@@ -32,9 +32,6 @@
 
 /* OSAtomic.h library native implementations. */
 
-	.text
-	.align	2, 0x90
-
 // This is a regparm(3) subroutine used by:
 
 // bool OSAtomicCompareAndSwap32( int32_t old, int32_t new, int32_t *value);
@@ -53,20 +50,18 @@
 
 //	TODO: move the .long onto a separate page to reduce icache pollution (?)
 
-Lcompare_and_swap32_mp:
+COMMPAGE_FUNCTION_START(compare_and_swap32_mp, 32, 4)
 .long	_COMM_PAGE_COMPARE_AND_SWAP32+4
 	lock
 	cmpxchgl  %edx, (%ecx)
 	ret
+COMMPAGE_DESCRIPTOR(compare_and_swap32_mp,_COMM_PAGE_COMPARE_AND_SWAP32,0,kUP)
 
-    COMMPAGE_DESCRIPTOR(compare_and_swap32_mp,_COMM_PAGE_COMPARE_AND_SWAP32,0,kUP)
-
-Lcompare_and_swap32_up:
+COMMPAGE_FUNCTION_START(compare_and_swap32_up, 32, 4)
 .long	_COMM_PAGE_COMPARE_AND_SWAP32+4
 	cmpxchgl %edx, (%ecx)
 	ret
-
-    COMMPAGE_DESCRIPTOR(compare_and_swap32_up,_COMM_PAGE_COMPARE_AND_SWAP32,kUP,0)
+COMMPAGE_DESCRIPTOR(compare_and_swap32_up,_COMM_PAGE_COMPARE_AND_SWAP32,kUP,0)
 
 // This is a subroutine used by:
 // bool OSAtomicCompareAndSwap64( int64_t old, int64_t new, int64_t *value);
@@ -75,20 +70,18 @@ Lcompare_and_swap32_up:
 // on success: returns with ZF set
 // on failure: returns with *value in %eax/%edx, ZF clear
 
-Lcompare_and_swap64_mp:
+COMMPAGE_FUNCTION_START(compare_and_swap64_mp, 32, 4)
 .long	_COMM_PAGE_COMPARE_AND_SWAP64+4
 	lock
 	cmpxchg8b (%esi)
 	ret
+COMMPAGE_DESCRIPTOR(compare_and_swap64_mp,_COMM_PAGE_COMPARE_AND_SWAP64,0,kUP)
 
-    COMMPAGE_DESCRIPTOR(compare_and_swap64_mp,_COMM_PAGE_COMPARE_AND_SWAP64,0,kUP)
-
-Lcompare_and_swap64_up:
+COMMPAGE_FUNCTION_START(compare_and_swap64_up, 32, 4)
 .long	_COMM_PAGE_COMPARE_AND_SWAP64+4
 	cmpxchg8b (%esi)
 	ret
-
-    COMMPAGE_DESCRIPTOR(compare_and_swap64_up,_COMM_PAGE_COMPARE_AND_SWAP64,kUP,0)
+COMMPAGE_DESCRIPTOR(compare_and_swap64_up,_COMM_PAGE_COMPARE_AND_SWAP64,kUP,0)
 
 // This is a subroutine used by:
 // bool OSAtomicTestAndSet( uint32_t n, void *value );
@@ -96,20 +89,18 @@ Lcompare_and_swap64_up:
 
 // Returns: old value of bit in CF
 
-Lbit_test_and_set_mp:
+COMMPAGE_FUNCTION_START(bit_test_and_set_mp, 32, 4)
 .long	_COMM_PAGE_BTS+4
 	lock
 	btsl %eax, (%edx)
 	ret
+COMMPAGE_DESCRIPTOR(bit_test_and_set_mp,_COMM_PAGE_BTS,0,kUP)
 
-    COMMPAGE_DESCRIPTOR(bit_test_and_set_mp,_COMM_PAGE_BTS,0,kUP)
-
-Lbit_test_and_set_up:
+COMMPAGE_FUNCTION_START(bit_test_and_set_up, 32, 4)
 .long	_COMM_PAGE_BTS+4
 	btsl %eax, (%edx)
 	ret
-
-    COMMPAGE_DESCRIPTOR(bit_test_and_set_up,_COMM_PAGE_BTS,kUP,0)
+COMMPAGE_DESCRIPTOR(bit_test_and_set_up,_COMM_PAGE_BTS,kUP,0)
 
 // This is a subroutine used by:
 // bool OSAtomicTestAndClear( uint32_t n, void *value );
@@ -117,20 +108,18 @@ Lbit_test_and_set_up:
 
 // Returns: old value of bit in CF
 
-Lbit_test_and_clear_mp:
+COMMPAGE_FUNCTION_START(bit_test_and_clear_mp, 32, 4)
 .long	_COMM_PAGE_BTC+4
 	lock
 	btrl %eax, (%edx)
 	ret
+COMMPAGE_DESCRIPTOR(bit_test_and_clear_mp,_COMM_PAGE_BTC,0,kUP)
 
-    COMMPAGE_DESCRIPTOR(bit_test_and_clear_mp,_COMM_PAGE_BTC,0,kUP)
-
-Lbit_test_and_clear_up:
+COMMPAGE_FUNCTION_START(bit_test_and_clear_up, 32, 4)
 .long	_COMM_PAGE_BTC+4
 	btrl %eax, (%edx)
 	ret
-
-    COMMPAGE_DESCRIPTOR(bit_test_and_clear_up,_COMM_PAGE_BTC,kUP,0)
+COMMPAGE_DESCRIPTOR(bit_test_and_clear_up,_COMM_PAGE_BTC,kUP,0)
 
 // This is a subroutine used by:
 // int32_t OSAtomicAdd32( int32_t amt, int32_t *value );
@@ -139,38 +128,34 @@ Lbit_test_and_clear_up:
 // Returns: old value in %eax
 // NB: OSAtomicAdd32 returns the new value,  so clients will add amt to %eax 
 
-Latomic_add32_mp:
+COMMPAGE_FUNCTION_START(atomic_add32_mp, 32, 4)
 .long	_COMM_PAGE_ATOMIC_ADD32+4
 	lock
 	xaddl	%eax, (%edx)
 	ret
-		
-    COMMPAGE_DESCRIPTOR(atomic_add32_mp,_COMM_PAGE_ATOMIC_ADD32,0,kUP)
+COMMPAGE_DESCRIPTOR(atomic_add32_mp,_COMM_PAGE_ATOMIC_ADD32,0,kUP)
 
-Latomic_add32_up:
+COMMPAGE_FUNCTION_START(atomic_add32_up, 32, 4)
 .long	_COMM_PAGE_ATOMIC_ADD32+4
 	xaddl	%eax, (%edx)
 	ret
-
-    COMMPAGE_DESCRIPTOR(atomic_add32_up,_COMM_PAGE_ATOMIC_ADD32,kUP,0)
+COMMPAGE_DESCRIPTOR(atomic_add32_up,_COMM_PAGE_ATOMIC_ADD32,kUP,0)
     
     
 // OSMemoryBarrier()
 // These are used both in 32 and 64-bit mode.  We use a fence even on UP
 // machines, so this function can be used with nontemporal stores.
 
-Lmemory_barrier:
+COMMPAGE_FUNCTION_START(memory_barrier, 32, 4)
 	lock
 	addl	$0,(%esp)
 	ret
-	
-    COMMPAGE_DESCRIPTOR(memory_barrier,_COMM_PAGE_MEMORY_BARRIER,0,kHasSSE2);
+COMMPAGE_DESCRIPTOR(memory_barrier,_COMM_PAGE_MEMORY_BARRIER,0,kHasSSE2);
 
-Lmemory_barrier_sse2:
+COMMPAGE_FUNCTION_START(memory_barrier_sse2, 32, 4)
 	mfence
 	ret
-	
-    COMMPAGE_DESCRIPTOR(memory_barrier_sse2,_COMM_PAGE_MEMORY_BARRIER,kHasSSE2,0);
+COMMPAGE_DESCRIPTOR(memory_barrier_sse2,_COMM_PAGE_MEMORY_BARRIER,kHasSSE2,0);
     
 
 /*
@@ -182,7 +167,7 @@ Lmemory_barrier_sse2:
  * void  OSAtomicEnqueue( OSQueueHead *list, void *new, size_t offset);
  */
 
-LAtomicEnqueue:
+COMMPAGE_FUNCTION_START(AtomicEnqueue, 32, 4)
 	pushl	%edi
 	pushl	%esi
 	pushl	%ebx
@@ -202,13 +187,12 @@ LAtomicEnqueue:
 	popl	%esi
 	popl	%edi
 	ret
-	
-    COMMPAGE_DESCRIPTOR(AtomicEnqueue,_COMM_PAGE_ENQUEUE,0,0)
+COMMPAGE_DESCRIPTOR(AtomicEnqueue,_COMM_PAGE_ENQUEUE,0,0)
 	
 	
 /* void* OSAtomicDequeue( OSQueueHead *list, size_t offset); */
 
-LAtomicDequeue:
+COMMPAGE_FUNCTION_START(AtomicDequeue, 32, 4)
 	pushl	%edi
 	pushl	%esi
 	pushl	%ebx
@@ -230,8 +214,7 @@ LAtomicDequeue:
 	popl	%esi
 	popl	%edi
 	ret			// ptr to 1st element in Q still in %eax
-	
-    COMMPAGE_DESCRIPTOR(AtomicDequeue,_COMM_PAGE_DEQUEUE,0,0)
+COMMPAGE_DESCRIPTOR(AtomicDequeue,_COMM_PAGE_DEQUEUE,0,0)
 
 
 
@@ -251,22 +234,18 @@ LAtomicDequeue:
 // on success: returns with ZF set
 // on failure: returns with *value in %eax, ZF clear
 
-	.code64
-Lcompare_and_swap32_mp_64:
+COMMPAGE_FUNCTION_START(compare_and_swap32_mp_64, 64, 4)
 	movl	%edi,%eax			// put old value where "cmpxchg" wants it
 	lock
 	cmpxchgl  %esi, (%rdx)
 	ret
+COMMPAGE_DESCRIPTOR(compare_and_swap32_mp_64,_COMM_PAGE_COMPARE_AND_SWAP32,0,kUP)
 
-    COMMPAGE_DESCRIPTOR(compare_and_swap32_mp_64,_COMM_PAGE_COMPARE_AND_SWAP32,0,kUP)
-
-	.code64
-Lcompare_and_swap32_up_64:
+COMMPAGE_FUNCTION_START(compare_and_swap32_up_64, 64, 4)
 	movl	%edi,%eax			// put old value where "cmpxchg" wants it
 	cmpxchgl  %esi, (%rdx)
 	ret
-
-    COMMPAGE_DESCRIPTOR(compare_and_swap32_up_64,_COMM_PAGE_COMPARE_AND_SWAP32,kUP,0)
+COMMPAGE_DESCRIPTOR(compare_and_swap32_up_64,_COMM_PAGE_COMPARE_AND_SWAP32,kUP,0)
 
 // This is a subroutine used by:
 // bool OSAtomicCompareAndSwap64( int64_t old, int64_t new, int64_t *value);
@@ -277,22 +256,18 @@ Lcompare_and_swap32_up_64:
 // on success: returns with ZF set
 // on failure: returns with *value in %rax, ZF clear
 
-	.code64
-Lcompare_and_swap64_mp_64:
+COMMPAGE_FUNCTION_START(compare_and_swap64_mp_64, 64, 4)
 	movq	%rdi,%rax			// put old value where "cmpxchg" wants it
 	lock
 	cmpxchgq  %rsi, (%rdx)
 	ret
+COMMPAGE_DESCRIPTOR(compare_and_swap64_mp_64,_COMM_PAGE_COMPARE_AND_SWAP64,0,kUP)
 
-    COMMPAGE_DESCRIPTOR(compare_and_swap64_mp_64,_COMM_PAGE_COMPARE_AND_SWAP64,0,kUP)
-
-	.code64
-Lcompare_and_swap64_up_64:
+COMMPAGE_FUNCTION_START(compare_and_swap64_up_64, 64, 4)
 	movq	%rdi,%rax			// put old value where "cmpxchg" wants it
 	cmpxchgq  %rsi, (%rdx)
 	ret
-
-    COMMPAGE_DESCRIPTOR(compare_and_swap64_up_64,_COMM_PAGE_COMPARE_AND_SWAP64,kUP,0)
+COMMPAGE_DESCRIPTOR(compare_and_swap64_up_64,_COMM_PAGE_COMPARE_AND_SWAP64,kUP,0)
 
 // This is a subroutine used by:
 // bool OSAtomicTestAndSet( uint32_t n, void *value );
@@ -301,20 +276,16 @@ Lcompare_and_swap64_up_64:
 //			value = %rsi
 // Returns: old value of bit in CF
 
-	.code64
-Lbit_test_and_set_mp_64:
+COMMPAGE_FUNCTION_START(bit_test_and_set_mp_64, 64, 4)
 	lock
 	btsl %edi, (%rsi)
 	ret
+COMMPAGE_DESCRIPTOR(bit_test_and_set_mp_64,_COMM_PAGE_BTS,0,kUP)
 
-    COMMPAGE_DESCRIPTOR(bit_test_and_set_mp_64,_COMM_PAGE_BTS,0,kUP)
-
-	.code64
-Lbit_test_and_set_up_64:
+COMMPAGE_FUNCTION_START(bit_test_and_set_up_64, 64, 4)
 	btsl %edi, (%rsi)
 	ret
-
-    COMMPAGE_DESCRIPTOR(bit_test_and_set_up_64,_COMM_PAGE_BTS,kUP,0)
+COMMPAGE_DESCRIPTOR(bit_test_and_set_up_64,_COMM_PAGE_BTS,kUP,0)
 
 // This is a subroutine used by:
 // bool OSAtomicTestAndClear( uint32_t n, void *value );
@@ -323,20 +294,16 @@ Lbit_test_and_set_up_64:
 //			value = %rsi
 // Returns: old value of bit in CF
 
-	.code64
-Lbit_test_and_clear_mp_64:
+COMMPAGE_FUNCTION_START(bit_test_and_clear_mp_64, 64, 4)
 	lock
 	btrl %edi, (%rsi)
 	ret
+COMMPAGE_DESCRIPTOR(bit_test_and_clear_mp_64,_COMM_PAGE_BTC,0,kUP)
 
-    COMMPAGE_DESCRIPTOR(bit_test_and_clear_mp_64,_COMM_PAGE_BTC,0,kUP)
-
-	.code64
-Lbit_test_and_clear_up_64:
+COMMPAGE_FUNCTION_START(bit_test_and_clear_up_64, 64, 4)
 	btrl %edi, (%rsi)
 	ret
-
-    COMMPAGE_DESCRIPTOR(bit_test_and_clear_up_64,_COMM_PAGE_BTC,kUP,0)
+COMMPAGE_DESCRIPTOR(bit_test_and_clear_up_64,_COMM_PAGE_BTC,kUP,0)
 
 // This is a subroutine used by:
 // int32_t OSAtomicAdd32( int32_t amt, int32_t *value );
@@ -346,20 +313,16 @@ Lbit_test_and_clear_up_64:
 // Returns: old value in %edi
 // NB: OSAtomicAdd32 returns the new value,  so clients will add amt to %edi 
 
-	.code64
-Latomic_add32_mp_64:
+COMMPAGE_FUNCTION_START(atomic_add32_mp_64, 64, 4)
 	lock
 	xaddl	%edi, (%rsi)
 	ret
-		
-    COMMPAGE_DESCRIPTOR(atomic_add32_mp_64,_COMM_PAGE_ATOMIC_ADD32,0,kUP)
+COMMPAGE_DESCRIPTOR(atomic_add32_mp_64,_COMM_PAGE_ATOMIC_ADD32,0,kUP)
 
-	.code64
-Latomic_add32_up_64:
+COMMPAGE_FUNCTION_START(atomic_add32_up_64, 64, 4)
 	xaddl	%edi, (%rsi)
 	ret
-
-    COMMPAGE_DESCRIPTOR(atomic_add32_up_64,_COMM_PAGE_ATOMIC_ADD32,kUP,0)
+COMMPAGE_DESCRIPTOR(atomic_add32_up_64,_COMM_PAGE_ATOMIC_ADD32,kUP,0)
 
 // This is a subroutine used by:
 // int64_t OSAtomicAdd64( int64_t amt, int64_t *value );
@@ -369,20 +332,16 @@ Latomic_add32_up_64:
 // Returns: old value in %rdi
 // NB: OSAtomicAdd64 returns the new value,  so clients will add amt to %rdi 
 
-	.code64
-Latomic_add64_mp_64:
+COMMPAGE_FUNCTION_START(atomic_add64_mp_64, 64, 4)
 	lock
 	xaddq	%rdi, (%rsi)
 	ret
-		
-    COMMPAGE_DESCRIPTOR(atomic_add64_mp_64,_COMM_PAGE_ATOMIC_ADD64,0,kUP)
+COMMPAGE_DESCRIPTOR(atomic_add64_mp_64,_COMM_PAGE_ATOMIC_ADD64,0,kUP)
 
-	.code64
-Latomic_add64_up_64:
+COMMPAGE_FUNCTION_START(atomic_add64_up_64, 64, 4)
 	xaddq	%rdi, (%rsi)
 	ret
-
-    COMMPAGE_DESCRIPTOR(atomic_add64_up_64,_COMM_PAGE_ATOMIC_ADD64,kUP,0)
+COMMPAGE_DESCRIPTOR(atomic_add64_up_64,_COMM_PAGE_ATOMIC_ADD64,kUP,0)
 
 
 /*
@@ -394,8 +353,9 @@ Latomic_add64_up_64:
  * void  OSAtomicEnqueue( OSQueueHead *list, void *new, size_t offset);
  */
 
-	.code64
-LAtomicEnqueue_64:		// %rdi == list head, %rsi == new, %rdx == offset
+// %rdi == list head, %rsi == new, %rdx == offset
+
+COMMPAGE_FUNCTION_START(AtomicEnqueue_64, 64, 4)
 	pushq	%rbx
 	movq	%rsi,%rbx	// %rbx == new
 	movq	%rdx,%rsi	// %rsi == offset
@@ -410,14 +370,14 @@ LAtomicEnqueue_64:		// %rdi == list head, %rsi == new, %rdx == offset
 	jnz	1b
 	popq	%rbx
 	ret
-	
-    COMMPAGE_DESCRIPTOR(AtomicEnqueue_64,_COMM_PAGE_ENQUEUE,0,0)
+COMMPAGE_DESCRIPTOR(AtomicEnqueue_64,_COMM_PAGE_ENQUEUE,0,0)
 	
 	
 /* void* OSAtomicDequeue( OSQueueHead *list, size_t offset); */
 
-	.code64
-LAtomicDequeue_64:		// %rdi == list head, %rsi == offset
+// %rdi == list head, %rsi == offset
+
+COMMPAGE_FUNCTION_START(AtomicDequeue_64, 64, 4)
 	pushq	%rbx
 	movq	(%rdi),%rax	// %rax == ptr to 1st element in Q
 	movq	8(%rdi),%rdx	// %rdx == current generation count
@@ -433,5 +393,4 @@ LAtomicDequeue_64:		// %rdi == list head, %rsi == offset
 2:
 	popq	%rbx
 	ret			// ptr to 1st element in Q still in %rax
-	
-    COMMPAGE_DESCRIPTOR(AtomicDequeue_64,_COMM_PAGE_DEQUEUE,0,0)
+COMMPAGE_DESCRIPTOR(AtomicDequeue_64,_COMM_PAGE_DEQUEUE,0,0)

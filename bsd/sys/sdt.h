@@ -29,9 +29,15 @@
 
 /*
  * This is a wrapper header that wraps the mach visible sdt.h header so that
- * the header file ends up vidible where software expects it to be.  We also
+ * the header file ends up visible where software expects it to be.  We also
  * do the C/C++ symbol wrapping here, since Mach headers are technically C
  * interfaces.
+ *
+ * Note:  The process of adding USDT probes to code is slightly different
+ * than documented in the "Solaris Dynamic Tracing Guide".
+ * The DTRACE_PROBE*() macros are not supported on Mac OS X -- instead see
+ * "BUILDING CODE CONTAINING USDT PROBES" in the dtrace(1) manpage
+ *
  */
 #include <sys/cdefs.h>
 __BEGIN_DECLS

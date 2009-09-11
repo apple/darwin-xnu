@@ -371,4 +371,23 @@ routine task_set_policy(
 	limit			: policy_limit_t;
 	change			: boolean_t);
 
+/*
+ * Read the selected state which is to be installed on new 
+ * threads in the task as they are created.
+ */
+routine task_get_state(
+		task		: task_t;
+		flavor		: thread_state_flavor_t;
+	out	old_state	: thread_state_t, CountInOut);
+ 
+/*
+ * Set the selected state information to be installed on
+ * all subsequently created threads in the task.
+ */
+routine	task_set_state(
+		task		: task_t;
+		flavor		: thread_state_flavor_t;
+		new_state	: thread_state_t);
+
+
 /* vim: set ft=c : */

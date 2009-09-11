@@ -215,7 +215,7 @@ OSStatus BTOpenPath(FCB *filePtr, KeyCompareProcPtr keyCompareProc)
 	btreePtr = (BTreeControlBlock*) NewPtrSysClear( sizeof( BTreeControlBlock ) );
 	if (btreePtr == nil)
 	{
-		Panic ("\pBTOpen: no memory for btreePtr.");
+		Panic ("BTOpen: no memory for btreePtr.");
 		return	memFullErr;
 	}
 
@@ -254,11 +254,11 @@ OSStatus BTOpenPath(FCB *filePtr, KeyCompareProcPtr keyCompareProc)
 	{
 		nodeRec.buffer = nil;
 		nodeRec.blockHeader	= nil;
-		Panic("\pBTOpen: getNodeProc returned error getting header node.");
+		Panic("BTOpen: getNodeProc returned error getting header node.");
 		goto ErrorExit;
 	}
 	++btreePtr->numGetNodes;
-	header = (BTHeaderRec*) ((u_long)nodeRec.buffer + sizeof(BTNodeDescriptor));
+	header = (BTHeaderRec*) ((uintptr_t)nodeRec.buffer + sizeof(BTNodeDescriptor));
 
 
 	///////////////////////////// verify header /////////////////////////////////
@@ -269,7 +269,7 @@ OSStatus BTOpenPath(FCB *filePtr, KeyCompareProcPtr keyCompareProc)
 
 	///////////////////// Initalize fields from header //////////////////////////
 	
-    PanicIf ( (FCBTOVCB(filePtr)->vcbSigWord != 0x4244) && (header->nodeSize == 512), "\p BTOpenPath: wrong node size for HFS+ volume!");	// 0x4244 = 'BD'
+    PanicIf ( (FCBTOVCB(filePtr)->vcbSigWord != 0x4244) && (header->nodeSize == 512), " BTOpenPath: wrong node size for HFS+ volume!");	// 0x4244 = 'BD'
 
 	btreePtr->treeDepth			= header->treeDepth;
 	btreePtr->rootNode			= header->rootNode;

@@ -41,7 +41,7 @@
  * Virtual memory related constants, all in bytes
  */
 #ifndef DFLDSIZ
-#define	DFLDSIZ		(6*1024*1024)		/* initial data size limit */
+#define	DFLDSIZ		(RLIM_INFINITY)		/* initial data size limit */
 #endif
 #ifndef MAXDSIZ
 #define	MAXDSIZ		(RLIM_INFINITY)		/* max data size */

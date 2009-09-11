@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -60,7 +60,7 @@ struct processor_data {
 	}						stack_cache;
 
 	/* VM event counters */
-	vm_statistics_data_t	vm_stat;
+	vm_statistics64_data_t	vm_stat;
 
 	/* IPC free message cache */
 	struct ikm_cache {

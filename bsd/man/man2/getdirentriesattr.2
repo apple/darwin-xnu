@@ -25,8 +25,14 @@
 .Sh SYNOPSIS
 .Fd #include <sys/attr.h>
 .Fd #include <unistd.h>
+.Pp
+.Fd #if __LP64__
+.Ft int
+.Fn getdirentriesattr "int fd" "struct attrlist * attrList" "void * attrBuf" "size_t attrBufSize" "unsigned int * count" "unsigned int * basep" "unsigned int * newState" "unsigned int options"
+.Fd #else
 .Ft int
 .Fn getdirentriesattr "int fd" "struct attrlist * attrList" "void * attrBuf" "size_t attrBufSize" "unsigned long * count" "unsigned long * basep" "unsigned long * newState" "unsigned long options"
+.Fd #endif
 .
 .
 .Sh DESCRIPTION
@@ -37,6 +43,15 @@ You can think of it as a combination of
 .Xr getdirentries 2
 and
 .Xr getattrlist 2 .
+.Fn getdirentriesattr
+iterates over the items in a directory like 
+.Xr getdirentries 2 ,
+and returns information about each directory entry like
+.Xr getattrlist 2 .
+Note: when
+.Fn getdirentriesattr
+returns information about a symbolic link, the information returned is about the link itself, not the target of the link.
+.Pp
 The function reads directory entries from the directory referenced by the 
 file descriptor 
 .Fa fd .
@@ -111,7 +126,7 @@ packed in exactly the same way as they are returned from
 .Xr getattrlist 2 .
 These groups are then placed into the buffer, one after another. 
 As each group starts with a leading 
-.Vt unsigned long 
+.Vt u_int32_t
 that contains the 
 overall length of the group, you can step from one group to the next 
 by simply adding this length to your pointer.
@@ -123,8 +138,10 @@ The initial contents of this buffer are ignored.
 .
 The 
 .Fa count 
-parameter points to a 
-.Vt unsigned long 
+parameter points to an 
+.Vt unsigned long
+or
+.Vt unsigned int
 variable. 
 You should initialise this variable to be the number of directory entries for which 
 you wish to get attributes.
@@ -142,6 +159,11 @@ manner identical to
 You can use this value to reset a directory iteration to a known position 
 using 
 .Xr lseek 2 .
+However, since the variable is too small to hold an
+.Vt off_t ,
+you should use
+.Xr lseek 2
+to get the directoy's current position instead of using this parameter.
 The initial value of the variable is ignored.
 .Pp
 .
@@ -289,7 +311,7 @@ typedef struct attrlist attrlist_t;
 .Pp
 .
 struct FInfoAttrBuf {
-    unsigned long   length;
+    u_int32_t       length;
     attrreference_t name;
     fsobj_type_t    objType;
     char            finderInfo[32];
@@ -308,12 +330,20 @@ static int FInfoDemo(const char *dirPath)
     int             junk;
     int             dirFD;
     attrlist_t      attrList;
+#ifdef __LP64__
+    unsigned int    index;
+    unsigned int    count;
+    unsigned int    junkBaseP;
+    unsigned int    oldState;
+    unsigned int    newState;
+#else
     unsigned long   index;
     unsigned long   count;
     unsigned long   junkBaseP;
-    bool            oldStateValid;
     unsigned long   oldState;
     unsigned long   newState;
+#endif
+    bool            oldStateValid;
     bool            done;
     FInfoAttrBuf *  thisEntry;
     char            attrBuf[kEntriesPerCall * (sizeof(FInfoAttrBuf) + 64)];

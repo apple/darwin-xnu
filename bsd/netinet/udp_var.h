@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -131,8 +131,8 @@ SYSCTL_DECL(_net_inet_udp);
 extern struct	pr_usrreqs udp_usrreqs;
 extern struct	inpcbhead udb;
 extern struct	inpcbinfo udbinfo;
-extern u_long	udp_sendspace;
-extern u_long	udp_recvspace;
+extern u_int32_t	udp_sendspace;
+extern u_int32_t	udp_recvspace;
 extern struct	udpstat udpstat;
 extern int	log_in_vain;
 
@@ -144,8 +144,8 @@ void	udp_input(struct mbuf *, int);
 
 void	udp_notify(struct inpcb *inp, int errno);
 int	udp_shutdown(struct socket *so);
-int	udp_lock (struct socket *, int, int);
-int	udp_unlock (struct socket *, int, int);
+int	udp_lock (struct socket *, int, void *);
+int	udp_unlock (struct socket *, int, void *);
 void	udp_slowtimo (void);
 #ifdef _KERN_LOCKS_H_
 lck_mtx_t *	udp_getlock (struct socket *, int);

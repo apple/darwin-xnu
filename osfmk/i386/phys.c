@@ -93,7 +93,7 @@
  */
 void
 pmap_zero_page(
-	       ppnum_t pn)
+       ppnum_t pn)
 {
 	assert(pn != vm_page_fictitious_addr);
 	assert(pn != vm_page_guard_addr);
@@ -106,14 +106,14 @@ pmap_zero_page(
  */
 void
 pmap_zero_part_page(
-        ppnum_t         pn,
+	ppnum_t         pn,
 	vm_offset_t     offset,
 	vm_size_t       len)
 {
 	assert(pn != vm_page_fictitious_addr);
 	assert(pn != vm_page_guard_addr);
 	assert(offset + len <= PAGE_SIZE);
-	bzero_phys((addr64_t)(i386_ptob(pn) + offset), len);
+	bzero_phys((addr64_t)(i386_ptob(pn) + offset), (uint32_t)len);
 }
 
 /*
@@ -137,8 +137,8 @@ pmap_copy_part_page(
 	src = i386_ptob(psrc);
 	dst = i386_ptob(pdst);
 
-	assert((((uint32_t)dst & PAGE_MASK) + dst_offset + len) <= PAGE_SIZE);
-	assert((((uint32_t)src & PAGE_MASK) + src_offset + len) <= PAGE_SIZE);
+	assert((((uintptr_t)dst & PAGE_MASK) + dst_offset + len) <= PAGE_SIZE);
+	assert((((uintptr_t)src & PAGE_MASK) + src_offset + len) <= PAGE_SIZE);
 
 	bcopy_phys((addr64_t)src + (src_offset & INTEL_OFFMASK),
 		   (addr64_t)dst + (dst_offset & INTEL_OFFMASK),
@@ -151,17 +151,20 @@ pmap_copy_part_page(
  */
 void
 pmap_copy_part_lpage(
-	vm_offset_t 	src,
-	ppnum_t 	pdst,
-	vm_offset_t	dst_offset,
-	vm_size_t	len)
+	__unused vm_offset_t 	src,
+	__unused ppnum_t 	pdst,
+	__unused vm_offset_t	dst_offset,
+	__unused vm_size_t	len)
 {
+#ifdef __i386__
         mapwindow_t *map;
+#endif
 
 	assert(pdst != vm_page_fictitious_addr);
 	assert(pdst != vm_page_guard_addr);
 	assert((dst_offset + len) <= PAGE_SIZE);
 
+#ifdef __i386__
         mp_disable_preemption();
 
         map = pmap_get_mapwindow(INTEL_PTE_VALID | INTEL_PTE_RW | (i386_ptob(pdst) & PG_FRAME) | 
@@ -172,6 +175,7 @@ pmap_copy_part_lpage(
 	pmap_put_mapwindow(map);
 
 	mp_enable_preemption();
+#endif
 }
 
 /*
@@ -180,17 +184,20 @@ pmap_copy_part_lpage(
  */
 void
 pmap_copy_part_rpage(
-	ppnum_t	        psrc,
-	vm_offset_t	src_offset,
-	vm_offset_t	dst,
-	vm_size_t	len)
+	__unused ppnum_t	        psrc,
+	__unused vm_offset_t	src_offset,
+	__unused vm_offset_t	dst,
+	__unused vm_size_t	len)
 {
+#ifdef __i386__
         mapwindow_t *map;
+#endif
 
 	assert(psrc != vm_page_fictitious_addr);
 	assert(psrc != vm_page_guard_addr);
 	assert((src_offset + len) <= PAGE_SIZE);
 
+#ifdef __i386__
         mp_disable_preemption();
 
         map = pmap_get_mapwindow(INTEL_PTE_VALID | INTEL_PTE_RW | (i386_ptob(psrc) & PG_FRAME) | 
@@ -201,6 +208,7 @@ pmap_copy_part_rpage(
 	pmap_put_mapwindow(map);
 
 	mp_enable_preemption();
+#endif
 }
 
 /*
@@ -212,17 +220,56 @@ addr64_t
 kvtophys(
 	vm_offset_t addr)
 {
-        pt_entry_t *ptep;
 	pmap_paddr_t pa;
- 
-	mp_disable_preemption();
-	if ((ptep = pmap_pte(kernel_pmap, (vm_map_offset_t)addr)) == PT_ENTRY_NULL) {
-	  pa = 0;
-	} else {
-	  pa =  pte_to_pa(*ptep) | (addr & INTEL_OFFMASK);
-	}
-	mp_enable_preemption_no_check();
+
+	pa = ((pmap_paddr_t)pmap_find_phys(kernel_pmap, addr)) << INTEL_PGSHIFT;
+	if (pa)
+		pa |= (addr & INTEL_OFFMASK);
 
 	return ((addr64_t)pa);
 }
 
+__private_extern__ void ml_copy_phys(addr64_t src64, addr64_t dst64, vm_size_t bytes) {
+	void *src, *dst;
+
+	mp_disable_preemption();
+#if NCOPY_WINDOWS > 0
+	mapwindow_t *src_map, *dst_map;
+	/* We rely on MTRRs here */
+	src_map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | ((pmap_paddr_t)src64 & PG_FRAME) | INTEL_PTE_REF));
+	dst_map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | INTEL_PTE_RW | ((pmap_paddr_t)dst64 & PG_FRAME) | INTEL_PTE_REF | INTEL_PTE_MOD));
+	src = (void *) ((uintptr_t)src_map->prv_CADDR | ((uint32_t)src64 & INTEL_OFFMASK));
+	dst = (void *) ((uintptr_t)dst_map->prv_CADDR | ((uint32_t)dst64 & INTEL_OFFMASK));
+#elif defined(__x86_64__)
+	src = PHYSMAP_PTOV(src64);
+	dst = PHYSMAP_PTOV(dst64);
+#endif
+	/* ensure we stay within a page */
+	if (((((uint32_t)src64 & (I386_PGBYTES-1)) + bytes) > I386_PGBYTES) || ((((uint32_t)dst64 & (I386_PGBYTES-1)) + bytes) > I386_PGBYTES) ) {
+	        panic("ml_copy_phys spans pages, src: 0x%llx, dst: 0x%llx", src64, dst64);
+	}
+
+	switch (bytes) {
+	case 1:
+		*((uint8_t *) dst) = *((uint8_t *) src);
+		break;
+	case 2:
+		*((uint16_t *) dst) = *((uint16_t *) src);
+		break;
+	case 4:
+		*((uint32_t *) dst) = *((uint32_t *) src);
+		break;
+		/* Should perform two 32-bit reads */
+	case 8:
+		*((uint64_t *) dst) = *((uint64_t *) src);
+		break;
+	default:
+		bcopy(src, dst, bytes);
+		break;
+	}
+#if NCOPY_WINDOWS > 0
+	pmap_put_mapwindow(src_map);
+	pmap_put_mapwindow(dst_map);
+#endif
+	mp_enable_preemption();
+}

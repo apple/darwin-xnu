@@ -49,18 +49,48 @@ typedef x86_saved_state_t savearea_t;
 #include <miscfs/devfs/devfs.h>
 #include <mach/vm_param.h>
 
+/*
+ * APPLE NOTE:  The regmap is used to decode which 64bit uregs[] register
+ * is being accessed when passed the 32bit uregs[] constant (based on
+ * the reg.d translator file). The dtrace_getreg() is smart enough to handle
+ * the register mappings.   The register set definitions are the same as
+ * those used by the fasttrap_getreg code.
+ */
+#include "fasttrap_regset.h"
+static const uint8_t regmap[19] = {
+    REG_GS,		/* GS */
+    REG_FS,		/* FS */
+    REG_ES,		/* ES */
+    REG_DS,		/* DS */
+    REG_RDI,		/* EDI */
+    REG_RSI,		/* ESI */
+    REG_RBP,		/* EBP, REG_FP  */
+    REG_RSP,		/* ESP */
+    REG_RBX,		/* EBX */
+    REG_RDX,		/* EDX, REG_R1  */
+    REG_RCX,		/* ECX */
+    REG_RAX,		/* EAX, REG_R0  */
+    REG_TRAPNO,		/* TRAPNO */
+    REG_ERR,		/* ERR */
+    REG_RIP,		/* EIP, REG_PC  */
+    REG_CS,		/* CS */
+    REG_RFL,		/* EFL, REG_PS  */
+    REG_RSP,		/* UESP, REG_SP */
+    REG_SS		/* SS */
+};    
+
 extern dtrace_id_t      dtrace_probeid_error;   /* special ERROR probe */
 
 void
 dtrace_probe_error(dtrace_state_t *state, dtrace_epid_t epid, int which,
-    int fault, int fltoffs, uint64_t illval)
+    int fltoffs, int fault, uint64_t illval)
 {
     /*
      * For the case of the error probe firing lets
      * stash away "illval" here, and special-case retrieving it in DIF_VARIABLE_ARG.
      */
     state->dts_arg_error_illval = illval;
-    dtrace_probe( dtrace_probeid_error, (uint64_t)(uintptr_t)state, epid, which, fault, fltoffs );
+    dtrace_probe( dtrace_probeid_error, (uint64_t)(uintptr_t)state, epid, which, fltoffs, fault );
 }
 
 /*
@@ -135,26 +165,77 @@ dtrace_xcall(processorid_t cpu, dtrace_xcall_t f, void *arg)
 /*
  * Runtime and ABI
  */
-extern greg_t
-dtrace_getfp(void)
-{
-	return (greg_t)__builtin_frame_address(0);
-}
 
 uint64_t
 dtrace_getreg(struct regs *savearea, uint_t reg)
 {
 	boolean_t is64Bit = proc_is64bit(current_proc());
 	x86_saved_state_t *regs = (x86_saved_state_t *)savearea;
-	
+
 	if (is64Bit) {
-		/* beyond register SS */
-		if (reg > x86_SAVED_STATE64_COUNT - 1) {
-			DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
-			return (0);
-		}
-		return ((uint64_t *)(&(regs->ss_64.gs)))[reg];
-	} else {
+	    if (reg <= SS) {
+		reg = regmap[reg];
+	    } else {
+		reg -= (SS + 1);
+	    }
+
+	    switch (reg) {
+	    case REG_RDI:
+		return (uint64_t)(regs->ss_64.rdi);
+	    case REG_RSI:
+		return (uint64_t)(regs->ss_64.rsi);
+	    case REG_RDX:
+		return (uint64_t)(regs->ss_64.rdx);
+	    case REG_RCX:
+		return (uint64_t)(regs->ss_64.rcx);
+	    case REG_R8:
+		return (uint64_t)(regs->ss_64.r8);
+	    case REG_R9:
+		return (uint64_t)(regs->ss_64.r9);
+	    case REG_RAX:
+		return (uint64_t)(regs->ss_64.rax);
+	    case REG_RBX:
+		return (uint64_t)(regs->ss_64.rbx);
+	    case REG_RBP:
+		return (uint64_t)(regs->ss_64.rbp);
+	    case REG_R10:
+		return (uint64_t)(regs->ss_64.r10);
+	    case REG_R11:
+		return (uint64_t)(regs->ss_64.r11);
+	    case REG_R12:
+		return (uint64_t)(regs->ss_64.r12);
+	    case REG_R13:
+		return (uint64_t)(regs->ss_64.r13);
+	    case REG_R14:
+		return (uint64_t)(regs->ss_64.r14);
+	    case REG_R15:
+		return (uint64_t)(regs->ss_64.r15);
+	    case REG_FS:
+		return (uint64_t)(regs->ss_64.fs);
+	    case REG_GS:
+		return (uint64_t)(regs->ss_64.gs);
+	    case REG_TRAPNO:
+		return (uint64_t)(regs->ss_64.isf.trapno);
+	    case REG_ERR:
+		return (uint64_t)(regs->ss_64.isf.err);
+	    case REG_RIP:
+		return (uint64_t)(regs->ss_64.isf.rip);
+	    case REG_CS:
+		return (uint64_t)(regs->ss_64.isf.cs);
+	    case REG_SS:
+		return (uint64_t)(regs->ss_64.isf.ss);
+	    case REG_RFL:
+		return (uint64_t)(regs->ss_64.isf.rflags);
+	    case REG_RSP:
+		return (uint64_t)(regs->ss_64.isf.rsp);
+	    case REG_DS:
+	    case REG_ES:
+	    default:
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+		return (0);
+	    }
+	
+	} else {   /* is 32bit user */
 		/* beyond register SS */
 		if (reg > x86_SAVED_STATE32_COUNT - 1) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
@@ -162,7 +243,6 @@ dtrace_getreg(struct regs *savearea, uint_t reg)
 		}
 		return (uint64_t)((unsigned int *)(&(regs->ss_32.gs)))[reg];
 	}
-	
 }
 
 #define RETURN_OFFSET 4
@@ -254,6 +334,69 @@ dtrace_getustack_common(uint64_t *pcstack, int pcstack_limit, user_addr_t pc,
 	return (ret);
 }
 
+
+/*
+ * The return value indicates if we've modified the stack.
+ */
+static int
+dtrace_adjust_stack(uint64_t **pcstack, int *pcstack_limit, user_addr_t *pc,
+                    user_addr_t sp)
+{
+    int64_t missing_tos;
+    int rc = 0;
+    boolean_t is64Bit = proc_is64bit(current_proc());
+
+    ASSERT(pc != NULL);
+
+    if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_ENTRY)) {
+        /*
+         * If we found ourselves in an entry probe, the frame pointer has not
+         * yet been pushed (that happens in the
+         * function prologue).  The best approach is to
+	 * add the current pc as a missing top of stack,
+         * and back the pc up to the caller, which is stored  at the
+         * current stack pointer address since the call
+         * instruction puts it there right before
+         * the branch.
+         */
+
+        missing_tos = *pc;
+
+        if (is64Bit)
+            *pc = dtrace_fuword64(sp);
+        else
+            *pc = dtrace_fuword32(sp);
+    } else {
+        /*
+         * We might have a top of stack override, in which case we just
+         * add that frame without question to the top.  This
+         * happens in return probes where you have a valid
+         * frame pointer, but it's for the callers frame
+         * and you'd like to add the pc of the return site
+         * to the frame.
+         */
+        missing_tos = cpu_core[CPU->cpu_id].cpuc_missing_tos;
+    }
+
+    if (missing_tos != 0) {
+        if (pcstack != NULL && pcstack_limit != NULL) {
+            /*
+	     * If the missing top of stack has been filled out, then
+	     * we add it and adjust the size.
+             */
+	    *(*pcstack)++ = missing_tos;
+	    (*pcstack_limit)--;
+	}
+        /*
+	 * return 1 because we would have changed the
+	 * stack whether or not it was passed in.  This
+	 * ensures the stack count is correct
+	 */
+         rc = 1;
+    }
+    return rc;
+}
+
 void
 dtrace_getupcstack(uint64_t *pcstack, int pcstack_limit)
 {
@@ -297,17 +440,15 @@ dtrace_getupcstack(uint64_t *pcstack, int pcstack_limit)
 		fp = regs->ss_32.ebp;
 	}
 
-	if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_ENTRY)) {
-		*pcstack++ = (uint64_t)pc;
-		pcstack_limit--;
-		if (pcstack_limit <= 0)
-			return;
+        /*
+	 * The return value indicates if we've modified the stack.
+	 * Since there is nothing else to fix up in either case,
+	 * we can safely ignore it here.
+	 */
+	(void)dtrace_adjust_stack(&pcstack, &pcstack_limit, &pc, sp);
 
-		if (is64Bit)
-			pc = dtrace_fuword64(sp);
-		else
-			pc = dtrace_fuword32(sp);
-	}
+	if(pcstack_limit <= 0)
+	    return;
 
 	/*
 	 * Note that unlike ppc, the x86 code does not use
@@ -356,15 +497,17 @@ dtrace_getustackdepth(void)
 		fp = regs->ss_32.ebp;
 	}
 
-	if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_ENTRY)) {
-		n++;
-
-		if (is64Bit)
-			pc = dtrace_fuword64(sp);
-		else
-			pc = dtrace_fuword32(sp);
+	if (dtrace_adjust_stack(NULL, NULL, &pc, sp) == 1) {
+	    /*
+	     * we would have adjusted the stack if we had
+	     * supplied one (that is what rc == 1 means).
+	     * Also, as a side effect, the pc might have
+	     * been fixed up, which is good for calling
+	     * in to dtrace_getustack_common.
+	     */
+	    n++;
 	}
-
+	
 	/*
 	 * Note that unlike ppc, the x86 code does not use
 	 * CPU_DTRACE_USTACK_FP. This is because x86 always
@@ -428,17 +571,13 @@ dtrace_getufpstack(uint64_t *pcstack, uint64_t *fpstack, int pcstack_limit)
 	}
 #endif
 
-	if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_ENTRY)) {
-		*pcstack++ = (uint64_t)pc;
-		*fpstack++ = 0;
-		pcstack_limit--;
-		if (pcstack_limit <= 0)
-			return;
-
-		if (is64Bit)
-			pc = dtrace_fuword64(sp);
-		else
-			pc = dtrace_fuword32(sp);
+	if(dtrace_adjust_stack(&pcstack, &pcstack_limit, &pc, sp) == 1) {
+            /*
+	     * we made a change.
+	     */
+	    *fpstack++ = 0;
+	    if (pcstack_limit <= 0)
+		return;
 	}
 
 	while (pc != 0) {
@@ -505,7 +644,7 @@ void
 dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 		  uint32_t *intrpc)
 {
-	struct frame *fp = (struct frame *)dtrace_getfp();
+	struct frame *fp = (struct frame *)__builtin_frame_address(0);
 	struct frame *nextfp, *minfp, *stacktop;
 	int depth = 0;
 	int last = 0;
@@ -516,7 +655,7 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 	if ((on_intr = CPU_ON_INTR(CPU)) != 0)
 		stacktop = (struct frame *)dtrace_get_cpu_int_stack_top();
 	else
-		stacktop = (struct frame *)(dtrace_get_kernel_stack(current_thread()) + KERNEL_STACK_SIZE);
+		stacktop = (struct frame *)(dtrace_get_kernel_stack(current_thread()) + kernel_stack_size);
 
 	minfp = fp;
 
@@ -527,7 +666,11 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 
 	while (depth < pcstack_limit) {
 		nextfp = *(struct frame **)fp;
-		pc = *(uintptr_t *)(((uint32_t)fp) + RETURN_OFFSET);
+#if defined(__x86_64__)
+		pc = *(uintptr_t *)(((uintptr_t)fp) + RETURN_OFFSET64);
+#else
+		pc = *(uintptr_t *)(((uintptr_t)fp) + RETURN_OFFSET);
+#endif
 
 		if (nextfp <= minfp || nextfp >= stacktop) {
 			if (on_intr) {
@@ -537,7 +680,7 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 				vm_offset_t kstack_base = dtrace_get_kernel_stack(current_thread());
 
 				minfp = (struct frame *)kstack_base;
-				stacktop = (struct frame *)(kstack_base + KERNEL_STACK_SIZE);
+				stacktop = (struct frame *)(kstack_base + kernel_stack_size);
 
 				on_intr = 0;
 				continue;
@@ -585,16 +728,26 @@ uint64_t
 dtrace_getarg(int arg, int aframes)
 {
 	uint64_t val;
-	struct frame *fp = (struct frame *)dtrace_getfp();
+	struct frame *fp = (struct frame *)__builtin_frame_address(0);
 	uintptr_t *stack;
 	uintptr_t pc;
 	int i;
+
+
+#if defined(__x86_64__)
+    /*
+     * A total of 6 arguments are passed via registers; any argument with
+     * index of 5 or lower is therefore in a register.
+     */
+    int inreg = 5;
+#endif
 
 	for (i = 1; i <= aframes; i++) {
 		fp = fp->backchain;
 		pc = fp->retaddr;
 
 		if (pc  == (uintptr_t)dtrace_invop_callsite) {
+#if defined(__i386__)
 			/*
 			 * If we pass through the invalid op handler, we will
 			 * use the pointer that it passed to the stack as the
@@ -605,19 +758,62 @@ dtrace_getarg(int arg, int aframes)
 			stack = (uintptr_t *)&fp[1]; /* Find marshalled arguments */
 			fp = (struct frame *)stack[1]; /* Grab *second* argument */
 			stack = (uintptr_t *)&fp[1]; /* Find marshalled arguments */
-			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
-			val = (uint64_t)(stack[arg]);
-			DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
-			return val;
+#elif defined(__x86_64__)
+			/*
+			 * In the case of x86_64, we will use the pointer to the
+			 * save area structure that was pushed when we took the
+			 * trap.  To get this structure, we must increment
+			 * beyond the frame structure. If the
+			 * argument that we're seeking is passed on the stack,
+			 * we'll pull the true stack pointer out of the saved
+			 * registers and decrement our argument by the number
+			 * of arguments passed in registers; if the argument
+			 * we're seeking is passed in regsiters, we can just
+			 * load it directly.
+			 */
+
+			/* fp points to frame of dtrace_invop() activation. */
+			fp = fp->backchain; /* to fbt_perfcallback() activation. */
+			fp = fp->backchain; /* to kernel_trap() activation. */
+			fp = fp->backchain; /* to trap_from_kernel() activation. */
+			
+			x86_saved_state_t   *tagged_regs = (x86_saved_state_t *)&fp[1];
+			x86_saved_state64_t *saved_state = saved_state64(tagged_regs);
+
+			if (arg <= inreg) {
+				stack = (uintptr_t *)&saved_state->rdi;
+			} else {
+				stack = (uintptr_t *)(saved_state->isf.rsp);
+				arg -= inreg;
+			}
+#else
+#error Unknown arch
+#endif
+			goto load;
 		}
 	}
 
 	/*
 	 * Arrive here when provider has called dtrace_probe directly.
 	 */
-	stack = (uintptr_t *)&fp[1]; /* Find marshalled arguments */
-	stack++; /* Advance past probeID */
+	arg++; /* Advance past probeID */
 
+#if defined(__x86_64__)
+	if (arg <= inreg) {
+		/*
+		 * This shouldn't happen.  If the argument is passed in a
+		 * register then it should have been, well, passed in a
+		 * register...
+		 */
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+		return (0);
+	}
+
+	arg -= (inreg + 1);
+#endif
+	stack = (uintptr_t *)&fp[1]; /* Find marshalled arguments */
+
+load:
 	DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
 	val = *(((uint64_t *)stack) + arg); /* dtrace_probe arguments arg0 .. arg4 are 64bits wide */
 	DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
@@ -635,15 +831,8 @@ dtrace_toxic_ranges(void (*func)(uintptr_t base, uintptr_t limit))
 	 * "base" is the smallest toxic address in the range, "limit" is the first
 	 * VALID address greater than "base".
 	 */
-	func(0x0, VM_MIN_KERNEL_ADDRESS);
-	func(VM_MAX_KERNEL_ADDRESS + 1, ~(uintptr_t)0);
-}
-
-extern boolean_t pmap_valid_page(ppnum_t pn);
-
-boolean_t
-dtxnu_is_RAM_page(ppnum_t pn)
-{
-	return pmap_valid_page(pn);
+	func(0x0, VM_MIN_KERNEL_AND_KEXT_ADDRESS);
+	if (VM_MAX_KERNEL_ADDRESS < ~(uintptr_t)0)
+			func(VM_MAX_KERNEL_ADDRESS + 1, ~(uintptr_t)0);
 }
 

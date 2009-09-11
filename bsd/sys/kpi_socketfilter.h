@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -29,7 +29,7 @@
 	@header kpi_socketfilter.h
 	This header defines an API for intercepting communications at the
 	socket layer.
-	
+
 	For the most part, socket filters want to do three things: Filter
 	data in and out, watch for state changes, and intercept a few calls
 	for security. The number of function pointers supplied by a socket
@@ -140,7 +140,7 @@ __BEGIN_DECLS
 
 /*!
 	@typedef sf_unregistered_func
-	
+
 	@discussion sf_unregistered_func is called to notify the filter it
 		has been unregistered. This is the last function the stack will
 		call and this function will only be called once all other
@@ -148,11 +148,11 @@ __BEGIN_DECLS
 		function has been called, your kext may safely unload.
 	@param handle The socket filter handle used to identify this filter.
 */
-typedef	void	(*sf_unregistered_func)(sflt_handle handle);
+typedef	void (*sf_unregistered_func)(sflt_handle handle);
 
 /*!
 	@typedef sf_attach_func
-	
+
 	@discussion sf_attach_func is called to notify the filter it has
 		been attached to a socket. The filter may allocate memory for
 		this attachment and use the cookie to track it. This filter is
@@ -170,7 +170,7 @@ typedef	errno_t	(*sf_attach_func)(void	**cookie, socket_t so);
 
 /*!
 	@typedef sf_detach_func
-	
+
 	@discussion sf_detach_func is called to notify the filter it has
 		been detached from a socket. If the filter allocated any memory
 		for this attachment, it should be freed. This function will
@@ -181,11 +181,11 @@ typedef	errno_t	(*sf_attach_func)(void	**cookie, socket_t so);
 	@result If you return a non-zero value, your filter will not be
 		attached to this socket.
 */
-typedef	void	(*sf_detach_func)(void	*cookie, socket_t so);
+typedef	void (*sf_detach_func)(void *cookie, socket_t so);
 
 /*!
 	@typedef sf_notify_func
-	
+
 	@discussion sf_notify_func is called to notify the filter of various
 		state changes and other events occuring on the socket.
 	@param cookie Cookie value specified when the filter attach was
@@ -194,12 +194,12 @@ typedef	void	(*sf_detach_func)(void	*cookie, socket_t so);
 	@param event The type of event that has occurred.
 	@param param Additional information about the event.
 */
-typedef	void	(*sf_notify_func)(void *cookie, socket_t so,
-						 sflt_event_t event, void *param);
+typedef	void (*sf_notify_func)(void *cookie, socket_t so, sflt_event_t event,
+    void *param);
 
 /*!
 	@typedef sf_getpeername_func
-	
+
 	@discussion sf_getpeername_func is called to allow a filter to
 		to intercept the getpeername function. When called, sa will
 		point to a pointer to a socket address that was malloced
@@ -215,12 +215,12 @@ typedef	void	(*sf_notify_func)(void *cookie, socket_t so,
 		but a result of zero will be returned to the caller of
 		getpeername.
 */
-typedef	int		(*sf_getpeername_func)(void *cookie, socket_t so,
-						 struct sockaddr **sa);
+typedef	int (*sf_getpeername_func)(void *cookie, socket_t so,
+    struct sockaddr **sa);
 
 /*!
 	@typedef sf_getsockname_func
-	
+
 	@discussion sf_getsockname_func is called to allow a filter to
 		to intercept the getsockname function. When called, sa will
 		point to a pointer to a socket address that was malloced
@@ -236,18 +236,18 @@ typedef	int		(*sf_getpeername_func)(void *cookie, socket_t so,
 		but a result of zero will be returned to the caller of
 		getsockname.
 */
-typedef	int		(*sf_getsockname_func)(void *cookie, socket_t so,
-						 struct sockaddr **sa);
+typedef	int (*sf_getsockname_func)(void *cookie, socket_t so,
+    struct sockaddr **sa);
 
 /*!
 	@typedef sf_data_in_func
-	
+
 	@discussion sf_data_in_func is called to filter incoming data. If your
-		filter intercepts data for later reinjection, it must queue all incoming
-		data to preserve the order of the data. Use sock_inject_data_in to later
-		reinject this data if you return EJUSTRETURN. Warning: This filter is on
-		the data path. Do not spend excesive time. Do not wait for data on
-		another socket.
+		filter intercepts data for later reinjection, it must queue
+		all incoming data to preserve the order of the data. Use
+		sock_inject_data_in to later reinject this data if you return
+		EJUSTRETURN. Warning: This filter is on the data path. Do not
+		spend excesive time. Do not wait for data on another socket.
 	@param cookie Cookie value specified when the filter attach was
 		called.
 	@param so The socket the filter is attached to.
@@ -261,16 +261,18 @@ typedef	int		(*sf_getsockname_func)(void *cookie, socket_t so,
 		record.
 	@result Return:
 		0 - The caller will continue with normal processing of the data.
-		EJUSTRETURN - The caller will stop processing the data, the data will not be freed.
-		Anything Else - The caller will free the data and stop processing.
+		EJUSTRETURN - The caller will stop processing the data, the
+			data will not be freed.
+		Anything Else - The caller will free the data and stop
+			processing.
 */
 typedef	errno_t	(*sf_data_in_func)(void *cookie, socket_t so,
-					const struct sockaddr *from, mbuf_t *data,
-					mbuf_t *control, sflt_data_flag_t flags);
+    const struct sockaddr *from, mbuf_t *data, mbuf_t *control,
+    sflt_data_flag_t flags);
 
 /*!
 	@typedef sf_data_out_func
-	
+
 	@discussion sf_data_out_func is called to filter outbound data. If
 		your filter intercepts data for later reinjection, it must queue
 		all outbound data to preserve the order of the data when
@@ -289,35 +291,39 @@ typedef	errno_t	(*sf_data_in_func)(void *cookie, socket_t so,
 		record.
 	@result Return:
 		0 - The caller will continue with normal processing of the data.
-		EJUSTRETURN - The caller will stop processing the data, the data will not be freed.
-		Anything Else - The caller will free the data and stop processing.
+		EJUSTRETURN - The caller will stop processing the data,
+			the data will not be freed.
+		Anything Else - The caller will free the data and stop
+			processing.
 */
 typedef	errno_t	(*sf_data_out_func)(void *cookie, socket_t so,
-					const struct sockaddr *to, mbuf_t *data,
-					mbuf_t *control, sflt_data_flag_t flags);
+    const struct sockaddr *to, mbuf_t *data, mbuf_t *control,
+    sflt_data_flag_t flags);
 
 /*!
 	@typedef sf_connect_in_func
-	
-	@discussion sf_connect_in_func is called to filter inbound connections. A
-		protocol will call this before accepting an incoming connection and
-		placing it on the queue of completed connections. Warning: This filter
-		is on the data path. Do not spend excesive time. Do not wait for data on
-		another socket.
+
+	@discussion sf_connect_in_func is called to filter inbound connections.
+		A protocol will call this before accepting an incoming
+		connection and placing it on the queue of completed connections.
+		Warning: This filter is on the data path. Do not spend excesive
+		time. Do not wait for data on another socket.
 	@param cookie Cookie value specified when the filter attach was
 		called.
 	@param so The socket the filter is attached to.
 	@param from The address the incoming connection is from.
 	@result Return:
-		0 - The caller will continue with normal processing of the connection.
-		Anything Else - The caller will rejecting the incoming connection.
+		0 - The caller will continue with normal processing of the
+			connection.
+		Anything Else - The caller will rejecting the incoming
+			connection.
 */
 typedef	errno_t	(*sf_connect_in_func)(void *cookie, socket_t so,
-					const struct sockaddr *from);
+    const struct sockaddr *from);
 
 /*!
 	@typedef sf_connect_out_func
-	
+
 	@discussion sf_connect_out_func is called to filter outbound
 		connections. A protocol will call this before initiating an
 		outbound connection.
@@ -326,15 +332,17 @@ typedef	errno_t	(*sf_connect_in_func)(void *cookie, socket_t so,
 	@param so The socket the filter is attached to.
 	@param to The remote address of the outbound connection.
 	@result Return:
-		0 - The caller will continue with normal processing of the connection.
-		Anything Else - The caller will rejecting the outbound connection.
+		0 - The caller will continue with normal processing of the
+			connection.
+		Anything Else - The caller will rejecting the outbound
+			connection.
 */
 typedef	errno_t	(*sf_connect_out_func)(void *cookie, socket_t so,
-					const struct sockaddr *to);
+    const struct sockaddr *to);
 
 /*!
 	@typedef sf_bind_func
-	
+
 	@discussion sf_bind_func is called before performing a bind
 		operation on a socket.
 	@param cookie Cookie value specified when the filter attach was
@@ -346,11 +354,11 @@ typedef	errno_t	(*sf_connect_out_func)(void *cookie, socket_t so,
 		Anything Else - The caller will rejecting the bind.
 */
 typedef	errno_t	(*sf_bind_func)(void *cookie, socket_t so,
-					const struct sockaddr *to);
+    const struct sockaddr *to);
 
 /*!
 	@typedef sf_setoption_func
-	
+
 	@discussion sf_setoption_func is called before performing setsockopt
 		on a socket.
 	@param cookie Cookie value specified when the filter attach was
@@ -358,15 +366,16 @@ typedef	errno_t	(*sf_bind_func)(void *cookie, socket_t so,
 	@param so The socket the filter is attached to.
 	@param opt The socket option to set.
 	@result Return:
-		0 - The caller will continue with normal processing of the setsockopt.
-		Anything Else - The caller will stop processing and return this error.
+		0 - The caller will continue with normal processing of the
+			setsockopt.
+		Anything Else - The caller will stop processing and return
+			this error.
 */
-typedef	errno_t	(*sf_setoption_func)(void *cookie, socket_t so,
-					sockopt_t opt);
+typedef	errno_t	(*sf_setoption_func)(void *cookie, socket_t so, sockopt_t opt);
 
 /*!
 	@typedef sf_getoption_func
-	
+
 	@discussion sf_getoption_func is called before performing getsockopt
 		on a socket.
 	@param cookie Cookie value specified when the filter attach was
@@ -374,15 +383,16 @@ typedef	errno_t	(*sf_setoption_func)(void *cookie, socket_t so,
 	@param so The socket the filter is attached to.
 	@param opt The socket option to get.
 	@result Return:
-		0 - The caller will continue with normal processing of the getsockopt.
-		Anything Else - The caller will stop processing and return this error.
+		0 - The caller will continue with normal processing of the
+			getsockopt.
+		Anything Else - The caller will stop processing and return
+			this error.
 */
-typedef	errno_t	(*sf_getoption_func)(void *cookie, socket_t so,
-					sockopt_t opt);
+typedef	errno_t	(*sf_getoption_func)(void *cookie, socket_t so, sockopt_t opt);
 
 /*!
 	@typedef sf_listen_func
-	
+
 	@discussion sf_listen_func is called before performing listen
 		on a socket.
 	@param cookie Cookie value specified when the filter attach was
@@ -390,13 +400,14 @@ typedef	errno_t	(*sf_getoption_func)(void *cookie, socket_t so,
 	@param so The socket the filter is attached to.
 	@result Return:
 		0 - The caller will continue with normal processing of listen.
-		Anything Else - The caller will stop processing and return this error.
+		Anything Else - The caller will stop processing and return
+			this error.
 */
 typedef	errno_t	(*sf_listen_func)(void *cookie, socket_t so);
 
 /*!
 	@typedef sf_ioctl_func
-	
+
 	@discussion sf_ioctl_func is called before performing an ioctl
 		on a socket.
 
@@ -409,11 +420,13 @@ typedef	errno_t	(*sf_listen_func)(void *cookie, socket_t so);
 	@param request The ioctl name.
 	@param argp A pointer to the ioctl parameter.
 	@result Return:
-		0 - The caller will continue with normal processing of this ioctl.
-		Anything Else - The caller will stop processing and return this error.
+		0 - The caller will continue with normal processing of
+			this ioctl.
+		Anything Else - The caller will stop processing and return
+			this error.
 */
 typedef	errno_t	(*sf_ioctl_func)(void *cookie, socket_t so,
-					u_int32_t request, const char* argp);
+    unsigned long request, const char* argp);
 
 /*!
 	@typedef sf_accept_func
@@ -533,8 +546,8 @@ struct sflt_filter {
 	@param protocol The protocol these filters will be attached to.
 	@result 0 on success otherwise the errno error.
  */
-errno_t	sflt_register(const struct sflt_filter *filter, int domain,
-					  int type, int protocol);
+extern errno_t sflt_register(const struct sflt_filter *filter, int domain,
+    int type, int protocol);
 
 /*!
 	@function sflt_unregister
@@ -545,7 +558,7 @@ errno_t	sflt_register(const struct sflt_filter *filter, int domain,
 	@param handle The sf_handle of the socket filter to unregister.
 	@result 0 on success otherwise the errno error.
  */
-errno_t sflt_unregister(sflt_handle handle);
+extern errno_t sflt_unregister(sflt_handle handle);
 
 /*!
 	@function sflt_attach
@@ -555,7 +568,7 @@ errno_t sflt_unregister(sflt_handle handle);
 	@param handle The handle of the registered filter to be attached.
 	@result 0 on success otherwise the errno error.
  */
-errno_t	sflt_attach(socket_t so, sflt_handle);
+extern errno_t sflt_attach(socket_t so, sflt_handle);
 
 /*!
 	@function sflt_detach
@@ -564,7 +577,7 @@ errno_t	sflt_attach(socket_t so, sflt_handle);
 	@param handle The handle of the registered filter to be detached.
 	@result 0 on success otherwise the errno error.
  */
-errno_t	sflt_detach(socket_t so, sflt_handle);
+extern errno_t sflt_detach(socket_t so, sflt_handle);
 
 /* Functions for manipulating sockets */
 /*
@@ -590,8 +603,8 @@ errno_t	sflt_detach(socket_t so, sflt_handle);
 		returns an error, the caller is responsible for freeing the
 		mbuf.
  */
-errno_t	sock_inject_data_in(socket_t so, const struct sockaddr* from,
-							mbuf_t data, mbuf_t control, sflt_data_flag_t flags);
+extern errno_t sock_inject_data_in(socket_t so, const struct sockaddr *from,
+    mbuf_t data, mbuf_t control, sflt_data_flag_t flags);
 
 /*!
 	@function sock_inject_data_out
@@ -607,8 +620,8 @@ errno_t	sock_inject_data_in(socket_t so, const struct sockaddr* from,
 	@result 0 on success otherwise the errno error. The data and control
 		values are always freed regardless of return value.
  */
-errno_t	sock_inject_data_out(socket_t so, const struct sockaddr* to,
-							 mbuf_t data, mbuf_t control, sflt_data_flag_t flags);
+extern errno_t sock_inject_data_out(socket_t so, const struct sockaddr *to,
+    mbuf_t data, mbuf_t control, sflt_data_flag_t flags);
 
 
 /*
@@ -628,7 +641,7 @@ typedef u_int8_t sockopt_dir;
 	@param sopt The socket option.
 	@result sock_opt_get or sock_opt_set.
  */
-sockopt_dir	sockopt_direction(sockopt_t sopt);
+extern sockopt_dir sockopt_direction(sockopt_t sopt);
 
 /*!
 	@function sockopt_level
@@ -636,7 +649,7 @@ sockopt_dir	sockopt_direction(sockopt_t sopt);
 	@param sopt The socket option.
 	@result The socket option level. See man 2 setsockopt
  */
-int	sockopt_level(sockopt_t sopt);
+extern int sockopt_level(sockopt_t sopt);
 
 /*!
 	@function sockopt_name
@@ -644,7 +657,7 @@ int	sockopt_level(sockopt_t sopt);
 	@param sopt The socket option.
 	@result The socket option name. See man 2 setsockopt
  */
-int	sockopt_name(sockopt_t sopt);
+extern int sockopt_name(sockopt_t sopt);
 
 /*!
 	@function sockopt_valsize
@@ -652,7 +665,7 @@ int	sockopt_name(sockopt_t sopt);
 	@param sopt The socket option.
 	@result The length, in bytes, of the data.
  */
-size_t	sockopt_valsize(sockopt_t sopt);
+extern size_t sockopt_valsize(sockopt_t sopt);
 
 /*!
 	@function sockopt_copyin
@@ -662,7 +675,7 @@ size_t	sockopt_valsize(sockopt_t sopt);
 	@param length The number of bytes to copy.
 	@result An errno error or zero upon success.
  */
-errno_t	sockopt_copyin(sockopt_t sopt, void *data, size_t length);
+extern errno_t sockopt_copyin(sockopt_t sopt, void *data, size_t length);
 
 /*!
 	@function sockopt_copyout
@@ -672,7 +685,7 @@ errno_t	sockopt_copyin(sockopt_t sopt, void *data, size_t length);
 	@param length The number of bytes to copy.
 	@result An errno error or zero upon success.
  */
-errno_t	sockopt_copyout(sockopt_t sopt, void *data, size_t length);
+extern errno_t sockopt_copyout(sockopt_t sopt, void *data, size_t length);
 
 __END_DECLS
-#endif
+#endif /* __KPI_SOCKETFILTER__ */

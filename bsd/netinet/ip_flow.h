@@ -75,12 +75,12 @@ struct ipflow {
 
 	u_int8_t ipf_tos;		/* type-of-service */
 	struct route ipf_ro;		/* associated route entry */
-	u_long ipf_uses;		/* number of uses in this period */
+	u_int32_t ipf_uses;		/* number of uses in this period */
 
 	int ipf_timer;			/* remaining lifetime of this entry */
-	u_long ipf_dropped;		/* ENOBUFS returned by if_output */
-	u_long ipf_errors;		/* other errors returned by if_output */
-	u_long ipf_last_uses;		/* number of uses in last period */
+	u_int32_t ipf_dropped;		/* ENOBUFS returned by if_output */
+	u_int32_t ipf_errors;		/* other errors returned by if_output */
+	u_int32_t ipf_last_uses;		/* number of uses in last period */
 };
 #endif /* KERNEL_PRIVATE */
 

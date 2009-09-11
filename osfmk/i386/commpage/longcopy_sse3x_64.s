@@ -54,11 +54,10 @@
 //      rdi = dest ptr
 //      rsi = source ptr
 //      rdx = length (>= 8kb, probably much bigger)
- 
-        .text
-	.code64
-        .align 5, 0x90
-Llongcopy_sse3x_64:			// void longcopy(const void *dest, void *sou, size_t len)
+
+// void longcopy(const void *dest, void *sou, size_t len)
+			
+COMMPAGE_FUNCTION_START(longcopy_sse3x_64, 64, 5)
 	pushq	%rbp			// set up a frame for backtraces
 	movq	%rsp,%rbp
 	movl	%edi,%eax		// copy dest ptr
@@ -207,5 +206,5 @@ LVeryLongChunkEnd:
 	popq	%rbp			// restore frame ptr
 	ret
 
-	/* always match for now, as commpage_stuff_routine() will panic if no match */
-	COMMPAGE_DESCRIPTOR(longcopy_sse3x_64, _COMM_PAGE_LONGCOPY, 0 ,0)
+/* always match for now, as commpage_stuff_routine() will panic if no match */
+COMMPAGE_DESCRIPTOR(longcopy_sse3x_64, _COMM_PAGE_LONGCOPY, 0 ,0)

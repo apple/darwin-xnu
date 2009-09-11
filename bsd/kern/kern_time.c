@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -74,6 +74,7 @@
 #include <sys/proc_internal.h>
 #include <sys/kauth.h>
 #include <sys/vnode.h>
+#include <sys/time.h>
 
 #include <sys/mount_internal.h>
 #include <sys/sysproto.h>
@@ -113,13 +114,19 @@ int
 gettimeofday(
 __unused	struct proc	*p,
 			struct gettimeofday_args *uap, 
-			register_t *retval)
+			int32_t *retval)
 {
 	int error = 0;
 	struct timezone ltz; /* local copy */
 
-	if (uap->tp)
-		clock_gettimeofday((uint32_t *)&retval[0], (uint32_t *)&retval[1]);
+	if (uap->tp) {
+		clock_sec_t		secs;
+		clock_usec_t	usecs;
+
+		clock_gettimeofday(&secs, &usecs);
+		retval[0] = secs;
+		retval[1] = usecs;
+	}
 	
 	if (uap->tzp) {
 		lck_spin_lock(tz_slock);
@@ -137,11 +144,13 @@ __unused	struct proc	*p,
  */
 /* ARGSUSED */
 int
-settimeofday(__unused struct proc *p, struct settimeofday_args  *uap, __unused register_t *retval)
+settimeofday(__unused struct proc *p, struct settimeofday_args  *uap, __unused int32_t *retval)
 {
 	struct timeval atv;
 	struct timezone atz;
 	int error;
+
+	bzero(&atv, sizeof(atv));
 
 #if CONFIG_MACF
 	error = mac_system_check_settime(kauth_cred_get());
@@ -155,12 +164,15 @@ settimeofday(__unused struct proc *p, struct settimeofday_args  *uap, __unused r
 	/* Verify all parameters before changing time */
 	if (uap->tv) {
 		if (IS_64BIT_PROCESS(p)) {
-			struct user_timeval user_atv;
-			error = copyin(uap->tv, &user_atv, sizeof(struct user_timeval));
+			struct user64_timeval user_atv;
+			error = copyin(uap->tv, &user_atv, sizeof(user_atv));
 			atv.tv_sec = user_atv.tv_sec;
 			atv.tv_usec = user_atv.tv_usec;
 		} else {
-			error = copyin(uap->tv, &atv, sizeof(struct timeval));
+			struct user32_timeval user_atv;
+			error = copyin(uap->tv, &user_atv, sizeof(user_atv));
+			atv.tv_sec = user_atv.tv_sec;
+			atv.tv_usec = user_atv.tv_usec;
 		}
 		if (error)
 			return (error);
@@ -193,7 +205,7 @@ setthetime(
  */
 /* ARGSUSED */
 int
-adjtime(struct proc *p, struct adjtime_args *uap, __unused register_t *retval)
+adjtime(struct proc *p, struct adjtime_args *uap, __unused int32_t *retval)
 {
 	struct timeval atv;
 	int error;
@@ -206,12 +218,15 @@ adjtime(struct proc *p, struct adjtime_args *uap, __unused register_t *retval)
 	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
 		return (error);
 	if (IS_64BIT_PROCESS(p)) {
-		struct user_timeval user_atv;
-		error = copyin(uap->delta, &user_atv, sizeof(struct user_timeval));
+		struct user64_timeval user_atv;
+		error = copyin(uap->delta, &user_atv, sizeof(user_atv));
 		atv.tv_sec = user_atv.tv_sec;
 		atv.tv_usec = user_atv.tv_usec;
 	} else {
-		error = copyin(uap->delta, &atv, sizeof(struct timeval));
+		struct user32_timeval user_atv;
+		error = copyin(uap->delta, &user_atv, sizeof(user_atv));
+		atv.tv_sec = user_atv.tv_sec;
+		atv.tv_usec = user_atv.tv_usec;
 	}
 	if (error)
 		return (error);
@@ -219,16 +234,19 @@ adjtime(struct proc *p, struct adjtime_args *uap, __unused register_t *retval)
 	/*
 	 * Compute the total correction and the rate at which to apply it.
 	 */
-	clock_adjtime((int32_t *)&atv.tv_sec, &atv.tv_usec);
+	clock_adjtime(&atv.tv_sec, &atv.tv_usec);
 
 	if (uap->olddelta) {
 		if (IS_64BIT_PROCESS(p)) {
-			struct user_timeval user_atv;
+			struct user64_timeval user_atv;
 			user_atv.tv_sec = atv.tv_sec;
 			user_atv.tv_usec = atv.tv_usec;
-			error = copyout(&user_atv, uap->olddelta, sizeof(struct user_timeval));
+			error = copyout(&user_atv, uap->olddelta, sizeof(user_atv));
 		} else {
-			error = copyout(&atv, uap->olddelta, sizeof(struct timeval));
+			struct user32_timeval user_atv;
+			user_atv.tv_sec = atv.tv_sec;
+			user_atv.tv_usec = atv.tv_usec;
+			error = copyout(&user_atv, uap->olddelta, sizeof(user_atv));
 		}
 	}
 
@@ -267,12 +285,12 @@ inittodr(
 time_t
 boottime_sec(void)
 {
-	uint32_t	sec, nanosec;
-	clock_get_boottime_nanotime(&sec, &nanosec);
-	return (sec);
-}
+	clock_sec_t		secs;
+	clock_nsec_t	nanosecs;
 
-uint64_t tvtoabstime(struct timeval *tvp);
+	clock_get_boottime_nanotime(&secs, &nanosecs);
+	return (secs);
+}
 
 /*
  * Get value of an interval timer.  The process virtual and
@@ -298,12 +316,14 @@ uint64_t tvtoabstime(struct timeval *tvp);
  */
 /* ARGSUSED */
 int
-getitimer(struct proc *p, struct getitimer_args *uap, __unused register_t *retval)
+getitimer(struct proc *p, struct getitimer_args *uap, __unused int32_t *retval)
 {
 	struct itimerval aitv;
 
 	if (uap->which > ITIMER_PROF)
 		return(EINVAL);
+
+	bzero(&aitv, sizeof(aitv));
 
 	proc_spinlock(p);
 	switch (uap->which) {
@@ -342,14 +362,19 @@ getitimer(struct proc *p, struct getitimer_args *uap, __unused register_t *retva
 	proc_spinunlock(p);
 
 	if (IS_64BIT_PROCESS(p)) {
-		struct user_itimerval user_itv;
+		struct user64_itimerval user_itv;
 		user_itv.it_interval.tv_sec = aitv.it_interval.tv_sec;
 		user_itv.it_interval.tv_usec = aitv.it_interval.tv_usec;
 		user_itv.it_value.tv_sec = aitv.it_value.tv_sec;
 		user_itv.it_value.tv_usec = aitv.it_value.tv_usec;
-		return (copyout((caddr_t)&user_itv, uap->itv, sizeof (struct user_itimerval)));
+		return (copyout((caddr_t)&user_itv, uap->itv, sizeof (user_itv)));
 	} else {
-		return (copyout((caddr_t)&aitv, uap->itv, sizeof (struct itimerval)));
+		struct user32_itimerval user_itv;
+		user_itv.it_interval.tv_sec = aitv.it_interval.tv_sec;
+		user_itv.it_interval.tv_usec = aitv.it_interval.tv_usec;
+		user_itv.it_value.tv_sec = aitv.it_value.tv_sec;
+		user_itv.it_value.tv_usec = aitv.it_value.tv_usec;
+		return (copyout((caddr_t)&user_itv, uap->itv, sizeof (user_itv)));
 	}
 }
 
@@ -362,26 +387,33 @@ getitimer(struct proc *p, struct getitimer_args *uap, __unused register_t *retva
  */
 /* ARGSUSED */
 int
-setitimer(struct proc *p, struct setitimer_args *uap, register_t *retval)
+setitimer(struct proc *p, struct setitimer_args *uap, int32_t *retval)
 {
 	struct itimerval aitv;
 	user_addr_t itvp;
 	int error;
 
+	bzero(&aitv, sizeof(aitv));
+
 	if (uap->which > ITIMER_PROF)
 		return (EINVAL);
 	if ((itvp = uap->itv)) {
 		if (IS_64BIT_PROCESS(p)) {
-			struct user_itimerval user_itv;
-			if ((error = copyin(itvp, (caddr_t)&user_itv, sizeof (struct user_itimerval))))
+			struct user64_itimerval user_itv;
+			if ((error = copyin(itvp, (caddr_t)&user_itv, sizeof (user_itv))))
 				return (error);
 			aitv.it_interval.tv_sec = user_itv.it_interval.tv_sec;
 			aitv.it_interval.tv_usec = user_itv.it_interval.tv_usec;
 			aitv.it_value.tv_sec = user_itv.it_value.tv_sec;
 			aitv.it_value.tv_usec = user_itv.it_value.tv_usec;
 		} else { 
-			if ((error = copyin(itvp, (caddr_t)&aitv, sizeof (struct itimerval))))
+			struct user32_itimerval user_itv;
+			if ((error = copyin(itvp, (caddr_t)&user_itv, sizeof (user_itv))))
 				return (error);
+			aitv.it_interval.tv_sec = user_itv.it_interval.tv_sec;
+			aitv.it_interval.tv_usec = user_itv.it_interval.tv_usec;
+			aitv.it_value.tv_sec = user_itv.it_value.tv_sec;
+			aitv.it_value.tv_usec = user_itv.it_value.tv_usec;
 		}
 	}
 	if ((uap->itv = uap->oitv) && (error = getitimer(p, (struct getitimer_args *)uap, retval)))
@@ -612,14 +644,26 @@ void
 microtime(
 	struct timeval	*tvp)
 {
-	clock_get_calendar_microtime((uint32_t *)&tvp->tv_sec, (uint32_t *)&tvp->tv_usec);
+	clock_sec_t		tv_sec;
+	clock_usec_t	tv_usec;
+
+	clock_get_calendar_microtime(&tv_sec, &tv_usec);
+
+	tvp->tv_sec = tv_sec;
+	tvp->tv_usec = tv_usec;
 }
 
 void
 microuptime(
 	struct timeval	*tvp)
 {
-	clock_get_system_microtime((uint32_t *)&tvp->tv_sec, (uint32_t *)&tvp->tv_usec);
+	clock_sec_t		tv_sec;
+	clock_usec_t	tv_usec;
+
+	clock_get_system_microtime(&tv_sec, &tv_usec);
+
+	tvp->tv_sec = tv_sec;
+	tvp->tv_usec = tv_usec;
 }
 
 /*
@@ -629,14 +673,26 @@ void
 nanotime(
 	struct timespec *tsp)
 {
-	clock_get_calendar_nanotime((uint32_t *)&tsp->tv_sec, (uint32_t *)&tsp->tv_nsec);
+	clock_sec_t		tv_sec;
+	clock_nsec_t	tv_nsec;
+
+	clock_get_calendar_nanotime(&tv_sec, &tv_nsec);
+
+	tsp->tv_sec = tv_sec;
+	tsp->tv_nsec = tv_nsec;
 }
 
 void
 nanouptime(
 	struct timespec *tsp)
 {
-	clock_get_system_nanotime((uint32_t *)&tsp->tv_sec, (uint32_t *)&tsp->tv_nsec);
+	clock_sec_t		tv_sec;
+	clock_nsec_t	tv_nsec;
+
+	clock_get_system_nanotime(&tv_sec, &tv_nsec);
+
+	tsp->tv_sec = tv_sec;
+	tsp->tv_nsec = tv_nsec;
 }
 
 uint64_t

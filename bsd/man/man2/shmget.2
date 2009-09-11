@@ -91,6 +91,10 @@ is set to the current time.
 .Va shm_segsz
 is set to the value of
 .Fa size .
+.It
+The
+.Xr ftok 3
+function may be used to generate a key from a pathname.
 .El
 .Sh RETURN VALUES
 Upon successful completion a positive shared memory segment identifier is returned.
@@ -156,6 +160,7 @@ The type of
 .Fa size
 has changed.
 .Sh SEE ALSO
+.Xr ftok 3 ,
 .Xr shmat 2 ,
 .Xr shmctl 2 ,
 .Xr shmdt 2 ,

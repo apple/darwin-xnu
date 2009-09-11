@@ -90,6 +90,7 @@ struct	sockaddr_un {
 
 #ifdef KERNEL
 #ifdef PRIVATE
+#include <kern/locks.h>
 __BEGIN_DECLS
 struct mbuf;
 struct socket;
@@ -103,6 +104,9 @@ void	unp_dispose(struct mbuf *m);
 int	unp_externalize(struct mbuf *rights);
 void	unp_init(void) __attribute__((section("__TEXT, initcode")));
 extern	struct pr_usrreqs uipc_usrreqs;
+int     unp_lock(struct socket *, int, void *);
+int     unp_unlock(struct socket *, int, void *);
+lck_mtx_t* unp_getlock(struct socket *, int);
 __END_DECLS
 #endif /* PRIVATE */
 #else /* !KERNEL */

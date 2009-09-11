@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2009 Apple, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -32,13 +32,7 @@
 #include <mach/i386/syscall_sw.h>
 	
 
-
-#define MP_SPIN_TRIES	1024
-
-	.text
-	.align 4, 0x90
-
-Lspin_lock_try_up:
+COMMPAGE_FUNCTION_START(spin_lock_try_up, 32, 4)
 	movl		4(%esp), %ecx 
 	xorl		%eax, %eax
 	orl		$-1, %edx
@@ -46,12 +40,10 @@ Lspin_lock_try_up:
 	setz		%dl
 	movzbl		%dl, %eax
 	ret
+COMMPAGE_DESCRIPTOR(spin_lock_try_up,_COMM_PAGE_SPINLOCK_TRY,kUP,0)
+ 
 
-	COMMPAGE_DESCRIPTOR(spin_lock_try_up,_COMM_PAGE_SPINLOCK_TRY,kUP,0)
- 
- 
-	.align 4, 0x90
-Lspin_lock_try_mp:
+COMMPAGE_FUNCTION_START(spin_lock_try_mp, 32, 4)
 	movl		4(%esp), %ecx 
 	xorl		%eax, %eax
 	orl		$-1, %edx
@@ -60,17 +52,15 @@ Lspin_lock_try_mp:
 	setz		%dl
 	movzbl		%dl, %eax
 	ret
+COMMPAGE_DESCRIPTOR(spin_lock_try_mp,_COMM_PAGE_SPINLOCK_TRY,0,kUP)
 
-	COMMPAGE_DESCRIPTOR(spin_lock_try_mp,_COMM_PAGE_SPINLOCK_TRY,0,kUP)
 
-
-	.align 4, 0x90
-Lspin_lock_up:
+COMMPAGE_FUNCTION_START(spin_lock_up, 32, 4)
 	movl		4(%esp), %ecx
 	xorl		%eax, %eax
 	orl		$-1, %edx
 	cmpxchgl	%edx, (%ecx)
-	jnz,pn		1f		/* predict not taken */
+	jnz		1f
 	ret
 1:
 	/* failed to get lock so relinquish the processor immediately on UP */
@@ -82,19 +72,17 @@ Lspin_lock_up:
 	int		$(MACH_INT)
 	addl		$16, %esp	/* adjust stack*/
 	jmp		Lspin_lock_up
+COMMPAGE_DESCRIPTOR(spin_lock_up,_COMM_PAGE_SPINLOCK_LOCK,kUP,0)
 
-	COMMPAGE_DESCRIPTOR(spin_lock_up,_COMM_PAGE_SPINLOCK_LOCK,kUP,0)
 
-
-	.align 4, 0x90
-Lspin_lock_mp:
+COMMPAGE_FUNCTION_START(spin_lock_mp, 32, 4)
 	movl		4(%esp), %ecx
 	xorl		%eax, %eax
 0:
 	orl		$-1, %edx
 	lock
 	cmpxchgl	%edx, (%ecx)
-	jnz,pn		1f		/* predict not taken */
+	jnz		1f
 	ret
 1:
 	xorl		%eax, %eax
@@ -102,9 +90,9 @@ Lspin_lock_mp:
 2:
 	pause	
 	cmpl		%eax, (%ecx)
-	jz,pt		0b		/* favor success and slow down spin loop */
+	jz		0b		/* favor success and slow down spin loop */
 	decl		%edx
-	jnz,pn		2b		/* slow down spin loop with a mispredict */
+	jnz		2b
 	/* failed to get lock after spinning so relinquish  */
 	pushl		$1		/* 1 ms				*/
 	pushl		$1		/* SWITCH_OPTION_DEPRESS	*/
@@ -114,39 +102,30 @@ Lspin_lock_mp:
 	int		$(MACH_INT)
 	addl		$16, %esp	/* adjust stack*/
 	jmp		Lspin_lock_mp
- 
-	COMMPAGE_DESCRIPTOR(spin_lock_mp,_COMM_PAGE_SPINLOCK_LOCK,0,kUP)
+COMMPAGE_DESCRIPTOR(spin_lock_mp,_COMM_PAGE_SPINLOCK_LOCK,0,kUP)
 
 
-	.align 4, 0x90
-Lspin_unlock:
+COMMPAGE_FUNCTION_START(spin_unlock, 32, 4)
 	movl		4(%esp), %ecx
 	movl		$0, (%ecx)
 	ret
-
-	COMMPAGE_DESCRIPTOR(spin_unlock,_COMM_PAGE_SPINLOCK_UNLOCK,0,0)
+COMMPAGE_DESCRIPTOR(spin_unlock,_COMM_PAGE_SPINLOCK_UNLOCK,0,0)
 
 
 /* ============================ 64-bit versions follow ===================== */
 
 
-	.text
-	.code64
-	.align 4, 0x90
-
-Lspin_lock_try_up_64:
+COMMPAGE_FUNCTION_START(spin_lock_try_up_64, 64, 4)
 	xorl		%eax, %eax
 	orl		$-1, %edx
 	cmpxchgl	%edx, (%rdi)
 	setz		%dl
 	movzbl		%dl, %eax
 	ret
+COMMPAGE_DESCRIPTOR(spin_lock_try_up_64,_COMM_PAGE_SPINLOCK_TRY,kUP,0)
 
-	COMMPAGE_DESCRIPTOR(spin_lock_try_up_64,_COMM_PAGE_SPINLOCK_TRY,kUP,0)
 
-
-	.align 4, 0x90
-Lspin_lock_try_mp_64:
+COMMPAGE_FUNCTION_START(spin_lock_try_mp_64, 64, 4)
 	xorl		%eax, %eax
 	orl		$-1, %edx
 	lock
@@ -154,18 +133,16 @@ Lspin_lock_try_mp_64:
 	setz		%dl
 	movzbl		%dl, %eax
 	ret
+COMMPAGE_DESCRIPTOR(spin_lock_try_mp_64,_COMM_PAGE_SPINLOCK_TRY,0,kUP)
 
-	COMMPAGE_DESCRIPTOR(spin_lock_try_mp_64,_COMM_PAGE_SPINLOCK_TRY,0,kUP)
 
-
-	.align 4, 0x90
-Lspin_lock_up_64:
+COMMPAGE_FUNCTION_START(spin_lock_up_64, 64, 4)
 	movq		%rdi,%r8
 0:
 	xorl		%eax, %eax
 	orl		$-1, %edx
 	cmpxchgl	%edx, (%r8)
-	jnz,pn		1f		/* predict not taken */
+	jnz		1f
 	ret
 1:
 	/* failed to get lock so relinquish the processor immediately on UP */
@@ -175,20 +152,17 @@ Lspin_lock_up_64:
 	movl		$(SYSCALL_CONSTRUCT_MACH(61)),%eax	/* 61 = thread_switch */
 	syscall
 	jmp		0b
-
-	COMMPAGE_DESCRIPTOR(spin_lock_up_64,_COMM_PAGE_SPINLOCK_LOCK,kUP,0)
+COMMPAGE_DESCRIPTOR(spin_lock_up_64,_COMM_PAGE_SPINLOCK_LOCK,kUP,0)
 	
 	
-
-	.align 4, 0x90
-Lspin_lock_mp_64:
+COMMPAGE_FUNCTION_START(spin_lock_mp_64, 64, 4)
 	movq		%rdi,%r8
 0:
 	xorl		%eax, %eax
 	orl		$-1, %edx
 	lock
 	cmpxchgl	%edx, (%r8)
-	jnz,pn		1f		/* predict not taken */
+	jnz		1f
 	ret
 1:
 	xorl		%eax, %eax
@@ -206,13 +180,10 @@ Lspin_lock_mp_64:
 	movl		$(SYSCALL_CONSTRUCT_MACH(61)),%eax	/* 61 = thread_switch */
 	syscall
 	jmp		0b
- 
-	COMMPAGE_DESCRIPTOR(spin_lock_mp_64,_COMM_PAGE_SPINLOCK_LOCK,0,kUP)
+COMMPAGE_DESCRIPTOR(spin_lock_mp_64,_COMM_PAGE_SPINLOCK_LOCK,0,kUP)
 
 
-	.align 4, 0x90
-Lspin_unlock_64:
+COMMPAGE_FUNCTION_START(spin_unlock_64, 64, 4)
 	movl		$0, (%rdi)
 	ret
-
-	COMMPAGE_DESCRIPTOR(spin_unlock_64,_COMM_PAGE_SPINLOCK_UNLOCK,0,0)
+COMMPAGE_DESCRIPTOR(spin_unlock_64,_COMM_PAGE_SPINLOCK_UNLOCK,0,0)

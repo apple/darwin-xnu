@@ -1,5 +1,5 @@
 .\"
-.\" Copyright (c) 2007 Apple Inc. All rights reserved.
+.\" Copyright (c) 2008 Apple Inc. All rights reserved.
 .\"
 .\" @APPLE_LICENSE_HEADER_START@
 .\" 
@@ -20,40 +20,60 @@
 .\" 
 .\" @APPLE_LICENSE_HEADER_END@
 .\"
-.Dd July 30, 2007
+.Dd April 19, 2005
 .Dt AUDITCTL 2
-.Os Darwin
+.Os
 .Sh NAME
 .Nm auditctl
-.Nd specify a new file for the audit trail to log to  
+.Nd "configure system audit parameters"
 .Sh SYNOPSIS
-.Fd #include <bsm/audit.h>
+.In bsm/audit.h
 .Ft int
-.Fn auditctl "const char * path"
+.Fn auditctl "const char *path"
 .Sh DESCRIPTION
 The
 .Fn auditctl
-function directs the kernel to begin writing the global audit trail to the 
-specified to the file specified by
-.Fa path .
-Specifying a 
-.Fa path
-of NULL will tell the system to stop writing to the audit trail, without
-disabling audit. To begin writing to a file again, simply pass another 
-path.
-.Sh RETURN VALUES
-Upon successful completion a value of 0 is returned.
-Otherwise, a value of -1 is returned and
-.Va errno
-is set to indicate the error.
-.Sh SEE ALSO
-.Xr audit 2 ,
-.Xr auditon 2 ,
-.Xr getauid 2 ,
-.Xr setauid 2 ,
-.Xr getaudit 2 ,
-.Xr setaudit 2
-.Sh HISTORY
+system call directs the kernel to open a new audit trail log file.
+It requires an appropriate privilege.
 The
 .Fn auditctl
-function call first appeared in Mac OS X 10.3 (Panther).
+system call
+opens new files, but
+.Xr auditon 2
+is used to disable the audit log.
+.Sh RETURN VALUES
+.Rv -std
+.Sh ERRORS
+The
+.Fn auditctl
+system call will fail if:
+.Bl -tag -width Er
+.It Bq Er EINVAL
+The path is invalid.
+.It Bq Er EPERM
+The process does not have sufficient permission to complete the
+operation.
+.El
+.Sh SEE ALSO
+.Xr auditon 2 ,
+.Xr libbsm 3 ,
+.Xr auditd 8
+.Sh HISTORY
+The OpenBSM implementation was created by McAfee Research, the security
+division of McAfee Inc., under contract to Apple Computer Inc.\& in 2004.
+It was subsequently adopted by the TrustedBSD Project as the foundation for
+the OpenBSM distribution.
+.Sh AUTHORS
+.An -nosplit
+This software was created by McAfee Research, the security research division
+of McAfee, Inc., under contract to Apple Computer Inc.
+Additional authors include
+.An Wayne Salamon ,
+.An Robert Watson ,
+and SPARTA Inc.
+.Pp
+The Basic Security Module (BSM) interface to audit records and audit event
+stream format were defined by Sun Microsystems.
+.Pp
+This manual page was written by
+.An Robert Watson Aq rwatson@FreeBSD.org .

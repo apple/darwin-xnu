@@ -39,7 +39,14 @@
 /* Globals */
 void (*PE_kputc)(char c);
 
+#if DEBUG
+/* DEBUG kernel starts with true serial, but
+ * may later disable or switch to video
+ * console */
+unsigned int disable_serial_output = FALSE;
+#else
 unsigned int disable_serial_output = TRUE;
+#endif
 
 decl_simple_lock_data(static, kprintf_lock)
 
@@ -51,18 +58,29 @@ void PE_init_kprintf(boolean_t vm_initialized)
 		panic("Platform Expert not initialized");
 
 	if (!vm_initialized) {
+		unsigned int new_disable_serial_output = TRUE;
+
 		simple_lock_init(&kprintf_lock, 0);
 
 		if (PE_parse_boot_argn("debug", &boot_arg, sizeof (boot_arg)))
 			if (boot_arg & DB_KPRT)
-				disable_serial_output = FALSE;
+				new_disable_serial_output = FALSE;
 
-		if (!disable_serial_output && serial_init())
+		/* If we are newly enabling serial, make sure we only call serial_init()
+		 * if our previous state was not enabled */
+		if (!new_disable_serial_output && (!disable_serial_output || serial_init()))
 			PE_kputc = serial_putc;
 		else
 			PE_kputc = cnputc;
+
+		disable_serial_output = new_disable_serial_output;
 	}
 }
+
+#if CONFIG_NO_KPRINTF_STRINGS
+/* Prevent CPP from breaking the definition below */
+#undef kprintf
+#endif
 
 #ifdef MP_DEBUG
 static void _kprintf(const char *format, ...)
@@ -85,6 +103,15 @@ void kprintf(const char *fmt, ...)
 	boolean_t state;
 
 	if (!disable_serial_output) {
+
+		/* If PE_kputc has not yet been initialized, don't
+		 * take any locks, just dump to serial */
+		if (!PE_kputc) {
+			va_start(listp, fmt);
+			_doprnt(fmt, &listp, serial_putc, 16);
+			va_end(listp);
+			return;
+		}
 
 		/*
 		 * Spin to get kprintf lock but re-enable interrupts while

@@ -1,3 +1,26 @@
+.\"
+.\" Copyright (c) 2008 Apple Inc.  All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this
+.\" file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.\"
 .\"	$NetBSD: munmap.2,v 1.5 1995/02/27 12:35:03 cgd Exp $
 .\"
 .\" Copyright (c) 1991, 1993
@@ -33,7 +56,7 @@
 .\"
 .\"	@(#)munmap.2	8.2 (Berkeley) 4/15/94
 .\"
-.Dd April 15, 1994
+.Dd October 16, 2008
 .Dt MUNMAP 2
 .Os
 .Sh NAME
@@ -53,6 +76,32 @@ system call
 deletes the mappings for the specified address range,
 causing further references to addresses within the range
 to generate invalid memory references.
+.Sh DIRTY PAGE HANDLING
+How
+.Fn munmap
+handles a dirty page, depends on what type of memory is being unmapped:
+.Pp
+.Bl -tag -width "[System V Shared]"
+.It Bq Anonymous
+If the memory is anonymous memory and if the last reference is going
+away, then the contents are discarded by definition of anonymous memory.
+.It Bq System V Shared
+If the memory mapping was created using System V shared memory, then 
+the contents persist until the System V memory region is destroyed or 
+the system is rebooted.
+.It Bq File mapping
+If the mapping maps data from a file (MAP_SHARED), then the memory will 
+eventually be written back to disk if it's dirty.  This will happen 
+automatically at some point in the future (implementation dependent).
+Note: to force the memory to be written back to the disk, use 
+.Xr msync 2 .
+.El
+.Pp
+If there are still other references to the memory when the munmap is 
+done, then nothing is done to the memory itself and it may be swapped 
+out if need be. The memory will continue to persist until the last 
+reference goes away (except for System V shared memory in which case, 
+see above).
 .Sh RETURN VALUES
 Upon successful completion,
 .Nm munmap

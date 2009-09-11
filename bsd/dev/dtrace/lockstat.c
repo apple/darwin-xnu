@@ -19,11 +19,11 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
-/* #pragma ident	"@(#)lockstat.c	1.11	06/03/24 SMI" */
+/* #pragma ident	"@(#)lockstat.c	1.12	08/01/16 SMI" */
 
 
 #ifdef KERNEL
@@ -55,7 +55,7 @@
 /*
  * Hot patch values, x86
  */
-#ifdef	__i386__
+#if defined(__i386__) || defined(__x86_64__)
 #define	NOP	0x90
 #define	RET	0xc3
 #define LOCKSTAT_AFRAMES 1
@@ -77,7 +77,7 @@ typedef struct lockstat_probe {
 
 lockstat_probe_t lockstat_probes[] =
 {
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 	/* Not implemented yet on PPC... */
 	{ LS_LCK_MTX_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_LOCK_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_MTX_LOCK,	LSA_SPIN,	LS_LCK_MTX_LOCK_SPIN, DTRACE_IDNONE },
@@ -88,16 +88,10 @@ lockstat_probe_t lockstat_probes[] =
 	{ LS_LCK_MTX_EXT_LOCK,	LSA_SPIN,	LS_LCK_MTX_EXT_LOCK_SPIN, DTRACE_IDNONE },
 	{ LS_LCK_MTX_EXT_TRY_LOCK, LSA_ACQUIRE,	LS_LCK_MTX_TRY_EXT_LOCK_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_MTX_UNLOCK,	LSA_RELEASE,	LS_LCK_MTX_EXT_UNLOCK_RELEASE, DTRACE_IDNONE },
-	{ LS_MUTEX_LOCK,	LSA_ACQUIRE,	LS_MUTEX_LOCK_ACQUIRE, DTRACE_IDNONE },
-	{ LS_MUTEX_UNLOCK,	LSA_RELEASE,	LS_MUTEX_UNLOCK_RELEASE, DTRACE_IDNONE },
-	{ LS_MUTEX_TRY_LOCK,	LSA_ACQUIRE,	LS_MUTEX_TRY_LOCK_ACQUIRE, DTRACE_IDNONE },
-	{ LS_MUTEX_TRY_SPIN,	LSA_ACQUIRE,	LS_MUTEX_TRY_SPIN_ACQUIRE, DTRACE_IDNONE },
-	{ LS_MUTEX_LOCK_SPIN,	LSA_ACQUIRE,	LS_MUTEX_LOCK_SPIN_ACQUIRE, DTRACE_IDNONE },
+	{ LS_LCK_MTX_LOCK_SPIN_LOCK,	LSA_ACQUIRE,	LS_LCK_MTX_LOCK_SPIN_ACQUIRE, DTRACE_IDNONE },
 #endif
 	{ LS_LCK_MTX_LOCK,	LSA_BLOCK,	LS_LCK_MTX_LOCK_BLOCK, DTRACE_IDNONE },
 	{ LS_LCK_MTX_EXT_LOCK,	LSA_BLOCK,	LS_LCK_MTX_EXT_LOCK_BLOCK, DTRACE_IDNONE },
-
-	{ LS_MUTEX_CONVERT_SPIN,	LSA_ACQUIRE,	LS_MUTEX_CONVERT_SPIN_ACQUIRE, DTRACE_IDNONE },
 
 	{ LS_LCK_RW_LOCK_SHARED,	LSR_ACQUIRE,	LS_LCK_RW_LOCK_SHARED_ACQUIRE, DTRACE_IDNONE },
 	{ LS_LCK_RW_LOCK_SHARED,	LSR_BLOCK,	LS_LCK_RW_LOCK_SHARED_BLOCK, DTRACE_IDNONE },
@@ -127,30 +121,30 @@ lockstat_probe_t lockstat_probes[] =
 	{ LS_LCK_RW_TRY_LOCK_SHARED,	LSA_SPIN,	LS_LCK_RW_TRY_LOCK_SHARED_SPIN, DTRACE_IDNONE },
 #endif
 
-	{ NULL }
+	{ NULL, NULL, 0, 0 }
 };
 
 dtrace_id_t lockstat_probemap[LS_NPROBES];
 
-extern void lck_mtx_lock_lockstat_patch_point();
-extern void lck_mtx_try_lock_lockstat_patch_point();
-extern void lck_mtx_try_lock_spin_lockstat_patch_point();
-extern void lck_mtx_unlock_lockstat_patch_point();
-extern void lck_mtx_unlock2_lockstat_patch_point();
-extern void mutex_lock_lockstat_patch_point();
-extern void mutex_unlock_lockstat_patch_point();
-extern void mutex_unlock2_lockstat_patch_point();
-extern void mutex_try_lockstat_patch_point();
-extern void mutex_try_spin_lockstat_patch_point();
-extern void mutex_lock_spin_lockstat_patch_point();
-extern void mutex_convert_spin_lockstat_patch_point();
-extern void lck_rw_done_lockstat_patch_point();
-extern void lck_rw_lock_shared_lockstat_patch_point();
-extern void lck_mtx_lock_ext_lockstat_patch_point();
-extern void lck_mtx_ext_unlock_lockstat_patch_point();
+#if CONFIG_DTRACE
+extern void lck_mtx_lock_lockstat_patch_point(void);
+extern void lck_mtx_try_lock_lockstat_patch_point(void);
+extern void lck_mtx_try_lock_spin_lockstat_patch_point(void);
+extern void lck_mtx_unlock_lockstat_patch_point(void);
+extern void lck_mtx_lock_ext_lockstat_patch_point(void);
+extern void lck_mtx_ext_unlock_lockstat_patch_point(void);
+
+extern void lck_rw_lock_shared_lockstat_patch_point(void);
+extern void lck_rw_lock_exclusive_lockstat_patch_point(void);
+extern void lck_rw_lock_shared_to_exclusive_lockstat_patch_point(void);
+extern void lck_rw_try_lock_shared_lockstat_patch_point(void);
+extern void lck_rw_try_lock_exclusive_lockstat_patch_point(void);
+extern void lck_mtx_lock_spin_lockstat_patch_point(void);
+#endif /* CONFIG_DTRACE */
 
 vm_offset_t *assembly_probes[] = {
-#if	defined(__i386__)
+#if CONFIG_DTRACE
+#if defined(__i386__) || defined(__x86_64__)
 	/*
 	 * On x86 these points are better done via hot patches, which ensure
 	 * there is zero overhead when not in use.  On x86 these patch points
@@ -161,26 +155,27 @@ vm_offset_t *assembly_probes[] = {
 	(vm_offset_t *) lck_mtx_try_lock_lockstat_patch_point,
 	(vm_offset_t *) lck_mtx_try_lock_spin_lockstat_patch_point,
 	(vm_offset_t *) lck_mtx_unlock_lockstat_patch_point,
-	(vm_offset_t *) lck_mtx_unlock2_lockstat_patch_point,
-	(vm_offset_t *) lck_rw_lock_shared_lockstat_patch_point,
-	(vm_offset_t *) lck_rw_done_lockstat_patch_point,
 	(vm_offset_t *) lck_mtx_lock_ext_lockstat_patch_point,
 	(vm_offset_t *) lck_mtx_ext_unlock_lockstat_patch_point,
-	(vm_offset_t *) mutex_lock_lockstat_patch_point,
-	(vm_offset_t *) mutex_try_spin_lockstat_patch_point,
-	(vm_offset_t *) mutex_try_lockstat_patch_point,
-	(vm_offset_t *) mutex_unlock_lockstat_patch_point,
-	(vm_offset_t *) mutex_unlock2_lockstat_patch_point,
-	(vm_offset_t *) mutex_lock_spin_lockstat_patch_point,
-	(vm_offset_t *) mutex_convert_spin_lockstat_patch_point,
-#endif
+	(vm_offset_t *) lck_rw_lock_shared_lockstat_patch_point,
+	(vm_offset_t *) lck_rw_lock_exclusive_lockstat_patch_point,
+	(vm_offset_t *) lck_rw_lock_shared_to_exclusive_lockstat_patch_point,
+	(vm_offset_t *) lck_rw_try_lock_shared_lockstat_patch_point,
+	(vm_offset_t *) lck_rw_try_lock_exclusive_lockstat_patch_point,
+	(vm_offset_t *) lck_mtx_lock_spin_lockstat_patch_point,
+#else
 	(vm_offset_t *) lck_mtx_unlock_lockstat_patch_point,
+#endif
+#endif /* CONFIG_DTRACE */
 	NULL
 };
 /*
  * Hot patch switches back and forth the probe points between NOP and RET.
  * The argument indicates whether the probe point is on or off.
  */
+#if defined(__APPLE__)
+static
+#endif /* __APPLE__ */
 void lockstat_hot_patch(boolean_t active)
 {
 #pragma unused(active)
@@ -188,7 +183,7 @@ void lockstat_hot_patch(boolean_t active)
 
 
 	for (i = 0; assembly_probes[i]; i++) {
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 		uint8_t instr;
 		instr = (active ? NOP : RET );
 		(void) ml_nofault_copy( (vm_offset_t)&instr, *(assembly_probes[i]), 
@@ -207,17 +202,6 @@ void lockstat_hot_patch(boolean_t active)
 void (*lockstat_probe)(dtrace_id_t, uint64_t, uint64_t,
 				    uint64_t, uint64_t, uint64_t);
 
-/*
- * An initial value for lockstat_probe. See lockstat_attach(). Think safety.
- */
-static void
-lockstat_stub(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
-				    uint64_t arg2, uint64_t arg3, uint64_t arg4)
-{
-#pragma unused(id,arg0,arg1,arg2,arg3,arg4)
-}
-
-
 static dev_info_t	*lockstat_devi;	/* saved in xxattach() for xxinfo() */
 static dtrace_provider_id_t lockstat_id;
 
@@ -225,15 +209,13 @@ static dtrace_provider_id_t lockstat_id;
 static void
 lockstat_enable(void *arg, dtrace_id_t id, void *parg)
 {
-#pragma unused(arg)
+#pragma unused(arg) /* __APPLE__ */
+    
 	lockstat_probe_t *probe = parg;
 
 	ASSERT(!lockstat_probemap[probe->lsp_probe]);
 
 	lockstat_probemap[probe->lsp_probe] = id;
-	membar_producer();
-
-	lockstat_probe = dtrace_probe;
 	membar_producer();
 
 	lockstat_hot_patch(TRUE);
@@ -245,7 +227,8 @@ lockstat_enable(void *arg, dtrace_id_t id, void *parg)
 static void
 lockstat_disable(void *arg, dtrace_id_t id, void *parg)
 {
-#pragma unused(arg,id)
+#pragma unused(arg, id) /* __APPLE__ */
+
 	lockstat_probe_t *probe = parg;
 	int i;
 
@@ -275,7 +258,8 @@ lockstat_disable(void *arg, dtrace_id_t id, void *parg)
 static void
 lockstat_provide(void *arg, const dtrace_probedesc_t *desc)
 {
-#pragma unused(arg,desc)
+#pragma unused(arg, desc) /* __APPLE__ */
+    
 	int i = 0;
 
 	for (i = 0; lockstat_probes[i].lsp_func != NULL; i++) {
@@ -297,7 +281,8 @@ lockstat_provide(void *arg, const dtrace_probedesc_t *desc)
 static void
 lockstat_destroy(void *arg, dtrace_id_t id, void *parg)
 {
-#pragma unused(arg,id)
+#pragma unused(arg, id) /* __APPLE__ */
+    
 	lockstat_probe_t *probe = parg;
 
 	ASSERT(!lockstat_probemap[probe->lsp_probe]);
@@ -345,9 +330,11 @@ lockstat_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		return (DDI_FAILURE);
 	}
 
+	lockstat_probe = dtrace_probe;
+	membar_producer();
+
 	ddi_report_dev(devi);
 	lockstat_devi = devi;
-	lockstat_probe = lockstat_stub;
 	return (DDI_SUCCESS);
 }
 
@@ -399,7 +386,7 @@ void lockstat_init( void )
 			return;
 		}
 
-		lockstat_attach( (dev_info_t	*)majdevno, DDI_ATTACH );
+		lockstat_attach( (dev_info_t	*)(uintptr_t)majdevno, DDI_ATTACH );
 		gLockstatInited = 1;
 	} else
 		panic("lockstat_init: called twice!\n");

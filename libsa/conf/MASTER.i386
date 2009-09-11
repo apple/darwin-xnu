@@ -1,8 +1,9 @@
 ######################################################################
 #
-#  RELEASE	= [ intel mach libkerncpp config_dtrace ]
+#  RELEASE	= [ intel mach libkerncpp config_dtrace config_kxld ]
 #  PROFILE	= [ RELEASE profile ]
 #  DEBUG	= [ RELEASE debug ]
+#
 #
 #  EMBEDDED	= [ intel mach libkerncpp ]
 #  DEVELOPMENT	= [ EMBEDDED config_dtrace ]
@@ -11,3 +12,5 @@
 
 machine		"i386"					# <intel>
 cpu		"i386"					# <intel>
+
+options     NO_NESTED_PMAP                  # <no_nested_pmap>

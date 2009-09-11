@@ -86,7 +86,7 @@ extern int available_for_purge;
  * mostly used on a user context and we don't want any contention with the
  * pageout daemon.
  */
-decl_mutex_data(,vm_purgeable_queue_lock)
+decl_lck_mtx_data(extern,vm_purgeable_queue_lock)
 
 /* add a new token to queue. called by vm_object_purgeable_control */
 /* enter with page queue locked */
@@ -102,7 +102,11 @@ void vm_purgeable_token_delete_first(purgeable_q_t queue);
 void vm_purgeable_q_advance_all(void);
 
 /* the object purger. purges the next eligible object from memory. */
-void vm_purgeable_object_purge_one(void);
+/* returns TRUE if an object was purged, otherwise FALSE. */
+boolean_t vm_purgeable_object_purge_one(void);
+
+/* purge all volatile objects now */
+void vm_purgeable_object_purge_all(void);
 
 /* insert purgeable object into queue */
 void vm_purgeable_object_add(vm_object_t object, purgeable_q_t queue, int group);

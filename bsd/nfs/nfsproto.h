@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -90,13 +90,15 @@
 #define	NFS_MAXDGRAMDATA 16384
 #define	NFS_PREFDGRAMDATA 8192
 #define	NFS_MAXDATA	(64*1024) // XXX not ready for >64K
+#define	NFSRV_MAXDATA	(64*1024) // XXX not ready for >64K
 #define	NFS_MAXPATHLEN	1024
 #define	NFS_MAXNAMLEN	255
-#define	NFS_MAXPKTHDR	404
-#define NFS_MAXPACKET	(NFS_MAXPKTHDR + NFS_MAXDATA)
-#define	NFS_MINPACKET	20
+#define	NFS_MAXPACKET	(16*1024*1024)
 #define	NFS_UDPSOCKBUF	(224*1024)
 #define	NFS_FABLKSIZE	512	/* Size in bytes of a block wrt fa_blocks */
+
+#define NFS4_CALLBACK_PROG		0x4E465343 /* "NFSC" */
+#define NFS4_CALLBACK_PROG_VERSION	1
 
 /* Stat numbers for NFS RPC returns */
 #define NFS_OK				0
@@ -173,6 +175,14 @@
 #define NFSERR_CB_PATH_DOWN		10048
 
 #define NFSERR_STALEWRITEVERF		30001	/* Fake return for nfs_commit() */
+#define NFSERR_DIRBUFDROPPED		30002	/* Fake return for nfs*_readdir_rpc() */
+
+/*
+ * For gss we would like to return EAUTH when we don't have or can't get credentials,
+ * but some callers don't know what to do with it, so we define our own version
+ * of EAUTH to be EACCES
+ */
+#define NFSERR_EAUTH	EACCES
 
 #define NFSERR_RETVOID		0x20000000 /* Return void, not error */
 #define NFSERR_AUTHERR		0x40000000 /* Mark an authentication error */
@@ -291,6 +301,8 @@
 #define NFS_TIME_DONT_CHANGE		0
 #define NFS_TIME_SET_TO_SERVER		1
 #define NFS_TIME_SET_TO_CLIENT		2
+#define NFS4_TIME_SET_TO_SERVER		0
+#define NFS4_TIME_SET_TO_CLIENT		1
 
 /* access() constants */
 #define NFS_ACCESS_READ			0x01
@@ -653,6 +665,8 @@ __private_extern__ uint32_t nfs_getattr_bitmap[NFS_ATTR_BITMAP_LEN];
 /* NFSv4 RPC procedures */
 #define NFSPROC4_NULL				0
 #define NFSPROC4_COMPOUND			1
+#define NFSPROC4_CB_NULL			0
+#define NFSPROC4_CB_COMPOUND			1
 
 /* NFSv4 opcodes */
 #define NFS_OP_ACCESS				3
@@ -750,19 +764,19 @@ __private_extern__ uint32_t nfs_getattr_bitmap[NFS_ATTR_BITMAP_LEN];
 
 
 /*
- * Quads are defined as arrays of 2 longs to ensure dense packing for the
- * protocol and to facilitate xdr conversion.
+ * Quads are defined as arrays of 2 32-bit values to ensure dense packing
+ * for the protocol and to facilitate xdr conversion.
  */
 struct nfs_uquad {
-	u_long	nfsuquad[2];
+	u_int32_t	nfsuquad[2];
 };
 typedef	struct nfs_uquad	nfsuint64;
 
 /*
- * Used to convert between two u_longs and a u_quad_t.
+ * Used to convert between two u_int32_ts and a u_quad_t.
  */
 union nfs_quadconvert {
-	u_long		lval[2];
+	u_int32_t		lval[2];
 	u_quad_t	qval;
 };
 typedef union nfs_quadconvert	nfsquad_t;
@@ -785,23 +799,14 @@ struct nfs_fsid {
 };
 typedef struct nfs_fsid nfs_fsid;
 
-
 /*
- * remove these once we're sure nobody's using them
+ * NFSv4 stateid structure
  */
-struct nfsv2_time {
-	u_long	nfsv2_sec;
-	u_long	nfsv2_usec;
+struct nfs_stateid {
+	uint32_t	seqid;
+	uint32_t	other[3];
 };
-typedef struct nfsv2_time	nfstime2;
-struct nfsv2_sattr {
-	u_long		sa_mode;
-	u_long		sa_uid;
-	u_long		sa_gid;
-	u_long		sa_size;
-	nfstime2	sa_atime;
-	nfstime2	sa_mtime;
-};
+typedef struct nfs_stateid nfs_stateid;
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* _NFS_NFSPROTO_H_ */

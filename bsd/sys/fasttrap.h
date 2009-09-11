@@ -79,6 +79,11 @@ typedef struct fasttrap_probe_spec {
 	char				ftps_func[DTRACE_FUNCNAMELEN];
 	char				ftps_mod[DTRACE_MODNAMELEN];
 
+#if defined(__APPLE__)
+#if !defined(__LP64__)
+	uint32_t			pad; /* Explicit pad to keep ILP32 and LP64 lined up. */
+#endif
+#endif
 	uint64_t			ftps_pc;
 	uint64_t			ftps_size;
 	uint64_t			ftps_noffs;

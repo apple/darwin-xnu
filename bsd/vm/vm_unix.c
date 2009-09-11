@@ -75,12 +75,13 @@
 #include <sys/mman.h>
 #include <sys/sysctl.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 #include <bsm/audit_kevents.h>
 
 #include <kern/kalloc.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_pageout.h>
 
 #include <machine/spl.h>
 
@@ -100,12 +101,6 @@ SYSCTL_INT(_vm, OID_AUTO, allow_stack_exec, CTLFLAG_RW, &allow_stack_exec, 0, ""
 SYSCTL_INT(_vm, OID_AUTO, allow_data_exec, CTLFLAG_RW, &allow_data_exec, 0, "");
 #endif /* !SECURE_KERNEL */
 
-#if CONFIG_NO_PRINTF_STRINGS
-void
-log_stack_execution_failure(__unused addr64_t a, __unused vm_prot_t b)
-{
-}
-#else
 static const char *prot_values[] = {
 	"none",
 	"read-only",
@@ -123,8 +118,44 @@ log_stack_execution_failure(addr64_t vaddr, vm_prot_t prot)
 	printf("Data/Stack execution not permitted: %s[pid %d] at virtual address 0x%qx, protections were %s\n", 
 		current_proc()->p_comm, current_proc()->p_pid, vaddr, prot_values[prot & VM_PROT_ALL]);
 }
-#endif
 
+int shared_region_unnest_logging = 1;
+
+SYSCTL_INT(_vm, OID_AUTO, shared_region_unnest_logging, CTLFLAG_RW,
+	   &shared_region_unnest_logging, 0, "");
+
+int vm_shared_region_unnest_log_interval = 10;
+int shared_region_unnest_log_count_threshold = 5;
+
+/* These log rate throttling state variables aren't thread safe, but
+ * are sufficient unto the task.
+ */
+static int64_t last_unnest_log_time = 0; 
+static int shared_region_unnest_log_count = 0;
+
+void log_unnest_badness(vm_map_t m, vm_map_offset_t s, vm_map_offset_t e) {
+	struct timeval tv;
+	const char *pcommstr;
+
+	if (shared_region_unnest_logging == 0)
+		return;
+
+	if (shared_region_unnest_logging == 1) {
+		microtime(&tv);
+		if ((tv.tv_sec - last_unnest_log_time) < vm_shared_region_unnest_log_interval) {
+			if (shared_region_unnest_log_count++ > shared_region_unnest_log_count_threshold)
+				return;
+		}
+		else {
+			last_unnest_log_time = tv.tv_sec;
+			shared_region_unnest_log_count = 0;
+		}
+	}
+
+	pcommstr = current_proc()->p_comm;
+
+	printf("%s (map: %p) triggered DYLD shared region unnest for map: %p, region 0x%qx->0x%qx. While not abnormal for debuggers, this increases system memory footprint until the target exits.\n", current_proc()->p_comm, get_task_map(current_proc()->task), m, (uint64_t)s, (uint64_t)e);
+}
 
 int
 useracc(
@@ -255,7 +286,7 @@ suword(
 
 long fuword(user_addr_t addr)
 {
-	long word;
+	long word = 0;
 
 	if (copyin(addr, (void *) &word, sizeof(int)))
 		return(-1);
@@ -274,7 +305,7 @@ suiword(
 
 long fuiword(user_addr_t addr)
 {
-	long word;
+	long word = 0;
 
 	if (copyin(addr, (void *) &word, sizeof(int)))
 		return(-1);
@@ -317,7 +348,7 @@ suulong(user_addr_t addr, uint64_t uword)
 	if (IS_64BIT_PROCESS(current_proc())) {
 		return(copyout((void *)&uword, addr, sizeof(uword)) == 0 ? 0 : -1);
 	} else {
-		return(suiword(addr, (u_long)uword));
+		return(suiword(addr, (uint32_t)uword));
 	}
 }
 
@@ -341,7 +372,23 @@ swapon(__unused proc_t procp, __unused struct swapon_args *uap, __unused int *re
 	return(ENOTSUP);
 }
 
-
+/*
+ * pid_for_task
+ *
+ * Find the BSD process ID for the Mach task associated with the given Mach port 
+ * name
+ *
+ * Parameters:	args		User argument descriptor (see below)
+ *
+ * Indirect parameters:	args->t		Mach port name
+ * 			args->pid	Process ID (returned value; see below)
+ *
+ * Returns:	KERL_SUCCESS	Success
+ * 		KERN_FAILURE	Not success           
+ *
+ * Implicit returns: args->pid		Process ID
+ *
+ */
 kern_return_t
 pid_for_task(
 	struct pid_for_task_args *args)
@@ -472,6 +519,8 @@ out:
  *		Only permitted to privileged processes, or processes
  *		with the same user ID.
  *
+ *		Note: if pid == 0, an error is return no matter who is calling.
+ *
  * XXX This should be a BSD system call, not a Mach trap!!!
  */
 kern_return_t
@@ -481,7 +530,6 @@ task_for_pid(
 	mach_port_name_t	target_tport = args->target_tport;
 	int			pid = args->pid;
 	user_addr_t		task_addr = args->t;
-	struct uthread		*uthread;
 	proc_t 			p = PROC_NULL;
 	task_t			t1 = TASK_NULL;
 	mach_port_name_t	tret = MACH_PORT_NULL;
@@ -493,13 +541,12 @@ task_for_pid(
 	AUDIT_ARG(pid, pid);
 	AUDIT_ARG(mach_port1, target_tport);
 
-#if defined(SECURE_KERNEL)
-	if (0 == pid) {
+	/* Always check if pid == 0 */
+	if (pid == 0) {
 		(void ) copyout((char *)&t1, task_addr, sizeof(mach_port_name_t));
 		AUDIT_MACH_SYSCALL_EXIT(KERN_FAILURE);
 		return(KERN_FAILURE);
 	}
-#endif
 
 	t1 = port_name_to_task(target_tport);
 	if (t1 == TASK_NULL) {
@@ -509,15 +556,11 @@ task_for_pid(
 	} 
 
 
-	/*
-	 * Delayed binding of thread credential to process credential, if we
-	 * are not running with an explicitly set thread credential.
-	 */
-	uthread = get_bsdthread_info(current_thread());
-	kauth_cred_uthread_update(uthread, current_proc());
-
 	p = proc_find(pid);
-	AUDIT_ARG(process, p);
+#if CONFIG_AUDIT
+	if (p != PROC_NULL)
+		AUDIT_ARG(process, p);
+#endif
 
 	if (!(task_for_pid_posix_check(p))) {
 		error = KERN_FAILURE;
@@ -593,7 +636,6 @@ task_name_for_pid(
 	mach_port_name_t	target_tport = args->target_tport;
 	int			pid = args->pid;
 	user_addr_t		task_addr = args->t;
-	struct uthread		*uthread;
 	proc_t		p = PROC_NULL;
 	task_t		t1;
 	mach_port_name_t	tret;
@@ -612,17 +654,9 @@ task_name_for_pid(
 		return(KERN_FAILURE);
 	} 
 
-
-	/*
-	 * Delayed binding of thread credential to process credential, if we
-	 * are not running with an explicitly set thread credential.
-	 */
-	uthread = get_bsdthread_info(current_thread());
-	kauth_cred_uthread_update(uthread, current_proc());
-
 	p = proc_find(pid);
-	AUDIT_ARG(process, p);
 	if (p != PROC_NULL) {
+		AUDIT_ARG(process, p);
 		target_cred = kauth_cred_proc_ref(p);
 		refheld = 1;
 
@@ -1048,7 +1082,7 @@ shared_region_map_np(
 
 	if (p->p_flag & P_NOSHLIB) {
 		/* signal that this process is now using split libraries */
-		OSBitAndAtomic(~((uint32_t)P_NOSHLIB), (UInt32 *)&p->p_flag);
+		OSBitAndAtomic(~((uint32_t)P_NOSHLIB), &p->p_flag);
 	}
 
 done:
@@ -1087,3 +1121,90 @@ extern unsigned int	vm_page_free_target;
 SYSCTL_INT(_vm, OID_AUTO, vm_page_free_target, CTLFLAG_RD, 
 		   &vm_page_free_target, 0, "Pageout daemon free target");
 
+extern unsigned int	vm_memory_pressure;
+SYSCTL_INT(_vm, OID_AUTO, memory_pressure, CTLFLAG_RD,
+	   &vm_memory_pressure, 0, "Memory pressure indicator");
+
+static int
+vm_ctl_page_free_wanted SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	unsigned int page_free_wanted;
+
+	page_free_wanted = mach_vm_ctl_page_free_wanted();
+	return SYSCTL_OUT(req, &page_free_wanted, sizeof (page_free_wanted));
+}
+SYSCTL_PROC(_vm, OID_AUTO, page_free_wanted,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED,
+	    0, 0, vm_ctl_page_free_wanted, "I", "");
+
+extern unsigned int	vm_page_purgeable_count;
+SYSCTL_INT(_vm, OID_AUTO, page_purgeable_count, CTLFLAG_RD,
+	   &vm_page_purgeable_count, 0, "Purgeable page count");
+
+extern unsigned int	vm_page_purgeable_wired_count;
+SYSCTL_INT(_vm, OID_AUTO, page_purgeable_wired_count, CTLFLAG_RD,
+	   &vm_page_purgeable_wired_count, 0, "Wired purgeable page count");
+
+SYSCTL_INT(_vm, OID_AUTO, page_reusable_count, CTLFLAG_RD,
+	   &vm_page_stats_reusable.reusable_count, 0, "Reusable page count");
+SYSCTL_QUAD(_vm, OID_AUTO, reusable_success, CTLFLAG_RD,
+	   &vm_page_stats_reusable.reusable_pages_success, "");
+SYSCTL_QUAD(_vm, OID_AUTO, reusable_failure, CTLFLAG_RD,
+	   &vm_page_stats_reusable.reusable_pages_failure, "");
+SYSCTL_QUAD(_vm, OID_AUTO, reusable_shared, CTLFLAG_RD,
+	   &vm_page_stats_reusable.reusable_pages_shared, "");
+SYSCTL_QUAD(_vm, OID_AUTO, all_reusable_calls, CTLFLAG_RD,
+	   &vm_page_stats_reusable.all_reusable_calls, "");
+SYSCTL_QUAD(_vm, OID_AUTO, partial_reusable_calls, CTLFLAG_RD,
+	   &vm_page_stats_reusable.partial_reusable_calls, "");
+SYSCTL_QUAD(_vm, OID_AUTO, reuse_success, CTLFLAG_RD,
+	   &vm_page_stats_reusable.reuse_pages_success, "");
+SYSCTL_QUAD(_vm, OID_AUTO, reuse_failure, CTLFLAG_RD,
+	   &vm_page_stats_reusable.reuse_pages_failure, "");
+SYSCTL_QUAD(_vm, OID_AUTO, all_reuse_calls, CTLFLAG_RD,
+	   &vm_page_stats_reusable.all_reuse_calls, "");
+SYSCTL_QUAD(_vm, OID_AUTO, partial_reuse_calls, CTLFLAG_RD,
+	   &vm_page_stats_reusable.partial_reuse_calls, "");
+SYSCTL_QUAD(_vm, OID_AUTO, can_reuse_success, CTLFLAG_RD,
+	   &vm_page_stats_reusable.can_reuse_success, "");
+SYSCTL_QUAD(_vm, OID_AUTO, can_reuse_failure, CTLFLAG_RD,
+	   &vm_page_stats_reusable.can_reuse_failure, "");
+
+
+int
+vm_pressure_monitor(
+	__unused struct proc *p,
+	struct vm_pressure_monitor_args *uap,
+	int *retval)
+{
+	kern_return_t	kr;
+	uint32_t	pages_reclaimed;
+	uint32_t	pages_wanted;
+
+	kr = mach_vm_pressure_monitor(
+		(boolean_t) uap->wait_for_pressure,
+		uap->nsecs_monitored,
+		(uap->pages_reclaimed) ? &pages_reclaimed : NULL,
+		&pages_wanted);
+
+	switch (kr) {
+	case KERN_SUCCESS:
+		break;
+	case KERN_ABORTED:
+		return EINTR;
+	default:
+		return EINVAL;
+	}
+
+	if (uap->pages_reclaimed) {
+		if (copyout((void *)&pages_reclaimed,
+			    uap->pages_reclaimed,
+			    sizeof (pages_reclaimed)) != 0) {
+			return EFAULT;
+		}
+	}
+
+	*retval = (int) pages_wanted;
+	return 0;
+}

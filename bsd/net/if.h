@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -94,6 +94,7 @@
 #define KEV_DL_PROTO_ATTACHED	14
 #define KEV_DL_PROTO_DETACHED	15
 #define KEV_DL_LINK_ADDRESS_CHANGED	16
+#define KEV_DL_WAKEFLAGS_CHANGED	17
 
 #include <net/if_var.h>
 #include <sys/types.h>
@@ -106,19 +107,18 @@ struct if_clonereq {
 	char	*ifcr_buffer;		/* buffer for cloner names */
 };
 
-/* in-kernel, LP64-aware version of if_clonereq.  all pointers 
- * grow when we're dealing with a 64-bit process.
- * WARNING - keep in sync with if_clonereq
- */
 struct if_clonereq64 {
 	int	ifcr_total;		/* total cloners (out) */
 	int	ifcr_count;		/* room for this many in user buffer */
-	union {
-	    u_int64_t	ifcru_buffer64;
-	    char *	ifcru_buffer32;
-	} ifcr_ifcru;
+	user64_addr_t ifcru_buffer	__attribute__((aligned(8)));
 };
-#endif KERNEL_PRIVATE
+
+struct if_clonereq32 {
+	int	ifcr_total;		/* total cloners (out) */
+	int	ifcr_count;		/* room for this many in user buffer */
+	user32_addr_t ifcru_buffer;
+};
+#endif /* KERNEL_PRIVATE */
 
 #define	IFF_UP		0x1		/* interface is up */
 #define	IFF_BROADCAST	0x2		/* broadcast address valid */
@@ -148,8 +148,8 @@ struct if_clonereq64 {
 #define IFEF_VLAN		0x200	/* interface has one or more vlans */
 #define IFEF_BOND		0x400	/* interface is part of bond */
 #define	IFEF_ARPLL		0x800	/* ARP for IPv4LL addresses on this port */
-#define	IFEF_NOWINDOWSCALE	0x1000	/* TCP window scale disabled on this interface, see 5933937 & 5959897*/
-#define	IFEF_NOTIMESTAMPS	IFEF_NOWINDOWSCALE	/* We don't actualy disable timestamps, just window scale see 5959897 */
+#define	IFEF_NOWINDOWSCALE	0x1000	/* Don't scale TCP window on iface */
+#define	IFEF_NOAUTOIPV6LL	0x2000	/* Interface IPv6 LinkLocal address not provided by kernel */
 #define	IFEF_SENDLIST	0x10000000 /* Interface supports sending a list of packets */
 #define IFEF_REUSE	0x20000000 /* DLIL ifnet recycler, ifnet is not new */
 #define IFEF_INUSE	0x40000000 /* DLIL ifnet recycler, ifnet in use */
@@ -288,6 +288,13 @@ struct ifkpi {
 	} ifk_data;
 };
 
+/* Wake capabilities of a interface */ 
+#define IF_WAKE_ON_MAGIC_PACKET 	0x01
+#ifdef KERNEL_PRIVATE
+#define IF_WAKE_VALID_FLAGS IF_WAKE_ON_MAGIC_PACKET
+#endif /* KERNEL_PRIVATE */
+
+
 #pragma pack()
 
 /*
@@ -314,9 +321,10 @@ struct	ifreq {
 		caddr_t	ifru_data;
 #ifdef KERNEL_PRIVATE
 		u_int64_t ifru_data64;	/* 64-bit ifru_data */
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 		struct	ifdevmtu ifru_devmtu;
 		struct	ifkpi	ifru_kpi;
+		u_int32_t ifru_wake_flags;
 	} ifr_ifru;
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
 #define	ifr_dstaddr	ifr_ifru.ifru_dstaddr	/* other end of p-to-p link */
@@ -336,8 +344,9 @@ struct	ifreq {
 #define ifr_intval	ifr_ifru.ifru_intval	/* integer value */
 #ifdef KERNEL_PRIVATE
 #define ifr_data64	ifr_ifru.ifru_data64	/* 64-bit pointer */
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 #define ifr_kpi		ifr_ifru.ifru_kpi
+#define ifr_wake_flags	ifr_ifru.ifru_wake_flags /* wake capabilities of devive */
 };
 
 #define	_SIZEOF_ADDR_IFREQ(ifr) \
@@ -357,6 +366,7 @@ struct rslvmulti_req {
      struct sockaddr **llsa;
 };
 
+#if !defined(KERNEL) || defined(KERNEL_PRIVATE)
 #pragma pack(4)
 
 struct ifmediareq {
@@ -370,12 +380,10 @@ struct ifmediareq {
 };
 
 #pragma pack()
+#endif /* !KERNEL || KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE
-/* LP64 version of ifmediareq.  all pointers 
- * grow when we're dealing with a 64-bit process.
- * WARNING - keep in sync with ifmediareq
- */
+#pragma pack(4)
 struct ifmediareq64 {
 	char	ifm_name[IFNAMSIZ];	/* if name, e.g. "en0" */
 	int	ifm_current;		/* current media options */
@@ -383,12 +391,20 @@ struct ifmediareq64 {
 	int	ifm_status;		/* media status */
 	int	ifm_active;		/* active options */
 	int	ifm_count;		/* # entries in ifm_ulist array */
-	union {				/* media words */
-	    int * 	ifmu_ulist32;	/* 32-bit pointer */
-	    u_int64_t	ifmu_ulist64;	/* 64-bit pointer */
-	} ifm_ifmu;
+	user64_addr_t ifmu_ulist __attribute__((aligned(8)));
 };
-#endif // KERNEL_PRIVATE
+
+struct ifmediareq32 {
+	char	ifm_name[IFNAMSIZ];	/* if name, e.g. "en0" */
+	int	ifm_current;		/* current media options */
+	int	ifm_mask;		/* don't care mask */
+	int	ifm_status;		/* media status */
+	int	ifm_active;		/* active options */
+	int	ifm_count;		/* # entries in ifm_ulist array */
+	user32_addr_t ifmu_ulist;	/* 32-bit pointer */
+};
+#pragma pack()
+#endif /* KERNEL_PRIVATE */
 
 /* 
  * Structure used to retrieve aux status data from interfaces.
@@ -403,14 +419,14 @@ struct ifstat {
 	char	ascii[IFSTATMAX + 1];
 };
 
-#pragma pack(4)
-
+#if !defined(KERNEL) || defined(KERNEL_PRIVATE)
 /*
  * Structure used in SIOCGIFCONF request.
  * Used to retrieve interface configuration
  * for machine (useful for programs which
  * must know all networks accessible).
  */
+#pragma pack(4)
 struct	ifconf {
 	int	ifc_len;		/* size of associated buffer */
 	union {
@@ -418,25 +434,28 @@ struct	ifconf {
 		struct	ifreq *ifcu_req;
 	} ifc_ifcu;
 };
+#pragma pack()
 #define	ifc_buf	ifc_ifcu.ifcu_buf	/* buffer address */
 #define	ifc_req	ifc_ifcu.ifcu_req	/* array of structures returned */
+#endif /* !KERNEL || KERNEL_PRIVATE */
 
-#pragma pack()
-
-#ifdef KERNEL_PRIVATE
-/* LP64 version of ifconf.  all pointers 
- * grow when we're dealing with a 64-bit process.
- * WARNING - keep in sync with ifconf
- */
-struct ifconf64 {
+#if defined(KERNEL_PRIVATE)
+#pragma pack(4)
+struct ifconf32 {
 	int     ifc_len;		/* size of associated buffer */
-	union {
-		struct ifreq *	ifcu_req;
-	    	u_int64_t	ifcu_req64;
+	struct {
+		user32_addr_t ifcu_req;
 	} ifc_ifcu;
 };
-#define	ifc_req64	ifc_ifcu.ifcu_req64
-#endif // KERNEL_PRIVATE
+
+struct ifconf64 {
+	int     ifc_len;		/* size of associated buffer */
+	struct {
+		user64_addr_t ifcu_req	__attribute__((aligned(8)));
+	} ifc_ifcu;
+};
+#pragma pack()
+#endif /* KERNEL_PRIVATE */
 
 /*
  * DLIL KEV_DL_PROTO_ATTACHED/DETACHED structure

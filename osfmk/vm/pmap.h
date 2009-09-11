@@ -169,6 +169,9 @@ extern void 		mapping_free_prime(void); /* Primes the mapping block release list
  */
 
 extern boolean_t	pmap_next_page(ppnum_t *pnum);
+#if defined(__LP64__)
+extern boolean_t	pmap_next_page_k64(ppnum_t *pnum);
+#endif
 						/* During VM initialization,
 						 * return the next unused
 						 * physical page.
@@ -416,9 +419,10 @@ extern void		(pmap_pageable)(
 				vm_map_offset_t	end,
 				boolean_t	pageable);
 
-#ifndef NO_NESTED_PMAP
+
 extern uint64_t pmap_nesting_size_min;
 extern uint64_t pmap_nesting_size_max;
+
 extern kern_return_t pmap_nest(pmap_t grand,
 			       pmap_t subord,
 			       addr64_t vstart,
@@ -427,8 +431,7 @@ extern kern_return_t pmap_nest(pmap_t grand,
 extern kern_return_t pmap_unnest(pmap_t grand,
 				 addr64_t vaddr,
 				 uint64_t size);
-#endif /* NO_NESTED_PMAP */
-
+extern boolean_t pmap_adjust_unnest_parameters(pmap_t, vm_map_offset_t *, vm_map_offset_t *);
 #endif	/* MACH_KERNEL_PRIVATE */
 
 /*
@@ -450,9 +453,11 @@ extern pmap_t	kernel_pmap;			/* The kernel's map */
 #define VM_WIMG_MASK		0xFF
 #define VM_WIMG_USE_DEFAULT	0x80000000
 
+#define VM_MEM_SUPERPAGE	0x100		/* map a superpage instead of a base page */
+#if	!defined(__LP64__)
 extern vm_offset_t	pmap_extract(pmap_t pmap,
 				vm_map_offset_t va);
-
+#endif
 extern void		pmap_change_wiring(	/* Specify pageability */
 				pmap_t		pmap,
 				vm_map_offset_t	va,
@@ -468,6 +473,10 @@ extern void		fillPage(ppnum_t pa, unsigned int fill);
 
 extern void pmap_map_sharedpage(task_t task, pmap_t pmap);
 extern void pmap_unmap_sharedpage(pmap_t pmap);
+
+#if defined(__LP64__)
+void pmap_pre_expand(pmap_t pmap, vm_map_offset_t vaddr);
+#endif
 
 #endif  /* KERNEL_PRIVATE */
 

@@ -73,7 +73,7 @@
 #include <net/if.h>
 
 #include <bsd/bsm/audit.h>
-#include <bsd/bsm/audit_kernel.h>
+#include <bsd/security/audit/audit.h>
 
 #include <security/mac_internal.h>
 

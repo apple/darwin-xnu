@@ -9,6 +9,7 @@
 
 #include "tests.h"
 #include <sys/xattr.h>
+#include <mach/mach.h>
 
 extern char  g_target_path[ PATH_MAX ];
 
@@ -26,12 +27,14 @@ int xattr_tests( void * the_argp )
 	ssize_t		my_result;
 	char		my_buffer[ 64 ];
 	char		my_xattr_data[ ] = "xattr_foo";
+	kern_return_t   my_kr;
+	
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -156,8 +159,8 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
 }

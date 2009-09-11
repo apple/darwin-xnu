@@ -33,81 +33,92 @@
 .\"
 .\"     @(#)tcp.4	8.1 (Berkeley) 6/5/93
 .\"
-.Dd June 5, 1993
+.Dd February 28, 2007
 .Dt TCP 4
 .Os BSD 4.2
 .Sh NAME
 .Nm tcp
 .Nd Internet Transmission Control Protocol
 .Sh SYNOPSIS
-.Fd #include <sys/socket.h>
-.Fd #include <netinet/in.h>
+.In sys/types.h
+.In sys/socket.h
+.In netinet/in.h
 .Ft int
 .Fn socket AF_INET SOCK_STREAM 0
 .Sh DESCRIPTION
 The
 .Tn TCP
 protocol provides reliable, flow-controlled, two-way
-transmission of data.  It is a byte-stream protocol used to
+transmission of data.
+It is a byte-stream protocol used to
 support the
 .Dv SOCK_STREAM
-abstraction.  TCP uses the standard
+abstraction.
+.Tn TCP
+uses the standard
 Internet address format and, in addition, provides a per-host
 collection of
-.Dq port addresses .
+.Dq "port addresses" .
 Thus, each address is composed
-of an Internet address specifying the host and network, with
-a specific
+of an Internet address specifying the host and network,
+with a specific
 .Tn TCP
 port on the host identifying the peer entity.
 .Pp
-Sockets utilizing the tcp protocol are either
+Sockets utilizing the
+.Tn TCP
+protocol are either
 .Dq active
 or
 .Dq passive .
 Active sockets initiate connections to passive
-sockets.  By default
+sockets.
+By default,
 .Tn TCP
 sockets are created active; to create a
-passive socket the
+passive socket, the
 .Xr listen 2
 system call must be used
 after binding the socket with the
 .Xr bind 2
-system call.  Only
-passive sockets may use the 
+system call.
+Only passive sockets may use the
 .Xr accept 2
-call to accept incoming connections.  Only active sockets may
-use the
+call to accept incoming connections.
+Only active sockets may use the
 .Xr connect 2
 call to initiate connections.
 .Pp
 Passive sockets may
 .Dq underspecify
 their location to match
-incoming connection requests from multiple networks.  This
-technique, termed
-.Dq wildcard addressing ,
+incoming connection requests from multiple networks.
+This technique, termed
+.Dq "wildcard addressing" ,
 allows a single
 server to provide service to clients on multiple networks.
 To create a socket which listens on all networks, the Internet
 address
 .Dv INADDR_ANY
-must be bound.  The
+must be bound.
+The
 .Tn TCP
 port may still be specified
-at this time; if the port is not specified the system will assign one.
-Once a connection has been established the socket's address is
-fixed by the peer entity's location.   The address assigned the
+at this time; if the port is not specified, the system will assign one.
+Once a connection has been established, the socket's address is
+fixed by the peer entity's location.
+The address assigned to the
 socket is the address associated with the network interface
-through which packets are being transmitted and received.  Normally
-this address corresponds to the peer entity's network.
+through which packets are being transmitted and received.
+Normally, this address corresponds to the peer entity's network.
 .Pp
 .Tn TCP
-supports one socket option which is set with
+supports a number of socket options which can be set with
 .Xr setsockopt 2
 and tested with
-.Xr getsockopt 2 .
+.Xr getsockopt 2 :
+.Bl -tag -width ".Dv TCP_CONNECTIONTIMEOUT"
+.It Dv TCP_NODELAY
 Under most circumstances,
 .Tn TCP
 sends data when it is presented;
@@ -117,19 +128,75 @@ an acknowledgement is received.
 For a small number of clients, such as window systems
 that send a stream of mouse events which receive no replies,
 this packetization may cause significant delays.
-Therefore,
-.Tn TCP
-provides a boolean option,
+The boolean option
 .Dv TCP_NODELAY
-(from
-.Aq Pa netinet/tcp.h ,
-to defeat this algorithm.
+defeats this algorithm.
+.It Dv TCP_MAXSEG
+By default, a sender- and
+.No receiver- Ns Tn TCP
+will negotiate among themselves to determine the maximum segment size
+to be used for each connection.
+The
+.Dv TCP_MAXSEG
+option allows the user to determine the result of this negotiation,
+and to reduce it if desired.
+.It Dv TCP_NOOPT
+.Tn TCP
+usually sends a number of options in each packet, corresponding to
+various
+.Tn TCP
+extensions which are provided in this implementation.
+The boolean option
+.Dv TCP_NOOPT
+is provided to disable
+.Tn TCP
+option use on a per-connection basis.
+.It Dv TCP_NOPUSH
+By convention, the
+.No sender- Ns Tn TCP
+will set the
+.Dq push
+bit, and begin transmission immediately (if permitted) at the end of
+every user call to
+.Xr write 2
+or
+.Xr writev 2 .
+When this option is set to a non-zero value,
+.Tn TCP
+will delay sending any data at all until either the socket is closed,
+or the internal send buffer is filled.
+.It Dv TCP_KEEPALIVE
+.Tn The
+.Dv TCP_KEEPALIVE
+options enable to specify the amount of time, in seconds, that the 
+connection must be idle before keepalive probes (if enabled) are sent. 
+The default value is specified by the 
+.Tn MIB
+variable
+.Va net.inet.tcp.keepidle .  
+.It Dv TCP_CONNECTIONTIMEOUT
+.Tn The
+.Dv TCP_CONNECTIONTIMEOUT
+option allows to specify the timeout, in seconds, for new, non established
+.Tn TCP
+connections. This option can be useful for both active and passive
+.Tn TCP
+connections. The default value is specified by the 
+.Tn MIB
+variable
+.Va net.inet.tcp.keepinit .
+.El
+.Pp
 The option level for the
-.Xr setsockopt
+.Xr setsockopt 2
 call is the protocol number for
 .Tn TCP ,
 available from
-.Xr getprotobyname 3 .
+.Xr getprotobyname 3 ,
+or
+.Dv IPPROTO_TCP .
+All options are declared in
+.In netinet/tcp.h .
 .Pp
 Options at the
 .Tn IP
@@ -139,9 +206,36 @@ see
 .Xr ip 4 .
 Incoming connection requests that are source-routed are noted,
 and the reverse source route is used in responding.
+.Ss "Non-blocking connect"
+.Pp
+When a
+.Tn TCP
+socket is set non-blocking, and the connection cannot be established immediatly, 
+.Xr connect 2
+returns with the error
+.Dv EINPROGRESS ,
+and the connection is established asynchronously.
+.Pp
+When the asynchronous connection completes successfully,
+.Xr select 2
+or
+.Xr poll 2
+or
+.Xr kqueue 2
+will indicate the file descriptor is ready for writing. 
+If the connection encounters an error, the file descriptor 
+is marked ready for both reading and writing, and the pending error 
+can be retrieved via the socket option 
+.Dv SO_ERROR .
+.Pp
+Note that even if the socket is non-blocking, it is possible for the connection 
+to be established immediatly. In that case 
+.Xr connect 2
+does not return with 
+.Dv EINPROGRESS .
 .Sh DIAGNOSTICS
 A socket operation may fail with one of the following errors returned:
-.Bl -tag -width [EADDRNOTAVAIL]
+.Bl -tag -width Er
 .It Bq Er EISCONN
 when trying to establish a connection on a socket which
 already has one;
@@ -163,18 +257,43 @@ when an attempt
 is made to create a socket with a port which has already been
 allocated;
 .It Bq Er EADDRNOTAVAIL
-when an attempt is made to create a 
+when an attempt is made to create a
 socket with a network address for which no network interface
-exists.
+exists;
+.It Bq Er EAFNOSUPPORT
+when an attempt is made to bind or connect a socket to a multicast
+address;
+.It Bq Er EINPROGRESS
+returned by
+.Xr connect 2
+when the socket is set nonblocking, and the connection cannot be 
+immediately established;
+.It Bq Er EALREADY
+returned by
+.Xr connect 2
+when connection request is already in progress for the specified socket.
+.
 .El
 .Sh SEE ALSO
+.Xr connect 2 ,
 .Xr getsockopt 2 ,
+.Xr kqueue 2 ,
+.Xr poll 2 ,
+.Xr select 2 ,
 .Xr socket 2 ,
+.Xr sysctl 3 ,
 .Xr inet 4 ,
-.Xr intro 4 ,
-.Xr ip 4
+.Xr inet6 4 ,
+.Xr ip 4 ,
+.Xr ip6 4 ,
+.Xr netintro 4 ,
+.Xr setkey 8
 .Sh HISTORY
 The
-.Nm
-protocol stack appeared in
+.Tn TCP
+protocol appeared in
 .Bx 4.2 .
+.Pp
+The socket option
+.Dv TCP_CONNECTIONTIMEOUT
+first appeared in Mac OS X 10.6.

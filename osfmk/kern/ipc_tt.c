@@ -168,7 +168,6 @@ ipc_task_init(
 		task->itk_bootstrap = IP_NULL;
 		task->itk_seatbelt = IP_NULL;
 		task->itk_gssd = IP_NULL;
-		task->itk_automountd = IP_NULL;
 		task->itk_task_access = IP_NULL;
 
 		for (i = 0; i < TASK_PORT_REGISTER_MAX; i++)
@@ -206,9 +205,6 @@ ipc_task_init(
 
 		task->itk_gssd =
 			ipc_port_copy_send(parent->itk_gssd);
-
-		task->itk_automountd =
-			ipc_port_copy_send(parent->itk_automountd);
 
 		task->itk_task_access =
 			ipc_port_copy_send(parent->itk_task_access);
@@ -323,9 +319,6 @@ ipc_task_terminate(
 	if (IP_VALID(task->itk_gssd))
 		ipc_port_release_send(task->itk_gssd);
 
-	if (IP_VALID(task->itk_automountd))
-		ipc_port_release_send(task->itk_automountd);
-
 	if (IP_VALID(task->itk_task_access))
 		ipc_port_release_send(task->itk_task_access);
 
@@ -339,6 +332,8 @@ ipc_task_terminate(
 	/* destroy the kernel ports */
 	ipc_port_dealloc_kernel(kport);
 	ipc_port_dealloc_kernel(nport);
+
+	itk_lock_destroy(task);
 }
 
 /*
@@ -883,10 +878,6 @@ task_get_special_port(
 		port = ipc_port_copy_send(task->itk_task_access);
 		break;
 			
-	    case TASK_AUTOMOUNTD_PORT:
-		port = ipc_port_copy_send(task->itk_automountd);
-		break;
-
 	    default:
                itk_unlock(task);
 		return KERN_INVALID_ARGUMENT;
@@ -956,10 +947,6 @@ task_set_special_port(
 		
 	    case TASK_ACCESS_PORT:
 		whichp = &task->itk_task_access;
-		break;
-		
-	    case TASK_AUTOMOUNTD_PORT:
-		whichp = &task->itk_automountd;
 		break;
 		
 	    default:
@@ -1524,7 +1511,7 @@ thread_set_exception_ports(
 	if (thread == THREAD_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	if (exception_mask & ~EXC_MASK_ALL)
+	if (exception_mask & ~EXC_MASK_VALID)
 		return (KERN_INVALID_ARGUMENT);
 
 	if (IP_VALID(new_port)) {
@@ -1595,7 +1582,7 @@ task_set_exception_ports(
 	if (task == TASK_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	if (exception_mask & ~EXC_MASK_ALL)
+	if (exception_mask & ~EXC_MASK_VALID)
 		return (KERN_INVALID_ARGUMENT);
 
 	if (IP_VALID(new_port)) {
@@ -1691,7 +1678,7 @@ thread_swap_exception_ports(
 	if (thread == THREAD_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	if (exception_mask & ~EXC_MASK_ALL)
+	if (exception_mask & ~EXC_MASK_VALID)
 		return (KERN_INVALID_ARGUMENT);
 
 	if (IP_VALID(new_port)) {
@@ -1787,7 +1774,7 @@ task_swap_exception_ports(
 	if (task == TASK_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	if (exception_mask & ~EXC_MASK_ALL)
+	if (exception_mask & ~EXC_MASK_VALID)
 		return (KERN_INVALID_ARGUMENT);
 
 	if (IP_VALID(new_port)) {
@@ -1896,7 +1883,7 @@ thread_get_exception_ports(
 	if (thread == THREAD_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	if (exception_mask & ~EXC_MASK_ALL)
+	if (exception_mask & ~EXC_MASK_VALID)
 		return (KERN_INVALID_ARGUMENT);
 
 	thread_mtx_lock(thread);
@@ -1958,7 +1945,7 @@ task_get_exception_ports(
 	if (task == TASK_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	if (exception_mask & ~EXC_MASK_ALL)
+	if (exception_mask & ~EXC_MASK_VALID)
 		return (KERN_INVALID_ARGUMENT);
 
 	itk_lock(task);

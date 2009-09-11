@@ -62,6 +62,13 @@ int shm_tests( void * the_argp )
 		printf( "shmdt failed with error %d - \"%s\" \n", errno, strerror( errno) );
 		goto test_failed_exit;
 	}
+	
+	my_err = shmctl( my_shm_id, IPC_RMID, NULL );
+	if ( my_err == -1 ) {
+		printf("shmctl failed to delete memory segment.\n");
+		goto test_failed_exit;
+	}
+	
 	my_shm_addr = NULL;
 	 
 	my_err = 0;
@@ -73,6 +80,7 @@ test_failed_exit:
 test_passed_exit:
 	if ( my_shm_addr != NULL ) {
 		shmdt( my_shm_addr );
+		shmctl( my_shm_id, IPC_RMID, NULL);
 	}
 	return( my_err );
 #else

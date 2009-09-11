@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -59,6 +59,11 @@ struct listattr_callback_state {
 	int         result;
 	uio_t       uio;
 	size_t      size;
+#if HFS_COMPRESSION
+	int         showcompressed;
+	vfs_context_t ctx;
+	vnode_t     vp;
+#endif /* HFS_COMPRESSION */
 };
 
 #define HFS_MAXATTRIBUTESIZE    (128 * 1024)
@@ -122,10 +127,17 @@ hfs_vnop_getnamedstream(struct vnop_getnamedstream_args* ap)
 	if ( !S_ISREG(cp->c_mode) ) {
 		return (EPERM);
 	}
+#if HFS_COMPRESSION
+	int hide_rsrc = hfs_hides_rsrc(ap->a_context, VTOC(vp), 1);
+#endif /* HFS_COMPRESSION */
 	if ((error = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK))) {
 		return (error);
 	}
-	if (!RSRC_FORK_EXISTS(cp) && (ap->a_operation != NS_OPEN)) {
+	if ((!RSRC_FORK_EXISTS(cp)
+#if HFS_COMPRESSION
+	     || hide_rsrc
+#endif /* HFS_COMPRESSION */
+	     ) && (ap->a_operation != NS_OPEN)) {
 		hfs_unlock(cp);
 		return (ENOATTR);
 	}
@@ -158,6 +170,17 @@ hfs_vnop_makenamedstream(struct vnop_makenamedstream_args* ap)
 	if ( !S_ISREG(cp->c_mode) ) {
 		return (EPERM);
 	}
+#if HFS_COMPRESSION
+	if (hfs_hides_rsrc(ap->a_context, VTOC(vp), 1)) {
+		if (VNODE_IS_RSRC(vp)) {
+			return EINVAL;
+		} else {
+			error = decmpfs_decompress_file(vp, VTOCMP(vp), -1, 1, 0);
+			if (error != 0)
+				return error;
+		}
+	}
+#endif /* HFS_COMPRESSION */
 	if ((error = hfs_lock(cp, HFS_EXCLUSIVE_LOCK))) {
 		return (error);
 	}
@@ -183,6 +206,13 @@ hfs_vnop_removenamedstream(struct vnop_removenamedstream_args* ap)
 	if (bcmp(ap->a_name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) != 0) {
 		return (ENOATTR);
 	}
+#if HFS_COMPRESSION
+	if (hfs_hides_rsrc(ap->a_context, VTOC(svp), 1)) {
+		/* do nothing */
+		return 0;
+	}
+#endif /* HFS_COMPRESSION */
+	
 	scp = VTOC(svp);
 
 	/* Take truncate lock before taking cnode lock. */
@@ -191,7 +221,7 @@ hfs_vnop_removenamedstream(struct vnop_removenamedstream_args* ap)
 		goto out;
 	}
 	if (VTOF(svp)->ff_size != 0) {
-		error = hfs_truncate(svp, 0, IO_NDELAY, 0, ap->a_context);
+		error = hfs_truncate(svp, 0, IO_NDELAY, 0, 0, ap->a_context);
 	}
 	hfs_unlock(scp);
 out:
@@ -234,6 +264,12 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 
 	cp = VTOC(vp);
 	if (vp == cp->c_vp) {
+#if HFS_COMPRESSION
+		int decmpfs_hide = hfs_hides_xattr(ap->a_context, VTOC(vp), ap->a_name, 1); /* 1 == don't take the cnode lock */
+		if (decmpfs_hide && !(ap->a_options & XATTR_SHOWCOMPRESSION))
+				return ENOATTR;
+#endif /* HFS_COMPRESSION */
+		
 		/* Get the Finder Info. */
 		if (bcmp(ap->a_name, XATTR_FINDERINFO_NAME, sizeof(XATTR_FINDERINFO_NAME)) == 0) {
 			u_int8_t finderinfo[32];
@@ -262,7 +298,7 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 				*ap->a_size = bufsize;
 				return (0);
 			}
-			if (uio_resid(uio) < bufsize)
+			if ((user_size_t)uio_resid(uio) < bufsize)
 				return (ERANGE);
 
 			result = uiomove((caddr_t)&finderinfo , bufsize, uio);
@@ -272,6 +308,8 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 		/* Read the Resource Fork. */
 		if (bcmp(ap->a_name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) == 0) {
 			struct vnode *rvp = NULL;
+			int openunlinked = 0;
+			int namelen = 0;
 
 			if ( !S_ISREG(cp->c_mode) ) {
 				return (EPERM);
@@ -279,11 +317,17 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 			if ((result = hfs_lock(cp, HFS_EXCLUSIVE_LOCK))) {
 				return (result);
 			}
+			namelen = cp->c_desc.cd_namelen;
+
 			if ( !RSRC_FORK_EXISTS(cp)) {
 				hfs_unlock(cp);
 				return (ENOATTR);
 			}
 			hfsmp = VTOHFS(vp);
+			if ((cp->c_flag & C_DELETED) && (namelen == 0)) {
+				openunlinked = 1;
+			}
+			
 			result = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE);
 			hfs_unlock(cp);
 			if (result) {
@@ -292,7 +336,41 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 			if (uio == NULL) {
 				*ap->a_size = (size_t)VTOF(rvp)->ff_size;
 			} else {
+#if HFS_COMPRESSION
+				user_ssize_t uio_size = 0;
+				if (decmpfs_hide)
+					uio_size = uio_resid(uio);
+#endif /* HFS_COMPRESSION */
 				result = VNOP_READ(rvp, uio, 0, ap->a_context);
+#if HFS_COMPRESSION
+				if (decmpfs_hide &&
+				    (result == 0) &&
+				    (uio_resid(uio) == uio_size)) {
+					/*
+					 we intentionally make the above call to VNOP_READ so that
+					 it can return an authorization/permission/etc. error
+					 based on ap->a_context and thus deny this operation;
+					 in that case, result != 0 and we won't proceed
+					 
+					 however, if result == 0, it will have returned no data
+					 because hfs_vnop_read hid the resource fork
+					 (hence uio_resid(uio) == uio_size, i.e. the uio is untouched)
+					 
+					 in that case, we try again with the decmpfs_ctx context
+					 to get the actual data
+					 */
+					result = VNOP_READ(rvp, uio, 0, decmpfs_ctx);
+				}
+#endif /* HFS_COMPRESSION */
+			}
+			/* force the rsrc fork vnode to recycle right away */
+			if (openunlinked) {
+				int vref;
+				vref = vnode_ref (rvp);
+				if (vref == 0) {
+					vnode_rele (rvp);
+				}
+				vnode_recycle(rvp);
 			}
 			vnode_put(rvp);
 			return (result);
@@ -368,7 +446,7 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 		}
 		*ap->a_size = recp->attrData.attrSize;
 		if (uio && recp->attrData.attrSize != 0) {
-			if (*ap->a_size > uio_resid(uio))
+			if (*ap->a_size > (user_size_t)uio_resid(uio))
 				result = ERANGE;
 			else
 				result = uiomove((caddr_t) &recp->attrData.attrData , recp->attrData.attrSize, uio);
@@ -386,7 +464,7 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 		if (uio == NULL) {
 			break;
 		}
-		if (*ap->a_size > uio_resid(uio)) {
+		if (*ap->a_size > (user_size_t)uio_resid(uio)) {
 			result = ERANGE;
 			break;
 		}
@@ -514,6 +592,15 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 	if (VNODE_IS_RSRC(vp)) {
 		return (EPERM);
 	}
+
+#if HFS_COMPRESSION
+	if (hfs_hides_xattr(ap->a_context, VTOC(vp), ap->a_name, 1) ) { /* 1 == don't take the cnode lock */
+		result = decmpfs_decompress_file(vp, VTOCMP(vp), -1, 1, 0);
+		if (result != 0)
+			return result;
+	}
+#endif /* HFS_COMPRESSION */
+	
 	/* Set the Finder Info. */
 	if (bcmp(ap->a_name, XATTR_FINDERINFO_NAME, sizeof(XATTR_FINDERINFO_NAME)) == 0) {
 		u_int8_t finderinfo[32];
@@ -523,7 +610,7 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 
 		attrsize = sizeof(VTOC(vp)->c_finderinfo);
 
-		if (uio_resid(uio) != attrsize) {
+		if ((user_size_t)uio_resid(uio) != attrsize) {
 			return (ERANGE);
 		}
 		/* Grab the new Finder Info data. */
@@ -598,6 +685,8 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 	/* Write the Resource Fork. */
 	if (bcmp(ap->a_name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) == 0) {
 		struct vnode *rvp = NULL;
+		int namelen = 0;
+		int openunlinked = 0;
 
 		if (!vnode_isreg(vp)) {
 			return (EPERM);
@@ -606,6 +695,7 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 			return (result);
 		}
 		cp = VTOC(vp);
+		namelen = cp->c_desc.cd_namelen;
 
 		if (RSRC_FORK_EXISTS(cp)) {
 			/* attr exists and "create" was specified. */
@@ -620,6 +710,15 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 				return (ENOATTR);
 			}
 		}
+		
+		/*
+		 * Note that we could be called on to grab the rsrc fork vnode
+		 * for a file that has become open-unlinked.
+		 */
+		if ((cp->c_flag & C_DELETED) && (namelen == 0)) {
+			openunlinked = 1;
+		}
+
 		result = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE);
 		hfs_unlock(cp);
 		if (result) {
@@ -627,6 +726,18 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		}
 		/* VNOP_WRITE will update timestamps accordingly */
 		result = VNOP_WRITE(rvp, uio, 0, ap->a_context);
+		
+		/* if open unlinked, force it inactive */
+		if (openunlinked) {
+			int vref;
+			vref = vnode_ref (rvp);
+			if (vref == 0) {
+				vnode_rele(rvp);
+			}
+			vnode_recycle (rvp);	
+		}
+
+
 		vnode_put(rvp);
 		return (result);
 	}
@@ -651,7 +762,8 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 	    attrsize < hfsmp->hfs_max_inline_attrsize) {
 		MALLOC(user_data_ptr, void *, attrsize, M_TEMP, M_WAITOK);
 		if (user_data_ptr == NULL) {
-			return (ENOMEM);
+			result = ENOMEM;
+			goto exit;
 		}
 
 		result = uiomove((caddr_t)user_data_ptr, attrsize, uio);
@@ -760,8 +872,11 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		/* Copy data into the blocks. */
 		result = write_attr_data(hfsmp, uio, attrsize, extentptr);
 		if (result) {
+			const char *name = vnode_getname(vp);
 			printf("hfs_setxattr: write_attr_data err (%d) %s:%s\n",
-				result, vnode_name(vp) ? vnode_name(vp) : "", ap->a_name);
+				result,  name ? name : "", ap->a_name);
+			if (name)
+				vnode_putname(name);
 			goto exit;
 		}
 
@@ -769,8 +884,11 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		if (exists) {
 			result = remove_attribute_records(hfsmp, iterator);
 			if (result) {
+				const char *name = vnode_getname(vp);
 				printf("hfs_setxattr: remove_attribute_records err (%d) %s:%s\n",
-					result, vnode_name(vp) ? vnode_name(vp) : "", ap->a_name);
+					result, name ? name : "", ap->a_name);
+				if (name)
+					vnode_putname(name);
 				goto exit; 
 			}
 		}
@@ -797,8 +915,11 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		result = BTInsertRecord(btfile, iterator, &btdata, btdata.itemSize);
 		if (result) {
 #if HFS_XATTR_VERBOSE
+			const char *name = vnode_getname(vp);
 			printf("hfs_setxattr: BTInsertRecord err (%d) %s:%s\n",
-			       MacToVFSError(result), vnode_name(vp) ? vnode_name(vp) : "", ap->a_name);
+			       MacToVFSError(result), name ? name : "", ap->a_name);
+			if (name)
+				vnode_putname(name);
 #endif
 			goto exit; 
 		}
@@ -821,8 +942,11 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 
 			result = BTInsertRecord(btfile, iterator, &btdata, btdata.itemSize);
 			if (result) {
+				const char *name = vnode_getname(vp);
 				printf("hfs_setxattr: BTInsertRecord err (%d) %s:%s\n",
-					MacToVFSError(result), vnode_name(vp) ? vnode_name(vp) : "", ap->a_name);
+					MacToVFSError(result), name ? name : "", ap->a_name);
+				if (name)
+					vnode_putname(name);
 				goto exit;
 			}
 			extentblks = count_extent_blocks(blkcnt, recp->overflowExtents.extents);
@@ -893,9 +1017,6 @@ exit:
 	if (cp) {
 		hfs_unlock(cp);
 	}
-	if (result == 0) {
-		HFS_KNOTE(vp, NOTE_ATTRIB);
-	}
 	if (user_data_ptr) {
 		FREE(user_data_ptr, M_TEMP);
 	}
@@ -942,6 +1063,11 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 		return (EPERM);
 	}
 
+#if HFS_COMPRESSION
+	if (hfs_hides_xattr(ap->a_context, VTOC(vp), ap->a_name, 1) && !(ap->a_options & XATTR_SHOWCOMPRESSION))
+		return ENOATTR;
+#endif /* HFS_COMPRESSION */
+	
 	/* If Resource Fork is non-empty then truncate it. */
 	if (bcmp(ap->a_name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) == 0) {
 		struct vnode *rvp = NULL;
@@ -979,7 +1105,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 			return (result);
 		}
 
-		result = hfs_truncate(rvp, (off_t)0, IO_NDELAY, 0, ap->a_context);
+		result = hfs_truncate(rvp, (off_t)0, IO_NDELAY, 0, 0, ap->a_context);
 		if (result == 0) {
 			cp->c_touch_chgtime = TRUE;
 			cp->c_flag |= C_MODIFIED;
@@ -1088,9 +1214,6 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 	hfs_end_transaction(hfsmp);
 exit:
 	hfs_unlock(cp);
-	if (result == 0) {
-		HFS_KNOTE(vp, NOTE_ATTRIB);
-	}
 	FREE(iterator, M_TEMP);
 	return MacToVFSError(result);
 }
@@ -1198,7 +1321,7 @@ remove_attribute_records(struct hfsmount *hfsmp, BTreeIterator * iterator)
 
 #if HFS_XATTR_VERBOSE
 		if (datasize < sizeof(HFSPlusAttrForkData)) {
-			printf("remove_attribute_records: bad record size %d (expecting %d)\n", datasize, sizeof(HFSPlusAttrForkData));
+			printf("hfs: remove_attribute_records: bad record size %d (expecting %d)\n", datasize, sizeof(HFSPlusAttrForkData));
 		}
 #endif
 		totalblks = attrdata.forkData.theFork.totalBlocks;
@@ -1206,7 +1329,7 @@ remove_attribute_records(struct hfsmount *hfsmp, BTreeIterator * iterator)
 		/* Process the first 8 extents. */
 		extentblks = count_extent_blocks(totalblks, attrdata.forkData.theFork.extents);
 		if (extentblks > totalblks)
-			panic("remove_attribute_records: corruption...");
+			panic("hfs: remove_attribute_records: corruption...");
 		if (BTDeleteRecord(btfile, iterator) == 0) {
 			free_attr_blks(hfsmp, extentblks, attrdata.forkData.theFork.extents);
 		}
@@ -1221,7 +1344,7 @@ remove_attribute_records(struct hfsmount *hfsmp, BTreeIterator * iterator)
 			if (result ||
 			    (attrdata.recordType != kHFSPlusAttrExtents) ||
 			    (datasize < sizeof(HFSPlusAttrExtents))) {
-				printf("remove_attribute_records: BTSearchRecord %d (%d), totalblks %d\n",
+				printf("hfs: remove_attribute_records: BTSearchRecord %d (%d), totalblks %d\n",
 					MacToVFSError(result), attrdata.recordType != kHFSPlusAttrExtents, totalblks);
 				result = ENOATTR;
 				break;   /* break from while */
@@ -1229,7 +1352,7 @@ remove_attribute_records(struct hfsmount *hfsmp, BTreeIterator * iterator)
 			/* Process the next 8 extents. */
 			extentblks = count_extent_blocks(totalblks, attrdata.overflowExtents.extents);
 			if (extentblks > totalblks)
-				panic("remove_attribute_records: corruption...");
+				panic("hfs: remove_attribute_records: corruption...");
 			if (BTDeleteRecord(btfile, iterator) == 0) {
 				free_attr_blks(hfsmp, extentblks, attrdata.overflowExtents.extents);
 			}
@@ -1277,6 +1400,11 @@ hfs_vnop_listxattr(struct vnop_listxattr_args *ap)
 	if (VNODE_IS_RSRC(vp)) {
 		return (EPERM);
 	}
+	
+#if HFS_COMPRESSION
+	int compressed = hfs_file_is_compressed(cp, 1); /* 1 == don't take the cnode lock */
+#endif /* HFS_COMPRESSION */
+	
 	hfsmp = VTOHFS(vp);
 	*ap->a_size = 0;
 
@@ -1297,7 +1425,7 @@ hfs_vnop_listxattr(struct vnop_listxattr_args *ap)
 	if (bcmp(finderinfo_start, emptyfinfo, finderinfo_size) != 0) {
 		if (uio == NULL) {
 			*ap->a_size += sizeof(XATTR_FINDERINFO_NAME);
-		} else if (uio_resid(uio) < sizeof(XATTR_FINDERINFO_NAME)) {
+		} else if ((user_size_t)uio_resid(uio) < sizeof(XATTR_FINDERINFO_NAME)) {
 			result = ERANGE;
 			goto exit;
 		} else {
@@ -1309,16 +1437,24 @@ hfs_vnop_listxattr(struct vnop_listxattr_args *ap)
 	}
 	/* If Resource Fork is non-empty then export it's name. */
 	if (S_ISREG(cp->c_mode) && RSRC_FORK_EXISTS(cp)) {
-		if (uio == NULL) {
-			*ap->a_size += sizeof(XATTR_RESOURCEFORK_NAME);
-		} else if (uio_resid(uio) < sizeof(XATTR_RESOURCEFORK_NAME)) {
-			result = ERANGE;
-			goto exit;
-		} else {
-			result = uiomove(XATTR_RESOURCEFORK_NAME,
-			                 sizeof(XATTR_RESOURCEFORK_NAME), uio);
-			if (result)
+#if HFS_COMPRESSION
+		if ((ap->a_options & XATTR_SHOWCOMPRESSION) ||
+		    !compressed ||
+		    !hfs_hides_rsrc(ap->a_context, VTOC(vp), 1) /* 1 == don't take the cnode lock */
+		    )
+#endif /* HFS_COMPRESSION */
+		{
+			if (uio == NULL) {
+				*ap->a_size += sizeof(XATTR_RESOURCEFORK_NAME);
+			} else if ((user_size_t)uio_resid(uio) < sizeof(XATTR_RESOURCEFORK_NAME)) {
+				result = ERANGE;
 				goto exit;
+			} else {
+				result = uiomove(XATTR_RESOURCEFORK_NAME,
+								 sizeof(XATTR_RESOURCEFORK_NAME), uio);
+				if (result)
+					goto exit;
+			}
 		}
 	}
 	/*
@@ -1372,6 +1508,11 @@ hfs_vnop_listxattr(struct vnop_listxattr_args *ap)
 	state.result = 0;
 	state.uio = uio;
 	state.size = 0;
+#if HFS_COMPRESSION
+	state.showcompressed = !compressed || ap->a_options & XATTR_SHOWCOMPRESSION;
+	state.ctx = ap->a_context;
+	state.vp = vp;
+#endif /* HFS_COMPRESSION */
 
 	/*
 	 * Process entries starting just after iterator->key.
@@ -1405,7 +1546,7 @@ static int
 listattr_callback(const HFSPlusAttrKey *key, __unused const HFSPlusAttrData *data, struct listattr_callback_state *state)
 {
 	char attrname[XATTR_MAXNAMELEN + 1];
-	size_t bytecount;
+	ssize_t bytecount;
 	int result;
 
 	if (state->fileID != key->fileID) {
@@ -1421,7 +1562,7 @@ listattr_callback(const HFSPlusAttrKey *key, __unused const HFSPlusAttrData *dat
 
 	/* Convert the attribute name into UTF-8. */
 	result = utf8_encodestr(key->attrName, key->attrNameLen * sizeof(UniChar),
-				(u_int8_t *)attrname, &bytecount, sizeof(attrname), '/', 0);
+				(u_int8_t *)attrname, (size_t *)&bytecount, sizeof(attrname), '/', 0);
 	if (result) {
 		state->result = result;
 		return (0);	/* stop */
@@ -1431,6 +1572,11 @@ listattr_callback(const HFSPlusAttrKey *key, __unused const HFSPlusAttrData *dat
 	if (xattr_protected(attrname))
 		return (1);     /* continue */
 
+#if HFS_COMPRESSION
+	if (!state->showcompressed && hfs_hides_xattr(state->ctx, VTOC(state->vp), attrname, 1) ) /* 1 == don't take the cnode lock */
+		return 1; /* continue */
+#endif /* HFS_COMPRESSION */
+	
 	if (state->uio == NULL) {
 		state->size += bytecount;
 	} else {
@@ -1461,7 +1607,7 @@ __private_extern__
 int
 hfs_removeallattr(struct hfsmount *hfsmp, u_int32_t fileid)
 {
-	BTreeIterator *iterator;
+	BTreeIterator *iterator = NULL;
 	HFSPlusAttrKey *key;
 	struct filefork *btfile;
 	int result, lockflags;
@@ -1472,6 +1618,9 @@ hfs_removeallattr(struct hfsmount *hfsmp, u_int32_t fileid)
 	btfile = VTOF(hfsmp->hfs_attribute_vp);
 
 	MALLOC(iterator, BTreeIterator *, sizeof(BTreeIterator), M_TEMP, M_WAITOK);
+	if (iterator == NULL) {
+		return (ENOMEM);
+	}
 	bzero(iterator, sizeof(BTreeIterator));
 	key = (HFSPlusAttrKey *)&iterator->key;
 
@@ -1979,7 +2128,7 @@ read_attr_data(struct hfsmount *hfsmp, uio_t uio, size_t datasize, HFSPlusExtent
 		result = cluster_read(evp, uio, VTOF(evp)->ff_size, IO_SYNC | IO_UNIT);
 
 #if HFS_XATTR_VERBOSE
-		printf("read_attr_data: cr iosize %d [%d, %d] (%d)\n",
+		printf("hfs: read_attr_data: cr iosize %d [%d, %d] (%d)\n",
 			iosize, extents[i].startBlock, extents[i].blockCount, result);
 #endif
 		if (result)
@@ -2034,7 +2183,7 @@ write_attr_data(struct hfsmount *hfsmp, uio_t uio, size_t datasize, HFSPlusExten
 		result = cluster_write(evp, uio, filesize, filesize, filesize,
 		                       (off_t) 0, IO_SYNC | IO_UNIT);
 #if HFS_XATTR_VERBOSE
-		printf("write_attr_data: cw iosize %d [%d, %d] (%d)\n",
+		printf("hfs: write_attr_data: cw iosize %d [%d, %d] (%d)\n",
 			iosize, extents[i].startBlock, extents[i].blockCount, result);
 #endif
 		if (result)
@@ -2077,7 +2226,7 @@ alloc_attr_blks(struct hfsmount *hfsmp, size_t attrsize, size_t extentbufsize, H
 		result = BlockAllocate(hfsmp, startblk, blkcnt, blkcnt, 0, 0,
 				       &extents[i].startBlock, &extents[i].blockCount);
 #if HFS_XATTR_VERBOSE
-		printf("alloc_attr_blks: BA blkcnt %d [%d, %d] (%d)\n",
+		printf("hfs: alloc_attr_blks: BA blkcnt %d [%d, %d] (%d)\n",
 			blkcnt, extents[i].startBlock, extents[i].blockCount, result);
 #endif
 		if (result) {
@@ -2095,7 +2244,7 @@ alloc_attr_blks(struct hfsmount *hfsmp, size_t attrsize, size_t extentbufsize, H
 		result = ENOSPC;
 
 #if HFS_XATTR_VERBOSE
-		printf("alloc_attr_blks: unexpected failure, %d blocks unallocated\n", blkcnt);
+		printf("hfs: alloc_attr_blks: unexpected failure, %d blocks unallocated\n", blkcnt);
 #endif
 		for (; i <= 0; i--) {
 			if ((blkcnt = extents[i].blockCount) != 0) {
@@ -2129,7 +2278,7 @@ free_attr_blks(struct hfsmount *hfsmp, int blkcnt, HFSPlusExtentDescriptor *exte
 	for (i = 0; (remblks > 0) && (extents[i].blockCount != 0); i++) {
 		if (extents[i].blockCount > (u_int32_t)blkcnt) {
 #if HFS_XATTR_VERBOSE
-			printf("free_attr_blks: skipping bad extent [%d, %d]\n",
+			printf("hfs: free_attr_blks: skipping bad extent [%d, %d]\n",
 				extents[i].startBlock, extents[i].blockCount);
 #endif
 			extents[i].blockCount = 0;
@@ -2144,7 +2293,7 @@ free_attr_blks(struct hfsmount *hfsmp, int blkcnt, HFSPlusExtentDescriptor *exte
 		remblks -= extents[i].blockCount;
 
 #if HFS_XATTR_VERBOSE
-		printf("free_attr_blks: BlockDeallocate [%d, %d]\n",
+		printf("hfs: free_attr_blks: BlockDeallocate [%d, %d]\n",
 		       extents[i].startBlock, extents[i].blockCount);
 #endif
 		/* Discard any resident pages for this block range. */

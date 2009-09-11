@@ -45,6 +45,8 @@
 #ifndef _MACH_SHARED_MEMORY_SERVER_H_
 #define _MACH_SHARED_MEMORY_SERVER_H_
 
+#warning "<mach/shared_memory_server.h> is deprecated.  Please use <mach/shared_region.h> instead."
+
 #include <sys/cdefs.h>
 #include <mach/vm_prot.h>
 #include <mach/vm_types.h>

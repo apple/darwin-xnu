@@ -49,7 +49,7 @@
 #include <sys/user.h>
 #include <sys/aio_kern.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <mach/machine.h>
 #include <mach/mach_types.h>
@@ -83,37 +83,40 @@ struct pipe;
 struct kqueue;
 struct atalk;
 
-int proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, register_t * retval);
+uint64_t get_dispatchqueue_offset_from_proc(void *);
+int proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
 
 /* protos for proc_info calls */
-int proc_listpids(uint32_t type, uint32_t tyoneinfo, user_addr_t buffer, uint32_t buffersize, register_t * retval);
-int proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, register_t * retval);
-int proc_pidfdinfo(int pid, int flavor,int fd, user_addr_t buffer, uint32_t buffersize, register_t * retval);
-int proc_kernmsgbuf(user_addr_t buffer, uint32_t buffersize, register_t * retval);
+int proc_listpids(uint32_t type, uint32_t tyoneinfo, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
+int proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
+int proc_pidfdinfo(int pid, int flavor,int fd, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
+int proc_kernmsgbuf(user_addr_t buffer, uint32_t buffersize, int32_t * retval);
+int proc_setcontrol(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
 
 /* protos for procpidinfo calls */
-int proc_pidfdlist(proc_t p, user_addr_t buffer, uint32_t buffersize, register_t *retval);
-int proc_pidbsdinfo(proc_t p, struct proc_bsdinfo *pbsd);
+int proc_pidfdlist(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+int proc_pidbsdinfo(proc_t p, struct proc_bsdinfo *pbsd, int zombie);
 int proc_pidtaskinfo(proc_t p, struct proc_taskinfo *ptinfo);
-int proc_pidallinfo(proc_t p, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, register_t *retval);
+int proc_pidallinfo(proc_t p, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int proc_pidthreadinfo(proc_t p, uint64_t arg,  struct proc_threadinfo *pthinfo);
 int proc_pidthreadpathinfo(proc_t p, uint64_t arg,  struct proc_threadwithpathinfo *pinfo);
-int proc_pidlistthreads(proc_t p,  user_addr_t buffer, uint32_t buffersize, register_t *retval);
-int proc_pidregioninfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, register_t *retval);
-int proc_pidregionpathinfo(proc_t p,  uint64_t arg, user_addr_t buffer, uint32_t buffersize, register_t *retval);
-int proc_pidvnodepathinfo(proc_t p,  uint64_t arg, user_addr_t buffer, uint32_t buffersize, register_t *retval);
-int proc_pidpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, register_t *retval);
+int proc_pidlistthreads(proc_t p,  user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+int proc_pidregioninfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+int proc_pidregionpathinfo(proc_t p,  uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+int proc_pidvnodepathinfo(proc_t p,  uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+int proc_pidpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+int proc_pidworkqueueinfo(proc_t p, struct proc_workqueueinfo *pwqinfo);
 
 
 /* protos for proc_pidfdinfo calls */
-int pid_vnodeinfo(vnode_t vp, uint32_t vid, struct fileproc * fp, int closeonexec, user_addr_t  buffer, uint32_t buffersize, register_t * retval);
-int pid_vnodeinfopath(vnode_t vp, uint32_t vid, struct fileproc * fp, int closeonexec, user_addr_t  buffer, uint32_t buffersize, register_t * retval);
-int pid_socketinfo(socket_t  so, struct fileproc *fp, int closeonexec, user_addr_t  buffer, uint32_t buffersize, register_t * retval);
-int pid_pseminfo(struct psemnode * psem, struct fileproc * fp,  int closeonexec, user_addr_t  buffer, uint32_t buffersize, register_t * retval);
-int pid_pshminfo(struct pshmnode * pshm, struct fileproc * fp,  int closeonexec, user_addr_t  buffer, uint32_t buffersize, register_t * retval);
-int pid_pipeinfo(struct pipe * p, struct fileproc * fp,  int closeonexec, user_addr_t  buffer, uint32_t buffersize, register_t * retval);
-int pid_kqueueinfo(struct kqueue * kq, struct fileproc * fp,  int closeonexec, user_addr_t  buffer, uint32_t buffersize, register_t * retval);
-int pid_atalkinfo(struct atalk  * at, struct fileproc * fp,  int closeonexec, user_addr_t  buffer, uint32_t buffersize, register_t * retval);
+int pid_vnodeinfo(vnode_t vp, uint32_t vid, struct fileproc * fp, int closeonexec, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+int pid_vnodeinfopath(vnode_t vp, uint32_t vid, struct fileproc * fp, int closeonexec, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+int pid_socketinfo(socket_t  so, struct fileproc *fp, int closeonexec, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+int pid_pseminfo(struct psemnode * psem, struct fileproc * fp,  int closeonexec, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+int pid_pshminfo(struct pshmnode * pshm, struct fileproc * fp,  int closeonexec, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+int pid_pipeinfo(struct pipe * p, struct fileproc * fp,  int closeonexec, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+int pid_kqueueinfo(struct kqueue * kq, struct fileproc * fp,  int closeonexec, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+int pid_atalkinfo(struct atalk  * at, struct fileproc * fp,  int closeonexec, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
 
 
 /* protos for misc */
@@ -123,17 +126,27 @@ void  fill_fileinfo(struct fileproc * fp, int closeonexec, struct proc_fileinfo 
 static int proc_security_policy(proc_t p);
 static void munge_vinfo_stat(struct stat64 *sbp, struct vinfo_stat *vsbp);
 
+uint64_t get_dispatchqueue_offset_from_proc(void *p)
+{
+	if(p != NULL) {
+		proc_t pself = (proc_t)p;
+		return (pself->p_dispatchqueue_offset);
+	} else {
+		return (uint64_t)0;
+	}
+}
+
 /***************************** proc_info ********************/
 
 int
-proc_info(__unused struct proc *p, struct proc_info_args * uap, register_t *retval)
+proc_info(__unused struct proc *p, struct proc_info_args * uap, int32_t *retval)
 {
 	return(proc_info_internal(uap->callnum, uap->pid, uap->flavor, uap->arg, uap->buffer, uap->buffersize, retval));
 }
 
 
 int 
-proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  buffersize, register_t * retval)
+proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  buffersize, int32_t * retval)
 {
 
 	switch(callnum) {
@@ -146,6 +159,9 @@ proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t b
 			return(proc_pidfdinfo(pid, flavor, (int)arg, buffer, buffersize, retval));
 		case 4: /* proc_kernmsgbuf */
 			return(proc_kernmsgbuf(buffer, buffersize, retval));
+		case 5: /* set on self properties  proc_setcontrol */
+			return(proc_setcontrol(pid, flavor, arg, buffer, buffersize, retval));
+			
 		default:
 				return(EINVAL);
 	}
@@ -155,13 +171,14 @@ proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t b
 
 /******************* proc_listpids routine ****************/
 int
-proc_listpids(uint32_t type, uint32_t typeinfo, user_addr_t buffer, uint32_t  buffersize, register_t * retval)
+proc_listpids(uint32_t type, uint32_t typeinfo, user_addr_t buffer, uint32_t  buffersize, int32_t * retval)
 {
 	int numprocs, wantpids;
 	char * kbuf;
 	int * ptr;
 	int n, skip;
 	struct proc * p;
+	struct tty * tp;
 	int error = 0;
 
 	/* if the buffer is null, return num of procs */
@@ -202,8 +219,8 @@ proc_listpids(uint32_t type, uint32_t typeinfo, user_addr_t buffer, uint32_t  bu
 				/* racy but list lock is held */
 				if ((p->p_flag & P_CONTROLT) == 0 ||
 					(p->p_pgrp == NULL) || (p->p_pgrp->pg_session == NULL) ||
-			    	p->p_pgrp->pg_session->s_ttyp == NULL ||
-			    	p->p_pgrp->pg_session->s_ttyp->t_dev != (dev_t)typeinfo)
+			    	(tp = SESSION_TP(p->p_pgrp->pg_session)) == TTY_NULL ||
+			    	tp->t_dev != (dev_t)typeinfo)
 					skip = 1;
 			  	break;
 			case PROC_UID_ONLY:
@@ -277,7 +294,7 @@ proc_listpids(uint32_t type, uint32_t typeinfo, user_addr_t buffer, uint32_t  bu
 /********************************** proc_pidinfo routines ********************************/
 
 int 
-proc_pidfdlist(proc_t p, user_addr_t buffer, uint32_t  buffersize, register_t *retval)
+proc_pidfdlist(proc_t p, user_addr_t buffer, uint32_t  buffersize, int32_t *retval)
 {
 		int numfds, needfds;
 		char * kbuf;
@@ -330,7 +347,7 @@ proc_pidfdlist(proc_t p, user_addr_t buffer, uint32_t  buffersize, register_t *r
 
 
 int 
-proc_pidbsdinfo(proc_t p, struct proc_bsdinfo * pbsd)
+proc_pidbsdinfo(proc_t p, struct proc_bsdinfo * pbsd, int zombie)
 {
 	register struct tty *tp;
 	struct  session *sessionp = NULL;
@@ -355,9 +372,10 @@ proc_pidbsdinfo(proc_t p, struct proc_bsdinfo * pbsd)
 	kauth_cred_unref(&my_cred);
 	
 	pbsd->pbi_nice = p->p_nice;
-	pbsd->pbi_start = p->p_start;
-	bcopy(&p->p_comm, &pbsd->pbi_comm[0], MAXCOMLEN);
-	bcopy(&p->p_name, &pbsd->pbi_name[0], 2* MAXCOMLEN);
+	pbsd->pbi_start_tvsec = p->p_start.tv_sec;
+	pbsd->pbi_start_tvusec = p->p_start.tv_usec;
+	bcopy(&p->p_comm, &pbsd->pbi_comm[0], MAXCOMLEN-1);
+	bcopy(&p->p_name, &pbsd->pbi_name[0], 2*MAXCOMLEN-1);
 
 	pbsd->pbi_flags = 0;	
 	if ((p->p_flag & P_SYSTEM) == P_SYSTEM) 
@@ -375,16 +393,41 @@ proc_pidbsdinfo(proc_t p, struct proc_bsdinfo * pbsd)
 	if ((p->p_flag & P_THCWD) == P_THCWD) 
 		pbsd->pbi_flags |= PROC_FLAG_THCWD;
 
-	if (SESS_LEADER(p, sessionp))
-		pbsd->pbi_flags |= PROC_FLAG_SLEADER;
-	if ((sessionp != SESSION_NULL) && sessionp->s_ttyvp)
-		pbsd->pbi_flags |= PROC_FLAG_CTTY;
+	if (sessionp != SESSION_NULL) {
+		if (SESS_LEADER(p, sessionp))
+			pbsd->pbi_flags |= PROC_FLAG_SLEADER;
+		if (sessionp->s_ttyvp)
+			pbsd->pbi_flags |= PROC_FLAG_CTTY;
+	}
+
+
+	switch(PROC_CONTROL_STATE(p)) {
+		case P_PCTHROTTLE:
+			pbsd->pbi_flags |= PROC_FLAG_PC_THROTTLE;
+			break;
+		case P_PCSUSP:
+			pbsd->pbi_flags |= PROC_FLAG_PC_SUSP;
+			break;
+		case P_PCKILL:
+			pbsd->pbi_flags |= PROC_FLAG_PC_KILL;
+			break;
+	};
+
+	switch(PROC_ACTION_STATE(p)) {
+		case P_PCTHROTTLE:
+			pbsd->pbi_flags |= PROC_FLAG_PA_THROTTLE;
+			break;
+		case P_PCSUSP:
+			pbsd->pbi_flags |= PROC_FLAG_PA_SUSP;
+			break;
+	};
 		
-	pbsd->pbi_nfiles = p->p_fd->fd_nfiles;
+	if (zombie == 0)
+		pbsd->pbi_nfiles = p->p_fd->fd_nfiles;
 	if (pg != PGRP_NULL) {
 		pbsd->pbi_pgid = p->p_pgrpid;
 		pbsd->pbi_pjobc = pg->pg_jobc;
-		if ((p->p_flag & P_CONTROLT) && (sessionp != SESSION_NULL) && (tp = sessionp->s_ttyp)) {
+		if ((p->p_flag & P_CONTROLT) && (sessionp != SESSION_NULL) && (tp = SESSION_TP(sessionp))) {
 			pbsd->e_tdev = tp->t_dev;
 			pbsd->e_tpgid = sessionp->s_ttypgrpid;
 		}
@@ -429,6 +472,13 @@ proc_pidthreadinfo(proc_t p, uint64_t arg,  struct proc_threadinfo *pthinfo)
 
 }
 
+void 
+bsd_getthreadname(void *uth, char *buffer)
+{
+	struct uthread *ut = (struct uthread *)uth;
+	if(ut->pth_name)
+		bcopy(ut->pth_name,buffer,MAXTHREADNAMESIZE);
+}
 
 void
 bsd_threadcdir(void * uth, void *vptr, int *vidp)
@@ -478,7 +528,7 @@ proc_pidthreadpathinfo(proc_t p, uint64_t arg,  struct proc_threadwithpathinfo *
 
 
 int 
-proc_pidlistthreads(proc_t p,  user_addr_t buffer, uint32_t  buffersize, register_t *retval)
+proc_pidlistthreads(proc_t p,  user_addr_t buffer, uint32_t  buffersize, int32_t *retval)
 {
 	int count = 0;	
 	int ret = 0;
@@ -512,13 +562,13 @@ proc_pidlistthreads(proc_t p,  user_addr_t buffer, uint32_t  buffersize, registe
 
 
 int 
-proc_pidregioninfo(proc_t p, uint64_t arg, user_addr_t buffer, __unused uint32_t  buffersize, register_t *retval)
+proc_pidregioninfo(proc_t p, uint64_t arg, user_addr_t buffer, __unused uint32_t  buffersize, int32_t *retval)
 {
 	struct proc_regioninfo preginfo;
 	int ret, error = 0;
 
 	bzero(&preginfo, sizeof(struct proc_regioninfo));
-	ret = fill_procregioninfo( p->task, arg, (struct proc_regioninfo_internal *)&preginfo, (uint32_t *)0, (uint32_t *)0);
+	ret = fill_procregioninfo( p->task, arg, (struct proc_regioninfo_internal *)&preginfo, (uintptr_t *)0, (uint32_t *)0);
 	if (ret == 0)
 		return(EINVAL);
 	error = copyout(&preginfo, buffer, sizeof(struct proc_regioninfo));
@@ -529,18 +579,18 @@ proc_pidregioninfo(proc_t p, uint64_t arg, user_addr_t buffer, __unused uint32_t
 
 
 int 
-proc_pidregionpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, __unused uint32_t  buffersize, register_t *retval)
+proc_pidregionpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, __unused uint32_t  buffersize, int32_t *retval)
 {
 	struct proc_regionwithpathinfo preginfo;
 	int ret, error = 0;
-	uint32_t vnodeaddr= 0;
+	uintptr_t vnodeaddr= 0;
 	uint32_t vnodeid= 0;
 	vnode_t vp;
 	int count;
 
 	bzero(&preginfo, sizeof(struct proc_regionwithpathinfo));
 
-	ret = fill_procregioninfo( p->task, arg, (struct proc_regioninfo_internal *)&preginfo.prp_prinfo, (uint32_t *)&vnodeaddr, (uint32_t *)&vnodeid);
+	ret = fill_procregioninfo( p->task, arg, (struct proc_regioninfo_internal *)&preginfo.prp_prinfo, (uintptr_t *)&vnodeaddr, (uint32_t *)&vnodeid);
 	if (ret == 0)
 		return(EINVAL);
 	if (vnodeaddr) {
@@ -566,7 +616,7 @@ proc_pidregionpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, __unused uint
  * thread directory.
  */
 int 
-proc_pidvnodepathinfo(proc_t p, __unused uint64_t arg, user_addr_t buffer, __unused uint32_t  buffersize, register_t *retval)
+proc_pidvnodepathinfo(proc_t p, __unused uint64_t arg, user_addr_t buffer, __unused uint32_t  buffersize, int32_t *retval)
 {
 	struct proc_vnodepathinfo pvninfo;
 	int error = 0;
@@ -628,7 +678,7 @@ out:
 }
 
 int 
-proc_pidpathinfo(proc_t p, __unused uint64_t arg, user_addr_t buffer, uint32_t buffersize, __unused register_t *retval)
+proc_pidpathinfo(proc_t p, __unused uint64_t arg, user_addr_t buffer, uint32_t buffersize, __unused int32_t *retval)
 {
 	int vid, error;
 	vnode_t tvp;
@@ -649,7 +699,7 @@ proc_pidpathinfo(proc_t p, __unused uint64_t arg, user_addr_t buffer, uint32_t b
 	vid = vnode_vid(tvp);
 	error = vnode_getwithvid(tvp, vid);
 	if (error == 0) {
-		error = vn_getpath(tvp, buf, &len);
+		error = vn_getpath_fsenter(tvp, buf, &len);
 		vnode_put(tvp);
 		if (error == 0) {
 			error = vnode_lookup(buf, 0, &nvp, vfs_context_current()); 
@@ -665,11 +715,25 @@ proc_pidpathinfo(proc_t p, __unused uint64_t arg, user_addr_t buffer, uint32_t b
 }
 
 
+int 
+proc_pidworkqueueinfo(proc_t p, struct proc_workqueueinfo *pwqinfo)
+{
+	int error = 0;
+
+	bzero(pwqinfo, sizeof(struct proc_workqueueinfo));
+
+	error = fill_procworkqueue(p, pwqinfo);
+	if (error)
+		return(ESRCH);
+	else
+		return(0);
+
+}
 /********************************** proc_pidinfo ********************************/
 
 
 int
-proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  buffersize, register_t * retval)
+proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  buffersize, int32_t * retval)
 {
 	struct proc * p = PROC_NULL;
 	int error = ENOTSUP;
@@ -677,6 +741,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 	int findzomb = 0;
 	int refheld = 0;
 	uint32_t size;
+	int zombie = 0;
 
 	switch (flavor) {
 		case PROC_PIDLISTFDS:
@@ -714,6 +779,13 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		case PROC_PIDPATHINFO:
 			size = MAXPATHLEN;
 			break;
+		case PROC_PIDWORKQUEUEINFO:
+			/* kernel does not have workq info */
+			if (pid == 0)
+				return(EINVAL);
+			else
+				size = PROC_PIDWORKQUEUEINFO_SIZE;
+			break;
 		default:
 			return(EINVAL);
 	}
@@ -747,16 +819,18 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		case PROC_PIDTBSDINFO: {
 			struct proc_bsdinfo pbsd;
 
+			zombie = 0;
 			if (arg)
 				findzomb = 1;
 			p = proc_find(pid);
 			if (p == PROC_NULL) {
-				if (findzomb) 
+				if (findzomb)  
 					p = pzfind(pid);
 				if (p == NULL) {
 					error = ESRCH;
 					goto out;	
 				}
+				zombie = 1;
 			} else 
 				refheld = 1;
 			/* Do we have permission to look into this ? */
@@ -765,7 +839,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 					proc_rele(p);
 				goto out;
 			}
-			error = proc_pidbsdinfo(p, &pbsd);
+			error = proc_pidbsdinfo(p, &pbsd, zombie);
 			if (refheld != 0)
 				proc_rele(p);
 			if (error == 0) {
@@ -791,7 +865,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		case PROC_PIDTASKALLINFO: {
 		struct proc_taskallinfo pall;
 
-			error = proc_pidbsdinfo(p, &pall.pbsd);
+			error = proc_pidbsdinfo(p, &pall.pbsd, 0);
 			error =  proc_pidtaskinfo(p, &pall.ptinfo);
 			if (error == 0) {
 				error = copyout(&pall, buffer, sizeof(struct proc_taskallinfo));
@@ -858,6 +932,19 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		}
 		break;
 
+
+		case PROC_PIDWORKQUEUEINFO:{
+		struct proc_workqueueinfo pwqinfo;
+
+			error  = proc_pidworkqueueinfo(p, &pwqinfo);
+			if (error == 0) {
+				error = copyout(&pwqinfo, buffer, sizeof(struct proc_workqueueinfo));
+				if (error == 0)
+					*retval = sizeof(struct proc_workqueueinfo);
+			}	
+		}
+		break;
+
 		default:
 			error = ENOTSUP;
 	}
@@ -870,7 +957,7 @@ out:
 
 
 int 
-pid_vnodeinfo(vnode_t vp, uint32_t vid, struct fileproc * fp, int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, register_t * retval) 
+pid_vnodeinfo(vnode_t vp, uint32_t vid, struct fileproc * fp, int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, int32_t * retval) 
 {
 	struct vnode_fdinfo vfi;
 	int error= 0;
@@ -891,7 +978,7 @@ pid_vnodeinfo(vnode_t vp, uint32_t vid, struct fileproc * fp, int closeonexec, u
 }
 
 int 
-pid_vnodeinfopath(vnode_t vp, uint32_t vid, struct fileproc * fp, int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, register_t * retval) 
+pid_vnodeinfopath(vnode_t vp, uint32_t vid, struct fileproc * fp, int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, int32_t * retval) 
 {
 	struct vnode_fdinfowithpath vfip;
 	int count, error= 0;
@@ -958,7 +1045,7 @@ out:
 }
 
 int
-pid_socketinfo(socket_t so, struct fileproc *fp, int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, register_t * retval)
+pid_socketinfo(socket_t so, struct fileproc *fp, int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, int32_t * retval)
 {
 #if SOCKETS
 	struct socket_fdinfo s;
@@ -978,7 +1065,7 @@ pid_socketinfo(socket_t so, struct fileproc *fp, int closeonexec, user_addr_t  b
 }
 
 int
-pid_pseminfo(struct psemnode *psem, struct fileproc *fp,  int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, register_t * retval)
+pid_pseminfo(struct psemnode *psem, struct fileproc *fp,  int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, int32_t * retval)
 {
 	struct psem_fdinfo pseminfo;
 	int error = 0;
@@ -995,7 +1082,7 @@ pid_pseminfo(struct psemnode *psem, struct fileproc *fp,  int closeonexec, user_
 }
 
 int
-pid_pshminfo(struct pshmnode *pshm, struct fileproc *fp,  int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, register_t * retval)
+pid_pshminfo(struct pshmnode *pshm, struct fileproc *fp,  int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, int32_t * retval)
 {
 	struct pshm_fdinfo pshminfo;
 	int error = 0;
@@ -1012,7 +1099,7 @@ pid_pshminfo(struct pshmnode *pshm, struct fileproc *fp,  int closeonexec, user_
 }
 
 int
-pid_pipeinfo(struct pipe *  p, struct fileproc *fp,  int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, register_t * retval)
+pid_pipeinfo(struct pipe *  p, struct fileproc *fp,  int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, int32_t * retval)
 {
 	struct pipe_fdinfo pipeinfo;
 	int error = 0;
@@ -1028,7 +1115,7 @@ pid_pipeinfo(struct pipe *  p, struct fileproc *fp,  int closeonexec, user_addr_
 }
 
 int
-pid_kqueueinfo(struct kqueue * kq, struct fileproc *fp,  int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, register_t * retval)
+pid_kqueueinfo(struct kqueue * kq, struct fileproc *fp,  int closeonexec, user_addr_t  buffer, __unused uint32_t buffersize, int32_t * retval)
 {
 	struct kqueue_fdinfo kqinfo;
 	int error = 0;
@@ -1046,7 +1133,7 @@ pid_kqueueinfo(struct kqueue * kq, struct fileproc *fp,  int closeonexec, user_a
 }
 
 int
-pid_atalkinfo(__unused struct atalk * at, __unused struct fileproc *fp,  __unused int closeonexec, __unused user_addr_t  buffer, __unused uint32_t buffersize, __unused register_t * retval)
+pid_atalkinfo(__unused struct atalk * at, __unused struct fileproc *fp,  __unused int closeonexec, __unused user_addr_t  buffer, __unused uint32_t buffersize, __unused int32_t * retval)
 {
 	return ENOTSUP;
 }
@@ -1055,7 +1142,7 @@ pid_atalkinfo(__unused struct atalk * at, __unused struct fileproc *fp,  __unuse
 
 /************************** proc_pidfdinfo routine ***************************/
 int
-proc_pidfdinfo(int pid, int flavor,  int fd, user_addr_t buffer, uint32_t buffersize, register_t * retval)
+proc_pidfdinfo(int pid, int flavor,  int fd, user_addr_t buffer, uint32_t buffersize, int32_t * retval)
 {
 	proc_t p;
 	int error = ENOTSUP;
@@ -1194,6 +1281,7 @@ proc_pidfdinfo(int pid, int flavor,  int fd, user_addr_t buffer, uint32_t buffer
 		}
 		break;
 
+#if NETAT
 		case PROC_PIDFDATALKINFO: {
 			struct atalk * at;
 
@@ -1206,7 +1294,7 @@ proc_pidfdinfo(int pid, int flavor,  int fd, user_addr_t buffer, uint32_t buffer
 			error =  pid_atalkinfo(at, fp, closeonexec, buffer, buffersize, retval);
 		}
 		break;
-
+#endif /* NETAT */
 		default: {
 			error = EINVAL;
 		}
@@ -1241,13 +1329,48 @@ proc_security_policy(proc_t p)
 }
 
 int 
-proc_kernmsgbuf(user_addr_t buffer, uint32_t buffersize, register_t * retval)
+proc_kernmsgbuf(user_addr_t buffer, uint32_t buffersize, int32_t * retval)
 {
 	if (suser(kauth_cred_get(), (u_short *)0) == 0) {
 		return(log_dmesg(buffer, buffersize, retval));
 	} else
 		return(EPERM);
 }
+
+/* ********* process control sets on self only */
+int 
+proc_setcontrol(int pid, int flavor, uint64_t arg, __unused user_addr_t buffer, __unused uint32_t buffersize, __unused int32_t * retval)
+{
+	struct proc * pself = PROC_NULL;
+	int error = 0;
+	uint32_t pcontrol = (uint32_t)arg;
+
+
+	pself = current_proc();
+	if (pid != pself->p_pid)
+		return(EINVAL);
+
+	if (pcontrol > P_PCMAX)
+		return(EINVAL);
+
+	switch (flavor) {
+		case PROC_SELFSET_PCONTROL: {
+			proc_lock(pself);
+			/* reset existing control setting while retaining action state */
+			pself->p_pcaction &= PROC_ACTION_MASK;
+			/* set new control state */
+			pself->p_pcaction |= pcontrol;
+			proc_unlock(pself);
+		}
+		break;
+
+		default:
+			error = ENOTSUP;
+	}
+	
+	return(error);
+}
+
 
 /*
  * copy stat64 structure into vinfo_stat structure.

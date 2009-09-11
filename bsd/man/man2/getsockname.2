@@ -48,16 +48,21 @@
 .Fa "socklen_t *restrict address_len"
 .Fc
 .Sh DESCRIPTION
-.Fn Getsockname
-returns the current 
+The
+.Fn getsockname
+fynction returns the current 
 .Fa address
-for the specified socket.  The
+for the specified socket. 
+.Pp
+The
 .Fa address_len
 parameter should be initialized to indicate
 the amount of space pointed to by
 .Fa address .
-On return it contains the actual size of the name
+On return it contains the actual size of the address
 returned (in bytes).
+.Pp
+The address is truncated if the buffer provided is too small.
 .Sh RETURN VALUES
 .Rv -std getsockname
 .Sh ERRORS
@@ -101,7 +106,7 @@ is not supported for the protocol in use by
 .Sh BUGS
 Names bound to sockets in the UNIX domain are inaccessible;
 .Fn getsockname
-returns a zero-length name.
+returns a zero-length address.
 .Sh HISTORY
 The
 .Fn getsockname

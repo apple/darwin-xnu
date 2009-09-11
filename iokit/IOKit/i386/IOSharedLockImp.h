@@ -55,30 +55,11 @@
 
 #include <architecture/i386/asm_help.h>
 
-/* 
- * void
- * ev_lock(p)
- *	int *p;
- *
- * Lock the lock pointed to by p.  Spin (possibly forever) until the next
- * lock is available.
- */
-	TEXT
-
 #ifndef KERNEL
-LEAF(_ev_lock, 0)
-LEAF(_IOSpinLock, 0)
-	movl		4(%esp), %ecx
-0:
-	xorl		%eax, %eax
-	rep
-	nop		/* pause for hyperthreaded CPU's */
-	lock
-	cmpxchgl	%ecx, (%ecx)
-	jne		0b
-	ret
-END(_ev_lock)
+#error this file for kernel only; comm page has user versions
 #endif
+
+	TEXT
 
 /*
  * void
@@ -89,11 +70,13 @@ END(_ev_lock)
  */
 LEAF(_ev_unlock, 0)
 LEAF(_IOSpinUnlock, 0)
+#if __x86_64__
+	movl		$0, (%rdi)
+#else
 	movl		4(%esp), %ecx
 	movl		$0, (%ecx)
-	ret
+#endif
 END(_ev_unlock)
-
 
 
 /*
@@ -106,6 +89,14 @@ END(_ev_unlock)
 
 LEAF(_ev_try_lock, 0)
 LEAF(_IOTrySpinLock, 0)
+#if __x86_64__
+	xorl		%eax, %eax
+	orl		$-1, %edx
+	lock
+	cmpxchgl	%edx, (%rdi)
+	setz		%dl
+	movzbl		%dl, %eax
+#else
         movl            4(%esp), %ecx 
 	xorl		%eax, %eax
         lock
@@ -115,6 +106,7 @@ LEAF(_IOTrySpinLock, 0)
 	ret
 1:
 	xorl	%eax, %eax		/* no */
+#endif
 END(_ev_try_lock)
 
 

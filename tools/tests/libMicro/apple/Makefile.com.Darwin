@@ -1,0 +1,58 @@
+#
+# CDDL HEADER START
+#
+# The contents of this file are subject to the terms
+# of the Common Development and Distribution License
+# (the "License").  You may not use this file except
+# in compliance with the License.
+#
+# You can obtain a copy of the license at
+# src/OPENSOLARIS.LICENSE
+# or http://www.opensolaris.org/os/licensing.
+# See the License for the specific language governing
+# permissions and limitations under the License.
+#
+# When distributing Covered Code, include this CDDL
+# HEADER in each file and include the License file at
+# usr/src/OPENSOLARIS.LICENSE.  If applicable,
+# add the following below this CDDL HEADER, with the
+# fields enclosed by brackets "[]" replaced with your
+# own identifying information: Portions Copyright [yyyy]
+# [name of copyright owner]
+#
+# CDDL HEADER END
+#
+
+#
+# Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
+# Use is subject to license terms.
+#
+# ident	"@(#)Makefile.com.Darwin	1.10	05/08/04 SMI"
+#
+
+include ../Makefile.benchmarks
+
+EXTRA_CFILES= \
+		exec_bin.c 	\
+		elided.c	\
+		tattle.c
+
+#
+# some definitions to make getting compiler versions possible - avoid quotes
+#
+COMPILER_VERSION_CMD_cc=cc -V 2>&1 | egrep Sun
+COMPILER_VERSION_CMD_gcc=gcc -dumpversion
+COMPILER_VERSION_CMD=$(COMPILER_VERSION_CMD_$(CC))
+
+default: $(ALL)
+
+%.o:	../%.c
+	$(CC) -c $(CFLAGS) $(CPPFLAGS) $< -o $@	
+
+%: %.o 
+	$(CC) -o $(@) $(@).o $($(@)_EXTRA_DEPS) $(CFLAGS) ../../bin-$(ARCH)/libmicro.a $($(@)_EXTRA_LIBS) $(EXTRA_LIBS) -lpthread -lm; cp $@ ../../bin-$(ARCH)/ 
+
+posix_spawn:    posix_spawn_bin
+
+posix_spawn_bin:        posix_spawn_bin.o
+	$(CC) -o posix_spawn_bin $(CFLAGS) posix_spawn_bin.o

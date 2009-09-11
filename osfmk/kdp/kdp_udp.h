@@ -32,6 +32,7 @@
 
 #include <libsa/types.h>
 #include <libkern/OSByteOrder.h>   /* OSSwap functions */
+#include <stdint.h>
 
 #define     ETHERMTU        1500
 #define     ETHERHDRSIZE    14
@@ -39,7 +40,7 @@
 #define     KDP_MAXPACKET   (ETHERHDRSIZE + ETHERMTU + ETHERCRC)
 
 struct in_addr {
-        u_long s_addr;
+        uint32_t s_addr;
 };
 
 struct ether_addr {
@@ -52,7 +53,7 @@ extern struct ether_addr kdp_get_mac_addr(void);
 unsigned int  kdp_get_ip_address(void);
 
 struct ipovly {
-        caddr_t ih_next, ih_prev;       /* for protocol sequence q's */
+        uint32_t ih_next, ih_prev;       /* for protocol sequence q's */
         u_char  ih_x1;                  /* (unused) */
         u_char  ih_pr;                  /* protocol */
         short   ih_len;                 /* protocol length */
@@ -85,7 +86,7 @@ struct  udpiphdr {
 
 struct ip { 
 	union {
-		u_long ip_w;
+		uint32_t ip_w;
 		struct {
 			unsigned int
 #ifdef __LITTLE_ENDIAN__

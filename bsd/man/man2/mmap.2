@@ -1,5 +1,3 @@
-.\"	$NetBSD: mmap.2,v 1.5 1995/06/24 10:48:59 cgd Exp $
-.\"
 .\" Copyright (c) 1991, 1993
 .\"	The Regents of the University of California.  All rights reserved.
 .\"
@@ -11,10 +9,6 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 3. All advertising materials mentioning features or use of this software
-.\"    must display the following acknowledgement:
-.\"	This product includes software developed by the University of
-.\"	California, Berkeley and its contributors.
 .\" 4. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
@@ -31,34 +25,30 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.\"	@(#)mmap.2	8.1 (Berkeley) 6/4/93
+.\"	@(#)mmap.2	8.4 (Berkeley) 5/11/95
+.\" $FreeBSD: src/lib/libc/sys/mmap.2,v 1.56 2007/01/09 00:28:15 imp Exp $
 .\"
-.Dd June 4, 1993
+.Dd April 21, 2006
 .Dt MMAP 2
-.Os BSD 4
+.Os
 .Sh NAME
 .Nm mmap
-.Nd map files or devices into memory
+.Nd allocate memory, or map files or devices into memory
+.Sh LIBRARY
+.Lb libc
 .Sh SYNOPSIS
-.Fd #include <sys/mman.h>
+.In sys/mman.h
 .Ft void *
-.Fo mmap
-.Fa "void *addr"
-.Fa "size_t len"
-.Fa "int prot"
-.Fa "int flags"
-.Fa "int fildes"
-.Fa "off_t offset"
-.Fc
+.Fn mmap "void *addr" "size_t len" "int prot" "int flags" "int fd" "off_t offset"
 .Sh DESCRIPTION
 The
-.Nm mmap
-function causes the pages starting at
+.Fn mmap
+system call causes the pages starting at
 .Fa addr
 and continuing for at most
 .Fa len
 bytes to be mapped from the object described by
-.Fa fildes ,
+.Fa fd ,
 starting at byte offset
 .Fa offset .
 If
@@ -67,19 +57,42 @@ or
 .Fa len
 is not a multiple of the pagesize, the mapped region may extend past the
 specified range.
+Any extension beyond the end of the mapped object will be zero-filled.
 .Pp
+The
+.Fa addr
+argument is used by the system to determine the starting address of the mapping,
+and its interpretation is dependent on the setting of the MAP_FIXED flag.
+If MAP_FIXED is specified in
+.Fa flags ,
+the system will try to place the mapping at the specified address, 
+possibly removing a
+mapping that already exists at that location.
+If MAP_FIXED is not specified,
+then the system will attempt to use the range of addresses starting at
+.Fa addr
+if they do not overlap any existing mappings,
+including memory allocated by malloc(3) and other such allocators.
+Otherwise,
+the system will choose an alternate address for the mapping (using an implementation
+dependent algorithm)
+that does not overlap any existing
+mappings.
+In other words,
+without MAP_FIXED the system will attempt to find an empty location in the address space if the specified address 
+range has already been mapped by something else.
 If
 .Fa addr
-is non-zero, it is used as a hint to the system.
-(As a convenience to the system, the actual address of the region may differ
-from the address supplied.)
-If
-.Fa addr
-is zero, an address will be selected by the system.
-The actual starting address of the region is returned.
-A successful
+is zero and MAP_FIXED is not specified,
+then an address will be selected by the system so as not to overlap
+any existing mappings in the address space.
+In all cases,
+the actual starting address of the region is returned.
+If MAP_FIXED is specified,
+a successful
 .Fa mmap
 deletes any previous mapping in the allocated address range.
+Previous mappings are never deleted if MAP_FIXED is not specified.
 .Pp
 The protections (region accessibility) are specified in the
 .Fa prot
@@ -87,30 +100,37 @@ argument by
 .Em or Ns 'ing
 the following values:
 .Pp
-.Bl -tag -width MAP_FIXEDX
-.It Dv PROT_EXEC
-Pages may be executed.
+.Bl -tag -width PROT_WRITE -compact
+.It Dv PROT_NONE
+Pages may not be accessed.
 .It Dv PROT_READ
 Pages may be read.
 .It Dv PROT_WRITE
 Pages may be written.
+.It Dv PROT_EXEC
+Pages may be executed.
 .El
+.Pp
+Note that, due to hardware limitations, on some platforms PROT_WRITE may
+imply PROT_READ, and PROT_READ may imply PROT_EXEC.  Portable programs
+should not rely on these flags being separately enforcable.
 .Pp
 The
 .Fa flags
-parameter specifies the type of the mapped object, mapping options,
-and whether modifications made to the mapped copy of the page
-are private to the process (copy-on-write)
-or are to be shared with other references.
-Sharing, mapping type, and options are specified in the
+argument specifies the type of the mapped object, mapping options and
+whether modifications made to the mapped copy of the page are private
+to the process (copy-on-write) or are to be shared with other references.
+Sharing, mapping type and options are specified in the
 .Fa flags
 argument by
 .Em or Ns 'ing
 the following values:
-.Pp
-.Bl -tag -width MAP_HASSEMAPHOREX
+.Bl -tag -width MAP_HASSEMAPHORE
 .It Dv MAP_ANON
 Map anonymous memory not associated with any specific file.
+The
+.Fa offset
+argument is ignored.
 Mac OS X specific: the file descriptor used for creating
 .Dv MAP_ANON
 regions can be used to pass some Mach VM flags, and can 
@@ -122,23 +142,36 @@ to
 are:
 .Pp
 VM_FLAGS_PURGABLE	to create Mach purgable (i.e. volatile) memory
-VM_MAKE_TAG(tag)	to associate an 8-bit tag with the region
 .Pp
+VM_MAKE_TAG(tag)	to associate an 8-bit tag with the region
+.br
 <mach/vm_statistics.h> defines some preset tags (with a VM_MEMORY_ prefix).
 Users are encouraged to use tags between 240 and 255.
 Tags are used by tools such as vmmap(1) to help identify specific memory regions.
 .It Dv MAP_FILE
-Mapped from a regular file or character-special device memory.  (This is
+Mapped from a regular file.  (This is
 the default mapping type, and need not be specified.)
 .It Dv MAP_FIXED
 Do not permit the system to select a different address than the one
 specified.
 If the specified address cannot be used,
-.Nm mmap
+.Fn mmap
 will fail.
-If MAP_FIXED is specified,
+If
+.Dv MAP_FIXED
+is specified,
 .Fa addr
 must be a multiple of the pagesize.
+If a
+.Dv MAP_FIXED
+request is successful, the mapping established by
+.Fn mmap
+replaces any previous mappings for the process' pages in the range from
+.Fa addr
+to
+.Fa addr
++
+.Fa len .
 Use of this option is discouraged.
 .It Dv MAP_HASSEMAPHORE
 Notify the kernel that the region may contain semaphores and that special
@@ -158,9 +191,9 @@ again in the near future.
 .Pp
 Conforming applications must specify either MAP_PRIVATE or MAP_SHARED.
 .Pp
-The 
+The
 .Xr close 2
-function does not unmap pages, see
+system call does not unmap pages, see
 .Xr munmap 2
 for further information.
 .Pp
@@ -173,89 +206,84 @@ the file descriptor argument specifies a file or device to which swapping
 should be done.
 .Sh RETURN VALUES
 Upon successful completion,
-.Nm mmap
+.Fn mmap
 returns a pointer to the mapped region.
-Otherwise, a value of -1 is returned and
+Otherwise, a value of
+.Dv MAP_FAILED
+is returned and
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Mmap
+The
+.Fn mmap
+system call
 will fail if:
 .Bl -tag -width Er
-.\" ===========
 .It Bq Er EACCES
-.Fa Fildes
-is not open for reading.
-.\" ===========
-.It Bq Er EACCES
+The flag
+.Dv PROT_READ
+was specified as part of the
+.Fa prot
+argument and
+.Fa fd
+was not open for reading.
 The flags
-.Dv PROT_WRITE
-and
 .Dv MAP_SHARED
-are specified as part of the
+and
+.Dv PROT_WRITE
+were specified as part of the
 .Fa flags
 and
 .Fa prot
-parameters and
-.Fa fildes
-is not open for writing.
-.\" ===========
+argument and
+.Fa fd
+was not open for writing.
 .It Bq Er EBADF
-.Fa fildes
-is not a valid file descriptor for an open file.
+The
+.Fa fd
+argument
+is not a valid open file descriptor.
 .It Bq Er EINVAL
 .Dv MAP_FIXED
-is specified and the
-.I addr
-parameter is not page aligned.
-.\" ===========
-.It Bq Er EINVAL
-.Fa fildes
-does not reference a regular or character special file.
-.\" ===========
+was specified and the
+.Fa addr
+argument was not page aligned, or part of the desired address space
+resides out of the valid address space for a user process.
 .It Bq Er EINVAL
 .Fa flags
 does not include either MAP_PRIVATE or MAP_SHARED.
-.\" ===========
 .It Bq Er EINVAL
+The
 .Fa len
-is not greater than zero.
-.\" ===========
+argument
+was negative.
 .It Bq Er EINVAL
+The
 .Fa offset
-is not a multiple of the page size,
-as returned by
-.Xr sysconf 3 .
-.\" ===========
-.It Bq Er EMFILE
-The limit on mapped regions (per process or system) is exceeded.
-.\" ===========
+argument
+was not page-aligned based on the page size as returned by getpagesize(3).
 .It Bq Er ENODEV
-The file type for
-.Fa fildes
-is not supported for mapping.
-.\" ===========
-.It Bq Er ENOMEM
-.Dv MAP_FIXED
-is specified and the address range specified
-exceeds the address space limit for the process.
-.\" ===========
-.It Bq Er ENOMEM
-.Dv MAP_FIXED
-is specified and the address specified by the
-.Fa addr
-parameter isn't available.
-.\" ===========
-.It Bq Er ENOMEM
 .Dv MAP_ANON
-is specified and insufficient memory is available.
-.\" ===========
+has not been specified and the file
+.Fa fd
+refers to does not support mapping.
+.It Bq Er ENOMEM
+.Dv MAP_FIXED
+was specified and the
+.Fa addr
+argument was not available.
+.Dv MAP_FIXED
+was specified and the address range specified exceeds the address space
+limit for the process.
+.Dv MAP_ANON
+was specified and insufficient memory was available.
 .It Bq Er ENXIO
-Addresses in the specified range are invalid for fildes.
-.\" ===========
+Addresses in the specified range are invalid for 
+.Fa fd .
 .It Bq Er EOVERFLOW
 Addresses in the specified range exceed the maximum offset
-set for fildes.
+set for 
+.Fa fd .
 .El
 .Sh LEGACY SYNOPSIS
 .Fd #include <sys/types.h>
@@ -286,13 +314,14 @@ parameter must be a multiple of pagesize,
 as returned by
 .Fn sysconf .
 .El
-.Sh "SEE ALSO"
-.Xr getpagesize 2 ,
+.Sh SEE ALSO
 .Xr madvise 2 ,
 .Xr mincore 2 ,
+.Xr minherit 2 ,
 .Xr mlock 2 ,
 .Xr mprotect 2 ,
 .Xr msync 2 ,
+.Xr munlock 2 ,
 .Xr munmap 2 ,
-.Xr sysconf 3 ,
-.Xr compat 5
+.Xr shmat 2 ,
+.Xr getpagesize 3

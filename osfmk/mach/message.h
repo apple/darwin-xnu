@@ -96,7 +96,7 @@ typedef natural_t mach_msg_timeout_t;
 #define MACH_MSG_TIMEOUT_NONE		((mach_msg_timeout_t) 0)
 
 /*
- *  The kernel uses MACH_MSGH_BITS_COMPLEX as a hint.  It it isn't on, it
+ *  The kernel uses MACH_MSGH_BITS_COMPLEX as a hint.  If it isn't on, it
  *  assumes the body of the message doesn't contain port rights or OOL
  *  data.  The field is set in received messages.  A user task must
  *  use caution in interpreting the body of a message if the bit isn't
@@ -145,11 +145,11 @@ typedef natural_t mach_msg_timeout_t;
 
 /*
  *  Every message starts with a message header.
- *  Following the message header are zero or more pairs of
- *  type descriptors (mach_msg_type_t/mach_msg_type_long_t) and
- *  data values.  The size of the message must be specified in bytes,
- *  and includes the message header, type descriptors, inline
- *  data, and inline pointer for out-of-line data.
+ *  Following the message header, if the message is complex, are a count
+ *  of type descriptors and the type descriptors themselves 
+ *  (mach_msg_descriptor_t). The size of the message must be specified in 
+ *  bytes, and includes the message header, descriptor count, descriptors, 
+ *  and inline data.
  *
  *  The msgh_remote_port field specifies the destination of the message.
  *  It must specify a valid send or send-once right for a port.
@@ -196,6 +196,18 @@ typedef unsigned int mach_msg_copy_options_t;
 #define MACH_MSG_KALLOC_COPY_T		4
 #endif  /* MACH_KERNEL */
 
+/*
+ * In a complex mach message, the mach_msg_header_t is followed by 
+ * a descriptor count, then an array of that number of descriptors 
+ * (mach_msg_*_descriptor_t). The type field of mach_msg_type_descriptor_t
+ * (which any descriptor can be cast to) indicates the flavor of the
+ * descriptor.
+ *
+ * Note that in LP64, the various types of descriptors are no longer all
+ * the same size as mach_msg_descriptor_t, so the array cannot be indexed 
+ * as expected.
+ */
+
 typedef unsigned int mach_msg_descriptor_type_t;
 
 #define MACH_MSG_PORT_DESCRIPTOR 		0
@@ -216,10 +228,16 @@ typedef struct
 typedef struct
 {
   mach_port_t			name;
+#if !(defined(KERNEL) && defined(__LP64__))
+// Pad to 8 bytes everywhere except the K64 kernel where mach_port_t is 8 bytes
   mach_msg_size_t		pad1;
+#endif
   unsigned int			pad2 : 16;
   mach_msg_type_name_t		disposition : 8;
   mach_msg_descriptor_type_t	type : 8;
+#if defined(KERNEL)
+  uint32_t          pad_end;
+#endif
 } mach_msg_port_descriptor_t;
 
 typedef struct
@@ -254,6 +272,9 @@ typedef struct
   mach_msg_descriptor_type_t    type: 8;
 #if defined(__LP64__)
   mach_msg_size_t       	size;
+#endif
+#if defined(KERNEL) && !defined(__LP64__)
+  uint32_t          pad_end;
 #endif
 } mach_msg_ool_descriptor_t;
 
@@ -290,6 +311,9 @@ typedef struct
 #if defined(__LP64__)
   mach_msg_size_t		count;
 #endif
+#if defined(KERNEL) && !defined(__LP64__)
+  uint32_t          pad_end;
+#endif
 } mach_msg_ool_ports_descriptor_t;
 
 /*
@@ -297,6 +321,15 @@ typedef struct
  * appropriate in LP64 mode because not all descriptors
  * are of the same size in that environment.
  */
+#if defined(__LP64__) && defined(KERNEL)
+typedef union
+{
+  mach_msg_port_descriptor_t		port;
+  mach_msg_ool_descriptor32_t		out_of_line;
+  mach_msg_ool_ports_descriptor32_t	ool_ports;
+  mach_msg_type_descriptor_t		type;
+} mach_msg_descriptor_t;
+#else
 typedef union
 {
   mach_msg_port_descriptor_t		port;
@@ -304,6 +337,7 @@ typedef union
   mach_msg_ool_ports_descriptor_t	ool_ports;
   mach_msg_type_descriptor_t		type;
 } mach_msg_descriptor_t;
+#endif
 
 typedef struct
 {
@@ -386,6 +420,17 @@ typedef struct
   audit_token_t			msgh_audit;
 } mach_msg_audit_trailer_t;
 
+typedef struct 
+{
+  mach_msg_trailer_type_t	msgh_trailer_type;
+  mach_msg_trailer_size_t	msgh_trailer_size;
+  mach_port_seqno_t		msgh_seqno;
+  security_token_t		msgh_sender;
+  audit_token_t			msgh_audit;
+  mach_vm_address_t		msgh_context;
+} mach_msg_context_trailer_t;
+
+
 typedef struct
 {
   mach_port_name_t sender;
@@ -402,9 +447,10 @@ typedef struct
   mach_msg_trailer_size_t       msgh_trailer_size;
   mach_port_seqno_t             msgh_seqno;
   security_token_t              msgh_sender;
-  audit_token_t			msgh_audit;
-  msg_labels_t                  msgh_labels;
+  audit_token_t                 msgh_audit;
+  mach_vm_address_t             msgh_context;
   int				msgh_ad;
+  msg_labels_t                  msgh_labels;
 } mach_msg_mac_trailer_t;
 
 #define MACH_MSG_TRAILER_MINIMUM_SIZE  sizeof(mach_msg_trailer_t)
@@ -419,7 +465,7 @@ typedef struct
  * MAX_TRAILER_SIZE.
  */
 typedef mach_msg_mac_trailer_t mach_msg_max_trailer_t;
-#define MAX_TRAILER_SIZE sizeof(mach_msg_max_trailer_t)
+#define MAX_TRAILER_SIZE ((mach_msg_size_t)sizeof(mach_msg_max_trailer_t))
 
 /*
  * Legacy requirements keep us from ever updating these defines (even
@@ -480,31 +526,6 @@ typedef union
 #define MACH_MSGH_KIND_NOTIFICATION	0x00000001
 #define	msgh_kind			msgh_seqno
 #define mach_msg_kind_t			mach_port_seqno_t
-
-/*
- *  The msgt_number field specifies the number of data elements.
- *  The msgt_size field specifies the size of each data element, in bits.
- *  The msgt_name field specifies the type of each data element.
- *  If msgt_inline is TRUE, the data follows the type descriptor
- *  in the body of the message.  If msgt_inline is FALSE, then a pointer
- *  to the data should follow the type descriptor, and the data is
- *  sent out-of-line.  In this case, if msgt_deallocate is TRUE,
- *  then the out-of-line data is moved (instead of copied) into the message.
- *  If msgt_longform is TRUE, then the type descriptor is actually
- *  a mach_msg_type_long_t.
- *
- *  The actual amount of inline data following the descriptor must
- *  a multiple of the word size.  For out-of-line data, this is a
- *  pointer.  For inline data, the supplied data size (calculated
- *  from msgt_number/msgt_size) is rounded up.  This guarantees
- *  that type descriptors always fall on word boundaries.
- *
- *  For port rights, msgt_size must be 8*sizeof(mach_port_t).
- *  If the data is inline, msgt_deallocate should be FALSE.
- *  The msgt_unused bit should be zero.
- *  The msgt_name, msgt_size, msgt_number fields in
- *  a mach_msg_type_long_t should be zero.
- */
 
 typedef natural_t mach_msg_type_size_t;
 typedef natural_t mach_msg_type_number_t;
@@ -575,16 +596,16 @@ typedef integer_t mach_msg_option_t;
  * which is equivalent to a mach_msg_trailer_t.
  *
  * XXXMAC: unlike the rest of the MACH_RCV_* flags, MACH_RCV_TRAILER_LABELS
- * and MACH_RCV_TRAILER_AV need their own private bit since we only calculate
- * their fields when absolutely required.  This will cause us problems if
- * Apple adds new trailers.
+ * needs its own private bit since we only calculate its fields when absolutely 
+ * required.
  */
 #define MACH_RCV_TRAILER_NULL   0
 #define MACH_RCV_TRAILER_SEQNO  1
 #define MACH_RCV_TRAILER_SENDER 2
 #define MACH_RCV_TRAILER_AUDIT  3
-#define MACH_RCV_TRAILER_LABELS 4
-#define MACH_RCV_TRAILER_AV     8
+#define MACH_RCV_TRAILER_CTX    4
+#define MACH_RCV_TRAILER_AV     7
+#define MACH_RCV_TRAILER_LABELS 8
 
 #define MACH_RCV_TRAILER_TYPE(x)     (((x) & 0xf) << 28) 
 #define MACH_RCV_TRAILER_ELEMENTS(x) (((x) & 0xf) << 24)  
@@ -593,12 +614,12 @@ typedef integer_t mach_msg_option_t;
 #define GET_RCV_ELEMENTS(y) (((y) >> 24) & 0xf)
 
 /* 
- * XXXMAC: note that in the case of MACH_RCV_TRAILER_AV and
- * MACH_RCV_TRAILER_LABELS, we just fall through to mach_msg_max_trailer_t.
+ * XXXMAC: note that in the case of MACH_RCV_TRAILER_LABELS, 
+ * we just fall through to mach_msg_max_trailer_t.
  * This is correct behavior since mach_msg_max_trailer_t is defined as
- * mac_msg_mac_trailer_t which is used for the LABELS and AV trailers.
- * It also makes things work properly if MACH_RCV_TRAILER_AV or
- * MACH_RCV_TRAILER_LABELS are ORed with one of the other options.
+ * mac_msg_mac_trailer_t which is used for the LABELS trailer.
+ * It also makes things work properly if MACH_RCV_TRAILER_LABELS is ORed 
+ * with one of the other options.
  */
 #define REQUESTED_TRAILER_SIZE(y) 				\
 	((mach_msg_trailer_size_t)				\
@@ -610,7 +631,11 @@ typedef integer_t mach_msg_option_t;
 	   sizeof(mach_msg_security_trailer_t) :		\
 	   ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_AUDIT) ?	\
 	    sizeof(mach_msg_audit_trailer_t) :      		\
-	    sizeof(mach_msg_max_trailer_t))))))
+	    ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_CTX) ?	\
+	     sizeof(mach_msg_context_trailer_t) :      		\
+	     ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_AV) ?	\
+	      sizeof(mach_msg_mac_trailer_t) :      		\
+	     sizeof(mach_msg_max_trailer_t))))))))
 
 /*
  *  Much code assumes that mach_msg_return_t == kern_return_t.
@@ -754,6 +779,10 @@ extern mach_msg_return_t	mach_msg(
 					mach_port_name_t rcv_name,
 					mach_msg_timeout_t timeout,
 					mach_port_name_t notify);
+
+#elif defined(MACH_KERNEL_PRIVATE)
+
+extern mach_msg_return_t	mach_msg_receive_results(void);
 
 #endif	/* KERNEL */
 

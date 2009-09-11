@@ -56,7 +56,7 @@
 #ifndef	_MACH_MACHINE_TYPES_H_
 #define _MACH_MACHINE_TYPES_H_ 1
 
-typedef long		dev_t;		/* device number (major+minor) */
+typedef int		dev_t;		/* device number (major+minor) */
 
 typedef signed char	bit8_t;		/* signed 8-bit quantity */
 typedef unsigned char	u_bit8_t;	/* unsigned 8-bit quantity */

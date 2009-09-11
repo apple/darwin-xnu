@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -151,7 +151,7 @@ aurpd_start()
 		sopt.sopt_level   = SOL_SOCKET;
 		sopt.sopt_name    = SO_RCVBUF;
 		sopt.sopt_dir     = SOPT_SET;
-		sopt.sopt_p		  = NULL;
+		sopt.sopt_p	  = kernproc;
 		if ((error = sosetopt(so, &sopt)) != 0)
 			goto out;
 	}
@@ -171,7 +171,7 @@ aurpd_start()
 		sopt.sopt_level   = SOL_SOCKET;
 		sopt.sopt_name    = SO_SNDBUF;
 		sopt.sopt_dir     = SOPT_SET;
-		sopt.sopt_p		  = NULL;
+		sopt.sopt_p	  = kernproc;
 		if ((error = sosetopt(so, &sopt)) != 0)
 			goto out;
 	}

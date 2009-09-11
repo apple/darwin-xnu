@@ -14,26 +14,23 @@ export COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)
 endif
 
 do_all: 
-	@echo "[ $(SOURCE) ] Starting do_all  $(COMPONENT) $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";		\
-	($(MKDIR) $(COMPOBJROOT)/kmod;					\
+	$(_v)($(MKDIR) $(COMPOBJROOT)/kmod;				\
 	cd $(COMPOBJROOT)/kmod;						\
 	${MAKE} MAKEFILES=$(SOURCE)/Makefile.kmod			\
 		TARGET=$(TARGET)					\
 		do_build_all						\
-	);								\
-	echo "[ $(SOURCE) ] Returning do_all $(COMPONENT) $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";
+	)
 
 do_build_all:	do_all
 
 do_install: 
-	@echo "[ $(SOURCE) ] Starting do_install  $(COMPONENT) $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";		\
+	@echo "[ $(SOURCE) ] make do_install  $(COMPONENT) $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";		\
 	($(MKDIR) $(COMPOBJROOT)/kmod;					\
 	cd $(COMPOBJROOT)/kmod;						\
 	${MAKE} MAKEFILES=$(SOURCE)/Makefile.kmod			\
 		TARGET=$(TARGET)					\
 		do_build_install					\
-	);								\
-	echo "[ $(SOURCE) ] Returning do_install $(COMPONENT) $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";
+	)
 
 do_build_install:	do_install
 

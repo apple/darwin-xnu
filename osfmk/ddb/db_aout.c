@@ -77,6 +77,8 @@
 #include <ddb/nlist.h>			/* a.out symbol table */
 #include <ddb/stab.h>
 
+#include <libkern/kernel_mach_header.h>
+
 #define private static
 
 private int aout_db_order_symbols(char *, char *);
@@ -133,9 +135,6 @@ aout_db_compare_symbols(
 
 int db_sorting_limit = 50000;
 
-extern boolean_t getsymtab(char *, vm_offset_t *, int *, vm_offset_t *,
-		vm_size_t *);
-
 boolean_t
 aout_db_sym_init(
 	char *	symtab,		/* pointer to start of symbol table */
@@ -148,7 +147,7 @@ aout_db_sym_init(
 	struct nlist	*sym_start, *sym_end, *dbsym_start, *dbsym_end;
 	struct nlist	*sp;
 	char *strtab, *dbstrtab;
-	int	db_strlen;
+	long	db_strlen;
 	char *estrtab, *dbestrtab;
 	unsigned long	minsym = ~0;
 	unsigned long	maxsym = 0;
@@ -157,7 +156,7 @@ aout_db_sym_init(
 	int nsyms;
 
 
-	if (!getsymtab(symtab, 
+	if (!getsymtab((kernel_mach_header_t *)symtab, 
 		(vm_offset_t *)&sym_start, &nsyms, 
 		(vm_offset_t *)&strtab, (vm_size_t *)&db_strlen)) {
 		return(FALSE);
@@ -680,7 +679,7 @@ aout_db_search_symbol(
 	if (symtab->sorted) {
 	    struct nlist target;
 
-	    target.n_value = off;
+	    target.n_value = (vm_offset_t)off;
 	    target.n_un.n_name = (char *) 0;
 	    target.n_other = (char) 0;
 	    db_qsort_limit_search((char *)&target, (char **)&sp, (char **)&ep,
@@ -783,7 +782,7 @@ aout_db_search_by_addr(
 	if (stab->sorted) {
 		struct nlist target;
 
-		target.n_value = addr;
+		target.n_value = (vm_offset_t)addr;
 		target.n_un.n_name = (char *) 0;
 		target.n_other = (char) 0;
 		db_qsort_limit_search((char *)&target, (char **)&sp,
@@ -800,7 +799,7 @@ aout_db_search_by_addr(
 			if (line_func)
 			    line_func = 0;
 			line_sp = cp;
-			line_diff = addr - cp->n_value;
+			line_diff = (unsigned long)(addr - cp->n_value);
 		    }
 		}
 		if (cp->n_value >= addr && line_sp)
@@ -826,14 +825,14 @@ aout_db_search_by_addr(
 		} else if (cp->n_value <= addr &&
 			 (func_sp == 0 || func_diff > addr - cp->n_value)) {
 		    func_sp = cp;
-		    func_diff = addr - cp->n_value;
+		    func_diff = (unsigned long)(addr - cp->n_value);
 		}
 		continue;
 	    case N_TEXT|N_EXT:
 		if (cp->n_value <= addr &&
 			 (func_sp == 0 || func_diff >= addr - cp->n_value)) {
 		    func_sp = cp;
-		    func_diff = addr - cp->n_value;
+		    func_diff = (unsigned long)(addr - cp->n_value);
 		    if (func_diff == 0 && file_sp && func_sp && line_sp == 0)
 		        break;
 		}
@@ -872,13 +871,13 @@ aout_db_search_by_addr(
 			    file_sp = cp;
 		    } else if (func_sp == 0) {
 			func_sp = cp;
-			func_diff = addr - cp->n_value;
+			func_diff = (unsigned long)(addr - cp->n_value);
 		    }
 		    continue;
 		case N_TEXT|N_EXT:
 		    if (func_sp == 0) {
 			func_sp = cp;
-			func_diff = addr - cp->n_value;
+			func_diff = (unsigned long)(addr - cp->n_value);
 			if (func_diff == 0 && file_sp && func_sp
 			    && line_sp == 0)
 			    break;
@@ -949,7 +948,6 @@ aout_db_line_at_pc(
 	return(found && func && *file);
 }
 
-extern struct mach_header _mh_execute_header;
 /*
  * Initialization routine for a.out files.
  */

@@ -65,6 +65,7 @@ static OSDictionary * 	 gIORegistryPlanes;
 
 const OSSymbol * 	gIONameKey;
 const OSSymbol * 	gIOLocationKey;
+const OSSymbol * 	gIORegistryEntryIDKey;
 
 enum {
     kParentSetIndex	= 0,
@@ -74,6 +75,10 @@ enum {
 enum {
     kIOMaxPlaneName	= 32
 };
+
+enum { kIORegistryIDReserved = (1ULL << 32) + 255 };
+
+static uint64_t gIORegistryLastID = kIORegistryIDReserved;
 
 class IORegistryPlane : public OSObject {
 
@@ -149,8 +154,12 @@ IORegistryEntry * IORegistryEntry::initialize( void )
 		&& gIORegistryPlanes );
         ok = gRegistryRoot->init();
 
+	if (ok)
+	    gRegistryRoot->reserved->fRegistryEntryID = ++gIORegistryLastID;
+
 	gIONameKey = OSSymbol::withCStringNoCopy( "IOName" );
 	gIOLocationKey = OSSymbol::withCStringNoCopy( "IOLocation" );
+	gIORegistryEntryIDKey = OSSymbol::withCStringNoCopy( kIORegistryEntryIDKey );
 
 	assert( ok && gIONameKey && gIOLocationKey );
 
@@ -261,6 +270,13 @@ bool IORegistryEntry::init( OSDictionary * dict )
     if( !super::init())
 	return( false);
 
+    if (!reserved)
+    {
+	reserved = IONew(ExpansionData, 1);
+	if (!reserved)
+	    return (false);
+	bzero(reserved, sizeof(ExpansionData));
+    }
     if( dict) {
 	dict->retain();
 	if( fPropertyTable)
@@ -307,6 +323,9 @@ bool IORegistryEntry::init( IORegistryEntry * old,
 
     WLOCK;
 
+    reserved = old->reserved;
+    old->reserved = NULL;
+
     fPropertyTable = old->getPropertyTable();
     fPropertyTable->retain();
 #ifdef IOREGSPLITTABLES
@@ -340,19 +359,11 @@ bool IORegistryEntry::init( IORegistryEntry * old,
 
 void IORegistryEntry::free( void )
 {
-
 #if DEBUG_FREE
-#define msg ": attached at free()"
-    int len = strlen(msg) + 40;
-    char buf[len];
-
     if( registryTable() && gIOServicePlane) {
         if( getParentSetReference( gIOServicePlane )
             || getChildSetReference( gIOServicePlane )) {
-
-            strlcpy( buf, getName(), 32);
-            strlcat( buf, msg, len );
-            IOPanic( buf );
+            panic("%s: attached at free()", getName());
         }
     }
 #endif
@@ -364,6 +375,9 @@ void IORegistryEntry::free( void )
     if( registryTable())
         registryTable()->release();
 #endif /* IOREGSPLITTABLES */
+
+    if (reserved)
+	IODelete(reserved, ExpansionData, 1);
 
     super::free();
 }
@@ -1593,6 +1607,9 @@ bool IORegistryEntry::attachToParent( IORegistryEntry * parent,
 
     WLOCK;
 
+    if (!reserved->fRegistryEntryID)
+	reserved->fRegistryEntryID = ++gIORegistryLastID;
+
     ret = makeLink( parent, kParentSetIndex, plane );
 
     if( (links = parent->getChildSetReference( plane )))
@@ -1631,6 +1648,14 @@ bool IORegistryEntry::attachToParent( IORegistryEntry * parent,
         ret &= parent->attachToChild( this, plane );
 
     return( ret );
+}
+
+uint64_t IORegistryEntry::getRegistryEntryID( void )
+{
+    if (reserved)
+	return (reserved->fRegistryEntryID);
+    else
+	return (0);
 }
 
 bool IORegistryEntry::attachToChild( IORegistryEntry * child,
@@ -2009,13 +2034,21 @@ OSOrderedSet * IORegistryIterator::iterateAll( void )
     return( done);
 }
 
+#if __LP64__
+OSMetaClassDefineReservedUnused(IORegistryEntry, 0);
+OSMetaClassDefineReservedUnused(IORegistryEntry, 1);
+OSMetaClassDefineReservedUnused(IORegistryEntry, 2);
+OSMetaClassDefineReservedUnused(IORegistryEntry, 3);
+OSMetaClassDefineReservedUnused(IORegistryEntry, 4);
+OSMetaClassDefineReservedUnused(IORegistryEntry, 5);
+#else
 OSMetaClassDefineReservedUsed(IORegistryEntry, 0);
 OSMetaClassDefineReservedUsed(IORegistryEntry, 1);
 OSMetaClassDefineReservedUsed(IORegistryEntry, 2);
 OSMetaClassDefineReservedUsed(IORegistryEntry, 3);
 OSMetaClassDefineReservedUsed(IORegistryEntry, 4);
 OSMetaClassDefineReservedUsed(IORegistryEntry, 5);
-
+#endif
 OSMetaClassDefineReservedUnused(IORegistryEntry, 6);
 OSMetaClassDefineReservedUnused(IORegistryEntry, 7);
 OSMetaClassDefineReservedUnused(IORegistryEntry, 8);

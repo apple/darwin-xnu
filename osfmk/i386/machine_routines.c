@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -36,19 +36,18 @@
 #include <kern/cpu_data.h>
 #include <kern/cpu_number.h>
 #include <kern/thread.h>
-#include <i386/cpu_data.h>
 #include <i386/machine_cpu.h>
 #include <i386/lapic.h>
 #include <i386/mp_events.h>
-#include <i386/pmap.h>
-#include <i386/misc_protos.h>
 #include <i386/pmCPU.h>
-#include <i386/proc_reg.h>
 #include <i386/tsc.h>
 #include <i386/cpu_threads.h>
+#include <i386/proc_reg.h>
 #include <mach/vm_param.h>
+#include <i386/pmap.h>
+#include <i386/misc_protos.h>
 #if MACH_KDB
-#include <i386/db_machdep.h>
+#include <machine/db_machdep.h>
 #include <ddb/db_aout.h>
 #include <ddb/db_access.h>
 #include <ddb/db_sym.h>
@@ -64,15 +63,15 @@
 #define DBG(x...)
 #endif
 
-extern thread_t	Shutdown_context(thread_t thread, void (*doshutdown)(processor_t),processor_t  processor);
+
 extern void 	wakeup(void *);
-extern unsigned KernelRelocOffset;
 
 static int max_cpus_initialized = 0;
 
 unsigned int	LockTimeOut;
 unsigned int	LockTimeOutTSC;
 unsigned int	MutexSpin;
+uint64_t	LastDebuggerEntryAllowance;
 
 #define MAX_CPUS_SET    0x1
 #define MAX_CPUS_WAIT   0x2
@@ -103,17 +102,14 @@ void ml_get_bouncepool_info(vm_offset_t *phys_addr, vm_size_t *size)
 
 
 vm_offset_t
-ml_boot_ptovirt(
-	vm_offset_t paddr)
-{
-	return (vm_offset_t)((paddr-KernelRelocOffset) | LINEAR_KERNEL_ADDRESS);
-} 
-
-vm_offset_t
 ml_static_ptovirt(
 	vm_offset_t paddr)
 {
-    return (vm_offset_t)((unsigned) paddr | LINEAR_KERNEL_ADDRESS);
+#if defined(__x86_64__)
+	return (vm_offset_t)(((unsigned long) paddr) | VM_MIN_KERNEL_ADDRESS);
+#else
+	return (vm_offset_t)((paddr) | LINEAR_KERNEL_ADDRESS);
+#endif
 } 
 
 
@@ -126,17 +122,18 @@ ml_static_mfree(
 	vm_offset_t vaddr,
 	vm_size_t size)
 {
-	vm_offset_t vaddr_cur;
+	addr64_t vaddr_cur;
 	ppnum_t ppn;
 
-//	if (vaddr < VM_MIN_KERNEL_ADDRESS) return;
+	assert(vaddr >= VM_MIN_KERNEL_ADDRESS);
 
 	assert((vaddr & (PAGE_SIZE-1)) == 0); /* must be page aligned */
 
+
 	for (vaddr_cur = vaddr;
-	     vaddr_cur < round_page_32(vaddr+size);
+	     vaddr_cur < round_page_64(vaddr+size);
 	     vaddr_cur += PAGE_SIZE) {
-		ppn = pmap_find_phys(kernel_pmap, (addr64_t)vaddr_cur);
+		ppn = pmap_find_phys(kernel_pmap, vaddr_cur);
 		if (ppn != (vm_offset_t)NULL) {
 		        kernel_pmap->stats.resident_count++;
 			if (kernel_pmap->stats.resident_count >
@@ -144,7 +141,7 @@ ml_static_mfree(
 				kernel_pmap->stats.resident_max =
 					kernel_pmap->stats.resident_count;
 			}
-			pmap_remove(kernel_pmap, (addr64_t)vaddr_cur, (addr64_t)(vaddr_cur+PAGE_SIZE));
+			pmap_remove(kernel_pmap, vaddr_cur, vaddr_cur+PAGE_SIZE);
 			vm_page_create(ppn,(ppn+1));
 			vm_page_wire_count--;
 		}
@@ -156,7 +153,7 @@ ml_static_mfree(
 vm_offset_t ml_vtophys(
 	vm_offset_t vaddr)
 {
-	return	kvtophys(vaddr);
+	return	(vm_offset_t)kvtophys(vaddr);
 }
 
 /*
@@ -182,11 +179,11 @@ vm_size_t ml_nofault_copy(
 			break;
 		if (!pmap_valid_page(i386_btop(cur_phys_dst)) || !pmap_valid_page(i386_btop(cur_phys_src)))
 			break;
-		count = PAGE_SIZE - (cur_phys_src & PAGE_MASK);
+		count = (uint32_t)(PAGE_SIZE - (cur_phys_src & PAGE_MASK));
 		if (count > (PAGE_SIZE - (cur_phys_dst & PAGE_MASK)))
-			count = PAGE_SIZE - (cur_phys_dst & PAGE_MASK);
+			count = (uint32_t)(PAGE_SIZE - (cur_phys_dst & PAGE_MASK));
 		if (count > size)
-			count = size;
+			count = (uint32_t)size;
 
 		bcopy_phys(cur_phys_src, cur_phys_dst, count);
 
@@ -207,12 +204,14 @@ void ml_init_interrupt(void)
 	(void) ml_set_interrupts_enabled(TRUE);
 }
 
+
+
 /* Get Interrupts Enabled */
 boolean_t ml_get_interrupts_enabled(void)
 {
   unsigned long flags;
 
-  __asm__ volatile("pushf; popl	%0" :  "=r" (flags));
+  __asm__ volatile("pushf; pop	%0" :  "=r" (flags));
   return (flags & EFL_IF) != 0;
 }
 
@@ -221,7 +220,7 @@ boolean_t ml_set_interrupts_enabled(boolean_t enable)
 {
   unsigned long flags;
 
-  __asm__ volatile("pushf; popl	%0" :  "=r" (flags));
+  __asm__ volatile("pushf; pop	%0" :  "=r" (flags));
 
   if (enable) {
 	ast_t		*myast;
@@ -296,27 +295,14 @@ void
 machine_signal_idle(
         processor_t processor)
 {
-	cpu_interrupt(processor->cpu_num);
+	cpu_interrupt(processor->cpu_id);
 }
 
-thread_t        
-machine_processor_shutdown(
-	thread_t	thread,
-	void		(*doshutdown)(processor_t),
-	processor_t	processor)
-{
-	vmx_suspend();
-	fpu_save_context(thread);
-	return(Shutdown_context(thread, doshutdown, processor));
-}
-
-kern_return_t
-ml_processor_register(
-	cpu_id_t	cpu_id,
-	uint32_t	lapic_id,
-	processor_t	*processor_out,
-	ipi_handler_t   *ipi_handler,
-	boolean_t	boot_cpu)
+static kern_return_t
+register_cpu(
+        uint32_t        lapic_id,
+	processor_t     *processor_out,
+	boolean_t       boot_cpu )
 {
 	int		target_cpu;
 	cpu_data_t	*this_cpu_datap;
@@ -331,7 +317,9 @@ ml_processor_register(
 
 	lapic_cpu_map(lapic_id, target_cpu);
 
-	this_cpu_datap->cpu_id = cpu_id;
+	/* The cpu_id is not known at registration phase. Just do
+	 * lapic_id for now 
+	 */
 	this_cpu_datap->cpu_phys_number = lapic_id;
 
 	this_cpu_datap->cpu_console_buf = console_cpu_alloc(boot_cpu);
@@ -349,9 +337,11 @@ ml_processor_register(
 
 		pmCPUStateInit();
 
+#if NCOPY_WINDOWS > 0
 		this_cpu_datap->cpu_pmap = pmap_cpu_alloc(boot_cpu);
 		if (this_cpu_datap->cpu_pmap == NULL)
 			goto failed;
+#endif
 
 		this_cpu_datap->cpu_processor = cpu_processor_alloc(boot_cpu);
 		if (this_cpu_datap->cpu_processor == NULL)
@@ -364,26 +354,72 @@ ml_processor_register(
 	}
 
 	*processor_out = this_cpu_datap->cpu_processor;
-	*ipi_handler = NULL;
-
-	if (target_cpu == machine_info.max_cpus - 1) {
-		/*
-		 * All processors are now registered but not started (except
-		 * for this "in-limbo" boot processor). We call to the machine
-		 * topology code to finalize and activate the topology.
-		 */
-		cpu_topology_start();
-	}
 
 	return KERN_SUCCESS;
 
 failed:
 	cpu_processor_free(this_cpu_datap->cpu_processor);
+#if NCOPY_WINDOWS > 0
 	pmap_cpu_free(this_cpu_datap->cpu_pmap);
+#endif
 	chudxnu_cpu_free(this_cpu_datap->cpu_chud);
 	console_cpu_free(this_cpu_datap->cpu_console_buf);
 	return KERN_FAILURE;
 }
+
+
+kern_return_t
+ml_processor_register(
+        cpu_id_t        cpu_id,
+        uint32_t        lapic_id,
+        processor_t     *processor_out,
+        boolean_t       boot_cpu,
+	boolean_t       start )
+{
+    static boolean_t done_topo_sort = FALSE;
+    static uint32_t num_registered = 0;
+
+    /* Register all CPUs first, and track max */
+    if( start == FALSE )
+    {
+	num_registered++;
+
+	DBG( "registering CPU lapic id %d\n", lapic_id );
+
+	return register_cpu( lapic_id, processor_out, boot_cpu );
+    }
+
+    /* Sort by topology before we start anything */
+    if( !done_topo_sort )
+    {
+	DBG( "about to start CPUs. %d registered\n", num_registered );
+
+	cpu_topology_sort( num_registered );
+	done_topo_sort = TRUE;
+    }
+
+    /* Assign the cpu ID */
+    uint32_t cpunum = -1;
+    cpu_data_t	*this_cpu_datap = NULL;
+
+    /* find cpu num and pointer */
+    cpunum = ml_get_cpuid( lapic_id );
+
+    if( cpunum == 0xFFFFFFFF ) /* never heard of it? */
+	panic( "trying to start invalid/unregistered CPU %d\n", lapic_id );
+
+    this_cpu_datap = cpu_datap(cpunum);
+
+    /* fix the CPU id */
+    this_cpu_datap->cpu_id = cpu_id;
+
+    /* output arg */
+    *processor_out = this_cpu_datap->cpu_processor;
+
+    /* OK, try and start this CPU */
+    return cpu_topology_start_cpu( cpunum );
+}
+
 
 void
 ml_cpu_get_info(ml_cpu_info_t *cpu_infop)
@@ -398,7 +434,7 @@ ml_cpu_get_info(ml_cpu_info_t *cpu_infop)
 	 * Are we supporting MMX/SSE/SSE2/SSE3?
 	 * As distinct from whether the cpu has these capabilities.
 	 */
-	os_supports_sse = get_cr4() & CR4_XMM;
+	os_supports_sse = !!(get_cr4() & CR4_XMM);
 	if ((cpuid_features() & CPUID_FEATURE_SSE4_2) && os_supports_sse)
 		cpu_infop->vector_unit = 8;
 	else if ((cpuid_features() & CPUID_FEATURE_SSE4_1) && os_supports_sse)
@@ -454,7 +490,7 @@ ml_init_max_cpus(unsigned long max_cpus)
 			 * that the kernel supports or that the "cpus="
 			 * boot-arg has set. Here we take int minimum.
 			 */
-                        machine_info.max_cpus = MIN(max_cpus, max_ncpus);
+                        machine_info.max_cpus = (integer_t)MIN(max_cpus, max_ncpus);
 		}
                 if (max_cpus_initialized == MAX_CPUS_WAIT)
                         wakeup((event_t)&max_cpus_initialized);
@@ -486,10 +522,15 @@ void
 ml_init_lock_timeout(void)
 {
 	uint64_t	abstime;
-	uint32_t	mtxspin; 
+	uint32_t	mtxspin;
+	uint64_t	default_timeout_ns = NSEC_PER_SEC>>2;
+	uint32_t	slto;
+	
+	if (PE_parse_boot_argn("slto_us", &slto, sizeof (slto)))
+		default_timeout_ns = slto * NSEC_PER_USEC;
 
 	/* LockTimeOut is absolutetime, LockTimeOutTSC is in TSC ticks */
-	nanoseconds_to_absolutetime(NSEC_PER_SEC>>2, &abstime);
+	nanoseconds_to_absolutetime(default_timeout_ns, &abstime);
 	LockTimeOut = (uint32_t) abstime;
 	LockTimeOutTSC = (uint32_t) tmrCvt(abstime, tscFCvtn2t);
 
@@ -501,6 +542,8 @@ ml_init_lock_timeout(void)
 		nanoseconds_to_absolutetime(10*NSEC_PER_USEC, &abstime);
 	}
 	MutexSpin = (unsigned int)abstime;
+
+	nanoseconds_to_absolutetime(2 * NSEC_PER_SEC, &LastDebuggerEntryAllowance);
 }
 
 /*
@@ -570,6 +613,7 @@ void ml_cpu_set_ldt(int selector)
 	    current_cpu_datap()->cpu_ldt == KERNEL_LDT)
 		return;
 
+#if defined(__i386__)
 	/*
  	 * If 64bit this requires a mode switch (and back). 
 	 */
@@ -577,7 +621,10 @@ void ml_cpu_set_ldt(int selector)
 		ml_64bit_lldt(selector);
 	else
 		lldt(selector);
-	current_cpu_datap()->cpu_ldt = selector;	
+#else
+	lldt(selector);
+#endif
+	current_cpu_datap()->cpu_ldt = selector;
 }
 
 void ml_fp_setvalid(boolean_t value)
@@ -590,6 +637,16 @@ uint64_t ml_cpu_int_event_time(void)
 	return current_cpu_datap()->cpu_int_event_time;
 }
 
+vm_offset_t ml_stack_remaining(void)
+{
+	uintptr_t local = (uintptr_t) &local;
+
+	if (ml_at_interrupt_context() != 0) {
+	    return (local - (current_cpu_datap()->cpu_int_stack_top - INTSTACK_SIZE));
+	} else {
+	    return (local - current_thread()->kernel_stack);
+	}
+}
 
 #if MACH_KDB
 

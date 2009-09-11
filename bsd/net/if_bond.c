@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -515,7 +515,7 @@ packet_buffer_allocate(int length)
     size = length + sizeof(struct ether_header);
     if (size > (int)MHLEN) {
 	/* XXX doesn't handle large payloads */
-	printf("bond: packet_buffer_allocate size %d > max %lu\n", size, MHLEN);
+	printf("bond: packet_buffer_allocate size %d > max %u\n", size, MHLEN);
 	return (NULL);
     }
     m = m_gethdr(M_WAITOK, MT_DATA);
@@ -651,7 +651,7 @@ static void bond_clone_destroy(struct ifnet *);
 static int bond_input(ifnet_t ifp, protocol_family_t protocol, mbuf_t m,
 					  char *frame_header);
 static int bond_output(struct ifnet *ifp, struct mbuf *m);
-static int bond_ioctl(struct ifnet *ifp, u_int32_t cmd, void * addr);
+static int bond_ioctl(struct ifnet *ifp, u_long cmd, void * addr);
 static int bond_set_bpf_tap(struct ifnet * ifp, bpf_tap_mode mode,
 			    bpf_packet_func func);
 static int bond_attach_protocol(struct ifnet *ifp);
@@ -666,7 +666,7 @@ static struct if_clone bond_cloner = IF_CLONE_INITIALIZER(BONDNAME,
 							  bond_clone_destroy, 
 							  0,
 							  BOND_MAXUNIT);
-static	void interface_link_event(struct ifnet * ifp, u_long event_code);
+static	void interface_link_event(struct ifnet * ifp, u_int32_t event_code);
 
 static int
 siocsifmtu(struct ifnet * ifp, int mtu)
@@ -873,33 +873,6 @@ interface_media_info(struct ifnet * ifp)
     return (mi);
 }
 
-/**
- ** interface utility functions
- **/
-static __inline__ struct ifaddr * 
-ifindex_get_ifaddr(int i)
-{
-    if (i > if_index || i == 0) {
-	return (NULL);
-    }
-    return (ifnet_addrs[i - 1]);
-}
-
-static __inline__ struct ifaddr *
-ifp_get_ifaddr(struct ifnet * ifp)
-{
-    return (ifindex_get_ifaddr(ifnet_index(ifp)));
-}
-
-static __inline__ struct sockaddr_dl *
-ifp_get_sdl(struct ifnet * ifp)
-{
-    struct ifaddr *	ifa;
-
-    ifa = ifp_get_ifaddr(ifp);
-    return ((struct sockaddr_dl *)(ifa->ifa_addr));
-}
-
 static int
 if_siflladdr(struct ifnet * ifp, const struct ether_addr * ea_p)
 {
@@ -915,7 +888,7 @@ if_siflladdr(struct ifnet * ifp, const struct ether_addr * ea_p)
 #if 0
     snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s%d", ifnet_name(ifp),
 	     ifnet_unit(ifp));
-#endif 0
+#endif
     return (ifnet_ioctl(ifp, 0, SIOCSIFLLADDR, &ifr));
 }
 
@@ -938,7 +911,7 @@ bond_globals_create(lacp_system_priority sys_pri,
     b->system_priority = sys_pri;
 #if 0
     b->verbose = 1;
-#endif 0
+#endif
     return (b);
 }
 
@@ -1108,12 +1081,15 @@ bond_setmulti(struct ifnet * ifp)
     return (result);
 }
 
-static void
+static int
 bond_clone_attach(void)
 {
-    if_clone_attach(&bond_cloner);
+    int error;
+
+    if ((error = if_clone_attach(&bond_cloner)) != 0)
+	return error;
     bond_lock_init();
-    return;
+    return 0;
 }
 
 static int
@@ -1165,7 +1141,7 @@ bond_clone_create(struct if_clone * ifc, int unit)
 	ifb->ifb_key = unit + 1;
 	
 	/* use the interface name as the unique id for ifp recycle */
-	if ((u_long)snprintf(ifb->ifb_name, sizeof(ifb->ifb_name), "%s%d",
+	if ((u_int32_t)snprintf(ifb->ifb_name, sizeof(ifb->ifb_name), "%s%d",
 						 ifc->ifc_name, unit) >= sizeof(ifb->ifb_name)) {
 		ifbond_release(ifb);
 		return (EINVAL);
@@ -1336,7 +1312,7 @@ ether_header_hash(struct ether_header * eh_p)
 }
 
 static struct mbuf *
-S_mbuf_skip_to_offset(struct mbuf * m, long * offset)
+S_mbuf_skip_to_offset(struct mbuf * m, int32_t * offset)
 {
     int			len;
 
@@ -1369,7 +1345,7 @@ make_uint32(u_char c0, u_char c1, u_char c2, u_char c3)
 #endif /* BYTE_ORDER == LITTLE_ENDIAN */
 
 static int
-S_mbuf_copy_uint32(struct mbuf * m, long offset, uint32_t * val)
+S_mbuf_copy_uint32(struct mbuf * m, int32_t offset, uint32_t * val)
 {
     struct mbuf *	current;
     u_char *		current_data;
@@ -1419,7 +1395,7 @@ ip_header_hash(struct mbuf * m)
     struct in_addr	ip_dst;
     struct in_addr	ip_src;
     u_char		ip_p;
-    long		offset;
+    int32_t		offset;
     struct mbuf *	orig_m = m;
 
     /* find the IP protocol field relative to the start of the packet */
@@ -1460,7 +1436,7 @@ ipv6_header_hash(struct mbuf * m)
 {
     u_char *		data;
     int			i;
-    long		offset;
+    int32_t		offset;
     struct mbuf *	orig_m = m;
     uint32_t *		scan;
     uint32_t		val;
@@ -1874,7 +1850,7 @@ bondport_create(struct ifnet * port_ifp, lacp_port_priority priority,
     }
     bzero(p, sizeof(*p));
     multicast_list_init(&p->po_multicast);
-    if ((u_long)snprintf(p->po_name, sizeof(p->po_name), "%s%d",
+    if ((u_int32_t)snprintf(p->po_name, sizeof(p->po_name), "%s%d",
 			 ifnet_name(port_ifp), ifnet_unit(port_ifp)) 
 	>= sizeof(p->po_name)) {
 	printf("if_bond: name too large\n");
@@ -2612,7 +2588,7 @@ bond_set_promisc(__unused struct ifnet *ifp)
 		ifb->ifb_flags &= ~IFBF_PROMISC;
 	}
     }
-#endif 0
+#endif
     return (error);
 }
 
@@ -2729,14 +2705,14 @@ bond_set_mtu(struct ifnet * ifp, int mtu, int isdevmtu)
 }
 
 static int
-bond_ioctl(struct ifnet *ifp, u_int32_t cmd, void * data)
+bond_ioctl(struct ifnet *ifp, u_long cmd, void * data)
 {
     int 		error = 0;
     struct if_bond_req	ibr;
     struct ifaddr *	ifa;
     ifbond_ref		ifb;
     struct ifreq *	ifr;
-    struct ifmediareq64 *ifmr;
+    struct ifmediareq	*ifmr;
     struct ifnet *	port_ifp = NULL;
     user_addr_t		user_addr;
 
@@ -2751,15 +2727,15 @@ bond_ioctl(struct ifnet *ifp, u_int32_t cmd, void * data)
 	ifnet_set_flags(ifp, IFF_UP, IFF_UP);
 	break;
 
+    case SIOCGIFMEDIA32:
     case SIOCGIFMEDIA64:
-    case SIOCGIFMEDIA:
 	bond_lock();
 	ifb = (ifbond_ref)ifnet_softc(ifp);
 	if (ifb == NULL || ifbond_flags_if_detaching(ifb)) {
 	    bond_unlock();
 	    return (ifb == NULL ? EOPNOTSUPP : EBUSY);
 	}
-	ifmr = (struct ifmediareq64 *)data;
+	ifmr = (struct ifmediareq *)data;
 	ifmr->ifm_current = IFM_ETHER;
 	ifmr->ifm_mask = 0;
 	ifmr->ifm_status = IFM_AVALID;
@@ -2777,9 +2753,9 @@ bond_ioctl(struct ifnet *ifp, u_int32_t cmd, void * data)
 	    ifmr->ifm_status |= IFM_ACTIVE;
 	}
 	bond_unlock();
-	user_addr = proc_is64bit(current_proc())
-	    ? ifmr->ifm_ifmu.ifmu_ulist64
-	    : CAST_USER_ADDR_T(ifmr->ifm_ifmu.ifmu_ulist32);
+	user_addr = (cmd == SIOCGIFMEDIA64) ?
+	    ((struct ifmediareq64 *)ifmr)->ifmu_ulist :
+	    CAST_USER_ADDR_T(((struct ifmediareq32 *)ifmr)->ifmu_ulist);
 	if (user_addr != USER_ADDR_NULL) {
 	    error = copyout(&ifmr->ifm_current,
 			    user_addr,
@@ -3067,11 +3043,11 @@ bond_event(struct ifnet * port_ifp, __unused protocol_family_t protocol,
 }
 
 static void
-interface_link_event(struct ifnet * ifp, u_long event_code)
+interface_link_event(struct ifnet * ifp, u_int32_t event_code)
 {
     struct {
 	struct kern_event_msg	header;
-	u_long			unit;
+	u_int32_t			unit;
 	char			if_name[IFNAMSIZ];
     } event;
 
@@ -3081,7 +3057,7 @@ interface_link_event(struct ifnet * ifp, u_long event_code)
     event.header.kev_subclass  = KEV_DL_SUBCLASS;
     event.header.event_code    = event_code;
     event.header.event_data[0] = ifnet_family(ifp);
-    event.unit                 = (u_long) ifnet_unit(ifp);
+    event.unit                 = (u_int32_t) ifnet_unit(ifp);
     strncpy(event.if_name, ifnet_name(ifp), IFNAMSIZ);
     ifnet_event(ifp, &event.header);
     return;
@@ -3166,6 +3142,7 @@ bond_family_init(void)
 	goto done;
     }
 #endif
+#if NETAT
     error = proto_register_plumber(PF_APPLETALK, APPLE_IF_FAM_BOND, 
 				  ether_attach_at, 
 				  ether_detach_at);
@@ -3174,7 +3151,13 @@ bond_family_init(void)
 	       error);
 	goto done;
     }
-    bond_clone_attach();
+#endif
+    error = bond_clone_attach();
+    if (error != 0) {
+        printf("bond: proto_register_plumber failed bond_clone_attach error=%d\n",
+               error);
+        goto done;
+    }
 
  done:
     return (error);
@@ -3435,7 +3418,7 @@ ifbond_set_max_active(ifbond_ref bond, int max_active)
     }
     return;
 }
-#endif 0
+#endif
 
 static int
 ifbond_all_ports_ready(ifbond_ref bond)
@@ -4382,7 +4365,7 @@ bondport_periodic_transmit_machine(bondport_ref p, LAEvent event,
  **/
 static int
 bondport_can_transmit(bondport_ref p, int32_t current_secs,
-		      long * next_secs)
+		      __darwin_time_t * next_secs)
 {
     if (p->po_last_transmit_secs != current_secs) {
 	p->po_last_transmit_secs = current_secs;

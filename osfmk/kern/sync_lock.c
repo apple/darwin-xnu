@@ -68,9 +68,9 @@
 
 #define ulock_ownership_clear(ul)				\
 	MACRO_BEGIN						\
-	thread_t th;					\
+	thread_t th;						\
 	th = (ul)->holder;					\
-        if (th->active) {					\
+        if ((th)->active) {					\
 		thread_mtx_lock(th);				\
 		remqueue(&th->held_ulocks,			\
 			 (queue_entry_t) (ul));			\
@@ -109,17 +109,24 @@ unsigned int lock_set_event;
 unsigned int lock_set_handoff;
 #define LOCK_SET_HANDOFF CAST_EVENT64_T(&lock_set_handoff)
 
+
+lck_attr_t				lock_set_attr;
+lck_grp_t				lock_set_grp;
+static lck_grp_attr_t	lock_set_grp_attr;
+
+
+
 /*
  *	ROUTINE:	lock_set_init		[private]
  *
  *	Initialize the lock_set subsystem.
- *
- *	For now, we don't have anything to do here.
  */
 void
 lock_set_init(void)
 {
-	return;
+	lck_grp_attr_setdefault(&lock_set_grp_attr);
+	lck_grp_init(&lock_set_grp, "lock_set", &lock_set_grp_attr);
+	lck_attr_setdefault(&lock_set_attr);
 }
 
 
@@ -158,15 +165,14 @@ lock_set_create (
 
 	lock_set_lock_init(lock_set);
 	lock_set->n_ulocks = n_ulocks;
-	lock_set->ref_count = 1;
+	lock_set->ref_count = (task == kernel_task) ? 1 : 2; /* one for kernel, one for port */
 
 	/*
 	 *  Create and initialize the lock set port
 	 */
 	lock_set->port = ipc_port_alloc_kernel();
 	if (lock_set->port == IP_NULL) {	
-		/* This will deallocate the lock set */
-		lock_set_dereference(lock_set);
+		kfree(lock_set, size);
 		return KERN_RESOURCE_SHORTAGE; 
 	}
 
@@ -186,6 +192,7 @@ lock_set_create (
 		ulock->blocked   = FALSE;
 		ulock->unstable	 = FALSE;
 		ulock->ho_wait	 = FALSE;
+		ulock->accept_wait = FALSE;
 		wait_queue_init(&ulock->wait_queue, policy);
 	}
 
@@ -277,13 +284,10 @@ lock_set_destroy (task_t task, lock_set_t lock_set)
 	lock_set_ownership_clear(lock_set, task);
 
 	/*
-	 *  Deallocate	
-	 *
-	 *  Drop the lock set reference, which inturn destroys the
-	 *  lock set structure if the reference count goes to zero.
+	 *  Drop the lock set reference given to the containing task,
+	 *  which inturn destroys the lock set structure if the reference
+	 *  count goes to zero.
 	 */
-
-	ipc_port_dealloc_kernel(lock_set->port);
 	lock_set_dereference(lock_set);
 
 	return KERN_SUCCESS;
@@ -552,16 +556,6 @@ ulock_release_internal (ulock_t ulock, thread_t thread)
 		/* wait_queue now unlocked, thread locked */
 
 		if (wqthread != THREAD_NULL) {
-			/*
-			 * JMM - These ownership transfer macros have a
-			 * locking/race problem.  To keep the thread from
-			 * changing states on us (nullifying the ownership
-			 * assignment) we need to keep the thread locked
-			 * during the assignment.  But we can't because the
-			 * macros take an activation lock, which is a mutex.
-			 * Since this code was already broken before I got
-			 * here, I will leave it for now.
-			 */
 			thread_unlock(wqthread);
 			splx(s);
 
@@ -646,16 +640,11 @@ lock_handoff (lock_set_t lock_set, int lock_id)
 		 *  Transfer lock ownership
 		 */
 		if (thread != THREAD_NULL) {
-			/*
-			 * JMM - These ownership transfer macros have a
-			 * locking/race problem.  To keep the thread from
-			 * changing states on us (nullifying the ownership
-			 * assignment) we need to keep the thread locked
-			 * during the assignment.  But we can't because the
-			 * macros take a thread mutex lock.
-			 *
-			 * Since this code was already broken before I got
-			 * here, I will leave it for now.
+			/* 
+			 * The thread we are transferring to will try
+			 * to take the lock on the ulock, and therefore
+			 * will wait for us complete the handoff even
+			 * through we set the thread running.
 			 */
 			thread_unlock(thread);
 			splx(s);
@@ -699,7 +688,15 @@ lock_handoff (lock_set_t lock_set, int lock_id)
 	 */
 	switch (wait_result) {
 
+
 	case THREAD_AWAKENED:
+		/*
+		 * we take the ulock lock to syncronize with the
+		 * thread that is accepting ownership.
+		 */
+		ulock_lock(ulock);
+		assert(ulock->holder != current_thread());
+		ulock_unlock(ulock);
 		return KERN_SUCCESS;
 
 	case THREAD_INTERRUPTED:
@@ -809,6 +806,15 @@ lock_handoff_accept (lock_set_t lock_set, int lock_id)
 	switch (wait_result) {
 
 	case THREAD_AWAKENED:
+		/*
+		 * Take the lock to synchronize with the thread handing
+		 * off the lock to us.  We don't want to continue until
+		 * they complete the handoff.
+		 */
+		ulock_lock(ulock);
+		assert(ulock->accept_wait == FALSE);
+		assert(ulock->holder == current_thread());
+		ulock_unlock(ulock);
 		return KERN_SUCCESS;
 
 	case THREAD_INTERRUPTED:
@@ -856,8 +862,9 @@ lock_set_dereference(lock_set_t lock_set)
 	lock_set_unlock(lock_set);
 
 	if (ref_count == 0) {
-		size =	sizeof(struct lock_set) +
-			(sizeof(struct ulock) * (lock_set->n_ulocks - 1));
+		ipc_port_dealloc_kernel(lock_set->port);
+		size = (int)(sizeof(struct lock_set) +
+			(sizeof(struct ulock) * (lock_set->n_ulocks - 1)));
 		kfree(lock_set, size);
 	}
 }

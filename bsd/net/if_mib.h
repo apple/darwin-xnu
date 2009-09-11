@@ -198,4 +198,16 @@ enum {
  * Put other types of interface MIBs here, or in interface-specific
  * header files if convenient ones already exist.
  */
+
+/*
+ * Structure for interface family ID table
+ */
+
+struct if_family_id {
+	u_int32_t		iffmid_len;
+	u_int32_t		iffmid_id;
+	char			iffmid_str[1];	/* variable length string */
+};
+
+
 #endif /* _NET_IF_MIB_H */

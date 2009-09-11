@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -117,22 +117,26 @@ struct nfsrv_sock *nfsrv_udpsock = NULL;
 
 /* NFS exports */
 struct nfsrv_expfs_list nfsrv_exports;
-struct nfsrv_export_hashhead *nfsrv_export_hashtbl;
+struct nfsrv_export_hashhead *nfsrv_export_hashtbl = NULL;
+int nfsrv_export_hash_size = NFSRVEXPHASHSZ;
 u_long nfsrv_export_hash;
 lck_grp_t *nfsrv_export_rwlock_group;
 lck_rw_t nfsrv_export_rwlock;
 
+#if CONFIG_FSE
 /* NFS server file modification event generator */
 struct nfsrv_fmod_hashhead *nfsrv_fmod_hashtbl;
 u_long nfsrv_fmod_hash;
 lck_grp_t *nfsrv_fmod_grp;
 lck_mtx_t *nfsrv_fmod_mutex;
 static int nfsrv_fmod_timer_on = 0;
-
 int nfsrv_fsevents_enabled = 1;
+#endif
 
 /* NFS server timers */
+#if CONFIG_FSE
 thread_call_t	nfsrv_fmod_timer_call;
+#endif
 thread_call_t	nfsrv_deadsock_timer_call;
 thread_call_t	nfsrv_wg_timer_call;
 int nfsrv_wg_timer_on;
@@ -149,10 +153,12 @@ int nfsrv_wg_delay_v3 = 0;
 
 int nfsrv_async = 0;
 
-static int nfsrv_authorize(vnode_t,vnode_t,kauth_action_t,vfs_context_t,struct nfs_export_options*,int);
-static int nfsrv_wg_coalesce(struct nfsrv_descript *, struct nfsrv_descript *);
+int nfsrv_authorize(vnode_t,vnode_t,kauth_action_t,vfs_context_t,struct nfs_export_options*,int);
+int nfsrv_wg_coalesce(struct nfsrv_descript *, struct nfsrv_descript *);
+void nfsrv_modified(vnode_t, vfs_context_t);
 
 extern void IOSleep(int);
+extern int safe_getpath(struct vnode *dvp, char *leafname, char *path, int _len, int *truncated_path);
 
 /*
  * Initialize the data structures for the server.
@@ -180,10 +186,8 @@ nfsrv_init(void)
 		return;
 	}
 
-	if (sizeof (struct nfsrv_sock) > NFS_SVCALLOC) {
+	if (sizeof (struct nfsrv_sock) > NFS_SVCALLOC)
 		printf("struct nfsrv_sock bloated (> %dbytes)\n",NFS_SVCALLOC);
-		printf("Try reducing NFS_UIDHASHSIZ\n");
-	}
 
 	/* init nfsd mutex */
 	nfsd_lck_grp = lck_grp_alloc_init("nfsd", LCK_GRP_ATTR_NULL);
@@ -194,7 +198,6 @@ nfsrv_init(void)
 	nfsrv_slp_mutex_group  = lck_grp_alloc_init("nfsrv-slp-mutex", LCK_GRP_ATTR_NULL);
 
 	/* init export data structures */
-	nfsrv_export_hashtbl = hashinit(8, M_TEMP, &nfsrv_export_hash);
 	LIST_INIT(&nfsrv_exports);
 	nfsrv_export_rwlock_group = lck_grp_alloc_init("nfsrv-export-rwlock", LCK_GRP_ATTR_NULL);
 	lck_rw_init(&nfsrv_export_rwlock, nfsrv_export_rwlock_group, LCK_ATTR_NULL);
@@ -206,13 +209,17 @@ nfsrv_init(void)
 	nfsrv_reqcache_lck_grp = lck_grp_alloc_init("nfsrv_reqcache", LCK_GRP_ATTR_NULL);
 	nfsrv_reqcache_mutex = lck_mtx_alloc_init(nfsrv_reqcache_lck_grp, LCK_ATTR_NULL);
 
+#if CONFIG_FSE
 	/* init NFS server file modified event generation */
 	nfsrv_fmod_hashtbl = hashinit(NFSRVFMODHASHSZ, M_TEMP, &nfsrv_fmod_hash);
 	nfsrv_fmod_grp = lck_grp_alloc_init("nfsrv_fmod", LCK_GRP_ATTR_NULL);
 	nfsrv_fmod_mutex = lck_mtx_alloc_init(nfsrv_fmod_grp, LCK_ATTR_NULL);
+#endif
 
 	/* initialize NFS server timer callouts */
+#if CONFIG_FSE
 	nfsrv_fmod_timer_call = thread_call_allocate(nfsrv_fmod_timer, NULL);
+#endif
 	nfsrv_deadsock_timer_call = thread_call_allocate(nfsrv_deadsock_timer, NULL);
 	nfsrv_wg_timer_call = thread_call_allocate(nfsrv_wg_timer, NULL);
 
@@ -268,7 +275,7 @@ nfsrv_access(
 	int error, attrerr;
 	struct vnode_attr vattr;
 	struct nfs_filehandle nfh;
-	u_long nfsmode;
+	u_int32_t nfsmode;
 	kauth_action_t testaction;
 	struct nfs_export *nx;
 	struct nfs_export_options *nxo;
@@ -587,13 +594,13 @@ nfsrv_lookup(
 	vfs_context_t ctx,
 	mbuf_t *mrepp)
 {
-	struct nameidata ni, *nip = &ni;
+	struct nameidata ni;
 	vnode_t vp, dirp = NULL;
 	struct nfs_filehandle dnfh, nfh;
 	struct nfs_export *nx = NULL;
 	struct nfs_export_options *nxo;
 	int error, attrerr, dirattrerr, isdotdot;
-	uint32_t len;
+	uint32_t len = 0;
 	uid_t saved_uid;
 	struct vnode_attr va, dirattr, *vap = &va;
 	struct nfsm_chain *nmreq, nmrep;
@@ -635,7 +642,7 @@ nfsrv_lookup(
 
 	nameidone(&ni);
 
-	vp = nip->ni_vp;
+	vp = ni.ni_vp;
 	error = nfsrv_vptofh(nx, nd->nd_vers, (isdotdot ? &dnfh : NULL), vp, ctx, &nfh);
 	if (!error) {
 		nfsm_srv_vattr_init(vap, nd->nd_vers);
@@ -689,7 +696,7 @@ nfsrv_readlink(
 	struct nfs_export_options *nxo;
 	struct nfsm_chain *nmreq, nmrep;
 	mbuf_t mpath, mp;
-	uio_t uiop = NULL;
+	uio_t auio = NULL;
 	char uio_buf[ UIO_SIZEOF(4) ];
 	char *uio_bufp = &uio_buf[0];
 	int uio_buflen = UIO_SIZEOF(4);
@@ -715,13 +722,13 @@ nfsrv_readlink(
 			error = ENOMEM;
 		nfsmerr_if(error);
 	}
-	uiop = uio_createwithbuffer(mpcnt, 0, UIO_SYSSPACE, UIO_READ, uio_bufp, uio_buflen);
-	if (!uiop)
+	auio = uio_createwithbuffer(mpcnt, 0, UIO_SYSSPACE, UIO_READ, uio_bufp, uio_buflen);
+	if (!auio)
 		error = ENOMEM;
 	nfsmerr_if(error);
 
 	for (mp = mpath; mp; mp = mbuf_next(mp))
-		uio_addiov(uiop, CAST_USER_ADDR_T((caddr_t)mbuf_data(mp)), mbuf_len(mp));
+		uio_addiov(auio, CAST_USER_ADDR_T((caddr_t)mbuf_data(mp)), mbuf_len(mp));
 
 	error = nfsrv_fhtovp(&nfh, nd, &vp, &nx, &nxo);
 	nfsmerr_if(error);
@@ -745,7 +752,7 @@ nfsrv_readlink(
 	if (!error)
 		error = nfsrv_authorize(vp, NULL, KAUTH_VNODE_READ_DATA, ctx, nxo, 0);
 	if (!error)
-		error = VNOP_READLINK(vp, uiop, ctx);
+		error = VNOP_READLINK(vp, auio, ctx);
 	if (vp) {
 		if (nd->nd_vers == NFS_VER3) {
 			nfsm_srv_vattr_init(&vattr, NFS_VER3);
@@ -772,9 +779,8 @@ nfsmerr:
 		nfsm_chain_build_done(error, &nmrep);
 		goto nfsmout;
 	}
-	if (uiop && (uio_resid(uiop) > 0)) {
-		// LP64todo - fix this
-		len -= uio_resid(uiop);
+	if (auio && (uio_resid(auio) > 0)) {
+		len -= uio_resid(auio);
 		tlen = nfsm_rndup(len);
 		nfsm_adj(mpath, NFS_MAXPATHLEN-tlen, tlen-len);
 	}
@@ -815,7 +821,7 @@ nfsrv_read(
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx;
 	struct nfs_export_options *nxo;
-	uio_t uiop = NULL;
+	uio_t auio = NULL;
 	char *uio_bufp = NULL;
 	struct vnode_attr vattr, *vap = &vattr;
 	off_t off;
@@ -839,7 +845,7 @@ nfsrv_read(
 	else
 		nfsm_chain_get_32(error, nmreq, off);
 	nfsm_chain_get_32(error, nmreq, reqlen);
-	maxlen = NFS_SRVMAXDATA(nd);
+	maxlen = NFSRV_NDMAXDATA(nd);
 	if (reqlen > maxlen)
 		reqlen = maxlen;
 	nfsmerr_if(error);
@@ -883,18 +889,18 @@ nfsrv_read(
 		nfsmerr_if(error);
 		MALLOC(uio_bufp, char *, UIO_SIZEOF(mreadcnt), M_TEMP, M_WAITOK);
 		if (uio_bufp)
-			uiop = uio_createwithbuffer(mreadcnt, off, UIO_SYSSPACE,
+			auio = uio_createwithbuffer(mreadcnt, off, UIO_SYSSPACE,
 					UIO_READ, uio_bufp, UIO_SIZEOF(mreadcnt));
-		if (!uio_bufp || !uiop) {
+		if (!uio_bufp || !auio) {
 			error = ENOMEM;
 			goto errorexit;
 		}
 		for (m = mread; m; m = mbuf_next(m))
-			uio_addiov(uiop, CAST_USER_ADDR_T((caddr_t)mbuf_data(m)), mbuf_len(m));
-		error = VNOP_READ(vp, uiop, IO_NODELOCKED, ctx);
+			uio_addiov(auio, CAST_USER_ADDR_T((caddr_t)mbuf_data(m)), mbuf_len(m));
+		error = VNOP_READ(vp, auio, IO_NODELOCKED, ctx);
 	} else {
-		uiop = uio_createwithbuffer(0, 0, UIO_SYSSPACE, UIO_READ, &uio_buf[0], sizeof(uio_buf));
-		if (!uiop) {
+		auio = uio_createwithbuffer(0, 0, UIO_SYSSPACE, UIO_READ, &uio_buf[0], sizeof(uio_buf));
+		if (!auio) {
 			error = ENOMEM;
 			goto errorexit;
 		}
@@ -913,8 +919,7 @@ errorexit:
 	vp = NULL;
 
 	/* trim off any data not actually read */
-	// LP64todo - fix this
-	len -= uio_resid(uiop);
+	len -= uio_resid(auio);
 	tlen = nfsm_rndup(len);
 	if (count != tlen || tlen != len)
 		nfsm_adj(mread, count - tlen, tlen - len);
@@ -964,6 +969,7 @@ nfsmout:
 	return (error);
 }
 
+#if CONFIG_FSE
 /*
  * NFS File modification reporting
  *
@@ -989,13 +995,14 @@ int nfsrv_fmod_min_interval = 100;	/* msec min interval between callbacks */
 void
 nfsrv_fmod_timer(__unused void *param0, __unused void *param1)
 {
-	struct nfsrv_fmod_hashhead *head;
-	struct nfsrv_fmod *fp, *nfp;
+	struct nfsrv_fmod_hashhead *headp, firehead;
+	struct nfsrv_fmod *fp, *nfp, *pfp;
 	uint64_t timenow, next_deadline;
-	int interval = 0;
-	int i;
+	int interval = 0, i, fmod_fire;
 
+	LIST_INIT(&firehead);
 	lck_mtx_lock(nfsrv_fmod_mutex);
+again:
 	clock_get_uptime(&timenow);
 	clock_interval_to_deadline(nfsrv_fmod_pendtime, 1000 * 1000,
 		&next_deadline);
@@ -1003,13 +1010,14 @@ nfsrv_fmod_timer(__unused void *param0, __unused void *param1)
 	/*
 	 * Scan all the hash chains
 	 */
+	fmod_fire = 0;
 	for (i = 0; i < NFSRVFMODHASHSZ; i++) {
 		/*
 		 * For each hash chain, look for an entry
 		 * that has exceeded the deadline.
 		 */
-		head = &nfsrv_fmod_hashtbl[i];
-		LIST_FOREACH(fp, head, fm_link) {
+		headp = &nfsrv_fmod_hashtbl[i];
+		LIST_FOREACH(fp, headp, fm_link) {
 			if (timenow >= fp->fm_deadline)
 				break;
 			if (fp->fm_deadline < next_deadline)
@@ -1022,25 +1030,40 @@ nfsrv_fmod_timer(__unused void *param0, __unused void *param1)
 		 * following entries in the chain, since they're
 		 * sorted in time order.
 		 */
+		pfp = NULL;
 		while (fp) {
-			/*
-			 * Fire off the content modified fsevent for each
-			 * entry, remove it from the list, and free it.
-			 */
-#if CONFIG_FSE
+			/* move each entry to the fire list */
+			nfp = LIST_NEXT(fp, fm_link);
+			LIST_REMOVE(fp, fm_link);
+			fmod_fire++;
+			if (pfp)
+				LIST_INSERT_AFTER(pfp, fp, fm_link);
+			else
+				LIST_INSERT_HEAD(&firehead, fp, fm_link);
+			pfp = fp;
+			fp = nfp;
+		}
+	}
+
+	if (fmod_fire) {
+		lck_mtx_unlock(nfsrv_fmod_mutex);
+		/*
+		 * Fire off the content modified fsevent for each
+		 * entry and free it.
+		 */
+		LIST_FOREACH_SAFE(fp, &firehead, fm_link, nfp) {
 			if (nfsrv_fsevents_enabled)
 				add_fsevent(FSE_CONTENT_MODIFIED, &fp->fm_context,
 					FSE_ARG_VNODE, fp->fm_vp,
 					FSE_ARG_DONE);
-#endif
 			vnode_put(fp->fm_vp);
 			kauth_cred_unref(&fp->fm_context.vc_ucred);
-			nfp = LIST_NEXT(fp, fm_link);
 			LIST_REMOVE(fp, fm_link);
 			FREE(fp, M_TEMP);
-			nfsrv_fmod_pending--;
-			fp = nfp;
 		}
+		lck_mtx_lock(nfsrv_fmod_mutex);
+		nfsrv_fmod_pending -= fmod_fire;
+		goto again;
 	}
 
 	/*
@@ -1062,14 +1085,13 @@ nfsrv_fmod_timer(__unused void *param0, __unused void *param1)
 	lck_mtx_unlock(nfsrv_fmod_mutex);
 }
 
-#if CONFIG_FSE
 /*
  * When a vnode has been written to, enter it in the hash
  * table of vnodes pending creation of an fsevent. If the
  * callout timer isn't already running, schedule a callback
  * for nfsrv_fmod_pendtime msec from now.
  */
-static void
+void
 nfsrv_modified(vnode_t vp, vfs_context_t ctx)
 {
 	uint64_t deadline;
@@ -1156,7 +1178,7 @@ nfsrv_write(
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx;
 	struct nfs_export_options *nxo;
-	uio_t uiop = NULL;
+	uio_t auio = NULL;
 	char *uio_bufp = NULL;
 	off_t off;
 	uid_t saved_uid;
@@ -1204,7 +1226,7 @@ nfsrv_write(
 	} else {
 		mlen = 0;
 	}
-	if ((len > NFS_MAXDATA) || (len < 0) || (mlen < len)) {
+	if ((len > NFSRV_MAXDATA) || (len < 0) || (mlen < len)) {
 		error = EIO;
 		goto nfsmerr;
 	}
@@ -1237,13 +1259,13 @@ nfsrv_write(
 				mcount++;
 		MALLOC(uio_bufp, char *, UIO_SIZEOF(mcount), M_TEMP, M_WAITOK);
 		if (uio_bufp)
-			uiop = uio_createwithbuffer(mcount, off, UIO_SYSSPACE, UIO_WRITE, uio_bufp, UIO_SIZEOF(mcount));
-		if (!uio_bufp || !uiop)
+			auio = uio_createwithbuffer(mcount, off, UIO_SYSSPACE, UIO_WRITE, uio_bufp, UIO_SIZEOF(mcount));
+		if (!uio_bufp || !auio)
 			error = ENOMEM;
 		nfsmerr_if(error);
 		for (m = nmreq->nmc_mcur; m; m = mbuf_next(m))
 			if ((mlen = mbuf_len(m)) > 0)
-				uio_addiov(uiop, CAST_USER_ADDR_T((caddr_t)mbuf_data(m)), mlen);
+				uio_addiov(auio, CAST_USER_ADDR_T((caddr_t)mbuf_data(m)), mlen);
 		/*
 		 * XXX The IO_METASYNC flag indicates that all metadata (and not just
 		 * enough to ensure data integrity) mus be written to stable storage
@@ -1256,8 +1278,8 @@ nfsrv_write(
 		else
 			ioflags = (IO_METASYNC | IO_SYNC | IO_NODELOCKED);
 
-		error = VNOP_WRITE(vp, uiop, ioflags, ctx);
-		OSAddAtomic(1, (SInt32*)&nfsstats.srvvop_writes);
+		error = VNOP_WRITE(vp, auio, ioflags, ctx);
+		OSAddAtomic(1, &nfsstats.srvvop_writes);
 
 		/* update export stats */
 		NFSStatAdd64(&nx->nx_stats.bytes_written, len);
@@ -1324,7 +1346,7 @@ nfsmout:
  */
 
 #define	NWDELAYHASH(sock, f) \
-	(&(sock)->ns_wdelayhashtbl[(*((u_long *)(f))) % NFS_WDELAYHASHSIZ])
+	(&(sock)->ns_wdelayhashtbl[(*((u_int32_t *)(f))) % NFS_WDELAYHASHSIZ])
 /* These macros compare nfsrv_descript structures.  */
 #define NFSW_CONTIG(o, n) \
 		(((o)->nd_eoff >= (n)->nd_off) && nfsrv_fhmatch(&(o)->nd_fh, &(n)->nd_fh))
@@ -1354,7 +1376,7 @@ nfsrv_writegather(
 	int preattrerr, postattrerr;
 	vnode_t vp;
 	mbuf_t m;
-	uio_t uiop = NULL;
+	uio_t auio = NULL;
 	char *uio_bufp = NULL;
 	u_quad_t cur_usec;
 	struct timeval now;
@@ -1404,7 +1426,7 @@ nfsrv_writegather(
 		mlen = 0;
 	    }
 
-	    if ((nd->nd_len > NFS_MAXDATA) || (nd->nd_len < 0)  || (mlen < nd->nd_len)) {
+	    if ((nd->nd_len > NFSRV_MAXDATA) || (nd->nd_len < 0)  || (mlen < nd->nd_len)) {
 		error = EIO;
 nfsmerr:
 		nd->nd_repstat = error;
@@ -1527,16 +1549,16 @@ loop1:
 
 		    MALLOC(uio_bufp, char *, UIO_SIZEOF(i), M_TEMP, M_WAITOK);
 		    if (uio_bufp)
-			uiop = uio_createwithbuffer(i, nd->nd_off, UIO_SYSSPACE,
+			auio = uio_createwithbuffer(i, nd->nd_off, UIO_SYSSPACE,
 						UIO_WRITE, uio_bufp, UIO_SIZEOF(i));
-		    if (!uio_bufp || !uiop)
+		    if (!uio_bufp || !auio)
 			error = ENOMEM;
 		    if (!error) {
 			for (m = nmreq->nmc_mhead; m; m = mbuf_next(m))
 			    if ((tlen = mbuf_len(m)) > 0)
-				uio_addiov(uiop, CAST_USER_ADDR_T((caddr_t)mbuf_data(m)), tlen);
-			error = VNOP_WRITE(vp, uiop, ioflags, ctx);
-			OSAddAtomic(1, (SInt32*)&nfsstats.srvvop_writes);
+				uio_addiov(auio, CAST_USER_ADDR_T((caddr_t)mbuf_data(m)), tlen);
+			error = VNOP_WRITE(vp, auio, ioflags, ctx);
+			OSAddAtomic(1, &nfsstats.srvvop_writes);
 
 			/* update export stats */
 			NFSStatAdd64(&nx->nx_stats.bytes_written, nd->nd_len);
@@ -1657,7 +1679,7 @@ loop1:
  * - update the nd_eoff and nd_stable for owp
  * - put nd on owp's nd_coalesce list
  */
-static int
+int
 nfsrv_wg_coalesce(struct nfsrv_descript *owp, struct nfsrv_descript *nd)
 {
 	int overlap, error;
@@ -1788,7 +1810,7 @@ nfsrv_create(
 	struct nameidata ni;
 	int error, rdev, dpreattrerr, dpostattrerr, postattrerr;
 	int how, exclusive_flag;
-	uint32_t len;
+	uint32_t len = 0, cnflags;
 	vnode_t vp, dvp, dirp;
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx = NULL;
@@ -2006,7 +2028,12 @@ nfsrv_create(
 			ni.ni_cnd.cn_context = ctx;
 			ni.ni_startdir = dvp;
 			ni.ni_usedvp   = dvp;
-			error = lookup(&ni);
+			cnflags = ni.ni_cnd.cn_flags; /* store in case we have to restore */
+			while ((error = lookup(&ni)) == ERECYCLE) {
+				ni.ni_cnd.cn_flags = cnflags;
+				ni.ni_cnd.cn_nameptr = ni.ni_cnd.cn_pnbuf;
+				ni.ni_usedvp = ni.ni_dvp = ni.ni_startdir = dvp;
+			}
 			if (!error) {
 				if (ni.ni_cnd.cn_flags & ISSYMLINK)
 					error = EINVAL;
@@ -2123,8 +2150,8 @@ nfsrv_mknod(
 	struct vnode_attr va, *vap = &va;
 	struct nameidata ni;
 	int error, dpreattrerr, dpostattrerr, postattrerr;
-	uint32_t len;
-	u_long major, minor;
+	uint32_t len = 0, cnflags;
+	u_int32_t major = 0, minor = 0;
 	enum vtype vtyp;
 	vnode_t vp, dvp, dirp;
 	struct nfs_filehandle nfh;
@@ -2272,7 +2299,12 @@ nfsrv_mknod(
 		ni.ni_cnd.cn_context = vfs_context_current();
 		ni.ni_startdir = dvp;
 		ni.ni_usedvp   = dvp;
-		error = lookup(&ni);
+		cnflags = ni.ni_cnd.cn_flags; /* store in case we have to restore */
+		while ((error = lookup(&ni)) == ERECYCLE) {
+			ni.ni_cnd.cn_flags = cnflags;
+			ni.ni_cnd.cn_nameptr = ni.ni_cnd.cn_pnbuf;
+			ni.ni_usedvp = ni.ni_dvp = ni.ni_startdir = dvp;
+		}
 		if (!error) {
 		        vp = ni.ni_vp;
 			if (ni.ni_cnd.cn_flags & ISSYMLINK)
@@ -2362,7 +2394,7 @@ nfsrv_remove(
 {
 	struct nameidata ni;
 	int error, dpreattrerr, dpostattrerr;
-	uint32_t len;
+	uint32_t len = 0;
 	uid_t saved_uid;
 	vnode_t vp, dvp, dirp = NULL;
 	struct vnode_attr dpreattr, dpostattr;
@@ -2515,7 +2547,7 @@ nfsrv_rename(
 	struct nfsm_chain *nmreq, nmrep;
 	char *from_name, *to_name;
 #if CONFIG_FSE
-	int from_len, to_len;
+	int from_len=0, to_len=0;
 	fse_info from_finfo, to_finfo;
 #endif
 	u_char didstats = 0;
@@ -2525,6 +2557,7 @@ nfsrv_rename(
 	fdpreattrerr = fdpostattrerr = ENOENT;
 	tdpreattrerr = tdpostattrerr = ENOENT;
 	saved_uid = kauth_cred_getuid(nd->nd_cr);
+	fromlen = tolen = 0;
 	frompath = topath = NULL;
 	fdirp = tdirp = NULL;
 	nmreq = &nd->nd_nmreq;
@@ -2912,50 +2945,26 @@ auth_exit:
 	 */
 #if CONFIG_FSE
 	if (nfsrv_fsevents_enabled && need_fsevent(FSE_RENAME, fvp)) {
+		int from_truncated = 0, to_truncated = 0;
+		
 	        get_fse_info(fvp, &from_finfo, ctx);
 		if (tvp)
 		        get_fse_info(tvp, &to_finfo, ctx);
 
 	        from_name = get_pathbuff();
-		from_len = MAXPATHLEN;
-		if (from_name && vn_getpath(fdvp, from_name, &from_len)) {
-			release_pathbuff(from_name);
-			from_name = NULL;
-		} else if ((from_len + 1 + fromni.ni_cnd.cn_namelen + 1) < MAXPATHLEN) {
-			// if the path is not just "/", then append a "/"
-			if (from_len > 2) {
-				from_name[from_len-1] = '/';
-			} else {
-				from_len--;
-			}
-			strlcpy(&from_name[from_len], fromni.ni_cnd.cn_nameptr, MAXPATHLEN-from_len);
-			from_len += fromni.ni_cnd.cn_namelen + 1;
-			from_name[from_len] = '\0';
+		if (from_name) {
+			from_len = safe_getpath(fdvp, fromni.ni_cnd.cn_nameptr, from_name, MAXPATHLEN, &from_truncated);
 		}
-
+		
 		to_name = from_name ? get_pathbuff() : NULL;
-		to_len = MAXPATHLEN;
-
-		if (!to_name) {
-			if (from_name) {
-				release_pathbuff(from_name);
-				from_name = NULL;
-			}
-		} else if (vn_getpath(tdvp, to_name, &to_len)) {
-			release_pathbuff(from_name);
-			release_pathbuff(to_name);
-			from_name = to_name = NULL;
-		} else if ((to_len + 1 + toni.ni_cnd.cn_namelen + 1) < MAXPATHLEN) {
-			// if the path is not just "/", then append a "/"
-			if (to_len > 2) {
-				to_name[to_len-1] = '/';
-			} else {
-				to_len--;
-			}
-			strlcpy(&to_name[to_len], toni.ni_cnd.cn_nameptr, MAXPATHLEN-to_len);
-			to_len += toni.ni_cnd.cn_namelen + 1;
-			to_name[to_len] = '\0';
+		if (to_name) {
+			to_len = safe_getpath(tdvp, toni.ni_cnd.cn_nameptr, to_name, MAXPATHLEN, &to_truncated);
 		}
+
+		if (from_truncated || to_truncated) {
+			from_finfo.mode |= FSE_TRUNCATED_PATH;
+		}
+
 	} else {
 	        from_name = NULL;
 	        to_name   = NULL;
@@ -3197,25 +3206,26 @@ nfsrv_link(
 #if CONFIG_FSE
 	if (nfsrv_fsevents_enabled && !error && need_fsevent(FSE_CREATE_FILE, dvp)) {
 		char *target_path = NULL;
-		int plen;
+		int plen, truncated=0;
 		fse_info finfo;
 
 		/* build the path to the new link file */
-		plen = MAXPATHLEN;
-		if ((target_path = get_pathbuff()) && !vn_getpath(dvp, target_path, &plen)) {
-			if ((plen + 1 + ni.ni_cnd.cn_namelen + 1) < MAXPATHLEN) {
-				target_path[plen-1] = '/';
-				strlcpy(&target_path[plen], ni.ni_cnd.cn_nameptr, MAXPATHLEN-plen);
-				plen += ni.ni_cnd.cn_namelen;
-			}
-			if (get_fse_info(vp, &finfo, ctx) == 0)
+		target_path = get_pathbuff();
+		if (target_path) {
+			plen = safe_getpath(dvp, ni.ni_cnd.cn_nameptr, target_path, MAXPATHLEN, &truncated);
+
+			if (get_fse_info(vp, &finfo, ctx) == 0) {
+				if (truncated) {
+					finfo.mode |= FSE_TRUNCATED_PATH;
+				}
 				add_fsevent(FSE_CREATE_FILE, ctx,
 					    FSE_ARG_STRING, plen, target_path,
 					    FSE_ARG_FINFO, &finfo,
 					    FSE_ARG_DONE);
-		}
-		if (target_path)
+			}
+
 			release_pathbuff(target_path);
+		}
 	}
 #endif
 
@@ -3279,7 +3289,7 @@ nfsrv_symlink(
 	struct vnode_attr va, *vap = &va;
 	struct nameidata ni;
 	int error, dpreattrerr, dpostattrerr, postattrerr;
-	uint32_t len, linkdatalen;
+	uint32_t len = 0, linkdatalen, cnflags;
 	uid_t saved_uid;
 	char *linkdata;
 	vnode_t vp, dvp, dirp;
@@ -3408,7 +3418,12 @@ nfsrv_symlink(
 			ni.ni_cnd.cn_context = ctx;
 			ni.ni_startdir = dvp;
 			ni.ni_usedvp   = dvp;
-			error = lookup(&ni);
+			cnflags = ni.ni_cnd.cn_flags; /* store in case we have to restore */
+			while ((error = lookup(&ni)) == ERECYCLE) {
+				ni.ni_cnd.cn_flags = cnflags;
+				ni.ni_cnd.cn_nameptr = ni.ni_cnd.cn_pnbuf;
+				ni.ni_usedvp = ni.ni_dvp = ni.ni_startdir = dvp;
+			}
 			if (!error)
 			        vp = ni.ni_vp;
 		}
@@ -3504,7 +3519,7 @@ nfsrv_mkdir(
 	struct vnode_attr va, *vap = &va;
 	struct nameidata ni;
 	int error, dpreattrerr, dpostattrerr, postattrerr;
-	uint32_t len;
+	uint32_t len = 0;
 	vnode_t vp, dvp, dirp;
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx = NULL;
@@ -3716,7 +3731,7 @@ nfsrv_rmdir(
 	mbuf_t *mrepp)
 {
 	int error, dpreattrerr, dpostattrerr;
-	uint32_t len;
+	uint32_t len = 0;
 	uid_t saved_uid;
 	vnode_t vp, dvp, dirp;
 	struct vnode_attr dpreattr, dpostattr;
@@ -3903,7 +3918,7 @@ nfsrv_readdir(
 
 	error = 0;
 	attrerr = ENOENT;
-	nentries = 0;
+	count = nentries = 0;
 	nmreq = &nd->nd_nmreq;
 	nfsm_chain_null(&nmrep);
 	rbuf = NULL;
@@ -3923,7 +3938,7 @@ nfsrv_readdir(
 
 	off = toff;
 	siz = ((count + DIRBLKSIZ - 1) & ~(DIRBLKSIZ - 1));
-	xfer = NFS_SRVMAXDATA(nd);
+	xfer = NFSRV_NDMAXDATA(nd);
 	if (siz > xfer)
 		siz = xfer;
 	fullsiz = siz;
@@ -3974,7 +3989,6 @@ again:
 	nfsmerr_if(error);
 
 	if (uio_resid(auio) != 0) {
-		// LP64todo - fix this
 		siz -= uio_resid(auio);
 
 		/* If nothing read, return empty reply with eof set */
@@ -4139,7 +4153,7 @@ nfsrv_readdirplus(
 	nfsmerr_if(error);
 
 	off = toff;
-	xfer = NFS_SRVMAXDATA(nd);
+	xfer = NFSRV_NDMAXDATA(nd);
 	dircount = ((dircount + DIRBLKSIZ - 1) & ~(DIRBLKSIZ - 1));
 	if (dircount > xfer)
 		dircount = xfer;
@@ -4191,7 +4205,6 @@ again:
 	nfsmerr_if(error);
 
 	if (uio_resid(auio) != 0) {
-		// LP64todo - fix this
 		siz -= uio_resid(auio);
 
 		/* If nothing read, return empty reply with eof set */
@@ -4574,7 +4587,7 @@ nfsmerr:
 		maxsize = NFS_MAXDGRAMDATA;
 		prefsize = NFS_PREFDGRAMDATA;
 	} else
-		maxsize = prefsize = NFS_MAXDATA;
+		maxsize = prefsize = NFSRV_MAXDATA;
 
 	nfsm_chain_add_32(error, &nmrep, maxsize);
 	nfsm_chain_add_32(error, &nmrep, prefsize);
@@ -4797,7 +4810,7 @@ int (*nfsrv_procs[NFS_NPROCS])(struct nfsrv_descript *nd,
  * will return EPERM instead of EACCESS. EPERM is always an error.
  */
 
-static int
+int
 nfsrv_authorize(
 	vnode_t vp,
 	vnode_t dvp,

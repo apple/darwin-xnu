@@ -113,8 +113,8 @@ extern vm_map_t bsd_pageable_map;
 
 #include <mach/mach_host.h>		/* for host_info() */
 
-#ifdef __i386__
-#include <i386/cpuid.h>		/* for cpuid_info() */
+#if defined(__i386__) || defined(__x86_64__)
+#include <i386/cpuid.h>	/* for cpuid_info() */
 #endif
 
 
@@ -339,7 +339,7 @@ SYSCTL_PROC    (_hw, OID_AUTO, physicalcpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_K
 SYSCTL_PROC    (_hw, OID_AUTO, physicalcpu_max, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_LOCAL_PHYSICALCPUMAX, sysctl_hw_generic, "I", "");
 SYSCTL_PROC    (_hw, OID_AUTO, logicalcpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_LOCAL_LOGICALCPU, sysctl_hw_generic, "I", "");
 SYSCTL_PROC    (_hw, OID_AUTO, logicalcpu_max, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_LOCAL_LOGICALCPUMAX, sysctl_hw_generic, "I", "");
-SYSCTL_INT     (_hw, HW_BYTEORDER, byteorder, CTLFLAG_RD | CTLFLAG_KERN, NULL, BYTE_ORDER, "");
+SYSCTL_INT     (_hw, HW_BYTEORDER, byteorder, CTLFLAG_RD | CTLFLAG_KERN, (int *)NULL, BYTE_ORDER, "");
 SYSCTL_INT     (_hw, OID_AUTO, cputype, CTLFLAG_RD | CTLFLAG_KERN, &cputype, 0, "");
 SYSCTL_INT     (_hw, OID_AUTO, cpusubtype, CTLFLAG_RD | CTLFLAG_KERN, &cpusubtype, 0, "");
 SYSCTL_INT     (_hw, OID_AUTO, cpu64bit_capable, CTLFLAG_RD | CTLFLAG_KERN, &cpu64bit, 0, "");
@@ -372,7 +372,7 @@ SYSCTL_INT     (_hw, OID_AUTO, packages, CTLFLAG_RD | CTLFLAG_KERN, &packages, 0
  */
 SYSCTL_NODE(_hw, OID_AUTO, optional, CTLFLAG_RW|CTLFLAG_LOCKED, NULL, "optional features");
 
-SYSCTL_INT(_hw_optional, OID_AUTO, floatingpoint, CTLFLAG_RD | CTLFLAG_KERN, 0, 1, "");	/* always set */
+SYSCTL_INT(_hw_optional, OID_AUTO, floatingpoint, CTLFLAG_RD | CTLFLAG_KERN, (int *)NULL, 1, "");	/* always set */
 
 /*
  * Deprecated variables.  These are supported for backwards compatibility
@@ -386,18 +386,18 @@ SYSCTL_INT(_hw_optional, OID_AUTO, floatingpoint, CTLFLAG_RD | CTLFLAG_KERN, 0, 
  *
  * The *_compat nodes are *NOT* visible within the kernel.
  */
-SYSCTL_INT (_hw, HW_PAGESIZE,     pagesize_compat, CTLFLAG_RD | CTLFLAG_MASKED, &page_size, 0, "");
-SYSCTL_INT (_hw, HW_BUS_FREQ,     busfrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED, &gPEClockFrequencyInfo.bus_clock_rate_hz, 0, "");
-SYSCTL_INT (_hw, HW_CPU_FREQ,     cpufrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED, &gPEClockFrequencyInfo.cpu_clock_rate_hz, 0, "");
+SYSCTL_COMPAT_INT (_hw, HW_PAGESIZE,     pagesize_compat, CTLFLAG_RD | CTLFLAG_MASKED, &page_size, 0, "");
+SYSCTL_COMPAT_INT (_hw, HW_BUS_FREQ,     busfrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED, &gPEClockFrequencyInfo.bus_clock_rate_hz, 0, "");
+SYSCTL_COMPAT_INT (_hw, HW_CPU_FREQ,     cpufrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED, &gPEClockFrequencyInfo.cpu_clock_rate_hz, 0, "");
 SYSCTL_PROC(_hw, HW_CACHELINE,    cachelinesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_CACHELINE, sysctl_hw_generic, "I", "");
 SYSCTL_PROC(_hw, HW_L1ICACHESIZE, l1icachesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_L1ICACHESIZE, sysctl_hw_generic, "I", "");
 SYSCTL_PROC(_hw, HW_L1DCACHESIZE, l1dcachesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_L1DCACHESIZE, sysctl_hw_generic, "I", "");
 SYSCTL_PROC(_hw, HW_L2CACHESIZE,  l2cachesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_L2CACHESIZE, sysctl_hw_generic, "I", "");
 SYSCTL_PROC(_hw, HW_L3CACHESIZE,  l3cachesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_L3CACHESIZE, sysctl_hw_generic, "I", "");
-SYSCTL_INT (_hw, HW_TB_FREQ,      tbfrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED, &gPEClockFrequencyInfo.timebase_frequency_hz, 0, "");
+SYSCTL_COMPAT_INT (_hw, HW_TB_FREQ,      tbfrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED, &gPEClockFrequencyInfo.timebase_frequency_hz, 0, "");
 SYSCTL_PROC(_hw, HW_MACHINE,      machine, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_MACHINE, sysctl_hw_generic, "A", "");
 SYSCTL_PROC(_hw, HW_MODEL,        model, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_MODEL, sysctl_hw_generic, "A", "");
-SYSCTL_UINT(_hw, HW_PHYSMEM,      physmem, CTLFLAG_RD | CTLFLAG_MASKED, &mem_size, 0, "");
+SYSCTL_COMPAT_UINT(_hw, HW_PHYSMEM,      physmem, CTLFLAG_RD | CTLFLAG_MASKED, &mem_size, 0, "");
 SYSCTL_PROC(_hw, HW_USERMEM,      usermem, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_USERMEM,	sysctl_hw_generic, "I", "");
 SYSCTL_PROC(_hw, HW_EPOCH,        epoch, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_EPOCH, sysctl_hw_generic, "I", "");
 SYSCTL_PROC(_hw, HW_VECTORUNIT,   vectorunit, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_VECTORUNIT, sysctl_hw_generic, "I", "");
@@ -423,7 +423,7 @@ SYSCTL_INT(_hw_optional, OID_AUTO, stfiwx, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG
 SYSCTL_INT(_hw_optional, OID_AUTO, dcba, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &dcba_flag, 0, "");
 SYSCTL_INT(_hw_optional, OID_AUTO, datastreams, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &datastreams_flag, 0, "");
 SYSCTL_INT(_hw_optional, OID_AUTO, dcbtstreams, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &dcbtstreams_flag, 0, "");
-#elif defined (__i386__)
+#elif defined (__i386__) || defined (__x86_64__)
 int mmx_flag = -1;
 int sse_flag = -1;
 int sse2_flag = -1;
@@ -440,6 +440,8 @@ SYSCTL_INT(_hw_optional, OID_AUTO, sse3, CTLFLAG_RD | CTLFLAG_KERN, &sse3_flag, 
 SYSCTL_INT(_hw_optional, OID_AUTO, supplementalsse3, CTLFLAG_RD | CTLFLAG_KERN, &supplementalsse3_flag, 0, "");
 SYSCTL_INT(_hw_optional, OID_AUTO, sse4_1, CTLFLAG_RD | CTLFLAG_KERN, &sse4_1_flag, 0, "");
 SYSCTL_INT(_hw_optional, OID_AUTO, sse4_2, CTLFLAG_RD | CTLFLAG_KERN, &sse4_2_flag, 0, "");
+/* "x86_64" is actually a preprocessor symbol on the x86_64 kernel, so we have to hack this */
+#undef x86_64
 SYSCTL_INT(_hw_optional, OID_AUTO, x86_64, CTLFLAG_RD | CTLFLAG_KERN, &x86_64_flag, 0, "");
 #endif /* __ppc__ */
 
@@ -458,7 +460,7 @@ pmsSysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 		return(error);
 
 	intr = ml_set_interrupts_enabled(FALSE);		/* No interruptions in here */
-	error = pmsControl(ctl.request, (user_addr_t)(unsigned long)ctl.reqaddr, ctl.reqsize);
+	error = pmsControl(ctl.request, (user_addr_t)(uintptr_t)ctl.reqaddr, ctl.reqsize);
 	(void)ml_set_interrupts_enabled(intr);			/* Restore interruptions */
 
 	return(error);
@@ -482,7 +484,7 @@ sysctl_mib_init(void)
 	cputhreadtype = cpu_threadtype();
 #if defined(__ppc__)
     cpu64bit = (_cpu_capabilities & k64Bit) == k64Bit;
-#elif defined(__i386__)
+#elif defined(__i386__) || defined (__x86_64__)
     cpu64bit = (_get_cpu_capabilities() & k64Bit) == k64Bit;
 #endif
 
@@ -596,7 +598,7 @@ sysctl_mib_init(void)
 	else
 		packages = hinfo.max_cpus;
 
-#elif defined (__i386__)
+#elif defined (__i386__) || defined (__x86_64__)
 	mmx_flag = ((_get_cpu_capabilities() & kHasMMX) == kHasMMX)? 1 : 0;
 	sse_flag = ((_get_cpu_capabilities() & kHasSSE) == kHasSSE)? 1 : 0;
 	sse2_flag = ((_get_cpu_capabilities() & kHasSSE2) == kHasSSE2)? 1 : 0;

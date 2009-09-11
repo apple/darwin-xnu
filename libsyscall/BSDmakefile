@@ -15,6 +15,7 @@ ARCH != arch
 RC_ARCHS = $(ARCH)
 RC_$(RC_ARCHS) = 1
 .endif
+SDKROOT ?= /
 NARCHS != echo $(RC_ARCHS) | wc -w
 LIBSYS = $(SDKROOT)/usr/local/lib/system
 NJOBS != perl -e '$$n = `/usr/sbin/sysctl -n hw.ncpu`; printf "%d\n", $$n < 2 ? 2 : ($$n * 1.5)'
@@ -61,10 +62,11 @@ LIPOARGS$(F) != perl -e 'printf "%s\n", join(" ", map(qq(-arch $$_ \"$(OBJROOT)/
 build-$(F): build-$(A)-$(F)
 .endfor # RC_ARCHS
 build-$(F):
+	mkdir -p $(SYMROOT)
 .if $(NARCHS) == 1
 	cp -p "$(OBJROOT)/obj.$(RC_ARCHS)/libsyscall$(SUFFIX$(F)).a" "$(SYMROOT)"
 .else
-	lipo -create $(LIPOARGS$(F)) -output $(SYMROOT)/libsyscall$(SUFFIX$(F)).a
+	xcrun -sdk $(SDKROOT) lipo -create $(LIPOARGS$(F)) -output $(SYMROOT)/libsyscall$(SUFFIX$(F)).a
 .endif
 
 .for A in $(RC_ARCHS)
@@ -72,19 +74,20 @@ build-$(A)-$(F):
 	mkdir -p $(OBJROOT)/obj.$(A) && \
 	MAKEOBJDIR="$(OBJROOT)/obj.$(A)" MACHINE_ARCH="$(A)" \
 		DSTROOT='$(DSTROOT)' OBJROOT='$(OBJROOT)' SYMROOT='$(SYMROOT)' \
-		MAKEFLAGS="" CFLAGS="-arch $(A) $(LOCAL_CFLAGS)" $(BSDMAKEJ) libsyscall$(SUFFIX$(F)).a
+		MAKEFLAGS="" MIGDEFINES="" CFLAGS="-arch $(A) $(LOCAL_CFLAGS)" $(BSDMAKEJ) libsyscall$(SUFFIX$(F)).a
 .endfor # RC_ARCHS
 .endfor # FORMS
 
 installhdrs:
 	MAKEOBJDIR="$(OBJROOT)" DESTDIR="$(DSTROOT)" MAKEFLAGS="" \
 		DSTROOT='$(DSTROOT)' OBJROOT='$(OBJROOT)' SYMROOT='$(SYMROOT)' \
+		MIGDEFINES="-DLIBSYSCALL_INTERFACE=1" \
 		$(BSDMAKE) installhdrs
 .for A in $(RC_ARCHS)
 	mkdir -p "$(OBJROOT)/obj.$(A)" && \
 	MAKEOBJDIR="$(OBJROOT)/obj.$(A)" MACHINE_ARCH="$(A)" \
 		DSTROOT='$(DSTROOT)' OBJROOT='$(OBJROOT)' SYMROOT='$(SYMROOT)' \
-		MAKEFLAGS="" $(BSDMAKE) installhdrs-md
+		MAKEFLAGS="" MIGDEFINES="" $(BSDMAKE) installhdrs-md
 .endfor # RC_ARCHS
 
 .for F in $(FORMS)
@@ -92,9 +95,10 @@ BI-install-$(F): build-$(F)
 	mkdir -p $(DSTROOT)/usr/local/lib/system
 	if [ -f "$(SYMROOT)/libsyscall$(SUFFIX$(F)).a" ]; then \
 		echo "Installing libsyscall$(SUFFIX$(F)).a" && \
-		install -c -m 444 "$(SYMROOT)/libsyscall$(SUFFIX$(F)).a" \
+		install -c -m 644 "$(SYMROOT)/libsyscall$(SUFFIX$(F)).a" \
 			$(DSTROOT)/usr/local/lib/system && \
 		ranlib "$(DSTROOT)/usr/local/lib/system/libsyscall$(SUFFIX$(F)).a"; \
+		chmod 444 "$(DSTROOT)/usr/local/lib/system/libsyscall$(SUFFIX$(F)).a"; \
 	fi
 .endfor # FORMS
 

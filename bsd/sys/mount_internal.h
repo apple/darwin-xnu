@@ -87,6 +87,15 @@
 
 struct label;
 
+#if defined(__i386__) || defined(__x86_64__)
+typedef uint64_t  pending_io_t;
+#define INCR_PENDING_IO(a, b) OSAddAtomic64((int64_t)(a), (int64_t *)&(b));
+#else
+typedef uint32_t  pending_io_t;
+#define INCR_PENDING_IO(a, b) OSAddAtomic((int32_t)(a), (int32_t *)&(b));
+#endif
+
+
 /*
  * Structure per mounted file system.  Each mounted file system has an
  * array of operations and an instance record.  The file systems are
@@ -104,26 +113,32 @@ struct mount {
 	struct vnodelst	mnt_vnodelist;		/* list of vnodes this mount */
 	struct vnodelst	mnt_workerqueue;		/* list of vnodes this mount */
 	struct vnodelst	mnt_newvnodes;		/* list of vnodes this mount */
-	int		mnt_flag;		/* flags */
-	int		mnt_kern_flag;		/* kernel only flags */
-	int		mnt_lflag;			/* mount life cycle flags */
-	int		mnt_maxsymlinklen;	/* max size of short symlink */
+	uint32_t		mnt_flag;		/* flags */
+	uint32_t		mnt_kern_flag;		/* kernel only flags */
+	uint32_t		mnt_lflag;			/* mount life cycle flags */
+	uint32_t		mnt_maxsymlinklen;	/* max size of short symlink */
 	struct vfsstatfs	mnt_vfsstat;		/* cache of filesystem stats */
 	qaddr_t		mnt_data;		/* private data */
 	/* Cached values of the IO constraints for the device */
-	u_int32_t	mnt_maxreadcnt;		/* Max. byte count for read */
-	u_int32_t	mnt_maxwritecnt;	/* Max. byte count for write */
-	u_int32_t	mnt_segreadcnt;		/* Max. segment count for read */
-	u_int32_t	mnt_segwritecnt;	/* Max. segment count for write */
-	u_int32_t	mnt_maxsegreadsize;	/* Max. segment read size  */
-	u_int32_t	mnt_maxsegwritesize;	/* Max. segment write size */
-        u_int32_t	mnt_alignmentmask;	/* Mask of bits that aren't addressable via DMA */
-	u_int32_t	mnt_devblocksize;	/* the underlying device block size */
-	u_int32_t	mnt_ioflags;		/* flags for  underlying device */
+	uint32_t	mnt_maxreadcnt;		/* Max. byte count for read */
+	uint32_t	mnt_maxwritecnt;	/* Max. byte count for write */
+	uint32_t	mnt_segreadcnt;		/* Max. segment count for read */
+	uint32_t	mnt_segwritecnt;	/* Max. segment count for write */
+	uint32_t	mnt_maxsegreadsize;	/* Max. segment read size  */
+	uint32_t	mnt_maxsegwritesize;	/* Max. segment write size */
+	uint32_t	mnt_alignmentmask;	/* Mask of bits that aren't addressable via DMA */
+	uint32_t	mnt_devblocksize;	/* the underlying device block size */
+	uint32_t	mnt_ioqueue_depth;	/* the maxiumum number of commands a device can accept */
+        uint32_t	mnt_ioscale;		/* scale the various throttles/limits imposed on the amount of I/O in flight */
+	uint32_t	mnt_ioflags;		/* flags for  underlying device */
+	pending_io_t	mnt_pending_write_size;	/* byte count of pending writes */
+	pending_io_t	mnt_pending_read_size;	/* byte count of pending reads */
+
 	lck_rw_t	mnt_rwlock;		/* mutex readwrite lock */
-        lck_mtx_t	mnt_renamelock;		/* mutex that serializes renames that change shape of tree */
+	lck_mtx_t	mnt_renamelock;		/* mutex that serializes renames that change shape of tree */
 	vnode_t		mnt_devvp;		/* the device mounted on for local file systems */
 	uint32_t	mnt_devbsdunit;		/* the BSD unit number of the device */
+	void		*mnt_throttle_info;	/* used by the throttle code */
 	int32_t		mnt_crossref;		/* refernces to cover lookups  crossing into mp */
 	int32_t		mnt_iterref;		/* refernces to cover iterations; drained makes it -ve  */
  
@@ -149,13 +164,13 @@ struct mount {
 	 * on it when we mount it
 	 */
 	vnode_t		mnt_realrootvp;
-        int		mnt_realrootvp_vid;
+	uint32_t	mnt_realrootvp_vid;
 	/*
 	 * bumped each time a mount or unmount
 	 * occurs... its used to invalidate
 	 * 'mnt_realrootvp' from the cache
 	 */
-        int             mnt_generation;
+	uint32_t             mnt_generation;
         /*
 	 * if 'MNTK_AUTH_CACHE_TIMEOUT' is 
 	 * set, then 'mnt_authcache_ttl' is
@@ -187,6 +202,11 @@ struct mount {
  * ioflags
  */
 #define MNT_IOFLAGS_FUA_SUPPORTED	0x00000001
+
+/*
+ * ioqueue depth for devices that don't report one
+ */
+#define MNT_DEFAULT_IOQUEUE_DEPTH	32
 
   
 /* XXX 3762912 hack to support HFS filesystem 'owner' */
@@ -258,7 +278,6 @@ typedef struct fhandle	fhandle_t;
  * mount time to identify the requested filesystem.
  */
 struct vfstable {
-/* THE FOLLOWING SHOULD KEEP THE SAME FOR user compat with sysctl */
 	struct	vfsops *vfc_vfsops;	/* filesystem operations vector */
 	char	vfc_name[MFSNAMELEN];	/* filesystem type name */
 	int	vfc_typenum;		/* historic filesystem type number */
@@ -266,23 +285,28 @@ struct vfstable {
 	int	vfc_flags;		/* permanent flags */
 	int	(*vfc_mountroot)(mount_t, vnode_t, vfs_context_t);	/* if != NULL, routine to mount root */
 	struct	vfstable *vfc_next;	/* next in list */
-/* Till the above we SHOULD KEEP THE SAME FOR user compat with sysctl */
-	int         vfc_threadsafe;     /* FS is thread & premeption safe */
-	lck_mtx_t   vfc_lock;		/* for non-threaded file systems */
+	int32_t	vfc_reserved1;
+	int32_t vfc_reserved2;
 	int 		vfc_vfsflags;	/* for optional types */
 	void *		vfc_descptr;	/* desc table allocated address */
 	int			vfc_descsize;	/* size allocated for desc table */
-	int 		vfc_64bitready;	/* The file system is ready for 64bit */
 };
 
 /* vfc_vfsflags: */
-#define VFC_VFSLOCALARGS	0x02
-#define	VFC_VFSGENERICARGS	0x04
-#define	VFC_VFSNATIVEXATTR	0x10
-#define	VFC_VFSDIRLINKS		0x20
-#define	VFC_VFSPREFLIGHT	0x40
-#define	VFC_VFSREADDIR_EXTENDED	0x80
+#define VFC_VFSLOCALARGS	0x002
+#define	VFC_VFSGENERICARGS	0x004
+#define	VFC_VFSNATIVEXATTR	0x010
+#define	VFC_VFSDIRLINKS		0x020
+#define	VFC_VFSPREFLIGHT	0x040
+#define	VFC_VFSREADDIR_EXTENDED	0x080
+#define	VFC_VFS64BITREADY	0x100
+#ifndef __LP64__
+#define	VFC_VFSTHREADSAFE	0x200
+#endif /* __LP64__ */
 #define	VFC_VFSNOMACLABEL	0x1000
+#define	VFC_VFSVNOP_PAGEINV2	0x2000
+#define	VFC_VFSVNOP_PAGEOUTV2	0x4000
+
 
 extern int maxvfsconf;		/* highest defined filesystem type */
 extern struct vfstable  *vfsconf;	/* head of list of filesystem types */
@@ -308,35 +332,57 @@ struct vfsmount_args {
 
 
 /*
- * LP64 version of statfs structure.
+ * LP64 *user* version of statfs structure.
  * NOTE - must be kept in sync with struct statfs in mount.h
  */
-struct user_statfs {
+struct user64_statfs {
 	short		f_otype;		/* TEMPORARY SHADOW COPY OF f_type */
 	short		f_oflags;		/* TEMPORARY SHADOW COPY OF f_flags */
-	user_long_t	f_bsize __attribute((aligned(8)));		/* fundamental file system block size */
-	user_long_t	f_iosize;		/* optimal transfer block size */
-	user_long_t	f_blocks;		/* total data blocks in file system */
-	user_long_t	f_bfree;		/* free blocks in fs */
-	user_long_t	f_bavail;		/* free blocks avail to non-superuser */
-	user_long_t	f_files;		/* total file nodes in file system */
-	user_long_t	f_ffree;		/* free file nodes in fs */
+	user64_long_t	f_bsize;		/* fundamental file system block size */
+	user64_long_t	f_iosize;		/* optimal transfer block size */
+	user64_long_t	f_blocks;		/* total data blocks in file system */
+	user64_long_t	f_bfree;		/* free blocks in fs */
+	user64_long_t	f_bavail;		/* free blocks avail to non-superuser */
+	user64_long_t	f_files;		/* total file nodes in file system */
+	user64_long_t	f_ffree;		/* free file nodes in fs */
 	fsid_t		f_fsid;			/* file system id */
 	uid_t		f_owner;		/* user that mounted the filesystem */
 	short		f_reserved1;	/* spare for later */
 	short		f_type;			/* type of filesystem */
-    user_long_t	f_flags;		/* copy of mount exported flags */
-	user_long_t f_reserved2[2];	/* reserved for future use */
+    user64_long_t	f_flags;		/* copy of mount exported flags */
+	user64_long_t f_reserved2[2];	/* reserved for future use */
 	char		f_fstypename[MFSNAMELEN]; /* fs type name */
 	char		f_mntonname[MNAMELEN];	/* directory on which mounted */
 	char		f_mntfromname[MNAMELEN];/* mounted filesystem */
-#if COMPAT_GETFSSTAT
-	char		f_reserved3[0];	/* For alignment */
-	user_long_t	f_reserved4[0];	/* For future use */
-#else
 	char		f_reserved3;	/* For alignment */
-	user_long_t	f_reserved4[4] __attribute((aligned(8)));	/* For future use */
-#endif
+	user64_long_t	f_reserved4[4];	/* For future use */
+};
+
+/*
+ * ILP32 *user* version of statfs structure.
+ * NOTE - must be kept in sync with struct statfs in mount.h
+ */
+struct user32_statfs {
+	short		f_otype;		/* TEMPORARY SHADOW COPY OF f_type */
+	short		f_oflags;		/* TEMPORARY SHADOW COPY OF f_flags */
+	user32_long_t	f_bsize;		/* fundamental file system block size */
+	user32_long_t	f_iosize;		/* optimal transfer block size */
+	user32_long_t	f_blocks;		/* total data blocks in file system */
+	user32_long_t	f_bfree;		/* free blocks in fs */
+	user32_long_t	f_bavail;		/* free blocks avail to non-superuser */
+	user32_long_t	f_files;		/* total file nodes in file system */
+	user32_long_t	f_ffree;		/* free file nodes in fs */
+	fsid_t		f_fsid;			/* file system id */
+	uid_t		f_owner;		/* user that mounted the filesystem */
+	short		f_reserved1;	/* spare for later */
+	short		f_type;			/* type of filesystem */
+    user32_long_t	f_flags;		/* copy of mount exported flags */
+	user32_long_t f_reserved2[2];	/* reserved for future use */
+	char		f_fstypename[MFSNAMELEN]; /* fs type name */
+	char		f_mntonname[MNAMELEN];	/* directory on which mounted */
+	char		f_mntfromname[MNAMELEN];/* mounted filesystem */
+	char		f_reserved3;	/* For alignment */
+	user32_long_t	f_reserved4[4];	/* For future use */
 };
 
 /*
@@ -350,13 +396,14 @@ struct user_statfs {
 
 __BEGIN_DECLS
 
-extern int mount_generation;
+extern uint32_t mount_generation;
 extern TAILQ_HEAD(mntlist, mount) mountlist;
 void mount_list_lock(void);
 void mount_list_unlock(void);
 void mount_lock_init(mount_t);
 void mount_lock_destroy(mount_t);
 void mount_lock(mount_t);
+void mount_lock_spin(mount_t);
 void mount_unlock(mount_t);
 void mount_lock_renames(mount_t);
 void mount_unlock_renames(mount_t);
@@ -366,7 +413,6 @@ int  mount_refdrain(mount_t);
 
 /* vfs_rootmountalloc should be kept as a private api */
 errno_t vfs_rootmountalloc(const char *, const char *, mount_t *mpp);
-errno_t	vfs_init_io_attributes(vnode_t, mount_t);
 
 int	vfs_mountroot(void);
 void	vfs_unmountall(void);
@@ -377,7 +423,7 @@ int	dounmount(struct mount *, int, int, vfs_context_t);
 void  mount_dropcrossref(mount_t, vnode_t, int);
 mount_t mount_lookupby_volfsid(int, int);
 mount_t mount_list_lookupby_fsid(fsid_t *, int, int);
-void mount_list_add(mount_t);
+int  mount_list_add(mount_t);
 void mount_list_remove(mount_t);
 int  mount_iterref(mount_t, int);
 int  mount_isdrained(mount_t, int);
@@ -388,7 +434,7 @@ void mount_iterreset(mount_t);
 /* throttled I/O api */
 int throttle_get_io_policy(struct uthread **ut);
 extern void throttle_lowpri_io(boolean_t ok_to_sleep);
-int throttle_io_will_be_throttled(int lowpri_window_msecs, size_t devbsdunit);
+int throttle_io_will_be_throttled(int lowpri_window_msecs, mount_t mp);
 
 __END_DECLS
 

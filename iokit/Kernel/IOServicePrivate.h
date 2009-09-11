@@ -84,7 +84,8 @@ public:
     OSOrderedSet *			whence;
 
     OSDictionary *			matching;
-    IOServiceNotificationHandler	handler;
+    IOServiceMatchingNotificationHandler handler;
+    IOServiceNotificationHandler	compatHandler;
     void *				target;
     void *				ref;
     SInt32				priority;
@@ -130,7 +131,7 @@ public:
     virtual void free();
 
     static void configThread( void );
-    static void main( _IOConfigThread * self );
+    static void main( void * arg, wait_result_t result );
 };
 
 enum {

@@ -76,6 +76,7 @@ bool OSSet::initWithObjects(const OSObject *inObjects[],
         return false;
 
     for ( unsigned int i = 0; i < inCount; i++ ) {
+// xx-review: no test here for failure of setObject()
         if (members->getCount() < inCapacity)
             setObject(inObjects[i]);
         else
@@ -208,6 +209,8 @@ bool OSSet::merge(const OSArray *array)
     const OSMetaClassBase *anObject;
     bool retVal = false;
 
+// xx-review: if any setObject fails due to memory allocation failure,
+// xx-review: this function should return false
     for (int i = 0; (anObject = array->getObject(i)); i++)
         if (setObject(anObject))
             retVal = true;

@@ -66,7 +66,7 @@
 #ifdef __ppc__
 #include <ppc/mappings.h>
 #endif
-#ifdef __i386
+#if defined(__i386__) || defined(__x86_64__)
 #include <i386/pmap.h>
 #endif
 #include <IOKit/IOTypes.h>
@@ -117,6 +117,7 @@ extern io_object_t iokit_lookup_connect_ref_current_task(io_object_t clientRef);
 
 extern void iokit_retain_port( ipc_port_t port );
 extern void iokit_release_port( ipc_port_t port );
+extern void iokit_release_port_send( ipc_port_t port );
 
 extern kern_return_t iokit_switch_object_port( ipc_port_t port, io_object_t obj, ipc_kobject_type_t type );
 
@@ -187,11 +188,11 @@ iokit_lookup_connect_ref(io_object_t connectRef, ipc_space_t space)
 {
 	io_object_t obj = NULL;
 
-	if (connectRef && MACH_PORT_VALID((mach_port_name_t)connectRef)) {
+	if (connectRef && MACH_PORT_VALID(CAST_MACH_PORT_TO_NAME(connectRef))) {
 		ipc_port_t port;
 		kern_return_t kr;
 
-		kr = ipc_object_translate(space, (mach_port_name_t)connectRef, MACH_PORT_RIGHT_SEND, (ipc_object_t *)&port);
+		kr = ipc_object_translate(space, CAST_MACH_PORT_TO_NAME(connectRef), MACH_PORT_RIGHT_SEND, (ipc_object_t *)&port);
 
 		if (kr == KERN_SUCCESS) {
             assert(IP_VALID(port));
@@ -224,6 +225,12 @@ EXTERN void
 iokit_release_port( ipc_port_t port )
 {
     ipc_port_release( port );
+}
+
+EXTERN void
+iokit_release_port_send( ipc_port_t port )
+{
+    ipc_port_release_send( port );
 }
 
 /*
@@ -436,7 +443,7 @@ iokit_notify( mach_msg_header_t * msg )
 /* need to create a pmap function to generalize */
 unsigned int IODefaultCacheBits(addr64_t pa)
 {
-	return(pmap_cache_attributes(pa >> PAGE_SHIFT));
+	return(pmap_cache_attributes((ppnum_t)(pa >> PAGE_SHIFT)));
 }
 
 kern_return_t IOMapPages(vm_map_t map, mach_vm_address_t va, mach_vm_address_t pa,
@@ -549,7 +556,7 @@ ppnum_t IOGetLastPageNumber(void)
     for (idx = 0; idx < pmap_mem_regions_count; idx++)
     {
 	lastPage = pmap_mem_regions[idx].mrEnd;
-#elif __i386__
+#elif __i386__ || __x86_64__
     for (idx = 0; idx < pmap_memory_region_count; idx++)
     {
 	lastPage = pmap_memory_regions[idx].end - 1;
@@ -566,6 +573,10 @@ ppnum_t IOGetLastPageNumber(void)
 void IOGetTime( mach_timespec_t * clock_time);
 void IOGetTime( mach_timespec_t * clock_time)
 {
-	clock_get_system_nanotime(&clock_time->tv_sec, (uint32_t *) &clock_time->tv_nsec);
+	clock_sec_t sec;
+	clock_nsec_t nsec;
+	clock_get_system_nanotime(&sec, &nsec);
+	clock_time->tv_sec = (typeof(clock_time->tv_sec))sec;
+	clock_time->tv_nsec = nsec;
 }
 

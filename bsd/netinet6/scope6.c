@@ -45,6 +45,8 @@
 #include <netinet6/in6_var.h>
 #include <netinet6/scope6_var.h>
 
+extern lck_mtx_t *scope6_mutex;
+
 struct scope6_id {
 	/*
 	 * 16 is correspondent to 4bit multicast scope field.
@@ -52,10 +54,10 @@ struct scope6_id {
 	 */
 	u_int32_t s6id_list[16];
 };
-static size_t if_indexlim = 8;
+static size_t if_scope_indexlim = 8;
 struct scope6_id *scope6_ids = NULL;
 
-void
+int
 scope6_ifattach(
 	struct ifnet *ifp)
 {
@@ -63,17 +65,24 @@ scope6_ifattach(
 	 * We have some arrays that should be indexed by if_index.
 	 * since if_index will grow dynamically, they should grow too.
 	 */
-	if (scope6_ids == NULL || if_index >= if_indexlim) {
+	lck_mtx_lock(scope6_mutex);
+	if (scope6_ids == NULL || if_index >= if_scope_indexlim) {
 		size_t n;
 		caddr_t q;
+		int newlim = if_scope_indexlim;
 
-		while (if_index >= if_indexlim)
-			if_indexlim <<= 1;
+		while (if_index >= newlim)
+			newlim <<= 1;
 
 		/* grow scope index array */
-		n = if_indexlim * sizeof(struct scope6_id);
+		n = newlim * sizeof(struct scope6_id);
 		/* XXX: need new malloc type? */
 		q = (caddr_t)_MALLOC(n, M_IFADDR, M_WAITOK);
+		if (q == NULL) {
+			lck_mtx_unlock(scope6_mutex);
+			return ENOBUFS;
+		}
+		if_scope_indexlim = newlim;
 		bzero(q, n);
 		if (scope6_ids) {
 			bcopy((caddr_t)scope6_ids, q, n/2);
@@ -86,7 +95,8 @@ scope6_ifattach(
 
 	/* don't initialize if called twice */
 	if (SID.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL]) {
-		return;
+		lck_mtx_unlock(scope6_mutex);
+		return 0;
 	}
 
 	/*
@@ -100,6 +110,9 @@ scope6_ifattach(
 	SID.s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL] = 1;
 #endif
 #undef SID
+	lck_mtx_unlock(scope6_mutex);
+
+	return 0;
 }
 
 int
@@ -123,6 +136,7 @@ scope6_set(
 	 * interface addresses, routing table entries, PCB entries... 
 	 */
 
+	lck_mtx_lock(scope6_mutex);
 	for (i = 0; i < 16; i++) {
 		if (idlist[i] &&
 		    idlist[i] != scope6_ids[ifp->if_index].s6id_list[i]) {
@@ -134,6 +148,7 @@ scope6_set(
 				 * IDs, but we check the consistency for
 				 * safety in later use.
 				 */
+				lck_mtx_unlock(scope6_mutex);
 				return(EINVAL);
 			}
 
@@ -145,6 +160,7 @@ scope6_set(
 			scope6_ids[ifp->if_index].s6id_list[i] = idlist[i];
 		}
 	}
+	lck_mtx_unlock(scope6_mutex);
 
 	return(error);
 }
@@ -157,8 +173,10 @@ scope6_get(
 	if (scope6_ids == NULL)	/* paranoid? */
 		return(EINVAL);
 
+	lck_mtx_lock(scope6_mutex);
 	bcopy(scope6_ids[ifp->if_index].s6id_list, idlist,
 	      sizeof(scope6_ids[ifp->if_index].s6id_list));
+	lck_mtx_unlock(scope6_mutex);
 
 	return(0);
 }
@@ -230,30 +248,38 @@ in6_addr2scopeid(
 {
 	int scope = in6_addrscope(addr);
 	int index = ifp->if_index;
+	int retid = 0;
 
 	if (scope6_ids == NULL)	/* paranoid? */
 		return(0);	/* XXX */
-	if (index >= if_indexlim)
+	
+	lck_mtx_lock(scope6_mutex);
+	if (index >= if_scope_indexlim) {
+		lck_mtx_unlock(scope6_mutex);
 		return(0);	/* XXX */
+	}
 
 #define SID scope6_ids[index]
 	switch(scope) {
 	case IPV6_ADDR_SCOPE_NODELOCAL:
-		return(-1);	/* XXX: is this an appropriate value? */
-
+		retid = -1;	/* XXX: is this an appropriate value? */
+		break;
 	case IPV6_ADDR_SCOPE_LINKLOCAL:
-		return(SID.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL]);
-
+		retid=SID.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL];
+		break;
 	case IPV6_ADDR_SCOPE_SITELOCAL:
-		return(SID.s6id_list[IPV6_ADDR_SCOPE_SITELOCAL]);
-
+		retid=SID.s6id_list[IPV6_ADDR_SCOPE_SITELOCAL];
+		break;
 	case IPV6_ADDR_SCOPE_ORGLOCAL:
-		return(SID.s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL]);
-
+		retid=SID.s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL];
+		break;
 	default:
-		return(0);	/* XXX: treat as global. */
+		break;	/* XXX: value 0, treat as global. */
 	}
 #undef SID
+
+	lck_mtx_unlock(scope6_mutex);
+	return retid;
 }
 
 void
@@ -266,12 +292,14 @@ scope6_setdefault(
 	 * We might eventually have to separate the notion of "link" from
 	 * "interface" and provide a user interface to set the default.
 	 */
+	lck_mtx_lock(scope6_mutex);
 	if (ifp) {
 		scope6_ids[0].s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] =
 			ifp->if_index;
 	}
 	else
 		scope6_ids[0].s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] = 0;
+	lck_mtx_unlock(scope6_mutex);
 }
 
 int
@@ -281,8 +309,10 @@ scope6_get_default(
 	if (scope6_ids == NULL)	/* paranoid? */
 		return(EINVAL);
 
+	lck_mtx_lock(scope6_mutex);
 	bcopy(scope6_ids[0].s6id_list, idlist,
 	      sizeof(scope6_ids[0].s6id_list));
+	lck_mtx_unlock(scope6_mutex);
 
 	return(0);
 }
@@ -291,5 +321,10 @@ u_int32_t
 scope6_addr2default(
 	struct in6_addr *addr)
 {
-	return(scope6_ids[0].s6id_list[in6_addrscope(addr)]);
+	u_int32_t id = 0;
+	int index = in6_addrscope(addr);
+	lck_mtx_lock(scope6_mutex);
+	id = scope6_ids[0].s6id_list[index];
+	lck_mtx_unlock(scope6_mutex);
+	return (id);
 }

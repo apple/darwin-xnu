@@ -54,11 +54,6 @@ OPTIONS/mach_mp_debug		optional mach_mp_debug
 OPTIONS/mach_pagemap		optional mach_pagemap
 OPTIONS/mach_rt			optional mach_rt
 OPTIONS/advisory_pageout	optional advisory_pageout
-#
-# MACH_RT is real-time.  MACH_TR is debugging.
-# Unfortunate choice of letters.
-#
-OPTIONS/mach_tr			optional mach_tr
 OPTIONS/mach_vm_debug		optional mach_vm_debug
 OPTIONS/mach_page_hash_stats    optional mach_page_hash_stats
 OPTIONS/mig_debug		optional mig_debug
@@ -75,6 +70,7 @@ OPTIONS/task_swapper		optional task_swapper
 OPTIONS/stack_usage		optional stack_usage
 
 OPTIONS/config_dtrace		optional config_dtrace
+OPTIONS/config_counters		optional config_counters
 
 # Default pager and system pager files, to be moved to separate component
  
@@ -93,6 +89,11 @@ osfmk/default_pager/dp_memory_object.c	standard
 # lockd files
 #
 ./lockd/lockd_mach.c				standard
+
+#
+# kextd files
+#
+./kextd/kextd_mach.c				standard
 
 #
 # UserNotification files
@@ -145,6 +146,7 @@ osfmk/ipc/mach_port.c			standard
 osfmk/ipc/mig_log.c			optional mig_debug
 osfmk/kern/affinity.c			standard
 osfmk/kern/ast.c			standard
+osfmk/kern/audit_sessionport.c		optional config_audit
 osfmk/kern/clock.c			standard
 osfmk/kern/clock_oldops.c		standard
 osfmk/kern/counters.c			standard
@@ -195,7 +197,7 @@ osfmk/kern/xpr.c			optional xpr_debug
 osfmk/kern/zalloc.c			standard
 osfmk/kern/bsd_kern.c		optional mach_bsd
 osfmk/kern/hibernate.c		optional hibernation
-osfmk/kern/symbols.c			standard
+osfmk/pmc/pmc.c				standard 
 ./mach/clock_server.c			standard
 ./mach/clock_priv_server.c		standard
 ./mach/clock_reply_user.c		standard
@@ -226,14 +228,12 @@ osfmk/kern/symbols.c			standard
 #
 ./mach/processor_server.c		standard
 ./mach/processor_set_server.c		standard
-./mach/semaphore_server.c		standard
 ./mach/task_server.c			standard
 ./mach/thread_act_server.c		standard
-./mach/vm_map_server.c			standard
+./mach/vm32_map_server.c		standard
 ./mach/security_server.c		optional config_macf
 
-osfmk/mach-o/mach_header.c		standard
-
+osfmk/vm/bsd_vm.c			optional mach_bsd
 osfmk/vm/device_vm.c			standard
 osfmk/vm/memory_object.c		standard
 osfmk/vm/vm_debug.c			standard
@@ -244,11 +244,12 @@ osfmk/vm/vm_kern.c			standard
 osfmk/vm/vm_map.c			standard
 osfmk/vm/vm_object.c			standard
 osfmk/vm/vm_pageout.c			standard
+osfmk/vm/vm_purgeable.c			standard
 osfmk/vm/vm_resident.c			standard
 osfmk/vm/vm_shared_region.c		standard
+osfmk/vm/vm_swapfile_pager.c		standard
 osfmk/vm/vm_user.c			standard
-osfmk/vm/bsd_vm.c			optional mach_bsd
-osfmk/vm/vm_purgeable.c			standard
+osfmk/vm/vm32_user.c			standard
 
 #
 # IOKit files, for a while
@@ -258,6 +259,7 @@ osfmk/device/iokit_rpc.c		optional iokit
 osfmk/device/device_init.c		optional iokit
 
 # kernel module loader interface
+osfmk/kern/kext_alloc.c     standard
 osfmk/kern/kmod.c			standard
 
 #
@@ -277,3 +279,4 @@ osfmk/chud/chud_osfmk_callback.c	standard
 osfmk/chud/chud_thread.c		standard
 
 osfmk/console/serial_general.c	standard
+

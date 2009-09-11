@@ -66,7 +66,6 @@
 
 #include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_UNSTABLE
 /*
  * This structure is used for the management of descriptors.  It may be
  * shared by multiple processes.
@@ -84,6 +83,8 @@
 #define NDFILE		25		/* 125 bytes */
 #define NDEXTENT	50		/* 250 bytes in 256-byte alloc. */ 
 
+#ifdef BSD_KERNEL_PRIVATE
+
 struct klist;
 
 struct filedesc {
@@ -95,7 +96,7 @@ struct filedesc {
 	int	fd_lastfile;		/* high-water mark of fd_ofiles */
 	int	fd_freefile;		/* approx. next free file */
 	u_short	fd_cmask;		/* mask for file creation */
-	u_long	fd_refcnt;		/* reference count */
+	uint32_t	fd_refcnt;		/* reference count */
 
 	int     fd_knlistsize;          /* size of knlist */
 	struct  klist *fd_knlist;       /* list of attached knotes */
@@ -152,6 +153,6 @@ extern void	fdexec(proc_t p);
 
 #endif /* KERNEL */
 
-#endif /* __APPLE_API_UNSTABLE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* !_SYS_FILEDESC_H_ */

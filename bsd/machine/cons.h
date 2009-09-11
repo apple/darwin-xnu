@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -25,15 +25,59 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#ifndef _BSD_MACHINE_CONS_H_
-#define _BSD_MACHINE_CONS_H_
+/* 
+ * Copyright (c) 1987 NeXT, Inc.
+ */
+ 
+struct consdev {
+	char	*cn_name;	/* name of device in dev_name_list */
+	int	(*cn_probe)(void);	/* probe and fill in consdev info */
+	int	(*cn_init)(void);	/* turn on as console */
+	int	(*cn_getc)(void);	/* kernel getchar interface */
+	int	(*cn_putc)(void);	/* kernel putchar interface */
+	struct	tty *cn_tp;	/* tty structure for console device */
+	dev_t	cn_dev;		/* major/minor of device */
+	short	cn_pri;		/* pecking order; the higher the better */
+};
 
-#if defined (__ppc__) || defined (__ppc64__)
-#include <dev/ppc/cons.h>
-#elif defined (__i386__) || defined(__x86_64__)
-#include <dev/i386/cons.h>
-#else
-#error architecture not supported
+/* values for cn_pri - reflect our policy for console selection */
+#define	CN_DEAD		0	/* device doesn't exist */
+#define CN_NORMAL	1	/* device exists but is nothing special */
+#define CN_INTERNAL	2	/* "internal" bit-mapped display */
+#define CN_REMOTE	3	/* serial interface with remote bit set */
+
+/* XXX */
+#define	CONSMAJOR	0
+
+#ifdef KERNEL
+
+#include <sys/types.h>
+#include <sys/conf.h>
+
+extern	struct consdev constab[];
+extern	struct consdev *cn_tab;
+extern	struct tty *cn_tty;
+
+extern struct tty	*constty;		/* current console device */
+
+int consopen(dev_t, int, int, struct proc *);
+int consclose(dev_t, int, int, struct proc *);
+int consread(dev_t, struct uio *, int);
+int conswrite(dev_t, struct uio *, int);
+int consioctl(dev_t, u_long, caddr_t, int, struct proc *);
+int consselect(dev_t, int, void *, struct proc *);
+
+/*
+ * These really want their own header file, but this is the only one in
+ * common, and the km device is the keyboard monitor, so it's technically a
+ * part of the console.
+ */
+int kmopen(dev_t, int, int, struct proc *);
+int kmclose(dev_t, int, int, struct proc *);
+int kmread(dev_t, struct uio *, int);
+int kmwrite(dev_t, struct uio *, int);
+int kmioctl(dev_t, u_long, caddr_t, int, struct proc *);
+int kmputc(dev_t, char);
+
 #endif
 
-#endif /* _BSD_MACHINE_CONS_H_ */

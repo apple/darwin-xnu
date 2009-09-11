@@ -1,3 +1,30 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
 /*	$FreeBSD: src/sys/netinet6/nd6_nbr.c,v 1.4.2.4 2001/07/06 05:32:25 sumikawa Exp $	*/
 /*	$KAME: nd6_nbr.c,v 1.64 2001/05/17 03:48:30 itojun Exp $	*/
 
@@ -105,12 +132,12 @@ nd6_ns_input(
 	struct in6_addr taddr6;
 	struct in6_addr myaddr6;
 	char *lladdr = NULL;
-	struct ifaddr *ifa;
+	struct ifaddr *ifa = NULL;
 	int lladdrlen = 0;
 	int anycast = 0, proxy = 0, tentative = 0;
 	int tlladdr;
 	union nd_opts ndopts;
-	struct sockaddr_dl *proxydl = NULL;
+	struct sockaddr_dl proxydl;
 
 #ifndef PULLDOWN_TEST
 	IP6_EXTHDR_CHECK(m, off, icmp6len, return);
@@ -216,21 +243,24 @@ nd6_ns_input(
 		tsin6.sin6_family = AF_INET6;
 		tsin6.sin6_addr = taddr6;
 
-		rt = rtalloc1((struct sockaddr *)&tsin6, 0, 0UL);
-		if (rt && (rt->rt_flags & RTF_ANNOUNCE) != 0 &&
-		    rt->rt_gateway->sa_family == AF_LINK) {
-			/*
-			 * proxy NDP for single entry
-			 */
-			ifa = (struct ifaddr *)in6ifa_ifpforlinklocal(ifp,
-				IN6_IFF_NOTREADY|IN6_IFF_ANYCAST);
-			if (ifa) {
-				proxy = 1;
-				proxydl = SDL(rt->rt_gateway);
+		rt = rtalloc1((struct sockaddr *)&tsin6, 0, 0);
+		if (rt != NULL) {
+			RT_LOCK(rt);
+			if ((rt->rt_flags & RTF_ANNOUNCE) != 0 &&
+			    rt->rt_gateway->sa_family == AF_LINK) {
+				/*
+				 * proxy NDP for single entry
+				 */
+				ifa = (struct ifaddr *)in6ifa_ifpforlinklocal(
+				    ifp, IN6_IFF_NOTREADY|IN6_IFF_ANYCAST);
+				if (ifa) {
+					proxy = 1;
+					proxydl = *SDL(rt->rt_gateway);
+				}
 			}
-		}
-		if (rt)
+			RT_UNLOCK(rt);
 			rtfree(rt);
+		}
 	}
 	if (!ifa) {
 		/*
@@ -302,7 +332,7 @@ nd6_ns_input(
 			      ((anycast || proxy || !tlladdr)
 				      ? 0 : ND_NA_FLAG_OVERRIDE)
 			      	| (ip6_forwarding ? ND_NA_FLAG_ROUTER : 0),
-			      tlladdr, (struct sockaddr *)proxydl);
+		      tlladdr, proxy ? (struct sockaddr *)&proxydl : NULL);
 		goto freeit;
 	}
 
@@ -312,9 +342,11 @@ nd6_ns_input(
 		      ((anycast || proxy || !tlladdr) ? 0 : ND_NA_FLAG_OVERRIDE)
 			| (ip6_forwarding ? ND_NA_FLAG_ROUTER : 0)
 			| ND_NA_FLAG_SOLICITED,
-		      tlladdr, (struct sockaddr *)proxydl);
+		      tlladdr, proxy ? (struct sockaddr *)&proxydl : NULL);
  freeit:
 	m_freem(m);
+	if (ifa != NULL)
+		ifafree(ifa);
 	return;
 
  bad:
@@ -323,6 +355,8 @@ nd6_ns_input(
 	nd6log((LOG_ERR, "nd6_ns_input: tgt=%s\n", ip6_sprintf(&taddr6)));
 	icmp6stat.icp6s_badns++;
 	m_freem(m);
+	if (ifa != NULL)
+		ifafree(ifa);
 }
 
 /*
@@ -333,6 +367,9 @@ nd6_ns_input(
  *
  * Based on RFC 2461
  * Based on RFC 2462 (duplicated address detection)
+ *
+ * Caller must bump up ln->ln_rt refcnt to make sure 'ln' doesn't go
+ * away if there is a llinfo_nd6 passed in.
  */
 void
 nd6_ns_output(
@@ -438,30 +475,53 @@ nd6_ns_output(
 		 * - saddr6 belongs to the outgoing interface.
 		 * Otherwise, we perform a scope-wise match.
 		 */
-		struct ip6_hdr *hip6;		/* hold ip6 */
-		struct in6_addr *saddr6;
+		struct ip6_hdr *hip6 = NULL;	/* hold ip6 */
+		struct in6_addr saddr6;
 
-		if (ln && ln->ln_hold) {
-			hip6 = mtod(ln->ln_hold, struct ip6_hdr *);
-			/* XXX pullup? */
-			if (sizeof(*hip6) < ln->ln_hold->m_len)
-				saddr6 = &hip6->ip6_src;
-			else
-				saddr6 = NULL;
-		} else
-			saddr6 = NULL;
-		if (saddr6 && in6ifa_ifpwithaddr(ifp, saddr6))
-			bcopy(saddr6, &ip6->ip6_src, sizeof(*saddr6));
-		else {
+		/* Caller holds ref on this route */
+		if (ln != NULL) {
+			RT_LOCK(ln->ln_rt);
+			if (ln->ln_hold != NULL) {
+				hip6 = mtod(ln->ln_hold, struct ip6_hdr *);
+				/* XXX pullup? */
+				if (sizeof (*hip6) < ln->ln_hold->m_len)
+					saddr6 = hip6->ip6_src;
+				else
+					hip6 = NULL;
+			}
+			/*
+			 * hip6 is used only to indicate whether or
+			 * not there is a valid source address from
+			 * the held packet in ln_hold.  For obvious
+			 * reasons we should not dereference it after
+			 * releasing the lock though we can simply
+			 * test if it's non-NULL.
+			 */
+			RT_UNLOCK(ln->ln_rt);
+		}
+
+		if (ia != NULL)
+			ifafree(&ia->ia_ifa);
+		if (hip6 != NULL && (ia = in6ifa_ifpwithaddr(ifp, &saddr6))) {
+			bcopy(&saddr6, &ip6->ip6_src, sizeof (saddr6));
+		} else {
 			ia = in6_ifawithifp(ifp, &ip6->ip6_dst);
 			if (ia == NULL) {
-				if (ln && ln->ln_hold)
-					m_freem(ln->ln_hold);
-				ln->ln_hold = NULL;
+				if (ln != NULL) {
+					RT_LOCK(ln->ln_rt);
+					if (ln->ln_hold != NULL)
+						m_freem(ln->ln_hold);
+					ln->ln_hold = NULL;
+					RT_UNLOCK(ln->ln_rt);
+				}
 				m_freem(m);
 				return;
 			}
 			ip6->ip6_src = ia->ia_addr.sin6_addr;
+		}
+		if (ia != NULL) {
+			ifafree(&ia->ia_ifa);
+			ia = NULL;
 		}
 #endif
 	} else {
@@ -555,7 +615,7 @@ nd6_na_input(
 	int is_override;
 	char *lladdr = NULL;
 	int lladdrlen = 0;
-	struct ifaddr *ifa;
+	struct ifaddr *ifa = NULL;
 	struct llinfo_nd6 *ln;
 	struct rtentry *rt;
 	struct sockaddr_dl *sdl;
@@ -651,12 +711,18 @@ nd6_na_input(
 
 	/*
 	 * If no neighbor cache entry is found, NA SHOULD silently be discarded.
+	 * Callee returns a locked route upon success.
 	 */
-	rt = nd6_lookup(&taddr6, 0, ifp, 0);
-	if ((rt == NULL) ||
-	   ((ln = (struct llinfo_nd6 *)rt->rt_llinfo) == NULL) ||
-	   ((sdl = SDL(rt->rt_gateway)) == NULL))
+	if ((rt = nd6_lookup(&taddr6, 0, ifp, 0)) == NULL)
 		goto freeit;
+
+	RT_LOCK_ASSERT_HELD(rt);
+	if ((ln = rt->rt_llinfo) == NULL ||
+	    (sdl = SDL(rt->rt_gateway)) == NULL) {
+		RT_REMREF_LOCKED(rt);
+		RT_UNLOCK(rt);
+		goto freeit;
+	}
 
 	getmicrotime(&timenow);
 	if (ln->ln_state == ND6_LLINFO_INCOMPLETE) {
@@ -664,8 +730,11 @@ nd6_na_input(
 		 * If the link-layer has address, and no lladdr option came,
 		 * discard the packet.
 		 */
-		if (ifp->if_addrlen && !lladdr)
+		if (ifp->if_addrlen && !lladdr) {
+			RT_REMREF_LOCKED(rt);
+			RT_UNLOCK(rt);
 			goto freeit;
+		}
 
 		/*
 		 * Record link-layer address, and update the state.
@@ -675,9 +744,12 @@ nd6_na_input(
 		if (is_solicited) {
 			ln->ln_state = ND6_LLINFO_REACHABLE;
 			ln->ln_byhint = 0;
-			if (ln->ln_expire)
+			if (ln->ln_expire) {
+				lck_rw_lock_shared(nd_if_rwlock);
 				ln->ln_expire = timenow.tv_sec +
 				    nd_ifinfo[rt->rt_ifp->if_index].reachable;
+				lck_rw_done(nd_if_rwlock);
+			}
 		} else {
 			ln->ln_state = ND6_LLINFO_STALE;
 			ln->ln_expire = timenow.tv_sec + nd6_gctimer;
@@ -688,7 +760,9 @@ nd6_na_input(
 			 * non-reachable to probably reachable, and might
 			 * affect the status of associated prefixes..
 			 */
+			RT_UNLOCK(rt);
 			pfxlist_onlink_check(0);
+			RT_LOCK(rt);
 		}
 	} else {
 		int llchange;
@@ -736,6 +810,8 @@ nd6_na_input(
 				ln->ln_state = ND6_LLINFO_STALE;
 				ln->ln_expire = timenow.tv_sec + nd6_gctimer;
 			}
+			RT_REMREF_LOCKED(rt);
+			RT_UNLOCK(rt);
 			goto freeit;
 		} else if (is_override				   /* (2a) */
 			|| (!is_override && (lladdr && !llchange)) /* (2b) */
@@ -757,8 +833,10 @@ nd6_na_input(
 				ln->ln_state = ND6_LLINFO_REACHABLE;
 				ln->ln_byhint = 0;
 				if (ln->ln_expire) {
+					lck_rw_lock_shared(nd_if_rwlock);
 					ln->ln_expire = timenow.tv_sec +
 					    nd_ifinfo[ifp->if_index].reachable;
+					lck_rw_done(nd_if_rwlock);
 				}
 			} else {
 				if (lladdr && llchange) {
@@ -776,6 +854,7 @@ nd6_na_input(
 			 */
 			struct nd_defrouter *dr;
 			struct in6_addr *in6;
+			struct ifnet *rt_ifp = rt->rt_ifp;
 
 			in6 = &((struct sockaddr_in6 *)rt_key(rt))->sin6_addr;
 
@@ -785,15 +864,16 @@ nd6_na_input(
 			 * is only called under the network software interrupt
 			 * context.  However, we keep it just for safety.  
 			 */
+			RT_UNLOCK(rt);
 			lck_mtx_lock(nd6_mutex);
-			dr = defrouter_lookup(in6, rt->rt_ifp);
+			dr = defrouter_lookup(in6, rt_ifp);
 			if (dr) {
 				defrtrlist_del(dr, 1);
 				lck_mtx_unlock(nd6_mutex);
 			}
 			else {
 				lck_mtx_unlock(nd6_mutex);
-				if (!ip6_forwarding && (ip6_accept_rtadv || (rt->rt_ifp->if_eflags & IFEF_ACCEPT_RTADVD))) {
+				if (!ip6_forwarding && (ip6_accept_rtadv || (rt_ifp->if_eflags & IFEF_ACCEPT_RTADVD))) {
 					/*
 				 	 * Even if the neighbor is not in the default
 					 * router list, the neighbor may be used
@@ -801,31 +881,42 @@ nd6_na_input(
 					 * (e.g. redirect case). So we must
 					 * call rt6_flush explicitly.
 					 */
-					rt6_flush(&ip6->ip6_src, rt->rt_ifp);
+					rt6_flush(&ip6->ip6_src, rt_ifp);
 				}
 			}
+			RT_LOCK(rt);
 		}
 		ln->ln_router = is_router;
 	}
+	RT_LOCK_ASSERT_HELD(rt);
 	rt->rt_flags &= ~RTF_REJECT;
 	ln->ln_asked = 0;
-	if (ln->ln_hold) {
+	if (ln->ln_hold != NULL) {
+		struct mbuf *n = ln->ln_hold;
+		ln->ln_hold = NULL;
 		/*
 		 * we assume ifp is not a loopback here, so just set the 2nd
 		 * argument as the 1st one.
 		 */
-		nd6_output(ifp, ifp, ln->ln_hold,
-			   (struct sockaddr_in6 *)rt_key(rt), rt, 0);
-		ln->ln_hold = 0;
+		RT_UNLOCK(rt);
+		nd6_output(ifp, ifp, n, (struct sockaddr_in6 *)rt_key(rt),
+		    rt, 0);
+		RT_LOCK_SPIN(rt);
 	}
+	RT_REMREF_LOCKED(rt);
+	RT_UNLOCK(rt);
 
  freeit:
 	m_freem(m);
+	if (ifa != NULL)
+		ifafree(ifa);
 	return;
 
  bad:
 	icmp6stat.icp6s_badna++;
 	m_freem(m);
+	if (ifa != NULL)
+		ifafree(ifa);
 }
 
 /*
@@ -842,7 +933,7 @@ nd6_na_output(
 	struct ifnet *ifp,
 	const struct in6_addr *daddr6,
 	const struct in6_addr *taddr6,
-	u_long flags,
+	uint32_t flags,
 	int tlladdr,		/* 1 if include target link-layer address */
 	struct sockaddr *sdl0)	/* sockaddr_dl (= proxy NA) or NULL */
 {
@@ -917,6 +1008,9 @@ nd6_na_output(
 		return;
 	}
 	ip6->ip6_src = ia->ia_addr.sin6_addr;
+	ifafree(&ia->ia_ifa);
+	ia = NULL;
+
 	nd_na = (struct nd_neighbor_advert *)(ip6 + 1);
 	nd_na->nd_na_type = ND_NEIGHBOR_ADVERT;
 	nd_na->nd_na_code = 0;
@@ -1121,9 +1215,12 @@ nd6_dad_start(
 	dp->dad_ns_icount = dp->dad_na_icount = 0;
 	dp->dad_ns_ocount = dp->dad_ns_tcount = 0;
 	if (tick_delay == NULL) {
+		u_int32_t retrans;
 		nd6_dad_ns_output(dp, ifa);
-		timeout((void (*)(void *))nd6_dad_timer, (void *)ifa,
-			nd_ifinfo[ifa->ifa_ifp->if_index].retrans * hz / 1000);
+		lck_rw_lock_shared(nd_if_rwlock);
+		retrans = nd_ifinfo[ifa->ifa_ifp->if_index].retrans * hz / 1000;
+		lck_rw_done(nd_if_rwlock);
+		timeout((void (*)(void *))nd6_dad_timer, (void *)ifa, retrans);
 	} else {
 		int ntick;
 
@@ -1213,12 +1310,15 @@ nd6_dad_timer(
 
 	/* Need more checks? */
 	if (dp->dad_ns_ocount < dp->dad_count) {
+		u_int32_t retrans;
 		/*
 		 * We have more NS to go.  Send NS packet for DAD.
 		 */
 		nd6_dad_ns_output(dp, ifa);
-		timeout((void (*)(void *))nd6_dad_timer, (void *)ifa,
-			nd_ifinfo[ifa->ifa_ifp->if_index].retrans * hz / 1000);
+		lck_rw_lock_shared(nd_if_rwlock);
+		retrans = nd_ifinfo[ifa->ifa_ifp->if_index].retrans * hz / 1000;
+		lck_rw_done(nd_if_rwlock);
+		timeout((void (*)(void *))nd6_dad_timer, (void *)ifa, retrans);
 	} else {
 		/*
 		 * We have transmitted sufficient number of DAD packets.

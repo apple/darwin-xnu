@@ -67,6 +67,7 @@
  * DKIOCGETMAXSEGMENTADDRESSABLEBITCOUNT get maximum segment width in bits
  *
  * DKIOCGETPHYSICALBLOCKSIZE             get device's block size
+ * DKIOCGETCOMMANDPOOLSIZE               get device's queue depth
  */
 
 typedef struct
@@ -132,6 +133,7 @@ typedef struct
 #define DKIOCGETMAXSEGMENTADDRESSABLEBITCOUNT _IOR('d', 75, uint64_t)
 
 #define DKIOCGETPHYSICALBLOCKSIZE             _IOR('d', 77, uint32_t)
+#define DKIOCGETCOMMANDPOOLSIZE               _IOR('d', 78, uint32_t)
 
 #ifdef KERNEL
 #define DK_FEATURE_DISCARD                    0x00000010

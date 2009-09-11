@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2009 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -44,7 +44,7 @@ that executes an action on the driver's work-loop.  'On the work-loop' is
 actually a lie but the work-loop single threaded semantic is maintained for this
 event source.  Using the work-loop gate rather than execution by the workloop.
 The command gate tests for a potential self dead lock by checking if the
-runCommand request is made from the work-loop's thread, it doens't check for a
+runCommand request is made from the work-loop's thread, it doesn't check for a
 mutual dead lock though where a pair of work loop's dead lock each other.
 <br><br>
 	The IOCommandGate is a lighter weight version of the IOCommandQueue and
@@ -54,7 +54,7 @@ check if the hardware is active, if so it will add the request to a pending
 queue internal to the device or the device's family.  Otherwise if the hardware
 is inactive then this request can be acted upon immediately.
 <br><br>
-    CAUTION: The runAction and runCommand functions can not be called from an interrupt context. But attemptCommand can, though it may return an error
+    CAUTION: The runAction, runCommand, and attemptCommand functions cannot be called from an interrupt context.
 
 */
 class IOCommandGate : public IOEventSource
@@ -189,10 +189,10 @@ client's thread attemptCommand will fail if the work-loop's gate is closed.
 
 /*! @function commandSleep  
     @abstract Put a thread that is currently holding the command gate to sleep.
-    @discussion Put a thread to sleep waiting for an event but release the gate first.  If the event occurs then the commandGate is closed before the  returns.
+    @discussion Put a thread to sleep waiting for an event but release the gate first.  If the event occurs then the commandGate is closed before the function returns.
     @param event Pointer to an address.
-    @param interruptible THREAD_UNINT, THREAD_INTERRUPTIBLE or THREAD_ABORTSAFE,  defaults to THREAD_ABORTSAFE.
-    @result THREAD_AWAKENED - normal wakeup, THREAD_TIMED_OUT - timeout expired, THREAD_INTERRUPTED - interrupted by clear_wait, THREAD_RESTART - restart operation entirely, kIOReturnNotPermitted if the calling thread does not hold the command gate. */
+    @param interruptible THREAD_UNINT, THREAD_INTERRUPTIBLE or THREAD_ABORTSAFE.  THREAD_UNINT specifies that the sleep cannot be interrupted by a signal.  THREAD_INTERRUPTIBLE specifies that the sleep may be interrupted by a "kill -9" signal.  THREAD_ABORTSAFE (the default value) specifies that the sleep may be interrupted by any user signal.
+    @result THREAD_AWAKENED - normal wakeup, THREAD_TIMED_OUT - timeout expired, THREAD_INTERRUPTED - interrupted, THREAD_RESTART - restart operation entirely, kIOReturnNotPermitted if the calling thread does not hold the command gate. */
     virtual IOReturn commandSleep(void *event,
                                   UInt32 interruptible = THREAD_ABORTSAFE);
 
@@ -212,8 +212,23 @@ client's thread attemptCommand will fail if the work-loop's gate is closed.
     @discussion  Enable the command gate.  The attemptAction/attemptCommand calls will now be enabled and can succeeed.  Stalled runCommand/runAction calls will be woken up. */
     virtual void enable();
 
+/*! @function commandSleep  
+    @abstract Put a thread that is currently holding the command gate to sleep.
+    @discussion Put a thread to sleep waiting for an event but release the gate first.  If the event occurs or timeout occurs then the commandGate is closed before the function returns.
+    @param event Pointer to an address.
+	@param deadline Clock deadline to timeout the sleep.
+    @param interruptible THREAD_UNINT, THREAD_INTERRUPTIBLE or THREAD_ABORTSAFE.  THREAD_UNINT specifies that the sleep cannot be interrupted by a signal.  THREAD_INTERRUPTIBLE specifies that the sleep may be interrupted by a "kill -9" signal.  THREAD_ABORTSAFE specifies that the sleep may be interrupted by any user signal.
+    @result THREAD_AWAKENED - normal wakeup, THREAD_TIMED_OUT - timeout expired, THREAD_INTERRUPTED - interrupted, THREAD_RESTART - restart operation entirely, kIOReturnNotPermitted if the calling thread does not hold the command gate. */
+    virtual IOReturn commandSleep(void *event,
+								  AbsoluteTime deadline,
+                                  UInt32 interruptible);
+
 private:
+#if __LP64__
     OSMetaClassDeclareReservedUnused(IOCommandGate, 0);
+#else
+    OSMetaClassDeclareReservedUsed(IOCommandGate, 0);
+#endif
     OSMetaClassDeclareReservedUnused(IOCommandGate, 1);
     OSMetaClassDeclareReservedUnused(IOCommandGate, 2);
     OSMetaClassDeclareReservedUnused(IOCommandGate, 3);

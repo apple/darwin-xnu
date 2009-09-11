@@ -9,7 +9,7 @@ include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
 	devfs \
-	fdesc \
+	fifofs \
 	specfs \
 	union
 
@@ -19,9 +19,8 @@ INSTINC_SUBDIRS_I386 = \
 
 EXPINC_SUBDIRS = \
 	devfs \
-	fdesc \
-	specfs \
-	union
+	fifofs \
+	specfs
 
 EXPINC_SUBDIRS_PPC = \
 

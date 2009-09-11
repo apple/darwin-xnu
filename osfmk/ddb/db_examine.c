@@ -115,7 +115,7 @@ db_examine_cmd(db_expr_t addr, __unused boolean_t have_addr, db_expr_t count,
 
 	if (count == (db_expr_t)-1)
 	    count = 1;
-	db_examine_count = count;
+	db_examine_count = (int)count;
 	if (db_option(modif, 't')) {
 	    if (modif == db_last_modifier)
 		thr_act = db_examine_act;
@@ -128,7 +128,7 @@ db_examine_cmd(db_expr_t addr, __unused boolean_t have_addr, db_expr_t count,
 	    thr_act = THREAD_NULL;
 
 	db_examine_act = thr_act;
-	db_examine((db_addr_t) addr, db_examine_format, count, 
+	db_examine((db_addr_t) addr, db_examine_format, (int)count, 
 					db_act_to_task(thr_act));
 }
 
@@ -240,7 +240,7 @@ db_examine(
 			next_addr = addr;
 			if (db_print_position() == 0) {
 			    /* If we hit a new symbol, print it */
-			    char *	name;
+			    const char *	name;
 			    db_addr_t	off;
 
 			    db_find_task_sym_and_offset(addr,&name,&off,task);
@@ -256,7 +256,7 @@ db_examine(
 			switch (c) {
 			    case 'p':	/* Addrs rendered symbolically. */
 				if( size == sizeof(void *) )  {
-				    char       *symName;
+				    const char       *symName;
 				    db_addr_t	offset;
 
 				    items = 1;
@@ -461,11 +461,11 @@ db_examine(
 				break;
 			    case 'i':	/* instruction */
 				next_addr = db_disasm(addr, FALSE, task);
-				size = next_addr - addr;
+				size = (int)(next_addr - addr);
 				break;
 			    case 'I':	/* instruction, alternate form */
 				next_addr = db_disasm(addr, TRUE, task);
-				size = next_addr - addr;
+				size = (int)(next_addr - addr);
 				break;
 			    default:
 				break;
@@ -670,7 +670,7 @@ db_search_cmd(void)
 	} else
 	    thr_act = THREAD_NULL;
 
-	db_search(addr, size, value, mask, count, db_act_to_task(thr_act));
+	db_search(addr, size, value, mask, (unsigned int)count, db_act_to_task(thr_act));
 }
 
 void
@@ -705,7 +705,7 @@ db_xcdump(
 	db_expr_t	value;
 	int		bcount;
 	db_addr_t	off;
-	char		*name;
+	const char		*name;
 	char		data[DB_XCDUMP_NC];
 
 	db_find_task_sym_and_offset(addr, &name, &off, task);
@@ -718,10 +718,10 @@ db_xcdump(
 	    db_printf("%0*llX:%s", 2*sizeof(db_addr_t),(unsigned long long) addr,
 					(size != 1) ? " " : "" );
 	    bcount = ((n > DB_XCDUMP_NC)? DB_XCDUMP_NC: n);
-	    if (trunc_page_32(addr) != trunc_page_32(addr+bcount-1)) {
-		db_addr_t next_page_addr = trunc_page_32(addr+bcount-1);
-		if (!DB_CHECK_ACCESS(next_page_addr, sizeof(int), task))
-		    bcount = next_page_addr - addr;
+	    if (trunc_page(addr) != trunc_page(addr+bcount-1)) {
+		db_addr_t next_page_addr = trunc_page(addr+bcount-1);
+		if (!DB_CHECK_ACCESS((vm_offset_t)next_page_addr, (int)sizeof(int), task))
+		    bcount = (int)(next_page_addr - addr);
 	    }
 	    db_read_bytes((vm_offset_t)addr, bcount, data, task);
 	    for (i = 0; i < bcount && off != 0; i += size) {
@@ -743,5 +743,5 @@ db_xcdump(
 	    }
 	    db_printf("*\n");
 	}
-	return(addr);
+	return((int)addr);
 }

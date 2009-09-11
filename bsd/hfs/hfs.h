@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -31,7 +31,7 @@
 
 #define HFS_SPARSE_DEV 1
 
-#ifdef DEBUG
+#if DEBUG
 #define HFS_CHECK_LOCK_ORDER 1
 #endif
 
@@ -108,15 +108,19 @@ extern struct timezone gTimeZone;
  * volume size, all capped at a certain fixed level
  */
  
-#define HFS_ROOTLOWDISKTRIGGERFRACTION 5
+#define HFS_ROOTVERYLOWDISKTRIGGERFRACTION 5
+#define HFS_ROOTVERYLOWDISKTRIGGERLEVEL ((u_int64_t)(125*1024*1024))
+#define HFS_ROOTLOWDISKTRIGGERFRACTION 10
 #define HFS_ROOTLOWDISKTRIGGERLEVEL ((u_int64_t)(250*1024*1024))
-#define HFS_ROOTLOWDISKSHUTOFFFRACTION 6
+#define HFS_ROOTLOWDISKSHUTOFFFRACTION 11
 #define HFS_ROOTLOWDISKSHUTOFFLEVEL ((u_int64_t)(375*1024*1024))
 
-#define HFS_LOWDISKTRIGGERFRACTION 1
-#define HFS_LOWDISKTRIGGERLEVEL ((u_int64_t)(50*1024*1024))
-#define HFS_LOWDISKSHUTOFFFRACTION 2
-#define HFS_LOWDISKSHUTOFFLEVEL ((u_int64_t)(75*1024*1024))
+#define HFS_VERYLOWDISKTRIGGERFRACTION 1
+#define HFS_VERYLOWDISKTRIGGERLEVEL ((u_int64_t)(100*1024*1024))
+#define HFS_LOWDISKTRIGGERFRACTION 2
+#define HFS_LOWDISKTRIGGERLEVEL ((u_int64_t)(150*1024*1024))
+#define HFS_LOWDISKSHUTOFFFRACTION 3
+#define HFS_LOWDISKSHUTOFFLEVEL ((u_int64_t)(200*1024*1024))
 
 /* Internal Data structures*/
 
@@ -153,7 +157,7 @@ typedef struct hfsmount {
 	gid_t         hfs_gid;            /* gid to set as owner of the files */
 	mode_t        hfs_dir_mask;       /* mask to and with directory protection bits */
 	mode_t        hfs_file_mask;      /* mask to and with file protection bits */
-	u_long        hfs_encoding;       /* Default encoding for non hfs+ volumes */	
+	u_int32_t        hfs_encoding;       /* Default encoding for non hfs+ volumes */	
 
 	/* Persistent fields (on disk, dynamic) */
 	time_t        hfs_mtime;          /* file system last modification time */
@@ -161,6 +165,7 @@ typedef struct hfsmount {
 	u_int32_t     hfs_dircount;       /* number of directories in file system */
 	u_int32_t     freeBlocks;	  /* free allocation blocks */
 	u_int32_t     nextAllocation;	  /* start of next allocation search */
+	u_int32_t     sparseAllocation;   /* start of allocations for sparse devices */
 	u_int32_t     vcbNxtCNID;         /* next unused catalog node ID - protected by catalog lock */
 	u_int32_t     vcbWrCnt;           /* file system write count */
 	u_int64_t     encodingsBitmap;    /* in-use encodings */
@@ -230,7 +235,8 @@ typedef struct hfsmount {
 	u_int32_t            hfs_global_lock_nesting;
 	
 	/* Notification variables: */
-	unsigned long		hfs_notification_conditions;
+	u_int32_t		hfs_notification_conditions;
+	u_int32_t		hfs_freespace_notify_dangerlimit;
 	u_int32_t		hfs_freespace_notify_warninglimit;
 	u_int32_t		hfs_freespace_notify_desiredlevel;
 
@@ -243,6 +249,8 @@ typedef struct hfsmount {
 	u_int32_t	hfs_metazone_end;
 	u_int32_t	hfs_hotfile_start;
 	u_int32_t	hfs_hotfile_end;
+        u_int32_t       hfs_min_alloc_start;
+	u_int32_t       hfs_freed_block_count;
 	int		hfs_hotfile_freeblks;
 	int		hfs_hotfile_maxblks;
 	int		hfs_overflow_maxblks;
@@ -262,6 +270,7 @@ typedef struct hfsmount {
 	struct vnode * hfs_backingfs_rootvp;
 	u_int32_t      hfs_last_backingstatfs;
 	int            hfs_sparsebandblks;
+	u_int64_t      hfs_backingfs_maxblocks;
 #endif
 	size_t         hfs_max_inline_attrsize;
 
@@ -273,6 +282,12 @@ typedef struct hfsmount {
 	/* Resize variables: */
 	u_int32_t		hfs_resize_filesmoved;
 	u_int32_t		hfs_resize_totalfiles;
+
+	/* Per mount cnode hash variables: */
+	lck_mtx_t      hfs_chash_mutex;	/* protects access to cnode hash table */
+	u_long         hfs_cnodehash;	/* size of cnode hash table - 1 */
+	LIST_HEAD(cnodehashhead, cnode) *hfs_cnodehashtbl;	/* base of cnode hash */
+					
 
 	/*
 	 * About the sync counters:
@@ -293,7 +308,9 @@ typedef struct hfsmount {
 	int32_t		hfs_sync_incomplete;
 	u_int64_t       hfs_last_sync_request_time;
 	u_int64_t       hfs_last_sync_time;
-	uint32_t        hfs_active_threads;
+	u_int32_t       hfs_active_threads;
+	u_int64_t       hfs_max_pending_io;
+					
 	thread_call_t   hfs_syncer;	      // removeable devices get sync'ed by this guy
 
 } hfsmount_t;
@@ -370,8 +387,10 @@ enum privdirtype {FILE_HARDLINKS, DIR_HARDLINKS};
 /* When set, we're in hfs_changefs, so hfs_sync should do nothing. */
 #define HFS_IN_CHANGEFS           0x40000
 /* When set, we are in process of downgrading or have downgraded to read-only, 
- * so hfs_start_transaction should return EROFS. */
+ * so hfs_start_transaction should return EROFS.
+ */
 #define HFS_RDONLY_DOWNGRADE      0x80000
+#define HFS_DID_CONTIG_SCAN      0x100000
 
 
 /* Macro to update next allocation block in the HFS mount structure.  If 
@@ -475,9 +494,6 @@ enum { kHFSPlusMaxFileNameBytes = kHFSPlusMaxFileNameChars * 3 };
 #define VFSTOVCB(MP)     VFSTOHFS(MP)
 #define HFSTOVCB(HFSMP)  (HFSMP)
 #define FCBTOVCB(FCB)    FCBTOHFS(FCB)
-
-
-#define HFS_KNOTE(vp, hint) KNOTE(&VTOC(vp)->c_knotes, (hint))
 
 
 #define E_NONE	0
@@ -614,7 +630,7 @@ void hfs_generate_volume_notifications(struct hfsmount *hfsmp);
 ******************************************************************************/
 extern int  hfs_relocate(struct  vnode *, u_int32_t, kauth_cred_t, struct  proc *);
 
-extern int hfs_truncate(struct vnode *, off_t, int, int, vfs_context_t);
+extern int hfs_truncate(struct vnode *, off_t, int, int, int, vfs_context_t);
 
 extern int hfs_bmap(struct vnode *, daddr_t, struct vnode **, daddr64_t *, unsigned int *);
 
@@ -628,7 +644,7 @@ extern int hfs_set_volxattr(struct hfsmount *hfsmp, unsigned int xattrtype, int 
 
 extern void hfs_check_volxattr(struct hfsmount *hfsmp, unsigned int xattrtype);
 
-extern int  hfs_isallocated(struct hfsmount *, u_long, u_long);
+extern int  hfs_isallocated(struct hfsmount *, u_int32_t, u_int32_t);
 
 
 /*****************************************************************************
@@ -661,9 +677,9 @@ void hfs_mark_volume_inconsistent(struct hfsmount *hfsmp);
 /*****************************************************************************
 	Functions from hfs_vfsutils.c
 ******************************************************************************/
-unsigned long BestBlockSizeFit(unsigned long allocationBlockSize,
-                               unsigned long blockSizeLimit,
-                               unsigned long baseMultiple);
+u_int32_t BestBlockSizeFit(u_int32_t allocationBlockSize,
+                               u_int32_t blockSizeLimit,
+                               u_int32_t baseMultiple);
 
 OSErr	hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 		struct proc *p);
@@ -689,7 +705,7 @@ extern int hfs_owner_rights(struct hfsmount *hfsmp, uid_t cnode_uid, kauth_cred_
 extern int  hfs_systemfile_lock(struct hfsmount *, int, enum hfslocktype);
 extern void hfs_systemfile_unlock(struct hfsmount *, int);
 
-extern u_long  GetFileInfo(ExtendedVCB *vcb, u_int32_t dirid, const char *name,
+extern u_int32_t  GetFileInfo(ExtendedVCB *vcb, u_int32_t dirid, const char *name,
 						   struct cat_attr *fattr, struct cat_fork *forkinfo);
 
 extern void hfs_remove_orphans(struct hfsmount *);
@@ -716,7 +732,11 @@ extern int  hfs_virtualmetafile(struct cnode *);
 
 extern int hfs_start_transaction(struct hfsmount *hfsmp);
 extern int hfs_end_transaction(struct hfsmount *hfsmp);
+extern int hfs_journal_flush(struct hfsmount *hfsmp);
 extern void hfs_sync_ejectable(struct hfsmount *hfsmp);
+
+/* Erase unused Catalog nodes due to <rdar://problem/6947811>. */
+extern int hfs_erase_unused_nodes(struct hfsmount *hfsmp);
 
 
 /*****************************************************************************

@@ -55,12 +55,6 @@ extern int gprofwrite(dev_t, io_req_t);
  * Macros to access the nth cpu's profile variable structures.
  */
 
-#if NCPUS <= 1
 #define PROFILE_VARS(cpu) (&_profile_vars)
-
-#else
-extern struct profile_vars *_profile_vars_cpus[NCPUS];
-#define PROFILE_VARS(cpu) (_profile_vars_cpus[(cpu)])
-#endif
 
 

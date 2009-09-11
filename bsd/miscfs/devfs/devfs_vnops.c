@@ -104,9 +104,15 @@
 #endif
 
 #include "devfsdefs.h"
+#include "devfs.h"
+
+#if FDESC
+#include "fdesc.h"
+#endif /* FDESC */
 
 static int devfs_update(struct vnode *vp, struct timeval *access,
                         struct timeval *modify);
+void	devfs_rele_node(devnode_t *);
 
 
 /*
@@ -360,7 +366,10 @@ devfs_getattr(struct vnop_getattr_args *ap)
 	switch (file_node->dn_type)
 	{
 	case 	DEV_DIR:
-		VATTR_RETURN(vap, va_rdev,  (dev_t)file_node->dn_dvm);
+#if FDESC
+	case	DEV_DEVFD:	/* Like a directory */
+#endif /* FDESC */
+		VATTR_RETURN(vap, va_rdev,  0);
 		vap->va_mode |= (S_IFDIR);
 		break;
 	case	DEV_CDEV:
@@ -383,7 +392,7 @@ devfs_getattr(struct vnop_getattr_args *ap)
 	VATTR_RETURN(vap, va_uid, file_node->dn_uid);
 	VATTR_RETURN(vap, va_gid, file_node->dn_gid);
 	VATTR_RETURN(vap, va_fsid, (uintptr_t)file_node->dn_dvm);
-	VATTR_RETURN(vap, va_fileid, (uintptr_t)file_node);
+	VATTR_RETURN(vap, va_fileid, (uintptr_t)file_node->dn_ino);
 	VATTR_RETURN(vap, va_data_size, file_node->dn_len);
 
 	/* return an override block size (advisory) */
@@ -406,9 +415,15 @@ devfs_getattr(struct vnop_getattr_args *ap)
 	VATTR_RETURN(vap, va_modify_time, file_node->dn_mtime);
 	VATTR_RETURN(vap, va_access_time, file_node->dn_atime);
 	VATTR_RETURN(vap, va_gen, 0);
-	VATTR_RETURN(vap, va_flags, 0);
 	VATTR_RETURN(vap, va_filerev, 0);
 	VATTR_RETURN(vap, va_acl, NULL);
+
+	/* Hide the root so Finder doesn't display it */
+	if (vnode_isvroot(vp)) {
+		VATTR_RETURN(vap, va_flags, UF_HIDDEN);
+	} else {
+		VATTR_RETURN(vap, va_flags, 0);
+	}
 
 	DEVFS_UNLOCK();
 
@@ -565,12 +580,8 @@ devfsspec_close(struct vnop_close_args *ap)
     	struct vnode *	    	vp = ap->a_vp;
 	register devnode_t * 	dnp;
 	struct timeval now;
-	int ref = 1;
 
-	if (vp->v_type == VBLK)
-		ref = 0;
-
-	if (vnode_isinuse(vp, ref)) {
+	if (vnode_isinuse(vp, 0)) {
 	    DEVFS_LOCK();
 	    microtime(&now);
 	    dnp = VTODN(vp);
@@ -636,8 +647,12 @@ devfs_write(struct vnop_write_args *ap)
 	return 0; /* not reached */
 }
 
+/* 
+ * Deviates from UFS naming convention because there is a KPI function
+ * called devfs_remove().
+ */
 static int
-devfs_remove(struct vnop_remove_args *ap)
+devfs_vnop_remove(struct vnop_remove_args *ap)
         /* struct vnop_remove_args  {
                 struct vnode *a_dvp;
                 struct vnode *a_vp;
@@ -1017,7 +1032,7 @@ devfs_rmdir(struct vnop_rmdir_args *ap)
 	ra.a_flags = 0;		/* XXX */
 	ra.a_context = ap->a_context;
 
-	return devfs_remove(&ra);
+	return devfs_vnop_remove(&ra);
 }
 
 
@@ -1032,25 +1047,35 @@ devfs_symlink(struct vnop_symlink_args *ap)
 		vfs_context_t a_context;
         } */
 {
-	struct componentname * cnp = ap->a_cnp;
-	vfs_context_t ctx = cnp->cn_context;
-	struct proc *p = vfs_context_proc(ctx);
+	int error;
+	devdirent_t *newent;
+
+	DEVFS_LOCK();
+	error = devfs_make_symlink(VTODN(ap->a_dvp), ap->a_cnp->cn_nameptr, ap->a_vap->va_mode, ap->a_target, &newent);
+	
+	if (error == 0) {
+		error = devfs_dntovn(newent->de_dnp, ap->a_vpp, vfs_context_proc(ap->a_context));
+	}
+
+	DEVFS_UNLOCK();
+
+	return error;
+
+}
+
+/* Called with devfs locked */
+int
+devfs_make_symlink(devnode_t *dir_p, char *name, int mode, char *target, devdirent_t **newent)
+{
 	int error = 0;
-	devnode_t * dir_p;
 	devnode_type_t typeinfo;
 	devdirent_t * nm_p;
 	devnode_t * dev_p;
-	struct vnode_attr *	vap = ap->a_vap;
-	struct vnode * * vpp = ap->a_vpp;
 
-	typeinfo.Slnk.name = ap->a_target;
-	typeinfo.Slnk.namelen = strlen(ap->a_target);
+	typeinfo.Slnk.name = target;
+	typeinfo.Slnk.namelen = strlen(target);
 
-	DEVFS_LOCK();
-
-	dir_p = VTODN(ap->a_dvp);
-
-	error = dev_add_entry(cnp->cn_nameptr, dir_p, DEV_SLNK, 
+	error = dev_add_entry(name, dir_p, DEV_SLNK, 
 			      &typeinfo, NULL, NULL, &nm_p);
 	if (error) {
 	    goto failure;
@@ -1058,12 +1083,14 @@ devfs_symlink(struct vnop_symlink_args *ap)
 	dev_p = nm_p->de_dnp;
 	dev_p->dn_uid = dir_p->dn_uid;
 	dev_p->dn_gid = dir_p->dn_gid;
-	dev_p->dn_mode = vap->va_mode;
+	dev_p->dn_mode = mode;
 	dn_copy_times(dev_p, dir_p);
 
-	error = devfs_dntovn(dev_p, vpp, p);
+	if (newent) {
+		*newent = nm_p;
+	}
+
 failure:
-	DEVFS_UNLOCK();
 
 	return error;
 }
@@ -1172,23 +1199,22 @@ devfs_readdir(struct vnop_readdir_args *ap)
 		switch(nodenumber)
 		{
 		case	0:
-			dirent.d_fileno = (int32_t)(void *)dir_node;
+			dirent.d_fileno = dir_node->dn_ino;
 			name = ".";
 			dirent.d_namlen = 1;
 			dirent.d_type = DT_DIR;
 			break;
 		case	1:
 			if(dir_node->dn_typeinfo.Dir.parent)
-			    dirent.d_fileno
-				= (int32_t)dir_node->dn_typeinfo.Dir.parent;
+				dirent.d_fileno = dir_node->dn_typeinfo.Dir.parent->dn_ino;
 			else
-				dirent.d_fileno = (u_int32_t)dir_node;
+				dirent.d_fileno = dir_node->dn_ino;
 			name = "..";
 			dirent.d_namlen = 2;
 			dirent.d_type = DT_DIR;
 			break;
 		default:
-			dirent.d_fileno = (int32_t)(void *)name_node->de_dnp;
+			dirent.d_fileno = name_node->de_dnp->dn_ino;
 			dirent.d_namlen = strlen(name_node->de_name);
 			name = name_node->de_name;
 			switch(name_node->de_dnp->dn_type) {
@@ -1276,16 +1302,12 @@ devfs_reclaim(struct vnop_reclaim_args *ap)
     dnp = VTODN(vp);
 
     if (dnp) {
-	/* 
-	 * do the same as devfs_inactive in case it is not called
-	 * before us (can that ever happen?)
-	 */
+	/* If this is a cloning device, it didn't have a dn_vn anyway */
 	dnp->dn_vn = NULL;
-	vp->v_data = NULL;
+	vnode_clearfsnode(vp);
 
-	if (dnp->dn_delete) {
-	    devnode_free(dnp);
-	}
+	/* This could delete the node, if we are the last vnode */
+	devfs_rele_node(dnp);
     }
     DEVFS_UNLOCK();
 
@@ -1352,7 +1374,18 @@ devs_vnop_pathconf(
 static int
 devfs_inactive(__unused struct vnop_inactive_args *ap)
 {
-    return (0);
+    	vnode_t vp = ap->a_vp;
+	devnode_t *dnp = VTODN(vp);
+
+	/* 
+	 * Cloned vnodes are not linked in anywhere, so they
+	 * can just be recycled.  
+	 */
+	if (dnp->dn_clone != NULL) {
+		vnode_recycle(vp);
+	}
+
+	return (0);
 }
 
 /*
@@ -1399,7 +1432,7 @@ static struct vnodeopv_entry_desc devfs_vnodeop_entries[] = {
 	{ &vnop_revoke_desc, (VOPFUNC)err_revoke },		/* revoke */
 	{ &vnop_mmap_desc, (VOPFUNC)err_mmap },			/* mmap */
 	{ &vnop_fsync_desc, (VOPFUNC)nop_fsync },		/* fsync */
-	{ &vnop_remove_desc, (VOPFUNC)devfs_remove },		/* remove */
+	{ &vnop_remove_desc, (VOPFUNC)devfs_vnop_remove },	/* remove */
 	{ &vnop_link_desc, (VOPFUNC)devfs_link },		/* link */
 	{ &vnop_rename_desc, (VOPFUNC)devfs_rename },		/* rename */
 	{ &vnop_mkdir_desc, (VOPFUNC)devfs_mkdir },		/* mkdir */
@@ -1445,7 +1478,7 @@ static struct vnodeopv_entry_desc devfs_spec_vnodeop_entries[] = {
 	{ &vnop_revoke_desc, (VOPFUNC)spec_revoke },		/* revoke */
 	{ &vnop_mmap_desc, (VOPFUNC)spec_mmap },			/* mmap */
 	{ &vnop_fsync_desc, (VOPFUNC)spec_fsync },		/* fsync */
-	{ &vnop_remove_desc, (VOPFUNC)devfs_remove },		/* remove */
+	{ &vnop_remove_desc, (VOPFUNC)devfs_vnop_remove },	/* remove */
 	{ &vnop_link_desc, (VOPFUNC)devfs_link },		/* link */
 	{ &vnop_rename_desc, (VOPFUNC)spec_rename },		/* rename */
 	{ &vnop_mkdir_desc, (VOPFUNC)spec_mkdir },		/* mkdir */
@@ -1472,3 +1505,30 @@ static struct vnodeopv_entry_desc devfs_spec_vnodeop_entries[] = {
 };
 struct vnodeopv_desc devfs_spec_vnodeop_opv_desc =
 	{ &devfs_spec_vnodeop_p, devfs_spec_vnodeop_entries };
+
+
+#if FDESC
+int (**devfs_devfd_vnodeop_p)(void*);
+static struct vnodeopv_entry_desc devfs_devfd_vnodeop_entries[] = {
+	{ &vnop_default_desc, (VOPFUNC)vn_default_error },
+	{ &vnop_lookup_desc, (VOPFUNC)devfs_devfd_lookup},	/* lookup */
+	{ &vnop_open_desc, (VOPFUNC)nop_open },			/* open */
+	{ &vnop_close_desc, (VOPFUNC)devfs_close },		/* close */
+	{ &vnop_getattr_desc, (VOPFUNC)devfs_getattr },		/* getattr */
+	{ &vnop_setattr_desc, (VOPFUNC)devfs_setattr },		/* setattr */
+	{ &vnop_revoke_desc, (VOPFUNC)err_revoke },		/* revoke */
+	{ &vnop_fsync_desc, (VOPFUNC)nop_fsync },		/* fsync */
+	{ &vnop_readdir_desc, (VOPFUNC)devfs_devfd_readdir},		/* readdir */
+	{ &vnop_inactive_desc, (VOPFUNC)devfs_inactive },	/* inactive */
+	{ &vnop_reclaim_desc, (VOPFUNC)devfs_reclaim },		/* reclaim */
+	{ &vnop_pathconf_desc, (VOPFUNC)devs_vnop_pathconf },	/* pathconf */
+#if CONFIG_MACF
+	{ &vnop_setlabel_desc, (VOPFUNC)devfs_setlabel },       /* setlabel */
+#endif
+	{ (struct vnodeop_desc*)NULL, (int(*)())NULL }
+};
+struct vnodeopv_desc devfs_devfd_vnodeop_opv_desc =
+	{ &devfs_devfd_vnodeop_p, devfs_devfd_vnodeop_entries};
+#endif /* FDESC */
+
+

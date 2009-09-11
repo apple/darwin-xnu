@@ -54,11 +54,25 @@ typedef int		vm_behavior_t;
  */
 
 
+/*
+ * The following behaviors affect the memory region's future behavior
+ * and are stored in the VM map entry data structure.
+ */
 #define VM_BEHAVIOR_DEFAULT	((vm_behavior_t) 0)	/* default */
 #define VM_BEHAVIOR_RANDOM	((vm_behavior_t) 1)	/* random */
 #define VM_BEHAVIOR_SEQUENTIAL	((vm_behavior_t) 2)	/* forward sequential */
 #define VM_BEHAVIOR_RSEQNTL	((vm_behavior_t) 3)	/* reverse sequential */
+
+/*
+ * The following "behaviors" affect the memory region only at the time of the
+ * call and are not stored in the VM map entry.
+ */
 #define VM_BEHAVIOR_WILLNEED	((vm_behavior_t) 4)	/* will need in near future */
 #define VM_BEHAVIOR_DONTNEED	((vm_behavior_t) 5)	/* dont need in near future */
+#define VM_BEHAVIOR_FREE	((vm_behavior_t) 6)	/* free memory without write-back */
+#define VM_BEHAVIOR_ZERO_WIRED_PAGES	((vm_behavior_t) 7)	/* zero out the wired pages of an entry if it is being deleted without unwiring them first */
+#define VM_BEHAVIOR_REUSABLE	((vm_behavior_t) 8)
+#define VM_BEHAVIOR_REUSE	((vm_behavior_t) 9)
+#define VM_BEHAVIOR_CAN_REUSE	((vm_behavior_t) 10)
 
 #endif	/*_MACH_VM_BEHAVIOR_H_*/

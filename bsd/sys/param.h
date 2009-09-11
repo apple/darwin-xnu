@@ -145,7 +145,8 @@
 #define	PRIMASK	0x0ff
 #define	PCATCH	0x100		/* OR'd with pri for tsleep to check signals */
 #define PTTYBLOCK 0x200		/* for tty SIGTTOU and SIGTTIN blocking */
-#define PDROP	0x400		/* OR'd with pri to stop re-entry of interlock mutex */
+#define PDROP	0x400		/* OR'd with pri to stop re-aquistion of mutex upon wakeup */
+#define PSPIN	0x800		/* OR'd with pri to require mutex in spin mode upon wakeup */
 
 #define	NBPW	sizeof(int)	/* number of bytes per word (integer) */
 
@@ -216,7 +217,7 @@
 
 /* Macros for counting and rounding. */
 #ifndef howmany
-#define	howmany(x, y)	(((x)+((y)-1))/(y))
+#define	howmany(x, y)	((((x) % (y)) == 0) ? ((x) / (y)) : (((x) / (y)) + 1))
 #endif
 #define	roundup(x, y)	((((x)+((y)-1))/(y))*(y))
 #define powerof2(x)	((((x)-1)&(x))==0)

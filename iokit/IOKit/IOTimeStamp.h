@@ -32,24 +32,24 @@
 
 static inline void
 IOTimeStampStartConstant(unsigned int csc,
-			 unsigned int a = 0, unsigned int b = 0,
-			 unsigned int c = 0, unsigned int d = 0)
+			 uintptr_t a = 0, uintptr_t b = 0,
+			 uintptr_t c = 0, uintptr_t d = 0)
 {
     KERNEL_DEBUG_CONSTANT(csc | DBG_FUNC_START, a, b, c, d, 0);
 }
 
 static inline void
-IOTimeStampEndConstant(unsigned int csc,
-		       unsigned int a = 0, unsigned int b = 0,
-		       unsigned int c = 0, unsigned int d = 0)
+IOTimeStampEndConstant(uintptr_t csc,
+		       uintptr_t a = 0, uintptr_t b = 0,
+		       uintptr_t c = 0, uintptr_t d = 0)
 {
     KERNEL_DEBUG_CONSTANT(csc | DBG_FUNC_END, a, b, c, d, 0);
 }
 
 static inline void
-IOTimeStampConstant(unsigned int csc,
-		    unsigned int a = 0, unsigned int b = 0,
-		    unsigned int c = 0, unsigned int d = 0)
+IOTimeStampConstant(uintptr_t csc,
+		    uintptr_t a = 0, uintptr_t b = 0,
+		    uintptr_t c = 0, uintptr_t d = 0)
 {
     KERNEL_DEBUG_CONSTANT(csc | DBG_FUNC_NONE, a, b, c, d, 0);
 }
@@ -57,25 +57,25 @@ IOTimeStampConstant(unsigned int csc,
 #if KDEBUG
 
 static inline void
-IOTimeStampStart(unsigned int csc,
-                 unsigned int a = 0, unsigned int b = 0,
-                 unsigned int c = 0, unsigned int d = 0)
+IOTimeStampStart(uintptr_t csc,
+                 uintptr_t a = 0, uintptr_t b = 0,
+                 uintptr_t c = 0, uintptr_t d = 0)
 {
     KERNEL_DEBUG(csc | DBG_FUNC_START, a, b, c, d, 0);
 }
 
 static inline void
-IOTimeStampEnd(unsigned int csc,
-               unsigned int a = 0, unsigned int b = 0,
-               unsigned int c = 0, unsigned int d = 0)
+IOTimeStampEnd(uintptr_t csc,
+               uintptr_t a = 0, uintptr_t b = 0,
+               uintptr_t c = 0, uintptr_t d = 0)
 {
     KERNEL_DEBUG(csc | DBG_FUNC_END, a, b, c, d, 0);
 }
 
 static inline void
-IOTimeStamp(unsigned int csc,
-            unsigned int a = 0, unsigned int b = 0,
-            unsigned int c = 0, unsigned int d = 0)
+IOTimeStamp(uintptr_t csc,
+            uintptr_t a = 0, uintptr_t b = 0,
+            uintptr_t c = 0, uintptr_t d = 0)
 {
     KERNEL_DEBUG(csc | DBG_FUNC_NONE, a, b, c, d, 0);
 }
@@ -114,6 +114,7 @@ IOTimeStamp(unsigned int csc,
 #define IODBG_MCURS(code)			(KDBG_CODE(DBG_IOKIT, DBG_IOMCURS, code))
 #define IODBG_MDESC(code)			(KDBG_CODE(DBG_IOKIT, DBG_IOMDESC, code))
 #define IODBG_POWER(code)			(KDBG_CODE(DBG_IOKIT, DBG_IOPOWER, code))
+#define IODBG_IOSERVICE(code)		(KDBG_CODE(DBG_IOKIT, DBG_IOSERVICE, code))
 
 /* IOKit specific codes - within each subclass */
 
@@ -164,5 +165,25 @@ IOTimeStamp(unsigned int csc,
 
 /* DBG_IOKIT/DBG_IOPOWER codes */
 // See IOKit/pwr_mgt/IOPMlog.h for the power management codes
+
+/* DBG_IOKIT/DBG_IOSERVICE codes */
+#define IOSERVICE_BUSY		1	/* 0x05080004 */
+#define IOSERVICE_NONBUSY	2	/* 0x05080008 */
+#define IOSERVICE_MODULESTALL	3	/* 0x0508000C */
+#define IOSERVICE_MODULEUNSTALL	4	/* 0x05080010 */
+
+#define IOSERVICE_TERMINATE_PHASE1		5	/* 0x05080014 */
+#define IOSERVICE_TERMINATE_REQUEST_OK		6	/* 0x05080018 */
+#define IOSERVICE_TERMINATE_REQUEST_FAIL	7	/* 0x0508001C */
+#define IOSERVICE_TERMINATE_SCHEDULE_STOP	8	/* 0x05080020 */
+#define IOSERVICE_TERMINATE_SCHEDULE_FINALIZE	9	/* 0x05080024 */
+#define IOSERVICE_TERMINATE_WILL		10	/* 0x05080028 */
+#define IOSERVICE_TERMINATE_DID			11	/* 0x0508002C */
+#define IOSERVICE_TERMINATE_DID_DEFER		12	/* 0x05080030 */
+#define IOSERVICE_TERMINATE_FINALIZE		13	/* 0x05080034 */
+#define IOSERVICE_TERMINATE_STOP		14	/* 0x05080038 */
+#define IOSERVICE_TERMINATE_STOP_NOP		15	/* 0x0508003C */
+#define IOSERVICE_TERMINATE_STOP_DEFER		16	/* 0x05080040 */
+#define IOSERVICE_TERMINATE_DONE		17	/* 0x05080044 */
 
 #endif /* ! IOKIT_IOTIMESTAMP_H */

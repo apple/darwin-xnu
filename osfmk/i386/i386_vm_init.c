@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -74,13 +74,23 @@
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
 #include <i386/pmap.h>
-#include <i386/ipl.h>
 #include <i386/misc_protos.h>
-#include <i386/mp_slave_boot.h>
+#include <i386/ipl.h>
 #include <i386/cpuid.h>
 #include <mach/thread_status.h>
 #include <pexpert/i386/efi.h>
-#include "i386_lowmem.h"
+#include <i386/i386_lowmem.h>
+#include <i386/lowglobals.h>
+
+#include <mach-o/loader.h>
+#include <libkern/kernel_mach_header.h>
+
+#if DEBUG 
+#define DBG(x...)	kprintf("DBG: " x)
+#define PRINT_PMAP_MEMORY_TABLE
+#else
+#define DBG(x...)
+#endif
 
 vm_size_t	mem_size = 0; 
 vm_offset_t	first_avail = 0;/* first after page tables */
@@ -92,7 +102,7 @@ uint64_t	sane_size = 0;  /* Memory size to use for defaults calculations */
 #define MAXBOUNCEPOOL	(128 * 1024 * 1024)
 #define MAXLORESERVE	( 32 * 1024 * 1024)
 
-extern int bsd_mbuf_cluster_reserve(void);
+extern unsigned int bsd_mbuf_cluster_reserve(void);
 
 
 uint32_t	bounce_pool_base = 0;
@@ -106,46 +116,34 @@ vm_offset_t	virtual_avail, virtual_end;
 static pmap_paddr_t	avail_remaining;
 vm_offset_t     static_memory_end = 0;
 
-#include	<mach-o/loader.h>
-vm_offset_t	edata, etext, end;
+vm_offset_t	sHIB, eHIB, stext, etext, sdata, edata, end;
+
+boolean_t	kernel_text_ps_4K = TRUE;
+boolean_t	wpkernel = TRUE;
+
+extern void	*KPTphys;
 
 /*
- * _mh_execute_header is the mach_header for the currently executing
- * 32 bit kernel
+ * _mh_execute_header is the mach_header for the currently executing kernel
  */
-extern struct mach_header _mh_execute_header;
-void *sectTEXTB; int sectSizeTEXT;
-void *sectDATAB; int sectSizeDATA;
-void *sectOBJCB; int sectSizeOBJC;
-void *sectLINKB; int sectSizeLINK;
-void *sectPRELINKB; int sectSizePRELINK;
-void *sectHIBB; int sectSizeHIB;
+void *sectTEXTB; unsigned long sectSizeTEXT;
+void *sectDATAB; unsigned long sectSizeDATA;
+void *sectOBJCB; unsigned long sectSizeOBJC;
+void *sectLINKB; unsigned long sectSizeLINK;
+void *sectPRELINKB; unsigned long sectSizePRELINK;
+void *sectHIBB; unsigned long sectSizeHIB;
+void *sectINITPTB; unsigned long sectSizeINITPT;
+extern int srv;
 
-extern void *getsegdatafromheader(struct mach_header *, const char *, int *);
-extern struct segment_command *getsegbyname(const char *);
-extern struct section *firstsect(struct segment_command *);
-extern struct section *nextsect(struct segment_command *, struct section *);
-
-
-void
-i386_macho_zerofill(void)
-{
-	struct segment_command	*sgp;
-	struct section		*sp;
-
-	sgp = getsegbyname("__DATA");
-	if (sgp) {
-		sp = firstsect(sgp);
-		if (sp) {
-			do {
-				if ((sp->flags & S_ZEROFILL))
-					bzero((char *) sp->addr, sp->size);
-			} while ((sp = nextsect(sgp, sp)));
-		}
-	}
-
-	return;
-}
+extern uint64_t firmware_Conventional_bytes;
+extern uint64_t firmware_RuntimeServices_bytes;
+extern uint64_t firmware_ACPIReclaim_bytes;
+extern uint64_t firmware_ACPINVS_bytes;
+extern uint64_t firmware_PalCode_bytes;
+extern uint64_t firmware_Reserved_bytes;
+extern uint64_t firmware_Unusable_bytes;
+extern uint64_t firmware_other_bytes;
+uint64_t firmware_MMIO_bytes;
 
 /*
  * Basic VM initialization.
@@ -184,11 +182,33 @@ i386_vm_init(uint64_t	maxmem,
 		&_mh_execute_header, "__LINKEDIT", &sectSizeLINK);
 	sectHIBB = (void *)getsegdatafromheader(
 		&_mh_execute_header, "__HIB", &sectSizeHIB);
+	sectINITPTB = (void *)getsegdatafromheader(
+		&_mh_execute_header, "__INITPT", &sectSizeINITPT);
 	sectPRELINKB = (void *) getsegdatafromheader(
-		&_mh_execute_header, "__PRELINK", &sectSizePRELINK);
+		&_mh_execute_header, "__PRELINK_TEXT", &sectSizePRELINK);
 
+	sHIB  = (vm_offset_t) sectHIBB;
+	eHIB  = (vm_offset_t) sectHIBB + sectSizeHIB;
+	/* Zero-padded from ehib to stext if text is 2M-aligned */
+	stext = (vm_offset_t) sectTEXTB;
 	etext = (vm_offset_t) sectTEXTB + sectSizeTEXT;
+	/* Zero-padded from etext to sdata if text is 2M-aligned */
+	sdata = (vm_offset_t) sectDATAB;
 	edata = (vm_offset_t) sectDATAB + sectSizeDATA;
+
+#if DEBUG
+	kprintf("sectTEXTB    = %p\n", sectTEXTB);
+	kprintf("sectDATAB    = %p\n", sectDATAB);
+	kprintf("sectOBJCB    = %p\n", sectOBJCB);
+	kprintf("sectLINKB    = %p\n", sectLINKB);
+	kprintf("sectHIBB     = %p\n", sectHIBB);
+	kprintf("sectPRELINKB = %p\n", sectPRELINKB);
+	kprintf("eHIB         = %p\n", (void *) eHIB);
+	kprintf("stext        = %p\n", (void *) stext);
+	kprintf("etext        = %p\n", (void *) etext);
+	kprintf("sdata        = %p\n", (void *) sdata);
+	kprintf("edata        = %p\n", (void *) edata);
+#endif
 
 	vm_set_page_size();
 
@@ -206,7 +226,7 @@ i386_vm_init(uint64_t	maxmem,
 	pmap_memory_region_count = pmap_memory_region_current = 0;
 	fap = (ppnum_t) i386_btop(first_avail);
 
-	mptr = (EfiMemoryRange *)args->MemoryMap;
+	mptr = (EfiMemoryRange *)ml_static_ptovirt((vm_offset_t)args->MemoryMap);
         if (args->MemoryMapDescriptorSize == 0)
 	        panic("Invalid memory map descriptor size");
         msize = args->MemoryMapDescriptorSize;
@@ -216,13 +236,16 @@ i386_vm_init(uint64_t	maxmem,
 
 	for (i = 0; i < mcount; i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize)) {
 	        ppnum_t base, top;
+		uint64_t region_bytes = 0;
 
 		if (pmap_memory_region_count >= PMAP_MEMORY_REGIONS_SIZE) {
 		        kprintf("WARNING: truncating memory region count at %d\n", pmap_memory_region_count);
 			break;
 		}
 		base = (ppnum_t) (mptr->PhysicalStart >> I386_PGSHIFT);
-		top = (ppnum_t) ((mptr->PhysicalStart) >> I386_PGSHIFT) + mptr->NumberOfPages - 1;
+		top = (ppnum_t) (((mptr->PhysicalStart) >> I386_PGSHIFT) + mptr->NumberOfPages - 1);
+		region_bytes = (uint64_t)(mptr->NumberOfPages << I386_PGSHIFT);
+		pmap_type = mptr->Type;
 
 		switch (mptr->Type) {
 		case kEfiLoaderCode:
@@ -234,31 +257,60 @@ i386_vm_init(uint64_t	maxmem,
 			 * Consolidate usable memory types into one.
 			 */
 		        pmap_type = kEfiConventionalMemory;
-		        sane_size += (uint64_t)(mptr->NumberOfPages << I386_PGSHIFT);
+		        sane_size += region_bytes;
+			firmware_Conventional_bytes += region_bytes;
 			break;
+			/*
+			 * sane_size should reflect the total amount of physical
+			 * RAM in the system, not just the amount that is
+			 * available for the OS to use.
+			 * FIXME:Consider deriving this value from SMBIOS tables
+			 * rather than reverse engineering the memory map.
+			 * Alternatively, see
+			 * <rdar://problem/4642773> Memory map should
+			 * describe all memory
+			 * Firmware on some systems guarantees that the memory
+			 * map is complete via the "RomReservedMemoryTracked"
+			 * feature field--consult that where possible to
+			 * avoid the "round up to 128M" workaround below.
+			 */
 
 		case kEfiRuntimeServicesCode:
 		case kEfiRuntimeServicesData:
+			firmware_RuntimeServices_bytes += region_bytes;
+			sane_size += region_bytes;
+			break;
 		case kEfiACPIReclaimMemory:
+			firmware_ACPIReclaim_bytes += region_bytes;
+			sane_size += region_bytes;
+			break;
 		case kEfiACPIMemoryNVS:
+			firmware_ACPINVS_bytes += region_bytes;
+			sane_size += region_bytes;
+			break;
 		case kEfiPalCode:
-			/*
-			 * sane_size should reflect the total amount of physical ram
-			 * in the system, not just the amount that is available for
-			 * the OS to use
-			 */
-		        sane_size += (uint64_t)(mptr->NumberOfPages << I386_PGSHIFT);
-			/* fall thru */
+			firmware_PalCode_bytes += region_bytes;
+		        sane_size += region_bytes;
+			break;
 
+
+		case kEfiReservedMemoryType:
+			firmware_Reserved_bytes += region_bytes;
+			break;
 		case kEfiUnusableMemory:
+			firmware_Unusable_bytes += region_bytes;
+			break;
 		case kEfiMemoryMappedIO:
 		case kEfiMemoryMappedIOPortSpace:
-		case kEfiReservedMemoryType:
+			firmware_MMIO_bytes += region_bytes;
+			break;
 		default:
-		        pmap_type = mptr->Type;
+			firmware_other_bytes += region_bytes;
+			break;
 		}
 
-		kprintf("EFI region: type = %u/%d,  base = 0x%x,  top = 0x%x\n", mptr->Type, pmap_type, base, top);
+		kprintf("EFI region %d: type %u/%d, base 0x%x, top 0x%x\n",
+			i, mptr->Type, pmap_type, base, top);
 
 		if (maxpg) {
 		        if (base >= maxpg)
@@ -347,69 +399,65 @@ i386_vm_init(uint64_t	maxmem,
 		}
 	}
 
-
 #ifdef PRINT_PMAP_MEMORY_TABLE
 	{
         unsigned int j;
         pmap_memory_region_t *p = pmap_memory_regions;
-        vm_offset_t region_start, region_end;
-        vm_offset_t efi_start, efi_end;
+        addr64_t region_start, region_end;
+        addr64_t efi_start, efi_end;
         for (j=0;j<pmap_memory_region_count;j++, p++) {
-            kprintf("type %d base 0x%x alloc 0x%x top 0x%x\n", p->type,
-                    p->base << I386_PGSHIFT, p->alloc << I386_PGSHIFT, p->end << I386_PGSHIFT);
-            region_start = p->base << I386_PGSHIFT;
-            region_end = (p->end << I386_PGSHIFT) - 1;
-            mptr = args->MemoryMap;
+            kprintf("pmap region %d type %d base 0x%llx alloc 0x%llx top 0x%llx\n",
+		    j, p->type,
+                    (addr64_t) p->base  << I386_PGSHIFT,
+		    (addr64_t) p->alloc << I386_PGSHIFT,
+		    (addr64_t) p->end   << I386_PGSHIFT);
+            region_start = (addr64_t) p->base << I386_PGSHIFT;
+            region_end = ((addr64_t) p->end << I386_PGSHIFT) - 1;
+	    mptr = (EfiMemoryRange *) ml_static_ptovirt((vm_offset_t)args->MemoryMap);
             for (i=0; i<mcount; i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize)) {
                 if (mptr->Type != kEfiLoaderCode &&
                     mptr->Type != kEfiLoaderData &&
                     mptr->Type != kEfiBootServicesCode &&
                     mptr->Type != kEfiBootServicesData &&
                     mptr->Type != kEfiConventionalMemory) {
-                efi_start = (vm_offset_t)mptr->PhysicalStart;
+                efi_start = (addr64_t)mptr->PhysicalStart;
                 efi_end = efi_start + ((vm_offset_t)mptr->NumberOfPages << I386_PGSHIFT) - 1;
                 if ((efi_start >= region_start && efi_start <= region_end) ||
                     (efi_end >= region_start && efi_end <= region_end)) {
                     kprintf(" *** Overlapping region with EFI runtime region %d\n", i);
                 }
-                }
-                
+              }
             }
-        }
+          }
 	}
 #endif
 
 	avail_start = first_avail;
 	mem_actual = sane_size;
 
-#define MEG		(1024*1024ULL)
-#define GIG		(1024*MEG)
-
 	/*
 	 * For user visible memory size, round up to 128 Mb - accounting for the various stolen memory
 	 * not reported by EFI.
 	 */
 
-	sane_size = (sane_size + 128 * MEG - 1) & ~((uint64_t)(128 * MEG - 1));
+	sane_size = (sane_size + 128 * MB - 1) & ~((uint64_t)(128 * MB - 1));
 
-#if defined(__i386__)
-#define K32_MAXMEM	(32*GIG)
 	/*
-	 * For K32 we cap at K32_MAXMEM GB (currently 32GB).
+	 * We cap at KERNEL_MAXMEM bytes (currently 32GB for K32, 64GB for K64).
 	 * Unless overriden by the maxmem= boot-arg
 	 * -- which is a non-zero maxmem argument to this function.
 	 */
-	if (maxmem == 0 && sane_size > K32_MAXMEM) {
-		maxmem = K32_MAXMEM;
-		printf("Physical memory %lld bytes capped at %dGB for 32-bit kernel\n",
-			sane_size, (uint32_t) (K32_MAXMEM/GIG));
+	if (maxmem == 0 && sane_size > KERNEL_MAXMEM) {
+		maxmem = KERNEL_MAXMEM;
+		printf("Physical memory %lld bytes capped at %dGB\n",
+			sane_size, (uint32_t) (KERNEL_MAXMEM/GB));
 	}
-#endif
+
 	/*
 	 * if user set maxmem, reduce memory sizes
 	 */
 	if ( (maxmem > (uint64_t)first_avail) && (maxmem < sane_size)) {
-		ppnum_t discarded_pages  = (sane_size - maxmem) >> I386_PGSHIFT;
+		ppnum_t discarded_pages  = (ppnum_t)((sane_size - maxmem) >> I386_PGSHIFT);
 		ppnum_t	highest_pn = 0;
 		ppnum_t	cur_alloc  = 0;
 		uint64_t	pages_to_use;
@@ -452,18 +500,24 @@ i386_vm_init(uint64_t	maxmem,
 	        mem_size = (vm_size_t)sane_size;
 	max_mem = sane_size;
 
-	kprintf("Physical memory %llu MB\n", sane_size/MEG);
+	kprintf("Physical memory %llu MB\n", sane_size/MB);
 
 	if (!PE_parse_boot_argn("max_valid_dma_addr", &maxdmaaddr, sizeof (maxdmaaddr)))
-	        max_valid_dma_address = 1024ULL * 1024ULL * 4096ULL;
+	        max_valid_dma_address = 4 * GB;
 	else
-	        max_valid_dma_address = ((uint64_t) maxdmaaddr) * 1024ULL * 1024ULL;
+	        max_valid_dma_address = ((uint64_t) maxdmaaddr) * MB;
 
 	if (!PE_parse_boot_argn("maxbouncepool", &maxbouncepoolsize, sizeof (maxbouncepoolsize)))
 	        maxbouncepoolsize = MAXBOUNCEPOOL;
 	else
 	        maxbouncepoolsize = maxbouncepoolsize * (1024 * 1024);
 
+	/* since bsd_mbuf_cluster_reserve() is going to be called, we need to check for server */
+        if (PE_parse_boot_argn("srv", &srv, sizeof (srv))) {
+                srv = 1;
+        }
+
+	
 	/*
 	 * bsd_mbuf_cluster_reserve depends on sane_size being set
 	 * in order to correctly determine the size of the mbuf pool
@@ -494,19 +548,36 @@ i386_vm_init(uint64_t	maxmem,
 unsigned int
 pmap_free_pages(void)
 {
-	return avail_remaining;
+	return (unsigned int)avail_remaining;
 }
 
+#if defined(__LP64__)
+/* On large memory systems, early allocations should prefer memory from the
+ * last region, which is typically all physical memory >4GB. This is used
+ * by pmap_steal_memory and pmap_pre_expand during init only. */
+boolean_t
+pmap_next_page_k64( ppnum_t *pn)
+{
+	if(max_mem >= (32*GB)) {
+		pmap_memory_region_t *last_region = &pmap_memory_regions[pmap_memory_region_count-1];
+		if (last_region->alloc != last_region->end) {
+			*pn = last_region->alloc++;
+			avail_remaining--;
+			return TRUE;
+		}
+	}
+	return pmap_next_page(pn);
+}
+#endif
 
 boolean_t
 pmap_next_page(
 	       ppnum_t *pn)
 {
-	
 	if (avail_remaining) while (pmap_memory_region_current < pmap_memory_region_count) {
-	        if (pmap_memory_regions[pmap_memory_region_current].alloc ==
-		    pmap_memory_regions[pmap_memory_region_current].end) {
-		        pmap_memory_region_current++;
+		if (pmap_memory_regions[pmap_memory_region_current].alloc ==
+				pmap_memory_regions[pmap_memory_region_current].end) {
+			pmap_memory_region_current++;
 			continue;
 		}
 		*pn = pmap_memory_regions[pmap_memory_region_current].alloc++;
@@ -525,7 +596,6 @@ pmap_valid_page(
         unsigned int i;
 	pmap_memory_region_t *pmptr = pmap_memory_regions;
 
-	assert(pn);
 	for (i = 0; i < pmap_memory_region_count; i++, pmptr++) {
 	        if ( (pn >= pmptr->base) && (pn <= pmptr->end) )
 	                return TRUE;
@@ -558,3 +628,205 @@ reserve_bouncepool(uint32_t bounce_pool_wanted)
 		avail_remaining -= pages_needed;
 	}
 }
+
+/*
+ * Called once VM is fully initialized so that we can release unused
+ * sections of low memory to the general pool.
+ * Also complete the set-up of identity-mapped sections of the kernel:
+ *  1) write-protect kernel text
+ *  2) map kernel text using large pages if possible
+ *  3) read and write-protect page zero (for K32)
+ *  4) map the global page at the appropriate virtual address.
+ *
+ * Use of large pages
+ * ------------------
+ * To effectively map and write-protect all kernel text pages, the text
+ * must be 2M-aligned at the base, and the data section above must also be
+ * 2M-aligned. That is, there's padding below and above. This is achieved
+ * through linker directives. Large pages are used only if this alignment
+ * exists (and not overriden by the -kernel_text_page_4K boot-arg). The
+ * memory layout is:
+ * 
+ *                       :                :
+ *                       |     __DATA     |
+ *               sdata:  ==================  2Meg
+ *                       |                |
+ *                       |  zero-padding  |
+ *                       |                |
+ *               etext:  ------------------ 
+ *                       |                |
+ *                       :                :
+ *                       |                |
+ *                       |     __TEXT     |
+ *                       |                |
+ *                       :                :
+ *                       |                |
+ *               stext:  ==================  2Meg
+ *                       |                |
+ *                       |  zero-padding  |
+ *                       |                |
+ *               eHIB:   ------------------ 
+ *                       |     __HIB      |
+ *                       :                :
+ *
+ * Prior to changing the mapping from 4K to 2M, the zero-padding pages
+ * [eHIB,stext] and [etext,sdata] are ml_static_mfree()'d. Then all the
+ * 4K pages covering [stext,etext] are coalesced as 2M large pages.
+ * The now unused level-1 PTE pages are also freed.
+ */
+void
+pmap_lowmem_finalize(void)
+{
+	spl_t           spl;
+	int		i;
+
+	/* Check the kernel is linked at the expected base address */
+	if (i386_btop(kvtophys((vm_offset_t) &IdlePML4)) !=
+	    I386_KERNEL_IMAGE_BASE_PAGE)
+		panic("pmap_lowmem_finalize() unexpected kernel base address");
+
+	/*
+	 * Free all pages in pmap regions below the base:
+	 * rdar://6332712
+	 *	We can't free all the pages to VM that EFI reports available.
+	 *	Pages in the range 0xc0000-0xff000 aren't safe over sleep/wake.
+	 *	There's also a size miscalculation here: pend is one page less
+	 *	than it should be but this is not fixed to be backwards
+	 *	compatible.
+	 *	Due to this current EFI limitation, we take only the first
+	 *	entry in the memory region table. However, the loop is retained
+	 * 	(with the intended termination criteria commented out) in the
+	 *	hope that some day we can free all low-memory ranges.
+	 */
+	for (i = 0;
+//	     pmap_memory_regions[i].end <= I386_KERNEL_IMAGE_BASE_PAGE;
+	     i < 1;
+	     i++) {
+		vm_offset_t	pbase = (vm_offset_t)i386_ptob(pmap_memory_regions[i].base);
+		vm_offset_t	pend  = (vm_offset_t)i386_ptob(pmap_memory_regions[i].end);
+//		vm_offset_t	pend  = i386_ptob(pmap_memory_regions[i].end+1);
+
+		DBG("ml_static_mfree(%p,%p) for pmap region %d\n",
+		    (void *) ml_static_ptovirt(pbase),
+		    (void *) (pend - pbase), i);
+		ml_static_mfree(ml_static_ptovirt(pbase), pend - pbase);
+	}
+
+	/*
+	 * If text and data are both 2MB-aligned,
+	 * we can map text with large-pages,
+	 * unless the -kernel_text_ps_4K boot-arg overrides.
+	 */
+	if ((stext & I386_LPGMASK) == 0 && (sdata & I386_LPGMASK) == 0) {
+		kprintf("Kernel text is 2MB aligned");
+		kernel_text_ps_4K = FALSE;
+		if (PE_parse_boot_argn("-kernel_text_ps_4K",
+				       &kernel_text_ps_4K,
+				       sizeof (kernel_text_ps_4K)))
+			kprintf(" but will be mapped with 4K pages\n");
+		else
+			kprintf(" and will be mapped with 2M pages\n");
+	}
+
+	(void) PE_parse_boot_argn("wpkernel", &wpkernel, sizeof (wpkernel));
+	if (wpkernel)
+		kprintf("Kernel text %p-%p to be write-protected\n",
+			(void *) stext, (void *) etext);
+
+	spl = splhigh();
+
+	/*
+	 * Scan over text if mappings are to be changed:
+	 * - Remap kernel text readonly unless the "wpkernel" boot-arg is 0 
+ 	 * - Change to large-pages if possible and not overriden.
+	 */
+	if (kernel_text_ps_4K && wpkernel) {
+		vm_offset_t     myva;
+		for (myva = stext; myva < etext; myva += PAGE_SIZE) {
+			pt_entry_t     *ptep;
+
+			ptep = pmap_pte(kernel_pmap, (vm_map_offset_t)myva);
+			if (ptep)
+				pmap_store_pte(ptep, *ptep & ~INTEL_PTE_RW);
+		}
+	}
+
+	if (!kernel_text_ps_4K) {
+		vm_offset_t     myva;
+
+		/*
+		 * Release zero-filled page padding used for 2M-alignment.
+		 */
+		DBG("ml_static_mfree(%p,%p) for padding below text\n",
+			(void *) eHIB, (void *) (stext - eHIB));
+		ml_static_mfree(eHIB, stext - eHIB);
+		DBG("ml_static_mfree(%p,%p) for padding above text\n",
+			(void *) etext, (void *) (sdata - etext));
+		ml_static_mfree(etext, sdata - etext);
+
+		/*
+		 * Coalesce text pages into large pages.
+		 */
+		for (myva = stext; myva < sdata; myva += I386_LPGBYTES) {
+			pt_entry_t	*ptep;
+			vm_offset_t	pte_phys;
+			pt_entry_t	*pdep;
+			pt_entry_t	pde;
+
+			pdep = pmap_pde(kernel_pmap, (vm_map_offset_t)myva);
+			ptep = pmap_pte(kernel_pmap, (vm_map_offset_t)myva);
+			DBG("myva: %p pdep: %p ptep: %p\n",
+				(void *) myva, (void *) pdep, (void *) ptep);
+			if ((*ptep & INTEL_PTE_VALID) == 0)
+				continue;
+			pte_phys = (vm_offset_t)(*ptep & PG_FRAME);
+			pde = *pdep & PTMASK;	/* page attributes from pde */
+			pde |= INTEL_PTE_PS;	/* make it a 2M entry */
+			pde |= pte_phys;	/* take page frame from pte */
+
+			if (wpkernel)
+				pde &= ~INTEL_PTE_RW;
+			DBG("pmap_store_pte(%p,0x%llx)\n",
+				(void *)pdep, pde);
+			pmap_store_pte(pdep, pde);
+
+			/*
+			 * Free the now-unused level-1 pte.
+			 * Note: ptep is a virtual address to the pte in the
+			 *   recursive map. We can't use this address to free
+			 *   the page. Instead we need to compute its address
+			 *   in the Idle PTEs in "low memory".
+			 */
+			vm_offset_t vm_ptep = (vm_offset_t) KPTphys
+						+ (pte_phys >> PTPGSHIFT);
+			DBG("ml_static_mfree(%p,0x%x) for pte\n",
+				(void *) vm_ptep, PAGE_SIZE);
+			ml_static_mfree(vm_ptep, PAGE_SIZE);
+		}
+
+		/* Change variable read by sysctl machdep.pmap */
+		pmap_kernel_text_ps = I386_LPGBYTES;
+	}
+
+#if defined(__i386__)
+	/* no matter what,  kernel page zero is not accessible */
+	pmap_store_pte(pmap_pte(kernel_pmap, 0), INTEL_PTE_INVALID);
+#endif
+
+	/* map lowmem global page into fixed addr */
+	pt_entry_t *pte = NULL;
+	if (0 == (pte = pmap_pte(kernel_pmap,
+				 VM_MIN_KERNEL_LOADED_ADDRESS + 0x2000)))
+		panic("lowmem pte");
+	/* make sure it is defined on page boundary */
+	assert(0 == ((vm_offset_t) &lowGlo & PAGE_MASK));
+	pmap_store_pte(pte, kvtophys((vm_offset_t)&lowGlo)
+				| INTEL_PTE_REF
+				| INTEL_PTE_MOD
+				| INTEL_PTE_WIRED
+				| INTEL_PTE_VALID
+				| INTEL_PTE_RW);
+	splx(spl);
+	flush_tlb();
+}
+

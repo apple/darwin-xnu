@@ -59,8 +59,8 @@
 #endif
 
 struct affinity_space {
-	mutex_t		aspc_lock;
-	uint32_t	aspc_task_count;
+	lck_mtx_t		aspc_lock;
+	uint32_t		aspc_task_count;
 	queue_head_t	aspc_affinities;
 };
 typedef struct affinity_space *affinity_space_t;
@@ -149,7 +149,7 @@ thread_affinity_set(thread_t thread, uint32_t tag)
 		return KERN_TERMINATED;
 	}
 
-	mutex_lock(&aspc->aspc_lock);
+	lck_mtx_lock(&aspc->aspc_lock);
 	aset = thread->affinity_set;
 	if (aset != NULL) {
 		/*
@@ -179,7 +179,7 @@ thread_affinity_set(thread_t thread, uint32_t tag)
 			} else {
 				aset = affinity_set_alloc();
 				if (aset == NULL) {
-					mutex_unlock(&aspc->aspc_lock);
+					lck_mtx_unlock(&aspc->aspc_lock);
 					thread_mtx_unlock(thread);
 					return KERN_RESOURCE_SHORTAGE;
 				}
@@ -192,7 +192,7 @@ thread_affinity_set(thread_t thread, uint32_t tag)
 		affinity_set_add(aset, thread);
 	}
 
-	mutex_unlock(&aspc->aspc_lock);
+	lck_mtx_unlock(&aspc->aspc_lock);
 	thread_mtx_unlock(thread);
 
 	/*
@@ -225,10 +225,10 @@ task_affinity_create(task_t parent_task, task_t child_task)
 	 * Bump the task reference count on the shared namespace and
 	 * give it to the child.
 	 */
-	mutex_lock(&aspc->aspc_lock);
+	lck_mtx_lock(&aspc->aspc_lock);
 	aspc->aspc_task_count++;
 	child_task->affinity_space = aspc;
-	mutex_unlock(&aspc->aspc_lock);
+	lck_mtx_unlock(&aspc->aspc_lock);
 }
 
 /*
@@ -243,19 +243,21 @@ task_affinity_deallocate(task_t	task)
 	DBG("task_affinity_deallocate(%p) aspc %p task_count %d\n",
 		task, aspc, aspc->aspc_task_count);
 
-	mutex_lock(&aspc->aspc_lock);
+	lck_mtx_lock(&aspc->aspc_lock);
 	if (--(aspc->aspc_task_count) == 0) {
 		assert(queue_empty(&aspc->aspc_affinities));
-		mutex_unlock(&aspc->aspc_lock);
+		lck_mtx_unlock(&aspc->aspc_lock);
 		affinity_space_free(aspc);
 	} else {
-		mutex_unlock(&aspc->aspc_lock);
+		lck_mtx_unlock(&aspc->aspc_lock);
 	}
 }
 
 /*
  * task_affinity_info()
  * Return affinity tag info (number, min, max) for the task.
+ *
+ * Conditions: task is locked.
  */
 kern_return_t
 task_affinity_info(
@@ -274,10 +276,9 @@ task_affinity_info(
 	info->min = THREAD_AFFINITY_TAG_NULL;
 	info->max = THREAD_AFFINITY_TAG_NULL;
 
-	task_lock(task);
 	aspc = task->affinity_space;
 	if (aspc) {
-		mutex_lock(&aspc->aspc_lock);
+		lck_mtx_lock(&aspc->aspc_lock);
 		queue_iterate(&aspc->aspc_affinities,
 				 aset, affinity_set_t, aset_affinities) {	
 			info->set_count++;
@@ -289,9 +290,8 @@ task_affinity_info(
 				info->max = aset->aset_tag;
 		}
 		info->task_count = aspc->aspc_task_count;
-		mutex_unlock(&aspc->aspc_lock);
+		lck_mtx_unlock(&aspc->aspc_lock);
 	}
-	task_unlock(task);
 	return KERN_SUCCESS;
 }
 
@@ -318,9 +318,9 @@ thread_affinity_dup(thread_t parent, thread_t child)
 	assert(aspc == parent->task->affinity_space);
 	assert(aspc == child->task->affinity_space);
 
-	mutex_lock(&aspc->aspc_lock);
+	lck_mtx_lock(&aspc->aspc_lock);
 	affinity_set_add(aset, child);
-	mutex_unlock(&aspc->aspc_lock);
+	lck_mtx_unlock(&aspc->aspc_lock);
 
 	thread_mtx_unlock(parent);
 }
@@ -339,11 +339,23 @@ thread_affinity_terminate(thread_t thread)
 	DBG("thread_affinity_terminate(%p)\n", thread);
 
 	aspc = aset->aset_space;
-	mutex_lock(&aspc->aspc_lock);
+	lck_mtx_lock(&aspc->aspc_lock);
 	if (affinity_set_remove(aset, thread)) {
 		affinity_set_free(aset);
 	}
-	mutex_unlock(&aspc->aspc_lock);
+	lck_mtx_unlock(&aspc->aspc_lock);
+}
+
+/*
+ * thread_affinity_exec()
+ * Called from execve() to cancel any current affinity - a new image implies
+ * the calling thread terminates any expressed or inherited affinity.
+ */
+void
+thread_affinity_exec(thread_t thread)
+{
+	if (thread->affinity_set != AFFINITY_SET_NULL)
+		thread_affinity_terminate(thread);
 }
 
 /*
@@ -358,7 +370,7 @@ affinity_space_alloc(void)
 	if (aspc == NULL)
 		return NULL;
 
-	mutex_init(&aspc->aspc_lock, 0);
+	lck_mtx_init(&aspc->aspc_lock, &task_lck_grp, &task_lck_attr);
 	queue_init(&aspc->aspc_affinities);
 	aspc->aspc_task_count = 1;
 
@@ -529,7 +541,7 @@ affinity_set_place(affinity_space_t aspc, affinity_set_t new_aset)
 	if (affinity_sets_mapping == 0)
 		i_least_occupied = 0;
 	else
-		i_least_occupied = ((unsigned int)aspc % 127) % num_cpu_asets;
+		i_least_occupied = (unsigned int)(((uintptr_t)aspc % 127) % num_cpu_asets);
 	for (i = 0; i < num_cpu_asets; i++) {
 		unsigned int	j = (i_least_occupied + i) % num_cpu_asets;
 		if (set_occupancy[j] == 0) {

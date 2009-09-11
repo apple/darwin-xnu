@@ -27,7 +27,7 @@ include $(MakeInc_def)
 # XXX: CFLAGS
 #
 CFLAGS+= -I. -imacros meta_features.h -DKERNEL -DBSD_KERNEL_PRIVATE \
-	-Wall -Wno-four-char-constants -fno-common
+	-Wall -fno-common
 
 #
 # Directories for mig generated files
@@ -86,8 +86,10 @@ $(COMPONENT).o: $(LDOBJS)
 	$(_v)$(COMPOBJROOT)/newvers \
 	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
 	$(_v)${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
-	@echo LD $(COMPONENT)
-	$(_v)$(LD)  $(LDFLAGS_COMPONENT)  -o $(COMPONENT).o ${LDOBJS} vers.o 
+	@echo LDFILELIST $(COMPONENT)
+	$(_v)( for obj in ${LDOBJS} vers.o; do	\
+		 echo $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$${obj}; \
+	done; ) > $(COMPONENT).o
 
 do_all: $(COMPONENT).o
 

@@ -155,7 +155,9 @@ struct nameidata {
 #define	AUDITVNPATH2	0x00200000 /* audit the path/vnode info */
 #define	USEDVP		0x00400000 /* start the lookup at ndp.ni_dvp */
 #define	CN_VOLFSPATH	0x00800000 /* user path was a volfs style path */
+#ifndef __LP64__
 #define FSNODELOCKHELD	0x01000000
+#endif /* __LP64__ */
 #define UNIONCREATED	0x02000000 /* union fs creation of vnode */
 #if NAMEDRSRCFORK
 #define CN_WANTSRSRCFORK 0x04000000
@@ -172,9 +174,6 @@ struct nameidata {
 	(ndp)->ni_cnd.cn_flags = flags; \
 	if ((segflg) == UIO_USERSPACE) { \
 		(ndp)->ni_segflg = ((IS_64BIT_PROCESS(vfs_context_proc(ctx))) ? UIO_USERSPACE64 : UIO_USERSPACE32); \
-	} \
-	else if ((segflg) == UIO_SYSSPACE) { \
-		(ndp)->ni_segflg = UIO_SYSSPACE32; \
 	} \
 	else { \
 		(ndp)->ni_segflg = segflg; \

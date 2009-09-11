@@ -45,7 +45,6 @@
 #include <sys/conf.h>
 
 /* Prototypes that should be elsewhere: */
-extern int	isdisk(dev_t dev, int type);
 extern dev_t	chrtoblk(dev_t dev);
 extern int	chrtoblk_set(int cdev, int bdev);
 extern int	iskmemdev(dev_t dev);
@@ -102,15 +101,11 @@ extern d_read_t		cnread;
 extern d_write_t	cnwrite;
 extern d_ioctl_t	cnioctl;
 extern d_select_t	cnselect;
-extern d_getc_t		cngetc;
-extern d_putc_t		cnputc;
 extern d_open_t		kmopen;
 extern d_close_t	kmclose;
 extern d_read_t		kmread;
 extern d_write_t	kmwrite;
 extern d_ioctl_t	kmioctl;
-extern d_getc_t		kmgetc;
-extern d_putc_t		kmputc;
 extern d_open_t		sgopen;
 extern d_close_t	sgclose;
 extern d_ioctl_t	sgioctl;
@@ -145,7 +140,6 @@ extern d_close_t	ptsclose;
 extern d_read_t		ptsread;
 extern d_write_t	ptswrite;
 extern d_stop_t		ptsstop;
-extern d_putc_t		ptsputc;
 extern d_open_t		ptcopen;
 extern d_close_t	ptcclose;
 extern d_read_t		ptcread;
@@ -158,7 +152,6 @@ extern d_ioctl_t	ptyioctl;
 #define ptsread		eno_rdwrt
 #define ptswrite	eno_rdwrt
 #define	ptsstop		nulldev
-#define ptsputc		nulldev
 
 #define ptcopen		eno_opcl
 #define ptcclose	eno_opcl
@@ -204,7 +197,7 @@ struct cdevsw	cdevsw[] =
     {
 	cnopen,		cnclose,	cnread,		cnwrite,	/* 0*/
 	cnioctl,	nullstop,	nullreset,	0,		cnselect,
-	eno_mmap,	eno_strat,	cngetc,		cnputc, 	D_TTY
+	eno_mmap,	eno_strat,	eno_getc,	eno_putc, 	D_TTY
     },
     NO_CDEVICE,								/* 1*/
     {
@@ -240,7 +233,7 @@ struct cdevsw	cdevsw[] =
     {
 	kmopen,		kmclose,	kmread,		kmwrite,	/*12*/
 	kmioctl,	nullstop,	nullreset,	km_tty,		ttselect,
-	eno_mmap,	eno_strat,	kmgetc,		kmputc,		0
+	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	0
     },
     NO_CDEVICE,								/*13*/
     NO_CDEVICE,								/*14*/

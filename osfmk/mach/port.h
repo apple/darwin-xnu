@@ -140,12 +140,20 @@ struct ipc_port ;
 
 typedef struct ipc_port	        *ipc_port_t;
 
-#define IPC_PORT_NULL		((ipc_port_t) 0)
-#define IPC_PORT_DEAD		((ipc_port_t)~0)
+#define IPC_PORT_NULL		((ipc_port_t) 0UL)
+#define IPC_PORT_DEAD		((ipc_port_t)~0UL)
 #define IPC_PORT_VALID(port) \
 	((port) != IPC_PORT_NULL && (port) != IPC_PORT_DEAD)
 
 typedef ipc_port_t 		mach_port_t;
+
+/*
+ * Since the 32-bit and 64-bit representations of ~0 are different,
+ * explicitly handle MACH_PORT_DEAD
+ */
+
+#define CAST_MACH_PORT_TO_NAME(x) ((mach_port_name_t)(uintptr_t)(x))
+#define CAST_MACH_NAME_TO_PORT(x) ((x) == MACH_PORT_DEAD ? (mach_port_t)IPC_PORT_DEAD : (mach_port_t)(uintptr_t)(x))
 
 #else	/* KERNEL */
 

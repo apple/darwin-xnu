@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -99,8 +99,8 @@ typedef struct cpu_desc_table64 {
 	uint8_t			dfstk[PAGE_SIZE] __attribute__ ((aligned (16)));
 } cpu_desc_table64_t;
 
-#define	current_gdt()	(current_cpu_datap()->cpu_desc_index.cdi_gdt)
-#define	current_idt()	(current_cpu_datap()->cpu_desc_index.cdi_idt)
+#define	current_gdt()	(current_cpu_datap()->cpu_desc_index.cdi_gdt.ptr)
+#define	current_idt()	(current_cpu_datap()->cpu_desc_index.cdi_idt.ptr)
 #define	current_ldt()	(current_cpu_datap()->cpu_desc_index.cdi_ldt)
 #define	current_ktss()	(current_cpu_datap()->cpu_desc_index.cdi_ktss)
 #define	current_dbtss()	(current_cpu_datap()->cpu_desc_index.cdi_dbtss)
@@ -110,20 +110,16 @@ typedef struct cpu_desc_table64 {
 #define	current_sstk64() ((addr64_t *) current_sstk())
 
 #define	gdt_desc_p(sel) \
-	((struct real_descriptor *)&current_gdt()[sel_idx(sel)])
+	(&((struct real_descriptor *)current_gdt())[sel_idx(sel)])
 #define	ldt_desc_p(sel) \
-	((struct real_descriptor *)&current_ldt()[sel_idx(sel)])
+	(&((struct real_descriptor *)current_ldt())[sel_idx(sel)])
 
-extern void	cpu_desc_init(
-			cpu_data_t	*cdp,
-			boolean_t	is_boot_cpu);
-extern void	cpu_desc_init64(
-			cpu_data_t	*cdp,
-			boolean_t	is_boot_cpu);
-extern void	cpu_desc_load64(
-			cpu_data_t	*cdp);
-extern void	cpu_mode_init(
-			cpu_data_t	*cdp);
+extern void	cpu_mode_init(cpu_data_t *cdp);
+
+extern void	cpu_desc_init(cpu_data_t *cdp);
+extern void	cpu_desc_init64(cpu_data_t *cdp);
+extern void	cpu_desc_load(cpu_data_t *cdp);
+extern void	cpu_desc_load64(cpu_data_t *cdp);
 
 static inline boolean_t
 valid_user_data_selector(uint16_t selector)
@@ -193,4 +189,4 @@ valid_user_segment_selectors(uint16_t cs,
 
 __END_DECLS
 
-#endif	/* _I386_MP_DESC_H_ */
+#endif	/* _X86_64_MP_DESC_H_ */

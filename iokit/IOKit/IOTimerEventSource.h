@@ -159,11 +159,10 @@ public:
     virtual IOReturn setTimeout(UInt32 interval,
 				UInt32 scale_factor = kNanosecondScale);
 
-/*! @function setTimeout
-    @abstract Setup a callback at after the delay in decrementer ticks.	 See wakeAtTime(AbsoluteTime).
-    @param interval Delay from now to wake up.
-    @result kIOReturnSuccess if everything is fine, kIOReturnNoResources if action hasn't been declared. */
-    virtual IOReturn setTimeout(mach_timespec_t interval);
+#if !defined(__LP64__)
+    virtual IOReturn setTimeout(mach_timespec_t interval)
+	APPLE_KEXT_DEPRECATED;
+#endif
 
 /*! @function setTimeout
     @abstract Setup a callback at after the delay in decrementer ticks.	 See wakeAtTime(AbsoluteTime).
@@ -197,11 +196,10 @@ public:
     virtual IOReturn wakeAtTime(UInt32 abstime,
 				UInt32 scale_factor = kNanosecondScale);
 
-/*! @function wakeAtTime
-    @abstract Setup a callback at this absolute time.  See wakeAtTime(AbsoluteTime).
-    @param abstime mach_timespec_t of the desired callout time.
-    @result kIOReturnSuccess if everything is fine, kIOReturnNoResources if action hasn't been declared. */
-    virtual IOReturn wakeAtTime(mach_timespec_t abstime);
+#if !defined(__LP64__)
+    virtual IOReturn wakeAtTime(mach_timespec_t abstime)
+	APPLE_KEXT_DEPRECATED;
+#endif
 
 /*! @function wakeAtTime
     @abstract Setup a callback at this absolute time.

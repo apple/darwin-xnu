@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -224,7 +224,7 @@ static OSErr FindExtentRecord(
 	u_int32_t			*foundHint)
 {
 	FCB *				fcb;
-	BTreeIterator		*btIterator;
+	BTreeIterator		btIterator;
 	FSBufferDescriptor	btRecord;
 	OSErr				err;
 	u_int16_t			btRecordSize;
@@ -234,14 +234,13 @@ static OSErr FindExtentRecord(
 		*foundHint = 0;
 	fcb = GetFileControlBlock(vcb->extentsRefNum);
 	
-	MALLOC(btIterator, BTreeIterator *, sizeof(*btIterator), M_TEMP, M_WAITOK);
-	bzero(btIterator, sizeof(*btIterator));
+	bzero(&btIterator, sizeof(btIterator));
 
 	if (vcb->vcbSigWord == kHFSSigWord) {
 		HFSExtentKey *		extentKeyPtr;
 		HFSExtentRecord		extentData;
 
-		extentKeyPtr = (HFSExtentKey*) &btIterator->key;
+		extentKeyPtr = (HFSExtentKey*) &btIterator.key;
 		extentKeyPtr->keyLength	= kHFSExtentKeyMaximumLength;
 		extentKeyPtr->forkType = forkType;
 		extentKeyPtr->fileID = fileID;
@@ -251,10 +250,10 @@ static OSErr FindExtentRecord(
 		btRecord.itemSize = sizeof(HFSExtentRecord);
 		btRecord.itemCount = 1;
 
-		err = BTSearchRecord(fcb, btIterator, &btRecord, &btRecordSize, btIterator);
+		err = BTSearchRecord(fcb, &btIterator, &btRecord, &btRecordSize, &btIterator);
 
 		if (err == btNotFound && allowPrevious) {
-			err = BTIterateRecord(fcb, kBTreePrevRecord, btIterator, &btRecord, &btRecordSize);
+			err = BTIterateRecord(fcb, kBTreePrevRecord, &btIterator, &btRecord, &btRecordSize);
 
 			//	A previous record may not exist, so just return btNotFound (like we would if
 			//	it was for the wrong file/fork).
@@ -298,7 +297,7 @@ static OSErr FindExtentRecord(
 		HFSPlusExtentKey *	extentKeyPtr;
 		HFSPlusExtentRecord	extentData;
 
-		extentKeyPtr = (HFSPlusExtentKey*) &btIterator->key;
+		extentKeyPtr = (HFSPlusExtentKey*) &btIterator.key;
 		extentKeyPtr->keyLength	 = kHFSPlusExtentKeyMaximumLength;
 		extentKeyPtr->forkType	 = forkType;
 		extentKeyPtr->pad		 = 0;
@@ -309,10 +308,10 @@ static OSErr FindExtentRecord(
 		btRecord.itemSize = sizeof(HFSPlusExtentRecord);
 		btRecord.itemCount = 1;
 
-		err = BTSearchRecord(fcb, btIterator, &btRecord, &btRecordSize, btIterator);
+		err = BTSearchRecord(fcb, &btIterator, &btRecord, &btRecordSize, &btIterator);
 
 		if (err == btNotFound && allowPrevious) {
-			err = BTIterateRecord(fcb, kBTreePrevRecord, btIterator, &btRecord, &btRecordSize);
+			err = BTIterateRecord(fcb, kBTreePrevRecord, &btIterator, &btRecord, &btRecordSize);
 
 			//	A previous record may not exist, so just return btNotFound (like we would if
 			//	it was for the wrong file/fork).
@@ -336,8 +335,7 @@ static OSErr FindExtentRecord(
 	}
 
 	if (foundHint)
-		*foundHint = btIterator->hint.nodeNum;
-	FREE(btIterator, M_TEMP);	
+		*foundHint = btIterator.hint.nodeNum;
 	return err;
 }
 
@@ -349,7 +347,7 @@ static OSErr CreateExtentRecord(
 	HFSPlusExtentRecord	extents,
 	u_int32_t			*hint)
 {
-	BTreeIterator * btIterator;
+	BTreeIterator btIterator;
 	FSBufferDescriptor	btRecord;
 	u_int16_t  btRecordSize;
 	int  lockflags;
@@ -358,8 +356,7 @@ static OSErr CreateExtentRecord(
 	err = noErr;
 	*hint = 0;
 
-	MALLOC(btIterator, BTreeIterator *, sizeof(*btIterator), M_TEMP, M_WAITOK);
-	bzero(btIterator, sizeof(*btIterator));
+	bzero(&btIterator, sizeof(btIterator));
 
 	/*
 	 * The lock taken by callers of ExtendFileC is speculative and
@@ -379,7 +376,7 @@ static OSErr CreateExtentRecord(
 		btRecord.itemSize = btRecordSize;
 		btRecord.itemCount = 1;
 
-		keyPtr = (HFSExtentKey*) &btIterator->key;
+		keyPtr = (HFSExtentKey*) &btIterator.key;
 		keyPtr->keyLength	= kHFSExtentKeyMaximumLength;
 		keyPtr->forkType	= key->forkType;
 		keyPtr->fileID		= key->fileID;
@@ -393,20 +390,19 @@ static OSErr CreateExtentRecord(
 		btRecord.itemSize = btRecordSize;
 		btRecord.itemCount = 1;
 
-		BlockMoveData(key, &btIterator->key, sizeof(HFSPlusExtentKey));
+		BlockMoveData(key, &btIterator.key, sizeof(HFSPlusExtentKey));
 	}
 
 	if (err == noErr)
-		err = BTInsertRecord(GetFileControlBlock(vcb->extentsRefNum), btIterator, &btRecord, btRecordSize);
+		err = BTInsertRecord(GetFileControlBlock(vcb->extentsRefNum), &btIterator, &btRecord, btRecordSize);
 
 	if (err == noErr)
-		*hint = btIterator->hint.nodeNum;
+		*hint = btIterator.hint.nodeNum;
 
 	(void) BTFlushPath(GetFileControlBlock(vcb->extentsRefNum));
 	
 	hfs_systemfile_unlock(vcb, lockflags);
 	
-	FREE(btIterator, M_TEMP);	
 	return err;
 }
 
@@ -417,18 +413,17 @@ static OSErr DeleteExtentRecord(
 	u_int32_t			fileID,
 	u_int32_t			startBlock)
 {
-	BTreeIterator * btIterator;
+	BTreeIterator btIterator;
 	OSErr				err;
 	
 	err = noErr;
 
-	MALLOC(btIterator, BTreeIterator *, sizeof(*btIterator), M_TEMP, M_WAITOK);
-	bzero(btIterator, sizeof(*btIterator));
+	bzero(&btIterator, sizeof(btIterator));
 	
 	if (vcb->vcbSigWord == kHFSSigWord) {
 		HFSExtentKey *	keyPtr;
 
-		keyPtr = (HFSExtentKey*) &btIterator->key;
+		keyPtr = (HFSExtentKey*) &btIterator.key;
 		keyPtr->keyLength	= kHFSExtentKeyMaximumLength;
 		keyPtr->forkType	= forkType;
 		keyPtr->fileID		= fileID;
@@ -437,7 +432,7 @@ static OSErr DeleteExtentRecord(
 	else {		//	HFS Plus volume
 		HFSPlusExtentKey *	keyPtr;
 
-		keyPtr = (HFSPlusExtentKey*) &btIterator->key;
+		keyPtr = (HFSPlusExtentKey*) &btIterator.key;
 		keyPtr->keyLength	= kHFSPlusExtentKeyMaximumLength;
 		keyPtr->forkType	= forkType;
 		keyPtr->pad			= 0;
@@ -445,10 +440,9 @@ static OSErr DeleteExtentRecord(
 		keyPtr->startBlock	= startBlock;
 	}
 
-	err = BTDeleteRecord(GetFileControlBlock(vcb->extentsRefNum), btIterator);
+	err = BTDeleteRecord(GetFileControlBlock(vcb->extentsRefNum), &btIterator);
 	(void) BTFlushPath(GetFileControlBlock(vcb->extentsRefNum));
 	
-	FREE(btIterator, M_TEMP);	
 	return err;
 }
 
@@ -730,9 +724,9 @@ int32_t CompareExtentKeys( const HFSExtentKey *searchKey, const HFSExtentKey *tr
 	
 	#if DEBUG_BUILD
 		if (searchKey->keyLength != kHFSExtentKeyMaximumLength)
-			DebugStr("\pHFS: search Key is wrong length");
+			DebugStr("HFS: search Key is wrong length");
 		if (trialKey->keyLength != kHFSExtentKeyMaximumLength)
-			DebugStr("\pHFS: trial Key is wrong length");
+			DebugStr("HFS: trial Key is wrong length");
 	#endif
 	
 	result = -1;		//	assume searchKey < trialKey
@@ -794,9 +788,9 @@ int32_t CompareExtentKeysPlus( const HFSPlusExtentKey *searchKey, const HFSPlusE
 	
 	#if DEBUG_BUILD
 		if (searchKey->keyLength != kHFSPlusExtentKeyMaximumLength)
-			DebugStr("\pHFS: search Key is wrong length");
+			DebugStr("HFS: search Key is wrong length");
 		if (trialKey->keyLength != kHFSPlusExtentKeyMaximumLength)
-			DebugStr("\pHFS: trial Key is wrong length");
+			DebugStr("HFS: trial Key is wrong length");
 	#endif
 	
 	result = -1;		//	assume searchKey < trialKey
@@ -1087,10 +1081,30 @@ OSErr ExtendFileC (
 	//	If that fails, get whatever we can.
 	//		If forceContig, then take whatever we got
 	//		else, keep getting bits and pieces (non-contig)
+	
+	/*
+	 * Note that for sparse devices (like sparse bundle dmgs), we
+	 * should only be aggressive with re-using once-allocated pieces
+	 * if we're not dealing with system files.  If we're trying to operate
+	 * on behalf of a system file, we need the maximum contiguous amount
+	 * possible.
+	 */
 	err = noErr;
-	wantContig = true;
+	if (   (vcb->hfs_flags & HFS_HAS_SPARSE_DEVICE)
+	    && (fcb->ff_cp->c_fileid >= kHFSFirstUserCatalogNodeID)
+	    && (flags & kEFMetadataMask) == 0) {
+		if (vcb->hfs_flags & HFS_DID_CONTIG_SCAN) {
+			wantContig = false;
+		} else {
+			// we only want to do this once to scan the bitmap to
+			// fill in the vcbFreeExt table of free blocks
+			vcb->hfs_flags |= HFS_DID_CONTIG_SCAN;
+			wantContig = true;
+		}
+	} else {
+		wantContig = true;
+	}
 	useMetaZone = flags & kEFMetadataMask;
-	vcb->vcbFreeExtCnt = 0;	/* For now, force rebuild of free extent list */
 	do {
 		if (blockHint != 0)
 			startBlock = blockHint;
@@ -1322,7 +1336,7 @@ OSErr TruncateFileC (
 	peof = (int64_t)((int64_t)nextBlock * (int64_t)vcb->blockSize);					// number of bytes in those blocks
 	if ((vcb->vcbSigWord == kHFSSigWord) && (peof >= kTwoGigabytes)) {
 		#if DEBUG_BUILD
-			DebugStr("\pHFS: Trying to truncate a file to 2GB or more");
+			DebugStr("HFS: Trying to truncate a file to 2GB or more");
 		#endif
 		err = fileBoundsErr;
 		goto ErrorExit;
@@ -1499,7 +1513,7 @@ OSErr HeadTruncateFile (
 					goto ErrorExit;  /* uh oh */
 				else {
 					error = 0;
-					printf("HeadTruncateFile: problems deallocating %s (%d)\n",
+					printf("hfs: HeadTruncateFile: problems deallocating %s (%d)\n",
 					       FTOC(fcb)->c_desc.cd_nameptr ? (const char *)FTOC(fcb)->c_desc.cd_nameptr : "", error);
 				}
 			}
@@ -1534,7 +1548,7 @@ OSErr HeadTruncateFile (
 			 * a known state.
 			 */
 			if (error != btNotFound)
-				printf("HeadTruncateFile: problems finding extents %s (%d)\n",
+				printf("hfs: HeadTruncateFile: problems finding extents %s (%d)\n",
 				       FTOC(fcb)->c_desc.cd_nameptr ? (const char *)FTOC(fcb)->c_desc.cd_nameptr : "", error);
 			error = 0;
 			break;
@@ -1548,7 +1562,7 @@ OSErr HeadTruncateFile (
 			if (blksfreed < headblks) {
 				error = BlockDeallocate(vcb, extents[i].startBlock, blkcnt);
 				if (error) {
-					printf("HeadTruncateFile: problems deallocating %s (%d)\n",
+					printf("hfs: HeadTruncateFile: problems deallocating %s (%d)\n",
 					       FTOC(fcb)->c_desc.cd_nameptr ? (const char *)FTOC(fcb)->c_desc.cd_nameptr : "", error);
 					error = 0;
 				}
@@ -1563,7 +1577,7 @@ OSErr HeadTruncateFile (
 		
 		error = DeleteExtentRecord(vcb, forkType, fileID, startblk);
 		if (error) {
-			printf("HeadTruncateFile: problems deallocating %s (%d)\n",
+			printf("hfs: HeadTruncateFile: problems deallocating %s (%d)\n",
 				FTOC(fcb)->c_desc.cd_nameptr ? (const char *)FTOC(fcb)->c_desc.cd_nameptr : "", error);
 			error = 0;
 		}
@@ -1834,7 +1848,7 @@ static OSErr UpdateExtentRecord (
 		FTOC(fcb)->c_flag |= C_MODIFIED;
 	}
 	else {
-		BTreeIterator * btIterator;
+		BTreeIterator btIterator;
 		FSBufferDescriptor btRecord;
 		u_int16_t btRecordSize;
 		FCB * btFCB;
@@ -1845,8 +1859,7 @@ static OSErr UpdateExtentRecord (
 		//
 		btFCB = GetFileControlBlock(vcb->extentsRefNum);
 
-		MALLOC(btIterator, BTreeIterator *, sizeof(*btIterator), M_TEMP, M_WAITOK);
-		bzero(btIterator, sizeof(*btIterator));
+		bzero(&btIterator, sizeof(btIterator));
 
 		/*
 		 * The lock taken by callers of ExtendFileC/TruncateFileC is
@@ -1861,50 +1874,49 @@ static OSErr UpdateExtentRecord (
 			HFSExtentKey *	key;				// Actual extent key used on disk in HFS
 			HFSExtentRecord	foundData;			// The extent data actually found
 
-			key = (HFSExtentKey*) &btIterator->key;
+			key = (HFSExtentKey*) &btIterator.key;
 			key->keyLength	= kHFSExtentKeyMaximumLength;
 			key->forkType	= extentFileKey->forkType;
 			key->fileID		= extentFileKey->fileID;
 			key->startBlock	= extentFileKey->startBlock;
 
-			btIterator->hint.index = 0;
-			btIterator->hint.nodeNum = extentBTreeHint;
+			btIterator.hint.index = 0;
+			btIterator.hint.nodeNum = extentBTreeHint;
 
 			btRecord.bufferAddress = &foundData;
 			btRecord.itemSize = sizeof(HFSExtentRecord);
 			btRecord.itemCount = 1;
 
-			err = BTSearchRecord(btFCB, btIterator, &btRecord, &btRecordSize, btIterator);
+			err = BTSearchRecord(btFCB, &btIterator, &btRecord, &btRecordSize, &btIterator);
 			
 			if (err == noErr)
 				err = HFSPlusToHFSExtents(extentData, (HFSExtentDescriptor *)&foundData);
 
 			if (err == noErr)
-				err = BTReplaceRecord(btFCB, btIterator, &btRecord, btRecordSize);
+				err = BTReplaceRecord(btFCB, &btIterator, &btRecord, btRecordSize);
 			(void) BTFlushPath(btFCB);
 		}
 		else {		//	HFS Plus volume
 			HFSPlusExtentRecord	foundData;		// The extent data actually found
 
-			BlockMoveData(extentFileKey, &btIterator->key, sizeof(HFSPlusExtentKey));
+			BlockMoveData(extentFileKey, &btIterator.key, sizeof(HFSPlusExtentKey));
 
-			btIterator->hint.index = 0;
-			btIterator->hint.nodeNum = extentBTreeHint;
+			btIterator.hint.index = 0;
+			btIterator.hint.nodeNum = extentBTreeHint;
 
 			btRecord.bufferAddress = &foundData;
 			btRecord.itemSize = sizeof(HFSPlusExtentRecord);
 			btRecord.itemCount = 1;
 
-			err = BTSearchRecord(btFCB, btIterator, &btRecord, &btRecordSize, btIterator);
+			err = BTSearchRecord(btFCB, &btIterator, &btRecord, &btRecordSize, &btIterator);
 	
 			if (err == noErr) {
 				BlockMoveData(extentData, &foundData, sizeof(HFSPlusExtentRecord));
-				err = BTReplaceRecord(btFCB, btIterator, &btRecord, btRecordSize);
+				err = BTReplaceRecord(btFCB, &btIterator, &btRecord, btRecordSize);
 			}
 			(void) BTFlushPath(btFCB);
 		}
 		hfs_systemfile_unlock(vcb, lockflags);
-		FREE(btIterator, M_TEMP);	
 	}
 	
 	return err;
@@ -1931,7 +1943,7 @@ static OSErr HFSPlusToHFSExtents(
 
 	#if DEBUG_BUILD
 		if (oldExtents[3].startBlock || oldExtents[3].blockCount) {
-			DebugStr("\pExtentRecord with > 3 extents is invalid for HFS");
+			DebugStr("ExtentRecord with > 3 extents is invalid for HFS");
 			err = fsDSIntErr;
 		}
 	#endif

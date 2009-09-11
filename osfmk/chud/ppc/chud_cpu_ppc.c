@@ -57,7 +57,9 @@
 #define mtsr(sr, reg) __asm__ volatile("sync" "@" "mtsr sr%0, %1 " "@" "isync" : : "i" (sr), "r" (reg)); 
 #define mfsr(reg, sr) __asm__ volatile("mfsr %0, sr%1" : "=r" (reg) : "i" (sr));
 
+#if 0
 #pragma mark **** cpu enable/disable ****
+#endif
 
 extern kern_return_t processor_start(processor_t     processor); // osfmk/kern/processor.c
 extern kern_return_t processor_exit(processor_t     processor); // osfmk/kern/processor.c
@@ -84,7 +86,9 @@ kern_return_t chudxnu_enable_cpu(int cpu, boolean_t enable)
     return KERN_FAILURE;
 }
 
+#if 0
 #pragma mark **** nap ****
+#endif
 
 __private_extern__
 kern_return_t chudxnu_enable_cpu_nap(int cpu, boolean_t enable)
@@ -116,7 +120,9 @@ boolean_t chudxnu_cpu_nap_enabled(int cpu)
     return prev;
 }
 
+#if 0
 #pragma mark **** shadowed spr ****
+#endif
 
 __private_extern__
 kern_return_t chudxnu_set_shadowed_spr(int cpu, int spr, uint32_t val)
@@ -358,7 +364,9 @@ uint32_t chudxnu_get_orig_cpu_l3cr(int cpu)
     return PerProcTable[cpu].ppe_vaddr->pf.l3crOriginal;
 }
 
+#if 0
 #pragma mark **** spr ****
+#endif
 
 __private_extern__
 kern_return_t chudxnu_read_spr(int cpu, int spr, uint32_t *val_p)
@@ -1077,7 +1085,9 @@ kern_return_t chudxnu_write_spr64(int cpu, int spr, uint64_t val)
     return retval;
 }
 
+#if 0
 #pragma mark **** perfmon facility ****
+#endif
 
 __private_extern__
 kern_return_t chudxnu_perfmon_acquire_facility(task_t task)
@@ -1091,10 +1101,12 @@ kern_return_t chudxnu_perfmon_release_facility(task_t task)
     return perfmon_release_facility(task);
 }
 
+#if 0
 #pragma mark **** rupt counters ****
+#endif
 
 __private_extern__
-kern_return_t chudxnu_get_cpu_interrupt_counters(int cpu, rupt_counters_t *rupts)
+kern_return_t chudxnu_get_cpu_interrupt_counters(int cpu, interrupt_counters_t *rupts)
 {
     if(cpu<0 || cpu>=chudxnu_phys_cpu_count()) { // check sanity of cpu argument
         return KERN_FAILURE;
@@ -1146,45 +1158,9 @@ kern_return_t chudxnu_clear_cpu_interrupt_counters(int cpu)
     return KERN_SUCCESS;
 }
 
-#pragma mark **** alignment exceptions ****
-
-__private_extern__
-kern_return_t chudxnu_passup_alignment_exceptions(boolean_t enable)
-{
-    if(enable) {
-        dgWork.dgFlags |= enaNotifyEM;
-    } else {
-        dgWork.dgFlags &= ~enaNotifyEM;
-    }
-    return KERN_SUCCESS;
-}
-
-#pragma mark **** scom ****
-kern_return_t chudxnu_scom_read(uint32_t reg, uint64_t *data)
-{
-	ml_scom_read(reg, data);
-	return KERN_SUCCESS;
-}
-
-kern_return_t chudxnu_scom_write(uint32_t reg, uint64_t data)
-{
-	ml_scom_write(reg, data);
-	return KERN_SUCCESS;
-}
-
+#if 0
 #pragma mark *** deprecated ***
-
-//DEPRECATED
-__private_extern__ kern_return_t
-chudxnu_get_cpu_rupt_counters(int cpu, rupt_counters_t *rupts) {
-	return chudxnu_get_cpu_interrupt_counters(cpu, rupts);
-}
-
-//DEPRECATED
-__private_extern__ kern_return_t
-chudxnu_clear_cpu_rupt_counters(int cpu) {
-	return chudxnu_clear_cpu_interrupt_counters(cpu);
-}
+#endif
 
 //DEPRECATED
 __private_extern__

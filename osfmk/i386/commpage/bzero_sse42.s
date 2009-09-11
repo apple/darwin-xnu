@@ -43,9 +43,7 @@
 #define kShort		80		// too short to bother with SSE (must be >=80)
 
 
-        .text
-        .align  5, 0x90
-Lbzero_sse42:                            // void	bzero(void *b, size_t len);
+COMMPAGE_FUNCTION_START(bzero_sse42, 32, 5)
 	pushl	%ebp			// set up a frame for backtraces
 	movl	%esp,%ebp
         pushl   %edi

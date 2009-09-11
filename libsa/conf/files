@@ -8,20 +8,3 @@ OPTIONS/config_dtrace										optional config_dtrace
 # libsa
 
 libsa/bootstrap.cpp                                           standard
-libsa/catalogue.cpp                                           standard
-libsa/c++rem3.c                                               standard
-libsa/dgraph.c                                                standard
-libsa/kld_patch.c                                             standard
-libsa/kext.cpp                                                standard
-libsa/load.c                                                  standard
-libsa/mach.c                                                  standard
-libsa/misc.c                                                  standard
-libsa/mkext.c                                                 standard
-libsa/vers_rsrc.c                                             standard
-
-# pseudo libc
-libsa/bsearch.c                                               standard
-libsa/malloc.c                                                standard
-libsa/sort.c                                                  standard
-libsa/strrchr.c                                               standard
-libsa/strstr.c                                                standard

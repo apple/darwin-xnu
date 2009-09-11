@@ -54,7 +54,7 @@
  *	These pages are all in "gobbled" state when .
  */
 extern kern_return_t
-cpm_allocate(vm_size_t size, vm_page_t *list, ppnum_t max_pnum, boolean_t wire);
+cpm_allocate(vm_size_t size, vm_page_t *list, ppnum_t max_pnum, ppnum_t pnum_mask, boolean_t wire, int flags);
 
 /*
  *	CPM-specific event counters.

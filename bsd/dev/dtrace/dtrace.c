@@ -20,11 +20,11 @@
  */
 
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
-/* #pragma ident	"@(#)dtrace.c	1.49	06/08/11 SMI" */
+/* #pragma ident	"@(#)dtrace.c	1.65	08/07/02 SMI" */
 
 /*
  * DTrace - Dynamic Tracing for Solaris
@@ -65,9 +65,34 @@
  * [Group] Functions", allowing one to find each block by searching forward
  * on capital-f functions.
  */
-
-#define _DTRACE_WANT_PROC_GLUE_	1
-
+#if !defined(__APPLE__)
+#include <sys/errno.h>
+#include <sys/stat.h>
+#include <sys/modctl.h>
+#include <sys/conf.h>
+#include <sys/systm.h>
+#include <sys/ddi.h>
+#include <sys/sunddi.h>
+#include <sys/cpuvar.h>
+#include <sys/kmem.h>
+#include <sys/strsubr.h>
+#include <sys/sysmacros.h>
+#include <sys/dtrace_impl.h>
+#include <sys/atomic.h>
+#include <sys/cmn_err.h>
+#include <sys/mutex_impl.h>
+#include <sys/rwlock_impl.h>
+#include <sys/ctf_api.h>
+#include <sys/panic.h>
+#include <sys/priv_impl.h>
+#include <sys/policy.h>
+#include <sys/cred_impl.h>
+#include <sys/procfs_isa.h>
+#include <sys/taskq.h>
+#include <sys/mkdev.h>
+#include <sys/kdi.h>
+#include <sys/zone.h>
+#else
 #include <sys/errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -88,6 +113,17 @@
 #include <mach/exception_types.h>
 #include <sys/signalvar.h>
 #include <kern/zalloc.h>
+#include <kern/ast.h>
+#include <netinet/in.h>
+
+#if defined(__APPLE__)
+extern uint32_t pmap_find_phys(void *, uint64_t);
+extern boolean_t pmap_valid_page(uint32_t);
+#endif /* __APPLE__ */
+
+
+/* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
+#define proc_t struct proc /* Steer clear of the Darwin typedef for proc_t */
 
 #define t_predcache t_dtrace_predcache /* Cosmetic. Helps readability of thread.h */
 
@@ -95,14 +131,16 @@ extern void dtrace_suspend(void);
 extern void dtrace_resume(void);
 extern void dtrace_init(void);
 extern void helper_init(void);
-
-#if defined(__APPLE__)
+extern void fasttrap_init(void);
+extern void dtrace_lazy_dofs_duplicate(proc_t *, proc_t *);
+extern void dtrace_lazy_dofs_destroy(proc_t *);
+extern void dtrace_postinit(void);
 
 #include "../../../osfmk/chud/chud_dtrace.h"
 
 extern kern_return_t chudxnu_dtrace_callback
 	(uint64_t selector, uint64_t *args, uint32_t count);
-#endif
+#endif /* __APPLE__ */
 
 /*
  * DTrace Tunable Variables
@@ -125,12 +163,9 @@ extern kern_return_t chudxnu_dtrace_callback
  * /etc/system.
  */
 int		dtrace_destructive_disallow = 0;
-#if defined(__APPLE__)
-#define proc_t struct proc
-#endif /* __APPLE__ */
 dtrace_optval_t	dtrace_nonroot_maxsize = (16 * 1024 * 1024);
 size_t		dtrace_difo_maxsize = (256 * 1024);
-dtrace_optval_t	dtrace_dof_maxsize = (256 * 1024);
+dtrace_optval_t	dtrace_dof_maxsize = (384 * 1024);
 size_t		dtrace_global_maxsize = (16 * 1024);
 size_t		dtrace_actions_max = (16 * 1024);
 size_t		dtrace_retain_max = 1024;
@@ -199,23 +234,22 @@ static dtrace_ecb_t	*dtrace_ecb_create_cache; /* cached created ECB */
 static dtrace_genid_t	dtrace_probegen;	/* current probe generation */
 static dtrace_helpers_t *dtrace_deferred_pid;	/* deferred helper list */
 static dtrace_enabling_t *dtrace_retained;	/* list of retained enablings */
+static dtrace_genid_t   dtrace_retained_gen;    /* current retained enab gen */
 static dtrace_dynvar_t	dtrace_dynhash_sink;	/* end of dynamic hash chains */
 #if defined(__APPLE__)
-static int		dtrace_dof_mode;	/* dof mode */
+static int		dtrace_dof_mode;	/* See dtrace_impl.h for a description of Darwin's dof modes. */
 #endif
 
 #if defined(__APPLE__)
-
 /*
  * To save memory, some common memory allocations are given a
- * unique zone. In example, dtrace_probe_t is 72 bytes in size,
+ * unique zone. For example, dtrace_probe_t is 72 bytes in size,
  * which means it would fall into the kalloc.128 bucket. With
  * 20k elements allocated, the space saved is substantial.
  */
 
 struct zone *dtrace_probe_t_zone;
-
-#endif
+#endif /* __APPLE__ */
 
 /*
  * DTrace Locking
@@ -248,6 +282,11 @@ struct zone *dtrace_probe_t_zone;
  * acquired _between_ dtrace_provider_lock and dtrace_lock.
  */
 
+#if !defined(__APPLE__)
+static kmutex_t		dtrace_lock;		/* probe state lock */
+static kmutex_t		dtrace_provider_lock;	/* provider state lock */
+static kmutex_t		dtrace_meta_lock;	/* meta-provider state lock */
+#else
 /*
  * APPLE NOTE:
  *
@@ -268,9 +307,8 @@ struct zone *dtrace_probe_t_zone;
 static lck_mtx_t	dtrace_lock;		/* probe state lock */
 static lck_mtx_t	dtrace_provider_lock;	/* provider state lock */
 static lck_mtx_t	dtrace_meta_lock;	/* meta-provider state lock */
-#if defined(__APPLE__)
 static lck_rw_t		dtrace_dof_mode_lock;	/* dof mode lock */
-#endif
+#endif /* __APPLE__ */
 
 /*
  * DTrace Provider Variables
@@ -313,9 +351,13 @@ dtrace_id_t		dtrace_probeid_error;	/* special ERROR probe */
 uint32_t dtrace_helptrace_next = 0;
 uint32_t dtrace_helptrace_nlocals;
 char	*dtrace_helptrace_buffer;
+#if !defined(__APPLE__) /* Quiet compiler warning */
 int	dtrace_helptrace_bufsize = 512 * 1024;
+#else
+size_t	dtrace_helptrace_bufsize = 512 * 1024;
+#endif /* __APPLE__ */
 
-#ifdef DEBUG
+#if DEBUG
 int	dtrace_helptrace_enabled = 1;
 #else
 int	dtrace_helptrace_enabled = 0;
@@ -330,7 +372,7 @@ int	dtrace_helptrace_enabled = 0;
  * debugging problems in the DIF code generator or in DOF generation .  The
  * error hash may be examined with the ::dtrace_errhash MDB dcmd.
  */
-#ifdef DEBUG
+#if DEBUG
 static dtrace_errhash_t	dtrace_errhash[DTRACE_ERRHASHSZ];
 static const char *dtrace_errlast;
 static kthread_t *dtrace_errthread;
@@ -360,6 +402,8 @@ static lck_mtx_t dtrace_errlock;
 
 #define	DTRACE_AGGHASHSIZE_SLEW		17
 
+#define	DTRACE_V4MAPPED_OFFSET		(sizeof (uint32_t) * 3)
+
 /*
  * The key for a thread-local variable consists of the lower 61 bits of the
  * t_did, plus the 3 bits of the highest active interrupt above LOCK_LEVEL.
@@ -385,22 +429,41 @@ static lck_mtx_t dtrace_errlock;
 	(where) = ((curthread->t_did + DIF_VARIABLE_MAX) & \
 	    (((uint64_t)1 << 61) - 1)) | ((uint64_t)intr << 61); \
 }
-#else
+#else 
+#if (defined(__x86_64__) || defined(__ppc64__))
+/* FIXME: two function calls!! */
 #define	DTRACE_TLS_THRKEY(where) { \
-	uint_t intr = ml_at_interrupt_context(); /* XXX just one measely bit */ \
-	uint_t thr = (uint_t)current_thread(); \
-	uint_t pid = (uint_t)proc_selfpid(); \
+	uint_t intr = ml_at_interrupt_context(); /* Note: just one measly bit */ \
+	uint64_t thr = (uintptr_t)current_thread(); \
 	ASSERT(intr < (1 << 3)); \
-	(where) = ((((uint64_t)thr << 32 | pid) + DIF_VARIABLE_MAX) & \
+	(where) = ((thr + DIF_VARIABLE_MAX) & \
 	    (((uint64_t)1 << 61) - 1)) | ((uint64_t)intr << 61); \
 }
+#else
+/* FIXME: three function calls!!! */
+#define	DTRACE_TLS_THRKEY(where) { \
+	uint_t intr = ml_at_interrupt_context(); /* Note: just one measly bit */ \
+	uint64_t thr = (uintptr_t)current_thread(); \
+	uint_t pid = (uint_t)proc_selfpid(); \
+	ASSERT(intr < (1 << 3)); \
+	(where) = (((thr << 32 | pid) + DIF_VARIABLE_MAX) & \
+	    (((uint64_t)1 << 61) - 1)) | ((uint64_t)intr << 61); \
+}
+#endif
 #endif /* __APPLE__ */
+
+#define	DT_BSWAP_8(x)	((x) & 0xff)
+#define	DT_BSWAP_16(x)	((DT_BSWAP_8(x) << 8) | DT_BSWAP_8((x) >> 8))
+#define	DT_BSWAP_32(x)	((DT_BSWAP_16(x) << 16) | DT_BSWAP_16((x) >> 16))
+#define	DT_BSWAP_64(x)	((DT_BSWAP_32(x) << 32) | DT_BSWAP_32((x) >> 32))
+
+#define	DT_MASK_LO 0x00000000FFFFFFFFULL
 
 #define	DTRACE_STORE(type, tomax, offset, what) \
 	*((type *)((uintptr_t)(tomax) + (uintptr_t)offset)) = (type)(what);
 
 #if !defined(__APPLE__)
-#if !(defined(__i386__) || defined (__x86_64__))
+#ifndef __i386
 #define	DTRACE_ALIGNCHECK(addr, size, flags)				\
 	if (addr & (size - 1)) {					\
 		*flags |= CPU_DTRACE_BADALIGN;				\
@@ -410,7 +473,38 @@ static lck_mtx_t dtrace_errlock;
 #else
 #define	DTRACE_ALIGNCHECK(addr, size, flags)
 #endif
+#else /* __APPLE__ */
+#define	DTRACE_ALIGNCHECK(addr, size, flags)				\
+	if (addr & (MIN(size,4) - 1)) {					\
+		*flags |= CPU_DTRACE_BADALIGN;				\
+		cpu_core[CPU->cpu_id].cpuc_dtrace_illval = addr;	\
+		return (0);						\
+	}
+#endif /* __APPLE__ */
 
+/*
+ * Test whether a range of memory starting at testaddr of size testsz falls
+ * within the range of memory described by addr, sz.  We take care to avoid
+ * problems with overflow and underflow of the unsigned quantities, and
+ * disallow all negative sizes.  Ranges of size 0 are allowed.
+ */
+#define	DTRACE_INRANGE(testaddr, testsz, baseaddr, basesz) \
+	((testaddr) - (baseaddr) < (basesz) && \
+	(testaddr) + (testsz) - (baseaddr) <= (basesz) && \
+	(testaddr) + (testsz) >= (testaddr))
+
+/*
+ * Test whether alloc_sz bytes will fit in the scratch region.  We isolate
+ * alloc_sz on the righthand side of the comparison in order to avoid overflow
+ * or underflow in the comparison with it.  This is simpler than the INRANGE
+ * check above, because we know that the dtms_scratch_ptr is valid in the
+ * range.  Allocations of size zero are allowed.
+ */
+#define	DTRACE_INSCRATCH(mstate, alloc_sz) \
+	((mstate)->dtms_scratch_base + (mstate)->dtms_scratch_size - \
+	(mstate)->dtms_scratch_ptr >= (alloc_sz))
+
+#if !defined(__APPLE__)
 #define	DTRACE_LOADFUNC(bits)						\
 /*CSTYLED*/								\
 uint##bits##_t								\
@@ -445,18 +539,12 @@ dtrace_load##bits(uintptr_t addr)					\
 	rval = *((volatile uint##bits##_t *)addr);			\
 	*flags &= ~CPU_DTRACE_NOFAULT;					\
 									\
-	return (rval);							\
+	return (!(*flags & CPU_DTRACE_FAULT) ? rval : 0);		\
 }
-#else
-#define	DTRACE_ALIGNCHECK(addr, size, flags)				\
-	if (addr & (MIN(size,4) - 1)) {					\
-		*flags |= CPU_DTRACE_BADALIGN;				\
-		cpu_core[CPU->cpu_id].cpuc_dtrace_illval = addr;	\
-		return (0);						\
-	}
-
+#else /* __APPLE__ */
 #define RECOVER_LABEL(bits) __asm__ volatile("_dtraceLoadRecover" #bits ":" );
 
+#if (defined(__i386__) || defined (__x86_64__))
 #define	DTRACE_LOADFUNC(bits)						\
 /*CSTYLED*/								\
 extern vm_offset_t dtraceLoadRecover##bits;				\
@@ -469,7 +557,6 @@ dtrace_load##bits(uintptr_t addr)					\
 	/*CSTYLED*/							\
 	uint##bits##_t rval = 0;					\
 	int i;								\
-	ppnum_t pp;							\
 	volatile uint16_t *flags = (volatile uint16_t *)		\
 	    &cpu_core[CPU->cpu_id].cpuc_dtrace_flags;			\
 									\
@@ -490,10 +577,52 @@ dtrace_load##bits(uintptr_t addr)					\
 		return (0);						\
 	}								\
 									\
-	pp = pmap_find_phys(kernel_pmap, addr);				\
+	{								\
+	volatile vm_offset_t recover = (vm_offset_t)&dtraceLoadRecover##bits;		\
+	*flags |= CPU_DTRACE_NOFAULT;					\
+	recover = dtrace_set_thread_recover(current_thread(), recover);	\
+	/*CSTYLED*/							\
+	/*                                                              \
+	* PR6394061 - avoid device memory that is unpredictably		\
+	* mapped and unmapped                                   	\
+	*/								\
+        if (pmap_valid_page(pmap_find_phys(kernel_pmap, addr)))		\
+	    rval = *((volatile uint##bits##_t *)addr);			\
+	RECOVER_LABEL(bits);						\
+	(void)dtrace_set_thread_recover(current_thread(), recover);	\
+	*flags &= ~CPU_DTRACE_NOFAULT;					\
+	}								\
 									\
-	if (0 == pp || /* pmap_find_phys failed ? */			\
-	    !dtxnu_is_RAM_page(pp) /* Backed by RAM? */ ) {		\
+	return (rval);							\
+}
+#else /* all other architectures */
+#define	DTRACE_LOADFUNC(bits)						\
+/*CSTYLED*/								\
+extern vm_offset_t dtraceLoadRecover##bits;				\
+uint##bits##_t dtrace_load##bits(uintptr_t addr);			\
+									\
+uint##bits##_t								\
+dtrace_load##bits(uintptr_t addr)					\
+{									\
+	size_t size = bits / NBBY;					\
+	/*CSTYLED*/							\
+	uint##bits##_t rval = 0;					\
+	int i;								\
+	volatile uint16_t *flags = (volatile uint16_t *)		\
+	    &cpu_core[CPU->cpu_id].cpuc_dtrace_flags;			\
+									\
+	DTRACE_ALIGNCHECK(addr, size, flags);				\
+									\
+	for (i = 0; i < dtrace_toxranges; i++) {			\
+		if (addr >= dtrace_toxrange[i].dtt_limit)		\
+			continue;					\
+									\
+		if (addr + size <= dtrace_toxrange[i].dtt_base)		\
+			continue;					\
+									\
+		/*							\
+		 * This address falls within a toxic region; return 0.	\
+		 */							\
 		*flags |= CPU_DTRACE_BADADDR;				\
 		cpu_core[CPU->cpu_id].cpuc_dtrace_illval = addr;	\
 		return (0);						\
@@ -503,7 +632,7 @@ dtrace_load##bits(uintptr_t addr)					\
 	volatile vm_offset_t recover = (vm_offset_t)&dtraceLoadRecover##bits;		\
 	*flags |= CPU_DTRACE_NOFAULT;					\
 	recover = dtrace_set_thread_recover(current_thread(), recover);	\
-	/*CSTYLED*/							\
+	/*CSTYLED*/	\
 	rval = *((volatile uint##bits##_t *)addr);			\
 	RECOVER_LABEL(bits);						\
 	(void)dtrace_set_thread_recover(current_thread(), recover);	\
@@ -512,8 +641,8 @@ dtrace_load##bits(uintptr_t addr)					\
 									\
 	return (rval);							\
 }
+#endif
 #endif /* __APPLE__ */
-
 
 #ifdef __LP64__
 #define	dtrace_loadptr	dtrace_load64
@@ -539,12 +668,23 @@ dtrace_load##bits(uintptr_t addr)					\
 	((flags) & CPU_DTRACE_TUPOFLOW) ?  DTRACEFLT_TUPOFLOW :		\
 	((flags) & CPU_DTRACE_BADALIGN) ?  DTRACEFLT_BADALIGN :		\
 	((flags) & CPU_DTRACE_NOSCRATCH) ?  DTRACEFLT_NOSCRATCH :	\
+	((flags) & CPU_DTRACE_BADSTACK) ?  DTRACEFLT_BADSTACK :		\
 	DTRACEFLT_UNKNOWN)
 
 #define	DTRACEACT_ISSTRING(act)						\
 	((act)->dta_kind == DTRACEACT_DIFEXPR &&			\
 	(act)->dta_difo->dtdo_rtype.dtdt_kind == DIF_TYPE_STRING)
 
+
+#if defined (__APPLE__)
+/* Avoid compiler warnings when assigning regs[rd] = NULL */
+#ifdef NULL
+#undef NULL
+#define NULL (uintptr_t)0
+#endif
+#endif /* __APPLE__ */
+
+static size_t dtrace_strlen(const char *, size_t);
 static dtrace_probe_t *dtrace_probe_lookup_id(dtrace_id_t id);
 static void dtrace_enabling_provide(dtrace_provider_t *);
 static int dtrace_enabling_match(dtrace_enabling_t *, int *);
@@ -675,8 +815,7 @@ dtrace_canstore_statvar(uint64_t addr, size_t sz,
 		if (svar == NULL || svar->dtsv_size == 0)
 			continue;
 
-		if (addr - svar->dtsv_data < svar->dtsv_size &&
-		    addr + sz <= svar->dtsv_data + svar->dtsv_size)
+		if (DTRACE_INRANGE(addr, sz, svar->dtsv_data, svar->dtsv_size))
 			return (1);
 	}
 
@@ -693,16 +832,11 @@ static int
 dtrace_canstore(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
     dtrace_vstate_t *vstate)
 {
-	uintptr_t a;
-	size_t s;
-
 	/*
 	 * First, check to see if the address is in scratch space...
 	 */
-	a = mstate->dtms_scratch_base;
-	s = mstate->dtms_scratch_size;
-
-	if (addr - a < s && addr + sz <= a + s)
+	if (DTRACE_INRANGE(addr, sz, mstate->dtms_scratch_base,
+	    mstate->dtms_scratch_size))
 		return (1);
 
 	/*
@@ -710,10 +844,42 @@ dtrace_canstore(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
 	 * up both thread-local variables and any global dynamically-allocated
 	 * variables.
 	 */
-	a = (uintptr_t)vstate->dtvs_dynvars.dtds_base;
-	s = vstate->dtvs_dynvars.dtds_size;
-	if (addr - a < s && addr + sz <= a + s)
+	if (DTRACE_INRANGE(addr, sz, (uintptr_t)vstate->dtvs_dynvars.dtds_base,
+	    vstate->dtvs_dynvars.dtds_size)) {
+		dtrace_dstate_t *dstate = &vstate->dtvs_dynvars;
+		uintptr_t base = (uintptr_t)dstate->dtds_base +
+		    (dstate->dtds_hashsize * sizeof (dtrace_dynhash_t));
+		uintptr_t chunkoffs;
+
+		/*
+		 * Before we assume that we can store here, we need to make
+		 * sure that it isn't in our metadata -- storing to our
+		 * dynamic variable metadata would corrupt our state.  For
+		 * the range to not include any dynamic variable metadata,
+		 * it must:
+		 *
+		 *	(1) Start above the hash table that is at the base of
+		 *	the dynamic variable space
+		 *
+		 *	(2) Have a starting chunk offset that is beyond the
+		 *	dtrace_dynvar_t that is at the base of every chunk
+		 *
+		 *	(3) Not span a chunk boundary
+		 *
+		 */
+		if (addr < base)
+			return (0);
+
+		chunkoffs = (addr - base) % dstate->dtds_chunksize;
+
+		if (chunkoffs < sizeof (dtrace_dynvar_t))
+			return (0);
+
+		if (chunkoffs + sz > dstate->dtds_chunksize)
+			return (0);
+
 		return (1);
+	}
 
 	/*
 	 * Finally, check the static local and global variables.  These checks
@@ -728,6 +894,104 @@ dtrace_canstore(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
 		return (1);
 
 	return (0);
+}
+
+
+/*
+ * Convenience routine to check to see if the address is within a memory
+ * region in which a load may be issued given the user's privilege level;
+ * if not, it sets the appropriate error flags and loads 'addr' into the
+ * illegal value slot.
+ *
+ * DTrace subroutines (DIF_SUBR_*) should use this helper to implement
+ * appropriate memory access protection.
+ */
+static int
+dtrace_canload(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
+    dtrace_vstate_t *vstate)
+{
+#if !defined(__APPLE__)  /* Quiet compiler warning - matches dtrace_dif_emulate */
+	volatile uintptr_t *illval = &cpu_core[CPU->cpu_id].cpuc_dtrace_illval;
+#else
+	volatile uint64_t *illval = &cpu_core[CPU->cpu_id].cpuc_dtrace_illval;
+#endif /* __APPLE */
+
+	/*
+	 * If we hold the privilege to read from kernel memory, then
+	 * everything is readable.
+	 */
+	if ((mstate->dtms_access & DTRACE_ACCESS_KERNEL) != 0)
+		return (1);
+
+	/*
+	 * You can obviously read that which you can store.
+	 */
+	if (dtrace_canstore(addr, sz, mstate, vstate))
+		return (1);
+
+	/*
+	 * We're allowed to read from our own string table.
+	 */
+	if (DTRACE_INRANGE(addr, sz, (uintptr_t)mstate->dtms_difo->dtdo_strtab,
+	    mstate->dtms_difo->dtdo_strlen))
+		return (1);
+
+	DTRACE_CPUFLAG_SET(CPU_DTRACE_KPRIV);
+	*illval = addr;
+	return (0);
+}
+
+/*
+ * Convenience routine to check to see if a given string is within a memory
+ * region in which a load may be issued given the user's privilege level;
+ * this exists so that we don't need to issue unnecessary dtrace_strlen()
+ * calls in the event that the user has all privileges.
+ */
+static int
+dtrace_strcanload(uint64_t addr, size_t sz, dtrace_mstate_t *mstate,
+    dtrace_vstate_t *vstate)
+{
+	size_t strsz;
+
+	/*
+	 * If we hold the privilege to read from kernel memory, then
+	 * everything is readable.
+	 */
+	if ((mstate->dtms_access & DTRACE_ACCESS_KERNEL) != 0)
+		return (1);
+
+	strsz = 1 + dtrace_strlen((char *)(uintptr_t)addr, sz);
+	if (dtrace_canload(addr, strsz, mstate, vstate))
+		return (1);
+
+	return (0);
+}
+
+/*
+ * Convenience routine to check to see if a given variable is within a memory
+ * region in which a load may be issued given the user's privilege level.
+ */
+static int
+dtrace_vcanload(void *src, dtrace_diftype_t *type, dtrace_mstate_t *mstate,
+    dtrace_vstate_t *vstate)
+{
+	size_t sz;
+	ASSERT(type->dtdt_flags & DIF_TF_BYREF);
+
+	/*
+	 * If we hold the privilege to read from kernel memory, then
+	 * everything is readable.
+	 */
+	if ((mstate->dtms_access & DTRACE_ACCESS_KERNEL) != 0)
+		return (1);
+
+	if (type->dtdt_kind == DIF_TYPE_STRING)
+		sz = dtrace_strlen(src,
+		    vstate->dtvs_state->dts_options[DTRACEOPT_STRSIZE]) + 1;
+	else
+		sz = type->dtdt_size;
+
+	return (dtrace_canload((uintptr_t)src, sz, mstate, vstate));
 }
 
 /*
@@ -745,15 +1009,17 @@ dtrace_strncmp(char *s1, char *s2, size_t limit)
 	flags = (volatile uint16_t *)&cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
 
 	do {
-		if (s1 == NULL)
+		if (s1 == NULL) {
 			c1 = '\0';
-		else
+		} else {
 			c1 = dtrace_load8((uintptr_t)s1++);
+		}
 
-		if (s2 == NULL)
+		if (s2 == NULL) {
 			c2 = '\0';
-		else
+		} else {
 			c2 = dtrace_load8((uintptr_t)s2++);
+		}
 
 		if (c1 != c2)
 			return (c1 - c2);
@@ -771,9 +1037,10 @@ dtrace_strlen(const char *s, size_t lim)
 {
 	uint_t len;
 
-	for (len = 0; len != lim; len++)
+	for (len = 0; len != lim; len++) {
 		if (dtrace_load8((uintptr_t)s++) == '\0')
 			break;
+	}
 
 	return (len);
 }
@@ -866,10 +1133,11 @@ dtrace_vcopy(void *src, void *dst, dtrace_diftype_t *type)
 {
 	ASSERT(type->dtdt_flags & DIF_TF_BYREF);
 
-	if (type->dtdt_kind == DIF_TYPE_STRING)
+	if (type->dtdt_kind == DIF_TYPE_STRING) {
 		dtrace_strcpy(src, dst, type->dtdt_size);
-	else
+	} else {
 		dtrace_bcopy(src, dst, type->dtdt_size);
+}
 }
 
 /*
@@ -915,6 +1183,93 @@ dtrace_bzero(void *dst, size_t len)
 		*cp++ = 0;
 }
 
+static void
+dtrace_add_128(uint64_t *addend1, uint64_t *addend2, uint64_t *sum)
+{
+	uint64_t result[2];
+
+	result[0] = addend1[0] + addend2[0];
+	result[1] = addend1[1] + addend2[1] +
+	    (result[0] < addend1[0] || result[0] < addend2[0] ? 1 : 0);
+
+	sum[0] = result[0];
+	sum[1] = result[1];
+}
+
+/*
+ * Shift the 128-bit value in a by b. If b is positive, shift left.
+ * If b is negative, shift right.
+ */
+static void
+dtrace_shift_128(uint64_t *a, int b)
+{
+	uint64_t mask;
+
+	if (b == 0)
+		return;
+
+	if (b < 0) {
+		b = -b;
+		if (b >= 64) {
+			a[0] = a[1] >> (b - 64);
+			a[1] = 0;
+		} else {
+			a[0] >>= b;
+			mask = 1LL << (64 - b);
+			mask -= 1;
+			a[0] |= ((a[1] & mask) << (64 - b));
+			a[1] >>= b;
+		}
+	} else {
+		if (b >= 64) {
+			a[1] = a[0] << (b - 64);
+			a[0] = 0;
+		} else {
+			a[1] <<= b;
+			mask = a[0] >> (64 - b);
+			a[1] |= mask;
+			a[0] <<= b;
+		}
+	}
+}
+
+/*
+ * The basic idea is to break the 2 64-bit values into 4 32-bit values,
+ * use native multiplication on those, and then re-combine into the
+ * resulting 128-bit value.
+ *
+ * (hi1 << 32 + lo1) * (hi2 << 32 + lo2) =
+ *     hi1 * hi2 << 64 +
+ *     hi1 * lo2 << 32 +
+ *     hi2 * lo1 << 32 +
+ *     lo1 * lo2
+ */
+static void
+dtrace_multiply_128(uint64_t factor1, uint64_t factor2, uint64_t *product)
+{
+	uint64_t hi1, hi2, lo1, lo2;
+	uint64_t tmp[2];
+
+	hi1 = factor1 >> 32;
+	hi2 = factor2 >> 32;
+
+	lo1 = factor1 & DT_MASK_LO;
+	lo2 = factor2 & DT_MASK_LO;
+
+	product[0] = lo1 * lo2;
+	product[1] = hi1 * hi2;
+
+	tmp[0] = hi1 * lo2;
+	tmp[1] = 0;
+	dtrace_shift_128(tmp, 32);
+	dtrace_add_128(product, tmp, product);
+
+	tmp[0] = hi2 * lo1;
+	tmp[1] = 0;
+	dtrace_shift_128(tmp, 32);
+	dtrace_add_128(product, tmp, product);
+}
+
 /*
  * This privilege check should be used by actions and subroutines to
  * verify that the user credentials of the process that enabled the
@@ -956,6 +1311,7 @@ static int
 dtrace_priv_proc_common_zone(dtrace_state_t *state)
 {
 	cred_t *cr, *s_cr = state->dts_cred.dcr_cred;
+#pragma unused(cr, s_cr) /* __APPLE__ */
 
 	/*
 	 * We should always have a non-NULL state cred here, since if cred
@@ -1116,7 +1472,7 @@ dtrace_priv_kernel_destructive(dtrace_state_t *state)
  * clean the dirty dynamic variable lists on all CPUs.  Dynamic variable
  * cleaning is explained in detail in <sys/dtrace_impl.h>.
  */
-#if defined(__APPLE__)
+#if defined(__APPLE__) /* Quiet compiler warning. */
 static 
 #endif /* __APPLE__ */
 void
@@ -1211,12 +1567,13 @@ dtrace_dynvar_clean(dtrace_dstate_t *dstate)
  * variable can be allocated.  If NULL is returned, the appropriate counter
  * will be incremented.
  */
-#if defined(__APPLE__)
+#if defined(__APPLE__) /* Quiet compiler warning. */
 static 
 #endif /* __APPLE__ */
 dtrace_dynvar_t *
 dtrace_dynvar(dtrace_dstate_t *dstate, uint_t nkeys,
-    dtrace_key_t *key, size_t dsize, dtrace_dynvar_op_t op)
+    dtrace_key_t *key, size_t dsize, dtrace_dynvar_op_t op,
+    dtrace_mstate_t *mstate, dtrace_vstate_t *vstate)
 {
 	uint64_t hashval = DTRACE_DYNHASH_VALID;
 	dtrace_dynhash_t *hash = dstate->dtds_hash;
@@ -1268,6 +1625,9 @@ dtrace_dynvar(dtrace_dstate_t *dstate, uint_t nkeys,
 			uint64_t j, size = key[i].dttk_size;
 			uintptr_t base = (uintptr_t)key[i].dttk_value;
 
+			if (!dtrace_canload(base, size, mstate, vstate))
+				break;
+
 			for (j = 0; j < size; j++) {
 				hashval += dtrace_load8(base + j);
 				hashval += (hashval << 10);
@@ -1275,6 +1635,9 @@ dtrace_dynvar(dtrace_dstate_t *dstate, uint_t nkeys,
 			}
 		}
 	}
+
+	if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_FAULT))
+		return (NULL);
 
 	hashval += (hashval << 3);
 	hashval ^= (hashval >> 11);
@@ -1306,9 +1669,15 @@ dtrace_dynvar(dtrace_dstate_t *dstate, uint_t nkeys,
 			while ((lock = *lockp) & 1)
 				continue;
 
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 			if (dtrace_casptr((void *)lockp,
 			    (void *)lock, (void *)(lock + 1)) == (void *)lock)
 				break;
+#else
+			if (dtrace_casptr((void *)(uintptr_t)lockp,
+			    (void *)lock, (void *)(lock + 1)) == (void *)lock)
+				break;
+#endif /* __APPLE__ */
 		}
 
 		dtrace_membar_producer();
@@ -1662,15 +2031,15 @@ retry:
 		dvar->dtdv_next = free;
 	} while (dtrace_casptr(&dcpu->dtdsc_dirty, free, dvar) != free);
 
-	return (dtrace_dynvar(dstate, nkeys, key, dsize, op));
+	return (dtrace_dynvar(dstate, nkeys, key, dsize, op, mstate, vstate));
 }
 
 /*ARGSUSED*/
 static void
 dtrace_aggregate_min(uint64_t *oval, uint64_t nval, uint64_t arg)
 {
-#pragma unused(arg)
-	if (nval < *oval)
+#pragma unused(arg) /* __APPLE__ */
+	if ((int64_t)nval < (int64_t)*oval)
 		*oval = nval;
 }
 
@@ -1678,8 +2047,8 @@ dtrace_aggregate_min(uint64_t *oval, uint64_t nval, uint64_t arg)
 static void
 dtrace_aggregate_max(uint64_t *oval, uint64_t nval, uint64_t arg)
 {
-#pragma unused(arg)
-	if (nval > *oval)
+#pragma unused(arg) /* __APPLE__ */
+	if ((int64_t)nval > (int64_t)*oval)
 		*oval = nval;
 }
 
@@ -1748,16 +2117,42 @@ dtrace_aggregate_lquantize(uint64_t *lquanta, uint64_t nval, uint64_t incr)
 static void
 dtrace_aggregate_avg(uint64_t *data, uint64_t nval, uint64_t arg)
 {
-#pragma unused(arg)
+#pragma unused(arg) /* __APPLE__ */
 	data[0]++;
 	data[1] += nval;
 }
 
 /*ARGSUSED*/
 static void
+dtrace_aggregate_stddev(uint64_t *data, uint64_t nval, uint64_t arg)
+{
+#pragma unused(arg) /* __APPLE__ */
+	int64_t snval = (int64_t)nval;
+	uint64_t tmp[2];
+
+	data[0]++;
+	data[1] += nval;
+
+	/*
+	 * What we want to say here is:
+	 *
+	 * data[2] += nval * nval;
+	 *
+	 * But given that nval is 64-bit, we could easily overflow, so
+	 * we do this as 128-bit arithmetic.
+	 */
+	if (snval < 0)
+		snval = -snval;
+
+	dtrace_multiply_128((uint64_t)snval, (uint64_t)snval, tmp);
+	dtrace_add_128(data + 2, tmp, data + 2);
+}
+
+/*ARGSUSED*/
+static void
 dtrace_aggregate_count(uint64_t *oval, uint64_t nval, uint64_t arg)
 {
-#pragma unused(nval,arg)
+#pragma unused(nval, arg) /* __APPLE__ */
 	*oval = *oval + 1;
 }
 
@@ -1765,7 +2160,7 @@ dtrace_aggregate_count(uint64_t *oval, uint64_t nval, uint64_t arg)
 static void
 dtrace_aggregate_sum(uint64_t *oval, uint64_t nval, uint64_t arg)
 {
-#pragma unused(arg)
+#pragma unused(arg) /* __APPLE__ */
 	*oval += nval;
 }
 
@@ -2084,17 +2479,28 @@ dtrace_speculation_commit(dtrace_state_t *state, processorid_t cpu,
 	dtrace_speculation_t *spec;
 	dtrace_buffer_t *src, *dest;
 	uintptr_t daddr, saddr, dlimit;
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	dtrace_speculation_state_t current, new;
+#else
+	dtrace_speculation_state_t current,  new = DTRACESPEC_INACTIVE;
+#endif /* __APPLE__ */
 	intptr_t offs;
 
 	if (which == 0)
 		return;
 
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	if (which > state->dts_nspeculations) {
 		cpu_core[cpu].cpuc_dtrace_flags |= CPU_DTRACE_ILLOP;
 		return;
 	}
-
+#else
+	if (which > (dtrace_specid_t)state->dts_nspeculations) {
+		cpu_core[cpu].cpuc_dtrace_flags |= CPU_DTRACE_ILLOP;
+		return;
+	}
+#endif /* __APPLE__ */
+	
 	spec = &state->dts_speculations[which - 1];
 	src = &spec->dtsp_buffer[cpu];
 	dest = &state->dts_buffer[cpu];
@@ -2200,6 +2606,7 @@ out:
 	    (current == DTRACESPEC_ACTIVEONE && new == DTRACESPEC_COMMITTING)) {
 		uint32_t rval = dtrace_cas32((uint32_t *)&spec->dtsp_state,
 		    DTRACESPEC_COMMITTING, DTRACESPEC_INACTIVE);
+#pragma unused(rval) /* __APPLE__ */
 
 		ASSERT(rval == DTRACESPEC_COMMITTING);
 	}
@@ -2220,16 +2627,27 @@ dtrace_speculation_discard(dtrace_state_t *state, processorid_t cpu,
     dtrace_specid_t which)
 {
 	dtrace_speculation_t *spec;
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	dtrace_speculation_state_t current, new;
+#else
+	dtrace_speculation_state_t current, new = DTRACESPEC_INACTIVE;
+#endif /* __APPLE__ */
 	dtrace_buffer_t *buf;
 
 	if (which == 0)
 		return;
 
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	if (which > state->dts_nspeculations) {
 		cpu_core[cpu].cpuc_dtrace_flags |= CPU_DTRACE_ILLOP;
 		return;
 	}
+#else
+	if (which > (dtrace_specid_t)state->dts_nspeculations) {
+		cpu_core[cpu].cpuc_dtrace_flags |= CPU_DTRACE_ILLOP;
+		return;
+	}
+#endif /* __APPLE__ */
 
 	spec = &state->dts_speculations[which - 1];
 	buf = &spec->dtsp_buffer[cpu];
@@ -2289,7 +2707,11 @@ dtrace_speculation_clean_here(dtrace_state_t *state)
 		return;
 	}
 
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	for (i = 0; i < state->dts_nspeculations; i++) {
+#else
+	for (i = 0; i < (dtrace_specid_t)state->dts_nspeculations; i++) {
+#endif /* __APPLE__ */
 		dtrace_speculation_t *spec = &state->dts_speculations[i];
 		dtrace_buffer_t *src = &spec->dtsp_buffer[cpu];
 
@@ -2324,10 +2746,19 @@ dtrace_speculation_clean_here(dtrace_state_t *state)
 static void
 dtrace_speculation_clean(dtrace_state_t *state)
 {
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	int work = 0, rv;
+#else
+	int work = 0;
+	uint32_t rv;
+#endif /* __APPLE__ */
 	dtrace_specid_t i;
 
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	for (i = 0; i < state->dts_nspeculations; i++) {
+#else
+	for (i = 0; i < (dtrace_specid_t)state->dts_nspeculations; i++) {
+#endif /* __APPLE__ */
 		dtrace_speculation_t *spec = &state->dts_speculations[i];
 
 		ASSERT(!spec->dtsp_cleaning);
@@ -2351,7 +2782,11 @@ dtrace_speculation_clean(dtrace_state_t *state)
 	 * speculation buffers, as appropriate.  We can now set the state
 	 * to inactive.
 	 */
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	for (i = 0; i < state->dts_nspeculations; i++) {
+#else
+	for (i = 0; i < (dtrace_specid_t)state->dts_nspeculations; i++) {
+#endif /* __APPLE__ */
 		dtrace_speculation_t *spec = &state->dts_speculations[i];
 		dtrace_speculation_state_t current, new;
 
@@ -2382,13 +2817,21 @@ dtrace_speculation_buffer(dtrace_state_t *state, processorid_t cpuid,
     dtrace_specid_t which)
 {
 	dtrace_speculation_t *spec;
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	dtrace_speculation_state_t current, new;
+#else
+	dtrace_speculation_state_t current, new = DTRACESPEC_INACTIVE;
+#endif /* __APPLE__ */
 	dtrace_buffer_t *buf;
 
 	if (which == 0)
 		return (NULL);
 
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	if (which > state->dts_nspeculations) {
+#else
+	if (which > (dtrace_specid_t)state->dts_nspeculations) {
+#endif /* __APPLE__ */
 		cpu_core[cpuid].cpuc_dtrace_flags |= CPU_DTRACE_ILLOP;
 		return (NULL);
 	}
@@ -2442,6 +2885,53 @@ dtrace_speculation_buffer(dtrace_state_t *state, processorid_t cpuid,
 }
 
 /*
+ * Return a string.  In the event that the user lacks the privilege to access
+ * arbitrary kernel memory, we copy the string out to scratch memory so that we
+ * don't fail access checking.
+ *
+ * dtrace_dif_variable() uses this routine as a helper for various
+ * builtin values such as 'execname' and 'probefunc.'
+ */
+#if defined(__APPLE__) /* Quiet compiler warning. */
+static
+#endif /* __APPLE__ */
+uintptr_t
+dtrace_dif_varstr(uintptr_t addr, dtrace_state_t *state,
+    dtrace_mstate_t *mstate)
+{
+	uint64_t size = state->dts_options[DTRACEOPT_STRSIZE];
+	uintptr_t ret;
+	size_t strsz;
+
+	/*
+	 * The easy case: this probe is allowed to read all of memory, so
+	 * we can just return this as a vanilla pointer.
+	 */
+	if ((mstate->dtms_access & DTRACE_ACCESS_KERNEL) != 0)
+		return (addr);
+
+	/*
+	 * This is the tougher case: we copy the string in question from
+	 * kernel memory into scratch memory and return it that way: this
+	 * ensures that we won't trip up when access checking tests the
+	 * BYREF return value.
+	 */
+	strsz = dtrace_strlen((char *)addr, size) + 1;
+
+	if (mstate->dtms_scratch_ptr + strsz >
+	    mstate->dtms_scratch_base + mstate->dtms_scratch_size) {
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
+		return (NULL);
+	}
+
+	dtrace_strcpy((const void *)addr, (void *)mstate->dtms_scratch_ptr,
+	    strsz);
+	ret = mstate->dtms_scratch_ptr;
+	mstate->dtms_scratch_ptr += strsz;
+	return (ret);
+}
+
+/*
  * This function implements the DIF emulator's variable lookups.  The emulator
  * passes a reserved variable identifier and optional built-in array index.
  */
@@ -2478,9 +2968,9 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 				    mstate->dtms_probe->dtpr_id,
 				    mstate->dtms_probe->dtpr_arg, ndx, aframes);
 #if defined(__APPLE__)
-			/* Special case access of arg5 as passed to dtrace_probeid_error (which see.) */
+			/* Special case access of arg5 as passed to dtrace_probe_error() (which see.) */
 			else if (mstate->dtms_probe->dtpr_id == dtrace_probeid_error && ndx == 5) {
-				return ((dtrace_state_t *)(mstate->dtms_arg[0]))->dts_arg_error_illval;
+			        return ((dtrace_state_t *)(uintptr_t)(mstate->dtms_arg[0]))->dts_arg_error_illval;
 			}
 #endif /* __APPLE__ */
 			else
@@ -2649,7 +3139,11 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 				    (uint32_t *)(uintptr_t)mstate->dtms_arg[0]);
 				mstate->dtms_caller = caller[1];
 			} else if ((mstate->dtms_caller =
+#if !defined(__APPLE__)  /* Quiet compiler warnings */
 			    dtrace_caller(aframes)) == -1) {
+#else
+			    dtrace_caller(aframes)) == (uintptr_t)-1) {
+#endif /* __APPLE__ */
 				/*
 				 * We have failed to do this the quick way;
 				 * we must resort to the slower approach of
@@ -2680,7 +3174,9 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 			 * we're after.
 			 */
 			ustack[2] = NULL;
+			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
 			dtrace_getupcstack(ustack, 3);
+			DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 			mstate->dtms_ucaller = ustack[2];
 			mstate->dtms_present |= DTRACE_MSTATE_UCALLER;
 		}
@@ -2689,23 +3185,27 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 
 	case DIF_VAR_PROBEPROV:
 		ASSERT(mstate->dtms_present & DTRACE_MSTATE_PROBE);
-		return ((uint64_t)(uintptr_t)
-		    mstate->dtms_probe->dtpr_provider->dtpv_name);
+		return (dtrace_dif_varstr(
+		    (uintptr_t)mstate->dtms_probe->dtpr_provider->dtpv_name,
+		    state, mstate));
 
 	case DIF_VAR_PROBEMOD:
 		ASSERT(mstate->dtms_present & DTRACE_MSTATE_PROBE);
-		return ((uint64_t)(uintptr_t)
-		    mstate->dtms_probe->dtpr_mod);
+		return (dtrace_dif_varstr(
+		    (uintptr_t)mstate->dtms_probe->dtpr_mod,
+		    state, mstate));
 
 	case DIF_VAR_PROBEFUNC:
 		ASSERT(mstate->dtms_present & DTRACE_MSTATE_PROBE);
-		return ((uint64_t)(uintptr_t)
-		    mstate->dtms_probe->dtpr_func);
+		return (dtrace_dif_varstr(
+		    (uintptr_t)mstate->dtms_probe->dtpr_func,
+		    state, mstate));
 
 	case DIF_VAR_PROBENAME:
 		ASSERT(mstate->dtms_present & DTRACE_MSTATE_PROBE);
-		return ((uint64_t)(uintptr_t)
-		    mstate->dtms_probe->dtpr_name);
+		return (dtrace_dif_varstr(
+		    (uintptr_t)mstate->dtms_probe->dtpr_name,
+		    state, mstate));
 
 #if !defined(__APPLE__)
 	case DIF_VAR_PID:
@@ -2758,6 +3258,12 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		if (DTRACE_ANCHORED(mstate->dtms_probe) && CPU_ON_INTR(CPU))
 			return (pid0.pid_id);
 
+		/*
+		 * It is always safe to dereference one's own t_procp pointer:
+		 * it always points to a valid, allocated proc structure.
+		 * (This is true because threads don't clean up their own
+		 * state -- they leave that task to whomever reaps them.)
+		 */
 		return ((uint64_t)curthread->t_procp->p_ppid);
 #else
 	case DIF_VAR_PPID:
@@ -2770,7 +3276,7 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		if (DTRACE_ANCHORED(mstate->dtms_probe) && CPU_ON_INTR(CPU))
 			return (0);
 
-		return ((uint64_t)(uintptr_t)(current_proc()->p_ppid));
+		return ((uint64_t)proc_selfppid());
 #endif /* __APPLE__ */
 
 #if !defined(__APPLE__)
@@ -2784,13 +3290,22 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		return ((uint64_t)curthread->t_tid);
 #else
 	case DIF_VAR_TID:
-		/*
-		 * See comment in DIF_VAR_PID.
-		 */
-		if (DTRACE_ANCHORED(mstate->dtms_probe) && CPU_ON_INTR(CPU))
+		/* We do not need to check for null current_thread() */
+		return thread_tid(current_thread()); /* globally unique */
+
+	case DIF_VAR_PTHREAD_SELF:
+		if (!dtrace_priv_proc(state))
 			return (0);
 
-		return ((uint64_t)(uintptr_t)current_thread()); /* Is user's (pthread_t)t->kernel_thread */
+		/* Not currently supported, but we should be able to delta the dispatchqaddr and dispatchqoffset to get pthread_self */
+		return 0;
+
+	case DIF_VAR_DISPATCHQADDR:
+		if (!dtrace_priv_proc(state))
+			return (0);
+
+		/* We do not need to check for null current_thread() */
+		return thread_dispatchqaddr(current_thread());
 #endif /* __APPLE__ */
 
 #if !defined(__APPLE__)
@@ -2810,8 +3325,9 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		 * (This is true because threads don't clean up their own
 		 * state -- they leave that task to whomever reaps them.)
 		 */
-		return ((uint64_t)(uintptr_t)
-		    curthread->t_procp->p_user.u_comm);
+		return (dtrace_dif_varstr(
+		    (uintptr_t)curthread->t_procp->p_user.u_comm,
+		    state, mstate));
 #else
 	case DIF_VAR_EXECNAME:
 	{
@@ -2819,9 +3335,10 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		size_t scratch_size = MAXCOMLEN+1;
 		
 		/* The scratch allocation's lifetime is that of the clause. */
-		if (mstate->dtms_scratch_ptr + scratch_size >
-		    mstate->dtms_scratch_base + mstate->dtms_scratch_size)
+		if (!DTRACE_INSCRATCH(mstate, scratch_size)) {
+			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
 			return 0;
+		}
 			
 		if (!dtrace_priv_proc_relaxed(state))
 			return (0);
@@ -2849,14 +3366,16 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		 * (This is true because threads don't clean up their own
 		 * state -- they leave that task to whomever reaps them.)
 		 */
-		return ((uint64_t)(uintptr_t)
-		    curthread->t_procp->p_zone->zone_name);
+		return (dtrace_dif_varstr(
+		    (uintptr_t)curthread->t_procp->p_zone->zone_name,
+		    state, mstate));
 
 #else
 	case DIF_VAR_ZONENAME:
 		if (!dtrace_priv_proc(state))
 			return (0);
 		
+		/* FIXME: return e.g. "global" allocated from scratch a la execname. */
 		return ((uint64_t)(uintptr_t)NULL); /* Darwin doesn't do "zones" */
 #endif /* __APPLE__ */
 
@@ -2871,7 +3390,16 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		if (DTRACE_ANCHORED(mstate->dtms_probe) && CPU_ON_INTR(CPU))
 			return ((uint64_t)p0.p_cred->cr_uid);
 
-		return ((uint64_t)curthread->t_cred->cr_uid);
+		/*
+		 * It is always safe to dereference one's own t_procp pointer:
+		 * it always points to a valid, allocated proc structure.
+		 * (This is true because threads don't clean up their own
+		 * state -- they leave that task to whomever reaps them.)
+		 *
+		 * Additionally, it is safe to dereference one's own process
+		 * credential, since this is never NULL after process birth.
+		 */
+		return ((uint64_t)curthread->t_procp->p_cred->cr_uid);
 #else
 	case DIF_VAR_UID:
 		if (!dtrace_priv_proc(state))
@@ -2884,9 +3412,13 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 			return (0);
 
 		if (dtrace_CRED() != NULL)
+			/* Credential does not require lazy initialization. */
 			return ((uint64_t)kauth_getuid());
-		else
-			return -1LL;
+		else {
+			/* proc_lock would be taken under kauth_cred_proc_ref() in kauth_cred_get(). */
+			DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+			return -1ULL;
+		}
 #endif /* __APPLE__ */
 
 #if !defined(__APPLE__)
@@ -2900,7 +3432,16 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		if (DTRACE_ANCHORED(mstate->dtms_probe) && CPU_ON_INTR(CPU))
 			return ((uint64_t)p0.p_cred->cr_gid);
 
-		return ((uint64_t)curthread->t_cred->cr_gid);
+		/*
+		 * It is always safe to dereference one's own t_procp pointer:
+		 * it always points to a valid, allocated proc structure.
+		 * (This is true because threads don't clean up their own
+		 * state -- they leave that task to whomever reaps them.)
+		 *
+		 * Additionally, it is safe to dereference one's own process
+		 * credential, since this is never NULL after process birth.
+		 */
+		return ((uint64_t)curthread->t_procp->p_cred->cr_gid);
 #else
 	case DIF_VAR_GID:
 		if (!dtrace_priv_proc(state))
@@ -2913,9 +3454,13 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 			return (0);
 
 		if (dtrace_CRED() != NULL)
+			/* Credential does not require lazy initialization. */
 			return ((uint64_t)kauth_getgid());
-		else
-			return -1LL;
+		else {
+			/* proc_lock would be taken under kauth_cred_proc_ref() in kauth_cred_get(). */
+			DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+			return -1ULL;
+		}
 #endif /* __APPLE__ */
 
 #if !defined(__APPLE__)
@@ -2930,6 +3475,12 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		if (DTRACE_ANCHORED(mstate->dtms_probe) && CPU_ON_INTR(CPU))
 			return (0);
 
+		/*
+		 * It is always safe to dereference one's own t_lwp pointer in
+		 * the event that this pointer is non-NULL.  (This is true
+		 * because threads and lwps don't clean up their own state --
+		 * they leave that task to whomever reaps them.)
+		 */
 		if ((lwp = curthread->t_lwp) == NULL)
 			return (0);
 
@@ -2947,7 +3498,12 @@ dtrace_dif_variable(dtrace_mstate_t *mstate, dtrace_state_t *state, uint64_t v,
 		if (DTRACE_ANCHORED(mstate->dtms_probe) && CPU_ON_INTR(CPU))
 			return (0);
 
-		return (uthread ? uthread->t_dtrace_errno : -1);
+		if (uthread)
+			return (uint64_t)uthread->t_dtrace_errno;
+		else {
+			DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+			return -1ULL;
+		}
 	}
 #endif /* __APPLE__ */
 
@@ -2975,6 +3531,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 #else
 	volatile uint64_t *illval = &cpu_core[CPU->cpu_id].cpuc_dtrace_illval;
 #endif /* __APPLE__ */
+	dtrace_vstate_t *vstate = &state->dts_vstate;
 
 #if !defined(__APPLE__)
 	union {
@@ -2987,7 +3544,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		uintptr_t rw;
 	} r;
 #else
-/* XXX awaits lock/mutex work */
+/* FIXME: awaits lock/mutex work */
 #endif /* __APPLE__ */
 
 	switch (subr) {
@@ -2997,6 +3554,12 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 
 #if !defined(__APPLE__)
 	case DIF_SUBR_MUTEX_OWNED:
+		if (!dtrace_canload(tupregs[0].dttk_value, sizeof (kmutex_t),
+		    mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
 		m.mx = dtrace_load64(tupregs[0].dttk_value);
 		if (MUTEX_TYPE_ADAPTIVE(&m.mi))
 			regs[rd] = MUTEX_OWNER(&m.mi) != MUTEX_NO_OWNER;
@@ -3005,6 +3568,12 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		break;
 
 	case DIF_SUBR_MUTEX_OWNER:
+		if (!dtrace_canload(tupregs[0].dttk_value, sizeof (kmutex_t),
+		    mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
 		m.mx = dtrace_load64(tupregs[0].dttk_value);
 		if (MUTEX_TYPE_ADAPTIVE(&m.mi) &&
 		    MUTEX_OWNER(&m.mi) != MUTEX_NO_OWNER)
@@ -3014,11 +3583,23 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		break;
 
 	case DIF_SUBR_MUTEX_TYPE_ADAPTIVE:
+		if (!dtrace_canload(tupregs[0].dttk_value, sizeof (kmutex_t),
+		    mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
 		m.mx = dtrace_load64(tupregs[0].dttk_value);
 		regs[rd] = MUTEX_TYPE_ADAPTIVE(&m.mi);
 		break;
 
 	case DIF_SUBR_MUTEX_TYPE_SPIN:
+		if (!dtrace_canload(tupregs[0].dttk_value, sizeof (kmutex_t),
+		    mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
 		m.mx = dtrace_load64(tupregs[0].dttk_value);
 		regs[rd] = MUTEX_TYPE_SPIN(&m.mi);
 		break;
@@ -3026,22 +3607,40 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 	case DIF_SUBR_RW_READ_HELD: {
 		uintptr_t tmp;
 
+		if (!dtrace_canload(tupregs[0].dttk_value, sizeof (uintptr_t),
+		    mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
 		r.rw = dtrace_loadptr(tupregs[0].dttk_value);
 		regs[rd] = _RW_READ_HELD(&r.ri, tmp);
 		break;
 	}
 
 	case DIF_SUBR_RW_WRITE_HELD:
+		if (!dtrace_canload(tupregs[0].dttk_value, sizeof (krwlock_t),
+		    mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
 		r.rw = dtrace_loadptr(tupregs[0].dttk_value);
 		regs[rd] = _RW_WRITE_HELD(&r.ri);
 		break;
 
 	case DIF_SUBR_RW_ISWRITER:
+		if (!dtrace_canload(tupregs[0].dttk_value, sizeof (krwlock_t),
+		    mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
 		r.rw = dtrace_loadptr(tupregs[0].dttk_value);
 		regs[rd] = _RW_ISWRITER(&r.ri);
 		break;
 #else
-/* XXX awaits lock/mutex work */
+/* FIXME: awaits lock/mutex work */
 #endif /* __APPLE__ */
 
 	case DIF_SUBR_BCOPY: {
@@ -3056,6 +3655,11 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		if (!dtrace_inscratch(dest, size, mstate)) {
 			*flags |= CPU_DTRACE_BADADDR;
 			*illval = regs[rd];
+			break;
+		}
+
+		if (!dtrace_canload(src, size, mstate, vstate)) {
+			regs[rd] = NULL;
 			break;
 		}
 
@@ -3075,8 +3679,13 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		 * probes will not activate in user contexts to which the
 		 * enabling user does not have permissions.
 		 */
-		if (mstate->dtms_scratch_ptr + scratch_size >
-		    mstate->dtms_scratch_base + mstate->dtms_scratch_size) {
+
+		/*
+		 * Rounding up the user allocation size could have overflowed
+		 * a large, bogus allocation (like -1ULL) to 0.
+		 */
+		if (scratch_size < size ||
+		    !DTRACE_INSCRATCH(mstate, scratch_size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
 			regs[rd] = NULL;
 			break;
@@ -3085,10 +3694,10 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		if (subr == DIF_SUBR_COPYIN) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
 #if !defined(__APPLE__)
-			dtrace_copyin(tupregs[0].dttk_value, dest, size);
+			dtrace_copyin(tupregs[0].dttk_value, dest, size, flags);
 #else
 			if (dtrace_priv_proc(state))
-				dtrace_copyin(tupregs[0].dttk_value, dest, size);
+				dtrace_copyin(tupregs[0].dttk_value, dest, size, flags);
 #endif /* __APPLE__ */
 			DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 		}
@@ -3115,10 +3724,10 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
 #if !defined(__APPLE__)
-		dtrace_copyin(tupregs[0].dttk_value, dest, size);
+		dtrace_copyin(tupregs[0].dttk_value, dest, size, flags);
 #else
 		if (dtrace_priv_proc(state))
-			dtrace_copyin(tupregs[0].dttk_value, dest, size);
+			dtrace_copyin(tupregs[0].dttk_value, dest, size, flags);
 #endif /* __APPLE__ */
 		DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 		break;
@@ -3136,8 +3745,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		 * probes will not activate in user contexts to which the
 		 * enabling user does not have permissions.
 		 */
-		if (mstate->dtms_scratch_ptr + size >
-		    mstate->dtms_scratch_base + mstate->dtms_scratch_size) {
+		if (!DTRACE_INSCRATCH(mstate, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
 			regs[rd] = NULL;
 			break;
@@ -3145,10 +3753,10 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
 #if !defined(__APPLE__)
-		dtrace_copyinstr(tupregs[0].dttk_value, dest, size);
+		dtrace_copyinstr(tupregs[0].dttk_value, dest, size, flags);
 #else
 		if (dtrace_priv_proc(state))
-			dtrace_copyinstr(tupregs[0].dttk_value, dest, size);
+			dtrace_copyinstr(tupregs[0].dttk_value, dest, size, flags);
 #endif /* __APPLE__ */
 		DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 
@@ -3167,6 +3775,13 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		int cont = 0;
 
 		while (baddr != NULL && !(*flags & CPU_DTRACE_FAULT)) {
+
+			if (!dtrace_canload(baddr, sizeof (mblk_t), mstate,
+			    vstate)) {
+				regs[rd] = NULL;
+				break;
+			}
+
 			wptr = dtrace_loadptr(baddr +
 			    offsetof(mblk_t, b_wptr));
 
@@ -3213,6 +3828,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 	case DIF_SUBR_MSGSIZE:
 	case DIF_SUBR_MSGDSIZE: {
 		/* Darwin does not implement SysV streams messages */
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
 		regs[rd] = 0;
 		break;
 	}
@@ -3283,7 +3899,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		    dtrace_priv_proc_control(state) &&
 		    !dtrace_istoxic(kaddr, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
-			dtrace_copyout(kaddr, uaddr, size);
+			dtrace_copyout(kaddr, uaddr, size, flags);
 			DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 		}
 		break;
@@ -3298,7 +3914,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		    dtrace_priv_proc_control(state) &&
 		    !dtrace_istoxic(kaddr, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
-			dtrace_copyoutstr(kaddr, uaddr, size);
+			dtrace_copyoutstr(kaddr, uaddr, size, flags);
 			DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 		}
 		break;
@@ -3313,7 +3929,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		    dtrace_priv_proc_control(state) &&
 		    !dtrace_istoxic(kaddr, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
-			dtrace_copyout(kaddr, uaddr, size);
+			dtrace_copyout(kaddr, uaddr, size, flags);
 			DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 		}
 		break;
@@ -3328,18 +3944,28 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		    dtrace_priv_proc_control(state) &&
 		    !dtrace_istoxic(kaddr, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
-			dtrace_copyoutstr(kaddr, uaddr, size);
+			dtrace_copyoutstr(kaddr, uaddr, size, flags);
 			DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 		}
 		break;
 	}
 #endif /* __APPLE__ */
 
-	case DIF_SUBR_STRLEN:
-		regs[rd] = dtrace_strlen((char *)(uintptr_t)
-		    tupregs[0].dttk_value,
+	case DIF_SUBR_STRLEN: {
+		size_t sz;
+		uintptr_t addr = (uintptr_t)tupregs[0].dttk_value;
+		sz = dtrace_strlen((char *)addr,
 		    state->dts_options[DTRACEOPT_STRSIZE]);
+
+		if (!dtrace_canload(addr, sz + 1, mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
+		regs[rd] = sz;
+
 		break;
+	}
 
 	case DIF_SUBR_STRCHR:
 	case DIF_SUBR_STRRCHR: {
@@ -3350,6 +3976,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		 * is DIF_SUBR_STRRCHR, we will look for the last occurrence
 		 * of the specified character instead of the first.
 		 */
+		uintptr_t saddr = tupregs[0].dttk_value;
 		uintptr_t addr = tupregs[0].dttk_value;
 		uintptr_t limit = addr + state->dts_options[DTRACEOPT_STRSIZE];
 		char c, target = (char)tupregs[1].dttk_value;
@@ -3364,6 +3991,11 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 
 			if (c == '\0')
 				break;
+		}
+
+		if (!dtrace_canload(saddr, addr - saddr, mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
 		}
 
 		break;
@@ -3391,6 +4023,17 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		int inc = 1;
 
 		regs[rd] = notfound;
+
+		if (!dtrace_canload((uintptr_t)addr, len + 1, mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
+		if (!dtrace_canload((uintptr_t)substr, sublen + 1, mstate,
+		    vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
 
 		/*
 		 * strstr() and index()/rindex() have similar semantics if
@@ -3466,13 +4109,21 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 						break;
 					}
 
+#if !defined(__APPLE__)  /* Quiet compiler warnings */
 					if (pos > len)
+#else
+					if ((size_t)pos > len)
+#endif /* __APPLE__ */
 						pos = len;
 				} else {
 					if (pos < 0)
 						pos = 0;
 
+#if !defined(__APPLE__)  /* Quiet compiler warnings */
 					if (pos >= len) {
+#else
+					if ((size_t)pos >= len) {
+#endif /* __APPLE__ */
 						if (sublen == 0)
 							regs[rd] = len;
 						break;
@@ -3513,12 +4164,25 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		uintptr_t tokaddr = tupregs[1].dttk_value;
 		uint64_t size = state->dts_options[DTRACEOPT_STRSIZE];
 		uintptr_t limit, toklimit = tokaddr + size;
-		uint8_t c, tokmap[32];	 /* 256 / 8 */
 		char *dest = (char *)mstate->dtms_scratch_ptr;
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
+		uint8_t c, tokmap[32];	 /* 256 / 8 */
 		int i;
+#else
+		uint8_t c='\0', tokmap[32];	 /* 256 / 8 */
+		uint64_t i = 0;
+#endif /* __APPLE__ */
 
-		if (mstate->dtms_scratch_ptr + size >
-		    mstate->dtms_scratch_base + mstate->dtms_scratch_size) {
+		/*
+		 * Check both the token buffer and (later) the input buffer,
+		 * since both could be non-scratch addresses.
+		 */
+		if (!dtrace_strcanload(tokaddr, size, mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
+		if (!DTRACE_INSCRATCH(mstate, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
 			regs[rd] = NULL;
 			break;
@@ -3533,6 +4197,19 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 			 * it behaves like an implicit clause-local variable.
 			 */
 			addr = mstate->dtms_strtok;
+		} else {
+			/*
+			 * If the user-specified address is non-NULL we must
+			 * access check it.  This is the only time we have
+			 * a chance to do so, since this address may reside
+			 * in the string table of this clause-- future calls
+			 * (when we fetch addr from mstate->dtms_strtok)
+			 * would fail this access check.
+			 */
+			if (!dtrace_strcanload(addr, size, mstate, vstate)) {
+				regs[rd] = NULL;
+				break;
+		}
 		}
 
 		/*
@@ -3606,15 +4283,19 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		size_t len = dtrace_strlen((char *)s, size);
 		int64_t i = 0;
 
-		if (nargs <= 2)
-			remaining = (int64_t)size;
+		if (!dtrace_canload(s, len + 1, mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
 
-		if (mstate->dtms_scratch_ptr + size >
-		    mstate->dtms_scratch_base + mstate->dtms_scratch_size) {
+		if (!DTRACE_INSCRATCH(mstate, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
 			regs[rd] = NULL;
 			break;
 		}
+
+		if (nargs <= 2)
+			remaining = (int64_t)size;
 
 		if (index < 0) {
 			index += len;
@@ -3625,18 +4306,29 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 			}
 		}
 
-		if (index >= len || index < 0)
-			index = len;
-
-		for (d[0] = '\0'; remaining > 0; remaining--) {
-			if ((d[i++] = dtrace_load8(s++ + index)) == '\0')
-				break;
-
-			if (i == size) {
-				d[i - 1] = '\0';
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
+		if (index >= len || index < 0) {
+			remaining = 0;
+		} else if (remaining < 0) {
+			remaining += len - index;
+		} else if (index + remaining > size) {
+			remaining = size - index;
+		}
+#else
+		if ((size_t)index >= len || index < 0) {
+			remaining = 0;
+		} else if (remaining < 0) {
+			remaining += len - index;
+		} else if ((uint64_t)index + (uint64_t)remaining > size) {
+			remaining = size - index;
+		}
+#endif /* __APPLE__ */
+		for (i = 0; i < remaining; i++) {
+			if ((d[i] = dtrace_load8(s + index + i)) == '\0')
 				break;
 			}
-		}
+
+		d[i] = '\0';
 
 		mstate->dtms_scratch_ptr += size;
 		regs[rd] = (uintptr_t)d;
@@ -3645,7 +4337,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 
 #if !defined(__APPLE__)
 	case DIF_SUBR_GETMAJOR:
-#ifdef __LP64__
+#ifdef _LP64
 		regs[rd] = (tupregs[0].dttk_value >> NBITSMINOR64) & MAXMAJ64;
 #else
 		regs[rd] = (tupregs[0].dttk_value >> NBITSMINOR) & MAXMAJ;
@@ -3660,7 +4352,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 
 #if !defined(__APPLE__)
 	case DIF_SUBR_GETMINOR:
-#ifdef __LP64__
+#ifdef _LP64
 		regs[rd] = tupregs[0].dttk_value & MAXMIN64;
 #else
 		regs[rd] = tupregs[0].dttk_value & MAXMIN;
@@ -3689,8 +4381,18 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		char *s;
 		int i, len, depth = 0;
 
-		if (size == 0 || mstate->dtms_scratch_ptr + size >
-		    mstate->dtms_scratch_base + mstate->dtms_scratch_size) {
+		/*
+		 * Due to all the pointer jumping we do and context we must
+		 * rely upon, we just mandate that the user must have kernel
+		 * read privileges to use this routine.
+		 */
+		if ((mstate->dtms_access & DTRACE_ACCESS_KERNEL) == 0) {
+			*flags |= CPU_DTRACE_KPRIV;
+			*illval = daddr;
+			regs[rd] = NULL;
+		}
+
+		if (!DTRACE_INSCRATCH(mstate, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
 			regs[rd] = NULL;
 			break;
@@ -3711,9 +4413,9 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		 * explained to them, and who can't even concisely describe
 		 * the conditions under which one would be forced to resort to
 		 * this technique.  Needless to say, those conditions are
-		 * found here -- and probably only here.  Is this is the only
-		 * use of this infamous trick in shipping, production code?
-		 * If it isn't, it probably should be...
+		 * found here -- and probably only here.  Is this the only use
+		 * of this infamous trick in shipping, production code?  If it
+		 * isn't, it probably should be...
 		 */
 		if (minor != -1) {
 			uintptr_t maddr = dtrace_loadptr(daddr +
@@ -3731,7 +4433,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 
 			while (maddr != NULL && !(*flags & CPU_DTRACE_FAULT)) {
 				uint64_t m;
-#ifdef __LP64__
+#ifdef _LP64
 				m = dtrace_load64(maddr + dev) & MAXMIN64;
 #else
 				m = dtrace_load32(maddr + dev) & MAXMIN;
@@ -3858,7 +4560,8 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 	}
 #else
 	case DIF_SUBR_DDI_PATHNAME: {
-		/* XXX awaits galactic disentanglement ;-} */
+		/* FIXME: awaits galactic disentanglement ;-} */
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
 		regs[rd] = NULL;
 		break;
 	}
@@ -3869,10 +4572,19 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		uint64_t size = state->dts_options[DTRACEOPT_STRSIZE];
 		uintptr_t s1 = tupregs[0].dttk_value;
 		uintptr_t s2 = tupregs[1].dttk_value;
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
 		int i = 0;
+#else
+		uint64_t i = 0;
+#endif /* __APPLE__ */
 
-		if (mstate->dtms_scratch_ptr + size >
-		    mstate->dtms_scratch_base + mstate->dtms_scratch_size) {
+		if (!dtrace_strcanload(s1, size, mstate, vstate) ||
+		    !dtrace_strcanload(s2, size, mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
+		if (!DTRACE_INSCRATCH(mstate, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
 			regs[rd] = NULL;
 			break;
@@ -3916,8 +4628,7 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		uint64_t size = 22;	/* enough room for 2^64 in decimal */
 		char *end = (char *)mstate->dtms_scratch_ptr + size - 1;
 
-		if (mstate->dtms_scratch_ptr + size >
-		    mstate->dtms_scratch_base + mstate->dtms_scratch_size) {
+		if (!DTRACE_INSCRATCH(mstate, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
 			regs[rd] = NULL;
 			break;
@@ -3937,6 +4648,36 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		break;
 	}
 
+	case DIF_SUBR_HTONS:
+	case DIF_SUBR_NTOHS:
+#ifdef _BIG_ENDIAN
+		regs[rd] = (uint16_t)tupregs[0].dttk_value;
+#else
+		regs[rd] = DT_BSWAP_16((uint16_t)tupregs[0].dttk_value);
+#endif
+		break;
+
+
+	case DIF_SUBR_HTONL:
+	case DIF_SUBR_NTOHL:
+#ifdef _BIG_ENDIAN
+		regs[rd] = (uint32_t)tupregs[0].dttk_value;
+#else
+		regs[rd] = DT_BSWAP_32((uint32_t)tupregs[0].dttk_value);
+#endif
+		break;
+
+
+	case DIF_SUBR_HTONLL:
+	case DIF_SUBR_NTOHLL:
+#ifdef _BIG_ENDIAN
+		regs[rd] = (uint64_t)tupregs[0].dttk_value;
+#else
+		regs[rd] = DT_BSWAP_64((uint64_t)tupregs[0].dttk_value);
+#endif
+		break;
+
+
 	case DIF_SUBR_DIRNAME:
 	case DIF_SUBR_BASENAME: {
 		char *dest = (char *)mstate->dtms_scratch_ptr;
@@ -3946,8 +4687,12 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		int lastbase = -1, firstbase = -1, lastdir = -1;
 		int start, end;
 
-		if (mstate->dtms_scratch_ptr + size >
-		    mstate->dtms_scratch_base + mstate->dtms_scratch_size) {
+		if (!dtrace_canload(src, len + 1, mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
+		if (!DTRACE_INSCRATCH(mstate, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
 			regs[rd] = NULL;
 			break;
@@ -4055,8 +4800,13 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 			end = lastbase;
 		}
 
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
 		for (i = start, j = 0; i <= end && j < size - 1; i++, j++)
 			dest[j] = dtrace_load8(src + i);
+#else
+		for (i = start, j = 0; i <= end && (uint64_t)j < size - 1; i++, j++)
+			dest[j] = dtrace_load8(src + i);
+#endif /* __APPLE__ */
 
 		dest[j] = '\0';
 		regs[rd] = (uintptr_t)dest;
@@ -4070,8 +4820,12 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		uintptr_t src = tupregs[0].dttk_value;
 		int i = 0, j = 0;
 
-		if (mstate->dtms_scratch_ptr + size >
-		    mstate->dtms_scratch_base + mstate->dtms_scratch_size) {
+		if (!dtrace_strcanload(src, size, mstate, vstate)) {
+			regs[rd] = NULL;
+			break;
+		}
+
+		if (!DTRACE_INSCRATCH(mstate, size)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
 			regs[rd] = NULL;
 			break;
@@ -4083,8 +4837,13 @@ dtrace_dif_subr(uint_t subr, uint_t rd, uint64_t *regs,
 		do {
 			c = dtrace_load8(src + i++);
 next:
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
 			if (j + 5 >= size)	/* 5 = strlen("/..c\0") */
 				break;
+#else
+			if ((uint64_t)(j + 5) >= size)	/* 5 = strlen("/..c\0") */
+				break;
+#endif /* __APPLE__ */
 
 			if (c != '/') {
 				dest[j++] = c;
@@ -4167,24 +4926,274 @@ next:
 		mstate->dtms_scratch_ptr += size;
 		break;
 	}
+
+	case DIF_SUBR_INET_NTOA:
+	case DIF_SUBR_INET_NTOA6:
+	case DIF_SUBR_INET_NTOP: {
+		size_t size;
+		int af, argi, i;
+		char *base, *end;
+
+		if (subr == DIF_SUBR_INET_NTOP) {
+			af = (int)tupregs[0].dttk_value;
+			argi = 1;
+		} else {
+			af = subr == DIF_SUBR_INET_NTOA ? AF_INET: AF_INET6;
+			argi = 0;
+		}
+
+		if (af == AF_INET) {
+#if !defined(__APPLE__)
+			ipaddr_t ip4;
+#else
+			in_addr_t ip4;
+#endif /* __APPLE__ */
+			uint8_t *ptr8, val;
+
+			/*
+			 * Safely load the IPv4 address.
+			 */
+			ip4 = dtrace_load32(tupregs[argi].dttk_value);
+
+			/*
+			 * Check an IPv4 string will fit in scratch.
+			 */
+#if !defined(__APPLE__)
+			size = INET_ADDRSTRLEN;
+#else
+			size = MAX_IPv4_STR_LEN;
+#endif /* __APPLE__ */
+			if (!DTRACE_INSCRATCH(mstate, size)) {
+				DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
+				regs[rd] = NULL;
+				break;
+			}
+			base = (char *)mstate->dtms_scratch_ptr;
+			end = (char *)mstate->dtms_scratch_ptr + size - 1;
+
+			/*
+			 * Stringify as a dotted decimal quad.
+			 */
+			*end-- = '\0';
+			ptr8 = (uint8_t *)&ip4;
+			for (i = 3; i >= 0; i--) {
+				val = ptr8[i];
+
+				if (val == 0) {
+					*end-- = '0';
+				} else {
+					for (; val; val /= 10) {
+						*end-- = '0' + (val % 10);
+					}
+				}
+
+				if (i > 0)
+					*end-- = '.';
+			}
+			ASSERT(end + 1 >= base);
+
+		} else if (af == AF_INET6) {
+#if defined(__APPLE__)
+#define _S6_un __u6_addr
+#define _S6_u8 __u6_addr8
+#endif /* __APPLE__ */
+			struct in6_addr ip6;
+			int firstzero, tryzero, numzero, v6end;
+			uint16_t val;
+			const char digits[] = "0123456789abcdef";
+
+			/*
+			 * Stringify using RFC 1884 convention 2 - 16 bit
+			 * hexadecimal values with a zero-run compression.
+			 * Lower case hexadecimal digits are used.
+			 * 	eg, fe80::214:4fff:fe0b:76c8.
+			 * The IPv4 embedded form is returned for inet_ntop,
+			 * just the IPv4 string is returned for inet_ntoa6.
+			 */
+
+			/*
+			 * Safely load the IPv6 address.
+			 */
+			dtrace_bcopy(
+			    (void *)(uintptr_t)tupregs[argi].dttk_value,
+			    (void *)(uintptr_t)&ip6, sizeof (struct in6_addr));
+
+			/*
+			 * Check an IPv6 string will fit in scratch.
+			 */
+			size = INET6_ADDRSTRLEN;
+			if (!DTRACE_INSCRATCH(mstate, size)) {
+				DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
+				regs[rd] = NULL;
+				break;
+			}
+			base = (char *)mstate->dtms_scratch_ptr;
+			end = (char *)mstate->dtms_scratch_ptr + size - 1;
+			*end-- = '\0';
+
+			/*
+			 * Find the longest run of 16 bit zero values
+			 * for the single allowed zero compression - "::".
+			 */
+			firstzero = -1;
+			tryzero = -1;
+			numzero = 1;
+#if !defined(__APPLE__)   /* Quiet compiler warnings */			
+			for (i = 0; i < sizeof (struct in6_addr); i++) {
+#else
+			for (i = 0; i < (int)sizeof (struct in6_addr); i++) {
+#endif /* __APPLE__ */
+				if (ip6._S6_un._S6_u8[i] == 0 &&
+				    tryzero == -1 && i % 2 == 0) {
+					tryzero = i;
+					continue;
+				}
+
+				if (tryzero != -1 &&
+				    (ip6._S6_un._S6_u8[i] != 0 ||
+				    i == sizeof (struct in6_addr) - 1)) {
+
+					if (i - tryzero <= numzero) {
+						tryzero = -1;
+						continue;
+					}
+
+					firstzero = tryzero;
+					numzero = i - i % 2 - tryzero;
+					tryzero = -1;
+
+					if (ip6._S6_un._S6_u8[i] == 0 &&
+					    i == sizeof (struct in6_addr) - 1)
+						numzero += 2;
+				}
+			}
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
+			ASSERT(firstzero + numzero <= sizeof (struct in6_addr));
+#else
+			ASSERT(firstzero + numzero <= (int)sizeof (struct in6_addr));
+#endif /* __APPLE__ */
+
+			/*
+			 * Check for an IPv4 embedded address.
+			 */
+			v6end = sizeof (struct in6_addr) - 2;
+			if (IN6_IS_ADDR_V4MAPPED(&ip6) ||
+			    IN6_IS_ADDR_V4COMPAT(&ip6)) {
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
+				for (i = sizeof (struct in6_addr) - 1;
+				    i >= DTRACE_V4MAPPED_OFFSET; i--) {
+#else
+				for (i = sizeof (struct in6_addr) - 1;
+				     i >= (int)DTRACE_V4MAPPED_OFFSET; i--) {
+#endif /* __APPLE__ */
+					ASSERT(end >= base);
+
+					val = ip6._S6_un._S6_u8[i];
+
+					if (val == 0) {
+						*end-- = '0';
+					} else {
+						for (; val; val /= 10) {
+							*end-- = '0' + val % 10;
+						}
+					}
+
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
+					if (i > DTRACE_V4MAPPED_OFFSET)
+						*end-- = '.';
+#else
+					if (i > (int)DTRACE_V4MAPPED_OFFSET)
+						*end-- = '.';
+#endif /* __APPLE__ */
+				}
+
+				if (subr == DIF_SUBR_INET_NTOA6)
+					goto inetout;
+
+				/*
+				 * Set v6end to skip the IPv4 address that
+				 * we have already stringified.
+				 */
+				v6end = 10;
+			}
+
+			/*
+			 * Build the IPv6 string by working through the
+			 * address in reverse.
+			 */
+			for (i = v6end; i >= 0; i -= 2) {
+				ASSERT(end >= base);
+
+				if (i == firstzero + numzero - 2) {
+					*end-- = ':';
+					*end-- = ':';
+					i -= numzero - 2;
+					continue;
+				}
+
+				if (i < 14 && i != firstzero - 2)
+					*end-- = ':';
+
+				val = (ip6._S6_un._S6_u8[i] << 8) +
+				    ip6._S6_un._S6_u8[i + 1];
+
+				if (val == 0) {
+					*end-- = '0';
+				} else {
+					for (; val; val /= 16) {
+						*end-- = digits[val % 16];
+					}
+				}
+			}
+			ASSERT(end + 1 >= base);
+
+#if defined(__APPLE__)
+#undef _S6_un
+#undef _S6_u8
+#endif /* __APPLE__ */
+		} else {
+			/*
+			 * The user didn't use AH_INET or AH_INET6.
+			 */
+			DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+			regs[rd] = NULL;
+			break;
+		}
+
+inetout:	regs[rd] = (uintptr_t)end + 1;
+		mstate->dtms_scratch_ptr += size;
+		break;
+	}
+	
 #ifdef __APPLE__
 
-	/* CHUD callback ('chud(uint64_t, [uint64_t], [uint64_t] ...)') */
-	case DIF_SUBR_CHUD: {
+	/* CoreProfile callback ('core_profile(uint64_t, [uint64_t], [uint64_t] ...)') */
+	case DIF_SUBR_COREPROFILE: {
 		uint64_t selector = tupregs[0].dttk_value;
 		uint64_t args[DIF_DTR_NREGS-1] = {0ULL};
 		uint32_t ii;
+		uint32_t count = (uint32_t)nargs;
 
-		/* copy in any variadic argument list */
-		for(ii = 0; ii < DIF_DTR_NREGS-1; ii++) {
+		if (count < 1) {
+		    regs[rd] = KERN_FAILURE;
+		    break;
+		}
+		
+		if(count > DIF_DTR_NREGS)
+		    count = DIF_DTR_NREGS;
+
+		/* copy in any variadic argument list, bounded by DIF_DTR_NREGS */
+		for(ii = 0; ii < count-1; ii++) {
 			args[ii] = tupregs[ii+1].dttk_value;
 		}
 
 		kern_return_t ret = 
-			chudxnu_dtrace_callback(selector, args, DIF_DTR_NREGS-1);
+			chudxnu_dtrace_callback(selector, args, count-1);
 		if(KERN_SUCCESS != ret) {
 			/* error */
 		}
+
+		regs[rd] = ret;
 		break;
 	}
 
@@ -4224,10 +5233,20 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 
 	uint8_t cc_n = 0, cc_z = 0, cc_v = 0, cc_c = 0;
 	int64_t cc_r;
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
 	uint_t pc = 0, id, opc;
+#else
+	uint_t pc = 0, id, opc = 0;
+#endif /* __APPLE__ */
 	uint8_t ttop = 0;
 	dif_instr_t instr;
 	uint_t r1, r2, rd;
+
+	/*
+	 * We stash the current DIF object into the machine state: we need it
+	 * for subsequent access checking.
+	 */
+	mstate->dtms_difo = difo;
 
 	regs[DIF_REG_R0] = 0; 		/* %r0 is fixed at zero */
 
@@ -4432,6 +5451,36 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 		case DIF_OP_LDX:
 			regs[rd] = dtrace_load64(regs[r1]);
 			break;
+#if !defined(__APPLE__)
+		case DIF_OP_ULDSB:
+			regs[rd] = (int8_t)
+			    dtrace_fuword8((void *)(uintptr_t)regs[r1]);
+			break;
+		case DIF_OP_ULDSH:
+			regs[rd] = (int16_t)
+			    dtrace_fuword16((void *)(uintptr_t)regs[r1]);
+			break;
+		case DIF_OP_ULDSW:
+			regs[rd] = (int32_t)
+			    dtrace_fuword32((void *)(uintptr_t)regs[r1]);
+			break;
+		case DIF_OP_ULDUB:
+			regs[rd] =
+			    dtrace_fuword8((void *)(uintptr_t)regs[r1]);
+			break;
+		case DIF_OP_ULDUH:
+			regs[rd] =
+			    dtrace_fuword16((void *)(uintptr_t)regs[r1]);
+			break;
+		case DIF_OP_ULDUW:
+			regs[rd] =
+			    dtrace_fuword32((void *)(uintptr_t)regs[r1]);
+			break;
+		case DIF_OP_ULDX:
+			regs[rd] =
+			    dtrace_fuword64((void *)(uintptr_t)regs[r1]);
+			break;
+#else /* Darwin 32-bit kernel may fetch from 64-bit user. Don't want uintptr_t cast. */
 		case DIF_OP_ULDSB:
 			regs[rd] = (int8_t)
 			    dtrace_fuword8(regs[r1]);
@@ -4459,9 +5508,11 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 		case DIF_OP_ULDX:
 			regs[rd] =
 			    dtrace_fuword64(regs[r1]);
+#endif /* __APPLE__ */
 			break;
 		case DIF_OP_RET:
 			rval = regs[rd];
+			pc = textlen;
 			break;
 		case DIF_OP_NOP:
 			break;
@@ -4472,15 +5523,25 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			regs[rd] = (uint64_t)(uintptr_t)
 			    (strtab + DIF_INSTR_STRING(instr));
 			break;
-		case DIF_OP_SCMP:
-			cc_r = dtrace_strncmp((char *)(uintptr_t)regs[r1],
-			    (char *)(uintptr_t)regs[r2],
-			    state->dts_options[DTRACEOPT_STRSIZE]);
+		case DIF_OP_SCMP: {
+			size_t sz = state->dts_options[DTRACEOPT_STRSIZE];
+			uintptr_t s1 = regs[r1];
+			uintptr_t s2 = regs[r2];
+
+			if (s1 != NULL &&
+			    !dtrace_strcanload(s1, sz, mstate, vstate))
+				break;
+			if (s2 != NULL &&
+			    !dtrace_strcanload(s2, sz, mstate, vstate))
+				break;
+
+			cc_r = dtrace_strncmp((char *)s1, (char *)s2, sz);
 
 			cc_n = cc_r < 0;
 			cc_z = cc_r == 0;
 			cc_v = cc_c = 0;
 			break;
+		}
 		case DIF_OP_LDGA:
 			regs[rd] = dtrace_dif_variable(mstate, state,
 			    r1, regs[r2]);
@@ -4543,6 +5604,10 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 					*(uint8_t *)a = 0;
 					a += sizeof (uint64_t);
 				}
+				if (!dtrace_vcanload(
+				    (void *)(uintptr_t)regs[rd], &v->dtdv_type,
+				    mstate, vstate))
+					break;
 
 				dtrace_vcopy((void *)(uintptr_t)regs[rd],
 				    (void *)a, &v->dtdv_type);
@@ -4574,7 +5639,11 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 
 			id -= DIF_VAR_OTHER_UBASE;
 
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
 			ASSERT(id < vstate->dtvs_nlocals);
+#else
+			ASSERT(id < (uint_t)vstate->dtvs_nlocals);
+#endif /* __APPLE__ */
 			ASSERT(vstate->dtvs_locals != NULL);
 
 			svar = vstate->dtvs_locals[id];
@@ -4613,7 +5682,11 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 
 			ASSERT(id >= DIF_VAR_OTHER_UBASE);
 			id -= DIF_VAR_OTHER_UBASE;
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
 			ASSERT(id < vstate->dtvs_nlocals);
+#else
+			ASSERT(id < (uint_t)vstate->dtvs_nlocals);
+#endif /* __APPLE__ */
 
 			ASSERT(vstate->dtvs_locals != NULL);
 			svar = vstate->dtvs_locals[id];
@@ -4635,6 +5708,11 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 					*(uint8_t *)a = 0;
 					a += sizeof (uint64_t);
 				}
+
+				if (!dtrace_vcanload(
+				    (void *)(uintptr_t)regs[rd], &v->dtdv_type,
+				    mstate, vstate))
+					break;
 
 				dtrace_vcopy((void *)(uintptr_t)regs[rd],
 				    (void *)a, &v->dtdv_type);
@@ -4662,7 +5740,8 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			key[1].dttk_size = 0;
 
 			dvar = dtrace_dynvar(dstate, 2, key,
-			    sizeof (uint64_t), DTRACE_DYNVAR_NOALLOC);
+			    sizeof (uint64_t), DTRACE_DYNVAR_NOALLOC,
+			    mstate, vstate);
 
 			if (dvar == NULL) {
 				regs[rd] = 0;
@@ -4697,7 +5776,7 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			    v->dtdv_type.dtdt_size > sizeof (uint64_t) ?
 			    v->dtdv_type.dtdt_size : sizeof (uint64_t),
 			    regs[rd] ? DTRACE_DYNVAR_ALLOC :
-			    DTRACE_DYNVAR_DEALLOC);
+			    DTRACE_DYNVAR_DEALLOC, mstate, vstate);
 
 			/*
 			 * Given that we're storing to thread-local data,
@@ -4709,11 +5788,15 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			dtrace_set_thread_predcache(current_thread(), 0);
 #endif /* __APPLE__ */
 
-
 			if (dvar == NULL)
 				break;
 
 			if (v->dtdv_type.dtdt_flags & DIF_TF_BYREF) {
+				if (!dtrace_vcanload(
+				    (void *)(uintptr_t)regs[rd],
+				    &v->dtdv_type, mstate, vstate))
+					break;
+
 				dtrace_vcopy((void *)(uintptr_t)regs[rd],
 				    dvar->dtdv_data, &v->dtdv_type);
 			} else {
@@ -4801,7 +5884,7 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			dvar = dtrace_dynvar(dstate, nkeys, key,
 			    v->dtdv_type.dtdt_size > sizeof (uint64_t) ?
 			    v->dtdv_type.dtdt_size : sizeof (uint64_t),
-			    DTRACE_DYNVAR_NOALLOC);
+			    DTRACE_DYNVAR_NOALLOC, mstate, vstate);
 
 			if (dvar == NULL) {
 				regs[rd] = 0;
@@ -4842,12 +5925,17 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			    v->dtdv_type.dtdt_size > sizeof (uint64_t) ?
 			    v->dtdv_type.dtdt_size : sizeof (uint64_t),
 			    regs[rd] ? DTRACE_DYNVAR_ALLOC :
-			    DTRACE_DYNVAR_DEALLOC);
+			    DTRACE_DYNVAR_DEALLOC, mstate, vstate);
 
 			if (dvar == NULL)
 				break;
 
 			if (v->dtdv_type.dtdt_flags & DIF_TF_BYREF) {
+				if (!dtrace_vcanload(
+				    (void *)(uintptr_t)regs[rd], &v->dtdv_type,
+				    mstate, vstate))
+					break;
+
 				dtrace_vcopy((void *)(uintptr_t)regs[rd],
 				    dvar->dtdv_data, &v->dtdv_type);
 			} else {
@@ -4861,17 +5949,21 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 			uintptr_t ptr = P2ROUNDUP(mstate->dtms_scratch_ptr, 8);
 			size_t size = ptr - mstate->dtms_scratch_ptr + regs[r1];
 
-			if (mstate->dtms_scratch_ptr + size >
-			    mstate->dtms_scratch_base +
-			    mstate->dtms_scratch_size) {
+			/*
+			 * Rounding up the user allocation size could have
+			 * overflowed large, bogus allocations (like -1ULL) to
+			 * 0.
+			 */
+			if (size < regs[r1] ||
+			    !DTRACE_INSCRATCH(mstate, size)) {
 				DTRACE_CPUFLAG_SET(CPU_DTRACE_NOSCRATCH);
 				regs[rd] = NULL;
-			} else {
-				dtrace_bzero((void *)
-				    mstate->dtms_scratch_ptr, size);
+				break;
+			}
+
+			dtrace_bzero((void *) mstate->dtms_scratch_ptr, size);
 				mstate->dtms_scratch_ptr += size;
 				regs[rd] = ptr;
-			}
 			break;
 		}
 
@@ -4882,6 +5974,9 @@ dtrace_dif_emulate(dtrace_difo_t *difo, dtrace_mstate_t *mstate,
 				*illval = regs[rd];
 				break;
 			}
+
+			if (!dtrace_canload(regs[r1], regs[r2], mstate, vstate))
+				break;
 
 			dtrace_bcopy((void *)(uintptr_t)regs[r1],
 			    (void *)(uintptr_t)regs[rd], (size_t)regs[r2]);
@@ -4959,8 +6054,13 @@ dtrace_action_breakpoint(dtrace_ecb_t *ecb)
 	dtrace_probe_t *probe = ecb->dte_probe;
 	dtrace_provider_t *prov = probe->dtpr_provider;
 	char c[DTRACE_FULLNAMELEN + 80], *str;
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
 	char *msg = "dtrace: breakpoint action at probe ";
 	char *ecbmsg = " (ecb ";
+#else
+	const char *msg = "dtrace: breakpoint action at probe ";
+	const char *ecbmsg = " (ecb ";
+#endif /* __APPLE__ */
 	uintptr_t mask = (0xf << (sizeof (uintptr_t) * NBBY / 4));
 	uintptr_t val = (uintptr_t)ecb;
 	int shift = (sizeof (uintptr_t) * NBBY) - 4, i = 0;
@@ -5080,7 +6180,7 @@ dtrace_action_raise(uint64_t sig)
 
 	if (uthread && uthread->t_dtrace_sig == 0) {
 		uthread->t_dtrace_sig = sig;
-		psignal(current_proc(), (int)sig);
+		astbsd_on();
 	}
 #endif /* __APPLE__ */
 }
@@ -5098,7 +6198,12 @@ dtrace_action_stop(void)
 		aston(curthread);
 	}
 #else
-	psignal(current_proc(), SIGSTOP);
+	uthread_t uthread = (uthread_t)get_bsdthread_info(current_thread());
+
+	if (uthread && uthread->t_dtrace_stop == 0) {
+		uthread->t_dtrace_stop = 1;
+		astbsd_on();
+	}
 #endif /* __APPLE__ */
 }
 
@@ -5173,8 +6278,11 @@ dtrace_action_ustack(dtrace_mstate_t *mstate, dtrace_state_t *state,
 	size = (uintptr_t)fps - mstate->dtms_scratch_ptr +
 	    (nframes * sizeof (uint64_t));
 
-	if (mstate->dtms_scratch_ptr + size >
-	    mstate->dtms_scratch_base + mstate->dtms_scratch_size) {
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
+	if (!DTRACE_INSCRATCH(mstate, size)) {
+#else
+	if (!DTRACE_INSCRATCH(mstate, (uintptr_t)size)) {
+#endif /* __APPLE__ */
 		/*
 		 * Not enough room for our frame pointers -- need to indicate
 		 * that we ran out of scratch space.
@@ -5291,11 +6399,13 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 #if !defined(__APPLE__)
 	/*
 	 * Kick out immediately if this CPU is still being born (in which case
-	 * curthread will be set to -1)
+	 * curthread will be set to -1) or the current thread can't allow
+	 * probes in its current context.
 	 */
-	if ((uintptr_t)curthread & 1)
+	if (((uintptr_t)curthread & 1) || (curthread->t_flag & T_DONTDTRACE))
 		return;
 #else
+	/* Not a concern for Darwin */
 #endif /* __APPLE__ */
 
 	cookie = dtrace_interrupt_disable();
@@ -5333,6 +6443,8 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 	if (vtime && curthread->t_dtrace_start)
 		curthread->t_dtrace_vtime += now - curthread->t_dtrace_start;
 #else
+	/* FIXME: the time spent entering DTrace and arriving to this point is attributed
+	   to the current thread. Instead it should accrue to DTrace. */
 	vtime = dtrace_vtime_references != 0;
 
 	if (vtime)
@@ -5358,10 +6470,10 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 	/*
 	 * A provider may call dtrace_probe_error() in lieu of dtrace_probe() in some circumstances.
 	 * See, e.g. fasttrap_isa.c. However the provider has no access to ECB context, so passes
-	 * NULL through "arg0" and the probe_id of the ovedrriden probe as arg1. Detect that here
+	 * 0 through "arg0" and the probe_id of the overridden probe as arg1. Detect that here
 	 * and cons up a viable state (from the probe_id).
 	 */
-	if (dtrace_probeid_error == id && NULL == arg0) {
+	if (dtrace_probeid_error == id && 0 == arg0) {
 		dtrace_id_t ftp_id = (dtrace_id_t)arg1;
 		dtrace_probe_t *ftp_probe = dtrace_probes[ftp_id - 1];
 		dtrace_ecb_t *ftp_ecb = ftp_probe->dtpr_ecb;
@@ -5379,7 +6491,9 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 	}
 #endif /* __APPLE__ */
 
+	mstate.dtms_difo = NULL;
 	mstate.dtms_probe = probe;
+	mstate.dtms_strtok = NULL;
 	mstate.dtms_arg[0] = arg0;
 	mstate.dtms_arg[1] = arg1;
 	mstate.dtms_arg[2] = arg2;
@@ -5483,6 +6597,7 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 				cred_t *s_cr =
 				    ecb->dte_state->dts_cred.dcr_cred;
 				proc_t *proc;
+#pragma unused(proc) /* __APPLE__ */
 
 				ASSERT(s_cr != NULL);
 
@@ -5510,14 +6625,17 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 				cred_t *cr;
 				cred_t *s_cr =
 				    ecb->dte_state->dts_cred.dcr_cred;
+#pragma unused(cr, s_cr) /* __APPLE__ */
 
 				ASSERT(s_cr != NULL);
 
-#if !defined(__APPLE__) /* Darwin doesn't do zones. */
+#if !defined(__APPLE__)
 				if ((cr = CRED()) == NULL ||
 				    s_cr->cr_zone->zone_id !=
 				    cr->cr_zone->zone_id)
 					continue;
+#else
+				/* Darwin doesn't do zones. */
 #endif /* __APPLE__ */
 			}
 		}
@@ -5558,6 +6676,11 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 
 		mstate.dtms_epid = ecb->dte_epid;
 		mstate.dtms_present |= DTRACE_MSTATE_EPID;
+
+		if (state->dts_cred.dcr_visible & DTRACE_CRV_KERNEL)
+			mstate.dtms_access = DTRACE_ACCESS_KERNEL;
+		else
+			mstate.dtms_access = 0;
 
 		if (pred != NULL) {
 			dtrace_difo_t *dp = pred->dtp_difo;
@@ -5639,10 +6762,17 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 				if (!dtrace_priv_kernel(state))
 					continue;
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 				dtrace_getpcstack((pc_t *)(tomax + valoffs),
 				    size / sizeof (pc_t), probe->dtpr_aframes,
 				    DTRACE_ANCHORED(probe) ? NULL :
 				    (uint32_t *)arg0);
+#else
+				dtrace_getpcstack((pc_t *)(tomax + valoffs),
+				    size / sizeof (pc_t), probe->dtpr_aframes,
+				    DTRACE_ANCHORED(probe) ? NULL :
+				  (uint32_t *)(uintptr_t)arg0);
+#endif /* __APPLE__ */
 
 				continue;
 
@@ -5761,6 +6891,9 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 			case DTRACEACT_PRINTA:
 			case DTRACEACT_SYSTEM:
 			case DTRACEACT_FREOPEN:
+#if defined(__APPLE__)
+			case DTRACEACT_APPLEBINARY:
+#endif /* __APPLE__ */
 				break;
 
 			case DTRACEACT_SYM:
@@ -5841,6 +6974,10 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 
 			if (dp->dtdo_rtype.dtdt_flags & DIF_TF_BYREF) {
 				uintptr_t end = valoffs + size;
+
+				if (!dtrace_vcanload((void *)(uintptr_t)val,
+				    &dp->dtdo_rtype, &mstate, vstate))
+					continue;
 
 				/*
 				 * If this is a string, we're going to only
@@ -5965,6 +7102,8 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 	if (vtime)
 		curthread->t_dtrace_start = dtrace_gethrtime();
 #else
+	/* FIXME: the time spent leaving DTrace from this point to the rti is attributed
+	   to the current thread. Instead it should accrue to DTrace. */
 	if (vtime) {
 		thread_t thread = current_thread();
 		int64_t t = dtrace_get_thread_tracing(thread);
@@ -5983,7 +7122,10 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 }
 
 #if defined(__APPLE__)
-/* Don't allow a thread to re-enter dtrace_probe() */
+/* Don't allow a thread to re-enter dtrace_probe(). This could occur if a probe is encountered
+   on some function in the transitive closure of the call to dtrace_probe(). Solaris has some
+   strong guarantees that this won't happen, the Darwin implementation is not so mature as to
+   make those guarantees. */
 void
 dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
     uint64_t arg2, uint64_t arg3, uint64_t arg4)
@@ -5992,12 +7134,15 @@ dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 
 	if (id == dtrace_probeid_error) {
 		__dtrace_probe(id, arg0, arg1, arg2, arg3, arg4);
-		dtrace_getfp(); /* Defeat tail-call optimization of __dtrace_probe() */
+		dtrace_getipl(); /* Defeat tail-call optimization of __dtrace_probe() */
 	} else if (!dtrace_get_thread_reentering(thread)) {
 		dtrace_set_thread_reentering(thread, TRUE);
 		__dtrace_probe(id, arg0, arg1, arg2, arg3, arg4);
 		dtrace_set_thread_reentering(thread, FALSE);
 	}
+#if DEBUG
+	else __dtrace_probe(dtrace_probeid_error, 0, id, 1, -1, DTRACEFLT_UNKNOWN);
+#endif
 }
 #endif /* __APPLE__ */
 
@@ -6013,7 +7158,11 @@ dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
  * specified.)
  */
 static uint_t
+#if !defined(__APPLE__)  /* Quiet compiler warnings */
 dtrace_hash_str(char *p)
+#else
+dtrace_hash_str(const char *p)
+#endif /* __APPLE__ */
 {
 	unsigned int g;
 	uint_t hval = 0;
@@ -6045,11 +7194,11 @@ dtrace_hash_create(uintptr_t stroffs, uintptr_t nextoffs, uintptr_t prevoffs)
 	return (hash);
 }
 
-#if !defined(__APPLE__) /* Quiet compiler warning */
+#if !defined(__APPLE__) /* Unused. Quiet compiler warning. */
 static void
 dtrace_hash_destroy(dtrace_hash_t *hash)
 {
-#ifdef DEBUG
+#if DEBUG
 	int i;
 
 	for (i = 0; i < hash->dth_size; i++)
@@ -6232,6 +7381,7 @@ dtrace_badattr(const dtrace_attribute_t *a)
  * Return a duplicate copy of a string.  If the specified string is NULL,
  * this function returns a zero-length string.
  */
+#if !defined(__APPLE__)
 static char *
 dtrace_strdup(const char *str)
 {
@@ -6242,6 +7392,19 @@ dtrace_strdup(const char *str)
 
 	return (new);
 }
+#else /* Employ size bounded string operation. */ 
+static char *
+dtrace_strdup(const char *str)
+{
+	size_t bufsize = (str != NULL ? strlen(str) : 0) + 1;
+	char *new = kmem_zalloc(bufsize, KM_SLEEP);
+
+	if (str != NULL)
+		(void) strlcpy(new, str, bufsize);
+
+	return (new);
+}
+#endif /* __APPLE__ */
 
 #define	DTRACE_ISALPHA(c)	\
 	(((c) >= 'a' && (c) <= 'z') || ((c) >= 'A' && (c) <= 'Z'))
@@ -6300,7 +7463,11 @@ dtrace_cred2priv(cred_t *cr, uint32_t *privp, uid_t *uidp, zoneid_t *zoneidp)
 static void
 dtrace_errdebug(const char *str)
 {
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	int hval = dtrace_hash_str((char *)str) % DTRACE_ERRHASHSZ;
+#else
+	int hval = dtrace_hash_str(str) % DTRACE_ERRHASHSZ;
+#endif /* __APPLE__ */	
 	int occupied = 0;
 
 	lck_mtx_lock(&dtrace_errlock);
@@ -6308,7 +7475,7 @@ dtrace_errdebug(const char *str)
 #if !defined(__APPLE__)
 	dtrace_errthread = curthread;
 #else
-	dtrace_errthread = current_thread();
+	dtrace_errthread = (kthread_t *)current_thread();
 #endif /* __APPLE__ */
 
 	while (occupied++ < DTRACE_ERRHASHSZ) {
@@ -6536,14 +7703,19 @@ top:
 static int
 dtrace_match_string(const char *s, const char *p, int depth)
 {
+#pragma unused(depth) /* __APPLE__ */
+#if !defined(__APPLE__)
 	return (s != NULL && strcmp(s, p) == 0);
+#else /* Employ size bounded string operation. */
+	return (s != NULL && strncmp(s, p, strlen(s) + 1) == 0);
+#endif /* __APPLE__ */
 }
 
 /*ARGSUSED*/
 static int
 dtrace_match_nul(const char *s, const char *p, int depth)
 {
-#pragma unused(s,p,depth)
+#pragma unused(s, p, depth) /* __APPLE__ */
 	return (1); /* always match the empty pattern */
 }
 
@@ -6551,7 +7723,7 @@ dtrace_match_nul(const char *s, const char *p, int depth)
 static int
 dtrace_match_nonzero(const char *s, const char *p, int depth)
 {
-#pragma unused(p,depth)
+#pragma unused(p, depth) /* __APPLE__ */
 	return (s != NULL && s[0] != '\0');
 }
 
@@ -6579,9 +7751,15 @@ dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
 		return (nmatched);
 	}
 
+#if !defined(__APPLE__)   /* Quiet compiler warnings */
 	template.dtpr_mod = (char *)pkp->dtpk_mod;
 	template.dtpr_func = (char *)pkp->dtpk_func;
 	template.dtpr_name = (char *)pkp->dtpk_name;
+#else
+	template.dtpr_mod =  (char *)(uintptr_t)pkp->dtpk_mod;
+	template.dtpr_func = (char *)(uintptr_t)pkp->dtpk_func;
+	template.dtpr_name = (char *)(uintptr_t)pkp->dtpk_name;
+#endif /* __APPLE__ */	
 
 	/*
 	 * We want to find the most distinct of the module name, function
@@ -6612,7 +7790,11 @@ dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
 	 * invoke our callback for each one that matches our input probe key.
 	 */
 	if (hash == NULL) {
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 		for (i = 0; i < dtrace_nprobes; i++) {
+#else
+		for (i = 0; i < (dtrace_id_t)dtrace_nprobes; i++) {
+#endif /* __APPLE__ */
 			if ((probe = dtrace_probes[i]) == NULL ||
 			    dtrace_match_probe(probe, pkp, priv, uid,
 			    zoneid) <= 0)
@@ -6765,8 +7947,16 @@ dtrace_register(const char *name, const dtrace_pattr_t *pap, uint32_t priv,
 	}
 
 	provider = kmem_zalloc(sizeof (dtrace_provider_t), KM_SLEEP);
+#if !defined(__APPLE__)
 	provider->dtpv_name = kmem_alloc(strlen(name) + 1, KM_SLEEP);
 	(void) strcpy(provider->dtpv_name, name);
+#else /* Employ size bounded string operation. */
+	{
+	size_t bufsize = strlen(name) + 1;
+	provider->dtpv_name = kmem_alloc(bufsize, KM_SLEEP);
+	(void) strlcpy(provider->dtpv_name, name, bufsize);
+	}
+#endif /* __APPLE__ */
 
 	provider->dtpv_attr = *pap;
 	provider->dtpv_priv.dtpp_flags = priv;
@@ -6870,7 +8060,6 @@ dtrace_unregister(dtrace_provider_id_t id)
 		ASSERT(dtrace_devi != NULL);
 		lck_mtx_assert(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
 		lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
-
 		self = 1;
 
 		if (dtrace_provider->dtpv_next != NULL) {
@@ -7145,7 +8334,11 @@ dtrace_probe_create(dtrace_provider_id_t prov, const char *mod,
 	dtrace_hash_add(dtrace_byfunc, probe);
 	dtrace_hash_add(dtrace_byname, probe);
 
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	if (id - 1 >= dtrace_nprobes) {
+#else
+	if (id - 1 >= (dtrace_id_t)dtrace_nprobes) {
+#endif /* __APPLE__ */
 		size_t osize = dtrace_nprobes * sizeof (dtrace_probe_t *);
 		size_t nsize = osize << 1;
 
@@ -7178,7 +8371,11 @@ dtrace_probe_create(dtrace_provider_id_t prov, const char *mod,
 			dtrace_nprobes <<= 1;
 		}
 
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 		ASSERT(id - 1 < dtrace_nprobes);
+#else
+		ASSERT(id - 1 < (dtrace_id_t)dtrace_nprobes);
+#endif /* __APPLE__ */
 	}
 
 	ASSERT(dtrace_probes[id - 1] == NULL);
@@ -7195,8 +8392,13 @@ dtrace_probe_lookup_id(dtrace_id_t id)
 {
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	if (id == 0 || id > dtrace_nprobes)
 		return (NULL);
+#else
+	if (id == 0 || id > (dtrace_id_t)dtrace_nprobes)
+		return (NULL);
+#endif /* __APPLE__ */
 
 	return (dtrace_probes[id - 1]);
 }
@@ -7269,12 +8471,21 @@ dtrace_probe_description(const dtrace_probe_t *prp, dtrace_probedesc_t *pdp)
 	bzero(pdp, sizeof (dtrace_probedesc_t));
 	pdp->dtpd_id = prp->dtpr_id;
 
+#if !defined(__APPLE__)
+	(void) strncpy(pdp->dtpd_provider,
+	    prp->dtpr_provider->dtpv_name, DTRACE_PROVNAMELEN - 1);
+
+	(void) strncpy(pdp->dtpd_mod, prp->dtpr_mod, DTRACE_MODNAMELEN - 1);
+	(void) strncpy(pdp->dtpd_func, prp->dtpr_func, DTRACE_FUNCNAMELEN - 1);
+	(void) strncpy(pdp->dtpd_name, prp->dtpr_name, DTRACE_NAMELEN - 1);
+#else /* Employ size bounded string operation. */
 	(void) strlcpy(pdp->dtpd_provider,
 	    prp->dtpr_provider->dtpv_name, DTRACE_PROVNAMELEN);
 
 	(void) strlcpy(pdp->dtpd_mod, prp->dtpr_mod, DTRACE_MODNAMELEN);
 	(void) strlcpy(pdp->dtpd_func, prp->dtpr_func, DTRACE_FUNCNAMELEN);
 	(void) strlcpy(pdp->dtpd_name, prp->dtpr_name, DTRACE_NAMELEN);
+#endif /* __APPLE__ */
 }
 
 /*
@@ -7297,6 +8508,7 @@ dtrace_probe_provide(dtrace_probedesc_t *desc, dtrace_provider_t *prv)
 {
 	struct modctl *ctl;
 	int all = 0;
+#pragma unused(ctl) /* __APPLE__ */
 
 	lck_mtx_assert(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
 
@@ -7318,7 +8530,7 @@ dtrace_probe_provide(dtrace_probedesc_t *desc, dtrace_provider_t *prv)
 		 * that this also prevents the mod_busy bits from changing.
 		 * (mod_busy can only be changed with mod_lock held.)
 		 */
-		lck_mtx_lock(&mod_lock);
+		mutex_enter(&mod_lock);
 
 		ctl = &modules;
 		do {
@@ -7329,9 +8541,10 @@ dtrace_probe_provide(dtrace_probedesc_t *desc, dtrace_provider_t *prv)
 
 		} while ((ctl = ctl->mod_next) != &modules);
 
-		lck_mtx_unlock(&mod_lock);
+		mutex_exit(&mod_lock);
 #else
 #if 0 /* FIXME: Workaround for PR_4643546 */
+		/* NOTE: kmod_lock has been removed. */
 		simple_lock(&kmod_lock);
 		
 		kmod_info_t *ktl = kmod;
@@ -7516,15 +8729,23 @@ dtrace_helper_provide_one(dof_helper_t *dhp, dof_sec_t *sec, pid_t pid)
 		dhpb.dthpb_mod = dhp->dofhp_mod;
 		dhpb.dthpb_func = strtab + probe->dofpr_func;
 		dhpb.dthpb_name = strtab + probe->dofpr_name;
-#if defined(__APPLE__)
-		dhpb.dthpb_base = dhp->dofhp_addr;
-#else
+#if !defined(__APPLE__)
 		dhpb.dthpb_base = probe->dofpr_addr;
+#else
+		dhpb.dthpb_base = dhp->dofhp_addr; /* FIXME: James, why? */
 #endif
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 		dhpb.dthpb_offs = off + probe->dofpr_offidx;
+#else
+		dhpb.dthpb_offs = (int32_t *)(off + probe->dofpr_offidx);
+#endif /* __APPLE__ */
 		dhpb.dthpb_noffs = probe->dofpr_noffs;
 		if (enoff != NULL) {
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 			dhpb.dthpb_enoffs = enoff + probe->dofpr_enoffidx;
+#else
+			dhpb.dthpb_enoffs = (int32_t *)(enoff + probe->dofpr_enoffidx);
+#endif /* __APPLE__ */
 			dhpb.dthpb_nenoffs = probe->dofpr_nenoffs;
 		} else {
 			dhpb.dthpb_enoffs = NULL;
@@ -7545,7 +8766,11 @@ dtrace_helper_provide(dof_helper_t *dhp, pid_t pid)
 {
 	uintptr_t daddr = (uintptr_t)dhp->dofhp_dof;
 	dof_hdr_t *dof = (dof_hdr_t *)daddr;
+#if !defined(__APPLE__)  /* Quiet compiler warning */		
 	int i;
+#else
+	uint32_t i;
+#endif /* __APPLE__ */
 
 	lck_mtx_assert(&dtrace_meta_lock, LCK_MTX_ASSERT_OWNED);
 
@@ -7602,7 +8827,11 @@ dtrace_helper_provider_remove(dof_helper_t *dhp, pid_t pid)
 {
 	uintptr_t daddr = (uintptr_t)dhp->dofhp_dof;
 	dof_hdr_t *dof = (dof_hdr_t *)daddr;
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	int i;
+#else
+	uint32_t i;
+#endif /* __APPLE__ */
 
 	lck_mtx_assert(&dtrace_meta_lock, LCK_MTX_ASSERT_OWNED);
 
@@ -7629,7 +8858,11 @@ dtrace_meta_register(const char *name, const dtrace_mops_t *mops, void *arg,
 {
 	dtrace_meta_t *meta;
 	dtrace_helpers_t *help, *next;
+#if !defined(__APPLE__)  /* Quiet compiler warning */
 	int i;
+#else
+	uint_t i;
+#endif /* __APPLE__ */
 
 	*idp = DTRACE_METAPROVNONE;
 
@@ -7654,8 +8887,16 @@ dtrace_meta_register(const char *name, const dtrace_mops_t *mops, void *arg,
 
 	meta = kmem_zalloc(sizeof (dtrace_meta_t), KM_SLEEP);
 	meta->dtm_mops = *mops;
+#if !defined(__APPLE__)
 	meta->dtm_name = kmem_alloc(strlen(name) + 1, KM_SLEEP);
 	(void) strcpy(meta->dtm_name, name);
+#else /* Employ size bounded string operation. */
+	{
+	size_t bufsize = strlen(name) + 1;
+	meta->dtm_name = kmem_alloc(bufsize, KM_SLEEP);
+	(void) strlcpy(meta->dtm_name, name, bufsize);
+	}
+#endif /* __APPLE__ */
 	meta->dtm_arg = arg;
 
 	lck_mtx_lock(&dtrace_meta_lock);
@@ -7771,13 +9012,18 @@ static int
 dtrace_difo_validate(dtrace_difo_t *dp, dtrace_vstate_t *vstate, uint_t nregs,
     cred_t *cr)
 {
+#if !defined(__APPLE__)  /* Quiet compiler warnings */
 	int err = 0, i;
+#else
+	int err = 0;
+	uint_t i;
+#endif /* __APPLE__ */
 	int (*efunc)(uint_t pc, const char *, ...) = dtrace_difo_err;
-	int kcheck;
+	int kcheckload;
 	uint_t pc;
 
-	kcheck = cr == NULL ||
-	    PRIV_POLICY_ONLY(cr, PRIV_DTRACE_KERNEL, B_FALSE) == 0;
+	kcheckload = cr == NULL ||
+	    (vstate->dtvs_state->dts_cred.dcr_visible & DTRACE_CRV_KERNEL) == 0;
 
 	dp->dtdo_destructive = 0;
 
@@ -7845,7 +9091,7 @@ dtrace_difo_validate(dtrace_difo_t *dp, dtrace_vstate_t *vstate, uint_t nregs,
 				err += efunc(pc, "invalid register %u\n", rd);
 			if (rd == 0)
 				err += efunc(pc, "cannot write to %r0\n");
-			if (kcheck)
+			if (kcheckload)
 				dp->dtdo_buf[pc] = DIF_INSTR_LOAD(op +
 				    DIF_OP_RLDSB - DIF_OP_LDSB, r1, rd);
 			break;
@@ -8056,7 +9302,12 @@ dtrace_difo_validate(dtrace_difo_t *dp, dtrace_vstate_t *vstate, uint_t nregs,
 	for (i = 0; i < dp->dtdo_varlen && err == 0; i++) {
 		dtrace_difv_t *v = &dp->dtdo_vartab[i], *existing = NULL;
 		dtrace_diftype_t *vt, *et;
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 		uint_t id, ndx;
+#else
+		uint_t id;
+		int ndx;
+#endif /* __APPLE__ */
 
 		if (v->dtdv_scope != DIFV_SCOPE_GLOBAL &&
 		    v->dtdv_scope != DIFV_SCOPE_THREAD &&
@@ -8281,13 +9532,24 @@ dtrace_difo_validate_helper(dtrace_difo_t *dp)
 			    subr == DIF_SUBR_COPYINTO ||
 			    subr == DIF_SUBR_COPYINSTR ||
 			    subr == DIF_SUBR_INDEX ||
+			    subr == DIF_SUBR_INET_NTOA ||
+			    subr == DIF_SUBR_INET_NTOA6 ||
+			    subr == DIF_SUBR_INET_NTOP ||
 			    subr == DIF_SUBR_LLTOSTR ||
 			    subr == DIF_SUBR_RINDEX ||
 			    subr == DIF_SUBR_STRCHR ||
 			    subr == DIF_SUBR_STRJOIN ||
 			    subr == DIF_SUBR_STRRCHR ||
 			    subr == DIF_SUBR_STRSTR ||
-				subr == DIF_SUBR_CHUD)
+#if defined(__APPLE__)
+			    subr == DIF_SUBR_COREPROFILE ||
+#endif /* __APPLE__ */
+			    subr == DIF_SUBR_HTONS ||
+			    subr == DIF_SUBR_HTONL ||
+			    subr == DIF_SUBR_HTONLL ||
+			    subr == DIF_SUBR_NTOHS ||
+			    subr == DIF_SUBR_NTOHL ||
+			    subr == DIF_SUBR_NTOHLL)
 				break;
 
 			err += efunc(pc, "invalid subr %u\n", subr);
@@ -8309,7 +9571,11 @@ dtrace_difo_validate_helper(dtrace_difo_t *dp)
 static int
 dtrace_difo_cacheable(dtrace_difo_t *dp)
 {
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	int i;
+#else
+	uint_t i;
+#endif /* __APPLE__ */
 
 	if (dp == NULL)
 		return (0);
@@ -8354,7 +9620,11 @@ dtrace_difo_cacheable(dtrace_difo_t *dp)
 static void
 dtrace_difo_hold(dtrace_difo_t *dp)
 {
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	int i;
+#else
+	uint_t i;
+#endif /* __APPLE__ */
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
@@ -8386,7 +9656,11 @@ dtrace_difo_hold(dtrace_difo_t *dp)
 static void
 dtrace_difo_chunksize(dtrace_difo_t *dp, dtrace_vstate_t *vstate)
 {
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	uint64_t sval;
+#else
+	uint64_t sval = 0;
+#endif /* __APPLE__ */
 	dtrace_key_t tupregs[DIF_DTR_NREGS + 2]; /* +2 for thread and id */
 	const dif_instr_t *text = dp->dtdo_buf;
 	uint_t pc, srd = 0;
@@ -8521,18 +9795,28 @@ dtrace_difo_chunksize(dtrace_difo_t *dp, dtrace_vstate_t *vstate)
 static void
 dtrace_difo_init(dtrace_difo_t *dp, dtrace_vstate_t *vstate)
 {
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	int i, oldsvars, osz, nsz, otlocals, ntlocals;
 	uint_t id;
+#else
+	int oldsvars, osz, nsz, otlocals, ntlocals;
+	uint_t i, id;
+#endif /* __APPLE__ */
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(dp->dtdo_buf != NULL && dp->dtdo_len != 0);
 
 	for (i = 0; i < dp->dtdo_varlen; i++) {
 		dtrace_difv_t *v = &dp->dtdo_vartab[i];
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 		dtrace_statvar_t *svar, ***svarp;
+#else
+		dtrace_statvar_t *svar;
+		dtrace_statvar_t ***svarp = NULL;
+#endif /* __APPLE__ */
 		size_t dsize = 0;
 		uint8_t scope = v->dtdv_scope;
-		int *np;
+		int *np = (int *)NULL;
 
 		if ((id = v->dtdv_id) < DIF_VAR_OTHER_UBASE)
 			continue;
@@ -8541,7 +9825,11 @@ dtrace_difo_init(dtrace_difo_t *dp, dtrace_vstate_t *vstate)
 
 		switch (scope) {
 		case DIFV_SCOPE_THREAD:
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 			while (id >= (otlocals = vstate->dtvs_ntlocals)) {
+#else
+			while (id >= (uint_t)(otlocals = vstate->dtvs_ntlocals)) {
+#endif /* __APPLE__ */
 				dtrace_difv_t *tlocals;
 
 				if ((ntlocals = (otlocals << 1)) == 0)
@@ -8591,7 +9879,11 @@ dtrace_difo_init(dtrace_difo_t *dp, dtrace_vstate_t *vstate)
 			ASSERT(0);
 		}
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 		while (id >= (oldsvars = *np)) {
+#else
+		while (id >= (uint_t)(oldsvars = *np)) {
+#endif /* __APPLE__ */
 			dtrace_statvar_t **statics;
 			int newsvars, oldsize, newsize;
 
@@ -8678,16 +9970,28 @@ dtrace_difo_duplicate(dtrace_difo_t *dp, dtrace_vstate_t *vstate)
 static void
 dtrace_difo_destroy(dtrace_difo_t *dp, dtrace_vstate_t *vstate)
 {
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	int i;
+#else
+	uint_t i;
+#endif /* __APPLE__ */
 
 	ASSERT(dp->dtdo_refcnt == 0);
 
 	for (i = 0; i < dp->dtdo_varlen; i++) {
 		dtrace_difv_t *v = &dp->dtdo_vartab[i];
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 		dtrace_statvar_t *svar, **svarp;
 		uint_t id;
 		uint8_t scope = v->dtdv_scope;
-		int *np;
+		int *np;		
+#else
+		dtrace_statvar_t *svar;
+		dtrace_statvar_t **svarp = NULL;
+		uint_t id;
+		uint8_t scope = v->dtdv_scope;
+		int *np = NULL;
+#endif /* __APPLE__ */
 
 		switch (scope) {
 		case DIFV_SCOPE_THREAD:
@@ -8711,7 +10015,12 @@ dtrace_difo_destroy(dtrace_difo_t *dp, dtrace_vstate_t *vstate)
 			continue;
 
 		id -= DIF_VAR_OTHER_UBASE;
+		
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 		ASSERT(id < *np);
+#else
+		ASSERT(id < (uint_t)*np);
+#endif /* __APPLE__ */
 
 		svar = svarp[id];
 		ASSERT(svar != NULL);
@@ -8741,7 +10050,11 @@ dtrace_difo_destroy(dtrace_difo_t *dp, dtrace_vstate_t *vstate)
 static void
 dtrace_difo_release(dtrace_difo_t *dp, dtrace_vstate_t *vstate)
 {
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	int i;
+#else
+	uint_t i;
+#endif /* __APPLE__ */
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(dp->dtdo_refcnt != 0);
@@ -8897,6 +10210,7 @@ static void
 dtrace_predicate_release(dtrace_predicate_t *pred, dtrace_vstate_t *vstate)
 {
 	dtrace_difo_t *dp = pred->dtp_difo;
+#pragma unused(dp) /* __APPLE__ */
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(dp != NULL && dp->dtdo_refcnt != 0);
@@ -8917,8 +10231,8 @@ dtrace_actdesc_create(dtrace_actkind_t kind, uint32_t ntuple,
 {
 	dtrace_actdesc_t *act;
 
-/*	ASSERT(!DTRACEACT_ISPRINTFLIKE(kind) || (arg != NULL &&
-  arg >= KERNELBASE) || (arg == NULL && kind == DTRACEACT_PRINTA));*/
+	ASSERT(!DTRACEACT_ISPRINTFLIKE(kind) || (arg != NULL &&
+	    arg >= KERNELBASE) || (arg == NULL && kind == DTRACEACT_PRINTA));
 
 	act = kmem_zalloc(sizeof (dtrace_actdesc_t), KM_SLEEP);
 	act->dtad_kind = kind;
@@ -8954,8 +10268,8 @@ dtrace_actdesc_release(dtrace_actdesc_t *act, dtrace_vstate_t *vstate)
 	if (DTRACEACT_ISPRINTFLIKE(kind)) {
 		char *str = (char *)(uintptr_t)act->dtad_arg;
 
-/*		ASSERT((str != NULL && (uintptr_t)str >= KERNELBASE) ||
-  (str == NULL && act->dtad_kind == DTRACEACT_PRINTA));*/
+		ASSERT((str != NULL && (uintptr_t)str >= KERNELBASE) ||
+		    (str == NULL && act->dtad_kind == DTRACEACT_PRINTA));
 
 		if (str != NULL)
 			kmem_free(str, strlen(str) + 1);
@@ -8988,11 +10302,19 @@ dtrace_ecb_add(dtrace_state_t *state, dtrace_probe_t *probe)
 
 	epid = state->dts_epid++;
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	if (epid - 1 >= state->dts_necbs) {
+#else
+	if (epid - 1 >= (dtrace_epid_t)state->dts_necbs) {
+#endif /* __APPLE__ */
 		dtrace_ecb_t **oecbs = state->dts_ecbs, **ecbs;
 		int necbs = state->dts_necbs << 1;
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 		ASSERT(epid == state->dts_necbs + 1);
+#else
+		ASSERT(epid == (dtrace_epid_t)state->dts_necbs + 1);
+#endif /* __APPLE__ */
 
 		if (necbs == 0) {
 			ASSERT(oecbs == NULL);
@@ -9217,11 +10539,12 @@ dtrace_ecb_aggregation_create(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 
 	switch (desc->dtad_kind) {
 	case DTRACEAGG_MIN:
-		agg->dtag_initial = UINT64_MAX;
+		agg->dtag_initial = INT64_MAX;
 		agg->dtag_aggregate = dtrace_aggregate_min;
 		break;
 
 	case DTRACEAGG_MAX:
+		agg->dtag_initial = INT64_MIN;
 		agg->dtag_aggregate = dtrace_aggregate_max;
 		break;
 
@@ -9252,6 +10575,11 @@ dtrace_ecb_aggregation_create(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 	case DTRACEAGG_AVG:
 		agg->dtag_aggregate = dtrace_aggregate_avg;
 		size = sizeof (uint64_t) * 2;
+		break;
+
+	case DTRACEAGG_STDDEV:
+		agg->dtag_aggregate = dtrace_aggregate_stddev;
+		size = sizeof (uint64_t) * 4;
 		break;
 
 	case DTRACEAGG_SUM:
@@ -9312,13 +10640,21 @@ success:
 	aggid = (dtrace_aggid_t)(uintptr_t)vmem_alloc(state->dts_aggid_arena, 1,
 	    VM_BESTFIT | VM_SLEEP);
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	if (aggid - 1 >= state->dts_naggregations) {
+#else
+	if (aggid - 1 >= (dtrace_aggid_t)state->dts_naggregations) {
+#endif /* __APPLE__ */
 		dtrace_aggregation_t **oaggs = state->dts_aggregations;
 		dtrace_aggregation_t **aggs;
 		int naggs = state->dts_naggregations << 1;
 		int onaggs = state->dts_naggregations;
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 		ASSERT(aggid == state->dts_naggregations + 1);
+#else
+		ASSERT(aggid == (dtrace_aggid_t)state->dts_naggregations + 1);
+#endif /* __APPLE */
 
 		if (naggs == 0) {
 			ASSERT(oaggs == NULL);
@@ -9376,7 +10712,12 @@ dtrace_ecb_action_add(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 	uint16_t format = 0;
 	dtrace_recdesc_t *rec;
 	dtrace_state_t *state = ecb->dte_state;
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	dtrace_optval_t *opt = state->dts_options, nframes, strsize;
+#else
+	dtrace_optval_t *opt = state->dts_options;
+	dtrace_optval_t nframes=0, strsize;
+#endif /* __APPLE__ */
 	uint64_t arg = desc->dtad_arg;
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
@@ -9422,7 +10763,7 @@ dtrace_ecb_action_add(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 				format = 0;
 			} else {
 				ASSERT(arg != NULL);
-				/* ASSERT(arg > KERNELBASE); */
+				ASSERT(arg > KERNELBASE);
 				format = dtrace_format_add(state,
 				    (char *)(uintptr_t)arg);
 			}
@@ -9430,6 +10771,9 @@ dtrace_ecb_action_add(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 			/*FALLTHROUGH*/
 		case DTRACEACT_LIBACT:
 		case DTRACEACT_DIFEXPR:
+#if defined(__APPLE__)
+		case DTRACEACT_APPLEBINARY:
+#endif /* __APPLE__ */
 			if (dp == NULL)
 				return (EINVAL);
 
@@ -9860,10 +11204,15 @@ static dtrace_ecb_t *
 dtrace_epid2ecb(dtrace_state_t *state, dtrace_epid_t id)
 {
 	dtrace_ecb_t *ecb;
+#pragma unused(ecb) /* __APPLE__ */
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	if (id == 0 || id > state->dts_necbs)
+#else
+	    if (id == 0 || id > (dtrace_epid_t)state->dts_necbs)
+#endif /* __APPLE__ */
 		return (NULL);
 
 	ASSERT(state->dts_necbs > 0 && state->dts_ecbs != NULL);
@@ -9876,10 +11225,15 @@ static dtrace_aggregation_t *
 dtrace_aggid2agg(dtrace_state_t *state, dtrace_aggid_t id)
 {
 	dtrace_aggregation_t *agg;
+#pragma unused(agg) /* __APPLE__ */
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	if (id == 0 || id > state->dts_naggregations)
+#else
+	if (id == 0 || id > (dtrace_aggid_t)state->dts_naggregations)
+#endif /* __APPLE__ */
 		return (NULL);
 
 	ASSERT(state->dts_naggregations > 0 && state->dts_aggregations != NULL);
@@ -9965,9 +11319,16 @@ dtrace_buffer_alloc(dtrace_buffer_t *bufs, size_t size, int flags,
 	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	if (size > dtrace_nonroot_maxsize &&
 	    !PRIV_POLICY_CHOICE(CRED(), PRIV_ALL, B_FALSE))
 		return (EFBIG);
+#else
+	if (size > (size_t)dtrace_nonroot_maxsize &&
+	    !PRIV_POLICY_CHOICE(CRED(), PRIV_ALL, B_FALSE))
+		return (EFBIG);
+#endif /* __APPLE__ */
+	
 
 #if defined(__APPLE__)
 	if (size > (sane_size / 8) / (int)NCPU) /* As in kdbg_set_nkdbufs(), roughly. */
@@ -10087,7 +11448,11 @@ dtrace_buffer_reserve(dtrace_buffer_t *buf, size_t needed, size_t align,
 			offs += sizeof (uint32_t);
 		}
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 		if ((soffs = offs + needed) > buf->dtb_size) {
+#else
+		if ((uint64_t)(soffs = offs + needed) > buf->dtb_size) {
+#endif /* __APPLE__ */
 			dtrace_buffer_drop(buf);
 			return (-1);
 		}
@@ -10158,7 +11523,11 @@ dtrace_buffer_reserve(dtrace_buffer_t *buf, size_t needed, size_t align,
 			 * there.  We need to clear the buffer from the current
 			 * offset to the end (there may be old gunk there).
 			 */
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 			while (offs < buf->dtb_size)
+#else
+			while ((uint64_t)offs < buf->dtb_size)
+#endif /* __APPLE__ */
 				tomax[offs++] = 0;
 
 			/*
@@ -10195,14 +11564,22 @@ dtrace_buffer_reserve(dtrace_buffer_t *buf, size_t needed, size_t align,
 			}
 		}
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 		while (offs + total_off > woffs) {
+#else
+		while (offs + total_off > (size_t)woffs) {
+#endif /* __APPLE__ */
 			dtrace_epid_t epid = *(uint32_t *)(tomax + woffs);
 			size_t size;
 
 			if (epid == DTRACE_EPIDNONE) {
 				size = sizeof (uint32_t);
 			} else {
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 				ASSERT(epid <= state->dts_necbs);
+#else
+				ASSERT(epid <= (dtrace_epid_t)state->dts_necbs);
+#endif /* __APPLE__ */
 				ASSERT(state->dts_ecbs[epid - 1] != NULL);
 
 				size = state->dts_ecbs[epid - 1]->dte_size;
@@ -10237,7 +11614,12 @@ dtrace_buffer_reserve(dtrace_buffer_t *buf, size_t needed, size_t align,
 					buf->dtb_offset = 0;
 					woffs = total_off;
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 					while (woffs < buf->dtb_size)
+#else
+					while ((uint64_t)woffs < buf->dtb_size)
+#endif /* __APPLE__ */
+					    
 						tomax[woffs++] = 0;
 				}
 
@@ -10391,7 +11773,7 @@ dtrace_enabling_add(dtrace_enabling_t *enab, dtrace_ecbdesc_t *ecb)
 	ASSERT(enab->dten_next == NULL && enab->dten_prev == NULL);
 
 #if defined(__APPLE__)
-	if (ecb == NULL) return; /* XXX protection against gcc 4.0 botch on x86 */
+	if (ecb == NULL) return; /* Note: protection against gcc 4.0 botch on x86 */
 #endif /* __APPLE__ */
 
 	if (enab->dten_ndesc < enab->dten_maxdesc) {
@@ -10498,6 +11880,7 @@ dtrace_enabling_destroy(dtrace_enabling_t *enab)
 		ASSERT(enab->dten_vstate->dtvs_state != NULL);
 		ASSERT(enab->dten_vstate->dtvs_state->dts_nretained > 0);
 		enab->dten_vstate->dtvs_state->dts_nretained--;
+                dtrace_retained_gen++;
 	}
 
 	if (enab->dten_prev == NULL) {
@@ -10540,6 +11923,7 @@ dtrace_enabling_retain(dtrace_enabling_t *enab)
 		return (ENOSPC);
 
 	state->dts_nretained++;
+        dtrace_retained_gen++;
 
 	if (dtrace_retained == NULL) {
 		dtrace_retained = enab;
@@ -10592,6 +11976,7 @@ dtrace_enabling_replicate(dtrace_state_t *state, dtrace_probedesc_t *match,
 			dtrace_ecbdesc_t *ep = enab->dten_desc[i];
 			dtrace_probedesc_t *pd = &ep->dted_probe;
 
+#if !defined(__APPLE__)
 			if (strcmp(pd->dtpd_provider, match->dtpd_provider))
 				continue;
 
@@ -10603,6 +11988,19 @@ dtrace_enabling_replicate(dtrace_state_t *state, dtrace_probedesc_t *match,
 
 			if (strcmp(pd->dtpd_name, match->dtpd_name))
 				continue;
+#else /* Employ size bounded string operation. */
+			if (strncmp(pd->dtpd_provider, match->dtpd_provider, DTRACE_PROVNAMELEN))
+				continue;
+
+			if (strncmp(pd->dtpd_mod, match->dtpd_mod, DTRACE_MODNAMELEN))
+				continue;
+
+			if (strncmp(pd->dtpd_func, match->dtpd_func, DTRACE_FUNCNAMELEN))
+				continue;
+
+			if (strncmp(pd->dtpd_name, match->dtpd_name, DTRACE_NAMELEN))
+				continue;
+#endif /* __APPLE__ */
 
 			/*
 			 * We have a winning probe!  Add it to our growing
@@ -10707,43 +12105,29 @@ dtrace_enabling_matchall(void)
 	lck_mtx_lock(&dtrace_lock);
 
 	/*
-	 * Because we can be called after dtrace_detach() has been called, we
-	 * cannot assert that there are retained enablings.  We can safely
-	 * load from dtrace_retained, however:  the taskq_destroy() at the
-	 * end of dtrace_detach() will block pending our completion.
+	 * Iterate over all retained enablings to see if any probes match
+	 * against them.  We only perform this operation on enablings for which
+	 * we have sufficient permissions by virtue of being in the global zone
+	 * or in the same zone as the DTrace client.  Because we can be called
+	 * after dtrace_detach() has been called, we cannot assert that there
+	 * are retained enablings.  We can safely load from dtrace_retained,
+	 * however:  the taskq_destroy() at the end of dtrace_detach() will
+	 * block pending our completion.
 	 */
-	for (enab = dtrace_retained; enab != NULL; enab = enab->dten_next)
-		(void) dtrace_enabling_match(enab, NULL);
+	for (enab = dtrace_retained; enab != NULL; enab = enab->dten_next) {
+#if !defined(__APPLE__)
+		cred_t *cr = enab->dten_vstate->dtvs_state->dts_cred.dcr_cred;
+
+		if (INGLOBALZONE(curproc) ||
+		    cr != NULL && getzoneid() == crgetzoneid(cr))
+			(void) dtrace_enabling_match(enab, NULL);
+#else
+		(void) dtrace_enabling_match(enab, NULL); /* As if always in "global" zone." */
+#endif /* __APPLE__ */
+	}
 
 	lck_mtx_unlock(&dtrace_lock);
 	lck_mtx_unlock(&cpu_lock);
-}
-
-static int
-dtrace_enabling_matchstate(dtrace_state_t *state, int *nmatched)
-{
-	dtrace_enabling_t *enab;
-	int matched, total_matched = 0, err;
-
-	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
-
-	for (enab = dtrace_retained; enab != NULL; enab = enab->dten_next) {
-		ASSERT(enab->dten_vstate->dtvs_state != NULL);
-
-		if (enab->dten_vstate->dtvs_state != state)
-			continue;
-
-		if ((err = dtrace_enabling_match(enab, &matched)) != 0)
-			return (err);
-
-		total_matched += matched;
-	}
-
-	if (nmatched != NULL)
-		*nmatched = total_matched;
-
-	return (0);
 }
 
 /*
@@ -10798,6 +12182,7 @@ dtrace_enabling_provide(dtrace_provider_t *prv)
 {
 	int i, all = 0;
 	dtrace_probedesc_t desc;
+        dtrace_genid_t gen;
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	lck_mtx_assert(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
@@ -10808,15 +12193,25 @@ dtrace_enabling_provide(dtrace_provider_t *prv)
 	}
 
 	do {
-		dtrace_enabling_t *enab = dtrace_retained;
+		dtrace_enabling_t *enab;
 		void *parg = prv->dtpv_arg;
 
-		for (; enab != NULL; enab = enab->dten_next) {
+retry:
+		gen = dtrace_retained_gen;
+		for (enab = dtrace_retained; enab != NULL;
+		    enab = enab->dten_next) {
 			for (i = 0; i < enab->dten_ndesc; i++) {
 				desc = enab->dten_desc[i]->dted_probe;
 				lck_mtx_unlock(&dtrace_lock);
 				prv->dtpv_pops.dtps_provide(parg, &desc);
 				lck_mtx_lock(&dtrace_lock);
+				/*
+				 * Process the retained enablings again if
+				 * they have changed while we weren't holding
+				 * dtrace_lock.
+				 */
+				if (gen != dtrace_retained_gen)
+					goto retry;
 			}
 		}
 	} while (all && (prv = prv->dtpv_next) != NULL);
@@ -10833,7 +12228,7 @@ dtrace_enabling_provide(dtrace_provider_t *prv)
 static void
 dtrace_dof_error(dof_hdr_t *dof, const char *str)
 {
-#pragma unused(dof)
+#pragma unused(dof) /* __APPLE__ */
 	if (dtrace_err_verbose)
 		cmn_err(CE_WARN, "failed to process DOF: %s", str);
 
@@ -10859,7 +12254,11 @@ dtrace_dof_create(dtrace_state_t *state)
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
+#if !defined(__APPLE__)
+	dof = kmem_zalloc(len, KM_SLEEP);
+#else
 	dof = dt_kmem_zalloc_aligned(len, 8, KM_SLEEP);
+#endif /* __APPLE__ */
 	dof->dofh_ident[DOF_ID_MAG0] = DOF_MAG_MAG0;
 	dof->dofh_ident[DOF_ID_MAG1] = DOF_MAG_MAG1;
 	dof->dofh_ident[DOF_ID_MAG2] = DOF_MAG_MAG2;
@@ -10906,10 +12305,10 @@ dtrace_dof_create(dtrace_state_t *state)
 }
 
 static dof_hdr_t *
-#if defined(__APPLE__)
-dtrace_dof_copyin(user_addr_t uarg, int *errp)
-#else
+#if !defined(__APPLE__)
 dtrace_dof_copyin(uintptr_t uarg, int *errp)
+#else
+dtrace_dof_copyin(user_addr_t uarg, int *errp)
 #endif
 {
 	dof_hdr_t hdr, *dof;
@@ -10919,10 +12318,10 @@ dtrace_dof_copyin(uintptr_t uarg, int *errp)
 	/*
 	 * First, we're going to copyin() the sizeof (dof_hdr_t).
 	 */
-#if defined(__APPLE__)
-	if (copyin(uarg, &hdr, sizeof (hdr)) != 0) {
-#else
+#if !defined(__APPLE__)
 	if (copyin((void *)uarg, &hdr, sizeof (hdr)) != 0) {
+#else
+	if (copyin(uarg, &hdr, sizeof (hdr)) != 0) {
 #endif
 		dtrace_dof_error(NULL, "failed to copyin DOF header");
 		*errp = EFAULT;
@@ -10933,7 +12332,11 @@ dtrace_dof_copyin(uintptr_t uarg, int *errp)
 	 * Now we'll allocate the entire DOF and copy it in -- provided
 	 * that the length isn't outrageous.
 	 */
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	if (hdr.dofh_loadsz >= dtrace_dof_maxsize) {
+#else
+	if (hdr.dofh_loadsz >= (uint64_t)dtrace_dof_maxsize) {
+#endif /* __APPLE__ */
 		dtrace_dof_error(&hdr, "load size exceeds maximum");
 		*errp = E2BIG;
 		return (NULL);
@@ -10945,12 +12348,14 @@ dtrace_dof_copyin(uintptr_t uarg, int *errp)
 		return (NULL);
 	}
 
+#if !defined(__APPLE__)
+	dof = kmem_alloc(hdr.dofh_loadsz, KM_SLEEP);
+
+	if (copyin((void *)uarg, dof, hdr.dofh_loadsz) != 0) {
+#else
 	dof = dt_kmem_alloc_aligned(hdr.dofh_loadsz, 8, KM_SLEEP);
 
-#if defined(__APPLE__)
 	if (copyin(uarg, dof, hdr.dofh_loadsz) != 0) {
-#else
-	if (copyin((void *)uarg, dof, hdr.dofh_loadsz) != 0) {
 #endif
 		dt_kmem_free_aligned(dof, hdr.dofh_loadsz);
 		*errp = EFAULT;
@@ -10982,7 +12387,7 @@ dtrace_dof_copyin_from_proc(proc_t* p, user_addr_t uarg, int *errp)
 	 * Now we'll allocate the entire DOF and copy it in -- provided
 	 * that the length isn't outrageous.
 	 */
-	if (hdr.dofh_loadsz >= dtrace_dof_maxsize) {
+	if (hdr.dofh_loadsz >= (uint64_t)dtrace_dof_maxsize) {
 		dtrace_dof_error(&hdr, "load size exceeds maximum");
 		*errp = E2BIG;
 		return (NULL);
@@ -11020,9 +12425,15 @@ dtrace_dof_property(const char *name)
 	 * only) interpreted to be integer arrays.  We must read our DOF
 	 * as an integer array, and then squeeze it into a byte array.
 	 */
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	if (ddi_prop_lookup_int_array(DDI_DEV_T_ANY, dtrace_devi, 0,
 	    (char *)name, (int **)&buf, &len) != DDI_PROP_SUCCESS)
 		return (NULL);
+#else
+	if (ddi_prop_lookup_int_array(DDI_DEV_T_ANY, dtrace_devi, 0,
+	    name, (int **)&buf, &len) != DDI_PROP_SUCCESS)
+		return (NULL);
+#endif /* __APPLE__ */
 
 	for (i = 0; i < len; i++)
 		buf[i] = (uchar_t)(((int *)buf)[i]);
@@ -11039,13 +12450,21 @@ dtrace_dof_property(const char *name)
 		return (NULL);
 	}
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	if (loadsz >= dtrace_dof_maxsize) {
+#else
+	if (loadsz >= (uint64_t)dtrace_dof_maxsize) {
+#endif /* __APPLE__ */
 		ddi_prop_free(buf);
 		dtrace_dof_error(NULL, "oversized DOF");
 		return (NULL);
 	}
 
+#if !defined(__APPLE__)
+	dof = kmem_alloc(loadsz, KM_SLEEP);
+#else
 	dof = dt_kmem_alloc_aligned(loadsz, 8, KM_SLEEP);
+#endif /* __APPLE__ */
 	bcopy(buf, dof, loadsz);
 	ddi_prop_free(buf);
 
@@ -11055,7 +12474,11 @@ dtrace_dof_property(const char *name)
 static void
 dtrace_dof_destroy(dof_hdr_t *dof)
 {
+#if !defined(__APPLE__)
+	kmem_free(dof, dof->dofh_loadsz);
+#else
 	dt_kmem_free_aligned(dof, dof->dofh_loadsz);
+#endif /* __APPLE__ */
 }
 
 /*
@@ -11129,6 +12552,9 @@ dtrace_dof_probedesc(dof_hdr_t *dof, dof_sec_t *sec, dtrace_probedesc_t *desc)
 	(void) strncpy(desc->dtpd_provider,
 	    (char *)(str + probe->dofp_provider),
 	    MIN(DTRACE_PROVNAMELEN - 1, size - probe->dofp_provider));
+#if defined(__APPLE__) /* Employ size bounded string operation. */
+	desc->dtpd_provider[DTRACE_PROVNAMELEN - 1] = '\0';
+#endif /* __APPLE__ */
 
 	if (probe->dofp_mod >= strtab->dofs_size) {
 		dtrace_dof_error(dof, "corrupt probe module");
@@ -11137,6 +12563,9 @@ dtrace_dof_probedesc(dof_hdr_t *dof, dof_sec_t *sec, dtrace_probedesc_t *desc)
 
 	(void) strncpy(desc->dtpd_mod, (char *)(str + probe->dofp_mod),
 	    MIN(DTRACE_MODNAMELEN - 1, size - probe->dofp_mod));
+#if defined(__APPLE__) /* Employ size bounded string operation. */
+	desc->dtpd_mod[DTRACE_MODNAMELEN - 1] = '\0';
+#endif /* __APPLE__ */
 
 	if (probe->dofp_func >= strtab->dofs_size) {
 		dtrace_dof_error(dof, "corrupt probe function");
@@ -11145,6 +12574,9 @@ dtrace_dof_probedesc(dof_hdr_t *dof, dof_sec_t *sec, dtrace_probedesc_t *desc)
 
 	(void) strncpy(desc->dtpd_func, (char *)(str + probe->dofp_func),
 	    MIN(DTRACE_FUNCNAMELEN - 1, size - probe->dofp_func));
+#if defined(__APPLE__) /* Employ size bounded string operation. */
+	desc->dtpd_func[DTRACE_FUNCNAMELEN - 1] = '\0';
+#endif /* __APPLE__ */
 
 	if (probe->dofp_name >= strtab->dofs_size) {
 		dtrace_dof_error(dof, "corrupt probe name");
@@ -11153,6 +12585,9 @@ dtrace_dof_probedesc(dof_hdr_t *dof, dof_sec_t *sec, dtrace_probedesc_t *desc)
 
 	(void) strncpy(desc->dtpd_name, (char *)(str + probe->dofp_name),
 	    MIN(DTRACE_NAMELEN - 1, size - probe->dofp_name));
+#if defined(__APPLE__) /* Employ size bounded string operation. */
+	desc->dtpd_name[DTRACE_NAMELEN - 1] = '\0';
+#endif /* __APPLE__ */
 
 	return (desc);
 }
@@ -11166,7 +12601,13 @@ dtrace_dof_difo(dof_hdr_t *dof, dof_sec_t *sec, dtrace_vstate_t *vstate,
 	dof_difohdr_t *dofd;
 	uintptr_t daddr = (uintptr_t)dof;
 	size_t max_size = dtrace_difo_maxsize;
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	int i, l, n;
+#else
+	uint_t i;
+	int l, n;
+#endif /* __APPLE__ */
+		
 
 	static const struct {
 		int section;
@@ -11238,18 +12679,31 @@ dtrace_dof_difo(dof_hdr_t *dof, dof_sec_t *sec, dtrace_vstate_t *vstate,
 		ttl += subsec->dofs_size;
 
 		for (i = 0; difo[i].section != DOF_SECT_NONE; i++) {
+
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 			if (subsec->dofs_type != difo[i].section)
 				continue;
+#else
+			if (subsec->dofs_type != (uint32_t)difo[i].section)
+				continue;
+#endif /* __APPLE __ */
 
 			if (!(subsec->dofs_flags & DOF_SECF_LOAD)) {
 				dtrace_dof_error(dof, "section not loaded");
 				goto err;
 			}
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 			if (subsec->dofs_align != difo[i].align) {
 				dtrace_dof_error(dof, "bad alignment");
 				goto err;
 			}
+#else
+			if (subsec->dofs_align != (uint32_t)difo[i].align) {
+				dtrace_dof_error(dof, "bad alignment");
+				goto err;
+			}
+#endif /* __APPLE__ */
 
 			bufp = (void **)((uintptr_t)dp + difo[i].bufoffs);
 			lenp = (uint32_t *)((uintptr_t)dp + difo[i].lenoffs);
@@ -11259,10 +12713,17 @@ dtrace_dof_difo(dof_hdr_t *dof, dof_sec_t *sec, dtrace_vstate_t *vstate,
 				goto err;
 			}
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 			if (difo[i].entsize != subsec->dofs_entsize) {
 				dtrace_dof_error(dof, "entry size mismatch");
 				goto err;
 			}
+#else
+			if ((uint32_t)difo[i].entsize != subsec->dofs_entsize) {
+				dtrace_dof_error(dof, "entry size mismatch");
+				goto err;
+			}
+#endif /* __APPLE__ */
 
 			if (subsec->dofs_entsize != 0 &&
 			    (subsec->dofs_size % subsec->dofs_entsize) != 0) {
@@ -11291,7 +12752,7 @@ dtrace_dof_difo(dof_hdr_t *dof, dof_sec_t *sec, dtrace_vstate_t *vstate,
 			goto err;
 		}
 	}
-
+	
 	if (dp->dtdo_buf == NULL) {
 		/*
 		 * We can't have a DIF object without DIF text.
@@ -11619,6 +13080,7 @@ static int
 dtrace_dof_slurp(dof_hdr_t *dof, dtrace_vstate_t *vstate, cred_t *cr,
     dtrace_enabling_t **enabp, uint64_t ubase, int noprobes)
 {
+#pragma unused(ubase) /* __APPLE__ */
 	uint64_t len = dof->dofh_loadsz, seclen;
 	uintptr_t daddr = (uintptr_t)dof;
 	dtrace_ecbdesc_t *ep;
@@ -11770,11 +13232,6 @@ dtrace_dof_slurp(dof_hdr_t *dof, dtrace_vstate_t *vstate, cred_t *cr,
 
 #if !defined(__APPLE__)
 	/*
-	 * APPLE NOTE: We have no relocation to perform. All dof values are
-	 * relative offsets.
-	 */
-
-	/*
 	 * Take a second pass through the sections and locate and perform any
 	 * relocations that are present.  We do this after the first pass to
 	 * be sure that all sections have had their headers validated.
@@ -11793,6 +13250,11 @@ dtrace_dof_slurp(dof_hdr_t *dof, dtrace_vstate_t *vstate, cred_t *cr,
 			break;
 		}
 	}
+#else
+	/*
+	 * APPLE NOTE: We have no relocation to perform. All dof values are
+	 * relative offsets.
+	 */
 #endif /* __APPLE__ */
 
 	if ((enab = *enabp) == NULL)
@@ -11812,7 +13274,7 @@ dtrace_dof_slurp(dof_hdr_t *dof, dtrace_vstate_t *vstate, cred_t *cr,
 			return (-1);
 		}
 #else
-		/* XXX Defend against gcc 4.0 botch on x86 (not all paths out of inlined dtrace_dof_ecbdesc
+		/* Note: Defend against gcc 4.0 botch on x86 (not all paths out of inlined dtrace_dof_ecbdesc
 		   are checked for the NULL return value.) */
 		ep = dtrace_dof_ecbdesc(dof, sec, vstate, cr);
 		if (ep == NULL) {
@@ -11835,7 +13297,12 @@ dtrace_dof_slurp(dof_hdr_t *dof, dtrace_vstate_t *vstate, cred_t *cr,
 static int
 dtrace_dof_options(dof_hdr_t *dof, dtrace_state_t *state)
 {
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 	int i, rval;
+#else
+	uint_t i;
+	int rval;
+#endif /* __APPLE__ */
 	uint32_t entsize;
 	size_t offs;
 	dof_optdesc_t *desc;
@@ -11872,7 +13339,11 @@ dtrace_dof_options(dof_hdr_t *dof, dtrace_state_t *state)
 				return (EINVAL);
 			}
 
+#if !defined(__APPLE__) /* Quiet compiler warnings */
 			if (desc->dofo_value == DTRACEOPT_UNSET) {
+#else
+			if (desc->dofo_value == (uint64_t)DTRACEOPT_UNSET) {
+#endif /* __APPLE __ */
 				dtrace_dof_error(dof, "unset option");
 				return (EINVAL);
 			}
@@ -11891,7 +13362,7 @@ dtrace_dof_options(dof_hdr_t *dof, dtrace_state_t *state)
 /*
  * DTrace Consumer State Functions
  */
-#if defined(__APPLE__)
+#if defined(__APPLE__) /* Quiet compiler warning. */
 static 
 #endif /* __APPLE__ */
 int
@@ -11901,7 +13372,11 @@ dtrace_dstate_init(dtrace_dstate_t *dstate, size_t size)
 	void *base;
 	uintptr_t limit;
 	dtrace_dynvar_t *dvar, *next, *start;
+#if !defined(__APPLE__) /* Quiet compiler warning */
 	int i;
+#else
+	size_t i;
+#endif /* __APPLE__ */
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 	ASSERT(dstate->dtds_base == NULL && dstate->dtds_percpu == NULL);
@@ -11954,7 +13429,7 @@ dtrace_dstate_init(dtrace_dstate_t *dstate, size_t size)
 	maxper = (limit - (uintptr_t)start) / (int)NCPU;
 	maxper = (maxper / dstate->dtds_chunksize) * dstate->dtds_chunksize;
 
-	for (i = 0; i < (int)NCPU; i++) {
+	for (i = 0; i < NCPU; i++) {
 		dstate->dtds_percpu[i].dtdsc_free = dvar = start;
 
 		/*
@@ -11964,7 +13439,7 @@ dtrace_dstate_init(dtrace_dstate_t *dstate, size_t size)
 		 * whatever is left over.  In either case, we set the limit to
 		 * be the limit of the dynamic variable space.
 		 */
-		if (maxper == 0 || i == (int)NCPU - 1) {
+		if (maxper == 0 || i == NCPU - 1) {
 			limit = (uintptr_t)base + size;
 			start = NULL;
 		} else {
@@ -11992,7 +13467,7 @@ dtrace_dstate_init(dtrace_dstate_t *dstate, size_t size)
 	return (0);
 }
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) /* Quiet compiler warning. */
 static 
 #endif /* __APPLE__ */
 void
@@ -12070,11 +13545,13 @@ dtrace_state_deadman(dtrace_state_t *state)
 	state->dts_alive = now;
 }
 
-#if defined(__APPLE__)
-static 
-#endif /* __APPLE__ */
+#if !defined(__APPLE__)
 dtrace_state_t *
 dtrace_state_create(dev_t *devp, cred_t *cr)
+#else
+static int
+dtrace_state_create(dev_t *devp, cred_t *cr, dtrace_state_t **new_state)
+#endif /* __APPLE__ */
 {
 	minor_t minor;
 	major_t major;
@@ -12089,13 +13566,21 @@ dtrace_state_create(dev_t *devp, cred_t *cr)
 #if !defined(__APPLE__)
 	minor = (minor_t)(uintptr_t)vmem_alloc(dtrace_minor, 1,
 	    VM_BESTFIT | VM_SLEEP);
+
+	if (ddi_soft_state_zalloc(dtrace_softstate, minor) != DDI_SUCCESS) {
+		vmem_free(dtrace_minor, (void *)(uintptr_t)minor, 1);
+		return (NULL);
+	}	
 #else
+	/* Cause restart */
+	*new_state = NULL;
+	
 	/*
 	 * Darwin's DEVFS layer acquired the minor number for this "device" when it called
 	 * dtrace_devfs_clone_func(). At that time, dtrace_devfs_clone_func() proposed a minor number
 	 * (next unused according to vmem_alloc()) and then immediately put the number back in play
 	 * (by calling vmem_free()). Now that minor number is being used for an open, so committing it
-	 * to use. The following vmem_alloc() must deliver that same minor number.
+	 * to use. The following vmem_alloc() must deliver that same minor number. FIXME.
 	 */
 
 	minor = (minor_t)(uintptr_t)vmem_alloc(dtrace_minor, 1,
@@ -12107,19 +13592,19 @@ dtrace_state_create(dev_t *devp, cred_t *cr)
 			printf("dtrace_open: couldn't re-acquire vended minor number %d. Instead got %d\n", 
 					getminor(*devp), minor);
 			vmem_free(dtrace_minor, (void *)(uintptr_t)minor, 1);
-			return NULL;
+			return (ERESTART);	/* can't reacquire */
 		}
 	} else {
         /* NULL==devp iff "Anonymous state" (see dtrace_anon_property),
 		 * so just vend the minor device number here de novo since no "open" has occurred. */
 	}
 
-#endif /* __APPLE__ */
-
 	if (ddi_soft_state_zalloc(dtrace_softstate, minor) != DDI_SUCCESS) {
 		vmem_free(dtrace_minor, (void *)(uintptr_t)minor, 1);
-		return (NULL);
+		return (EAGAIN);	/* temporary resource shortage */
 	}
+
+#endif /* __APPLE__ */
 
 	state = ddi_get_soft_state(dtrace_softstate, minor);
 	state->dts_epid = DTRACE_EPIDNONE + 1;
@@ -12313,7 +13798,12 @@ dtrace_state_create(dev_t *devp, cred_t *cr)
 		}
 	}
 
+#if !defined(__APPLE__)
 	return (state);
+#else
+	*new_state = state;
+	return(0);  /* Success */
+#endif /* __APPLE__ */
 }
 
 static int
@@ -12351,7 +13841,11 @@ dtrace_state_buffer(dtrace_state_t *state, dtrace_buffer_t *buf, int which)
 			flags |= DTRACEBUF_INACTIVE;
 	}
 
+#if !defined(__APPLE__) /* Quiet compiler warning */
 	for (size = opt[which]; size >= sizeof (uint64_t); size >>= 1) {
+#else
+	for (size = opt[which]; (size_t)size >= sizeof (uint64_t); size >>= 1) {
+#endif /* __APPLE__ */
 		/*
 		 * The size must be 8-byte aligned.  If the size is not 8-byte
 		 * aligned, drop it down by the difference.
@@ -12545,10 +14039,17 @@ dtrace_state_go(dtrace_state_t *state, processorid_t *cpu)
 			 * If we have an aggregation buffer, we must also have
 			 * a buffer to use as scratch.
 			 */
+#if !defined(__APPLE__) /* Quiet compiler warning */
 			if (opt[DTRACEOPT_BUFSIZE] == DTRACEOPT_UNSET ||
 			    opt[DTRACEOPT_BUFSIZE] < state->dts_needed) {
 				opt[DTRACEOPT_BUFSIZE] = state->dts_needed;
 			}
+#else
+			if (opt[DTRACEOPT_BUFSIZE] == DTRACEOPT_UNSET ||
+			  (size_t)opt[DTRACEOPT_BUFSIZE] < state->dts_needed) {
+				opt[DTRACEOPT_BUFSIZE] = state->dts_needed;
+			}
+#endif /* __APPLE__ */
 		}
 	}
 
@@ -12904,7 +14405,7 @@ dtrace_state_destroy(dtrace_state_t *state)
 	kmem_free(state->dts_ecbs, state->dts_necbs * sizeof (dtrace_ecb_t *));
 
 	if (state->dts_aggregations != NULL) {
-#ifdef DEBUG
+#if DEBUG
 		for (i = 0; i < state->dts_naggregations; i++)
 			ASSERT(state->dts_aggregations[i] == NULL);
 #endif
@@ -12991,10 +14492,15 @@ dtrace_anon_property(void)
 		 * If we haven't allocated an anonymous state, we'll do so now.
 		 */
 		if ((state = dtrace_anon.dta_state) == NULL) {
+#if !defined(__APPLE__)
 			state = dtrace_state_create(NULL, NULL);
 			dtrace_anon.dta_state = state;
-
 			if (state == NULL) {
+#else
+			rv = dtrace_state_create(NULL, NULL, &state);
+			dtrace_anon.dta_state = state;
+			if (rv != 0 || state == NULL) {
+#endif /* __APPLE__ */
 				/*
 				 * This basically shouldn't happen:  the only
 				 * failure mode from dtrace_state_create() is a
@@ -13059,14 +14565,23 @@ static void
 dtrace_helper_trace(dtrace_helper_action_t *helper,
     dtrace_mstate_t *mstate, dtrace_vstate_t *vstate, int where)
 {
+#if !defined(__APPLE__) /* Quiet compiler warning */
 	uint32_t size, next, nnext, i;
+#else
+	uint32_t size, next, nnext;
+	int i;
+#endif /* __APPLE__ */
 	dtrace_helptrace_t *ent;
 	uint16_t flags = cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
 
 	if (!dtrace_helptrace_enabled)
 		return;
 
+#if !defined(__APPLE__) /* Quiet compiler warning */
 	ASSERT(vstate->dtvs_nlocals <= dtrace_helptrace_nlocals);
+#else
+	ASSERT((uint32_t)vstate->dtvs_nlocals <= dtrace_helptrace_nlocals);
+#endif /* __APPLE__ */
 
 	/*
 	 * What would a tracing framework be without its own tracing
@@ -13238,7 +14753,11 @@ dtrace_helper_destroygen(proc_t* p, int gen)
 #endif
 	dtrace_helpers_t *help = p->p_dtrace_helpers;
 	dtrace_vstate_t *vstate;
+#if !defined(__APPLE__) /* Quiet compiler warning */
 	int i;
+#else
+	uint_t i;
+#endif /* __APPLE__ */
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
 
@@ -13411,7 +14930,11 @@ dtrace_helper_action_add(proc_t* p, int which, dtrace_ecbdesc_t *ep)
 		last->dtha_next = helper;
 	}
 
+#if !defined(__APPLE__) /* Quiet compiler warning */
 	if (vstate->dtvs_nlocals > dtrace_helptrace_nlocals) {
+#else
+	if ((uint32_t)vstate->dtvs_nlocals > dtrace_helptrace_nlocals) {
+#endif /* __APPLE__ */
 		dtrace_helptrace_nlocals = vstate->dtvs_nlocals;
 		dtrace_helptrace_next = 0;
 	}
@@ -13469,7 +14992,11 @@ dtrace_helper_provider_register(proc_t *p, dtrace_helpers_t *help,
 		 * off to the meta provider.
 		 */
 
+#if !defined(__APPLE__) /* Quiet compiler warning */
 		int i;
+#else
+		uint_t i;
+#endif /* __APPLE__ */
 		lck_mtx_unlock(&dtrace_lock);
 
 		for (i = 0; i < help->dthps_nprovs; i++) {
@@ -13821,7 +15348,11 @@ dtrace_helper_slurp(proc_t* p, dof_hdr_t *dof, dof_helper_t *dhp)
 	 * Look for helper providers and validate their descriptions.
 	 */
 	if (dhp != NULL) {
+#if !defined(__APPLE__) /* Quiet compiler warning */
 		for (i = 0; i < dof->dofh_secnum; i++) {
+#else
+		for (i = 0; (uint32_t)i < dof->dofh_secnum; i++) {
+#endif /* __APPLE__ */
 			dof_sec_t *sec = (dof_sec_t *)(uintptr_t)(daddr +
 			    dof->dofh_secoff + i * dof->dofh_secsize);
 
@@ -13845,6 +15376,7 @@ dtrace_helper_slurp(proc_t* p, dof_hdr_t *dof, dof_helper_t *dhp)
 		dtrace_ecbdesc_t *ep = enab->dten_desc[i];
 		dtrace_probedesc_t *desc = &ep->dted_probe;
 
+#if !defined(__APPLE__)
 		if (strcmp(desc->dtpd_provider, "dtrace") != 0)
 			continue;
 
@@ -13853,13 +15385,24 @@ dtrace_helper_slurp(proc_t* p, dof_hdr_t *dof, dof_helper_t *dhp)
 
 		if (strcmp(desc->dtpd_func, "ustack") != 0)
 			continue;
+#else /* Employ size bounded string operation. */
+		if (!LIT_STRNEQL(desc->dtpd_provider, "dtrace"))
+			continue;
+
+		if (!LIT_STRNEQL(desc->dtpd_mod, "helper"))
+			continue;
+
+		if (!LIT_STRNEQL(desc->dtpd_func, "ustack"))
+			continue;
+#endif /* __APPLE__ */
 
 #if !defined(__APPLE__)
-		if ((rv = dtrace_helper_action_add(DTRACE_HELPER_ACTION_USTACK, ep)) != 0)
+		if ((rv = dtrace_helper_action_add(DTRACE_HELPER_ACTION_USTACK,
+		    ep)) != 0) {
 #else
-		if ((rv = dtrace_helper_action_add(p, DTRACE_HELPER_ACTION_USTACK, ep)) != 0)
+		if ((rv = dtrace_helper_action_add(p, DTRACE_HELPER_ACTION_USTACK,
+		    ep)) != 0) {
 #endif
-		{
 			/*
 			 * Adding this helper action failed -- we are now going
 			 * to rip out the entire generation and return failure.
@@ -13968,7 +15511,7 @@ dtrace_helper_slurp(proc_t* p, dof_hdr_t *dof, dof_helper_t *dhp)
  * If the dofs data is claimed by this method, dofs_claimed will be set.
  * Callers should not free claimed dofs.
  */
-int
+static int
 dtrace_lazy_dofs_add(proc_t *p, dof_ioctl_data_t* incoming_dofs, int *dofs_claimed)
 {
 	ASSERT(p);
@@ -14050,7 +15593,7 @@ dtrace_lazy_dofs_add(proc_t *p, dof_ioctl_data_t* incoming_dofs, int *dofs_claim
 		for (i=0; i<all_dofs->dofiod_count-1; i++) {
 			ASSERT(all_dofs->dofiod_helpers[i].dofhp_dof < all_dofs->dofiod_helpers[i+1].dofhp_dof);
 		}
-#endif DEBUG
+#endif /* DEBUG */
 
 unlock:
 		lck_mtx_unlock(&p->p_dtrace_sprlock);
@@ -14069,7 +15612,7 @@ unlock:
  * EINVAL: lazy dof is enabled, but the requested generation was not found.
  * EACCES: This removal needs to be handled non-lazily. 
  */
-int
+static int
 dtrace_lazy_dofs_remove(proc_t *p, int generation)
 {
 	int rval = EINVAL;
@@ -14339,15 +15882,18 @@ dtrace_helpers_create(proc_t *p)
 static void
 dtrace_helpers_destroy(void)
 {
+	dtrace_helpers_t *help;
+	dtrace_vstate_t *vstate;
 	proc_t *p = curproc;
+	int i;
 #else
 static void
 dtrace_helpers_destroy(proc_t* p)
 {
-#endif
 	dtrace_helpers_t *help;
 	dtrace_vstate_t *vstate;
-	int i;
+	uint_t i;
+#endif
 
 	lck_mtx_lock(&dtrace_lock);
 
@@ -14440,7 +15986,12 @@ dtrace_helpers_duplicate(proc_t *from, proc_t *to)
 	dtrace_helper_action_t *helper, *new, *last;
 	dtrace_difo_t *dp;
 	dtrace_vstate_t *vstate;
+#if !defined(__APPLE__) /* Quiet compiler warning */
 	int i, j, sz, hasprovs = 0;
+#else
+	uint_t i;
+	int j, sz, hasprovs = 0;
+#endif /* __APPLE__ */
 
 	lck_mtx_lock(&dtrace_lock);
 	ASSERT(from->p_dtrace_helpers != NULL);
@@ -14474,6 +16025,7 @@ dtrace_helpers_duplicate(proc_t *from, proc_t *to)
 			sz = sizeof (dtrace_difo_t *) * new->dtha_nactions;
 			new->dtha_actions = kmem_alloc(sz, KM_SLEEP);
 
+#if !defined(__APPLE__) /* Quiet compiler warning */	    			
 			for (j = 0; j < new->dtha_nactions; j++) {
 				dtrace_difo_t *dp = helper->dtha_actions[j];
 
@@ -14481,6 +16033,15 @@ dtrace_helpers_duplicate(proc_t *from, proc_t *to)
 				dp = dtrace_difo_duplicate(dp, vstate);
 				new->dtha_actions[j] = dp;
 			}
+#else
+			for (j = 0; j < new->dtha_nactions; j++) {
+				dtrace_difo_t *dpj = helper->dtha_actions[j];
+
+				ASSERT(dpj != NULL);
+				dpj = dtrace_difo_duplicate(dpj, vstate);
+				new->dtha_actions[j] = dpj;
+			}
+#endif /* __APPLE__ */			
 
 			if (last != NULL) {
 				last->dtha_next = new;
@@ -14526,7 +16087,11 @@ dtrace_module_loaded(struct modctl *ctl)
 	lck_mtx_lock(&dtrace_provider_lock);
 	lck_mtx_lock(&mod_lock);
 
-	// ASSERT(ctl->mod_busy);
+#if !defined(__APPLE__)
+	ASSERT(ctl->mod_busy);
+#else
+	/* FIXME: awaits kmod awareness PR_4648477. */
+#endif /* __APPLE__ */
 
 	/*
 	 * We're going to call each providers per-module provide operation
@@ -14661,7 +16226,7 @@ dtrace_module_unloaded(struct modctl *ctl)
 		kmem_free(probe, sizeof (dtrace_probe_t));
 #else
 		zfree(dtrace_probe_t_zone, probe);
-#endif
+#endif /* __APPLE__ */
 	}
 
 	lck_mtx_unlock(&dtrace_lock);
@@ -14790,6 +16355,7 @@ dtrace_toxrange_add(uintptr_t base, uintptr_t limit)
 static int
 dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 {
+#pragma unused(cmd) /* __APPLE__ */
 	dtrace_provider_id_t id;
 	dtrace_state_t *state = NULL;
 	dtrace_enabling_t *enab;
@@ -14820,6 +16386,8 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		lck_mtx_unlock(&dtrace_lock);
 		return (DDI_FAILURE);
 	}
+#else
+	/* Darwin uses BSD cloning device driver to automagically obtain minor device number. */
 #endif /* __APPLE__ */
 
 	ddi_report_dev(devi);
@@ -14834,8 +16402,6 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	dtrace_cpustart_fini = dtrace_resume;
 	dtrace_debugger_init = dtrace_suspend;
 	dtrace_debugger_fini = dtrace_resume;
-	dtrace_kreloc_init = dtrace_suspend;
-	dtrace_kreloc_fini = dtrace_resume;
 
 	register_cpu_setup_func((cpu_setup_func_t *)dtrace_cpu_setup, NULL);
 
@@ -14854,7 +16420,6 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	    NULL, NULL, NULL, NULL, NULL, 0);
 
 	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
-
 	dtrace_bymod = dtrace_hash_create(offsetof(dtrace_probe_t, dtpr_mod),
 	    offsetof(dtrace_probe_t, dtpr_nextmod),
 	    offsetof(dtrace_probe_t, dtpr_prevmod));
@@ -14976,8 +16541,6 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	return (DDI_SUCCESS);
 }
 
-extern void fasttrap_init(void);
-
 /*ARGSUSED*/
 static int
 dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
@@ -14987,6 +16550,9 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 	uint32_t priv;
 	uid_t uid;
 	zoneid_t zoneid;
+#if defined (__APPLE__)
+	int rv;
+#endif /* __APPLE__ */
 
 #if !defined(__APPLE__)
 	if (getminor(*devp) == DTRACEMNRN_HELPER)
@@ -14996,7 +16562,8 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 	 * If this wasn't an open with the "helper" minor, then it must be
 	 * the "dtrace" minor.
 	 */
-	ASSERT(getminor(*devp) == DTRACEMNRN_DTRACE);
+	if (getminor(*devp) != DTRACEMNRN_DTRACE)
+		return (ENXIO);
 #else
 	/* Darwin puts Helper on its own major device. */
 #endif /* __APPLE__ */
@@ -15040,6 +16607,7 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 		return (EBUSY);
 	}
 
+#if !defined(__APPLE__)
 	state = dtrace_state_create(devp, cred_p);
 	lck_mtx_unlock(&cpu_lock);
 
@@ -15049,10 +16617,22 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 		lck_mtx_unlock(&dtrace_lock);
 		return (EAGAIN);
 	}
+	
+	lck_mtx_unlock(&dtrace_lock);
+#else
+	rv = dtrace_state_create(devp, cred_p, &state);
+	lck_mtx_unlock(&cpu_lock);
 
+	if (rv != 0 || state == NULL) {
+		if (--dtrace_opens == 0)
+			(void) kdi_dtrace_set(KDI_DTSET_DTRACE_DEACTIVATE);
+		lck_mtx_unlock(&dtrace_lock);
+		/* propagate EAGAIN or ERESTART */
+		return (rv);
+	}
+	
 	lck_mtx_unlock(&dtrace_lock);
 
-#if defined(__APPLE__)
 	lck_rw_lock_exclusive(&dtrace_dof_mode_lock);
 
 	/*
@@ -15076,7 +16656,7 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 	}
 
 	lck_rw_unlock_exclusive(&dtrace_dof_mode_lock);
-#endif
+#endif /* __APPLE__ */
 
 	return (0);
 }
@@ -15085,7 +16665,7 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 static int
 dtrace_close(dev_t dev, int flag, int otyp, cred_t *cred_p)
 {
-#pragma unused(flag,otyp,cred_p)
+#pragma unused(flag, otyp, cred_p) /* __APPLE__ */
 	minor_t minor = getminor(dev);
 	dtrace_state_t *state;
 
@@ -15136,187 +16716,78 @@ dtrace_close(dev_t dev, int flag, int otyp, cred_t *cred_p)
 
 	lck_mtx_unlock(&dtrace_lock);
 	lck_rw_unlock_exclusive(&dtrace_dof_mode_lock);
-#endif
+#endif /* __APPLE__ */
 
 	return (0);
 }
 
-#if defined(__APPLE__)
-/*
- * Introduce cast to quiet warnings.
- * XXX: This hides a lot of brokenness.
- */
-#define copyin(src, dst, len) copyin( (user_addr_t)(src), (dst), (len) )
-#define copyout(src, dst, len) copyout( (src), (user_addr_t)(dst), (len) )
-#endif /* __APPLE__ */
-
-#if defined(__APPLE__)
+#if !defined(__APPLE__)
 /*ARGSUSED*/
 static int
-dtrace_ioctl_helper(int cmd, caddr_t arg, int *rv)
+dtrace_ioctl_helper(int cmd, intptr_t arg, int *rv)
 {
-#pragma unused(rv)
-	/*
-	 * Safe to check this outside the dof mode lock
-	 */
-	if (dtrace_dof_mode == DTRACE_DOF_MODE_NEVER)
-		return KERN_SUCCESS;
+	int rval;
+	dof_helper_t help, *dhp = NULL;
 
 	switch (cmd) {
-		case DTRACEHIOC_ADDDOF: {
-			dof_helper_t *dhp = NULL;
-			size_t dof_ioctl_data_size;
-			dof_ioctl_data_t* multi_dof;
-			unsigned int i;
-			int rval = 0;
-			user_addr_t user_address = *(user_addr_t*)arg;
-			uint64_t dof_count;
-			int multi_dof_claimed = 0;
-			proc_t* p = current_proc();
-
-			/*
-			 * Read the number of DOF sections being passed in.
-			 */
-			if (copyin(user_address + offsetof(dof_ioctl_data_t, dofiod_count),
-				   &dof_count,
-				   sizeof(dof_count))) {
-				dtrace_dof_error(NULL, "failed to copyin dofiod_count");
-				return (EFAULT);
-			}
-				   			
-			/*
-			 * Range check the count.
-			 */
-			if (dof_count == 0 || dof_count > 1024) {
-				dtrace_dof_error(NULL, "dofiod_count is not valid");
-				return (EINVAL);
-			}
-			
-			/*
-			 * Allocate a correctly sized structure and copyin the data.
-			 */
-			dof_ioctl_data_size = DOF_IOCTL_DATA_T_SIZE(dof_count);
-			if ((multi_dof = kmem_alloc(dof_ioctl_data_size, KM_SLEEP)) == NULL) 
-				return (ENOMEM);
-			
-			/* NOTE! We can no longer exit this method via return */
-			if (copyin(user_address, multi_dof, dof_ioctl_data_size) != 0) {
-				dtrace_dof_error(NULL, "failed copyin of dof_ioctl_data_t");
-				rval = EFAULT;
-				goto cleanup;
-			}
-			
-			/*
-			 * Check that the count didn't change between the first copyin and the second.
-			 */
-			if (multi_dof->dofiod_count != dof_count) {
-				rval = EINVAL;
-				goto cleanup;
-			}
-
-			/*
-			 * Try to process lazily first.
-			 */
-			rval = dtrace_lazy_dofs_add(p, multi_dof, &multi_dof_claimed);
-
-			/*
-			 * If rval is EACCES, we must be non-lazy.
-			 */
-			if (rval == EACCES) {
-				rval = 0;
-				/*
-				 * Process each dof_helper_t
-				 */
-				i = 0;
-				do {
-					dhp = &multi_dof->dofiod_helpers[i];
-					
-					dof_hdr_t *dof = dtrace_dof_copyin(dhp->dofhp_dof, &rval);
-					
-					if (dof != NULL) {					
-						lck_mtx_lock(&dtrace_lock);
-						
-						/*
-						 * dtrace_helper_slurp() takes responsibility for the dof --
-						 * it may free it now or it may save it and free it later.
-						 */
-						if ((dhp->dofhp_dof = (uint64_t)dtrace_helper_slurp(p, dof, dhp)) == -1ULL) {
-							rval = EINVAL;
-						}
-						
-						lck_mtx_unlock(&dtrace_lock);
-					}
-				} while (++i < multi_dof->dofiod_count && rval == 0);
-			}
-
-			/*
-			 * We need to copyout the multi_dof struct, because it contains
-			 * the generation (unique id) values needed to call DTRACEHIOC_REMOVE
-			 *
-			 * This could certainly be better optimized.
-			 */
-			if (copyout(multi_dof, user_address, dof_ioctl_data_size) != 0) {
-				dtrace_dof_error(NULL, "failed copyout of dof_ioctl_data_t");
-				/* Don't overwrite pre-existing error code */
-				if (rval == 0) rval = EFAULT;
-			}
-			
-		cleanup:
-			/*
-			 * If we had to allocate struct memory, free it.
-			 */
-			if (multi_dof != NULL && !multi_dof_claimed) {
-				kmem_free(multi_dof, dof_ioctl_data_size);
-			}
-			
-			return rval;
+	case DTRACEHIOC_ADDDOF:
+		if (copyin((void *)arg, &help, sizeof (help)) != 0) {
+			dtrace_dof_error(NULL, "failed to copyin DOF helper");
+			return (EFAULT);
 		}
 
-		case DTRACEHIOC_REMOVE: {
-			int generation = *(int*)arg;
-			proc_t* p = current_proc();
+		dhp = &help;
+		arg = (intptr_t)help.dofhp_dof;
+		/*FALLTHROUGH*/
 
-			/*
-			 * Try lazy first.
-			 */
-			int rval = dtrace_lazy_dofs_remove(p, generation);
-			
-			/*
-			 * EACCES means non-lazy
-			 */
-			if (rval == EACCES) {
-				lck_mtx_lock(&dtrace_lock);
-				rval = dtrace_helper_destroygen(p, generation);
-				lck_mtx_unlock(&dtrace_lock);
-			}
+	case DTRACEHIOC_ADD: {
+		dof_hdr_t *dof = dtrace_dof_copyin(arg, &rval);
 
+		if (dof == NULL)
 			return (rval);
+
+		mutex_enter(&dtrace_lock);
+
+		/*
+		 * dtrace_helper_slurp() takes responsibility for the dof --
+		 * it may free it now or it may save it and free it later.
+		 */
+		if ((rval = dtrace_helper_slurp(dof, dhp)) != -1) {
+			*rv = rval;
+			rval = 0;
+		} else {
+			rval = EINVAL;
 		}
 
-		default:
-			break;
+		mutex_exit(&dtrace_lock);
+		return (rval);
 	}
 
-	return ENOTTY;
+	case DTRACEHIOC_REMOVE: {
+		mutex_enter(&dtrace_lock);
+		rval = dtrace_helper_destroygen(arg);
+		mutex_exit(&dtrace_lock);
+
+		return (rval);
+	}
+
+	default:
+		break;
+	}
+
+	return (ENOTTY);
 }
-#endif /* __APPLE__ */
 
 /*ARGSUSED*/
 static int
-dtrace_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
+dtrace_ioctl(dev_t dev, u_long cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 {
-#pragma unused(md)
-
 	minor_t minor = getminor(dev);
 	dtrace_state_t *state;
 	int rval;
 
-#if !defined(__APPLE__)
 	if (minor == DTRACEMNRN_HELPER)
 		return (dtrace_ioctl_helper(cmd, arg, rv));
-#else
-	/* Darwin puts Helper on its own major device. */
-#endif /* __APPLE__ */
 
 	state = ddi_get_soft_state(dtrace_softstate, minor);
 
@@ -15544,13 +17015,9 @@ dtrace_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		 * cue to reevaluate our enablings.
 		 */
 		if (arg == NULL) {
-			lck_mtx_lock(&cpu_lock);
-			lck_mtx_lock(&dtrace_lock);
-			err = dtrace_enabling_matchstate(state, rv);
-			lck_mtx_unlock(&dtrace_lock);
-			lck_mtx_unlock(&cpu_lock);
+			dtrace_enabling_matchall();
 
-			return (err);
+			return (0);
 		}
 
 		if ((dof = dtrace_dof_copyin(arg, &rval)) == NULL)
@@ -15811,7 +17278,7 @@ dtrace_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		if (copyin((void *)arg, &desc, sizeof (desc)) != 0)
 			return (EFAULT);
 
-		if (desc.dtbd_cpu < 0 || desc.dtbd_cpu >= (int)NCPU)
+		if (desc.dtbd_cpu < 0 || desc.dtbd_cpu >= NCPU)
 			return (EINVAL);
 
 		lck_mtx_lock(&dtrace_lock);
@@ -15977,7 +17444,7 @@ dtrace_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 		nerrs = state->dts_errors;
 		dstate = &state->dts_vstate.dtvs_dynvars;
 
-		for (i = 0; i < (int)NCPU; i++) {
+		for (i = 0; i < NCPU; i++) {
 			dtrace_dstate_percpu_t *dcpu = &dstate->dtds_percpu[i];
 
 			stat.dtst_dyndrops += dcpu->dtdsc_drops;
@@ -16067,10 +17534,915 @@ dtrace_ioctl(dev_t dev, int cmd, intptr_t arg, int md, cred_t *cr, int *rv)
 
 	return (ENOTTY);
 }
+#else
+/*ARGSUSED*/
+static int
+dtrace_ioctl_helper(u_long cmd, caddr_t arg, int *rv)
+{
+#pragma unused(rv)
+	/*
+	 * Safe to check this outside the dof mode lock
+	 */
+	if (dtrace_dof_mode == DTRACE_DOF_MODE_NEVER)
+		return KERN_SUCCESS;
 
-#if defined(__APPLE__)
-#undef copyin
-#undef copyout
+	switch (cmd) {
+		case DTRACEHIOC_ADDDOF: {
+			dof_helper_t *dhp = NULL;
+			size_t dof_ioctl_data_size;
+			dof_ioctl_data_t* multi_dof;
+			unsigned int i;
+			int rval = 0;
+			user_addr_t user_address = *(user_addr_t*)arg;
+			uint64_t dof_count;
+			int multi_dof_claimed = 0;
+			proc_t* p = current_proc();
+
+			/*
+			 * Read the number of DOF sections being passed in.
+			 */
+			if (copyin(user_address + offsetof(dof_ioctl_data_t, dofiod_count),
+				   &dof_count,
+				   sizeof(dof_count))) {
+				dtrace_dof_error(NULL, "failed to copyin dofiod_count");
+				return (EFAULT);
+			}
+				   			
+			/*
+			 * Range check the count.
+			 */
+			if (dof_count == 0 || dof_count > 1024) {
+				dtrace_dof_error(NULL, "dofiod_count is not valid");
+				return (EINVAL);
+			}
+			
+			/*
+			 * Allocate a correctly sized structure and copyin the data.
+			 */
+			dof_ioctl_data_size = DOF_IOCTL_DATA_T_SIZE(dof_count);
+			if ((multi_dof = kmem_alloc(dof_ioctl_data_size, KM_SLEEP)) == NULL) 
+				return (ENOMEM);
+			
+			/* NOTE! We can no longer exit this method via return */
+			if (copyin(user_address, multi_dof, dof_ioctl_data_size) != 0) {
+				dtrace_dof_error(NULL, "failed copyin of dof_ioctl_data_t");
+				rval = EFAULT;
+				goto cleanup;
+			}
+			
+			/*
+			 * Check that the count didn't change between the first copyin and the second.
+			 */
+			if (multi_dof->dofiod_count != dof_count) {
+				rval = EINVAL;
+				goto cleanup;
+			}
+
+			/*
+			 * Try to process lazily first.
+			 */
+			rval = dtrace_lazy_dofs_add(p, multi_dof, &multi_dof_claimed);
+
+			/*
+			 * If rval is EACCES, we must be non-lazy.
+			 */
+			if (rval == EACCES) {
+				rval = 0;
+				/*
+				 * Process each dof_helper_t
+				 */
+				i = 0;
+				do {
+					dhp = &multi_dof->dofiod_helpers[i];
+					
+					dof_hdr_t *dof = dtrace_dof_copyin(dhp->dofhp_dof, &rval);
+					
+					if (dof != NULL) {					
+						lck_mtx_lock(&dtrace_lock);
+						
+						/*
+						 * dtrace_helper_slurp() takes responsibility for the dof --
+						 * it may free it now or it may save it and free it later.
+						 */
+						if ((dhp->dofhp_dof = (uint64_t)dtrace_helper_slurp(p, dof, dhp)) == -1ULL) {
+							rval = EINVAL;
+						}
+						
+						lck_mtx_unlock(&dtrace_lock);
+					}
+				} while (++i < multi_dof->dofiod_count && rval == 0);
+			}
+
+			/*
+			 * We need to copyout the multi_dof struct, because it contains
+			 * the generation (unique id) values needed to call DTRACEHIOC_REMOVE
+			 *
+			 * This could certainly be better optimized.
+			 */
+			if (copyout(multi_dof, user_address, dof_ioctl_data_size) != 0) {
+				dtrace_dof_error(NULL, "failed copyout of dof_ioctl_data_t");
+				/* Don't overwrite pre-existing error code */
+				if (rval == 0) rval = EFAULT;
+			}
+			
+		cleanup:
+			/*
+			 * If we had to allocate struct memory, free it.
+			 */
+			if (multi_dof != NULL && !multi_dof_claimed) {
+				kmem_free(multi_dof, dof_ioctl_data_size);
+			}
+			
+			return rval;
+		}
+
+		case DTRACEHIOC_REMOVE: {
+			int generation = *(int*)arg;
+			proc_t* p = current_proc();
+
+			/*
+			 * Try lazy first.
+			 */
+			int rval = dtrace_lazy_dofs_remove(p, generation);
+			
+			/*
+			 * EACCES means non-lazy
+			 */
+			if (rval == EACCES) {
+				lck_mtx_lock(&dtrace_lock);
+				rval = dtrace_helper_destroygen(p, generation);
+				lck_mtx_unlock(&dtrace_lock);
+			}
+
+			return (rval);
+		}
+
+		default:
+			break;
+	}
+
+	return ENOTTY;
+}
+
+/*ARGSUSED*/
+static int
+dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv)
+{
+#pragma unused(md)
+	minor_t minor = getminor(dev);
+	dtrace_state_t *state;
+	int rval;
+
+	/* Darwin puts Helper on its own major device. */
+
+	state = ddi_get_soft_state(dtrace_softstate, minor);
+
+	if (state->dts_anon) {
+	   ASSERT(dtrace_anon.dta_state == NULL);
+	   state = state->dts_anon;
+	}
+
+	switch (cmd) {
+	case DTRACEIOC_PROVIDER: {
+		dtrace_providerdesc_t pvd;
+		dtrace_provider_t *pvp;
+
+		if (copyin(arg, &pvd, sizeof (pvd)) != 0)
+			return (EFAULT);
+
+		pvd.dtvd_name[DTRACE_PROVNAMELEN - 1] = '\0';
+		lck_mtx_lock(&dtrace_provider_lock);
+
+		for (pvp = dtrace_provider; pvp != NULL; pvp = pvp->dtpv_next) {
+			if (strncmp(pvp->dtpv_name, pvd.dtvd_name, DTRACE_PROVNAMELEN) == 0)
+				break;
+		}
+
+		lck_mtx_unlock(&dtrace_provider_lock);
+
+		if (pvp == NULL)
+			return (ESRCH);
+
+		bcopy(&pvp->dtpv_priv, &pvd.dtvd_priv, sizeof (dtrace_ppriv_t));
+		bcopy(&pvp->dtpv_attr, &pvd.dtvd_attr, sizeof (dtrace_pattr_t));
+		if (copyout(&pvd, arg, sizeof (pvd)) != 0)
+			return (EFAULT);
+
+		return (0);
+	}
+
+	case DTRACEIOC_EPROBE: {
+		dtrace_eprobedesc_t epdesc;
+		dtrace_ecb_t *ecb;
+		dtrace_action_t *act;
+		void *buf;
+		size_t size;
+		uintptr_t dest;
+		int nrecs;
+
+		if (copyin(arg, &epdesc, sizeof (epdesc)) != 0)
+			return (EFAULT);
+
+		lck_mtx_lock(&dtrace_lock);
+
+		if ((ecb = dtrace_epid2ecb(state, epdesc.dtepd_epid)) == NULL) {
+			lck_mtx_unlock(&dtrace_lock);
+			return (EINVAL);
+		}
+
+		if (ecb->dte_probe == NULL) {
+			lck_mtx_unlock(&dtrace_lock);
+			return (EINVAL);
+		}
+
+		epdesc.dtepd_probeid = ecb->dte_probe->dtpr_id;
+		epdesc.dtepd_uarg = ecb->dte_uarg;
+		epdesc.dtepd_size = ecb->dte_size;
+
+		nrecs = epdesc.dtepd_nrecs;
+		epdesc.dtepd_nrecs = 0;
+		for (act = ecb->dte_action; act != NULL; act = act->dta_next) {
+			if (DTRACEACT_ISAGG(act->dta_kind) || act->dta_intuple)
+				continue;
+
+			epdesc.dtepd_nrecs++;
+		}
+
+		/*
+		 * Now that we have the size, we need to allocate a temporary
+		 * buffer in which to store the complete description.  We need
+		 * the temporary buffer to be able to drop dtrace_lock()
+		 * across the copyout(), below.
+		 */
+		size = sizeof (dtrace_eprobedesc_t) +
+			(epdesc.dtepd_nrecs * sizeof (dtrace_recdesc_t));
+
+		buf = kmem_alloc(size, KM_SLEEP);
+		dest = (uintptr_t)buf;
+
+		bcopy(&epdesc, (void *)dest, sizeof (epdesc));
+		dest += offsetof(dtrace_eprobedesc_t, dtepd_rec[0]);
+
+		for (act = ecb->dte_action; act != NULL; act = act->dta_next) {
+			if (DTRACEACT_ISAGG(act->dta_kind) || act->dta_intuple)
+				continue;
+
+			if (nrecs-- == 0)
+				break;
+
+			bcopy(&act->dta_rec, (void *)dest,
+			sizeof (dtrace_recdesc_t));
+			dest += sizeof (dtrace_recdesc_t);
+		}
+
+		lck_mtx_unlock(&dtrace_lock);
+
+		if (copyout(buf, arg, dest - (uintptr_t)buf) != 0) {
+			kmem_free(buf, size);
+			return (EFAULT);
+		}
+
+		kmem_free(buf, size);
+		return (0);
+	}
+
+	case DTRACEIOC_AGGDESC: {
+		dtrace_aggdesc_t aggdesc;
+		dtrace_action_t *act;
+		dtrace_aggregation_t *agg;
+		int nrecs;
+		uint32_t offs;
+		dtrace_recdesc_t *lrec;
+		void *buf;
+		size_t size;
+		uintptr_t dest;
+
+		if (copyin(arg, &aggdesc, sizeof (aggdesc)) != 0)
+			return (EFAULT);
+
+		lck_mtx_lock(&dtrace_lock);
+
+		if ((agg = dtrace_aggid2agg(state, aggdesc.dtagd_id)) == NULL) {
+			lck_mtx_unlock(&dtrace_lock);
+			return (EINVAL);
+		}
+
+		aggdesc.dtagd_epid = agg->dtag_ecb->dte_epid;
+
+		nrecs = aggdesc.dtagd_nrecs;
+		aggdesc.dtagd_nrecs = 0;
+
+		offs = agg->dtag_base;
+		lrec = &agg->dtag_action.dta_rec;
+		aggdesc.dtagd_size = lrec->dtrd_offset + lrec->dtrd_size - offs;
+
+		for (act = agg->dtag_first; ; act = act->dta_next) {
+			ASSERT(act->dta_intuple ||
+			DTRACEACT_ISAGG(act->dta_kind));
+
+			/*
+			 * If this action has a record size of zero, it
+			 * denotes an argument to the aggregating action.
+			 * Because the presence of this record doesn't (or
+			 * shouldn't) affect the way the data is interpreted,
+			 * we don't copy it out to save user-level the
+			 * confusion of dealing with a zero-length record.
+			 */
+			if (act->dta_rec.dtrd_size == 0) {
+				ASSERT(agg->dtag_hasarg);
+				continue;
+			}
+
+			aggdesc.dtagd_nrecs++;
+
+			if (act == &agg->dtag_action)
+				break;
+		}
+
+		/*
+		 * Now that we have the size, we need to allocate a temporary
+		 * buffer in which to store the complete description.  We need
+		 * the temporary buffer to be able to drop dtrace_lock()
+		 * across the copyout(), below.
+		 */
+		size = sizeof (dtrace_aggdesc_t) +
+			(aggdesc.dtagd_nrecs * sizeof (dtrace_recdesc_t));
+
+		buf = kmem_alloc(size, KM_SLEEP);
+		dest = (uintptr_t)buf;
+
+		bcopy(&aggdesc, (void *)dest, sizeof (aggdesc));
+		dest += offsetof(dtrace_aggdesc_t, dtagd_rec[0]);
+
+		for (act = agg->dtag_first; ; act = act->dta_next) {
+			dtrace_recdesc_t rec = act->dta_rec;
+
+			/*
+			 * See the comment in the above loop for why we pass
+			 * over zero-length records.
+			 */
+			if (rec.dtrd_size == 0) {
+				ASSERT(agg->dtag_hasarg);
+				continue;
+			}
+
+			if (nrecs-- == 0)
+				break;
+
+			rec.dtrd_offset -= offs;
+			bcopy(&rec, (void *)dest, sizeof (rec));
+			dest += sizeof (dtrace_recdesc_t);
+
+			if (act == &agg->dtag_action)
+				break;
+		}
+
+		lck_mtx_unlock(&dtrace_lock);
+
+		if (copyout(buf, arg, dest - (uintptr_t)buf) != 0) {
+			kmem_free(buf, size);
+			return (EFAULT);
+		}
+
+		kmem_free(buf, size);
+		return (0);
+	}
+
+	case DTRACEIOC_ENABLE: {
+		dof_hdr_t *dof;
+		dtrace_enabling_t *enab = NULL;
+		dtrace_vstate_t *vstate;
+		int err = 0;
+
+		*rv = 0;
+
+		/*
+		 * If a NULL argument has been passed, we take this as our
+		 * cue to reevaluate our enablings.
+		 */
+		if (arg == NULL) {
+			dtrace_enabling_matchall();
+
+			return (0);
+		}
+
+		if ((dof = dtrace_dof_copyin(arg, &rval)) == NULL)
+			return (rval);
+
+		lck_mtx_lock(&cpu_lock);
+		lck_mtx_lock(&dtrace_lock);
+		vstate = &state->dts_vstate;
+
+		if (state->dts_activity != DTRACE_ACTIVITY_INACTIVE) {
+			lck_mtx_unlock(&dtrace_lock);
+			lck_mtx_unlock(&cpu_lock);
+			dtrace_dof_destroy(dof);
+			return (EBUSY);
+		}
+
+		if (dtrace_dof_slurp(dof, vstate, cr, &enab, 0, B_TRUE) != 0) {
+			lck_mtx_unlock(&dtrace_lock);
+			lck_mtx_unlock(&cpu_lock);
+			dtrace_dof_destroy(dof);
+			return (EINVAL);
+		}
+
+		if ((rval = dtrace_dof_options(dof, state)) != 0) {
+			dtrace_enabling_destroy(enab);
+			lck_mtx_unlock(&dtrace_lock);
+			lck_mtx_unlock(&cpu_lock);
+			dtrace_dof_destroy(dof);
+			return (rval);
+		}
+
+		if ((err = dtrace_enabling_match(enab, rv)) == 0) {
+			err = dtrace_enabling_retain(enab);
+		} else {
+			dtrace_enabling_destroy(enab);
+		}
+
+		lck_mtx_unlock(&cpu_lock);
+		lck_mtx_unlock(&dtrace_lock);
+		dtrace_dof_destroy(dof);
+
+		return (err);
+	}
+
+	case DTRACEIOC_REPLICATE: {
+		dtrace_repldesc_t desc;
+		dtrace_probedesc_t *match = &desc.dtrpd_match;
+		dtrace_probedesc_t *create = &desc.dtrpd_create;
+		int err;
+
+		if (copyin(arg, &desc, sizeof (desc)) != 0)
+			return (EFAULT);
+
+		match->dtpd_provider[DTRACE_PROVNAMELEN - 1] = '\0';
+		match->dtpd_mod[DTRACE_MODNAMELEN - 1] = '\0';
+		match->dtpd_func[DTRACE_FUNCNAMELEN - 1] = '\0';
+		match->dtpd_name[DTRACE_NAMELEN - 1] = '\0';
+
+		create->dtpd_provider[DTRACE_PROVNAMELEN - 1] = '\0';
+		create->dtpd_mod[DTRACE_MODNAMELEN - 1] = '\0';
+		create->dtpd_func[DTRACE_FUNCNAMELEN - 1] = '\0';
+		create->dtpd_name[DTRACE_NAMELEN - 1] = '\0';
+
+		lck_mtx_lock(&dtrace_lock);
+		err = dtrace_enabling_replicate(state, match, create);
+		lck_mtx_unlock(&dtrace_lock);
+
+		return (err);
+	}
+
+	case DTRACEIOC_PROBEMATCH:
+	case DTRACEIOC_PROBES: {
+		dtrace_probe_t *probe = NULL;
+		dtrace_probedesc_t desc;
+		dtrace_probekey_t pkey;
+		dtrace_id_t i;
+		int m = 0;
+		uint32_t priv;
+		uid_t uid;
+		zoneid_t zoneid;
+
+		if (copyin(arg, &desc, sizeof (desc)) != 0)
+			return (EFAULT);
+
+		desc.dtpd_provider[DTRACE_PROVNAMELEN - 1] = '\0';
+		desc.dtpd_mod[DTRACE_MODNAMELEN - 1] = '\0';
+		desc.dtpd_func[DTRACE_FUNCNAMELEN - 1] = '\0';
+		desc.dtpd_name[DTRACE_NAMELEN - 1] = '\0';
+
+		/*
+		 * Before we attempt to match this probe, we want to give
+		 * all providers the opportunity to provide it.
+		 */
+		if (desc.dtpd_id == DTRACE_IDNONE) {
+			lck_mtx_lock(&dtrace_provider_lock);
+			dtrace_probe_provide(&desc, NULL);
+			lck_mtx_unlock(&dtrace_provider_lock);
+			desc.dtpd_id++;
+		}
+
+		if (cmd == DTRACEIOC_PROBEMATCH)  {
+			dtrace_probekey(&desc, &pkey);
+			pkey.dtpk_id = DTRACE_IDNONE;
+		}
+
+		dtrace_cred2priv(cr, &priv, &uid, &zoneid);
+
+		lck_mtx_lock(&dtrace_lock);
+
+		if (cmd == DTRACEIOC_PROBEMATCH) {
+                        /* Quiet compiler warning */
+			for (i = desc.dtpd_id; i <= (dtrace_id_t)dtrace_nprobes; i++) {
+				if ((probe = dtrace_probes[i - 1]) != NULL &&
+					(m = dtrace_match_probe(probe, &pkey,
+					priv, uid, zoneid)) != 0)
+					break;
+			}
+
+			if (m < 0) {
+				lck_mtx_unlock(&dtrace_lock);
+				return (EINVAL);
+			}
+
+		} else {
+                        /* Quiet compiler warning */
+			for (i = desc.dtpd_id; i <= (dtrace_id_t)dtrace_nprobes; i++) {
+				if ((probe = dtrace_probes[i - 1]) != NULL &&
+					dtrace_match_priv(probe, priv, uid, zoneid))
+					break;
+			}
+		}
+
+		if (probe == NULL) {
+			lck_mtx_unlock(&dtrace_lock);
+			return (ESRCH);
+		}
+
+		dtrace_probe_description(probe, &desc);
+		lck_mtx_unlock(&dtrace_lock);
+
+		if (copyout(&desc, arg, sizeof (desc)) != 0)
+			return (EFAULT);
+
+		return (0);
+	}
+
+	case DTRACEIOC_PROBEARG: {
+		dtrace_argdesc_t desc;
+		dtrace_probe_t *probe;
+		dtrace_provider_t *prov;
+
+		if (copyin(arg, &desc, sizeof (desc)) != 0)
+			return (EFAULT);
+
+		if (desc.dtargd_id == DTRACE_IDNONE)
+			return (EINVAL);
+
+		if (desc.dtargd_ndx == DTRACE_ARGNONE)
+			return (EINVAL);
+
+		lck_mtx_lock(&dtrace_provider_lock);
+		lck_mtx_lock(&mod_lock);
+		lck_mtx_lock(&dtrace_lock);
+
+                /* Quiet compiler warning */
+		if (desc.dtargd_id > (dtrace_id_t)dtrace_nprobes) {
+			lck_mtx_unlock(&dtrace_lock);
+			lck_mtx_unlock(&mod_lock);
+			lck_mtx_unlock(&dtrace_provider_lock);
+			return (EINVAL);
+		}
+
+		if ((probe = dtrace_probes[desc.dtargd_id - 1]) == NULL) {
+			lck_mtx_unlock(&dtrace_lock);
+			lck_mtx_unlock(&mod_lock);
+			lck_mtx_unlock(&dtrace_provider_lock);
+			return (EINVAL);
+		}
+
+		lck_mtx_unlock(&dtrace_lock);
+
+		prov = probe->dtpr_provider;
+
+		if (prov->dtpv_pops.dtps_getargdesc == NULL) {
+		/*
+		 * There isn't any typed information for this probe.
+		 * Set the argument number to DTRACE_ARGNONE.
+		 */
+			desc.dtargd_ndx = DTRACE_ARGNONE;
+		} else {
+			desc.dtargd_native[0] = '\0';
+			desc.dtargd_xlate[0] = '\0';
+			desc.dtargd_mapping = desc.dtargd_ndx;
+
+			prov->dtpv_pops.dtps_getargdesc(prov->dtpv_arg,
+			probe->dtpr_id, probe->dtpr_arg, &desc);
+		}
+
+		lck_mtx_unlock(&mod_lock);
+		lck_mtx_unlock(&dtrace_provider_lock);
+
+		if (copyout(&desc, arg, sizeof (desc)) != 0)
+			return (EFAULT);
+
+		return (0);
+	}
+
+	case DTRACEIOC_GO: {
+		processorid_t cpuid;
+		rval = dtrace_state_go(state, &cpuid);
+
+		if (rval != 0)
+			return (rval);
+
+		if (copyout(&cpuid, arg, sizeof (cpuid)) != 0)
+			return (EFAULT);
+
+		return (0);
+	}
+
+	case DTRACEIOC_STOP: {
+		processorid_t cpuid;
+
+		lck_mtx_lock(&dtrace_lock);
+		rval = dtrace_state_stop(state, &cpuid);
+		lck_mtx_unlock(&dtrace_lock);
+
+		if (rval != 0)
+			return (rval);
+
+		if (copyout(&cpuid, arg, sizeof (cpuid)) != 0)
+			return (EFAULT);
+
+		return (0);
+	}
+
+	case DTRACEIOC_DOFGET: {
+		dof_hdr_t hdr, *dof;
+		uint64_t len;
+
+		if (copyin(arg, &hdr, sizeof (hdr)) != 0)
+			return (EFAULT);
+
+		lck_mtx_lock(&dtrace_lock);
+		dof = dtrace_dof_create(state);
+		lck_mtx_unlock(&dtrace_lock);
+
+		len = MIN(hdr.dofh_loadsz, dof->dofh_loadsz);
+		rval = copyout(dof, arg, len);
+		dtrace_dof_destroy(dof);
+
+		return (rval == 0 ? 0 : EFAULT);
+	}
+
+	case DTRACEIOC_AGGSNAP:
+	case DTRACEIOC_BUFSNAP: {
+		dtrace_bufdesc_t desc;
+		caddr_t cached;
+		dtrace_buffer_t *buf;
+
+		if (copyin(arg, &desc, sizeof (desc)) != 0)
+			return (EFAULT);
+
+		if ((int)desc.dtbd_cpu < 0 || desc.dtbd_cpu >= NCPU)
+			return (EINVAL);
+
+		lck_mtx_lock(&dtrace_lock);
+
+		if (cmd == DTRACEIOC_BUFSNAP) {
+			buf = &state->dts_buffer[desc.dtbd_cpu];
+		} else {
+			buf = &state->dts_aggbuffer[desc.dtbd_cpu];
+		}
+
+		if (buf->dtb_flags & (DTRACEBUF_RING | DTRACEBUF_FILL)) {
+			size_t sz = buf->dtb_offset;
+
+			if (state->dts_activity != DTRACE_ACTIVITY_STOPPED) {
+				lck_mtx_unlock(&dtrace_lock);
+				return (EBUSY);
+			}
+
+			/*
+			 * If this buffer has already been consumed, we're
+			 * going to indicate that there's nothing left here
+			 * to consume.
+			 */
+			if (buf->dtb_flags & DTRACEBUF_CONSUMED) {
+				lck_mtx_unlock(&dtrace_lock);
+
+				desc.dtbd_size = 0;
+				desc.dtbd_drops = 0;
+				desc.dtbd_errors = 0;
+				desc.dtbd_oldest = 0;
+				sz = sizeof (desc);
+
+				if (copyout(&desc, arg, sz) != 0)
+					return (EFAULT);
+
+				return (0);
+			}
+
+			/*
+			 * If this is a ring buffer that has wrapped, we want
+			 * to copy the whole thing out.
+			 */
+			if (buf->dtb_flags & DTRACEBUF_WRAPPED) {
+				dtrace_buffer_polish(buf);
+				sz = buf->dtb_size;
+			}
+
+			if (copyout(buf->dtb_tomax, (user_addr_t)desc.dtbd_data, sz) != 0) {
+				lck_mtx_unlock(&dtrace_lock);
+				return (EFAULT);
+			}
+
+			desc.dtbd_size = sz;
+			desc.dtbd_drops = buf->dtb_drops;
+			desc.dtbd_errors = buf->dtb_errors;
+			desc.dtbd_oldest = buf->dtb_xamot_offset;
+
+			lck_mtx_unlock(&dtrace_lock);
+
+			if (copyout(&desc, arg, sizeof (desc)) != 0)
+				return (EFAULT);
+
+			buf->dtb_flags |= DTRACEBUF_CONSUMED;
+
+			return (0);
+		}
+
+		if (buf->dtb_tomax == NULL) {
+			ASSERT(buf->dtb_xamot == NULL);
+			lck_mtx_unlock(&dtrace_lock);
+			return (ENOENT);
+		}
+
+		cached = buf->dtb_tomax;
+		ASSERT(!(buf->dtb_flags & DTRACEBUF_NOSWITCH));
+
+		dtrace_xcall(desc.dtbd_cpu,
+			(dtrace_xcall_t)dtrace_buffer_switch, buf);
+
+		state->dts_errors += buf->dtb_xamot_errors;
+
+		/*
+		* If the buffers did not actually switch, then the cross call
+		* did not take place -- presumably because the given CPU is
+		* not in the ready set.  If this is the case, we'll return
+		* ENOENT.
+		*/
+		if (buf->dtb_tomax == cached) {
+			ASSERT(buf->dtb_xamot != cached);
+			lck_mtx_unlock(&dtrace_lock);
+			return (ENOENT);
+		}
+
+		ASSERT(cached == buf->dtb_xamot);
+
+		/*
+		* We have our snapshot; now copy it out.
+		*/
+		if (copyout(buf->dtb_xamot, (user_addr_t)desc.dtbd_data,
+					buf->dtb_xamot_offset) != 0) {
+			lck_mtx_unlock(&dtrace_lock);
+			return (EFAULT);
+		}
+
+		desc.dtbd_size = buf->dtb_xamot_offset;
+		desc.dtbd_drops = buf->dtb_xamot_drops;
+		desc.dtbd_errors = buf->dtb_xamot_errors;
+		desc.dtbd_oldest = 0;
+
+		lck_mtx_unlock(&dtrace_lock);
+
+		/*
+		 * Finally, copy out the buffer description.
+		 */
+		if (copyout(&desc, arg, sizeof (desc)) != 0)
+			return (EFAULT);
+
+		return (0);
+	}
+
+	case DTRACEIOC_CONF: {
+		dtrace_conf_t conf;
+
+		bzero(&conf, sizeof (conf));
+		conf.dtc_difversion = DIF_VERSION;
+		conf.dtc_difintregs = DIF_DIR_NREGS;
+		conf.dtc_diftupregs = DIF_DTR_NREGS;
+		conf.dtc_ctfmodel = CTF_MODEL_NATIVE;
+
+		if (copyout(&conf, arg, sizeof (conf)) != 0)
+			return (EFAULT);
+
+		return (0);
+	}
+
+	case DTRACEIOC_STATUS: {
+		dtrace_status_t stat;
+		dtrace_dstate_t *dstate;
+		int i, j;
+		uint64_t nerrs;
+
+		/*
+		* See the comment in dtrace_state_deadman() for the reason
+		* for setting dts_laststatus to INT64_MAX before setting
+		* it to the correct value.
+		*/
+		state->dts_laststatus = INT64_MAX;
+		dtrace_membar_producer();
+		state->dts_laststatus = dtrace_gethrtime();
+
+		bzero(&stat, sizeof (stat));
+
+		lck_mtx_lock(&dtrace_lock);
+
+		if (state->dts_activity == DTRACE_ACTIVITY_INACTIVE) {
+			lck_mtx_unlock(&dtrace_lock);
+			return (ENOENT);
+		}
+
+		if (state->dts_activity == DTRACE_ACTIVITY_DRAINING)
+			stat.dtst_exiting = 1;
+
+		nerrs = state->dts_errors;
+		dstate = &state->dts_vstate.dtvs_dynvars;
+
+		for (i = 0; i < (int)NCPU; i++) {
+			dtrace_dstate_percpu_t *dcpu = &dstate->dtds_percpu[i];
+
+			stat.dtst_dyndrops += dcpu->dtdsc_drops;
+			stat.dtst_dyndrops_dirty += dcpu->dtdsc_dirty_drops;
+			stat.dtst_dyndrops_rinsing += dcpu->dtdsc_rinsing_drops;
+
+			if (state->dts_buffer[i].dtb_flags & DTRACEBUF_FULL)
+				stat.dtst_filled++;
+
+			nerrs += state->dts_buffer[i].dtb_errors;
+
+			for (j = 0; j < state->dts_nspeculations; j++) {
+				dtrace_speculation_t *spec;
+				dtrace_buffer_t *buf;
+
+				spec = &state->dts_speculations[j];
+				buf = &spec->dtsp_buffer[i];
+				stat.dtst_specdrops += buf->dtb_xamot_drops;
+			}
+		}
+
+		stat.dtst_specdrops_busy = state->dts_speculations_busy;
+		stat.dtst_specdrops_unavail = state->dts_speculations_unavail;
+		stat.dtst_stkstroverflows = state->dts_stkstroverflows;
+		stat.dtst_dblerrors = state->dts_dblerrors;
+		stat.dtst_killed =
+			(state->dts_activity == DTRACE_ACTIVITY_KILLED);
+		stat.dtst_errors = nerrs;
+
+		lck_mtx_unlock(&dtrace_lock);
+
+		if (copyout(&stat, arg, sizeof (stat)) != 0)
+			return (EFAULT);
+
+		return (0);
+	}
+
+	case DTRACEIOC_FORMAT: {
+		dtrace_fmtdesc_t fmt;
+		char *str;
+		int len;
+
+		if (copyin(arg, &fmt, sizeof (fmt)) != 0)
+			return (EFAULT);
+
+		lck_mtx_lock(&dtrace_lock);
+
+		if (fmt.dtfd_format == 0 ||
+			fmt.dtfd_format > state->dts_nformats) {
+			lck_mtx_unlock(&dtrace_lock);
+			return (EINVAL);
+		}
+
+		/*
+		 * Format strings are allocated contiguously and they are
+		 * never freed; if a format index is less than the number
+		 * of formats, we can assert that the format map is non-NULL
+		 * and that the format for the specified index is non-NULL.
+		 */
+		ASSERT(state->dts_formats != NULL);
+		str = state->dts_formats[fmt.dtfd_format - 1];
+		ASSERT(str != NULL);
+
+		len = strlen(str) + 1;
+
+		if (len > fmt.dtfd_length) {
+			fmt.dtfd_length = len;
+
+			if (copyout(&fmt, arg, sizeof (fmt)) != 0) {
+				lck_mtx_unlock(&dtrace_lock);
+				return (EINVAL);
+			}
+		} else {
+			if (copyout(str, (user_addr_t)fmt.dtfd_string, len) != 0) {
+				lck_mtx_unlock(&dtrace_lock);
+				return (EINVAL);
+			}
+		}
+
+		lck_mtx_unlock(&dtrace_lock);
+		return (0);
+	}
+
+	default:
+		break;
+	}
+
+	return (ENOTTY);
+}
 #endif /* __APPLE__ */
 
 #if !defined(__APPLE__)
@@ -16281,7 +18653,7 @@ _fini(void)
 {
 	return (mod_remove(&modlinkage));
 }
-#else
+#else /* Darwin BSD driver model. */
 
 d_open_t _dtrace_open, helper_open;
 d_close_t _dtrace_close, helper_close;
@@ -16322,16 +18694,22 @@ _dtrace_ioctl(dev_t dev, u_long cmd, caddr_t data, int fflag, struct proc *p)
 {
 #pragma unused(p)
 	int err, rv = 0;
+    user_addr_t uaddrp;
 
-	err = dtrace_ioctl(dev, (int)cmd, *(intptr_t *)data, fflag, CRED(), &rv);
+    if (proc_is64bit(p))
+		uaddrp = *(user_addr_t *)data;
+	else
+		uaddrp = (user_addr_t) *(uint32_t *)data;
+
+	err = dtrace_ioctl(dev, cmd, uaddrp, fflag, CRED(), &rv);
 	
-	/* XXX Darwin's BSD ioctls only return -1 or zero. Overload errno to mimic Solaris. 20 bits suffice. */
+	/* Darwin's BSD ioctls only return -1 or zero. Overload errno to mimic Solaris. 20 bits suffice. */
 	if (err != 0) {
 		ASSERT( (err & 0xfffff000) == 0 );
-		return (err & 0xfff); /* ioctl returns -1 and errno set to an error code < 4096 */
+		return (err & 0xfff); /* ioctl will return -1 and will set errno to an error code < 4096 */
 	} else if (rv != 0) {
 		ASSERT( (rv & 0xfff00000) == 0 );
-		return (((rv & 0xfffff) << 12)); /* ioctl returns -1 and errno set to a return value >= 4096 */
+		return (((rv & 0xfffff) << 12)); /* ioctl will return -1 and will set errno to a value >= 4096 */
 	} else 
 		return 0;
 }
@@ -16342,14 +18720,14 @@ helper_ioctl(dev_t dev, u_long cmd, caddr_t data, int fflag, struct proc *p)
 #pragma unused(dev,fflag,p)
 	int err, rv = 0;
 	
-	err = dtrace_ioctl_helper((int)cmd, data, &rv);
-	/* XXX Darwin's BSD ioctls only return -1 or zero. Overload errno to mimic Solaris. 20 bits suffice. */
+	err = dtrace_ioctl_helper(cmd, data, &rv);
+	/* Darwin's BSD ioctls only return -1 or zero. Overload errno to mimic Solaris. 20 bits suffice. */
 	if (err != 0) {
 		ASSERT( (err & 0xfffff000) == 0 );
-		return (err & 0xfff); /* ioctl returns -1 and errno set to an error code < 4096 */
+		return (err & 0xfff); /* ioctl will return -1 and will set errno to an error code < 4096 */
 	} else if (rv != 0) {
 		ASSERT( (rv & 0xfff00000) == 0 );
-		return (((rv & 0xfffff) << 20)); /* ioctl returns -1 and errno set to a return value >= 4096 */
+		return (((rv & 0xfffff) << 12)); /* ioctl will return -1 and will set errno to a value >= 4096 */
 	} else 
 		return 0;
 }
@@ -16429,7 +18807,7 @@ dtrace_clone_func(dev_t dev, int action)
 		else {
 			/*
 			 * Propose a minor number, namely the next number that vmem_alloc() will return.
-			 * Immediately put it back in play by calling vmem_free().
+			 * Immediately put it back in play by calling vmem_free(). FIXME.
 			 */
 			int ret = (int)(uintptr_t)vmem_alloc(dtrace_minor, 1, VM_BESTFIT | VM_SLEEP);
 
@@ -16492,12 +18870,10 @@ dtrace_init( void )
 		}
 
 #if defined(DTRACE_MEMORY_ZONES)
-
 		/*
 		 * Initialize the dtrace kalloc-emulation zones.
 		 */
 		dtrace_alloc_init();
-
 #endif /* DTRACE_MEMORY_ZONES */
 
 		/*
@@ -16521,7 +18897,7 @@ dtrace_init( void )
 		lck_mtx_init(&dtrace_lock, dtrace_lck_grp, dtrace_lck_attr);
 		lck_mtx_init(&dtrace_provider_lock, dtrace_lck_grp, dtrace_lck_attr);
 		lck_mtx_init(&dtrace_meta_lock, dtrace_lck_grp, dtrace_lck_attr);
-#ifdef DEBUG
+#if DEBUG
 		lck_mtx_init(&dtrace_errlock, dtrace_lck_grp, dtrace_lck_attr);
 #endif
 		lck_rw_init(&dtrace_dof_mode_lock, dtrace_lck_grp, dtrace_lck_attr);
@@ -16550,6 +18926,7 @@ dtrace_init( void )
 
 		lck_mtx_lock(&cpu_lock);
 		for (i = 0; i < ncpu; ++i) 
+			/* FIXME: track CPU configuration a la CHUD Processor Pref Pane. */
 			dtrace_cpu_setup_initial( (processorid_t)i ); /* In lieu of register_cpu_setup_func() callback */
 		lck_mtx_unlock(&cpu_lock);
 
@@ -16559,7 +18936,7 @@ dtrace_init( void )
 		 * See dtrace_impl.h for a description of dof modes.
 		 * The default is lazy dof.
 		 *
-		 * XXX Warn if state is LAZY_OFF? It won't break anything, but
+		 * FIXME: Warn if state is LAZY_OFF? It won't break anything, but
 		 * makes no sense...
 		 */
 		if (!PE_parse_boot_argn("dtrace_dof_mode", &dtrace_dof_mode, sizeof (dtrace_dof_mode))) {
@@ -16597,7 +18974,12 @@ dtrace_init( void )
 void
 dtrace_postinit(void)
 {
-		dtrace_attach( (dev_info_t *)makedev(gMajDevNo, 0), 0 );
+		/*
+		 * Called from bsd_init after all provider's *_init() routines have been
+		 * run. That way, anonymous DOF enabled under dtrace_attach() is safe
+		 * to go.
+		 */
+		dtrace_attach( (dev_info_t *)(uintptr_t)makedev(gMajDevNo, 0), 0 ); /* Punning a dev_t to a dev_info_t* */
 }
 #undef DTRACE_MAJOR
 

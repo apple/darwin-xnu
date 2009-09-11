@@ -31,7 +31,9 @@
 
 #include <kern/queue.h>
 
+#if 0
 #pragma mark **** cpu timer ****
+#endif
 
 /*
  * Cross-cpu signal request entries are queued on the target cpu's

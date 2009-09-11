@@ -33,20 +33,17 @@
 .\"
 .\"     @(#)syscall.2	8.1 (Berkeley) 6/16/93
 .\"
-.Dd June 16, 1993
+.Dd June 23, 2008
 .Dt SYSCALL 2
 .Os BSD 4
 .Sh NAME
-.Nm syscall ,
-.Nm __syscall
+.Nm syscall
 .Nd indirect system call
 .Sh SYNOPSIS
 .Fd #include <sys/syscall.h>
 .Fd #include <unistd.h>
 .Ft int
 .Fn syscall "int number" "..."
-.Ft int
-.Fn __syscall "quad_t number" "..."
 .Sh DESCRIPTION
 .Fn Syscall
 performs the system call whose assembly language
@@ -55,11 +52,7 @@ interface has the specified
 with the specified arguments.
 Symbolic constants for system calls can be found in the header file
 .Ao Pa sys/syscall.h Ac .
-The
-.Nm __syscall
-form should be used when one or more of the parameters is a
-64-bit argument to ensure that argument alignment is correct.
-This system call is useful for testing new system calls that
+This function is useful for testing new system calls that
 do not have entries in the C library.
 .Sh RETURN VALUES
 The return values are defined by the system call being invoked.

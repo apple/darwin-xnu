@@ -1,4 +1,31 @@
 /*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+/*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
  *
@@ -72,45 +99,33 @@
 #define	sin6tosa(sin6)	((struct sockaddr *)(sin6))
 #define	ifatoia6(ifa)	((struct in6_ifaddr *)(ifa))
 
-#ifndef APPLE
-//void	in6_pcbpurgeif0(struct in6pcb *, struct ifnet *);
-#endif
-void	in6_losing(struct inpcb *);
-int	in6_pcballoc(struct socket *, struct inpcbinfo *, struct proc *);
-int	in6_pcbbind(struct inpcb *, struct sockaddr *, struct proc *);
-int	in6_pcbconnect(struct inpcb *, struct sockaddr *, struct proc *);
-void	in6_pcbdetach(struct inpcb *);
-void	in6_pcbdisconnect(struct inpcb *);
-int	in6_pcbladdr(struct inpcb *, struct sockaddr *,
-			  struct in6_addr *);
-struct	inpcb *
-	in6_pcblookup_local(struct inpcbinfo *,
-				 struct in6_addr *, u_int, int);
-struct	inpcb *
-	in6_pcblookup_hash(struct inpcbinfo *,
-				struct in6_addr *, u_int, struct in6_addr *,
-				u_int, int, struct ifnet *);
-void	in6_pcbnotify(struct inpcbinfo *, struct sockaddr *,
-			   u_int, const struct sockaddr *, u_int, int,
-			   void (*)(struct inpcb *, int));
-void
-	in6_rtchange(struct inpcb *, int);
-struct sockaddr *
-	in6_sockaddr(in_port_t port, struct in6_addr *addr_p);
-struct sockaddr *
-	in6_v4mapsin6_sockaddr(in_port_t port, struct in_addr *addr_p);
-int	in6_setpeeraddr(struct socket *so, struct sockaddr **nam);
-int	in6_setsockaddr(struct socket *so, struct sockaddr **nam);
-int	in6_mapped_sockaddr(struct socket *so, struct sockaddr **nam);
-int	in6_mapped_peeraddr(struct socket *so, struct sockaddr **nam);
-struct	in6_addr *in6_selectsrc(struct sockaddr_in6 *,
-				     struct ip6_pktopts *,
-				     struct ip6_moptions *,
-				     struct route_in6 *, struct in6_addr *,
-				     struct in6_addr *, int *);
-int	in6_selecthlim(struct in6pcb *, struct ifnet *);
-int	in6_pcbsetport(struct in6_addr *, struct inpcb *, struct proc *, int);
-void	init_sin6(struct sockaddr_in6 *sin6, struct mbuf *m);
-#endif KERNEL_PRIVATE
+extern void in6_losing(struct inpcb *);
+extern int in6_pcbbind(struct inpcb *, struct sockaddr *, struct proc *);
+extern int in6_pcbconnect(struct inpcb *, struct sockaddr *, struct proc *);
+extern void in6_pcbdetach(struct inpcb *);
+extern void in6_pcbdisconnect(struct inpcb *);
+extern int in6_pcbladdr(struct inpcb *, struct sockaddr *, struct in6_addr *);
+extern struct inpcb *in6_pcblookup_local(struct inpcbinfo *, struct in6_addr *,
+    u_int, int);
+extern struct inpcb *in6_pcblookup_hash(struct inpcbinfo *, struct in6_addr *,
+    u_int, struct in6_addr *, u_int, int, struct ifnet *);
+extern void in6_pcbnotify(struct inpcbinfo *, struct sockaddr *, u_int,
+    const struct sockaddr *, u_int, int, void (*)(struct inpcb *, int));
+extern void in6_rtchange(struct inpcb *, int);
+extern struct sockaddr *in6_sockaddr(in_port_t port, struct in6_addr *addr_p);
+extern struct sockaddr *in6_v4mapsin6_sockaddr(in_port_t port,
+    struct in_addr *addr_p);
+extern int in6_setpeeraddr(struct socket *so, struct sockaddr **nam);
+extern int in6_setsockaddr(struct socket *so, struct sockaddr **nam);
+extern int in6_mapped_sockaddr(struct socket *so, struct sockaddr **nam);
+extern int in6_mapped_peeraddr(struct socket *so, struct sockaddr **nam);
+extern struct in6_addr *in6_selectsrc(struct sockaddr_in6 *,
+    struct ip6_pktopts *, struct ip6_moptions *, struct route_in6 *,
+    struct in6_addr *, struct in6_addr *, int *);
+extern int in6_selecthlim(struct in6pcb *, struct ifnet *);
+extern int in6_pcbsetport(struct in6_addr *, struct inpcb *,
+    struct proc *, int);
+extern void init_sin6(struct sockaddr_in6 *sin6, struct mbuf *m);
+#endif /* KERNEL_PRIVATE */
 
-#endif !_NETINET6_IN6_PCB_H_
+#endif /* !_NETINET6_IN6_PCB_H_ */

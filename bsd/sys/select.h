@@ -160,6 +160,7 @@ struct selinfo;
 
 __BEGIN_DECLS
 
+extern int selwait;
 void	selrecord(proc_t selector, struct selinfo *, void *);
 void	selwakeup(struct selinfo *);
 void	selthreadclear(struct selinfo *);

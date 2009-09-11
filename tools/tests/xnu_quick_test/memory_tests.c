@@ -8,6 +8,7 @@
  */
 
 #include "tests.h"
+#include <mach/mach.h>
 
 extern char  g_target_path[ PATH_MAX ];
 
@@ -27,12 +28,14 @@ int memory_tests( void * the_argp )
 	char *		my_test_page_p = NULL;
 	ssize_t		my_result;
 	pid_t		my_pid, my_wait_pid;
+	kern_return_t   my_kr;		
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+	
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -44,11 +47,12 @@ int memory_tests( void * the_argp )
 	}
 
 	my_page_size = getpagesize( );
-	my_test_page_p = (char *) malloc( my_page_size );
-	if ( my_test_page_p == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_test_page_p, my_page_size, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_test_page_p = 0x00;
 	strcat( my_test_page_p, "parent data" );
  
@@ -76,9 +80,17 @@ int memory_tests( void * the_argp )
 		strcat( my_test_page_p, " child data" );
 
 		/* create a test file in page size chunks */
-		my_bufp = (char *) malloc( (my_page_size * 10) );
-		if ( my_bufp == NULL ) {
-			printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
+       		my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_bufp, (my_page_size * 10), VM_FLAGS_ANYWHERE);
+	        if(my_kr != KERN_SUCCESS){
+        	        printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			my_err = -1;
+                	goto exit_child;
+        	}
+
+		/* test madvise on anonymous memory */
+		my_err = madvise(my_bufp, (my_page_size * 10), MADV_WILLNEED);
+		if ( my_err == -1 ) {
+			printf("madvise WILLNEED on anon memory failed with error %d - \"%s\" \n", errno, strerror( errno ) );
 			my_err = -1;
 			goto exit_child;
 		}
@@ -91,6 +103,14 @@ int memory_tests( void * the_argp )
 			goto exit_child;
 		}
 		
+		/* test madvise on anonymous memory */
+		my_err = madvise(my_bufp, (my_page_size * 10), MADV_DONTNEED);
+		if ( my_err == -1 ) {
+			printf("madvise DONTNEED on anon memory failed with error %d - \"%s\" \n", errno, strerror( errno ) );
+			my_err = -1;
+			goto exit_child;
+		}
+
 		my_result = write( my_fd, my_bufp, (my_page_size * 10) );
 		if ( my_result == -1 ) {
 			printf( "write call failed with error %d - \"%s\" \n", errno, strerror( errno) );
@@ -116,7 +136,14 @@ int memory_tests( void * the_argp )
 		/* test madvise */
 		my_err = madvise( my_addr, (my_page_size * 2), MADV_WILLNEED );
 		if ( my_err == -1 ) {
-			printf( "madvise call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			printf( "madvise WILLNEED call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			my_err = -1;
+			goto exit_child;
+		}
+
+		my_err = madvise( my_addr, (my_page_size * 2), MADV_DONTNEED );
+		if ( my_err == -1 ) {
+			printf( "madvise DONTNEED call failed with error %d - \"%s\" \n", errno, strerror( errno) );
 			my_err = -1;
 			goto exit_child;
 		}
@@ -125,6 +152,14 @@ int memory_tests( void * the_argp )
 		my_err = mlock( my_addr, my_page_size );
 		if ( my_err == -1 ) {
 			printf( "mlock call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			my_err = -1;
+			goto exit_child;
+		}
+
+		/* mybufp is about to be reused, so test madvise on anonymous memory */
+		my_err = madvise(my_bufp, (my_page_size * 10), MADV_FREE);
+		if ( my_err == -1 ) {
+			printf("madvise FREE on anon memory failed with error %d - \"%s\" \n", errno, strerror( errno ) );
 			my_err = -1;
 			goto exit_child;
 		}
@@ -158,6 +193,22 @@ int memory_tests( void * the_argp )
 			goto exit_child;
 		}
 					
+		/* test madvise */
+		my_err = madvise( my_addr, (my_page_size * 2), MADV_DONTNEED );
+		if ( my_err == -1 ) {
+			printf( "madvise DONTNEED call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			my_err = -1;
+			goto exit_child;
+		}
+
+		/* test madvise */
+		my_err = madvise( my_addr, (my_page_size * 2), MADV_FREE );
+		if ( my_err == -1 ) {
+			printf( "madvise FREE call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			my_err = -1;
+			goto exit_child;
+		}
+
 		/* verify that the file was updated */
 		lseek( my_fd, 0, SEEK_SET );	
 		bzero( (void *)my_bufp, my_page_size );
@@ -245,10 +296,10 @@ test_failed_exit:
 test_passed_exit:
 	if ( my_pathp != NULL ) {
 		remove( my_pathp );	
-		free( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);		
 	 }
 	 if ( my_test_page_p != NULL ) {
-		free( my_test_page_p );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_test_page_p, my_page_size);
 	 }
 	return( my_err );
 }

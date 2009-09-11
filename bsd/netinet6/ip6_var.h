@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/ip6_var.h,v 1.2.2.2 2001/07/03 11:01:54 ume Exp $	*/
 /*	$KAME: ip6_var.h,v 1.62 2001/05/03 14:51:48 itojun Exp $	*/
 
@@ -149,6 +177,8 @@ struct	ip6_pktopts {
 
 	/* Destination options header (after a routing header) */
 	struct	ip6_dest *ip6po_dest2;
+
+	int     ip6po_tclass;   /* traffic class */
 };
 
 /*
@@ -309,7 +339,6 @@ int 	icmp6_dgram_attach(struct socket *, int , struct proc *);
 
 struct in6_ifaddr;
 void	ip6_init(void);
-void	ip6intr(void);
 void	ip6_input(struct mbuf *);
 struct in6_ifaddr *ip6_getdstifaddr(struct mbuf *);
 void	ip6_freepcbopts(struct ip6_pktopts *);
@@ -328,10 +357,6 @@ int	ip6_process_hopopts(struct mbuf *, u_int8_t *, int, u_int32_t *,
 				 u_int32_t *);
 void	ip6_savecontrol(struct inpcb *, struct mbuf **, struct ip6_hdr *,
 			     struct mbuf *);
-void	ip6_notify_pmtu(struct inpcb *, struct sockaddr_in6 *,
-			     u_int32_t *);
-int	ip6_sysctl(int *, u_int, void *, size_t *, void *, size_t);
-
 void	ip6_forward(struct mbuf *, struct route_in6 *, int, int);
 
 void	ip6_mloopback(struct ifnet *, struct mbuf *, struct sockaddr_in6 *);
@@ -340,7 +365,7 @@ int	ip6_output(struct mbuf *, struct ip6_pktopts *,
 			int,
 			struct ip6_moptions *, struct ifnet **, int locked);
 int	ip6_ctloutput(struct socket *, struct sockopt *sopt);
-void	init_ip6pktopts(struct ip6_pktopts *);
+void	ip6_initpktopts(struct ip6_pktopts *);
 int	ip6_setpktoptions(struct mbuf *, struct ip6_pktopts *, int, int);
 void	ip6_clearpktopts(struct ip6_pktopts *, int, int);
 struct ip6_pktopts *ip6_copypktopts(struct ip6_pktopts *, int);
@@ -353,16 +378,12 @@ int	frag6_input(struct mbuf **, int *);
 void	frag6_slowtimo(void);
 void	frag6_drain(void);
 
-void	rip6_init(void);
 int	rip6_input(struct mbuf **mp, int *offset);
 void	rip6_ctlinput(int, struct sockaddr *, void *);
 int	rip6_ctloutput(struct socket *so, struct sockopt *sopt);
 int	rip6_output(struct mbuf *, struct socket *, struct sockaddr_in6 *, struct mbuf *);
-int	rip6_usrreq(struct socket *,
-	    int, struct mbuf *, struct mbuf *, struct mbuf *, struct proc *);
 
 int	dest6_input(struct mbuf **, int *);
-int	none_input(struct mbuf **, int *);
 #endif /* KERNEL */
 #endif /* KERNEL_PRIVATE */
 

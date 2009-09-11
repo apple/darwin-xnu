@@ -60,4 +60,7 @@
 
 #include <i386/user_ldt.h>
 
-#define MACHINE_TASK struct user_ldt *       i386_ldt;
+#define MACHINE_TASK \
+	struct user_ldt *       i386_ldt; \
+	void* 			task_debug;
+

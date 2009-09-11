@@ -4,10 +4,10 @@
 #  Standard Apple MacOS X Configurations:
 #  -------- ---- -------- ---------------
 #
-#  RELEASE = [ppc mach libkerncpp networking config_dtrace crypto zlib]
+#  RELEASE = [ppc mach libkerncpp networking config_dtrace crypto zlib config_kxld ]
 #  DEVELOPMENT = [ RELEASE ]
 #  PROFILE = [RELEASE profile]
-#  DEBUG = [RELEASE debug]
+#  DEBUG = [RELEASE debug mach_kdb ]
 #  RELEASE_TRACE = [ RELEASE kdebug ]
 #  DEBUG_TRACE   = [ DEBUG kdebug ]
 #
@@ -16,3 +16,4 @@
 machine		"ppc"					# <ppc>
 cpu		"ppc"					# <ppc>
 
+options		MACH_KDB	#				# <mach_kdb>

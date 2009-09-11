@@ -596,9 +596,9 @@ mac_socket_check_received(kauth_cred_t cred, struct socket *so, struct sockaddr 
 
 	if (!mac_socket_enforce)
 		return 0;
-
+	
 	MAC_CHECK(socket_check_received, cred,
-		  (socket_t)so, so->so_label, saddr);
+		  so, so->so_label, saddr);
 	return (error);
 }
 

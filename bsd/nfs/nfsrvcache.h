@@ -81,7 +81,7 @@
 struct nfsrvcache {
 	TAILQ_ENTRY(nfsrvcache) rc_lru;		/* LRU chain */
 	LIST_ENTRY(nfsrvcache) rc_hash;		/* Hash chain */
-	u_long	rc_xid;				/* rpc id number */
+	u_int32_t	rc_xid;				/* rpc id number */
 	union {
 		mbuf_t ru_repmb;		/* Reply mbuf list OR */
 		int ru_repstat;			/* Reply status */

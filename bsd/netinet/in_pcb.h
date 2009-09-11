@@ -197,10 +197,6 @@ struct inpcb {
 #if CONFIG_MACF_NET
 	struct label *inp_label;	/* MAC label */
 #endif
-#if CONFIG_IP_EDGEHOLE
-	u_int32_t	inpcb_edgehole_flags;
-	u_int32_t	inpcb_edgehole_mask;
-#endif
 };
 
 #endif /* KERNEL_PRIVATE */
@@ -334,6 +330,54 @@ struct	xinpcb {
 	u_quad_t	xi_alignment_hack;
 };
 
+#if !CONFIG_EMBEDDED
+
+struct inpcb64_list_entry {
+    u_int64_t   le_next;
+    u_int64_t   le_prev;
+};
+
+struct	xinpcb64 {
+	u_int64_t		xi_len;		/* length of this structure */
+	u_int64_t		xi_inpp;
+	u_short 		inp_fport;	/* foreign port */
+	u_short			inp_lport;	/* local port */
+	struct inpcb64_list_entry	
+				inp_list;	/* list for all PCBs of this proto */
+	u_int64_t		inp_ppcb;	/* pointer to per-protocol pcb */
+	u_int64_t		inp_pcbinfo;	/* PCB list info */
+	struct inpcb64_list_entry	
+				inp_portlist;	/* list for this PCB's local port */
+	u_int64_t		inp_phd;	/* head of this list */
+	inp_gen_t		inp_gencnt;	/* generation count of this instance */
+	int			inp_flags;	/* generic IP/datagram flags */
+	u_int32_t		inp_flow;
+	u_char			inp_vflag;
+	u_char			inp_ip_ttl;	/* time to live */
+	u_char			inp_ip_p;	/* protocol */
+        union {					/* foreign host table entry */
+                struct  in_addr_4in6	inp46_foreign;
+                struct  in6_addr	inp6_foreign;
+        }			inp_dependfaddr;
+        union {					/* local host table entry */
+                struct  in_addr_4in6	inp46_local;
+                struct  in6_addr	inp6_local;
+        }			inp_dependladdr;
+        struct {
+                u_char		inp4_ip_tos;	/* type of service */
+        }			inp_depend4;
+        struct {
+                u_int8_t        inp6_hlim;
+		int		inp6_cksum;
+                u_short		inp6_ifindex;
+                short   	inp6_hops;
+        }			inp_depend6;
+        struct  xsocket64       xi_socket;
+	u_quad_t		xi_alignment_hack;
+};
+
+#endif /* !CONFIG_EMBEDDED */
+
 struct	xinpgen {
 	u_int32_t xig_len;	/* length of this structure */
 	u_int	xig_count;	/* number of PCBs at this time */
@@ -367,7 +411,7 @@ struct	xinpgen {
 #define	in6p_moptions	inp_depend6.inp6_moptions
 #define	in6p_icmp6filt	inp_depend6.inp6_icmp6filt
 #define	in6p_cksum	inp_depend6.inp6_cksum
-#define	inp6_ifindex	inp_depend6.inp6_ifindex
+#define	in6p_ifindex	inp_depend6.inp6_ifindex
 #define	in6p_flags	inp_flags  /* for KAME src sync over BSD*'s */
 #define	in6p_socket	inp_socket  /* for KAME src sync over BSD*'s */
 #define	in6p_lport	inp_lport  /* for KAME src sync over BSD*'s */
@@ -386,11 +430,11 @@ struct inpcbport {
 struct inpcbinfo {		/* XXX documentation, prefixes */
 	struct	inpcbhead *hashbase;
 #ifdef __APPLE__
-	u_long	hashsize; /* in elements */
+	u_int32_t	hashsize; /* in elements */
 #endif
-	u_long	hashmask;
+	u_long	hashmask;	/* needs to be u_long as expected by hash functions */
 	struct	inpcbporthead *porthashbase;
-	u_long	porthashmask;
+	u_long	porthashmask;	/* needs to be u_long as expected by hash functions */
 	struct	inpcbhead *listhead;
 	u_short	lastport;
 	u_short	lastlow;
@@ -399,15 +443,11 @@ struct inpcbinfo {		/* XXX documentation, prefixes */
 	u_int	ipi_count;	/* number of pcbs in this list */
 	u_quad_t ipi_gencnt;	/* current generation count */
 #ifdef __APPLE__
-	u_char   all_owners;
-	struct	socket nat_dummy_socket; /* fake socket for NAT pcb backpointer */
-	struct 	inpcb *nat_dummy_pcb;	 /* fake pcb for finding NAT mutex */
-	caddr_t  dummy_cb;
 #ifdef _KERN_LOCKS_H_
-	lck_attr_t		*mtx_attr;		/* mutex attributes */
-	lck_grp_t			*mtx_grp;			/* mutex group definition */
+	lck_attr_t	*mtx_attr;	/* mutex attributes */
+	lck_grp_t	*mtx_grp;	/* mutex group definition */
 	lck_grp_attr_t	*mtx_grp_attr;	/* mutex group attributes */
-	lck_rw_t			*mtx;			/* global mutex for the pcblist*/
+	lck_rw_t	*mtx;		/* global mutex for the pcblist*/
 #else
 	void	*mtx_attr;	/* mutex attributes */
 	void	*mtx_grp;	/* mutex group definition */
@@ -450,19 +490,20 @@ struct inpcbinfo {		/* XXX documentation, prefixes */
 #define	IN6P_HOPLIMIT		0x020000 /* receive hoplimit */
 #define	IN6P_HOPOPTS		0x040000 /* receive hop-by-hop options */
 #define	IN6P_DSTOPTS		0x080000 /* receive dst options after rthdr */
-#define	IN6P_RTHDR		0x100000 /* receive routing header */
+#define	IN6P_RTHDR			0x100000 /* receive routing header */
 #define	IN6P_RTHDRDSTOPTS	0x200000 /* receive dstoptions before rthdr */
-#define IN6P_AUTOFLOWLABEL	0x800000 /* attach flowlabel automatically */
+#define	IN6P_TCLASS			0x400000 /* receive traffic class value */
+#define	IN6P_AUTOFLOWLABEL	0x800000 /* attach flowlabel automatically */
 #define	IN6P_BINDV6ONLY		0x10000000 /* do not grab IPv4 traffic */
 
 #ifdef KERNEL_PRIVATE
 #define	INP_CONTROLOPTS		(INP_RECVOPTS|INP_RECVRETOPTS|INP_RECVDSTADDR|\
-					INP_RECVIF|\
+				 INP_RECVIF|INP_RECVTTL|\
 				 IN6P_PKTINFO|IN6P_HOPLIMIT|IN6P_HOPOPTS|\
 				 IN6P_DSTOPTS|IN6P_RTHDR|IN6P_RTHDRDSTOPTS|\
-				 IN6P_AUTOFLOWLABEL|INP_RECVTTL)
+				 IN6P_TCLASS|IN6P_AUTOFLOWLABEL)
 #define	INP_UNMAPPABLEOPTS	(IN6P_HOPOPTS|IN6P_DSTOPTS|IN6P_RTHDR|\
-				 IN6P_AUTOFLOWLABEL)
+				 IN6P_TCLASS|IN6P_AUTOFLOWLABEL)
 
  /* for KAME src sync over BSD*'s */
 #define	IN6P_HIGHPORT		INP_HIGHPORT
@@ -508,70 +549,39 @@ extern int	ipport_hilastauto;
 #define WNT_ACQUIRE	0x1		/* that pcb is being acquired, do not recycle this time */
 #define WNT_RELEASE	0x2		/* release acquired mode, can be garbage collected when wantcnt is null */
 
+extern void	in_losing(struct inpcb *);
+extern void	in_rtchange(struct inpcb *, int);
+extern int	in_pcballoc(struct socket *, struct inpcbinfo *, struct proc *);
+extern int	in_pcbbind(struct inpcb *, struct sockaddr *, struct proc *);
+extern int	in_pcbconnect(struct inpcb *, struct sockaddr *, struct proc *);
+extern void	in_pcbdetach(struct inpcb *);
+extern void	in_pcbdispose (struct inpcb *);
+extern void	in_pcbdisconnect(struct inpcb *);
+extern int	in_pcbinshash(struct inpcb *, int);
+extern int	in_pcbladdr(struct inpcb *, struct sockaddr *,
+		    struct sockaddr_in **);
+extern struct inpcb *in_pcblookup_local(struct inpcbinfo *, struct in_addr,
+		    u_int, int);
+extern struct inpcb *in_pcblookup_local_and_cleanup(struct inpcbinfo *,
+		    struct in_addr, u_int, int);
+extern struct inpcb *in_pcblookup_hash(struct inpcbinfo *, struct in_addr,
+		    u_int, struct in_addr, u_int, int, struct ifnet *);
+extern void	in_pcbnotifyall(struct inpcbinfo *, struct in_addr, int,
+		    void (*)(struct inpcb *, int));
+extern void	in_pcbrehash(struct inpcb *);
+extern int	in_setpeeraddr(struct socket *so, struct sockaddr **nam);
+extern int	in_setsockaddr(struct socket *so, struct sockaddr **nam);
+extern int	in_pcb_checkstate(struct inpcb *pcb, int mode, int locked);
 
-void	in_pcbpurgeif0(struct inpcb *, struct ifnet *);
-void	in_losing(struct inpcb *);
-void	in_rtchange(struct inpcb *, int);
-int	in_pcballoc(struct socket *, struct inpcbinfo *, struct proc *);
-int	in_pcbbind(struct inpcb *, struct sockaddr *, struct proc *);
-int	in_pcbconnect(struct inpcb *, struct sockaddr *, struct proc *);
-void	in_pcbdetach(struct inpcb *);
-void	in_pcbdispose (struct inpcb *);
-void	in_pcbdisconnect(struct inpcb *);
-int	in_pcbinshash(struct inpcb *, int);
-int	in_pcbladdr(struct inpcb *, struct sockaddr *, struct sockaddr_in **);
-struct inpcb *
-	in_pcblookup_local(struct inpcbinfo *, struct in_addr, u_int, int);
-struct inpcb *
-	in_pcblookup_local_and_cleanup(struct inpcbinfo *, struct in_addr, u_int, int);
-struct inpcb *
-	in_pcblookup_hash(struct inpcbinfo *,
-			       struct in_addr, u_int, struct in_addr, u_int,
-			       int, struct ifnet *);
-void	in_pcbnotifyall(struct inpcbinfo *, struct in_addr,
-	    int, void (*)(struct inpcb *, int));
-void	in_pcbrehash(struct inpcb *);
-int	in_setpeeraddr(struct socket *so, struct sockaddr **nam);
-int	in_setsockaddr(struct socket *so, struct sockaddr **nam);
-int	in_pcb_checkstate(struct inpcb *pcb, int mode, int locked);
-
-int
-in_pcb_grab_port (struct inpcbinfo *pcbinfo,
-		       u_short		options,
-		       struct in_addr	laddr, 
-		       u_short		*lport,  
-		       struct in_addr	faddr,
-		       u_short		fport,
-		       u_int		cookie, 
-		       u_char		owner_id);
-
-int	
-in_pcb_letgo_port(struct inpcbinfo *pcbinfo, 
-		       struct in_addr laddr, 
-		       u_short lport,
-		       struct in_addr faddr,
-		       u_short fport, u_char owner_id);
-
-u_char
-in_pcb_get_owner(struct inpcbinfo *pcbinfo, 
-		      struct in_addr laddr, 
-		      u_short lport, 
-		      struct in_addr faddr,
-		      u_short fport,
-		      u_int *cookie);
-
-void in_pcb_nat_init(struct inpcbinfo *pcbinfo, int afamily, int pfamily,
-		     int protocol);
-
-int
-in_pcb_new_share_client(struct inpcbinfo *pcbinfo, u_char *owner_id);
-
-int
-in_pcb_rem_share_client(struct inpcbinfo *pcbinfo, u_char owner_id);
-
-void	in_pcbremlists(struct inpcb *inp);
-int 	in_pcb_ckeckstate(struct inpcb *, int, int);
-void	inpcb_to_compat(struct inpcb *inp, struct inpcb_compat *inp_compat);
+extern void	in_pcbremlists(struct inpcb *inp);
+extern void	inpcb_to_compat(struct inpcb *inp,
+		    struct inpcb_compat *inp_compat);
+#if !CONFIG_EMBEDDED
+extern void	inpcb_to_xinpcb64(struct inpcb *inp,
+		        struct xinpcb64 *xinp);
+#endif
+extern void	inp_route_copyout(struct inpcb *, struct route *);
+extern void	inp_route_copyin(struct inpcb *, struct route *);
 
 #endif /* KERNEL */
 #endif /* KERNEL_PRIVATE */

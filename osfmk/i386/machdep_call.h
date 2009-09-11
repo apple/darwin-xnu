@@ -68,8 +68,6 @@ extern machdep_call_t		machdep_call_table64[];
 
 extern int			machdep_call_count;
 
-extern kern_return_t		thread_get_cthread_self(void);
-extern kern_return_t		thread_set_cthread_self(uint32_t);
 extern kern_return_t		thread_fast_set_cthread_self(uint32_t);
 extern kern_return_t		thread_fast_set_cthread_self64(uint64_t);
 extern kern_return_t		thread_set_user_ldt(uint32_t,uint32_t,uint32_t);

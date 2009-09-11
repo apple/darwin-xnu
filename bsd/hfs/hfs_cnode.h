@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -42,7 +42,9 @@
 
 #include <hfs/hfs_catalog.h>
 #include <hfs/rangelist.h>
-
+#if HFS_COMPRESSION
+#include <sys/decmpfs.h>
+#endif
 
 /*
  * The filefork is used to represent an HFS file fork (data or resource).
@@ -109,9 +111,7 @@ struct cnode {
 	u_int32_t		c_hflag;	/* cnode's flags for maintaining hash - protected by global hash lock */
 	struct vnode		*c_vp;		/* vnode for data fork or dir */
 	struct vnode		*c_rsrc_vp;	/* vnode for resource fork */
-	dev_t			c_dev;		/* cnode's device */
-        struct dquot		*c_dquot[MAXQUOTAS]; /* cnode's quota info */
-	struct klist		c_knotes;	/* knotes attached to this vnode */
+    struct dquot		*c_dquot[MAXQUOTAS]; /* cnode's quota info */
 	u_int32_t		c_childhint;	 /* catalog hint for children (small dirs only) */
 	u_int32_t		c_dirthreadhint; /* catalog hint for directory's thread rec */
 	struct cat_desc		c_desc;		/* cnode's descriptor */
@@ -129,6 +129,9 @@ struct cnode {
 	atomicflag_t	c_touch_acctime;
 	atomicflag_t	c_touch_chgtime;
 	atomicflag_t	c_touch_modtime;
+#if HFS_COMPRESSION
+	decmpfs_cnode  *c_decmp;
+#endif /* HFS_COMPRESSION */
 };
 typedef struct cnode cnode_t;
 
@@ -185,6 +188,7 @@ typedef struct cnode cnode_t;
 #define C_NEED_DATA_SETSIZE  0x01000  /* Do a ubc_setsize(0) on c_rsrc_vp after the unlock */
 #define C_NEED_RSRC_SETSIZE  0x02000  /* Do a ubc_setsize(0) on c_vp after the unlock */
 #define C_DIR_MODIFICATION   0x04000  /* Directory is being modified, wait for lookups */
+#define C_ALWAYS_ZEROFILL    0x08000  /* Always zero-fill the file on an fsync */
 
 #define ZFTIMELIMIT	(5 * 60)
 
@@ -231,6 +235,18 @@ enum { kFinderInvisibleMask = 1 << 14 };
 
 #define VNODE_IS_RSRC(vp)	((vp) == VTOC((vp))->c_rsrc_vp)
 
+#if HFS_COMPRESSION
+/*
+ * VTOCMP(vp) returns a pointer to vp's decmpfs_cnode; this could be NULL
+ * if the file is not compressed or if hfs_file_is_compressed() hasn't
+ * yet been called on this file.
+ */
+#define VTOCMP(vp) (VTOC((vp))->c_decmp)
+int hfs_file_is_compressed(struct cnode *cp, int skiplock);
+int hfs_uncompressed_size_of_compressed_file(struct hfsmount *hfsmp, struct vnode *vp, cnid_t fid, off_t *size, int skiplock);
+int hfs_hides_rsrc(vfs_context_t ctx, struct cnode *cp, int skiplock);
+int hfs_hides_xattr(vfs_context_t ctx, struct cnode *cp, const char *name, int skiplock);
+#endif
 
 #define ATIME_ONDISK_ACCURACY	300
 
@@ -260,21 +276,21 @@ extern void hfs_touchtimes(struct hfsmount *, struct cnode *);
  * HFS cnode hash functions.
  */
 extern void  hfs_chashinit(void);
-extern void  hfs_chashinit_finish(void);
-extern void  hfs_chashinsert(struct cnode *cp);
-extern int   hfs_chashremove(struct cnode *cp);
-extern void  hfs_chash_abort(struct cnode *cp);
-extern void  hfs_chash_rehash(struct cnode *cp1, struct cnode *cp2);
-extern void  hfs_chashwakeup(struct cnode *cp, int flags);
-extern void  hfs_chash_mark_in_transit(struct cnode *cp);
+extern void  hfs_chashinit_finish(struct hfsmount *hfsmp);
+extern void  hfs_delete_chash(struct hfsmount *hfsmp);
+extern int   hfs_chashremove(struct hfsmount *hfsmp, struct cnode *cp);
+extern void  hfs_chash_abort(struct hfsmount *hfsmp, struct cnode *cp);
+extern void  hfs_chash_rehash(struct hfsmount *hfsmp, struct cnode *cp1, struct cnode *cp2);
+extern void  hfs_chashwakeup(struct hfsmount *hfsmp, struct cnode *cp, int flags);
+extern void  hfs_chash_mark_in_transit(struct hfsmount *hfsmp, struct cnode *cp);
 
-extern struct vnode * hfs_chash_getvnode(dev_t dev, ino_t inum, int wantrsrc, int skiplock);
-extern struct cnode * hfs_chash_getcnode(dev_t dev, ino_t inum, struct vnode **vpp, int wantrsrc, int skiplock);
-extern int hfs_chash_snoop(dev_t, ino_t, int (*)(const struct cat_desc *,
+extern struct vnode * hfs_chash_getvnode(struct hfsmount *hfsmp, ino_t inum, int wantrsrc, int skiplock);
+extern struct cnode * hfs_chash_getcnode(struct hfsmount *hfsmp, ino_t inum, struct vnode **vpp, int wantrsrc, int skiplock);
+extern int hfs_chash_snoop(struct hfsmount *, ino_t, int (*)(const struct cat_desc *,
                             const struct cat_attr *, void *), void *);
 extern int hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname *cnp, cnid_t cnid);
 				
-extern int hfs_chash_set_childlinkbit(dev_t dev, cnid_t cnid);
+extern int hfs_chash_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid);
 
 /*
  * HFS cnode lock functions.
@@ -299,7 +315,7 @@ enum hfslocktype  {HFS_SHARED_LOCK = 1, HFS_EXCLUSIVE_LOCK = 2, HFS_FORCE_LOCK =
 extern int hfs_lock(struct cnode *, enum hfslocktype);
 extern int hfs_lockpair(struct cnode *, struct cnode *, enum hfslocktype);
 extern int hfs_lockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *,
-                        enum hfslocktype);
+                        enum hfslocktype, struct cnode **);
 
 extern void hfs_unlock(struct cnode *);
 extern void hfs_unlockpair(struct cnode *, struct cnode *);

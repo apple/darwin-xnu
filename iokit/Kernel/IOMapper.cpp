@@ -27,6 +27,7 @@
  */
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMapper.h>
+#include <IOKit/IODMACommand.h>
 #include <libkern/c++/OSData.h>
 
 #include "IOCopyMapper.h"
@@ -39,8 +40,8 @@ __END_DECLS
 OSDefineMetaClassAndAbstractStructors(IOMapper, IOService);
 
 OSMetaClassDefineReservedUsed(IOMapper, 0);
-OSMetaClassDefineReservedUnused(IOMapper, 1);
-OSMetaClassDefineReservedUnused(IOMapper, 2);
+OSMetaClassDefineReservedUsed(IOMapper, 1);
+OSMetaClassDefineReservedUsed(IOMapper, 2);
 OSMetaClassDefineReservedUnused(IOMapper, 3);
 OSMetaClassDefineReservedUnused(IOMapper, 4);
 OSMetaClassDefineReservedUnused(IOMapper, 5);
@@ -73,6 +74,7 @@ static IOMapperLock sMapperLock;
 
 bool IOMapper::start(IOService *provider)
 {
+    OSObject * obj;
     if (!super::start(provider))
         return false;
 
@@ -86,6 +88,14 @@ bool IOMapper::start(IOService *provider)
         sMapperLock.unlock();
     }
 
+    if (provider)
+    {
+    	obj = provider->getProperty("iommu-id");
+	if (!obj)
+	    obj = provider->getProperty("AAPL,phandle");
+	if (obj)
+	    setProperty(gIOMapperIDKey, obj);
+    }
     return true;
 }
 
@@ -123,9 +133,46 @@ void IOMapper::setMapperRequired(bool hasMapper)
 void IOMapper::waitForSystemMapper()
 {
     sMapperLock.lock();
-    while ((vm_address_t) IOMapper::gSystem & kWaitMask)
+    while ((uintptr_t) IOMapper::gSystem & kWaitMask)
         sMapperLock.sleep(&IOMapper::gSystem);
     sMapperLock.unlock();
+}
+
+IOMapper * IOMapper::copyMapperForDevice(IOService * device)
+{
+    OSObject * obj;
+    IOMapper * mapper;
+    OSDictionary * matching;
+    
+    obj = device->copyProperty("iommu-parent");
+    if (!obj)
+	return (NULL);
+
+    if ((mapper = OSDynamicCast(IOMapper, obj)))
+	return (mapper);
+
+    matching = IOService::propertyMatching(gIOMapperIDKey, obj);
+    if (matching)
+    {
+	mapper = OSDynamicCast(IOMapper, IOService::waitForMatchingService(matching));
+    	matching->release();
+    }
+    if (mapper)
+	device->setProperty("iommu-parent", mapper);
+    else
+	obj->release();
+    
+    return (mapper);
+}
+
+ppnum_t IOMapper::iovmAllocDMACommand(IODMACommand * command, IOItemCount pageCount)
+{
+	return (0);
+}
+
+void IOMapper::iovmFreeDMACommand(IODMACommand * command,
+				  ppnum_t addr, IOItemCount pageCount)
+{
 }
 
 void IOMapper::iovmInsert(ppnum_t addr, IOItemCount offset,
@@ -151,8 +198,8 @@ NewARTTable(IOByteCount size, void ** virtAddrP, ppnum_t *physAddrP)
     kern_return_t kr;
     vm_address_t address;
 
-    size = round_page_32(size);
-    kr = kmem_alloc_contig(kernel_map, &address, size, PAGE_MASK, 0, 0);
+    size = round_page(size);
+    kr = kmem_alloc_contig(kernel_map, &address, size, PAGE_MASK, 0 /*max_pnum*/, 0 /*pnum_mask*/, false);
     if (kr)
         return 0;
 
@@ -173,7 +220,7 @@ void IOMapper::FreeARTTable(OSData *artHandle, IOByteCount size)
 {
     vm_address_t address = (vm_address_t) artHandle;
 
-    size = round_page_32(size);
+    size = round_page(size);
     kmem_free(kernel_map, address, size);	// Just panic if address is 0
 }
 

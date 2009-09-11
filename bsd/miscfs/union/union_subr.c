@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -102,7 +102,7 @@ static int union_vn_close(struct vnode *vp, int fmode, vfs_context_t ctx);
 
 /* unsigned int ... */
 #define UNION_HASH(u, l) \
-	(((((unsigned long) (u)) + ((unsigned long) l)) >> 8) & (NHASH-1))
+	(((((uintptr_t) (u)) + ((uintptr_t) l)) >> 8) & (NHASH-1))
 
 static LIST_HEAD(unhead, union_node) unhead[NHASH];
 static int unvplock[NHASH];
@@ -763,8 +763,8 @@ int
 union_copyfile(struct vnode *fvp, struct vnode *tvp, vfs_context_t context)
 {
 	char *bufp;
-	struct uio uio;
-	struct iovec_32 iov;
+	struct uio *auio;
+	char uio_buf [ UIO_SIZEOF(1) ];
 	int error = 0;
 
 	/*
@@ -775,43 +775,34 @@ union_copyfile(struct vnode *fvp, struct vnode *tvp, vfs_context_t context)
 	 * give up at the first sign of trouble.
 	 */
 
-
-#if 1   /* LP64todo - can't use new segment flags until the drivers are ready */
-	uio.uio_segflg = UIO_SYSSPACE;
-#else
-	uio.uio_segflg = UIO_SYSSPACE32;
-#endif 
-	uio.uio_offset = 0;
+	auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE,
+		UIO_READ /* will change */, &uio_buf, sizeof(uio_buf));
 
 	bufp = _MALLOC(MAXPHYSIO, M_TEMP, M_WAITOK);
+	if (bufp == NULL) {
+		return ENOMEM;
+	}
 
 	/* ugly loop follows... */
 	do {
-		off_t offset = uio.uio_offset;
+		off_t offset = uio_offset(auio);
 
-		uio.uio_iovs.iov32p = &iov;
-		uio.uio_iovcnt = 1;
-		iov.iov_base = (uintptr_t)bufp;
-		iov.iov_len = MAXPHYSIO;
-		uio_setresid(&uio, iov.iov_len);
-		uio.uio_rw = UIO_READ;
-		error = VNOP_READ(fvp, &uio, 0, context);
+		uio_reset(auio, offset, UIO_SYSSPACE, UIO_READ);
+		uio_addiov(auio, (uintptr_t)bufp, MAXPHYSIO);
+		error = VNOP_READ(fvp, auio, 0, context);
 
 		if (error == 0) {
-			uio.uio_iovs.iov32p = &iov;
-			uio.uio_iovcnt = 1;
-			iov.iov_base = (uintptr_t)bufp;
-			iov.iov_len = MAXPHYSIO - uio_resid(&uio);
-			uio.uio_offset = offset;
-			uio.uio_rw = UIO_WRITE;
-			uio_setresid(&uio, iov.iov_len);
+			user_ssize_t resid = uio_resid(auio);
 
-			if (uio_resid(&uio) == 0)
+			uio_reset(auio, offset, UIO_SYSSPACE, UIO_WRITE);
+			uio_addiov(auio, (uintptr_t)bufp, MAXPHYSIO - resid);
+
+			if (uio_resid(auio) == 0)
 				break;
 
 			do {
-				error = VNOP_WRITE(tvp, &uio, 0, context);
-			} while ((uio_resid(&uio) > 0) && (error == 0));
+				error = VNOP_WRITE(tvp, auio, 0, context);
+			} while ((uio_resid(auio) > 0) && (error == 0));
 		}
 
 	} while (error == 0);
@@ -1467,6 +1458,9 @@ union_dircache(struct vnode *vp, __unused vfs_context_t context)
 		dircache = (struct vnode **)
 				_MALLOC(count * sizeof(struct vnode *),
 					M_TEMP, M_WAITOK);
+		if (dircache == NULL) {
+			goto out;
+		}
 		newdircache = dircache;
 		alloced = 1;
 		vpp = dircache;

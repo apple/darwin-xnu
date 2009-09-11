@@ -44,10 +44,9 @@
 #define kShort		80		// too short to bother with SSE (must be >=80)
 
 
-        .text
-	.code64
-        .align  5, 0x90
-Lbzero_sse42_64:                         // void	bzero(void *b, size_t len);
+// void	bzero(void *b, size_t len);
+	
+COMMPAGE_FUNCTION_START(bzero_sse42_64, 64, 5)
 	pushq	%rbp			// set up a frame for backtraces
 	movq	%rsp,%rbp
         xorl    %eax,%eax               // set fill data to 0

@@ -34,7 +34,7 @@
 
 #define super OSObject
 
-OSDefineMetaClassAndStructors(OSBoolean, OSObject)
+OSDefineMetaClassAndStructorsWithInit(OSBoolean, OSObject, OSBoolean::initialize())
 OSMetaClassDefineReservedUnused(OSBoolean, 0);
 OSMetaClassDefineReservedUnused(OSBoolean, 1);
 OSMetaClassDefineReservedUnused(OSBoolean, 2);
@@ -82,8 +82,8 @@ void OSBoolean::free()
     assert(false);
 }
 
-void OSBoolean::taggedRetain(const void *tag) const { }
-void OSBoolean::taggedRelease(const void *tag, const int when) const { }
+void OSBoolean::taggedRetain(__unused const void *tag) const { }
+void OSBoolean::taggedRelease(__unused const void *tag, __unused const int when) const { }
 
 OSBoolean *OSBoolean::withBoolean(bool inValue)
 {

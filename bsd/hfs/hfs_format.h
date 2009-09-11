@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -104,6 +104,13 @@ enum {
  */
 #define FIRST_LINK_XATTR_NAME	"com.apple.system.hfs.firstlink"
 #define FIRST_LINK_XATTR_REC_SIZE (sizeof(HFSPlusAttrData) - 2 + 12)
+
+/*
+ * The name space ID for generating an HFS volume UUID
+ *
+ * B3E20F39-F292-11D6-97A4-00306543ECAC
+ */
+#define HFS_UUID_NAMESPACE_ID  "\xB3\xE2\x0F\x39\xF2\x92\x11\xD6\x97\xA4\x00\x30\x65\x43\xEC\xAC"
 
 #endif /* __APPLE_API_PRIVATE */
 
@@ -555,7 +562,7 @@ enum {
 
 /* HFS and HFS Plus volume attribute bits */
 enum {
-							/* Bits 0-6 are reserved (always cleared by MountVol call) */
+	/* Bits 0-6 are reserved (always cleared by MountVol call) */
 	kHFSVolumeHardwareLockBit	= 7,		/* volume is locked by hardware */
 	kHFSVolumeUnmountedBit		= 8,		/* volume was successfully unmounted */
 	kHFSVolumeSparedBlocksBit	= 9,		/* volume has bad blocks spared */
@@ -565,7 +572,12 @@ enum {
 	kHFSVolumeJournaledBit = 13,			/* this volume has a journal on it */
 	kHFSVolumeInconsistentBit = 14,			/* serious inconsistencies detected at runtime */
 	kHFSVolumeSoftwareLockBit	= 15,		/* volume is locked by software */
-
+	/*
+	 * HFS only has 16 bits of attributes in the MDB, but HFS Plus has 32 bits.
+	 * Therefore, bits 16-31 can only be used on HFS Plus.
+	 */
+	kHFSUnusedNodeFixBit = 31,				/* Unused nodes in the Catalog B-tree have been zero-filled.  See Radar #6947811. */
+	
 	kHFSVolumeHardwareLockMask	= 1 << kHFSVolumeHardwareLockBit,
 	kHFSVolumeUnmountedMask		= 1 << kHFSVolumeUnmountedBit,
 	kHFSVolumeSparedBlocksMask	= 1 << kHFSVolumeSparedBlocksBit,
@@ -575,9 +587,13 @@ enum {
 	kHFSVolumeJournaledMask	= 1 << kHFSVolumeJournaledBit,
 	kHFSVolumeInconsistentMask = 1 << kHFSVolumeInconsistentBit,
 	kHFSVolumeSoftwareLockMask	= 1 << kHFSVolumeSoftwareLockBit,
+	kHFSUnusedNodeFixMask = 1 << kHFSUnusedNodeFixBit,
 	kHFSMDBAttributesMask		= 0x8380
 };
 
+enum {
+	kHFSUnusedNodesFixDate = 0xc5ef2480		/* March 25, 2009 */
+};
 
 /* HFS Master Directory Block - 162 bytes */
 /* Stored at sector #2 (3rd sector) and second-to-last sector. */
@@ -729,13 +745,26 @@ enum {
 	kHFSBinaryCompare = 0xBC  /* binary compare (case-sensitive) */
 };
 
+#include <uuid/uuid.h>
+
 /* JournalInfoBlock - Structure that describes where our journal lives */
+
+// the original size of the reserved field in the JournalInfoBlock was
+// 32*sizeof(u_int32_t).  To keep the total size of the structure the 
+// same we subtract the size of new fields (currently: ext_jnl_uuid and
+// machine_uuid).  If you add additional fields, place them before the
+// reserved field and subtract their size in this macro.
+//
+#define JIB_RESERVED_SIZE  ((32*sizeof(u_int32_t)) - sizeof(uuid_string_t) - 48)
+
 struct JournalInfoBlock {
 	u_int32_t	flags;
     	u_int32_t       device_signature[8];  // signature used to locate our device.
 	u_int64_t       offset;               // byte offset to the journal on the device
 	u_int64_t       size;                 // size in bytes of the journal
-	u_int32_t 	reserved[32];
+	uuid_string_t   ext_jnl_uuid;
+	char            machine_serial_num[48];
+	char    	reserved[JIB_RESERVED_SIZE];
 } __attribute__((aligned(2), packed));
 typedef struct JournalInfoBlock JournalInfoBlock;
 
@@ -744,6 +773,13 @@ enum {
     kJIJournalOnOtherDeviceMask = 0x00000002,
     kJIJournalNeedInitMask      = 0x00000004
 };
+
+//
+// This the content type uuid for "external journal" GPT 
+// partitions.  Each instance of a partition also has a
+// uuid that uniquely identifies that instance.
+//
+#define EXTJNL_CONTENT_TYPE_UUID "4A6F7572-6E61-11AA-AA11-00306543ECAC"
 
 
 #ifdef __cplusplus

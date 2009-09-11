@@ -250,9 +250,9 @@ tcp_trace(act, ostate, tp, ipgen, th, req)
 		return;
 	printf(
 	"\trcv_(nxt,wnd,up) (%lx,%lx,%lx) snd_(una,nxt,max) (%lx,%lx,%lx)\n",
-	    (u_long)tp->rcv_nxt, tp->rcv_wnd, (u_long)tp->rcv_up,
-	    (u_long)tp->snd_una, (u_long)tp->snd_nxt, (u_long)tp->snd_max);
+	    (uint32_t)tp->rcv_nxt, tp->rcv_wnd, (uint32_t)tp->rcv_up,
+	    (uint32_t)tp->snd_una, (uint32_t)tp->snd_nxt, (uint32_t)tp->snd_max);
 	printf("\tsnd_(wl1,wl2,wnd) (%lx,%lx,%lx)\n",
-	    (u_long)tp->snd_wl1, (u_long)tp->snd_wl2, tp->snd_wnd);
+	    (uint32_t)tp->snd_wl1, (uint32_t)tp->snd_wl2, tp->snd_wnd);
 #endif /* TCPDEBUG */
 }

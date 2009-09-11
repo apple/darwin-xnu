@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -298,7 +298,12 @@ kern_return_t
 rtclock_gettime(
 	mach_timespec_t		*time)	/* OUT */
 {
-	clock_get_system_nanotime(&time->tv_sec, (uint32_t *)&time->tv_nsec);
+	clock_sec_t		secs;
+	clock_nsec_t	nsecs;
+
+	clock_get_system_nanotime(&secs, &nsecs);
+	time->tv_sec = (unsigned int)secs;
+	time->tv_nsec = nsecs;
 
 	return (KERN_SUCCESS);
 }
@@ -307,7 +312,12 @@ kern_return_t
 calend_gettime(
 	mach_timespec_t		*time)	/* OUT */
 {
-	clock_get_calendar_nanotime(&time->tv_sec, (uint32_t *)&time->tv_nsec);
+	clock_sec_t		secs;
+	clock_nsec_t	nsecs;
+
+	clock_get_calendar_nanotime(&secs, &nsecs);
+	time->tv_sec = (unsigned int)secs;
+	time->tv_nsec = nsecs;
 
 	return (KERN_SUCCESS);
 }
@@ -785,6 +795,8 @@ check_time(
 	return ((result >= 0)? result: 0);
 }
 
+#ifndef	__LP64__
+
 mach_timespec_t
 clock_get_system_value(void)
 {
@@ -806,3 +818,5 @@ clock_get_calendar_value(void)
 
 	return value;
 }
+
+#endif	/* __LP64__ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000,2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -84,6 +84,8 @@
 #include <netinet/ip_var.h>
 #include <netinet/ip_flow.h>
 #include <net/dlil.h>
+
+#if IPFLOW
 
 #define	IPFLOW_TIMER		(5 * PR_SLOWHZ)
 #define IPFLOW_HASHBITS		6	/* should not be a multiple of 8 */
@@ -219,9 +221,9 @@ ipflow_addstats(
 	struct ipflow *ipf)
 {
 	ipf->ipf_ro.ro_rt->rt_use += ipf->ipf_uses;
-	OSAddAtomic(ipf->ipf_errors + ipf->ipf_dropped, (SInt32*)&ipstat.ips_cantforward);
-	OSAddAtomic(ipf->ipf_uses, (SInt32*)&ipstat.ips_forward);
-	OSAddAtomic(ipf->ipf_uses, (SInt32*)&ipstat.ips_fastforward);
+	OSAddAtomic(ipf->ipf_errors + ipf->ipf_dropped, &ipstat.ips_cantforward);
+	OSAddAtomic(ipf->ipf_uses, &ipstat.ips_forward);
+	OSAddAtomic(ipf->ipf_uses, &ipstat.ips_fastforward);
 }
 
 static void
@@ -279,7 +281,6 @@ ipflow_reap(
 	LIST_REMOVE(ipf, ipf_next);
 	ipflow_addstats(ipf);
 	rtfree(ipf->ipf_ro.ro_rt);
-	ipf->ipf_ro.ro_rt = NULL;
 	return ipf;
 }
 /* note: called under the ip_mutex lock */
@@ -299,8 +300,8 @@ ipflow_slowtimo(
 			} else {
 				ipf->ipf_last_uses = ipf->ipf_uses;
 				ipf->ipf_ro.ro_rt->rt_use += ipf->ipf_uses;
-				OSAddAtomic(ipf->ipf_uses, (SInt32*)&ipstat.ips_forward);
-				OSAddAtomic(ipf->ipf_uses, (SInt32*)&ipstat.ips_fastforward);
+				OSAddAtomic(ipf->ipf_uses, &ipstat.ips_forward);
+				OSAddAtomic(ipf->ipf_uses, &ipstat.ips_fastforward);
 				ipstat.ips_forward += ipf->ipf_uses;
 				ipstat.ips_fastforward += ipf->ipf_uses;
 				ipf->ipf_uses = 0;
@@ -345,7 +346,6 @@ ipflow_create(
 		LIST_REMOVE(ipf, ipf_next);
 		ipflow_addstats(ipf);
 		rtfree(ipf->ipf_ro.ro_rt);
-		ipf->ipf_ro.ro_rt = NULL;
 		ipf->ipf_uses = ipf->ipf_last_uses = 0;
 		ipf->ipf_errors = ipf->ipf_dropped = 0;
 	}
@@ -353,10 +353,8 @@ ipflow_create(
 	/*
 	 * Fill in the updated information.
 	 */
-	lck_mtx_lock(rt_mtx);
 	ipf->ipf_ro = *ro;
-	rtref(ro->ro_rt);
-	lck_mtx_unlock(rt_mtx);
+	RT_ADDREF(ro->ro_rt);
 	ipf->ipf_dst = ip->ip_dst;
 	ipf->ipf_src = ip->ip_src;
 	ipf->ipf_tos = ip->ip_tos;
@@ -367,3 +365,16 @@ ipflow_create(
 	hash = ipflow_hash(ip->ip_dst, ip->ip_src, ip->ip_tos);
 	LIST_INSERT_HEAD(&ipflows[hash], ipf, ipf_next);
 }
+#else /* !IPFLOW */
+int
+ipflow_fastforward(struct mbuf *m)
+{
+#pragma unused(m)
+	/*
+	 * Since this symbol is exported (albeit unsupported), just return
+	 * false to keep things (e.g. PPP) happy, in case ipflow is not
+	 * compiled in.
+	 */
+	return (0);
+}
+#endif /* !IPFLOW */

@@ -543,8 +543,12 @@ LEXT(hw_lock_held)
  */
 			.align	5
 			.globl	EXT(hw_compare_and_store)
+			.globl	EXT(OSCompareAndSwap)
+			.globl	EXT(OSCompareAndSwapPtr)
 
 LEXT(hw_compare_and_store)
+LEXT(OSCompareAndSwap)
+LEXT(OSCompareAndSwapPtr)
 
 			mr		r6,r3							; Save the old value
 
@@ -656,13 +660,13 @@ andtry:		lwarx	r3,0,r6							; Grab the area value
  *			anchor is the pointer to the first element
  *			element is the pointer to the element to insert
  *			disp is the displacement into the element to the chain pointer
- *
- *          NOTE: OSEnqueueAtomic() is aliased to this, see xnu/libkern/Makefile
  */
 			.align	5
 			.globl	EXT(hw_queue_atomic)
+			.globl	EXT(OSEnqueueAtomic)
 
 LEXT(hw_queue_atomic)
+LEXT(OSEnqueueAtomic)
 
 			mr		r7,r4							; Make end point the same as start
 			mr		r8,r5							; Copy the displacement also
@@ -701,13 +705,13 @@ hw_queue_comm:
  *			anchor is the pointer to the first element
  *			disp is the displacement into the element to the chain pointer
  *			Returns element if found, 0 if empty.
- *
- *          NOTE: OSDequeueAtomic() is aliased to this, see xnu/libkern/Makefile
  */
 			.align	5
 			.globl	EXT(hw_dequeue_atomic)
+			.globl	EXT(OSDequeueAtomic)
 
 LEXT(hw_dequeue_atomic)
+LEXT(OSDequeueAtomic)
 
 			mr		r5,r3							; Save the anchor
 
@@ -838,51 +842,7 @@ mylock_attempt:
 			bne		2b								__ASMNL__	\
 3:	
 
-/*
- *		void mutex_init(mutex_t* l, etap_event_t etap)
- *
- */
 			.align	5
-			.globl	EXT(mutex_init)
-LEXT(mutex_init)
-
-			PROLOG(0)
-			li		r10,0
-			stw		r10,MUTEX_DATA(r3)				; clear lock word
-			sth		r10,MUTEX_WAITERS(r3)			; init waiter count
-			sth		r10,MUTEX_PROMOTED_PRI(r3)
-#if	MACH_LDEBUG
-			li		r11,MUTEX_ATTR_DEBUG
-			stw		r10,MUTEX_STACK(r3)				; init caller pc
-			stw		r10,MUTEX_THREAD(r3)			; and owning thread
-			li		r9,	MUTEX_TAG
-			stw		r9,	MUTEX_TYPE(r3)				; set lock type
-			stw		r11,MUTEX_ATTR(r3)
-			addi	r8,r3,MUTEX_STACK-4
-			li		r9,MUTEX_FRAMES
-mlistck:
-			stwu	r10,4(r8)						; init stack
-			subi	r9,r9,1
-			cmpi	cr0,r9,0
-			bne		mlistck
-#endif	/* MACH_LDEBUG */
-			EPILOG
-			blr
-
-/*
- *		void lck_mtx_lock_ext(lck_mtx_ext_t*)
- *
- */
-			.align	5
-			.globl	EXT(lck_mtx_lock_ext)
-LEXT(lck_mtx_lock_ext)
-#if	MACH_LDEBUG
-			.globl	EXT(mutex_lock)
-LEXT(mutex_lock)
-
-			.globl	EXT(_mutex_lock)
-LEXT(_mutex_lock)
-#endif
 			mr		r11,r3							; Save lock addr
 mlckeEnter:
 			lwz		r0,MUTEX_ATTR(r3)
@@ -890,28 +850,28 @@ mlckeEnter:
 			CHECK_SETUP(r12)	
 			CHECK_MUTEX_TYPE()
 
-			bf		MUTEX_ATTR_DEBUGb,L_mutex_lock_assert_wait_2
+			bf		MUTEX_ATTR_DEBUGb,L_mtx_lock_assert_wait_2
 			PROLOG(0)
 			bl		EXT(assert_wait_possible)
 			mr.		r3,r3
-			bne		L_mutex_lock_assert_wait_1
-			lis		r3,hi16(L_mutex_lock_assert_wait_panic_str)
-			ori		r3,r3,lo16(L_mutex_lock_assert_wait_panic_str)
+			bne		L_mtx_lock_assert_wait_1
+			lis		r3,hi16(L_mtx_lock_assert_wait_panic_str)
+			ori		r3,r3,lo16(L_mtx_lock_assert_wait_panic_str)
 			bl		EXT(panic)
 			BREAKPOINT_TRAP							; We die here anyway
 
 			.data
-L_mutex_lock_assert_wait_panic_str:
+L_mtx_lock_assert_wait_panic_str:
 			STRINGD "mutex lock attempt with  assert_wait_possible false\n\000" 
 			.text
 
-L_mutex_lock_assert_wait_1:
+L_mtx_lock_assert_wait_1:
 			lwz		r3,FM_ARG0(r1)
 			lwz		r11,FM_ARG0+0x04(r1)
 			lwz		r2,(FM_ALIGN(0)+FM_SIZE+FM_CR_SAVE)(r1)
 			mtcr	r2
 			EPILOG
-L_mutex_lock_assert_wait_2:
+L_mtx_lock_assert_wait_2:
 
 			mfsprg	r6,1							; load the current thread
 			bf		MUTEX_ATTR_STATb,mlckestatskip	; Branch if no stat
@@ -980,14 +940,6 @@ mlckespin01:
 			.align	5
 			.globl	EXT(lck_mtx_lock)
 LEXT(lck_mtx_lock)
-
-#if	!MACH_LDEBUG
-			.globl	EXT(mutex_lock)
-LEXT(mutex_lock)
-
-			.globl	EXT(_mutex_lock)
-LEXT(_mutex_lock)
-#endif
 
 			mfsprg	r6,1							; load the current thread
 			lwz		r5,MUTEX_DATA(r3)				; Get the lock quickly
@@ -1217,12 +1169,6 @@ mlStatSkip2:
 			.align	5
 			.globl	EXT(lck_mtx_try_lock_ext)
 LEXT(lck_mtx_try_lock_ext)
-#if	MACH_LDEBUG
-			.globl	EXT(mutex_try)
-LEXT(mutex_try)
-			.globl	EXT(_mutex_try)
-LEXT(_mutex_try)
-#endif
 			mr		r11,r3							; Save lock addr
 mlteEnter:
 			lwz		r0,MUTEX_ATTR(r3)
@@ -1247,7 +1193,7 @@ mlteStatSkip:
 			mfsprg	r6,1							; load the current thread
 			lwz		r5,MUTEX_DATA(r3)				; Get the lock value
 			mr.		r5,r5							; Quick check
-			bne--	L_mutex_try_slow				; Can not get it now...
+			bne--	L_mtx_try_slow					; Can not get it now...
 			mfmsr	r9								; Get the MSR value
 			lis		r0,hi16(MASK(MSR_VEC))			; Get vector enable
 			ori		r0,r0,lo16(MASK(MSR_FP))		; Get FP enable
@@ -1281,7 +1227,7 @@ mlteSlowX:
 			li		r5,lgKillResv					; Killing field
 			stwcx.	r5,0,r5							; Kill reservation
 			mtmsr	r9								; Say, any interrupts pending?
-			b		L_mutex_try_slow
+			b		L_mtx_try_slow
 
 
 /*
@@ -1291,12 +1237,6 @@ mlteSlowX:
 			.align	5
 			.globl	EXT(lck_mtx_try_lock)
 LEXT(lck_mtx_try_lock)
-#if	!MACH_LDEBUG
-			.globl	EXT(mutex_try)
-LEXT(mutex_try)
-			.globl	EXT(_mutex_try)
-LEXT(_mutex_try)
-#endif
 
 			mfsprg	r6,1							; load the current thread
 			lwz		r5,MUTEX_DATA(r3)				; Get the lock value
@@ -1329,7 +1269,7 @@ mltSlow02:
 			li		r0,0
 			mtcrf	1,r0							; Set cr7 to zero
 
-L_mutex_try_slow:
+L_mtx_try_slow:
 			PROLOG(0)
 	
 			lwz		r6,MUTEX_DATA(r3)				; Quick check
@@ -1411,21 +1351,6 @@ mtFail:		li		r3,0							; Set failure code
 			blr										; Return...
 
 		
-/*
- *		void mutex_unlock(mutex_t* l)
- *
- */
-			.align	5
-			.globl	EXT(mutex_unlock)
-LEXT(mutex_unlock)
-
-			sync
-			mr		r11,r3							; Save lock addr
-#if	MACH_LDEBUG
-			b		mlueEnter1
-#else
-			b		mluEnter1
-#endif
 
 /*
  *		void lck_mtx_ext_unlock(lck_mtx_ext_t* l)
@@ -1434,10 +1359,6 @@ LEXT(mutex_unlock)
 			.align	5
 			.globl	EXT(lck_mtx_ext_unlock)
 LEXT(lck_mtx_ext_unlock)
-#if	MACH_LDEBUG
-			.globl	EXT(mutex_unlock_rwcmb)
-LEXT(mutex_unlock_rwcmb)
-#endif
 mlueEnter:
 			.globl	EXT(mulckePatch_isync)
 LEXT(mulckePatch_isync)
@@ -1455,7 +1376,7 @@ mlueEnter1:
 
 			lwz		r5,MUTEX_DATA(r3)				; Get the lock
 			rlwinm.	r4,r5,0,30,31					; Quick check
-			bne--	L_mutex_unlock_slow				; Can not get it now...
+			bne--	L_mtx_unlock_slow				; Can not get it now...
 			mfmsr	r9								; Get the MSR value
 			lis		r0,hi16(MASK(MSR_VEC))			; Get vector enable
 			ori		r0,r0,lo16(MASK(MSR_FP))		; Get FP enable
@@ -1479,7 +1400,7 @@ mlueSlowX:
 			li		r5,lgKillResv					; Killing field
 			stwcx.	r5,0,r5							; Dump reservation
 			mtmsr	r9								; Say, any interrupts pending?
-			b		L_mutex_unlock_slow				; Join slow path...
+			b		L_mtx_unlock_slow				; Join slow path...
 
 /*
  *		void lck_mtx_unlock(lck_mtx_t* l)
@@ -1488,10 +1409,6 @@ mlueSlowX:
 			.align	5
 			.globl	EXT(lck_mtx_unlock)
 LEXT(lck_mtx_unlock)
-#if	!MACH_LDEBUG
-			.globl	EXT(mutex_unlock_rwcmb)
-LEXT(mutex_unlock_rwcmb)
-#endif
 mluEnter:
 			.globl	EXT(mulckPatch_isync)
 LEXT(mulckPatch_isync)
@@ -1524,14 +1441,14 @@ mluLoop:
 
 mluSlow0:
 			cmpli	cr0,r5,MUTEX_IND				; Is it a mutex indirect 
-			bne--	L_mutex_unlock_slow				; No, go handle contention 
+			bne--	L_mtx_unlock_slow				; No, go handle contention 
 			lwz		r3,MUTEX_PTR(r3)				; load mutex ext pointer
 			b		mlueEnter1
 mluSlowX:
 			li		r5,lgKillResv					; Killing field
 			stwcx.	r5,0,r5							; Dump reservation
 
-L_mutex_unlock_slow:
+L_mtx_unlock_slow:
 			
 			PROLOG(0)
 	
@@ -1578,8 +1495,6 @@ muUnlock:
 			.align	5
 			.globl	EXT(lck_mtx_assert)
 LEXT(lck_mtx_assert)
-			.globl	EXT(_mutex_assert)
-LEXT(_mutex_assert)
 			mr		r11,r3
 maEnter:
 			lwz		r5,MUTEX_DATA(r3)

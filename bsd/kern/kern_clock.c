@@ -314,7 +314,7 @@ void
 startprofclock(struct proc *p)
 {
 	if ((p->p_flag & P_PROFIL) == 0)
-		OSBitOrAtomic(P_PROFIL, (UInt32 *)&p->p_flag);
+		OSBitOrAtomic(P_PROFIL, &p->p_flag);
 }
 
 /*
@@ -324,7 +324,7 @@ void
 stopprofclock(struct proc *p)
 {
 	if (p->p_flag & P_PROFIL)
-		OSBitAndAtomic(~((uint32_t)P_PROFIL), (UInt32 *)&p->p_flag);
+		OSBitAndAtomic(~((uint32_t)P_PROFIL), &p->p_flag);
 }
 
 /* TBD locking user profiling is not resolved yet */

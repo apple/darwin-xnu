@@ -55,20 +55,22 @@ off_t	ubc_getsize(struct vnode *);
 int	ubc_setsize(struct vnode *, off_t);
 
 kauth_cred_t ubc_getcred(struct vnode *);
-#ifdef __APPLE_API_OBSOLETE
-/* This API continues to exist only until <rdar://4714366> is resolved */
-int	ubc_setcred(struct vnode *, struct proc *) __deprecated;
-#endif
 struct thread;
 int	ubc_setthreadcred(struct vnode *, struct proc *, struct thread *);
 
 int     ubc_sync_range(vnode_t, off_t, off_t, int);
 errno_t ubc_msync(vnode_t, off_t, off_t, off_t *, int);
 int	ubc_pages_resident(vnode_t);
+int	ubc_page_op(vnode_t, off_t, int, ppnum_t *, int *);
+int	ubc_range_op(vnode_t, off_t, off_t, int, int *);
 
+#ifdef KERNEL_PRIVATE
+/* This API continues to exist only until <rdar://4714366> is resolved */
+int	ubc_setcred(struct vnode *, struct proc *) __deprecated;
 /* code signing */
 struct cs_blob;
 struct cs_blob *ubc_cs_blob_get(vnode_t, cpu_type_t, off_t);
+#endif
 
 /* cluster IO routines */
 int	advisory_read(vnode_t, off_t, off_t, int);
@@ -80,11 +82,11 @@ int	cluster_read_ext(vnode_t, struct uio *, off_t, int, int (*)(buf_t, void *), 
 int	cluster_write(vnode_t, struct uio *, off_t, off_t, off_t, off_t, int);
 int	cluster_write_ext(vnode_t, struct uio *, off_t, off_t, off_t, off_t, int, int (*)(buf_t, void *), void *);
 
-int	cluster_pageout(vnode_t, upl_t, vm_offset_t, off_t, int, off_t, int);
-int	cluster_pageout_ext(vnode_t, upl_t, vm_offset_t, off_t, int, off_t, int, int (*)(buf_t, void *), void *);
+int	cluster_pageout(vnode_t, upl_t, upl_offset_t, off_t, int, off_t, int);
+int	cluster_pageout_ext(vnode_t, upl_t, upl_offset_t, off_t, int, off_t, int, int (*)(buf_t, void *), void *);
 
-int	cluster_pagein(vnode_t, upl_t, vm_offset_t, off_t, int, off_t, int);
-int	cluster_pagein_ext(vnode_t, upl_t, vm_offset_t, off_t, int, off_t, int, int (*)(buf_t, void *), void *);
+int	cluster_pagein(vnode_t, upl_t, upl_offset_t, off_t, int, off_t, int);
+int	cluster_pagein_ext(vnode_t, upl_t, upl_offset_t, off_t, int, off_t, int, int (*)(buf_t, void *), void *);
 
 int	cluster_push(vnode_t, int);
 int	cluster_push_ext(vnode_t, int, int (*)(buf_t, void *), void *);
@@ -92,15 +94,15 @@ int	cluster_push_ext(vnode_t, int, int (*)(buf_t, void *), void *);
 int	cluster_bp(buf_t);
 int	cluster_bp_ext(buf_t, int (*)(buf_t, void *), void *);
 
-void	cluster_zero(upl_t, vm_offset_t, int, buf_t);
+void	cluster_zero(upl_t, upl_offset_t, int, buf_t);
 
 int	cluster_copy_upl_data(uio_t, upl_t, int, int *);
 int	cluster_copy_ubc_data(vnode_t, uio_t, int *, int);
 
 
 /* UPL routines */
-int	ubc_create_upl(vnode_t, off_t, long, upl_t *, upl_page_info_t **, int);
-int	ubc_upl_map(upl_t, upl_offset_t *);
+int	ubc_create_upl(vnode_t, off_t, int, upl_t *, upl_page_info_t **, int);
+int	ubc_upl_map(upl_t, vm_offset_t *);
 int	ubc_upl_unmap(upl_t);
 int	ubc_upl_commit(upl_t);
 int	ubc_upl_commit_range(upl_t, upl_offset_t, upl_size_t, int);
@@ -109,6 +111,8 @@ int	ubc_upl_abort_range(upl_t, upl_offset_t, upl_size_t, int);
 
 upl_page_info_t *ubc_upl_pageinfo(upl_t);
 upl_size_t ubc_upl_maxbufsize(void);
+
+int	is_file_clean(vnode_t, off_t);
 
 __END_DECLS
 

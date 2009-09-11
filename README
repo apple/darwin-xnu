@@ -22,13 +22,13 @@ A. How to build XNU:
 	
   Examples:
 	/* make a debug kernel for H1 arm board */
-	make TARGET_CONFIGS="debug arm s5l8900x"
+	make TARGET_CONFIGS="debug arm s5l8900x" SDKROOT=/path/to/SDK
 	
     $(OBJROOT)/DEBUG_ARM_S5L8900X/osfmk/DEBUG/osfmk.o: pre-linked object for osfmk component
     $(OBJROOT)/DEBUG_ARM_S5L8900X/mach_kernel: bootable image
 
 	/* make debug and development kernels for H1 arm board */
-	make TARGET_CONFIGS="debug arm s5l8900x  development arm s5l8900x"
+	make TARGET_CONFIGS="debug arm s5l8900x  development arm s5l8900x" SDKROOT=/path/to/SDK
 	
     $(OBJROOT)/DEBUG_ARM_S5L8900X/osfmk/DEBUG/osfmk.o: pre-linked object for osfmk component
     $(OBJROOT)/DEBUG_ARM_S5L8900X/mach_kernel: bootable image
@@ -36,9 +36,9 @@ A. How to build XNU:
     $(OBJROOT)/DEVELOPMENT_ARM_S5L8900X/mach_kernel: bootable image
 
 	/* this is all you need to do to build H1 arm with DEVELOPMENT kernel configuration  */
-	make TARGET_CONFIGS="default arm default"
+	make TARGET_CONFIGS="default arm default" SDKROOT=/path/to/SDK
 	
-	or the following is equivalent
+	or the following is equivalent (ommitted SDKROOT will use /)
 	
 	make ARCH_CONFIGS=ARM
 
@@ -90,6 +90,7 @@ A. How to build XNU:
   or
 
   $ export TARGET_CONFIGS="DEBUG ARM MX31ADS"
+  $ export SDKROOT=/path/to/SDK
   $ make all
 
   Example:
@@ -150,10 +151,16 @@ A. How to build XNU:
 
     $ make cscope	# this will build cscope database
 
+9) Other makefile options
+
+   $ make MAKEJOBS=-j8    # this will use 8 processes during the build. The default is 2x the number of active cores
+
+   $ make -w              # trace recursive make invocations. Useful in combination with VERBOSE=YES
+
 =============================================
 B. How to install a new header file from XNU
 
-[Note: This does not covers installing header file in IOKit framework]
+[Note: This does not cover installing header files in IOKit framework]
 
 1) XNU installs header files at the following locations -
 	a. $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
@@ -196,7 +203,7 @@ B. How to install a new header file from XNU
 3) The Makefile combines the file lists mentioned above into different 
    install lists which are used by build system to install the header files.
 
-   If the install list that you are interested does not exists, create it
+   If the install list that you are interested does not exist, create it
    by adding the appropriate file lists.  The default install lists, its 
    member file lists and their default location are described below - 
 

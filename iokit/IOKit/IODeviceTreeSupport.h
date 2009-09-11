@@ -88,8 +88,6 @@ OSArray * IODTResolveAddressing( IORegistryEntry * regEntry,
 			const char * addressPropertyName,
 			IODeviceMemory * parent );
 
-#pragma options align=mac68k
-
 struct IONVRAMDescriptor {
     unsigned int format:4;
     unsigned int marker:1;
@@ -98,9 +96,7 @@ struct IONVRAMDescriptor {
     unsigned int bridgeDevices:6 * 5;
     unsigned int functionNum:3;
     unsigned int deviceNum:5;
-};
-
-#pragma options align=reset
+} __attribute__((aligned(2), packed));
 
 IOReturn IODTMakeNVDescriptor( IORegistryEntry * regEntry,
 				IONVRAMDescriptor * hdr );

@@ -20,14 +20,14 @@
  */
 
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 #ifndef _SYS_DTRACE_H
 #define _SYS_DTRACE_H
 
-/* #pragma ident	"@(#)dtrace.h	1.32	06/08/07 SMI" */
+/* #pragma ident	"@(#)dtrace.h	1.37	07/06/05 SMI" */
 
 #ifdef  __cplusplus
 extern "C" {
@@ -55,6 +55,16 @@ extern "C" {
 #include <sys/cyclic.h>
 #include <sys/int_limits.h>
 #else /* is Apple Mac OS X */
+
+#if defined(__LP64__)
+#if !defined(_LP64)
+#define _LP64 /* Solaris vs. Darwin */
+#endif
+#else
+#if !defined(_ILP32)
+#define _ILP32 /* Solaris vs. Darwin */
+#endif
+#endif
 
 #ifdef KERNEL
 #ifndef _KERNEL
@@ -90,12 +100,17 @@ extern "C" {
 #define P2ROUNDUP(x, align)             (-(-(x) & -(align)))
 
 #define	CTF_MODEL_ILP32	1	/* object data model is ILP32 */
+#define	CTF_MODEL_LP64	2	/* object data model is LP64 */
+#ifdef __LP64__
+#define	CTF_MODEL_NATIVE	CTF_MODEL_LP64
+#else
 #define	CTF_MODEL_NATIVE	CTF_MODEL_ILP32
+#endif
 
 typedef uint8_t		uchar_t;
 typedef uint16_t	ushort_t;
 typedef uint32_t	uint_t;
-typedef uint32_t	ulong_t;
+typedef unsigned long	ulong_t;
 typedef uint64_t	u_longlong_t;
 typedef int64_t		longlong_t;
 typedef int64_t		off64_t;
@@ -124,7 +139,8 @@ typedef uint32_t        zoneid_t;
 #include <stdarg.h> 
 typedef va_list __va_list;
 
-#define proc_t struct proc
+/* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
+#define proc_t struct proc /* Steer clear of the Darwin typedef for proc_t */
 #endif /* __APPLE__ */
 
 /*
@@ -310,6 +326,10 @@ typedef enum dtrace_probespec {
 #define	DIF_VAR_UID		0x011e	/* process user ID */
 #define	DIF_VAR_GID		0x011f	/* process group ID */
 #define	DIF_VAR_ERRNO		0x0120	/* thread errno */
+#if defined(__APPLE__)
+#define DIF_VAR_PTHREAD_SELF	0x0200	/* Apple specific PTHREAD_SELF (Not currently supported!) */
+#define DIF_VAR_DISPATCHQADDR	0x0201	/* Apple specific dispatch queue addr */
+#endif /* __APPLE __ */
 
 #define	DIF_SUBR_RAND			0
 #define	DIF_SUBR_MUTEX_OWNED		1
@@ -346,9 +366,23 @@ typedef enum dtrace_probespec {
 #define	DIF_SUBR_SUBSTR			32
 #define	DIF_SUBR_INDEX			33
 #define	DIF_SUBR_RINDEX			34
-#define DIF_SUBR_CHUD			35
+#define	DIF_SUBR_HTONS			35
+#define	DIF_SUBR_HTONL			36
+#define	DIF_SUBR_HTONLL			37
+#define	DIF_SUBR_NTOHS			38
+#define	DIF_SUBR_NTOHL			39
+#define	DIF_SUBR_NTOHLL			40
+#define	DIF_SUBR_INET_NTOP		41
+#define	DIF_SUBR_INET_NTOA		42
+#define	DIF_SUBR_INET_NTOA6		43
+#if !defined(__APPLE__)
 
-#define DIF_SUBR_MAX            35      /* max subroutine value */
+#define DIF_SUBR_MAX			43      /* max subroutine value */
+#else
+#define DIF_SUBR_COREPROFILE	44
+
+#define DIF_SUBR_MAX			44      /* max subroutine value */
+#endif /* __APPLE__ */
 
 typedef uint32_t dif_instr_t;
 
@@ -458,6 +492,10 @@ typedef struct dtrace_difv {
 #define DTRACEACT_PRINTA                4       /* printa() action */
 #define DTRACEACT_LIBACT                5       /* library-controlled action */
 
+#if defined(__APPLE__)
+#define DTRACEACT_APPLEBINARY           50      /* Apple DT perf. tool action */
+#endif /* __APPLE__ */
+
 #define DTRACEACT_PROC                  0x0100
 #define DTRACEACT_USTACK                (DTRACEACT_PROC + 1)
 #define DTRACEACT_JSTACK                (DTRACEACT_PROC + 2)
@@ -526,10 +564,17 @@ typedef struct dtrace_difv {
 #define DTRACEACT_ISAGG(x)              \
         (DTRACEACT_CLASS(x) == DTRACEACT_AGGREGATION)
 
+#if !defined(__APPLE__)  /* Quiet compiler warning. */
 #define DTRACE_QUANTIZE_NBUCKETS        \
         (((sizeof (uint64_t) * NBBY) - 1) * 2 + 1)
 
 #define DTRACE_QUANTIZE_ZEROBUCKET      ((sizeof (uint64_t) * NBBY) - 1)
+#else
+#define DTRACE_QUANTIZE_NBUCKETS        \
+        (int)(((sizeof (uint64_t) * NBBY) - 1) * 2 + 1)
+
+#define DTRACE_QUANTIZE_ZEROBUCKET      (int64_t)((sizeof (uint64_t) * NBBY) - 1)
+#endif /* __APPLE __*/
 
 #define DTRACE_QUANTIZE_BUCKETVAL(buck)                                 \
         (int64_t)((buck) < DTRACE_QUANTIZE_ZEROBUCKET ?                 \
@@ -561,6 +606,8 @@ typedef struct dtrace_difv {
 #define DTRACE_USTACK_ARG(x, y)         \
         ((((uint64_t)(y)) << 32) | ((x) & UINT32_MAX))
 
+#if !defined(__APPLE__)
+
 #ifndef _LP64
 #ifndef _LITTLE_ENDIAN
 #define DTRACE_PTR(type, name)  uint32_t name##pad; type *name
@@ -570,6 +617,16 @@ typedef struct dtrace_difv {
 #else
 #define DTRACE_PTR(type, name)  type *name
 #endif
+
+#else
+
+#ifndef _LP64
+#define DTRACE_PTR(type, name)  user_addr_t name
+#else
+#define DTRACE_PTR(type, name)  type *name
+#endif
+
+#endif /* __APPLE__ */
 
 /*
  * DTrace Object Format (DOF)
@@ -680,8 +737,12 @@ typedef struct dof_hdr {
 
 #define	DOF_VERSION_1	1	/* DOF version 1: Solaris 10 FCS */
 #define	DOF_VERSION_2	2	/* DOF version 2: Solaris Express 6/06 */
+#if !defined(__APPLE__)
+#define	DOF_VERSION	DOF_VERSION_2	/* Latest DOF version */
+#else
 #define	DOF_VERSION_3	3	/* DOF version 3: Minimum version for Leopard */
 #define	DOF_VERSION	DOF_VERSION_3	/* Latest DOF version */
+#endif /* __APPLE__ */
 
 #define DOF_FL_VALID    0       /* mask of all valid dofh_flags bits */
 
@@ -1036,12 +1097,12 @@ typedef struct dtrace_fmtdesc {
 #define	DTRACEOPT_AGGSORTREV	24	/* reverse-sort aggregations */
 #define	DTRACEOPT_AGGSORTPOS	25	/* agg. position to sort on */
 #define	DTRACEOPT_AGGSORTKEYPOS	26	/* agg. key position to sort on */
-#if defined(__APPLE__)
+#if !defined(__APPLE__)
+#define DTRACEOPT_MAX           27      /* number of options */
+#else
 #define DTRACEOPT_STACKSYMBOLS  27      /* clear to prevent stack symbolication */
 #define DTRACEOPT_MAX           28      /* number of options */
-#else
-#define DTRACEOPT_MAX           27      /* number of options */
-#endif
+#endif /* __APPLE__ */
 
 #define	DTRACEOPT_UNSET		(dtrace_optval_t)-2	/* unset option */
 
@@ -1141,6 +1202,7 @@ typedef struct dtrace_conf {
 #define DTRACEFLT_KPRIV                 6       /* Illegal kernel access */
 #define DTRACEFLT_UPRIV                 7       /* Illegal user access */
 #define DTRACEFLT_TUPOFLOW              8       /* Tuple stack overflow */
+#define	DTRACEFLT_BADSTACK		9	/* Bad stack */
 
 #define DTRACEFLT_LIBRARY               1000    /* Library-level fault */
 
@@ -1393,7 +1455,11 @@ typedef struct dof_ioctl_data {
 #endif
 
 #define DTRACEMNR_DTRACE        "dtrace"        /* node for DTrace ops */
+#if !defined(__APPLE__)
+#define	DTRACEMNR_HELPER	"helper"	/* node for helpers */
+#else
 #define DTRACEMNR_HELPER        "dtracehelper"  /* node for helpers */
+#endif /* __APPLE__ */
 #define DTRACEMNRN_DTRACE       0               /* minor for DTrace ops */
 #define DTRACEMNRN_HELPER       1               /* minor for helpers */
 #define DTRACEMNRN_CLONE        2               /* first clone minor */
@@ -2285,6 +2351,12 @@ extern void dtrace_vtime_disable_tnf(void);
 extern void dtrace_vtime_enable(void);
 extern void dtrace_vtime_disable(void);
 
+#if !defined(__APPLE__)
+struct regs;
+
+extern int (*dtrace_pid_probe_ptr)(struct regs *);
+extern int (*dtrace_return_probe_ptr)(struct regs *);
+#else
 #if defined (__ppc__) || defined (__ppc64__)
 extern int (*dtrace_pid_probe_ptr)(ppc_saved_state_t *regs);
 extern int (*dtrace_return_probe_ptr)(ppc_saved_state_t* regs);
@@ -2294,7 +2366,7 @@ extern int (*dtrace_return_probe_ptr)(x86_saved_state_t* regs);
 #else
 #error architecture not supported
 #endif
- 
+#endif /* __APPLE__ */
 extern void (*dtrace_fasttrap_fork_ptr)(proc_t *, proc_t *);
 extern void (*dtrace_fasttrap_exec_ptr)(proc_t *);
 extern void (*dtrace_fasttrap_exit_ptr)(proc_t *);
@@ -2334,7 +2406,10 @@ extern void dtrace_panic(const char *, ...);
 extern int dtrace_safe_defer_signal(void);
 extern void dtrace_safe_synchronous_signal(void);
 
-#if defined(__i386__) || defined(__x86_64__)
+extern int dtrace_mach_aframes(void);
+
+#if !defined(__APPLE__)
+#if defined(__i386) || defined(__amd64)
 extern int dtrace_instr_size(uchar_t *instr);
 extern int dtrace_instr_size_isa(uchar_t *, model_t, int *);
 extern void dtrace_invop_add(int (*)(uintptr_t, uintptr_t *, uintptr_t));
@@ -2346,8 +2421,16 @@ extern void dtrace_invop_callsite(void);
 extern int dtrace_blksuword32(uintptr_t, uint32_t *, int);
 extern void dtrace_getfsr(uint64_t *);
 #endif
+#else
+#if defined(__i386__) || defined(__x86_64__)
+extern int dtrace_instr_size(uchar_t *instr);
+extern int dtrace_instr_size_isa(uchar_t *, model_t, int *);
+extern void dtrace_invop_add(int (*)(uintptr_t, uintptr_t *, uintptr_t));
+extern void dtrace_invop_remove(int (*)(uintptr_t, uintptr_t *, uintptr_t));
+extern void dtrace_invop_callsite(void);
+#endif
 
-#if defined(__APPLE__)
+    
 #if defined (__ppc__) || defined (__ppc64__)
 extern void dtrace_invop_add(int (*)(uintptr_t, uintptr_t *, uintptr_t));
 extern void dtrace_invop_remove(int (*)(uintptr_t, uintptr_t *, uintptr_t));
@@ -2368,6 +2451,17 @@ extern void dtrace_invop_remove(int (*)(uintptr_t, uintptr_t *, uintptr_t));
 
 #endif  /* _ASM */
 
+#if !defined(__APPLE__)
+#if defined(__i386) || defined(__amd64)
+
+#define	DTRACE_INVOP_PUSHL_EBP		1
+#define	DTRACE_INVOP_POPL_EBP		2
+#define	DTRACE_INVOP_LEAVE		3
+#define	DTRACE_INVOP_NOP		4
+#define	DTRACE_INVOP_RET		5
+
+#endif
+#else
 #if defined(__i386__) || defined(__x86_64__)
 
 #define DTRACE_INVOP_PUSHL_EBP          1
@@ -2378,7 +2472,6 @@ extern void dtrace_invop_remove(int (*)(uintptr_t, uintptr_t *, uintptr_t));
 
 #endif
 
-#if defined(__APPLE__)
 #if defined (__ppc__) || defined (__ppc64__)
 #define DTRACE_INVOP_NOP                4
 #define DTRACE_INVOP_RET                5

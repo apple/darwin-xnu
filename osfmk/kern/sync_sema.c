@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -62,7 +62,7 @@ static unsigned int semaphore_event;
 #define SEMAPHORE_EVENT CAST_EVENT64_T(&semaphore_event)
 
 zone_t semaphore_zone;
-unsigned int semaphore_max = SEMAPHORE_MAX;
+unsigned int semaphore_max;
 
 /* Forward declarations */
 
@@ -109,12 +109,26 @@ semaphore_convert_wait_result(
 void
 semaphore_wait_continue(void);
 
-kern_return_t
+static kern_return_t
 semaphore_wait_internal(
 			semaphore_t		wait_semaphore,
 			semaphore_t		signal_semaphore,
-			mach_timespec_t	*wait_timep,
+			uint64_t		deadline,
+			int				option,
 			void (*caller_cont)(kern_return_t));
+
+static __inline__ uint64_t
+semaphore_deadline(
+	unsigned int		sec,
+	clock_res_t			nsec)
+{
+	uint64_t	abstime;
+
+	nanoseconds_to_absolutetime((uint64_t)sec *	NSEC_PER_SEC + nsec, &abstime);
+	clock_absolutetime_interval_to_deadline(abstime, &abstime);
+
+	return (abstime);
+}
 
 /*
  *	ROUTINE:	semaphore_init		[private]
@@ -145,33 +159,33 @@ semaphore_create(
 	int				value)
 {
 	semaphore_t		 s = SEMAPHORE_NULL;
+	kern_return_t		kret;
 
 
-
-	if (task == TASK_NULL || value < 0 || policy > SYNC_POLICY_MAX) {
-		*new_semaphore = SEMAPHORE_NULL;
+	*new_semaphore = SEMAPHORE_NULL;
+	if (task == TASK_NULL || value < 0 || policy > SYNC_POLICY_MAX)
 		return KERN_INVALID_ARGUMENT;
-	}
 
 	s = (semaphore_t) zalloc (semaphore_zone);
 
-	if (s == SEMAPHORE_NULL) {
-		*new_semaphore = SEMAPHORE_NULL;
+	if (s == SEMAPHORE_NULL)
 		return KERN_RESOURCE_SHORTAGE; 
+
+	kret = wait_queue_init(&s->wait_queue, policy); /* also inits lock */
+	if (kret != KERN_SUCCESS) {
+		zfree(semaphore_zone, s);
+		return kret;
 	}
 
-	wait_queue_init(&s->wait_queue, policy); /* also inits lock */
 	s->count = value;
-	s->ref_count = 1;
+	s->ref_count = (task == kernel_task) ? 1 : 2;
 
 	/*
 	 *  Create and initialize the semaphore port
 	 */
 	s->port	= ipc_port_alloc_kernel();
 	if (s->port == IP_NULL) {	
-		/* This will deallocate the semaphore */	
-		semaphore_dereference(s);
-		*new_semaphore = SEMAPHORE_NULL;
+		zfree(semaphore_zone, s);
 		return KERN_RESOURCE_SHORTAGE; 
 	}
 
@@ -259,10 +273,9 @@ semaphore_destroy(
 	/*
 	 *  Deallocate
 	 *
-	 *  Drop the semaphore reference, which in turn deallocates the
-	 *  semaphore structure if the reference count goes to zero.
+	 *  Drop the task's semaphore reference, which in turn deallocates
+	 *  the semaphore structure if the reference count goes to zero.
 	 */
-	ipc_port_dealloc_kernel(semaphore->port);
 	semaphore_dereference(semaphore);
 	return KERN_SUCCESS;
 }
@@ -586,14 +599,14 @@ semaphore_wait_continue(void)
  *		The reference
  *		A reference is held on the signal semaphore.
  */
-kern_return_t
+static kern_return_t
 semaphore_wait_internal(
 	semaphore_t		wait_semaphore,
 	semaphore_t		signal_semaphore,
-	mach_timespec_t		*wait_timep,
+	uint64_t		deadline,
+	int				option,
 	void 			(*caller_cont)(kern_return_t))
 {
-	boolean_t			nonblocking;
 	int					wait_result;
 	spl_t				spl_level;
 	kern_return_t		kr = KERN_ALREADY_WAITING;
@@ -601,42 +614,22 @@ semaphore_wait_internal(
 	spl_level = splsched();
 	semaphore_lock(wait_semaphore);
 
-	/*
-	 * Decide if we really have to wait.
-	 */
-	nonblocking = (wait_timep != (mach_timespec_t *)0) ?
-		      (wait_timep->tv_sec == 0 && wait_timep->tv_nsec == 0) :
-		      FALSE;
-
 	if (!wait_semaphore->active) {
 		kr = KERN_TERMINATED;
 	} else if (wait_semaphore->count > 0) {
 		wait_semaphore->count--;
 		kr = KERN_SUCCESS;
-	} else if (nonblocking) {
+	} else if (option & SEMAPHORE_TIMEOUT_NOBLOCK) {
 		kr = KERN_OPERATION_TIMED_OUT;
 	} else {
-		uint64_t	abstime;
 		thread_t	self = current_thread();
 
 		wait_semaphore->count = -1;  /* we don't keep an actual count */
 		thread_lock(self);
-		
-		/*
-		 * If it is a timed wait, calculate the wake up deadline.
-		 */
-		if (wait_timep != (mach_timespec_t *)0) {
-			nanoseconds_to_absolutetime((uint64_t)wait_timep->tv_sec *
-											NSEC_PER_SEC + wait_timep->tv_nsec, &abstime);
-			clock_absolutetime_interval_to_deadline(abstime, &abstime);
-		}
-		else
-			abstime = 0;
-
 		(void)wait_queue_assert_wait64_locked(
 					&wait_semaphore->wait_queue,
 					SEMAPHORE_EVENT,
-					THREAD_ABORTSAFE, abstime,
+					THREAD_ABORTSAFE, deadline,
 					self);
 		thread_unlock(self);
 	}
@@ -729,8 +722,37 @@ semaphore_wait(
 		return KERN_INVALID_ARGUMENT;
 
 	return(semaphore_wait_internal(semaphore,
-				       SEMAPHORE_NULL,
-				       (mach_timespec_t *)0,
+					   SEMAPHORE_NULL,
+					   0ULL, SEMAPHORE_OPTION_NONE,
+				       (void (*)(kern_return_t))0));
+}
+
+kern_return_t
+semaphore_wait_noblock(
+	semaphore_t		semaphore)
+{	
+
+	if (semaphore == SEMAPHORE_NULL)
+		return KERN_INVALID_ARGUMENT;
+
+	return(semaphore_wait_internal(semaphore,
+					   SEMAPHORE_NULL,
+					   0ULL, SEMAPHORE_TIMEOUT_NOBLOCK,
+				       (void (*)(kern_return_t))0));
+}
+
+kern_return_t
+semaphore_wait_deadline(
+	semaphore_t		semaphore,
+	uint64_t		deadline)
+{	
+
+	if (semaphore == SEMAPHORE_NULL)
+		return KERN_INVALID_ARGUMENT;
+
+	return(semaphore_wait_internal(semaphore,
+					   SEMAPHORE_NULL,
+					   deadline, SEMAPHORE_OPTION_NONE,
 				       (void (*)(kern_return_t))0));
 }
 
@@ -762,7 +784,7 @@ semaphore_wait_trap_internal(
 	if (kr == KERN_SUCCESS) {
 		kr = semaphore_wait_internal(semaphore,
 				SEMAPHORE_NULL,
-				(mach_timespec_t *)0,
+				0ULL, SEMAPHORE_OPTION_NONE,
 				caller_cont);
 		semaphore_dereference(semaphore);
 	}
@@ -781,16 +803,24 @@ kern_return_t
 semaphore_timedwait(
 	semaphore_t		semaphore,
 	mach_timespec_t		wait_time)
-{	
+{
+	int				option = SEMAPHORE_OPTION_NONE;
+	uint64_t		deadline = 0;
+
 	if (semaphore == SEMAPHORE_NULL)
 		return KERN_INVALID_ARGUMENT;
 	
 	if(BAD_MACH_TIMESPEC(&wait_time))
 		return KERN_INVALID_VALUE;
+
+	if (wait_time.tv_sec == 0 && wait_time.tv_nsec == 0)
+		option = SEMAPHORE_TIMEOUT_NOBLOCK;
+	else
+		deadline = semaphore_deadline(wait_time.tv_sec, wait_time.tv_nsec);
 	
 	return (semaphore_wait_internal(semaphore,
 					SEMAPHORE_NULL,
-					&wait_time,
+					deadline, option,
 					(void(*)(kern_return_t))0));
 	
 }
@@ -822,7 +852,6 @@ semaphore_timedwait_trap_internal(
 	clock_res_t             nsec,
 	void (*caller_cont)(kern_return_t))
 {
-
 	semaphore_t semaphore;
 	mach_timespec_t wait_time;
 	kern_return_t kr;
@@ -834,9 +863,17 @@ semaphore_timedwait_trap_internal(
 	
 	kr = port_name_to_semaphore(name, &semaphore);
 	if (kr == KERN_SUCCESS) {
+		int				option = SEMAPHORE_OPTION_NONE;
+		uint64_t		deadline = 0;
+
+		if (sec == 0 && nsec == 0)
+			option = SEMAPHORE_TIMEOUT_NOBLOCK;
+		else
+			deadline = semaphore_deadline(sec, nsec);
+
 		kr = semaphore_wait_internal(semaphore,
 				SEMAPHORE_NULL,
-				&wait_time,
+				deadline, option,
 				caller_cont);
 		semaphore_dereference(semaphore);
 	}
@@ -861,7 +898,7 @@ semaphore_wait_signal(
 	
 	return(semaphore_wait_internal(wait_semaphore,
 				       signal_semaphore,
-				       (mach_timespec_t *)0,
+					   0ULL, SEMAPHORE_OPTION_NONE,
 				       (void(*)(kern_return_t))0));
 }
 
@@ -894,7 +931,7 @@ semaphore_wait_signal_trap_internal(
 		if (kr == KERN_SUCCESS) {
 			kr = semaphore_wait_internal(wait_semaphore,
 					signal_semaphore,
-					(mach_timespec_t *)0,
+					0ULL, SEMAPHORE_OPTION_NONE,
 					caller_cont);
 			semaphore_dereference(wait_semaphore);
 		}
@@ -919,15 +956,23 @@ semaphore_timedwait_signal(
 	semaphore_t		signal_semaphore,
 	mach_timespec_t		wait_time)
 {
+	int				option = SEMAPHORE_OPTION_NONE;
+	uint64_t		deadline = 0;
+
 	if (wait_semaphore == SEMAPHORE_NULL)
 		return KERN_INVALID_ARGUMENT;
 	
 	if(BAD_MACH_TIMESPEC(&wait_time))
 		return KERN_INVALID_VALUE;
+
+	if (wait_time.tv_sec == 0 && wait_time.tv_nsec == 0)
+		option = SEMAPHORE_TIMEOUT_NOBLOCK;
+	else
+		deadline = semaphore_deadline(wait_time.tv_sec, wait_time.tv_nsec);
 	
 	return(semaphore_wait_internal(wait_semaphore,
 				       signal_semaphore,
-				       &wait_time,
+					   deadline, option,
 				       (void(*)(kern_return_t))0));
 }
 
@@ -966,9 +1011,17 @@ semaphore_timedwait_signal_trap_internal(
 	if (kr == KERN_SUCCESS) {
 		kr = port_name_to_semaphore(wait_name, &wait_semaphore);
 		if (kr == KERN_SUCCESS) {
+			int				option = SEMAPHORE_OPTION_NONE;
+			uint64_t		deadline = 0;
+
+			if (sec == 0 && nsec == 0)
+				option = SEMAPHORE_TIMEOUT_NOBLOCK;
+			else
+				deadline = semaphore_deadline(sec, nsec);
+
 			kr = semaphore_wait_internal(wait_semaphore,
 					signal_semaphore,
-					&wait_time,
+					deadline, option,
 					caller_cont);
 			semaphore_dereference(wait_semaphore);
 		}
@@ -988,15 +1041,7 @@ void
 semaphore_reference(
 	semaphore_t		semaphore)
 {
-	spl_t			spl_level;
-
-	spl_level = splsched();
-	semaphore_lock(semaphore);
-
-	semaphore->ref_count++;
-
-	semaphore_unlock(semaphore);
-	splx(spl_level);
+	(void)hw_atomic_add(&semaphore->ref_count, 1);
 }
 
 /*
@@ -1010,20 +1055,14 @@ semaphore_dereference(
 	semaphore_t		semaphore)
 {
 	int			ref_count;
-	spl_t			spl_level;
 
 	if (semaphore != NULL) {
-	    spl_level = splsched();
-	    semaphore_lock(semaphore);
+		ref_count = hw_atomic_sub(&semaphore->ref_count, 1);
 
-	    ref_count = --(semaphore->ref_count);
-
-	    semaphore_unlock(semaphore);
-	    splx(spl_level);
-
-	    if (ref_count == 0) {
+		if (ref_count == 0) {
 			assert(wait_queue_empty(&semaphore->wait_queue));
+			ipc_port_dealloc_kernel(semaphore->port);
 			zfree(semaphore_zone, semaphore);
-	    }
+		}
 	}
 }

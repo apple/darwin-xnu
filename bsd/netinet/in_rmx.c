@@ -85,7 +85,6 @@
 
 extern int tvtohz(struct timeval *);
 extern int	in_inithead(void **head, int off);
-extern u_long route_generation;
 
 #ifdef __APPLE__
 static void in_rtqtimo(void *rock);
@@ -107,13 +106,16 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 	struct sockaddr_in *sin = (struct sockaddr_in *)rt_key(rt);
 	struct radix_node *ret;
 
+	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	RT_LOCK_ASSERT_HELD(rt);
+
 	/*
 	 * For IP, all unicast non-host routes are automatically cloning.
 	 */
-	if(IN_MULTICAST(ntohl(sin->sin_addr.s_addr)))
+	if (IN_MULTICAST(ntohl(sin->sin_addr.s_addr)))
 		rt->rt_flags |= RTF_MULTICAST;
 
-	if(!(rt->rt_flags & (RTF_HOST | RTF_CLONING | RTF_MULTICAST))) {
+	if (!(rt->rt_flags & (RTF_HOST | RTF_CLONING | RTF_MULTICAST))) {
 		rt->rt_flags |= RTF_PRCLONING;
 	}
 
@@ -160,16 +162,25 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		rt2 = rtalloc1_scoped_locked(rt_key(rt), 0,
 		    RTF_CLONING | RTF_PRCLONING, sa_get_ifscope(rt_key(rt)));
 		if (rt2) {
-			if (rt2->rt_flags & RTF_LLINFO &&
-				rt2->rt_flags & RTF_HOST &&
-				rt2->rt_gateway &&
-				rt2->rt_gateway->sa_family == AF_LINK) {
-				rtrequest_locked(RTM_DELETE,
-					  (struct sockaddr *)rt_key(rt2),
-					  rt2->rt_gateway,
-					  rt_mask(rt2), rt2->rt_flags, 0);
+			RT_LOCK(rt2);
+			if ((rt2->rt_flags & RTF_LLINFO) &&
+			    (rt2->rt_flags & RTF_HOST) &&
+			    rt2->rt_gateway != NULL &&
+			    rt2->rt_gateway->sa_family == AF_LINK) {
+				/*
+				 * Safe to drop rt_lock and use rt_key,
+				 * rt_gateway, since holding rnh_lock here
+				 * prevents another thread from calling
+				 * rt_setgate() on this route.
+				 */
+				RT_UNLOCK(rt2);
+				rtrequest_locked(RTM_DELETE, rt_key(rt2),
+				    rt2->rt_gateway, rt_mask(rt2),
+				    rt2->rt_flags, 0);
 				ret = rn_addroute(v_arg, n_arg, head,
 					treenodes);
+			} else {
+				RT_UNLOCK(rt2);
 			}
 			rtfree_locked(rt2);
 		}
@@ -185,8 +196,10 @@ in_validate(struct radix_node *rn)
 {
 	struct rtentry *rt = (struct rtentry *)rn;
 
+	RT_LOCK_ASSERT_HELD(rt);
+
 	/* This is first reference? */
-	if (rt != NULL && rt->rt_refcnt == 0 && (rt->rt_flags & RTPRF_OURS)) {
+	if (rt->rt_refcnt == 0 && (rt->rt_flags & RTPRF_OURS)) {
 		rt->rt_flags &= ~RTPRF_OURS;
 		rt->rt_rmx.rmx_expire = 0;
 	}
@@ -213,7 +226,12 @@ in_matroute_args(void *v_arg, struct radix_node_head *head,
 {
 	struct radix_node *rn = rn_match_args(v_arg, head, f, w);
 
-	return (in_validate(rn));
+	if (rn != NULL) {
+		RT_LOCK_SPIN((struct rtentry *)rn);
+		in_validate(rn);
+		RT_UNLOCK((struct rtentry *)rn);
+	}
+	return (rn);
 }
 
 static int rtq_reallyold = 60*60;
@@ -251,7 +269,7 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, check_route_selfref, CTLFLAG_RW,
     &check_routeselfref , 0, "");
 #endif
 
-__private_extern__ int use_routegenid = 1;
+int use_routegenid = 1;
 SYSCTL_INT(_net_inet_ip, OID_AUTO, use_route_genid, CTLFLAG_RW, 
     &use_routegenid , 0, "");
 
@@ -263,6 +281,9 @@ static void
 in_clsroute(struct radix_node *rn, __unused struct radix_node_head *head)
 {
 	struct rtentry *rt = (struct rtentry *)rn;
+
+	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	RT_LOCK_ASSERT_HELD(rt);
 
 	if (!(rt->rt_flags & RTF_UP))
 		return;		/* prophylactic measures */
@@ -284,11 +305,18 @@ in_clsroute(struct radix_node *rn, __unused struct radix_node_head *head)
 		 * called when the route's reference count is 0, don't
 		 * deallocate it until we return from this routine by
 		 * telling rtrequest that we're interested in it.
+		 * Safe to drop rt_lock and use rt_key, rt_gateway since
+		 * holding rnh_lock here prevents another thread from
+		 * calling rt_setgate() on this route.
 		 */
+		RT_UNLOCK(rt);
 		if (rtrequest_locked(RTM_DELETE, (struct sockaddr *)rt_key(rt),
 		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, &rt) == 0) {
 			/* Now let the caller free it */
-			rtunref(rt);
+			RT_LOCK(rt);
+			RT_REMREF_LOCKED(rt);
+		} else {
+			RT_LOCK(rt);
 		}
 	} else {
 		struct timeval timenow;
@@ -322,8 +350,9 @@ in_rtqkill(struct radix_node *rn, void *rock)
 	struct timeval timenow;
 
 	getmicrotime(&timenow);
-	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
+	RT_LOCK(rt);
 	if (rt->rt_flags & RTPRF_OURS) {
 		ap->found++;
 
@@ -331,10 +360,18 @@ in_rtqkill(struct radix_node *rn, void *rock)
 			if (rt->rt_refcnt > 0)
 				panic("rtqkill route really not free");
 
-			err = rtrequest_locked(RTM_DELETE,
-					(struct sockaddr *)rt_key(rt),
-					rt->rt_gateway, rt_mask(rt),
-					rt->rt_flags, 0);
+			/*
+			 * Delete this route since we're done with it;
+			 * the route may be freed afterwards, so we
+			 * can no longer refer to 'rt' upon returning
+			 * from rtrequest().  Safe to drop rt_lock and
+			 * use rt_key, rt_gateway since holding rnh_lock
+			 * here prevents another thread from calling
+			 * rt_setgate() on this route.
+			 */
+			RT_UNLOCK(rt);
+			err = rtrequest_locked(RTM_DELETE, rt_key(rt),
+			    rt->rt_gateway, rt_mask(rt), rt->rt_flags, 0);
 			if (err) {
 				log(LOG_WARNING, "in_rtqkill: error %d\n", err);
 			} else {
@@ -349,7 +386,10 @@ in_rtqkill(struct radix_node *rn, void *rock)
 			}
 			ap->nextstop = lmin(ap->nextstop,
 					    rt->rt_rmx.rmx_expire);
+			RT_UNLOCK(rt);
 		}
+	} else {
+		RT_UNLOCK(rt);
 	}
 
 	return 0;
@@ -373,7 +413,7 @@ in_rtqtimo(void *rock)
 	static time_t last_adjusted_timeout = 0;
 	struct timeval timenow;
 
-	lck_mtx_lock(rt_mtx);
+	lck_mtx_lock(rnh_lock);
 	/* Get the timestamp after we acquire the lock for better accuracy */
 	getmicrotime(&timenow);
 
@@ -411,7 +451,7 @@ in_rtqtimo(void *rock)
 
 	atv.tv_usec = 0;
 	atv.tv_sec = arg.nextstop - timenow.tv_sec;
-	lck_mtx_unlock(rt_mtx);
+	lck_mtx_unlock(rnh_lock);
 	timeout(in_rtqtimo_funnel, rock, tvtohz(&atv));
 }
 
@@ -425,9 +465,9 @@ in_rtqdrain(void)
 	arg.nextstop = 0;
 	arg.draining = 1;
 	arg.updating = 0;
-	lck_mtx_lock(rt_mtx);
+	lck_mtx_lock(rnh_lock);
 	rnh->rnh_walktree(rnh, in_rtqkill, &arg);
-	lck_mtx_unlock(rt_mtx);
+	lck_mtx_unlock(rnh_lock);
 }
 
 /*
@@ -481,6 +521,7 @@ in_ifadownkill(struct radix_node *rn, void *xap)
 	struct rtentry *rt = (struct rtentry *)rn;
 	int err;
 
+	RT_LOCK(rt);
 	if (rt->rt_ifa == ap->ifa &&
 	    (ap->del || !(rt->rt_flags & RTF_STATIC))) {
 		/*
@@ -489,14 +530,20 @@ in_ifadownkill(struct radix_node *rn, void *xap)
 		 * away the pointers that rn_walktree() needs in order
 		 * continue our descent.  We will end up deleting all
 		 * the routes that rtrequest() would have in any case,
-		 * so that behavior is not needed there.
+		 * so that behavior is not needed there.  Safe to drop
+		 * rt_lock and use rt_key, rt_gateway, since holding
+		 * rnh_lock here prevents another thread from calling
+		 * rt_setgate() on this route.
 		 */
 		rt->rt_flags &= ~(RTF_CLONING | RTF_PRCLONING);
-		err = rtrequest_locked(RTM_DELETE, (struct sockaddr *)rt_key(rt),
-				rt->rt_gateway, rt_mask(rt), rt->rt_flags, 0);
+		RT_UNLOCK(rt);
+		err = rtrequest_locked(RTM_DELETE, rt_key(rt),
+		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, 0);
 		if (err) {
 			log(LOG_WARNING, "in_ifadownkill: error %d\n", err);
 		}
+	} else {
+		RT_UNLOCK(rt);
 	}
 	return 0;
 }
@@ -507,14 +554,14 @@ in_ifadown(struct ifaddr *ifa, int delete)
 	struct in_ifadown_arg arg;
 	struct radix_node_head *rnh;
 
-	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (ifa->ifa_addr->sa_family != AF_INET)
 		return 1;
 
 	/* trigger route cache reevaluation */
-	if (use_routegenid) 
-		route_generation++;
+	if (use_routegenid)
+		routegenid_update();
 
 	arg.rnh = rnh = rt_tables[AF_INET];
 	arg.ifa = ifa;

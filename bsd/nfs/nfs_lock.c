@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2007 Apple Inc.  All rights reserved.
+ * Copyright (c) 2002-2008 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -124,11 +124,20 @@ struct nfs_lock_pid {
 	(&nfs_lock_pid_hash_tbl[(pid) & nfs_lock_pid_hash])
 static LIST_HEAD(, nfs_lock_pid) *nfs_lock_pid_hash_tbl;
 static TAILQ_HEAD(, nfs_lock_pid) nfs_lock_pid_lru;
-static u_long nfs_lock_pid_hash, nfs_lock_pid_hash_trusted;
+static u_long nfs_lock_pid_hash;
+static uint32_t nfs_lock_pid_hash_trusted;
 
 static lck_grp_t *nfs_lock_lck_grp;
 static lck_mtx_t *nfs_lock_mutex;
 
+void nfs_lockdmsg_enqueue(LOCKD_MSG_REQUEST *);
+void nfs_lockdmsg_dequeue(LOCKD_MSG_REQUEST *);
+int nfs_lockdmsg_compare_to_answer(LOCKD_MSG_REQUEST *, struct lockd_ans *);
+LOCKD_MSG_REQUEST *nfs_lockdmsg_find_by_answer(struct lockd_ans *);
+LOCKD_MSG_REQUEST *nfs_lockdmsg_find_by_xid(uint64_t);
+uint64_t nfs_lockxid_get(void);
+int nfs_lock_pid_check(proc_t, int);
+int nfs_lockd_send_request(LOCKD_MSG *, int);
 
 /*
  * initialize global nfs lock state
@@ -195,7 +204,7 @@ nfs_lockd_mount_change(int i)
  * insert a lock request message into the pending queue
  * (nfs_lock_mutex must be held)
  */
-static inline void
+inline void
 nfs_lockdmsg_enqueue(LOCKD_MSG_REQUEST *msgreq)
 {
 	LOCKD_MSG_REQUEST *mr;
@@ -221,7 +230,7 @@ nfs_lockdmsg_enqueue(LOCKD_MSG_REQUEST *msgreq)
  * remove a lock request message from the pending queue
  * (nfs_lock_mutex must be held)
  */
-static inline void
+inline void
 nfs_lockdmsg_dequeue(LOCKD_MSG_REQUEST *msgreq)
 {
 	TAILQ_REMOVE(&nfs_pendlockq, msgreq, lmr_next);
@@ -239,7 +248,7 @@ nfs_lockdmsg_dequeue(LOCKD_MSG_REQUEST *msgreq)
  *
  * (nfs_lock_mutex must be held)
  */
-static inline LOCKD_MSG_REQUEST *
+inline LOCKD_MSG_REQUEST *
 nfs_lockdmsg_find_by_xid(uint64_t lockxid)
 {
 	LOCKD_MSG_REQUEST *mr;
@@ -265,7 +274,7 @@ nfs_lockdmsg_find_by_xid(uint64_t lockxid)
  *
  * returns 0 on equality and 1 if different
  */
-static inline int
+inline int
 nfs_lockdmsg_compare_to_answer(LOCKD_MSG_REQUEST *msgreq, struct lockd_ans *ansp)
 {
 	if (!(ansp->la_flags & LOCKD_ANS_LOCK_INFO))
@@ -298,7 +307,7 @@ nfs_lockdmsg_compare_to_answer(LOCKD_MSG_REQUEST *msgreq, struct lockd_ans *ansp
  *
  * (nfs_lock_mutex must be held)
  */
-static inline LOCKD_MSG_REQUEST *
+inline LOCKD_MSG_REQUEST *
 nfs_lockdmsg_find_by_answer(struct lockd_ans *ansp)
 {
 	LOCKD_MSG_REQUEST *mr;
@@ -316,7 +325,7 @@ nfs_lockdmsg_find_by_answer(struct lockd_ans *ansp)
  * return the next unique lock request transaction ID
  * (nfs_lock_mutex must be held)
  */
-static inline uint64_t
+inline uint64_t
 nfs_lockxid_get(void)
 {
 	LOCKD_MSG_REQUEST *mr;
@@ -358,7 +367,7 @@ nfs_lockxid_get(void)
  * (Also, if adding, try to clean up some stale entries.)
  * (nfs_lock_mutex must be held)
  */
-static int
+int
 nfs_lock_pid_check(proc_t p, int addflag)
 {
 	struct nfs_lock_pid *lp, *lplru, *lplru_next, *mlp;
@@ -489,8 +498,8 @@ loop:
 
 #define MACH_MAX_TRIES 3
 
-static int
-send_request(LOCKD_MSG *msg, int interruptable)
+int
+nfs_lockd_send_request(LOCKD_MSG *msg, int interruptable)
 {
 	kern_return_t kr;
 	int retries = 0;
@@ -560,7 +569,7 @@ nfs3_vnop_advlock(
 	vnode_t vp;
 	nfsnode_t np;
 	int error, error2;
-	int interruptable;
+	int interruptable, modified;
 	struct flock *fl;
 	struct nfsmount *nmp;
 	struct nfs_vattr nvattr;
@@ -642,28 +651,16 @@ nfs3_vnop_advlock(
 	case SEEK_END:
 		/* need to flush, and refetch attributes to make */
 		/* sure we have the correct end of file offset   */
-		error = nfs_lock(np, NFS_NODE_LOCK_EXCLUSIVE);
-		if (error)
+		if ((error = nfs_node_lock(np)))
 			return (error);
-		NATTRINVALIDATE(np);
-		if (np->n_flag & NMODIFIED) {
-			nfs_unlock(np);
-			error = nfs_vinvalbuf(vp, V_SAVE, ctx, 1);
-			if (error)
-				return (error);
-		} else
-			nfs_unlock(np);
-
-		error = nfs_getattr(np, &nvattr, ctx, 0);
-		nfs_data_lock(np, NFS_NODE_LOCK_SHARED);
-		if (!error)
-			error = nfs_lock(np, NFS_NODE_LOCK_SHARED);
-		if (error) {
-			nfs_data_unlock(np);
+		modified = (np->n_flag & NMODIFIED);
+		nfs_node_unlock(np);
+		if (modified && ((error = nfs_vinvalbuf(vp, V_SAVE, ctx, 1))))
 			return (error);
-		}
+		if ((error = nfs_getattr(np, &nvattr, ctx, NGA_UNCACHED)))
+			return (error);
+		nfs_data_lock(np, NFS_DATA_LOCK_SHARED);
 		start = np->n_size + fl->l_start;
-		nfs_unlock(np);
 		nfs_data_unlock(np);
 		break;
 	default:
@@ -738,9 +735,9 @@ nfs3_vnop_advlock(
 	for (;;) {
 		nfs_lockd_request_sent = 1;
 
-		/* need to drop nfs_lock_mutex while calling send_request() */
+		/* need to drop nfs_lock_mutex while calling nfs_lockd_send_request() */
 		lck_mtx_unlock(nfs_lock_mutex);
-		error = send_request(msg, interruptable);
+		error = nfs_lockd_send_request(msg, interruptable);
 		lck_mtx_lock(nfs_lock_mutex);
 		if (error && error != EAGAIN)
 			break;
@@ -863,6 +860,7 @@ wait_for_granted:
 			/* warn if we're not getting any response */
 			microuptime(&now);
 			if ((msgreq.lmr_errno != EINPROGRESS) &&
+			    !(msg->lm_flags & LOCKD_MSG_DENIED_GRACE) &&
 			    (nmp->nm_tprintf_initial_delay != 0) &&
 			    ((lastmsg + nmp->nm_tprintf_delay) < now.tv_sec)) {
 				lck_mtx_unlock(&nmp->nm_lock);
@@ -895,6 +893,23 @@ wait_for_granted:
 				/* send cancel then resend request */
 				continue;
 			}
+
+			if (msg->lm_flags & LOCKD_MSG_DENIED_GRACE) {
+				/*
+				 * Time to resend a request previously denied due to a grace period.
+				 */
+				msg->lm_flags &= ~LOCKD_MSG_DENIED_GRACE;
+				nfs_lockdmsg_dequeue(&msgreq);
+				msg->lm_xid = nfs_lockxid_get();
+				nfs_lockdmsg_enqueue(&msgreq);
+				msgreq.lmr_saved_errno = 0;
+				msgreq.lmr_errno = 0;
+				msgreq.lmr_answered = 0;
+				timeo = 2;
+				/* resend request */
+				continue;
+			}
+
 			/*
 			 * We timed out, so we will resend the request.
 			 */
@@ -909,6 +924,17 @@ wait_for_granted:
 		nfs_up(VTONMP(vp), vfs_context_thread(ctx), NFSSTA_LOCKTIMEO,
 			wentdown ? "lockd alive again" : NULL);
 		wentdown = 0;
+
+		if (msgreq.lmr_answered && (msg->lm_flags & LOCKD_MSG_DENIED_GRACE)) {
+			/*
+			 * The lock request was denied because the server lockd is
+			 * still in its grace period.  So, we need to try the
+			 * request again in a little bit.
+			 */
+			timeo = 4;
+			msgreq.lmr_answered = 0;
+			goto wait_for_granted;
+		}
 
 		if (msgreq.lmr_errno == EINPROGRESS) {
 			/* got NLM_BLOCKED response */
@@ -1069,6 +1095,8 @@ nfslockdans(proc_t p, struct lockd_ans *ansp)
 			msgreq->lmr_msg.lm_fl.l_type = F_UNLCK;
 		}
 	}
+	if (ansp->la_flags & LOCKD_ANS_DENIED_GRACE)
+		msgreq->lmr_msg.lm_flags |= LOCKD_MSG_DENIED_GRACE;
 
 	msgreq->lmr_answered = 1;
 	lck_mtx_unlock(nfs_lock_mutex);

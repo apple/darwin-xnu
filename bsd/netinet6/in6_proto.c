@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/in6_proto.c,v 1.19 2002/10/16 02:25:05 sam Exp $	*/
 /*	$KAME: in6_proto.c,v 1.91 2001/05/27 13:28:35 itojun Exp $	*/
 
@@ -378,10 +406,10 @@ int	ip6_rr_prune = 5;	/* router renumbering prefix
 				 * walk list every 5 sec.    */
 int	ip6_v6only = 0;		/* Mapped addresses on by default -  Radar 3347718 */
 
-int	ip6_neighborgcthresh = 2048;	/* Threshold # of NDP entries for GC */
+int	ip6_neighborgcthresh = 1024;	/* Threshold # of NDP entries for GC */
 int	ip6_maxifprefixes = 16;		/* Max acceptable prefixes via RA per IF */
 int	ip6_maxifdefrouters = 16;	/* Max acceptable def routers via RA */
-int	ip6_maxdynroutes = 4096;	/* Max # of routes created via redirect */
+int	ip6_maxdynroutes = 1024;	/* Max # of routes created via redirect */
 
 u_int32_t ip6_id = 0UL;
 int	ip6_keepfaith = 0;
@@ -403,13 +431,13 @@ int pmtu_probe = 60*2;
 #define	RIPV6SNDQ	8192
 #define	RIPV6RCVQ	8192
 
-u_long	rip6_sendspace = RIPV6SNDQ;
-u_long	rip6_recvspace = RIPV6RCVQ;
+u_int32_t	rip6_sendspace = RIPV6SNDQ;
+u_int32_t	rip6_recvspace = RIPV6RCVQ;
 
 /* ICMPV6 parameters */
 int	icmp6_rediraccept = 1;		/* accept and process redirects */
 int	icmp6_redirtimeout = 10 * 60;	/* 10 minutes */
-int	icmp6errppslim = 100;		/* 100pps */
+int	icmp6errppslim = 500;		/* 500 packets per second */
 int	icmp6_nodeinfo = 3;		/* enable/disable NI response */
 
 /* UDP on IP6 parameters */
@@ -436,6 +464,7 @@ SYSCTL_NODE(_net_inet6,	IPPROTO_ESP,	ipsec6,	CTLFLAG_RW|CTLFLAG_LOCKED, 0,	"IPSE
 static int
 sysctl_ip6_temppltime SYSCTL_HANDLER_ARGS
 {
+#pragma unused(oidp, arg2)
 	int error = 0;
 	int old;
 
@@ -455,6 +484,7 @@ sysctl_ip6_temppltime SYSCTL_HANDLER_ARGS
 static int
 sysctl_ip6_tempvltime SYSCTL_HANDLER_ARGS
 {
+#pragma unused(oidp, arg2)
 	int error = 0;
 	int old;
 
@@ -499,7 +529,7 @@ SYSCTL_INT(_net_inet6_ip6, IPV6CTL_DEFMCASTHLIM,
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_GIF_HLIM,
 	gifhlim, CTLFLAG_RW,	&ip6_gif_hlim,			0, "");
 SYSCTL_STRING(_net_inet6_ip6, IPV6CTL_KAME_VERSION,
-	kame_version, CTLFLAG_RD,	__KAME_VERSION,		0, "");
+	kame_version, CTLFLAG_RD, (void *)((uintptr_t)(__KAME_VERSION)),		0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_USE_DEPRECATED,
 	use_deprecated, CTLFLAG_RW,	&ip6_use_deprecated,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RR_PRUNE,

@@ -95,6 +95,7 @@ typedef struct vm_shared_region *vm_shared_region_t;
 /* address space shared region descriptor */
 struct vm_shared_region {
 	uint32_t		sr_ref_count;
+	queue_chain_t		sr_q;
 	void			*sr_root_dir;
 	cpu_type_t		sr_cpu_type;
 	boolean_t		sr_64bit;
@@ -106,7 +107,7 @@ struct vm_shared_region {
 	mach_vm_size_t		sr_size;
 	mach_vm_offset_t	sr_pmap_nesting_start;
 	mach_vm_size_t		sr_pmap_nesting_size;
-	queue_chain_t		sr_q;
+	thread_call_t		sr_timer_call;
 };
 
 #else  /* !MACH_KERNEL_PRIVATE */

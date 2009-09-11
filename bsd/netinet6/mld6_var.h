@@ -49,6 +49,6 @@ void	mld6_input(struct mbuf *, int);
 void	mld6_start_listening(struct in6_multi *);
 void	mld6_stop_listening(struct in6_multi *);
 void	mld6_fasttimeo(void);
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
-#endif _NETINET6_MLD6_VAR_H_
+#endif /* _NETINET6_MLD6_VAR_H_ */

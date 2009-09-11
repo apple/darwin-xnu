@@ -69,7 +69,7 @@
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#include <kern/lock.h>
+#include <kern/locks.h>
 #include <kern/exception.h>
 #include <mach/exception_types.h>
 #include <mach/host_special_ports.h>
@@ -77,7 +77,7 @@
 
 
 struct	host {
-	decl_mutex_data(,lock)		/* lock to protect exceptions */
+	decl_lck_mtx_data(,lock)		/* lock to protect exceptions */
 	ipc_port_t special[HOST_MAX_SPECIAL_PORT + 1];
 	struct exception_action exc_actions[EXC_TYPES_COUNT];
 };
@@ -86,8 +86,8 @@ typedef struct host	host_data_t;
 
 extern host_data_t	realhost;
 
-#define host_lock(host)		mutex_lock(&(host)->lock)
-#define host_unlock(host)	mutex_unlock(&(host)->lock)
+#define host_lock(host)		lck_mtx_lock(&(host)->lock)
+#define host_unlock(host)	lck_mtx_unlock(&(host)->lock)
 
 #endif	/* MACH_KERNEL_PRIVATE */
 

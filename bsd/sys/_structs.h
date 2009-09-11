@@ -172,10 +172,95 @@ _STRUCT_UCONTEXT64
 _STRUCT_USER_TIMESPEC
 {
 	user_time_t	tv_sec;		/* seconds */
-	__int64_t	tv_nsec __attribute((aligned(8)));	/* and nanoseconds */
+	user_long_t	tv_nsec;	/* and nanoseconds */
 };
 #endif /* _STRUCT_USER_TIMESPEC */
 #endif /* __need_struct_user_timespec */
+
+#ifdef __need_struct_user64_timespec
+#undef __need_struct_user64_timespec
+#ifndef _STRUCT_USER64_TIMESPEC
+#define _STRUCT_USER64_TIMESPEC	struct user64_timespec
+_STRUCT_USER64_TIMESPEC
+{
+	user64_time_t	tv_sec;		/* seconds */
+	user64_long_t	tv_nsec;	/* and nanoseconds */
+};
+#endif /* _STRUCT_USER64_TIMESPEC */
+#endif /* __need_struct_user64_timespec */
+
+#ifdef __need_struct_user32_timespec
+#undef __need_struct_user32_timespec
+#ifndef _STRUCT_USER32_TIMESPEC
+#define _STRUCT_USER32_TIMESPEC	struct user32_timespec
+_STRUCT_USER32_TIMESPEC
+{
+	user32_time_t	tv_sec;		/* seconds */
+	user32_long_t	tv_nsec;	/* and nanoseconds */
+};
+#endif /* _STRUCT_USER32_TIMESPEC */
+#endif /* __need_struct_user32_timespec */
+
+#ifdef __need_struct_user_timeval
+#undef __need_struct_user_timeval
+#ifndef _STRUCT_USER_TIMEVAL
+#define _STRUCT_USER_TIMEVAL		struct user_timeval
+_STRUCT_USER_TIMEVAL
+{
+	user_time_t		tv_sec;		/* seconds */
+	__int32_t		tv_usec;	/* and microseconds */
+};
+#endif /* _STRUCT_USER_TIMEVAL */
+#endif /* __need_struct_user_timeval */
+
+#ifdef __need_struct_user64_timeval
+#undef __need_struct_user64_timeval
+#ifndef _STRUCT_USER64_TIMEVAL
+#define _STRUCT_USER64_TIMEVAL		struct user64_timeval
+_STRUCT_USER64_TIMEVAL
+{
+	user64_time_t		tv_sec;		/* seconds */
+	__int32_t			tv_usec;	/* and microseconds */
+};
+#endif /* _STRUCT_USER64_TIMEVAL */
+#endif /* __need_struct_user64_timeval */
+
+#ifdef __need_struct_user32_timeval
+#undef __need_struct_user32_timeval
+#ifndef _STRUCT_USER32_TIMEVAL
+#define _STRUCT_USER32_TIMEVAL		struct user32_timeval
+_STRUCT_USER32_TIMEVAL
+{
+	user32_time_t		tv_sec;		/* seconds */
+	__int32_t		tv_usec;	/* and microseconds */
+};
+#endif /* _STRUCT_USER32_TIMEVAL */
+#endif /* __need_struct_user32_timeval */
+
+#ifdef __need_struct_user64_itimerval
+#undef __need_struct_user64_itimerval
+#ifndef _STRUCT_USER64_ITIMERVAL
+#define _STRUCT_USER64_ITIMERVAL		struct user64_itimerval
+_STRUCT_USER64_ITIMERVAL
+{
+	_STRUCT_USER64_TIMEVAL	it_interval;	/* timer interval */
+	_STRUCT_USER64_TIMEVAL	it_value;		/* current value */
+};
+#endif /* _STRUCT_USER64_TIMEVAL */
+#endif /* __need_struct_user64_itimerval */
+
+#ifdef __need_struct_user32_itimerval
+#undef __need_struct_user32_itimerval
+#ifndef _STRUCT_USER32_ITIMERVAL
+#define _STRUCT_USER32_ITIMERVAL		struct user32_itimerval
+_STRUCT_USER32_ITIMERVAL
+{
+	_STRUCT_USER32_TIMEVAL	it_interval;	/* timer interval */
+	_STRUCT_USER32_TIMEVAL	it_value;		/* current value */
+};
+#endif /* _STRUCT_USER32_TIMEVAL */
+#endif /* __need_struct_user32_itimerval */
+
 #endif	/* KERNEL */
 
 #ifdef __need_fd_set
@@ -195,7 +280,7 @@ _STRUCT_USER_TIMESPEC
 #endif /* FD_SETSIZE */
 #define	__DARWIN_NBBY		8				/* bits in a byte */
 #define __DARWIN_NFDBITS	(sizeof(__int32_t) * __DARWIN_NBBY) /* bits per mask */
-#define	__DARWIN_howmany(x, y) (((x) + ((y) - 1)) / (y))	/* # y's == x bits? */
+#define	__DARWIN_howmany(x, y)	((((x) % (y)) == 0) ? ((x) / (y)) : (((x) / (y)) + 1)) /* # y's == x bits? */
 
 __BEGIN_DECLS
 typedef	struct fd_set {
@@ -205,7 +290,7 @@ __END_DECLS
 
 /* This inline avoids argument side-effect issues with FD_ISSET() */
 static __inline int
-__darwin_fd_isset(int _n, struct fd_set *_p)
+__darwin_fd_isset(int _n, const struct fd_set *_p)
 {
 	return (_p->fds_bits[_n/__DARWIN_NFDBITS] & (1<<(_n % __DARWIN_NFDBITS)));
 }

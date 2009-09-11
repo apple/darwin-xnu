@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/in6_src.c,v 1.1.2.2 2001/07/03 11:01:52 ume Exp $	*/
 /*	$KAME: in6_src.c,v 1.37 2001/03/29 05:34:31 itojun Exp $	*/
 
@@ -143,14 +171,25 @@ in6_selectsrc(
 	 * the interface.
 	 */
 	if (pi && pi->ipi6_ifindex) {
+		ifnet_t out_ifp = NULL;
+		ifnet_head_lock_shared();
+		if (pi->ipi6_ifindex > if_index) {
+			ifnet_head_done();
+                        *errorp = EADDRNOTAVAIL;
+			return(0);
+		} else {
+			out_ifp = ifindex2ifnet[pi->ipi6_ifindex];
+		}
+		ifnet_head_done();
+		
 		/* XXX boundary check is assumed to be already done. */
-		ia6 = in6_ifawithscope(ifindex2ifnet[pi->ipi6_ifindex],
-				       dst);
+		ia6 = in6_ifawithscope(out_ifp, dst);
 		if (ia6 == 0) {
 			*errorp = EADDRNOTAVAIL;
 			return(0);
 		}
 		*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
+		ifafree(&ia6->ia_ifa);
 		return src_storage;
 	}
 
@@ -168,19 +207,27 @@ in6_selectsrc(
 		/*
 		 * I'm not sure if boundary check for scope_id is done
 		 * somewhere...
+		 *
+		 * Since sin6_scope_id is unsigned, we only need to check against if_index.
 		 */
-		if (dstsock->sin6_scope_id < 0 ||
-		    if_index < dstsock->sin6_scope_id) {
+		ifnet_t out_ifp = NULL;
+		ifnet_head_lock_shared();
+		if (if_index < dstsock->sin6_scope_id) {
 			*errorp = ENXIO; /* XXX: better error? */
+			ifnet_head_done();
 			return(0);
+		} else {
+			out_ifp = ifindex2ifnet[dstsock->sin6_scope_id];
 		}
-		ia6 = in6_ifawithscope(ifindex2ifnet[dstsock->sin6_scope_id],
-				       dst);
+		ifnet_head_done();
+
+		ia6 = in6_ifawithscope(out_ifp, dst);
 		if (ia6 == 0) {
 			*errorp = EADDRNOTAVAIL;
 			return(0);
 		}
 		*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
+		ifafree(&ia6->ia_ifa);
 		return src_storage;
 	}
 
@@ -207,6 +254,7 @@ in6_selectsrc(
 				return(0);
 			}
 			*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
+			ifafree(&ia6->ia_ifa);
 			return src_storage;
 		}
 	}
@@ -223,16 +271,27 @@ in6_selectsrc(
 		if (opts && opts->ip6po_nexthop) {
 			sin6_next = satosin6(opts->ip6po_nexthop);
 			rt = nd6_lookup(&sin6_next->sin6_addr, 1, NULL, 0);
-			if (rt) {
+			if (rt != NULL) {
+				RT_LOCK_ASSERT_HELD(rt);
 				ia6 = in6_ifawithscope(rt->rt_ifp, dst);
-				if (ia6 == 0)
+				if (ia6 == 0) {
 					ia6 = ifatoia6(rt->rt_ifa);
+					if (ia6 != NULL)
+						ifaref(&ia6->ia_ifa);
+				}
 			}
 			if (ia6 == 0) {
 				*errorp = EADDRNOTAVAIL;
+				if (rt != NULL) {
+					RT_REMREF_LOCKED(rt);
+					RT_UNLOCK(rt);
+				}
 				return(0);
 			}
 			*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
+			ifafree(&ia6->ia_ifa);
+			RT_REMREF_LOCKED(rt);
+			RT_UNLOCK(rt);
 			return src_storage;
 		}
 	}
@@ -242,19 +301,23 @@ in6_selectsrc(
 	 * our src addr is taken from the i/f, else punt.
 	 */
 	if (ro) {
-		lck_mtx_lock(rt_mtx);
-		if (ro->ro_rt &&
+		if (ro->ro_rt != NULL)
+			RT_LOCK(ro->ro_rt);
+		if (ro->ro_rt != NULL &&
 		    (!(ro->ro_rt->rt_flags & RTF_UP) ||
-		     satosin6(&ro->ro_dst)->sin6_family != AF_INET6 || 
+		     satosin6(&ro->ro_dst)->sin6_family != AF_INET6 ||
+		     ro->ro_rt->generation_id != route_generation ||
 		     !IN6_ARE_ADDR_EQUAL(&satosin6(&ro->ro_dst)->sin6_addr,
 					 dst))) {
-			rtfree_locked(ro->ro_rt);
-			ro->ro_rt = (struct rtentry *)0;
+			RT_UNLOCK(ro->ro_rt);
+			rtfree(ro->ro_rt);
+			ro->ro_rt = NULL;
 		}
-		if (ro->ro_rt == (struct rtentry *)0 ||
-		    ro->ro_rt->rt_ifp == 0) {
+		if (ro->ro_rt == NULL || ro->ro_rt->rt_ifp == NULL) {
 			struct sockaddr_in6 *sa6;
 
+			if (ro->ro_rt != NULL)
+				RT_UNLOCK(ro->ro_rt);
 			/* No route yet, so try to acquire one */
 			bzero(&ro->ro_dst, sizeof(struct sockaddr_in6));
 			sa6 = (struct sockaddr_in6 *)&ro->ro_dst;
@@ -265,13 +328,14 @@ in6_selectsrc(
 			sa6->sin6_scope_id = dstsock->sin6_scope_id;
 #endif
 			if (IN6_IS_ADDR_MULTICAST(dst)) {
-				ro->ro_rt = rtalloc1_locked(
-				    &((struct route *)ro)->ro_dst, 0, 0UL);
+				ro->ro_rt = rtalloc1(
+				    &((struct route *)ro)->ro_dst, 0, 0);
 			} else {
-				rtalloc_ign_locked((struct route *)ro, 0UL);
+				rtalloc_ign((struct route *)ro, 0);
 			}
+			if (ro->ro_rt != NULL)
+				RT_LOCK(ro->ro_rt);
 		}
-		lck_mtx_unlock(rt_mtx);
 
 		/*
 		 * in_pcbconnect() checks out IFF_LOOPBACK to skip using
@@ -279,17 +343,15 @@ in6_selectsrc(
 		 * It is necessary to ensure the scope even for lo0
 		 * so doesn't check out IFF_LOOPBACK.
 		 */
-
-		if (ro->ro_rt) {
+		if (ro->ro_rt != NULL) {
+			RT_LOCK_ASSERT_HELD(ro->ro_rt);
 			ia6 = in6_ifawithscope(ro->ro_rt->rt_ifa->ifa_ifp, dst);
 			if (ia6 == 0) {
 				ia6 = ifatoia6(ro->ro_rt->rt_ifa);
 				if (ia6)
 					ifaref(&ia6->ia_ifa);
 			}
-			else {
-				ifaref(&ia6->ia_ifa);
-			}
+			RT_UNLOCK(ro->ro_rt);
 		}
 #if 0
 		/*
@@ -308,6 +370,7 @@ in6_selectsrc(
 			if (ia6 == 0)
 				return(0);
 			*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
+			ifafree(&ia6->ia_ifa);
 			return src_storage;
 		}
 #endif /* 0 */
@@ -336,12 +399,19 @@ in6_selecthlim(
 	struct in6pcb *in6p,
 	struct ifnet *ifp)
 {
-	if (in6p && in6p->in6p_hops >= 0)
+	if (in6p && in6p->in6p_hops >= 0) {
 		return(in6p->in6p_hops);
-	else if (ifp)
-		return(nd_ifinfo[ifp->if_index].chlim);
-	else
-		return(ip6_defhlim);
+	} else {
+		lck_rw_lock_shared(nd_if_rwlock);
+		if (ifp && ifp->if_index < nd_ifinfo_indexlim) {
+			u_int8_t chlim = nd_ifinfo[ifp->if_index].chlim;
+			lck_rw_done(nd_if_rwlock);
+			return (chlim);
+		} else {
+			lck_rw_done(nd_if_rwlock);
+			return(ip6_defhlim);
+		}
+	}
 }
 
 /*
@@ -378,7 +448,7 @@ in6_pcbsetport(
 		last  = ipport_hilastauto;
 		lastport = &pcbinfo->lasthi;
 	} else if (inp->inp_flags & INP_LOWPORT) {
-                if (p && (error = proc_suser(p))) {
+                if ((error = proc_suser(p)) != 0) {
 			if (!locked)
 				lck_rw_done(pcbinfo->mtx);
 			return error;
@@ -513,6 +583,7 @@ in6_embedscope(
 		 * KAME assumption: link id == interface id
 		 */
 
+		ifnet_head_lock_shared();
 		if (in6p && in6p->in6p_outputopts &&
 		    (pi = in6p->in6p_outputopts->ip6po_pktinfo) &&
 		    pi->ipi6_ifindex) {
@@ -524,13 +595,20 @@ in6_embedscope(
 			ifp = in6p->in6p_moptions->im6o_multicast_ifp;
 			in6->s6_addr16[1] = htons(ifp->if_index);
 		} else if (scopeid) {
-			/* boundary check */
-			if (scopeid < 0 || if_index < scopeid)
+			/* 
+			 * Since scopeid is unsigned, we only have to check it
+			 * against if_index
+			 */
+			if (if_index < scopeid) {
+				ifnet_head_done();
 				return ENXIO;  /* XXX EINVAL? */
+
+			}
 			ifp = ifindex2ifnet[scopeid];
 			/*XXX assignment to 16bit from 32bit variable */
 			in6->s6_addr16[1] = htons(scopeid & 0xffff);
 		}
+		ifnet_head_done();
 
 		if (ifpp)
 			*ifpp = ifp;
@@ -572,8 +650,13 @@ in6_recoverscope(
 		 */
 		scopeid = ntohs(sin6->sin6_addr.s6_addr16[1]);
 		if (scopeid) {
-			/* sanity check */
-			if (scopeid < 0 || if_index < scopeid)
+			/* 
+			 * sanity check 
+			 *
+			 * Since scopeid is unsigned, we only have to check it
+			 * against if_index
+			 */
+			if (if_index < scopeid)
 				return ENXIO;
 			if (ifp && ifp->if_index != scopeid)
 				return ENXIO;

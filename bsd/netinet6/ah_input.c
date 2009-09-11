@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/ah_input.c,v 1.1.2.6 2002/04/28 05:40:26 suz Exp $	*/
 /*	$KAME: ah_input.c,v 1.67 2002/01/07 11:39:56 kjc Exp $	*/
 
@@ -209,7 +237,7 @@ ah4_input(struct mbuf *m, int off)
 	if (siz1 < siz) {
 		ipseclog((LOG_NOTICE, "sum length too short in IPv4 AH input "
 		    "(%lu, should be at least %lu): %s\n",
-		    (u_long)siz1, (u_long)siz,
+		    (u_int32_t)siz1, (u_int32_t)siz,
 		    ipsec4_logpacketstr(ip, spi)));
 		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		goto fail;
@@ -217,7 +245,7 @@ ah4_input(struct mbuf *m, int off)
 	if ((ah->ah_len << 2) - sizoff != siz1) {
 		ipseclog((LOG_NOTICE, "sum length mismatch in IPv4 AH input "
 		    "(%d should be %lu): %s\n",
-		    (ah->ah_len << 2) - sizoff, (u_long)siz1,
+		    (ah->ah_len << 2) - sizoff, (u_int32_t)siz1,
 		    ipsec4_logpacketstr(ip, spi)));
 		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		goto fail;
@@ -644,7 +672,7 @@ ah6_input(mp, offp)
 	if (siz1 < siz) {
 		ipseclog((LOG_NOTICE, "sum length too short in IPv6 AH input "
 		    "(%lu, should be at least %lu): %s\n",
-		    (u_long)siz1, (u_long)siz,
+		    (u_int32_t)siz1, (u_int32_t)siz,
 		    ipsec6_logpacketstr(ip6, spi)));
 		IPSEC_STAT_INCREMENT(ipsec6stat.in_inval);
 		goto fail;
@@ -652,7 +680,7 @@ ah6_input(mp, offp)
 	if ((ah->ah_len << 2) - sizoff != siz1) {
 		ipseclog((LOG_NOTICE, "sum length mismatch in IPv6 AH input "
 		    "(%d should be %lu): %s\n",
-		    (ah->ah_len << 2) - sizoff, (u_long)siz1,
+		    (ah->ah_len << 2) - sizoff, (u_int32_t)siz1,
 		    ipsec6_logpacketstr(ip6, spi)));
 		IPSEC_STAT_INCREMENT(ipsec6stat.in_inval);
 		goto fail;

@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)rename.2	8.1 (Berkeley) 6/4/93
 .\"
-.Dd June 4, 1993
+.Dd September 18, 2008
 .Dt RENAME 2
 .Os BSD 4.2
 .Sh NAME
@@ -76,7 +76,7 @@ If the final component of
 is a symbolic link,
 the symbolic link is renamed,
 not the file or directory to which it points.
-.Sh CAVEAT
+.Sh CAVEATS
 The system can deadlock if a loop is present in the file system graph.
 This loop takes the form of an entry in directory
 .Ql Pa a ,
@@ -107,6 +107,12 @@ the underlying filesystem implementation.
 It is recommended that any hard links to directories in an underlying
 filesystem should be replaced by symbolic links by the system administrator
 to avoid the possibility of deadlocks.
+.Pp
+Moving or renaming a file or directory into a directory with inheritable ACLs does not result in ACLs being set on the file or directory. Use
+.Xr acl 3
+in conjunction with
+.Fn rename
+to set ACLs on the file or directory.
 .Sh RETURN VALUES
 A 0 value is returned if the operation succeeds, otherwise
 .Fn rename

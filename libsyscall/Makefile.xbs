@@ -54,7 +54,7 @@ SOBJS+= ${OBJS:.o=.So}
 
 #### mig Rules ########################################################
 .defs.h .defsUser.c .defsServer.c:
-	mig -arch ${MACHINE_ARCH} -cc ${CC} -user ${.PREFIX}User.c -server ${.PREFIX}Server.c -header ${.PREFIX}.h ${.IMPSRC}
+	$(MIG) ${PRIVINC} ${MIGDEFINES} -arch ${MACHINE_ARCH} -cc ${MIGCC} -user ${.PREFIX}User.c -server ${.PREFIX}Server.c -header ${.PREFIX}.h ${.IMPSRC}
 
 gen_mig_defs: ${SRVMIGHDRS} ${MIGHDRS}
 gen_md_mig_defs: ${MD_MIGHDRS}

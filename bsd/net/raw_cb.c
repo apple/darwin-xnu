@@ -81,8 +81,8 @@
 
 struct rawcb_list_head rawcb_list;
 
-static u_long	raw_sendspace = RAWSNDQ;
-static u_long	raw_recvspace = RAWRCVQ;
+static uint32_t	raw_sendspace = RAWSNDQ;
+static uint32_t	raw_recvspace = RAWRCVQ;
 extern lck_mtx_t 	*raw_mtx;	/*### global raw cb mutex for now */
 
 /*
@@ -170,6 +170,8 @@ raw_bind(struct socket *so, struct mbuf *nam)
 		return (EADDRNOTAVAIL);
 	rp = sotorawcb(so);
 	nam = m_copym(nam, 0, M_COPYALL, M_WAITOK);
+	if (nam == NULL)
+		return ENOBUFS;
 	rp->rcb_laddr = mtod(nam, struct sockaddr *);
 	return (0);
 }

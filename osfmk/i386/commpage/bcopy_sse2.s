@@ -44,9 +44,7 @@
 
 // void bcopy(const void *src, void *dst, size_t len);
  
-        .text
-        .align 5, 0x90
-Lbcopy_sse2:				// void bcopy(const void *src, void *dst, size_t len)
+COMMPAGE_FUNCTION_START(bcopy_sse2, 32, 5)
 	pushl	%ebp			// set up a frame for backtraces
 	movl	%esp,%ebp
         pushl   %esi
@@ -472,5 +470,4 @@ LReverseUnalignedLoop:                  // loop over 64-byte chunks
         
         jmp     LReverseShort           // copy remaining 0..63 bytes and done
 
-
-	COMMPAGE_DESCRIPTOR(bcopy_sse2,_COMM_PAGE_BCOPY,kHasSSE2+kCache64,kHasSupplementalSSE3)
+COMMPAGE_DESCRIPTOR(bcopy_sse2,_COMM_PAGE_BCOPY,kHasSSE2+kCache64,kHasSupplementalSSE3)

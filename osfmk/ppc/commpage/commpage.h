@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -83,6 +83,7 @@ extern	char	*commPagePtr64;				// virt address of 64-bit commpage in kernel map
 extern	void	commpage_set_timestamp(uint64_t tbr, uint64_t secs, uint32_t ticks_per_sec);
 
 #define	commpage_disable_timestamp() commpage_set_timestamp( 0, 0, 0 )
+#define commpage_set_memory_pressure( pressure )
 
 extern	int	commpage_time_dcba( void );
 

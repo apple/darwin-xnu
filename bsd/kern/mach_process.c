@@ -82,14 +82,17 @@
 
 #include <sys/mount_internal.h>
 #include <sys/sysproto.h>
+#include <sys/kdebug.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <kern/task.h>
 #include <kern/thread.h>
 
 #include <mach/task.h>			/* for task_resume() */
 #include <kern/sched_prim.h>		/* for thread_exception_return() */
+
+#include <vm/vm_protos.h>		/* cs_allow_invalid() */
 
 /* XXX ken/bsd_kern.c - prototype should be in common header */
 int get_task_userstop(task_t);
@@ -108,7 +111,7 @@ extern thread_t get_firstthread(task_t);
  */
 
 int
-ptrace(struct proc *p, struct ptrace_args *uap, register_t *retval)
+ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 {
 	struct proc *t = current_proc();	/* target process */
 	task_t		task;
@@ -121,12 +124,14 @@ ptrace(struct proc *p, struct ptrace_args *uap, register_t *retval)
 	AUDIT_ARG(cmd, uap->req);
 	AUDIT_ARG(pid, uap->pid);
 	AUDIT_ARG(addr, uap->addr);
-	AUDIT_ARG(value, uap->data);
+	AUDIT_ARG(value32, uap->data);
 
 	if (uap->req == PT_DENY_ATTACH) {
 		proc_lock(p);
 		if (ISSET(p->p_lflag, P_LTRACED)) {
 			proc_unlock(p);
+			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_FRCEXIT) | DBG_FUNC_NONE,
+					      p->p_pid, W_EXITCODE(ENOTSUP, 0), 4, 0, 0);
 			exit1(p, W_EXITCODE(ENOTSUP, 0), retval);
 			/* drop funnel before we return */
 			thread_exception_return();
@@ -140,7 +145,7 @@ ptrace(struct proc *p, struct ptrace_args *uap, register_t *retval)
 
 	if (uap->req == PT_FORCEQUOTA) {
 		if (is_suser()) {
-			OSBitOrAtomic(P_FORCEQUOTA, (UInt32 *)&t->p_flag);
+			OSBitOrAtomic(P_FORCEQUOTA, &t->p_flag);
 			return (0);
 		} else
 			return (EPERM);
@@ -154,7 +159,13 @@ ptrace(struct proc *p, struct ptrace_args *uap, register_t *retval)
 		SET(p->p_lflag, P_LTRACED);
 		/* Non-attached case, our tracer is our parent. */
 		p->p_oppid = p->p_ppid;
+		/* Check whether child and parent are allowed to run modified
+		 * code (they'll have to) */
+		struct proc *pproc=proc_find(p->p_oppid);
 		proc_unlock(p);
+		cs_allow_invalid(p);
+		cs_allow_invalid(pproc);
+		proc_rele(pproc);
 		return(0);
 	}
 	if (uap->req == PT_SIGEXC) {
@@ -201,7 +212,11 @@ ptrace(struct proc *p, struct ptrace_args *uap, register_t *retval)
 				SET(t->p_lflag, P_LSIGEXC);
 	
 			t->p_oppid = t->p_ppid;
+			/* Check whether child and parent are allowed to run modified
+			 * code (they'll have to) */
 			proc_unlock(t);
+			cs_allow_invalid(t);
+			cs_allow_invalid(p);
 			if (t->p_pptr != p)
 				proc_reparentlocked(t, p, 1, 0);
 	
@@ -363,7 +378,7 @@ ptrace(struct proc *p, struct ptrace_args *uap, register_t *retval)
 			error = EINVAL;
 			goto out;
 		}
-		th_act = port_name_to_thread(CAST_DOWN(mach_port_name_t, uap->addr));
+		th_act = port_name_to_thread(CAST_MACH_PORT_TO_NAME(uap->addr));
 		if (th_act == THREAD_NULL)
 			return (ESRCH);
 		ut = (uthread_t)get_bsdthread_info(th_act);

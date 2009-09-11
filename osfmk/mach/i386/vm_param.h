@@ -92,19 +92,23 @@
 
 #define BYTE_SIZE		8		/* byte size in bits */
 
-#define I386_PGBYTES	4096	/* bytes per 80386 page */
-#define I386_PGSHIFT	12		/* number of bits to shift for pages */
+#define I386_PGBYTES		4096		/* bytes per 80386 page */
+#define I386_PGSHIFT		12		/* bitshift for pages */
 
 #define	PAGE_SIZE		I386_PGBYTES
 #define	PAGE_SHIFT		I386_PGSHIFT
 #define	PAGE_MASK		(PAGE_SIZE - 1)
+
+#define I386_LPGBYTES		2*1024*1024	/* bytes per large page */
+#define I386_LPGSHIFT		21		/* bitshift for large pages */
+#define I386_LPGMASK		(I386_LPGBYTES-1)
 
 /*
  *	Convert bytes to pages and convert pages to bytes.
  *	No rounding is used.
  */
 
-#define i386_btop(x)		(((pmap_paddr_t)(x)) >> I386_PGSHIFT)
+#define i386_btop(x)		((ppnum_t)((x) >> I386_PGSHIFT))
 #define machine_btop(x)		i386_btop(x)
 #define i386_ptob(x)		(((pmap_paddr_t)(x)) << I386_PGSHIFT)
 
@@ -152,7 +156,22 @@
 #ifdef	KERNEL_PRIVATE 
 
 /* Kernel-wide values */
-#define VM_MIN_KERNEL_ADDRESS	((vm_offset_t) 0x00001000U)
+
+#define KB		(1024ULL)		
+#define MB		(1024*KB)
+#define GB		(1024*MB)
+
+/*
+ * Maximum physical memory supported.
+ */
+#define	K32_MAXMEM	(32*GB)
+#define	K64_MAXMEM	(96*GB)
+#if defined(__i386__)
+#define KERNEL_MAXMEM	K32_MAXMEM
+#else
+#define KERNEL_MAXMEM	K64_MAXMEM
+#endif
+
 /*
  * XXX
  * The kernel max VM address is limited to 0xFF3FFFFF for now because
@@ -161,8 +180,25 @@
  * We can't let VM allocate memory from there.
  */
 
+#if defined(__i386__)
+
+#define VM_MIN_KERNEL_ADDRESS	((vm_offset_t) 0x00001000U)
+#define VM_MIN_KERNEL_AND_KEXT_ADDRESS VM_MIN_KERNEL_ADDRESS
+
 #define VM_MAX_KERNEL_ADDRESS	((vm_offset_t) 0xFE7FFFFFU)
 #define KERNEL_STACK_SIZE		(I386_PGBYTES*4)
+
+#elif defined(__x86_64__)
+
+#define VM_MIN_KERNEL_ADDRESS	((vm_offset_t) 0xFFFFFF8000000000UL)
+#define VM_MIN_KERNEL_AND_KEXT_ADDRESS (VM_MIN_KERNEL_ADDRESS - 0x80000000ULL)
+
+#define VM_MAX_KERNEL_ADDRESS	((vm_offset_t) 0xFFFFFFFFFFFFEFFFUL)
+#define KERNEL_STACK_SIZE		(I386_PGBYTES*4)
+
+#else
+#error unsupported architecture
+#endif
 
 #define VM_MAP_MIN_ADDRESS	MACH_VM_MIN_ADDRESS
 #define VM_MAP_MAX_ADDRESS	MACH_VM_MAX_ADDRESS
@@ -173,16 +209,31 @@
 #ifdef	MACH_KERNEL_PRIVATE
 
 /* For implementing legacy 32-bit interfaces */
-#define VM32_SUPPORT
+#define VM32_SUPPORT			1
 #define VM32_MIN_ADDRESS		((vm32_offset_t) 0)
 #define VM32_MAX_ADDRESS		((vm32_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
+
+#if defined(__i386__)
 
 #define LINEAR_KERNEL_ADDRESS	((vm_offset_t) 0x00000000)
 
 #define VM_MIN_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0x00000000U)
-#define VM_MAX_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0x1fffffffU)
+#define VM_MAX_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0x1FFFFFFFU)
 
 #define NCOPY_WINDOWS 4
+
+#elif defined(__x86_64__)
+
+#define LINEAR_KERNEL_ADDRESS	((vm_offset_t) 0x00000000)
+
+#define VM_MIN_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0xFFFFFF8000000000UL)
+#define VM_MAX_KERNEL_LOADED_ADDRESS	((vm_offset_t) 0xFFFFFF801FFFFFFFUL)
+
+#define NCOPY_WINDOWS 0
+
+#else
+#error unsupported architecture
+#endif
 
 /*
  *	Conversion between 80386 pages and VM pages

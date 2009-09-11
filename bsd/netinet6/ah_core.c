@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/ah_core.c,v 1.2.2.4 2001/07/03 11:01:49 ume Exp $	*/
 /*	$KAME: ah_core.c,v 1.44 2001/03/12 11:24:39 itojun Exp $	*/
 
@@ -109,16 +137,19 @@ static int ah_hmac_sha1_init(struct ah_algorithm_state *, struct secasvar *);
 static void ah_hmac_sha1_loop(struct ah_algorithm_state *, caddr_t, size_t);
 static void ah_hmac_sha1_result(struct ah_algorithm_state *, caddr_t);
 #if ALLCRYPTO
+static int ah_sumsiz_sha2_256(struct secasvar *);
 static int ah_hmac_sha2_256_mature(struct secasvar *);
 static int ah_hmac_sha2_256_init(struct ah_algorithm_state *,
 	struct secasvar *);
 static void ah_hmac_sha2_256_loop(struct ah_algorithm_state *, caddr_t, size_t);
 static void ah_hmac_sha2_256_result(struct ah_algorithm_state *, caddr_t);
+static int ah_sumsiz_sha2_384(struct secasvar *);
 static int ah_hmac_sha2_384_mature(struct secasvar *);
 static int ah_hmac_sha2_384_init(struct ah_algorithm_state *,
 	struct secasvar *);
 static void ah_hmac_sha2_384_loop(struct ah_algorithm_state *, caddr_t, size_t);
 static void ah_hmac_sha2_384_result(struct ah_algorithm_state *, caddr_t);
+static int ah_sumsiz_sha2_512(struct secasvar *);
 static int ah_hmac_sha2_512_mature(struct secasvar *);
 static int ah_hmac_sha2_512_init(struct ah_algorithm_state *,
 	struct secasvar *);
@@ -155,17 +186,17 @@ ah_algorithm_lookup(idx)
 			ah_none_init, ah_none_loop, ah_none_result, };
 #if ALLCRYPTO
 	static struct ah_algorithm hmac_sha2_256 =
-		{ ah_sumsiz_1216, ah_hmac_sha2_256_mature, 256, 256,
+		{ ah_sumsiz_sha2_256, ah_hmac_sha2_256_mature, 256, 256,
 			"hmac-sha2-256",
 			ah_hmac_sha2_256_init, ah_hmac_sha2_256_loop,
 			ah_hmac_sha2_256_result, };
 	static struct ah_algorithm hmac_sha2_384 =
-		{ ah_sumsiz_1216, ah_hmac_sha2_384_mature, 384, 384,
+		{ ah_sumsiz_sha2_384, ah_hmac_sha2_384_mature, 384, 384,
 			"hmac-sha2-384",
 			ah_hmac_sha2_384_init, ah_hmac_sha2_384_loop,
 			ah_hmac_sha2_384_result, };
 	static struct ah_algorithm hmac_sha2_512 =
-		{ ah_sumsiz_1216, ah_hmac_sha2_512_mature, 512, 512,
+		{ ah_sumsiz_sha2_512, ah_hmac_sha2_512_mature, 512, 512,
 			"hmac-sha2-512",
 			ah_hmac_sha2_512_init, ah_hmac_sha2_512_loop,
 			ah_hmac_sha2_512_result, };
@@ -536,7 +567,7 @@ ah_hmac_md5_init(state, sav)
 		key = &tk[0];
 		keylen = 16;
 	} else {
-		key = _KEYBUF(state->sav->key_auth);
+		key = (u_char *) _KEYBUF(state->sav->key_auth);
 		keylen = _KEYLEN(state->sav->key_auth);
 	}
 
@@ -661,7 +692,7 @@ ah_hmac_sha1_init(state, sav)
 		key = &tk[0];
 		keylen = SHA1_RESULTLEN;
 	} else {
-		key = _KEYBUF(state->sav->key_auth);
+		key = (u_char *) _KEYBUF(state->sav->key_auth);
 		keylen = _KEYLEN(state->sav->key_auth);
 	}
 
@@ -726,6 +757,16 @@ ah_hmac_sha1_result(state, addr)
 
 #if ALLCRYPTO
 static int
+ah_sumsiz_sha2_256(sav)
+	struct secasvar *sav;
+{
+	if (!sav)
+		return -1;
+	// return half the output size (in bytes), as per rfc 4868
+	return 16; // 256/(8*2)
+}
+
+static int
 ah_hmac_sha2_256_mature(sav)
 	struct secasvar *sav;
 {
@@ -786,13 +827,13 @@ ah_hmac_sha2_256_init(state, sav)
 		bzero(tk, sizeof(tk));
 		bzero(ctxt, sizeof(*ctxt));
 		SHA256_Init(ctxt);
-		SHA256_Update(ctxt, _KEYBUF(state->sav->key_auth),
+		SHA256_Update(ctxt, (const u_int8_t *) _KEYBUF(state->sav->key_auth),
 		    _KEYLEN(state->sav->key_auth));
 		SHA256_Final(&tk[0], ctxt);
 		key = &tk[0];
 		keylen = sizeof(tk) < 64 ? sizeof(tk) : 64;
 	} else {
-		key = _KEYBUF(state->sav->key_auth);
+		key = (u_char *) _KEYBUF(state->sav->key_auth);
 		keylen = _KEYLEN(state->sav->key_auth);
 	}
 
@@ -824,7 +865,7 @@ ah_hmac_sha2_256_loop(state, addr, len)
 		panic("ah_hmac_sha2_256_loop: what?");
 
 	ctxt = (SHA256_CTX *)(((u_char *)state->foo) + 128);
-	SHA256_Update(ctxt, (caddr_t)addr, (size_t)len);
+	SHA256_Update(ctxt, (const u_int8_t *)addr, (size_t)len);
 }
 
 static void
@@ -832,7 +873,6 @@ ah_hmac_sha2_256_result(state, addr)
 	struct ah_algorithm_state *state;
 	caddr_t addr;
 {
-	u_char digest[SHA256_DIGEST_LENGTH];
 	u_char *ipad;
 	u_char *opad;
 	SHA256_CTX *ctxt;
@@ -844,17 +884,25 @@ ah_hmac_sha2_256_result(state, addr)
 	opad = (u_char *)(ipad + 64);
 	ctxt = (SHA256_CTX *)(opad + 64);
 
-	SHA256_Final((caddr_t)&digest[0], ctxt);
+	SHA256_Final((u_int8_t *)addr, ctxt);
 
 	bzero(ctxt, sizeof(*ctxt));
 	SHA256_Init(ctxt);
 	SHA256_Update(ctxt, opad, 64);
-	SHA256_Update(ctxt, (caddr_t)&digest[0], sizeof(digest));
-	SHA256_Final((caddr_t)&digest[0], ctxt);
-
-	bcopy(&digest[0], (void *)addr, HMACSIZE);
+	SHA256_Update(ctxt, (const u_int8_t *)addr, SHA256_DIGEST_LENGTH);
+	SHA256_Final((u_int8_t *)addr, ctxt);
 
 	FREE(state->foo, M_TEMP);
+}
+
+static int
+ah_sumsiz_sha2_384(sav)
+	struct secasvar *sav;
+{
+	if (!sav)
+		return -1;
+	// return half the output size (in bytes), as per rfc 4868
+	return 24; // 384/(8*2)
 }
 
 static int
@@ -904,43 +952,43 @@ ah_hmac_sha2_384_init(state, sav)
 		panic("ah_hmac_sha2_384_init: what?");
 
 	state->sav = sav;
-	state->foo = (void *)_MALLOC(64 + 64 + sizeof(SHA384_CTX),
+	state->foo = (void *)_MALLOC(128 + 128 + sizeof(SHA384_CTX),
 	    M_TEMP, M_NOWAIT);
 	if (!state->foo)
 		return ENOBUFS;
-	bzero(state->foo, 64 + 64 + sizeof(SHA384_CTX));
+	bzero(state->foo, 128 + 128 + sizeof(SHA384_CTX));
 
 	ipad = (u_char *)state->foo;
-	opad = (u_char *)(ipad + 64);
-	ctxt = (SHA384_CTX *)(opad + 64);
+	opad = (u_char *)(ipad + 128);
+	ctxt = (SHA384_CTX *)(opad + 128);
 
 	/* compress the key if necessery */
-	if (64 < _KEYLEN(state->sav->key_auth)) {
+	if (128 < _KEYLEN(state->sav->key_auth)) {
 		bzero(tk, sizeof(tk));
 		bzero(ctxt, sizeof(*ctxt));
 		SHA384_Init(ctxt);
-		SHA384_Update(ctxt, _KEYBUF(state->sav->key_auth),
+		SHA384_Update(ctxt, (const u_int8_t *) _KEYBUF(state->sav->key_auth),
 		    _KEYLEN(state->sav->key_auth));
 		SHA384_Final(&tk[0], ctxt);
 		key = &tk[0];
-		keylen = sizeof(tk) < 64 ? sizeof(tk) : 64;
+		keylen = sizeof(tk) < 128 ? sizeof(tk) : 128;
 	} else {
-		key = _KEYBUF(state->sav->key_auth);
+		key = (u_char *) _KEYBUF(state->sav->key_auth);
 		keylen = _KEYLEN(state->sav->key_auth);
 	}
 
-	bzero(ipad, 64);
-	bzero(opad, 64);
+	bzero(ipad, 128);
+	bzero(opad, 128);
 	bcopy(key, ipad, keylen);
 	bcopy(key, opad, keylen);
-	for (i = 0; i < 64; i++) {
+	for (i = 0; i < 128; i++) {
 		ipad[i] ^= 0x36;
 		opad[i] ^= 0x5c;
 	}
 
 	bzero(ctxt, sizeof(*ctxt));
 	SHA384_Init(ctxt);
-	SHA384_Update(ctxt, ipad, 64);
+	SHA384_Update(ctxt, ipad, 128);
 
 	return 0;
 }
@@ -956,8 +1004,8 @@ ah_hmac_sha2_384_loop(state, addr, len)
 	if (!state || !state->foo)
 		panic("ah_hmac_sha2_384_loop: what?");
 
-	ctxt = (SHA384_CTX *)(((u_char *)state->foo) + 128);
-	SHA384_Update(ctxt, (caddr_t)addr, (size_t)len);
+	ctxt = (SHA384_CTX *)(((u_char *)state->foo) + 256);
+	SHA384_Update(ctxt, (const u_int8_t *)addr, (size_t)len);
 }
 
 static void
@@ -965,7 +1013,6 @@ ah_hmac_sha2_384_result(state, addr)
 	struct ah_algorithm_state *state;
 	caddr_t addr;
 {
-	u_char digest[SHA384_DIGEST_LENGTH];
 	u_char *ipad;
 	u_char *opad;
 	SHA384_CTX *ctxt;
@@ -974,20 +1021,28 @@ ah_hmac_sha2_384_result(state, addr)
 		panic("ah_hmac_sha2_384_result: what?");
 
 	ipad = (u_char *)state->foo;
-	opad = (u_char *)(ipad + 64);
-	ctxt = (SHA384_CTX *)(opad + 64);
+	opad = (u_char *)(ipad + 128);
+	ctxt = (SHA384_CTX *)(opad + 128);
 
-	SHA384_Final((caddr_t)&digest[0], ctxt);
+	SHA384_Final((u_int8_t *)addr, ctxt);
 
 	bzero(ctxt, sizeof(*ctxt));
 	SHA384_Init(ctxt);
-	SHA384_Update(ctxt, opad, 64);
-	SHA384_Update(ctxt, (caddr_t)&digest[0], sizeof(digest));
-	SHA384_Final((caddr_t)&digest[0], ctxt);
-
-	bcopy(&digest[0], (void *)addr, HMACSIZE);
+	SHA384_Update(ctxt, opad, 128);
+	SHA384_Update(ctxt, (const u_int8_t *)addr, SHA384_DIGEST_LENGTH);
+	SHA384_Final((u_int8_t *)addr, ctxt);
 
 	FREE(state->foo, M_TEMP);
+}
+
+static int
+ah_sumsiz_sha2_512(sav)
+	struct secasvar *sav;
+{
+	if (!sav)
+		return -1;
+	// return half the output size (in bytes), as per rfc 4868
+	return 32; // 512/(8*2)
 }
 
 static int
@@ -1037,43 +1092,43 @@ ah_hmac_sha2_512_init(state, sav)
 		panic("ah_hmac_sha2_512_init: what?");
 
 	state->sav = sav;
-	state->foo = (void *)_MALLOC(64 + 64 + sizeof(SHA512_CTX),
+	state->foo = (void *)_MALLOC(128 + 128 + sizeof(SHA512_CTX),
 	    M_TEMP, M_NOWAIT);
 	if (!state->foo)
 		return ENOBUFS;
-	bzero(state->foo, 64 + 64 + sizeof(SHA512_CTX));
+	bzero(state->foo, 128 + 128 + sizeof(SHA512_CTX));
 
 	ipad = (u_char *)state->foo;
-	opad = (u_char *)(ipad + 64);
-	ctxt = (SHA512_CTX *)(opad + 64);
+	opad = (u_char *)(ipad + 128);
+	ctxt = (SHA512_CTX *)(opad + 128);
 
 	/* compress the key if necessery */
-	if (64 < _KEYLEN(state->sav->key_auth)) {
+	if (128 < _KEYLEN(state->sav->key_auth)) {
 		bzero(tk, sizeof(tk));
 		bzero(ctxt, sizeof(*ctxt));
 		SHA512_Init(ctxt);
-		SHA512_Update(ctxt, _KEYBUF(state->sav->key_auth),
+		SHA512_Update(ctxt, (const u_int8_t *) _KEYBUF(state->sav->key_auth),
 		    _KEYLEN(state->sav->key_auth));
 		SHA512_Final(&tk[0], ctxt);
 		key = &tk[0];
-		keylen = sizeof(tk) < 64 ? sizeof(tk) : 64;
+		keylen = sizeof(tk) < 128 ? sizeof(tk) : 128;
 	} else {
-		key = _KEYBUF(state->sav->key_auth);
+		key = (u_char *) _KEYBUF(state->sav->key_auth);
 		keylen = _KEYLEN(state->sav->key_auth);
 	}
 
-	bzero(ipad, 64);
-	bzero(opad, 64);
+	bzero(ipad, 128);
+	bzero(opad, 128);
 	bcopy(key, ipad, keylen);
 	bcopy(key, opad, keylen);
-	for (i = 0; i < 64; i++) {
+	for (i = 0; i < 128; i++) {
 		ipad[i] ^= 0x36;
 		opad[i] ^= 0x5c;
 	}
 
 	bzero(ctxt, sizeof(*ctxt));
 	SHA512_Init(ctxt);
-	SHA512_Update(ctxt, ipad, 64);
+	SHA512_Update(ctxt, ipad, 128);
 
 	return 0;
 }
@@ -1089,8 +1144,8 @@ ah_hmac_sha2_512_loop(state, addr, len)
 	if (!state || !state->foo)
 		panic("ah_hmac_sha2_512_loop: what?");
 
-	ctxt = (SHA512_CTX *)(((u_char *)state->foo) + 128);
-	SHA512_Update(ctxt, (caddr_t)addr, (size_t)len);
+	ctxt = (SHA512_CTX *)(((u_char *)state->foo) + 256);
+	SHA512_Update(ctxt, (const u_int8_t *) addr, (size_t)len);
 }
 
 static void
@@ -1098,7 +1153,6 @@ ah_hmac_sha2_512_result(state, addr)
 	struct ah_algorithm_state *state;
 	caddr_t addr;
 {
-	u_char digest[SHA512_DIGEST_LENGTH];
 	u_char *ipad;
 	u_char *opad;
 	SHA512_CTX *ctxt;
@@ -1107,18 +1161,16 @@ ah_hmac_sha2_512_result(state, addr)
 		panic("ah_hmac_sha2_512_result: what?");
 
 	ipad = (u_char *)state->foo;
-	opad = (u_char *)(ipad + 64);
-	ctxt = (SHA512_CTX *)(opad + 64);
+	opad = (u_char *)(ipad + 128);
+	ctxt = (SHA512_CTX *)(opad + 128);
 
-	SHA512_Final((caddr_t)&digest[0], ctxt);
+	SHA512_Final((u_int8_t *)addr, ctxt);
 
 	bzero(ctxt, sizeof(*ctxt));
 	SHA512_Init(ctxt);
-	SHA512_Update(ctxt, opad, 64);
-	SHA512_Update(ctxt, (caddr_t)&digest[0], sizeof(digest));
-	SHA512_Final((caddr_t)&digest[0], ctxt);
-
-	bcopy(&digest[0], (void *)addr, HMACSIZE);
+	SHA512_Update(ctxt, opad, 128);
+	SHA512_Update(ctxt, (const u_int8_t *)addr, SHA512_DIGEST_LENGTH);
+	SHA512_Final((u_int8_t *)addr, ctxt);
 
 	FREE(state->foo, M_TEMP);
 }
@@ -1323,8 +1375,9 @@ again:
 					break;
 				i += l;
 			}
+
 			p = mtod(n, u_char *) + sizeof(struct ip);
-			(algo->update)(&algos, p, hlen - sizeof(struct ip));
+			(algo->update)(&algos, (caddr_t)p, hlen - sizeof(struct ip));
 
 			m_free(n);
 			n = NULL;
@@ -1400,7 +1453,7 @@ again:
 		goto fail;
 	}
 
-	(algo->result)(&algos, &sumbuf[0]);
+	(algo->result)(&algos, (caddr_t) &sumbuf[0]);
 	bcopy(&sumbuf[0], ahdat, (*algo->sumsiz)(sav));
 
 	if (n)
@@ -1627,7 +1680,7 @@ ah6_calccksum(m, ahdat, len, algo, sav)
 		goto fail;
 	}
 
-	(algo->result)(&algos, &sumbuf[0]);
+	(algo->result)(&algos, (caddr_t) &sumbuf[0]);
 	bcopy(&sumbuf[0], ahdat, (*algo->sumsiz)(sav));
 
 	/* just in case */

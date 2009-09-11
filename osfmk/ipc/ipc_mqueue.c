@@ -90,7 +90,9 @@
 #include <ipc/ipc_pset.h>
 #include <ipc/ipc_space.h>
 
-#include <ddb/tr.h>
+#ifdef __LP64__
+#include <vm/vm_map.h>
+#endif
 
 #if CONFIG_MACF_MACH
 #include <security/mac_mach_internal.h>
@@ -98,8 +100,6 @@
 
 int ipc_mqueue_full;		/* address is event for queue space */
 int ipc_mqueue_rcv;		/* address is event for message arrival */
-
-#define TR_ENABLE 0
 
 /* forward declarations */
 void ipc_mqueue_receive_results(wait_result_t result);
@@ -115,7 +115,7 @@ ipc_mqueue_init(
 	boolean_t	is_set)
 {
 	if (is_set) {
-		wait_queue_set_init(&mqueue->imq_set_queue, SYNC_POLICY_FIFO);
+		wait_queue_set_init(&mqueue->imq_set_queue, SYNC_POLICY_FIFO|SYNC_POLICY_PREPOST);
 	} else {
 		wait_queue_init(&mqueue->imq_wait_queue, SYNC_POLICY_FIFO);
 		ipc_kmsg_queue_init(&mqueue->imq_messages);
@@ -245,6 +245,7 @@ ipc_mqueue_add(
 
 		for (;;) {
 			thread_t th;
+			mach_msg_size_t msize;
 
 			th = wait_queue_wakeup64_identity_locked(
 						port_waitq,
@@ -257,6 +258,17 @@ ipc_mqueue_add(
 				goto leave;
 
 			/*
+			 * If the receiver waited with a facility not directly
+			 * related to Mach messaging, then it isn't prepared to get
+			 * handed the message directly.  Just set it running, and
+			 * go look for another thread that can.
+			 */
+			if (th->ith_state != MACH_RCV_IN_PROGRESS) {
+				  thread_unlock(th);
+				  continue;
+			}
+
+			/*
 			 * Found a receiver. see if they can handle the message
 			 * correctly (the message is not too large for them, or
 			 * they didn't care to be informed that the message was
@@ -264,15 +276,16 @@ ipc_mqueue_add(
 			 * the list and let them go back and figure it out and
 			 * just move onto the next.
 			 */
+			msize = ipc_kmsg_copyout_size(kmsg, th->map);
 			if (th->ith_msize <
-			    kmsg->ikm_header->msgh_size +
-			    REQUESTED_TRAILER_SIZE(th->ith_option)) {
+					(msize + REQUESTED_TRAILER_SIZE(th->ith_option))) {
 				th->ith_state = MACH_RCV_TOO_LARGE;
-				th->ith_msize = kmsg->ikm_header->msgh_size;
+				th->ith_msize = msize;
 				if (th->ith_option & MACH_RCV_LARGE) {
 					/*
 					 * let him go without message
 					 */
+					th->ith_receiver_name = port_mqueue->imq_receiver_name;
 					th->ith_kmsg = IKM_NULL;
 					th->ith_seqno = 0;
 					thread_unlock(th);
@@ -344,12 +357,12 @@ ipc_mqueue_changed(
 mach_msg_return_t
 ipc_mqueue_send(
 	ipc_mqueue_t		mqueue,
-	ipc_kmsg_t			kmsg,
+	ipc_kmsg_t		kmsg,
 	mach_msg_option_t	option,
-	mach_msg_timeout_t	send_timeout)
+	mach_msg_timeout_t	send_timeout,
+	spl_t			s)
 {
 	int wresult;
-	spl_t s;
 
 	/*
 	 *  Don't block if:
@@ -357,9 +370,6 @@ ipc_mqueue_send(
 	 *	2) Caller used the MACH_SEND_ALWAYS internal option.
 	 *	3) Message is sent to a send-once right.
 	 */
-	s = splsched();
-	imq_lock(mqueue);
-
 	if (!imq_full(mqueue) ||
 	    (!imq_full_kernel(mqueue) && 
 	     ((option & MACH_SEND_ALWAYS) ||
@@ -420,6 +430,8 @@ ipc_mqueue_send(
 			return MACH_SEND_INTERRUPTED;
 			
 		case THREAD_RESTART:
+			/* mqueue is being destroyed */
+			return MACH_SEND_INVALID_DEST;
 		default:
 			panic("ipc_mqueue_send");
 		}
@@ -477,7 +489,6 @@ ipc_mqueue_post(
 	register ipc_mqueue_t 	mqueue,
 	register ipc_kmsg_t		kmsg)
 {
-
 	spl_t s;
 
 	/*
@@ -491,6 +502,7 @@ ipc_mqueue_post(
 	for (;;) {
 		wait_queue_t waitq = &mqueue->imq_wait_queue;
 		thread_t receiver;
+		mach_msg_size_t msize;
 
 		receiver = wait_queue_wakeup64_identity_locked(
 							waitq,
@@ -507,16 +519,28 @@ ipc_mqueue_post(
 			ipc_kmsg_enqueue_macro(&mqueue->imq_messages, kmsg);
 			break;
 		}
-		
+	
+		/*
+		 * If the receiver waited with a facility not directly
+		 * related to Mach messaging, then it isn't prepared to get
+		 * handed the message directly.  Just set it running, and
+		 * go look for another thread that can.
+		 */
+		if (receiver->ith_state != MACH_RCV_IN_PROGRESS) {
+				  thread_unlock(receiver);
+				  continue;
+		}
+
+	
 		/*
 		 * We found a waiting thread.
 		 * If the message is too large or the scatter list is too small
 		 * the thread we wake up will get that as its status.
 		 */
+		msize =	ipc_kmsg_copyout_size(kmsg, receiver->map);
 		if (receiver->ith_msize <
-		    (kmsg->ikm_header->msgh_size) +
-		    REQUESTED_TRAILER_SIZE(receiver->ith_option)) {
-			receiver->ith_msize = kmsg->ikm_header->msgh_size;
+				(msize + REQUESTED_TRAILER_SIZE(receiver->ith_option))) {
+			receiver->ith_msize = msize;
 			receiver->ith_state = MACH_RCV_TOO_LARGE;
 		} else {
 			receiver->ith_state = MACH_MSG_SUCCESS;
@@ -650,160 +674,20 @@ ipc_mqueue_receive_continue(
 
 void
 ipc_mqueue_receive(
-	ipc_mqueue_t         mqueue,
-	mach_msg_option_t    option,
-	mach_msg_size_t      max_size,
-	mach_msg_timeout_t   rcv_timeout,
-	int                  interruptible)
+	ipc_mqueue_t            mqueue,
+	mach_msg_option_t       option,
+	mach_msg_size_t         max_size,
+	mach_msg_timeout_t      rcv_timeout,
+	int                     interruptible)
 {
-	ipc_kmsg_queue_t        kmsgs;
 	wait_result_t           wresult;
-	thread_t                self;
-	uint64_t				deadline;
-	spl_t                   s;
-#if CONFIG_MACF_MACH
-	ipc_labelh_t lh;
-	task_t task;
-	int rc;
-#endif
-
-	s = splsched();
-	imq_lock(mqueue);
-	self = current_thread();
-	
-	if (imq_is_set(mqueue)) {
-		wait_queue_link_t wql;
-		ipc_mqueue_t port_mq;
-		queue_t q;
-
-		q = &mqueue->imq_setlinks;
-
-		/*
-		 * If we are waiting on a portset mqueue, we need to see if
-		 * any of the member ports have work for us.  If so, try to
-		 * deliver one of those messages. By holding the portset's
-		 * mqueue lock during the search, we tie up any attempts by
-		 * mqueue_deliver or portset membership changes that may
-		 * cross our path. But this is a lock order violation, so we
-		 * have to do it "softly."  If we don't find a message waiting
-		 * for us, we will assert our intention to wait while still
-		 * holding that lock.  When we release the lock, the deliver/
-		 * change will succeed and find us.
-		 */
-	search_set:
-		queue_iterate(q, wql, wait_queue_link_t, wql_setlinks) {
-			port_mq = (ipc_mqueue_t)wql->wql_queue;
-			kmsgs = &port_mq->imq_messages;
-			
-			if (!imq_lock_try(port_mq)) {
-				imq_unlock(mqueue);
-				splx(s);
-				mutex_pause(0);
-				s = splsched();
-				imq_lock(mqueue);
-				goto search_set; /* start again at beginning - SMP */
-			}
-
-			/*
-			 * If there is still a message to be had, we will
-			 * try to select it (may not succeed because of size
-			 * and options).  In any case, we deliver those
-			 * results back to the user.
-			 *
-			 * We also move the port's linkage to the tail of the
-			 * list for this set (fairness). Future versions will
-			 * sort by timestamp or priority.
-			 */
-			if (ipc_kmsg_queue_first(kmsgs) == IKM_NULL) {
-				imq_unlock(port_mq);
-				continue;
-			}
-			queue_remove(q, wql, wait_queue_link_t, wql_setlinks);
-			queue_enter(q, wql, wait_queue_link_t, wql_setlinks);
-			imq_unlock(mqueue);
-
-			ipc_mqueue_select(port_mq, option, max_size);
-			imq_unlock(port_mq);
-#if CONFIG_MACF_MACH
-			if (self->ith_kmsg != NULL &&
-			    self->ith_kmsg->ikm_sender != NULL) {
-				lh = self->ith_kmsg->ikm_sender->label;
-				task = current_task();
-				tasklabel_lock(task);
-				ip_lock(lh->lh_port);
-				rc = mac_port_check_receive(&task->maclabel,
-				    &lh->lh_label);
-				ip_unlock(lh->lh_port);
-				tasklabel_unlock(task);
-				if (rc)
-					self->ith_state = MACH_RCV_INVALID_DATA;
-			}
-#endif
-			splx(s);
-			return;
-			
-		}
-
-	} else {
-
-		/*
-		 * Receive on a single port. Just try to get the messages.
-		 */
-	  	kmsgs = &mqueue->imq_messages;
-		if (ipc_kmsg_queue_first(kmsgs) != IKM_NULL) {
-			ipc_mqueue_select(mqueue, option, max_size);
-			imq_unlock(mqueue);
-#if CONFIG_MACF_MACH
-			if (self->ith_kmsg != NULL &&
-			    self->ith_kmsg->ikm_sender != NULL) {
-				lh = self->ith_kmsg->ikm_sender->label;
-				task = current_task();
-				tasklabel_lock(task);
-				ip_lock(lh->lh_port);
-				rc = mac_port_check_receive(&task->maclabel,
-				    &lh->lh_label);
-				ip_unlock(lh->lh_port);
-				tasklabel_unlock(task);
-				if (rc)
-					self->ith_state = MACH_RCV_INVALID_DATA;
-			}
-#endif
-			splx(s);
-			return;
-		}
-	}
-		
-	/*
-	 * Looks like we'll have to block.  The mqueue we will
-	 * block on (whether the set's or the local port's) is
-	 * still locked.
-	 */
-	if (option & MACH_RCV_TIMEOUT) {
-		if (rcv_timeout == 0) {
-			imq_unlock(mqueue);
-			splx(s);
-			self->ith_state = MACH_RCV_TIMED_OUT;
-			return;
-		}
-	}
-
-	thread_lock(self);
-	self->ith_state = MACH_RCV_IN_PROGRESS;
-	self->ith_option = option;
-	self->ith_msize = max_size;
-
-	if (option & MACH_RCV_TIMEOUT)
-		clock_interval_to_deadline(rcv_timeout, 1000*NSEC_PER_USEC, &deadline);
-	else
-		deadline = 0;
-
-	wresult = wait_queue_assert_wait64_locked(&mqueue->imq_wait_queue,
-												IPC_MQUEUE_RECEIVE,
-												interruptible, deadline,
-												self);
-	thread_unlock(self);
-	imq_unlock(mqueue);
-	splx(s);
+        thread_t                self = current_thread();
+        
+        wresult = ipc_mqueue_receive_on_thread(mqueue, option, max_size,
+                                               rcv_timeout, interruptible,
+                                               self);
+        if (wresult == THREAD_NOT_WAITING)
+                return;
 
 	if (wresult == THREAD_WAITING) {
 		counter((interruptible == THREAD_ABORTSAFE) ? 
@@ -819,33 +703,205 @@ ipc_mqueue_receive(
 	ipc_mqueue_receive_results(wresult);
 }
 
+wait_result_t
+ipc_mqueue_receive_on_thread(
+        ipc_mqueue_t            mqueue,
+	mach_msg_option_t       option,
+	mach_msg_size_t         max_size,
+	mach_msg_timeout_t      rcv_timeout,
+	int                     interruptible,
+	thread_t                thread)
+{
+	ipc_kmsg_queue_t        kmsgs;
+	wait_result_t           wresult;
+	uint64_t		deadline;
+	spl_t                   s;
+#if CONFIG_MACF_MACH
+	ipc_labelh_t lh;
+	task_t task;
+	int rc;
+#endif
+
+	s = splsched();
+	imq_lock(mqueue);
+	
+	if (imq_is_set(mqueue)) {
+		queue_t q;
+
+		q = &mqueue->imq_preposts;
+
+		/*
+		 * If we are waiting on a portset mqueue, we need to see if
+		 * any of the member ports have work for us.  Ports that
+		 * have (or recently had) messages will be linked in the
+		 * prepost queue for the portset. By holding the portset's
+		 * mqueue lock during the search, we tie up any attempts by
+		 * mqueue_deliver or portset membership changes that may
+		 * cross our path.
+		 */
+	search_set:
+		while(!queue_empty(q)) {
+			wait_queue_link_t wql;
+			ipc_mqueue_t port_mq;
+
+			queue_remove_first(q, wql, wait_queue_link_t, wql_preposts);
+			assert(!wql_is_preposted(wql));
+
+			/*
+			 * This is a lock order violation, so we have to do it
+			 * "softly," putting the link back on the prepost list
+			 * if it fails (at the tail is fine since the order of
+			 * handling messages from different sources in a set is
+			 * not guaranteed and we'd like to skip to the next source
+			 * if one is available).
+			 */
+			port_mq = (ipc_mqueue_t)wql->wql_queue;
+			if (!imq_lock_try(port_mq)) {
+				queue_enter(q, wql, wait_queue_link_t, wql_preposts);
+				imq_unlock(mqueue);
+				splx(s);
+				mutex_pause(0);
+				s = splsched();
+				imq_lock(mqueue);
+				goto search_set; /* start again at beginning - SMP */
+			}
+
+			/*
+			 * If there are no messages on this queue, just skip it
+			 * (we already removed the link from the set's prepost queue).
+			 */
+			kmsgs = &port_mq->imq_messages;
+			if (ipc_kmsg_queue_first(kmsgs) == IKM_NULL) {
+				imq_unlock(port_mq);
+				continue;
+			}
+
+			/*
+			 * There are messages, so reinsert the link back
+			 * at the tail of the preposted queue (for fairness)
+			 * while we still have the portset mqueue locked.
+			 */
+			queue_enter(q, wql, wait_queue_link_t, wql_preposts);
+			imq_unlock(mqueue);
+
+			/*
+			 * Continue on to handling the message with just
+			 * the port mqueue locked.
+			 */
+			ipc_mqueue_select_on_thread(port_mq, option, max_size, thread);
+			imq_unlock(port_mq);
+#if CONFIG_MACF_MACH
+			if (thread->task != TASK_NULL &&
+			    thread->ith_kmsg != NULL &&
+			    thread->ith_kmsg->ikm_sender != NULL) {
+				lh = thread->ith_kmsg->ikm_sender->label;
+				tasklabel_lock(thread->task);
+				ip_lock(lh->lh_port);
+				rc = mac_port_check_receive(&thread->task->maclabel,
+                                                            &lh->lh_label);
+				ip_unlock(lh->lh_port);
+				tasklabel_unlock(thread->task);
+				if (rc)
+					thread->ith_state = MACH_RCV_INVALID_DATA;
+			}
+#endif
+			splx(s);
+			return THREAD_NOT_WAITING;
+			
+		}
+
+	} else {
+
+		/*
+		 * Receive on a single port. Just try to get the messages.
+		 */
+	  	kmsgs = &mqueue->imq_messages;
+		if (ipc_kmsg_queue_first(kmsgs) != IKM_NULL) {
+			ipc_mqueue_select_on_thread(mqueue, option, max_size, thread);
+			imq_unlock(mqueue);
+#if CONFIG_MACF_MACH
+			if (thread->task != TASK_NULL &&
+			    thread->ith_kmsg != NULL &&
+			    thread->ith_kmsg->ikm_sender != NULL) {
+				lh = thread->ith_kmsg->ikm_sender->label;
+				tasklabel_lock(thread->task);
+				ip_lock(lh->lh_port);
+				rc = mac_port_check_receive(&thread->task->maclabel,
+                                                            &lh->lh_label);
+				ip_unlock(lh->lh_port);
+				tasklabel_unlock(thread->task);
+				if (rc)
+					thread->ith_state = MACH_RCV_INVALID_DATA;
+			}
+#endif
+			splx(s);
+			return THREAD_NOT_WAITING;
+		}
+	}
+	
+	/*
+	 * Looks like we'll have to block.  The mqueue we will
+	 * block on (whether the set's or the local port's) is
+	 * still locked.
+	 */
+	if (option & MACH_RCV_TIMEOUT) {
+		if (rcv_timeout == 0) {
+			imq_unlock(mqueue);
+			splx(s);
+			thread->ith_state = MACH_RCV_TIMED_OUT;
+			return THREAD_NOT_WAITING;
+		}
+	}
+
+	thread_lock(thread);
+	thread->ith_state = MACH_RCV_IN_PROGRESS;
+	thread->ith_option = option;
+	thread->ith_msize = max_size;
+
+	if (option & MACH_RCV_TIMEOUT)
+		clock_interval_to_deadline(rcv_timeout, 1000*NSEC_PER_USEC, &deadline);
+	else
+		deadline = 0;
+
+	wresult = wait_queue_assert_wait64_locked(&mqueue->imq_wait_queue,
+						  IPC_MQUEUE_RECEIVE,
+						  interruptible, deadline,
+						  thread);
+	/* preposts should be detected above, not here */
+	if (wresult == THREAD_AWAKENED)
+		panic("ipc_mqueue_receive_on_thread: sleep walking");
+
+	thread_unlock(thread);
+	imq_unlock(mqueue);
+	splx(s);
+	return wresult;
+}
+
 
 /*
- *	Routine:	ipc_mqueue_select
+ *	Routine:	ipc_mqueue_select_on_thread
  *	Purpose:
  *		A receiver discovered that there was a message on the queue
  *		before he had to block.  Pick the message off the queue and
- *		"post" it to himself.
+ *		"post" it to thread.
  *	Conditions:
  *		mqueue locked.
+ *              thread not locked.
  *		There is a message.
  *	Returns:
  *		MACH_MSG_SUCCESS	Actually selected a message for ourselves.
  *		MACH_RCV_TOO_LARGE  May or may not have pull it, but it is large
  */
 void
-ipc_mqueue_select(
+ipc_mqueue_select_on_thread(
 	ipc_mqueue_t		mqueue,
 	mach_msg_option_t	option,
-	mach_msg_size_t		max_size)
+	mach_msg_size_t		max_size,
+	thread_t                thread)
 {
-	thread_t self = current_thread();
 	ipc_kmsg_t kmsg;
-	mach_msg_return_t mr;
+	mach_msg_return_t mr = MACH_MSG_SUCCESS;
 	mach_msg_size_t rcv_size;
-
-	mr = MACH_MSG_SUCCESS;
-
 
 	/*
 	 * Do some sanity checking of our ability to receive
@@ -860,26 +916,77 @@ ipc_mqueue_select(
 	 * the queue, instead return the appropriate error
 	 * (and size needed).
 	 */
-	rcv_size = ipc_kmsg_copyout_size(kmsg, self->map);
+	rcv_size = ipc_kmsg_copyout_size(kmsg, thread->map);
 	if (rcv_size + REQUESTED_TRAILER_SIZE(option) > max_size) {
 		mr = MACH_RCV_TOO_LARGE;
 		if (option & MACH_RCV_LARGE) {
-			self->ith_kmsg = IKM_NULL;
-			self->ith_msize = rcv_size;
-			self->ith_seqno = 0;
-			self->ith_state = mr;
+			thread->ith_receiver_name = mqueue->imq_receiver_name;
+			thread->ith_kmsg = IKM_NULL;
+			thread->ith_msize = rcv_size;
+			thread->ith_seqno = 0;
+			thread->ith_state = mr;
 			return;
 		}
 	}
 
 	ipc_kmsg_rmqueue_first_macro(&mqueue->imq_messages, kmsg);
 	ipc_mqueue_release_msgcount(mqueue);
-	self->ith_seqno = mqueue->imq_seqno++;
-	self->ith_kmsg = kmsg;
-	self->ith_state = mr;
+	thread->ith_seqno = mqueue->imq_seqno++;
+	thread->ith_kmsg = kmsg;
+	thread->ith_state = mr;
 
 	current_task()->messages_received++;
 	return;
+}
+
+/*
+ *	Routine:	ipc_mqueue_peek
+ *	Purpose:
+ *		Peek at a message queue to see if it has any messages
+ *		(in it or contained message queues for a set).
+ *
+ *	Conditions:
+ *		Locks may be held by callers, so this routine cannot block.
+ *		Caller holds reference on the message queue.
+ */
+int
+ipc_mqueue_peek(ipc_mqueue_t mq)
+{
+	wait_queue_link_t	wql;
+	queue_t			q;
+	spl_t s;
+
+	if (!imq_is_set(mq))
+		return (ipc_kmsg_queue_first(&mq->imq_messages) != IKM_NULL);
+
+	/*
+	 * Don't block trying to get the lock.
+	 */
+	s = splsched();
+	if (!imq_lock_try(mq)) {
+		splx(s);
+		return -1;
+	}
+
+	/* 
+	 * peek at the contained port message queues, return as soon as
+	 * we spot a message on one of the message queues linked on the
+	 * prepost list.
+	 */
+	q = &mq->imq_preposts;
+	queue_iterate(q, wql, wait_queue_link_t, wql_preposts) {
+		ipc_mqueue_t port_mq = (ipc_mqueue_t)wql->wql_queue;
+		ipc_kmsg_queue_t kmsgs = &port_mq->imq_messages;
+			
+		if (ipc_kmsg_queue_first(kmsgs) != IKM_NULL) {
+			imq_unlock(mq);
+			splx(s);
+			return 1;
+		}
+	}
+	imq_unlock(mq);
+	splx(s);
+	return 0;
 }
 
 /*
@@ -909,7 +1016,7 @@ ipc_mqueue_destroy(
 	wait_queue_wakeup64_all_locked(
 				&mqueue->imq_wait_queue,
 				IPC_MQUEUE_FULL,
-				THREAD_AWAKENED,
+				THREAD_RESTART,
 				FALSE);
 
 	kmqueue = &mqueue->imq_messages;

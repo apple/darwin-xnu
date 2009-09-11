@@ -16,7 +16,7 @@
 .\" 
 .\"     @(#)searchfs.2
 .
-.Dd December 15, 2003
+.Dd October 13, 2008
 .Dt SEARCHFS 2
 .Os Darwin
 .Sh NAME
@@ -26,7 +26,7 @@
 .Fd #include <sys/attr.h>
 .Fd #include <unistd.h>
 .Ft int
-.Fn searchfs "const char * path" "struct fssearchblock * searchBlock" "unsigned long * numMatches" "unsigned long scriptCode" "unsigned long options" "struct searchstate * state"
+.Fn searchfs "const char* path" "struct fssearchblock* searchBlock" "unsigned int* numMatches" "unsigned int scriptCode" "unsigned int options" "struct searchstate* state"
 .
 .Sh DESCRIPTION
 The
@@ -79,7 +79,7 @@ struct fssearchblock {
     struct attrlist *   returnattrs;
     void *              returnbuffer;
     size_t              returnbuffersize;
-    unsigned long       maxmatches;
+    unsigned int        maxmatches;
     struct timeval      timelimit;
     void *              searchparams1;
     size_t              sizeofsearchparams1;
@@ -105,7 +105,11 @@ structure are defined as follows.
 .
 .It returnattrs
 .Fn searchfs 
-can return arbitrary attributes of the file system objects that it finds. 
+can return arbitrary attributes of the file system objects that meet the designated
+search criteria passed in via 
+.Vt searchparams1 
+and 
+.Vt searchparams2.  
 This field must point to an 
 .Vt attrlist 
 structure that specifies the attributes that you want returned. 
@@ -142,7 +146,7 @@ to run.
 .
 If you're implementing a volume format, you should impose your own internal 
 limit on the duration of this call to prevent a malicious user program 
-from monopolising kernel resources.
+from monopolizing kernel resources.
 .Pp
 .
 .It searchparams1
@@ -196,7 +200,7 @@ This is discussed in detail below.
 The 
 .Fa numMatches 
 parameter points to an 
-.Vt unsigned long 
+.Vt unsigned int 
 variable. 
 The initial value of this variable is ignored.
 On return, this variable contains the number of matching file system objects found.
@@ -266,13 +270,15 @@ or both.
 .It SRCHFS_SKIPLINKS
 If this bit is set, 
 .Fn searchfs 
-will only return one reference for a hard linked file, rather that a reference 
+will only return one reference for a hard linked file, rather than a reference 
 for each hard link to the file.
 .Pp
 This option is not recommended for general development.
 Its primary client is the 
 .Xr quotacheck 2 
-utility.
+utility.  Note that not all filesystems that support 
+.Fn searchfs 
+support this option and may return EINVAL if it is requested.
 .Pp
 .
 This option is privileged (the caller's effective UID must be 0) and cannot 
@@ -443,8 +449,9 @@ The format of each of these buffers is determined by the attributes that you're 
 The values are packed in exactly the same way as they would be returned from 
 .Xr getattrlist 2 ,
 including the leading
-.Vt unsigned long 
-length value.
+.Vt u_int32_t
+length value.  Note that the size of these buffers must be bounded by SEARCHFS_MAX_SEARCHPARMS bytes, 
+which is defined in <sys/attr.h>.  
 .Pp
 .
 The attribute values in the first and second search buffers form a lower and upper bound for 
@@ -571,7 +578,9 @@ One of the pointer parameters points to an invalid address.
 The 
 .Fa options 
 parameter contains an invalid flag or sizeofsearchparams1/2 is greater than
-SEARCHFS_MAX_SEARCHPARMS (see attr.h).
+SEARCHFS_MAX_SEARCHPARMS (see attr.h).  Additionally, filesystems that do
+not support SRCHFS_SKIPLINKS may return EINVAL if this search option
+is requested.
 .
 .It Bq Er EAGAIN
 The search terminated with partial results, either because 
@@ -599,9 +608,7 @@ An I/O error occurred while reading from or writing to the file system.
 .Pp
 .
 .Sh CAVEATS
-Not all attributes can be searched for using 
-.Fn searchfs . 
-The list currently includes:
+The list of searchable attributes currently includes:
 .Pp
 .
 .Bl -item -compact
@@ -667,14 +674,14 @@ typedef struct searchstate      searchstate_t;
 .Pp
 .
 struct SearchAttrBuf {
-    unsigned long   length;
+    u_int32_t       length;
     char            finderInfo[32];
 };
 typedef struct SearchAttrBuf SearchAttrBuf;
 .Pp
 .
 struct ResultAttrBuf {
-    unsigned long   length;
+    u_int32_t       length;
     attrreference_t name;
     fsobj_id_t      parObjID;
 };
@@ -697,9 +704,9 @@ static int SearchFSDemo(
     SearchAttrBuf   lower;
     SearchAttrBuf   upper;
     static const unsigned char kAllOnes[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
-    unsigned long   matchCount;
-    unsigned long   matchIndex;
-    unsigned long   options;
+    unsigned int    matchCount;
+    unsigned int    matchIndex;
+    unsigned int    options;
     searchstate_t   state;
     ResultAttrBuf * thisEntry;
     attrlist_t      returnAttrList;

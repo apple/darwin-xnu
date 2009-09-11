@@ -60,7 +60,7 @@ getchar(void)
 #if 0
 	if (c == 0x1b)		/* ESC ? */
 		call_kdp();
-#endif 0
+#endif
 
 	if (c == '\r')
 		c = '\n';

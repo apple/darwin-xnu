@@ -1,3 +1,32 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
+
 /*	$FreeBSD: src/sys/netinet6/udp6_output.c,v 1.1.2.3 2001/08/31 13:49:58 jlemon Exp $	*/
 /*	$KAME: udp6_output.c,v 1.31 2001/05/21 16:39:15 jinmei Exp $	*/
 
@@ -126,7 +155,7 @@ get_socket_id(struct socket * s)
 	if (s == NULL) {
 	    return (0);
 	}
-	val = (u_int16_t)(((u_int32_t)s) / sizeof(struct socket));
+	val = (u_int16_t)(((uintptr_t)s) / sizeof(struct socket));
 	if (val == 0) {
 		val = 0xffff;
 	}
@@ -155,13 +184,8 @@ udp6_output(in6p, m, addr6, control, p)
 	struct sockaddr_in6 tmp;
 	struct	in6_addr storage;
 
-	priv = 0;
-#ifdef __APPLE__
-	if (p && !proc_suser(p))
-#else
-	if (p && !suser(p))
-#endif
-		priv = 1;
+	priv = (proc_suser(p) == 0);
+
 	if (control) {
 		if ((error = ip6_setpktoptions(control, &opt, priv, 0)) != 0)
 			goto release;

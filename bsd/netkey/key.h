@@ -67,7 +67,7 @@ extern struct mbuf *key_sp2msg(struct secpolicy *);
 extern int key_ismyaddr(struct sockaddr *);
 extern int key_spdacquire(struct secpolicy *);
 extern void key_timehandler(void);
-extern u_long key_random(void);
+extern u_int32_t key_random(void);
 extern void key_randomfill(void *, size_t);
 extern void key_freereg(struct socket *);
 extern int key_parse(struct mbuf *, struct socket *);

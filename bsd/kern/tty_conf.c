@@ -100,12 +100,8 @@ struct	linesw linesw[MAXLDISC] =
 	  l_noioctl,	ttyinput,	ttwwakeup,	ttymodem },
 	NODISC(1),		/* 1- defunct */
 	  			/* 2- NTTYDISC */
-#if COMPAT_43_TTY
 	{ ttyopen,	ttylclose,	ttread,		ttwrite,
 	  l_noioctl,	ttyinput,	ttwwakeup,	ttymodem },
-#else
-	NODISC(2),
-#endif
 	NODISC(3),		/* TABLDISC */
 	NODISC(4),		/* SLIPDISC */
 	NODISC(5),		/* PPPDISC */

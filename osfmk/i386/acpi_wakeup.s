@@ -37,57 +37,10 @@
 	.text
 	.align	12	/* Page align for single bcopy_phys() */
 
-#define LJMP(segment, address)			 \
-	.byte	0xea				;\
-	.long	address - EXT(acpi_wake_start)	;\
-	.word	segment
-
 #define	PA(addr)	(addr)
 
-/*
- * acpi_wake_start
- *
- * The code from acpi_wake_start to acpi_wake_end is copied to
- * memory below 1MB.  The firmware waking vector is updated to
- * point at acpi_wake_start in low memory before sleeping.
- */
-
-ENTRY(acpi_wake_start)
-	/*
-	 * CPU woke up from sleep, and is back in real mode.
-	 * Initialize it just enough to get back to protected mode.
-	 */
-	cli
-
-	POSTCODE(ACPI_WAKE_START_ENTRY)
-
-	/* set up DS to match CS */
-	movw	%cs, %ax
-	movw	%ax, %ds
-
-	/*
-	 * Must initialize GDTR before entering protected mode.
-	 * Use a temporary GDT that is 0 based, 4GB limit, code and data.
-	 * Restoring the actual GDT will come later.
-	 */
-	addr16
-	data16
-	lgdt	EXT(acpi_gdtr) - EXT(acpi_wake_start)
-
-	/* set CR0.PE to enter protected mode */
-	mov	%cr0, %eax
-	data16
-	or	$(CR0_PE), %eax
-	mov	%eax, %cr0
-
-	/*
-	 * Make intra-segment jump to flush pipeline and reload CS register.
-	 * If GDT is bogus, it will blow up here.
-	 */
-	data16
-	LJMP(0x8, acpi_wake_prot + ACPI_WAKE_ADDR)
-
-acpi_wake_prot:
+#if CONFIG_SLEEP
+ENTRY(acpi_wake_prot)
 
 	/* protected mode, paging disabled */
 
@@ -102,36 +55,6 @@ acpi_wake_prot:
 	/* jump back to the sleep function in the kernel */
 	movl	PA(saved_eip), %eax
 	jmp	*%eax
-
-/*  Segment Descriptor
- *
- * 31          24         19   16                 7           0
- * ------------------------------------------------------------
- * |             | |B| |A|       | |   |1|0|E|W|A|            |
- * | BASE 31..24 |G|/|0|V| LIMIT |P|DPL|  TYPE   | BASE 23:16 |
- * |             | |D| |L| 19..16| |   |1|1|C|R|A|            |
- * ------------------------------------------------------------
- * |                             |                            |
- * |        BASE 15..0           |       LIMIT 15..0          |
- * |                             |                            |
- * ------------------------------------------------------------
- */
-ENTRY(acpi_gdt)
-	.word	0, 0		/* 0x0  : null */
-	.byte	0, 0, 0, 0
-
-	.word	0xffff, 0x0000	/* 0x8  : code */
-	.byte	0, 0x9e, 0xcf, 0
-
-	.word	0xffff, 0x0000	/* 0x10 : data */
-	.byte	0, 0x92, 0xcf, 0
-
-ENTRY(acpi_gdtr)
-	.word	24		/* limit (8*3 segs) */
-	.long	EXT(acpi_gdt) - EXT(acpi_wake_start) + ACPI_WAKE_ADDR
-
-ENTRY(acpi_wake_end)
-
 
 /*
  * acpi_sleep_cpu(acpi_sleep_callback func, void * refcon)
@@ -223,7 +146,7 @@ wake_prot:
 	movl	%eax, %cr0
 
 	/* switch to kernel code segment */
-	ljmpl	$(KERNEL_CS), $wake_paged
+	ljmpl	$(KERNEL32_CS), $wake_paged
 
 wake_paged:
 
@@ -272,6 +195,29 @@ wake_restore:
         
         .globl EXT(acpi_wake_prot_entry)
 ENTRY(acpi_wake_prot_entry)
+	mov		%cr0, %eax
+	and		$(~CR0_PG), %eax
+	mov		%eax, %cr0
+	mov		$EXT(IdlePDPT), %eax
+	mov		EXT(IdlePTD), %ecx
+	or		$(INTEL_PTE_VALID), %ecx
+	mov 	$0x0, %edx
+	mov		%ecx, (0*8+0)(%eax)
+	mov 	%edx, (0*8+4)(%eax)
+	add		$(PAGE_SIZE), %ecx
+	mov 	%ecx, (1*8+0)(%eax)
+	mov 	%edx, (1*8+4)(%eax)
+	add		$(PAGE_SIZE), %ecx
+	mov 	%ecx, (2*8+0)(%eax)
+	mov 	%edx, (2*8+4)(%eax)
+	add		$(PAGE_SIZE), %ecx
+	mov 	%ecx, (3*8+0)(%eax)
+	mov 	%edx, (3*8+4)(%eax)
+	mov 	%eax, %cr3
+	mov		%cr0, %eax
+	or		$(CR0_PG), %eax
+	mov		%eax, %cr0
+
 	/* protected mode, paging enabled */
 
 	POSTCODE(ACPI_WAKE_PAGED_ENTRY)
@@ -338,13 +284,13 @@ ENTRY(acpi_wake_prot_entry)
         movl   $2, %eax
 
         leave
+
 	ret
+#endif /* CONFIG_SLEEP */
 
-        
-	.data
-        .section __HIB, __data
-	.align	2
-
+.data
+.section __SLEEP, __data
+.align	2
 
 /*
  * CPU registers saved across sleep/wake.

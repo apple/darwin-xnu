@@ -141,7 +141,7 @@ hibernate_vm_lock(void)
     if (getPerProc()->hibernate)
     {
         vm_page_lock_queues();
-        mutex_lock(&vm_page_queue_free_lock);
+        lck_mtx_lock(&vm_page_queue_free_lock);
     }
 }
 
@@ -150,7 +150,7 @@ hibernate_vm_unlock(void)
 {
     if (getPerProc()->hibernate)
     {
-        mutex_unlock(&vm_page_queue_free_lock);
+        lck_mtx_unlock(&vm_page_queue_free_lock);
         vm_page_unlock_queues();
     }
 }

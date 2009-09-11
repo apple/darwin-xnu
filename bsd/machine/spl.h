@@ -30,6 +30,8 @@
 
 #ifdef KERNEL
 #ifndef __ASSEMBLER__
+
+#if !defined(__LP64__) || defined(XNU_KERNEL_PRIVATE)
 /*
  *	Machine-dependent SPL definitions.
  *
@@ -54,6 +56,8 @@ extern void	splon(unsigned int level);
 extern void	splx(unsigned int level);
 extern void	spln(unsigned int level);
 #define splstatclock()	splhigh()
+
+#endif  /* !__LP64__ || XNU_KERNEL_PRIVATE */
 
 #endif /* __ASSEMBLER__ */
 

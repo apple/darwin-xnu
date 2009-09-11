@@ -87,25 +87,6 @@ Entry(ml_load_desc64)
 	ret
 
 
-Entry(ml_64bit_wrmsr64)
-	/* (uint32_t msr, uint64_t value) */
-	/* (uint32_t msr, uint32_t lo, uint32_t hi) */
-
-	FRAME
-
-	ENTER_64BIT_MODE()
-
-	movl	B_ARG0, %ecx
-	movl	B_ARG1, %eax
-	movl	B_ARG2, %edx
-	wrmsr
-
-	ENTER_COMPAT_MODE()
-
-	EMARF
-	ret
-
-
 Entry(ml_64bit_lldt)
 	/* (int32_t selector) */
 
@@ -194,16 +175,11 @@ Entry(get64_cr3)
 
 /* FXSAVE and FXRSTOR operate in a mode dependent fashion, hence these variants.
  * Must be called with interrupts disabled.
- * We clear pending x87 exceptions here; this is technically incorrect, since we
- * should propagate those to the user, but the compatibility mode kernel is
- * currently not prepared to handle exceptions originating in 64-bit kernel mode.
- * However, it may be possible to work around this should it prove necessary.
  */
 
 Entry(fxsave64)
 	movl		S_ARG0,%eax
 	ENTER_64BIT_MODE()
-	fnclex
 	fxsave		0(%eax)
 	ENTER_COMPAT_MODE()
 	ret
@@ -211,7 +187,13 @@ Entry(fxsave64)
 Entry(fxrstor64)
 	movl		S_ARG0,%eax
 	ENTER_64BIT_MODE()
-	fnclex
 	fxrstor		0(%rax)
 	ENTER_COMPAT_MODE()
 	ret
+
+Entry(cpuid64)
+	ENTER_64BIT_MODE()
+	cpuid
+	ENTER_COMPAT_MODE()
+	ret
+

@@ -24,12 +24,11 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 #
-# XXX: CFLAGS   ARM_TODO: added __MBUF_TRANSITION_ for IONetworkingFamily
+# XXX: CFLAGS
 #
 CFLAGS+= -imacros meta_features.h -DKERNEL -DDRIVER_PRIVATE				\
-	-Wall -Wno-four-char-constants -fno-common		\
+	-Wall -fno-common					\
 	-DIOMATCHDEBUG=1 -DIOALLOCDEBUG=1			\
-	-D__MBUF_TRANSITION_					\
 	-imacros meta_features.h $(CFLAGS_INLINE_CONFIG)
 #-DIOKITDEBUG=-1
 
@@ -87,12 +86,14 @@ ${OBJS}: ${OBJSDEPS}
 LDOBJS = $(OBJS)
 
 $(COMPONENT).o: $(LDOBJS)
-	@echo LD $(COMPONENT)
 	$(_v)$(SEG_HACK) __HIB IOHibernateRestoreKernel.o -o _IOHibernateRestoreKernel.o
 	$(_v)mv _IOHibernateRestoreKernel.o IOHibernateRestoreKernel.o
 	$(_v)$(SEG_HACK) __HIB WKdmDecompress.o -o _WKdmDecompress.o
 	$(_v)mv _WKdmDecompress.o WKdmDecompress.o
-	$(_v)$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} 
+	@echo LDFILELIST $(COMPONENT)
+	$(_v)( for obj in ${LDOBJS}; do	\
+		 echo $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$${obj}; \
+	done; ) > $(COMPONENT).o
 
 do_depend: do_all
 	$(_v)${MD} -u Makedep -f -d `ls *.d`

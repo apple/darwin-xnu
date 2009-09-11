@@ -177,7 +177,7 @@ void ModifyBlockStart(FileReference vp, BlockDescPtr blockPtr)
 	
     bp = (struct buf *) blockPtr->blockHeader;
     if (bp == NULL) {
-		panic("ModifyBlockStart: null bp  for blockdescptr %p?!?\n", blockPtr);
+		panic("hfs: ModifyBlockStart: null bp  for blockdescptr %p?!?\n", blockPtr);
 		return;
     }
 
@@ -207,7 +207,7 @@ btree_swap_node(struct buf *bp, __unused void *arg)
      */
     retval = hfs_swap_BTNode (&block, vp, kSwapBTNodeHostToBig, true);
     if (retval)
-    	panic("btree_swap_node: about to write corrupt node!\n");
+    	panic("hfs: btree_swap_node: about to write corrupt node!\n");
 }
 
 
@@ -464,7 +464,7 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 		if (ret) {
 			// XXXdbg - this probably doesn't need to be a panic()
 			panic("hfs: error truncating btree files (sz 0x%llx, trim %lld, ret %ld)\n",
-			      filePtr->fcbEOF, trim, ret);
+			      filePtr->fcbEOF, trim, (long)ret);
 			goto out;
 		}
 	}
@@ -588,7 +588,11 @@ hfs_create_attr_btree(struct hfsmount *hfsmp, u_int32_t nodesize, u_int32_t node
 	BTreeControlBlockPtr btcb = NULL;
 	struct buf *bp = NULL;
 	void * buffer;
+	u_int8_t *bitmap;
 	u_int16_t *index;
+	u_int32_t node_num, num_map_nodes;
+	u_int32_t bytes_per_map_record;
+	u_int32_t temp;
 	u_int16_t  offset;
 	int intrans = 0;
 	int result;
@@ -674,8 +678,34 @@ again:
 		goto exit;
 
 	btcb->totalNodes = VTOF(vp)->ff_size / nodesize;
-	btcb->freeNodes = btcb->totalNodes - 1;
 
+	/*
+	 * Figure out how many map nodes we'll need.
+	 *
+	 * bytes_per_map_record = the number of bytes in the map record of a
+	 * map node.  Since that is the only record in the node, it is the size
+	 * of the node minus the node descriptor at the start, and two record
+	 * offsets at the end of the node.  The "- 2" is to round the size down
+	 * to a multiple of 4 bytes (since sizeof(BTNodeDescriptor) is not a
+	 * multiple of 4).
+	 *
+	 * The value "temp" here is the number of *bits* in the map record of
+	 * the header node.
+	 */
+	bytes_per_map_record = nodesize - sizeof(BTNodeDescriptor) - 2*sizeof(u_int16_t) - 2;
+	temp = 8 * (nodesize - sizeof(BTNodeDescriptor) 
+			- sizeof(BTHeaderRec)
+			- kBTreeHeaderUserBytes
+			- 4 * sizeof(u_int16_t));
+	if (btcb->totalNodes > temp) {
+		num_map_nodes = howmany(btcb->totalNodes - temp, bytes_per_map_record * 8);
+	}
+	else {
+		num_map_nodes = 0;
+	}
+	
+	btcb->freeNodes = btcb->totalNodes - 1 - num_map_nodes;
+	
 	/*
 	 * Initialize the b-tree header on disk
 	 */
@@ -701,6 +731,8 @@ again:
 
 	/* FILL IN THE NODE DESCRIPTOR:  */
 	ndp = (BTNodeDescriptor *)buffer;
+	if (num_map_nodes != 0)
+		ndp->fLink = 1;
 	ndp->kind = kBTHeaderNode;
 	ndp->numRecords = 3;
 	offset = sizeof(BTNodeDescriptor);
@@ -723,8 +755,19 @@ again:
 	offset += kBTreeHeaderUserBytes;
 	index[(nodesize / 2) - 3] = offset;
 
-	/* FILL IN THE MAP RECORD (only one node in use). */
-	*((u_int8_t *)buffer + offset) = 0x80;
+	/* Mark the header node and map nodes in use in the map record.
+	 *
+	 * NOTE: Assumes that the header node's map record has at least
+	 * (num_map_nodes + 1) bits.
+	 */
+	bitmap = (u_int8_t *) buffer + offset;
+	temp = num_map_nodes + 1;	/* +1 for the header node */
+	while (temp >= 8) {
+		*(bitmap++) = 0xFF;
+		temp -= 8;
+	}
+	*bitmap = ~(0xFF >> temp);
+	
 	offset += nodesize - sizeof(BTNodeDescriptor) - sizeof(BTHeaderRec)
 			   - kBTreeHeaderUserBytes - (4 * sizeof(int16_t));
 	index[(nodesize / 2) - 4] = offset;
@@ -737,6 +780,48 @@ again:
 	if (result)
 		goto exit;
 
+	/* Create the map nodes: node numbers 1 .. num_map_nodes */
+	for (node_num=1; node_num <= num_map_nodes; ++node_num) {
+		bp = buf_getblk(vp, node_num, nodesize, 0, 0, BLK_META);
+		if (bp == NULL) {
+			result = EIO;
+			goto exit;
+		}
+		buffer = (void *)buf_dataptr(bp);
+		blkdesc.buffer = buffer;
+		blkdesc.blockHeader = (void *)bp;
+		blkdesc.blockReadFromDisk = 0;
+		blkdesc.isModified = 0;
+	
+		ModifyBlockStart(vp, &blkdesc);
+		
+		bzero(buffer, nodesize);
+		index = (u_int16_t *)buffer;
+	
+		/* Fill in the node descriptor */
+		ndp = (BTNodeDescriptor *)buffer;
+		if (node_num != num_map_nodes)
+			ndp->fLink = node_num + 1;
+		ndp->kind = kBTMapNode;
+		ndp->numRecords = 1;
+		offset = sizeof(BTNodeDescriptor);
+		index[(nodesize / 2) - 1] = offset;
+	
+	
+		/* Fill in the map record's offset */
+		/* Note: We assume that the map record is all zeroes */
+		offset = sizeof(BTNodeDescriptor) + bytes_per_map_record;
+		index[(nodesize / 2) - 2] = offset;
+	
+		if (hfsmp->jnl) {
+			result = btree_journal_modify_block_end(hfsmp, bp);
+		} else {
+			result = VNOP_BWRITE(bp);
+		}
+		if (result)
+			goto exit;
+	}
+	
 	/* Update vp/cp for attribute btree */
 	lck_mtx_lock(&hfsmp->hfs_mutex);
 	hfsmp->hfs_attribute_cp = VTOC(vp);

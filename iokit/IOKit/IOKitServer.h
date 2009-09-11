@@ -81,6 +81,7 @@ enum {
     kIOCatalogRemoveDriversNoMatch,
     kIOCatalogStartMatching,
     kIOCatalogRemoveKernelLinker,
+    kIOCatalogKextdActive,
     kIOCatalogKextdFinishedLaunching
 };
 
@@ -116,10 +117,6 @@ enum {
     kIOCatalogModuleUnload      = 1,
     kIOCatalogModuleTerminate,
     kIOCatalogServiceTerminate
-};
-
-enum {
-    kIOCatalogMatchIdle      = KMOD_IOKIT_END_RANGE_PACKET - 0x10
 };
 
 #endif /* ! _IOKIT_IOKITSERVER_H */

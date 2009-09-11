@@ -35,7 +35,7 @@
 #include <sys/kernel.h>
 #include <sys/tty.h>
 
-#include <dev/ppc/cons.h>
+#include <machine/cons.h>
 #include <sys/conf.h>
 #include <sys/systm.h>
 #include <sys/uio.h>
@@ -50,7 +50,7 @@
 /*
  * 'Global' variables, shared only by this file and conf.c.
  */
-struct tty *km_tty[1] = { &cons };
+struct tty *km_tty[1] = { 0 };
 
 /*
  * this works early on, after initialize_screen() but before autoconf (and thus
@@ -68,7 +68,7 @@ extern int  cngetc(void);		// From osfmk
 extern void cons_cinput(char ch);	// Used by osfmk
 
 static int kmoutput(struct tty *tp);
-static void kmtimeout(struct tty *tp);
+static void kmtimeout(void *tp);
 static void kmstart(struct tty *tp);
 
 extern void KeyboardOpen(void);
@@ -76,14 +76,16 @@ extern void KeyboardOpen(void);
 void
 kminit(void)
 {
-   	 cons.t_dev = makedev(12, 0);
+	km_tty[0] = ttymalloc();
+   	km_tty[0]->t_dev = makedev(12, 0);
 	initialized = 1;
 }
+
 /*
  * cdevsw interface to km driver.
  */
 int 
-kmopen(dev_t dev, int flag, __unused int devtype, struct proc *pp)
+kmopen(dev_t dev, int flag, __unused int devtype, proc_t pp)
 {
 	int unit;
 	struct tty *tp;
@@ -94,7 +96,10 @@ kmopen(dev_t dev, int flag, __unused int devtype, struct proc *pp)
 	if(unit >= 1)
 		return (ENXIO);
 
-	tp = (struct tty *)&cons;
+	tp = km_tty[unit];
+
+	tty_lock(tp);
+
 	tp->t_oproc = kmstart;
 	tp->t_param = NULL;
 	tp->t_dev = dev;
@@ -107,25 +112,34 @@ kmopen(dev_t dev, int flag, __unused int devtype, struct proc *pp)
 		tp->t_ispeed = tp->t_ospeed = TTYDEF_SPEED;
 		termioschars(&tp->t_termios);
 		ttsetwater(tp);
-	} else if ((tp->t_state & TS_XCLUDE) && proc_suser(pp))
-		return EBUSY;
+	} else if ((tp->t_state & TS_XCLUDE) && proc_suser(pp)) {
+		ret = EBUSY;
+		goto out;
+	}
 
 	tp->t_state |= TS_CARR_ON; /* lie and say carrier exists and is on. */
+
 	ret = ((*linesw[tp->t_line].l_open)(dev, tp));
 	{
 		PE_Video video;
 		wp = &tp->t_winsize;
-		/* Magic numbers.  These are CHARWIDTH and CHARHEIGHT
+		/*
+		 * Magic numbers.  These are CHARWIDTH and CHARHEIGHT
 		 * from osfmk/ppc/POWERMAC/video_console.c
 		 */
 		wp->ws_xpixel = 8;
 		wp->ws_ypixel = 16;
+
+		tty_unlock(tp);		/* XXX race window */
 
 		if (flag & O_POPUP)
 			PE_initialize_console(0, kPETextScreen);
 
 		bzero(&video, sizeof(video));
 		PE_current_console(&video);
+
+		tty_lock(tp);
+
 		if( video.v_width != 0 && video.v_height != 0 ) {
 			wp->ws_col = video.v_width / wp->ws_xpixel;
 			wp->ws_row = video.v_height / wp->ws_ypixel;
@@ -134,126 +148,134 @@ kmopen(dev_t dev, int flag, __unused int devtype, struct proc *pp)
 			wp->ws_row = 36;
 		}
 	}
+
+out:
+	tty_unlock(tp);
+
 	return ret;
 }
 
 int 
-kmclose(__unused dev_t dev, __unused int flag, __unused int mode,
-	__unused struct proc *p)
+kmclose(dev_t dev, __unused int flag, __unused int mode, __unused proc_t p)
 {
-	 
-	struct tty *tp;
+	int ret;
+	struct tty *tp = km_tty[minor(dev)];
 
-	tp = &cons;
-	(*linesw[tp->t_line].l_close)(tp,flag);
+	tty_lock(tp);
+	ret = (*linesw[tp->t_line].l_close)(tp,flag);
 	ttyclose(tp);
-	return (0);
+	tty_unlock(tp);
+
+	return (ret);
 }
 
 int 
-kmread(__unused dev_t dev, struct uio *uio, int ioflag)
+kmread(dev_t dev, struct uio *uio, int ioflag)
 {
-	register struct tty *tp;
- 
-	tp = &cons;
-	return ((*linesw[tp->t_line].l_read)(tp, uio, ioflag));
+	int ret;
+	struct tty *tp = km_tty[minor(dev)];
+
+	tty_lock(tp);
+	ret = (*linesw[tp->t_line].l_read)(tp, uio, ioflag);
+	tty_unlock(tp);
+
+	return (ret);
 }
 
 int 
-kmwrite(__unused dev_t dev, struct uio *uio, int ioflag)
+kmwrite(dev_t dev, struct uio *uio, int ioflag)
 {
-	register struct tty *tp;
- 
-	tp = &cons;
-	return ((*linesw[tp->t_line].l_write)(tp, uio, ioflag));
+	int ret;
+	struct tty *tp = km_tty[minor(dev)];
+
+	tty_lock(tp);
+	ret = (*linesw[tp->t_line].l_write)(tp, uio, ioflag);
+	tty_unlock(tp);
+
+	return (ret);
 }
 
 int 
-kmioctl( __unused dev_t dev, u_long cmd, caddr_t data, int flag,
-	struct proc *p)
+kmioctl(dev_t dev, u_long cmd, caddr_t data, int flag, proc_t p)
 {
-	int error;
-	struct tty *tp = &cons;
+	int error = 0;
+	struct tty *tp = km_tty[minor(dev)];
 	struct winsize *wp;
+
+	tty_lock(tp);
 	
 	switch (cmd) {
-		
-
-
 	    case KMIOCSIZE:
 		wp = (struct winsize *)data;
 		*wp = tp->t_winsize;
-		return 0;
+		break;
 		
 	    case TIOCSWINSZ:
 		/* Prevent changing of console size --
 		 * this ensures that login doesn't revert to the
 		 * termcap-defined size
 		 */
-		return EINVAL;
+		error = EINVAL;
+		break;
 
 	    /* Bodge in the CLOCAL flag as the km device is always local */
-	    case TIOCSETA:
-	    case TIOCSETAW:
-	    case TIOCSETAF: {
-		register struct termios *t = (struct termios *)data;
-		t->c_cflag |= CLOCAL;
-		/* No Break */
-	    }
+	    case TIOCSETA_32:
+	    case TIOCSETAW_32:
+	    case TIOCSETAF_32:
+		{
+			struct termios32 *t = (struct termios32 *)data;
+			t->c_cflag |= CLOCAL;
+			/* No Break */
+		}
+		goto fallthrough;
+	    case TIOCSETA_64:
+	    case TIOCSETAW_64:
+	    case TIOCSETAF_64:
+		{
+			struct user_termios *t = (struct user_termios *)data;
+			t->c_cflag |= CLOCAL;
+			/* No Break */
+		}
+fallthrough:
 	    default:		
 		error = (*linesw[tp->t_line].l_ioctl)(tp, cmd, data, flag, p);
 		if (ENOTTY != error)
-			return error;
-		return ttioctl (tp, cmd, data, flag, p);
+			break;
+		error = ttioctl_locked(tp, cmd, data, flag, p);
+		break;
 	}
+
+	tty_unlock(tp);
+
+	return (error);
 }
 
+/*
+ * kmputc
+ *
+ * Output a character to the serial console driver via cnputcusr(),
+ * which is exported by that driver.
+ *
+ * Locks:       Assumes tp in the calling tty driver code is locked on
+ *              entry, remains locked on exit
+ *
+ * Notes:       Called from kmoutput(); giving the locking output
+ *              assumptions here, this routine should be static (and
+ *              inlined, given there is only one call site).
+ */
 int 
 kmputc(__unused dev_t dev, char c)
 {
-
-	if( disableConsoleOutput)
-		return( 0);
-
-	if(!initialized)
-		return( 0);
-
-	if(c == '\n')
-		cnputcusr('\r');
-
-	cnputcusr(c);
-
-	return 0;
-}
-
-int 
-kmgetc(__unused dev_t dev)
-{
-	int c;
-	
-	c= cngetc();
-
-	if (c == '\r') {
-		c = '\n';
+	if(!disableConsoleOutput && initialized) {
+		/* OCRNL */
+		if(c == '\n')
+			cnputcusr('\r');
+		cnputcusr(c);
 	}
-	cnputcusr(c);
-	return c;
+
+	return (0);
 }
 
-#if 0
-int 
-kmgetc_silent(
-	__unused dev_t dev)
-{
-	int c;
-	
-	c= cngetc();
-	if (c == '\r') {
-		c = '\n';
-	}
-	return c;
-}
-#endif /* 0 */
 
 /*
  * Callouts from linesw.
@@ -261,6 +283,11 @@ kmgetc_silent(
  
 #define KM_LOWAT_DELAY	((ns_time_t)1000)
 
+/*
+ * t_oproc for this driver; called from within the line discipline
+ *
+ * Locks:	Assumes tp is locked on entry, remains locked on exit
+ */
 static void 
 kmstart(struct tty *tp)
 {
@@ -277,35 +304,59 @@ out:
 	return;
 }
 
+/*
+ * One-shot output retry timeout from kmoutput(); re-calls kmoutput() at
+ * intervals until the output queue for the tty is empty, at which point
+ * the timeout is not rescheduled by kmoutput()
+ *
+ * This function must take the tty_lock() around the kmoutput() call; it
+ * ignores the return value.
+ */
 static void
-kmtimeout(struct tty *tp)
+kmtimeout(void *arg)
 {
-	boolean_t 	funnel_state;
+	struct tty	*tp = (struct tty *)arg;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-	kmoutput(tp);
-	(void) thread_funnel_set(kernel_flock, funnel_state);
-
-
+	tty_lock(tp);
+	(void)kmoutput(tp);
+	tty_unlock(tp);
 }
+
+/*
+ * kmoutput
+ *
+ * Locks:	Assumes tp is locked on entry, remains locked on exit
+ *
+ * Notes:	Called from kmstart() and kmtimeout(); kmtimeout() is a
+ *		timer initiated by this routine to deal with pending
+ *		output not yet flushed (output is flushed at a maximum
+ *		of sizeof(buf) charatcers at a time before dropping into
+ *		the timeout code).
+ */
 static int 
 kmoutput(struct tty *tp)
 {
-	/*
-	 * FIXME - to be grokked...copied from m68k km.c.
-	 */
-	char 		buf[80];
-	char 		*cp;
-	int 		cc = -1;
+	char 	buf[80];	/* buffer; limits output per call */
+	char 	*cp;
+	int 	cc = -1;
 
+
+	/* While there is data available to be output... */
 	while (tp->t_outq.c_cc > 0) {
 		cc = ndqb(&tp->t_outq, 0);
 		if (cc == 0)
 			break;
+		/*
+		 * attempt to output as many characters as are available,
+		 * up to the available transfer buffer size.
+		 */
 		cc = min(cc, sizeof buf);
+		/* copy the output queue contents to the buffer */
 		(void) q_to_b(&tp->t_outq, (unsigned char *)buf, cc);
-		for (cp = buf; cp < &buf[cc]; cp++)
-		    kmputc(tp->t_dev, *cp & 0x7f);
+		for (cp = buf; cp < &buf[cc]; cp++) {
+			/* output the buffer one charatcer at a time */
+			kmputc(tp->t_dev, *cp & 0x7f);
+		}
 	}
         if (tp->t_outq.c_cc > 0) {
 		timeout((timeout_fcn_t)kmtimeout, tp, hz);
@@ -316,10 +367,26 @@ kmoutput(struct tty *tp)
 	return 0;
 }
 
-void cons_cinput(char ch)
+/*
+ * cons_cinput
+ *
+ * Driver character input from the polled mode serial console driver calls
+ * this routine to input a character from the serial driver into the tty
+ * line discipline specific input processing receiv interrupt routine,
+ * l_rint().
+ *
+ * Locks:       Assumes that the tty_lock() is NOT held on the tp, so a
+ *              serial driver should NOT call this function as a result
+ *              of being called from a function which already holds the
+ *              lock; ECHOE will be handled at the line discipline, if
+ *              output echo processing is going to occur.
+ */
+void
+cons_cinput(char ch)
 {
-	struct tty *tp = &cons;
-	
-	(*linesw[tp->t_line].l_rint) (ch, tp);
-}
+	struct tty *tp = km_tty[0];	/* XXX */
 
+	tty_lock(tp);
+	(*linesw[tp->t_line].l_rint) (ch, tp);
+	tty_unlock(tp);
+}

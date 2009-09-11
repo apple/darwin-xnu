@@ -32,8 +32,6 @@
 #include <IOKit/IOTypes.h>
 #include <IOKit/IOLocks.h>
 
-#define DEPRECATED __attribute__((deprecated))
-
 class IOSyncer : public OSObject
 {
     OSDeclareDefaultStructors(IOSyncer)
@@ -49,17 +47,17 @@ private:
 public:
 
     static IOSyncer * create(bool twoRetains = true)
-	DEPRECATED;
+	APPLE_KEXT_DEPRECATED;
 
     virtual bool init(bool twoRetains)
-	DEPRECATED;
+	APPLE_KEXT_DEPRECATED;
     virtual void reinit()
-	DEPRECATED;
+	APPLE_KEXT_DEPRECATED;
     virtual IOReturn wait(bool autoRelease = true)
-	DEPRECATED;
+	APPLE_KEXT_DEPRECATED;
     virtual void signal(IOReturn res = kIOReturnSuccess,
 					bool autoRelease = true)
-	DEPRECATED;
+	APPLE_KEXT_DEPRECATED;
 };
 
 #endif /* !_IOSYNCER */

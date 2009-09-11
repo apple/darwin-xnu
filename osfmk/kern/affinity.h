@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -25,8 +25,13 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#ifndef	_KERN_CPU_AFFINITY_H_
-#define	_KERN_CPU_AFFINITY_H_
+
+#ifdef	XNU_KERNEL_PRIVATE
+
+#ifndef	_KERN_AFFINITY_H_
+#define	_KERN_AFFINITY_H_
+
+#ifdef	MACH_KERNEL_PRIVATE
 
 #include <kern/queue.h>
 #include <kern/processor.h>
@@ -50,8 +55,6 @@ struct affinity_set {
 };
 
 extern boolean_t	thread_affinity_is_supported(void);
-extern kern_return_t	thread_affinity_set(thread_t thread, uint32_t tag);
-extern uint32_t		thread_affinity_get(thread_t thread);
 extern void		thread_affinity_dup(thread_t parent, thread_t child);
 extern void		thread_affinity_terminate(thread_t thread);
 extern void		task_affinity_create(
@@ -64,4 +67,12 @@ extern kern_return_t	task_affinity_info(
 					task_info_t,
 					mach_msg_type_number_t  *);
 
-#endif	/* _KERN_CPU_AFFINITY_H_ */
+#endif	/* MACH_KERNEL_PRIVATE */
+
+extern kern_return_t	thread_affinity_set(thread_t thread, uint32_t tag);
+extern uint32_t		thread_affinity_get(thread_t thread);
+extern void		thread_affinity_exec(thread_t thread);
+
+#endif	/* _KERN_AFFINITY_H_ */
+
+#endif	/* XNU_KERNEL_PRIVATE */

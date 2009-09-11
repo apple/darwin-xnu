@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -83,9 +83,9 @@ IOReturn AppleNVRAM::read(IOByteCount offset, UInt8 *buffer,
 			  IOByteCount length)
 {
   UInt32 cnt;
-  
-  if ((buffer == 0) || (length <= 0) || (offset < 0) ||
-      (offset + length > kNVRAMImageSize))
+ 
+  // length and offset can't be less than zero (unsigned), so we don't check
+  if ((buffer == 0) || (length == 0) || (offset + length > kNVRAMImageSize))
     return kIOReturnBadArgument;
   
   switch (_nvramType) {
@@ -122,8 +122,8 @@ IOReturn AppleNVRAM::write(IOByteCount offset, UInt8 *buffer,
 {
   UInt32 cnt;
   
-  if ((buffer == 0) || (length <= 0) || (offset < 0) ||
-      (offset + length > kNVRAMImageSize))
+  // length and offset can't be less than zero (unsigned), so we don't check
+  if ((buffer == 0) || (length == 0) || (offset + length > kNVRAMImageSize))
     return kIOReturnBadArgument;
   
   switch (_nvramType) {

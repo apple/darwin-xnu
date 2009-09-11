@@ -43,9 +43,8 @@
 #include <mach/boolean.h>
 #include <mach/memory_object_types.h>
 #include <mach/vm_types.h>
+#include <vm/vm_protos.h>
 #include <vm/vm_pager.h>
-
-vm_pager_t	vnode_pager_setup(struct vnode *, memory_object_t);
 
 /*
  *  Vstructs are the internal (to us) description of a unit of backing store.
@@ -127,30 +126,6 @@ typedef struct vstruct {
 } *vnode_pager_t;
 
 #define	VNODE_PAGER_NULL	((vnode_pager_t) 0)
-
-
-pager_return_t	vnode_pagein(struct vnode *, upl_t,
-			     upl_offset_t, vm_object_offset_t,
-			     upl_size_t, int, int *);
-pager_return_t	vnode_pageout(struct vnode *, upl_t,
-			      upl_offset_t, vm_object_offset_t,
-			      upl_size_t, int, int *);
-
-extern vm_object_offset_t vnode_pager_get_filesize(
-	struct vnode *vp);
-
-extern kern_return_t vnode_pager_get_pathname(
-	struct vnode	*vp,
-	char		*pathname,
-	vm_size_t	*length_p);
-
-extern kern_return_t vnode_pager_get_filename(
-	struct vnode	*vp,
-	const char	**filename);
-
-extern kern_return_t vnode_pager_get_cs_blobs(
-	struct vnode	*vp,
-	void		**blobs);
 
 #endif	/* KERNEL */
 

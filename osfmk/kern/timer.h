@@ -72,9 +72,13 @@ struct timer {
 #if	!STAT_TIME
 	uint64_t	tstamp;
 #endif	/* STAT_TIME */
+#if	defined(__LP64__)
+	uint64_t	all_bits;
+#else
 	uint32_t	low_bits;
 	uint32_t	high_bits;
 	uint32_t	high_bits_check;
+#endif
 };
 
 typedef struct timer	timer_data_t, *timer_t;
@@ -151,6 +155,13 @@ extern void		timer_advance(
  */
 
 /* Read timer value */
+#if	defined(__LP64__)
+static inline uint64_t timer_grab(
+					timer_t		timer)
+{
+	return timer->all_bits;
+}
+#else
 extern uint64_t	timer_grab(
 					timer_t		timer);
 
@@ -159,5 +170,6 @@ extern void		timer_update(
 					timer_t		timer,
 					uint32_t	new_high,
 					uint32_t	new_low);
+#endif	/* defined(__LP64__) */
 
 #endif	/* _KERN_TIMER_H_ */

@@ -44,6 +44,12 @@
 #define	KDP_ERROR 5			/* error code */
 #define KDP_SEEK  6                     /* Seek to specified offset */
 #define KDP_EOF   7                     /* signal end of file */
+
+#if	defined(__LP64__)
+#define KDP_FEATURE_MASK_STRING		"features"
+enum	{KDP_FEATURE_LARGE_CRASHDUMPS = 1};
+extern	uint32_t	kdp_crashdump_feature_mask;
+#endif
 struct	corehdr {
 	short	th_opcode;		/* packet type */
 	union {
@@ -80,7 +86,7 @@ void abort_panic_transfer (void);
 struct corehdr *create_panic_header(unsigned int request, const char *corename, unsigned length, unsigned block);
 
 int 	kdp_send_crashdump_pkt(unsigned int request, char *corename,
-				unsigned int length, void *panic_data);
+				uint64_t length, void *panic_data);
 
 int	kdp_send_crashdump_data(unsigned int request, char *corename,
-				unsigned int length, caddr_t txstart);
+				uint64_t length, caddr_t txstart);

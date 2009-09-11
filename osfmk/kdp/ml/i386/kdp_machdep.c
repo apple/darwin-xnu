@@ -39,6 +39,7 @@
 #include <mach-o/nlist.h>
 #include <IOKit/IOPlatformExpert.h> /* for PE_halt_restart */
 #include <kern/machine.h> /* for halt_all_cpus */
+#include <libkern/OSAtomic.h>
 
 #include <kern/thread.h>
 #include <i386/thread.h>
@@ -72,8 +73,6 @@ machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nf
 
 unsigned
 machine_read64(addr64_t srcaddr, caddr_t dstaddr, uint32_t len);
-
-extern unsigned kdp_vm_read(caddr_t src, caddr_t dst, unsigned len);
 
 static void	kdp_callouts(kdp_event_t event);
 
@@ -279,11 +278,7 @@ kdp_machine_hostinfo(
 
 void
 kdp_panic(
-#if CONFIG_NO_KPRINTF_STRINGS
-    __unused const char		*msg
-#else
     const char		*msg
-#endif
 )
 {
     kprintf("kdp panic: %s\n", msg);    
@@ -292,7 +287,7 @@ kdp_panic(
 
 
 void
-kdp_reboot(void)
+kdp_machine_reboot(void)
 {
 	printf("Attempting system restart...");
 	/* Call the platform specific restart*/
@@ -489,14 +484,17 @@ kdp_call_kdb(
         return(FALSE);
 }
 
-unsigned int
-kdp_ml_get_breakinsn(void)
+void
+kdp_machine_get_breakinsn(
+						  uint8_t *bytes,
+						  uint32_t *size
+)
 {
-  return 0xcc;
+	bytes[0] = 0xcc;
+	*size = 1;
 }
 
 extern pmap_t kdp_pmap;
-extern uint32_t kdp_src_high32;
 
 #define RETURN_OFFSET 4
 int
@@ -543,25 +541,27 @@ machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nfra
 		if (!stackptr || (stackptr == fence)) {
 			break;
 		}
-		/* Stack grows downward */
-		if (stackptr < prevsp) {
-			break;
-		}
+
 		/* Unaligned frame */
 		if (stackptr & 0x0000003) {
 			break;
 		}
+
 		if (stackptr > stacklimit) {
 			break;
 		}
+		
+		if (stackptr <= prevsp) {
+			break;
+		}
 
-		if (kdp_vm_read((caddr_t) (stackptr + RETURN_OFFSET), (caddr_t) tracebuf, sizeof(caddr_t)) != sizeof(caddr_t)) {
+		if (kdp_machine_vm_read((mach_vm_address_t)(stackptr + RETURN_OFFSET), (caddr_t) tracebuf, sizeof(caddr_t)) != sizeof(caddr_t)) {
 			break;
 		}
 		tracebuf++;
 		
 		prevsp = stackptr;
-		if (kdp_vm_read((caddr_t) stackptr, (caddr_t) &stackptr, sizeof(caddr_t)) != sizeof(caddr_t)) {
+		if (kdp_machine_vm_read((mach_vm_address_t)stackptr, (caddr_t) &stackptr, sizeof(caddr_t)) != sizeof(caddr_t)) {
 			*tracebuf++ = 0;
 			break;
 		}
@@ -577,14 +577,7 @@ machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nfra
 unsigned
 machine_read64(addr64_t srcaddr, caddr_t dstaddr, uint32_t len)
 {
-	uint32_t kdp_vm_read_low32;
-	unsigned retval;
-	
-	kdp_src_high32 = srcaddr >> 32;
-	kdp_vm_read_low32 = srcaddr & 0x00000000FFFFFFFFUL;
-	retval = kdp_vm_read((caddr_t)kdp_vm_read_low32, dstaddr, len);
-	kdp_src_high32 = 0;
-	return retval;
+	return (unsigned)kdp_machine_vm_read(srcaddr, dstaddr, len);
 }
 
 int
@@ -607,11 +600,6 @@ machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nf
 		stacklimit = 0xffffffffffffffffULL;
 		kdp_pmap = thread->task->map->pmap;
 	}
-	else {
-		/* DRK: This would need to adapt for a 64-bit kernel, if any */
-		stackptr = STACK_IKS(thread->kernel_stack)->k_ebp;
-		init_rip = STACK_IKS(thread->kernel_stack)->k_eip;
-	}
 
 	*tracebuf++ = init_rip;
 
@@ -627,13 +615,15 @@ machine_trace_thread64(thread_t thread, char *tracepos, char *tracebound, int nf
 		if (!stackptr || (stackptr == fence)){
 			break;
 		}
-		if (stackptr < prevsp) {
-			break;
-		}
+
 		if (stackptr & 0x0000003) {
 			break;
 		}
 		if (stackptr > stacklimit) {
+			break;
+		}
+
+		if (stackptr <= prevsp) {
 			break;
 		}
 
@@ -683,9 +673,7 @@ kdp_register_callout(
 	do {
 		list_head = kdp_callout_list;
 		kcp->callout_next = list_head;
-	} while(!atomic_cmpxchg((uint32_t *) &kdp_callout_list,
-				(uint32_t) list_head,
-				(uint32_t) kcp));
+	} while (!OSCompareAndSwapPtr(list_head, kcp, (void * volatile *)&kdp_callout_list));
 }
 
 /*

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -24,8 +24,8 @@
  * limitations under the License.
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
- */
-/*-
+ *
+ *
  * Copyright (c) 1999 John D. Polstra
  * All rights reserved.
  *
@@ -71,18 +71,12 @@
  */
 
 #ifdef KERNEL
-# define MACH_KERNEL	1
-# include "mach-o/loader.h"
-typedef int _ls_size_t;
-# ifndef _KERN_MACH_HEADER_
-extern void *getsectdatafromheader(struct mach_header *, const char *, const char *, _ls_size_t *);
-extern struct mach_header _mh_execute_header;
-# endif
+# include <mach-o/loader.h>
+# include <libkern/kernel_mach_header.h>
 #else
 # include <mach-o/ldsyms.h>
 # include <mach-o/getsect.h>
 # include <mach-o/loader.h>
-typedef unsigned long  _ls_size_t;
 #endif
 
 
@@ -142,7 +136,7 @@ typedef unsigned long  _ls_size_t;
  *	Preferred interface to linker_set_object_begin(), takes set name unquoted.
  * void **LINKER_SET_OBJECT_LIMIT(_object, _set)
  *	Preferred interface to linker_set_object_begin(), takes set name unquoted.
- * LINKER_SET_OBJECT_FOREACH(_object, (set_member_type **)_pvar, _set)
+ * LINKER_SET_OBJECT_FOREACH(_object, (set_member_type **)_pvar, _cast, _set)
  *	Iterates over the members of _set within _object.  Since the set contains
  *	pointers to its elements, for a set of elements of type etyp, _pvar must
  *	be (etyp **).
@@ -151,30 +145,34 @@ typedef unsigned long  _ls_size_t;
  *
  * void **LINKER_SET_BEGIN(_set)
  * void **LINKER_SET_LIMINT(_set)
- * LINKER_SET_FOREACH((set_member_type **)_pvar, _set)
+ * LINKER_SET_FOREACH((set_member_type **)_pvar, _cast, _set)
  * set_member_type **LINKER_SET_ITEM(_set, _i)
  *	These versions implicitly reference the kernel/application object.
+ * 
+ * Example of _cast: For the _pvar "struct sysctl_oid **oidpp", _cast would be
+ * 	 	     "struct sysctl_oid **"
+ *
  */
 
 #define LINKER_SET_OBJECT_BEGIN(_object, _set)	__linker_set_object_begin(_object, _set)
 #define LINKER_SET_OBJECT_LIMIT(_object, _set)	__linker_set_object_limit(_object, _set)
 
-#define LINKER_SET_OBJECT_FOREACH(_object, _pvar, _set)			\
-	for ((void **)_pvar = LINKER_SET_OBJECT_BEGIN(_object, _set);		\
-     	     (void **)_pvar < LINKER_SET_OBJECT_LIMIT(_object, _set);	\
-	     ((void **)_pvar)++)
+#define LINKER_SET_OBJECT_FOREACH(_object, _pvar, _cast, _set)		\
+	for (_pvar = (_cast) LINKER_SET_OBJECT_BEGIN(_object, _set);	\
+     	     _pvar < (_cast) LINKER_SET_OBJECT_LIMIT(_object, _set);	\
+	     _pvar++)
 
 #define LINKER_SET_OBJECT_ITEM(_object, _set, _i)			\
 	((LINKER_SET_OBJECT_BEGIN(_object, _set))[_i])
 
 #define LINKER_SET_BEGIN(_set)						\
-		LINKER_SET_OBJECT_BEGIN((struct mach_header *)&_mh_execute_header, _set)
+		LINKER_SET_OBJECT_BEGIN((kernel_mach_header_t *)&_mh_execute_header, _set)
 #define LINKER_SET_LIMIT(_set)						\
-		LINKER_SET_OBJECT_LIMIT((struct mach_header *)&_mh_execute_header, _set)
-#define LINKER_SET_FOREACH(_pvar, _set)					\
-	LINKER_SET_OBJECT_FOREACH((struct mach_header *)&_mh_execute_header, _pvar, _set)
+		LINKER_SET_OBJECT_LIMIT((kernel_mach_header_t *)&_mh_execute_header, _set)
+#define LINKER_SET_FOREACH(_pvar, _cast, _set)					\
+	LINKER_SET_OBJECT_FOREACH((kernel_mach_header_t *)&_mh_execute_header, _pvar, _cast, _set)
 #define LINKER_SET_ITEM(_set, _i)					\
-      	LINKER_SET_OBJECT_ITEM((struct mach_header *)&_mh_execute_header, _set, _i)
+      	LINKER_SET_OBJECT_ITEM((kernel_mach_header_t *)&_mh_execute_header, _set, _i)
 
 /*
  * Implementation.
@@ -186,29 +184,30 @@ typedef unsigned long  _ls_size_t;
  */
 
 static __inline void **
-__linker_set_object_begin(struct mach_header *_header, const char *_set)
+__linker_set_object_begin(kernel_mach_header_t *_header, const char *_set)
      __attribute__((__const__));
 static __inline void **
-__linker_set_object_begin(struct mach_header *_header, const char *_set)
+__linker_set_object_begin(kernel_mach_header_t *_header, const char *_set)
 {
 	void *_set_begin;
-	_ls_size_t _size;
+	unsigned long _size;
 
 	_set_begin = getsectdatafromheader(_header, "__DATA", _set, &_size);
-	return((void **)_set_begin);
+	return( (void **) _set_begin );
 }
 
 static __inline void **
-__linker_set_object_limit(struct mach_header *_header, const char *_set)
+__linker_set_object_limit(kernel_mach_header_t *_header, const char *_set)
      __attribute__((__const__));
 static __inline void **
-__linker_set_object_limit(struct mach_header *_header, const char *_set)
+__linker_set_object_limit(kernel_mach_header_t *_header, const char *_set)
 {
 	void *_set_begin;
-	_ls_size_t _size;
+	unsigned long _size;
 
 	_set_begin = getsectdatafromheader(_header, "__DATA", _set, &_size);
-	return((void **)((uintptr_t)_set_begin + _size));
+	
+	return ((void **) ((uintptr_t) _set_begin + _size));
 }
 
 #endif /* !KERNEL || __APPLE_API_PRIVATE */

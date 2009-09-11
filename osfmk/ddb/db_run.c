@@ -239,8 +239,8 @@ db_restart_at_pc(
 
 	    ins = db_get_task_value(pc, sizeof(int), FALSE, task);
 	    db_inst_count++;
-	    db_load_count += db_inst_load(ins);
-	    db_store_count += db_inst_store(ins);
+	    db_load_count += db_inst_load((unsigned long)ins);
+	    db_store_count += db_inst_store((unsigned long)ins);
 #ifdef	SOFTWARE_SSTEP
 	    /* Account for instructions in delay slots */
 	    brpc = next_instr_address(pc,1,task);
@@ -428,7 +428,7 @@ db_single_step_cmd(__unused db_expr_t addr, __unused boolean_t have_addr,
 	    print = TRUE;
 
 	db_run_mode = STEP_ONCE;
-	db_loop_count = count;
+	db_loop_count = (typeof(db_loop_count))count;
 	db_sstep_print = print;
 	db_inst_count = 0;
 	db_last_inst_count = 0;

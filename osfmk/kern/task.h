@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -116,22 +116,25 @@
 
 struct task {
 	/* Synchronization/destruction information */
-	decl_mutex_data(,lock)		/* Task's lock */
+	decl_lck_mtx_data(,lock)		/* Task's lock */
 	uint32_t	ref_count;	/* Number of references to me */
 	boolean_t	active;		/* Task has not been terminated */
+	boolean_t	halting;	/* Task is being halted */
 
 	/* Miscellaneous */
 	vm_map_t	map;		/* Address space description */
 	queue_chain_t	tasks;	/* global list of tasks */
 	void		*user_data;	/* Arbitrary data settable via IPC */
-	int		suspend_count;	/* Internal scheduling only */
 
 	/* Threads in this task */
 	queue_head_t		threads;
+
+	processor_set_t		pset_hint;
+	struct affinity_space	*affinity_space;
+
 	int			thread_count;
 	uint32_t		active_thread_count;
-	processor_set_t			pset_hint;
-	struct affinity_space	*affinity_space;
+	int			suspend_count;	/* Internal scheduling only */
 
 	/* User-visible scheduling information */
 	integer_t		user_stop_count;	/* outstanding stops */
@@ -153,7 +156,7 @@ struct task {
 	uint32_t		vtimers;
 
 	/* IPC structures */
-	decl_mutex_data(,itk_lock_data)
+	decl_lck_mtx_data(,itk_lock_data)
 	struct ipc_port *itk_self;	/* not a right, doesn't hold ref */
 	struct ipc_port *itk_nself;	/* not a right, doesn't hold ref */
 	struct ipc_port *itk_sself;	/* a send right */
@@ -164,7 +167,6 @@ struct task {
 	struct ipc_port *itk_seatbelt;	/* a send right */
 	struct ipc_port *itk_gssd;	/* yet another send right */
 	struct ipc_port *itk_task_access; /* and another send right */ 
-	struct ipc_port *itk_automountd;/* a send right */
 	struct ipc_port *itk_registered[TASK_PORT_REGISTER_MAX];
 					/* all send rights */
 
@@ -208,15 +210,22 @@ struct task {
 #define task_clear_64BitAddr(task)	\
 	 ((task)->taskFeatures[0] &= ~tf64BitAddr)
 
+	mach_vm_address_t	all_image_info_addr; /* dyld __all_image_info     */
+	mach_vm_size_t		all_image_info_size; /* section location and size */
 #if CONFIG_MACF_MACH
 	ipc_labelh_t label;
 #endif
 
+#if CONFIG_COUNTERS
+#define TASK_PMC_FLAG 0x1	/* Bit in "t_chud" signifying PMC interest */
+	uint32_t t_chud;		/* CHUD flags, used for Shark */
+#endif
+
 };
 
-#define task_lock(task)		mutex_lock(&(task)->lock)
-#define task_lock_try(task)	mutex_try(&(task)->lock)
-#define task_unlock(task)	mutex_unlock(&(task)->lock)
+#define task_lock(task)		lck_mtx_lock(&(task)->lock)
+#define task_lock_try(task)	lck_mtx_try_lock(&(task)->lock)
+#define task_unlock(task)	lck_mtx_unlock(&(task)->lock)
 
 #if CONFIG_MACF_MACH
 #define maclabel label->lh_label
@@ -228,9 +237,10 @@ extern void tasklabel_lock2(task_t a, task_t b);
 extern void tasklabel_unlock2(task_t a, task_t b);
 #endif /* MAC_MACH */
 
-#define	itk_lock_init(task)	mutex_init(&(task)->itk_lock_data, 0)
-#define	itk_lock(task)		mutex_lock(&(task)->itk_lock_data)
-#define	itk_unlock(task)	mutex_unlock(&(task)->itk_lock_data)
+#define	itk_lock_init(task)	lck_mtx_init(&(task)->itk_lock_data, &ipc_lck_grp, &ipc_lck_attr)
+#define	itk_lock_destroy(task)	lck_mtx_destroy(&(task)->itk_lock_data, &ipc_lck_grp)
+#define	itk_lock(task)		lck_mtx_lock(&(task)->itk_lock_data)
+#define	itk_unlock(task)	lck_mtx_unlock(&(task)->itk_lock_data)
 
 #define task_reference_internal(task)		\
 			(void)hw_atomic_add(&(task)->ref_count, 1)
@@ -255,6 +265,9 @@ extern void		task_init(void) __attribute__((section("__TEXT, initcode")));
 
 #define	current_task_fast()	(current_thread()->task)
 #define current_task()		current_task_fast()
+
+extern lck_attr_t      task_lck_attr;
+extern lck_grp_t       task_lck_grp;
 
 #else	/* MACH_KERNEL_PRIVATE */
 
@@ -281,7 +294,11 @@ extern kern_return_t	task_release(
 							task_t		task);
 
 /* Halt all other threads in the current task */
-extern kern_return_t	task_halt(
+extern kern_return_t	task_start_halt(
+							task_t		task);
+
+/* Wait for other threads to halt and free halting task resources */
+extern void		task_complete_halt(
 							task_t		task);
 
 extern kern_return_t	task_terminate_internal(
@@ -321,22 +338,40 @@ extern void		task_set_64bit(
 extern void		task_backing_store_privileged(
 					task_t		task);
 
-extern int		get_task_numactivethreads(
-					task_t		task);
+extern void		task_set_dyld_info(
+    					task_t		task,
+					mach_vm_address_t addr,
+					mach_vm_size_t size);
+
 /* Get number of activations in a task */
 extern int		get_task_numacts(
 					task_t		task);
 
+extern int get_task_numactivethreads(task_t task);
 
 /* JMM - should just be temporary (implementation in bsd_kern still) */
 extern void	set_bsdtask_info(task_t,void *);
 extern vm_map_t get_task_map_reference(task_t);
-extern vm_map_t	swap_task_map(task_t, vm_map_t);
+extern vm_map_t	swap_task_map(task_t, thread_t, vm_map_t);
 extern pmap_t	get_task_pmap(task_t);
+extern uint64_t	get_task_resident_size(task_t);
 
 extern boolean_t	is_kerneltask(task_t task);
 
 extern kern_return_t check_actforsig(task_t task, thread_t thread, int setast);
+
+extern kern_return_t machine_task_get_state(
+					task_t task, 
+					int flavor, 
+					thread_state_t state, 
+					mach_msg_type_number_t *state_count);
+
+extern kern_return_t machine_task_set_state(
+					task_t task, 
+					int flavor, 
+					thread_state_t state, 
+					mach_msg_type_number_t state_count);
+
 
 #endif	/* XNU_KERNEL_PRIVATE */
 

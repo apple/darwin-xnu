@@ -355,7 +355,7 @@ ipc_object_alloc(
 	}
 
 	io_lock_init(object);
-	*namep = (mach_port_name_t)object;
+	*namep = CAST_MACH_PORT_TO_NAME(object);
 	kr = ipc_entry_alloc(space, namep, &entry);
 	if (kr != KERN_SUCCESS) {
 		io_free(otype, object);
@@ -728,7 +728,7 @@ ipc_object_copyout(
 			break;
 		}
 
-		name = (mach_port_name_t)object;
+		name = CAST_MACH_PORT_TO_NAME(object);
 		kr = ipc_entry_get(space, &name, &entry);
 		if (kr != KERN_SUCCESS) {
 			/* unlocks/locks space, so must start again */
@@ -1019,7 +1019,7 @@ struct label *io_getlabel (ipc_object_t objp)
 		return &port->ip_label;
 }
 #endif
-#if MACH_ASSERT || CONFIG_MACF_MACH
+
 /*
  *	Check whether the object is a port if so, free it.  But
  *	keep track of that fact.
@@ -1042,9 +1042,9 @@ io_free(
 		mac_port_label_destroy(&port->ip_label);
 #endif	  
 	}
+	io_lock_destroy(object);
 	zfree(ipc_object_zones[otype], object);
 }
-#endif		/* MACH_ASSER || MAC */
 
 #include <mach_kdb.h>
 #if	MACH_KDB
@@ -1093,6 +1093,7 @@ const char *ikot_print_array[IKOT_MAX_TYPE] = {
 	"(IOKIT_OBJECT)     ",	/* 30 */
 	"(UPL)              ",
 	"(MEM_OBJ_CONTROL)  ",
+	"(AU_SESSIONPORT)   ",	/* 33 */
 #if CONFIG_MACF_MACH
 	"(LABELH)           ",
 #endif

@@ -35,14 +35,17 @@
 #include <kern/misc_protos.h>
 #include <kern/machine.h>
 #include <mach/processor_info.h>
+#include <i386/pmap.h>
 #include <i386/machine_cpu.h>
 #include <i386/machine_routines.h>
-#include <i386/pmap.h>
 #include <i386/misc_protos.h>
 #include <i386/cpu_threads.h>
 #include <i386/rtclock.h>
+#include <i386/cpuid.h>
+#if CONFIG_VMX
+#include <i386/vmx/vmx_cpu.h>
+#endif
 #include <vm/vm_kern.h>
-#include "cpuid.h"
 
 struct processor	processor_master;
 
@@ -173,8 +176,10 @@ cpu_machine_init(
 #endif
 	ml_init_interrupt();
 
+#if CONFIG_VMX
 	/* for every CPU, get the VT specs */
 	vmx_get_specs();
+#endif
 }
 
 processor_t
@@ -240,6 +245,8 @@ slot_threadtype(
 {
 	return (cpu_datap(slot_num)->cpu_threadtype);
 }
+
+
 
 cpu_type_t
 cpu_type(void)

@@ -27,13 +27,14 @@
  */
 
 
-#define	kPMSetAggressiveness        0
-#define	kPMGetAggressiveness        1
-#define	kPMSleepSystem              2
-#define	kPMAllowPowerChange         3
-#define	kPMCancelPowerChange        4
-#define	kPMShutdownSystem           5
-#define	kPMRestartSystem            6
-#define kPMSleepSystemOptions       7
+#define	kPMSetAggressiveness            0
+#define	kPMGetAggressiveness            1
+#define	kPMSleepSystem                  2
+#define	kPMAllowPowerChange             3
+#define	kPMCancelPowerChange            4
+#define	kPMShutdownSystem               5
+#define	kPMRestartSystem                6
+#define kPMSleepSystemOptions           7
+#define kPMSetMaintenanceWakeCalendar   8
 
-#define kNumPMMethods               8
+#define kNumPMMethods                   9

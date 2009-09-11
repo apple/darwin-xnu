@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -62,14 +62,14 @@
  */
 
 /*
- * The dirent structure defines the format of directory entries returned by 
- * the getdirentries(2) system call.
+ * The dirent structure defines the format of directory entries.
  *
  * A directory entry has a struct dirent at the front of it, containing its
  * inode number, the length of the entry, and the length of the name
  * contained in the entry.  These are followed by the name padded to a 4
  * byte boundary with null bytes.  All names are guaranteed null terminated.
- * The maximum length of a name in a directory is MAXNAMLEN.
+ * The maximum length of a name in a directory is MAXNAMLEN when 32-bit
+ * ino_t is in effect; (MAXPATHLEN - 1) when 64-bit ino_t is in effect.
  */
 
 #ifndef _SYS_DIRENT_H 

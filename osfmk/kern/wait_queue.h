@@ -64,7 +64,7 @@ typedef struct wait_queue {
     unsigned int                    /* flags */
     /* boolean_t */	wq_type:16,		/* only public field */
 					wq_fifo:1,		/* fifo wakeup policy? */
-					wq_isprepost:1,	/* is waitq preposted? set only */
+					wq_prepost:1,	/* waitq supports prepost? set only */
 					:0;				/* force to long boundary */
     hw_lock_data_t	wq_interlock;	/* interlock */
     queue_head_t	wq_queue;		/* queue of elements */
@@ -80,12 +80,12 @@ typedef struct wait_queue {
 typedef struct wait_queue_set {
 	WaitQueue		wqs_wait_queue; /* our wait queue */
 	queue_head_t	wqs_setlinks;	/* links from set perspective */
-	unsigned int 	wqs_refcount;	/* refcount for preposting */
+	queue_head_t	wqs_preposts;	/* preposted links */
 } WaitQueueSet;
 
 #define wqs_type		wqs_wait_queue.wq_type
 #define wqs_fifo		wqs_wait_queue.wq_fifo
-#define wqs_isprepost	wqs_wait_queue.wq_isprepost
+#define wqs_prepost	wqs_wait_queue.wq_prepost
 #define wqs_queue		wqs_wait_queue.wq_queue
 
 /*
@@ -126,6 +126,7 @@ typedef WaitQueueElement *wait_queue_element_t;
 typedef struct _wait_queue_link {
 	WaitQueueElement		wql_element;	/* element on master */
 	queue_chain_t			wql_setlinks;	/* element on set */
+	queue_chain_t			wql_preposts;	/* element on set prepost list */
     wait_queue_set_t		wql_setqueue;	/* set queue */
 } WaitQueueLink;
 
@@ -171,23 +172,22 @@ static inline void wait_queue_lock(wait_queue_t wq) {
  
 static inline void wait_queue_unlock(wait_queue_t wq) {
 	assert(wait_queue_held(wq));
-#if defined(__i386__)
-	/* DRK: On certain x86 systems, this spinlock is susceptible to
-	 * lock starvation. Hence use an unlock variant which performs
-	 * a cacheline flush to minimize cache affinity on acquisition.
-	 */
-	i386_lock_unlock_with_flush(&(wq)->wq_interlock);
-#else
 	hw_lock_unlock(&(wq)->wq_interlock);
-#endif
 }
 
 #define wqs_lock(wqs)		wait_queue_lock(&(wqs)->wqs_wait_queue)
 #define wqs_unlock(wqs)		wait_queue_unlock(&(wqs)->wqs_wait_queue)
 #define wqs_lock_try(wqs)	wait_queue__try_lock(&(wqs)->wqs_wait_queue)
+#define wqs_is_preposted(wqs)	((wqs)->wqs_prepost && !queue_empty(&(wqs)->wqs_preposts))
+
+#define wql_is_preposted(wql)	((wql)->wql_preposts.next != NULL)
+#define wql_clear_prepost(wql)  ((wql)->wql_preposts.next = (wql)->wql_preposts.prev = NULL)
 
 #define wait_queue_assert_possible(thread) \
 			((thread)->wait_queue == WAIT_QUEUE_NULL)
+
+/* bootstrap interface - can allocate/link wait_queues and sets after calling this */
+__private_extern__ void wait_queue_bootstrap(void);
 
 /******** Decomposed interfaces (to build higher level constructs) ***********/
 
@@ -233,6 +233,34 @@ __private_extern__ kern_return_t wait_queue_wakeup64_thread_locked(
 			thread_t thread,
 			wait_result_t result,
 			boolean_t unlock);
+
+__private_extern__ uint32_t num_wait_queues;
+__private_extern__ struct wait_queue *wait_queues;
+/* The Jenkins "one at a time" hash.
+ * TBD: There may be some value to unrolling here,
+ * depending on the architecture.
+ */
+static inline uint32_t wq_hash(char *key)
+{
+	uint32_t hash = 0;
+	size_t i, length = sizeof(char *);
+
+	for (i = 0; i < length; i++) {
+		hash += key[i];
+		hash += (hash << 10);
+		hash ^= (hash >> 6);
+	}
+ 
+	hash += (hash << 3);
+	hash ^= (hash >> 11);
+	hash += (hash << 15);
+
+	return hash;
+}
+
+/* TBD: It should be possible to eliminate the divide here */
+#define       wait_hash(event)						\
+	(wq_hash((char *)&event) % (num_wait_queues))
 
 #endif	/* MACH_KERNEL_PRIVATE */
 
@@ -281,9 +309,6 @@ extern kern_return_t wait_queue_unlink(
 			wait_queue_set_t set_queue);
 
 extern kern_return_t wait_queue_unlink_all(
-			wait_queue_t wait_queue);
-
-extern kern_return_t wait_queue_unlinkall_nofree(
 			wait_queue_t wait_queue);
 
 extern kern_return_t wait_queue_set_unlink_all(

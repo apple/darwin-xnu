@@ -1,9 +1,6 @@
 #ifndef _TESTS_H_
 #define	_TESTS_H_
 
-#ifndef DEBUG
-#define DEBUG                          0
-#endif
 #ifndef CONFORMANCE_TESTS_IN_XNU
 #define CONFORMANCE_TESTS_IN_XNU       0
 #endif
@@ -19,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdarg.h>		/* Used to support printf() in misc.c */
 #include <mach/machine.h>	/* Used to determine host properties */
 #include <mach/vm_inherit.h>
 #include <sys/acct.h>
@@ -82,7 +80,7 @@ int get_bits(void);					/* 64 or 32 */
 int getlogin_setlogin_test( void * the_argp );
 int getpid_getppid_pipe_test( void * the_argp );
 int getpriority_setpriority_test( void * the_argp );
-int getrusage_profil_test( void * the_argp );
+int getrusage_test( void * the_argp );
 int groups_test( void * the_argp );
 int ioctl_test( void * the_argp );
 int kqueue_tests( void * the_argp );
@@ -110,6 +108,10 @@ int syscall_test( void * the_argp );
 int time_tests( void * the_argp );
 int uid_tests( void * the_argp );
 int xattr_tests( void * the_argp );
+int data_exec_tests( void * the_argp );
+int machvm_tests( void * the_argp );
+int getdirentries_test( void * the_argp );
+int statfs_32bit_inode_tests( void * the_argp );
 
 struct test_entry 
 {
@@ -119,5 +121,9 @@ struct test_entry
 	char *			test_infop;			/* information about what is tested */ 
 };
 typedef struct test_entry * test_entryp;
+
+/* Special replacement printf with date/time stamp */
+int my_printf(const char * __restrict fmt, ...);
+#define printf my_printf
 
 #endif /* !_TESTS_H_ */

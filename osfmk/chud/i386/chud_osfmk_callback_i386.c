@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -37,13 +37,14 @@
 #include <kern/kalloc.h>
 #include <kern/thread.h>
 
+#include <libkern/OSAtomic.h>
+
 #include <machine/machine_routines.h>
 #include <machine/cpu_data.h>
 #include <machine/trap.h>
 
 #include <chud/chud_xnu.h>
 #include <chud/chud_xnu_private.h>
-#include <chud/chud_thread.h>
 
 #include <i386/misc_protos.h>
 #include <i386/lapic.h>
@@ -129,11 +130,6 @@ chudxnu_private_cpu_timer_callback(
 				     FALSE) == KERN_SUCCESS) {
 			fn = chud_proc_info->cpu_timer_callback_fn;
        		if (fn) {
-			KERNEL_DEBUG_CONSTANT(
-				MACHDBG_CODE(DBG_MACH_CHUD,
-					CHUD_TIMER_CALLBACK) | DBG_FUNC_NONE,
-				(uint32_t)fn, 0,0,0,0);
-				//state.eip, state.cs, 0, 0);
        			(fn)(
 				x86_THREAD_STATE,
 				(thread_state_t)&state,
@@ -167,11 +163,6 @@ chudxnu_cpu_timer_callback_enter(
 	timer_call_enter(&(chud_proc_info->cpu_timer_call),
 			 chud_proc_info->t_deadline);
 
-	KERNEL_DEBUG_CONSTANT(
-		MACHDBG_CODE(DBG_MACH_CHUD,
-			     CHUD_TIMER_CALLBACK_ENTER) | DBG_FUNC_NONE,
-		(uint32_t) func, time, units, 0, 0);
-
 	ml_set_interrupts_enabled(oldlevel);
 	return KERN_SUCCESS;
 }
@@ -186,11 +177,6 @@ chudxnu_cpu_timer_callback_cancel(void)
 	chud_proc_info = (chudcpu_data_t *)(current_cpu_datap()->cpu_chud);
 
 	timer_call_cancel(&(chud_proc_info->cpu_timer_call));
-
-	KERNEL_DEBUG_CONSTANT(
-		MACHDBG_CODE(DBG_MACH_CHUD,
-			     CHUD_TIMER_CALLBACK_CANCEL) | DBG_FUNC_NONE,
-		0, 0, 0, 0, 0);
 
 	// set to max value:
 	chud_proc_info->t_deadline |= ~(chud_proc_info->t_deadline);
@@ -217,8 +203,17 @@ chudxnu_cpu_timer_callback_cancel_all(void)
 	return KERN_SUCCESS;
 }
 
+#if 0
 #pragma mark **** trap ****
-static chudxnu_trap_callback_func_t trap_callback_fn = NULL;
+#endif
+static kern_return_t chud_null_trap(uint32_t trapentry, thread_flavor_t flavor,
+	thread_state_t tstate,  mach_msg_type_number_t count);
+static chudxnu_trap_callback_func_t trap_callback_fn = chud_null_trap;
+
+static kern_return_t chud_null_trap(uint32_t trapentry __unused, thread_flavor_t flavor __unused,
+	thread_state_t tstate __unused,  mach_msg_type_number_t count __unused) {
+	return KERN_FAILURE;
+}
 
 static kern_return_t
 chudxnu_private_trap_callback(
@@ -279,22 +274,46 @@ chudxnu_private_trap_callback(
 __private_extern__ kern_return_t
 chudxnu_trap_callback_enter(chudxnu_trap_callback_func_t func)
 {
-    trap_callback_fn = func;
-    perfTrapHook = chudxnu_private_trap_callback;
-    return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(NULL, chudxnu_private_trap_callback, 
+		(void * volatile *)&perfTrapHook)) {
+
+		chudxnu_trap_callback_func_t old = trap_callback_fn;
+		while(!OSCompareAndSwapPtr(old, func, 
+			(void * volatile *)&trap_callback_fn)) {
+			old = trap_callback_fn;
+		}
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
 __private_extern__ kern_return_t
 chudxnu_trap_callback_cancel(void)
 {
-    trap_callback_fn = NULL;
-        perfTrapHook = NULL;
-    return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(chudxnu_private_trap_callback,  NULL,
+		(void * volatile *)&perfTrapHook)) {
+
+		chudxnu_trap_callback_func_t old = trap_callback_fn;
+		while(!OSCompareAndSwapPtr(old, chud_null_trap, 
+			(void * volatile *)&trap_callback_fn)) {
+			old = trap_callback_fn;
+		}
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
+#if 0
 #pragma mark **** ast ****
-static
-chudxnu_perfmon_ast_callback_func_t perfmon_ast_callback_fn = NULL;
+#endif
+static kern_return_t chud_null_ast(thread_flavor_t flavor, thread_state_t tstate,  
+	mach_msg_type_number_t count);
+static chudxnu_perfmon_ast_callback_func_t perfmon_ast_callback_fn = chud_null_ast;
+
+static kern_return_t chud_null_ast(thread_flavor_t flavor __unused,
+	thread_state_t tstate __unused,  mach_msg_type_number_t count __unused) {
+	return KERN_FAILURE;
+}
 
 static kern_return_t
 chudxnu_private_chud_ast_callback(
@@ -333,11 +352,6 @@ chudxnu_private_chud_ast_callback(
 			(thread_state_t) &state, &count,
 			TRUE) == KERN_SUCCESS) {
 
-			KERNEL_DEBUG_CONSTANT(
-				MACHDBG_CODE(DBG_MACH_CHUD,
-				    CHUD_AST_CALLBACK) | DBG_FUNC_NONE,
-				(uint32_t) fn, 0, 0, 0, 0);
-
 			(fn)(
 				x86_THREAD_STATE,
 				(thread_state_t) &state,
@@ -352,17 +366,35 @@ chudxnu_private_chud_ast_callback(
 __private_extern__ kern_return_t
 chudxnu_perfmon_ast_callback_enter(chudxnu_perfmon_ast_callback_func_t func)
 {
-	perfmon_ast_callback_fn = func;
-	perfASTHook = chudxnu_private_chud_ast_callback;
-	return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(NULL, chudxnu_private_chud_ast_callback,
+		(void * volatile *)&perfASTHook)) {
+		chudxnu_perfmon_ast_callback_func_t old = perfmon_ast_callback_fn;
+
+		while(!OSCompareAndSwapPtr(old, func,
+			(void * volatile *)&perfmon_ast_callback_fn)) {
+			old = perfmon_ast_callback_fn;
+		}
+
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
 __private_extern__ kern_return_t
 chudxnu_perfmon_ast_callback_cancel(void)
 {
-    perfmon_ast_callback_fn = NULL;
-    perfASTHook = NULL;
-    return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(chudxnu_private_chud_ast_callback, NULL,
+		(void * volatile *)&perfASTHook)) {
+		chudxnu_perfmon_ast_callback_func_t old = perfmon_ast_callback_fn;
+
+		while(!OSCompareAndSwapPtr(old, chud_null_ast,
+			(void * volatile *)&perfmon_ast_callback_fn)) {
+			old = perfmon_ast_callback_fn;
+		}
+
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
 __private_extern__ kern_return_t
@@ -377,22 +409,21 @@ chudxnu_perfmon_ast_send_urgent(boolean_t urgent)
         *myast |= (AST_CHUD);
     }
 
-    KERNEL_DEBUG_CONSTANT(
-	MACHDBG_CODE(DBG_MACH_CHUD, CHUD_AST_SEND) | DBG_FUNC_NONE,
-	urgent, 0, 0, 0, 0);
-
     ml_set_interrupts_enabled(oldlevel);
     return KERN_SUCCESS;
 }
 
-__private_extern__ kern_return_t
-chudxnu_perfmon_ast_send(void)
-{
-    return chudxnu_perfmon_ast_send_urgent(TRUE);
-}
-
+#if 0
 #pragma mark **** interrupt ****
-static chudxnu_interrupt_callback_func_t interrupt_callback_fn = NULL;
+#endif
+static kern_return_t chud_null_int(uint32_t trapentry, thread_flavor_t flavor, 
+	thread_state_t tstate,  mach_msg_type_number_t count);
+static chudxnu_interrupt_callback_func_t interrupt_callback_fn = chud_null_int;
+
+static kern_return_t chud_null_int(uint32_t trapentry __unused, thread_flavor_t flavor __unused,
+	thread_state_t tstate __unused,  mach_msg_type_number_t count __unused) {
+	return KERN_FAILURE;
+}
 
 static void
 chudxnu_private_interrupt_callback(void *foo)
@@ -426,20 +457,32 @@ chudxnu_private_interrupt_callback(void *foo)
 __private_extern__ kern_return_t
 chudxnu_interrupt_callback_enter(chudxnu_interrupt_callback_func_t func)
 {
-    interrupt_callback_fn = func;
-    lapic_set_pmi_func((i386_intr_func_t)chudxnu_private_interrupt_callback);
-    return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(chud_null_int, func, 
+		(void * volatile *)&interrupt_callback_fn)) {
+		lapic_set_pmi_func((i386_intr_func_t)chudxnu_private_interrupt_callback);
+
+		return KERN_SUCCESS;
+	}
+    return KERN_FAILURE;
 }
 
 __private_extern__ kern_return_t
 chudxnu_interrupt_callback_cancel(void)
 {
-    interrupt_callback_fn = NULL;
+	chudxnu_interrupt_callback_func_t old = interrupt_callback_fn;
+
+	while(!OSCompareAndSwapPtr(old, chud_null_int,
+		(void * volatile *)&interrupt_callback_fn)) {
+		old = interrupt_callback_fn;
+	}
+
     lapic_set_pmi_func(NULL);
     return KERN_SUCCESS;
 }
 
+#if 0
 #pragma mark **** cpu signal ****
+#endif
 static chudxnu_cpusig_callback_func_t cpusig_callback_fn = NULL;
 
 static          kern_return_t
@@ -455,10 +498,6 @@ chudxnu_private_cpu_signal_handler(int request)
 					     x86_THREAD_STATE,
 					     (thread_state_t) &state, &count,
 					     FALSE) == KERN_SUCCESS) {
-			KERNEL_DEBUG_CONSTANT(
-				MACHDBG_CODE(DBG_MACH_CHUD,
-					CHUD_CPUSIG_CALLBACK) | DBG_FUNC_NONE,
-				(uint32_t)fn, request, 0, 0, 0);
 			return (fn)(
 					request, x86_THREAD_STATE,
 					(thread_state_t) &state, count);
@@ -493,14 +532,23 @@ chudxnu_cpu_signal_handler(void)
 __private_extern__ kern_return_t
 chudxnu_cpusig_callback_enter(chudxnu_cpusig_callback_func_t func)
 {
-	cpusig_callback_fn = func;
-	return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(NULL, func, 
+		(void * volatile *)&cpusig_callback_fn)) {
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
 __private_extern__ kern_return_t
 chudxnu_cpusig_callback_cancel(void)
 {
-	cpusig_callback_fn = NULL;
+	chudxnu_cpusig_callback_func_t old = cpusig_callback_fn;
+
+	while(!OSCompareAndSwapPtr(old, NULL,
+		(void * volatile *)&cpusig_callback_fn)) {
+		old = cpusig_callback_fn;
+	}
+
 	return KERN_SUCCESS;
 }
 
@@ -531,11 +579,6 @@ chudxnu_cpusig_send(int otherCPU, uint32_t request_code)
 		//request.req_type = CPRQchud;		/* set request type */
 		request.req_code = request_code;	/* set request */
 
-		KERNEL_DEBUG_CONSTANT(
-			MACHDBG_CODE(DBG_MACH_CHUD,
-				     CHUD_CPUSIG_SEND) | DBG_FUNC_NONE,
-			otherCPU, request_code, 0, 0, 0);
-
 		/*
 		 * Insert the new request in the target cpu's request queue
 		 * and signal target cpu.
@@ -562,4 +605,3 @@ chudxnu_cpusig_send(int otherCPU, uint32_t request_code)
 	enable_preemption();
 	return retval;
 }
-

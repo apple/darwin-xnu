@@ -119,7 +119,7 @@
 #include <sys/sysproto.h>
 #include <sys/proc_info.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <sys/kdebug.h>
 
@@ -158,7 +158,6 @@
 
 #endif
 
-
 /*
  * interfaces to the outside world
  */
@@ -179,6 +178,8 @@ static int pipe_kqfilter(struct fileproc *fp, struct knote *kn,
 static int pipe_ioctl(struct fileproc *fp, u_long cmd, caddr_t data,
 		vfs_context_t ctx);
 
+static int pipe_drain(struct fileproc *fp,vfs_context_t ctx);
+
 
 struct  fileops pipeops =
   { pipe_read,
@@ -187,17 +188,23 @@ struct  fileops pipeops =
     pipe_select,
     pipe_close,
     pipe_kqfilter,
-    NULL };
+    pipe_drain };
 
 
 static void	filt_pipedetach(struct knote *kn);
 static int	filt_piperead(struct knote *kn, long hint);
 static int	filt_pipewrite(struct knote *kn, long hint);
 
-static struct filterops pipe_rfiltops =
-	{ 1, NULL, filt_pipedetach, filt_piperead };
-static struct filterops pipe_wfiltops =
-	{ 1, NULL, filt_pipedetach, filt_pipewrite };
+static struct filterops pipe_rfiltops = {
+        .f_isfd = 1,
+        .f_detach = filt_pipedetach,
+        .f_event = filt_piperead,
+};
+static struct filterops pipe_wfiltops = {
+        .f_isfd = 1,
+        .f_detach = filt_pipedetach,
+        .f_event = filt_pipewrite,
+};
 
 /*
  * Default pipe buffer size(s), this can be kind-of large now because pipe
@@ -319,7 +326,7 @@ pipe_touch(struct pipe *tpipe, int touch)
 
 /* ARGSUSED */
 int
-pipe(proc_t p, __unused struct pipe_args *uap, register_t *retval)
+pipe(proc_t p, __unused struct pipe_args *uap, int32_t *retval)
 {
 	struct fileproc *rf, *wf;
 	struct pipe *rpipe, *wpipe;
@@ -490,7 +497,7 @@ pipe_stat(struct pipe *cpipe, void *ub, int isstat64)
 	 	* address of this pipe's struct pipe.  This number may be recycled
 	 	* relatively quickly.
 	 	*/
-		sb64->st_ino = (ino64_t)((uint32_t)cpipe);
+		sb64->st_ino = (ino64_t)((uintptr_t)cpipe);
 	} else {
 		sb = (struct stat *)ub;	
 
@@ -517,7 +524,7 @@ pipe_stat(struct pipe *cpipe, void *ub, int isstat64)
 	 	* address of this pipe's struct pipe.  This number may be recycled
 	 	* relatively quickly.
 	 	*/
-		sb->st_ino = (ino_t)cpipe;
+		sb->st_ino = (ino_t)(uintptr_t)cpipe;
 	}
 	PIPE_UNLOCK(cpipe);
 
@@ -557,8 +564,8 @@ pipespace(struct pipe *cpipe, int size)
 	cpipe->pipe_buffer.out = 0;
 	cpipe->pipe_buffer.cnt = 0;
 
-	OSAddAtomic(1, (SInt32 *)&amountpipes);
-	OSAddAtomic(cpipe->pipe_buffer.size, (SInt32 *)&amountpipekva);
+	OSAddAtomic(1, &amountpipes);
+	OSAddAtomic(cpipe->pipe_buffer.size, &amountpipekva);
 
 	return (0);
 }
@@ -734,8 +741,9 @@ pipe_read(struct fileproc *fp, struct uio *uio, __unused int flags,
 			 * detect EOF condition
 			 * read returns 0 on EOF, no need to set error
 			 */
-			if (rpipe->pipe_state & PIPE_EOF)
+			if (rpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF)) {
 				break;
+			}
 
 			/*
 			 * If the "write-side" has been blocked, wake it up now.
@@ -975,7 +983,7 @@ retry:
 		    PRIBIO | PCATCH, "pipdww", 0);
 		if (error)
 			goto error1;
-		if (wpipe->pipe_state & PIPE_EOF) {
+		if (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF)) {
 			error = EPIPE;
 			goto error1;
 		}
@@ -992,7 +1000,7 @@ retry:
 		    PRIBIO | PCATCH, "pipdwc", 0);
 		if (error)
 			goto error1;
-		if (wpipe->pipe_state & PIPE_EOF) {
+		if (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF)) {
 			error = EPIPE;
 			goto error1;
 		}
@@ -1013,7 +1021,7 @@ retry:
 
 	error = 0;
 	while (!error && (wpipe->pipe_state & PIPE_DIRECTW)) {
-		if (wpipe->pipe_state & PIPE_EOF) {
+		if (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF)) {
 			pipelock(wpipe, 0);
 			PIPE_UNLOCK(wpipe);
 			pipe_destroy_write_buffer(wpipe);
@@ -1072,7 +1080,7 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 	/*
 	 * detect loss of pipe read side, issue SIGPIPE if lost.
 	 */
-	if (wpipe == NULL || (wpipe->pipe_state & PIPE_EOF)) {
+	if (wpipe == NULL || (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF))) {
 		PIPE_UNLOCK(rpipe);
 		return (EPIPE);
 	}
@@ -1125,7 +1133,7 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 		if ((error = pipelock(wpipe, 1)) == 0) {
 			PIPE_UNLOCK(wpipe);
 			if (pipespace(wpipe, pipe_size) == 0)
-				OSAddAtomic(1, (SInt32 *)&nbigpipe);
+				OSAddAtomic(1, &nbigpipe);
 			PIPE_LOCK(wpipe);
 			pipeunlock(wpipe);
 
@@ -1169,7 +1177,7 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 		 */
 		if ((uio->uio_iov->iov_len >= PIPE_MINDIRECT) &&
 		    (fp->f_flag & FNONBLOCK) == 0 &&
-		    amountpipekvawired + uio->uio_resid < maxpipekvawired) { 
+		    amountpipekvawired + uio_resid(uio) < maxpipekvawired) { 
 			error = pipe_direct_write(wpipe, uio);
 			if (error)
 				break;
@@ -1191,7 +1199,7 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 			}
 			error = msleep(wpipe, PIPE_MTX(wpipe), PRIBIO | PCATCH, "pipbww", 0);
 
-			if (wpipe->pipe_state & PIPE_EOF)
+			if (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF))
 				break;
 			if (error)
 				break;
@@ -1213,7 +1221,7 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 				int size;	/* Transfer size */
 				int segsize;	/* first segment to transfer */
 
-				if (wpipe->pipe_state & PIPE_EOF) {
+				if (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF)) {
 					pipeunlock(wpipe);
 				        error = EPIPE;
 					break;
@@ -1340,7 +1348,7 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 			 * If read side wants to go away, we just issue a signal
 			 * to ourselves.
 			 */
-			if (wpipe->pipe_state & PIPE_EOF) {
+			if (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF)) {
 				error = EPIPE;
 				break;
 			}	
@@ -1472,7 +1480,7 @@ pipe_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx)
         case FREAD:
 		if ((rpipe->pipe_state & PIPE_DIRECTW) ||
 		    (rpipe->pipe_buffer.cnt > 0) ||
-		    (rpipe->pipe_state & PIPE_EOF)) {
+		    (rpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF))) {
 
 		        retnum = 1;
 		} else {
@@ -1482,7 +1490,7 @@ pipe_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx)
 		break;
 
         case FWRITE:
-		if (wpipe == NULL || (wpipe->pipe_state & PIPE_EOF) ||
+		if (wpipe == NULL || (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF)) ||
 		    (((wpipe->pipe_state & PIPE_DIRECTW) == 0) &&
 		     (wpipe->pipe_buffer.size - wpipe->pipe_buffer.cnt) >= PIPE_BUF)) {
 
@@ -1526,9 +1534,9 @@ pipe_free_kmem(struct pipe *cpipe)
 
 	if (cpipe->pipe_buffer.buffer != NULL) {
 		if (cpipe->pipe_buffer.size > PIPE_SIZE)
-			OSAddAtomic(-1, (SInt32 *)&nbigpipe);
-		OSAddAtomic(-(cpipe->pipe_buffer.size), (SInt32 *)&amountpipekva);
-		OSAddAtomic(-1, (SInt32 *)&amountpipes);
+			OSAddAtomic(-1, &nbigpipe);
+		OSAddAtomic(-(cpipe->pipe_buffer.size), &amountpipekva);
+		OSAddAtomic(-1, &amountpipes);
 
 		kmem_free(kernel_map, (vm_offset_t)cpipe->pipe_buffer.buffer,
 			  cpipe->pipe_buffer.size);
@@ -1569,6 +1577,7 @@ pipeclose(struct pipe *cpipe)
 	 * If the other side is blocked, wake it up saying that
 	 * we want to close it down.
 	 */
+	cpipe->pipe_state &= ~PIPE_DRAIN;
 	cpipe->pipe_state |= PIPE_EOF;
 	pipeselwakeup(cpipe, cpipe);
 	
@@ -1592,6 +1601,7 @@ pipeclose(struct pipe *cpipe)
 	 */
 	if ((ppipe = cpipe->pipe_peer) != NULL) {
 
+		ppipe->pipe_state &= ~(PIPE_DRAIN);
 		ppipe->pipe_state |= PIPE_EOF;
 
 		pipeselwakeup(ppipe, ppipe);
@@ -1627,6 +1637,7 @@ pipeclose(struct pipe *cpipe)
 	pipe_free_kmem(cpipe);
 
 	zfree(pipe_zone, cpipe);
+
 }
 
 /*ARGSUSED*/
@@ -1725,8 +1736,8 @@ filt_piperead(struct knote *kn, long hint)
 	if ((kn->kn_data == 0) && (rpipe->pipe_state & PIPE_DIRECTW))
 		kn->kn_data = rpipe->pipe_map.cnt;
 #endif
-	if ((rpipe->pipe_state & PIPE_EOF) ||
-	    (wpipe == NULL) || (wpipe->pipe_state & PIPE_EOF)) {
+	if ((rpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF)) ||
+	    (wpipe == NULL) || (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF))) {
 		kn->kn_flags |= EV_EOF;
 		retval = 1;
 	} else {
@@ -1758,7 +1769,7 @@ filt_pipewrite(struct knote *kn, long hint)
 
 	wpipe = rpipe->pipe_peer;
 
-	if ((wpipe == NULL) || (wpipe->pipe_state & PIPE_EOF)) {
+	if ((wpipe == NULL) || (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF))) {
 		kn->kn_data = 0;
 		kn->kn_flags |= EV_EOF; 
 
@@ -1863,3 +1874,36 @@ fill_pipeinfo(struct pipe * cpipe, struct pipe_info * pinfo)
 
 	return (0);
 }
+
+
+static int 
+pipe_drain(struct fileproc *fp, __unused vfs_context_t ctx)
+{
+
+	/* Note: fdlock already held */
+	struct pipe *ppipe, *cpipe = (struct pipe *)(fp->f_fglob->fg_data);
+
+	if (cpipe) {
+		PIPE_LOCK(cpipe);
+		cpipe->pipe_state |= PIPE_DRAIN; 
+		cpipe->pipe_state &= ~(PIPE_WANTR | PIPE_WANTW);
+		wakeup(cpipe);
+		
+		/* Must wake up peer: a writer sleeps on the read side */
+		if ((ppipe = cpipe->pipe_peer)) {
+			ppipe->pipe_state |= PIPE_DRAIN;
+			ppipe->pipe_state &= ~(PIPE_WANTR | PIPE_WANTW);
+			wakeup(ppipe);
+		}
+		
+		PIPE_UNLOCK(cpipe);
+		return 0;
+	}
+
+	return 1;
+}
+
+
+
+
+

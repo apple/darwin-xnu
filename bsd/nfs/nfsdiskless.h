@@ -72,53 +72,15 @@
 #include <sys/appleapiopts.h>
 
 #ifdef __APPLE_API_PRIVATE
-/*
- * Structure that must be initialized for a diskless nfs client.
- * This structure is used by nfs_mountroot() to set up the root and swap
- * vnodes plus do a partial ifconfig(8) and route(8) so that the critical net
- * interface can communicate with the server.
- * The primary bootstrap is expected to fill in the appropriate fields before
- * starting the kernel. Whether or not the swap area is nfs mounted is
- * determined by the value in swdevt[0]. (equal to NODEV --> swap over nfs)
- * Currently only works for AF_INET protocols.
- * NB: All fields are stored in net byte order to avoid hassles with
- * client/server byte ordering differences.
- */
-
-/*
- * I have defined a new structure that can handle an NFS Version 3 file handle
- * but the kernel still expects the old Version 2 one to be provided. The
- * changes required in nfs_vfsops.c for using the new are documented there in
- * comments. (I felt that breaking network booting code by changing this
- * structure would not be prudent at this time, since almost all servers are
- * still Version 2 anyhow.)
- */
-struct nfsv3_diskless {
-	struct ifaliasreq myif;			/* Default interface */
-	struct sockaddr_in mygateway;		/* Default gateway */
-	struct nfs_args	swap_args;		/* Mount args for swap file */
-	int		swap_fhsize;		/* Size of file handle */
-	u_char		swap_fh[NFSX_V3FHMAX];	/* Swap file's file handle */
-	struct sockaddr_in swap_saddr;		/* Address of swap server */
-	char		swap_hostnam[MNAMELEN];	/* Host name for mount pt */
-	int		swap_nblks;		/* Size of server swap file */
-	struct ucred	swap_ucred;		/* Swap credentials */
-	struct nfs_args	root_args;		/* Mount args for root fs */
-	int		root_fhsize;		/* Size of root file handle */
-	u_char		root_fh[NFSX_V3FHMAX];	/* File handle of root dir */
-	struct sockaddr_in root_saddr;		/* Address of root server */
-	char		root_hostnam[MNAMELEN];	/* Host name for mount pt */
-	long		root_time;		/* Timestamp of root fs */
-	char		my_hostnam[MAXHOSTNAMELEN]; /* Client host name */
-};
 
 struct nfs_dlmount {
 	struct sockaddr_in ndm_saddr;  		/* Address of file server */
-	char		ndm_host[MNAMELEN]; 	/* Host name for mount pt */
+	char		ndm_host[MAXHOSTNAMELEN];/* Host name for mount pt */
 	char		*ndm_path; 		/* path name for mount pt */
-	u_long		ndm_nfsv3;		/* NFSv3 or NFSv2? */
-	u_long		ndm_sotype;		/* SOCK_STREAM or SOCK_DGRAM? */
-	u_long		ndm_fhlen;		/* length of file handle */
+	char		*ndm_mntfrom; 		/* mntfromname for mount pt */
+	u_int32_t		ndm_nfsv3;		/* NFSv3 or NFSv2? */
+	u_int32_t		ndm_sotype;		/* SOCK_STREAM or SOCK_DGRAM? */
+	u_int32_t		ndm_fhlen;		/* length of file handle */
 	u_char		ndm_fh[NFSX_V3FHMAX];	/* The file's file handle */
 };
 

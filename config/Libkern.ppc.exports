@@ -1,5 +1,11 @@
 _OSDequeueAtomic
 _OSEnqueueAtomic
+_OSRuntimeFinalizeCPP
+_OSRuntimeInitializeCPP
+_OSRuntimeUnloadCPP
+_OSRuntimeUnloadCPPForSegment
+__ZN12OSOrderedSet12withCapacityEjPFlPK15OSMetaClassBaseS2_PvES3_
+__ZN12OSOrderedSet16initWithCapacityEjPFlPK15OSMetaClassBaseS2_PvES3_
 __ZN8OSObject19_RESERVEDOSObject16Ev
 __ZN8OSObject19_RESERVEDOSObject17Ev
 __ZN8OSObject19_RESERVEDOSObject18Ev
@@ -18,6 +24,6 @@ __ZN8OSObject19_RESERVEDOSObject30Ev
 __ZN8OSObject19_RESERVEDOSObject31Ev
 _bcopy_nc
 _bzero_nc
-_strcpy
-_strcat
 _sprintf
+_strcat
+_strcpy

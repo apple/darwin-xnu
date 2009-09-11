@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -76,6 +76,7 @@
 #include <sys/systm.h>
 #include <sys/proc.h>
 
+#include <machine/endian.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -131,8 +132,8 @@
 static struct inpcbhead divcb;
 static struct inpcbinfo divcbinfo;
 
-static u_long	div_sendspace = DIVSNDQ;	/* XXX sysctl ? */
-static u_long	div_recvspace = DIVRCVQ;	/* XXX sysctl ? */
+static u_int32_t	div_sendspace = DIVSNDQ;	/* XXX sysctl ? */
+static u_int32_t	div_recvspace = DIVRCVQ;	/* XXX sysctl ? */
 
 /* Optimization: have this preinitialized */
 static struct sockaddr_in divsrc = { sizeof(divsrc), AF_INET, 0, { 0 }, { 0,0,0,0,0,0,0,0 } };
@@ -190,7 +191,7 @@ div_init(void)
 void
 div_input(struct mbuf *m, __unused int off)
 {
-	OSAddAtomic(1, (SInt32*)&ipstat.ips_noproto);
+	OSAddAtomic(1, &ipstat.ips_noproto);
 	m_freem(m);
 }
 
@@ -291,8 +292,8 @@ divert_packet(struct mbuf *m, int incoming, int port, int rule)
 		socket_unlock(sa, 1);
 	} else {
 		m_freem(m);
-		OSAddAtomic(1, (SInt32*)&ipstat.ips_noproto);
-		OSAddAtomic(-1, (SInt32*)&ipstat.ips_delivered);
+		OSAddAtomic(1, &ipstat.ips_noproto);
+		OSAddAtomic(-1, &ipstat.ips_delivered);
         }
 	lck_rw_done(divcbinfo.mtx); 	
 }
@@ -352,6 +353,7 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 	/* Reinject packet into the system as incoming or outgoing */
 	if (!sin || sin->sin_addr.s_addr == 0) {
 		struct ip_out_args ipoa = { IFSCOPE_NONE };
+		struct route ro;
 
 		/*
 		 * Don't allow both user specified and setsockopt options,
@@ -364,24 +366,28 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 		}
 
 		/* Convert fields to host order for ip_output() */
+#if BYTE_ORDER != BIG_ENDIAN
 		NTOHS(ip->ip_len);
 		NTOHS(ip->ip_off);
+#endif
 
-		/* Send packet to output processing */
-		OSAddAtomic(1, (SInt32*)&ipstat.ips_rawout);
+		OSAddAtomic(1, &ipstat.ips_rawout);
+		/* Copy the cached route and take an extra reference */
+		inp_route_copyout(inp, &ro);
+
 		socket_unlock(so, 0);
 #if CONFIG_MACF_NET
 		mac_mbuf_label_associate_inpcb(inp, m);
 #endif
-#if CONFIG_IP_EDGEHOLE
-		ip_edgehole_mbuf_tag(inp, m);
-#endif
-		error = ip_output(m,
-			    inp->inp_options, &inp->inp_route,
+		/* Send packet to output processing */
+		error = ip_output(m, inp->inp_options, &ro,
 			(so->so_options & SO_DONTROUTE) |
 			IP_ALLOWBROADCAST | IP_RAWOUTPUT | IP_OUTARGS,
 			inp->inp_moptions, &ipoa);
+
 		socket_lock(so, 0);
+		/* Synchronize cached PCB route */
+		inp_route_copyin(inp, &ro);
 	} else {
 		struct	ifaddr *ifa;
 
@@ -426,7 +432,7 @@ div_attach(struct socket *so, int proto, struct proc *p)
 	inp  = sotoinpcb(so);
 	if (inp)
 		panic("div_attach");
-	if (p && (error = proc_suser(p)) != 0)
+	if ((error = proc_suser(p)) != 0)
 		return error;
 
 	error = soreserve(so, div_sendspace, div_recvspace);
@@ -519,7 +525,7 @@ div_send(struct socket *so, __unused int flags, struct mbuf *m, struct sockaddr 
 	/* Packet must have a header (but that's about it) */
 	if (m->m_len < sizeof (struct ip) &&
 	    (m = m_pullup(m, sizeof (struct ip))) == 0) {
-		OSAddAtomic(1, (SInt32*)&ipstat.ips_toosmall);
+		OSAddAtomic(1, &ipstat.ips_toosmall);
 		m_freem(m);
 		return EINVAL;
 	}
@@ -528,9 +534,11 @@ div_send(struct socket *so, __unused int flags, struct mbuf *m, struct sockaddr 
 	return div_output(so, m, nam, control);
 }
 
+#if 0
 static int
 div_pcblist SYSCTL_HANDLER_ARGS
 {
+#pragma unused(oidp, arg1, arg2)
 	int error, i, n;
 	struct inpcb *inp, **inp_list;
 	inp_gen_t gencnt;
@@ -622,82 +630,90 @@ div_pcblist SYSCTL_HANDLER_ARGS
 	lck_rw_done(divcbinfo.mtx);
 	return error;
 }
+#endif
 
 __private_extern__ int
-div_lock(struct socket *so, int refcount, int lr)
- {
-	int lr_saved;
-	if (lr == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
-	else lr_saved = lr;
-	
+div_lock(struct socket *so, int refcount, void *lr)
+{
+	void *lr_saved;
+
+	if (lr == NULL)
+		lr_saved = __builtin_return_address(0);
+	else
+		lr_saved = lr;
+
 #ifdef MORE_DICVLOCK_DEBUG
-	printf("div_lock: so=%p sopcb=%p lock=%x ref=%x lr=%x\n",
-			so, 
-			so->so_pcb, 
-			so->so_pcb ? ((struct inpcb *)so->so_pcb)->inpcb_mtx : 0, 
-			so->so_usecount, 
-			lr_saved);
+	printf("div_lock: so=%p sopcb=%p lock=%p ref=%x lr=%p\n",
+	    so, so->so_pcb, so->so_pcb ?
+	    ((struct inpcb *)so->so_pcb)->inpcb_mtx : NULL,
+	    so->so_usecount, lr_saved);
 #endif
 	if (so->so_pcb) {
 		lck_mtx_lock(((struct inpcb *)so->so_pcb)->inpcb_mtx);
 	} else  {
-		panic("div_lock: so=%p NO PCB! lr=%x\n", so, lr_saved);
-		lck_mtx_lock(so->so_proto->pr_domain->dom_mtx);
+		panic("div_lock: so=%p NO PCB! lr=%p lrh= lrh= %s\n", 
+		    so, lr_saved, solockhistory_nr(so));
+		/* NOTREACHED */
 	}
-	
-	if (so->so_usecount < 0)
-		panic("div_lock: so=%p so_pcb=%p lr=%x ref=%x\n",
-		so, so->so_pcb, lr_saved, so->so_usecount);
-	
+
+	if (so->so_usecount < 0) {
+		panic("div_lock: so=%p so_pcb=%p lr=%p ref=%x lrh= %s\n",
+		    so, so->so_pcb, lr_saved, so->so_usecount,
+		    solockhistory_nr(so));
+		/* NOTREACHED */
+	}
+
 	if (refcount)
 		so->so_usecount++;
-	so->lock_lr[so->next_lock_lr] = (u_int32_t)lr_saved;
+	so->lock_lr[so->next_lock_lr] = lr_saved;
 	so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
 
 	return (0);
 }
 
 __private_extern__ int
-div_unlock(struct socket *so, int refcount, int lr)
+div_unlock(struct socket *so, int refcount, void *lr)
 {
-	int lr_saved;
+	void *lr_saved;
 	lck_mtx_t * mutex_held;
-	struct inpcb *inp = sotoinpcb(so);	
+	struct inpcb *inp = sotoinpcb(so);
 
-	if (lr == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
-	else lr_saved = lr;
+	if (lr == NULL)
+		lr_saved = __builtin_return_address(0);
+	else
+		lr_saved = lr;
 
-	
 #ifdef MORE_DICVLOCK_DEBUG
-	printf("div_unlock: so=%p sopcb=%p lock=%x ref=%x lr=%x\n",
-			so, 
-			so->so_pcb, 
-			so->so_pcb ? ((struct inpcb *)so->so_pcb)->inpcb_mtx : 0, 
-			so->so_usecount, 
-			lr_saved);
+	printf("div_unlock: so=%p sopcb=%p lock=%p ref=%x lr=%p\n",
+	    so, so->so_pcb, so->so_pcb ?
+	    ((struct inpcb *)so->so_pcb)->inpcb_mtx : NULL,
+	    so->so_usecount, lr_saved);
 #endif
 	if (refcount)
 		so->so_usecount--;
-	
-	if (so->so_usecount < 0)
-		panic("div_unlock: so=%p usecount=%x\n", so, so->so_usecount);
-	if (so->so_pcb == NULL) {
-		panic("div_unlock: so=%p NO PCB usecount=%x lr=%x\n", so, so->so_usecount, lr_saved);
-		mutex_held = so->so_proto->pr_domain->dom_mtx;
-	} else {
-		mutex_held = ((struct inpcb *)so->so_pcb)->inpcb_mtx;
+
+	if (so->so_usecount < 0) {
+		panic("div_unlock: so=%p usecount=%x lrh= %s\n", 
+		    so, so->so_usecount, solockhistory_nr(so));
+		/* NOTREACHED */
 	}
+	if (so->so_pcb == NULL) {
+		panic("div_unlock: so=%p NO PCB usecount=%x lr=%p lrh= %s\n",
+		    so, so->so_usecount, lr_saved, solockhistory_nr(so));
+		/* NOTREACHED */
+	}
+	mutex_held = ((struct inpcb *)so->so_pcb)->inpcb_mtx;
 
 	if (so->so_usecount == 0 && (inp->inp_wantcnt == WNT_STOPUSING)) {
 		lck_rw_lock_exclusive(divcbinfo.mtx);
+		if (inp->inp_state != INPCB_STATE_DEAD)
+			in_pcbdetach(inp);
 		in_pcbdispose(inp);
 		lck_rw_done(divcbinfo.mtx);
 		return (0);
 	}
 	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
-	so->unlock_lr[so->next_unlock_lr] = (u_int32_t) lr_saved;
+	so->unlock_lr[so->next_unlock_lr] = lr_saved;
 	so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 	lck_mtx_unlock(mutex_held);
 	return (0);
@@ -710,10 +726,12 @@ div_getlock(struct socket *so, __unused int locktype)
 	
 	if (so->so_pcb)  {
 		if (so->so_usecount < 0)
-			panic("div_getlock: so=%p usecount=%x\n", so, so->so_usecount);
+			panic("div_getlock: so=%p usecount=%x lrh= %s\n", 
+			    so, so->so_usecount, solockhistory_nr(so));
 		return(inpcb->inpcb_mtx);
 	} else {
-		panic("div_getlock: so=%p NULL so_pcb\n", so);
+		panic("div_getlock: so=%p NULL NO PCB lrh= %s\n", 
+		    so, solockhistory_nr(so));
 		return (so->so_proto->pr_domain->dom_mtx);
 	}
 }

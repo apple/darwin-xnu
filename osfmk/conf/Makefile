@@ -34,7 +34,6 @@ $(COMPOBJROOT)/$(OSFMK_KERNEL_CONFIG)/Makefile:  $(SOURCE)/MASTER  \
 	$(SOURCE)/files.$(ARCH_CONFIG_LC) \
 	$(COMPOBJROOT)/doconf
 	$(_v)(doconf_target=$(addsuffix /conf, $(TARGET)); \
-	echo $${doconf_target};\
 	$(MKDIR) $${doconf_target}; \
 	cd $${doconf_target}; \
 	rm -f $(notdir $?); \

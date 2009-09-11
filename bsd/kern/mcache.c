@@ -99,7 +99,7 @@
 #define	MCACHE_LOCK_TRY(l)	lck_mtx_try_lock(l)
 
 /* This should be in a header file */
-#define	atomic_add_32(a, n)	((void) OSAddAtomic(n, (volatile SInt32 *)a))
+#define	atomic_add_32(a, n)	((void) OSAddAtomic(n, a))
 
 static int ncpu;
 static lck_mtx_t *mcache_llock;
@@ -1499,7 +1499,7 @@ mcache_audit_free_verify_set(mcache_audit_t *mca, void *base, size_t offset,
 	((mcache_obj_t *)addr)->obj_next = next;
 }
 
-#undef panic(...)
+#undef panic
 
 __private_extern__ char *
 mcache_dump_mca(mcache_audit_t *mca)

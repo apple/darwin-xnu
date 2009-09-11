@@ -58,11 +58,11 @@ extern "C"
 #define AES_BLOCK_SIZE  16  /* the AES block size in bytes          */
 #define N_COLS           4  /* the number of columns in the state   */
 
-typedef	unsigned long   uint_32t;
+typedef	unsigned int    uint_32t;
 typedef unsigned char   uint_8t;
 typedef unsigned short  uint_16t;
 typedef unsigned char   aes_08t;
-typedef	unsigned long   aes_32t;
+typedef	unsigned int    aes_32t;
 
 #define void_ret  void
 #define int_ret   int

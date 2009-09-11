@@ -38,9 +38,13 @@ COMP_SUBDIRS = \
 	mach \
 	UserNotification \
 	gssd \
+	kextd \
 	lockd
 
 COMP_SUBDIRS_I386 = \
+	mach
+
+COMP_SUBDIRS_X86_64 = \
 	mach
 
 #
@@ -88,8 +92,10 @@ $(COMPONENT).o: $(LDOBJS) assym.s
                 $(SEG_HACK) __HIB $${hib_file} -o $${hib_file}__; \
                 mv $${hib_file}__ $${hib_file} ; \
 	done;
-	@echo LD $(COMPONENT)
-	$(_v)$(LD)  $(LDFLAGS_COMPONENT)  -o $(COMPONENT).o ${LDOBJS}
+	@echo LDFILELIST $(COMPONENT)
+	$(_v)( for obj in ${LDOBJS}; do	\
+		 echo $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$${obj}; \
+	done; ) > $(COMPONENT).o
 
 do_all: $(COMPONENT).o
 

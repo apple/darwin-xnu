@@ -47,7 +47,7 @@
 #ifndef _MACH_TYPES_H_
 #define _MACH_TYPES_H_
 
-#include "machine/types.h"
+#include "libsa/machine/types.h"
 
 #ifndef	_SIZE_T
 #define _SIZE_T
@@ -95,4 +95,14 @@ typedef	volatile unsigned char	vuchar_t;
 typedef	volatile unsigned short	vushort_t;
 typedef	volatile unsigned int	vuint_t;
 typedef volatile unsigned long	vulong_t;
+
+/*
+ * Deprecation macro
+ */
+#if __GNUC__ >= 3
+#define __deprecated __attribute__((deprecated))
+#else
+#define __deprecated /* nothing */
+#endif
+
 #endif	/* _MACH_TYPES_H_ */

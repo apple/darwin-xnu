@@ -39,12 +39,17 @@ __END_DECLS
 #include <libkern/c++/OSContainers.h>
 #include <iokit/IOLib.h>
 
-char *testBuffer = 
+const char *testBuffer = 
 " <?xml version=\"1.0\" encoding=\"UTF-8\"?> \n"
 " <!DOCTYPE plist SYSTEM \"file://localhost/System/Library/DTDs/PropertyList.dtd\"> \n"
 " <plist version=\"1.0\"> \n"
 " <!DOCTYPE plist PUBLIC \"-//Apple Computer//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"> \n"
 " <plist version=\"0.9\"> \n"
+" <!-- this is a comment --> \n"    
+" <!-- this is a comment with embedded XML statements \n"
+" <key>ignore me</key>	<true/> \n"
+" --> \n"
+
 " <dict> \n"
 
 " <key>key true</key>	<true/> \n"
@@ -64,7 +69,7 @@ char *testBuffer =
 " <key>key s0</key>	<string></string> \n"
 " <key>key s1</key>	<string>string 1</string> \n"
 " <key>key s2</key>	<string ID=\"3\">string 2</string> \n"
-" <key>key mr ©</key>	<string>mac roman copyright ©</string> \n"
+" <key>key mr ï¿½</key>	<string>mac roman copyright ï¿½</string> \n"
 " <key>key uft8 \xc2\xa9</key>	<string>utf-8 copyright \xc2\xa9</string> \n"
 " <key>key &lt;&amp;&gt;</key>	<string>&lt;&amp;&gt;</string> \n"
 

@@ -34,15 +34,7 @@
 #include <IOKit/IOLocks.h>
 #include <libkern/c++/OSContainers.h>
 
-__BEGIN_DECLS
 #include <mach/memory_object_types.h>
-__END_DECLS
-
-struct IOPhysicalRange
-{
-    IOPhysicalAddress	address;
-    IOByteCount		length;
-};
 
 class IOMemoryMap;
 class IOMapper;
@@ -50,7 +42,11 @@ class IOMapper;
 /*
  * Direction of transfer, with respect to the described memory.
  */
+#ifdef __LP64__
+enum
+#else /* !__LP64__ */
 enum IODirection
+#endif /* !__LP64__ */
 {
     kIODirectionNone  = 0x0,	//                    same as VM_PROT_NONE
     kIODirectionIn    = 0x1,	// User land 'read',  same as VM_PROT_READ
@@ -58,26 +54,36 @@ enum IODirection
     kIODirectionOutIn = kIODirectionOut | kIODirectionIn,
     kIODirectionInOut = kIODirectionIn  | kIODirectionOut
 };
+#ifdef __LP64__
+typedef IOOptionBits IODirection;
+#endif /* __LP64__ */
 
 /*
  * IOOptionBits used in the withOptions variant
  */
 enum {
     kIOMemoryDirectionMask	= 0x00000007,
+#ifdef XNU_KERNEL_PRIVATE
     kIOMemoryAutoPrepare	= 0x00000008,	// Shared with Buffer MD
-    
+#endif
+
     kIOMemoryTypeVirtual	= 0x00000010,
     kIOMemoryTypePhysical	= 0x00000020,
     kIOMemoryTypeUPL		= 0x00000030,
     kIOMemoryTypePersistentMD	= 0x00000040,	// Persistent Memory Descriptor
     kIOMemoryTypeUIO		= 0x00000050,
+#ifdef __LP64__
+    kIOMemoryTypeVirtual64	= kIOMemoryTypeVirtual,
+    kIOMemoryTypePhysical64	= kIOMemoryTypePhysical,
+#else /* !__LP64__ */
     kIOMemoryTypeVirtual64	= 0x00000060,
     kIOMemoryTypePhysical64	= 0x00000070,
+#endif /* !__LP64__ */
     kIOMemoryTypeMask		= 0x000000f0,
 
     kIOMemoryAsReference	= 0x00000100,
     kIOMemoryBufferPageable	= 0x00000400,
-    kIOMemoryDontMap		= 0x00000800,
+    kIOMemoryMapperNone		= 0x00000800,
 #ifdef XNU_KERNEL_PRIVATE
     kIOMemoryRedirected		= 0x00004000,
     kIOMemoryPreparedReadOnly	= 0x00008000,
@@ -89,7 +95,6 @@ enum {
     kIOMemoryThreadSafe		= 0x00100000,	// Shared with Buffer MD
 };
 
-#define kIOMapperNone	((IOMapper *) -1)
 #define kIOMapperSystem	((IOMapper *) 0)
 
 enum 
@@ -107,6 +112,11 @@ enum
 
 #define	IOMEMORYDESCRIPTOR_SUPPORTS_DMACOMMAND	1
 
+enum 
+{
+    kIOPreparationIDUnprepared = 0,
+    kIOPreparationIDUnsupported = 1,
+};
 
 /*! @class IOMemoryDescriptor : public OSObject
     @abstract An abstract base class defining common methods for describing physical or virtual memory.
@@ -114,8 +124,7 @@ enum
 
 class IOMemoryDescriptor : public OSObject
 {
-    friend class _IOMemoryMap;
-    friend class IOSubMemoryDescriptor;
+    friend class IOMemoryMap;
 
     OSDeclareDefaultStructors(IOMemoryDescriptor);
 
@@ -139,15 +148,23 @@ protected:
     IOOptionBits 	_flags;
     void *		_memEntry;
 
-    IODirection         _direction;        /* DEPRECATED: use _flags instead. direction of transfer */
+#ifdef __LP64__
+    uint64_t		__iomd_reserved1;
+    uint64_t		__iomd_reserved2;
+    uint64_t		__iomd_reserved3;
+    uint64_t		__iomd_reserved4;
+#else /* !__LP64__ */
+    IODirection         _direction;        /* use _flags instead */
+#endif /* !__LP64__ */
     IOByteCount         _length;           /* length of all ranges */
     IOOptionBits 	_tag;
 
 public:
 typedef IOOptionBits DMACommandOps;
+#ifndef __LP64__
     virtual IOPhysicalAddress getSourceSegment( IOByteCount offset,
-						IOByteCount * length );
-    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 0);
+						IOByteCount * length ) APPLE_KEXT_DEPRECATED;
+#endif /* !__LP64__ */
 
 /*! @function initWithOptions
     @abstract Master initialiser for all variants of memory descriptors.  For a more complete description see IOMemoryDescriptor::withOptions.
@@ -159,12 +176,11 @@ typedef IOOptionBits DMACommandOps;
                                  task_t		task,
                                  IOOptionBits	options,
                                  IOMapper *	mapper = kIOMapperSystem);
-    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 1);
 
+#ifndef __LP64__
     virtual addr64_t getPhysicalSegment64( IOByteCount offset,
-                                            IOByteCount * length );
-    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 2);
-
+                                            IOByteCount * length ) APPLE_KEXT_DEPRECATED; /* use getPhysicalSegment() and kIOMemoryMapperNone instead */
+#endif /* !__LP64__ */
 
 /*! @function setPurgeable
     @abstract Control the purgeable status of a memory descriptors memory.
@@ -182,7 +198,6 @@ typedef IOOptionBits DMACommandOps;
 
     virtual IOReturn setPurgeable( IOOptionBits newState,
                                     IOOptionBits * oldState );
-    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 3);
 
 /*! @function performOperation
     @abstract Perform an operation on the memory descriptor's memory.
@@ -196,15 +211,48 @@ typedef IOOptionBits DMACommandOps;
 
     virtual IOReturn performOperation( IOOptionBits options,
                                         IOByteCount offset, IOByteCount length );
-    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 4);
 
     // Used for dedicated communications for IODMACommand
     virtual IOReturn dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const;
-    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 5);
 
+/*! @function getPhysicalSegment
+    @abstract Break a memory descriptor into its physically contiguous segments.
+    @discussion This method returns the physical address of the byte at the given offset into the memory, and optionally the length of the physically contiguous segment from that offset.
+    @param offset A byte offset into the memory whose physical address to return.
+    @param length If non-zero, getPhysicalSegment will store here the length of the physically contiguous segement at the given offset.
+    @result A physical address, or zero if the offset is beyond the length of the memory. */
+
+#ifdef __LP64__
+    virtual addr64_t getPhysicalSegment( IOByteCount   offset,
+                                         IOByteCount * length,
+                                         IOOptionBits  options = 0 ) = 0;
+#else /* !__LP64__ */
+    virtual addr64_t getPhysicalSegment( IOByteCount   offset,
+                                         IOByteCount * length,
+                                         IOOptionBits  options );
+#endif /* !__LP64__ */
+
+    virtual uint64_t getPreparationID( void );
+	
 private:
+    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 0);
+#ifdef __LP64__
+    OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 1);
+    OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 2);
+    OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 3);
+    OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 4);
+    OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 5);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 6);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 7);
+#else /* !__LP64__ */
+    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 1);
+    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 2);
+    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 3);
+    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 4);
+    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 5);
+    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 6);
+    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 7);
+#endif /* !__LP64__ */
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 8);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 9);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 10);
@@ -222,7 +270,7 @@ public:
 public:
 /*! @function withAddress
     @abstract Create an IOMemoryDescriptor to describe one virtual range of the kernel task.
-    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of a single virtual memory range mapped into the kernel map.
+    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of a single virtual memory range mapped into the kernel map.  This memory descriptor needs to be prepared before it can be used to extract data from the memory described.
     @param address The virtual address of the first byte in the memory.
     @param withLength The length of memory.
     @param withDirection An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
@@ -232,19 +280,12 @@ public:
                                             IOByteCount  withLength,
                                             IODirection  withDirection);
 
-/*! @function withAddress
-    @abstract Create an IOMemoryDescriptor to describe one virtual range of the specified map.
-    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of a single virtual memory range mapped into the specified map.
-    @param address The virtual address of the first byte in the memory.
-    @param withLength The length of memory.
-    @param withDirection An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
-    @param withTask The task the virtual ranges are mapped into.
-    @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
-
-    static IOMemoryDescriptor * withAddress(vm_address_t address,
+#ifndef __LP64__
+    static IOMemoryDescriptor * withAddress(IOVirtualAddress address,
                                             IOByteCount  withLength,
                                             IODirection  withDirection,
-                                            task_t       withTask);
+                                            task_t       withTask) APPLE_KEXT_DEPRECATED; /* use withAddressRange() and prepare() instead */
+#endif /* !__LP64__ */
 
 /*! @function withPhysicalAddress
     @abstract Create an IOMemoryDescriptor to describe one physical range.
@@ -259,25 +300,17 @@ public:
 				IOByteCount		withLength,
 				IODirection      	withDirection );
 
-/*! @function withRanges
-    @abstract Create an IOMemoryDescriptor to describe one or more virtual ranges.
-    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of an array of virtual memory ranges each mapped into a specified source task.
-    @param ranges An array of IOVirtualRange structures which specify the virtual ranges in the specified map which make up the memory to be described.
-    @param withCount The member count of the ranges array.
-    @param withDirection An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
-    @param withTask The task each of the virtual ranges are mapped into.
-    @param asReference If false, the IOMemoryDescriptor object will make a copy of the ranges array, otherwise, the array will be used in situ, avoiding an extra allocation.
-    @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
-
+#ifndef __LP64__
      static IOMemoryDescriptor * withRanges(IOVirtualRange * ranges,
                                             UInt32           withCount,
                                             IODirection      withDirection,
                                             task_t           withTask,
-                                            bool             asReference = false);
+                                            bool             asReference = false) APPLE_KEXT_DEPRECATED; /* use withAddressRanges() instead */
+#endif /* !__LP64__ */
 
 /*! @function withAddressRange
     @abstract Create an IOMemoryDescriptor to describe one virtual range of the specified map.
-    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of a single virtual memory range mapped into the specified map. Note that unlike IOMemoryDescriptor::withAddress(), kernel_task memory must be explicitly prepared when passed to this api.
+    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of a single virtual memory range mapped into the specified map.  This memory descriptor needs to be prepared before it can be used to extract data from the memory described.
     @param address The virtual address of the first byte in the memory.
     @param withLength The length of memory.
     @param options
@@ -293,7 +326,7 @@ public:
 
 /*! @function withAddressRanges
     @abstract Create an IOMemoryDescriptor to describe one or more virtual ranges.
-    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of an array of virtual memory ranges each mapped into a specified source task. Note that unlike IOMemoryDescriptor::withAddress(), kernel_task memory must be explicitly prepared when passed to this api.
+    @discussion This method creates and initializes an IOMemoryDescriptor for memory consisting of an array of virtual memory ranges each mapped into a specified source task.  This memory descriptor needs to be prepared before it can be used to extract data from the memory described.
     @param ranges An array of IOAddressRange structures which specify the virtual ranges in the specified map which make up the memory to be described. IOAddressRange is the 64bit version of IOVirtualRange.
     @param rangeCount The member count of the ranges array.
     @param options
@@ -306,14 +339,14 @@ public:
 					IOAddressRange * ranges,
 					UInt32           rangeCount,
 					IOOptionBits     options,
-					task_t           withTask);
+					task_t           task);
 
 /*! @function withOptions
     @abstract Master initialiser for all variants of memory descriptors.
-    @discussion This method creates and initializes an IOMemoryDescriptor for memory it has three main variants: Virtual, Physical & mach UPL.  These variants are selected with the options parameter, see below.  This memory descriptor needs to be prepared before it can be used to extract data from the memory described.  However we temporarily have setup a mechanism that automatically prepares kernel_task memory descriptors at creation time.
+    @discussion This method creates and initializes an IOMemoryDescriptor for memory it has three main variants: Virtual, Physical & mach UPL.  These variants are selected with the options parameter, see below.  This memory descriptor needs to be prepared before it can be used to extract data from the memory described.
 
 
-    @param buffers A pointer to an array of IOVirtualRanges or IOPhysicalRanges if the options:type is Virtual or Physical.  For type UPL it is a upl_t returned by the mach/memory_object_types.h apis, primarily used internally by the UBC.
+    @param buffers A pointer to an array of IOAddressRange when options:type is kIOMemoryTypeVirtual64 or kIOMemoryTypePhysical64 or a 64bit kernel. For type UPL it is a upl_t returned by the mach/memory_object_types.h apis, primarily used internally by the UBC. IOVirtualRanges or IOPhysicalRanges are 32 bit only types for use when options:type is kIOMemoryTypeVirtual or kIOMemoryTypePhysical on 32bit kernels.
 
     @param count options:type = Virtual or Physical count contains a count of the number of entires in the buffers array.  For options:type = UPL this field contains a total length.
 
@@ -323,10 +356,9 @@ public:
 
     @param options
         kIOMemoryDirectionMask (options:direction)	This nibble indicates the I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures. 
-        kIOMemoryTypeMask (options:type)	kIOMemoryTypeVirtual, kIOMemoryTypePhysical, kIOMemoryTypeUPL Indicates that what type of memory basic memory descriptor to use.  This sub-field also controls the interpretation of the buffers, count, offset & task parameters.
+        kIOMemoryTypeMask (options:type)	kIOMemoryTypeVirtual64, kIOMemoryTypeVirtual, kIOMemoryTypePhysical64, kIOMemoryTypePhysical, kIOMemoryTypeUPL Indicates that what type of memory basic memory descriptor to use.  This sub-field also controls the interpretation of the buffers, count, offset & task parameters.
         kIOMemoryAsReference	For options:type = Virtual or Physical this indicate that the memory descriptor need not copy the ranges array into local memory.  This is an optimisation to try to minimise unnecessary allocations.
         kIOMemoryBufferPageable	Only used by the IOBufferMemoryDescriptor as an indication that the kernel virtual memory is in fact pageable and we need to use the kernel pageable submap rather than the default map.
-        kIOMemoryNoAutoPrepare	Indicates that the temporary AutoPrepare of kernel_task memory should not be performed.
     
     @param mapper Which IOMapper should be used to map the in-memory physical addresses into I/O space addresses.  Defaults to 0 which indicates that the system mapper is to be used, if present.  
 
@@ -339,34 +371,20 @@ public:
                                            IOOptionBits	options,
                                            IOMapper *	mapper = kIOMapperSystem);
 
-/*! @function withPhysicalRanges
-    @abstract Create an IOMemoryDescriptor to describe one or more physical ranges.
-    @discussion  This method creates and initializes an IOMemoryDescriptor for memory consisting of an array of physical memory ranges.
-    @param ranges An array of IOPhysicalRange structures which specify the physical ranges which make up the memory to be described.
-    @param withCount The member count of the ranges array.
-    @param withDirection An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
-    @param asReference If false, the IOMemoryDescriptor object will make a copy of the ranges array, otherwise, the array will be used in situ, avoiding an extra allocation.
-    @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
-
+#ifndef __LP64__
     static IOMemoryDescriptor * withPhysicalRanges(
                                             IOPhysicalRange *	ranges,
                                             UInt32		withCount,
                                             IODirection 	withDirection,
-                                            bool		asReference = false);
+                                            bool		asReference = false) APPLE_KEXT_DEPRECATED; /* use withOptions() and kIOMemoryTypePhysical instead */
+#endif /* !__LP64__ */
 
-/*! @function withSubRange
-    @abstract Create an IOMemoryDescriptor to describe a subrange of an existing descriptor.
-    @discussion  This method creates and initializes an IOMemoryDescriptor for memory consisting of a subrange of the specified memory descriptor. The parent memory descriptor is retained by the new descriptor.
-    @param of The parent IOMemoryDescriptor of which a subrange is to be used for the new descriptor, which will be retained by the subrange IOMemoryDescriptor.
-    @param offset A byte offset into the parent memory descriptor's memory.
-    @param length The length of the subrange.
-    @param withDirection An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures. This is used over the direction of the parent descriptor.
-    @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
-
+#ifndef __LP64__
     static IOMemoryDescriptor *	withSubRange(IOMemoryDescriptor *of,
 					     IOByteCount offset,
 					     IOByteCount length,
-                                             IODirection withDirection);
+					     IODirection withDirection) APPLE_KEXT_DEPRECATED; /* use IOSubMemoryDescriptor::withSubRange() and kIOMemoryThreadSafe instead */
+#endif /* !__LP64__ */
 
 /*! @function withPersistentMemoryDescriptor
     @abstract Copy constructor that generates a new memory descriptor if the backing memory for the same task's virtual address and length has changed.
@@ -376,74 +394,30 @@ public:
     static IOMemoryDescriptor *
 	withPersistentMemoryDescriptor(IOMemoryDescriptor *originalMD);
 
-/*! @function initWithAddress
-    @abstract Initialize or reinitialize an IOMemoryDescriptor to describe one virtual range of the kernel task.
-    @discussion This method initializes an IOMemoryDescriptor for memory consisting of a single virtual memory range mapped into the kernel map. An IOMemoryDescriptor can be re-used by calling initWithAddress or initWithRanges again on an existing instance -- note this behavior is not commonly supported in other IOKit classes, although it is supported here.
-    @param address The virtual address of the first byte in the memory.
-    @param withLength The length of memory.
-    @param withDirection An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
-    @result true on success, false on failure. */
-
+#ifndef __LP64__
+	// obsolete initializers
+	// - initWithOptions is the designated initializer 
     virtual bool initWithAddress(void *       address,
                                  IOByteCount  withLength,
-                                 IODirection  withDirection) = 0;
-
-/*! @function initWithAddress
-    @abstract Initialize or reinitialize an IOMemoryDescriptor to describe one virtual range of the specified map.
-    @discussion This method initializes an IOMemoryDescriptor for memory consisting of a single virtual memory range mapped into the specified map. An IOMemoryDescriptor can be re-used by calling initWithAddress or initWithRanges again on an existing instance -- note this behavior is not commonly supported in other IOKit classes, although it is supported here.
-    @param address The virtual address of the first byte in the memory.
-    @param withLength The length of memory.
-    @param withDirection An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
-    @param withTask The task the virtual ranges are mapped into.
-    @result true on success, false on failure. */
-
-    virtual bool initWithAddress(vm_address_t address,
+                                 IODirection  withDirection) APPLE_KEXT_DEPRECATED; /* use initWithOptions() instead */
+    virtual bool initWithAddress(IOVirtualAddress address,
                                  IOByteCount  withLength,
                                  IODirection  withDirection,
-                                 task_t       withTask) = 0;
-
-/*! @function initWithPhysicalAddress
-    @abstract Initialize or reinitialize an IOMemoryDescriptor to describe one physical range.
-    @discussion This method initializes an IOMemoryDescriptor for memory consisting of a single physical memory range. An IOMemoryDescriptor can be re-used by calling initWithAddress or initWithRanges again on an existing instance -- note this behavior is not commonly supported in other IOKit classes, although it is supported here.
-    @param address The physical address of the first byte in the memory.
-    @param withLength The length of memory.
-    @param withDirection An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
-    @result true on success, false on failure. */
-
+                                 task_t       withTask) APPLE_KEXT_DEPRECATED; /* use initWithOptions() instead */
     virtual bool initWithPhysicalAddress(
 				 IOPhysicalAddress	address,
 				 IOByteCount		withLength,
-				 IODirection      	withDirection ) = 0;
-
-/*! @function initWithRanges
-    @abstract Initialize or reinitialize an IOMemoryDescriptor to describe one or more virtual ranges.
-    @discussion This method initializes an IOMemoryDescriptor for memory consisting of an array of virtual memory ranges each mapped into a specified source task. An IOMemoryDescriptor can be re-used by calling initWithAddress or initWithRanges again on an existing instance -- note this behavior is not commonly supported in other IOKit classes, although it is supported here.
-    @param ranges An array of IOVirtualRange structures which specify the virtual ranges in the specified map which make up the memory to be described.
-    @param withCount The member count of the ranges array.
-    @param withDirection An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
-    @param withTask The task each of the virtual ranges are mapped into.
-    @param asReference If false, the IOMemoryDescriptor object will make a copy of the ranges array, otherwise, the array will be used in situ, avoiding an extra allocation.
-    @result true on success, false on failure. */
-
+				 IODirection      	withDirection ) APPLE_KEXT_DEPRECATED; /* use initWithOptions() instead */
     virtual bool initWithRanges(IOVirtualRange * ranges,
                                 UInt32           withCount,
                                 IODirection      withDirection,
                                 task_t           withTask,
-                                bool             asReference = false) = 0;
-
-/*! @function initWithPhysicalRanges
-    @abstract Initialize or reinitialize an IOMemoryDescriptor to describe one or more physical ranges.
-    @discussion  This method initializes an IOMemoryDescriptor for memory consisting of an array of physical memory ranges. An IOMemoryDescriptor can be re-used by calling initWithAddress or initWithRanges again on an existing instance -- note this behavior is not commonly supported in other IOKit classes, although it is supported here.
-    @param ranges An array of IOPhysicalRange structures which specify the physical ranges which make up the memory to be described.
-    @param withCount The member count of the ranges array.
-    @param withDirection An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
-    @param asReference If false, the IOMemoryDescriptor object will make a copy of the ranges array, otherwise, the array will be used in situ, avoiding an extra allocation.
-    @result true on success, false on failure. */
-
+                                bool             asReference = false) APPLE_KEXT_DEPRECATED; /* use initWithOptions() instead */
     virtual bool initWithPhysicalRanges(IOPhysicalRange * ranges,
                                         UInt32           withCount,
                                         IODirection      withDirection,
-                                        bool             asReference = false) = 0;
+                                        bool             asReference = false) APPLE_KEXT_DEPRECATED; /* use initWithOptions() instead */
+#endif /* __LP64__ */
 
 /*! @function getDirection
     @abstract Accessor to get the direction the memory descriptor was created with.
@@ -479,7 +453,7 @@ public:
     @param offset A byte offset into the memory descriptor's memory.
     @param bytes The caller supplied buffer to copy the data to.
     @param withLength The length of the data to copy.
-    @result The number of bytes copied, zero will be returned if the specified offset is beyond the length of the descriptor. */
+    @result The number of bytes copied, zero will be returned if the specified offset is beyond the length of the descriptor. Development/debug kernel builds will assert if the offset is beyond the length of the descriptor. */
 
     virtual IOByteCount readBytes(IOByteCount offset,
 				void * bytes, IOByteCount withLength);
@@ -490,33 +464,27 @@ public:
     @param offset A byte offset into the memory descriptor's memory.
     @param bytes The caller supplied buffer to copy the data from.
     @param withLength The length of the data to copy.
-    @result The number of bytes copied, zero will be returned if the specified offset is beyond the length of the descriptor. */
+    @result The number of bytes copied, zero will be returned if the specified offset is beyond the length of the descriptor. Development/debug kernel builds will assert if the offset is beyond the length of the descriptor. */
 
     virtual IOByteCount writeBytes(IOByteCount offset,
 				const void * bytes, IOByteCount withLength);
 
-/*! @function getPhysicalSegment
-    @abstract Break a memory descriptor into its physically contiguous segments.
-    @discussion This method returns the physical address of the byte at the given offset into the memory, and optionally the length of the physically contiguous segment from that offset.
-    @param offset A byte offset into the memory whose physical address to return.
-    @param length If non-zero, getPhysicalSegment will store here the length of the physically contiguous segement at the given offset.
-    @result A physical address, or zero if the offset is beyond the length of the memory. */
-
+#ifndef __LP64__
     virtual IOPhysicalAddress getPhysicalSegment(IOByteCount offset,
-						 IOByteCount * length) = 0;
+						 IOByteCount * length);
+#endif /* !__LP64__ */
 
 /*! @function getPhysicalAddress
     @abstract Return the physical address of the first byte in the memory.
     @discussion This method returns the physical address of the  first byte in the memory. It is most useful on memory known to be physically contiguous.
     @result A physical address. */
 
-    /* inline */ IOPhysicalAddress getPhysicalAddress();
-        /* { return( getPhysicalSegment( 0, 0 )); } */
+    IOPhysicalAddress getPhysicalAddress();
 
-    /* DEPRECATED */ /* USE INSTEAD: map(), readBytes(), writeBytes() */
-    /* DEPRECATED */ virtual void * getVirtualSegment(IOByteCount offset,
-    /* DEPRECATED */					IOByteCount * length) = 0;
-    /* DEPRECATED */ /* USE INSTEAD: map(), readBytes(), writeBytes() */
+#ifndef __LP64__
+    virtual void * getVirtualSegment(IOByteCount offset,
+					IOByteCount * length) APPLE_KEXT_DEPRECATED; /* use map() and getVirtualAddress() instead */
+#endif /* !__LP64__ */
 
 /*! @function prepare
     @abstract Prepare the memory for an I/O transfer.
@@ -561,29 +529,14 @@ public:
 	mach_vm_size_t		offset = 0,
 	mach_vm_size_t		length = 0 );
 
-/*! @function map
-    @abstract Maps a IOMemoryDescriptor into a task - deprecated, only safe for 32 bit tasks. Use createMappingInTask instead.
-    @discussion This is the general purpose method to map all or part of the memory described by a memory descriptor into a task at any available address, or at a fixed address if possible. Caching & read-only options may be set for the mapping. The mapping is represented as a returned reference to a IOMemoryMap object, which may be shared if the mapping is compatible with an existing mapping of the IOMemoryDescriptor. The IOMemoryMap object returned should be released only when the caller has finished accessing the mapping, as freeing the object destroys the mapping. 
-    @param intoTask Sets the target task for the mapping. Pass kernel_task for the kernel address space.
-    @param atAddress If a placed mapping is requested, atAddress specifies its address, and the kIOMapAnywhere should not be set. Otherwise, atAddress is ignored.
-    @param options Mapping options are defined in IOTypes.h,<br>
-	kIOMapAnywhere should be passed if the mapping can be created anywhere. If not set, the atAddress parameter sets the location of the mapping, if it is available in the target map.<br>
-	kIOMapDefaultCache to inhibit the cache in I/O areas, kIOMapCopybackCache in general purpose RAM.<br>
-	kIOMapInhibitCache, kIOMapWriteThruCache, kIOMapCopybackCache to set the appropriate caching.<br>
-	kIOMapReadOnly to allow only read only accesses to the memory - writes will cause and access fault.<br>
-	kIOMapReference will only succeed if the mapping already exists, and the IOMemoryMap object is just an extra reference, ie. no new mapping will be created.<br>
-	kIOMapUnique allows a special kind of mapping to be created that may be used with the IOMemoryMap::redirect() API. These mappings will not be shared as is the default - there will always be a unique mapping created for the caller, not an existing mapping with an extra reference.<br>
-    @param offset Is a beginning offset into the IOMemoryDescriptor's memory where the mapping starts. Zero is the default to map all the memory.
-    @param length Is the length of the mapping requested for a subset of the IOMemoryDescriptor. Zero is the default to map all the memory.
-    @result A reference to an IOMemoryMap object representing the mapping, which can supply the virtual address of the mapping and other information. The mapping may be shared with multiple callers - multiple maps are avoided if a compatible one exists. The IOMemoryMap object returned should be released only when the caller has finished accessing the mapping, as freeing the object destroys the mapping. The IOMemoryMap instance also retains the IOMemoryDescriptor it maps while it exists. */
-
+#ifndef __LP64__
     virtual IOMemoryMap * 	map(
 	task_t		intoTask,
 	IOVirtualAddress	atAddress,
 	IOOptionBits		options,
 	IOByteCount		offset = 0,
-	IOByteCount		length = 0 );
-
+	IOByteCount		length = 0 ) APPLE_KEXT_DEPRECATED; /* use createMappingInTask() instead */
+#endif /* !__LP64__ */
 
 /*! @function map
     @abstract Maps a IOMemoryDescriptor into the kernel map.
@@ -609,7 +562,9 @@ public:
 
     // Following methods are private implementation
 
-    // make virtual
+#ifdef __LP64__
+    virtual
+#endif /* __LP64__ */
     IOReturn redirect( task_t safeTask, bool redirect );
 
     IOReturn handleFault(
@@ -620,7 +575,6 @@ public:
 	mach_vm_size_t		length,
         IOOptionBits		options );
 
-protected:
     virtual IOMemoryMap * 	makeMapping(
 	IOMemoryDescriptor *	owner,
 	task_t			intoTask,
@@ -629,6 +583,7 @@ protected:
 	IOByteCount		offset,
 	IOByteCount		length );
 
+protected:
     virtual void 		addMapping(
 	IOMemoryMap *		mapping );
 
@@ -651,12 +606,31 @@ protected:
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 /*! @class IOMemoryMap : public OSObject
-    @abstract An abstract base class defining common methods for describing a memory mapping.
+    @abstract A class defining common methods for describing a memory mapping.
     @discussion The IOMemoryMap object represents a mapped range of memory, described by a IOMemoryDescriptor. The mapping may be in the kernel or a non-kernel task and has processor cache mode attributes. IOMemoryMap instances are created by IOMemoryDescriptor when it creates mappings in its map method, and returned to the caller. */
 
 class IOMemoryMap : public OSObject
 {
-    OSDeclareAbstractStructors(IOMemoryMap)
+    OSDeclareDefaultStructors(IOMemoryMap)
+#ifdef XNU_KERNEL_PRIVATE
+public:
+    IOMemoryDescriptor * fMemory;
+    IOMemoryMap *	 fSuperMap;
+    mach_vm_size_t	 fOffset;
+    mach_vm_address_t	 fAddress;
+    mach_vm_size_t	 fLength;
+    task_t		 fAddressTask;
+    vm_map_t		 fAddressMap;
+    IOOptionBits	 fOptions;
+    upl_t		 fRedirUPL;
+    ipc_port_t		 fRedirEntry;
+    IOMemoryDescriptor * fOwner;
+    uint8_t		 fUserClientUnmap;
+#endif /* XNU_KERNEL_PRIVATE */
+
+protected:
+    virtual void taggedRelease(const void *tag = 0) const;
+    virtual void free();
 
 public:
 /*! @function getVirtualAddress
@@ -664,7 +638,7 @@ public:
     @discussion This method returns the virtual address of the first byte in the mapping.
     @result A virtual address. */
 
-    virtual IOVirtualAddress 	getVirtualAddress() = 0;
+    virtual IOVirtualAddress 	getVirtualAddress();
 
 /*! @function getPhysicalSegment
     @abstract Break a mapping into its physically contiguous segments.
@@ -673,53 +647,58 @@ public:
     @param length If non-zero, getPhysicalSegment will store here the length of the physically contiguous segement at the given offset.
     @result A physical address, or zero if the offset is beyond the length of the mapping. */
 
+#ifdef __LP64__
     virtual IOPhysicalAddress 	getPhysicalSegment(IOByteCount offset,
-	       					   IOByteCount * length) = 0;
+	       					   IOByteCount * length,
+	       					   IOOptionBits  options = 0);
+#else /* !__LP64__ */
+    virtual IOPhysicalAddress 	getPhysicalSegment(IOByteCount offset,
+	       					   IOByteCount * length);
+#endif /* !__LP64__ */
 
 /*! @function getPhysicalAddress
     @abstract Return the physical address of the first byte in the mapping.
     @discussion This method returns the physical address of the  first byte in the mapping. It is most useful on mappings known to be physically contiguous.
     @result A physical address. */
 
-    /* inline */ IOPhysicalAddress getPhysicalAddress();
-        /* { return( getPhysicalSegment( 0, 0 )); } */
+    IOPhysicalAddress getPhysicalAddress();
 
 /*! @function getLength
     @abstract Accessor to the length of the mapping.
     @discussion This method returns the length of the mapping.
     @result A byte count. */
 
-    virtual IOByteCount 	getLength() = 0;
+    virtual IOByteCount 	getLength();
 
 /*! @function getAddressTask
     @abstract Accessor to the task of the mapping.
     @discussion This method returns the mach task the mapping exists in.
     @result A mach task_t. */
 
-    virtual task_t		getAddressTask() = 0;
+    virtual task_t		getAddressTask();
 
 /*! @function getMemoryDescriptor
     @abstract Accessor to the IOMemoryDescriptor the mapping was created from.
     @discussion This method returns the IOMemoryDescriptor the mapping was created from.
     @result An IOMemoryDescriptor reference, which is valid while the IOMemoryMap object is retained. It should not be released by the caller. */
 
-    virtual IOMemoryDescriptor * getMemoryDescriptor() = 0;
+    virtual IOMemoryDescriptor * getMemoryDescriptor();
 
 /*! @function getMapOptions
     @abstract Accessor to the options the mapping was created with.
     @discussion This method returns the options to IOMemoryDescriptor::map the mapping was created with.
     @result Options for the mapping, including cache settings. */
 
-    virtual IOOptionBits 	getMapOptions() = 0;
+    virtual IOOptionBits 	getMapOptions();
 
 /*! @function unmap
     @abstract Force the IOMemoryMap to unmap, without destroying the object.
     @discussion IOMemoryMap instances will unmap themselves upon free, ie. when the last client with a reference calls release. This method forces the IOMemoryMap to destroy the mapping it represents, regardless of the number of clients. It is not generally used.
     @result An IOReturn code. */
 
-    virtual IOReturn 		unmap() = 0;
+    virtual IOReturn 		unmap();
 
-    virtual void		taskDied() = 0;
+    virtual void		taskDied();
 
 /*! @function redirect
     @abstract Replace the memory mapped in a process with new backing memory.
@@ -729,24 +708,69 @@ public:
     @param offset As with IOMemoryDescriptor::map(), a beginning offset into the IOMemoryDescriptor's memory where the mapping starts. Zero is the default.
     @result An IOReturn code. */
 
+#ifndef __LP64__
+// For 32 bit XNU, there is a 32 bit (IOByteCount) and a 64 bit (mach_vm_size_t) interface;
+// for 64 bit, these fall together on the 64 bit one.
     virtual IOReturn		redirect(IOMemoryDescriptor * newBackingMemory,
 					 IOOptionBits         options,
-					 IOByteCount          offset = 0) = 0;
-
+					 IOByteCount          offset = 0);
+#endif
     virtual IOReturn		redirect(IOMemoryDescriptor * newBackingMemory,
 					 IOOptionBits         options,
-					 mach_vm_size_t       offset = 0) = 0;
+					 mach_vm_size_t       offset = 0);
 
-    virtual mach_vm_address_t 	getAddress() = 0;
-    virtual mach_vm_size_t 	getSize() = 0;
+#ifdef __LP64__
+    inline mach_vm_address_t 	getAddress() __attribute__((always_inline));
+    inline mach_vm_size_t 	getSize() __attribute__((always_inline));
+#else /* !__LP64__ */
+    virtual mach_vm_address_t 	getAddress();
+    virtual mach_vm_size_t 	getSize();
+#endif /* !__LP64__ */
+
+#ifdef XNU_KERNEL_PRIVATE
+    // for IOMemoryDescriptor use
+    IOMemoryMap * copyCompatible( IOMemoryMap * newMapping );
+
+    bool init(
+	task_t			intoTask,
+	mach_vm_address_t	toAddress,
+	IOOptionBits		options,
+        mach_vm_size_t		offset,
+        mach_vm_size_t		length );
+
+    bool    setMemoryDescriptor(IOMemoryDescriptor * _memory, mach_vm_size_t _offset);
+
+    IOReturn redirect(
+	task_t			intoTask, bool redirect );
+
+    IOReturn userClientUnmap();
+#endif /* XNU_KERNEL_PRIVATE */
+
+    OSMetaClassDeclareReservedUnused(IOMemoryMap, 0);
+    OSMetaClassDeclareReservedUnused(IOMemoryMap, 1);
+    OSMetaClassDeclareReservedUnused(IOMemoryMap, 2);
+    OSMetaClassDeclareReservedUnused(IOMemoryMap, 3);
+    OSMetaClassDeclareReservedUnused(IOMemoryMap, 4);
+    OSMetaClassDeclareReservedUnused(IOMemoryMap, 5);
+    OSMetaClassDeclareReservedUnused(IOMemoryMap, 6);
+    OSMetaClassDeclareReservedUnused(IOMemoryMap, 7);
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+#ifdef XNU_KERNEL_PRIVATE
+// Also these flags should not overlap with the options to
+//	IOMemoryDescriptor::initWithRanges(... IOOptionsBits options);
+enum {
+    _kIOMemorySourceSegment	= 0x00002000
+};
+#endif /* XNU_KERNEL_PRIVATE */
+
+#if !defined(__LP64) || defined(_IOMEMORYDESCRIPTOR_INTERNAL_)
 
 // The following classes are private implementation of IOMemoryDescriptor - they
 // should not be referenced directly, just through the public API's in the 
 // IOMemoryDescriptor class. For example, an IOGeneralMemoryDescriptor instance
-// might be created by IOMemoryDescriptor::withAddress(), but there should be 
+// might be created by IOMemoryDescriptor::withAddressRange(), but there should be 
 // no need to reference as anything but a generic IOMemoryDescriptor *.
 
 class IOGeneralMemoryDescriptor : public IOMemoryDescriptor
@@ -763,7 +787,9 @@ public:
 protected:
     Ranges		_ranges;
     unsigned		_rangesCount;       /* number of address ranges in list */
+#ifndef __LP64__
     bool		_rangesIsAllocated; /* is list allocated by us? */
+#endif /* !__LP64__ */
 
     task_t		_task;               /* task where all ranges are mapped to */
 
@@ -774,21 +800,28 @@ protected:
 
     unsigned		_wireCount;        /* number of outstanding wires */
 
-    /* DEPRECATED */ vm_address_t _cachedVirtualAddress;  /* a cached virtual-to-physical */
+#ifndef __LP64__
+    uintptr_t _cachedVirtualAddress;
 
-    /* DEPRECATED */ IOPhysicalAddress	_cachedPhysicalAddress;
+    IOPhysicalAddress	_cachedPhysicalAddress;
+#endif /* !__LP64__ */
 
     bool		_initialized;      /* has superclass been initialized? */
 
+public:
     virtual void free();
 
     virtual IOReturn dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const;
 
+    virtual uint64_t getPreparationID( void );
+
 private:
 
-    /* DEPRECATED */ virtual void setPosition(IOByteCount position);
-    /* DEPRECATED */ virtual void mapIntoKernel(unsigned rangeIndex);
-    /* DEPRECATED */ virtual void unmapFromKernel();
+#ifndef __LP64__
+    virtual void setPosition(IOByteCount position);
+    virtual void mapIntoKernel(unsigned rangeIndex);
+    virtual void unmapFromKernel();
+#endif /* !__LP64__ */
 
     // Internal APIs may be made virtual at some time in the future.
     IOReturn wireVirtual(IODirection forDirection);
@@ -816,43 +849,56 @@ public:
                                  IOOptionBits	options,
                                  IOMapper *	mapper = kIOMapperSystem);
 
+#ifndef __LP64__
     // Secondary initialisers
     virtual bool initWithAddress(void *		address,
                                  IOByteCount	withLength,
-                                 IODirection	withDirection);
+                                 IODirection	withDirection) APPLE_KEXT_DEPRECATED;
 
-    virtual bool initWithAddress(vm_address_t	address,
+    virtual bool initWithAddress(IOVirtualAddress address,
                                  IOByteCount    withLength,
                                  IODirection	withDirection,
-                                 task_t		withTask);
+                                 task_t		withTask) APPLE_KEXT_DEPRECATED;
 
     virtual bool initWithPhysicalAddress(
 				 IOPhysicalAddress	address,
 				 IOByteCount		withLength,
-				 IODirection      	withDirection );
+				 IODirection      	withDirection ) APPLE_KEXT_DEPRECATED;
 
     virtual bool initWithRanges(        IOVirtualRange * ranges,
                                         UInt32           withCount,
                                         IODirection      withDirection,
                                         task_t           withTask,
-                                        bool             asReference = false);
+                                        bool             asReference = false) APPLE_KEXT_DEPRECATED;
 
     virtual bool initWithPhysicalRanges(IOPhysicalRange * ranges,
                                         UInt32           withCount,
                                         IODirection      withDirection,
-                                        bool             asReference = false);
+                                        bool             asReference = false) APPLE_KEXT_DEPRECATED;
 
     virtual addr64_t getPhysicalSegment64( IOByteCount offset,
-                                            IOByteCount * length );
+                                            IOByteCount * length ) APPLE_KEXT_DEPRECATED;
 
     virtual IOPhysicalAddress getPhysicalSegment(IOByteCount offset,
 						 IOByteCount * length);
 
     virtual IOPhysicalAddress getSourceSegment(IOByteCount offset,
-                                               IOByteCount * length);
+                                               IOByteCount * length) APPLE_KEXT_DEPRECATED;
 
-    /* DEPRECATED */ virtual void * getVirtualSegment(IOByteCount offset,
-    /* DEPRECATED */					IOByteCount * length);
+    virtual void * getVirtualSegment(IOByteCount offset,
+					IOByteCount * length) APPLE_KEXT_DEPRECATED;
+#endif /* !__LP64__ */
+
+    virtual IOReturn setPurgeable( IOOptionBits newState,
+                                    IOOptionBits * oldState );
+
+    virtual addr64_t getPhysicalSegment( IOByteCount   offset,
+                                         IOByteCount * length,
+#ifdef __LP64__
+                                         IOOptionBits  options = 0 );
+#else /* !__LP64__ */
+                                         IOOptionBits  options );
+#endif /* !__LP64__ */
 
     virtual IOReturn prepare(IODirection forDirection = kIODirectionNone);
 
@@ -878,119 +924,23 @@ public:
 
 };
 
+#endif /* !defined(__LP64) || defined(_IOMEMORYDESCRIPTOR_INTERNAL_) */
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-class IOSubMemoryDescriptor : public IOMemoryDescriptor
+#ifdef __LP64__
+mach_vm_address_t 	IOMemoryMap::getAddress()
 {
-    friend class IOMemoryDescriptor;
+    return (getVirtualAddress());
+}
 
-    OSDeclareDefaultStructors(IOSubMemoryDescriptor);
-
-protected:
-    IOMemoryDescriptor * _parent;
-    IOByteCount 	 _start;
-
-    virtual void free();
-
-    virtual bool initWithAddress(void *       address,
-                                 IOByteCount    withLength,
-                                 IODirection  withDirection);
-
-    virtual bool initWithAddress(vm_address_t address,
-                                 IOByteCount    withLength,
-                                 IODirection  withDirection,
-                                 task_t       withTask);
-
-    virtual bool initWithPhysicalAddress(
-				 IOPhysicalAddress	address,
-				 IOByteCount		withLength,
-				 IODirection      	withDirection );
-
-    virtual bool initWithRanges(        IOVirtualRange * ranges,
-                                        UInt32           withCount,
-                                        IODirection      withDirection,
-                                        task_t           withTask,
-                                        bool             asReference = false);
-
-    virtual bool initWithPhysicalRanges(IOPhysicalRange * ranges,
-                                        UInt32           withCount,
-                                        IODirection      withDirection,
-                                        bool             asReference = false);
-
-    IOMemoryDescriptor::withAddress;
-    IOMemoryDescriptor::withPhysicalAddress;
-    IOMemoryDescriptor::withPhysicalRanges;
-    IOMemoryDescriptor::withRanges;
-    IOMemoryDescriptor::withSubRange;
-
-    // used by IODMACommand
-    virtual IOReturn dmaCommandOperation(DMACommandOps op, void *vData, UInt dataSize) const;
-
-public:
-    /*
-     * Initialize or reinitialize an IOSubMemoryDescriptor to describe
-     * a subrange of an existing descriptor.
-     *
-     * An IOSubMemoryDescriptor can be re-used by calling initSubRange
-     * again on an existing instance -- note that this behavior is not
-     * commonly supported in other IOKit classes, although it is here.
-     */
-    virtual bool initSubRange( IOMemoryDescriptor * parent,
-				IOByteCount offset, IOByteCount length,
-				IODirection withDirection );
-
-    /*
-     * IOMemoryDescriptor required methods
-     */
-
-    virtual addr64_t getPhysicalSegment64( IOByteCount offset,
-                                            IOByteCount * length );
-
-    virtual IOPhysicalAddress getPhysicalSegment(IOByteCount offset,
-						 IOByteCount * length);
-
-    virtual IOPhysicalAddress getSourceSegment(IOByteCount offset,
-                                               IOByteCount * length);
-
-    virtual IOByteCount readBytes(IOByteCount offset,
-				void * bytes, IOByteCount withLength);
-
-    virtual IOByteCount writeBytes(IOByteCount offset,
-				const void * bytes, IOByteCount withLength);
-
-    virtual void * getVirtualSegment(IOByteCount offset,
-					IOByteCount * length);
-
-    virtual IOReturn prepare(IODirection forDirection = kIODirectionNone);
-
-    virtual IOReturn complete(IODirection forDirection = kIODirectionNone);
-
-    // make virtual
-    IOReturn redirect( task_t safeTask, bool redirect );
-
-    virtual bool serialize(OSSerialize *s) const;
-
-    virtual IOReturn setPurgeable( IOOptionBits newState,
-                                    IOOptionBits * oldState );
-    virtual IOReturn performOperation( IOOptionBits options,
-                                        IOByteCount offset, IOByteCount length );
-
-protected:
-    virtual IOMemoryMap * 	makeMapping(
-	IOMemoryDescriptor *	owner,
-	task_t			intoTask,
-	IOVirtualAddress	atAddress,
-	IOOptionBits		options,
-	IOByteCount		offset,
-	IOByteCount		length );
-
-    virtual IOReturn doMap(
-       vm_map_t                addressMap,
-       IOVirtualAddress *      atAddress,
-       IOOptionBits            options,
-       IOByteCount             sourceOffset = 0,
-       IOByteCount             length = 0 );
-};
+mach_vm_size_t 	IOMemoryMap::getSize()
+{
+    return (getLength());
+}
+#else /* !__LP64__ */
+#include <IOKit/IOSubMemoryDescriptor.h>
+#endif /* !__LP64__ */
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 

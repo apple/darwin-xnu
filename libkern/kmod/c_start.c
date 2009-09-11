@@ -43,14 +43,39 @@
         *.o -lkmodc++ kmod_info.o -lkmod
  */
 #include <mach/mach_types.h>
+#include <libkern/OSKextLib.h>
 
 // These global symbols will be defined by CreateInfo script's info.c file.
 extern kmod_start_func_t *_realmain;
+extern kmod_info_t KMOD_INFO_NAME;
 
+/*********************************************************************
+*********************************************************************/
 __private_extern__ kern_return_t _start(kmod_info_t *ki, void *data)
 {
     if (_realmain)
         return (*_realmain)(ki, data);
     else
         return KERN_SUCCESS;
+}
+
+/*********************************************************************
+*********************************************************************/
+__private_extern__ const char * OSKextGetCurrentIdentifier(void)
+{
+    return KMOD_INFO_NAME.name;
+}
+
+/*********************************************************************
+*********************************************************************/
+__private_extern__ const char * OSKextGetCurrentVersionString(void)
+{
+    return KMOD_INFO_NAME.version;
+}
+
+/*********************************************************************
+*********************************************************************/
+__private_extern__ OSKextLoadTag OSKextGetCurrentLoadTag(void)
+{
+    return (OSKextLoadTag)KMOD_INFO_NAME.id;
 }

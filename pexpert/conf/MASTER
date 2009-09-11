@@ -84,8 +84,8 @@ ident		PEXPERT
 
 options		MACH_PE		# Objective-C support		# <mach_pe>
 options		MACH_KERNEL
-options		DEBUG
-options     CONFIG_DTRACE 	# dtrace support			# <config_dtrace>
+options		DEBUG		# general debugging code	# <debug>
+options		CONFIG_DTRACE 	# dtrace support		# <config_dtrace>
 
 options		PANIC_INFO	# want kernel panic info	# <panic_info>
 
@@ -97,3 +97,4 @@ options		CONFIG_NO_KPRINTF_STRINGS	# <no_kprintf_str>
 # embedded device
 #
 options   CONFIG_EMBEDDED                       # <config_embedded>
+

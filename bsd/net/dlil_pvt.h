@@ -38,9 +38,9 @@ struct dlil_family_mod_str {
     char	*interface_family;
     int (*add_if)(struct ifnet_ptr  *ifp);
     int (*del_if)(struct ifnet    *ifp);
-    int (*add_proto)(struct ifnet *ifp, u_long protocol_family,
+    int (*add_proto)(struct ifnet *ifp, uint32_t protocol_family,
     				 struct ddesc_head_str *demux_desc_head);
-    int (*del_proto)(struct ifnet *ifp, u_long proto_family);
+    int (*del_proto)(struct ifnet *ifp, uint32_t proto_family);
 }
 
 #endif /* KERNEL_PRIVATE */

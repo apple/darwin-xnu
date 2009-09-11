@@ -56,6 +56,7 @@ typedef	struct pager_struct	*vm_pager_t;
 #define	PAGER_ABSENT		1  /* pager does not have page */
 #define	PAGER_ERROR		2  /* pager unable to read or write page */
 
+#if 0
 #ifdef	KERNEL
 typedef	int		pager_return_t;
 
@@ -65,5 +66,6 @@ extern pager_return_t	vm_pager_get(void);
 extern pager_return_t	vm_pager_put(void);
 extern boolean_t		vm_pager_has_page(void);
 #endif	/* KERNEL */
+#endif
 
 #endif	/* _VM_PAGER_ */

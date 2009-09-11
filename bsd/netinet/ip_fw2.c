@@ -1,4 +1,32 @@
 /*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
+/*
  * Copyright (c) 2002 Luigi Rizzo, Universita` di Pisa
  *
  * Redistribution and use in source and binary forms, with or without
@@ -128,6 +156,9 @@ static int autoinc_step = 100; /* bounded to 1..1000 in add_rule() */
 
 static void ipfw_kev_post_msg(u_int32_t );
 
+static int Get32static_len(void);
+static int Get64static_len(void);
+
 #ifdef SYSCTL_NODE
 
 static int ipfw_sysctl SYSCTL_HANDLER_ARGS;
@@ -215,6 +246,8 @@ static u_int32_t dyn_keepalive = 1;	/* do send keepalives */
 
 static u_int32_t static_count;	/* # of static rules */
 static u_int32_t static_len;	/* size in bytes of static rules */
+static u_int32_t static_len_32;	/* size in bytes of static rules for 32 bit client */
+static u_int32_t static_len_64;	/* size in bytes of static rules for 64 bit client */
 static u_int32_t dyn_count;		/* # of dynamic rules */
 static u_int32_t dyn_max = 4096;	/* max # of dynamic rules */
 
@@ -242,6 +275,7 @@ SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_short_lifetime, CTLFLAG_RW,
     &dyn_short_lifetime, 0, "Lifetime of dyn. rules for other situations");
 SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_keepalive, CTLFLAG_RW,
     &dyn_keepalive, 0, "Enable keepalives for dyn. rules");
+
 
 static int
 ipfw_sysctl SYSCTL_HANDLER_ARGS
@@ -286,6 +320,12 @@ static          size_t		ipfwstringlen;
 		ipfwsyslog a ; 	\
 	else log a ;		\
 }
+
+#define RULESIZE64(rule)  (sizeof(struct ip_fw_64) + \
+							((struct ip_fw *)(rule))->cmd_len * 4 - 4)
+
+#define RULESIZE32(rule)  (sizeof(struct ip_fw_32) + \
+							((struct ip_fw *)(rule))->cmd_len * 4 - 4)
 
 void    ipfwsyslog( int level, const char *format,...)
 {
@@ -349,6 +389,441 @@ is_icmp_query(struct ip *ip)
 	return (type <= ICMP_MAXTYPE && (TT & (1<<type)) );
 }
 #undef TT
+
+static int
+Get32static_len()
+{
+	int	diff;
+	int len = static_len_32;
+	struct ip_fw *rule;
+	char		 *useraction;
+
+	for (rule = layer3_chain; rule ; rule = rule->next) {
+		if (rule->reserved_1 == IPFW_RULE_INACTIVE) {
+			continue;
+		}
+		if ( rule->act_ofs ){
+			useraction =  (char*)ACTION_PTR( rule ); 
+			if ( ((ipfw_insn*)useraction)->opcode == O_QUEUE || ((ipfw_insn*)useraction)->opcode == O_PIPE){
+				diff = sizeof(ipfw_insn_pipe) - sizeof(ipfw_insn_pipe_32);
+				if (diff)
+					len -= diff;
+			}
+		}
+	}
+	return len;
+}
+
+static int
+Get64static_len()
+{
+	int	diff;
+	int len = static_len_64;
+	struct ip_fw *rule;
+	char		 *useraction;
+
+	for (rule = layer3_chain; rule ; rule = rule->next) {
+		if (rule->reserved_1 == IPFW_RULE_INACTIVE) {
+			continue;
+		}
+		if ( rule->act_ofs ){
+			useraction =  (char *)ACTION_PTR( rule ); 
+			if ( ((ipfw_insn*)useraction)->opcode == O_QUEUE || ((ipfw_insn*)useraction)->opcode == O_PIPE){
+				diff = sizeof(ipfw_insn_pipe_64) - sizeof(ipfw_insn_pipe);
+				if (diff)
+					len += diff;
+			}
+		}
+	}
+	return len;
+}
+
+static void 
+copyto32fw_insn( struct ip_fw_32 *fw32 , struct ip_fw *user_ip_fw, int cmdsize)
+{
+	char		*end;
+	char		*fw32action;
+	char		*useraction;
+	int			justcmdsize;
+	int			diff=0;
+	int			actioncopysize;
+
+	end = ((char*)user_ip_fw->cmd) + cmdsize;
+	useraction = (char*)ACTION_PTR( user_ip_fw );
+	fw32action = (char*)fw32->cmd + (user_ip_fw->act_ofs * sizeof(uint32_t));
+	if ( ( justcmdsize = ( fw32action - (char*)fw32->cmd)))
+		bcopy( user_ip_fw->cmd, fw32->cmd, justcmdsize); 
+	while ( useraction < end ){
+		if ( ((ipfw_insn*)useraction)->opcode == O_QUEUE || ((ipfw_insn*)useraction)->opcode == O_PIPE){
+			actioncopysize = sizeof(ipfw_insn_pipe_32);
+			((ipfw_insn*)fw32action)->opcode = ((ipfw_insn*)useraction)->opcode;
+			((ipfw_insn*)fw32action)->arg1 = ((ipfw_insn*)useraction)->arg1;
+			((ipfw_insn*)fw32action)->len = F_INSN_SIZE(ipfw_insn_pipe_32);
+			diff = ((ipfw_insn*)useraction)->len - ((ipfw_insn*)fw32action)->len;
+			if ( diff ){
+				fw32->cmd_len -= diff;
+			}
+		} else{
+			actioncopysize =  (F_LEN((ipfw_insn*)useraction) ? (F_LEN((ipfw_insn*)useraction)) : 1 ) * sizeof(uint32_t);
+			bcopy( useraction, fw32action, actioncopysize );
+		}
+		useraction += (F_LEN((ipfw_insn*)useraction) ? (F_LEN((ipfw_insn*)useraction)) : 1 ) * sizeof(uint32_t);
+		fw32action += actioncopysize;
+	}
+}
+
+static void
+copyto64fw_insn( struct ip_fw_64 *fw64 , struct ip_fw *user_ip_fw, int cmdsize)
+{
+	char		*end;
+	char		*fw64action;
+	char		*useraction;
+	int			justcmdsize;
+	int			diff;
+	int			actioncopysize;
+
+	end = ((char *)user_ip_fw->cmd) + cmdsize;
+	useraction = (char*)ACTION_PTR( user_ip_fw );
+	if ( (justcmdsize = (useraction - (char*)user_ip_fw->cmd)))
+		bcopy( user_ip_fw->cmd, fw64->cmd, justcmdsize); 
+	fw64action = (char*)fw64->cmd + justcmdsize;
+	while ( useraction < end ){
+		if ( ((ipfw_insn*)user_ip_fw)->opcode == O_QUEUE || ((ipfw_insn*)user_ip_fw)->opcode == O_PIPE){
+			actioncopysize = sizeof(ipfw_insn_pipe_64);
+			((ipfw_insn*)fw64action)->opcode = ((ipfw_insn*)useraction)->opcode;
+			((ipfw_insn*)fw64action)->arg1 = ((ipfw_insn*)useraction)->arg1;
+			((ipfw_insn*)fw64action)->len = F_INSN_SIZE(ipfw_insn_pipe_64);
+			diff = ((ipfw_insn*)fw64action)->len - ((ipfw_insn*)useraction)->len;
+			if (diff)
+				fw64->cmd_len += diff;
+			
+		} else{
+			actioncopysize = (F_LEN((ipfw_insn*)useraction) ? (F_LEN((ipfw_insn*)useraction)) : 1 ) * sizeof(uint32_t);
+			bcopy( useraction, fw64action, actioncopysize );
+		}
+		useraction += (F_LEN((ipfw_insn*)useraction) ? (F_LEN((ipfw_insn*)useraction)) : 1 ) * sizeof(uint32_t);
+		fw64action += actioncopysize;
+	}
+}
+
+static void 
+copyto32fw( struct ip_fw *user_ip_fw, struct ip_fw_32 *fw32 , __unused size_t copysize)
+{
+	size_t	rulesize, cmdsize;
+	
+	fw32->version = user_ip_fw->version;
+	fw32->context = CAST_DOWN_EXPLICIT( user32_addr_t, user_ip_fw->context);
+	fw32->next = CAST_DOWN_EXPLICIT(user32_addr_t, user_ip_fw->next);
+	fw32->next_rule = CAST_DOWN_EXPLICIT(user32_addr_t, user_ip_fw->next_rule);
+	fw32->act_ofs = user_ip_fw->act_ofs;
+	fw32->cmd_len = user_ip_fw->cmd_len;
+	fw32->rulenum = user_ip_fw->rulenum;
+	fw32->set = user_ip_fw->set;
+	fw32->set_masks[0] = user_ip_fw->set_masks[0];
+	fw32->set_masks[1] = user_ip_fw->set_masks[1];
+	fw32->pcnt = user_ip_fw->pcnt;
+	fw32->bcnt = user_ip_fw->bcnt;
+	fw32->timestamp = user_ip_fw->timestamp;
+	fw32->reserved_1 = user_ip_fw->reserved_1;
+	fw32->reserved_2 = user_ip_fw->reserved_2;
+	rulesize = sizeof(struct ip_fw_32) + (user_ip_fw->cmd_len * sizeof(ipfw_insn) - 4);
+	cmdsize = user_ip_fw->cmd_len * sizeof(u_int32_t);
+	copyto32fw_insn( fw32, user_ip_fw, cmdsize );
+}
+
+static void
+copyto64fw( struct ip_fw *user_ip_fw, struct ip_fw_64	*fw64, size_t copysize)
+{
+	size_t	rulesize, cmdsize;
+
+	fw64->version = user_ip_fw->version;
+	fw64->context = CAST_DOWN_EXPLICIT(__uint64_t, user_ip_fw->context);
+	fw64->next = CAST_DOWN_EXPLICIT(user64_addr_t, user_ip_fw->next);
+	fw64->next_rule = CAST_DOWN_EXPLICIT(user64_addr_t, user_ip_fw->next_rule);
+	fw64->act_ofs = user_ip_fw->act_ofs;
+	fw64->cmd_len = user_ip_fw->cmd_len;
+	fw64->rulenum = user_ip_fw->rulenum;
+	fw64->set = user_ip_fw->set;
+	fw64->set_masks[0] = user_ip_fw->set_masks[0];
+	fw64->set_masks[1] = user_ip_fw->set_masks[1];
+	fw64->pcnt = user_ip_fw->pcnt;
+	fw64->bcnt = user_ip_fw->bcnt;
+	fw64->timestamp = user_ip_fw->timestamp;
+	fw64->reserved_1 = user_ip_fw->reserved_1;
+	fw64->reserved_2 = user_ip_fw->reserved_2;
+	rulesize = sizeof(struct ip_fw_64) + (user_ip_fw->cmd_len * sizeof(ipfw_insn) - 4);
+	if (rulesize > copysize)
+		cmdsize = copysize - sizeof(struct ip_fw_64) + 4;
+	else
+		cmdsize = user_ip_fw->cmd_len * sizeof(u_int32_t);
+	copyto64fw_insn( fw64, user_ip_fw, cmdsize);
+}
+
+static int
+copyfrom32fw_insn( struct ip_fw_32 *fw32 , struct ip_fw *user_ip_fw, int cmdsize)
+{
+	char		*end;
+	char		*fw32action;
+	char		*useraction;
+	int			justcmdsize;
+	int			diff;
+	int			actioncopysize;
+
+	end = ((char*)fw32->cmd) + cmdsize;
+	fw32action = (char*)ACTION_PTR( fw32 );
+	if ((justcmdsize = (fw32action - (char*)fw32->cmd)))
+		bcopy( fw32->cmd, user_ip_fw->cmd, justcmdsize); 
+	useraction = (char*)user_ip_fw->cmd + justcmdsize;
+	while ( fw32action < end ){
+		if ( ((ipfw_insn*)fw32action)->opcode == O_QUEUE || ((ipfw_insn*)fw32action)->opcode == O_PIPE){
+			actioncopysize = sizeof(ipfw_insn_pipe);
+			((ipfw_insn*)useraction)->opcode = ((ipfw_insn*)fw32action)->opcode;
+			((ipfw_insn*)useraction)->arg1 = ((ipfw_insn*)fw32action)->arg1;
+			((ipfw_insn*)useraction)->len = F_INSN_SIZE(ipfw_insn_pipe);
+			diff = ((ipfw_insn*)useraction)->len - ((ipfw_insn*)fw32action)->len;
+			if (diff){
+				/* readjust the cmd_len */
+				user_ip_fw->cmd_len += diff;
+			}
+		} else{
+			actioncopysize = (F_LEN((ipfw_insn*)fw32action) ? (F_LEN((ipfw_insn*)fw32action)) : 1 ) * sizeof(uint32_t);
+			bcopy( fw32action, useraction, actioncopysize );
+		}
+		fw32action += (F_LEN((ipfw_insn*)fw32action) ? (F_LEN((ipfw_insn*)fw32action)) : 1 ) * sizeof(uint32_t);
+		useraction += actioncopysize;
+	}
+
+	return( useraction - (char*)user_ip_fw->cmd );
+}
+
+static int
+copyfrom64fw_insn( struct ip_fw_64 *fw64 , struct ip_fw *user_ip_fw, int cmdsize)
+{
+	char		*end;
+	char		*fw64action;
+	char		*useraction;
+	int			justcmdsize;
+	int			diff;
+	int			actioncopysize;
+
+	end = ((char *)fw64->cmd) + cmdsize ;
+	fw64action = (char*)ACTION_PTR( fw64 );
+	if ( (justcmdsize = (fw64action - (char*)fw64->cmd)))
+		bcopy( fw64->cmd, user_ip_fw->cmd, justcmdsize); 
+	useraction = (char*)user_ip_fw->cmd + justcmdsize;
+	while ( fw64action < end ){
+		if ( ((ipfw_insn*)fw64action)->opcode == O_QUEUE || ((ipfw_insn*)fw64action)->opcode == O_PIPE){
+			actioncopysize = sizeof(ipfw_insn_pipe);
+			((ipfw_insn*)useraction)->opcode = ((ipfw_insn*)fw64action)->opcode;
+			((ipfw_insn*)useraction)->arg1 = ((ipfw_insn*)fw64action)->arg1;
+			((ipfw_insn*)useraction)->len = F_INSN_SIZE(ipfw_insn_pipe);
+			diff = ((ipfw_insn*)fw64action)->len - ((ipfw_insn*)useraction)->len; 
+			if (diff) {
+				/* readjust the cmd_len */
+				user_ip_fw->cmd_len -= diff;
+			}
+		} else{
+			actioncopysize = (F_LEN((ipfw_insn*)fw64action) ? (F_LEN((ipfw_insn*)fw64action)) : 1 ) * sizeof(uint32_t);
+			bcopy( fw64action, useraction, actioncopysize );
+		}
+		fw64action += (F_LEN((ipfw_insn*)fw64action) ? (F_LEN((ipfw_insn*)fw64action)) : 1 ) * sizeof(uint32_t); 
+		useraction += actioncopysize;
+	}
+	return( useraction - (char*)user_ip_fw->cmd );
+}
+
+static size_t 
+copyfrom32fw( struct ip_fw_32	*fw32, struct ip_fw *user_ip_fw, size_t copysize)
+{
+	size_t rulesize, cmdsize;
+	 
+	user_ip_fw->version = fw32->version;
+	user_ip_fw->context = CAST_DOWN(void *, fw32->context);
+	user_ip_fw->next = CAST_DOWN(struct ip_fw*, fw32->next);
+	user_ip_fw->next_rule = CAST_DOWN_EXPLICIT(struct ip_fw*, fw32->next_rule);
+	user_ip_fw->act_ofs = fw32->act_ofs;
+	user_ip_fw->cmd_len = fw32->cmd_len;
+	user_ip_fw->rulenum = fw32->rulenum;
+	user_ip_fw->set = fw32->set;
+	user_ip_fw->set_masks[0] = fw32->set_masks[0];
+	user_ip_fw->set_masks[1] = fw32->set_masks[1];
+	user_ip_fw->pcnt = fw32->pcnt;
+	user_ip_fw->bcnt = fw32->bcnt;
+	user_ip_fw->timestamp = fw32->timestamp;
+	user_ip_fw->reserved_1 = fw32->reserved_1;
+	user_ip_fw->reserved_2 = fw32->reserved_2;
+	rulesize = sizeof(struct ip_fw_32) + (fw32->cmd_len * sizeof(ipfw_insn) - 4);
+	if ( rulesize > copysize )
+		cmdsize = copysize - sizeof(struct ip_fw_32)-4;
+	else
+		cmdsize = fw32->cmd_len * sizeof(ipfw_insn);
+	cmdsize = copyfrom32fw_insn( fw32, user_ip_fw, cmdsize);
+	return( sizeof(struct ip_fw) + cmdsize - 4);
+}
+
+static size_t 
+copyfrom64fw( struct ip_fw_64 *fw64, struct ip_fw *user_ip_fw, size_t copysize)
+{
+	size_t rulesize, cmdsize;
+	
+	user_ip_fw->version = fw64->version;
+	user_ip_fw->context = CAST_DOWN_EXPLICIT( void *, fw64->context);
+	user_ip_fw->next = CAST_DOWN_EXPLICIT(struct ip_fw*, fw64->next);
+	user_ip_fw->next_rule = CAST_DOWN_EXPLICIT(struct ip_fw*, fw64->next_rule);
+	user_ip_fw->act_ofs = fw64->act_ofs;
+	user_ip_fw->cmd_len = fw64->cmd_len;
+	user_ip_fw->rulenum = fw64->rulenum;
+	user_ip_fw->set = fw64->set;
+	user_ip_fw->set_masks[0] = fw64->set_masks[0];
+	user_ip_fw->set_masks[1] = fw64->set_masks[1];
+	user_ip_fw->pcnt = fw64->pcnt;
+	user_ip_fw->bcnt = fw64->bcnt;
+	user_ip_fw->timestamp = fw64->timestamp;
+	user_ip_fw->reserved_1 = fw64->reserved_1;
+	user_ip_fw->reserved_2 = fw64->reserved_2;
+	//bcopy( fw64->cmd, user_ip_fw->cmd, fw64->cmd_len * sizeof(ipfw_insn));
+	rulesize = sizeof(struct ip_fw_64) + (fw64->cmd_len * sizeof(ipfw_insn) - 4);
+	if ( rulesize > copysize )
+		cmdsize = copysize - sizeof(struct ip_fw_64)-4;
+	else
+		cmdsize = fw64->cmd_len * sizeof(ipfw_insn);
+	cmdsize = copyfrom64fw_insn( fw64, user_ip_fw, cmdsize);
+	return( sizeof(struct ip_fw) + cmdsize - 4);
+}
+
+static
+void cp_dyn_to_comp_32( struct ipfw_dyn_rule_compat_32 *dyn_rule_vers1, int *len)
+{
+	struct ipfw_dyn_rule_compat_32 *dyn_last=NULL;
+	ipfw_dyn_rule 	*p;
+	int i;
+
+	if (ipfw_dyn_v) {
+		for (i = 0; i < curr_dyn_buckets; i++) {
+			for ( p = ipfw_dyn_v[i] ; p != NULL ; p = p->next) {
+				dyn_rule_vers1->chain = (user32_addr_t)(p->rule->rulenum);
+				dyn_rule_vers1->id = p->id;
+				dyn_rule_vers1->mask = p->id;
+				dyn_rule_vers1->type = p->dyn_type;
+				dyn_rule_vers1->expire = p->expire;
+				dyn_rule_vers1->pcnt = p->pcnt;
+				dyn_rule_vers1->bcnt = p->bcnt;
+				dyn_rule_vers1->bucket = p->bucket;
+				dyn_rule_vers1->state = p->state;
+				
+				dyn_rule_vers1->next = CAST_DOWN_EXPLICIT( user32_addr_t, p->next);
+				dyn_last = dyn_rule_vers1;
+				
+				*len += sizeof(*dyn_rule_vers1);
+				dyn_rule_vers1++;
+			}
+		}
+		
+		if (dyn_last != NULL) {
+			dyn_last->next = ((user32_addr_t)0);
+		}
+	}
+}
+
+
+static
+void cp_dyn_to_comp_64( struct ipfw_dyn_rule_compat_64 *dyn_rule_vers1, int *len)
+{
+	struct ipfw_dyn_rule_compat_64 *dyn_last=NULL;
+	ipfw_dyn_rule 	*p;
+	int i;
+
+	if (ipfw_dyn_v) {
+		for (i = 0; i < curr_dyn_buckets; i++) {
+			for ( p = ipfw_dyn_v[i] ; p != NULL ; p = p->next) {
+				dyn_rule_vers1->chain = (user64_addr_t) p->rule->rulenum;
+				dyn_rule_vers1->id = p->id;
+				dyn_rule_vers1->mask = p->id;
+				dyn_rule_vers1->type = p->dyn_type;
+				dyn_rule_vers1->expire = p->expire;
+				dyn_rule_vers1->pcnt = p->pcnt;
+				dyn_rule_vers1->bcnt = p->bcnt;
+				dyn_rule_vers1->bucket = p->bucket;
+				dyn_rule_vers1->state = p->state;
+				
+				dyn_rule_vers1->next = CAST_DOWN(user64_addr_t, p->next);
+				dyn_last = dyn_rule_vers1;
+				
+				*len += sizeof(*dyn_rule_vers1);
+				dyn_rule_vers1++;
+			}
+		}
+		
+		if (dyn_last != NULL) {
+			dyn_last->next = CAST_DOWN(user64_addr_t, NULL);
+		}
+	}
+}
+
+static int
+sooptcopyin_fw( struct sockopt *sopt, struct ip_fw *user_ip_fw, size_t *size )
+{
+	size_t	valsize, copyinsize = 0;
+	int	error = 0;
+
+	valsize = sopt->sopt_valsize;	
+	if ( size )
+		copyinsize = *size;
+	if (proc_is64bit(sopt->sopt_p)) {
+		struct ip_fw_64	*fw64=NULL;
+		
+		if ( valsize < sizeof(struct ip_fw_64) ) {
+			return(EINVAL);
+		}
+		if ( !copyinsize )
+			copyinsize = sizeof(struct ip_fw_64);
+		if ( valsize > copyinsize )
+			sopt->sopt_valsize = valsize = copyinsize;
+			
+		if ( sopt->sopt_p != 0) {
+			fw64 = _MALLOC(copyinsize, M_TEMP, M_WAITOK);
+			if ( fw64 == NULL )
+				return(ENOBUFS);
+			if ((error = copyin(sopt->sopt_val, fw64, valsize)) != 0){
+				_FREE(fw64, M_TEMP);
+				return error;
+			}
+		}
+		else {
+			bcopy(CAST_DOWN(caddr_t, sopt->sopt_val), fw64, valsize);
+		}
+		valsize = copyfrom64fw( fw64, user_ip_fw, valsize );
+		_FREE( fw64, M_TEMP);
+	}else {
+		struct ip_fw_32 *fw32=NULL;
+	
+		if ( valsize < sizeof(struct ip_fw_32) ) {
+			return(EINVAL);
+		}
+		if ( !copyinsize)
+			copyinsize = sizeof(struct ip_fw_32);
+		if ( valsize > copyinsize)
+			sopt->sopt_valsize = valsize = copyinsize;
+			
+		if ( sopt->sopt_p != 0) {
+			fw32 = _MALLOC(copyinsize, M_TEMP, M_WAITOK);
+			if ( fw32 == NULL )
+				return(ENOBUFS);
+			if ( (error = copyin(sopt->sopt_val, fw32, valsize)) != 0){
+				_FREE( fw32, M_TEMP);
+				return( error );
+			}
+		}
+		else {
+			bcopy(CAST_DOWN(caddr_t, sopt->sopt_val), fw32, valsize);
+		}
+		valsize = copyfrom32fw( fw32, user_ip_fw, valsize);
+		_FREE( fw32, M_TEMP);
+	}
+	if ( size )
+		*size = valsize;
+	return error;
+}
 
 /*
  * The following checks use two arrays of 8 or 16 bits to store the
@@ -538,11 +1013,16 @@ verify_rev_path(struct in_addr src, struct ifnet *ifp)
 
 		rtalloc_ign(&ro, RTF_CLONING|RTF_PRCLONING);
 	}
-
-	if ((ro.ro_rt == NULL) || (ifp == NULL) ||
-	    (ro.ro_rt->rt_ifp->if_index != ifp->if_index))
-		return 0;
-
+	if (ro.ro_rt != NULL)
+		RT_LOCK_SPIN(ro.ro_rt);
+	else
+		return 0;	/* No route */
+	if ((ifp == NULL) ||
+		(ro.ro_rt->rt_ifp->if_index != ifp->if_index)) {
+			RT_UNLOCK(ro.ro_rt);
+			return 0;
+        }
+	RT_UNLOCK(ro.ro_rt);
 	return 1;
 }
 
@@ -1228,22 +1708,21 @@ install_state(struct ip_fw *rule, ipfw_insn_limit *cmd,
 }
 
 /*
- * Transmit a TCP packet, containing either a RST or a keepalive.
+ * Generate a TCP packet, containing either a RST or a keepalive.
  * When flags & TH_RST, we are sending a RST packet, because of a
  * "reset" action matched the packet.
  * Otherwise we are sending a keepalive, and flags & TH_
  */
-static void
+static struct mbuf *
 send_pkt(struct ipfw_flow_id *id, u_int32_t seq, u_int32_t ack, int flags)
 {
 	struct mbuf *m;
 	struct ip *ip;
 	struct tcphdr *tcp;
-	struct route sro;	/* fake route */
 
 	MGETHDR(m, M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 	if (m == 0)
-		return;
+		return NULL;
 	m->m_pkthdr.rcvif = (struct ifnet *)0;
 	m->m_pkthdr.len = m->m_len = sizeof(struct ip) + sizeof(struct tcphdr);
 	m->m_data += max_linkhdr;
@@ -1305,14 +1784,9 @@ send_pkt(struct ipfw_flow_id *id, u_int32_t seq, u_int32_t ack, int flags)
 	 */
 	ip->ip_ttl = ip_defttl;
 	ip->ip_len = m->m_pkthdr.len;
-	bzero (&sro, sizeof (sro));
-	ip_rtaddr(ip->ip_dst, &sro);
 	m->m_flags |= M_SKIP_FIREWALL;
-	ip_output_list(m, 0, NULL, &sro, 0, NULL, NULL);
-	if (sro.ro_rt) {
-		RTFREE(sro.ro_rt);
-		sro.ro_rt = NULL;
-	}
+	
+	return m;
 }
 
 /*
@@ -1335,9 +1809,19 @@ send_reject(struct ip_fw_args *args, int code, int offset, __unused int ip_len)
 		struct tcphdr *const tcp =
 		    L3HDR(struct tcphdr, mtod(args->m, struct ip *));
 		if ( (tcp->th_flags & TH_RST) == 0) {
-			send_pkt(&(args->f_id), ntohl(tcp->th_seq),
+			struct mbuf *m;
+			
+			m = send_pkt(&(args->f_id), ntohl(tcp->th_seq),
 				ntohl(tcp->th_ack),
 				tcp->th_flags | TH_RST);
+			if (m != NULL) {
+				struct route sro;	/* fake route */
+				
+				bzero (&sro, sizeof (sro));
+				ip_output_list(m, 0, NULL, &sro, 0, NULL, NULL);
+				if (sro.ro_rt)
+					RTFREE(sro.ro_rt);
+			}
 		}
 		m_freem(args->m);
 	} else
@@ -1727,7 +2211,7 @@ check_body:
 					    dst_ip, htons(dst_port),
 					    wildcard, NULL);
 
-				if (pcb == NULL || pcb->inp_socket == NULL)
+				if (pcb == NULL || pcb->inp_socket == NULL) 
 					break;
 #if __FreeBSD_version < 500034
 #define socheckuid(a,b)	(kauth_cred_getuid((a)->so_cred) != (b))
@@ -1748,6 +2232,8 @@ check_body:
 						(gid_t)((ipfw_insn_u32 *)cmd)->d[0], &match);
 				}
 #endif
+				/* release reference on pcb */
+				in_pcb_checkstate(pcb, WNT_RELEASE, 0);
 				}
 
 			break;
@@ -2317,6 +2803,8 @@ add_rule(struct ip_fw **head, struct ip_fw *input_rule)
 done:
 	static_count++;
 	static_len += l;
+	static_len_32 += RULESIZE32(input_rule);
+	static_len_64 += RULESIZE64(input_rule);
 	DEB(printf("ipfw: installed rule %d, static count now %d\n",
 		rule->rulenum, static_count);)
 	return (0);
@@ -2345,6 +2833,8 @@ delete_rule(struct ip_fw **head, struct ip_fw *prev, struct ip_fw *rule)
 		prev->next = n;
 	static_count--;
 	static_len -= l;
+	static_len_32 -= RULESIZE32(rule);
+	static_len_64 -= RULESIZE64(rule);
 
 #if DUMMYNET
 	if (DUMMYNET_LOADED)
@@ -2454,6 +2944,8 @@ mark_inactive(struct ip_fw **prev, struct ip_fw **rule)
 		(*rule)->reserved_1 = IPFW_RULE_INACTIVE;
 		static_count--;
 		static_len -= l;
+		static_len_32 -= RULESIZE32(*rule);
+		static_len_64 -= RULESIZE64(*rule);
 		
 		timeout(flush_inactive, *rule, 30*hz); /* 30 sec. */
 	}
@@ -2885,7 +3377,9 @@ ipfw_ctl(struct sockopt *sopt)
 	int command;
 	int error;
 	size_t size;
+	size_t	rulesize = RULE_MAXSIZE;
 	struct ip_fw *bp , *buf, *rule;
+	int	is64user = 0;
 	
 	/* copy of orig sopt to send to ipfw_get_command_and_version() */
 	struct sockopt tmp_sopt = *sopt; 
@@ -2911,14 +3405,18 @@ ipfw_ctl(struct sockopt *sopt)
 
 	/* first get the command and version, then do conversion as necessary */
 	error = ipfw_get_command_and_version(&tmp_sopt, &command, &api_version);
-	
 	if (error) {
 		/* error getting the version */
 		return error;
 	}
 	
+	if (proc_is64bit(sopt->sopt_p))
+		is64user = 1;
+
 	switch (command) {
 	case IP_FW_GET:
+	{
+		size_t	dynrulesize;
 		/*
 		 * pass up a copy of the current rules. Static rules
 		 * come first (the last of which has number IPFW_DEFAULT_RULE),
@@ -2926,9 +3424,18 @@ ipfw_ctl(struct sockopt *sopt)
 		 * The last dynamic rule has NULL in the "next" field.
 		 */
 		lck_mtx_lock(ipfw_mutex);
-		size = static_len;	/* size of static rules */
-		if (ipfw_dyn_v)		/* add size of dyn.rules */
-			size += (dyn_count * sizeof(ipfw_dyn_rule));
+						
+		if (is64user){
+			size = Get64static_len();
+			dynrulesize = sizeof(ipfw_dyn_rule_64);
+			if (ipfw_dyn_v)
+				size += (dyn_count * dynrulesize);
+		}else {
+			size = Get32static_len();
+			dynrulesize = sizeof(ipfw_dyn_rule_32);
+			if (ipfw_dyn_v)
+				size += (dyn_count * dynrulesize);
+		}
 
 		/*
 		 * XXX todo: if the user passes a short length just to know
@@ -2946,41 +3453,94 @@ ipfw_ctl(struct sockopt *sopt)
 
 		bp = buf;
 		for (rule = layer3_chain; rule ; rule = rule->next) {
-			int i = RULESIZE(rule);
-			
+	
 			if (rule->reserved_1 == IPFW_RULE_INACTIVE) {
 				continue;
 			}
-			bcopy(rule, bp, i);
-			bcopy(&set_disable, &(bp->next_rule),
-			    sizeof(set_disable));
-			bp = (struct ip_fw *)((char *)bp + i);
+			
+			if (is64user){
+				int rulesize_64;
+
+				copyto64fw( rule, (struct ip_fw_64 *)bp, size);
+				bcopy(&set_disable, &(( (struct ip_fw_64*)bp)->next_rule), sizeof(set_disable));
+				/* do not use macro RULESIZE64 since we want RULESIZE for ip_fw_64 */
+				rulesize_64 = sizeof(struct ip_fw_64) + ((struct ip_fw_64 *)(bp))->cmd_len * 4 - 4;
+				bp = (struct ip_fw *)((char *)bp + rulesize_64);
+			}else{
+				int rulesize_32;
+
+				copyto32fw( rule, (struct ip_fw_32*)bp, size);
+				bcopy(&set_disable, &(( (struct ip_fw_32*)bp)->next_rule), sizeof(set_disable));
+				/* do not use macro RULESIZE32 since we want RULESIZE for ip_fw_32 */
+				rulesize_32 = sizeof(struct ip_fw_32) + ((struct ip_fw_32 *)(bp))->cmd_len * 4 - 4;
+				bp = (struct ip_fw *)((char *)bp + rulesize_32);
+			}
 		}
 		if (ipfw_dyn_v) {
 			int i;
-			ipfw_dyn_rule *p, *dst, *last = NULL;
-
-			dst = (ipfw_dyn_rule *)bp;
+			ipfw_dyn_rule *p;
+			char *dst, *last = NULL;
+			
+			dst = (char *)bp;
 			for (i = 0 ; i < curr_dyn_buckets ; i++ )
 				for ( p = ipfw_dyn_v[i] ; p != NULL ;
-				    p = p->next, dst++ ) {
-					bcopy(p, dst, sizeof *p);
-					bcopy(&(p->rule->rulenum), &(dst->rule),
-					    sizeof(p->rule->rulenum));
-					/*
-					 * store a non-null value in "next".
-					 * The userland code will interpret a
-					 * NULL here as a marker
-					 * for the last dynamic rule.
-					 */
-					bcopy(&dst, &dst->next, sizeof(dst));
-					last = dst ;
-					dst->expire =
-					    TIME_LEQ(dst->expire, timenow.tv_sec) ?
-						0 : dst->expire - timenow.tv_sec ;
+				    p = p->next, dst += dynrulesize ) {
+					if ( is64user ){
+						ipfw_dyn_rule_64	*ipfw_dyn_dst;
+						
+						ipfw_dyn_dst = (ipfw_dyn_rule_64 *)dst;
+						/*
+						 * store a non-null value in "next".
+						 * The userland code will interpret a
+						 * NULL here as a marker
+						 * for the last dynamic rule.
+						 */
+						ipfw_dyn_dst->next = CAST_DOWN_EXPLICIT(user64_addr_t, dst);
+						ipfw_dyn_dst->rule = p->rule->rulenum;
+						ipfw_dyn_dst->parent = CAST_DOWN(user64_addr_t, p->parent);
+						ipfw_dyn_dst->pcnt = p->pcnt;
+						ipfw_dyn_dst->bcnt = p->bcnt;
+						ipfw_dyn_dst->id = p->id;
+						ipfw_dyn_dst->expire =
+							TIME_LEQ(p->expire, timenow.tv_sec) ?
+							0 : p->expire - timenow.tv_sec;
+						ipfw_dyn_dst->bucket = p->bucket;
+						ipfw_dyn_dst->state = p->state;
+						ipfw_dyn_dst->ack_fwd = p->ack_fwd;
+						ipfw_dyn_dst->ack_rev = p->ack_rev;
+						ipfw_dyn_dst->dyn_type = p->dyn_type;
+						ipfw_dyn_dst->count = p->count;
+						last = (char*)&ipfw_dyn_dst->next;
+					} else {
+						ipfw_dyn_rule_32	*ipfw_dyn_dst;
+						
+						ipfw_dyn_dst = (ipfw_dyn_rule_32 *)dst;
+						/*
+						 * store a non-null value in "next".
+						 * The userland code will interpret a
+						 * NULL here as a marker
+						 * for the last dynamic rule.
+						 */
+						ipfw_dyn_dst->next = CAST_DOWN_EXPLICIT(user32_addr_t, dst);
+						ipfw_dyn_dst->rule = p->rule->rulenum;
+						ipfw_dyn_dst->parent = CAST_DOWN_EXPLICIT(user32_addr_t, p->parent);
+						ipfw_dyn_dst->pcnt = p->pcnt;
+						ipfw_dyn_dst->bcnt = p->bcnt;
+						ipfw_dyn_dst->id = p->id;
+						ipfw_dyn_dst->expire =
+							TIME_LEQ(p->expire, timenow.tv_sec) ?
+							0 : p->expire - timenow.tv_sec;
+						ipfw_dyn_dst->bucket = p->bucket;
+						ipfw_dyn_dst->state = p->state;
+						ipfw_dyn_dst->ack_fwd = p->ack_fwd;
+						ipfw_dyn_dst->ack_rev = p->ack_rev;
+						ipfw_dyn_dst->dyn_type = p->dyn_type;
+						ipfw_dyn_dst->count = p->count;
+						last = (char*)&ipfw_dyn_dst->next;
+					}
 				}
 			if (last != NULL) /* mark last dynamic rule */
-				bzero(&last->next, sizeof(last));
+				bzero(last, sizeof(last));
 		}
 		lck_mtx_unlock(ipfw_mutex);
 
@@ -3003,7 +3563,7 @@ ipfw_ctl(struct sockopt *sopt)
 				for (i = 0; i < static_count; i++) {
 					/* static rules have different sizes */
 					int j = RULESIZE(bp);
-					ipfw_convert_from_latest(bp, rule_vers0, api_version);
+					ipfw_convert_from_latest(bp, rule_vers0, api_version, is64user);
 					bp = (struct ip_fw *)((char *)bp + j);
 					len += sizeof(*rule_vers0);
 					rule_vers0++;
@@ -3014,63 +3574,56 @@ ipfw_ctl(struct sockopt *sopt)
 			}
 		} else if (api_version == IP_FW_VERSION_1) {
 			int	i, len = 0, buf_size;
-			struct ip_fw_compat	*buf2, *rule_vers1;
-			struct ipfw_dyn_rule_compat	*dyn_rule_vers1, *dyn_last = NULL;
-			ipfw_dyn_rule 	*p;
+			struct ip_fw_compat	*buf2;
+			size_t	ipfwcompsize;
+			size_t	ipfwdyncompsize;
+			char	*rule_vers1;
 
 			lck_mtx_lock(ipfw_mutex);
-			buf_size = static_count * sizeof(struct ip_fw_compat) +
-						dyn_count * sizeof(struct ipfw_dyn_rule_compat);
+			if ( is64user ){
+				ipfwcompsize = sizeof(struct ip_fw_compat_64);
+				ipfwdyncompsize = sizeof(struct ipfw_dyn_rule_compat_64);
+			} else {
+				ipfwcompsize = sizeof(struct ip_fw_compat_32);
+				ipfwdyncompsize = sizeof(struct ipfw_dyn_rule_compat_32);
+			}
+				
+			buf_size = static_count * ipfwcompsize + 
+						dyn_count * ipfwdyncompsize;
 						
 			buf2 = _MALLOC(buf_size, M_TEMP, M_WAITOK);
 			if (buf2 == 0) {
 				lck_mtx_unlock(ipfw_mutex);
 				error = ENOBUFS;
 			}
-			
 			if (!error) {
 				bp = buf;
-				rule_vers1 = buf2;
+				rule_vers1 = (char*)buf2;
 				
 				/* first do static rules */
 				for (i = 0; i < static_count; i++) {
 					/* static rules have different sizes */
-					int j = RULESIZE(bp);
-					ipfw_convert_from_latest(bp, rule_vers1, api_version);
-					bp = (struct ip_fw *)((char *)bp + j);
-					len += sizeof(*rule_vers1);
-					rule_vers1++;
+					if ( is64user ){
+						int rulesize_64;
+						ipfw_convert_from_latest(bp, (void *)rule_vers1, api_version, is64user);
+						rulesize_64 = sizeof(struct ip_fw_64) + ((struct ip_fw_64 *)(bp))->cmd_len * 4 - 4;
+						bp = (struct ip_fw *)((char *)bp + rulesize_64);
+					}else {
+						int rulesize_32;
+						ipfw_convert_from_latest(bp, (void *)rule_vers1, api_version, is64user);
+						rulesize_32 = sizeof(struct ip_fw_32) + ((struct ip_fw_32 *)(bp))->cmd_len * 4 - 4;
+						bp = (struct ip_fw *)((char *)bp + rulesize_32);
+					}
+					len += ipfwcompsize;
+					rule_vers1 += ipfwcompsize;
 				}
-			
 				/* now do dynamic rules */
-				dyn_rule_vers1 = (struct ipfw_dyn_rule_compat *)rule_vers1;
-				if (ipfw_dyn_v) {
-					for (i = 0; i < curr_dyn_buckets; i++) {
-						for ( p = ipfw_dyn_v[i] ; p != NULL ; p = p->next) {
-							dyn_rule_vers1->chain = p->rule->rulenum;
-							dyn_rule_vers1->id = p->id;
-							dyn_rule_vers1->mask = p->id;
-							dyn_rule_vers1->type = p->dyn_type;
-							dyn_rule_vers1->expire = p->expire;
-							dyn_rule_vers1->pcnt = p->pcnt;
-							dyn_rule_vers1->bcnt = p->bcnt;
-							dyn_rule_vers1->bucket = p->bucket;
-							dyn_rule_vers1->state = p->state;
-							
-							dyn_rule_vers1->next = (struct ipfw_dyn_rule *) dyn_rule_vers1;
-							dyn_last = dyn_rule_vers1;
-							
-							len += sizeof(*dyn_rule_vers1);
-							dyn_rule_vers1++;
-						}
-					}
-					
-					if (dyn_last != NULL) {
-						dyn_last->next = NULL;
-					}
-				}
+				if ( is64user )
+					cp_dyn_to_comp_64( (struct ipfw_dyn_rule_compat_64 *)rule_vers1, &len);
+				else 
+					cp_dyn_to_comp_32( (struct ipfw_dyn_rule_compat_32 *)rule_vers1, &len);
+
 				lck_mtx_unlock(ipfw_mutex);
-				
 				error = sooptcopyout(sopt, buf2, len);
 				_FREE(buf2, M_TEMP);
 			}
@@ -3080,7 +3633,8 @@ ipfw_ctl(struct sockopt *sopt)
 		
 		_FREE(buf, M_TEMP);
 		break;
-
+	}
+	
 	case IP_FW_FLUSH:
 		/*
 		 * Normally we cannot release the lock on each iteration.
@@ -3105,6 +3659,8 @@ ipfw_ctl(struct sockopt *sopt)
 		break;
 
 	case IP_FW_ADD:
+	{
+		size_t savedsopt_valsize=0;
 		rule = _MALLOC(RULE_MAXSIZE, M_TEMP, M_WAITOK);
 		if (rule == 0) {
 			error = ENOBUFS;
@@ -3114,11 +3670,12 @@ ipfw_ctl(struct sockopt *sopt)
 		bzero(rule, RULE_MAXSIZE);
 
 		if (api_version != IP_FW_CURRENT_API_VERSION) {
-			error = ipfw_convert_to_latest(sopt, rule, api_version);
+			error = ipfw_convert_to_latest(sopt, rule, api_version, is64user);
 		}
 		else {
-			error = sooptcopyin(sopt, rule, RULE_MAXSIZE,
-				sizeof(struct ip_fw) );
+			savedsopt_valsize = sopt->sopt_valsize;   /* it might get modified in sooptcopyin_fw */
+			error = sooptcopyin_fw( sopt, rule, &rulesize); 
+
 		}
 		
 		if (!error) {
@@ -3127,8 +3684,9 @@ ipfw_ctl(struct sockopt *sopt)
 				 * adjust sopt_valsize to match what would be expected.
 				 */
 				sopt->sopt_valsize = RULESIZE(rule);
+				rulesize = RULESIZE(rule);
 			}
-			error = check_ipfw_struct(rule, sopt->sopt_valsize);
+			error = check_ipfw_struct(rule, rulesize);
 			if (!error) {
 				lck_mtx_lock(ipfw_mutex);
 				error = add_rule(&layer3_chain, rule);
@@ -3142,19 +3700,30 @@ ipfw_ctl(struct sockopt *sopt)
 					if (api_version == IP_FW_VERSION_0) {
 						struct ip_old_fw	rule_vers0;
 						
-						ipfw_convert_from_latest(rule, &rule_vers0, api_version);
+						ipfw_convert_from_latest(rule, &rule_vers0, api_version, is64user);
 						sopt->sopt_valsize = sizeof(struct ip_old_fw);
 						
 						error = sooptcopyout(sopt, &rule_vers0, sizeof(struct ip_old_fw));
 					} else if (api_version == IP_FW_VERSION_1) {
 						struct ip_fw_compat	rule_vers1;
-		
-						ipfw_convert_from_latest(rule, &rule_vers1, api_version);
+						ipfw_convert_from_latest(rule, &rule_vers1, api_version, is64user);
 						sopt->sopt_valsize = sizeof(struct ip_fw_compat);
 						
 						error = sooptcopyout(sopt, &rule_vers1, sizeof(struct ip_fw_compat));
 					} else {
-						error = sooptcopyout(sopt, rule, size);
+						char *userrule;
+						userrule = _MALLOC(savedsopt_valsize, M_TEMP, M_WAITOK);
+						if ( userrule == NULL )
+							userrule = (char*)rule;
+						if (proc_is64bit(sopt->sopt_p)){
+							copyto64fw( rule, (struct ip_fw_64*)userrule, savedsopt_valsize);
+						}
+						else {
+								copyto32fw( rule, (struct ip_fw_32*)userrule, savedsopt_valsize);
+						}
+						error = sooptcopyout(sopt, userrule, savedsopt_valsize);
+						if ( userrule )
+							_FREE(userrule, M_TEMP);
 					}
 				}
 			}
@@ -3162,7 +3731,7 @@ ipfw_ctl(struct sockopt *sopt)
 		
 		_FREE(rule, M_TEMP);
 		break;
-
+	}
 	case IP_FW_DEL:
 	{
 		/*
@@ -3184,11 +3753,10 @@ ipfw_ctl(struct sockopt *sopt)
 		
 		bzero(&temp_rule, sizeof(struct ip_fw));
 		if (api_version != IP_FW_CURRENT_API_VERSION) {
-			error = ipfw_convert_to_latest(sopt, &temp_rule, api_version);
+			error = ipfw_convert_to_latest(sopt, &temp_rule, api_version, is64user);
 		}
 		else {
-			error = sooptcopyin(sopt, &temp_rule, sizeof(struct ip_fw),
-				sizeof(struct ip_fw) );
+			error = sooptcopyin_fw(sopt, &temp_rule, 0 );
 		}
 
 		if (!error) {
@@ -3234,17 +3802,16 @@ ipfw_ctl(struct sockopt *sopt)
 		/* there is only a simple rule passed in
 		 * (no cmds), so use a temp struct to copy
 		 */
-		struct ip_fw	temp_rule;
+		struct ip_fw temp_rule;
 		
 		bzero(&temp_rule, sizeof(struct ip_fw));
 		
 		if (api_version != IP_FW_CURRENT_API_VERSION) {
-			error = ipfw_convert_to_latest(sopt, &temp_rule, api_version);
+			error = ipfw_convert_to_latest(sopt, &temp_rule, api_version, is64user);
 		}
 		else {
 			if (sopt->sopt_val != 0) {
-				error = sooptcopyin(sopt, &temp_rule, sizeof(struct ip_fw),
-					sizeof(struct ip_fw) );
+				error = sooptcopyin_fw( sopt, &temp_rule, 0); 
 			}
 		}
 
@@ -3299,16 +3866,25 @@ struct ip_fw *ip_fw_default_rule;
 static void
 ipfw_tick(__unused void * unused)
 {
+	struct mbuf *m0, *m, *mnext, **mtailp;
 	int i;
 	ipfw_dyn_rule *q;
 	struct timeval timenow;
-
 
 	if (dyn_keepalive == 0 || ipfw_dyn_v == NULL || dyn_count == 0)
 		goto done;
 
 	getmicrotime(&timenow);
 
+	/*
+	 * We make a chain of packets to go out here -- not deferring
+	 * until after we drop the ipfw lock would result
+	 * in a lock order reversal with the normal packet input -> ipfw
+	 * call stack.
+	 */
+	m0 = NULL;
+	mtailp = &m0;
+	
 	lck_mtx_lock(ipfw_mutex);
 	for (i = 0 ; i < curr_dyn_buckets ; i++) {
 		for (q = ipfw_dyn_v[i] ; q ; q = q->next ) {
@@ -3324,11 +3900,27 @@ ipfw_tick(__unused void * unused)
 			if (TIME_LEQ(q->expire, timenow.tv_sec))
 				continue;	/* too late, rule expired */
 
-			send_pkt(&(q->id), q->ack_rev - 1, q->ack_fwd, TH_SYN);
-			send_pkt(&(q->id), q->ack_fwd - 1, q->ack_rev, 0);
+			*mtailp = send_pkt(&(q->id), q->ack_rev - 1, q->ack_fwd, TH_SYN);
+			if (*mtailp != NULL)
+				mtailp = &(*mtailp)->m_nextpkt;
+
+			*mtailp = send_pkt(&(q->id), q->ack_fwd - 1, q->ack_rev, 0);
+			if (*mtailp != NULL)
+				mtailp = &(*mtailp)->m_nextpkt;
 		}
 	}
 	lck_mtx_unlock(ipfw_mutex);
+	
+	for (m = mnext = m0; m != NULL; m = mnext) {
+		struct route sro;	/* fake route */
+
+		mnext = m->m_nextpkt;
+		m->m_nextpkt = NULL;
+		bzero (&sro, sizeof (sro));
+		ip_output_list(m, 0, NULL, &sro, 0, NULL, NULL);
+		if (sro.ro_rt)
+			RTFREE(sro.ro_rt);
+	}
 done:
 	timeout(ipfw_tick, NULL, dyn_keepalive_period*hz);
 }

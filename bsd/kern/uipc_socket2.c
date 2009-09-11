@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -113,9 +113,15 @@ static int sbappendcontrol_internal(struct sockbuf *, struct mbuf *,
 static int soqlimitcompat = 1;
 static int soqlencomp = 0;
 
-u_long	sb_max = SB_MAX;		/* XXX should be static */
+/* Based on the number of mbuf clusters configured, high_sb_max and sb_max can get 
+ * scaled up or down to suit that memory configuration. high_sb_max is a higher 
+ * limit on sb_max that is checked when sb_max gets set through sysctl.
+ */
 
-static	u_long sb_efficiency = 8;	/* parameter for sbreserve() */
+u_int32_t	sb_max = SB_MAX;		/* XXX should be static */
+u_int32_t	high_sb_max = SB_MAX;
+
+static	u_int32_t sb_efficiency = 8;	/* parameter for sbreserve() */
 __private_extern__ unsigned int total_mb_cnt = 0;
 __private_extern__ unsigned int total_cl_cnt = 0;
 __private_extern__ int sbspace_factor = 8;
@@ -260,7 +266,7 @@ sonewconn_internal(struct socket *head, int connstatus)
 	if (so_qlen >=
 	    (soqlimitcompat ? head->so_qlimit : (3 * head->so_qlimit / 2)))
 		return ((struct socket *)0);
-	so = soalloc(M_NOWAIT, head->so_proto->pr_domain->dom_family,
+	so = soalloc(1, head->so_proto->pr_domain->dom_family,
 	    head->so_type);
 	if (so == NULL)
 		return ((struct socket *)0);
@@ -279,7 +285,13 @@ sonewconn_internal(struct socket *head, int connstatus)
 	so->so_timeo = head->so_timeo;
 	so->so_pgid  = head->so_pgid;
 	so->so_uid = head->so_uid;
-	so->so_flags = head->so_flags & (SOF_REUSESHAREUID|SOF_NOTIFYCONFLICT); /* inherit SO_REUSESHAREUID and SO_NOTIFYCONFLICT ocket options */
+	/* inherit socket options stored in so_flags */
+	so->so_flags = head->so_flags & (SOF_NOSIGPIPE |
+					 SOF_NOADDRAVAIL |
+					 SOF_REUSESHAREUID | 
+					 SOF_NOTIFYCONFLICT | 
+					 SOF_BINDRANDOMPORT | 
+					 SOF_NPX_SETOPTSHUT);
 	so->so_usecount = 1;
 	so->next_lock_lr = 0;
 	so->next_unlock_lr = 0;
@@ -411,12 +423,13 @@ socantrcvmore(struct socket *so)
 int
 sbwait(struct sockbuf *sb)
 {
-	int error = 0, lr_saved;
+	int error = 0;
+	uintptr_t lr_saved;
 	struct socket *so = sb->sb_so;
 	lck_mtx_t *mutex_held;
 	struct timespec ts;
 
-	lr_saved = (unsigned int) __builtin_return_address(0);
+	lr_saved = (uintptr_t) __builtin_return_address(0);
 
 	if (so->so_proto->pr_getlock != NULL)
 		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
@@ -564,7 +577,7 @@ sowakeup(struct socket *so, struct sockbuf *sb)
  *		ENOBUFS
  */
 int
-soreserve(struct socket *so, u_long sndcc, u_long rcvcc)
+soreserve(struct socket *so, u_int32_t sndcc, u_int32_t rcvcc)
 {
 
 	if (sbreserve(&so->so_snd, sndcc) == 0)
@@ -593,7 +606,7 @@ bad:
  * if buffering efficiency is near the normal case.
  */
 int
-sbreserve(struct sockbuf *sb, u_long cc)
+sbreserve(struct sockbuf *sb, u_int32_t cc)
 {
 	if ((u_quad_t)cc > (u_quad_t)sb_max * MCLBYTES / (MSIZE + MCLBYTES))
 		return (0);
@@ -724,7 +737,7 @@ sbcheck(struct sockbuf *sb)
 {
 	struct mbuf *m;
 	struct mbuf *n = 0;
-	u_long len = 0, mbcnt = 0;
+	u_int32_t len = 0, mbcnt = 0;
 	lck_mtx_t *mutex_held;
 
 	if (sb->sb_so->so_proto->pr_getlock != NULL)
@@ -1215,7 +1228,7 @@ sb_empty_assert(struct sockbuf *sb, const char *where)
 {
 	if (!(sb->sb_cc == 0 && sb->sb_mb == NULL && sb->sb_mbcnt == 0 &&
 	    sb->sb_mbtail == NULL && sb->sb_lastrecord == NULL)) {
-		panic("%s: sb %p so %p cc %ld mbcnt %ld mb %p mbtail %p "
+		panic("%s: sb %p so %p cc %d mbcnt %d mb %p mbtail %p "
 		    "lastrecord %p\n", where, sb, sb->sb_so, sb->sb_cc,
 		    sb->sb_mbcnt, sb->sb_mb, sb->sb_mbtail, sb->sb_lastrecord);
 		/* NOTREACHED */
@@ -1436,7 +1449,7 @@ pru_connect2_notsupp(__unused struct socket *so1, __unused struct socket *so2)
 }
 
 int
-pru_control_notsupp(__unused struct socket *so, __unused u_long cmd,
+pru_control_notsupp(__unused struct socket *so, __unused u_long  cmd,
     __unused caddr_t data, __unused struct ifnet *ifp, __unused struct proc *p)
 {
 	return (EOPNOTSUPP);
@@ -1570,13 +1583,18 @@ sb_notify(struct sockbuf *sb)
  * How much space is there in a socket buffer (so->so_snd or so->so_rcv)?
  * This is problematical if the fields are unsigned, as the space might
  * still be negative (cc > hiwat or mbcnt > mbmax).  Should detect
- * overflow and return 0.  Should use "lmin" but it doesn't exist now.
+ * overflow and return 0.  
  */
-long
+int
 sbspace(struct sockbuf *sb)
 {
-	return ((long)imin((int)(sb->sb_hiwat - sb->sb_cc),
-	    (int)(sb->sb_mbmax - sb->sb_mbcnt)));
+	int space =
+		imin((int)(sb->sb_hiwat - sb->sb_cc),
+	    	(int)(sb->sb_mbmax - sb->sb_mbcnt));
+	if (space < 0)
+		space = 0;
+
+	return space;
 }
 
 /* do we have to send all at once on a socket? */
@@ -1600,7 +1618,7 @@ soreadable(struct socket *so)
 int
 sowriteable(struct socket *so)
 {
-	return ((sbspace(&(so)->so_snd) >= (long)(so)->so_snd.sb_lowat &&
+	return ((sbspace(&(so)->so_snd) >= (so)->so_snd.sb_lowat &&
 	    ((so->so_state&SS_ISCONNECTED) ||
 	    (so->so_proto->pr_flags&PR_CONNREQUIRED) == 0)) ||
 	    (so->so_state & SS_CANTSENDMORE) ||
@@ -1623,7 +1641,7 @@ sballoc(struct sockbuf *sb, struct mbuf *m)
 		sb->sb_mbcnt += m->m_ext.ext_size; 
 		cnt += m->m_ext.ext_size / MSIZE ;
 	}
-	OSAddAtomic(cnt, (SInt32*)&total_mb_cnt);
+	OSAddAtomic(cnt, &total_mb_cnt);
 }
 
 /* adjust counters in sb reflecting freeing of m */
@@ -1640,7 +1658,7 @@ sbfree(struct sockbuf *sb, struct mbuf *m)
 		sb->sb_mbcnt -= m->m_ext.ext_size; 
 		cnt -= m->m_ext.ext_size / MSIZE ;
 	}
-	OSAddAtomic(cnt, (SInt32*)&total_mb_cnt);
+	OSAddAtomic(cnt, &total_mb_cnt);
 }
 
 /*
@@ -1670,36 +1688,37 @@ void
 sbunlock(struct sockbuf *sb, int keeplocked)
 {
 	struct socket *so = sb->sb_so;
-	int lr_saved;
+	void *lr_saved;
 	lck_mtx_t *mutex_held;
 
-	lr_saved = (unsigned int) __builtin_return_address(0);
+	lr_saved = __builtin_return_address(0);
 
 	sb->sb_flags &= ~SB_LOCK;
 
 	if (sb->sb_flags & SB_WANT) {
 		sb->sb_flags &= ~SB_WANT;
-		if (so->so_usecount < 0)
-			panic("sbunlock: b4 wakeup so=%p ref=%d lr=%x "
-			    "sb_flags=%x\n", sb->sb_so, so->so_usecount,
-			    lr_saved, sb->sb_flags);
-
+		if (so->so_usecount < 0) {
+			panic("sbunlock: b4 wakeup so=%p ref=%d lr=%p "
+			    "sb_flags=%x lrh= %s\n", sb->sb_so, so->so_usecount,
+			    lr_saved, sb->sb_flags, solockhistory_nr(so));
+			/* NOTREACHED */
+		}
 		wakeup((caddr_t)&(sb)->sb_flags);
 	}
 	if (keeplocked == 0) {	/* unlock on exit */
-		if (so->so_proto->pr_getlock != NULL) 
+		if (so->so_proto->pr_getlock != NULL)
 			mutex_held = (*so->so_proto->pr_getlock)(so, 0);
-		else 
+		else
 			mutex_held = so->so_proto->pr_domain->dom_mtx;
-	
+
 		lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
 
 		so->so_usecount--;
 		if (so->so_usecount < 0)
-			panic("sbunlock: unlock on exit so=%p ref=%d lr=%x "
-			    "sb_flags=%x\n", so, so->so_usecount, lr_saved,
-			    sb->sb_flags);
-		so->unlock_lr[so->next_unlock_lr] = (u_int32_t)lr_saved;
+			panic("sbunlock: unlock on exit so=%p ref=%d lr=%p "
+			    "sb_flags=%x lrh= %s\n", so, so->so_usecount, lr_saved,
+			    sb->sb_flags, solockhistory_nr(so));
+		so->unlock_lr[so->next_unlock_lr] = lr_saved;
 		so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 		lck_mtx_unlock(mutex_held);
 	}
@@ -1747,12 +1766,12 @@ void
 sotoxsocket(struct socket *so, struct xsocket *xso)
 {
 	xso->xso_len = sizeof (*xso);
-	xso->xso_so = so;
+	xso->xso_so = (_XSOCKET_PTR(struct socket *))(uintptr_t)so;
 	xso->so_type = so->so_type;
 	xso->so_options = so->so_options;
 	xso->so_linger = so->so_linger;
 	xso->so_state = so->so_state;
-	xso->so_pcb = so->so_pcb;
+	xso->so_pcb = (_XSOCKET_PTR(caddr_t))(uintptr_t)so->so_pcb;
 	if (so->so_proto) {
 		xso->xso_protocol = so->so_proto->pr_protocol;
 		xso->xso_family = so->so_proto->pr_domain->dom_family;
@@ -1771,6 +1790,39 @@ sotoxsocket(struct socket *so, struct xsocket *xso)
 	xso->so_uid = so->so_uid;
 }
 
+
+#if !CONFIG_EMBEDDED
+
+void
+sotoxsocket64(struct socket *so, struct xsocket64 *xso)
+{
+        xso->xso_len = sizeof (*xso);
+        xso->xso_so = (u_int64_t)(uintptr_t)so;
+        xso->so_type = so->so_type;
+        xso->so_options = so->so_options;
+        xso->so_linger = so->so_linger;
+        xso->so_state = so->so_state;
+        xso->so_pcb = (u_int64_t)(uintptr_t)so->so_pcb;
+        if (so->so_proto) {
+                xso->xso_protocol = so->so_proto->pr_protocol;
+                xso->xso_family = so->so_proto->pr_domain->dom_family;
+        } else {
+                xso->xso_protocol = xso->xso_family = 0;
+        }
+        xso->so_qlen = so->so_qlen;
+        xso->so_incqlen = so->so_incqlen;
+        xso->so_qlimit = so->so_qlimit;
+        xso->so_timeo = so->so_timeo;
+        xso->so_error = so->so_error;
+        xso->so_pgid = so->so_pgid;
+        xso->so_oobmark = so->so_oobmark;
+        sbtoxsockbuf(&so->so_snd, &xso->so_snd);
+        sbtoxsockbuf(&so->so_rcv, &xso->so_rcv);
+        xso->so_uid = so->so_uid;
+}
+
+#endif /* !CONFIG_EMBEDDED */
+
 /*
  * This does the same for sockbufs.  Note that the xsockbuf structure,
  * since it is always embedded in a socket, does not include a self
@@ -1786,7 +1838,7 @@ sbtoxsockbuf(struct sockbuf *sb, struct xsockbuf *xsb)
 	xsb->sb_mbmax = sb->sb_mbmax;
 	xsb->sb_lowat = sb->sb_lowat;
 	xsb->sb_flags = sb->sb_flags;
-	xsb->sb_timeo = (u_long)
+	xsb->sb_timeo = (short)
 	    (sb->sb_timeo.tv_sec * hz) + sb->sb_timeo.tv_usec / tick;
 	if (xsb->sb_timeo == 0 && sb->sb_timeo.tv_usec != 0)
 		xsb->sb_timeo = 1;
@@ -1798,12 +1850,30 @@ sbtoxsockbuf(struct sockbuf *sb, struct xsockbuf *xsb)
  */
 SYSCTL_NODE(_kern, KERN_IPC, ipc, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "IPC");
 
-/* This takes the place of kern.maxsockbuf, which moved to kern.ipc. */
-static int dummy;
-SYSCTL_INT(_kern, KERN_DUMMY, dummy, CTLFLAG_RW, &dummy, 0, "");
+/* Check that the maximum socket buffer size is within a range */
 
-SYSCTL_INT(_kern_ipc, KIPC_MAXSOCKBUF, maxsockbuf, CTLFLAG_RW,
-    &sb_max, 0, "Maximum socket buffer size");
+static int
+sysctl_sb_max(__unused struct sysctl_oid *oidp, __unused void *arg1,
+	__unused int arg2, struct sysctl_req *req)
+{
+	u_int32_t new_value;
+	int changed = 0;
+	int error = sysctl_io_number(req, sb_max, sizeof(u_int32_t), &new_value,
+		&changed);
+	if (!error && changed) {
+		if (new_value > LOW_SB_MAX && 
+			new_value <= high_sb_max ) {
+			sb_max = new_value;
+		} else {
+			error = ERANGE;
+		}
+	}
+	return error;
+}
+
+SYSCTL_PROC(_kern_ipc, KIPC_MAXSOCKBUF, maxsockbuf, CTLTYPE_INT | CTLFLAG_RW,
+    &sb_max, 0, &sysctl_sb_max, "IU", "Maximum socket buffer size");
+
 SYSCTL_INT(_kern_ipc, OID_AUTO, maxsockets, CTLFLAG_RD,
     &maxsockets, 0, "Maximum number of sockets avaliable");
 SYSCTL_INT(_kern_ipc, KIPC_SOCKBUF_WASTE, sockbuf_waste_factor, CTLFLAG_RW,

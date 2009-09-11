@@ -272,7 +272,6 @@ public:
     @param arg3 Parameter for action parameter, defaults to 0.
     @result Returns the value of the Action callout.
 */
-    OSMetaClassDeclareReservedUsed(IOWorkLoop, 0);
     virtual IOReturn runAction(Action action, OSObject *target,
 			       void *arg0 = 0, void *arg1 = 0,
 			       void *arg2 = 0, void *arg3 = 0);
@@ -296,12 +295,22 @@ public:
 
     @result Return false if the work loop is shutting down, true otherwise.
 */
-    OSMetaClassDeclareReservedUsed(IOWorkLoop, 1);
     virtual bool runEventSources();
 
 protected:
+    // Internal APIs used by event sources to control the thread
+    virtual int sleepGate(void *event, AbsoluteTime deadline, UInt32 interuptibleType);
 
+protected:
+#if __LP64__
+    OSMetaClassDeclareReservedUnused(IOWorkLoop, 0);
+    OSMetaClassDeclareReservedUnused(IOWorkLoop, 1);
     OSMetaClassDeclareReservedUnused(IOWorkLoop, 2);
+#else
+    OSMetaClassDeclareReservedUsed(IOWorkLoop, 0);
+    OSMetaClassDeclareReservedUsed(IOWorkLoop, 1);
+    OSMetaClassDeclareReservedUsed(IOWorkLoop, 2);
+#endif
     OSMetaClassDeclareReservedUnused(IOWorkLoop, 3);
     OSMetaClassDeclareReservedUnused(IOWorkLoop, 4);
     OSMetaClassDeclareReservedUnused(IOWorkLoop, 5);

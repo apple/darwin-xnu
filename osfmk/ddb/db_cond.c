@@ -228,7 +228,7 @@ db_cond_cmd(void)
 	    db_error(0);
 	    return;
 	}
-	if ((bkpt = db_find_breakpoint_number(db_tok_number, 0)) == 0) {
+	if ((bkpt = db_find_breakpoint_number((int)db_tok_number, 0)) == 0) {
 	    db_printf("No such break point #%d\n", db_tok_number);
 	    db_error(0);
 	    return;

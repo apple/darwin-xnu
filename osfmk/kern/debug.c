@@ -60,6 +60,7 @@
 #include <mach_kdp.h>
 
 #include <kern/cpu_number.h>
+#include <kern/kalloc.h>
 #include <kern/lock.h>
 #include <kern/spl.h>
 #include <kern/thread.h>
@@ -79,12 +80,15 @@
 #include <ppc/low_trace.h>
 #endif
 
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 #include <i386/cpu_threads.h>
 #include <i386/pmCPU.h>
 #endif
 
 #include <IOKit/IOPlatformExpert.h>
+
+#include <sys/kdebug.h>
+#include <libkern/OSKextLibPrivate.h>
 
 unsigned int	halt_in_debugger = 0;
 unsigned int	switch_debugger = 0;
@@ -132,15 +136,16 @@ struct pasc {
 
 typedef struct pasc pasc_t;
 
+/* Prevent CPP from breaking the definition below */
+#if CONFIG_NO_PANIC_STRINGS
+#undef Assert
+#endif
+
 void
 Assert(
 	const char	*file,
 	int		line,
-#if CONFIG_NO_PANIC_STRINGS
-	__unused const char	*expression
-#else
 	const char	*expression
-#endif
       )
 {
 	int saved_return_on_panic;
@@ -193,7 +198,7 @@ debug_log_init(void)
 	debug_buf_size = sizeof(debug_buf);
 }
 
-#if __i386__
+#if defined(__i386__) || defined(__x86_64__)
 #define panic_stop()	pmCPUHalt(PM_HALT_PANIC)
 #define panic_safe()	pmSafeMode(x86_lcpu(), PM_SAFE_FL_SAFE)
 #define panic_normal()	pmSafeMode(x86_lcpu(), PM_SAFE_FL_NORMAL)
@@ -203,7 +208,17 @@ debug_log_init(void)
 #define panic_normal()
 #endif
 
-#undef panic(...) 
+/*
+ * Prevent CPP from breaking the definition below,
+ * since all clients get a #define to prepend line numbers
+ */
+#undef panic
+
+void _consume_panic_args(int a __unused, ...)
+{
+    panic(NULL);
+}
+
 void
 panic(const char *str, ...)
 {
@@ -211,6 +226,10 @@ panic(const char *str, ...)
 	spl_t	s;
 	thread_t thread;
 	wait_queue_t wq;
+
+
+	if (kdebug_enable)
+		kdbg_dump_trace_to_file("/var/tmp/panic.trace");
 
 	s = splhigh();
 	disable_preemption();
@@ -260,7 +279,7 @@ restart:
 	panicwait = 1;
 
 	PANIC_UNLOCK();
-	kdb_printf("panic(cpu %d caller 0x%08lX): ", (unsigned) paniccpu, panic_caller);
+	kdb_printf("panic(cpu %d caller 0x%lx): ", (unsigned) paniccpu, panic_caller);
 	if (str) {
 		va_start(listp, str);
 		_doprnt(str, &listp, consdebug_putc, 0);
@@ -422,18 +441,19 @@ __private_extern__ void panic_display_system_configuration(void) {
 		panic_display_model_name();
 		panic_display_uptime();
 		config_displayed = TRUE;
+		panic_display_zprint();
+		kext_dump_panic_lists(&kdb_log);
 	}
 }
 
 extern zone_t		first_zone;
 extern unsigned int	num_zones, stack_total;
 
-#if defined(__i386__)
+#if defined(__i386__) || defined (__x86_64__)
 extern unsigned int	inuse_ptepages_count;
 #endif
 
 extern boolean_t	panic_include_zprint;
-extern vm_size_t	kalloc_large_total;
 
 __private_extern__ void panic_display_zprint()
 {
@@ -460,17 +480,18 @@ __private_extern__ void panic_display_zprint()
 			}
 		}
 
-		kdb_printf("Kernel Stacks:%lu\n",(uintptr_t)(KERNEL_STACK_SIZE * stack_total));
-#if defined(__i386__)
+		kdb_printf("Kernel Stacks:%lu\n",(uintptr_t)(kernel_stack_size * stack_total));
+
+#if defined(__i386__) || defined (__x86_64__)
 		kdb_printf("PageTables:%lu\n",(uintptr_t)(PAGE_SIZE * inuse_ptepages_count));
 #endif
+
 		kdb_printf("Kalloc.Large:%lu\n",(uintptr_t)kalloc_large_total);
 	}
 }
 
 #if !MACH_KDP
 static struct ether_addr kdp_current_mac_address = {{0, 0, 0, 0, 0, 0}};
-unsigned int not_in_kdp = 1;
 
 /* XXX ugly forward declares to stop warnings */
 void *kdp_get_interface(void);

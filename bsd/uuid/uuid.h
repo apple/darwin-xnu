@@ -42,6 +42,11 @@
 typedef __darwin_uuid_t	uuid_t;
 #endif /* _UUID_T */
 
+#ifndef _UUID_STRING_T
+#define _UUID_STRING_T
+typedef __darwin_uuid_string_t	uuid_string_t;
+#endif /* _UUID_STRING_T */
+
 #define UUID_DEFINE(name,u0,u1,u2,u3,u4,u5,u6,u7,u8,u9,u10,u11,u12,u13,u14,u15) \
 	static const uuid_t name __attribute__ ((unused)) = {u0,u1,u2,u3,u4,u5,u6,u7,u8,u9,u10,u11,u12,u13,u14,u15}
 
@@ -61,11 +66,11 @@ void uuid_generate_time(uuid_t out);
 
 int uuid_is_null(const uuid_t uu);
 
-int uuid_parse(const char *in, uuid_t uu);
+int uuid_parse(const uuid_string_t in, uuid_t uu);
 
-void uuid_unparse(const uuid_t uu, char *out);
-void uuid_unparse_lower(const uuid_t uu, char *out);
-void uuid_unparse_upper(const uuid_t uu, char *out);
+void uuid_unparse(const uuid_t uu, uuid_string_t out);
+void uuid_unparse_lower(const uuid_t uu, uuid_string_t out);
+void uuid_unparse_upper(const uuid_t uu, uuid_string_t out);
 
 #ifdef __cplusplus
 }

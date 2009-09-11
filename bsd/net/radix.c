@@ -106,7 +106,7 @@ lck_mtx_t *rn_mutex;
 #define rn_masktop (mask_rnhead->rnh_treetop)
 #undef Bcmp
 #define Bcmp(a, b, l) \
-	(l == 0 ? 0 : bcmp((caddr_t)(a), (caddr_t)(b), (u_long)l))
+	(l == 0 ? 0 : bcmp((caddr_t)(a), (caddr_t)(b), (uint32_t)l))
 
 static int	rn_lexobetter(void *m_arg, void *n_arg);
 static struct radix_mask *

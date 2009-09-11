@@ -220,7 +220,7 @@ db_save_lex_context(register struct db_lex_context *lp)
 	lp->l_ptr = db_lp;
 	lp->l_eptr = db_endlp;
 	lp->l_char = db_look_char;
-	lp->l_token = db_look_token;
+	lp->l_token = (int)db_look_token;
 }
 
 void
@@ -267,7 +267,7 @@ db_read_token(void)
 	int	t;
 
 	if (db_look_token) {
-	    t = db_look_token;
+	    t = (int)db_look_token;
 	    db_look_token = 0;
 	}
 	else {
@@ -341,7 +341,7 @@ db_lex(void)
 	    int	r, digit;
 
 	    if (c > '0')
-		r = db_radix;
+		r = (int)db_radix;
 	    else {
 		c = db_read_char();
 		if (c == 'O' || c == 'o')
@@ -352,7 +352,7 @@ db_lex(void)
 		    r = 16;
 		else {
 		    cp--;
-		    r = db_radix;
+		    r = (int)db_radix;
 		    db_unread_char(c);
 		}
 		c = db_read_char();

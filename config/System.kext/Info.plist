@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleGetInfoString</key>
-	<string>System Resource Pseudoextension, Apple Computer Inc, ###KERNEL_VERSION_LONG###</string>
+	<string>System Resource Pseudoextension, Apple Inc, ###KERNEL_VERSION_LONG###</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.apple.kernel</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -25,6 +25,8 @@
 	<key>OSBundleRequired</key>
 	<string>Root</string>
 	<key>OSKernelResource</key>
+	<true/>
+	<key>OSBundleAllowUserLoad</key>
 	<true/>
 </dict>
 </plist>

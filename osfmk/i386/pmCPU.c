@@ -31,14 +31,14 @@
  *
  * Implements the "wrappers" to the KEXT.
  */
-#include <kern/machine.h>
-#include <i386/machine_routines.h>
-#include <i386/machine_cpu.h>
-#include <i386/misc_protos.h>
-#include <i386/pmap.h>
 #include <i386/asm.h>
+#include <i386/machine_cpu.h>
 #include <i386/mp.h>
+#include <i386/machine_routines.h>
 #include <i386/proc_reg.h>
+#include <i386/pmap.h>
+#include <i386/misc_protos.h>
+#include <kern/machine.h>
 #include <kern/pms.h>
 #include <kern/processor.h>
 #include <i386/cpu_threads.h>
@@ -46,6 +46,7 @@
 #include <i386/cpuid.h>
 #include <i386/rtclock.h>
 #include <kern/sched_prim.h>
+#include <i386/lapic.h>
 
 /*
  * Kernel parameter determining whether threads are halted unconditionally
@@ -106,7 +107,6 @@ machine_idle(void)
 	goto out;
 
     my_cpu->lcpu.state = LCPU_IDLE;
-    my_cpu->lcpu.flags |= X86CORE_FL_IDLE;
     DBGLOG(cpu_handle, cpu_number(), MP_IDLE);
     MARK_CPU_IDLE(cpu_number());
 
@@ -130,7 +130,6 @@ machine_idle(void)
      */
     MARK_CPU_ACTIVE(cpu_number());
     DBGLOG(cpu_handle, cpu_number(), MP_UNIDLE);
-    my_cpu->lcpu.flags &= ~(X86CORE_FL_IDLE | X86CORE_FL_WAKEUP);
     my_cpu->lcpu.state = LCPU_RUN;
 
     /*
@@ -164,7 +163,7 @@ pmCPUHalt(uint32_t reason)
     default:
 	__asm__ volatile ("cli");
 
-	if (pmInitDone
+    if (pmInitDone
 	    && pmDispatch != NULL
 	    && pmDispatch->pmCPUHalt != NULL) {
 	    /*
@@ -284,7 +283,7 @@ pmCPUGetDeadline(cpu_data_t *cpu)
 {
     uint64_t	deadline	= EndOfAllTime;
 
-    if (pmInitDone
+	if (pmInitDone
 	&& pmDispatch != NULL
 	&& pmDispatch->GetDeadline != NULL)
 	deadline = (*pmDispatch->GetDeadline)(&cpu->lcpu);
@@ -299,7 +298,7 @@ pmCPUGetDeadline(cpu_data_t *cpu)
 uint64_t
 pmCPUSetDeadline(cpu_data_t *cpu, uint64_t deadline)
 {
-    if (pmInitDone
+   if (pmInitDone
 	&& pmDispatch != NULL
 	&& pmDispatch->SetDeadline != NULL)
 	deadline = (*pmDispatch->SetDeadline)(&cpu->lcpu, deadline);
@@ -327,16 +326,12 @@ pmCPUExitIdle(cpu_data_t *cpu)
 {
     boolean_t		do_ipi;
 
-    cpu->lcpu.flags |= X86CORE_FL_WAKEUP;
     if (pmInitDone
 	&& pmDispatch != NULL
 	&& pmDispatch->exitIdle != NULL)
 	do_ipi = (*pmDispatch->exitIdle)(&cpu->lcpu);
     else
 	do_ipi = TRUE;
-
-    if (do_ipi)
-	cpu->lcpu.flags &= ~X86CORE_FL_WAKEUP;
 
     return(do_ipi);
 }
@@ -618,6 +613,12 @@ pmReSyncDeadlines(int cpu)
 	cpu_PM_interrupt(cpu);
 }
 
+static void
+pmSendIPI(int cpu)
+{
+    lapic_send_ipi(cpu, LAPIC_PM_INTERRUPT);
+}
+
 /*
  * Called by the power management kext to register itself and to get the
  * callbacks it might need into other kernel functions.  This interface
@@ -646,6 +647,7 @@ pmKextRegister(uint32_t version, pmDispatch_t *cpuFuncs,
 	callbacks->LCPUtoProcessor      = pmLCPUtoProcessor;
 	callbacks->ThreadBind           = thread_bind;
 	callbacks->GetSavedRunCount     = pmGetSavedRunCount;
+	callbacks->pmSendIPI		= pmSendIPI;
 	callbacks->topoParms            = &topoParms;
     } else {
 	panic("Version mis-match between Kernel and CPU PM");
@@ -653,6 +655,10 @@ pmKextRegister(uint32_t version, pmDispatch_t *cpuFuncs,
 
     if (cpuFuncs != NULL) {
 	pmDispatch = cpuFuncs;
+
+	if (pmDispatch->pmIPIHandler != NULL) {
+	    lapic_set_pm_func((i386_intr_func_t)pmDispatch->pmIPIHandler);
+	}
     }
 }
 

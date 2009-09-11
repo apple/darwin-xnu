@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/esp_core.c,v 1.1.2.4 2002/03/26 10:12:29 ume Exp $	*/
 /*	$KAME: esp_core.c,v 1.50 2000/11/02 12:27:38 itojun Exp $	*/
 
@@ -250,9 +278,9 @@ esp_schedule(algo, sav)
 		lck_mtx_unlock(sadb_mutex);
 		return 0;
 	}
-
+        
 	sav->schedlen = (*algo->schedlen)(algo);
-	if (sav->schedlen < 0) {
+	if ((signed) sav->schedlen < 0) {
 		lck_mtx_unlock(sadb_mutex);
 		return EINVAL;
 	}
@@ -504,7 +532,7 @@ esp_blowfish_schedule(
 
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	BF_set_key((BF_KEY *)sav->sched, _KEYLEN(sav->key_enc),
-	    _KEYBUF(sav->key_enc));
+	    (u_int8_t *) _KEYBUF(sav->key_enc));
 	return 0;
 }
 
@@ -562,7 +590,7 @@ esp_cast128_schedule(
 	struct secasvar *sav)
 {
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
-	set_cast128_subkey((u_int32_t *)sav->sched, _KEYBUF(sav->key_enc),
+	set_cast128_subkey((u_int32_t *)sav->sched, (u_int8_t *) _KEYBUF(sav->key_enc),
 		_KEYLEN(sav->key_enc));
 	return 0;
 }
@@ -737,7 +765,7 @@ esp_cbc_decrypt(m, off, sav, algo, ivlen)
 	}
 
 	/* grab iv */
-	m_copydata(m, ivoff, ivlen, iv);
+	m_copydata(m, ivoff, ivlen, (caddr_t) iv);
 
 	/* extend iv */
 	if (ivlen == blocklen)
@@ -758,7 +786,7 @@ esp_cbc_decrypt(m, off, sav, algo, ivlen)
 
 	if (m->m_pkthdr.len < bodyoff) {
 		ipseclog((LOG_ERR, "esp_cbc_decrypt %s: bad len %d/%lu\n",
-		    algo->name, m->m_pkthdr.len, (unsigned long)bodyoff));
+		    algo->name, m->m_pkthdr.len, (u_int32_t)bodyoff));
 		m_freem(m);
 		return EINVAL;
 	}
@@ -799,7 +827,7 @@ esp_cbc_decrypt(m, off, sav, algo, ivlen)
 			sp = mtod(s, u_int8_t *) + sn;
 		} else {
 			/* body is non-continuous */
-			m_copydata(s, sn, blocklen, sbuf);
+			m_copydata(s, sn, blocklen, (caddr_t) sbuf);
 			sp = sbuf;
 		}
 
@@ -938,11 +966,11 @@ esp_cbc_encrypt(
 
 	/* put iv into the packet.  if we are in derived mode, use seqno. */
 	if (derived)
-		m_copydata(m, ivoff, ivlen, iv);
+		m_copydata(m, ivoff, ivlen, (caddr_t) iv);
 	else {
 		bcopy(sav->iv, iv, ivlen);
 		/* maybe it is better to overwrite dest, not source */
-		m_copyback(m, ivoff, ivlen, iv);
+		m_copyback(m, ivoff, ivlen, (caddr_t) iv);
 	}
 
 	/* extend iv */
@@ -964,14 +992,14 @@ esp_cbc_encrypt(
 
 	if (m->m_pkthdr.len < bodyoff) {
 		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: bad len %d/%lu\n",
-		    algo->name, m->m_pkthdr.len, (unsigned long)bodyoff));
+		    algo->name, m->m_pkthdr.len, (u_int32_t)bodyoff));
 		m_freem(m);
 		return EINVAL;
 	}
 	if ((m->m_pkthdr.len - bodyoff) % blocklen) {
 		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: "
 		    "payload length must be multiple of %lu\n",
-		    algo->name, (unsigned long)algo->padbound));
+		    algo->name, (u_int32_t)algo->padbound));
 		m_freem(m);
 		return EINVAL;
 	}
@@ -1005,7 +1033,7 @@ esp_cbc_encrypt(
 			sp = mtod(s, u_int8_t *) + sn;
 		} else {
 			/* body is non-continuous */
-			m_copydata(s, sn, blocklen, sbuf);
+			m_copydata(s, sn, blocklen, (caddr_t) sbuf);
 			sp = sbuf;
 		}
 
@@ -1136,7 +1164,7 @@ esp_auth(m0, skip, length, sav, sum)
 	if (sizeof(sumbuf) < siz) {
 		ipseclog((LOG_DEBUG,
 		    "esp_auth: AH_MAXSUMSIZE is too small: siz=%lu\n",
-		    (u_long)siz));
+		    (u_int32_t)siz));
 		KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 4,0,0,0,0);
 		return EINVAL;
 	}
@@ -1165,17 +1193,17 @@ esp_auth(m0, skip, length, sav, sum)
 			panic("mbuf chain?");
 
 		if (m->m_len - off < length) {
-			(*algo->update)(&s, mtod(m, u_char *) + off,
+			(*algo->update)(&s, (caddr_t)(mtod(m, u_char *) + off),
 				m->m_len - off);
 			length -= m->m_len - off;
 			m = m->m_next;
 			off = 0;
 		} else {
-			(*algo->update)(&s, mtod(m, u_char *) + off, length);
+			(*algo->update)(&s, (caddr_t)(mtod(m, u_char *) + off), length);
 			break;
 		}
 	}
-	(*algo->result)(&s, sumbuf);
+	(*algo->result)(&s, (caddr_t) sumbuf);
 	bcopy(sumbuf, sum, siz);	/*XXX*/
 	KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 6,0,0,0,0);
 	return 0;

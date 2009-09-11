@@ -65,7 +65,6 @@
 #include <mach_vm_debug.h>
 #include <mach/kern_return.h>
 #include <mach/mach_host_server.h>
-#include <mach/vm_map_server.h>
 #include <mach_debug/vm_info.h>
 #include <mach_debug/page_info.h>
 #include <mach_debug/hash_info.h>
@@ -92,6 +91,11 @@
 #define __DEBUG_ONLY
 #endif /* !MACH_VM_DEBUG */
 
+#if VM32_SUPPORT
+
+#include <mach/vm32_map_server.h>
+#include <mach/vm_map.h>
+
 /*
  *	Routine:	mach_vm_region_info [kernel call]
  *	Purpose:
@@ -107,9 +111,9 @@
  */
 
 kern_return_t
-mach_vm_region_info(
+vm32_region_info(
 	__DEBUG_ONLY vm_map_t			map,
-	__DEBUG_ONLY vm_offset_t		address,
+	__DEBUG_ONLY vm32_offset_t		address,
 	__DEBUG_ONLY vm_info_region_t		*regionp,
 	__DEBUG_ONLY vm_info_object_array_t	*objectsp,
 	__DEBUG_ONLY mach_msg_type_number_t	*objectsCntp)
@@ -169,10 +173,10 @@ mach_vm_region_info(
 		/* cmap is read-locked; we have a real entry */
 
 		object = entry->object.vm_object;
-		region.vir_start = entry->vme_start;
-		region.vir_end = entry->vme_end;
-		region.vir_object = (vm_offset_t) object;
-		region.vir_offset = entry->offset;
+		region.vir_start = (natural_t) entry->vme_start;
+		region.vir_end = (natural_t) entry->vme_end;
+		region.vir_object = (natural_t)(uintptr_t) object;
+		region.vir_offset = (natural_t) entry->offset;
 		region.vir_needs_copy = entry->needs_copy;
 		region.vir_protection = entry->protection;
 		region.vir_max_protection = entry->max_protection;
@@ -181,7 +185,7 @@ mach_vm_region_info(
 		region.vir_user_wired_count = entry->user_wired_count;
 
 		used = 0;
-		room = size / sizeof(vm_info_object_t);
+		room = (unsigned int) (size / sizeof(vm_info_object_t));
 
 		if (object == VM_OBJECT_NULL) {
 			vm_map_unlock_read(cmap);
@@ -200,27 +204,28 @@ mach_vm_region_info(
 					&((vm_info_object_t *) addr)[used];
 
 				vio->vio_object =
-					(vm_offset_t) cobject;
+					(natural_t)(uintptr_t) cobject;
 				vio->vio_size =
-					cobject->size;
+					(natural_t) cobject->size;
 				vio->vio_ref_count =
 					cobject->ref_count;
 				vio->vio_resident_page_count =
 					cobject->resident_page_count;
 				vio->vio_copy =
-					(vm_offset_t) cobject->copy;
+					(natural_t)(uintptr_t) cobject->copy;
 				vio->vio_shadow =
-					(vm_offset_t) cobject->shadow;
+					(natural_t)(uintptr_t) cobject->shadow;
 				vio->vio_shadow_offset =
-					cobject->shadow_offset;
+					(natural_t) cobject->shadow_offset;
 				vio->vio_paging_offset =
-					cobject->paging_offset;
+					(natural_t) cobject->paging_offset;
 				vio->vio_copy_strategy =
 					cobject->copy_strategy;
 				vio->vio_last_alloc =
-					cobject->last_alloc;
+					(vm_offset_t) cobject->last_alloc;
 				vio->vio_paging_in_progress =
-					cobject->paging_in_progress;
+					cobject->paging_in_progress +
+					cobject->activity_in_progress;
 				vio->vio_pager_created =
 					cobject->pager_created;
 				vio->vio_pager_initialized =
@@ -262,7 +267,7 @@ mach_vm_region_info(
 
 		if (size != 0)
 			kmem_free(ipc_kernel_map, addr, size);
-		size = round_page_32(2 * used * sizeof(vm_info_object_t));
+		size = round_page(2 * used * sizeof(vm_info_object_t));
 
 		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE);
 		if (kr != KERN_SUCCESS)
@@ -283,7 +288,7 @@ mach_vm_region_info(
 			kmem_free(ipc_kernel_map, addr, size);
 	} else {
 		vm_size_t size_used =
-			round_page_32(used * sizeof(vm_info_object_t));
+			round_page(used * sizeof(vm_info_object_t));
 
 		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr),
 				   vm_map_round_page(addr + size_used), FALSE);
@@ -310,9 +315,9 @@ mach_vm_region_info(
  */
 
 kern_return_t
-mach_vm_region_info_64(
+vm32_region_info_64(
 	__DEBUG_ONLY vm_map_t			map,
-	__DEBUG_ONLY vm_offset_t		address,
+	__DEBUG_ONLY vm32_offset_t		address,
 	__DEBUG_ONLY vm_info_region_64_t	*regionp,
 	__DEBUG_ONLY vm_info_object_array_t	*objectsp,
 	__DEBUG_ONLY mach_msg_type_number_t	*objectsCntp)
@@ -370,9 +375,9 @@ mach_vm_region_info_64(
 		/* cmap is read-locked; we have a real entry */
 
 		object = entry->object.vm_object;
-		region.vir_start = entry->vme_start;
-		region.vir_end = entry->vme_end;
-		region.vir_object = (vm_offset_t) object;
+		region.vir_start = (natural_t) entry->vme_start;
+		region.vir_end = (natural_t) entry->vme_end;
+		region.vir_object = (natural_t)(uintptr_t) object;
 		region.vir_offset = entry->offset;
 		region.vir_needs_copy = entry->needs_copy;
 		region.vir_protection = entry->protection;
@@ -382,7 +387,7 @@ mach_vm_region_info_64(
 		region.vir_user_wired_count = entry->user_wired_count;
 
 		used = 0;
-		room = size / sizeof(vm_info_object_t);
+		room = (unsigned int) (size / sizeof(vm_info_object_t));
 
 		if (object == VM_OBJECT_NULL) {
 			vm_map_unlock_read(cmap);
@@ -401,27 +406,28 @@ mach_vm_region_info_64(
 					&((vm_info_object_t *) addr)[used];
 
 				vio->vio_object =
-					(vm_offset_t) cobject;
+					(natural_t)(uintptr_t) cobject;
 				vio->vio_size =
-					cobject->size;
+					(natural_t) cobject->size;
 				vio->vio_ref_count =
 					cobject->ref_count;
 				vio->vio_resident_page_count =
 					cobject->resident_page_count;
 				vio->vio_copy =
-					(vm_offset_t) cobject->copy;
+					(natural_t)(uintptr_t) cobject->copy;
 				vio->vio_shadow =
-					(vm_offset_t) cobject->shadow;
+					(natural_t)(uintptr_t) cobject->shadow;
 				vio->vio_shadow_offset =
-					cobject->shadow_offset;
+					(natural_t) cobject->shadow_offset;
 				vio->vio_paging_offset =
-					cobject->paging_offset;
+					(natural_t) cobject->paging_offset;
 				vio->vio_copy_strategy =
 					cobject->copy_strategy;
 				vio->vio_last_alloc =
-					cobject->last_alloc;
+					(vm_offset_t) cobject->last_alloc;
 				vio->vio_paging_in_progress =
-					cobject->paging_in_progress;
+					cobject->paging_in_progress +
+					cobject->activity_in_progress;
 				vio->vio_pager_created =
 					cobject->pager_created;
 				vio->vio_pager_initialized =
@@ -463,7 +469,7 @@ mach_vm_region_info_64(
 
 		if (size != 0)
 			kmem_free(ipc_kernel_map, addr, size);
-		size = round_page_32(2 * used * sizeof(vm_info_object_t));
+		size = round_page(2 * used * sizeof(vm_info_object_t));
 
 		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE);
 		if (kr != KERN_SUCCESS)
@@ -484,7 +490,7 @@ mach_vm_region_info_64(
 			kmem_free(ipc_kernel_map, addr, size);
 	} else {
 		vm_size_t size_used =
-			round_page_32(used * sizeof(vm_info_object_t));
+			round_page(used * sizeof(vm_info_object_t));
 
 		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr),
 				   vm_map_round_page(addr + size_used), FALSE);
@@ -509,7 +515,7 @@ mach_vm_region_info_64(
  * Return an array of virtual pages that are mapped to a task.
  */
 kern_return_t
-vm_mapped_pages_info(
+vm32_mapped_pages_info(
 	__DEBUG_ONLY vm_map_t			map,
 	__DEBUG_ONLY page_address_array_t	*pages,
 	__DEBUG_ONLY mach_msg_type_number_t	*pages_count)
@@ -528,7 +534,7 @@ vm_mapped_pages_info(
 
 	pmap = map->pmap;
 	size = pmap_resident_count(pmap) * sizeof(vm_offset_t);
-	size = round_page_32(size);
+	size = round_page(size);
 
 	for (;;) {
 	    (void) vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE);
@@ -536,7 +542,7 @@ vm_mapped_pages_info(
 				 vm_map_round_page(addr + size), FALSE);
 
 	    list = (page_address_array_t) addr;
-	    space = size / sizeof(vm_offset_t);
+	    space = (unsigned int) (size / sizeof(vm_offset_t));
 
 	    actual = pmap_list_resident_pages(pmap,
 					list,
@@ -552,7 +558,7 @@ vm_mapped_pages_info(
 	    /*
 	     * Try again, doubling the size
 	     */
-	    size = round_page_32(actual * sizeof(vm_offset_t));
+	    size = round_page(actual * sizeof(vm_offset_t));
 	}
 	if (actual == 0) {
 	    *pages = 0;
@@ -561,7 +567,7 @@ vm_mapped_pages_info(
 	}
 	else {
 	    *pages_count = actual;
-	    size_used = round_page_32(actual * sizeof(vm_offset_t));
+	    size_used = round_page(actual * sizeof(vm_offset_t));
 	    (void) vm_map_wire(ipc_kernel_map, vm_map_trunc_page(addr),
 				vm_map_round_page(addr + size), 
 				VM_PROT_READ|VM_PROT_WRITE, FALSE);
@@ -580,6 +586,8 @@ vm_mapped_pages_info(
 	return (KERN_SUCCESS);
 #endif /* MACH_VM_DEBUG */
 }
+
+#endif /* VM32_SUPPORT */
 
 /*
  *	Routine:	host_virtual_physical_table_info
@@ -626,13 +634,13 @@ host_virtual_physical_table_info(
 		if (info != *infop)
 			kmem_free(ipc_kernel_map, addr, size);
 
-		size = round_page_32(actual * sizeof *info);
+		size = round_page(actual * sizeof *info);
 		kr = kmem_alloc_pageable(ipc_kernel_map, &addr, size);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
 		info = (hash_info_bucket_t *) addr;
-		potential = size/sizeof *info;
+		potential = (unsigned int) (size/sizeof (*info));
 	}
 
 	if (info == *infop) {
@@ -647,7 +655,7 @@ host_virtual_physical_table_info(
 		vm_map_copy_t copy;
 		vm_size_t used;
 
-		used = round_page_32(actual * sizeof *info);
+		used = round_page(actual * sizeof *info);
 
 		if (used != size)
 			kmem_free(ipc_kernel_map, addr + used, size - used);

@@ -31,16 +31,16 @@
 
 extern void bcopy(const void *, void *, size_t);
 
-void video_scroll_up(unsigned long start,
-                     unsigned long end,
-                     unsigned long dest)
+void video_scroll_up(void *start,
+                     void *end,
+                     void *dest)
 {
-    bcopy((void *) start, (void *) dest, (end - start) << 2);
+    bcopy(start, dest, ((char*)end - (char*)start) << 2);;
 }
 
-void video_scroll_down(unsigned long start,  /* HIGH addr */
-                       unsigned long end,    /* LOW addr */
-                       unsigned long dest)   /* HIGH addr */
+void video_scroll_down(void *start,  /* HIGH addr */
+                       void *end,    /* LOW addr */
+                       void *dest)   /* HIGH addr */
 {
-    bcopy((void *) end, (void *) dest, (start - end) << 2);
+    bcopy(end, dest, ((char*)start - (char*)end) << 2);
 }

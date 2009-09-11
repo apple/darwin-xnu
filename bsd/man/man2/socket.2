@@ -35,7 +35,7 @@
 .\"
 .Dd June 4, 1993
 .Dt SOCKET 2
-.Os BSD 4.2
+.Os 
 .Sh NAME
 .Nm socket
 .Nd create an endpoint for communication
@@ -61,11 +61,14 @@ These families are defined in the include file
 The currently understood formats are
 .Pp
 .Bd -literal -offset indent -compact
-AF_UNIX		(UNIX internal protocols),
-AF_INET		(ARPA Internet protocols),
-AF_ISO		(ISO protocols),
-AF_NS		(Xerox Network Systems protocols), and
-AF_IMPLINK	(IMP \*(lqhost at IMP\*(rq link layer).
+PF_LOCAL	Host-internal protocols, formerly called PF_UNIX,
+PF_UNIX		Host-internal protocols, deprecated, use PF_LOCAL,
+PF_INET		Internet version 4 protocols,
+PF_ROUTE	Internal Routing protocol,
+PF_KEY		Internal key-management function,
+PF_INET6	Internet version 6 protocols,
+PF_SYSTEM	System domain,
+PF_NDRV		Raw access to network device
 .Ed
 .Pp
 The socket has the indicated

@@ -124,10 +124,13 @@ void console_per_proc_free(void *per_proc_cbfr)
 		kfree(per_proc_cbfr, sizeof(ppcbfr_t));
 }
 
-
 static void _cnputc(char c)
 {
 	cons_ops[cons_ops_index].putc(console_unit, console_chan, c);
+}
+
+void cnputc_unbuffered(char c) {
+	_cnputc(c);
 }
 
 void cnputcusr(char c) {										/* Echo input character directly */

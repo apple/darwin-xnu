@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/in6_gif.c,v 1.2.2.3 2001/07/03 11:01:52 ume Exp $	*/
 /*	$KAME: in6_gif.c,v 1.49 2001/05/14 14:02:17 itojun Exp $	*/
 
@@ -66,8 +94,6 @@
 #include <net/if_gif.h>
 
 #include <net/net_osdep.h>
-
-extern u_long  route_generation;
 
 static __inline__ void*
 _cast_non_const(const void * ptr) {
@@ -178,7 +204,7 @@ in6_gif_output(
 	    (sc->gif_ro6.ro_rt != NULL &&
 	    (sc->gif_ro6.ro_rt->generation_id != route_generation ||
 	    sc->gif_ro6.ro_rt->rt_ifp == ifp))) {
-		/* cache route doesn't match */
+		/* cache route doesn't match or recursive route */
 		bzero(dst, sizeof(*dst));
 		dst->sin6_family = sin6_dst->sin6_family;
 		dst->sin6_len = sizeof(struct sockaddr_in6);
@@ -198,9 +224,10 @@ in6_gif_output(
 			m_freem(m);
 			return ENETUNREACH;
 		}
-
+		RT_LOCK(sc->gif_ro6.ro_rt);
 		/* if it constitutes infinite encapsulation, punt. */
 		if (sc->gif_ro6.ro_rt->rt_ifp == ifp) {
+			RT_UNLOCK(sc->gif_ro6.ro_rt);
 			m_freem(m);
 			return ENETUNREACH;	/*XXX*/
 		}
@@ -208,6 +235,7 @@ in6_gif_output(
 		ifp->if_mtu = sc->gif_ro6.ro_rt->rt_ifp->if_mtu
 			- sizeof(struct ip6_hdr);
 #endif
+		RT_UNLOCK(sc->gif_ro6.ro_rt);
 	}
 	
 #if IPV6_MINMTU
@@ -336,17 +364,22 @@ gif_validate6(
 		sin6.sin6_scope_id = 0; /* XXX */
 #endif
 
-		rt = rtalloc1((struct sockaddr *)&sin6, 0, 0UL);
+		rt = rtalloc1((struct sockaddr *)&sin6, 0, 0);
+		if (rt != NULL)
+			RT_LOCK(rt);
 		if (!rt || rt->rt_ifp != ifp) {
 #if 0
 			log(LOG_WARNING, "%s: packet from %s dropped "
 			    "due to ingress filter\n", if_name(&sc->gif_if),
 			    ip6_sprintf(&sin6.sin6_addr));
 #endif
-			if (rt)
+			if (rt != NULL) {
+				RT_UNLOCK(rt);
 				rtfree(rt);
+			}
 			return 0;
 		}
+		RT_UNLOCK(rt);
 		rtfree(rt);
 	}
 
@@ -372,7 +405,7 @@ gif_encapcheck6(
 	/* sanity check done in caller */
 	sc = (struct gif_softc *)arg;
 
-	mbuf_copydata(m, 0, sizeof(ip6), &ip6);
+	mbuf_copydata((struct mbuf *)(size_t)m, 0, sizeof(ip6), &ip6);
 	ifp = ((m->m_flags & M_PKTHDR) != 0) ? m->m_pkthdr.rcvif : NULL;
 
 	return gif_validate6(&ip6, sc, ifp);

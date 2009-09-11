@@ -16,6 +16,7 @@ export INCR_EXPORTHDRS	= FALSE
 endif
 endif
 
+
 #
 # Component List
 #
@@ -36,7 +37,7 @@ endif
 # Architecture options
 #
 ifndef SUPPORTED_ARCH_CONFIGS
-export SUPPORTED_ARCH_CONFIGS = PPC I386 ARM
+export SUPPORTED_ARCH_CONFIGS = PPC I386 X86_64 ARM
 endif
 
 ifndef ARCH_CONFIGS
@@ -60,7 +61,11 @@ export SUPPORTED_KERNEL_CONFIGS = RELEASE DEVELOPMENT DEBUG PROFILE
 endif
 
 ifndef DEFAULT_KERNEL_CONFIG
+ifeq ($(RC_ProjectName),xnu_debug)
+export DEFAULT_KERNEL_CONFIG = DEBUG
+else
 export DEFAULT_KERNEL_CONFIG = RELEASE
+endif
 endif
 
 # If KERNEL_CONFIGS is specified it should override KERNEL_CONFIG.
@@ -110,11 +115,12 @@ endif
 # default architecture configuration = system architecture where you are running make.
 # default machine configuration for ppc = none at this time.
 # default machine configuration for i386 = none at this time.
+# default machine configuration for x86_64 = none at this time.
 # default machine configuration for arm = "S5L8900X".
 #
 ifndef TARGET_CONFIGS_UC
 ifdef TARGET_CONFIGS
-	export TARGET_CONFIGS_UC = $(strip $(shell printf "%s" "$(TARGET_CONFIGS)" | $(TR) a-z A-Z))
+	export TARGET_CONFIGS_UC := $(strip $(shell printf "%s" "$(TARGET_CONFIGS)" | $(TR) a-z A-Z))
 	export MACHINE_CONFIG	= $(word 3, $(TARGET_CONFIGS_UC))
 	export DEFAULT_KERNEL_CONFIG = $(word 1, $(TARGET_CONFIGS_UC))
 else
@@ -133,7 +139,7 @@ export KERNEL_CONFIG_LC := $(shell printf "%s" "$(KERNEL_CONFIG)" | $(TR) A-Z a-
 #
 # Kernel Configuration to install
 #
-#  supported install architecture : PPC I386 ARM
+#  supported install architecture : PPC I386 X86_64 ARM
 #
 export INSTALL_TYPE 	= $(DEFAULT_KERNEL_CONFIG)
 
@@ -142,7 +148,7 @@ export INSTALL_ARCHS 	= $(strip $(foreach my_config, $(SUPPORTED_ARCH_CONFIGS), 
 export INSTALL_ARCHS_LC := $(shell printf "%s" "$(INSTALL_ARCHS)" | $(TR) A-Z a-z)
 endif
 
-export INSTALL_ARCH_DEFAULT	= PPC
+export INSTALL_ARCH_DEFAULT	= $(firstword $(INSTALL_ARCHS))
 
 #
 # Standard defines list
@@ -162,23 +168,15 @@ KC++ := $(CXX)
 CWARNFLAGS_STD = \
 	-Wall -Wno-format-y2k -W -Wstrict-prototypes -Wmissing-prototypes \
 	-Wpointer-arith -Wreturn-type -Wcast-qual -Wwrite-strings -Wswitch \
-	-Wshadow -Wcast-align -Wbad-function-cast -Wchar-subscripts -Winline \
+	-Wshadow -Wcast-align -Wchar-subscripts -Winline \
 	-Wnested-externs -Wredundant-decls
 
 export CWARNFLAGS ?= $(CWARNFLAGS_STD)
 
-MWARNFLAGS_STD = \
-	-Wall -Wno-format-y2k -W -Wstrict-prototypes -Wmissing-prototypes \
-	-Wpointer-arith -Wreturn-type -Wcast-qual -Wwrite-strings -Wswitch \
-	-Wshadow -Wcast-align -Wbad-function-cast -Wchar-subscripts -Winline \
-	-Wnested-externs -Wredundant-decls
-
-export MWARNFLAGS ?= $(MWARNFLAGS_STD)
-
 CXXWARNFLAGS_STD = \
 	-Wall -Wno-format-y2k -W \
 	-Wpointer-arith -Wreturn-type -Wcast-qual -Wwrite-strings -Wswitch \
-	-Wshadow -Wcast-align -Wchar-subscripts -Winline -Wredundant-decls
+	-Wcast-align -Wchar-subscripts -Wredundant-decls
 
 export CXXWARNFLAGS ?= $(CXXWARNFLAGS_STD)
 
@@ -195,10 +193,12 @@ endif
 
 ARCH_FLAGS_PPC		  = -arch ppc
 ARCH_FLAGS_I386		  = -arch i386
+ARCH_FLAGS_X86_64	  = -arch x86_64
 ARCH_FLAGS_ARM		  = $($(addsuffix $(MACHINE_CONFIG),ARCH_FLAGS_ARM_))
 
 ARCH_FLAGS_ALL_PPC		= $(ARCH_FLAGS_PPC)
 ARCH_FLAGS_ALL_I386		= $(ARCH_FLAGS_I386)
+ARCH_FLAGS_ALL_X86_64		= $(ARCH_FLAGS_X86_64)
 ARCH_FLAGS_ALL_ARM		= -arch arm
 
 
@@ -216,8 +216,8 @@ export DSYMBUILDDIR = ./Contents/Resources/DWARF/
 # probes from the kernel.
 #
 export CFLAGS_GEN = -static $(DEBUG_CFLAGS) -nostdinc -nostdlib \
-	-fno-builtin -finline -msoft-float \
-	-fsigned-bitfields $(OTHER_CFLAGS)
+	-fno-builtin -finline -fno-common -msoft-float \
+	-fsigned-bitfields -fno-stack-protector $(OTHER_CFLAGS)
 
 ifeq ($(BUILD_STABS),1)
 export CFLAGS_GEN += -gstabs+
@@ -238,6 +238,8 @@ export CFLAGS_PPC 	= -Dppc -DPPC -D__PPC__ -DPAGE_SIZE_FIXED \
 				-mno-altivec -force_cpusubtype_ALL
 export CFLAGS_I386 	= -Di386 -DI386 -D__I386__ \
 				-DPAGE_SIZE_FIXED -force_cpusubtype_ALL
+export CFLAGS_X86_64	= -Dx86_64 -DX86_64 -D__X86_64__ -DLP64 \
+				-DPAGE_SIZE_FIXED -mkernel
 export CFLAGS_ARM 	= -Darm -DARM -D__ARM__ -DPAGE_SIZE_FIXED \
 				-fno-strict-aliasing -fno-keep-inline-functions
 
@@ -248,14 +250,13 @@ ifeq (-arch armv6,$(ARCH_FLAGS_ARM))
 CFLAGS_ARM		+= -mthumb
 endif
 ifeq (-arch armv5,$(ARCH_FLAGS_ARM))
-#CFLAGS_ARM		+= -mthumb # <rdar://problem/6174175>
+CFLAGS_ARM		+= -mthumb
 endif
 ifeq (-arch xscale,$(ARCH_FLAGS_ARM))
 CFLAGS_ARM		+= -mthumb
 endif
 
 export CFLAGS_RELEASEPPC = -O2 -mcpu=750 -mmultiple
-export CFLAGS_RELEASE_TRACEPPC = -O2 -mcpu=750 -mmultiple
 export CFLAGS_DEVELOPMENTPPC = -O2 -mcpu=750 -mmultiple
 export CFLAGS_DEBUGPPC = -O2 -mcpu=750 -mmultiple
 export CFLAGS_PROFILEPPC = -O2 -mcpu=750 -mmultiple
@@ -264,6 +265,12 @@ export CFLAGS_RELEASEI386 = -Os
 export CFLAGS_DEVELOPMENTI386 = -Os
 export CFLAGS_DEBUGI386 = -Os
 export CFLAGS_PROFILEI386 = -Os
+
+export CFLAGS_RELEASEX86_64 = -Os
+export CFLAGS_DEVELOPMENTX86_64 = -Os
+# No space optimization for the DEBUG kernel for the benefit of gdb:
+export CFLAGS_DEBUGX86_64 = -O0
+export CFLAGS_PROFILEX86_64 = -Os
 
 export CFLAGS_RELEASEARM = -O2
 export CFLAGS_DEVELOPMENTARM = -O2
@@ -277,8 +284,6 @@ export CFLAGS 	= $(CFLAGS_GEN) \
 		  $($(addsuffix $(KERNEL_CONFIG),CFLAGS_)) \
 		  $($(addsuffix $(ARCH_CONFIG), $(addsuffix $(KERNEL_CONFIG),CFLAGS_))) \
 		  $(DEFINES)
-
-export MIGCC = $(CC)
 
 # Default C++ flags
 #
@@ -307,6 +312,7 @@ export SFLAGS_PROFILE 	=
 export SFLAGS_PPC 	= $(CFLAGS_PPC) -force_cpusubtype_ALL
 export SFLAGS_I386	= $(CFLAGS_I386)
 export SFLAGS_ARM	= $(CFLAGS_ARM)
+export SFLAGS_X86_64 	= $(CFLAGS_X86_64)
 
 export SFLAGS 	= $(SFLAGS_GEN) \
 		  $($(addsuffix $(MACHINE_CONFIG),MACHINE_FLAGS_)) \
@@ -323,21 +329,6 @@ LD	= $(KC++) -nostdlib
 #
 # Default LDFLAGS
 #
-export LDFLAGS_COMPONENT_GEN = -static -r $(COMP_LDFLAGS_COMPONENT_GEN)
-
-export LDFLAGS_COMPONENT_RELEASE =  $(COMP_LDFLAGS_COMPONENT_RELEASE)
-export LDFLAGS_COMPONENT_DEVELOPMENT =  $(COMP_LDFLAGS_COMPONENT_DEVELOPMENT)
-export LDFLAGS_COMPONENT_DEBUG   =  $(COMP_LDFLAGS_COMPONENT_DEBUG)
-export LDFLAGS_COMPONENT_PROFILE =  $(COMP_LDFLAGS_COMPONENT_PROFILE)
-
-export LDFLAGS_COMPONENT_PPC 	= $(COMP_LDFLAGS_COMPONENT_PPC) -force_cpusubtype_ALL
-export LDFLAGS_COMPONENT_I386 	= $(COMP_LDFLAGS_COMPONENT_i386)
-export LDFLAGS_COMPONENT_ARM 	= $(COMP_LDFLAGS_COMPONENT_ARM) -Wl,-new_linker
-
-export LDFLAGS_COMPONENT	= $(LDFLAGS_COMPONENT_GEN) \
-		  $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
-		  $($(addsuffix $(ARCH_CONFIG),LDFLAGS_COMPONENT_)) \
-		  $($(addsuffix $(KERNEL_CONFIG),LDFLAGS_COMPONENT_))
 
 export LDFLAGS_KERNEL_GEN = \
 	-static \
@@ -346,44 +337,84 @@ export LDFLAGS_KERNEL_GEN = \
 	-Wl,-sectalign,__TEXT,__text,0x1000 \
 	-Wl,-sectalign,__DATA,__common,0x1000 \
 	-Wl,-sectalign,__DATA,__bss,0x1000 \
-	-Wl,-sectcreate,__PRELINK,__text,/dev/null \
-	-Wl,-sectcreate,__PRELINK,__symtab,/dev/null \
-	-Wl,-sectcreate,__PRELINK,__info,/dev/null
+	-Wl,-sectcreate,__PRELINK_TEXT,__text,/dev/null \
+	-Wl,-sectcreate,__PRELINK_STATE,__kernel,/dev/null \
+        -Wl,-sectcreate,__PRELINK_STATE,__kexts,/dev/null \
+	-Wl,-sectcreate,__PRELINK_INFO,__info,/dev/null
+
+# Availability of DWARF allows DTrace CTF (compressed type format) to be constructed
+ifeq ($(BUILD_DWARF),1)
+export LDFLAGS_KERNEL_GEN += \
+    -Wl,-sectcreate,__CTF,__ctf,/dev/null
+endif
 
 export LDFLAGS_KERNEL_RELEASE 	=
 export LDFLAGS_KERNEL_DEVELOPMENT 	=
-#  -noseglinkedit
 export LDFLAGS_KERNEL_DEBUG 	= 
 export LDFLAGS_KERNEL_PROFILE 	= 
 
 export LDFLAGS_KERNEL_PPC      = \
 	-force_cpusubtype_ALL \
 	-Wl,-new_linker \
+	-Wl,-pagezero_size,0x0 \
 	-Wl,-segaddr,__VECTORS,0x0 \
 	-Wl,-segaddr,__HIB,0x7000  \
 	-Wl,-segaddr,__TEXT,0xe000
  
-export LDFLAGS_KERNEL_I386     = \
+export LDFLAGS_KERNEL_RELEASEI386     = \
 	-Wl,-new_linker \
-	-Wl,-segaddr,__HIB,0x100000 \
-	-Wl,-segaddr,__TEXT,0x111000 
+	-Wl,-pagezero_size,0x0 \
+	-Wl,-segaddr,__INITPT,0x00100000 \
+	-Wl,-segaddr,__INITGDT,0x00106000 \
+	-Wl,-segaddr,__SLEEP,0x00107000 \
+	-Wl,-segaddr,__HIB,0x00108000 \
+	-Wl,-image_base,0x200000 \
+	-Wl,-seg_page_size,__TEXT,0x200000
+
+export LDFLAGS_KERNEL_DEBUGI386 = $(LDFLAGS_KERNEL_RELEASEI386)
+export LDFLAGS_KERNEL_DEVELOPMENTI386 = $(LDFLAGS_KERNEL_RELEASEI386)
+export LDFLAGS_KERNEL_PROFILEI386 = $(LDFLAGS_KERNEL_RELEASEI386)
+
+# Keep these constants in sync with the *_SEG_BASE definitions in i386/pmap.h
+export LDFLAGS_KERNEL_RELEASEX86_64   = \
+	-Wl,-new_linker \
+	-Wl,-pagezero_size,0x0 \
+	-Wl,-segaddr,__INITPT,0xffffff8000100000 \
+	-Wl,-segaddr,__INITGDT,0xffffff8000106000 \
+	-Wl,-segaddr,__SLEEP,0xffffff8000107000 \
+	-Wl,-segaddr,__HIB,0xffffff8000108000 \
+	-Wl,-image_base,0xffffff8000200000 \
+	-Wl,-seg_page_size,__TEXT,0x200000
+
+export LDFLAGS_KERNEL_DEBUGX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
+export LDFLAGS_KERNEL_DEVELOPMENTX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
+export LDFLAGS_KERNEL_PROFILEX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
 
 export LDFLAGS_KERNEL_ARM     = \
 	-Wl,-new_linker \
+	-Wl,-pagezero_size,0x0 \
 	-Wl,-segaddr,__HIB,0xC0000000 \
-	-Wl,-segaddr,__TEXT,0xC0008000
+	-Wl,-image_base,0xC0008000
+
 
 export LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
 		  $($(addsuffix $(MACHINE_CONFIG),MACHINE_FLAGS_)) \
 		  $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) \
 		  $($(addsuffix $(ARCH_CONFIG),LDFLAGS_KERNEL_)) \
-		  $($(addsuffix $(KERNEL_CONFIG),LDFLAGS_KERNEL_))
+		  $($(addsuffix $(KERNEL_CONFIG),LDFLAGS_KERNEL_)) \
+		  $($(addsuffix $(ARCH_CONFIG), $(addsuffix $(KERNEL_CONFIG),LDFLAGS_KERNEL_))) \
 
 
 #
 # Default runtime libraries to be linked with the kernel
 #
 export LD_KERNEL_LIBS	= -lcc_kext
+
+#
+# Command to generate host binaries. Intentionally not
+# $(CC), which controls the target compiler
+#
+HOST_CC			= cc
 
 #
 # Default INCFLAGS
@@ -445,6 +476,7 @@ SINCFRAME_UNIFDEF  = $(XNU_PRIVATE_UNIFDEF) -UKERNEL_PRIVATE -UKERNEL -UPRIVATE 
 KPINCFRAME_UNIFDEF = $(XNU_PRIVATE_UNIFDEF) -DKERNEL_PRIVATE -DPRIVATE -DKERNEL -U_OPEN_SOURCE_
 KINCFRAME_UNIFDEF  = $(XNU_PRIVATE_UNIFDEF) -UKERNEL_PRIVATE -UPRIVATE -DKERNEL -D_OPEN_SOURCE_
 
+
 #
 # Compononent Header file destinations
 #
@@ -455,9 +487,7 @@ EXPDIR = EXPORT_HDRS/$(COMPONENT)
 #
 export STRIP_FLAGS_RELEASE	= -S -x 
 export STRIP_FLAGS_DEVELOPMENT	= -S -x 
-export STRIP_FLAGS_RELEASE_TRACE	= -S -x 
 export STRIP_FLAGS_DEBUG	= -S 
-export STRIP_FLAGS_DEBUG_TRACE	= -S 
 export STRIP_FLAGS_PROFILE	= -S -x
 
 export STRIP_FLAGS 	= $($(addsuffix $(KERNEL_CONFIG),STRIP_FLAGS_)) 
@@ -466,6 +496,7 @@ export STRIP_FLAGS 	= $($(addsuffix $(KERNEL_CONFIG),STRIP_FLAGS_))
 # dsymutil flags
 #
 export DSYMUTIL_FLAGS_I386 = --arch=i386
+export DSYMUTIL_FLAGS_X86_64 = --arch=x86_64
 export DSYMUTIL_FLAGS_PPC = --arch=ppc
 export DSYMUTIL_FLAGS_ARM = --arch=arm
 
@@ -476,20 +507,10 @@ export DSYMUTIL_FLAGS = $($(addsuffix $(ARCH_CONFIG),DSYMUTIL_FLAGS_))
 #
 MANDIR = usr/share/man
 
-##
-# Verbosity
-##
-ifeq ($(RC_XBS),YES)
-VERBOSE = YES
-else
-VERBOSE = NO
-endif
-
-ifeq ($(VERBOSE),YES)
-_v = 
-else
-_v = @
-endif
+#
+# DEBUG alias location
+#
+DEVELOPER_EXTRAS_DIR = AppleInternal/Developer/Extras
 
 #
 #  This must be here before any rules are possibly defined by the

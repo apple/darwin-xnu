@@ -1,5 +1,11 @@
 _PE_install_interrupt_handler
 _PE_interrupt_handler
+_PE_parse_boot_arg
+__ZN11IOMemoryMap19setMemoryDescriptorEP18IOMemoryDescriptory
+__ZN11IOMemoryMap8redirectEP18IOMemoryDescriptormm
+__ZN11IOMemoryMap8redirectEP18IOMemoryDescriptormy
+__ZN24IOBufferMemoryDescriptor20initWithPhysicalMaskEP4taskmyyy
+__ZN24IOBufferMemoryDescriptor22inTaskWithPhysicalMaskEP4taskmyy
 _acpi_install_wake_handler
 _acpi_sleep_kernel
 _cpu_number
@@ -8,9 +14,7 @@ _cpuid_features
 _cpuid_info
 _hfs_addconverter
 _hfs_remconverter
-_kdreboot
 _lapic_end_of_interrupt
-_lapic_smm_restore
 _ml_get_max_cpus
 _mp_broadcast
 _mp_cpus_call 
@@ -20,8 +24,6 @@ _mtrr_range_remove
 _rtc_clock_stepped
 _rtc_clock_stepping
 _smp_initialized
-__ZN24IOBufferMemoryDescriptor20initWithPhysicalMaskEP4taskmyyy
-__ZN24IOBufferMemoryDescriptor22inTaskWithPhysicalMaskEP4taskmyy
+_sprintf
 _strcat
 _strcpy
-_sprintf

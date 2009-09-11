@@ -79,6 +79,13 @@
 #define __need_struct_timeval
 #ifdef KERNEL
 #define __need_struct_user_timespec
+#define __need_struct_user32_timespec
+#define __need_struct_user64_timespec
+#define __need_struct_user_timeval
+#define __need_struct_user32_timeval
+#define __need_struct_user64_timeval
+#define __need_struct_user32_itimerval
+#define __need_struct_user64_itimerval
 #endif /* KERNEL */
 #include <sys/_structs.h>
 
@@ -136,30 +143,6 @@ struct	itimerval {
 #ifndef FD_COPY
 #define	FD_COPY(f, t)	__DARWIN_FD_COPY(f, t)
 #endif	/* FD_COPY */
-
-#ifdef KERNEL
-#ifndef _USERTIMEVAL
-#define _USERTIMEVAL
-
-#include <machine/types.h>	/* user_time_t */
-/*
- * LP64 version of struct timeval.  time_t is a long and must grow when 
- * we're dealing with a 64-bit process.
- * WARNING - keep in sync with struct timeval
- */
-
-struct user_timeval {
-	user_time_t	tv_sec;		/* seconds */
-	suseconds_t	tv_usec __attribute((aligned(8)));	/* and microseconds */
-};	
-
-struct	user_itimerval {
-	struct	user_timeval it_interval;	/* timer interval */
-	struct	user_timeval it_value;		/* current value */
-};
-
-#endif /* _USERTIMEVAL */
-#endif /* KERNEL */
 
 #define	TIMEVAL_TO_TIMESPEC(tv, ts) {					\
 	(ts)->tv_sec = (tv)->tv_sec;					\

@@ -57,8 +57,9 @@ typedef	unsigned int		lck_sleep_action_t;
 #define	LCK_SLEEP_UNLOCK	0x01	/* Release the lock and return unheld */
 #define	LCK_SLEEP_SHARED	0x02	/* Reclaim the lock in shared mode (RW only) */
 #define	LCK_SLEEP_EXCLUSIVE	0x04	/* Reclaim the lock in exclusive mode (RW only) */
+#define	LCK_SLEEP_SPIN		0x08	/* Reclaim the lock in spin mode (mutex only) */
 
-#define	LCK_SLEEP_MASK		0x07	/* Valid actions */
+#define	LCK_SLEEP_MASK		0x0f	/* Valid actions */
 
 #ifdef	MACH_KERNEL_PRIVATE
 
@@ -104,11 +105,11 @@ typedef	struct _lck_grp_stat_ {
 
 typedef	struct _lck_grp_ {
 	queue_chain_t		lck_grp_link;
-	unsigned int		lck_grp_refcnt;
-	unsigned int		lck_grp_spincnt;
-	unsigned int		lck_grp_mtxcnt;
-	unsigned int		lck_grp_rwcnt;
-	unsigned int		lck_grp_attr;
+	uint32_t		lck_grp_refcnt;
+	uint32_t		lck_grp_spincnt;
+	uint32_t		lck_grp_mtxcnt;
+	uint32_t		lck_grp_rwcnt;
+	uint32_t		lck_grp_attr;
 	char			lck_grp_name[LCK_GRP_MAX_NAME];
 	lck_grp_stat_t		lck_grp_stat;
 } lck_grp_t;
@@ -121,7 +122,7 @@ typedef struct __lck_grp__ lck_grp_t;
 
 #ifdef	MACH_KERNEL_PRIVATE
 typedef	struct _lck_grp_attr_ {
-	unsigned int	grp_attr_val;
+	uint32_t	grp_attr_val;
 } lck_grp_attr_t;
 
 extern lck_grp_attr_t  LockDefaultGroupAttr;
@@ -265,6 +266,10 @@ extern wait_result_t	lck_spin_sleep_deadline(
 extern boolean_t		lck_spin_try_lock(
 									lck_spin_t		*lck);
 
+struct _lck_mtx_ext_;
+extern void lck_mtx_init_ext(lck_mtx_t *lck, struct _lck_mtx_ext_ *lck_ext,
+    lck_grp_t *grp, lck_attr_t *attr);
+
 #endif
 
 
@@ -278,13 +283,15 @@ extern void				lck_mtx_init(
 									lck_mtx_t		*lck, 
 									lck_grp_t		*grp,
 									lck_attr_t		*attr);
-
 extern void				lck_mtx_lock(
 									lck_mtx_t		*lck);
 
+#if	defined(__i386__)
+extern void	lck_mtx_unlock(lck_mtx_t		*lck) __DARWIN10_ALIAS(lck_mtx_unlock);
+#else
 extern void				lck_mtx_unlock(
 									lck_mtx_t		*lck);
-
+#endif	/* __i386__ */
 extern void				lck_mtx_destroy(
 									lck_mtx_t		*lck,
 									lck_grp_t		*grp);
@@ -311,7 +318,12 @@ extern wait_result_t	lck_mtx_sleep_deadline(
 extern boolean_t		lck_mtx_try_lock(
 									lck_mtx_t		*lck);
 
-#ifdef i386
+extern void				mutex_pause(uint32_t);
+
+extern void 			lck_mtx_yield (
+									lck_mtx_t		*lck);
+
+#if defined(i386) || defined(x86_64)
 extern boolean_t		lck_mtx_try_lock_spin(
 									lck_mtx_t		*lck);
 
@@ -354,9 +366,6 @@ extern void				lck_mtx_unlockspin_wakeup(
 extern boolean_t		lck_mtx_ilk_unlock(
 									lck_mtx_t		*lck);
 
-struct _lck_mtx_ext_;
-extern void lck_mtx_init_ext(lck_mtx_t *lck, struct _lck_mtx_ext_ *lck_ext,
-    lck_grp_t *grp, lck_attr_t *attr);
 #endif
 
 #define decl_lck_rw_data(class,name)     class lck_rw_t name;

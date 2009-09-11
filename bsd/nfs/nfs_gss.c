@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -108,17 +108,39 @@
 #include <nfs/nfsm_subs.h>
 #include <nfs/nfs_gss.h>
 
+#include "nfs_gss_crypto.h"
+
 #define NFS_GSS_MACH_MAX_RETRIES 3
+
+typedef struct {
+	int type;
+	union {
+		MD5_DESCBC_CTX m_ctx;
+		HMAC_SHA1_DES3KD_CTX h_ctx;
+	};
+} GSS_DIGEST_CTX;
+
+#define MAX_DIGEST SHA_DIGEST_LENGTH
+#ifdef NFS_KERNEL_DEBUG
+#define HASHLEN(ki)  (((ki)->hash_len > MAX_DIGEST) ? \
+		(panic("nfs_gss.c:%d ki->hash_len is invalid = %d\n", __LINE__, (ki)->hash_len), MAX_DIGEST) : (ki)->hash_len)
+#else
+#define HASHLEN(ki)  (((ki)->hash_len > MAX_DIGEST) ? \
+		(printf("nfs_gss.c:%d ki->hash_len is invalid = %d\n", __LINE__, (ki)->hash_len), MAX_DIGEST) : (ki)->hash_len)
+#endif	
 
 #if NFSSERVER
 u_long nfs_gss_svc_ctx_hash;
 struct nfs_gss_svc_ctx_hashhead *nfs_gss_svc_ctx_hashtbl;
 lck_mtx_t *nfs_gss_svc_ctx_mutex;
 lck_grp_t *nfs_gss_svc_grp;
+uint32_t nfsrv_gss_context_ttl = GSS_CTX_EXPIRE;
+#define GSS_SVC_CTX_TTL ((uint64_t)max(2*GSS_CTX_PEND, nfsrv_gss_context_ttl) * NSEC_PER_SEC)
 #endif /* NFSSERVER */
 
 #if NFSCLIENT
 lck_grp_t *nfs_gss_clnt_grp;
+int nfs_single_des;
 #endif /* NFSCLIENT */
 
 /*
@@ -128,8 +150,13 @@ lck_grp_t *nfs_gss_clnt_grp;
 static u_char krb5_tokhead[] = { 0x60, 0x23 };
 static u_char krb5_mech[] = { 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02 };
 static u_char krb5_mic[]  = { 0x01, 0x01, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff };
+static u_char krb5_mic3[]  = { 0x01, 0x01, 0x04, 0x00, 0xff, 0xff, 0xff, 0xff };
 static u_char krb5_wrap[] = { 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff };
+static u_char krb5_wrap3[] = { 0x02, 0x01, 0x04, 0x00, 0x02, 0x00, 0xff, 0xff };
 static u_char iv0[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // DES MAC Initialization Vector
+
+#define ALG_MIC(ki) (((ki)->type == NFS_GSS_1DES) ? krb5_mic : krb5_mic3)
+#define ALG_WRAP(ki) (((ki)->type == NFS_GSS_1DES) ? krb5_wrap : krb5_wrap3)
 
 /*
  * The size of the Kerberos v5 ASN.1 token
@@ -148,10 +175,10 @@ static u_char iv0[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // DES
 #define KRB5_SZ_MECH	sizeof(krb5_mech)
 #define KRB5_SZ_ALG	sizeof(krb5_mic) // 8 - same as krb5_wrap
 #define KRB5_SZ_SEQ	8
-#define KRB5_SZ_CKSUM	8
 #define KRB5_SZ_EXTRA	3  // a wrap token may be longer by up to this many octets
-#define KRB5_SZ_TOKEN	(KRB5_SZ_TOKHEAD + KRB5_SZ_MECH + KRB5_SZ_ALG + KRB5_SZ_SEQ + KRB5_SZ_CKSUM)
-#define KRB5_SZ_TOKMAX	(KRB5_SZ_TOKEN + KRB5_SZ_EXTRA)
+#define KRB5_SZ_TOKEN_NOSUM	(KRB5_SZ_TOKHEAD + KRB5_SZ_MECH + KRB5_SZ_ALG + KRB5_SZ_SEQ)
+#define KRB5_SZ_TOKEN(cksumlen)		((cksumlen) + KRB5_SZ_TOKEN_NOSUM)
+#define KRB5_SZ_TOKMAX(cksumlen)	(KRB5_SZ_TOKEN(cksumlen) + KRB5_SZ_EXTRA)
 
 #if NFSCLIENT
 static int	nfs_gss_clnt_ctx_find(struct nfsreq *);
@@ -176,22 +203,26 @@ static void	task_release_special_port(mach_port_t);
 static mach_port_t task_copy_special_port(mach_port_t);
 static void	nfs_gss_mach_alloc_buffer(u_char *, uint32_t, vm_map_copy_t *);
 static int	nfs_gss_mach_vmcopyout(vm_map_copy_t, uint32_t, u_char *);
-static int	nfs_gss_token_get(des_key_schedule, u_char *, u_char *, int, uint32_t *, u_char *);
-static int	nfs_gss_token_put(des_key_schedule, u_char *, u_char *, int, int, u_char *);
+static int	nfs_gss_token_get(gss_key_info *ki, u_char *, u_char *, int, uint32_t *, u_char *);
+static int	nfs_gss_token_put(gss_key_info *ki, u_char *, u_char *, int, int, u_char *);
 static int	nfs_gss_der_length_size(int);
 static void	nfs_gss_der_length_put(u_char **, int);
 static int	nfs_gss_der_length_get(u_char **);
 static int	nfs_gss_mchain_length(mbuf_t);
 static int	nfs_gss_append_chain(struct nfsm_chain *, mbuf_t);
 static void	nfs_gss_nfsm_chain(struct nfsm_chain *, mbuf_t);
-static void	nfs_gss_cksum_mchain(des_key_schedule, mbuf_t, u_char *, int, int, u_char *);
-static void	nfs_gss_cksum_chain(des_key_schedule, struct nfsm_chain *, u_char *, int, int, u_char *);
-static void	nfs_gss_cksum_rep(des_key_schedule, uint32_t, u_char *);
-static void	nfs_gss_encrypt_mchain(u_char *, mbuf_t, int, int, int);
-static void	nfs_gss_encrypt_chain(u_char *, struct nfsm_chain *, int, int, int);
-static DES_LONG	des_cbc_cksum(des_cblock *, des_cblock *, long, des_key_schedule, des_cblock *);
-static void	des_cbc_encrypt(des_cblock *, des_cblock *, long, des_key_schedule,
-			des_cblock *, des_cblock *, int);
+static void	nfs_gss_cksum_mchain(gss_key_info *, mbuf_t, u_char *, int, int, u_char *);
+static void	nfs_gss_cksum_chain(gss_key_info *, struct nfsm_chain *, u_char *, int, int, u_char *);
+static void	nfs_gss_cksum_rep(gss_key_info *, uint32_t, u_char *);
+static void	nfs_gss_encrypt_mchain(gss_key_info *, mbuf_t, int, int, int);
+static void	nfs_gss_encrypt_chain(gss_key_info *, struct nfsm_chain *, int, int, int);
+
+static void	gss_digest_Init(GSS_DIGEST_CTX *, gss_key_info *);
+static void	gss_digest_Update(GSS_DIGEST_CTX *, void *, size_t);
+static void	gss_digest_Final(GSS_DIGEST_CTX *, void *);
+static void	gss_des_crypt(gss_key_info *, des_cblock *, des_cblock *,
+				int32_t, des_cblock *, des_cblock *, int, int);
+static int	gss_key_init(gss_key_info *, uint32_t);
 
 #if NFSSERVER
 thread_call_t nfs_gss_svc_ctx_timer_call;
@@ -240,7 +271,6 @@ nfs_gss_clnt_ctx_find(struct nfsreq *req)
 	int error = 0;
 	int retrycnt = 0;
 
-retry:	
 	lck_mtx_lock(&nmp->nm_lock);
 	TAILQ_FOREACH(cp, &nmp->nm_gsscl, gss_clnt_entries) {
 		if (cp->gss_clnt_uid == uid) {
@@ -280,17 +310,16 @@ retry:
 	 * to failover to sec=sys.
 	 */
 	if (req->r_thread == NULL) {
-		if ((nmp->nm_flag & NFSMNT_SECGIVEN) == 0) {
+		if (nmp->nm_flag & NFSMNT_SECSYSOK) {
 			error = nfs_gss_clnt_ctx_failover(req);
 		} else {
 			printf("nfs_gss_clnt_ctx_find: no context for async\n");
-			error = EAUTH;
+			error = NFSERR_EAUTH;
 		}
 
 		lck_mtx_unlock(&nmp->nm_lock);
 		return (error);
 	}
-		
 
 	MALLOC(cp, struct nfs_gss_clnt_ctx *, sizeof(*cp), M_TEMP, M_WAITOK|M_ZERO);
 	if (cp == NULL) {
@@ -305,23 +334,41 @@ retry:
 	TAILQ_INSERT_TAIL(&nmp->nm_gsscl, cp, gss_clnt_entries);
 	lck_mtx_unlock(&nmp->nm_lock);
 
+retry:
 	error = nfs_gss_clnt_ctx_init(req, cp);
-	if (error)
-		nfs_gss_clnt_ctx_unref(req);
-
 	if (error == ENEEDAUTH) {
 		error = nfs_gss_clnt_ctx_delay(req, &retrycnt);
 		if (!error)
 			goto retry;
+
+		/* Giving up on this context */
+		cp->gss_clnt_flags |= GSS_CTX_INVAL;
+
+		/*
+		 * Wake any threads waiting to use the context
+		 */
+		lck_mtx_lock(cp->gss_clnt_mtx);
+		cp->gss_clnt_thread = NULL;
+		if (cp->gss_clnt_flags & GSS_NEEDCTX) {
+			cp->gss_clnt_flags &= ~GSS_NEEDCTX;
+			wakeup(cp);
+		}
+		lck_mtx_unlock(cp->gss_clnt_mtx);				
+
 	}
+
+	if (error)
+		nfs_gss_clnt_ctx_unref(req);
 
 	/*
 	 * If we failed to set up a Kerberos context for this
-	 * user and no sec= mount option was given then set
+	 * user and no sec= mount option was given, but the
+	 * server indicated that it could support AUTH_SYS, then set
 	 * up a dummy context that allows this user to attempt
 	 * sec=sys calls.
 	 */
-	if (error && (nmp->nm_flag & NFSMNT_SECGIVEN) == 0) {
+	if (error && (nmp->nm_flag & NFSMNT_SECSYSOK) &&
+	    (error != ENXIO) && (error != ETIMEDOUT)) {
 		lck_mtx_lock(&nmp->nm_lock);
 		error = nfs_gss_clnt_ctx_failover(req);
 		lck_mtx_unlock(&nmp->nm_lock);
@@ -371,19 +418,24 @@ nfs_gss_clnt_ctx_failover(struct nfsreq *req)
 int
 nfs_gss_clnt_cred_put(struct nfsreq *req, struct nfsm_chain *nmc, mbuf_t args)
 {
-	struct nfsmount *nmp = req->r_nmp;
 	struct nfs_gss_clnt_ctx *cp;
 	uint32_t seqnum = 0;
 	int error = 0;
-	int slpflag = 0;
+	int slpflag, recordmark = 0;
 	int start, len, offset = 0;
 	int pad, toklen;
 	struct nfsm_chain nmc_tmp;
 	struct gss_seq *gsp;
-	u_char tokbuf[KRB5_SZ_TOKMAX];
-	u_char cksum[8];
+	u_char tokbuf[KRB5_SZ_TOKMAX(MAX_DIGEST)];
+	u_char cksum[MAX_DIGEST];
 	struct timeval now;
-
+	gss_key_info *ki;
+	
+	slpflag = (PZERO-1);
+	if (req->r_nmp) {
+		slpflag |= ((req->r_nmp->nm_flag & NFSMNT_INT) && req->r_thread) ? PCATCH : 0;
+		recordmark = (req->r_nmp->nm_sotype == SOCK_STREAM);
+	}
 retry:
 	if (req->r_gss_ctx == NULL) {
 		/*
@@ -430,15 +482,15 @@ retry:
 	lck_mtx_lock(cp->gss_clnt_mtx);
 	if (cp->gss_clnt_thread && cp->gss_clnt_thread != current_thread()) {
 		cp->gss_clnt_flags |= GSS_NEEDCTX;
-		slpflag = (PZERO-1) | PDROP | (((nmp->nm_flag & NFSMNT_INT) && req->r_thread) ? PCATCH : 0);
-		msleep(cp, cp->gss_clnt_mtx, slpflag, "ctxwait", NULL);
-		if ((error = nfs_sigintr(nmp, req, req->r_thread, 0)))
+		msleep(cp, cp->gss_clnt_mtx, slpflag | PDROP, "ctxwait", NULL);
+		if ((error = nfs_sigintr(req->r_nmp, req, req->r_thread, 0)))
 			return (error);
 		nfs_gss_clnt_ctx_unref(req);
 		goto retry;
 	}
 	lck_mtx_unlock(cp->gss_clnt_mtx);
 
+	ki = &cp->gss_clnt_kinfo;
 	if (cp->gss_clnt_flags & GSS_CTX_COMPLETE) {
 		/*
 		 * Get a sequence number for this request.
@@ -451,9 +503,8 @@ retry:
 		while (win_getbit(cp->gss_clnt_seqbits, 
 			((cp->gss_clnt_seqnum - cp->gss_clnt_seqwin) + 1) % cp->gss_clnt_seqwin)) {
 			cp->gss_clnt_flags |= GSS_NEEDSEQ;
-			slpflag = (PZERO-1) | (((nmp->nm_flag & NFSMNT_INT) && req->r_thread) ? PCATCH : 0);
 			msleep(cp, cp->gss_clnt_mtx, slpflag, "seqwin", NULL);
-			if ((error = nfs_sigintr(nmp, req, req->r_thread, 0))) {
+			if ((error = nfs_sigintr(req->r_nmp, req, req->r_thread, 0))) {
 				lck_mtx_unlock(cp->gss_clnt_mtx);
 				return (error);
 			}
@@ -483,8 +534,13 @@ retry:
 	nfsm_chain_add_32(error, nmc, seqnum);
 	nfsm_chain_add_32(error, nmc, cp->gss_clnt_service);
 	nfsm_chain_add_32(error, nmc, cp->gss_clnt_handle_len);
-	nfsm_chain_add_opaque(error, nmc, cp->gss_clnt_handle, cp->gss_clnt_handle_len);
-
+	if (cp->gss_clnt_handle_len > 0) {
+	   	if (cp->gss_clnt_handle == NULL)
+		  	return (EBADRPC); 
+		nfsm_chain_add_opaque(error, nmc, cp->gss_clnt_handle, cp->gss_clnt_handle_len);
+	}
+	if (error)
+	    return(error);
 	/*
 	 * Now add the verifier
 	 */
@@ -502,11 +558,11 @@ retry:
 		return (error);
 	}
 
-	offset = nmp->nm_sotype == SOCK_STREAM ? NFSX_UNSIGNED : 0; // record mark
+	offset = recordmark ? NFSX_UNSIGNED : 0; // record mark
 	nfsm_chain_build_done(error, nmc);
-	nfs_gss_cksum_chain(cp->gss_clnt_sched, nmc, krb5_mic, offset, 0, cksum);
+	nfs_gss_cksum_chain(ki, nmc, ALG_MIC(ki), offset, 0, cksum);
 
-	toklen = nfs_gss_token_put(cp->gss_clnt_sched, krb5_mic, tokbuf, 1, 0, cksum);
+	toklen = nfs_gss_token_put(ki, ALG_MIC(ki), tokbuf, 1, 0, cksum);
 	nfsm_chain_add_32(error, nmc, RPCSEC_GSS);	// flavor
 	nfsm_chain_add_32(error, nmc, toklen);		// length
 	nfsm_chain_add_opaque(error, nmc, tokbuf, toklen);
@@ -536,10 +592,10 @@ retry:
 		nfs_gss_append_chain(nmc, args);	// Append the args mbufs
 
 		/* Now compute a checksum over the seqnum + args */
-		nfs_gss_cksum_chain(cp->gss_clnt_sched, nmc, krb5_mic, start, len, cksum);
+		nfs_gss_cksum_chain(ki, nmc, ALG_MIC(ki), start, len, cksum);
 
 		/* Insert it into a token and append to the request */
-		toklen = nfs_gss_token_put(cp->gss_clnt_sched, krb5_mic, tokbuf, 1, 0, cksum);
+		toklen = nfs_gss_token_put(ki, ALG_MIC(ki), tokbuf, 1, 0, cksum);
 		nfsm_chain_finish_mbuf(error, nmc);	// force checksum into new mbuf
 		nfsm_chain_add_32(error, nmc, toklen);
 		nfsm_chain_add_opaque(error, nmc, tokbuf, toklen);
@@ -577,10 +633,10 @@ retry:
 		nfsm_chain_build_done(error, &nmc_tmp);
 
 		/* Now compute a checksum over the confounder + seqnum + args */
-		nfs_gss_cksum_chain(cp->gss_clnt_sched, &nmc_tmp, krb5_wrap, 0, len, cksum);
+		nfs_gss_cksum_chain(ki, &nmc_tmp, ALG_WRAP(ki), 0, len, cksum);
 
 		/* Insert it into a token */
-		toklen = nfs_gss_token_put(cp->gss_clnt_sched, krb5_wrap, tokbuf, 1, len, cksum);
+		toklen = nfs_gss_token_put(ki, ALG_WRAP(ki), tokbuf, 1, len, cksum);
 		nfsm_chain_add_32(error, nmc, toklen + len);	// token + args length
 		nfsm_chain_add_opaque_nopad(error, nmc, tokbuf, toklen);
 		req->r_gss_argoff = nfsm_chain_offset(nmc);	// Stash offset
@@ -590,7 +646,7 @@ retry:
 		nfs_gss_append_chain(nmc, nmc_tmp.nmc_mhead);	// Append the args mbufs
 
 		/* Finally, encrypt the args */
-		nfs_gss_encrypt_chain(cp->gss_clnt_skey, &nmc_tmp, 0, len, DES_ENCRYPT);
+		nfs_gss_encrypt_chain(ki, &nmc_tmp, 0, len, DES_ENCRYPT);
 
 		/* Add null XDR pad if the ASN.1 token misaligned the data */
 		pad = nfsm_pad(toklen + len);
@@ -620,20 +676,21 @@ nfs_gss_clnt_verf_get(
 	uint32_t verflen,
 	uint32_t *accepted_statusp)
 {
-	u_char tokbuf[KRB5_SZ_TOKMAX];
-	u_char cksum1[8], cksum2[8];
+	u_char tokbuf[KRB5_SZ_TOKMAX(MAX_DIGEST)];
+	u_char cksum1[MAX_DIGEST], cksum2[MAX_DIGEST];
 	uint32_t seqnum = 0;
 	struct nfs_gss_clnt_ctx *cp = req->r_gss_ctx;
 	struct nfsm_chain nmc_tmp;
 	struct gss_seq *gsp;
 	uint32_t reslen, start, cksumlen, toklen;
 	int error = 0;
+	gss_key_info *ki = &cp->gss_clnt_kinfo;
 
 	reslen = cksumlen = 0;
 	*accepted_statusp = 0;
 
 	if (cp == NULL)
-		return (EAUTH);
+		return (NFSERR_EAUTH);
 	/*
 	 * If it's not an RPCSEC_GSS verifier, then it has to
 	 * be a null verifier that resulted from either
@@ -643,18 +700,15 @@ nfs_gss_clnt_verf_get(
 	 */
 	if (verftype != RPCSEC_GSS) {
 		if (verftype != RPCAUTH_NULL)
-			return (EAUTH);
+			return (NFSERR_EAUTH);
 		if (cp->gss_clnt_flags & GSS_CTX_COMPLETE &&
 			cp->gss_clnt_service != RPCSEC_GSS_SVC_SYS)
-			return (EAUTH);
+			return (NFSERR_EAUTH);
 		if (verflen > 0)
 			nfsm_chain_adv(error, nmc, nfsm_rndup(verflen));
 		nfsm_chain_get_32(error, nmc, *accepted_statusp);
 		return (error);
 	}
-
-	if (verflen != KRB5_SZ_TOKEN)
-		return (EAUTH);
 
 	/*
 	 * If we received an RPCSEC_GSS verifier but the
@@ -675,6 +729,9 @@ nfs_gss_clnt_verf_get(
 		return (error);
 	}
 
+	if (verflen != KRB5_SZ_TOKEN(ki->hash_len))
+		return (NFSERR_EAUTH);
+
 	/*
 	 * Get the 8 octet sequence number
 	 * checksum out of the verifier token.
@@ -682,7 +739,7 @@ nfs_gss_clnt_verf_get(
 	nfsm_chain_get_opaque(error, nmc, verflen, tokbuf);
 	if (error)
 		goto nfsmout;
-	error = nfs_gss_token_get(cp->gss_clnt_sched, krb5_mic, tokbuf, 0, NULL, cksum1);
+	error = nfs_gss_token_get(ki, ALG_MIC(ki), tokbuf, 0, NULL, cksum1);
 	if (error)
 		goto nfsmout;
 
@@ -692,12 +749,12 @@ nfs_gss_clnt_verf_get(
 	 * the one in the verifier returned by the server.
 	 */
 	SLIST_FOREACH(gsp, &req->r_gss_seqlist, gss_seqnext) {
-		nfs_gss_cksum_rep(cp->gss_clnt_sched, gsp->gss_seqnum, cksum2);
-		if (bcmp(cksum1, cksum2, 8) == 0)
+		nfs_gss_cksum_rep(ki, gsp->gss_seqnum, cksum2);
+		if (bcmp(cksum1, cksum2, HASHLEN(ki)) == 0)
 			break;
 	}
 	if (gsp == NULL)
-		return (EAUTH);
+		return (NFSERR_EAUTH);
 
 	/*
 	 * Get the RPC accepted status
@@ -732,7 +789,7 @@ nfs_gss_clnt_verf_get(
 
 		/* Compute a checksum over the sequence number + results */
 		start = nfsm_chain_offset(nmc);
-		nfs_gss_cksum_chain(cp->gss_clnt_sched, nmc, krb5_mic, start, reslen, cksum1);
+		nfs_gss_cksum_chain(ki, nmc, ALG_MIC(ki), start, reslen, cksum1);
 
 		/*
 		 * Get the sequence number prepended to the results
@@ -756,20 +813,19 @@ nfs_gss_clnt_verf_get(
 		reslen -= NFSX_UNSIGNED;			// already skipped seqnum
 		nfsm_chain_adv(error, &nmc_tmp, reslen);	// skip over the results
 		nfsm_chain_get_32(error, &nmc_tmp, cksumlen);	// length of checksum
-		if (cksumlen != KRB5_SZ_TOKEN) {
+		if (cksumlen != KRB5_SZ_TOKEN(ki->hash_len)) {
 			error = EBADRPC;
 			goto nfsmout;
 		}
 		nfsm_chain_get_opaque(error, &nmc_tmp, cksumlen, tokbuf);
 		if (error)
 			goto nfsmout;
-		error = nfs_gss_token_get(cp->gss_clnt_sched, krb5_mic, tokbuf, 0,
-			NULL, cksum2);
+		error = nfs_gss_token_get(ki, ALG_MIC(ki), tokbuf, 0, NULL, cksum2);
 		if (error)
 			goto nfsmout;
 
 		/* Verify that the checksums are the same */
-		if (bcmp(cksum1, cksum2, 8) != 0) {
+		if (bcmp(cksum1, cksum2, HASHLEN(ki)) != 0) {
 			error = EBADRPC;
 			goto nfsmout;
 		}
@@ -791,10 +847,10 @@ nfs_gss_clnt_verf_get(
 		}
 
 		/* Get the token that prepends the encrypted results */
-		nfsm_chain_get_opaque(error, nmc, KRB5_SZ_TOKMAX, tokbuf);
+		nfsm_chain_get_opaque(error, nmc, KRB5_SZ_TOKMAX(ki->hash_len), tokbuf);
 		if (error)
 			goto nfsmout;
-		error = nfs_gss_token_get(cp->gss_clnt_sched, krb5_wrap, tokbuf, 0,
+		error = nfs_gss_token_get(ki, ALG_WRAP(ki), tokbuf, 0,
 			&toklen, cksum1);
 		if (error)
 			goto nfsmout;
@@ -803,13 +859,13 @@ nfs_gss_clnt_verf_get(
 
 		/* decrypt the confounder + sequence number + results */
 		start = nfsm_chain_offset(nmc);
-		nfs_gss_encrypt_chain(cp->gss_clnt_skey, nmc, start, reslen, DES_DECRYPT);
+		nfs_gss_encrypt_chain(ki, nmc, start, reslen, DES_DECRYPT);
 
 		/* Compute a checksum over the confounder + sequence number + results */
-		nfs_gss_cksum_chain(cp->gss_clnt_sched, nmc, krb5_wrap, start, reslen, cksum2);
+		nfs_gss_cksum_chain(ki, nmc, ALG_WRAP(ki), start, reslen, cksum2);
 
 		/* Verify that the checksums are the same */
-		if (bcmp(cksum1, cksum2, 8) != 0) {
+		if (bcmp(cksum1, cksum2, HASHLEN(ki)) != 0) {
 			error = EBADRPC;
 			goto nfsmout;
 		}
@@ -856,7 +912,7 @@ nfs_gss_clnt_args_restore(struct nfsreq *req)
 	int len, error = 0;
 
 	if (cp == NULL) 
-		return (EAUTH);
+		return (NFSERR_EAUTH);
 
 	if ((cp->gss_clnt_flags & GSS_CTX_COMPLETE) == 0)
 		return (ENEEDAUTH);
@@ -894,8 +950,8 @@ nfs_gss_clnt_args_restore(struct nfsreq *req)
 		 */
 		len = req->r_gss_arglen;
 		len += len % 8 > 0 ? 4 : 8;			// add DES padding length
-		nfs_gss_encrypt_chain(cp->gss_clnt_skey, nmc,
-			req->r_gss_argoff, len, DES_DECRYPT);
+		nfs_gss_encrypt_chain(&cp->gss_clnt_kinfo, nmc,
+					req->r_gss_argoff, len, DES_DECRYPT);
 		nfsm_chain_adv(error, nmc, req->r_gss_arglen);
 		if (error)
 			return (error);
@@ -923,17 +979,19 @@ nfs_gss_clnt_ctx_init(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	struct nfsmount *nmp = req->r_nmp;
 	int client_complete = 0;
 	int server_complete = 0;
-	u_char cksum1[8], cksum2[8];
+	u_char cksum1[MAX_DIGEST], cksum2[MAX_DIGEST];
 	int error = 0;
 	struct timeval now;
+	gss_key_info *ki = &cp->gss_clnt_kinfo;
 
 	/* Initialize a new client context */
 
 	cp->gss_clnt_svcname = nfs_gss_clnt_svcname(nmp);
 	if (cp->gss_clnt_svcname == NULL) {
-		error = EAUTH;
+		error = NFSERR_EAUTH;
 		goto nfsmout;
 	}
+
 	cp->gss_clnt_proc = RPCSEC_GSS_INIT;
 
 	cp->gss_clnt_service =
@@ -941,6 +999,7 @@ nfs_gss_clnt_ctx_init(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 		nmp->nm_auth == RPCAUTH_KRB5I ? RPCSEC_GSS_SVC_INTEGRITY :
 		nmp->nm_auth == RPCAUTH_KRB5P ? RPCSEC_GSS_SVC_PRIVACY : 0;
 
+	cp->gss_clnt_gssd_flags = (nfs_single_des ? GSSD_NFS_1DES : 0);
 	/*
 	 * Now loop around alternating gss_init_sec_context and
 	 * gss_accept_sec_context upcalls to the gssd on the client
@@ -948,6 +1007,7 @@ nfs_gss_clnt_ctx_init(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	 */
 	for (;;) {
 
+retry:
 		/* Upcall to the gss_init_sec_context in the gssd */
 		error = nfs_gss_clnt_gssd_upcall(req, cp);
 		if (error)
@@ -958,7 +1018,7 @@ nfs_gss_clnt_ctx_init(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 			if (server_complete)
 				break;
 		} else if (cp->gss_clnt_major != GSS_S_CONTINUE_NEEDED) {
-			error = EAUTH;
+			error = NFSERR_EAUTH;
 			goto nfsmout;
 		}
 
@@ -966,15 +1026,26 @@ nfs_gss_clnt_ctx_init(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 		 * Pass the token to the server.
 		 */
 		error = nfs_gss_clnt_ctx_callserver(req, cp);
-		if (error)
+		if (error) {
+			if (cp->gss_clnt_proc == RPCSEC_GSS_INIT &&
+				(cp->gss_clnt_gssd_flags & (GSSD_RESTART | GSSD_NFS_1DES)) == 0) {
+				cp->gss_clnt_gssd_flags = (GSSD_RESTART | GSSD_NFS_1DES);
+				if (cp->gss_clnt_token)
+					FREE(cp->gss_clnt_token, M_TEMP);
+				cp->gss_clnt_token = NULL;
+				cp->gss_clnt_tokenlen = 0;
+				goto retry;
+			}
+			// Reset flags, if error = ENEEDAUTH we will try 3des again
+			cp->gss_clnt_gssd_flags = 0; 
 			goto nfsmout;
-
+		}
 		if (cp->gss_clnt_major == GSS_S_COMPLETE) {
 			server_complete = 1;
 			if (client_complete)
 				break;
 		} else if (cp->gss_clnt_major != GSS_S_CONTINUE_NEEDED) {
-			error = EAUTH;
+			error = NFSERR_EAUTH;
 			goto nfsmout;
 		}
 
@@ -989,31 +1060,23 @@ nfs_gss_clnt_ctx_init(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	microuptime(&now);
 	cp->gss_clnt_ctime = now.tv_sec;	// time stamp
 
-	/*
-	 * Construct a key schedule from our shiny new session key
-	 */
-	error = des_key_sched((des_cblock *) cp->gss_clnt_skey, cp->gss_clnt_sched);
-	if (error) {
-		error = EAUTH;
-		goto nfsmout;
-	}
 
 	/*
 	 * Compute checksum of the server's window
 	 */
-	nfs_gss_cksum_rep(cp->gss_clnt_sched, cp->gss_clnt_seqwin, cksum1);
+	nfs_gss_cksum_rep(ki, cp->gss_clnt_seqwin, cksum1);
 
 	/*
 	 * and see if it matches the one in the
 	 * verifier the server returned.
 	 */
-	error = nfs_gss_token_get(cp->gss_clnt_sched, krb5_mic, cp->gss_clnt_verf, 0,
+	error = nfs_gss_token_get(ki, ALG_MIC(ki), cp->gss_clnt_verf, 0,
 		NULL, cksum2);
 	FREE(cp->gss_clnt_verf, M_TEMP);
 	cp->gss_clnt_verf = NULL;
 
-	if (error || bcmp(cksum1, cksum2, 8) != 0) {
-		error = EAUTH;
+	if (error || bcmp(cksum1, cksum2, HASHLEN(ki)) != 0) {
+		error = NFSERR_EAUTH;
 		goto nfsmout;
 	}
 
@@ -1032,8 +1095,16 @@ nfs_gss_clnt_ctx_init(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	MALLOC(cp->gss_clnt_seqbits, uint32_t *,
 		nfsm_rndup((cp->gss_clnt_seqwin + 7) / 8), M_TEMP, M_WAITOK|M_ZERO);
 	if (cp->gss_clnt_seqbits == NULL)
-		error = EAUTH;
+		error = NFSERR_EAUTH;
 nfsmout:
+ 	/*
+	 * If the error is ENEEDAUTH we're not done, so no need
+	 * to wake up other threads again. This thread will retry in
+	 * the find or renew routines.
+	 */
+	if (error == ENEEDAUTH) 
+		return (error);
+
 	/*
 	 * If there's an error, just mark it as invalid.
 	 * It will be removed when the reference count
@@ -1065,25 +1136,26 @@ nfsmout:
 static int
 nfs_gss_clnt_ctx_callserver(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 {
-	struct nfsmount *nmp = req->r_nmp;
 	struct nfsm_chain nmreq, nmrep;
 	int error = 0, status;
-	u_int64_t xid;
 	int sz;
 
+	if (!req->r_nmp)
+		return (ENXIO);
 	nfsm_chain_null(&nmreq);
 	nfsm_chain_null(&nmrep);
 	sz = NFSX_UNSIGNED + nfsm_rndup(cp->gss_clnt_tokenlen);
 	nfsm_chain_build_alloc_init(error, &nmreq, sz);
 	nfsm_chain_add_32(error, &nmreq, cp->gss_clnt_tokenlen);
-	nfsm_chain_add_opaque(error, &nmreq, cp->gss_clnt_token, cp->gss_clnt_tokenlen);
+	if (cp->gss_clnt_tokenlen > 0)
+		nfsm_chain_add_opaque(error, &nmreq, cp->gss_clnt_token, cp->gss_clnt_tokenlen);
 	nfsm_chain_build_done(error, &nmreq);
 	if (error)
 		goto nfsmout;
 
 	/* Call the server */
-	error = nfs_request2(NULL, nmp->nm_mountp, &nmreq, NFSPROC_NULL,
-			req->r_thread, req->r_cred, 0, &nmrep, &xid, &status);
+	error = nfs_request_gss(req->r_nmp->nm_mountp, &nmreq, req->r_thread, req->r_cred, 
+				(req->r_flags & R_OPTMASK), cp, &nmrep, &status);
 	if (cp->gss_clnt_token != NULL) {
 		FREE(cp->gss_clnt_token, M_TEMP);
 		cp->gss_clnt_token = NULL;
@@ -1096,8 +1168,10 @@ nfs_gss_clnt_ctx_callserver(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	/* Get the server's reply */
 
 	nfsm_chain_get_32(error, &nmrep, cp->gss_clnt_handle_len);
-	if (cp->gss_clnt_handle != NULL)
+	if (cp->gss_clnt_handle != NULL) {
 		FREE(cp->gss_clnt_handle, M_TEMP);
+		cp->gss_clnt_handle = NULL;
+	}
 	if (cp->gss_clnt_handle_len > 0) {
 		MALLOC(cp->gss_clnt_handle, u_char *, cp->gss_clnt_handle_len, M_TEMP, M_WAITOK);
 		if (cp->gss_clnt_handle == NULL) {
@@ -1127,10 +1201,12 @@ nfs_gss_clnt_ctx_callserver(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	if (cp->gss_clnt_major != GSS_S_COMPLETE &&
 	    cp->gss_clnt_major != GSS_S_CONTINUE_NEEDED) {
 		char who[] = "server";
+		char unknown[] = "<unknown>";
 
 		(void) mach_gss_log_error(
 			cp->gss_clnt_mport,
-			vfs_statfs(nmp->nm_mountp)->f_mntfromname,
+			!req->r_nmp ? unknown :
+			vfs_statfs(req->r_nmp->nm_mountp)->f_mntfromname,
 			cp->gss_clnt_uid,
 			who,
 			cp->gss_clnt_major,
@@ -1154,10 +1230,12 @@ nfsmout:
 static char *
 nfs_gss_clnt_svcname(struct nfsmount *nmp)
 {
-	char *svcname, *d;
-	char* mntfromhere = &vfs_statfs(nmp->nm_mountp)->f_mntfromname[0];
+	char *svcname, *d, *mntfromhere;
 	int len;
 
+	if (!nmp)
+		return (NULL);
+	mntfromhere = &vfs_statfs(nmp->nm_mountp)->f_mntfromname[0];
 	len = strlen(mntfromhere) + 5; /* "nfs/" plus null */
 	MALLOC(svcname, char *, len, M_TEMP, M_NOWAIT);
 	if (svcname == NULL)
@@ -1187,8 +1265,10 @@ nfs_gss_clnt_gssd_upcall(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	int retry_cnt = 0;
 	vm_map_copy_t itoken = NULL;
 	byte_buffer otoken = NULL;
+	mach_msg_type_number_t otokenlen;
 	int error = 0;
 	char uprinc[1];
+	uint32_t ret_flags;
 
 	/*
 	 * NFS currently only supports default principals or
@@ -1202,13 +1282,13 @@ nfs_gss_clnt_gssd_upcall(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	if (cp->gss_clnt_mport == NULL) {
 		kr = task_get_gssd_port(get_threadtask(req->r_thread), &cp->gss_clnt_mport);
 		if (kr != KERN_SUCCESS) {
-			printf("nfs_gss_clnt_gssd_upcall: can't get gssd port, status %d\n", kr);
-			return (EAUTH);
+			printf("nfs_gss_clnt_gssd_upcall: can't get gssd port, status %x (%d)\n", kr, kr);
+			goto out;
 		}
 		if (!IPC_PORT_VALID(cp->gss_clnt_mport)) {
 			printf("nfs_gss_clnt_gssd_upcall: gssd port not valid\n");
 			cp->gss_clnt_mport = NULL;
-			return (EAUTH);
+			goto out;
 		}
 	}
 
@@ -1223,23 +1303,29 @@ retry:
 		cp->gss_clnt_uid,
 		uprinc,
 		cp->gss_clnt_svcname,
-		GSSD_MUTUAL_FLAG | GSSD_NO_UI,
-		&cp->gss_clnt_gssd_verf,
+		GSSD_MUTUAL_FLAG,
+		cp->gss_clnt_gssd_flags,
 		&cp->gss_clnt_context,
 		&cp->gss_clnt_cred_handle,
+		&ret_flags,
 		&okey,  (mach_msg_type_number_t *) &skeylen,
-		&otoken, (mach_msg_type_number_t *) &cp->gss_clnt_tokenlen,
+		&otoken, &otokenlen,
 		&cp->gss_clnt_major,
 		&cp->gss_clnt_minor);
 
-	if (kr != 0) {
-		printf("nfs_gss_clnt_gssd_upcall: mach_gss_init_sec_context failed: %x\n", kr);
+	cp->gss_clnt_gssd_flags &= ~GSSD_RESTART;
+	
+	if (kr != KERN_SUCCESS) {
+		printf("nfs_gss_clnt_gssd_upcall: mach_gss_init_sec_context failed: %x (%d)\n", kr, kr);
 		if (kr == MIG_SERVER_DIED && cp->gss_clnt_cred_handle == 0 &&
-			retry_cnt++ < NFS_GSS_MACH_MAX_RETRIES)
+			retry_cnt++ < NFS_GSS_MACH_MAX_RETRIES) {
+			if (cp->gss_clnt_tokenlen > 0)
+				nfs_gss_mach_alloc_buffer(cp->gss_clnt_token, cp->gss_clnt_tokenlen, &itoken);
 			goto retry;
+		}
 		task_release_special_port(cp->gss_clnt_mport);
 		cp->gss_clnt_mport = NULL;
-		return (EAUTH);
+		goto out;
 	}
 
 	/*
@@ -1248,9 +1334,11 @@ retry:
 	if (cp->gss_clnt_major != GSS_S_COMPLETE &&
 	    cp->gss_clnt_major != GSS_S_CONTINUE_NEEDED) {
 		char who[] = "client";
+		char unknown[] = "<unknown>";
 
 		(void) mach_gss_log_error(
 			cp->gss_clnt_mport,
+			!req->r_nmp ? unknown :
 			vfs_statfs(req->r_nmp->nm_mountp)->f_mntfromname,
 			cp->gss_clnt_uid,
 			who,
@@ -1259,26 +1347,56 @@ retry:
 	}
 
 	if (skeylen > 0) {
-		if (skeylen != SKEYLEN) {
+		if (skeylen != SKEYLEN && skeylen != SKEYLEN3) {
 			printf("nfs_gss_clnt_gssd_upcall: bad key length (%d)\n", skeylen);
-			return (EAUTH);
+			vm_map_copy_discard((vm_map_copy_t) okey);
+			vm_map_copy_discard((vm_map_copy_t) otoken);
+			goto out;
 		}
-		error = nfs_gss_mach_vmcopyout((vm_map_copy_t) okey, skeylen, cp->gss_clnt_skey);
+		error = nfs_gss_mach_vmcopyout((vm_map_copy_t) okey, skeylen, 
+				cp->gss_clnt_kinfo.skey);
+		if (error) {
+			vm_map_copy_discard((vm_map_copy_t) otoken);
+			goto out;
+		}
+		
+		error = gss_key_init(&cp->gss_clnt_kinfo, skeylen);
 		if (error)
-			return (EAUTH);
+			goto out;
 	}
 
-	if (cp->gss_clnt_tokenlen > 0) {
-		MALLOC(cp->gss_clnt_token, u_char *, cp->gss_clnt_tokenlen, M_TEMP, M_WAITOK);
-		if (cp->gss_clnt_token == NULL)
+	/* Free context token used as input */
+	if (cp->gss_clnt_token)
+		FREE(cp->gss_clnt_token, M_TEMP);
+	cp->gss_clnt_token = NULL;
+	cp->gss_clnt_tokenlen = 0;
+
+	if (otokenlen > 0) {
+		/* Set context token to gss output token */
+		MALLOC(cp->gss_clnt_token, u_char *, otokenlen, M_TEMP, M_WAITOK);
+		if (cp->gss_clnt_token == NULL) {
+			printf("nfs_gss_clnt_gssd_upcall: could not allocate %d bytes\n", otokenlen);
+			vm_map_copy_discard((vm_map_copy_t) otoken);
 			return (ENOMEM);
-		error = nfs_gss_mach_vmcopyout((vm_map_copy_t) otoken, cp->gss_clnt_tokenlen,
-			cp->gss_clnt_token);
-		if (error)
-			return (EAUTH);
+		}
+		error = nfs_gss_mach_vmcopyout((vm_map_copy_t) otoken, otokenlen, cp->gss_clnt_token);
+		if (error) {
+			FREE(cp->gss_clnt_token, M_TEMP);
+			cp->gss_clnt_token = NULL;
+			return (NFSERR_EAUTH);
+		}
+		cp->gss_clnt_tokenlen = otokenlen;
 	}
 
 	return (0);
+
+out:
+	if (cp->gss_clnt_token)
+		FREE(cp->gss_clnt_token, M_TEMP);
+	cp->gss_clnt_token = NULL;
+	cp->gss_clnt_tokenlen = 0;
+	
+	return (NFSERR_EAUTH);
 }
 
 /*
@@ -1425,7 +1543,7 @@ nfs_gss_clnt_ctx_renew(struct nfsreq *req)
 	mach_port_t saved_mport;
 	int retrycnt = 0;
 
-	if (cp == NULL || !(cp->gss_clnt_flags & GSS_CTX_COMPLETE))
+	if (cp == NULL)
 		return (0);
 
 	lck_mtx_lock(cp->gss_clnt_mtx);
@@ -1438,9 +1556,7 @@ nfs_gss_clnt_ctx_renew(struct nfsreq *req)
 	saved_mport = task_copy_special_port(cp->gss_clnt_mport);
 
 	/* Remove the old context */
-	lck_mtx_lock(&nmp->nm_lock);
 	cp->gss_clnt_flags |= GSS_CTX_INVAL;
-	lck_mtx_unlock(&nmp->nm_lock);
 
 	/*
 	 * If there's a thread waiting
@@ -1452,14 +1568,14 @@ nfs_gss_clnt_ctx_renew(struct nfsreq *req)
 	}
 	lck_mtx_unlock(cp->gss_clnt_mtx);
 
-retry:
 	/*
 	 * Create a new context
 	 */
 	MALLOC(ncp, struct nfs_gss_clnt_ctx *, sizeof(*ncp),
 		M_TEMP, M_WAITOK|M_ZERO);
 	if (ncp == NULL) {
-		return (ENOMEM);
+		error = ENOMEM;
+		goto out;
 	}
 
 	ncp->gss_clnt_uid = saved_uid;
@@ -1474,13 +1590,14 @@ retry:
 	nfs_gss_clnt_ctx_unref(req);
 	nfs_gss_clnt_ctx_ref(req, ncp);
 
+retry:
 	error = nfs_gss_clnt_ctx_init(req, ncp); // Initialize new context
 	if (error == ENEEDAUTH) {
 		error = nfs_gss_clnt_ctx_delay(req, &retrycnt);
 		if (!error)
 			goto retry;
 	}
-
+out:
 	task_release_special_port(saved_mport);
 	if (error)
 		nfs_gss_clnt_ctx_unref(req);
@@ -1499,7 +1616,6 @@ nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp, int mntflags)
 	struct ucred temp_cred;
 	kauth_cred_t cred;
 	struct nfsm_chain nmreq, nmrep;
-	u_int64_t xid;
 	int error, status;
 	struct nfsreq req;
 
@@ -1532,8 +1648,8 @@ nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp, int mntflags)
 			nfsm_chain_build_alloc_init(error, &nmreq, 0);
 			nfsm_chain_build_done(error, &nmreq);
 			if (!error)
-				nfs_request2(NULL, nmp->nm_mountp, &nmreq, NFSPROC_NULL,
-					current_thread(), cred, 0, &nmrep, &xid, &status);
+				nfs_request_gss(nmp->nm_mountp, &nmreq,
+					current_thread(), cred, 0, cp, &nmrep, &status);
 			nfsm_chain_cleanup(&nmreq);
 			nfsm_chain_cleanup(&nmrep);
 			kauth_cred_unref(&cred);
@@ -1564,6 +1680,8 @@ nfs_gss_clnt_ctx_delay(struct nfsreq *req, int *retry)
 	struct timeval now;
 	time_t waituntil;
 
+	if (!nmp)
+		return (ENXIO);
 	if ((nmp->nm_flag & NFSMNT_SOFT) && *retry > nmp->nm_retry)
 		return (ETIMEDOUT);
 	if (timeo > 60)
@@ -1573,7 +1691,7 @@ nfs_gss_clnt_ctx_delay(struct nfsreq *req, int *retry)
 	waituntil = now.tv_sec + timeo;
 	while (now.tv_sec < waituntil) {
 		tsleep(&lbolt, PSOCK, "nfs_gss_clnt_ctx_delay", 0);
-		error = nfs_sigintr(nmp, req, current_thread(), 0);
+		error = nfs_sigintr(req->r_nmp, req, current_thread(), 0);
 		if (error)
 			break;
 		microuptime(&now);
@@ -1602,13 +1720,38 @@ nfs_gss_svc_ctx_find(uint32_t handle)
 {
 	struct nfs_gss_svc_ctx_hashhead *head;
 	struct nfs_gss_svc_ctx *cp;
-	
+	uint64_t timenow;
+
+	if (handle == 0)
+		return (NULL);
+		
 	head = &nfs_gss_svc_ctx_hashtbl[SVC_CTX_HASH(handle)];
+	/*
+	 * Don't return a context that is going to expire in GSS_CTX_PEND seconds
+	 */
+	clock_interval_to_deadline(GSS_CTX_PEND, NSEC_PER_SEC, &timenow);
 
 	lck_mtx_lock(nfs_gss_svc_ctx_mutex);
+
 	LIST_FOREACH(cp, head, gss_svc_entries)
-		if (cp->gss_svc_handle == handle)
+		if (cp->gss_svc_handle == handle) {
+			if (timenow > cp->gss_svc_incarnation + GSS_SVC_CTX_TTL) {
+				/* 
+				 * Context has or is about to expire. Don't use.
+				 * We'll return null and the client will have to create
+				 * a new context.
+				 */
+				cp->gss_svc_handle = 0;
+				/*
+				 * Make sure though that we stay around for GSS_CTC_PEND seconds 
+				 * for other threads that might be using the context.
+				 */
+				cp->gss_svc_incarnation = timenow;
+				cp = NULL;
+			}
 			break;
+		}
+
 	lck_mtx_unlock(nfs_gss_svc_ctx_mutex);
 
 	return (cp);
@@ -1631,9 +1774,11 @@ nfs_gss_svc_ctx_insert(struct nfs_gss_svc_ctx *cp)
 
 	if (!nfs_gss_timer_on) {
 		nfs_gss_timer_on = 1;
+
 		nfs_interval_timer_start(nfs_gss_svc_ctx_timer_call,
-			GSS_TIMER_PERIOD * MSECS_PER_SEC);
+			min(GSS_TIMER_PERIOD, max(GSS_CTX_TTL_MIN, GSS_SVC_CTX_TTL)) * MSECS_PER_SEC);
 	}
+
 	lck_mtx_unlock(nfs_gss_svc_ctx_mutex);
 }
 
@@ -1667,7 +1812,8 @@ nfs_gss_svc_ctx_timer(__unused void *param1, __unused void *param2)
 		for (cp = LIST_FIRST(head); cp; cp = next) {
 			contexts++;
 			next = LIST_NEXT(cp, gss_svc_entries);
-			if (timenow > cp->gss_svc_expiretime) {
+			if (timenow  > cp->gss_svc_incarnation + 
+				(cp->gss_svc_handle ? GSS_SVC_CTX_TTL : 0)) {
 				/*
 				 * A stale context - remove it
 				 */
@@ -1690,7 +1836,7 @@ nfs_gss_svc_ctx_timer(__unused void *param1, __unused void *param2)
 	nfs_gss_timer_on = nfs_gss_ctx_count > 0;
 	if (nfs_gss_timer_on)
 		nfs_interval_timer_start(nfs_gss_svc_ctx_timer_call,
-			GSS_TIMER_PERIOD * MSECS_PER_SEC);
+			min(GSS_TIMER_PERIOD, max(GSS_CTX_TTL_MIN, GSS_SVC_CTX_TTL)) * MSECS_PER_SEC);
 
 	lck_mtx_unlock(nfs_gss_svc_ctx_mutex);
 }
@@ -1714,10 +1860,11 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 	uint32_t flavor = 0, verflen = 0;
 	int error = 0;
 	uint32_t arglen, start, toklen, cksumlen;
-	u_char tokbuf[KRB5_SZ_TOKMAX];
-	u_char cksum1[8], cksum2[8];
+	u_char tokbuf[KRB5_SZ_TOKMAX(MAX_DIGEST)];
+	u_char cksum1[MAX_DIGEST], cksum2[MAX_DIGEST];
 	struct nfsm_chain nmc_tmp;
-
+	gss_key_info *ki;
+	
 	vers = proc = seqnum = service = handle_len = 0;
 	arglen = cksumlen = 0;
 
@@ -1794,6 +1941,7 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 	}
 
 	cp->gss_svc_proc = proc;
+	ki = &cp->gss_svc_kinfo;
 
 	if (proc == RPCSEC_GSS_DATA || proc == RPCSEC_GSS_DESTROY) {
 		struct ucred temp_cred;
@@ -1815,7 +1963,7 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 		}
 
 		/* Now compute the client's call header checksum */
-		nfs_gss_cksum_chain(cp->gss_svc_sched, nmc, krb5_mic, 0, 0, cksum1);
+		nfs_gss_cksum_chain(ki, nmc, ALG_MIC(ki), 0, 0, cksum1);
 
 		/*
 		 * Validate the verifier.
@@ -1827,19 +1975,19 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 		 */
 		nfsm_chain_get_32(error, nmc, flavor);
 		nfsm_chain_get_32(error, nmc, verflen);
-		if (flavor != RPCSEC_GSS || verflen != KRB5_SZ_TOKEN)
+		if (flavor != RPCSEC_GSS || verflen != KRB5_SZ_TOKEN(ki->hash_len))
 			error = NFSERR_AUTHERR | AUTH_BADVERF;
 		nfsm_chain_get_opaque(error, nmc, verflen, tokbuf);
 		if (error)
 			goto nfsmout;
 
 		/* Get the checksum from the token inside the verifier */
-		error = nfs_gss_token_get(cp->gss_svc_sched, krb5_mic, tokbuf, 1,
+		error = nfs_gss_token_get(ki, ALG_MIC(ki), tokbuf, 1,
 			NULL, cksum2);
 		if (error)
 			goto nfsmout;
 
-		if (bcmp(cksum1, cksum2, 8) != 0) {
+		if (bcmp(cksum1, cksum2, HASHLEN(ki)) != 0) {
 			error = NFSERR_AUTHERR | RPCSEC_GSS_CTXPROBLEM;
 			goto nfsmout;
 		}
@@ -1860,8 +2008,7 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 			error = ENOMEM;
 			goto nfsmout;
 		}
-		clock_interval_to_deadline(GSS_CTX_EXPIRE, NSEC_PER_SEC,
-			&cp->gss_svc_expiretime);
+		clock_get_uptime(&cp->gss_svc_incarnation);
 
 		/*
 		 * If the call arguments are integrity or privacy protected
@@ -1889,7 +2036,7 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 
 			/* Compute the checksum over the call args */
 			start = nfsm_chain_offset(nmc);
-			nfs_gss_cksum_chain(cp->gss_svc_sched, nmc, krb5_mic, start, arglen, cksum1);
+			nfs_gss_cksum_chain(ki, nmc, ALG_MIC(ki), start, arglen, cksum1);
 	
 			/*
 			 * Get the sequence number prepended to the args
@@ -1910,18 +2057,18 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 			arglen -= NFSX_UNSIGNED;			// skipped seqnum
 			nfsm_chain_adv(error, &nmc_tmp, arglen);	// skip args
 			nfsm_chain_get_32(error, &nmc_tmp, cksumlen);	// length of checksum
-			if (cksumlen != KRB5_SZ_TOKEN) {
+			if (cksumlen != KRB5_SZ_TOKEN(ki->hash_len)) {
 				error = EBADRPC;
 				goto nfsmout;
 			}
 			nfsm_chain_get_opaque(error, &nmc_tmp, cksumlen, tokbuf);
 			if (error)
 				goto nfsmout;
-			error = nfs_gss_token_get(cp->gss_svc_sched, krb5_mic, tokbuf, 1,
+			error = nfs_gss_token_get(ki, ALG_MIC(ki), tokbuf, 1,
 				NULL, cksum2);
 	
 			/* Verify that the checksums are the same */
-			if (error || bcmp(cksum1, cksum2, 8) != 0) {
+			if (error || bcmp(cksum1, cksum2, HASHLEN(ki)) != 0) {
 				error = EBADRPC;
 				goto nfsmout;
 			}
@@ -1943,11 +2090,11 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 			}
 	
 			/* Get the token that prepends the encrypted args */
-			nfsm_chain_get_opaque(error, nmc, KRB5_SZ_TOKMAX, tokbuf);
+			nfsm_chain_get_opaque(error, nmc, KRB5_SZ_TOKMAX(ki->hash_len), tokbuf);
 			if (error)
 				goto nfsmout;
-			error = nfs_gss_token_get(cp->gss_svc_sched, krb5_wrap, tokbuf, 1,
-				&toklen, cksum1);
+			error = nfs_gss_token_get(ki, ALG_WRAP(ki), tokbuf, 1,
+							&toklen, cksum1);
 			if (error)
 				goto nfsmout;
 			nfsm_chain_reverse(nmc, nfsm_pad(toklen));
@@ -1955,13 +2102,13 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 			/* decrypt the 8 byte confounder + seqnum + args */
 			start = nfsm_chain_offset(nmc);
 			arglen -= toklen;
-			nfs_gss_encrypt_chain(cp->gss_svc_skey, nmc, start, arglen, DES_DECRYPT);
+			nfs_gss_encrypt_chain(ki, nmc, start, arglen, DES_DECRYPT);
 	
 			/* Compute a checksum over the sequence number + results */
-			nfs_gss_cksum_chain(cp->gss_svc_sched, nmc, krb5_wrap, start, arglen, cksum2);
+			nfs_gss_cksum_chain(ki, nmc, ALG_WRAP(ki), start, arglen, cksum2);
 	
 			/* Verify that the checksums are the same */
-			if (bcmp(cksum1, cksum2, 8) != 0) {
+			if (bcmp(cksum1, cksum2, HASHLEN(ki)) != 0) {
 				error = EBADRPC;
 				goto nfsmout;
 			}
@@ -2008,12 +2155,14 @@ nfs_gss_svc_verf_put(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 {
 	struct nfs_gss_svc_ctx *cp;
 	int error = 0;
-	u_char tokbuf[KRB5_SZ_TOKEN];
+	u_char tokbuf[KRB5_SZ_TOKEN(MAX_DIGEST)];
 	int toklen;
-	u_char cksum[8];
+	u_char cksum[MAX_DIGEST];
+	gss_key_info *ki;
 
 	cp = nd->nd_gss_context;
-
+	ki = &cp->gss_svc_kinfo;
+	
 	if (cp->gss_svc_major != GSS_S_COMPLETE) {
 		/*
 		 * If the context isn't yet complete
@@ -2032,14 +2181,14 @@ nfs_gss_svc_verf_put(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 	 */
 	if (cp->gss_svc_proc == RPCSEC_GSS_INIT ||
 	    cp->gss_svc_proc == RPCSEC_GSS_CONTINUE_INIT)
-		nfs_gss_cksum_rep(cp->gss_svc_sched, cp->gss_svc_seqwin, cksum);
+		nfs_gss_cksum_rep(ki, cp->gss_svc_seqwin, cksum);
 	else
-		nfs_gss_cksum_rep(cp->gss_svc_sched, nd->nd_gss_seqnum, cksum);
+		nfs_gss_cksum_rep(ki, nd->nd_gss_seqnum, cksum);
 	/*
 	 * Now wrap it in a token and add
 	 * the verifier to the reply.
 	 */
-	toklen = nfs_gss_token_put(cp->gss_svc_sched, krb5_mic, tokbuf, 0, 0, cksum);
+	toklen = nfs_gss_token_put(ki, ALG_MIC(ki), tokbuf, 0, 0, cksum);
 	nfsm_chain_add_32(error, nmc, RPCSEC_GSS);
 	nfsm_chain_add_32(error, nmc, toklen);
 	nfsm_chain_add_opaque(error, nmc, tokbuf, toklen);
@@ -2097,10 +2246,11 @@ nfs_gss_svc_protect_reply(struct nfsrv_descript *nd, mbuf_t mrep)
 	struct nfsm_chain nmrep_pre, *nmc_pre = &nmrep_pre;
 	mbuf_t mb, results;
 	uint32_t reslen;
-	u_char tokbuf[KRB5_SZ_TOKMAX];
+	u_char tokbuf[KRB5_SZ_TOKMAX(MAX_DIGEST)];
 	int pad, toklen;
-	u_char cksum[8];
+	u_char cksum[MAX_DIGEST];
 	int error = 0;
+	gss_key_info *ki = &cp->gss_svc_kinfo;
 
 	/*
 	 * Using a reference to the mbuf where we previously split the reply
@@ -2127,10 +2277,10 @@ nfs_gss_svc_protect_reply(struct nfsrv_descript *nd, mbuf_t mrep)
 		nfs_gss_append_chain(nmc_pre, results);	// Append the results mbufs
 
 		/* Now compute the checksum over the results data */
-		nfs_gss_cksum_mchain(cp->gss_svc_sched, results, krb5_mic, 0, reslen, cksum);
+		nfs_gss_cksum_mchain(ki, results, ALG_MIC(ki), 0, reslen, cksum);
 
 		/* Put it into a token and append to the request */
-		toklen = nfs_gss_token_put(cp->gss_svc_sched, krb5_mic, tokbuf, 0, 0, cksum);
+		toklen = nfs_gss_token_put(ki, ALG_MIC(ki), tokbuf, 0, 0, cksum);
 		nfsm_chain_add_32(error, nmc_res, toklen);
 		nfsm_chain_add_opaque(error, nmc_res, tokbuf, toklen);
 		nfsm_chain_build_done(error, nmc_res);
@@ -2152,10 +2302,10 @@ nfs_gss_svc_protect_reply(struct nfsrv_descript *nd, mbuf_t mrep)
 		nfsm_chain_build_done(error, nmc_res);
 
 		/* Now compute the checksum over the results data */
-		nfs_gss_cksum_mchain(cp->gss_svc_sched, results, krb5_wrap, 0, reslen, cksum);
+		nfs_gss_cksum_mchain(ki, results, ALG_WRAP(ki), 0, reslen, cksum);
 
 		/* Put it into a token and insert in the reply */
-		toklen = nfs_gss_token_put(cp->gss_svc_sched, krb5_wrap, tokbuf, 0, reslen, cksum);
+		toklen = nfs_gss_token_put(ki, ALG_WRAP(ki), tokbuf, 0, reslen, cksum);
 		nfsm_chain_add_32(error, nmc_pre, toklen + reslen);
 		nfsm_chain_add_opaque_nopad(error, nmc_pre, tokbuf, toklen);
 		nfsm_chain_build_done(error, nmc_pre);
@@ -2164,7 +2314,7 @@ nfs_gss_svc_protect_reply(struct nfsrv_descript *nd, mbuf_t mrep)
 		nfs_gss_append_chain(nmc_pre, results);	// Append the results mbufs
 
 		/* Encrypt the confounder + seqnum + results */
-		nfs_gss_encrypt_mchain(cp->gss_svc_skey, results, 0, reslen, DES_ENCRYPT);
+		nfs_gss_encrypt_mchain(ki, results, 0, reslen, DES_ENCRYPT);
 
 		/* Add null XDR pad if the ASN.1 token misaligned the data */
 		pad = nfsm_pad(toklen + reslen);
@@ -2217,7 +2367,7 @@ nfs_gss_svc_ctx_init(struct nfsrv_descript *nd, struct nfsrv_sock *slp, mbuf_t *
 		cp->gss_svc_handle = handle;
 		cp->gss_svc_mtx = lck_mtx_alloc_init(nfs_gss_svc_grp, LCK_ATTR_NULL);
 		clock_interval_to_deadline(GSS_CTX_PEND, NSEC_PER_SEC,
-			&cp->gss_svc_expiretime);
+			&cp->gss_svc_incarnation);
 
 		nfs_gss_svc_ctx_insert(cp);
 
@@ -2241,7 +2391,7 @@ nfs_gss_svc_ctx_init(struct nfsrv_descript *nd, struct nfsrv_sock *slp, mbuf_t *
 		error = nfs_gss_svc_gssd_upcall(cp);
 		if (error) {
 			autherr = RPCSEC_GSS_CREDPROBLEM;
-			if (error == EAUTH)
+			if (error == NFSERR_EAUTH)
 				error = 0;
 			break;
 		}
@@ -2257,23 +2407,13 @@ nfs_gss_svc_ctx_init(struct nfsrv_descript *nd, struct nfsrv_sock *slp, mbuf_t *
 		 * Now the server context is complete.
 		 * Finish setup.
 		 */
-		clock_interval_to_deadline(GSS_CTX_EXPIRE, NSEC_PER_SEC,
-			&cp->gss_svc_expiretime);
+		clock_get_uptime(&cp->gss_svc_incarnation);
+
 		cp->gss_svc_seqwin = GSS_SVC_SEQWINDOW;
 		MALLOC(cp->gss_svc_seqbits, uint32_t *,
 			nfsm_rndup((cp->gss_svc_seqwin + 7) / 8), M_TEMP, M_WAITOK|M_ZERO);
 		if (cp->gss_svc_seqbits == NULL) {
 			autherr = RPCSEC_GSS_CREDPROBLEM;
-			break;
-		}
-
-		/*
-		 * Generate a key schedule from our shiny new DES key
-		 */
-		error = des_key_sched((des_cblock *) cp->gss_svc_skey, cp->gss_svc_sched);
-		if (error) {
-			autherr = RPCSEC_GSS_CREDPROBLEM;
-			error = 0;
 			break;
 		}
 		break;
@@ -2294,7 +2434,7 @@ nfs_gss_svc_ctx_init(struct nfsrv_descript *nd, struct nfsrv_sock *slp, mbuf_t *
 			cp->gss_svc_handle = 0;	// so it can't be found
 			lck_mtx_lock(cp->gss_svc_mtx);
 			clock_interval_to_deadline(GSS_CTX_PEND, NSEC_PER_SEC,
-				&cp->gss_svc_expiretime);
+				&cp->gss_svc_incarnation);
 			lck_mtx_unlock(cp->gss_svc_mtx);
 		}
 		break;
@@ -2323,8 +2463,8 @@ nfs_gss_svc_ctx_init(struct nfsrv_descript *nd, struct nfsrv_sock *slp, mbuf_t *
 		nfsm_chain_add_32(error, &nmrep, cp->gss_svc_seqwin);
 	
 		nfsm_chain_add_32(error, &nmrep, cp->gss_svc_tokenlen);
-		nfsm_chain_add_opaque(error, &nmrep, cp->gss_svc_token, cp->gss_svc_tokenlen);
 		if (cp->gss_svc_token != NULL) {
+			nfsm_chain_add_opaque(error, &nmrep, cp->gss_svc_token, cp->gss_svc_tokenlen);
 			FREE(cp->gss_svc_token, M_TEMP);
 			cp->gss_svc_token = NULL;
 		}
@@ -2332,6 +2472,7 @@ nfs_gss_svc_ctx_init(struct nfsrv_descript *nd, struct nfsrv_sock *slp, mbuf_t *
 
 nfsmout:
 	if (autherr != 0) {
+		nd->nd_gss_context = NULL;
 		LIST_REMOVE(cp, gss_svc_entries);
 		if (cp->gss_svc_seqbits != NULL)
 			FREE(cp->gss_svc_seqbits, M_TEMP);
@@ -2363,19 +2504,21 @@ nfs_gss_svc_gssd_upcall(struct nfs_gss_svc_ctx *cp)
 	int retry_cnt = 0;
 	byte_buffer okey = NULL;
 	uint32_t skeylen = 0;
+	uint32_t ret_flags;
 	vm_map_copy_t itoken = NULL;
 	byte_buffer otoken = NULL;
+	mach_msg_type_number_t otokenlen;
 	int error = 0;
 	char svcname[] = "nfs";
 
 	kr = task_get_gssd_port(get_threadtask(current_thread()), &mp);
 	if (kr != KERN_SUCCESS) {
-		printf("nfs_gss_svc_gssd_upcall: can't get gssd port, status 0x%08x\n", kr);
-		return (EAUTH);
+		printf("nfs_gss_svc_gssd_upcall: can't get gssd port, status %x (%d)\n", kr, kr);
+		goto out;
 	}
 	if (!IPC_PORT_VALID(mp)) {
 		printf("nfs_gss_svc_gssd_upcall: gssd port not valid\n");
-		return (EAUTH);
+		goto out;
 	}
 
 	if (cp->gss_svc_tokenlen > 0)
@@ -2387,48 +2530,80 @@ retry:
 		(byte_buffer) itoken, (mach_msg_type_number_t) cp->gss_svc_tokenlen,
 		svcname,
 		0,
-		&cp->gss_svc_gssd_verf,
 		&cp->gss_svc_context,
 		&cp->gss_svc_cred_handle,
+		&ret_flags,
 		&cp->gss_svc_uid,
 		cp->gss_svc_gids,
 		&cp->gss_svc_ngroups,
 		&okey, (mach_msg_type_number_t *) &skeylen,
-		&otoken, (mach_msg_type_number_t *) &cp->gss_svc_tokenlen,
+		&otoken, &otokenlen,
 		&cp->gss_svc_major,
 		&cp->gss_svc_minor);
 
 	if (kr != KERN_SUCCESS) { 
-		printf("nfs_gss_svc_gssd_upcall failed: %d\n", kr);
+		printf("nfs_gss_svc_gssd_upcall failed: %x (%d)\n", kr, kr);
 		if (kr == MIG_SERVER_DIED && cp->gss_svc_context == 0 &&
-			retry_cnt++ < NFS_GSS_MACH_MAX_RETRIES)
+			retry_cnt++ < NFS_GSS_MACH_MAX_RETRIES) {
+			if (cp->gss_svc_tokenlen > 0)
+				nfs_gss_mach_alloc_buffer(cp->gss_svc_token, cp->gss_svc_tokenlen, &itoken);
 			goto retry;
+		}
 		task_release_special_port(mp);
-		return (EAUTH);
+		goto out;
 	}
 
 	task_release_special_port(mp);
+
 	if (skeylen > 0) {
-		if (skeylen != SKEYLEN) {
+		if (skeylen != SKEYLEN && skeylen != SKEYLEN3) {
 			printf("nfs_gss_svc_gssd_upcall: bad key length (%d)\n", skeylen);
-			return (EAUTH);
+			vm_map_copy_discard((vm_map_copy_t) okey);
+			vm_map_copy_discard((vm_map_copy_t) otoken);
+			goto out;
 		}
-		error = nfs_gss_mach_vmcopyout((vm_map_copy_t) okey, skeylen, cp->gss_svc_skey);
+		error = nfs_gss_mach_vmcopyout((vm_map_copy_t) okey, skeylen, cp->gss_svc_kinfo.skey);
+		if (error) {
+			vm_map_copy_discard((vm_map_copy_t) otoken);
+			goto out;
+		}
+		error = gss_key_init(&cp->gss_svc_kinfo, skeylen);
 		if (error)
-			return (EAUTH);
+			goto out;
+
 	}
 
-	if (cp->gss_svc_tokenlen > 0) {
-		MALLOC(cp->gss_svc_token, u_char *, cp->gss_svc_tokenlen, M_TEMP, M_WAITOK);
-		if (cp->gss_svc_token == NULL)
+	/* Free context token used as input */
+	if (cp->gss_svc_token)
+		FREE(cp->gss_svc_token, M_TEMP);
+	cp->gss_svc_token = NULL;
+	cp->gss_svc_tokenlen = 0;
+	
+	if (otokenlen > 0) {
+		/* Set context token to gss output token */
+		MALLOC(cp->gss_svc_token, u_char *, otokenlen, M_TEMP, M_WAITOK);
+		if (cp->gss_svc_token == NULL) {
+			printf("nfs_gss_svc_gssd_upcall: could not allocate %d bytes\n", otokenlen);
+			vm_map_copy_discard((vm_map_copy_t) otoken);
 			return (ENOMEM);
-		error = nfs_gss_mach_vmcopyout((vm_map_copy_t) otoken, cp->gss_svc_tokenlen,
-			cp->gss_svc_token);
-		if (error)
-			return (EAUTH);
+		}
+		error = nfs_gss_mach_vmcopyout((vm_map_copy_t) otoken, otokenlen, cp->gss_svc_token);
+		if (error) {
+			FREE(cp->gss_svc_token, M_TEMP);
+			cp->gss_svc_token = NULL;
+			return (NFSERR_EAUTH);
+		}
+		cp->gss_svc_tokenlen = otokenlen;
 	}
 
-	return (kr);
+	return (0);
+
+out:
+	FREE(cp->gss_svc_token, M_TEMP);
+	cp->gss_svc_tokenlen = 0;
+	cp->gss_svc_token = NULL;
+
+	return (NFSERR_EAUTH);	
 }
 
 /*
@@ -2580,9 +2755,15 @@ nfs_gss_mach_alloc_buffer(u_char *buf, uint32_t buflen, vm_map_copy_t *addr)
 	kr = vm_map_wire(ipc_kernel_map, vm_map_trunc_page(kmem_buf),
 		vm_map_round_page(kmem_buf + tbuflen),
 		VM_PROT_READ|VM_PROT_WRITE, FALSE);
-
+	if (kr != 0) {
+		printf("nfs_gss_mach_alloc_buffer: vm_map_wire failed\n");
+		return;
+	}
+	
 	bcopy(buf, (void *) kmem_buf, buflen);
-
+	// Shouldn't need to bzero below since vm_allocate returns zeroed pages
+	// bzero(kmem_buf + buflen, tbuflen - buflen);
+	
 	kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(kmem_buf),
 		vm_map_round_page(kmem_buf + tbuflen), FALSE);
 	if (kr != 0) {
@@ -2596,9 +2777,6 @@ nfs_gss_mach_alloc_buffer(u_char *buf, uint32_t buflen, vm_map_copy_t *addr)
 		printf("nfs_gss_mach_alloc_buffer: vm_map_copyin failed\n");
 		return;
 	}
-
-	if (buflen != tbuflen)
-		kmem_free(ipc_kernel_map, kmem_buf + buflen, tbuflen - buflen);
 }
 
 /*
@@ -2632,7 +2810,7 @@ nfs_gss_mach_vmcopyout(vm_map_copy_t in, uint32_t len, u_char *out)
  */
 static int
 nfs_gss_token_put(
-	des_key_schedule sched,
+	gss_key_info *ki,
 	u_char *alg,
 	u_char *p,
 	int initiator,
@@ -2651,7 +2829,7 @@ nfs_gss_token_put(
 	 * MIC token, or 35 + encrypted octets for a wrap token;
 	 */
 	*p++ = 0x060;
-	toklen = KRB5_SZ_MECH + KRB5_SZ_ALG + KRB5_SZ_SEQ + KRB5_SZ_CKSUM;
+	toklen = KRB5_SZ_MECH + KRB5_SZ_ALG + KRB5_SZ_SEQ + HASHLEN(ki);
 	nfs_gss_der_length_put(&p, toklen + datalen);
 
 	/*
@@ -2693,18 +2871,18 @@ nfs_gss_token_put(
 		plain[i] = (u_char) ((seqnum >> (i * 8)) & 0xff);
 	for (i = 4; i < 8; i++)
 		plain[i] = initiator ? 0x00 : 0xff;
-	des_cbc_encrypt((des_cblock *) plain, (des_cblock *) p, 8,
-		sched, (des_cblock *) cksum, NULL, DES_ENCRYPT);
+	gss_des_crypt(ki, (des_cblock *) plain, (des_cblock *) p, 8,
+			(des_cblock *) cksum, NULL, DES_ENCRYPT, KG_USAGE_SEQ);
 	p += 8;
 
 	/*
-	 * Finally, append 8 octets of DES MAC MD5
+	 * Finally, append the octets of the 
 	 * checksum of the alg + plaintext data.
 	 * The plaintext could be an RPC call header,
 	 * the window value, or a sequence number.
 	 */
-	bcopy(cksum, p, 8);
-	p += 8;
+	bcopy(cksum, p, HASHLEN(ki));
+	p += HASHLEN(ki);
 
 	return (p - psave);
 }
@@ -2771,7 +2949,7 @@ nfs_gss_der_length_get(u_char **pp)
  */
 static int
 nfs_gss_token_get(
-	des_key_schedule sched,
+	gss_key_info *ki,
 	u_char *alg,
 	u_char *p,
 	int initiator,
@@ -2806,15 +2984,15 @@ nfs_gss_token_get(
 
 	/*
 	 * Now decrypt the sequence number.
-	 * Note that the DES CBC decryption uses the first 8 octets
+	 * Note that the gss decryption uses the first 8 octets
 	 * of the checksum field as an initialization vector (p + 8).
 	 * Per RFC 2203 section 5.2.2 we don't check the sequence number
 	 * in the ASN.1 token because the RPCSEC_GSS protocol has its
 	 * own sequence number described in section 5.3.3.1
 	 */
 	seqnum = 0;
-	des_cbc_encrypt((des_cblock *) p, (des_cblock *) plain, 8,
-		sched, (des_cblock *) (p + 8), NULL, DES_DECRYPT);
+	gss_des_crypt(ki, (des_cblock *)p, (des_cblock *) plain, 8,
+			(des_cblock *) (p + 8), NULL, DES_DECRYPT, KG_USAGE_SEQ);
 	p += 8;
 	for (i = 0; i < 4; i++)
 		seqnum |= plain[i] << (i * 8);
@@ -2831,8 +3009,8 @@ nfs_gss_token_get(
 	/*
 	 * Finally, get the checksum
 	 */
-	bcopy(p, cksum, 8);
-	p += 8;
+	bcopy(p, cksum, HASHLEN(ki));
+	p += HASHLEN(ki);
 
 	if (len != NULL)
 		*len = p - psave;
@@ -2911,26 +3089,25 @@ nfs_gss_nfsm_chain(struct nfsm_chain *nmc, mbuf_t mc)
  */
 static void
 nfs_gss_cksum_mchain(
-	des_key_schedule sched,
+	gss_key_info *ki,
 	mbuf_t mhead,
 	u_char *alg,
 	int offset,
 	int len,
-	u_char *cksum)
+	u_char *digest)
 {
 	mbuf_t mb;
 	u_char *ptr;
 	int left, bytes;
-	MD5_CTX context;
-	u_char digest[16];
+	GSS_DIGEST_CTX context;
 
-	MD5Init(&context);
+	gss_digest_Init(&context, ki);
 
 	/*
 	 * Logically prepend the first 8 bytes of the algorithm
 	 * field as required by RFC 1964, section 1.2.1.1
 	 */
-	MD5Update(&context, alg, KRB5_SZ_ALG);
+	gss_digest_Update(&context, alg, KRB5_SZ_ALG);
 
 	/*
 	 * Move down the mbuf chain until we reach the given
@@ -2953,17 +3130,11 @@ nfs_gss_cksum_mchain(
 			
 		bytes = left < len ? left : len;
 		if (bytes > 0)
-			MD5Update(&context, ptr, bytes);
+			gss_digest_Update(&context, ptr, bytes);
 		len -= bytes;
 	}
 
-	MD5Final(digest, &context);
-
-	/*
-	 * Now get the DES CBC checksum for the digest.
-	 */
-	(void) des_cbc_cksum((des_cblock *) digest, (des_cblock *) cksum,
-		sizeof(digest), sched, (des_cblock *) iv0);
+	gss_digest_Final(&context, digest);
 }
 
 /*
@@ -2975,7 +3146,7 @@ nfs_gss_cksum_mchain(
  */
 static void
 nfs_gss_cksum_chain(
-	des_key_schedule sched,
+	gss_key_info *ki,
 	struct nfsm_chain *nmc,
 	u_char *alg,
 	int offset,
@@ -2990,7 +3161,7 @@ nfs_gss_cksum_chain(
 	if (len == 0)
 		len = nfsm_chain_offset(nmc) - offset;
 
-	return (nfs_gss_cksum_mchain(sched, nmc->nmc_mhead, alg, offset, len, cksum));
+	return (nfs_gss_cksum_mchain(ki, nmc->nmc_mhead, alg, offset, len, cksum));
 }
 
 /*
@@ -2998,31 +3169,24 @@ nfs_gss_cksum_chain(
  * of an RPCSEC_GSS reply.
  */
 static void
-nfs_gss_cksum_rep(des_key_schedule sched, uint32_t seqnum, u_char *cksum)
+nfs_gss_cksum_rep(gss_key_info *ki, uint32_t seqnum, u_char *cksum)
 {
-	MD5_CTX context;
-	u_char digest[16];
+	GSS_DIGEST_CTX context;
 	uint32_t val = htonl(seqnum);
 
-	MD5Init(&context);
+	gss_digest_Init(&context, ki);
 
 	/*
 	 * Logically prepend the first 8 bytes of the MIC
 	 * token as required by RFC 1964, section 1.2.1.1
 	 */
-	MD5Update(&context, krb5_mic, KRB5_SZ_ALG);
+	gss_digest_Update(&context, ALG_MIC(ki), KRB5_SZ_ALG);
 
 	/*
 	 * Compute the digest of the seqnum in network order
 	 */
-	MD5Update(&context, (u_char *) &val, 4);
-	MD5Final(digest, &context);
-
-	/*
-	 * Now get the DES CBC checksum for the digest.
-	 */
-	(void) des_cbc_cksum((des_cblock *) digest, (des_cblock *) cksum,
-		sizeof(digest), sched, (des_cblock *) iv0);
+	gss_digest_Update(&context, &val, 4);
+	gss_digest_Final(&context, cksum);
 }
 
 /*
@@ -3030,26 +3194,19 @@ nfs_gss_cksum_rep(des_key_schedule sched, uint32_t seqnum, u_char *cksum)
  */
 static void
 nfs_gss_encrypt_mchain(
-	u_char *key,
+	gss_key_info *ki,
 	mbuf_t mhead,
 	int offset,
 	int len,
 	int encrypt)
 {
-	des_key_schedule sched;
 	mbuf_t mb, mbn;
 	u_char *ptr, *nptr;
 	u_char tmp[8], ivec[8];
-	int i, left, left8, remain;
+	int left, left8, remain;
 
-	/*
-	 * Make the key schedule per RFC 1964 section 1.2.2.3
-	 */
-	for (i = 0; i < 8; i++)
-		tmp[i] = key[i] ^ 0xf0;
+
 	bzero(ivec, 8);
-
-	(void) des_key_sched((des_cblock *) tmp, sched);
 
 	/*
 	 * Move down the mbuf chain until we reach the given
@@ -3072,7 +3229,7 @@ nfs_gss_encrypt_mchain(
 		offset = 0;
 			
 		/*
-		 * DES CBC has to encrypt 8 bytes at a time.
+		 * DES or DES3 CBC has to encrypt 8 bytes at a time.
 		 * If the number of bytes to be encrypted in this
 		 * mbuf isn't some multiple of 8 bytes, encrypt all
 		 * the 8 byte blocks, then combine the remaining
@@ -3084,8 +3241,8 @@ nfs_gss_encrypt_mchain(
 		left8 = left - remain;
 		left = left8 < len ? left8 : len;
 		if (left > 0) {
-			des_cbc_encrypt((des_cblock *) ptr, (des_cblock *) ptr, left, sched,
-				(des_cblock *) ivec, (des_cblock *) ivec, encrypt);
+			gss_des_crypt(ki, (des_cblock *) ptr, (des_cblock *) ptr,
+					left, &ivec, &ivec, encrypt, KG_USAGE_SEAL);
 			len -= left;
 		}
 
@@ -3094,8 +3251,8 @@ nfs_gss_encrypt_mchain(
 			offset = 8 - remain;
 			bcopy(ptr + left, tmp, remain);		// grab from this mbuf
 			bcopy(nptr, tmp + remain, offset);	// grab from next mbuf
-			des_cbc_encrypt((des_cblock *) tmp, (des_cblock *) tmp, 8, sched,
-				(des_cblock *) ivec, (des_cblock *) ivec, encrypt);
+			gss_des_crypt(ki, (des_cblock *) tmp, (des_cblock *) tmp, 8,
+					&ivec, &ivec, encrypt, KG_USAGE_SEAL);
 			bcopy(tmp, ptr + left, remain);		// return to this mbuf
 			bcopy(tmp + remain, nptr, offset);	// return to next mbuf
 			len -= 8;
@@ -3108,7 +3265,7 @@ nfs_gss_encrypt_mchain(
  */
 static void
 nfs_gss_encrypt_chain(
-	u_char *key,
+	gss_key_info *ki,
 	struct nfsm_chain *nmc,
 	int offset,
 	int len,
@@ -3122,134 +3279,127 @@ nfs_gss_encrypt_chain(
 	if (len == 0)
 		len = nfsm_chain_offset(nmc) - offset;
 
-	return (nfs_gss_encrypt_mchain(key, nmc->nmc_mhead, offset, len, encrypt));
+	return (nfs_gss_encrypt_mchain(ki, nmc->nmc_mhead, offset, len, encrypt));
 }
 
 /*
- * XXX This function borrowed from OpenBSD.
- * It will likely be moved into kernel crypto.
+ * The routines that follow provide abstractions for doing digests and crypto.
  */
-static DES_LONG
-des_cbc_cksum(input, output, length, schedule, ivec)
-	des_cblock (*input);
-	des_cblock (*output);
-	long length;
-	des_key_schedule schedule;
-	des_cblock (*ivec);
-{
-	register unsigned long tout0,tout1,tin0,tin1;
-	register long l=length;
-	unsigned long tin[2];
-	unsigned char *in,*out,*iv;
-
-	in=(unsigned char *)input;
-	out=(unsigned char *)output;
-	iv=(unsigned char *)ivec;
-
-	c2l(iv,tout0);
-	c2l(iv,tout1);
-	for (; l>0; l-=8) {
-		if (l >= 8) {
-			c2l(in,tin0);
-			c2l(in,tin1);
-		} else
-			c2ln(in,tin0,tin1,l);
-			
-		tin0^=tout0; tin[0]=tin0;
-		tin1^=tout1; tin[1]=tin1;
-		des_encrypt1((DES_LONG *)tin,schedule,DES_ENCRYPT);
-		/* fix 15/10/91 eay - thanks to keithr@sco.COM */
-		tout0=tin[0];
-		tout1=tin[1];
-	}
-	if (out != NULL) {
-		l2c(tout0,out);
-		l2c(tout1,out);
-	}
-	tout0=tin0=tin1=tin[0]=tin[1]=0;
-	return(tout1);
-}
-
-/*
- * XXX This function borrowed from OpenBSD.
- * It will likely be moved into kernel crypto.
- */
+ 
 static void
-des_cbc_encrypt(input, output, length, schedule, ivec, retvec, encrypt)
-	des_cblock (*input);
-	des_cblock (*output);
-	long length;
-	des_key_schedule schedule;
-	des_cblock (*ivec);
-	des_cblock (*retvec);
-	int encrypt;
+gss_digest_Init(GSS_DIGEST_CTX *ctx, gss_key_info *ki)
 {
-	register unsigned long tin0,tin1;
-	register unsigned long tout0,tout1,xor0,xor1;
-	register unsigned char *in,*out,*retval;
-	register long l=length;
-	unsigned long tin[2];
-	unsigned char *iv;
-	tin0 = tin1 = 0;
-
-	in=(unsigned char *)input;
-	out=(unsigned char *)output;
-	retval=(unsigned char *)retvec;
-	iv=(unsigned char *)ivec;
-
-	if (encrypt) {
-		c2l(iv,tout0);
-		c2l(iv,tout1);
-		for (l-=8; l>=0; l-=8) {
-			c2l(in,tin0);
-			c2l(in,tin1);
-			tin0^=tout0; tin[0]=tin0;
-			tin1^=tout1; tin[1]=tin1;
-			des_encrypt1((DES_LONG *)tin,schedule,DES_ENCRYPT);
-			tout0=tin[0]; l2c(tout0,out);
-			tout1=tin[1]; l2c(tout1,out);
-		}
-		if (l != -8) {
-			c2ln(in,tin0,tin1,l+8);
-			tin0^=tout0; tin[0]=tin0;
-			tin1^=tout1; tin[1]=tin1;
-			des_encrypt1((DES_LONG *)tin,schedule,DES_ENCRYPT);
-			tout0=tin[0]; l2c(tout0,out);
-			tout1=tin[1]; l2c(tout1,out);
-		}
-		if (retval) {
-			l2c(tout0,retval);
-			l2c(tout1,retval);
-		}
-	} else {
-		c2l(iv,xor0);
-		c2l(iv,xor1);
-		for (l-=8; l>=0; l-=8) {
-			c2l(in,tin0); tin[0]=tin0;
-			c2l(in,tin1); tin[1]=tin1;
-			des_encrypt1((DES_LONG *)tin,schedule,DES_DECRYPT);
-			tout0=tin[0]^xor0;
-			tout1=tin[1]^xor1;
-			l2c(tout0,out);
-			l2c(tout1,out);
-			xor0=tin0;
-			xor1=tin1;
-		}
-		if (l != -8) {
-			c2l(in,tin0); tin[0]=tin0;
-			c2l(in,tin1); tin[1]=tin1;
-			des_encrypt1((DES_LONG *)tin,schedule,DES_DECRYPT);
-			tout0=tin[0]^xor0;
-			tout1=tin[1]^xor1;
-			l2cn(tout0,tout1,out,l+8);
-		/*	xor0=tin0;
-			xor1=tin1; */
-		}
-		if (retval) {
-			l2c(tin0,retval);
-			l2c(tin1,retval);
-		}
+	ctx->type = ki->type;
+	switch (ki->type) {
+	case NFS_GSS_1DES:	MD5_DESCBC_Init(&ctx->m_ctx, &ki->ks_u.des.gss_sched);
+				break;
+	case NFS_GSS_3DES:	HMAC_SHA1_DES3KD_Init(&ctx->h_ctx, ki->ks_u.des3.ckey, 0);
+				break;
+	default:
+			printf("gss_digest_Init: Unknown key info type %d\n", ki->type);
 	}
-	tin0=tin1=tout0=tout1=xor0=xor1=0;
-	tin[0]=tin[1]=0;
 }
+
+static void
+gss_digest_Update(GSS_DIGEST_CTX *ctx, void *data, size_t len)
+{
+	switch (ctx->type) {
+	case NFS_GSS_1DES:	MD5_DESCBC_Update(&ctx->m_ctx, data, len);
+				break;
+	case NFS_GSS_3DES:	HMAC_SHA1_DES3KD_Update(&ctx->h_ctx, data, len);
+				break;
+	}
+}
+
+static void
+gss_digest_Final(GSS_DIGEST_CTX *ctx, void *digest)
+{
+	switch (ctx->type) {
+	case NFS_GSS_1DES:	MD5_DESCBC_Final(digest, &ctx->m_ctx);
+				break;
+	case NFS_GSS_3DES:	HMAC_SHA1_DES3KD_Final(digest, &ctx->h_ctx);
+				break;
+	}
+}
+
+static void
+gss_des_crypt(gss_key_info *ki, des_cblock *in, des_cblock *out,
+		int32_t len, des_cblock *iv, des_cblock *retiv, int encrypt, int usage)
+{
+	switch (ki->type) {
+	case NFS_GSS_1DES:
+			{
+				des_key_schedule *sched = ((usage == KG_USAGE_SEAL) ?
+							&ki->ks_u.des.gss_sched_Ke :
+							&ki->ks_u.des.gss_sched);
+				des_cbc_encrypt(in, out, len, *sched, iv, retiv, encrypt); 
+			}
+			break;
+	case NFS_GSS_3DES:
+
+			des3_cbc_encrypt(in, out, len, ki->ks_u.des3.gss_sched, iv, retiv, encrypt);
+			break;
+	}
+}
+
+static int
+gss_key_init(gss_key_info *ki, uint32_t skeylen)
+{
+	size_t i;
+	int rc;
+	des_cblock k[3];
+
+	ki->keybytes = skeylen;
+	switch (skeylen) {
+	case sizeof(des_cblock):
+				ki->type = NFS_GSS_1DES;
+				ki->hash_len = MD5_DESCBC_DIGEST_LENGTH;
+				ki->ks_u.des.key = (des_cblock *)ki->skey;
+				rc = des_key_sched(ki->ks_u.des.key, ki->ks_u.des.gss_sched);
+				if (rc)
+					return (rc);
+				for (i = 0; i < ki->keybytes; i++)
+					k[0][i] = 0xf0 ^ (*ki->ks_u.des.key)[i];
+				rc = des_key_sched(&k[0], ki->ks_u.des.gss_sched_Ke);
+				break;
+	case 3*sizeof(des_cblock):	
+				ki->type = NFS_GSS_3DES;
+				ki->hash_len = SHA_DIGEST_LENGTH;
+				ki->ks_u.des3.key = (des_cblock (*)[3])ki->skey;
+				des3_derive_key(*ki->ks_u.des3.key, ki->ks_u.des3.ckey,
+						KEY_USAGE_DES3_SIGN, KEY_USAGE_LEN);
+ 				rc = des3_key_sched(*ki->ks_u.des3.key, ki->ks_u.des3.gss_sched);
+				if (rc)
+					return (rc);
+				break;
+	default:
+				printf("gss_key_init: Invalid key length %d\n", skeylen);
+				rc = EINVAL;
+				break;
+	}
+	
+	return (rc);
+}
+
+#if 0
+#define DISPLAYLEN 16
+#define MAXDISPLAYLEN 256
+
+static void
+hexdump(const char *msg, void *data, size_t len)
+{
+	size_t i, j;
+	u_char *d = data;
+	char *p, disbuf[3*DISPLAYLEN+1];
+	
+	printf("NFS DEBUG %s len=%d:\n", msg, (uint32_t)len);
+	if (len > MAXDISPLAYLEN)
+		len = MAXDISPLAYLEN;
+
+	for (i = 0; i < len; i += DISPLAYLEN) {
+		for (p = disbuf, j = 0; (j + i) < len && j < DISPLAYLEN; j++, p += 3)
+			snprintf(p, 4, "%02x ", d[i + j]);
+		printf("\t%s\n", disbuf);
+	}
+}
+#endif

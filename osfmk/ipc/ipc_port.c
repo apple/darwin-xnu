@@ -102,8 +102,10 @@
 
 #include <string.h>
 
-decl_mutex_data(,	ipc_port_multiple_lock_data)
-decl_mutex_data(,	ipc_port_timestamp_lock_data)
+decl_lck_mtx_data(,	ipc_port_multiple_lock_data)
+decl_lck_mtx_data(,	ipc_port_timestamp_lock_data)
+lck_mtx_ext_t	ipc_port_multiple_lock_data_ext;
+lck_mtx_ext_t	ipc_port_timestamp_lock_data_ext;
 ipc_port_timestamp_t	ipc_port_timestamp_data;
 
 #if	MACH_ASSERT
@@ -471,6 +473,7 @@ ipc_port_init(
 
 	port->ip_pset_count = 0;
 	port->ip_premsg = IKM_NULL;
+	port->ip_context = 0;
 
 #if	MACH_ASSERT
 	ipc_port_init_debug(port);
@@ -989,7 +992,7 @@ ipc_port_copyout_send(
 				name = MACH_PORT_NULL;
 		}
 	} else
-		name = (mach_port_name_t) sright;
+		name = CAST_MACH_PORT_TO_NAME(sright);
 
 	return name;
 }
@@ -1206,7 +1209,8 @@ ipc_port_dealloc_special(
  *	deallocation is intercepted via io_free.
  */
 queue_head_t	port_alloc_queue;
-decl_mutex_data(,port_alloc_queue_lock)
+decl_lck_mtx_data(,port_alloc_queue_lock)
+lck_mtx_ext_t	port_alloc_queue_lock_ext;
 
 unsigned long	port_count = 0;
 unsigned long	port_count_warning = 20000;
@@ -1230,7 +1234,7 @@ void
 ipc_port_debug_init(void)
 {
 	queue_init(&port_alloc_queue);
-	mutex_init(&port_alloc_queue_lock, 0);
+	lck_mtx_init_ext(&port_alloc_queue_lock, &port_alloc_queue_lock_ext, &ipc_lck_grp, &ipc_lck_attr);
 }
 
 
@@ -1259,12 +1263,12 @@ ipc_port_init_debug(
 	machine_callstack(&port->ip_callstack[0], IP_CALLSTACK_MAX);
 
 #if 0
-	mutex_lock(&port_alloc_queue_lock);
+	lck_mtx_lock(&port_alloc_queue_lock);
 	++port_count;
 	if (port_count_warning > 0 && port_count >= port_count_warning)
 		assert(port_count < port_count_warning);
 	queue_enter(&port_alloc_queue, port, ipc_port_t, ip_port_links);
-	mutex_unlock(&port_alloc_queue_lock);
+	lck_mtx_unlock(&port_alloc_queue_lock);
 #endif
 }
 
@@ -1285,11 +1289,11 @@ void
 ipc_port_track_dealloc(
 	ipc_port_t		port)
 {
-	mutex_lock(&port_alloc_queue_lock);
+	lck_mtx_lock(&port_alloc_queue_lock);
 	assert(port_count > 0);
 	--port_count;
 	queue_remove(&port_alloc_queue, port, ipc_port_t, ip_port_links);
-	mutex_unlock(&port_alloc_queue_lock);
+	lck_mtx_unlock(&port_alloc_queue_lock);
 }
 #endif
 

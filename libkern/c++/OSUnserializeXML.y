@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -100,10 +100,9 @@ typedef struct parser_state {
 
 #undef yyerror 	
 #define yyerror(s)	OSUnserializeerror(STATE, (s))
-static int		OSUnserializeerror(parser_state_t *state, char *s);
+static int		OSUnserializeerror(parser_state_t *state, const char *s);
 
 static int		yylex(YYSTYPE *lvalp, parser_state_t *state);
-static int		yyparse(void * state);
 
 static object_t 	*newObject(parser_state_t *state);
 static void 		freeObject(parser_state_t *state, object_t *o);
@@ -123,10 +122,6 @@ extern "C" {
 extern void		*kern_os_malloc(size_t size);
 extern void		*kern_os_realloc(void * addr, size_t size);
 extern void		kern_os_free(void * addr);
-
-//XXX shouldn't have to define these
-extern long		strtol(const char *, char **, int);
-extern unsigned long	strtoul(const char *, char **, int);
 
 } /* extern "C" */
 
@@ -255,15 +250,14 @@ string:	  STRING
 %%
 
 int
-OSUnserializeerror(parser_state_t * state, char *s)  /* Called by yyparse on errors */
+OSUnserializeerror(parser_state_t * state, const char *s)  /* Called by yyparse on errors */
 {
-    char tempString[128];
-
     if (state->errorString) {
+	char tempString[128];
 	snprintf(tempString, 128, "OSUnserializeXML: %s near line %d\n", s, state->lineNumber);
 	*(state->errorString) = OSString::withCString(tempString);
     }
-
+    
     return 0;
 }
 
@@ -273,7 +267,7 @@ OSUnserializeerror(parser_state_t * state, char *s)  /* Called by yyparse on err
 #define TAG_START		1
 #define TAG_END			2
 #define TAG_EMPTY		3
-#define TAG_COMMENT		4
+#define TAG_IGNORE		4
 
 #define currentChar()	(state->parseBuffer[state->parseBufferIndex])
 #define nextChar()	(state->parseBuffer[++state->parseBufferIndex])
@@ -302,16 +296,50 @@ getTag(parser_state_t *state,
 	if (c != '<') return TAG_BAD;
         c = nextChar();		// skip '<'
 
-        if (c == '?' || c == '!') {
-                while ((c = nextChar()) != 0) {
-                        if (c == '\n') state->lineNumber++;
-                        if (c == '>') {
-                                (void)nextChar();
-                                return TAG_COMMENT;
-                        }
-                }
-        }
 
+	// <!TAG   declarations     >
+	// <!--     comments      -->
+        if (c == '!') {
+	    c = nextChar();  
+	    bool isComment = (c == '-') && ((c = nextChar()) != 0) && (c == '-');
+	    if (!isComment && !isAlpha(c)) return TAG_BAD;   // <!1, <!-A, <!eos
+
+	    while (c && (c = nextChar()) != 0) {
+		if (c == '\n') state->lineNumber++;
+		if (isComment) {
+		    if (c != '-') continue;
+		    c = nextChar();
+		    if (c != '-') continue;
+		    c = nextChar();
+		}
+		if (c == '>') {
+		    (void)nextChar();
+		    return TAG_IGNORE;
+		}
+		if (isComment) break;
+	    }
+	    return TAG_BAD;
+	}
+
+	else
+
+	// <? Processing Instructions  ?>
+        if (c == '?') {
+	    while ((c = nextChar()) != 0) {
+		if (c == '\n') state->lineNumber++;
+		if (c != '?') continue;
+		c = nextChar();
+		if (c == '>') {
+		    (void)nextChar();
+		    return TAG_IGNORE;
+		}
+	    }
+	    return TAG_BAD;
+	}
+
+	else
+
+	// </ end tag >    
 	if (c == '/') {
 		c = nextChar();		// skip '/'
 		tagType = TAG_END;
@@ -646,7 +674,7 @@ yylex(YYSTYPE *lvalp, parser_state_t *state)
 
 	tagType = getTag(STATE, tag, &attributeCount, attributes, values);
 	if (tagType == TAG_BAD) return SYNTAX_ERROR;
-	if (tagType == TAG_COMMENT) goto top;
+	if (tagType == TAG_IGNORE) goto top;
 
 	// handle allocation and check for "ID" and "IDREF" tags up front
 	*lvalp = object = newObject(STATE);
@@ -1049,7 +1077,7 @@ buildNumber(parser_state_t *state, object_t *o)
 };
 
 object_t *
-buildBoolean(parser_state_t *state, object_t *o)
+buildBoolean(parser_state_t *state __unused, object_t *o)
 {
 	o->object = ((o->number == 0) ? kOSBooleanFalse : kOSBooleanTrue);
 	o->object->retain();

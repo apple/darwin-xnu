@@ -1,3 +1,26 @@
+.\"
+.\" Copyright (c) 2008 Apple Inc.  All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this
+.\" file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.\"
 .\" Copyright (c) 2000 Jonathan Lemon
 .\" All rights reserved.
 .\"
@@ -24,12 +47,14 @@
 .\"
 .\" $FreeBSD: src/lib/libc/sys/kqueue.2,v 1.32 2002/12/19 09:40:25 ru Exp $
 .\"
-.Dd April 14, 2000
+.Dd October 21, 2008
 .Dt KQUEUE 2
 .Os
 .Sh NAME
 .Nm kqueue ,
-.Nm kevent
+.Nm kevent ,
+and
+.Nm kevent64
 .Nd kernel event notification mechanism
 .Sh LIBRARY
 .Lb libc
@@ -41,7 +66,10 @@
 .Fn kqueue "void"
 .Ft int
 .Fn kevent "int kq" "const struct kevent *changelist" "int nchanges" "struct kevent *eventlist" "int nevents" "const struct timespec *timeout"
+.Ft int
+.Fn kevent64 "int kq" "const struct kevent64_s *changelist" "int nchanges" "struct kevent64_s *eventlist" "int nevents" "unsigned int flags" "const struct timespec *timeout"
 .Fn EV_SET "&kev" ident filter flags fflags data udata
+.Fn EV_SET64 "&kev" ident filter flags fflags data udata "ext[0]" "ext[1]"
 .Sh DESCRIPTION
 The
 .Fn kqueue
@@ -51,7 +79,7 @@ event (kevent) happens or a condition holds, based on the results
 of small pieces of kernel code termed filters.
 A kevent is identified by an (ident, filter) pair and specifies
 the interesting conditions to be notified about for that pair. 
-An (ident, filter) pair can only appear once is a given kqueue.
+An (ident, filter) pair can only appear once in a given kqueue.
 Subsequent attempts to register the same pair for a given kqueue
 will result in the replacement of the conditions being watched,
 not an addition.
@@ -85,14 +113,18 @@ The queue is not inherited by a child created with
 .Pp
 The
 .Fn kevent
-system call
-is used to register events with the queue, and return any pending
+and
+.Fn kevent64
+system calls
+are used to register events with the queue, and return any pending
 events to the user.
 The
 .Fa changelist
 argument
 is a pointer to an array of
 .Va kevent
+or
+.Va kevent64_s
 structures, as defined in
 .Aq Pa sys/event.h .
 All changes contained in the
@@ -106,7 +138,11 @@ gives the size of
 The
 .Fa eventlist
 argument
-is a pointer to an array of kevent structures.
+is a pointer to an array of 
+.Va kevent
+or
+.Va kevent64_s 
+structures.
 The
 .Fa nevents
 argument
@@ -117,9 +153,11 @@ If
 is a non-NULL pointer, it specifies a maximum interval to wait
 for an event, which will be interpreted as a struct timespec.  If
 .Fa timeout
-is a NULL pointer,
+is a NULL pointer, both
 .Fn kevent
-waits indefinitely.  To effect a poll, the
+and
+.Fn kevent64
+wait indefinitely.  To effect a poll, the
 .Fa timeout
 argument should be non-NULL, pointing to a zero-valued
 .Va timespec
@@ -131,24 +169,46 @@ and
 The
 .Fn EV_SET
 macro is provided for ease of initializing a
-kevent structure.
+.Va kevent
+structure. Similarly, 
+.Fn EV_SET64 
+initializes a
+.Va kevent64_s
+structure.
 .Pp
 The
 .Va kevent
-structure is defined as:
+and
+.Va kevent64_s
+structures are defined as:
 .Bd -literal
 struct kevent {
-	uintptr_t ident;	/* identifier for this event */
-	short	  filter;	/* filter for event */
-	u_short	  flags;	/* action flags for kqueue */
-	u_int	  fflags;	/* filter flag value */
-	intptr_t  data;		/* filter data value */
-	void	  *udata;	/* opaque user data identifier */
+	uintptr_t 	ident;		/* identifier for this event */
+	int16_t		filter;		/* filter for event */
+	uint16_t	flags;		/* general flags */
+	uint32_t	fflags;		/* filter-specific flags */
+	intptr_t  	data;		/* filter-specific data */
+	void		*udata;		/* opaque user data identifier */
+};
+
+
+struct kevent64_s {
+        uint64_t        ident;          /* identifier for this event */
+	int16_t         filter;         /* filter for event */
+	uint16_t        flags;          /* general flags */
+	uint32_t        fflags;         /* filter-specific flags */
+	int64_t         data;           /* filter-specific data */
+	uint64_t        udata;          /* opaque user data identifier */
+	uint64_t        ext[2];         /* filter-specific extensions */
 };
 .Ed
 .Pp
+----
+.Pp
 The fields of
 .Fa struct kevent
+and
+.Fa struct kevent64_s
 are:
 .Bl -tag -width XXXfilter
 .It ident
@@ -168,6 +228,17 @@ Filter-specific data value.
 Opaque user-defined value passed through the kernel unchanged.
 .El
 .Pp
+In addition,
+.Fa struct kevent64_s
+contains:
+.Bl -tag -width XXXfilter
+.It ext[2]
+This field stores extensions for the event's filter. What type of extension depends on 
+what type of filter is being used.
+.El
+.Pp
+----
+.Pp
 The
 .Va flags
 field can contain the following values:
@@ -180,10 +251,14 @@ unless overridden by the EV_DISABLE flag.
 .It EV_ENABLE
 Permit
 .Fn kevent
+and
+.Fn kevent64
 to return the event if it is triggered.
 .It EV_DISABLE
 Disable the event so
 .Fn kevent
+and
+.Fn kevent64
 will not return it.  The filter itself is not disabled.
 .It EV_DELETE
 Removes the event from the kqueue.  Events which are attached to
@@ -212,13 +287,19 @@ See
 below.
 .El
 .Pp
+----
+.Pp
 The predefined system filters are listed below.
 Arguments may be passed to and from the filter via the
 .Va fflags
 and
 .Va data
-fields in the kevent structure.
-.Bl -tag -width EVFILT_SIGNAL
+fields in the
+.Va kevent
+or
+.Va kevent64_s
+structure.
+.Bl -tag -width EVFILT_MACHPORT
 .It EVFILT_READ
 Takes a file descriptor as the identifier, and returns whenever
 there is data available to read.
@@ -349,7 +430,7 @@ in
 and returns when the process performs one or more of the requested events.
 If a process can normally see another process, it can attach an event to it.
 The events to monitor are:
-.Bl -tag -width 
+.Bl -tag -width NOTE_SIGNAL 
 .It NOTE_EXIT
 The process has exited.
 .It NOTE_FORK
@@ -375,33 +456,114 @@ On return,
 contains the events which triggered the filter.
 .It EVFILT_SIGNAL
 Takes the signal number to monitor as the identifier and returns
-when the given signal is delivered to the process.
+when the given signal is generated for the process.
 This coexists with the
 .Fn signal
 and
 .Fn sigaction
-facilities, and has a lower precedence.  The filter will record
+facilities, and has a lower precedence.  Only signals sent to the process, 
+not to a particular thread, will trigger the filter. The filter will record
 all attempts to deliver a signal to a process, even if the signal has
-been marked as SIG_IGN.  Event notification happens after normal
+been marked as SIG_IGN.  Event notification happens before normal
 signal delivery processing.
 .Va data
-returns the number of times the signal has occurred since the last call to
+returns the number of times the signal has been generated since the last call to
 .Fn kevent .
 This filter automatically sets the EV_CLEAR flag internally.
+.It EVFILT_MACHPORT
+Takes the name of a mach port, or port set, in 
+.Va ident
+and waits until a message is received on the port or port set. When a message 
+is recieved, the size of the message is returned in 
+.Va data 
+and if
+.Va fflags 
+is set to MACH_RCV_MSG, a pointer to the message is returned in ext[0].
 .It EVFILT_TIMER
-This filter is currently unsupported.
-.\"Establishes an arbitrary timer identified by
-.\".Va ident .
-.\"When adding a timer,
-.\".Va data
-.\"specifies the timeout period in milliseconds.
-.\"The timer will be periodic unless EV_ONESHOT is specified.
-.\"On return,
-.\".Va data
-.\"contains the number of times the timeout has expired since the last call to
-.\".Fn kevent .
-.\"This filter automatically sets the EV_CLEAR flag internally.
+Establishes an interval timer with the data
+timer identified by
+.Va ident .
+When adding a timer,
+.Va data
+specifies the timeout period and
+.Va fflags
+can be set to one of the following:
+.Bl -tag -width NOTE_ABSOLUTE
+.It NOTE_SECONDS
+data is in seconds
+.It NOTE_USECONDS
+data is in microseconds
+.It NOTE_NSECONDS
+data is in nanoseconds
+.It NOTE_ABSOLUTE
+data is an absolute timeout
 .El
+.Pp
+If fflags is not set, the default is milliseconds. The timer will be periodic unless EV_ONESHOT is specified.
+On return,
+.Va data
+contains the number of times the timeout has expired since the last call to
+.Fn kevent 
+or
+.Fn kevent64 .
+This filter automatically sets the EV_CLEAR flag internally.
+.It EVFILT_SESSION
+Takes the audit session ID to monitor as the identifier and the events to watch for in 
+.Va fflags ,
+and returns when one or more of the requested session events occurs.  
+To monitor for events for any audit session the value AS_ANY_ASID 
+should be used as the identifier.  With AS_ANY_ASID, as new audit
+sessions are created they are included as if the were added
+individually.  The events to monitor are:
+.Bl -tag -width NOTE_AS_UPDATE
+.It NOTE_AS_START
+A new audit session has started. 
+.It NOTE_AS_END
+All the processes in the audit session have exited.  
+.It NOTE_AS_CLOSE
+This audit session is no longer valid in the kernel.  In other words, it
+is now safe to dispose of any cached information about this session or
+reuse its session ID for a new audit session.
+.It NOTE_AS_UPDATE
+The audit session information was updated.  The audit session information is 
+considered immutable once initially set.  If this becomes enforced in
+the kernel then this event may no longer be needed and may become
+obsolete.
+.It NOTE_AS_ERR
+This flag is returned if the system was unable to attach an event to a
+new session when the audit session ID of AS_ANY_ASID
+is used.  This is usually due to resource limitations.
+.El
+.Pp
+On return, 
+.Va fflags
+contains the events which triggered the filter,
+.Va ident
+contains the audit session ID, and
+.Va data
+contains the audit user ID.
+This filter automatically sets the EV_CLEAR flag internally.
+.El
+.Pp
+----
+.Pp
+In the 
+.Va ext[2]
+field of the
+.Va kevent64_s
+struture, 
+.Va ext[0] 
+is only used with the EVFILT_MACHPORT filter.
+With other filters, 
+.Va ext[0]
+is passed through
+.Fn kevent64
+much like
+.Va udata .
+.Va ext[1]
+can always be used like
+.Va udata .
+For the use of ext[0], see the EVFILT_MACHPORT filter above.
 .Sh RETURN VALUES
 The
 .Fn kqueue
@@ -412,8 +574,10 @@ returned and errno set.
 .Pp
 The
 .Fn kevent
-system call
-returns the number of events placed in the
+and
+.Fn kevent64
+system calls
+return the number of events placed in the
 .Fa eventlist ,
 up to the value given by
 .Fa nevents .
@@ -436,7 +600,9 @@ will be returned, and
 will be set to indicate the error condition.
 If the time limit expires, then
 .Fn kevent
-returns 0.
+and
+.Fn kevent64
+return 0.
 .Sh ERRORS
 The
 .Fn kqueue
@@ -452,13 +618,17 @@ The system file table is full.
 .Pp
 The
 .Fn kevent
-system call fails if:
+and
+.Fn kevent64
+system calls fail if:
 .Bl -tag -width Er
 .It Bq Er EACCES
 The process does not have permission to register a filter.
 .It Bq Er EFAULT
 There was an error reading or writing the
 .Va kevent
+or
+.Va kevent64_s
 structure.
 .It Bq Er EBADF
 The specified descriptor is invalid.

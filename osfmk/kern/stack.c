@@ -71,22 +71,52 @@ static unsigned int		stack_new_count;						/* total new stack allocations */
 
 static vm_offset_t		stack_addr_mask;
 
+unsigned int			kernel_stack_pages = KERNEL_STACK_SIZE / PAGE_SIZE;
+vm_offset_t			kernel_stack_size = KERNEL_STACK_SIZE;
+vm_offset_t			kernel_stack_mask = -KERNEL_STACK_SIZE;
+vm_offset_t			kernel_stack_depth_max = 0;
+
 /*
  *	The next field is at the base of the stack,
  *	so the low end is left unsullied.
  */
 #define stack_next(stack)	\
-			(*((vm_offset_t *)((stack) + KERNEL_STACK_SIZE) - 1))
+	(*((vm_offset_t *)((stack) + kernel_stack_size) - 1))
+
+static inline int
+log2(vm_offset_t size)
+{
+	int	result;
+	for (result = 0; size > 0; result++)
+		size >>= 1;
+	return result;
+}
+
+static inline vm_offset_t
+roundup_pow2(vm_offset_t size)
+{
+	return 1UL << (log2(size - 1) + 1); 
+}
 
 void
 stack_init(void)
 {
 	simple_lock_init(&stack_lock_data, 0);
 	
-	if (KERNEL_STACK_SIZE < round_page(KERNEL_STACK_SIZE))
-		panic("stack_init: stack size %d not a multiple of page size %d\n",	KERNEL_STACK_SIZE, PAGE_SIZE);
+	if (PE_parse_boot_argn("kernel_stack_pages",
+			       &kernel_stack_pages,
+			       sizeof (kernel_stack_pages))) {
+		kernel_stack_size = kernel_stack_pages * PAGE_SIZE;
+		printf("stack_init: kernel_stack_pages=%d kernel_stack_size=%p\n",
+			kernel_stack_pages, (void *) kernel_stack_size);
+	}
+
+	if (kernel_stack_size < round_page(kernel_stack_size))
+		panic("stack_init: stack size %p not a multiple of page size %d\n",
+			(void *) kernel_stack_size, PAGE_SIZE);
 	
-	stack_addr_mask = KERNEL_STACK_SIZE - 1;
+	stack_addr_mask = roundup_pow2(kernel_stack_size) - 1;
+	kernel_stack_mask = ~stack_addr_mask;
 }
 
 /*
@@ -131,7 +161,7 @@ stack_alloc(
 
 		guard_flags = KMA_GUARD_FIRST | KMA_GUARD_LAST;
 		if (kernel_memory_allocate(kernel_map, &stack,
-					   KERNEL_STACK_SIZE + (2*PAGE_SIZE),
+					   kernel_stack_size + (2*PAGE_SIZE),
 					   stack_addr_mask,
 					   KMA_KOBJECT | guard_flags)
 		    != KERN_SUCCESS)
@@ -271,12 +301,12 @@ stack_collect(void)
 			 * back in stack_alloc().
 			 */
 
-			stack = vm_map_trunc_page(stack);
+			stack = (vm_offset_t)vm_map_trunc_page(stack);
 			stack -= PAGE_SIZE;
 			if (vm_map_remove(
 				    kernel_map,
 				    stack,
-				    stack + KERNEL_STACK_SIZE+(2*PAGE_SIZE),
+				    stack + kernel_stack_size+(2*PAGE_SIZE),
 				    VM_MAP_REMOVE_KUNWIRE)
 			    != KERN_SUCCESS)
 				panic("stack_collect: vm_map_remove");
@@ -345,10 +375,10 @@ stack_fake_zone_info(int *count, vm_size_t *cur_size, vm_size_t *max_size, vm_si
 	splx(s);
 
 	*count      = total - free;
-	*cur_size   = KERNEL_STACK_SIZE * total;
-	*max_size   = KERNEL_STACK_SIZE * hiwat;
-	*elem_size  = KERNEL_STACK_SIZE;
-	*alloc_size = KERNEL_STACK_SIZE;
+	*cur_size   = kernel_stack_size * total;
+	*max_size   = kernel_stack_size * hiwat;
+	*elem_size  = kernel_stack_size;
+	*alloc_size = kernel_stack_size;
 	*collectable = 1;
 	*exhaustable = 0;
 }
@@ -399,7 +429,7 @@ processor_set_stack_usage(
 	addr = NULL;
 
 	for (;;) {
-		mutex_lock(&tasks_threads_lock);
+		lck_mtx_lock(&tasks_threads_lock);
 
 		actual = threads_count;
 
@@ -409,7 +439,7 @@ processor_set_stack_usage(
 		if (size_needed <= size)
 			break;
 
-		mutex_unlock(&tasks_threads_lock);
+		lck_mtx_unlock(&tasks_threads_lock);
 
 		if (size != 0)
 			kfree(addr, size);
@@ -432,7 +462,7 @@ processor_set_stack_usage(
 	}
 	assert(i <= actual);
 
-	mutex_unlock(&tasks_threads_lock);
+	lck_mtx_unlock(&tasks_threads_lock);
 
 	/* calculate maxusage and free thread references */
 
@@ -452,7 +482,7 @@ processor_set_stack_usage(
 		kfree(addr, size);
 
 	*totalp = total;
-	*residentp = *spacep = total * round_page(KERNEL_STACK_SIZE);
+	*residentp = *spacep = total * round_page(kernel_stack_size);
 	*maxusagep = maxusage;
 	*maxstackp = maxstack;
 	return KERN_SUCCESS;
@@ -462,10 +492,10 @@ processor_set_stack_usage(
 
 vm_offset_t min_valid_stack_address(void)
 {
-	return vm_map_min(kernel_map);
+	return (vm_offset_t)vm_map_min(kernel_map);
 }
 
 vm_offset_t max_valid_stack_address(void)
 {
-	return vm_map_max(kernel_map);
+	return (vm_offset_t)vm_map_max(kernel_map);
 }

@@ -160,20 +160,20 @@ dlil_send_arp(
 int dlil_attach_filter(ifnet_t ifp, const struct iff_filter *if_filter,
 					   interface_filter_t *filter_ref);
 void dlil_detach_filter(interface_filter_t filter);
-int dlil_detach_protocol(ifnet_t ifp, u_long protocol);
+int dlil_detach_protocol(ifnet_t ifp, u_int32_t protocol);
 extern void dlil_proto_unplumb_all(ifnet_t);
 
 #endif /* BSD_KERNEL_PRIVATE */
 
 void
-dlil_post_msg(struct ifnet *ifp,u_long event_subclass, u_long event_code, 
-		   struct net_event_data *event_data, u_long event_data_len);
+dlil_post_msg(struct ifnet *ifp,u_int32_t event_subclass, u_int32_t event_code, 
+		   struct net_event_data *event_data, u_int32_t event_data_len);
 
 /* 
  * dlil_if_acquire is obsolete. Use ifnet_allocate.
  */
 
-int dlil_if_acquire(u_long family, const void *uniqueid, size_t uniqueid_len, 
+int dlil_if_acquire(u_int32_t family, const void *uniqueid, size_t uniqueid_len, 
 			struct ifnet **ifp);
 			
 

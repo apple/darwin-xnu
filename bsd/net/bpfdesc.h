@@ -100,10 +100,10 @@ struct bpf_d {
 	int		bd_bufsize;	/* absolute length of buffers */
 
 	struct bpf_if *	bd_bif;		/* interface descriptor */
-	u_long		bd_rtout;	/* Read timeout in 'ticks' */
+	u_int32_t		bd_rtout;	/* Read timeout in 'ticks' */
 	struct bpf_insn *bd_filter; 	/* filter code */
-	u_long		bd_rcount;	/* number of packets received */
-	u_long		bd_dcount;	/* number of packets dropped */
+	u_int32_t		bd_rcount;	/* number of packets received */
+	u_int32_t		bd_dcount;	/* number of packets dropped */
 
 	u_char		bd_promisc;	/* true if listening promiscuously */
 	u_char		bd_state;	/* idle, waiting, or timed out */
@@ -126,6 +126,7 @@ struct bpf_d {
 #endif
 	int		bd_hdrcmplt;	/* false to fill in src lladdr automatically */
 	int		bd_seesent;	/* true if bpf should see sent packets */
+	int		bd_oflags;	/* device open flags */
 #if CONFIG_MACF_NET
 	struct label *	bd_label;	/* MAC label for descriptor */
 #endif

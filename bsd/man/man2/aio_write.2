@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD: src/lib/libc/sys/aio_write.2,v 1.16 2003/01/13 10:37:11 tjr Exp $
 .\"
-.Dd June 2, 1999
+.Dd September 18, 2008
 .Dt AIO_WRITE 2
 .Os
 .Sh NAME
@@ -153,11 +153,22 @@ is invalid, or is not opened for writing.
 .It Bq Er EINVAL
 The offset
 .Fa aiocbp->aio_offset
-is not valid, the priority specified by
+is not valid.
+.\" ==========
+.It Bq Er EINVAL
+The priority specified by
 .Fa aiocbp->aio_reqprio
-is not a valid priority, or the number of bytes specified by
+is not a valid priority.
+.\" ==========
+.It Bq Er EINVAL
+The number of bytes specified by
 .Fa aiocbp->aio_nbytes
 is not valid.
+.\" ==========
+.It Bq Er EINVAL
+The constant in
+.Fa aiocbp->aio_sigevent.sigev_notify
+is set to SIGEV_THREAD (SIGEV_THREAD is not supported).
 .El
 .Pp
 If the request is successfully enqueued, but subsequently canceled
@@ -181,11 +192,6 @@ is invalid for writing.
 .It Bq Er ECANCELED
 The request was explicitly canceled via a call to
 .Fn aio_cancel .
-.\" ==========
-.It Bq Er EINVAL
-The offset
-.Fa aiocbp->aio_offset
-would be invalid.
 .El
 .Sh SEE ALSO
 .Xr aio_cancel 2 ,

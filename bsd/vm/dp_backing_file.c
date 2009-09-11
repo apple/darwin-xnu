@@ -47,7 +47,7 @@
 #include <default_pager/default_pager_types.h>
 #include <default_pager/default_pager_object.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 #include <bsm/audit_kevents.h>
 
 #include <mach/mach_types.h>
@@ -154,6 +154,57 @@ backing_store_suspend_return:
 	return(error);
 }
 
+extern boolean_t backing_store_stop_compaction;
+
+/*
+ *	Routine:	macx_backing_store_compaction
+ *	Function:
+ *		Turn compaction of swap space on or off.  This is
+ *		used during shutdown/restart so	that the kernel 
+ *		doesn't waste time compacting swap files that are 
+ *		about to be deleted anyway.  Compaction	is always 
+ *		on by default when the system comes up and is turned 
+ *		off when a shutdown/restart is requested.  It is 
+ *		re-enabled if the shutdown/restart is aborted for any reason.
+ */
+
+int
+macx_backing_store_compaction(int flags)
+{
+	int error;
+
+	if ((error = suser(kauth_cred_get(), 0)))
+		return error;
+
+	if (flags & SWAP_COMPACT_DISABLE) {
+		backing_store_stop_compaction = TRUE;
+
+	} else if (flags & SWAP_COMPACT_ENABLE) {
+		backing_store_stop_compaction = FALSE;
+	}
+
+	return 0;
+}
+
+/*
+ *	Routine:	macx_triggers
+ *	Function:
+ *		Syscall interface to set the call backs for low and
+ *		high water marks.
+ */
+int
+macx_triggers(
+	struct macx_triggers_args *args)
+{
+	int	error;
+
+	error = suser(kauth_cred_get(), 0);
+	if (error)
+		return error;
+
+	return mach_macx_triggers(args);
+}
+
 /*
  *	Routine:	macx_swapon
  *	Function:
@@ -177,7 +228,7 @@ macx_swapon(
 	struct proc		*p =  current_proc();
 
 	AUDIT_MACH_SYSCALL_ENTER(AUE_SWAPON);
-	AUDIT_ARG(value, args->priority);
+	AUDIT_ARG(value32, args->priority);
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	ndp = &nd;
@@ -195,7 +246,7 @@ macx_swapon(
 	 */
 	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
 	       ((IS_64BIT_PROCESS(p)) ? UIO_USERSPACE64 : UIO_USERSPACE32),
-	       CAST_USER_ADDR_T(args->filename), ctx);
+	       (user_addr_t) args->filename, ctx);
 
 	if ((error = namei(ndp)))
 		goto swapon_bailout;
@@ -261,6 +312,11 @@ macx_swapon(
 	   goto swapon_bailout;
 	}
 
+	/* Mark this vnode as being used for swapfile */
+	vnode_lock_spin(vp);
+	SET(vp->v_flag, VSWAP);
+	vnode_unlock(vp);
+
 	/*
 	 * NOTE: we are able to supply PAGE_SIZE here instead of
 	 *	an actual record size or block number because:
@@ -277,13 +333,16 @@ macx_swapon(
 		error = EINVAL;
 	   else 
 		error = ENOMEM;
+
+	   /* This vnode is not to be used for swapfile */
+	   vnode_lock_spin(vp);
+	   CLR(vp->v_flag, VSWAP);
+	   vnode_unlock(vp);
+
 	   goto swapon_bailout;
 	}
 	bs_port_table[i].bs = (void *)backing_store;
 	error = 0;
-
-	/* Mark this vnode as being used for swapfile */
-	SET(vp->v_flag, VSWAP);
 
 	ubc_setthreadcred(vp, p, current_thread());
 
@@ -337,7 +396,7 @@ macx_swapoff(
 	 */
 	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
 	       ((IS_64BIT_PROCESS(p)) ? UIO_USERSPACE64 : UIO_USERSPACE32),
-	       CAST_USER_ADDR_T(args->filename), ctx);
+	       (user_addr_t) args->filename, ctx);
 
 	if ((error = namei(ndp)))
 		goto swapoff_bailout;
@@ -373,7 +432,9 @@ macx_swapoff(
 			error = 0;
 			bs_port_table[i].vp = 0;
 			/* This vnode is no longer used for swapfile */
+			vnode_lock_spin(vp);
 			CLR(vp->v_flag, VSWAP);
+			vnode_unlock(vp);
 
 			/* get rid of macx_swapon() "long term" reference */
 			vnode_rele(vp);

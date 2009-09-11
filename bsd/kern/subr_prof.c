@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -62,7 +62,7 @@
  */
 
 #ifdef GPROF
-#include <kern/mach_header.h>
+#include <libkern/kernel_mach_header.h>
 #endif
 
 #include <sys/param.h>
@@ -106,13 +106,13 @@ struct gmonparam _gmonparam = { .state = GMON_PROF_OFF };
 void
 kmstartup(void)
 {
-	char *cp;
-	struct segment_command	*sgp;	/* 32 bit mach object file segment */
+	tostruct_t *cp;
+	kernel_segment_command_t	*sgp;	/* 32 bit mach object file segment */
 	struct gmonparam *p = &_gmonparam;
 	
 	sgp = getsegbyname("__TEXT");
-	p->lowpc = (u_long)sgp->vmaddr;
-	p->highpc = (u_long)(sgp->vmaddr + sgp->vmsize);
+	p->lowpc = (u_int32_t)sgp->vmaddr;
+	p->highpc = (u_int32_t)(sgp->vmaddr + sgp->vmsize);
 	
 	/*
 	 * Round lowpc and highpc to multiples of the density we're using
@@ -131,18 +131,18 @@ kmstartup(void)
 		p->tolimit = MINARCS;
 	else if (p->tolimit > MAXARCS)
 		p->tolimit = MAXARCS;
-	p->tossize = p->tolimit * sizeof(struct tostruct);
+	p->tossize = p->tolimit * sizeof(tostruct_t);
 	/* Why not use MALLOC with M_GPROF ? */
-	cp = (char *)kalloc(p->kcountsize + p->fromssize + p->tossize);
+	cp = (tostruct_t *)kalloc(p->kcountsize + p->fromssize + p->tossize);
 	if (cp == 0) {
 		printf("No memory for profiling.\n");
 		return;
 	}
 	bzero(cp, p->kcountsize + p->tossize + p->fromssize);
-	p->tos = (struct tostruct *)cp;
-	cp += p->tossize;
+	p->tos = cp;
+	cp = (tostruct_t *)((vm_offset_t)cp + p->tossize);
 	p->kcount = (u_short *)cp;
-	cp += p->kcountsize;
+	cp = (tostruct_t *)((vm_offset_t)cp + p->kcountsize);
 	p->froms = (u_short *)cp;
 	
 	mcount_lock_grp = lck_grp_alloc_init("MCOUNT", LCK_GRP_ATTR_NULL);
@@ -198,12 +198,12 @@ sysctl_doprof(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
  */
 void
 mcount(
-    u_long frompc,
-    u_long selfpc
+    uintptr_t frompc,
+    uintptr_t selfpc
 )
 {
     unsigned short *frompcindex;
-	struct tostruct *top, *prevtop;
+	tostruct_t *top, *prevtop;
 	struct gmonparam *p = &_gmonparam;
 	long toindex;
 
@@ -312,178 +312,29 @@ overflow:
 #define PROFILE_LOCK(x)
 #define PROFILE_UNLOCK(x)
 
-static int profil_funneled(struct proc *p, struct profil_args *uap, register_t *retval);
-static int add_profil_funneled(struct proc *p, struct add_profil_args *uap, register_t *retval);
-
 
 int
-profil(struct proc *p, struct profil_args *uap, register_t *retval)
+profil(struct proc *p, struct profil_args *uap, int32_t *retval)
 {
-	boolean_t funnel_state;
-	int error;
+	void *tmp;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-	error = profil_funneled(p, uap, retval);
-	thread_funnel_set(kernel_flock, funnel_state);
-	return(error);
-}
+	tmp = p;
+	tmp = uap;
+	tmp = retval;
 
-static int
-profil_funneled(struct proc *p, struct profil_args *uap, __unused register_t *retval)
-{
-        struct uprof *upp = &p->p_stats->p_prof;
-	int s;
-
-	if (uap->pcscale > (1 << 16))
-		return (EINVAL);
-
-	if (uap->pcscale == 0) {
-		stopprofclock(p);
-		return (0);
-	}
-	/*
-	 * Block profile interrupts while changing state.
-	 */
-	s = ml_set_interrupts_enabled(FALSE);	
-
-	if (proc_is64bit(p)) {
-	        struct user_uprof *user_upp = &p->p_stats->user_p_prof;
-		struct user_uprof *upc, *nupc;
-	
-		PROFILE_LOCK(&user_upp->pr_lock);
-
-		user_upp->pr_base = uap->bufbase;
-		user_upp->pr_size = uap->bufsize;
-		user_upp->pr_off = uap->pcoffset;
-		user_upp->pr_scale = uap->pcscale;
-		upp->pr_base = NULL;
-		upp->pr_size = 0;
-		upp->pr_scale = 0;
-
-		/*
-		 * remove buffers previously allocated with add_profil()
-		 * don't do the kfree's while interrupts disabled
-		 */
-		upc = user_upp->pr_next;
-		user_upp->pr_next = 0;
-
-		PROFILE_UNLOCK(&user_upp->pr_lock);
-
-		startprofclock(p);
-		ml_set_interrupts_enabled(s);
-
-		while (upc) {
-		        nupc = upc->pr_next;
-			kfree(upc, sizeof (*upc));
-			upc = nupc;
-		}
-
-	} else {
-	        struct uprof *upc, *nupc;
-	    
-		PROFILE_LOCK(&upp->pr_lock);
-
-		upp->pr_base = CAST_DOWN(caddr_t, uap->bufbase);
-		upp->pr_size = uap->bufsize;
-		upp->pr_off = uap->pcoffset;
-		upp->pr_scale = uap->pcscale;
-
-		/*
-		 * remove buffers previously allocated with add_profil()
-		 * don't do the kfree's while interrupts disabled
-		 */
-		upc = upp->pr_next;
-		upp->pr_next = 0;
-
-		PROFILE_UNLOCK(&upp->pr_lock);
-
-		startprofclock(p);
-		ml_set_interrupts_enabled(s);
-
-		while (upc) {
-		        nupc = upc->pr_next;
-			kfree(upc, sizeof (struct uprof));
-			upc = nupc;
-		}
-	}
-	return(0);
+	return EINVAL;
 }
 
 int
-add_profil(struct proc *p, struct add_profil_args *uap, register_t *retval)
+add_profil(struct proc *p, struct add_profil_args *uap, int32_t *retval)
 {
-	boolean_t funnel_state;
-	int error;
+	void *tmp;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-	error = add_profil_funneled(p, uap, retval);
-	thread_funnel_set(kernel_flock, funnel_state);
-	return(error);
-}
+	tmp = p;
+	tmp = uap;
+	tmp = retval;
 
-
-static int
-add_profil_funneled(struct proc *p, struct add_profil_args *uap, __unused register_t *retval)
-{
-	struct uprof *upp = &p->p_stats->p_prof, *upc;
-	struct user_uprof *user_upp = NULL, *user_upc;
-	int s;
-	boolean_t is64bit = proc_is64bit(p);
-
-
-	upc = NULL;
-	user_upc = NULL;
-
-	if (is64bit) {
-	        user_upp = &p->p_stats->user_p_prof;
-
-		if (user_upp->pr_scale == 0)
-		        return (0);
-	}
-	else {
-	        if (upp->pr_scale == 0)
-		        return (0);
-	}
-	if (is64bit) {
-	        user_upc = (struct user_uprof *) kalloc(sizeof (struct user_uprof));
-	        user_upc->pr_base = uap->bufbase;
-		user_upc->pr_size = uap->bufsize;
-		user_upc->pr_off = uap->pcoffset;
-		user_upc->pr_scale = uap->pcscale;
-	} else {
-	        upc = (struct uprof *) kalloc(sizeof (struct uprof));
-	        upc->pr_base = CAST_DOWN(caddr_t, uap->bufbase);
-		upc->pr_size = uap->bufsize;
-		upc->pr_off = uap->pcoffset;
-		upc->pr_scale = uap->pcscale;
-	}
-	s = ml_set_interrupts_enabled(FALSE);	
-    
-	if (is64bit) {
-		PROFILE_LOCK(&user_upp->pr_lock);
-		if (user_upp->pr_scale) {
-		        user_upc->pr_next = user_upp->pr_next;
-			user_upp->pr_next = user_upc;
-			user_upc = NULL;
-		}
-		PROFILE_UNLOCK(&user_upp->pr_lock);
-	} else {
-		PROFILE_LOCK(&upp->pr_lock);
-	        if (upp->pr_scale) {
-		        upc->pr_next = upp->pr_next;
-			upp->pr_next = upc;
-			upc = NULL;
-		}
-		PROFILE_UNLOCK(&upp->pr_lock);
-	}
-	ml_set_interrupts_enabled(s);		
-
-	if (upc)
-	        kfree(upc, sizeof(struct uprof));
-	if (user_upc)
-	        kfree(user_upc, sizeof(struct user_uprof));
-
-	return(0);
+	return EINVAL;
 }
 
 /*
@@ -491,8 +342,9 @@ add_profil_funneled(struct proc *p, struct add_profil_args *uap, __unused regist
  * into the value, and is <= 1.0.  pc is at most 32 bits, so the
  * intermediate result is at most 48 bits.
  */
+//K64todo - this doesn't fit into 64 bit any more, it needs 64+16
 #define PC_TO_INDEX(pc, prof) \
-	((int)(((u_quad_t)((pc) - (prof)->pr_off) * \
+	((user_addr_t)(((u_quad_t)((pc) - (prof)->pr_off) * \
 			(u_quad_t)((prof)->pr_scale)) >> 16) & ~1)
 
 /*
@@ -512,7 +364,7 @@ add_profil_funneled(struct proc *p, struct add_profil_args *uap, __unused regist
 void
 addupc_task(struct proc *p, user_addr_t pc, u_int ticks)
 {
-	u_int off;
+	user_addr_t off;
 	u_short count;
 
 	/* Testing P_PROFIL may be unnecessary, but is certainly safe. */
@@ -544,10 +396,10 @@ addupc_task(struct proc *p, user_addr_t pc, u_int ticks)
         short *cell;
 
         for (prof = &p->p_stats->p_prof; prof; prof = prof->pr_next) {
-            off = PC_TO_INDEX(CAST_DOWN(uint, pc),prof);
+            off = PC_TO_INDEX(pc,prof);
             cell = (short *)(prof->pr_base + off);
             if (cell >= (short *)prof->pr_base &&
-                cell < (short*)(prof->pr_size + (int) prof->pr_base)) {
+                cell < (short*)(prof->pr_size + prof->pr_base)) {
                 if (copyin(CAST_USER_ADDR_T(cell), (caddr_t) &count, sizeof(count)) == 0) {
                     count += ticks;
                     if(copyout((caddr_t) &count, CAST_USER_ADDR_T(cell), sizeof(count)) == 0)

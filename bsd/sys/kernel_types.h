@@ -23,15 +23,13 @@ typedef struct buf * buf_t;
 struct file;
 typedef struct file * file_t;
 
+#ifndef __LP64__
 struct ucred;
 typedef struct ucred * ucred_t;
+#endif
 
 struct mount;
 typedef struct mount * mount_t;
-
-#ifdef TBDDDD
-typedef struct fsid { int32_t val[2]; } fsid_t;	/* file system id type */
-#endif /* TBDDDD */
 
 struct vnode;
 typedef struct vnode * vnode_t;
@@ -72,7 +70,9 @@ typedef struct __rtentry*		route_t;
 
 typedef struct buf * buf_t;
 typedef struct file * file_t;
+#ifndef __LP64__
 typedef struct ucred * ucred_t;
+#endif
 typedef struct mount * mount_t;
 typedef struct vnode * vnode_t;
 typedef struct proc * proc_t;

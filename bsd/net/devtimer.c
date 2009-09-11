@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004,2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004,2007-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -46,12 +46,12 @@
 
 #ifdef DEVTIMER_DEBUG
 #define _devtimer_printf	printf
-#else DEVTIMER_DEBUG
+#else /* !DEVTIMER_DEBUG */
 static __inline__ void
 _devtimer_printf(__unused const char * fmt, ...)
 {
 }
-#endif DEVTIMER_DEBUG
+#endif /* !DEVTIMER_DEBUG */
 
 struct devtimer_s {
     void *			dt_callout;
@@ -102,7 +102,7 @@ devtimer_valid(devtimer_ref timer)
 __private_extern__ void
 devtimer_retain(devtimer_ref timer)
 {
-    OSIncrementAtomic((SInt32 *)&timer->dt_retain_count);
+    OSIncrementAtomic(&timer->dt_retain_count);
     return;
 }
 
@@ -123,7 +123,7 @@ devtimer_release(devtimer_ref timer)
 {
     UInt32	old_retain_count;
 
-    old_retain_count = OSDecrementAtomic((SInt32 *)&timer->dt_retain_count);
+    old_retain_count = OSDecrementAtomic(&timer->dt_retain_count);
     switch (old_retain_count) {
     case 0:
 	panic("devtimer_release: retain count is 0\n");
@@ -142,7 +142,7 @@ devtimer_release(devtimer_ref timer)
 static void
 devtimer_process(void * param0, void * param1)
 {
-    int				generation = (int)param1;
+    int				generation = *(int*)param1;
     devtimer_process_func 	process_func;
     devtimer_timeout_func 	timeout_func;
     devtimer_ref		timer = (devtimer_ref)param0;
@@ -215,7 +215,7 @@ devtimer_set_absolute(devtimer_ref timer,
     timer->dt_generation++;
     devtimer_retain(timer);
     thread_call_enter1_delayed(timer->dt_callout, 
-			       (thread_call_param_t)timer->dt_generation,
+			       &timer->dt_generation,
 			       timeval_to_absolutetime(abs_time));
     return;
 }
@@ -272,8 +272,8 @@ __private_extern__ struct timeval
 devtimer_current_time(void)
 {
     struct timeval 	tv;
-    uint32_t sec;
-    uint32_t usec;
+    clock_sec_t sec;
+    clock_usec_t usec;
 
     clock_get_system_microtime(&sec, &usec);
     tv.tv_sec = sec;

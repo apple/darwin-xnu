@@ -86,6 +86,6 @@ const struct encaptab *encap_attach_func(int, int,
 	const struct protosw *, void *);
 int	encap_detach(const struct encaptab *);
 void	*encap_getarg(struct mbuf *);
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
 #endif /*_NETINET_IP_ENCAP_H_*/

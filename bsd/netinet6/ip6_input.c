@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -150,6 +150,10 @@ extern int ipsec_bypass;
 
 #include <net/net_osdep.h>
 
+#if PF
+#include <net/pfvar.h>
+#endif /* PF */
+
 extern struct domain inet6domain;
 extern struct ip6protosw inet6sw[];
 
@@ -178,10 +182,11 @@ struct ifqueue ip6intrq;
 lck_mtx_t 		*ip6_mutex;
 lck_mtx_t 		*dad6_mutex;
 lck_mtx_t 		*nd6_mutex;
-lck_mtx_t			*prefix6_mutex;
+lck_mtx_t		*prefix6_mutex;
+lck_mtx_t		*scope6_mutex;
 lck_attr_t		*ip6_mutex_attr;
-lck_grp_t			*ip6_mutex_grp;
-lck_grp_attr_t	*ip6_mutex_grp_attr;
+lck_grp_t		*ip6_mutex_grp;
+lck_grp_attr_t		*ip6_mutex_grp_attr;
 extern lck_mtx_t	*inet6_domain_mutex;
 #endif
 extern int loopattach_done;
@@ -232,7 +237,7 @@ ip6_init()
 	for (i = 0; i < IPPROTO_MAX; i++)
 		ip6_protox[i] = pr;
 	for (pr = (struct ip6protosw*)inet6domain.dom_protosw; pr; pr = pr->pr_next) {
-		if(!((unsigned int)pr->pr_domain)) continue;    /* If uninitialized, skip */
+		if(!(pr->pr_domain)) continue;    /* If uninitialized, skip */
 		if (pr->pr_domain->dom_family == PF_INET6 &&
 		    pr->pr_protocol && pr->pr_protocol != IPPROTO_RAW) {
 			ip6_protox[pr->pr_protocol] = pr;
@@ -245,26 +250,28 @@ ip6_init()
 	ip6_mutex_attr = lck_attr_alloc_init();
 
 	if ((ip6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
-		printf("ip6_init: can't alloc ip6_mutex\n");
-		return;
+		panic("ip6_init: can't alloc ip6_mutex\n");
 	}
 	if ((dad6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
-		printf("ip6_init: can't alloc dad6_mutex\n");
-		return;
+		panic("ip6_init: can't alloc dad6_mutex\n");
 	}
 	if ((nd6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
-		printf("ip6_init: can't alloc nd6_mutex\n");
-		return;
+		panic("ip6_init: can't alloc nd6_mutex\n");
 	}
 
 	if ((prefix6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
-		printf("ip6_init: can't alloc prefix6_mutex\n");
-		return;
+		panic("ip6_init: can't alloc prefix6_mutex\n");
 	}
+
+	if ((scope6_mutex = lck_mtx_alloc_init(ip6_mutex_grp, ip6_mutex_attr)) == NULL) {
+		panic("ip6_init: can't alloc scope6_mutex\n");
+	}
+
 
 	inet6domain.dom_flags = DOM_REENTRANT;	
 
 	ip6intrq.ifq_maxlen = ip6qmaxlen;
+	in6_ifaddr_init();
 	nd6_init();
 	frag6_init();
 	icmp6_init();
@@ -295,7 +302,7 @@ ip6_init2(
 		timeout(ip6_init2, (caddr_t)0, 1 * hz);
 		return;
 	}
-	in6_ifattach(lo_ifp, NULL, NULL);
+	(void) in6_ifattach(lo_ifp, NULL, NULL);
 
 #ifdef __APPLE__
 	/* nd6_timer_init */
@@ -545,6 +552,21 @@ ip6_input(m)
 	}
 #endif
 
+#if PF
+	/* Invoke inbound packet filter */
+	lck_mtx_unlock(ip6_mutex);
+	if (pf_af_hook(m->m_pkthdr.rcvif, NULL, &m, AF_INET6, TRUE) != 0) {
+		if (m != NULL) {
+			panic("%s: unexpected packet %p\n", __func__, m);
+			/* NOTREACHED */
+		}
+		/* Already freed by callee */
+		return;
+	}
+	ip6 = mtod(m, struct ip6_hdr *);
+	lck_mtx_lock(ip6_mutex);
+#endif /* PF */
+
 	/* drop packets if interface ID portion is already filled */
 	if ((m->m_pkthdr.rcvif->if_flags & IFF_LOOPBACK) == 0) {
 		if (IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_src) &&
@@ -598,42 +620,49 @@ ip6_input(m)
 	 * Multicast check
 	 */
 	if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst)) {
-	  	struct	in6_multi *in6m = 0;
+		struct	in6_multi *in6m = 0;
+		struct ifnet *ifp = m->m_pkthdr.rcvif;
 
-		in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_mcast);
+		in6_ifstat_inc(ifp, ifs6_in_mcast);
 		/*
 		 * See if we belong to the destination multicast group on the
 		 * arrival interface.
 		 */
-		IN6_LOOKUP_MULTI(ip6->ip6_dst, m->m_pkthdr.rcvif, in6m);
+		ifnet_lock_shared(ifp);
+		IN6_LOOKUP_MULTI(ip6->ip6_dst, ifp, in6m);
+		ifnet_lock_done(ifp);
 		if (in6m)
 			ours = 1;
 		else if (!ip6_mrouter) {
 			ip6stat.ip6s_notmember++;
 			ip6stat.ip6s_cantforward++;
-			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_discard);
+			in6_ifstat_inc(ifp, ifs6_in_discard);
 			goto bad;
 		}
-		deliverifp = m->m_pkthdr.rcvif;
+		deliverifp = ifp;
 		goto hbhcheck;
 	}
 
+	if (ip6_forward_rt.ro_rt != NULL)
+		RT_LOCK(ip6_forward_rt.ro_rt);
 	/*
 	 *  Unicast check
 	 */
 	if (ip6_forward_rt.ro_rt != NULL &&
-	    (ip6_forward_rt.ro_rt->rt_flags & RTF_UP) != 0 && 
+	    (ip6_forward_rt.ro_rt->rt_flags & RTF_UP) &&
 	    IN6_ARE_ADDR_EQUAL(&ip6->ip6_dst,
-	    &((struct sockaddr_in6 *)(&ip6_forward_rt.ro_dst))->sin6_addr))
+	    &((struct sockaddr_in6 *)(&ip6_forward_rt.ro_dst))->sin6_addr) &&
+	    ip6_forward_rt.ro_rt->generation_id == route_generation) {
 		ip6stat.ip6s_forward_cachehit++;
-	else {
+	} else {
 		struct sockaddr_in6 *dst6;
 
-		if (ip6_forward_rt.ro_rt) {
-			/* route is down or destination is different */
+		if (ip6_forward_rt.ro_rt != NULL) {
+			/* route is down/stale or destination is different */
 			ip6stat.ip6s_forward_cachemiss++;
+			RT_UNLOCK(ip6_forward_rt.ro_rt);
 			rtfree(ip6_forward_rt.ro_rt);
-			ip6_forward_rt.ro_rt = 0;
+			ip6_forward_rt.ro_rt = NULL;
 		}
 
 		bzero(&ip6_forward_rt.ro_dst, sizeof(struct sockaddr_in6));
@@ -647,6 +676,8 @@ ip6_input(m)
 #endif
 
 		rtalloc_ign((struct route *)&ip6_forward_rt, RTF_PRCLONING);
+		if (ip6_forward_rt.ro_rt != NULL)
+			RT_LOCK(ip6_forward_rt.ro_rt);
 	}
 
 #define rt6_key(r) ((struct sockaddr_in6 *)((r)->rt_nodes->rn_key))
@@ -671,14 +702,11 @@ ip6_input(m)
 	 * while it would be less efficient.  Or, should we rather install a
 	 * reject route for such a case?
 	 */
-	if (ip6_forward_rt.ro_rt &&
+	if (ip6_forward_rt.ro_rt != NULL &&
 	    (ip6_forward_rt.ro_rt->rt_flags &
 	     (RTF_HOST|RTF_GATEWAY)) == RTF_HOST &&
 #if RTF_WASCLONED
 	    !(ip6_forward_rt.ro_rt->rt_flags & RTF_WASCLONED) &&
-#endif
-#if RTF_CLONED
-	    !(ip6_forward_rt.ro_rt->rt_flags & RTF_CLONED) &&
 #endif
 #if 0
 	    /*
@@ -712,8 +740,10 @@ ip6_input(m)
 			ia6->ia_ifa.if_ipackets++;
 			ia6->ia_ifa.if_ibytes += m->m_pkthdr.len;
 #endif
+			RT_UNLOCK(ip6_forward_rt.ro_rt);
 			goto hbhcheck;
 		} else {
+			RT_UNLOCK(ip6_forward_rt.ro_rt);
 			/* address is not ready, so discard the packet. */
 			nd6log((LOG_INFO,
 			    "ip6_input: packet to an unready address %s->%s\n",
@@ -733,10 +763,13 @@ ip6_input(m)
 			/* XXX do we need more sanity checks? */
 			ours = 1;
 			deliverifp = ip6_forward_rt.ro_rt->rt_ifp; /* faith */
+			RT_UNLOCK(ip6_forward_rt.ro_rt);
 			goto hbhcheck;
 		}
 	}
 #endif
+	if (ip6_forward_rt.ro_rt != NULL)
+		RT_UNLOCK(ip6_forward_rt.ro_rt);
 
 	/*
 	 * Now there is no reason to process the packet if it's not our own
@@ -767,6 +800,7 @@ ip6_input(m)
 				 * to the upper layers.
 				 */
 			}
+			ifafree(&ia6->ia_ifa);
 		}
 	}
 
@@ -1343,6 +1377,20 @@ ip6_savecontrol(in6p, mp, ip6, m)
 			mp = &(*mp)->m_next;
 	}
 
+        if ((in6p->in6p_flags & IN6P_TCLASS) != 0) {
+                u_int32_t flowinfo;
+                int tclass;
+
+                flowinfo = (u_int32_t)ntohl(ip6->ip6_flow & IPV6_FLOWINFO_MASK);
+                flowinfo >>= 20;
+
+                tclass = flowinfo & 0xff;
+                *mp = sbcreatecontrol((caddr_t) &tclass, sizeof(tclass),
+                    IPV6_TCLASS, IPPROTO_IPV6);
+                if (*mp)
+                        mp = &(*mp)->m_next;
+        }
+
 	/*
 	 * IPV6_HOPOPTS socket option.  Recall that we required super-user
 	 * privilege for the option (see ip6_ctloutput), but it might be too
@@ -1774,8 +1822,8 @@ ip6_addaux(
 	if (tag == NULL) {
 		/* Allocate a tag */
 		tag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_INET6,
-						  sizeof(*tag), M_DONTWAIT);
-		
+		    sizeof (struct ip6aux), M_DONTWAIT);
+
 		/* Attach it to the mbuf */
 		if (tag) {
 			m_tag_prepend(m, tag);

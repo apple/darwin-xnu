@@ -63,8 +63,8 @@ struct ndrv_cb
 	int nd_descrcnt;		/* # elements in nd_dlist - Obsolete */
 	TAILQ_HEAD(dlist, dlil_demux_desc) nd_dlist; /* Descr. list */
 	struct ifnet *nd_if; /* obsolete, maintained for binary compatibility */
-    u_long	nd_proto_family;
-    u_long	nd_family;
+    u_int32_t	nd_proto_family;
+    u_int32_t	nd_family;
     struct ndrv_multiaddr*	nd_multiaddrs;
     short	nd_unit;
 };

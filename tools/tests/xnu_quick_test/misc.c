@@ -1,5 +1,6 @@
 
 #include "tests.h"
+#include <mach/mach.h>
 
 /*
  * create_random_name - creates a file with a random / unique name in the given directory.
@@ -83,13 +84,15 @@ int create_file_with_name( char *the_target_dirp, char *the_namep, int remove_ex
 	int				my_fd = -1;
 	char *			my_pathp = NULL;
 	struct stat		my_sb;
-	
+	kern_return_t           my_kr;
+
 	create_test_file = 0;
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto failure_exit;
-	}
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto failure_exit;
+        }
+ 
 	strcpy( my_pathp, the_target_dirp );
 	strcat( my_pathp, the_namep );
 
@@ -147,7 +150,7 @@ routine_exit:
 		if ( my_result == -1 && create_test_file ) {
 			remove( my_pathp );	
 		}
-		free( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
 	 }
 	
 	return( my_result );
@@ -220,7 +223,12 @@ int do_execve_test(char * path, char * argv[], void * envp, int killwait)
 		goto test_failed_exit;
 	}       
 
-	if ( WIFSIGNALED( my_status ) && WTERMSIG( my_status ) != SIGKILL ) {
+	if (!(WIFSIGNALED( my_status ))) {
+		printf( "child process was not signaled and should have been\n", my_status );
+		goto test_failed_exit;
+	}
+		
+	if (WTERMSIG( my_status ) != SIGKILL) {
 		printf( "wait4 returned wrong signal status - 0x%02X \n", my_status );
 		goto test_failed_exit;
 	}
@@ -367,3 +375,43 @@ finished:
 	return rval;
 }
 
+/*
+ * printf with a date and time stamp so that we can correlate printf's
+ * with the log files of a system in case of test failure.
+ *
+ * NB: MY_PRINTF_DATE_FMT chosen to look like syslog to aid "grep".
+ */
+#define MY_PRINTF_DATE_FMT	"%b %e %T"
+#undef printf	/* was my_printf */
+int
+my_printf(const char * __restrict fmt, ...)
+{
+	char *bufp;
+	char datebuf[256];
+	struct tm *timeptr;
+	time_t result;
+	int rv;
+	va_list ap;
+
+	/* Get the timestamp for this printf */
+	result = time(NULL);
+	timeptr = localtime(&result);
+	strftime(datebuf, sizeof(datebuf), MY_PRINTF_DATE_FMT, timeptr);
+
+	/* do the printf of the requested data to a local buffer */
+	va_start(ap, fmt);
+	rv = vasprintf(&bufp, fmt, ap);
+	va_end(ap);
+
+	/*
+	 * if we successfully got a local buffer, then we want to
+	 * print a timestamp plus what we would have printed before,
+	 * then free the allocated memory.
+	 */
+	if (rv != -1) {
+		rv = printf("%s %s", datebuf, bufp);
+		free(bufp);
+	}
+
+	return(rv);
+}

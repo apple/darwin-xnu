@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -72,6 +72,8 @@
 #ifndef	_IPC_IPC_PORT_H_
 #define _IPC_IPC_PORT_H_
 
+#if MACH_KERNEL_PRIVATE
+
 #include <norma_vm.h>
 #include <mach_rt.h>
 #include <mach_assert.h>
@@ -111,10 +113,12 @@ typedef unsigned int ipc_port_timestamp_t;
 struct ipc_port {
 
 	/*
-	 * Initial sub-structure in common with ipc_pset and rpc_port
-	 * First element is an ipc_object
+	 * Initial sub-structure in common with ipc_pset
+	 * First element is an ipc_object second is a
+	 * message queue
 	 */
 	struct ipc_object ip_object;
+	struct ipc_mqueue ip_messages;
 
 	union {
 		struct ipc_space *receiver;
@@ -132,8 +136,8 @@ struct ipc_port {
 	struct ipc_port_request *ip_dnrequests;
 
 	unsigned int ip_pset_count;
-	struct ipc_mqueue ip_messages;
 	struct ipc_kmsg *ip_premsg;
+	mach_vm_address_t ip_context;
 
 #if	NORMA_VM
 	/*
@@ -154,21 +158,22 @@ struct ipc_port {
 	natural_t	ip_callstack[IP_CALLSTACK_MAX]; /* stack trace */
 	unsigned long	ip_spares[IP_NSPARES]; /* for debugging */
 #endif	/* MACH_ASSERT */
-	int		alias;
+	uintptr_t		alias;
 
-//#if MAC
+#if CONFIG_MACF_MACH
         struct label    ip_label;
-//#endif
+#endif
 };
 
 
 #define ip_references		ip_object.io_references
 #define ip_bits			ip_object.io_bits
-#define ip_receiver_name	ip_object.io_receiver_name
 
 #define	ip_receiver		data.receiver
 #define	ip_destination		data.destination
 #define	ip_timestamp		data.timestamp
+
+#define ip_receiver_name	ip_messages.imq_receiver_name
 
 #define IP_NULL			IPC_PORT_NULL
 #define IP_DEAD			IPC_PORT_DEAD
@@ -229,22 +234,26 @@ struct ipc_port_request {
 #define	ipr_soright		notify.port
 #define	ipr_name		name.name
 
+extern lck_grp_t 	ipc_lck_grp;
+extern lck_attr_t 	ipc_lck_attr;
+
 /*
  *	Taking the ipc_port_multiple lock grants the privilege
  *	to lock multiple ports at once.  No ports must locked
  *	when it is taken.
  */
 
-decl_mutex_data(extern,ipc_port_multiple_lock_data)
+decl_lck_mtx_data(extern,ipc_port_multiple_lock_data)
+extern lck_mtx_ext_t	ipc_port_multiple_lock_data_ext;
 
 #define	ipc_port_multiple_lock_init()					\
-		mutex_init(&ipc_port_multiple_lock_data, 0)
+		lck_mtx_init_ext(&ipc_port_multiple_lock_data, &ipc_port_multiple_lock_data_ext, &ipc_lck_grp, &ipc_lck_attr)
 
 #define	ipc_port_multiple_lock()					\
-		mutex_lock(&ipc_port_multiple_lock_data)
+		lck_mtx_lock(&ipc_port_multiple_lock_data)
 
 #define	ipc_port_multiple_unlock()					\
-		mutex_unlock(&ipc_port_multiple_lock_data)
+		lck_mtx_unlock(&ipc_port_multiple_lock_data)
 
 /*
  *	The port timestamp facility provides timestamps
@@ -252,17 +261,19 @@ decl_mutex_data(extern,ipc_port_multiple_lock_data)
  *	mach_port_names with port death.
  */
 
-decl_mutex_data(extern,ipc_port_timestamp_lock_data)
+decl_lck_mtx_data(extern,ipc_port_timestamp_lock_data)
+extern lck_mtx_ext_t	ipc_port_timestamp_lock_data_ext;
+
 extern ipc_port_timestamp_t ipc_port_timestamp_data;
 
 #define	ipc_port_timestamp_lock_init()					\
-		mutex_init(&ipc_port_timestamp_lock_data, 0)
+		lck_mtx_init_ext(&ipc_port_timestamp_lock_data, &ipc_port_timestamp_lock_data_ext, &ipc_lck_grp, &ipc_lck_attr)
 
 #define	ipc_port_timestamp_lock()					\
-		mutex_lock(&ipc_port_timestamp_lock_data)
+		lck_mtx_lock(&ipc_port_timestamp_lock_data)
 
 #define	ipc_port_timestamp_unlock()					\
-		mutex_unlock(&ipc_port_timestamp_lock_data)
+		lck_mtx_unlock(&ipc_port_timestamp_lock_data)
 
 /* Retrieve a port timestamp value */
 extern ipc_port_timestamp_t ipc_port_timestamp(void);
@@ -400,9 +411,17 @@ extern mach_port_name_t ipc_port_copyout_send(
 	ipc_port_t	sright,
 	ipc_space_t	space);
 
+#endif /* MACH_KERNEL_PRIVATE */
+
+#if KERNEL_PRIVATE
+
 /* Release a (valid) naked send right */
 extern void ipc_port_release_send(
 	ipc_port_t	port);
+
+#endif /* KERNEL_PRIVATE */
+
+#if MACH_KERNEL_PRIVATE
 
 /* Make a naked send-once right from a receive right */
 extern ipc_port_t ipc_port_make_sonce(
@@ -449,5 +468,7 @@ extern void ipc_port_debug_init(void);
 
 #define	ipc_port_release(port)		\
 		ipc_object_release(&(port)->ip_object)
+
+#endif /* MACH_KERNEL_PRIVATE */
 
 #endif	/* _IPC_IPC_PORT_H_ */

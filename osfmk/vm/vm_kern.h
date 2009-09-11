@@ -86,6 +86,7 @@ extern kern_return_t	kernel_memory_allocate(
 #define KMA_LOMEM	0x08
 #define KMA_GUARD_FIRST	0x10
 #define KMA_GUARD_LAST	0x20
+#define KMA_PERMANENT	0x40
 
 extern kern_return_t kmem_alloc_contig(
 				vm_map_t	map,
@@ -93,6 +94,7 @@ extern kern_return_t kmem_alloc_contig(
 				vm_size_t	size,
 				vm_offset_t 	mask,
 				ppnum_t		max_pnum,
+				ppnum_t		pnum_mask,
 				int 		flags);
 
 extern kern_return_t	kmem_alloc(
@@ -127,16 +129,14 @@ extern kern_return_t	kmem_suballoc(
 				vm_offset_t	*addr,
 				vm_size_t	size,
 				boolean_t	pageable,
-				boolean_t	anywhere,
+				int		flags,
 				vm_map_t	*new_map);
 
 
-#ifdef XNU_KERNEL_PRIVATE
-extern kern_return_t	kmem_alloc_wired(
+extern kern_return_t	kmem_alloc_kobject(
 				vm_map_t	map,
 				vm_offset_t	*addrp,
 				vm_size_t	size);
-#endif
 
 #ifdef	MACH_KERNEL_PRIVATE
 

@@ -172,7 +172,7 @@ mk_timer_expire(
 
 		msg.unused[0] = msg.unused[1] = msg.unused[2] = 0;
 
-		(void) mach_msg_send_from_kernel(&msg.header, sizeof (msg));
+		(void) mach_msg_send_from_kernel_proper(&msg.header, sizeof (msg));
 
 		simple_lock(&timer->lock);
 	}

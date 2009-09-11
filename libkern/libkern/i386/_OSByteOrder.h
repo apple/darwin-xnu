@@ -56,11 +56,25 @@ _OSSwapInt32(
     __uint32_t        _data
 )
 {
+#if defined(__llvm__)
+    return __builtin_bswap32(_data);
+#else
     __asm__ ("bswap   %0" : "+r" (_data));
     return _data;
+#endif
 }
 
-#if defined(__i386__)
+#if defined(__llvm__)
+__DARWIN_OS_INLINE
+__uint64_t
+_OSSwapInt64(
+    __uint64_t        _data
+)
+{
+    return __builtin_bswap64(_data);
+}
+
+#elif defined(__i386__)
 __DARWIN_OS_INLINE
 __uint64_t
 _OSSwapInt64(

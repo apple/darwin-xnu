@@ -56,6 +56,8 @@ void IOEventSource::closeGate()			{ workLoop->closeGate(); }
 bool IOEventSource::tryCloseGate()		{ return workLoop->tryCloseGate(); }
 int IOEventSource::sleepGate(void *event, UInt32 type)
         { return workLoop->sleepGate(event, type); }
+int IOEventSource::sleepGate(void *event, AbsoluteTime deadline, UInt32 type)
+        { return workLoop->sleepGate(event, deadline, type); }
 void IOEventSource::wakeupGate(void *event, bool oneThread)
         { workLoop->wakeupGate(event, oneThread); }
 

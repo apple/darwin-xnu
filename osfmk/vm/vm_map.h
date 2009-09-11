@@ -139,9 +139,9 @@ typedef union vm_map_object {
 	vm_map_t		sub_map;	/* belongs to another map */
 } vm_map_object_t;
 
-#define named_entry_lock_init(object)   mutex_init(&(object)->Lock, 0)
-#define named_entry_lock(object)          mutex_lock(&(object)->Lock)
-#define named_entry_unlock(object)        mutex_unlock(&(object)->Lock)   
+#define named_entry_lock_init(object)	lck_mtx_init(&(object)->Lock, &vm_object_lck_grp, &vm_object_lck_attr)
+#define named_entry_lock(object)		lck_mtx_lock(&(object)->Lock)
+#define named_entry_unlock(object)		lck_mtx_unlock(&(object)->Lock)   
 
 /*
  *	Type:		vm_named_entry_t [internal use only]
@@ -162,7 +162,7 @@ typedef union vm_map_object {
  */
 
 struct vm_named_entry {
-	decl_mutex_data(,	Lock)		/* Synchronization */
+	decl_lck_mtx_data(,	Lock)		/* Synchronization */
 	union {
 		vm_object_t	object;		/* object I point to */
 		memory_object_t	pager;		/* amo pager port */
@@ -219,12 +219,30 @@ struct vm_map_entry {
 	/* vm_prot_t */		max_protection:3,/* maximum protection */
 	/* vm_inherit_t */	inheritance:2,	/* inheritance */
 	/* boolean_t */		use_pmap:1,	/* nested pmaps */
+	/*
+	 * IMPORTANT:
+	 * The "alias" field can be updated while holding the VM map lock
+	 * "shared".  It's OK as along as it's the only field that can be
+	 * updated without the VM map "exclusive" lock.
+	 */
 	/* unsigned char */	alias:8,	/* user alias */
 	/* boolean_t */		no_cache:1,	/* should new pages be cached? */
-	/* unsigned char */	pad:7;		/* available bits */
+	/* boolean_t */		permanent:1,	/* mapping can not be removed */
+	/* boolean_t */		superpage_size:3,/* use superpages of a certain size */
+	/* boolean_t */		zero_wired_pages:1, /* zero out the wired pages of this entry it is being deleted without unwiring them */
+	/* unsigned char */	pad:2;		/* available bits */
 	unsigned short		wired_count;	/* can be paged if = 0 */
 	unsigned short		user_wired_count; /* for vm_wire */
 };
+
+/*
+ * Convenience macros for dealing with superpages
+ * SUPERPAGE_NBASEPAGES is architecture dependent and defined in pmap.h
+ */
+#define SUPERPAGE_SIZE (PAGE_SIZE*SUPERPAGE_NBASEPAGES)
+#define SUPERPAGE_MASK (-SUPERPAGE_SIZE)
+#define SUPERPAGE_ROUND_DOWN(a) (a & SUPERPAGE_MASK)
+#define SUPERPAGE_ROUND_UP(a) ((a + SUPERPAGE_SIZE-1) & SUPERPAGE_MASK)
 
 /*
  * wired_counts are unsigned short.  This value is used to safeguard
@@ -276,7 +294,8 @@ struct _vm_map {
 	int			res_count;	/* Residence count (swap) */
 	int			sw_state;	/* Swap state */
 #endif	/* TASK_SWAPPER */
-	decl_mutex_data(,	s_lock)		/* Lock ref, res fields */
+	decl_lck_mtx_data(,	s_lock)		/* Lock ref, res fields */
+	lck_mtx_ext_t		s_lock_ext;
 	vm_map_entry_t		hint;		/* hint for quick lookups */
 	vm_map_entry_t		first_free;	/* First free space hint */
 	boolean_t		wait_for_space;	/* Should callers wait
@@ -284,7 +303,7 @@ struct _vm_map {
 	boolean_t		wiring_required;/* All memory wired? */
 	boolean_t		no_zero_fill;	/* No zero fill absent pages */
 	boolean_t		mapped;		/* has this map been mapped */
-	boolean_t		prot_copy_allow;/* is VM_PROT_COPY allowed on this map */
+	boolean_t		switch_protect;	/* Protect map from write faults while switched */
 	unsigned int		timestamp;	/* Version number */
 	unsigned int		color_rr;	/* next color (not protected by a lock) */
 } ;
@@ -469,7 +488,9 @@ extern vm_map_entry_t	vm_map_entry_insert(
 				vm_behavior_t		behavior,
 				vm_inherit_t		inheritance,
 				unsigned		wired_count,
-				boolean_t		no_cache);
+				boolean_t		no_cache,
+				boolean_t		permanent,
+				unsigned int		superpage_size);
 
 
 /*
@@ -516,10 +537,10 @@ extern void		vm_map_reference_swap(
 MACRO_BEGIN					\
 	vm_map_t Map = (map);		\
 	if (Map) {				\
-		mutex_lock(&Map->s_lock);	\
+		lck_mtx_lock(&Map->s_lock);	\
 		Map->res_count++;		\
 		Map->ref_count++;		\
-		mutex_unlock(&Map->s_lock);	\
+		lck_mtx_unlock(&Map->s_lock);	\
 	}					\
 MACRO_END
 
@@ -527,10 +548,10 @@ MACRO_END
 MACRO_BEGIN					\
 	vm_map_t Lmap = (map);		\
 	if (Lmap->res_count == 0) {		\
-		mutex_unlock(&Lmap->s_lock);\
+		lck_mtx_unlock(&Lmap->s_lock);\
 		vm_map_lock(Lmap);		\
 		vm_map_swapin(Lmap);		\
-		mutex_lock(&Lmap->s_lock);	\
+		lck_mtx_lock(&Lmap->s_lock);	\
 		++Lmap->res_count;		\
 		vm_map_unlock(Lmap);		\
 	} else					\
@@ -541,21 +562,21 @@ MACRO_END
 MACRO_BEGIN					\
 	vm_map_t Map = (map);		\
 	if (--Map->res_count == 0) {	\
-		mutex_unlock(&Map->s_lock);	\
+		lck_mtx_unlock(&Map->s_lock);	\
 		vm_map_lock(Map);		\
 		vm_map_swapout(Map);		\
 		vm_map_unlock(Map);		\
-		mutex_lock(&Map->s_lock);	\
+		lck_mtx_lock(&Map->s_lock);	\
 	}					\
 MACRO_END
 
 #define vm_map_reference_swap(map)	\
 MACRO_BEGIN				\
 	vm_map_t Map = (map);		\
-	mutex_lock(&Map->s_lock);	\
+	lck_mtx_lock(&Map->s_lock);	\
 	++Map->ref_count;		\
 	vm_map_res_reference(Map);	\
-	mutex_unlock(&Map->s_lock);	\
+	lck_mtx_unlock(&Map->s_lock);	\
 MACRO_END
 #endif 	/* MACH_ASSERT */
 
@@ -571,9 +592,9 @@ extern void		vm_map_swapout(
 MACRO_BEGIN					\
 	vm_map_t Map = (map);			\
 	if (Map) {				\
-		mutex_lock(&Map->s_lock);	\
+		lck_mtx_lock(&Map->s_lock);	\
 		Map->ref_count++;		\
-		mutex_unlock(&Map->s_lock);	\
+		lck_mtx_unlock(&Map->s_lock);	\
 	}					\
 MACRO_END
 
@@ -604,21 +625,21 @@ extern vm_object_t	vm_submap_object;
 
 #define	vm_map_ref_fast(map)			\
 	MACRO_BEGIN					\
-	mutex_lock(&map->s_lock);			\
+	lck_mtx_lock(&map->s_lock);			\
 	map->ref_count++;				\
 	vm_map_res_reference(map);			\
-	mutex_unlock(&map->s_lock);			\
+	lck_mtx_unlock(&map->s_lock);			\
 	MACRO_END
 
 #define	vm_map_dealloc_fast(map)		\
 	MACRO_BEGIN					\
 	register int c;				\
 							\
-	mutex_lock(&map->s_lock);			\
+	lck_mtx_lock(&map->s_lock);			\
 	c = --map->ref_count;			\
 	if (c > 0)					\
 		vm_map_res_deallocate(map);		\
-	mutex_unlock(&map->s_lock);			\
+	lck_mtx_unlock(&map->s_lock);			\
 	if (c == 0)					\
 		vm_map_destroy(map);			\
 	MACRO_END
@@ -748,11 +769,12 @@ extern kern_return_t vm_map_region_recurse_64(
 				vm_region_submap_info_64_t info,
 				mach_msg_type_number_t  *count);
 
-extern kern_return_t vm_map_page_info(
+extern kern_return_t vm_map_page_query_internal(
 				vm_map_t		map,
 				vm_map_offset_t		offset,
 				int			*disposition,
 				int			*ref_count);
+
 
 extern kern_return_t	vm_map_submap(
 				vm_map_t		map,
@@ -852,6 +874,20 @@ extern kern_return_t	vm_map_enter_mem_object(
 				vm_prot_t		max_protection,
 				vm_inherit_t		inheritance);
 
+/* Enter a mapping of a memory object */
+extern kern_return_t	vm_map_enter_mem_object_control(
+				vm_map_t		map,
+				vm_map_offset_t		*address,
+				vm_map_size_t		size,
+				vm_map_offset_t		mask,
+				int			flags,
+				memory_object_control_t	control,
+				vm_object_offset_t	offset,
+				boolean_t		needs_copy,
+				vm_prot_t		cur_protection,
+				vm_prot_t		max_protection,
+				vm_inherit_t		inheritance);
+
 /* Deallocate a region */
 extern kern_return_t	vm_map_remove(
 				vm_map_t		map,
@@ -868,7 +904,7 @@ extern kern_return_t	vm_map_copy_overwrite(
 				vm_map_t                dst_map,
 				vm_map_address_t        dst_addr,
 				vm_map_copy_t           copy,
-				int                     interruptible);
+				boolean_t               interruptible);
 
 /* Place a copy into a map */
 extern kern_return_t	vm_map_copyout(
@@ -924,9 +960,19 @@ extern void		vm_map_set_user_wire_limit(
 				vm_map_t		map,
 				vm_size_t		limit);
 
-extern void		vm_map_set_prot_copy_allow(
-				vm_map_t		map,
-				boolean_t		allow);
+extern void vm_map_switch_protect(
+				vm_map_t		map, 
+				boolean_t		val);
+
+#ifdef XNU_KERNEL_PRIVATE
+extern kern_return_t vm_map_page_info(
+	vm_map_t		map,
+	vm_map_offset_t		offset,
+	vm_page_info_flavor_t	flavor,
+	vm_page_info_t		info,
+	mach_msg_type_number_t	*count);
+#endif /* XNU_KERNEL_PRIVATE */
+
 
 #ifdef	MACH_KERNEL_PRIVATE
 
@@ -971,12 +1017,12 @@ extern void		vm_map_set_prot_copy_allow(
 extern kern_return_t vm_map_get_upl(
 				vm_map_t		target_map,
 				vm_map_offset_t		map_offset,
-				vm_size_t		*size,
+				upl_size_t		*size,
 				upl_t			*upl,
 				upl_page_info_array_t	page_info,
-				mach_msg_type_number_t	*page_infoCnt,
-				integer_t		*flags,
-				integer_t		force_data_sync);
+				unsigned int	*page_infoCnt,
+				int		*flags,
+				int		force_data_sync);
 
 __END_DECLS
 

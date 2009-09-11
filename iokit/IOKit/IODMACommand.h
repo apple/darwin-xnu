@@ -362,6 +362,12 @@ public:
 				      UInt32    *numSegments)
     { return genIOVMSegments(offset, segments, numSegments); };
 
+	IOReturn
+	genIOVMSegments(SegmentFunction segmentFunction,
+							UInt64 *offsetP,
+							void   *segmentsP,
+							UInt32 *numSegmentsP);
+	
     virtual void free();
 
 private:
@@ -372,7 +378,8 @@ private:
 				    void         *segments,
 				    UInt32        segmentIndex);
 
-    IOReturn genIOVMSegments(InternalSegmentFunction outSegFunc,
+    IOReturn genIOVMSegments(uint32_t op,
+				  InternalSegmentFunction outSegFunc,
 				  void   *reference,
 				  UInt64 *offsetP,
 				  void   *segmentsP,
@@ -381,7 +388,7 @@ private:
     static IOReturn clientOutputSegment(
 	    void *reference, IODMACommand *target,
 	    Segment64 segment, void *vSegList, UInt32 outSegIndex);
-
+	
     static IOReturn segmentOp(
 			void         *reference,
 			IODMACommand *target,
@@ -428,10 +435,22 @@ public:
 			void         *segments,
 			UInt32        segmentIndex);
 
+/*! @function getPreparedOffsetAndLength
+    @abstract Returns the offset and length into the target IOMemoryDescriptor of a prepared IODDMACommand.
+    @discussion If successfully prepared, returns the offset and length into the IOMemoryDescriptor. Will fail for an unprepared IODMACommand.
+    @param offset returns the starting offset in the memory descriptor the DMA command was prepared with. Pass NULL for don't care.
+    @param length returns the length in the memory descriptor the DMA command was prepared with. Pass NULL for don't care.
+    @result An IOReturn code. kIOReturnNotReady if the IODMACommand is not prepared. */
+
+    virtual IOReturn getPreparedOffsetAndLength(UInt64 * offset, UInt64 * length);
+
+	UInt8	 getNumAddressBits(void);
+	UInt32	 getAlignment(void);
+	
 private:
     OSMetaClassDeclareReservedUsed(IODMACommand,  0);
     OSMetaClassDeclareReservedUsed(IODMACommand,  1);
-    OSMetaClassDeclareReservedUnused(IODMACommand,  2);
+    OSMetaClassDeclareReservedUsed(IODMACommand,  2);
     OSMetaClassDeclareReservedUnused(IODMACommand,  3);
     OSMetaClassDeclareReservedUnused(IODMACommand,  4);
     OSMetaClassDeclareReservedUnused(IODMACommand,  5);

@@ -86,7 +86,7 @@ struct ipc_pset {
 };
 
 #define	ips_references		ips_object.io_references
-#define ips_local_name		ips_object.io_receiver_name
+#define ips_local_name		ips_messages.imq_local_name
 
 
 #define	ips_active(pset)	io_active(&(pset)->ips_object)

@@ -79,7 +79,7 @@
 #include <sys/vfs_context.h>
 #include <sys/namei.h>
 #include <bsd/bsm/audit.h>
-#include <bsd/bsm/audit_kernel.h>
+#include <bsd/security/audit/audit.h>
 #include <sys/file.h>
 #include <sys/file_internal.h>
 #include <sys/filedesc.h>
@@ -95,7 +95,6 @@
 #include <kern/sched_prim.h>
 #include <osfmk/kern/task.h>
 #include <osfmk/kern/kalloc.h>
-#include <libsa/libsa/kext.h>
 
 #if CONFIG_MACF
 #include <security/mac.h>
@@ -104,6 +103,7 @@
 #include <security/mac_internal.h>
 #include <security/mac_mach_internal.h>
 #endif
+
 
 /* 
  * define MB_DEBUG to display run-time debugging information
@@ -161,9 +161,31 @@ int	mac_late = 0;
  * already has to deal with uninitialized labels, this probably won't
  * be a problem.  Note: currently no locking.  Will this be a problem?
  */
+#if CONFIG_MACF_NET
+unsigned int mac_label_mbufs	= 1;
+SYSCTL_UINT(_security_mac, OID_AUTO, label_mbufs, CTLFLAG_RW,
+	&mac_label_mbufs, 0, "Label all MBUFs");
+#endif
+
 #if !defined(CONFIG_MACF_ALWAYS_LABEL_MBUF) && 0
 static int	mac_labelmbufs = 0;
 #endif
+
+/*
+ * Flag to indicate whether or not we should allocate label storage for
+ * new vnodes.  Since most dynamic policies we currently work with don't
+ * rely on vnode labeling, try to avoid paying the cost of mtag allocation
+ * unless specifically notified of interest.  One result of this is
+ * that if a dynamically loaded policy requests vnode labels, it must
+ * be able to deal with a NULL label being returned on any vnodes that
+ * were already in flight when the policy was loaded.  Since the policy
+ * already has to deal with uninitialized labels, this probably won't
+ * be a problem.
+ */
+unsigned int	mac_label_vnodes = 0;
+SYSCTL_UINT(_security_mac, OID_AUTO, labelvnodes, CTLFLAG_RW,
+    &mac_label_vnodes, 0, "Label all vnodes");
+
 
 unsigned int	mac_mmap_revocation = 0;
 SYSCTL_UINT(_security_mac, OID_AUTO, mmap_revocation, CTLFLAG_RW,
@@ -242,13 +264,7 @@ SYSCTL_UINT(_security_mac, OID_AUTO, task_enforce, CTLFLAG_RW,
     &mac_task_enforce, 0, "Enforce MAC policy on Mach task operations");
 #endif
 
-#if CONFIG_MACF_NET
-unsigned int mac_label_mbufs	= 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, label_mbufs, CTLFLAG_RW,
-	&mac_label_mbufs, 0, "Label all MBUFs");
-#endif
-
-#if AUDIT
+#if CONFIG_AUDIT
 /*
  * mac_audit_data_zone is the zone used for data pushed into the audit
  * record by policies. Using a zone simplifies memory management of this
@@ -512,6 +528,13 @@ mac_policy_init(void)
 	mac_labelzone_init();
 }
 
+/* Function pointer set up for loading security extensions.
+ * It is set to an actual function after OSlibkernInit()
+ * has been called, and is set back to 0 by OSKextRemoveKextBootstrap()
+ * after bsd_init().
+ */
+void (*load_security_extensions_function)(void) = 0;
+
 /*
  * Init after early Mach startup, but before BSD
  */
@@ -526,7 +549,9 @@ mac_policy_initmach(void)
 	 * kernel startup.
 	 */
 
-	load_security_extensions();
+	if (load_security_extensions_function) {
+		load_security_extensions_function();
+	}
 	mac_late = 1;
 #if CONFIG_MACF_MACH
 	mac_label_journal_replay();
@@ -542,7 +567,7 @@ mac_policy_initbsd(void)
 	struct mac_policy_conf *mpc;
 	u_int i;
 
-#if AUDIT
+#if CONFIG_AUDIT
 	mac_audit_data_zone = zinit(MAC_AUDIT_DATA_LIMIT,
 				    AQ_HIWATER * MAC_AUDIT_DATA_LIMIT,
 				    8192, "mac_audit_data_zone");
@@ -1181,17 +1206,43 @@ done:
 /*
  * Get the external forms of labels from all policies, for all label
  * namespaces contained in a list.
+ *
+ * XXX This may be leaking an sbuf.
  */
 int
 mac_externalize(size_t mpo_externalize_off, struct label *label,
     const char *elementlist, char *outbuf, size_t outbuflen)
 {
 	char *element;
+	char *scratch_base;
+	char *scratch;
 	struct sbuf sb;
 	int error = 0, len;
 
-	sbuf_new(&sb, outbuf, outbuflen, SBUF_FIXEDLEN);
-	while ((element = strsep(&elementlist, ",")) != NULL) {
+	/* allocate a scratch buffer the size of the string */
+	MALLOC(scratch_base, char *, strlen(elementlist)+1, M_MACTEMP, M_WAITOK); 
+	if (scratch_base == NULL) {
+		error = ENOMEM;
+		goto out;
+	}
+
+	/* copy the elementlist to the scratch buffer */
+	strlcpy(scratch_base, elementlist, strlen(elementlist)+1);
+
+	/*
+	 * set up a temporary pointer that can be used to iterate the
+	 * scratch buffer without losing the allocation address
+	 */
+	scratch = scratch_base;
+
+	/* get an sbuf */
+	if (sbuf_new(&sb, outbuf, outbuflen, SBUF_FIXEDLEN) == NULL) {
+		/* could not allocate interior buffer */
+		error = ENOMEM;
+		goto out;
+	}
+	/* iterate the scratch buffer; NOTE: buffer contents modified! */
+	while ((element = strsep(&scratch, ",")) != NULL) {
 		error = mac_label_externalize(mpo_externalize_off, label,
 		    element, &sb);
 		if (error)
@@ -1200,6 +1251,11 @@ mac_externalize(size_t mpo_externalize_off, struct label *label,
 	if ((len = sbuf_len(&sb)) > 0)
 		sbuf_setpos(&sb, len - 1);	/* trim trailing comma */
 	sbuf_finish(&sb);
+
+out:
+	if (scratch_base != NULL)
+		FREE(scratch_base, M_MACTEMP);
+
 	return (error);
 }
 
@@ -1279,7 +1335,7 @@ mac_internalize(size_t mpo_internalize_off, struct label *label,
 /* system calls */
 
 int
-__mac_get_pid(struct proc *p, struct __mac_get_pid_args *uap, register_t *ret __unused)
+__mac_get_pid(struct proc *p, struct __mac_get_pid_args *uap, int *ret __unused)
 {
 	char *elements, *buffer;
 	struct user_mac mac;
@@ -1332,7 +1388,7 @@ __mac_get_pid(struct proc *p, struct __mac_get_pid_args *uap, register_t *ret __
 }
 
 int
-__mac_get_proc(proc_t p, struct __mac_get_proc_args *uap, register_t *ret __unused)
+__mac_get_proc(proc_t p, struct __mac_get_proc_args *uap, int *ret __unused)
 {
 	char *elements, *buffer;
 	struct user_mac mac;
@@ -1377,14 +1433,10 @@ __mac_get_proc(proc_t p, struct __mac_get_proc_args *uap, register_t *ret __unus
 	return (error);
 }
 
-/*
- * MPSAFE
- */
-
 int
-__mac_set_proc(proc_t p, struct __mac_set_proc_args *uap, register_t *ret __unused)
+__mac_set_proc(proc_t p, struct __mac_set_proc_args *uap, int *ret __unused)
 {
-	kauth_cred_t newcred, oldcred;
+	kauth_cred_t newcred;
 	struct label *intlabel;
 	struct user_mac mac;
 	char *buffer;
@@ -1447,8 +1499,24 @@ out:
 }
 
 #if CONFIG_LCTX
+/*
+ * __mac_get_lcid: 
+ *	Get login context ID.  A login context associates a BSD process 
+ *	with an instance of a user.  For more information see getlcid(2) man page.
+ *
+ * Parameters:    p                        Process requesting the get
+ *                uap                      User argument descriptor (see below)
+ *                ret                      (ignored)
+ *
+ * Indirect:      uap->lcid                login context ID to search
+ *                uap->mac_p.m_buflen      MAC info buffer size
+ *                uap->mac_p.m_string      MAC info user address
+ *
+ * Returns:        0                       Success
+ *                !0                       Not success
+ */
 int
-__mac_get_lcid(proc_t p, struct __mac_get_lcid_args *uap, register_t *ret __unused)
+__mac_get_lcid(proc_t p, struct __mac_get_lcid_args *uap, int *ret __unused)
 {
 	char *elements, *buffer;
 	struct user_mac mac;
@@ -1456,7 +1524,7 @@ __mac_get_lcid(proc_t p, struct __mac_get_lcid_args *uap, register_t *ret __unus
 	int error;
 	size_t ulen;
 
-	AUDIT_ARG(value, uap->lcid);
+	AUDIT_ARG(value32, uap->lcid);
 	if (IS_64BIT_PROCESS(p)) {
 		error = copyin(uap->mac_p, &mac, sizeof(mac));
 	} else {
@@ -1497,8 +1565,24 @@ __mac_get_lcid(proc_t p, struct __mac_get_lcid_args *uap, register_t *ret __unus
 	return (error);
 }
 
+/*
+ * __mac_get_lctx:
+ *	Get login context label.  A login context associates a BSD process
+ *	associated with an instance of a user.
+ *
+ * Parameters:    p                        Process requesting the get
+ *                uap                      User argument descriptor (see below)
+ *                ret                      (ignored)
+ *
+ * Indirect:      uap->lcid                login context ID to search
+ *                uap->mac_p               MAC info 
+ *
+ * Returns:        0                       Success
+ *                !0                       Not success
+ *
+ */
 int
-__mac_get_lctx(proc_t p, struct __mac_get_lctx_args *uap, register_t *ret __unused)
+__mac_get_lctx(proc_t p, struct __mac_get_lctx_args *uap, int *ret __unused)
 {
 	char *elements, *buffer;
 	struct user_mac mac;
@@ -1550,7 +1634,7 @@ out:
 }
 
 int
-__mac_set_lctx(proc_t p, struct __mac_set_lctx_args *uap, register_t *ret __unused)
+__mac_set_lctx(proc_t p, struct __mac_set_lctx_args *uap, int *ret __unused)
 {
 	struct user_mac mac;
 	struct label *intlabel;
@@ -1609,21 +1693,21 @@ out:
 #else	/* LCTX */
 
 int
-__mac_get_lcid(proc_t p __unused, struct __mac_get_lcid_args *uap __unused, register_t *ret __unused)
+__mac_get_lcid(proc_t p __unused, struct __mac_get_lcid_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_get_lctx(proc_t p __unused, struct __mac_get_lctx_args *uap __unused, register_t *ret __unused)
+__mac_get_lctx(proc_t p __unused, struct __mac_get_lctx_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_set_lctx(proc_t p __unused, struct __mac_set_lctx_args *uap __unused, register_t *ret __unused)
+__mac_set_lctx(proc_t p __unused, struct __mac_set_lctx_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
@@ -1631,7 +1715,7 @@ __mac_set_lctx(proc_t p __unused, struct __mac_set_lctx_args *uap __unused, regi
 #endif	/* !LCTX */
 
 int
-__mac_get_fd(proc_t p, struct __mac_get_fd_args *uap, register_t *ret __unused)
+__mac_get_fd(proc_t p, struct __mac_get_fd_args *uap, int *ret __unused)
 {
 	struct fileproc *fp;
 	struct vnode *vp;
@@ -1691,10 +1775,12 @@ __mac_get_fd(proc_t p, struct __mac_get_fd_args *uap, register_t *ret __unused)
 	
 	switch (fp->f_fglob->fg_type) {
 		case DTYPE_VNODE:
-
 			intlabel = mac_vnode_label_alloc();
+			if (intlabel == NULL) {
+				error = ENOMEM;
+				break;
+			}
 			vp = (struct vnode *)fp->f_fglob->fg_data;
-
 			error = vnode_getwithref(vp);
 			if (error == 0) {
 				mac_vnode_label_copy(vp->v_label, intlabel);
@@ -1735,9 +1821,6 @@ __mac_get_fd(proc_t p, struct __mac_get_fd_args *uap, register_t *ret __unused)
 	return (error);
 }
 
-/*
- * MPSAFE
- */
 static int
 mac_get_filelink(proc_t p, user_addr_t mac_p, user_addr_t path_p, int follow)
 {
@@ -1767,8 +1850,11 @@ mac_get_filelink(proc_t p, user_addr_t mac_p, user_addr_t path_p, int follow)
 		return (error);
 
 	MALLOC(elements, char *, mac.m_buflen, M_MACTEMP, M_WAITOK);
+	MALLOC(buffer, char *, mac.m_buflen, M_MACTEMP, M_WAITOK | M_ZERO);
+
 	error = copyinstr(mac.m_string, elements, mac.m_buflen, &ulen);
 	if (error) {
+		FREE(buffer, M_MACTEMP);
 		FREE(elements, M_MACTEMP);
 		return (error);
 	}
@@ -1781,6 +1867,7 @@ mac_get_filelink(proc_t p, user_addr_t mac_p, user_addr_t path_p, int follow)
 		UIO_USERSPACE, path_p, ctx);
 	error = namei(&nd);
 	if (error) {
+		FREE(buffer, M_MACTEMP);
 		FREE(elements, M_MACTEMP);
 		return (error);
 	}
@@ -1790,25 +1877,23 @@ mac_get_filelink(proc_t p, user_addr_t mac_p, user_addr_t path_p, int follow)
 
 	intlabel = mac_vnode_label_alloc();
 	mac_vnode_label_copy(vp->v_label, intlabel);
-
-	MALLOC(buffer, char *, mac.m_buflen, M_MACTEMP, M_WAITOK | M_ZERO);
 	error = mac_vnode_label_externalize(intlabel, elements, buffer,
-					    mac.m_buflen, M_WAITOK);
-	FREE(elements, M_MACTEMP);
-
+				    	    mac.m_buflen, M_WAITOK);
+	mac_vnode_label_free(intlabel);
 	if (error == 0)
 		error = copyout(buffer, mac.m_string, strlen(buffer) + 1);
-	FREE(buffer, M_MACTEMP);
 
 	vnode_put(vp);
-	mac_vnode_label_free(intlabel);
+
+	FREE(buffer, M_MACTEMP);
+	FREE(elements, M_MACTEMP);
 
 	return (error);
 }
 
 int
 __mac_get_file(proc_t p, struct __mac_get_file_args *uap,
-	       register_t *ret __unused)
+	       int *ret __unused)
 {
 
 	return (mac_get_filelink(p, uap->mac_p, uap->path_p, 1));
@@ -1816,14 +1901,14 @@ __mac_get_file(proc_t p, struct __mac_get_file_args *uap,
 
 int
 __mac_get_link(proc_t p, struct __mac_get_link_args *uap,
-	       register_t *ret __unused)
+	       int *ret __unused)
 {
 
 	return (mac_get_filelink(p, uap->mac_p, uap->path_p, 0));
 }
 
 int
-__mac_set_fd(proc_t p, struct __mac_set_fd_args *uap, register_t *ret __unused)
+__mac_set_fd(proc_t p, struct __mac_set_fd_args *uap, int *ret __unused)
 {
 
 	struct fileproc *fp;
@@ -1880,6 +1965,11 @@ __mac_set_fd(proc_t p, struct __mac_set_fd_args *uap, register_t *ret __unused)
 	switch (fp->f_fglob->fg_type) {
 
 		case DTYPE_VNODE:
+			if (mac_label_vnodes == 0) {
+				error = ENOSYS;
+				break;
+			}
+
 			intlabel = mac_vnode_label_alloc();
 
 			error = mac_vnode_label_internalize(intlabel, buffer);
@@ -1927,9 +2017,6 @@ __mac_set_fd(proc_t p, struct __mac_set_fd_args *uap, register_t *ret __unused)
 	return (error);
 }
 
-/*
- * MPSAFE
- */
 static int
 mac_set_filelink(proc_t p, user_addr_t mac_p, user_addr_t path_p,
 		 int follow)
@@ -1942,6 +2029,9 @@ mac_set_filelink(proc_t p, user_addr_t mac_p, user_addr_t path_p,
 	char *buffer;
 	int error;
 	size_t ulen;
+
+	if (mac_label_vnodes == 0)
+		return ENOSYS;
 
 	if (IS_64BIT_PROCESS(p)) {
 		error = copyin(mac_p, &mac, sizeof(mac));
@@ -1997,7 +2087,7 @@ mac_set_filelink(proc_t p, user_addr_t mac_p, user_addr_t path_p,
 
 int
 __mac_set_file(proc_t p, struct __mac_set_file_args *uap,
-	       register_t *ret __unused)
+	       int *ret __unused)
 {
 
 	return (mac_set_filelink(p, uap->mac_p, uap->path_p, 1));
@@ -2005,18 +2095,29 @@ __mac_set_file(proc_t p, struct __mac_set_file_args *uap,
 
 int
 __mac_set_link(proc_t p, struct __mac_set_link_args *uap,
-	       register_t *ret __unused)
+	       int *ret __unused)
 {
 
 	return (mac_set_filelink(p, uap->mac_p, uap->path_p, 0));
 }
 
 /*
- * MPSAFE
+ * __mac_syscall: Perform a MAC policy system call
+ *
+ * Parameters:    p                       Process calling this routine
+ *                uap                     User argument descriptor (see below)
+ *                retv                    (Unused)
+ *
+ * Indirect:      uap->policy             Name of target MAC policy
+ *                uap->call               MAC policy-specific system call to perform
+ *                uap->arg                MAC policy-specific system call arguments
+ *                
+ * Returns:        0                      Success
+ *                !0                      Not success
+ *
  */
-
 int
-__mac_syscall(proc_t p, struct __mac_syscall_args *uap, register_t *retv __unused)
+__mac_syscall(proc_t p, struct __mac_syscall_args *uap, int *retv __unused)
 {
 	struct mac_policy_conf *mpc;
 	char target[MAC_MAX_POLICY_NAME];
@@ -2027,7 +2128,7 @@ __mac_syscall(proc_t p, struct __mac_syscall_args *uap, register_t *retv __unuse
 	error = copyinstr(uap->policy, target, sizeof(target), &ulen);
 	if (error)
 		return (error);
-	AUDIT_ARG(value, uap->call);
+	AUDIT_ARG(value32, uap->call);
 	AUDIT_ARG(mac_string, target);
 
 	error = ENOPOLICY;
@@ -2109,9 +2210,22 @@ mac_mount_label_get(struct mount *mp, user_addr_t mac_p)
 	return (error);
 }
 
+/*
+ * __mac_get_mount: Get mount point label information for a given pathname
+ *
+ * Parameters:    p                        (ignored)
+ *                uap                      User argument descriptor (see below)
+ *                ret                      (ignored)
+ *
+ * Indirect:      uap->path                Pathname
+ *                uap->mac_p               MAC info 
+ *
+ * Returns:        0                       Success
+ *                !0                       Not success
+ */
 int
 __mac_get_mount(proc_t p __unused, struct __mac_get_mount_args *uap,
-    register_t *ret __unused)
+    int *ret __unused)
 {
 	struct nameidata nd;
 	struct vfs_context *ctx = vfs_context_current();
@@ -2183,91 +2297,91 @@ mac_vnop_removexattr(struct vnode *vp __unused, const char *name __unused)
 }
 
 int
-__mac_get_pid(proc_t p __unused, struct __mac_get_pid_args *uap __unused, register_t *ret __unused)
+__mac_get_pid(proc_t p __unused, struct __mac_get_pid_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_get_proc(proc_t p __unused, struct __mac_get_proc_args *uap __unused, register_t *ret __unused)
+__mac_get_proc(proc_t p __unused, struct __mac_get_proc_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_set_proc(proc_t p __unused, struct __mac_set_proc_args *uap __unused, register_t *ret __unused)
+__mac_set_proc(proc_t p __unused, struct __mac_set_proc_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_get_file(proc_t p __unused, struct __mac_get_file_args *uap __unused, register_t *ret __unused)
+__mac_get_file(proc_t p __unused, struct __mac_get_file_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_get_link(proc_t p __unused, struct __mac_get_link_args *uap __unused, register_t *ret __unused)
+__mac_get_link(proc_t p __unused, struct __mac_get_link_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_set_file(proc_t p __unused, struct __mac_set_file_args *uap __unused, register_t *ret __unused)
+__mac_set_file(proc_t p __unused, struct __mac_set_file_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_set_link(proc_t p __unused, struct __mac_set_link_args *uap __unused, register_t *ret __unused)
+__mac_set_link(proc_t p __unused, struct __mac_set_link_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_get_fd(proc_t p __unused, struct __mac_get_fd_args *uap __unused, register_t *ret __unused)
+__mac_get_fd(proc_t p __unused, struct __mac_get_fd_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_set_fd(proc_t p __unused, struct __mac_set_fd_args *uap __unused, register_t *ret __unused)
+__mac_set_fd(proc_t p __unused, struct __mac_set_fd_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_syscall(proc_t p __unused, struct __mac_syscall_args *uap __unused, register_t *ret __unused)
+__mac_syscall(proc_t p __unused, struct __mac_syscall_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_get_lcid(proc_t p __unused, struct __mac_get_lcid_args *uap __unused, register_t *ret __unused)
+__mac_get_lcid(proc_t p __unused, struct __mac_get_lcid_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_get_lctx(proc_t p __unused, struct __mac_get_lctx_args *uap __unused, register_t *ret __unused)
+__mac_get_lctx(proc_t p __unused, struct __mac_get_lctx_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
 }
 
 int
-__mac_set_lctx(proc_t p __unused, struct __mac_set_lctx_args *uap __unused, register_t *ret __unused)
+__mac_set_lctx(proc_t p __unused, struct __mac_set_lctx_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);
@@ -2275,7 +2389,7 @@ __mac_set_lctx(proc_t p __unused, struct __mac_set_lctx_args *uap __unused, regi
 
 int
 __mac_get_mount(proc_t p __unused,
-    struct __mac_get_mount_args *uap __unused, register_t *ret __unused)
+    struct __mac_get_mount_args *uap __unused, int *ret __unused)
 {
 
 	return (ENOSYS);

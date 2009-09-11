@@ -75,5 +75,6 @@ typedef unsigned		vm_sync_t;
 #define VM_SYNC_KILLPAGES       ((vm_sync_t) 0x08)
 #define VM_SYNC_DEACTIVATE      ((vm_sync_t) 0x10)
 #define VM_SYNC_CONTIGUOUS      ((vm_sync_t) 0x20)
+#define VM_SYNC_REUSABLEPAGES	((vm_sync_t) 0x40)
 
 #endif  /* _MACH_VM_SYNC_H_ */

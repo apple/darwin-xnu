@@ -52,10 +52,10 @@
 // operands, with the standard ABI.
 //
 //	void longcopy(const void *dest, void *sou, size_t len)
- 
-        .text
-        .align	5, 0x90
-Llongcopy_sse3x:			// void longcopy(const void *dest, void *sou, size_t len)
+
+// void longcopy(const void *dest, void *sou, size_t len)
+
+COMMPAGE_FUNCTION_START(longcopy_sse3x, 32, 5)
 	pushl	%ebp			// set up a frame for backtraces
 	movl	%esp,%ebp
         pushl   %esi
@@ -217,5 +217,5 @@ LVeryLongChunkEnd:
 	popl	%ebp
 	ret
 
-	/* always match for now, as commpage_stuff_routine() will panic if no match */
-	COMMPAGE_DESCRIPTOR(longcopy_sse3x, _COMM_PAGE_LONGCOPY, 0 ,0)
+/* always match for now, as commpage_stuff_routine() will panic if no match */
+COMMPAGE_DESCRIPTOR(longcopy_sse3x, _COMM_PAGE_LONGCOPY, 0 ,0)

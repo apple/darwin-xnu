@@ -112,7 +112,7 @@ struct  ether_addr {
 # define	U_QUAD_T	u_quad_t
 # define	QUAD_T		quad_t
 #else /* BSD > 199306 */
-# define	U_QUAD_T	u_long
+# define	U_QUAD_T	u_int32_t
 # define	QUAD_T		long
 #endif /* BSD > 199306 */
 
@@ -129,7 +129,7 @@ typedef u_int32_t       u_32_t;
 # if defined(__alpha__) || defined(__alpha)
 typedef unsigned int    u_32_t;
 # else
-typedef unsigned long   u_32_t;
+typedef u_int32_t   u_32_t;
 # endif
 #endif /* __NetBSD__ || __OpenBSD__ || __FreeBSD__ || __sgi */
 
@@ -606,7 +606,7 @@ typedef struct icmp {
 			ip_t idi_ip;
 			/* options and then 64 bits of data */
 		} id_ip;
-		u_long	id_mask;
+		u_int32_t	id_mask;
 		char	id_data[1];
 	} icmp_dun;
 # define	icmp_otime	icmp_dun.id_ts.its_otime

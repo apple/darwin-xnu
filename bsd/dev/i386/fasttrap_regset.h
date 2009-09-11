@@ -115,6 +115,13 @@ extern "C" {
 #define	FS		1
 #define	GS		0
 
+#define REG_PC  EIP
+#define REG_FP  EBP
+#define REG_SP  UESP
+#define REG_PS  EFL
+#define REG_R0  EAX
+#define REG_R1  EDX
+
 #ifdef	__cplusplus
 }
 #endif

@@ -1,5 +1,30 @@
-/*	$FreeBSD: src/sys/netinet6/in6_cksum.c,v 1.1.2.3 2001/07/03 11:01:52 ume Exp $	*/
-/*	$KAME: in6_cksum.c,v 1.10 2000/12/03 00:53:59 itojun Exp $	*/
+/*
+ * Copyright (c) 2009 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -65,6 +90,35 @@
  *	@(#)in_cksum.c	8.1 (Berkeley) 6/10/93
  */
 
+/*-
+ * Copyright (c) 2008 Joerg Sonnenberger <joerg@NetBSD.org>.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE
+ * COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+ * AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+ * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
+
 #include <sys/param.h>
 #include <sys/mbuf.h>
 #include <sys/systm.h>
@@ -73,6 +127,95 @@
 #include <netinet/ip6.h>
 
 #include <net/net_osdep.h>
+
+#include <machine/endian.h>
+
+
+#if defined(__arm__) && __ARM_ARCH__ >= 6
+extern int cpu_in_cksum(struct mbuf *m, int len, int off, uint32_t initial_sum);
+
+u_int16_t
+inet6_cksum(struct mbuf *m, unsigned int nxt, unsigned int off,
+    unsigned int len)
+{
+	union {
+		uint16_t words[16];
+		struct {
+			struct in6_addr ip6_src;
+			struct in6_addr ip6_dst;
+		} addrs;
+	} u;
+	const struct in6_addr *in6_src;
+	const struct in6_addr *in6_dst;
+	const struct ip6_hdr *ip6;
+	uint32_t sum;
+	const uint16_t *w;
+	const char *cp;
+
+	if (off < sizeof (struct ip6_hdr))
+		panic("inet6_cksum: offset too short for IPv6 header");
+	if (m->m_len < sizeof (struct ip6_hdr))
+		panic("inet6_cksum: mbuf too short for IPv6 header");
+
+	if (nxt == 0)
+		return (cpu_in_cksum(m, len, off, 0));
+
+	/*
+	 * Compute the equivalent of:
+	 * struct ip6_hdr_pseudo ip6;
+	 *
+	 * bzero(sizeof (*ip6));
+	 * ip6.ip6ph_nxt = nxt;
+	 * ip6.ip6ph_len = htonl(len);
+	 * ipv6.ip6ph_src = mtod(m, struct ip6_hdr *)->ip6_src;
+	 * in6_clearscope(&ip6->ip6ph_src);
+	 * ipv6.ip6ph_dst = mtod(m, struct ip6_hdr *)->ip6_dst;
+	 * in6_clearscope(&ip6->ip6ph_dst);
+	 * sum = one_add(&ip6);
+	 */
+
+#if BYTE_ORDER == LITTLE_ENDIAN
+	sum = ((len & 0xffff) + ((len >> 16) & 0xffff) + nxt) << 8;
+#else
+	sum = (len & 0xffff) + ((len >> 16) & 0xffff) + nxt;
+#endif
+	cp = mtod(m, const char *);
+	w = (const uint16_t *)(cp + offsetof(struct ip6_hdr, ip6_src));
+	ip6 = (const void *)cp;
+	if ((uintptr_t)w % 2 == 0) {
+		in6_src = &ip6->ip6_src;
+		in6_dst = &ip6->ip6_dst;
+	} else {
+		memcpy(&u, &ip6->ip6_src, 32);
+		w = u.words;
+		in6_src = &u.addrs.ip6_src;
+		in6_dst = &u.addrs.ip6_dst;
+	}
+
+	sum += w[0];
+	if (!IN6_IS_SCOPE_EMBED(in6_src))
+		sum += w[1];
+	sum += w[2];
+	sum += w[3];
+	sum += w[4];
+	sum += w[5];
+	sum += w[6];
+	sum += w[7];
+	w += 8;
+	sum += w[0];
+	if (!IN6_IS_SCOPE_EMBED(in6_dst))
+		sum += w[1];
+	sum += w[2];
+	sum += w[3];
+	sum += w[4];
+	sum += w[5];
+	sum += w[6];
+	sum += w[7];
+
+	return (cpu_in_cksum(m, len, off, sum));
+}
+
+#else
 
 /*
  * Checksum routine for Internet Protocol family headers (Portable Version).
@@ -118,7 +261,7 @@ inet6_cksum(struct mbuf *m, unsigned int nxt, unsigned int off,
 	} l_util;
 
 	/* sanity check */
-	if (m->m_pkthdr.len < off + len) {
+	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.len < off + len) {
 		panic("inet6_cksum: mbuf len (%d) < off+len (%d+%d)\n",
 		    m->m_pkthdr.len, off, len);
 	}
@@ -169,7 +312,7 @@ inet6_cksum(struct mbuf *m, unsigned int nxt, unsigned int off,
 	/*
 	 * Force to even boundary.
 	 */
-	if ((1 & (long) w) && (mlen > 0)) {
+	if ((1 & (intptr_t) w) && (mlen > 0)) {
 		REDUCE;
 		sum <<= 8;
 		s_util.c[0] = *(u_char *)w;
@@ -245,7 +388,7 @@ inet6_cksum(struct mbuf *m, unsigned int nxt, unsigned int off,
 		/*
 		 * Force to even boundary.
 		 */
-		if ((1 & (long) w) && (mlen > 0)) {
+		if ((1 & (intptr_t) w) && (mlen > 0)) {
 			REDUCE;
 			sum <<= 8;
 			s_util.c[0] = *(u_char *)w;
@@ -301,3 +444,5 @@ inet6_cksum(struct mbuf *m, unsigned int nxt, unsigned int off,
 	REDUCE;
 	return (~sum & 0xffff);
 }
+
+#endif

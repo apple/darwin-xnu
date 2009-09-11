@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -28,7 +28,7 @@
 /*
  * Copyright 1995 NeXT Computer, Inc. All rights reserved.
  */
-/*-
+/*
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -94,7 +94,7 @@ typedef	long long		int64_t;
 #endif
 typedef	unsigned long long	u_int64_t;
 
-#if defined(__ppc64__)
+#if __LP64__
 typedef int64_t			register_t;
 #else
 typedef int32_t			register_t;
@@ -110,22 +110,59 @@ typedef unsigned long		uintptr_t;
 #endif
 
 #if !defined(_ANSI_SOURCE) && (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
-/* with LP64 support pointers and longs from user address space may vary */
-/* in size depending on the type of process (currently 32 or 64-bit, but */
-/* may change in the future).  These types are used for reserving the largest */
-/* possible size. */
-typedef u_int64_t	user_addr_t;	
-typedef u_int64_t	user_size_t;	
-typedef int64_t		user_ssize_t;	
-typedef int64_t		user_long_t;
-typedef u_int64_t	user_ulong_t;
-typedef int64_t		user_time_t;
+/* These types are used for reserving the largest possible size. */
+typedef u_int64_t		user_addr_t;	
+typedef u_int64_t		user_size_t;	
+typedef int64_t			user_ssize_t;
+typedef int64_t			user_long_t;
+typedef u_int64_t		user_ulong_t;
+typedef int64_t			user_time_t;
+typedef int64_t			user_off_t;
 #define USER_ADDR_NULL	((user_addr_t) 0)
 #define CAST_USER_ADDR_T(a_ptr)   ((user_addr_t)((uintptr_t)(a_ptr)))
+
+#ifdef KERNEL
+
+/*
+ * These types are used when you know the word size of the target
+ * user process. They can be used to create struct layouts independent
+ * of the types and alignment requirements of the current running
+ * kernel.
+ */
+
+/*
+ * The default ABI for the 32-bit PowerPC userspace is called "Power"
+ * alignment, and aligns fundamental integral data types to their
+ * natural boundary, with a maximum alignment of 4, even for 8-byte
+ * quantites. Power alignment also pads a structure to 8-byte alignment
+ * if the first field is an 8-byte quantity, which is not handled by
+ * these typedefs. The default ABI for 64-bit PowerPC userspace is called
+ * "Natural" alignment, and aligns fundamental integral data types
+ * to their natural boundaries.
+ */
+
+typedef __uint64_t		user64_addr_t __attribute__((aligned(8)));
+typedef __uint64_t		user64_size_t __attribute__((aligned(8)));
+typedef __int64_t		user64_ssize_t __attribute__((aligned(8)));
+typedef __int64_t		user64_long_t __attribute__((aligned(8)));
+typedef __uint64_t		user64_ulong_t __attribute__((aligned(8)));
+typedef __int64_t		user64_time_t __attribute__((aligned(8)));
+typedef __int64_t		user64_off_t __attribute__((aligned(8)));
+
+typedef __uint32_t		user32_addr_t;
+typedef __uint32_t		user32_size_t;
+typedef __int32_t		user32_ssize_t;
+typedef __int32_t		user32_long_t;
+typedef __uint32_t		user32_ulong_t;
+typedef __int32_t		user32_time_t;
+typedef __int64_t		user32_off_t __attribute__((aligned(4)));
+
+#endif /* KERNEL */
+
 #endif /* !_ANSI_SOURCE && (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /* This defines the size of syscall arguments after copying into the kernel: */
-typedef u_int64_t	syscall_arg_t;
+typedef u_int64_t		syscall_arg_t;
 
 #ifndef __offsetof
 #define __offsetof(type, field) ((size_t)(&((type *)0)->field))

@@ -993,6 +993,88 @@ mach_port_set_seqno(
 }
 
 /*
+ *	Routine:	mach_port_get_context [kernel call]
+ *	Purpose:
+ *		Returns a receive right's context pointer.
+ *	Conditions:
+ *		Nothing locked.
+ *	Returns:
+ *		KERN_SUCCESS		Set context pointer.
+ *		KERN_INVALID_TASK	The space is null.
+ *		KERN_INVALID_TASK	The space is dead.
+ *		KERN_INVALID_NAME	The name doesn't denote a right.
+ *		KERN_INVALID_RIGHT	Name doesn't denote receive rights.
+ */
+
+kern_return_t
+mach_port_get_context(
+	ipc_space_t		space,
+	mach_port_name_t	name,
+	mach_vm_address_t 	*context)
+{
+	ipc_port_t port;
+	kern_return_t kr;
+
+	if (space == IS_NULL)
+		return KERN_INVALID_TASK;
+
+	if (!MACH_PORT_VALID(name))
+		return KERN_INVALID_RIGHT;
+
+	kr = ipc_port_translate_receive(space, name, &port);
+	if (kr != KERN_SUCCESS)
+		return kr;
+
+	/* port is locked and active */
+	*context = port->ip_context;
+
+	ip_unlock(port);
+	return KERN_SUCCESS;
+}
+
+
+/*
+ *	Routine:	mach_port_set_context [kernel call]
+ *	Purpose:
+ *		Changes a receive right's context pointer.
+ *	Conditions:
+ *		Nothing locked.
+ *	Returns:
+ *		KERN_SUCCESS		Set context pointer.
+ *		KERN_INVALID_TASK	The space is null.
+ *		KERN_INVALID_TASK	The space is dead.
+ *		KERN_INVALID_NAME	The name doesn't denote a right.
+ *		KERN_INVALID_RIGHT	Name doesn't denote receive rights.
+ */
+
+kern_return_t
+mach_port_set_context(
+	ipc_space_t		space,
+	mach_port_name_t	name,
+	mach_vm_address_t 	context)
+{
+	ipc_port_t port;
+	kern_return_t kr;
+
+	if (space == IS_NULL)
+		return KERN_INVALID_TASK;
+
+	if (!MACH_PORT_VALID(name))
+		return KERN_INVALID_RIGHT;
+
+	kr = ipc_port_translate_receive(space, name, &port);
+	if (kr != KERN_SUCCESS)
+		return kr;
+
+	/* port is locked and active */
+	port->ip_context = context;
+
+	ip_unlock(port);
+	return KERN_SUCCESS;
+}
+
+
+/*
  *	Routine:	mach_port_gst_helper
  *	Purpose:
  *		A helper function for mach_port_get_set_status.
@@ -1103,7 +1185,7 @@ mach_port_get_set_status(
 		/* the port set must be active */
 
 		names = (mach_port_name_t *) addr;
-		maxnames = size / sizeof(mach_port_name_t);
+		maxnames = (ipc_entry_num_t)(size / sizeof(mach_port_name_t));
 		actual = 0;
 
 		table = space->is_table;

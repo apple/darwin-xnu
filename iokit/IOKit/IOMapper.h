@@ -57,6 +57,9 @@ __END_DECLS
 #include <IOKit/IOMemoryDescriptor.h>
 
 class OSData;
+class IODMACommand;
+
+extern const OSSymbol * gIOMapperIDKey;
 
 class IOMapper : public IOService
 {
@@ -109,20 +112,28 @@ public:
                             ppnum_t *pageList, IOItemCount pageCount);
     virtual void iovmInsert(ppnum_t addr, IOItemCount offset,
                             upl_page_info_t *pageList, IOItemCount pageCount);
-    static void checkForSystemMapper()
-        { if ((vm_address_t) gSystem & kWaitMask) waitForSystemMapper(); };
 
+    static void checkForSystemMapper()
+        { if ((uintptr_t) gSystem & kWaitMask) waitForSystemMapper(); };
+
+    static IOMapper * copyMapperForDevice(IOService * device);
+
+	
     // Function will panic if the given address is not found in a valid
     // iovm mapping.
     virtual addr64_t mapAddr(IOPhysicalAddress addr) = 0;
 
     // Get the address mask to or into an address to bypass this mapper
-    virtual bool getBypassMask(addr64_t *maskP) const
+    virtual bool getBypassMask(addr64_t *maskP) const;
+
+    virtual ppnum_t iovmAllocDMACommand(IODMACommand * command, IOItemCount pageCount);
+    virtual void iovmFreeDMACommand(IODMACommand * command, ppnum_t addr, IOItemCount pageCount);
+    
     OSMetaClassDeclareReservedUsed(IOMapper, 0);
+    OSMetaClassDeclareReservedUsed(IOMapper, 1);
+    OSMetaClassDeclareReservedUsed(IOMapper, 2);
 
 private:
-    OSMetaClassDeclareReservedUnused(IOMapper, 1);
-    OSMetaClassDeclareReservedUnused(IOMapper, 2);
     OSMetaClassDeclareReservedUnused(IOMapper, 3);
     OSMetaClassDeclareReservedUnused(IOMapper, 4);
     OSMetaClassDeclareReservedUnused(IOMapper, 5);

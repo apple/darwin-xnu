@@ -110,6 +110,7 @@ struct sysenter_stack {
 	uint64_t	top;		/* Top and pointer to ISS in PCS */
 };
 
+#pragma pack(4)
 struct x86_64_tss {
 	uint32_t	reserved1;
 	uint64_t	rsp0;		/* stack pointer for CPL0 */
@@ -130,4 +131,5 @@ struct x86_64_tss {
 	uint16_t	io_bit_map_offset;
 					/* offset to IO permission bit map */
 };
+#pragma pack()
 #endif	/* _I386_TSS_H_ */

@@ -729,7 +729,9 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 				tp->t_flags &= ~TF_MORETOCOME;
 		}
 	} else {
-		if (sbspace(&so->so_snd) < -512) {
+		if (sbspace(&so->so_snd) == 0) { 
+			/* if no space is left in sockbuf, 
+			 * do not try to squeeze in OOB traffic */
 			m_freem(m);
 			error = ENOBUFS;
 			goto out;
@@ -915,7 +917,7 @@ tcp_connect(tp, nam, p)
 
 		if (oinp != inp && (otp = intotcpcb(oinp)) != NULL &&
 		otp->t_state == TCPS_TIME_WAIT &&
-		    otp->t_starttime < (u_long)tcp_msl &&
+		    otp->t_starttime < (u_int32_t)tcp_msl &&
 		    (otp->t_flags & TF_RCVD_CC))
 			otp = tcp_close(otp);
 		else {
@@ -966,7 +968,7 @@ skip_oinp:
 	soisconnecting(so);
 	tcpstat.tcps_connattempt++;
 	tp->t_state = TCPS_SYN_SENT;
-	tp->t_timer[TCPT_KEEP] = tcp_keepinit;
+	tp->t_timer[TCPT_KEEP] = tp->t_keepinit ? tp->t_keepinit : tcp_keepinit;
 	tp->iss = tcp_new_isn(tp);
 	tcp_sendseqinit(tp);
 
@@ -1032,7 +1034,7 @@ tcp6_connect(tp, nam, p)
 	if (oinp) {
 		if (oinp != inp && (otp = intotcpcb(oinp)) != NULL &&
 		    otp->t_state == TCPS_TIME_WAIT &&
-		    otp->t_starttime < (u_long)tcp_msl &&
+		    otp->t_starttime < (u_int32_t)tcp_msl &&
 		    (otp->t_flags & TF_RCVD_CC))
 			otp = tcp_close(otp);
 		else
@@ -1061,7 +1063,7 @@ tcp6_connect(tp, nam, p)
 	soisconnecting(so);
 	tcpstat.tcps_connattempt++;
 	tp->t_state = TCPS_SYN_SENT;
-	tp->t_timer[TCPT_KEEP] = tcp_keepinit;
+	tp->t_timer[TCPT_KEEP] = tp->t_keepinit ? tp->t_keepinit : tcp_keepinit;
 	tp->iss = tcp_new_isn(tp);
 	tcp_sendseqinit(tp);
 
@@ -1179,6 +1181,17 @@ tcp_ctloutput(so, sopt)
 				tp->t_timer[TCPT_KEEP] = TCP_KEEPIDLE(tp); /* reset the timer to new value */
 			}
                         break;
+
+		case TCP_CONNECTIONTIMEOUT:
+			error = sooptcopyin(sopt, &optval, sizeof optval,
+						sizeof optval);
+			if (error)
+				break;
+			if (optval < 0)
+				error = EINVAL;
+			else 
+				tp->t_keepinit = optval * TCP_RETRANSHZ;
+			break;
 		
 		default:
 			error = ENOPROTOOPT;
@@ -1203,6 +1216,9 @@ tcp_ctloutput(so, sopt)
 		case TCP_NOPUSH:
 			optval = tp->t_flags & TF_NOPUSH;
 			break;
+		case TCP_CONNECTIONTIMEOUT:
+			optval = tp->t_keepinit / TCP_RETRANSHZ;
+			break;
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -1219,12 +1235,47 @@ tcp_ctloutput(so, sopt)
  * sizes, respectively.  These are obsolescent (this information should
  * be set by the route).
  */
-u_long	tcp_sendspace = 1448*256;
-SYSCTL_INT(_net_inet_tcp, TCPCTL_SENDSPACE, sendspace, CTLFLAG_RW, 
-    &tcp_sendspace , 0, "Maximum outgoing TCP datagram size");
-u_long	tcp_recvspace = 1448*384;
-SYSCTL_INT(_net_inet_tcp, TCPCTL_RECVSPACE, recvspace, CTLFLAG_RW, 
-    &tcp_recvspace , 0, "Maximum incoming TCP datagram size");
+u_int32_t	tcp_sendspace = 1448*256;
+u_int32_t	tcp_recvspace = 1448*384;
+
+/* During attach, the size of socket buffer allocated is limited to
+ * sb_max in sbreserve. Disallow setting the tcp send and recv space
+ * to be more than sb_max because that will cause tcp_attach to fail
+ * (see radar 5713060)
+ */  
+static int
+sysctl_tcp_sospace(struct sysctl_oid *oidp, __unused void *arg1,
+	__unused int arg2, struct sysctl_req *req) {
+	u_int32_t new_value = 0, *space_p = NULL;
+	int changed = 0, error = 0;
+	u_quad_t sb_effective_max = (sb_max / (MSIZE+MCLBYTES)) * MCLBYTES;
+
+	switch (oidp->oid_number) {
+		case TCPCTL_SENDSPACE:
+			space_p = &tcp_sendspace;
+			break;
+		case TCPCTL_RECVSPACE:
+			space_p = &tcp_recvspace;
+			break;
+		default:
+			return EINVAL;
+	}
+	error = sysctl_io_number(req, *space_p, sizeof(u_int32_t),
+		&new_value, &changed);
+	if (changed) {
+		if (new_value > 0 && new_value <= sb_effective_max) {
+			*space_p = new_value;
+		} else {
+			error = ERANGE;
+		}
+	}
+	return error;
+}
+
+SYSCTL_PROC(_net_inet_tcp, TCPCTL_SENDSPACE, sendspace, CTLTYPE_INT | CTLFLAG_RW, 
+    &tcp_sendspace , 0, &sysctl_tcp_sospace, "IU", "Maximum outgoing TCP datagram size");
+SYSCTL_PROC(_net_inet_tcp, TCPCTL_RECVSPACE, recvspace, CTLTYPE_INT | CTLFLAG_RW, 
+    &tcp_recvspace , 0, &sysctl_tcp_sospace, "IU", "Maximum incoming TCP datagram size");
 
 
 /*

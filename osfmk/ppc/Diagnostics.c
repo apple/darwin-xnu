@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -468,7 +468,7 @@ int diagCall(struct savearea *save) {
 			prssr = (processor_t)port->ip_kobject;	/* Extract the processor */
 			is_write_unlock(current_space());		/* All done with the space now, unlock it */
 			
-			save->save_r3 = (uint64_t)(uint32_t)PerProcTable[prssr->cpu_num].ppe_vaddr;	/* Pass back ther per proc */
+			save->save_r3 = (uint64_t)(uint32_t)PerProcTable[prssr->cpu_id].ppe_vaddr;	/* Pass back ther per proc */
 			return -1;								/* Return and check asts */
 
 /*
@@ -485,7 +485,7 @@ int diagCall(struct savearea *save) {
 			addrs = 0;								/* Clear just in case */
 			
 			ret = kmem_alloc_contig(kernel_map, &addrs, (vm_size_t)save->save_r4,
-						PAGE_MASK, 0, 0);						/* That which does not make us stronger, kills us... */
+						PAGE_MASK, 0, 0, FALSE);						/* That which does not make us stronger, kills us... */
 			if(ret != KERN_SUCCESS) addrs = 0;		/* Pass 0 if error */
 		
 			save->save_r3 = (uint64_t)addrs;		/* Pass back whatever */

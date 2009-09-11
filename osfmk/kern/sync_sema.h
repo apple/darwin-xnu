@@ -53,7 +53,7 @@ typedef struct semaphore {
 	struct wait_queue wait_queue; /* queue of blocked threads & lock     */
 	task_t		  owner;      /* task that owns semaphore            */
 	ipc_port_t	  port;	      /* semaphore port	 		     */
-	int		  ref_count;  /* reference count		     */
+	uint32_t	  ref_count;  /* reference count		     */
 	int		  count;      /* current count value	             */
 	boolean_t	  active;     /* active status			     */
 } Semaphore;

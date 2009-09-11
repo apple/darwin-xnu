@@ -77,9 +77,13 @@ timer_init(
 #if	!STAT_TIME
 	timer->tstamp = 0;
 #endif	/* STAT_TIME */
+#if	defined(__LP64__)
+	timer->all_bits = 0;
+#else
 	timer->low_bits = 0;
 	timer->high_bits = 0;
 	timer->high_bits_check = 0;
+#endif	/* defined(__LP64__) */
 }
 
 /*
@@ -103,13 +107,17 @@ timer_advance(
 	timer_t		timer,
 	uint64_t	delta)
 {
+#if	defined(__LP64__)
+	timer->all_bits += delta;
+#else
 	uint64_t	low;
 
 	low = delta + timer->low_bits;
 	if (low >> 32)
-		timer_update(timer, timer->high_bits + (low >> 32), low);
+		timer_update(timer, (uint32_t)(timer->high_bits + (low >> 32)), (uint32_t)low);
 	else
-		timer->low_bits = low;
+		timer->low_bits = (uint32_t)low;
+#endif 	/* defined(__LP64__) */
 }
 
 #if	!STAT_TIME

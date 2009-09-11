@@ -47,7 +47,7 @@ extern "C" {
 //#include <math.h>
 //#include <strings.h>
 
-typedef unsigned long WK_word;
+typedef unsigned int WK_word;
 
 /* at the moment we have dependencies on the page size.  That should
  * be changed to work for any power-of-two size that's at least 16

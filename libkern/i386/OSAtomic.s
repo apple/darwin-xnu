@@ -31,8 +31,10 @@
 #;***************************************************************************
 
 	.globl _OSCompareAndSwap
+	.globl _OSCompareAndSwapPtr
 
 _OSCompareAndSwap:
+_OSCompareAndSwapPtr:
 	movl		 4(%esp), %eax	#; oldValue
 	movl		 8(%esp), %edx	#; newValue
 	movl		12(%esp), %ecx	#; ptr
@@ -96,7 +98,9 @@ _OSAddAtomic64:
 #;*******************************************************
 
 	.globl	_OSAddAtomic
+	.globl	_OSAddAtomicLong
 _OSAddAtomic:
+_OSAddAtomicLong:
 	movl	4(%esp), %eax		#; Load addend
 	movl	8(%esp), %ecx		#; Load address of operand
 	lock

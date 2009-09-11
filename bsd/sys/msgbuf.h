@@ -80,7 +80,7 @@ extern struct	msgbuf *msgbufp;
 extern void log_putc(char);
 extern void log_putc_locked(char);
 extern void log_setsize(long size);
-extern int log_dmesg(user_addr_t, uint32_t, register_t *);
+extern int log_dmesg(user_addr_t, uint32_t, int32_t *);
 __END_DECLS
 #endif
 #endif	/* !_SYS_MSGBUF_H_ */

@@ -96,6 +96,7 @@ type NDR_record_t         = struct[8] of char;
 type io_user_scalar_t     = uint64_t;
 type io_user_reference_t  = uint64_t;
 type io_scalar_inband_t   = array[*:16] of int;
+// must be the same type as OSAsyncReference
 type io_async_ref_t 	  = array[*:8]  of natural_t;
 type io_scalar_inband64_t = array[*:16] of io_user_scalar_t;
 type io_async_ref64_t 	  = array[*:8]  of io_user_reference_t;
@@ -242,8 +243,13 @@ routine io_connect_map_memory(
 	    connection		: io_connect_t;
 	in  memory_type		: uint32_t;
 	in  into_task		: task_t;
+#if  KERNEL_SERVER
+	inout address		: uint32_t;
+	inout size		: uint32_t;
+#else
 	inout address		: vm_address_t;
 	inout size		: vm_size_t;
+#endif
 	in  flags		: uint32_t
 	);
 #else
@@ -484,7 +490,11 @@ routine io_connect_unmap_memory(
 	    connection		: io_connect_t;
 	in  memory_type		: uint32_t;
 	in  into_task		: task_t;
+#if KERNEL_SERVER
+	in  address		: uint32_t
+#else
 	in  address		: vm_address_t
+#endif
 	);
 #else
 skip;
@@ -504,10 +514,11 @@ routine io_registry_entry_get_property_recursively(
 	out properties		: io_buf_ptr_t, physicalcopy
 	);
 
-
 routine io_service_get_state(
 	    service		: io_object_t;
-	out state		: uint64_t
+	out state		: uint64_t;
+	out busy_state		: uint32_t;
+	out accumulated_busy_time : uint64_t
 	);
 
 routine io_service_get_matching_services_ool(
@@ -656,6 +667,11 @@ routine FUNC_NAME(io_service_add_notification_ool)(
 
 
 #endif /* KERNEL_SERVER || __LP64__ */
+
+routine io_registry_entry_get_registry_entry_id(
+	    registry_entry	: io_object_t;
+	out entry_id		: uint64_t
+	);
 
 #endif /* IOKIT */
 

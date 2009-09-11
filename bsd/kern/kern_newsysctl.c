@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -24,8 +24,8 @@
  * limitations under the License.
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
- */
-/*-
+ *
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -75,7 +75,7 @@
 #include <sys/proc_internal.h>
 #include <sys/systm.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 /*
 struct sysctl_oid_list sysctl__debug_children;
@@ -84,8 +84,6 @@ struct sysctl_oid_list sysctl__net_children;
 struct sysctl_oid_list sysctl__sysctl_children;
 */
 
-extern struct sysctl_oid *newsysctl_list[];
-extern struct sysctl_oid *machdep_sysctl_list[];
 lck_rw_t * sysctl_geometry_lock = NULL;
 
 static void
@@ -217,7 +215,7 @@ void sysctl_register_set(const char *set)
 {
 	struct sysctl_oid **oidpp, *oidp;
 
-	LINKER_SET_FOREACH(oidpp, set) {
+	LINKER_SET_FOREACH(oidpp, struct sysctl_oid **, set) {
 		oidp = *oidpp;
 		if (!(oidp->oid_kind & CTLFLAG_NOAUTO)) {
 		    sysctl_register_oid(oidp);
@@ -229,7 +227,7 @@ void sysctl_unregister_set(const char *set)
 {
 	struct sysctl_oid **oidpp, *oidp;
 
-	LINKER_SET_FOREACH(oidpp, set) {
+	LINKER_SET_FOREACH(oidpp, struct sysctl_oid **, set) {
 		oidp = *oidpp;
 		if (!(oidp->oid_kind & CTLFLAG_NOAUTO)) {
 		    sysctl_unregister_oid(oidp);
@@ -277,8 +275,9 @@ sysctl_io_number(struct sysctl_req *req, long long bigValue, size_t valueSize, v
 	 */
 
 	/* 32 bit value expected or 32 bit buffer offered */
-	if ((valueSize == sizeof(int)) ||
-	    ((req->oldlen == sizeof(int)) && (valueSize == sizeof(long long)))) {
+	if (((valueSize == sizeof(int)) ||
+	    ((req->oldlen == sizeof(int)) && (valueSize == sizeof(long long))))
+			&& (req->oldptr)) {
 		smallValue = (int)bigValue;
 		if ((long long)smallValue != bigValue)
 			return(ERANGE);
@@ -1094,7 +1093,7 @@ new_sysctl(struct proc *p, struct sysctl_args *uap)
 		return (error);
 
 	error = userland_sysctl(p, name, uap->namelen,
-		                    CAST_USER_ADDR_T(uap->old), uap->oldlenp, 0,
+		                    CAST_USER_ADDR_T(uap->old), uap->oldlenp,
 		                    CAST_USER_ADDR_T(uap->new), uap->newlen, &j);
 	if (error && error != ENOMEM)
 		return (error);
@@ -1112,7 +1111,7 @@ new_sysctl(struct proc *p, struct sysctl_args *uap)
  */
 int
 userland_sysctl(struct proc *p, int *name, u_int namelen, user_addr_t oldp, 
-                size_t *oldlenp, int inkernel, user_addr_t newp, size_t newlen, 
+                size_t *oldlenp, user_addr_t newp, size_t newlen, 
                 size_t *retval)
 {
 	int error = 0;
@@ -1123,13 +1122,7 @@ userland_sysctl(struct proc *p, int *name, u_int namelen, user_addr_t oldp,
 	req.p = p;
 
 	if (oldlenp) {
-		if (inkernel) {
-			req.oldlen = *oldlenp;
-		} else {
-			error = copyin(CAST_USER_ADDR_T(oldlenp), &req.oldlen, sizeof(*oldlenp));
-			if (error)
-				return (error);
-		}
+		req.oldlen = *oldlenp;
 	}
 
 	if (oldp) {
@@ -1189,6 +1182,13 @@ sysctlnametomib(const char *name, int *mibp, size_t *sizep)
 {
 	int oid[2];
 	int error;
+	char *non_const_name;
+
+	/*
+	 * NOTE: This cast is safe because the service node does not modify
+	 * the contents of the string as part of its operation.
+	 */
+	non_const_name = __CAST_AWAY_QUALIFIER(name, const, char *);
 
 	/* magic service node */
 	oid[0] = 0;
@@ -1196,8 +1196,9 @@ sysctlnametomib(const char *name, int *mibp, size_t *sizep)
 
 	/* look up OID for name */
 	*sizep *= sizeof(int);
-	error = sysctl(oid, 2, mibp, sizep, (void *)name, strlen(name));
+	error = sysctl(oid, 2, mibp, sizep, non_const_name, strlen(name));
 	*sizep /= sizeof(int);
+
 	return(error);
 }
 

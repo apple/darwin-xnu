@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -174,8 +174,10 @@ discrtrequest(cmd, rt, sa)
 	struct rtentry *rt;
 	struct sockaddr *sa;
 {
-	if (rt)
+	if (rt != NULL) {
+		RT_LOCK_ASSERT_HELD(rt);
 		rt->rt_rmx.rmx_mtu = DSMTU;
+	}
 }
 
 /*

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -77,11 +77,6 @@
 #define	SIOCSPGRP	 _IOW('s',  8, int)		/* set process group */
 #define	SIOCGPGRP	 _IOR('s',  9, int)		/* get process group */
 
-#if 0
-#define        SIOCADDRT        _IOW('r', 10, struct ortentry) /* add route */
-#define        SIOCDELRT        _IOW('r', 11, struct ortentry) /* delete route */
-#endif
-
 /*
  * OSIOCGIF* ioctls are deprecated; they are kept for binary compatibility.
  */
@@ -101,6 +96,8 @@
 #define	SIOCSIFBRDADDR	 _IOW('i', 19, struct ifreq)	/* set broadcast addr */
 #ifdef KERNEL_PRIVATE
 #define	OSIOCGIFCONF	_IOWR('i', 20, struct ifconf)	/* deprecated */
+#define	OSIOCGIFCONF32	_IOWR('i', 20, struct ifconf32)	/* deprecated */
+#define	OSIOCGIFCONF64	_IOWR('i', 20, struct ifconf64)	/* deprecated */
 #define	OSIOCGIFNETMASK	_IOWR('i', 21, struct ifreq)	/* deprecated */
 #endif /* KERNEL_PRIVATE */
 #define	SIOCSIFNETMASK	 _IOW('i', 22, struct ifreq)	/* set net addr mask */
@@ -118,10 +115,13 @@
 #define	SIOCGIFADDR	_IOWR('i', 33, struct ifreq)	/* get ifnet address */
 #define	SIOCGIFDSTADDR	_IOWR('i', 34, struct ifreq)	/* get p-p address */
 #define	SIOCGIFBRDADDR	_IOWR('i', 35, struct ifreq)	/* get broadcast addr */
+#if !defined(KERNEL) || defined(KERNEL_PRIVATE)
 #define	SIOCGIFCONF	_IOWR('i', 36, struct ifconf)	/* get ifnet list */
+#endif /* !KERNEL || KERNEL_PRIVATE */
 #ifdef KERNEL_PRIVATE
+#define	SIOCGIFCONF32	_IOWR('i', 36, struct ifconf32)	/* get ifnet list */
 #define	SIOCGIFCONF64	_IOWR('i', 36, struct ifconf64)	/* get ifnet list */
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 #define	SIOCGIFNETMASK	_IOWR('i', 37, struct ifreq)	/* get net addr mask */
 #define SIOCAUTOADDR	_IOWR('i', 38, struct ifreq)	/* autoconf address */
 #define SIOCAUTONETMASK	_IOW('i', 39, struct ifreq)	/* autoconf netmask */
@@ -137,8 +137,9 @@
 #define	SIOCSIFMEDIA	_IOWR('i', 55, struct ifreq)	/* set net media */
 #define	SIOCGIFMEDIA	_IOWR('i', 56, struct ifmediareq) /* get net media */
 #ifdef KERNEL_PRIVATE
+#define	SIOCGIFMEDIA32	_IOWR('i', 56, struct ifmediareq32) /* get net media */
 #define	SIOCGIFMEDIA64	_IOWR('i', 56, struct ifmediareq64) /* get net media (64-bit) */
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 #define	SIOCSIFGENERIC	 _IOW('i', 57, struct ifreq)	/* generic IF set op */
 #define	SIOCGIFGENERIC	_IOWR('i', 58, struct ifreq)	/* generic IF get op */
 #define SIOCRSLVMULTI   _IOWR('i', 59, struct rslvmulti_req)
@@ -165,13 +166,14 @@
 #define	SIOCGETVLAN	SIOCGIFVLAN
 #ifdef KERNEL_PRIVATE
 #define	SIOCSIFDEVMTU	 SIOCSIFALTMTU			/* deprecated */
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
 #ifdef PRIVATE
 #ifdef KERNEL
 #define	SIOCIFGCLONERS	_IOWR('i', 129, struct if_clonereq) /* get cloners */
+#define	SIOCIFGCLONERS32 _IOWR('i', 129, struct if_clonereq32) /* get cloners */
 #define	SIOCIFGCLONERS64 _IOWR('i', 129, struct if_clonereq64) /* get cloners */
-#endif KERNEL
+#endif /* KERNEL */
 
 /* 
  * temporary control calls to attach/detach IP to/from an ethernet interface
@@ -192,5 +194,7 @@
 #define SIOCSIFMAC	_IOW('i', 131, struct ifreq)	/* set IF MAC label */
 #define	SIOCSIFKPI	_IOW('i', 134, struct ifreq) /* set interface kext param - root only */
 #define	SIOCGIFKPI	_IOWR('i', 135, struct ifreq) /* get interface kext param */
+
+#define	SIOCGIFWAKEFLAGS _IOWR('i', 136, struct ifreq) /* get interface wake property flags */
 
 #endif /* !_SYS_SOCKIO_H_ */

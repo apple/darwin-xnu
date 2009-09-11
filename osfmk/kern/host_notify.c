@@ -45,8 +45,13 @@
 
 #include "mach/host_notify_reply.h"
 
+decl_lck_mtx_data(,host_notify_lock)
+
+lck_mtx_ext_t			host_notify_lock_ext;
+lck_grp_t				host_notify_lock_grp;
+lck_attr_t				host_notify_lock_attr;
+static lck_grp_attr_t	host_notify_lock_grp_attr;
 static zone_t			host_notify_zone;
-decl_mutex_data(static,host_notify_lock)
 
 static queue_head_t		host_notify_queue[HOST_NOTIFY_TYPE_MAX+1];
 
@@ -68,7 +73,11 @@ host_notify_init(void)
 	for (i = 0; i <= HOST_NOTIFY_TYPE_MAX; i++)
 		queue_init(&host_notify_queue[i]);
 
-	mutex_init(&host_notify_lock, 0);
+	lck_grp_attr_setdefault(&host_notify_lock_grp_attr);
+	lck_grp_init(&host_notify_lock_grp, "host_notify", &host_notify_lock_grp_attr);
+	lck_attr_setdefault(&host_notify_lock_attr);
+
+	lck_mtx_init_ext(&host_notify_lock, &host_notify_lock_ext, &host_notify_lock_grp, &host_notify_lock_attr);
 
 	i = sizeof (struct host_notify_entry);
 	host_notify_zone =
@@ -96,13 +105,13 @@ host_request_notification(
 	if (entry == NULL)
 		return (KERN_RESOURCE_SHORTAGE);
 
-	mutex_lock(&host_notify_lock);
+	lck_mtx_lock(&host_notify_lock);
 
 	ip_lock(port);
 	if (!ip_active(port) || ip_kotype(port) != IKOT_NONE) {
 		ip_unlock(port);
 
-		mutex_unlock(&host_notify_lock);
+		lck_mtx_unlock(&host_notify_lock);
 		zfree(host_notify_zone, entry);
 
 		return (KERN_FAILURE);
@@ -113,7 +122,7 @@ host_request_notification(
 	ip_unlock(port);
 
 	enqueue_tail(&host_notify_queue[notify_type], (queue_entry_t)entry);
-	mutex_unlock(&host_notify_lock);
+	lck_mtx_unlock(&host_notify_lock);
 
 	return (KERN_SUCCESS);
 }
@@ -124,7 +133,7 @@ host_notify_port_destroy(
 {
 	host_notify_t		entry;
 
-	mutex_lock(&host_notify_lock);
+	lck_mtx_lock(&host_notify_lock);
 
 	ip_lock(port);
 	if (ip_kotype(port) == IKOT_HOST_NOTIFY) {
@@ -135,7 +144,7 @@ host_notify_port_destroy(
 
 		assert(entry->port == port);
 		remqueue(NULL, (queue_entry_t)entry);
-		mutex_unlock(&host_notify_lock);
+		lck_mtx_unlock(&host_notify_lock);
 		zfree(host_notify_zone, entry);
 
 		ipc_port_release_sonce(port);
@@ -143,7 +152,7 @@ host_notify_port_destroy(
 	}
 	ip_unlock(port);
 
-	mutex_unlock(&host_notify_lock);
+	lck_mtx_unlock(&host_notify_lock);
 }
 
 static void
@@ -154,7 +163,7 @@ host_notify_all(
 {
 	queue_t		notify_queue = &host_notify_queue[notify_type];
 
-	mutex_lock(&host_notify_lock);
+	lck_mtx_lock(&host_notify_lock);
 
 	if (!queue_empty(notify_queue)) {
 		queue_head_t		send_queue;
@@ -183,18 +192,18 @@ host_notify_all(
 			ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
 			ip_unlock(port);
 
-			mutex_unlock(&host_notify_lock);
+			lck_mtx_unlock(&host_notify_lock);
 			zfree(host_notify_zone, entry);
 
 			msg->msgh_remote_port = port;
 
-			(void) mach_msg_send_from_kernel(msg, msg_size);
+			(void) mach_msg_send_from_kernel_proper(msg, msg_size);
 
-			mutex_lock(&host_notify_lock);
+			lck_mtx_lock(&host_notify_lock);
 		}
 	}
 
-	mutex_unlock(&host_notify_lock);
+	lck_mtx_unlock(&host_notify_lock);
 }
 
 void

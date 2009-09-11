@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -42,6 +42,8 @@
 
 __BEGIN_DECLS
 
+#ifdef XNU_KERNEL_PRIVATE
+
 /* are we a 64 bit platform ? */
 
 boolean_t ml_is64bit(void);
@@ -65,20 +67,76 @@ void	ml_cpu_set_ldt(int);
 /* Initialize Interrupts */
 void    ml_init_interrupt(void);
 
-/* Get Interrupts Enabled */
-boolean_t ml_get_interrupts_enabled(void);
-
-/* Set Interrupts Enabled */
-boolean_t ml_set_interrupts_enabled(boolean_t enable);
-
-/* Check if running at interrupt context */
-boolean_t ml_at_interrupt_context(void);
 
 /* Generate a fake interrupt */
 void ml_cause_interrupt(void);
 
+/* Initialize Interrupts */
+void ml_install_interrupt_handler(
+    void *nub,
+    int source,
+    void *target,
+    IOInterruptHandler handler,
+    void *refCon);
+
 void ml_get_timebase(unsigned long long *timestamp);
 void ml_init_lock_timeout(void); 
+
+vm_offset_t
+ml_static_ptovirt(
+	vm_offset_t);
+
+void ml_static_mfree(
+	vm_offset_t,
+	vm_size_t);
+
+/* boot memory allocation */
+vm_offset_t ml_static_malloc(
+	vm_size_t size);
+
+/* virtual to physical on wired pages */
+vm_offset_t ml_vtophys(
+	vm_offset_t vaddr);
+
+vm_size_t ml_nofault_copy(
+	vm_offset_t virtsrc, vm_offset_t virtdst, vm_size_t size);
+
+/* Machine topology info */
+uint64_t ml_cpu_cache_size(unsigned int level);	
+uint64_t ml_cpu_cache_sharing(unsigned int level);	
+
+/* Initialize the maximum number of CPUs */
+void ml_init_max_cpus(
+	unsigned long max_cpus);
+
+extern void	ml_cpu_up(void);
+extern void	ml_cpu_down(void);
+
+void bzero_phys_nc(
+				   addr64_t phys_address,
+				   uint32_t length);
+
+#if	defined(PEXPERT_KERNEL_PRIVATE) || defined(MACH_KERNEL_PRIVATE)
+/* IO memory map services */
+
+/* Map memory map IO space */
+vm_offset_t ml_io_map(
+	vm_offset_t phys_addr, 
+	vm_size_t size);
+
+extern uint32_t	bounce_pool_base;
+extern uint32_t	bounce_pool_size;
+
+void	ml_get_bouncepool_info(
+			       vm_offset_t *phys_addr,
+			       vm_size_t   *size);
+
+
+#endif /* PEXPERT_KERNEL_PRIVATE || MACH_KERNEL_PRIVATE  */
+
+#endif /* XNU_KERNEL_PRIVATE */
+
+#ifdef KERNEL_PRIVATE
 
 /* Type for the Time Base Enable function */
 typedef void (*time_base_enable_t)(cpu_id_t cpu_id, boolean_t enable);
@@ -100,31 +158,13 @@ typedef struct ml_processor_info ml_processor_info_t;
 
 
 /* Register a processor */
-kern_return_t ml_processor_register(
-        cpu_id_t cpu_id,
-	uint32_t lapic_id,
-        processor_t *processor,
-        ipi_handler_t *ipi_handler,
-	boolean_t boot_cpu);
-
-/* Initialize Interrupts */
-void ml_install_interrupt_handler(
-    void *nub,
-    int source,
-    void *target,
-    IOInterruptHandler handler,
-    void *refCon);
-
-#ifdef __APPLE_API_UNSTABLE
-vm_offset_t
-ml_static_ptovirt(
-	vm_offset_t);
-
-#ifdef	XNU_KERNEL_PRIVATE
-vm_offset_t
-ml_boot_ptovirt(
-	vm_offset_t);
-#endif
+kern_return_t
+ml_processor_register(
+        cpu_id_t        cpu_id,
+        uint32_t        lapic_id,
+        processor_t     *processor_out,
+        boolean_t       boot_cpu,
+	boolean_t       start );
 
 /* PCI config cycle probing */
 boolean_t ml_probe_read(
@@ -190,17 +230,6 @@ void ml_phys_write_double(
 void ml_phys_write_double_64(
 	addr64_t paddr, unsigned long long data);
 
-void ml_static_mfree(
-	vm_offset_t,
-	vm_size_t);
-
-/* virtual to physical on wired pages */
-vm_offset_t ml_vtophys(
-	vm_offset_t vaddr);
-
-vm_size_t ml_nofault_copy(
-	vm_offset_t virtsrc, vm_offset_t virtdst, vm_size_t size);
-
 /* Struct for ml_cpu_get_info */
 struct ml_cpu_info {
 	unsigned long		vector_unit;
@@ -218,45 +247,6 @@ typedef struct ml_cpu_info ml_cpu_info_t;
 /* Get processor info */
 void ml_cpu_get_info(ml_cpu_info_t *ml_cpu_info);
 
-/* Machine topology info */
-uint64_t ml_cpu_cache_size(unsigned int level);	
-uint64_t ml_cpu_cache_sharing(unsigned int level);	
-
-#endif /* __APPLE_API_UNSTABLE */
-
-#ifdef __APPLE_API_PRIVATE
-#if	defined(PEXPERT_KERNEL_PRIVATE) || defined(MACH_KERNEL_PRIVATE)
-/* IO memory map services */
-
-/* Map memory map IO space */
-vm_offset_t ml_io_map(
-	vm_offset_t phys_addr, 
-	vm_size_t size);
-
-/* boot memory allocation */
-vm_offset_t ml_static_malloc(
-	vm_size_t size);
-
-
-extern uint32_t	bounce_pool_base;
-extern uint32_t	bounce_pool_size;
-
-void	ml_get_bouncepool_info(
-			       vm_offset_t *phys_addr,
-			       vm_size_t   *size);
-
-
-#endif /* PEXPERT_KERNEL_PRIVATE || MACH_KERNEL_PRIVATE  */
-
-/* Zero bytes starting at a physical address */
-void bzero_phys(
-	addr64_t phys_address,
-	uint32_t length);
-
-void bzero_phys_nc(
-	addr64_t phys_address,
-	uint32_t length);
-
 void ml_thread_policy(
 	thread_t thread,
 	unsigned policy_id,
@@ -267,16 +257,9 @@ void ml_thread_policy(
 #define MACHINE_NETWORK_WORKLOOP		0x00000001
 #define MACHINE_NETWORK_NETISR			0x00000002
 
-/* Initialize the maximum number of CPUs */
-void ml_init_max_cpus(
-	unsigned long max_cpus);
-
 /* Return the maximum number of CPUs set by ml_init_max_cpus() */
 int ml_get_max_cpus(
 	void);
-
-extern void	ml_cpu_up(void);
-extern void	ml_cpu_down(void);
 
 /*
  * The following are in pmCPU.c not machine_routines.c.
@@ -293,7 +276,28 @@ extern uint64_t tmrCvt(uint64_t time, uint64_t conversion);
 
 extern uint64_t ml_cpu_int_event_time(void);
 
-#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL_PRIVATE */
+
+/* Get Interrupts Enabled */
+boolean_t ml_get_interrupts_enabled(void);
+
+/* Set Interrupts Enabled */
+boolean_t ml_set_interrupts_enabled(boolean_t enable);
+
+/* Check if running at interrupt context */
+boolean_t ml_at_interrupt_context(void);
+
+/* Zero bytes starting at a physical address */
+void bzero_phys(
+	addr64_t phys_address,
+	uint32_t length);
+
+/* Bytes available on current stack */
+vm_offset_t ml_stack_remaining(void);
+
+#if CONFIG_COUNTERS
+void ml_get_csw_threads(thread_t * /*old*/, thread_t * /*new*/);
+#endif /* CONFIG_COUNTERS */
 
 __END_DECLS
 

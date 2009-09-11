@@ -159,14 +159,10 @@ void DisposePtr (Ptr p)
 
 void
 DebugStr(
-#if CONFIG_NO_KPRINTF_STRINGS
-	__unused ConstStr255Param debuggerMsg
-#else
-	ConstStr255Param debuggerMsg
-#endif
+	const char * debuggerMsg
 	)
 {
-    kprintf ("*** Mac OS Debugging Message: %s\n", &debuggerMsg[1]);
+    kprintf ("*** Mac OS Debugging Message: %s\n", debuggerMsg);
 	DEBUG_BREAK;
 }
 

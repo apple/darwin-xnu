@@ -61,7 +61,11 @@
 
 #include <mach/port.h>
 
+#if defined(__x86_64__)
+extern mach_port_t			ux_exception_port;
+#else
 extern mach_port_name_t			ux_exception_port;
+#endif /* __x86_64__ */
 
 boolean_t	machine_exception(int exception, mach_exception_code_t code, 
 			mach_exception_subcode_t subcode,

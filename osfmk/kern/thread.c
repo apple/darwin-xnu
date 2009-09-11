@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -132,6 +132,9 @@
 #include <mach/host_priv_server.h>
 
 static struct zone			*thread_zone;
+static lck_grp_attr_t		thread_lck_grp_attr;
+lck_attr_t					thread_lck_attr;
+lck_grp_t					thread_lck_grp;
 
 decl_simple_lock_data(static,thread_stack_lock)
 static queue_head_t		thread_stack_queue;
@@ -144,10 +147,17 @@ static struct thread	thread_template, init_thread;
 static void		sched_call_null(
 					int			type,
 					thread_t	thread);
+
 #ifdef MACH_BSD
 extern void proc_exit(void *);
+extern uint64_t get_dispatchqueue_offset_from_proc(void *);
 #endif /* MACH_BSD */
+
 extern int debug_task;
+int thread_max = CONFIG_THREAD_MAX;	/* Max number of threads */
+int task_threadmax = CONFIG_THREAD_MAX;
+
+static uint64_t		thread_unique_id = 0;
 
 void
 thread_bootstrap(void)
@@ -200,7 +210,6 @@ thread_bootstrap(void)
 
 	thread_template.bound_processor = PROCESSOR_NULL;
 	thread_template.last_processor = PROCESSOR_NULL;
-	thread_template.last_switch = 0;
 
 	thread_template.sched_call = sched_call_null;
 
@@ -231,8 +240,10 @@ thread_bootstrap(void)
 	thread_template.t_dtrace_vtime = 0;
 	thread_template.t_dtrace_tracing = 0;
 #endif /* CONFIG_DTRACE */
-	
+
 	thread_template.t_chud = 0;
+	thread_template.t_page_creation_count = 0;
+	thread_template.t_page_creation_time = 0;
 
 	thread_template.affinity_set = NULL;
 	
@@ -245,10 +256,14 @@ thread_init(void)
 {
 	thread_zone = zinit(
 			sizeof(struct thread),
-			THREAD_MAX * sizeof(struct thread),
+			thread_max * sizeof(struct thread),
 			THREAD_CHUNK * sizeof(struct thread),
 			"threads");
-
+	
+	lck_grp_attr_setdefault(&thread_lck_grp_attr);
+	lck_grp_init(&thread_lck_grp, "thread", &thread_lck_grp_attr);
+	lck_attr_setdefault(&thread_lck_attr);
+	
 	stack_init();
 
 	/*
@@ -274,7 +289,9 @@ thread_terminate_self(void)
 	thread_t		thread = current_thread();
 	task_t			task;
 	spl_t			s;
-	int lastthread = 0;
+	int threadcnt;
+
+	DTRACE_PROC(lwp__exit);
 
 	thread_mtx_lock(thread);
 
@@ -308,23 +325,22 @@ thread_terminate_self(void)
 		thread_lock(thread);
 	}
 
+	thread_sched_call(thread, NULL);
+
 	thread_unlock(thread);
 	splx(s);
 
 	thread_policy_reset(thread);
 
+	task = thread->task;
+	uthread_cleanup(task, thread->uthread, task->bsd_info);
+	threadcnt = hw_atomic_sub(&task->active_thread_count, 1);
+
 	/*
 	 * If we are the last thread to terminate and the task is
 	 * associated with a BSD process, perform BSD process exit.
 	 */
-	task = thread->task;
-	uthread_cleanup(task, thread->uthread, task->bsd_info);
-	if (hw_atomic_sub(&task->active_thread_count, 1) == 0	&&
-					task->bsd_info != NULL) {
-		lastthread = 1;
-	} 
-	
-	if (lastthread != 0)
+	if (threadcnt == 0 && task->bsd_info != NULL)
 		proc_exit(task->bsd_info);
 
 	uthread_cred_free(thread->uthread);
@@ -405,6 +421,7 @@ thread_deallocate(
 	if (thread->kernel_stack != 0)
 		stack_free(thread);
 
+	lck_mtx_destroy(&thread->mutex, &thread_lck_grp);
 	machine_thread_destroy(thread);
 
 	zfree(thread_zone, thread);
@@ -440,12 +457,20 @@ thread_terminate_daemon(void)
 
 		queue_remove(&task->threads, thread, thread_t, task_threads);
 		task->thread_count--;
+
+		/* 
+		 * If the task is being halted, and there is only one thread
+		 * left in the task after this one, then wakeup that thread.
+		 */
+		if (task->thread_count == 1 && task->halting)
+			thread_wakeup((event_t)&task->halting);
+
 		task_unlock(task);
 
-		mutex_lock(&tasks_threads_lock);
+		lck_mtx_lock(&tasks_threads_lock);
 		queue_remove(&threads, thread, thread_t, threads);
 		threads_count--;
-		mutex_unlock(&tasks_threads_lock);
+		lck_mtx_unlock(&tasks_threads_lock);
 
 		thread_deallocate(thread);
 
@@ -565,6 +590,10 @@ thread_create_internal(
 	task_t					parent_task,
 	integer_t				priority,
 	thread_continue_t		continuation,
+	int						options,
+#define TH_OPTION_NONE		0x00
+#define TH_OPTION_NOCRED	0x01
+#define TH_OPTION_NOSUSP	0x02
 	thread_t				*out_thread)
 {
 	thread_t				new_thread;
@@ -573,38 +602,35 @@ thread_create_internal(
 	/*
 	 *	Allocate a thread and initialize static fields
 	 */
-	if (first_thread == NULL)
+	if (first_thread == THREAD_NULL)
 		new_thread = first_thread = current_thread();
 	else
 		new_thread = (thread_t)zalloc(thread_zone);
-	if (new_thread == NULL)
+	if (new_thread == THREAD_NULL)
 		return (KERN_RESOURCE_SHORTAGE);
 
 	if (new_thread != first_thread)
 		*new_thread = thread_template;
 
 #ifdef MACH_BSD
-    {
-		new_thread->uthread = uthread_alloc(parent_task, new_thread);
-		if (new_thread->uthread == NULL) {
-			zfree(thread_zone, new_thread);
-			return (KERN_RESOURCE_SHORTAGE);
-		}
+	new_thread->uthread = uthread_alloc(parent_task, new_thread, (options & TH_OPTION_NOCRED) != 0);
+	if (new_thread->uthread == NULL) {
+		zfree(thread_zone, new_thread);
+		return (KERN_RESOURCE_SHORTAGE);
 	}
 #endif  /* MACH_BSD */
 
 	if (machine_thread_create(new_thread, parent_task) != KERN_SUCCESS) {
 #ifdef MACH_BSD
-		{
-			void *ut = new_thread->uthread;
+		void *ut = new_thread->uthread;
 
-			new_thread->uthread = NULL;
-			/* cred free may not be necessary */
-			uthread_cleanup(parent_task, ut, parent_task->bsd_info);
-			uthread_cred_free(ut);
-			uthread_zone_free(ut);
-		}
+		new_thread->uthread = NULL;
+		/* cred free may not be necessary */
+		uthread_cleanup(parent_task, ut, parent_task->bsd_info);
+		uthread_cred_free(ut);
+		uthread_zone_free(ut);
 #endif  /* MACH_BSD */
+
 		zfree(thread_zone, new_thread);
 		return (KERN_FAILURE);
 	}
@@ -614,21 +640,23 @@ thread_create_internal(
 	thread_lock_init(new_thread);
 	wake_lock_init(new_thread);
 
-	mutex_init(&new_thread->mutex, 0);
+	lck_mtx_init(&new_thread->mutex, &thread_lck_grp, &thread_lck_attr);
 
 	ipc_thread_init(new_thread);
 	queue_init(&new_thread->held_ulocks);
 
 	new_thread->continuation = continuation;
 
-	mutex_lock(&tasks_threads_lock);
+	lck_mtx_lock(&tasks_threads_lock);
 	task_lock(parent_task);
 
-	if (	!parent_task->active							||
-			(parent_task->thread_count >= THREAD_MAX	&&
-			 parent_task != kernel_task)) {
+	if (	!parent_task->active || parent_task->halting ||
+			((options & TH_OPTION_NOSUSP) != 0 &&
+			 	parent_task->suspend_count > 0)	||
+			(parent_task->thread_count >= task_threadmax &&
+				parent_task != kernel_task)		) {
 		task_unlock(parent_task);
-		mutex_unlock(&tasks_threads_lock);
+		lck_mtx_unlock(&tasks_threads_lock);
 
 #ifdef MACH_BSD
 		{
@@ -643,10 +671,14 @@ thread_create_internal(
 #endif  /* MACH_BSD */
 		ipc_thread_disable(new_thread);
 		ipc_thread_terminate(new_thread);
+		lck_mtx_destroy(&new_thread->mutex, &thread_lck_grp);
 		machine_thread_destroy(new_thread);
 		zfree(thread_zone, new_thread);
 		return (KERN_FAILURE);
 	}
+
+	/* New threads inherit any default state on the task */
+	machine_thread_inherit_taskwide(new_thread, parent_task);
 
 	task_reference_internal(parent_task);
 
@@ -660,11 +692,23 @@ thread_create_internal(
 	/* So terminating threads don't need to take the task lock to decrement */
 	hw_atomic_add(&parent_task->active_thread_count, 1);
 
+	/* Protected by the tasks_threads_lock */
+	new_thread->thread_id = ++thread_unique_id;
+
 	queue_enter(&threads, new_thread, thread_t, threads);
 	threads_count++;
 
 	timer_call_setup(&new_thread->wait_timer, thread_timer_expire, new_thread);
 	timer_call_setup(&new_thread->depress_timer, thread_depress_expire, new_thread);
+
+#if CONFIG_COUNTERS
+	/*
+	 * If parent task has any reservations, they need to be propagated to this
+	 * thread.
+	 */
+	new_thread->t_chud = (TASK_PMC_FLAG == (parent_task->t_chud & TASK_PMC_FLAG)) ? 
+		THREAD_PMC_FLAG : 0U;
+#endif
 
 	/* Set the thread's scheduling parameters */
 	if (parent_task != kernel_task)
@@ -691,7 +735,7 @@ thread_create_internal(
 
 		KERNEL_DEBUG_CONSTANT(
 					TRACEDBG_CODE(DBG_TRACE_DATA, 1) | DBG_FUNC_NONE,
-							(vm_address_t)new_thread, dbg_arg2, 0, 0, 0);
+							(vm_address_t)(uintptr_t)thread_tid(new_thread), dbg_arg2, 0, 0, 0);
 
 		kdbg_trace_string(parent_task->bsd_info,
 							&dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
@@ -717,7 +761,7 @@ thread_create(
 	if (task == TASK_NULL || task == kernel_task)
 		return (KERN_INVALID_ARGUMENT);
 
-	result = thread_create_internal(task, -1, (thread_continue_t)thread_bootstrap_return, &thread);
+	result = thread_create_internal(task, -1, (thread_continue_t)thread_bootstrap_return, TH_OPTION_NONE, &thread);
 	if (result != KERN_SUCCESS)
 		return (result);
 
@@ -727,7 +771,7 @@ thread_create(
 		thread_hold(thread);
 
 	task_unlock(task);
-	mutex_unlock(&tasks_threads_lock);
+	lck_mtx_unlock(&tasks_threads_lock);
 	
 	*new_thread = thread;
 
@@ -748,7 +792,7 @@ thread_create_running(
 	if (task == TASK_NULL || task == kernel_task)
 		return (KERN_INVALID_ARGUMENT);
 
-	result = thread_create_internal(task, -1, (thread_continue_t)thread_bootstrap_return, &thread);
+	result = thread_create_internal(task, -1, (thread_continue_t)thread_bootstrap_return, TH_OPTION_NONE, &thread);
 	if (result != KERN_SUCCESS)
 		return (result);
 
@@ -756,7 +800,7 @@ thread_create_running(
 						thread, flavor, new_state, new_state_count);
 	if (result != KERN_SUCCESS) {
 		task_unlock(task);
-		mutex_unlock(&tasks_threads_lock);
+		lck_mtx_unlock(&tasks_threads_lock);
 
 		thread_terminate(thread);
 		thread_deallocate(thread);
@@ -768,11 +812,40 @@ thread_create_running(
 	thread_mtx_unlock(thread);
 
 	task_unlock(task);
-	mutex_unlock(&tasks_threads_lock);
+	lck_mtx_unlock(&tasks_threads_lock);
 
 	*new_thread = thread;
 
 	return (result);
+}
+
+kern_return_t
+thread_create_workq(
+	task_t				task,
+	thread_t			*new_thread)
+{
+	kern_return_t		result;
+	thread_t			thread;
+
+	if (task == TASK_NULL || task == kernel_task)
+		return (KERN_INVALID_ARGUMENT);
+
+	result = thread_create_internal(task, -1, (thread_continue_t)thread_bootstrap_return,
+													TH_OPTION_NOCRED | TH_OPTION_NOSUSP, &thread);
+	if (result != KERN_SUCCESS)
+		return (result);
+
+	thread->user_stop_count = 1;
+	thread_hold(thread);
+	if (task->suspend_count > 0)
+		thread_hold(thread);
+
+	task_unlock(task);
+	lck_mtx_unlock(&tasks_threads_lock);
+	
+	*new_thread = thread;
+
+	return (KERN_SUCCESS);
 }
 
 /*
@@ -792,12 +865,12 @@ kernel_thread_create(
 	thread_t			thread;
 	task_t				task = kernel_task;
 
-	result = thread_create_internal(task, priority, continuation, &thread);
+	result = thread_create_internal(task, priority, continuation, TH_OPTION_NONE, &thread);
 	if (result != KERN_SUCCESS)
 		return (result);
 
 	task_unlock(task);
-	mutex_unlock(&tasks_threads_lock);
+	lck_mtx_unlock(&tasks_threads_lock);
 
 	stack_alloc(thread);
 	assert(thread->kernel_stack != 0);
@@ -829,11 +902,11 @@ kernel_thread_start_priority(
 	if (result != KERN_SUCCESS)
 		return (result);
 
+	*new_thread = thread;	
+
 	thread_mtx_lock(thread);
 	thread_start_internal(thread);
 	thread_mtx_unlock(thread);
-
-	*new_thread = thread;
 
 	return (result);
 }
@@ -846,6 +919,8 @@ kernel_thread_start(
 {
 	return kernel_thread_start_priority(continuation, parameter, -1, new_thread);
 }
+
+#ifndef	__LP64__
 
 thread_t
 kernel_thread(
@@ -866,6 +941,8 @@ kernel_thread(
 
 	return (thread);
 }
+
+#endif	/* __LP64__ */
 
 kern_return_t
 thread_info_internal(
@@ -909,8 +986,8 @@ thread_info_internal(
 		 *	then for 5/8 ageing.  The correction factor [3/5] is
 		 *	(1/(5/8) - 1).
 		 */
-		basic_info->cpu_usage =	((uint64_t)thread->cpu_usage
-									* TH_USAGE_SCALE) /	sched_tick_interval;
+		basic_info->cpu_usage =	(integer_t)(((uint64_t)thread->cpu_usage
+									* TH_USAGE_SCALE) /	sched_tick_interval);
 		basic_info->cpu_usage = (basic_info->cpu_usage * 3) / 5;
 
 		if (basic_info->cpu_usage > TH_USAGE_SCALE)
@@ -953,6 +1030,36 @@ thread_info_internal(
 	    *thread_info_count = THREAD_BASIC_INFO_COUNT;
 
 	    return (KERN_SUCCESS);
+	}
+	else
+	if (flavor == THREAD_IDENTIFIER_INFO) {
+	    register thread_identifier_info_t	identifier_info;
+
+	    if (*thread_info_count < THREAD_IDENTIFIER_INFO_COUNT)
+			return (KERN_INVALID_ARGUMENT);
+
+	    identifier_info = (thread_identifier_info_t) thread_info_out;
+
+	    s = splsched();
+	    thread_lock(thread);
+
+	    identifier_info->thread_id = thread->thread_id;
+#if defined(__ppc__) || defined(__arm__)
+	    identifier_info->thread_handle = thread->machine.cthread_self;
+#else
+	    identifier_info->thread_handle = thread->machine.pcb->cthread_self;
+#endif
+	    if(thread->task->bsd_info) {
+	    	identifier_info->dispatch_qaddr =  identifier_info->thread_handle + get_dispatchqueue_offset_from_proc(thread->task->bsd_info);
+	    } else {
+		    thread_unlock(thread);
+		    splx(s);
+		    return KERN_INVALID_ARGUMENT;
+	    }
+
+	    thread_unlock(thread);
+	    splx(s);
+	    return KERN_SUCCESS;
 	}
 	else
 	if (flavor == THREAD_SCHED_TIMESHARE_INFO) {
@@ -1049,13 +1156,16 @@ thread_read_times(
 	time_value_t	*user_time,
 	time_value_t	*system_time)
 {
-	absolutetime_to_microtime(timer_grab(&thread->user_timer),
-				  (unsigned *)&user_time->seconds,
-				  (unsigned *)&user_time->microseconds);
+	clock_sec_t		secs;
+	clock_usec_t	usecs;
 
-	absolutetime_to_microtime(timer_grab(&thread->system_timer),
-				  (unsigned *)&system_time->seconds,
-				  (unsigned *)&system_time->microseconds);
+	absolutetime_to_microtime(timer_grab(&thread->user_timer), &secs, &usecs);
+	user_time->seconds = (typeof(user_time->seconds))secs;
+	user_time->microseconds = usecs;
+
+	absolutetime_to_microtime(timer_grab(&thread->system_timer), &secs, &usecs);
+	system_time->seconds = (typeof(system_time->seconds))secs;
+	system_time->microseconds = usecs;
 }
 
 kern_return_t
@@ -1290,6 +1400,34 @@ thread_static_param(
 	thread_mtx_unlock(thread);
 }
 
+uint64_t
+thread_tid(
+	thread_t	thread)
+{
+	return (thread != THREAD_NULL? thread->thread_id: 0);
+}
+
+uint64_t
+thread_dispatchqaddr(
+	thread_t		thread)
+{
+	uint64_t	dispatchqueue_addr = 0;
+	uint64_t	thread_handle = 0;
+
+	if (thread != THREAD_NULL) {
+#if defined(__ppc__) || defined(__arm__)
+		thread_handle = thread->machine.cthread_self;
+#else
+		thread_handle = thread->machine.pcb->cthread_self;
+#endif
+
+		if (thread->task->bsd_info)
+			dispatchqueue_addr = thread_handle + get_dispatchqueue_offset_from_proc(thread->task->bsd_info);
+	}
+
+	return (dispatchqueue_addr);
+}
+
 /*
  * Export routines to other components for things that are done as macros
  * within the osfmk component.
@@ -1416,4 +1554,13 @@ vm_offset_t dtrace_set_thread_recover(thread_t thread, vm_offset_t recover)
 	return prev;
 }
 
+void dtrace_thread_bootstrap(void)
+{
+	task_t task = current_task();
+	if(task->thread_count == 1) {
+		DTRACE_PROC(start);
+	}
+	DTRACE_PROC(lwp__start);
+
+}
 #endif /* CONFIG_DTRACE */

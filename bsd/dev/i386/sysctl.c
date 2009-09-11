@@ -38,11 +38,11 @@ hw_cpu_sysctl SYSCTL_HANDLER_ARGS
 {
     __unused struct sysctl_oid *unused_oidp = oidp;
     i386_cpu_info_t *cpu_info = cpuid_info();
-    void *ptr = (uint8_t *)cpu_info + (uint32_t)arg1;
+    void *ptr = (uint8_t *)cpu_info + (uintptr_t)arg1;
     int value;
 
     if (arg2 == -1) {
-        ptr = *(char **)ptr;
+        ptr = *(void **)ptr;
         arg2 = 0;
     }
 
@@ -56,6 +56,19 @@ hw_cpu_sysctl SYSCTL_HANDLER_ARGS
 	arg2 = sizeof(uint32_t);
     }
     return SYSCTL_OUT(req, ptr, arg2 ? (size_t) arg2 : strlen((char *)ptr)+1);
+}
+
+static int
+hw_cpu_sysctl_nonzero SYSCTL_HANDLER_ARGS
+{
+    i386_cpu_info_t *cpu_info = cpuid_info();
+    void *ptr = (uint8_t *)cpu_info + (uintptr_t)arg1;
+    int value = *(uint32_t *)ptr;
+
+    if (value == 0)
+        return ENOENT;
+
+    return hw_cpu_sysctl(oidp, arg1, arg2, req);
 }
 
 static int
@@ -99,17 +112,6 @@ hw_cpu_logical_per_package SYSCTL_HANDLER_ARGS
 
 	return SYSCTL_OUT(req, &cpu_info->cpuid_logical_per_package,
 			  sizeof(cpu_info->cpuid_logical_per_package));
-}
-
-static int
-hw_cpu_sysctl_nehalem SYSCTL_HANDLER_ARGS
-{
-	i386_cpu_info_t *cpu_info = cpuid_info();
-
-	if (cpu_info->cpuid_model != 26)
-		return ENOENT;
-
-	hw_cpu_sysctl(oidp, arg1, arg2, req);
 }
 
 static int
@@ -157,6 +159,14 @@ hw_cpu_flex_ratio_max SYSCTL_HANDLER_ARGS
 SYSCTL_NODE(_machdep, OID_AUTO, cpu, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"CPU info");
 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, max_basic, CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_max_basic),sizeof(uint32_t),
+	    hw_cpu_sysctl, "IU", "Max Basic Information value");
+
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, max_ext, CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_max_ext), sizeof(uint32_t),
+	    hw_cpu_sysctl, "IU", "Max Extended Function Information value");
+
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, vendor, CTLTYPE_STRING | CTLFLAG_RD, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_vendor), 0,
 	    hw_cpu_sysctl, "A", "CPU vendor");
@@ -187,11 +197,11 @@ SYSCTL_PROC(_machdep_cpu, OID_AUTO, stepping, CTLTYPE_INT | CTLFLAG_RD,
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, feature_bits, CTLTYPE_QUAD | CTLFLAG_RD, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_features), sizeof(uint64_t),
-	    hw_cpu_sysctl, "I", "CPU features");
+	    hw_cpu_sysctl, "IU", "CPU features");
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, extfeature_bits, CTLTYPE_QUAD | CTLFLAG_RD, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_extfeatures), sizeof(uint64_t),
-	    hw_cpu_sysctl, "I", "CPU extended features");
+	    hw_cpu_sysctl, "IU", "CPU extended features");
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, signature, CTLTYPE_INT | CTLFLAG_RD, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_signature), sizeof(uint32_t),
@@ -353,30 +363,65 @@ SYSCTL_PROC(_machdep_cpu_cache, OID_AUTO, size,
 
 SYSCTL_NODE(_machdep_cpu, OID_AUTO, tlb, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"tlb");
+SYSCTL_NODE(_machdep_cpu_tlb, OID_AUTO, inst, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
+	"inst");
+SYSCTL_NODE(_machdep_cpu_tlb, OID_AUTO, data, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
+	"data");
 
-SYSCTL_PROC(_machdep_cpu_tlb, OID_AUTO, inst_small,
+SYSCTL_PROC(_machdep_cpu_tlb_inst, OID_AUTO, small,
 	    CTLTYPE_INT | CTLFLAG_RD, 
-	    (void *)offsetof(i386_cpu_info_t, cpuid_itlb_small),
+	    (void *)offsetof(i386_cpu_info_t,
+			     cpuid_tlb[TLB_INST][TLB_SMALL][0]),
 	    sizeof(uint32_t),
-	    hw_cpu_sysctl, "I", "Number of small page instruction TLBs");
+	    hw_cpu_sysctl_nonzero, "I",
+	    "Number of small page instruction TLBs");
 
-SYSCTL_PROC(_machdep_cpu_tlb, OID_AUTO, data_small,
+SYSCTL_PROC(_machdep_cpu_tlb_data, OID_AUTO, small,
 	    CTLTYPE_INT | CTLFLAG_RD, 
-	    (void *)offsetof(i386_cpu_info_t, cpuid_dtlb_small),
+	    (void *)offsetof(i386_cpu_info_t,
+			     cpuid_tlb[TLB_DATA][TLB_SMALL][0]),
 	    sizeof(uint32_t),
-	    hw_cpu_sysctl, "I", "Number of small page data TLBs");
+	    hw_cpu_sysctl_nonzero, "I",
+	    "Number of small page data TLBs (1st level)");
 
-SYSCTL_PROC(_machdep_cpu_tlb, OID_AUTO, inst_large,
+SYSCTL_PROC(_machdep_cpu_tlb_data, OID_AUTO, small_level1,
 	    CTLTYPE_INT | CTLFLAG_RD, 
-	    (void *)offsetof(i386_cpu_info_t, cpuid_itlb_large),
+	    (void *)offsetof(i386_cpu_info_t,
+			     cpuid_tlb[TLB_DATA][TLB_SMALL][1]),
 	    sizeof(uint32_t),
-	    hw_cpu_sysctl, "I", "Number of large page instruction TLBs");
+	    hw_cpu_sysctl_nonzero, "I",
+	    "Number of small page data TLBs (2nd level)");
 
-SYSCTL_PROC(_machdep_cpu_tlb, OID_AUTO, data_large,
+SYSCTL_PROC(_machdep_cpu_tlb_inst, OID_AUTO, large,
 	    CTLTYPE_INT | CTLFLAG_RD, 
-	    (void *)offsetof(i386_cpu_info_t, cpuid_dtlb_large),
+	    (void *)offsetof(i386_cpu_info_t,
+			     cpuid_tlb[TLB_INST][TLB_LARGE][0]),
 	    sizeof(uint32_t),
-	    hw_cpu_sysctl, "I", "Number of large page data TLBs");
+	    hw_cpu_sysctl_nonzero, "I",
+	    "Number of large page instruction TLBs");
+
+SYSCTL_PROC(_machdep_cpu_tlb_data, OID_AUTO, large,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t,
+			     cpuid_tlb[TLB_DATA][TLB_LARGE][0]),
+	    sizeof(uint32_t),
+	    hw_cpu_sysctl_nonzero, "I",
+	    "Number of large page data TLBs (1st level)");
+
+SYSCTL_PROC(_machdep_cpu_tlb_data, OID_AUTO, large_level1,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t,
+			     cpuid_tlb[TLB_DATA][TLB_LARGE][1]),
+	    sizeof(uint32_t),
+	    hw_cpu_sysctl_nonzero, "I",
+	    "Number of large page data TLBs (2nd level)");
+
+SYSCTL_PROC(_machdep_cpu_tlb, OID_AUTO, shared,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_stlb),
+	    sizeof(uint32_t),
+	    hw_cpu_sysctl_nonzero, "I",
+	    "Number of shared TLBs");
 
 
 SYSCTL_NODE(_machdep_cpu, OID_AUTO, address_bits, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
@@ -393,6 +438,7 @@ SYSCTL_PROC(_machdep_cpu_address_bits, OID_AUTO, virtual,
 	    (void *)offsetof(i386_cpu_info_t, cpuid_address_bits_virtual),
 	    sizeof(uint32_t),
 	    hw_cpu_sysctl, "I", "Number of virtual address bits");
+
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, core_count,
 	    CTLTYPE_INT | CTLFLAG_RD, 
@@ -427,6 +473,7 @@ SYSCTL_PROC(_machdep_cpu_flex_ratio, OID_AUTO, max,
 uint64_t pmap_pv_hashlist_walks;
 uint64_t pmap_pv_hashlist_cnts;
 uint32_t pmap_pv_hashlist_max;
+uint32_t pmap_kernel_text_ps = PAGE_SIZE;
 
 /*extern struct sysctl_oid_list sysctl__machdep_pmap_children;*/
 
@@ -436,3 +483,24 @@ SYSCTL_NODE(_machdep, OID_AUTO, pmap, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 SYSCTL_QUAD    (_machdep_pmap, OID_AUTO, hashwalks, CTLFLAG_RD | CTLFLAG_KERN, &pmap_pv_hashlist_walks, "");
 SYSCTL_QUAD    (_machdep_pmap, OID_AUTO, hashcnts, CTLFLAG_RD | CTLFLAG_KERN, &pmap_pv_hashlist_cnts, "");
 SYSCTL_INT     (_machdep_pmap, OID_AUTO, hashmax, CTLFLAG_RD | CTLFLAG_KERN, &pmap_pv_hashlist_max, 0, "");
+SYSCTL_INT     (_machdep_pmap, OID_AUTO, kernel_text_ps, CTLFLAG_RD | CTLFLAG_KERN, &pmap_kernel_text_ps, 0, "");
+
+SYSCTL_NODE(_machdep, OID_AUTO, memmap, CTLFLAG_RD|CTLFLAG_LOCKED, NULL, "physical memory map");
+
+uint64_t firmware_Conventional_bytes = 0;
+uint64_t firmware_RuntimeServices_bytes = 0;
+uint64_t firmware_ACPIReclaim_bytes = 0;
+uint64_t firmware_ACPINVS_bytes = 0;
+uint64_t firmware_PalCode_bytes = 0;
+uint64_t firmware_Reserved_bytes = 0;
+uint64_t firmware_Unusable_bytes = 0;
+uint64_t firmware_other_bytes = 0;
+
+SYSCTL_QUAD(_machdep_memmap, OID_AUTO, Conventional, CTLFLAG_RD|CTLFLAG_LOCKED, &firmware_Conventional_bytes, "");
+SYSCTL_QUAD(_machdep_memmap, OID_AUTO, RuntimeServices, CTLFLAG_RD|CTLFLAG_LOCKED, &firmware_RuntimeServices_bytes, "");
+SYSCTL_QUAD(_machdep_memmap, OID_AUTO, ACPIReclaim, CTLFLAG_RD|CTLFLAG_LOCKED, &firmware_ACPIReclaim_bytes, "");
+SYSCTL_QUAD(_machdep_memmap, OID_AUTO, ACPINVS, CTLFLAG_RD|CTLFLAG_LOCKED, &firmware_ACPINVS_bytes, "");
+SYSCTL_QUAD(_machdep_memmap, OID_AUTO, PalCode, CTLFLAG_RD|CTLFLAG_LOCKED, &firmware_PalCode_bytes, "");
+SYSCTL_QUAD(_machdep_memmap, OID_AUTO, Reserved, CTLFLAG_RD|CTLFLAG_LOCKED, &firmware_Reserved_bytes, "");
+SYSCTL_QUAD(_machdep_memmap, OID_AUTO, Unusable, CTLFLAG_RD|CTLFLAG_LOCKED, &firmware_Unusable_bytes, "");
+SYSCTL_QUAD(_machdep_memmap, OID_AUTO, Other, CTLFLAG_RD|CTLFLAG_LOCKED, &firmware_other_bytes, "");

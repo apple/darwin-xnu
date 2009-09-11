@@ -55,6 +55,10 @@
 
 #include <mach/mach_types.h>
 #include <mach/memory_object_types.h>
+#include <mach/memory_object_control.h>
+#include <mach/vm_map.h>
+#include <mach/mach_vm.h>
+#include <mach/upl.h>
 #include <mach/sdt.h>
 
 #include <vm/vm_map.h>
@@ -76,11 +80,20 @@
 
 #include <vm/vm_protos.h>
 
-unsigned int vp_pagein=0;
-unsigned int vp_pgodirty=0;
-unsigned int vp_pgoclean=0;
-unsigned int dp_pgouts=0;	/* Default pager pageouts */
-unsigned int dp_pgins=0;	/* Default pager pageins */
+
+uint32_t
+vnode_pager_isinuse(struct vnode *vp)
+{
+	if (vp->v_usecount > vp->v_kusecount)
+		return (1);
+	return (0);
+}
+
+uint32_t
+vnode_pager_return_hard_throttle_limit(struct vnode *vp, uint32_t *limit, uint32_t hard_throttle)
+{
+	return(cluster_hard_throttle_limit(vp, limit, hard_throttle));
+}
 
 vm_object_offset_t
 vnode_pager_get_filesize(struct vnode *vp)
@@ -127,9 +140,9 @@ vnode_pager_get_cs_blobs(
 pager_return_t
 vnode_pageout(struct vnode *vp,
 	upl_t			upl,
-	vm_offset_t		upl_offset,
+	upl_offset_t		upl_offset,
 	vm_object_offset_t	f_offset,
-	vm_size_t		size,
+	upl_size_t		size,
 	int			flags,
 	int			*errorp)
 {
@@ -140,7 +153,7 @@ vnode_pageout(struct vnode *vp,
 	int isize;
 	int pg_index;
 	int base_index;
-	int offset;
+	upl_offset_t offset;
 	upl_page_info_t *pl;
 	vfs_context_t ctx = vfs_context_current();	/* pager context */
 
@@ -166,8 +179,6 @@ vnode_pageout(struct vnode *vp,
 		 * just go ahead and call vnop_pageout since
 		 * it has already sorted out the dirty ranges
 		 */
-		dp_pgouts++;
-
 		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_START, 
 				      size, 1, 0, 0, 0);
 
@@ -180,6 +191,45 @@ vnode_pageout(struct vnode *vp,
 
 		goto out;
 	}
+	if (upl == NULL) {
+		int			request_flags;
+
+		if (vp->v_mount->mnt_vtable->vfc_vfsflags & VFC_VFSVNOP_PAGEOUTV2) {
+			/*
+			 * filesystem has requested the new form of VNOP_PAGEOUT for file
+			 * backed objects... we will not grab the UPL befofe calling VNOP_PAGEOUT...
+			 * it is the fileystem's responsibility to grab the range we're denoting
+			 * via 'f_offset' and 'size' into a UPL... this allows the filesystem to first
+			 * take any locks it needs, before effectively locking the pages into a UPL...
+			 */
+			KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_START, 
+					      size, (int)f_offset, 0, 0, 0);
+
+			if ( (error_ret = VNOP_PAGEOUT(vp, NULL, upl_offset, (off_t)f_offset,
+						       size, flags, ctx)) ) {
+				result = PAGER_ERROR;
+			}
+			KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_END, 
+					      size, 0, 0, 0, 0);
+
+			goto out;
+		}
+		if (flags & UPL_MSYNC)
+			request_flags = UPL_UBC_MSYNC | UPL_RET_ONLY_DIRTY;
+		else
+			request_flags = UPL_UBC_PAGEOUT | UPL_RET_ONLY_DIRTY;
+		
+	        ubc_create_upl(vp, f_offset, size, &upl, &pl, request_flags);
+
+		if (upl == (upl_t)NULL) {
+			result    = PAGER_ERROR;
+			error_ret = EINVAL;
+			goto out;
+		}
+		upl_offset = 0;
+	} else 
+		pl = ubc_upl_pageinfo(upl);
+
 	/*
 	 * we come here for pageouts to 'real' files and
 	 * for msyncs...  the upl may not contain any
@@ -187,8 +237,6 @@ vnode_pageout(struct vnode *vp,
 	 * through it and find the 'runs' of dirty pages
 	 * to call VNOP_PAGEOUT on...
 	 */
-	pl = ubc_upl_pageinfo(upl);
-
 	if (ubc_getsize(vp) == 0) {
 	        /*
 		 * if the file has been effectively deleted, then
@@ -276,8 +324,6 @@ vnode_pageout(struct vnode *vp,
 			 * Note we must not sleep here if the buffer is busy - that is
 			 * a lock inversion which causes deadlock.
 			 */
-			vp_pgoclean++;			
-
 #if NFSCLIENT
 			if (vp->v_tag == VT_NFS)
 				/* check with nfs if page is OK to drop */
@@ -305,8 +351,6 @@ vnode_pageout(struct vnode *vp,
 
 			continue;
 		}
-		vp_pgodirty++;
-
 		num_of_pages = 1;
 		xsize = isize - PAGE_SIZE;
 
@@ -321,7 +365,7 @@ vnode_pageout(struct vnode *vp,
 		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_START, 
 				      xsize, (int)f_offset, 0, 0, 0);
 
-		if ( (error = VNOP_PAGEOUT(vp, upl, (vm_offset_t)offset, (off_t)f_offset,
+		if ( (error = VNOP_PAGEOUT(vp, upl, offset, (off_t)f_offset,
 					   xsize, flags, ctx)) ) {
 		        if (error_ret == 0)
 		                error_ret = error;
@@ -347,9 +391,9 @@ pager_return_t
 vnode_pagein(
 	struct vnode 		*vp,
 	upl_t        		upl,
-	vm_offset_t  		upl_offset,
+	upl_offset_t  		upl_offset,
 	vm_object_offset_t	f_offset,
-	vm_size_t     		size,
+	upl_size_t     		size,
 	int           		flags,
 	int 			*errorp)
 {
@@ -377,20 +421,36 @@ vnode_pagein(
 		goto out;
 	}
 	if (upl == (upl_t)NULL) {
+		flags &= ~UPL_NOCOMMIT;
+
 	        if (size > (MAX_UPL_SIZE * PAGE_SIZE)) {
-
-		  	panic("vnode_pagein: size = %x\n", size);
-
 		        result = PAGER_ERROR;
 			error  = PAGER_ERROR;
 			goto out;
 		}
-	        ubc_create_upl(vp, f_offset, size, &upl, &pl, UPL_NOBLOCK | UPL_RET_ONLY_ABSENT | UPL_SET_LITE);
+		if (vp->v_mount->mnt_vtable->vfc_vfsflags & VFC_VFSVNOP_PAGEINV2) {
+			/*
+			 * filesystem has requested the new form of VNOP_PAGEIN for file
+			 * backed objects... we will not grab the UPL befofe calling VNOP_PAGEIN...
+			 * it is the fileystem's responsibility to grab the range we're denoting
+			 * via 'f_offset' and 'size' into a UPL... this allows the filesystem to first
+			 * take any locks it needs, before effectively locking the pages into a UPL...
+			 * so we pass a NULL into the filesystem instead of a UPL pointer... the 'upl_offset'
+			 * is used to identify the "must have" page in the extent... the filesystem is free
+			 * to clip the extent to better fit the underlying FS blocksize if it desires as 
+			 * long as it continues to include the "must have" page... 'f_offset' + 'upl_offset'
+			 * identifies that page
+			 */
+			if ( (error = VNOP_PAGEIN(vp, NULL, upl_offset, (off_t)f_offset,
+						  size, flags, vfs_context_current())) ) {
+				result = PAGER_ERROR;
+				error  = PAGER_ERROR;
+			}
+			goto out;
+		}
+	        ubc_create_upl(vp, f_offset, size, &upl, &pl, UPL_UBC_PAGEIN | UPL_RET_ONLY_ABSENT);
 
 		if (upl == (upl_t)NULL) {
-
-		  	panic("vnode_pagein: ubc_create_upl failed\n");
-
 		        result =  PAGER_ABSENT;
 			error = PAGER_ABSENT;
 			goto out;
@@ -403,15 +463,10 @@ vnode_pagein(
 		 * are responsible for commiting/aborting it
 		 * regardless of what the caller has passed in
 		 */
-		flags &= ~UPL_NOCOMMIT;
 		must_commit = 1;
-		
-		vp_pagein++;
 	} else {
 	        pl = ubc_upl_pageinfo(upl);
 		first_pg = upl_offset / PAGE_SIZE;
-
-		dp_pgins++;
 	}
 	pages_in_upl = size / PAGE_SIZE;
 	DTRACE_VM2(pgpgin, int, pages_in_upl, (uint64_t *), NULL);
@@ -495,9 +550,20 @@ vnode_pagein(
 		        xsize = (last_pg - start_pg) * PAGE_SIZE;
 			xoff  = start_pg * PAGE_SIZE;
 
-			if ( (error = VNOP_PAGEIN(vp, upl, (vm_offset_t) xoff,
+			if ( (error = VNOP_PAGEIN(vp, upl, (upl_offset_t) xoff,
 					       (off_t)f_offset + xoff,
 					       xsize, flags, vfs_context_current())) ) {
+		        	/*
+				 * Usually this UPL will be aborted/committed by the lower cluster layer.
+				 * In the case of decmpfs, however, we may return an error (EAGAIN) to avoid
+				 * a deadlock with another thread already inflating the file. In that case,
+				 * we must take care of our UPL at this layer itself.
+				 */
+				if (must_commit) {
+					if(error == EAGAIN) {
+			        		ubc_upl_abort_range(upl, (upl_offset_t) xoff, xsize, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_RESTART);
+					}
+				}
 				result = PAGER_ERROR;
 				error  = PAGER_ERROR;
 

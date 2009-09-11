@@ -104,11 +104,12 @@ convert_semaphore_to_port (semaphore_t semaphore)
 {
 	ipc_port_t port;
 
-	if (semaphore != SEMAPHORE_NULL)
-		port = ipc_port_make_send(semaphore->port);
-	else
-		port = IP_NULL;
+	if (semaphore == SEMAPHORE_NULL)
+		return (IP_NULL);
 
+	/* caller is donating a reference */
+	port = ipc_port_make_send(semaphore->port);
+	semaphore_dereference(semaphore);
 	return (port);
 }
 
@@ -134,11 +135,12 @@ convert_lock_set_to_port (lock_set_t lock_set)
 {
 	ipc_port_t port;
 
-	if (lock_set != LOCK_SET_NULL)
-		port = ipc_port_make_send(lock_set->port);
-	else
-		port = IP_NULL;
+	if (lock_set == LOCK_SET_NULL)
+		return IP_NULL;
 
+	/* caller is donating a reference */
+	port = ipc_port_make_send(lock_set->port);
+	lock_set_dereference(lock_set);
 	return (port);
 }
 

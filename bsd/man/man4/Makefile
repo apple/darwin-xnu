@@ -9,6 +9,8 @@ include $(MakeInc_def)
 DATAFILES = \
 	aio.4	\
 	arp.4	\
+	audit.4 \
+	auditpipe.4	\
 	bpf.4	\
 	divert.4	\
         dummynet.4 \

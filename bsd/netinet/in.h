@@ -442,7 +442,7 @@ struct ip_opts {
 #define	IP_TRAFFIC_MGT_BACKGROUND	65   /* int*; get background IO flags; set background IO */
 
 #ifdef PRIVATE
-#define	IP_FORCE_OUT_IFP	69  /* deprecated; use IP_BOUND_IF instead */
+#define	IP_FORCE_OUT_IFP	69   /* deprecated; use IP_BOUND_IF instead */
 #endif
 
 /* Background socket configuration flags */
@@ -612,7 +612,7 @@ extern u_short in_addword(u_short, u_short);
 extern u_short in_pseudo(u_int, u_int, u_int);
 
 extern int in_localaddr(struct in_addr);
-extern u_long in_netof(struct in_addr);
+extern u_int32_t in_netof(struct in_addr);
 
 extern int inaddr_local(struct in_addr);
 #endif /* KERNEL_PRIVATE */
@@ -621,5 +621,15 @@ extern int inaddr_local(struct in_addr);
 
 extern const char *inet_ntop(int, const void *, char *, socklen_t); /* in libkern */
 #endif /* KERNEL */
+
+#ifndef KERNEL		
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+__BEGIN_DECLS
+int        bindresvport(int, struct sockaddr_in *);
+struct sockaddr;
+int        bindresvport_sa(int, struct sockaddr *);
+__END_DECLS
+#endif
+#endif
 
 #endif /* _NETINET_IN_H_ */

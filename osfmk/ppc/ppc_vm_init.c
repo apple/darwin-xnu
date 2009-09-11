@@ -57,7 +57,7 @@
 #include <ppc/lowglobals.h>
 #include <ppc/serial_io.h>
 
-#include <mach-o/mach_header.h>
+#include <libkern/kernel_mach_header.h>
 
 extern const char version[];
 extern const char version_variant[];
@@ -94,19 +94,18 @@ vm_offset_t first_avail;
 vm_offset_t static_memory_end;
 addr64_t vm_last_addr = VM_MAX_KERNEL_ADDRESS;	/* Highest kernel virtual address known to the VM system */
 
-extern struct mach_header _mh_execute_header;
 vm_offset_t sectTEXTB;
-int sectSizeTEXT;
+unsigned long sectSizeTEXT;
 vm_offset_t sectDATAB;
-int sectSizeDATA;
+unsigned long sectSizeDATA;
 vm_offset_t sectLINKB;
-int sectSizeLINK;
+unsigned long sectSizeLINK;
 vm_offset_t sectKLDB;
-int sectSizeKLD;
+unsigned long sectSizeKLD;
 vm_offset_t sectPRELINKB;
-int sectSizePRELINK;
+unsigned long sectSizePRELINK;
 vm_offset_t sectHIBB;
-int sectSizeHIB;
+unsigned long sectSizeHIB;
 
 vm_offset_t end, etext, edata;
 
@@ -224,7 +223,7 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 	sectHIBB = (vm_offset_t)(uint32_t *)getsegdatafromheader(
 		&_mh_execute_header, "__HIB", &sectSizeHIB);
 	sectPRELINKB = (vm_offset_t)(uint32_t *)getsegdatafromheader(
-		&_mh_execute_header, "__PRELINK", &sectSizePRELINK);
+		&_mh_execute_header, "__PRELINK_TEXT", &sectSizePRELINK);
 
 	etext = (vm_offset_t) sectTEXTB + sectSizeTEXT;
 	edata = (vm_offset_t) sectDATAB + sectSizeDATA;

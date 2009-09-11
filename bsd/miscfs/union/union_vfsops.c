@@ -280,9 +280,6 @@ union_mount(mount_t mp, __unused vnode_t devvp, user_addr_t data, vfs_context_t 
 	(void) copyinstr(args.target, vcp, len - 1, (size_t *)&size);
 	bzero(vcp + size, len - size);
 
-	/* mark the filesystem thred safe */
-	 mp->mnt_vtable->vfc_threadsafe = TRUE;
-
 #ifdef UNION_DIAGNOSTIC
 	printf("union_mount: from %s, on %s\n",
 		mp->mnt_vfsstat.f_mntfromname, mp->mnt_vfsstat.f_mntonname);

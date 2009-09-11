@@ -1,19 +1,14 @@
 /*
  * Copyright (c) 1999-2008 Apple Inc.  All Rights Reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
- * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
@@ -23,7 +18,7 @@
  * Please see the License for the specific language governing rights and
  * limitations under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 #ifndef _MACHO_LOADER_H_
 #define _MACHO_LOADER_H_
@@ -50,9 +45,7 @@
  * states and the structures of those flavors for each machine.
  */
 #include <mach/machine/thread_status.h>
-#ifndef KERNEL
 #include <architecture/byte_order.h>
-#endif /* KERNEL */
 
 /*
  * The 32-bit mach header appears at the very beginning of the object file for
@@ -126,6 +119,7 @@ struct mach_header_64 {
 					/*  linking only, no section contents */
 #define	MH_DSYM		0xa		/* companion file with only debug */
 					/*  sections */
+#define	MH_KEXT_BUNDLE	0xb		/* x86_64 kexts */
 
 /* Constants for the flags field of the mach_header */
 #define	MH_NOUNDEFS	0x1		/* the object file has no undefined
@@ -180,6 +174,13 @@ struct mach_header_64 {
 					   in the task will be given stack
 					   execution privilege.  Only used in
 					   MH_EXECUTE filetypes. */
+#define	MH_DEAD_STRIPPABLE_DYLIB 0x400000 /* Only for use on dylibs.  When
+					     linking against a dylib that
+					     has this bit set, the static linker
+					     will automatically not create a
+					     LC_LOAD_DYLIB load command to the
+					     dylib if no symbols are being
+					     referenced from the dylib. */
 #define MH_ROOT_SAFE 0x40000           /* When this bit is set, the binary 
 					  declares it is safe for use in
 					  processes with uid zero */
@@ -272,6 +273,8 @@ struct load_command {
 #define LC_REEXPORT_DYLIB (0x1f | LC_REQ_DYLD) /* load and re-export dylib */
 #define	LC_LAZY_LOAD_DYLIB 0x20	/* delay load of dylib until first use */
 #define	LC_ENCRYPTION_INFO 0x21	/* encrypted segment information */
+#define	LC_DYLD_INFO 	0x22	/* compressed dyld information */
+#define	LC_DYLD_INFO_ONLY (0x22|LC_REQ_DYLD)	/* compressed dyld information only */
 
 /*
  * A variable length string in a load command is represented by an lc_str
@@ -1131,6 +1134,171 @@ struct encryption_info_command {
    uint32_t	cryptid;	/* which enryption system,
 				   0 means not-encrypted yet */
 };
+
+/*
+ * The dyld_info_command contains the file offsets and sizes of 
+ * the new compressed form of the information dyld needs to 
+ * load the image.  This information is used by dyld on Mac OS X
+ * 10.6 and later.  All information pointed to by this command
+ * is encoded using byte streams, so no endian swapping is needed
+ * to interpret it. 
+ */
+struct dyld_info_command {
+   uint32_t   cmd;		/* LC_DYLD_INFO or LC_DYLD_INFO_ONLY */
+   uint32_t   cmdsize;		/* sizeof(struct dyld_info_command) */
+
+    /*
+     * Dyld rebases an image whenever dyld loads it at an address different
+     * from its preferred address.  The rebase information is a stream
+     * of byte sized opcodes whose symbolic names start with REBASE_OPCODE_.
+     * Conceptually the rebase information is a table of tuples:
+     *    <seg-index, seg-offset, type>
+     * The opcodes are a compressed way to encode the table by only
+     * encoding when a column changes.  In addition simple patterns
+     * like "every n'th offset for m times" can be encoded in a few
+     * bytes.
+     */
+    uint32_t   rebase_off;	/* file offset to rebase info  */
+    uint32_t   rebase_size;	/* size of rebase info   */
+    
+    /*
+     * Dyld binds an image during the loading process, if the image
+     * requires any pointers to be initialized to symbols in other images.  
+     * The rebase information is a stream of byte sized 
+     * opcodes whose symbolic names start with BIND_OPCODE_.
+     * Conceptually the bind information is a table of tuples:
+     *    <seg-index, seg-offset, type, symbol-library-ordinal, symbol-name, addend>
+     * The opcodes are a compressed way to encode the table by only
+     * encoding when a column changes.  In addition simple patterns
+     * like for runs of pointers initialzed to the same value can be 
+     * encoded in a few bytes.
+     */
+    uint32_t   bind_off;	/* file offset to binding info   */
+    uint32_t   bind_size;	/* size of binding info  */
+        
+    /*
+     * Some C++ programs require dyld to unique symbols so that all
+     * images in the process use the same copy of some code/data.
+     * This step is done after binding. The content of the weak_bind
+     * info is an opcode stream like the bind_info.  But it is sorted
+     * alphabetically by symbol name.  This enable dyld to walk 
+     * all images with weak binding information in order and look
+     * for collisions.  If there are no collisions, dyld does
+     * no updating.  That means that some fixups are also encoded
+     * in the bind_info.  For instance, all calls to "operator new"
+     * are first bound to libstdc++.dylib using the information
+     * in bind_info.  Then if some image overrides operator new
+     * that is detected when the weak_bind information is processed
+     * and the call to operator new is then rebound.
+     */
+    uint32_t   weak_bind_off;	/* file offset to weak binding info   */
+    uint32_t   weak_bind_size;  /* size of weak binding info  */
+    
+    /*
+     * Some uses of external symbols do not need to be bound immediately.
+     * Instead they can be lazily bound on first use.  The lazy_bind
+     * are contains a stream of BIND opcodes to bind all lazy symbols.
+     * Normal use is that dyld ignores the lazy_bind section when
+     * loading an image.  Instead the static linker arranged for the
+     * lazy pointer to initially point to a helper function which 
+     * pushes the offset into the lazy_bind area for the symbol
+     * needing to be bound, then jumps to dyld which simply adds
+     * the offset to lazy_bind_off to get the information on what 
+     * to bind.  
+     */
+    uint32_t   lazy_bind_off;	/* file offset to lazy binding info */
+    uint32_t   lazy_bind_size;  /* size of lazy binding infs */
+    
+    /*
+     * The symbols exported by a dylib are encoded in a trie.  This
+     * is a compact representation that factors out common prefixes.
+     * It also reduces LINKEDIT pages in RAM because it encodes all  
+     * information (name, address, flags) in one small, contiguous range.
+     * The export area is a stream of nodes.  The first node sequentially
+     * is the start node for the trie.  
+     *
+     * Nodes for a symbol start with a byte that is the length of
+     * the exported symbol information for the string so far.
+     * If there is no exported symbol, the byte is zero. If there
+     * is exported info, it follows the length byte.  The exported
+     * info normally consists of a flags and offset both encoded
+     * in uleb128.  The offset is location of the content named
+     * by the symbol.  It is the offset from the mach_header for
+     * the image.  
+     *
+     * After the initial byte and optional exported symbol information
+     * is a byte of how many edges (0-255) that this node has leaving
+     * it, followed by each edge.
+     * Each edge is a zero terminated cstring of the addition chars
+     * in the symbol, followed by a uleb128 offset for the node that
+     * edge points to.
+     *  
+     */
+    uint32_t   export_off;	/* file offset to lazy binding info */
+    uint32_t   export_size;	/* size of lazy binding infs */
+};
+
+/*
+ * The following are used to encode rebasing information
+ */
+#define REBASE_TYPE_POINTER					1
+#define REBASE_TYPE_TEXT_ABSOLUTE32				2
+#define REBASE_TYPE_TEXT_PCREL32				3
+
+#define REBASE_OPCODE_MASK					0xF0
+#define REBASE_IMMEDIATE_MASK					0x0F
+#define REBASE_OPCODE_DONE					0x00
+#define REBASE_OPCODE_SET_TYPE_IMM				0x10
+#define REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB		0x20
+#define REBASE_OPCODE_ADD_ADDR_ULEB				0x30
+#define REBASE_OPCODE_ADD_ADDR_IMM_SCALED			0x40
+#define REBASE_OPCODE_DO_REBASE_IMM_TIMES			0x50
+#define REBASE_OPCODE_DO_REBASE_ULEB_TIMES			0x60
+#define REBASE_OPCODE_DO_REBASE_ADD_ADDR_ULEB			0x70
+#define REBASE_OPCODE_DO_REBASE_ULEB_TIMES_SKIPPING_ULEB	0x80
+
+
+/*
+ * The following are used to encode binding information
+ */
+#define BIND_TYPE_POINTER					1
+#define BIND_TYPE_TEXT_ABSOLUTE32				2
+#define BIND_TYPE_TEXT_PCREL32					3
+
+#define BIND_SPECIAL_DYLIB_SELF					 0
+#define BIND_SPECIAL_DYLIB_MAIN_EXECUTABLE			-1
+#define BIND_SPECIAL_DYLIB_FLAT_LOOKUP				-2
+
+#define BIND_SYMBOL_FLAGS_WEAK_IMPORT				0x1
+#define BIND_SYMBOL_FLAGS_NON_WEAK_DEFINITION			0x8
+
+#define BIND_OPCODE_MASK					0xF0
+#define BIND_IMMEDIATE_MASK					0x0F
+#define BIND_OPCODE_DONE					0x00
+#define BIND_OPCODE_SET_DYLIB_ORDINAL_IMM			0x10
+#define BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB			0x20
+#define BIND_OPCODE_SET_DYLIB_SPECIAL_IMM			0x30
+#define BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM		0x40
+#define BIND_OPCODE_SET_TYPE_IMM				0x50
+#define BIND_OPCODE_SET_ADDEND_SLEB				0x60
+#define BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB			0x70
+#define BIND_OPCODE_ADD_ADDR_ULEB				0x80
+#define BIND_OPCODE_DO_BIND					0x90
+#define BIND_OPCODE_DO_BIND_ADD_ADDR_ULEB			0xA0
+#define BIND_OPCODE_DO_BIND_ADD_ADDR_IMM_SCALED			0xB0
+#define BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB		0xC0
+
+
+/*
+ * The following are used on the flags byte of a terminal node
+ * in the export information.
+ */
+#define EXPORT_SYMBOL_FLAGS_KIND_MASK				0x03
+#define EXPORT_SYMBOL_FLAGS_KIND_REGULAR			0x00
+#define EXPORT_SYMBOL_FLAGS_KIND_THREAD_LOCAL			0x01
+#define EXPORT_SYMBOL_FLAGS_WEAK_DEFINITION			0x04
+#define EXPORT_SYMBOL_FLAGS_INDIRECT_DEFINITION			0x08
+#define EXPORT_SYMBOL_FLAGS_HAS_SPECIALIZATIONS			0x10
 
 /*
  * The symseg_command contains the offset and size of the GNU style

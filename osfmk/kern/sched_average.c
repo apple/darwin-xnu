@@ -102,6 +102,7 @@ static struct sched_average {
 } sched_average[] = {
 	{ compute_averunnable, &sched_nrun, SCHED_AVG_SECS(5), 0 },
 	{ compute_stack_target, NULL, SCHED_AVG_SECS(5), 1 },
+	{ compute_memory_pressure, NULL, SCHED_AVG_SECS(1), 0 },
 	{ NULL, NULL, 0, 0 }
 };
 

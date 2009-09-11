@@ -123,13 +123,13 @@ min(u_int a, u_int b)
 {
 	return (a < b ? a : b);
 }
-static inline u_long
-ulmax(u_long a, u_long b)
+static inline u_int32_t
+ulmax(u_int32_t a, u_int32_t b)
 {
 	return (a > b ? a : b);
 }
-static inline u_long
-ulmin(u_long a, u_long b)
+static inline u_int32_t
+ulmin(u_int32_t a, u_int32_t b)
 {
 	return (a < b ? a : b);
 }
@@ -139,7 +139,7 @@ ulmin(u_long a, u_long b)
 /* Prototypes for non-quad routines. */
 extern int	ffs(int);
 extern int	locc(int, char *, u_int);
-extern u_long	random(void);
+extern u_int32_t	random(void);
 extern char	*rindex(const char *, int);
 extern int	scanc(u_int, u_char *, const u_char *, int);
 extern int	skpc(int, int, char *);
@@ -156,8 +156,16 @@ int	sprintf(char *bufp, const char *, ...) __deprecated;
 int	sscanf(const char *, char const *, ...) __scanflike(2,3);
 int	printf(const char *, ...) __printflike(1,2);
 
+#if KERNEL_PRIVATE
+int	_consume_printf_args(int, ...);
+#endif
+
 #if CONFIG_NO_PRINTF_STRINGS
+#if KERNEL_PRIVATE
+#define printf(x, ...)  _consume_printf_args( 0, ## __VA_ARGS__ )
+#else
 #define printf(x, ...)  do {} while (0)
+#endif
 #endif
 
 uint32_t	crc32(uint32_t crc, const void *bufp, size_t len);
@@ -176,8 +184,13 @@ extern int	vsnprintf(char *, size_t, const char *, va_list);
 /* vsprintf() is being deprecated. Please use vsnprintf() instead. */
 extern int	vsprintf(char *bufp, const char *, va_list) __deprecated;
 
+#ifdef KERNEL_PRIVATE
 extern void invalidate_icache(vm_offset_t, unsigned, int);
 extern void flush_dcache(vm_offset_t, unsigned, int);
+#else
+extern void invalidate_icache(vm_offset_t, unsigned, int);
+extern void flush_dcache(vm_offset_t, unsigned, int);
+#endif
 extern void invalidate_icache64(addr64_t, unsigned, int);
 extern void flush_dcache64(addr64_t, unsigned, int);
 

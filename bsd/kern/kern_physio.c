@@ -78,9 +78,6 @@
 #include <sys/uio_internal.h>
 #include <kern/assert.h>
 
-int rawread(dev_t dev, struct uio *uio);
-int rawwrite(dev_t dev, struct uio *uio);
-
 int
 physio( void (*f_strategy)(buf_t), 
 	buf_t bp,
@@ -112,8 +109,12 @@ physio( void (*f_strategy)(buf_t),
 	 */
 	for (i = 0; i < uio->uio_iovcnt; i++) {
 		if (UIO_SEG_IS_USER_SPACE(uio->uio_segflg)) {
-			if (!useracc(uio_iov_base_at(uio, i),
-					uio_iov_len_at(uio, i),
+			user_addr_t base;
+			user_size_t len;
+			
+			if (uio_getiov(uio, i, &base, &len) ||
+				!useracc(base,
+					len,
 		    		(flags == B_READ) ? B_WRITE : B_READ))
 			return (EFAULT);
 		}
@@ -156,10 +157,9 @@ physio( void (*f_strategy)(buf_t),
 	 * Note that I/O errors are handled with a 'goto' at the bottom
 	 * of the 'while' loop.
 	 */
-	for (i = 0; i < uio->uio_iovcnt; i++) {
-		while (uio_iov_len_at(uio, i) > 0) {
+	while (uio_resid(uio) > 0) {
 			
-			if ( (iosize = uio_iov_len_at(uio, i)) > MAXPHYSIO_WIRED)
+			if ( (iosize = uio_curriovlen(uio)) > MAXPHYSIO_WIRED)
 			        iosize = MAXPHYSIO_WIRED;
 			/*
 			 * make sure we're set to issue a fresh I/O
@@ -168,10 +168,9 @@ physio( void (*f_strategy)(buf_t),
 			buf_reset(bp, flags);
 
 			/* [set up the buffer for a maximum-sized transfer] */
- 			buf_setblkno(bp, uio->uio_offset / blocksize);
+ 			buf_setblkno(bp, uio_offset(uio) / blocksize);
 			buf_setcount(bp, iosize);
-			// LP64todo - fix this!
-			buf_setdataptr(bp, (uintptr_t)CAST_DOWN(caddr_t, uio_iov_base_at(uio, i)));
+			buf_setdataptr(bp, (uintptr_t)CAST_DOWN(caddr_t, uio_curriovbase(uio)));
 			
 			/*
 			 * [call f_minphys to bound the tranfer size]
@@ -214,10 +213,7 @@ physio( void (*f_strategy)(buf_t),
 			 *    of data to transfer]
 			 */
 			done = buf_count(bp) - buf_resid(bp);
-			uio_iov_len_add_at(uio, -done, i);
-			uio_iov_base_add_at(uio, done, i);
-			uio->uio_offset += done;
-			uio_setresid(uio, (uio_resid(uio) - done));
+			uio_update(uio, done);
 
 			/*
 			 * Now, check for an error.
@@ -225,7 +221,6 @@ physio( void (*f_strategy)(buf_t),
 			 */
 			if (error || done < todo)
 				goto done;
-		}
 	}
 
 done:
@@ -252,24 +247,4 @@ minphys(struct buf *bp)
 
 	buf_setcount(bp, min(MAXPHYS, buf_count(bp)));
         return buf_count(bp);
-}
-
-/*
- * Do a read on a device for a user process.
- */
-int
-rawread(dev_t dev, struct uio *uio)
-{
-	return (physio(cdevsw[major(dev)].d_strategy, (struct buf *)NULL,
-	    dev, B_READ, minphys, uio, DEV_BSIZE));
-}
-
-/*
- * Do a write on a device for a user process.
- */
-int
-rawwrite(dev_t dev, struct uio *uio)
-{
-	return (physio(cdevsw[major(dev)].d_strategy, (struct buf *)NULL,
-	    dev, B_WRITE, minphys, uio, DEV_BSIZE));
 }

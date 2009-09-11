@@ -90,16 +90,16 @@ hfs_swap_BTNode (
     BTNodeDescriptor *srcDesc = src->buffer;
     u_int16_t *srcOffs = NULL;
 	BTreeControlBlockPtr btcb = (BTreeControlBlockPtr)VTOF(vp)->fcbBTCBPtr;
-    u_int32_t i;
+    u_int16_t i; /* index to match srcDesc->numRecords */
     int error = 0;
 
 #ifdef ENDIAN_DEBUG
     if (direction == kSwapBTNodeBigToHost) {
-        printf ("BE -> Native Swap\n");
+        printf ("hfs: BE -> Native Swap\n");
     } else if (direction == kSwapBTNodeHostToBig) {
-        printf ("Native -> BE Swap\n");
+        printf ("hfs: Native -> BE Swap\n");
     } else if (direction == kSwapBTNodeHeaderRecordOnly) {
-        printf ("Not swapping descriptors\n");
+        printf ("hfs: Not swapping descriptors\n");
     } else {
         panic ("hfs_swap_BTNode: This is impossible");
     }
@@ -144,6 +144,7 @@ hfs_swap_BTNode (
 				error = fsBTInvalidHeaderErr;
 				goto fail;
 			}
+
 
 		}
 		
@@ -380,7 +381,7 @@ fail:
 		/*
 		 * Log some useful information about where the corrupt node is.
 		 */
-		printf("node=%lld fileID=%u volume=%s device=%s\n", src->blockNum, VTOC(vp)->c_fileid,
+		printf("hfs: node=%lld fileID=%u volume=%s device=%s\n", src->blockNum, VTOC(vp)->c_fileid,
 			VTOVCB(vp)->vcbVN, vfs_statfs(vnode_mount(vp))->f_mntfromname);
 		hfs_mark_volume_inconsistent(VTOVCB(vp));
 	}
@@ -489,7 +490,7 @@ hfs_swap_HFSPlusBTInternalNode (
              * to be sure the current record doesn't overflow into the next
              * record.
              */
-			nextRecord = (char *)src->buffer + srcOffs[i-1];
+			nextRecord = (char *)src->buffer + (uintptr_t)(srcOffs[i-1]);
 
 			/*
 			 * Make sure we can safely dereference the keyLength and parentID fields. 

@@ -359,6 +359,11 @@ udp6_input(
 			 */
 			if (reuse_sock == 0 || ((m = n) == NULL))
 				break;
+			/*
+			 * Recompute IP and UDP header pointers for new mbuf
+			 */
+			ip6 = mtod(m, struct ip6_hdr *);
+			uh = (struct udphdr *)((caddr_t)ip6 + off);
 		}
 		lck_rw_done(pcbinfo->mtx);
 

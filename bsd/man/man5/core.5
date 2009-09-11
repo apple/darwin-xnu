@@ -1,4 +1,4 @@
-.\""Copyright (c) 2001 Apple Computer, Inc. All Rights Reserved.
+.\""Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
 .\"The contents of this file constitute Original Code as defined in and are 
 .\"subject to the Apple Public Source License Version 1.2 (the 'License'). 
 .\"You may not use this file except in compliance with the
@@ -12,7 +12,7 @@
 .\"WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
 .\"QUIET ENJOYMENT OR NON-INFRINGEMENT. Please see the License for the 
 .\"specific language governing rights and limitations under the License."
-.Dd March 18, 2002
+.Dd June 26, 2008
 .Dt CORE 5
 .Os
 .Sh NAME
@@ -52,17 +52,30 @@ file consists of various sections described in the
 header.
 .Sh NOTE
 Core dumps are disabled by default under Darwin/Mac OS X.  To re-enable 
-core dumps, a privileged user must edit
-.Pa /etc/hostconfig
-to contain the line:
-.Bd -literal
-COREDUMPS=-YES-
-.Ed
+core dumps, a privileged user must do one of the following
+.Pp
+* Edit
+.Pa /etc/launchd.conf 
+or 
+.Pa $HOME/.launchd.conf
+and add a line specifying the limit
+.Pa limit core unlimited
+.Pp
+* A privileged user can also enable cores with
+.Pa launchctl limit core unlimited
+.Pp
+* A privileged user can also enable core files by using
+.Xr ulimit 1
+or 
+.Xr limit 1
+depending upon the shell.
 .Sh SEE ALSO
 .Xr gdb 1 ,
 .Xr setrlimit 2 ,
 .Xr sigaction 2 ,
 .Xr Mach-O 5 ,
+.Xr launchd.conf 5 ,
+.Xr launchd.plist 5 ,
 .Xr sysctl 8
 .Sh HISTORY
 A

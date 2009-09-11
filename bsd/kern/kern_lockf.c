@@ -135,14 +135,6 @@ static void	 lf_wakelock(struct lockf *, boolean_t);
 
 
 /*
- * in order to mitigate risk
- * don't switch to new wake-one method unless
- * we have at least this many waiters to wake up
- */
-#define SAFE_WAITER_LIMIT    20
-
-
-/*
  * lf_advlock
  *
  * Description:	Advisory record locking support
@@ -267,7 +259,6 @@ lf_advlock(struct vnop_advlock_args *ap)
 	lock->lf_type = fl->l_type;
 	lock->lf_head = head;
 	lock->lf_next = (struct lockf *)0;
-	lock->lf_waiters = 0;
 	TAILQ_INIT(&lock->lf_blkhd);
 	lock->lf_flags = ap->a_flags;
 
@@ -514,7 +505,6 @@ lf_setlock(struct lockf *lock)
 		 */
 		lock->lf_next = block;
 		TAILQ_INSERT_TAIL(&block->lf_blkhd, lock, lf_block);
-		block->lf_waiters++;
 
 		if ( !(lock->lf_flags & F_FLOCK))
 		        block->lf_flags &= ~F_WAKE1_SAFE;
@@ -535,9 +525,6 @@ lf_setlock(struct lockf *lock)
 				        tlock->lf_next = block;
 				}
 			        TAILQ_CONCAT(&block->lf_blkhd, &lock->lf_blkhd, lf_block);
-
-				block->lf_waiters += lock->lf_waiters;
-				lock->lf_waiters = 0;
 			}
 		}
 		if (error) {	/* XXX */
@@ -551,7 +538,6 @@ lf_setlock(struct lockf *lock)
 			 */
 			if (lock->lf_next) {
 				TAILQ_REMOVE(&lock->lf_next->lf_blkhd, lock, lf_block);
-				lock->lf_next->lf_waiters--;
 				lock->lf_next = NOLOCKF;
 			}
 			if (!TAILQ_EMPTY(&lock->lf_blkhd))
@@ -646,12 +632,8 @@ lf_setlock(struct lockf *lock)
 					ltmp = TAILQ_FIRST(&overlap->lf_blkhd);
 					TAILQ_REMOVE(&overlap->lf_blkhd, ltmp,
 					    lf_block);
-					overlap->lf_waiters--;
-
 					TAILQ_INSERT_TAIL(&lock->lf_blkhd,
 					    ltmp, lf_block);
-					lock->lf_waiters++;
-
 					ltmp->lf_next = lock;
 				}
 			}
@@ -1092,13 +1074,12 @@ lf_wakelock(struct lockf *listhead, boolean_t force_all)
 	struct lockf *wakelock;
 	boolean_t wake_all = TRUE;
 
-	if (force_all == FALSE && (listhead->lf_flags & F_WAKE1_SAFE) && listhead->lf_waiters > SAFE_WAITER_LIMIT)
+	if (force_all == FALSE && (listhead->lf_flags & F_WAKE1_SAFE))
 	        wake_all = FALSE;
 
 	while (!TAILQ_EMPTY(&listhead->lf_blkhd)) {
 		wakelock = TAILQ_FIRST(&listhead->lf_blkhd);
 		TAILQ_REMOVE(&listhead->lf_blkhd, wakelock, lf_block);
-		listhead->lf_waiters--;
 
 		wakelock->lf_next = NOLOCKF;
 #ifdef LOCKF_DEBUGGING
@@ -1106,12 +1087,14 @@ lf_wakelock(struct lockf *listhead, boolean_t force_all)
 			lf_print("lf_wakelock: awakening", wakelock);
 #endif /* LOCKF_DEBUGGING */
 		if (wake_all == FALSE) {
+			/*
+			 * If there are items on the list head block list,
+			 * move them to the wakelock list instead, and then
+			 * correct their lf_next pointers.
+			 */
+			if (!TAILQ_EMPTY(&listhead->lf_blkhd)) {
+				TAILQ_CONCAT(&wakelock->lf_blkhd, &listhead->lf_blkhd, lf_block);
 
-		        TAILQ_CONCAT(&wakelock->lf_blkhd, &listhead->lf_blkhd, lf_block);
-			wakelock->lf_waiters = listhead->lf_waiters;
-			listhead->lf_waiters = 0;
-
-			if (!TAILQ_EMPTY(&wakelock->lf_blkhd)) {
 			        struct lockf *tlock;
 
 			        TAILQ_FOREACH(tlock, &wakelock->lf_blkhd, lf_block) {

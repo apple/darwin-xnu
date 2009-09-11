@@ -53,9 +53,15 @@ OSReadSwapInt16(
     uint16_t result;
     volatile uint16_t *addr = (volatile uint16_t *)((uintptr_t)base + byteOffset);
 
+#if defined(__llvm__)
+    result = *addr;
+    result = ((result << 8) | (result >> 8));
+#else
     __asm__ ("lhbrx %0, %2, %1"
              : "=r" (result)
              : "r"  (base), "bO" (byteOffset), "m" (*addr));
+#endif
+
     return result;
 }
 
@@ -69,9 +75,14 @@ OSReadSwapInt32(
     uint32_t result;
     volatile uint32_t *addr = (volatile uint32_t *)((uintptr_t)base + byteOffset);
 
+#if defined(__llvm__)
+    result = __builtin_bswap32(*addr);
+#else
     __asm__ ("lwbrx %0, %2, %1"
              : "=r" (result)
              : "r"  (base), "bO" (byteOffset), "m" (*addr));
+#endif
+
     return result;
 }
 
@@ -88,10 +99,15 @@ OSReadSwapInt64(
         uint32_t u32[2];
     } u;
 
+#if defined(__llvm__)
+    u.u64 = __builtin_bswap64(*addr);
+#else
     __asm__ ("lwbrx %0, %3, %2\n\t"
              "lwbrx %1, %4, %2"
              : "=&r" (u.u32[1]), "=r" (u.u32[0])
              : "r"  (base), "bO" (byteOffset), "b" (byteOffset + 4), "m" (*addr));
+#endif
+
     return u.u64;
 }
 
@@ -107,9 +123,13 @@ OSWriteSwapInt16(
 {
     volatile uint16_t *addr = (volatile uint16_t *)((uintptr_t)base + byteOffset);
 
+#if defined(__llvm__)
+    *addr = ((data >> 8) | (data << 8));
+#else
     __asm__ ("sthbrx %1, %3, %2"
              : "=m" (*addr)
              : "r" (data), "r" (base), "bO" (byteOffset));
+#endif
 }
 
 OS_INLINE
@@ -122,9 +142,13 @@ OSWriteSwapInt32(
 {
     volatile uint32_t *addr = (volatile uint32_t *)((uintptr_t)base + byteOffset);
 
+#if defined(__llvm__)
+    *addr = __builtin_bswap32(data);
+#else
     __asm__ ("stwbrx %1, %3, %2"
              : "=m" (*addr)
              : "r" (data), "r" (base), "bO" (byteOffset));
+#endif
 }
 
 OS_INLINE
@@ -136,6 +160,10 @@ OSWriteSwapInt64(
 )
 {
     volatile uint64_t *addr = (volatile uint64_t *)((uintptr_t)base + byteOffset);
+
+#if defined(__llvm__)
+    *addr = __builtin_bswap64(data);
+#else
     uint32_t hi = (uint32_t)(data >> 32);
     uint32_t lo = (uint32_t)(data & 0xffffffff);
 
@@ -143,6 +171,7 @@ OSWriteSwapInt64(
              "stwbrx %2, %5, %3"
              : "=m" (*addr)
              : "r" (lo), "r" (hi), "r" (base), "bO" (byteOffset), "b" (byteOffset + 4));
+#endif
 }
 
 /* Generic byte swapping functions. */

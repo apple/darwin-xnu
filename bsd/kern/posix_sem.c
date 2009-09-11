@@ -71,7 +71,7 @@
 #include <security/mac_framework.h>
 #endif
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <mach/mach_types.h>
 #include <mach/vm_prot.h>
@@ -135,7 +135,7 @@ struct	psemstats {
 struct psemname {
 	char	*psem_nameptr;	/* pointer to looked up name */
 	long	psem_namelen;	/* length of looked up component */
-	u_long	psem_hash;	/* hash value of looked up name */
+	u_int32_t	psem_hash;	/* hash value of looked up name */
 };
 
 struct psemnode {
@@ -157,7 +157,7 @@ long	posix_sem_max = 10000;		/* tunable for max POSIX semaphores */
 					/* 10000 limits to ~1M of memory */
 SYSCTL_NODE(_kern, KERN_POSIX, posix, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Posix");
 SYSCTL_NODE(_kern_posix, OID_AUTO, sem, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Semaphores");
-SYSCTL_INT (_kern_posix_sem, OID_AUTO, max, CTLFLAG_RW, &posix_sem_max, 0, "max");
+SYSCTL_LONG (_kern_posix_sem, OID_AUTO, max, CTLFLAG_RW, &posix_sem_max, "max");
 
 struct psemstats psemstats;		/* cache effectiveness statistics */
 
@@ -350,14 +350,15 @@ psem_cache_purge(void)
 int
 sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
 {
-	struct fileproc *fp;
 	size_t i;
-	struct fileproc *nfp;
 	int indx, error;
 	struct psemname nd;
 	struct pseminfo *pinfo;
-	struct psemcache *pcp = NULL;	/* protected by !incache */
-	char * pnbuf;
+	struct fileproc *fp = NULL;
+	char *pnbuf = NULL;
+	struct pseminfo *new_pinfo = PSEMINFO_NULL;
+	struct psemnode *new_pnode = PSEMNODE_NULL;
+	struct psemcache *pcache = PSEMCACHE_NULL;
 	char * nameptr;
 	char * cp;
 	size_t pathlen, plen;
@@ -365,20 +366,24 @@ sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
 	int cmode = uap->mode;
 	int value = uap->value;
 	int incache = 0;
-	struct psemnode * pnode = PSEMNODE_NULL;
-	struct psemcache * pcache = PSEMCACHE_NULL;
-	kern_return_t kret = KERN_SUCCESS;
-	int pinfo_alloc = 0;
-
+	struct psemcache *pcp = PSEMCACHE_NULL;
+	kern_return_t kret = KERN_INVALID_ADDRESS;	/* default fail */
+	
 	AUDIT_ARG(fflags, uap->oflag);
 	AUDIT_ARG(mode, uap->mode);
-	AUDIT_ARG(value, uap->value);
+	AUDIT_ARG(value32, uap->value);
 
 	pinfo = PSEMINFO_NULL;
 
+	/*
+	 * Preallocate everything we might need up front to avoid taking
+	 * and dropping the lock, opening us up to race conditions.
+	 */
 	MALLOC_ZONE(pnbuf, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	if (pnbuf == NULL)
-		return(ENOSPC);
+	if (pnbuf == NULL) {
+		error = ENOSPC;
+		goto bad;
+	}
 
 	pathlen = MAXPATHLEN;
 	error = copyinstr(uap->name, pnbuf, MAXPATHLEN, &pathlen);
@@ -415,28 +420,86 @@ sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
                nd.psem_hash += (unsigned char)*cp * i;
 	}
 
+	/*
+	 * attempt to allocate a new fp; if unsuccessful, the fp will be
+	 * left unmodified (NULL).
+	 */
+	error = falloc(p, &fp, &indx, vfs_context_current());
+	if (error)
+		goto bad;
+
+	/*
+	 * We allocate a new entry if we are less than the maximum
+	 * allowed and the one at the front of the LRU list is in use.
+	 * Otherwise we use the one at the front of the LRU list.
+	 */
+	MALLOC(pcp, struct psemcache *, sizeof(struct psemcache), M_SHM, M_WAITOK|M_ZERO);
+	if (pcp == PSEMCACHE_NULL) {
+		error = ENOMEM;
+		goto bad;
+	}
+
+	MALLOC(new_pinfo, struct pseminfo *, sizeof(struct pseminfo), M_SHM, M_WAITOK|M_ZERO);
+	if (new_pinfo == NULL) {
+		error = ENOSPC;
+		goto bad;
+	}
+#if CONFIG_MACF
+	mac_posixsem_label_init(new_pinfo);
+#endif
+
+	/*
+	 * Provisionally create the semaphore in the new_pinfo; we have to do
+	 * this here to prevent locking later.  We use the value of kret to
+	 * signal success or failure, which is why we set its default value
+	 * to KERN_INVALID_ADDRESS, above.
+	 */
+	
+	fmode = FFLAGS(uap->oflag);
+	
+	if((fmode & O_CREAT)) {
+		
+		if((value < 0) || (value > SEM_VALUE_MAX)) {
+			error = EINVAL;
+			goto bad;
+		}
+		
+		kret = semaphore_create(kernel_task, &new_pinfo->psem_semobject, SYNC_POLICY_FIFO, value);
+	
+		if (kret != KERN_SUCCESS) {
+			switch (kret) {
+				case KERN_RESOURCE_SHORTAGE:
+					error = ENOMEM;
+					break;
+				case KERN_PROTECTION_FAILURE:
+					error = EACCES;
+					break;
+				default:
+					error = EINVAL;
+			}
+			goto bad;
+		}
+	}
+	
+	MALLOC(new_pnode, struct psemnode *, sizeof(struct psemnode), M_SHM, M_WAITOK|M_ZERO);
+	if (new_pnode == NULL) {
+		error = ENOSPC;
+		goto bad;
+	}
+
 	PSEM_SUBSYS_LOCK();
 	error = psem_cache_search(&pinfo, &nd, &pcache);
 
 	if (error == ENOENT) {
-		PSEM_SUBSYS_UNLOCK();
 		error = EINVAL;
-		goto bad;
+		goto bad_locked;
 
 	}
 	if (!error) {
 		incache = 0;
 	} else
 		incache = 1;
-	fmode = FFLAGS(uap->oflag);
 
-	PSEM_SUBSYS_UNLOCK();
-	error = falloc(p, &nfp, &indx, vfs_context_current());
-	if (error)
-		goto bad;
-
-	PSEM_SUBSYS_LOCK();
-	fp = nfp;
 	cmode &=  ALLPERMS;
 
 	if (((fmode & (O_CREAT | O_EXCL))==(O_CREAT | O_EXCL)) &&  incache) {
@@ -447,9 +510,8 @@ sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
 #endif 
 		AUDIT_ARG(posix_ipc_perm, pinfo->psem_uid,
 			pinfo->psem_gid, pinfo->psem_mode);
-		PSEM_SUBSYS_UNLOCK();
 		error = EEXIST;
-		goto bad1;
+		goto bad_locked;
 	}
 	if (((fmode & (O_CREAT | O_EXCL))== O_CREAT) &&  incache) {
 		/* As per POSIX, O_CREAT has no effect */
@@ -457,23 +519,8 @@ sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
 	}
 
 	if ( (fmode & O_CREAT) ) {
-		if((value < 0) || (value > SEM_VALUE_MAX)) {
-			PSEM_SUBSYS_UNLOCK();
-			error = EINVAL;
-			goto bad1;
-		}
-		PSEM_SUBSYS_UNLOCK();
-		MALLOC(pinfo, struct pseminfo *, sizeof(struct pseminfo), M_SHM, M_WAITOK|M_ZERO);
-		if (pinfo == NULL) {
-			error = ENOSPC;
-			goto bad1;
-		}
-#if CONFIG_MACF
-		mac_posixsem_label_init(pinfo);
-#endif
-		PSEM_SUBSYS_LOCK();
-
-		pinfo_alloc = 1;
+		/* create a new one (commit the allocation) */
+		pinfo = new_pinfo;
 		pinfo->psem_flags = PSEM_DEFINED | PSEM_INCREATE;
 		pinfo->psem_usecount = 1;
 		pinfo->psem_mode = cmode;
@@ -481,86 +528,74 @@ sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
 		pinfo->psem_gid = kauth_cred_get()->cr_gid;
 		bcopy(pnbuf, &pinfo->psem_name[0], PSEMNAMLEN);
 		pinfo->psem_name[PSEMNAMLEN]= 0;
-		PSEM_SUBSYS_UNLOCK();
-   		kret = semaphore_create(kernel_task, &pinfo->psem_semobject,
-                            SYNC_POLICY_FIFO, value);
-		if(kret != KERN_SUCCESS) 
-			goto bad3;
-		PSEM_SUBSYS_LOCK();
 		pinfo->psem_flags &= ~PSEM_DEFINED;
 		pinfo->psem_flags |= PSEM_ALLOCATED;
 		pinfo->sem_proc = p;
+		
 #if CONFIG_MACF
 		error = mac_posixsem_check_create(kauth_cred_get(), nameptr);
 		if (error) {
-			PSEM_SUBSYS_UNLOCK();
-			goto bad2;
+			goto bad_locked;
 		}
 		mac_posixsem_label_associate(kauth_cred_get(), pinfo, nameptr);
 #endif
 	} else {
 		/* semaphore should exist as it is without  O_CREAT */
 		if (!incache) {
-			PSEM_SUBSYS_UNLOCK();
 			error = ENOENT;
-			goto bad1;
+			goto bad_locked;
 		}
 		if( pinfo->psem_flags & PSEM_INDELETE) {
-			PSEM_SUBSYS_UNLOCK();
 			error = ENOENT;
-			goto bad1;
+			goto bad_locked;
 		}	
 		AUDIT_ARG(posix_ipc_perm, pinfo->psem_uid,
 			pinfo->psem_gid, pinfo->psem_mode);
 #if CONFIG_MACF
 		error = mac_posixsem_check_open(kauth_cred_get(), pinfo);
 		if (error) {
-			PSEM_SUBSYS_UNLOCK();
-			goto bad1;
+			goto bad_locked;
 		}
 #endif
 		if ( (error = psem_access(pinfo, fmode, kauth_cred_get())) ) {
-			PSEM_SUBSYS_UNLOCK();
-			goto bad1;
+			goto bad_locked;
 		}
 	}
-	PSEM_SUBSYS_UNLOCK();
-	MALLOC(pnode, struct psemnode *, sizeof(struct psemnode), M_SHM, M_WAITOK|M_ZERO);
-	if (pnode == NULL) {
-		error = ENOSPC;
-		goto bad1;
-	}
-	if (!incache) {
-		/*
-	 	* We allocate a new entry if we are less than the maximum
-	 	* allowed and the one at the front of the LRU list is in use.
-	 	* Otherwise we use the one at the front of the LRU list.
-	 	*/
-		MALLOC(pcp, struct psemcache *, sizeof(struct psemcache), M_SHM, M_WAITOK|M_ZERO);
-		if (pcp == NULL) {
-			error = ENOMEM;
-			goto bad2;
-		}
 
-	}
-	PSEM_SUBSYS_LOCK();
 	if (!incache) {
+		/* if successful, this will consume the pcp */
 		if ( (error = psem_cache_add(pinfo, &nd, pcp)) ) {
-			PSEM_SUBSYS_UNLOCK();
-			FREE(pcp, M_SHM);
-			goto bad2;
+			goto bad_locked;
 		}
 	}
 	pinfo->psem_flags &= ~PSEM_INCREATE;
 	pinfo->psem_usecount++;
-	pnode->pinfo = pinfo;
+	new_pnode->pinfo = pinfo;
 	PSEM_SUBSYS_UNLOCK();
+
+	/*
+	 * if incache, we did not use the new pcp or the new pcp or the
+	 * new . and we must free them.
+	 */
+	if (incache) {
+		FREE(pcp, M_SHM);
+		pcp = PSEMCACHE_NULL;
+		if (new_pinfo != PSEMINFO_NULL) {
+			/* return value ignored - we can't _not_ do this */
+			(void)semaphore_destroy(kernel_task, new_pinfo->psem_semobject);
+#if CONFIG_MACF
+			mac_posixsem_label_destroy(new_pinfo);
+#endif
+			FREE(new_pinfo, M_SHM);
+			new_pinfo = PSEMINFO_NULL;
+		}
+	}
 
 	proc_fdlock(p);
 	fp->f_flag = fmode & FMASK;
 	fp->f_type = DTYPE_PSXSEM;
 	fp->f_ops = &psemops;
-	fp->f_data = (caddr_t)pnode;
+	fp->f_data = (caddr_t)new_pnode;
 	procfdtbl_releasefd(p, indx, NULL);
 	fp_drop(p, indx, fp, 1);
 	proc_fdunlock(p);
@@ -569,30 +604,36 @@ sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
 	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
 	return (0);
 
-bad3:
-	switch (kret) {
-	case KERN_RESOURCE_SHORTAGE:
-		error = ENOMEM;
-		break;
-	case KERN_PROTECTION_FAILURE:
-		error = EACCES;
-		break;
-	default:
-		error = EINVAL;
-	}
-	goto bad1;
-bad2:
-	FREE(pnode, M_SHM);
-bad1:
-	if (pinfo_alloc) {
-#if CONFIG_MACF
-		mac_posixsem_label_destroy(pinfo);
-#endif
-		FREE(pinfo, M_SHM);
-	}
-	fp_free(p, indx, nfp);
+bad_locked:
+	PSEM_SUBSYS_UNLOCK();
 bad:
-	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
+	if (pcp != PSEMCACHE_NULL)
+		FREE(pcp, M_SHM);
+
+	if (new_pnode != PSEMNODE_NULL)
+		FREE(new_pnode, M_SHM);
+
+	if (fp != NULL)
+		fp_free(p, indx, fp);
+
+	if (new_pinfo != PSEMINFO_NULL) {
+		/*
+		 * kret signals whether or not we successfully created a
+		 * Mach semaphore for this semaphore; if so, we need to
+		 * destroy it here.
+		 */
+		if (kret == KERN_SUCCESS) {
+			/* return value ignored - we can't _not_ do this */
+			(void)semaphore_destroy(kernel_task, new_pinfo->psem_semobject);
+		}
+#if CONFIG_MACF
+		mac_posixsem_label_destroy(new_pinfo);
+#endif
+		FREE(new_pinfo, M_SHM);
+	}
+
+	if (pnbuf != NULL)
+		FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
 	return (error);
 }
 
@@ -638,7 +679,7 @@ psem_access(struct pseminfo *pinfo, int mode, kauth_cred_t cred)
 }
 
 int
-sem_unlink(__unused proc_t p, struct sem_unlink_args *uap, __unused register_t *retval)
+sem_unlink(__unused proc_t p, struct sem_unlink_args *uap, __unused int32_t *retval)
 {
 	size_t i;
 	int error=0;
@@ -754,9 +795,9 @@ bad:
 }
 
 int
-sem_close(proc_t p, struct sem_close_args *uap, __unused register_t *retval)
+sem_close(proc_t p, struct sem_close_args *uap, __unused int32_t *retval)
 {
-	int fd = CAST_DOWN(int,uap->sem);
+	int fd = CAST_DOWN_EXPLICIT(int,uap->sem);
 	struct fileproc *fp;
 	int error = 0;
 
@@ -777,16 +818,16 @@ sem_close(proc_t p, struct sem_close_args *uap, __unused register_t *retval)
 }
 
 int
-sem_wait(proc_t p, struct sem_wait_args *uap, register_t *retval)
+sem_wait(proc_t p, struct sem_wait_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
 	return(sem_wait_nocancel(p, (struct sem_wait_nocancel_args *)uap, retval));
 }
 
 int
-sem_wait_nocancel(proc_t p, struct sem_wait_nocancel_args *uap, __unused register_t *retval)
+sem_wait_nocancel(proc_t p, struct sem_wait_nocancel_args *uap, __unused int32_t *retval)
 {
-	int fd = CAST_DOWN(int,uap->sem);
+	int fd = CAST_DOWN_EXPLICIT(int,uap->sem);
 	struct fileproc *fp;
 	struct pseminfo * pinfo;
 	struct psemnode * pnode ;
@@ -844,9 +885,9 @@ out:
 }
 
 int
-sem_trywait(proc_t p, struct sem_trywait_args *uap, __unused register_t *retval)
+sem_trywait(proc_t p, struct sem_trywait_args *uap, __unused int32_t *retval)
 {
-	int fd = CAST_DOWN(int,uap->sem);
+	int fd = CAST_DOWN_EXPLICIT(int,uap->sem);
 	struct fileproc *fp;
 	struct pseminfo * pinfo;
 	struct psemnode * pnode ;
@@ -909,9 +950,9 @@ out:
 }
 
 int
-sem_post(proc_t p, struct sem_post_args *uap, __unused register_t *retval)
+sem_post(proc_t p, struct sem_post_args *uap, __unused int32_t *retval)
 {
-	int fd = CAST_DOWN(int,uap->sem);
+	int fd = CAST_DOWN_EXPLICIT(int,uap->sem);
 	struct fileproc *fp;
 	struct pseminfo * pinfo;
 	struct psemnode * pnode ;
@@ -968,19 +1009,19 @@ out:
 }
 
 int
-sem_init(__unused proc_t p, __unused struct sem_init_args *uap, __unused register_t *retval)
+sem_init(__unused proc_t p, __unused struct sem_init_args *uap, __unused int32_t *retval)
 {
 	return(ENOSYS);
 }
 
 int
-sem_destroy(__unused proc_t p, __unused struct sem_destroy_args *uap, __unused register_t *retval)
+sem_destroy(__unused proc_t p, __unused struct sem_destroy_args *uap, __unused int32_t *retval)
 {
 	return(ENOSYS);
 }
 
 int
-sem_getvalue(__unused proc_t p, __unused struct sem_getvalue_args *uap, __unused register_t *retval)
+sem_getvalue(__unused proc_t p, __unused struct sem_getvalue_args *uap, __unused int32_t *retval)
 {
 	return(ENOSYS);
 }

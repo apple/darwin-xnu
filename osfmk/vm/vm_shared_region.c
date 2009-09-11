@@ -100,6 +100,7 @@
 
 #include <kern/ipc_tt.h>
 #include <kern/kalloc.h>
+#include <kern/thread_call.h>
 
 #include <mach/mach_vm.h>
 
@@ -114,11 +115,14 @@
 /* "dyld" uses this to figure out what the kernel supports */
 int shared_region_version = 3;
 
-/* should local (non-chroot) shared regions persist when no task uses them ? */
-int shared_region_persistence = 1;	/* yes by default */
-
 /* trace level, output is sent to the system log file */
 int shared_region_trace_level = SHARED_REGION_TRACE_ERROR_LVL;
+
+/* should local (non-chroot) shared regions persist when no task uses them ? */
+int shared_region_persistence = 0;	/* no by default */
+
+/* delay before reclaiming an unused shared region */
+int shared_region_destroy_delay = 120; /* in seconds */
 
 /* this lock protects all the shared region data structures */
 lck_grp_t *vm_shared_region_lck_grp;
@@ -141,6 +145,16 @@ static vm_shared_region_t vm_shared_region_create(
 	cpu_type_t		cputype,
 	boolean_t		is_64bit);
 static void vm_shared_region_destroy(vm_shared_region_t shared_region);
+
+static void vm_shared_region_timeout(thread_call_param_t param0,
+				     thread_call_param_t param1);
+
+static int __commpage_setup = 0;
+#if defined(__i386__) || defined(__x86_64__)
+static int __system_power_source = 1;	/* init to extrnal power source */
+static void post_sys_powersource_internal(int i, int internal);
+#endif /* __i386__ || __x86_64__ */
+
 
 /*
  * Initialize the module...
@@ -400,6 +414,22 @@ vm_shared_region_reference_locked(
 		 shared_region));
 	assert(shared_region->sr_ref_count > 0);
 	shared_region->sr_ref_count++;
+
+	if (shared_region->sr_timer_call != NULL) {
+		boolean_t cancelled;
+
+		/* cancel and free any pending timeout */
+		cancelled = thread_call_cancel(shared_region->sr_timer_call);
+		if (cancelled) {
+			thread_call_free(shared_region->sr_timer_call);
+			shared_region->sr_timer_call = NULL;
+			/* release the reference held by the cancelled timer */
+			shared_region->sr_ref_count--;
+		} else {
+			/* the timer will drop the reference and free itself */
+		}
+	}
+
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: reference_locked(%p) <- %d\n",
 		 shared_region, shared_region->sr_ref_count));
@@ -449,16 +479,46 @@ vm_shared_region_deallocate(
 		 shared_region, shared_region->sr_ref_count));
 
 	if (shared_region->sr_ref_count == 0) {
-		assert(! shared_region->sr_mapping_in_progress);
-		/* remove it from the queue first, so no one can find it... */
-		queue_remove(&vm_shared_region_queue,
-			     shared_region,
-			     vm_shared_region_t,
-			     sr_q);
-		vm_shared_region_unlock();
-		/* ... and destroy it */
-		vm_shared_region_destroy(shared_region);
-		shared_region = NULL;
+		uint64_t deadline;
+
+		if (shared_region->sr_timer_call == NULL) {
+			/* hold one reference for the timer */
+			assert(! shared_region->sr_mapping_in_progress);
+			shared_region->sr_ref_count++;
+
+			/* set up the timer */
+			shared_region->sr_timer_call = thread_call_allocate(
+				(thread_call_func_t) vm_shared_region_timeout,
+				(thread_call_param_t) shared_region);
+
+			/* schedule the timer */
+			clock_interval_to_deadline(shared_region_destroy_delay,
+						   1000 * 1000 * 1000,
+						   &deadline);
+			thread_call_enter_delayed(shared_region->sr_timer_call,
+						  deadline);
+
+			SHARED_REGION_TRACE_DEBUG(
+				("shared_region: deallocate(%p): armed timer\n",
+				 shared_region));
+
+			vm_shared_region_unlock();
+		} else {
+			/* timer expired: let go of this shared region */
+
+			/*
+			 * Remove it from the queue first, so no one can find
+			 * it...
+			 */
+			queue_remove(&vm_shared_region_queue,
+				     shared_region,
+				     vm_shared_region_t,
+				     sr_q);
+			vm_shared_region_unlock();
+			/* ... and destroy it */
+			vm_shared_region_destroy(shared_region);
+			shared_region = NULL;
+		}
 	} else {
 		vm_shared_region_unlock();
 	}
@@ -466,6 +526,18 @@ vm_shared_region_deallocate(
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: deallocate(%p) <-\n",
 		 shared_region));
+}
+
+void
+vm_shared_region_timeout(
+	thread_call_param_t	param0,
+	__unused thread_call_param_t	param1)
+{
+	vm_shared_region_t	shared_region;
+
+	shared_region = (vm_shared_region_t) param0;
+
+	vm_shared_region_deallocate(shared_region);
 }
 
 /*
@@ -606,6 +678,7 @@ vm_shared_region_create(
 	queue_init(&shared_region->sr_q);
 	shared_region->sr_mapping_in_progress = FALSE;
 	shared_region->sr_persists = FALSE;
+	shared_region->sr_timer_call = NULL;
 	shared_region->sr_first_mapping = (mach_vm_offset_t) -1;
 
 	/* grab a reference for the caller */
@@ -682,6 +755,10 @@ vm_shared_region_destroy(
 	mach_memory_entry_port_release(shared_region->sr_mem_entry);
 	mem_entry = NULL;
 	shared_region->sr_mem_entry = IPC_PORT_NULL;
+
+	if (shared_region->sr_timer_call) {
+		thread_call_free(shared_region->sr_timer_call);
+	}
 
 	/* release the shared region structure... */
 	kfree(shared_region, sizeof (*shared_region));
@@ -1255,6 +1332,12 @@ vm_commpage_init(void)
 
 	/* populate them according to this specific platform */
 	commpage_populate();
+	__commpage_setup = 1;
+#if defined(__i386__) || defined(__x86_64__)
+	if (__system_power_source == 0) {
+		post_sys_powersource_internal(0, 1);
+	}
+#endif /* __i386__ || __x86_64__ */
 
 	SHARED_REGION_TRACE_DEBUG(
 		("commpage: init() <-\n"));
@@ -1366,3 +1449,38 @@ vm_commpage_enter(
 		 map, task, kr));
 	return kr;
 }
+
+
+/* 
+ * This is called from powermanagement code to let kernel know the current source of power.
+ * 0 if it is external source (connected to power )
+ * 1 if it is internal power source ie battery
+ */
+void
+#if defined(__i386__) || defined(__x86_64__)
+post_sys_powersource(int i)
+#else
+post_sys_powersource(__unused int i)
+#endif
+{
+#if defined(__i386__) || defined(__x86_64__)
+	post_sys_powersource_internal(i, 0);
+#endif /* __i386__ || __x86_64__ */
+}
+
+
+#if defined(__i386__) || defined(__x86_64__)
+static void
+post_sys_powersource_internal(int i, int internal)
+{
+	if (internal == 0)
+		__system_power_source = i;
+
+	if (__commpage_setup != 0) {
+		if (__system_power_source != 0)
+			commpage_set_spin_count(0);
+		else
+			commpage_set_spin_count(MP_SPIN_TRIES);
+	}
+}
+#endif /* __i386__ || __x86_64__ */

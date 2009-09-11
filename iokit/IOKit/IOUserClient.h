@@ -173,19 +173,31 @@ protected:
 */
     ExpansionData * reserved;
 
+#ifdef XNU_KERNEL_PRIVATE
 public:
+#else
+private:
+#endif
     OSSet * mappings;
     UInt8   sharedInstance;
     UInt8   __reservedA[3];
     void  * __reserved[7];
 
-    virtual IOReturn externalMethod( uint32_t selector, IOExternalMethodArguments * arguments,
+public:
+   virtual IOReturn externalMethod( uint32_t selector, IOExternalMethodArguments * arguments,
 					IOExternalMethodDispatch * dispatch = 0, OSObject * target = 0, void * reference = 0 );
-    OSMetaClassDeclareReservedUsed(IOUserClient, 0);
+
+   virtual IOReturn registerNotificationPort(
+					mach_port_t port, UInt32 type, io_user_reference_t refCon);
 
 private:
-
+#if __LP64__
+    OSMetaClassDeclareReservedUnused(IOUserClient, 0);
     OSMetaClassDeclareReservedUnused(IOUserClient, 1);
+#else
+    OSMetaClassDeclareReservedUsed(IOUserClient, 0);
+    OSMetaClassDeclareReservedUsed(IOUserClient, 1);
+#endif
     OSMetaClassDeclareReservedUnused(IOUserClient, 2);
     OSMetaClassDeclareReservedUnused(IOUserClient, 3);
     OSMetaClassDeclareReservedUnused(IOUserClient, 4);
@@ -201,6 +213,17 @@ private:
     OSMetaClassDeclareReservedUnused(IOUserClient, 14);
     OSMetaClassDeclareReservedUnused(IOUserClient, 15);
 
+#ifdef XNU_KERNEL_PRIVATE
+    /* Available within xnu source only */
+public:
+    static void initialize( void );
+    static void destroyUserReferences( OSObject * obj );
+    IOMemoryMap * mapClientMemory64( IOOptionBits type,
+                                    task_t task,
+                                    IOOptionBits mapFlags = kIOMapAnywhere,
+				    mach_vm_address_t atAddress = 0 );
+#endif
+
 protected:
     static IOReturn sendAsyncResult(OSAsyncReference reference,
                                     IOReturn result, void *args[], UInt32 numArgs);
@@ -215,12 +238,25 @@ protected:
 					mach_vm_address_t callback, io_user_reference_t refcon);
 public:
 
-    static void initialize( void );
-
-    static void destroyUserReferences( OSObject * obj );
-
     static IOReturn clientHasPrivilege( void * securityToken,
                                         const char * privilegeName );
+
+    /*!
+        @function releaseAsyncReference64
+	@abstract Release the mach_port_t reference held within the OSAsyncReference64 structure.
+	@discussion The OSAsyncReference64 structure passed to async methods holds a reference to the wakeup mach port, which should be released to balance each async method call. Behavior is undefined if these calls are not correctly balanced.
+        @param reference The reference passed to the subclass IOAsyncMethod, or externalMethod() in the IOExternalMethodArguments.asyncReference field.
+        @result A return code.
+    */
+    static IOReturn releaseAsyncReference64(OSAsyncReference64 reference);
+    /*!
+        @function releaseNotificationPort
+	@abstract Release the mach_port_t passed to registerNotificationPort().
+	@discussion The mach_port_t passed to the registerNotificationPort() methods should be released to balance each call to registerNotificationPort(). Behavior is undefined if these calls are not correctly balanced.
+        @param reference The mach_port_t argument previously passed to the subclass implementation of registerNotificationPort().
+        @result A return code.
+    */
+    static IOReturn releaseNotificationPort(mach_port_t port);
 
     virtual bool init();
     virtual bool init( OSDictionary * dictionary );
@@ -252,15 +288,16 @@ public:
 			        IOOptionBits * options,
 				IOMemoryDescriptor ** memory );
 
-    virtual IOMemoryMap * mapClientMemory( IOOptionBits type,
+#if !__LP64__
+private:
+	APPLE_KEXT_COMPATIBILITY_VIRTUAL
+	IOMemoryMap * mapClientMemory( IOOptionBits type,
                                     task_t task,
                                     IOOptionBits mapFlags = kIOMapAnywhere,
-				    IOVirtualAddress atAddress = 0 );
+									IOVirtualAddress atAddress = 0 );
+#endif
 
-    IOMemoryMap * mapClientMemory64( IOOptionBits type,
-                                    task_t task,
-                                    IOOptionBits mapFlags = kIOMapAnywhere,
-				    mach_vm_address_t atAddress = 0 );
+public:
 
     /*!
         @function removeMappingForDescriptor
@@ -282,9 +319,11 @@ public:
 
     // Old methods for accessing method vector backward compatiblility only
     virtual IOExternalMethod *
-        getExternalMethodForIndex( UInt32 index );
+        getExternalMethodForIndex( UInt32 index )
+	APPLE_KEXT_DEPRECATED;
     virtual IOExternalAsyncMethod *
-        getExternalAsyncMethodForIndex( UInt32 index );
+        getExternalAsyncMethodForIndex( UInt32 index )
+	APPLE_KEXT_DEPRECATED;
 
     // Methods for accessing method vector.
     virtual IOExternalMethod *
@@ -294,7 +333,9 @@ public:
 
     // Methods for accessing trap vector - old and new style
     virtual IOExternalTrap *
-      getExternalTrapForIndex( UInt32 index );
+		getExternalTrapForIndex( UInt32 index )
+	APPLE_KEXT_DEPRECATED;
+
     virtual IOExternalTrap *
       getTargetAndTrapForIndex( IOService **targetP, UInt32 index );
 };

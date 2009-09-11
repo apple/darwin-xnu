@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -153,7 +153,7 @@ host_info(
 	case HOST_BASIC_INFO:
 	{
 		register host_basic_info_t	basic_info;
-		register int				master_num;
+		register int				master_id;
 
 		/*
 		 *	Basic information about this host.
@@ -166,12 +166,12 @@ host_info(
 		basic_info->memory_size = machine_info.memory_size;
 		basic_info->max_cpus = machine_info.max_cpus;
 		basic_info->avail_cpus = processor_avail_count;
-		master_num = master_processor->cpu_num;
-		basic_info->cpu_type = slot_type(master_num);
-		basic_info->cpu_subtype = slot_subtype(master_num);
+		master_id = master_processor->cpu_id;
+		basic_info->cpu_type = slot_type(master_id);
+		basic_info->cpu_subtype = slot_subtype(master_id);
 
 		if (*count >= HOST_BASIC_INFO_COUNT) {
-			basic_info->cpu_threadtype = slot_threadtype(master_num);
+			basic_info->cpu_threadtype = slot_threadtype(master_id);
 			basic_info->physical_cpu = machine_info.physical_cpu;
 			basic_info->physical_cpu_max = machine_info.physical_cpu_max;
 			basic_info->logical_cpu = machine_info.logical_cpu;
@@ -263,6 +263,7 @@ host_statistics(
 	host_info_t				info,
 	mach_msg_type_number_t	*count)
 {
+	uint32_t	i;
 
 	if (host == HOST_NULL)
 		return (KERN_INVALID_HOST);
@@ -290,8 +291,9 @@ host_statistics(
 	case HOST_VM_INFO:
 	{
 		register processor_t		processor;
-		register vm_statistics_t	stat;
-		vm_statistics_data_t		host_vm_stat;
+		register vm_statistics64_t	stat;
+		vm_statistics64_data_t		host_vm_stat;
+		vm_statistics_t			stat32;
 		mach_msg_type_number_t		original_count;
                 
 		if (*count < HOST_VM_INFO_REV0_COUNT)
@@ -320,20 +322,34 @@ host_statistics(
 			simple_unlock(&processor_list_lock);
 		}
 
-		stat = (vm_statistics_t) info;
+		stat32 = (vm_statistics_t) info;
 
-		stat->free_count = vm_page_free_count + vm_page_speculative_count;
-		stat->active_count = vm_page_active_count;
-		stat->inactive_count = vm_page_inactive_count;
-		stat->wire_count = vm_page_wire_count;
-		stat->zero_fill_count = host_vm_stat.zero_fill_count;
-		stat->reactivations = host_vm_stat.reactivations;
-		stat->pageins = host_vm_stat.pageins;
-		stat->pageouts = host_vm_stat.pageouts;
-		stat->faults = host_vm_stat.faults;
-		stat->cow_faults = host_vm_stat.cow_faults;
-		stat->lookups = host_vm_stat.lookups;
-		stat->hits = host_vm_stat.hits;
+		stat32->free_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_free_count + vm_page_speculative_count);
+		stat32->active_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_active_count);
+		
+		if (vm_page_local_q) {
+			for (i = 0; i < vm_page_local_q_count; i++) {
+				struct vpl	*lq;
+
+				lq = &vm_page_local_q[i].vpl_un.vpl;
+
+				stat32->active_count += VM_STATISTICS_TRUNCATE_TO_32_BIT(lq->vpl_count);
+			}
+		}
+		stat32->inactive_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_inactive_count);
+#if CONFIG_EMBEDDED
+		stat32->wire_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_wire_count);
+#else
+		stat32->wire_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_wire_count + vm_page_throttled_count);
+#endif
+		stat32->zero_fill_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.zero_fill_count);
+		stat32->reactivations = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.reactivations);
+		stat32->pageins = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.pageins);
+		stat32->pageouts = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.pageouts);
+		stat32->faults = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.faults);
+		stat32->cow_faults = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.cow_faults);
+		stat32->lookups = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.lookups);
+		stat32->hits = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.hits);
 
 		/*
 		 * Fill in extra info added in later revisions of the
@@ -344,15 +360,18 @@ host_statistics(
 		*count = HOST_VM_INFO_REV0_COUNT; /* rev0 already filled in */
 		if (original_count >= HOST_VM_INFO_REV1_COUNT) {
 			/* rev1 added "purgeable" info */
-			stat->purgeable_count = vm_page_purgeable_count;
-			stat->purges = vm_page_purged_count;
+			stat32->purgeable_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_purgeable_count);
+			stat32->purges = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_purged_count);
 			*count = HOST_VM_INFO_REV1_COUNT;
 		}
+
 		if (original_count >= HOST_VM_INFO_REV2_COUNT) {
 			/* rev2 added "speculative" info */
-			stat->speculative_count = vm_page_speculative_count;
+			stat32->speculative_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_speculative_count);
 			*count = HOST_VM_INFO_REV2_COUNT;
 		}
+
+		/* rev3 changed some of the fields to be 64-bit*/
 
 		return (KERN_SUCCESS);
 	}
@@ -365,10 +384,11 @@ host_statistics(
 		if (*count < HOST_CPU_LOAD_INFO_COUNT)
 			return (KERN_FAILURE);
 
-#define GET_TICKS_VALUE(processor, state, timer)										\
-MACRO_BEGIN																				\
-	cpu_load_info->cpu_ticks[(state)] +=												\
-				timer_grab(&PROCESSOR_DATA(processor, timer)) / hz_tick_interval;		\
+#define GET_TICKS_VALUE(processor, state, timer)			 \
+MACRO_BEGIN								 \
+	cpu_load_info->cpu_ticks[(state)] +=				 \
+		(uint32_t)(timer_grab(&PROCESSOR_DATA(processor, timer)) \
+				/ hz_tick_interval);			 \
 MACRO_END
 
 		cpu_load_info = (host_cpu_load_info_t)info;
@@ -403,6 +423,100 @@ MACRO_END
 		return (KERN_INVALID_ARGUMENT);
 	}
 }
+
+
+kern_return_t
+host_statistics64(
+	host_t				host,
+	host_flavor_t			flavor,
+	host_info64_t			info,
+	mach_msg_type_number_t		*count)
+{
+	uint32_t	i;
+	
+	if (host == HOST_NULL)
+		return (KERN_INVALID_HOST);
+	
+	switch(flavor) {
+
+		case HOST_VM_INFO64: /* We were asked to get vm_statistics64 */
+		{
+			register processor_t		processor;
+			register vm_statistics64_t	stat;
+			vm_statistics64_data_t		host_vm_stat;
+
+			if (*count < HOST_VM_INFO64_COUNT)
+				return (KERN_FAILURE);
+
+			processor = processor_list;
+			stat = &PROCESSOR_DATA(processor, vm_stat);
+			host_vm_stat = *stat;
+
+			if (processor_count > 1) {
+				simple_lock(&processor_list_lock);
+
+				while ((processor = processor->processor_list) != NULL) {
+					stat = &PROCESSOR_DATA(processor, vm_stat);
+
+					host_vm_stat.zero_fill_count +=	stat->zero_fill_count;
+					host_vm_stat.reactivations += stat->reactivations;
+					host_vm_stat.pageins += stat->pageins;
+					host_vm_stat.pageouts += stat->pageouts;
+					host_vm_stat.faults += stat->faults;
+					host_vm_stat.cow_faults += stat->cow_faults;
+					host_vm_stat.lookups += stat->lookups;
+					host_vm_stat.hits += stat->hits;
+				}
+
+				simple_unlock(&processor_list_lock);
+			}
+
+			stat = (vm_statistics64_t) info;
+
+			stat->free_count = vm_page_free_count + vm_page_speculative_count;
+			stat->active_count = vm_page_active_count;
+
+			if (vm_page_local_q) {
+				for (i = 0; i < vm_page_local_q_count; i++) {
+					struct vpl	*lq;
+				
+					lq = &vm_page_local_q[i].vpl_un.vpl;
+
+					stat->active_count += lq->vpl_count;
+				}
+			}
+			stat->inactive_count = vm_page_inactive_count;
+#if CONFIG_EMBEDDED
+			stat->wire_count = vm_page_wire_count;
+#else
+			stat->wire_count = vm_page_wire_count + vm_page_throttled_count;
+#endif
+			stat->zero_fill_count = host_vm_stat.zero_fill_count;
+			stat->reactivations = host_vm_stat.reactivations;
+			stat->pageins = host_vm_stat.pageins;
+			stat->pageouts = host_vm_stat.pageouts;
+			stat->faults = host_vm_stat.faults;
+			stat->cow_faults = host_vm_stat.cow_faults;
+			stat->lookups = host_vm_stat.lookups;
+			stat->hits = host_vm_stat.hits;
+		
+			/* rev1 added "purgable" info */
+			stat->purgeable_count = vm_page_purgeable_count;
+			stat->purges = vm_page_purged_count;
+		
+			/* rev2 added "speculative" info */
+			stat->speculative_count = vm_page_speculative_count;
+
+			*count = HOST_VM_INFO64_COUNT;	
+
+			return(KERN_SUCCESS);
+		}
+
+		default: /* If we didn't recognize the flavor, send to host_statistics */
+			return(host_statistics(host, flavor, (host_info_t) info, count)); 
+	}
+}
+
 
 /*
  * Get host statistics that require privilege.
@@ -656,7 +770,7 @@ host_get_special_port(
 	ipc_port_t	port;
 
 	if (host_priv == HOST_PRIV_NULL ||
-	    id == HOST_SECURITY_PORT || id > HOST_MAX_SPECIAL_PORT )
+	    id == HOST_SECURITY_PORT || id > HOST_MAX_SPECIAL_PORT || id < 0)
 		return KERN_INVALID_ARGUMENT;
 
 	host_lock(host_priv);

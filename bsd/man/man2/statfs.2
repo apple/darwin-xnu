@@ -33,12 +33,14 @@
 .\"
 .\"	@(#)statfs.2	8.3 (Berkeley) 2/11/94
 .\"
-.Dd February 11, 1994
+.Dd August 14, 2008
 .Dt STATFS 2
 .Os
 .Sh NAME
 .Nm statfs,
-.Nm fstatfs
+.Nm statfs64,
+.Nm fstatfs,
+.Nm fstatfs64
 .Nd get file system statistics
 .Sh SYNOPSIS
 .Fd #include <sys/param.h>
@@ -47,44 +49,105 @@
 .Fn statfs "const char *path" "struct statfs *buf"
 .Ft int
 .Fn fstatfs "int fd" "struct statfs *buf"
+.Sh TRANSITIIONAL SYNOPSIS (NOW DEPRECATED)
+.Ft int
+.br
+.Fn statfs64 "const char *path" "struct statfs64 *buf" ;
+.sp
+.Ft int
+.br
+.Fn fstatfs64 "int fd" "struct statfs64 *buf" ;
 .Sh DESCRIPTION
-.Fn Statfs
-returns information about a mounted file system.
-.Fa Path
-is the path name of any file within the mounted file system.
-.Fa Buf
-is a pointer to a 
+The
+.Fn statfs
+routine returns information about a mounted file system.
+The
+.Fa path
+argument is the path name of any file or directory within the mounted file system.
+The
+.Fa buf
+argument is a pointer to a 
 .Fa statfs
-structure defined as follows:
+structure.
+When the macro
+.Dv _DARWIN_FEATURE_64_BIT_INODE
+is not defined (the
+.Ft ino_t
+type is 32-bits), that structure is defined as:
 .Bd -literal
 typedef struct { int32_t val[2]; } fsid_t;
 
+#define MFSNAMELEN      15 /* length of fs type name, not inc. nul */
+#define MNAMELEN        90 /* length of buffer for returned name */
+
+struct statfs { /* when _DARWIN_FEATURE_64_BIT_INODE is NOT defined */
+    short   f_otype;	/* type of file system (reserved: zero) */
+    short   f_oflags;	/* copy of mount flags (reserved: zero) */
+    long    f_bsize;	/* fundamental file system block size */
+    long    f_iosize;	/* optimal transfer block size */
+    long    f_blocks;	/* total data blocks in file system */
+    long    f_bfree;	/* free blocks in fs */
+    long    f_bavail;	/* free blocks avail to non-superuser */
+    long    f_files;	/* total file nodes in file system */
+    long    f_ffree;	/* free file nodes in fs */
+    fsid_t  f_fsid;	/* file system id */
+    uid_t   f_owner;	/* user that mounted the file system */
+    short   f_reserved1;	/* reserved for future use */
+    short   f_type;	/* type of file system (reserved) */
+    long    f_flags;	/* copy of mount flags (reserved) */
+    long    f_reserved2[2];	/* reserved for future use */
+    char    f_fstypename[MFSNAMELEN]; /* fs type name */
+    char    f_mntonname[MNAMELEN];    /* directory on which mounted */
+    char    f_mntfromname[MNAMELEN];  /* mounted file system */
+    char    f_reserved3;	/* reserved for future use */
+    long    f_reserved4[4];	/* reserved for future use */
+};
+.Ed
+.Pp
+However, when the macro
+.Dv _DARWIN_FEATURE_64_BIT_INODE
+is defined, the
+.Ft ino_t
+type will be 64-bits (force 64-bit inode mode by defining the
+.Dv _DARWIN_USE_64_BIT_INODE
+macro before including header files).
+This will cause symbol variants of the 
+.Fa statfs
+family, with the
+.Fa $INODE64
+suffixes, to be automatically linked in.
+In addition, the
+.Fa statfs
+structure will now be defined as:
+.Bd -literal
 #define MFSTYPENAMELEN  16 /* length of fs type name including null */
 #define MAXPATHLEN      1024	
+#define MNAMELEN        MAXPATHLEN
 
-struct statfs {
-    uint32_t        f_bsize;        /* fundamental file system block size */ 
-    int32_t         f_iosize;       /* optimal transfer block size */ 
-    uint64_t        f_blocks;       /* total data blocks in file system */ 
-    uint64_t        f_bfree;        /* free blocks in fs */ 
-    uint64_t        f_bavail;       /* free blocks avail to non-superuser */ 
-    uint64_t        f_files;        /* total file nodes in file system */ 
-    uint64_t        f_ffree;        /* free file nodes in fs */ 
-    fsid_t          f_fsid;         /* file system id */ 
-    uid_t           f_owner;        /* user that mounted the filesystem */ 
-    uint32_t        f_type;         /* type of filesystem */ 
-    uint32_t        f_flags;        /* copy of mount exported flags */ 
-    uint32_t        f_fssubtype;    /* fs sub-type (flavor) */ 
-    char            f_fstypename[MFSTYPENAMELEN];   /* fs type name */ 
-    char            f_mntonname[MAXPATHLEN];        /* directory on which mounted */ 
-    char            f_mntfromname[MAXPATHLEN];      /* mounted filesystem */ 
-    uint32_t        f_reserved[8];  /* For future use */ 
+struct statfs { /* when _DARWIN_FEATURE_64_BIT_INODE is defined */
+    uint32_t    f_bsize;        /* fundamental file system block size */ 
+    int32_t     f_iosize;       /* optimal transfer block size */ 
+    uint64_t    f_blocks;       /* total data blocks in file system */ 
+    uint64_t    f_bfree;        /* free blocks in fs */ 
+    uint64_t    f_bavail;       /* free blocks avail to non-superuser */ 
+    uint64_t    f_files;        /* total file nodes in file system */ 
+    uint64_t    f_ffree;        /* free file nodes in fs */ 
+    fsid_t      f_fsid;         /* file system id */ 
+    uid_t       f_owner;        /* user that mounted the filesystem */ 
+    uint32_t    f_type;         /* type of filesystem */ 
+    uint32_t    f_flags;        /* copy of mount exported flags */ 
+    uint32_t    f_fssubtype;    /* fs sub-type (flavor) */ 
+    char        f_fstypename[MFSTYPENAMELEN];   /* fs type name */ 
+    char        f_mntonname[MAXPATHLEN];        /* directory on which mounted */ 
+    char        f_mntfromname[MAXPATHLEN];      /* mounted filesystem */ 
+    uint32_t    f_reserved[8];  /* For future use */ 
 };
 .Ed
 .Pp
 Fields that are undefined for a particular file system are set to -1.
-.Fn Fstatfs
-returns the same information about an open file referenced by descriptor
+The
+.Fn fstatfs
+routine returns the same information about an open file referenced by descriptor
 .Fa fd .
 .Sh FLAGS
 .Bl -tag -width MNT_UNKOWNPERMISSIONS
@@ -105,7 +168,7 @@ Union with underlying filesysten
 File system written to asynchronously
 .It Dv MNT_EXPORTED
 File system is exported
-.it Dv MNT_LOCAL
+.It Dv MNT_LOCAL
 File system is stored locally
 .It Dv MNT_QUOTA
 Quotas are enabled on this file system
@@ -135,8 +198,9 @@ Otherwise, -1 is returned and the global variable
 .Va errno
 is set to indicate the error.
 .Sh ERRORS
-.Fn Statfs
-fails if one or more of the following are true:
+The
+.Fn statfs
+routine fails if one or more of the following are true:
 .Bl -tag -width Er
 .It Bq Er ENOTDIR
 A component of the path prefix of
@@ -153,7 +217,7 @@ exceeds
 .Dv {PATH_MAX}
 characters.
 .It Bq Er ENOENT
-The file referred to by
+The file or directory referred to by
 .Fa path
 does not exist.
 .It Bq Er EACCES
@@ -173,8 +237,9 @@ An
 error occurred while reading from or writing to the file system.
 .El
 .Pp
-.Fn Fstatfs
-fails if one or more of the following are true:
+The
+.Fn fstatfs
+routine fails if one or more of the following are true:
 .Bl -tag -width Er
 .It Bq Er EBADF
 .Fa fd
@@ -187,7 +252,30 @@ An
 .Tn I/O
 error occurred while reading from or writing to the file system.
 .El
+.Sh TRANSITIONAL DESCRIPTION (NOW DEPRECATED)
+The
+.Fa statfs64
+and
+.Fa fstatfs64
+routines are equivalent to their corresponding non-64-suffixed routine,
+when 64-bit inodes are in effect.
+They were added before there was support for the symbol variants, and so are
+now deprecated.
+Instead of using these, set the
+.Dv _DARWIN_USE_64_BIT_INODE
+macro before including header files to force 64-bit inode support.
+.Pp
+The
+.Fa statfs64
+structure used by these deprecated routines is the same as the
+.Fa statfs
+structure when 64-bit inodes are in effect (see above).
 .Sh HISTORY
 The
 .Fn statfs
-function first appeared in 4.4BSD.
+function first appeared in 4.4BSD. The
+.Fn statfs64
+and 
+.Fn fstatfs64
+first appeared in Max OS X 10.5 (Leopard) and are now deprecated
+in favor of the corresponding symbol variants.

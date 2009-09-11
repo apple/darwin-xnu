@@ -108,6 +108,11 @@ int main(int argc, const char * argv[])
 	if (do_execve_test("helpers/sleep-ppc32", argvs, NULL, 1))		goto test_failed_exit;	
 #endif
 
+	/* 
+	 * We are ourselves launched with do_execve_test, which wants a chance to 
+	 * send a SIGKILL
+	 */
+	sleep(4);
 	return 0;
 
 test_failed_exit:

@@ -27,6 +27,7 @@
  */
 
 #include <mach/mach_types.h>
+#include <sys/appleapiopts.h>
 #include <kern/debug.h>
 
 #include <kdp/kdp_internal.h>
@@ -41,9 +42,6 @@
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 
-int kdp_vm_read( caddr_t, caddr_t, unsigned int);
-int kdp_vm_write( caddr_t, caddr_t, unsigned int);
-
 #define DO_ALIGN	1	/* align all packet data accesses */
 
 #define KDP_TEST_HARNESS 0
@@ -54,7 +52,7 @@ int kdp_vm_write( caddr_t, caddr_t, unsigned int);
 #endif
 
 static kdp_dispatch_t
-    dispatch_table[KDP_HOSTREBOOT - KDP_CONNECT +1] =
+    dispatch_table[KDP_INVALID_REQUEST-KDP_CONNECT] =
     {
 /* 0 */	kdp_connect,
 /* 1 */	kdp_disconnect,
@@ -75,23 +73,36 @@ static kdp_dispatch_t
 /*10 */ kdp_breakpoint_remove,
 /*11 */	kdp_regions,
 /*12 */ kdp_reattach,
-/*13 */ (kdp_dispatch_t)kdp_reboot
+/*13 */ kdp_reboot,
+/*14 */ kdp_readmem64,
+/*15 */ kdp_writemem64,
+/*16 */ kdp_breakpoint64_set,
+/*17 */ kdp_breakpoint64_remove,
+/*18 */ kdp_kernelversion,
+/*19 */ kdp_readphysmem64,
+/*20 */ kdp_writephysmem64,
+/*21 */ kdp_readioport,
+/*22 */ kdp_writeioport,
+/*23 */ kdp_readmsr64,
+/*24 */ kdp_writemsr64,
     };
     
 kdp_glob_t	kdp;
 
-
 #define MAX_BREAKPOINTS 100
-#define KDP_MAX_BREAKPOINTS 100
 
-#define BREAKPOINT_NOT_FOUND 101
-#define BREAKPOINT_ALREADY_SET 102
-
-#define KDP_VERSION 10
+/*
+ * Version 11 of the KDP Protocol adds support for 64-bit wide memory
+ * addresses (read/write and breakpoints) as well as a dedicated
+ * kernelversion request. Version 12 adds read/writing of physical
+ * memory with 64-bit wide memory addresses.
+ */
+#define KDP_VERSION 12
 
 typedef struct{
-  unsigned int address;
-  unsigned int old_instruction;
+	mach_vm_address_t	address;
+	uint32_t	bytesused;
+	uint8_t		oldbytes[MAX_BREAKINSN_BYTES];
 } kdp_breakpoint_record_t;
 
 static kdp_breakpoint_record_t breakpoint_list[MAX_BREAKPOINTS];
@@ -100,24 +111,6 @@ static unsigned int breakpoints_initialized = 0;
 int reattach_wait = 0;
 int noresume_on_disconnect = 0;
 extern unsigned int return_on_panic;
-
-#define MAXCOMLEN 16
-
-struct thread_snapshot {
-	uint32_t snapshot_magic;
-	thread_t thread_id;
-	int32_t state;
-	wait_queue_t wait_queue;
-	event64_t wait_event;
-	vm_offset_t kernel_stack;
-	vm_offset_t reserved_stack;
-	thread_continue_t continuation;
-	uint32_t nkern_frames;
-	char user64_p;
-	uint32_t nuser_frames;
-	int32_t pid;
-	char p_comm[MAXCOMLEN + 1];
-};
 
 typedef struct thread_snapshot *thread_snapshot_t;
 
@@ -136,8 +129,22 @@ kdp_snapshot_postflight(void);
 static int
 pid_from_task(task_t task);
 
+kdp_error_t
+kdp_set_breakpoint_internal(
+							   mach_vm_address_t	address
+							   );
+
+kdp_error_t
+kdp_remove_breakpoint_internal(
+							   mach_vm_address_t	address
+							   );
+
+
 int
 kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, unsigned trace_options, uint32_t *pbytesTraced);
+
+boolean_t kdp_copyin(pmap_t, uint64_t, void *, size_t);
+extern void bcopy_phys(addr64_t, addr64_t, vm_size_t);
 
 extern char version[];
 
@@ -173,7 +180,7 @@ kdp_packet(
     }
     
     req = rd->hdr.request;
-    if (req > KDP_HOSTREBOOT) {
+    if (req >= KDP_INVALID_REQUEST) {
 	printf("kdp_packet bad request %x len %d seq %x key %x\n",
 	    rd->hdr.request, rd->hdr.len, rd->hdr.seq, rd->hdr.key);
 
@@ -319,11 +326,42 @@ kdp_hostinfo(
     if (plen < sizeof (*rq))
 	return (FALSE);
 
+	dprintf(("kdp_hostinfo\n"));
+
     rp->hdr.is_reply = 1;
     rp->hdr.len = sizeof (*rp);
 
     kdp_machine_hostinfo(&rp->hostinfo);
 
+    *reply_port = kdp.reply_port;
+    *len = rp->hdr.len;
+    
+    return (TRUE);
+}
+
+static boolean_t
+kdp_kernelversion(
+				  kdp_pkt_t		*pkt,
+				  int			*len,
+				  unsigned short	*reply_port
+)
+{
+    kdp_kernelversion_req_t	*rq = &pkt->kernelversion_req;
+    size_t		plen = *len;
+    kdp_kernelversion_reply_t *rp = &pkt->kernelversion_reply;
+	size_t		slen;
+	
+    if (plen < sizeof (*rq))
+		return (FALSE);
+	
+    rp->hdr.is_reply = 1;
+    rp->hdr.len = sizeof (*rp);
+	
+    dprintf(("kdp_kernelversion\n"));
+	slen = strlcpy(rp->version, version, MAX_KDP_DATA_SIZE);
+	
+	rp->hdr.len += slen + 1; /* strlcpy returns the amount copied with NUL */
+	
     *reply_port = kdp.reply_port;
     *len = rp->hdr.len;
     
@@ -394,7 +432,7 @@ kdp_writemem(
     kdp_writemem_req_t	*rq = &pkt->writemem_req;
     size_t		plen = *len;
     kdp_writemem_reply_t *rp = &pkt->writemem_reply;
-    int 		cnt;
+    mach_vm_size_t 		cnt;
 
     if (plen < sizeof (*rq))
 	return (FALSE);
@@ -404,13 +442,77 @@ kdp_writemem(
     else {
 	dprintf(("kdp_writemem addr %x size %d\n", rq->address, rq->nbytes));
 
-	cnt = kdp_vm_write((caddr_t)rq->data, (caddr_t)rq->address, rq->nbytes);
+	cnt = kdp_machine_vm_write((caddr_t)rq->data, (mach_vm_address_t)rq->address, rq->nbytes);
 	rp->error = KDPERR_NO_ERROR;
     }
 
     rp->hdr.is_reply = 1;
     rp->hdr.len = sizeof (*rp);
 
+    *reply_port = kdp.reply_port;
+    *len = rp->hdr.len;
+    
+    return (TRUE);
+}
+
+static boolean_t
+kdp_writemem64(
+			 kdp_pkt_t		*pkt,
+			 int			*len,
+			 unsigned short	*reply_port
+)
+{
+    kdp_writemem64_req_t	*rq = &pkt->writemem64_req;
+    size_t		plen = *len;
+    kdp_writemem64_reply_t *rp = &pkt->writemem64_reply;
+    mach_vm_size_t 		cnt;
+	
+    if (plen < sizeof (*rq))
+		return (FALSE);
+	
+    if (rq->nbytes > MAX_KDP_DATA_SIZE)
+		rp->error = KDPERR_BAD_NBYTES;
+    else {
+		dprintf(("kdp_writemem64 addr %llx size %d\n", rq->address, rq->nbytes));
+		
+		cnt = kdp_machine_vm_write((caddr_t)rq->data, (mach_vm_address_t)rq->address, (mach_vm_size_t)rq->nbytes);
+		rp->error = KDPERR_NO_ERROR;
+    }
+	
+    rp->hdr.is_reply = 1;
+    rp->hdr.len = sizeof (*rp);
+	
+    *reply_port = kdp.reply_port;
+    *len = rp->hdr.len;
+    
+    return (TRUE);
+}
+
+static boolean_t
+kdp_writephysmem64(
+			 kdp_pkt_t		*pkt,
+			 int			*len,
+			 unsigned short	*reply_port
+)
+{
+    kdp_writephysmem64_req_t	*rq = &pkt->writephysmem64_req;
+    size_t		plen = *len;
+    kdp_writephysmem64_reply_t *rp = &pkt->writephysmem64_reply;
+	
+    if (plen < sizeof (*rq))
+		return (FALSE);
+	
+    if (rq->nbytes > MAX_KDP_DATA_SIZE)
+		rp->error = KDPERR_BAD_NBYTES;
+    else {
+		dprintf(("kdp_writephysmem64 addr %llx size %d\n", rq->address, rq->nbytes));
+		kdp_machine_phys_write(rq, rq->data, rq->lcpu);
+		rp->error = KDPERR_NO_ERROR;
+    }
+	
+    rp->hdr.is_reply = 1;
+    rp->hdr.len = sizeof (*rp);
+	
     *reply_port = kdp.reply_port;
     *len = rp->hdr.len;
     
@@ -427,10 +529,11 @@ kdp_readmem(
     kdp_readmem_req_t	*rq = &pkt->readmem_req;
     size_t		plen = *len;
     kdp_readmem_reply_t *rp = &pkt->readmem_reply;
-    int			cnt;
+    mach_vm_size_t			cnt;
 #if __i386__ || __arm__
     void		*pversion = &version;
 #endif
+
     if (plen < sizeof (*rq))
 	return (FALSE);
 
@@ -452,17 +555,90 @@ kdp_readmem(
 	 * a table) is implemented on these architectures, as with PPC.
 	 * N.B.: x86 now has a low global page, and the version indirection
 	 * is pinned at 0x201C. We retain the 0x501C address override
-	 * for compatibility.
+	 * for compatibility. Future architectures should instead use
+	 * the KDP_KERNELVERSION request.
 	 */
-	if (rq->address == (void *)0x501C)
-		rq->address = &pversion;
+	if (rq->address == 0x501C)
+		rq->address = (uintptr_t)&pversion;
 #endif
-	cnt = kdp_vm_read((caddr_t)rq->address, (caddr_t)rp->data, n);
+	cnt = kdp_machine_vm_read((mach_vm_address_t)rq->address, (caddr_t)rp->data, n);
 	rp->error = KDPERR_NO_ERROR;
 
 	rp->hdr.len += cnt;
     }
 
+    *reply_port = kdp.reply_port;
+    *len = rp->hdr.len;
+    
+    return (TRUE);
+}
+
+static boolean_t
+kdp_readmem64(
+			kdp_pkt_t		*pkt,
+			int			*len,
+			unsigned short	*reply_port
+)
+{
+    kdp_readmem64_req_t	*rq = &pkt->readmem64_req;
+    size_t		plen = *len;
+    kdp_readmem64_reply_t *rp = &pkt->readmem64_reply;
+    mach_vm_size_t			cnt;
+
+    if (plen < sizeof (*rq))
+		return (FALSE);
+	
+    rp->hdr.is_reply = 1;
+    rp->hdr.len = sizeof (*rp);
+	
+    if (rq->nbytes > MAX_KDP_DATA_SIZE)
+		rp->error = KDPERR_BAD_NBYTES;
+    else {
+
+		dprintf(("kdp_readmem64 addr %llx size %d\n", rq->address, rq->nbytes));
+
+		cnt = kdp_machine_vm_read((mach_vm_address_t)rq->address, (caddr_t)rp->data, rq->nbytes);
+		rp->error = KDPERR_NO_ERROR;
+		
+		rp->hdr.len += cnt;
+    }
+	
+    *reply_port = kdp.reply_port;
+    *len = rp->hdr.len;
+    
+    return (TRUE);
+}
+
+static boolean_t
+kdp_readphysmem64(
+			kdp_pkt_t		*pkt,
+			int			*len,
+			unsigned short	*reply_port
+)
+{
+    kdp_readphysmem64_req_t	*rq = &pkt->readphysmem64_req;
+    size_t		plen = *len;
+    kdp_readphysmem64_reply_t *rp = &pkt->readphysmem64_reply;
+    int			cnt;
+
+    if (plen < sizeof (*rq))
+		return (FALSE);
+	
+    rp->hdr.is_reply = 1;
+    rp->hdr.len = sizeof (*rp);
+	
+    if (rq->nbytes > MAX_KDP_DATA_SIZE)
+		rp->error = KDPERR_BAD_NBYTES;
+    else {
+
+		dprintf(("kdp_readphysmem64 addr %llx size %d\n", rq->address, rq->nbytes));
+
+		cnt = (int)kdp_machine_phys_read(rq, rp->data, rq->lcpu);
+		rp->error = KDPERR_NO_ERROR;
+		
+		rp->hdr.len += cnt;
+    }
+	
     *reply_port = kdp.reply_port;
     *len = rp->hdr.len;
     
@@ -516,15 +692,11 @@ kdp_version(
     dprintf(("kdp_version\n"));
 
     rp->version = KDP_VERSION;
-#if	__ppc__
     if (!(kdp_flag & KDP_BP_DIS))
       rp->feature = KDP_FEATURE_BP;
     else
       rp->feature = 0;
-#else
-    rp->feature = 0;
-#endif
-
+	
     *reply_port = kdp.reply_port;
     *len = rp->hdr.len;
     
@@ -554,7 +726,7 @@ kdp_regions(
     r = rp->regions;
     rp->nregions = 0;
 
-    r->address = NULL;
+    r->address = 0;
     r->nbytes = 0xffffffff;
 
     r->protection = VM_PROT_ALL; r++; rp->nregions++;
@@ -582,7 +754,7 @@ kdp_writeregs(
     if (plen < sizeof (*rq))
 	return (FALSE);
     
-    size = rq->hdr.len - sizeof(kdp_hdr_t) - sizeof(unsigned int);
+    size = rq->hdr.len - (unsigned)sizeof(kdp_hdr_t) - (unsigned)sizeof(unsigned int);
     rp->error = kdp_machine_write_regs(rq->cpu, rq->flavor, rq->data, &size);
 
     rp->hdr.is_reply = 1;
@@ -621,130 +793,223 @@ kdp_readregs(
     return (TRUE);
 }
 
-static boolean_t 
+
+boolean_t 
 kdp_breakpoint_set(
-    kdp_pkt_t		*pkt,
-    int			*len,
-    unsigned short	*reply_port
+				   kdp_pkt_t		*pkt,
+				   int			*len,
+				   unsigned short	*reply_port
 )
 {
-  kdp_breakpoint_req_t	*rq = &pkt->breakpoint_req;
-  kdp_breakpoint_reply_t *rp = &pkt->breakpoint_reply;
-  size_t		plen = *len;
-  int                   cnt, i;
-  unsigned int          old_instruction = 0;
-  unsigned int breakinstr = kdp_ml_get_breakinsn();
+	kdp_breakpoint_req_t	*rq = &pkt->breakpoint_req;
+	kdp_breakpoint_reply_t *rp = &pkt->breakpoint_reply;
+	size_t		plen = *len;
+	kdp_error_t	kerr;
+	
+	if (plen < sizeof (*rq))
+		return (FALSE);
+	
+	dprintf(("kdp_breakpoint_set %x\n", rq->address));
 
-  if(breakpoints_initialized == 0)
-    {
-      for(i=0;(i < MAX_BREAKPOINTS); breakpoint_list[i].address=0, i++);
-      breakpoints_initialized++;
-    }
-  if (plen < sizeof (*rq))
-    return (FALSE);
-  cnt = kdp_vm_read((caddr_t)rq->address, (caddr_t)(&old_instruction), sizeof(int));
-
-  if (old_instruction==breakinstr)
-    {
-      printf("A trap was already set at that address, not setting new breakpoint\n");
-      rp->error = BREAKPOINT_ALREADY_SET;
-      
-      rp->hdr.is_reply = 1;
-      rp->hdr.len = sizeof (*rp);
-      *reply_port = kdp.reply_port;
-      *len = rp->hdr.len;
-
-      return (TRUE);
-    }
-
-  for(i=0;(i < MAX_BREAKPOINTS) && (breakpoint_list[i].address != 0); i++);
-
-  if (i == MAX_BREAKPOINTS)
-    {
-      rp->error = KDP_MAX_BREAKPOINTS; 
-      
-      rp->hdr.is_reply = 1;
-      rp->hdr.len = sizeof (*rp);
-      *reply_port = kdp.reply_port;
-      *len = rp->hdr.len;
-
-      return (TRUE);
-    }
-  breakpoint_list[i].address =  rq->address;
-  breakpoint_list[i].old_instruction = old_instruction;
-
-  cnt = kdp_vm_write((caddr_t)&breakinstr, (caddr_t)rq->address, sizeof(&breakinstr));
-
-  rp->error = KDPERR_NO_ERROR;
-  rp->hdr.is_reply = 1;
-  rp->hdr.len = sizeof (*rp);
-  *reply_port = kdp.reply_port;
-  *len = rp->hdr.len;
-
-  return (TRUE);
+	kerr = kdp_set_breakpoint_internal((mach_vm_address_t)rq->address);
+	
+	rp->error = kerr; 
+	
+	rp->hdr.is_reply = 1;
+	rp->hdr.len = sizeof (*rp);
+	*reply_port = kdp.reply_port;
+	*len = rp->hdr.len;
+	
+	return (TRUE);
 }
 
-static boolean_t
-kdp_breakpoint_remove(
-    kdp_pkt_t		*pkt,
-    int			*len,
-    unsigned short	*reply_port
+boolean_t 
+kdp_breakpoint64_set(
+					 kdp_pkt_t		*pkt,
+					 int			*len,
+					 unsigned short	*reply_port
 )
 {
-  kdp_breakpoint_req_t	*rq = &pkt->breakpoint_req;
-  kdp_breakpoint_reply_t *rp = &pkt->breakpoint_reply;
-  size_t		plen = *len;
-  int                   cnt,i;
+	kdp_breakpoint64_req_t	*rq = &pkt->breakpoint64_req;
+	kdp_breakpoint64_reply_t *rp = &pkt->breakpoint64_reply;
+	size_t		plen = *len;
+	kdp_error_t	kerr;
+	
+	if (plen < sizeof (*rq))
+		return (FALSE);
+	
+	dprintf(("kdp_breakpoint64_set %llx\n", rq->address));
 
-  if (plen < sizeof (*rq))
-    return (FALSE);
+	kerr = kdp_set_breakpoint_internal((mach_vm_address_t)rq->address);
+	
+	rp->error = kerr; 
+	
+	rp->hdr.is_reply = 1;
+	rp->hdr.len = sizeof (*rp);
+	*reply_port = kdp.reply_port;
+	*len = rp->hdr.len;
+	
+	return (TRUE);
+}
 
-  for(i=0;(i < MAX_BREAKPOINTS) && (breakpoint_list[i].address != rq->address); i++);
-  if (i == MAX_BREAKPOINTS)
+boolean_t 
+kdp_breakpoint_remove(
+					  kdp_pkt_t		*pkt,
+					  int			*len,
+					  unsigned short	*reply_port
+)
+{
+	kdp_breakpoint_req_t	*rq = &pkt->breakpoint_req;
+	kdp_breakpoint_reply_t *rp = &pkt->breakpoint_reply;
+	size_t		plen = *len;
+	kdp_error_t	kerr;
+	if (plen < sizeof (*rq))
+		return (FALSE);
+	
+	dprintf(("kdp_breakpoint_remove %x\n", rq->address));
+
+	kerr = kdp_remove_breakpoint_internal((mach_vm_address_t)rq->address);
+	
+	rp->error = kerr; 
+	
+	rp->hdr.is_reply = 1;
+	rp->hdr.len = sizeof (*rp);
+	*reply_port = kdp.reply_port;
+	*len = rp->hdr.len;
+	
+	return (TRUE);
+}
+
+boolean_t 
+kdp_breakpoint64_remove(
+						kdp_pkt_t		*pkt,
+						int			*len,
+						unsigned short	*reply_port
+)
+{
+	kdp_breakpoint64_req_t	*rq = &pkt->breakpoint64_req;
+	kdp_breakpoint64_reply_t *rp = &pkt->breakpoint64_reply;
+	size_t		plen = *len;
+	kdp_error_t	kerr;
+	
+	if (plen < sizeof (*rq))
+		return (FALSE);
+	
+	dprintf(("kdp_breakpoint64_remove %llx\n", rq->address));
+
+	kerr = kdp_remove_breakpoint_internal((mach_vm_address_t)rq->address);
+	
+	rp->error = kerr; 
+	
+	rp->hdr.is_reply = 1;
+	rp->hdr.len = sizeof (*rp);
+	*reply_port = kdp.reply_port;
+	*len = rp->hdr.len;
+	
+	return (TRUE);
+}
+
+
+kdp_error_t
+kdp_set_breakpoint_internal(
+							mach_vm_address_t	address
+							)
+{
+	
+	uint8_t		breakinstr[MAX_BREAKINSN_BYTES], oldinstr[MAX_BREAKINSN_BYTES];
+	uint32_t	breakinstrsize = sizeof(breakinstr);
+	mach_vm_size_t	cnt;
+	int			i;
+	
+	kdp_machine_get_breakinsn(breakinstr, &breakinstrsize);
+	
+	if(breakpoints_initialized == 0)
     {
-      rp->error = BREAKPOINT_NOT_FOUND; 
-      rp->hdr.is_reply = 1;
-      rp->hdr.len = sizeof (*rp);
-      *reply_port = kdp.reply_port;
-      *len = rp->hdr.len;
-
-      return (TRUE); /* Check if it needs to be FALSE in case of error */
+		for(i=0;(i < MAX_BREAKPOINTS); breakpoint_list[i].address=0, i++);
+		breakpoints_initialized++;
     }
+	
+	cnt = kdp_machine_vm_read(address, (caddr_t)&oldinstr, (mach_vm_size_t)breakinstrsize);
+	
+	if (0 == memcmp(oldinstr, breakinstr, breakinstrsize)) {
+		printf("A trap was already set at that address, not setting new breakpoint\n");
+		
+		return KDPERR_BREAKPOINT_ALREADY_SET;
+	}
+	
+	for(i=0;(i < MAX_BREAKPOINTS) && (breakpoint_list[i].address != 0); i++);
+	
+	if (i == MAX_BREAKPOINTS) {
+		return KDPERR_MAX_BREAKPOINTS;
+	}
+	
+	breakpoint_list[i].address =  address;
+	memcpy(breakpoint_list[i].oldbytes, oldinstr, breakinstrsize);
+	breakpoint_list[i].bytesused =  breakinstrsize;
+	
+	cnt = kdp_machine_vm_write((caddr_t)&breakinstr, address, breakinstrsize);
+	
+	return KDPERR_NO_ERROR;
+}
 
-  breakpoint_list[i].address = 0;
-  cnt = kdp_vm_write((caddr_t)&(breakpoint_list[i].old_instruction), (caddr_t)rq->address, sizeof(int));
-  rp->error = KDPERR_NO_ERROR;
-  rp->hdr.is_reply = 1;
-  rp->hdr.len = sizeof (*rp);
-  *reply_port = kdp.reply_port;
-  *len = rp->hdr.len;
-
-  return (TRUE);
+kdp_error_t
+kdp_remove_breakpoint_internal(
+							   mach_vm_address_t	address
+							   )
+{
+	mach_vm_size_t	cnt;
+	int		i;
+	
+	for(i=0;(i < MAX_BREAKPOINTS) && (breakpoint_list[i].address != address); i++);
+	
+	if (i == MAX_BREAKPOINTS)
+    {
+		return KDPERR_BREAKPOINT_NOT_FOUND; 
+	}
+	
+	breakpoint_list[i].address = 0;
+	cnt = kdp_machine_vm_write((caddr_t)&breakpoint_list[i].oldbytes, address, breakpoint_list[i].bytesused);
+	
+	return KDPERR_NO_ERROR;
 }
 
 boolean_t
 kdp_remove_all_breakpoints(void)
 {
-  int i;
-  boolean_t breakpoint_found = FALSE;
-  
-  if (breakpoints_initialized)
+	int i;
+	boolean_t breakpoint_found = FALSE;
+	
+	if (breakpoints_initialized)
     {
-      for(i=0;i < MAX_BREAKPOINTS; i++)
-	{
-	  if (breakpoint_list[i].address)
-	    {
-	      kdp_vm_write((caddr_t)&(breakpoint_list[i].old_instruction), (caddr_t)breakpoint_list[i].address, sizeof(int));
-	      breakpoint_found = TRUE;
-	      breakpoint_list[i].address = 0;
-	    }
-	}
-      if (breakpoint_found)
-       printf("kdp_remove_all_breakpoints: found extant breakpoints, removing them.\n");
+		for(i=0;i < MAX_BREAKPOINTS; i++)
+		{
+			if (breakpoint_list[i].address)
+			{
+				kdp_machine_vm_write((caddr_t)&(breakpoint_list[i].oldbytes), (mach_vm_address_t)breakpoint_list[i].address, (mach_vm_size_t)breakpoint_list[i].bytesused);
+				breakpoint_found = TRUE;
+				breakpoint_list[i].address = 0;
+			}
+		}
+		
+		if (breakpoint_found)
+			printf("kdp_remove_all_breakpoints: found extant breakpoints, removing them.\n");
     }
-  return breakpoint_found;
+	return breakpoint_found;
 }
 
+boolean_t
+kdp_reboot(
+		   __unused kdp_pkt_t *pkt,
+		   __unused int	*len,
+		   __unused unsigned short *reply_port
+)
+{
+	dprintf(("kdp_reboot\n"));
+
+	kdp_machine_reboot();
+	
+	return (TRUE); // no, not really, we won't return
+}
 
 #define MAX_FRAMES 1000
 
@@ -756,6 +1021,32 @@ static int pid_from_task(task_t task)
 		pid = proc_pid(task->bsd_info);
 
 	return pid;
+}
+
+boolean_t
+kdp_copyin(pmap_t p, uint64_t uaddr, void *dest, size_t size) {
+	size_t rem = size;
+	char *kvaddr = dest;
+
+	while (rem) {
+		ppnum_t upn = pmap_find_phys(p, uaddr);
+		uint64_t phys_src = (upn << PAGE_SHIFT) | (uaddr & PAGE_MASK);
+		uint64_t phys_dest = kvtophys((vm_offset_t)kvaddr);
+		uint64_t src_rem = PAGE_SIZE - (phys_src & PAGE_MASK);
+		uint64_t dst_rem = PAGE_SIZE - (phys_dest & PAGE_MASK);
+		size_t cur_size = (uint32_t) MIN(src_rem, dst_rem);
+		cur_size = MIN(cur_size, rem);
+
+		if (upn && pmap_valid_page(upn) && phys_dest) {
+			bcopy_phys(phys_src, phys_dest, cur_size);
+		}
+		else
+			break;
+		uaddr += cur_size;
+		kvaddr += cur_size;
+		rem -= cur_size;	
+	}
+	return (rem == 0);
 }
 
 int
@@ -771,6 +1062,8 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, unsigned trace_op
 	int nframes = trace_options;
 	thread_snapshot_t tsnap = NULL;
 	unsigned framesize = 2 * sizeof(vm_offset_t);
+	boolean_t dispatch_p = ((trace_options & STACKSHOT_GET_DQ) != 0);
+	uint16_t  dispatch_offset = (trace_options & STACKSHOT_DISPATCH_OFFSET_MASK) >> STACKSHOT_DISPATCH_OFFSET_SHIFT;
 	struct task ctask;
 	struct thread cthread;
 
@@ -791,42 +1084,63 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, unsigned trace_op
 				}
 /* Populate the thread snapshot header */
 				tsnap = (thread_snapshot_t) tracepos;
-				tsnap->thread_id = thread;
+				tsnap->thread_id = (uint64_t) (uintptr_t)thread;
 				tsnap->state = thread->state;
-				tsnap->wait_queue = thread->wait_queue;
 				tsnap->wait_event = thread->wait_event;
-				tsnap->kernel_stack = thread->kernel_stack;
-				tsnap->reserved_stack = thread->reserved_stack;
-				tsnap->continuation = thread->continuation;
+				tsnap->continuation = (uint64_t) (uintptr_t) thread->continuation;
 /* Add the BSD process identifiers */
 				if ((tsnap->pid = pid_from_task(task)) != -1)
-					proc_name_kdp(task, tsnap->p_comm, MAXCOMLEN + 1);
+					proc_name_kdp(task, tsnap->p_comm, sizeof(tsnap->p_comm));
 				else
 					tsnap->p_comm[0] = '\0';
 
 				tsnap->snapshot_magic = 0xfeedface;
 				tracepos += sizeof(struct thread_snapshot);
+				tsnap->ss_flags = 0;
 
+				if (dispatch_p && (task != kernel_task) && (task->active) && (task->map)) {
+					uint64_t dqkeyaddr = thread_dispatchqaddr(thread);
+					if (dqkeyaddr != 0) {
+						boolean_t task64 = task_has_64BitAddr(task);
+						uint64_t dqaddr = 0;
+						if (kdp_copyin(task->map->pmap, dqkeyaddr, &dqaddr, (task64 ? 8 : 4)) && (dqaddr != 0)) {
+							uint64_t dqserialnumaddr = dqaddr + dispatch_offset;
+							uint64_t dqserialnum = 0;
+							if (kdp_copyin(task->map->pmap, dqserialnumaddr, &dqserialnum, (task64 ? 8 : 4))) {
+								tsnap->ss_flags |= kHasDispatchSerial;
+								*(uint64_t *)tracepos = dqserialnum;
+								tracepos += 8;
+							}
+						}
+					}
+				}
 /* Call through to the machine specific trace routines
  * Frames are added past the snapshot header.
  */
-				if (tsnap->kernel_stack != 0)
+				if (thread->kernel_stack != 0) {
+#if defined(__LP64__)					
+					tracebytes = machine_trace_thread64(thread, tracepos, tracebound, nframes, FALSE);
+					tsnap->ss_flags |= kKernel64_p;
+					framesize = 16;
+#else
 					tracebytes = machine_trace_thread(thread, tracepos, tracebound, nframes, FALSE);
-				tsnap->nkern_frames = tracebytes/(2 * sizeof(vm_offset_t));
+					framesize = 8;
+#endif
+				}
+				tsnap->nkern_frames = tracebytes/framesize;
 				tracepos += tracebytes;
 				tracebytes = 0;
-				tsnap->user64_p = 0;
 /* Trace user stack, if any */
 				if (thread->task->map != kernel_map) {
-/* 64-bit task? */
+					/* 64-bit task? */
 					if (task_has_64BitAddr(thread->task)) {
 						tracebytes = machine_trace_thread64(thread, tracepos, tracebound, nframes, TRUE);
-						tsnap->user64_p = 1;
-						framesize = 2 * sizeof(addr64_t);
+						tsnap->ss_flags |= kUser64_p;
+						framesize = 16;
 					}
 					else {
 						tracebytes = machine_trace_thread(thread, tracepos, tracebound, nframes, TRUE);
-						framesize = 2 * sizeof(vm_offset_t);
+						framesize = 8;
 					}
 				}
 				tsnap->nuser_frames = tracebytes/framesize;
@@ -839,7 +1153,128 @@ error_exit:
 	/* Release stack snapshot wait indicator */
 	kdp_snapshot_postflight();
 
-	*pbytesTraced = tracepos - (char *) tracebuf;
+	*pbytesTraced = (uint32_t)(tracepos - (char *) tracebuf);
 
 	return error;
+}
+
+static boolean_t
+kdp_readioport(kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
+	       )
+{
+	kdp_readioport_req_t   *rq = &pkt->readioport_req;
+	kdp_readioport_reply_t *rp = &pkt->readioport_reply;
+	size_t plen = *len;
+
+	if (plen < sizeof (*rq))
+		return (FALSE);
+	
+	rp->hdr.is_reply = 1;
+	rp->hdr.len = sizeof (*rp);
+	
+	if (rq->nbytes > MAX_KDP_DATA_SIZE)
+		rp->error = KDPERR_BAD_NBYTES;
+	else {
+#if KDP_TEST_HARNESS
+                uint16_t addr = rq->address;
+#endif
+		uint16_t size = rq->nbytes;
+		dprintf(("kdp_readioport addr %x size %d\n", addr, size));
+
+		rp->error = kdp_machine_ioport_read(rq, rp->data, rq->lcpu);
+		if (rp->error == KDPERR_NO_ERROR)
+			rp->hdr.len += size;
+	}
+	
+	*reply_port = kdp.reply_port;
+	*len = rp->hdr.len;
+    
+	return (TRUE);
+}
+
+static boolean_t
+kdp_writeioport(
+	kdp_pkt_t	*pkt,
+	int		*len,
+	unsigned short	*reply_port
+                )
+{
+	kdp_writeioport_req_t   *rq = &pkt->writeioport_req;
+	kdp_writeioport_reply_t *rp = &pkt->writeioport_reply;
+	size_t	plen = *len;
+	
+	if (plen < sizeof (*rq))
+		return (FALSE);
+	
+	if (rq->nbytes > MAX_KDP_DATA_SIZE)
+		rp->error = KDPERR_BAD_NBYTES;
+	else {
+		dprintf(("kdp_writeioport addr %x size %d\n", rq->address, 
+			rq->nbytes));
+		
+		rp->error = kdp_machine_ioport_write(rq, rq->data, rq->lcpu);
+	}
+	
+	rp->hdr.is_reply = 1;
+	rp->hdr.len = sizeof (*rp);
+	
+	*reply_port = kdp.reply_port;
+	*len = rp->hdr.len;
+    
+	return (TRUE);
+}
+
+static boolean_t
+kdp_readmsr64(kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
+              )
+{
+	kdp_readmsr64_req_t   *rq = &pkt->readmsr64_req;
+	kdp_readmsr64_reply_t *rp = &pkt->readmsr64_reply;
+	size_t plen = *len;
+
+	if (plen < sizeof (*rq))
+		return (FALSE);
+	
+	rp->hdr.is_reply = 1;
+	rp->hdr.len = sizeof (*rp);
+	
+	dprintf(("kdp_readmsr64 lcpu %x addr %x\n", rq->lcpu, rq->address));
+	rp->error = kdp_machine_msr64_read(rq, rp->data, rq->lcpu);
+	if (rp->error == KDPERR_NO_ERROR)
+		rp->hdr.len += sizeof(uint64_t);
+	
+	*reply_port = kdp.reply_port;
+	*len = rp->hdr.len;
+    
+	return (TRUE);
+}
+
+static boolean_t
+kdp_writemsr64(
+	kdp_pkt_t	*pkt,
+	int		*len,
+	unsigned short	*reply_port
+	       )
+{
+	kdp_writemsr64_req_t   *rq = &pkt->writemsr64_req;
+	kdp_writemsr64_reply_t *rp = &pkt->writemsr64_reply;
+	size_t	plen = *len;
+	
+	if (plen < sizeof (*rq))
+		return (FALSE);
+	
+	dprintf(("kdp_writemsr64 lcpu %x addr %x\n", rq->lcpu, rq->address)); 
+	rp->error = kdp_machine_msr64_write(rq, rq->data, rq->lcpu);
+	
+	rp->hdr.is_reply = 1;
+	rp->hdr.len = sizeof (*rp);
+	
+	*reply_port = kdp.reply_port;
+	*len = rp->hdr.len;
+    
+	return (TRUE);
 }

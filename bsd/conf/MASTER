@@ -126,7 +126,11 @@ options		ROUTING		# routing			# <routing>
 options		NETMIBS		#				# <netmibs>
 options		VLAN		#				# <vlan>
 options		BOND		#				# <bond>
+options		PF		# Packet Filter			# <pf>
+options		PF_PKTHDR	# PF tag inside mbuf pkthdr	# <pf_pkthdr>
+options		PFLOG		# PF log interface		# <pflog>
 options		IPDIVERT        # Divert sockets (for NAT)      # <ipdivert>
+options		IPFLOW		# IP fast forwarding		# <ipflow>
 options		IPFIREWALL      # IP Firewalling (used by NAT)  # <ipfirewall>
 options		IPFIREWALL_FORWARD      #Transparent proxy      # <ipfirewall>
 options		IPFIREWALL_DEFAULT_TO_ACCEPT    # allow everything by default   # <ipfirewall>
@@ -139,21 +143,22 @@ options		RANDOM_IP_ID	# random (not sequential) ip ids	# <randomipid>
 options		TCP_DROP_SYNFIN	# Drop TCP packets with SYN+FIN set	# <tcpdrop_synfin>
 options		ICMP_BANDLIM	# ICMP bandwidth limiting sysctl
 options		IFNET_INPUT_SANITY_CHK	# allow dlil/ifnet input sanity check # <ifnet_input_chk>
-options		AUDIT		# Security event auditing	# <audit>
 options		SYSV_SEM	# SVID semaphores			# <sysv_sem>
 options		SYSV_MSG	# SVID messages				# <sysv_msg>
 options		SYSV_SHM	# SVID shared mem			# <sysv_shm>
+options		PSYNCH		# pthread synch				# <psynch>
 options		PANIC_INFO	# want kernel panic info	# <panic_info>
 options		DEVELOPMENT	# dev kernel				# <development>
 
 # secure_kernel - secure kernel from user programs
 options     SECURE_KERNEL       # <secure_kernel> 
 
+options     OLD_SEMWAIT_SIGNAL  # old semwait_signal handler
+
 #
 #	4.4 general kernel 
 #
 options		SOCKETS		# socket support			# <inet, inet6, netat>
-options 	COMPAT_43_TTY	# 4.3 BSD tty compat	# <compat_43_tty>
 options 	DIAGNOSTIC	# diagnostics				# <diagnostic>
 options		CONFIG_DTRACE	# dtrace support			# <config_dtrace>
 options		GPROF		# build profiling			# <profile>
@@ -162,13 +167,14 @@ options		NETWORKING	# networking layer			# <inet, inet6, netat>
 options		CONFIG_FSE	# file system events		# <config_fse>
 options		CONFIG_IMAGEBOOT	# local image boot	# <config_imageboot>
 options		CONFIG_SOWUPCALL	# SB_UPCALL on sowwakeup	# <config_sowupcall>
-options		CONFIG_FORCE_OUT_IFP	# Force IP output to use an interface # <config_force_out_ifp>
 options		CONFIG_MBUF_NOEXPAND	# limit mbuf expansion	# <config_mbuf_noexpand>
 options		CONFIG_MBUF_JUMBO	# jumbo cluster pool	# <config_mbuf_jumbo>
-options		CONFIG_SCOPEDROUTING	# scoped routing on by default	# <config_scopedrouting>
-options		CONFIG_IP_EDGEHOLE	# Drop tagged packets at EDGE interface # <config_ip_edgehole>
+options		CONFIG_MBUF_TAGS_MALLOC # use malloc for tags	# <config_mbuf_tags_malloc>
+options		CONFIG_FORCE_OUT_IFP	# Enable IP_FORCE_OUT_IFP # <config_force_out_ifp>
+options		CONFIG_IFEF_NOWINDOWSCALE # Scale TCP window per driver # <config_ifef_nowindowscale>
 
 options		CONFIG_WORKQUEUE	# <config_workqueue>
+
 
 #
 #	4.4 filesystems 
@@ -178,9 +184,9 @@ options		HFS			# HFS/HFS+ support		# <hfs>
 options		FIFO		# fifo support			# <fifo>
 options		UNION		# union_fs support		# <union>
 options		FDESC		# fdesc_fs support		# <fdesc>
-options		CD9660		# ISO 9660 CD-ROM support	# <cd9660>
 options		DEVFS		# devfs support			# <devfs>
 options		JOURNALING	# journaling support	# <journaling>
+options		HFS_COMPRESSION	# hfs compression	# <hfs_compression>
 
 #
 #	file system features
@@ -282,7 +288,7 @@ options   CONFIG_VNODES=263168		# <large,xlarge>
 options   CONFIG_VNODES=263168		# <medium>
 options   CONFIG_VNODES=10240		# <small>
 options   CONFIG_VNODES=1024		# <xsmall>
-options   CONFIG_VNODES=640			# <bsmall>
+options   CONFIG_VNODES=750			# <bsmall>
 
 options   CONFIG_VNODE_FREE_MIN=500		# <large,xlarge>
 options   CONFIG_VNODE_FREE_MIN=300		# <medium>
@@ -328,10 +334,11 @@ options        CONFIG_NMBCLUSTERS="((1024 * 1024) / MCLBYTES)"		# <large,xlarge>
 options        CONFIG_NMBCLUSTERS="((1024 * 512) / MCLBYTES)"		# <medium>
 options        CONFIG_NMBCLUSTERS="((1024 * 256) / MCLBYTES)"		# <bsmall,xsmall,small>
 
+#
 # set maximum space used for packet buffers
 #
-options        CONFIG_USESOCKTHRESHOLD=1		# <large,xlarge,medium>
-options        CONFIG_USESOCKTHRESHOLD=0		# <bsmall,xsmall,small>
+options CONFIG_USESOCKTHRESHOLD=1	# <large,xlarge,medium>
+options CONFIG_USESOCKTHRESHOLD=0	# <bsmall,xsmall,small>
 
 #
 # Configure size of TCP hash table
@@ -396,6 +403,11 @@ options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
 # embedded device
 #
 options   CONFIG_EMBEDDED			# <config_embedded>
+
+# only execute signed code. Hang this off config_embedded since there's
+# nothing more appropriate right now
+#
+options   CONFIG_ENFORCE_SIGNED_CODE		# <config_embedded>
 
 #
 # code decryption... used on embedded for app protection

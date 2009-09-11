@@ -104,6 +104,11 @@ struct ipc_kmsg {
 	mach_msg_header_t *ikm_header;
 };
 
+#if defined(__i386__) || defined(__arm__)
+#define	IKM_SUPPORT_LEGACY	1
+#else
+#define	IKM_SUPPORT_LEGACY	0
+#endif
 
 #define	IKM_OVERHEAD		(sizeof(struct ipc_kmsg))
 
@@ -320,6 +325,11 @@ extern mach_msg_return_t ipc_kmsg_copyin(
 extern void ipc_kmsg_copyin_from_kernel(
 	ipc_kmsg_t		kmsg);
 
+#if IKM_SUPPORT_LEGACY
+extern void ipc_kmsg_copyin_from_kernel_legacy(
+	ipc_kmsg_t	kmsg);
+#endif
+
 /* Copyout port rights in the header of a message */
 extern mach_msg_return_t ipc_kmsg_copyout_header(
 	mach_msg_header_t	*msg,
@@ -370,6 +380,12 @@ extern void ipc_kmsg_copyout_dest(
 extern void ipc_kmsg_copyout_to_kernel(
 	ipc_kmsg_t		kmsg,
 	ipc_space_t		space);
+
+#if IKM_SUPPORT_LEGACY
+extern void ipc_kmsg_copyout_to_kernel_legacy(
+	ipc_kmsg_t		kmsg,
+	ipc_space_t		space);
+#endif
 
 /* get a scatter list and check consistency */
 extern mach_msg_body_t *ipc_kmsg_get_scatter(

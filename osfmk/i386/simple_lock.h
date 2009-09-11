@@ -105,7 +105,7 @@ extern void			i386_lock_unlock_with_flush(
 #else
 
 typedef	struct slock {
-	unsigned int	lock_data[10];
+	unsigned long	lock_data[10];
 } usimple_lock_data_t, *usimple_lock_t;
 
 #endif	/* defined(MACH_KERNEL_PRIVATE) && defined(__APPLE_API_PRIVATE) */

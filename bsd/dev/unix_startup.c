@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -39,26 +39,31 @@
 
 #include <sys/param.h>
 #include <sys/buf_internal.h>
+#include <sys/file_internal.h>
+#include <sys/proc_internal.h>
 #include <sys/clist.h>
 #include <sys/mbuf.h>
 #include <sys/systm.h>
 #include <sys/tty.h>
 #include <sys/vnode.h>
 #include <sys/sysctl.h>
-#include <dev/ppc/cons.h>
+#include <machine/cons.h>
 #include <pexpert/pexpert.h>
+#include <sys/socketvar.h>
 
 extern vm_map_t mb_map;
 
 #if INET || INET6
-extern u_long   tcp_sendspace;
-extern u_long   tcp_recvspace;
+extern uint32_t   tcp_sendspace;
+extern uint32_t   tcp_recvspace;
 #endif
 
 void            bsd_bufferinit(void) __attribute__((section("__TEXT, initcode")));
 extern void     md_prepare_for_shutdown(int, int, char *);
 
-int		bsd_mbuf_cluster_reserve(void);
+unsigned int	bsd_mbuf_cluster_reserve(void);
+void bsd_srv_setup(int);
+void bsd_exec_setup(int);
 
 /*
  * Declare these as initialized data so we can patch them.
@@ -86,7 +91,7 @@ static unsigned int mbuf_poolsz;
 
 vm_map_t        buffer_map;
 vm_map_t        bufferhdr_map;
-
+static int vnodes_sized = 0;
 
 extern void     bsd_startupearly(void) __attribute__((section("__TEXT, initcode")));
 
@@ -99,7 +104,7 @@ bsd_startupearly(void)
 
 	/* clip the number of buf headers upto 16k */
 	if (max_nbuf_headers == 0)
-		max_nbuf_headers = atop(sane_size / 50);	/* Get 2% of ram, but no more than we can map */
+		max_nbuf_headers = atop_kernel(sane_size / 50);	/* Get 2% of ram, but no more than we can map */
 	if ((customnbuf == 0) && (max_nbuf_headers > 16384))
 		max_nbuf_headers = 16384;
 	if (max_nbuf_headers < CONFIG_MIN_NBUF)
@@ -107,7 +112,7 @@ bsd_startupearly(void)
 
 	/* clip the number of hash elements  to 200000 */
 	if ( (customnbuf == 0 ) && nbuf_hashelements == 0) {
-		nbuf_hashelements = atop(sane_size / 50);
+		nbuf_hashelements = atop_kernel(sane_size / 50);
 		if (nbuf_hashelements > 200000)
 			nbuf_hashelements = 200000;
 	} else
@@ -170,6 +175,7 @@ bsd_startupearly(void)
 	}
 #endif /* SOCKETS */
 
+	if (vnodes_sized == 0) {
 	/*
 	 * Size vnodes based on memory 
 	 * Number vnodes  is (memsize/64k) + 1024 
@@ -182,6 +188,7 @@ bsd_startupearly(void)
 	desiredvnodes  = (sane_size/65536) + 1024;
 	if (desiredvnodes > CONFIG_VNODES)
 		desiredvnodes = CONFIG_VNODES;
+	}
 }
 
 void
@@ -189,7 +196,10 @@ bsd_bufferinit(void)
 {
 	kern_return_t   ret;
 
-	cons.t_dev = makedev(12, 0);
+	/*
+	 * Note: Console device initialized in kminit() from bsd_autoconf()
+	 * prior to call to us in bsd_init().
+	 */
 
 	bsd_startupearly();
 
@@ -211,9 +221,13 @@ bsd_bufferinit(void)
 	bufinit();
 }
 
-/* 512 MB hard limit on size of the mbuf pool */
-#define MAX_MBUF_POOL   (512 << MBSHIFT)
-#define MAX_NCL         (MAX_MBUF_POOL >> MCLSHIFT)
+/* 512 MB (K32) or 2 GB (K64) hard limit on size of the mbuf pool */
+#if !defined(__LP64__)
+#define	MAX_MBUF_POOL	(512 << MBSHIFT)
+#else
+#define	MAX_MBUF_POOL	(2ULL << GBSHIFT)
+#endif /* !__LP64__ */
+#define	MAX_NCL		(MAX_MBUF_POOL >> MCLSHIFT)
 
 /*
  * this has been broken out into a separate routine that
@@ -222,30 +236,90 @@ bsd_bufferinit(void)
  * DMA hardware that can't fully address all of the physical
  * memory that is present.
  */
-int
+unsigned int
 bsd_mbuf_cluster_reserve(void)
 {
+	int mbuf_pool = 0;
+
 	/* If called more than once, return the previously calculated size */
-        if (mbuf_poolsz != 0)
-                goto done;
+	if (mbuf_poolsz != 0)
+		goto done;
 
-	PE_parse_boot_argn("ncl", &ncl, sizeof (ncl));
+	/*
+	 * Some of these are parsed in parse_bsd_args(), but for x86 we get
+	 * here early from i386_vm_init() and so we parse them now, in order
+	 * to correctly compute the size of the low-memory VM pool.  It is
+	 * redundant but rather harmless.
+	 */
+	//(void) PE_parse_boot_argn("srv", &srv, sizeof (srv));
+	(void) PE_parse_boot_argn("ncl", &ncl, sizeof (ncl));
+	(void) PE_parse_boot_argn("mbuf_pool", &mbuf_pool, sizeof (mbuf_pool));
 
-        if (sane_size > (64 * 1024 * 1024) || ncl) {
+	/*
+	 * Convert "mbuf_pool" from MB to # of 2KB clusters; it is
+	 * equivalent to "ncl", except that it uses different unit.
+	 */
+	if (mbuf_pool != 0)
+		ncl = (mbuf_pool << MBSHIFT) >> MCLSHIFT;
+
+        if (sane_size > (64 * 1024 * 1024) || ncl != 0) {
 	        if ((nmbclusters = ncl) == 0) {
-		        if ((nmbclusters = ((sane_size / 16)/MCLBYTES)) > 32768)
-			        nmbclusters = 32768;
+			/* Auto-configure the mbuf pool size */
+			nmbclusters = mbuf_default_ncl(srv, sane_size);
+		} else {
+			/* Make sure it's not odd in case ncl is manually set */
+			if (nmbclusters & 0x1)
+				--nmbclusters;
+
+			/* And obey the upper limit */
+			if (nmbclusters > MAX_NCL)
+				nmbclusters = MAX_NCL;
 		}
-		/* Make sure it's not odd in case ncl is manually set */
-		if (nmbclusters & 0x1)
-			--nmbclusters;
-
-                /* And obey the upper limit */
-                if (nmbclusters > MAX_NCL)
-                	nmbclusters = MAX_NCL;
-
 	}
 	mbuf_poolsz = nmbclusters << MCLSHIFT;
 done:
-	return (nmbclusters * MCLBYTES);
+	return (mbuf_poolsz);
 }
+#if defined(__LP64__)
+extern int tcp_tcbhashsize;
+extern int max_cached_sock_count;
+void IOSleep(int);
+#endif 
+
+
+void
+bsd_srv_setup(int scale)
+{
+#if defined(__LP64__)
+	/* if memory is more than 16G, then apply rules for processes */
+	if (scale >  0) {
+		maxproc = 2500 * scale;
+		hard_maxproc = maxproc;
+		/* no fp usage */
+		maxprocperuid = (maxproc*3)/4;
+		maxfiles = (150000 * scale);
+		maxfilesperproc = maxfiles/2;
+		desiredvnodes = maxfiles;
+		vnodes_sized = 1;
+		if (scale > 4) {
+			/* clip them at 32G level */
+			somaxconn = 2048;
+			/* 64G or more the hash size is 32k */
+			if (scale > 7) {
+				/* clip at 64G level */
+				tcp_tcbhashsize = 16 *1024;
+				max_cached_sock_count = 165000;
+			} else {
+				tcp_tcbhashsize = 32 *1024;
+				max_cached_sock_count = 60000 + ((scale-1) * 15000);
+			}
+		} else {
+			somaxconn = 512*scale;
+			tcp_tcbhashsize = 4*1024*scale;
+			max_cached_sock_count = 60000 + ((scale-1) * 15000);
+		}
+	}
+#endif
+	bsd_exec_setup(scale);
+}
+

@@ -72,20 +72,12 @@
 #include <ppc/locks.h>
 
 #if     !MACH_LDEBUG
-typedef	lck_mtx_t	mutex_t;
-#else
-typedef	lck_mtx_ext_t	mutex_t;
-#endif	/* !MACH_LDEBUG */
-
-#if     !MACH_LDEBUG
 typedef	lck_rw_t	lock_t;
 #else
 typedef	lck_rw_ext_t	lock_t;
 #endif	/* !MACH_LDEBUG */
 
 extern unsigned int LockTimeOut;			/* Number of hardware ticks of a lock timeout */
-
-#define	mutex_unlock(l)		mutex_unlock_rwcmb(l)
 
 #endif	/* MACH_KERNEL_PRIVATE */
 

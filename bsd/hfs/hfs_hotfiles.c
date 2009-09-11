@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -214,7 +214,7 @@ hfs_recording_start(struct hfsmount *hfsmp)
 				hfsmp->hfc_timebase = hfsmp->hfc_timeout - HFC_DEFAULT_DURATION;
 			}
 #if HFC_VERBOSE
-			printf("Resume recording hot files on %s (%d secs left)\n",
+			printf("hfs: Resume recording hot files on %s (%d secs left)\n",
 				hfsmp->vcbVN, SWAP_BE32 (hotfileinfo.timeleft));
 #endif
 		} else {
@@ -240,7 +240,7 @@ hfs_recording_start(struct hfsmount *hfsmp)
 			return (error);
 		}
 #if HFC_VERBOSE
-		printf("HFS: begin recording hot files on %s\n", hfsmp->vcbVN);
+		printf("hfs: begin recording hot files on %s\n", hfsmp->vcbVN);
 #endif
 		hfsmp->hfc_maxfiles = HFC_DEFAULT_FILE_COUNT;
 		hfsmp->hfc_timeout = tv.tv_sec + HFC_DEFAULT_DURATION;
@@ -264,6 +264,13 @@ hfs_recording_start(struct hfsmount *hfsmp)
 
 	size = sizeof(hotfile_data_t) + (maxentries * sizeof(hotfile_entry_t));
 	MALLOC(hotdata, hotfile_data_t *, size, M_TEMP, M_WAITOK);
+	if (hotdata == NULL) {
+		hfsmp->hfc_recdata = NULL;
+		hfsmp->hfc_stage = HFC_IDLE;
+		wakeup((caddr_t)&hfsmp->hfc_stage);
+		return(ENOMEM);
+	}
+
 	bzero(hotdata, size);
 
 	for (i = 1; i < maxentries ; i++)
@@ -312,7 +319,7 @@ hfs_recording_stop(struct hfsmount *hfsmp)
 	 * then dump the sample data
 	 */
 #if HFC_VERBOSE
-	printf("HFS: end of hot file recording on %s\n", hfsmp->vcbVN);
+	printf("hfs: end of hot file recording on %s\n", hfsmp->vcbVN);
 #endif
 	hotdata = (hotfile_data_t *)hfsmp->hfc_recdata;
 	if (hotdata == NULL)
@@ -322,7 +329,7 @@ hfs_recording_stop(struct hfsmount *hfsmp)
 	wakeup((caddr_t)&hfsmp->hfc_stage);
 
 #if HFC_VERBOSE
-	printf("  curentries: %d\n", hotdata->activefiles);
+	printf("hfs:   curentries: %d\n", hotdata->activefiles);
 #endif
 	/*
 	 * If no hot files recorded then we're done.
@@ -407,9 +414,9 @@ hfs_recording_stop(struct hfsmount *hfsmp)
 out:
 #if HFC_VERBOSE
 	if (newstage == HFC_EVICTION)
-		printf("HFS: evicting coldest files\n");
+		printf("hfs: evicting coldest files\n");
 	else if (newstage == HFC_ADOPTION)
-		printf("HFS: adopting hotest files\n");
+		printf("hfs: adopting hotest files\n");
 #endif
 	FREE(hotdata, M_TEMP);
 
@@ -450,7 +457,7 @@ hfs_recording_suspend(struct hfsmount *hfsmp)
 	hfsmp->hfc_stage = HFC_BUSY;
 
 #if HFC_VERBOSE
-	printf("HFS: suspend hot file recording on %s\n", hfsmp->vcbVN);
+	printf("hfs: suspend hot file recording on %s\n", hfsmp->vcbVN);
 #endif
 	error = hfc_btree_open(hfsmp, &hfsmp->hfc_filevp);
 	if (error) {
@@ -513,7 +520,7 @@ hfs_recording_init(struct hfsmount *hfsmp)
 	u_int32_t  dataSize;
 	HFSPlusCatalogFile *filep;
 	BTScanState scanstate;
-	BTreeIterator * iterator;
+	BTreeIterator * iterator = NULL;
 	FSBufferDescriptor  record;
 	HotFileKey * key;
 	filefork_t * filefork;
@@ -555,7 +562,7 @@ hfs_recording_init(struct hfsmount *hfsmp)
 	error = hfc_btree_create(hfsmp, HFSTOVCB(hfsmp)->blockSize, HFC_DEFAULT_FILE_COUNT);
 	if (error) {
 #if HFC_VERBOSE
-		printf("Error %d creating hot file b-tree on %s \n", error, hfsmp->vcbVN);
+		printf("hfs: Error %d creating hot file b-tree on %s \n", error, hfsmp->vcbVN);
 #endif
 		return (error);
 	}
@@ -567,11 +574,17 @@ hfs_recording_init(struct hfsmount *hfsmp)
 	error = hfc_btree_open(hfsmp, &hfsmp->hfc_filevp);
 	if (error) {
 #if HFC_VERBOSE
-		printf("Error %d opening hot file b-tree on %s \n", error, hfsmp->vcbVN);
+		printf("hfs: Error %d opening hot file b-tree on %s \n", error, hfsmp->vcbVN);
 #endif
 		return (error);
 	}
 	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
+	if (iterator == NULL) {
+		error = ENOMEM;
+		(void) hfc_btree_close(hfsmp, hfsmp->hfc_filevp);
+		hfsmp->hfc_filevp = NULL;
+		goto out2;
+	}
 	bzero(iterator, sizeof(*iterator));
 	key = (HotFileKey*) &iterator->key;
 	key->keyLength = HFC_KEYLENGTH;
@@ -580,7 +593,7 @@ hfs_recording_init(struct hfsmount *hfsmp)
 	record.itemSize = sizeof(u_int32_t);
 	record.itemCount = 1;
 #if HFC_VERBOSE
-	printf("Evaluating space for \"%s\" metadata zone...\n", HFSTOVCB(hfsmp)->vcbVN);
+	printf("hfs: Evaluating space for \"%s\" metadata zone...\n", HFSTOVCB(hfsmp)->vcbVN);
 #endif
 	/*
 	 * Get ready to scan the Catalog file.
@@ -678,13 +691,14 @@ hfs_recording_init(struct hfsmount *hfsmp)
 out0:
 	hfs_end_transaction(hfsmp);
 #if HFC_VERBOSE
-	printf("%d files identified out of %d\n", inserted, filecount);
+	printf("hfs: %d files identified out of %d\n", inserted, filecount);
 #endif
 	
 out1:
 	(void) BTScanTerminate(&scanstate, &data, &data, &data);
 out2:	
-	FREE(iterator, M_TEMP);
+	if (iterator)
+		FREE(iterator, M_TEMP);
 	if (hfsmp->hfc_filevp) {
 		(void) hfc_btree_close(hfsmp, hfsmp->hfc_filevp);
 		hfsmp->hfc_filevp = NULL;
@@ -938,7 +952,7 @@ update_callback(const HotFileKey *key, u_int32_t *data, u_int32_t *state)
 static int
 hotfiles_refine(struct hfsmount *hfsmp)
 {
-	BTreeIterator * iterator;
+	BTreeIterator * iterator = NULL;
 	struct mount *mp;
 	filefork_t * filefork;
 	hotfilelist_t  *listp;
@@ -955,6 +969,10 @@ hotfiles_refine(struct hfsmount *hfsmp)
 	mp = HFSTOVFS(hfsmp);
 
 	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
+	if (iterator == NULL) {
+		error = ENOMEM;
+		goto out;
+	}
 	bzero(iterator, sizeof(*iterator));
 	key = (HotFileKey*) &iterator->key;
 
@@ -992,7 +1010,7 @@ hotfiles_refine(struct hfsmount *hfsmp)
 				(IterateCallBackProcPtr)update_callback,
 				&listp->hfl_hotfile[i].hf_temperature);
 		if (error) {
-			printf("hotfiles_refine: BTUpdateRecord failed %d (file %d)\n", error, key->fileID);
+			printf("hfs: hotfiles_refine: BTUpdateRecord failed %d (file %d)\n", error, key->fileID);
 			error = MacToVFSError(error);
 		//	break;
 		}
@@ -1008,7 +1026,7 @@ hotfiles_refine(struct hfsmount *hfsmp)
 		(void) BTSearchRecord(filefork, iterator, &record, NULL, iterator);
 		error = BTDeleteRecord(filefork, iterator);
 		if (error) {
-			printf("hotfiles_refine: BTDeleteRecord failed %d (file %d)\n", error, key->fileID);
+			printf("hfs: hotfiles_refine: BTDeleteRecord failed %d (file %d)\n", error, key->fileID);
 			error = MacToVFSError(error);
 			break;
 		}
@@ -1018,7 +1036,7 @@ hotfiles_refine(struct hfsmount *hfsmp)
 		key->forkType = 0;
 		error = BTInsertRecord(filefork, iterator, &record, record.itemSize);
 		if (error) {
-			printf("hotfiles_refine: BTInsertRecord failed %d (file %d)\n", error, key->fileID);
+			printf("hfs: hotfiles_refine: BTInsertRecord failed %d (file %d)\n", error, key->fileID);
 			error = MacToVFSError(error);
 			break;
 		}
@@ -1037,7 +1055,8 @@ hotfiles_refine(struct hfsmount *hfsmp)
 out1:
 	hfs_end_transaction(hfsmp);
 out:
-	FREE(iterator, M_TEMP);	
+	if (iterator)
+		FREE(iterator, M_TEMP);	
 	return (error);
 }
 
@@ -1049,7 +1068,7 @@ out:
 static int
 hotfiles_adopt(struct hfsmount *hfsmp)
 {
-	BTreeIterator * iterator;
+	BTreeIterator * iterator = NULL;
 	struct vnode *vp;
 	filefork_t * filefork;
 	hotfilelist_t  *listp;
@@ -1074,6 +1093,12 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 		return (EPERM);
 	}
 
+	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
+	if (iterator == NULL) {
+		hfs_unlock(VTOC(hfsmp->hfc_filevp));
+		return (ENOMEM);
+	}
+
 	stage = hfsmp->hfc_stage;
 	hfsmp->hfc_stage = HFC_BUSY;
 
@@ -1082,7 +1107,6 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 	if (last > listp->hfl_count)
 		last = listp->hfl_count;
 
-	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
 	bzero(iterator, sizeof(*iterator));
 	key = (HotFileKey*) &iterator->key;
 	key->keyLength = HFC_KEYLENGTH;
@@ -1114,7 +1138,7 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 			break;
 		}
 		if (!vnode_isreg(vp) && !vnode_islnk(vp)) {
-			printf("hotfiles_adopt: huh, not a file %d (%d)\n", listp->hfl_hotfile[i].hf_fileid, VTOC(vp)->c_cnid);
+			printf("hfs: hotfiles_adopt: huh, not a file %d (%d)\n", listp->hfl_hotfile[i].hf_fileid, VTOC(vp)->c_cnid);
 			hfs_unlock(VTOC(vp));
 			vnode_put(vp);
 			listp->hfl_hotfile[i].hf_temperature = 0;
@@ -1176,7 +1200,7 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 
 		error = BTInsertRecord(filefork, iterator, &record, record.itemSize);
 		if (error) {
-			printf("hotfiles_adopt: BTInsertRecord failed %d (fileid %d)\n", error, key->fileID);
+			printf("hfs: hotfiles_adopt: BTInsertRecord failed %d (fileid %d)\n", error, key->fileID);
 			error = MacToVFSError(error);
 			stage = HFC_IDLE;
 			break;
@@ -1190,7 +1214,7 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 		data = listp->hfl_hotfile[i].hf_temperature;
 		error = BTInsertRecord(filefork, iterator, &record, record.itemSize);
 		if (error) {
-			printf("hotfiles_adopt: BTInsertRecord failed %d (fileid %d)\n", error, key->fileID);
+			printf("hfs: hotfiles_adopt: BTInsertRecord failed %d (fileid %d)\n", error, key->fileID);
 			error = MacToVFSError(error);
 			stage = HFC_IDLE;
 			break;
@@ -1210,14 +1234,14 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 		}
 		if (hfsmp->hfs_hotfile_freeblks <= 0) {
 #if HFC_VERBOSE
-			printf("hotfiles_adopt: free space exhausted (%d)\n", hfsmp->hfs_hotfile_freeblks);
+			printf("hfs: hotfiles_adopt: free space exhausted (%d)\n", hfsmp->hfs_hotfile_freeblks);
 #endif
 			break;
 		}
 	} /* end for */
 
 #if HFC_VERBOSE
-	printf("hotfiles_adopt: [%d] adopted %d blocks (%d left)\n", listp->hfl_next, blksmoved, listp->hfl_totalblocks);
+	printf("hfs: hotfiles_adopt: [%d] adopted %d blocks (%d left)\n", listp->hfl_next, blksmoved, listp->hfl_totalblocks);
 #endif
 	/* Finish any outstanding transactions. */
 	if (startedtrans) {
@@ -1229,8 +1253,8 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 
 	if ((listp->hfl_next >= listp->hfl_count) || (hfsmp->hfs_hotfile_freeblks <= 0)) {
 #if HFC_VERBOSE
-		printf("hotfiles_adopt: all done relocating %d files\n", listp->hfl_count);
-		printf("hotfiles_adopt: %d blocks free in hot file band\n", hfsmp->hfs_hotfile_freeblks);
+		printf("hfs: hotfiles_adopt: all done relocating %d files\n", listp->hfl_count);
+		printf("hfs: hotfiles_adopt: %d blocks free in hot file band\n", hfsmp->hfs_hotfile_freeblks);
 #endif
 		stage = HFC_IDLE;
 	}
@@ -1253,7 +1277,7 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 static int
 hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 {
-	BTreeIterator * iterator;
+	BTreeIterator * iterator = NULL;
 	struct vnode *vp;
 	HotFileKey * key;
 	filefork_t * filefork;
@@ -1278,13 +1302,18 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 		return (EPERM);
 	}
 
+	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
+	if (iterator == NULL) {
+		hfs_unlock(VTOC(hfsmp->hfc_filevp));
+		return (ENOMEM);
+	}
+
 	stage = hfsmp->hfc_stage;
 	hfsmp->hfc_stage = HFC_BUSY;
 
 	filesmoved = blksmoved = 0;
 	bt_op = kBTreeFirstRecord;
 
-	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
 	bzero(iterator, sizeof(*iterator));
 	key = (HotFileKey*) &iterator->key;
 
@@ -1299,20 +1328,20 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 		 */
 		if (BTIterateRecord(filefork, bt_op, iterator, NULL, NULL) != 0) {
 #if HFC_VERBOSE
-			printf("hotfiles_evict: no more records\n");
+			printf("hfs: hotfiles_evict: no more records\n");
 #endif
 			error = 0;
 			stage = HFC_ADOPTION;
 			break;
 		}
 		if (key->keyLength != HFC_KEYLENGTH) {
-			printf("hotfiles_evict: invalid key length %d\n", key->keyLength);
+			printf("hfs: hotfiles_evict: invalid key length %d\n", key->keyLength);
 			error = EFTYPE;
 			break;
 		}		
 		if (key->temperature == HFC_LOOKUPTAG) {
 #if HFC_VERBOSE
-			printf("hotfiles_evict: ran into thread records\n");
+			printf("hfs: hotfiles_evict: ran into thread records\n");
 #endif
 			error = 0;
 			stage = HFC_ADOPTION;
@@ -1326,13 +1355,13 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 			if (error == ENOENT) {
 				goto delete;  /* stale entry, go to next */
 			} else {
-				printf("hotfiles_evict: err %d getting file %d\n",
+				printf("hfs: hotfiles_evict: err %d getting file %d\n",
 				       error, key->fileID);
 			}
 			break;
 		}
 		if (!vnode_isreg(vp) && !vnode_islnk(vp)) {
-			printf("hotfiles_evict: huh, not a file %d\n", key->fileID);
+			printf("hfs: hotfiles_evict: huh, not a file %d\n", key->fileID);
 			hfs_unlock(VTOC(vp));
 			vnode_put(vp);
 			goto delete;  /* invalid entry, go to next */
@@ -1349,7 +1378,7 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 		 */
 		if (!hotextents(hfsmp, &VTOF(vp)->ff_extents[0])) {
 #if HFC_VERBOSE
-			printf("hotfiles_evict: file %d isn't hot!\n", key->fileID);
+			printf("hfs: hotfiles_evict: file %d isn't hot!\n", key->fileID);
 #endif
 			hfs_unlock(VTOC(vp));
 			vnode_put(vp);
@@ -1361,7 +1390,7 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 		 */
 		error = hfs_relocate(vp, HFSTOVCB(hfsmp)->nextAllocation, vfs_context_ucred(ctx), vfs_context_proc(ctx));
 		if (error) {
-			printf("hotfiles_evict: err %d relocating file %d\n", error, key->fileID);
+			printf("hfs: hotfiles_evict: err %d relocating file %d\n", error, key->fileID);
 			hfs_unlock(VTOC(vp));
 			vnode_put(vp);
 			bt_op = kBTreeNextRecord;
@@ -1417,7 +1446,7 @@ next:
 	} /* end while */
 
 #if HFC_VERBOSE
-	printf("hotfiles_evict: moved %d files (%d blks, %d to go)\n", filesmoved, blksmoved, listp->hfl_reclaimblks);
+	printf("hfs: hotfiles_evict: moved %d files (%d blks, %d to go)\n", filesmoved, blksmoved, listp->hfl_reclaimblks);
 #endif
 	/* Finish any outstanding transactions. */
 	if (startedtrans) {
@@ -1433,7 +1462,7 @@ next:
 	if (listp->hfl_reclaimblks <= 0) {
 		stage = HFC_ADOPTION;
 #if HFC_VERBOSE
-		printf("hotfiles_evict: %d blocks free in hot file band\n", hfsmp->hfs_hotfile_freeblks);
+		printf("hfs: hotfiles_evict: %d blocks free in hot file band\n", hfsmp->hfs_hotfile_freeblks);
 #endif
 	}
 	FREE(iterator, M_TEMP);	
@@ -1449,7 +1478,7 @@ static int
 hotfiles_age(struct hfsmount *hfsmp)
 {
 	BTreeInfoRec  btinfo;
-	BTreeIterator * iterator;
+	BTreeIterator * iterator = NULL;
 	BTreeIterator * prev_iterator;
 	FSBufferDescriptor  record;
 	FSBufferDescriptor  prev_record;
@@ -1467,6 +1496,10 @@ hotfiles_age(struct hfsmount *hfsmp)
 
 
 	MALLOC(iterator, BTreeIterator *, 2 * sizeof(*iterator), M_TEMP, M_WAITOK);
+	if (iterator == NULL) {
+		error = ENOMEM;
+		goto out2;
+	}
 	bzero(iterator, 2 * sizeof(*iterator));
 	key = (HotFileKey*) &iterator->key;
 
@@ -1595,7 +1628,8 @@ out:
 out1:
 	hfs_end_transaction(hfsmp);
 out2:
-	FREE(iterator, M_TEMP);	
+	if (iterator)
+		FREE(iterator, M_TEMP);	
 	return (error);
 }
 
@@ -1666,20 +1700,20 @@ hfc_btree_open(struct hfsmount *hfsmp, struct vnode **vpp)
 	hfs_systemfile_unlock(hfsmp, lockflags);
 
 	if (error) {
-		printf("hfc_btree_open: cat_lookup error %d\n", error);
+		printf("hfs: hfc_btree_open: cat_lookup error %d\n", error);
 		return (error);
 	}
 again:
 	cdesc.cd_flags |= CD_ISMETA;
 	error = hfs_getnewvnode(hfsmp, NULL, NULL, &cdesc, 0, &cattr, &cfork, &vp);
 	if (error) {
-		printf("hfc_btree_open: hfs_getnewvnode error %d\n", error);
+		printf("hfs: hfc_btree_open: hfs_getnewvnode error %d\n", error);
 		cat_releasedesc(&cdesc);
 		return (error);
 	}
 	if (!vnode_issystem(vp)) {
 #if HFC_VERBOSE
-		printf("hfc_btree_open: file has UBC, try again\n");
+		printf("hfs: hfc_btree_open: file has UBC, try again\n");
 #endif
 		hfs_unlock(VTOC(vp));
 		vnode_recycle(vp);
@@ -1693,7 +1727,7 @@ again:
 	/* Open the B-tree file for writing... */
 	error = BTOpenPath(VTOF(vp), (KeyCompareProcPtr) hfc_comparekeys);	
 	if (error) {
-		printf("hfc_btree_open: BTOpenPath error %d\n", error);
+		printf("hfs: hfc_btree_open: BTOpenPath error %d\n", error);
 		error = MacToVFSError(error);
 	}
 
@@ -1705,7 +1739,7 @@ again:
 	vnode_put(vp);
 
 	if (!vnode_issystem(vp))
-		panic("hfc_btree_open: not a system file (vp = %p)", vp);
+		panic("hfs: hfc_btree_open: not a system file (vp = %p)", vp);
 
 	return (error);
 }
@@ -1723,7 +1757,7 @@ hfc_btree_close(struct hfsmount *hfsmp, struct vnode *vp)
 
 
 	if (hfsmp->jnl) {
-	    journal_flush(hfsmp->jnl);
+	    hfs_journal_flush(hfsmp);
 	}
 
 	if (vnode_get(vp) == 0) {
@@ -1758,7 +1792,7 @@ hfc_btree_create(struct hfsmount *hfsmp, unsigned int nodesize, unsigned int ent
 	int  error;
 
 	if (hfsmp->hfc_filevp)
-		panic("hfc_btree_create: hfc_filevp exists (vp = %p)", hfsmp->hfc_filevp);
+		panic("hfs: hfc_btree_create: hfc_filevp exists (vp = %p)", hfsmp->hfc_filevp);
 
 	error = VFS_ROOT(HFSTOVFS(hfsmp), &dvp, ctx);
 	if (error) {
@@ -1783,7 +1817,7 @@ hfc_btree_create(struct hfsmount *hfsmp, unsigned int nodesize, unsigned int ent
 	/* call ourselves directly, ignore the higher-level VFS file creation code */
 	error = VNOP_CREATE(dvp, &vp, &cname, &va, ctx);
 	if (error) {
-		printf("HFS: error %d creating HFBT on %s\n", error, HFSTOVCB(hfsmp)->vcbVN);
+		printf("hfs: error %d creating HFBT on %s\n", error, HFSTOVCB(hfsmp)->vcbVN);
 		goto out;
 	}
 	if (dvp) {
@@ -1801,7 +1835,7 @@ hfc_btree_create(struct hfsmount *hfsmp, unsigned int nodesize, unsigned int ent
 		goto out;
 	}
 
-	printf("HFS: created HFBT on %s\n", HFSTOVCB(hfsmp)->vcbVN);
+	printf("hfs: created HFBT on %s\n", HFSTOVCB(hfsmp)->vcbVN);
 
 	if (VTOF(vp)->ff_size < nodesize) {
 		caddr_t  buffer;
@@ -1874,9 +1908,9 @@ hfc_btree_create(struct hfsmount *hfsmp, unsigned int nodesize, unsigned int ent
 		index[(nodesize / 2) - 4] = SWAP_BE16 (offset);
 
 		vnode_setnoflush(vp);
-		error = hfs_truncate(vp, (off_t)filesize, IO_NDELAY, 0, ctx);
+		error = hfs_truncate(vp, (off_t)filesize, IO_NDELAY, 0, 0, ctx);
 		if (error) {
-			printf("HFS: error %d growing HFBT on %s\n", error, HFSTOVCB(hfsmp)->vcbVN);
+			printf("hfs: error %d growing HFBT on %s\n", error, HFSTOVCB(hfsmp)->vcbVN);
 			goto out;
 		}
 		cp->c_flag |= C_ZFWANTSYNC;
@@ -1886,7 +1920,7 @@ hfc_btree_create(struct hfsmount *hfsmp, unsigned int nodesize, unsigned int ent
 			struct vnop_write_args args;
 			uio_t auio;
 
-			auio = uio_create(1, 0, UIO_SYSSPACE32, UIO_WRITE);
+			auio = uio_create(1, 0, UIO_SYSSPACE, UIO_WRITE);
 			uio_addiov(auio, (uintptr_t)buffer, nodesize);
 
 			args.a_desc = &vnop_write_desc;
@@ -1900,7 +1934,7 @@ hfc_btree_create(struct hfsmount *hfsmp, unsigned int nodesize, unsigned int ent
 
 			error = hfs_vnop_write(&args);
 			if (error)
-				printf("HFS: error %d writing HFBT on %s\n", error, HFSTOVCB(hfsmp)->vcbVN);
+				printf("hfs: error %d writing HFBT on %s\n", error, HFSTOVCB(hfsmp)->vcbVN);
 
 			uio_free(auio);
 		}
@@ -2196,7 +2230,7 @@ hf_getsortedlist(hotfile_data_t * hotdata, hotfilelist_t *sortedlist)
 	sortedlist->hfl_count = i;
 	
 #if HFC_VERBOSE
-	printf("HFS: hf_getsortedlist returned %d entries\n", i);
+	printf("hfs: hf_getsortedlist returned %d entries\n", i);
 #endif
 }
 
@@ -2219,7 +2253,7 @@ hf_printtree(hotfile_entry_t * root)
 {
 	if (root) {
 		hf_printtree(root->left);
-		printf("temperature: % 8d, fileid %d\n", root->temperature, root->fileid);
+		printf("hfs: temperature: % 8d, fileid %d\n", root->temperature, root->fileid);
 		hf_printtree(root->right);
 	}
 }

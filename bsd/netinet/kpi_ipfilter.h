@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -47,18 +47,18 @@
 struct ipf_pktopts {
 	u_int32_t			ippo_flags;
 	ifnet_t				ippo_mcast_ifnet;
-	int					ippo_mcast_loop;
+	int				ippo_mcast_loop;
 	u_int8_t			ippo_mcast_ttl;
 };
 #define IPPOF_MCAST_OPTS 0x1
 
-typedef struct ipf_pktopts* ipf_pktopts_t;
+typedef struct ipf_pktopts *ipf_pktopts_t;
 
 __BEGIN_DECLS
 
 /*!
 	@typedef ipf_input_func
-	
+
 	@discussion ipf_input_func is used to filter incoming ip packets.
 		The IP filter is called for packets from all interfaces. The
 		filter is called between when the general IP processing is
@@ -78,15 +78,19 @@ __BEGIN_DECLS
 		(udp/tcp/icmp/esp/etc...).
 	@param protocol The protocol type (udp/tcp/icmp/etc...) of the IP packet
 	@result Return:
-		0 - The caller will continue with normal processing of the packet.
-		EJUSTRETURN - The caller will stop processing the packet, the packet will not be freed.
-		Anything Else - The caller will free the packet and stop processing.
+		0 - The caller will continue with normal processing of the
+			packet.
+		EJUSTRETURN - The caller will stop processing the packet,
+			the packet will not be freed.
+		Anything Else - The caller will free the packet and stop
+			processing.
 */
-typedef	errno_t (*ipf_input_func)(void* cookie, mbuf_t *data, int offset, u_int8_t protocol);
+typedef	errno_t (*ipf_input_func)(void *cookie, mbuf_t *data, int offset,
+    u_int8_t protocol);
 
 /*!
 	@typedef ipf_output_func
-	
+
 	@discussion ipf_output_func is used to filter outbound ip packets.
 		The IP filter is called for packets to all interfaces. The
 		filter is called before fragmentation and IPSec processing. If
@@ -96,20 +100,24 @@ typedef	errno_t (*ipf_input_func)(void* cookie, mbuf_t *data, int offset, u_int8
 	@param data The ip packet, will contain an IP header followed by the
 		rest of the IP packet.
 	@result Return:
-		0 - The caller will continue with normal processing of the packet.
-		EJUSTRETURN - The caller will stop processing the packet, the packet will not be freed.
-		Anything Else - The caller will free the packet and stop processing.
+		0 - The caller will continue with normal processing of the
+			packet.
+		EJUSTRETURN - The caller will stop processing the packet,
+			the packet will not be freed.
+		Anything Else - The caller will free the packet and stop
+			processing.
 */
-typedef	errno_t (*ipf_output_func)(void* cookie, mbuf_t *data, ipf_pktopts_t options);
+typedef	errno_t (*ipf_output_func)(void *cookie, mbuf_t *data,
+    ipf_pktopts_t options);
 
 /*!
 	@typedef ipf_detach_func
-	
+
 	@discussion ipf_detach_func is called to notify your filter that it
 		has been detached.
 	@param cookie The cookie specified when your filter was attached.
 */
-typedef	void (*ipf_detach_func)(void* cookie);
+typedef	void (*ipf_detach_func)(void *cookie);
 
 /*!
 	@typedef ipf_filter
@@ -123,15 +131,15 @@ typedef	void (*ipf_detach_func)(void* cookie);
 	@field ipf_detach The filter function to notify of a detach.
 */
 struct ipf_filter {
-	void*		cookie;
-	const char*	name;
+	void		*cookie;
+	const char	*name;
 	ipf_input_func	ipf_input;
 	ipf_output_func	ipf_output;
 	ipf_detach_func	ipf_detach;
 };
 
 struct opaque_ipfilter;
-typedef	struct opaque_ipfilter*	ipfilter_t;
+typedef	struct opaque_ipfilter *ipfilter_t;
 
 /*!
 	@function ipf_addv4
@@ -140,7 +148,8 @@ typedef	struct opaque_ipfilter*	ipfilter_t;
 	@param filter_ref A reference to the filter used to detach it.
 	@result 0 on success otherwise the errno error.
  */
-errno_t	ipf_addv4(const struct ipf_filter* filter, ipfilter_t *filter_ref);
+extern errno_t ipf_addv4(const struct ipf_filter *filter,
+    ipfilter_t *filter_ref);
 
 /*!
 	@function ipf_addv6
@@ -149,7 +158,8 @@ errno_t	ipf_addv4(const struct ipf_filter* filter, ipfilter_t *filter_ref);
 	@param filter_ref A reference to the filter used to detach it.
 	@result 0 on success otherwise the errno error.
  */
-errno_t	ipf_addv6(const struct ipf_filter* filter, ipfilter_t *filter_ref);
+extern errno_t ipf_addv6(const struct ipf_filter *filter,
+    ipfilter_t *filter_ref);
 
 /*!
 	@function ipf_remove
@@ -158,7 +168,7 @@ errno_t	ipf_addv6(const struct ipf_filter* filter, ipfilter_t *filter_ref);
 		ipf_addv6.
 	@result 0 on success otherwise the errno error.
  */
-errno_t	ipf_remove(ipfilter_t filter_ref);
+extern errno_t ipf_remove(ipfilter_t filter_ref);
 
 /*!
 	@function ipf_inject_input
@@ -170,7 +180,7 @@ errno_t	ipf_remove(ipfilter_t filter_ref);
 		getting a chance to process the packet. If the filter modified
 		the packet, it should not specify the filter ref to give other
 		filters a chance to process the new packet.
-		
+
 		Caller is responsible for freeing mbuf chain in the event that
 		ipf_inject_input returns an error.
 	@param data The complete IPv4 or IPv6 packet, receive interface must
@@ -178,7 +188,7 @@ errno_t	ipf_remove(ipfilter_t filter_ref);
 	@param filter_ref The reference to the filter injecting the data
 	@result 0 on success otherwise the errno error.
  */
-errno_t	ipf_inject_input(mbuf_t data, ipfilter_t filter_ref);
+extern errno_t ipf_inject_input(mbuf_t data, ipfilter_t filter_ref);
 
 /*!
 	@function ipf_inject_output
@@ -196,7 +206,8 @@ errno_t	ipf_inject_input(mbuf_t data, ipfilter_t filter_ref);
 	@result 0 on success otherwise the errno error. ipf_inject_output
 		will always free the mbuf.
  */
-errno_t ipf_inject_output(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options);
+extern errno_t ipf_inject_output(mbuf_t data, ipfilter_t filter_ref,
+    ipf_pktopts_t options);
 
 __END_DECLS
 #endif /* __KPI_IPFILTER__ */

@@ -26,50 +26,36 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <debug.h>
 
 #include <kern/page_decrypt.h>
 #include <kern/task.h>
 #include <machine/commpage.h>
 
-/*#include <sys/kernel.h> */
-extern int hz;			/* system clock's frequency */
-
-/* #include <sys/proc.h> */
-extern int	tsleep(void *chan, int pri, const char *wmesg, int timo);
-
-/* #include <sys/param.h> */
-#define	PZERO	22		/* No longer magic, shouldn't be here.  XXX */
-
-static int _dsmos_wait_for_callback(const void*,void*);
-
-static dsmos_page_transform_hook_t dsmos_hook = _dsmos_wait_for_callback;
-
-int
-_dsmos_wait_for_callback(const void* from, void *to)
-{
-/*	printf("%s\n", __FUNCTION__); */
-	while (dsmos_hook == NULL || dsmos_hook == _dsmos_wait_for_callback)
-		tsleep(&dsmos_hook, PZERO, "dsmos", hz / 10);
-
-	return (*dsmos_hook) (from, to);
-}
+static dsmos_page_transform_hook_t dsmos_hook = NULL;
 
 void
 dsmos_page_transform_hook(dsmos_page_transform_hook_t hook)
 {
-/*	printf("%s\n", __FUNCTION__); */
 
+	printf("DSMOS has arrived\n");
 	/* set the hook now - new callers will run with it */
 	dsmos_hook = hook;
 }
 
 int
-dsmos_page_transform(const void* from, void *to, __unused unsigned long long src_offset, __unused void *ops)
+dsmos_page_transform(const void* from, void *to, unsigned long long src_offset, void *ops)
 {
-/*	printf("%s\n", __FUNCTION__); */
-	if (dsmos_hook == NULL)
-		return KERN_FAILURE;
-	return (*dsmos_hook) (from, to);
+	static boolean_t first_wait = TRUE;
+
+	if (dsmos_hook == NULL) {
+		if (first_wait) {
+			first_wait = FALSE;
+			printf("Waiting for DSMOS...\n");
+		}
+		return KERN_ABORTED;
+	}
+	return (*dsmos_hook) (from, to, src_offset, ops);
 }
 
 
@@ -77,4 +63,4 @@ text_crypter_create_hook_t text_crypter_create=NULL;
 void text_crypter_create_hook_set(text_crypter_create_hook_t hook)
 {
 	text_crypter_create=hook;
-};
+}

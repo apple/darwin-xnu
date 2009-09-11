@@ -1,0 +1,21 @@
+######################################################################
+#  
+#  Standard Apple Mac OS Configurations:
+#  -------- ----- ------ ---------------
+#
+#  RELEASE	= [ intel mach iokitcpp hibernation medium crypto config_dtrace config_sleep ]
+#  PROFILE	= [ RELEASE profile ]
+#  DEBUG	= [ RELEASE debug ]
+#
+#
+#  EMBEDDED	= [ intel mach iokitcpp hibernation no_kextd bsmall crypto ]
+#  DEVELOPMENT	= [ EMBEDDED ]
+#
+######################################################################
+
+machine		"x86_64"					# <intel>
+cpu		"x86_64"					# <intel>
+
+options		NO_KEXTD				# <no_kextd>
+
+options     NO_NESTED_PMAP                  # <no_nested_pmap>

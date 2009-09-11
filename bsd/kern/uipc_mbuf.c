@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -77,6 +77,7 @@
 #include <sys/protosw.h>
 #include <sys/domain.h>
 #include <sys/queue.h>
+#include <sys/proc.h>
 
 #include <kern/kern_types.h>
 #include <kern/simple_lock.h>
@@ -295,7 +296,7 @@
 
 /* TODO: should be in header file */
 /* kernel translater */
-extern vm_offset_t kmem_mb_alloc(vm_map_t, int);
+extern vm_offset_t kmem_mb_alloc(vm_map_t, int, int);
 extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
 extern vm_map_t mb_map;		/* special map */
 
@@ -312,12 +313,17 @@ static int mbuf_expand_mcl;	/* number of cluster creation requets */
 static int mbuf_expand_big;	/* number of big cluster creation requests */
 static int mbuf_expand_16k;	/* number of 16K cluster creation requests */
 static int ncpu;		/* number of CPUs */
-static int *mcl_paddr;		/* Array of cluster physical addresses */
+static ppnum_t *mcl_paddr;	/* Array of cluster physical addresses */
+static ppnum_t mcl_pages;	/* Size of array (# physical pages) */
 static ppnum_t mcl_paddr_base;	/* Handle returned by IOMapper::iovmAlloc() */
 static mcache_t *ref_cache;	/* Cache of cluster reference & flags */
 static mcache_t *mcl_audit_con_cache; /* Audit contents cache */
 static unsigned int mbuf_debug;	/* patchable mbuf mcache flags */
 static unsigned int mb_normalized; /* number of packets "normalized" */
+static unsigned int mbuf_gscale; /* Power-of-two growth scale for m_howmany */
+
+#define	MB_GROWTH_AGGRESSIVE	1	/* Threshold: 1/2 of total */
+#define	MB_GROWTH_NORMAL	4	/* Threshold: 15/16 of total */
 
 typedef enum {
 	MC_MBUF = 0,	/* Regular mbuf */
@@ -415,11 +421,7 @@ static unsigned int maxmbufcl;
  * Note that we don't save the contents of clusters when they are freed;
  * we simply pattern-fill them.
  */
-#if defined(__LP64__)
-#define	AUDIT_CONTENTS_SIZE	160
-#else
-#define	AUDIT_CONTENTS_SIZE	80
-#endif /* __LP64__ */
+#define	AUDIT_CONTENTS_SIZE	((MSIZE - MHLEN) + sizeof (_m_ext_t))
 
 /*
  * mbuf specific mcache audit flags
@@ -446,6 +448,8 @@ int max_linkhdr;		/* largest link-level header */
 int max_protohdr;		/* largest protocol header */
 int max_hdr;			/* largest link+protocol header */
 int max_datalen;		/* MHLEN - max_hdr */
+
+extern u_int32_t high_sb_max;
 
 /* TODO: should be in header file */
 int do_reclaim = 0;
@@ -578,6 +582,16 @@ static void slab_nextptr_panic(mcl_slab_t *, void *);
 static void slab_detach(mcl_slab_t *);
 static boolean_t slab_is_detached(mcl_slab_t *);
 
+static unsigned int m_length(struct mbuf *);
+static int m_copyback0(struct mbuf **, int, int, const void *, int, int);
+static struct mbuf *m_split0(struct mbuf *, int, int, int);
+
+/* flags for m_copyback0 */
+#define	M_COPYBACK0_COPYBACK	0x0001	/* copyback from cp */
+#define	M_COPYBACK0_PRESERVE	0x0002	/* preserve original data */
+#define	M_COPYBACK0_COW		0x0004	/* do copy-on-write */
+#define	M_COPYBACK0_EXTEND	0x0008	/* extend chain */
+
 /*
  * This flag is set for all mbufs that come out of and into the composite
  * mbuf + cluster caches, i.e. MC_MBUF_CL and MC_MBUF_BIGCL.  mbufs that
@@ -653,7 +667,7 @@ static boolean_t slab_is_detached(mcl_slab_t *);
 		(m)->m_pkthdr.header = NULL;				\
 		(m)->m_pkthdr.csum_flags = 0;				\
 		(m)->m_pkthdr.csum_data = 0;				\
-		(m)->m_pkthdr.reserved0 = NULL;				\
+		(m)->m_pkthdr.tso_segsz = 0;				\
 		(m)->m_pkthdr.vlan_tag = 0;				\
 		(m)->m_pkthdr.socket_id = 0;				\
 		m_tag_init(m);						\
@@ -694,9 +708,12 @@ static boolean_t slab_is_detached(mcl_slab_t *);
  * that allows for a more accurate view of the state of the allocator.
  */
 struct mb_stat *mb_stat;
+struct omb_stat *omb_stat;	/* For backwards compatibility */
 
 #define	MB_STAT_SIZE(n) \
 	((size_t)(&((mb_stat_t *)0)->mbs_class[n]))
+#define	OMB_STAT_SIZE(n) \
+	((size_t)(&((struct omb_stat *)0)->mbs_class[n]))
 
 /*
  * The legacy structure holding all of the mbuf allocation statistics.
@@ -742,14 +759,15 @@ static mbuf_mtypes_t *mbuf_mtypes;	/* per-CPU statistics */
 	((mtypes_cpu_t *)((char *)(p) + MBUF_MTYPES_SIZE(cpu_number())))
 
 /* This should be in a header file */
-#define	atomic_add_32(a, n)	((void) OSAddAtomic(n, (volatile SInt32 *)a))
+#define	atomic_add_16(a, n)	((void) OSAddAtomic16(n, a))
+#define	atomic_add_32(a, n)	((void) OSAddAtomic(n, a))
 
 #define	mtype_stat_add(type, n) {					\
 	if ((unsigned)(type) < MT_MAX) {				\
 		mtypes_cpu_t *mbs = MTYPES_CPU(mbuf_mtypes);		\
 		atomic_add_32(&mbs->cpu_mtypes[type], n);		\
-	} else if ((unsigned)(type) < MBSTAT_MTYPES_MAX) {		\
-		atomic_add_32(&mbstat.m_mtypes[type], n);		\
+	} else if ((unsigned)(type) < (unsigned)MBSTAT_MTYPES_MAX) {		\
+		atomic_add_16((int16_t*)&mbstat.m_mtypes[type], n);		\
 	}								\
 }
 
@@ -790,7 +808,8 @@ mb_stat_sysctl SYSCTL_HANDLER_ARGS
 	mcache_t *cp;
 	mcache_cpu_t *ccp;
 	mb_class_stat_t *sp;
-	int k, m, bktsize;
+	void *statp;
+	int k, m, bktsize, statsz, proc64 = proc_is64bit(req->p);
 
 	lck_mtx_lock(mbuf_mlock);
 	for (k = 0; k < NELEM(mbuf_table); k++) {
@@ -853,9 +872,44 @@ mb_stat_sysctl SYSCTL_HANDLER_ARGS
 			break;
 		}
 	}
+
+	if (!proc64) {
+		struct omb_class_stat *oc;
+		struct mb_class_stat *c;
+
+		omb_stat->mbs_cnt = mb_stat->mbs_cnt;
+		oc = &omb_stat->mbs_class[0];
+		c = &mb_stat->mbs_class[0];
+		for (k = 0; k < omb_stat->mbs_cnt; k++, oc++, c++) {
+			(void) snprintf(oc->mbcl_cname, sizeof (oc->mbcl_cname),
+			    "%s", c->mbcl_cname);
+			oc->mbcl_size = c->mbcl_size;
+			oc->mbcl_total = c->mbcl_total;
+			oc->mbcl_active = c->mbcl_active;
+			oc->mbcl_infree = c->mbcl_infree;
+			oc->mbcl_slab_cnt = c->mbcl_slab_cnt;
+			oc->mbcl_alloc_cnt = c->mbcl_alloc_cnt;
+			oc->mbcl_free_cnt = c->mbcl_free_cnt;
+			oc->mbcl_notified = c->mbcl_notified;
+			oc->mbcl_purge_cnt = c->mbcl_purge_cnt;
+			oc->mbcl_fail_cnt = c->mbcl_fail_cnt;
+			oc->mbcl_ctotal = c->mbcl_ctotal;
+			oc->mbcl_mc_state = c->mbcl_mc_state;
+			oc->mbcl_mc_cached = c->mbcl_mc_cached;
+			oc->mbcl_mc_waiter_cnt = c->mbcl_mc_waiter_cnt;
+			oc->mbcl_mc_wretry_cnt = c->mbcl_mc_wretry_cnt;
+			oc->mbcl_mc_nwretry_cnt = c->mbcl_mc_nwretry_cnt;
+		}
+		statp = omb_stat;
+		statsz = OMB_STAT_SIZE(NELEM(mbuf_table));
+	} else {
+		statp = mb_stat;
+		statsz = MB_STAT_SIZE(NELEM(mbuf_table));
+	}
+
 	lck_mtx_unlock(mbuf_mlock);
 
-	return (SYSCTL_OUT(req, mb_stat, MB_STAT_SIZE(NELEM(mbuf_table))));
+	return (SYSCTL_OUT(req, statp, statsz));
 }
 
 static inline void
@@ -890,6 +944,10 @@ static void
 mbuf_table_init(void)
 {
 	int m;
+
+	MALLOC(omb_stat, struct omb_stat *, OMB_STAT_SIZE(NELEM(mbuf_table)),
+	    M_TEMP, M_WAITOK | M_ZERO);
+	VERIFY(omb_stat != NULL);
 
 	MALLOC(mb_stat, mb_stat_t *, MB_STAT_SIZE(NELEM(mbuf_table)),
 	    M_TEMP, M_WAITOK | M_ZERO);
@@ -998,13 +1056,67 @@ mbuf_table_init(void)
 	mbstat.m_bigmclbytes = m_maxsize(MC_BIGCL);
 }
 
+#if defined(__LP64__)
+typedef struct ncl_tbl {
+	uint64_t nt_maxmem;	/* memory (sane) size */
+	uint32_t nt_mbpool;	/* mbuf pool size */
+} ncl_tbl_t;
+
+/* Non-server */
+static ncl_tbl_t ncl_table[] = {
+	{ (1ULL << GBSHIFT)       /*  1 GB */,	(64 << MBSHIFT)	 /*  64 MB */ },
+	{ (1ULL << (GBSHIFT + 3)) /*  8 GB */,	(96 << MBSHIFT)	 /*  96 MB */ },
+	{ (1ULL << (GBSHIFT + 4)) /* 16 GB */,	(128 << MBSHIFT) /* 128 MB */ },
+	{ 0, 0 }
+};
+
+/* Server */
+static ncl_tbl_t ncl_table_srv[] = {
+	{ (1ULL << GBSHIFT)       /*  1 GB */,	(96 << MBSHIFT)  /*  96 MB */ },
+	{ (1ULL << (GBSHIFT + 2)) /*  4 GB */,	(128 << MBSHIFT) /* 128 MB */ },
+	{ (1ULL << (GBSHIFT + 3)) /*  8 GB */,	(160 << MBSHIFT) /* 160 MB */ },
+	{ (1ULL << (GBSHIFT + 4)) /* 16 GB */,	(192 << MBSHIFT) /* 192 MB */ },
+	{ (1ULL << (GBSHIFT + 5)) /* 32 GB */,	(256 << MBSHIFT) /* 256 MB */ },
+	{ (1ULL << (GBSHIFT + 6)) /* 64 GB */,	(384 << MBSHIFT) /* 384 MB */ },
+	{ 0, 0 }
+};
+#endif /* __LP64__ */
+
+__private_extern__ unsigned int
+mbuf_default_ncl(int srv, uint64_t mem)
+{
+#if !defined(__LP64__)
+#pragma unused(srv)
+	unsigned int n;
+	/*
+	 * 32-bit kernel (default to 64MB of mbuf pool for >= 1GB RAM).
+	 */
+        if ((n = ((mem / 16) / MCLBYTES)) > 32768)
+	        n = 32768;
+#else
+	unsigned int n, i;
+	ncl_tbl_t *tbl = (srv ? ncl_table_srv : ncl_table);
+	/*
+	 * 64-bit kernel (mbuf pool size based on table).
+	 */
+	n = tbl[0].nt_mbpool;
+	for (i = 0; tbl[i].nt_mbpool != 0; i++) {
+		if (mem < tbl[i].nt_maxmem)
+			break;
+		n = tbl[i].nt_mbpool;
+	}
+	n >>= MCLSHIFT;
+#endif /* !__LP64__ */
+	return (n);
+}
+
 __private_extern__ void
 mbinit(void)
 {
 	unsigned int m;
 	int initmcl = MINCL;
-	int mcl_pages;
 	void *buf;
+	thread_t thread = THREAD_NULL;
 
 	if (nmbclusters == 0)
 		nmbclusters = NMBCLUSTERS;
@@ -1039,13 +1151,14 @@ mbinit(void)
 	}
 
 	/* Calculate the number of pages assigned to the cluster pool */
-	mcl_pages = nmbclusters/(NBPG/CLBYTES);
-	MALLOC(mcl_paddr, int *, mcl_pages * sizeof (int), M_TEMP, M_WAITOK);
+	mcl_pages = (nmbclusters * MCLBYTES) / CLBYTES;
+	MALLOC(mcl_paddr, ppnum_t *, mcl_pages * sizeof (ppnum_t),
+	    M_TEMP, M_WAITOK);
 	VERIFY(mcl_paddr != NULL);
 
 	/* Register with the I/O Bus mapper */
 	mcl_paddr_base = IOMapperIOVMAlloc(mcl_pages);
-	bzero((char *)mcl_paddr, mcl_pages * sizeof (int));
+	bzero((char *)mcl_paddr, mcl_pages * sizeof (ppnum_t));
 
 	embutl = (union mcluster *)
 	    ((unsigned char *)mbutl + (nmbclusters * MCLBYTES));
@@ -1059,7 +1172,8 @@ mbinit(void)
 
 	lck_mtx_unlock(mbuf_mlock);
 
-	(void) kernel_thread(kernel_task, mbuf_worker_thread_init);
+	(void) kernel_thread_start((thread_continue_t)mbuf_worker_thread_init, NULL, &thread);
+	thread_deallocate(thread);
 
 	ref_cache = mcache_create("mext_ref", sizeof (struct ext_ref),
 	    0, 0, MCR_SLEEP);
@@ -1093,7 +1207,7 @@ mbinit(void)
 
 		m_cache(m) = mcache_create_ext(m_cname(m), m_maxsize(m),
 		    allocfunc, freefunc, auditfunc, mbuf_slab_notify,
-		    (void *)m, flags, MCR_SLEEP);
+		    (void *)(uintptr_t)m, flags, MCR_SLEEP);
 	}
 
 	/*
@@ -1110,7 +1224,30 @@ mbinit(void)
 	mbuf_mtypes = (mbuf_mtypes_t *)P2ROUNDUP((intptr_t)buf, CPU_CACHE_SIZE);
 	bzero(mbuf_mtypes, MBUF_MTYPES_SIZE(ncpu));
 
-	printf("mbinit: done\n");
+	mbuf_gscale = MB_GROWTH_NORMAL;
+
+	/* 
+	 * Set the max limit on sb_max to be 1/16 th of the size of 
+	 * memory allocated for mbuf clusters.
+	 */
+	high_sb_max = (nmbclusters << (MCLSHIFT - 4)); 
+	if (high_sb_max < sb_max) {
+		/* sb_max is too large for this configuration, scale it down */
+		if (high_sb_max > (1 << MBSHIFT)) { 
+			/* We have atleast 16 M of mbuf pool */
+			sb_max = high_sb_max;
+		} else if ((nmbclusters << MCLSHIFT) > (1 << MBSHIFT)) {
+			/* If we have more than 1M of mbufpool, cap the size of
+			 * max sock buf at 1M
+			 */ 
+			sb_max = high_sb_max = (1 << MBSHIFT);
+		} else {
+			sb_max = high_sb_max;
+		}
+	}
+
+	printf("mbinit: done (%d MB memory set for mbuf pool)\n",
+	    (nmbclusters << MCLSHIFT) >> MBSHIFT);
 }
 
 /*
@@ -1371,7 +1508,7 @@ slab_free(mbuf_class_t class, mcache_obj_t *buf)
 		m_total(MC_MBUF) -= NMBPCL;
 		mbstat.m_mbufs = m_total(MC_MBUF);
 		m_infree(MC_MBUF) -= NMBPCL;
-		mtype_stat_add(MT_FREE, -NMBPCL);
+		mtype_stat_add(MT_FREE, -((unsigned)NMBPCL));
 
 		while (i--) {
 			struct mbuf *m = sp->sl_head;
@@ -2077,7 +2214,7 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 {
 	int i;
 	vm_size_t size = 0;
-	int numpages = 0;
+	int numpages = 0, large_buffer = (bufsize == m_maxsize(MC_16KCL));
 	vm_offset_t page = 0;
 	mcache_audit_t *mca_list = NULL;
 	mcache_obj_t *con_list = NULL;
@@ -2116,14 +2253,22 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 
 	lck_mtx_unlock(mbuf_mlock);
 
-	size = round_page_32(i * bufsize);
-	page = kmem_mb_alloc(mb_map, size);
+	size = round_page(i * bufsize);
+	page = kmem_mb_alloc(mb_map, size, large_buffer);
+
+	/*
+	 * If we did ask for "n" 16K physically contiguous chunks
+	 * and didn't get them, then please try again without this
+	 * restriction.
+	 */
+	if (large_buffer && page == 0)
+		page = kmem_mb_alloc(mb_map, size, 0);
 
 	if (page == 0) {
 		if (bufsize <= m_maxsize(MC_BIGCL)) {
 			/* Try for 1 page if failed, only for 2KB/4KB request */
 			size = NBPG;
-			page = kmem_mb_alloc(mb_map, size);
+			page = kmem_mb_alloc(mb_map, size, 0);
 		}
 
 		if (page == 0) {
@@ -2173,13 +2318,14 @@ m_clalloc(const u_int32_t num, const int wait, const u_int32_t bufsize)
 	for (i = 0; i < numpages; i++, page += NBPG) {
 		ppnum_t offset = ((char *)page - (char *)mbutl) / NBPG;
 		ppnum_t new_page = pmap_find_phys(kernel_pmap,
-		    (vm_address_t)page);
+		    (vm_offset_t)page);
 
 		/*
 		 * In the case of no mapper being available the following
 		 * code noops and returns the input page; if there is a
 		 * mapper the appropriate I/O page is returned.
 		 */
+		VERIFY(offset < mcl_pages);
 		new_page = IOMapperInsertPage(mcl_paddr_base, offset, new_page);
 		mcl_paddr[offset] = new_page << PGSHIFT;
 
@@ -2874,6 +3020,36 @@ m_clattach(struct mbuf *m, int type, caddr_t extbuf,
 	return (m);
 }
 
+/*
+ * Perform `fast' allocation mbuf clusters from a cache of recently-freed
+ * clusters. (If the cache is empty, new clusters are allocated en-masse.)
+ */
+struct mbuf *
+m_getcl(int wait, int type, int flags)
+{
+	struct mbuf *m;
+	int mcflags = MSLEEPF(wait);
+	int hdr = (flags & M_PKTHDR);
+
+	/* Is this due to a non-blocking retry?  If so, then try harder */
+	if (mcflags & MCR_NOSLEEP)
+		mcflags |= MCR_TRYHARD;
+
+	m = mcache_alloc(m_cache(MC_MBUF_CL), mcflags);
+	if (m != NULL) {
+		MBUF_INIT(m, hdr, type);
+		mtype_stat_inc(type);
+		mtype_stat_dec(MT_FREE);
+#if CONFIG_MACF_NET
+		if (hdr && mac_init_mbuf(m, wait) != 0) {
+			m_free(m);
+			return (NULL);
+		}
+#endif /* MAC_NET */
+	}
+	return (m);
+}
+
 /* m_mclget() add an mbuf cluster to a normal mbuf */
 struct mbuf *
 m_mclget(struct mbuf *m, int wait)
@@ -2999,15 +3175,16 @@ m_m16kget(struct mbuf *m, int wait)
 	return (m);
 }
 
-/* */
+/*
+ * "Move" mbuf pkthdr from "from" to "to".
+ * "from" must have M_PKTHDR set, and "to" must be empty.
+ */
 void
 m_copy_pkthdr(struct mbuf *to, struct mbuf *from)
 {
-#if CONFIG_MACF_NET
 	/* We will be taking over the tags of 'to' */
 	if (to->m_flags & M_PKTHDR)
 		m_tag_delete_chain(to, NULL);
-#endif /* MAC_NET */
 	to->m_pkthdr = from->m_pkthdr;		/* especially tags */
 	m_tag_init(from);			/* purge tags from src */
 	to->m_flags = (from->m_flags & M_COPYFLAGS) | (to->m_flags & M_EXT);
@@ -3023,10 +3200,8 @@ m_copy_pkthdr(struct mbuf *to, struct mbuf *from)
 static int
 m_dup_pkthdr(struct mbuf *to, struct mbuf *from, int how)
 {
-#if CONFIG_MACF_NET
 	if (to->m_flags & M_PKTHDR)
 		m_tag_delete_chain(to, NULL);
-#endif /* MAC_NET */
 	to->m_flags = (from->m_flags & M_COPYFLAGS) | (to->m_flags & M_EXT);
 	if ((to->m_flags & M_EXT) == 0)
 		to->m_data = to->m_pktdat;
@@ -3845,7 +4020,7 @@ m_copym(struct mbuf *m, int off0, int len, int wait)
 		}
 		if (len == M_COPYALL) {
 			if (MIN(len, (m->m_len - off)) == len) {
-				printf("m->m_len %ld - off %d = %ld, %ld\n",
+				printf("m->m_len %d - off %d = %d, %d\n",
 				    m->m_len, off, m->m_len - off,
 				    MIN(len, (m->m_len - off)));
 			}
@@ -4016,9 +4191,10 @@ nospace:
  * continuing for "len" bytes, into the indicated buffer.
  */
 void
-m_copydata(struct mbuf *m, int off, int len, caddr_t cp)
+m_copydata(struct mbuf *m, int off, int len, void *vp)
 {
 	unsigned count;
+	char *cp = vp;
 
 	if (off < 0 || len < 0)
 		panic("m_copydata: invalid offset %d or len %d", off, len);
@@ -4215,6 +4391,12 @@ bad:
 struct mbuf *
 m_split(struct mbuf *m0, int len0, int wait)
 {
+	return (m_split0(m0, len0, wait, 1));
+}
+
+static struct mbuf *
+m_split0(struct mbuf *m0, int len0, int wait, int copyhdr)
+{
 	struct mbuf *m, *n;
 	unsigned len = len0, remain;
 
@@ -4223,7 +4405,7 @@ m_split(struct mbuf *m0, int len0, int wait)
 	if (m == NULL)
 		return (NULL);
 	remain = m->m_len - len;
-	if (m0->m_flags & M_PKTHDR) {
+	if (copyhdr && (m0->m_flags & M_PKTHDR)) {
 		_MGETHDR(n, wait, m0->m_type);
 		if (n == NULL)
 			return (NULL);
@@ -4347,6 +4529,30 @@ m_devget(char *buf, int totlen, int off0, struct ifnet *ifp,
 	return (top);
 }
 
+void
+mbuf_growth_aggressive(void)
+{
+	lck_mtx_lock(mbuf_mlock);
+	/*
+	 * Don't start to grow the pool until we are at least
+	 * 1/2 (50%) of current total capacity.
+	 */
+	mbuf_gscale = MB_GROWTH_AGGRESSIVE;
+	lck_mtx_unlock(mbuf_mlock);
+}
+
+void
+mbuf_growth_normal(void)
+{
+	lck_mtx_lock(mbuf_mlock);
+	/*
+	 * Don't start to grow the pool until we are at least
+	 * 15/16 (93.75%) of current total capacity.
+	 */
+	mbuf_gscale = MB_GROWTH_NORMAL;
+	lck_mtx_unlock(mbuf_mlock);
+}
+
 /*
  * Cluster freelist allocation check.
  */
@@ -4356,6 +4562,7 @@ m_howmany(int num, size_t bufsize)
 	int i = 0, j = 0;
 	u_int32_t m_clusters, m_bigclusters, m_16kclusters;
 	u_int32_t m_clfree, m_bigclfree, m_16kclfree;
+	u_int32_t s = mbuf_gscale;
 
 	lck_mtx_assert(mbuf_mlock, LCK_MTX_ASSERT_OWNED);
 
@@ -4384,14 +4591,14 @@ m_howmany(int num, size_t bufsize)
 		/* Under minimum */
 		if (m_clusters < MINCL)
 			return (MINCL - m_clusters);
-		/* Too few (free < 1/16 total) and not over maximum */
+		/* Too few (free < threshold) and not over maximum */
 		if (m_clusters < m_maxlimit(MC_CL)) {
 			if (m_clfree >= MCL_LOWAT)
 				return (0);
 			if (num >= m_clfree)
 				i = num - m_clfree;
-			if (((m_clusters + num) >> 4) > m_clfree)
-				j = ((m_clusters + num) >> 4) - m_clfree;
+			if (((m_clusters + num) >> s) > m_clfree)
+				j = ((m_clusters + num) >> s) - m_clfree;
 			i = MAX(i, j);
 			if (i + m_clusters >= m_maxlimit(MC_CL))
 				i = m_maxlimit(MC_CL) - m_clusters;
@@ -4438,35 +4645,281 @@ m_howmany(int num, size_t bufsize)
 }
 
 /*
+ * Return the number of bytes in the mbuf chain, m.
+  */
+static unsigned int
+m_length(struct mbuf *m)
+{
+	struct mbuf *m0;
+	unsigned int pktlen;
+
+	if (m->m_flags & M_PKTHDR)
+		return (m->m_pkthdr.len);
+
+	pktlen = 0;
+	for (m0 = m; m0 != NULL; m0 = m0->m_next)
+		pktlen += m0->m_len;
+	return (pktlen);
+}
+
+/*
  * Copy data from a buffer back into the indicated mbuf chain,
  * starting "off" bytes from the beginning, extending the mbuf
  * chain if necessary.
  */
 void
-m_copyback(struct mbuf *m0, int off, int len, caddr_t cp)
+m_copyback(struct mbuf *m0, int off, int len, const void *cp)
 {
-	int mlen;
-	struct mbuf *m = m0, *n;
-	int totlen = 0;
+#if DEBUG
+	struct mbuf *origm = m0;
+	int error;
+#endif /* DEBUG */
 
 	if (m0 == NULL)
 		return;
+
+#if DEBUG
+	error =
+#endif /* DEBUG */
+	m_copyback0(&m0, off, len, cp,
+	    M_COPYBACK0_COPYBACK | M_COPYBACK0_EXTEND, M_DONTWAIT);
+
+#if DEBUG
+	if (error != 0 || (m0 != NULL && origm != m0))
+		panic("m_copyback");
+#endif /* DEBUG */
+}
+
+struct mbuf *
+m_copyback_cow(struct mbuf *m0, int off, int len, const void *cp, int how)
+{
+	int error;
+
+	/* don't support chain expansion */
+	VERIFY(off + len <= m_length(m0));
+
+	error = m_copyback0(&m0, off, len, cp,
+	    M_COPYBACK0_COPYBACK | M_COPYBACK0_COW, how);
+	if (error) {
+		/*
+		 * no way to recover from partial success.
+		 * just free the chain.
+		 */
+		m_freem(m0);
+		return (NULL);
+	}
+	return (m0);
+}
+
+/*
+ * m_makewritable: ensure the specified range writable.
+ */
+int
+m_makewritable(struct mbuf **mp, int off, int len, int how)
+{
+	int error;
+#if DEBUG
+	struct mbuf *n;
+	int origlen, reslen;
+
+	origlen = m_length(*mp);
+#endif /* DEBUG */
+
+#if 0 /* M_COPYALL is large enough */
+	if (len == M_COPYALL)
+		len = m_length(*mp) - off; /* XXX */
+#endif
+
+	error = m_copyback0(mp, off, len, NULL,
+	    M_COPYBACK0_PRESERVE | M_COPYBACK0_COW, how);
+
+#if DEBUG
+	reslen = 0;
+	for (n = *mp; n; n = n->m_next)
+		reslen += n->m_len;
+	if (origlen != reslen)
+		panic("m_makewritable: length changed");
+	if (((*mp)->m_flags & M_PKTHDR) && reslen != (*mp)->m_pkthdr.len)
+		panic("m_makewritable: inconsist");
+#endif /* DEBUG */
+
+	return (error);
+}
+
+static int
+m_copyback0(struct mbuf **mp0, int off, int len, const void *vp, int flags,
+    int how)
+{
+	int mlen;
+	struct mbuf *m, *n;
+	struct mbuf **mp;
+	int totlen = 0;
+	const char *cp = vp;
+
+	VERIFY(mp0 != NULL);
+	VERIFY(*mp0 != NULL);
+	VERIFY((flags & M_COPYBACK0_PRESERVE) == 0 || cp == NULL);
+	VERIFY((flags & M_COPYBACK0_COPYBACK) == 0 || cp != NULL);
+
+	/*
+	 * we don't bother to update "totlen" in the case of M_COPYBACK0_COW,
+	 * assuming that M_COPYBACK0_EXTEND and M_COPYBACK0_COW are exclusive.
+	 */
+
+	VERIFY((~flags & (M_COPYBACK0_EXTEND|M_COPYBACK0_COW)) != 0);
+
+	mp = mp0;
+	m = *mp;
 	while (off > (mlen = m->m_len)) {
 		off -= mlen;
 		totlen += mlen;
 		if (m->m_next == NULL) {
-			n = m_getclr(M_DONTWAIT, m->m_type);
-			if (n == NULL)
+			int tspace;
+extend:
+			if (!(flags & M_COPYBACK0_EXTEND))
 				goto out;
-			n->m_len = MIN(MLEN, len + off);
+
+			/*
+			 * try to make some space at the end of "m".
+			 */
+
+			mlen = m->m_len;
+			if (off + len >= MINCLSIZE &&
+			    !(m->m_flags & M_EXT) && m->m_len == 0) {
+				MCLGET(m, how);
+			}
+			tspace = M_TRAILINGSPACE(m);
+			if (tspace > 0) {
+				tspace = MIN(tspace, off + len);
+				VERIFY(tspace > 0);
+				bzero(mtod(m, char *) + m->m_len,
+				    MIN(off, tspace));
+				m->m_len += tspace;
+				off += mlen;
+				totlen -= mlen;
+				continue;
+			}
+
+			/*
+			 * need to allocate an mbuf.
+			 */
+
+			if (off + len >= MINCLSIZE) {
+				n = m_getcl(how, m->m_type, 0);
+			} else {
+				n = _M_GET(how, m->m_type);
+			}
+			if (n == NULL) {
+				goto out;
+			}
+			n->m_len = 0;
+			n->m_len = MIN(M_TRAILINGSPACE(n), off + len);
+			bzero(mtod(n, char *), MIN(n->m_len, off));
 			m->m_next = n;
 		}
+		mp = &m->m_next;
 		m = m->m_next;
 	}
 	while (len > 0) {
-		mlen = MIN(m->m_len - off, len);
-		bcopy(cp, off + MTOD(m, caddr_t), (unsigned)mlen);
-		cp += mlen;
+		mlen = m->m_len - off;
+		if (mlen != 0 && m_mclhasreference(m)) {
+			char *datap;
+			int eatlen;
+
+			/*
+			 * this mbuf is read-only.
+			 * allocate a new writable mbuf and try again.
+			 */
+
+#if defined(DIAGNOSTIC)
+			if (!(flags & M_COPYBACK0_COW))
+				panic("m_copyback0: read-only");
+#endif /* defined(DIAGNOSTIC) */
+
+			/*
+			 * if we're going to write into the middle of
+			 * a mbuf, split it first.
+			 */
+			if (off > 0 && len < mlen) {
+				n = m_split0(m, off, how, 0);
+				if (n == NULL)
+					goto enobufs;
+				m->m_next = n;
+				mp = &m->m_next;
+				m = n;
+				off = 0;
+				continue;
+			}
+
+			/*
+			 * XXX TODO coalesce into the trailingspace of
+			 * the previous mbuf when possible.
+			 */
+
+			/*
+			 * allocate a new mbuf.  copy packet header if needed.
+			 */
+			n = _M_GET(how, m->m_type);
+			if (n == NULL)
+				goto enobufs;
+			if (off == 0 && (m->m_flags & M_PKTHDR)) {
+				M_COPY_PKTHDR(n, m);
+				n->m_len = MHLEN;
+			} else {
+				if (len >= MINCLSIZE)
+					MCLGET(n, M_DONTWAIT);
+				n->m_len =
+				    (n->m_flags & M_EXT) ? MCLBYTES : MLEN;
+			}
+			if (n->m_len > len)
+				n->m_len = len;
+
+			/*
+			 * free the region which has been overwritten.
+			 * copying data from old mbufs if requested.
+			 */
+			if (flags & M_COPYBACK0_PRESERVE)
+				datap = mtod(n, char *);
+			else
+				datap = NULL;
+			eatlen = n->m_len;
+			VERIFY(off == 0 || eatlen >= mlen);
+			if (off > 0) {
+				VERIFY(len >= mlen);
+				m->m_len = off;
+				m->m_next = n;
+				if (datap) {
+					m_copydata(m, off, mlen, datap);
+					datap += mlen;
+				}
+				eatlen -= mlen;
+				mp = &m->m_next;
+				m = m->m_next;
+			}
+			while (m != NULL && m_mclhasreference(m) &&
+			    n->m_type == m->m_type && eatlen > 0) {
+				mlen = MIN(eatlen, m->m_len);
+				if (datap) {
+					m_copydata(m, 0, mlen, datap);
+					datap += mlen;
+				}
+				m->m_data += mlen;
+				m->m_len -= mlen;
+				eatlen -= mlen;
+				if (m->m_len == 0)
+					*mp = m = m_free(m);
+			}
+			if (eatlen > 0)
+				n->m_len -= eatlen;
+			n->m_next = m;
+			*mp = m = n;
+			continue;
+		}
+		mlen = MIN(mlen, len);
+		if (flags & M_COPYBACK0_COPYBACK) {
+			bcopy(cp, mtod(m, caddr_t) + off, (unsigned)mlen);
+			cp += mlen;
+		}
 		len -= mlen;
 		mlen += off;
 		off = 0;
@@ -4474,23 +4927,27 @@ m_copyback(struct mbuf *m0, int off, int len, caddr_t cp)
 		if (len == 0)
 			break;
 		if (m->m_next == NULL) {
-			n = _M_GET(M_DONTWAIT, m->m_type);
-			if (n == NULL)
-				break;
-			n->m_len = MIN(MLEN, len);
-			m->m_next = n;
+			goto extend;
 		}
+		mp = &m->m_next;
 		m = m->m_next;
 	}
 out:
-	if (((m = m0)->m_flags & M_PKTHDR) && (m->m_pkthdr.len < totlen))
+	if (((m = *mp0)->m_flags & M_PKTHDR) && (m->m_pkthdr.len < totlen)) {
+		VERIFY(flags & M_COPYBACK0_EXTEND);
 		m->m_pkthdr.len = totlen;
+	}
+
+	return (0);
+
+enobufs:
+	return (ENOBUFS);
 }
 
 char *
 mcl_to_paddr(char *addr)
 {
-	int base_phys;
+	vm_offset_t base_phys;
 
 	if (!MBUF_IN_MAP(addr))
 		return (NULL);
@@ -4498,7 +4955,7 @@ mcl_to_paddr(char *addr)
 
 	if (base_phys == 0)
 		return (NULL);
-	return ((char *)((int)base_phys | ((int)addr & PGOFSET)));
+	return ((char *)((uintptr_t)base_phys | ((uintptr_t)addr & PGOFSET)));
 }
 
 /*
@@ -4715,7 +5172,7 @@ m_mtod(struct mbuf *m)
 struct mbuf *
 m_dtom(void *x)
 {
-	return ((struct mbuf *)((u_long)(x) & ~(MSIZE-1)));
+	return ((struct mbuf *)((uintptr_t)(x) & ~(MSIZE-1)));
 }
 
 void
@@ -5039,7 +5496,7 @@ slab_inrange(mcl_slab_t *sp, void *buf)
 	    (uintptr_t)buf < ((uintptr_t)sp->sl_base + sp->sl_len));
 }
 
-#undef panic(...)
+#undef panic
 
 static void
 slab_nextptr_panic(mcl_slab_t *sp, void *addr)

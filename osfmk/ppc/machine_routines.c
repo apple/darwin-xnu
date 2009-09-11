@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -50,9 +50,7 @@
 unsigned int		LockTimeOut = 1250000000;
 unsigned int		MutexSpin = 0;
 
-decl_mutex_data(static,mcpus_lock);
-unsigned int		mcpus_lock_initialized = 0;
-unsigned int		mcpus_state = 0;
+static int max_cpus_initialized = 0;
 
 uint32_t warFlags = 0;
 #define warDisMBpoff	0x80000000
@@ -495,35 +493,30 @@ ml_enable_nap(int target_cpu, boolean_t nap_enabled)
  *	Function:
  */
 void
-ml_init_max_cpus(unsigned int mcpus)
+ml_init_max_cpus(unsigned int max_cpus)
 {
+	boolean_t current_state;
 
-	if (hw_compare_and_store(0,1,&mcpus_lock_initialized))
-		mutex_init(&mcpus_lock,0);
-	mutex_lock(&mcpus_lock);
-	if ((mcpus_state & MAX_CPUS_SET)
-	    || (mcpus == 0)
-	    || (mcpus > MAX_CPUS))
-		panic("ml_init_max_cpus(): Invalid call, max_cpus: %d\n", mcpus);
-
-	machine_info.max_cpus = mcpus;
-	machine_info.physical_cpu_max = mcpus;
-	machine_info.logical_cpu_max = mcpus;
-	mcpus_state |= MAX_CPUS_SET;
-
-	if (mcpus_state & MAX_CPUS_WAIT) {
-		mcpus_state |= ~MAX_CPUS_WAIT;
-		thread_wakeup((event_t)&mcpus_state);
+	current_state = ml_set_interrupts_enabled(FALSE);
+	if (max_cpus_initialized != MAX_CPUS_SET) {
+			if (max_cpus > 0 && max_cpus <= MAX_CPUS) {
+			/*
+			 * Note: max_ncpus is the maximum number
+			 * that the kernel supports or that the "cpus="
+			 * boot-arg has set. Here we take int minimum.
+			 */
+			machine_info.max_cpus = MIN(max_cpus, max_ncpus);
+			machine_info.physical_cpu_max = max_cpus;
+			machine_info.logical_cpu_max = max_cpus;
+		}
+		if (max_cpus_initialized == MAX_CPUS_WAIT)
+			wakeup((event_t)&max_cpus_initialized);
+		max_cpus_initialized = MAX_CPUS_SET;
 	}
-	mutex_unlock(&mcpus_lock);
-
+	
 	if (machine_info.logical_cpu_max == 1) {
-		struct patch_up *patch_up_ptr;
-		boolean_t current_state;
+		struct patch_up *patch_up_ptr = &patch_up_table[0];
 
-		patch_up_ptr = &patch_up_table[0];
-
-		current_state = ml_set_interrupts_enabled(FALSE);
 		while (patch_up_ptr->addr != NULL) {
 			/*
 			 * Patch for V=R kernel text section
@@ -533,8 +526,9 @@ ml_init_max_cpus(unsigned int mcpus)
 			sync_cache64((addr64_t)((unsigned int)(patch_up_ptr->addr)),4);
 			patch_up_ptr++;
 		}
-		(void) ml_set_interrupts_enabled(current_state);
 	}
+	
+	(void) ml_set_interrupts_enabled(current_state);	
 }
 
 /*
@@ -544,15 +538,15 @@ ml_init_max_cpus(unsigned int mcpus)
 unsigned int
 ml_get_max_cpus(void)
 {
-	if (hw_compare_and_store(0,1,&mcpus_lock_initialized))
-		mutex_init(&mcpus_lock,0);
-	mutex_lock(&mcpus_lock);
-	if (!(mcpus_state & MAX_CPUS_SET)) {
-		mcpus_state |= MAX_CPUS_WAIT;
-		thread_sleep_mutex((event_t)&mcpus_state,
-					 &mcpus_lock, THREAD_UNINT);
+	boolean_t current_state;
+
+	current_state = ml_set_interrupts_enabled(FALSE);
+	if (max_cpus_initialized != MAX_CPUS_SET) {
+			max_cpus_initialized = MAX_CPUS_WAIT;
+			assert_wait((event_t)&max_cpus_initialized, THREAD_UNINT);
+			(void)thread_block(THREAD_CONTINUE_NULL);
 	}
-	mutex_unlock(&mcpus_lock);
+	(void) ml_set_interrupts_enabled(current_state);
 	return(machine_info.max_cpus);
 }
 
@@ -829,4 +823,15 @@ boolean_t
 machine_cpu_is_inactive(__unused int num)
 {
     return(FALSE);
+}
+
+vm_offset_t ml_stack_remaining(void)
+{
+	uintptr_t local = (uintptr_t) &local;
+
+	if (ml_at_interrupt_context()) {
+	    return (local - (getPerProc()->intstack_top_ss - INTSTACK_SIZE));
+	} else {
+	    return (local - current_thread()->kernel_stack);
+	}
 }

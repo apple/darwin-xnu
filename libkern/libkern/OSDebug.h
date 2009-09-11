@@ -36,16 +36,24 @@
 #define _OS_OSDEBBUG_H
 
 #include <sys/cdefs.h>
+#include <mach/mach_types.h>
 
 __BEGIN_DECLS
 
 extern int log_leaks;
 
 /* Use kernel_debug() to log a backtrace */ 
-extern void trace_backtrace(unsigned int debugid, unsigned int debugid2, int size, int data);
+extern void trace_backtrace(unsigned int debugid, unsigned int debugid2, unsigned long size, unsigned long data);
 /* Report a message with a 4 entry backtrace - very slow */
 extern void OSReportWithBacktrace(const char *str, ...);
 extern unsigned OSBacktrace(void **bt, unsigned maxAddrs);
+
+/*! @function OSKernelStackRemaining
+    @abstract Returns bytes available below the current stack frame.
+    @discussion Returns bytes available below the current stack frame. Safe for interrupt or thread context.
+    @result Approximate byte count available. */
+
+vm_offset_t OSKernelStackRemaining( void );
 
 __END_DECLS
 

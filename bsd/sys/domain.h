@@ -107,8 +107,8 @@ struct	domain {
 #else
 	void 	*dom_mtx;		/* domain global mutex */
 #endif
-	u_long		dom_flags;
-	u_long		reserved[2];
+	uint32_t		dom_flags;
+	uint32_t		reserved[2];
 };
 
 #pragma pack()

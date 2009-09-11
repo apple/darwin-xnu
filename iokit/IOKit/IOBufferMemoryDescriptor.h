@@ -72,15 +72,18 @@ protected:
     vm_size_t            _capacity;
     vm_offset_t		 _alignment;
     IOOptionBits	 _options;
-    IOPhysicalAddress *  _physAddrs;
-    unsigned             _physSegCount;
+private:
+    uintptr_t		 _internalReserved;
+    unsigned             _internalFlags;
 
 private:
+#ifndef __LP64__
     virtual bool initWithOptions(
                                IOOptionBits options,
                                vm_size_t    capacity,
                                vm_offset_t  alignment,
-			       task_t	    inTask);
+			       task_t	    inTask) APPLE_KEXT_DEPRECATED; /* use withOptions() instead */
+#endif /* !__LP64__ */
 
     virtual bool initWithPhysicalMask(
 				task_t		  inTask,
@@ -89,8 +92,13 @@ private:
 				mach_vm_address_t alignment,
 				mach_vm_address_t physicalMask);
 
+#ifdef __LP64__
+    OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 0);
+    OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 1);
+#else /* !__LP64__ */
     OSMetaClassDeclareReservedUsed(IOBufferMemoryDescriptor, 0);
     OSMetaClassDeclareReservedUsed(IOBufferMemoryDescriptor, 1);
+#endif /* !__LP64__ */
     OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 2);
     OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 3);
     OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 4);
@@ -109,38 +117,6 @@ private:
 protected:
     virtual void free();
 
-    virtual bool initWithAddress( void *      address,       /* not supported */
-                                  IOByteCount withLength,
-                                  IODirection withDirection );
-
-    virtual bool initWithAddress( vm_address_t address,      /* not supported */
-                                  IOByteCount  withLength,
-                                  IODirection  withDirection,
-                                  task_t       withTask );
-
-    virtual bool initWithPhysicalAddress( 
-                                  IOPhysicalAddress address, /* not supported */
-                                  IOByteCount       withLength,
-                                  IODirection       withDirection );
-
-    virtual bool initWithPhysicalRanges( 
-                                  IOPhysicalRange * ranges,  /* not supported */
-                                  UInt32            withCount,
-                                  IODirection       withDirection,
-                                  bool              asReference = false );
-
-    virtual bool initWithRanges(  IOVirtualRange * ranges,   /* not supported */
-                                  UInt32           withCount,
-                                  IODirection      withDirection,
-                                  task_t           withTask,
-                                  bool             asReference = false );
-
-    IOGeneralMemoryDescriptor::withAddress;                  /* not supported */
-    IOGeneralMemoryDescriptor::withPhysicalAddress;          /* not supported */
-    IOGeneralMemoryDescriptor::withPhysicalRanges;           /* not supported */
-    IOGeneralMemoryDescriptor::withRanges;                   /* not supported */
-    IOGeneralMemoryDescriptor::withSubRange;                 /* not supported */
-
 public:
 
     /*
@@ -150,9 +126,11 @@ public:
      * hold capacity bytes.  The descriptor's length is initially set to the
      * capacity.
      */
+#ifndef __LP64__
     virtual bool initWithOptions(   IOOptionBits options,
                                     vm_size_t    capacity,
-                                    vm_offset_t  alignment);
+                                    vm_offset_t  alignment) APPLE_KEXT_DEPRECATED; /* use withOptions() instead */
+#endif /* !__LP64__ */
 
     static IOBufferMemoryDescriptor * withOptions(  IOOptionBits options,
                                                     vm_size_t    capacity,
@@ -207,16 +185,12 @@ public:
                                      vm_size_t    capacity,
                                      IODirection  withDirection,
                                      bool         withContiguousMemory = false);
-    /*
-     * initWithBytes:
-     *
-     * Initialize a new IOBufferMemoryDescriptor preloaded with bytes (copied).
-     * The descriptor's length and capacity are set to the input buffer's size.
-     */
+#ifndef __LP64__
     virtual bool initWithBytes(const void * bytes,
                                vm_size_t    withLength,
                                IODirection  withDirection,
-                               bool         withContiguousMemory = false);
+                               bool         withContiguousMemory = false) APPLE_KEXT_DEPRECATED; /* use withBytes() instead */
+#endif /* !__LP64__ */
 
     /*
      * withBytes:
@@ -281,8 +255,10 @@ public:
      */
     virtual bool appendBytes(const void *bytes, vm_size_t withLength);
 
-    /* DEPRECATED */ virtual void * getVirtualSegment(IOByteCount offset,
-    /* DEPRECATED */					IOByteCount * length);
+#ifndef __LP64__
+    virtual void * getVirtualSegment(IOByteCount offset,
+					IOByteCount * length) APPLE_KEXT_DEPRECATED; /* use getBytesNoCopy() instead */
+#endif /* !__LP64__ */
 };
 
 #endif /* !_IOBUFFERMEMORYDESCRIPTOR_H */

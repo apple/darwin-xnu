@@ -69,7 +69,7 @@
  * and various other messes.
  */
 
-#define	MAC_MAX_SLOTS	8
+#define	MAC_MAX_SLOTS	7
 
 #define	MAC_FLAG_INITIALIZED	0x0000001	/* Is initialized for use. */
 

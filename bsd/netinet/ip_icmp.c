@@ -75,6 +75,8 @@
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
 
+#include <machine/endian.h>
+
 #include <net/if.h>
 #include <net/route.h>
 
@@ -114,13 +116,14 @@
 #include <security/mac_framework.h>
 #endif /* MAC_NET */
 
+
 /*
  * ICMP routines: error generation, receive packet processing, and
  * routines to turnaround packets back to the originator, and
  * host table maintenance routines.
  */
 
-static struct	icmpstat icmpstat;
+struct	icmpstat icmpstat;
 SYSCTL_STRUCT(_net_inet_icmp, ICMPCTL_STATS, stats, CTLFLAG_RD,
 	&icmpstat, icmpstat, "");
 
@@ -173,7 +176,6 @@ int	icmpprintfs = 0;
 
 static void	icmp_reflect(struct mbuf *);
 static void	icmp_send(struct mbuf *, struct mbuf *);
-static int	ip_next_mtu(int, int);
 
 extern	struct protosw inetsw[];
 
@@ -187,7 +189,7 @@ icmp_error(
 	int type,
 	int code,
 	n_long dest,
-	struct ifnet *destifp)
+	u_int32_t nextmtu)
 {
 	struct ip *oip = mtod(n, struct ip *), *nip;
 	unsigned oiplen = IP_VHL_HL(oip->ip_vhl) << 2;
@@ -257,8 +259,8 @@ icmp_error(
 			icp->icmp_pptr = code;
 			code = 0;
 		} else if (type == ICMP_UNREACH &&
-			code == ICMP_UNREACH_NEEDFRAG && destifp) {
-			icp->icmp_nextmtu = htons(destifp->if_mtu);
+		    code == ICMP_UNREACH_NEEDFRAG && nextmtu != 0) {
+			icp->icmp_nextmtu = htons(nextmtu);
 		}
 	}
 
@@ -269,9 +271,10 @@ icmp_error(
 	/*
 	 * Convert fields to network representation.
 	 */
+#if BYTE_ORDER != BIG_ENDIAN
 	HTONS(nip->ip_len);
 	HTONS(nip->ip_off);
-
+#endif
 	/*
 	 * Now, copy old ip header (without options)
 	 * in front of icmp message.
@@ -444,7 +447,11 @@ icmp_input(struct mbuf *m, int hlen)
 			icmpstat.icps_badlen++;
 			goto freeit;
 		}
+
+#if BYTE_ORDER != BIG_ENDIAN
 		NTOHS(icp->icmp_ip.ip_len);
+#endif
+
 		/* Discard ICMP's in response to multicast packets */
 		if (IN_MULTICAST(ntohl(icp->icmp_ip.ip_dst.s_addr)))
 			goto badcode;
@@ -453,52 +460,7 @@ icmp_input(struct mbuf *m, int hlen)
 			printf("deliver to protocol %d\n", icp->icmp_ip.ip_p);
 #endif
 		icmpsrc.sin_addr = icp->icmp_ip.ip_dst;
-#if 1
-		/*
-		 * MTU discovery:
-		 * If we got a needfrag and there is a host route to the
-		 * original destination, and the MTU is not locked, then
-		 * set the MTU in the route to the suggested new value
-		 * (if given) and then notify as usual.  The ULPs will
-		 * notice that the MTU has changed and adapt accordingly.
-		 * If no new MTU was suggested, then we guess a new one
-		 * less than the current value.  If the new MTU is 
-		 * unreasonably small (defined by sysctl tcp_minmss), then
-		 * we reset the MTU to the interface value and enable the
-		 * lock bit, indicating that we are no longer doing MTU
-		 * discovery.
-		 */
-		if (code == PRC_MSGSIZE) {
-			struct rtentry *rt;
-			int mtu;
 
-			rt = rtalloc1((struct sockaddr *)&icmpsrc, 0,
-				      RTF_CLONING | RTF_PRCLONING);
-			if (rt && (rt->rt_flags & RTF_HOST)
-			    && !(rt->rt_rmx.rmx_locks & RTV_MTU)) {
-				mtu = ntohs(icp->icmp_nextmtu);
-				if (!mtu)
-					mtu = ip_next_mtu(rt->rt_rmx.rmx_mtu,
-							  1);
-#if DEBUG_MTUDISC
-				printf("MTU for %s reduced to %d\n",
-					   inet_ntop(AF_INET, &icmpsrc.sin_addr, ipv4str,
-					   			 sizeof(ipv4str)),
-					   mtu);
-#endif
-				if (mtu < max(296, (tcp_minmss + sizeof(struct tcpiphdr)))) {
-					/* rt->rt_rmx.rmx_mtu =
-						rt->rt_ifp->if_mtu; */
-					rt->rt_rmx.rmx_locks |= RTV_MTU;
-				} else if (rt->rt_rmx.rmx_mtu > mtu) {
-					rt->rt_rmx.rmx_mtu = mtu;
-				}
-			}
-			if (rt)
-				rtfree(rt);
-		}
-
-#endif
 		/*
 		 * XXX if the packet contains [IPv4 AH TCP], we can't make a
 		 * notification to TCP layer.
@@ -598,7 +560,7 @@ reflect:
 
 	case ICMP_REDIRECT:
 		if (log_redirect) {
-			u_long src, dst, gw;
+			u_int32_t src, dst, gw;
 
 			src = ntohl(ip->ip_src.s_addr);
 			dst = ntohl(icp->icmp_ip.ip_dst.s_addr);
@@ -698,16 +660,25 @@ icmp_reflect(struct mbuf *m)
 	 * or anonymous), use the address which corresponds
 	 * to the incoming interface.
 	 */
-	lck_mtx_lock(rt_mtx);
-	for (ia = in_ifaddrhead.tqh_first; ia; ia = ia->ia_link.tqe_next) {
+	lck_rw_lock_shared(in_ifaddr_rwlock);
+	TAILQ_FOREACH(ia, INADDR_HASH(t.s_addr), ia_hash) {
 		if (t.s_addr == IA_SIN(ia)->sin_addr.s_addr)
-			break;
+			goto match;
+	}
+	/*
+	 * Slow path; check for broadcast addresses.  Find a source
+	 * IP address to use when replying to the broadcast request;
+	 * let IP handle the source interface selection work.
+	 */
+	for (ia = in_ifaddrhead.tqh_first; ia; ia = ia->ia_link.tqe_next) {
 		if (ia->ia_ifp && (ia->ia_ifp->if_flags & IFF_BROADCAST) &&
 		    t.s_addr == satosin(&ia->ia_broadaddr)->sin_addr.s_addr)
 			break;
 	}
+match:
 	if (ia)
 		ifaref(&ia->ia_ifa);
+	lck_rw_done(in_ifaddr_rwlock);
 	icmpdst.sin_addr = t;
 	if ((ia == (struct in_ifaddr *)0) && m->m_pkthdr.rcvif)
 		ia = (struct in_ifaddr *)ifaof_ifpforaddr(
@@ -717,15 +688,16 @@ icmp_reflect(struct mbuf *m)
 	 * and was received on an interface with no IP address.
 	 */
 	if (ia == (struct in_ifaddr *)0) {
+		lck_rw_lock_shared(in_ifaddr_rwlock);
 		ia = in_ifaddrhead.tqh_first;
 		if (ia == (struct in_ifaddr *)0) {/* no address yet, bail out */
+			lck_rw_done(in_ifaddr_rwlock);
 			m_freem(m);
-			lck_mtx_unlock(rt_mtx);
 			goto done;
 		}
 		ifaref(&ia->ia_ifa);
+		lck_rw_done(in_ifaddr_rwlock);
 	}
-	lck_mtx_unlock(rt_mtx);
 #if CONFIG_MACF_NET
 	mac_netinet_icmp_reply(m);
 #endif
@@ -853,17 +825,15 @@ icmp_send(struct mbuf *m, struct mbuf *opts)
 #endif
 	bzero(&ro, sizeof ro);
 	(void) ip_output(m, opts, &ro, IP_OUTARGS, NULL, &ipoa);
-	if (ro.ro_rt) {
+	if (ro.ro_rt)
 		rtfree(ro.ro_rt);
-		ro.ro_rt = NULL;
-	}
 }
 
 n_time
 iptime(void)
 {
 	struct timeval atv;
-	u_long t;
+	u_int32_t t;
 
 	microtime(&atv);
 	t = (atv.tv_sec % (24*60*60)) * 1000 + atv.tv_usec / 1000;
@@ -876,7 +846,7 @@ iptime(void)
  * given current value MTU.  If DIR is less than zero, a larger plateau
  * is returned; otherwise, a smaller value is returned.
  */
-static int
+int
 ip_next_mtu(int mtu, int dir)
 {
 	static int mtutab[] = {
@@ -999,8 +969,8 @@ badport_bandlim(int which)
 #include <netinet/in_pcb.h>
 
 extern struct domain inetdomain;
-extern u_long rip_sendspace;
-extern u_long rip_recvspace;
+extern u_int32_t rip_sendspace;
+extern u_int32_t rip_recvspace;
 extern struct inpcbinfo ripcbinfo;
 
 int rip_abort(struct socket *);
@@ -1082,11 +1052,11 @@ icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt)
 		case IP_RECVTTL:
 		case IP_BOUND_IF:
 #if CONFIG_FORCE_OUT_IFP
-		case IP_FORCE_OUT_IFP:
+                case IP_FORCE_OUT_IFP:
 #endif
 			error = rip_ctloutput(so, sopt);
 			break;
-		
+
 		default:
 			error = EINVAL;
 			break;
@@ -1123,7 +1093,7 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *n
 		if (hlen < 20 || hlen > 40 || ip->ip_len != m->m_pkthdr.len)
 			goto bad;
 		/* Bogus fragments can tie up peer resources */ 
-		if (ip->ip_off != 0)
+		if ((ip->ip_off & ~IP_DF) !=  0)
 			goto bad;
 		/* Allow only ICMP even for user provided IP header */
 		if (ip->ip_p != IPPROTO_ICMP)
@@ -1131,20 +1101,22 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *n
 		/* To prevent spoofing, specified source address must be one of ours */
 		if (ip->ip_src.s_addr != INADDR_ANY) {
 			socket_unlock(so, 0);
-			lck_mtx_lock(rt_mtx);
+			lck_rw_lock_shared(in_ifaddr_rwlock);
 			if (TAILQ_EMPTY(&in_ifaddrhead)) {
-				lck_mtx_unlock(rt_mtx);
+				lck_rw_done(in_ifaddr_rwlock);
 				socket_lock(so, 0);
 				goto bad;
 			}
-			TAILQ_FOREACH(ia, &in_ifaddrhead, ia_link) {
-				if (IA_SIN(ia)->sin_addr.s_addr == ip->ip_src.s_addr) {
-					lck_mtx_unlock(rt_mtx);
+			TAILQ_FOREACH(ia, INADDR_HASH(ip->ip_src.s_addr),
+			    ia_hash) {
+				if (IA_SIN(ia)->sin_addr.s_addr ==
+				    ip->ip_src.s_addr) {
+					lck_rw_done(in_ifaddr_rwlock);
 					socket_lock(so, 0);
 					goto ours;
 				}
 			}
-			lck_mtx_unlock(rt_mtx);
+			lck_rw_done(in_ifaddr_rwlock);
 			socket_lock(so, 0);
 			goto bad;
 		}

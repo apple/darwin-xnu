@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -78,6 +78,7 @@
 #include <mach/vm_param.h>
 #include <ipc/ipc_init.h>
 #include <kern/assert.h>
+#include <kern/mach_param.h>
 #include <kern/misc_protos.h>
 #include <kern/clock.h>
 #include <kern/cpu_number.h>
@@ -89,6 +90,7 @@
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/timer.h>
+#include <kern/wait_queue.h>
 #include <kern/xpr.h>
 #include <kern/zalloc.h>
 #include <kern/locks.h>
@@ -112,6 +114,10 @@
 #include <security/mac_mach_internal.h>
 #endif
 
+#if CONFIG_COUNTERS
+#include <pmc/pmc.h>
+#endif
+
 #ifdef __ppc__
 #include <ppc/Firmware.h>
 #include <ppc/mappings.h>
@@ -121,18 +127,24 @@ static void		kernel_bootstrap_thread(void);
 
 static void		load_context(
 					thread_t	thread);
-#ifdef i386
+#if (defined(__i386__) || defined(__x86_64__)) && NCOPY_WINDOWS > 0
 extern void cpu_userwindow_init(int);
 extern void cpu_physwindow_init(int);
 #endif
 
-#ifdef CONFIG_JETTISON_KERNEL_LINKER
-extern void	jettison_kernel_linker(void);
-#endif
+// libkern/OSKextLib.cpp
+extern void	OSKextRemoveKextBootstrap(void);
+
+void srv_setup(void);
+extern void bsd_srv_setup(int);
+extern unsigned int semaphore_max;
+
 
 /*
  *	Running in virtual memory, on the interrupt stack.
  */
+
+extern int srv;
 
 void
 kernel_bootstrap(void)
@@ -144,23 +156,36 @@ kernel_bootstrap(void)
 
 #define kernel_bootstrap_kprintf(x...) /* kprintf("kernel_bootstrap: " x) */
 
+	/* i386_vm_init already checks for this ; do it aagin anyway */
+        if (PE_parse_boot_argn("srv", &srv, sizeof (srv))) {
+                srv = 1;
+        }
+
+	srv_setup();
+
 	kernel_bootstrap_kprintf("calling lck_mod_init\n");
 	lck_mod_init();
-
-	kernel_bootstrap_kprintf("calling sched_init\n");
-	sched_init();
 
 	kernel_bootstrap_kprintf("calling vm_mem_bootstrap\n");
 	vm_mem_bootstrap();
 
-	kernel_bootstrap_kprintf("calling ipc_bootstrap\n");
-	ipc_bootstrap();
-
 	kernel_bootstrap_kprintf("calling vm_mem_init\n");
 	vm_mem_init();
 
-	kernel_bootstrap_kprintf("calling kmod_init\n");
-	kmod_init();
+	machine_info.memory_size = (uint32_t)mem_size;
+	machine_info.max_mem = max_mem;
+	machine_info.major_version = version_major;
+	machine_info.minor_version = version_minor;
+
+	kernel_bootstrap_kprintf("calling sched_init\n");
+	sched_init();
+
+	kernel_bootstrap_kprintf("calling wait_queue_bootstrap\n");
+	wait_queue_bootstrap();
+
+	kernel_bootstrap_kprintf("calling ipc_bootstrap\n");
+	ipc_bootstrap();
+
 #if CONFIG_MACF
 	mac_policy_init();
 #endif
@@ -183,10 +208,6 @@ kernel_bootstrap(void)
 	kernel_bootstrap_kprintf("calling clock_init\n");
 	clock_init();
 
-	machine_info.memory_size = mem_size;
-	machine_info.max_mem = max_mem;
-	machine_info.major_version = version_major;
-	machine_info.minor_version = version_minor;
 
 	/*
 	 *	Initialize the IPC, task, and thread subsystems.
@@ -274,12 +295,16 @@ kernel_bootstrap_thread(void)
 	kdp_init();
 #endif
 		
-#ifdef i386
+#if (defined(__i386__) || defined(__x86_64__)) && NCOPY_WINDOWS > 0
 	/*
 	 * Create and initialize the physical copy window for processor 0
 	 * This is required before starting kicking off  IOKit.
 	 */
 	cpu_physwindow_init(0);
+#endif
+
+#if CONFIG_COUNTERS
+	pmc_bootstrap();
 #endif
 
 #ifdef	IOKIT
@@ -288,7 +313,7 @@ kernel_bootstrap_thread(void)
 	
 	(void) spllo();		/* Allow interruptions */
 
-#ifdef i386
+#if (defined(__i386__) || defined(__x86_64__)) && NCOPY_WINDOWS > 0
 	/*
 	 * Create and initialize the copy window for processor 0
 	 * This also allocates window space for all other processors.
@@ -316,12 +341,15 @@ kernel_bootstrap_thread(void)
 	bsd_init();
 #endif
 
-#ifdef CONFIG_JETTISON_KERNEL_LINKER
-	/* We do not run kextd, so get rid of the kernel linker now */
-	jettison_kernel_linker();
-#endif
+    /*
+     * Get rid of segments used to bootstrap kext loading. This removes
+     * the KLD, PRELINK symtab, LINKEDIT, and symtab segments/load commands.
+     */
+	OSKextRemoveKextBootstrap();
 
 	serial_keyboard_init();		/* Start serial keyboard if wanted */
+
+	vm_page_init_local_q();
 
 	thread_bind(PROCESSOR_NULL);
 
@@ -407,7 +435,7 @@ load_context(
 	load_context_kprintf("calling processor_up\n");
 	processor_up(processor);
 
-	PMAP_ACTIVATE_KERNEL(processor->cpu_num);
+	PMAP_ACTIVATE_KERNEL(processor->cpu_id);
 
 	/*
 	 * Acquire a stack if none attached.  The panic
@@ -441,9 +469,36 @@ load_context(
 	timer_start(&PROCESSOR_DATA(processor, system_state), processor->last_dispatch);
 	PROCESSOR_DATA(processor, current_state) = &PROCESSOR_DATA(processor, system_state);
 
-	PMAP_ACTIVATE_USER(thread, processor->cpu_num);
+	PMAP_ACTIVATE_USER(thread, processor->cpu_id);
 
 	load_context_kprintf("calling machine_load_context\n");
 	machine_load_context(thread);
 	/*NOTREACHED*/
 }
+
+void
+srv_setup()
+{
+	int scale = 0;
+#if defined(__LP64__)
+	/* if memory is more than 16G, then apply rules for processes */
+	if ((srv != 0) && ((uint64_t)sane_size >= (uint64_t)(16 * 1024 * 1024 *1024ULL))) {
+		scale = (int)((uint64_t)sane_size / (uint64_t)(8 * 1024 * 1024 *1024ULL));
+		/* limit to 128 G */
+		if (scale > 16)
+			scale = 16;
+		task_max = 2500 * scale;
+		task_threadmax = task_max;
+		thread_max = task_max * 5;
+	} else
+		scale = 0;
+#endif
+	bsd_srv_setup(scale);
+	
+	ipc_space_max = SPACE_MAX;
+	ipc_tree_entry_max = ITE_MAX;
+	ipc_port_max = PORT_MAX;
+	ipc_pset_max = SET_MAX;
+	semaphore_max = SEMAPHORE_MAX;
+}
+

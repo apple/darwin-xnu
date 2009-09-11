@@ -31,7 +31,7 @@
 
 #if defined (__ppc__)
 #include "ppc/commpage/commpage.h"
-#elif defined (__i386__)
+#elif defined (__i386__) || defined (__x86_64__)
 #include "i386/commpage/commpage.h"
 #else
 #error architecture not supported

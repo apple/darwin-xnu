@@ -109,9 +109,6 @@ typedef	int  stop_fcn_t(struct tty *tp, int rw);
 typedef	int  reset_fcn_t(int uban);
 typedef	int  select_fcn_t(dev_t dev, int which, void * wql, struct proc *p);
 typedef	int  mmap_fcn_t(void);
-typedef	int  getc_fcn_t(dev_t dev);
-typedef	int  putc_fcn_t(dev_t dev, char c);
-typedef int  d_poll_t(dev_t dev, int events, struct proc *p);
 
 #define	d_open_t	open_close_fcn_t
 #define	d_close_t	open_close_fcn_t
@@ -123,8 +120,6 @@ typedef int  d_poll_t(dev_t dev, int events, struct proc *p);
 #define	d_select_t	select_fcn_t
 #define	d_mmap_t	mmap_fcn_t
 #define	d_strategy_t	strategy_fcn_t
-#define	d_getc_t	getc_fcn_t
-#define	d_putc_t	putc_fcn_t
 
 __BEGIN_DECLS
 int		enodev(void);		
@@ -144,10 +139,11 @@ __END_DECLS
 #define eno_stop		((stop_fcn_t *)&enodev)
 #define eno_reset		((reset_fcn_t *)&enodev)
 #define eno_mmap		((mmap_fcn_t *)&enodev)
-#define eno_getc		((getc_fcn_t *)&enodev)
-#define eno_putc		((putc_fcn_t *)&enodev)
 #define eno_select		((select_fcn_t *)&enodev)
 
+/* For source backward compatibility only! */
+#define eno_getc		((void *)&enodev)
+#define eno_putc		((void *)&enodev)
 
 /*
  * Block device switch table
@@ -186,16 +182,16 @@ struct cdevsw {
 	open_close_fcn_t	*d_close;
 	read_write_fcn_t	*d_read;
 	read_write_fcn_t	*d_write;
-	ioctl_fcn_t			*d_ioctl;
-	stop_fcn_t			*d_stop;
-	reset_fcn_t			*d_reset;
+	ioctl_fcn_t		*d_ioctl;
+	stop_fcn_t		*d_stop;
+	reset_fcn_t		*d_reset;
 	struct	tty 		**d_ttys;
 	select_fcn_t		*d_select;
-	mmap_fcn_t			*d_mmap;
+	mmap_fcn_t		*d_mmap;
 	strategy_fcn_t		*d_strategy;
-	getc_fcn_t			*d_getc;
-	putc_fcn_t			*d_putc;
-	int					d_type;
+	void			*d_reserved_1;
+	void			*d_reserved_2;
+	int			d_type;
 };
 
 
@@ -287,6 +283,7 @@ int  cdevsw_isfree(int);
 int  cdevsw_add(int, struct cdevsw *);
 int  cdevsw_add_with_bdev(int index, struct cdevsw * csw, int bdev);
 int  cdevsw_remove(int, struct cdevsw *);
+int  isdisk(dev_t, int);
 __END_DECLS
 #endif /* KERNEL */
 

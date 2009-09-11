@@ -40,6 +40,6 @@
 int in6_gif_input(struct mbuf **, int *);
 int in6_gif_output(struct ifnet *, int, struct mbuf *, struct rtentry *);
 int gif_encapcheck6(const struct mbuf *, int, int, void *);
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
-#endif _NETINET6_IN6_GIF_H_
+#endif /* _NETINET6_IN6_GIF_H_ */

@@ -81,6 +81,8 @@
 #include <ipc/ipc_pset.h>
 #include <vm/vm_map.h>
 
+#include <libkern/OSAtomic.h>
+
 /*
  *	Routine:	mach_msg_send_from_kernel
  *	Purpose:
@@ -98,6 +100,13 @@
  *		                        or destination is above kernel limit
  */
 
+#if IKM_SUPPORT_LEGACY
+
+#undef mach_msg_send_from_kernel
+mach_msg_return_t mach_msg_send_from_kernel(
+	mach_msg_header_t	*msg,
+	mach_msg_size_t		send_size);
+
 mach_msg_return_t
 mach_msg_send_from_kernel(
 	mach_msg_header_t	*msg,
@@ -106,7 +115,34 @@ mach_msg_send_from_kernel(
 	ipc_kmsg_t kmsg;
 	mach_msg_return_t mr;
 
-	if (!MACH_PORT_VALID((mach_port_name_t)msg->msgh_remote_port))
+	if (!MACH_PORT_VALID(CAST_MACH_PORT_TO_NAME(msg->msgh_remote_port)))
+		return MACH_SEND_INVALID_DEST;
+
+	mr = ipc_kmsg_get_from_kernel(msg, send_size, &kmsg);
+	if (mr != MACH_MSG_SUCCESS)
+		return mr;
+
+	ipc_kmsg_copyin_from_kernel_legacy(kmsg);
+
+	mr = ipc_kmsg_send_always(kmsg);
+	if (mr != MACH_MSG_SUCCESS) {
+		ipc_kmsg_destroy(kmsg);
+	}
+
+	return mr;
+}
+
+#endif /* IKM_SUPPORT_LEGACY */
+
+mach_msg_return_t
+mach_msg_send_from_kernel_proper(
+	mach_msg_header_t	*msg,
+	mach_msg_size_t		send_size)
+{
+	ipc_kmsg_t kmsg;
+	mach_msg_return_t mr;
+
+	if (!MACH_PORT_VALID(CAST_MACH_PORT_TO_NAME(msg->msgh_remote_port)))
 		return MACH_SEND_INVALID_DEST;
 
 	mr = ipc_kmsg_get_from_kernel(msg, send_size, &kmsg);
@@ -123,6 +159,8 @@ mach_msg_send_from_kernel(
 	return mr;
 }
 
+#if IKM_SUPPORT_LEGACY
+
 mach_msg_return_t
 mach_msg_send_from_kernel_with_options(
 	mach_msg_header_t	*msg,
@@ -133,14 +171,14 @@ mach_msg_send_from_kernel_with_options(
 	ipc_kmsg_t kmsg;
 	mach_msg_return_t mr;
 
-	if (!MACH_PORT_VALID((mach_port_name_t)msg->msgh_remote_port))
+	if (!MACH_PORT_VALID(CAST_MACH_PORT_TO_NAME(msg->msgh_remote_port)))
 		return MACH_SEND_INVALID_DEST;
 
 	mr = ipc_kmsg_get_from_kernel(msg, send_size, &kmsg);
 	if (mr != MACH_MSG_SUCCESS)
 		return mr;
 
-	ipc_kmsg_copyin_from_kernel(kmsg);
+	ipc_kmsg_copyin_from_kernel_legacy(kmsg);
 	mr = ipc_kmsg_send(kmsg, option, timeout_val);
 	if (mr != MACH_MSG_SUCCESS) {
 		ipc_kmsg_destroy(kmsg);
@@ -148,6 +186,8 @@ mach_msg_send_from_kernel_with_options(
 	
 	return mr;
 }
+
+#endif /* IKM_SUPPORT_LEGACY */
 
 /*
  *	Routine:	mach_msg_rpc_from_kernel
@@ -164,11 +204,47 @@ mach_msg_send_from_kernel_with_options(
  *		MACH_RCV_PORT_DIED	The reply port was deallocated.
  */
 
+mach_msg_return_t mach_msg_rpc_from_kernel_body(mach_msg_header_t *msg, 
+        mach_msg_size_t send_size, mach_msg_size_t rcv_size, boolean_t legacy);
+
+#if IKM_SUPPORT_LEGACY
+
+#undef mach_msg_rpc_from_kernel
+mach_msg_return_t
+mach_msg_rpc_from_kernel(
+	mach_msg_header_t	*msg,
+	mach_msg_size_t		send_size,
+	mach_msg_size_t		rcv_size);
+
 mach_msg_return_t
 mach_msg_rpc_from_kernel(
 	mach_msg_header_t	*msg,
 	mach_msg_size_t		send_size,
 	mach_msg_size_t		rcv_size)
+{
+    return mach_msg_rpc_from_kernel_body(msg, send_size, rcv_size, TRUE);
+}
+
+#endif /* IKM_SUPPORT_LEGACY */
+
+mach_msg_return_t
+mach_msg_rpc_from_kernel_proper(
+	mach_msg_header_t	*msg,
+	mach_msg_size_t		send_size,
+	mach_msg_size_t		rcv_size)
+{
+    return mach_msg_rpc_from_kernel_body(msg, send_size, rcv_size, FALSE);
+}
+
+mach_msg_return_t
+mach_msg_rpc_from_kernel_body(
+	mach_msg_header_t	*msg,
+	mach_msg_size_t		send_size,
+	mach_msg_size_t		rcv_size,
+#if !IKM_SUPPORT_LEGACY
+	__unused
+#endif
+    boolean_t           legacy)
 {
 	thread_t self = current_thread();
 	ipc_port_t reply;
@@ -176,7 +252,7 @@ mach_msg_rpc_from_kernel(
 	mach_port_seqno_t seqno;
 	mach_msg_return_t mr;
 
-	assert(MACH_PORT_VALID((mach_port_name_t)msg->msgh_remote_port));
+	assert(MACH_PORT_VALID(CAST_MACH_PORT_TO_NAME(msg->msgh_remote_port)));
 	assert(msg->msgh_local_port == MACH_PORT_NULL);
 
 	mr = ipc_kmsg_get_from_kernel(msg, send_size, &kmsg);
@@ -199,7 +275,14 @@ mach_msg_rpc_from_kernel(
 
 	ipc_port_reference(reply);
 
-	ipc_kmsg_copyin_from_kernel(kmsg);
+#if IKM_SUPPORT_LEGACY
+    if(legacy)
+        ipc_kmsg_copyin_from_kernel_legacy(kmsg);
+    else
+        ipc_kmsg_copyin_from_kernel(kmsg);
+#else
+    ipc_kmsg_copyin_from_kernel(kmsg);
+#endif
 
 	mr = ipc_kmsg_send_always(kmsg);
 	if (mr != MACH_MSG_SUCCESS) {
@@ -283,7 +366,14 @@ mach_msg_rpc_from_kernel(
 	 *	We don't have to put them anywhere; just leave them
 	 *	as they are.
 	 */
-	ipc_kmsg_copyout_to_kernel(kmsg, ipc_space_reply);
+#if IKM_SUPPORT_LEGACY
+    if(legacy)
+        ipc_kmsg_copyout_to_kernel_legacy(kmsg, ipc_space_reply);
+    else
+        ipc_kmsg_copyout_to_kernel(kmsg, ipc_space_reply);
+#else
+    ipc_kmsg_copyout_to_kernel(kmsg, ipc_space_reply);
+#endif
 	ipc_kmsg_put_to_kernel(msg, kmsg, rcv_size);
 	return mr;
 }
@@ -322,7 +412,7 @@ mach_msg_overwrite(
 	ipc_kmsg_t kmsg;
 	mach_port_seqno_t seqno;
 	mach_msg_return_t mr;
-	mach_msg_format_0_trailer_t *trailer;
+	mach_msg_max_trailer_t *trailer;
 
 	if (option & MACH_SEND_MSG) {
 		mach_msg_size_t	msg_and_trailer_size;
@@ -398,10 +488,12 @@ mach_msg_overwrite(
 		if (mr != MACH_MSG_SUCCESS)
 			return mr;
 
-		trailer = (mach_msg_format_0_trailer_t *) 
+		trailer = (mach_msg_max_trailer_t *) 
 		    ((vm_offset_t)kmsg->ikm_header + kmsg->ikm_header->msgh_size);
 		if (option & MACH_RCV_TRAILER_MASK) {
 			trailer->msgh_seqno = seqno;
+			trailer->msgh_context = 
+				kmsg->ikm_header->msgh_remote_port->ip_context;
 			trailer->msgh_trailer_size = REQUESTED_TRAILER_SIZE(option);
 		}
 
@@ -457,7 +549,6 @@ void
 mig_dealloc_reply_port(
 	__unused mach_port_t reply_port)
 {
-	panic("mig_dealloc_reply_port");
 }
 
 /*
@@ -642,8 +733,8 @@ convert_mig_object_to_port(
 
 		assert(previous == IP_NULL);
 
-		if (hw_compare_and_store((uint32_t)IP_NULL, (uint32_t)port,
-											(uint32_t *)&mig_object->port)) {
+		if (OSCompareAndSwapPtr((void *)IP_NULL, (void *)port,
+											(void * volatile *)&mig_object->port)) {
 			deallocate = FALSE;
 		} else {
 			ipc_port_dealloc_kernel(port);

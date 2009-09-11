@@ -36,242 +36,736 @@
 class OSArray;
 
 /*!
-    @class OSSet
-    @abstract A collection class for storing OSMetaClassBase derived objects.
-    @discussion
-    Instances of OSSet store unique OSMetaClassBase derived objects in a non-ordered manner.
-*/
+ * @header
+ *
+ * @abstract
+ * This header declares the OSSet collection class.
+ */
+ 
+ 
+/*!
+ * @class OSSet
+ *
+ * @abstract
+ * OSSet provides an unordered set store of objects.
+ *
+ * @discussion
+ * OSSet is a container for Libkern C++ objects
+ * (those derived from
+ * @link //apple_ref/doc/class/OSMetaClassBase OSMetaClassBase@/link,
+ * in particular @link //apple_ref/doc/class/OSObject OSObject@/link).
+ * Storage and access follow basic set logic: you can add or remove an object,
+ * and test whether the set contains a particular object.
+ * A given object is only stored in the set once,
+ * and there is no ordering of objects in the set.
+ * A subclass @link //apple_ref/doc/class/OSOrderedSet OSOrderedSet@/link,
+ * provides for ordered set logic.
+ *
+ * As with all Libkern collection classes,
+ * OSSet retains objects added to it,
+ * and releases objects removed from it.
+ * An OSSet also grows as necessary to accommodate new objects,
+ * <i>unlike</i> Core Foundation collections (it does not, however, shrink).
+ *
+ * <b>Use Restrictions</b>
+ *
+ * With very few exceptions in the I/O Kit, all Libkern-based C++
+ * classes, functions, and macros are <b>unsafe</b>
+ * to use in a primary interrupt context.
+ * Consult the I/O Kit documentation related to primary interrupts 
+ * for more information.
+ *
+ * OSSet provides no concurrency protection;
+ * it's up to the usage context to provide any protection necessary.
+ * Some portions of the I/O Kit, such as
+ * @link //apple_ref/doc/class/IORegistryEntry IORegistryEntry@/link,
+ * handle synchronization via defined member functions for setting
+ * properties.
+ */
 class OSSet : public OSCollection
 {
     OSDeclareDefaultStructors(OSSet)
 
 private:
-    OSArray *members;
+    OSArray * members;
 
 protected:
     /*
      * OSCollectionIterator interfaces.
      */
     virtual unsigned int iteratorSize() const;
-    virtual bool initIterator(void *iterator) const;
-    virtual bool getNextObjectForIterator(void *iterator, OSObject **ret) const;
+    virtual bool initIterator(void * iterator) const;
+    virtual bool getNextObjectForIterator(void * iterator, OSObject ** ret) const;
 
     struct ExpansionData { };
     
-    /*! @var reserved
-        Reserved for future use.  (Internal use only)  */
-    ExpansionData *reserved;
+    /* Reserved for future use.  (Internal use only)  */
+    ExpansionData * reserved;
 
 public:
-    /*!
-        @function withCapacity
-        @abstract A static constructor function to create and initialize an instance of OSSet with a given capacity.
-        @param capacity The initial capacity of the collection. The capacity is the total number of objects that can be stored in the collection.
-        @result Returns an instance of OSSet or 0 on failure.
+
+
+   /*!
+    * @function withCapacity
+    *
+    * @abstract
+    * Creates and initializes an empty OSSet.
+    * 
+    * @param   capacity The initial storage capacity of the new set object.
+    *
+    * @result
+    * An empty instance of OSSet
+    *         with a retain count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * <code>capacity</code> must be nonzero.
+    * The new OSSet will grow as needed to accommodate more key/object pairs
+    * (<i>unlike</i> @link //apple_ref/doc/uid/20001503 CFMutableSet@/link,
+    * for which the initial capacity is a hard limit).
     */
-    static OSSet *withCapacity(unsigned int capacity);
-    /*!
-        @function withObjects
-        @abstract A static constructor function to create and initialize an instance of OSSet and populate it with the objects provided.
-        @param objects A static array of OSMetaClassBase derived objects which are used to populate the collection.
-        @param count The number of objects passed to the collection.
-        @param capacity The initial storage size of the collection.  The capacity is the total number of objects that can be stored in the collection.  This value must be equal to or larger than the count parameter.
-        @result Returns an instance of OSSet or 0 on failure.
+    static OSSet * withCapacity(unsigned int capacity);
+
+
+   /*!
+    * @function withObjects
+    *
+    * @abstract
+    * Creates and initializes an OSSet
+    * populated with objects provided.
+    *
+    * @param objects   A C array of OSMetaClassBase-derived objects.
+    * @param count     The number of objects to be placed into the set.
+    * @param capacity  The initial storage capacity of the new set object.
+    *                  If 0, <code>count</code> is used; otherwise this value
+    *                  must be greater than or equal to <code>count</code>.
+    *
+    * @result
+    * An instance of OSSet
+    * containing the objects provided,
+    * with a retain count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * <code>objects</code> must be non-<code>NULL</code>,
+    * and <code>count</code> must be nonzero.
+    * If <code>capacity</code> is nonzero,
+    * it must be greater than or equal to <code>count</code>.
+    * The new OSSet will grow as needed to accommodate more objects
+    * (<i>unlike</i> @link //apple_ref/doc/uid/20001503 CFMutableSet@/link,
+    * for which the initial capacity is a hard limit).
+    *
+    * The objects in <code>objects</code> are retained for storage in the new set,
+    * not copied.
     */
-    static OSSet *withObjects(const OSObject *objects[],
-                                 unsigned int count,
-                                 unsigned int capacity = 0);
-    /*!
-        @function withArray
-        @abstract A static constructor function to create and initialize an instance of OSSet and populate it with the objects from an OSSArray object.
-        @param array An OSArray object containing a list of OSMetaClassBase derived objects which are used to initially populate the OSSet object.
-        @param capacity The initial storage size of the collection.  This value must be equal to or larger than the number of objects provided by the OSArray object passed as the first parameter.
-        @result Returns an instance of OSSet or 0 on failure.
+    static OSSet * withObjects(
+        const OSObject * objects[],
+        unsigned int     count,
+        unsigned int     capacity = 0);
+
+
+   /*!
+    * @function withArray
+    *
+    * @abstract
+    * Creates and initializes an OSSet
+    * populated with the contents of an OSArray.
+    *
+    * @param array     An array whose objects will be stored in the new OSSet.
+    * @param capacity  The initial storage capacity of the new set object.
+    *                  If 0, the capacity is set to the number of objects
+    *                  in <code>array</code>;
+    *                  otherwise <code>capacity</code> must be greater than or equal to
+    *                  the number of objects in <code>array</code>.
+    * @result
+    * An instance of OSSet containing
+    * the objects of <code>array</code>,
+    * with a retain count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * Each distinct object in <code>array</code> is added to the new set.
+    *
+    * <code>array</code> must be non-<code>NULL</code>.
+    * If <code>capacity</code> is nonzero,
+    * it must be greater than or equal to <code>count</code>.
+    * The new OSSet will grow as needed to accommodate more key-object pairs
+    * (<i>unlike</i> @link //apple_ref/doc/uid/20001503 CFMutableSet@/link,
+    * for which the initial capacity is a hard limit).
+    *
+    * The objects in <code>array</code> are retained for storage in the new set,
+    * not copied.
     */
-    static OSSet *withArray(const OSArray *array,
-                            unsigned int capacity = 0);
-    /*!
-        @function withSet
-        @abstract A static constructor function to create an instance of OSSet and populate it with the objects from another OSSet object.
-        @param array An OSSet object containing OSMetaClassBase derived objects which are used to initially populate the new OSSet object.
-        @param capacity The initial storage size of the collection.  This value must be equal to or larger than the number of objects provided by the OSSet object passed as the first parameter.
-        @result Returns an instance of OSSet or 0 on failure.
+    static OSSet * withArray(
+        const OSArray * array,
+        unsigned int    capacity = 0);
+
+
+   /*!
+    * @function withSet
+    *
+    * @abstract
+    * Creates and initializes an OSSet
+    * populated with the contents of another OSSet.
+    *
+    * @param set       An OSSet whose contents will be stored
+    *                  in the new instance.
+    * @param capacity  The initial storage capacity of the set object.
+    *                  If 0, the capacity is set to the number of objects
+    *                  in <code>set</code>;
+    *                  otherwise <code>capacity</code> must be greater than or equal to
+    *                  the number of objects in <code>array</code>.
+    * @result
+    * An instance of OSArray
+    * containing the objects of <code>set</code>,
+    * with a retain count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * <code>set</code> must be non-<code>NULL</code>.
+    * If <code>capacity</code> is nonzero,
+    * it must be greater than or equal to <code>count</code>.
+    * The array will grow as needed to accommodate more key-object pairs
+    * (<i>unlike</i> @link //apple_ref/doc/uid/20001503 CFMutableSet@/link,
+    * for which the initial capacity is a hard limit).
+    *
+    * The objects in <code>set</code> are retained for storage in the new set,
+    * not copied.
     */
-    static OSSet *withSet(const OSSet *set,
+    static OSSet * withSet(const OSSet * set,
                           unsigned int capacity = 0);
 
-    /*!
-        @function initWithCapacity
-        @abstract A member function to initialize an instance of OSSet with a given capacity.
-        @param capacity The initial storage size of the collection.
-        @result Returns true if initialization successful or false on failure.
+
+   /*!
+    * @function initWithCapacity
+    *
+    * @abstract
+    * Initializes a new instance of OSSet.
+    *
+    * @param capacity  The initial storage capacity of the new set object.
+    *
+    * @result
+    * <code>true</code> on success, <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link
+    * //apple_ref/cpp/clm/OSSet/withCapacity/staticOSSet*\/(unsignedint)
+    * withCapacity@/link</code>
+    * instead.
+    *
+    * <code>capacity</code> must be nonzero.
+    * The new set will grow as needed to accommodate more key/object pairs
+    * (<i>unlike</i> @link //apple_ref/doc/uid/20001503 CFMutableSet@/link,
+    * for which the initial capacity is a hard limit).
     */
     virtual bool initWithCapacity(unsigned int capacity);
-    /*!
-        @function initWithObjects
-        @abstract A member function to initialize an instance of OSSet with a given capacity and populate the collection with the objects provided.
-        @param object A static array containing OSMetaClassBase derived objects used to populate the collection.
-        @param count The number of objects provided.
-     @param capacity The initial storage size of the collection. This value must be equal to or larger than the 'count' parameter.
-        @result Returns true if initialization successful or false on failure.
+
+
+   /*!
+    * @function initWithObjects
+    *
+    * @abstract
+    * Initializes a new OSSet populated with objects provided.
+    *
+    * @param objects   A C array of OSObject-derived objects.
+    * @param count     The number of objects to be placed into the set.
+    * @param capacity  The initial storage capacity of the new set object.
+    *                  If 0, <code>count</code> is used; otherwise this value
+    *                  must be greater than or equal to <code>count</code>.
+    *
+    * @result
+    * <code>true</code> on success, <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link
+    * //apple_ref/cpp/clm/OSSet/withObjects/staticOSSet*\/(constOSObject*,unsignedint,unsignedint)
+    * withObjects@/link</code>
+    * instead.
+    *
+    * <code>objects</code> must be non-<code>NULL</code>,
+    * and <code>count</code> must be nonzero.
+    * If <code>capacity</code> is nonzero, it must be greater than or equal to <code>count</code>.
+    * The new array will grow as needed to accommodate more key-object pairs
+    * (<i>unlike</i> @link //apple_ref/doc/uid/20001503 CFMutableSet@/link,
+    * for which the initial capacity is a hard limit).
+    *
+    * The objects in <code>objects</code> are retained for storage in the new set,
+    * not copied.
     */
-    virtual bool initWithObjects(const OSObject *objects[],
-                                 unsigned int count,
-                                 unsigned int capacity = 0);
-    /*!
-        @function initWithArray
-        @abstract A member function to initialize a new instance of OSSet and populate it with the contents of the OSArray object provided.
-        @param array The OSArray object containing OSMetaClassBase derived objects used to populate the new OSSet object.
-        @param capacity The initial storage capacity of the object.  This value must be equal to or larger than the number of objects provided by the OSArray object passed as the first parameter.
-        @result Returns true if initialization successful or false on failure.
+    virtual bool initWithObjects(
+        const OSObject * objects[],
+        unsigned int     count,
+        unsigned int     capacity = 0);
+
+
+   /*!
+    * @function initWithArray
+    *
+    * @abstract Initializes a new OSSet
+    *           populated with the contents of an OSArray.
+    *
+    * @param array     An OSAray whose contents will be placed
+    *                  in the new instance.
+    * @param capacity  The initial storage capacity of the new set object.
+    *                  If 0, the capacity is set
+    *                  to the number of objects in <code>array</code>;
+    *                  otherwise <code>capacity</code> must be greater than or equal to
+    *                  the number of objects in <code>array</code>.
+    *
+    * @result
+    * <code>true</code> on success, <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link
+    * //apple_ref/cpp/clm/OSSet/withArray/staticOSSet*\/(constOSArray*,unsignedint)
+    * withArray@/link</code>
+    * instead.
+    *
+    * <code>array</code> must be non-<code>NULL</code>.
+    * If <code>capacity</code> is nonzero,
+    * it must be greater than or equal to <code>count</code>.
+    * The new array will grow as needed to accommodate more key-object pairs
+    * (<i>unlike</i> @link //apple_ref/doc/uid/20001503 CFMutableSet@/link,
+    * for which the initial capacity is a hard limit).
+    *
+    * The objects in <code>array</code> are retained for storage in the new set,
+    * not copied.
     */
-    virtual bool initWithArray(const OSArray *array,
-                               unsigned int capacity = 0);
-    /*!
-        @function initWithSet
-        @abstract A member function to initialize a new instance of OSSet and populate it with the contents of the OSSet object provided.
-        @param array The OSSet object containing OSMetaClassBase derived objects used to populate the new OSSet object.
-        @param capacity The initial storage capacity of the object.  This value must be equal to or larger than the number of objects provided by the OSSet object passed as the first parameter.
-        @result Returns true if initialization successful or false on failure.
-        @discussion This function should not be called directly, use release() instead.
+    virtual bool initWithArray(
+        const OSArray * array,
+        unsigned int capacity = 0);
+
+
+   /*!
+    * @function initWithSet
+    *
+    * @abstract
+    * Initializes a new OSSet
+    * populated with the contents of another OSSet.
+    *
+    * @param set       A set whose contents will be placed in the new instance.
+    * @param capacity  The initial storage capacity of the new set object.
+    *                  If 0, the capacity is set
+    *                  to the number of objects in <code>set</code>;
+    *                  otherwise <code>capacity</code> must be greater than or equal to
+    *                  the number of objects in <code>set</code>.
+    *
+    * @result
+    * <code>true</code> on success, <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link withSet withSet@/link</code> instead.
+    *
+    * <code>set</code> must be non-<code>NULL</code>.
+    * If <code>capacity</code> is nonzero,
+    * it must be greater than or equal to <code>count</code>.
+    * The new set will grow as needed to accommodate more key-object pairs
+    * (<i>unlike</i> @link //apple_ref/doc/uid/20001503 CFMutableSet@/link,
+    * for which the initial capacity is a hard limit).
+    *
+    * The objects in <code>set</code> are retained for storage in the new set,
+    * not copied.
     */
     virtual bool initWithSet(const OSSet *set,
                              unsigned int capacity = 0);
-    /*!
-        @function free
-        @abstract A member function to release all resources created or used by the OSArray instance.
+
+
+   /*!
+    * @function free
+    *
+    * @abstract
+    * Deallocates or releases any resources
+    * used by the OSSet instance.
+    *
+    * @discussion
+    * This function should not be called directly;
+    * use
+    * <code>@link
+    * //apple_ref/cpp/instm/OSObject/release/virtualvoid/()
+    * release@/link</code>
+    * instead.
     */
     virtual void free();
 
-    /*!
-        @function getCount
-        @abstract A member function which returns the number of objects current in the collection.
-        @result Returns the number of objects in the collection.
+
+   /*!
+    * @function getCount
+    *
+    * @abstract
+    * Returns the current number of objects within the set.
+    *
+    * @result
+    * The current number of objects within the set.
     */
     virtual unsigned int getCount() const;
-    /*!
-        @function getCapacity
-        @abstract A member function which returns the storage capacity of the collection.
-        @result Returns the storage size of the collection.
+
+
+   /*!
+    * @function getCapacity
+    *
+    * @abstract
+    * Returns the number of objects the set
+    * can store without reallocating.
+    *
+    * @result
+    * The number objects the set
+    * can store without reallocating.
+    *
+    * @discussion
+    * OSSet objects grow when full to accommodate additional objects.
+    * See
+    * <code>@link
+    * //apple_ref/cpp/instm/OSSet/getCapacityIncrement/virtualunsignedint/()
+    * getCapacityIncrement@/link</code>
+    * and
+    * <code>@link
+    * //apple_ref/cpp/instm/OSSet/ensureCapacity/virtualunsignedint/(unsignedint)
+    * ensureCapacity@/link</code>.
     */
     virtual unsigned int getCapacity() const;
-    /*!
-        @function getCapacityIncrement
-        @abstract A member function which returns the growth factor of the collection.
-        @result Returns the size by which the collection will grow.
+
+
+   /*!
+    * @function getCapacityIncrement
+    *
+    * @abstract
+    * Returns the storage increment of the set.
+    *
+    * @result
+    * The storage increment of the set.
+    *
+    * @discussion
+    * An OSSet allocates storage for objects in multiples
+    * of the capacity increment.
     */
     virtual unsigned int getCapacityIncrement() const;
-    /*!
-        @function setCapacityIncrement
-        @abstract A member function which sets the growth factor of the collection.
-        @result Returns the new increment.
+
+
+   /*!
+    * @function setCapacityIncrement
+    *
+    * @abstract
+    * Sets the storage increment of the set.
+    *
+    * @result
+    * The new storage increment of the set,
+    * which may be different from the number requested.
+    *
+    * @discussion
+    * An OSSet allocates storage for objects in multiples
+    * of the capacity increment.
+    * Calling this function does not immediately reallocate storage.
     */
     virtual unsigned int setCapacityIncrement(unsigned increment);
 
-    /*!
-        @function ensureCapacity
-        @abstract A member function to grow the size of the collection.
-        @param newCapacity The new capacity for the collection to expand to.
-        @result Returns the new capacity of the collection or the previous capacity upon error.
+
+   /*!
+    * @function ensureCapacity
+    *
+    * @abstract
+    * Ensures the set has enough space
+    * to store the requested number of distinct objects.
+    *
+    * @param newCapacity  The total number of distinct objects the set
+    *                     should be able to store.
+    * @result
+    * The new capacity of the set,
+    * which may be different from the number requested
+    * (if smaller, reallocation of storage failed).
+    *
+    * @discussion
+    * This function immediately resizes the set, if necessary,
+    * to accommodate at least <code>newCapacity</code> distinct objects.
+    * If <code>newCapacity</code> is not greater than the current capacity,
+    * or if an allocation error occurs, the original capacity is returned.
+    *
+    * There is no way to reduce the capacity of an OSSet.
     */
     virtual unsigned int ensureCapacity(unsigned int newCapacity);
 
-    /*!
-        @function flushCollection
-        @abstract A member function which removes and releases all objects within the collection.
+
+   /*!
+    * @function flushCollection
+    *
+    * @abstract
+    * Removes and releases all objects within the set.
+    *
+    * @discussion
+    * The set's capacity (and therefore direct memory consumption)
+    * is not reduced by this function.
     */
     virtual void flushCollection();
 
-    /*!
-        @function setObject
-        @abstract A member function to place objects into the collection.
-        @param anObject The OSMetaClassBase derived object to be placed into the collection.
-        @result Returns true if the object was successfully placed into the collection, false otherwise.
-        @discussion The object added to the collection is automatically retained.
-    */
-    virtual bool setObject(const OSMetaClassBase *anObject);
-    /*!
-        @function merge
-        @abstract A member function to merge the contents of an OSArray object with set.
-        @param array The OSArray object which contains the objects to be merged.
-        @result Returns true if the contents of the OSArray were successfully merged into the receiver.
-    */
-    virtual bool merge(const OSArray *array);
-    /*!
-        @function merge
-        @abstract A member function to merge the contents of an OSSet object with receiver.
-        @param set The OSSet object which contains the objects to be merged.
-        @result Returns true if the contents of the OSSet were successfully merged into the receiver.
-    */
-    virtual bool merge(const OSSet *set);
 
-    /*!
-        @function removeObject
-        @abstract A member function to remove objects from the collection.
-        @param anObject The OSMetaClassBase derived object to be removed from the collection.
-        @discussion The object removed from the collection is automatically released.
+   /*!
+    * @function setObject
+    *
+    * @abstract
+    * Adds an object to the OSSet if it is not already present.
+    *
+    * @param anObject  The OSMetaClassBase-derived object to be added to the set.
+    *
+    * @result
+    * <code>true</code> if <code>anObject</code> was successfully
+    * added to the set, <code>false</code> otherwise
+    * (including if it was already in the set).
+    *
+    * @discussion
+    * The set adds storage to accomodate the new object, if necessary.
+    * If successfully added, the object is retained.
+    *
+    * A <code>false</code> return value can mean either
+    * that <code>anObject</code> is already present in the set,
+    * or that a memory allocation failure occurred.
+    * If you need to know whether the object
+    * is already present, use
+    * <code>@link containsObject containsObject@/link</code>.
+    */
+    virtual bool setObject(const OSMetaClassBase * anObject);
+
+
+   /*!
+    * @function merge
+    *
+    * @abstract
+    * Adds the contents of an OSArray to the set.
+    *
+    * @param array  The OSArray object containing the objects to be added.
+    *
+    * @result
+    * <code>true</code> if any object from <code>array</code>
+    * was successfully added the receiver,
+    * <code>false</code> otherwise.
+    *
+    * @discussion
+    * This functions adds to the receiving set
+    * all objects from <code>array</code>
+    * that are not already in the set.
+    * Objects successfully added to the receiver are retained.
+    *
+    * A <code>false</code> return value can mean either
+    * that all the objects in <code>array</code> are already present in the set,
+    * or that a memory allocation failure occurred.
+    * If you need to know whether the objects
+    * are already present, use
+    * <code>@link containsObject containsObject@/link</code>
+    * for each object.
+    */
+    virtual bool merge(const OSArray * array);
+
+
+   /*!
+    * @function merge
+    *
+    * @abstract
+    * Adds the contents of an OSet to the set.
+    *
+    * @param set    The OSSet object containing the objects to be added.
+    *
+    * @result
+    * <code>true</code> if any object from <code>set</code>
+    * was successfully added the receiver,
+    * <code>false</code> otherwise.
+    *
+    * @discussion
+    * This functions adds to the receiving set
+    * all objects from <code>set</code>
+    * that are not already in the receiving set.
+    * Objects successfully added to the receiver are retained.
+    *
+    * A <code>false</code> return value can mean either
+    * that all the objects in <code>array</code> are already present in the set,
+    * or that a memory allocation failure occurred.
+    * If you need to know whether the objects
+    * are already present, use
+    * <code>@link containsObject containsObject@/link</code>
+    * for each object.
+    */
+    virtual bool merge(const OSSet * set);
+
+
+   /*!
+    * @function removeObject
+    *
+    * @abstract
+    * Removes an object from the set.
+    *
+    * @param anObject  The OSMetaClassBase-derived object
+    *                  to be removed from the set.
+    *
+    * @discussion
+    * The object removed from the set is released.
     */
     virtual void removeObject(const OSMetaClassBase * anObject);
 
-    /*!
-        @function containsObject
-        @abstract A member function to query the collection for the presence of an object.
-        @param anObject The OSMetaClassBase derived object to be queried for in the collecion.
-        @result Returns true if the object is present within the set, false otherwise.
-    */
-    virtual bool containsObject(const OSMetaClassBase *anObject) const;
-    /*!
-        @function member
-        @abstract A member function to query the collection for the presence of an object.
-        @param anObject The OSMetaClassBase derived object to be queried for in the collecion.
-        @result Returns true if the object is present within the set, false otherwise.
-    */
-    virtual bool member(const OSMetaClassBase *anObject) const;
-    /*!
-        @function getAnyObject
-        @abstract A member function which returns an object from the set.
-        @result Returns an object if one exists within the set.
-    */
-    virtual OSObject *getAnyObject() const;
 
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality between the receiver and an OSSet object.
-        @param aSet An OSSet object to be compared against the receiver.
-        @result Returns true if the objects are equivalent.
+   /*!
+    * @function containsObject
+    *
+    * @abstract
+    * Checks the set for the presence of an object.
+    *
+    * @param anObject  The OSMetaClassBase-derived object
+    *                  to check for in the set.
+    *
+    * @result
+    * <code>true</code> if <code>anObject</code> is present within the set,
+    * <code>false</code> otherwise.
+    *
+    * @discussion
+    * Pointer equality is used.
+    * This function returns <code>false</code> if passed <code>NULL</code>.
     */
-    virtual bool isEqualTo(const OSSet *aSet) const;
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality between the receiver and an unknown object.
-        @param anObject An object to be compared against the receiver.
-        @result Returns true if the objects are equal.
+    virtual bool containsObject(const OSMetaClassBase * anObject) const;
+
+
+   /*!
+    * @function member
+    *
+    * @abstract
+    * Checks the set for the presence of an object.
+    *
+    * @param anObject  The OSMetaClassBase-derived object
+    *                  to check for in the set.
+    *
+    * @result
+    * <code>true</code> if <code>anObject</code> is present
+    * within the set, <code>false</code> otherwise.
+    *
+    * @discussion
+    * Pointer equality is used. This function returns <code>false</code>
+    * if passed <code>NULL</code>.
+    *
+    * <code>@link containsObject containsObject@/link</code>
+    * checks for <code>NULL</code> first,
+    * and is therefore more efficient than this function.
     */
-    virtual bool isEqualTo(const OSMetaClassBase *anObject) const;
+    virtual bool member(const OSMetaClassBase * anObject) const;
 
-    /*!
-        @function serialize
-        @abstract A member function which archives the receiver.
-        @param s The OSSerialize object.
-        @result Returns true if serialization was successful, false if not.
+
+   /*!
+    * @function getAnyObject
+    *
+    * @abstract
+    * Returns an arbitrary (not random) object from the set.
+    *
+    * @result
+    * An arbitrary (not random) object
+    * if one exists within the set.
+    *
+    * @discussion
+    * The returned object will be released if removed from the set;
+    * if you plan to store the reference, you should call
+    * <code>@link
+    * //apple_ref/cpp/instm/OSObject/retain/virtualvoid/()
+    * retain@/link</code>
+    * on that object.
     */
-    virtual bool serialize(OSSerialize *s) const;
+    virtual OSObject * getAnyObject() const;
 
-    /*!
-        @function setOptions
-        @abstract This function is used to recursively set option bits in this set and all child collections.
-	@param options Set the (options & mask) bits.
-        @param mask The mask of bits which need to be set, 0 to get the current value.
-        @result The options before the set operation, NB setOptions(?,0) returns the current value of this collection.
-     */
-    virtual unsigned setOptions(unsigned options, unsigned mask, void * = 0);
 
-    /*!
-        @function copyCollection
-        @abstract Do a deep copy of this ordered set.
-	@discussion This function copies this set and all of included  containers recursively.  Objects that don't derive from OSContainter are NOT copied, that is objects like OSString and OSData.
-        @param cycleDict Is a dictionary of all of the collections that have been, to start the copy at the top level just leave this field 0.
-	@result The newly copied collecton or 0 if insufficient memory
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract
+    * Tests the equality of two OSSet objects.
+    *
+    * @param aSet  The set object being compared against the receiver.
+    * @result
+    * <code>true</code> if the two sets are equivalent,
+    * <code>false</code> otherwise.
+    *
+    * @discussion
+    * Two OSSet objects are considered equal if they have same count
+    * and the same object pointer values.
+    */
+    virtual bool isEqualTo(const OSSet * aSet) const;
+
+
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract
+    * Tests the equality of an OSSet against an arbitrary object.
+    *
+    * @param anObject  The object being compared against the receiver.
+    * @result
+    * <code>true</code> if the two objects are equivalent,
+    * <code>false</code> otherwise.
+    *
+    * @discussion
+    * An OSSet object is considered equal to another object if the other object
+    * is derived from OSSet and compares equal as a set.
+    */
+    virtual bool isEqualTo(const OSMetaClassBase * anObject) const;
+
+
+   /*!
+    * @function serialize
+    *
+    * @abstract
+    * Archives the receiver into the provided
+    * @link //apple_ref/doc/class/OSSerialize OSSerialize@/link object.
+    *
+    * @param serializer The OSSerialize object.
+    *
+    * @result
+    * <code>true</code> if serialization succeeds, <code>false</code> if not.
+    */
+    virtual bool serialize(OSSerialize * serializer) const;
+
+
+   /*!
+    * @function setOptions
+    *
+    * @abstract
+    * Recursively sets option bits in the set
+    * and all child collections.
+    *
+    * @param options  A bitfield whose values turn the options on (1) or off (0).
+    * @param mask     A mask indicating which bits
+    *                 in <code>options</code> to change.
+    *                 Pass 0 to get the whole current options bitfield
+    *                 without changing any settings.
+    * @param context  Unused.
+    *
+    * @result
+    * The options bitfield as it was before the set operation.
+    *
+    * @discussion
+    * Kernel extensions should not call this function.
+    *
+    * Child collections' options are changed only if the receiving set's
+    * options actually change.
+    */
+    virtual unsigned setOptions(unsigned options, unsigned mask, void * context = 0);
+
+
+   /*!
+    * @function copyCollection
+    *
+    * @abstract
+    * Creates a deep copy of this set and its child collections.
+    *
+    * @param cycleDict  A dictionary of all of the collections
+    *                   that have been copied so far,
+    *                   which is used to track circular references.
+    *                   To start the copy at the top level,
+    *                   pass <code>NULL</code>.
+    *
+    * @result
+    * The newly copied set, with a retain count of 1,
+    * or <code>NULL</code> if there is insufficient memory to do the copy.
+    *
+    * @discussion
+    * The receiving set, and any collections it contains,
+    * recursively, are copied.
+    * Objects that are not derived from OSCollection are retained
+    * rather than copied.
     */
     OSCollection *copyCollection(OSDictionary *cycleDict = 0);
 

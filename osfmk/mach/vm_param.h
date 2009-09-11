@@ -96,6 +96,9 @@
 #define atop_64(x) ((uint64_t)(x) >> PAGE_SHIFT)
 #define ptoa_64(x) ((uint64_t)(x) << PAGE_SHIFT)
 
+#define atop_kernel(x) ((vm_address_t)(x) >> PAGE_SHIFT)
+#define ptoa_kernel(x) ((vm_address_t)(x) << PAGE_SHIFT)
+
 /*
  *      While the following block is enabled, the legacy atop and ptoa
  *      macros will behave correctly.  If not, they will generate
@@ -124,8 +127,8 @@
  *	address space size) VM types.
  */
 
-#define round_page(x) (((vm_offset_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
-#define trunc_page(x) ((vm_offset_t)(x) & ~((signed)PAGE_MASK))
+#define round_page(x) (((vm_offset_t)(x) + PAGE_MASK) & ~((vm_offset_t)PAGE_MASK))
+#define trunc_page(x) ((vm_offset_t)(x) & ~((vm_offset_t)PAGE_MASK))
 
 /*
  *	Round off or truncate to the nearest page.  These will work
@@ -139,11 +142,10 @@
  *	associated with the specific VM type should be used.
  */
 
-#define round_page_32(x) (((uint32_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
-#define trunc_page_32(x) ((uint32_t)(x) & ~((signed)PAGE_MASK))
-#define round_page_64(x) (((uint64_t)(x) + PAGE_MASK_64) & ~((signed)PAGE_MASK_64))
-#define trunc_page_64(x) ((uint64_t)(x) & ~((signed)PAGE_MASK_64))
-
+#define round_page_32(x) (((uint32_t)(x) + PAGE_MASK) & ~((uint32_t)PAGE_MASK))
+#define trunc_page_32(x) ((uint32_t)(x) & ~((uint32_t)PAGE_MASK))
+#define round_page_64(x) (((uint64_t)(x) + PAGE_MASK_64) & ~((uint64_t)PAGE_MASK_64))
+#define trunc_page_64(x) ((uint64_t)(x) & ~((uint64_t)PAGE_MASK_64))
 
 /*
  *      Enable the following block to find uses of xxx_32 macros that should
@@ -209,10 +211,25 @@
  *	an exact page multiple.
  */
 
-#define	page_aligned(x)	((((vm_object_offset_t) (x)) & PAGE_MASK) == 0)
+#define	page_aligned(x)	(((x) & PAGE_MASK) == 0)
 
 extern vm_size_t	mem_size;		/* 32-bit size of memory - limited by maxmem - deprecated */
 extern uint64_t		max_mem;		/* 64-bit size of memory - limited by maxmem */
+
+/*
+ * The default pager does not handle 64-bit offsets inside its objects,
+ * so this limits the size of anonymous memory objects to 4GB minus 1 page.
+ * When we need to allocate a chunk of anonymous memory over that size,
+ * we have to allocate more than one chunk.
+ */
+#define ANON_MAX_SIZE	0xFFFFF000ULL
+/*
+ * Work-around for <rdar://problem/6626493>
+ * Break large anonymous memory areas into 128MB chunks to alleviate
+ * the cost of copying when copy-on-write is not possible because a small
+ * portion of it being wired.
+ */
+#define ANON_CHUNK_SIZE	(128ULL * 1024 * 1024) /* 128MB */
 
 #ifdef	XNU_KERNEL_PRIVATE
 
@@ -230,16 +247,19 @@ extern vm_size_t	page_mask;
 extern int			page_shift;
 
 /* We need a way to get rid of compiler warnings when we cast from   */
-/* a 64 bit value to an address that is 32 bits.                     */
-/* We know at this point the cast is harmless but sometime in        */
-/* the future it may not be.                                         */
-/* When size of an int is no longer equal to size of uintptr_t then  */
-/* the compile will fail and we know we need to fix our cast.		 */
+/* a 64 bit value to an address (which may be 32 bits or 64-bits).   */
+/* An intptr_t is used convert the value to the right precision, and */
+/* then to an address. This macro is also used to convert addresses  */
+/* to 32-bit integers, which is a hard failure for a 64-bit kernel   */
 #include <stdint.h>
 #ifndef __CAST_DOWN_CHECK
 #define __CAST_DOWN_CHECK
-typedef char __NEED_TO_CHANGE_CAST_DOWN[ sizeof(uintptr_t) == sizeof(int) ? 0 : -1 ];
-#define CAST_DOWN( type, addr )  ( ((type)((uintptr_t) (addr))) ) 
+
+#define CAST_DOWN( type, addr ) \
+    ( ((type)((uintptr_t) (addr)/(sizeof(type) < sizeof(uintptr_t) ? 0 : 1))) )
+
+#define CAST_DOWN_EXPLICIT( type, addr )  ( ((type)((uintptr_t) (addr))) ) 
+
 #endif /* __CAST_DOWN_CHECK */
 
 #endif	/* ASSEMBLER */

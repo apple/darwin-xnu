@@ -46,7 +46,9 @@
 #include <ppc/machine_routines.h>
 #include <ppc/fpu_protos.h>
 
+#if 0
 #pragma mark **** thread state ****
+#endif
 
 __private_extern__
 kern_return_t chudxnu_copy_savearea_to_threadstate(thread_flavor_t flavor, thread_state_t tstate, mach_msg_type_number_t *count, struct savearea *sv)
@@ -327,7 +329,9 @@ kern_return_t chudxnu_thread_set_state(thread_t thread,
     }
 }
 
+#if 0
 #pragma mark **** task memory read/write ****
+#endif
     
 __private_extern__
 kern_return_t chudxnu_task_read(task_t task, void *kernaddr, uint64_t usraddr, vm_size_t size)
@@ -451,7 +455,7 @@ kern_return_t chudxnu_thread_get_callstack64(	thread_t thread,
     uint64_t framePointer;
     uint64_t prevPC = 0;
     uint64_t kernStackMin = thread->kernel_stack;
-    uint64_t kernStackMax = kernStackMin + KERNEL_STACK_SIZE;
+    uint64_t kernStackMax = kernStackMin + kernel_stack_size;
     uint64_t *buffer = callStack;
     uint32_t tmpWord;
     int bufferIndex = 0;
@@ -551,151 +555,6 @@ kern_return_t chudxnu_thread_get_callstack64(	thread_t thread,
 				nextFramePointer = tmpWord;
 			}
 		}
-        if(kr!=KERN_SUCCESS) {
-            nextFramePointer = 0;
-        }
-
-        if(nextFramePointer) {
-            buffer[bufferIndex++] = pc;
-            prevPC = pc;
-        }
-    
-        if(nextFramePointer<framePointer) {
-            break;
-        } else {
-	    	framePointer = nextFramePointer;
-		}
-    }
-
-    if(bufferIndex>=bufferMaxIndex) {
-        *count = 0;
-        return KERN_RESOURCE_SHORTAGE;
-    }
-
-    // Save link register and R0 at bottom of stack (used for later fixup).
-    buffer[bufferIndex++] = currLR;
-    buffer[bufferIndex++] = currR0;
-
-    *count = bufferIndex;
-    return KERN_SUCCESS;
-}
-
-#pragma mark **** DEPRECATED ****
-
-// DEPRECATED
-__private_extern__
-kern_return_t chudxnu_thread_get_callstack( thread_t thread, 
-					    uint32_t *callStack,
-					    mach_msg_type_number_t *count,
-					    boolean_t user_only)
-{
-    kern_return_t kr;
-    task_t task = get_threadtask(thread);
-    uint64_t nextFramePointer = 0;
-    uint64_t currPC, currLR, currR0;
-    uint64_t framePointer;
-    uint64_t prevPC = 0;
-    uint64_t kernStackMin = thread->kernel_stack;
-    uint64_t kernStackMax = kernStackMin + KERNEL_STACK_SIZE;
-    uint32_t *buffer = callStack;
-    uint32_t tmpWord;
-    int bufferIndex = 0;
-    int bufferMaxIndex = *count;
-    boolean_t supervisor;
-    boolean_t is64Bit;
-    struct savearea *sv;
-
-    if(user_only) {
-        sv = find_user_regs(thread);
-    } else {
-        sv = find_kern_regs(thread);
-    }
-
-    if(!sv) {
-        *count = 0;
-        return KERN_FAILURE;
-    }
-
-    supervisor = SUPERVISOR_MODE(sv->save_srr1);
-    if(supervisor) {
-		is64Bit = FALSE; /* XXX assuming kernel task is always 32-bit */
-    } else {
-		is64Bit = chudxnu_is_64bit_task(task);
-    }
-
-    bufferMaxIndex = bufferMaxIndex - 2; // allot space for saving the LR and R0 on the stack at the end.
-    if(bufferMaxIndex<2) {
-        *count = 0;
-        return KERN_RESOURCE_SHORTAGE;
-    }
-
-    currPC = sv->save_srr0;
-    framePointer = sv->save_r1; /* r1 is the stack pointer (no FP on PPC)  */
-    currLR = sv->save_lr;
-    currR0 = sv->save_r0;
-
-    bufferIndex = 0;  // start with a stack of size zero
-    buffer[bufferIndex++] = currPC; // save PC in position 0.
-
-    // Now, fill buffer with stack backtraces.
-    while(bufferIndex<bufferMaxIndex && VALID_STACK_ADDRESS(framePointer)) {
-        uint64_t pc = 0;
-        // Above the stack pointer, the following values are saved:
-        // saved LR
-        // saved CR
-        // saved SP
-        //-> SP
-        // Here, we'll get the lr from the stack.
-        uint64_t fp_link;
-
-		if(is64Bit) {
-			fp_link = framePointer + FP_LINK_OFFSET*sizeof(uint64_t);
-		} else {
-			fp_link = framePointer + FP_LINK_OFFSET*sizeof(uint32_t);
-		}
-
-        // Note that we read the pc even for the first stack frame (which, in theory,
-        // is always empty because the callee fills it in just before it lowers the
-        // stack.  However, if we catch the program in between filling in the return
-        // address and lowering the stack, we want to still have a valid backtrace.
-        // FixupStack correctly disregards this value if necessary.
-
-        if(supervisor) {
-			if(is64Bit) {
-				kr = chudxnu_kern_read(&pc, fp_link, sizeof(uint64_t));
-			} else {
-				kr = chudxnu_kern_read(&tmpWord, fp_link, sizeof(uint32_t));
-				pc = tmpWord;
-			}    
-        } else {
-			if(is64Bit) {
-				kr = chudxnu_task_read(task, &pc, fp_link, sizeof(uint64_t));
-			} else {
-				kr = chudxnu_task_read(task, &tmpWord, fp_link, sizeof(uint32_t));
-				pc = tmpWord;
-			}
-        }
-        if(kr!=KERN_SUCCESS) {
-            pc = 0;
-            break;
-        }
-
-        // retrieve the contents of the frame pointer and advance to the next stack frame if it's valid
-        if(supervisor) {
-			if(is64Bit) {
-				kr = chudxnu_kern_read(&nextFramePointer, framePointer, sizeof(uint64_t));
-			} else {
-				kr = chudxnu_kern_read(&tmpWord, framePointer, sizeof(uint32_t));
-				nextFramePointer = tmpWord;
-			}  
-        } else {
-			if(is64Bit) {
-				kr = chudxnu_task_read(task, &nextFramePointer, framePointer, sizeof(uint64_t));
-			} else {
-				kr = chudxnu_task_read(task, &tmpWord, framePointer, sizeof(uint32_t));
-				nextFramePointer = tmpWord;
-			}
-        }
         if(kr!=KERN_SUCCESS) {
             nextFramePointer = 0;
         }

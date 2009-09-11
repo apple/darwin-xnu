@@ -114,11 +114,6 @@ typedef struct mac_policy_list mac_policy_list_t;
 
 
 /*
- * Darwin functions not properly exported
- */
-extern void kmod_load_early(void);	/* defined in libsa/kext.cpp */
-
-/*
  * Policy that has registered with the framework for a specific
  * label namespace name.
  */
@@ -211,6 +206,8 @@ extern unsigned int mac_task_enforce;
 #if CONFIG_MACF_NET
 extern unsigned int mac_label_mbufs;
 #endif
+
+extern unsigned int mac_label_vnodes;
 
 static int mac_proc_check_enforce(proc_t p, int enforce_flag);
 

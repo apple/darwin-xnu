@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -29,10 +29,6 @@
 #ifndef	_I386_POSTCODE_H_
 #define	_I386_POSTCODE_H_
 
-#ifndef DEBUG
-#include <debug.h>
-#endif
-
 /* Define this to delay about 1 sec after posting each code */
 //#define POSTCODE_DELAY 1
 
@@ -55,14 +51,27 @@
 	CPU_PAUSE();			\
 	decl	%eax;			\
 	jne	1b
+#define POSTCODE_AX			\
+        outw    %ax,$(POSTPORT);	\
+	movl	$(SPINCOUNT), %eax;	\
+1:					\
+	CPU_PAUSE();			\
+	decl	%eax;			\
+	jne	1b
 #else
 #define POSTCODE_AL			\
         outb    %al,$(POSTPORT)
+#define POSTCODE_AX			\
+        outw    %ax,$(POSTPORT)
 #endif /* POSTCODE_DELAY */
 
 #define POSTCODE(XX)			\
 	mov	$(XX), %al;		\
 	POSTCODE_AL
+
+#define POSTCODE2(XXXX)			\
+	mov	$(XXXX), %ax;		\
+	POSTCODE_AX
 
 /* Output byte value to postcode, without destoying register eax */ 
 #define	POSTCODE_SAVE_EAX(XX)		\
@@ -94,7 +103,10 @@
 
 #else	/* DEBUG */
 #define POSTCODE_AL
+#define POSTCODE_AX
 #define POSTCODE(X)
+#define POSTCODE2(X)
+#define POSTCODE_SAVE_EAX(X)
 #define POSTCODE32_EBX
 #endif	/* DEBUG */
 
@@ -106,13 +118,18 @@
 #define	_PSTART_RELOC			0xFE
 #define	PSTART_ENTRY			0xFD
 #define PSTART_PAGE_TABLES		0xFC
+#if defined(__x86_64__)
+#define PSTART_BEFORE_ID_MAP		0xFB
+#else
 #define PSTART_BEFORE_PAGING		0xFB
+#endif
 #define VSTART_ENTRY			0xFA
 #define VSTART_STACK_SWITCH		0xF9
-#define VSTART_EXIT			0xF8
-#define	I386_INIT_ENTRY			0xF7
-#define	CPU_INIT_D			0xF6
-#define	PE_INIT_PLATFORM_D		0xF5
+#define VSTART_BEFORE_PAGING		0xF8
+#define VSTART_EXIT			0xF7
+#define	I386_INIT_ENTRY			0xF6
+#define	CPU_INIT_D			0xF5
+#define	PE_INIT_PLATFORM_D		0xF4
 
 #define	SLAVE_RSTART_ENTRY		0xEF
 #define	SLAVE_REAL_TO_PROT_ENTRY	0xEE
@@ -121,10 +138,12 @@
 #define	SLAVE_STARTPROG_EXIT		0xEB
 #define	SLAVE_PSTART_ENTRY		0xEA
 #define	SLAVE_PSTART_EXIT		0xE9
+#if defined(__i386__)
 #define	SLAVE_VSTART_ENTRY		0xE8
 #define	SLAVE_VSTART_DESC_INIT		0xE7
 #define	SLAVE_VSTART_STACK_SWITCH	0xE6
 #define	SLAVE_VSTART_EXIT		0xE5
+#endif
 #define	I386_INIT_SLAVE			0xE4
 
 #define	PANIC_DOUBLE_FAULT		0xDF	/* Double Fault exception */
@@ -162,6 +181,11 @@ _postcode(uint8_t	xx)
 {
 	asm volatile("outb %0, %1" : : "a" (xx), "N" (POSTPORT));
 }
+inline static void
+_postcode2(uint16_t	xxxx)
+{
+	asm volatile("outw %0, %1" : : "a" (xxxx), "N" (POSTPORT));
+}
 #if	DEBUG
 inline static void
 postcode(uint8_t	xx)
@@ -171,8 +195,17 @@ postcode(uint8_t	xx)
 	_postcode_delay(SPINCOUNT);
 #endif
 }
+inline static void
+postcode2(uint8_t	xxxx)
+{
+	_postcode2(xxxx);
+#if	POSTCODE_DELAY
+	_postcode_delay(SPINCOUNT);
+#endif
+}
 #else
 #define postcode(xx) do {} while(0)
+#define postcode2(xxxx) do {} while(0)
 #endif
 #endif
 

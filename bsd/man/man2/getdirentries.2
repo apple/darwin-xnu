@@ -40,6 +40,7 @@
 .Nm getdirentries
 .Nd "get directory entries in a filesystem independent format"
 .Sh SYNOPSIS
+.Fd #include <dirent.h>
 .Fd #include <sys/types.h>
 .Fd #include <sys/dirent.h>
 .Ft int
@@ -144,6 +145,28 @@ The current position pointer should only be set to a value returned by
 a value returned in the location pointed to by
 .Fa basep ,
 or zero.
+.Sh NOTES
+.Fn getdirentries
+should rarely be used directly; instead,
+.Xr opendir 3
+and
+.Xr readdir 3
+should be used.
+.Pp
+As of Mac OS X 10.6,
+.Fn getdirentries
+is deprecated, and it is recommended that applications
+use
+.Xr readdir 3
+rather than using
+.Fn getdirentries
+directly.  Due to limitations with the system call, 
+.Fn getdirentries
+will not work
+with 64-bit inodes; in order to use
+.Fn getdirentries ,
+.Dv _DARWIN_NO_64_BIT_INODE
+must be defined.
 .Sh RETURN VALUES
 If successful, the number of bytes actually transferred is returned.
 Otherwise, -1 is returned and the global variable
@@ -169,7 +192,9 @@ error occurred while reading from or writing to the file system.
 .El
 .Sh SEE ALSO
 .Xr lseek 2 ,
-.Xr open 2
+.Xr open 2 ,
+.Xr opendir 3 ,
+.Xr readdir 3
 .Sh HISTORY
 The
 .Fn getdirentries

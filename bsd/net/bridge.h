@@ -83,7 +83,7 @@ struct bdg_softc {
 #define IFF_MUTE        0x0002  /* mute this if for bridging.   */
 #define IFF_USED        0x0004  /* use this if for bridging.    */
     short cluster_id ; /* in network format */
-    u_long magic;
+    uint32_t magic;
 } ;
 
 extern struct bdg_softc *ifp2sc;
@@ -154,8 +154,8 @@ struct mbuf *bdg_forward(struct mbuf *m0, struct ether_header *eh, struct ifnet 
 #define STAT_MAX (int)BDG_FORWARD
 struct bdg_port_stat {
     char name[16];
-    u_long collisions;
-    u_long p_in[STAT_MAX+1];
+    uint32_t collisions;
+    uint32_t p_in[STAT_MAX+1];
 } ;
 
 struct bdg_stats {

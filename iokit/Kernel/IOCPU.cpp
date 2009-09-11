@@ -175,14 +175,14 @@ iocpu_run_platform_actions(queue_head_t * queue, uint32_t first_priority, uint32
 extern "C" kern_return_t 
 IOCPURunPlatformQuiesceActions(void)
 {
-    return (iocpu_run_platform_actions(iocpu_get_platform_quiesce_queue(), 0, 0UL-1,
+    return (iocpu_run_platform_actions(iocpu_get_platform_quiesce_queue(), 0, 0U-1,
 				    NULL, NULL, NULL));
 }
 
 extern "C" kern_return_t 
 IOCPURunPlatformActiveActions(void)
 {
-    return (iocpu_run_platform_actions(iocpu_get_platform_active_queue(), 0, 0UL-1,
+    return (iocpu_run_platform_actions(iocpu_get_platform_active_queue(), 0, 0U-1,
 				    NULL, NULL, NULL));
 }
 
@@ -324,7 +324,7 @@ void IOCPUSleepKernel(void)
 	iter->release();
     }
 
-    iocpu_run_platform_actions(&gIOSleepActionQueue, 0, 0UL-1,
+    iocpu_run_platform_actions(&gIOSleepActionQueue, 0, 0U-1,
 				NULL, NULL, NULL);
 
     numCPUs = gIOCPUs->getCount();
@@ -350,7 +350,7 @@ void IOCPUSleepKernel(void)
     if (bootCPU)
         bootCPU->haltCPU();
 
-    iocpu_run_platform_actions(&gIOWakeActionQueue, 0, 0UL-1,
+    iocpu_run_platform_actions(&gIOWakeActionQueue, 0, 0U-1,
 				    NULL, NULL, NULL);
 
     iocpu_platform_action_entry_t * entry;
@@ -362,9 +362,9 @@ void IOCPUSleepKernel(void)
     }
 
     if (!queue_empty(&gIOSleepActionQueue))
-	IOPanic("gIOSleepActionQueue");
+	panic("gIOSleepActionQueue");
     if (!queue_empty(&gIOWakeActionQueue))
-	IOPanic("gIOWakeActionQueue");
+	panic("gIOWakeActionQueue");
   
     // Wake the other CPUs.
     for (cnt = 0; cnt < numCPUs; cnt++) 
@@ -432,7 +432,7 @@ bool IOCPU::start(IOService *provider)
   provider->setProperty("timebase-frequency", timebaseFrequency);
   timebaseFrequency->release();
   
-  super::setProperty("IOCPUID", (UInt32)this, 32);
+  super::setProperty("IOCPUID", (uintptr_t)this, sizeof(uintptr_t)*8);
   
   setCPUNumber(0);
   setCPUState(kIOCPUStateUnregistered);

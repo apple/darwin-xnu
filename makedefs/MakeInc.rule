@@ -513,32 +513,14 @@ endif
 # Compilation rules to generate .o from .s
 #
 
-COMP_SOBJ_FILES = $(addprefix $(TARGET)$(COMP_OBJ_DIR), $(COMP_SOBJ_LIST))
-
-$(COMP_SOBJ_FILES): $(TARGET)$(COMP_OBJ_DIR)%.o : %.s
-	${S_KCC} -E -MD ${SFLAGS} -DASSEMBLER $(INCFLAGS) $< > $(patsubst %.o, %.pp, ${@});
-	sed '/^\#/d' $(patsubst %.o, %.pp, ${@}) > $(patsubst %.o, %.s, ${@});
-	${S_KCC} ${SFLAGS} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});
-	${RM} ${_RMFLAGS_} $(patsubst %.o, %.pp, ${@}) $(patsubst %.o,%.s,${@});
-
-S_RULE_1A=@ls /
-S_RULE_1B= ${patsubst %.o,%.s,${@}} > /dev/null
-S_RULE_2=$(_v)${S_KCC} -E -MD ${SFLAGS} -DASSEMBLER $(INCFLAGS) $< \
-               > $(patsubst %.o, %.pp, ${@}); \
-	sed '/^\#/d' $(patsubst %.o, %.pp, ${@}) > $(patsubst %.o, %.s, ${@});
-ifeq    ($(BUILD_STABS),1)
-S_RULE_3=$(_v)${S_KCC} ${SFLAGS} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});\
-       ${RM} ${_RMFLAGS_} $(patsubst %.o, %.pp, ${@}) $(patsubst %.o,%.s,${@});
-else
-S_RULE_3=$(_v)${S_KCC} ${SFLAGS} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});\
-       ${RM} ${_RMFLAGS_} $(patsubst %.o, %.pp, ${@}) $(patsubst %.o,%.s,${@});\
-  ${CTFCONVERT} -l xnu -v -o $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf || true;
-S_RULE_4=@echo ASM $@
-endif
+S_RULE_1A=$(_v)${S_KCC} -c -MD ${SFLAGS} -DASSEMBLER ${INCFLAGS} ${$@_INCFLAGS}
+S_RULE_1B=$*.s
+S_RULE_2=@echo AS $@
+S_RULE_3=
 
 #
 # Compilation rules to generate .o from .c for normal files
-C_RULE_1A=$(_v)${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS} ${CWARNFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
+C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} 
 C_RULE_1B=$*.c
 C_RULE_2=@echo CC $@
 ifeq    ($(BUILD_STABS),1)
@@ -558,19 +540,10 @@ C_RULE_3_D=${C_RULE_3}
 C_RULE_4_D=${C_RULE_4}
 
 #
-# Compilation rules to generate .o from .m
-#
-M_RULE_1A=$(_v)${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS} ${MWARNFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
-M_RULE_1B=$*.m
-M_RULE_2=@echo CC $@
-M_RULE_3=
-M_RULE_4=
-
-#
 # Compilation rules to generate .co from .cp or .cpo from .cpp
 #   The config tool slickly changes the last source filename char to 'o'
 #   for the object filename.
-P_RULE_1A=$(_v)${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS} ${CXXWARNFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
+P_RULE_1A=$(_v)${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CXXWARNFLAGS}} -MD ${$@_CFLAGS_ADD} ${$@_CXXWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} 
 P_RULE_1B=$(<F)
 P_RULE_2=$(_v)sed 's/.c.o: /.cpo: /' $(@:.cpo=.d) > $(@:.cpo=.d~) && mv $(@:.cpo=.d~) $(@:.cpo=.d)
 P_RULE_3=@echo C++ $@
@@ -579,46 +552,58 @@ P_RULE_4=
 else
 P_RULE_4=$(_v)${CTFCONVERT} -l xnu -v -o $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf || true;
 endif
-P_RULE_4=
 
-#
-# Linker rule to generate a component
-#
-LD_COMPONENT_OBJ_FILES = $(addprefix $(TARGET)$(COMP_OBJ_DIR), $(LD_COMPONENT_OBJ_LIST))
-
-COMPONENT_IMAGE_FILE = $(addprefix $(TARGET), $(COMPONENT_IMAGE))
-
-$(COMPONENT_IMAGE_FILE): $(LD_COMPONENT_OBJ_FILES)
-	@echo LD $@
-	$(_v)$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT_IMAGE_FILE) ${LD_COMPONENT_OBJ_FILES};
-	$(_v)(cd $(TARGET)$(COMP_OBJ_DIR); ${MD} -u Makedep -f -d `ls *.d`);
 
 setup_build_all: 
 
 do_build_all: $(COMP_FILES) $(COMP_COBJ_FILES) $(COMP_SOBJ_FILES) $(COMPONENT_IMAGE_FILE)
 
-ifeq ($(COMPONENT), .)
-do_build_all: do_build_mach_kernel
-endif
-
 #
 # mach_kernel building rules
 #
-do_build_mach_kernel: $(OBJPATH)/kgmacros
-	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $(SRCROOT)/config/version.c $(OBJPATH)/version.c;
-	$(_v)$(SRCROOT)/config/newvers.pl $(OBJPATH)/version.c > /dev/null;
-	@echo CC version.o
-	$(_v)${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} $(OBJPATH)/version.c -o $(OBJPATH)/version.o
+ifeq ($(COMPONENT), .)
+do_build_all: do_build_mach_kernel
+
+STATIC_KMODS =  $(SRCROOT)/kmods.a
+
+do_build_mach_kernel: $(TARGET)/kgmacros $(TARGET)/mach_kernel
+
+$(TARGET)/mach_kernel: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) lastkernelconstructor.o
+	$(_v)${MAKE} version.o
 	@echo LD mach_kernel.sys
-	$(_v)$(LD) $(LDFLAGS_KERNEL) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) $(OBJPATH)/version.o -o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS)
+	$(_v)$(CAT) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) > mach_kernel.filelist
+	$(_v)$(LD) $(LDFLAGS_KERNEL) -filelist mach_kernel.filelist version.o lastkernelconstructor.o `if [ -e $(STATIC_KMODS) ]; then echo $(STATIC_KMODS); fi` \
+		-o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS)
 	@echo DSYMUTIL mach_kernel.sys
 	$(_v)if [ $(BUILD_DWARF)  -eq  1 ]; then \
 		$(DSYMUTIL) $(DSYMUTIL_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel.sys.dSYM > /dev/null; \
 	fi;
 	@echo STRIP mach_kernel
 	$(_v)$(STRIP) $(STRIP_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel
+	@echo CTFMERGE mach_kernel
+	$(_v)if [ $(BUILD_DWARF) -eq 1 ]; then			\
+		$(FIND) $(OBJPATH)/ -name \*.ctf -size 0	\
+			-exec $(RM) -rf {} \;	;		\
+		$(CTFMERGE) -l xnu -o $(TARGET)/mach_kernel 		\
+			$(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true;	\
+	fi;							\
 
-$(OBJPATH)/kgmacros: $(SRCROOT)/kgmacros
+version.o: $(OBJPATH)/version.c
+	${C_RULE_1A}$<
+	${C_RULE_2}
+	${C_RULE_4}
+
+.PHONY: $(OBJPATH)/version.c
+$(OBJPATH)/version.c: $(SRCROOT)/config/version.c $(NEWVERS) $(SRCROOT)/config/MasterVersion
+	$(_v)$(CP) $< $@
+	$(_v)$(NEWVERS) $(OBJPATH)/version.c > /dev/null;
+
+lastkernelconstructor.o: $(SRCROOT)/libsa/lastkernelconstructor.c
+	${C_RULE_1A}$<
+	${C_RULE_2}
+	${C_RULE_4}
+
+$(TARGET)/kgmacros: $(SRCROOT)/kgmacros
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $? $@
 
 # Special rules to install machine configuration variants
@@ -633,36 +618,12 @@ $(DSTROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC): $(TA
 		$(INSTALL) $(FILE_INSTALL_FLAGS) $< $@;		\
 	else							\
 		if [ ! -e $@ ]; then				\
-			echo >empty_file_$(notdir $@);			\
-			lipo_arg="$(subst _empty_file, empty_file_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+			print "" >empty_file_$(notdir $@);			\
+			lipo_arg="$(foreach lipo_arch,$(INSTALL_ARCHS),$(ARCH_FLAGS_$(lipo_arch)) empty_file_$(notdir $@))"; \
 			$(LIPO) $${lipo_arg} -create -output $@;	\
-			$(RM) $(RMFLAGS) empty_file_$(notdir $@);	\
+			$(RM) $(RMFLAGS) empty_file_$(notdir $@);		\
 		fi;							\
-		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
-	fi;								\
-	if [ $(BUILD_DWARF) -eq 1 ]; then				\
-		if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
-			$(CP) -f $< $<.ctfsys;				\
-			$(FIND) $(OBJPATH)/ -name \*.ctf -size 0	\
-				-exec $(RM) -rf {} \;	;		\
-			$(CTFMERGE) -l xnu -o $<.ctfsys 		\
-				$(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true;	\
-			$(INSTALL) $(FILE_INSTALL_FLAGS) $<.ctfsys $@.ctfsys; \
-		else							\
-			if [ ! -e $@.ctfsys ]; then			\
-				echo >empty_file_$(notdir $@);		\
-				lipo_arg="$(subst _empty_file, empty_file_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
-				$(LIPO) $${lipo_arg} -create -output $@.ctfsys;\
-				$(RM) $(RMFLAGS) empty_file_$(notdir $@);\
-			fi;						\
-			$(FIND) $(OBJPATH)/ -name \*.ctf -size 0	\
-				-exec $(RM) -rf {} \;	;		\
-			$(CP) -f $< $<.ctfsys;				\
-			$(CTFMERGE) -l xnu -o $<.ctfsys			\
-				$(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true;	\
-			$(LIPO) $@.ctfsys -replace $(ARCH_CONFIG_LC)	\
-				$<.ctfsys -o $@.ctfsys;			\
-		fi;							\
+		$(LIPO) $@ -replace $(subst -arch,,$(ARCH_FLAGS_$(ARCH_CONFIG))) $< -o $@;	\
 	fi
 
 $(SYMROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC): $(TARGET)/mach_kernel.sys force_file_install
@@ -682,14 +643,15 @@ $(SYMROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC): $(TA
 		fi;							\
 	else							\
 		if [ ! -e $@ ]; then				\
-			echo >empty_file_$(notdir $@);			\
-			lipo_arg="$(subst _empty_file, empty_file_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+			printf "" >empty_file_$(notdir $@);			\
+			lipo_arg="$(foreach lipo_arch,$(INSTALL_ARCHS),$(ARCH_FLAGS_$(lipo_arch)) empty_file_$(notdir $@))"; \
 			$(LIPO) $${lipo_arg} -create -output $@;	\
 			$(RM) $(RMFLAGS) empty_file_$(notdir $@);		\
 		fi;							\
-		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
+		$(LIPO) $@ -replace $(subst -arch,,$(ARCH_FLAGS_$(ARCH_CONFIG))) $< -o $@;	\
 	fi
 
+endif # mach_kernel-specific build rules
 
 #
 # Generic Install rules
@@ -706,43 +668,15 @@ $(INSTALL_FILE_FILES_GENERIC): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% forc
 	fi;								\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then		\
 		$(RM) $(RMFLAGS) $@;					\
-		if [ $(MACHINE_CONFIG) = DEFAULT ]; then		\
-			$(INSTALL) $(FILE_INSTALL_FLAGS) $< $@;		\
-		fi;							\
+		$(INSTALL) $(FILE_INSTALL_FLAGS) $< $@;			\
 	else								\
 		if [ ! -e $@ ]; then					\
-			echo >empty_file_$(notdir $@);			\
-			lipo_arg="$(subst _empty_file, empty_file_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+			printf "" >empty_file_$(notdir $@);		\
+			lipo_arg="$(foreach lipo_arch,$(INSTALL_ARCHS),$(ARCH_FLAGS_$(lipo_arch)) empty_file_$(notdir $@))"; \
 			$(LIPO) $${lipo_arg} -create -output $@;	\
 			$(RM) $(RMFLAGS) empty_file_$(notdir $@);	\
 		fi;							\
-		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
-	fi;								\
-	if [ $(BUILD_DWARF) -eq 1 ]; then				\
-		if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
-			$(CP) -f $< $<.ctfsys;				\
-			$(FIND) $(OBJPATH)/ -name \*.ctf -size 0	\
-				-exec $(RM) -rf {} \;	;		\
-			$(CTFMERGE) -l xnu -o $<.ctfsys 		\
-				$(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true;	\
-			if [ $(MACHINE_CONFIG) = DEFAULT ]; then	\
-				$(INSTALL) $(FILE_INSTALL_FLAGS) $<.ctfsys $(dir $@); \
-			fi;						\
-		else							\
-			if [ ! -e $@.ctfsys ]; then			\
-				echo >empty_file_$(notdir $@);		\
-				lipo_arg="$(subst _empty_file, empty_file_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
-				$(LIPO) $${lipo_arg} -create -output $@.ctfsys;\
-				$(RM) $(RMFLAGS) empty_file_$(notdir $@);\
-			fi;						\
-			$(FIND) $(OBJPATH)/ -name \*.ctf -size 0	\
-				-exec $(RM) -rf {} \;	;		\
-			$(CP) -f $< $<.ctfsys;				\
-			$(CTFMERGE) -l xnu -o $<.ctfsys			\
-				$(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true;	\
-			$(LIPO) $@.ctfsys -replace $(ARCH_CONFIG_LC)	\
-				$<.ctfsys -o $@.ctfsys;			\
-		fi;							\
+		$(LIPO) $@ -replace $(subst -arch,,$(ARCH_FLAGS_$(ARCH_CONFIG))) $< -o $@;	\
 	fi
 
 INSTALL_FILESYS_FILES = $(addprefix $(SYMROOT)$(INSTALL_FILE_DIR), $(INSTALL_FILE_LIST))
@@ -770,17 +704,17 @@ $(INSTALL_FILESYS_FILES_GENERIC): $(SYMROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/%.s
 		fi;							\
 	else							\
 		if [ ! -e $@ ]; then				\
-			echo >empty_filesys_$(notdir $@);	\
-			lipo_arg="$(subst _empty_file, empty_filesys_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+			printf "" >empty_filesys_$(notdir $@);	\
+			lipo_arg="$(foreach lipo_arch,$(INSTALL_ARCHS),$(ARCH_FLAGS_$(lipo_arch)) empty_filesys_$(notdir $@))"; \
 			$(LIPO) $${lipo_arg} -create -output $@;	\
 			$(RM) $(RMFLAGS) empty_filesys_$(notdir $@);	\
 		fi;							\
-		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
+		$(LIPO) $@ -replace $(subst -arch,,$(ARCH_FLAGS_$(ARCH_CONFIG))) $< -o $@;	\
 									\
 		if [ $(BUILD_DWARF) -eq 1 ]; then			       \
 			if [ ! -e $@.dSYM/$(DSYMBUILDDIR)/$(notdir $@) ]; then \
-				echo >empty_filesys_$(notdir $@);	       \
-				lipo_arg="$(subst _empty_file, empty_filesys_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+				printf "" >empty_filesys_$(notdir $@);	       \
+				lipo_arg="$(foreach lipo_arch,$(INSTALL_ARCHS),$(ARCH_FLAGS_$(lipo_arch)) empty_filesys_$(notdir $@))"; \
 				$(MKDIR) -p -m 0755 $@.dSYM/$(DSYMBUILDDIR);   \
 				$(LIPO) $${lipo_arg} -create		       \
 					-output				       \
@@ -791,7 +725,7 @@ $(INSTALL_FILESYS_FILES_GENERIC): $(SYMROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/%.s
 				$(TARGET)/mach_kernel.sys		\
 				-o $(TARGET)/mach_kernel.sys.dSYM;	\
 			$(LIPO) $@.dSYM/$(DSYMBUILDDIR)/$(notdir $@)	       \
-				-replace $(ARCH_CONFIG_LC)		       \
+				-replace $(subst -arch,,$(ARCH_FLAGS_$(ARCH_CONFIG)))		       \
 				$<.dSYM/$(DSYMBUILDDIR)/$(notdir $<)	       \
 				-o $@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);       \
 		fi;							       \
@@ -849,5 +783,8 @@ $(INSTALL_MAN_FILES): $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/% : %
 ifeq    ($(INCL_MAKEDEP), TRUE)
 -include Makedep
 endif
+
+help:
+	@cat README
 
 # vim: set ft=make:

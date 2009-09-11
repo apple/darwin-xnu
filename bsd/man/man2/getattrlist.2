@@ -20,7 +20,8 @@
 .Dt GETATTRLIST 2
 .Os Darwin
 .Sh NAME
-.Nm getattrlist
+.Nm getattrlist ,
+.Nm fgetattrlist
 .Nd get file system attributes
 .Sh SYNOPSIS
 .Fd #include <sys/attr.h>
@@ -28,17 +29,25 @@
 .Ft int
 .Fn getattrlist "const char* path" "struct attrlist * attrList" "void * attrBuf" "size_t attrBufSize" "unsigned long options"
 .
+.Ft int
+.Fn fgetattrlist "int fd" "struct attrlist * attrList" "void * attrBuf" "size_t attrBufSize" "unsigned long options"
 .Sh DESCRIPTION
 The
 .Fn getattrlist
 function returns attributes (that is, metadata) of file system objects.
+.Fn getattrlist
+works on the file system object named by
+.Fa path ,
+while
+.Fn fgetattrlist
+works on the provided file descriptor
+.Fa fd .
 You can think of
 .Fn getattrlist
 as a seriously enhanced version of
 .Xr stat 2 .
-The function returns attributes about the file system object specified by
-.Fa path
-in the buffer specified by
+The functions return attributes about the specified file system object
+into the buffer specified by
 .Fa attrBuf
 and
 .Fa attrBufSize .
@@ -52,12 +61,14 @@ parameter lets you control specific aspects of the function's behavior.
 .
 The
 .Fn getattrlist
-function is only supported by certain volume format implementations.
+and
+.Fn fgetattrlist
+functions are only supported by certain volume format implementations.
 For maximum compatibility, client programs should use high-level APIs
 (such as the Carbon File Manager) to access file system attributes.
 These high-level APIs include logic to emulate file system attributes
 on volumes that don't support
-.Fn getattrlist .
+the calls.
 .Pp
 .
 Not all volumes support all attributes.
@@ -181,10 +192,10 @@ The initial contents of this buffer are ignored.
 The
 .Fa options
 parameter is a bit set that controls the behaviour of
-.Fn getattrlist .
+the functions.
 The following option bits are defined.
 .
-.Bl -tag -width XXXbitmapcount
+.Bl -tag -width FSOPT_PACK_INVAL_ATTRS
 .
 .It FSOPT_NOFOLLOW
 If this bit is set,
@@ -192,6 +203,21 @@ If this bit is set,
 will not follow a symlink if it occurs as
 the last component of
 .Fa path .
+.
+.It FSOPT_REPORT_FULLSIZE
+The size of the attributes reported (in the first
+.Vt u_int32_t
+field in the attribute buffer) will be the size needed to hold all the
+requested attributes; if not set, only the attributes actually returned
+will be reported.  This allows the caller to determine if any truncation
+occurred.
+.
+.It FSOPT_PACK_INVAL_ATTRS
+If this is bit is set, then all requested attributes, even ones that are
+not supported by the object or file system, will be returned.  Default values
+will be used for the invalid ones.  Requires that
+.Dv ATTR_CMN_RETURNED_ATTRS
+be requested.
 .
 .El
 .
@@ -221,6 +247,8 @@ where the type is given as part of the attribute description (below).
 The attributes are placed into the attribute buffer in the order
 that they are described below.
 .
+.It
+Each attribute is aligned to a 4-byte boundary (including 64-bit data types).
 .El
 .Pp
 .
@@ -233,8 +261,8 @@ structure, as defined by
 .
 .Bd -literal
 typedef struct attrreference {
-    long        attr_dataoffset;
-    size_t      attr_length;
+    int32_t        attr_dataoffset;
+    u_int32_t      attr_length;
 } attrreference_t;
 .Ed
 .Pp
@@ -249,7 +277,7 @@ field is the offset in bytes from the
 .Vt attrreference
 structure
 to the attribute data.
-This offset will always be a multiple of sizeof(unsigned long) bytes,
+This offset will always be a multiple of sizeof(u_int32_t) bytes,
 so you can safely access common data types without fear of alignment
 exceptions.
 .Pp
@@ -307,6 +335,18 @@ Common attributes relate to all types of file system objects.
 The following common attributes are defined.
 .
 .Bl -tag -width ATTR_VOL_ALLOCATIONCLUMP
+.
+.It ATTR_CMN_RETURNED_ATTRS
+An
+.Vt attribute_set_t
+structure which is used to report which of the requested attributes
+were actually returned. This attribute, when requested, will always
+be the first attribute returned. By default, unsupported attributes
+will be skipped (i.e. not packed into the output buffer). This behavior
+can be over-ridden using the FSOPT_PACK_INVAL_ATTRS option flag. Only
+.Xr getattrlist 2 supports this attribute (
+.Xr getdirentriesattr 2 and
+.Xr searchfs 2 do not support it ).
 .
 .It ATTR_CMN_NAME
 An
@@ -584,6 +624,26 @@ See
 .Xr access 2
 for more details.
 .
+.It ATTR_CMN_EXTENDED_SECURITY
+A variable-length object (thus an
+.Vt attrreference
+structure) containing a
+.Vt kauth_filesec
+structure, of which only the ACL entry is used.
+.
+.It ATTR_CMN_UUID
+A
+.Vt guid_t
+of the owner of the file system object.  Analoguous to
+.Dv ATTR_CMN_OWNERID .
+.
+.It ATTR_CMN_GRPUUID
+A
+.Vt guid_t
+of the group to which the file system object belongs.
+Analoguous to
+.Dv ATTR_CMN_GRPID .
+.
 .It ATTR_CMN_FILEID
 A
 .Vt u_int64_t
@@ -593,6 +653,19 @@ that uniquely identifies the file system object within its volume.
 A
 .Vt u_int64_t
 that identifies the parent directory of the file system object.
+.
+.It ATTR_CMN_FULLPATH
+An
+.Vt attrreference
+structure containing the full path (resolving all symlinks) to 
+the file system object as
+a UTF-8 encoded, null terminated C string.
+The attribute data length will not be greater than
+.Dv PATH_MAX. 
+Inconsistent behavior may be observed when this attribute is requested on
+hard-linked items, particularly when the file system does not support ATTR_CMN_PARENTID
+natively. Callers should be aware of this when requesting the full path of a hard-linked item.
+.Pp
 .
 .El
 .
@@ -781,6 +854,12 @@ A
 structure describing the optional features supported by this volume.
 See below for a discussion of volume capabilities.
 .
+.It ATTR_VOL_UUID
+A
+.Vt uuid_t
+containing the file system UUID.  Typically this will be a
+version 5 UUID.
+.
 .It ATTR_VOL_ATTRIBUTES
 A
 .Vt vol_attributes_attr_t
@@ -800,14 +879,15 @@ A
 .Vt u_int32_t
 containing the number of hard links to the directory;
 this does not include the historical "." and ".." entries.
-For filesystems that do not support hard links to directories,
+For file systems that do not support hard links to directories,
 this value will be 1.
 .
 .It ATTR_DIR_ENTRYCOUNT
 A
 .Vt u_int32_t
 containing the number of file system objects in the directory, not including
-any synthetic items.
+any synthetic items.  The historical "." and ".." entries are also
+excluded from this count.
 .
 .It ATTR_DIR_MOUNTSTATUS
 A
@@ -816,9 +896,12 @@ containing flags describing what's mounted on the directory.
 Currently the only flag defined is
 .Dv DIR_MNTSTATUS_MNTPOINT,
 which indicates that there is a file system mounted on this directory.
-Due to a bug (r. 3502822), this flag is never set on current system.
 .
 .El
+.
+.Pp
+Requested directory attributes are not returned for file system objects that
+are not directories.
 .
 .Sh FILE ATTRIBUTES
 .
@@ -946,6 +1029,12 @@ See also
 .Dv ATTR_FILE_DATAEXTENTS .
 .
 .El
+.
+.Pp
+File attributes are used for any file system object that is not a directory,
+not just ordinary files.
+Requested file attributes are not returned for file system objects that
+are directories.
 .
 .Sh FORK ATTRIBUTES
 .
@@ -1159,12 +1248,45 @@ should not set this bit.
 Introduced with Darwin 7.0 (Mac OS X version 10.3).
 .
 .It VOL_CAP_FMT_2TB_FILESIZE
-If this bit is set the volume format supports file
-sizes upto 2TB.  This bit does not necessarily mean that the file
-system does not support file size more than 2TB.
-This bit does not mean that the currently available space on the volume is 2TB.
+If this bit is set the volume format supports file sizes larger
+than 4GB, and potentially up to 2TB; it does not indicate
+whether the file system supports files larger than that.
 .Pp
 Introduced with Darwin 8.0 (Mac OS X version 10.4).
+.
+.It VOL_CAP_FMT_OPENDENYMODES
+If this bit is set, the volume format supports open deny modes
+(e.g., "open for read write, deny write").
+.
+.It VOL_CAP_FMT_HIDDEN_FILES
+If this bit is set, the volume format supports the
+.Dv UF_HIDDEN
+file flag, and the
+.Dv UF_HIDDEN
+flag is mapped to that volume's native "hidden" or "invisible"
+bit (e.g., the invisible bit from the Finder Info extended attribute).
+.
+.It VOL_CAP_FMT_PATH_FROM_ID
+If this bit is set, the volume format supports the ability to derive a pathname
+to the root of the file system given only the ID of an object.  This also
+implies that object IDs on this file system are persistent and not recycled.
+Most file systems will not support this capability.
+.
+.It VOL_CAP_FMT_NO_VOLUME_SIZES
+If this bit is set the volume format does not support 
+determining values for total data blocks, available blocks, or free blocks, as in 
+.Fa f_blocks,
+.Fa f_bavail,
+and 
+.Fa f_bfree
+in the 
+.Fa struct statfs
+returned by
+.Xr statfs 2 . 
+Historically, those values were set to 0xFFFFFFFF for volumes 
+that did not support them.
+.Pp
+Introduced with Darwin 10.0 (Mac OS X version 10.6).
 .
 .El
 .Pp
@@ -1207,6 +1329,9 @@ Introduced with Darwin 7.0 (Mac OS X version 10.3).
 .It VOL_CAP_INT_COPYFILE
 If this bit is set the volume format implementation supports the (private and undocumented)
 copyfile() function.
+(This is not the
+.Xr copyfile 3
+function.)
 .Pp
 Introduced with Darwin 7.0 (Mac OS X version 10.3).
 .
@@ -1262,6 +1387,20 @@ If this bit is set the volume format implementation supports the
 ATTR_CMN_USERACCESS attribute.
 .Pp
 Introduced with Darwin 8.0 (Mac OS X version 10.4).
+.
+.It VOL_CAP_INT_MANLOCK
+If this bit is set, the volume format implementation supports
+AFP-style mandatory byte range locks via
+.Xr ioctl 2 .
+.
+.It VOL_CAP_INT_EXTENDED_ATTR
+If this bit is set, the volume format implementation supports
+native extended attributes (see
+.Xr setxattr 2 ).
+.
+.It VOL_CAP_INT_NAMEDSTREAMS
+If this bit is set, the volume format implementation supports
+native named streams.
 .
 .El
 .Pp
@@ -1350,31 +1489,46 @@ you should be careful to support the behaviour specified by this document.
 .
 .Sh ERRORS
 .Fn getattrlist
+and
+.Fn fgetattrlist
 will fail if:
 .Bl -tag -width Er
 .
 .It Bq Er ENOTSUP
-The volume does not support
-.Fn getattrlist .
+The volume does not support the query.
 .
 .It Bq Er ENOTDIR
-A component of the path prefix is not a directory.
+A component of the path prefix for
+.Fn getattrlist
+is not a directory.
 .
 .It Bq Er ENAMETOOLONG
-A component of a path name exceeded
+A component of a path name for
+.Fn getattrlist
+exceeded
 .Dv NAME_MAX
 characters, or an entire path name exceeded
 .Dv PATH_MAX
 characters.
 .
 .It Bq Er ENOENT
-The file system object does not exist.
+The file system object for
+.Fn getattrlist
+does not exist.
+.
+.It Bq Er EBADF
+The file descriptor argument for
+.Fn fgetattrlist
+is not a valid file descriptor.
 .
 .It Bq Er EACCES
-Search permission is denied for a component of the path prefix.
+Search permission is denied for a component of the path prefix for
+.Fn getattrlist .
 .
 .It Bq Er ELOOP
-Too many symbolic links were encountered in translating the pathname.
+Too many symbolic links were encountered in translating the pathname
+for
+.Fn getattrlist .
 .
 .It Bq Er EFAULT
 .Fa path ,
@@ -1440,6 +1594,19 @@ This is due to a bug in an early version of Mac OS X that can't be fixed for
 binary compatibility reasons.
 When ordering attributes, you should always use the order in which they
 are described above.
+.Pp
+.
+The
+.Vt timespec
+structure is 64-bits (two 32-bit elements) in 32-bit code, and
+128-bits (two 64-bit elements) in 64-bit code; however, it is aligned
+on a 4-byte (32-bit) boundary, even in 64-bit code.
+.Pp
+.
+Inconsistent behavior may be observed when the ATTR_CMN_FULLPATH attribute is requested on
+hard-linked items, particularly when the file system does not support ATTR_CMN_PARENTID
+natively. Callers should be aware of this when requesting the full path of a hard-linked item, especially
+if the full path crosses mount points.
 .Pp
 .
 For more caveats, see also the compatibility notes above.
@@ -1655,8 +1822,8 @@ static int VolDemo(const char *path)
 .Pp
 
         printf("Volume information for %s:\en", path);
-        printf("ATTR_VOL_FILECOUNT:  %lu\en", attrBuf.fileCount);
-        printf("ATTR_VOL_DIRCOUNT:   %lu\en", attrBuf.dirCount);
+        printf("ATTR_VOL_FILECOUNT:  %u\en", attrBuf.fileCount);
+        printf("ATTR_VOL_DIRCOUNT:   %u\en", attrBuf.dirCount);
         printf(
             "ATTR_VOL_MOUNTPOINT: %.*s\en",
             (int) attrBuf.mountPointRef.attr_length,

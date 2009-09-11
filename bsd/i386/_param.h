@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004, 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -37,9 +37,10 @@
  * cast to any desired pointer type.
  */
 #define	__DARWIN_ALIGNBYTES	(sizeof(__darwin_size_t) - 1)
-#define	__DARWIN_ALIGN(p)	((__darwin_size_t)((char *)(__darwin_intptr_t)(p) + __DARWIN_ALIGNBYTES) &~ __DARWIN_ALIGNBYTES)
+#define	__DARWIN_ALIGN(p)	((__darwin_size_t)((char *)(__darwin_size_t)(p) + __DARWIN_ALIGNBYTES) &~ __DARWIN_ALIGNBYTES)
 
-#define	__DARWIN_ALIGNBYTES32	(sizeof(__uint32_t) - 1)
-#define	__DARWIN_ALIGN32(p)	((__darwin_size_t)((char *)(__darwin_intptr_t)(p) + __DARWIN_ALIGNBYTES32) &~ __DARWIN_ALIGNBYTES32)
+#define      __DARWIN_ALIGNBYTES32     (sizeof(__uint32_t) - 1)
+#define       __DARWIN_ALIGN32(p)       ((__darwin_size_t)((char *)(__darwin_size_t)(p) + __DARWIN_ALIGNBYTES32) &~ __DARWIN_ALIGNBYTES32)
+
 
 #endif /* _I386__PARAM_H_ */

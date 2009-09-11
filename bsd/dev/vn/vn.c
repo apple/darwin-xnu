@@ -172,7 +172,7 @@ struct vn_softc {
 	u_int64_t	sc_fsize;	/* file size in bytes 		*/
 	u_int64_t	sc_size;	/* size of vn, sc_secsize scale	*/
 	int		sc_flags;	/* flags 			*/
-	u_long		sc_secsize;	/* sector size			*/
+	u_int32_t		sc_secsize;	/* sector size			*/
 	struct vnode	*sc_vp;		/* vnode if not NULL		*/
 	uint32_t	sc_vid;
 	int		sc_open_flags;
@@ -198,19 +198,19 @@ static u_int32_t	vn_options;
 
 static int	setcred(struct vnode * vp, kauth_cred_t cred);
 static void	vnclear (struct vn_softc *vn, vfs_context_t  ctx);
-static void vn_ioctl_to_64(struct vn_ioctl *from, struct user_vn_ioctl *to);
+static void vn_ioctl_to_64(struct vn_ioctl_32 *from, struct vn_ioctl_64 *to);
 void vndevice_init(void);
 int vndevice_root_image(char * path, char devname[], dev_t * dev_p);
 
 static int
 vniocattach_file(struct vn_softc *vn,
-		 struct user_vn_ioctl *vniop,
+		 struct vn_ioctl_64 *vniop,
 		 dev_t dev,
 		 int in_kernel,
 		 proc_t p);
 static int
 vniocattach_shadow(struct vn_softc * vn,
-		   struct user_vn_ioctl *vniop,
+		   struct vn_ioctl_64 *vniop,
 		   dev_t dev,
 		   int in_kernel,
 		   proc_t p);
@@ -289,7 +289,7 @@ static int
 vnread_shadow(struct vn_softc * vn, struct uio *uio, int ioflag, 
 	      vfs_context_t ctx)
 {
-	u_long		blocksize = vn->sc_secsize;
+	u_int32_t		blocksize = vn->sc_secsize;
 	int 		error = 0;
 	off_t		offset;
 	user_ssize_t	resid;
@@ -300,9 +300,9 @@ vnread_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 	orig_offset = offset = uio_offset(uio);
 
 	while (resid > 0) {
-		u_long		remainder;
-		u_long		this_block_number;
-		u_long		this_block_count;
+		u_int32_t		remainder;
+		u_int32_t		this_block_number;
+		u_int32_t		this_block_count;
 		off_t		this_offset;
 		user_ssize_t	this_resid;
 		struct vnode *	vp;
@@ -348,7 +348,7 @@ vnread_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 
 static int
 vncopy_block_to_shadow(struct vn_softc * vn, vfs_context_t ctx,
-		       u_long file_block, u_long shadow_block)
+		       u_int32_t file_block, u_int32_t shadow_block)
 {
 	int	error;
 	char *	tmpbuf;
@@ -382,7 +382,7 @@ static int
 vnwrite_shadow(struct vn_softc * vn, struct uio *uio, int ioflag, 
 	       vfs_context_t ctx)
 {
-	u_long		blocksize = vn->sc_secsize;
+	u_int32_t		blocksize = vn->sc_secsize;
 	int 		error = 0;
 	user_ssize_t	resid;
 	off_t		offset;
@@ -392,11 +392,11 @@ vnwrite_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 
 	while (resid > 0) {
 		int		flags = 0;
-		u_long		offset_block_number;
-		u_long		remainder;
-		u_long		resid_block_count;
-		u_long		shadow_block_count;
-		u_long		shadow_block_number;
+		u_int32_t		offset_block_number;
+		u_int32_t		remainder;
+		u_int32_t		resid_block_count;
+		u_int32_t		shadow_block_count;
+		u_int32_t		shadow_block_number;
 		user_ssize_t	this_resid;
 
 		/* figure out which blocks to write */
@@ -429,7 +429,7 @@ vnwrite_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 			size = (off_t)shadow_map_shadow_size(vn->sc_shadow_map) 
 				* vn->sc_secsize;
 			vnode_setsize(vn->sc_shadow_vp, size, IO_SYNC, ctx);
-#endif 0
+#endif
 		}
 		/* write the blocks (or parts thereof) */
 		uio_setoffset(uio, (off_t)
@@ -439,8 +439,8 @@ vnwrite_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 			this_resid = resid;
 			if ((flags & FLAGS_LAST_BLOCK_PARTIAL) != 0) {
 				/* copy the last block to the shadow */
-				u_long 	d;
-				u_long	s;
+				u_int32_t 	d;
+				u_int32_t	s;
 
 				s = offset_block_number 
 					+ resid_block_count - 1;
@@ -449,7 +449,7 @@ vnwrite_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 				error = vncopy_block_to_shadow(vn, ctx, s, d);
 				if (error) {
 					printf("vnwrite_shadow: failed to copy"
-					       " block %lu to shadow block %lu\n",
+					       " block %u to shadow block %u\n",
 					       s, d);
 					break;
 				}
@@ -463,7 +463,7 @@ vnwrite_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 						       shadow_block_number);
 			if (error) {
 				printf("vnwrite_shadow: failed to"
-				       " copy block %lu to shadow block %lu\n", 
+				       " copy block %u to shadow block %u\n", 
 				       offset_block_number, 
 				       shadow_block_number);
 				break;
@@ -648,19 +648,19 @@ static int
 shadow_read(struct vn_softc * vn, struct buf * bp, char * base,
 	vfs_context_t ctx)
 {
-	u_long		blocksize = vn->sc_secsize;
+	u_int32_t		blocksize = vn->sc_secsize;
 	int 		error = 0;
-	u_long		offset;
+	u_int32_t		offset;
 	boolean_t	read_shadow;
-	u_long		resid;
-	u_long		start = 0;
+	u_int32_t		resid;
+	u_int32_t		start = 0;
 
 	offset = buf_blkno(bp);
 	resid =  buf_resid(bp) / blocksize;
 	while (resid > 0) {
 		user_ssize_t	temp_resid;
-		u_long		this_offset;
-		u_long		this_resid;
+		u_int32_t		this_offset;
+		u_int32_t		this_resid;
 		struct vnode *	vp;
 
 		read_shadow = shadow_map_read(vn->sc_shadow_map,
@@ -696,19 +696,19 @@ static int
 shadow_write(struct vn_softc * vn, struct buf * bp, char * base, 
 	     vfs_context_t ctx)
 {
-	u_long		blocksize = vn->sc_secsize;
+	u_int32_t		blocksize = vn->sc_secsize;
 	int 		error = 0;
-	u_long		offset;
+	u_int32_t		offset;
 	boolean_t	shadow_grew;
-	u_long		resid;
-	u_long		start = 0;
+	u_int32_t		resid;
+	u_int32_t		start = 0;
 
 	offset = buf_blkno(bp);
 	resid =  buf_resid(bp) / blocksize;
 	while (resid > 0) {
 		user_ssize_t	temp_resid;
-		u_long		this_offset;
-		u_long		this_resid;
+		u_int32_t		this_offset;
+		u_int32_t		this_resid;
 
 		shadow_grew = shadow_map_write(vn->sc_shadow_map, 
 					       offset, resid, 
@@ -874,13 +874,13 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data,
 	int is_char)
 {
 	struct vn_softc *vn;
-	struct user_vn_ioctl *viop;
+	struct vn_ioctl_64 *viop;
 	int error;
 	u_int32_t *f;
 	u_int64_t * o;
 	int unit;
 	struct vfsioattr ioattr;
-	struct user_vn_ioctl user_vnio;
+	struct vn_ioctl_64 user_vnio;
 	boolean_t   		funnel_state;
 	struct vfs_context  	context; 
 
@@ -899,12 +899,17 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data,
 	context.vc_thread = current_thread();
 	context.vc_ucred = vn->sc_cred;
 
-	viop = (struct user_vn_ioctl *)data;
+	viop = (struct vn_ioctl_64 *)data;
 	f = (u_int32_t *)data;
 	o = (u_int64_t *)data;
 	switch (cmd) {
+#ifdef __LP64__
+	case VNIOCDETACH32:
+	case VNIOCDETACH:
+#else
 	case VNIOCDETACH:
 	case VNIOCDETACH64:
+#endif
 	case DKIOCGETBLOCKSIZE:
 	case DKIOCSETBLOCKSIZE:
 	case DKIOCGETMAXBLOCKCOUNTREAD:
@@ -991,8 +996,13 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data,
 	case DKIOCGETBLOCKCOUNT:
 		*o = vn->sc_size;
 		break;
+#ifdef __LP64__
+	case VNIOCSHADOW32:
+	case VNIOCSHADOW:
+#else
 	case VNIOCSHADOW:
 	case VNIOCSHADOW64:
+#endif
 		if (vn->sc_shadow_vp != NULL) {
 			error = EBUSY;
 			break;
@@ -1004,7 +1014,7 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data,
 		}
 		if (!proc_is64bit(p)) {
 			/* downstream code expects LP64 version of vn_ioctl structure */
-			vn_ioctl_to_64((struct vn_ioctl *)viop, &user_vnio);
+			vn_ioctl_to_64((struct vn_ioctl_32 *)viop, &user_vnio);
 			viop = &user_vnio;
 		}
 		if (viop->vn_file == USER_ADDR_NULL) {
@@ -1014,8 +1024,13 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data,
 		error = vniocattach_shadow(vn, viop, dev, 0, p);
 		break;
 
+#ifdef __LP64__
+	case VNIOCATTACH32:
+	case VNIOCATTACH:
+#else
 	case VNIOCATTACH:
 	case VNIOCATTACH64:
+#endif
 		if (is_char) {
 			/* attach only on block device */
 			error = ENODEV;
@@ -1027,7 +1042,7 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data,
 		}
 		if (!proc_is64bit(p)) {
 			/* downstream code expects LP64 version of vn_ioctl structure */
-			vn_ioctl_to_64((struct vn_ioctl *)viop, &user_vnio);
+			vn_ioctl_to_64((struct vn_ioctl_32 *)viop, &user_vnio);
 			viop = &user_vnio;
 		}
 		if (viop->vn_file == USER_ADDR_NULL) {
@@ -1037,8 +1052,13 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data,
 		error = vniocattach_file(vn, viop, dev, 0, p);
 		break;
 
+#ifdef __LP64__
+	case VNIOCDETACH32:
+	case VNIOCDETACH:
+#else
 	case VNIOCDETACH:
 	case VNIOCDETACH64:
+#endif
 		if (is_char) {
 			/* detach only on block device */
 			error = ENODEV;
@@ -1107,7 +1127,7 @@ vnioctl_blk(dev_t dev, u_long cmd, caddr_t data, int flag, proc_t p)
 
 static int
 vniocattach_file(struct vn_softc *vn,
-		 struct user_vn_ioctl *vniop,
+		 struct vn_ioctl_64 *vniop,
 		 dev_t dev,
 		 int in_kernel,
 		 proc_t p)
@@ -1121,7 +1141,7 @@ vniocattach_file(struct vn_softc *vn,
 
 	flags = FREAD|FWRITE;
 	if (in_kernel) {
-		NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE32, vniop->vn_file, ctx);
+		NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, vniop->vn_file, ctx);
 	}
 	else {
 		NDINIT(&nd, LOOKUP, FOLLOW, 
@@ -1136,7 +1156,7 @@ vniocattach_file(struct vn_softc *vn,
 		}
 		flags &= ~FWRITE;
 		if (in_kernel) {
-			NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE32, 
+			NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, 
 			       vniop->vn_file, ctx);
 		}
 		else {
@@ -1190,8 +1210,8 @@ vniocattach_file(struct vn_softc *vn,
 }
 
 static int
-vniocattach_shadow(struct vn_softc *vn, struct user_vn_ioctl *vniop, 
-				   __unused int dev, int in_kernel, proc_t p)
+vniocattach_shadow(struct vn_softc *vn, struct vn_ioctl_64 *vniop, 
+				   __unused dev_t dev, int in_kernel, proc_t p)
 {
 	vfs_context_t ctx = vfs_context_current();
 	struct nameidata nd;
@@ -1201,7 +1221,7 @@ vniocattach_shadow(struct vn_softc *vn, struct user_vn_ioctl *vniop,
 
 	flags = FREAD|FWRITE;
 	if (in_kernel) {
-		NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE32, vniop->vn_file, ctx);
+		NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, vniop->vn_file, ctx);
 	}
 	else {
 		NDINIT(&nd, LOOKUP, FOLLOW, 
@@ -1244,7 +1264,7 @@ vndevice_root_image(char * path, char devname[], dev_t * dev_p)
 {
 	int 			error = 0;
 	struct vn_softc *		vn;
-	struct user_vn_ioctl 	vnio;
+	struct vn_ioctl_64 	vnio;
 
 	vnio.vn_file = CAST_USER_ADDR_T(path);
 	vnio.vn_size = 0;
@@ -1377,7 +1397,7 @@ vndevice_do_init( void )
 }
 
 static void 
-vn_ioctl_to_64(struct vn_ioctl *from, struct user_vn_ioctl *to) 
+vn_ioctl_to_64(struct vn_ioctl_32 *from, struct vn_ioctl_64 *to) 
 {
 	to->vn_file = CAST_USER_ADDR_T(from->vn_file);
 	to->vn_size = from->vn_size;

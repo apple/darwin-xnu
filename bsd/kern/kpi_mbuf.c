@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -37,7 +37,8 @@
 #include <kern/kalloc.h>
 #include <string.h>
 #include <netinet/in.h>
-#include "kpi_mbuf_internal.h"
+
+#include "net/net_str_id.h"
 
 static const mbuf_flags_t mbuf_flags_mask = MBUF_EXT | MBUF_PKTHDR | MBUF_EOR |
 				MBUF_BCAST | MBUF_MCAST | MBUF_FRAG | MBUF_FIRSTFRAG |
@@ -354,6 +355,17 @@ errno_t mbuf_adjustlen(mbuf_t m, int amount)
 	return 0;
 }
 
+mbuf_t
+mbuf_concatenate(mbuf_t dst, mbuf_t src)
+{
+	if (dst == NULL)
+		return (NULL);
+
+	m_cat(dst, src);
+
+	/* return dst as is in the current implementation */
+	return (dst);
+}
 errno_t mbuf_copydata(const mbuf_t m0, size_t off, size_t len, void* out_data)
 {
 	/* Copied m_copydata, added error handling (don't just panic) */
@@ -529,7 +541,7 @@ extern void in_cksum_offset(struct mbuf* m, size_t ip_offset);
 extern void in_delayed_cksum_offset(struct mbuf *m, int ip_offset);
 
 void
-mbuf_outbound_finalize(mbuf_t mbuf, u_long protocol_family, size_t protocol_offset)
+mbuf_outbound_finalize(mbuf_t mbuf, u_int32_t protocol_family, size_t protocol_offset)
 {
 	if ((mbuf->m_pkthdr.csum_flags &
 		 (CSUM_DELAY_DATA | CSUM_DELAY_IP | CSUM_TCP_SUM16)) == 0)
@@ -568,7 +580,7 @@ mbuf_outbound_finalize(mbuf_t mbuf, u_long protocol_family, size_t protocol_offs
 			 * Hardware checksum code looked pretty IPv4 specific.
 			 */
 			if ((mbuf->m_pkthdr.csum_flags & (CSUM_DELAY_DATA | CSUM_DELAY_IP)) != 0)
-				panic("mbuf_outbound_finalize - CSUM flags set for non-IPv4 packet (%lu)!\n", protocol_family);
+				panic("mbuf_outbound_finalize - CSUM flags set for non-IPv4 packet (%u)!\n", protocol_family);
 	}
 }
 
@@ -618,6 +630,27 @@ mbuf_set_csum_requested(
 	request &= mbuf_valid_csum_request_flags;
 	mbuf->m_pkthdr.csum_flags = (mbuf->m_pkthdr.csum_flags & 0xffff0000) | request;
 	mbuf->m_pkthdr.csum_data = value;
+	
+	return 0;
+}
+
+static const mbuf_tso_request_flags_t mbuf_valid_tso_request_flags = 
+	MBUF_TSO_IPV4 | MBUF_TSO_IPV6;
+
+errno_t
+mbuf_get_tso_requested(
+	mbuf_t mbuf,
+	mbuf_tso_request_flags_t *request,
+	u_int32_t *value)
+{
+	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 ||
+			request == NULL || value == NULL)
+		return EINVAL;
+
+	*request = mbuf->m_pkthdr.csum_flags;
+	*request &= mbuf_valid_tso_request_flags;
+	if (*request && value != NULL) 
+		*value = mbuf->m_pkthdr.tso_segsz;
 	
 	return 0;
 }
@@ -754,111 +787,14 @@ nd6_storelladdr(void)
  * Mbuf tag KPIs
  */
 
-struct mbuf_tag_id_entry {
-	SLIST_ENTRY(mbuf_tag_id_entry)	next;
-	mbuf_tag_id_t					id;
-	char							string[];
-};
-
-#define	MBUF_TAG_ID_ENTRY_SIZE(__str) \
-	((size_t)&(((struct mbuf_tag_id_entry*)0)->string[0]) + \
-	 strlen(__str) + 1)
-
-#define	MTAG_FIRST_ID					1000
-static mbuf_tag_id_t					mtag_id_next = MTAG_FIRST_ID;
-static SLIST_HEAD(,mbuf_tag_id_entry)	mtag_id_list = {NULL};
-static lck_mtx_t						*mtag_id_lock = NULL;
-
-__private_extern__ void
-mbuf_tag_id_first_last(
-	mbuf_tag_id_t * first,
-	mbuf_tag_id_t * last)
-{
-	*first = MTAG_FIRST_ID;
-	*last = mtag_id_next - 1;
-}
-
-__private_extern__ errno_t
-mbuf_tag_id_find_internal(
-	const char		*string,
-	mbuf_tag_id_t	*out_id,
-	int				create)
-{
-	struct mbuf_tag_id_entry			*entry = NULL;
-	
-	
-	*out_id = 0;
-	
-	if (string == NULL || out_id == NULL) {
-		return EINVAL;
-	}
-	
-	/* Don't bother allocating the lock if we're only doing a lookup */
-	if (create == 0 && mtag_id_lock == NULL)
-		return ENOENT;
-	
-	/* Allocate lock if necessary */
-	if (mtag_id_lock == NULL) {
-		lck_grp_attr_t	*grp_attrib = NULL;
-		lck_attr_t		*lck_attrb = NULL;
-		lck_grp_t		*lck_group = NULL;
-		lck_mtx_t		*new_lock = NULL;
-		
-		grp_attrib = lck_grp_attr_alloc_init();
-		lck_group = lck_grp_alloc_init("mbuf_tag_allocate_id", grp_attrib);
-		lck_grp_attr_free(grp_attrib);
-		lck_attrb = lck_attr_alloc_init();
-
-		new_lock = lck_mtx_alloc_init(lck_group, lck_attrb);
-		if (!OSCompareAndSwap((UInt32)0, (UInt32)new_lock, (UInt32*)&mtag_id_lock)) {
-			/*
-			 * If the atomic swap fails, someone else has already
-			 * done this work. We can free the stuff we allocated.
-			 */
-			lck_mtx_free(new_lock, lck_group);
-			lck_grp_free(lck_group);
-		}
-		lck_attr_free(lck_attrb);
-	}
-	
-	/* Look for an existing entry */
-	lck_mtx_lock(mtag_id_lock);
-	SLIST_FOREACH(entry, &mtag_id_list, next) {
-		if (strncmp(string, entry->string, strlen(string) + 1) == 0) {
-			break;
-		}
-	}
-	
-	if (entry == NULL) {
-		if (create == 0) {
-			lck_mtx_unlock(mtag_id_lock);
-			return ENOENT;
-		}
-		
-		entry = kalloc(MBUF_TAG_ID_ENTRY_SIZE(string));
-		if (entry == NULL) {
-			lck_mtx_unlock(mtag_id_lock);
-			return ENOMEM;
-		}
-		
-		strlcpy(entry->string, string, strlen(string)+1);
-		entry->id = mtag_id_next;
-		mtag_id_next++;
-		SLIST_INSERT_HEAD(&mtag_id_list, entry, next);
-	}
-	lck_mtx_unlock(mtag_id_lock);
-	
-	*out_id = entry->id;
-	
-	return 0;
-}
+#define MTAG_FIRST_ID FIRST_KPI_STR_ID
 
 errno_t
 mbuf_tag_id_find(
 	const char		*string,
 	mbuf_tag_id_t	*out_id)
 {
-	return mbuf_tag_id_find_internal(string, out_id, 1);
+	return net_str_id_find_internal(string, out_id, NSI_MBUF_TAG, 1);
 }
 
 errno_t
@@ -871,13 +807,15 @@ mbuf_tag_allocate(
 	void**			data_p)
 {
 	struct m_tag *tag;
+	u_int32_t mtag_id_first, mtag_id_last;
 	
 	if (data_p != NULL)
 		*data_p = NULL;
 	
 	/* Sanity check parameters */
-	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 || id < MTAG_FIRST_ID ||
-		id >= mtag_id_next || length < 1 || (length & 0xffff0000) != 0 ||
+	(void) net_str_id_first_last(&mtag_id_first, &mtag_id_last, NSI_MBUF_TAG);
+	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 || id < mtag_id_first ||
+		id > mtag_id_last || length < 1 || (length & 0xffff0000) != 0 ||
 		data_p == NULL) {
 		return EINVAL;
 	}
@@ -910,6 +848,7 @@ mbuf_tag_find(
 	void**			data_p)
 {
 	struct m_tag *tag;
+	u_int32_t mtag_id_first, mtag_id_last;
 	
 	if (length != NULL)
 		*length = 0;
@@ -917,8 +856,9 @@ mbuf_tag_find(
 		*data_p = NULL;
 	
 	/* Sanity check parameters */
-	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 || id < MTAG_FIRST_ID ||
-		id >= mtag_id_next || length == NULL || data_p == NULL) {
+	(void) net_str_id_first_last(&mtag_id_first, &mtag_id_last, NSI_MBUF_TAG);
+	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 || id < mtag_id_first ||
+		id > mtag_id_last || length == NULL || data_p == NULL) {
 		return EINVAL;
 	}
 	
@@ -942,9 +882,12 @@ mbuf_tag_free(
 	mbuf_tag_type_t	type)
 {
 	struct m_tag *tag;
+	u_int32_t mtag_id_first, mtag_id_last;
 	
-	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 || id < MTAG_FIRST_ID ||
-		id >= mtag_id_next)
+	/* Sanity check parameters */
+	(void) net_str_id_first_last(&mtag_id_first, &mtag_id_last, NSI_MBUF_TAG);
+	if (mbuf == NULL || (mbuf->m_flags & M_PKTHDR) == 0 || id < mtag_id_first ||
+		id > mtag_id_last)
 		return;
 	
 	tag = m_tag_locate(mbuf, id, type, NULL);
@@ -1117,11 +1060,14 @@ out:
 	return result;
 }
 
-#if !INET6
-void inet6_unsupported(void);
-
-void inet6_unsupported(void)
+u_int32_t
+mbuf_get_mlen(void)
 {
-	*((int *)0) = 0x1;
+	return (_MLEN);
 }
-#endif /* !INET6 */
+
+u_int32_t
+mbuf_get_mhlen(void)
+{
+	return (_MHLEN);
+}

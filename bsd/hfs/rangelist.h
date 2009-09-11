@@ -46,10 +46,10 @@ enum rl_overlaptype {
 
 #define RL_INFINITY ((off_t)-1)
 
-CIRCLEQ_HEAD(rl_head, rl_entry);
+TAILQ_HEAD(rl_head, rl_entry);
 
 struct rl_entry {
-    CIRCLEQ_ENTRY(rl_entry) rl_link;
+    TAILQ_ENTRY(rl_entry) rl_link;
     off_t rl_start;
     off_t rl_end;
 };

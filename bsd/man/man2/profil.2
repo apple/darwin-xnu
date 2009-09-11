@@ -36,7 +36,7 @@
 .\"
 .\"	@(#)profil.2	8.1 (Berkeley) 6/4/93
 .\"
-.Dd June 4, 1993
+.Dd September 26, 2008
 .Dt PROFIL 2
 .Os
 .Sh NAME
@@ -49,6 +49,13 @@
 .Ft int
 .Fn profil "char *samples" "size_t size" "u_long offset" "u_int scale"
 .Sh DESCRIPTION
+.Pp
+.Fd -- This function is now deprecated. It will always return EINVAL. --
+.Pp
+The intended replacements are the user-level developer tools, like CHUD and dtrace.
+.Pp
+------
+.Pp
 The
 .Fn profil
 function enables or disables

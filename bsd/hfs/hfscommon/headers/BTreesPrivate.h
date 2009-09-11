@@ -289,7 +289,7 @@ typedef BTreeKeyPtr			 KeyPtr;
 //////////////////////////////////// Macros /////////////////////////////////////
 
 #if DEBUG_BUILD
-	#define Panic( message )					DebugStr( (ConstStr255Param) message )
+	#define Panic( message )					DebugStr( message )
 	#define PanicIf( condition, message )		do { if ( condition != 0 )	DebugStr( message ); } while(0)
 #else
 	#define Panic( message )				do { } while(0)

@@ -98,6 +98,7 @@ extern void		kalloc_fake_zone_info(
 				int		*exhaustable);
 
 extern vm_size_t kalloc_max_prerounded;
+extern vm_size_t kalloc_large_total;
 
 #endif	/* MACH_KERNEL_PRIVATE */
 

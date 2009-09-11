@@ -32,63 +32,6 @@
 #define super IOMemoryDescriptor
 OSDefineMetaClassAndStructors(IOMultiMemoryDescriptor, IOMemoryDescriptor)
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-bool IOMultiMemoryDescriptor::initWithAddress(
-                                  void *      /* address       */ ,
-                                  IOByteCount /* withLength    */ ,
-                                  IODirection /* withDirection */ )
-{
-    return false;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-bool IOMultiMemoryDescriptor::initWithAddress(
-                                  vm_address_t /* address       */ ,
-                                  IOByteCount  /* withLength    */ ,
-                                  IODirection  /* withDirection */ ,
-                                  task_t       /* withTask      */ )
-{
-    return false;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-bool IOMultiMemoryDescriptor::initWithPhysicalAddress(
-                                  IOPhysicalAddress /* address       */ ,
-                                  IOByteCount       /* withLength    */ ,
-                                  IODirection       /* withDirection */ )
-{
-    return false;
-}
-
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-bool IOMultiMemoryDescriptor::initWithPhysicalRanges(
-                                  IOPhysicalRange * /* ranges        */ ,
-                                  UInt32            /* withCount     */ ,
-                                  IODirection       /* withDirection */ ,
-                                  bool              /* asReference   */ )
-{
-    return false;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-bool IOMultiMemoryDescriptor::initWithRanges(
-                                  IOVirtualRange * /* ranges        */ ,
-                                  UInt32           /* withCount     */ ,
-                                  IODirection      /* withDirection */ ,
-                                  task_t           /* withTask      */ ,
-                                  bool             /* asReference   */ )
-{
-    return false;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 IOMultiMemoryDescriptor * IOMultiMemoryDescriptor::withDescriptors(
                                   IOMemoryDescriptor ** descriptors,
                                   UInt32                withCount,
@@ -117,8 +60,6 @@ IOMultiMemoryDescriptor * IOMultiMemoryDescriptor::withDescriptors(
 
     return me;
 }
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 bool IOMultiMemoryDescriptor::initWithDescriptors(
                                   IOMemoryDescriptor ** descriptors,
@@ -155,7 +96,10 @@ bool IOMultiMemoryDescriptor::initWithDescriptors(
     _descriptors            = 0;
     _descriptorsCount       = withCount;
     _descriptorsIsAllocated = asReference ? false : true;
-    _direction              = withDirection;
+    _flags                  = withDirection;
+#ifndef __LP64__
+    _direction              = (IODirection) (_flags & kIOMemoryDirectionMask);
+#endif /* !__LP64__ */
     _length                 = 0;
     _mappings               = 0;
     _tag                    = 0;
@@ -185,8 +129,6 @@ bool IOMultiMemoryDescriptor::initWithDescriptors(
     return true;
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 void IOMultiMemoryDescriptor::free()
 {
     //
@@ -205,8 +147,6 @@ void IOMultiMemoryDescriptor::free()
     super::free();
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 IOReturn IOMultiMemoryDescriptor::prepare(IODirection forDirection)
 {
     //
@@ -223,7 +163,7 @@ IOReturn IOMultiMemoryDescriptor::prepare(IODirection forDirection)
 
     if ( forDirection == kIODirectionNone )
     {
-        forDirection = _direction;
+        forDirection = getDirection();
     }
 
     for ( index = 0; index < _descriptorsCount; index++ ) 
@@ -244,8 +184,6 @@ IOReturn IOMultiMemoryDescriptor::prepare(IODirection forDirection)
     return status;
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 IOReturn IOMultiMemoryDescriptor::complete(IODirection forDirection)
 {
     //
@@ -261,7 +199,7 @@ IOReturn IOMultiMemoryDescriptor::complete(IODirection forDirection)
 
     if ( forDirection == kIODirectionNone )
     {
-        forDirection = _direction;
+        forDirection = getDirection();
     }
 
     for ( unsigned index = 0; index < _descriptorsCount; index++ ) 
@@ -274,65 +212,10 @@ IOReturn IOMultiMemoryDescriptor::complete(IODirection forDirection)
     return statusFinal;
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-addr64_t IOMultiMemoryDescriptor::getPhysicalSegment64( 
-				    IOByteCount   offset, IOByteCount * length )
-{
-    //
-    // This method returns the physical address of the byte at the given offset
-    // into the memory,  and optionally the length of the physically contiguous
-    // segment from that offset.
-    //
-
-    assert(offset <= _length);
-
-    for ( unsigned index = 0; index < _descriptorsCount; index++ ) 
-    {
-        if ( offset < _descriptors[index]->getLength() )
-        {
-            return _descriptors[index]->getPhysicalSegment64(offset, length);
-        }
-        offset -= _descriptors[index]->getLength();
-    }
-
-    if ( length )  *length = 0;
-
-    return 0;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-IOPhysicalAddress IOMultiMemoryDescriptor::getPhysicalSegment( 
-				    IOByteCount   offset, IOByteCount * length )
-{
-    //
-    // This method returns the physical address of the byte at the given offset
-    // into the memory,  and optionally the length of the physically contiguous
-    // segment from that offset.
-    //
-
-    assert(offset <= _length);
-
-    for ( unsigned index = 0; index < _descriptorsCount; index++ ) 
-    {
-        if ( offset < _descriptors[index]->getLength() )
-        {
-            return _descriptors[index]->getPhysicalSegment(offset, length);
-        }
-        offset -= _descriptors[index]->getLength();
-    }
-
-    if ( length )  *length = 0;
-
-    return 0;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-IOPhysicalAddress IOMultiMemoryDescriptor::getSourceSegment(
+addr64_t IOMultiMemoryDescriptor::getPhysicalSegment(
                                                        IOByteCount   offset,
-                                                       IOByteCount * length )
+                                                       IOByteCount * length,
+                                                       IOOptionBits  options )
 {
     //
     // This method returns the physical address of the byte at the given offset
@@ -346,7 +229,7 @@ IOPhysicalAddress IOMultiMemoryDescriptor::getSourceSegment(
     {
         if ( offset < _descriptors[index]->getLength() )
         {
-            return _descriptors[index]->getSourceSegment(offset, length);
+            return _descriptors[index]->getPhysicalSegment(offset, length, options);
         }
         offset -= _descriptors[index]->getLength();
     }
@@ -354,84 +237,4 @@ IOPhysicalAddress IOMultiMemoryDescriptor::getSourceSegment(
     if ( length )  *length = 0;
 
     return 0;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-void * IOMultiMemoryDescriptor::getVirtualSegment( IOByteCount   /* offset */ ,
-                                                   IOByteCount * /* length */ )
-{
-    return 0;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-IOByteCount IOMultiMemoryDescriptor::readBytes( IOByteCount offset,
-                                                void *      bytes,
-                                                IOByteCount withLength )
-{
-    //
-    // Copies data from the memory descriptor's buffer at the given offset, to
-    // the specified buffer.  Returns the number of bytes copied.
-    //
-
-    IOByteCount bytesCopied = 0;
-    unsigned    index;
-
-    for ( index = 0; index < _descriptorsCount; index++ ) 
-    {
-        if ( offset < _descriptors[index]->getLength() )  break;
-        offset -= _descriptors[index]->getLength();
-    }
-
-    for ( ; index < _descriptorsCount && withLength; index++)
-    {
-        IOByteCount copy   = min(_descriptors[index]->getLength(), withLength);
-        IOByteCount copied = _descriptors[index]->readBytes(offset,bytes,copy);
-
-        bytesCopied += copied;
-        if ( copied != copy )  break;
-
-        bytes = ((UInt8 *) bytes) + copied;
-        withLength -= copied;
-        offset = 0;
-    }
-
-    return bytesCopied;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-IOByteCount IOMultiMemoryDescriptor::writeBytes( IOByteCount  offset,
-                                                 const void * bytes,
-                                                 IOByteCount  withLength )
-{
-    //
-    // Copies data to the memory descriptor's buffer at the given offset, from
-    // the specified buffer.  Returns the number of bytes copied.
-    //
-
-    IOByteCount bytesCopied = 0;
-    unsigned    index;
-
-    for ( index = 0; index < _descriptorsCount; index++ ) 
-    {
-        if ( offset < _descriptors[index]->getLength() )  break;
-        offset -= _descriptors[index]->getLength();
-    }
-
-    for ( ; index < _descriptorsCount && withLength; index++)
-    {
-        IOByteCount copy   = min(_descriptors[index]->getLength(), withLength);
-        IOByteCount copied = _descriptors[index]->writeBytes(offset,bytes,copy);
-
-        bytesCopied += copied;
-        if ( copied != copy )  break;
-
-        bytes = ((UInt8 *) bytes) + copied;
-        withLength -= copied;
-        offset = 0;
-    }
-
-    return bytesCopied;
 }

@@ -84,6 +84,6 @@ struct	rtentry *tcp_rtlookup6(struct inpcb *);
 
 extern struct	pr_usrreqs tcp6_usrreqs;
 
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
-#endif _NETINET_TCP6_VAR_H_
+#endif /* _NETINET_TCP6_VAR_H_ */

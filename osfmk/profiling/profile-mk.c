@@ -47,11 +47,6 @@
 
 extern char etext[], pstart[];
 
-#if NCPUS > 1
-struct profile_vars *_profile_vars_cpus[NCPUS] = { &_profile_vars };
-struct profile_vars _profile_vars_aux[NCPUS-1];
-#endif
-
 void *
 _profile_alloc_pages (size_t size)
 {
@@ -102,7 +97,6 @@ kmstartup(void)
 	prof_uptrint_t monsize;
 	prof_uptrint_t lowpc;
 	prof_uptrint_t highpc;
-	int i;
 	struct profile_vars *pv;
 
 	/*
@@ -115,48 +109,40 @@ kmstartup(void)
 	textsize = highpc - lowpc;
 	monsize = (textsize / HISTFRACTION) * sizeof(LHISTCOUNTER);
 
-	for (i = 0; i < NCPUS; i++) {
-		pv = PROFILE_VARS(i);
-
-#if NCPUS > 1
-		if (!pv) {
-			_profile_vars_cpus[i] = pv = &_profile_vars_aux[i-i];
-		}
-#endif
+	pv = PROFILE_VARS(0);
 
 #ifdef DEBUG_PROFILE
-		pv->debug = 1;
+	pv->debug = 1;
 #endif
-		pv->page_size = PAGE_SIZE;
-		_profile_md_init(pv, PROFILE_GPROF, PROFILE_ALLOC_MEM_YES);
+	pv->page_size = PAGE_SIZE;
+	_profile_md_init(pv, PROFILE_GPROF, PROFILE_ALLOC_MEM_YES);
 
-		/* Profil related variables */
-		pv->profil_buf = _profile_alloc (pv, monsize, ACONTEXT_PROFIL);
-		pv->profil_info.highpc = highpc;
-		pv->profil_info.lowpc = lowpc;
-		pv->profil_info.text_len = textsize;
-		pv->profil_info.profil_len = monsize;
-		pv->profil_info.counter_size = sizeof(LHISTCOUNTER);
-		pv->profil_info.scale = 0x10000 / HISTFRACTION;
-		pv->stats.profil_buckets = monsize / sizeof(LHISTCOUNTER);
+	/* Profil related variables */
+	pv->profil_buf = _profile_alloc (pv, monsize, ACONTEXT_PROFIL);
+	pv->profil_info.highpc = highpc;
+	pv->profil_info.lowpc = lowpc;
+	pv->profil_info.text_len = textsize;
+	pv->profil_info.profil_len = monsize;
+	pv->profil_info.counter_size = sizeof(LHISTCOUNTER);
+	pv->profil_info.scale = 0x10000 / HISTFRACTION;
+	pv->stats.profil_buckets = monsize / sizeof(LHISTCOUNTER);
 
-		/* Other gprof variables */
-		pv->stats.my_cpu = i;
-		pv->stats.max_cpu = NCPUS;
-		pv->init = 1;
-		pv->active = 1;
-		pv->use_dci = 0;
-		pv->use_profil = 1;
-		pv->check_funcs = 1;		/* for now */
+	/* Other gprof variables */
+	pv->stats.my_cpu = 0;
+	pv->stats.max_cpu = 1;  /* initial number of cpus */
+	pv->init = 1;
+	pv->active = 1;
+	pv->use_dci = 0;
+	pv->use_profil = 1;
+	pv->check_funcs = 1;		/* for now */
 
-		if (pv->debug) {
-			printf("Profiling kernel, s_textsize=%ld, monsize=%ld [0x%lx..0x%lx], cpu = %d\n",
-			       (long)textsize,
-			       (long)monsize,
-			       (long)lowpc,
-			       (long)highpc,
-			       i);
-		}
+	if (pv->debug) {
+		printf("Profiling kernel, s_textsize=%ld, monsize=%ld [0x%lx..0x%lx], cpu = %d\n",
+			 (long)textsize,
+			(long)monsize,
+			(long)lowpc,
+			(long)highpc,
+			0);
 	}
 
 	_profile_md_start();
@@ -207,7 +193,7 @@ gprofstrategy(io_req_t ior)
 	long count = _profile_kgmon(!(ior->io_op & IO_READ),
 				    ior->io_count,
 				    ior->io_recnum,
-				    NCPUS,
+				    1,
 				    &sys_ptr,
 				    (void (*)(kgmon_control_t))0);
 

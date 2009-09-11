@@ -68,13 +68,17 @@
 #include <sys/queue.h>  
 #include <security/mac_internal.h>
 #include <bsd/bsm/audit.h>
-#include <bsd/bsm/audit_kernel.h>
+#include <bsd/security/audit/audit.h>
 #include <bsd/sys/malloc.h>
 #include <vm/vm_kern.h>
 #include <kern/kalloc.h>
 #include <kern/zalloc.h>
 
-#if AUDIT
+
+int mac_audit(__unused int len, __unused u_char *data);
+
+
+#if CONFIG_AUDIT
 
 /* The zone allocator is initialized in mac_base.c. */
 zone_t mac_audit_data_zone;
@@ -162,7 +166,7 @@ mac_proc_check_getaudit(struct proc *curp)
 }
 
 int
-mac_proc_check_setaudit(struct proc *curp, struct auditinfo *ai)
+mac_proc_check_setaudit(struct proc *curp, struct auditinfo_addr *ai)
 {
 	kauth_cred_t cred;
 	int error;
@@ -318,28 +322,28 @@ mac_audit_check_postselect(struct ucred *cred, unsigned short syscode,
 	return (ret);
 }
 
-#else	/* AUDIT */
+#else	/* !CONFIG_AUDIT */
 
 /*
  * Function stubs for when AUDIT isn't defined.
  */
 
 int
-mac_system_check_audit(struct ucred *cred, void *record, int length)
+mac_system_check_audit(__unused struct ucred *cred, __unused void *record, __unused int length)
 {
 
 	return (0);
 }
 
 int
-mac_system_check_auditon(struct ucred *cred, int cmd)
+mac_system_check_auditon(__unused struct ucred *cred, __unused int cmd)
 {
 
 	return (0);
 }
 
 int
-mac_system_check_auditctl(struct ucred *cred, struct vnode *vp)
+mac_system_check_auditctl(__unused struct ucred *cred, __unused struct vnode *vp)
 {
 
 	return (0);
@@ -367,7 +371,8 @@ mac_proc_check_getaudit(__unused struct proc *curp)
 }
 
 int
-mac_proc_check_setaudit(__unused struct proc *curp, struct auditinfo *ai)
+mac_proc_check_setaudit(__unused struct proc *curp,
+    __unused struct auditinfo_addr *ai)
 {
 
 	return (0);
@@ -390,7 +395,7 @@ mac_audit_check_postselect(__unused struct ucred *cred, __unused unsigned short 
 }
 
 int
-mac_audit(int len, u_char *data)
+mac_audit(__unused int len, __unused u_char *data)
 {
 
 	return (0);
@@ -401,4 +406,4 @@ mac_audit_text(__unused char *text, __unused mac_policy_handle_t handle)
 {
 	return (0);
 }
-#endif	/* !AUDIT */
+#endif	/* !CONFIG_AUDIT */

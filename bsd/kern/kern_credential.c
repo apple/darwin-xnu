@@ -37,7 +37,6 @@
  * and identity information.
  */
 
-
 #include <sys/param.h>	/* XXX trim includes */
 #include <sys/acct.h>
 #include <sys/systm.h>
@@ -50,12 +49,18 @@
 #include <sys/kauth.h>
 #include <sys/kernel.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <sys/mount.h>
 #include <sys/sysproto.h>
+#include <sys/kern_callout.h>
 #include <mach/message.h>
 #include <mach/host_security.h>
+
+/* mach_absolute_time() */
+#include <mach/clock_types.h>
+#include <mach/mach_types.h>
+#include <mach/mach_time.h>
 
 #include <libkern/OSAtomic.h>
 
@@ -71,6 +76,8 @@
 #include <security/mac.h>
 #include <security/mac_framework.h>
 #endif
+
+void mach_kauth_cred_uthread_update( void );
 
 #define CRED_DIAGNOSTIC 0
 
@@ -143,6 +150,7 @@ struct kauth_resolver_work {
 	TAILQ_ENTRY(kauth_resolver_work) kr_link;
 	struct kauth_identity_extlookup kr_work;
 	uint32_t	kr_seqno;
+	uint64_t	kr_subtime;	/* submission time */
 	int		kr_refs;
 	int		kr_flags;
 #define KAUTH_REQUEST_UNSUBMITTED	(1<<0)
@@ -166,6 +174,9 @@ static int	kauth_cred_table_size = 0;
 
 TAILQ_HEAD(kauth_cred_entry_head, ucred);
 static struct kauth_cred_entry_head * kauth_cred_table_anchor = NULL;
+
+/* Weighted moving average for resolver response time */
+static struct kco_moving_average resolver_ma;
 
 #define KAUTH_CRED_HASH_DEBUG	0
 
@@ -218,6 +229,11 @@ kauth_resolver_init(void)
 	TAILQ_INIT(&kauth_resolver_done);
 	kauth_resolver_sequence = 31337;
 	kauth_resolver_mtx = lck_mtx_alloc_init(kauth_lck_grp, 0/*LCK_ATTR_NULL*/);
+
+	/*
+	 * 110% of average response time is "too long" and should be reported
+	 */
+	kco_ma_init(&resolver_ma, 110, KCO_MA_F_WMA);
 }
 
 
@@ -248,6 +264,7 @@ kauth_resolver_submit(struct kauth_identity_extlookup *lkp)
 	struct kauth_resolver_work *workp, *killp;
 	struct timespec ts;
 	int	error, shouldfree;
+	uint64_t	duration;
 	
 	/* no point actually blocking if the resolver isn't up yet */
 	if (kauth_resolver_identity == 0) {
@@ -310,6 +327,26 @@ kauth_resolver_submit(struct kauth_identity_extlookup *lkp)
 		if (error != 0)
 			break;
 	}
+
+	/*
+	 * Update the moving average of how long it took; if it took longer
+	 * than the time threshold, then we complain about it being slow.
+	 */
+	duration = mach_absolute_time() - workp->kr_subtime;
+	if (kco_ma_addsample(&resolver_ma, duration)) {
+		uint64_t	average;
+		uint64_t	old_average;
+		int32_t		threshold;
+		int		count;
+
+		/* If we can't get information, don't log anything */
+		if (kco_ma_info(&resolver_ma, KCO_MA_F_WMA, &average, &old_average, &threshold, &count)) {
+			char pname[MAXCOMLEN+1] = "(NULL)";
+			proc_name(kauth_resolver_identity, pname, sizeof(pname));
+			// <rdar://6276265>  printf("kauth_resolver_submit: External resolver pid %d (name %s) response time %lld, average %lld new %lld threshold %d%% actual %d%% count %d\n", kauth_resolver_identity, pname, duration, old_average, average, threshold, (int)((duration * 100) / old_average), count);
+		}
+	}
+
 	/* if the request was processed, copy the result */
 	if (error == 0)
 		*lkp = workp->kr_work;
@@ -389,7 +426,7 @@ kauth_resolver_submit(struct kauth_identity_extlookup *lkp)
  *		for the next request.
  */
 int
-identitysvc(__unused struct proc *p, struct identitysvc_args *uap, __unused register_t *retval)
+identitysvc(__unused struct proc *p, struct identitysvc_args *uap, __unused int32_t *retval)
 {
 	int opcode = uap->opcode;
 	user_addr_t message = uap->message;
@@ -432,6 +469,24 @@ identitysvc(__unused struct proc *p, struct identitysvc_args *uap, __unused regi
 	if (current_proc()->p_pid != kauth_resolver_identity) {
 		KAUTH_DEBUG("RESOLVER - call from bogus resolver %d\n", current_proc()->p_pid);
 		return(EPERM);
+	}
+
+	if (opcode == KAUTH_EXTLOOKUP_DEREGISTER) {
+		/*
+		 * Terminate outstanding requests; without an authoritative
+		 * resolver, we are now back on our own authority.
+		 */
+		struct kauth_resolver_work *killp;
+
+		KAUTH_RESOLVER_LOCK();
+		kauth_resolver_identity = 0;
+		TAILQ_FOREACH(killp, &kauth_resolver_submitted, kr_link)
+		    wakeup(killp);
+		TAILQ_FOREACH(killp, &kauth_resolver_unsubmitted, kr_link)
+		    wakeup(killp);
+		/* Cause all waiting-for-work threads to return EIO */
+		wakeup((caddr_t)&kauth_resolver_unsubmitted);
+		KAUTH_RESOLVER_UNLOCK();
 	}
 	
 	/*
@@ -491,6 +546,12 @@ kauth_resolver_getwork_continue(int result)
 		int error;
 
 		error = msleep0(&kauth_resolver_unsubmitted, kauth_resolver_mtx, PCATCH, "GRGetWork", 0, kauth_resolver_getwork_continue);
+		/*
+		 * If this is a wakeup from another thread in the resolver
+		 * deregistering it, error out the request-for-work thread
+		 */
+		if (!kauth_resolver_identity)
+			error = EIO;
 		KAUTH_RESOLVER_UNLOCK();
 		return(error);
 	}
@@ -541,6 +602,7 @@ kauth_resolver_getwork2(user_addr_t message)
 	TAILQ_REMOVE(&kauth_resolver_unsubmitted, workp, kr_link);
 	workp->kr_flags &= ~KAUTH_REQUEST_UNSUBMITTED;
 	workp->kr_flags |= KAUTH_REQUEST_SUBMITTED;
+	workp->kr_subtime = mach_absolute_time();
 	TAILQ_INSERT_TAIL(&kauth_resolver_submitted, workp, kr_link);
 
 out:
@@ -583,6 +645,12 @@ kauth_resolver_getwork(user_addr_t message)
 		ut->uu_kauth.message = message;
 		error = msleep0(&kauth_resolver_unsubmitted, kauth_resolver_mtx, PCATCH, "GRGetWork", 0, kauth_resolver_getwork_continue);
 		KAUTH_RESOLVER_UNLOCK();
+		/*
+		 * If this is a wakeup from another thread in the resolver
+		 * deregistering it, error out the request-for-work thread
+		 */
+		if (!kauth_resolver_identity)
+			error = EIO;
 		return(error);
 	}
 	return kauth_resolver_getwork2(message);
@@ -605,6 +673,7 @@ kauth_resolver_complete(user_addr_t message)
 {
 	struct kauth_identity_extlookup	extl;
 	struct kauth_resolver_work *workp;
+	struct kauth_resolver_work *killp;
 	int error, result;
 
 	if ((error = copyin(message, &extl, sizeof(extl))) != 0) {
@@ -628,24 +697,38 @@ kauth_resolver_complete(user_addr_t message)
 		}
 	}
 	/* FALLTHROUGH */
+
 	case KAUTH_EXTLOOKUP_SUCCESS:
 		break;
 
 	case KAUTH_EXTLOOKUP_FATAL:
 		/* fatal error means the resolver is dead */
 		KAUTH_DEBUG("RESOLVER - resolver %d died, waiting for a new one", kauth_resolver_identity);
+		/*
+		 * Terminate outstanding requests; without an authoritative
+		 * resolver, we are now back on our own authority.
+		 */
 		kauth_resolver_identity = 0;
-		/* XXX should we terminate all outstanding requests? */
+		TAILQ_FOREACH(killp, &kauth_resolver_submitted, kr_link)
+		    wakeup(killp);
+		TAILQ_FOREACH(killp, &kauth_resolver_unsubmitted, kr_link)
+		    wakeup(killp);
+		/* Cause all waiting-for-work threads to return EIO */
+		wakeup((caddr_t)&kauth_resolver_unsubmitted);
+		/* and return EIO to the caller */
 		error = EIO;
 		break;
+
 	case KAUTH_EXTLOOKUP_BADRQ:
 		KAUTH_DEBUG("RESOLVER - resolver reported invalid request %d", extl.el_seqno);
 		result = EINVAL;
 		break;
+
 	case KAUTH_EXTLOOKUP_FAILURE:
 		KAUTH_DEBUG("RESOLVER - resolver reported transient failure for request %d", extl.el_seqno);
 		result = EIO;
 		break;
+
 	default:
 		KAUTH_DEBUG("RESOLVER - resolver returned unexpected status %d", extl.el_result);
 		result = EIO;
@@ -1772,6 +1855,8 @@ kauth_cred_cache_lookup(int from, int to, void *src, void *dst)
 	 *
 	 * Note:	We ask for as much data as we can get.
 	 */
+	bzero(&el, sizeof(el));
+	el.el_info_pid = current_proc()->p_pid;
 	switch(from) {
 	case KI_VALID_UID:
 		el.el_flags = KAUTH_EXTLOOKUP_VALID_UID;
@@ -2130,6 +2215,8 @@ kauth_cred_ismember_gid(kauth_cred_t cred, gid_t gid, int *resultp)
 		return(0);
 	
 	/* nothing in the cache, need to go to userland */
+	bzero(&el, sizeof(el));
+	el.el_info_pid = current_proc()->p_pid;
 	el.el_flags = KAUTH_EXTLOOKUP_VALID_UID | KAUTH_EXTLOOKUP_VALID_GID | KAUTH_EXTLOOKUP_WANT_MEMBERSHIP;
 	el.el_uid = cred->cr_gmuid;
 	el.el_gid = gid;
@@ -2177,6 +2264,7 @@ kauth_cred_ismember_gid(kauth_cred_t cred, gid_t gid, int *resultp)
 int
 kauth_cred_ismember_guid(kauth_cred_t cred, guid_t *guidp, int *resultp)
 {
+	struct kauth_identity ki;
 	gid_t gid;
 	int error, wkg;
 
@@ -2190,7 +2278,40 @@ kauth_cred_ismember_guid(kauth_cred_t cred, guid_t *guidp, int *resultp)
 		*resultp = 1;
 		break;
 	default:
-		/* translate guid to gid */
+#if 6603280
+		/*
+		 * Grovel the identity cache looking for this GUID.
+		 * If we find it, and it is for a user record, return
+		 * false because it's not a group.
+		 *
+		 * This is necessary because we don't have -ve caching
+		 * of group memberships, and we really want to avoid
+		 * calling out to the resolver if at all possible.
+		 *
+		 * Because we're called by the ACL evaluator, and the
+		 * ACL evaluator is likely to encounter ACEs for users,
+		 * this is expected to be a common case.
+		 */
+		ki.ki_valid = 0;
+		if ((error = kauth_identity_find_guid(guidp, &ki)) == 0 &&
+		    !kauth_identity_guid_expired(&ki)) {
+			if (ki.ki_valid & KI_VALID_GID) {
+				/* It's a group after all... */
+				gid = ki.ki_gid;
+				goto do_check;
+			}
+			if (ki.ki_valid & KI_VALID_UID) {
+				*resultp = 0;
+				return (0);
+			}
+		}
+#endif /* 6603280 */
+		/*
+		 * Attempt to translate the GUID to a GID.  Even if
+		 * this fails, we will have primed the cache if it is
+		 * a user record and we'll see it above the next time
+		 * we're asked.
+		 */
 		if ((error = kauth_cred_guid2gid(guidp, &gid)) != 0) {
 			/*
 			 * If we have no guid -> gid translation, it's not a group and
@@ -2201,6 +2322,7 @@ kauth_cred_ismember_guid(kauth_cred_t cred, guid_t *guidp, int *resultp)
 				error = 0;
 			}
 		} else {
+ do_check:
 			error = kauth_cred_ismember_gid(cred, gid, resultp);
 		}
 	}
@@ -2305,7 +2427,7 @@ static lck_mtx_t *kauth_cred_hash_mtx;
 #define KAUTH_CRED_HASH_LOCK()		lck_mtx_lock(kauth_cred_hash_mtx);
 #define KAUTH_CRED_HASH_UNLOCK()	lck_mtx_unlock(kauth_cred_hash_mtx);
 #if KAUTH_CRED_HASH_DEBUG
-#define KAUTH_CRED_HASH_LOCK_ASSERT()	_mutex_assert(kauth_cred_hash_mtx, MA_OWNED)
+#define KAUTH_CRED_HASH_LOCK_ASSERT()	lck_mtx_assert(kauth_cred_hash_mtx, LCK_MTX_ASSERT_OWNED)
 #else	/* !KAUTH_CRED_HASH_DEBUG */
 #define KAUTH_CRED_HASH_LOCK_ASSERT()
 #endif	/* !KAUTH_CRED_HASH_DEBUG */
@@ -2477,6 +2599,17 @@ kauth_cred_get(void)
 	return(uthread->uu_ucred);
 }
 
+void
+mach_kauth_cred_uthread_update(void)
+{
+	uthread_t uthread;
+	proc_t proc;
+
+	uthread = get_bsdthread_info(current_thread());
+	proc = current_proc();
+
+	kauth_cred_uthread_update(uthread, proc);
+}
 
 /*
  * kauth_cred_uthread_update
@@ -2653,6 +2786,9 @@ kauth_cred_alloc(void)
 	if (newcred != 0) {
 		bzero(newcred, sizeof(*newcred));
 		newcred->cr_ref = 1;
+		newcred->cr_audit.as_aia_p = &audit_default_aia;
+		/* XXX the following will go away with cr_au */
+		newcred->cr_au.ai_auid = AU_DEFAUDITID;
 		/* must do this, or cred has same group membership as uid 0 */
 		newcred->cr_gmuid = KAUTH_UID_NONE;
 #if CRED_DIAGNOSTIC
@@ -2744,6 +2880,13 @@ kauth_cred_create(kauth_cred_t cred)
 			new_cred->cr_gmuid = cred->cr_gmuid;
 			new_cred->cr_ngroups = cred->cr_ngroups;	
 			bcopy(&cred->cr_groups[0], &new_cred->cr_groups[0], sizeof(new_cred->cr_groups));
+#if CONFIG_AUDIT
+			bcopy(&cred->cr_audit, &new_cred->cr_audit, 
+			    sizeof(new_cred->cr_audit));
+			/* XXX the following bcopy() will go away with cr_au */
+			bcopy(&cred->cr_au, &new_cred->cr_au,
+			    sizeof(new_cred->cr_au));
+#endif
 			new_cred->cr_flags = cred->cr_flags;
 			
 			KAUTH_CRED_HASH_LOCK();
@@ -2756,6 +2899,8 @@ kauth_cred_create(kauth_cred_t cred)
 #if CONFIG_MACF
 			mac_cred_label_destroy(new_cred);
 #endif
+			AUDIT_SESSION_UNREF(new_cred);
+
 			FREE_ZONE(new_cred, sizeof(*new_cred), M_CRED);
 			new_cred = NULL;
 		}
@@ -3067,6 +3212,7 @@ kauth_cred_setuidgid(kauth_cred_t cred, uid_t uid, gid_t gid)
 	temp_cred.cr_uid = uid;
 	temp_cred.cr_ruid = uid;
 	temp_cred.cr_svuid = uid;
+	temp_cred.cr_flags = cred->cr_flags;
 	/* inherit the opt-out of memberd */
 	if (cred->cr_flags & CRF_NOMEMBERD) {
 		temp_cred.cr_gmuid = KAUTH_UID_NONE;
@@ -3148,7 +3294,7 @@ kauth_cred_setsvuidgid(kauth_cred_t cred, uid_t uid, gid_t gid)
 /*
  * kauth_cred_setauditinfo
  * 
- * Description:	Update the given credential using the given auditinfo_t.
+ * Description:	Update the given credential using the given au_session_t.
  *
  * Parameters:	cred				The original credential
  *		auditinfo_p			Pointer to ne audit information
@@ -3168,7 +3314,7 @@ kauth_cred_setsvuidgid(kauth_cred_t cred, uid_t uid, gid_t gid)
  *		persistent reference.
  */
 kauth_cred_t
-kauth_cred_setauditinfo(kauth_cred_t cred, auditinfo_t *auditinfo_p)
+kauth_cred_setauditinfo(kauth_cred_t cred, au_session_t *auditinfo_p)
 {
 	struct ucred temp_cred;
 
@@ -3178,13 +3324,25 @@ kauth_cred_setauditinfo(kauth_cred_t cred, auditinfo_t *auditinfo_p)
 	 * We don't need to do anything if the audit info is already the
 	 * same as the audit info in the credential provided.
 	 */
-	if (bcmp(&cred->cr_au, auditinfo_p, sizeof(cred->cr_au)) == 0) {
+	if (bcmp(&cred->cr_audit, auditinfo_p, sizeof(cred->cr_audit)) == 0) {
 		/* no change needed */
 		return(cred);
 	}
 
 	bcopy(cred, &temp_cred, sizeof(temp_cred));
-	bcopy(auditinfo_p, &temp_cred.cr_au, sizeof(temp_cred.cr_au));
+	bcopy(auditinfo_p, &temp_cred.cr_audit, sizeof(temp_cred.cr_audit));
+	/* XXX the following will go away with cr_au */
+	temp_cred.cr_au.ai_auid = auditinfo_p->as_aia_p->ai_auid;
+	temp_cred.cr_au.ai_mask.am_success = 
+		auditinfo_p->as_mask.am_success;
+	temp_cred.cr_au.ai_mask.am_failure = 
+		auditinfo_p->as_mask.am_failure;
+	temp_cred.cr_au.ai_termid.port = 
+		auditinfo_p->as_aia_p->ai_termid.at_port;
+	temp_cred.cr_au.ai_termid.machine = 
+		auditinfo_p->as_aia_p->ai_termid.at_addr[0];
+	temp_cred.cr_au.ai_asid = auditinfo_p->as_aia_p->ai_asid;
+	/* XXX */
 
 	return(kauth_cred_update(cred, &temp_cred, FALSE));
 }
@@ -3504,8 +3662,7 @@ kauth_cred_ref(kauth_cred_t cred)
 	
 	NULLCRED_CHECK(cred);
 
-	// XXX SInt32 not safe for an LP64 kernel
-	old_value = OSAddAtomic(1, (SInt32 *)&cred->cr_ref);
+	old_value = OSAddAtomicLong(1, (long*)&cred->cr_ref);
 
 	if (old_value < 1)
 		panic("kauth_cred_ref: trying to take a reference on a cred with no references");
@@ -3556,8 +3713,7 @@ kauth_cred_unref_hashlocked(kauth_cred_t *credp)
 	KAUTH_CRED_HASH_LOCK_ASSERT();
 	NULLCRED_CHECK(*credp);
 
-	// XXX SInt32 not safe for an LP64 kernel
-	old_value = OSAddAtomic(-1, (SInt32 *)&(*credp)->cr_ref);
+	old_value = OSAddAtomicLong(-1, (long*)&(*credp)->cr_ref);
 
 #if DIAGNOSTIC
 	if (old_value == 0)
@@ -3611,6 +3767,7 @@ kauth_cred_unref(kauth_cred_t *credp)
 }
 
 
+#ifndef __LP64__
 /*
  * kauth_cred_rele
  *
@@ -3631,6 +3788,7 @@ kauth_cred_rele(kauth_cred_t cred)
 {
 	kauth_cred_unref(&cred);
 }
+#endif /* !__LP64__ */
 
 
 /*
@@ -3694,6 +3852,7 @@ kauth_cred_dup(kauth_cred_t cred)
 		newcred->cr_label = temp_label;
 		mac_cred_label_associate(cred, newcred);
 #endif
+		AUDIT_SESSION_REF(cred);
 		newcred->cr_ref = 1;
 	}
 	return(newcred);
@@ -3781,6 +3940,8 @@ kauth_cred_copy_real(kauth_cred_t cred)
 #if CONFIG_MACF
 		mac_cred_label_destroy(newcred);
 #endif
+		AUDIT_SESSION_UNREF(newcred);
+
 		FREE_ZONE(newcred, sizeof(*newcred), M_CRED);
 		newcred = NULL;
 	}
@@ -3828,8 +3989,13 @@ kauth_cred_update(kauth_cred_t old_cred, kauth_cred_t model_cred,
 	 * Make sure we carry the auditinfo forward to the new credential
 	 * unless we are actually updating the auditinfo.
 	 */
-	if (retain_auditinfo)
-		bcopy(&old_cred->cr_au, &model_cred->cr_au, sizeof(model_cred->cr_au));
+	if (retain_auditinfo) {
+		bcopy(&old_cred->cr_audit, &model_cred->cr_audit, 
+		    sizeof(model_cred->cr_audit));
+		/* XXX following bcopy will go away with cr_au */
+		bcopy(&old_cred->cr_au, &model_cred->cr_au,
+		    sizeof(model_cred->cr_au));
+	}
 	
 	for (;;) {
 		int		err;
@@ -3867,6 +4033,8 @@ kauth_cred_update(kauth_cred_t old_cred, kauth_cred_t model_cred,
 #if CONFIG_MACF
 		mac_cred_label_destroy(new_cred);
 #endif
+		AUDIT_SESSION_UNREF(new_cred);
+
 		FREE_ZONE(new_cred, sizeof(*new_cred), M_CRED);
 		new_cred = NULL;
 	}
@@ -3964,6 +4132,8 @@ kauth_cred_remove(kauth_cred_t cred)
 #if CONFIG_MACF
 			mac_cred_label_destroy(cred);
 #endif
+			AUDIT_SESSION_UNREF(cred);
+
 			cred->cr_ref = 0;
 			FREE_ZONE(cred, sizeof(*cred), M_CRED);
 #if KAUTH_CRED_HASH_DEBUG
@@ -4173,9 +4343,13 @@ kauth_cred_print(kauth_cred_t cred)
 		printf("%d ", cred->cr_groups[i]);
 	}
 	printf("r%d sv%d ", cred->cr_rgid, cred->cr_svgid);
-	printf("auditinfo %d %d %d %d %d %d\n", 
-		cred->cr_au.ai_auid, cred->cr_au.ai_mask.am_success, cred->cr_au.ai_mask.am_failure, 
-		cred->cr_au.ai_termid.port, cred->cr_au.ai_termid.machine, cred->cr_au.ai_asid);
+	printf("auditinfo_addr %d %d %d %d %d %d\n", 
+		cred->cr_audit.s_aia_p->ai_auid,
+		cred->cr_audit.as_mask.am_success,
+		cred->cr_audit.as_mask.am_failure,
+		cred->cr_audit.as_aia_p->ai_termid.at_port,
+		cred->cr_audit.as_aia_p->ai_termid.at_addr[0],
+		cred->cr_audit.as_aia_p->ai_asid);
 }
 
 int is_target_cred( kauth_cred_t the_cred )
@@ -4216,18 +4390,18 @@ int is_target_cred( kauth_cred_t the_cred )
 		return( 0 );
 	if ( the_cred->cr_gmuid != 3475 ) 
 		return( 0 );
-	if ( the_cred->cr_au.ai_auid != 3475 ) 
+	if ( the_cred->cr_audit.as_aia_p->ai_auid != 3475 ) 
 		return( 0 );
 /*
-	if ( the_cred->cr_au.ai_mask.am_success != 0 ) 
+	if ( the_cred->cr_audit.as_mask.am_success != 0 ) 
 		return( 0 );
-	if ( the_cred->cr_au.ai_mask.am_failure != 0 ) 
+	if ( the_cred->cr_audit.as_mask.am_failure != 0 ) 
 		return( 0 );
-	if ( the_cred->cr_au.ai_termid.port != 0 ) 
+	if ( the_cred->cr_audit.as_aia_p->ai_termid.at_port != 0 ) 
 		return( 0 );
-	if ( the_cred->cr_au.ai_termid.machine != 0 ) 
+	if ( the_cred->cr_audit.as_aia_p->ai_termid.at_addr[0] != 0 ) 
 		return( 0 );
-	if ( the_cred->cr_au.ai_asid != 0 ) 
+	if ( the_cred->cr_audit.as_aia_p->ai_asid != 0 ) 
 		return( 0 );
 	if ( the_cred->cr_flags != 0 ) 
 		return( 0 );
@@ -4281,7 +4455,7 @@ struct debug_ucred {
 	gid_t	cr_rgid;			/* real group id */
 	gid_t	cr_svgid;			/* saved group id */
 	uid_t	cr_gmuid;			/* UID for group membership purposes */
-	struct auditinfo cr_au;		/* user auditing data */
+	struct auditinfo_addr cr_audit;	/* user auditing data. */
 	void	*cr_label;			/* MACF label */
 	int		cr_flags;			/* flags on credential */
 };
@@ -4344,12 +4518,28 @@ sysctl_dump_creds( __unused struct sysctl_oid *oidp, __unused void *arg1, __unus
 			nextp->cr_rgid = found_cred->cr_rgid;
 			nextp->cr_svgid = found_cred->cr_svgid;
 			nextp->cr_gmuid = found_cred->cr_gmuid;
-			nextp->cr_au.ai_auid = found_cred->cr_au.ai_auid;
-			nextp->cr_au.ai_mask.am_success = found_cred->cr_au.ai_mask.am_success;
-			nextp->cr_au.ai_mask.am_failure = found_cred->cr_au.ai_mask.am_failure;
-			nextp->cr_au.ai_termid.port = found_cred->cr_au.ai_termid.port;
-			nextp->cr_au.ai_termid.machine = found_cred->cr_au.ai_termid.machine;
-			nextp->cr_au.ai_asid = found_cred->cr_au.ai_asid;
+			nextp->cr_audit.ai_auid =
+			    found_cred->cr_audit.as_aia_p->ai_auid;
+			nextp->cr_audit.ai_mask.am_success =
+			    found_cred->cr_audit.as_mask.am_success;
+			nextp->cr_audit.ai_mask.am_failure =
+			    found_cred->cr_audit.as_mask.am_failure;
+			nextp->cr_audit.ai_termid.at_port =
+			    found_cred->cr_audit.as_aia_p->ai_termid.at_port;
+			nextp->cr_audit.ai_termid.at_type =
+			    found_cred->cr_audit.as_aia_p->ai_termid.at_type;
+			nextp->cr_audit.ai_termid.at_addr[0] =
+			    found_cred->cr_audit.as_aia_p->ai_termid.at_addr[0];
+			nextp->cr_audit.ai_termid.at_addr[1] =
+			    found_cred->cr_audit.as_aia_p->ai_termid.at_addr[1];
+			nextp->cr_audit.ai_termid.at_addr[2] =
+			    found_cred->cr_audit.as_aia_p->ai_termid.at_addr[2];
+			nextp->cr_audit.ai_termid.at_addr[3] =
+			    found_cred->cr_audit.as_aia_p->ai_termid.at_addr[3];
+			nextp->cr_audit.ai_asid =
+			    found_cred->cr_audit.as_aia_p->ai_asid;
+			nextp->cr_audit.ai_flags =
+			    found_cred->cr_audit.as_aia_p->ai_flags;
 			nextp->cr_label = found_cred->cr_label;
 			nextp->cr_flags = found_cred->cr_flags;
 			nextp++;

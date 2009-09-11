@@ -111,10 +111,10 @@
 typedef natural_t ipc_space_refs_t;
 
 struct ipc_space {
-	decl_mutex_data(,is_ref_lock_data)
+	decl_lck_mtx_data(,is_ref_lock_data)
 	ipc_space_refs_t is_references;
 
-	decl_mutex_data(,is_lock_data)
+	decl_lck_mtx_data(,is_lock_data)
 	boolean_t is_active;		/* is the space alive? */
 	boolean_t is_growing;		/* is the space growing? */
 	ipc_entry_t is_table;		/* an array of entries */
@@ -147,43 +147,50 @@ extern ipc_space_t default_pager_space;
 
 #define is_fast_space(is)	((is)->is_fast)
 
-#define	is_ref_lock_init(is)	mutex_init(&(is)->is_ref_lock_data, 0)
+#define	is_ref_lock_init(is)	lck_mtx_init(&(is)->is_ref_lock_data, &ipc_lck_grp, &ipc_lck_attr)
+#define	is_ref_lock_destroy(is)	lck_mtx_destroy(&(is)->is_ref_lock_data, &ipc_lck_grp)
 
 #define	ipc_space_reference_macro(is)					\
 MACRO_BEGIN								\
-	mutex_lock(&(is)->is_ref_lock_data);				\
+	lck_mtx_lock(&(is)->is_ref_lock_data);				\
 	assert((is)->is_references > 0);				\
 	(is)->is_references++;						\
-	mutex_unlock(&(is)->is_ref_lock_data);				\
+	lck_mtx_unlock(&(is)->is_ref_lock_data);				\
 MACRO_END
 
 #define	ipc_space_release_macro(is)					\
 MACRO_BEGIN								\
 	ipc_space_refs_t _refs;						\
 									\
-	mutex_lock(&(is)->is_ref_lock_data);				\
+	lck_mtx_lock(&(is)->is_ref_lock_data);				\
 	assert((is)->is_references > 0);				\
 	_refs = --(is)->is_references;					\
-	mutex_unlock(&(is)->is_ref_lock_data);				\
+	lck_mtx_unlock(&(is)->is_ref_lock_data);				\
 									\
-	if (_refs == 0)							\
+	if (_refs == 0) {						\
+		is_lock_destroy(is);					\
+		is_ref_lock_destroy(is);				\
 		is_free(is);						\
+	}								\
 MACRO_END
 
-#define	is_lock_init(is)	mutex_init(&(is)->is_lock_data, 0)
+#define	is_lock_init(is)	lck_mtx_init(&(is)->is_lock_data, &ipc_lck_grp, &ipc_lck_attr)
+#define	is_lock_destroy(is)	lck_mtx_destroy(&(is)->is_lock_data, &ipc_lck_grp)
 
-#define	is_read_lock(is)	mutex_lock(&(is)->is_lock_data)
-#define is_read_unlock(is)	mutex_unlock(&(is)->is_lock_data)
-#define is_read_sleep(is)	thread_sleep_mutex((event_t)(is),	\
-						   &(is)->is_lock_data,	\
-						   THREAD_UNINT)
+#define	is_read_lock(is)	lck_mtx_lock(&(is)->is_lock_data)
+#define is_read_unlock(is)	lck_mtx_unlock(&(is)->is_lock_data)
+#define is_read_sleep(is)	lck_mtx_sleep(&(is)->is_lock_data,	\
+							LCK_SLEEP_DEFAULT,					\
+							(event_t)(is),						\
+							THREAD_UNINT)
 
-#define	is_write_lock(is)	mutex_lock(&(is)->is_lock_data)
-#define	is_write_lock_try(is)	mutex_try(&(is)->is_lock_data)
-#define is_write_unlock(is)	mutex_unlock(&(is)->is_lock_data)
-#define is_write_sleep(is)	thread_sleep_mutex((event_t)(is),	\
-						   &(is)->is_lock_data,	\
-						   THREAD_UNINT)
+#define	is_write_lock(is)	lck_mtx_lock(&(is)->is_lock_data)
+#define	is_write_lock_try(is)	lck_mtx_try_lock(&(is)->is_lock_data)
+#define is_write_unlock(is)	lck_mtx_unlock(&(is)->is_lock_data)
+#define is_write_sleep(is)	lck_mtx_sleep(&(is)->is_lock_data,	\
+							LCK_SLEEP_DEFAULT,					\
+							(event_t)(is),						\
+							THREAD_UNINT)
 
 #define	is_reference(is)	ipc_space_reference(is)
 #define	is_release(is)		ipc_space_release(is)

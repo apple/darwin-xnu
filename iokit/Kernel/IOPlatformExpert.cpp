@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -53,9 +53,6 @@ extern "C" {
 #include <pexpert/pexpert.h>
 #include <uuid/uuid.h>
 }
-
-/* Delay period for UPS halt */
-#define kUPSDelayHaltCPU_msec   (1000*60*5)
 
 void printDictionaryKeys (OSDictionary * inDictionary, char * inMsg);
 static void getCStringForObject(OSObject *inObj, char *outStr, size_t outStrLen);
@@ -254,16 +251,11 @@ int IOPlatformExpert::haltRestart(unsigned int type)
 {
   if (type == kPEPanicSync) return 0;
 
-  if (type == kPEHangCPU) while (1);
+  if (type == kPEHangCPU) while (true) {}
 
   if (type == kPEUPSDelayHaltCPU) {
-    // Stall shutdown for 5 minutes, and if no outside force has 
-    // removed our power at that point, proceed with a reboot.
-    IOSleep( kUPSDelayHaltCPU_msec );
-
-    // Ideally we never reach this point.
-
-    type = kPERestartCPU;
+    // RestartOnPowerLoss feature was turned on, proceed with shutdown.
+    type = kPEHaltCPU;
   }
 
   // On ARM kPEPanicRestartCPU is supported in the drivers
@@ -384,13 +376,14 @@ PMLog(const char *who, unsigned long event,
 
     if (debugFlags & kIOLogPower) {
 
-	uint32_t nows, nowus;
+	clock_sec_t nows;
+	clock_usec_t nowus;
 	clock_get_system_microtime(&nows, &nowus);
 	nowus += (nows % 1000) * 1000000;
 
-        kprintf("pm%u %x %.30s %d %x %x\n",
-		nowus, (unsigned) current_thread(), who,	// Identity
-		(int) event, param1, param2);			// Args
+        kprintf("pm%u %p %.30s %d %lx %lx\n",
+		nowus, current_thread(), who,	// Identity
+		(int) event, (long) param1, (long) param2);			// Args
 
 	if (debugFlags & kIOLogTracePower) {
 	    static const UInt32 sStartStopBitField[] = 
@@ -412,7 +405,7 @@ PMLog(const char *who, unsigned long event,
 	    }
 
 	    // Record the timestamp, wish I had a this pointer
-	    IOTimeStampConstant(code, (UInt32) who, event, param1, param2);
+	    IOTimeStampConstant(code, (uintptr_t) who, event, param1, param2);
 	}
     }
 }
@@ -433,7 +426,6 @@ void IOPlatformExpert::PMInstantiatePowerDomains ( void )
     root->init();
     root->attach(this);
     root->start(this);
-    root->youAreRoot();
 }
 
 
@@ -750,7 +742,7 @@ static void IOShutdownNotificationsTimedOut(
     thread_call_param_t p0, 
     thread_call_param_t p1)
 {
-    int type = (int)p0;
+    int type = (int)(long)p0;
 
     /* 30 seconds has elapsed - resume shutdown */
     if(gIOPlatform) gIOPlatform->haltRestart(type);
@@ -792,7 +784,6 @@ int PEHaltRestart(unsigned int type)
   IOPMrootDomain    *pmRootDomain = IOService::getPMRootDomain();
   AbsoluteTime      deadline;
   thread_call_t     shutdown_hang;
-  unsigned int      tell_type;
   
   if(type == kPEHaltCPU || type == kPERestartCPU || type == kPEUPSDelayHaltCPU)
   {
@@ -809,15 +800,8 @@ int PEHaltRestart(unsigned int type)
                         (thread_call_param_t) type);
     clock_interval_to_deadline( 30, kSecondScale, &deadline );
     thread_call_enter1_delayed( shutdown_hang, 0, deadline );
-    
 
-    if( kPEUPSDelayHaltCPU == type ) {
-        tell_type = kPEHaltCPU;
-    } else {
-        tell_type = type;
-    }
-
-    pmRootDomain->handlePlatformHaltRestart(tell_type); 
+    pmRootDomain->handlePlatformHaltRestart(type); 
     /* This notification should have few clients who all do 
        their work synchronously.
              
@@ -842,16 +826,14 @@ long PEGetGMTTimeOfDay(void)
 {
 	long	result = 0;
 
-    if( gIOPlatform)
-		result = gIOPlatform->getGMTTimeOfDay();
+	if( gIOPlatform)		result = gIOPlatform->getGMTTimeOfDay();
 
 	return (result);
 }
 
 void PESetGMTTimeOfDay(long secs)
 {
-    if( gIOPlatform)
-		gIOPlatform->setGMTTimeOfDay(secs);
+    if( gIOPlatform)		gIOPlatform->setGMTTimeOfDay(secs);
 }
 
 } /* extern "C" */
@@ -861,7 +843,7 @@ void IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
     OSData *          data;
     IORegistryEntry * entry;
     OSString *        string = 0;
-    char              uuid[ 36 + 1 ];
+    uuid_string_t     uuid;
 
     entry = IORegistryEntry::fromPath( "/efi/platform", gIODTPlane );
     if ( entry )
@@ -925,7 +907,7 @@ IOReturn IOPlatformExpert::callPlatformFunction(const OSSymbol *functionName,
   if (waitForFunction) {
     _resources = waitForService(resourceMatching(functionName));
   } else {
-    _resources = resources();
+    _resources = getResourceService();
   }
   if (_resources == 0) return kIOReturnUnsupported;
   
@@ -1406,3 +1388,4 @@ bool IOPanicPlatform::start(IOService * provider) {
 
     return false;
 }
+

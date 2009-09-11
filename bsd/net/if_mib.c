@@ -116,6 +116,11 @@ SYSCTL_INT(_net_link_generic_system, OID_AUTO, dlil_input_sanity_check, CTLFLAG_
 		    &dlil_input_sanity_check , 0, "Turn on sanity checking in DLIL input");
 #endif
 
+extern int dlil_verbose;
+SYSCTL_INT(_net_link_generic_system, OID_AUTO, dlil_verbose, CTLFLAG_RW,
+           &dlil_verbose, 0, "Log DLIL error messages");
+
+
 static int make_ifmibdata(struct ifnet *, int *, struct sysctl_req *);
 
 
@@ -197,10 +202,13 @@ sysctl_ifdata SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
 
 	if (namelen != 2)
 		return EINVAL;
-
+	ifnet_head_lock_shared();
 	if (name[0] <= 0 || name[0] > if_index ||
-	    (ifp = ifindex2ifnet[name[0]]) == NULL)
+	    (ifp = ifindex2ifnet[name[0]]) == NULL) {
+		ifnet_head_done();
 		return ENOENT;
+	}
+	ifnet_head_done();
 
 	ifnet_lock_shared(ifp);
 	

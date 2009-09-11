@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -43,6 +43,8 @@
 #ifndef _IP6_FW_H
 #define _IP6_FW_H
 
+#include <sys/appleapiopts.h>
+
 /*
  * Define IPv6 Firewall event subclass, and associated events.
  */
@@ -77,11 +79,6 @@
 */
 #define KEV_IP6FW_ENABLE	4
 
-
-
-#if !__LP64__
-
-#include <sys/appleapiopts.h>
 
 #include <net/if.h>
 
@@ -119,12 +116,13 @@ union ip6_fw_if {
  * Warning: setsockopt() will fail if sizeof(struct ip_fw) > MLEN (108)
  */
 
+
 struct ip6_fw {
 	u_int32_t version;		/* Version of this structure.  Should always be */
 							/* set to IP6_FW_CURRENT_API_VERSION by clients. */
 	void *context;			/* Context that is usable by user processes to */
 							/* identify this rule. */
-    u_long fw_pcnt,fw_bcnt;		/* Packet and byte counters */
+    u_int32_t fw_pcnt,fw_bcnt;		/* Packet and byte counters */
     struct in6_addr fw_src, fw_dst;	/* Source and destination IPv6 addr */
     struct in6_addr fw_smsk, fw_dmsk;	/* Mask for src and dest IPv6 addr */
     u_short fw_number;			/* Rule number */
@@ -149,6 +147,76 @@ struct ip6_fw {
 					/* src ports; max of 10 ports in all; */
 					/* count of 0 means match all ports) */
 };
+
+#if defined(KERNEL_PRIVATE)
+#pragma pack(4)
+
+struct ip6_fw_32 {
+	u_int32_t version;		/* Version of this structure.  Should always be */
+	/* set to IP6_FW_CURRENT_API_VERSION by clients. */
+	user32_addr_t context;			/* Context that is usable by user processes to */
+	/* identify this rule. */
+    u_int32_t fw_pcnt,fw_bcnt;		/* Packet and byte counters */
+    struct in6_addr fw_src, fw_dst;	/* Source and destination IPv6 addr */
+    struct in6_addr fw_smsk, fw_dmsk;	/* Mask for src and dest IPv6 addr */
+    u_short fw_number;			/* Rule number */
+    u_short fw_flg;			/* Flags word */
+#define IPV6_FW_MAX_PORTS	10	/* A reasonable maximum */
+    u_int fw_ipflg;			/* IP flags word */
+    u_short fw_pts[IPV6_FW_MAX_PORTS];	/* Array of port numbers to match */
+    u_char fw_ip6opt,fw_ip6nopt;	/* IPv6 options set/unset */
+    u_char fw_tcpf,fw_tcpnf;		/* TCP flags set/unset */
+#define IPV6_FW_ICMPTYPES_DIM (256 / (sizeof(unsigned) * 8))
+    unsigned fw_icmp6types[IPV6_FW_ICMPTYPES_DIM]; /* ICMP types bitmap */
+    user32_time_t timestamp;			/* timestamp (tv_sec) of last match */
+    union ip6_fw_if fw_in_if, fw_out_if;/* Incoming and outgoing interfaces */
+    union {
+		u_short fu_divert_port;		/* Divert/tee port (options IP6DIVERT) */
+		u_short fu_skipto_rule;		/* SKIPTO command rule number */
+		u_short fu_reject_code;		/* REJECT response code */
+    } fw_un;
+    u_char fw_prot;			/* IPv6 protocol */
+    u_char fw_nports;			/* N'of src ports and # of dst ports */
+	/* in ports array (dst ports follow */
+	/* src ports; max of 10 ports in all; */
+	/* count of 0 means match all ports) */
+};
+
+#pragma pack()
+
+struct ip6_fw_64 {
+	u_int32_t version;	 	/* Version of this structure.  Should always be */
+	/* set to IP6_FW_CURRENT_API_VERSION by clients. */
+	__uint64_t context __attribute__((aligned(8)));			/* Context that is usable by user processes to */
+	/* identify this rule. */
+    u_int32_t fw_pcnt,fw_bcnt;		/* Packet and byte counters */
+    struct in6_addr fw_src, fw_dst;	/* Source and destination IPv6 addr */
+    struct in6_addr fw_smsk, fw_dmsk;	/* Mask for src and dest IPv6 addr */
+    u_short fw_number;			/* Rule number */
+    u_short fw_flg;			/* Flags word */
+#define IPV6_FW_MAX_PORTS	10	/* A reasonable maximum */
+    u_int fw_ipflg;			/* IP flags word */
+    u_short fw_pts[IPV6_FW_MAX_PORTS];	/* Array of port numbers to match */
+    u_char fw_ip6opt,fw_ip6nopt;	/* IPv6 options set/unset */
+    u_char fw_tcpf,fw_tcpnf;		/* TCP flags set/unset */
+#define IPV6_FW_ICMPTYPES_DIM (256 / (sizeof(unsigned) * 8))
+    unsigned fw_icmp6types[IPV6_FW_ICMPTYPES_DIM]; /* ICMP types bitmap */
+    user64_time_t timestamp;			/* timestamp (tv_sec) of last match */
+    union ip6_fw_if fw_in_if, fw_out_if;/* Incoming and outgoing interfaces */
+    union {
+		u_short fu_divert_port;		/* Divert/tee port (options IP6DIVERT) */
+		u_short fu_skipto_rule;		/* SKIPTO command rule number */
+		u_short fu_reject_code;		/* REJECT response code */
+    } fw_un;
+    u_char fw_prot;			/* IPv6 protocol */
+    u_char fw_nports;			/* N'of src ports and # of dst ports */
+	/* in ports array (dst ports follow */
+	/* src ports; max of 10 ports in all; */
+	/* count of 0 means match all ports) */
+};
+
+
+#endif	/* KERNEL_PRIVATE */
 
 #define IPV6_FW_GETNSRCP(rule)		((rule)->fw_nports & 0x0f)
 #define IPV6_FW_SETNSRCP(rule, n)		do {				\
@@ -274,5 +342,4 @@ extern	int ip6_fw_enable;
 
 #endif /* KERNEL_PRIVATE */
 
-#endif /* !__LP64__ */
 #endif /* _IP6_FW_H */

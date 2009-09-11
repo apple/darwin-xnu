@@ -2,40 +2,6 @@
 #BEGIN	Machine dependent Makefile fragment for i386
 ######################################################################
 
-# Enable -Werror for i386 builds
-CFLAGS+= $(WERROR)
-CWARNFLAGS= $(filter-out -Wbad-function-cast, $(CWARNFLAGS_STD))
-
-# Objects that don't compile cleanly in libkern/c++:
-OBJS_NO_WERROR=				\
-	ioconf.o			\
-	OSRuntimeSupport.o		\
-	OSMetaClass.cpo			\
-	OSArray.cpo			\
-	OSBoolean.cpo			\
-	OSCollectionIterator.cpo	\
-	OSCollection.cpo		\
-	OSData.cpo			\
-	OSDictionary.cpo		\
-	OSNumber.cpo			\
-	OSObject.cpo			\
-	OSOrderedSet.cpo		\
-	OSRuntime.cpo			\
-	OSSerialize.cpo			\
-	OSString.cpo			\
-	OSSymbol.cpo			\
-	OSUnserialize.cpo		\
-	OSIterator.cpo			\
-	OSSet.cpo			\
-	scanf.o				\
-	OSUnserializeXML.cpo		\
-	zlib.o				\
-	uuid.o
-
-OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
-
-$(OBJS_WERROR):		WERROR=-Werror
-
 ######################################################################
 #END	Machine dependent Makefile fragment for i386
 ######################################################################

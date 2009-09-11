@@ -32,6 +32,8 @@ HISTORY
     1998-7-13	Godfrey van der Linden(gvdl)
         Created.
 */
+
+#include <pexpert/pexpert.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOEventSource.h>
 #include <IOKit/IOInterruptEventSource.h>
@@ -44,10 +46,15 @@ HISTORY
 OSDefineMetaClassAndStructors(IOWorkLoop, OSObject);
 
 // Block of unused functions intended for future use
+#if __LP64__
+OSMetaClassDefineReservedUnused(IOWorkLoop, 0);
+OSMetaClassDefineReservedUnused(IOWorkLoop, 1);
+OSMetaClassDefineReservedUnused(IOWorkLoop, 2);
+#else
 OSMetaClassDefineReservedUsed(IOWorkLoop, 0);
 OSMetaClassDefineReservedUsed(IOWorkLoop, 1);
-
-OSMetaClassDefineReservedUnused(IOWorkLoop, 2);
+OSMetaClassDefineReservedUsed(IOWorkLoop, 2);
+#endif
 OSMetaClassDefineReservedUnused(IOWorkLoop, 3);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 4);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 5);
@@ -72,6 +79,7 @@ static inline bool ISSETP(void *addr, unsigned int flag)
 #endif
 
 #define fFlags loopRestart
+
 
 bool IOWorkLoop::init()
 {
@@ -110,12 +118,11 @@ bool IOWorkLoop::init()
     }
 
     if ( workThread == NULL ) {
-        IOThreadFunc cptr = OSMemberFunctionCast(
-            IOThreadFunc,
+        thread_continue_t cptr = OSMemberFunctionCast(
+            thread_continue_t,
             this,
             &IOWorkLoop::threadMain);
-        workThread = IOCreateThread(cptr, this);
-        if (!workThread)
+        if (KERN_SUCCESS != kernel_thread_start(cptr, this, &workThread))
             return false;
     }
 
@@ -355,9 +362,12 @@ restartThread:
     } while(workToDo);
 
 exitThread:
+	thread_t thread = workThread;
     workThread = 0;	// Say we don't have a loop and free ourselves
     free();
-    IOExitThread();
+
+	thread_deallocate(thread);
+    (void) thread_terminate(thread);
 }
 
 IOThread IOWorkLoop::getThread() const
@@ -406,6 +416,11 @@ int IOWorkLoop::sleepGate(void *event, UInt32 interuptibleType)
     return IORecursiveLockSleep(gateLock, event, interuptibleType);
 }
 
+int IOWorkLoop::sleepGate(void *event, AbsoluteTime deadline, UInt32 interuptibleType)
+{
+    return IORecursiveLockSleepDeadline(gateLock, event, deadline, interuptibleType);
+}
+
 void IOWorkLoop::wakeupGate(void *event, bool oneThread)
 {
     IORecursiveLockWakeup(gateLock, event, oneThread);
@@ -427,7 +442,7 @@ IOReturn IOWorkLoop::runAction(Action inAction, OSObject *target,
 
 IOReturn IOWorkLoop::_maintRequest(void *inC, void *inD, void *, void *)
 {
-    maintCommandEnum command = (maintCommandEnum) (vm_address_t) inC;
+    maintCommandEnum command = (maintCommandEnum) (uintptr_t) inC;
     IOEventSource *inEvent = (IOEventSource *) inD;
     IOReturn res = kIOReturnSuccess;
 

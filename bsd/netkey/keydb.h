@@ -59,6 +59,7 @@ struct secashead {
 	struct sadb_ident *identd;	/* destination identity */
 					/* XXX I don't know how to use them. */
 
+	u_int8_t dir;                   /* IPSEC_DIR_INBOUND or IPSEC_DIR_OUTBOUND */
 	u_int8_t state;			/* MATURE or DEAD. */
 	LIST_HEAD(_satree, secasvar) savtree[SADB_SASTATE_MAX+1];
 					/* SA chain */

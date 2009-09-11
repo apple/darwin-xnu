@@ -67,25 +67,117 @@
 
 #include <kern/kern_types.h>
 #include <kern/simple_lock.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/queue.h>
 #include <kern/spl.h>
 #include <mach/sync_policy.h>
+#include <kern/mach_param.h>
 #include <kern/sched_prim.h>
 
 #include <kern/wait_queue.h>
+#include <vm/vm_kern.h>
 
 /* forward declarations */
 static boolean_t wait_queue_member_locked(
 			wait_queue_t		wq,
 			wait_queue_set_t	wq_set);
 
-void wait_queue_unlink_one(
-			wait_queue_t		wq,
-			wait_queue_set_t	*wq_setp);
+static void wait_queues_init(void) __attribute__((section("__TEXT, initcode")));
 
-kern_return_t wait_queue_set_unlink_all_nofree(
-			wait_queue_set_t	wq_set);
+
+#define WAIT_QUEUE_MAX thread_max
+#define WAIT_QUEUE_SET_MAX task_max * 3
+#define WAIT_QUEUE_LINK_MAX PORT_MAX / 2 + (WAIT_QUEUE_MAX * WAIT_QUEUE_SET_MAX) / 64
+
+static zone_t _wait_queue_link_zone;
+static zone_t _wait_queue_set_zone;
+static zone_t _wait_queue_zone;
+
+/* see rdar://6737748&5561610; we need an unshadowed
+ * definition of a WaitQueueLink for debugging,
+ * but it needs to be used somewhere to wind up in
+ * the dSYM file. */
+volatile WaitQueueLink *unused_except_for_debugging;
+
+
+/*
+ *	Waiting protocols and implementation:
+ *
+ *	Each thread may be waiting for exactly one event; this event
+ *	is set using assert_wait().  That thread may be awakened either
+ *	by performing a thread_wakeup_prim() on its event,
+ *	or by directly waking that thread up with clear_wait().
+ *
+ *	The implementation of wait events uses a hash table.  Each
+ *	bucket is queue of threads having the same hash function
+ *	value; the chain for the queue (linked list) is the run queue
+ *	field.  [It is not possible to be waiting and runnable at the
+ *	same time.]
+ *
+ *	Locks on both the thread and on the hash buckets govern the
+ *	wait event field and the queue chain field.  Because wakeup
+ *	operations only have the event as an argument, the event hash
+ *	bucket must be locked before any thread.
+ *
+ *	Scheduling operations may also occur at interrupt level; therefore,
+ *	interrupts below splsched() must be prevented when holding
+ *	thread or hash bucket locks.
+ *
+ *	The wait event hash table declarations are as follows:
+ */
+
+struct wait_queue boot_wait_queue[1];
+__private_extern__ struct wait_queue *wait_queues = &boot_wait_queue[0];
+
+__private_extern__ uint32_t num_wait_queues = 1;
+
+static uint32_t
+compute_wait_hash_size(__unused unsigned cpu_count, __unused uint64_t memsize) {
+	uint32_t hsize = (uint32_t)round_page_64((thread_max / 11) * sizeof(struct wait_queue));
+	uint32_t bhsize;
+	
+	if (PE_parse_boot_argn("wqsize", &bhsize, sizeof(bhsize)))
+		hsize = bhsize;
+
+	return hsize;
+}
+
+static void
+wait_queues_init(void)
+{
+	uint32_t	i, whsize;
+	kern_return_t	kret;
+
+	whsize = compute_wait_hash_size(processor_avail_count, machine_info.max_mem);
+	num_wait_queues = (whsize / ((uint32_t)sizeof(struct wait_queue))) - 1;
+
+	kret = kernel_memory_allocate(kernel_map, (vm_offset_t *) &wait_queues, whsize, 0, KMA_KOBJECT|KMA_NOPAGEWAIT);
+
+	if (kret != KERN_SUCCESS || wait_queues == NULL)
+		panic("kernel_memory_allocate() failed to allocate wait queues, error: %d, whsize: 0x%x", kret, whsize);
+
+	for (i = 0; i < num_wait_queues; i++) {
+		wait_queue_init(&wait_queues[i], SYNC_POLICY_FIFO);
+	}
+}
+
+void
+wait_queue_bootstrap(void)
+{
+	wait_queues_init();
+	_wait_queue_zone = zinit(sizeof(struct wait_queue),
+				      WAIT_QUEUE_MAX * sizeof(struct wait_queue),
+				      sizeof(struct wait_queue),
+				      "wait queues");
+	_wait_queue_set_zone = zinit(sizeof(struct wait_queue_set),
+				      WAIT_QUEUE_SET_MAX * sizeof(struct wait_queue_set),
+				      sizeof(struct wait_queue_set),
+				      "wait queue sets");
+	_wait_queue_link_zone = zinit(sizeof(struct _wait_queue_link),
+				      WAIT_QUEUE_LINK_MAX * sizeof(struct _wait_queue_link),
+				      sizeof(struct _wait_queue_link),
+				      "wait queue links");
+}
 
 /*
  *	Routine:        wait_queue_init
@@ -100,10 +192,11 @@ wait_queue_init(
 	wait_queue_t wq,
 	int policy)
 {
-	if (!((policy & SYNC_POLICY_ORDER_MASK) == SYNC_POLICY_FIFO))
+	/* only FIFO and LIFO for now */
+	if ((policy & SYNC_POLICY_FIXED_PRIORITY) != 0)
 		return KERN_INVALID_ARGUMENT;
 
-	wq->wq_fifo = TRUE;
+	wq->wq_fifo = ((policy & SYNC_POLICY_REVERSED) == 0);
 	wq->wq_type = _WAIT_QUEUE_inited;
 	queue_init(&wq->wq_queue);
 	hw_lock_init(&wq->wq_interlock);
@@ -128,11 +221,11 @@ wait_queue_alloc(
 	wait_queue_t wq;
 	kern_return_t ret;
 
-	wq = (wait_queue_t) kalloc(sizeof(struct wait_queue));
+	wq = (wait_queue_t) zalloc(_wait_queue_zone);
 	if (wq != WAIT_QUEUE_NULL) {
 		ret = wait_queue_init(wq, policy);
 		if (ret != KERN_SUCCESS) {
-			kfree(wq, sizeof(struct wait_queue));
+			zfree(_wait_queue_zone, wq);
 			wq = WAIT_QUEUE_NULL;
 		}
 	}
@@ -154,7 +247,7 @@ wait_queue_free(
 		return KERN_INVALID_ARGUMENT;
 	if (!queue_empty(&wq->wq_queue))
 		return KERN_FAILURE;
-	kfree(wq, sizeof(struct wait_queue));
+	zfree(_wait_queue_zone, wq);
 	return KERN_SUCCESS;
 }
 
@@ -179,11 +272,11 @@ wait_queue_set_init(
 
 	wqset->wqs_wait_queue.wq_type = _WAIT_QUEUE_SET_inited;
 	if (policy & SYNC_POLICY_PREPOST)
-		wqset->wqs_wait_queue.wq_isprepost = TRUE;
+		wqset->wqs_wait_queue.wq_prepost = TRUE;
 	else 
-		wqset->wqs_wait_queue.wq_isprepost = FALSE;
+		wqset->wqs_wait_queue.wq_prepost = FALSE;
 	queue_init(&wqset->wqs_setlinks);
-	wqset->wqs_refcount = 0;
+	queue_init(&wqset->wqs_preposts);
 	return KERN_SUCCESS;
 }
 
@@ -200,12 +293,22 @@ kern_return_t
 wait_queue_sub_clearrefs(
         wait_queue_set_t wq_set)
 {
+	wait_queue_link_t wql;
+	queue_t q;
+	spl_t s;
+
 	if (!wait_queue_is_set(wq_set))
 		return KERN_INVALID_ARGUMENT;
 
+	s = splsched();
 	wqs_lock(wq_set);
-	wq_set->wqs_refcount = 0;
+	q = &wq_set->wqs_preposts;
+	while (!queue_empty(q)) {
+		queue_remove_first(q, wql, wait_queue_link_t, wql_preposts);
+		assert(!wql_is_preposted(wql));
+	}
 	wqs_unlock(wq_set);
+	splx(s);
 	return KERN_SUCCESS;
 }
 
@@ -226,13 +329,13 @@ wait_queue_set_alloc(
 {
 	wait_queue_set_t wq_set;
 
-	wq_set = (wait_queue_set_t) kalloc(sizeof(struct wait_queue_set));
+	wq_set = (wait_queue_set_t) zalloc(_wait_queue_set_zone);
 	if (wq_set != WAIT_QUEUE_SET_NULL) {
 		kern_return_t ret;
 
 		ret = wait_queue_set_init(wq_set, policy);
 		if (ret != KERN_SUCCESS) {
-			kfree(wq_set, sizeof(struct wait_queue_set));
+			zfree(_wait_queue_set_zone, wq_set);
 			wq_set = WAIT_QUEUE_SET_NULL;
 		}
 	}
@@ -256,7 +359,7 @@ wait_queue_set_free(
 	if (!queue_empty(&wq_set->wqs_wait_queue.wq_queue))
 		return KERN_FAILURE;
 
-	kfree(wq_set, sizeof(struct wait_queue_set));
+	zfree(_wait_queue_set_zone, wq_set);
 	return KERN_SUCCESS;
 }
 
@@ -273,9 +376,11 @@ unsigned int wait_queue_link_size(void) { return sizeof(WaitQueueLink); }
 
 /* declare a unique type for wait queue link structures */
 static unsigned int _wait_queue_link;
+static unsigned int _wait_queue_link_noalloc;
 static unsigned int _wait_queue_unlinked;
 
 #define WAIT_QUEUE_LINK ((void *)&_wait_queue_link)
+#define WAIT_QUEUE_LINK_NOALLOC ((void *)&_wait_queue_link_noalloc)
 #define WAIT_QUEUE_UNLINKED ((void *)&_wait_queue_unlinked)
 
 #define WAIT_QUEUE_ELEMENT_CHECK(wq, wqe) \
@@ -293,12 +398,14 @@ static unsigned int _wait_queue_unlinked;
 			(queue_t)(wql) : &(wql)->wql_setlinks)))
 
 #define WAIT_QUEUE_SET_LINK_CHECK(wqs, wql) \
-		WQASSERT((((wql)->wql_type == WAIT_QUEUE_LINK) && \
+		WQASSERT(((((wql)->wql_type == WAIT_QUEUE_LINK) || \
+			   ((wql)->wql_type == WAIT_QUEUE_LINK_NOALLOC)) && \
 			((wql)->wql_setqueue == (wqs)) && \
-			((wql)->wql_queue->wq_type == _WAIT_QUEUE_inited) && \
+			(((wql)->wql_queue->wq_type == _WAIT_QUEUE_inited) || \
+			 ((wql)->wql_queue->wq_type == _WAIT_QUEUE_SET_inited)) && \
 			(WQSNEXT((wqs), WQSPREV((wqs),(wql))) == (wql))), \
 			"wait queue set links corruption: wqs=%#x, wql=%#x", \
-			(wqs), (wql))
+			 (wqs), (wql))
 
 #if defined(_WAIT_QUEUE_DEBUG_)
 
@@ -357,7 +464,8 @@ wait_queue_member_locked(
 	wq_element = (wait_queue_element_t) queue_first(q);
 	while (!queue_end(q, (queue_entry_t)wq_element)) {
 		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
-		if ((wq_element->wqe_type == WAIT_QUEUE_LINK)) {
+		if ((wq_element->wqe_type == WAIT_QUEUE_LINK) ||
+		    (wq_element->wqe_type == WAIT_QUEUE_LINK_NOALLOC)) {
 			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
 
 			if (wql->wql_setqueue == wq_set)
@@ -399,16 +507,18 @@ wait_queue_member(
 
 
 /*
- *	Routine:	wait_queue_link_noalloc
+ *	Routine:	wait_queue_link_internal
  *	Purpose:
  *		Insert a set wait queue into a wait queue.  This
  *		requires us to link the two together using a wait_queue_link
- *		structure that we allocate.
+ *		structure that was provided.
  *	Conditions:
  *		The wait queue being inserted must be inited as a set queue
+ *		The wait_queue_link structure must already be properly typed
  */
+static 
 kern_return_t
-wait_queue_link_noalloc(
+wait_queue_link_internal(
 	wait_queue_t wq,
 	wait_queue_set_t wq_set,
 	wait_queue_link_t wql)
@@ -417,13 +527,13 @@ wait_queue_link_noalloc(
 	queue_t q;
 	spl_t s;
 
-	if (!wait_queue_is_queue(wq) || !wait_queue_is_set(wq_set))
+	if (!wait_queue_is_valid(wq) || !wait_queue_is_set(wq_set))
   		return KERN_INVALID_ARGUMENT;
 
 	/*
-	 * There are probably less threads and sets associated with
-	 * the wait queue, then there are wait queues associated with
-	 * the set.  So lets validate it that way.
+	 * There are probably fewer threads and sets associated with
+	 * the wait queue than there are wait queues associated with
+	 * the set.  So let's validate it that way.
 	 */
 	s = splsched();
 	wait_queue_lock(wq);
@@ -431,7 +541,8 @@ wait_queue_link_noalloc(
 	wq_element = (wait_queue_element_t) queue_first(q);
 	while (!queue_end(q, (queue_entry_t)wq_element)) {
 		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
-		if (wq_element->wqe_type == WAIT_QUEUE_LINK &&
+		if ((wq_element->wqe_type == WAIT_QUEUE_LINK ||
+		     wq_element->wqe_type == WAIT_QUEUE_LINK_NOALLOC) &&
 		    ((wait_queue_link_t)wq_element)->wql_setqueue == wq_set) {
 			wait_queue_unlock(wq);
 			splx(s);
@@ -448,11 +559,14 @@ wait_queue_link_noalloc(
 
 	WAIT_QUEUE_SET_CHECK(wq_set);
 
+	assert(wql->wql_type == WAIT_QUEUE_LINK ||
+	       wql->wql_type == WAIT_QUEUE_LINK_NOALLOC);
+
 	wql->wql_queue = wq;
+	wql_clear_prepost(wql);
 	queue_enter(&wq->wq_queue, wql, wait_queue_link_t, wql_links);
 	wql->wql_setqueue = wq_set;
 	queue_enter(&wq_set->wqs_setlinks, wql, wait_queue_link_t, wql_setlinks);
-	wql->wql_type = WAIT_QUEUE_LINK;
 
 	wqs_unlock(wq_set);
 	wait_queue_unlock(wq);
@@ -460,6 +574,25 @@ wait_queue_link_noalloc(
 
 	return KERN_SUCCESS;
 }	
+
+/*
+ *	Routine:	wait_queue_link_noalloc
+ *	Purpose:
+ *		Insert a set wait queue into a wait queue.  This
+ *		requires us to link the two together using a wait_queue_link
+ *		structure that we allocate.
+ *	Conditions:
+ *		The wait queue being inserted must be inited as a set queue
+ */
+kern_return_t
+wait_queue_link_noalloc(
+	wait_queue_t wq,
+	wait_queue_set_t wq_set,
+	wait_queue_link_t wql)
+{
+	wql->wql_type = WAIT_QUEUE_LINK_NOALLOC;
+	return wait_queue_link_internal(wq, wq_set, wql);
+}
 
 /*
  *	Routine:	wait_queue_link
@@ -478,20 +611,21 @@ wait_queue_link(
 	wait_queue_link_t wql;
 	kern_return_t ret;
 
-	wql = (wait_queue_link_t) kalloc(sizeof(struct _wait_queue_link));
+	wql = (wait_queue_link_t) zalloc(_wait_queue_link_zone);
 	if (wql == WAIT_QUEUE_LINK_NULL)
 		return KERN_RESOURCE_SHORTAGE;
 
-	ret = wait_queue_link_noalloc(wq, wq_set, wql);
+	wql->wql_type = WAIT_QUEUE_LINK;
+	ret = wait_queue_link_internal(wq, wq_set, wql);
 	if (ret != KERN_SUCCESS)
-		kfree(wql, sizeof(struct _wait_queue_link));
+		zfree(_wait_queue_link_zone, wql);
 
 	return ret;
 }	
 
 
 /*
- *	Routine:	wait_queue_unlink_nofree
+ *	Routine:	wait_queue_unlink_locked
  *	Purpose:
  *		Undo the linkage between a wait queue and a set.
  */
@@ -508,6 +642,10 @@ wait_queue_unlink_locked(
 	queue_remove(&wq->wq_queue, wql, wait_queue_link_t, wql_links);
 	wql->wql_setqueue = WAIT_QUEUE_SET_NULL;
 	queue_remove(&wq_set->wqs_setlinks, wql, wait_queue_link_t, wql_setlinks);
+	if (wql_is_preposted(wql)) {
+		queue_t ppq = &wq_set->wqs_preposts;
+		queue_remove(ppq, wql, wait_queue_link_t, wql_preposts);
+	}
 	wql->wql_type = WAIT_QUEUE_UNLINKED;
 
 	WAIT_QUEUE_CHECK(wq);
@@ -532,7 +670,7 @@ wait_queue_unlink(
 	queue_t q;
 	spl_t s;
 
-	if (!wait_queue_is_queue(wq) || !wait_queue_is_set(wq_set)) {
+	if (!wait_queue_is_valid(wq) || !wait_queue_is_set(wq_set)) {
 		return KERN_INVALID_ARGUMENT;
 	}
 	s = splsched();
@@ -542,16 +680,22 @@ wait_queue_unlink(
 	wq_element = (wait_queue_element_t) queue_first(q);
 	while (!queue_end(q, (queue_entry_t)wq_element)) {
 		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
-		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK ||
+		    wq_element->wqe_type == WAIT_QUEUE_LINK_NOALLOC) {
+
 		   	wql = (wait_queue_link_t)wq_element;
 			
 			if (wql->wql_setqueue == wq_set) {
+				boolean_t alloced;
+
+				alloced = (wql->wql_type == WAIT_QUEUE_LINK);
 				wqs_lock(wq_set);
 				wait_queue_unlink_locked(wq, wq_set, wql);
 				wqs_unlock(wq_set);
 				wait_queue_unlock(wq);
 				splx(s);
-				kfree(wql, sizeof(struct _wait_queue_link));
+				if (alloced)
+					zfree(_wait_queue_link_zone, wql);
 				return KERN_SUCCESS;
 			}
 		}
@@ -563,65 +707,12 @@ wait_queue_unlink(
 	return KERN_NOT_IN_SET;
 }	
 
-
-/*
- *	Routine:	wait_queue_unlinkall_nofree
- *	Purpose:
- *		Remove the linkage between a wait queue and all its
- *		sets. The caller is responsible for freeing
- *		the wait queue link structures.
- */
-
-kern_return_t
-wait_queue_unlinkall_nofree(
-	wait_queue_t wq)
-{
-	wait_queue_element_t wq_element;
-	wait_queue_element_t wq_next_element;
-	wait_queue_set_t wq_set;
-	wait_queue_link_t wql;
-	queue_head_t links_queue_head;
-	queue_t links = &links_queue_head;
-	queue_t q;
-	spl_t s;
-
-	if (!wait_queue_is_queue(wq)) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	queue_init(links);
-
-	s = splsched();
-	wait_queue_lock(wq);
-
-	q = &wq->wq_queue;
-
-	wq_element = (wait_queue_element_t) queue_first(q);
-	while (!queue_end(q, (queue_entry_t)wq_element)) {
-		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
-		wq_next_element = (wait_queue_element_t)
-			     queue_next((queue_t) wq_element);
-
-		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
-			wql = (wait_queue_link_t)wq_element;
-			wq_set = wql->wql_setqueue;
-			wqs_lock(wq_set);
-			wait_queue_unlink_locked(wq, wq_set, wql);
-			wqs_unlock(wq_set);
-		}
-		wq_element = wq_next_element;
-	}
-	wait_queue_unlock(wq);
-	splx(s);
-	return(KERN_SUCCESS);
-}	
-
-
 /*
  *	Routine:	wait_queue_unlink_all
  *	Purpose:
- *		Remove the linkage between a wait queue and all its	sets.
- *		All the linkage structures are freed.
+ *		Remove the linkage between a wait queue and all its sets.
+ *		All the linkage structures that were allocated internally
+ *		are freed.  The others are the caller's responsibility.
  *	Conditions:
  *		Nothing of interest locked.
  */
@@ -639,7 +730,7 @@ wait_queue_unlink_all(
 	queue_t q;
 	spl_t s;
 
-	if (!wait_queue_is_queue(wq)) {
+	if (!wait_queue_is_valid(wq)) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -652,17 +743,21 @@ wait_queue_unlink_all(
 
 	wq_element = (wait_queue_element_t) queue_first(q);
 	while (!queue_end(q, (queue_entry_t)wq_element)) {
+		boolean_t alloced;
+
 		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
 		wq_next_element = (wait_queue_element_t)
 			     queue_next((queue_t) wq_element);
 
-		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
+		alloced = (wq_element->wqe_type == WAIT_QUEUE_LINK);
+		if (alloced || wq_element->wqe_type == WAIT_QUEUE_LINK_NOALLOC) {
 			wql = (wait_queue_link_t)wq_element;
 			wq_set = wql->wql_setqueue;
 			wqs_lock(wq_set);
 			wait_queue_unlink_locked(wq, wq_set, wql);
 			wqs_unlock(wq_set);
-			enqueue(links, &wql->wql_links);
+			if (alloced)
+				enqueue(links, &wql->wql_links);
 		}
 		wq_element = wq_next_element;
 	}
@@ -671,58 +766,8 @@ wait_queue_unlink_all(
 
 	while(!queue_empty(links)) {
 		wql = (wait_queue_link_t) dequeue(links);
-		kfree(wql, sizeof(struct _wait_queue_link));
+		zfree(_wait_queue_link_zone, wql);
 	}
-
-	return(KERN_SUCCESS);
-}	
-
-/*
- *	Routine:	wait_queue_set_unlink_all_nofree
- *	Purpose:
- *		Remove the linkage between a set wait queue and all its
- *		member wait queues. The link structures are not freed, nor
- *		returned. It is the caller's responsibility to track and free
- *		them.
- *	Conditions:
- *		The wait queue being must be a member set queue
- */
-kern_return_t
-wait_queue_set_unlink_all_nofree(
-	wait_queue_set_t wq_set)
-{
-	wait_queue_link_t wql;
-	wait_queue_t wq;
-	queue_t q;
-	spl_t s;
-
-	if (!wait_queue_is_set(wq_set)) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-retry:
-	s = splsched();
-	wqs_lock(wq_set);
-
-	q = &wq_set->wqs_setlinks;
-
-	wql = (wait_queue_link_t)queue_first(q);
-	while (!queue_end(q, (queue_entry_t)wql)) {
-		WAIT_QUEUE_SET_LINK_CHECK(wq_set, wql);
-		wq = wql->wql_queue;
-		if (wait_queue_lock_try(wq)) {
-			wait_queue_unlink_locked(wq, wq_set, wql);
-			wait_queue_unlock(wq);
-			wql = (wait_queue_link_t)queue_first(q);
-		} else {
-			wqs_unlock(wq_set);
-			splx(s);
-			delay(1);
-			goto retry;
-		}
-	}
-	wqs_unlock(wq_set);
-	splx(s);
 
 	return(KERN_SUCCESS);
 }	
@@ -732,7 +777,7 @@ kern_return_t
 wait_subqueue_unlink_all(
 	wait_queue_set_t	wq_set)
 {
-	return wait_queue_set_unlink_all_nofree(wq_set);
+	return wait_queue_set_unlink_all(wq_set);
 }
 
 
@@ -740,7 +785,8 @@ wait_subqueue_unlink_all(
  *	Routine:	wait_queue_set_unlink_all
  *	Purpose:
  *		Remove the linkage between a set wait queue and all its
- *		member wait queues. The link structures are freed.
+ *		member wait queues. The link structures are freed for those
+ *		links which were dynamically allocated.
  *	Conditions:
  *		The wait queue must be a set
  */
@@ -772,9 +818,13 @@ retry:
 		WAIT_QUEUE_SET_LINK_CHECK(wq_set, wql);
 		wq = wql->wql_queue;
 		if (wait_queue_lock_try(wq)) {
+			boolean_t alloced;
+
+			alloced = (wql->wql_type == WAIT_QUEUE_LINK);
 			wait_queue_unlink_locked(wq, wq_set, wql);
 			wait_queue_unlock(wq);
-			enqueue(links, &wql->wql_links);
+			if (alloced)
+				enqueue(links, &wql->wql_links);
 			wql = (wait_queue_link_t)queue_first(q);
 		} else {
 			wqs_unlock(wq_set);
@@ -788,58 +838,10 @@ retry:
 
 	while (!queue_empty (links)) {
 		wql = (wait_queue_link_t) dequeue(links);
-		kfree(wql, sizeof(struct _wait_queue_link));
+		zfree(_wait_queue_link_zone, wql);
 	}
 	return(KERN_SUCCESS);
 }	
-
-
-/*
- *	Routine:	wait_queue_unlink_one
- *	Purpose:
- *		Find and unlink one set wait queue
- *	Conditions:
- *		Nothing of interest locked.
- */
-void
-wait_queue_unlink_one(
-	wait_queue_t wq,
-	wait_queue_set_t *wq_setp)
-{
-	wait_queue_element_t wq_element;
-	queue_t q;
-	spl_t s;
-
-	s = splsched();
-	wait_queue_lock(wq);
-
-	q = &wq->wq_queue;
-	
-	wq_element = (wait_queue_element_t) queue_first(q);
-	while (!queue_end(q, (queue_entry_t)wq_element)) {
-
-		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
-			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
-			wait_queue_set_t wq_set = wql->wql_setqueue;
-			
-			wqs_lock(wq_set);
-			wait_queue_unlink_locked(wq, wq_set, wql);
-			wqs_unlock(wq_set);
-			wait_queue_unlock(wq);
-			splx(s);
-			kfree(wql,sizeof(struct _wait_queue_link));
-			*wq_setp = wq_set;
-			return;
-		}
-
-		wq_element = (wait_queue_element_t)
-			queue_next((queue_t) wq_element);
-	}
-	wait_queue_unlock(wq);
-	splx(s);
-	*wq_setp = WAIT_QUEUE_SET_NULL;
-}
-
 
 /*
  *	Routine:	wait_queue_assert_wait64_locked
@@ -868,7 +870,7 @@ wait_queue_assert_wait64_locked(
 	if (wq->wq_type == _WAIT_QUEUE_SET_inited) {
 		wait_queue_set_t wqs = (wait_queue_set_t)wq;
 
-		if (wqs->wqs_isprepost && wqs->wqs_refcount > 0)
+		if (event == NO_EVENT64 && wqs_is_preposted(wqs))
 			return(THREAD_AWAKENED);
 	}
 	  
@@ -880,7 +882,7 @@ wait_queue_assert_wait64_locked(
 	 */
 	wait_result = thread_mark_wait_locked(thread, interruptible);
 	if (wait_result == THREAD_WAITING) {
-		if (thread->options & TH_OPT_VMPRIV)
+		if (!wq->wq_fifo || thread->options & TH_OPT_VMPRIV)
 			enqueue_head(&wq->wq_queue, (queue_entry_t) thread);
 		else
 			enqueue_tail(&wq->wq_queue, (queue_entry_t) thread);
@@ -924,7 +926,7 @@ wait_queue_assert_wait(
 	s = splsched();
 	wait_queue_lock(wq);
 	thread_lock(thread);
-	ret = wait_queue_assert_wait64_locked(wq, (event64_t)((uint32_t)event),
+	ret = wait_queue_assert_wait64_locked(wq, CAST_DOWN(event64_t,event),
 											interruptible, deadline, thread);
 	thread_unlock(thread);
 	wait_queue_unlock(wq);
@@ -999,27 +1001,24 @@ _wait_queue_select64_all(
 		/*
 		 * We may have to recurse if this is a compound wait queue.
 		 */
-		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK ||
+		    wq_element->wqe_type == WAIT_QUEUE_LINK_NOALLOC) {
 			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
-			wait_queue_t set_queue;
+			wait_queue_set_t set_queue = wql->wql_setqueue;
 
 			/*
-			 * We have to check the set wait queue.
+			 * We have to check the set wait queue. If it is marked
+			 * as pre-post, and it is the "generic event" then mark
+			 * it pre-posted now (if not already).
 			 */
-			set_queue = (wait_queue_t)wql->wql_setqueue;
-			wait_queue_lock(set_queue);
-			if (set_queue->wq_isprepost) {
-				wait_queue_set_t wqs = (wait_queue_set_t)set_queue;
-				
-				/*
-				 * Preposting is only for sets and wait queue
-				 * is the first element of set 
-				 */
-				wqs->wqs_refcount++;
+			wqs_lock(set_queue);
+			if (event == NO_EVENT64 && set_queue->wqs_prepost && !wql_is_preposted(wql)) {
+				queue_t ppq = &set_queue->wqs_preposts;
+				queue_enter(ppq, wql, wait_queue_link_t, wql_preposts);
 			}
-			if (! wait_queue_empty(set_queue)) 
-				_wait_queue_select64_all(set_queue, event, wake_queue);
-			wait_queue_unlock(set_queue);
+			if (! wait_queue_empty(&set_queue->wqs_wait_queue)) 
+				_wait_queue_select64_all(&set_queue->wqs_wait_queue, event, wake_queue);
+			wqs_unlock(set_queue);
 		} else {
 			
 			/*
@@ -1125,7 +1124,7 @@ wait_queue_wakeup_all(
 //		panic("wait_queue_wakeup_all: we did not get the lock on %p\n", wq);	/* (BRINGUP) */
 //	}
 	ret = wait_queue_wakeup64_all_locked(
-				wq, (event64_t)((uint32_t)event),
+				wq, CAST_DOWN(event64_t,event),
 				result, TRUE);
 	/* lock released */
 	splx(s);
@@ -1177,7 +1176,7 @@ wait_queue_wakeup64_all(
  *		a locked thread - if one found
  *	Note:
  *		This is where the sync policy of the wait queue comes
- *		into effect.  For now, we just assume FIFO.
+ *		into effect.  For now, we just assume FIFO/LIFO.
  */
 static thread_t
 _wait_queue_select64_one(
@@ -1188,8 +1187,6 @@ _wait_queue_select64_one(
 	wait_queue_element_t wqe_next;
 	thread_t t = THREAD_NULL;
 	queue_t q;
-
-	assert(wq->wq_fifo);
 
 	q = &wq->wq_queue;
 
@@ -1202,21 +1199,34 @@ _wait_queue_select64_one(
 		/*
 		 * We may have to recurse if this is a compound wait queue.
 		 */
-		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK ||
+		    wq_element->wqe_type == WAIT_QUEUE_LINK_NOALLOC) {
 			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
-			wait_queue_t set_queue;
+			wait_queue_set_t set_queue = wql->wql_setqueue;
 
 			/*
-			 * We have to check the set wait queue.
+			 * We have to check the set wait queue. If the set
+			 * supports pre-posting, it isn't already preposted,
+			 * and we didn't find a thread in the set, then mark it.
+			 *
+			 * If we later find a thread, there may be a spurious
+			 * pre-post here on this set.  The wait side has to check
+			 * for that either pre- or post-wait.
 			 */
-			set_queue = (wait_queue_t)wql->wql_setqueue;
-			wait_queue_lock(set_queue);
-			if (! wait_queue_empty(set_queue)) {
-				t = _wait_queue_select64_one(set_queue, event);
+			wqs_lock(set_queue);
+			if (! wait_queue_empty(&set_queue->wqs_wait_queue)) {
+				t = _wait_queue_select64_one(&set_queue->wqs_wait_queue, event);
 			}
-			wait_queue_unlock(set_queue);
-			if (t != THREAD_NULL)
+			if (t != THREAD_NULL) {
+				wqs_unlock(set_queue);
 				return t;
+			}
+			if (event == NO_EVENT64 && set_queue->wqs_prepost && !wql_is_preposted(wql)) {
+				queue_t ppq = &set_queue->wqs_preposts;
+				queue_enter(ppq, wql, wait_queue_link_t, wql_preposts);
+			}
+			wqs_unlock(set_queue);
+
 		} else {
 			
 			/*
@@ -1319,18 +1329,18 @@ _wait_queue_select64_thread(
 		wqe_next = (wait_queue_element_t)
 			       queue_next((queue_t) wq_element);
 
-		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK ||
+		    wq_element->wqe_type == WAIT_QUEUE_LINK_NOALLOC) {
 			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
-			wait_queue_t set_queue;
+			wait_queue_set_t set_queue = wql->wql_setqueue;
 
-			set_queue = (wait_queue_t)wql->wql_setqueue;
-			wait_queue_lock(set_queue);
-			if (! wait_queue_empty(set_queue)) {
-				res = _wait_queue_select64_thread(set_queue,
+			wqs_lock(set_queue);
+			if (! wait_queue_empty(&set_queue->wqs_wait_queue)) {
+				res = _wait_queue_select64_thread(&set_queue->wqs_wait_queue,
 								event,
 								thread);
 			}
-			wait_queue_unlock(set_queue);
+			wqs_unlock(set_queue);
 			if (res == KERN_SUCCESS)
 				return KERN_SUCCESS;
 		}
@@ -1444,7 +1454,7 @@ wait_queue_wakeup_one(
 
 	s = splsched();
 	wait_queue_lock(wq);
-	thread = _wait_queue_select64_one(wq, (event64_t)((uint32_t)event));
+	thread = _wait_queue_select64_one(wq, CAST_DOWN(event64_t,event));
 	wait_queue_unlock(wq);
 
 	if (thread) {
@@ -1587,7 +1597,7 @@ wait_queue_wakeup_thread(
 
 	s = splsched();
 	wait_queue_lock(wq);
-	res = _wait_queue_select64_thread(wq, (event64_t)((uint32_t)event), thread);
+	res = _wait_queue_select64_thread(wq, CAST_DOWN(event64_t,event), thread);
 	wait_queue_unlock(wq);
 
 	if (res == KERN_SUCCESS) {

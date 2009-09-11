@@ -362,6 +362,23 @@ struct vnodeop_desc vnop_kqfilt_remove_desc = {
 	NULL
 };
 
+int vnop_monitor_vp_offsets[] = {
+	VOPARG_OFFSETOF(struct vnop_monitor_args,a_vp),
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_monitor_desc = {
+	0,
+	"vnop_monitor",
+	0,
+	vnop_monitor_vp_offsets,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vnop_monitor_args, a_context),
+	NULL
+};
+
 int vnop_setlabel_vp_offsets[] = {
 	VOPARG_OFFSETOF(struct vnop_setlabel_args,a_vp),
 	VDESC_NO_OFFSET
@@ -1028,6 +1045,7 @@ struct vnodeop_desc *vfs_op_descs[] = {
 	&vnop_blktooff_desc,
 	&vnop_offtoblk_desc,
 	&vnop_blockmap_desc,
+	&vnop_monitor_desc,
 #if NAMEDSTREAMS
 	&vnop_getnamedstream_desc,
 	&vnop_makenamedstream_desc,

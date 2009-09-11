@@ -345,7 +345,7 @@ sflt_detach_private(
 	if (entry->sfe_socket->so_filteruse != 0) {
 		entry->sfe_flags |= SFEF_DETACHUSEZERO;
 		lck_mtx_unlock(sock_filter_lock);
-
+	
 		if (unregistering) {
 #if DEBUG
 			printf("sflt_detach_private unregistering SFEF_DETACHUSEZERO "
@@ -355,7 +355,6 @@ sflt_detach_private(
 #endif
 			socket_unlock(entry->sfe_socket, 0);	
 		}
-
 		return;
 	} else {
 		/*
@@ -592,7 +591,7 @@ sock_inject_data_in(
 	socket_lock(so, 1);
 	
 	if (from) {
-		if (sbappendaddr(&so->so_rcv, (struct sockaddr*)from, data,
+		if (sbappendaddr(&so->so_rcv, (struct sockaddr*)(uintptr_t)from, data,
 						 control, NULL))
 			sorwakeup(so);
 		goto done;
@@ -631,7 +630,7 @@ sock_inject_data_out(
 {
 	int	sosendflags = 0;
 	if (flags & sock_data_filt_flag_oob) sosendflags = MSG_OOB;
-	return sosend(so, (struct sockaddr*)to, NULL,
+	return sosend(so, (struct sockaddr*)(uintptr_t)to, NULL,
 				  data, control, sosendflags);
 }
 

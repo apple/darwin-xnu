@@ -83,7 +83,7 @@ static u_int16_t ru_a, ru_b;
 static u_int16_t ru_g;
 static u_int16_t ru_counter = 0;
 static u_int16_t ru_msb = 0;
-static long ru_reseed;
+static time_t ru_reseed;
 static u_int32_t tmp;		/* Storage for unused random */
 
 static u_int16_t pmod(u_int16_t, u_int16_t, u_int16_t);

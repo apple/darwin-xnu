@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -30,7 +30,8 @@
 
 #include <sys/kpi_mbuf.h>
 
-void mbuf_tag_id_first_last(mbuf_tag_id_t * first, mbuf_tag_id_t * last);
-errno_t mbuf_tag_id_find_internal(const char *string, 
-				  mbuf_tag_id_t * out_id, int create);
-#endif __KPI_MBUF_INTERNAL_
+extern void mbuf_tag_id_first_last(mbuf_tag_id_t * first, mbuf_tag_id_t * last);
+extern errno_t mbuf_tag_id_find_internal(const char *string,
+    mbuf_tag_id_t * out_id, int create);
+
+#endif /* __KPI_MBUF_INTERNAL_ */

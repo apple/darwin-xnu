@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -34,7 +34,6 @@
 
 #include <i386/cpu_data.h>
 #include <i386/machine_routines.h>
-#include <i386/perfmon.h>
 #include <i386/lapic.h>
 #include <i386/mp.h>
 #include <i386/trap.h>
@@ -42,7 +41,9 @@
 
 #include <chud/chud_xnu.h>
 
+#if 0
 #pragma mark **** cpu enable/disable ****
+#endif
 
 extern kern_return_t processor_start(processor_t     processor); // osfmk/kern/processor.c
 extern kern_return_t processor_exit(processor_t     processor); // osfmk/kern/processor.c
@@ -70,24 +71,28 @@ kern_return_t chudxnu_enable_cpu(int cpu, boolean_t enable)
     return KERN_FAILURE;
 }
 
+#if 0
 #pragma mark **** perfmon facility ****
+#endif
 
 __private_extern__ kern_return_t
-chudxnu_perfmon_acquire_facility(task_t task)
+chudxnu_perfmon_acquire_facility(task_t task __unused)
 {
-    return pmc_acquire(task);
+    return KERN_SUCCESS;
 }
 
 __private_extern__ kern_return_t
-chudxnu_perfmon_release_facility(task_t task)
+chudxnu_perfmon_release_facility(task_t task __unused)
 {
-    return pmc_release(task);
+    return KERN_SUCCESS;
 }
 
+#if 0
 #pragma mark **** interrupt counters ****
+#endif
 
 __private_extern__ kern_return_t
-chudxnu_get_cpu_interrupt_counters(int cpu, rupt_counters_t *rupts)
+chudxnu_get_cpu_interrupt_counters(int cpu, interrupt_counters_t *rupts)
 {
     if(cpu < 0 || (unsigned int)cpu >= real_ncpus) { // sanity check
         return KERN_FAILURE;
@@ -158,18 +163,3 @@ chudxnu_clear_cpu_interrupt_counters(int cpu)
     return KERN_SUCCESS;
 }
 
-#pragma mark *** deprecated ***
-
-//DEPRECATED
-__private_extern__ kern_return_t
-chudxnu_get_cpu_rupt_counters(int cpu, rupt_counters_t *rupts)
-{
-	return chudxnu_get_cpu_interrupt_counters(cpu, rupts);
-}
-
-//DEPRECATED
-__private_extern__ kern_return_t
-chudxnu_clear_cpu_rupt_counters(int cpu)
-{
-	return chudxnu_clear_cpu_interrupt_counters(cpu);
-}

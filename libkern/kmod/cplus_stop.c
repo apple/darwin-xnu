@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000,2008-2009 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -42,6 +42,7 @@
     The linkline must look like this.
         *.o -lkmodc++ kmod_info.o -lkmod
  */
+#if __i386__ || __ppc__
 #include <mach/mach_types.h>
 
 asm(".destructors_used = 0");
@@ -55,10 +56,16 @@ extern kmod_stop_func_t *_antimain;
 
 __private_extern__ kern_return_t _stop(kmod_info_t *ki, void *data)
 {
-    kern_return_t res = OSRuntimeFinalizeCPP(ki, data);
+    kern_return_t result = KERN_SUCCESS;
 
-    if (!res && _antimain)
-        res = (*_antimain)(ki, data);
-
-    return res;
+    if (_antimain) {
+        result = (*_antimain)(ki, data);
+    }
+    
+    if (result == KERN_SUCCESS) {
+        result = OSRuntimeFinalizeCPP(ki, data);
+    }
+    
+    return result;
 }
+#endif

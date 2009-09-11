@@ -26,10 +26,10 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
-Copyright (c) 1998 Apple Computer, Inc.	 All rights reserved.
+Copyright (c) 1998 Apple Computer, Inc.  All rights reserved.
 HISTORY
-    1998-10-30	Godfrey van der Linden(gvdl)
-	Created
+    1998-10-30  Godfrey van der Linden(gvdl)
+    Created
 */
 #ifndef _LIBKERN_OSOBJECT_H
 #define _LIBKERN_OSOBJECT_H
@@ -38,118 +38,384 @@ HISTORY
 
 class OSSymbol;
 class OSString;
+
+
 /*!
-    @class OSObject : OSMetaClassBase
-    @abstract The root base class for Mac OS X kernel and just generally all-round useful class to have around.
-    @discussion
-Defines the minimum functionality that an object can expect.  Implements reference counting, type safe object casting, allocation primitives & serialisation among other functionality.	 This object is an abstract base class and can not be copied, nor can it be constructed by itself.
+ * @header
+ *
+ * @abstract
+ * This header declares the OSObject class,
+ * which is the concrete root of the Libkern C++ class hierarchy.
+ */
+ 
 
-<br><br> Construction <br><br>
-
-As Mac OS X's C++ is based upon Embedded C++ we have a problem with the typical C++ method of using constructors.  Embedded C++ does not allow exceptions.  This means that the standard constructors can not report a failure.  Well obviously initialisation of a new object can fail so we have had to work around this language limitation.  In the Mac OS X kernel we have chosen to break object construction into two phases.  Phase one is the familiar C++ new operator, the only initialisation is the object has exactly one reference after creation.  Once the new is called the client MUST call init and check it's return value.  If the init call fails then the object MUST be immediately released.  IOKit usually implements factory methods to make construction a one step process for clients.  
-
-<br><br>Reference Counting<br><br>
-
-OSObject provides reference counting services using the $link retain(), $link release(), $link release(int when) and $link free() functions.  The public interface to the reference counting is retain() & release().  release() is implemented as a simple call to release(1).  The actual implementation of release(when) is a little subtle.  If the current reference count is less than or equal to the 'when' parameter the object will call free on itself.  
-<br>
-In general a subclass is expected to only override $link free().  It may also choose to override release() if the object has a circular retain count, see $link release(int when);
-
-<br><br>Runtime Type Information System<br><br>
-
-The Mac OS X C++ implements a basic runtime type information system using meta class information and a number of macros, $link OSDynamicCast, $link OSTypeID, $link OSTypeIDInst, $link OSCheckTypeInst and $link OSMetaClass.
-*/
+/*!
+ * @class OSObject
+ *
+ * @abstract
+ * OSObject is the concrete root class
+ * of the Libkern and I/O Kit C++ class hierarchy.
+ *
+ * @discussion
+ * OSObject defines the minimal functionality
+ * required of Libkern and I/O Kit C++ classes:
+ * tie-in to the run-time type information facility,
+ * the dynamic allocation/initialization paradigm,
+ * and reference counting.
+ * While kernel extensions are free to use their own C++ classes internally,
+ * any interaction they have with Libkern or the I/O Kit will require
+ * classes ultimately derived from OSObject.
+ *
+ * <b>Run-Time Type Information</b>
+ *
+ * OSObject is derived from the abstract root class
+ * @link //apple_ref/doc/class/OSMetaClassBase OSMetaClassBase@/link,
+ * which declares (and defines many of) the primitives
+ * on which the run-time type information facility is based.
+ * A parallel inheritance hierarchy of metaclass objects
+ * provides run-time introspection, including access to class names,
+ * inheritance, and safe type-casting.
+ * See @link //apple_ref/doc/class/OSMetaClass OSMetaClass@/link
+ * for more information.
+ *
+ * <b>Dynamic Allocation/Initialization</b>
+ *
+ * The kernel-resident C++ runtime does not support exceptions,
+ * so Libkern classes cannot use standard C++ object
+ * constructors and destructors,
+ * which use exceptions to report errors.
+ * To support error-handling during instance creation, then,
+ * OSObject separates object allocation from initialization.
+ * You can create a new OSObject-derived instance
+ * with the <code>new</code> operator,
+ * but this does nothing more than allocate memory
+ * and initialize the reference count to 1.
+ * Following this, you must call a designated initialization function
+ * and check its <code>bool</code> return value.
+ * If the initialization fails,
+ * you must immediately call
+ * <code>@link
+ * //apple_ref/cpp/instm/OSObject/release/virtualvoid/()
+ * release@/link</code>
+ * on the instance and handle the failure in whatever way is appropriate.
+ * Many Libkern and I/O Kit classes define static instance-creation functions
+ * (beginning with the word "with")
+ * to make construction a one-step process for clients.
+ *
+ * <b>Reference Counting</b>
+ *
+ * OSObject provides reference counting services using the
+ * <code>@link
+ * //apple_ref/cpp/instm/OSObject/retain/virtualvoid/()
+ * retain@/link</code>, 
+ * <code>@link
+ * //apple_ref/cpp/instm/OSObject/release/virtualvoid/()
+ * release()@/link</code>,
+ * <code>@link
+ * //apple_ref/cpp/instm/OSObject/release/virtualvoid/(int)
+ * release(int freeWhen)@/link</code>
+ * and
+ *<code> @link
+ * //apple_ref/cpp/instm/OSObject/free/virtualvoid/()
+ * free@/link</code>
+ * functions.
+ * The public interface to the reference counting is
+ * <code>@link
+ * //apple_ref/cpp/instm/OSObject/retain/virtualvoid/()
+ * retain@/link</code>, 
+ * and 
+ * <code>@link
+ * //apple_ref/cpp/instm/OSObject/release/virtualvoid/()
+ * release@/link</code>;
+ * <code>@link
+ * //apple_ref/cpp/instm/OSObject/release/virtualvoid/(int)
+ * release(int freeWhen)@/link</code>
+ * is provided
+ * for objects that have internal retain cycles.
+ *
+ * In general, a subclass is expected to only override
+ * <code>@link
+ * //apple_ref/cpp/instm/OSObject/free/virtualvoid/()
+ * free@/link</code>.
+ * It may also choose to override
+ * <code>@link
+ * //apple_ref/cpp/instm/OSObject/release/virtualvoid/(int)
+ * release(int freeWhen)@/link</code>
+ * if the object has a circular retain count, as noted above.
+ *
+ * <b>Use Restrictions</b>
+ *
+ * With very few exceptions in the I/O Kit, all Libkern-based C++
+ * classes, functions, and macros are <b>unsafe</b>
+ * to use in a primary interrupt context.
+ * Consult the I/O Kit documentation related to primary interrupts 
+ * for more information.
+ *
+ * <b>Concurrency Protection</b>
+ *
+ * The basic features of OSObject are thread-safe.
+ * Most Libkern subclasses are not, and require locking or other protection
+ * if instances are shared between threads.
+ * I/O Kit driver objects are either designed for use within thread-safe contexts
+ * or designed to inherently be thread-safe.
+ * Always check the individual class documentation to see what
+ * steps are necessary for concurrent use of instances.
+ */
 class OSObject : public OSMetaClassBase
 {
     OSDeclareAbstractStructors(OSObject)
 
 private:
-/*! @var retainCount Number of references held on this instance. */
+   /* Not to be included in headerdoc.
+    *
+    * @var retainCount Number of references held on this instance.
+    */
     mutable int retainCount;
 
 protected:
 
-/*! @function release
-    @abstract untagged release(when) mechansim.
-    @param when Pass through to taggedRelease. */
-    virtual void release(int when) const;
+// xx-review: seems not to be used, should we deprecate?
 
-/*! @function taggedRelease
-    @abstract Primary implementation of the tagged release mechanism.
-    @discussion  If $link retainCount <= the when argument then call $link free().  This indirect implementation of $link release allows the developer to break reference circularity.  An example of this sort of problem is a parent/child mutual reference, either the parent or child can implement: void taggedRelease(tag) { taggedRelease(tag, 2); } thus breaking the cirularity. 
-    @param when If retainCount == when then call free(). */
-    virtual void taggedRelease(const void *tag, const int when) const;
+   /*!
+    * @function release
+    *
+    * @abstract
+    * Releases a reference to an object,
+    * freeing it immediately if the reference count
+    * drops below the specified threshold.
+    *
+    * @param freeWhen If decrementing the reference count makes it
+    *                 >= <code>freeWhen</code>, the object is immediately freed.
+    *
+    * @discussion
+    * If the receiver has <code>freeWhen</code> or fewer references
+    * after its reference count is decremented,
+    * it is immediately freed.
+    *
+    * This version of <code>release</code>
+    * can be used to break certain retain cycles in object graphs.
+    * In general, however, it should be avoided.
+    */
+    virtual void release(int freeWhen) const;
 
-/*! @function init
-    @abstract Mac OS X kernel's primary mechanism for constructing objects.
-    @discussion Your responsibility as a subclass author is to override the init method of your parent.  In general most of our implementations call <super>::init() before doing local initialisation, if the parent fails then return false immediately.  If you have a failure during you local initialisation then return false.
-    @result OSObject::init Always returns true, but subclasses will return false on init failure.
-*/
+   /*!
+    * @function taggedRelease
+    *
+    * @abstract
+    * Releases a tagged reference to an object,
+    * freeing it immediately if the reference count
+    * drops below the specified threshold.
+    *
+    * @param tag      Used for tracking collection references.
+    * @param freeWhen If decrementing the reference count makes it
+    *                 >= <code>freeWhen</code>, the object is immediately freed.
+    *
+    * @discussion
+    * Kernel extensions should not use this function.
+    * It is for use by OSCollection and subclasses to track
+    * inclusion in collections.
+    *
+    * If the receiver has <code>freeWhen</code> or fewer references
+    * after its reference count is decremented,
+    * it is immediately freed.
+    *
+    * This version of <code>release</code>
+    * can be used to break certain retain cycles in object graphs.
+    * In general, however, it should be avoided.
+    */
+    virtual void taggedRelease(const void * tag, const int freeWhen) const;
+
+
+   /*!
+    * @function init
+    *
+    * @abstract
+    * Initializes a newly-allocated object.
+    *
+    * @result
+    * <code>true</code> on success, <code>false</code> on failure.
+    *
+    * @discussion
+    * Classes derived from OSObject must override the primary init method
+    * of their parent.
+    * In general most implementations call
+    * <code><i>super</i>::init()</code>
+    * before doing local initialisation.
+    * If the superclass call fails then return <code>false</code> immediately.
+    * If the subclass encounters a failure then it should return <code>false</code>.
+    */
     virtual bool init();
 
-/*! @function free
-    @abstract The last reference is gone so clean up your resources.
-    @discussion Release all resources held by the object, then call your parent's free().  
 
-<br><br>Caution:
-<br>1> You can not assume that you have completed initialization before your free is called, so be very careful in your implementation.  
-<br>2> The implementation is OSObject::free() { delete this; } so do not call super::free() until just before you return.
-<br>3> Free is not allowed to fail all resource must be released on completion. */
+   /*!
+    * @function free
+    *
+    * @abstract
+    * Deallocates/releases resources held by the object.
+    *
+    * @discussion
+    * Classes derived from OSObject should override this function
+    * to deallocate or release all dynamic resources held by the instance,
+    * then call the superclass's implementation.  
+    *
+    * <b>Caution:<b>
+    * <ol>
+    * <li>You can not assume that you have completed initialization
+    *     before <code>free</code> is called,
+    *     so be very careful in your implementation.</li>
+    * <li>OSObject's implementation performs the C++ <code>delete</code>
+    *     of the instance, so be sure that you call the superclass
+    *     implementation <i>last</i> in your implementation.</li>
+    * <li><code>free</code> must not fail;
+    *     all resources must be deallocated or released on completion.</li>
+    * </ol>
+    */
     virtual void free();
 
-/*! @function operator delete
-    @abstract Release the 'operator new'ed memory.
-    @discussion Never attempt to delete an object that inherits from OSObject directly use $link release().
-    @param mem pointer to block of memory
-    @param size size of block of memory
-*/
-    static void operator delete(void *mem, size_t size);
+
+   /*!
+    * @function operator delete
+    *
+    * @abstract
+    * Frees the memory of the object itself.
+    *
+    * @param mem   A pointer to the object's memory.
+    * @param size  The size of the object's block of memory.
+    *
+    * @discussion
+    * Never use <code>delete</code> on objects derived from OSObject;
+    * use
+    * <code>@link
+    * //apple_ref/cpp/instm/OSObject/release/virtualvoid/()
+    * release@/link</code>
+    * instead.
+    */
+    static void operator delete(void * mem, size_t size);
 
 public:
 
-/*! @function operator new
-    @abstract Allocator for all objects that inherit from OSObject
-    @param size number of bytes to allocate
-    @result returns pointer to block of memory if available, 0 otherwise.
-*/
-    static void *operator new(size_t size);
+   /*!
+    * @function operator new
+    *
+    * @abstract
+    * Allocates memory for an instance of the class.
+    *
+    * @param size The number of bytes to allocate
+    *
+    * @result
+    * A pointer to block of memory if available, <code>NULL</code> otherwise.
+    */
+    static void * operator new(size_t size);
 
-/*! @function getRetainCount
-    @abstract How many times has this object been retained?
-    @result Current retain count
-*/
+
+   /*!
+    * @function getRetainCount
+    *
+    * @abstract
+    * Returns the reference count of the object.
+    *
+    * @result
+    * The reference count of the object.
+    */
     virtual int getRetainCount() const;
 
-/*! @function retain
-    @abstract Retain a reference in this object.
-    @discussion Takes a reference that is NULL tagged.  See taggedRetain().
-*/
+
+   /*!
+    * @function retain
+    *
+    * @abstract
+    * Retains a reference to the object.
+    *
+    * @discussion
+    * This function increments the reference count of the receiver by 1.
+    * If you need to maintain a reference to an object
+    * outside the context in which you received it,
+    * you should always retain it immediately.
+    */
     virtual void retain() const;
 
-/*! @function release
-    @abstract Release a reference to this object
-    @discussion Removes a reference that is NULL tagged.  See taggedRelease().
-*/
+
+   /*!
+    * @function release
+    *
+    * @abstract
+    * Releases a reference to the object,
+    * freeing it immediately if the reference count drops to zero.
+    *
+    * @discussion
+    * This function decrements the reference count of the receiver by 1.
+    * If the reference count drops to zero,
+    * the object is immediately freed using
+    * <code>@link
+    * //apple_ref/cpp/instm/OSObject/free/virtualvoid/()
+    * free@/link</code>.
+    */
     virtual void release() const;
 
-/*! @function taggedRetain
-    @abstract Retain a tagged reference in this object.
-    @param tag Retain a reference on this object with this tag, see taggedRelease.
-*/
-    virtual void taggedRetain(const void *tag = 0) const;
 
-/*! @function taggedRelease
-    @abstract Release a tagged reference to this object
-    @param tag Remove a reference on this object with this tag, if an attempt is made to remove a reference that isn't associated with this tag the kernel will panic immediately.
-*/
-    virtual void taggedRelease(const void *tag = 0) const;
+   /*!
+    * @function taggedRetain
+    *
+    * @abstract
+    * Retains a reference to the object with an optional
+    * tag used for reference-tracking.
+    *
+    * @param tag      Used for tracking collection references.
+    *
+    * @discussion
+    * Kernel extensions should not use this function.
+    * It is for use by OSCollection and subclasses to track
+    * inclusion in collections.
+    *
+    * If you need to maintain a reference to an object
+    * outside the context in which you received it,
+    * you should always retain it immediately.
+    */
+    virtual void taggedRetain(const void * tag = 0) const;
 
-/*! @function serialize
-    @abstract 
-    @discussion 
-    @param s
-    @result 
-*/
-    virtual bool serialize(OSSerialize *s) const;
+
+   /*!
+    * @function taggedRelease
+    *
+    * @abstract
+    * Releases a tagged reference to an object,
+    * freeing it immediately if the reference count
+    * drops to zero.
+    *
+    * @param tag      Used for tracking collection references.
+    *
+    * @discussion
+    * Kernel extensions should not use this function.
+    * It is for use by OSCollection and subclasses to track
+    * inclusion in collections.
+    */
+    virtual void taggedRelease(const void * tag = 0) const;
+    // xx-review: used to say, "Remove a reference on this object with this tag, if an attempt is made to remove a reference that isn't associated with this tag the kernel will panic immediately", but I don't see that in the implementation
+
+
+   /*!
+    * @function serialize
+    *
+    * @abstract
+    * Overridden by subclasses to archive the receiver into the provided
+    * @link //apple_ref/doc/class/OSSerialize OSSerialize@/link object.
+    *
+    * @param serializer The OSSerialize object.
+    *
+    * @result
+    * <code>true</code> if serialization succeeds, <code>false</code> if not.
+    *
+    * @discussion
+    * OSObject's implementation writes a string indicating that
+    * the class of the object receiving the function call
+    * is not serializable.
+    * Subclasses that can meaningfully encode themselves
+    * in I/O Kit-style property list XML can override this function to do so.
+    * See
+    * @link //apple_ref/doc/class/OSSerialize OSSerialize@/link
+    * for more information.
+    */
+    virtual bool serialize(OSSerialize * serializer) const;
 
     // Unused Padding
     OSMetaClassDeclareReservedUnused(OSObject,  0);

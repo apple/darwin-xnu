@@ -184,9 +184,9 @@ union sigval {
 	void	*sival_ptr;
 };
 
-#define	SIGEV_NONE	0		/* No async notification */
-#define	SIGEV_SIGNAL	1		/* aio - completion notification */
-#define SIGEV_THREAD	3		/* A notification function will be called to perform notification */
+#define	SIGEV_NONE	0	/* No async notification */
+#define	SIGEV_SIGNAL	1	/* aio - completion notification */
+#define	SIGEV_THREAD	3	/* [NOTIMP] [RTS] call notification function */
 
 struct sigevent {
 	int				sigev_notify;				/* Notification type */
@@ -198,12 +198,42 @@ struct sigevent {
 
 #ifdef BSD_KERNEL_PRIVATE
 
+union user64_sigval {
+	struct {
+		uint32_t		pad;	/* assumes Motorola byte order */
+		int32_t			sival_int;
+	} size_equivalent;
+	user64_addr_t	sival_ptr;
+};
+
+union user32_sigval {
+	/* Members as suggested by Annex C of POSIX 1003.1b. */
+	int32_t	sival_int;
+	user32_addr_t sival_ptr;
+};
+
 union user_sigval {
 	struct {
-		int		pad;	/* assumes Motorolla byte order */
-		int		sival_int;
+		uint32_t		pad;	/* assumes Motorola byte order */
+		int32_t			sival_int;
 	} size_equivalent;
-	user_addr_t	sival_ptr;
+	user_addr_t sival_ptr;
+};
+
+struct user64_sigevent {
+	int		sigev_notify;			/* Notification type */
+	int		sigev_signo;			/* Signal number */
+	union user64_sigval sigev_value;			/* Signal value */
+	user64_addr_t	sigev_notify_function;	  	/* Notify function */
+	user64_addr_t 	sigev_notify_attributes;	/* Notify attributes */
+};
+
+struct user32_sigevent {
+	int		sigev_notify;			/* Notification type */
+	int		sigev_signo;			/* Signal number */
+	union user32_sigval sigev_value;			/* Signal value */
+	user32_addr_t	sigev_notify_function;	  	/* Notify function */
+	user32_addr_t 	sigev_notify_attributes;	/* Notify attributes */
 };
 
 struct user_sigevent {
@@ -231,7 +261,7 @@ typedef struct __siginfo {
 
 #ifdef BSD_KERNEL_PRIVATE
 
-typedef struct __user_siginfo {
+typedef struct user_siginfo {
 	int		si_signo;	/* signal number */
 	int		si_errno;	/* errno association */
 	int		si_code;	/* signal code */
@@ -243,6 +273,32 @@ typedef struct __user_siginfo {
 	user_long_t	si_band;	/* band event for SIGPOLL */
 	user_ulong_t	pad[7];		/* Reserved for Future Use */
 } user_siginfo_t;
+
+typedef struct user64_siginfo {
+	int		si_signo;	/* signal number */
+	int		si_errno;	/* errno association */
+	int		si_code;	/* signal code */
+	pid_t		si_pid;		/* sending process */
+	uid_t		si_uid;		/* sender's ruid */
+	int		si_status;	/* exit value */
+	user64_addr_t	si_addr;	/* faulting instruction (see below) */
+	union user64_sigval si_value;	/* signal value */
+	user64_long_t	si_band;	/* band event for SIGPOLL */
+	user64_ulong_t	__pad[7];		/* Reserved for Future Use */
+} user64_siginfo_t;
+
+typedef struct user32_siginfo {
+	int		si_signo;	/* signal number */
+	int		si_errno;	/* errno association */
+	int		si_code;	/* signal code */
+	pid_t		si_pid;		/* sending process */
+	uid_t		si_uid;		/* sender's ruid */
+	int		si_status;	/* exit value */
+	user32_addr_t	si_addr;	/* faulting instruction (see below) */
+	union user32_sigval	si_value;	/* signal value */
+	user32_long_t	si_band;	/* band event for SIGPOLL */
+	user32_ulong_t	__pad[7];		/* Reserved for Future Use */
+} user32_siginfo_t;
 
 #endif	/* BSD_KERNEL_PRIVATE */
 
@@ -282,8 +338,8 @@ typedef struct __user_siginfo {
 #define FPE_FLTRES	4	/* [XSI] floating point inexact result */
 #define FPE_FLTINV	5	/* [XSI] invalid floating point operation */
 #define	FPE_FLTSUB	6	/* [XSI] subscript out of range -NOTIMP */
-#define	FPE_INTDIV	7	/* [XSI] integer divide by zero -NOTIMP */
-#define	FPE_INTOVF	8	/* [XSI] integer overflow -NOTIMP */
+#define	FPE_INTDIV	7	/* [XSI] integer divide by zero */
+#define	FPE_INTOVF	8	/* [XSI] integer overflow */
 
 /* Codes for SIGSEGV */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
@@ -350,19 +406,55 @@ struct	sigaction {
 #ifdef	BSD_KERNEL_PRIVATE
 #include <machine/types.h>
 
-union __user_sigaction_u {
-	user_addr_t	__sa_handler;
-	user_addr_t	__sa_sigaction;
+union __user32_sigaction_u {
+	user32_addr_t __sa_handler;
+	user32_addr_t __sa_sigaction;
 };
 
-struct	user_sigaction {
-	union __user_sigaction_u __sigaction_u;  /* signal handler */
+struct	user32_sigaction {
+	union __user32_sigaction_u __sigaction_u;  /* signal handler */
 	sigset_t sa_mask;		/* signal mask to apply */
 	int	sa_flags;		/* see signal options below */
 };
 
-struct	__user_sigaction {
-	union __user_sigaction_u __sigaction_u;  /* signal handler */
+struct	__user32_sigaction {
+	union __user32_sigaction_u __sigaction_u;  /* signal handler */
+	user32_addr_t sa_tramp;
+	sigset_t sa_mask;		/* signal mask to apply */
+	int	sa_flags;		/* see signal options below */
+};
+
+union __user64_sigaction_u {
+	user64_addr_t	__sa_handler;
+	user64_addr_t	__sa_sigaction;
+};
+
+struct	user64_sigaction {
+	union __user64_sigaction_u __sigaction_u;  /* signal handler */
+	sigset_t sa_mask;		/* signal mask to apply */
+	int	sa_flags;		/* see signal options below */
+};
+
+struct	__user64_sigaction {
+	union __user64_sigaction_u __sigaction_u;  /* signal handler */
+	user64_addr_t	sa_tramp;	/* signal mask to apply */
+	sigset_t sa_mask;		/* signal mask to apply */
+	int	sa_flags;		/* see signal options below */
+};
+
+union __kern_sigaction_u {
+	user_addr_t	__sa_handler;
+	user_addr_t	__sa_sigaction;
+};
+
+struct	kern_sigaction {
+	union __kern_sigaction_u __sigaction_u;  /* signal handler */
+	sigset_t sa_mask;		/* signal mask to apply */
+	int	sa_flags;		/* see signal options below */
+};
+
+struct	__kern_sigaction {
+	union __kern_sigaction_u __sigaction_u;  /* signal handler */
 	user_addr_t	sa_tramp;	/* signal mask to apply */
 	sigset_t sa_mask;		/* signal mask to apply */
 	int	sa_flags;		/* see signal options below */
@@ -426,10 +518,22 @@ typedef	void (*sig_t)(int);	/* type of signal function */
  */
 #ifdef	BSD_KERNEL_PRIVATE
 
-struct  user_sigaltstack {
+struct  user32_sigaltstack {
+	user32_addr_t	ss_sp;		/* signal stack base */
+	user32_size_t	ss_size;	/* signal stack length */
+	int	 	    ss_flags;	/* SA_DISABLE and/or SA_ONSTACK */
+};
+
+struct  user64_sigaltstack {
+	user64_addr_t	ss_sp;		/* signal stack base */
+	user64_size_t	ss_size;	/* signal stack length */
+	int		ss_flags;	/* SA_DISABLE and/or SA_ONSTACK */
+};
+
+struct  kern_sigaltstack {
 	user_addr_t	ss_sp;		/* signal stack base */
 	user_size_t	ss_size;	/* signal stack length */
-	int		ss_flags __attribute((aligned(8)));	/* SA_DISABLE and/or SA_ONSTACK */
+	int		ss_flags;	/* SA_DISABLE and/or SA_ONSTACK */
 };
 
 #endif	/* BSD_KERNEL_PRIVATE */
@@ -484,6 +588,19 @@ struct	sigstack {
 		    sigmask(SIGFPE)|sigmask(SIGBUS)|\
 		    sigmask(SIGSEGV)|sigmask(SIGSYS)|\
 		    sigmask(SIGPIPE))
+
+#define workq_threadmask (threadmask | sigcantmask)
+
+/*
+ * Signals carried across exec.
+ */
+#define execmask   (sigmask(SIGHUP)|sigmask(SIGINT)|\
+		    sigmask(SIGQUIT)|sigmask(SIGKILL)|\
+		    sigmask(SIGTERM)|sigmask(SIGSTOP)|\
+		    sigmask(SIGTSTP)|sigmask(SIGCONT)|\
+		    sigmask(SIGTTIN)|sigmask(SIGTTOU)|\
+		    sigmask(SIGUSR1)|sigmask(SIGUSR2))
+
 #endif	/* BSD_KERNEL_PRIVATE */
 
 #define	BADSIG		SIG_ERR

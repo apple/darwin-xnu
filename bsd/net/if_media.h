@@ -126,7 +126,7 @@ void	ifmedia_set(struct ifmedia *ifm, int mword);
 
 /* Common ioctl function for getting/setting media, called by driver. */
 int	ifmedia_ioctl(struct ifnet *ifp, struct ifreq *ifr,
-	    struct ifmedia *ifm, u_long cmd);
+	    struct ifmedia *ifm, uint32_t cmd);
 
 #endif /* KERNEL_PRIVATE */
 
@@ -166,6 +166,8 @@ int	ifmedia_ioctl(struct ifnet *ifp, struct ifreq *ifr,
 #define	IFM_HPNA_1	17		/* HomePNA 1.0 (1Mb/s) */
 #define	IFM_10G_SR	18		/* 10GbaseSR - multi-mode fiber */
 #define	IFM_10G_LR	19		/* 10GbaseLR - single-mode fiber */
+#define	IFM_10G_CX4	20		/* 10GbaseCX4 - copper */
+#define	IFM_10G_T	21		/* 10GbaseT - 4 pair cat 6 */
 
 /*
  * Token ring
@@ -295,6 +297,8 @@ struct ifmedia_description {
     { IFM_HPNA_1,   "HomePNA1"    },                \
     { IFM_10G_SR,   "10GbaseSR"   },                \
     { IFM_10G_LR,   "10GbaseLR"   },                \
+    { IFM_10G_CX4,  "10GbaseCX4"  },                \
+    { IFM_10G_T,    "10GbaseT"    },                \
     { 0, NULL },                                    \
 }
 
@@ -321,6 +325,8 @@ struct ifmedia_description {
     { IFM_HPNA_1,   "HPNA1"  },                     \
     { IFM_10G_SR,   "10GSR"  },                     \
     { IFM_10G_LR,   "10GLR"  },                     \
+    { IFM_10G_CX4,  "10GCX4" },                     \
+    { IFM_10G_T,    "10GT"   },                     \
     { 0, NULL },                                    \
 }
 

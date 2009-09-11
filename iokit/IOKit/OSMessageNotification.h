@@ -82,7 +82,7 @@ enum {
 // --------------
 enum {
     kOSAsyncRef64Count	= 8,
-    kOSAsyncRef64Size 	= kOSAsyncRef64Count * sizeof(io_user_reference_t)
+    kOSAsyncRef64Size 	= kOSAsyncRef64Count * ((int) sizeof(io_user_reference_t))
 };
 typedef io_user_reference_t OSAsyncReference64[kOSAsyncRef64Count];
 
@@ -98,10 +98,12 @@ struct OSNotificationHeader64 {
 #endif
 };
 
+#pragma pack(4)
 struct IOServiceInterestContent64 {
     natural_t		messageType;
     io_user_reference_t	messageArgument[1];
 };
+#pragma pack()
 // --------------
 
 #if !KERNEL_USER32
@@ -136,9 +138,9 @@ struct IOServiceInterestContent {
 struct IOAsyncCompletionContent {
     IOReturn result;
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
-    void * args[];
+    void * args[] __attribute__ ((packed));
 #else
-    void * args[0];
+    void * args[0] __attribute__ ((packed));
 #endif
 };
 

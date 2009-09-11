@@ -131,15 +131,20 @@
 __BEGIN_DECLS
 
 /* Send a message from the kernel */
-extern mach_msg_return_t mach_msg_send_from_kernel(
+
+extern mach_msg_return_t mach_msg_send_from_kernel_proper(
 	mach_msg_header_t	*msg,
 	mach_msg_size_t		send_size);
 
+#define mach_msg_send_from_kernel mach_msg_send_from_kernel_proper
 
-extern mach_msg_return_t mach_msg_rpc_from_kernel(
+extern mach_msg_return_t
+mach_msg_rpc_from_kernel_proper(
 	mach_msg_header_t	*msg,
 	mach_msg_size_t		send_size,
 	mach_msg_size_t		rcv_size);
+
+#define mach_msg_rpc_from_kernel mach_msg_rpc_from_kernel_proper
 
 extern mach_msg_return_t mach_msg_send_from_kernel_with_options(
 	mach_msg_header_t	*msg,

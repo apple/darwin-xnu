@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -226,7 +226,7 @@ processor_shutdown(
 	processor_doshutdown(processor);
 	splx(s);
 
-	cpu_exit_wait(processor->cpu_num);
+	cpu_exit_wait(processor->cpu_id);
 
 	return (KERN_SUCCESS);
 }
@@ -293,7 +293,7 @@ processor_offline(
 
 	thread_dispatch(old_thread, new_thread);
 
-	PMAP_DEACTIVATE_KERNEL(processor->cpu_num);
+	PMAP_DEACTIVATE_KERNEL(processor->cpu_id);
 
 	pset = processor->processor_set;
 	pset_lock(pset);

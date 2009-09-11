@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>${EXECUTABLE_NAME}</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.yourcompany.driver.${PRODUCT_NAME:identifier}</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>KEXT</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>1.0.0d1</string>
+	<key>IOKitPersonalities</key>
+    <dict>
+                <key>testvmx</key>
+                <dict>
+                        <key>CFBundleIdentifier</key>
+                        <string>com.yourcompany.driver.${PRODUCT_NAME:identifier}</string>
+                        <key>IOClass</key>
+                        <string>testvmx</string>
+                        <key>IOMatchCategory</key>
+                        <string>testvmx</string>
+                        <key>IOProviderClass</key>
+                        <string>IOResources</string>
+                        <key>IOResourceMatch</key>
+                        <string>IOKit</string>
+                </dict>
+	</dict>
+	<key>OSBundleLibraries</key>
+	<dict>
+		<key>com.apple.kpi.mach</key>
+		<string>10.0.0d3</string>
+		<key>com.apple.kpi.libkern</key>
+		<string>10.0.0d3</string>
+		<key>com.apple.kpi.iokit</key>
+		<string>10.0.0d3</string>
+	</dict>
+</dict>
+</plist>

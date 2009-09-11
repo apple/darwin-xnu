@@ -406,12 +406,15 @@ routine mach_port_dnrequest_info(
  *	that the given send/receive right represents.
  *      This call is only valid on MACH_IPC_DEBUG kernels.
  *      Otherwise, KERN_FAILURE is returned.
+ *
+ *	This interface is DEPRECATED in favor of the new
+ *	mach_port_kernel_object64() call (see below).
  */
 routine	mach_port_kernel_object(
 		task		: ipc_space_t;
 		name		: mach_port_name_t;
 	out	object_type	: unsigned;
-	out	object_addr	: vm_offset_t);
+	out	object_addr	: unsigned);
 
 
 /*
@@ -452,5 +455,38 @@ routine mach_port_extract_member(
 		task		: ipc_space_t;
 		name		: mach_port_name_t;
 		pset		: mach_port_name_t);
+
+/*
+ * Only valid for receive rights.
+ * Gets the context pointer for the port.
+ */
+
+routine mach_port_get_context(
+		task		: ipc_space_t;
+		name		: mach_port_name_t;
+	out context		: mach_vm_address_t);
+
+/*
+ * Only valid for receive rights.
+ * Sets the context pointer for the port.
+ */
+
+routine mach_port_set_context(
+		task		: ipc_space_t;
+		name		: mach_port_name_t;
+		context		: mach_vm_address_t);
+
+/*
+ *	Return the type and address of the kernel object
+ *	that the given send/receive right represents.
+ *      This call is only valid on MACH_IPC_DEBUG kernels.
+ *      Otherwise, KERN_FAILURE is returned.
+ */
+routine	mach_port_kobject(
+		task		: ipc_space_t;
+		name		: mach_port_name_t;
+	out	object_type	: natural_t;
+	out	object_addr	: mach_vm_address_t);
+
 
 /* vim: set ft=c : */

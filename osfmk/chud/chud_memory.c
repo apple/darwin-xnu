@@ -66,18 +66,3 @@ uint64_t chudxnu_inactive_memory_size(void)
 	return (uint64_t)vm_page_inactive_count * (uint64_t)page_size;
 }
 
-#pragma mark *** DEPRECATED ***
-
-// DEPRECATED
-__private_extern__
-vm_offset_t chudxnu_io_map(uint64_t phys_addr, vm_size_t size)
-{
-    return ml_io_map(phys_addr, size); // XXXXX limited to first 2GB XXXXX
-}
-
-// DEPRECATED
-__private_extern__ uint32_t
-chudxnu_phys_addr_wimg(uint64_t phys_addr)
-{
-    return IODefaultCacheBits(phys_addr);
-}

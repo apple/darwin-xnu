@@ -85,10 +85,14 @@
 #include "devfs.h"
 #include "devfsdefs.h"
 
+#if FDESC
+#include "fdesc.h"
+#endif /* FDESC */
+
+
 static int devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, vfs_context_t ctx);
 static int devfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t ctx);
 
-static struct vfstable * devfs_vfsp = 0;
 extern int setup_kmem;
 __private_extern__ void devfs_setup_kmem(void);
 
@@ -102,10 +106,8 @@ __private_extern__ void devfs_setup_kmem(void);
  * devices from devfs get sync'd.
  */
 static int
-devfs_init(struct vfsconf *vfsp)
+devfs_init(__unused struct vfsconf *vfsp)
 {
-    devfs_vfsp = (struct vfstable *)vfsp; /* remember this for devfs_kernel_mount below */
-
     if (devfs_sinit())
 	return (ENOTSUP);
     devfs_make_node(makedev(0, 0), DEVFS_CHAR, 
@@ -121,6 +123,11 @@ devfs_init(struct vfsconf *vfsp)
 		    UID_ROOT, GID_WHEEL, 0666, "zero");
     devfs_make_node(makedev(6, 0), DEVFS_CHAR, 
 		    UID_ROOT, GID_WHEEL, 0600, "klog");
+
+#if  FDESC
+    devfs_fdesc_init();
+#endif
+
     return 0;
 }
 
@@ -182,7 +189,7 @@ devfs_mount(struct mount *mp, __unused vnode_t devvp, __unused user_addr_t data,
 	 *  Fill out some fields
 	 */
 	mp->mnt_data = (qaddr_t)devfs_mp_p;
-	mp->mnt_vfsstat.f_fsid.val[0] = (int32_t)(void *)devfs_mp_p;
+	mp->mnt_vfsstat.f_fsid.val[0] = (int32_t)(uintptr_t)devfs_mp_p;
 	mp->mnt_vfsstat.f_fsid.val[1] = vfs_typenum(mp);
 	mp->mnt_flag |= MNT_LOCAL;
 
@@ -286,7 +293,7 @@ devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, __unused vfs_context_t ct
 	sbp->f_bavail = 0;
 	sbp->f_files  = devfs_stats.nodes;
 	sbp->f_ffree  = 0;
-	sbp->f_fsid.val[0] = (int32_t)(void *)devfs_mp_p;
+	sbp->f_fsid.val[0] = (int32_t)(uintptr_t)devfs_mp_p;
 	sbp->f_fsid.val[1] = vfs_typenum(mp);
 
 	return 0;
@@ -314,6 +321,108 @@ devfs_vfs_getattr(__unused mount_t mp, struct vfs_attr *fsap, __unused vfs_conte
 	VFSATTR_RETURN(fsap, f_files, devfs_stats.nodes);
 	VFSATTR_RETURN(fsap, f_ffree, 0);
 	VFSATTR_RETURN(fsap, f_fssubtype, 0);
+	
+	if (VFSATTR_IS_ACTIVE(fsap, f_capabilities)) {
+		fsap->f_capabilities.capabilities[VOL_CAPABILITIES_FORMAT] =
+			VOL_CAP_FMT_SYMBOLICLINKS |
+			VOL_CAP_FMT_HARDLINKS |
+			VOL_CAP_FMT_NO_ROOT_TIMES |
+			VOL_CAP_FMT_CASE_SENSITIVE |
+			VOL_CAP_FMT_CASE_PRESERVING |
+			VOL_CAP_FMT_FAST_STATFS |
+			VOL_CAP_FMT_2TB_FILESIZE |
+			VOL_CAP_FMT_HIDDEN_FILES;
+		fsap->f_capabilities.capabilities[VOL_CAPABILITIES_INTERFACES] =
+			VOL_CAP_INT_ATTRLIST ;
+		fsap->f_capabilities.capabilities[VOL_CAPABILITIES_RESERVED1] = 0;
+		fsap->f_capabilities.capabilities[VOL_CAPABILITIES_RESERVED2] = 0;
+		
+		fsap->f_capabilities.valid[VOL_CAPABILITIES_FORMAT] =
+			VOL_CAP_FMT_PERSISTENTOBJECTIDS |
+			VOL_CAP_FMT_SYMBOLICLINKS |
+			VOL_CAP_FMT_HARDLINKS |
+			VOL_CAP_FMT_JOURNAL |
+			VOL_CAP_FMT_JOURNAL_ACTIVE |
+			VOL_CAP_FMT_NO_ROOT_TIMES |
+			VOL_CAP_FMT_SPARSE_FILES |
+			VOL_CAP_FMT_ZERO_RUNS |
+			VOL_CAP_FMT_CASE_SENSITIVE |
+			VOL_CAP_FMT_CASE_PRESERVING |
+			VOL_CAP_FMT_FAST_STATFS |
+			VOL_CAP_FMT_2TB_FILESIZE |
+			VOL_CAP_FMT_OPENDENYMODES |
+			VOL_CAP_FMT_HIDDEN_FILES |
+			VOL_CAP_FMT_PATH_FROM_ID |
+			VOL_CAP_FMT_NO_VOLUME_SIZES;
+		fsap->f_capabilities.valid[VOL_CAPABILITIES_INTERFACES] =
+			VOL_CAP_INT_SEARCHFS |
+			VOL_CAP_INT_ATTRLIST |
+			VOL_CAP_INT_NFSEXPORT |
+			VOL_CAP_INT_READDIRATTR |
+			VOL_CAP_INT_EXCHANGEDATA |
+			VOL_CAP_INT_COPYFILE |
+			VOL_CAP_INT_ALLOCATE |
+			VOL_CAP_INT_VOL_RENAME |
+			VOL_CAP_INT_ADVLOCK |
+			VOL_CAP_INT_FLOCK |
+			VOL_CAP_INT_EXTENDED_SECURITY |
+			VOL_CAP_INT_USERACCESS |
+			VOL_CAP_INT_MANLOCK |
+			VOL_CAP_INT_EXTENDED_ATTR |
+			VOL_CAP_INT_NAMEDSTREAMS;
+		fsap->f_capabilities.valid[VOL_CAPABILITIES_RESERVED1] = 0;
+		fsap->f_capabilities.valid[VOL_CAPABILITIES_RESERVED2] = 0;
+		
+		VFSATTR_SET_SUPPORTED(fsap, f_capabilities);
+	}
+	
+	if (VFSATTR_IS_ACTIVE(fsap, f_attributes)) {
+		fsap->f_attributes.validattr.commonattr =
+			ATTR_CMN_NAME | ATTR_CMN_DEVID | ATTR_CMN_FSID |
+			ATTR_CMN_OBJTYPE | ATTR_CMN_OBJTAG | ATTR_CMN_OBJID |
+			ATTR_CMN_PAROBJID |
+			ATTR_CMN_MODTIME | ATTR_CMN_CHGTIME | ATTR_CMN_ACCTIME |
+			ATTR_CMN_OWNERID | ATTR_CMN_GRPID | ATTR_CMN_ACCESSMASK |
+			ATTR_CMN_FLAGS | ATTR_CMN_USERACCESS | ATTR_CMN_FILEID;
+		fsap->f_attributes.validattr.volattr =
+			ATTR_VOL_FSTYPE | ATTR_VOL_SIZE | ATTR_VOL_SPACEFREE |
+			ATTR_VOL_SPACEAVAIL | ATTR_VOL_MINALLOCATION |
+			ATTR_VOL_OBJCOUNT | ATTR_VOL_MAXOBJCOUNT |
+			ATTR_VOL_MOUNTPOINT | ATTR_VOL_MOUNTFLAGS |
+			ATTR_VOL_MOUNTEDDEVICE | ATTR_VOL_CAPABILITIES |
+			ATTR_VOL_ATTRIBUTES;
+		fsap->f_attributes.validattr.dirattr =
+			ATTR_DIR_LINKCOUNT | ATTR_DIR_MOUNTSTATUS;
+		fsap->f_attributes.validattr.fileattr =
+			ATTR_FILE_LINKCOUNT | ATTR_FILE_TOTALSIZE |
+			ATTR_FILE_IOBLOCKSIZE | ATTR_FILE_DEVTYPE |
+			ATTR_FILE_DATALENGTH;
+		fsap->f_attributes.validattr.forkattr = 0;
+		
+		fsap->f_attributes.nativeattr.commonattr =
+			ATTR_CMN_NAME | ATTR_CMN_DEVID | ATTR_CMN_FSID |
+			ATTR_CMN_OBJTYPE | ATTR_CMN_OBJTAG | ATTR_CMN_OBJID |
+			ATTR_CMN_PAROBJID |
+			ATTR_CMN_MODTIME | ATTR_CMN_CHGTIME | ATTR_CMN_ACCTIME |
+			ATTR_CMN_OWNERID | ATTR_CMN_GRPID | ATTR_CMN_ACCESSMASK |
+			ATTR_CMN_FLAGS | ATTR_CMN_USERACCESS | ATTR_CMN_FILEID;
+		fsap->f_attributes.nativeattr.volattr =
+			ATTR_VOL_FSTYPE | ATTR_VOL_SIZE | ATTR_VOL_SPACEFREE |
+			ATTR_VOL_SPACEAVAIL | ATTR_VOL_MINALLOCATION |
+			ATTR_VOL_OBJCOUNT | ATTR_VOL_MAXOBJCOUNT |
+			ATTR_VOL_MOUNTPOINT | ATTR_VOL_MOUNTFLAGS |
+			ATTR_VOL_MOUNTEDDEVICE | ATTR_VOL_CAPABILITIES |
+			ATTR_VOL_ATTRIBUTES;
+		fsap->f_attributes.nativeattr.dirattr =
+			ATTR_DIR_MOUNTSTATUS;
+		fsap->f_attributes.nativeattr.fileattr =
+			ATTR_FILE_LINKCOUNT | ATTR_FILE_TOTALSIZE |
+			ATTR_FILE_IOBLOCKSIZE | ATTR_FILE_DEVTYPE |
+			ATTR_FILE_DATALENGTH;
+		fsap->f_attributes.nativeattr.forkattr = 0;
+
+		VFSATTR_SET_SUPPORTED(fsap, f_attributes);
+	}
 	
 	return 0;
 }
@@ -372,16 +481,21 @@ devfs_kernel_mount(char * mntname)
 	struct nameidata nd;
 	struct vnode  * vp;
 	vfs_context_t ctx = vfs_context_kernel();
+	struct vfstable *vfsp;
 
-	if (devfs_vfsp == NULL) {
-	    printf("devfs_kernel_mount: devfs_vfsp is NULL\n");
-	    return (EINVAL);
-	}
+	/* Find our vfstable entry */
+	for (vfsp = vfsconf; vfsp; vfsp = vfsp->vfc_next)
+		if (!strncmp(vfsp->vfc_name, "devfs", sizeof(vfsp->vfc_name)))
+			break;
+	
+	if (!vfsp) {
+		panic("Could not find entry in vfsconf for devfs.\n");
+	} 
 
 	/*
 	 * Get vnode to be covered
 	 */
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE32,
+	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
 	    CAST_USER_ADDR_T(mntname), ctx);
 	if ((error = namei(&nd))) {
 	    printf("devfs_kernel_mount: failed to find directory '%s', %d", 
@@ -414,9 +528,9 @@ devfs_kernel_mount(char * mntname)
 	/*
 	 * Allocate and initialize the filesystem.
 	 */
-	MALLOC_ZONE(mp, struct mount *, (u_long)sizeof(struct mount),
+	MALLOC_ZONE(mp, struct mount *, sizeof(struct mount),
 		M_MOUNT, M_WAITOK);
-	bzero((char *)mp, (u_long)sizeof(struct mount));
+	bzero((char *)mp, sizeof(struct mount));
 
 	/* Initialize the default IO constraints */
 	mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
@@ -431,14 +545,11 @@ devfs_kernel_mount(char * mntname)
 	TAILQ_INIT(&mp->mnt_newvnodes);
 
 	(void)vfs_busy(mp, LK_NOWAIT);
-	mp->mnt_op = devfs_vfsp->vfc_vfsops;
-	mp->mnt_vtable = devfs_vfsp;
-	devfs_vfsp->vfc_refcount++;
-	devfs_vfsp->vfc_threadsafe = TRUE;
-	devfs_vfsp->vfc_64bitready = TRUE;
+	mp->mnt_op = &devfs_vfsops;
+	mp->mnt_vtable = vfsp;
 	mp->mnt_flag = 0;
-	mp->mnt_flag |= devfs_vfsp->vfc_flags & MNT_VISFLAGMASK;
-	strlcpy(mp->mnt_vfsstat.f_fstypename, devfs_vfsp->vfc_name, MFSTYPENAMELEN);
+	mp->mnt_flag |= vfsp->vfc_flags & MNT_VISFLAGMASK;
+	strlcpy(mp->mnt_vfsstat.f_fstypename, vfsp->vfc_name, MFSTYPENAMELEN);
 	vp->v_mountedhere = mp;
 	mp->mnt_vnodecovered = vp;
 	mp->mnt_vfsstat.f_owner = kauth_cred_getuid(kauth_cred_get());

@@ -48,7 +48,7 @@
 #include <pexpert/pexpert.h>
 #include <sys/kdebug.h>
 
-perfCallback perfIntHook;						/* Pointer to CHUD trap hook routine */
+volatile perfCallback perfIntHook;						/* Pointer to CHUD trap hook routine */
 
 #if CONFIG_DTRACE
 #if (DEVELOPMENT || DEBUG )
@@ -87,8 +87,9 @@ struct savearea * interrupt(
 
 	disable_preemption();
 
-	if(perfIntHook) {							/* Is there a hook? */
-		if(perfIntHook(type, ssp, dsisr, dar) == KERN_SUCCESS) return ssp;	/* If it succeeds, we are done... */
+	perfCallback fn = perfIntHook;
+	if(fn) {							/* Is there a hook? */
+		if(fn(type, ssp, dsisr, dar) == KERN_SUCCESS) return ssp;	/* If it succeeds, we are done... */
 	}
 	
 #if CONFIG_DTRACE

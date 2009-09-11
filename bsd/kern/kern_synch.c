@@ -71,11 +71,12 @@ _sleep_continue( __unused void *parameter, wait_result_t wresult)
 	struct uthread * ut;
 	int sig, catch;
 	int error = 0;
-	int dropmutex;
+	int dropmutex, spinmutex;
 
 	ut = get_bsdthread_info(self);
 	catch     = ut->uu_pri & PCATCH;
 	dropmutex = ut->uu_pri & PDROP;
+	spinmutex = ut->uu_pri & PSPIN;
 
 	switch (wresult) {
 		case THREAD_TIMED_OUT:
@@ -116,9 +117,12 @@ _sleep_continue( __unused void *parameter, wait_result_t wresult)
 	if (error == EINTR || error == ERESTART)
 		act_set_astbsd(self);
 
-	if (ut->uu_mtx && !dropmutex)
-	        lck_mtx_lock(ut->uu_mtx);
-
+	if (ut->uu_mtx && !dropmutex) {
+		if (spinmutex)
+			lck_mtx_lock_spin(ut->uu_mtx);
+		else
+			lck_mtx_lock(ut->uu_mtx);
+	}
 	ut->uu_wchan = NULL;
 	ut->uu_wmesg = NULL;
 
@@ -160,6 +164,7 @@ _sleep(
 	struct uthread * ut;
 	int sig, catch = pri & PCATCH;
 	int dropmutex  = pri & PDROP;
+	int spinmutex  = pri & PSPIN;
 	int wait_result;
 	int error = 0;
 
@@ -169,7 +174,7 @@ _sleep(
 	p->p_priority = pri & PRIMASK;
 	/* It can still block in proc_exit() after the teardown. */
 	if (p->p_stats != NULL)
-		OSIncrementAtomic(&p->p_stats->p_ru.ru_nvcsw);
+		OSIncrementAtomicLong(&p->p_stats->p_ru.ru_nvcsw);
 
 	/* set wait message & channel */
 	ut->uu_wchan = chan;
@@ -198,8 +203,12 @@ _sleep(
 						error = EINTR;
 					else
 						error = ERESTART;
-					if (mtx && !dropmutex)
-		        			lck_mtx_lock(mtx);
+					if (mtx && !dropmutex) {
+						if (spinmutex)
+							lck_mtx_lock_spin(mtx);
+						else
+							lck_mtx_lock(mtx);
+					}
 					goto out;
 				}
 			}
@@ -208,8 +217,12 @@ _sleep(
 					goto block;
 				error = EINTR;
 
-				if (mtx && !dropmutex)
-				        lck_mtx_lock(mtx);
+				if (mtx && !dropmutex) {
+					if (spinmutex)
+						lck_mtx_lock_spin(mtx);
+					else
+						lck_mtx_lock(mtx);
+				}
 				goto out;
 			}
 		}		
@@ -227,8 +240,12 @@ block:
 		
 		wait_result = thread_block(THREAD_CONTINUE_NULL);
 
-		if (mtx && !dropmutex)
-		        lck_mtx_lock(mtx);
+		if (mtx && !dropmutex) {
+			if (spinmutex)
+				lck_mtx_lock_spin(mtx);
+			else
+				lck_mtx_lock(mtx);
+		}
 	}
 
 	switch (wait_result) {
@@ -258,7 +275,10 @@ block:
 					if (thread_should_abort(self)) {
 						error = EINTR;
 					}
-				}
+				} else if( (ut->uu_flag & ( UT_CANCELDISABLE | UT_CANCEL | UT_CANCELED)) == UT_CANCEL) {
+                                        /* due to thread cancel */
+                                        error = EINTR;
+                                }
 			}  else
 				error = EINTR;
 			break;

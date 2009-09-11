@@ -185,8 +185,8 @@ WKdm_compress (WK_word* src_buf,
   printf("tempLowBitsArray holds %u bytes\n",
          (char *) next_low_bits - (char *) tempLowBitsArray);
 
-  printf("next_full_patt is %u\n",
-         (unsigned long) next_full_patt);
+  printf("next_full_patt is %p\n",
+          next_full_patt);
 
   printf(" i.e., there are %u full patterns\n",
      next_full_patt - (dest_buf + TAGS_AREA_OFFSET + (num_input_words / 16)));
@@ -280,7 +280,7 @@ WKdm_compress (WK_word* src_buf,
 				 next_full_patt);
 #ifdef WK_DEBUG
      printf("Packing of queue positions stopped at %u\n", boundary_tmp);
-#endif WK_DEBUG
+#endif // WK_DEBUG
 
     /* Record (into the header) where we stopped packing queue positions,
      * which is where we will start packing low bits.

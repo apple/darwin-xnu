@@ -40,7 +40,7 @@
 #include <libkern/c++/OSObject.h>
 #include <IOKit/IOTypes.h>
 
-typedef UInt32 IORangeScalar;
+typedef IOByteCount IORangeScalar;
 
 /*! @class IORangeAllocator
     @abstract A utility class to manage allocations from a range.
@@ -94,7 +94,8 @@ public:
     @result Returns the new IORangeAllocator instance, to be released by the caller, or zero on failure. */
 
     static IORangeAllocator * withRange( IORangeScalar endOfRange,
-					IORangeScalar defaultAlignment = 0,						UInt32 capacity = 0,
+					IORangeScalar defaultAlignment = 0,
+					UInt32 capacity = 0,
 					IOOptionBits options = 0 );
 
     virtual void free();

@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)types.5	8.1 (Berkeley) 6/5/93
 .\"
-.Dd AUGUST 2, 2001
+.Dd May 15, 2008
 .Dt TYPES 5
 .Os Darwin 
 .Sh NAME
@@ -85,21 +85,23 @@ typedef	_TIME_T_	time_t;
 #undef	_TIME_T_
 #endif
 
-#ifndef _POSIX_SOURCE
-typedef	struct	_uquad { unsigned long val[2]; } u_quad;
-typedef	struct	_quad { long val[2]; } quad;
-#endif
-typedef	long *	qaddr_t;	/* should be typedef quad * qaddr_t; */
+typedef	u_int64_t	u_quad_t;
+typedef	int64_t		quad_t
+typedef	quad_t *	qaddr_t;	/* should be typedef quad * qaddr_t; */
 
 typedef	long	daddr_t;
 typedef	char *	caddr_t;
-typedef	u_int64_t ino_t;
+#ifdef _DARWIN_FEATURE_64_BIT_INODE
+typedef	u_int64_t	ino_t;
+#else /* !_DARWIN_FEATURE_64_BIT_INODE */
+typedef	u_int		ino_t;
+#endif /* _DARWIN_FEATURE_64_BIT_INODE */
 typedef	long	swblk_t;
 typedef	long	segsz_t;
-typedef	long	off_t;
-typedef	u_short	uid_t;
-typedef	u_short	gid_t;
-typedef	short	pid_t;
+typedef	int64_t	off_t;
+typedef	u_int	uid_t;
+typedef	u_int	gid_t;
+typedef	int	pid_t;
 typedef	u_short	nlink_t;
 typedef	u_short	mode_t;
 typedef u_long	fixpt_t;

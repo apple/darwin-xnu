@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/esp_input.c,v 1.1.2.3 2001/07/03 11:01:50 ume Exp $	*/
 /*	$KAME: esp_input.c,v 1.55 2001/03/23 08:08:47 itojun Exp $	*/
 
@@ -233,12 +261,12 @@ esp4_input(m, off)
 	if (AH_MAXSUMSIZE < siz) {
 		ipseclog((LOG_DEBUG,
 		    "internal error: AH_MAXSUMSIZE must be larger than %lu\n",
-		    (u_long)siz));
+		    (u_int32_t)siz));
 		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		goto bad;
 	}
 
-	m_copydata(m, m->m_pkthdr.len - siz, siz, &sum0[0]);
+	m_copydata(m, m->m_pkthdr.len - siz, siz, (caddr_t) &sum0[0]);
 
 	if (esp_auth(m, off, m->m_pkthdr.len - off - siz, sav, sum)) {
 		ipseclog((LOG_WARNING, "auth fail in IPv4 ESP input: %s %s\n",
@@ -678,12 +706,12 @@ esp6_input(mp, offp)
 	if (AH_MAXSUMSIZE < siz) {
 		ipseclog((LOG_DEBUG,
 		    "internal error: AH_MAXSUMSIZE must be larger than %lu\n",
-		    (u_long)siz));
+		    (u_int32_t)siz));
 		IPSEC_STAT_INCREMENT(ipsec6stat.in_inval);
 		goto bad;
 	}
 
-	m_copydata(m, m->m_pkthdr.len - siz, siz, &sum0[0]);
+	m_copydata(m, m->m_pkthdr.len - siz, siz, (caddr_t) &sum0[0]);
 
 	if (esp_auth(m, off, m->m_pkthdr.len - off - siz, sav, sum)) {
 		ipseclog((LOG_WARNING, "auth fail in IPv6 ESP input: %s %s\n",

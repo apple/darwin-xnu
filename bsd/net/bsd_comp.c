@@ -465,10 +465,10 @@ bsd_init_comp_db(db, options, opt_len, unit, hdrlen, mru, debug, decomp)
     db->unit = unit;
     db->hdrlen = hdrlen;
     db->mru = mru;
-#ifndef DEBUG
+#if !DEBUG
     if (debug)
 #endif
-	db->debug = 1;
+        db->debug = 1;
 
     bsd_reset(db);
 
@@ -1004,7 +1004,7 @@ bsd_decompress(state, cmp, dmpp)
 	    m_freem(mret);
 	    if (db->debug) {
 		printf("bsd_decomp%d: ran out of mru\n", db->unit);
-#ifdef DEBUG
+#if DEBUG
 		while ((cmp = cmp->m_next) != NULL)
 		    len += cmp->m_len;
 		printf("  len=%d, finchar=0x%x, codelen=%d, explen=%d\n",
@@ -1045,7 +1045,7 @@ bsd_decompress(state, cmp, dmpp)
 	p = (wptr += codelen);
 	while (finchar > LAST) {
 	    dictp = &db->dict[db->dict[finchar].cptr];
-#ifdef DEBUG
+#if DEBUG
 	    if (--codelen <= 0 || dictp->codem1 != finchar-1)
 		goto bad;
 #endif
@@ -1054,7 +1054,7 @@ bsd_decompress(state, cmp, dmpp)
 	}
 	*--p = finchar;
 
-#ifdef DEBUG
+#if DEBUG
 	if (--codelen != 0)
 	    printf("bsd_decomp%d: short by %d after code 0x%x, max_ent=0x%x\n",
 		   db->unit, codelen, incode, max_ent);
@@ -1134,7 +1134,7 @@ bsd_decompress(state, cmp, dmpp)
     *dmpp = mret;
     return DECOMP_OK;
 
-#ifdef DEBUG
+#if DEBUG
  bad:
     if (codelen <= 0) {
 	printf("bsd_decomp%d: fell off end of chain ", db->unit);

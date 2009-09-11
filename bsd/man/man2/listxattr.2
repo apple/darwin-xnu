@@ -26,7 +26,7 @@
 .Sh NAME
 .Nm listxattr,
 .Nm flistxattr
-.Nd list an extended attribute value
+.Nd list extended attribute names
 .Sh SYNOPSIS
 .Fd #include <sys/xattr.h>
 .Ft ssize_t
@@ -66,6 +66,14 @@ normally lists attributes of the target of
 if it is a symbolic link.  With this option,
 .Fn listxattr
 will list attributes of the link itself.
+.It Dv XATTR_SHOWCOMPRESSION
+.Fn listxattr
+and 
+.Fn flistxattr
+will list HFS Plus Compression extended attribute(s) (if present) for the file referred to by
+.Fa path
+or
+.Fa fd .
 .El
 .Pp
 If

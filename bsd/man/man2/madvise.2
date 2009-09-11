@@ -124,6 +124,14 @@ The address range will remain valid.
 This is used with
 .Fn madvise
 system call.
+.It Dv MADV_ZERO_WIRED_PAGES
+Indicates that the application would like the wired pages in this address
+range to be zeroed out if the address range is dellocated without first
+unwiring the pages (i.e. a munmap(2) without a preceding munlock(2) or the application
+quits).
+This is used with
+.Fn madvise
+system call.
 .El
 .Pp
 The

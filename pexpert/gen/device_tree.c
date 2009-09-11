@@ -44,8 +44,8 @@
 #define       NULL    ((void *) 0)
 #endif
 
-#define round_long(x)	(((x) + 3) & -4)
-#define next_prop(x)	((DeviceTreeNodeProperty *) (((int)x) + sizeof(DeviceTreeNodeProperty) + round_long(x->length)))
+#define round_long(x)	(((x) + 3UL) & ~(3UL))
+#define next_prop(x)	((DeviceTreeNodeProperty *) (((uintptr_t)x) + sizeof(DeviceTreeNodeProperty) + round_long(x->length)))
 
 /* Entry*/
 typedef DeviceTreeNode *RealDTEntry;
@@ -200,7 +200,7 @@ int DTFindEntry(const char *propName, const char *propValue, DTEntry *entryH)
 
 int find_entry(const char *propName, const char *propValue, DTEntry *entryH)
 {
-	DeviceTreeNode *nodeP = (DeviceTreeNode *) startingP;
+	DeviceTreeNode *nodeP = (DeviceTreeNode *) (void *) startingP;
 	unsigned int k;
 
 	if (nodeP->nProperties == 0) return(kError);	// End of the list of nodes
@@ -208,7 +208,7 @@ int find_entry(const char *propName, const char *propValue, DTEntry *entryH)
 
 	// Search current entry
 	for (k = 0; k < nodeP->nProperties; ++k) {
-		DeviceTreeNodeProperty *propP = (DeviceTreeNodeProperty *) startingP;
+		DeviceTreeNodeProperty *propP = (DeviceTreeNodeProperty *) (void *) startingP;
 
 		startingP += sizeof (*propP) + ((propP->length + 3) & -4);
 
@@ -410,7 +410,7 @@ DTGetProperty(const DTEntry entry, const char *propertyName, void **propertyValu
 		prop = (DeviceTreeNodeProperty *) (entry + 1);
 		for (k = 0; k < entry->nProperties; k++) {
 			if (strcmp(prop->name, propertyName) == 0) {
-				*propertyValue = (void *) (((int)prop)
+				*propertyValue = (void *) (((uintptr_t)prop)
 						+ sizeof(DeviceTreeNodeProperty));
 				*propertySize = prop->length;
 				return kSuccess;

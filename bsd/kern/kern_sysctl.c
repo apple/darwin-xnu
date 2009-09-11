@@ -103,13 +103,16 @@
 #include <sys/aio_kern.h>
 #include <sys/reboot.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
+#include <kern/kalloc.h>
 
 #include <mach/machine.h>
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
+#include <kern/mach_param.h>
 #include <kern/task.h>
 #include <kern/lock.h>
+#include <kern/debug.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <mach/host_info.h>
@@ -126,12 +129,12 @@
 
 #include <vm/vm_protos.h>
 
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 #include <i386/cpuid.h>
 #endif
 
 sysctlfn kern_sysctl;
-#ifdef DEBUG
+#if DEBUG
 sysctlfn debug_sysctl;
 #endif
 extern sysctlfn net_sysctl;
@@ -143,17 +146,21 @@ extern int lowpri_IO_window_msecs;
 extern int lowpri_IO_delay_msecs;
 extern int nx_enabled;
 extern int speculative_reads_disabled;
+extern unsigned int preheat_pages_max;
+extern unsigned int preheat_pages_min;
+extern unsigned int preheat_pages_mult;
+extern long numvnodes;
 
 static void
-fill_eproc(proc_t p, struct eproc *ep);
+fill_user32_eproc(proc_t p, struct user32_eproc *ep);
 static void
-fill_externproc(proc_t p, struct extern_proc *exp);
+fill_user32_externproc(proc_t p, struct user32_extern_proc *exp);
 static void
-fill_user_eproc(proc_t p, struct user_eproc *ep);
+fill_user64_eproc(proc_t p, struct user64_eproc *ep);
 static void
-fill_user_proc(proc_t p, struct user_kinfo_proc *kp);
+fill_user64_proc(proc_t p, struct user64_kinfo_proc *kp);
 static void
-fill_user_externproc(proc_t p, struct user_extern_proc *exp);
+fill_user64_externproc(proc_t p, struct user64_extern_proc *exp);
 extern int 
 kdbg_control(int *name, u_int namelen, user_addr_t where, size_t * sizep);
 int
@@ -173,7 +180,7 @@ int
 sysctl_doprof(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp, 
 			  user_addr_t newp, size_t newlen);
 static void
-fill_proc(proc_t p, struct kinfo_proc *kp);
+fill_user32_proc(proc_t p, struct user32_kinfo_proc *kp);
 int
 sysctl_procargs(int *name, u_int namelen, user_addr_t where, 
 				size_t *sizep, proc_t cur_proc);
@@ -192,20 +199,31 @@ static int sysdoproc_filt_KERN_PROC_PGRP(proc_t p, void * arg);
 static int sysdoproc_filt_KERN_PROC_TTY(proc_t p, void * arg);
 static int  sysdoproc_filt_KERN_PROC_UID(proc_t p, void * arg);
 static int  sysdoproc_filt_KERN_PROC_RUID(proc_t p, void * arg);
+#if CONFIG_LCTX
 static int  sysdoproc_filt_KERN_PROC_LCID(proc_t p, void * arg);
+#endif
 int sysdoproc_callback(proc_t p, void *arg);
 
-static int __sysctl_funneled(proc_t p, struct __sysctl_args *uap, register_t *retval);
+static int __sysctl_funneled(proc_t p, struct __sysctl_args *uap, int32_t *retval);
 
 extern void IORegistrySetOSBuildVersion(char * build_version); 
 
 static void
-loadavg32to64(struct loadavg *la32, struct user_loadavg *la64)
+fill_loadavg64(struct loadavg *la, struct user64_loadavg *la64)
 {
-	la64->ldavg[0]	= la32->ldavg[0];
-	la64->ldavg[1]	= la32->ldavg[1];
-	la64->ldavg[2]	= la32->ldavg[2];
-	la64->fscale	= (user_long_t)la32->fscale;
+	la64->ldavg[0]	= la->ldavg[0];
+	la64->ldavg[1]	= la->ldavg[1];
+	la64->ldavg[2]	= la->ldavg[2];
+	la64->fscale	= (user64_long_t)la->fscale;
+}
+
+static void
+fill_loadavg32(struct loadavg *la, struct user32_loadavg *la32)
+{
+	la32->ldavg[0]	= la->ldavg[0];
+	la32->ldavg[1]	= la->ldavg[1];
+	la32->ldavg[2]	= la->ldavg[2];
+	la32->fscale	= (user32_long_t)la->fscale;
 }
 
 /*
@@ -215,7 +233,7 @@ static struct sysctl_lock memlock;
 
 /* sysctl() syscall */
 int
-__sysctl(proc_t p, struct __sysctl_args *uap, register_t *retval)
+__sysctl(proc_t p, struct __sysctl_args *uap, int32_t *retval)
 {
 	boolean_t funnel_state;
 	int error;
@@ -227,7 +245,7 @@ __sysctl(proc_t p, struct __sysctl_args *uap, register_t *retval)
 }
 
 static int
-__sysctl_funneled(proc_t p, struct __sysctl_args *uap, __unused register_t *retval)
+__sysctl_funneled(proc_t p, struct __sysctl_args *uap, __unused int32_t *retval)
 {
 	int error, dolock = 1;
 	size_t savelen = 0, oldlen = 0, newlen;
@@ -261,12 +279,12 @@ __sysctl_funneled(proc_t p, struct __sysctl_args *uap, __unused register_t *retv
 	else {
 		newlen = uap->newlen;
 	}
-
+	
 	/* CTL_UNSPEC is used to get oid to AUTO_OID */
 	if (uap->new != USER_ADDR_NULL
 	    && ((name[0] == CTL_KERN
 		&& !(name[1] == KERN_IPC || name[1] == KERN_PANICINFO || name[1] == KERN_PROCDELAYTERM || 
-		     name[1] == KERN_PROC_LOW_PRI_IO || name[1] == KERN_PROCNAME || name[1] == KERN_RAGEVNODE || name[1] == KERN_CHECKOPENEVT))
+		     name[1] == KERN_PROCNAME || name[1] == KERN_RAGEVNODE || name[1] == KERN_CHECKOPENEVT || name[1] == KERN_THREADNAME))
 	    || (name[0] == CTL_HW)
 	    || (name[0] == CTL_VM))
 	    && (error = suser(kauth_cred_get(), &p->p_acflag)))
@@ -285,7 +303,7 @@ __sysctl_funneled(proc_t p, struct __sysctl_args *uap, __unused register_t *retv
 	case CTL_VFS:
 		fnp = vfs_sysctl;
 		break;
-#ifdef DEBUG
+#if DEBUG
 	case CTL_DEBUG:
 		fnp = debug_sysctl;
 		break;
@@ -375,7 +393,7 @@ __sysctl_funneled(proc_t p, struct __sysctl_args *uap, __unused register_t *retv
 		funnel_state = thread_funnel_set(kernel_flock, FALSE);
 		
 		error = userland_sysctl(p, name, uap->namelen, uap->old, &tmp, 
-		                        1, uap->new, newlen, &oldlen);
+		                        uap->new, newlen, &oldlen);
 
 		thread_funnel_set(kernel_flock, funnel_state);
 	}
@@ -424,9 +442,9 @@ sysctl_affinity(
 			                (cur_proc->p_flag & P_AFFINITY) ? 1 : 0);
 	} else if (name[0] == 1 && 2 == namelen) {
 		if (name[1] == 0) {
-			OSBitAndAtomic(~((uint32_t)P_AFFINITY), (UInt32 *)&cur_proc->p_flag);
+			OSBitAndAtomic(~((uint32_t)P_AFFINITY), &cur_proc->p_flag);
 		} else {
-			OSBitOrAtomic(P_AFFINITY, (UInt32 *)&cur_proc->p_flag);
+			OSBitOrAtomic(P_AFFINITY, &cur_proc->p_flag);
 		}
 		return 0;
 	}
@@ -487,7 +505,7 @@ set_archhandler(__unused proc_t p, int arch)
 		return (EBADARCH);
 	}
 
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE32,
+	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
 		   CAST_USER_ADDR_T(archhandler->path), ctx);
 	error = namei(&nd);
 	if (error)
@@ -512,7 +530,7 @@ set_archhandler(__unused proc_t p, int arch)
 	vnode_put(nd.ni_vp);
 	
 	archhandler->fsid = va.va_fsid;
-	archhandler->fileid = (u_long)va.va_fileid;
+	archhandler->fileid = (u_int32_t)va.va_fileid;
 	return 0;
 }
 
@@ -581,6 +599,65 @@ done:
 	return error;
 
 }
+
+static int
+sysctl_handle_kern_threadname(	__unused struct sysctl_oid *oidp, __unused void *arg1,
+	      __unused int arg2, struct sysctl_req *req)
+{
+	int error;
+	struct uthread *ut = get_bsdthread_info(current_thread());
+	user_addr_t oldp=0, newp=0;
+	size_t *oldlenp=NULL;
+	size_t newlen=0;
+
+	oldp = req->oldptr;
+	oldlenp = &(req->oldlen);
+	newp = req->newptr;
+	newlen = req->newlen;
+
+	/* We want the current length, and maybe the string itself */
+	if(oldlenp) {
+		/* if we have no thread name yet tell'em we want MAXTHREADNAMESIZE - 1 */
+		size_t currlen = MAXTHREADNAMESIZE - 1;
+		
+		if(ut->pth_name)
+			/* use length of current thread name */
+			currlen = strlen(ut->pth_name);
+		if(oldp) {
+			if(*oldlenp < currlen)
+				return ENOMEM;
+			/* NOTE - we do not copy the NULL terminator */
+			if(ut->pth_name) {
+				error = copyout(ut->pth_name,oldp,currlen);
+				if(error)
+					return error;
+			}
+		}	
+		/* return length of thread name minus NULL terminator (just like strlen)  */
+		req->oldidx = currlen;
+	}
+
+	/* We want to set the name to something */
+	if(newp) 
+	{
+		if(newlen > (MAXTHREADNAMESIZE - 1))
+			return ENAMETOOLONG;
+		if(!ut->pth_name)
+		{
+			ut->pth_name = (char*)kalloc( MAXTHREADNAMESIZE );
+			if(!ut->pth_name)
+				return ENOMEM;
+		}
+		bzero(ut->pth_name, MAXTHREADNAMESIZE);
+		error = copyin(newp, ut->pth_name, newlen);
+		if(error)
+			return error;
+	}
+		
+	return 0;
+}
+
+SYSCTL_PROC(_kern, KERN_THREADNAME, threadname, CTLFLAG_ANYBODY | CTLTYPE_STRING | CTLFLAG_RW, 0, 0, sysctl_handle_kern_threadname,"A","");
 
 SYSCTL_NODE(_kern, KERN_EXEC, exec, CTLFLAG_RD|CTLFLAG_LOCKED, 0, "");
 
@@ -708,7 +785,7 @@ kern_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	/* NOTREACHED */
 }
 
-#ifdef DEBUG
+#if DEBUG
 /*
  * Debugging related system variables.
  */
@@ -734,9 +811,9 @@ debug_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 
 	/* all sysctl names at this level are name and field */
 	if (namelen != 2)
-		return (ENOTDIR);		/* overloaded */
+		return (ENOTSUP);		/* overloaded */
 	if (name[0] < 0 || name[0] >= CTL_DEBUG_MAXID)
-                return (ENOTSUP);
+		return (ENOTSUP);
 	cdp = debugvars[name[0]];
 	if (cdp->debugname == 0)
 		return (ENOTSUP);
@@ -783,7 +860,7 @@ sysctl_int(user_addr_t oldp, size_t *oldlenp,
 		error = copyout(valp, oldp, sizeof(int));
 	if (error == 0 && newp) {
 		error = copyin(newp, valp, sizeof(int));
-		AUDIT_ARG(value, *valp);
+		AUDIT_ARG(value32, *valp);
 	}
 	return (error);
 }
@@ -1047,7 +1124,7 @@ SYSCTL_PROC(_kern, KERN_FILE, file,
 static int
 sysdoproc_filt_KERN_PROC_PID(proc_t p, void * arg)
 {
-	if (p->p_pid != (pid_t)arg)
+	if (p->p_pid != (pid_t)*(int*)arg)
 		return(0);
 	else
 		return(1);
@@ -1056,7 +1133,7 @@ sysdoproc_filt_KERN_PROC_PID(proc_t p, void * arg)
 static int
 sysdoproc_filt_KERN_PROC_PGRP(proc_t p, void * arg)
 {
-	if (p->p_pgrpid != (pid_t)arg)
+	if (p->p_pgrpid != (pid_t)*(int*)arg)
 		return(0);
 	else
 	  return(1);
@@ -1067,14 +1144,15 @@ sysdoproc_filt_KERN_PROC_TTY(proc_t p, void * arg)
 {
 	boolean_t funnel_state;
 	int retval;
+	struct tty *tp;
 
 	
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	/* This is very racy but list lock is held.. Hmmm. */
 	if ((p->p_flag & P_CONTROLT) == 0 ||
 		(p->p_pgrp == NULL) || (p->p_pgrp->pg_session == NULL) ||
-			p->p_pgrp->pg_session->s_ttyp == NULL ||
-			p->p_pgrp->pg_session->s_ttyp->t_dev != (dev_t)arg)
+			(tp = SESSION_TP(p->p_pgrp->pg_session)) == TTY_NULL ||
+			tp->t_dev != (dev_t)*(int*)arg)
 				retval = 0;
 	else
 		retval = 1;
@@ -1096,7 +1174,7 @@ sysdoproc_filt_KERN_PROC_UID(proc_t p, void * arg)
 	uid = kauth_cred_getuid(my_cred);
 	kauth_cred_unref(&my_cred);
 
-	if (uid != (uid_t)arg)
+	if (uid != (uid_t)*(int*)arg)
 		return(0);
 	else
 		return(1);
@@ -1115,21 +1193,23 @@ sysdoproc_filt_KERN_PROC_RUID(proc_t p, void * arg)
 	ruid = my_cred->cr_ruid;
 	kauth_cred_unref(&my_cred);
 
-	if (ruid != (uid_t)arg)
+	if (ruid != (uid_t)*(int*)arg)
 		return(0);
 	else
 		return(1);
 }
 
+#if CONFIG_LCTX
 static int
 sysdoproc_filt_KERN_PROC_LCID(proc_t p, void * arg)
 {
 	if ((p->p_lctx == NULL) ||
-		(p->p_lctx->lc_id != (pid_t)arg))
+		(p->p_lctx->lc_id != (pid_t)*(int*)arg))
 		return(0);
 	else
 		return(1);
 }
+#endif
 
 /*
  * try over estimating by 5 procs
@@ -1156,19 +1236,19 @@ sysdoproc_callback(proc_t p, void * arg)
 	int error=0;
 
 	if (args->buflen >= args->sizeof_kproc) {
-		if ((args->ruidcheck != 0)  && (sysdoproc_filt_KERN_PROC_RUID(p, (void *)args->uidval) == 0))
+		if ((args->ruidcheck != 0)  && (sysdoproc_filt_KERN_PROC_RUID(p, &args->uidval) == 0))
 			return(PROC_RETURNED);
-		if ((args->uidcheck != 0)  && (sysdoproc_filt_KERN_PROC_UID(p, (void *)args->uidval) == 0))
+		if ((args->uidcheck != 0)  && (sysdoproc_filt_KERN_PROC_UID(p, &args->uidval) == 0))
 			return(PROC_RETURNED);
-		if ((args->ttycheck != 0)  && (sysdoproc_filt_KERN_PROC_TTY(p, (void *)args->uidval) == 0))
+		if ((args->ttycheck != 0)  && (sysdoproc_filt_KERN_PROC_TTY(p, &args->uidval) == 0))
 			return(PROC_RETURNED);
 
 		bzero(args->kprocp, args->sizeof_kproc);
 		if (args->is_64_bit) {
-			fill_user_proc(p, (struct user_kinfo_proc *) args->kprocp);
+			fill_user64_proc(p, (struct user64_kinfo_proc *) args->kprocp);
 		}
 		else {
-			fill_proc(p, (struct kinfo_proc *) args->kprocp);
+			fill_user32_proc(p, (struct user32_kinfo_proc *) args->kprocp);
 		}
 		error = copyout(args->kprocp, args->dp, args->sizeof_kproc);
 		if (error) {
@@ -1191,8 +1271,8 @@ sysctl_doproc(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 	int buflen = where != USER_ADDR_NULL ? *sizep : 0;
 	int error = 0;
 	boolean_t is_64_bit = FALSE;
-	struct kinfo_proc       kproc;
-	struct user_kinfo_proc  user_kproc;
+	struct user32_kinfo_proc  user32_kproc;
+	struct user64_kinfo_proc  user_kproc;
 	int sizeof_kproc;
 	caddr_t kprocp;
 	int (*filterfn)(proc_t, void *) = 0;
@@ -1209,8 +1289,8 @@ sysctl_doproc(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 		kprocp = (caddr_t) &user_kproc;
 	}
 	else {
-		sizeof_kproc = sizeof(kproc);
-		kprocp = (caddr_t) &kproc;
+		sizeof_kproc = sizeof(user32_kproc);
+		kprocp = (caddr_t) &user32_kproc;
 	}
 
 
@@ -1256,7 +1336,7 @@ sysctl_doproc(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 	args.sizeof_kproc = sizeof_kproc;
 	args.uidval = name[1];
 
-	proc_iterate((PROC_ALLPROCLIST | PROC_ZOMBPROCLIST), sysdoproc_callback, &args, filterfn, (void *)name[1]);
+	proc_iterate((PROC_ALLPROCLIST | PROC_ZOMBPROCLIST), sysdoproc_callback, &args, filterfn, &name[1]);
 
 	if (error)
 		return(error);
@@ -1279,7 +1359,7 @@ sysctl_doproc(int *name, u_int namelen, user_addr_t where, size_t *sizep)
  * Fill in an eproc structure for the specified process.
  */
 static void
-fill_eproc(proc_t p, struct eproc *ep)
+fill_user32_eproc(proc_t p, struct user32_eproc *ep)
 {
 	struct tty *tp;
 	kauth_cred_t my_cred;
@@ -1289,16 +1369,16 @@ fill_eproc(proc_t p, struct eproc *ep)
 	pg = proc_pgrp(p);
 	sessp = proc_session(p);
 
-	ep->e_paddr = p;
+	ep->e_paddr = CAST_DOWN_EXPLICIT(uint32_t,p);
 
 	if (pg != PGRP_NULL) {
-		ep->e_sess = sessp;
+		ep->e_sess = CAST_DOWN_EXPLICIT(uint32_t,sessp);
 		ep->e_pgid = p->p_pgrpid;
 		ep->e_jobc = pg->pg_jobc;
 		if ((sessp != SESSION_NULL) && sessp->s_ttyvp)
 			ep->e_flag = EPROC_CTTY;
 	} else {
-		ep->e_sess = (struct session *)0;
+		ep->e_sess = 0;
 		ep->e_pgid = 0;
 		ep->e_jobc = 0;
 	}
@@ -1311,7 +1391,7 @@ fill_eproc(proc_t p, struct eproc *ep)
 #endif
 	ep->e_ppid = p->p_ppid;
 	/* Pre-zero the fake historical pcred */
-	bzero(&ep->e_pcred, sizeof(struct _pcred));
+	bzero(&ep->e_pcred, sizeof(ep->e_pcred));
 	if (p->p_ucred) {
 		my_cred = kauth_cred_proc_ref(p);
 
@@ -1336,10 +1416,10 @@ fill_eproc(proc_t p, struct eproc *ep)
 	ep->e_vm.vm_rssize = 0;
 
 	if ((p->p_flag & P_CONTROLT) && (sessp != SESSION_NULL) &&
-	     (tp = sessp->s_ttyp)) {
+	     (tp = SESSION_TP(sessp))) {
 		ep->e_tdev = tp->t_dev;
 		ep->e_tpgid = sessp->s_ttypgrpid;
-		ep->e_tsess = tp->t_session;
+		ep->e_tsess = CAST_DOWN_EXPLICIT(uint32_t,tp->t_session);
 	} else
 		ep->e_tdev = NODEV;
 
@@ -1358,7 +1438,7 @@ fill_eproc(proc_t p, struct eproc *ep)
  * Fill in an LP64 version of eproc structure for the specified process.
  */
 static void
-fill_user_eproc(proc_t p, struct user_eproc *ep)
+fill_user64_eproc(proc_t p, struct user64_eproc *ep)
 {
 	struct tty *tp;
 	struct	session *sessp = NULL;
@@ -1417,7 +1497,7 @@ fill_user_eproc(proc_t p, struct user_eproc *ep)
 	ep->e_vm.vm_rssize = 0;
 
 	if ((p->p_flag & P_CONTROLT) && (sessp != SESSION_NULL) &&
-	     (tp = sessp->s_ttyp)) {
+	     (tp = SESSION_TP(sessp))) {
 		ep->e_tdev = tp->t_dev;
 		ep->e_tpgid = sessp->s_ttypgrpid;
 		ep->e_tsess = CAST_USER_ADDR_T(tp->t_session);
@@ -1439,12 +1519,13 @@ fill_user_eproc(proc_t p, struct user_eproc *ep)
  * Fill in an eproc structure for the specified process.
  */
 static void
-fill_externproc(proc_t p, struct extern_proc *exp)
+fill_user32_externproc(proc_t p, struct user32_extern_proc *exp)
 {
-	exp->p_forw = exp->p_back = NULL;
-	exp->p_starttime = p->p_start;
-	exp->p_vmspace = NULL;
-	exp->p_sigacts = p->p_sigacts;
+	exp->p_forw = exp->p_back = 0;
+	exp->p_starttime.tv_sec = p->p_start.tv_sec;
+	exp->p_starttime.tv_usec = p->p_start.tv_usec;
+	exp->p_vmspace = 0;
+	exp->p_sigacts = CAST_DOWN_EXPLICIT(uint32_t,p->p_sigacts);
 	exp->p_flag  = p->p_flag;
 	if (p->p_lflag & P_LTRACED)
 		exp->p_flag |= P_TRACED;
@@ -1456,8 +1537,8 @@ fill_externproc(proc_t p, struct extern_proc *exp)
 	exp->p_pid  = p->p_pid ;
 	exp->p_oppid  = p->p_oppid ;
 	/* Mach related  */
-	exp->user_stack  = CAST_DOWN(caddr_t, p->user_stack);
-	exp->exit_thread  = p->exit_thread ;
+	exp->user_stack  = p->user_stack;
+	exp->exit_thread  = CAST_DOWN_EXPLICIT(uint32_t,p->exit_thread);
 	exp->p_debugger  = p->p_debugger ;
 	exp->sigwait  = p->sigwait ;
 	/* scheduling */
@@ -1482,7 +1563,7 @@ fill_externproc(proc_t p, struct extern_proc *exp)
 	exp->p_traceflag  = 0;
 	exp->p_tracep  = 0 ;
 	exp->p_siglist  = 0 ;	/* No longer relevant */
-	exp->p_textvp  = p->p_textvp ;
+	exp->p_textvp  = CAST_DOWN_EXPLICIT(uint32_t,p->p_textvp) ;
 	exp->p_holdcnt = 0 ;
 	exp->p_sigmask  = 0 ;	/* no longer avaialable */
 	exp->p_sigignore  = p->p_sigignore ;
@@ -1492,18 +1573,18 @@ fill_externproc(proc_t p, struct extern_proc *exp)
 	exp->p_nice  = p->p_nice ;
 	bcopy(&p->p_comm, &exp->p_comm,MAXCOMLEN);
 	exp->p_comm[MAXCOMLEN] = '\0';
-	exp->p_pgrp  = p->p_pgrp ;
-	exp->p_addr  = NULL;
+	exp->p_pgrp  = CAST_DOWN_EXPLICIT(uint32_t,p->p_pgrp) ;
+	exp->p_addr  = 0;
 	exp->p_xstat  = p->p_xstat ;
 	exp->p_acflag  = p->p_acflag ;
-	exp->p_ru  = p->p_ru ;		/* XXX may be NULL */
+	exp->p_ru  = CAST_DOWN_EXPLICIT(uint32_t,p->p_ru) ;		/* XXX may be NULL */
 }
 
 /*
  * Fill in an LP64 version of extern_proc structure for the specified process.
  */
 static void
-fill_user_externproc(proc_t p, struct user_extern_proc *exp)
+fill_user64_externproc(proc_t p, struct user64_extern_proc *exp)
 {
 	exp->p_forw = exp->p_back = USER_ADDR_NULL;
 	exp->p_starttime.tv_sec = p->p_start.tv_sec;
@@ -1569,17 +1650,18 @@ fill_user_externproc(proc_t p, struct user_extern_proc *exp)
 }
 
 static void
-fill_proc(proc_t p, struct kinfo_proc *kp)
+fill_user32_proc(proc_t p, struct user32_kinfo_proc *kp)
 {
-	fill_externproc(p, &kp->kp_proc);
-	fill_eproc(p, &kp->kp_eproc);
+	/* on a 64 bit kernel, 32 bit users will get some truncated information */
+	fill_user32_externproc(p, &kp->kp_proc);
+	fill_user32_eproc(p, &kp->kp_eproc);
 }
 
 static void
-fill_user_proc(proc_t p, struct user_kinfo_proc *kp)
+fill_user64_proc(proc_t p, struct user64_kinfo_proc *kp)
 {
-	fill_user_externproc(p, &kp->kp_proc);
-	fill_user_eproc(p, &kp->kp_eproc);
+	fill_user64_externproc(p, &kp->kp_proc);
+	fill_user64_eproc(p, &kp->kp_eproc);
 }
 
 int
@@ -1590,11 +1672,11 @@ kdebug_ops(int *name, u_int namelen, user_addr_t where,
 
 	if (namelen == 0)
 		return(ENOTSUP);
-
+	
     ret = suser(kauth_cred_get(), &p->p_acflag);
 	if (ret)
 		return(ret);
-
+	
 	switch(name[0]) {
 	case KERN_KDEFLAGS:
 	case KERN_KDDFLAGS:
@@ -1662,7 +1744,7 @@ sysctl_procargsx(int *name, u_int namelen, user_addr_t where,
 
 	if ( namelen < 1 )
 		return(EINVAL);
-
+	
 	if (argc_yes)
 		buflen -= sizeof(int);		/* reserve first word to return argc */
 
@@ -1964,7 +2046,7 @@ sysctl_maxproc
 	int new_value, changed;
 	int error = sysctl_io_number(req, maxproc, sizeof(int), &new_value, &changed);
 	if (changed) {
-		AUDIT_ARG(value, new_value);
+		AUDIT_ARG(value32, new_value);
 		/* make sure the system-wide limit is less than the configured hard
 		   limit set at kernel compilation */
 		if (new_value <= hard_maxproc && new_value > 0)
@@ -1983,10 +2065,50 @@ SYSCTL_STRING(_kern, KERN_OSRELEASE, osrelease,
 		osrelease, 0, "");
 SYSCTL_INT(_kern, KERN_OSREV, osrevision, 
 		CTLFLAG_RD | CTLFLAG_KERN, 
-		NULL, BSD, "");
+		(int *)NULL, BSD, "");
 SYSCTL_STRING(_kern, KERN_VERSION, version, 
 		CTLFLAG_RD | CTLFLAG_KERN, 
 		version, 0, "");
+
+#if DEBUG
+int debug_kprint_syscall = 0;
+char debug_kprint_syscall_process[MAXCOMLEN+1];
+
+SYSCTL_INT (_debug, OID_AUTO, kprint_syscall,
+	    CTLFLAG_RW, &debug_kprint_syscall, 0, "kprintf syscall tracing");
+SYSCTL_STRING(_debug, OID_AUTO, kprint_syscall_process, 
+			  CTLFLAG_RW, debug_kprint_syscall_process, sizeof(debug_kprint_syscall_process),
+			  "name of process for kprintf syscall tracing");
+
+int debug_kprint_current_process(const char **namep)
+{
+	struct proc *p = current_proc();
+
+	if (p == NULL) {
+		return 0;
+	}
+
+	if (debug_kprint_syscall_process[0]) {
+		/* user asked to scope tracing to a particular process name */
+		if(0 == strncmp(debug_kprint_syscall_process,
+						p->p_comm, sizeof(debug_kprint_syscall_process))) {
+			/* no value in telling the user that we traced what they asked */
+			if(namep) *namep = NULL;
+
+			return 1;
+		} else {
+			return 0;
+		}
+	}
+
+	/* trace all processes. Tell user what we traced */
+	if (namep) {
+		*namep = p->p_comm;
+	}
+
+	return 1;
+}
+#endif
 
 /* PR-5293665: need to use a callback function for kern.osversion to set
  * osversion in IORegistry */
@@ -2032,33 +2154,52 @@ SYSCTL_INT(_kern, KERN_MAXFILES, maxfiles,
 		&maxfiles, 0, "");
 SYSCTL_INT(_kern, KERN_ARGMAX, argmax, 
 		CTLFLAG_RD | CTLFLAG_KERN, 
-		NULL, ARG_MAX, "");
+		(int *)NULL, ARG_MAX, "");
 SYSCTL_INT(_kern, KERN_POSIX1, posix1version, 
 		CTLFLAG_RD | CTLFLAG_KERN, 
-		NULL, _POSIX_VERSION, "");
+		(int *)NULL, _POSIX_VERSION, "");
 SYSCTL_INT(_kern, KERN_NGROUPS, ngroups, 
 		CTLFLAG_RD | CTLFLAG_KERN, 
-		NULL, NGROUPS_MAX, "");
+		(int *)NULL, NGROUPS_MAX, "");
 SYSCTL_INT(_kern, KERN_JOB_CONTROL, job_control, 
 		CTLFLAG_RD | CTLFLAG_KERN, 
-		NULL, 1, "");
+		(int *)NULL, 1, "");
 #if 1	/* _POSIX_SAVED_IDS from <unistd.h> */
 SYSCTL_INT(_kern, KERN_SAVED_IDS, saved_ids, 
 		CTLFLAG_RD | CTLFLAG_KERN, 
-		NULL, 1, "");
+		(int *)NULL, 1, "");
 #else
 SYSCTL_INT(_kern, KERN_SAVED_IDS, saved_ids, 
 		CTLFLAG_RD | CTLFLAG_KERN, 
 		NULL, 0, "");
 #endif
+SYSCTL_INT(_kern, OID_AUTO, num_files, 
+		CTLFLAG_RD, 
+		&nfiles, 0, "");
+SYSCTL_COMPAT_INT(_kern, OID_AUTO, num_vnodes, 
+		CTLFLAG_RD, 
+		&numvnodes, 0, "");
+SYSCTL_INT(_kern, OID_AUTO, num_tasks, 
+		CTLFLAG_RD, 
+		&task_max, 0, "");
+SYSCTL_INT(_kern, OID_AUTO, num_threads, 
+		CTLFLAG_RD, 
+		&thread_max, 0, "");
+SYSCTL_INT(_kern, OID_AUTO, num_taskthreads, 
+		CTLFLAG_RD, 
+		&task_threadmax, 0, "");
 
 static int
 sysctl_maxvnodes (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
-	unsigned int oldval = desiredvnodes;
+	int oldval = desiredvnodes;
 	int error = sysctl_io_number(req, desiredvnodes, sizeof(int), &desiredvnodes, NULL);
-	reset_vmobjectcache(oldval, desiredvnodes);
-	resize_namecache(desiredvnodes);
+
+	if (oldval != desiredvnodes) {
+		reset_vmobjectcache(oldval, desiredvnodes);
+		resize_namecache(desiredvnodes);
+	}
+
 	return(error);
 }
 
@@ -2121,7 +2262,7 @@ SYSCTL_PROC(_kern, KERN_DOMAINNAME, nisdomainname,
 		CTLTYPE_STRING | CTLFLAG_RW,
 		0, 0, sysctl_domainname, "A", "");
 
-SYSCTL_INT(_kern, KERN_HOSTID, hostid, 
+SYSCTL_COMPAT_INT(_kern, KERN_HOSTID, hostid, 
 		CTLFLAG_RW | CTLFLAG_KERN, 
 		&hostid, 0, "");
 
@@ -2159,16 +2300,36 @@ SYSCTL_INT(_kern, KERN_SPECULATIVE_READS, speculative_reads_disabled,
 		CTLFLAG_RW | CTLFLAG_KERN, 
 		&speculative_reads_disabled, 0, "");
 
+SYSCTL_UINT(_kern, OID_AUTO, preheat_pages_max, 
+		CTLFLAG_RW | CTLFLAG_KERN, 
+		&preheat_pages_max, 0, "");
+
+SYSCTL_UINT(_kern, OID_AUTO, preheat_pages_min, 
+		CTLFLAG_RW | CTLFLAG_KERN, 
+		&preheat_pages_min, 0, "");
+
+SYSCTL_UINT(_kern, OID_AUTO, preheat_pages_mult, 
+		CTLFLAG_RW | CTLFLAG_KERN, 
+		&preheat_pages_mult, 0, "");
+
 static int
 sysctl_boottime
 (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
-	struct timeval t;
+	time_t tv_sec = boottime_sec();
+	struct proc *p = req->p;
 
-	t.tv_sec = boottime_sec();
-	t.tv_usec = 0;
-
-	return sysctl_io_opaque(req, &t, sizeof(t), NULL);
+	if (proc_is64bit(p)) {
+		struct user64_timeval t;
+		t.tv_sec = tv_sec;
+		t.tv_usec = 0;
+		return sysctl_io_opaque(req, &t, sizeof(t), NULL);
+	} else {
+		struct user32_timeval t;
+		t.tv_sec = tv_sec;
+		t.tv_usec = 0;
+		return sysctl_io_opaque(req, &t, sizeof(t), NULL);
+	}
 }
 
 SYSCTL_PROC(_kern, KERN_BOOTTIME, boottime,
@@ -2211,7 +2372,7 @@ sysctl_usrstack
 	return sysctl_io_number(req, (int)req->p->user_stack, sizeof(int), NULL, NULL);
 }
 
-SYSCTL_PROC(_kern, KERN_USRSTACK, usrstack,
+SYSCTL_PROC(_kern, KERN_USRSTACK32, usrstack,
 		CTLTYPE_INT | CTLFLAG_RD,
 		0, 0, sysctl_usrstack, "I", "");
 
@@ -2296,50 +2457,6 @@ SYSCTL_PROC(_kern, KERN_PROCDELAYTERM, delayterm,
 		CTLTYPE_INT | CTLFLAG_RW,
 		0, 0, sysctl_delayterm, "I", "");
 
-static int
-sysctl_proc_low_pri_io
-(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
-{
-	struct proc *p = req->p;
-	int new_value, old_value, changed;
-	int error;
-
-	proc_lock(p);
-    switch (req->p->p_iopol_disk) {
-    case IOPOL_DEFAULT:
-    case IOPOL_NORMAL:
-        old_value = 0;
-        break;
-    case IOPOL_THROTTLE:
-        old_value = 1;
-        break;
-    case IOPOL_PASSIVE:
-        old_value = 2;
-        break;
-    default:
-        /* this should never happen, but to be robust, return the default value */
-        old_value = 0;
-        break;
-    }
-	proc_unlock(p);
-	
-	error = sysctl_io_number(req, old_value, sizeof(int), &new_value, &changed);
-	if (changed) {
-		proc_lock(p);
-        if (new_value & 0x01)
-            req->p->p_iopol_disk = IOPOL_THROTTLE;
-        else if (new_value & 0x02)
-            req->p->p_iopol_disk = IOPOL_PASSIVE;
-        else if (new_value == 0)
-            req->p->p_iopol_disk = IOPOL_NORMAL;
-		proc_unlock(p);
-	}
-	return(error);
-}
-
-SYSCTL_PROC(_kern, KERN_PROC_LOW_PRI_IO, proc_low_pri_io,
-		CTLTYPE_INT | CTLFLAG_RW,
-		0, 0, sysctl_proc_low_pri_io, "I", "");
 
 static int
 sysctl_rage_vnode
@@ -2387,7 +2504,7 @@ sysctl_rage_vnode
 }
 
 SYSCTL_PROC(_kern, KERN_RAGEVNODE, rage_vnode,
-		CTLTYPE_INT | CTLFLAG_RW,
+		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_ANYBODY,
 		0, 0, sysctl_rage_vnode, "I", "");
 
 
@@ -2410,11 +2527,11 @@ sysctl_kern_check_openevt
 	if (error == 0) {
 	        switch (new_value) {
 		case KERN_OPENEVT_PROC:
-			OSBitOrAtomic(P_CHECKOPENEVT, (UInt32 *)&p->p_flag);
+			OSBitOrAtomic(P_CHECKOPENEVT, &p->p_flag);
 			break;
 
 		case KERN_UNOPENEVT_PROC:
-			OSBitAndAtomic(~((uint32_t)P_CHECKOPENEVT), (UInt32 *)&p->p_flag);
+			OSBitAndAtomic(~((uint32_t)P_CHECKOPENEVT), &p->p_flag);
 			break;
 
 		default:
@@ -2444,7 +2561,7 @@ sysctl_nx
 		return error;
 
 	if (changed) {
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 		/*
 		 * Only allow setting if NX is supported on the chip
 		 */
@@ -2467,11 +2584,13 @@ sysctl_loadavg
 (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
 		if (proc_is64bit(req->p)) {
-			struct user_loadavg loadinfo64;
-			loadavg32to64(&averunnable, &loadinfo64);
+			struct user64_loadavg loadinfo64;
+			fill_loadavg64(&averunnable, &loadinfo64);
 			return sysctl_io_opaque(req, &loadinfo64, sizeof(loadinfo64), NULL);
 		} else {
-			return sysctl_io_opaque(req, &averunnable, sizeof(averunnable), NULL);
+			struct user32_loadavg loadinfo32;
+			fill_loadavg32(&averunnable, &loadinfo32);
+			return sysctl_io_opaque(req, &loadinfo32, sizeof(loadinfo32), NULL);
 		}
 }
 
@@ -2486,7 +2605,7 @@ sysctl_swapusage
 		int			error;
 		uint64_t		swap_total;
 		uint64_t		swap_avail;
-		uint32_t		swap_pagesize;
+		vm_size_t		swap_pagesize;
 		boolean_t		swap_encrypted;
 		struct xsw_usage	xsu;
 
@@ -2515,9 +2634,9 @@ SYSCTL_PROC(_vm, VM_SWAPUSAGE, swapusage,
 /* this kernel does NOT implement shared_region_make_private_np() */
 SYSCTL_INT(_kern, KERN_SHREG_PRIVATIZABLE, shreg_private, 
 		CTLFLAG_RD, 
-		NULL, 0, "");
+		(int *)NULL, 0, "");
 
-#if __i386__
+#if defined(__i386__) || defined(__x86_64__)
 static int
 sysctl_sysctl_exec_affinity(__unused struct sysctl_oid *oidp,
 			   __unused void *arg1, __unused int arg2,
@@ -2537,9 +2656,9 @@ sysctl_sysctl_exec_affinity(__unused struct sysctl_oid *oidp,
 		if ((error = SYSCTL_IN(req, &newcputype, sizeof(newcputype))))
 			return error;
 		if (newcputype == CPU_TYPE_I386)
-			OSBitAndAtomic(~((uint32_t)P_AFFINITY), (UInt32 *)&cur_proc->p_flag);
+			OSBitAndAtomic(~((uint32_t)P_AFFINITY), &cur_proc->p_flag);
 		else if (newcputype == CPU_TYPE_POWERPC)
-			OSBitOrAtomic(P_AFFINITY, (UInt32 *)&cur_proc->p_flag);
+			OSBitOrAtomic(P_AFFINITY, &cur_proc->p_flag);
 		else
 			return (EINVAL);
 	}
@@ -2573,7 +2692,7 @@ fetch_process_cputype(
 		goto out;
 	}
 
-#if __i386__
+#if defined(__i386__) || defined(__x86_64__)
 	if (p->p_flag & P_TRANSLATED) {
 		ret = CPU_TYPE_POWERPC;
 	}
@@ -2665,8 +2784,34 @@ SYSCTL_INT (_kern, OID_AUTO, affinity_sets_mapping,
  * All values are in bytes.
  */
 
+vm_map_size_t	vm_global_no_user_wire_amount;
 vm_map_size_t	vm_global_user_wire_limit;
 vm_map_size_t	vm_user_wire_limit;
 
+/*
+ * There needs to be a more automatic/elegant way to do this
+ */
+
+SYSCTL_QUAD(_vm, OID_AUTO, global_no_user_wire_amount, CTLFLAG_RW, &vm_global_no_user_wire_amount, "");
 SYSCTL_QUAD(_vm, OID_AUTO, global_user_wire_limit, CTLFLAG_RW, &vm_global_user_wire_limit, "");
 SYSCTL_QUAD(_vm, OID_AUTO, user_wire_limit, CTLFLAG_RW, &vm_user_wire_limit, "");
+
+
+
+/*
+ * enable back trace events for thread blocks
+ */
+
+extern	uint32_t        kdebug_thread_block;
+
+SYSCTL_INT (_kern, OID_AUTO, kdebug_thread_block,
+	    CTLFLAG_RW, &kdebug_thread_block, 0, "kdebug thread_block");
+
+/*
+ * Kernel stack size and depth
+ */
+SYSCTL_INT (_kern, OID_AUTO, stack_size,
+	    CTLFLAG_RD, (int *) &kernel_stack_size, 0, "Kernel stack size");
+SYSCTL_INT (_kern, OID_AUTO, stack_depth_max,
+	    CTLFLAG_RD, (int *) &kernel_stack_depth_max, 0, "Max kernel stack depth at interrupt or context switch");
+

@@ -60,10 +60,10 @@
 #if NAMEDSTREAMS
 
 /*
- * Cast to 'unsigned int' loses precision - hope that's OK...
+ * We use %p to prevent loss of precision for pointers on varying architectures.
  */
 #define MAKE_SHADOW_NAME(VP, NAME)  \
-	snprintf((NAME), sizeof((NAME)), ".vfs_rsrc_stream_%x%08x%x", (unsigned int)(VP), (VP)->v_id, (unsigned int)(VP)->v_data);
+	snprintf((NAME), sizeof((NAME)), ".vfs_rsrc_stream_%p%08x%p", (void*)(VP), (VP)->v_id, (VP)->v_data);
 
 static vnode_t shadow_dvp;  /* tmp directory to hold stream shadow files */
 static int shadow_vid;
@@ -397,20 +397,27 @@ vnode_getnamedstream(vnode_t vp, vnode_t *svpp, const char *name, enum nsoperati
 		uint32_t streamflags = VISNAMEDSTREAM;
 		vnode_t svp = *svpp;
 
-		if ((vp->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0) { 
+		if ((vp->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0) {
 			streamflags |= VISSHADOW;
-		}    
-
+		}
+		
 		/* Tag the vnode. */
 		vnode_lock_spin(svp);
 		svp->v_flag |= streamflags;
 		vnode_unlock(svp);
-		/* Make the file its parent. 
-		 * Note: This parent link helps us distinguish vnodes for 
-		 * shadow stream files from vnodes for resource fork on file
-		 * systems that support named streams natively (both have
-		 * VISNAMEDSTREAM set) by allowing access to mount structure
-		 * for checking MNTK_NAMED_STREAMS bit at many places in the code
+
+		/* Tag the parent so we know to flush credentials for streams on setattr */
+		vnode_lock_spin(vp);
+		vp->v_lflag |= VL_HASSTREAMS;
+		vnode_unlock(vp);
+
+		/* Make the file it's parent.  
+		 * Note:  This parent link helps us distinguish vnodes for 
+		 * shadow stream files from vnodes for resource fork on file 
+		 * systems that support namedstream natively (both have 
+		 * VISNAMEDSTREAM set) by allowing access to mount structure 
+		 * for checking MNTK_NAMED_STREAMS bit at many places in the 
+		 * code.
 		 */
 		vnode_update_identity(svp, vp, NULL, 0, 0, VNODE_UPDATE_PARENT);
 	}		
@@ -439,18 +446,24 @@ vnode_makenamedstream(vnode_t vp, vnode_t *svpp, const char *name, int flags, vf
 		if ((vp->v_mount->mnt_kern_flag & MNTK_NAMED_STREAMS) == 0) {
 			streamflags |= VISSHADOW;
 		}
-
+		
 		/* Tag the vnode. */
 		vnode_lock_spin(svp);
 		svp->v_flag |= streamflags;
 		vnode_unlock(svp);
 
-		/* Make the file its parent. 
-		 * Note: This parent link helps us distinguish vnodes for 
-		 * shadow stream files from vnodes for resource fork on file
-		 * systems that support named streams natively (both have
-		 * VISNAMEDSTREAM set) by allowing access to mount structure
-		 * for checking MNTK_NAMED_STREAMS bit at many places in the code
+		/* Tag the parent so we know to flush credentials for streams on setattr */
+		vnode_lock_spin(vp);
+		vp->v_lflag |= VL_HASSTREAMS;
+		vnode_unlock(vp);
+
+		/* Make the file it's parent.
+		 * Note:  This parent link helps us distinguish vnodes for 
+		 * shadow stream files from vnodes for resource fork on file 
+		 * systems that support namedstream natively (both have 
+		 * VISNAMEDSTREAM set) by allowing access to mount structure 
+		 * for checking MNTK_NAMED_STREAMS bit at many places in the 
+		 * code.
 		 */
 		vnode_update_identity(svp, vp, NULL, 0, 0, VNODE_UPDATE_PARENT);
 	}
@@ -492,7 +505,7 @@ vnode_relenamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 {
 	vnode_t dvp;
 	struct componentname cn;
-	char tmpname[48];
+	char tmpname[80];
 	errno_t err;
 
 	cache_purge(svp);
@@ -514,7 +527,7 @@ vnode_relenamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 	if (err != 0) {
 		return err;
 	}
-	
+
 	(void) VNOP_REMOVE(dvp, svp, &cn, 0, context);
 	vnode_put(dvp);
 
@@ -552,7 +565,7 @@ vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 	if (kmem_alloc(kernel_map, (vm_offset_t *)&bufptr, bufsize)) {
 		return (ENOMEM);
 	}
-	auio = uio_create(1, 0, UIO_SYSSPACE32, UIO_READ);
+	auio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ);
 	offset = 0;
 
 	/*
@@ -566,7 +579,7 @@ vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 	while (offset < datasize) {
 		iosize = MIN(datasize - offset, iosize);
 
-		uio_reset(auio, offset, UIO_SYSSPACE32, UIO_READ);
+		uio_reset(auio, offset, UIO_SYSSPACE, UIO_READ);
 		uio_addiov(auio, (uintptr_t)bufptr, iosize);
 		error = VNOP_READ(svp, auio, 0, context);
 		if (error) {
@@ -579,7 +592,7 @@ vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 				break;
 			}
 		}
-		uio_reset(auio, offset, UIO_SYSSPACE32, UIO_WRITE);
+		uio_reset(auio, offset, UIO_SYSSPACE, UIO_WRITE);
 		uio_addiov(auio, (uintptr_t)bufptr, iosize);
 		error = vn_setxattr(vp, XATTR_RESOURCEFORK_NAME, auio, XATTR_NOSECURITY, context);
 		if (error) {
@@ -607,7 +620,7 @@ getshadowfile(vnode_t vp, vnode_t *svpp, int makestream, size_t *rsrcsize,
 	vnode_t  svp = NULLVP;
 	struct componentname cn;
 	struct vnode_attr va;
-	char tmpname[48];
+	char tmpname[80];
 	size_t datasize = 0;
 	int  error = 0;
 
@@ -743,7 +756,14 @@ retry:
 
 	/*
 	 * The creator of the shadow file provides its file data,
-	 * all other threads should wait until its ready.
+	 * all other threads should wait until its ready.  In order to 
+	 * prevent a deadlock during error codepaths, we need to check if the
+	 * vnode is being created, or if it has failed out. Regardless of success or 
+	 * failure, we set the VISSHADOW bit on the vnode, so we check that
+	 * if the vnode's flags don't have VISNAMEDSTREAM set.  If it doesn't,
+	 * then we can infer the creator isn't done yet.  If it's there, but
+	 * VISNAMEDSTREAM is not set, then we can infer it errored out and we should
+	 * try again.
 	 */
 	if (!creator) {
 		vnode_lock(svp);
@@ -752,9 +772,19 @@ retry:
 			vnode_unlock(svp);
 			goto out;
 		} else {
-			/* its not ready, wait for it (sleep using v_parent as channel) */
-			msleep((caddr_t)&svp->v_parent, &svp->v_lock, PINOD | PDROP,
-				"getnamedstream", NULL);
+			/* It's not ready, wait for it (sleep using v_parent as channel) */
+			if ((svp->v_flag & VISSHADOW)) {
+				/* 
+				 * No VISNAMEDSTREAM, but we did see VISSHADOW, indicating that the other
+				 * thread is done with this vnode. Just unlock the vnode and try again
+				 */
+				vnode_unlock(svp);
+			}	
+			else {
+				/* Otherwise, sleep if the shadow file is not created yet */
+				msleep((caddr_t)&svp->v_parent, &svp->v_lock, PINOD | PDROP,
+						"getnamedstream", NULL);
+			}
 			vnode_put(svp);
 			svp = NULLVP;
 			goto retry;
@@ -774,7 +804,7 @@ retry:
 			goto out;
 		}
 
-		auio = uio_create(1, 0, UIO_SYSSPACE32, UIO_READ);
+		auio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ);
 		offset = 0;
 
 		error = VNOP_OPEN(svp, 0, context);
@@ -786,7 +816,7 @@ retry:
 
 			iosize = MIN(datasize - offset, iosize);
 
-			uio_reset(auio, offset, UIO_SYSSPACE32, UIO_READ);
+			uio_reset(auio, offset, UIO_SYSSPACE, UIO_READ);
 			uio_addiov(auio, (uintptr_t)bufptr, iosize);
 			error = vn_getxattr(vp, XATTR_RESOURCEFORK_NAME, auio, &tmpsize,
 			                    XATTR_NOSECURITY, context);
@@ -794,7 +824,7 @@ retry:
 				break;
 			}
 		
-			uio_reset(auio, offset, UIO_SYSSPACE32, UIO_WRITE);
+			uio_reset(auio, offset, UIO_SYSSPACE, UIO_WRITE);
 			uio_addiov(auio, (uintptr_t)bufptr, iosize);
 			error = VNOP_WRITE(svp, auio, 0, context);
 			if (error) {
@@ -809,17 +839,23 @@ out:
 	if (creator) {
 		if (error == 0) {
 			vnode_lock(svp);
-			svp->v_flag |= VISNAMEDSTREAM;
+			/* VISSHADOW would be set later on anyway, so we set it now */
+			svp->v_flag |= (VISNAMEDSTREAM | VISSHADOW);
 			wakeup((caddr_t)&svp->v_parent);
 			vnode_unlock(svp);
 		} else {
-			/* On post create errors, get rid of the shadow file. This
-			 * way, if there is another process waiting for initialization
-			 * of the shadow file by the current process, it will wake up
-			 * and retry by creating and initializing the shadow file again.
+			/* On post create errors, get rid of the shadow file.  This 
+			 * way if there is another process waiting for initialization 
+			 * of the shadowfile by the current process will wake up and 
+			 * retry by creating and initializing the shadow file again.
+			 * Also add the VISSHADOW bit here to indicate we're done operating
+			 * on this vnode.
 			 */
-			(void) vnode_relenamedstream(vp, svp, context);
+			(void)vnode_relenamedstream(vp, svp, context);
+			vnode_lock (svp);
+			svp->v_flag |= VISSHADOW;
 			wakeup((caddr_t)&svp->v_parent);
+			vnode_unlock(svp);
 		}
 	}
 
@@ -862,11 +898,14 @@ default_makenamedstream(vnode_t vp, vnode_t *svpp, const char *name, vfs_context
 		vnode_t svp = *svpp;
 
 		vnode_lock(svp);
-		svp->v_flag |= VISNAMEDSTREAM;
+		/* If we're the creator, mark it as a named stream */
+		svp->v_flag |= (VISNAMEDSTREAM | VISSHADOW);
 		/* Wakeup any waiters on the v_parent channel */
 		wakeup((caddr_t)&svp->v_parent);
 		vnode_unlock(svp);
+
 	}
+
 	return (error);
 }
 
@@ -892,7 +931,7 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 	vnode_t  sdvp = NULLVP;
 	struct componentname  cn;
 	struct vnode_attr  va;
-	char tmpname[48];
+	char tmpname[80];
 	uint32_t  tmp_fsid;
 	int  error;
 
@@ -913,8 +952,8 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 	}
 
 	/* Create the shadow stream directory. */
-	snprintf(tmpname, sizeof(tmpname), ".vfs_rsrc_streams_%x%x",
-	         (unsigned int)rootvnode, shadow_sequence);
+	snprintf(tmpname, sizeof(tmpname), ".vfs_rsrc_streams_%p%x",
+	         (void*)rootvnode, shadow_sequence);
 	bzero(&cn, sizeof(cn));
 	cn.cn_nameiop = LOOKUP;
 	cn.cn_flags = ISLASTCN;
@@ -1136,15 +1175,13 @@ baddir:
  */
 
 
-#pragma options align=mac68k
-
 #define FINDERINFOSIZE	32
 
 typedef struct apple_double_entry {
 	u_int32_t   type;     /* entry type: see list, 0 invalid */ 
 	u_int32_t   offset;   /* entry data offset from the beginning of the file. */
  	u_int32_t   length;   /* entry data length in bytes. */
-} apple_double_entry_t;
+} __attribute__((aligned(2), packed)) apple_double_entry_t;
 
 
 typedef struct apple_double_header {
@@ -1155,7 +1192,7 @@ typedef struct apple_double_header {
 	apple_double_entry_t   entries[2];  /* 'finfo' & 'rsrc' always exist */
 	u_int8_t    finfo[FINDERINFOSIZE];  /* Must start with Finder Info (32 bytes) */
 	u_int8_t    pad[2];        /* get better alignment inside attr_header */
-} apple_double_header_t;
+} __attribute__((aligned(2), packed)) apple_double_header_t;
 
 #define ADHDRSIZE  (4+4+16+2)
 
@@ -1166,7 +1203,7 @@ typedef struct attr_entry {
 	u_int16_t   flags;
 	u_int8_t    namelen;
 	u_int8_t    name[1];    /* NULL-terminated UTF-8 name (up to 128 bytes max) */
-} attr_entry_t;
+} __attribute__((aligned(2), packed)) attr_entry_t;
 
 
 /* Header + entries must fit into 64K.  Data may extend beyond 64K. */
@@ -1180,7 +1217,7 @@ typedef struct attr_header {
 	u_int32_t   reserved[3];
 	u_int16_t   flags;
 	u_int16_t   num_attrs;
-} attr_header_t;
+} __attribute__((aligned(2), packed)) attr_header_t;
 
 
 /* Empty Resource Fork Header */
@@ -1202,13 +1239,11 @@ typedef struct rsrcfork_header {
 	u_int16_t    mh_Types;
 	u_int16_t    mh_Names;
 	u_int16_t    typeCount;
-} rsrcfork_header_t;
+} __attribute__((aligned(2), packed)) rsrcfork_header_t;
 
 #define RF_FIRST_RESOURCE    256
 #define RF_NULL_MAP_LENGTH    30
 #define RF_EMPTY_TAG  "This resource fork intentionally left blank   "
-
-#pragma options align=reset
 
 /* Runtime information about the attribute file. */
 typedef struct attr_info {
@@ -1864,6 +1899,9 @@ out:
 			(void) vnode_setattr(vp, &va, context);
 		}
 	}
+	
+	post_event_if_success(vp, error, NOTE_ATTRIB);
+
 	return (error);
 }
 
@@ -2083,6 +2121,9 @@ out:
 			(void) vnode_setattr(vp, &va, context);
 		}
 	}
+
+	post_event_if_success(vp, error, NOTE_ATTRIB);
+
 	return (error);
 	
 }
@@ -2112,6 +2153,8 @@ default_listxattr(vnode_t vp, uio_t uio, size_t *size, __unused int options, vfs
 		return (error);
 	}
 	if ((error = get_xattrinfo(xvp, 0, &ainfo, context))) {
+		if (error == ENOATTR)
+			error = 0;
 		close_xattrfile(xvp, FREAD, context);
 		return (error);
 	}
@@ -2182,6 +2225,70 @@ out:
 	close_xattrfile(xvp, FREAD, context);
 
 	return (error);
+}
+
+/*
+ * Check the header of a ._ file to verify that it is in fact an Apple Double
+ * file. Returns 0 if the header is valid, non-zero if invalid.
+ */
+int check_appledouble_header(vnode_t vp, vfs_context_t ctx)
+{
+	int error = 0;	
+	attr_info_t ainfo;
+	struct vnode_attr va;
+	uio_t auio = NULL;
+	void *buffer = NULL;
+	int iosize;
+	
+	ainfo.filevp = vp;
+	ainfo.context = ctx;
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_data_size);
+	if ((error = vnode_getattr(vp, &va, ctx))) {
+		goto out;
+	}
+	ainfo.filesize = va.va_data_size;
+
+	iosize = MIN(ATTR_MAX_HDR_SIZE, ainfo.filesize);
+	if (iosize == 0) {
+		error = ENOATTR;
+		goto out;
+	}
+	ainfo.iosize = iosize;
+
+	MALLOC(buffer, void *, iosize, M_TEMP, M_WAITOK);
+	if (buffer == NULL) {
+		error = ENOMEM;
+		goto out;
+	}
+	
+	auio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ);
+	uio_addiov(auio, (uintptr_t)buffer, iosize);
+
+	/* Read the header */
+	error = VNOP_READ(vp, auio, 0, ctx);
+	if (error) {
+		goto out;
+	}
+	ainfo.rawsize = iosize - uio_resid(auio);
+	ainfo.rawdata = (u_int8_t *)buffer;
+
+	error = check_and_swap_apple_double_header(&ainfo);
+	if (error) {
+		goto out;
+	}
+
+	/* If we made it here, then the header is ok */
+
+out:
+	if (auio) {
+		uio_free(auio);
+	}
+	if (buffer) {
+		FREE(buffer, M_TEMP);
+	}
+
+	return error;
 }
 
 static int
@@ -2289,8 +2396,10 @@ lookup:
 			error = vn_create(dvp, &nd.ni_vp, &nd.ni_cnd, &va,
 			                  VN_CREATE_NOAUTH | VN_CREATE_NOINHERIT | VN_CREATE_NOLABEL,
 			                  context);
-			if (error == 0)
-			        xvp = nd.ni_vp;
+			if (error)
+				error = ENOATTR;
+			else
+				xvp = nd.ni_vp;
 		}
 		nameidone(&nd);
 		if (dvp != vp) {
@@ -2299,10 +2408,10 @@ lookup:
 		if (error)
 		        goto out;
 	} else {
-	        if ((error = namei(&nd))) {
-		        nd.ni_dvp = NULLVP;
+		if ((error = namei(&nd))) {
+			nd.ni_dvp = NULLVP;
 			error = ENOATTR;
-		        goto out;
+			goto out;
 		}
 	        xvp = nd.ni_vp;
 		nameidone(&nd);
@@ -2368,6 +2477,8 @@ lookup:
 
 		locktype = (fileflags & O_EXLOCK) ? F_WRLCK : F_RDLCK;
 		error = lock_xattrfile(xvp, locktype, context);
+		if (error)
+			error = ENOATTR;
 	}
 out:
 	if (dvp && (dvp != vp)) {
@@ -2508,7 +2619,7 @@ get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t conte
 		goto bail;
 	}
 
-	auio = uio_create(1, 0, UIO_SYSSPACE32, UIO_READ);
+	auio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ);
 	uio_addiov(auio, (uintptr_t)buffer, iosize);
 
 	/* Read the file header. */
@@ -2575,7 +2686,7 @@ get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t conte
 
 
 				/* Read the system data which starts at byte 16 */
-				rf_uio = uio_create(1, 0, UIO_SYSSPACE32, UIO_READ);
+				rf_uio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ);
 				uio_addiov(rf_uio, (uintptr_t)systemData, sizeof(systemData));
 				uio_setoffset(rf_uio, filehdr->entries[i].offset + 16);
 				rf_err = VNOP_READ(xvp, rf_uio, 0, context);
@@ -2663,7 +2774,7 @@ get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t conte
 			attrhdr->num_attrs   = 0;
 	
 			/* Push out new header */
-			uio_reset(auio, 0, UIO_SYSSPACE32, UIO_WRITE);
+			uio_reset(auio, 0, UIO_SYSSPACE, UIO_WRITE);
 			uio_addiov(auio, (uintptr_t)filehdr, writesize);
 	
 			swap_adhdr(filehdr);	/* to big endian */
@@ -2723,7 +2834,7 @@ create_xattrfile(vnode_t xvp, u_int32_t fileid, vfs_context_t context)
 	bzero(buffer, ATTR_BUF_SIZE);
 
 	xah = (attr_header_t *)buffer;
-	auio = uio_create(1, 0, UIO_SYSSPACE32, UIO_WRITE);
+	auio = uio_create(1, 0, UIO_SYSSPACE, UIO_WRITE);
 	uio_addiov(auio, (uintptr_t)buffer, ATTR_BUF_SIZE);
 	rsrcforksize = sizeof(rsrcfork_header_t);
 	rsrcforkhdr = (rsrcfork_header_t *) ((char *)buffer + ATTR_BUF_SIZE - rsrcforksize);
@@ -2787,7 +2898,7 @@ write_xattrinfo(attr_info_t *ainfop)
 	uio_t auio;
 	int error;
 
-	auio = uio_create(1, 0, UIO_SYSSPACE32, UIO_WRITE);
+	auio = uio_create(1, 0, UIO_SYSSPACE, UIO_WRITE);
 	uio_addiov(auio, (uintptr_t)ainfop->filehdr, ainfop->iosize);
 
 	swap_adhdr(ainfop->filehdr);
@@ -2960,7 +3071,7 @@ shift_data_down(vnode_t xvp, off_t start, size_t len, off_t delta, vfs_context_t
 	size_t chunk, orig_chunk;
 	char *buff;
 	off_t pos;
-	ucred_t ucred = vfs_context_ucred(context);
+	kauth_cred_t ucred = vfs_context_ucred(context);
 	proc_t p = vfs_context_proc(context);
     
 	if (delta == 0 || len == 0) {
@@ -2992,7 +3103,7 @@ shift_data_down(vnode_t xvp, off_t start, size_t len, off_t delta, vfs_context_t
 			break;
 		}
 		
-		if ((pos - chunk) < start) {
+		if ((pos - (off_t)chunk) < start) {
 			chunk = pos - start;
 	    
 			if (chunk == 0) {   // we're all done
@@ -3014,7 +3125,7 @@ shift_data_up(vnode_t xvp, off_t start, size_t len, off_t delta, vfs_context_t c
 	char *buff;
 	off_t pos;
 	off_t end;
-	ucred_t ucred = vfs_context_ucred(context);
+	kauth_cred_t ucred = vfs_context_ucred(context);
 	proc_t p = vfs_context_proc(context);
     
 	if (delta == 0 || len == 0) {
@@ -3047,7 +3158,7 @@ shift_data_up(vnode_t xvp, off_t start, size_t len, off_t delta, vfs_context_t c
 			break;
 		}
 		
-		if ((pos + chunk) > end) {
+		if ((pos + (off_t)chunk) > end) {
 			chunk = end - pos;
 	    
 			if (chunk == 0) {   // we're all done

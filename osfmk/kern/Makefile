@@ -12,6 +12,7 @@ DATAFILES =
 EXPORT_ONLY_FILES = \
 	affinity.h \
 	assert.h \
+	audit_sessionport.h \
 	clock.h \
 	cpu_number.h \
 	cpu_data.h \
@@ -19,6 +20,7 @@ EXPORT_ONLY_FILES = \
 	etimer.h \
 	ipc_mig.h \
 	kalloc.h \
+	kext_alloc.h \
 	kern_types.h \
 	lock.h \
 	locks.h \

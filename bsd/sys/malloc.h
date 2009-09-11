@@ -192,14 +192,20 @@
 #define M_FILEGLOB	99	/* fileglobal */
 #define M_KAUTH		100	/* kauth subsystem */
 #define M_DUMMYNET	101	/* dummynet */
+#ifndef __LP64__
 #define M_UNSAFEFS	102	/* storage for vnode lock state for unsafe FS */
+#endif /* __LP64__ */
 #define M_MACPIPELABEL	103	/* MAC pipe labels */
 #define M_MACTEMP	104	/* MAC framework */
 #define M_SBUF		105	/* string buffers */
 #define M_EXTATTR	106	/* extended attribute */
 #define M_LCTX		107	/* process login context */
+/* M_TRAFFIC_MGT 108 */
+#if HFS_COMPRESSION
+#define M_DECMPFS_CNODE	109	/* decmpfs cnode structures */
+#endif /* HFS_COMPRESSION */
 
-#define	M_LAST		109	/* Must be last type + 1 */
+#define	M_LAST		110	/* Must be last type + 1 */
 
 #else /* BSD_KERNEL_PRIVATE */
 

@@ -32,32 +32,6 @@
  * Version 2.0.
  */
 
-
-/* This list is used in IOStartIOKit.cpp to declare fake kmod_info
- * structs for kext dependencies that are built into the kernel.
- * Empty version strings get replaced with osrelease at runtime.
- */
-const char * gIOKernelKmods =
-"{"
-   "'com.apple.kernel'                         = '';"
-   "'com.apple.kpi.bsd'                        = '';"
-   "'com.apple.kpi.dsep'                       = '';"
-   "'com.apple.kpi.iokit'                      = '';"
-   "'com.apple.kpi.libkern'                    = '';"
-   "'com.apple.kpi.mach'                       = '';"
-   "'com.apple.kpi.unsupported'                = '';"
-   "'com.apple.iokit.IONVRAMFamily'            = '';"
-   "'com.apple.driver.AppleNMI'                = '';"
-   "'com.apple.iokit.IOSystemManagementFamily' = '';"
-   "'com.apple.iokit.ApplePlatformFamily'      = '';"
-   "'com.apple.kernel.6.0'                     = '7.9.9';"
-   "'com.apple.kernel.bsd'                     = '7.9.9';"
-   "'com.apple.kernel.iokit'                   = '7.9.9';"
-   "'com.apple.kernel.libkern'                 = '7.9.9';"
-   "'com.apple.kernel.mach'                    = '7.9.9';"
-"}";
-
-
 const char * gIOKernelConfigTables =
 "("
 "   {"
@@ -87,3 +61,11 @@ const char * gIOKernelConfigTables =
 ")";
 
 
+/* This stuff is no longer used at all but was exported in prior
+ * releases, so we'll keep them around for PPC/i386 only.
+ * See libkern's OSKext.cpp for other symbols, which have been moved
+ * there for sanity.
+ */
+#if __ppc__ || __i386__
+const char * gIOKernelKmods = "";
+#endif /* __ppc__ || __i386__ */

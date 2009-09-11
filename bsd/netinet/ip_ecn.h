@@ -67,4 +67,4 @@
 
 extern void ip_ecn_ingress(int, u_int8_t *, const u_int8_t *);
 extern void ip_ecn_egress(int, const u_int8_t *, u_int8_t *);
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */

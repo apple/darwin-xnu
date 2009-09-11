@@ -29,8 +29,8 @@
 #define _I386_CPU_THREADS_H_
 
 #include <i386/cpu_data.h>
-#include <i386/mp.h>
 #include <i386/cpu_topology.h>
+#include <i386/mp.h>
 
 /*
  * These are defined here rather than in cpu_topology.h so as to keep

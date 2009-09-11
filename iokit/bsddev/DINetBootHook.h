@@ -77,4 +77,4 @@ int di_root_image(const char *path, char devname[], dev_t *dev_p);
 
 #endif /* __APPLE_API_PRIVATE */
 
-#endif __DINETBOOKHOOK_H__
+#endif /* __DINETBOOKHOOK_H__ */

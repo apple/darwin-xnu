@@ -63,6 +63,8 @@
 #ifndef __FIFOFS_FOFO_H__
 #define __FIFOFS_FOFO_H__
 
+__BEGIN_DECLS
+
 #ifdef BSD_KERNEL_PRIVATE
 
 
@@ -83,25 +85,22 @@ struct fifoinfo {
 #define FIFO_CREATEWAIT	2
 #define FIFO_CREATED	4
 
+int	fifo_close_internal (vnode_t, int, vfs_context_t, int);
+int fifo_freespace(struct vnode *vp, long *count);
+int fifo_charcount(struct vnode *vp, int *count);
 
+#endif /* BSD_KERNEL_PRIVATE */
+#ifdef KERNEL
 /*
  * Prototypes for fifo operations on vnodes.
  */
 int	fifo_ebadf(void *);
 
-int	fifo_lookup (struct vnop_lookup_args *);
 #define fifo_create (int (*) (struct  vnop_create_args *))err_create
 #define fifo_mknod (int (*) (struct  vnop_mknod_args *))err_mknod
-int	fifo_open (struct vnop_open_args *);
-int	fifo_close (struct vnop_close_args *);
-int	fifo_close_internal (vnode_t, int, vfs_context_t, int);
 #define fifo_access (int (*) (struct  vnop_access_args *))fifo_ebadf
 #define fifo_getattr (int (*) (struct  vnop_getattr_args *))fifo_ebadf
 #define fifo_setattr (int (*) (struct  vnop_setattr_args *))fifo_ebadf
-int	fifo_read (struct vnop_read_args *);
-int	fifo_write (struct vnop_write_args *);
-int	fifo_ioctl (struct vnop_ioctl_args *);
-int	fifo_select (struct vnop_select_args *);
 #define	fifo_revoke nop_revoke
 #define fifo_mmap (int (*) (struct  vnop_mmap_args *))err_mmap
 #define fifo_fsync (int (*) (struct  vnop_fsync_args *))nullop
@@ -113,16 +112,26 @@ int	fifo_select (struct vnop_select_args *);
 #define fifo_symlink (int (*) (struct  vnop_symlink_args *))err_symlink
 #define fifo_readdir (int (*) (struct  vnop_readdir_args *))err_readdir
 #define fifo_readlink (int (*) (struct  vnop_readlink_args *))err_readlink
-int	fifo_inactive (struct  vnop_inactive_args *);
 #define fifo_reclaim (int (*) (struct  vnop_reclaim_args *))nullop
 #define fifo_strategy (int (*) (struct  vnop_strategy_args *))err_strategy
-int	fifo_pathconf (struct vnop_pathconf_args *);
-int	fifo_advlock (struct vnop_advlock_args *);
 #define fifo_valloc (int (*) (struct  vnop_valloc_args *))err_valloc
 #define fifo_vfree (int (*) (struct  vnop_vfree_args *))err_vfree
 #define fifo_bwrite (int (*) (struct  vnop_bwrite_args *))nullop
 #define fifo_blktooff (int (*) (struct vnop_blktooff_args *))err_blktooff
 
-#endif /* BSD_KERNEL_PRIVATE */
+int	fifo_lookup (struct vnop_lookup_args *);
+int	fifo_open (struct vnop_open_args *);
+int	fifo_close (struct vnop_close_args *);
+int	fifo_read (struct vnop_read_args *);
+int	fifo_write (struct vnop_write_args *);
+int	fifo_ioctl (struct vnop_ioctl_args *);
+int	fifo_select (struct vnop_select_args *);
+int	fifo_inactive (struct  vnop_inactive_args *);
+int	fifo_pathconf (struct vnop_pathconf_args *);
+int	fifo_advlock (struct vnop_advlock_args *);
+
+#endif /* KERNEL */
+
+__END_DECLS
 
 #endif /* __FIFOFS_FOFO_H__ */

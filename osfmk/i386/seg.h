@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -55,9 +55,12 @@
  */
 #ifndef	_I386_SEG_H_
 #define	_I386_SEG_H_
-
+#ifdef MACH_KERNEL
 #include <mach_kdb.h>
-#ifndef ASSEMBLER
+#else
+#define	MACH_KDB 0
+#endif	/* MACH_KERNEL */
+#ifndef __ASSEMBLER__
 #include <stdint.h>
 #include <mach/vm_types.h>
 #include <architecture/i386/sel.h>
@@ -97,9 +100,13 @@ selector_to_sel(uint16_t selector)
 					/* kernel ldt entries */
 
 #if	MACH_KDB
-#define	GDTSZ		19
+#define	GDTSZ		20
 #else
-#define	GDTSZ		18
+#define	GDTSZ		19
+#endif
+
+#ifdef __x86_64__
+#define PROT_MODE_GDT_SIZE 48 /* size of prot_mode_gdt in bytes */
 #endif
 
 /*
@@ -150,6 +157,16 @@ struct real_gate64 {
 			reserved32:32;		/* reserved/zero */
 };
 
+#define MAKE_REAL_DESCRIPTOR(base,lim,gran,acc) { \
+	.limit_low = lim & 0xffff, \
+	.limit_high = (lim >> 16) & 0xf, \
+	.base_low = base & 0xffff, \
+	.base_med = (base >> 16) & 0xff, \
+	.base_high = (base >> 24) & 0xff, \
+	.access = acc, \
+	.granularity = gran \
+}
+
 /*
  * We build descriptors and gates in a 'fake' format to let the
  * fields be contiguous.  We shuffle them into the real format
@@ -164,7 +181,7 @@ struct fake_descriptor {
 	uint32_t	access:8;		/* access */
 };
 struct fake_descriptor64 {
-	uint32_t	offset[2];		/* offset [0..31,32..63] */
+	uint64_t	offset64;		/* offset [0..31,32..63] */
 	uint32_t	lim_or_seg:20;		/* limit */
 						/* or segment, for gate */
 	uint32_t	size_or_IST:4;		/* size/granularity */
@@ -172,22 +189,22 @@ struct fake_descriptor64 {
 	uint32_t	access:8;		/* access */
 	uint32_t	reserved:32;		/* reserved/zero */
 };
+#ifdef __i386__
 #define	FAKE_UBER64(addr32)	{ (uint32_t) (addr32), KERNEL_UBER_BASE_HI32 }
 #define	FAKE_COMPAT(addr32)	{ (uint32_t) (addr32), 0x0 }
 #define	UBER64(addr32)		((addr64_t) (uintptr_t)addr32 + KERNEL_UBER_BASE)
+#endif
 
 /*
  * Boot-time data for master (or only) CPU
  */
 extern struct fake_descriptor	master_idt[IDTSZ];
-extern struct fake_descriptor	master_gdt[GDTSZ];
-extern struct fake_descriptor	master_ldt[LDTSZ];
+extern struct real_descriptor	master_gdt[GDTSZ];
+extern struct real_descriptor	master_ldt[LDTSZ];
 extern struct i386_tss		master_ktss;
 extern struct sysenter_stack	master_sstk;
 
 extern struct fake_descriptor64	master_idt64[IDTSZ];
-extern struct fake_descriptor64	kernel_ldt_desc64;
-extern struct fake_descriptor64	kernel_tss_desc64;
 extern struct x86_64_tss	master_ktss64;
 
 __BEGIN_DECLS
@@ -265,6 +282,7 @@ __END_DECLS
 
 #define NULL_SEG	0
 
+#ifdef __i386__
 /*
  * User descriptors for MACH - 32-bit flat address space
  */
@@ -287,7 +305,7 @@ __END_DECLS
 /*
  * Kernel descriptors for MACH - 32-bit flat address space.
  */
-#define	KERNEL_CS	0x08		/* kernel code */
+#define	KERNEL32_CS	0x08		/* kernel code */
 #define	KERNEL_DS	0x10		/* kernel data */
 #define	KERNEL_LDT	0x18		/* master LDT */
 #define	KERNEL_LDT_2	0x20		/* master LDT expanded for 64-bit */
@@ -304,28 +322,52 @@ __END_DECLS
 #define	USER_TSS	0x60
 #define	FPE_CS		0x68
 
-#define USER_WINDOW_SEL	0x70		/* window for copyin/copyout */
-#define PHYS_WINDOW_SEL	0x78		/* window for copyin/copyout */
+#else // __x86_64__
 
-#define	KERNEL64_CS	0x80		/* kernel 64-bit code */
-#define	KERNEL64_SS	0x88		/* kernel 64-bit (syscall) stack */
+/*
+ * Kernel descriptors for MACH - 64-bit flat address space.
+ */
+#define KERNEL64_CS 	0x08		/* 1:  First entry */
+#define SYSENTER_CS 	0x0b 		/*     alias to KERNEL64_CS */
+#define	KERNEL64_SS	0x10		/* 2:  must be SYSENTER_CS + 8  */
+#define USER_CS		0x1b		/* 3:  must be SYSENTER_CS + 16 */
+#define USER_DS		0x23		/* 4:  must be SYSENTER_CS + 24 */
+#define USER64_CS	0x2b		/* 5:  must be SYSENTER_CS + 32 */
+#define USER64_DS	USER_DS		/*     nothing special about 64bit DS */
+#define KERNEL_LDT	0x30		/* 6:  */
+					/* 7:  other 8 bytes of KERNEL_LDT */
+#define KERNEL_TSS	0x40		/* 8:  */
+					/* 9:  other 8 bytes of KERNEL_TSS */
+#define KERNEL32_CS	0x50		/* 10: */
+#define USER_LDT	0x58		/* 11: */
+					/* 12: other 8 bytes of USER_LDT */
+#define KERNEL_DS	0x80		/* 16: */
+#define	SYSCALL_CS	0x8f		/* 17: 64-bit syscall pseudo-segment */
 
-#if	MACH_KDB
-#define	DEBUG_TSS	0x90		/* debug TSS (uniprocessor) */
 #endif
 
-#ifndef __ASSEMBLER__
-struct __gdt_desc_struct {
-  unsigned short size;
-  unsigned long address __attribute__((packed));
-  unsigned short pad;
-} __attribute__ ((packed));
+#ifdef __i386__
+#define USER_WINDOW_SEL	0x70		/* 14:  window for copyin/copyout */
+#define PHYS_WINDOW_SEL	0x78		/* 15:  window for copyin/copyout */
 
-struct __idt_desc_struct {
-  unsigned short size;
-  unsigned long address __attribute__((packed));
-  unsigned short pad;
-} __attribute__ ((packed));
-#endif /* __ASSEMBLER__ */
+#define	KERNEL64_CS	0x80		/* 16:  kernel 64-bit code */
+#define	KERNEL64_SS	0x88		/* 17:  kernel 64-bit (syscall) stack */
+#else // __x86_64__
+#define SYSENTER_TF_CS	(USER_CS|0x10000)
+#define	SYSENTER_DS	KERNEL64_SS	/* sysenter kernel data segment */
+#endif
+
+#if	MACH_KDB
+#define	DEBUG_TSS	0x90		/* 18:  debug TSS (uniprocessor) */
+#endif
+
+#ifdef __x86_64__
+/*
+ * 64-bit kernel LDT descriptors
+ */
+#define	USER_CTHREAD	0x0f		/* user cthread area */
+#define	USER_SETTABLE	0x1f		/* start of user settable ldt entries */
+#define	USLDTSZ		10		/* number of user settable entries */
+#endif
 
 #endif	/* _I386_SEG_H_ */

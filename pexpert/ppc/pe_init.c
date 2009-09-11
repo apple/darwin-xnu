@@ -101,6 +101,7 @@ int PE_initialize_console( PE_Video * info, int op )
 
 	case kPEEnableScreen:
             initialize_screen(info, op);
+            if (info) PE_state.video = *info;
             kprintf("kPEEnableScreen %d\n",last_console);
             if( last_console != -1)
                 switch_to_old_console( last_console);

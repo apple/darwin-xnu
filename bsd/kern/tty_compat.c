@@ -62,7 +62,15 @@
  */
 
 /*
- * mapping routines for old line discipline (yuck)
+ * Compatibility routines for BSD 4.3 tty ioctl() commands
+ *
+ * The only function externalized from this file is ttcompat() and it is
+ * externalized as private extern to prevent exporting of the symbol when
+ * KEXTs link against the kernel.
+ *
+ * Locks:	All functions in this file assume that the tty_lock()
+ *		is held on the tty structure before these functions are
+ *		called.
  */
 
 #include <sys/param.h>
@@ -76,9 +84,6 @@
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
-
-/* NeXT Move define down here cause COMPAT_43_TTY not valid earlier */
-#if COMPAT_43_TTY || defined(COMPAT_SUNOS)
 
 static int ttcompatgetflags(struct tty *tp);
 static void ttcompatsetflags(struct tty	*tp, struct termios *t);
@@ -152,6 +157,7 @@ ttcompatspeedtab(int speed, struct speedtab *table)
 	return (1); /* 50, min and not hangup */
 }
 
+
 /*
  * ttsetcompat
  *
@@ -167,8 +173,8 @@ ttcompatspeedtab(int speed, struct speedtab *table)
  *		TIOCLSET	->	TIOCSETA
  *
  *	The converted command argument and potentially modified 'term'
- *	argument are returned to the caller, which will then call ttioctl(),
- *	if this function returns successfully.
+ *	argument are returned to ttcompat(), which will then call
+ *	ttioctl_locked(), if this function returns successfully.
  *
  * Parameters	struct tty *tp		The tty on which the operation is
  *					being performed.
@@ -192,11 +198,16 @@ ttcompatspeedtab(int speed, struct speedtab *table)
  *		TIOCLBIC, or TIOCLSET.
  *
  *		All other tp fields will remain unmodifed, since the struct
- *		termious is a local stack copy from ttcompat(), and not the
- *		real thing.  A subsequent call to ttioctl() in ttcompat(),
- *		however, may result in subsequent changes.
+ *		termios is a local stack copy from ttcompat(), and not the
+ *		real thing.  A subsequent call to ttioctl_locked() in
+ *		ttcompat(), however, may result in subsequent changes.
+ *
+ * WARNING:	This compatibility code is not 6/432 clean; it will only
+ *		work for 32 bit processes on 32 bit kernels or 64 bit
+ *		processes on 64 bit kernels.  We are not addressing this
+ *		due to <rdar://6904053>.
  */
-__private_extern__ int
+static int
 ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term)
 {
 	switch (*com) {
@@ -314,8 +325,8 @@ ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term)
  * ttcompat
  *
  * Description:	For 'set' commands, convert the command and arguments as
- *		necessary, and call ttioctl(), returning the result as
- *		our result; for 'get' commands, obtain the requested data
+ *		necessary, and call ttioctl_locked(), returning the result
+ *		as our result; for 'get' commands, obtain the requested data
  *		from the appropriate source, and return it in the expected
  *		format.  If the command is not recognized, return EINVAL.
  *
@@ -336,12 +347,12 @@ ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term)
  *					terminal with no associated session,
  *					or for which there is a session, but
  *					no session leader.
- *		EIOCTL			If the command cannot be handled at
+ *		ENOTTY			If the command cannot be handled at
  *					this layer, this will be returned.
- *		*			Any value returned by ttioctl(), if a
- *					set command is requested.
+ *		*			Any value returned by ttioctl_locked(),
+ *					if a set command is requested.
  *
- * NOTES:	The process pointer may be a proxy on whose behalf we are
+ * Notes:	The process pointer may be a proxy on whose behalf we are
  *		operating, so it is not safe to simply use current_process()
  *		instead.
  */
@@ -368,7 +379,7 @@ ttcompat(struct tty *tp, u_long com, caddr_t data, int flag, struct proc *p)
 		term = tp->t_termios;
 		if ((error = ttsetcompat(tp, &com, data, &term)) != 0)
 			return error;
-		return ttioctl(tp, com, (caddr_t) &term, flag, p);
+		return ttioctl_locked(tp, com, (caddr_t) &term, flag, p);
 	}
 	case TIOCGETP:
 		/*
@@ -450,7 +461,7 @@ ttcompat(struct tty *tp, u_long com, caddr_t data, int flag, struct proc *p)
 	    {
 		int ldisczero = 0;
 
-		return (ttioctl(tp, TIOCSETD, 
+		return (ttioctl_locked(tp, TIOCSETD, 
 		    *(int *)data == 2 ? (caddr_t)&ldisczero : data, flag, p));
 	    }
 
@@ -459,7 +470,7 @@ ttcompat(struct tty *tp, u_long com, caddr_t data, int flag, struct proc *p)
 		 * Become the console device.
 		 */
 		*(int *)data = 1;
-		return (ttioctl(tp, TIOCCONS, data, flag, p));
+		return (ttioctl_locked(tp, TIOCCONS, data, flag, p));
 
 	case TIOCGSID:
 		/*
@@ -741,4 +752,3 @@ ttcompatsetlflags(struct tty *tp, struct termios *t)
 	t->c_lflag = lflag;
 	t->c_cflag = cflag;
 }
-#endif	/* COMPAT_43_TTY || COMPAT_SUNOS */

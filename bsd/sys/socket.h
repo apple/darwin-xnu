@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -72,7 +72,7 @@
 #ifndef _SYS_SOCKET_H_
 #define	_SYS_SOCKET_H_
 
-#include <sys/_types.h>
+#include <sys/types.h>
 #include <sys/cdefs.h>
 #include <machine/_param.h>
 
@@ -200,6 +200,8 @@ struct iovec {
 #define SO_RESTRICT_DENYIN		0x00000001	/* flag for SO_RESTRICTIONS - deny inbound */
 #define SO_RESTRICT_DENYOUT		0x00000002	/* flag for SO_RESTRICTIONS - deny outbound */
 #define SO_RESTRICT_DENYSET		0x80000000	/* flag for SO_RESTRICTIONS - deny has been set */
+#define SO_RANDOMPORT   0x1082  /* APPLE: request local port randomization */
+#define SO_NP_EXTENSIONS	0x1083	/* To turn off some POSIX behavior */
 #endif
 #ifdef PRIVATE
 #define	SO_EXECPATH	0x1085 		/* Application Firewall Socket option */
@@ -221,6 +223,27 @@ struct	accept_filter_arg {
 	char	af_name[16];
 	char	af_arg[256-16];
 };
+#endif
+
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#ifdef __APPLE__
+
+/*
+ * Structure to control non-portable Sockets extension to POSIX  
+ */
+struct so_np_extensions {
+	u_int32_t	npx_flags;
+	u_int32_t	npx_mask;
+};
+
+#define SONPX_SETOPTSHUT	0x000000001     /* flag for allowing setsockopt after shutdown */
+
+
+#ifdef KERNEL_PRIVATE
+#define SONPX_MASK_VALID		(SONPX_SETOPTSHUT)
+#endif
+
+#endif
 #endif
 
 /*
@@ -293,7 +316,8 @@ struct	accept_filter_arg {
 #ifndef __APPLE__
 #define	AF_NETGRAPH	32		/* Netgraph sockets */
 #endif
-#define	AF_MAX		37
+#define AF_IEEE80211    37              /* IEEE 802.11 protocol */
+#define	AF_MAX		38
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
@@ -507,19 +531,50 @@ struct msghdr {
 };
 
 #ifdef KERNEL
-/* LP64 version of struct msghdr.  all pointers 
- * grow when we're dealing with a 64-bit process.
- * WARNING - keep in sync with struct msghdr
+/*
+ * In-kernel representation of "struct msghdr" from
+ * userspace. Has enough precision for 32-bit or
+ * 64-bit clients, but does not need to be packed.
  */
 
 struct user_msghdr {
 	user_addr_t	msg_name;		/* optional address */
 	socklen_t	msg_namelen;		/* size of address */
-	user_addr_t	msg_iov __attribute((aligned(8)));		/* scatter/gather array */
+	user_addr_t	msg_iov;		/* scatter/gather array */
 	int		msg_iovlen;		/* # elements in msg_iov */
-	user_addr_t	msg_control __attribute((aligned(8)));		/* ancillary data, see below */
+	user_addr_t	msg_control;		/* ancillary data, see below */
 	socklen_t	msg_controllen;		/* ancillary data buffer len */
 	int		msg_flags;		/* flags on received message */
+};
+
+/*
+ * LP64 user version of struct msghdr.
+ * WARNING - keep in sync with struct msghdr
+ */
+
+struct user64_msghdr {
+	user64_addr_t	msg_name;		/* optional address */
+	socklen_t	msg_namelen;		/* size of address */
+	user64_addr_t	msg_iov;		/* scatter/gather array */
+	int		msg_iovlen;		/* # elements in msg_iov */
+	user64_addr_t	msg_control;		/* ancillary data, see below */
+	socklen_t	msg_controllen;		/* ancillary data buffer len */
+	int		msg_flags;		/* flags on received message */
+};
+
+/*
+ * ILP32 user version of struct msghdr.
+ * WARNING - keep in sync with struct msghdr
+ */
+
+struct user32_msghdr {
+	user32_addr_t	msg_name;	/* optional address */
+	socklen_t	msg_namelen;	/* size of address */
+	user32_addr_t	msg_iov;	/* scatter/gather array */
+	int		msg_iovlen;	/* # elements in msg_iov */
+	user32_addr_t	msg_control;	/* ancillary data, see below */
+	socklen_t	msg_controllen;	/* ancillary data buffer len */
+	int		msg_flags;	/* flags on received message */
 };
 
 #endif // KERNEL
@@ -598,15 +653,30 @@ struct cmsgcred {
 #define	CMSG_DATA(cmsg)		((unsigned char *)(cmsg) + \
 				 __DARWIN_ALIGN32(sizeof(struct cmsghdr)))
 
-/* given pointer to struct cmsghdr, return pointer to next cmsghdr */
-#define	CMSG_NXTHDR(mhdr, cmsg)	\
-	(((unsigned char *)(cmsg) + __DARWIN_ALIGN32((uint32_t)(cmsg)->cmsg_len) + \
-	  __DARWIN_ALIGN32(sizeof(struct cmsghdr)) > \
-	    (unsigned char *)(mhdr)->msg_control + (mhdr)->msg_controllen) ? \
-	    (struct cmsghdr *)0L /* NULL */ : \
-	    (struct cmsghdr *)((unsigned char *)(cmsg) + __DARWIN_ALIGN32((uint32_t)(cmsg)->cmsg_len)))
+/*
+ * RFC 2292 requires to check msg_controllen, in case that the kernel returns
+ * an empty list for some reasons.
+ */
+#define CMSG_FIRSTHDR(mhdr) \
+        ((mhdr)->msg_controllen >= sizeof(struct cmsghdr) ? \
+         (struct cmsghdr *)(mhdr)->msg_control : \
+         (struct cmsghdr *)0L)
 
-#define	CMSG_FIRSTHDR(mhdr)	((struct cmsghdr *)(mhdr)->msg_control)
+
+/* 
+ * Given pointer to struct cmsghdr, return pointer to next cmsghdr
+ * RFC 2292 says that CMSG_NXTHDR(mhdr, NULL) is equivalent to CMSG_FIRSTHDR(mhdr)
+ */
+#define	CMSG_NXTHDR(mhdr, cmsg)						\
+	((char *)(cmsg) == (char *)0L ? CMSG_FIRSTHDR(mhdr) :		\
+	 ((((unsigned char *)(cmsg) +					\
+	    __DARWIN_ALIGN32((__uint32_t)(cmsg)->cmsg_len) +		\
+	    __DARWIN_ALIGN32(sizeof(struct cmsghdr))) >			\
+	    ((unsigned char *)(mhdr)->msg_control +			\
+	     (mhdr)->msg_controllen)) ?					\
+	  (struct cmsghdr *)0L /* NULL */ :				\
+	  (struct cmsghdr *)((unsigned char *)(cmsg) +			\
+	 		    __DARWIN_ALIGN32((__uint32_t)(cmsg)->cmsg_len))))
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /* RFC 2292 additions */
@@ -614,7 +684,7 @@ struct cmsgcred {
 #define	CMSG_LEN(l)		(__DARWIN_ALIGN32(sizeof(struct cmsghdr)) + (l))
 
 #ifdef KERNEL
-#define	CMSG_ALIGN(n)	__DARWIN_ALIGN(n)
+#define	CMSG_ALIGN(n)	__DARWIN_ALIGN32(n)
 #endif
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
@@ -667,13 +737,29 @@ struct sf_hdtr {
 
 #ifdef KERNEL
 
+/* In-kernel representation */
 struct user_sf_hdtr {
-	user_addr_t headers __attribute((aligned(8)));	/* pointer to an array of header struct iovec's */
+	user_addr_t headers;	/* pointer to an array of header struct iovec's */
 	int hdr_cnt;		/* number of header iovec's */
-	user_addr_t trailers __attribute((aligned(8)));	/* pointer to an array of trailer struct iovec's */
+	user_addr_t trailers;	/* pointer to an array of trailer struct iovec's */
 	int trl_cnt;		/* number of trailer iovec's */
 };
 
+/* LP64 user version of struct sf_hdtr */
+struct user64_sf_hdtr {
+	user64_addr_t headers;	/* pointer to an array of header struct iovec's */
+	int hdr_cnt;		/* number of header iovec's */
+	user64_addr_t trailers;	/* pointer to an array of trailer struct iovec's */
+	int trl_cnt;		/* number of trailer iovec's */
+};
+
+/* ILP32 user version of struct sf_hdtr */
+struct user32_sf_hdtr {
+	user32_addr_t headers;	/* pointer to an array of header struct iovec's */
+	int hdr_cnt;		/* number of header iovec's */
+	user32_addr_t trailers;	/* pointer to an array of trailer struct iovec's */
+	int trl_cnt;		/* number of trailer iovec's */
+};
 
 #endif /* KERNEL */
 

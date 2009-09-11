@@ -118,11 +118,25 @@ extern integer_t sprintf(char *buf, const char *fmt, ...) __deprecated;
 
 extern int printf(const char *format, ...) __printflike(1,2);
 
+#if KERNEL_PRIVATE
+int     _consume_printf_args(int, ...);
+#endif
+
+#if CONFIG_NO_PRINTF_STRINGS
+#if KERNEL_PRIVATE
+#define printf(x, ...)  _consume_printf_args( 0, ## __VA_ARGS__ )
+#else
+#define printf(x, ...)  do {} while (0)
+#endif
+#endif
+
 extern void dbugprintf(const char *format, ...) __printflike(1,2);
 
 extern int kdb_printf(const char *format, ...) __printflike(1,2);
 
 extern int kdb_log(const char *format, ...) __printflike(1,2);
+
+extern int kdb_printf_unbuffered(const char *format, ...) __printflike(1,2);
 
 extern void printf_init(void);
 
@@ -139,7 +153,7 @@ _doprnt(
 int
 __doprnt(
 	register const char	*fmt,
-	va_list			*argp,
+	va_list			argp,
 	void			(*putc)(int, void *),
 	void                    *arg,
 	int			radix);
@@ -156,7 +170,11 @@ extern void consdebug_putc(char);
 
 extern void consdebug_log(char);
 
+extern void consdebug_putc_unbuffered(char);
+
 extern void cnputc(char);
+
+extern void cnputc_unbuffered(char);
 
 extern int cngetc(void);
 
@@ -178,7 +196,6 @@ extern void delay(
 		int		n);
 
 
-extern void norma_bootstrap(void);
 
 #if	DIPC
 extern boolean_t	no_bootstrap_task(void);
@@ -194,15 +211,5 @@ user_addr_t get_useraddr(void);
 
 /* symbol lookup */
 struct kmod_info_t;
-
-extern int syms_formataddr(
-		vm_offset_t	addr,
-		char		*out,
-		vm_offset_t	outsize);
-
-extern const char *syms_nameforaddr(
-		vm_offset_t	addr,
-		vm_offset_t	*ofs,
-		kmod_info_t	**kmod);
 
 #endif	/* _MISC_PROTOS_H_ */

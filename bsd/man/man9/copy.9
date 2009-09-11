@@ -1,3 +1,26 @@
+.\"
+.\" Copyright (c) 2008 Apple Inc.  All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this
+.\" file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.\"
 .\"	$NetBSD: copy.9,v 1.2 1996/01/09 03:23:04 thorpej Exp $
 .\"
 .\" Copyright (c) 1996 Jason R. Thorpe.
@@ -34,7 +57,7 @@
 .\"
 .\" $FreeBSD: src/share/man/man9/copy.9,v 1.6.2.5 2001/12/17 11:30:18 ru Exp $
 .\"
-.Dd January 7, 1996
+.Dd October 2, 2008
 .Dt COPY 9
 .Os
 .Sh NAME
@@ -144,21 +167,47 @@ NUL, is returned in
 .Sh RETURN VALUES
 The
 .Nm
-functions return 0 on success or
-.Er EFAULT
-if a bad address is encountered.
-In addition, the
-.Fn copystr ,
+functions return 0 on success or the following error on failure:
+.\" ========
+.Bl -tag -width Er
+.It Bq EFAULT
+If a bad address is encountered. When this error is returned, the contents of the destination buffer (
+.Fa *kaddr
+for
+.Fn copyin ,
+.Fn copyinstr ,
 and
+.Fn copystr ;
+.Fa *uaddr
+for
+.Fn copyout )
+are undefined. For
 .Fn copyinstr
+and
+.Fn copystr ,
+the contents of the
+.Fa *done
+parameter are also undefined on a return of EFAULT.
+.El
+.Pp
+In addition to EFAULT,
+.\" .Fn copystr ,
 .\" .Fn copyinstr ,
 .\" and
 .\" .Fn copyoutstr
-functions return
-.Er ENAMETOOLONG
-if the string is longer than
+.Fn copystr
+and
+.Fn copyinstr
+on failure will return:
+.\" ========
+.Bl -tag -width Er
+.It Bq ENAMETOLONG
+When the string is longer than
 .Pa len
-bytes.
+bytes. On this error return, the destination buffer is not null-terminated, but the
+.Fa *done
+parameter is maintained.
+.EL
 .Sh SEE ALSO
 .Xr fetch 9 ,
 .Xr store 9

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -178,7 +178,7 @@ soo_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 
 	/* Generation of SIGPIPE can be controlled per socket */
 	procp = vfs_context_proc(ctx);
-	if (stat == EPIPE && procp && !(so->so_flags & SOF_NOSIGPIPE))
+	if (stat == EPIPE && !(so->so_flags & SOF_NOSIGPIPE))
 		psignal(procp, SIGPIPE);
 
 	return (stat);
@@ -187,15 +187,10 @@ soo_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 __private_extern__ int
 soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 {
-	struct sockopt sopt;
 	int error = 0;
 	int dropsockref = -1;
-	
-	socket_lock(so, 1);
 
-	sopt.sopt_level = cmd;
-	sopt.sopt_name = (int)data;
-	sopt.sopt_p = p;
+	socket_lock(so, 1);
 
 	/* Call the socket filter's ioctl handler for most ioctls */
 	if (IOCGROUP(cmd) != 'i' && IOCGROUP(cmd) != 'r') {
@@ -282,7 +277,7 @@ soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		/* Always set socket non-blocking for OT */
 		so->so_state |= SS_NBIO;
 		so->so_options |= SO_DONTTRUNC | SO_WANTMORE;
-		so->so_flags |= SOF_NOSIGPIPE;
+		so->so_flags |= SOF_NOSIGPIPE | SOF_NPX_SETOPTSHUT;
 
 		if (cloned_so && so != cloned_so) {
 			/* Flags options */

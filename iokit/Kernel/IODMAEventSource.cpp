@@ -103,7 +103,7 @@ IOReturn IODMAEventSource::startDMACommand(IODMACommand *dmaCommand, IODirection
   return kIOReturnSuccess;
 }
 
-IOReturn IODMAEventSource::stopDMACommand(bool flush, mach_timespec_t *timeout)
+IOReturn IODMAEventSource::stopDMACommand(bool flush, uint64_t timeout)
 {
   if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) return kIOReturnError;
   
@@ -116,6 +116,14 @@ IOReturn IODMAEventSource::queryDMACommand(IODMACommand **dmaCommand, IOByteCoun
   if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) return kIOReturnError;
   
   return dmaController->queryDMACommand(dmaIndex, dmaCommand, transferCount, waitForIdle);
+}
+
+
+IOByteCount IODMAEventSource::getFIFODepth()
+{
+  if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) return kIOReturnError;
+  
+  return dmaController->getFIFODepth(dmaIndex);
 }
 
 

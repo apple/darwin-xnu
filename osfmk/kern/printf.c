@@ -94,9 +94,7 @@
  *	%0m.n	zero-padding
  *	%*.*	width and precision taken from arguments
  *
- *  This version does not implement %f, %e, or %g.  It accepts, but
- *  ignores, an `l' as in %ld, %lo, %lx, and %lu, and therefore will not
- *  work correctly on machines for which sizeof(long) != sizeof(int).
+ *  This version does not implement %f, %e, or %g.
  *
  *  As mentioned, this version does not return any reasonable value.
  *
@@ -186,8 +184,17 @@ static char digs[] = "0123456789abcdef";
 
 
 #if CONFIG_NO_PRINTF_STRINGS
-#undef printf(x, ...)
+/* Prevent CPP from breaking the definition below */
+#undef printf
 #endif
+
+int _consume_printf_args(int a __unused, ...)
+{
+    return 0;
+}
+void _consume_kprintf_args(int a __unused, ...)
+{
+}
 
 static int
 printnum(
@@ -218,7 +225,7 @@ boolean_t	_doprnt_truncates = FALSE;
 int
 __doprnt(
 	const char	*fmt,
-	va_list			*argp,
+	va_list			argp,
 						/* character output routine */
 	void			(*putc)(int, void *arg),
 	void                    *arg,
@@ -290,7 +297,7 @@ __doprnt(
 		}
 	    }
 	    else if (c == '*') {
-		length = va_arg(*argp, int);
+		length = va_arg(argp, int);
 		c = *++fmt;
 		if (length < 0) {
 		    ladjust = !ladjust;
@@ -308,13 +315,15 @@ __doprnt(
 		    }
 		}
 		else if (c == '*') {
-		    prec = va_arg(*argp, int);
+		    prec = va_arg(argp, int);
 		    c = *++fmt;
 		}
 	    }
 
 	    if (c == 'l') {
 		c = *++fmt;	/* need it if sizeof(int) < sizeof(long) */
+		if (sizeof(int)<sizeof(long))
+		    long_long = 1;
 		if (c == 'l') {
 		    long_long = 1;
 		    c = *++fmt;
@@ -336,11 +345,11 @@ __doprnt(
 		    register int  i;
 
 		    if (long_long) {
-			u = va_arg(*argp, unsigned long long);
+			u = va_arg(argp, unsigned long long);
 		    } else {
-			u = va_arg(*argp, unsigned long);
+			u = va_arg(argp, unsigned int);
 		    }
-		    p = va_arg(*argp, char *);
+		    p = va_arg(argp, char *);
 		    base = *p++;
 		    nprinted += printnum(u, base, putc, arg);
 
@@ -399,7 +408,7 @@ __doprnt(
 		}
 
 		case 'c':
-		    c = va_arg(*argp, int);
+		    c = va_arg(argp, int);
 		    (*putc)(c, arg);
 		    nprinted++;
 		    break;
@@ -412,7 +421,7 @@ __doprnt(
 		    if (prec == -1)
 			prec = 0x7fffffff;	/* MAXINT */
 
-		    p = va_arg(*argp, char *);
+		    p = va_arg(argp, char *);
 
 		    if (p == NULL)
 			p = "";
@@ -465,8 +474,8 @@ __doprnt(
 		    unsigned char *up;
 		    char *q, *p;
 		    
-			up = (unsigned char *)va_arg(*argp, unsigned char *);
-			p = (char *)va_arg(*argp, char *);
+			up = (unsigned char *)va_arg(argp, unsigned char *);
+			p = (char *)va_arg(argp, char *);
 			if (length == -1)
 				length = 16;
 			while(length--) {
@@ -497,6 +506,9 @@ __doprnt(
 
 		case 'p':
 		    altfmt = TRUE;
+		    if (sizeof(int)<sizeof(void *)) {
+			long_long = 1;
+		    }
 		case 'x':
 		    truncate = _doprnt_truncates;
 		    base = 16;
@@ -531,9 +543,9 @@ __doprnt(
 
 		print_signed:
 		    if (long_long) {
-			n = va_arg(*argp, long long);
+			n = va_arg(argp, long long);
 		    } else {
-			n = va_arg(*argp, long);
+			n = va_arg(argp, int);
 		    }
 		    if (n >= 0) {
 			u = n;
@@ -547,9 +559,9 @@ __doprnt(
 
 		print_unsigned:
 		    if (long_long) {
-			u = va_arg(*argp, unsigned long long);
+			u = va_arg(argp, unsigned long long);
 		    } else { 
-			u = va_arg(*argp, unsigned long);
+			u = va_arg(argp, unsigned int);
 		    }
 		    goto print_num;
 
@@ -575,11 +587,11 @@ __doprnt(
 			u /= base;
 		    } while (u != 0);
 
-		    length -= (&buf[MAXBUF-1] - p);
+		    length -= (int)(&buf[MAXBUF-1] - p);
 		    if (sign_char)
 			length--;
 		    if (prefix)
-			length -= strlen(prefix);
+			length -= (int)strlen(prefix);
 
 		    if (padc == ' ' && !ladjust) {
 			/* blank padding goes before prefix */
@@ -649,7 +661,7 @@ _doprnt(
 	void			(*putc)(char),
 	int			radix)		/* default radix - for '%r' */
 {
-    __doprnt(fmt, argp, dummy_putc, putc, radix);
+    __doprnt(fmt, *argp, dummy_putc, putc, radix);
 }
 
 #if	MP_PRINTF 
@@ -796,6 +808,18 @@ consdebug_putc(char c)
 			PE_kputc(c);
 }
 
+void
+consdebug_putc_unbuffered(char c)
+{
+	if ((debug_mode && !disable_debug_output) || !disableConsoleOutput)
+		cnputc_unbuffered(c);
+
+	debug_putc(c);
+
+	if (!console_is_serial())
+		if (!disable_serial_output)
+			PE_kputc(c);
+}
 
 void
 consdebug_log(char c)
@@ -821,6 +845,17 @@ kdb_log(const char *fmt, ...)
 
 	va_start(listp, fmt);
 	_doprnt(fmt, &listp, consdebug_log, 16);
+	va_end(listp);
+	return 0;
+}
+
+int
+kdb_printf_unbuffered(const char *fmt, ...)
+{
+	va_list	listp;
+
+	va_start(listp, fmt);
+	_doprnt(fmt, &listp, consdebug_putc_unbuffered, 16);
 	va_end(listp);
 	return 0;
 }
@@ -851,8 +886,8 @@ sprintf(char *buf, const char *fmt, ...)
 
         va_start(listp, fmt);
         copybyte_str = buf;
-        __doprnt(fmt, &listp, copybyte, &copybyte_str, 16);
+        __doprnt(fmt, listp, copybyte, &copybyte_str, 16);
         va_end(listp);
 	*copybyte_str = '\0';
-        return strlen(buf);
+        return (int)strlen(buf);
 }

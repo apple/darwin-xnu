@@ -29,54 +29,34 @@
 #ifndef _IOPMPOWERSTATEQUEUE_H_
 #define _IOPMPOWERSTATEQUEUE_H_
  
-#include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOEventSource.h>
-#include <IOKit/IOService.h>
-extern "C" {
-    #include <kern/queue.h>
-}
+#include <IOKit/IOLocks.h>
+#include <kern/queue.h>
+
+typedef void (*IOPMPowerStateQueueAction)(OSObject *, uint32_t event, void *, void *);
 
 class IOPMPowerStateQueue : public IOEventSource
- {
-    OSDeclareDefaultStructors(IOPMPowerStateQueue);
+{
+    OSDeclareDefaultStructors(IOPMPowerStateQueue)
 
 private:
-    enum {
-        kUnIdle = 0,
-        kPMFeatureChange = 1
+    struct PowerEventEntry {
+        queue_chain_t   chain;
+        uint32_t        eventType;
+        void *          args[2];
     };
 
-    // Queue of requested states
-    struct PowerChangeEntry 
-    {
-        void                    *next;
-        uint16_t                actionType;
-        uint32_t                state;
-        IOService               *target;
-    };
-
-    void                        *changes;
-#ifndef __ppc__
-    IOLock                      *tmpLock;
-#endif
+    queue_head_t    queueHead;
+    IOLock *        queueLock;
 
 protected:
-    virtual bool checkForWork(void);
+    virtual bool checkForWork( void );
+    virtual bool init( OSObject * owner, Action action );
 
 public:
-    //typedef void (*Action)(IOService *target, unsigned long state);
+    static IOPMPowerStateQueue * PMPowerStateQueue( OSObject * owner, Action action );
 
-    virtual bool init(OSObject *owner, Action action = 0);
+    bool submitPowerEvent( uint32_t eventType, void * arg0 = 0, void * arg1 = 0 );
+};
 
-    // static initialiser
-    static IOPMPowerStateQueue *PMPowerStateQueue(OSObject *owner);
-         
-    // Enqueues an activityTickle request to be executed on the workloop
-    virtual bool unIdleOccurred(IOService *, unsigned long);
-    
-    // Enqueues a feature changed notify request to be executed on the workloop
-    virtual bool featureChangeOccurred(uint32_t, IOService *);
- };
- 
- #endif /* _IOPMPOWERSTATEQUEUE_H_ */
- 
+#endif /* _IOPMPOWERSTATEQUEUE_H_ */

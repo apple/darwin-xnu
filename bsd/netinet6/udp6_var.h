@@ -76,6 +76,6 @@ int	udp6_input(struct mbuf **, int *);
 int	udp6_output(struct inpcb *inp, struct mbuf *m,
 			struct sockaddr *addr, struct mbuf *control,
 			struct proc *p);
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
-#endif _NETINET6_UDP6_VAR_H_
+#endif /* _NETINET6_UDP6_VAR_H_ */

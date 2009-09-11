@@ -73,8 +73,8 @@
 #include <sys/ucred.h>
 #include <sys/uio.h>
 #endif
+#ifdef XNU_KERNEL_PRIVATE
 #include <sys/resourcevar.h>
-#ifdef KERNEL_PRIVATE
 #include <sys/signalvar.h>
 #endif
 #include <sys/vm.h>		/* XXX */
@@ -84,6 +84,8 @@
 #ifdef __APPLE_API_PRIVATE
 #include <sys/eventvar.h>
 
+
+#if !defined(__LP64__) || defined(XNU_KERNEL_PRIVATE)
 /*
  * VFS context structure (part of uthread)
  */
@@ -92,10 +94,13 @@ struct vfs_context {
 	kauth_cred_t	vc_ucred;		/* per thread credential */
 };
 
+#endif /* !__LP64 || XNU_KERNEL_PRIVATE */
+
+#ifdef BSD_KERNEL_PRIVATE
 /* XXX Deprecated: xnu source compatability */
 #define uu_ucred	uu_context.vc_ucred
 
-#ifdef BSD_KERNEL_PRIVATE
+#define MAXTHREADNAMESIZE 64
 /*
  *	Per-thread U area.
  */
@@ -124,19 +129,19 @@ struct uthread {
 	} uu_select;			/* saved state for select() */
 	/* to support kevent continuations */
 	union {
-		struct _kevent_scan {
+		struct _kqueue_scan {
 			kevent_callback_t call; /* per-event callback */
-			kevent_continue_t cont; /* whole call continuation */
+			kqueue_continue_t cont; /* whole call continuation */
 			uint64_t deadline;	/* computed deadline for operation */
 			void *data;		/* caller's private data */
-		} ss_kevent_scan;		/* saved state for kevent_scan() */
+		} ss_kqueue_scan;		/* saved state for kevent_scan() */
 		struct _kevent {
-			struct _kevent_scan scan;/* space for the generic data */
+			struct _kqueue_scan scan;/* space for the generic data */
 			struct fileproc *fp;	 /* fileproc we hold iocount on */
 			int fd;			 /* filedescriptor for kq */
-			register_t *retval;	 /* place to store return val */
+			int32_t *retval;	 /* place to store return val */
 			user_addr_t eventlist;	 /* user-level event list address */
-			size_t eventsize;	/* user-level event size (LP64) */
+			size_t eventsize;	/* kevent or kevent64_s */
 			int eventcount;	 	/* user-level event count */
 			int eventout;		 /* number of events output */
 		} ss_kevent;			 /* saved state for kevent() */
@@ -165,7 +170,7 @@ struct uthread {
 
 	TAILQ_ENTRY(uthread) uu_list;		/* List of uthreads in proc */
 
-	struct kaudit_record 		*uu_ar;		/* audit record */
+	struct kaudit_record 	*uu_ar;			/* audit record */
 	struct task*	uu_aio_task;			/* target task for async io */
      
   /* network support for dlil layer locking */
@@ -173,9 +178,9 @@ struct uthread {
 	lck_mtx_t	*uu_mtx;
 
 	int		uu_lowpri_window;
-	size_t		uu_devbsdunit; 		// to identify which device throttled I/Os are sent to
+	void	*	uu_throttle_info; 	/* pointer to throttled I/Os info */
 
-	struct user_sigaltstack uu_sigstk;
+	struct kern_sigaltstack uu_sigstk;
         int		uu_defer_reclaims;
         vnode_t		uu_vreclaims;
 	int		uu_notrigger;		/* XXX - flag for autofs */
@@ -188,6 +193,7 @@ struct uthread {
         void 	*	uu_vps[32];
 #endif
 #if CONFIG_DTRACE
+	siginfo_t	t_dtrace_siginfo;
 	uint32_t	t_dtrace_errno; /* Most recent errno */
         uint8_t         t_dtrace_stop;  /* indicates a DTrace-desired stop */
         uint8_t         t_dtrace_sig;   /* signal sent via DTrace's raise() */
@@ -202,7 +208,7 @@ struct uthread {
                         uint8_t _t_dtrace_reg;  /* modified register */
 #endif
                 } _tds;
-                unsigned long _t_dtrace_ft;           /* bitwise or of these flags */
+                u_int32_t _t_dtrace_ft;           /* bitwise or of these flags */
         } _tdu;
 #define t_dtrace_ft     _tdu._t_dtrace_ft
 #define t_dtrace_on     _tdu._tds._t_dtrace_on
@@ -225,6 +231,11 @@ struct uthread {
 #endif
 #endif /* CONFIG_DTRACE */
 	void *		uu_threadlist;
+	char *		pth_name;
+	TAILQ_ENTRY(uthread) uu_mtxlist;	/* psynch waiters list*/
+	uint32_t	uu_lockseq;		/* seq on arrival */
+	uint32_t	uu_psynchretval;	/* pmtx retval */
+	void *		uu_kwqqueue;		/* queue blocked on */
 };
 
 typedef struct uthread * uthread_t;

@@ -57,7 +57,6 @@
 #include <i386/mp.h>
 #include <i386/cpu_number.h>
 #include <i386/machine_cpu.h>
-#include <i386/mp_slave_boot.h>
 #include <i386/seg.h>
 
 #include <vm/vm_protos.h>
@@ -66,6 +65,7 @@
 
 #include <i386/postcode.h>
 
+#ifdef __i386__
 void
 cpu_IA32e_enable(cpu_data_t *cdp)
 {
@@ -185,56 +185,7 @@ cpu_IA32e_disable(cpu_data_t *cdp)
 
 	postcode(CPU_IA32_DISABLE_EXIT);
 }
-
-void
-fix_desc64(void *descp, int count)
-{
-	struct fake_descriptor64	*fakep;
-	union {
-		struct real_gate64		gate;
-		struct real_descriptor64	desc;
-	}				real;
-	int				i;
-
-	fakep = (struct fake_descriptor64 *) descp;
-	
-	for (i = 0; i < count; i++, fakep++) {
-		/*
-		 * Construct the real decriptor locally.
-		 */
-
-		bzero((void *) &real, sizeof(real));
-
-		switch (fakep->access & ACC_TYPE) {
-		case 0:
-			break;
-		case ACC_CALL_GATE:
-		case ACC_INTR_GATE:
-		case ACC_TRAP_GATE:
-			real.gate.offset_low16 = fakep->offset[0] & 0xFFFF;
-			real.gate.selector16 = fakep->lim_or_seg & 0xFFFF;
-			real.gate.IST = fakep->size_or_IST & 0x7;
-			real.gate.access8 = fakep->access;
-			real.gate.offset_high16 = (fakep->offset[0]>>16)&0xFFFF;
-			real.gate.offset_top32 = (uint32_t)fakep->offset[1];
-			break;
-		default:	/* Otherwise */
-			real.desc.limit_low16 = fakep->lim_or_seg & 0xFFFF;
-			real.desc.base_low16 = fakep->offset[0] & 0xFFFF;
-			real.desc.base_med8 = (fakep->offset[0] >> 16) & 0xFF;
-			real.desc.access8 = fakep->access;
-			real.desc.limit_high4 = (fakep->lim_or_seg >> 16) & 0xFF;
-			real.desc.granularity4 = fakep->size_or_IST;
-			real.desc.base_high8 = (fakep->offset[0] >> 24) & 0xFF;
-			real.desc.base_top32 = (uint32_t) fakep->offset[1];
-		}
-
-		/*
-		 * Now copy back over the fake structure.
-		 */
-		bcopy((void *) &real, (void *) fakep, sizeof(real));
-	}
-}
+#endif
 
 #if DEBUG
 extern void dump_gdt(void *);
@@ -313,7 +264,11 @@ dump_frame64(x86_saved_state64_t *sp)
 		kprintf("%p: 0x%016llx\n", ip, *ip);
 
 	kprintf("sp->isf.trapno: 0x%08x\n", sp->isf.trapno);
+#ifdef __i386__
 	kprintf("sp->isf.trapfn: 0x%08x\n", sp->isf.trapfn);
+#else
+	kprintf("sp->isf.trapfn: 0x%016llx\n", sp->isf.trapfn);
+#endif
 	kprintf("sp->isf.err:    0x%016llx\n", sp->isf.err);
 	kprintf("sp->isf.rip:    0x%016llx\n", sp->isf.rip);
 	kprintf("sp->isf.cs:     0x%016llx\n", sp->isf.cs);

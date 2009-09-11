@@ -84,7 +84,14 @@ and
 The directory entry format is defined in the file
 .Aq sys/dirent.h 
 and further in the file
-.Aq dirent.h :
+.Aq dirent.h .
+When the macro
+.Dv _DARWIN_FEATURE_64_BIT_INODE
+is not defined (the
+.Ft ino_t
+type is 32-bits), the
+.Fa dirent
+structure is defined as:
 .Bd -literal
 /*** Excerpt from <sys/dirent.h> ***/
 /*
@@ -94,21 +101,54 @@ and further in the file
  * inode number, the length of the entry, and the length of the name
  * contained in the entry.  These are followed by the name padded to a 4
  * byte boundary with null bytes.  All names are guaranteed null terminated.
- * The maximum length of a name in a directory is MAXPATHLEN.
+ * The maximum length of a name in a directory is 255.
  */
 
-#ifndef _SYS_DIRENT_H 
-#define _SYS_DIRENT_H 
-
-struct dirent {
-        ino_t     d_ino;                /* file number of entry */
-        u_int64_t d_seekoff;            /* length of this record */
-        u_int16_t d_reclen;             /* length of this record */
-        u_int16_t d_namlen;             /* length of string in d_name */
-        u_int8_t  d_type;               /* file type, see below */
-        char      d_name[MAXPATHLEN];   /* name must be no longer than this */
+struct dirent { /* when _DARWIN_FEATURE_64_BIT_INODE is NOT defined */
+        ino_t      d_ino;                /* file number of entry */
+        __uint16_t d_reclen;             /* length of this record */
+        __uint8_t  d_type;               /* file type, see below */
+        __uint8_t  d_namlen;             /* length of string in d_name */
+        char    d_name[255 + 1];   /* name must be no longer than this */
 };
+.Ed
+.Pp
+However, when the macro
+.Dv _DARWIN_FEATURE_64_BIT_INODE
+is defined, the
+.Ft ino_t
+type will be 64-bits (force 64-bit inode mode by defining the
+.Dv _DARWIN_USE_64_BIT_INODE
+macro before including header files).
+This will cause symbol variants of the directory routines, with the
+.Fa $INODE64
+suffixes, to be automatically linked in.
+In addition, the
+.Fa dirent
+structure will now be defined as:
+.Bd -literal
+/*
+ * The dirent structure defines the format of directory entries.
+ *
+ * A directory entry has a struct dirent at the front of it, containing its
+ * inode number, the length of the entry, and the length of the name
+ * contained in the entry.  These are followed by the name padded to a 4
+ * byte boundary with null bytes.  All names are guaranteed null terminated.
+ * The maximum length of a name in a directory is 1023.
+ */
 
+struct dirent { /* when _DARWIN_FEATURE_64_BIT_INODE is defined */
+        ino_t      d_fileno;     /* file number of entry */
+        __uint16_t d_seekoff;    /* seek offset (optional, used by servers) */
+        __uint16_t d_reclen;     /* length of this record */
+        __uint16_t d_namlen;     /* length of string in d_name */
+        __uint8_t  d_type;       /* file type, see below */
+        char    d_name[1024];    /* name must be no longer than this */
+};
+.Ed
+.Pp
+In addition:
+.Bd -literal
 /*
  * File types
  */
@@ -122,15 +162,12 @@ struct dirent {
 #define DT_SOCK         12
 #define DT_WHT          14
 
-#endif /* !_SYS_DIRENT_H_ */
-
 .Ed
 -----------------------------------------
 .Bd -literal
 /*** Excerpt from <dirent.h> ***/
 
-#ifndef _DIRENT_H 
-#define _DIRENT_H 
+#define d_fileno        d_ino        /* backward compatibility */
 
 /* definitions for library routines operating on directories. */
 #define DIRBLKSIZ       1024
@@ -138,28 +175,26 @@ struct dirent {
 struct _telldir;                /* see telldir.h */
 
 /* structure describing an open directory. */
-typedef struct {
-        int     __dd_fd;        /* file descriptor associated with directory */
-        long    __dd_loc;       /* offset in current buffer */
-        long    __dd_size;      /* amount of data returned by getdirentries */
-        char    *__dd_buf;      /* data buffer */
-        int     __dd_len;       /* size of data buffer */
-        long    __dd_seek;      /* magic cookie returned by getdirentries */
-        long    __dd_rewind;    /* magic cookie for rewinding */
-        int     __dd_flags;     /* flags for readdir */
+typedef struct _dirdesc {
+        int     __dd_fd;      /* file descriptor associated with directory */
+        long    __dd_loc;     /* offset in current buffer */
+        long    __dd_size;    /* amount of data returned by getdirentries */
+        char    *__dd_buf;    /* data buffer */
+        int     __dd_len;     /* size of data buffer */
+        long    __dd_seek;    /* magic cookie returned by getdirentries */
+        long    __dd_rewind;  /* magic cookie for rewinding */
+        int     __dd_flags;   /* flags for readdir */
         pthread_mutex_t __dd_lock; /* for thread locking */
         struct _telldir *__dd_td; /* telldir position recording */
 } DIR;
 
-#define dirfd(dirp)     ((dirp)->__dd_fd)
+#define dirfd(dirp)     ((dirp)->dd_fd)
 
 /* flags for opendir2 */
 #define DTF_HIDEW       0x0001  /* hide whiteout entries */
 #define DTF_NODUP       0x0002  /* don't return duplicate names */
 #define DTF_REWIND      0x0004  /* rewind after reading union stack */
 #define __DTF_READALL   0x0008  /* everything has been read */
-
-#endif /* !_DIRENT_H_ */
 .Ed
 .Sh SEE ALSO
 .Xr fs 5 ,

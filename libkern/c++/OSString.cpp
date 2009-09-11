@@ -94,7 +94,7 @@ bool OSString::initWithCStringNoCopy(const char *cString)
 
     length = strlen(cString) + 1;
     flags |= kOSStringNoCopy;
-    string = (char *) cString;
+    string = const_cast<char *>(cString);
 
     return true;
 }
@@ -208,7 +208,7 @@ bool OSString::isEqualTo(const OSString *aString) const
 
 bool OSString::isEqualTo(const char *aCString) const
 {
-    return strcmp(string, aCString) == 0;
+    return strncmp(string, aCString, length) == 0;
 }
 
 bool OSString::isEqualTo(const OSMetaClassBase *obj) const

@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)link.2	8.3 (Berkeley) 1/12/94
 .\"
-.Dd January 12, 1994
+.Dd October 29, 2008
 .Dt LINK 2
 .Os BSD 4
 .Sh NAME
@@ -81,6 +81,21 @@ must be in the same file system.
 As mandated by POSIX.1,
 .Fa path1
 may not be a directory.
+.Pp
+.Fn link
+will resolve and follow symbolic links contained within both
+.Fa path1
+and
+.Fa path2 .
+If the last component of
+.Fa path1
+is a symbolic link,
+.Fn link
+will point the hard link, 
+.Fa path2 ,
+to the underlying object pointed to by
+.Fa path1 ,
+not to the symbolic link itself.
 .Sh RETURN VALUES
 Upon successful completion, a value of 0 is returned.  Otherwise,
 a value of -1 is returned and
@@ -135,12 +150,12 @@ characters, or an entire path name exceeded
 characters.
 .\" ==========
 .It Bq Er ENOENT
-A component of either path prefix does not exist.
+A component of either path prefix does not exist, or is a dangling symbolic link.
 .\" ==========
 .It Bq Er ENOENT
 The file named by
 .Fa path1
-does not exist.
+does not exist, or is a dangling symbolic link.
 .\" ==========
 .It Bq Er ENOSPC
 The directory in which the entry for the new link is being placed

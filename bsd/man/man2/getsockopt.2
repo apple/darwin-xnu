@@ -166,15 +166,20 @@ and set with
 .It Dv SO_TYPE Ta "get the type of the socket (get only)"
 .It Dv SO_ERROR Ta "get and clear error on the socket (get only)"
 .It Dv SO_NOSIGPIPE Ta "do not generate SIGPIPE, instead return EPIPE"
+.It Dv SO_NREAD Ta "number of bytes to be read (get only)"
+.It Dv SO_NWRITE Ta "number of bytes written not yet sent by the protocol (get only)"
+.It Dv SO_LINGER_SEC Ta "linger on close if data present with timeout in seconds"
 .El
 .Pp
 .Dv SO_DEBUG
 enables debugging in the underlying protocol modules.
+.Pp
 .Dv SO_REUSEADDR
 indicates that the rules used in validating addresses supplied
 in a
 .Xr bind 2
 call should allow reuse of local addresses.
+.Pp
 .Dv SO_REUSEPORT
 allows completely duplicate bindings by multiple processes
 if they all set
@@ -182,6 +187,7 @@ if they all set
 before binding the port.
 This option permits multiple instances of a program to each
 receive UDP/IP multicast or broadcast datagrams destined for the bound port.
+.Pp
 .Dv SO_KEEPALIVE
 enables the
 periodic transmission of messages on a connected socket.  Should the
@@ -189,6 +195,7 @@ connected party fail to respond to these messages, the connection is
 considered broken and processes using the socket are notified via a
 .Dv SIGPIPE
 signal when attempting to send data.
+.Pp
 .Dv SO_DONTROUTE
 indicates that outgoing messages should
 bypass the standard routing facilities.  Instead, messages are directed
@@ -218,11 +225,18 @@ is disabled and a
 is issued, the system will process the close in a manner that allows
 the process to continue as quickly as possible.
 .Pp
+.Dv SO_LINGER_SEC
+is the same option as 
+.Dv SO_LINGER 
+except the linger time is in seconds for 
+.Dv SO_LINGER_SEC .
+.Pp
 The option
 .Dv SO_BROADCAST
 requests permission to send broadcast datagrams
 on the socket.
 Broadcast was a privileged operation in earlier versions of the system.
+.Pp
 With protocols that support out-of-band data, the
 .Dv SO_OOBINLINE
 option
@@ -235,6 +249,7 @@ calls without the
 .Dv MSG_OOB
 flag.
 Some protocols always behave as if this option is set.
+.Pp
 .Dv SO_SNDBUF
 and
 .Dv SO_RCVBUF
@@ -323,20 +338,36 @@ instead, the write to the socket returns with the error
 when there is no reader.
 .Pp
 Finally,
-.Dv SO_TYPE
-and
-.Dv SO_ERROR
+.Dv SO_TYPE ,
+.Dv SO_ERROR ,
+.Dv SO_NREAD , and
+.Dv SO_NWRITE
 are options used only with
 .Fn getsockopt .
+.Pp
 .Dv SO_TYPE
 returns the type of the socket, such as
 .Dv SOCK_STREAM ;
 it is useful for servers that inherit sockets on startup.
+.Pp
 .Dv SO_ERROR
 returns any pending error on the socket and clears
 the error status.
 It may be used to check for asynchronous errors on connected
 datagram sockets or for other asynchronous errors.
+.Pp
+.Dv SO_NREAD
+returns the amount of data in the input buffer that is available to be received. 
+For datagram oriented sockets,
+.Dv SO_NREAD
+returns the size of the first packet -- this differs from the 
+.Fn ioctl 
+command 
+.Dv FIONREAD 
+that returns the total amount of data available.
+.Pp
+.Dv SO_NWRITE 
+returns the amount of data in the output buffer not yet sent by the protocol.
 .Sh RETURN VALUES
 .Rv -std
 .Sh ERRORS
@@ -366,7 +397,10 @@ is not in a valid part of the process address space.
 The option is invalid at the level indicated.
 .\" ==========
 .It Bq Er ENOBUFS
-Insufficient memory buffers are available.
+Insufficient system resources available for the call to complete.
+.\" ==========
+.It Bq Er ENOMEM
+Insufficient memory available for the system call to complete.
 .\" ==========
 .It Bq Er ENOPROTOOPT
 The option is unknown at the level indicated.
@@ -392,6 +426,9 @@ is out of bounds.
 is already connected
 and a specified option cannot be set
 while this is the case.
+.\" ==========
+.It Bq Er EINVAL
+The socket has been shut down.
 .El
 .Sh LEGACY SYNOPSIS
 .Fd #include <sys/types.h>
@@ -401,8 +438,9 @@ The include file
 .In sys/types.h
 is necessary.
 .Sh SEE ALSO
-.Xr ioctl 2 ,
 .Xr socket 2 ,
+.Xr bind 2 ,
+.Xr ioctl 2 ,
 .Xr getprotoent 3 ,
 .Xr protocols 5
 .Sh BUGS

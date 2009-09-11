@@ -287,7 +287,7 @@ void save_adjust(void) {
 		
 		while(saveanchor.saveadjust > 0) {				/* Keep going until we have enough */
 
-			ret = kmem_alloc_wired(kernel_map, (vm_offset_t *)&freepage, PAGE_SIZE);	/* Get a page for free pool */
+			ret = kmem_alloc_kobject(kernel_map, (vm_offset_t *)&freepage, PAGE_SIZE);	/* Get a page for free pool */
 			if(ret != KERN_SUCCESS) {					/* Did we get some memory? */
 				panic("Whoops...  Not a bit of wired memory left for saveareas\n");
 			}

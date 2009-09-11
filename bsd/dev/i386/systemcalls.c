@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -31,6 +31,7 @@
 #include <kern/clock.h>
 #include <kern/locks.h>
 #include <kern/sched_prim.h>
+#include <kern/debug.h>
 #include <mach/machine/thread_status.h>
 #include <mach/thread_act.h>
 
@@ -47,7 +48,7 @@
 #include <sys/kauth.h>
 #include <sys/systm.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <i386/seg.h>
 #include <i386/machine_routines.h>
@@ -64,6 +65,10 @@ extern void *find_user_regs(thread_t);
 
 extern void x86_toggle_sysenter_arg_store(thread_t thread, boolean_t valid);
 extern boolean_t x86_sysenter_arg_store_isvalid(thread_t thread);
+
+/* dynamically generated at build time based on syscalls.master */
+extern const char *syscallnames[];
+
 /*
  * Function:	unix_syscall
  *
@@ -95,6 +100,7 @@ unix_syscall(x86_saved_state_t *state)
 	thread = current_thread();
 	uthread = get_bsdthread_info(thread);
 
+
 	/* Get the approriate proc; may be different from task's for vfork() */
 	if (!(uthread->uu_flag & UT_VFORK))
 		p = (struct proc *)get_bsdtask_info(current_task());
@@ -111,8 +117,10 @@ unix_syscall(x86_saved_state_t *state)
 	}
 
 	code = regs->eax & I386_SYSCALL_NUMBER_MASK;
+	DEBUG_KPRINT_SYSCALL_UNIX("unix_syscall: code=%d(%s) eip=%u\n",
+							  code, syscallnames[code >= NUM_SYSENT ? 63 : code], (uint32_t)regs->eip);
 	args_in_uthread = ((regs->eax & I386_SYSCALL_ARG_BYTES_MASK) != 0) && x86_sysenter_arg_store_isvalid(thread);
-	params = (vm_offset_t) ((caddr_t)regs->uesp + sizeof (int));
+	params = (vm_offset_t) (regs->uesp + sizeof (int));
 
 	regs->efl &= ~(EFL_CF);
 
@@ -153,7 +161,7 @@ unix_syscall(x86_saved_state_t *state)
 
 		/*
 		 * If non-NULL, then call the syscall argument munger to
-		 * copy in arguments (see xnu/bsd/dev/i386/munge.s); the
+		 * copy in arguments (see xnu/bsd/dev/{i386|x86_64}/munge.s); the
 		 * first argument is NULL because we are munging in place
 		 * after a copyin because the ABI currently doesn't use
 		 * registers to pass system call arguments.
@@ -183,10 +191,13 @@ unix_syscall(x86_saved_state_t *state)
 	AUDIT_SYSCALL_ENTER(code, p, uthread);
 	error = (*(callp->sy_call))((void *) p, (void *) vt, &(uthread->uu_rval[0]));
         AUDIT_SYSCALL_EXIT(code, p, uthread, error);
+#if CONFIG_MACF
+	mac_thread_userret(code, error, thread);
+#endif
 
 #ifdef JOE_DEBUG
         if (uthread->uu_iocount)
-                joe_debug("system call returned with uu_iocount != 0");
+                printf("system call returned with uu_iocount != 0\n");
 #endif
 #if CONFIG_DTRACE
 	uthread->t_dtrace_errno = error;
@@ -199,6 +210,7 @@ unix_syscall(x86_saved_state_t *state)
 		 * The SYSENTER_TF_CS covers single-stepping over a sysenter
 		 * - see debug trap handler in idt.s/idt64.s
 		 */
+
 		if (regs->cs == SYSENTER_CS || regs->cs == SYSENTER_TF_CS) {
 			regs->eip -= 5;
 		}
@@ -214,6 +226,10 @@ unix_syscall(x86_saved_state_t *state)
 		    regs->edx = uthread->uu_rval[1];
 		} 
 	}
+
+	DEBUG_KPRINT_SYSCALL_UNIX(
+		"unix_syscall: error=%d retval=(%u,%u)\n",
+		error, regs->eax, regs->edx);
 
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
 #if DEBUG
@@ -234,7 +250,8 @@ unix_syscall(x86_saved_state_t *state)
 	}
 	if (code != 180)
 	        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-				      error, uthread->uu_rval[0], uthread->uu_rval[1], 0, 0);
+				      error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
+
 
 	thread_exception_return();
 	/* NOTREACHED */
@@ -280,6 +297,9 @@ unix_syscall64(x86_saved_state_t *state)
 	args_in_regs = 6;
 
 	code = regs->rax & SYSCALL_NUMBER_MASK;
+	DEBUG_KPRINT_SYSCALL_UNIX(
+		"unix_syscall64: code=%d(%s) rip=%llx\n",
+		code, syscallnames[code >= NUM_SYSENT ? 63 : code], regs->isf.rip);
 	callp = (code >= NUM_SYSENT) ? &sysent[63] : &sysent[code];
 	uargp = (void *)(&regs->rdi);
 
@@ -389,7 +409,10 @@ unsafe:
 		} 
 	}
 
-
+	DEBUG_KPRINT_SYSCALL_UNIX(
+		"unix_syscall64: error=%d retval=(%llu,%llu)\n",
+		error, regs->rax, regs->rdx);
+	
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
 
 	/*
@@ -409,7 +432,7 @@ unsafe:
 	}
 	if (code != 180)
 	        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-				      error, uthread->uu_rval[0], uthread->uu_rval[1], 0, 0);
+				      error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
 
 	thread_exception_return();
 	/* NOTREACHED */
@@ -428,6 +451,7 @@ unix_syscall_return(int error)
 
 	thread = current_thread();
 	uthread = get_bsdthread_info(thread);
+
 
 	p = current_proc();
 
@@ -451,6 +475,7 @@ unix_syscall_return(int error)
 		if (callp->sy_call == dtrace_systrace_syscall)
 			dtrace_systrace_syscall_return( code, error, uthread->uu_rval );
 #endif /* CONFIG_DTRACE */
+		AUDIT_SYSCALL_EXIT(code, p, uthread, error);
 
 		if (error == ERESTART) {
 			/*
@@ -491,6 +516,9 @@ unix_syscall_return(int error)
 				regs->isf.rflags &= ~EFL_CF;
 			} 
 		}
+		DEBUG_KPRINT_SYSCALL_UNIX(
+			"unix_syscall_return: error=%d retval=(%llu,%llu)\n",
+			error, regs->rax, regs->rdx);
 	} else {
 		x86_saved_state32_t	*regs;
 
@@ -505,9 +533,10 @@ unix_syscall_return(int error)
 		if (callp->sy_call == dtrace_systrace_syscall)
 			dtrace_systrace_syscall_return( code, error, uthread->uu_rval );
 #endif /* CONFIG_DTRACE */
+		AUDIT_SYSCALL_EXIT(code, p, uthread, error);
 
 		if (callp == sysent) {
-			params = (vm_offset_t) ((caddr_t)regs->uesp + sizeof (int));
+			params = (vm_offset_t) (regs->uesp + sizeof (int));
 			code = fuword(params);
 		}
 		if (error == ERESTART) {
@@ -522,6 +551,9 @@ unix_syscall_return(int error)
 				regs->edx = uthread->uu_rval[1];
 			} 
 		}
+		DEBUG_KPRINT_SYSCALL_UNIX(
+			"unix_syscall_return: error=%d retval=(%u,%u)\n",
+			error, regs->eax, regs->edx);
 	}
 
 
@@ -544,7 +576,7 @@ unix_syscall_return(int error)
 	}
 	if (code != 180)
 	        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-				      error, uthread->uu_rval[0], uthread->uu_rval[1], 0, 0);
+				      error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
 
 	thread_exception_return();
 	/* NOTREACHED */
@@ -592,12 +624,4 @@ munge_wwlwww(
 	arg64[1] = arg32[1];	/* wWlwww */
 	arg64[0] = arg32[0];	/* Wwlwww */
 }	
-
-#ifdef JOE_DEBUG
-joe_debug(char *p) {
-
-        printf("%s\n", p);
-}
-#endif
-
 

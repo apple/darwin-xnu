@@ -29,7 +29,7 @@ struct debug_ucred {
 	gid_t		cr_rgid;			/* real group id */
 	gid_t		cr_svgid;			/* saved group id */
 	uid_t		cr_gmuid;			/* UID for group membership purposes */
-	struct auditinfo cr_au;		/* user auditing data */
+	struct auditinfo_addr cr_audit;			/* user auditing data */
 	uint32_t	cr_label;			/* MACF label */
 	int			cr_flags;			/* flags on credential */
 };
@@ -103,12 +103,12 @@ void dump_cred( debug_ucred * credp )
 	printf("] %d ", credp->cr_rgid);
 	printf("%d ", credp->cr_svgid);
 	printf("%d ", credp->cr_gmuid);
-	printf("a[%d ", credp->cr_au.ai_auid);
-	printf("%d ", credp->cr_au.ai_mask.am_success);
-	printf("%d ", credp->cr_au.ai_mask.am_failure);
-	printf("%d ", credp->cr_au.ai_termid.port);
-	printf("%d ", credp->cr_au.ai_termid.machine);
-	printf("%d ", credp->cr_au.ai_asid);
+	printf("a[%d ", credp->cr_audit.ai_auid);
+	printf("%d ", credp->cr_audit.ai_mask.am_success);
+	printf("%d ", credp->cr_audit.ai_mask.am_failure);
+	printf("%d ", credp->cr_audit.ai_termid.at_port);
+	printf("%d ", credp->cr_audit.ai_termid.at_addr[0]);
+	printf("%d ", credp->cr_audit.ai_asid);
 	printf("] ");
 	printf("%p ", credp->cr_label);
 	printf("0x%08x \n", credp->cr_flags);

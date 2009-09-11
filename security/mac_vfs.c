@@ -79,7 +79,7 @@
 #include <sys/vnode_internal.h>
 
 #include <miscfs/devfs/devfsdefs.h>
-#include <miscfs/fdesc/fdesc.h>
+#include <miscfs/devfs/fdesc.h>
 
 #include <security/mac_internal.h>
 
@@ -139,8 +139,13 @@ mac_vnode_label_alloc(void)
 void
 mac_vnode_label_init(vnode_t vp)
 {
-
 	vp->v_label = mac_vnode_label_alloc();
+}
+
+int
+mac_vnode_label_init_needed(vnode_t vp)
+{
+	return (mac_label_vnodes != 0 && vp->v_label == NULL);
 }
 
 /* 
@@ -182,8 +187,6 @@ mac_mount_label_free(struct label *label)
 void
 mac_mount_label_destroy(struct mount *mp)
 {
-
-
 	if (mp->mnt_mntlabel != NULL) {
 		mac_mount_label_free(mp->mnt_mntlabel);
 		mp->mnt_mntlabel = NULL;
@@ -193,7 +196,6 @@ mac_mount_label_destroy(struct mount *mp)
 void
 mac_vnode_label_free(struct label *label)
 {
-
 	MAC_PERFORM(vnode_label_destroy, label);
 	mac_labelzone_free(label);
 }
@@ -202,17 +204,21 @@ mac_vnode_label_free(struct label *label)
 void
 mac_vnode_label_destroy(struct vnode *vp)
 {
-
-	mac_vnode_label_free(vp->v_label);
-	vp->v_label = NULL;
+	if (vp->v_label != NULL) {
+		mac_vnode_label_free(vp->v_label);
+		vp->v_label = NULL;
+	}
 }
 #endif
 
 void
 mac_vnode_label_copy(struct label *src, struct label *dest)
 {
-
-	MAC_PERFORM(vnode_label_copy, src, dest);
+	if (src == NULL) {
+		MAC_PERFORM(vnode_label_init, dest);
+	} else {
+		MAC_PERFORM(vnode_label_copy, src, dest);
+	}
 }
 
 int
@@ -346,7 +352,7 @@ void
 mac_vnode_label_associate_singlelabel(struct mount *mp, struct vnode *vp)
 {
 
-	if (!mac_vnode_enforce)
+	if (!mac_vnode_enforce || !mac_label_vnodes)
 		return;
 
 	MAC_PERFORM(vnode_label_associate_singlelabel, mp,
@@ -382,7 +388,7 @@ mac_vnode_label_update_extattr(struct mount *mp, struct vnode *vp,
 {
 	int error = 0;
 
-	if (!mac_vnode_enforce)
+	if (!mac_vnode_enforce || !mac_label_vnodes)
 		return;
 
 	MAC_PERFORM(vnode_label_update_extattr, mp, mp->mnt_mntlabel, vp,
@@ -403,7 +409,7 @@ mac_vnode_label_store(vfs_context_t ctx, struct vnode *vp,
 	kauth_cred_t cred;
 	int error;
 
-	if (!mac_vnode_enforce &&
+	if (!mac_vnode_enforce || !mac_label_vnodes ||
 	    !mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
 		return 0;
 
@@ -1074,14 +1080,59 @@ mac_vnode_check_write(vfs_context_t ctx, struct ucred *file_cred,
 	return (error);
 }
 
+int
+mac_vnode_check_uipc_bind(vfs_context_t ctx, struct vnode *dvp,
+    struct componentname *cnp, struct vnode_attr *vap)
+{
+	kauth_cred_t cred;
+	int error;
+
+	if (!mac_vnode_enforce || 
+		!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
+		return (0);
+
+	cred = vfs_context_ucred(ctx);
+	MAC_CHECK(vnode_check_uipc_bind, cred, dvp, dvp->v_label, cnp, vap);
+	return (error);
+}
+
+int
+mac_vnode_check_uipc_connect(vfs_context_t ctx, struct vnode *vp)
+{
+	kauth_cred_t cred;
+	int error;
+
+	if (!mac_vnode_enforce || 
+		!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
+		return (0);
+
+	cred = vfs_context_ucred(ctx);
+	MAC_CHECK(vnode_check_uipc_connect, cred, vp, vp->v_label);
+	return (error);
+}
+
 void
 mac_vnode_label_update(vfs_context_t ctx, struct vnode *vp, struct label *newlabel)
 {
 	kauth_cred_t cred = vfs_context_ucred(ctx);
+	struct label *tmpl = NULL;
+
+	if (vp->v_label == NULL)
+		tmpl = mac_vnode_label_alloc();
 
 	vnode_lock(vp);
+
+	/* recheck after lock */
+	if (vp->v_label == NULL) {
+		vp->v_label = tmpl;
+		tmpl = NULL;
+	}
+
 	MAC_PERFORM(vnode_label_update, cred, vp, vp->v_label, newlabel);
 	vnode_unlock(vp);
+
+	if (tmpl != NULL)
+		mac_vnode_label_free(tmpl);
 }
 
 void
@@ -1289,7 +1340,7 @@ vn_setlabel(struct vnode *vp, struct label *intlabel, vfs_context_t context)
 {
 	int error;
 
-	if (!mac_vnode_enforce)
+	if (!mac_vnode_enforce || !mac_label_vnodes)
 		return (0);
 
 	if (vp->v_mount == NULL) {

@@ -33,9 +33,9 @@
 #include <vm/vm_page.h>
 #include <pexpert/pexpert.h>
 
-#include "cpuid.h"
+#include <i386/cpuid.h>
 #if MACH_KDB
-#include <i386/db_machdep.h>
+#include <machine/db_machdep.h>
 #include <ddb/db_aout.h>
 #include <ddb/db_access.h>
 #include <ddb/db_sym.h>
@@ -48,9 +48,168 @@
 #define min(a,b) ((a) < (b) ? (a) : (b))
 #define quad(hi,lo)	(((uint64_t)(hi)) << 32 | (lo))
 
-#define bit(n)		(1UL << (n))
+/* Only for 32bit values */
+#define bit(n)		(1U << (n))
 #define bitmask(h,l)	((bit(h)|(bit(h)-1)) & ~(bit(l)-1))
-#define bitfield(x,h,l)	(((x) & bitmask(h,l)) >> l)
+#define bitfield(x,h,l)	((((x) & bitmask(h,l)) >> l))
+
+/*
+ * Leaf 2 cache descriptor encodings.
+ */
+typedef enum {
+	_NULL_,		/* NULL (empty) descriptor */
+	CACHE,		/* Cache */
+	TLB,		/* TLB */
+	STLB,		/* Shared second-level unified TLB */
+	PREFETCH	/* Prefetch size */
+} cpuid_leaf2_desc_type_t;
+
+typedef enum {
+	NA,		/* Not Applicable */
+	FULLY,		/* Fully-associative */	
+	TRACE,		/* Trace Cache (P4 only) */
+	INST,		/* Instruction TLB */
+	DATA,		/* Data TLB */
+	DATA0,		/* Data TLB, 1st level */
+	DATA1,		/* Data TLB, 2nd level */
+	L1,		/* L1 (unified) cache */
+	L1_INST,	/* L1 Instruction cache */
+	L1_DATA,	/* L1 Data cache */
+	L2,		/* L2 (unified) cache */
+	L3,		/* L3 (unified) cache */
+	L2_2LINESECTOR,	/* L2 (unified) cache with 2 lines per sector */
+	L3_2LINESECTOR,	/* L3(unified) cache with 2 lines per sector */
+	SMALL,		/* Small page TLB */
+	LARGE,		/* Large page TLB */
+	BOTH		/* Small and Large page TLB */
+} cpuid_leaf2_qualifier_t;
+
+typedef struct cpuid_cache_descriptor {
+	uint8_t		value;		/* descriptor code */
+	uint8_t		type;		/* cpuid_leaf2_desc_type_t */
+	uint8_t		level;		/* level of cache/TLB hierachy */
+	uint8_t		ways;		/* wayness of cache */
+	uint16_t	size;		/* cachesize or TLB pagesize */ 
+	uint16_t	entries;	/* number of TLB entries or linesize */
+} cpuid_cache_descriptor_t;
+
+/*
+ * These multipliers are used to encode 1*K .. 64*M in a 16 bit size field 
+ */
+#define	K	(1)
+#define	M	(1024)
+
+/*
+ * Intel cache descriptor table:
+ */
+static cpuid_cache_descriptor_t intel_cpuid_leaf2_descriptor_table[] = {
+//	-------------------------------------------------------
+//	value	type	level		ways	size	entries
+//	-------------------------------------------------------
+	{ 0x00,	_NULL_,	NA,		NA,	NA,	NA  },
+	{ 0x01,	TLB,	INST,		4,	SMALL,	32  },	
+	{ 0x02,	TLB,	INST,		FULLY,	LARGE,	2   },	
+	{ 0x03,	TLB,	DATA,		4,	SMALL,	64  },	
+	{ 0x04,	TLB,	DATA,		4,	LARGE,	8   },	
+	{ 0x05,	TLB,	DATA1,		4,	LARGE,	32  },	
+	{ 0x06,	CACHE,	L1_INST,	4,	8*K,	32  },
+	{ 0x08,	CACHE,	L1_INST,	4,	16*K,	32  },
+	{ 0x09,	CACHE,	L1_INST,	4,	32*K,	64  },
+	{ 0x0A,	CACHE,	L1_DATA,	2,	8*K,	32  },
+	{ 0x0B,	TLB,	INST,		4,	LARGE,	4   },	
+	{ 0x0C,	CACHE,	L1_DATA,	4,	16*K,	32  },
+	{ 0x0D,	CACHE,	L1_DATA,	4,	16*K,	64  },
+	{ 0x0E,	CACHE,	L1_DATA,	6,	24*K,	64  },
+	{ 0x21,	CACHE,	L2,		8,	256*K,	64  },
+	{ 0x22,	CACHE,	L3_2LINESECTOR,	4,	512*K,	64  },
+	{ 0x23,	CACHE,	L3_2LINESECTOR, 8,	1*M,	64  },
+	{ 0x25,	CACHE,	L3_2LINESECTOR,	8,	2*M,	64  },
+	{ 0x29,	CACHE,	L3_2LINESECTOR, 8,	4*M,	64  },
+	{ 0x2C,	CACHE,	L1_DATA,	8,	32*K,	64  },
+	{ 0x30,	CACHE,	L1_INST,	8,	32*K,	64  },
+	{ 0x40,	CACHE,	L2,		NA,	0,	NA  },
+	{ 0x41,	CACHE,	L2,		4,	128*K,	32  },
+	{ 0x42,	CACHE,	L2,		4,	256*K,	32  },
+	{ 0x43,	CACHE,	L2,		4,	512*K,	32  },
+	{ 0x44,	CACHE,	L2,		4,	1*M,	32  },
+	{ 0x45,	CACHE,	L2,		4,	2*M,	32  },
+	{ 0x46,	CACHE,	L3,		4,	4*M,	64  },
+	{ 0x47,	CACHE,	L3,		8,	8*M,	64  },
+	{ 0x48,	CACHE,	L2,		12, 	3*M,	64  },
+	{ 0x49,	CACHE,	L2,		16,	4*M,	64  },
+	{ 0x4A,	CACHE,	L3,		12, 	6*M,	64  },
+	{ 0x4B,	CACHE,	L3,		16,	8*M,	64  },
+	{ 0x4C,	CACHE,	L3,		12, 	12*M,	64  },
+	{ 0x4D,	CACHE,	L3,		16,	16*M,	64  },
+	{ 0x4E,	CACHE,	L2,		24,	6*M,	64  },
+	{ 0x4F,	TLB,	INST,		NA,	SMALL,	32  },	
+	{ 0x50,	TLB,	INST,		NA,	BOTH,	64  },	
+	{ 0x51,	TLB,	INST,		NA,	BOTH,	128 },	
+	{ 0x52,	TLB,	INST,		NA,	BOTH,	256 },	
+	{ 0x55,	TLB,	INST,		FULLY,	BOTH,	7   },	
+	{ 0x56,	TLB,	DATA0,		4,	LARGE,	16  },	
+	{ 0x57,	TLB,	DATA0,		4,	SMALL,	16  },	
+	{ 0x59,	TLB,	DATA0,		FULLY,	SMALL,	16  },	
+	{ 0x5A,	TLB,	DATA0,		4,	LARGE,	32  },	
+	{ 0x5B,	TLB,	DATA,		NA,	BOTH,	64  },	
+	{ 0x5C,	TLB,	DATA,		NA,	BOTH,	128 },	
+	{ 0x5D,	TLB,	DATA,		NA,	BOTH,	256 },	
+	{ 0x60,	CACHE,	L1,		16*K,	8,	64  },
+	{ 0x61,	CACHE,	L1,		4,	8*K,	64  },
+	{ 0x62,	CACHE,	L1,		4,	16*K,	64  },
+	{ 0x63,	CACHE,	L1,		4,	32*K,	64  },
+	{ 0x70,	CACHE,	TRACE,		8,	12*K,	NA  },
+	{ 0x71,	CACHE,	TRACE,		8,	16*K,	NA  },
+	{ 0x72,	CACHE,	TRACE,		8,	32*K,	NA  },
+	{ 0x78,	CACHE,	L2,		4,	1*M,	64  },
+	{ 0x79,	CACHE,	L2_2LINESECTOR,	8,	128*K,	64  },
+	{ 0x7A,	CACHE,	L2_2LINESECTOR,	8,	256*K,	64  },
+	{ 0x7B,	CACHE,	L2_2LINESECTOR,	8,	512*K,	64  },
+	{ 0x7C,	CACHE,	L2_2LINESECTOR,	8,	1*M,	64  },
+	{ 0x7D,	CACHE,	L2,		8,	2*M,	64  },
+	{ 0x7F,	CACHE,	L2,		2,	512*K,	64  },
+	{ 0x80,	CACHE,	L2,		8,	512*K,	64  },
+	{ 0x82,	CACHE,	L2,		8,	256*K,	32  },
+	{ 0x83,	CACHE,	L2,		8,	512*K,	32  },
+	{ 0x84,	CACHE,	L2,		8,	1*M,	32  },
+	{ 0x85,	CACHE,	L2,		8,	2*M,	32  },
+	{ 0x86,	CACHE,	L2,		4,	512*K,	64  },
+	{ 0x87,	CACHE,	L2,		8,	1*M,	64  },
+	{ 0xB0,	TLB,	INST,		4,	SMALL,	128 },	
+	{ 0xB1,	TLB,	INST,		4,	LARGE,	8   },	
+	{ 0xB2,	TLB,	INST,		4,	SMALL,	64  },	
+	{ 0xB3,	TLB,	DATA,		4,	SMALL,	128 },	
+	{ 0xB4,	TLB,	DATA1,		4,	SMALL,	256 },	
+	{ 0xBA,	TLB,	DATA1,		4,	BOTH,	64  },	
+	{ 0xCA,	STLB,	DATA1,		4,	BOTH,	512 },	
+	{ 0xD0,	CACHE,	L3,		4,	512*K,	64  },	
+	{ 0xD1,	CACHE,	L3,		4,	1*M,	64  },	
+	{ 0xD2,	CACHE,	L3,		4,	2*M,	64  },	
+	{ 0xD6,	CACHE,	L3,		8,	1*M,	64  },	
+	{ 0xD7,	CACHE,	L3,		8,	2*M,	64  },	
+	{ 0xD8,	CACHE,	L3,		8,	4*M,	64  },	
+	{ 0xDC,	CACHE,	L3,		12, 	1536*K,	64  },	
+	{ 0xDD,	CACHE,	L3,		12, 	3*M,	64  },	
+	{ 0xDE,	CACHE,	L3,		12, 	6*M,	64  },	
+	{ 0xE2,	CACHE,	L3,		16,	2*M,	64  },	
+	{ 0xE3,	CACHE,	L3,		16,	4*M,	64  },	
+	{ 0xE4,	CACHE,	L3,		16,	8*M,	64  },	
+	{ 0xF0,	PREFETCH, NA,		NA,	64,	NA  },	
+	{ 0xF1,	PREFETCH, NA,		NA,	128,	NA  }	
+};
+#define	INTEL_LEAF2_DESC_NUM (sizeof(intel_cpuid_leaf2_descriptor_table) / \
+				sizeof(cpuid_cache_descriptor_t))
+
+static inline cpuid_cache_descriptor_t *
+cpuid_leaf2_find(uint8_t value)
+{
+	unsigned int	i;
+
+	for (i = 0; i < INTEL_LEAF2_DESC_NUM; i++)
+		if (intel_cpuid_leaf2_descriptor_table[i].value == value)
+			return &intel_cpuid_leaf2_descriptor_table[i];
+	return NULL;
+}
 
 /*
  * CPU identification routines.
@@ -58,6 +217,27 @@
 
 static i386_cpu_info_t	*cpuid_cpu_infop = NULL;
 static i386_cpu_info_t	cpuid_cpu_info;
+
+#if defined(__x86_64__)
+static void _do_cpuid(uint32_t selector, uint32_t *result)
+{
+	do_cpuid(selector, result);
+}
+#else
+static void _do_cpuid(uint32_t selector, uint32_t *result)
+{
+	if (cpu_mode_is64bit()) {
+	       asm("call _cpuid64"
+			: "=a" (result[0]),
+			  "=b" (result[1]),
+			  "=c" (result[2]),
+			  "=d" (result[3])
+			: "a"(selector));
+	} else {
+		do_cpuid(selector, result);
+	}
+}
+#endif
 
 /* this function is Intel-specific */
 static void
@@ -76,7 +256,7 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 	/* Get processor cache descriptor info using leaf 2.  We don't use
 	 * this internally, but must publish it for KEXTs.
 	 */
-	do_cpuid(2, cpuid_result);
+	_do_cpuid(2, cpuid_result);
 	for (j = 0; j < 4; j++) {
 		if ((cpuid_result[j] >> 31) == 1) 	/* bit31 is validity */
 			continue;
@@ -86,7 +266,7 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 	for (i = 1; i < info_p->cache_info[0]; i++) {
 		if (i*16 > sizeof(info_p->cache_info))
 			break;
-		do_cpuid(2, cpuid_result);
+		_do_cpuid(2, cpuid_result);
 		for (j = 0; j < 4; j++) {
 			if ((cpuid_result[j] >> 31) == 1) 
 				continue;
@@ -100,7 +280,7 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 	 * Most processors Mac OS X supports implement this flavor of CPUID.
 	 * Loop over each cache on the processor.
 	 */
-	do_cpuid(0, cpuid_result);
+	_do_cpuid(0, cpuid_result);
 	if (cpuid_result[eax] >= 4)
 		cpuid_deterministic_supported = TRUE;
 
@@ -152,10 +332,11 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 		}
 		
 		/* The total size of a cache is:
-		 *	( linesize * sets * associativity )
+		 *	( linesize * sets * associativity * partitions )
 		 */
 		if (type != Lnone) {
-			cache_size = cache_linesize * cache_sets * cache_associativity;
+			cache_size = cache_linesize * cache_sets *
+				     cache_associativity * cache_partitions;
 			info_p->cache_size[type] = cache_size;
 			info_p->cache_sharing[type] = cache_sharing;
 			info_p->cache_partitions[type] = cache_partitions;
@@ -215,72 +396,46 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 	else panic("no linesize");
 
 	/*
-	 * Extract and publish TLB information.
+	 * Extract and publish TLB information from Leaf 2 descriptors.
 	 */
 	for (i = 1; i < sizeof(info_p->cache_info); i++) {
-		uint8_t		desc = info_p->cache_info[i];
+		cpuid_cache_descriptor_t	*descp;
+		int				id;
+		int				level;
+		int				page;
 
-		switch (desc) {
-		case CPUID_CACHE_ITLB_4K_32_4:
-			info_p->cpuid_itlb_small = 32;
+		descp = cpuid_leaf2_find(info_p->cache_info[i]);
+		if (descp == NULL)
+			continue;
+
+		switch (descp->type) {
+		case TLB:
+			page = (descp->size == SMALL) ? TLB_SMALL : TLB_LARGE;
+			/* determine I or D: */
+			switch (descp->level) {
+			case INST:
+				id = TLB_INST;
+				break;
+			case DATA:
+			case DATA0:
+			case DATA1:
+				id = TLB_DATA;
+				break;
+			default:
+				continue;
+			}
+			/* determine level: */
+			switch (descp->level) {
+			case DATA1:
+				level = 1;
+				break;
+			default:
+				level = 0;
+			}
+			info_p->cpuid_tlb[id][page][level] = descp->entries;
 			break;
-		case CPUID_CACHE_ITLB_4M_2:
-			info_p->cpuid_itlb_large = 2;
-			break;
-		case CPUID_CACHE_DTLB_4K_64_4:
-			info_p->cpuid_dtlb_small = 64;
-			break;
-		case CPUID_CACHE_DTLB_4M_8_4:
-			info_p->cpuid_dtlb_large = 8;
-			break;
-		case CPUID_CACHE_DTLB_4M_32_4:
-			info_p->cpuid_dtlb_large = 32;
-			break;
-		case CPUID_CACHE_ITLB_64:
-			info_p->cpuid_itlb_small = 64;
-			info_p->cpuid_itlb_large = 64;
-			break;
-		case CPUID_CACHE_ITLB_128:
-			info_p->cpuid_itlb_small = 128;
-			info_p->cpuid_itlb_large = 128;
-			break;
-		case CPUID_CACHE_ITLB_256:
-			info_p->cpuid_itlb_small = 256;
-			info_p->cpuid_itlb_large = 256;
-			break;
-		case CPUID_CACHE_DTLB_64:
-			info_p->cpuid_dtlb_small = 64;
-			info_p->cpuid_dtlb_large = 64;
-			break;
-		case CPUID_CACHE_DTLB_128:
-			info_p->cpuid_dtlb_small = 128;
-			info_p->cpuid_dtlb_large = 128;
-			break;
-		case CPUID_CACHE_DTLB_256:
-			info_p->cpuid_dtlb_small = 256;
-			info_p->cpuid_dtlb_large = 256;
-			break;
-		case CPUID_CACHE_ITLB_4M2M_7:
-			info_p->cpuid_itlb_large = 7;
-			break;
-		case CPUID_CACHE_DTLB_4K_16_4:
-			info_p->cpuid_dtlb_small = 16;
-			break;
-		case CPUID_CACHE_DTLB_4M2M_32_4:
-			info_p->cpuid_dtlb_large = 32;
-			break;
-		case CPUID_CACHE_ITLB_4K_128_4:
-			info_p->cpuid_itlb_small = 128;
-			break;
-		case CPUID_CACHE_ITLB_4M_8:
-			info_p->cpuid_itlb_large = 8;
-			break;
-		case CPUID_CACHE_DTLB_4K_128_4:
-			info_p->cpuid_dtlb_small = 128;
-			break;
-		case CPUID_CACHE_DTLB_4K_256_4:
-			info_p->cpuid_dtlb_small = 256;
-			break;
+		case STLB:
+			info_p->cpuid_stlb = descp->entries;
 		}
 	}
 }
@@ -289,31 +444,31 @@ static void
 cpuid_set_generic_info(i386_cpu_info_t *info_p)
 {
 	uint32_t	cpuid_reg[4];
-	uint32_t	max_extid;
         char            str[128], *p;
 
 	/* do cpuid 0 to get vendor */
-	do_cpuid(0, cpuid_reg);
+	_do_cpuid(0, cpuid_reg);
+	info_p->cpuid_max_basic = cpuid_reg[eax];
 	bcopy((char *)&cpuid_reg[ebx], &info_p->cpuid_vendor[0], 4); /* ug */
 	bcopy((char *)&cpuid_reg[ecx], &info_p->cpuid_vendor[8], 4);
 	bcopy((char *)&cpuid_reg[edx], &info_p->cpuid_vendor[4], 4);
 	info_p->cpuid_vendor[12] = 0;
 
 	/* get extended cpuid results */
-	do_cpuid(0x80000000, cpuid_reg);
-	max_extid = cpuid_reg[eax];
+	_do_cpuid(0x80000000, cpuid_reg);
+	info_p->cpuid_max_ext = cpuid_reg[eax];
 
 	/* check to see if we can get brand string */
-	if (max_extid >= 0x80000004) {
+	if (info_p->cpuid_max_ext >= 0x80000004) {
 		/*
 		 * The brand string 48 bytes (max), guaranteed to
 		 * be NUL terminated.
 		 */
-		do_cpuid(0x80000002, cpuid_reg);
+		_do_cpuid(0x80000002, cpuid_reg);
 		bcopy((char *)cpuid_reg, &str[0], 16);
-		do_cpuid(0x80000003, cpuid_reg);
+		_do_cpuid(0x80000003, cpuid_reg);
 		bcopy((char *)cpuid_reg, &str[16], 16);
-		do_cpuid(0x80000004, cpuid_reg);
+		_do_cpuid(0x80000004, cpuid_reg);
 		bcopy((char *)cpuid_reg, &str[32], 16);
 		for (p = str; *p != '\0'; p++) {
 			if (*p != ' ') break;
@@ -333,13 +488,13 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	}
     
 	/* Get cache and addressing info. */
-	if (max_extid >= 0x80000006) {
-		do_cpuid(0x80000006, cpuid_reg);
+	if (info_p->cpuid_max_ext >= 0x80000006) {
+		_do_cpuid(0x80000006, cpuid_reg);
 		info_p->cpuid_cache_linesize   = bitfield(cpuid_reg[ecx], 7, 0);
 		info_p->cpuid_cache_L2_associativity =
 						 bitfield(cpuid_reg[ecx],15,12);
 		info_p->cpuid_cache_size       = bitfield(cpuid_reg[ecx],31,16);
-		do_cpuid(0x80000008, cpuid_reg);
+		_do_cpuid(0x80000008, cpuid_reg);
 		info_p->cpuid_address_bits_physical =
 						 bitfield(cpuid_reg[eax], 7, 0);
 		info_p->cpuid_address_bits_virtual =
@@ -347,7 +502,7 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	}
 
 	/* get processor signature and decode */
-	do_cpuid(1, cpuid_reg);
+	_do_cpuid(1, cpuid_reg);
 	info_p->cpuid_signature = cpuid_reg[eax];
 	info_p->cpuid_stepping  = bitfield(cpuid_reg[eax],  3,  0);
 	info_p->cpuid_model     = bitfield(cpuid_reg[eax],  7,  4);
@@ -370,17 +525,17 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	else
 		info_p->cpuid_logical_per_package = 1;
 
-	if (max_extid >= 0x80000001) {
-		do_cpuid(0x80000001, cpuid_reg);
+	if (info_p->cpuid_max_ext >= 0x80000001) {
+		_do_cpuid(0x80000001, cpuid_reg);
 		info_p->cpuid_extfeatures =
 				quad(cpuid_reg[ecx], cpuid_reg[edx]);
 	}
 
 	/* Fold in the Invariant TSC feature bit, if present */
-	if (max_extid >= 0x80000007) {
-		do_cpuid(0x80000007, cpuid_reg);  
+	if (info_p->cpuid_max_ext >= 0x80000007) {
+		_do_cpuid(0x80000007, cpuid_reg);  
 		info_p->cpuid_extfeatures |=
-				cpuid_reg[edx] & CPUID_EXTFEATURE_TSCI;
+				cpuid_reg[edx] & (uint32_t)CPUID_EXTFEATURE_TSCI;
 	}
 
 	/* Find the microcode version number a.k.a. signature a.k.a. BIOS ID */
@@ -393,24 +548,26 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		 * (which determines whether SMT/Hyperthreading is active).
 		 */
 		uint64_t msr_core_thread_count = rdmsr64(MSR_CORE_THREAD_COUNT);
-		info_p->core_count   = bitfield(msr_core_thread_count, 31, 16);
-		info_p->thread_count = bitfield(msr_core_thread_count, 15,  0);
+		info_p->core_count   = bitfield((uint32_t)msr_core_thread_count, 31, 16);
+		info_p->thread_count = bitfield((uint32_t)msr_core_thread_count, 15,  0);
 	}
 	
-	if (info_p->cpuid_features & CPUID_FEATURE_MONITOR) {
+	if (info_p->cpuid_max_basic >= 0x5) {
 		/*
 		 * Extract the Monitor/Mwait Leaf info:
 		 */
-		do_cpuid(5, cpuid_reg);
+		_do_cpuid(5, cpuid_reg);
 		info_p->cpuid_mwait_linesize_min = cpuid_reg[eax];
 		info_p->cpuid_mwait_linesize_max = cpuid_reg[ebx];
 		info_p->cpuid_mwait_extensions   = cpuid_reg[ecx];
 		info_p->cpuid_mwait_sub_Cstates  = cpuid_reg[edx];
+	}
 
+	if (info_p->cpuid_max_basic >= 0x6) {
 		/*
-		 * And the thermal and Power Leaf while we're at it:
+		 * The thermal and Power Leaf:
 		 */
-		do_cpuid(6, cpuid_reg);
+		_do_cpuid(6, cpuid_reg);
 		info_p->cpuid_thermal_sensor =
 					bitfield(cpuid_reg[eax], 0, 0);
 		info_p->cpuid_thermal_dynamic_acceleration =
@@ -419,11 +576,13 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 					bitfield(cpuid_reg[ebx], 3, 0);
 		info_p->cpuid_thermal_ACNT_MCNT =
 					bitfield(cpuid_reg[ecx], 0, 0);
+	}
 
+	if (info_p->cpuid_max_basic >= 0xa) {
 		/*
-		 * And the Architectural Performance Monitoring Leaf:
+		 * Architectural Performance Monitoring Leaf:
 		 */
-		do_cpuid(0xa, cpuid_reg);
+		_do_cpuid(0xa, cpuid_reg);
 		info_p->cpuid_arch_perf_version =
 					bitfield(cpuid_reg[eax], 7, 0);
 		info_p->cpuid_arch_perf_number =
@@ -438,7 +597,6 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 					bitfield(cpuid_reg[edx], 4, 0);
 		info_p->cpuid_arch_perf_fixed_width =
 					bitfield(cpuid_reg[edx],12, 5);
-
 	}
 
 	return;
@@ -522,6 +680,7 @@ static struct {
 	{CPUID_FEATURE_SSE4_2,  "SSE4.2"},
 	{CPUID_FEATURE_xAPIC,   "xAPIC"},
 	{CPUID_FEATURE_POPCNT,  "POPCNT"},
+	{CPUID_FEATURE_VMM,     "VMM"},
 	{0, 0}
 },
 extfeature_map[] = {
@@ -548,7 +707,7 @@ cpuid_info(void)
 char *
 cpuid_get_feature_names(uint64_t features, char *buf, unsigned buf_len)
 {
-	int	len = -1;
+	size_t	len = -1;
 	char	*p = buf;
 	int	i;
 
@@ -557,7 +716,7 @@ cpuid_get_feature_names(uint64_t features, char *buf, unsigned buf_len)
 			continue;
 		if (len > 0)
 			*p++ = ' ';
-		len = min(strlen(feature_map[i].name), (buf_len-1) - (p-buf));
+		len = min(strlen(feature_map[i].name), (size_t) ((buf_len-1) - (p-buf)));
 		if (len == 0)
 			break;
 		bcopy(feature_map[i].name, p, len);
@@ -570,7 +729,7 @@ cpuid_get_feature_names(uint64_t features, char *buf, unsigned buf_len)
 char *
 cpuid_get_extfeature_names(uint64_t extfeatures, char *buf, unsigned buf_len)
 {
-	int	len = -1;
+	size_t	len = -1;
 	char	*p = buf;
 	int	i;
 
@@ -579,7 +738,7 @@ cpuid_get_extfeature_names(uint64_t extfeatures, char *buf, unsigned buf_len)
 			continue;
 		if (len > 0)
 			*p++ = ' ';
-		len = min(strlen(extfeature_map[i].name), (buf_len-1)-(p-buf));
+		len = min(strlen(extfeature_map[i].name), (size_t) ((buf_len-1)-(p-buf)));
 		if (len == 0)
 			break;
 		bcopy(extfeature_map[i].name, p, len);
@@ -590,25 +749,6 @@ cpuid_get_extfeature_names(uint64_t extfeatures, char *buf, unsigned buf_len)
 }
 
 
-#if CONFIG_NO_KPRINTF_STRINGS
-void
-cpuid_feature_display(
-	__unused const char	*header)
-{
-}
-
-void
-cpuid_extfeature_display(
-	__unused const char	*header)
-{
-}
-
-void
-cpuid_cpu_display(
-	__unused const char	*header)
-{
-}
-#else /* CONFIG_NO_KPRINTF_STRINGS */
 void
 cpuid_feature_display(
 	const char	*header)
@@ -648,7 +788,6 @@ cpuid_cpu_display(
 	kprintf("%s: %s\n", header, cpuid_cpu_info.cpuid_brand_string);
     }
 }
-#endif /* !CONFIG_NO_KPRINTF_STRINGS */
 
 unsigned int
 cpuid_family(void)

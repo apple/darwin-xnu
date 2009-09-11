@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -243,12 +243,12 @@ static int pim6;
 
 #if UPCALL_TIMING
 #define UPCALL_MAX	50
-u_long upcall_data[UPCALL_MAX + 1];
+u_int32_t upcall_data[UPCALL_MAX + 1];
 static void collate();
 #endif /* UPCALL_TIMING */
 
 static int get_sg_cnt(struct sioc_sg_req6 *);
-static int get_mif6_cnt(struct sioc_mif_req6 *);
+static int get_mif6_cnt(void *, int);
 static int ip6_mrouter_init(struct socket *, int, int);
 static int add_m6if(struct mif6ctl *);
 static int del_m6if(mifi_t *);
@@ -352,24 +352,25 @@ ip6_mrouter_get(so, sopt)
  * Handle ioctl commands to obtain information from the cache
  */
 int
-mrt6_ioctl(cmd, data)
-	int cmd;
-	caddr_t data;
+mrt6_ioctl(u_long cmd, caddr_t data)
 {
 	int error = 0;
 
 	switch (cmd) {
 	case SIOCGETSGCNT_IN6:
-		return(get_sg_cnt((struct sioc_sg_req6 *)data));
-		break;		/* for safety */
-	case SIOCGETMIFCNT_IN6:
-		return(get_mif6_cnt((struct sioc_mif_req6 *)data));
-		break;		/* for safety */
+		return (get_sg_cnt((struct sioc_sg_req6 *)data));
+		/* NOTREACHED */
+
+	case SIOCGETMIFCNT_IN6_32:
+	case SIOCGETMIFCNT_IN6_64:
+		return (get_mif6_cnt(data, cmd == SIOCGETMIFCNT_IN6_64));
+		/* NOTREACHED */
+
 	default:
-		return (EINVAL);
+		error = EINVAL;
 		break;
 	}
-	return error;
+	return (error);
 }
 
 /*
@@ -399,20 +400,34 @@ get_sg_cnt(req)
  * returns the input and output packet and byte counts on the mif provided
  */
 static int
-get_mif6_cnt(req)
-	struct sioc_mif_req6 *req;
+get_mif6_cnt(void *data, int p64)
 {
-	mifi_t mifi = req->mifi;
+	if (p64) {
+		struct sioc_mif_req6_64 *req = data;
 
-	if (mifi >= nummifs)
-		return EINVAL;
+		mifi_t mifi = req->mifi;
 
-	req->icount = mif6table[mifi].m6_pkt_in;
-	req->ocount = mif6table[mifi].m6_pkt_out;
-	req->ibytes = mif6table[mifi].m6_bytes_in;
-	req->obytes = mif6table[mifi].m6_bytes_out;
+		if (mifi >= nummifs)
+			return (EINVAL);
 
-	return 0;
+		req->icount = mif6table[mifi].m6_pkt_in;
+		req->ocount = mif6table[mifi].m6_pkt_out;
+		req->ibytes = mif6table[mifi].m6_bytes_in;
+		req->obytes = mif6table[mifi].m6_bytes_out;
+	} else {
+		struct sioc_mif_req6_32 *req = data;
+
+		mifi_t mifi = req->mifi;
+
+		if (mifi >= nummifs)
+			return (EINVAL);
+
+		req->icount = mif6table[mifi].m6_pkt_in;
+		req->ocount = mif6table[mifi].m6_pkt_out;
+		req->ibytes = mif6table[mifi].m6_bytes_in;
+		req->obytes = mif6table[mifi].m6_bytes_out;
+	}
+	return (0);
 }
 
 static int
@@ -600,10 +615,18 @@ add_m6if(mifcp)
 	mifp = mif6table + mifcp->mif6c_mifi;
 	if (mifp->m6_ifp)
 		return EADDRINUSE; /* XXX: is it appropriate? */
-	if (mifcp->mif6c_pifi == 0 || mifcp->mif6c_pifi > if_index)
-		return ENXIO;
-	ifp = ifindex2ifnet[mifcp->mif6c_pifi];
 
+	ifnet_head_lock_shared();
+	if (mifcp->mif6c_pifi == 0 || mifcp->mif6c_pifi > if_index) {
+		ifnet_head_done();
+		return ENXIO;
+	}
+	ifp = ifindex2ifnet[mifcp->mif6c_pifi];
+	ifnet_head_done();
+
+	if (ifp == NULL) {
+		return ENXIO;
+	}
 	if (mifcp->mif6c_flags & MIFF_REGISTER) {
 		if (reg_mif_num == (mifi_t)-1) {
 			multicast_register_if.if_name = "register_mif";
@@ -708,7 +731,7 @@ add_m6fc(mfccp)
 	struct mf6cctl *mfccp;
 {
 	struct mf6c *rt;
-	u_long hash;
+	u_int32_t hash;
 	struct rtdetq *rte;
 	u_short nstl;
 
@@ -857,9 +880,9 @@ static void
 collate(t)
 	struct timeval *t;
 {
-	u_long d;
+	u_int32_t d;
 	struct timeval tp;
-	u_long delta;
+	u_int32_t delta;
 
 	GET_TIME(tp);
 
@@ -887,7 +910,7 @@ del_m6fc(mfccp)
 	struct sockaddr_in6 	mcastgrp;
 	struct mf6c 		*rt;
 	struct mf6c	 	**nptr;
-	u_long 		hash;
+	u_int32_t 		hash;
 
 	origin = mfccp->mf6cc_origin;
 	mcastgrp = mfccp->mf6cc_mcastgrp;
@@ -1021,7 +1044,7 @@ ip6_mforward(ip6, ifp, m)
 
 		struct mbuf *mb0;
 		struct rtdetq *rte;
-		u_long hash;
+		u_int32_t hash;
 /*		int i, npkts;*/
 #if UPCALL_TIMING
 		struct timeval tp;
@@ -1498,7 +1521,9 @@ phyint_send(ip6, mifp, m)
 	 * on the outgoing interface, loop back a copy.
 	 */
 	dst6 = (struct sockaddr_in6 *)&ro.ro_dst;
+	ifnet_lock_shared(ifp);
 	IN6_LOOKUP_MULTI(ip6->ip6_dst, ifp, in6m);
+	ifnet_lock_done(ifp);
 	if (in6m != NULL) {
 		dst6->sin6_len = sizeof(struct sockaddr_in6);
 		dst6->sin6_family = AF_INET6;

@@ -58,7 +58,7 @@ extern void	vm_page_print(
 #include <vm/vm_external.h>
 extern void vm_external_print(
 			vm_external_map_t	map,
-			vm_size_t		size);
+			vm_object_size_t	size);
 #endif	/* MACH_PAGEMAP */
 
 extern void	db_vm(void);

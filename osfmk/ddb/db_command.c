@@ -96,7 +96,6 @@
 #include <ddb/db_variables.h>
 #include <ddb/db_watch.h>
 #include <ddb/db_write_cmd.h>
-#include <ddb/tr.h>
 
 #include <machine/setjmp.h>
 #include <kern/thread.h>
@@ -542,12 +541,6 @@ struct db_command db_show_cmds[] = {
 		.fcn = (db_func)xmm_reply_print,
 	},
 #endif	/* NORMA_VM */
-#if TRACE_BUFFER
-	{
-		.name = "tr",
-		.fcn = db_show_tr,
-	},
-#endif	/* TRACE_BUFFER */
 	{
 		.name = "space",
 		.fcn = db_show_one_space,
@@ -563,10 +556,6 @@ struct db_command db_show_cmds[] = {
 	{
 		.name = "lock",
 		.fcn = (db_func)db_show_one_lock,
-	},
-	{
-		.name = "mutex_lock",
-		.fcn = (db_func)db_show_one_mutex,
 	},
 	{
 		.name = "simple_lock",

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1997-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -43,8 +43,7 @@
  *
  * In addition to the former use, when combined with socket NKEs,
  * PF_NDRV permits a fairly flexible mechanism for implementing
- * strange protocol support.  One of the main ones will be the
- * BlueBox/Classic Shared IP Address support.
+ * strange protocol support.
  */
 #include <mach/mach_types.h>
 
@@ -82,19 +81,19 @@
 
 static int ndrv_do_detach(struct ndrv_cb *);
 static int ndrv_do_disconnect(struct ndrv_cb *);
-static struct ndrv_cb *ndrv_find_inbound(struct ifnet *ifp, u_long protocol_family);
+static struct ndrv_cb *ndrv_find_inbound(struct ifnet *ifp, u_int32_t protocol_family);
 static int ndrv_setspec(struct ndrv_cb *np, struct sockopt *sopt);
 static int ndrv_delspec(struct ndrv_cb *);
 static int ndrv_to_ifnet_demux(struct ndrv_demux_desc* ndrv, struct ifnet_demux_desc* ifdemux);
-static void ndrv_handle_ifp_detach(u_long family, short unit);
+static void ndrv_handle_ifp_detach(u_int32_t family, short unit);
 static int ndrv_do_add_multicast(struct ndrv_cb *np, struct sockopt *sopt);
 static int ndrv_do_remove_multicast(struct ndrv_cb *np, struct sockopt *sopt);
 static struct ndrv_multiaddr* ndrv_have_multicast(struct ndrv_cb *np, struct sockaddr* addr);
 static void ndrv_remove_all_multicast(struct ndrv_cb *np);
 static void ndrv_dominit(void) __attribute__((section("__TEXT, initcode")));
 
-unsigned long  ndrv_sendspace = NDRVSNDQ;
-unsigned long  ndrv_recvspace = NDRVRCVQ;
+u_int32_t  ndrv_sendspace = NDRVSNDQ;
+u_int32_t  ndrv_recvspace = NDRVRCVQ;
 TAILQ_HEAD(, ndrv_cb)	ndrvl = TAILQ_HEAD_INITIALIZER(ndrvl);
 
 extern struct domain ndrvdomain;
@@ -268,7 +267,6 @@ static int
 ndrv_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 {
 	struct ndrv_cb *np = sotondrvcb(so);
-    int	result = 0;
 
 	if (np == 0)
 		return EINVAL;
@@ -276,13 +274,11 @@ ndrv_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 	if (np->nd_faddr)
 		return EISCONN;
     
-    /* Allocate memory to store the remote address */
-    MALLOC(np->nd_faddr, struct sockaddr_ndrv*,
+	/* Allocate memory to store the remote address */
+	MALLOC(np->nd_faddr, struct sockaddr_ndrv*,
                 nam->sa_len, M_IFADDR, M_WAITOK);
-    if (result != 0)
-        return result;
-    if (np->nd_faddr == NULL)
-        return ENOMEM;
+	if (np->nd_faddr == NULL)
+		return ENOMEM;
     
 	bcopy((caddr_t) nam, (caddr_t) np->nd_faddr, nam->sa_len);
 	soisconnected(so);
@@ -543,7 +539,7 @@ ndrv_do_detach(struct ndrv_cb *np)
     /* Remove from the linked list of control blocks */
     TAILQ_REMOVE(&ndrvl, np, nd_next);
     if (ifp != NULL) {
-		u_long proto_family = np->nd_proto_family;
+		u_int32_t proto_family = np->nd_proto_family;
 
 		if (proto_family != PF_NDRV && proto_family != 0) {
 			socket_unlock(so, 0);
@@ -669,7 +665,7 @@ ndrv_setspec(struct ndrv_cb *np, struct sockopt *sopt)
 		return EINVAL;
 
 	/* Copy the ndrvSpec */
-	if (proc_is64bit(current_proc())) {
+	if (proc_is64bit(sopt->sopt_p)) {
 		struct ndrv_protocol_desc64	ndrvSpec64;
 
 		if (sopt->sopt_valsize != sizeof(ndrvSpec64))
@@ -686,14 +682,20 @@ ndrv_setspec(struct ndrv_cb *np, struct sockopt *sopt)
 		user_addr = ndrvSpec64.demux_list;
 	}
 	else {
-		if (sopt->sopt_valsize != sizeof(ndrvSpec))
+		struct ndrv_protocol_desc32	ndrvSpec32;
+
+		if (sopt->sopt_valsize != sizeof(ndrvSpec32))
 			return EINVAL;
 	
-		error = sooptcopyin(sopt, &ndrvSpec, sizeof(ndrvSpec), sizeof(ndrvSpec));
+		error = sooptcopyin(sopt, &ndrvSpec32, sizeof(ndrvSpec32), sizeof(ndrvSpec32));
 		if (error != 0)
 			return error;
 
-		user_addr = CAST_USER_ADDR_T(ndrvSpec.demux_list);
+		ndrvSpec.version         = ndrvSpec32.version;
+		ndrvSpec.protocol_family = ndrvSpec32.protocol_family;
+		ndrvSpec.demux_count     = ndrvSpec32.demux_count;
+
+		user_addr = CAST_USER_ADDR_T(ndrvSpec32.demux_list);
 	}
 	
 	/* Verify the parameter */
@@ -729,7 +731,7 @@ ndrv_setspec(struct ndrv_cb *np, struct sockopt *sopt)
 	if (error == 0)
 	{
 		/* At this point, we've at least got enough bytes to start looking around */
-		u_long	demuxOn = 0;
+		u_int32_t	demuxOn = 0;
 		
 		proto_param.demux_count = ndrvSpec.demux_count;
 		proto_param.input = ndrv_input;
@@ -806,7 +808,7 @@ ndrv_delspec(struct ndrv_cb *np)
 }
 
 struct ndrv_cb *
-ndrv_find_inbound(struct ifnet *ifp, u_long protocol)
+ndrv_find_inbound(struct ifnet *ifp, u_int32_t protocol)
 {
     struct ndrv_cb* np;
 	
@@ -832,7 +834,7 @@ static void ndrv_dominit(void)
 }
 
 static void
-ndrv_handle_ifp_detach(u_long family, short unit)
+ndrv_handle_ifp_detach(u_int32_t family, short unit)
 {
     struct ndrv_cb* np;
     struct ifnet	*ifp = NULL;

@@ -82,10 +82,6 @@ and
 drivers have been modified to interact with
 .Nm .
 .Pp
-Since packet data is in network byte order, applications should use the
-.Xr byteorder 3
-macros to extract multi-byte values.
-.Pp
 A packet can be sent out on the network by writing to a
 .Nm
 file descriptor.  The writes are unbuffered, meaning only one
@@ -149,6 +145,32 @@ if it is passed a buffer that is not this size.
 .It Dv BIOCGDLT
 .Pq Li u_int
 Returns the type of the data link layer underlying the attached interface.
+.Er EINVAL
+is returned if no interface has been specified.
+The device types, prefixed with
+.Dq Li DLT_ ,
+are defined in
+.Aq Pa net/bpf.h .
+.It Dv BIOCSDLT
+.Pq Li u_int
+Used to specify the type of data link layer of the interface 
+attached to the bpf descriptor. If the current interface is 
+not of the given type then the descriptor will be reattached 
+to an interface of the given type. If the descriptor has 
+promiscuous mode set, the new interface will be moved to 
+promiscuous mode.
+.Er EINVAL
+is returned if no interface has been specified.
+The device types, prefixed with
+.Dq Li DLT_ ,
+are defined in
+.Aq Pa net/bpf.h .
+.It Dv BIOCGDLTLIST
+.Pq Li struct bpf_dltlist
+Returns a list of data link types of the the given interface. 
+A user allocated buffer to hold the list and length of expected 
+list should be provided in struct bpf_dltlist, defined in
+.Aq Pa net/bpf.h .
 .Er EINVAL
 is returned if no interface has been specified.
 The device types, prefixed with
@@ -295,6 +317,12 @@ interface should be returned by BPF.  Set to zero to see only incoming
 packets on the interface.  Set to one to see packets originating
 locally and remotely on the interface.  This flag is initialized to one by
 default.
+.It Dv BIOCGRSIG
+.Pq Li u_int
+Returns the signal that will be sent to a process waiting on the bpf descriptor upon packet reception. The default is SIGIO.
+.It Dv BIOCSRSIG
+.Pq Li u_int
+Sets the signal that should be sent to a process waiting on bpf descriptor upon packet reception. The default is SIGIO.
 .El
 .Sh BPF HEADER
 The following structure is prepended to each packet returned by
@@ -694,9 +722,7 @@ struct bpf_insn insns[] = {
 .Ed
 .Sh SEE ALSO
 .Xr tcpdump 1 ,
-.Xr ioctl 2 ,
-.Xr byteorder 3 ,
-.Xr ng_bpf 4
+.Xr ioctl 2 
 .Rs
 .%A McCanne, S.
 .%A Jacobson V.

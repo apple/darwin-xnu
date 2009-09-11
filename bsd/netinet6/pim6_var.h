@@ -68,5 +68,5 @@ struct pim6stat {
 
 int pim6_input(struct mbuf **, int*);
 
-#endif KERNEL_PRIVATE
-#endif _NETINET6_PIM6_VAR_H_
+#endif /* KERNEL_PRIVATE */
+#endif /* _NETINET6_PIM6_VAR_H_ */

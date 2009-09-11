@@ -81,7 +81,8 @@
 /* [XSI] The timespec structure may be defined as described in <time.h> */
 #define __need_struct_timespec
 #ifdef KERNEL
-#define __need_struct_user_timespec
+#define __need_struct_user64_timespec
+#define __need_struct_user32_timespec
 #endif /* KERNEL */
 #include <sys/_structs.h>
 
@@ -276,12 +277,13 @@ struct stat64 __DARWIN_STRUCT_STAT64;
 
 
 #ifdef KERNEL
+#ifdef BSD_KERNEL_PRIVATE
 /* LP64 version of struct stat.  time_t (see timespec) is a long and must 
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with struct stat
  */
 
-struct user_stat {
+struct user64_stat {
 	dev_t	 	st_dev;		/* [XSI] ID of device containing file */
 	ino_t	  	st_ino;		/* [XSI] File serial number */
 	mode_t	 	st_mode;	/* [XSI] Mode of file (see below) */
@@ -290,16 +292,16 @@ struct user_stat {
 	gid_t		st_gid;		/* [XSI] Group ID of the file */
 	dev_t		st_rdev;	/* [XSI] Device ID */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-	struct	user_timespec st_atimespec; /* time of last access */
-	struct	user_timespec st_mtimespec; /* time of last data modification */
-	struct	user_timespec st_ctimespec; /* time of last status change */
+	struct	user64_timespec st_atimespec; /* time of last access */
+	struct	user64_timespec st_mtimespec; /* time of last data modification */
+	struct	user64_timespec st_ctimespec; /* time of last status change */
 #else
-	user_time_t	st_atime;	/* [XSI] Time of last access */
-	__int64_t	st_atimensec;	/* nsec of last access */
-	user_time_t	st_mtime;	/* [XSI] Last data modification */
-	__int64_t	st_mtimensec;	/* last data modification nsec */
-	user_time_t	st_ctime;	/* [XSI] Time of last status change */
-	__int64_t	st_ctimensec;	/* nsec of last status change */
+	user64_time_t	st_atime;	/* [XSI] Time of last access */
+	user64_long_t	st_atimensec;	/* nsec of last access */
+	user64_time_t	st_mtime;	/* [XSI] Last data modification */
+	user64_long_t	st_mtimensec;	/* last data modification nsec */
+	user64_time_t	st_ctime;	/* [XSI] Time of last status change */
+	user64_long_t	st_ctimensec;	/* nsec of last status change */
 #endif
 	off_t		st_size;	/* [XSI] File size, in bytes */
 	blkcnt_t	st_blocks;	/* [XSI] Blocks allocated for file */
@@ -310,10 +312,44 @@ struct user_stat {
 	__int64_t	st_qspare[2];	/* RESERVED: DO NOT USE! */
 };
 
-extern void munge_stat(struct stat *sbp, struct user_stat *usbp);
+/* ILP32 version of struct stat.
+ * WARNING - keep in sync with struct stat
+ */
+
+struct user32_stat {
+	dev_t	 	st_dev;		/* [XSI] ID of device containing file */
+	ino_t	  	st_ino;		/* [XSI] File serial number */
+	mode_t	 	st_mode;	/* [XSI] Mode of file (see below) */
+	nlink_t		st_nlink;	/* [XSI] Number of hard links */
+	uid_t		st_uid;		/* [XSI] User ID of the file */
+	gid_t		st_gid;		/* [XSI] Group ID of the file */
+	dev_t		st_rdev;	/* [XSI] Device ID */
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+	struct	user32_timespec st_atimespec; /* time of last access */
+	struct	user32_timespec st_mtimespec; /* time of last data modification */
+	struct	user32_timespec st_ctimespec; /* time of last status change */
+#else
+	user32_time_t	st_atime;	/* [XSI] Time of last access */
+	user32_long_t	st_atimensec;	/* nsec of last access */
+	user32_time_t	st_mtime;	/* [XSI] Last data modification */
+	user32_long_t	st_mtimensec;	/* last data modification nsec */
+	user32_time_t	st_ctime;	/* [XSI] Time of last status change */
+	user32_long_t	st_ctimensec;	/* nsec of last status change */
+#endif
+	off_t		st_size;	/* [XSI] File size, in bytes */
+	blkcnt_t	st_blocks;	/* [XSI] Blocks allocated for file */
+	blksize_t	st_blksize;	/* [XSI] Optimal blocksize for I/O */
+	__uint32_t	st_flags;	/* user defined flags for file */
+	__uint32_t	st_gen;		/* file generation number */
+	__int32_t	st_lspare;	/* RESERVED: DO NOT USE! */
+	__int64_t	st_qspare[2];	/* RESERVED: DO NOT USE! */
+};
+
+extern void munge_user64_stat(struct stat *sbp, struct user64_stat *usbp);
+extern void munge_user32_stat(struct stat *sbp, struct user32_stat *usbp);
 
 
-struct user_stat64 {
+struct user64_stat64 {
 	dev_t		st_dev;					/* [XSI] ID of device containing file */
 	mode_t		st_mode;				/* [XSI] Mode of file (see below) */
 	nlink_t		st_nlink;				/* [XSI] Number of hard links */
@@ -322,19 +358,19 @@ struct user_stat64 {
 	gid_t		st_gid;					/* [XSI] Group ID of the file */
 	dev_t		st_rdev;				/* [XSI] Device ID */
 #ifndef _POSIX_C_SOURCE
-	struct user_timespec st_atimespec;		/* time of last access */
-	struct user_timespec st_mtimespec;		/* time of last data modification */
-	struct user_timespec st_ctimespec;		/* time of last status change */
-	struct user_timespec st_birthtimespec;	/* time of file creation(birth) */
+	struct user64_timespec st_atimespec;		/* time of last access */
+	struct user64_timespec st_mtimespec;		/* time of last data modification */
+	struct user64_timespec st_ctimespec;		/* time of last status change */
+	struct user64_timespec st_birthtimespec;	/* time of file creation(birth) */
 #else
-	user_time_t	st_atime;				/* [XSI] Time of last access */
-	__int64_t	st_atimensec;			/* nsec of last access */
-	user_time_t	st_mtime;				/* [XSI] Last data modification time */
-	__int64_t	st_mtimensec;			/* last data modification nsec */
-	user_time_t	st_ctime;				/* [XSI] Time of last status change */
-	__int64_t	st_ctimensec;			/* nsec of last status change */
-	user_time_t	st_birthtime;			/*  File creation time(birth)  */
-	__int64_t	st_birthtimensec;		/* nsec of File creation time */
+	user64_time_t	st_atime;				/* [XSI] Time of last access */
+	user64_long_t	st_atimensec;			/* nsec of last access */
+	user64_time_t	st_mtime;				/* [XSI] Last data modification time */
+	user64_long_t	st_mtimensec;			/* last data modification nsec */
+	user64_time_t	st_ctime;				/* [XSI] Time of last status change */
+	user64_long_t	st_ctimensec;			/* nsec of last status change */
+	user64_time_t	st_birthtime;			/*  File creation time(birth)  */
+	user64_long_t	st_birthtimensec;		/* nsec of File creation time */
 #endif
 	off_t		st_size;				/* [XSI] file size, in bytes */
 	blkcnt_t	st_blocks;				/* [XSI] blocks allocated for file */
@@ -345,9 +381,44 @@ struct user_stat64 {
 	__int64_t	st_qspare[2];			/* RESERVED: DO NOT USE! */
 };
 
-extern void munge_stat64(struct stat64 *sbp, struct user_stat64 *usbp);
+struct user32_stat64 {
+	dev_t		st_dev;					/* [XSI] ID of device containing file */
+	mode_t		st_mode;				/* [XSI] Mode of file (see below) */
+	nlink_t		st_nlink;				/* [XSI] Number of hard links */
+	ino64_t		st_ino;					/* [XSI] File serial number */
+	uid_t		st_uid;					/* [XSI] User ID of the file */
+	gid_t		st_gid;					/* [XSI] Group ID of the file */
+	dev_t		st_rdev;				/* [XSI] Device ID */
+#ifndef _POSIX_C_SOURCE
+	struct user32_timespec st_atimespec;		/* time of last access */
+	struct user32_timespec st_mtimespec;		/* time of last data modification */
+	struct user32_timespec st_ctimespec;		/* time of last status change */
+	struct user32_timespec st_birthtimespec;	/* time of file creation(birth) */
+#else
+	user32_time_t	st_atime;				/* [XSI] Time of last access */
+	user32_long_t	st_atimensec;			/* nsec of last access */
+	user32_time_t	st_mtime;				/* [XSI] Last data modification time */
+	user32_long_t	st_mtimensec;			/* last data modification nsec */
+	user32_time_t	st_ctime;				/* [XSI] Time of last status change */
+	user32_long_t	st_ctimensec;			/* nsec of last status change */
+	user32_time_t	st_birthtime;			/*  File creation time(birth)  */
+	user32_long_t	st_birthtimensec;		/* nsec of File creation time */
+#endif
+	off_t		st_size;				/* [XSI] file size, in bytes */
+	blkcnt_t	st_blocks;				/* [XSI] blocks allocated for file */
+	blksize_t	st_blksize;				/* [XSI] optimal blocksize for I/O */
+	__uint32_t	st_flags;				/* user defined flags for file */
+	__uint32_t	st_gen;					/* file generation number */
+	__uint32_t	st_lspare;				/* RESERVED: DO NOT USE! */
+	__int64_t	st_qspare[2];			/* RESERVED: DO NOT USE! */
+} __attribute__((packed,aligned(4)));
 
-#endif // KERNEL
+extern void munge_user64_stat64(struct stat64 *sbp, struct user64_stat64 *usbp);
+extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
+
+#endif /* BSD_KERNEL_PRIVATE */
+
+#endif /* KERNEL */
 
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
@@ -373,7 +444,6 @@ extern void munge_stat64(struct stat64 *sbp, struct user_stat64 *usbp);
 #define	S_IFSOCK	0140000		/* [XSI] socket */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	S_IFWHT		0160000		/* whiteout */
-#define S_IFXATTR	0200000		/* extended attribute */
 #endif
 
 /* File mode */
@@ -411,16 +481,15 @@ extern void munge_stat64(struct stat64 *sbp, struct user_stat64 *usbp);
  * of st_mode from a stat structure.  The macro shall evaluate to a non-zero
  * value if the test is true; 0 if the test is false.
  */
-#define	S_ISBLK(m)	(((m) & 0170000) == 0060000)	/* block special */
-#define	S_ISCHR(m)	(((m) & 0170000) == 0020000)	/* char special */
-#define	S_ISDIR(m)	(((m) & 0170000) == 0040000)	/* directory */
-#define	S_ISFIFO(m)	(((m) & 0170000) == 0010000)	/* fifo or socket */
-#define	S_ISREG(m)	(((m) & 0170000) == 0100000)	/* regular file */
-#define	S_ISLNK(m)	(((m) & 0170000) == 0120000)	/* symbolic link */
-#define	S_ISSOCK(m)	(((m) & 0170000) == 0140000)	/* socket */
+#define	S_ISBLK(m)	(((m) & S_IFMT) == S_IFBLK)	/* block special */
+#define	S_ISCHR(m)	(((m) & S_IFMT) == S_IFCHR)	/* char special */
+#define	S_ISDIR(m)	(((m) & S_IFMT) == S_IFDIR)	/* directory */
+#define	S_ISFIFO(m)	(((m) & S_IFMT) == S_IFIFO)	/* fifo or socket */
+#define	S_ISREG(m)	(((m) & S_IFMT) == S_IFREG)	/* regular file */
+#define	S_ISLNK(m)	(((m) & S_IFMT) == S_IFLNK)	/* symbolic link */
+#define	S_ISSOCK(m)	(((m) & S_IFMT) == S_IFSOCK)	/* socket */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define	S_ISWHT(m)	(((m) & 0170000) == 0160000)	/* whiteout */
-#define S_ISXATTR(m)	(((m) & 0200000) == 0200000)	/* extended attribute */
+#define	S_ISWHT(m)	(((m) & S_IFMT) == S_IFWHT)	/* whiteout */
 #endif
 
 /*
@@ -483,7 +552,8 @@ extern void munge_stat64(struct stat64 *sbp, struct user_stat64 *usbp);
  * in Mac OS X.
  */
 /* #define UF_NOUNLINK	0x00000010 */	/* file may not be removed or renamed */
-/* Bits 0x0020 through 0x4000 are currently undefined. */
+#define UF_COMPRESSED	0x00000020	/* file is hfs-compressed */
+/* Bits 0x0040 through 0x4000 are currently undefined. */
 #define UF_HIDDEN	0x00008000	/* hint that this item should not be */
 					/* displayed in a GUI */
 /*
@@ -493,6 +563,7 @@ extern void munge_stat64(struct stat64 *sbp, struct user_stat64 *usbp);
 #define	SF_ARCHIVED	0x00010000	/* file is archived */
 #define	SF_IMMUTABLE	0x00020000	/* file may not be changed */
 #define	SF_APPEND	0x00040000	/* writes to file may only append */
+
 /*
  * The following two bits are reserved for FreeBSD.  They are not
  * implemented in Mac OS X.

@@ -120,7 +120,7 @@ struct ppp_softc {
 
 	/* Device-dependent part for async lines. */
 	ext_accm sc_asyncmap;		/* async control character map */
-	u_long	sc_rasyncmap;		/* receive async control char map */
+	u_int32_t	sc_rasyncmap;		/* receive async control char map */
 	struct	mbuf *sc_outm;		/* mbuf chain currently being output */
 	struct	mbuf *sc_m;		/* pointer to input mbuf chain */
 	struct	mbuf *sc_mc;		/* pointer to current input mbuf */

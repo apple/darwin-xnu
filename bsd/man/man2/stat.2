@@ -33,13 +33,16 @@
 .\"
 .\"     @(#)stat.2	8.3 (Berkeley) 4/19/94
 .\"
-.Dd April 19, 1994
+.Dd May 15, 2008
 .Dt STAT 2
 .Os BSD 4
 .Sh NAME
 .Nm fstat ,
+.Nm fstat64 ,
 .Nm lstat ,
-.Nm stat
+.Nm lstat64 ,
+.Nm stat ,
+.Nm stat64
 .Nd get file status
 .Sh SYNOPSIS
 .Fd #include <sys/stat.h>
@@ -58,10 +61,29 @@
 .Fa "const char *restrict path"
 .Fa "struct stat *restrict buf"
 .Fc
+.Sh TRANSITIIONAL SYNOPSIS (NOW DEPRECATED)
+.Ft int
+.br
+.Fo fstat64
+.Fa "int fildes"
+.Fa "struct stat64 *buf"
+.Fc ;
+.sp
+.Ft int
+.br
+.Fo lstat64
+.Fa "const char *restrict path"
+.Fa "struct stat64 *restrict buf"
+.Fc ;
+.sp
+.Ft int
+.br
+.Fo stat64
+.Fa "const char *restrict path"
+.Fa "struct stat64 *restrict buf"
+.Fc ;
 .Sh DESCRIPTION
-The
-.Fn stat
-family of functions obtain information about a file. The 
+The 
 .Fn stat 
 function obtains information about the file pointed to by
 .Fa path .
@@ -69,21 +91,22 @@ Read, write or execute
 permission of the named file is not required, but all directories
 listed in the path name leading to the file must be searchable.
 .Pp
-.Fn Lstat
+The
+.Fn lstat
+function
 is like
 .Fn stat
-except in the case where the named file is a symbolic link,
-in which case
+except in the case where the named file is a symbolic link;
 .Fn lstat
 returns information about the link,
 while
 .Fn stat
 returns information about the file the link references.
 Unlike other filesystem objects,
-symbolic links do not have an owner, group, access mode, times, etc.
-Instead, these attributes are taken from the directory that
+symbolic links may not have an owner, group, access mode, times, etc.
+Instead, these attributes may be taken from the directory that
 contains the link.
-The only attributes returned from an
+In this case, the only attributes returned from an
 .Fn lstat
 that refer to the symbolic link itself are the file type (S_IFLNK),
 size, blocks, and link count (always 1).
@@ -102,8 +125,50 @@ structure
 as defined by
 .Aq Pa sys/stat.h
 and into which information is placed concerning the file.
+When the macro
+.Dv _DARWIN_FEATURE_64_BIT_INODE
+is not defined (the
+.Ft ino_t
+type is 32-bits), the
+.Fa stat
+structure is defined as:
 .Bd -literal
-struct stat {
+struct stat { /* when _DARWIN_FEATURE_64_BIT_INODE is NOT defined */
+    dev_t    st_dev;    /* device inode resides on */
+    ino_t    st_ino;    /* inode's number */
+    mode_t   st_mode;   /* inode protection mode */
+    nlink_t  st_nlink;  /* number or hard links to the file */
+    uid_t    st_uid;    /* user-id of owner */
+    gid_t    st_gid;    /* group-id of owner */
+    dev_t    st_rdev;   /* device type, for special file inode */
+    struct timespec st_atimespec;  /* time of last access */
+    struct timespec st_mtimespec;  /* time of last data modification */
+    struct timespec st_ctimespec;  /* time of last file status change */
+    off_t    st_size;   /* file size, in bytes */
+    quad_t   st_blocks; /* blocks allocated for file */
+    u_long   st_blksize;/* optimal file sys I/O ops blocksize */
+    u_long   st_flags;  /* user defined flags for file */
+    u_long   st_gen;    /* file generation number */
+};
+.Ed
+.Pp
+However, when the macro
+.Dv _DARWIN_FEATURE_64_BIT_INODE
+is defined, the
+.Ft ino_t
+type will be 64-bits (force 64-bit inode mode by defining the
+.Dv _DARWIN_USE_64_BIT_INODE
+macro before including header files).
+This will cause symbol variants of the
+.Fa stat
+family, with the
+.Fa $INODE64
+suffixes, to be automatically linked in.
+In addition, the
+.Fa stat
+structure will now be defined as:
+.Bd -literal
+struct stat { /* when _DARWIN_FEATURE_64_BIT_INODE is defined */
     dev_t           st_dev;           /* ID of device containing file */
     mode_t          st_mode;          /* Mode of file (see below) */
     nlink_t         st_nlink;         /* Number of hard links */
@@ -123,8 +188,6 @@ struct stat {
     int32_t         st_lspare;        /* RESERVED: DO NOT USE! */
     int64_t         st_qspare[2];     /* RESERVED: DO NOT USE! */
 };
-
-
 .Ed
 .Pp
 The time-related fields of
@@ -161,8 +224,9 @@ and
 .Xr write 2
 system calls.
 .It st_birthtime
-Time of file creation. Only set once when the file is created.
-On filesystems where birthtime is not available, this field holds the
+Time of file creation. Only set once when the file is created. This field is 
+only available in the 64 bit inode variants. On filesystems where birthtime is 
+not available, this field holds the
 .Fa ctime
 instead.
 .El
@@ -300,6 +364,35 @@ in the structure pointed to by
 The file generation number,
 .Fa st_gen ,
 is only available to the super-user.
+.br
+The fields in the stat structure currently marked
+.Fa st_spare1 ,
+.Fa st_spare2 ,
+and
+.Fa st_spare3
+are present in preparation for inode time stamps expanding
+to 64 bits.  This, however, can break certain programs that
+depend on the time stamps being contiguous (in calls to
+.Xr utimes 2 ) .
+.Sh TRANSITIONAL DESCRIPTION (NOW DEPRECATED)
+The
+.Fa fstat64 ,
+.Fa lstat64
+and
+.Fa stat64
+routines are equivalent to their corresponding non-64-suffixed routine,
+when 64-bit inodes are in effect.
+They were added before there was support for the symbol variants, and so are
+now deprecated.
+Instead of using these, set the
+.Dv _DARWIN_USE_64_BIT_INODE
+macro before including header files to force 64-bit inode support.
+.Pp
+The
+.Fa stat64
+structure used by these deprecated routines is the same as the
+.Fa stat
+structure when 64-bit inodes are in effect (see above).
 .Sh SEE ALSO
 .Xr chflags 2 ,
 .Xr chmod 2 ,
@@ -326,3 +419,10 @@ An
 .Fn lstat
 function call appeared in
 .Bx 4.2 .
+The 
+.Fn stat64 ,
+.Fn fstat64 ,
+and
+.Fn lstat64
+system calls first appeared in Mac OS X 10.5 (Leopard) and are now deprecated
+in favor of the corresponding symbol variants.

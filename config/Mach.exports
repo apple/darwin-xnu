@@ -23,7 +23,8 @@ _lck_rw_sleep_deadline
 _lck_spin_sleep
 _lck_spin_sleep_deadline
 _mach_absolute_time
-_mach_msg_send_from_kernel
+_mach_msg_send_from_kernel_proper
+_mach_vm_pressure_monitor
 _nanoseconds_to_absolutetime
 _preemption_enabled
 _semaphore_create
@@ -32,8 +33,9 @@ _semaphore_destroy
 _semaphore_reference
 _semaphore_signal
 _semaphore_signal_all
-_semaphore_timedwait
 _semaphore_wait
+_semaphore_wait_deadline
+_semaphore_wait_noblock
 _task_deallocate
 _task_reference
 _thread_block

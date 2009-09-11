@@ -19,11 +19,11 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
-/* #pragma ident	"@(#)sdt.c	1.6	06/03/24 SMI" */
+/* #pragma ident	"@(#)sdt.c	1.9	08/07/01 SMI" */
 
 #ifdef KERNEL
 #ifndef _KERNEL
@@ -46,6 +46,7 @@
 
 extern sdt_probe_t      **sdt_probetab;
 
+#if defined(__i386__)
 /*ARGSUSED*/
 int
 sdt_invop(uintptr_t addr, uintptr_t *stack, uintptr_t eax)
@@ -60,7 +61,7 @@ sdt_invop(uintptr_t addr, uintptr_t *stack, uintptr_t eax)
                         if (CPU_ON_INTR(CPU))
                                 stacktop = (uintptr_t *)dtrace_get_cpu_int_stack_top();
                         else
-                                stacktop = (uintptr_t *)(dtrace_get_kernel_stack(current_thread()) + KERNEL_STACK_SIZE);
+                                stacktop = (uintptr_t *)(dtrace_get_kernel_stack(current_thread()) + kernel_stack_size);
 
             if (stack <= stacktop)
                 stack0 = *stack++;
@@ -81,4 +82,28 @@ sdt_invop(uintptr_t addr, uintptr_t *stack, uintptr_t eax)
 
 	return (0);
 }
+#elif defined(__x86_64__)
+/*ARGSUSED*/
+int
+sdt_invop(uintptr_t addr, uintptr_t *stack, uintptr_t eax)
+{
+#pragma unused(eax)
+	sdt_probe_t *sdt = sdt_probetab[SDT_ADDR2NDX(addr)];
+
+	for (; sdt != NULL; sdt = sdt->sdp_hashnext) {
+		if ((uintptr_t)sdt->sdp_patchpoint == addr) {
+			x86_saved_state64_t *regs = (x86_saved_state64_t *)stack;
+
+			dtrace_probe(sdt->sdp_id, regs->rdi, regs->rsi, regs->rdx, regs->rcx, regs->r8);
+
+			return (DTRACE_INVOP_NOP);
+		}
+	}
+
+	return (0);
+}
+#else
+#error Unknown arch
+#endif
+
 

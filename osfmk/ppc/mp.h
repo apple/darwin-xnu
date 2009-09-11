@@ -35,10 +35,4 @@
 #include <cpus.h>
 #include <mach_kdb.h>
 
-#if	NCPUS > 1
-extern void	interrupt_stack_alloc(void);
-
-extern unsigned int wncpu;
-#endif	/* NCPUS > 1 */
-
 #endif	/* _PPC_MP_H_ */

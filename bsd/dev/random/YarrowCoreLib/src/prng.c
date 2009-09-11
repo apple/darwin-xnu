@@ -93,8 +93,10 @@ static HANDLE Statmutex = NULL;
 static DWORD mutexCreatorId = 0;
 #endif
 
+#if 0
 #pragma mark -
 #pragma mark * * * Static Utility functions * * * 
+#endif
 
 /* All error checking should be done in the function that calls these */
 
@@ -211,8 +213,10 @@ bubbleSort( UINT *data, LONG len )
 	}		
 }
 
+#if 0
 #pragma mark -
 #pragma mark * * * Public functions * * * 
+#endif
 
 /* Set up the PRNG */
 prng_error_status

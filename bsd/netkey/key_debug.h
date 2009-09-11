@@ -79,7 +79,7 @@ extern void kdebug_secasindex(struct secasindex *);
 extern void kdebug_secasv(struct secasvar *);
 extern void kdebug_mbufhdr(struct mbuf *);
 extern void kdebug_mbuf(struct mbuf *);
-#endif KERNEL
+#endif /* KERNEL */
 
 struct sockaddr;
 extern void kdebug_sockaddr(struct sockaddr *);

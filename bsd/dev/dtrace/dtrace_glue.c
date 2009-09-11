@@ -67,7 +67,8 @@
 /*
  * pid/proc
  */
-#define proc_t struct proc
+/* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
+#define proc_t struct proc /* Steer clear of the Darwin typedef for proc_t */
 
 /* Not called from probe context */
 proc_t * 
@@ -419,11 +420,11 @@ _cyclic_add_omni(cyclic_id_list_t cyc_list)
 
 	t = (char *)cyc_list;
 	t += sizeof(cyc_omni_handler_t);
-	cyc_list = (cyclic_id_list_t)t;
+	cyc_list = (cyclic_id_list_t)(uintptr_t)t;
 
 	t += sizeof(cyclic_id_t)*NCPU;
 	t += (sizeof(wrap_timer_call_t))*cpu_number();
-	wrapTC = (wrap_timer_call_t *)t;
+	wrapTC = (wrap_timer_call_t *)(uintptr_t)t;
 
 	cyc_list[cpu_number()] = timer_call_add_cyclic(wrapTC, &cH, &cT);
 }
@@ -454,7 +455,7 @@ _cyclic_remove_omni(cyclic_id_list_t cyc_list)
 
 	t = (char *)cyc_list;
 	t += sizeof(cyc_omni_handler_t);
-	cyc_list = (cyclic_id_list_t)t;
+	cyc_list = (cyclic_id_list_t)(uintptr_t)t;
 
 	cid = cyc_list[cpu_number()];
 	oarg = timer_call_get_cyclic_arg(cid);
@@ -674,7 +675,7 @@ _dtrace_register_anon_DOF(char *name, uchar_t *data, uint_t nelements)
 
 int
 ddi_prop_lookup_int_array(dev_t match_dev, dev_info_t *dip, uint_t flags,
-    char *name, int **data, uint_t *nelements)
+    const char *name, int **data, uint_t *nelements)
 {
 #pragma unused(match_dev,dip,flags)
 	unsigned int i;
@@ -698,14 +699,14 @@ ddi_prop_free(void *buf)
 }
 
 int
-ddi_driver_major(dev_info_t	*devi) { return (int)major(devi); }
+ddi_driver_major(dev_info_t	*devi) { return (int)major(CAST_DOWN_EXPLICIT(int,devi)); }
 
 int
 ddi_create_minor_node(dev_info_t *dip, const char *name, int spec_type,
     minor_t minor_num, const char *node_type, int flag)
 {
 #pragma unused(spec_type,node_type,flag)
-	dev_t dev = makedev( (uint32_t)dip, minor_num );
+	dev_t dev = makedev( ddi_driver_major(dip), minor_num );
 
 	if (NULL == devfs_make_node( dev, DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666, name, 0 ))
 		return DDI_FAILURE;
@@ -885,7 +886,7 @@ void dt_kmem_free_aligned(void* buf, size_t size)
  */
 kmem_cache_t *
 kmem_cache_create(
-    char *name,		/* descriptive name for this cache */
+    const char *name,		/* descriptive name for this cache */
     size_t bufsize,		/* size of the objects it manages */
     size_t align,		/* required object alignment */
     int (*constructor)(void *, void *, int), /* object constructor */
@@ -988,7 +989,7 @@ vmem_create(const char *name, void *base, size_t size, size_t quantum, void *ign
 	
 	p->blist = bl = blist_create( size );
 	blist_free(bl, 0, size);
-	if (base) blist_alloc( bl, (daddr_t)base ); /* Chomp off initial ID(s) */
+	if (base) blist_alloc( bl, (daddr_t)(uintptr_t)base ); /* Chomp off initial ID(s) */
 	
 	return (vmem_t *)p;
 }
@@ -1011,7 +1012,7 @@ vmem_alloc(vmem_t *vmp, size_t size, int vmflag)
 			panic("vmem_alloc: failure after blist_resize!");
 	}
 	
-	return (void *)p;
+	return (void *)(uintptr_t)p;
 }
 
 void
@@ -1019,7 +1020,7 @@ vmem_free(vmem_t *vmp, void *vaddr, size_t size)
 {
 	struct blist_hdl *p = (struct blist_hdl *)vmp;
 	
-	blist_free( p->blist, (daddr_t)vaddr, (daddr_t)size );
+	blist_free( p->blist, (daddr_t)(uintptr_t)vaddr, (daddr_t)size );
 }
 
 void
@@ -1043,7 +1044,8 @@ vmem_destroy(vmem_t *vmp)
 hrtime_t
 dtrace_gethrestime(void)
 {
-	uint32_t		secs, nanosecs;
+	clock_sec_t		secs;
+	clock_nsec_t	nanosecs;
 	uint64_t		secs64, ns64;
     
 	clock_get_calendar_nanotime_nowait(&secs, &nanosecs);
@@ -1122,7 +1124,7 @@ dtrace_gethrtime(void)
 uint32_t
 dtrace_cas32(uint32_t *target, uint32_t cmp, uint32_t new)
 {
-	if (OSCompareAndSwap( cmp, new, (unsigned long *)target ))
+    if (OSCompareAndSwap( (UInt32)cmp, (UInt32)new, (volatile UInt32 *)target ))
 		return cmp;
 	else
 		return ~cmp; /* Must return something *other* than cmp */
@@ -1131,14 +1133,10 @@ dtrace_cas32(uint32_t *target, uint32_t cmp, uint32_t new)
 void *
 dtrace_casptr(void *target, void *cmp, void *new)
 {
-#if defined(__LP64__)
-#error dtrace_casptr implementation missing for LP64
-#else
-	if (OSCompareAndSwap( (uint32_t)cmp, (uint32_t)new, (unsigned long *)target ))
+	if (OSCompareAndSwapPtr( cmp, new, (void**)target ))
 		return cmp;
 	else
 		return (void *)(~(uintptr_t)cmp); /* Must return something *other* than cmp */
-#endif
 }
 
 /*
@@ -1201,8 +1199,10 @@ dtrace_copycheck(user_addr_t uaddr, uintptr_t kaddr, size_t size)
 }
 
 void
-dtrace_copyin(user_addr_t src, uintptr_t dst, size_t len)
+dtrace_copyin(user_addr_t src, uintptr_t dst, size_t len, volatile uint16_t *flags)
 {
+#pragma unused(flags)
+    
 	if (dtrace_copycheck( src, dst, len )) {
 		if (copyin((const user_addr_t)src, (char *)dst, (vm_size_t)len)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_BADADDR);
@@ -1213,8 +1213,10 @@ dtrace_copyin(user_addr_t src, uintptr_t dst, size_t len)
 }
 
 void
-dtrace_copyinstr(user_addr_t src, uintptr_t dst, size_t len)
+dtrace_copyinstr(user_addr_t src, uintptr_t dst, size_t len, volatile uint16_t *flags)
 {
+#pragma unused(flags)
+    
 	size_t actual;
 	
 	if (dtrace_copycheck( src, dst, len )) {
@@ -1236,8 +1238,10 @@ dtrace_copyinstr(user_addr_t src, uintptr_t dst, size_t len)
 }
 
 void
-dtrace_copyout(uintptr_t src, user_addr_t dst, size_t len)
+dtrace_copyout(uintptr_t src, user_addr_t dst, size_t len, volatile uint16_t *flags)
 {
+#pragma unused(flags)
+    
 	if (dtrace_copycheck( dst, src, len )) {
 		if (copyout((const void *)src, dst, (vm_size_t)len)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_BADADDR);
@@ -1248,8 +1252,10 @@ dtrace_copyout(uintptr_t src, user_addr_t dst, size_t len)
 }
 
 void
-dtrace_copyoutstr(uintptr_t src, user_addr_t dst, size_t len)
+dtrace_copyoutstr(uintptr_t src, user_addr_t dst, size_t len, volatile uint16_t *flags)
 {
+#pragma unused(flags)
+    
 	size_t actual;
 
 	if (dtrace_copycheck( dst, src, len )) {
@@ -1504,7 +1510,7 @@ void cmn_err( int level, const char *format, ... )
  *  2002-01-24 	gvdl	Initial implementation of strstr
  */
 
-__private_extern__ char *
+__private_extern__ const char *
 strstr(const char *in, const char *str)
 {
     char c;
@@ -1512,7 +1518,7 @@ strstr(const char *in, const char *str)
 
     c = *str++;
     if (!c)
-        return (char *) in;	// Trivial empty string case
+        return (const char *) in;	// Trivial empty string case
 
     len = strlen(str);
     do {
@@ -1525,7 +1531,7 @@ strstr(const char *in, const char *str)
         } while (sc != c);
     } while (strncmp(in, str, len) != 0);
 
-    return (char *) (in - 1);
+    return (const char *) (in - 1);
 }
 
 /*
@@ -1541,7 +1547,7 @@ dtrace_caller(int ignore)
 int
 dtrace_getstackdepth(int aframes)
 {
-	struct frame *fp = (struct frame *)dtrace_getfp();
+	struct frame *fp = (struct frame *)__builtin_frame_address(0);
 	struct frame *nextfp, *minfp, *stacktop;
 	int depth = 0;
 	int on_intr;
@@ -1549,7 +1555,7 @@ dtrace_getstackdepth(int aframes)
 	if ((on_intr = CPU_ON_INTR(CPU)) != 0)
 		stacktop = (struct frame *)dtrace_get_cpu_int_stack_top();
 	else
-		stacktop = (struct frame *)(dtrace_get_kernel_stack(current_thread()) + KERNEL_STACK_SIZE);
+		stacktop = (struct frame *)(dtrace_get_kernel_stack(current_thread()) + kernel_stack_size);
 
 	minfp = fp;
 
@@ -1568,7 +1574,7 @@ dtrace_getstackdepth(int aframes)
                                 vm_offset_t kstack_base = dtrace_get_kernel_stack(current_thread());
 
                                 minfp = (struct frame *)kstack_base;
-                                stacktop = (struct frame *)(kstack_base + KERNEL_STACK_SIZE);
+                                stacktop = (struct frame *)(kstack_base + kernel_stack_size);
 
 				on_intr = 0;
 				continue;

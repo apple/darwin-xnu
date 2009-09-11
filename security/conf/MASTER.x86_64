@@ -1,0 +1,30 @@
+######################################################################
+#
+#  RELEASE	= [ intel mach libkerncpp config_dtrace audit ]
+#  PROFILE	= [ RELEASE profile ]
+#  DEBUG	= [ RELEASE debug ]
+#
+#
+#  EMBEDDED	= [ intel mach libkerncpp audit ]
+#  DEVELOPMENT	= [ EMBEDDED ]
+#
+######################################################################
+
+#
+# Note: MAC/AUDIT options must be set in all the bsd/conf, osfmk/conf, and 
+# security/conf MASTER files.
+#
+options		CONFIG_MACF			# Mandatory Access Control Framework
+options		CONFIG_MACF_SOCKET_SUBSET	# MACF subset of socket support
+options		CONFIG_FSE
+#options	CONFIG_MACF_SOCKET
+#options	CONFIG_MACF_NET
+#options	CONFIG_MACF_ALWAYS_LABEL_MBUF
+#options	CONFIG_MACF_DEBUG
+#options	CONFIG_MACF_MACH
+options		CONFIG_AUDIT			# Kernel auditing
+
+machine		"x86_64"					# <intel>
+cpu		"x86_64"					# <intel>
+
+options     NO_NESTED_PMAP                  # <no_nested_pmap>

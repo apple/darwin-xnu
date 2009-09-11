@@ -51,14 +51,14 @@ extern dtrace_id_t      dtrace_probeid_error;   /* special ERROR probe */
 
 void
 dtrace_probe_error(dtrace_state_t *state, dtrace_epid_t epid, int which,
-    int fault, int fltoffs, uint64_t illval)
+    int fltoffs, int fault, uint64_t illval)
 {
 	/*
 	 * dtrace_getarg() is a lost cause on PPC. For the case of the error probe firing lets
 	 * stash away "illval" here, and special-case retrieving it in DIF_VARIABLE_ARG.
 	 */
 	state->dts_arg_error_illval = illval;
-	dtrace_probe( dtrace_probeid_error, (uint64_t)(uintptr_t)state, epid, which, fault, fltoffs );
+	dtrace_probe( dtrace_probeid_error, (uint64_t)(uintptr_t)state, epid, which, fltoffs, fault );
 }
 
 /*
@@ -143,12 +143,6 @@ dtrace_xcall(processorid_t cpu, dtrace_xcall_t f, void *arg)
 /*
  * Runtime and ABI
  */
-extern greg_t
-dtrace_getfp(void)
-{
-	return (greg_t)__builtin_frame_address(0);
-}
-
 uint64_t
 dtrace_getreg(struct regs *savearea, uint_t reg)
 {
@@ -497,7 +491,7 @@ void
 dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
     uint32_t *intrpc)
 {
-	struct frame *fp = (struct frame *)dtrace_getfp();
+	struct frame *fp = (struct frame *)__builtin_frame_address(0);
 	struct frame *nextfp, *minfp, *stacktop;
 	int depth = 0;
 	int last = 0;
@@ -508,7 +502,7 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 	if ((on_intr = CPU_ON_INTR(CPU)) != 0)
 		stacktop = (struct frame *)dtrace_get_cpu_int_stack_top();
 	else
-		stacktop = (struct frame *)(dtrace_get_kernel_stack(current_thread()) + KERNEL_STACK_SIZE);
+		stacktop = (struct frame *)(dtrace_get_kernel_stack(current_thread()) + kernel_stack_size);
 
 	minfp = fp;
 
@@ -519,7 +513,7 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 
 	while (depth < pcstack_limit) {
 		nextfp = *(struct frame **)fp;
-		pc = *(uintptr_t *)(((uint32_t)fp) + RETURN_OFFSET);
+		pc = *(uintptr_t *)(((uintptr_t)fp) + RETURN_OFFSET);
 
 		if (nextfp <= minfp || nextfp >= stacktop) {
 			if (on_intr) {
@@ -529,7 +523,7 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 				vm_offset_t kstack_base = dtrace_get_kernel_stack(current_thread());
 
 				minfp = (struct frame *)kstack_base;
-				stacktop = (struct frame *)(kstack_base + KERNEL_STACK_SIZE);
+				stacktop = (struct frame *)(kstack_base + kernel_stack_size);
 
 				on_intr = 0;
 				continue;
@@ -587,15 +581,9 @@ dtrace_toxic_ranges(void (*func)(uintptr_t base, uintptr_t limit))
 	 * VALID address greater than "base".
 	 */
 	func(0x0, VM_MIN_KERNEL_ADDRESS);
-	func(VM_MAX_KERNEL_ADDRESS + 1, ~(uintptr_t)0);
+	if (VM_MAX_KERNEL_ADDRESS < ~(uintptr_t)0)
+			func(VM_MAX_KERNEL_ADDRESS + 1, ~(uintptr_t)0);
 }
 
 extern void *mapping_phys_lookup(ppnum_t, unsigned int *);
-
-boolean_t
-dtxnu_is_RAM_page(ppnum_t pn)
-{
-	unsigned int ignore;
-	return (NULL == mapping_phys_lookup(pn, &ignore)) ? FALSE : TRUE;
-}
 

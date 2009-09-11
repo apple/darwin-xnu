@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -114,14 +114,14 @@ struct nfs_fsattr {
 struct nfs_funcs {
 	int	(*nf_mount)(struct nfsmount *, vfs_context_t, struct user_nfs_args *, nfsnode_t *);
 	int	(*nf_update_statfs)(struct nfsmount *, vfs_context_t);
-	int	(*nf_getquota)(struct nfsmount *, vfs_context_t, u_long, int, struct dqblk *);
-	int	(*nf_access_rpc)(nfsnode_t, u_long *, vfs_context_t);
+	int	(*nf_getquota)(struct nfsmount *, vfs_context_t, uid_t, int, struct dqblk *);
+	int	(*nf_access_rpc)(nfsnode_t, u_int32_t *, vfs_context_t);
 	int	(*nf_getattr_rpc)(nfsnode_t, mount_t, u_char *, size_t, vfs_context_t, struct nfs_vattr *, u_int64_t *);
-	int	(*nf_setattr_rpc)(nfsnode_t, struct vnode_attr *, vfs_context_t, int);
+	int	(*nf_setattr_rpc)(nfsnode_t, struct vnode_attr *, vfs_context_t);
 	int	(*nf_read_rpc_async)(nfsnode_t, off_t, size_t, thread_t, kauth_cred_t, struct nfsreq_cbinfo *, struct nfsreq **);
-	int	(*nf_read_rpc_async_finish)(nfsnode_t, struct nfsreq *, struct uio *, size_t *, int *);
+	int	(*nf_read_rpc_async_finish)(nfsnode_t, struct nfsreq *, uio_t, size_t *, int *);
 	int	(*nf_readlink_rpc)(nfsnode_t, char *, uint32_t *, vfs_context_t);
-	int	(*nf_write_rpc_async)(nfsnode_t, struct uio *, size_t, thread_t, kauth_cred_t, int, struct nfsreq_cbinfo *, struct nfsreq **);
+	int	(*nf_write_rpc_async)(nfsnode_t, uio_t, size_t, thread_t, kauth_cred_t, int, struct nfsreq_cbinfo *, struct nfsreq **);
 	int	(*nf_write_rpc_async_finish)(nfsnode_t, struct nfsreq *, int *, size_t *, uint64_t *);
 	int	(*nf_commit_rpc)(nfsnode_t, uint64_t, uint64_t, kauth_cred_t);
 	int	(*nf_lookup_rpc_async)(nfsnode_t, char *, int, vfs_context_t, struct nfsreq **);
@@ -129,6 +129,17 @@ struct nfs_funcs {
 	int	(*nf_remove_rpc)(nfsnode_t, char *, int, thread_t, kauth_cred_t);
 	int	(*nf_rename_rpc)(nfsnode_t, char *, int, nfsnode_t, char *, int, vfs_context_t);
 };
+
+/*
+ * The long form of the NFSv4 client ID.
+ */
+struct nfs_client_id {
+	TAILQ_ENTRY(nfs_client_id)	nci_link;	/* list of client IDs */
+	char				*nci_id;	/* client id buffer */
+	int				nci_idlen;	/* length of client id buffer */
+};
+TAILQ_HEAD(nfsclientidlist, nfs_client_id);
+__private_extern__ struct nfsclientidlist nfsclientids;
 
 /*
  * Mount structure.
@@ -147,10 +158,10 @@ struct nfsmount {
 	TAILQ_HEAD(, nfs_gss_clnt_ctx) nm_gsscl; /* GSS user contexts */
 	int	nm_timeo;		/* Init timer for NFSMNT_DUMBTIMR */
 	int	nm_retry;		/* Max retries */
-	int	nm_rsize;		/* Max size of read rpc */
-	int	nm_wsize;		/* Max size of write rpc */
-	int	nm_biosize;		/* buffer I/O size */
-	int	nm_readdirsize;		/* Size of a readdir rpc */
+	uint32_t nm_rsize;		/* Max size of read rpc */
+	uint32_t nm_wsize;		/* Max size of write rpc */
+	uint32_t nm_biosize;		/* buffer I/O size */
+	uint32_t nm_readdirsize;	/* Size of a readdir rpc */
 	int	nm_readahead;		/* Num. of blocks to readahead */
 	int	nm_acregmin;		/* reg file min attr cache timeout */
 	int	nm_acregmax;		/* reg file max attr cache timeout */
@@ -167,9 +178,18 @@ struct nfsmount {
 		uint32_t rqportstamp;	/* timestamp of rquota port */
 	    } v3;
 	    struct {			/* v4 specific fields */
-		uint64_t clientid;	/* client ID */
-		uint64_t mounttime;	/* mount verifier */
+		struct nfs_client_id *longid; /* client ID, long form */
+		uint64_t mounttime;	/* used as client ID verifier */
+		uint64_t clientid;	/* client ID, short form */
 		thread_call_t renew_timer; /* RENEW timer call */
+		TAILQ_HEAD(, nfs_open_owner) open_owners; /* list of open owners */
+		TAILQ_HEAD(, nfsnode) recallq; /* list of nodes with recalled delegations */
+		TAILQ_ENTRY(nfsmount) cblink; /* chain of mounts registered for callbacks */
+		uint32_t stateinuse;	/* state in use counter */
+		uint32_t stategenid;	/* state generation counter */
+		kauth_cred_t mcred;	/* credential used for the mount */
+		uint32_t cbid;		/* callback channel identifier */
+		uint32_t cbrefs;	/* # callbacks using this mount */
 	    } v4;
 	} nm_un;
 	/* async I/O queue */
@@ -184,12 +204,15 @@ struct nfsmount {
 	mbuf_t	nm_nam;			/* Address of server */
 	u_short nm_sockflags;		/* socket state flags */
 	socket_t nm_so;			/* RPC socket */
-	int	nm_reconnect_start;	/* reconnect start time */
+	time_t	nm_deadto_start;	/* dead timeout start time */
+	time_t	nm_reconnect_start;	/* reconnect start time */
 	int	nm_tprintf_initial_delay;	/* delay first "server down" */
 	int	nm_tprintf_delay;	/* delay between "server down" */
+	int	nm_deadtimeout;		/* delay between first "server down" and dead */
 	int	nm_srtt[4];		/* Timers for RPCs */
 	int	nm_sdrtt[4];
 	int	nm_timeouts;		/* Request timeouts */
+	int	nm_jbreqs;		/* # R_JBTPRINTFMSG requests */
 	union {
 		struct {
 			int sent;	/* Request send count */
@@ -211,6 +234,7 @@ struct nfsmount {
 /*
  * NFS mount state flags (nm_state)
  */
+#define NFSSTA_BIGCOOKIES	0x00000800  /* have seen >32bit dir cookies */
 #define NFSSTA_JUKEBOXTIMEO	0x00001000  /* experienced a jukebox timeout */
 #define NFSSTA_LOCKTIMEO	0x00002000  /* experienced a lock req timeout */
 #define NFSSTA_MOUNTED		0x00004000  /* completely mounted */
@@ -222,6 +246,8 @@ struct nfsmount {
 #define NFSSTA_GOTFSINFO	0x00100000  /* Got the V3 fsinfo */
 #define NFSSTA_SNDLOCK		0x01000000  /* Send socket lock */
 #define NFSSTA_WANTSND		0x02000000  /* Want above */
+#define NFSSTA_DEAD		0x04000000  /* mount is dead */
+#define NFSSTA_RECOVER		0x08000000  /* mount state needs to be recovered */
 
 /* flags for nm_sockflags */
 #define NMSOCK_READY		0x0001	/* socket is ready for use */
@@ -245,9 +271,18 @@ struct nfsmount {
 /* aliases for version-specific fields */
 #define nm_rqport	nm_un.v3.rqport
 #define nm_rqportstamp	nm_un.v3.rqportstamp
+#define nm_longid	nm_un.v4.longid
 #define nm_clientid	nm_un.v4.clientid
 #define nm_mounttime	nm_un.v4.mounttime
 #define nm_renew_timer	nm_un.v4.renew_timer
+#define nm_open_owners	nm_un.v4.open_owners
+#define nm_stateinuse	nm_un.v4.stateinuse
+#define nm_stategenid	nm_un.v4.stategenid
+#define nm_mcred	nm_un.v4.mcred
+#define nm_cbid		nm_un.v4.cbid
+#define nm_cblink	nm_un.v4.cblink
+#define nm_cbrefs	nm_un.v4.cbrefs
+#define nm_recallq	nm_un.v4.recallq
 
 #if defined(KERNEL)
 /*

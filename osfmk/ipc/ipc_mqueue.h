@@ -73,11 +73,14 @@
 #include <kern/assert.h>
 #include <kern/macro_help.h>
 #include <kern/kern_types.h>
+#include <kern/spl.h>
 #include <kern/wait_queue.h>
 
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_types.h>
+
+#include <sys/event.h>
 
 typedef struct ipc_mqueue {
 	union {
@@ -86,10 +89,14 @@ typedef struct ipc_mqueue {
 			struct ipc_kmsg_queue	messages;
 			mach_port_msgcount_t	msgcount;
 			mach_port_msgcount_t	qlimit;
-		 	mach_port_seqno_t 	seqno;
+			mach_port_seqno_t 	seqno;
+			mach_port_name_t	receiver_name;
 			boolean_t		fullwaiters;
 		} port;
-		struct wait_queue_set		set_queue;
+		struct {
+			struct wait_queue_set	set_queue;
+			mach_port_name_t	local_name;
+		} pset;
 	} data;
 } *ipc_mqueue_t;
 
@@ -100,10 +107,13 @@ typedef struct ipc_mqueue {
 #define imq_msgcount		data.port.msgcount
 #define imq_qlimit		data.port.qlimit
 #define imq_seqno		data.port.seqno
+#define imq_receiver_name	data.port.receiver_name
 #define imq_fullwaiters		data.port.fullwaiters
 
-#define imq_set_queue		data.set_queue
-#define imq_setlinks		data.set_queue.wqs_setlinks
+#define imq_set_queue		data.pset.set_queue
+#define imq_setlinks		data.pset.set_queue.wqs_setlinks
+#define imq_preposts		data.pset.set_queue.wqs_preposts
+#define imq_local_name		data.pset.local_name
 #define imq_is_set(mq)		wait_queue_is_set(&(mq)->imq_set_queue)
 
 #define	imq_lock(mq)		wait_queue_lock(&(mq)->imq_wait_queue)
@@ -115,10 +125,10 @@ typedef struct ipc_mqueue {
 #define imq_full_kernel(mq)	((mq)->imq_msgcount >= MACH_PORT_QLIMIT_KERNEL)
 
 extern int ipc_mqueue_full;
-extern int ipc_mqueue_rcv;
+// extern int ipc_mqueue_rcv;
 
 #define IPC_MQUEUE_FULL		CAST_EVENT64_T(&ipc_mqueue_full)
-#define IPC_MQUEUE_RECEIVE	CAST_EVENT64_T(&ipc_mqueue_rcv)
+#define IPC_MQUEUE_RECEIVE	NO_EVENT64
 
 /*
  * Exported interfaces
@@ -165,7 +175,8 @@ extern mach_msg_return_t ipc_mqueue_send(
 	ipc_mqueue_t		mqueue,
 	ipc_kmsg_t		kmsg,
 	mach_msg_option_t	option,
-	mach_msg_timeout_t	timeout_val);
+	mach_msg_timeout_t	timeout_val,
+	spl_t			s);
 
 /* Deliver message to message queue or waiting receiver */
 extern void ipc_mqueue_post(
@@ -180,16 +191,30 @@ extern void ipc_mqueue_receive(
 	mach_msg_timeout_t	timeout_val,
 	int                     interruptible);
 
+/* Receive a message from a message queue using a specified thread */
+extern wait_result_t ipc_mqueue_receive_on_thread(
+        ipc_mqueue_t            mqueue,
+	mach_msg_option_t       option,
+	mach_msg_size_t         max_size,
+	mach_msg_timeout_t      rcv_timeout,
+	int                     interruptible,
+	thread_t                thread);
+
 /* Continuation routine for message receive */
 extern void ipc_mqueue_receive_continue(
 	void			*param,
 	wait_result_t		wresult);
 
 /* Select a message from a queue and try to post it to ourself */
-extern void ipc_mqueue_select(
+extern void ipc_mqueue_select_on_thread(
 	ipc_mqueue_t		mqueue,
 	mach_msg_option_t	option,
-	mach_msg_size_t		max_size);
+	mach_msg_size_t		max_size,
+	thread_t                thread);
+
+/* Peek into a messaqe queue to see if there are messages */
+extern int ipc_mqueue_peek(
+	ipc_mqueue_t		mqueue);
 
 /* Clear a message count reservation */
 extern void ipc_mqueue_release_msgcount(

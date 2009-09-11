@@ -72,12 +72,17 @@
 #include <i386/trap.h>
 #include <assym.s>
 #include <mach/exception_types.h>
+#include <config_dtrace.h>
 
 #define _ARCH_I386_ASM_HELP_H_          /* Prevent inclusion of user header */
 #include <mach/i386/syscall_sw.h>
 
 #include <i386/mp.h>
 
+
+#define CLI cli
+#define STI sti
+	
 /*
  * PTmap is recursive pagemap at top of virtual address space.
  * Within PTmap, the page directory can be found (third indirection).
@@ -190,7 +195,16 @@ LEXT(recover_table)		;\
 	.align	2			;\
 	.globl	EXT(recover_table_end)	;\
 LEXT(recover_table_end)			;\
-	.text
+	.long 0  /* workaround see comment below */ ;\
+	.text ;
+
+/* TODO FIXME
+ * the .long 0 is to work around a linker bug (insert radar# here)
+ * basically recover_table_end has zero size and bumps up right against saved_esp in acpi_wakeup.s
+ * recover_table_end is in __RECOVER,__vectors and saved_esp is in __SLEEP,__data, but they're right next to each
+ * other and so the linker combines them and incorrectly relocates everything referencing recover_table_end to point
+ * into the SLEEP section
+ */
 
 /*
  * Allocate recovery and table.
@@ -245,12 +259,12 @@ Entry(timer_grab)
 /*
  * Add 64-bit delta in register dreg : areg to timer pointed to by register treg.
  */
-#define TIMER_UPDATE(treg,dreg,areg)									  \
-	addl	TIMER_LOW(treg),areg		/* add low bits */				; \
-	adcl	dreg,TIMER_HIGH(treg)		/* add carry high bits */		; \
-	movl	areg,TIMER_LOW(treg)		/* store updated low bit */		; \
-	movl	TIMER_HIGH(treg),dreg		/* copy high bits */			; \
-	movl    dreg,TIMER_HIGHCHK(treg)	/* to high check */
+#define TIMER_UPDATE(treg,dreg,areg,offset)									\
+	addl	(TIMER_LOW+(offset))(treg),areg		/* add low bits */			;\
+	adcl	dreg,(TIMER_HIGH+(offset))(treg)	/* add carry high bits */	;\
+	movl	areg,(TIMER_LOW+(offset))(treg)		/* store updated low bit */	;\
+	movl	(TIMER_HIGH+(offset))(treg),dreg	/* copy high bits */		;\
+	movl	dreg,(TIMER_HIGHCHK+(offset))(treg)	/* to high check */
 
 /*
  * Add time delta to old timer and start new.
@@ -259,22 +273,21 @@ Entry(timer_grab)
 	NANOTIME							/* edx:eax nanosecs */			; \
 	movl	%eax,%esi					/* save timestamp */			; \
 	movl	%edx,%edi					/* save timestamp */			; \
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx  /* get current thread */			; \
+	subl	(old##_TIMER)+TIMER_TSTAMP(%ecx),%eax	   /* compute elapsed time */	  ; \
+	sbbl	(old##_TIMER)+TIMER_TSTAMP+4(%ecx),%edx	 /* compute elapsed time */	  ; \
+	TIMER_UPDATE(%ecx,%edx,%eax,old##_TIMER)			/* update timer */			  ; \
+	movl	%esi,(new##_TIMER)+TIMER_TSTAMP(%ecx)	   /* set timestamp */			 ; \
+	movl	%edi,(new##_TIMER)+TIMER_TSTAMP+4(%ecx)	 /* set timestamp */			 ; \
+	leal	(new##_TIMER)(%ecx), %ecx   /* compute new timer pointer */ ; \
 	movl	%gs:CPU_PROCESSOR,%ebx		/* get current processor */		; \
-	movl 	THREAD_TIMER(%ebx),%ecx		/* get current timer */			; \
-	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
-	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
-	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
-	addl	$(new##_TIMER-old##_TIMER),%ecx	/* point to new timer */	; \
-	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
-	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */				; \
 	movl	%ecx,THREAD_TIMER(%ebx)		/* set current timer */			; \
 	movl	%esi,%eax					/* restore timestamp */			; \
 	movl	%edi,%edx					/* restore timestamp */			; \
-	movl	CURRENT_STATE(%ebx),%ecx	/* current state */				; \
-	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
-	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
-	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
-	addl	$(new##_STATE-old##_STATE),%ecx /* point to new state */	; \
+	subl	(old##_STATE)+TIMER_TSTAMP(%ebx),%eax	   /* compute elapsed time */	  ; \
+	sbbl	(old##_STATE)+TIMER_TSTAMP+4(%ebx),%edx	 /* compute elapsed time */	  ; \
+	TIMER_UPDATE(%ebx,%edx,%eax,old##_STATE)			/* update timer */			  ; \
+	leal	(new##_STATE)(%ebx),%ecx	/* compute new state pointer */ ; \
 	movl	%ecx,CURRENT_STATE(%ebx)	/* set current state */			; \
 	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
 	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */
@@ -306,7 +319,7 @@ Entry(timer_grab)
 	movl 	THREAD_TIMER(%ebx),%ecx		/* get current timer */			; \
 	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
 	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
-	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	TIMER_UPDATE(%ecx,%edx,%eax,0)		/* update timer */				; \
 	movl	KERNEL_TIMER(%ebx),%ecx		/* point to kernel timer */		; \
 	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
 	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */				; \
@@ -316,7 +329,7 @@ Entry(timer_grab)
 	pushl	%ecx						/* save state */				; \
 	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
 	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
-	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	TIMER_UPDATE(%ecx,%edx,%eax,0)		/* update timer */				; \
 	leal	IDLE_STATE(%ebx),%eax		/* get idle state */			; \
 	cmpl	%eax,%ecx					/* compare current state */		; \
 	je		0f							/* skip if equal */				; \
@@ -340,7 +353,7 @@ Entry(timer_grab)
 	movl	KERNEL_TIMER(%ebx),%ecx		/* point to kernel timer */		; \
 	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
 	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
-	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	TIMER_UPDATE(%ecx,%edx,%eax,0)		/* update timer */				; \
 	movl	THREAD_TIMER(%ebx),%ecx		/* interrupted timer */			; \
 	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
 	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */				; \
@@ -349,7 +362,7 @@ Entry(timer_grab)
 	movl	CURRENT_STATE(%ebx),%ecx	/* get current state */			; \
 	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
 	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
-	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	TIMER_UPDATE(%ecx,%edx,%eax,0)		/* update timer */				; \
 	popl	%ecx						/* restore state */				; \
 	movl	%ecx,CURRENT_STATE(%ebx)	/* set current state */			; \
 	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
@@ -452,8 +465,8 @@ Entry(db_task_start)
 	movl	%esp,%edx
 	subl	$(ISS32_SIZE),%edx
 	movl	%edx,%esp		/* allocate x86_saved_state on stack */
-	movl	%eax,R_ERR(%esp)
-	movl	%ebx,R_TRAPNO(%esp)
+	movl	%eax,R32_ERR(%esp)
+	movl	%ebx,R32_TRAPNO(%esp)
 	pushl	%edx
 	CPU_NUMBER(%edx)
 	movl	CX(EXT(master_dbtss),%edx),%edx
@@ -472,15 +485,23 @@ Entry(db_task_start)
 /*
  *	Called as a function, makes the current thread
  *	return from the kernel as if from an exception.
+ *	We will consult with DTrace if this is a 
+ *	newly created thread and we need to fire a probe.
  */
 
 	.globl	EXT(thread_exception_return)
 	.globl	EXT(thread_bootstrap_return)
-LEXT(thread_exception_return)
 LEXT(thread_bootstrap_return)
-	cli
+#if CONFIG_DTRACE
+	call EXT(dtrace_thread_bootstrap)
+#endif
+
+LEXT(thread_exception_return)
+	CLI
 	movl	%gs:CPU_KERNEL_STACK,%ecx
+
 	movl	(%ecx),%esp			/* switch back to PCB stack */
+	xorl	%ecx,%ecx		/* don't check if we're in the PFZ */
 	jmp	EXT(return_from_trap)
 
 Entry(call_continuation)
@@ -509,14 +530,14 @@ Entry(call_continuation)
  *	cr3	 -> kernel directory
  *	esp	 -> low based stack
  *	gs	 -> CPU_DATA_GS
- *	cs	 -> KERNEL_CS
+ *	cs	 -> KERNEL32_CS
  *	ss/ds/es -> KERNEL_DS
  *
  *	interrupts disabled
  *	direction flag cleared
  */
 Entry(lo_alltraps)
-	movl	R_CS(%esp),%eax		/* assume 32-bit state */
+	movl	R32_CS(%esp),%eax	/* assume 32-bit state */
 	cmpl	$(SS_64),SS_FLAVOR(%esp)/* 64-bit? */	
 	jne	1f
 	movl	R64_CS(%esp),%eax	/* 64-bit user mode */
@@ -548,30 +569,63 @@ Entry(lo_alltraps)
 	CCALL1(user_trap, %ebx)		/* call user trap routine */
 	cli				/* hold off intrs - critical section */
 	popl	%esp			/* switch back to PCB stack */
-
+	xorl	%ecx,%ecx		/* don't check if we're in the PFZ */
+	
 /*
  * Return from trap or system call, checking for ASTs.
  * On lowbase PCB stack with intrs disabled
  */	
 LEXT(return_from_trap)
-	movl	%gs:CPU_PENDING_AST,%eax
-	testl	%eax,%eax
+	movl	%gs:CPU_PENDING_AST, %eax
+	testl	%eax, %eax
 	je	EXT(return_to_user)	/* branch if no AST */
 
-	movl	%gs:CPU_KERNEL_STACK,%ebx
-	xchgl	%ebx,%esp		/* switch to kernel stack */
-	sti				/* interrupts always enabled on return to user mode */
+LEXT(return_from_trap_with_ast)
+	movl	%gs:CPU_KERNEL_STACK, %ebx
+	xchgl	%ebx, %esp		/* switch to kernel stack */
 
+	testl	%ecx, %ecx		/* see if we need to check for an EIP in the PFZ */
+	je	2f			/* no, go handle the AST */
+	cmpl	$(SS_64), SS_FLAVOR(%ebx)	/* are we a 64-bit task? */
+	je	1f
+					/* no... 32-bit user mode */
+	movl	R32_EIP(%ebx), %eax
 	pushl	%ebx			/* save PCB stack */
-	xorl	%ebp,%ebp		/* Clear framepointer */
+	xorl	%ebp, %ebp		/* clear frame pointer */
+	CCALL1(commpage_is_in_pfz32, %eax)
+	popl	%ebx			/* retrieve pointer to PCB stack */
+	testl	%eax, %eax
+	je	2f			/* not in the PFZ... go service AST */
+	movl	%eax, R32_EBX(%ebx)	/* let the PFZ know we've pended an AST */
+	xchgl	%ebx, %esp		/* switch back to PCB stack */
+	jmp	EXT(return_to_user)
+1:					/* 64-bit user mode */
+	movl	R64_RIP(%ebx), %ecx
+	movl	R64_RIP+4(%ebx), %eax
+	pushl	%ebx			/* save PCB stack */
+	xorl	%ebp, %ebp		/* clear frame pointer */
+	CCALL2(commpage_is_in_pfz64, %ecx, %eax)
+	popl	%ebx			/* retrieve pointer to PCB stack */
+	testl	%eax, %eax		
+	je	2f			/* not in the PFZ... go service AST */
+	movl	%eax, R64_RBX(%ebx)	/* let the PFZ know we've pended an AST */
+	xchgl	%ebx, %esp		/* switch back to PCB stack */
+	jmp	EXT(return_to_user)
+2:	
+	STI				/* interrupts always enabled on return to user mode */
+	pushl	%ebx			/* save PCB stack */
+	xorl	%ebp, %ebp		/* Clear framepointer */
 	CCALL1(i386_astintr, $0)	/* take the AST */
-	cli
+	CLI
+	
 	popl	%esp			/* switch back to PCB stack (w/exc link) */
+
+	xorl	%ecx, %ecx		/* don't check if we're in the PFZ */
 	jmp	EXT(return_from_trap)	/* and check again (rare) */
 
 LEXT(return_to_user)
 	TIME_TRAP_UEXIT
-
+	
 LEXT(ret_to_user)
 	cmpl	$0, %gs:CPU_IS64BIT
 	je	EXT(lo_ret_to_user)
@@ -586,7 +640,7 @@ LEXT(ret_to_user)
  */
 trap_from_kernel:
 	movl	%esp, %eax		/* saved state addr */
-	pushl	R_EIP(%esp)		/* Simulate a CALL from fault point */
+	pushl	R32_EIP(%esp)		/* Simulate a CALL from fault point */
 	pushl   %ebp			/* Extend framepointer chain */
 	movl	%esp, %ebp
 	CCALL1(kernel_trap, %eax)	/* Call kernel trap handler */
@@ -597,16 +651,16 @@ trap_from_kernel:
 	movl	%gs:CPU_PENDING_AST,%eax		/* get pending asts */
 	testl	$ AST_URGENT,%eax	/* any urgent preemption? */
 	je	ret_to_kernel			/* no, nothing to do */
-	cmpl	$ T_PREEMPT,R_TRAPNO(%esp)
+	cmpl	$ T_PREEMPT,R32_TRAPNO(%esp)
 	je	ret_to_kernel			  /* T_PREEMPT handled in kernel_trap() */
-	testl	$ EFL_IF,R_EFLAGS(%esp)			/* interrupts disabled? */
+	testl	$ EFL_IF,R32_EFLAGS(%esp)		/* interrupts disabled? */
 	je	ret_to_kernel
 	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL		/* preemption disabled? */
 	jne	ret_to_kernel
 	movl	%gs:CPU_KERNEL_STACK,%eax
 	movl	%esp,%ecx
 	xorl	%eax,%ecx
-	andl	$(-KERNEL_STACK_SIZE),%ecx
+	and	EXT(kernel_stack_mask),%ecx
 	testl	%ecx,%ecx		/* are we on the kernel stack? */
 	jne	ret_to_kernel		/* no, skip it */
 
@@ -627,7 +681,7 @@ ret_to_kernel:
  *	cr3	 -> kernel directory
  *	esp	 -> low based stack
  *	gs	 -> CPU_DATA_GS
- *	cs	 -> KERNEL_CS
+ *	cs	 -> KERNEL32_CS
  *	ss/ds/es -> KERNEL_DS
  *
  *	interrupts disabled
@@ -675,7 +729,7 @@ Entry(lo_allintrs)
 	incl	%gs:CPU_INTERRUPT_LEVEL
 
 	movl	%gs:CPU_INT_STATE, %eax
-	CCALL1(PE_incoming_interrupt, %eax) /* call generic interrupt routine */
+	CCALL1(interrupt, %eax)		/* call generic interrupt routine */
 
 	cli				/* just in case we returned with intrs enabled */
 	xorl	%eax,%eax
@@ -704,7 +758,7 @@ Entry(lo_allintrs)
 	popl	%esp			/* switch back to old stack */
 
 	/* Load interrupted code segment into %eax */
-	movl	R_CS(%esp),%eax		/* assume 32-bit state */
+	movl	R32_CS(%esp),%eax	/* assume 32-bit state */
 	cmpl	$(SS_64),SS_FLAVOR(%esp)/* 64-bit? */	
 	jne	3f
 	movl	R64_CS(%esp),%eax	/* 64-bit user mode */
@@ -726,7 +780,7 @@ Entry(lo_allintrs)
 	movl	%gs:CPU_KERNEL_STACK,%eax
 	movl	%esp,%ecx
 	xorl	%eax,%ecx
-	andl	$(-KERNEL_STACK_SIZE),%ecx
+	and	EXT(kernel_stack_mask),%ecx
 	testl	%ecx,%ecx			/* are we on the kernel stack? */
 	jne	ret_to_kernel			/* no, skip it */
 
@@ -748,7 +802,7 @@ int_from_intstack:
 	incl	%gs:CPU_INTERRUPT_LEVEL
 
 	movl	%esp, %edx		/* x86_saved_state */
-	CCALL1(PE_incoming_interrupt, %edx)
+	CCALL1(interrupt, %edx)
 
 	decl	%gs:CPU_INTERRUPT_LEVEL
 	decl	%gs:CPU_PREEMPTION_LEVEL
@@ -765,7 +819,8 @@ ast_from_interrupt_user:
 
 	TIME_TRAP_UENTRY
 
-	jmp	EXT(return_from_trap)	/* return */
+	movl	$1, %ecx		/* check if we're in the PFZ */
+	jmp	EXT(return_from_trap_with_ast)	/* return */
 
 
 /*******************************************************************************************************
@@ -777,7 +832,7 @@ ast_from_interrupt_user:
  *	cr3	 -> kernel directory
  *	esp	 -> low based stack
  *	gs	 -> CPU_DATA_GS
- *	cs	 -> KERNEL_CS
+ *	cs	 -> KERNEL32_CS
  *	ss/ds/es -> KERNEL_DS
  *
  *	interrupts disabled
@@ -789,7 +844,7 @@ Entry(lo_sysenter)
 	 * We can be here either for a mach syscall or a unix syscall,
 	 * as indicated by the sign of the code:
 	 */
-	movl	R_EAX(%esp),%eax
+	movl	R32_EAX(%esp),%eax
 	testl	%eax,%eax
 	js	EXT(lo_mach_scall)		/* < 0 => mach */
 						/* > 0 => unix */
@@ -928,7 +983,7 @@ Entry(lo_diag_scall)
  *	cr3	 -> kernel directory
  *	esp	 -> low based stack
  *	gs	 -> CPU_DATA_GS
- *	cs	 -> KERNEL_CS
+ *	cs	 -> KERNEL32_CS
  *	ss/ds/es -> KERNEL_DS
  *
  *	interrupts disabled
@@ -1280,103 +1335,6 @@ copyout_fail:
 
 #endif	/* MACH_ASSERT */
 
-
-#if	MACH_KDB || MACH_ASSERT
-
-/*
- * Following routines are also defined as macros in i386/pio.h
- * Compile then when MACH_KDB is configured so that they
- * can be invoked from the debugger.
- */
-
-/*
- * void outb(unsigned char *io_port,
- *	     unsigned char byte)
- *
- * Output a byte to an IO port.
- */
-ENTRY(outb)
-	PUSH_FRAME
-	ILL_ON_SLAVE
-	movl	ARG0,%edx		/* IO port address */
-	movl	ARG1,%eax		/* data to output */
-	outb	%al,%dx			/* send it out */
-	POP_FRAME
-	ret
-
-/*
- * unsigned char inb(unsigned char *io_port)
- *
- * Input a byte from an IO port.
- */
-ENTRY(inb)
-	PUSH_FRAME
-	ILL_ON_SLAVE
-	movl	ARG0,%edx		/* IO port address */
-	xor	%eax,%eax		/* clear high bits of register */
-	inb	%dx,%al			/* get the byte */
-	POP_FRAME
-	ret
-
-/*
- * void outw(unsigned short *io_port,
- *	     unsigned short word)
- *
- * Output a word to an IO port.
- */
-ENTRY(outw)
-	PUSH_FRAME
-	ILL_ON_SLAVE
-	movl	ARG0,%edx		/* IO port address */
-	movl	ARG1,%eax		/* data to output */
-	outw	%ax,%dx			/* send it out */
-	POP_FRAME
-	ret
-
-/*
- * unsigned short inw(unsigned short *io_port)
- *
- * Input a word from an IO port.
- */
-ENTRY(inw)
-	PUSH_FRAME
-	ILL_ON_SLAVE
-	movl	ARG0,%edx		/* IO port address */
-	xor	%eax,%eax		/* clear high bits of register */
-	inw	%dx,%ax			/* get the word */
-	POP_FRAME
-	ret
-
-/*
- * void outl(unsigned int *io_port,
- *	     unsigned int byte)
- *
- * Output an int to an IO port.
- */
-ENTRY(outl)
-	PUSH_FRAME
-	ILL_ON_SLAVE
-	movl	ARG0,%edx		/* IO port address*/
-	movl	ARG1,%eax		/* data to output */
-	outl	%eax,%dx		/* send it out */
-	POP_FRAME
-	ret
-
-/*
- * unsigned int inl(unsigned int *io_port)
- *
- * Input an int from an IO port.
- */
-ENTRY(inl)
-	PUSH_FRAME
-	ILL_ON_SLAVE
-	movl	ARG0,%edx		/* IO port address */
-	inl	%dx,%eax		/* get the int */
-	POP_FRAME
-	ret
-
-#endif	/* MACH_KDB  || MACH_ASSERT*/
-
 /*
  * void loutb(unsigned byte *io_port,
  *	      unsigned byte *data,
@@ -1721,7 +1679,7 @@ ENTRY(mul_scale)
  * Double-fault exception handler task. The last gasp...
  */
 Entry(df_task_start)
-	CCALL1(panic_double_fault, $(T_DOUBLE_FAULT))
+	CCALL1(panic_double_fault32, $(T_DOUBLE_FAULT))
 	hlt
 
 
@@ -1729,7 +1687,7 @@ Entry(df_task_start)
  * machine-check handler task. The last gasp...
  */
 Entry(mc_task_start)
-	CCALL1(panic_machine_check, $(T_MACHINE_CHECK))
+	CCALL1(panic_machine_check32, $(T_MACHINE_CHECK))
 	hlt
 
 /*

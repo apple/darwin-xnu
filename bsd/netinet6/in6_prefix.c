@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$KAME: in6_prefix.c,v 1.27 2000/03/29 23:13:13 itojun Exp $	*/
 
 /*
@@ -173,6 +201,7 @@ in6_prefixwithifp(struct ifnet *ifp, int plen, struct in6_addr *dst)
 	return (ifpr);
 }
 
+#if 0
 /*
  * Search prefix which matches arg prefix as specified in
  * draft-ietf-ipngwg-router-renum-08.txt
@@ -239,7 +268,7 @@ search_matched_prefix(struct ifnet *ifp, struct in6_prefixreq *ipr)
  * Return 1 if anything matched, and 0 if nothing matched.
  */
 static int
-mark_matched_prefixes(u_long cmd, struct ifnet *ifp, struct in6_rrenumreq *irr)
+mark_matched_prefixes(u_int32_t cmd, struct ifnet *ifp, struct in6_rrenumreq *irr)
 {
 	struct ifprefix *ifpr;
 	struct ifaddr *ifa;
@@ -340,6 +369,7 @@ unmark_prefixes(struct ifnet *ifp)
 	}
 	ifnet_lock_done(ifp);
 }
+#endif
 
 static void
 init_prefix_ltimes(struct rr_prefix *rpp)
@@ -602,7 +632,8 @@ add_each_addr(struct socket *so, struct rr_prefix *rpp, struct rp_addr *rap)
 {
 	struct in6_ifaddr *ia6;
 	struct in6_aliasreq ifra;
-	int error;
+	struct proc *p = current_proc();
+	int error, p64 = proc_is64bit(p);
 
 	/* init ifra */
 	bzero(&ifra, sizeof(ifra));
@@ -638,16 +669,16 @@ add_each_addr(struct socket *so, struct rr_prefix *rpp, struct rp_addr *rap)
 			/* link this addr and the prefix each other */
 			if (rap->ra_addr)
 				ifafree(&rap->ra_addr->ia_ifa);
+			/* Reference held in in6ifa_ifpwithaddr() */
 			rap->ra_addr = ia6;
-			ifaref(&rap->ra_addr->ia_ifa);
 			ia6->ia6_ifpr = rp2ifpr(rpp);
 			return;
 		}
 		if (ia6->ia6_ifpr == rp2ifpr(rpp)) {
 			if (rap->ra_addr)
 				ifafree(&rap->ra_addr->ia_ifa);
+			/* Reference held in in6ifa_ifpwithaddr() */
 			rap->ra_addr = ia6;
-			ifaref(&rap->ra_addr->ia_ifa);
 			return;
 		}
 		/*
@@ -666,13 +697,43 @@ add_each_addr(struct socket *so, struct rr_prefix *rpp, struct rp_addr *rap)
 		    ip6_sprintf(&ifra.ifra_addr.sin6_addr), rpp->rp_plen,
 		    ip6_sprintf(IA6_IN6(ia6)),
 		    in6_mask2len(&ia6->ia_prefixmask.sin6_addr, NULL));
+		ifafree(&ia6->ia_ifa);
 		return;
 	}
 	/* propagate ANYCAST flag if it is set for ancestor addr */
 	if (rap->ra_flags.anycast != 0)
 		ifra.ifra_flags |= IN6_IFF_ANYCAST;
-	error = in6_control(so, SIOCAIFADDR_IN6, (caddr_t)&ifra, rpp->rp_ifp,
-			    current_proc());
+
+	if (!p64) {
+#if defined(__LP64__)
+		struct in6_aliasreq_32 ifra_32;
+		/*
+		 * Use 32-bit ioctl and structure for 32-bit process.
+		 */
+		in6_aliasreq_64_to_32((struct in6_aliasreq_64 *)&ifra,
+		    &ifra_32);
+		error = in6_control(so, SIOCAIFADDR_IN6_32, (caddr_t)&ifra_32,
+		    rpp->rp_ifp, p);
+#else
+		error = in6_control(so, SIOCAIFADDR_IN6, (caddr_t)&ifra,
+		    rpp->rp_ifp, p);
+#endif /* __LP64__ */
+	} else {
+#if defined(__LP64__)
+		error = in6_control(so, SIOCAIFADDR_IN6, (caddr_t)&ifra,
+		    rpp->rp_ifp, p);
+#else
+		struct in6_aliasreq_64 ifra_64;
+		/*
+		 * Use 32-bit ioctl and structure for 32-bit process.
+		 */
+		in6_aliasreq_32_to_64((struct in6_aliasreq_32 *)&ifra,
+		    &ifra_64);
+		error = in6_control(so, SIOCAIFADDR_IN6_64, (caddr_t)&ifra_64,
+		    rpp->rp_ifp, p);
+#endif /* __LP64__ */
+	}
+
 	if (error != 0) {
 		log(LOG_ERR, "in6_prefix.c: add_each_addr: addition of an addr"
 		    "%s/%d failed because in6_control failed for error %d\n",
@@ -867,7 +928,7 @@ create_ra_entry(struct rp_addr **rapp)
 	*rapp = (struct rp_addr *)_MALLOC(sizeof(struct rp_addr), M_RR_ADDR,
 					 M_NOWAIT);
 	if (*rapp == NULL) {
-		log(LOG_ERR, "in6_prefix.c: init_newprefix:%d: ENOBUFS"
+		log(LOG_ERR, "in6_prefix.c:%d: ENOBUFS"
 		    "for rp_addr\n", __LINE__);
 		return ENOBUFS;
 	}
@@ -876,6 +937,7 @@ create_ra_entry(struct rp_addr **rapp)
 	return 0;
 }
 
+#if 0
 static int
 init_newprefix(struct in6_rrenumreq *irr, struct ifprefix *ifpr,
 	       struct rr_prefix *rpp)
@@ -927,6 +989,7 @@ init_newprefix(struct in6_rrenumreq *irr, struct ifprefix *ifpr,
 
 	return 0;
 }
+#endif
 
 static void
 free_rp_entries(struct rr_prefix *rpp)
@@ -949,6 +1012,7 @@ free_rp_entries(struct rr_prefix *rpp)
 	lck_mtx_unlock(prefix6_mutex);
 }
 
+#if 0
 static int
 add_useprefixes(struct socket *so, struct ifnet *ifp,
 		struct in6_rrenumreq *irr)
@@ -977,6 +1041,7 @@ add_useprefixes(struct socket *so, struct ifnet *ifp,
 
 	return error;
 }
+#endif
 
 static void
 unprefer_prefix(struct rr_prefix *rpp)
@@ -1031,6 +1096,7 @@ delete_each_prefix(struct rr_prefix *rpp, u_char origin)
 	return error;
 }
 
+#if 0
 static void
 delete_prefixes(struct ifnet *ifp, u_char origin)
 {
@@ -1049,6 +1115,7 @@ delete_prefixes(struct ifnet *ifp, u_char origin)
 	}
 	ifnet_lock_done(ifp);
 }
+#endif
 
 static int
 link_stray_ia6s(struct rr_prefix *rpp)
@@ -1088,6 +1155,7 @@ link_stray_ia6s(struct rr_prefix *rpp)
 	return 0;
 }
 
+#if 0
 /* XXX assumes that permission is already checked by the caller */
 int
 in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
@@ -1118,7 +1186,7 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 			log(LOG_NOTICE,
 			    "in6_prefix_ioctl: preferred lifetime"
 			    "(%ld) is greater than valid lifetime(%ld)\n",
-			    (u_long)irr->irr_pltime, (u_long)irr->irr_vltime);
+			    (u_int32_t)irr->irr_pltime, (u_int32_t)irr->irr_vltime);
 			error = EINVAL;
 			break;
 		}
@@ -1153,7 +1221,7 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 			log(LOG_NOTICE,
 			    "in6_prefix_ioctl: preferred lifetime"
 			    "(%ld) is greater than valid lifetime(%ld)\n",
-			    (u_long)ipr->ipr_pltime, (u_long)ipr->ipr_vltime);
+			    (u_int32_t)ipr->ipr_pltime, (u_int32_t)ipr->ipr_vltime);
 			error = EINVAL;
 			break;
 		}
@@ -1222,6 +1290,7 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
  bad:
 	return error;
 }
+#endif
 
 void
 in6_rr_timer(__unused void *ignored_arg)

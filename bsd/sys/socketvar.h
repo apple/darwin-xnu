@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -144,7 +144,7 @@ struct socket {
 	short	so_timeo;		/* connection timeout */
 	u_short	so_error;		/* error affecting connection */
 	pid_t	so_pgid;		/* pgid for signals */
-	u_long	so_oobmark;		/* chars to oob mark */
+	u_int32_t	so_oobmark;		/* chars to oob mark */
 #ifndef __APPLE__
 	/* We don't support AIO ops */
 	TAILQ_HEAD(, aiocblist) so_aiojobq; /* AIO ops waiting on socket */
@@ -153,12 +153,12 @@ struct socket {
 	 * Variables for socket buffering.
 	 */
 	struct	sockbuf {
-		u_long	sb_cc;		/* actual chars in buffer */
-		u_long	sb_hiwat;	/* max actual char count */
-		u_long	sb_mbcnt;	/* chars of mbufs used */
-		u_long	sb_mbmax;	/* max chars of mbufs to use */
-		u_long	sb_ctl;		/* non-data chars in buffer */
-		u_long	sb_lowat;	/* low water mark */
+		u_int32_t	sb_cc;		/* actual chars in buffer */
+		u_int32_t	sb_hiwat;	/* max actual char count */
+		u_int32_t	sb_mbcnt;	/* chars of mbufs used */
+		u_int32_t	sb_mbmax;	/* max chars of mbufs to use */
+		u_int32_t	sb_ctl;		/* non-data chars in buffer */
+		u_int32_t	sb_lowat;	/* low water mark */
 		struct	mbuf *sb_mb;	/* the mbuf chain */
 		struct	mbuf *sb_mbtail; /* the last mbuf in the chain */
 		struct	mbuf *sb_lastrecord; /* first mbuf of last record */
@@ -172,6 +172,7 @@ struct socket {
 		void	*reserved1[4];	/* for future use */
 	} so_rcv, so_snd;
 #define	SB_MAX		(8192*1024)	/* default for max chars in sockbuf */
+#define LOW_SB_MAX	(2*9*1024)	/* lower limit on max socket buffer size, 2 max datagrams */
 #define	SB_LOCK		0x01		/* lock on data queue */
 #define	SB_WANT		0x02		/* someone is waiting to lock */
 #define	SB_WAIT		0x04		/* someone is waiting for data/space */
@@ -209,13 +210,13 @@ struct socket {
 	int	cached_in_sock_layer;	/* bundled with pcb/pcb.inp_ppcb? */
 	struct	socket	*cache_next;
 	struct	socket	*cache_prev;
-	u_long		cache_timestamp;
+	u_int32_t		cache_timestamp;
 	caddr_t		so_saved_pcb;	/* Saved pcb when cacheing */
 	struct	mbuf *so_temp;		/* Holding area for outbound frags */
 	/* Plug-in support - make the socket interface overridable */
 	struct	mbuf *so_tail;
 	struct socket_filter_entry *so_filt;	/* NKE hook */
-	u_long	so_flags;	/* Flags */
+	u_int32_t	so_flags;	/* Flags */
 #define	SOF_NOSIGPIPE	0x1
 #define	SOF_NOADDRAVAIL	0x2	/* EADDRNOTAVAIL if src addr is gone */
 #define	SOF_PCBCLEARING	0x4	/* pru_disconnect done; don't call pru_detach */
@@ -230,6 +231,8 @@ struct socket {
 #define SOF_NOTIFYCONFLICT 0x400	/* notify that a bind was done on a port already in use */
 #endif
 #define	SOF_UPCALLCLOSEWAIT 0x800 /* block on close until an upcall returns  */
+#define SOF_BINDRANDOMPORT 0x1000 /* Request a randomized port number for the bind */
+#define SOF_NPX_SETOPTSHUT 0x2000 /* Non POSIX extension to allow setsockopt(2) after shut down */
 	int	so_usecount;	/* refcounting of socket use */;
 	int	so_retaincnt;
 	u_int32_t so_filteruse;	/* usecount for the socket filters */
@@ -239,9 +242,9 @@ struct socket {
 
 /* for debug pruposes */
 #define	SO_LCKDBG_MAX 4	/* number of debug locking Link Registers recorded */
-	u_int32_t lock_lr[SO_LCKDBG_MAX];	/* locking calling history */
+	void	*lock_lr[SO_LCKDBG_MAX];	/* locking calling history */
 	int	next_lock_lr;
-	u_int32_t unlock_lr[SO_LCKDBG_MAX];	/* unlocking caller history */
+	void	*unlock_lr[SO_LCKDBG_MAX];	/* unlocking caller history */
 	int	next_unlock_lr;
 	void *reserved; /* reserved for future use */
 #endif /* __APPLE__ */
@@ -281,27 +284,7 @@ struct socket {
 
 #pragma pack(4)
 
-/*
- * Externalized form of struct socket used by the sysctl(3) interface.
- */
-struct	xsocket {
-	u_int32_t	xso_len;		/* length of this structure */
-	_XSOCKET_PTR(struct socket *) xso_so;	/* makes a convenient handle */
-	short		so_type;
-	short		so_options;
-	short		so_linger;
-	short		so_state;
-	_XSOCKET_PTR(caddr_t)	so_pcb;		/* another convenient handle */
-	int		xso_protocol;
-	int		xso_family;
-	short		so_qlen;
-	short		so_incqlen;
-	short		so_qlimit;
-	short		so_timeo;
-	u_short		so_error;
-	pid_t		so_pgid;
-	u_int32_t	so_oobmark;
-	struct	xsockbuf {
+struct xsockbuf {
 		u_int32_t	sb_cc;
 		u_int32_t	sb_hiwat;
 		u_int32_t	sb_mbcnt;
@@ -309,9 +292,58 @@ struct	xsocket {
 		int32_t		sb_lowat;
 		short		sb_flags;
 		short		sb_timeo;
-	} so_rcv, so_snd;
-	uid_t		so_uid;		/* XXX */
 };
+
+/*
+ * Externalized form of struct socket used by the sysctl(3) interface.
+ */
+struct	xsocket {
+	u_int32_t		xso_len;		/* length of this structure */
+	_XSOCKET_PTR(struct socket *) xso_so;	/* makes a convenient handle */
+	short			so_type;
+	short			so_options;
+	short			so_linger;
+	short			so_state;
+	_XSOCKET_PTR(caddr_t)	so_pcb;		/* another convenient handle */
+	int				xso_protocol;
+	int				xso_family;
+	short			so_qlen;
+	short			so_incqlen;
+	short			so_qlimit;
+	short			so_timeo;
+	u_short			so_error;
+	pid_t			so_pgid;
+	u_int32_t		so_oobmark;
+	struct xsockbuf	so_rcv;
+	struct xsockbuf	so_snd;
+	uid_t			so_uid;		/* XXX */
+};
+
+#if !CONFIG_EMBEDDED
+
+struct	xsocket64 {
+	u_int32_t		xso_len;		/* length of this structure */
+	u_int64_t		xso_so;	/* makes a convenient handle */
+	short			so_type;
+	short			so_options;
+	short			so_linger;
+	short			so_state;
+	u_int64_t		so_pcb;		/* another convenient handle */
+	int			xso_protocol;
+	int			xso_family;
+	short			so_qlen;
+	short			so_incqlen;
+	short			so_qlimit;
+	short			so_timeo;
+	u_short			so_error;
+	pid_t			so_pgid;
+	u_int32_t		so_oobmark;
+	struct xsockbuf		so_rcv;
+	struct xsockbuf		so_snd;
+	uid_t			so_uid;		/* XXX */
+};
+
+#endif /* !CONFIG_EMBEDDED */
 
 #pragma pack()
 
@@ -330,7 +362,7 @@ struct	xsocket {
 
 __BEGIN_DECLS
 int	sb_notify(struct sockbuf *sb);
-long	sbspace(struct sockbuf *sb);
+int	sbspace(struct sockbuf *sb);
 int	sosendallatonce(struct socket *so);
 int	soreadable(struct socket *so);
 int	sowriteable(struct socket *so);
@@ -393,7 +425,7 @@ MALLOC_DECLARE(M_SONAME);
 #endif
 
 extern int	maxsockets;
-extern u_long	sb_max;
+extern u_int32_t	sb_max;
 extern int socket_zone;
 extern so_gen_t so_gencnt;
 extern int	socket_debug;
@@ -451,7 +483,7 @@ extern void sbdroprecord(struct sockbuf *sb);
 extern void sbflush(struct sockbuf *sb);
 extern int sbinsertoob(struct sockbuf *sb, struct mbuf *m0);
 extern void sbrelease(struct sockbuf *sb);
-extern int sbreserve(struct sockbuf *sb, u_long cc);
+extern int sbreserve(struct sockbuf *sb, u_int32_t cc);
 extern void sbtoxsockbuf(struct sockbuf *sb, struct xsockbuf *xsb);
 extern int sbwait(struct sockbuf *sb);
 extern int sb_lock(struct sockbuf *sb);
@@ -493,6 +525,8 @@ extern int sooptcopyout(struct sockopt *sopt, void *data, size_t len);
 extern int socket_lock(struct socket *so, int refcount);
 extern int socket_unlock(struct socket *so, int refcount);
 extern void sofreelastref(struct socket *, int);
+extern int sogetaddr_locked(struct socket *, struct sockaddr **, int);
+extern const char *solockhistory_nr(struct socket *);
 
 /*
  * XXX; prepare mbuf for (__FreeBSD__ < 3) routines.
@@ -505,7 +539,7 @@ extern int soopt_mcopyout(struct sockopt *sopt, struct mbuf *m);
 extern int sopoll(struct socket *so, int events, struct ucred *cred, void *wql);
 extern int soreceive(struct socket *so, struct sockaddr **paddr,
     struct uio *uio, struct mbuf **mp0, struct mbuf **controlp, int *flagsp);
-extern int soreserve(struct socket *so, u_long sndcc, u_long rcvcc);
+extern int soreserve(struct socket *so, u_int32_t sndcc, u_int32_t rcvcc);
 extern void sorflush(struct socket *so);
 extern int sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
     struct mbuf *top, struct mbuf *control, int flags);
@@ -514,6 +548,9 @@ extern int sosetopt(struct socket *so, struct sockopt *sopt);
 extern int soshutdown(struct socket *so, int how);
 extern int soshutdownlock(struct socket *so, int how);
 extern void sotoxsocket(struct socket *so, struct xsocket *xso);
+#if !CONFIG_EMBEDDED
+extern void sotoxsocket64(struct socket *so, struct xsocket64 *xso);
+#endif
 extern void sowakeup(struct socket *so, struct sockbuf *sb);
 extern int soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p);
 

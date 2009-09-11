@@ -45,11 +45,7 @@ include $(MakeInc_def)
 #
 CFLAGS+= -imacros meta_features.h -DARCH_PRIVATE -DKERNEL -DDRIVER_PRIVATE \
 	-D_KERNEL_BUILD -DKERNEL_BUILD -DMACH_KERNEL -DBSD_BUILD \
-	-DBSD_KERNEL_PRIVATE -DNCPUS=1 -Wno-four-char-constants -fpascal-strings \
-	-D__APPLE__ -DLP64KERN=1 -DLP64_DEBUG=0  -I. $(CFLAGS_INLINE_CONFIG)
-
-# XXX: ld flags for bsd.o
-export LDFLAGS_COMPONENT += -keep_private_externs
+	-DBSD_KERNEL_PRIVATE -DLP64KERN=1 -DLP64_DEBUG=0  -I. $(CFLAGS_INLINE_CONFIG)
 
 #
 # Directories for mig generated files
@@ -103,12 +99,28 @@ ${OBJS}: ${OBJSDEPS}
 LDOBJS = $(OBJS)
 
 $(COMPONENT).o: $(LDOBJS)
-	@echo LD $(COMPONENT)
-	$(_v)$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} 
+	@echo LDFILELIST $(COMPONENT)
+	$(_v)( for obj in ${LDOBJS}; do	\
+		 echo $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$${obj}; \
+	done; ) > $(COMPONENT).o
+
+MAKESYSCALLS = $(SRCROOT)/bsd/kern/makesyscalls.sh
+
+init_sysent.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
+	@echo "Generating $@ from $<";
+	$(_v)$(MAKESYSCALLS) $< table > /dev/null
+
+syscalls.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
+	@echo "Generating $@ from $<";
+	$(_v)$(MAKESYSCALLS) $< names > /dev/null
+
+audit_kevents.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
+	@echo "Generating $@ from $<";
+	$(_v)$(MAKESYSCALLS) $< audit > /dev/null
 
 do_depend: do_all
 	$(_v)${MD} -u Makedep -f -d `ls *.d`;
-	
+
 do_all: $(COMPONENT).o
 
 do_build_all: do_depend

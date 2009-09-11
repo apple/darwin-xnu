@@ -1,0 +1,86 @@
+.\"
+.\" Copyright (c) 2008 Apple Inc.  All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this
+.\" file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.Dd October 1, 2008
+.Dt PTHREAD_SETUGID_NP 2
+.Os
+.Sh NAME
+.Nm pthread_setugid_np
+.Nd Set the per-thread userid and single groupid.
+.Sh SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/unistd.h>
+.Ft int
+.Fn pthread_setugid_np "uid_t uid, gid_t gid"
+.Sh DESCRIPTION
+.Fn pthread_setugid_np
+changes the current thread's effective, real, and saved userid and groupid to the requested
+userid and groupid (
+.Fa uid
+and
+.Fa gid
+, respectively) and clears all other groupids.
+.Pp
+.Fa uid
+can be the current real userid, KAUTH_UID_NONE, or, if the caller is privileged, any userid.
+.Fa gid
+can be the current real groupid or, if the caller is priviledged, any single groupid.
+.Pp
+Setting
+.Fa uid 
+to KAUTH_UID_NONE means to "revert to the per process credential".
+.Sh CAVEATS
+Temporarily restoring root privileges for a non-privileged process is only possible on a per-process basis and not a per-thread basis.
+.Pp
+.Fn pthread_setugid_np 
+is not intended as a privilege escalation mechanism.
+.Pp
+Do not use
+.Fn pthread_setugid_np.2
+in a security sensitive situation.
+.Sh RETURN VALUES
+Upon successful completion, a value of 0 is returned.
+Otherwise, -1 is returned and the global variable
+.Va errno
+is set to indicate the error.
+.Sh ERRORS
+.Fn pthread_setugid_np
+fails if one or more of the following are true:
+.\" ========
+.Bl -tag -width Er
+.It Bq EPERM
+The calling process does not have the correct credentials to set the override identity (i.e. The current credentials do not imply "super-user").
+.\" ========
+.It Bq EPERM
+If
+.Fa uid
+is set to KAUTH_UID_NONE, 
+the current thread must already be assuming another identity in order to revert back.
+.\" ========
+.It Bq EPERM
+The current thread cannot already be assuming another identity.
+.El
+.Sh SEE ALSO
+.Xr setuid 2
+.Xr setgid 2
+.Xr seteuid 2
+.Xr setegid 2

@@ -59,7 +59,7 @@
 #include <sys/malloc.h>
 #include <mach/mach_types.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <sys/filedesc.h>
 #include <sys/file_internal.h>
@@ -151,7 +151,21 @@ sysv_msgtime(void)
  * NOTE: Source and target may *NOT* overlap! (target is smaller)
  */
 static void
-msqid_ds_64to32(struct user_msqid_ds *in, struct msqid_ds *out)
+msqid_ds_kerneltouser32(struct user_msqid_ds *in, struct user32_msqid_ds *out)
+{
+	out->msg_perm	= in->msg_perm;
+	out->msg_qnum	= in->msg_qnum;
+	out->msg_cbytes	= in->msg_cbytes;	/* for ipcs */
+	out->msg_qbytes	= in->msg_qbytes;
+	out->msg_lspid	= in->msg_lspid;
+	out->msg_lrpid	= in->msg_lrpid;
+	out->msg_stime	= in->msg_stime;	/* XXX loss of range */
+	out->msg_rtime	= in->msg_rtime;	/* XXX loss of range */
+	out->msg_ctime	= in->msg_ctime;	/* XXX loss of range */
+}
+
+static void
+msqid_ds_kerneltouser64(struct user_msqid_ds *in, struct user64_msqid_ds *out)
 {
 	out->msg_perm	= in->msg_perm;
 	out->msg_qnum	= in->msg_qnum;
@@ -170,7 +184,21 @@ msqid_ds_64to32(struct user_msqid_ds *in, struct msqid_ds *out)
  * the beginning.
  */
 static void
-msqid_ds_32to64(struct msqid_ds *in, struct user_msqid_ds *out)
+msqid_ds_user32tokernel(struct user32_msqid_ds *in, struct user_msqid_ds *out)
+{
+	out->msg_ctime	= in->msg_ctime;
+	out->msg_rtime	= in->msg_rtime;
+	out->msg_stime	= in->msg_stime;
+	out->msg_lrpid	= in->msg_lrpid;
+	out->msg_lspid	= in->msg_lspid;
+	out->msg_qbytes	= in->msg_qbytes;
+	out->msg_cbytes	= in->msg_cbytes;	/* for ipcs */
+	out->msg_qnum	= in->msg_qnum;
+	out->msg_perm	= in->msg_perm;
+}
+
+static void
+msqid_ds_user64tokernel(struct user64_msqid_ds *in, struct user_msqid_ds *out)
 {
 	out->msg_ctime	= in->msg_ctime;
 	out->msg_rtime	= in->msg_rtime;
@@ -296,11 +324,29 @@ bad:
 }
 
 /*
- * Entry point for all MSG calls
+ * msgsys
+ *
+ * Entry point for all MSG calls: msgctl, msgget, msgsnd, msgrcv
+ *
+ * Parameters:	p	Process requesting the call
+ * 		uap	User argument descriptor (see below)
+ * 		retval	Return value of the selected msg call
+ *
+ * Indirect parameters:	uap->which	msg call to invoke (index in array of msg calls)
+ * 			uap->a2		User argument descriptor
+ *                  
+ * Returns:	0	Success
+ * 		!0	Not success
+ *
+ * Implicit returns: retval	Return value of the selected msg call
+ *
+ * DEPRECATED:  This interface should not be used to call the other MSG
+ * 		functions (msgctl, msgget, msgsnd, msgrcv). The correct
+ * 		usage is to call the other MSG functions directly.
+ *
  */
-	/* XXX actually varargs. */
 int
-msgsys(struct proc *p, struct msgsys_args *uap, register_t *retval)
+msgsys(struct proc *p, struct msgsys_args *uap, int32_t *retval)
 {
 	if (uap->which >= sizeof(msgcalls)/sizeof(msgcalls[0]))
 		return (EINVAL);
@@ -339,7 +385,7 @@ msg_freehdr(struct msg *msghdr)
 }
 
 int
-msgctl(struct proc *p, struct msgctl_args *uap, register_t *retval)
+msgctl(struct proc *p, struct msgctl_args *uap, int32_t *retval)
 {
 	int msqid = uap->msqid;
 	int cmd = uap->cmd;
@@ -347,7 +393,6 @@ msgctl(struct proc *p, struct msgctl_args *uap, register_t *retval)
 	int rval, eval;
 	struct user_msqid_ds msqbuf;
 	struct msqid_kernel *msqptr;
-	struct user_msqid_ds umsds;
 
 	SYSV_MSG_SUBSYS_LOCK();
 
@@ -457,11 +502,16 @@ msgctl(struct proc *p, struct msgctl_args *uap, register_t *retval)
 		SYSV_MSG_SUBSYS_UNLOCK();
 
 		if (IS_64BIT_PROCESS(p)) {
-			eval = copyin(uap->buf, &msqbuf, sizeof(struct user_msqid_ds));
+			struct user64_msqid_ds tmpds;
+			eval = copyin(uap->buf, &tmpds, sizeof(tmpds));
+
+			msqid_ds_user64tokernel(&tmpds, &msqbuf);
 		} else {
-			eval = copyin(uap->buf, &msqbuf, sizeof(struct msqid_ds));
-			/* convert in place; ugly, but safe */
-			msqid_ds_32to64((struct msqid_ds *)&msqbuf, &msqbuf);
+			struct user32_msqid_ds tmpds;
+
+			eval = copyin(uap->buf, &tmpds, sizeof(tmpds));
+
+			msqid_ds_user32tokernel(&tmpds, &msqbuf);
 		}
 		if (eval)
 			return(eval);
@@ -476,7 +526,7 @@ msgctl(struct proc *p, struct msgctl_args *uap, register_t *retval)
 
 
 		/* compare (msglen_t) value against restrict (int) value */
-		if (msqbuf.msg_qbytes > (msglen_t)msginfo.msgmnb) {
+		if (msqbuf.msg_qbytes > (user_msglen_t)msginfo.msgmnb) {
 #ifdef MSG_DEBUG_OK
 			printf("can't increase msg_qbytes beyond %d (truncating)\n",
 			    msginfo.msgmnb);
@@ -506,15 +556,15 @@ msgctl(struct proc *p, struct msgctl_args *uap, register_t *retval)
 			goto msgctlout;
 		}
 
-		bcopy(msqptr, &umsds, sizeof(struct user_msqid_ds));
-
 		SYSV_MSG_SUBSYS_UNLOCK();
 		if (IS_64BIT_PROCESS(p)) {
-			eval = copyout(&umsds, uap->buf, sizeof(struct user_msqid_ds));
+			struct user64_msqid_ds msqid_ds64;
+			msqid_ds_kerneltouser64(&msqptr->u, &msqid_ds64);
+			eval = copyout(&msqid_ds64, uap->buf, sizeof(msqid_ds64));
 		} else {
-			struct msqid_ds msqid_ds32;
-			msqid_ds_64to32(&umsds, &msqid_ds32);
-			eval = copyout(&msqid_ds32, uap->buf, sizeof(struct msqid_ds));
+			struct user32_msqid_ds msqid_ds32;
+			msqid_ds_kerneltouser32(&msqptr->u, &msqid_ds32);
+			eval = copyout(&msqid_ds32, uap->buf, sizeof(msqid_ds32));
 		}
 		SYSV_MSG_SUBSYS_LOCK();
 		break;
@@ -535,7 +585,7 @@ msgctlout:
 }
 
 int
-msgget(__unused struct proc *p, struct msgget_args *uap, register_t *retval)
+msgget(__unused struct proc *p, struct msgget_args *uap, int32_t *retval)
 {
 	int msqid, eval;
 	int key = uap->key;
@@ -655,14 +705,14 @@ msggetout:
 
 
 int
-msgsnd(struct proc *p, struct msgsnd_args *uap, register_t *retval)
+msgsnd(struct proc *p, struct msgsnd_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
 	return(msgsnd_nocancel(p, (struct msgsnd_nocancel_args *)uap, retval));
 }
 
 int
-msgsnd_nocancel(struct proc *p, struct msgsnd_nocancel_args *uap, register_t *retval)
+msgsnd_nocancel(struct proc *p, struct msgsnd_nocancel_args *uap, int32_t *retval)
 {
 	int msqid = uap->msqid;
 	user_addr_t user_msgp = uap->msgp;
@@ -683,7 +733,7 @@ msgsnd_nocancel(struct proc *p, struct msgsnd_nocancel_args *uap, register_t *re
 	}
 
 #ifdef MSG_DEBUG_OK
-	printf("call to msgsnd(%d, 0x%qx, %d, %d)\n", msqid, user_msgp, msgsz,
+	printf("call to msgsnd(%d, 0x%qx, %ld, %d)\n", msqid, user_msgp, msgsz,
 	    msgflg);
 #endif
 
@@ -729,7 +779,7 @@ msgsnd_nocancel(struct proc *p, struct msgsnd_nocancel_args *uap, register_t *re
 #endif
 	segs_needed = (msgsz + msginfo.msgssz - 1) / msginfo.msgssz;
 #ifdef MSG_DEBUG_OK
-	printf("msgsz=%d, msgssz=%d, segs_needed=%d\n", msgsz, msginfo.msgssz,
+	printf("msgsz=%ld, msgssz=%d, segs_needed=%d\n", msgsz, msginfo.msgssz,
 	    segs_needed);
 #endif
 
@@ -930,9 +980,11 @@ msgsnd_nocancel(struct proc *p, struct msgsnd_nocancel_args *uap, register_t *re
 		user_msgp = user_msgp + sizeof(msgtype);	/* ptr math */
 	} else {
 		SYSV_MSG_SUBSYS_UNLOCK();
-		eval = copyin(user_msgp, &msghdr->msg_type, sizeof(long));
+		int32_t msg_type32;
+		eval = copyin(user_msgp, &msg_type32, sizeof(msg_type32));
+		msghdr->msg_type = msg_type32;
 		SYSV_MSG_SUBSYS_LOCK();
-		user_msgp = user_msgp + sizeof(long);		/* ptr math */
+		user_msgp = user_msgp + sizeof(msg_type32);		/* ptr math */
 	}
 
 	if (eval != 0) {
@@ -954,7 +1006,7 @@ msgsnd_nocancel(struct proc *p, struct msgsnd_nocancel_args *uap, register_t *re
 		msqptr->u.msg_perm.mode &= ~MSG_LOCKED;
 		wakeup((caddr_t)msqptr);
 #ifdef MSG_DEBUG_OK
-		printf("mtype (%d) < 1\n", msghdr->msg_type);
+		printf("mtype (%ld) < 1\n", msghdr->msg_type);
 #endif
 		eval = EINVAL;
 		goto msgsndout;
@@ -1088,7 +1140,7 @@ msgrcv_nocancel(struct proc *p, struct msgrcv_nocancel_args *uap, user_ssize_t *
 	int eval;
 	short next;
 	user_long_t msgtype;
-	long msg_type_long;
+	int32_t msg_type32;
 
 	SYSV_MSG_SUBSYS_LOCK();
 
@@ -1098,7 +1150,7 @@ msgrcv_nocancel(struct proc *p, struct msgrcv_nocancel_args *uap, user_ssize_t *
 	}
 
 #ifdef MSG_DEBUG_OK
-	printf("call to msgrcv(%d, 0x%qx, %d, %ld, %d)\n", msqid, user_msgp,
+	printf("call to msgrcv(%d, 0x%qx, %ld, %ld, %d)\n", msqid, user_msgp,
 	    msgsz, msgtyp, msgflg);
 #endif
 
@@ -1150,7 +1202,7 @@ msgrcv_nocancel(struct proc *p, struct msgrcv_nocancel_args *uap, user_ssize_t *
 				if (msgsz < msghdr->msg_ts &&
 				    (msgflg & MSG_NOERROR) == 0) {
 #ifdef MSG_DEBUG_OK
-					printf("first message on the queue is too big (want %d, got %d)\n",
+					printf("first message on the queue is too big (want %ld, got %d)\n",
 					    msgsz, msghdr->msg_ts);
 #endif
 					eval = E2BIG;
@@ -1190,13 +1242,13 @@ msgrcv_nocancel(struct proc *p, struct msgrcv_nocancel_args *uap, user_ssize_t *
 				if (msgtyp == msghdr->msg_type ||
 				    msghdr->msg_type <= -msgtyp) {
 #ifdef MSG_DEBUG_OK
-					printf("found message type %d, requested %d\n",
+					printf("found message type %ld, requested %ld\n",
 					    msghdr->msg_type, msgtyp);
 #endif
 					if (msgsz < msghdr->msg_ts &&
 					    (msgflg & MSG_NOERROR) == 0) {
 #ifdef MSG_DEBUG_OK
-						printf("requested message on the queue is too big (want %d, got %d)\n",
+						printf("requested message on the queue is too big (want %ld, got %d)\n",
 						    msgsz, msghdr->msg_ts);
 #endif
 						eval = E2BIG;
@@ -1248,7 +1300,7 @@ msgrcv_nocancel(struct proc *p, struct msgrcv_nocancel_args *uap, user_ssize_t *
 
 		if ((msgflg & IPC_NOWAIT) != 0) {
 #ifdef MSG_DEBUG_OK
-			printf("no appropriate message found (msgtyp=%d)\n",
+			printf("no appropriate message found (msgtyp=%ld)\n",
 			    msgtyp);
 #endif
 			/* The SVID says to return ENOMSG. */
@@ -1320,7 +1372,7 @@ msgrcv_nocancel(struct proc *p, struct msgrcv_nocancel_args *uap, user_ssize_t *
 	 */
 
 #ifdef MSG_DEBUG_OK
-	printf("found a message, msgsz=%d, msg_ts=%d\n", msgsz,
+	printf("found a message, msgsz=%ld, msg_ts=%d\n", msgsz,
 	    msghdr->msg_ts);
 #endif
 	if (msgsz > msghdr->msg_ts)
@@ -1341,11 +1393,11 @@ msgrcv_nocancel(struct proc *p, struct msgrcv_nocancel_args *uap, user_ssize_t *
 		SYSV_MSG_SUBSYS_LOCK();
 		user_msgp = user_msgp + sizeof(msgtype);	/* ptr math */
 	} else {
-		msg_type_long = msghdr->msg_type;
+		msg_type32 = msghdr->msg_type;
 		SYSV_MSG_SUBSYS_UNLOCK();
-		eval = copyout(&msg_type_long, user_msgp, sizeof(long));
+		eval = copyout(&msg_type32, user_msgp, sizeof(msg_type32));
 		SYSV_MSG_SUBSYS_LOCK();
-		user_msgp = user_msgp + sizeof(long);		/* ptr math */
+		user_msgp = user_msgp + sizeof(msg_type32);		/* ptr math */
 	}
 
 	if (eval != 0) {
@@ -1413,18 +1465,22 @@ IPCS_msg_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	int error;
 	int cursor;
 	union {
-		struct IPCS_command u32;
+		struct user32_IPCS_command u32;
 		struct user_IPCS_command u64;
 	} ipcs;
-	struct msqid_ds msqid_ds32;	/* post conversion, 32 bit version */
+	struct user32_msqid_ds msqid_ds32;	/* post conversion, 32 bit version */
+	struct user64_msqid_ds msqid_ds64;	/* post conversion, 64 bit version */
 	void *msqid_dsp;
-	size_t ipcs_sz = sizeof(struct user_IPCS_command);
-	size_t msqid_ds_sz = sizeof(struct user_msqid_ds);
+	size_t ipcs_sz;
+	size_t msqid_ds_sz;
 	struct proc *p = current_proc();
 
-	if (!IS_64BIT_PROCESS(p)) {
-		ipcs_sz = sizeof(struct IPCS_command);
-		msqid_ds_sz = sizeof(struct msqid_ds);
+	if (IS_64BIT_PROCESS(p)) {
+		ipcs_sz = sizeof(struct user_IPCS_command);
+		msqid_ds_sz = sizeof(struct user64_msqid_ds);
+	} else {
+		ipcs_sz = sizeof(struct user32_IPCS_command);
+		msqid_ds_sz = sizeof(struct user32_msqid_ds);
 	}
 
 	/* Copy in the command structure */
@@ -1489,10 +1545,14 @@ IPCS_msg_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 		 * If necessary, convert the 64 bit kernel segment
 		 * descriptor to a 32 bit user one.
 		 */
-		if (!IS_64BIT_PROCESS(p)) {
-			msqid_ds_64to32(msqid_dsp, &msqid_ds32);
+		if (IS_64BIT_PROCESS(p)) {
+			msqid_ds_kerneltouser64(msqid_dsp, &msqid_ds64);
+			msqid_dsp = &msqid_ds64;
+		} else {
+			msqid_ds_kerneltouser32(msqid_dsp, &msqid_ds32);
 			msqid_dsp = &msqid_ds32;
 		}
+
 		SYSV_MSG_SUBSYS_UNLOCK();
 		error = copyout(msqid_dsp, ipcs.u64.ipcs_data, ipcs.u64.ipcs_datalen);
 		if (!error) {
@@ -1500,7 +1560,7 @@ IPCS_msg_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 			ipcs.u64.ipcs_cursor = cursor + 1;
 
 			if (!IS_64BIT_PROCESS(p))	/* convert in place */
-				ipcs.u32.ipcs_data = CAST_DOWN(void *,ipcs.u64.ipcs_data);
+				ipcs.u32.ipcs_data = CAST_DOWN_EXPLICIT(user32_addr_t,ipcs.u64.ipcs_data);
 			error = SYSCTL_OUT(req, &ipcs, ipcs_sz);
 		}
 		SYSV_MSG_SUBSYS_LOCK();

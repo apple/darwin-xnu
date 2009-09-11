@@ -105,7 +105,7 @@ Otherwise, -1 is returned and the global variable
 is set to indicate the error.
 .Sh ERRORS
 .Fn Chflags
-will fail it:
+will fail if:
 .Bl -tag -width Er
 .It Bq Er ENOTDIR
 A component of the path prefix is not a directory.
@@ -133,6 +133,8 @@ points outside the process's allocated address space.
 An
 .Tn I/O
 error occurred while reading from or writing to the file system.
+.It Bq Er ENOTSUP
+The operation isn't supported by the filesystem.
 .El
 .Pp
 .Fn Fchflags
@@ -152,10 +154,13 @@ The file resides on a read-only file system.
 An
 .Tn I/O
 error occurred while reading from or writing to the file system.
+.It Bq Er ENOTSUP
+The operation isn't supported by the filesystem.
 .El
 .Sh SEE ALSO
 .Xr chflags 1 ,
 .Xr fflagstostr 3 ,
+.Xr lchflags 3 ,
 .Xr strtofflags 3 ,
 .Xr init 8
 .Sh HISTORY

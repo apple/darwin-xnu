@@ -71,9 +71,7 @@
          *  ws@tools.de     (Wolfgang Solfrank, TooLs GmbH) +49-228-985800
          */
  
-.text
-.align 5, 0x90
-Lbcopy_scalar:
+COMMPAGE_FUNCTION_START(bcopy_scalar, 32, 5)
 	pushl	%ebp		/* set up a frame for backtraces */
 	movl	%esp,%ebp
         pushl   %esi
@@ -82,9 +80,9 @@ Lbcopy_scalar:
         movl    12(%ebp),%edi
 	jmp	1f
 /*
-** These need to be 32 bytes from Lbcopy_scalar
-*/
-.align 5, 0x90
+ * These need to be 32 bytes from Lbcopy_scalar
+ */
+	.align 5, 0x90
 Lmemcpy_scalar:
 Lmemmove_scalar:
 	pushl	%ebp		/* set up a frame for backtraces */
@@ -135,4 +133,4 @@ Lmemmove_scalar:
         cld
         ret
 
-	COMMPAGE_DESCRIPTOR(bcopy_scalar,_COMM_PAGE_BCOPY,0,kHasSSE2+kHasSupplementalSSE3)
+COMMPAGE_DESCRIPTOR(bcopy_scalar,_COMM_PAGE_BCOPY,0,kHasSSE2+kHasSupplementalSSE3)

@@ -36,6 +36,8 @@
 #include <kern/kalloc.h>
 #include <kern/thread.h>
 
+#include <libkern/OSAtomic.h>
+
 #include <ppc/machine_routines.h>
 #include <ppc/cpu_data.h>
 #include <ppc/cpu_internal.h>
@@ -167,8 +169,18 @@ kern_return_t chudxnu_cpu_timer_callback_cancel_all(void)
     return KERN_SUCCESS;
 }
 
+#if 0
 #pragma mark **** trap ****
-static chudxnu_trap_callback_func_t trap_callback_fn = NULL;
+#endif
+static kern_return_t chud_null_trap(uint32_t trapentry, thread_flavor_t flavor,
+	thread_state_t tstate,  mach_msg_type_number_t count);
+static chudxnu_trap_callback_func_t trap_callback_fn = chud_null_trap;
+
+static kern_return_t chud_null_trap(uint32_t trapentry __unused, thread_flavor_t flavor __unused,
+	thread_state_t tstate __unused,  mach_msg_type_number_t count __unused) {
+	return KERN_FAILURE;
+}
+
 
 #define TRAP_ENTRY_POINT(t) ((t==T_RESET) ? 0x100 : \
                              (t==T_MACHINE_CHECK) ? 0x200 : \
@@ -224,28 +236,52 @@ chudxnu_private_trap_callback(int trapno, struct savearea *ssp,
     return retval;
 }
 
-__private_extern__
-kern_return_t chudxnu_trap_callback_enter(chudxnu_trap_callback_func_t func)
+__private_extern__ kern_return_t
+chudxnu_trap_callback_enter(chudxnu_trap_callback_func_t func)
 {
-    trap_callback_fn = func;
-    perfTrapHook = chudxnu_private_trap_callback;
-    __asm__ volatile("eieio");	/* force order */
-    __asm__ volatile("sync");	/* force to memory */
-    return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(NULL, chudxnu_private_trap_callback, 
+		(void * volatile *)&perfTrapHook)) {
+
+		chudxnu_trap_callback_func_t old = trap_callback_fn;
+		while(!OSCompareAndSwapPtr(old, func, 
+			(void * volatile *)&trap_callback_fn)) {
+			old = trap_callback_fn;
+		}
+	
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
-__private_extern__
-kern_return_t chudxnu_trap_callback_cancel(void)
+__private_extern__ kern_return_t
+chudxnu_trap_callback_cancel(void)
 {
-    trap_callback_fn = NULL;
-        perfTrapHook = NULL;
-    __asm__ volatile("eieio");	/* force order */
-    __asm__ volatile("sync");	/* force to memory */
-    return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(chudxnu_private_trap_callback,  NULL,
+		(void * volatile *)&perfTrapHook)) {
+
+		chudxnu_trap_callback_func_t old = trap_callback_fn;
+		while(!OSCompareAndSwapPtr(old, chud_null_trap, 
+			(void * volatile *)&trap_callback_fn)) {
+			old = trap_callback_fn;
+		}
+		
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
+#if 0
 #pragma mark **** ast ****
-static chudxnu_perfmon_ast_callback_func_t perfmon_ast_callback_fn = NULL;
+#endif
+static kern_return_t chud_null_ast(thread_flavor_t flavor, thread_state_t tstate,  
+	mach_msg_type_number_t count);
+static chudxnu_perfmon_ast_callback_func_t perfmon_ast_callback_fn = chud_null_ast;
+
+static kern_return_t chud_null_ast(thread_flavor_t flavor __unused,
+	thread_state_t tstate __unused,  mach_msg_type_number_t count __unused) {
+	return KERN_FAILURE;
+}
+
 
 static kern_return_t
 chudxnu_private_chud_ast_callback(__unused int trapno,
@@ -301,24 +337,38 @@ chudxnu_private_chud_ast_callback(__unused int trapno,
 	return retval;
 }
 
-__private_extern__
-kern_return_t chudxnu_perfmon_ast_callback_enter(chudxnu_perfmon_ast_callback_func_t func)
+__private_extern__ kern_return_t
+chudxnu_perfmon_ast_callback_enter(chudxnu_perfmon_ast_callback_func_t func)
 {
-    perfmon_ast_callback_fn = func;
-    perfASTHook = chudxnu_private_chud_ast_callback;
-    __asm__ volatile("eieio");	/* force order */
-    __asm__ volatile("sync");	/* force to memory */
-    return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(NULL, chudxnu_private_chud_ast_callback,
+		(void * volatile *)&perfASTHook)) {
+		chudxnu_perfmon_ast_callback_func_t old = perfmon_ast_callback_fn;
+
+		while(!OSCompareAndSwapPtr(old, func,
+			(void * volatile *)&perfmon_ast_callback_fn)) {
+			old = perfmon_ast_callback_fn;
+		}
+
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
-__private_extern__
-kern_return_t chudxnu_perfmon_ast_callback_cancel(void)
+__private_extern__ kern_return_t
+chudxnu_perfmon_ast_callback_cancel(void)
 {
-    perfmon_ast_callback_fn = NULL;
-    perfASTHook = NULL;
-    __asm__ volatile("eieio");	/* force order */
-    __asm__ volatile("sync");	/* force to memory */
-    return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(chudxnu_private_chud_ast_callback, NULL,
+		(void * volatile *)&perfASTHook)) {
+		chudxnu_perfmon_ast_callback_func_t old = perfmon_ast_callback_fn;
+
+		while(!OSCompareAndSwapPtr(old, chud_null_ast,
+			(void * volatile *)&perfmon_ast_callback_fn)) {
+			old = perfmon_ast_callback_fn;
+		}
+
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
 __private_extern__
@@ -337,15 +387,18 @@ kern_return_t chudxnu_perfmon_ast_send_urgent(boolean_t urgent)
     return KERN_SUCCESS;
 }
 
-__private_extern__
-kern_return_t chudxnu_perfmon_ast_send(void)
-{
-    return chudxnu_perfmon_ast_send_urgent(TRUE);
+#if 0
+#pragma mark **** interrupt ****
+#endif
+static kern_return_t chud_null_int(uint32_t trapentry, thread_flavor_t flavor, 
+	thread_state_t tstate,  mach_msg_type_number_t count);
+static chudxnu_interrupt_callback_func_t interrupt_callback_fn = chud_null_int;
+
+static kern_return_t chud_null_int(uint32_t trapentry __unused, thread_flavor_t flavor __unused,
+	thread_state_t tstate __unused,  mach_msg_type_number_t count __unused) {
+	return KERN_FAILURE;
 }
 
-#pragma mark **** interrupt ****
-static chudxnu_interrupt_callback_func_t interrupt_callback_fn = NULL;
-//extern perfCallback perfIntHook; /* function hook into interrupt() */
 
 static kern_return_t
 chudxnu_private_interrupt_callback(int trapno, struct savearea *ssp,
@@ -367,24 +420,40 @@ chudxnu_private_interrupt_callback(int trapno, struct savearea *ssp,
 __private_extern__
 kern_return_t chudxnu_interrupt_callback_enter(chudxnu_interrupt_callback_func_t func)
 {
-    interrupt_callback_fn = func;
-    perfIntHook = chudxnu_private_interrupt_callback;
-    __asm__ volatile("eieio");	/* force order */
-    __asm__ volatile("sync");	/* force to memory */
-    return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(NULL, chudxnu_private_interrupt_callback,
+		(void * volatile *)&perfIntHook)) {
+		chudxnu_interrupt_callback_func_t old = interrupt_callback_fn;
+
+		while(!OSCompareAndSwapPtr(old, func,
+			(void * volatile *)&interrupt_callback_fn)) {
+			old = interrupt_callback_fn;
+		}
+
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
 __private_extern__
 kern_return_t chudxnu_interrupt_callback_cancel(void)
 {
-    interrupt_callback_fn = NULL;
-    perfIntHook = NULL;
-    __asm__ volatile("eieio");	/* force order */
-    __asm__ volatile("sync");	/* force to memory */
-    return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(chudxnu_private_interrupt_callback, NULL, 
+		(void * volatile *)&perfIntHook)) {
+		chudxnu_interrupt_callback_func_t old = interrupt_callback_fn;
+
+		while(!OSCompareAndSwapPtr(old, chud_null_int,
+			(void * volatile *)&interrupt_callback_fn)) {
+			old = interrupt_callback_fn;
+		}
+
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
+#if 0
 #pragma mark **** cpu signal ****
+#endif
 static chudxnu_cpusig_callback_func_t cpusig_callback_fn = NULL;
 extern perfCallback perfCpuSigHook; /* function hook into cpu_signal_handler() */
 
@@ -407,21 +476,35 @@ chudxnu_private_cpu_signal_handler(int request, struct savearea *ssp,
 __private_extern__
 kern_return_t chudxnu_cpusig_callback_enter(chudxnu_cpusig_callback_func_t func)
 {
-    cpusig_callback_fn = func;
-    perfCpuSigHook = chudxnu_private_cpu_signal_handler;
-    __asm__ volatile("eieio");	/* force order */
-    __asm__ volatile("sync");	/* force to memory */
-    return KERN_SUCCESS;
+	if(OSCompareAndSwapPtr(NULL, chudxnu_private_cpu_signal_handler,
+		(void * volatile *)&perfCpuSigHook)) {
+		chudxnu_cpusig_callback_func_t old = cpusig_callback_fn;
+
+		while(!OSCompareAndSwapPtr(old, func,
+			(void * volatile *)&cpusig_callback_fn)) {
+			old = cpusig_callback_fn;
+		}
+
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
 __private_extern__
 kern_return_t chudxnu_cpusig_callback_cancel(void)
 {
-    cpusig_callback_fn = NULL;
-    perfCpuSigHook = NULL;
-    __asm__ volatile("eieio");	/* force order */
-    __asm__ volatile("sync");	/* force to memory */
-    return KERN_SUCCESS;
+    if(OSCompareAndSwapPtr(chudxnu_private_cpu_signal_handler, NULL,
+		(void * volatile *)&perfCpuSigHook)) {
+		chudxnu_cpusig_callback_func_t old = cpusig_callback_fn;
+
+		while(!OSCompareAndSwapPtr(old, NULL,
+			(void * volatile *)&cpusig_callback_fn)) {
+			old = cpusig_callback_fn;
+		}
+
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
 }
 
 __private_extern__
@@ -463,3 +546,4 @@ kern_return_t chudxnu_cpusig_send(int otherCPU, uint32_t request)
     ml_set_interrupts_enabled(oldlevel);
     return retval;
 }
+

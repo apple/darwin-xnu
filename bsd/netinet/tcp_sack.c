@@ -211,13 +211,8 @@ tcp_update_sack_list(struct tcpcb *tp, tcp_seq rcv_start, tcp_seq rcv_end)
 void
 tcp_clean_sackreport( struct tcpcb *tp)
 {
-/*
-	int i;
 
 	tp->rcv_numsacks = 0;
-	for (i = 0; i < MAX_SACK_BLKS; i++)
-		tp->sackblks[i].start = tp->sackblks[i].end=0;
-*/
 	bzero(&tp->sackblks[0], sizeof (struct sackblk) * MAX_SACK_BLKS);
 }
 
@@ -328,16 +323,20 @@ tcp_sack_doack(struct tcpcb *tp, struct tcpopt *to, tcp_seq th_ack)
 	}
 	/*
 	 * Append received valid SACK blocks to sack_blocks[].
+	 * Check that the SACK block range is valid.
 	 */
-	for (i = 0; i < to->to_nsacks; i++) {
-		bcopy((to->to_sacks + i * TCPOLEN_SACK), &sack, sizeof(sack));
-		sack.start = ntohl(sack.start);
-		sack.end = ntohl(sack.end);
-		if (SEQ_GT(sack.end, sack.start) &&
-		    SEQ_GT(sack.start, tp->snd_una) &&
-		    SEQ_GT(sack.start, th_ack) &&
-		    SEQ_LEQ(sack.end, tp->snd_max))
-			sack_blocks[num_sack_blks++] = sack;
+		for (i = 0; i < to->to_nsacks; i++) {
+			bcopy((to->to_sacks + i * TCPOLEN_SACK),
+			    &sack, sizeof(sack));
+			sack.start = ntohl(sack.start);
+			sack.end = ntohl(sack.end);
+			if (SEQ_GT(sack.end, sack.start) &&
+			    SEQ_GT(sack.start, tp->snd_una) &&
+			    SEQ_GT(sack.start, th_ack) &&
+			    SEQ_LT(sack.start, tp->snd_max) &&
+			    SEQ_GT(sack.end, tp->snd_una) &&
+			    SEQ_LEQ(sack.end, tp->snd_max))
+				sack_blocks[num_sack_blks++] = sack;
 	}
 
 	/*
@@ -504,6 +503,8 @@ tcp_free_sackholes(struct tcpcb *tp)
 	while ((q = TAILQ_FIRST(&tp->snd_holes)) != NULL)
 		tcp_sackhole_remove(tp, q);
 	tp->sackhint.sack_bytes_rexmit = 0;
+	tp->sackhint.nexthole = NULL;
+	tp->sack_newdata = 0;
 
 }
 

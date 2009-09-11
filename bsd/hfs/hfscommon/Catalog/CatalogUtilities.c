@@ -33,54 +33,8 @@
 #include	"../headers/BTreesInternal.h"
 #include	"../headers/CatalogPrivate.h"
 #include	"../headers/HFSUnicodeWrappers.h"
+#include 	"../headers/BTreesPrivate.h"
 #include	<string.h>
-
-
-//*******************************************************************************
-//	Routine:	LocateCatalogNode
-//
-// Function: 	Locates the catalog record for an existing folder or file
-//				CNode and returns pointers to the key and data records.
-//
-//*******************************************************************************
-
-OSErr
-LocateCatalogNode(const ExtendedVCB *volume, HFSCatalogNodeID folderID, const CatalogName *name,
-					u_int32_t hint, CatalogKey *keyPtr, CatalogRecord *dataPtr, u_int32_t *newHint)
-{
-	OSErr				result;
-	CatalogName 		*nodeName = NULL;	/* To ward off uninitialized use warnings from compiler */
-	HFSCatalogNodeID	threadParentID;
-
-
-	result = LocateCatalogRecord(volume, folderID, name, hint, keyPtr, dataPtr, newHint);
-	ReturnIfError(result);
-	
-	// if we got a thread record, then go look up real record
-	switch ( dataPtr->recordType )
-	{
-		case kHFSFileThreadRecord:
-		case kHFSFolderThreadRecord:
-			threadParentID = dataPtr->hfsThread.parentID;
-			nodeName = (CatalogName *) &dataPtr->hfsThread.nodeName;
-			break;
-
-		case kHFSPlusFileThreadRecord:
-		case kHFSPlusFolderThreadRecord:
-			threadParentID = dataPtr->hfsPlusThread.parentID;
-			nodeName = (CatalogName *) &dataPtr->hfsPlusThread.nodeName;	
-			break;
-
-		default:
-			threadParentID = 0;
-			break;
-	}
-	
-	if ( threadParentID )		// found a thread
-		result = LocateCatalogRecord(volume, threadParentID, nodeName, kNoHint, keyPtr, dataPtr, newHint);
-	
-	return result;
-}
 
 //
 //	Routine:	LocateCatalogNodeByKey
@@ -163,20 +117,33 @@ LocateCatalogNodeByKey(const ExtendedVCB *volume, u_int32_t hint, CatalogKey *ke
 
 OSErr
 LocateCatalogRecord(const ExtendedVCB *volume, HFSCatalogNodeID folderID, const CatalogName *name,
-					u_int32_t hint, CatalogKey *keyPtr, CatalogRecord *dataPtr, u_int32_t *newHint)
+					__unused u_int32_t hint, CatalogKey *keyPtr, CatalogRecord *dataPtr, u_int32_t *newHint)
 {
-	OSErr			result;
-	CatalogKey		tempKey;	// 518 bytes
-	u_int16_t		tempSize;
+	OSErr result;
+	uint16_t tempSize;
+	FSBufferDescriptor btRecord;
+	BTreeIterator searchIterator;
+	FCB *fcb;
+	BTreeControlBlock *btcb;
 
-	BuildCatalogKey(folderID, name, (volume->vcbSigWord == kHFSPlusSigWord), &tempKey);
+	bzero(&searchIterator, sizeof(searchIterator));
 
-	if ( name == NULL )
-		hint = kNoHint;			// no CName given so clear the hint
-
-	result = SearchBTreeRecord(volume->catalogRefNum, &tempKey, hint, keyPtr, dataPtr, &tempSize, newHint);
+	fcb = GetFileControlBlock(volume->catalogRefNum);
+	btcb = (BTreeControlBlock *)fcb->fcbBTCBPtr;
 	
-	return (result == btNotFound ? cmNotFound : result);	
+	btRecord.bufferAddress = dataPtr;
+	btRecord.itemCount = 1;
+	btRecord.itemSize = sizeof(CatalogRecord);
+
+	BuildCatalogKey(folderID, name, (volume->vcbSigWord == kHFSPlusSigWord), (CatalogKey *)&searchIterator.key);
+
+	result = BTSearchRecord(fcb, &searchIterator, &btRecord, &tempSize, &searchIterator);
+	if (result == noErr) {
+		*newHint = searchIterator.hint.nodeNum;
+		BlockMoveData(&searchIterator.key, keyPtr, CalcKeySize(btcb, &searchIterator.key));
+	}
+
+	return (result == btNotFound ? cmNotFound : result);
 }
 
 

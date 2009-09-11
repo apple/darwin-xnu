@@ -499,7 +499,7 @@ machine_stack_detach(
   vm_offset_t stack;
 
   KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_SCHED,MACH_STACK_DETACH),
-											thread, thread->priority,
+											(uintptr_t)thread_tid(thread), thread->priority,
 											thread->sched_pri, 0, 0);
 
   act_machine_sv_free(thread, 0);	/* XXX flag == 0 OK? */
@@ -530,7 +530,7 @@ machine_stack_attach(
   struct savearea *sv;
 
         KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_SCHED,MACH_STACK_ATTACH),
-            thread, thread->priority,
+            (uintptr_t)thread_tid(thread), thread->priority,
             thread->sched_pri, 0, 0);
 
   assert(stack);

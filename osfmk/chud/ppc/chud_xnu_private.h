@@ -29,7 +29,9 @@
 #ifndef _PPC_CHUD_XNU_PRIVATE_H_
 #define _PPC_CHUD_XNU_PRIVATE_H_
 
+#if 0
 #pragma mark **** thread ****
+#endif
 // *****************************************************************************
 // thread
 // *****************************************************************************
@@ -45,7 +47,9 @@ extern kern_return_t chudxnu_copy_threadstate_to_savearea(
 			thread_state_t tstate,
 			mach_msg_type_number_t *count);
 
+#if 0
 #pragma mark **** cpu timer ****
+#endif
 typedef struct {
 	timer_call_data_t			cpu_timer_call;
 	uint64_t				t_deadline;

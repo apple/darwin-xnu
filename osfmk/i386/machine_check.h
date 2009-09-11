@@ -29,6 +29,10 @@
 #ifndef _I386_MACHINE_CHECK_H_
 #define _I386_MACHINE_CHECK_H_
 
+#include <stdint.h>
+
+#include <i386/cpu_data.h>
+
 /*
  * This header defines the machine check architecture for Pentium4 and Xeon.
  */
@@ -167,7 +171,6 @@ typedef union {
 #define	MC8_MMM_WRITE			2
 #define	MC8_MMM_ADDRESS_COMMAND		3
 #define	MC8_MMM_RESERVED		4
-
 typedef union {
     struct {
 	uint64_t	reserved1		:BITS(15,0);

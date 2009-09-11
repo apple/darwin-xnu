@@ -44,23 +44,8 @@
 #include <vm/vm_protos.h>
 #include <vm/vm_kern.h>
 
-unsigned kdp_vm_read( caddr_t, caddr_t, unsigned);
-unsigned kdp_vm_write( caddr_t, caddr_t, unsigned);
-
-boolean_t kdp_read_io;
-boolean_t kdp_trans_off;
-uint32_t kdp_src_high32;
-extern pmap_paddr_t avail_start, avail_end;
-
-extern void bcopy_phys(addr64_t from, addr64_t to, int size);
-static addr64_t kdp_vtophys(pmap_t pmap, addr64_t va);
-
-pmap_t kdp_pmap = 0;
-
-unsigned int not_in_kdp = 1; /* Cleared when we begin to access vm functions in kdp */
-
 extern vm_offset_t sectTEXTB, sectDATAB, sectLINKB, sectPRELINKB;
-extern int sectSizeTEXT, sectSizeDATA, sectSizeLINK, sectSizePRELINK;
+extern unsigned long sectSizeTEXT, sectSizeDATA, sectSizeLINK, sectSizePRELINK;
 
 int	kern_dump(void);
 int	kdp_dump_trap(int type, x86_saved_state32_t *regs);
@@ -85,128 +70,6 @@ typedef struct {
 } tir_t;
 
 char command_buffer[512];
-
-static addr64_t
-kdp_vtophys(
-	pmap_t pmap,
-	addr64_t va)
-{
-	addr64_t    pa;
-	ppnum_t pp;
-
-	pp = pmap_find_phys(pmap, va);
-	if(!pp) return 0;
-	
-	pa = ((addr64_t)pp << 12) | (va & 0x0000000000000FFFULL);
-	return(pa);
-}
-
-/*
- *
- */
-unsigned kdp_vm_read(
-	caddr_t src, 
-	caddr_t dst, 
-	unsigned len)
-{
-	addr64_t cur_virt_src = (addr64_t)((unsigned int)src | (((uint64_t)kdp_src_high32) << 32));
-	addr64_t cur_virt_dst = (addr64_t)((unsigned int)dst);
-	addr64_t cur_phys_dst, cur_phys_src;
-	unsigned resid = len;
-	unsigned cnt = 0;
-	pmap_t src_pmap = kernel_pmap;
-
-/* If a different pmap has been specified with kdp_pmap, use it to translate the
- * source (cur_virt_src); otherwise, the source is translated using the
- * kernel_pmap.
- */
-	if (kdp_pmap)
-		src_pmap = kdp_pmap;
-
-	while (resid != 0) {
-/* Translate, unless kdp_trans_off is set */
-		if (!kdp_trans_off) {
-			if (!(cur_phys_src = kdp_vtophys(src_pmap,
-				    cur_virt_src)))
-				goto exit;
-		}
-		else
-			cur_phys_src = cur_virt_src;
-
-/* Always translate the destination buffer using the kernel_pmap */
-		if(!(cur_phys_dst = kdp_vtophys(kernel_pmap, cur_virt_dst)))
-			goto exit;
-
-		/* Validate physical page numbers unless kdp_read_io is set */
-		if (kdp_read_io == FALSE)
-			if (!pmap_valid_page(i386_btop(cur_phys_dst)) || !pmap_valid_page(i386_btop(cur_phys_src)))
-				goto exit;
-
-/* Get length left on page */
-		cnt = PAGE_SIZE - (cur_phys_src & PAGE_MASK);
-		if (cnt > (PAGE_SIZE - (cur_phys_dst & PAGE_MASK)))
-			cnt = PAGE_SIZE - (cur_phys_dst & PAGE_MASK);
-		if (cnt > resid)
-			cnt = resid;
-
-/* Do a physical copy */
-		bcopy_phys(cur_phys_src, cur_phys_dst, cnt);
-
-		cur_virt_src += cnt;
-		cur_virt_dst += cnt;
-		resid -= cnt;
-	}
-exit:
-	return (len - resid);
-}
-
-/*
- * 
- */
-unsigned kdp_vm_write(
-        caddr_t src,
-        caddr_t dst,
-        unsigned len)
-{       
-	addr64_t cur_virt_src, cur_virt_dst;
-	addr64_t cur_phys_src, cur_phys_dst;
-	unsigned resid, cnt, cnt_src, cnt_dst;
-
-#ifdef KDP_VM_WRITE_DEBUG
-	printf("kdp_vm_write: src %x dst %x len %x - %08X %08X\n", src, dst, len, ((unsigned long *)src)[0], ((unsigned long *)src)[1]);
-#endif
-
-	cur_virt_src = (addr64_t)((unsigned int)src);
-	cur_virt_dst = (addr64_t)((unsigned int)dst);
-
-	resid = len;
-
-	while (resid != 0) {
-		if ((cur_phys_dst = kdp_vtophys(kernel_pmap, cur_virt_dst)) == 0) 
-			goto exit;
-
-		if ((cur_phys_src = kdp_vtophys(kernel_pmap, cur_virt_src)) == 0) 
-			goto exit;
-
-		cnt_src = ((cur_phys_src + PAGE_SIZE) & (PAGE_MASK)) - cur_phys_src;
-		cnt_dst = ((cur_phys_dst + PAGE_SIZE) & (PAGE_MASK)) - cur_phys_dst;
-
-		if (cnt_src > cnt_dst)
-			cnt = cnt_dst;
-		else
-			cnt = cnt_src;
-		if (cnt > resid) 
-			cnt = resid;
-
-		bcopy_phys(cur_phys_src, cur_phys_dst, cnt);		/* Copy stuff over */
-
-		cur_virt_src +=cnt;
-		cur_virt_dst +=cnt;
-		resid -= cnt;
-	}
-exit:
-	return (len - resid);
-}
 
 static void
 kern_collectth_state(thread_t thread, tir_t *t)
@@ -246,7 +109,7 @@ kern_collectth_state(thread_t thread, tir_t *t)
 			vm_offset_t kstack;
 			bzero(tstate, x86_THREAD_STATE32_COUNT * sizeof(int));
 			if ((kstack = thread->kernel_stack) != 0){
-				struct x86_kernel_state32 *iks = STACK_IKS(kstack);
+				struct x86_kernel_state *iks = STACK_IKS(kstack);
 				tstate->ebx = iks->k_ebx;
 				tstate->esp = iks->k_esp;
 				tstate->ebp = iks->k_ebp;
@@ -318,8 +181,6 @@ kern_dump(void)
 	unsigned int num_sects_txed = 0;
 
 	map = kernel_map;
-
-	not_in_kdp = 0; /* Signal vm functions not to acquire locks */
 
 	thread_count = 1;
 	segment_count = get_vmmap_entries(map); 

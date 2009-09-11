@@ -86,6 +86,6 @@ typedef	__uint32_t n_time;		/* ms since 00:00 GMT, byte rev */
 
 #ifdef KERNEL_PRIVATE
 n_time	 iptime(void);
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
 #endif

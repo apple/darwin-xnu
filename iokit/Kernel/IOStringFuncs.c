@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -25,7 +25,9 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/*      Copyright (c) 1995 NeXT Computer, Inc.  All rights reserved.
+
+/*      
+ *      Copyright (c) 1995 NeXT Computer, Inc.  All rights reserved.
  *
  * strol.c - The functions strtol() & strtoul() are exported as public API
  *           via the header file ~driverkit/generalFuncs.h
@@ -38,7 +40,7 @@
  *      Commented out references to errno.
  */
 
-/*-
+/*
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -78,6 +80,15 @@
 */
 #include <sys/types.h>
 #include <machine/limits.h>
+
+
+long strtol(const char *nptr, char **endptr, int base);
+unsigned long strtoul(const char *nptr, char **endptr, int base);
+quad_t strtoq(const char *nptr, char **endptr, int base);
+u_quad_t strtouq(const char *nptr, char **endptr, int base);
+char *strchr(const char *str, int ch);
+char *strncat(char *s1, const char *s2, unsigned long n);
+
 
 typedef int BOOL;
 
@@ -191,7 +202,16 @@ strtol(const char *nptr, char **endptr, int base)
 	} else if (neg)
 		acc = -acc;
 	if (endptr != 0)
-		*endptr = (char *)(any ? s - 1 : nptr);
+	{
+		if(any)
+		{
+			*endptr = __CAST_AWAY_QUALIFIER(s - 1, const, char *);
+		}
+		else
+		{
+			*endptr = __CAST_AWAY_QUALIFIER(nptr, const, char *);
+		}
+	}
 	return (acc);
 }
 
@@ -253,7 +273,17 @@ strtoul(const char *nptr, char **endptr, int base)
 	} else if (neg)
 		acc = -acc;
 	if (endptr != 0)
-		*endptr = (char *)(any ? s - 1 : nptr);
+	{
+		if(any)
+		{
+			*endptr = __CAST_AWAY_QUALIFIER(s - 1, const, char *);
+		}
+		else
+		{
+			*endptr = __CAST_AWAY_QUALIFIER(nptr, const, char *);
+		}
+	}
+
 	return (acc);
 }
 
@@ -329,7 +359,7 @@ strtoq(const char *nptr, char **endptr, int base)
 			break;
 		if (c >= base)
 			break;
-		if (any < 0 || acc > cutoff || acc == cutoff && c > cutlim)
+		if (any < 0 || acc > cutoff || (acc == cutoff && c > cutlim))
 			any = -1;
 		else {
 			any = 1;
@@ -343,7 +373,17 @@ strtoq(const char *nptr, char **endptr, int base)
 	} else if (neg)
 		acc = -acc;
 	if (endptr != 0)
-		*endptr = (char *)(any ? s - 1 : nptr);
+	{
+		if(any)
+		{
+			*endptr = __CAST_AWAY_QUALIFIER(s - 1, const, char *);
+		}
+		else
+		{
+			*endptr = __CAST_AWAY_QUALIFIER(nptr, const, char *);
+		}
+	}
+
 	return (acc);
 }
 
@@ -400,7 +440,7 @@ strtouq(const char *nptr,
 			break;
 		if (c >= base)
 			break;
-		if (any < 0 || acc > cutoff || acc == cutoff && c > cutlim)
+		if (any < 0 || acc > cutoff || (acc == cutoff && c > cutlim))
 			any = -1;
 		else {
 			any = 1;
@@ -414,7 +454,17 @@ strtouq(const char *nptr,
 	} else if (neg)
 		acc = -acc;
 	if (endptr != 0)
-		*endptr = (char *)(any ? s - 1 : nptr);
+	{
+		if(any)
+		{
+			*endptr = __CAST_AWAY_QUALIFIER(s - 1, const, char *);
+		}
+		else
+		{
+			*endptr = __CAST_AWAY_QUALIFIER(nptr, const, char *);
+		}
+	}
+
 	return (acc);
 }
 
@@ -427,7 +477,7 @@ char *strchr(const char *str, int ch)
 {
     do {
 	if (*str == ch)
-	    return((char *)str);
+	    return(__CAST_AWAY_QUALIFIER(str, const, char *));
     } while (*str++);
     return ((char *) 0);
 }

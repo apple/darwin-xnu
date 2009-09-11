@@ -44,19 +44,19 @@ HISTORY
 #define IOTimeTypeStampS(t)						\
 do {									\
     IOTimeStampStart(IODBG_INTES(t),					\
-                     (unsigned int) this, (unsigned int) owner);	\
+                     (uintptr_t) this, (uintptr_t) owner);	\
 } while(0)
 
 #define IOTimeTypeStampE(t)						\
 do {									\
     IOTimeStampEnd(IODBG_INTES(t),					\
-                   (unsigned int) this, (unsigned int) owner);		\
+                   (uintptr_t) this, (uintptr_t) owner);		\
 } while(0)
 
 #define IOTimeStampLatency()						\
 do {									\
     IOTimeStampEnd(IODBG_INTES(IOINTES_LAT),				\
-                   (unsigned int) this, (unsigned int) owner);		\
+                   (uintptr_t) this, (uintptr_t) owner);		\
 } while(0)
 
 #else /* !KDEBUG */
@@ -188,7 +188,7 @@ bool IOInterruptEventSource::checkForWork()
         IOTimeStampLatency();
         IOTimeTypeStampS(IOINTES_CLIENT);
             IOTimeStampConstant(IODBG_INTES(IOINTES_ACTION),
-                                (unsigned int) intAction, (unsigned int) owner);
+                                (uintptr_t) intAction, (uintptr_t) owner);
             (*intAction)(owner, this,  numInts);
         IOTimeTypeStampE(IOINTES_CLIENT);
 
@@ -200,7 +200,7 @@ bool IOInterruptEventSource::checkForWork()
         IOTimeStampLatency();
         IOTimeTypeStampS(IOINTES_CLIENT);
             IOTimeStampConstant(IODBG_INTES(IOINTES_ACTION),
-                                (unsigned int) intAction, (unsigned int) owner);
+                                (uintptr_t) intAction, (uintptr_t) owner);
              (*intAction)(owner, this, -numInts);
         IOTimeTypeStampE(IOINTES_CLIENT);
     

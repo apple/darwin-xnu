@@ -77,6 +77,7 @@
 struct	 savearea *ppc_last_saved_statep;
 struct	 savearea ppc_nested_saved_state;
 unsigned ppc_last_kdb_sp;
+db_regs_t	ddb_regs;	/* register state */
 
 extern int debugger_cpu;				/* Current cpu running debugger	*/
 

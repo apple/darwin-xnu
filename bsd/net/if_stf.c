@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/net/if_stf.c,v 1.1.2.6 2001/07/24 19:10:18 brooks Exp $	*/
 /*	$KAME: if_stf.c,v 1.62 2001/06/07 22:32:16 itojun Exp $	*/
 
@@ -125,7 +153,7 @@
 
 struct stf_softc {
 	ifnet_t				sc_if;	   /* common area */
-	u_long				sc_protocol_family; /* dlil protocol attached */
+	u_int32_t				sc_protocol_family; /* dlil protocol attached */
 	union {
 		struct route  __sc_ro4;
 		struct route_in6 __sc_ro6; /* just for safety */
@@ -161,7 +189,7 @@ static int stf_checkaddr4(struct stf_softc *, const struct in_addr *,
 static int stf_checkaddr6(struct stf_softc *, struct in6_addr *,
 	struct ifnet *);
 static void stf_rtrequest(int, struct rtentry *, struct sockaddr *);
-static errno_t stf_ioctl(ifnet_t ifp, u_int32_t cmd, void *data);
+static errno_t stf_ioctl(ifnet_t ifp, u_long cmd, void *data);
 static errno_t stf_output(ifnet_t ifp, mbuf_t m);
 
 /*
@@ -362,8 +390,7 @@ stf_encapcheck(
 	if (proto != IPPROTO_IPV6)
 		return 0;
 
-	/* LINTED const cast */
-	mbuf_copydata(m, 0, sizeof(ip), &ip);
+	mbuf_copydata((struct mbuf *)(size_t)m, 0, sizeof(ip), &ip);
 
 	if (ip.ip_v != 4)
 		return 0;
@@ -378,9 +405,10 @@ stf_encapcheck(
 	 * success on: dst = 10.1.1.1, ia6->ia_addr = 2002:0a01:0101:...
 	 */
 	if (bcmp(GET_V4(&ia6->ia_addr.sin6_addr), &ip.ip_dst,
-	    sizeof(ip.ip_dst)) != 0)
+	    sizeof(ip.ip_dst)) != 0) {
+		ifafree(&ia6->ia_ifa);
 		return 0;
-
+	}
 	/*
 	 * check if IPv4 src matches the IPv4 address derived from the
 	 * local 6to4 address masked by prefixmask.
@@ -392,10 +420,12 @@ stf_encapcheck(
 	a.s_addr &= GET_V4(&ia6->ia_prefixmask.sin6_addr)->s_addr;
 	b = ip.ip_src;
 	b.s_addr &= GET_V4(&ia6->ia_prefixmask.sin6_addr)->s_addr;
-	if (a.s_addr != b.s_addr)
+	if (a.s_addr != b.s_addr) {
+		ifafree(&ia6->ia_ifa);
 		return 0;
-
+	}
 	/* stf interface makes single side match only */
+	ifafree(&ia6->ia_ifa);
 	return 32;
 }
 
@@ -421,7 +451,7 @@ stf_getsrcifa6(struct ifnet *ifp)
 			continue;
 
 		bcopy(GET_V4(&sin6->sin6_addr), &in, sizeof(in));
-		lck_mtx_lock(rt_mtx);
+		lck_rw_lock_shared(in_ifaddr_rwlock);
 		for (ia4 = TAILQ_FIRST(&in_ifaddrhead);
 		     ia4;
 		     ia4 = TAILQ_NEXT(ia4, ia_link))
@@ -429,10 +459,11 @@ stf_getsrcifa6(struct ifnet *ifp)
 			if (ia4->ia_addr.sin_addr.s_addr == in.s_addr)
 				break;
 		}
-		lck_mtx_unlock(rt_mtx);
+		lck_rw_done(in_ifaddr_rwlock);
 		if (ia4 == NULL)
 			continue;
 
+		ifaref(ia);
 		ifnet_lock_done(ifp);
 		return (struct in6_ifaddr *)ia;
 	}
@@ -485,6 +516,7 @@ stf_pre_output(
 		m = m_pullup(m, sizeof(*ip6));
 		if (!m) {
 			*m0 = NULL; /* makes sure this won't be double freed */
+			ifafree(&ia6->ia_ifa);
 			return ENOBUFS;
 		}
 	}
@@ -500,6 +532,7 @@ stf_pre_output(
 	else if (IN6_IS_ADDR_6TO4(&dst6->sin6_addr))
 		in4 = GET_V4(&dst6->sin6_addr);
 	else {
+		ifafree(&ia6->ia_ifa);
 		return ENETUNREACH;
 	}
 
@@ -515,6 +548,7 @@ stf_pre_output(
 		m = m_pullup(m, sizeof(struct ip));
 	if (m == NULL) {
 		*m0 = NULL; 
+		ifafree(&ia6->ia_ifa);
 		return ENOBUFS;
 	}
 	ip = mtod(m, struct ip *);
@@ -549,6 +583,7 @@ stf_pre_output(
 	if (sc->sc_ro.ro_rt == NULL) {
 		rtalloc(&sc->sc_ro);
 		if (sc->sc_ro.ro_rt == NULL) {
+			ifafree(&ia6->ia_ifa);
 			return ENETUNREACH;
 		}
 	}
@@ -559,6 +594,7 @@ stf_pre_output(
 	if (result == 0)
 		result = EJUSTRETURN;
 	*m0 = NULL;
+	ifafree(&ia6->ia_ifa);
 	return result;
 }
 static errno_t
@@ -594,7 +630,7 @@ stf_checkaddr4(
 	/*
 	 * reject packets with broadcast
 	 */
-	lck_mtx_lock(rt_mtx);
+	lck_rw_lock_shared(in_ifaddr_rwlock);
 	for (ia4 = TAILQ_FIRST(&in_ifaddrhead);
 	     ia4;
 	     ia4 = TAILQ_NEXT(ia4, ia_link))
@@ -602,11 +638,11 @@ stf_checkaddr4(
 		if ((ia4->ia_ifa.ifa_ifp->if_flags & IFF_BROADCAST) == 0)
 			continue;
 		if (in->s_addr == ia4->ia_broadaddr.sin_addr.s_addr) {
-			lck_mtx_unlock(rt_mtx);
+			lck_rw_done(in_ifaddr_rwlock);
 			return -1;
 		}
 	}
-	lck_mtx_unlock(rt_mtx);
+	lck_rw_done(in_ifaddr_rwlock);
 
 	/*
 	 * perform ingress filter
@@ -619,17 +655,22 @@ stf_checkaddr4(
 		sin.sin_family = AF_INET;
 		sin.sin_len = sizeof(struct sockaddr_in);
 		sin.sin_addr = *in;
-		rt = rtalloc1((struct sockaddr *)&sin, 0, 0UL);
-		if (!rt || rt->rt_ifp != inifp) {
+		rt = rtalloc1((struct sockaddr *)&sin, 0, 0);
+		if (rt != NULL)
+			RT_LOCK(rt);
+		if (rt == NULL || rt->rt_ifp != inifp) {
 #if 1
 			log(LOG_WARNING, "%s: packet from 0x%x dropped "
 			    "due to ingress filter\n", if_name(sc->sc_if),
 			    (u_int32_t)ntohl(sin.sin_addr.s_addr));
 #endif
-			if (rt)
+			if (rt != NULL) {
+				RT_UNLOCK(rt);
 				rtfree(rt);
+			}
 			return -1;
 		}
+		RT_UNLOCK(rt);
 		rtfree(rt);
 	}
 
@@ -758,15 +799,16 @@ stf_rtrequest(
 	struct rtentry *rt,
 	__unused struct sockaddr *sa)
 {
-
-	if (rt)
+	if (rt != NULL) {
+		RT_LOCK_ASSERT_HELD(rt);
 		rt->rt_rmx.rmx_mtu = IPV6_MMTU;
+	}
 }
 
 static errno_t
 stf_ioctl(
 	ifnet_t		ifp,
-	u_int32_t	cmd,
+	u_long		cmd,
 	void		*data)
 {
 	struct ifaddr *ifa;

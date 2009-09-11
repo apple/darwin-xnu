@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -77,6 +77,7 @@
  *	Generic information structure to allow for expansion.
  */
 typedef integer_t	*host_info_t;		/* varying array of int. */
+typedef integer_t	*host_info64_t;		/* varying array of int. */
 
 #define	HOST_INFO_MAX	(1024)		/* max array size */
 typedef integer_t	host_info_data_t[HOST_INFO_MAX];
@@ -181,6 +182,10 @@ typedef struct host_priority_info	*host_priority_info_t;
 #define HOST_VM_INFO		2	/* Virtual memory stats */
 #define HOST_CPU_LOAD_INFO	3	/* CPU load stats */
 
+/* host_statistics64() */
+#define HOST_VM_INFO64		4	/* 64-bit virtual memory stats */
+
+
 struct host_load_info {
 	integer_t	avenrun[3];	/* scaled by LOAD_SCALE */
 	integer_t	mach_factor[3];	/* scaled by LOAD_SCALE */
@@ -192,12 +197,21 @@ typedef struct host_load_info	*host_load_info_t;
 		(sizeof(host_load_info_data_t)/sizeof(integer_t)))
 
 /* in <mach/vm_statistics.h> */
+/* vm_statistics64 */
+#define	HOST_VM_INFO64_COUNT ((mach_msg_type_number_t) \
+		(sizeof(vm_statistics64_data_t)/sizeof(integer_t)))
+
+/* size of the latest version of the structure */
+#define HOST_VM_INFO64_LATEST_COUNT HOST_VM_INFO64_COUNT
+
+
+/* vm_statistics */
 #define	HOST_VM_INFO_COUNT ((mach_msg_type_number_t) \
 		(sizeof(vm_statistics_data_t)/sizeof(integer_t)))
 
 /* size of the latest version of the structure */
 #define HOST_VM_INFO_LATEST_COUNT HOST_VM_INFO_COUNT
-#define HOST_VM_INFO_REV2_COUNT	HOST_VM_INFO_LATEST_COUNT
+#define	HOST_VM_INFO_REV2_COUNT HOST_VM_INFO_LATEST_COUNT
 /* previous versions: adjust the size according to what was added each time */
 #define	HOST_VM_INFO_REV1_COUNT /* added "speculative_count" (1 int) */	\
 	((mach_msg_type_number_t) \

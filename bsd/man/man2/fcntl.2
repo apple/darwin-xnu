@@ -1,3 +1,26 @@
+.\"
+.\" Copyright (c) 2008 Apple Inc.  All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this
+.\" file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.\"
 .\"	$NetBSD: fcntl.2,v 1.6 1995/02/27 12:32:29 cgd Exp $
 .\"
 .\" Copyright (c) 1983, 1993
@@ -33,7 +56,7 @@
 .\"
 .\"     @(#)fcntl.2	8.2 (Berkeley) 1/12/94
 .\"
-.Dd January 12, 1994
+.Dd October 2, 2008
 .Dt FCNTL 2
 .Os BSD 4.2
 .Sh NAME
@@ -131,7 +154,9 @@ The argument must be a buffer of size
 .Sy MAXPATHLEN
 or greater.
 .It Dv F_PREALLOCATE
-Preallocate file storage space.
+Preallocate file storage space. Note: upon success, 
+the space that is allocated can be the same size or 
+larger than the space requested.
 .It Dv F_SETSIZE
 Truncate a file without zeroing space.
 The calling process must have root privileges.
@@ -253,7 +278,7 @@ as well as remove either type of lock
 If a shared or exclusive lock cannot be set,
 .Nm fcntl
 returns immediately with
-.Er EACCES .
+.Er EAGAIN .
 .It Dv F_SETLKW
 This command is the same as
 .Dv F_SETLK
@@ -486,7 +511,7 @@ The
 system call will fail if:
 .Bl -tag -width Er
 .\" ==========
-.It Bq Er EACCES
+.It Bq Er EAGAIN
 The argument
 .Fa cmd
 is
@@ -502,7 +527,7 @@ exclusive-locked by another process;
 or the type is an exclusive lock and some portion of the
 segment of a file to be locked is already shared-locked or
 exclusive-locked by another process.
-.Pp
+.It Bq Er EACCESS
 The argument
 .Fa cmd
 is either

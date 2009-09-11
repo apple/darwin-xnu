@@ -133,11 +133,11 @@ mmd_fixup_ele(struct mac_module_data *oldbase,
     struct mac_module_data *newbase, struct mac_module_data_element *ele)
 {
 	if (ele->key != NULL) {		/* Array elements have no keys.       */
-		ele->key -= (unsigned int)oldbase;
-		ele->key += (unsigned int)newbase;
+		ele->key -= (uintptr_t)oldbase;
+		ele->key += (uintptr_t)newbase;
 	}
-	ele->value -= (unsigned int)oldbase;
-	ele->value += (unsigned int)newbase;
+	ele->value -= (uintptr_t)oldbase;
+	ele->value += (uintptr_t)newbase;
 }
 
 #endif

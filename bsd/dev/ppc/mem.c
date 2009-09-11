@@ -77,6 +77,7 @@
 #include <sys/dir.h>
 #include <sys/proc.h>
 #include <sys/systm.h>
+#include <sys/conf.h>
 #include <sys/vm.h>
 #include <sys/uio_internal.h>
 #include <sys/malloc.h>
@@ -151,13 +152,8 @@ mmrw(dev, uio, rw)
 	vm_offset_t	where;
 
 	while (uio_resid(uio) > 0 && error == 0) {
-		if (uio_iov_len(uio) == 0) {
-			uio_next_iov(uio);
-			uio->uio_iovcnt--;
-			if (uio->uio_iovcnt < 0)
-				panic("mmrw");
-			continue;
-		}
+		uio_update(uio, 0);
+
 		switch (minor(dev)) {
 
 /* minor device 0 is physical memory */
@@ -189,8 +185,7 @@ mmrw(dev, uio, rw)
 				}
 			}
 			o = uio->uio_offset - vll;
-			// LP64todo - fix this!
-			c = min(PAGE_SIZE - o, uio_iov_len(uio));
+			c = min(PAGE_SIZE - o, uio_curriovlen(uio));
 			error = uiomove((caddr_t)(where + o), c, uio);
 
 			if(dgWork.dgFlags & enaDiagDM) (void)mapping_remove(kernel_pmap, (addr64_t)where);	/* Unmap it */
@@ -205,7 +200,7 @@ mmrw(dev, uio, rw)
 			if (((addr64_t)uio->uio_offset > vm_last_addr) ||
 				((addr64_t)uio->uio_offset < VM_MIN_KERNEL_ADDRESS))
 				goto fault;
-			c = uio_iov_len(uio);
+			c = uio_curriovlen(uio);
 			if (!kernacc(uio->uio_offset, c))
 				goto fault;
 			error = uiomove64(uio->uio_offset, c, uio);
@@ -215,7 +210,7 @@ mmrw(dev, uio, rw)
 		case 2:
 			if (rw == UIO_READ)
 				return (0);
-			c = uio_iov_len(uio);
+			c = uio_curriovlen(uio);
 			break;
 		/* minor device 3 is ZERO/RATHOLE */
 		case 3:
@@ -224,11 +219,10 @@ mmrw(dev, uio, rw)
 				bzero(devzerobuf, PAGE_SIZE);
 			}
 			if(uio->uio_rw == UIO_WRITE) {
-				c = uio_iov_len(uio);
+				c = uio_curriovlen(uio);
 				break;
 			}
-			// LP64todo - fix this!
-			c = min(uio_iov_len(uio), PAGE_SIZE);
+			c = min(uio_curriovlen(uio), PAGE_SIZE);
 			error = uiomove(devzerobuf, c, uio);
 			continue;
 		default:
@@ -238,15 +232,7 @@ mmrw(dev, uio, rw)
 			
 		if (error)
 			break;
-		uio_iov_base_add(uio, c);
-		uio->uio_offset += c;
-#if LP64KERN
-		uio_setresid(uio, (uio_resid(uio) - c));
-		uio_iov_len_add(uio, -((int64_t)c));
-#else
-		uio_setresid(uio, (uio_resid(uio) - c));
-		uio_iov_len_add(uio, -((int)c));
-#endif
+		uio_update(uio, c);
 	}
 	return (error);
 fault:

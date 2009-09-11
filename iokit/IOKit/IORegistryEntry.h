@@ -42,6 +42,7 @@
 
 extern const OSSymbol * gIONameKey;
 extern const OSSymbol * gIOLocationKey;
+extern const OSSymbol * gIORegistryEntryIDKey;
 
 class IORegistryEntry;
 class IORegistryPlane;
@@ -70,7 +71,10 @@ protected:
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of this class in the future.
     */    
-    struct ExpansionData { };
+    struct ExpansionData
+    {
+	uint64_t	fRegistryEntryID;
+    };
 
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
@@ -97,7 +101,6 @@ public:
                                      IOOptionBits            options =
                                         kIORegistryIterateRecursively |
                                         kIORegistryIterateParents) const;
-    OSMetaClassDeclareReservedUsed(IORegistryEntry, 0);
 
 /*! @function copyProperty
     @abstract Synchronized method to obtain a property from a registry entry or one of its parents (or children) in the hierarchy. Available in Mac OS X 10.1 or later.
@@ -112,7 +115,6 @@ public:
                                      IOOptionBits            options =
                                         kIORegistryIterateRecursively |
                                         kIORegistryIterateParents) const;
-    OSMetaClassDeclareReservedUsed(IORegistryEntry, 1);
 
 /*! @function copyProperty
     @abstract Synchronized method to obtain a property from a registry entry or one of its parents (or children) in the hierarchy. Available in Mac OS X 10.1 or later.
@@ -127,7 +129,6 @@ public:
                                      IOOptionBits            options =
                                         kIORegistryIterateRecursively |
                                         kIORegistryIterateParents) const;
-    OSMetaClassDeclareReservedUsed(IORegistryEntry, 2);
 
 /*! @function copyParentEntry
     @abstract Returns an registry entry's first parent entry in a plane. Available in Mac OS X 10.1 or later.
@@ -136,7 +137,6 @@ public:
     @result Returns the first parent of the registry entry, or zero if the entry is not attached into the registry in that plane. A reference on the entry is returned to caller, which should be released. */
 
     virtual IORegistryEntry * copyParentEntry( const IORegistryPlane * plane ) const;
-    OSMetaClassDeclareReservedUsed(IORegistryEntry, 3);
 
 /*! @function copyChildEntry
     @abstract Returns an registry entry's first child entry in a plane. Available in Mac OS X 10.1 or later.
@@ -145,7 +145,6 @@ public:
     @result Returns the first child of the registry entry, or zero if the entry is not attached into the registry in that plane. A reference on the entry is returned to caller, which should be released. */
 
     virtual IORegistryEntry * copyChildEntry( const IORegistryPlane * plane ) const;
-    OSMetaClassDeclareReservedUsed(IORegistryEntry, 4);
 
     /* method available in Mac OS X 10.4 or later */
 /*!
@@ -179,10 +178,23 @@ member function's parameter list.
     virtual IOReturn runPropertyAction(Action action, OSObject *target,
 			       void *arg0 = 0, void *arg1 = 0,
 			       void *arg2 = 0, void *arg3 = 0);
-    OSMetaClassDeclareReservedUsed(IORegistryEntry, 5);
 
 private:
-
+#if __LP64__
+    OSMetaClassDeclareReservedUnused(IORegistryEntry, 0);
+    OSMetaClassDeclareReservedUnused(IORegistryEntry, 1);
+    OSMetaClassDeclareReservedUnused(IORegistryEntry, 2);
+    OSMetaClassDeclareReservedUnused(IORegistryEntry, 3);
+    OSMetaClassDeclareReservedUnused(IORegistryEntry, 4);
+    OSMetaClassDeclareReservedUnused(IORegistryEntry, 5);
+#else
+    OSMetaClassDeclareReservedUsed(IORegistryEntry, 0);
+    OSMetaClassDeclareReservedUsed(IORegistryEntry, 1);
+    OSMetaClassDeclareReservedUsed(IORegistryEntry, 2);
+    OSMetaClassDeclareReservedUsed(IORegistryEntry, 3);
+    OSMetaClassDeclareReservedUsed(IORegistryEntry, 4);
+    OSMetaClassDeclareReservedUsed(IORegistryEntry, 5);
+#endif
     OSMetaClassDeclareReservedUnused(IORegistryEntry, 6);
     OSMetaClassDeclareReservedUnused(IORegistryEntry, 7);
     OSMetaClassDeclareReservedUnused(IORegistryEntry, 8);
@@ -757,16 +769,34 @@ public:
     static const char * dealiasPath( const char ** opath,
                                     const IORegistryPlane * plane );
 
+/*! @function makePlane
+    @abstract Constructs an IORegistryPlane object.
+    @discussion Most planes in IOKit are created by the OS, although other planes may be created.
+    @param name A C-string name for the new plane, to be copied.
+    @result A new instance of an IORegistryPlane, or zero on failure. */
+
+    static const IORegistryPlane * makePlane( const char * name );
+
+/*!    @abstract Returns an ID for the registry entry that is global to all tasks.
+    @discussion The entry ID returned by getRegistryEntryID can be used to identify a registry entry across all tasks. A registry entry may be looked up by its entry ID by creating a matching dictionary with IORegistryEntryIDMatching() in user space, or <code>IOService::registryEntryIDMatching()</code> in the kernel, to be used with the IOKit matching functions. The ID is valid only until the machine reboots.
+    @result An ID for the registry entry, assigned when the entry is first attached in the registry. */
+
+    uint64_t getRegistryEntryID( void );
+
     /* * * * * * * * * * * * * * * * * * * * * * * * * * * * */
     /* * * * * * * * * * * * internals * * * * * * * * * * * */
     /* * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-public:
-    static IORegistryEntry * initialize( void );
-    static const IORegistryPlane * makePlane( const char * name );
-    // don't even think about using this
     virtual bool init( IORegistryEntry * from,
 				const IORegistryPlane * inPlane );
+
+#ifdef XNU_KERNEL_PRIVATE
+public:
+#else
+private:
+#endif
+    static IORegistryEntry * initialize( void );
+
 private:
     inline bool arrayMember( OSArray * set,
                             const IORegistryEntry * member,
@@ -779,16 +809,24 @@ private:
                     unsigned int relation,
                     const IORegistryPlane * plane ) const;
 
-    virtual OSArray * getParentSetReference( const IORegistryPlane * plane )
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+	OSArray * getParentSetReference( const IORegistryPlane * plane )
 									const;
-    virtual OSArray * getChildSetReference( const IORegistryPlane * plane )
+
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    OSArray * getChildSetReference( const IORegistryPlane * plane )
 									const;
-    virtual IORegistryEntry * getChildFromComponent( const char ** path,
+
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IORegistryEntry * getChildFromComponent( const char ** path,
 				const IORegistryPlane * plane );
 
-    virtual const OSSymbol * hasAlias(  const IORegistryPlane * plane,
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    const OSSymbol * hasAlias(  const IORegistryPlane * plane,
                                     char * opath = 0, int * length = 0 ) const;
-    virtual const char * matchPathLocation( const char * cmp,
+
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    const char * matchPathLocation( const char * cmp,
 				const IORegistryPlane * plane );
 
 };

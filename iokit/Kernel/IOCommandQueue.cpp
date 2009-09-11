@@ -32,11 +32,15 @@ HISTORY
     1998-7-13	Godfrey van der Linden(gvdl)
         Created.
 ]*/
+
+#if !defined(__LP64__)
+
 #include <IOKit/IOCommandQueue.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOTimeStamp.h>
 
 #include <mach/sync_policy.h>
+
 
 #define NUM_FIELDS_IN_COMMAND	4
 typedef struct commandEntryTag {
@@ -150,7 +154,7 @@ bool IOCommandQueue::checkForWork()
         consumerIndex = 0;
 
     IOTimeStampConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-			(unsigned int) action, (unsigned int) owner);
+			(uintptr_t) action, (uintptr_t) owner);
 
     (*(IOCommandQueueAction) action)(owner, field0, field1, field2, field3);
 
@@ -272,3 +276,5 @@ int IOCommandQueue::performAndFlush(OSObject *target,
 
     return numEntries;
 }
+
+#endif /* !defined(__LP64__) */

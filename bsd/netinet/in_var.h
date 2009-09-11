@@ -70,7 +70,7 @@
 #include <sys/kern_event.h>
 #endif
 
-#ifdef PRIVATE
+#ifdef KERNEL_PRIVATE
 #include <net/route.h>
 
 /*
@@ -84,18 +84,19 @@ struct in_ifaddr {
 #define	ia_ifp			ia_ifa.ifa_ifp
 #define	ia_flags		ia_ifa.ifa_flags
 						/* ia_{,sub}net{,mask} in host order */
-	u_long			ia_net;		/* network number of interface */
-	u_long			ia_netmask;	/* mask of net part */
-	u_long			ia_subnet;	/* subnet number, including net */
-	u_long			ia_subnetmask;	/* mask of subnet part */
+	u_int32_t		ia_net;		/* network number of interface */
+	u_int32_t		ia_netmask;	/* mask of net part */
+	u_int32_t		ia_subnet;	/* subnet number, including net */
+	u_int32_t		ia_subnetmask;	/* mask of subnet part */
 	struct in_addr		ia_netbroadcast; /* to recognize net broadcasts */
 	TAILQ_ENTRY(in_ifaddr)	ia_link;	/* tailq macro glue */
 	struct sockaddr_in	ia_addr;	/* reserve space for interface name */
 	struct sockaddr_in	ia_dstaddr;	/* reserve space for broadcast addr */
 #define	ia_broadaddr		ia_dstaddr
 	struct sockaddr_in	ia_sockmask;	/* reserve space for general netmask */
+	TAILQ_ENTRY(in_ifaddr)	ia_hash;	/* hash bucket entry */
 };
-#endif /* PRIVATE */
+#endif /* KERNEL_PRIVATE */
 
 struct	in_aliasreq {
 	char			ifra_name[IFNAMSIZ];	/* if name, e.g. "en0" */
@@ -155,6 +156,8 @@ struct kev_in_portinuse {
 #endif
 
 #ifdef KERNEL_PRIVATE
+#include <net/if_var.h>
+#include <kern/locks.h>
 /*
  * Given a pointer to an in_ifaddr (ifaddr),
  * return a pointer to the addr as a sockaddr_in.
@@ -165,11 +168,18 @@ struct kev_in_portinuse {
 #define IN_LNAOF(in, ifa) \
 	((ntohl((in).s_addr) & ~((struct in_ifaddr *)(ifa)->ia_subnetmask))
 
-extern	TAILQ_HEAD(in_ifaddrhead, in_ifaddr) in_ifaddrhead;
+/*
+ * Hash table for IPv4 addresses.
+ */
+__private_extern__ TAILQ_HEAD(in_ifaddrhead, in_ifaddr) in_ifaddrhead;
+__private_extern__ TAILQ_HEAD(in_ifaddrhashhead, in_ifaddr) *in_ifaddrhashtbl;
+__private_extern__ lck_rw_t *in_ifaddr_rwlock;
+
+#define	INADDR_HASH(x)	(&in_ifaddrhashtbl[inaddr_hashval(x)])
+
 extern	struct	ifqueue	ipintrq;		/* ip packet input queue */
 extern	struct	in_addr zeroin_addr;
 extern	u_char	inetctlerrmap[];
-extern	lck_mtx_t *rt_mtx;
 
 extern int apple_hwcksum_tx;
 extern int apple_hwcksum_rx;
@@ -178,36 +188,37 @@ extern int apple_hwcksum_rx;
  * Macro for finding the interface (ifnet structure) corresponding to one
  * of our IP addresses.
  */
-#define INADDR_TO_IFP(addr, ifp) \
-	/* struct in_addr addr; */ \
-	/* struct ifnet *ifp; */ \
-{ \
-	struct in_ifaddr *ia; \
-\
-	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_NOTOWNED); \
-	lck_mtx_lock(rt_mtx); \
-	TAILQ_FOREACH(ia, &in_ifaddrhead, ia_link) \
-		if (IA_SIN(ia)->sin_addr.s_addr == (addr).s_addr) \
-			break; \
-	(ifp) = (ia == NULL) ? NULL : ia->ia_ifp; \
-	lck_mtx_unlock(rt_mtx); \
+#define INADDR_TO_IFP(addr, ifp)					\
+	/* struct in_addr addr; */					\
+	/* struct ifnet *ifp; */					\
+{									\
+	struct in_ifaddr *ia;						\
+									\
+	lck_rw_lock_shared(in_ifaddr_rwlock);				\
+	TAILQ_FOREACH(ia, INADDR_HASH((addr).s_addr), ia_hash)		\
+		if (IA_SIN(ia)->sin_addr.s_addr == (addr).s_addr)	\
+			break;						\
+	(ifp) = (ia == NULL) ? NULL : ia->ia_ifp;			\
+	lck_rw_done(in_ifaddr_rwlock);					\
 }
 
 /*
  * Macro for finding the internet address structure (in_ifaddr) corresponding
- * to a given interface (ifnet structure).
+ * to a given interface (ifnet structure).  Caller is responsible for freeing
+ * the reference.
  */
-#define IFP_TO_IA(ifp, ia) \
-	/* struct ifnet *ifp; */ \
-	/* struct in_ifaddr *ia; */ \
-{ \
-	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_NOTOWNED); \
-	lck_mtx_lock(rt_mtx); \
-	for ((ia) = TAILQ_FIRST(&in_ifaddrhead); \
-	    (ia) != NULL && (ia)->ia_ifp != (ifp); \
-	    (ia) = TAILQ_NEXT((ia), ia_link)) \
-		continue; \
-	lck_mtx_unlock(rt_mtx); \
+#define IFP_TO_IA(ifp, ia)						\
+	/* struct ifnet *ifp; */					\
+	/* struct in_ifaddr *ia; */					\
+{									\
+	lck_rw_lock_shared(in_ifaddr_rwlock);				\
+	for ((ia) = TAILQ_FIRST(&in_ifaddrhead);			\
+	    (ia) != NULL && (ia)->ia_ifp != (ifp);			\
+	    (ia) = TAILQ_NEXT((ia), ia_link))				\
+		continue;						\
+	if ((ia) != NULL)						\
+		ifaref(&(ia)->ia_ifa);					\
+	lck_rw_done(in_ifaddr_rwlock);					\
 }
 
 /*
@@ -299,18 +310,23 @@ do { \
 } while(0)
 
 struct	route;
-struct	in_multi *in_addmulti(struct in_addr *, struct ifnet *);
-void	in_delmulti(struct in_multi **);
-int	in_control(struct socket *, u_long, caddr_t, struct ifnet *,
-			struct proc *);
-void	in_rtqdrain(void);
+
+extern void in_ifaddr_init(void);
+extern struct in_multi *in_addmulti(struct in_addr *, struct ifnet *);
+extern void in_delmulti(struct in_multi **);
+extern int in_control(struct socket *, u_long, caddr_t, struct ifnet *,
+    struct proc *);
+extern void in_rtqdrain(void);
 extern struct radix_node *in_validate(struct radix_node *);
-void	ip_input(struct mbuf *);
-int	in_ifadown(struct ifaddr *ifa, int);
-void	in_ifscrub(struct ifnet *, struct in_ifaddr *, int);
-int	ipflow_fastforward(struct mbuf *);
-void	ipflow_create(const struct route *, struct mbuf *);
-void	ipflow_slowtimo(void);
+extern void ip_input(struct mbuf *);
+extern int in_ifadown(struct ifaddr *ifa, int);
+extern void in_ifscrub(struct ifnet *, struct in_ifaddr *, int);
+extern int ipflow_fastforward(struct mbuf *);
+#if IPFLOW
+extern void ipflow_create(const struct route *, struct mbuf *);
+extern void ipflow_slowtimo(void);
+#endif /* IPFLOW */
+extern u_int32_t inaddr_hashval(u_int32_t);
 
 #endif /* KERNEL_PRIVATE */
 

@@ -78,14 +78,14 @@ const struct memory_object_pager_ops device_pager_ops = {
 	"device pager"
 };
 
-typedef int device_port_t;
+typedef uintptr_t device_port_t;
 
 /*
  * The start of "struct device_pager" MUST match a "struct memory_object".
  */
 typedef struct device_pager {
+	struct ipc_object_header	pager_header;	/* fake ip_kotype()	*/
 	memory_object_pager_ops_t pager_ops; /* == &device_pager_ops	*/
-	unsigned int	pager_ikot;	/* fake ip_kotype() 		*/
 	unsigned int	ref_count;	/* reference count		*/
 	memory_object_control_t	control_handle;	/* mem object's cntrl handle */
 	device_port_t   device_handle;  /* device_handle */
@@ -93,7 +93,7 @@ typedef struct device_pager {
 	int		flags;
 } *device_pager_t;
 
-
+#define pager_ikot pager_header.io_bits
 
 
 device_pager_t
@@ -136,7 +136,7 @@ device_pager_bootstrap(void)
 memory_object_t
 device_pager_setup(
 	__unused memory_object_t device,
-	int		device_handle,
+	uintptr_t		device_handle,
 	vm_size_t	size,
 	int		flags)
 {
@@ -184,10 +184,12 @@ device_pager_populate_object(
 
 	if(!vm_object->phys_contiguous) {
 		unsigned int null_size = 0;
+		assert((upl_size_t) size == size);
         	kr = vm_object_upl_request(vm_object,
-             		(vm_object_offset_t)offset, size, &upl,  NULL,
-			&null_size, (UPL_NO_SYNC | UPL_CLEAN_IN_PLACE)); 
-
+					   (vm_object_offset_t)offset,
+					   (upl_size_t) size, &upl,  NULL,
+					   &null_size,
+					   (UPL_NO_SYNC | UPL_CLEAN_IN_PLACE));
 		if(kr != KERN_SUCCESS)
 			panic("device_pager_populate_object: list_req failed");
 
@@ -220,7 +222,7 @@ kern_return_t
 device_pager_init(
 	memory_object_t mem_obj, 
 	memory_object_control_t control, 
-	__unused vm_size_t pg_size)
+	__unused memory_object_cluster_size_t pg_size)
 {
 	device_pager_t   device_object;
 	kern_return_t   kr;
@@ -278,7 +280,7 @@ kern_return_t
 device_pager_data_return(
 	memory_object_t			mem_obj,
 	memory_object_offset_t		offset,
-	vm_size_t			data_cnt,
+	memory_object_cluster_size_t			data_cnt,
 	__unused memory_object_offset_t	*resid_offset,
 	__unused int			*io_error,
 	__unused boolean_t		dirty,
@@ -304,7 +306,7 @@ kern_return_t
 device_pager_data_request(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
-	vm_size_t		length,
+	memory_object_cluster_size_t		length,
 	__unused vm_prot_t	protection_required,
         __unused memory_object_fault_info_t 	fault_info)
 {
@@ -376,7 +378,7 @@ kern_return_t
 device_pager_data_initialize(
         __unused memory_object_t		mem_obj,
         __unused memory_object_offset_t	offset,
-        __unused vm_size_t		data_cnt)
+        __unused memory_object_cluster_size_t		data_cnt)
 {
 	panic("device_pager_data_initialize");
 	return KERN_FAILURE;
@@ -386,7 +388,7 @@ kern_return_t
 device_pager_data_unlock(
 	__unused memory_object_t		mem_obj,
 	__unused memory_object_offset_t	offset,
-	__unused vm_size_t		size,
+	__unused memory_object_size_t		size,
 	__unused vm_prot_t		desired_access)
 {
 	return KERN_FAILURE;
@@ -408,7 +410,7 @@ kern_return_t
 device_pager_synchronize(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
-	vm_offset_t		length,
+	memory_object_size_t		length,
 	__unused vm_sync_t		sync_flags)
 {
 	device_pager_t	device_object;

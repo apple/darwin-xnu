@@ -141,14 +141,14 @@
 subsystem
 #if	KERNEL_USER
 	  KernelUser
-#endif	KERNEL_USER
+#endif	/* KERNEL_USER */
 #if	KERNEL_SERVER
 	  KernelServer
-#endif	KERNEL_SERVER
+#endif	/* KERNEL_SERVER */
 		       mach_norma 555000;
 #ifdef	KERNEL_USER
 userprefix r_;
-#endif	KERNEL_USER
+#endif	/* KERNEL_USER */
 
 #include <mach/std_types.defs>
 #include <mach/mach_types.defs>

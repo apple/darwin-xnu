@@ -331,6 +331,8 @@ ifmedia_ioctl(
 		if (ifmr->ifm_count != 0) {
 			kptr = (int *) _MALLOC(ifmr->ifm_count * sizeof(int),
 			    M_TEMP, M_WAITOK);
+			if (kptr == NULL)
+				return ENOBUFS;
 
 			/*
 			 * Get the media words from the interface's list.

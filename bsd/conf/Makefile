@@ -3,10 +3,11 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-export ubc_subr.o_CFLAGS_ADD=-Wno-discard-qual
-export vnode_pager.o_CFLAGS_ADD=-Werror
-export vm_unix.o_CFLAGS_ADD=-Werror
-export dp_backing_file.o_CFLAGS_ADD=-Werror
+export dp_backing_file.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export ubc_subr.o_CFLAGS_ADD=-Wno-discard-qual -Wshorten-64-to-32
+export vnode_pager.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_unix.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+
 export if_mib.o_CFLAGS_ADD=-Wno-unused-parameter
 export adsp_Write.o_CFLAGS_ADD=-Wno-sign-compare
 export adsp_Packet.o_CFLAGS_ADD=-Wno-sign-compare
@@ -114,7 +115,6 @@ $(COMPOBJROOT)/$(BSD_KERNEL_CONFIG)/Makefile :  $(SOURCE)/MASTER  \
 	$(SOURCE)/files.$(ARCH_CONFIG_LC) \
 	$(COMPOBJROOT)/doconf
 	$(_v)(doconf_target=$(addsuffix /conf, $(TARGET)); \
-	echo $${doconf_target};\
 	$(MKDIR) $${doconf_target}; \
 	cd $${doconf_target}; \
 	rm -f $(notdir $?); \

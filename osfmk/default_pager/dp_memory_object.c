@@ -73,7 +73,7 @@
 #include <vm/vm_protos.h>
 
 /* forward declaration */
-vstruct_t vs_object_create(vm_size_t size);
+vstruct_t vs_object_create(dp_size_t size);
 
 /*
  * List of all vstructs.  A specific vstruct is
@@ -301,7 +301,7 @@ vs_finish_write(
 
 vstruct_t
 vs_object_create(
-	vm_size_t size)
+	dp_size_t size)
 {
 	vstruct_t	vs;
 
@@ -376,7 +376,7 @@ kern_return_t
 dp_memory_object_init(
 	memory_object_t		mem_obj,
 	memory_object_control_t	control,
-	__unused vm_size_t pager_page_size)
+	__unused memory_object_cluster_size_t pager_page_size)
 {
 	vstruct_t		vs;
 
@@ -400,7 +400,7 @@ kern_return_t
 dp_memory_object_synchronize(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
-	vm_size_t		length,
+	memory_object_size_t		length,
 	__unused vm_sync_t		flags)
 {
 	vstruct_t	vs;
@@ -590,11 +590,12 @@ kern_return_t
 dp_memory_object_data_request(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
-	vm_size_t		length,
+	memory_object_cluster_size_t		length,
 	__unused vm_prot_t	protection_required,
         memory_object_fault_info_t	fault_info)
 {
 	vstruct_t		vs;
+	kern_return_t		kr = KERN_SUCCESS;
 
 	GSTAT(global_stats.gs_pagein_calls++);
 
@@ -643,11 +644,23 @@ dp_memory_object_data_request(
 	if ((offset & vm_page_mask) != 0 || (length & vm_page_mask) != 0)
 		Panic("bad alignment");
 
-	pvs_cluster_read(vs, (vm_offset_t)offset, length, fault_info);
+	assert((dp_offset_t) offset == offset);
+	kr = pvs_cluster_read(vs, (dp_offset_t) offset, length, fault_info);
 
+	/* Regular data requests have a non-zero length and always return KERN_SUCCESS.  
+	   Their actual success is determined by the fact that they provide a page or not, 
+	   i.e whether we call upl_commit() or upl_abort().  A length of 0 means that the 
+	   caller is only asking if the pager has a copy of that page or not.  The answer to 
+	   that question is provided by the return value.  KERN_SUCCESS means that the pager 
+	   does have that page.
+	*/
+	if(length) {
+		kr = KERN_SUCCESS;
+	}
+	
 	vs_finish_read(vs);
 
-	return KERN_SUCCESS;
+	return kr;
 }
 
 /*
@@ -666,7 +679,7 @@ kern_return_t
 dp_memory_object_data_initialize(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
-	vm_size_t		size)
+	memory_object_cluster_size_t		size)
 {
 	vstruct_t	vs;
 
@@ -685,7 +698,8 @@ dp_memory_object_data_initialize(
 	 * loop if the address range specified crosses cluster
 	 * boundaries.
 	 */
-	vs_cluster_write(vs, 0, (vm_offset_t)offset, size, FALSE, 0);
+	assert((upl_offset_t) offset == offset);
+	vs_cluster_write(vs, 0, (upl_offset_t)offset, size, FALSE, 0);
 
 	vs_finish_write(vs);
 
@@ -696,7 +710,7 @@ kern_return_t
 dp_memory_object_data_unlock(
 	__unused memory_object_t		mem_obj,
 	__unused memory_object_offset_t	offset,
-	__unused vm_size_t		size,
+	__unused memory_object_size_t		size,
 	__unused vm_prot_t		desired_access)
 {
 	Panic("dp_memory_object_data_unlock: illegal");
@@ -709,7 +723,7 @@ kern_return_t
 dp_memory_object_data_return(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	offset,
-	vm_size_t			size,
+	memory_object_cluster_size_t			size,
 	__unused memory_object_offset_t	*resid_offset,
 	__unused int		*io_error,
 	__unused boolean_t	dirty,
@@ -788,7 +802,8 @@ dp_memory_object_data_return(
 	 * loop if the address range specified crosses cluster
 	 * boundaries.
 	 */
-	vs_cluster_write(vs, 0, (vm_offset_t)offset, size, FALSE, 0);
+	assert((upl_offset_t) offset == offset);
+	vs_cluster_write(vs, 0, (upl_offset_t) offset, size, FALSE, 0);
 
 	vs_finish_write(vs);
 
@@ -828,7 +843,12 @@ default_pager_memory_object_create(
 
 	assert(dmm == default_pager_object);
 
-	vs = vs_object_create(new_size);
+	if ((dp_size_t) new_size != new_size) {
+		/* 32-bit overflow */
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	vs = vs_object_create((dp_size_t) new_size);
 	if (vs == VSTRUCT_NULL)
 		return KERN_RESOURCE_SHORTAGE;
 
@@ -840,7 +860,7 @@ default_pager_memory_object_create(
 	 */
 
 	vs->vs_pager_ops = &default_pager_ops;
-	vs->vs_mem_obj_ikot = IKOT_MEMORY_OBJECT;
+	vs->vs_pager_header.io_bits = IKOT_MEMORY_OBJECT;
 
 	/*
 	 * After this, other threads might receive requests
@@ -866,7 +886,12 @@ default_pager_object_create(
 	if (default_pager != default_pager_object)
 		return KERN_INVALID_ARGUMENT;
 
-	vs = vs_object_create(size);
+	if ((dp_size_t) size != size) {
+		/* 32-bit overflow */
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	vs = vs_object_create((dp_size_t) size);
 	if (vs == VSTRUCT_NULL)
 		return KERN_RESOURCE_SHORTAGE;
 
@@ -914,8 +939,8 @@ default_pager_objects(
 	/*
 	 * Out out-of-line port arrays are simply kalloc'ed.
 	 */
-	psize = round_page(actual * sizeof * pagers);
-	ppotential = psize / sizeof * pagers;
+	psize = round_page(actual * sizeof (*pagers));
+	ppotential = (unsigned int) (psize / sizeof (*pagers));
 	pagers = (memory_object_t *)kalloc(psize);
 	if (0 == pagers)
 		return KERN_RESOURCE_SHORTAGE;
@@ -926,8 +951,8 @@ default_pager_objects(
 	 * then "copied in" as if it had been sent by a
 	 * user process.
 	 */
-	osize = round_page(actual * sizeof * objects);
-	opotential = osize / sizeof * objects;
+	osize = round_page(actual * sizeof (*objects));
+	opotential = (unsigned int) (osize / sizeof (*objects));
 	kr = kmem_alloc(ipc_kernel_map, &oaddr, osize);
 	if (KERN_SUCCESS != kr) {
 		kfree(pagers, psize);
@@ -1095,13 +1120,13 @@ default_pager_object_pages(
 		if (0 != addr)
 			kmem_free(ipc_kernel_map, addr, size);
 
-		size = round_page(actual * sizeof * pages);
+		size = round_page(actual * sizeof (*pages));
 		kr = kmem_alloc(ipc_kernel_map, &addr, size);
 		if (KERN_SUCCESS != kr)
 			return KERN_RESOURCE_SHORTAGE;
 
 		pages = (default_pager_page_t *)addr;
-		potential = size / sizeof * pages;
+		potential = (unsigned int) (size / sizeof (*pages));
 	}
 
 	/*

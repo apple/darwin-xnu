@@ -144,16 +144,16 @@ uuid_is_null(const uuid_t uu)
 }
 
 int
-uuid_parse(const char *in, uuid_t uu)
+uuid_parse(const uuid_string_t in, uuid_t uu)
 {
 	int n = 0;
 
 	sscanf(in,
-		"%hh2x%hh2x%hh2x%hh2x-"
-		"%hh2x%hh2x-"
-		"%hh2x%hh2x-"
-		"%hh2x%hh2x-"
-		"%hh2x%hh2x%hh2x%hh2x%hh2x%hh2x%n",
+		"%2hhx%2hhx%2hhx%2hhx-"
+		"%2hhx%2hhx-"
+		"%2hhx%2hhx-"
+		"%2hhx%2hhx-"
+		"%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx%n",
 		&uu[0], &uu[1], &uu[2], &uu[3],
 		&uu[4], &uu[5],
 		&uu[6], &uu[7],
@@ -164,9 +164,10 @@ uuid_parse(const char *in, uuid_t uu)
 }
 
 void
-uuid_unparse_lower(const uuid_t uu, char *out)
+uuid_unparse_lower(const uuid_t uu, uuid_string_t out)
 {
-	sprintf(out,
+	snprintf(out,
+		sizeof(uuid_string_t),
 		"%02x%02x%02x%02x-"
 		"%02x%02x-"
 		"%02x%02x-"
@@ -180,9 +181,10 @@ uuid_unparse_lower(const uuid_t uu, char *out)
 }
 
 void
-uuid_unparse_upper(const uuid_t uu, char *out)
+uuid_unparse_upper(const uuid_t uu, uuid_string_t out)
 {
-	sprintf(out,
+	snprintf(out,
+		sizeof(uuid_string_t),
 		"%02X%02X%02X%02X-"
 		"%02X%02X-"
 		"%02X%02X-"
@@ -196,7 +198,7 @@ uuid_unparse_upper(const uuid_t uu, char *out)
 }
 
 void
-uuid_unparse(const uuid_t uu, char *out)
+uuid_unparse(const uuid_t uu, uuid_string_t out)
 {
 	uuid_unparse_upper(uu, out);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -42,9 +42,9 @@
 
 __BEGIN_DECLS
 
-/****************************************************************************/
-/* Protocol input/inject													*/
-/****************************************************************************/
+/******************************************************************************/
+/* Protocol input/inject                                                      */
+/******************************************************************************/
 
 #ifdef KERNEL_PRIVATE
 /*!
@@ -77,8 +77,9 @@ typedef void (*proto_input_detached_handler)(protocol_family_t protocol);
 	@param chains Input function supports packet chains.
 	@result A errno error on failure.
  */
-errno_t	proto_register_input(protocol_family_t protocol, proto_input_handler input,
-							 proto_input_detached_handler detached, int chains);
+extern errno_t proto_register_input(protocol_family_t protocol,
+    proto_input_handler input, proto_input_detached_handler detached,
+    int chains);
 
 /*!
 	@function proto_unregister_input
@@ -95,8 +96,8 @@ errno_t	proto_register_input(protocol_family_t protocol, proto_input_handler inp
 		on the normal input path).
 	@result A errno error on failure.
  */
-void	proto_unregister_input(protocol_family_t protocol);
-#endif
+extern void proto_unregister_input(protocol_family_t protocol);
+#endif /* KERNEL_PRIVATE */
 
 /*!
 	@function proto_input
@@ -107,7 +108,7 @@ void	proto_unregister_input(protocol_family_t protocol);
 	@result A errno error on failure. Unless proto_input returns zero,
 		the caller is responsible for freeing the mbuf.
  */
-errno_t	proto_input(protocol_family_t protocol, mbuf_t packet);
+extern errno_t proto_input(protocol_family_t protocol, mbuf_t packet);
 
 /*!
 	@function proto_inject
@@ -119,12 +120,12 @@ errno_t	proto_input(protocol_family_t protocol, mbuf_t packet);
 	@result A errno error on failure. Unless proto_inject returns zero,
 		the caller is responsible for freeing the mbuf.
  */
-errno_t	proto_inject(protocol_family_t protocol, mbuf_t packet);
+extern errno_t proto_inject(protocol_family_t protocol, mbuf_t packet);
 
 
-/****************************************************************************/
-/* Protocol plumbing														*/
-/****************************************************************************/
+/******************************************************************************/
+/* Protocol plumbing                                                          */
+/******************************************************************************/
 
 /*!
 	@typedef proto_plumb_handler
@@ -152,9 +153,9 @@ typedef void (*proto_unplumb_handler)(ifnet_t ifp, protocol_family_t protocol);
 
 /*!
 	@function proto_register_plumber
-	@discussion Allows the caller to specify the functions called when a protocol
-		is attached to an interface belonging to the specified family and when
-		that protocol is detached.
+	@discussion Allows the caller to specify the functions called when a
+		protocol is attached to an interface belonging to the specified
+		family and when that protocol is detached.
 	@param proto_fam The protocol family these plumbing functions will
 		handle.
 	@param if_fam The interface family these plumbing functions will
@@ -166,8 +167,9 @@ typedef void (*proto_unplumb_handler)(ifnet_t ifp, protocol_family_t protocol);
 		be used to detach the protocol.
 	@result A non-zero value of the attach failed.
  */
-errno_t	proto_register_plumber(protocol_family_t proto_fam, ifnet_family_t if_fam,
-							   proto_plumb_handler plumb, proto_unplumb_handler unplumb);
+extern errno_t proto_register_plumber(protocol_family_t proto_fam,
+    ifnet_family_t if_fam, proto_plumb_handler plumb,
+    proto_unplumb_handler unplumb);
 
 /*!
 	@function proto_unregister_plumber
@@ -176,72 +178,43 @@ errno_t	proto_register_plumber(protocol_family_t proto_fam, ifnet_family_t if_fa
 		handle.
 	@param if_fam The interface family these plumbing functions handle.
  */
-void	proto_unregister_plumber(protocol_family_t proto_fam, ifnet_family_t if_fam);
+extern void proto_unregister_plumber(protocol_family_t proto_fam,
+    ifnet_family_t if_fam);
 
 #ifdef KERNEL_PRIVATE
-
-/* 
-
-Function : proto_plumb
-
-    proto_plumb() will plumb a protocol to an actual interface.
-    This will find a registered protocol module and call its attach function.
-    The module will typically call dlil_attach_protocol with the appropriate parameters.
-            
-Parameters :
-    'protocol_family' is PF_INET, PF_INET6, ...
-    'ifp' is the interface to plumb the protocol to.
-    
-Return code :    
-
-0 :
-
-    No error.
-
-ENOENT:
-
-    No module was registered.
-
-other: 
-    
-    Error returned by the attach_proto function
-
+/*
+	@function proto_plumb
+	@discussion Plumbs a protocol to an actual interface.  This will find
+		a registered protocol module and call its attach function.
+		The module will typically call dlil_attach_protocol() with the
+		appropriate parameters.
+	@param protocol_family The protocol family.
+	@param ifp The interface to plumb the protocol to.
+	@result 0: No error.
+		ENOENT: No module was registered.
+		Other: Error returned by the attach_proto function
 */
-errno_t proto_plumb(protocol_family_t protocol_family, ifnet_t ifp);
+extern errno_t proto_plumb(protocol_family_t protocol_family, ifnet_t ifp);
 
-/* 
-
-Function : proto_unplumb
-
-    proto_unplumb() will unplumb a protocol from an interface.
-    This will find a registered protocol module and call its detach function.
-    The module will typically call dlil_detach_protocol with the appropriate parameters.
-    If no module is found, this function will call dlil_detach_protocol directly. 
-    
-Parameters :
-    'protocol_family' is PF_INET, PF_INET6, ...
-    'ifp' is APPLE_IF_FAM_ETHERNET, APPLE_IF_FAM_PPP, ...
-    
-Return code :    
-
-0 :
-
-    No error.
-
-ENOENT:
-
-    No module was registered.
-
-other: 
-    
-    Error returned by the attach_proto function
-
+/*
+	@function proto_unplumb
+	@discussion Unplumbs a protocol from an interface.  This will find
+		a registered protocol module and call its detach function.
+		The module will typically call dlil_detach_protocol() with
+		the appropriate parameters.  If no module is found, this
+		function will call dlil_detach_protocol directly().
+	@param protocol_family The protocol family.
+	@param ifp The interface to unplumb the protocol from.
+	@result 0: No error.
+		ENOENT: No module was registered.
+		Other: Error returned by the attach_proto function
 */
-errno_t proto_unplumb(protocol_family_t protocol_family, ifnet_t ifp);
+extern errno_t proto_unplumb(protocol_family_t protocol_family, ifnet_t ifp);
 
-__private_extern__ void proto_kpi_init(void) __attribute__((section("__TEXT, initcode")));
+__private_extern__ void
+proto_kpi_init(void) __attribute__((section("__TEXT, initcode")));
 
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 __END_DECLS
 
-#endif
+#endif /* __KPI_PROTOCOL__ */

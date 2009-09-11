@@ -65,6 +65,9 @@ ledger_enter(
 	     ledger_t		ledger,
 	     ledger_item_t	amount)
 {
+	if (ledger == LEDGER_NULL)
+		return KERN_SUCCESS;
+
 	/* Need to lock the ledger */
 	ledger_lock(ledger);
 	
@@ -211,7 +214,7 @@ kern_return_t ledger_create(
 	(*new_ledger)->ledger_limit = transfer;
 
 	/* Charge the ledger against the ledger_ledger */
-	ledger_ledger->ledger_balance += sizeof(ledger_data_t);
+	ledger_ledger->ledger_balance += (ledger_item_t)sizeof(ledger_data_t);
 	ledger_unlock(parent_ledger);
 
 	ledger_unlock(ledger_ledger);
@@ -256,7 +259,7 @@ kern_return_t ledger_terminate(
 	(void) ledger_enter(ledger->ledger_parent, ledger->ledger_balance);
 	
 	/* adjust the balance of the creation ledger */
-	(void) ledger_enter(ledger->ledger_ledger, -sizeof(*ledger));
+	(void) ledger_enter(ledger->ledger_ledger, (ledger_item_t)-sizeof(*ledger));
 
 	/* delete the ledger */
 	ledger_deallocate(ledger);
@@ -397,8 +400,10 @@ convert_ledger_to_port(
 {
 	ipc_port_t port;
 
-	port = ipc_port_make_send(ledger->ledger_self);
+	if (ledger == LEDGER_NULL)
+		return IP_NULL;
 
+	port = ipc_port_make_send(ledger->ledger_self);
 	return port;
 }
 
@@ -409,7 +414,8 @@ ipc_port_t
 ledger_copy(
 	    ledger_t ledger)
 {
-	/* XXX reference counting */
-	assert(ledger);
+	if (ledger == LEDGER_NULL)
+		return IP_NULL;
+
 	return(ipc_port_copy_send(ledger->ledger_self));
 }

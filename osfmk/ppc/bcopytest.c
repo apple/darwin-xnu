@@ -56,12 +56,12 @@ void bcopytest(void) {
 	
 	db_printf("bcopy test\n");	
 	
-	retr = kmem_alloc_wired(kernel_map, (vm_offset_t *)&sink, (1024*1024)+4096);	/* Get sink area */
+	retr = kmem_alloc_kobject(kernel_map, (vm_offset_t *)&sink, (1024*1024)+4096);	/* Get sink area */
 	if(retr != KERN_SUCCESS) {	/* Did we find any memory at all? */
 		panic("bcopytest: Whoops...  no memory for sink\n");
 	}
 	
-	retr = kmem_alloc_wired(kernel_map, (vm_offset_t *)&source, (1024*1024)+4096);	/* Get source area */
+	retr = kmem_alloc_kobject(kernel_map, (vm_offset_t *)&source, (1024*1024)+4096);	/* Get source area */
 	if(retr != KERN_SUCCESS) {	/* Did we find any memory at all? */
 		panic("bcopytest: Whoops...  no memory for source\n");
 	}

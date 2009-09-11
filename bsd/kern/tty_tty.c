@@ -158,7 +158,7 @@ cttyioctl(__unused dev_t dev, u_long cmd, caddr_t addr, int flag, proc_t p)
 	if (cmd == TIOCNOTTY) {
 		sessp = proc_session(p);
 		if (!SESS_LEADER(p, sessp)) {
-			OSBitAndAtomic(~((uint32_t)P_CONTROLT), (UInt32 *)&p->p_flag);
+			OSBitAndAtomic(~((uint32_t)P_CONTROLT), &p->p_flag);
 			if (sessp != SESSION_NULL)
 				session_rele(sessp);
 			error = 0;

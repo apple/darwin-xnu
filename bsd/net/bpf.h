@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -117,10 +117,14 @@ struct bpf_program {
  */
 struct bpf_program64 {
 	u_int		bf_len;
-	user_addr_t	bf_insns __attribute__((aligned(8)));
+	user64_addr_t	bf_insns __attribute__((aligned(8)));
 };
 
-#endif // KERNEL_PRIVATE
+struct bpf_program32 {
+	u_int		bf_len;
+	user32_addr_t	bf_insns;
+};
+#endif /* KERNEL_PRIVATE */
 
 /*
  * Struct returned by BIOCGSTATS.
@@ -151,7 +155,7 @@ struct bpf_version {
 #define BPF_TIMEVAL timeval32
 #else
 #define BPF_TIMEVAL timeval
-#endif
+#endif /* __LP64__ */
 /* Current version number of filter architecture. */
 #define BPF_MAJOR_VERSION 1
 #define BPF_MINOR_VERSION 1
@@ -161,7 +165,8 @@ struct bpf_version {
 #define	BIOCSETF	_IOW('B',103, struct bpf_program)
 #ifdef KERNEL_PRIVATE
 #define	BIOCSETF64	_IOW('B',103, struct bpf_program64)
-#endif // KERNEL_PRIVATE
+#define	BIOCSETF32	_IOW('B',103, struct bpf_program32)
+#endif /* KERNEL_PRIVATE */
 #define	BIOCFLUSH	_IO('B',104)
 #define BIOCPROMISC	_IO('B',105)
 #define	BIOCGDLT	_IOR('B',106, u_int)
@@ -217,7 +222,6 @@ struct bpf_hdr {
 #define DLT_FDDI	10	/* FDDI */
 #define DLT_ATM_RFC1483	11	/* LLC/SNAP encapsulated atm */
 #define DLT_RAW		12	/* raw IP */
-#define DLT_APPLE_IP_OVER_IEEE1394      138
 
 /*
  * These are values from BSD/OS's "bpf.h".
@@ -235,6 +239,7 @@ struct bpf_hdr {
 #define DLT_SLIP_BSDOS	15	/* BSD/OS Serial Line IP */
 #define DLT_PPP_BSDOS	16	/* BSD/OS Point-to-point Protocol */
 
+#define	DLT_PFSYNC	18	/* Packet filter state syncing */
 #define DLT_ATM_CLIP	19	/* Linux Classical-IP over ATM */
 
 /*
@@ -300,6 +305,50 @@ struct bpf_hdr {
  * This is for Linux cooked sockets.
  */
 #define DLT_LINUX_SLL	113
+
+/*
+ * For use in capture-file headers as a link-layer type corresponding
+ * to OpenBSD PF (Packet Filter) log.
+ */
+#define	DLT_PFLOG	117
+
+/*
+ * BSD header for 802.11 plus a number of bits of link-layer information
+ * including radio information.
+ */
+#ifndef DLT_IEEE802_11_RADIO
+#define DLT_IEEE802_11_RADIO	127
+#endif
+
+/*
+ * Apple IP-over-IEEE 1394, as per a request from Dieter Siegmund
+ * <dieter@apple.com>.  The header that's presented is an Ethernet-like
+ * header:
+ *
+ *	#define FIREWIRE_EUI64_LEN	8
+ *	struct firewire_header {
+ *		u_char  firewire_dhost[FIREWIRE_EUI64_LEN];
+ *		u_char  firewire_shost[FIREWIRE_EUI64_LEN];
+ *		u_short firewire_type;
+ *	};
+ *
+ * with "firewire_type" being an Ethernet type value, rather than,
+ * for example, raw GASP frames being handed up.
+ */
+#define DLT_APPLE_IP_OVER_IEEE1394	138
+
+/*
+ * For future use with 802.11 captures - defined by AbsoluteValue
+ * Systems to store a number of bits of link-layer information
+ * including radio information:
+ *
+ *	http://www.shaftnet.org/~pizza/software/capturefrm.txt
+ *
+ * but it might be used by some non-AVS drivers now or in the
+ * future.
+ */
+#define DLT_IEEE802_11_RADIO_AVS 163	/* 802.11 plus AVS radio header */
+
 
 /*
  * The instruction encodings.
@@ -379,9 +428,9 @@ struct bpf_insn {
  * Structure to retrieve available DLTs for the interface.
  */
 struct bpf_dltlist {
-	u_int32_t	bfl_len;        /* number of bfd_list array */
+	u_int32_t		bfl_len;	/* number of bfd_list array */
 	union {
-		u_int32_t   *bflu_list;      /* array of DLTs */
+		u_int32_t	*bflu_list;	/* array of DLTs */
 		u_int64_t	bflu_pad;
 	} bfl_u;
 };
@@ -394,11 +443,10 @@ struct bpf_dltlist {
 struct ifnet;
 struct mbuf;
 
-int		bpf_validate(const struct bpf_insn *, int);
-void	bpfdetach(struct ifnet *);
-void	bpfilterattach(int);
-u_int	bpf_filter(const struct bpf_insn *, u_char *, u_int, u_int);
-
+extern int	bpf_validate(const struct bpf_insn *, int);
+extern void	bpfdetach(struct ifnet *);
+extern void	bpfilterattach(int);
+extern u_int	bpf_filter(const struct bpf_insn *, u_char *, u_int, u_int);
 #endif /* KERNEL_PRIVATE */
 
 #ifdef KERNEL
@@ -414,10 +462,10 @@ u_int	bpf_filter(const struct bpf_insn *, u_char *, u_int, u_int);
 */
 
 enum {
-		BPF_MODE_DISABLED		= 0,
-		BPF_MODE_INPUT			= 1,
-		BPF_MODE_OUTPUT			= 2,
-		BPF_MODE_INPUT_OUTPUT	= 3
+	BPF_MODE_DISABLED	= 0,
+	BPF_MODE_INPUT		= 1,
+	BPF_MODE_OUTPUT		= 2,
+	BPF_MODE_INPUT_OUTPUT	= 3
 };
 /*!
 	@typedef bpf_tap_mode
@@ -468,7 +516,8 @@ typedef errno_t (*bpf_tap_func)(ifnet_t interface, u_int32_t data_link_type,
 		DLT_* defines in bpf.h.
 	@param header_length The length, in bytes, of the data link header.
  */
-void	 bpfattach(ifnet_t interface, u_int data_link_type, u_int header_length);
+extern void  bpfattach(ifnet_t interface, u_int data_link_type,
+    u_int header_length);
 
 /*!
 	@function bpf_attach
@@ -486,9 +535,8 @@ void	 bpfattach(ifnet_t interface, u_int data_link_type, u_int header_length);
 		DLT_* defines in bpf.h.
 	@param header_length The length, in bytes, of the data link header.
  */
-errno_t	 bpf_attach(ifnet_t interface, u_int32_t data_link_type,
-					u_int32_t header_length, bpf_send_func send,
-					bpf_tap_func tap);
+extern errno_t  bpf_attach(ifnet_t interface, u_int32_t data_link_type,
+    u_int32_t header_length, bpf_send_func send, bpf_tap_func tap);
 
 /*!
 	@function bpf_tap_in
@@ -501,8 +549,8 @@ errno_t	 bpf_attach(ifnet_t interface, u_int32_t data_link_type,
 	@param header An optional pointer to a header that will be prepended.
 	@param headerlen If the header was specified, the length of the header.
  */
-void	bpf_tap_in(ifnet_t interface, u_int32_t dlt, mbuf_t packet,
-				   void* header, size_t header_len);
+extern void bpf_tap_in(ifnet_t interface, u_int32_t dlt, mbuf_t packet,
+    void *header, size_t header_len);
 
 /*!
 	@function bpf_tap_out
@@ -515,8 +563,8 @@ void	bpf_tap_in(ifnet_t interface, u_int32_t dlt, mbuf_t packet,
 	@param header An optional pointer to a header that will be prepended.
 	@param headerlen If the header was specified, the length of the header.
  */
-void	bpf_tap_out(ifnet_t interface, u_int32_t dlt, mbuf_t packet,
-					void* header, size_t header_len);
+extern void bpf_tap_out(ifnet_t interface, u_int32_t dlt, mbuf_t packet,
+    void *header, size_t header_len);
 
 #endif /* KERNEL */
 
@@ -525,4 +573,4 @@ void	bpf_tap_out(ifnet_t interface, u_int32_t dlt, mbuf_t packet,
  */
 #define BPF_MEMWORDS 16
 
-#endif
+#endif /* _NET_BPF_H_ */

@@ -89,6 +89,9 @@ extern dtrace_provider_id_t	fbt_id;
 extern fbt_probe_t		**fbt_probetab;
 extern int			fbt_probetab_mask;
 
+kern_return_t fbt_perfCallback(int, ppc_saved_state_t *, int, int);
+kern_return_t fbt_perfIntCallback(int, ppc_saved_state_t *, int, int);
+
 /*
  * Critical routines that must not be probed. PR_5221096, PR_5379018.
  */
@@ -121,7 +124,7 @@ static const char * critical_blacklist[] =
 
 /*
  * The transitive closure of entry points that can be reached from probe context.
- * (Apart from routines whose names begin with dtrace_ or dtxnu_.)
+ * (Apart from routines whose names begin with dtrace_).
  */
 static const char * probe_ctx_closure[] =
 {
@@ -168,17 +171,20 @@ static const char * probe_ctx_closure[] =
 	"proc_is64bit",
 	"proc_selfname",
 	"proc_selfpid",
+	"proc_selfppid",
 	"psignal_lock",
+	"sdt_getargdesc",
 	"splhigh",
 	"splx",
 	"strlcpy",
+	"systrace_stub",
 	"timer_grab"
 };
 #define PROBE_CTX_CLOSURE_COUNT (sizeof(probe_ctx_closure)/sizeof(probe_ctx_closure[0]))
 
 static int _cmp(const void *a, const void *b)
 {
-	return strcmp((const char *)a, *(const char **)b);
+	return strncmp((const char *)a, *(const char **)b, strlen((const char *)a) + 1);
 }
 
 static const void * bsearch(
@@ -218,12 +224,12 @@ fbt_invop(uintptr_t addr, uintptr_t *stack, uintptr_t rval)
 			if (fbt->fbtp_roffset == 0) {
 				ppc_saved_state_t *regs = (ppc_saved_state_t *)stack;
 
-				CPU->cpu_dtrace_caller = addr;
+				CPU->cpu_dtrace_caller = regs->save_lr;
 				
 				dtrace_probe(fbt->fbtp_id, regs->save_r3 & mask, regs->save_r4 & mask,
 					regs->save_r5 & mask, regs->save_r6 & mask, regs->save_r7 & mask);
 					
-				CPU->cpu_dtrace_caller = NULL;
+				CPU->cpu_dtrace_caller = (uintptr_t)NULL;
 			} else {
 			
 				dtrace_probe(fbt->fbtp_id, fbt->fbtp_roffset, rval, 0, 0, 0);
@@ -235,7 +241,7 @@ fbt_invop(uintptr_t addr, uintptr_t *stack, uintptr_t rval)
 					regs->save_srr0 &= mask;
 				}
 				
-				CPU->cpu_dtrace_caller = NULL;
+				CPU->cpu_dtrace_caller = (uintptr_t)NULL;
 			}
 
 			return (fbt->fbtp_rval);
@@ -347,7 +353,7 @@ __fbt_provide_module(void *arg, struct modctl *ctl)
 	 * where prohibited.
 	 */
 
-	if (strcmp(modname, "com.apple.driver.dtrace") == 0)
+	if (LIT_STRNEQL(modname, "com.apple.driver.dtrace"))
 		return;
 
 	if (strstr(modname, "CHUD") != NULL)
@@ -361,11 +367,11 @@ __fbt_provide_module(void *arg, struct modctl *ctl)
         if (cmd->cmd == LC_SEGMENT) {
             struct segment_command *orig_sg = (struct segment_command *) cmd;
  
-            if (strcmp(SEG_TEXT, orig_sg->segname) == 0)
+            if (LIT_STRNEQL(orig_sg->segname, SEG_TEXT))
                 orig_ts = orig_sg;
-            else if (strcmp(SEG_LINKEDIT, orig_sg->segname) == 0)
+            else if (LIT_STRNEQL(orig_sg->segname, SEG_LINKEDIT))
                 orig_le = orig_sg;
-            else if (strcmp("", orig_sg->segname) == 0)
+            else if (LIT_STRNEQL(orig_sg->segname, ""))
                 orig_ts = orig_sg; /* kexts have a single unnamed segment */
         }
         else if (cmd->cmd == LC_SYMTAB)
@@ -377,8 +383,8 @@ __fbt_provide_module(void *arg, struct modctl *ctl)
 	if ((orig_ts == NULL) || (orig_st == NULL) || (orig_le == NULL))
 		return;
 
-    sym = (struct nlist *)orig_le->vmaddr;
-    strings = ((char *)sym) + orig_st->nsyms * sizeof(struct nlist);
+	sym = (struct nlist *)(orig_le->vmaddr + orig_st->symoff - orig_le->fileoff);
+	strings = (char *)(orig_le->vmaddr + orig_st->stroff - orig_le->fileoff);
 	
 	/* Find extent of the TEXT section */
 	instrLow = (uintptr_t)orig_ts->vmaddr;
@@ -402,8 +408,7 @@ __fbt_provide_module(void *arg, struct modctl *ctl)
 		if (*name == '_')
 			name += 1;
 		
-		if (strstr(name, "dtrace_") == name &&
-		    strstr(name, "dtrace_safe_") != name) {
+		if (LIT_STRNSTART(name, "dtrace_") && !LIT_STRNSTART(name, "dtrace_safe_")) {
 			/*
 			 * Anything beginning with "dtrace_" may be called
 			 * from probe context unless it explitly indicates
@@ -413,86 +418,94 @@ __fbt_provide_module(void *arg, struct modctl *ctl)
 			continue;
 		}
 		
-        if (strstr(name, "dsmos_") == name) 
+		if (LIT_STRNSTART(name, "fasttrap_") ||
+		    LIT_STRNSTART(name, "fuword") ||
+		    LIT_STRNSTART(name, "suword") ||
+			LIT_STRNEQL(name, "sprlock") ||
+			LIT_STRNEQL(name, "sprunlock") ||
+			LIT_STRNEQL(name, "uread") ||
+			LIT_STRNEQL(name, "uwrite"))
+			continue; /* Fasttrap inner-workings. */
+
+        if (LIT_STRNSTART(name, "dsmos_")) 
             continue; /* Don't Steal Mac OS X! */
 
-        if (strstr(name, "dtxnu_") == name ||
-			strstr(name, "_dtrace") == name) 
+        if (LIT_STRNSTART(name, "_dtrace")) 
 			continue; /* Shims in dtrace.c */
 		
-		if (strstr(name, "chud") == name)
+		if (LIT_STRNSTART(name, "chud"))
 			continue; /* Professional courtesy. */
 
-        if (strstr(name, "hibernate_") == name)
+        if (LIT_STRNSTART(name, "hibernate_"))
             continue; /* Let sleeping dogs lie. */
         
-        if (0 == strcmp(name, "ZN9IOService14newTemperatureElPS_") || /* IOService::newTemperature */
-            0 == strcmp(name, "ZN9IOService26temperatureCriticalForZoneEPS_")) /* IOService::temperatureCriticalForZone */
+        if (LIT_STRNEQL(name, "_ZN9IOService14newTemperatureElPS_") || /* IOService::newTemperature */
+            LIT_STRNEQL(name, "_ZN9IOService26temperatureCriticalForZoneEPS_")) /* IOService::temperatureCriticalForZone */
             continue; /* Per the fire code */
 
 		/*
 		 * Place no probes (illegal instructions) in the exception handling path!
 		 */
-		if (0 == strcmp(name, "L_handler700") ||
-			0 == strcmp(name, "save_get_phys_64") ||
-			0 == strcmp(name, "save_get_phys_32") ||
-			0 == strcmp(name, "EmulExit") ||
-			0 == strcmp(name, "Emulate") ||
-			0 == strcmp(name, "Emulate64") ||
-			0 == strcmp(name, "switchSegs") ||
-			0 == strcmp(name, "save_ret_phys"))
+		if (LIT_STRNEQL(name, "L_handler700") ||
+			LIT_STRNEQL(name, "save_get_phys_64") ||
+			LIT_STRNEQL(name, "save_get_phys_32") ||
+			LIT_STRNEQL(name, "EmulExit") ||
+			LIT_STRNEQL(name, "Emulate") ||
+			LIT_STRNEQL(name, "Emulate64") ||
+			LIT_STRNEQL(name, "switchSegs") ||
+			LIT_STRNEQL(name, "save_ret_phys"))
 			continue;
 
-		if (0 == strcmp(name, "thandler") ||
-			0 == strcmp(name, "versave") ||
-			0 == strcmp(name, "timer_event") ||
-			0 == strcmp(name, "hw_atomic_or") ||
-			0 == strcmp(name, "trap"))
+		if (LIT_STRNEQL(name, "thandler") ||
+			LIT_STRNEQL(name, "versave") ||
+			LIT_STRNEQL(name, "timer_event") ||
+			LIT_STRNEQL(name, "hw_atomic_or") ||
+			LIT_STRNEQL(name, "trap"))
 			continue;
 
-		if (0 == strcmp(name, "fbt_perfCallback") ||
-			0 == strcmp(name, "fbt_perfIntCallback") ||
-			0 == strcmp(name, "ml_set_interrupts_enabled") ||
-			0 == strcmp(name, "dtrace_invop") ||
-			0 == strcmp(name, "fbt_invop") ||
-			0 == strcmp(name, "sdt_invop") ||
-			0 == strcmp(name, "max_valid_stack_address"))
+		if (LIT_STRNEQL(name, "fbt_perfCallback") ||
+			LIT_STRNEQL(name, "fbt_perfIntCallback") ||
+			LIT_STRNEQL(name, "ml_set_interrupts_enabled") ||
+			LIT_STRNEQL(name, "dtrace_invop") ||
+			LIT_STRNEQL(name, "fbt_invop") ||
+			LIT_STRNEQL(name, "sdt_invop") ||
+			LIT_STRNEQL(name, "max_valid_stack_address"))
 			continue;
 
 		/*
 		 * Probes encountered while we're on the interrupt stack are routed along
 		 * the interrupt handling path. No probes allowed there either!
 		 */
-		if (0 == strcmp(name, "ihandler") ||
-			0 == strcmp(name, "interrupt") ||
-			0 == strcmp(name, "disable_preemption"))
+		if (LIT_STRNEQL(name, "ihandler") ||
+			LIT_STRNEQL(name, "interrupt") ||
+			LIT_STRNEQL(name, "disable_preemption"))
 			continue;
 
 		/*
 		 * Avoid weird stack voodoo in and under machine_stack_handoff et al
 		 */
-        if (strstr(name, "machine_stack") == name ||
-            0 == strcmp(name, "getPerProc") ||     /* Called in machine_stack_handoff with weird stack state */
-            0 == strcmp(name, "fpu_save") ||     /* Called in machine_stack_handoff with weird stack state */
-            0 == strcmp(name, "vec_save") ||     /* Called in machine_stack_handoff with weird stack state */
-            0 == strcmp(name, "pmap_switch"))     /* Called in machine_stack_handoff with weird stack state */
+        if (LIT_STRNSTART(name, "machine_stack") ||
+            LIT_STRNEQL(name, "getPerProc") ||     /* Called in machine_stack_handoff with weird stack state */
+            LIT_STRNEQL(name, "fpu_save") ||     /* Called in machine_stack_handoff with weird stack state */
+            LIT_STRNEQL(name, "vec_save") ||     /* Called in machine_stack_handoff with weird stack state */
+            LIT_STRNEQL(name, "pmap_switch"))     /* Called in machine_stack_handoff with weird stack state */
 				continue;
 
 		/*
 		 * Avoid machine_ routines. PR_5346750.
 		 */
-		if (strstr(name, "machine_") == name)
+		if (LIT_STRNSTART(name, "machine_"))
 			continue;
 
 		/*
 		 * Avoid low level pmap and virtual machine monitor PowerPC routines. See PR_5379018.
 		 */
 
-		if (strstr(name, "hw_") == name ||
-			strstr(name, "mapping_") == name ||
-			strstr(name, "commpage_") == name ||
-			strstr(name, "pmap_") == name ||
-			strstr(name, "vmm_") == name)
+		if (LIT_STRNSTART(name, "hw_") ||
+			LIT_STRNSTART(name, "mapping_") ||
+			LIT_STRNSTART(name, "commpage_") ||
+			LIT_STRNSTART(name, "pmap_") ||
+			LIT_STRNSTART(name, "vmm_"))
 				continue;
 		/*
 		 * Place no probes on critical routines. PR_5221096
@@ -511,25 +524,25 @@ __fbt_provide_module(void *arg, struct modctl *ctl)
 		/*
 		 * Place no probes that could be hit on the way to the debugger.
 		 */
-		if (strstr(name, "kdp_") == name ||
-			strstr(name, "kdb_") == name ||
-			strstr(name, "kdbg_") == name ||
-			strstr(name, "kdebug_") == name ||
-			0 == strcmp(name, "kernel_debug") ||
-			0 == strcmp(name, "Debugger") ||
-			0 == strcmp(name, "Call_DebuggerC") ||
-			0 == strcmp(name, "lock_debugger") ||
-			0 == strcmp(name, "unlock_debugger") ||
-			0 == strcmp(name, "SysChoked")) 
+		if (LIT_STRNSTART(name, "kdp_") ||
+			LIT_STRNSTART(name, "kdb_") ||
+			LIT_STRNSTART(name, "kdbg_") ||
+			LIT_STRNSTART(name, "kdebug_") ||
+			LIT_STRNEQL(name, "kernel_debug") ||
+			LIT_STRNEQL(name, "Debugger") ||
+			LIT_STRNEQL(name, "Call_DebuggerC") ||
+			LIT_STRNEQL(name, "lock_debugger") ||
+			LIT_STRNEQL(name, "unlock_debugger") ||
+			LIT_STRNEQL(name, "SysChoked")) 
 			continue;
 		
 		/*
 		 * Place no probes that could be hit on the way to a panic.
 		 */
 		if (NULL != strstr(name, "panic_") ||
-			0 == strcmp(name, "panic") ||
-			0 == strcmp(name, "handleMck") ||
-			0 == strcmp(name, "unresolved_kernel_trap"))
+			LIT_STRNEQL(name, "panic") ||
+			LIT_STRNEQL(name, "handleMck") ||
+			LIT_STRNEQL(name, "unresolved_kernel_trap"))
 			continue;
 		
 		if (dtrace_probe_lookup(fbt_id, modname, name, NULL) != 0)
@@ -674,7 +687,8 @@ fbt_provide_module(void *arg, struct modctl *ctl)
 #pragma unused(ctl)
 	__fbt_provide_module(arg, &g_fbt_kernctl);
 
-    kmem_free(kernel_map, (vm_offset_t)g_fbt_kernctl.address, round_page_32(g_fbt_kernctl.size));
+	if ( (vm_offset_t)g_fbt_kernctl.address != (vm_offset_t )NULL )
+	    kmem_free(kernel_map, (vm_offset_t)g_fbt_kernctl.address, round_page(g_fbt_kernctl.size));
 	g_fbt_kernctl.address = 0;
 	g_fbt_kernctl.size = 0;
 }

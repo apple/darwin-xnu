@@ -72,6 +72,7 @@
 #include <gprof.h>
 #endif	/* MACH_KERNEL || _KERNEL */
 
+#if defined(__i386__)
 
 #define S_PC	 (%esp)
 #define S_ARG0	 4(%esp)
@@ -89,6 +90,20 @@
 #define B_ARG1	12(%ebp)
 #define B_ARG2	16(%ebp)
 #define B_ARG3	20(%ebp)
+
+#elif defined(__x86_64__)
+
+#define S_PC	 (%rsp)
+
+#define FRAME	pushq %rbp; movq %rsp, %rbp
+#define EMARF	leave
+
+#define B_LINK	 (%rbp)
+#define B_PC	 8(%rbp)
+
+#else
+#error unsupported architecture
+#endif
 
 /* There is another definition of ALIGN for .c sources */
 #ifdef ASSEMBLER

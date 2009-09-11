@@ -117,8 +117,8 @@ __BEGIN_DECLS
 __END_DECLS
 
 #ifdef BSD_KERNEL_PRIVATE
-extern char version[];		/* system version */
-extern char copyright[];	/* system copyright */
+extern char version[];			/* system version */
+extern const char copyright[];		/* system copyright */
 
 
 extern int	boothowto;	/* reboot flags, from console subsystem */
@@ -129,13 +129,16 @@ extern int nchrdev;		/* number of entries in cdevsw */
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE
-#define NO_FUNNEL 0
-#define KERNEL_FUNNEL 1
 
 extern int securelevel;		/* system security level */
 extern dev_t rootdev;		/* root device */
 extern struct vnode *rootvp;	/* vnode equivalent to above */
+
+#ifdef XNU_KERNEL_PRIVATE
+#define NO_FUNNEL 0
+#define KERNEL_FUNNEL 1
 extern funnel_t * kernel_flock;
+#endif /* XNU_KERNEL_PRIVATE */
 
 #endif /* KERNEL_PRIVATE */
 
@@ -144,41 +147,63 @@ extern funnel_t * kernel_flock;
 
 #define getenv_int(a,b) (*b = 0)
 #define	KASSERT(exp,msg)
-
 /*
  * General function declarations.
  */
 __BEGIN_DECLS
+
+#ifdef BSD_KERNEL_PRIVATE
+int	einval(void);
+void	nullsys(void);
+int	errsys(void);
+int	seltrue(dev_t dev, int which, struct proc *p);
+void	ttyprintf(struct tty *, const char *, ...) __printflike(2, 3);
+void	realitexpire(struct proc *);
+int	hzto(struct timeval *tv);
+void	tablefull(const char *);
+int	kvprintf(char const *, void (*)(int, void*), void *, int,
+		      __darwin_va_list);
+void	uprintf(const char *, ...) __printflike(1,2);
+int	copywithin(void *saddr, void *daddr, size_t len);
+int64_t	fulong(user_addr_t addr);
+int	sulong(user_addr_t addr, int64_t longword);
+uint64_t fuulong(user_addr_t addr);
+int	suulong(user_addr_t addr, uint64_t ulongword);
+int	vslock(user_addr_t addr, user_size_t len);
+int	vsunlock(user_addr_t addr, user_size_t len, int dirtied);
+int	clone_system_shared_regions(int shared_regions_active,
+				    int chain_regions,
+				    int base_vnode);
+extern kern_return_t bsd_exception(int, mach_exception_data_t codes, int);
+extern void	bsdinit_task(void);
+extern void unix_syscall_return(int) __dead2;
+void	initclocks(void);
+void	startprofclock(struct proc *);
+void	stopprofclock(struct proc *);
+void	setstatclockrate(int hzrate);
+struct time_value;
+void	get_procrustime(struct time_value *tv);
+void	load_init_program(struct proc *p);
+void __pthread_testcancel(int presyscall);
+void syscall_exit_funnelcheck(void);
+void throttle_info_get_last_io_time(mount_t mp, struct timeval *tv);
+void update_last_io_time(mount_t mp);
+#endif /* BSD_KERNEL_PRIVATE */
+
+#ifdef KERNEL_PRIVATE
+void	timeout(void (*)(void *), void *arg, int ticks);
+void	untimeout(void (*)(void *), void *arg);
+int  	bsd_hostname(char *, int, int*);
+#endif /* KERNEL_PRIVATE */
+
 int	nullop(void);
 int	nulldev(void);
 int	enoioctl(void);
 int	enosys(void);
-int	errsys(void);
-void	nullsys(void);
 int	enxio(void);
 int	eopnotsupp(void);
-int	einval(void);
-
-#ifdef BSD_KERNEL_PRIVATE
-int	seltrue(dev_t dev, int which, struct proc *p);
-void	ttyprintf(struct tty *, const char *, ...);
-void	realitexpire(struct proc *);
-int	hzto(struct timeval *tv);
-#endif /* __APPLE_API_UNSTABLE */
-
 void	*hashinit(int count, int type, u_long *hashmask);
-
-void	tablefull(const char *);
-
-int	kvprintf(char const *, void (*)(int, void*), void *, int,
-		      __darwin_va_list);
-
-void	uprintf(const char *, ...) __printflike(1,2);
-
-
 void	ovbcopy(const void *from, void *to, size_t len);
-int	copywithin(void *saddr, void *daddr, size_t len);
-
 int	fubyte(user_addr_t addr);
 int	fuibyte(user_addr_t addr);
 int	subyte(user_addr_t addr, int byte);
@@ -187,54 +212,21 @@ long   fuword(user_addr_t addr);
 long   fuiword(user_addr_t addr);
 int    suword(user_addr_t addr, long word);
 int    suiword(user_addr_t addr, long word);
-int64_t	fulong(user_addr_t addr);
-int	sulong(user_addr_t addr, int64_t longword);
-uint64_t fuulong(user_addr_t addr);
-int	suulong(user_addr_t addr, uint64_t ulongword);
 #define fusize(_a)	((user_size_t)fulong(_a))
 #define susize(_a, _s)	sulong((_a), (_s))
 #define fuptr(a)	((user_addr_t)fulong(_a)
 #define suptr(_a, _p)	sulong((_a), (_p))
 int	useracc(user_addr_t addr, user_size_t len,int prot);
-
 typedef void (*timeout_fcn_t)(void *);
-#ifdef KERNEL_PRIVATE
-void	timeout(void (*)(void *), void *arg, int ticks);
-void	untimeout(void (*)(void *), void *arg);
-#endif /* KERNEL_PRIVATE */
 void	bsd_timeout(void (*)(void *), void *arg, struct timespec * ts);
 void	bsd_untimeout(void (*)(void *), void *arg);
-
 void	set_fsblocksize(struct vnode *);
-
-#ifdef BSD_KERNEL_PRIVATE
-int	vslock(user_addr_t addr, user_size_t len);
-int	vsunlock(user_addr_t addr, user_size_t len, int dirtied);
-int	clone_system_shared_regions(int shared_regions_active,
-				    int chain_regions,
-				    int base_vnode);
-
-extern kern_return_t bsd_exception(int, mach_exception_data_t codes, int);
-extern void	bsdinit_task(void);
-extern void unix_syscall_return(int) __dead2;
-
-void	initclocks(void);
-
-void	startprofclock(struct proc *);
-void	stopprofclock(struct proc *);
-void	setstatclockrate(int hzrate);
-
-struct time_value;
-void	get_procrustime(struct time_value *tv);
-
-void	load_init_program(struct proc *p);
-void __pthread_testcancel(int presyscall);
-void syscall_exit_funnelcheck(void);
-void throttle_info_get_last_io_time(mount_t mp, struct timeval *tv);
-void update_last_io_time(mount_t mp);
-#endif /* BSD_KERNEL_PRIVATE */
-
-
+uint64_t tvtoabstime(struct timeval *);
+void	*throttle_info_create(void);
+void	throttle_info_mount_ref(mount_t mp, void * throttle_info);	
+void	throttle_info_mount_rel(mount_t mp);	
+void	throttle_info_release(void *throttle_info);
+void	throttle_info_update(void *throttle_info, int flags);
 __END_DECLS
 
 #endif /* !_SYS_SYSTM_H_ */

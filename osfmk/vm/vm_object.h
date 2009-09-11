@@ -89,6 +89,8 @@
 #include <vm/vm_external.h>
 #endif	/* MACH_PAGEMAP */
 
+#include <vm/vm_options.h>
+
 struct vm_page;
 
 /*
@@ -106,6 +108,7 @@ struct vm_object_fault_info {
         vm_map_offset_t	lo_offset;
 	vm_map_offset_t	hi_offset;
 	boolean_t	no_cache;
+	boolean_t	stealth;
 };
 
 
@@ -124,6 +127,8 @@ struct vm_object {
 #endif	/* TASK_SWAPPER */
 	unsigned int		resident_page_count;
 						/* number of resident pages */
+	unsigned int		wired_page_count; /* number of wired pages */
+	unsigned int		reusable_page_count;
 
 	struct vm_object	*copy;		/* Object that should receive
 						 * a copy of my changed pages,
@@ -142,7 +147,7 @@ struct vm_object {
 	memory_object_copy_strategy_t
 				copy_strategy;	/* How to handle data copy */
 
-	int			paging_in_progress;
+	short			paging_in_progress;
 						/* The memory object ports are
 						 * being used (e.g., for pagein
 						 * or pageout) -- don't change
@@ -150,6 +155,8 @@ struct vm_object {
 						 * don't collapse, destroy or
 						 * terminate)
 						 */
+	short			activity_in_progress;
+
 	unsigned int
 	/* boolean_t array */	all_wanted:11,	/* Bit array of "want to be
 						 * awakened" notations.  See
@@ -288,10 +295,16 @@ struct vm_object {
 		code_signed:1,		/* pages are signed and should be
 					   validated; the signatures are stored
 					   with the pager */
+		hashed:1,		/* object/pager entered in hash */
+		transposed:1,		/* object was transposed with another */
 		mapping_in_progress:1,	/* pager being mapped/unmapped */
-		not_in_use:22;		/* for expansion */
+		volatile_empty:1,
+		volatile_fault:1,
+		all_reusable:1,
+		blocked_access:1,
+		__object2_unused_bits:16;	/* for expansion */
 
-#ifdef	UPL_DEBUG
+#if	UPL_DEBUG
 	queue_head_t		uplq;		/* List of outstanding upls */
 #endif /* UPL_DEBUG */
 
@@ -309,6 +322,11 @@ struct vm_object {
 
         queue_chain_t       objq;      /* object queue - currently used for purgable queues */
 };
+
+#define VM_OBJECT_PURGEABLE_FAULT_ERROR(object)				\
+	((object)->volatile_fault &&					\
+	 ((object)->purgable == VM_PURGABLE_VOLATILE ||			\
+	  (object)->purgable == VM_PURGABLE_EMPTY))
 
 #define VM_PAGE_REMOVE(page)						\
 	MACRO_BEGIN							\
@@ -356,27 +374,31 @@ struct msync_req {
 	vm_object_offset_t	offset;
 	vm_object_size_t	length;
 	vm_object_t		object;		/* back pointer */
-	decl_mutex_data(,	msync_req_lock)	/* Lock for this structure */
+	decl_lck_mtx_data(,	msync_req_lock)	/* Lock for this structure */
 };
 
 typedef struct msync_req	*msync_req_t;
 #define MSYNC_REQ_NULL		((msync_req_t) 0)
 
+
+extern lck_grp_t		vm_map_lck_grp;
+extern lck_attr_t		vm_map_lck_attr;
+
 /*
  * Macros to allocate and free msync_reqs
  */
 #define msync_req_alloc(msr)						\
-	MACRO_BEGIN							\
+    MACRO_BEGIN							\
         (msr) = (msync_req_t)kalloc(sizeof(struct msync_req));		\
-        mutex_init(&(msr)->msync_req_lock, 0);		\
-	msr->flag = VM_MSYNC_INITIALIZED;				\
-        MACRO_END
+        lck_mtx_init(&(msr)->msync_req_lock, &vm_map_lck_grp, &vm_map_lck_attr);		\
+        msr->flag = VM_MSYNC_INITIALIZED;				\
+    MACRO_END
 
 #define msync_req_free(msr)						\
 	(kfree((msr), sizeof(struct msync_req)))
 
-#define msr_lock(msr)   mutex_lock(&(msr)->msync_req_lock)
-#define msr_unlock(msr) mutex_unlock(&(msr)->msync_req_lock)
+#define msr_lock(msr)   lck_mtx_lock(&(msr)->msync_req_lock)
+#define msr_unlock(msr) lck_mtx_unlock(&(msr)->msync_req_lock)
 
 /*
  *	Declare procedures that operate on VM objects.
@@ -430,7 +452,7 @@ __private_extern__ void	vm_object_res_deallocate(
 	vm_object_t RLObject = (object);				\
 	vm_object_lock_assert_shared(object);				\
 	assert((RLObject)->ref_count > 0);				\
-	OSAddAtomic(1, (SInt32 *)&(RLObject)->ref_count);		\
+	OSAddAtomic(1, &(RLObject)->ref_count);		\
 	assert((RLObject)->ref_count > 1);				\
 	/* XXX we would need an atomic version of the following ... */	\
 	vm_object_res_reference(RLObject);				\
@@ -446,8 +468,8 @@ __private_extern__ void		vm_object_reference(
 MACRO_BEGIN						\
 	vm_object_t RObject = (object);			\
 	if (RObject) {					\
-		vm_object_lock(RObject);		\
-		vm_object_reference_locked(RObject);	\
+		vm_object_lock_shared(RObject);		\
+		vm_object_reference_shared(RObject);	\
 		vm_object_unlock(RObject);		\
 	}						\
 MACRO_END
@@ -478,9 +500,16 @@ __private_extern__ void		vm_object_deactivate_pages(
 					vm_object_t		object,
 					vm_object_offset_t	offset,
 					vm_object_size_t	size,
-					boolean_t               kill_page);
+					boolean_t               kill_page,
+					boolean_t		reusable_page);
 
-__private_extern__ unsigned int	vm_object_purge(
+__private_extern__ void	vm_object_reuse_pages(
+	vm_object_t		object,
+	vm_object_offset_t	start_offset,
+	vm_object_offset_t	end_offset,
+	boolean_t		allow_partial_reuse);
+
+__private_extern__ void		vm_object_purge(
 					vm_object_t		object);
 
 __private_extern__ kern_return_t vm_object_purgable_control(
@@ -525,7 +554,7 @@ __private_extern__ kern_return_t	vm_object_copy_slowly(
 				vm_object_t		src_object,
 				vm_object_offset_t	src_offset,
 				vm_object_size_t	size,
-				int			interruptible,
+				boolean_t		interruptible,
 				vm_object_t		*_result_object);
 
 __private_extern__ vm_object_t	vm_object_copy_delayed(
@@ -605,7 +634,8 @@ __private_extern__ void	vm_object_cluster_size(
 					vm_object_t		object,
 					vm_object_offset_t	*start,
 					vm_size_t		*length,
-					vm_object_fault_info_t  fault_info);
+					vm_object_fault_info_t  fault_info,
+					uint32_t		*io_streaming);
 
 __private_extern__ kern_return_t vm_object_populate_with_private(
 	vm_object_t		object,
@@ -629,7 +659,17 @@ extern kern_return_t vm_object_range_op(
 	vm_object_offset_t	offset_beg,
 	vm_object_offset_t	offset_end,
 	int                     ops,
-	int                     *range);
+	uint32_t		*range);
+
+
+__private_extern__ void		vm_object_reap_pages(
+	                                vm_object_t object,
+					int	reap_type);
+#define REAP_REAP	0
+#define	REAP_TERMINATE	1
+#define REAP_PURGEABLE	2
+#define REAP_DATA_FLUSH	3
+
 
 /*
  *	Event waiting handling
@@ -643,6 +683,8 @@ extern kern_return_t vm_object_range_op(
 #define	VM_OBJECT_EVENT_UNCACHING		5
 #define	VM_OBJECT_EVENT_COPY_CALL		6
 #define	VM_OBJECT_EVENT_CACHING			7
+#define VM_OBJECT_EVENT_UNBLOCKED		8
+#define VM_OBJECT_EVENT_PAGING_ONLY_IN_PROGRESS	9
 
 #define	vm_object_assert_wait(object, event, interruptible)		\
 	(((object)->all_wanted |= 1 << (event)),			\
@@ -683,8 +725,9 @@ extern kern_return_t vm_object_range_op(
 #include <libkern/OSDebug.h>
 #define VM_PIP_DEBUG_BEGIN(object)					\
 	MACRO_BEGIN							\
-	if ((object)->paging_in_progress < VM_PIP_DEBUG_MAX_REFS) {	\
-		int pip = (object)->paging_in_progress;			\
+	int pip = ((object)->paging_in_progress +			\
+		   (object)->activity_in_progress);			\
+	if (pip < VM_PIP_DEBUG_MAX_REFS) {				\
 		(void) OSBacktrace(&(object)->pip_holders[pip].pip_retaddr[0], \
 				   VM_PIP_DEBUG_STACK_FRAMES);		\
 	}								\
@@ -693,7 +736,26 @@ extern kern_return_t vm_object_range_op(
 #define VM_PIP_DEBUG_BEGIN(object)
 #endif	/* VM_PIP_DEBUG */
 
-#define		vm_object_paging_begin(object) 				\
+#define		vm_object_activity_begin(object)			\
+	MACRO_BEGIN							\
+	vm_object_lock_assert_exclusive((object));			\
+	assert((object)->paging_in_progress >= 0);			\
+	VM_PIP_DEBUG_BEGIN((object));					\
+	(object)->activity_in_progress++;				\
+	MACRO_END
+
+#define		vm_object_activity_end(object)				\
+	MACRO_BEGIN							\
+	vm_object_lock_assert_exclusive((object));			\
+	assert((object)->activity_in_progress > 0);			\
+	(object)->activity_in_progress--;				\
+	if ((object)->paging_in_progress == 0 &&			\
+	    (object)->activity_in_progress == 0)			\
+		vm_object_wakeup((object),				\
+				 VM_OBJECT_EVENT_PAGING_IN_PROGRESS);	\
+	MACRO_END
+
+#define		vm_object_paging_begin(object)				\
 	MACRO_BEGIN							\
 	vm_object_lock_assert_exclusive((object));			\
 	assert((object)->paging_in_progress >= 0);			\
@@ -701,24 +763,44 @@ extern kern_return_t vm_object_range_op(
 	(object)->paging_in_progress++;					\
 	MACRO_END
 
-#define		vm_object_paging_end(object) 				\
+#define		vm_object_paging_end(object)				\
 	MACRO_BEGIN							\
 	vm_object_lock_assert_exclusive((object));			\
 	assert((object)->paging_in_progress > 0);			\
-	if (--(object)->paging_in_progress == 0) {			\
-		vm_object_wakeup(object,				\
-			VM_OBJECT_EVENT_PAGING_IN_PROGRESS);		\
+	(object)->paging_in_progress--;					\
+	if ((object)->paging_in_progress == 0) {			\
+		vm_object_wakeup((object),				\
+				 VM_OBJECT_EVENT_PAGING_ONLY_IN_PROGRESS); \
+		if ((object)->activity_in_progress == 0)		\
+			vm_object_wakeup((object),			\
+					 VM_OBJECT_EVENT_PAGING_IN_PROGRESS); \
 	}								\
 	MACRO_END
 
 #define		vm_object_paging_wait(object, interruptible)		\
 	MACRO_BEGIN							\
 	vm_object_lock_assert_exclusive((object));			\
-	while ((object)->paging_in_progress != 0) {			\
+	while ((object)->paging_in_progress != 0 ||			\
+	       (object)->activity_in_progress != 0) {			\
 		wait_result_t  _wr;					\
 									\
 		_wr = vm_object_sleep((object),				\
 				VM_OBJECT_EVENT_PAGING_IN_PROGRESS,	\
+				(interruptible));			\
+									\
+		/*XXX if ((interruptible) && (_wr != THREAD_AWAKENED))*/\
+			/*XXX break; */					\
+	}								\
+	MACRO_END
+
+#define vm_object_paging_only_wait(object, interruptible)		\
+	MACRO_BEGIN							\
+	vm_object_lock_assert_exclusive((object));			\
+	while ((object)->paging_in_progress != 0) {			\
+		wait_result_t  _wr;					\
+									\
+		_wr = vm_object_sleep((object),				\
+				VM_OBJECT_EVENT_PAGING_ONLY_IN_PROGRESS,\
 				(interruptible));			\
 									\
 		/*XXX if ((interruptible) && (_wr != THREAD_AWAKENED))*/\
@@ -772,6 +854,8 @@ extern vm_object_t	vm_pageout_scan_wants_object;
 
 extern void		vm_object_lock(vm_object_t);
 extern boolean_t	vm_object_lock_try(vm_object_t);
+extern boolean_t	_vm_object_lock_try(vm_object_t);
+extern boolean_t	vm_object_lock_avoid(vm_object_t);
 extern void		vm_object_lock_shared(vm_object_t);
 extern boolean_t	vm_object_lock_try_shared(vm_object_t);
 
@@ -789,7 +873,7 @@ extern boolean_t	vm_object_lock_try_shared(vm_object_t);
 
 #define vm_object_unlock(object)	lck_rw_done(&(object)->Lock)
 #define vm_object_lock_upgrade(object)	lck_rw_lock_shared_to_exclusive(&(object)->Lock)
-#define vm_object_lock_try_scan(object)	lck_rw_try_lock_exclusive(&(object)->Lock)
+#define vm_object_lock_try_scan(object)	_vm_object_lock_try(object)
 
 /*
  * CAUTION: the following vm_object_lock_assert_held*() macros merely

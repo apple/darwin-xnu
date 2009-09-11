@@ -83,16 +83,6 @@
 #include <mach_rt.h>
 #include <mach_ldebug.h>
 
-typedef struct {
-	lck_mtx_t	lck_mtx;	/* inlined lck_mtx, need to be first */
-#if     MACH_LDEBUG     
-	int				type;
-#define MUTEX_TAG       0x4d4d
-	vm_offset_t		pc;
-	vm_offset_t		thread;
-#endif  /* MACH_LDEBUG */
-} mutex_t;
-
 typedef lck_rw_t lock_t;
 
 extern unsigned int LockTimeOutTSC;	/* Lock timeout in TSC ticks */
@@ -140,15 +130,6 @@ extern unsigned int LockTimeOut;	/* Lock timeout in absolute time */
 								:	\
 			"r" (bit), "m" (*(volatile int *)(l)));
 
-static inline unsigned long i_bit_isset(unsigned int test, volatile unsigned long *word)
-{
-	int	bit;
-
-	__asm__ volatile("btl %2,%1\n\tsbbl %0,%0" : "=r" (bit)
-		: "m" (word), "ir" (test));
-	return bit;
-}
-
 static inline char	xchgb(volatile char * cp, char new);
 
 static inline void	atomic_incl(volatile long * p, long delta);
@@ -177,31 +158,10 @@ static inline char	xchgb(volatile char * cp, char new)
 	return (old);
 }
 
-/*
- * Compare and exchange:
- * - returns failure (0) if the location did not contain the old value,
- * - returns success (1) if the location was set to the new value.
- */
-static inline uint32_t
-atomic_cmpxchg(uint32_t *p, uint32_t old, uint32_t new)
-{
-	uint32_t res = old;
-
-	__asm__ volatile(
-		"lock;	cmpxchgl	%1,%2;	\n\t"
-		"	setz		%%al;	\n\t"
-		"	movzbl		%%al,%0"
-		: "+a" (res)	/* %0: old value to compare, returns success */
-		: "r" (new),	/* %1: new value to set */
-		  "m" (*(p))	/* %2: memory address */
-		: "memory");
-	return (res);
-}
-
 static inline void	atomic_incl(volatile long * p, long delta)
 {
 	__asm__ volatile ("	lock		\n		\
-				addl    %0,%1"		:	\
+				add    %0,%1"		:	\
 							:	\
 				"r" (delta), "m" (*(volatile long *)p));
 }
@@ -225,7 +185,7 @@ static inline void	atomic_incb(volatile char * p, char delta)
 static inline void	atomic_decl(volatile long * p, long delta)
 {
 	__asm__ volatile ("	lock		\n		\
-				subl	%0,%1"		:	\
+				sub		%0,%1"		:	\
 							:	\
 				"r" (delta), "m" (*(volatile long *)p));
 }
@@ -235,7 +195,7 @@ static inline int	atomic_decl_and_test(volatile long * p, long delta)
 	uint8_t	ret;
 	__asm__ volatile (
 		"	lock		\n\t"
-		"	subl	%1,%2	\n\t"
+		"	sub		%1,%2	\n\t"
 		"	sete	%0"
 		: "=qm" (ret)
 		: "r" (delta), "m" (*(volatile long *)p));

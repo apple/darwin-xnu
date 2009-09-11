@@ -74,8 +74,7 @@ typedef	struct object {
 
 } object_t;
 
-static int yyparse();
-static int yyerror(char *s);
+static int yyerror(const char *s);
 static int yylex();
 
 static object_t * newObject();
@@ -93,7 +92,7 @@ static void rememberObject(int, object_t *);
 static OSObject *retrieveObject(int);
 
 // temp variable to use during parsing
-static object_t *o;
+static object_t *oo;
 
 // resultant object of parsed text
 static OSObject	*parsedObject;
@@ -179,12 +178,12 @@ elements: object		{ $$ = newObject();
 				  $$->next = NULL; 
 				  $$->prev = NULL; 
 				}
-	| elements ',' object	{ o = newObject();
-				  o->object = $3;
-				  o->next = $1;
-				  o->prev = NULL; 
-				  $1->prev = o;
-				  $$ = o; 
+	| elements ',' object	{ oo = newObject();
+				  oo->object = $3;
+				  oo->next = $1;
+				  oo->prev = NULL; 
+				  $1->prev = oo;
+				  $$ = oo; 
 				}
 	;
 
@@ -231,9 +230,9 @@ static int		parseBufferIndex;
 static char yyerror_message[128];
 
 int
-yyerror(char *s)  /* Called by yyparse on error */
+yyerror(const char *s)  /* Called by yyparse on error */
 {
-	sprintf(yyerror_message, "OSUnserialize: %s near line %d\n", s, lineNumber);
+	snprintf(yyerror_message, sizeof(yyerror_message), "OSUnserialize: %s near line %d\n", s, lineNumber);
 	return 0;
 }
 
@@ -447,14 +446,14 @@ yylex()
 // !@$&)(^Q$&*^!$(*!@$_(^%_(*Q#$(_*&!$_(*&!$_(*&!#$(*!@&^!@#%!_!#
 // !@$&)(^Q$&*^!$(*!@$_(^%_(*Q#$(_*&!$_(*&!$_(*&!#$(*!@&^!@#%!_!#
 
-#ifdef DEBUG
+#if DEBUG
 int debugUnserializeAllocCount = 0;
 #endif
 
 object_t *
 newObject()
 {
-#ifdef DEBUG
+#if DEBUG
 	debugUnserializeAllocCount++;
 #endif
 	return (object_t *)malloc(sizeof(object_t));
@@ -463,7 +462,7 @@ newObject()
 void
 freeObject(object_t *o)
 {
-#ifdef DEBUG
+#if DEBUG
 	debugUnserializeAllocCount--;
 #endif
 	free(o);
@@ -475,7 +474,7 @@ static void
 rememberObject(int tag, object_t *o)
 {
 	char key[16];
-	sprintf(key, "%u", tag);
+	snprintf(key, sizeof(key), "%u", tag);
 
 	tags->setObject(key, (OSObject *)o);
 }
@@ -484,7 +483,7 @@ static OSObject *
 retrieveObject(int tag)
 {
 	char key[16];
-	sprintf(key, "%u", tag);
+	snprintf(key, sizeof(key), "%u", tag);
 
 	return tags->getObject(key);
 }
@@ -603,10 +602,11 @@ buildOSBoolean(object_t *o)
 };
 
 __BEGIN_DECLS
-#include <kern/lock.h>
+#include <kern/locks.h>
 __END_DECLS
 
-static mutex_t *lock = 0;
+static lck_mtx_t *lock = 0;
+extern lck_grp_t *IOLockGroup;
 
 OSObject*
 OSUnserialize(const char *buffer, OSString **errorString)
@@ -614,14 +614,14 @@ OSUnserialize(const char *buffer, OSString **errorString)
 	OSObject *object;
 
 	if (!lock) {
-		lock = mutex_alloc(ETAP_IO_AHA);
-		_mutex_lock(lock);
+		lock = lck_mtx_alloc_init(IOLockGroup, LCK_ATTR_NULL);
+		lck_mtx_lock(lock);
 	} else {
-		_mutex_lock(lock);
+		lck_mtx_lock(lock);
 
 	}
 
-#ifdef DEBUG
+#if DEBUG
 	debugUnserializeAllocCount = 0;
 #endif
 	yyerror_message[0] = 0;	//just in case
@@ -638,13 +638,13 @@ OSUnserialize(const char *buffer, OSString **errorString)
 	}
 
 	tags->release();
-#ifdef DEBUG
+#if DEBUG
 	if (debugUnserializeAllocCount) {
 		printf("OSUnserialize: allocation check failed, count = %d.\n", 
 		       debugUnserializeAllocCount);
 	}
 #endif
-	mutex_unlock(lock);
+	lck_mtx_unlock(lock);
 
 	return object;
 }

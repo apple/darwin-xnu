@@ -66,6 +66,7 @@
 #include <mach/machine/vm_types.h>
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
+#include <kern/kext_alloc.h>
 #include <vm/vm_object.h>
 #include <vm/vm_map.h>
 #include <vm/vm_page.h>
@@ -83,7 +84,7 @@
 /* Maximum zone size is 1.5G */
 #define ZONE_MAP_MAX (1024 * 1024 * 1536) 
 
-const vm_offset_t vm_min_kernel_address = VM_MIN_KERNEL_ADDRESS;
+const vm_offset_t vm_min_kernel_address = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
 const vm_offset_t vm_max_kernel_address = VM_MAX_KERNEL_ADDRESS;
 
 boolean_t vm_kernel_ready = FALSE;
@@ -140,11 +141,21 @@ vm_mem_bootstrap(void)
 		zsize = sane_size >> 2;				/* Get target zone size as 1/4 of physical memory */
 	}
 
-	if(zsize < ZONE_MAP_MIN) zsize = ZONE_MAP_MIN;	/* Clamp to min */
-	if(zsize > ZONE_MAP_MAX) zsize = ZONE_MAP_MAX;	/* Clamp to max */
+	if (zsize < ZONE_MAP_MIN)
+		zsize = ZONE_MAP_MIN;	/* Clamp to min */
+	if (zsize > sane_size >> 1)
+		zsize = sane_size >> 1;	/* Clamp to half of RAM max */
+#if !__LP64__
+	if (zsize > ZONE_MAP_MAX)
+		zsize = ZONE_MAP_MAX;	/* Clamp to 1.5GB max for K32 */
+#endif /* !__LP64__ */
+
+	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling kext_alloc_init\n"));
+	kext_alloc_init();
 
 	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling zone_init\n"));
-	zone_init(zsize);						/* Allocate address space for zones */
+	assert((vm_size_t) zsize == zsize);
+	zone_init((vm_size_t) zsize);						/* Allocate address space for zones */
 	
 	vm_mem_bootstrap_kprintf(("vm_mem_bootstrap: calling kalloc_init\n"));
 	kalloc_init();

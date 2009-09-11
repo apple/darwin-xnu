@@ -65,16 +65,20 @@
 #define	_NET_IF_VAR_H_
 
 #include <sys/appleapiopts.h>
+#include <stdint.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/queue.h>		/* get TAILQ macros */
 #ifdef KERNEL_PRIVATE
 #include <kern/locks.h>
 #endif /* KERNEL_PRIVATE */
+#ifdef PRIVATE
+#include <net/route.h>
+#endif
 
 #ifdef KERNEL
 #include <net/kpi_interface.h>
-#endif KERNEL
+#endif /* KERNEL */
 
 #ifdef __APPLE__
 #define APPLE_IF_FAM_LOOPBACK  1
@@ -257,6 +261,8 @@ struct if_data_internal {
 #define IF_LASTCHANGEUPTIME	1	/* lastchange: 1-uptime 0-calendar time */
 	struct	timeval ifi_lastchange;	/* time of last administrative change */
 	u_int32_t	ifi_hwassist;	/* HW offload capabilities */
+	u_int32_t	ifi_tso_v4_mtu;	/* TCP Segment Offload IPv4 maximum segment size */
+	u_int32_t	ifi_tso_v6_mtu;	/* TCP Segment Offload IPv6 maximum segment size */
 };
 
 #define	if_mtu		if_data.ifi_mtu
@@ -283,6 +289,8 @@ struct if_data_internal {
 #define if_recvquota	if_data.ifi_recvquota
 #define	if_xmitquota	if_data.ifi_xmitquota
 #define if_iflags	if_data.ifi_iflags
+#define	if_tso_v4_mtu	if_data.ifi_tso_v4_mtu
+#define	if_tso_v6_mtu	if_data.ifi_tso_v6_mtu
 
 struct	mbuf;
 struct ifaddr;
@@ -306,19 +314,33 @@ struct ifnet_filter;
 TAILQ_HEAD(ifnet_filter_head, ifnet_filter);
 TAILQ_HEAD(ddesc_head_name, dlil_demux_desc);
 
-/* bottom 16 bits reserved for hardware checksum */
-#define IF_HWASSIST_CSUM_IP		0x0001	/* will csum IP */
-#define IF_HWASSIST_CSUM_TCP		0x0002	/* will csum TCP */
-#define IF_HWASSIST_CSUM_UDP		0x0004	/* will csum UDP */
-#define IF_HWASSIST_CSUM_IP_FRAGS	0x0008	/* will csum IP fragments */
-#define IF_HWASSIST_CSUM_FRAGMENT	0x0010  /* will do IP fragmentation */
-#define IF_HWASSIST_CSUM_TCP_SUM16	0x1000	/* simple TCP Sum16 computation */
+/* All of the following IF_HWASSIST_* flags are defined
+ * in kpi_inteface.h as IFNET_* flags. These are redefined
+ * here as constants to avoid failures to build user level
+ * programs that can not include kpi_interface.h. It is 
+ * important to keep this in sync with the definitions in
+ * kpi_interface.h. The corresponding constant for each 
+ * definition is mentioned in the comment.
+ *
+ * Bottom 16 bits reserved for hardware checksum 
+ */
+#define IF_HWASSIST_CSUM_IP		0x0001	/* will csum IP, IFNET_CSUM_IP */
+#define IF_HWASSIST_CSUM_TCP		0x0002	/* will csum TCP, IFNET_CSUM_TCP */
+#define IF_HWASSIST_CSUM_UDP		0x0004	/* will csum UDP, IFNET_CSUM_UDP */
+#define IF_HWASSIST_CSUM_IP_FRAGS	0x0008	/* will csum IP fragments, IFNET_CSUM_FRAGMENT */
+#define IF_HWASSIST_CSUM_FRAGMENT	0x0010	/* will do IP fragmentation, IFNET_IP_FRAGMENT */
+#define IF_HWASSIST_CSUM_TCP_SUM16	0x1000	/* simple TCP Sum16 computation, IFNET_CSUM_SUM16 */
 #define IF_HWASSIST_CSUM_MASK		0xffff
 #define IF_HWASSIST_CSUM_FLAGS(hwassist)	((hwassist) & IF_HWASSIST_CSUM_MASK)
 
 /* VLAN support */
-#define IF_HWASSIST_VLAN_TAGGING	0x10000	/* supports VLAN tagging */
-#define IF_HWASSIST_VLAN_MTU		0x20000 /* supports VLAN MTU-sized packet (for software VLAN) */
+#define IF_HWASSIST_VLAN_TAGGING	0x00010000	/* supports VLAN tagging, IFNET_VLAN_TAGGING */
+#define IF_HWASSIST_VLAN_MTU		0x00020000	/* supports VLAN MTU-sized packet (for software VLAN), IFNET_VLAN_MTU */
+
+/* TCP Segment Offloading support */
+
+#define IF_HWASSIST_TSO_V4		0x00200000	/* will do TCP Segment offload for IPv4, IFNET_TSO_IPV4 */
+#define IF_HWASSIST_TSO_V6		0x00400000	/* will do TCP Segment offload for IPv6, IFNET_TSO_IPV6 */
 
 #define IFNET_RW_LOCK 1
 
@@ -340,6 +362,9 @@ struct ddesc_head_str;
 struct proto_hash_entry;
 struct kev_msg;
 struct dlil_threading_info;
+#if PF
+struct pfi_kif;
+#endif /* PF */
 
 /*
  * Structure defining a network interface.
@@ -351,12 +376,12 @@ struct ifnet {
 	const char	*if_name;		/* name, e.g. ``en'' or ``lo'' */
 	TAILQ_ENTRY(ifnet) if_link; 	/* all struct ifnets are chained */
 	struct	ifaddrhead if_addrhead;	/* linked list of addresses per if */
-	u_long	if_refcnt;
+	u_int32_t	if_refcnt;
 #ifdef __KPI_INTERFACE__
 	ifnet_check_multi	if_check_multi;
 #else
 	void*				if_check_multi;
-#endif __KPI_INTERFACE__
+#endif /* __KPI_INTERFACE__ */
 	int	if_pcount;		/* number of promiscuous listeners */
 	struct	bpf_if *if_bpf;		/* packet filter structure */
 	u_short	if_index;		/* numeric abbreviation for this if  */
@@ -382,7 +407,7 @@ struct ifnet {
 	ifnet_demux_func	if_demux;
 	ifnet_event_func	if_event;
 	ifnet_framer_func	if_framer;
-	ifnet_family_t		if_family;		/* ulong assigned by Apple */
+	ifnet_family_t		if_family;		/* value assigned by Apple */
 #else
 	void*				if_output;
 	void*				if_ioctl;
@@ -391,14 +416,14 @@ struct ifnet {
 	void*				if_demux;
 	void*				if_event;
 	void*				if_framer;
-	u_long				if_family;		/* ulong assigned by Apple */
+	u_int32_t			if_family;		/* value assigned by Apple */
 #endif
 
 	struct ifnet_filter_head if_flt_head;
 
 /* End DLIL specific */
 
-	u_long 	if_delayed_detach; /* need to perform delayed detach */
+	u_int32_t 	if_delayed_detach; /* need to perform delayed detach */
 	void    *if_private;	/* private to interface */
 	long	if_eflags;		/* autoaddr, autoaddr done, etc. */
 
@@ -408,10 +433,10 @@ struct ifnet {
 #ifdef __KPI_INTERFACE__
 	ifnet_add_proto_func	if_add_proto;
 	ifnet_del_proto_func	if_del_proto;
-#else __KPI_INTERFACE__
+#else /* !__KPI_INTERFACE__ */
 	void*	if_add_proto;
 	void*	if_del_proto;
-#endif __KPI_INTERFACE__
+#endif /* !__KPI_INTERFACE__ */
 	struct proto_hash_entry	*if_proto_hash;
 	void					*if_kpi_storage;
 #if 0	
@@ -422,9 +447,9 @@ struct ifnet {
 	void	*unused_was_resolvemulti;
 	
 	struct ifqueue	if_snd;
-	u_long 	unused_2[1];
+	u_int32_t 	unused_2[1];
 #ifdef __APPLE__
-	u_long	family_cookie;
+	uintptr_t	family_cookie;
 	struct	ifprefixhead if_prefixhead; /* list of prefixes per if */
 
 #ifdef _KERN_LOCKS_H_
@@ -441,7 +466,7 @@ struct ifnet {
 	struct	ifprefixhead if_prefixhead; /* list of prefixes per if */
 #endif /* __APPLE__ */
 	struct {
-		u_long	length;
+		u_int32_t	length;
 		union {
 			u_char	buffer[8];
 			u_char	*ptr;
@@ -450,13 +475,25 @@ struct ifnet {
 #if CONFIG_MACF_NET
 	struct  label *if_label;	/* interface MAC label */
 #endif
+
+	u_int32_t	if_wake_properties;
+#if PF
+	struct thread	*if_pf_curthread;
+	struct pfi_kif	*if_pf_kif;
+#endif /* PF */
+#ifdef _KERN_LOCKS_H_
+	lck_mtx_t	*if_fwd_route_lock;
+#else
+	void		*if_fwd_route_lock;
+#endif
+	struct route	if_fwd_route;	/* cached IPv4 forwarding route */
 };
 
 #ifndef __APPLE__
 /* for compatibility with other BSDs */
 #define	if_addrlist	if_addrhead
 #define	if_list		if_link
-#endif !__APPLE__
+#endif /* !__APPLE__ */
 
 
 #endif /* PRIVATE */
@@ -544,9 +581,9 @@ if_enq_drop(struct ifqueue *ifq, struct mbuf *m)
 
 #ifdef MT_HEADER
 int	if_enq_drop(struct ifqueue *, struct mbuf *);
-#endif MT_HEADER
+#endif /* MT_HEADER */
 
-#endif defined(__GNUC__) && defined(MT_HEADER)
+#endif /* defined(__GNUC__) && defined(MT_HEADER) */
 
 #endif /* KERNEL_PRIVATE */
 
@@ -565,21 +602,29 @@ struct ifaddr {
 	struct	sockaddr *ifa_netmask;	/* used to determine subnet */
 	struct	ifnet *ifa_ifp;		/* back-pointer to interface */
 	TAILQ_ENTRY(ifaddr) ifa_link;	/* queue macro glue */
-	void	(*ifa_rtrequest)	/* check or clean routes (+ or -)'d */
-		(int, struct rtentry *, struct sockaddr *);
-	u_short	ifa_flags;		/* mostly rt_flags for cloning */
-	int	ifa_refcnt;/* 32bit ref count, use ifaref, ifafree */
-	int	ifa_metric;		/* cost of going out this interface */
-#ifdef notdef
-	struct	rtentry *ifa_rt;	/* XXXX for ROUTETOIF ????? */
-#endif
-	int (*ifa_claim_addr)		/* check if an addr goes to this if */
-		(struct ifaddr *, const struct sockaddr *);
-	u_long	ifa_debug;		/* debug flags */
+	void (*ifa_rtrequest)		/* check or clean routes (+ or -)'d */
+	    (int, struct rtentry *, struct sockaddr *);
+	uint32_t ifa_flags;		/* mostly rt_flags for cloning */
+	int32_t	ifa_refcnt;		/* ref count, use ifaref, ifafree */
+	int32_t	ifa_metric;		/* cost of going out this interface */
+	void (*ifa_free)(struct ifaddr *); /* callback fn for freeing */
+	void (*ifa_trace)		/* callback fn for tracing refs */
+	    (struct ifaddr *, int);
+	uint32_t ifa_debug;		/* debug flags */
 };
+
+/*
+ * Valid values for ifa_flags
+ */
 #define	IFA_ROUTE	RTF_UP		/* route installed (0x1) */
 #define	IFA_CLONING	RTF_CLONING	/* (0x100) */
-#define IFA_ATTACHED 	0x1		/* ifa_debug: IFA is attached to an interface */
+
+/*
+ * Valid values for ifa_debug
+ */
+#define	IFD_ATTACHED	0x1		/* attached to an interface */
+#define	IFD_ALLOC	0x2		/* dynamically allocated */
+#define	IFD_DEBUG	0x4		/* has debugging info */
 
 #endif /* PRIVATE */
 
@@ -653,7 +698,7 @@ int	ifioctllocked(struct socket *, u_long, caddr_t, struct proc *);
 struct	ifnet *ifunit(const char *);
 struct  ifnet *if_withname(struct sockaddr *);
 
-void	if_clone_attach(struct if_clone *);
+int	if_clone_attach(struct if_clone *);
 void	if_clone_detach(struct if_clone *);
 
 void	ifnet_lock_assert(struct ifnet *ifp, int what);
@@ -687,7 +732,8 @@ void	ifaref(struct ifaddr *);
 
 struct	ifmultiaddr *ifmaof_ifpforaddr(const struct sockaddr *, struct ifnet *);
 
-int	ifa_foraddr(unsigned int addr);
+extern struct in_ifaddr *ifa_foraddr(unsigned int);
+extern struct in_ifaddr *ifa_foraddr_scoped(unsigned int, unsigned int);
 
 #ifdef BSD_KERNEL_PRIVATE
 enum {

@@ -100,6 +100,7 @@ int	 db_active = 0;
 x86_saved_state32_t	*i386_last_saved_statep;
 x86_saved_state32_t	i386_nested_saved_state;
 unsigned i386_last_kdb_sp;
+db_regs_t	ddb_regs;	/* register state */
 
 extern	thread_t db_default_act;
 extern pt_entry_t *DMAP1;
@@ -508,7 +509,7 @@ db_user_to_kernel_address(
 	 * back since it's been mapped through a per-cpu window
 	 */
         mp_disable_preemption();
-	
+
 	ptp = pmap_pte(task->map->pmap, (vm_map_offset_t)addr);
 	if (ptp == PT_ENTRY_NULL || (*ptp & INTEL_PTE_VALID) == 0) {
 	    if (flag) {
@@ -520,7 +521,6 @@ db_user_to_kernel_address(
 	    return(-1);
 	}
 	src = (vm_offset_t)pte_to_pa(*ptp);
-
 	mp_enable_preemption();
 
 	*(int *) DMAP1 = INTEL_PTE_VALID | INTEL_PTE_RW | (src & PG_FRAME) | 
@@ -1013,7 +1013,7 @@ kdb_on(
  * system reboot
  */
 
-extern void kdp_reboot(void);
+extern void kdp_machine_reboot(void);
 
 void db_reboot(
 	db_expr_t	addr,
@@ -1021,5 +1021,5 @@ void db_reboot(
 	db_expr_t	count,
 	char		*modif)
 {
-	kdp_reboot();
+	kdp_machine_reboot();
 }

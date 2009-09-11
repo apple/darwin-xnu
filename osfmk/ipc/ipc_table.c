@@ -111,7 +111,7 @@ ipc_table_fill(
 	     (index < num) && (size < PAGE_SIZE);
 	     size <<= 1) {
 		if (size >= minsize) {
-			its[index].its_size = size / elemsize;
+			its[index].its_size = (ipc_table_elems_t)(size / elemsize);
 			index++;
 		}
 	}
@@ -125,7 +125,7 @@ ipc_table_fill(
 		     (period < 15) && (index < num);
 		     period++, size += incrsize) {
 			if (size >= minsize) {
-				its[index].its_size = size / elemsize;
+				its[index].its_size = (ipc_table_elems_t)(size / elemsize);
 				index++;
 			}
 		}

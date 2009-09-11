@@ -210,9 +210,25 @@ enum {
  */
 #define kAppleClamshellCausesSleepKey       "AppleClamshellCausesSleep"
 
+/* kIOPMSleepWakeUUIDKey
+ * Key refers to a CFStringRef that will uniquely identify
+ * a sleep/wake cycle for logging & tracking.
+ * The key becomes valid at the beginning of a sleep cycle - before we
+ * initiate any sleep/wake notifications.
+ * The key becomes invalid at the completion of a system wakeup. The
+ * property will not be present in the IOPMrootDomain's registry entry
+ * when it is invalid.
+ * 
+ * See IOPMrootDomain notification kIOPMMessageSleepWakeUUIDChange
+ */
+ #define kIOPMSleepWakeUUIDKey              "SleepWakeUUID"
+
 /*******************************************************************************
  *
  * Root Domain general interest messages
+ *
+ * Available by registering for interest type 'gIOGeneralInterest' 
+ * on IOPMrootDomain. 
  *
  ******************************************************************************/
 
@@ -265,6 +281,24 @@ enum {
 #define kIOPMMessageSystemPowerEventOccurred  \
                 iokit_family_msg(sub_iokit_powermanagement, 0x130)
 
+/* kIOPMMessageSleepWakeUUIDChange
+ * Either a new SleepWakeUUID has been specified at the beginning of a sleep,
+ * or we're removing the existing property upon completion of a wakeup.
+ */
+#define kIOPMMessageSleepWakeUUIDChange  \
+                iokit_family_msg(sub_iokit_powermanagement, 0x140)
+                
+/* kIOPMMessageSleepWakeUUIDSet
+ * Argument accompanying the kIOPMMessageSleepWakeUUIDChange notification when 
+ * a new UUID has been specified.
+ */
+#define kIOPMMessageSleepWakeUUIDSet                    ((void *)1)
+
+/* kIOPMMessageSleepWakeUUIDCleared
+ * Argument accompanying the kIOPMMessageSleepWakeUUIDChange notification when 
+ * the current UUID has been removed.
+ */
+#define kIOPMMessageSleepWakeUUIDCleared                ((void *)0)
 
 /*******************************************************************************
  *
@@ -297,25 +331,31 @@ enum {
  ******************************************************************************/
 enum {
     kIOPMNoErr                  = 0,
-    // Returned by powerStateWillChange and powerStateDidChange:
-    // Immediate acknowledgement of power state change
+
+    // Returned by driver's setPowerState(), powerStateWillChangeTo(),
+    // powerStateDidChangeTo(), or acknowledgeSetPowerState() to
+    // implicitly acknowledge power change upon function return.
     kIOPMAckImplied             = 0,
-    // Acknowledgement of power state change will come later 
+
+    // Deprecated
     kIOPMWillAckLater           = 1,
-    
-    // Returned by requestDomainState:
-    // Unrecognized specification parameter
+
+    // Returned by requestPowerDomainState() to indicate
+    // unrecognized specification parameter.
     kIOPMBadSpecification       = 4,
-    // No power state matches search specification
+
+    // Returned by requestPowerDomainState() to indicate
+    // no power state matches search specification.
     kIOPMNoSuchState            = 5,
-    
-    // Device cannot change its power for some reason
+
+    // Deprecated
     kIOPMCannotRaisePower       = 6,
-    
-  // Returned by changeStateTo:
-    // Requested state doesn't exist
+
+    // Deprecated
     kIOPMParameterError         = 7,
-    // Device not yet fully hooked into power management
+
+    // Returned when power management state is accessed
+    // before driver has called PMinit().
     kIOPMNotYetInitialized      = 8,
 
     // And the old constants; deprecated
@@ -363,7 +403,7 @@ enum {
 #define kIOPMPSBatteryChargeStatusKey               "ChargeStatus"
 #define kIOPMPSBatteryTemperatureKey                "Temperature"
 
-// kIOPMBatteryChargeStatusKey may have one of the following values, or may have
+// kIOPMPSBatteryChargeStatusKey may have one of the following values, or may have
 // no value. If kIOPMBatteryChargeStatusKey has a NULL value (or no value) associated with it
 // then charge is proceeding normally. If one of these battery charge status reasons is listed,
 // then the charge may have been interrupted.
@@ -500,6 +540,9 @@ enum {
 #define kIOPMSettingDebugWakeRelativeKey            "WakeRelativeToSleep"
 #define kIOPMSettingDebugPowerRelativeKey           "PowerRelativeToShutdown"
 
+// Maintenance wake calendar.
+#define kIOPMSettingMaintenanceWakeCalendarKey      "MaintenanceWakeCalendarDate"
+
 struct IOPMCalendarStruct {
     UInt32      year;
     UInt8       month;
@@ -605,8 +648,6 @@ struct IOPowerStateChangeNotification {
 };
 typedef struct IOPowerStateChangeNotification IOPowerStateChangeNotification;
 typedef IOPowerStateChangeNotification sleepWakeNote;
-
-extern void IOPMRegisterDevice(const char *, IOService *);
 #endif /* KERNEL && __cplusplus */
 
 #endif /* ! _IOKIT_IOPM_H */

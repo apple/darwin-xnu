@@ -99,6 +99,10 @@ The specified protocol is not supported on this machine.
 .\" ===========
 .It Bq Er EPROTOTYPE
 The socket type is not supported by the protocol.
+.\" ===========
+.It Bq Er EACCES
+The process does not have appropriate privileges to create a socket of the 
+specified type and/or protocol.
 .El
 .Sh LEGACY SYNOPSIS
 .Fd #include <sys/types.h>
@@ -108,7 +112,7 @@ The include file
 .In sys/types.h
 is necessary.
 .Sh SEE ALSO
-.Xr pipe 2 ,
+.Xr socket 2 ,
 .Xr read 2 ,
 .Xr write 2 ,
 .Xr compat 5

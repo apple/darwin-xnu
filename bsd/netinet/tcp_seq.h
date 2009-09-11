@@ -111,5 +111,5 @@
 					/* timestamp wrap-around time */
 
 extern tcp_cc	tcp_ccgen;		/* global connection count */
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 #endif /* _NETINET_TCP_SEQ_H_ */

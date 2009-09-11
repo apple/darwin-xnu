@@ -1,4 +1,31 @@
 /*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+/*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
  *
@@ -109,9 +136,8 @@ extern int ipsec_bypass;
 
 extern struct	inpcbhead ripcb;
 extern struct	inpcbinfo ripcbinfo;
-extern u_long	rip_sendspace;
-extern u_long	rip_recvspace;
-extern u_long  route_generation;
+extern u_int32_t	rip_sendspace;
+extern u_int32_t	rip_recvspace;
 
 struct rip6stat rip6stat;
 
@@ -330,6 +356,10 @@ rip6_output(
 	}
 
 	M_PREPEND(m, sizeof(*ip6), M_WAIT);
+	if (m == NULL) {
+		error = ENOBUFS;
+		goto bad;
+	}
 	ip6 = mtod(m, struct ip6_hdr *);
 
 	/*
@@ -350,6 +380,7 @@ rip6_output(
 		 * XXX Boundary check is assumed to be already done in
 		 * ip6_setpktoptions().
 		 */
+		ifnet_head_lock_shared();
 		if (optp && (pi = optp->ip6po_pktinfo) && pi->ipi6_ifindex) {
 			ip6->ip6_dst.s6_addr16[1] = htons(pi->ipi6_ifindex);
 			oifp = ifindex2ifnet[pi->ipi6_ifindex];
@@ -359,15 +390,21 @@ rip6_output(
 			oifp = in6p->in6p_moptions->im6o_multicast_ifp;
 			ip6->ip6_dst.s6_addr16[1] = htons(oifp->if_index);
 		} else if (dstsock->sin6_scope_id) {
-			/* boundary check */
-			if (dstsock->sin6_scope_id < 0
-			 || if_index < dstsock->sin6_scope_id) {
+			/* 
+			 * boundary check 
+			 *
+			 * Sinced stsock->sin6_scope_id is unsigned, we don't
+			 * need to check if it's < 0
+			 */
+			if (if_index < dstsock->sin6_scope_id) {
 				error = ENXIO;  /* XXX EINVAL? */
+				ifnet_head_done();
 				goto bad;
 			}
 			ip6->ip6_dst.s6_addr16[1]
 				= htons(dstsock->sin6_scope_id & 0xffff);/*XXX*/
 		}
+		ifnet_head_done();
 	}
 
 	/*
@@ -376,7 +413,7 @@ rip6_output(
 	{
 		struct in6_addr *in6a;
 		struct in6_addr	storage;
-
+		u_short index = 0;
 		if ((in6a = in6_selectsrc(dstsock, optp,
 					  in6p->in6p_moptions,
 					  &in6p->in6p_route,
@@ -387,8 +424,18 @@ rip6_output(
 			goto bad;
 		}
 		ip6->ip6_src = *in6a;
-		if (in6p->in6p_route.ro_rt)
-			oifp = ifindex2ifnet[in6p->in6p_route.ro_rt->rt_ifp->if_index];
+		if (in6p->in6p_route.ro_rt != NULL) {
+			RT_LOCK(in6p->in6p_route.ro_rt);
+			if (in6p->in6p_route.ro_rt->rt_ifp != NULL)
+				index = in6p->in6p_route.ro_rt->rt_ifp->if_index;
+			RT_UNLOCK(in6p->in6p_route.ro_rt);
+			ifnet_head_lock_shared();
+			if (index == 0 || if_index < index) {
+				panic("bad if_index on interface from route");
+			}
+			oifp = ifindex2ifnet[index];
+			ifnet_head_done();
+		}
 	}
 	ip6->ip6_flow = (ip6->ip6_flow & ~IPV6_FLOWINFO_MASK) |
 		(in6p->in6p_flowinfo & IPV6_FLOWINFO_MASK);
@@ -434,9 +481,10 @@ rip6_output(
 	}
 #endif /*IPSEC*/
 
-	if (in6p->in6p_route.ro_rt && in6p->in6p_route.ro_rt->generation_id != route_generation) {
+	if (in6p->in6p_route.ro_rt != NULL &&
+	    in6p->in6p_route.ro_rt->generation_id != route_generation) {
 		rtfree(in6p->in6p_route.ro_rt);
-		in6p->in6p_route.ro_rt = (struct rtentry *)0;
+		in6p->in6p_route.ro_rt = NULL;
 	}
 
 	error = ip6_output(m, optp, &in6p->in6p_route, 0,
@@ -556,7 +604,7 @@ rip6_ctloutput(
 }
 
 static int
-rip6_attach(struct socket *so, int proto, __unused struct proc *p)
+rip6_attach(struct socket *so, int proto, struct proc *p)
 {
 	struct inpcb *inp;
 	int error;
@@ -564,7 +612,7 @@ rip6_attach(struct socket *so, int proto, __unused struct proc *p)
 	inp = sotoinpcb(so);
 	if (inp)
 		panic("rip6_attach");
-	if (p && (error = proc_suser(p)) != 0)
+	if ((error = proc_suser(p)) != 0)
 		return error;
 
 	error = soreserve(so, rip_sendspace, rip_recvspace);
@@ -575,7 +623,7 @@ rip6_attach(struct socket *so, int proto, __unused struct proc *p)
 		return error;
 	inp = (struct inpcb *)so->so_pcb;
 	inp->inp_vflag |= INP_IPV6;
-	inp->in6p_ip6_nxt = (long)proto;
+	inp->in6p_ip6_nxt = (char)proto;
 	inp->in6p_hops = -1;	/* use kernel default */
 	inp->in6p_cksum = -1;
 	MALLOC(inp->in6p_icmp6filt, struct icmp6_filter *,

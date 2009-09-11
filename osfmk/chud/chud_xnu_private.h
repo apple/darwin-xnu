@@ -35,7 +35,7 @@
 
 #if defined (__ppc__)
 #include "chud/ppc/chud_xnu_private.h"
-#elif defined (__i386__)
+#elif defined (__i386__) || defined (__x86_64__)
 #include "chud/i386/chud_xnu_private.h"
 #else
 #error architecture not supported

@@ -281,6 +281,9 @@ extern pmapTransTab *pmapTrans;			/* Space to pmap translate table */
 /* write combining mode, aka store gather */
 #define VM_WIMG_WCOMB		(VM_MEM_NOT_CACHEABLE | VM_MEM_COHERENT) 
 
+/* superpages */
+#define SUPERPAGE_NBASEPAGES 1	/* we don't support superpages on PowerPC */
+
 /* 
  * prototypes.
  */
@@ -323,6 +326,10 @@ extern int pmap_list_resident_pages(
 	int		space);
 extern void pmap_init_sharedpage(vm_offset_t cpg);
 extern void pmap_disable_NX(pmap_t pmap);
+
+extern boolean_t	pmap_valid_page(
+				ppnum_t	pn);
+
 /* Not required for ppc: */
 static inline void pmap_set_4GB_pagezero(__unused pmap_t pmap) {}
 static inline void pmap_clear_4GB_pagezero(__unused pmap_t pmap) {}

@@ -67,6 +67,14 @@ struct user_IPCS_command {
 	user_addr_t	ipcs_data;	/* OP specific data */
 };
 
+struct user32_IPCS_command {
+	int		ipcs_magic;	/* Magic number for struct layout */
+	int		ipcs_op;	/* Operation to perform */
+	int		ipcs_cursor;	/* Cursor for iteration functions */
+	int		ipcs_datalen;	/* Length of ipcs_data area */
+	user32_addr_t	ipcs_data;	/* OP specific data */
+};
+
 #endif /* KERNEL_PRIVATE */
 
 /*

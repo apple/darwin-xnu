@@ -118,7 +118,7 @@ extern void		draw_panic_dialog(
 
 extern void		commit_paniclog(
 					void);
-#ifdef	DEBUG
+#if	DEBUG
 #define DPRINTF(x) { printf("%s : ",__FUNCTION__);printf x; }
 #endif	/* DEBUG */
 

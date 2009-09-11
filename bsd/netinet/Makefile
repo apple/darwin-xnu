@@ -34,7 +34,7 @@ KERNELFILES = \
 PRIVATE_DATAFILES = \
 	if_fddi.h if_atm.h ip_dummynet.h \
 	tcp_debug.h \
-	in_gif.h ip_compat.h ip_edgehole.h
+	in_gif.h ip_compat.h
 
 PRIVATE_KERNELFILES = ${KERNELFILES} \
 	ip_ecn.h ip_encap.h ip_flow.h

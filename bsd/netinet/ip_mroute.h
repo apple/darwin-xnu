@@ -95,7 +95,7 @@
 
 #ifdef KERNEL_PRIVATE
 #define GET_TIME(t)	microtime(&t)
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
 #ifndef CONFIG_MAXVIFS
 #define CONFIG_MAXVIFS 32  /* 4635538 temp workaround */
@@ -108,7 +108,7 @@
 /*
  * Types and macros for handling bitmaps with one bit per virtual interface.
  */
-typedef u_long vifbitmap_t;
+typedef u_int32_t vifbitmap_t;
 typedef u_short vifi_t;		/* type of a vif index */
 #define ALL_VIFS (vifi_t)-1
 
@@ -203,10 +203,10 @@ struct vif {
     struct in_addr 	v_lcl_addr;   	/* local interface address           */
     struct in_addr 	v_rmt_addr;   	/* remote address (tunnels only)     */
     struct ifnet       *v_ifp;	     	/* pointer to interface              */
-    u_long		v_pkt_in;	/* # pkts in on interface            */
-    u_long		v_pkt_out;	/* # pkts out on interface           */
-    u_long		v_bytes_in;	/* # bytes in on interface	     */
-    u_long		v_bytes_out;	/* # bytes out on interface	     */
+    u_int32_t		v_pkt_in;	/* # pkts in on interface            */
+    u_int32_t		v_pkt_out;	/* # pkts out on interface           */
+    u_int32_t		v_bytes_in;	/* # bytes in on interface	     */
+    u_int32_t		v_bytes_out;	/* # bytes out on interface	     */
     struct route	v_route;	/* cached route if this is a tunnel */
     u_int		v_rsvp_on;	/* RSVP listening on this vif */
     struct socket      *v_rsvpd;	/* RSVP daemon socket */
@@ -223,9 +223,9 @@ struct mfc {
     struct in_addr  mfc_mcastgrp;  		/* multicast group associated*/
     vifi_t	    mfc_parent; 		/* incoming vif              */
     u_char	    mfc_ttls[CONFIG_MAXVIFS]; 		/* forwarding ttls on vifs   */
-    u_long	    mfc_pkt_cnt;		/* pkt count for src-grp     */
-    u_long	    mfc_byte_cnt;		/* byte count for src-grp    */
-    u_long	    mfc_wrong_if;		/* wrong if for src-grp	     */
+    u_int32_t	    mfc_pkt_cnt;		/* pkt count for src-grp     */
+    u_int32_t	    mfc_byte_cnt;		/* byte count for src-grp    */
+    u_int32_t	    mfc_wrong_if;		/* wrong if for src-grp	     */
     int		    mfc_expire;			/* time to clean entry up    */
     struct timeval  mfc_last_assert;		/* last time I sent an assert*/
     struct rtdetq  *mfc_stall;			/* q of packets awaiting mfc */
@@ -284,9 +284,9 @@ struct rtdetq {
 struct tbf
 {
     struct timeval tbf_last_pkt_t; /* arr. time of last pkt 	*/
-    u_long tbf_n_tok;      	/* no of tokens in bucket 	*/
-    u_long tbf_q_len;    	/* length of queue at this vif	*/
-    u_long tbf_max_q_len;	/* max. queue length		*/
+    u_int32_t tbf_n_tok;      	/* no of tokens in bucket 	*/
+    u_int32_t tbf_q_len;    	/* length of queue at this vif	*/
+    u_int32_t tbf_max_q_len;	/* max. queue length		*/
     struct mbuf *tbf_q;		/* Packet queue			*/
     struct mbuf *tbf_t;		/* tail-insertion pointer	*/
 };
@@ -303,5 +303,5 @@ extern int	(*mrt_ioctl)(int, caddr_t);
 extern int	(*mrt_ioctl)(int, caddr_t, struct proc *);
 #endif
 
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 #endif /* _NETINET_IP_MROUTE_H_ */

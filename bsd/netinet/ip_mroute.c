@@ -57,6 +57,9 @@
 #include <sys/kernel.h>
 #include <sys/sockio.h>
 #include <sys/syslog.h>
+
+#include <machine/endian.h>
+
 #include <net/if.h>
 #include <net/route.h>
 #include <net/kpi_protocol.h>
@@ -73,22 +76,9 @@
 #include <security/mac_framework.h>
 #endif
 
-#ifndef NTOHL
-#if BYTE_ORDER != BIG_ENDIAN
-#define NTOHL(d) ((d) = ntohl((d)))
-#define NTOHS(d) ((d) = ntohs((u_short)(d)))
-#define HTONL(d) ((d) = htonl((d)))
-#define HTONS(d) ((d) = htons((u_short)(d)))
-#else
-#define NTOHL(d)
-#define NTOHS(d)
-#define HTONL(d)
-#define HTONS(d)
-#endif
-#endif
 
 #ifndef MROUTING
-extern u_long	_ip_mcast_src(int vifi);
+extern u_int32_t	_ip_mcast_src(int vifi);
 extern int	_ip_mforward(struct ip *ip, struct ifnet *ifp,
 				  struct mbuf *m, struct ip_moptions *imo);
 extern int	_ip_mrouter_done(void);
@@ -181,9 +171,9 @@ int (*legal_vif_num)(int) = 0;
  * just in case it does get called, the code a little lower in ip_output
  * will assign the packet a local address.
  */
-u_long
+u_int32_t
 _ip_mcast_src(int vifi) { return INADDR_ANY; }
-u_long (*ip_mcast_src)(int) = _ip_mcast_src;
+u_int32_t (*ip_mcast_src)(int) = _ip_mcast_src;
 
 int
 ip_rsvp_vif_init(so, sopt)
@@ -294,10 +284,10 @@ static int have_encap_tunnel = 0;
  * one-back cache used by ipip_input to locate a tunnel's vif
  * given a datagram's src ip address.
  */
-static u_long last_encap_src;
+static u_int32_t last_encap_src;
 static struct vif *last_encap_vif;
 
-static u_long	X_ip_mcast_src(int vifi);
+static u_int32_t	X_ip_mcast_src(int vifi);
 static int	X_ip_mforward(struct ip *ip, struct ifnet *ifp, struct mbuf *m, struct ip_moptions *imo);
 static int	X_ip_mrouter_done(void);
 static int	X_ip_mrouter_get(struct socket *so, struct sockopt *m);
@@ -319,7 +309,7 @@ static int ip_mdq(struct mbuf *, struct ifnet *, struct mfc *,
 		  vifi_t);
 static void phyint_send(struct ip *, struct vif *, struct mbuf *);
 static void encap_send(struct ip *, struct vif *, struct mbuf *);
-static void tbf_control(struct vif *, struct mbuf *, struct ip *, u_long);
+static void tbf_control(struct vif *, struct mbuf *, struct ip *, u_int32_t);
 static void tbf_queue(struct vif *, struct mbuf *);
 static void tbf_process_q(struct vif *);
 static void tbf_reprocess_q(void *);
@@ -394,7 +384,7 @@ static int pim_assert;
 	      (a).tv_sec <= (b).tv_sec) || (a).tv_sec < (b).tv_sec)
 
 #if UPCALL_TIMING
-u_long upcall_data[51];
+u_int32_t upcall_data[51];
 static void collate(struct timeval *);
 #endif /* UPCALL_TIMING */
 
@@ -774,9 +764,9 @@ add_vif(struct vifctl *vifcp)
     if (mrtdebug)
 	log(LOG_DEBUG, "add_vif #%d, lcladdr %lx, %s %lx, thresh %x, rate %d\n",
 	    vifcp->vifc_vifi, 
-	    (u_long)ntohl(vifcp->vifc_lcl_addr.s_addr),
+	    (u_int32_t)ntohl(vifcp->vifc_lcl_addr.s_addr),
 	    (vifcp->vifc_flags & VIFF_TUNNEL) ? "rmtaddr" : "mask",
-	    (u_long)ntohl(vifcp->vifc_rmt_addr.s_addr),
+	    (u_int32_t)ntohl(vifcp->vifc_rmt_addr.s_addr),
 	    vifcp->vifc_threshold,
 	    vifcp->vifc_rate_limit);    
 
@@ -839,7 +829,7 @@ static int
 add_mfc(struct mfcctl *mfccp)
 {
     struct mfc *rt;
-    u_long hash;
+    u_int32_t hash;
     struct rtdetq *rte;
     u_short nstl;
     int i;
@@ -850,8 +840,8 @@ add_mfc(struct mfcctl *mfccp)
     if (rt) {
 	if (mrtdebug & DEBUG_MFC)
 	    log(LOG_DEBUG,"add_mfc update o %lx g %lx p %x\n",
-		(u_long)ntohl(mfccp->mfcc_origin.s_addr),
-		(u_long)ntohl(mfccp->mfcc_mcastgrp.s_addr),
+		(u_int32_t)ntohl(mfccp->mfcc_origin.s_addr),
+		(u_int32_t)ntohl(mfccp->mfcc_mcastgrp.s_addr),
 		mfccp->mfcc_parent);
 
 	rt->mfc_parent = mfccp->mfcc_parent;
@@ -873,14 +863,14 @@ add_mfc(struct mfcctl *mfccp)
 	    if (nstl++)
 		log(LOG_ERR, "add_mfc %s o %lx g %lx p %x dbx %p\n",
 		    "multiple kernel entries",
-		    (u_long)ntohl(mfccp->mfcc_origin.s_addr),
-		    (u_long)ntohl(mfccp->mfcc_mcastgrp.s_addr),
+		    (u_int32_t)ntohl(mfccp->mfcc_origin.s_addr),
+		    (u_int32_t)ntohl(mfccp->mfcc_mcastgrp.s_addr),
 		    mfccp->mfcc_parent, (void *)rt->mfc_stall);
 
 	    if (mrtdebug & DEBUG_MFC)
 		log(LOG_DEBUG,"add_mfc o %lx g %lx p %x dbg %p\n",
-		    (u_long)ntohl(mfccp->mfcc_origin.s_addr),
-		    (u_long)ntohl(mfccp->mfcc_mcastgrp.s_addr),
+		    (u_int32_t)ntohl(mfccp->mfcc_origin.s_addr),
+		    (u_int32_t)ntohl(mfccp->mfcc_mcastgrp.s_addr),
 		    mfccp->mfcc_parent, (void *)rt->mfc_stall);
 
 	    rt->mfc_origin     = mfccp->mfcc_origin;
@@ -919,8 +909,8 @@ add_mfc(struct mfcctl *mfccp)
     if (nstl == 0) {
 	if (mrtdebug & DEBUG_MFC)
 	    log(LOG_DEBUG,"add_mfc no upcall h %lu o %lx g %lx p %x\n",
-		hash, (u_long)ntohl(mfccp->mfcc_origin.s_addr),
-		(u_long)ntohl(mfccp->mfcc_mcastgrp.s_addr),
+		hash, (u_int32_t)ntohl(mfccp->mfcc_origin.s_addr),
+		(u_int32_t)ntohl(mfccp->mfcc_mcastgrp.s_addr),
 		mfccp->mfcc_parent);
 	
 	for (rt = mfctable[hash]; rt != NULL; rt = rt->mfc_next) {
@@ -979,9 +969,9 @@ add_mfc(struct mfcctl *mfccp)
 static void
 collate(struct timeval *t)
 {
-    u_long d;
+    u_int32_t d;
     struct timeval tp;
-    u_long delta;
+    u_int32_t delta;
     
     GET_TIME(tp);
     
@@ -1008,7 +998,7 @@ del_mfc(struct mfcctl *mfccp)
     struct in_addr 	mcastgrp;
     struct mfc 		*rt;
     struct mfc	 	**nptr;
-    u_long 		hash;
+    u_int32_t 		hash;
 
     origin = mfccp->mfcc_origin;
     mcastgrp = mfccp->mfcc_mcastgrp;
@@ -1016,7 +1006,7 @@ del_mfc(struct mfcctl *mfccp)
 
     if (mrtdebug & DEBUG_MFC)
 	log(LOG_DEBUG,"del_mfc orig %lx mcastgrp %lx\n",
-	    (u_long)ntohl(origin.s_addr), (u_long)ntohl(mcastgrp.s_addr));
+	    (u_int32_t)ntohl(origin.s_addr), (u_int32_t)ntohl(mcastgrp.s_addr));
 
     nptr = &mfctable[hash];
     while ((rt = *nptr) != NULL) {
@@ -1087,7 +1077,7 @@ X_ip_mforward(struct ip *ip, struct ifnet *ifp, struct mbuf *m,
 
     if (mrtdebug & DEBUG_FORWARD)
 	log(LOG_DEBUG, "ip_mforward: src %lx, dst %lx, ifp %p\n",
-	    (u_long)ntohl(ip->ip_src.s_addr), (u_long)ntohl(ip->ip_dst.s_addr),
+	    (u_int32_t)ntohl(ip->ip_src.s_addr), (u_int32_t)ntohl(ip->ip_dst.s_addr),
 	    (void *)ifp);
 
     if (ip->ip_hl < (IP_HDR_LEN + TUNNEL_LEN) >> 2 ||
@@ -1104,7 +1094,7 @@ X_ip_mforward(struct ip *ip, struct ifnet *ifp, struct mbuf *m,
 	if ((srctun++ % 1000) == 0)
 	    log(LOG_ERR,
 		"ip_mforward: received source-routed packet from %lx\n",
-		(u_long)ntohl(ip->ip_src.s_addr));
+		(u_int32_t)ntohl(ip->ip_src.s_addr));
 
 	return 1;
     }
@@ -1153,7 +1143,7 @@ X_ip_mforward(struct ip *ip, struct ifnet *ifp, struct mbuf *m,
 
 	struct mbuf *mb0;
 	struct rtdetq *rte;
-	u_long hash;
+	u_int32_t hash;
 	int hlen = ip->ip_hl << 2;
 #if UPCALL_TIMING
 	struct timeval tp;
@@ -1164,8 +1154,8 @@ X_ip_mforward(struct ip *ip, struct ifnet *ifp, struct mbuf *m,
 	mrtstat.mrts_no_route++;
 	if (mrtdebug & (DEBUG_FORWARD | DEBUG_MFC))
 	    log(LOG_DEBUG, "ip_mforward: no rte s %lx g %lx\n",
-		(u_long)ntohl(ip->ip_src.s_addr),
-		(u_long)ntohl(ip->ip_dst.s_addr));
+		(u_int32_t)ntohl(ip->ip_src.s_addr),
+		(u_int32_t)ntohl(ip->ip_dst.s_addr));
 
 	/*
 	 * Allocate mbufs early so that we don't do extra work if we are
@@ -1308,8 +1298,8 @@ expire_upcalls(__unused void *unused)
 		--mfc->mfc_expire == 0) {
 		if (mrtdebug & DEBUG_EXPIRE)
 		    log(LOG_DEBUG, "expire_upcalls: expiring (%lx %lx)\n",
-			(u_long)ntohl(mfc->mfc_origin.s_addr),
-			(u_long)ntohl(mfc->mfc_mcastgrp.s_addr));
+			(u_int32_t)ntohl(mfc->mfc_origin.s_addr),
+			(u_int32_t)ntohl(mfc->mfc_mcastgrp.s_addr));
 		/*
 		 * drop all the packets
 		 * free the mbuf with the pkt, if, timing info
@@ -1392,7 +1382,7 @@ ip_mdq(struct mbuf *m, struct ifnet *ifp, struct mfc *rt,
 	    struct igmpmsg *im;
 	    int hlen = ip->ip_hl << 2;
 	    struct timeval now;
-	    u_long delta;
+	    u_int32_t delta;
 
 	    GET_TIME(now);
 
@@ -1469,7 +1459,7 @@ int (*legal_vif_num)(int) = X_legal_vif_num;
 /*
  * Return the local address used by this vif
  */
-static u_long
+static u_int32_t
 X_ip_mcast_src(int vifi)
 {
     if (vifi >= 0 && vifi < numvifs)
@@ -1479,7 +1469,7 @@ X_ip_mcast_src(int vifi)
 }
 
 #if !defined(MROUTE_LKM) || !MROUTE_LKM
-u_long (*ip_mcast_src)(int) = X_ip_mcast_src;
+u_int32_t (*ip_mcast_src)(int) = X_ip_mcast_src;
 #endif
 
 static void
@@ -1557,8 +1547,12 @@ encap_send(struct ip *ip, struct vif *vifp, struct mbuf *m)
      */
     ip = (struct ip *)((caddr_t)ip_copy + sizeof(multicast_encap_iphdr));
     --ip->ip_ttl;
+
+#if BYTE_ORDER != BIG_ENDIAN
     HTONS(ip->ip_len);
     HTONS(ip->ip_off);
+#endif
+
     ip->ip_sum = 0;
     mb_copy->m_data += sizeof(multicast_encap_iphdr);
     ip->ip_sum = in_cksum(mb_copy, ip->ip_hl << 2);
@@ -1624,7 +1618,7 @@ ipip_input(struct mbuf *m, int iphlen)
 	m_freem(m);
 	if (mrtdebug)
 	  log(LOG_DEBUG, "ip_mforward: no tunnel with %lx\n",
-		(u_long)ntohl(ip->ip_src.s_addr));
+		(u_int32_t)ntohl(ip->ip_src.s_addr));
 	return;
     }
     ifp = vifp->v_ifp;
@@ -1645,7 +1639,7 @@ ipip_input(struct mbuf *m, int iphlen)
 
 static void
 tbf_control(struct vif *vifp, struct mbuf *m, struct ip *ip,
-	    u_long p_len)
+	    u_int32_t p_len)
 {
     struct tbf *t = vifp->v_tbf;
 
@@ -1850,7 +1844,7 @@ static void
 tbf_update_tokens(struct vif *vifp)
 {
     struct timeval tp;
-    u_long tm;
+    u_int32_t tm;
     struct tbf *t = vifp->v_tbf;
 
     GET_TIME(tp);
@@ -2081,7 +2075,7 @@ rsvp_input(struct mbuf *m, int iphlen)
     rsvp_src.sin_addr = ip->ip_src;
 
     if (rsvpdebug && m)
-	printf("rsvp_input: m->m_len = %ld, sbspace() = %ld\n",
+	printf("rsvp_input: m->m_len = %d, sbspace() = %d\n",
 	       m->m_len,sbspace(&(viftable[vifi].v_rsvpd->so_rcv)));
 
     if (socket_send(viftable[vifi].v_rsvpd, m, &rsvp_src) < 0) {

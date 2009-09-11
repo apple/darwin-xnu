@@ -86,16 +86,18 @@ typedef struct ucred *kauth_cred_t;
 __BEGIN_DECLS
 int	hfs_chkdq(struct cnode *, int64_t, kauth_cred_t, int);
 int	hfs_chkdqchg(struct cnode *, int64_t, kauth_cred_t, int);
-int	hfs_chkiq(struct cnode *, long, kauth_cred_t, int);
-int	hfs_chkiqchg(struct cnode *, long, kauth_cred_t, int);
+int	hfs_chkiq(struct cnode *, int32_t, kauth_cred_t, int);
+int	hfs_chkiqchg(struct cnode *, int32_t, kauth_cred_t, int);
 int	hfs_getinoquota(struct cnode *);
-int	hfs_getquota(struct mount *, u_long, int, caddr_t);
+int	hfs_getquota(struct mount *, u_int32_t, int, caddr_t);
 int	hfs_qsync(struct mount *mp);
 int	hfs_quotaoff(struct proc *, struct mount *, int);
 int	hfs_quotaon(struct proc *, struct mount *, int, caddr_t);
 int hfs_quotastat(struct mount *, int, caddr_t);
-int	hfs_setquota(struct mount *, u_long, int, caddr_t);
-int	hfs_setuse(struct mount *, u_long, int, caddr_t);
+int	hfs_setquota(struct mount *, u_int32_t, int, caddr_t);
+int	hfs_setuse(struct mount *, u_int32_t, int, caddr_t);
+int hfs_isiqchg_allowed(struct dquot *, struct hfsmount *, int32_t, kauth_cred_t, int, uid_t);
+int hfs_quotacheck (struct hfsmount *, int , uid_t, gid_t, kauth_cred_t);
 __END_DECLS
 
 #if DIAGNOSTIC

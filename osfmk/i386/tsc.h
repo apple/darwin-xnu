@@ -40,7 +40,7 @@
 #ifndef _I386_TSC_H_
 #define _I386_TSC_H_
 
-#define BASE_NHM_CLOCK_SOURCE 	139806638ULL
+#define BASE_NHM_CLOCK_SOURCE 	133333333ULL
 #define IA32_PERF_STS		0x198
 
 extern uint64_t	busFCvtt2n;

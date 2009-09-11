@@ -240,7 +240,7 @@ extern struct gmonparam _gmonparam;
 
 void kmstartup(void);
 void cfreemem(caddr_t, int);  /* Currently only a stub function. */
-void mcount(u_long, u_long);
+void mcount(uintptr_t, uintptr_t);
 
 #endif /* XNU_KERNEL_PRIVATE */
 #endif /* GPROF */

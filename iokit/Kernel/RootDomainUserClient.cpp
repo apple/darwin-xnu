@@ -86,9 +86,9 @@ IOReturn RootDomainUserClient::secureSleepSystemOptions(
     void * p1, void * p2, void * p3,
     void * p4, void * p5, void * p6 )
 {
-    void            *inOptions = (void *)p1; 
+    void            *inOptions = (void *)p1;
     uint32_t        *returnCode = (uint32_t *)p2;
-    IOByteCount     inOptionsSize = (IOByteCount)p3;
+//  IOByteCount     inOptionsSize = (uintptr_t)p3;
     IOByteCount     *returnCodeSize = (IOByteCount *)p4;
 
     int             local_priv = 0;
@@ -164,9 +164,35 @@ IOReturn RootDomainUserClient::secureSetAggressiveness(
         *return_code = kIOReturnNotPrivileged;
         return kIOReturnSuccess;
     }
-
 }
 
+IOReturn RootDomainUserClient::secureSetMaintenanceWakeCalendar( 
+    void * p1, void * p2, void * p3,
+    void * p4, void * p5, void * p6 )
+{
+#if ROOT_DOMAIN_RUN_STATES
+    IOPMCalendarStruct *    inCalendar = (IOPMCalendarStruct *) p1;
+    uint32_t *              returnCode = (uint32_t *) p2;
+    IOByteCount *           returnCodeSize = (IOByteCount *) p4;
+    int                     admin_priv = 0;
+    IOReturn                ret = kIOReturnNotPrivileged;
+    
+    ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeAdministrator);
+    admin_priv = (kIOReturnSuccess == ret);
+
+    *returnCodeSize = sizeof(uint32_t);
+
+    if (admin_priv && fOwner) {
+        *returnCode = fOwner->setMaintenanceWakeCalendar(inCalendar);
+        return kIOReturnSuccess;
+    } else {
+        *returnCode = kIOReturnNotPrivileged;
+        return kIOReturnSuccess;
+    }
+#else
+    return kIOReturnUnsupported;
+#endif
+}
 
 IOReturn RootDomainUserClient::clientClose( void )
 {
@@ -184,30 +210,34 @@ IOExternalMethod *
 RootDomainUserClient::getTargetAndMethodForIndex( IOService ** targetP, UInt32 index )
 {
     static const IOExternalMethod sMethods[] = {
-        { // kPMSetAggressiveness, 0
+        {   // kPMSetAggressiveness, 0
             (IOService *)1, (IOMethod)&RootDomainUserClient::secureSetAggressiveness, kIOUCScalarIScalarO, 2, 1
         },
-        { // kPMGetAggressiveness, 1
+        {   // kPMGetAggressiveness, 1
             0, (IOMethod)&IOPMrootDomain::getAggressiveness, kIOUCScalarIScalarO, 1, 1
         },
-        { // kPMSleepSystem, 2
+        {   // kPMSleepSystem, 2
             (IOService *)1, (IOMethod)&RootDomainUserClient::secureSleepSystem, kIOUCScalarIScalarO, 0, 1
         },
-        { // kPMAllowPowerChange, 3
+        {   // kPMAllowPowerChange, 3
             0, (IOMethod)&IOPMrootDomain::allowPowerChange, kIOUCScalarIScalarO, 1, 0
         },
-        { // kPMCancelPowerChange, 4
+        {   // kPMCancelPowerChange, 4
             0, (IOMethod)&IOPMrootDomain::cancelPowerChange, kIOUCScalarIScalarO, 1, 0
         },
-        { // kPMShutdownSystem, 5
+        {   // kPMShutdownSystem, 5
             0, (IOMethod)&IOPMrootDomain::shutdownSystem, kIOUCScalarIScalarO, 0, 0
         },
-        { // kPMRestartSystem, 6
+        {   // kPMRestartSystem, 6
             0, (IOMethod)&IOPMrootDomain::restartSystem, kIOUCScalarIScalarO, 0, 0
         },
-        { // kPMSleepSystemOptions, 7
+        {   // kPMSleepSystemOptions, 7
             (IOService *)1, (IOMethod)&RootDomainUserClient::secureSleepSystemOptions, 
             kIOUCStructIStructO, kIOUCVariableStructureSize, sizeof(uint32_t)
+        },
+        {   // kPMSetMaintenanceWakeCalendar, 8
+            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSetMaintenanceWakeCalendar,
+            kIOUCStructIStructO, sizeof(IOPMCalendarStruct), sizeof(uint32_t)
         }
     };
     

@@ -400,6 +400,8 @@ _remove_from_delayed_queue(
     return (call_removed);
 }
 
+#ifndef	__LP64__
+
 /*
  *	thread_call_func:
  *
@@ -447,6 +449,8 @@ thread_call_func(
 	simple_unlock(&thread_call_lock);
     splx(s);
 }
+
+#endif	/* __LP64__ */
 
 /*
  *	thread_call_func_delayed:
@@ -712,6 +716,8 @@ thread_call_cancel(
 	return (result);
 }
 
+#ifndef	__LP64__
+
 /*
  *	thread_call_is_delayed:
  *
@@ -743,6 +749,8 @@ thread_call_is_delayed(
 
 	return (result);
 }
+
+#endif	/* __LP64__ */
 
 /*
  *	thread_call_wake:
@@ -832,7 +840,7 @@ thread_call_thread(
 
 		KERNEL_DEBUG_CONSTANT(
 			MACHDBG_CODE(DBG_MACH_SCHED,MACH_CALLOUT) | DBG_FUNC_NONE,
-				(int)func, (int)param0, (int)param1, 0, 0);
+				func, param0, param1, 0, 0);
 
 		(*func)(param0, param1);
 

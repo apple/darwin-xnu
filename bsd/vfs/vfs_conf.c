@@ -72,6 +72,13 @@
 #include <sys/mount_internal.h>
 #include <sys/vnode_internal.h>
 
+#ifndef __LP64__ 
+#define VFS_THREAD_SAFE_FLAG VFC_VFSTHREADSAFE /* This is only defined for 32-bit */
+#else 
+#define VFS_THREAD_SAFE_FLAG 0
+#endif /* __LP64__  */
+
+
 /*
  * These define the root filesystem, device, and root filesystem type.
  */
@@ -82,22 +89,15 @@ int (*mountroot)(void) = NULL;
 /*
  * Set up the initial array of known filesystem types.
  */
-extern	struct vfsops ufs_vfsops;
-#if FFS
-extern	int ffs_mountroot(mount_t, vnode_t, vfs_context_t);
-#endif
 extern	struct vfsops mfs_vfsops;
 extern	int mfs_mountroot(mount_t, vnode_t, vfs_context_t);	/* dead */
 extern  struct vfsops hfs_vfsops;
 extern	int hfs_mountroot(mount_t, vnode_t, vfs_context_t);
-extern	struct vfsops cd9660_vfsops;
-extern	int cd9660_mountroot(mount_t, vnode_t, vfs_context_t);
 extern	struct vfsops nfs_vfsops;
 extern	int nfs_mountroot(void);
 extern	struct vfsops afs_vfsops;
 extern	struct vfsops null_vfsops;
 extern	struct vfsops union_vfsops;
-extern	struct vfsops fdesc_vfsops;
 extern	struct vfsops devfs_vfsops;
 
 /*
@@ -112,74 +112,68 @@ typedef int (*mountroot_t)(mount_t, vnode_t, vfs_context_t);
 static struct vfstable vfstbllist[] = {
 	/* HFS/HFS+ Filesystem */
 #if HFS
-	{ &hfs_vfsops, "hfs", 17, 0, (MNT_LOCAL | MNT_DOVOLFS), hfs_mountroot, NULL, 1, {{0}}, VFC_VFSLOCALARGS | VFC_VFSREADDIR_EXTENDED, NULL, 0, 1},
-#endif
-
-	/* Fast Filesystem */
-#if FFS
-	{ &ufs_vfsops, "ufs", 1, 0, MNT_LOCAL, ffs_mountroot, NULL, 0, {{0}}, VFC_VFSLOCALARGS | VFC_VFSREADDIR_EXTENDED, NULL, 0, 0},
-#endif
-
-	/* ISO9660 (aka CDROM) Filesystem */
-#if CD9660
-	{ &cd9660_vfsops, "cd9660", 14, 0, MNT_LOCAL, cd9660_mountroot, NULL, 0, {{0}}, VFC_VFSLOCALARGS, NULL, 0, 0},
+	{ &hfs_vfsops, "hfs", 17, 0, (MNT_LOCAL | MNT_DOVOLFS), hfs_mountroot, NULL, 0, 0, VFC_VFSLOCALARGS | VFC_VFSREADDIR_EXTENDED | VFS_THREAD_SAFE_FLAG | VFC_VFS64BITREADY | VFC_VFSVNOP_PAGEOUTV2, NULL, 0},
 #endif
 
 	/* Memory-based Filesystem */
+
+#ifndef __LP64__
 #if MFS
-	{ &mfs_vfsops, "mfs", 3, 0, MNT_LOCAL, mfs_mountroot, NULL, 0, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
+	{ &mfs_vfsops, "mfs", 3, 0, MNT_LOCAL, mfs_mountroot, NULL, 0, 0, VFC_VFSGENERICARGS, NULL, 0},
 #endif
+#endif /* __LP64__ */
 
 	/* Sun-compatible Network Filesystem */
 #if NFSCLIENT
-	{ &nfs_vfsops, "nfs", 2, 0, 0, (mountroot_t)nfs_mountroot, NULL, 1, {{0}}, VFC_VFSGENERICARGS|VFC_VFSPREFLIGHT, NULL, 0, 1},
+	{ &nfs_vfsops, "nfs", 2, 0, 0, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFSPREFLIGHT | VFS_THREAD_SAFE_FLAG | VFC_VFS64BITREADY | VFC_VFSREADDIR_EXTENDED, NULL, 0},
 #endif
 
 	/* Andrew Filesystem */
+#ifndef __LP64__
 #if AFS
-	{ &afs_vfsops, "andrewfs", 13, 0, 0, afs_mountroot, NULL, 0, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
+	{ &afs_vfsops, "andrewfs", 13, 0, 0, afs_mountroot, NULL, 0, 0, VFC_VFSGENERICARGS , NULL, 0},
 #endif
+#endif /* __LP64__ */
 
 	/* Loopback (Minimal) Filesystem Layer */
+#ifndef __LP64__
 #if NULLFS
-	{ &null_vfsops, "loopback", 9, 0, 0, NULL, NULL, 0, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
+	{ &null_vfsops, "loopback", 9, 0, 0, NULL, NULL, 0, 0, VFC_VFSGENERICARGS , NULL, 0},
 #endif
+#endif /* __LP64__ */
 
 	/* Union (translucent) Filesystem */
 #if UNION
-	{ &union_vfsops, "unionfs", 15, 0, 0, NULL, NULL, 1, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
-#endif
-
-	/* File Descriptor Filesystem */
-#if FDESC
-	{ &fdesc_vfsops, "fdesc", 7, 0, 0, NULL, NULL, 0, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
+	{ &union_vfsops, "unionfs", 15, 0, 0, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFS_THREAD_SAFE_FLAG | VFC_VFS64BITREADY, NULL, 0},
 #endif
 
 	/* Device Filesystem */
 #if DEVFS
 #if CONFIG_MACF
-	{ &devfs_vfsops, "devfs", 19, 0, MNT_MULTILABEL, NULL, NULL, 0, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
+	{ &devfs_vfsops, "devfs", 19, 0, (MNT_DONTBROWSE | MNT_MULTILABEL), NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFS_THREAD_SAFE_FLAG | VFC_VFS64BITREADY, NULL, 0},
 #else
-	{ &devfs_vfsops, "devfs", 19, 0, 0, NULL, NULL, 0, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
+	{ &devfs_vfsops, "devfs", 19, 0, MNT_DONTBROWSE, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFS_THREAD_SAFE_FLAG | VFC_VFS64BITREADY, NULL, 0},
 #endif /* MAC */
 #endif
 
+#ifndef __LP64__
+#endif /* __LP64__ */
 
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0}
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0}
 };
 
 /*
@@ -198,11 +192,6 @@ struct vfstable *vfsconf = vfstbllist;
  * vectors.  It is NULL terminated.
  *
  */
-#if FFS
-extern struct vnodeopv_desc ffs_vnodeop_opv_desc;
-extern struct vnodeopv_desc ffs_specop_opv_desc;
-extern struct vnodeopv_desc ffs_fifoop_opv_desc;
-#endif
 extern struct vnodeopv_desc mfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc dead_vnodeop_opv_desc;
 #if FIFO && SOCKETS
@@ -215,27 +204,20 @@ extern struct vnodeopv_desc fifo_nfsv2nodeop_opv_desc;
 extern struct vnodeopv_desc nfsv4_vnodeop_opv_desc;
 extern struct vnodeopv_desc spec_nfsv4nodeop_opv_desc;
 extern struct vnodeopv_desc fifo_nfsv4nodeop_opv_desc;
-extern struct vnodeopv_desc fdesc_vnodeop_opv_desc;
 extern struct vnodeopv_desc null_vnodeop_opv_desc;
 extern struct vnodeopv_desc hfs_vnodeop_opv_desc;
+extern struct vnodeopv_desc hfs_std_vnodeop_opv_desc;
 extern struct vnodeopv_desc hfs_specop_opv_desc;
 extern struct vnodeopv_desc hfs_fifoop_opv_desc;
-extern struct vnodeopv_desc cd9660_vnodeop_opv_desc;
-extern struct vnodeopv_desc cd9660_cdxaop_opv_desc;
-extern struct vnodeopv_desc cd9660_specop_opv_desc;
-extern struct vnodeopv_desc cd9660_fifoop_opv_desc;
 extern struct vnodeopv_desc union_vnodeop_opv_desc;
 extern struct vnodeopv_desc devfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc devfs_spec_vnodeop_opv_desc;
+#if FDESC
+extern struct vnodeopv_desc devfs_devfd_vnodeop_opv_desc;
+extern struct vnodeopv_desc devfs_fdesc_vnodeop_opv_desc;
+#endif /* FDESC */
 
 struct vnodeopv_desc *vfs_opv_descs[] = {
-#if FFS
-	&ffs_vnodeop_opv_desc,
-	&ffs_specop_opv_desc,
-#if FIFO
-	&ffs_fifoop_opv_desc,
-#endif
-#endif
 	&dead_vnodeop_opv_desc,
 #if FIFO && SOCKETS
 	&fifo_vnodeop_opv_desc,
@@ -254,25 +236,15 @@ struct vnodeopv_desc *vfs_opv_descs[] = {
 	&fifo_nfsv4nodeop_opv_desc,
 #endif
 #endif
-#if FDESC
-	&fdesc_vnodeop_opv_desc,
-#endif
 #if NULLFS
 	&null_vnodeop_opv_desc,
 #endif
 #if HFS
 	&hfs_vnodeop_opv_desc,
+	&hfs_std_vnodeop_opv_desc,
 	&hfs_specop_opv_desc,
 #if FIFO
 	&hfs_fifoop_opv_desc,
-#endif
-#endif
-#if CD9660
-	&cd9660_vnodeop_opv_desc,
-	&cd9660_cdxaop_opv_desc,
-	&cd9660_specop_opv_desc,
-#if FIFO
-	&cd9660_fifoop_opv_desc,
 #endif
 #endif
 #if UNION
@@ -281,6 +253,10 @@ struct vnodeopv_desc *vfs_opv_descs[] = {
 #if DEVFS
 	&devfs_vnodeop_opv_desc,
 	&devfs_spec_vnodeop_opv_desc,
-#endif
+#if FDESC
+	&devfs_devfd_vnodeop_opv_desc,
+	&devfs_fdesc_vnodeop_opv_desc,
+#endif /* FDESC */
+#endif /* DEVFS */
 	NULL
 };

@@ -23,6 +23,7 @@ libkern/c++/OSCollectionIterator.cpp			optional libkerncpp
 libkern/c++/OSData.cpp					optional libkerncpp
 libkern/c++/OSDictionary.cpp				optional libkerncpp
 libkern/c++/OSIterator.cpp				optional libkerncpp
+libkern/c++/OSKext.cpp					optional libkerncpp
 libkern/c++/OSNumber.cpp				optional libkerncpp
 libkern/c++/OSOrderedSet.cpp				optional libkerncpp
 libkern/c++/OSRuntime.cpp				optional libkerncpp
@@ -34,14 +35,48 @@ libkern/c++/OSSymbol.cpp				optional libkerncpp
 libkern/c++/OSUnserialize.cpp				optional libkerncpp
 libkern/c++/OSUnserializeXML.cpp			optional libkerncpp
 
+libkern/OSKextLib.cpp					standard libkerncpp
+libkern/mkext.c						standard
+libkern/OSKextVersion.c					standard
+
 libkern/stdio/scanf.c					standard
 
 libkern/uuid/uuid.c					standard
 
-libkern/zlib.c					optional zlib networking
-libkern/zlib.c					optional ipsec
+libkern/kernel_mach_header.c                            standard
+
+libkern/zlib/adler32.c                                  optional zlib
+libkern/zlib/compress.c                                 optional zlib
+libkern/zlib/crc32.c                                    optional zlib
+libkern/zlib/deflate.c                                  optional zlib
+#libkern/zlib/gzio.c            not needed for kernel   optional zlib
+libkern/zlib/infback.c                                  optional zlib
+libkern/zlib/inffast.c                                  optional zlib
+libkern/zlib/inflate.c                                  optional zlib
+libkern/zlib/inftrees.c                                 optional zlib
+libkern/zlib/trees.c                                    optional zlib
+libkern/zlib/uncompr.c                                  optional zlib
+libkern/zlib/zutil.c                                    optional zlib
 
 libkern/crypto/md5.c				optional crypto
 libkern/crypto/md5.c				optional networking
 libkern/crypto/sha1.c				optional crypto
 libkern/crypto/sha1.c				optional ipsec
+
+libkern/stack_protector.c       standard
+
+libkern/kxld/kxld.c             optional config_kxld
+libkern/kxld/kxld_array.c       optional config_kxld
+libkern/kxld/kxld_copyright.c   optional config_kxld
+libkern/kxld/kxld_dict.c        optional config_kxld
+libkern/kxld/kxld_kext.c        optional config_kxld
+libkern/kxld/kxld_reloc.c       optional config_kxld
+libkern/kxld/kxld_sect.c        optional config_kxld
+libkern/kxld/kxld_seg.c         optional config_kxld
+libkern/kxld/kxld_state.c       optional config_kxld
+libkern/kxld/kxld_sym.c         optional config_kxld
+libkern/kxld/kxld_symtab.c      optional config_kxld
+libkern/kxld/kxld_util.c        optional config_kxld
+libkern/kxld/kxld_uuid.c        optional config_kxld
+libkern/kxld/kxld_vtable.c      optional config_kxld
+libkern/kxld/kxld_stubs.c       standard

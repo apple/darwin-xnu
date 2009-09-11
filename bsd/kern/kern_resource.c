@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -86,7 +86,7 @@
 #include <sys/mount_internal.h>
 #include <sys/sysproto.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <machine/vmparam.h>
 
@@ -120,7 +120,7 @@ rlim_t maxsmap = MAXSSIZ - PAGE_SIZE;	/* XXX */
  *
  * Note: would be in kern/subr_param.c in FreeBSD.
  */
-int maxfilesperproc = OPEN_MAX;		/* per-proc open files limit */
+__private_extern__ int maxfilesperproc = OPEN_MAX;		/* per-proc open files limit */
 
 SYSCTL_INT( _kern, KERN_MAXPROCPERUID, maxprocperuid, CTLFLAG_RW,
     		&maxprocperuid, 0, "Maximum processes allowed per userid" );
@@ -152,7 +152,7 @@ static int ppgrp_donice_callback(proc_t p, void * arg);
  * Resource controls and accounting.
  */
 int
-getpriority(struct proc *curp, struct getpriority_args *uap, register_t *retval)
+getpriority(struct proc *curp, struct getpriority_args *uap, int32_t *retval)
 {
 	struct proc *p;
 	int low = PRIO_MAX + 1;
@@ -295,7 +295,7 @@ ppgrp_donice_callback(proc_t p, void * arg)
  */
 /* ARGSUSED */
 int
-setpriority(struct proc *curp, struct setpriority_args *uap, __unused register_t *retval)
+setpriority(struct proc *curp, struct setpriority_args *uap, __unused int32_t *retval)
 {
 	struct proc *p;
 	int found = 0, error = 0;
@@ -303,7 +303,7 @@ setpriority(struct proc *curp, struct setpriority_args *uap, __unused register_t
 
 	AUDIT_ARG(cmd, uap->which);
 	AUDIT_ARG(owner, uap->who, 0);
-	AUDIT_ARG(value, uap->prio);
+	AUDIT_ARG(value32, uap->prio);
 
 	/* would also test (uap->who < 0), but id_t is unsigned */
 	if (uap->who > 0x7fffffff)
@@ -519,7 +519,7 @@ do_background_thread(struct proc *curp, int priority)
  */
 /* ARGSUSED */
 int
-setrlimit(struct proc *p, struct setrlimit_args *uap, __unused register_t *retval)
+setrlimit(struct proc *p, struct setrlimit_args *uap, __unused int32_t *retval)
 {
 	struct rlimit alim;
 	int error;
@@ -585,12 +585,16 @@ dosetrlimit(struct proc *p, u_int which, struct rlimit *limp)
 			task_absolutetime_info_data_t	tinfo;
 			mach_msg_type_number_t			count;
 			struct timeval					ttv, tv;
+			clock_sec_t						tv_sec;
+			clock_usec_t					tv_usec;
 
 			count = TASK_ABSOLUTETIME_INFO_COUNT;
 			task_info(p->task, TASK_ABSOLUTETIME_INFO,
 							  	(task_info_t)&tinfo, &count);
 			absolutetime_to_microtime(tinfo.total_user + tinfo.total_system,
-								(uint32_t *) &ttv.tv_sec, (uint32_t *) &ttv.tv_usec);
+									  &tv_sec, &tv_usec);
+			ttv.tv_sec = tv_sec;
+			ttv.tv_usec = tv_usec;
 
 			tv.tv_sec = (limp->rlim_cur > __INT_MAX__ ? __INT_MAX__ : limp->rlim_cur);
 			tv.tv_usec = 0;
@@ -817,7 +821,7 @@ out:
 
 /* ARGSUSED */
 int
-getrlimit(struct proc *p, struct getrlimit_args *uap, __unused register_t *retval)
+getrlimit(struct proc *p, struct getrlimit_args *uap, __unused int32_t *retval)
 {
 	struct rlimit lim;
 
@@ -851,14 +855,16 @@ calcru(struct proc *p, struct timeval *up, struct timeval *sp, struct timeval *i
 
 	task = p->task;
 	if (task) {
-		task_basic_info_data_t tinfo;
+		task_basic_info_32_data_t tinfo;
 		task_thread_times_info_data_t ttimesinfo;
-		mach_msg_type_number_t task_info_stuff, task_ttimes_stuff;
+		task_events_info_data_t teventsinfo;
+		mach_msg_type_number_t task_info_count, task_ttimes_count;
+		mach_msg_type_number_t task_events_count;
 		struct timeval ut,st;
 
-		task_info_stuff	= TASK_BASIC_INFO_COUNT;
-		task_info(task, TASK_BASIC_INFO,
-			  (task_info_t)&tinfo, &task_info_stuff);
+		task_info_count	= TASK_BASIC_INFO_32_COUNT;
+		task_info(task, TASK_BASIC2_INFO_32,
+			  (task_info_t)&tinfo, &task_info_count);
 		ut.tv_sec = tinfo.user_time.seconds;
 		ut.tv_usec = tinfo.user_time.microseconds;
 		st.tv_sec = tinfo.system_time.seconds;
@@ -866,9 +872,9 @@ calcru(struct proc *p, struct timeval *up, struct timeval *sp, struct timeval *i
 		timeradd(&ut, up, up);
 		timeradd(&st, sp, sp);
 
-		task_ttimes_stuff = TASK_THREAD_TIMES_INFO_COUNT;
+		task_ttimes_count = TASK_THREAD_TIMES_INFO_COUNT;
 		task_info(task, TASK_THREAD_TIMES_INFO,
-			  (task_info_t)&ttimesinfo, &task_ttimes_stuff);
+			  (task_info_t)&ttimesinfo, &task_ttimes_count);
 
 		ut.tv_sec = ttimesinfo.user_time.seconds;
 		ut.tv_usec = ttimesinfo.user_time.microseconds;
@@ -876,17 +882,37 @@ calcru(struct proc *p, struct timeval *up, struct timeval *sp, struct timeval *i
 		st.tv_usec = ttimesinfo.system_time.microseconds;
 		timeradd(&ut, up, up);
 		timeradd(&st, sp, sp);
+
+		task_events_count = TASK_EVENTS_INFO_COUNT;
+		task_info(task, TASK_EVENTS_INFO,
+			  (task_info_t)&teventsinfo, &task_events_count);
+
+		/*
+		 * No need to lock "p":  this does not need to be
+		 * completely consistent, right ?
+		 */
+		p->p_stats->p_ru.ru_minflt = (teventsinfo.faults -
+					      teventsinfo.pageins);
+		p->p_stats->p_ru.ru_majflt = teventsinfo.pageins;
+		p->p_stats->p_ru.ru_nivcsw = (teventsinfo.csw -
+					      p->p_stats->p_ru.ru_nvcsw);
+		if (p->p_stats->p_ru.ru_nivcsw < 0)
+			p->p_stats->p_ru.ru_nivcsw = 0;
+
+		p->p_stats->p_ru.ru_maxrss = tinfo.resident_size;
 	}
 }
 
-__private_extern__ void munge_rusage(struct rusage *a_rusage_p, struct user_rusage *a_user_rusage_p);
+__private_extern__ void munge_user64_rusage(struct rusage *a_rusage_p, struct user64_rusage *a_user_rusage_p);
+__private_extern__ void munge_user32_rusage(struct rusage *a_rusage_p, struct user32_rusage *a_user_rusage_p);
 
 /* ARGSUSED */
 int
-getrusage(struct proc *p, struct getrusage_args *uap, __unused register_t *retval)
+getrusage(struct proc *p, struct getrusage_args *uap, __unused int32_t *retval)
 {
 	struct rusage *rup, rubuf;
-	struct user_rusage rubuf64;
+	struct user64_rusage rubuf64;
+	struct user32_rusage rubuf32;
 	size_t retsize = sizeof(rubuf);			/* default: 32 bits */
 	caddr_t retbuf = (caddr_t)&rubuf;		/* default: 32 bits */
 	struct timeval utime;
@@ -896,7 +922,6 @@ getrusage(struct proc *p, struct getrusage_args *uap, __unused register_t *retva
 	switch (uap->who) {
 	case RUSAGE_SELF:
 		calcru(p, &utime, &stime, NULL);
-		// LP64todo: proc struct should have 64 bit version of struct
 		proc_lock(p);
 		rup = &p->p_stats->p_ru;
 		rup->ru_utime = utime;
@@ -920,8 +945,13 @@ getrusage(struct proc *p, struct getrusage_args *uap, __unused register_t *retva
 	if (IS_64BIT_PROCESS(p)) {
 		retsize = sizeof(rubuf64);
 		retbuf = (caddr_t)&rubuf64;
-		munge_rusage(&rubuf, &rubuf64);
+		munge_user64_rusage(&rubuf, &rubuf64);
+	} else {
+		retsize = sizeof(rubuf32);
+		retbuf = (caddr_t)&rubuf32;
+		munge_user32_rusage(&rubuf, &rubuf32);
 	}
+
 	return (copyout(retbuf, uap->rusage, retsize));
 }
 
@@ -929,7 +959,7 @@ void
 ruadd(struct rusage *ru, struct rusage *ru2)
 {
 	long *ip, *ip2;
-	int i;
+	long i;
 
 	timeradd(&ru->ru_utime, &ru2->ru_utime, &ru->ru_utime);
 	timeradd(&ru->ru_stime, &ru2->ru_stime, &ru->ru_stime);
@@ -1059,7 +1089,7 @@ proc_limitreplace(proc_t p)
  *
  */
 int
-iopolicysys(__unused struct proc *p, __unused struct iopolicysys_args *uap, __unused register_t *retval)
+iopolicysys(__unused struct proc *p, __unused struct iopolicysys_args *uap, __unused int32_t *retval)
 {
 	int	error = 0;
 	thread_t thread = THREAD_NULL;
@@ -1131,4 +1161,26 @@ iopolicysys(__unused struct proc *p, __unused struct iopolicysys_args *uap, __un
   exit:
 	*retval = error;
 	return (error);
+}
+
+
+boolean_t thread_is_io_throttled(void);
+
+boolean_t
+thread_is_io_throttled(void) {
+
+	int	policy;
+	struct uthread  *ut;
+
+	policy = current_proc()->p_iopol_disk;
+
+	ut = get_bsdthread_info(current_thread());
+
+	if (ut->uu_iopol_disk != IOPOL_DEFAULT)
+		policy = ut->uu_iopol_disk;
+
+	if (policy == IOPOL_THROTTLE)
+		return TRUE;
+
+	return FALSE;
 }

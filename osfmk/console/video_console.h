@@ -44,28 +44,28 @@ int vcgetc(	int		l,
 		boolean_t	wait,
 		boolean_t	raw );
 
-void video_scroll_up(	unsigned long	start,
-			unsigned long	end,
-			unsigned long	dest );
+void video_scroll_up(	void	*start,
+			void	*end,
+			void	*dest );
 
-void video_scroll_down(	unsigned long	start,  /* HIGH addr */
-			unsigned long	end,    /* LOW addr */
-			unsigned long	dest ); /* HIGH addr */
+void video_scroll_down(	void	*start,  /* HIGH addr */
+			void	*end,    /* LOW addr */
+			void	*dest ); /* HIGH addr */
 
 struct vc_info
 {
-	unsigned long	v_height;	/* pixels */
-	unsigned long	v_width;	/* pixels */
-	unsigned long	v_depth;
-	unsigned long	v_rowbytes;
+	unsigned int	v_height;	/* pixels */
+	unsigned int	v_width;	/* pixels */
+	unsigned int	v_depth;
+	unsigned int	v_rowbytes;
 	unsigned long	v_baseaddr;
-	unsigned long	v_type;
+	unsigned int	v_type;
 	char		v_name[32];
 	unsigned long	v_physaddr;
-	unsigned long	v_rows;		/* characters */
-	unsigned long	v_columns;	/* characters */
-	unsigned long	v_rowscanbytes;	/* Actualy number of bytes used for display per row*/
-	unsigned long	v_reserved[5];
+	unsigned int	v_rows;		/* characters */
+	unsigned int	v_columns;	/* characters */
+	unsigned int	v_rowscanbytes;	/* Actualy number of bytes used for display per row*/
+	unsigned int	v_reserved[5];
 };
 
 #endif /* _VIDEO_CONSOLE_H_ */

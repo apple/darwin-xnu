@@ -768,7 +768,12 @@ mapping_phys_lookup(ppnum_t pp, unsigned int *pindex)
 	
 }
 
+boolean_t
+pmap_valid_page(ppnum_t pn) {
+	unsigned int tmp;
 
+	return (mapping_phys_lookup(pn, &tmp) != 0);
+}
 
 
 /*
@@ -833,7 +838,7 @@ void mapping_adjust(void) {										/* Adjust free mappings */
 			splx(s);											/* Restore 'rupts */
 
 			for(; allocsize > 0; allocsize >>= 1) {				/* Try allocating in descending halves */ 
-				retr = kmem_alloc_wired(mapping_map, (vm_offset_t *)&mbn, PAGE_SIZE * allocsize);	/* Find a virtual address to use */
+				retr = kmem_alloc_kobject(mapping_map, (vm_offset_t *)&mbn, PAGE_SIZE * allocsize);	/* Find a virtual address to use */
 				if((retr != KERN_SUCCESS) && (allocsize == 1)) {	/* Did we find any memory at all? */
 					break;
 				}
@@ -1389,7 +1394,7 @@ void mapping_prealloc(unsigned int size) {					/* Preallocates mapppings for lar
 	splx(s);												/* Restore 'rupts */
 	
 	for(i = 0; i < nmapb; i++) {							/* Allocate 'em all */
-		retr = kmem_alloc_wired(mapping_map, (vm_offset_t *)&mbn, PAGE_SIZE);	/* Find a virtual address to use */
+		retr = kmem_alloc_kobject(mapping_map, (vm_offset_t *)&mbn, PAGE_SIZE);	/* Find a virtual address to use */
 		if(retr != KERN_SUCCESS) 							/* Did we get some memory? */
 			break;
 		mapping_free_init((vm_offset_t)mbn, -1, 0);			/* Initialize on to the release queue */
@@ -1458,7 +1463,7 @@ void mapping_free_prime(void) {									/* Primes the mapping block release list
 #endif
 	
 	for(i = 0; i < nmapb; i++) {								/* Allocate 'em all */
-		retr = kmem_alloc_wired(mapping_map, (vm_offset_t *)&mbn, PAGE_SIZE);	/* Find a virtual address to use */
+		retr = kmem_alloc_kobject(mapping_map, (vm_offset_t *)&mbn, PAGE_SIZE);	/* Find a virtual address to use */
 		if(retr != KERN_SUCCESS) {								/* Did we get some memory? */
 			panic("Whoops...  Not a bit of wired memory left for anyone\n");
 		}

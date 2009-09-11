@@ -36,48 +36,238 @@ class OSSet;
 class OSDictionary;
 
 /*!
-    @class OSSerialize
-    @abstract A class used by the OS Container classes to serialize their instance data.
-    @discussion This class is for the most part internal to the OS Container classes and should not be used directly.  Each class inherits a serialize() method from OSObject which is used to actually serialize an object.
-*/
-
+ * @header
+ *
+ * @abstract
+ * This header declares the OSSerialize class.
+ */
+ 
+ 
+/*!
+ * @class OSSerialize
+ *
+ * @abstract
+ * OSSerialize coordinates serialization of Libkern C++ objects
+ * into an XML stream.
+ *
+ * @discussion
+ * This class is for the most part internal to the OSContainer classes,
+ * used for transferring property tables between the kernel and user space.
+ * It should not be used directly.
+ * Classes that participate in serialization
+ * override the
+ * <code>@link
+ * //apple_ref/cpp/instm/OSObject/serialize/virtualbool/(OSSerialize*)
+ * OSObject::serialize@/link</code> .
+ * function.
+ *
+ * <b>Use Restrictions</b>
+ *
+ * With very few exceptions in the I/O Kit, all Libkern-based C++
+ * classes, functions, and macros are <b>unsafe</b>
+ * to use in a primary interrupt context.
+ * Consult the I/O Kit documentation related to primary interrupts 
+ * for more information.
+ *
+ * OSSerialize provides no concurrency protection;
+ * it's up to the usage context to provide any protection necessary.
+ * Some portions of the I/O Kit, such as
+ * @link //apple_ref/doc/class/IORegistryEntry IORegistryEntry@/link,
+ * handle synchronization via defined member functions
+ * for serializing properties.
+ */
 class OSSerialize : public OSObject
 {
     OSDeclareDefaultStructors(OSSerialize)
 
 protected:
-    char *data;			// container for serialized data
-    unsigned int length;		// of serialized data (counting NULL)
-    unsigned int capacity;		// of container
-    unsigned int capacityIncrement;	// of container
+    char         * data;               // container for serialized data
+    unsigned int   length;             // of serialized data (counting NULL)
+    unsigned int   capacity;           // of container
+    unsigned int   capacityIncrement;  // of container
 
-    unsigned int tag;
-    OSDictionary *tags;		// tags for all objects seen
+    unsigned int   tag;
+    OSDictionary * tags;               // tags for all objects seen
 
     struct ExpansionData { };
     
-    /*! @var reserved
-        Reserved for future use.  (Internal use only)  */
+    /* Reserved for future use. (Internal use only)  */
     ExpansionData *reserved;
 
 
 public:
-    static OSSerialize *withCapacity(unsigned int capacity);
 
-    virtual char *text() const;
+   /*!
+    * @function withCapacity
+    *
+    * @abstract
+    * Creates and initializes an empty OSSerialize object.
+    * 
+    * @param  capacity The initial size of the XML buffer.
+    *
+    * @result
+    * A new instance of OSSerialize
+    * with a retain count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * The serializer will grow as needed to accommodate more data.
+    */
+    static OSSerialize * withCapacity(unsigned int capacity);
 
-    virtual void clearText();	// using this can be a great speedup
-                                    // if you are serializing the same object
-                                    // over and over again
+   /*!
+    * @function text
+    *
+    * @abstract
+    * Returns the XML text serialized so far.
+    * 
+    * @result
+    * The nul-terminated XML data serialized so far.
+    */
+    virtual char * text() const;
+
+
+   /*!
+    * @function clearText
+    *
+    * @abstract
+    * Resets the OSSerialize object.
+    *
+    * @discussion
+    * This function is a useful optimization if you are serializing
+    * the same object repeatedly.
+    */
+    virtual void clearText();
 
     // stuff to serialize your object
-    virtual bool previouslySerialized(const OSMetaClassBase *);
 
-    virtual bool addXMLStartTag(const OSMetaClassBase *o, const char *tagString);
-    virtual bool addXMLEndTag(const char *tagString);
+   /*!
+    * @function previouslySerialized
+    *
+    * @abstract
+    * Checks whether the object has already been serialized
+    * into the XML stream, emitting a reference if it has.
+    *
+    * @param object The object to check.
+    *
+    * @result
+    * <code>true</code> if <code>object</code> has already been serialized
+    * by this OSSerialize object and a reference
+    * to it is successfully added to the XML stream,
+    * <code>false</code> otherwise.
+    *    
+    *
+    * @discussion
+    * This function both reduces the size of generated XML
+    * by emitting shorter references to existing objects with the same
+    * value (particularly for OSString, OSSymbol, and OSData),
+    * and also preserves instance references
+    * so that the user-space I/O Kit library can reconstruct
+    * an identical graph of object relationships.
+    *
+    * All classes that override
+    * <code>@link
+    * //apple_ref/cpp/instm/OSObject/serialize/virtualbool/(OSSerialize*)
+    * OSObject::serialize@/link</code>.
+    * should call this function before doing any actual serialization;
+    * if it returns <code>true</code>, the <code>serialize</code> implementation
+    * can immediately return <code>true</code>.
+    */
+    virtual bool previouslySerialized(const OSMetaClassBase * object);
 
-    virtual bool addChar(const char);
-    virtual bool addString(const char *);
+
+   /*!
+    * @function addXMLStartTag
+    *
+    * @abstract
+    * Appends an XML start tag to the XML stream.
+    *
+    * @param object    The object being serialized.
+    * @param tagString The name of the XML tag to emit; for example, "string".
+    *
+    * @result
+    * <code>true</code> if an XML start tag for <code>tagString</code>
+    * is successfully added to the XML stream, <code>false</code> otherwise.
+    *    
+    * @discussion
+    * This function emits the named tag,
+    * enclosed within a pair of angle brackets.
+    *
+    * A class that implements serialization should call this function
+    * with the name of the XML tag that best represents the serialized
+    * contents of the object.
+    * A limited number of tags are supported by the user-space
+    * I/O Kit library:
+    * <ul>
+    * <li>array</li>
+    * <li>dict</li>
+    * <li>integer</li>
+    * <li>key</li>
+    * <li>set</li>
+    * <li>string</li>
+    * </ul>
+    *
+    * A call to this function must be balanced with one to
+    * <code>@link addXMLEndTag addXMLEndTag@/link</code>
+    * using the same <code>tagString</code>.
+    */
+    virtual bool addXMLStartTag(
+        const OSMetaClassBase * object,
+        const char            * tagString);
+
+
+   /*!
+    * @function addXMLEndTag
+    *
+    * @abstract
+    * Appends an XML end tag to the XML stream.
+    *
+    * @param tagString The name of the XML tag to emit; for example, "string".
+    *
+    * @result
+    * <code>true</code> if an XML end tag for <code>tagString</code>
+    * is successfully added to the XML stream, <code>false</code> otherwise.
+    *    
+    * @discussion
+    * This function emits the named tag,
+    * preceded by a slash character to indicate the closing of an entity,
+    * all enclosed within a pair of angle brackets.
+    *
+    * A call to this function must balance an earlier call to
+    * <code>@link addXMLStartTag addXMLStartTag@/link</code>
+    * using the same <code>tagString</code>.
+    */
+    virtual bool addXMLEndTag(const char * tagString);
+
+
+   /*!
+    * @function addChar
+    *
+    * @abstract
+    * Appends a single character to the XML stream.
+    *
+    * @param aChar The character to append to the XML stream.
+    *
+    * @result
+    * <code>true</code> if <code>char</code>
+    * is successfully added to the XML stream, <code>false</code> otherwise.
+    */
+    virtual bool addChar(const char aChar);
+
+
+   /*!
+    * @function addString
+    *
+    * @abstract
+    * Appends a C string to the XML stream.
+    *
+    * @param cString The C string to append to the XML stream.
+    *
+    * @result
+    *  <code>true</code> if <code>cString</code>
+    * is successfully added to the XML stream, <code>false</code> otherwise.
+    */
+    virtual bool addString(const char * cString);
 
     // stuff you should never have to use (in theory)
 
@@ -99,8 +289,10 @@ public:
     OSMetaClassDeclareReservedUnused(OSSerialize, 7);
 };
 
+// xx-review: this whole class seems to be unused!
+
 typedef bool (*OSSerializerCallback)(void * target, void * ref,
-                                     OSSerialize * s);
+                                     OSSerialize * serializer);
 
 class OSSerializer : public OSObject
 {
@@ -112,10 +304,12 @@ class OSSerializer : public OSObject
     
 public:
 
-    static OSSerializer * forTarget(void * target,
-                                OSSerializerCallback callback, void * ref = 0);
+    static OSSerializer * forTarget(
+        void * target,
+        OSSerializerCallback callback,
+        void * ref = 0);
 
-    virtual bool serialize(OSSerialize * s) const;
+    virtual bool serialize(OSSerialize * serializer) const;
 };
 
 #endif /* _OS_OSSERIALIZE_H */

@@ -53,7 +53,7 @@
 .Ft ssize_t
 .Fo sendmsg
 .Fa "int socket"
-.Fa "const struct msghdr *buffer"
+.Fa "const struct msghdr *message"
 .Fa "int flags"
 .Fc
 .Ft ssize_t
@@ -127,9 +127,33 @@ data.
 .Dv MSG_DONTROUTE
 is usually used only by diagnostic or routing programs.
 .Pp
+The
+.Fn sendmsg
+system call uses a
+.Fa msghdr
+structure to minimize the number of directly supplied arguments.
+The 
+.Fa msg_iov
+and 
+.Fa msg_iovlen 
+fields of message specify zero or more buffers 
+containing the data to be sent. 
+.Fa msg_iov 
+points to an array of iovec structures; 
+.Fa msg_iovlen 
+shall be set to the dimension of this array. 
+In each iovec structure, the 
+.Fa iov_base 
+field specifies a storage area and 
+the 
+.Fa iov_len 
+field gives its size in bytes. Some of these sizes can be zero. 
+The data from each storage area indicated by 
+.Fa msg_iov 
+is sent in turn.
 See 
 .Xr recv 2
-for a description of the
+for a complete description of the
 .Fa msghdr
 structure.
 .Sh RETURN VALUES
@@ -174,6 +198,7 @@ before any data is transmitted.
 .It Bq Er EMSGSIZE
 The socket requires that message be sent atomically,
 and the size of the message to be sent makes this impossible.
+.Dv IOV_MAX .
 .\" ===========
 .It Bq Er ENETDOWN
 The local network interface used to reach the destination is down.
@@ -259,6 +284,13 @@ system call will fail if:
 .\" ===========
 .It Bq Er EINVAL
 The sum of the iov_len values overflows an ssize_t.
+.\" ===========
+.It Bq Er EMSGSIZE
+The socket requires that message be sent atomically,
+and the size of the message to be sent makes this impossible, 
+or the msg_iovlen member of the msghdr structure pointed to by message 
+is less than or equal to 0 or is greater than 
+.Dv IOV_MAX .
 .El
 .Sh LEGACY SYNOPSIS
 .Fd #include <sys/types.h>

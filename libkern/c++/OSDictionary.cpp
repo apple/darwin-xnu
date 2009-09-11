@@ -87,7 +87,7 @@ bool OSDictionary::initWithObjects(const OSObject *objects[],
                                    unsigned int theCount,
                                    unsigned int theCapacity)
 {
-    unsigned int capacity = theCount;
+    unsigned int newCapacity = theCount;
 
     if (!objects || !keys)
         return false;
@@ -96,10 +96,10 @@ bool OSDictionary::initWithObjects(const OSObject *objects[],
         if (theCount > theCapacity)
             return false;
         
-        capacity = theCapacity;
+        newCapacity = theCapacity;
     }
 
-    if (!initWithCapacity(capacity))
+    if (!initWithCapacity(newCapacity))
         return false;
 
     for (unsigned int i = 0; i < theCount; i++) {
@@ -117,7 +117,7 @@ bool OSDictionary::initWithObjects(const OSObject *objects[],
                                    unsigned int theCount,
                                    unsigned int theCapacity)
 {
-    unsigned int capacity = theCount;
+    unsigned int newCapacity = theCount;
 
     if (!objects || !keys)
         return false;
@@ -126,10 +126,10 @@ bool OSDictionary::initWithObjects(const OSObject *objects[],
         if (theCount > theCapacity)
             return false;
 
-        capacity = theCapacity;
+        newCapacity = theCapacity;
     }
 
-    if (!initWithCapacity(capacity))
+    if (!initWithCapacity(newCapacity))
         return false;
 
     for (unsigned int i = 0; i < theCount; i++) {
@@ -153,21 +153,21 @@ bool OSDictionary::initWithObjects(const OSObject *objects[],
 bool OSDictionary::initWithDictionary(const OSDictionary *dict,
                                       unsigned int theCapacity)
 {
-    unsigned int capacity;
+    unsigned int newCapacity;
 
     if ( !dict )
         return false;
 
-    capacity = dict->count;
+    newCapacity = dict->count;
 
     if ( theCapacity ) {
         if ( dict->count > theCapacity )
             return false;
         
-        capacity = theCapacity;
+        newCapacity = theCapacity;
     }
 
-    if (!initWithCapacity(capacity))
+    if (!initWithCapacity(newCapacity))
         return false;
 
     count = dict->count;
@@ -371,7 +371,7 @@ bool OSDictionary::merge(const OSDictionary *srcDict)
     if ( !OSDynamicCast(OSDictionary, srcDict) )
         return false;
 
-    iter = OSCollectionIterator::withCollection((OSDictionary *)srcDict);
+    iter = OSCollectionIterator::withCollection(const_cast<OSDictionary *>(srcDict));
     if ( !iter )
         return false;
 
@@ -397,7 +397,7 @@ OSObject *OSDictionary::getObject(const OSSymbol *aKey) const
     // if the key exists, remove the object
     for (unsigned int i = 0; i < count; i++)
         if (aKey == dictionary[i].key)
-            return (OSObject *) dictionary[i].value;
+            return (const_cast<OSObject *> ((const OSObject *)dictionary[i].value));
 
     return 0;
 }

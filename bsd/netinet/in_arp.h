@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -30,6 +30,7 @@
 #define	_NETINET_IN_ARP_H_
 #include <sys/kernel_types.h>
 
+struct sockaddr;
 struct sockaddr_dl;
 struct sockaddr_in;
 
@@ -61,15 +62,18 @@ struct sockaddr_in;
 #ifdef BSD_KERNEL_PRIVATE
 #define inet_arp_lookup arp_lookup_ip
 #else
-errno_t inet_arp_lookup(ifnet_t interface, const struct sockaddr_in *ip_dest,
-			struct sockaddr_dl *ll_dest, size_t ll_dest_len, route_t hint,
-			mbuf_t packet);
+extern errno_t inet_arp_lookup(ifnet_t interface,
+    const struct sockaddr_in *ip_dest, struct sockaddr_dl *ll_dest,
+    size_t ll_dest_len, route_t hint, mbuf_t packet);
 #endif /* BSD_KERNEL_PRIVATE */
 #ifdef KERNEL_PRIVATE
+extern void arp_init(void);
 /* arp_lookup_ip is obsolete, use inet_arp_lookup */
-errno_t arp_lookup_ip(ifnet_t interface, const struct sockaddr_in *ip_dest,
-			struct sockaddr_dl *ll_dest, size_t ll_dest_len, route_t hint,
-			mbuf_t packet);
+extern errno_t arp_lookup_ip(ifnet_t interface,
+    const struct sockaddr_in *ip_dest, struct sockaddr_dl *ll_dest,
+    size_t ll_dest_len, route_t hint, mbuf_t packet);
+__private_extern__ errno_t arp_route_to_gateway_route(const struct sockaddr *,
+    route_t, route_t *);
 #endif /* KERNEL_PRIVATE */
 
 /*!
@@ -92,14 +96,14 @@ errno_t arp_lookup_ip(ifnet_t interface, const struct sockaddr_in *ip_dest,
 #ifdef BSD_KERNEL_PRIVATE
 #define inet_arp_handle_input arp_ip_handle_input
 #else
-errno_t inet_arp_handle_input(ifnet_t ifp, u_int16_t arpop,
+extern errno_t inet_arp_handle_input(ifnet_t ifp, u_int16_t arpop,
 			const struct sockaddr_dl *sender_hw,
 			const struct sockaddr_in *sender_ip,
 			const struct sockaddr_in *target_ip);
 #endif /* KERNEL_PRIVATE */
 #ifdef KERNEL_PRIVATE
 /* arp_ip_handle_input is obsolete, use inet_arp_handle_input */
-errno_t arp_ip_handle_input(ifnet_t ifp, u_int16_t arpop,
+extern errno_t arp_ip_handle_input(ifnet_t ifp, u_int16_t arpop,
 			const struct sockaddr_dl *sender_hw,
 			const struct sockaddr_in *sender_ip,
 			const struct sockaddr_in *target_ip);
@@ -131,7 +135,7 @@ errno_t arp_ip_handle_input(ifnet_t ifp, u_int16_t arpop,
 /* inet_arp_init_ifaddr is aliased to arp_ifinit */
 #define	inet_arp_init_ifaddr	arp_ifinit
 #else
-void	inet_arp_init_ifaddr(ifnet_t interface, ifaddr_t ipaddr);
+extern void inet_arp_init_ifaddr(ifnet_t interface, ifaddr_t ipaddr);
 #endif
 
-#endif _NETINET_IN_ARP_H_
+#endif /* _NETINET_IN_ARP_H_ */

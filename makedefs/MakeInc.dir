@@ -4,6 +4,11 @@
 ifeq ($(RC_ProjectName),Libsyscall)
 installhdrs:
 	bsdmake -C libsyscall installhdrs
+else ifeq ($(findstring libkxld,$(RC_ProjectName)),libkxld)
+installhdrs:
+	make -C libkern/kxld/ installhdrs
+else ifeq ($(RC_ProjectName),xnu_debug)
+installhdrs:
 else # xnu
 installhdrs: exporthdrs installhdrs_mi installhdrs_md 
 	@echo "[ $(SRCROOT) ] make installhdrs installing Kernel.framework"
@@ -14,7 +19,7 @@ installhdrs: exporthdrs installhdrs_mi installhdrs_md
 	[ -d $$kincpath ] || $(MKDIR) $$kincpath;			\
 	cd $(SRCROOT)/EXTERNAL_HEADERS;					\
 		install $(FILE_INSTALL_FLAGS) Info.plist $$krespath;	\
-		$(SRCROOT)/config/newvers.pl $${krespath}/Info.plist;	\
+		$(NEWVERS) $${krespath}/Info.plist;	\
 	cd $$kframepath/Versions;					\
 	    [ -L Current ] || $(LN) $(KINCVERS) Current;		\
 	cd $$kframepath;						\
@@ -39,7 +44,7 @@ installhdrs_mi:
 	arch_config=$(INSTALL_ARCH_DEFAULT);					\
 	installinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
 	[ -d $${installinc_dir} ] ||$(MKDIR) $${installinc_dir};	\
-	${MAKE} -C $${installinc_dir}					\
+	${MAKE} ${MAKEJOBS} -C $${installinc_dir}			\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile				\
@@ -67,7 +72,7 @@ installhdrs_md:
 		objpath=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/$${rel_path};	\
 	fi;		\
 	[ -d $${objpath} ] || $(MKDIR) $${objpath};	\
-	${MAKE} -C $${objpath}	\
+	${MAKE} ${MAKEJOBS} -C $${objpath}				\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile				\
@@ -81,36 +86,42 @@ installhdrs_md:
 #
 do_installhdrs_mi:
 
-build_installhdrs_mi::
-	@echo "[ $(SOURCE) ] make build_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-	$(_v)for installinc_subdir in $(INSTINC_SUBDIRS);			\
-	do								\
-		[ -d $${installinc_subdir} ] || $(MKDIR) $${installinc_subdir};		\
-		${MAKE} -C $${installinc_subdir}			\
-			MAKEFILES=$(SOURCE)$${installinc_subdir}/Makefile	\
-			SOURCE=$(SOURCE)$${installinc_subdir}/		\
-			TARGET=$(TARGET)$${installinc_subdir}/		\
-		build_installhdrs_mi;					\
-	done;								\
-	${MAKE} ${MAKEJOBS} do_installhdrs_mi;
+BUILD_INSTALLHDRS_MI_SUBDIRS_TARGETS = $(addprefix build_installhdrs_mi_,$(INSTINC_SUBDIRS))
+
+.PHONY: $(BUILD_INSTALLHDRS_MI_SUBDIRS_TARGETS)
+
+$(BUILD_INSTALLHDRS_MI_SUBDIRS_TARGETS):
+	$(_v)installinc_subdir="$(patsubst build_installhdrs_mi_%,%,$@)";	\
+	[ -d $${installinc_subdir} ] || $(MKDIR) $${installinc_subdir};		\
+	${MAKE} -C $${installinc_subdir}	 				\
+		MAKEFILES=$(SOURCE)$${installinc_subdir}/Makefile		\
+		SOURCE=$(SOURCE)$${installinc_subdir}/				\
+		TARGET=$(TARGET)$${installinc_subdir}/				\
+		build_installhdrs_mi;
+
+build_installhdrs_mi: $(BUILD_INSTALLHDRS_MI_SUBDIRS_TARGETS)
+	$(_v)${MAKE} do_installhdrs_mi;
 
 #
 # Install machine dependent kernel header files 
 #
 do_installhdrs_md:
 
-build_installhdrs_md::
-	@echo "[ $(SOURCE) ] make installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
-	$(_v)for installinc_subdir in $($(addprefix INSTINC_SUBDIRS_, $(ARCH_CONFIG)));		\
-	do								\
-		[ -d $${installinc_subdir} ] || $(MKDIR) $${installinc_subdir};			\
-		${MAKE} -C $${installinc_subdir}			\
-			MAKEFILES=$(SOURCE)$${installinc_subdir}/Makefile	\
-			SOURCE=$(SOURCE)$${installinc_subdir}/		\
-			TARGET=$(TARGET)$${installinc_subdir}/		\
-		build_installhdrs_md;					\
-	done;								\
-	${MAKE} ${MAKEJOBS} do_installhdrs_md;
+BUILD_INSTALLHDRS_MD_SUBDIRS_TARGETS = $(addprefix build_installhdrs_md_,$($(addprefix INSTINC_SUBDIRS_, $(ARCH_CONFIG))))
+
+.PHONY: $(BUILD_INSTALLHDRS_MD_SUBDIRS_TARGETS)
+
+$(BUILD_INSTALLHDRS_MD_SUBDIRS_TARGETS):
+	$(_v)installinc_subdir="$(patsubst build_installhdrs_md_%,%,$@)";	\
+	[ -d $${installinc_subdir} ] || $(MKDIR) $${installinc_subdir};		\
+	${MAKE} -C $${installinc_subdir}	 				\
+		MAKEFILES=$(SOURCE)$${installinc_subdir}/Makefile		\
+		SOURCE=$(SOURCE)$${installinc_subdir}/				\
+		TARGET=$(TARGET)$${installinc_subdir}/				\
+		build_installhdrs_md;
+
+build_installhdrs_md: $(BUILD_INSTALLHDRS_MD_SUBDIRS_TARGETS)
+	$(_v)${MAKE} do_installhdrs_md;
 
 #
 # Install kernel header files
@@ -133,7 +144,7 @@ exporthdrs_mi:
 	arch_config=$(INSTALL_ARCH_DEFAULT);					\
 	exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
 	[ -d $${exportinc_dir} ] || $(MKDIR) $${exportinc_dir};					\
-	${MAKE} -C $${exportinc_dir}					\
+	${MAKE} ${MAKEJOBS} -C $${exportinc_dir}			\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile				\
@@ -186,7 +197,7 @@ exporthdrs_md:
 				exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/$${rel_path};	\
 			fi;		\
 			[ -d $${exportinc_dir} ] || $(MKDIR) $${exportinc_dir};					\
-			${MAKE} -C $${exportinc_dir}					\
+			${MAKE} ${MAKEJOBS} -C $${exportinc_dir}			\
 				KERNEL_CONFIG=$${kernel_config}				\
 				ARCH_CONFIG=$${arch_config}				\
 				MAKEFILES=${SOURCE}/Makefile				\
@@ -202,36 +213,42 @@ exporthdrs_md:
 #
 do_exporthdrs_mi:
 
-build_exporthdrs_mi:
-	$(_v)_TMP_EXPINC_SUBDIRS="$(EXPINC_SUBDIRS)";			\
-	for exportinc_subdir in $${_TMP_EXPINC_SUBDIRS};		\
-	do								\
-		[ -d $${exportinc_subdir} ] || $(MKDIR) $${exportinc_subdir};				\
-		${MAKE} -C $${exportinc_subdir}				\
-			MAKEFILES=$(SOURCE)$${exportinc_subdir}/Makefile	\
-			SOURCE=$(SOURCE)$${exportinc_subdir}/		\
-			TARGET=$(TARGET)$${exportinc_subdir}/		\
-		build_exporthdrs_mi;					\
-	done;								\
-	${MAKE} ${MAKEJOBS} do_exporthdrs_mi;
+BUILD_EXPORTHDRS_MI_SUBDIRS_TARGETS = $(addprefix build_exporthdrs_mi_,$(EXPINC_SUBDIRS))
+
+.PHONY: $(BUILD_EXPORTHDRS_MI_SUBDIRS_TARGETS)
+
+$(BUILD_EXPORTHDRS_MI_SUBDIRS_TARGETS):
+	$(_v)exportinc_subdir="$(patsubst build_exporthdrs_mi_%,%,$@)";		\
+	[ -d $${exportinc_subdir} ] || $(MKDIR) $${exportinc_subdir};		\
+	${MAKE} -C $${exportinc_subdir}						\
+		MAKEFILES=$(SOURCE)$${exportinc_subdir}/Makefile		\
+		SOURCE=$(SOURCE)$${exportinc_subdir}/				\
+		TARGET=$(TARGET)$${exportinc_subdir}/				\
+		build_exporthdrs_mi;
+
+build_exporthdrs_mi: $(BUILD_EXPORTHDRS_MI_SUBDIRS_TARGETS)
+	$(_v)${MAKE} do_exporthdrs_mi;
 
 #
 # Install machine dependent kernel header files 
 #
 do_exporthdrs_md:
 
-build_exporthdrs_md:
-	$(_v)_TMP_exportinc_subdir="$($(addprefix EXPINC_SUBDIRS_, $(ARCH_CONFIG)))";	\
-	for exportinc_subdir in $${_TMP_exportinc_subdir};			\
-	do								\
-		[ -d $${exportinc_subdir} ] || $(MKDIR) $${exportinc_subdir};				\
-		${MAKE} -C $${exportinc_subdir}				\
-			MAKEFILES=$(SOURCE)$${exportinc_subdir}/Makefile	\
-			SOURCE=$(SOURCE)$${exportinc_subdir}/		\
-			TARGET=$(TARGET)$${exportinc_subdir}/		\
-		build_exporthdrs_md;					\
-	done;								\
-	${MAKE} ${MAKEJOBS} do_exporthdrs_md;
+BUILD_EXPORTHDRS_MD_SUBDIRS_TARGETS = $(addprefix build_exporthdrs_md_,$($(addprefix EXPINC_SUBDIRS_, $(ARCH_CONFIG))))
+
+.PHONY: $(BUILD_EXPORTHDRS_MD_SUBDIRS_TARGETS)
+
+$(BUILD_EXPORTHDRS_MD_SUBDIRS_TARGETS):
+	$(_v)exportinc_subdir="$(patsubst build_exporthdrs_md_%,%,$@)";		\
+	[ -d $${exportinc_subdir} ] || $(MKDIR) $${exportinc_subdir};		\
+	${MAKE} -C $${exportinc_subdir}						\
+		MAKEFILES=$(SOURCE)$${exportinc_subdir}/Makefile		\
+		SOURCE=$(SOURCE)$${exportinc_subdir}/				\
+		TARGET=$(TARGET)$${exportinc_subdir}/				\
+		build_exporthdrs_md;
+
+build_exporthdrs_md: $(BUILD_EXPORTHDRS_MD_SUBDIRS_TARGETS)
+	$(_v)${MAKE} do_exporthdrs_md;
 
 #
 # Setup pass for  all architectures for all Configuration/Architecture options
@@ -256,18 +273,21 @@ setup:
 
 do_build_setup:
 
-build_setup:
-	$(_v)_TMP_setup_subdir="$(SETUP_SUBDIRS) $($(addprefix SETUP_SUBDIRS_, $(ARCH_CONFIG)))";	\
-	for setup_subdir in $${_TMP_setup_subdir};		\
-	do							\
-	[ -d $${setup_subdir} ] || $(MKDIR) $${setup_subdir};				\
+BUILD_SETUP_SUBDIRS_TARGETS = $(addprefix build_setup_,$(SETUP_SUBDIRS) $($(addprefix SETUP_SUBDIRS_, $(ARCH_CONFIG))))
+
+.PHONY: $(BUILD_SETUP_SUBDIRS_TARGETS)
+
+$(BUILD_SETUP_SUBDIRS_TARGETS):
+	$(_v)setup_subdir="$(patsubst build_setup_%,%,$@)";	\
+	[ -d $${setup_subdir} ] || $(MKDIR) $${setup_subdir};	\
 	${MAKE} -C $${setup_subdir}				\
 		MAKEFILES=${SOURCE}/$${setup_subdir}/Makefile	\
 		SOURCE=${SOURCE}/$${setup_subdir}/		\
 		TARGET=${TARGET}/$${setup_subdir}/		\
-		build_setup;					\
-	done;							\
-	${MAKE} do_build_setup;
+		build_setup;
+
+build_setup: $(BUILD_SETUP_SUBDIRS_TARGETS)
+	$(_v)${MAKE} do_build_setup;
 
 
 #
@@ -280,7 +300,10 @@ build_setup:
 ifeq ($(RC_ProjectName),Libsyscall)
 all:
 	bsdmake -C libsyscall install
-else # xnu
+else ifeq ($(findstring libkxld,$(RC_ProjectName)),libkxld)
+all:
+	make -C libkern/kxld/ install
+else # xnu or xnu_debug
 ifeq ($(COMPONENT), .)
 all: exporthdrs
 else
@@ -315,9 +338,9 @@ endif
 			build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/$${rel_path}; \
 		fi;		\
 		[ -d $${build_subdir} ] || $(MKDIR) $${build_subdir};					\
-			${MAKE} -C $${build_subdir}					\
+			${MAKE} ${MAKEJOBS} -C $${build_subdir}				\
 				KERNEL_CONFIG=$${kernel_config}				\
-				ARCH_CONFIG=$${arch_config}			\
+				ARCH_CONFIG=$${arch_config}				\
 				MACHINE_CONFIG=$${machine_config}			\
 				MAKEFILES=${SOURCE}/Makefile 				\
 				SOURCE=${SOURCE}/					\
@@ -331,23 +354,31 @@ endif
 #
 do_build_all:
 
-build_all: 
+BUILD_ALL_SUBDIRS_TARGETS = $(addprefix build_all_,$(COMP_SUBDIRS) $($(addprefix COMP_SUBDIRS_, $(ARCH_CONFIG))))
+
+.PHONY: $(BUILD_ALL_SUBDIRS_TARGETS)
+
+$(BUILD_ALL_SUBDIRS_TARGETS):
 	$(_v)if [ $(MACHINE_CONFIG) = DEFAULT ] ; then  \
 		TARGET=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT);	\
 	else		\
 		TARGET="$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)";	\
 	fi;		\
-	_TMP_comp_subdir="$(COMP_SUBDIRS) $($(addprefix COMP_SUBDIRS_, $(ARCH_CONFIG)))";	\
-	for comp_subdir in $${_TMP_comp_subdir};			\
-	do								\
-		[ -d $${comp_subdir} ] || $(MKDIR) $${comp_subdir};				\
-		${MAKE} -C $${comp_subdir}				\
-			MAKEFILES=${SOURCE}/$${comp_subdir}/Makefile	\
-			SOURCE=${SOURCE}$${comp_subdir}/		\
-			TARGET=$${TARGET}				\
-		build_all;						\
-	done;								\
-	${MAKE} ${MAKEJOBS} INCL_MAKEDEP=TRUE TARGET=$${TARGET} do_build_all;	\
+	comp_subdir="$(patsubst build_all_%,%,$@)";		\
+	[ -d $${comp_subdir} ] || $(MKDIR) $${comp_subdir};	\
+	${MAKE} -C $${comp_subdir}				\
+		MAKEFILES=${SOURCE}/$${comp_subdir}/Makefile	\
+		SOURCE=${SOURCE}$${comp_subdir}/		\
+		TARGET=$${TARGET}				\
+		build_all;
+
+build_all: $(BUILD_ALL_SUBDIRS_TARGETS)
+	$(_v)if [ $(MACHINE_CONFIG) = DEFAULT ] ; then  \
+		TARGET=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT);	\
+	else		\
+		TARGET="$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)";	\
+	fi;		\
+	${MAKE} INCL_MAKEDEP=TRUE TARGET=$${TARGET} do_build_all;	\
 	_TMP_comp_subdir="$(CONFIG_SUBDIRS) $($(addprefix CONFIG_SUBDIRS_, $(ARCH_CONFIG)))";	\
 	for comp_subdir in $${_TMP_comp_subdir};			\
 	do								\
@@ -397,7 +428,7 @@ mach_kernel:
 			build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config};	\
 		fi;		\
 		[ -d $${build_subdir} ] || $(MKDIR) $${build_subdir};					\
-		${MAKE} -C $${build_subdir}					\
+		${MAKE} ${MAKEJOBS} -C $${build_subdir}					\
 			KERNEL_CONFIG=$${kernel_config}				\
 			ARCH_CONFIG=$${arch_config}				\
 			MACHINE_CONFIG=$${machine_config}			\
@@ -414,7 +445,7 @@ mach_kernel:
 do_build_mach_kernel:
 
 build_mach_kernel: 
-	$(_v)${MAKE} ${MAKEJOBS} do_build_mach_kernel;
+	$(_v)${MAKE} do_build_mach_kernel;
 
 
 #
@@ -430,7 +461,9 @@ build_mach_kernel:
 install: installhdrs all installman installmachinekernels
 ifeq ($(RC_ProjectName),Libsyscall)
 # nothing to do
-else # xnu
+else ifeq ($(findstring libkxld,$(RC_ProjectName)),libkxld)
+# nothing to do
+else # xnu or xnu_debug
 	$(_v)rel_path=$(shell $(RELPATH) $(SRCROOT) $(SOURCE));			\
 	machine_config=$(MACHINE_CONFIG);		\
 	for kernel_config in $(INSTALL_TYPE);				\
@@ -448,7 +481,7 @@ else # xnu
 		install_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/$${rel_path};	\
 	fi;		\
 	[ -d $${install_subdir} ] || $(MKDIR) $${install_subdir};					\
-	${MAKE} -C $${install_subdir}					\
+	${MAKE} ${MAKEJOBS} -C $${install_subdir}			\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MACHINE_CONFIG=$${machine_config}			\
@@ -457,6 +490,15 @@ else # xnu
 		build_install;						\
 	done;								\
 	done;
+ifeq ($(RC_ProjectName),xnu_debug)
+	$(_v)$(MKDIR) $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)
+	$(_v)$(MV) $(DSTROOT)/mach_kernel* $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)
+	$(_v)$(CP) $(SYMROOT)/kgmacros $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)
+	$(_v)$(CP) -r $(SYMROOT)/System.kext $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)
+	$(_v)$(CP) -r $(SYMROOT)/mach_kernel.dSYM $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)
+	$(_v)$(CP) $(SRCROOT)/config/README.DEBUG-kernel.txt $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)
+	$(_v)$(MV) $(DSTROOT)/System $(DSTROOT)/usr $(OBJROOT)/
+endif
 endif
 
 installmachinekernels:
@@ -483,7 +525,7 @@ installmachinekernels:
 			build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config};	\
 			install_file_list=mach.`printf "%s" "$${kernel_config}" | $(TR) A-Z a-z`.`printf "%s" "$${machine_config}" | $(TR) A-Z a-z`;	\
 			[ -d $${build_subdir} ] || $(MKDIR) $${build_subdir};					\
-			${MAKE} -C $${build_subdir}					\
+			${MAKE} ${MAKEJOBS} -C $${build_subdir}					\
 				INSTALL_FILE_LIST=$${install_file_list}			\
 				KERNEL_CONFIG=$${kernel_config}				\
 				ARCH_CONFIG=$${arch_config}				\
@@ -503,7 +545,11 @@ setup_build_install:
 
 do_build_install:
 
-build_install: 
+BUILD_INSTALL_SUBDIRS_TARGETS = $(addprefix build_install_,$(INST_SUBDIRS))
+
+.PHONY: $(BUILD_INSTALL_SUBDIRS_TARGETS)
+
+$(BUILD_INSTALL_SUBDIRS_TARGETS):
 	$(_v)if [ $(MACHINE_CONFIG) = DEFAULT ] ; then  \
 		TARGET=${OBJROOT}/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT);	\
 	else		\
@@ -511,24 +557,29 @@ build_install:
 	fi;		\
 	${MAKE} TARGET=$${TARGET} setup_build_install;			\
 	kernel_config=$(KERNEL_CONFIG);					\
-	for install_subdir in $(INST_SUBDIRS);				\
-	do								\
-		[ -d $${install_subdir} ] || $(MKDIR) $${install_subdir};				\
-		${MAKE} -C $${install_subdir}				\
-			KERNEL_CONFIG=$${kernel_config}			\
-			MAKEFILES=${SOURCE}/$${install_subdir}/Makefile	\
-			SOURCE=${SOURCE}$${install_subdir}/		\
-			TARGET=$${TARGET}				\
-		build_install;						\
-	done;								\
-	${MAKE} ${MAKEJOBS} TARGET=$${TARGET} do_build_install;
+	install_subdir="$(patsubst build_install_%,%,$@)";		\
+	[ -d $${install_subdir} ] || $(MKDIR) $${install_subdir};				\
+	${MAKE} -C $${install_subdir}				\
+		KERNEL_CONFIG=$${kernel_config}			\
+		MAKEFILES=${SOURCE}/$${install_subdir}/Makefile	\
+		SOURCE=${SOURCE}$${install_subdir}/		\
+		TARGET=$${TARGET}				\
+		build_install;
+
+build_install: $(BUILD_INSTALL_SUBDIRS_TARGETS)
+	$(_v)if [ $(MACHINE_CONFIG) = DEFAULT ] ; then  \
+		TARGET=${OBJROOT}/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT);	\
+	else		\
+		TARGET="$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)";	\
+	fi;		\
+	${MAKE} TARGET=$${TARGET} do_build_install;
 
 
 #
 # Install source tree
 #
 installsrc:
-	$(_v)(tar -c --mode go=r,+X --no-ignore-case --exclude .svn --exclude cscope.\* --exclude BUILD --exclude \*~ -f - .) | (cd $(SRCROOT) && tar --no-same-owner -xf -)
+	$(_v)($(TAR) -c --mode go=r,+X --no-ignore-case --exclude .svn --exclude cscope.\* --exclude BUILD --exclude \*~ -f - .) | (cd $(SRCROOT) && $(TAR) --no-same-owner -xf -)
 
 
 #
@@ -578,32 +629,36 @@ TAGS: cscope.files
 installman:
 ifeq ($(RC_ProjectName),Libsyscall)
 	bsdmake -C libsyscall install-man
-else # xnu
+else ifeq ($(findstring libkxld,$(RC_ProjectName)),libkxld)
+# nothing to do
+else # xnu or xnu_debug
 	@echo "[ $(SRCROOT) ] Installing man pages"
 	$(_v)manpath=$(DSTROOT)/$(MANDIR);   \
 	[ -d $$manpath ] || $(MKDIR) $$manpath;             \
-	${MAKE} MAKEFILES=${SOURCE}/Makefile \
+	${MAKE} ${MAKEJOBS} MAKEFILES=${SOURCE}/Makefile \
 		SOURCE=${SOURCE}/ \
 		TARGET=${DSTROOT}/ \
 		build_installman
-	${SOURCE}/config/compress-man-pages.pl ${DSTROOT}/${MANDIR}
+	${SRCROOT}/config/compress-man-pages.pl ${DSTROOT}/${MANDIR}
 endif
 
 do_installman:
 
-build_installman:
-	@echo "[ $(SOURCE) ] make build_installman"
-	$(_v)if [ -n "$(strip $(INSTMAN_SUBDIRS))" ]; then \
-		for installman_subdir in $(INSTMAN_SUBDIRS); do \
-			${MAKE} -C $${installman_subdir} -r \
-				MAKEFILES=$(SOURCE)$${installman_subdir}/Makefile \
-				SOURCE=$(SOURCE)$${installman_subdir}/ \
-				TARGET=$(TARGET)$${installman_subdir}/ \
-				build_installman; \
-		done; \
-	fi; \
-	if [ -n "$(strip $(INSTALL_MAN_LIST))" ]; then \
-		${MAKE} ${MAKEJOBS} do_installman; \
+BUILD_INSTALLMAN_SUBDIRS_TARGETS = $(addprefix build_installman_,$(INSTMAN_SUBDIRS))
+
+.PHONY: $(BUILD_INSTALLMAN_SUBDIRS_TARGETS)
+
+$(BUILD_INSTALLMAN_SUBDIRS_TARGETS):
+	$(_v)installman_subdir="$(patsubst build_installman_%,%,$@)";	\
+	${MAKE} -C $${installman_subdir} -r 	 				\
+		MAKEFILES=$(SOURCE)$${installman_subdir}/Makefile 		\
+		SOURCE=$(SOURCE)$${installman_subdir}/ 				\
+		TARGET=$(TARGET)$${installman_subdir}/ 				\
+		build_installman; 
+
+build_installman: $(BUILD_INSTALLMAN_SUBDIRS_TARGETS)
+	$(_v)if [ -n "$(strip $(INSTALL_MAN_LIST))" ]; then \
+		${MAKE} do_installman; \
 	fi
 
 # vim: set ft=make:

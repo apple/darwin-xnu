@@ -72,6 +72,7 @@
 
 #include <pexpert/pexpert.h>
 
+#define etherbroadcastaddr	fugly
 #include <net/if.h>
 #include <net/route.h>
 #include <net/if_llc.h>
@@ -82,6 +83,7 @@
 #include <netinet/in.h>	/* For M_LOOP */
 #include <net/kpi_interface.h>
 #include <net/kpi_protocol.h>
+#undef etherbroadcastaddr
 
 /*
 #if INET
@@ -123,8 +125,8 @@ SYSCTL_NODE(_net_link, IFT_ETHER, ether, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Ethernet
 
 struct en_desc {
 	u_int16_t	type;			/* Type of protocol stored in data */
-	u_long 		protocol_family;	/* Protocol family */
-	u_long		data[2];		/* Protocol data */
+	u_int32_t 		protocol_family;	/* Protocol family */
+	u_int32_t		data[2];		/* Protocol data */
 };
 
 /* descriptors are allocated in blocks of ETHER_DESC_BLK_SIZE */
@@ -139,9 +141,9 @@ struct en_desc {
  */
 
 struct ether_desc_blk_str {
-	u_long  n_max_used;
-	u_long	n_count;
-	u_long	n_used;
+	u_int32_t  n_max_used;
+	u_int32_t	n_count;
+	u_int32_t	n_used;
 	struct en_desc  block_ptr[1];
 };
 /* Size of the above struct before the array of struct en_desc */
@@ -174,7 +176,7 @@ ether_del_proto(
 	protocol_family_t protocol_family)
 {
 	struct ether_desc_blk_str *desc_blk = (struct ether_desc_blk_str *)ifp->family_cookie;
-	u_long	current = 0;
+	u_int32_t	current = 0;
 	int found = 0;
 	
 	if (desc_blk == NULL)
@@ -265,9 +267,9 @@ ether_add_proto_internal(
 	// Check for case where all of the descriptor blocks are in use
 	if (desc_blk == NULL || desc_blk->n_used == desc_blk->n_count) {
 		struct ether_desc_blk_str *tmp;
-		u_long	new_count = ETHER_DESC_BLK_SIZE;
-		u_long	new_size;
-		u_long	old_size = 0;
+		u_int32_t	new_count = ETHER_DESC_BLK_SIZE;
+		u_int32_t	new_size;
+		u_int32_t	old_size = 0;
 		
 		i = 0;
 		
@@ -293,7 +295,7 @@ ether_add_proto_internal(
 			FREE(desc_blk, M_IFADDR);
 		}
 		desc_blk = tmp;
-		ifp->family_cookie = (u_long)desc_blk;
+		ifp->family_cookie = (uintptr_t)desc_blk;
 		desc_blk->n_count = new_count;
 	}
 	else {
@@ -373,9 +375,9 @@ ether_demux(
 	u_short			ether_type = eh->ether_type;
 	u_int16_t		type;
 	u_int8_t		*data;
-	u_long			i = 0;
+	u_int32_t			i = 0;
 	struct ether_desc_blk_str *desc_blk = (struct ether_desc_blk_str *)ifp->family_cookie;
-	u_long			maxd = desc_blk ? desc_blk->n_max_used : 0;
+	u_int32_t			maxd = desc_blk ? desc_blk->n_max_used : 0;
 	struct en_desc	*ed = desc_blk ? desc_blk->block_ptr : NULL;
 	u_int32_t		extProto1 = 0;
 	u_int32_t		extProto2 = 0;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -163,6 +163,8 @@ in6_pcblookup_local_and_cleanup(
 		lck_mtx_lock(inp->inpcb_mtx);
 		
 		if (so->so_usecount == 0) {
+			if (inp->inp_state != INPCB_STATE_DEAD)
+				in6_pcbdetach(inp);
 			in_pcbdispose(inp);
 			inp = NULL;
 		}
@@ -260,7 +262,7 @@ in6_pcbbind(
 			struct inpcb *t;
 
 			/* GROSS */
-			if (ntohs(lport) < IPV6PORT_RESERVED && p &&
+			if (ntohs(lport) < IPV6PORT_RESERVED &&
                             ((so->so_state & SS_PRIV) == 0)) {
 				lck_rw_done(pcbinfo->mtx);
 				socket_lock(so, 0);
@@ -423,6 +425,7 @@ in6_pcbladdr(
 		 */
 	}
 
+	/* XXX: what is the point in doing this? */
 	if (inp->in6p_route.ro_rt)
 		ifp = inp->in6p_route.ro_rt->rt_ifp;
 
@@ -491,227 +494,6 @@ in6_pcbconnect(inp, nam, p)
 	return (0);
 }
 
-#if 0
-/*
- * Return an IPv6 address, which is the most appropriate for given
- * destination and user specified options.
- * If necessary, this function lookups the routing table and return
- * an entry to the caller for later use.
- */
-struct in6_addr *
-in6_selectsrc(
-	struct sockaddr_in6 *dstsock,
-	struct ip6_pktopts *opts,
-	struct ip6_moptions *mopts,
-	struct route_in6 *ro,
-	struct in6_addr *laddr,
-	struct in6_addr *src_storage,
-	int *errorp)
-{
-	struct in6_addr *dst;
-	struct in6_ifaddr *ia6 = 0;
-	struct in6_pktinfo *pi = NULL;
-
-	dst = &dstsock->sin6_addr;
-	*errorp = 0;
-
-	/*
-	 * If the source address is explicitly specified by the caller,
-	 * use it.
-	 */
-	if (opts && (pi = opts->ip6po_pktinfo) &&
-	    !IN6_IS_ADDR_UNSPECIFIED(&pi->ipi6_addr))
-		return(&pi->ipi6_addr);
-
-	/*
-	 * If the source address is not specified but the socket(if any)
-	 * is already bound, use the bound address.
-	 */
-	if (laddr && !IN6_IS_ADDR_UNSPECIFIED(laddr))
-		return(laddr);
-
-	/*
-	 * If the caller doesn't specify the source address but
-	 * the outgoing interface, use an address associated with
-	 * the interface.
-	 */
-	if (pi && pi->ipi6_ifindex) {
-		/* XXX boundary check is assumed to be already done. */
-		ia6 = in6_ifawithscope(ifindex2ifnet[pi->ipi6_ifindex],
-				       dst);
-		if (ia6 == 0) {
-			*errorp = EADDRNOTAVAIL;
-			return(0);
-		}
-		*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
-		ifafree(&ia6->ia_ifa);
-		return(src_storage);
-	}
-
-	/*
-	 * If the destination address is a link-local unicast address or
-	 * a multicast address, and if the outgoing interface is specified
-	 * by the sin6_scope_id filed, use an address associated with the
-	 * interface.
-	 * XXX: We're now trying to define more specific semantics of
-	 *      sin6_scope_id field, so this part will be rewritten in
-	 *      the near future.
-	 */
-	if ((IN6_IS_ADDR_LINKLOCAL(dst) || IN6_IS_ADDR_MULTICAST(dst)) &&
-	    dstsock->sin6_scope_id) {
-		/*
-		 * I'm not sure if boundary check for scope_id is done
-		 * somewhere...
-		 */
-		if (dstsock->sin6_scope_id < 0 ||
-		    if_index < dstsock->sin6_scope_id) {
-			*errorp = ENXIO; /* XXX: better error? */
-			return(0);
-		}
-		ia6 = in6_ifawithscope(ifindex2ifnet[dstsock->sin6_scope_id],
-				       dst);
-		if (ia6 == 0) {
-			*errorp = EADDRNOTAVAIL;
-			return(0);
-		}
-		*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
-		ifafree(&ia6->ia_ifa);
-		return(src_storage);
-	}
-
-	/*
-	 * If the destination address is a multicast address and
-	 * the outgoing interface for the address is specified
-	 * by the caller, use an address associated with the interface.
-	 * There is a sanity check here; if the destination has node-local
-	 * scope, the outgoing interfacde should be a loopback address.
-	 * Even if the outgoing interface is not specified, we also
-	 * choose a loopback interface as the outgoing interface.
-	 */
-	if (IN6_IS_ADDR_MULTICAST(dst)) {
-		struct ifnet *ifp = mopts ? mopts->im6o_multicast_ifp : NULL;
-
-		if (ifp == NULL && IN6_IS_ADDR_MC_NODELOCAL(dst)) {
-			ifp = lo_ifp;
-		}
-
-		if (ifp) {
-			ia6 = in6_ifawithscope(ifp, dst);
-			if (ia6 == 0) {
-				*errorp = EADDRNOTAVAIL;
-				return(0);
-			}
-			*src_storage = ia6->ia_addr.sin6_addr;
-			ifafree(&ia6->ia_ifa);
-			return(src_storage);
-		}
-	}
-
-	/*
-	 * If the next hop address for the packet is specified
-	 * by caller, use an address associated with the route
-	 * to the next hop.
-	 */
-	{
-		struct sockaddr_in6 *sin6_next;
-		struct rtentry *rt;
-
-		if (opts && opts->ip6po_nexthop) {
-			sin6_next = satosin6(opts->ip6po_nexthop);
-			rt = nd6_lookup(&sin6_next->sin6_addr, 1, NULL, 0);
-			if (rt) {
-				ia6 = in6_ifawithscope(rt->rt_ifp, dst);
-				if (ia6 == 0) {
-					ifaref(&rt->rt_ifa);
-					ia6 = ifatoia6(rt->rt_ifa);
-				}
-			}
-			if (ia6 == 0) {
-				*errorp = EADDRNOTAVAIL;
-				return(0);
-			}
-			*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
-			ifaref(&rt->rt_ifa);
-			return(src_storage);
-		}
-	}
-
-	/*
-	 * If route is known or can be allocated now,
-	 * our src addr is taken from the i/f, else punt.
-	 */
-	if (ro) {
-		if (ro->ro_rt &&
-		    !IN6_ARE_ADDR_EQUAL(&satosin6(&ro->ro_dst)->sin6_addr, dst)) {
-			rtfree(ro->ro_rt);
-			ro->ro_rt = (struct rtentry *)0;
-		}
-		if (ro->ro_rt == (struct rtentry *)0 ||
-		    ro->ro_rt->rt_ifp == (struct ifnet *)0) {
-			struct sockaddr_in6 *dst6;
-
-			/* No route yet, so try to acquire one */
-			bzero(&ro->ro_dst, sizeof(struct sockaddr_in6));
-			dst6 = (struct sockaddr_in6 *)&ro->ro_dst;
-			dst6->sin6_family = AF_INET6;
-			dst6->sin6_len = sizeof(struct sockaddr_in6);
-			dst6->sin6_addr = *dst;
-			if (IN6_IS_ADDR_MULTICAST(dst)) {
-				ro->ro_rt =
-				    rtalloc1(&((struct route *)ro)->ro_dst, 0, 0UL);
-			} else {
-				rtalloc((struct route *)ro);
-			}
-		}
-
-		/*
-		 * in_pcbconnect() checks out IFF_LOOPBACK to skip using
-		 * the address. But we don't know why it does so.
-		 * It is necessary to ensure the scope even for lo0
-		 * so doesn't check out IFF_LOOPBACK.
-		 */
-
-		if (ro->ro_rt) {
-			ia6 = in6_ifawithscope(ro->ro_rt->rt_ifa->ifa_ifp, dst);
-			if (ia6 == 0) { /* xxx scope error ?*/
-				ifaref(ro->ro_rt->rt_ifa);
-				ia6 = ifatoia6(ro->ro_rt->rt_ifa);
-			}
-		}
-		if (ia6 == 0) {
-			*errorp = EHOSTUNREACH;	/* no route */
-			return(0);
-		}
-		*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
-		ifaref(&rt->rt_ifa);
-		return(src_storage);
-	}
-
-	*errorp = EADDRNOTAVAIL;
-	return(0);
-}
-
-/*
- * Default hop limit selection. The precedence is as follows:
- * 1. Hoplimit valued specified via ioctl.
- * 2. (If the outgoing interface is detected) the current
- *     hop limit of the interface specified by router advertisement.
- * 3. The system default hoplimit.
-*/
-int
-in6_selecthlim(
-	struct in6pcb *in6p,
-	struct ifnet *ifp)
-{
-	if (in6p && in6p->in6p_hops >= 0)
-		return(in6p->in6p_hops);
-	else if (ifp)
-		return(nd_ifinfo[ifp->if_index].chlim);
-	else
-		return(ip6_defhlim);
-}
-#endif
-
 void
 in6_pcbdisconnect(inp)
 	struct inpcb *inp;
@@ -779,6 +561,8 @@ in6_sockaddr(port, addr_p)
 	struct sockaddr_in6 *sin6;
 
 	MALLOC(sin6, struct sockaddr_in6 *, sizeof *sin6, M_SONAME, M_WAITOK);
+	if (sin6 == NULL)
+		return NULL;
 	bzero(sin6, sizeof *sin6);
 	sin6->sin6_family = AF_INET6;
 	sin6->sin6_len = sizeof(*sin6);
@@ -810,6 +594,8 @@ in6_v4mapsin6_sockaddr(port, addr_p)
 
 	MALLOC(sin6_p, struct sockaddr_in6 *, sizeof *sin6_p, M_SONAME,
 		M_WAITOK);
+	if (sin6_p == NULL)
+		return NULL;
 	in6_sin_2_v4mapsin6(&sin, sin6_p);
 
 	return (struct sockaddr *)sin6_p;
@@ -842,6 +628,8 @@ in6_setsockaddr(so, nam)
 	addr = inp->in6p_laddr;
 
 	*nam = in6_sockaddr(port, &addr);
+	if (*nam == NULL)
+		return ENOBUFS;
 	return 0;
 }
 
@@ -862,6 +650,8 @@ in6_setpeeraddr(so, nam)
 	addr = inp->in6p_faddr;
 
 	*nam = in6_sockaddr(port, &addr);
+	if (*nam == NULL)
+		return ENOBUFS;
 	return 0;
 }
 
@@ -876,11 +666,11 @@ in6_mapped_sockaddr(struct socket *so, struct sockaddr **nam)
 	if (inp->inp_vflag & INP_IPV4) {
 		error = in_setsockaddr(so, nam);
 		if (error == 0)
-			in6_sin_2_v4mapsin6_in_sock(nam);
-	} else
-	/* scope issues will be handled in in6_setsockaddr(). */
-	error = in6_setsockaddr(so, nam);
-
+			error = in6_sin_2_v4mapsin6_in_sock(nam);
+	} else {
+		/* scope issues will be handled in in6_setsockaddr(). */
+		error = in6_setsockaddr(so, nam);
+	}
 	return error;
 }
 
@@ -895,11 +685,11 @@ in6_mapped_peeraddr(struct socket *so, struct sockaddr **nam)
 	if (inp->inp_vflag & INP_IPV4) {
 		error = in_setpeeraddr(so, nam);
 		if (error == 0)
-			in6_sin_2_v4mapsin6_in_sock(nam);
-	} else
-	/* scope issues will be handled in in6_setpeeraddr(). */
-	error = in6_setpeeraddr(so, nam);
-
+			error = in6_sin_2_v4mapsin6_in_sock(nam);
+	} else {
+		/* scope issues will be handled in in6_setpeeraddr(). */
+		error = in6_setpeeraddr(so, nam);
+	}
 	return error;
 }
 
@@ -1149,25 +939,32 @@ in6_losing(in6p)
 	struct rt_addrinfo info;
 
 	if ((rt = in6p->in6p_route.ro_rt) != NULL) {
-		in6p->in6p_route.ro_rt = 0;
+		in6p->in6p_route.ro_rt = NULL;
+		RT_LOCK(rt);
 		bzero((caddr_t)&info, sizeof(info));
 		info.rti_info[RTAX_DST] =
 			(struct sockaddr *)&in6p->in6p_route.ro_dst;
 		info.rti_info[RTAX_GATEWAY] = rt->rt_gateway;
 		info.rti_info[RTAX_NETMASK] = rt_mask(rt);
-		lck_mtx_lock(rt_mtx);
 		rt_missmsg(RTM_LOSING, &info, rt->rt_flags, 0);
-		if (rt->rt_flags & RTF_DYNAMIC)
-			(void)rtrequest_locked(RTM_DELETE, rt_key(rt),
-					rt->rt_gateway, rt_mask(rt), rt->rt_flags,
-					(struct rtentry **)0);
-		else
+		if (rt->rt_flags & RTF_DYNAMIC) {
+			/*
+			 * Prevent another thread from modifying rt_key,
+			 * rt_gateway via rt_setgate() after the rt_lock
+			 * is dropped by marking the route as defunct.
+			 */
+			rt->rt_flags |= RTF_CONDEMNED;
+			RT_UNLOCK(rt);
+			(void) rtrequest(RTM_DELETE, rt_key(rt),
+			    rt->rt_gateway, rt_mask(rt), rt->rt_flags, NULL);
+		} else {
+			RT_UNLOCK(rt);
+		}
 		/*
 		 * A new route can be allocated
 		 * the next time output is attempted.
 		 */
-			rtfree_locked(rt);
-		lck_mtx_unlock(rt_mtx);
+		rtfree(rt);
 	}
 }
 

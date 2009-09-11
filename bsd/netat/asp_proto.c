@@ -255,7 +255,7 @@ asp_close(gref)
 	return 0;
 } /* asp_close */
 
-#ifdef DEBUG
+#if DEBUG
 
 static const char *aspStateStr(int);
 

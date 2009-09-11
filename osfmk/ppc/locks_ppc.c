@@ -1449,7 +1449,7 @@ lck_rw_ext_backtrace(
 	while (frame < LCK_FRAMES_MAX) {
 		stackptr_prev = stackptr;
 		stackptr = ( unsigned int *)*stackptr;
-		if ( (((unsigned int)stackptr_prev) ^ ((unsigned int)stackptr)) > 8192)
+		if ( (((unsigned int)stackptr_prev) - ((unsigned int)stackptr)) > 8192)
 			break;
 		lck->lck_rw_deb.stack[frame] = *(stackptr+2); 
 		frame++;
@@ -2168,36 +2168,6 @@ void lck_mtx_ext_init(
 	lck_attr_t	*attr);
 
 /*
- *	Routine:	mutex_alloc
- *	Function:
- *		Allocate a mutex for external users who cannot
- *		hard-code the structure definition into their
- *		objects.
- *		For now just use kalloc, but a zone is probably
- *		warranted.
- */
-mutex_t *
-mutex_alloc(
-	unsigned short	tag)
-{
-	mutex_t		*m;
-
-	if ((m = (mutex_t *)kalloc(sizeof(mutex_t))) != 0)
-	  mutex_init(m, tag);
-	return(m);
-}
-
-/*
- *	Routine:	mutex_free
- */
-void
-mutex_free(
-	mutex_t	*m)
-{
-	kfree((void *)m, sizeof(mutex_t));
-}
-
-/*
  *      Routine:        lck_mtx_alloc_init
  */
 lck_mtx_t *
@@ -2335,13 +2305,9 @@ lck_mtx_destroy(
  */
 
 const char *simple_lock_labels = "ENTRY    ILK THREAD   DURATION CALLER";
-const char *mutex_labels = "ENTRY    LOCKED WAITERS   THREAD CALLER";
 
 void	db_print_simple_lock(
 			simple_lock_t	addr);
-
-void	db_print_mutex(
-			mutex_t		* addr);
 
 void
 db_show_one_simple_lock (db_expr_t addr, boolean_t have_addr,
@@ -2373,37 +2339,6 @@ db_print_simple_lock (
 	db_printf (" %08x ", addr->debug.duration[1]);
 	db_printsym ((int)addr->debug.lock_pc, DB_STGY_ANY);
 #endif	/* USLOCK_DEBUG */
-	db_printf ("\n");
-}
-
-void
-db_show_one_mutex (db_expr_t addr, boolean_t have_addr,
-		   __unused db_expr_t count,
-		   __unused char *modif)
-{
-	mutex_t		* maddr = (mutex_t *)(unsigned long)addr;
-
-	if (maddr == (mutex_t *)0 || !have_addr)
-		db_error ("No mutex\n");
-#if	MACH_LDEBUG
-	else if (maddr->lck_mtx_deb.type != MUTEX_TAG)
-		db_error ("Not a mutex\n");
-#endif	/* MACH_LDEBUG */
-
-	db_printf ("%s\n", mutex_labels);
-	db_print_mutex (maddr);
-}
-
-void
-db_print_mutex (
-	mutex_t		* addr)
-{
-	db_printf ("%08x %6d %7d",
-		   addr, *addr, addr->lck_mtx.lck_mtx_waiters);
-#if	MACH_LDEBUG
-	db_printf (" %08x ", addr->lck_mtx_deb.thread);
-	db_printsym (addr->lck_mtx_deb.stack[0], DB_STGY_ANY);
-#endif	/* MACH_LDEBUG */
 	db_printf ("\n");
 }
 

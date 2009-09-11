@@ -3,11 +3,9 @@
 #ifndef _IP_FW_COMPAT_H_
 #define _IP_FW_COMPAT_H_
 
-#if !__LP64__
-
 /* prototypes */
-void	ipfw_convert_from_latest(struct ip_fw *curr_rule, void *old_rule, u_int32_t api_version);
-int		ipfw_convert_to_latest(struct sockopt *sopt, struct ip_fw *rule, int api_version);
+void	ipfw_convert_from_latest(struct ip_fw *curr_rule, void *old_rule, u_int32_t api_version, int is64user);
+int		ipfw_convert_to_latest(struct sockopt *sopt, struct ip_fw *rule, int api_version, int is64user);
 int	ipfw_get_command_and_version(struct sockopt *sopt, int *command, u_int32_t *api_version);
 
 
@@ -46,6 +44,7 @@ union ip_fw_if_compat {
  * fw_flg and fw_n*p are stored in host byte order (of course).
  * Port numbers are stored in HOST byte order.
  */
+
 
 struct ip_fw_compat {
 	u_int32_t version;		/* Version of this structure.  Should always be */
@@ -115,6 +114,7 @@ struct ip_fw_chain_compat {
 /*
  * dynamic ipfw rule
  */
+ 
 struct ipfw_dyn_rule_compat {
     struct ipfw_dyn_rule *next ;
 
@@ -128,6 +128,128 @@ struct ipfw_dyn_rule_compat {
     u_int32_t state ;			/* state of this rule (typ. a   */
 					/* combination of TCP flags)	*/
 } ;
+
+#ifdef KERNEL
+#pragma pack(4)
+
+struct ip_fw_compat_32 {
+	u_int32_t version;		/* Version of this structure.  Should always be */
+							/* set to IP_FW_CURRENT_API_VERSION by clients. */
+	user32_addr_t context;	/* Context that is usable by user processes to */
+							/* identify this rule. */
+    u_int64_t fw_pcnt,fw_bcnt;		/* Packet and byte counters */
+    struct in_addr fw_src, fw_dst;	/* Source and destination IP addr */
+    struct in_addr fw_smsk, fw_dmsk;/* Mask for src and dest IP addr */
+    u_short fw_number;		/* Rule number */
+    u_int fw_flg;			/* Flags word */
+#define IP_FW_MAX_PORTS_COMPAT	10		/* A reasonable maximum */
+	union {
+		u_short fw_pts[IP_FW_MAX_PORTS_COMPAT];	/* Array of port numbers to match */
+#define IP_FW_ICMPTYPES_MAX_COMPAT	128
+#define IP_FW_ICMPTYPES_DIM_COMPAT	(IP_FW_ICMPTYPES_MAX_COMPAT / (sizeof(unsigned) * 8))
+		unsigned fw_icmptypes[IP_FW_ICMPTYPES_DIM_COMPAT]; /* ICMP types bitmap */
+	} fw_uar_compat;
+    u_int fw_ipflg;			/* IP flags word */
+    u_char fw_ipopt,fw_ipnopt;		/* IP options set/unset */
+    u_char fw_tcpopt,fw_tcpnopt;	/* TCP options set/unset */
+    u_char fw_tcpf,fw_tcpnf;		/* TCP flags set/unset */
+    u_int32_t timestamp;			/* timestamp (tv_sec) of last match */
+    union ip_fw_if_compat fw_in_if, fw_out_if;	/* Incoming and outgoing interfaces */
+    union {
+		u_short fu_divert_port;		/* Divert/tee port (options IPDIVERT) */
+		u_short fu_pipe_nr;		/* queue number (option DUMMYNET) */
+		u_short fu_skipto_rule;		/* SKIPTO command rule number */
+		u_short fu_reject_code;		/* REJECT response code */
+		struct sockaddr_in fu_fwd_ip;
+    } fw_un_compat;
+    u_char fw_prot;			/* IP protocol */
+	/*
+	 * N'of src ports and # of dst ports in ports array (dst ports
+	 * follow src ports; max of 10 ports in all; count of 0 means
+	 * match all ports)
+	 */
+    u_char fw_nports;
+    user32_addr_t pipe_ptr;                    /* flow_set ptr for dummynet pipe */
+    user32_addr_t next_rule_ptr ;              /* next rule in case of match */
+    uid_t fw_uid;			/* uid to match */
+    int fw_logamount;			/* amount to log */
+    u_int64_t fw_loghighest;		/* highest number packet to log */
+};
+#pragma pack()
+
+struct ip_fw_compat_64 {
+	u_int32_t version;		/* Version of this structure.  Should always be */
+							/* set to IP_FW_CURRENT_API_VERSION by clients. */
+	user64_addr_t context;			/* Context that is usable by user processes to */
+									/* identify this rule. */
+    u_int64_t fw_pcnt,fw_bcnt;		/* Packet and byte counters */
+    struct in_addr fw_src, fw_dst;	/* Source and destination IP addr */
+    struct in_addr fw_smsk, fw_dmsk;/* Mask for src and dest IP addr */
+    u_short fw_number;				/* Rule number */
+    u_int fw_flg;					/* Flags word */
+#define IP_FW_MAX_PORTS_COMPAT	10		/* A reasonable maximum */
+	union {
+		u_short fw_pts[IP_FW_MAX_PORTS_COMPAT];	/* Array of port numbers to match */
+#define IP_FW_ICMPTYPES_MAX_COMPAT	128
+#define IP_FW_ICMPTYPES_DIM_COMPAT	(IP_FW_ICMPTYPES_MAX_COMPAT / (sizeof(unsigned) * 8))
+		unsigned fw_icmptypes[IP_FW_ICMPTYPES_DIM_COMPAT]; /* ICMP types bitmap */
+	} fw_uar_compat;
+    u_int fw_ipflg;					/* IP flags word */
+    u_char fw_ipopt,fw_ipnopt;		/* IP options set/unset */
+    u_char fw_tcpopt,fw_tcpnopt;	/* TCP options set/unset */
+    u_char fw_tcpf,fw_tcpnf;		/* TCP flags set/unset */
+    u_int64_t timestamp;			/* timestamp (tv_sec) of last match */
+    union ip_fw_if_compat fw_in_if, fw_out_if;	/* Incoming and outgoing interfaces */
+    union {
+		u_short fu_divert_port;		/* Divert/tee port (options IPDIVERT) */
+		u_short fu_pipe_nr;			/* queue number (option DUMMYNET) */
+		u_short fu_skipto_rule;		/* SKIPTO command rule number */
+		u_short fu_reject_code;		/* REJECT response code */
+		struct sockaddr_in fu_fwd_ip;
+    } fw_un_compat;
+    u_char fw_prot;			/* IP protocol */
+	/*
+	 * N'of src ports and # of dst ports in ports array (dst ports
+	 * follow src ports; max of 10 ports in all; count of 0 means
+	 * match all ports)
+	 */
+    u_char fw_nports;
+    user64_addr_t pipe_ptr;                    /* flow_set ptr for dummynet pipe */
+    user64_addr_t next_rule_ptr ;              /* next rule in case of match */
+    uid_t fw_uid;								/* uid to match */
+    int fw_logamount;							/* amount to log */
+    u_int64_t fw_loghighest;					/* highest number packet to log */
+};
+
+struct ipfw_dyn_rule_compat_32 {
+    user32_addr_t next ;
+
+    struct ipfw_flow_id id ;
+    struct ipfw_flow_id mask ;
+    user32_addr_t chain ;		/* pointer to parent rule	*/
+    u_int32_t type ;			/* rule type			*/
+    u_int32_t expire ;			/* expire time			*/
+    u_int64_t pcnt, bcnt;		/* match counters		*/
+    u_int32_t bucket ;			/* which bucket in hash table	*/
+    u_int32_t state ;			/* state of this rule (typ. a   */
+					/* combination of TCP flags)	*/
+} ;
+
+struct ipfw_dyn_rule_compat_64 {
+    user64_addr_t next ;
+
+    struct ipfw_flow_id id ;
+    struct ipfw_flow_id mask ;
+    user64_addr_t chain ;		/* pointer to parent rule	*/
+    u_int32_t type ;			/* rule type			*/
+    u_int32_t expire ;			/* expire time			*/
+    u_int64_t pcnt, bcnt;		/* match counters		*/
+    u_int32_t bucket ;			/* which bucket in hash table	*/
+    u_int32_t state ;			/* state of this rule (typ. a   */
+					/* combination of TCP flags)	*/
+} ;
+#endif			/* KERNEL */
+
 
 #define IP_FW_GETNSRCP_COMPAT(rule)		((rule)->fw_nports & 0x0f)
 #define IP_FW_SETNSRCP_COMPAT(rule, n)		do {				\
@@ -372,5 +494,4 @@ struct ip_old_fw {
  */
 #define IP_OLD_FW_TCPF_ESTAB	0x40
 
-#endif /* !__LP64__ */
 #endif /* _IP_FW_COMPAT_H_ */

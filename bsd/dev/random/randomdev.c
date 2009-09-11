@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2009 Apple, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -26,6 +26,17 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+/*
+	WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING!
+	
+	THIS FILE IS NEEDED TO PASS FIPS ACCEPTANCE FOR THE RANDOM NUMBER GENERATOR.
+	IF YOU ALTER IT IN ANY WAY, WE WILL NEED TO GO THOUGH FIPS ACCEPTANCE AGAIN,
+	AN OPERATION THAT IS VERY EXPENSIVE AND TIME CONSUMING.  IN OTHER WORDS,
+	DON'T MESS WITH THIS FILE.
+
+	WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING!
+*/
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
@@ -43,10 +54,13 @@
 
 #include <dev/random/randomdev.h>
 #include <dev/random/YarrowCoreLib/include/yarrow.h>
-#include <libkern/crypto/sha1.h>
+
+#include <libkern/OSByteOrder.h>
 
 #include <mach/mach_time.h>
 #include <machine/machine_routines.h>
+
+#include "fips_sha1.h"
 
 #define RANDOM_MAJOR  -1 /* let the kernel pick the device number */
 
@@ -83,17 +97,13 @@ static lck_attr_t *gYarrowAttr;
 static lck_grp_attr_t *gYarrowGrpAttr;
 static lck_mtx_t *gYarrowMutex = 0;
 
-void CheckReseed(void);
-
 #define RESEED_TICKS 50 /* how long a reseed operation can take */
 
 
-enum {kBSizeInBits = 160}; // MUST be a multiple of 32!!!
-enum {kBSizeInBytes = kBSizeInBits / 8};
-typedef u_int32_t BlockWord;
-enum {kWordSizeInBits = 32};
-enum {kBSize = 5};
+typedef u_int8_t BlockWord;
+enum {kBSize = 20};
 typedef BlockWord Block[kBSize];
+enum {kBlockSize = sizeof(Block)};
 
 /* define prototypes to keep the compiler happy... */
 
@@ -112,26 +122,26 @@ u_int32_t CalculateCRC(u_int8_t* buffer, size_t length);
 void
 add_blocks(Block a, Block b, BlockWord carry)
 {
-	int i = kBSize;
-	while (--i >= 0)
+	int i = kBlockSize - 1;
+	while (i >= 0)
 	{
-		u_int64_t c = (u_int64_t)carry +
-					  (u_int64_t)a[i] +
-					  (u_int64_t)b[i];
-		a[i] = c & ((1LL << kWordSizeInBits) - 1);
-		carry = c >> kWordSizeInBits;
+		u_int32_t c = (u_int32_t)carry +
+					  (u_int32_t)a[i] +
+					  (u_int32_t)b[i];
+		a[i] = c & 0xff;
+		carry = c >> 8;
+		i -= 1;
 	}
 }
 
 
 
-struct sha1_ctxt g_sha1_ctx;
-char zeros[(512 - kBSizeInBits) / 8];
-Block g_xkey;
-Block g_random_data;
-int g_bytes_used;
-unsigned char g_SelfTestInitialized = 0;
-u_int32_t gLastBlockChecksum;
+static char zeros[(512 - kBSize * 8) / 8];
+static Block g_xkey;
+static Block g_random_data;
+static int g_bytes_used;
+static unsigned char g_SelfTestInitialized = 0;
+static u_int32_t gLastBlockChecksum;
 
 static const u_int32_t g_crc_table[] =
 {
@@ -196,6 +206,8 @@ u_int32_t CalculateCRC(u_int8_t* buffer, size_t length)
 void
 random_block(Block b, int addOptional)
 {
+	SHA1_CTX sha1_ctx;
+	
 	int repeatCount = 0;
 	do
 	{
@@ -203,6 +215,7 @@ random_block(Block b, int addOptional)
 		
 		if (addOptional)
 		{
+			// create an xSeed to add.
 			Block xSeed;
 			prngOutput (gPrngRef, (BYTE*) &xSeed, sizeof (xSeed));
 			
@@ -210,17 +223,33 @@ random_block(Block b, int addOptional)
 			add_blocks (g_xkey, xSeed, 0);
 		}
 		
+		// initialize the value of H
+		FIPS_SHA1Init(&sha1_ctx);
+		
+		// to stay compatible with the FIPS specification, we need to flip the bytes in
+		// g_xkey to little endian byte order.  In our case, this makes exactly no difference
+		// (random is random), but we need to do it anyway to keep FIPS happy
+		
 		// compute "G"
-		SHA1Update (&g_sha1_ctx, (const u_int8_t *) &g_xkey, sizeof (g_xkey));
+		FIPS_SHA1Update(&sha1_ctx, g_xkey, kBlockSize);
 		
 		// add zeros to fill the internal SHA-1 buffer
-		SHA1Update (&g_sha1_ctx, (const u_int8_t *)zeros, sizeof (zeros));
+		FIPS_SHA1Update (&sha1_ctx, (const u_int8_t *)zeros, sizeof (zeros));
 		
-		// write the resulting block
-		memmove(b, g_sha1_ctx.h.b8, sizeof (Block));
+		// we have to do a byte order correction here because the sha1 math is being done internally
+		// as u_int32_t, not a stream of bytes.  Since we maintain our data as a byte stream, we need
+		// to convert
+		
+		u_int32_t* finger = (u_int32_t*) b;
+		
+		unsigned j;
+		for (j = 0; j < kBlockSize / sizeof (u_int32_t); ++j)
+		{
+			*finger++ = OSSwapHostToBigInt32(sha1_ctx.h.b32[j]);
+		}		
 		
 		// calculate the CRC-32 of the block
-		u_int32_t new_crc = CalculateCRC(g_sha1_ctx.h.b8, sizeof (Block));
+		u_int32_t new_crc = CalculateCRC(sha1_ctx.h.b8, sizeof (Block));
 		
 		// make sure we don't repeat
 		int cmp = new_crc == gLastBlockChecksum;
@@ -276,7 +305,6 @@ PreliminarySetup(void)
 	/* clear the error flag, reads and write should then work */
     gRandomError = 0;
 
-   {
     struct timeval tt;
     char buffer [16];
 
@@ -302,7 +330,6 @@ PreliminarySetup(void)
     
     /* and scramble it some more */
     perr = prngForceReseed(gPrngRef, RESEED_TICKS);
-    }
     
     /* make a mutex to control access */
     gYarrowGrpAttr = lck_grp_attr_alloc_init();
@@ -313,7 +340,7 @@ PreliminarySetup(void)
 	fips_initialize ();
 }
 
-const Block kKnownAnswer = {0x92b404e5, 0x56588ced, 0x6c1acd4e, 0xbf053f68, 0x9f73a93};
+const Block kKnownAnswer = {0x92, 0xb4, 0x04, 0xe5, 0x56, 0x58, 0x8c, 0xed, 0x6c, 0x1a, 0xcd, 0x4e, 0xbf, 0x05, 0x3f, 0x68, 0x09, 0xf7, 0x3a, 0x93};
 
 void
 fips_initialize(void)
@@ -321,22 +348,15 @@ fips_initialize(void)
 	/* So that we can do the self test, set the seed to zero */
 	memset(&g_xkey, 0, sizeof(g_xkey));
 	
-	/* initialize our SHA1 generator */
-	SHA1Init (&g_sha1_ctx);
-	
 	/* other initializations */
 	memset (zeros, 0, sizeof (zeros));
 	g_bytes_used = 0;
 	random_block(g_random_data, FALSE);
 	
 	// check here to see if we got the initial data we were expecting
-	int i;
-	for (i = 0; i < kBSize; ++i)
+	if (memcmp(kKnownAnswer, g_random_data, kBlockSize) != 0)
 	{
-		if (kKnownAnswer[i] != g_random_data[i])
-		{
-			panic("FIPS random self test failed");
-		}
+		panic("FIPS random self test failed");
 	}
 	
 	// now do the random block again to make sure that userland doesn't get predicatable data
@@ -358,10 +378,8 @@ random_init(void)
 	/* install us in the file system */
 	gRandomInstalled = 1;
 
-#ifndef ARM_BOARD_CONFIG_S5L8900XFPGA_1136JFS
 	/* setup yarrow and the mutex */
 	PreliminarySetup();
-#endif
 
 	ret = cdevsw_add(RANDOM_MAJOR, &random_cdevsw);
 	if (ret < 0) {
@@ -458,7 +476,6 @@ random_write (__unused dev_t dev, struct uio *uio, __unused int ioflag)
 
     while (uio_resid(uio) > 0 && retCode == 0) {
         /* get the user's data */
-        // LP64todo - fix this!  uio_resid may be 64-bit value
         int bytesToInput = min(uio_resid(uio), sizeof (rdBuffer));
         retCode = uiomove(rdBuffer, bytesToInput, uio);
         if (retCode != 0)
@@ -500,18 +517,17 @@ random_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
    /* lock down the mutex */
     lck_mtx_lock(gYarrowMutex);
 
-    CheckReseed();
 	int bytes_remaining = uio_resid(uio);
     while (bytes_remaining > 0 && retCode == 0) {
         /* get the user's data */
 		int bytes_to_read = 0;
 		
-		int bytes_available = kBSizeInBytes - g_bytes_used;
+		int bytes_available = kBlockSize - g_bytes_used;
         if (bytes_available == 0)
 		{
 			random_block(g_random_data, TRUE);
 			g_bytes_used = 0;
-			bytes_available = kBSizeInBytes;
+			bytes_available = kBlockSize;
 		}
 		
 		bytes_to_read = min (bytes_remaining, bytes_available);
@@ -537,24 +553,21 @@ void
 read_random(void* buffer, u_int numbytes)
 {
     if (gYarrowMutex == 0) { /* are we initialized? */
-#ifndef ARM_BOARD_CONFIG_S5L8900XFPGA_1136JFS
         PreliminarySetup ();
-#endif
     }
     
     lck_mtx_lock(gYarrowMutex);
-    CheckReseed();
 
 	int bytes_read = 0;
 
 	int bytes_remaining = numbytes;
     while (bytes_remaining > 0) {
-        int bytes_to_read = min(bytes_remaining, kBSizeInBytes - g_bytes_used);
+        int bytes_to_read = min(bytes_remaining, kBlockSize - g_bytes_used);
         if (bytes_to_read == 0)
 		{
 			random_block(g_random_data, TRUE);
 			g_bytes_used = 0;
-			bytes_to_read = min(bytes_remaining, kBSizeInBytes);
+			bytes_to_read = min(bytes_remaining, kBlockSize);
 		}
 		
 		memmove ((u_int8_t*) buffer + bytes_read, ((u_int8_t*)g_random_data)+ g_bytes_used, bytes_to_read);
@@ -567,17 +580,12 @@ read_random(void* buffer, u_int numbytes)
 }
 
 /*
- * Return an unsigned long pseudo-random number.
+ * Return an u_int32_t pseudo-random number.
  */
-u_long
+u_int32_t
 RandomULong(void)
 {
-	u_long buf;
+	u_int32_t buf;
 	read_random(&buf, sizeof (buf));
 	return (buf);
-}
-
-void
-CheckReseed(void)
-{
 }

@@ -63,6 +63,8 @@
 #include <mach/task.h>		/* task_suspend() */
 #include <kern/task.h>		/* get_task_numacts() */
 
+#include <security/audit/audit.h>
+
 typedef struct {
 	int	flavor;			/* the number for this flavor */
 	mach_msg_type_number_t	count;	/* count of ints in this flavor */
@@ -85,7 +87,7 @@ mythread_state_flavor_t thread_flavor_array[]={
 		{PPC_VECTOR_STATE, PPC_VECTOR_STATE_COUNT}
 		};
 
-#elif defined (__i386__)
+#elif defined (__i386__) || defined (__x86_64__)
 mythread_state_flavor_t thread_flavor_array [] = { 
 		{x86_THREAD_STATE, x86_THREAD_STATE_COUNT},
 		{x86_FLOAT_STATE, x86_FLOAT_STATE_COUNT},
@@ -113,6 +115,8 @@ kern_return_t thread_getstatus(register thread_t act, int flavor,
 	thread_state_t tstate, mach_msg_type_number_t *count);
 void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
 
+static cpu_type_t process_cpu_type(proc_t proc);
+static cpu_type_t process_cpu_subtype(proc_t proc);
 
 #ifdef SECURE_KERNEL
 __private_extern__ int do_coredump = 0;	/* default: don't dump cores */
@@ -120,6 +124,44 @@ __private_extern__ int do_coredump = 0;	/* default: don't dump cores */
 __private_extern__ int do_coredump = 1;	/* default: dump cores */
 #endif
 __private_extern__ int sugid_coredump = 0; /* default: but not SGUID binaries */
+
+
+/* cpu_type returns only the most generic indication of the current CPU. */
+/* in a core we want to know the kind of process. */
+
+static cpu_type_t
+process_cpu_type(proc_t core_proc)
+{
+	cpu_type_t what_we_think;
+#if defined (__i386__) || defined (__x86_64__)
+    if (IS_64BIT_PROCESS(core_proc)) {
+		what_we_think = CPU_TYPE_X86_64;
+	} else {
+		what_we_think = CPU_TYPE_I386;
+	}
+#elif defined (__ppc__)
+	#pragma unused(core_proc)
+	what_we_think = CPU_TYPE_POWERPC;
+#endif
+	return what_we_think;
+}
+
+static cpu_type_t
+process_cpu_subtype(proc_t core_proc)
+{
+	cpu_type_t what_we_think;
+#if defined (__i386__) || defined (__x86_64__)
+    if (IS_64BIT_PROCESS(core_proc)) {
+		what_we_think = CPU_SUBTYPE_X86_64_ALL;
+	} else {
+		what_we_think = CPU_SUBTYPE_I386_ALL;
+	}
+#elif defined (__ppc__)
+	#pragma unused(core_proc)
+	what_we_think = CPU_SUBTYPE_POWERPC_ALL;
+#endif
+	return what_we_think;
+}
 
 void
 collectth_state(thread_t th_act, void *tirp)
@@ -221,7 +263,10 @@ coredump(proc_t core_proc)
 	    ( (sugid_coredump == 0) &&	/* Not dumping SUID/SGID binaries */
 	      ( (cred->cr_svuid != cred->cr_ruid) ||
 	        (cred->cr_svgid != cred->cr_rgid)))) {
-	    
+
+#if CONFIG_AUDIT
+		audit_proc_coredump(core_proc, NULL, EFAULT);
+#endif
 		return (EFAULT);
 	}
 
@@ -241,7 +286,8 @@ coredump(proc_t core_proc)
 
 	/* create name according to sysctl'able format string */
 	/* if name creation fails, fall back to historical behaviour... */
-	if (proc_core_name(core_proc->p_comm, kauth_cred_getuid(cred),
+	if (alloced_name == NULL ||
+	    proc_core_name(core_proc->p_comm, kauth_cred_getuid(cred),
 			   core_proc->p_pid, alloced_name, MAXPATHLEN)) {
 		snprintf(stack_name, sizeof(stack_name),
 			 "/cores/core.%d", core_proc->p_pid);
@@ -295,9 +341,10 @@ coredump(proc_t core_proc)
 
 	header_size = command_size + mach_header_sz;
 
-	(void) kmem_alloc(kernel_map,
-				    (vm_offset_t *)&header,
-				    (vm_size_t)header_size);
+	if (kmem_alloc(kernel_map, &header, (vm_size_t)header_size) != KERN_SUCCESS) {
+		error = ENOMEM;
+		goto out;
+	}
 
 	/*
 	 *	Set up Mach-O header.
@@ -305,8 +352,8 @@ coredump(proc_t core_proc)
 	if (is_64) {
 		mh64 = (struct mach_header_64 *)header;
 		mh64->magic = MH_MAGIC_64;
-		mh64->cputype = cpu_type();
-		mh64->cpusubtype = cpu_subtype();
+		mh64->cputype = process_cpu_type(core_proc);
+		mh64->cpusubtype = process_cpu_subtype(core_proc);
 		mh64->filetype = MH_CORE;
 		mh64->ncmds = segment_count + thread_count;
 		mh64->sizeofcmds = command_size;
@@ -314,8 +361,8 @@ coredump(proc_t core_proc)
 	} else {
 		mh = (struct mach_header *)header;
 		mh->magic = MH_MAGIC;
-		mh->cputype = cpu_type();
-		mh->cpusubtype = cpu_subtype();
+		mh->cputype = process_cpu_type(core_proc);
+		mh->cpusubtype = process_cpu_subtype(core_proc);
 		mh->filetype = MH_CORE;
 		mh->ncmds = segment_count + thread_count;
 		mh->sizeofcmds = command_size;
@@ -391,10 +438,10 @@ coredump(proc_t core_proc)
 			sc->cmdsize = sizeof(struct segment_command);
 			/* segment name is zeroed by kmem_alloc */
 			sc->segname[0] = 0;
-			sc->vmaddr = CAST_DOWN(vm_offset_t,vmoffset);
-			sc->vmsize = CAST_DOWN(vm_size_t,vmsize);
-			sc->fileoff = CAST_DOWN(uint32_t,foffset);
-			sc->filesize = CAST_DOWN(uint32_t,vmsize);
+			sc->vmaddr = CAST_DOWN_EXPLICIT(vm_offset_t,vmoffset);
+			sc->vmsize = CAST_DOWN_EXPLICIT(vm_size_t,vmsize);
+			sc->fileoff = CAST_DOWN_EXPLICIT(uint32_t,foffset); /* will never truncate */
+			sc->filesize = CAST_DOWN_EXPLICIT(uint32_t,vmsize); /* will never truncate */
 			sc->maxprot = maxprot;
 			sc->initprot = prot;
 			sc->nsects = 0;
@@ -416,21 +463,11 @@ coredump(proc_t core_proc)
 		if ((maxprot & VM_PROT_READ) == VM_PROT_READ
 			&& vbr.user_tag != VM_MEMORY_IOKIT
 			&& coredumpok(map,vmoffset)) {
-			vm_map_size_t	tmp_vmsize = vmsize;
-			off_t		xfer_foffset = foffset;
-
-			//LP64todo - works around vn_rdwr_64() 2G limit
-			while (tmp_vmsize > 0) {
-				vm_map_size_t	xfer_vmsize = tmp_vmsize;
-				if (xfer_vmsize > INT_MAX)
-					xfer_vmsize = INT_MAX;
-				error = vn_rdwr_64(UIO_WRITE, vp,
-						vmoffset, xfer_vmsize, xfer_foffset,
+			
+			error = vn_rdwr_64(UIO_WRITE, vp, vmoffset, vmsize, foffset,
 					(IS_64BIT_PROCESS(core_proc) ? UIO_USERSPACE64 : UIO_USERSPACE32), 
-					IO_NODELOCKED|IO_UNIT, cred, (int *) 0, core_proc);
-				tmp_vmsize -= xfer_vmsize;
-				xfer_foffset += xfer_vmsize;
-			}
+					IO_NOCACHE|IO_NODELOCKED|IO_UNIT, cred, (int64_t *) 0, core_proc);
+
 		}
 
 		hoffset += segment_command_sz;
@@ -465,11 +502,14 @@ coredump(proc_t core_proc)
 	 *	file.  OK to use a 32 bit write for this.
 	 */
 	error = vn_rdwr(UIO_WRITE, vp, (caddr_t)header, header_size, (off_t)0,
-			UIO_SYSSPACE32, IO_NODELOCKED|IO_UNIT, cred, (int *) 0, core_proc);
+			UIO_SYSSPACE, IO_NOCACHE|IO_NODELOCKED|IO_UNIT, cred, (int *) 0, core_proc);
 	kmem_free(kernel_map, header, header_size);
 out:
 	error1 = vnode_close(vp, FWRITE, ctx);
 out2:
+#if CONFIG_AUDIT
+	audit_proc_coredump(core_proc, name, error);
+#endif
 	if (alloced_name != NULL)
 		FREE(alloced_name, M_TEMP);
 	if (error == 0)

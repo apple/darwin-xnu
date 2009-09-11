@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -3059,7 +3059,7 @@ typedef int mpo_proc_check_sched_t(
 */
 typedef int mpo_proc_check_setaudit_t(
 	kauth_cred_t cred,
-	struct auditinfo *ai
+	struct auditinfo_addr *ai
 );
 /**
   @brief Access control check for setting audit user ID
@@ -4412,21 +4412,17 @@ typedef int mpo_proc_check_get_task_t(
 	kauth_cred_t cred,
 	struct proc *p
 );
-
-
 /**
- @brief Access control check for manipulating a proc's vm_map
- @param cred Subject credential
+ @brief Privilege check for a process to run invalid
  @param proc Object process
  
- Determine whether the vm_map map belonging to process proc with 
- credential cred allows the VM_PROT_COPY operation.
+ Determine whether the process may execute even though the system determined
+ that it is untrusted (eg unidentified / modified code).
  
  @return Return 0 if access is granted, otherwise an appropriate value for
  errno should be returned.
  */
-typedef int mpo_proc_check_map_prot_copy_allow_t(
-	kauth_cred_t cred,
+typedef int mac_proc_check_run_cs_invalid_t(
 	struct proc *p
 );
 
@@ -5280,6 +5276,47 @@ typedef int mpo_vnode_check_truncate_t(
 	struct label *label
 );
 /**
+  @brief Access control check for binding UNIX domain socket
+  @param cred Subject credential
+  @param dvp Directory vnode
+  @param dlabel Policy label for dvp
+  @param cnp Component name for dvp
+  @param vap vnode attributes for vap
+
+  Determine whether the subject identified by the credential can perform a
+  bind operation on a UNIX domain socket with the passed parent directory,
+  passed name information, and passed attribute information.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned. Suggested failure: EACCES for label mismatch or
+  EPERM for lack of privilege.
+*/
+typedef int mpo_vnode_check_uipc_bind_t(
+	kauth_cred_t cred,
+	struct vnode *dvp,
+	struct label *dlabel,
+	struct componentname *cnp,
+	struct vnode_attr *vap
+);
+/**
+  @brief Access control check for connecting UNIX domain socket
+  @param cred Subject credential
+  @param vp Object vnode
+  @param label Policy label associated with vp
+
+  Determine whether the subject identified by the credential can perform a
+  connect operation on the passed UNIX domain socket vnode.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned. Suggested failure: EACCES for label mismatch or
+  EPERM for lack of privilege.
+*/
+typedef int mpo_vnode_check_uipc_connect_t(
+	kauth_cred_t cred,
+	struct vnode *vp,
+	struct label *label
+);
+/**
   @brief Access control check for deleting vnode
   @param cred Subject credential
   @param dvp Parent directory vnode
@@ -6035,9 +6072,9 @@ struct mac_policy_ops {
 	mpo_vnode_label_update_t		*mpo_vnode_label_update;
 	mpo_vnode_notify_create_t		*mpo_vnode_notify_create;
 	mpo_vnode_check_signature_t		*mpo_vnode_check_signature;
-	mpo_proc_check_map_prot_copy_allow_t	*mpo_proc_check_map_prot_copy_allow;
-	mpo_reserved_hook_t			*mpo_reserved2;
-	mpo_reserved_hook_t			*mpo_reserved3;
+	mpo_vnode_check_uipc_bind_t		*mpo_vnode_check_uipc_bind;
+	mpo_vnode_check_uipc_connect_t		*mpo_vnode_check_uipc_connect;
+	mac_proc_check_run_cs_invalid_t		*mpo_proc_check_run_cs_invalid;
 	mpo_reserved_hook_t			*mpo_reserved4;
 	mpo_reserved_hook_t			*mpo_reserved5;
 	mpo_reserved_hook_t			*mpo_reserved6;
@@ -6247,6 +6284,14 @@ int	mac_vnop_removexattr(struct vnode *, const char *);
 
 
 #define	LABEL_TO_SLOT(l, s)	(l)->l_perpolicy[s]
+
+/*
+ * Policy interface to map a struct label pointer to per-policy data.
+ * Typically, policies wrap this in their own accessor macro that casts an
+ * intptr_t to a policy-specific data type.
+ */
+intptr_t        mac_label_get(struct label *l, int slot);
+void            mac_label_set(struct label *l, int slot, intptr_t v);
 
 #define	mac_get_mpc(h)		(mac_policy_list.entries[h].mpc)
 

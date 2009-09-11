@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -76,6 +76,11 @@
 #include <kern/kern_types.h>
 #include <kern/lock.h>
 
+#include <libkern/OSAtomic.h>
+
+
+#include <vm/vm_options.h>
+
 extern kern_return_t vm_map_create_upl(
 	vm_map_t		map,
 	vm_map_address_t	offset,
@@ -88,13 +93,46 @@ extern kern_return_t vm_map_create_upl(
 extern ppnum_t upl_get_highest_page(
 	upl_t			upl);
 
+extern upl_size_t upl_get_size(
+	upl_t			upl);
+
 #ifdef	MACH_KERNEL_PRIVATE
 
 #include <vm/vm_page.h>
 
 extern unsigned int	vm_pageout_scan_event_counter;
-extern unsigned int	vm_zf_count;
 extern unsigned int	vm_zf_queue_count;
+
+
+#if defined(__ppc__) /* On ppc, vm statistics are still 32-bit */
+
+extern unsigned int	vm_zf_count;
+
+#define VM_ZF_COUNT_INCR()				\
+	MACRO_BEGIN					\
+	OSAddAtomic(1, (SInt32 *) &vm_zf_count);	\
+	MACRO_END					\
+
+#define VM_ZF_COUNT_DECR()				\
+	MACRO_BEGIN					\
+	OSAddAtomic(-1, (SInt32 *) &vm_zf_count);	\
+	MACRO_END					\
+
+#else /* !(defined(__ppc__)) */
+
+extern uint64_t	vm_zf_count;
+
+#define VM_ZF_COUNT_INCR()				\
+	MACRO_BEGIN					\
+	OSAddAtomic64(1, (SInt64 *) &vm_zf_count);	\
+	MACRO_END					\
+
+#define VM_ZF_COUNT_DECR()				\
+	MACRO_BEGIN					\
+	OSAddAtomic64(-1, (SInt64 *) &vm_zf_count);	\
+	MACRO_END					\
+
+#endif /* !(defined(__ppc__)) */
 
 /*
  *	Routines exported to Mach.
@@ -120,15 +158,52 @@ extern void		vm_pageclean_setup(
 
 /* UPL exported routines and structures */
 
-#define upl_lock_init(object)	mutex_init(&(object)->Lock, 0)
-#define upl_lock(object)	mutex_lock(&(object)->Lock)
-#define upl_unlock(object)	mutex_unlock(&(object)->Lock)
+#define upl_lock_init(object)	lck_mtx_init(&(object)->Lock, &vm_object_lck_grp, &vm_object_lck_attr)
+#define upl_lock_destroy(object)	lck_mtx_destroy(&(object)->Lock, &vm_object_lck_grp)
+#define upl_lock(object)	lck_mtx_lock(&(object)->Lock)
+#define upl_unlock(object)	lck_mtx_unlock(&(object)->Lock)
 
+#define MAX_VECTOR_UPL_ELEMENTS	8
+
+struct _vector_upl_iostates{
+	upl_offset_t offset;
+	upl_size_t   size;
+};
+
+typedef struct _vector_upl_iostates vector_upl_iostates_t;
+
+struct _vector_upl {
+	upl_size_t		size;
+	uint32_t		num_upls;
+	uint32_t		invalid_upls;
+	uint32_t		_reserved;
+	vm_map_t		submap;
+	vm_offset_t		submap_dst_addr;
+	vm_object_offset_t	offset;
+	upl_t			upl_elems[MAX_VECTOR_UPL_ELEMENTS];	
+	upl_page_info_array_t	pagelist;	
+	vector_upl_iostates_t	upl_iostates[MAX_VECTOR_UPL_ELEMENTS]; 
+};
+
+typedef struct _vector_upl* vector_upl_t;
 
 /* universal page list structure */
 
+#if UPL_DEBUG
+#define	UPL_DEBUG_STACK_FRAMES	16
+#define UPL_DEBUG_COMMIT_RECORDS 4
+
+struct ucd {
+	upl_offset_t	c_beg;
+	upl_offset_t	c_end;
+	int		c_aborted;
+	void *		c_retaddr[UPL_DEBUG_STACK_FRAMES];
+};
+#endif
+
+
 struct upl {
-	decl_mutex_data(,	Lock)	/* Synchronization */
+	decl_lck_mtx_data(,	Lock)	/* Synchronization */
 	int		ref_count;
 	int		flags;
 	vm_object_t	src_object; /* object derived from */
@@ -137,10 +212,18 @@ struct upl {
 	vm_offset_t	kaddr;      /* secondary mapping in kernel */
 	vm_object_t	map_object;
 	ppnum_t		highest_page;
-#ifdef	UPL_DEBUG
-	unsigned int	ubc_alias1;
-	unsigned int	ubc_alias2;
+	void*		vector_upl;
+#if	UPL_DEBUG
+	uintptr_t	ubc_alias1;
+	uintptr_t 	ubc_alias2;
 	queue_chain_t	uplq;	    /* List of outstanding upls on an obj */
+	
+	thread_t	upl_creator;
+	uint32_t	upl_state;
+	uint32_t	upl_commit_index;
+	void	*upl_create_retaddr[UPL_DEBUG_STACK_FRAMES];
+
+	struct  ucd	upl_commit_records[UPL_DEBUG_COMMIT_RECORDS];
 #endif	/* UPL_DEBUG */
 };
 
@@ -158,11 +241,26 @@ struct upl {
 #define UPL_ACCESS_BLOCKED	0x400
 #define UPL_ENCRYPTED		0x800
 #define UPL_SHADOWED		0x1000
+#define UPL_KERNEL_OBJECT	0x2000
+#define UPL_VECTOR		0x4000
 
 /* flags for upl_create flags parameter */
 #define UPL_CREATE_EXTERNAL	0
 #define UPL_CREATE_INTERNAL	0x1
 #define UPL_CREATE_LITE		0x2
+
+extern upl_t vector_upl_create(vm_offset_t);
+extern void vector_upl_deallocate(upl_t);
+extern boolean_t vector_upl_is_valid(upl_t);
+extern boolean_t vector_upl_set_subupl(upl_t, upl_t, u_int32_t);
+extern void vector_upl_set_pagelist(upl_t);
+extern void vector_upl_set_submap(upl_t, vm_map_t, vm_offset_t);
+extern void vector_upl_get_submap(upl_t, vm_map_t*, vm_offset_t*);
+extern void vector_upl_set_iostate(upl_t, upl_t, upl_offset_t, upl_size_t);
+extern void vector_upl_get_iostate(upl_t, upl_t, upl_offset_t*, upl_size_t*);
+extern void vector_upl_get_iostate_byindex(upl_t, uint32_t, upl_offset_t*, upl_size_t*);
+extern upl_t vector_upl_subupl_byindex(upl_t , uint32_t);
+extern upl_t vector_upl_subupl_byoffset(upl_t , upl_offset_t*, upl_size_t*);
 
 extern kern_return_t vm_object_iopl_request(
 	vm_object_t		object,
@@ -194,22 +292,12 @@ extern kern_return_t vm_map_remove_upl(
 	vm_map_t		map, 
 	upl_t			upl);
 
-#ifdef UPL_DEBUG
-extern kern_return_t  upl_ubc_alias_set(
-	upl_t upl,
-	unsigned int alias1,
-	unsigned int alias2);
-extern int  upl_ubc_alias_get(
-	upl_t upl,
-	unsigned int * al,
-	unsigned int * al2);
-#endif /* UPL_DEBUG */
-
 /* wired  page list structure */
-typedef unsigned long *wpl_array_t;
+typedef uint32_t *wpl_array_t;
 
 extern void vm_page_free_list(
-	register vm_page_t	mem);
+	vm_page_t	mem,
+	boolean_t	prepare_object);
 	 
 extern void vm_page_free_reserve(int pages);
 
@@ -249,7 +337,22 @@ decl_simple_lock_data(extern, vm_paging_lock)
  */
 extern unsigned int    vm_backing_store_low;
 
+extern void vm_pageout_queue_steal(
+	vm_page_t page, 
+	boolean_t queues_locked);
+	
 #endif  /* MACH_KERNEL_PRIVATE */
+
+#if UPL_DEBUG
+extern kern_return_t  upl_ubc_alias_set(
+	upl_t upl,
+	uintptr_t alias1,
+	uintptr_t alias2);
+extern int  upl_ubc_alias_get(
+	upl_t upl,
+	uintptr_t * al,
+	uintptr_t * al2);
+#endif /* UPL_DEBUG */
 
 extern void vm_countdirtypages(void);
 
@@ -260,6 +363,36 @@ extern kern_return_t upl_transpose(
 	upl_t	upl1,
 	upl_t	upl2);
 
+extern kern_return_t mach_vm_pressure_monitor(
+	boolean_t	wait_for_pressure,
+	unsigned int	nsecs_monitored,
+	unsigned int	*pages_reclaimed_p,
+	unsigned int	*pages_wanted_p);
+
+extern kern_return_t
+vm_set_buffer_cleanup_callout(
+	boolean_t	(*func)(void));
+
+struct vm_page_stats_reusable {
+	SInt32		reusable_count;
+	uint64_t	reusable;
+	uint64_t	reused;
+	uint64_t	reused_wire;
+	uint64_t	reused_remove;
+	uint64_t	all_reusable_calls;
+	uint64_t	partial_reusable_calls;
+	uint64_t	all_reuse_calls;
+	uint64_t	partial_reuse_calls;
+	uint64_t	reusable_pages_success;
+	uint64_t	reusable_pages_failure;
+	uint64_t	reusable_pages_shared;
+	uint64_t	reuse_pages_success;
+	uint64_t	reuse_pages_failure;
+	uint64_t	can_reuse_success;
+	uint64_t	can_reuse_failure;
+};
+extern struct vm_page_stats_reusable vm_page_stats_reusable;
+	
 #endif	/* KERNEL_PRIVATE */
 
 #endif	/* _VM_VM_PAGEOUT_H_ */

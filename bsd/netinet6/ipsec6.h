@@ -79,6 +79,6 @@ extern int ipsec6_output_tunnel(struct ipsec_output_state *,
 				struct secpolicy *, int, int*);
 extern int ipsec6_tunnel_validate(struct mbuf *, int, u_int,
 	struct secasvar *);
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
-#endif _NETINET6_IPSEC6_H_
+#endif /* _NETINET6_IPSEC6_H_ */

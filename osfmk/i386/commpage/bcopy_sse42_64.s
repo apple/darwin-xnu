@@ -40,10 +40,7 @@
 
 // void bcopy(const void *src, void *dst, size_t len);
  
-        .text
-	.code64
-        .align 5, 0x90
-Lbcopy_sse42_64:				// void bcopy(const void *src, void *dst, size_t len)
+COMMPAGE_FUNCTION_START(bcopy_sse42_64, 64, 5)
 	pushq	%rbp			// set up a frame for backtraces
 	movq	%rsp,%rbp
 	movq	%rsi,%rax		// copy dest ptr

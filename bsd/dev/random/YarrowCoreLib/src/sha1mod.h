@@ -37,6 +37,8 @@ By Steve Reid <steve@edmweb.com>
 
 #define __SHA1_H__
 
+#include <sys/types.h>
+
 /*
 Test Vectors (from FIPS PUB 180-1)
 "abc"
@@ -53,13 +55,13 @@ A million repetitions of "a"
 
 //Context declaration
 typedef struct {
-    unsigned long state[5];
-    unsigned long count[2];
+    u_int32_t state[5];
+    u_int32_t count[2];
     unsigned char buffer[64];
 } YSHA1_CTX;
 
 //Function forward declerations
-__private_extern__ void YSHA1Transform(unsigned long state[5],
+__private_extern__ void YSHA1Transform(u_int32_t state[5],
     const unsigned char buffer[64]);
 __private_extern__ void YSHA1Init(YSHA1_CTX* context);
 __private_extern__ void YSHA1Update(YSHA1_CTX* context,

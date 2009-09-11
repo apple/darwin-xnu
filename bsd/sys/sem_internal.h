@@ -70,6 +70,34 @@ struct user_semid_ds {
 	__int32_t	sem_pad3[4];	/* RESERVED: DO NOT USE! */
 };
 
+#pragma pack(4)
+struct user64_semid_ds {
+	struct ipc_perm sem_perm;	/* [XSI] operation permission struct */
+	int32_t	sem_base;	/* 32 bit base ptr for semaphore set */
+	unsigned short	sem_nsems;	/* [XSI] number of sems in set */
+	user64_time_t	sem_otime;	/* [XSI] last operation time */
+	int32_t	sem_pad1;	/* RESERVED: DO NOT USE! */
+	user64_time_t	sem_ctime;	/* [XSI] last change time */
+    					/* Times measured in secs since */
+    					/* 00:00:00 GMT, Jan. 1, 1970 */
+	int32_t	sem_pad2;	/* RESERVED: DO NOT USE! */
+	int32_t	sem_pad3[4];	/* RESERVED: DO NOT USE! */
+};
+
+struct user32_semid_ds {
+	struct ipc_perm sem_perm;	/* [XSI] operation permission struct */
+	int32_t	sem_base;	/* 32 bit base ptr for semaphore set */
+	unsigned short	sem_nsems;	/* [XSI] number of sems in set */
+	user32_time_t	sem_otime;	/* [XSI] last operation time */
+	int32_t	sem_pad1;	/* RESERVED: DO NOT USE! */
+	user32_time_t	sem_ctime;	/* [XSI] last change time */
+    					/* Times measured in secs since */
+    					/* 00:00:00 GMT, Jan. 1, 1970 */
+	int32_t	sem_pad2;	/* RESERVED: DO NOT USE! */
+	int32_t	sem_pad3[4];	/* RESERVED: DO NOT USE! */
+};
+#pragma pack()
+
 union user_semun {
 	user_addr_t	buf;		/* buffer for IPC_STAT & IPC_SET */
 	user_addr_t	array;		/* array for GETALL & SETALL */

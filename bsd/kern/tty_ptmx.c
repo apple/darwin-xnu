@@ -74,7 +74,7 @@
 #include <sys/tty.h>
 #include <sys/conf.h>
 #include <sys/file_internal.h>
-#include <sys/uio.h>
+#include <sys/uio_internal.h>
 #include <sys/kernel.h>
 #include <sys/vnode.h>
 #include <sys/vnode_internal.h>		/* _devfs_setattr() */
@@ -307,6 +307,8 @@ static struct _ptmx_ioctl_state {
  *
  * Returns:	NULL			Did not exist/could not create
  *		!NULL			structure corresponding minor number
+ *
+ * Locks:	tty_lock() on ptmx_ioctl->pt_tty NOT held on entry or exit.
  */
 static struct ptmx_ioctl *
 ptmx_get_ioctl(int minor, int open_flag)
@@ -395,6 +397,9 @@ ptmx_get_ioctl(int minor, int open_flag)
 				makedev(ptsd_major, minor),
 				DEVFS_CHAR, UID_ROOT, GID_TTY, 0620,
 				PTSD_TEMPLATE, minor);
+		if (_state.pis_ioctl_list[minor]->pt_devhandle == NULL) {
+			printf("devfs_make_node() call failed for ptmx_get_ioctl()!!!!\n");
+		}
 	} else if (open_flag & PF_OPEN_S) {
 		DEVFS_LOCK();
 		_state.pis_ioctl_list[minor]->pt_flags |= PF_OPEN_S;
@@ -403,22 +408,15 @@ ptmx_get_ioctl(int minor, int open_flag)
 	return (_state.pis_ioctl_list[minor]);
 }
 
+/*
+ * Locks:	tty_lock() of old_ptmx_ioctl->pt_tty NOT held for this call.
+ */
 static int
 ptmx_free_ioctl(int minor, int open_flag)
 {
 	struct ptmx_ioctl *old_ptmx_ioctl = NULL;
 
 	DEVFS_LOCK();
-#if 5161374
-	/*
-	 * We have to check after taking the DEVFS_LOCK, since the pointer
-	 * is protected by the lock
-	 */
-	if (_state.pis_ioctl_list[minor] == NULL) {
-		DEVFS_UNLOCK();
-		return (ENXIO);
-	}
-#endif	/* 5161374 */
 	_state.pis_ioctl_list[minor]->pt_flags &= ~(open_flag);
 
 	/*
@@ -514,21 +512,20 @@ ptsd_open(dev_t dev, int flag, __unused int devtype, __unused proc_t p)
 	struct tty *tp;
 	struct ptmx_ioctl *pti;
 	int error;
-	boolean_t   funnel_state;
 
 	if ((pti = ptmx_get_ioctl(minor(dev), 0)) == NULL) {
 	        return (ENXIO);
 	}
-	tp = pti->pt_tty;
 
 	if (!(pti->pt_flags & PF_UNLOCKED)) {
 		return (EAGAIN);
 	}
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tp = pti->pt_tty;
+	tty_lock(tp);
 
 	if ((tp->t_state & TS_ISOPEN) == 0) {
-		ttychars(tp);		/* Set up default chars */
+		termioschars(&tp->t_termios);	/* Set up default chars */
 		tp->t_iflag = TTYDEF_IFLAG;
 		tp->t_oflag = TTYDEF_OFLAG;
 		tp->t_lflag = TTYDEF_LFLAG;
@@ -555,7 +552,7 @@ ptsd_open(dev_t dev, int flag, __unused int devtype, __unused proc_t p)
 	if (error == 0)
 		ptmx_wakeup(tp, FREAD|FWRITE);
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
 	return (error);
 }
 
@@ -565,7 +562,6 @@ ptsd_close(dev_t dev, int flag, __unused int mode, __unused proc_t p)
 	struct tty *tp;
 	struct ptmx_ioctl *pti;
 	int err;
-	boolean_t   funnel_state;
 
 	/*
 	 * This is temporary until the VSX conformance tests
@@ -577,13 +573,9 @@ ptsd_close(dev_t dev, int flag, __unused int mode, __unused proc_t p)
 	int save_timeout;
 #endif
 	pti = ptmx_get_ioctl(minor(dev), 0);
-#if 5161374
-	if (pti == NULL || pti->pt_tty == NULL)
-		return(ENXIO);
-#endif	/* 5161374 */
-	tp = pti->pt_tty;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tp = pti->pt_tty;
+	tty_lock(tp);
 
 #ifdef	FIX_VSX_HANG
 	save_timeout = tp->t_timeout;
@@ -595,7 +587,8 @@ ptsd_close(dev_t dev, int flag, __unused int mode, __unused proc_t p)
 #ifdef	FIX_VSX_HANG
 	tp->t_timeout = save_timeout;
 #endif
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+
+	tty_unlock(tp);
 
 	/* unconditional, just like ttyclose() */
 	ptmx_free_ioctl(minor(dev), PF_OPEN_S);
@@ -612,18 +605,12 @@ ptsd_read(dev_t dev, struct uio *uio, int flag)
 	struct ptmx_ioctl *pti;
 	int error = 0;
 	struct uthread *ut;
-	boolean_t   funnel_state;
 	struct pgrp * pg;
 
 	pti = ptmx_get_ioctl(minor(dev), 0);
-#if 5161374
-	if (pti == NULL || pti->pt_tty == NULL)
-		return(ENXIO);
-#endif	/* 5161374 */
+
 	tp = pti->pt_tty;
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-
+	tty_lock(tp);
 
 	ut = (struct uthread *)get_bsdthread_info(current_thread());
 again:
@@ -640,13 +627,20 @@ again:
 				error = EIO;
 				goto out;
 			}
+			/*
+			 * SAFE: We about to drop the lock ourselves by
+			 * SAFE: erroring out or sleeping anyway.
+			 */
+			tty_unlock(tp);
 			if (pg->pg_jobc == 0) {
 				pg_rele(pg);
+				tty_lock(tp);
 				error = EIO;
 				goto out;
 			}
 			pgsignal(pg, SIGTTIN, 1);
 			pg_rele(pg);
+			tty_lock(tp);
 
 			error = ttysleep(tp, &lbolt, TTIPRI | PCATCH | PTTYBLOCK, "ptsd_bg",
 					 0);
@@ -654,8 +648,10 @@ again:
 			        goto out;
 		}
 		if (tp->t_canq.c_cc == 0) {
-			if (flag & IO_NDELAY)
-				return (EWOULDBLOCK);
+			if (flag & IO_NDELAY) {
+				error = EWOULDBLOCK;
+				goto out;
+			}
 			error = ttysleep(tp, TSA_PTS_READ(tp), TTIPRI | PCATCH,
 					 "ptsd_in", 0);
 			if (error)
@@ -683,7 +679,7 @@ again:
 			error = (*linesw[tp->t_line].l_read)(tp, uio, flag);
 	ptmx_wakeup(tp, FWRITE);
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
 	return (error);
 }
 
@@ -698,43 +694,35 @@ ptsd_write(dev_t dev, struct uio *uio, int flag)
 	struct tty *tp;
 	struct ptmx_ioctl *pti;
 	int error;
-	boolean_t   funnel_state;
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	pti = ptmx_get_ioctl(minor(dev), 0);
-#if 5161374
-	if (pti == NULL || pti->pt_tty == NULL)
-		return(ENXIO);
-#endif	/* 5161374 */
+
 	tp = pti->pt_tty;
+	tty_lock(tp);
 
 	if (tp->t_oproc == 0)
 		error = EIO;
 	else
 	        error = (*linesw[tp->t_line].l_write)(tp, uio, flag);
 
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
 	return (error);
 }
 
 /*
  * Start output on pseudo-tty.
  * Wake up process selecting or sleeping for input from controlling tty.
+ *
+ * t_oproc for this driver; called from within the line discipline
+ *
+ * Locks:	Assumes tp is locked on entry, remains locked on exit
  */
 static void
 ptsd_start(struct tty *tp)
 {
 	struct ptmx_ioctl *pti;
-	boolean_t   funnel_state;
 
 	pti = ptmx_get_ioctl(minor(tp->t_dev), 0);
-#if 5161374
-	if (pti == NULL)
-		return;		/* XXX ENXIO, but this function is void! */
-#endif	/* 5161374 */
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	if (tp->t_state & TS_TTSTOP)
 	        goto out;
@@ -744,23 +732,18 @@ ptsd_start(struct tty *tp)
 	}
 	ptmx_wakeup(tp, FREAD);
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
 	return;
 }
 
+/*
+ * Locks:	Assumes tty_lock() is held over this call.
+ */
 static void
 ptmx_wakeup(struct tty *tp, int flag)
 {
 	struct ptmx_ioctl *pti;
-	boolean_t   funnel_state;
 
 	pti = ptmx_get_ioctl(minor(tp->t_dev), 0);
-#if 5161374
-	if (pti == NULL)
-		return;		/* XXX ENXIO, but this function is void! */
-#endif	/* 5161374 */
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	if (flag & FREAD) {
 		selwakeup(&pti->pt_selr);
@@ -770,7 +753,6 @@ ptmx_wakeup(struct tty *tp, int flag)
 		selwakeup(&pti->pt_selw);
 		wakeup(TSA_PTC_WRITE(tp));
 	}
-	(void) thread_funnel_set(kernel_flock, funnel_state);
 }
 
 FREE_BSDSTATIC int
@@ -779,7 +761,6 @@ ptmx_open(dev_t dev, __unused int flag, __unused int devtype, __unused proc_t p)
 	struct tty *tp;
 	struct ptmx_ioctl *pti;
 	int error = 0;
-	boolean_t   funnel_state;
 
 	pti = ptmx_get_ioctl(minor(dev), PF_OPEN_M);
 	if (pti == NULL) {
@@ -787,12 +768,13 @@ ptmx_open(dev_t dev, __unused int flag, __unused int devtype, __unused proc_t p)
 	} else if (pti == (struct ptmx_ioctl*)-1) {
 		return (EREDRIVEOPEN);
 	}
-	tp = pti->pt_tty;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tp = pti->pt_tty;
+	tty_lock(tp);
 
 	/* If master is open OR slave is still draining, pty is still busy */
 	if (tp->t_oproc || (tp->t_state & TS_ISOPEN)) {
+		tty_unlock(tp);
 		/*
 		 * If master is closed, we are the only reference, so we
 		 * need to clear the master open bit
@@ -800,7 +782,7 @@ ptmx_open(dev_t dev, __unused int flag, __unused int devtype, __unused proc_t p)
 		if (!tp->t_oproc)
 			ptmx_free_ioctl(minor(dev), PF_OPEN_M);
 		error = EBUSY;
-		goto out;
+		goto err;
 	}
 	tp->t_oproc = ptsd_start;
 	CLR(tp->t_state, TS_ZOMBIE);
@@ -810,8 +792,8 @@ ptmx_open(dev_t dev, __unused int flag, __unused int devtype, __unused proc_t p)
 	(void)(*linesw[tp->t_line].l_modem)(tp, 1);
 	tp->t_lflag &= ~EXTPROC;
 
-out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
+err:
 	return (error);
 }
 
@@ -820,16 +802,11 @@ ptmx_close(dev_t dev, __unused int flags, __unused int fmt, __unused proc_t p)
 {
 	struct tty *tp;
 	struct ptmx_ioctl *pti;
-	boolean_t   funnel_state;
 
 	pti = ptmx_get_ioctl(minor(dev), 0);
-#if 5161374
-	if (pti == NULL || pti->pt_tty == NULL)
-		return(ENXIO);
-#endif	/* 5161374 */
-	tp = pti->pt_tty;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tp = pti->pt_tty;
+	tty_lock(tp);
 
 	(void)(*linesw[tp->t_line].l_modem)(tp, 0);
 
@@ -849,7 +826,7 @@ ptmx_close(dev_t dev, __unused int flags, __unused int fmt, __unused proc_t p)
 
 	tp->t_oproc = 0;		/* mark closed */
 
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
 
 	ptmx_free_ioctl(minor(dev), PF_OPEN_M);
 
@@ -863,16 +840,11 @@ ptmx_read(dev_t dev, struct uio *uio, int flag)
 	struct ptmx_ioctl *pti;
 	char buf[BUFSIZ];
 	int error = 0, cc;
-	boolean_t   funnel_state;
 
 	pti = ptmx_get_ioctl(minor(dev), 0);
-#if 5161374
-	if (pti == NULL || pti->pt_tty == NULL)
-		return(ENXIO);
-#endif	/* 5161374 */
-	tp = pti->pt_tty;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tp = pti->pt_tty;
+	tty_lock(tp);
 
 	/*
 	 * We want to block until the slave
@@ -911,7 +883,7 @@ ptmx_read(dev_t dev, struct uio *uio, int flag)
 			error = EWOULDBLOCK;
 			goto out;
 		}
-		error = tsleep(TSA_PTC_READ(tp), TTIPRI | PCATCH, "ptmx_in", 0);
+		error = ttysleep(tp, TSA_PTC_READ(tp), TTIPRI | PCATCH, "ptmx_in", 0);
 		if (error)
 		        goto out;
 	}
@@ -926,24 +898,22 @@ ptmx_read(dev_t dev, struct uio *uio, int flag)
 	(*linesw[tp->t_line].l_start)(tp);
 
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
 	return (error);
 }
 
+/*
+ * Line discipline callback
+ *
+ * Locks:	tty_lock() is assumed held on entry and exit.
+ */
 FREE_BSDSTATIC int
 ptsd_stop(struct tty *tp, int flush)
 {
 	struct ptmx_ioctl *pti;
 	int flag;
-	boolean_t   funnel_state;
 
 	pti = ptmx_get_ioctl(minor(tp->t_dev), 0);
-#if 5161374
-	if (pti == NULL)
-		return(ENXIO);
-#endif	/* 5161374 */
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	/* note: FLUSHREAD and FLUSHWRITE already ok */
 	if (flush == 0) {
@@ -959,8 +929,6 @@ ptsd_stop(struct tty *tp, int flush)
 	if (flush & FWRITE)
 		flag |= FREAD;
 	ptmx_wakeup(tp, flag);
-
-	(void) thread_funnel_set(kernel_flock, funnel_state);
 
 	return (0);
 }
@@ -1019,33 +987,38 @@ ptsd_select(dev_t dev, int rw, void *wql, proc_t p)
 {
 	struct ptmx_ioctl *pti;
 	struct tty *tp;
+	int retval = 0;
 
 	pti = ptmx_get_ioctl(minor(dev), 0);
-#if 5161374
-	if (pti == NULL || pti->pt_tty == NULL)
-		return(ENXIO);
-#endif	/* 5161374 */
+
 	tp = pti->pt_tty;
 
 	if (tp == NULL)
 		return (ENXIO);
 
+	tty_lock(tp);
+
 	switch (rw) {
 	case FREAD:
-		if (ttnread(tp) > 0 || ISSET(tp->t_state, TS_ZOMBIE))
-			return(1);
+		if (ttnread(tp) > 0 || ISSET(tp->t_state, TS_ZOMBIE)) {
+			retval = 1;
+			break;
+		}
 		selrecord(p, &tp->t_rsel, wql);
 		break;
 	case FWRITE:
 		if ((tp->t_outq.c_cc <= tp->t_lowat &&
 		     ISSET(tp->t_state, TS_CONNECTED))
 		    || ISSET(tp->t_state, TS_ZOMBIE)) {
-			return (1);
+			retval = 1;
+			break;
 		}
 		selrecord(p, &tp->t_wsel, wql);
 		break;
 	}
-	return (0);
+
+	tty_unlock(tp);
+	return (retval);
 }
 
 FREE_BSDSTATIC int
@@ -1054,23 +1027,17 @@ ptmx_select(dev_t dev, int rw, void *wql, proc_t p)
 	struct tty *tp;
 	struct ptmx_ioctl *pti;
 	int retval = 0;
-	boolean_t   funnel_state;
 
 	pti = ptmx_get_ioctl(minor(dev), 0);
-#if 5161374
-	if (pti == NULL || pti->pt_tty == NULL)
-		return(ENXIO);
-#endif	/* 5161374 */
-	tp = pti->pt_tty;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tp = pti->pt_tty;
+	tty_lock(tp);
 
 	if ((tp->t_state & TS_CONNECTED) == 0) {
 		retval = 1;
 		goto out;
 	}
 	switch (rw) {
-
 	case FREAD:
 		/*
 		 * Need to block timeouts (ttrstart).
@@ -1078,7 +1045,7 @@ ptmx_select(dev_t dev, int rw, void *wql, proc_t p)
 		if ((tp->t_state&TS_ISOPEN) &&
 		     tp->t_outq.c_cc && (tp->t_state&TS_TTSTOP) == 0) {
 			retval = 1;
-			goto out;
+			break;
 		}
 		/* FALLTHROUGH */
 
@@ -1087,27 +1054,26 @@ ptmx_select(dev_t dev, int rw, void *wql, proc_t p)
 		    ((pti->pt_flags & PF_PKT && pti->pt_send) ||
 		     (pti->pt_flags & PF_UCNTL && pti->pt_ucntl))) {
 			retval = 1;
-			goto out;
+			break;
 		}
 		selrecord(p, &pti->pt_selr, wql);
 		break;
-
 
 	case FWRITE:
 		if (tp->t_state&TS_ISOPEN) {
 			if (pti->pt_flags & PF_REMOTE) {
 			    if (tp->t_canq.c_cc == 0) {
 				retval = 1;
-				goto out;
+				break;
 			    }
 			} else {
 			    if (tp->t_rawq.c_cc + tp->t_canq.c_cc < TTYHOG-2) {
 				    retval = 1;
-				    goto out;
+				    break;
 			    }
 			    if (tp->t_canq.c_cc == 0 && (tp->t_lflag&ICANON)) {
 				    retval = 1;
-				    goto out;
+				    break;
 			    }
 			}
 		}
@@ -1116,7 +1082,7 @@ ptmx_select(dev_t dev, int rw, void *wql, proc_t p)
 
 	}
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
 	return (retval);
 }
 
@@ -1142,16 +1108,11 @@ ptmx_write(dev_t dev, struct uio *uio, int flag)
 	u_char locbuf[BUFSIZ];
 	int wcnt = 0;
 	int error = 0;
-	boolean_t   funnel_state;
 
 	pti = ptmx_get_ioctl(minor(dev), 0);
-#if 5161374
-	if (pti == NULL || pti->pt_tty == NULL)
-		return(ENXIO);
-#endif	/* 5161374 */
-	tp = pti->pt_tty;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tp = pti->pt_tty;
+	tty_lock(tp);
 
 again:
 	if ((tp->t_state&TS_ISOPEN) == 0)
@@ -1224,9 +1185,11 @@ again:
 		}
 		cc = 0;
 	}
+
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
 	return (error);
+
 block:
 	/*
 	 * Come here to wait for slave to open, for space
@@ -1245,7 +1208,7 @@ block:
 			error = EWOULDBLOCK;
 		goto out;
 	}
-	error = tsleep(TSA_PTC_WRITE(tp), TTOPRI | PCATCH, "ptmx_out", 0);
+	error = ttysleep(tp, TSA_PTC_WRITE(tp), TTOPRI | PCATCH, "ptmx_out", 0);
 	if (error) {
 		/* adjust for data copied in but not written */
 		uio_setresid(uio, (uio_resid(uio) + cc));
@@ -1262,17 +1225,13 @@ cptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, proc_t p)
 	struct ptmx_ioctl *pti;
 	u_char *cc;
 	int stop, error = 0;
-	boolean_t   funnel_state;
 
 	pti = ptmx_get_ioctl(minor(dev), 0);
-#if 5161374
-	if (pti == NULL || pti->pt_tty == NULL)
-		return(ENXIO);
-#endif	/* 5161374 */
-	tp = pti->pt_tty;
-	cc = tp->t_cc;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tp = pti->pt_tty;
+	tty_lock(tp);
+
+	cc = tp->t_cc;
 
 	/*
 	 * IF CONTROLLER STTY THEN MUST FLUSH TO PREVENT A HANG.
@@ -1341,14 +1300,15 @@ cptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, proc_t p)
 			ttyflush(tp, FREAD|FWRITE);
 			goto out;
 
-#if COMPAT_43_TTY
 		case TIOCSETP:
 		case TIOCSETN:
-#endif
 		case TIOCSETD:
-		case TIOCSETA:
-		case TIOCSETAW:
-		case TIOCSETAF:
+		case TIOCSETA_32:
+		case TIOCSETAW_32:
+		case TIOCSETAF_32:
+		case TIOCSETA_64:
+		case TIOCSETAW_64:
+		case TIOCSETAF_64:
 			ndflush(&tp->t_outq, tp->t_outq.c_cc);
 			break;
 
@@ -1360,10 +1320,18 @@ cptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, proc_t p)
 			}
 			if ((tp->t_lflag&NOFLSH) == 0)
 				ttyflush(tp, FREAD|FWRITE);
-			tty_pgsignal(tp, *(unsigned int *)data, 1);
 			if ((*(unsigned int *)data == SIGINFO) &&
 			    ((tp->t_lflag&NOKERNINFO) == 0))
-				ttyinfo(tp);
+				ttyinfo_locked(tp);
+			/*
+			 * SAFE: All callers drop the lock on return and
+			 * SAFE: the linesw[] will short circut this call
+			 * SAFE: if the ioctl() is eaten before the lower
+			 * SAFE: level code gets to see it.
+			 */
+			tty_unlock(tp);
+			tty_pgsignal(tp, *(unsigned int *)data, 1);
+			tty_lock(tp);
 			goto out;
 
 		case TIOCPTYGRANT:	/* grantpt(3) */
@@ -1397,7 +1365,7 @@ cptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, proc_t p)
 		}
 	error = (*linesw[tp->t_line].l_ioctl)(tp, cmd, data, flag, p);
 	if (error == ENOTTY) {
-		error = ttioctl(tp, cmd, data, flag, p);
+		error = ttioctl_locked(tp, cmd, data, flag, p);
 		if (error == ENOTTY) {
 			if (pti->pt_flags & PF_UCNTL && (cmd & ~0xff) == UIOCCMD(0)) {
 				/* Process the UIOCMD ioctl group */
@@ -1427,20 +1395,19 @@ cptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, proc_t p)
 	 */
 	if ((tp->t_lflag&EXTPROC) && (pti->pt_flags & PF_PKT)) {
 		switch(cmd) {
-		case TIOCSETA:
-		case TIOCSETAW:
-		case TIOCSETAF:
-#if COMPAT_43_TTY
+		case TIOCSETA_32:
+		case TIOCSETAW_32:
+		case TIOCSETAF_32:
+		case TIOCSETA_64:
+		case TIOCSETAW_64:
+		case TIOCSETAF_64:
 		case TIOCSETP:
 		case TIOCSETN:
-#endif
-#if COMPAT_43_TTY || defined(COMPAT_SUNOS)
 		case TIOCSETC:
 		case TIOCSLTC:
 		case TIOCLBIS:
 		case TIOCLBIC:
 		case TIOCLSET:
-#endif
 			pti->pt_send |= TIOCPKT_IOCTL;
 			ptmx_wakeup(tp, FREAD);
 		default:
@@ -1465,6 +1432,173 @@ cptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, proc_t p)
 		}
 	}
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
 	return (error);
 }
+
+/*
+ * kqueue support.
+ */
+int ptsd_kqfilter(dev_t, struct knote *); 
+static void ptsd_kqops_read_detach(struct knote *);
+static int ptsd_kqops_read_event(struct knote *, long);
+static void ptsd_kqops_write_detach(struct knote *);
+static int ptsd_kqops_write_event(struct knote *, long);
+
+static struct filterops ptsd_kqops_read = {
+	.f_isfd = 1,
+	.f_detach = ptsd_kqops_read_detach,
+	.f_event = ptsd_kqops_read_event,
+};                                    
+static struct filterops ptsd_kqops_write = {
+	.f_isfd = 1,
+	.f_detach = ptsd_kqops_write_detach,
+	.f_event = ptsd_kqops_write_event,
+};                                  
+
+static void
+ptsd_kqops_read_detach(struct knote *kn)
+{
+	struct ptmx_ioctl *pti;
+	struct tty *tp;
+	dev_t dev = (dev_t) kn->kn_hookid;
+
+	pti = ptmx_get_ioctl(minor(dev), 0);
+	tp = pti->pt_tty;
+
+	if (tp == NULL)
+		return;
+
+	tty_lock(tp);
+	KNOTE_DETACH(&tp->t_rsel.si_note, kn);
+	tty_unlock(tp);
+
+	kn->kn_hookid = 0;
+}
+
+static int
+ptsd_kqops_read_event(struct knote *kn, long hint)
+{
+	struct ptmx_ioctl *pti;
+	struct tty *tp;
+	dev_t dev = (dev_t) kn->kn_hookid;
+	int retval = 0;
+
+	pti = ptmx_get_ioctl(minor(dev), 0);
+	tp = pti->pt_tty;
+
+	if (tp == NULL)
+		return (ENXIO);
+
+	if (hint == 0)
+		tty_lock(tp);
+
+	kn->kn_data = ttnread(tp);
+	if (kn->kn_data > 0) {
+		retval = 1;
+	}
+
+	if (ISSET(tp->t_state, TS_ZOMBIE)) {
+		kn->kn_flags |= EV_EOF;
+		retval = 1;
+	}
+
+	if (hint == 0)
+		tty_unlock(tp);
+	return (retval);
+}                                                                                                
+static void 
+ptsd_kqops_write_detach(struct knote *kn)
+{
+	struct ptmx_ioctl *pti;
+	struct tty *tp;
+	dev_t dev = (dev_t) kn->kn_hookid;
+
+	pti = ptmx_get_ioctl(minor(dev), 0);
+	tp = pti->pt_tty;
+
+	if (tp == NULL)
+		return;
+
+	tty_lock(tp);
+	KNOTE_DETACH(&tp->t_wsel.si_note, kn);
+	tty_unlock(tp);
+
+	kn->kn_hookid = 0;
+}
+
+static int
+ptsd_kqops_write_event(struct knote *kn, long hint)
+{
+	struct ptmx_ioctl *pti;
+	struct tty *tp;
+	dev_t dev = (dev_t) kn->kn_hookid;
+	int retval = 0;
+
+	pti = ptmx_get_ioctl(minor(dev), 0);
+	tp = pti->pt_tty;
+
+	if (tp == NULL)
+		return (ENXIO);
+
+	if (hint == 0)
+		tty_lock(tp);
+
+	if ((tp->t_outq.c_cc <= tp->t_lowat) &&
+			ISSET(tp->t_state, TS_CONNECTED)) {
+		kn->kn_data = tp->t_outq.c_cn - tp->t_outq.c_cc;
+		retval = 1;
+	}
+
+	if (ISSET(tp->t_state, TS_ZOMBIE)) {
+		kn->kn_flags |= EV_EOF;
+		retval = 1;
+	}
+
+	if (hint == 0)
+		tty_unlock(tp);
+	return (retval);
+
+}
+
+int
+ptsd_kqfilter(dev_t dev, struct knote *kn)
+{
+	struct tty *tp = NULL; 
+	struct ptmx_ioctl *pti = NULL;
+	int retval = 0;
+
+	/* make sure we're talking about the right device type */
+	if (cdevsw[major(dev)].d_open != ptsd_open) {
+		return (EINVAL);
+	}
+
+	if ((pti = ptmx_get_ioctl(minor(dev), 0)) == NULL) {
+	        return (ENXIO);
+	}
+
+	tp = pti->pt_tty;
+	tty_lock(tp);
+
+	kn->kn_hookid = dev;
+
+        switch (kn->kn_filter) {
+        case EVFILT_READ:
+                kn->kn_fop = &ptsd_kqops_read;
+		SLIST_INIT(&tp->t_rsel.si_note);
+                KNOTE_ATTACH(&tp->t_rsel.si_note, kn);
+                break;
+        case EVFILT_WRITE:
+                kn->kn_fop = &ptsd_kqops_write;
+		SLIST_INIT(&tp->t_wsel.si_note);
+                KNOTE_ATTACH(&tp->t_wsel.si_note, kn);
+                break;
+        default:
+                retval = EINVAL;
+                break;
+        }
+
+        tty_unlock(tp);
+        return (retval);
+}
+

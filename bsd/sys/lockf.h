@@ -90,7 +90,6 @@ struct lockf {
 	off_t	lf_start;	    /* Byte # of the start of the lock */
 	off_t	lf_end;		    /* Byte # of the end of the lock (-1=EOF) */
 	caddr_t	lf_id;		    /* Id of the resource holding the lock */
-        uint32_t lf_waiters;        /* count of waiters on this lock */
 	struct	lockf **lf_head;    /* Back pointer to the head of the locf list */
 	struct vnode *lf_vnode;	    /* Back pointer to the inode */
 	struct	lockf *lf_next;	    /* Pointer to the next lock on this inode */
@@ -105,6 +104,7 @@ struct lockf {
 
 __BEGIN_DECLS
 
+#ifdef KERNEL_PRIVATE
 int	lf_advlock(struct vnop_advlock_args *);
 int	lf_assert(struct vnop_advlock_args *, void **);
 void	lf_commit(void *, int);
@@ -113,6 +113,7 @@ void	lf_commit(void *, int);
 void	lf_print(char *, struct lockf *);
 void	lf_printlist(char *, struct lockf *);
 #endif
+#endif /* KERNEL_PRIVATE */
 
 __END_DECLS
 

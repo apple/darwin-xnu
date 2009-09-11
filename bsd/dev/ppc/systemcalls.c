@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -32,6 +32,8 @@
  * Version 2.0.
  */
 
+#include <mach/mach_traps.h>
+
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/assert.h>
@@ -54,7 +56,7 @@
 #include <sys/sysproto.h>
 #include <sys/kauth.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #if CONFIG_DTRACE
 extern int32_t dtrace_systrace_syscall(struct proc *, void *, int *);
@@ -193,7 +195,7 @@ unsafe:
 
 #ifdef JOE_DEBUG
 	if (uthread->uu_iocount)
-	        joe_debug("system call returned with uu_iocount != 0");
+	        printf("system call returned with uu_iocount != 0\n");
 #endif
 #if CONFIG_DTRACE
 	uthread->t_dtrace_errno = error;
@@ -274,10 +276,10 @@ unsafe:
 
 	        if (callp->sy_return_type == _SYSCALL_RET_SSIZE_T)
 		        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-					      error, uthread->uu_rval[1], 0, 0, 0);
+					      error, uthread->uu_rval[1], 0, proc->p_pid, 0);
 		else
 		        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-					      error, uthread->uu_rval[0], uthread->uu_rval[1], 0, 0);
+					      error, uthread->uu_rval[0], uthread->uu_rval[1], proc->p_pid, 0);
 	}
 
 	thread_exception_return();
@@ -311,6 +313,7 @@ unix_syscall_return(int error)
         if (callp->sy_call == dtrace_systrace_syscall)
                 dtrace_systrace_syscall_return( code, error, uthread->uu_rval );
 #endif /* CONFIG_DTRACE */
+	AUDIT_SYSCALL_EXIT(code, proc, uthread, error);
 
 	/*
 	 * Get index into sysent table
@@ -385,19 +388,46 @@ unix_syscall_return(int error)
 	if (kdebug_enable && (code != 180)) {
 	        if (callp->sy_return_type == _SYSCALL_RET_SSIZE_T)
 		        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-					      error, uthread->uu_rval[1], 0, 0, 0);
+					      error, uthread->uu_rval[1], 0, proc->p_pid, 0);
 		else
 		        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-					      error, uthread->uu_rval[0], uthread->uu_rval[1], 0, 0);
+					      error, uthread->uu_rval[0], uthread->uu_rval[1], proc->p_pid, 0);
 	}
 
 	thread_exception_return();
 	/* NOTREACHED */
 }
 
-#ifdef JOE_DEBUG
-joe_debug(char *p) {
+void
+munge_lwww(
+	const void	*in32,
+	void		*out64)
+{
+	const uint32_t	*arg32;
+	uint64_t	*arg64;
 
-        printf("%s\n", p);
+	arg32 = (const uint32_t *) in32;
+	arg64 = (uint64_t *) out64;
+
+	arg64[3] = arg32[9];	/* lwwW */
+	arg64[2] = arg32[7];	/* lwWw */
+	arg64[1] = arg32[5]; 	/* lWww */
+	arg64[0] = ((uint64_t) arg32[1]) << 32;	/* Lwww (hi) */
+	arg64[0] |= (uint64_t) arg32[3];	/* Lwww (lo) */
 }
-#endif
+
+void
+munge_lw(
+	const void	*in32,
+	void		*out64)
+{
+	const uint32_t	*arg32;
+	uint64_t	*arg64;
+
+	arg32 = (const uint32_t *) in32;
+	arg64 = (uint64_t *) out64;
+
+	arg64[1] = arg32[5]; 	/* lW */
+	arg64[0] = ((uint64_t) arg32[1]) << 32;	/* Lw (hi) */
+	arg64[0] |= (uint64_t) arg32[3];	/* Lw (lo) */
+}

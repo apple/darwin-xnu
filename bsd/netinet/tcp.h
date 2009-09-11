@@ -195,12 +195,13 @@ struct tcphdr {
 /*
  * User-settable options (used with setsockopt).
  */
-#define	TCP_NODELAY	0x01	/* don't delay send to coalesce packets */
+#define	TCP_NODELAY             0x01    /* don't delay send to coalesce packets */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define	TCP_MAXSEG	0x02	/* set maximum segment size */
-#define TCP_NOPUSH	0x04	/* don't push last block of write */
-#define TCP_NOOPT	0x08	/* don't use TCP options */
-#define TCP_KEEPALIVE	0x10	/* idle time used when SO_KEEPALIVE is enabled */
+#define	TCP_MAXSEG              0x02    /* set maximum segment size */
+#define TCP_NOPUSH              0x04    /* don't push last block of write */
+#define TCP_NOOPT               0x08    /* don't use TCP options */
+#define TCP_KEEPALIVE           0x10    /* idle time used when SO_KEEPALIVE is enabled */
+#define TCP_CONNECTIONTIMEOUT   0x20    /* connection timeout */
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 #endif

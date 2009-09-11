@@ -116,7 +116,7 @@ void *dtrace_alloc(vm_size_t size)
 
 	/*
 	 * If size is too large for a zone, then use kmem_alloc.
-	 * (We use kmem_alloc instead of kmem_alloc_wired so that
+	 * (We use kmem_alloc instead of kmem_alloc_kobject so that
 	 * krealloc can use kmem_realloc.)
 	 */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003, 2005-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2003, 2005-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -359,7 +359,7 @@ OSStatus	ExtendBTree	(BTreeControlBlockPtr	btreePtr,
 	} while ( ((BTNodeDescriptor*)mapNode.buffer)->fLink != 0 );
 
 	if (DEBUG_BUILD && totalMapBits != CalcMapBits (btreePtr))
-		Panic ("\pExtendBTree: totalMapBits != CalcMapBits");
+		Panic ("ExtendBTree: totalMapBits != CalcMapBits");
 		
 	/////////////////////// Extend LEOF If Necessary ////////////////////////////
 
@@ -464,7 +464,7 @@ OSStatus	ExtendBTree	(BTreeControlBlockPtr	btreePtr,
 			
 			if (DEBUG_BUILD && mapSize != M_MapRecordSize (btreePtr->nodeSize) )
 			{
-				Panic ("\pExtendBTree: mapSize != M_MapRecordSize");
+				Panic ("ExtendBTree: mapSize != M_MapRecordSize");
 			}
 			
 			mapBits		= mapSize << 3;		// mapSize (in bytes) * 8
@@ -613,4 +613,113 @@ u_int32_t		CalcMapBits	(BTreeControlBlockPtr	 btreePtr)
 		mapBits	+= M_MapRecordSize (btreePtr->nodeSize) << 3;
 	
 	return	mapBits;
+}
+
+
+/*-------------------------------------------------------------------------------
+Routine:	BTZeroUnusedNodes
+
+Function:	Write zeros to all nodes in the B-tree that are not currently in use.
+-------------------------------------------------------------------------------*/
+__private_extern__
+int
+BTZeroUnusedNodes(FCB *filePtr)
+{
+	int						err;
+	vnode_t					vp;
+	BTreeControlBlockPtr	btreePtr;
+	BlockDescriptor			mapNode;
+	buf_t					bp;
+	u_int32_t				nodeNumber;
+	u_int16_t				*mapPtr, *pos;
+	u_int16_t				mapSize, size;
+	u_int16_t				mask;
+	u_int16_t				bitNumber;
+	u_int16_t				word;
+	int						numWritten;
+	
+	vp = FTOV(filePtr);
+	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
+	bp = NULL;
+	nodeNumber = 0;
+	mapNode.buffer = nil;
+	mapNode.blockHeader = nil;
+	numWritten = 0;
+	
+	/* Iterate over map nodes. */
+	while (true)
+	{
+		err = GetMapNode (btreePtr, &mapNode, &mapPtr, &mapSize);
+		if (err)
+		{
+			err = MacToVFSError(err);
+			goto ErrorExit;
+		}
+		
+		pos		= mapPtr;
+		size	= mapSize;
+		size  >>= 1;					/* convert to number of 16-bit words */
+
+		/* Iterate over 16-bit words in the map record. */
+		while (size--)
+		{
+			if (*pos != 0xFFFF)			/* Anything free in this word? */
+			{
+				word = SWAP_BE16(*pos);
+				
+				/* Iterate over bits in the word. */
+				for (bitNumber = 0, mask = 0x8000;
+				     bitNumber < 16;
+				     ++bitNumber, mask >>= 1)
+				{
+					if (word & mask)
+						continue;				/* This node is in use. */
+					
+					if (nodeNumber + bitNumber >= btreePtr->totalNodes)
+					{
+						/* We've processed all of the nodes. */
+						goto done;
+					}
+					
+					/*
+					 * Get a buffer full of zeros and write it to the unused
+					 * node.  Since we'll probably be writing a lot of nodes,
+					 * bypass the journal (to avoid a transaction that's too
+					 * big).  Instead, this behaves more like clearing out
+					 * nodes when extending a B-tree (eg., ClearBTNodes).
+					 */
+					bp = buf_getblk(vp, nodeNumber + bitNumber, btreePtr->nodeSize, 0, 0, BLK_META);
+					if (bp == NULL)
+					{
+						printf("hfs: BTZeroUnusedNodes: unable to read node %u\n", nodeNumber + bitNumber);
+						err = EIO;
+						goto ErrorExit;
+					}
+					
+					buf_clear(bp);
+					buf_markaged(bp);
+					
+					/*
+					 * Try not to hog the buffer cache.  Wait for the write
+					 * every 32 nodes.
+					 */
+					++numWritten;
+					if (numWritten % 32 == 0)
+						VNOP_BWRITE(bp);
+					else
+						buf_bawrite(bp);
+				}
+			}
+			
+			/* Go to the next word in the bitmap */
+			++pos;
+			nodeNumber += 16;
+		}
+	}
+
+ErrorExit:
+done:
+	(void) ReleaseNode(btreePtr, &mapNode);
+	
+	return err;
 }

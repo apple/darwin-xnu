@@ -57,8 +57,6 @@
 #ifndef _IP_DUMMYNET_H
 #define _IP_DUMMYNET_H
 
-#if !__LP64__
-
 #include <sys/appleapiopts.h>
 
 #ifdef PRIVATE
@@ -243,7 +241,7 @@ struct dn_flow_queue {
     struct mbuf *head, *tail ;	/* queue of packets */
     u_int len ;
     u_int len_bytes ;
-    u_long numbytes ;		/* credit for transmission (dynamic queues) */
+    u_int32_t numbytes ;		/* credit for transmission (dynamic queues) */
 
     u_int64_t tot_pkts ;	/* statistics counters	*/
     u_int64_t tot_bytes ;
@@ -282,7 +280,7 @@ struct dn_flow_queue {
  * latter case, the structure is located inside the struct dn_pipe).
  */
 struct dn_flow_set {
-    struct dn_flow_set *next; /* next flow set in all_flow_sets list */
+    SLIST_ENTRY(dn_flow_set)	next;	/* linked list in a hash slot */
 
     u_short fs_nr ;             /* flow_set number       */
     u_short flags_fs;
@@ -332,6 +330,8 @@ struct dn_flow_set {
     int max_pkt_size ;		/* max packet size */
 } ;
 
+SLIST_HEAD(dn_flow_set_head, dn_flow_set);
+
 /*
  * Pipe descriptor. Contains global parameters, delay-line queue,
  * and the flow_set used for fixed-rate queues.
@@ -347,7 +347,7 @@ struct dn_flow_set {
  *
  */
 struct dn_pipe {		/* a pipe */
-    struct dn_pipe *next ;
+    SLIST_ENTRY(dn_pipe)	next;	/* linked list in a hash slot */
 
     int	pipe_nr ;		/* number	*/
     int bandwidth;		/* really, bytes/tick.	*/
@@ -377,6 +377,8 @@ struct dn_pipe {		/* a pipe */
     struct dn_flow_set fs ; /* used with fixed-rate flows */
 };
 
+SLIST_HEAD(dn_pipe_head, dn_pipe);
+
 #ifdef KERNEL
 
 void ip_dn_init(void); /* called from raw_ip.c:load_ipfw() */
@@ -389,6 +391,257 @@ extern	ip_dn_ctl_t *ip_dn_ctl_ptr;
 extern	ip_dn_ruledel_t *ip_dn_ruledel_ptr;
 extern	ip_dn_io_t *ip_dn_io_ptr;
 #define	DUMMYNET_LOADED	(ip_dn_io_ptr != NULL)
+
+#pragma pack(4)
+
+struct dn_heap_32 {
+    int size ;
+    int elements ;
+    int offset ; /* XXX if > 0 this is the offset of direct ptr to obj */
+    user32_addr_t p ;	/* really an array of "size" entries */
+} ;
+
+struct dn_flow_queue_32 {
+    user32_addr_t next ;
+    struct ipfw_flow_id id ;
+
+    user32_addr_t head, tail ;	/* queue of packets */
+    u_int len ;
+    u_int len_bytes ;
+    u_int32_t numbytes ;	/* credit for transmission (dynamic queues) */
+
+    u_int64_t tot_pkts ;	/* statistics counters	*/
+    u_int64_t tot_bytes ;
+    u_int32_t drops ;
+
+    int hash_slot ;			/* debugging/diagnostic */
+
+    /* RED parameters */
+    int avg ;                   /* average queue length est. (scaled) */
+    int count ;                 /* arrivals since last RED drop */
+    int random ;                /* random value (scaled) */
+    u_int32_t q_time ;          /* start of queue idle time */
+
+    /* WF2Q+ support */
+    user32_addr_t fs ;	/* parent flow set */
+    int heap_pos ;		/* position (index) of struct in heap */
+    dn_key sched_time ;		/* current time when queue enters ready_heap */
+
+    dn_key S,F ;		/* start time, finish time */
+    /*
+     * Setting F < S means the timestamp is invalid. We only need
+     * to test this when the queue is empty.
+     */
+} ;
+
+struct dn_flow_set_32 {
+    user32_addr_t	next; /* next flow set in all_flow_sets list */
+	
+    u_short fs_nr ;             	/* flow_set number       */
+    u_short flags_fs;
+#define DN_HAVE_FLOW_MASK	0x0001
+#define DN_IS_RED		0x0002
+#define DN_IS_GENTLE_RED	0x0004
+#define DN_QSIZE_IS_BYTES	0x0008	/* queue size is measured in bytes */
+#define DN_NOERROR		0x0010		/* do not report ENOBUFS on drops  */
+#define DN_IS_PIPE		0x4000
+#define DN_IS_QUEUE		0x8000
+	
+    user32_addr_t pipe ;	/* pointer to parent pipe */
+    u_short parent_nr ;		/* parent pipe#, 0 if local to a pipe */
+	
+    int weight ;		/* WFQ queue weight */
+    int qsize ;			/* queue size in slots or bytes */
+    int plr ;			/* pkt loss rate (2^31-1 means 100%) */
+	
+    struct ipfw_flow_id flow_mask ;
+	
+    /* hash table of queues onto this flow_set */
+    int rq_size ;		/* number of slots */
+    int rq_elements ;	/* active elements */
+    user32_addr_t rq;	/* array of rq_size entries */
+	
+    u_int32_t last_expired ;	/* do not expire too frequently */
+    int backlogged ;			/* #active queues for this flowset */
+	
+	/* RED parameters */
+#define SCALE_RED               16
+#define SCALE(x)                ( (x) << SCALE_RED )
+#define SCALE_VAL(x)            ( (x) >> SCALE_RED )
+#define SCALE_MUL(x,y)          ( ( (x) * (y) ) >> SCALE_RED )
+    int w_q ;			/* queue weight (scaled) */
+    int max_th ;		/* maximum threshold for queue (scaled) */
+    int min_th ;		/* minimum threshold for queue (scaled) */
+    int max_p ;			/* maximum value for p_b (scaled) */
+    u_int c_1 ;			/* max_p/(max_th-min_th) (scaled) */
+    u_int c_2 ;			/* max_p*min_th/(max_th-min_th) (scaled) */
+    u_int c_3 ;			/* for GRED, (1-max_p)/max_th (scaled) */
+    u_int c_4 ;			/* for GRED, 1 - 2*max_p (scaled) */
+    user32_addr_t w_q_lookup ;	/* lookup table for computing (1-w_q)^t */
+    u_int lookup_depth ;	/* depth of lookup table */
+    int lookup_step ;		/* granularity inside the lookup table */
+    int lookup_weight ;		/* equal to (1-w_q)^t / (1-w_q)^(t+1) */
+    int avg_pkt_size ;		/* medium packet size */
+    int max_pkt_size ;		/* max packet size */
+} ;
+
+struct dn_pipe_32 {		/* a pipe */
+    user32_addr_t	next ;
+	
+    int	pipe_nr ;		/* number	*/
+    int bandwidth;		/* really, bytes/tick.	*/
+    int	delay ;			/* really, ticks	*/
+	
+    user32_addr_t head, tail ;	/* packets in delay line */
+	
+    /* WF2Q+ */
+    struct dn_heap_32 scheduler_heap ; /* top extract - key Finish time*/
+    struct dn_heap_32 not_eligible_heap; /* top extract- key Start time */
+    struct dn_heap_32 idle_heap ; /* random extract - key Start=Finish time */
+	
+    dn_key V ;			/* virtual time */
+    int sum;			/* sum of weights of all active sessions */
+    int numbytes;		/* bits I can transmit (more or less). */
+	
+    dn_key sched_time ;	/* time pipe was scheduled in ready_heap */
+	
+    /*
+     * When the tx clock come from an interface (if_name[0] != '\0'), its name
+     * is stored below, whereas the ifp is filled when the rule is configured.
+     */
+    char if_name[IFNAMSIZ];
+    user32_addr_t ifp ;
+    int ready ; 		/* set if ifp != NULL and we got a signal from it */
+	
+    struct dn_flow_set_32 fs ; /* used with fixed-rate flows */
+};
+#pragma pack()
+
+
+struct dn_heap_64 {
+    int size ;
+    int elements ;
+    int offset ; /* XXX if > 0 this is the offset of direct ptr to obj */
+    user64_addr_t p ;	/* really an array of "size" entries */
+} ;
+
+
+struct dn_flow_queue_64 {
+    user64_addr_t next ;
+    struct ipfw_flow_id id ;
+
+    user64_addr_t head, tail ;	/* queue of packets */
+    u_int len ;
+    u_int len_bytes ;
+    u_int32_t numbytes ;		/* credit for transmission (dynamic queues) */
+
+    u_int64_t tot_pkts ;		/* statistics counters	*/
+    u_int64_t tot_bytes ;
+    u_int32_t drops ;
+
+    int hash_slot ;				/* debugging/diagnostic */
+
+    /* RED parameters */
+    int avg ;                   /* average queue length est. (scaled) */
+    int count ;                 /* arrivals since last RED drop */
+    int random ;                /* random value (scaled) */
+    u_int32_t q_time ;          /* start of queue idle time */
+
+    /* WF2Q+ support */
+    user64_addr_t fs ;			/* parent flow set */
+    int heap_pos ;				/* position (index) of struct in heap */
+    dn_key sched_time ;			/* current time when queue enters ready_heap */
+
+    dn_key S,F ;				/* start time, finish time */
+    /*
+     * Setting F < S means the timestamp is invalid. We only need
+     * to test this when the queue is empty.
+     */
+} ;
+
+struct dn_flow_set_64 {
+    user64_addr_t next; 		/* next flow set in all_flow_sets list */
+	
+    u_short fs_nr ;             /* flow_set number       */
+    u_short flags_fs;
+#define DN_HAVE_FLOW_MASK	0x0001
+#define DN_IS_RED		0x0002
+#define DN_IS_GENTLE_RED	0x0004
+#define DN_QSIZE_IS_BYTES	0x0008	/* queue size is measured in bytes */
+#define DN_NOERROR		0x0010		/* do not report ENOBUFS on drops  */
+#define DN_IS_PIPE		0x4000
+#define DN_IS_QUEUE		0x8000
+	
+    user64_addr_t pipe ;	/* pointer to parent pipe */
+    u_short parent_nr ;		/* parent pipe#, 0 if local to a pipe */
+	
+    int weight ;		/* WFQ queue weight */
+    int qsize ;			/* queue size in slots or bytes */
+    int plr ;			/* pkt loss rate (2^31-1 means 100%) */
+	
+    struct ipfw_flow_id flow_mask ;
+	
+    /* hash table of queues onto this flow_set */
+    int rq_size ;		/* number of slots */
+    int rq_elements ;	/* active elements */
+    user64_addr_t rq;	/* array of rq_size entries */
+	
+    u_int32_t last_expired ;	/* do not expire too frequently */
+    int backlogged ;			/* #active queues for this flowset */
+	
+	/* RED parameters */
+#define SCALE_RED               16
+#define SCALE(x)                ( (x) << SCALE_RED )
+#define SCALE_VAL(x)            ( (x) >> SCALE_RED )
+#define SCALE_MUL(x,y)          ( ( (x) * (y) ) >> SCALE_RED )
+    int w_q ;			/* queue weight (scaled) */
+    int max_th ;		/* maximum threshold for queue (scaled) */
+    int min_th ;		/* minimum threshold for queue (scaled) */
+    int max_p ;			/* maximum value for p_b (scaled) */
+    u_int c_1 ;			/* max_p/(max_th-min_th) (scaled) */
+    u_int c_2 ;			/* max_p*min_th/(max_th-min_th) (scaled) */
+    u_int c_3 ;			/* for GRED, (1-max_p)/max_th (scaled) */
+    u_int c_4 ;			/* for GRED, 1 - 2*max_p (scaled) */
+    user64_addr_t w_q_lookup ;	/* lookup table for computing (1-w_q)^t */
+    u_int lookup_depth ;	/* depth of lookup table */
+    int lookup_step ;		/* granularity inside the lookup table */
+    int lookup_weight ;		/* equal to (1-w_q)^t / (1-w_q)^(t+1) */
+    int avg_pkt_size ;		/* medium packet size */
+    int max_pkt_size ;		/* max packet size */
+} ;
+
+struct dn_pipe_64 {		/* a pipe */
+    user64_addr_t	next ;
+	
+    int	pipe_nr ;		/* number	*/
+    int bandwidth;		/* really, bytes/tick.	*/
+    int	delay ;			/* really, ticks	*/
+	
+    user64_addr_t head, tail ;	/* packets in delay line */
+	
+    /* WF2Q+ */
+    struct dn_heap_64 scheduler_heap ; 		/* top extract - key Finish time*/
+    struct dn_heap_64 not_eligible_heap;	/* top extract- key Start time */
+    struct dn_heap_64 idle_heap ; 			/* random extract - key Start=Finish time */
+	
+    dn_key V ;			/* virtual time */
+    int sum;			/* sum of weights of all active sessions */
+    int numbytes;		/* bits I can transmit (more or less). */
+	
+    dn_key sched_time ;	/* time pipe was scheduled in ready_heap */
+	
+    /*
+     * When the tx clock come from an interface (if_name[0] != '\0'), its name
+     * is stored below, whereas the ifp is filled when the rule is configured.
+     */
+    char if_name[IFNAMSIZ];
+    user64_addr_t ifp ;
+    int ready ; /* set if ifp != NULL and we got a signal from it */
+	
+    struct dn_flow_set_64 fs ; /* used with fixed-rate flows */
+};
+
+
 
 /*
  * Return the IPFW rule associated with the dummynet tag; if any.
@@ -408,5 +661,4 @@ ip_dn_claim_rule(struct mbuf *m)
 #endif /* KERNEL */
 
 #endif /* PRIVATE */
-#endif /* !__LP64__ */
 #endif /* _IP_DUMMYNET_H */

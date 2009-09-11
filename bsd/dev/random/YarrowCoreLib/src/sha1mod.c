@@ -68,12 +68,12 @@ By Steve Reid <steve@edmweb.com>
 /* Hash a single 512-bit block. This is the core of the algorithm. */
 
 __private_extern__ void
-YSHA1Transform(unsigned long state[5], const unsigned char buffer[64])
+YSHA1Transform(u_int32_t state[5], const unsigned char buffer[64])
 {
-unsigned long a, b, c, d, e;
+u_int32_t a, b, c, d, e;
 typedef union {
     unsigned char c[64];
-    unsigned long l[16];
+    u_int32_t l[16];
 } CHAR64LONG16;
 CHAR64LONG16* block;
 #ifdef SHA1HANDSOFF
@@ -164,16 +164,16 @@ unsigned int i, j;
 __private_extern__ void
 YSHA1Final(unsigned char digest[20], YSHA1_CTX* context)
 {
-unsigned long i, j;
+u_int32_t i, j;
 unsigned char finalcount[8];
 
     for (i = 0; i < 8; i++) {
         finalcount[i] = (unsigned char)((context->count[(i >= 4 ? 0 : 1)]
          >> ((3-(i & 3)) * 8) ) & 255);  /* Endian independent */
     }
-    YSHA1Update(context, (unsigned char *)"\200", 1);
+    YSHA1Update(context, (const unsigned char *)"\200", 1);
     while ((context->count[0] & 504) != 448) {
-        YSHA1Update(context, (unsigned char *)"\0", 1);
+        YSHA1Update(context, (const unsigned char *)"\0", 1);
     }
     YSHA1Update(context, finalcount, 8);  /* Should cause a YSHA1Transform() */
     for (i = 0; i < 20; i++) {

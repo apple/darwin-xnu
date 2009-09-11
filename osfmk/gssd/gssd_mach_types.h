@@ -32,8 +32,9 @@
 typedef enum mechtype { DEFAULT_MECH = 0, KRB5_MECH = 0, SPNEGO_MECH } mechtype;
 typedef char *string_t;
 typedef uint8_t *byte_buffer;
-typedef uint64_t gssd_verifier;
 typedef uint32_t *gid_list;
+typedef uint64_t gss_ctx;
+typedef uint64_t gss_cred;
 
 #define GSSD_GSS_FLAGS_MASK	0x1FF
 /* The following need to correspond to GSS_C_*_FLAG in gssapi.h */
@@ -46,12 +47,15 @@ typedef uint32_t *gid_list;
 #define GSSD_ANON_FLAG		64
 #define GSSD_PROT_FLAG		128
 #define GSSD_TRANS_FLAG		256
+#define GSSD_C_DELEG_POLICY_FLAG 32768
 
-#define GSSD_FLAGS_SHIFT		16
+#define GSSD_FLAGS_SHIFT		0
 #define GSSD_NO_DEFAULT		(1 << GSSD_FLAGS_SHIFT) // Only use principal from uid
 #define GSSD_NO_CANON		(2 << GSSD_FLAGS_SHIFT) // Don't canononicalize host names
-#define GSSD_NO_HOME_ACCESS	(4 << GSSD_FLAGS_SHIFT) // Dont access home directory
-#define GSSD_NO_UI		(8 << GSSD_FLAGS_SHIFT) // Don't bring up UI
+#define GSSD_HOME_ACCESS_OK	(4 << GSSD_FLAGS_SHIFT) // OK to access home directory
+#define GSSD_UI_OK		(8 << GSSD_FLAGS_SHIFT) // OK to bring up UI
+#define GSSD_RESTART		(16 << GSSD_FLAGS_SHIFT) // Destroy the supplied context and start over
+#define GSSD_NFS_1DES		(64 << GSSD_FLAGS_SHIFT) // Only get single DES session keys
 #define GSSD_WIN2K_HACK		(128 << GSSD_FLAGS_SHIFT) // Hack for Win2K
 
 

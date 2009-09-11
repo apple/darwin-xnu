@@ -78,6 +78,7 @@
 
 /* Kernel-wide values */
 #define VM_MIN_KERNEL_ADDRESS	((vm_offset_t) 0x00001000U)
+#define VM_MIN_KERNEL_AND_KEXT_ADDRESS VM_MIN_KERNEL_ADDRESS
 #define VM_MAX_KERNEL_ADDRESS	((vm_offset_t) 0xDFFFFFFFU)
 #define KERNEL_STACK_SIZE		(4 * PPC_PGBYTES)
 #define INTSTACK_SIZE		(5 * PPC_PGBYTES)
@@ -88,7 +89,7 @@
 #ifdef	MACH_KERNEL_PRIVATE
 
 /* For implementing legacy 32-bit interfaces */
-#define VM32_SUPPORT
+#define VM32_SUPPORT		1
 #define VM32_MIN_ADDRESS	((vm32_offset_t) 0)
 #define VM32_MAX_ADDRESS	((vm32_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
 

@@ -331,5 +331,5 @@ do {									\
 	}								\
 } while (0)
 
-#endif KERNEL_PRIVATE
-#endif !_NETINET_IP6_H_
+#endif /* KERNEL_PRIVATE */
+#endif /* !_NETINET_IP6_H_ */

@@ -40,13 +40,10 @@
 #define kVeryLong   (500*1024)          // large enough for non-temporal stores (must be >= 8192)
 #define kFastUCode  ((16*1024)-15)	// cutoff for microcode fastpath for "rep/movsl"
 
-
 // void bcopy(const void *src, void *dst, size_t len);
  
-        .text
-        .align	5, 0x90
+COMMPAGE_FUNCTION_START(bcopy_sse3x, 32, 5)
 LZero:
-Lbcopy_sse3x:				// void bcopy(const void *src, void *dst, size_t len)
 	pushl	%ebp			// set up a frame for backtraces
 	movl	%esp,%ebp
         pushl   %esi
@@ -166,27 +163,49 @@ LDestAligned:
         addl    %edx,%esi               // point to 1st byte not copied
         addl    %edx,%edi
         negl    %edx                    // now generate offset to 1st byte to be copied
-	movl	(_COMM_PAGE_BCOPY+LTable-LZero)(,%eax,4),%eax
+.set LTableOffset, LTable - LZero
+	leal	(LTableOffset)(,%eax,4), %eax	// load jump table entry address, relative to LZero
+	movl	_COMM_PAGE_BCOPY(%eax), %eax	// load jump table entry
+	addl	$(_COMM_PAGE_BCOPY), %eax	// add runtime address of LZero to get final function
 	jmp	*%eax
 	
 	.align	2
 LTable:					// table of copy loop addresses
-	.long	LMod0 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod1 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod2 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod3 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod4 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod5 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod6 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod7 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod8 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod9 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod10 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod11 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod12 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod13 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod14 + _COMM_PAGE_BCOPY - LZero
-	.long	LMod15 + _COMM_PAGE_BCOPY - LZero
+// force generation of assembly-time constants. Otherwise assembler
+// creates subtractor relocations relative to first external symbol,
+// and this file has none
+.set LMod0Offset, LMod0 - LZero
+.set LMod1Offset, LMod1 - LZero
+.set LMod2Offset, LMod2 - LZero
+.set LMod3Offset, LMod3 - LZero
+.set LMod4Offset, LMod4 - LZero
+.set LMod5Offset, LMod5 - LZero
+.set LMod6Offset, LMod6 - LZero
+.set LMod7Offset, LMod7 - LZero
+.set LMod8Offset, LMod8 - LZero
+.set LMod9Offset, LMod9 - LZero
+.set LMod10Offset, LMod10 - LZero
+.set LMod11Offset, LMod11 - LZero
+.set LMod12Offset, LMod12 - LZero
+.set LMod13Offset, LMod13 - LZero
+.set LMod14Offset, LMod14 - LZero
+.set LMod15Offset, LMod15 - LZero
+	.long LMod0Offset
+	.long LMod1Offset
+	.long LMod2Offset
+	.long LMod3Offset
+	.long LMod4Offset
+	.long LMod5Offset
+	.long LMod6Offset
+	.long LMod7Offset
+	.long LMod8Offset
+	.long LMod9Offset
+	.long LMod10Offset
+	.long LMod11Offset
+	.long LMod12Offset
+	.long LMod13Offset
+	.long LMod14Offset
+	.long LMod15Offset
 
 
 // Very long forward moves.  These are at least several pages.  They are special cased
@@ -801,5 +820,4 @@ LReverseUnalignedLoop:                  // loop over 64-byte chunks
         
         jmp     LReverseShort           // copy remaining 0..63 bytes and done
 
-
-	COMMPAGE_DESCRIPTOR(bcopy_sse3x,_COMM_PAGE_BCOPY,kHasSSE2+kHasSupplementalSSE3+kCache64,kHasSSE4_2)
+COMMPAGE_DESCRIPTOR(bcopy_sse3x,_COMM_PAGE_BCOPY,kHasSSE2+kHasSupplementalSSE3+kCache64,kHasSSE4_2)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -54,16 +54,15 @@
  */
 
 struct UNDReply {
-	decl_mutex_data(,lock)				/* UNDReply lock */
+	decl_lck_mtx_data(,lock)				/* UNDReply lock */
 	int				userLandNotificationKey;
 	KUNCUserNotificationCallBack 	callback;
 	boolean_t			inprogress;
 	ipc_port_t			self_port;	/* Our port */
 };
 
-#define UNDReply_lock(reply)		mutex_lock(&reply->lock)
-#define UNDReply_lock_try(reply)	mutex_lock_try(&(reply)->lock)
-#define UNDReply_unlock(reply)		mutex_unlock(&(reply)->lock)
+#define UNDReply_lock(reply)		lck_mtx_lock(&reply->lock)
+#define UNDReply_unlock(reply)		lck_mtx_lock(&reply->lock)
 
 /* forward declarations */
 void UNDReply_deallocate(
@@ -149,7 +148,7 @@ UNDAlertCompletedWithResult_rpc (
 #endif /* KERNEL_CF */
 
 	if (reply->callback) {
-		(reply->callback)((KUNCUserNotificationID) reply, result, dict);
+		(reply->callback)((int)(KUNCUserNotificationID)reply, result, dict);
 	}
 
 	UNDReply_lock(reply);
@@ -190,6 +189,7 @@ UNDNotificationCreated_rpc (
  * KUNC Functions
 */
 
+extern lck_grp_t LockCompatGroup;
 
 KUNCUserNotificationID
 KUNCGetNotificationID(void)
@@ -203,7 +203,7 @@ KUNCGetNotificationID(void)
 			kfree(reply, sizeof(struct UNDReply));
 			reply = UND_REPLY_NULL;
 		} else {
-			mutex_init(&reply->lock, 0);
+			lck_mtx_init(&reply->lock, &LockCompatGroup, LCK_ATTR_NULL);
 			reply->userLandNotificationKey = -1;
 			reply->inprogress = FALSE;
 			ipc_kobject_set(reply->self_port,

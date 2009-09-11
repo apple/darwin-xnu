@@ -52,24 +52,8 @@
 #include "../../hfs_cnode.h"
 
 
-#if PRAGMA_ONCE
-#pragma once
-#endif
-
 #ifdef __cplusplus
 extern "C" {
-#endif
-
-#if PRAGMA_IMPORT
-#pragma import on
-#endif
-
-#if PRAGMA_STRUCT_ALIGN
-	#pragma options align=mac68k
-#elif PRAGMA_STRUCT_PACKPUSH
-	#pragma pack(push, 2)
-#elif PRAGMA_STRUCT_PACK
-	#pragma pack(2)
 #endif
 
 /* CatalogNodeID is used to track catalog objects */
@@ -212,15 +196,6 @@ typedef CALLBACK_API_C( int32_t , KeyCompareProcPtr )(void *a, void *b);
 
 
 EXTERN_API_C( OSErr )
-SearchBTreeRecord				(FileReference 				refNum,
-								 const void *			key,
-								 u_int32_t 				hint,
-								 void *					foundKey,
-								 void *					data,
-								 u_int16_t *			dataSize,
-								 u_int32_t *			newHint);
-
-EXTERN_API_C( OSErr )
 ReplaceBTreeRecord				(FileReference 				refNum,
 								 const void *			key,
 								 u_int32_t 				hint,
@@ -312,20 +287,6 @@ LocalToUTC						(u_int32_t 				localTime);
 EXTERN_API_C( u_int32_t )
 UTCToLocal						(u_int32_t 				utcTime);
 
-
-#if PRAGMA_STRUCT_ALIGN
-	#pragma options align=reset
-#elif PRAGMA_STRUCT_PACKPUSH
-	#pragma pack(pop)
-#elif PRAGMA_STRUCT_PACK
-	#pragma pack()
-#endif
-
-#ifdef PRAGMA_IMPORT_OFF
-#pragma import off
-#elif PRAGMA_IMPORT
-#pragma import reset
-#endif
 
 #ifdef __cplusplus
 }

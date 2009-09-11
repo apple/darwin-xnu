@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -74,6 +74,7 @@
 #ifdef KERNEL
 #include <sys/queue.h>
 #include <sys/kernel_types.h>
+#include <sys/uio.h>
 #endif
 
 #ifndef _KAUTH_CRED_T
@@ -99,14 +100,18 @@ struct extern_file {
 
 #pragma pack()
 
-#ifdef KERNEL
 __BEGIN_DECLS
+#ifdef KERNEL
 int file_socket(int, socket_t *);
 int file_vnode(int, vnode_t *);
+int file_vnode_withvid(int, vnode_t *, uint32_t *);
 int file_flags(int, int *);
 int file_drop(int);
-__END_DECLS
-
 #endif /* KERNEL */
 
+#ifdef KERNEL_PRIVATE
+int fd_rdwr(int fd, enum uio_rw, uint64_t base, int64_t len, enum uio_seg,
+	    off_t offset, int io_flg, int64_t *aresid);
+#endif	/* KERNEL_PRIVATE */
+__END_DECLS
 #endif /* !_SYS_FILE_H_ */

@@ -54,10 +54,6 @@ int kdp_getc(void);
 boolean_t kdp_call_kdb(void);
 
 extern pmap_t kdp_pmap;
-extern uint32_t kdp_src_high32;
-
-
-extern unsigned kdp_vm_read(caddr_t src, caddr_t dst, unsigned len);
 
 int
 machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nframes, boolean_t user_p);
@@ -439,7 +435,7 @@ kdp_panic(
 extern void halt_all_cpus(boolean_t);
 
 void
-kdp_reboot(void)
+kdp_machine_reboot(void)
 {
 	printf("Attempting system restart...");
 	/* Call the platform specific restart*/
@@ -624,9 +620,7 @@ static void kdp_print_registers(struct savearea *state)
 	printf("lr        = 0x%08llx\t\t",state->save_lr);
 	printf("ctr       = 0x%08llx\n",state->save_ctr);
 	printf("srr0(iar) = 0x%08llx\t\t",state->save_srr0);
-	printf("srr1(msr) = 0x%08B\n",state->save_srr1,
-		"\x10\x11""EE\x12PR\x13""FP\x14ME\x15""FE0\x16SE\x18"
-		"FE1\x19""AL\x1a""EP\x1bIT\x1c""DT");
+	printf("srr1(msr) = 0x%08llx\n",state->save_srr1);
 	printf("\n");
 }
 
@@ -647,10 +641,16 @@ kdp_print_backtrace(
 	while(1);
 }
 
-unsigned int kdp_ml_get_breakinsn(void)
+void
+kdp_machine_get_breakinsn(
+						  uint8_t *bytes,
+						  uint32_t *size
+)
 {
-  return 0x7fe00008;
+	*(uint32_t *)bytes = 0x7fe00008;
+	*size = sizeof(uint32_t);
 }
+
 #define LR_OFFSET 8
 #define LR_OFFSET64 16
 
@@ -705,14 +705,14 @@ machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nfra
 			break;
 		}
 /* Assume there's a saved link register, and read it */
-		if (kdp_vm_read((caddr_t) (stackptr + LR_OFFSET), (caddr_t) tracebuf, sizeof(caddr_t)) != sizeof(caddr_t)) {
+		if (kdp_machine_vm_read((caddr_t) (stackptr + LR_OFFSET), (caddr_t) tracebuf, sizeof(caddr_t)) != sizeof(caddr_t)) {
 			break;
 		}
 
 		tracebuf++;
 		prevsp = stackptr;
 /* Next frame */
-		if (kdp_vm_read((caddr_t) stackptr, (caddr_t) &stackptr, sizeof(caddr_t)) != sizeof(caddr_t)) {
+		if (kdp_machine_vm_read((caddr_t) stackptr, (caddr_t) &stackptr, sizeof(caddr_t)) != sizeof(caddr_t)) {
 			*tracebuf++ = 0;
 			break;
 		}
@@ -726,13 +726,9 @@ machine_trace_thread(thread_t thread, char *tracepos, char *tracebound, int nfra
 unsigned
 machine_read64(addr64_t srcaddr, caddr_t dstaddr, uint32_t len)
 {
-	uint32_t kdp_vm_read_low32;
 	unsigned retval;
 	
-	kdp_src_high32 = srcaddr >> 32;
-	kdp_vm_read_low32 = srcaddr & 0x00000000FFFFFFFFUL;
-	retval = kdp_vm_read((caddr_t)kdp_vm_read_low32, dstaddr, len);
-	kdp_src_high32 = 0;
+	retval = kdp_machine_vm_read(srcaddr, dstaddr, len);
 	return retval;
 }
 
@@ -804,4 +800,28 @@ void
 kdp_ml_enter_debugger(void)
 {
 	__asm__ __volatile__("tw 4,r3,r3");
+}
+
+int
+kdp_machine_ioport_read(kdp_readioport_req_t *rq, caddr_t data, uint16_t lcpu)
+{
+    return 0;
+}
+
+int
+kdp_machine_ioport_write(kdp_writeioport_req_t *rq, caddr_t data, uint16_t lcpu)
+{
+    return 0;
+}
+
+int
+kdp_machine_msr64_read(kdp_readmsr64_req_t *rq, caddr_t data, uint16_t lcpu)
+{
+    return 0;
+}
+
+int
+kdp_machine_msr64_write(kdp_writemsr64_req_t *rq, __unused caddr_t data, uint16_t lcpu)
+{
+    return 0;
 }

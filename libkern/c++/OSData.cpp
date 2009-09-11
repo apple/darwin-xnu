@@ -38,7 +38,7 @@
 #define super OSObject
 
 OSDefineMetaClassAndStructors(OSData, OSObject)
-OSMetaClassDefineReservedUnused(OSData, 0);
+OSMetaClassDefineReservedUsed(OSData, 0);    // setDeallocFunction
 OSMetaClassDefineReservedUnused(OSData, 1);
 OSMetaClassDefineReservedUnused(OSData, 2);
 OSMetaClassDefineReservedUnused(OSData, 3);
@@ -190,7 +190,12 @@ void OSData::free()
     if (capacity != EXTERNAL && data && capacity) {
         kfree(data, capacity);
         ACCUMSIZE( -capacity );
-    }
+    } else if (capacity == EXTERNAL) {
+	    DeallocFunction freemem = (DeallocFunction)reserved;
+		if (freemem && data && length) {
+			freemem(data, length);
+		}
+	}
     super::free();
 }
 
@@ -206,6 +211,8 @@ unsigned int OSData::setCapacityIncrement(unsigned increment)
 {
     return capacityIncrement = increment; 
 }
+
+// xx-review: does not check for capacity == EXTERNAL
 
 unsigned int OSData::ensureCapacity(unsigned int newCapacity)
 {
@@ -321,11 +328,11 @@ bool OSData::isEqualTo(const void *someData, unsigned int inLength) const
 
 bool OSData::isEqualTo(const OSMetaClassBase *obj) const
 {
-    OSData *	data;
+    OSData *	otherData;
     OSString *  str;
 
-    if ((data = OSDynamicCast(OSData, obj)))
-        return isEqualTo(data);
+    if ((otherData = OSDynamicCast(OSData, obj)))
+        return isEqualTo(otherData);
     else if ((str = OSDynamicCast (OSString, obj)))
         return isEqualTo(str);
     else
@@ -422,4 +429,13 @@ bool OSData::serialize(OSSerialize *s) const
     }
 
     return s->addXMLEndTag("data");
+}
+
+/* Note I am just using the reserved pointer here instead of allocating a whole buffer
+ * to hold one pointer.
+ */
+void OSData::setDeallocFunction(DeallocFunction func)
+{
+    reserved = (ExpansionData *)func;
+	return;
 }

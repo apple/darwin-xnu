@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,6 +73,10 @@
  * <sys/time.h>
  */
 #define __need_struct_timeval
+#ifdef KERNEL
+#define __need_struct_user32_timeval
+#define __need_struct_user64_timeval
+#endif
 #include <sys/_structs.h>
 
 /* The id_t type shall be defined as described in <sys/types.h> */
@@ -171,37 +175,46 @@ struct	rusage {
 
 
 #ifdef KERNEL
-#include <machine/types.h>	/* user_time_t */
 
-/* LP64 version of struct timeval.  time_t is a long and must grow when 
- * we're dealing with a 64-bit process.
- * WARNING - keep in sync with struct timeval
- */
-
-struct user_rusage_timeval {
-	user_time_t		tv_sec;		/* seconds */
-	__darwin_suseconds_t	tv_usec __attribute((aligned(8)));	/* and microseconds */
-};	
-struct	user_rusage {
-	struct user_rusage_timeval ru_utime;	/* user time used */
-	struct user_rusage_timeval ru_stime;	/* system time used */
-	user_long_t	ru_maxrss;		/* max resident set size */
-	user_long_t	ru_ixrss;		/* integral shared memory size */
-	user_long_t	ru_idrss;		/* integral unshared data " */
-	user_long_t	ru_isrss;		/* integral unshared stack " */
-	user_long_t	ru_minflt;		/* page reclaims */
-	user_long_t	ru_majflt;		/* page faults */
-	user_long_t	ru_nswap;		/* swaps */
-	user_long_t	ru_inblock;		/* block input operations */
-	user_long_t	ru_oublock;		/* block output operations */
-	user_long_t	ru_msgsnd;		/* messages sent */
-	user_long_t	ru_msgrcv;		/* messages received */
-	user_long_t	ru_nsignals;	/* signals received */
-	user_long_t	ru_nvcsw;		/* voluntary context switches */
-	user_long_t	ru_nivcsw;		/* involuntary " */
+struct	user64_rusage {
+	struct user64_timeval ru_utime;	/* user time used */
+	struct user64_timeval ru_stime;	/* system time used */
+	user64_long_t	ru_maxrss;		/* max resident set size */
+	user64_long_t	ru_ixrss;		/* integral shared memory size */
+	user64_long_t	ru_idrss;		/* integral unshared data " */
+	user64_long_t	ru_isrss;		/* integral unshared stack " */
+	user64_long_t	ru_minflt;		/* page reclaims */
+	user64_long_t	ru_majflt;		/* page faults */
+	user64_long_t	ru_nswap;		/* swaps */
+	user64_long_t	ru_inblock;		/* block input operations */
+	user64_long_t	ru_oublock;		/* block output operations */
+	user64_long_t	ru_msgsnd;		/* messages sent */
+	user64_long_t	ru_msgrcv;		/* messages received */
+	user64_long_t	ru_nsignals;	/* signals received */
+	user64_long_t	ru_nvcsw;		/* voluntary context switches */
+	user64_long_t	ru_nivcsw;		/* involuntary " */
 };
 
-#endif // KERNEL
+struct	user32_rusage {
+	struct user32_timeval ru_utime;	/* user time used */
+	struct user32_timeval ru_stime;	/* system time used */
+	user32_long_t	ru_maxrss;		/* max resident set size */
+	user32_long_t	ru_ixrss;		/* integral shared memory size */
+	user32_long_t	ru_idrss;		/* integral unshared data " */
+	user32_long_t	ru_isrss;		/* integral unshared stack " */
+	user32_long_t	ru_minflt;		/* page reclaims */
+	user32_long_t	ru_majflt;		/* page faults */
+	user32_long_t	ru_nswap;		/* swaps */
+	user32_long_t	ru_inblock;		/* block input operations */
+	user32_long_t	ru_oublock;		/* block output operations */
+	user32_long_t	ru_msgsnd;		/* messages sent */
+	user32_long_t	ru_msgrcv;		/* messages received */
+	user32_long_t	ru_nsignals;	/* signals received */
+	user32_long_t	ru_nvcsw;		/* voluntary context switches */
+	user32_long_t	ru_nivcsw;		/* involuntary " */
+};
+
+#endif /* KERNEL */
 
 
 /*****

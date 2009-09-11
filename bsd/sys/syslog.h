@@ -310,10 +310,13 @@ struct reg_desc {
 
 #include <stdarg.h>
 __BEGIN_DECLS
-void	logpri(int);
 void	log(int, const char *, ...);
+#ifdef XNU_KERNEL_PRIVATE
+void	logpri(int);
 int	vaddlog(const char *, va_list);
 void	logtime(time_t);
+#endif /* XNU_KERNEL_PRIVATE */
+
 __END_DECLS
 
 #endif /* !KERNEL */

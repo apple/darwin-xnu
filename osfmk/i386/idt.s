@@ -91,8 +91,8 @@
 	.byte	type		;\
 	.text
 
-#define	IDT_ENTRY(vec,type)	IDT_BASE_ENTRY(vec,KERNEL_CS,type)
-#define	IDT_ENTRY_INT(vec,type)	IDT_BASE_ENTRY_INT(vec,KERNEL_CS,type)
+#define	IDT_ENTRY(vec,type)	IDT_BASE_ENTRY(vec,KERNEL32_CS,type)
+#define	IDT_ENTRY_INT(vec,type)	IDT_BASE_ENTRY_INT(vec,KERNEL32_CS,type)
 
 /*
  * No error code.  Clear error code and push trap number.
@@ -179,6 +179,7 @@ L_ ## n:					;\
 Entry(master_idt)
 Entry(hi_remap_data)
 	.text
+	.align 12
 Entry(hi_remap_text)
 
 EXCEPTION(0x00,t_zero_div)
@@ -620,7 +621,7 @@ hi_sysenter_2:
 	pushl	%eax			/* err/eax - syscall code */
 	pushl	$0			/* clear trap number slot */
 	pusha				/* save the general registers */
-	orl	$(EFL_IF),R_EFLAGS-R_EDI(%esp)	/* (edi was last reg pushed) */
+	orl	$(EFL_IF),R32_EFLAGS-R32_EDI(%esp)	/* (edi was last reg pushed) */
 	movl	$ EXT(lo_sysenter),%ebx
 enter_lohandler:
 	pushl   %ds
@@ -646,7 +647,7 @@ enter_lohandler1:
 	movl	%ecx,%cr3
 	movl	%ecx,%gs:CPU_ACTIVE_CR3
 1:
-	testb	$3,R_CS(%esp)
+	testb	$3,R32_CS(%esp)
 	jz	2f
 	movl	%esp,%edx			/* came from user mode */
 	subl	%gs:CPU_HI_ISS,%edx
@@ -658,7 +659,7 @@ enter_lohandler1:
 	movl	$0, %ecx		/* If so, reset DR7 (the control) */
 	movl	%ecx, %dr7
 2:
-	movl	R_TRAPNO(%esp),%ecx			// Get the interrupt vector
+	movl	R32_TRAPNO(%esp),%ecx			// Get the interrupt vector
 	addl	$1,%gs:hwIntCnt(,%ecx,4)	// Bump the count
 	jmp		*%ebx
 
@@ -670,7 +671,7 @@ Entry(hi_page_fault)
 	pushl	$(T_PAGE_FAULT)		/* mark a page fault trap */
 	pusha				/* save the general registers */
 	movl	%cr2,%eax		/* get the faulting address */
-	movl	%eax,R_CR2-R_EDI(%esp)	/* save in esp save slot */
+	movl	%eax,R32_CR2-R32_EDI(%esp)/* save in esp save slot */
 
 	movl	$ EXT(lo_alltraps),%ebx
 	jmp	enter_lohandler
@@ -834,8 +835,8 @@ push_gs:
 	pushl	%gs			/* restore gs. */
 push_none:
 	pushl	$(SS_32)		/* 32-bit state flavor */
-	movl	%eax,R_TRAPNO(%esp)	/* set trap number */
-	movl	%edx,R_ERR(%esp)	/* set error code */
+	movl	%eax,R32_TRAPNO(%esp)	/* set trap number */
+	movl	%edx,R32_ERR(%esp)	/* set error code */
 					/* now treat as fault from user */
 					/* except that segment registers are */
 					/* already pushed */

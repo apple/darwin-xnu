@@ -1,5 +1,12 @@
-_OSCompareAndSwap64
+_lck_mtx_unlock_darwin10
 _OSAddAtomic64
-_strcpy
-_strcat
+_OSCompareAndSwap64
+_OSRuntimeFinalizeCPP
+_OSRuntimeInitializeCPP
+_OSRuntimeUnloadCPP
+_OSRuntimeUnloadCPPForSegment
+__ZN12OSOrderedSet12withCapacityEjPFlPK15OSMetaClassBaseS2_PvES3_
+__ZN12OSOrderedSet16initWithCapacityEjPFlPK15OSMetaClassBaseS2_PvES3_
 _sprintf
+_strcat
+_strcpy

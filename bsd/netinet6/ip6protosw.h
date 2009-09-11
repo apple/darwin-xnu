@@ -1,4 +1,32 @@
 /*	$FreeBSD: src/sys/netinet6/ip6protosw.h,v 1.2.2.3 2001/07/03 11:01:54 ume Exp $	*/
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$KAME: ip6protosw.h,v 1.22 2001/02/08 18:02:08 itojun Exp $	*/
 
 /*
@@ -120,6 +148,9 @@ struct ip6ctlparam {
 	u_int8_t ip6c_nxt;		/* final next header field */
 };
 
+#ifdef __LP64__ // K64todo: might also make sense for the generic case
+#pragma pack(4)
+#endif
 struct ip6protosw {
 	short	pr_type;		/* socket type used for */
 	struct	domain *pr_domain;	/* domain protocol a member of */
@@ -155,8 +186,8 @@ struct ip6protosw {
 
 	struct	pr_usrreqs *pr_usrreqs;	/* supersedes pr_usrreq() */
 #ifdef __APPLE__
-	int     	(*pr_lock)      (struct socket *so, int locktype, int debug); /* lock function for protocol */
-	int     	(*pr_unlock)    (struct socket *so, int locktype, int debug); /* unlock for protocol */
+	int     	(*pr_lock)      (struct socket *so, int locktype, void *debug); /* lock function for protocol */
+	int     	(*pr_unlock)    (struct socket *so, int locktype, void *debug); /* unlock for protocol */
 #ifdef _KERN_LOCKS_H_
 	lck_mtx_t *	(*pr_getlock)   (struct socket *so, int locktype); /* unlock for protocol */
 #else
@@ -165,9 +196,12 @@ struct ip6protosw {
 	/* Filter hooks */
 	TAILQ_HEAD(pr6_sfilter, NFDescriptor) pr_sfilter;
 	struct ip6protosw *pr_next;	/* Chain for domain */
-	u_long reserved[1];
+	u_int32_t reserved[1];
 #endif
 };
+#ifdef __LP64__ // K64todo: might also make sense for the generic case
+#pragma pack()
+#endif
 
-#endif KERNEL_PRIVATE
-#endif _NETINET6_IP6PROTOSW_H_
+#endif /* KERNEL_PRIVATE */
+#endif /* _NETINET6_IP6PROTOSW_H_ */

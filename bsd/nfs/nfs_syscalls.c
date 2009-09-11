@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -101,7 +101,7 @@
 #include <kern/thread_call.h>
 #include <kern/task.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -133,13 +133,12 @@ extern int nfsrv_wg_delay_v3;
 static int nfsrv_require_resv_port = 0;
 static int nfsrv_deadsock_timer_on = 0;
 
-static int	nfssvc_addsock(socket_t, mbuf_t);
-static int	nfssvc_nfsd(void);
-static int	nfssvc_export(user_addr_t);
-
-static void	nfsrv_zapsock(struct nfsrv_sock *slp);
-static void	nfsrv_slpderef(struct nfsrv_sock *);
-static void	nfsrv_slpfree(struct nfsrv_sock *);
+int	nfssvc_export(user_addr_t argp);
+int	nfssvc_nfsd(void);
+int	nfssvc_addsock(socket_t, mbuf_t);
+void	nfsrv_zapsock(struct nfsrv_sock *);
+void	nfsrv_slpderef(struct nfsrv_sock *);
+void	nfsrv_slpfree(struct nfsrv_sock *);
 
 #endif /* NFSSERVER */
 
@@ -161,6 +160,8 @@ SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, nfsiod_thread_max, CTLFLAG_RW, &nf
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, nfsiod_thread_count, CTLFLAG_RD, &nfsiod_thread_count, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, lockd_mounts, CTLFLAG_RD, &nfs_lockd_mounts, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, max_async_writes, CTLFLAG_RW, &nfs_max_async_writes, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, single_des, CTLFLAG_RW, &nfs_single_des, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, access_delete, CTLFLAG_RW, &nfs_access_delete, 0, "");
 #endif /* NFSCLIENT */
 
 #if NFSSERVER
@@ -169,10 +170,14 @@ SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, wg_delay, CTLFLAG_RW, &nfsrv_wg_de
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, wg_delay_v3, CTLFLAG_RW, &nfsrv_wg_delay_v3, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, require_resv_port, CTLFLAG_RW, &nfsrv_require_resv_port, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, async, CTLFLAG_RW, &nfsrv_async, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, export_hash_size, CTLFLAG_RW, &nfsrv_export_hash_size, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, reqcache_size, CTLFLAG_RW, &nfsrv_reqcache_size, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, request_queue_length, CTLFLAG_RW, &nfsrv_sock_max_rec_queue_length, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, user_stats, CTLFLAG_RW, &nfsrv_user_stat_enabled, 0, "");
+SYSCTL_UINT(_vfs_generic_nfs_server, OID_AUTO, gss_context_ttl, CTLFLAG_RW, &nfsrv_gss_context_ttl, 0, "");
+#if CONFIG_FSE
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, fsevents, CTLFLAG_RW, &nfsrv_fsevents_enabled, 0, "");
+#endif
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, nfsd_thread_max, CTLFLAG_RW, &nfsd_thread_max, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, nfsd_thread_count, CTLFLAG_RD, &nfsd_thread_count, 0, "");
 #endif /* NFSSERVER */
@@ -206,7 +211,6 @@ nfsclnt(proc_t p, struct nfsclnt_args *uap, __unused int *retval)
  * Async requests will pull the next struct nfsiod from the head of the free list,
  * put it on the work queue, and wake whatever thread is waiting on that struct.
  */
-static int nfsiod_continue(int);
 
 /*
  * nfsiod thread exit routine
@@ -214,7 +218,7 @@ static int nfsiod_continue(int);
  * Must be called with nfsiod_mutex held so that the
  * decision to terminate is atomic with the termination.
  */
-static void
+void
 nfsiod_terminate(struct nfsiod *niod)
 {
 	nfsiod_thread_count--;
@@ -228,7 +232,7 @@ nfsiod_terminate(struct nfsiod *niod)
 }
 
 /* nfsiod thread startup routine */
-static void
+void
 nfsiod_thread(void)
 {
 	struct nfsiod *niod;
@@ -238,6 +242,7 @@ nfsiod_thread(void)
 	if (!niod) {
 		lck_mtx_lock(nfsiod_mutex);
 		nfsiod_thread_count--;
+		wakeup(current_thread());
 		lck_mtx_unlock(nfsiod_mutex);
 		thread_terminate(current_thread());
 		/*NOTREACHED*/
@@ -263,7 +268,7 @@ nfsiod_thread(void)
 int
 nfsiod_start(void)
 {
-	thread_t thd;
+	thread_t thd = THREAD_NULL;
 
 	lck_mtx_lock(nfsiod_mutex);
 	if ((nfsiod_thread_count >= NFSIOD_MAX) && (nfsiod_thread_count > 0)) {
@@ -271,9 +276,13 @@ nfsiod_start(void)
 		return (EBUSY);
 	}
 	nfsiod_thread_count++;
-	thd = kernel_thread(kernel_task, nfsiod_thread);
+	if (kernel_thread_start((thread_continue_t)nfsiod_thread, NULL, &thd) != KERN_SUCCESS) {
+		lck_mtx_unlock(nfsiod_mutex);
+		return (EBUSY);
+	}
 	/* wait for the thread to complete startup */
 	msleep(thd, nfsiod_mutex, PWAIT | PDROP, "nfsiodw", NULL);
+	thread_deallocate(thd);
 	return (0);
 }
 
@@ -282,7 +291,7 @@ nfsiod_start(void)
  *
  * Grab an nfsiod struct to work on, do some work, then drop it
  */
-static int
+int
 nfsiod_continue(int error)
 {
 	struct nfsiod *niod;
@@ -295,8 +304,6 @@ nfsiod_continue(int error)
 	niod = TAILQ_FIRST(&nfsiodwork);
 	if (!niod) {
 		/* there's no work queued up */
-		if (error != EWOULDBLOCK)
-			printf("nfsiod: error %d work %p\n", error, niod);
 		/* remove an old nfsiod struct and terminate */
 		if ((niod = TAILQ_LAST(&nfsiodfree, nfsiodlist)))
 			TAILQ_REMOVE(&nfsiodfree, niod, niod_link);
@@ -474,7 +481,7 @@ extern struct fileops vnops;
 int
 fhopen( proc_t p,
 	struct fhopen_args *uap,
-	register_t *retval)
+	int32_t *retval)
 {
 	vnode_t vp;
 	struct nfs_filehandle nfh;
@@ -629,10 +636,9 @@ nfssvc(proc_t p, struct nfssvc_args *uap, __unused int *retval)
 	AUDIT_ARG(cmd, uap->flag);
 
 	/*
-	 * Must be super user
+	 * Must be super user for most operations (export ops checked later).
 	 */
-	error = proc_suser(p);
-	if (error)
+	if ((uap->flag != NFSSVC_EXPORT) && ((error = proc_suser(p))))
 		return (error);
 #if CONFIG_MACF
 	error = mac_system_check_nfsd(kauth_cred_get());
@@ -695,7 +701,7 @@ nfssvc(proc_t p, struct nfssvc_args *uap, __unused int *retval)
 /*
  * Adds a socket to the list for servicing by nfsds.
  */
-static int
+int
 nfssvc_addsock(socket_t so, mbuf_t mynam)
 {
 	struct nfsrv_sock *slp;
@@ -830,7 +836,7 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
  *   have any work are simply dropped from the queue.
  *
  */
-static int
+int
 nfssvc_nfsd(void)
 {
 	mbuf_t m, mrep;
@@ -1049,7 +1055,7 @@ nfssvc_nfsd(void)
 
 			}
 			if (error) {
-				OSAddAtomic(1, (SInt32*)&nfsstats.srv_errs);
+				OSAddAtomic(1, &nfsstats.srv_errs);
 				nfsrv_updatecache(nd, FALSE, mrep);
 				if (nd->nd_nam2) {
 					mbuf_freem(nd->nd_nam2);
@@ -1057,7 +1063,7 @@ nfssvc_nfsd(void)
 				}
 				break;
 			}
-			OSAddAtomic(1, (SInt32*)&nfsstats.srvrpccnt[nd->nd_procnum]);
+			OSAddAtomic(1, &nfsstats.srvrpccnt[nd->nd_procnum]);
 			nfsrv_updatecache(nd, TRUE, mrep);
 			/* FALLTHRU */
 
@@ -1098,7 +1104,7 @@ nfssvc_nfsd(void)
 			if (slp->ns_sotype == SOCK_STREAM) {
 				error = mbuf_prepend(&m, NFSX_UNSIGNED, MBUF_WAITOK);
 				if (!error)
-					*(u_long*)mbuf_data(m) = htonl(0x80000000 | siz);
+					*(u_int32_t*)mbuf_data(m) = htonl(0x80000000 | siz);
 			}
 			if (!error) {
 				if (slp->ns_flag & SLP_VALID) {
@@ -1189,7 +1195,7 @@ done:
 	return (error);
 }
 
-static int
+int
 nfssvc_export(user_addr_t argp)
 {
 	int error = 0, is_64bit;
@@ -1230,7 +1236,7 @@ nfssvc_export(user_addr_t argp)
  * will stop using it and clear ns_flag at the end so that it will not be
  * reassigned during cleanup.
  */
-static void
+void
 nfsrv_zapsock(struct nfsrv_sock *slp)
 {
 	socket_t so;
@@ -1258,7 +1264,7 @@ nfsrv_zapsock(struct nfsrv_sock *slp)
 /*
  * cleanup and release a server socket structure.
  */
-static void
+void
 nfsrv_slpfree(struct nfsrv_sock *slp)
 {
 	struct nfsrv_descript *nwp, *nnwp;
@@ -1403,8 +1409,10 @@ nfsrv_cleanup(void)
 {
 	struct nfsrv_sock *slp, *nslp;
 	struct timeval now;
+#if CONFIG_FSE
 	struct nfsrv_fmod *fp, *nfp;
 	int i;
+#endif
 
 	microuptime(&now);
 	for (slp = TAILQ_FIRST(&nfsrv_socklist); slp != 0; slp = nslp) {
@@ -1436,6 +1444,7 @@ nfsrv_cleanup(void)
 		}
 	}
 
+#if CONFIG_FSE
 	/*
 	 * Flush pending file write fsevents
 	 */
@@ -1446,12 +1455,10 @@ nfsrv_cleanup(void)
 			 * Fire off the content modified fsevent for each
 			 * entry, remove it from the list, and free it.
 			 */
-#if CONFIG_FSE
 			if (nfsrv_fsevents_enabled)
 				add_fsevent(FSE_CONTENT_MODIFIED, &fp->fm_context,
 						FSE_ARG_VNODE, fp->fm_vp,
 						FSE_ARG_DONE);
-#endif
 			vnode_put(fp->fm_vp);
 			kauth_cred_unref(&fp->fm_context.vc_ucred);
 			nfp = LIST_NEXT(fp, fm_link);
@@ -1461,6 +1468,7 @@ nfsrv_cleanup(void)
 	}
 	nfsrv_fmod_pending = 0;
 	lck_mtx_unlock(nfsrv_fmod_mutex);
+#endif
 
 	nfs_gss_svc_cleanup();	/* Remove any RPCSEC_GSS contexts */
 

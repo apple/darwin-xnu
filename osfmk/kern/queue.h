@@ -146,7 +146,7 @@ extern void		insque(
 				queue_entry_t	pred);
 
 /* Dequeue element */
-extern int		remque(
+extern void		remque(
 				queue_entry_t elt);
 
 __END_DECLS
@@ -225,14 +225,12 @@ insque(
 	pred->next = entry;
 }
 
-static __inline__ integer_t
+static __inline__ void
 remque(
 	register queue_entry_t elt)
 {
 	(elt->next)->prev = elt->prev;
 	(elt->prev)->next = elt->next;
-
-	return((integer_t)elt);
 }
 
 #endif	/* !__GNUC__ */

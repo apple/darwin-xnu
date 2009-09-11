@@ -144,9 +144,11 @@ static void	blst_radix_print(blmeta_t *scan, daddr_t blk,
 					daddr_t radix, int skip, int tab);
 #endif
 
+#if !defined(__APPLE__)
 #ifdef _KERNEL
 static MALLOC_DEFINE(M_SWAP, "SWAP", "Swap space");
 #endif
+#endif /* __APPLE__ */
 
 /*
  * blist_create() - create a blist capable of handling up to the specified
@@ -347,7 +349,11 @@ blst_leaf_alloc(blmeta_t *scan, daddr_t blk, int count)
 		scan->u.bmu_bitmap &= ~(1 << r);
 		return(blk + r);
 	}
+#if !defined(__APPLE__)
 	if (count <= BLIST_BMAP_RADIX) {
+#else
+	if (count <= (int)BLIST_BMAP_RADIX) {
+#endif /* __APPLE__ */
 		/*
 		 * non-optimized code to allocate N bits out of the bitmap.
 		 * The more bits, the faster the code runs.  It will run
@@ -613,11 +619,19 @@ static void blst_copy(blmeta_t *scan, daddr_t blk, daddr_t radix,
 		if (v == (u_daddr_t)-1) {
 			blist_free(dest, blk, count);
 		} else if (v != 0) {
+#if !defined(__APPLE__)
 			int i;
 
 			for (i = 0; i < BLIST_BMAP_RADIX && i < count; ++i)
 				if (v & (1 << i))
 					blist_free(dest, blk + i, 1);
+#else
+			int j;   /* Avoid shadow warnings */
+
+			for (j = 0; j < (int)BLIST_BMAP_RADIX && j < count; ++j)
+				if (v & (1 << j))
+					blist_free(dest, blk + j, 1);
+#endif /* __APPLE__ */
 		}
 		return;
 	}

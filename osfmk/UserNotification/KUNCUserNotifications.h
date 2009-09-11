@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -50,7 +50,7 @@ KUNCUserNotificationDisplayNotice(
 	char		*localizationPath,
 	char		*alertHeader,
 	char		*alertMessage,
-	char		*defaultButtonTitle);
+	char		*defaultButtonTitle) __attribute__((deprecated));
 
 /*
  * ***BLOCKING*** alert call, returned int value corresponds to the
@@ -68,7 +68,8 @@ KUNCUserNotificationDisplayAlert(
 	char 		*defaultButtonTitle,
 	char		*alternateButtonTitle,
 	char		*otherButtonTitle,
-	unsigned	*responseFlags);
+	unsigned	*responseFlags) __attribute__((deprecated));
+
 
 /*
  * Execute a userland executable with the given path, user and type
@@ -86,7 +87,7 @@ kern_return_t
 KUNCExecute(
 	char	*executionPath,
 	int	openAsUser,
-	int	pathExecutionType);
+	int	pathExecutionType) __attribute__((deprecated));
 
 
 /* KUNC User Notification XML Keys
@@ -184,7 +185,7 @@ KUNCExecute(
  *		back to the client in the callback pararmeter contextKey
  */
 
-typedef int KUNCUserNotificationID;
+typedef uintptr_t KUNCUserNotificationID;
 
 /*
  * Reponse value checking & default setting
@@ -216,8 +217,7 @@ typedef void
 /*
  * Get a notification ID
  */
-KUNCUserNotificationID KUNCGetNotificationID(void);
-
+KUNCUserNotificationID KUNCGetNotificationID(void) __attribute__((deprecated));
 
 /* This function currently requires a bundle path, which kexts cannot currently get.  In the future, the CFBundleIdentiofier of the kext will be pass in in place of the bundlePath. */
 
@@ -230,12 +230,12 @@ KUNCUserNotificationDisplayFromBundle(
 	char				*messageKey,
 	char				*tokenString,
 	KUNCUserNotificationCallBack	callback,
-	int				contextKey);
+	int				contextKey) __attribute__((deprecated));
 
 
 kern_return_t
 KUNCUserNotificationCancel(
-	KUNCUserNotificationID	notification);
+	KUNCUserNotificationID	notification) __attribute__((deprecated));
 
 
 __END_DECLS

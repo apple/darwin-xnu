@@ -89,6 +89,7 @@
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
 #if INET6
+#include <netinet6/in6_pcb.h>
 #include <netinet6/ip6_var.h>
 #endif
 #include <netinet/ip_icmp.h>
@@ -160,7 +161,6 @@ struct	inpcbinfo udbinfo;
 #endif
 
 extern	int	esp_udp_encap_port;
-extern	u_long  route_generation;
 
 extern  void    ipfwsyslog( int level, const char *format,...);
  
@@ -183,6 +183,10 @@ SYSCTL_STRUCT(_net_inet_udp, UDPCTL_STATS, stats, CTLFLAG_RD,
     &udpstat, udpstat, "UDP statistics (struct udpstat, netinet/udp_var.h)");
 SYSCTL_INT(_net_inet_udp, OID_AUTO, pcbcount, CTLFLAG_RD, 
     &udbinfo.ipi_count, 0, "Number of active PCBs");
+
+__private_extern__ int udp_use_randomport = 1;
+SYSCTL_INT(_net_inet_udp, OID_AUTO, randomize_ports, CTLFLAG_RW,
+    &udp_use_randomport, 0, "Randomize UDP port numbers");
 
 #if INET6
 struct udp_in6 {
@@ -235,37 +239,9 @@ udp_init()
 
 	if ((pcbinfo->mtx = lck_rw_alloc_init(pcbinfo->mtx_grp, pcbinfo->mtx_attr)) == NULL)
 		return;	/* pretty much dead if this fails... */
-
-	in_pcb_nat_init(&udbinfo, AF_INET, IPPROTO_UDP, SOCK_DGRAM);
 #else
 	udbinfo.ipi_zone = zinit("udpcb", sizeof(struct inpcb), maxsockets,
 				 ZONE_INTERRUPT, 0);
-#endif
-
-#if 0
-	/* for pcb sharing testing only */
-	stat = in_pcb_new_share_client(&udbinfo, &fake_owner);
-	kprintf("udp_init in_pcb_new_share_client - stat = %d\n", stat);
-
-	laddr.s_addr = 0x11646464;
-	faddr.s_addr = 0x11646465;
-	
-	lport = 1500;
-	in_pcb_grab_port(&udbinfo, 0, laddr, &lport, faddr, 1600, 0, fake_owner); 
-	kprintf("udp_init in_pcb_grab_port - stat = %d\n", stat);
-
-	stat = in_pcb_rem_share_client(&udbinfo, fake_owner);
-	kprintf("udp_init in_pcb_rem_share_client - stat = %d\n", stat);
-
-	stat = in_pcb_new_share_client(&udbinfo, &fake_owner);
-	kprintf("udp_init in_pcb_new_share_client(2) - stat = %d\n", stat);
-
-	laddr.s_addr = 0x11646464;
-	faddr.s_addr = 0x11646465;
-	
-	lport = 1500;
-	stat = in_pcb_grab_port(&udbinfo, 0, laddr, &lport, faddr, 1600, 0, fake_owner); 
-	kprintf("udp_init in_pcb_grab_port(2) - stat = %d\n", stat);
 #endif
 }
 
@@ -393,7 +369,6 @@ doudpcksum:
 	    in_broadcast(ip->ip_dst, m->m_pkthdr.rcvif)) {
 
 		int reuse_sock = 0, mcast_delivered = 0;
-		struct mbuf *n = NULL;
 
 		lck_rw_lock_shared(pcbinfo->mtx);
 		/*
@@ -426,11 +401,6 @@ doudpcksum:
 		udp_in6.uin6_init_done = udp_ip6.uip6_init_done = 0;
 #endif
 		LIST_FOREACH(inp, &udb, inp_list) {
-#ifdef __APPLE__
-			/* Ignore nat/SharedIP dummy pcbs */
-			if (inp->inp_socket == &udbinfo.nat_dummy_socket)
-				continue;
-#endif
 			if (inp->inp_socket == NULL) 
 				continue;
 			if (inp != sotoinpcb(inp->inp_socket))
@@ -486,6 +456,8 @@ doudpcksum:
 				if (skipit == 0) 
 #endif /*IPSEC*/
 				{
+					struct mbuf *n = NULL;
+					
 					if (reuse_sock) 
 						n = m_copy(m, 0, M_COPYALL);
 #if INET6
@@ -498,6 +470,8 @@ doudpcksum:
 					    &udp_in);
 #endif /* INET6 */
 					mcast_delivered++;
+
+					m = n;
 				}
 				udp_unlock(inp->inp_socket, 1, 0);
 			}
@@ -509,8 +483,13 @@ doudpcksum:
 			 * port.  It assumes that an application will never
 			 * clear these options after setting them.
 			 */
-			if (reuse_sock == 0 || ((m = n) == NULL))
+			if (reuse_sock == 0 || m == NULL)
 				break;
+			/*
+			 * Recompute IP and UDP header pointers for new mbuf
+			 */
+			ip = mtod(m, struct ip *);
+			uh = (struct udphdr *)((caddr_t)ip + iphlen);
 		}
 		lck_rw_done(pcbinfo->mtx);
 
@@ -524,8 +503,9 @@ doudpcksum:
 			goto bad;
 		}
 
-		if (reuse_sock != 0)	/* free the extra copy of mbuf */
+		if (m != NULL)	/* free the extra copy of mbuf or skipped by IPSec */
 			m_freem(m);
+		KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END, 0,0,0,0,0);
 		return;
 	}
 
@@ -975,7 +955,110 @@ udp_pcblist SYSCTL_HANDLER_ARGS
 SYSCTL_PROC(_net_inet_udp, UDPCTL_PCBLIST, pcblist, CTLFLAG_RD, 0, 0,
 	    udp_pcblist, "S,xinpcb", "List of active UDP sockets");
 
+#if !CONFIG_EMBEDDED
 
+static int
+udp_pcblist64 SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+        int error, i, n;
+        struct inpcb *inp, **inp_list;
+        inp_gen_t gencnt;
+        struct xinpgen xig;
+
+        /*
+         * The process of preparing the TCB list is too time-consuming and
+         * resource-intensive to repeat twice on every request.
+         */
+        lck_rw_lock_shared(udbinfo.mtx);
+        if (req->oldptr == USER_ADDR_NULL) {
+                n = udbinfo.ipi_count;
+                req->oldidx = 2 * (sizeof xig)
+                        + (n + n/8) * sizeof(struct xinpcb64);
+                lck_rw_done(udbinfo.mtx);
+                return 0;
+        }
+
+        if (req->newptr != USER_ADDR_NULL) {
+                lck_rw_done(udbinfo.mtx);
+                return EPERM;
+        }
+
+        /*
+         * OK, now we're committed to doing something.
+         */
+        gencnt = udbinfo.ipi_gencnt;
+        n = udbinfo.ipi_count;
+
+        bzero(&xig, sizeof(xig));
+        xig.xig_len = sizeof xig;
+        xig.xig_count = n;
+        xig.xig_gen = gencnt;
+        xig.xig_sogen = so_gencnt;
+        error = SYSCTL_OUT(req, &xig, sizeof xig);
+        if (error) {
+                lck_rw_done(udbinfo.mtx);
+                return error;
+        }
+    /*
+     * We are done if there is no pcb
+     */
+    if (n == 0) {
+        lck_rw_done(udbinfo.mtx);
+        return 0;
+    }
+
+        inp_list = _MALLOC(n * sizeof *inp_list, M_TEMP, M_WAITOK);
+        if (inp_list == 0) {
+                lck_rw_done(udbinfo.mtx);
+                return ENOMEM;
+        }
+
+        for (inp = LIST_FIRST(udbinfo.listhead), i = 0; inp && i < n;
+             inp = LIST_NEXT(inp, inp_list)) {
+                if (inp->inp_gencnt <= gencnt && inp->inp_state != INPCB_STATE_DEAD)
+                        inp_list[i++] = inp;
+        }
+        n = i;
+
+        error = 0;
+        for (i = 0; i < n; i++) {
+                inp = inp_list[i];
+                if (inp->inp_gencnt <= gencnt && inp->inp_state != INPCB_STATE_DEAD) {
+                        struct xinpcb64 xi;
+
+                        bzero(&xi, sizeof(xi));
+                        xi.xi_len = sizeof xi;
+                        inpcb_to_xinpcb64(inp, &xi);
+                        if (inp->inp_socket)
+                                sotoxsocket64(inp->inp_socket, &xi.xi_socket);
+                        error = SYSCTL_OUT(req, &xi, sizeof xi);
+                }
+        }
+        if (!error) {
+                /*
+                 * Give the user an updated idea of our state.
+                 * If the generation differs from what we told
+                 * her before, she knows that something happened
+                 * while we were processing this request, and it
+                 * might be necessary to retry.
+                 */
+                bzero(&xig, sizeof(xig));
+                xig.xig_len = sizeof xig;
+                xig.xig_gen = udbinfo.ipi_gencnt;
+                xig.xig_sogen = so_gencnt;
+                xig.xig_count = udbinfo.ipi_count;
+                error = SYSCTL_OUT(req, &xig, sizeof xig);
+        }
+        FREE(inp_list, M_TEMP);
+        lck_rw_done(udbinfo.mtx);
+        return error;
+}
+
+SYSCTL_PROC(_net_inet_udp, OID_AUTO, pcblist64, CTLFLAG_RD, 0, 0,
+            udp_pcblist64, "S,xinpcb64", "List of active UDP sockets");
+
+#endif /* !CONFIG_EMBEDDED */
 
 static __inline__ u_int16_t
 get_socket_id(struct socket * s)
@@ -985,7 +1068,7 @@ get_socket_id(struct socket * s)
 	if (s == NULL) {
 	    return (0);
 	}
-	val = (u_int16_t)(((u_int32_t)s) / sizeof(struct socket));
+	val = (u_int16_t)(((uintptr_t)s) / sizeof(struct socket));
 	if (val == 0) {
 		val = 0xffff;
 	}
@@ -1039,17 +1122,25 @@ udp_output(inp, m, addr, control, p)
 	 * that we have a valid source address. 
 	 * Reacquire a new source address if INADDR_ANY was specified
 	 */
-	if (inp->inp_route.ro_rt && inp->inp_route.ro_rt->generation_id != route_generation) {
-		if (ifa_foraddr(inp->inp_laddr.s_addr) == 0) { /* src address is gone */
-			if (inp->inp_flags & INP_INADDR_ANY)
-				inp->inp_laddr.s_addr = INADDR_ANY; /* new src will be set later */
-			else {
+	if (inp->inp_route.ro_rt != NULL &&
+	    inp->inp_route.ro_rt->generation_id != route_generation) {
+		struct in_ifaddr *ia;
+
+		/* src address is gone? */
+		if ((ia = ifa_foraddr(inp->inp_laddr.s_addr)) == NULL) {
+			if (inp->inp_flags & INP_INADDR_ANY) {
+				/* new src will be set later */
+				inp->inp_laddr.s_addr = INADDR_ANY;
+			} else {
 				error = EADDRNOTAVAIL;
 				goto release;
 			}
 		}
-		rtfree(inp->inp_route.ro_rt);
-		inp->inp_route.ro_rt = (struct rtentry *)0;
+		if (ia != NULL)
+			ifafree(&ia->ia_ifa);
+		if (inp->inp_route.ro_rt != NULL)
+			rtfree(inp->inp_route.ro_rt);
+		inp->inp_route.ro_rt = NULL;
 	}
 
 	origladdr= laddr = inp->inp_laddr;
@@ -1104,10 +1195,6 @@ udp_output(inp, m, addr, control, p)
 
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_inpcb(inp, m);
-#endif
-	
-#if CONFIG_IP_EDGEHOLE
-	ip_edgehole_mbuf_tag(inp, m);
 #endif
 
 	/*
@@ -1164,24 +1251,18 @@ udp_output(inp, m, addr, control, p)
 	soopts |= (inp->inp_socket->so_options & (SO_DONTROUTE | SO_BROADCAST));
 	mopts = inp->inp_moptions;
 
-	/* We don't want to cache the route for non-connected UDP */
-	if (udp_dodisconnect) {
-		bcopy(&inp->inp_route, &ro, sizeof (ro));
-		ro.ro_rt = NULL;
-	}
+	/* Copy the cached route and take an extra reference */
+	inp_route_copyout(inp, &ro);
 
 	socket_unlock(so, 0);
 	/* XXX jgraessley please look at XXX */
-	error = ip_output_list(m, 0, inpopts,
-	    udp_dodisconnect ? &ro : &inp->inp_route, soopts, mopts, &ipoa);
+	error = ip_output_list(m, 0, inpopts, &ro, soopts, mopts, &ipoa);
 	socket_lock(so, 0);
 
+	/* Synchronize PCB cached route */
+	inp_route_copyin(inp, &ro);
+
 	if (udp_dodisconnect) {
-		/* Discard the cached route, if there is one */
-		if (ro.ro_rt != NULL) {
-			rtfree(ro.ro_rt);
-			ro.ro_rt = NULL;
-		}
 		in_pcbdisconnect(inp);
 		inp->inp_laddr = origladdr;	/* XXX rehash? */
 	}
@@ -1200,20 +1281,51 @@ release:
 	return (error);
 }
 
-u_long	udp_sendspace = 9216;		/* really max datagram size */
-					/* 40 1K datagrams */
-SYSCTL_INT(_net_inet_udp, UDPCTL_MAXDGRAM, maxdgram, CTLFLAG_RW,
-    &udp_sendspace, 0, "Maximum outgoing UDP datagram size");
-
-u_long	udp_recvspace = 40 * (1024 +
+u_int32_t	udp_sendspace = 9216;		/* really max datagram size */
+/* 40 1K datagrams */
+u_int32_t	udp_recvspace = 40 * (1024 +
 #if INET6
 				      sizeof(struct sockaddr_in6)
 #else
 				      sizeof(struct sockaddr_in)
 #endif
 				      );
-SYSCTL_INT(_net_inet_udp, UDPCTL_RECVSPACE, recvspace, CTLFLAG_RW,
-    &udp_recvspace, 0, "Maximum incoming UDP datagram size");
+
+/* Check that the values of udp send and recv space do not exceed sb_max */
+static int
+sysctl_udp_sospace(struct sysctl_oid *oidp, __unused void *arg1,
+	__unused int arg2, struct sysctl_req *req) {
+	u_int32_t new_value = 0, *space_p = NULL;
+	int changed = 0, error = 0;
+	u_quad_t sb_effective_max = (sb_max/ (MSIZE+MCLBYTES)) * MCLBYTES;
+
+	switch (oidp->oid_number) {
+		case UDPCTL_RECVSPACE:
+			space_p = &udp_recvspace;
+			break;
+		case UDPCTL_MAXDGRAM:
+			space_p = &udp_sendspace;
+			break;
+		default:
+			return EINVAL;
+	}
+        error = sysctl_io_number(req, *space_p, sizeof(u_int32_t),
+                &new_value, &changed);
+        if (changed) {
+                if (new_value > 0 && new_value <= sb_effective_max) {
+                        *space_p = new_value;
+                } else {
+                        error = ERANGE;
+                }
+        }
+        return error;
+}
+
+SYSCTL_PROC(_net_inet_udp, UDPCTL_RECVSPACE, recvspace, CTLTYPE_INT | CTLFLAG_RW,
+    &udp_recvspace, 0, &sysctl_udp_sospace, "IU", "Maximum incoming UDP datagram size");
+
+SYSCTL_PROC(_net_inet_udp, UDPCTL_MAXDGRAM, maxdgram, CTLTYPE_INT | CTLFLAG_RW,
+    &udp_sendspace, 0, &sysctl_udp_sospace, "IU", "Maximum outgoing UDP datagram size");
 
 static int
 udp_abort(struct socket *so)
@@ -1351,60 +1463,53 @@ struct pr_usrreqs udp_usrreqs = {
 
 
 int
-udp_lock(struct socket *so, int refcount, int debug)
+udp_lock(struct socket *so, int refcount, void *debug)
 {
-	int lr_saved;
-	if (debug == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
-	else lr_saved = debug;
+	void *lr_saved;
+
+	if (debug == NULL)
+		lr_saved = __builtin_return_address(0);
+	else
+		lr_saved = debug;
 
 	if (so->so_pcb) {
-		lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_NOTOWNED);
+		lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx,
+		    LCK_MTX_ASSERT_NOTOWNED);
 		lck_mtx_lock(((struct inpcb *)so->so_pcb)->inpcb_mtx);
+	} else {
+		panic("udp_lock: so=%p NO PCB! lr=%p lrh= %s\n", 
+		    so, lr_saved, solockhistory_nr(so));
+		/* NOTREACHED */
 	}
-	else 
-		panic("udp_lock: so=%p NO PCB! lr=%x\n", so, lr_saved);
-
-	if (refcount) 
+	if (refcount)
 		so->so_usecount++;
 
-	so->lock_lr[so->next_lock_lr] = (u_int32_t)lr_saved;
+	so->lock_lr[so->next_lock_lr] = lr_saved;
 	so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
 	return (0);
 }
 
 int
-udp_unlock(struct socket *so, int refcount, int debug)
+udp_unlock(struct socket *so, int refcount, void *debug)
 {
-	int lr_saved;
+	void *lr_saved;
 
-	if (debug == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
-	else lr_saved = debug;
+	if (debug == NULL)
+		lr_saved = __builtin_return_address(0);
+	else
+		lr_saved = debug;
 
-	if (refcount) {
+	if (refcount)
 		so->so_usecount--;
-#if 0
-		{
-			struct inpcb *inp = sotoinpcb(so);
-		    struct inpcbinfo *pcbinfo	= &udbinfo;
-		    
-			if (so->so_usecount == 0 && (inp->inp_wantcnt == WNT_STOPUSING)) {
-				
-				if (lck_rw_try_lock_exclusive(pcbinfo->mtx)) {
-					in_pcbdispose(inp);
-					lck_rw_done(pcbinfo->mtx);
-					return(0);
-				}
-			}
-		}
-#endif
-	}
-	if (so->so_pcb == NULL) 
-		panic("udp_unlock: so=%p NO PCB! lr=%x\n", so, lr_saved);
-	else {
-		lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
-		so->unlock_lr[so->next_unlock_lr] = (u_int32_t)lr_saved;
+
+	if (so->so_pcb == NULL) {
+		panic("udp_unlock: so=%p NO PCB! lr=%p lrh= %s\n", 
+		    so, lr_saved, solockhistory_nr(so));
+		/* NOTREACHED */
+	} else {
+		lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx,
+		    LCK_MTX_ASSERT_OWNED);
+		so->unlock_lr[so->next_unlock_lr] = lr_saved;
 		so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 		lck_mtx_unlock(((struct inpcb *)so->so_pcb)->inpcb_mtx);
 	}
@@ -1422,7 +1527,8 @@ udp_getlock(struct socket *so, __unused int locktype)
 	if (so->so_pcb)
 		return(inp->inpcb_mtx);
 	else {
-		panic("udp_getlock: so=%p NULL so_pcb\n", so);
+		panic("udp_getlock: so=%p NULL so_pcb lrh= %s\n", 
+			so, solockhistory_nr(so));
 		return (so->so_proto->pr_domain->dom_mtx);
 	}
 }
@@ -1446,10 +1552,6 @@ udp_slowtimo()
 
 	for (inp = udb.lh_first; inp != NULL; inp = inpnxt) {
 		inpnxt = inp->inp_list.le_next;
-	
-		/* Ignore nat/SharedIP dummy pcbs */
-		if (inp->inp_socket == &udbinfo.nat_dummy_socket)
-				continue;
 
 		if (inp->inp_wantcnt != WNT_STOPUSING) 
 			continue;
@@ -1458,10 +1560,19 @@ udp_slowtimo()
 		if (!lck_mtx_try_lock(inp->inpcb_mtx))	/* skip if busy, no hurry for cleanup... */
 			continue;
 
-		if (so->so_usecount == 0)
+		if (so->so_usecount == 0) {
+			if (inp->inp_state != INPCB_STATE_DEAD) {
+#if INET6
+				if (INP_CHECK_SOCKAF(so, AF_INET6))
+					in6_pcbdetach(inp);
+				else
+#endif /* INET6 */
+				in_pcbdetach(inp);
+			}
 			in_pcbdispose(inp);
-		else 
+		} else {
 			lck_mtx_unlock(inp->inpcb_mtx);
+		}
 	}
 	lck_rw_done(pcbinfo->mtx);
 }

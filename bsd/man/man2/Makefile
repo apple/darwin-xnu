@@ -7,7 +7,6 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 DATAFILES = \
-	__syscall.2		\
 	_exit.2			\
 	EV_SET.2		\
 	FD_CLR.2		\
@@ -45,6 +44,8 @@ DATAFILES = \
 	fchmod.2		\
 	fchown.2		\
 	fcntl.2			\
+	fgetattrlist.2		\
+	fsetattrlist.2		\
 	fgetxattr.2		\
 	fhopen.2		\
 	flistxattr.2		\
@@ -54,12 +55,15 @@ DATAFILES = \
 	fremovexattr.2		\
 	fsetxattr.2		\
 	fstat.2			\
+	fstat64.2		\
 	fstatfs.2		\
+	fstatfs64.2		\
 	fsync.2			\
 	ftruncate.2		\
 	futimes.2		\
 	getattrlist.2		\
 	getaudit.2		\
+	getaudit_addr.2		\
 	getauid.2		\
 	getdirentries.2		\
 	getdirentriesattr.2	\
@@ -93,6 +97,7 @@ DATAFILES = \
 	issetugid.2		\
 	kill.2			\
 	kevent.2		\
+	kevent64.2		\
 	kqueue.2		\
 	lchown.2		\
 	link.2			\
@@ -100,6 +105,7 @@ DATAFILES = \
 	listxattr.2		\
 	lseek.2			\
 	lstat.2			\
+	lstat64.2		\
 	madvise.2		\
 	mincore.2		\
 	minherit.2		\
@@ -122,6 +128,7 @@ DATAFILES = \
 	posix_madvise.2		\
 	pread.2			\
 	profil.2		\
+	pthread_setugid_np.2	\
 	ptrace.2		\
 	pwrite.2		\
 	quotactl.2		\
@@ -147,6 +154,7 @@ DATAFILES = \
 	sendto.2		\
 	setattrlist.2		\
 	setaudit.2		\
+	setaudit_addr.2		\
 	setauid.2		\
 	setegid.2		\
 	seteuid.2		\
@@ -178,7 +186,9 @@ DATAFILES = \
 	socket.2		\
 	socketpair.2		\
 	stat.2			\
+	stat64.2		\
 	statfs.2		\
+	statfs64.2		\
 	symlink.2		\
 	sync.2			\
 	syscall.2		\

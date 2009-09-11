@@ -130,6 +130,10 @@ multicast_list_program(struct multicast_list * mc_list,
 	    continue;
 	}
 	mc = _MALLOC(sizeof(struct multicast_entry), M_DEVBUF, M_WAITOK);
+	if (mc == NULL) {
+		error = ENOBUFS;
+		break;
+	}
 	bcopy(LLADDR(&source_sdl), LLADDR(&target_sdl), alen);
 	error = ifnet_add_multicast(target_ifp, (struct sockaddr *)&target_sdl, 
 				    &mc->mc_ifma);

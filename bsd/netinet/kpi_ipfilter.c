@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -32,6 +32,9 @@
 #include <sys/socket.h>
 #include <sys/mbuf.h>
 #include <sys/systm.h>
+#include <libkern/OSAtomic.h>
+
+#include <machine/endian.h>
 
 #define _IP_VHL
 #include <net/if_var.h>
@@ -48,6 +51,7 @@
 #include <netinet6/ip6_var.h>
 #include <netinet/kpi_ipfilter_var.h>
 
+
 /*
  * kipf_lock and kipf_ref protect the linkage of the list of IP filters
  * An IP filter can be removed only when kipf_ref is zero
@@ -56,8 +60,9 @@
  * kipf_ref eventually goes down to zero, the IP filter is removed
  */
 static lck_mtx_t *kipf_lock = 0;
-static unsigned long kipf_ref = 0;
-static unsigned long kipf_delayed_remove = 0;
+static u_int32_t kipf_ref = 0;
+static u_int32_t kipf_delayed_remove = 0;
+u_int32_t kipf_count = 0;
 
 __private_extern__ struct ipfilter_list	ipv4_filters = TAILQ_HEAD_INITIALIZER(ipv4_filters);
 __private_extern__ struct ipfilter_list	ipv6_filters = TAILQ_HEAD_INITIALIZER(ipv6_filters);
@@ -122,22 +127,17 @@ ipf_add(
 	new_filter->ipf_filter = *filter;
 	new_filter->ipf_head = head;
 	
-	/*
-	 * 3957298
-	 * Make sure third parties have a chance to filter packets before
-	 * SharedIP. Always SharedIP at the end of the list.
-	 */
-	if (filter->name != NULL &&
-		strcmp(filter->name, "com.apple.nke.SharedIP") == 0) {
-		TAILQ_INSERT_TAIL(head, new_filter, ipf_link);
-	}
-	else {
-		TAILQ_INSERT_HEAD(head, new_filter, ipf_link);
-	}
+	TAILQ_INSERT_HEAD(head, new_filter, ipf_link);
 	
 	lck_mtx_unlock(kipf_lock);
 	
 	*filter_ref = (ipfilter_t)new_filter;
+
+	/* This will force TCP to re-evaluate its use of TSO */
+	OSAddAtomic(1, &kipf_count);
+	if (use_routegenid)
+		routegenid_update();
+
 	return 0;
 }
 
@@ -190,6 +190,12 @@ ipf_remove(
 				if (ipf_detach)
 					ipf_detach(cookie);
 				FREE(match, M_IFADDR);
+
+				/* This will force TCP to re-evaluate its use of TSO */
+				OSAddAtomic(-1, &kipf_count);
+				if (use_routegenid)
+					routegenid_update();
+
 			}
 			return 0;
 		}
@@ -309,17 +315,18 @@ ipf_injectv4_out(
 	}
 	
 	/* Put ip_len and ip_off in host byte order, ip_output expects that */
+
+#if BYTE_ORDER != BIG_ENDIAN
 	NTOHS(ip->ip_len);
 	NTOHS(ip->ip_off);
-	
+#endif
+
 	/* Send  */
 	error = ip_output(m, NULL, &ro, IP_ALLOWBROADCAST | IP_RAWOUTPUT, imo, NULL);
 	
 	/* Release the route */
-	if (ro.ro_rt) {
+	if (ro.ro_rt)
 		rtfree(ro.ro_rt);
-		ro.ro_rt = NULL;
-	}
 	
 	return error;
 }
@@ -392,10 +399,8 @@ ipf_injectv6_out(
 	error = ip6_output(m, NULL, &ro, 0, im6o, NULL, 0);
 	
 	/* Release the route */
-	if (ro.ro_rt) {
+	if (ro.ro_rt)
 		rtfree(ro.ro_rt);
-		ro.ro_rt = NULL;
-	}
 	
 	return error;
 }

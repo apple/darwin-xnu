@@ -37,19 +37,21 @@
  * This value should be changed each time that pmDsipatch_t or pmCallBacks_t
  * changes.
  */
-#define PM_DISPATCH_VERSION	16
+#define PM_DISPATCH_VERSION	17
 
 /*
  * Dispatch table for functions that get installed when the power
  * management KEXT loads.
+ *
+ * pmDispatch_t is the set of functions that the kernel can use to call
+ * into the power management KEXT.
+ *
+ * pmCallBacks_t is the set of functions that the power management kext
+ * can call to get at specific kernel functions.
  */
 typedef struct
 {
     int			(*pmCPUStateInit)(void);
-
-    /*
-     * The following are the 'C' State interfaces.
-     */
     void		(*cstateInit)(void);
     uint64_t		(*cstateMachineIdle)(uint64_t maxIdleDuration);
     uint64_t		(*GetDeadline)(x86_lcpu_t *lcpu);
@@ -72,7 +74,9 @@ typedef struct
     void		(*markAllCPUsOff)(void);
     void		(*pmSetRunCount)(uint32_t count);
     boolean_t		(*pmIsCPUUnAvailable)(x86_lcpu_t *lcpu);
+    int			(*pmIPIHandler)(void *state);
 } pmDispatch_t;
+
 
 typedef struct {
     int			(*setRTCPop)(uint64_t time);
@@ -92,6 +96,7 @@ typedef struct {
     processor_t		(*LCPUtoProcessor)(int lcpu);
     processor_t		(*ThreadBind)(processor_t proc);
     uint32_t		(*GetSavedRunCount)(void);
+    void		(*pmSendIPI)(int cpu);
     x86_topology_parameters_t	*topoParms;
 } pmCallBacks_t;
 

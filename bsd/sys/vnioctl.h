@@ -94,8 +94,14 @@ struct vn_ioctl {
 
 #ifdef KERNEL_PRIVATE
 
-struct user_vn_ioctl {
+struct vn_ioctl_64 {
 	u_int64_t	vn_file;	/* pathname of file to mount */
+	int			vn_size;	/* (returned) size of disk */
+	vncontrol_t	vn_control;
+};
+
+struct vn_ioctl_32 {
+	u_int32_t	vn_file;	/* pathname of file to mount */
 	int			vn_size;	/* (returned) size of disk */
 	vncontrol_t	vn_control;
 };
@@ -116,9 +122,14 @@ struct user_vn_ioctl {
 #define VNIOCUCLEAR	_IOWR('F', 5, u_int32_t )		/* reset --//-- */
 #define VNIOCSHADOW	_IOWR('F', 6, struct vn_ioctl)	/* attach shadow */
 #ifdef KERNEL_PRIVATE
-#define VNIOCATTACH64	_IOWR('F', 0, struct user_vn_ioctl)	/* attach file - LP64 */
-#define VNIOCDETACH64	_IOWR('F', 1, struct user_vn_ioctl)	/* detach disk - LP64 */
-#define VNIOCSHADOW64	_IOWR('F', 6, struct user_vn_ioctl)	/* attach shadow - LP64 */
+#define VNIOCATTACH64	_IOWR('F', 0, struct vn_ioctl_64)	/* attach file - LP64 */
+#define VNIOCDETACH64	_IOWR('F', 1, struct vn_ioctl_64)	/* detach disk - LP64 */
+#define VNIOCSHADOW64	_IOWR('F', 6, struct vn_ioctl_64)	/* attach shadow - LP64 */
+#ifdef __LP64__
+#define VNIOCATTACH32	_IOWR('F', 0, struct vn_ioctl_32)	/* attach file - U32 version for K64 */
+#define VNIOCDETACH32	_IOWR('F', 1, struct vn_ioctl_32)	/* detach disk - U32 version for K64 */
+#define VNIOCSHADOW32	_IOWR('F', 6, struct vn_ioctl_32)	/* attach shadow - U32 version for K64 */
+#endif
 #endif /* KERNEL_PRIVATE */
 
 #define VN_LABELS	0x1	/* Use disk(/slice) labels */

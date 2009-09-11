@@ -39,11 +39,11 @@ DATAFILES = \
 	ioccom.h ioctl.h \
 	ioctl_compat.h ipc.h kernel.h kernel_types.h kern_event.h loadable_fs.h lock.h lockf.h \
 	kauth.h kdebug.h kern_control.h kern_memorystatus.h lctx.h malloc.h \
-	mbuf.h mman.h mount.h msg.h msgbuf.h mtio.h netport.h param.h paths.h pipe.h poll.h \
+	mbuf.h mman.h mount.h msg.h msgbuf.h netport.h param.h paths.h pipe.h poll.h \
 	proc.h  proc_info.h ptrace.h queue.h quota.h random.h reboot.h resource.h resourcevar.h \
 	sbuf.h posix_sem.h posix_shm.h sdt.h \
 	select.h sem.h semaphore.h shm.h signal.h signalvar.h socket.h socketvar.h sockio.h stat.h \
-	syscall.h sysctl.h syslimits.h syslog.h sys_domain.h termios.h  time.h \
+	sysctl.h syslimits.h syslog.h sys_domain.h termios.h  time.h \
 	timeb.h times.h tprintf.h trace.h tty.h  ttychars.h ttycom.h \
 	ttydefaults.h ttydev.h  types.h ubc.h ucontext.h ucred.h uio.h un.h unistd.h unpcb.h \
 	user.h utfconv.h utsname.h vadvise.h vcmd.h \
@@ -56,10 +56,13 @@ DATAFILES = \
 PRIVATE_DATAFILES = \
 	codesign.h \
 	disklabel.h \
+	fsctl.h \
+	fsgetpath.h \
 	fslog.h \
 	ipcs.h \
 	shm_internal.h \
 	spawn_internal.h \
+	tree.h \
 	ux_exception.h \
 	proc_info.h \
 	vnioctl.h
@@ -71,12 +74,12 @@ KERNELFILES = \
 	appleapiopts.h 	 attr.h \
 	buf.h cdefs.h conf.h \
 	dir.h dirent.h disk.h disklabel.h dkstat.h  \
-	errno.h ev.h event.h fcntl.h file.h filedesc.h filio.h \
+	errno.h ev.h event.h fcntl.h file.h filio.h \
 	ioccom.h ioctl.h ipc.h \
 	ioctl_compat.h  kernel.h kernel_types.h kern_event.h lctx.h lock.h lockf.h \
-	kauth.h kdebug.h  md5.h kern_control.h kern_memorystatus.h imgact.h malloc.h namei.h \
-	mman.h mbuf.h mount.h  mtio.h netport.h param.h paths.h \
-	proc.h  queue.h quota.h random.h resource.h resourcevar.h \
+	kauth.h kdebug.h  md5.h kern_callout.h kern_control.h kern_memorystatus.h imgact.h malloc.h namei.h \
+	mman.h mbuf.h mount.h netport.h param.h paths.h \
+	proc.h  queue.h random.h resource.h \
 	sbuf.h posix_sem.h posix_shm.h sem.h shm.h \
 	select.h signal.h socket.h socketvar.h sockio.h stat.h \
 	sysctl.h syslimits.h syslog.h systm.h sys_domain.h  time.h \
@@ -85,7 +88,7 @@ KERNELFILES = \
 	_select.h _structs.h _types.h _endian.h protosw.h domain.h \
 	kpi_mbuf.h kpi_socket.h kpi_socketfilter.h \
 	ttycom.h termios.h msg.h \
-	pipe.h sysproto.h semaphore.h wait.h \
+	wait.h \
 	spawn.h
 # The last line was added to export needed headers for the MAC calls
 # whose source is outside of the xnu/bsd tree.
@@ -94,35 +97,38 @@ KERNELFILES = \
 # Installs header file for Apple internal use for kernel extensions - 
 #	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
 PRIVATE_KERNELFILES = \
+	decmpfs.h \
 	disktab.h \
 	fbt.h \
-	file_internal.h \
+	fsctl.h \
 	fslog.h \
 	mach_swapon.h \
 	msgbuf.h \
 	eventvar.h \
-	mount_internal.h \
-	proc_internal.h \
-	vnode_internal.h \
+	quota.h \
 	sem_internal.h \
 	shm_internal.h \
 	signalvar.h \
 	tty.h  ttychars.h \
 	ttydefaults.h ttydev.h \
 	user.h \
-	ubc_internal.h \
-	uio_internal.h \
 	vfs_context.h \
 	vmmeter.h \
 	spawn_internal.h
-	
+
 
 # /System/Library/Frameworks/System.framework/Headers and /usr/include
 INSTALL_MI_LIST	= ${DATAFILES}
 
+INSTALL_MI_GEN_LIST = syscall.h
+
 INSTALL_MI_DIR = sys
 
-EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} syscall.h linker_set.h bsdtask_info.h
+EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} linker_set.h bsdtask_info.h filedesc.h pipe.h resourcevar.h semaphore.h \
+								vnode_internal.h proc_internal.h file_internal.h mount_internal.h \
+								uio_internal.h
+
+EXPORT_MI_GEN_LIST = syscall.h sysproto.h
 
 EXPORT_MI_DIR = sys
 
@@ -132,8 +138,22 @@ INSTALL_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
 # /System/Library/Frameworks/Kernel.framework/PrivateHeaders
 INSTALL_KF_MI_LCL_LIST =  ${KERNELFILES} ${PRIVATE_KERNELFILES}
 
+INSTALL_KF_MI_LCL_GEN_LIST = sysproto.h
+
 # /System/Library/Frameworks/Kernel.framework/Headers
 INSTALL_KF_MI_LIST = ${KERNELFILES}
+
+INSTALL_KF_MI_GEN_LIST = 
+
+MAKESYSCALLS = $(SRCROOT)/bsd/kern/makesyscalls.sh
+
+syscall.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
+	@echo "Generating bsd/sys/$@ from $<";
+	$(_v)$(MAKESYSCALLS) $< header > /dev/null
+
+sysproto.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
+	@echo "Generating bsd/sys/$@ from $<";
+	$(_v)$(MAKESYSCALLS) $< proto > /dev/null
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

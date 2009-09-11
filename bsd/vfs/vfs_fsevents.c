@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -26,9 +26,9 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <stdarg.h>
-#include <libsa/stdlib.h>
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/event.h>         // for kqueue related stuff
 #include <sys/fsevents.h>
 
 #if CONFIG_FSE
@@ -58,7 +58,7 @@
 #include <kern/thread_call.h>
 #include <kern/clock.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 #include <bsm/audit_kevents.h>
 
 
@@ -99,7 +99,7 @@ struct fsevent_handle;
 typedef struct fs_event_watcher {
     int8_t      *event_list;             // the events we're interested in
     int32_t      num_events;
-    dev_t       *devices_to_watch;       // only report events from these devices
+    dev_t       *devices_not_to_watch;   // report events from devices not in this list
     uint32_t     num_devices;
     int32_t      flags;
     kfs_event  **event_queue;
@@ -110,6 +110,7 @@ typedef struct fs_event_watcher {
     int32_t      blockers;
     int32_t      my_id;
     uint32_t     num_dropped;
+    uint64_t     max_event_id;
     struct fsevent_handle *fseh;
 } fs_event_watcher;
 
@@ -154,7 +155,13 @@ static lck_mtx_t watch_table_lock;
 static lck_mtx_t event_buf_lock;
 static lck_mtx_t event_writer_lock;
 
-static void init_pathbuff(void);
+
+/* Explicitly declare qsort so compiler doesn't complain */
+__private_extern__ void qsort(
+    void * array,
+    size_t nmembers,
+    size_t member_size,
+    int (*)(const void *, const void *));
 
 
 static void
@@ -199,8 +206,6 @@ fsevents_internal_init(void)
     // ever grow beyond what we initially filled it with
     zone_change(event_zone, Z_EXHAUST, TRUE);
     zone_change(event_zone, Z_COLLECT, FALSE);
-
-    init_pathbuff();
 }
 
 static void
@@ -235,24 +240,23 @@ watcher_cares_about_dev(fs_event_watcher *watcher, dev_t dev)
 {
     unsigned int i;
     
-    // if there is not list of devices to watch, then always
-    // say we're interested so we'll report all events from
-    // all devices
-    if (watcher->devices_to_watch == NULL) {
+    // if devices_not_to_watch is NULL then we care about all
+    // events from all devices
+    if (watcher->devices_not_to_watch == NULL) {
 	return 1;
     }
 
     for(i=0; i < watcher->num_devices; i++) {
-	if (dev == watcher->devices_to_watch[i]) {
-	    // found a match! that means we want events
-	    // from this device.
-	    return 1;
+	if (dev == watcher->devices_not_to_watch[i]) {
+	    // found a match! that means we do not 
+	    // want events from this device.
+	    return 0;
 	}
     }
 
-    // if we're here it's not in the devices_to_watch[] 
-    // list so that means we do not care about it
-    return 0;
+    // if we're here it's not in the devices_not_to_watch[] 
+    // list so that means we do care about it
+    return 1;
 }
 
 
@@ -463,6 +467,7 @@ static char    last_str[MAXPATHLEN];
 static int     last_nlen=0;
 static int     last_vid=-1;
 static uint64_t last_coalesced_time=0;
+static void   *last_event_ptr=NULL;
 int            last_coalesced = 0;
 static mach_timebase_info_data_t    sTimebaseInfo = { 0, 0 };
 
@@ -483,6 +488,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
     int               pathbuff_len;
 
 
+
     va_start(ap, ctx);
 
     // ignore bogus event types..
@@ -493,6 +499,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
     // if no one cares about this type of event, bail out
     if (fs_event_type_watchers[type] == 0) {
 	va_end(ap);
+
 	return 0;
     }
 
@@ -559,6 +566,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 	    last_coalesced++;
 	    unlock_fs_event_list();
 	    va_end(ap);
+
 	    return 0;
 	} else {
 	    last_ptr = ptr;
@@ -663,7 +671,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		    printf("add_fsevent: event queue is full! dropping events (num dropped events: %d; num events outstanding: %d).\n", num_dropped, num_events_outstanding);
 		    printf("add_fsevent: kfse_list head %p ; num_pending_rename %d\n", listhead, num_pending_rename);
 		    printf("add_fsevent: zalloc sez: %p\n", junkptr);
-		    printf("add_fsevent: event_zone info: %d %p\n", ((int *)event_zone)[0], (void *)((int *)event_zone)[1]);
+		    printf("add_fsevent: event_zone info: %d 0x%x\n", ((int *)event_zone)[0], ((int *)event_zone)[1]);
 		    for(ii=0; ii < MAX_WATCHERS; ii++) {
 			if (watcher_table[ii] == NULL) {
 			    continue;
@@ -792,7 +800,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 	//
 	if (str && kfse->len != 0) {
 	    kfse->abstime = now;
-	    OSAddAtomic(1, (SInt32 *)&kfse->refcount);
+	    OSAddAtomic(1, &kfse->refcount);
 	    skip_init = 1;
 
 	    if (reuse_type == KFSE_COMBINED) {
@@ -813,6 +821,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		panic("add_fsevent: line %d: kfse recount %d but should be at least 1\n", __LINE__, kfse->refcount);
 	    }
 
+	    last_event_ptr = kfse;
 	    unlock_fs_event_list();
 	    goto normal_delivery;
 	    
@@ -828,7 +837,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 	    need_event_unlock = 1;
 	    lck_rw_lock_exclusive(&event_handling_lock);
 
-	    OSAddAtomic(1, (SInt32 *)&kfse->refcount);
+	    OSAddAtomic(1, &kfse->refcount);
 
 	    if (kfse->refcount < 1) {
 		panic("add_fsevent: line %d: kfse recount %d but should be at least 1\n", __LINE__, kfse->refcount);
@@ -855,7 +864,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 	    kfse->flags = 0 | KFSE_RECYCLED_EVENT;
 	    
 	    if (kfse_dest) {
-		OSAddAtomic(1, (SInt32 *)&kfse_dest->refcount);
+		OSAddAtomic(1, &kfse_dest->refcount);
 		kfse_dest->flags = 0 | KFSE_RECYCLED_EVENT;
 
 		if (did_alloc == 0) {
@@ -902,6 +911,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
     OSBitOrAtomic16(KFSE_BEING_CREATED, &kfse->flags);
 
   process_normally:
+    last_event_ptr = kfse;
     kfse->type     = type;
     kfse->abstime  = now;
     kfse->pid      = p->p_pid;
@@ -975,7 +985,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		}
 
 		cur->dev  = dev = (dev_t)va.va_fsid;
-		cur->ino  = (ino_t)va.va_fileid;
+		cur->ino  = (ino64_t)va.va_fileid;
 		cur->mode = (int32_t)vnode_vttoif(vnode_vtype(vp)) | va.va_mode;
 		cur->uid  = va.va_uid;
 		cur->gid  = va.va_gid;
@@ -986,17 +996,43 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		    pathbuff_len = MAXPATHLEN;
 		    
 		    pathbuff[0] = '\0';
-		    if (vn_getpath(vp, pathbuff, &pathbuff_len) != 0 || pathbuff[0] == '\0') {
-			printf("add_fsevent: no name hard-link! dropping the event. (event %d vp == %p (%s)). \n",
-			       type, vp, vp->v_name ? vp->v_name : "-UNKNOWN-FILE");
-			error = ENOENT;
-			release_pathbuff(pathbuff);
-			pathbuff = NULL;
-			if (need_event_unlock == 0) {
-			    // then we only grabbed it shared 
-			    lck_rw_unlock_shared(&event_handling_lock);
+		    if ((ret = vn_getpath(vp, pathbuff, &pathbuff_len)) != 0 || pathbuff[0] == '\0') {
+			struct vnode *orig_vp = vp;
+			
+			if (ret != ENOSPC) {
+				printf("add_fsevent: unable to get path for vp %p (%s; ret %d; type %d)\n",
+				       vp, vp->v_name ? vp->v_name : "-UNKNOWN-FILE", ret, type);
 			}
-			goto clean_up;
+
+			cur->flags |= KFSE_CONTAINS_DROPPED_EVENTS;
+			
+			do {
+				if (vp->v_parent != NULL) {
+					vp = vp->v_parent;
+				} else if (vp->v_mount) {
+					strlcpy(pathbuff, vp->v_mount->mnt_vfsstat.f_mntonname, MAXPATHLEN);
+					break;
+				} else {
+					vp = NULL;
+				}
+
+				if (vp == NULL) {
+					break;
+				}
+
+				pathbuff_len = MAXPATHLEN;
+				ret = vn_getpath(vp, pathbuff, &pathbuff_len);
+			} while (ret == ENOSPC);
+				
+			if (ret != 0 || vp == NULL) {
+				printf("add_fsevent: unabled to get a path for vp %p.  dropping the event.\n", orig_vp);
+				error = ENOENT;
+				if (need_event_unlock == 0) {
+					// then we only grabbed it shared 
+					lck_rw_unlock_shared(&event_handling_lock);
+				}
+				goto clean_up;
+			}
 		    }
 		}
 
@@ -1019,13 +1055,17 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		fse = va_arg(ap, fse_info *);
 		
 		cur->dev  = dev = (dev_t)fse->dev;
-		cur->ino  = (ino_t)fse->ino;
+		cur->ino  = (ino64_t)fse->ino;
 		cur->mode = (int32_t)fse->mode;
 		cur->uid  = (uid_t)fse->uid;
 		cur->gid  = (uid_t)fse->gid;
 		// if it's a hard-link and this is the last link, flag it
 		if ((fse->mode & FSE_MODE_HLINK) && fse->nlink == 0) {
 		    cur->mode |= FSE_MODE_LAST_HLINK;
+		}
+		if (cur->mode & FSE_TRUNCATED_PATH) {
+			cur->flags |= KFSE_CONTAINS_DROPPED_EVENTS;
+			cur->mode &= ~FSE_TRUNCATED_PATH;
 		}
 		break;
 	    }
@@ -1127,12 +1167,18 @@ release_event_ref(kfs_event *kfse)
     kfs_event copy, dest_copy;
     
     
-    old_refcount = OSAddAtomic(-1, (SInt32 *)&kfse->refcount);
+    old_refcount = OSAddAtomic(-1, &kfse->refcount);
     if (old_refcount > 1) {
 	return;
     }
 
     lock_fs_event_list();
+    if (last_event_ptr == kfse) {
+	    last_event_ptr = NULL;
+	    last_event_type = -1;
+	    last_coalesced_time = 0;
+    }
+
     if (kfse->refcount < 0) {
 	panic("release_event_ref: bogus kfse refcount %d\n", kfse->refcount);
     }
@@ -1159,7 +1205,7 @@ release_event_ref(kfs_event *kfse)
     // holding the fs_event_buf lock
     //
     copy = *kfse;
-    if (kfse->dest && OSAddAtomic(-1, (SInt32 *)&kfse->dest->refcount) == 1) {
+    if (kfse->dest && OSAddAtomic(-1, &kfse->dest->refcount) == 1) {
 	dest_copy = *kfse->dest;
     } else {
 	dest_copy.str  = NULL;
@@ -1168,8 +1214,8 @@ release_event_ref(kfs_event *kfse)
     }
 
     kfse->pid = kfse->type;             // save this off for debugging...
-    kfse->uid = (uid_t)kfse->str;       // save this off for debugging...
-    kfse->gid = (gid_t)current_thread();
+    kfse->uid = (uid_t)(long)kfse->str;       // save this off for debugging... 
+    kfse->gid = (gid_t)(long)current_thread();
 
     kfse->str = (char *)0xdeadbeef;             // XXXdbg - catch any cheaters...
 
@@ -1250,7 +1296,7 @@ add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_even
 
     watcher->event_list   = event_list;
     watcher->num_events   = num_events;
-    watcher->devices_to_watch = NULL;
+    watcher->devices_not_to_watch = NULL;
     watcher->num_devices  = 0;
     watcher->flags        = 0;
     watcher->event_queue  = (kfs_event **)&watcher[1];
@@ -1259,6 +1305,7 @@ add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_even
     watcher->wr           = 0;
     watcher->blockers     = 0;
     watcher->num_readers  = 0;
+    watcher->max_event_id = 0;
     watcher->fseh         = NULL;
 
     watcher->num_dropped  = 0;      // XXXdbg - debugging
@@ -1326,7 +1373,7 @@ remove_watcher(fs_event_watcher *target)
 
 	// printf("fsevents: removing watcher %p (rd %d wr %d num_readers %d flags 0x%x)\n", watcher, watcher->rd, watcher->wr, watcher->num_readers, watcher->flags);
 	watcher->flags |= WATCHER_CLOSING;
-	OSAddAtomic(1, (SInt32 *)&watcher->num_readers);
+	OSAddAtomic(1, &watcher->num_readers);
 	
 	unlock_watch_table();
 	    
@@ -1362,9 +1409,9 @@ remove_watcher(fs_event_watcher *target)
 	    FREE(watcher->event_list, M_TEMP);
 	    watcher->event_list = NULL;
 	}
-	if (watcher->devices_to_watch) {
-	    FREE(watcher->devices_to_watch, M_TEMP);
-	    watcher->devices_to_watch = NULL;
+	if (watcher->devices_not_to_watch) {
+	    FREE(watcher->devices_not_to_watch, M_TEMP);
+	    watcher->devices_not_to_watch = NULL;
 	}
 	FREE(watcher, M_TEMP);
 
@@ -1428,13 +1475,17 @@ schedule_event_wakeup(void)
 static int
 watcher_add_event(fs_event_watcher *watcher, kfs_event *kfse)
 {
+    if (kfse->abstime > watcher->max_event_id) {
+	watcher->max_event_id = kfse->abstime;
+    }
+
     if (((watcher->wr + 1) % watcher->eventq_size) == watcher->rd) {
 	watcher->flags |= WATCHER_DROPPED_EVENTS;
 	fsevents_wakeup(watcher);
 	return ENOSPC;
     }
 
-    OSAddAtomic(1, (SInt32 *)&kfse->refcount);
+    OSAddAtomic(1, &kfse->refcount);
     watcher->event_queue[watcher->wr] = kfse;
     OSSynchronizeIO();
     watcher->wr = (watcher->wr + 1) % watcher->eventq_size;
@@ -1457,18 +1508,6 @@ watcher_add_event(fs_event_watcher *watcher, kfs_event *kfse)
 
     return 0;
 }
-
-
-// check if the next chunk of data will fit in the user's
-// buffer.  if not, just goto get_out which will return
-// the number of bytes worth of events that we did read.
-// this leaves the event that didn't fit in the queue.
-//    
-	// LP64todo - fix this
-#define CHECK_UPTR(size) if (size > (unsigned)uio_resid(uio)) { \
-                            uio_setresid(uio, last_full_event_resid); \
-                            goto get_out; \
-                         }
 
 static int
 fill_buff(uint16_t type, int32_t size, const void *data,
@@ -1700,11 +1739,11 @@ copy_out_kfse(fs_event_watcher *watcher, kfs_event *kfse, struct uio *uio)
 static int
 fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 {
-    int               error=0, last_full_event_resid;
+    int               error=0; 
+    user_ssize_t      last_full_event_resid;
     kfs_event        *kfse;
     uint16_t          tmp16;
 
-    // LP64todo - fix this
     last_full_event_resid = uio_resid(uio);
 
     // need at least 2048 bytes of space (maxpathlen + 1 event buf)
@@ -1716,26 +1755,26 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 	return 0;
     }
 
-    if (OSAddAtomic(1, (SInt32 *)&watcher->num_readers) != 0) {
+    if (OSAddAtomic(1, &watcher->num_readers) != 0) {
 	// don't allow multiple threads to read from the fd at the same time
-	OSAddAtomic(-1, (SInt32 *)&watcher->num_readers);
+	OSAddAtomic(-1, &watcher->num_readers);
 	return EAGAIN;
     }
 
     if (watcher->rd == watcher->wr) {
 	if (watcher->flags & WATCHER_CLOSING) {
-	    OSAddAtomic(-1, (SInt32 *)&watcher->num_readers);
+	    OSAddAtomic(-1, &watcher->num_readers);
 	    return 0;
 	}
-	OSAddAtomic(1, (SInt32 *)&watcher->blockers);
+	OSAddAtomic(1, &watcher->blockers);
     
 	// there's nothing to do, go to sleep
 	error = tsleep((caddr_t)watcher, PUSER|PCATCH, "fsevents_empty", 0);
 
-	OSAddAtomic(-1, (SInt32 *)&watcher->blockers);
+	OSAddAtomic(-1, &watcher->blockers);
 
 	if (error != 0 || (watcher->flags & WATCHER_CLOSING)) {
-	    OSAddAtomic(-1, (SInt32 *)&watcher->num_readers);
+	    OSAddAtomic(-1, &watcher->num_readers);
 	    return error;
 	}
     }
@@ -1752,12 +1791,11 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 	    tmp16 = FSE_ARG_DONE;  // makes it a consistent msg
 	    error = uiomove((caddr_t)&tmp16, sizeof(int16_t), uio);
 
-	    // LP64todo - fix this
 	    last_full_event_resid = uio_resid(uio);
 	} 
 
 	if (error) {
-	    OSAddAtomic(-1, (SInt32 *)&watcher->num_readers);
+	    OSAddAtomic(-1, &watcher->num_readers);
 	    return error;
 	}
 	
@@ -1798,7 +1836,6 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 		}
 	    }
 
-	    // LP64todo - fix this
 	    last_full_event_resid = uio_resid(uio);
 	}
 
@@ -1815,7 +1852,7 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
     }
 
   get_out:
-    OSAddAtomic(-1, (SInt32 *)&watcher->num_readers);
+    OSAddAtomic(-1, &watcher->num_readers);
 
     return error;
 }
@@ -1845,6 +1882,7 @@ typedef struct fsevent_handle {
     UInt32            flags;
     SInt32            active;
     fs_event_watcher *watcher;
+    struct klist      knotes;
     struct selinfo    si;
 } fsevent_handle;
 
@@ -1870,10 +1908,12 @@ fseventsf_write(__unused struct fileproc *fp, __unused struct uio *uio,
     return EIO;
 }
 
+#pragma pack(push, 4)
 typedef struct ext_fsevent_dev_filter_args {
     uint32_t    num_devices;
     user_addr_t devices;
 } ext_fsevent_dev_filter_args;
+#pragma pack(pop)
 
 typedef struct old_fsevent_dev_filter_args {
     uint32_t  num_devices;
@@ -1883,6 +1923,14 @@ typedef struct old_fsevent_dev_filter_args {
 #define	OLD_FSEVENTS_DEVICE_FILTER	_IOW('s', 100, old_fsevent_dev_filter_args)
 #define	NEW_FSEVENTS_DEVICE_FILTER	_IOW('s', 100, ext_fsevent_dev_filter_args)
 
+#if __LP64__
+/* need this in spite of the padding due to alignment of devices */
+typedef struct fsevent_dev_filter_args32 {
+    uint32_t  num_devices;
+    uint32_t  devices;
+    int32_t   pad1;
+} fsevent_dev_filter_args32;
+#endif
 
 static int
 fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx)
@@ -1902,7 +1950,11 @@ fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx
 	devfilt_args->num_devices = udev_filt_args->num_devices;
 	devfilt_args->devices     = CAST_USER_ADDR_T(udev_filt_args->devices);
     } else {
+#if __LP64__
+	fsevent_dev_filter_args32 *udev_filt_args = (fsevent_dev_filter_args32 *)data;
+#else
 	fsevent_dev_filter_args *udev_filt_args = (fsevent_dev_filter_args *)data;
+#endif
 	
 	devfilt_args = &_devfilt_args;
 	memset(devfilt_args, 0, sizeof(ext_fsevent_dev_filter_args));
@@ -1932,10 +1984,16 @@ fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx
 	    break;
 	}
 
+	case FSEVENTS_GET_CURRENT_ID: {
+		*(uint64_t *)data = fseh->watcher->max_event_id;
+		ret = 0;
+		break;
+	}
+
 	case OLD_FSEVENTS_DEVICE_FILTER:
 	case NEW_FSEVENTS_DEVICE_FILTER: {
 	    int new_num_devices;
-	    dev_t *devices_to_watch, *tmp=NULL;
+	    dev_t *devices_not_to_watch, *tmp=NULL;
 	    
 	    if (devfilt_args->num_devices > 256) {
 		ret = EINVAL;
@@ -1944,10 +2002,10 @@ fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx
 	    
 	    new_num_devices = devfilt_args->num_devices;
 	    if (new_num_devices == 0) {
-		tmp = fseh->watcher->devices_to_watch;
+		tmp = fseh->watcher->devices_not_to_watch;
 
 		lock_watch_table();
-		fseh->watcher->devices_to_watch = NULL;
+		fseh->watcher->devices_not_to_watch = NULL;
 		fseh->watcher->num_devices = new_num_devices;
 		unlock_watch_table();
 
@@ -1957,26 +2015,26 @@ fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx
 		break;
 	    }
 
-	    MALLOC(devices_to_watch, dev_t *,
+	    MALLOC(devices_not_to_watch, dev_t *,
 		   new_num_devices * sizeof(dev_t),
 		   M_TEMP, M_WAITOK);
-	    if (devices_to_watch == NULL) {
+	    if (devices_not_to_watch == NULL) {
 		ret = ENOMEM;
 		break;
 	    }
     
 	    ret = copyin(devfilt_args->devices,
-			 (void *)devices_to_watch,
+			 (void *)devices_not_to_watch,
 			 new_num_devices * sizeof(dev_t));
 	    if (ret) {
-		FREE(devices_to_watch, M_TEMP);
+		FREE(devices_not_to_watch, M_TEMP);
 		break;
 	    }
 
 	    lock_watch_table();
 	    fseh->watcher->num_devices = new_num_devices;
-	    tmp = fseh->watcher->devices_to_watch;
-	    fseh->watcher->devices_to_watch = devices_to_watch;
+	    tmp = fseh->watcher->devices_not_to_watch;
+	    fseh->watcher->devices_not_to_watch = devices_not_to_watch;
 	    unlock_watch_table();
 
 	    if (tmp) {
@@ -2049,10 +2107,95 @@ fseventsf_close(struct fileglob *fg, __unused vfs_context_t ctx)
     return 0;
 }
 
+static void
+filt_fsevent_detach(struct knote *kn)
+{
+	fsevent_handle *fseh = (struct fsevent_handle *)kn->kn_hook;
+
+	lock_watch_table();
+
+	KNOTE_DETACH(&fseh->knotes, kn);
+	
+	unlock_watch_table();
+}
+
+/* 
+ * Determine whether this knote should be active
+ * 
+ * This is kind of subtle.  
+ * 	--First, notice if the vnode has been revoked: in so, override hint
+ * 	--EVFILT_READ knotes are checked no matter what the hint is
+ * 	--Other knotes activate based on hint.  
+ * 	--If hint is revoke, set special flags and activate
+ */
+static int
+filt_fsevent(struct knote *kn, long hint)
+{
+	fsevent_handle *fseh = (struct fsevent_handle *)kn->kn_hook;
+	int activate = 0;
+	int32_t rd, wr, amt;
+
+	if (NOTE_REVOKE == hint) {
+		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
+		activate = 1;
+	}
+
+	rd = fseh->watcher->rd;
+	wr = fseh->watcher->wr;
+	if (rd <= wr) {
+	    amt = wr - rd;
+	} else {
+	    amt = fseh->watcher->eventq_size - (rd - wr);
+	}
+
+	switch(kn->kn_filter) {
+		case EVFILT_READ:
+			kn->kn_data = amt;
+			
+			if (kn->kn_data != 0) {
+				activate = 1;
+			}
+			break;
+		case EVFILT_VNODE:
+			/* Check events this note matches against the hint */
+			if (kn->kn_sfflags & hint) {
+				kn->kn_fflags |= hint; /* Set which event occurred */
+			}
+			if (kn->kn_fflags != 0) {
+				activate = 1;
+			}
+			break;
+		default: {
+			// nothing to do...
+			break;
+		}
+	}
+
+	return (activate);
+}
+
+
+struct  filterops fsevent_filtops = { 
+	.f_isfd = 1, 
+	.f_attach = NULL, 
+	.f_detach = filt_fsevent_detach, 
+	.f_event = filt_fsevent
+};
+
 static int
 fseventsf_kqfilter(__unused struct fileproc *fp, __unused struct knote *kn, __unused vfs_context_t ctx)
 {
-    // XXXdbg
+    fsevent_handle *fseh = (struct fsevent_handle *)fp->f_fglob->fg_data;
+
+    kn->kn_hook = (void*)fseh;
+    kn->kn_hookid = 1;
+    kn->kn_fop = &fsevent_filtops;
+    
+    lock_watch_table();
+
+    KNOTE_ATTACH(&fseh->knotes, kn);
+
+    unlock_watch_table();
     return 0;
 }
 
@@ -2173,10 +2316,25 @@ parse_buffer_and_add_events(const char *buffer, int bufsize, vfs_context_t ctx, 
 	event_start = ptr;   // record where the next event starts
 
 	dest_path_len = ptr - dest_path;
-	err = add_fsevent(type, ctx,
-	                  FSE_ARG_STRING, path_len,      path,      FSE_ARG_FINFO, finfo,
-	                  FSE_ARG_STRING, dest_path_len, dest_path, FSE_ARG_FINFO, dest_finfo,
-	                  FSE_ARG_DONE);
+	//
+	// If the destination inode number is non-zero, generate a rename
+	// with both source and destination FSE_ARG_FINFO. Otherwise generate
+	// a rename with only one FSE_ARG_FINFO. If you need to inject an
+	// exchange with an inode of zero, just make that inode (and its path)
+	// come in as the first one, not the second.
+	//
+	if (dest_finfo->ino) {
+	        err = add_fsevent(type, ctx,
+		                  FSE_ARG_STRING, path_len,      path,      FSE_ARG_FINFO, finfo,
+		                  FSE_ARG_STRING, dest_path_len, dest_path, FSE_ARG_FINFO, dest_finfo,
+		                  FSE_ARG_DONE);
+	} else {
+		err = add_fsevent(type, ctx,
+		                  FSE_ARG_STRING, path_len,      path,      FSE_ARG_FINFO, finfo,
+		                  FSE_ARG_STRING, dest_path_len, dest_path,
+		                  FSE_ARG_DONE);
+	}
+
 	if (err) {
 	    break;
 	}
@@ -2284,10 +2442,10 @@ typedef struct ext_fsevent_clone_args {
 } ext_fsevent_clone_args;
 
 typedef struct old_fsevent_clone_args {
-    int32_t  event_list;
+    uint32_t  event_list;
     int32_t  num_events;
     int32_t  event_queue_depth;
-    int32_t  fd;
+    uint32_t  fd;
 } old_fsevent_clone_args;
 
 #define	OLD_FSEVENTS_CLONE	_IOW('s', 1, old_fsevent_clone_args)
@@ -2342,6 +2500,8 @@ fseventsioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag, s
 		return ENOMEM;
 	    }
 	    memset(fseh, 0, sizeof(fsevent_handle));
+	    
+	    klist_init(&fseh->knotes);
 
 	    MALLOC(event_list, int8_t *,
 		   fse_clone_args->num_events * sizeof(int8_t),
@@ -2407,8 +2567,9 @@ fseventsioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag, s
 static void
 fsevents_wakeup(fs_event_watcher *watcher)
 {
-    wakeup((caddr_t)watcher);
     selwakeup(&watcher->fseh->si);
+    KNOTE(&watcher->fseh->knotes, NOTE_WRITE|NOTE_NONE);
+    wakeup((caddr_t)watcher);
 }
 
 
@@ -2464,89 +2625,22 @@ fsevents_init(void)
 }
 
 
-
-//
-// XXXdbg - temporary path buffer handling
-//
-#define NUM_PATH_BUFFS  16
-static char path_buff[NUM_PATH_BUFFS][MAXPATHLEN];
-static char path_buff_inuse[NUM_PATH_BUFFS];
-
-static lck_grp_attr_t * pathbuff_group_attr;
-static lck_attr_t *     pathbuff_lock_attr;
-static lck_grp_t *      pathbuff_mutex_group;
-static lck_mtx_t        pathbuff_lock;
-
-static void
-init_pathbuff(void)
-{
-    pathbuff_lock_attr    = lck_attr_alloc_init();
-    pathbuff_group_attr   = lck_grp_attr_alloc_init();
-    pathbuff_mutex_group  = lck_grp_alloc_init("pathbuff-mutex", pathbuff_group_attr);
-
-    lck_mtx_init(&pathbuff_lock, pathbuff_mutex_group, pathbuff_lock_attr);
-}
-
-static void
-lock_pathbuff(void)
-{
-    lck_mtx_lock(&pathbuff_lock);
-}
-
-static void
-unlock_pathbuff(void)
-{
-    lck_mtx_unlock(&pathbuff_lock);
-}
-
-
 char *
 get_pathbuff(void)
 {
-    int i;
+    char *path;
 
-    lock_pathbuff();
-    for(i=0; i < NUM_PATH_BUFFS; i++) {
-	if (path_buff_inuse[i] == 0) {
-	    break;
-	}
-    }
-
-    if (i >= NUM_PATH_BUFFS) {
-	char *path;
-	
-	unlock_pathbuff();
-	MALLOC_ZONE(path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	return path;
-    }
-
-    path_buff_inuse[i] = 1;
-    unlock_pathbuff();
-    return &path_buff[i][0];
+    MALLOC_ZONE(path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+    return path;
 }
 
 void
 release_pathbuff(char *path)
 {
-    int i;
 
     if (path == NULL) {
 	return;
     }
-
-    lock_pathbuff();
-    for(i=0; i < NUM_PATH_BUFFS; i++) {
-	if (path == &path_buff[i][0]) {
-	    path_buff[i][0] = '\0';
-	    path_buff_inuse[i] = 0;
-	    unlock_pathbuff();
-	    return;
-	}
-    }
-
-    unlock_pathbuff();
-
-    // if we get here then it wasn't one of our temp buffers
     FREE_ZONE(path, MAXPATHLEN, M_NAMEI);
 }
 
@@ -2589,6 +2683,57 @@ get_fse_info(struct vnode *vp, fse_info *fse, __unused vfs_context_t ctx)
     }    
 
     return 0;
+}
+
+void
+create_fsevent_from_kevent(vnode_t vp, uint32_t kevents, struct vnode_attr *vap)
+{
+    int fsevent_type=FSE_CONTENT_MODIFIED, len;   // the default is the most pessimistic
+    char pathbuf[MAXPATHLEN];
+    fse_info fse;
+
+    
+    if (kevents & VNODE_EVENT_DELETE) {
+        fsevent_type = FSE_DELETE;
+    } else if (kevents & (VNODE_EVENT_EXTEND|VNODE_EVENT_WRITE)) {
+	fsevent_type = FSE_CONTENT_MODIFIED;
+    } else if (kevents & VNODE_EVENT_LINK) {
+	fsevent_type = FSE_CREATE_FILE;
+    } else if (kevents & VNODE_EVENT_RENAME) {
+	fsevent_type = FSE_CREATE_FILE;    // XXXdbg - should use FSE_RENAME but we don't have the destination info;
+    } else if (kevents & (VNODE_EVENT_FILE_CREATED|VNODE_EVENT_FILE_REMOVED|VNODE_EVENT_DIR_CREATED|VNODE_EVENT_DIR_REMOVED)) {
+	fsevent_type = FSE_STAT_CHANGED;  // XXXdbg - because vp is a dir and the thing created/removed lived inside it
+    } else {   // a catch all for VNODE_EVENT_PERMS, VNODE_EVENT_ATTRIB and anything else
+        fsevent_type = FSE_STAT_CHANGED;
+    }
+
+    // printf("convert_kevent: kevents 0x%x fsevent type 0x%x (for %s)\n", kevents, fsevent_type, vp->v_name ? vp->v_name : "(no-name)");
+
+    fse.dev = vap->va_fsid;
+    fse.ino = vap->va_fileid;
+    fse.mode = vnode_vttoif(vnode_vtype(vp)) | (uint32_t)vap->va_mode;
+    if (vp->v_flag & VISHARDLINK) {
+	fse.mode |= FSE_MODE_HLINK;
+	if (vp->v_type == VDIR) {
+	    fse.nlink = vap->va_dirlinkcount;
+	} else {
+	    fse.nlink = vap->va_nlink;
+	}
+    }
+
+    if (vp->v_type == VDIR) {
+	fse.mode |= FSE_REMOTE_DIR_EVENT;	
+    }
+    
+
+    fse.uid = vap->va_uid;
+    fse.gid = vap->va_gid;
+
+    len = sizeof(pathbuf);
+    if (vn_getpath(vp, pathbuf, &len) == 0) {
+	add_fsevent(fsevent_type, vfs_context_current(), FSE_ARG_STRING, len, pathbuf, FSE_ARG_FINFO, &fse, FSE_ARG_DONE);
+    }
+    return;
 }
 
 #else /* CONFIG_FSE */

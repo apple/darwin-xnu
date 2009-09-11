@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -227,6 +227,9 @@ extern void		compute_averunnable(
 extern void		compute_stack_target(
 					void			*arg);
 
+extern void		compute_memory_pressure(
+					void			*arg);
+
 /*
  *	Conversion factor from usage
  *	to priority.
@@ -271,9 +274,9 @@ MACRO_END
  */
 #define thread_timer_delta(thread, delta)					\
 MACRO_BEGIN													\
-	(delta) = timer_delta(&(thread)->system_timer,			\
+	(delta) = (typeof(delta))timer_delta(&(thread)->system_timer,			\
 							&(thread)->system_timer_save);	\
-	(delta) += timer_delta(&(thread)->user_timer,			\
+	(delta) += (typeof(delta))timer_delta(&(thread)->user_timer,			\
 							&(thread)->user_timer_save);	\
 MACRO_END
 

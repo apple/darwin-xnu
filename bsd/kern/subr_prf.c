@@ -127,7 +127,7 @@ void	(*v_putc)(char) = cnputc;	/* routine to putc on virtual console */
 extern	struct tty cons;		/* standard console tty */
 extern struct	tty *constty;		/* pointer to console "window" tty */
 extern int  __doprnt(const char *fmt,
-					 va_list    *argp,
+					 va_list    argp,
 					 void       (*)(int, void *),
 					 void       *arg,
 					 int        radix);
@@ -135,11 +135,7 @@ extern int  __doprnt(const char *fmt,
 /*
  *	Record cpu that panic'd and lock around panic data
  */
-static void printn(u_long n, int b, int flags, struct tty *ttyp, int zf, int fld_size);
-
-#if	NCPUS > 1
-boolean_t new_printf_cpu_number;  /* do we need to output who we are */
-#endif
+static void printn(uint32_t n, int b, int flags, struct tty *ttyp, int zf, int fld_size);
 
 extern	void logwakeup(void);
 extern	void halt_cpu(void);
@@ -165,22 +161,23 @@ uprintf(const char *fmt, ...)
 	struct proc *p = current_proc();
 	struct putchar_args pca;
 	va_list ap;
-	struct session * sessp;
-	boolean_t fstate;
+	struct session *sessp;
 	
 	sessp = proc_session(p);
 
-	fstate = thread_funnel_set(kernel_flock, TRUE);
-	pca.flags = TOTTY;
-	pca.tty   = (struct tty *)sessp->s_ttyp;
-
-	if (p->p_flag & P_CONTROLT && sessp->s_ttyvp) {
+	if (p->p_flag & P_CONTROLT && sessp != SESSION_NULL && sessp->s_ttyvp) {
+		pca.flags = TOTTY;
+		pca.tty   = SESSION_TP(sessp);
+		if (pca.tty != NULL)
+			tty_lock(pca.tty);
 		va_start(ap, fmt);
-		__doprnt(fmt, &ap, putchar, &pca, 10);
+		__doprnt(fmt, ap, putchar, &pca, 10);
 		va_end(ap);
+		if (pca.tty != NULL)
+		tty_unlock(pca.tty);
 	}
-	(void) thread_funnel_set(kernel_flock, fstate);
-	session_rele(sessp);
+	if (sessp != SESSION_NULL)
+		session_rele(sessp);
 }
 
 tpr_t
@@ -209,33 +206,41 @@ tprintf_close(tpr_t sessp)
 /*
  * tprintf prints on the controlling terminal associated
  * with the given session.
+ *
+ * NOTE:	No one else should call this function!!!
  */
 void
 tprintf(tpr_t tpr, const char *fmt, ...)
 {
 	struct session *sess = (struct session *)tpr;
-	struct tty *tp = NULL;
+	struct tty *tp = TTY_NULL;
 	int flags = TOLOG;
 	va_list ap;
 	struct putchar_args pca;
-	boolean_t fstate;
 
 	logpri(LOG_INFO);
-	/* to protect tty */
-	fstate = thread_funnel_set(kernel_flock, TRUE);
 
-	if (sess && sess->s_ttyvp && ttycheckoutq(sess->s_ttyp, 0)) {
-		flags |= TOTTY;
-		tp = sess->s_ttyp;
+	if (sess && (tp = SESSION_TP(sess)) != TTY_NULL) {
+		/* ttycheckoutq(), tputchar() require a locked tp */
+		tty_lock(tp);
+		if(ttycheckoutq(tp, 0)) {
+			flags |= TOTTY;
+			/* going to the tty; leave locked */
+		} else {
+			/* not going to the tty... */
+			tty_unlock(tp);
+			tp = TTY_NULL;
+		}
 	}
 	
 	pca.flags = flags;
 	pca.tty   = tp;
 	va_start(ap, fmt);
-	__doprnt(fmt, &ap, putchar, &pca, 10);
+	__doprnt(fmt, ap, putchar, &pca, 10);
 	va_end(ap);
 
-	(void) thread_funnel_set(kernel_flock, fstate);
+	if (tp != NULL)
+		tty_unlock(tp);	/* lock/unlock is guarded by tp, above */
 
 	logwakeup();
 }
@@ -244,25 +249,27 @@ tprintf(tpr_t tpr, const char *fmt, ...)
  * Ttyprintf displays a message on a tty; it should be used only by
  * the tty driver, or anything that knows the underlying tty will not
  * be revoke(2)'d away.  Other callers should use tprintf.
+ *
+ * Locks:	It is assumed that the tty_lock() is held over the call
+ *		to this function.  Ensuring this is the responsibility
+ *		of the caller.
  */
 void
 ttyprintf(struct tty *tp, const char *fmt, ...)
 {
 	va_list ap;
-	boolean_t fstate;
 
 	if (tp != NULL) {
-		fstate = thread_funnel_set(kernel_flock, TRUE);
 		struct putchar_args pca;
 		pca.flags = TOTTY;
 		pca.tty   = tp;
 		
 		va_start(ap, fmt);
-		__doprnt(fmt, &ap, putchar, &pca, 10);
+		__doprnt(fmt, ap, putchar, &pca, 10);
 		va_end(ap);
-		(void) thread_funnel_set(kernel_flock, fstate);
 	}
 }
+
 
 extern	int log_open;
 
@@ -275,7 +282,7 @@ logpri(int level)
 	pca.tty   = NULL;
 	
 	putchar('<', &pca);
-	printn((u_long)level, 10, TOLOG, (struct tty *)0, 0, 0);
+	printn((uint32_t)level, 10, TOLOG, (struct tty *)0, 0, 0);
 	putchar('>', &pca);
 }
 
@@ -307,7 +314,7 @@ vaddlog(const char *fmt, va_list ap)
 	}
 
 	bsd_log_lock();
-	__doprnt(fmt, &ap, putchar, &pca, 10);
+	__doprnt(fmt, ap, putchar, &pca, 10);
 	bsd_log_unlock();
 	
 	logwakeup();
@@ -319,50 +326,31 @@ _printf(int flags, struct tty *ttyp, const char *format, ...)
 {
 	va_list ap;
 	struct putchar_args pca;
-	boolean_t fstate;
 
 	pca.flags = flags;
 	pca.tty   = ttyp;
-	fstate = thread_funnel_set(kernel_flock, TRUE);
+
+	if (ttyp != NULL) {
+		tty_lock(ttyp);
 	
-	va_start(ap, format);
-	__doprnt(format, &ap, putchar, &pca, 10);
-	va_end(ap);
-	(void) thread_funnel_set(kernel_flock, fstate);
+		va_start(ap, format);
+		__doprnt(format, ap, putchar, &pca, 10);
+		va_end(ap);
+
+		tty_unlock(ttyp);
+	}
 }
 
-int prf(const char *fmt, va_list ap, int flags, struct tty *ttyp)
+int
+prf(const char *fmt, va_list ap, int flags, struct tty *ttyp)
 {
 	struct putchar_args pca;
 
 	pca.flags = flags;
 	pca.tty   = ttyp;
 
-#if    NCPUS > 1
-    int cpun = cpu_number();
+	__doprnt(fmt, ap, putchar, &pca, 10);
 
-    if(ttyp == 0) {
-	} else
-		TTY_LOCK(ttyp);
-
-	if (cpun != master_cpu)
-	    new_printf_cpu_number = TRUE;
-
-	if (new_printf_cpu_number) {
-		putchar('{', flags, ttyp);
-		printn((u_long)cpun, 10, flags, ttyp, 0, 0);
-		putchar('}', flags, ttyp);
-	}
-#endif /* NCPUS > 1 */
-	  
-	__doprnt(fmt, &ap, putchar, &pca, 10);
-
-#if    NCPUS > 1
-	if(ttyp == 0) {
-	} else
-		TTY_UNLOCK(ttyp);
-#endif
- 
 	return 0;
 }
 
@@ -370,7 +358,8 @@ int prf(const char *fmt, va_list ap, int flags, struct tty *ttyp)
  * Printn prints a number n in base b.
  * We don't use recursion to avoid deep kernel stacks.
  */
-static void printn(u_long n, int b, int flags, struct tty *ttyp, int zf, int fld_size)
+static void
+printn(uint32_t n, int b, int flags, struct tty *ttyp, int zf, int fld_size)
 {
 	char prbuf[11];
 	char *cp;
@@ -414,6 +403,9 @@ void tablefull(const char *tab)
  * Print a character on console or users terminal.
  * If destination is console then the last MSGBUFS characters
  * are saved in msgbuf for inspection later.
+ *
+ * Locks:	If TOTTY is set, we assume that the tty lock is held
+ *		over the call to this function.
  */
 /*ARGSUSED*/
 void
@@ -450,7 +442,7 @@ vprintf(const char *fmt, va_list ap)
 
 	pca.flags = TOLOG | TOCONS;
 	pca.tty   = NULL;
-	__doprnt(fmt, &ap, putchar, &pca, 10);
+	__doprnt(fmt, ap, putchar, &pca, 10);
 	return 0;
 }
 
@@ -469,7 +461,7 @@ vsprintf(char *buf, const char *cfmt, va_list ap)
 	info.str = buf;
 	info.remain = 999999;
 
-	retval = __doprnt(cfmt, &ap, snprintf_func, &info, 10);
+	retval = __doprnt(cfmt, ap, snprintf_func, &info, 10);
 	if (info.remain >= 1) {
 		*info.str++ = '\0';
 	}
@@ -502,7 +494,7 @@ vsnprintf(char *str, size_t size, const char *format, va_list ap)
 
 	info.str = str;
 	info.remain = size;
-	retval = __doprnt(format, &ap, snprintf_func, &info, 10);
+	retval = __doprnt(format, ap, snprintf_func, &info, 10);
 	if (info.remain >= 1)
 		*info.str++ = '\0';
 	return retval;
@@ -522,7 +514,7 @@ snprintf_func(int ch, void *arg)
 int
 kvprintf(char const *fmt, void (*func)(int, void*), void *arg, int radix, va_list ap)
 {
-	__doprnt(fmt, &ap, func, arg, radix);
+	__doprnt(fmt, ap, func, arg, radix);
 	return 0;
 }
 

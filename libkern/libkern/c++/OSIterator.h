@@ -38,31 +38,92 @@
 #include <libkern/c++/OSObject.h>
 
 /*!
-    @class OSIterator
-    @abstract Abstract super class for iterator classes.
-    @discussion
-    OSIterator is an abstract super class providing a consistent set of API's for subclasses.
-*/
+ * @header
+ *
+ * @abstract
+ * This header declares the OSIterator collection class.
+ */
+ 
+ 
+/*!
+ * @class OSIterator
+ * @abstract
+ * The abstract superclass for Libkern iterators.
+ *
+ * @discussion
+ * OSIterator is the abstract superclass for all Libkern C++ object iterators.
+ * It defines the basic interface for iterating and resetting.
+ * See @link //apple_ref/cpp/macro/OSCollection OSCollection@/link and
+ * @link //apple_ref/cpp/macro/OSCollectionIterator OSCollectionIterator@/link
+ * for more information.
+ *
+ * With very few exceptions in the I/O Kit, all Libkern-based C++
+ * classes, functions, and macros are <b>unsafe</b>
+ * to use in a primary interrupt context.
+ * Consult the I/O Kit documentation related to primary interrupts 
+ * for more information.
+ *
+ * OSIterator provides no concurrency protection.
+ */
 class OSIterator : public OSObject
 {
     OSDeclareAbstractStructors(OSIterator)
 
 public:
-    /*!
-        @function reset
-        @abstract A pure virtual member function to be over-ridden by the subclass which reset the iterator to the beginning of the collection.
+   /*!
+    * @function reset
+    *
+    * @abstract
+    * Resets the iterator to the beginning of the collection,
+    * as if it had just been created.
+    *
+    * @discussion
+    * Subclasses must implement this pure virtual member function.
     */
     virtual void reset() = 0;
 
-    /*!
-        @function isValid
-        @abstract A pure virtual member function to be over-ridden by the subclass which indicates a modification was made to the collection.
+
+   /*!
+    * @function isValid
+    *
+    * @abstract
+    * Check that the collection hasn't been modified during iteration.
+    *
+    * @result 
+    * <code>true</code> if the iterator is valid for continued use,
+    * <code>false</code> otherwise
+    * (typically because the collection being iterated has been modified).
+    *
+    * @discussion
+    * Subclasses must implement this pure virtual member function.
     */
     virtual bool isValid() = 0;
 
-    /*!
-        @function getNextObject
-        @abstract A pure virtual function to be over-ridden by the subclass which returns a reference to the current object in the collection and advances the interator to the next object.
+
+   /*!
+    * @function getNextObject
+    *
+    * @abstract
+    * Advances to and returns the next object in the iteration.
+    *
+    * @return
+    * The next object in the iteration context,
+    * <code>NULL</code> if there is no next object
+    * or if the iterator is no longer valid.
+    *
+    * @discussion
+    * The returned object will be released if removed from the collection;
+    * if you plan to store the reference, you should call
+    * <code>@link
+    * //apple_ref/cpp/instm/OSObject/retain/virtualvoid/()
+    * retain@/link</code>
+    * on that object.
+    *
+    * Subclasses must implement this pure virtual function
+    * to check for validity with 
+    * <code>@link isValid isValid@/link</code>,
+    * and then to advance the iteration context to the next object (if any)
+    * and return that next object, or <code>NULL</code> if there is none.
     */
     virtual OSObject *getNextObject() = 0;
 

@@ -538,10 +538,11 @@ get_ip_parameters(struct in_addr * iaddr_p, struct in_addr * netmask_p,
 
 static int
 route_cmd(int cmd, struct in_addr d, struct in_addr g, 
-	  struct in_addr m, u_long more_flags)
+	  struct in_addr m, uint32_t more_flags, unsigned int ifscope)
 {
     struct sockaddr_in 		dst;
-    u_long			flags = RTF_UP | RTF_STATIC;
+    int				error;
+    uint32_t			flags = RTF_UP | RTF_STATIC;
     struct sockaddr_in		gw;
     struct sockaddr_in		mask;
     
@@ -564,29 +565,35 @@ route_cmd(int cmd, struct in_addr d, struct in_addr g,
     mask.sin_len = sizeof(mask);
     mask.sin_family = AF_INET;
     mask.sin_addr = m;
+    lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+    lck_mtx_lock(rnh_lock);
+    error = rtrequest_scoped_locked(cmd, (struct sockaddr *)&dst,
+				    (struct sockaddr *)&gw,
+				    (struct sockaddr *)&mask,
+				    flags, NULL, ifscope);
+    lck_mtx_unlock(rnh_lock);
+    return (error);
 
-    return (rtrequest(cmd, (struct sockaddr *)&dst, (struct sockaddr *)&gw,
-		      (struct sockaddr *)&mask, flags, NULL));
 }
 
 static int
 default_route_add(struct in_addr router, boolean_t proxy_arp)
 {
-    u_long			flags = 0;
+    uint32_t			flags = 0;
     struct in_addr		zeroes = { 0 };
     
     if (proxy_arp == FALSE) {
 	flags |= RTF_GATEWAY;
     }
-    return (route_cmd(RTM_ADD, zeroes, router, zeroes, flags));
+    return (route_cmd(RTM_ADD, zeroes, router, zeroes, flags, IFSCOPE_NONE));
 }
 
 static int
-host_route_delete(struct in_addr host)
+host_route_delete(struct in_addr host, unsigned int ifscope)
 {
     struct in_addr		zeroes = { 0 };
     
-    return (route_cmd(RTM_DELETE, host, zeroes, zeroes, RTF_HOST));
+    return (route_cmd(RTM_DELETE, host, zeroes, zeroes, RTF_HOST, ifscope));
 }
 
 static struct ifnet *
@@ -705,7 +712,8 @@ netboot_mountroot(void)
 		/* NOT REACHED */
 	    case EHOSTDOWN:
 		/* remove the server's arp entry */
-		error = host_route_delete(S_netboot_info_p->server_ip);
+		error = host_route_delete(S_netboot_info_p->server_ip,
+					  ifp->if_index);
 		if (error) {
 		    printf("netboot: host_route_delete(" IP_FORMAT
 			   ") failed %d\n", 
@@ -713,7 +721,7 @@ netboot_mountroot(void)
 		}
 		break;
 	    case EHOSTUNREACH:
-		error = host_route_delete(router);
+		error = host_route_delete(router, ifp->if_index);
 		if (error) {
 		    printf("netboot: host_route_delete(" IP_FORMAT
 			   ") failed %d\n", IP_LIST(&router), error);
@@ -770,7 +778,7 @@ netboot_setup()
     }
     rootdev = dev;
     mountroot = NULL;
-    printf("netboot: root device 0x%x\n", rootdev);
+    printf("netboot: root device 0x%x\n", (int32_t)rootdev);
     error = vfs_mountroot();
     if (error == 0 && rootvnode != NULL) {
         struct vnode *tvp;

@@ -67,41 +67,58 @@
 #define EVFILT_PROC		(-5)	/* attached to struct proc */
 #define EVFILT_SIGNAL		(-6)	/* attached to struct proc */
 #define EVFILT_TIMER		(-7)	/* timers */
-#define EVFILT_MACHPORT		(-8)	/* Mach ports */
+#define EVFILT_MACHPORT         (-8)	/* Mach portsets */
 #define EVFILT_FS		(-9)	/* Filesystem events */
+#define EVFILT_USER             (-10)   /* User events */
+#define	EVFILT_SESSION		(-11)	/* Audit session events */
 
-#define EVFILT_SYSCOUNT		9
+#define EVFILT_SYSCOUNT		11
 #define EVFILT_THREADMARKER	EVFILT_SYSCOUNT /* Internal use only */
 
 #pragma pack(4)
 
 struct kevent {
 	uintptr_t	ident;		/* identifier for this event */
-	short		filter;		/* filter for event */
-	unsigned short	flags;		/* general flags */
-	unsigned int	fflags;		/* filter-specific flags */
+	int16_t		filter;		/* filter for event */
+	uint16_t	flags;		/* general flags */
+	uint32_t	fflags;		/* filter-specific flags */
 	intptr_t	data;		/* filter-specific data */
-#ifdef KERNEL_PRIVATE
-	user_addr_t	udata;		/* opaque user data identifier */
-#else
 	void		*udata;		/* opaque user data identifier */
-#endif
 };
 
 #ifdef KERNEL_PRIVATE
 
-struct user_kevent {
+struct user64_kevent {
 	uint64_t	ident;		/* identifier for this event */
-	short		filter;		/* filter for event */
-	unsigned short	flags;		/* general flags */
-	unsigned int	fflags;		/* filter-specific flags */
+	int16_t		filter;		/* filter for event */
+	uint16_t	flags;		/* general flags */
+	uint32_t	fflags;		/* filter-specific flags */
 	int64_t		data;		/* filter-specific data */
 	user_addr_t	udata;		/* opaque user data identifier */
+};
+
+struct user32_kevent {
+	uint32_t	ident;		/* identifier for this event */
+	int16_t		filter;		/* filter for event */
+	uint16_t	flags;		/* general flags */
+	uint32_t	fflags;		/* filter-specific flags */
+	int32_t		data;		/* filter-specific data */
+	user32_addr_t	udata;		/* opaque user data identifier */
 };
 
 #endif
 
 #pragma pack()
+
+struct kevent64_s {
+	uint64_t	ident;		/* identifier for this event */
+	int16_t		filter;		/* filter for event */
+	uint16_t	flags;		/* general flags */
+	uint32_t	fflags;		/* filter-specific flags */
+	int64_t		data;		/* filter-specific data */
+	uint64_t	udata;		/* opaque user data identifier */
+	uint64_t	ext[2];		/* filter-specific extensions */
+};
 
 #define EV_SET(kevp, a, b, c, d, e, f) do {	\
 	struct kevent *__kevp__ = (kevp);	\
@@ -111,6 +128,18 @@ struct user_kevent {
 	__kevp__->fflags = (d);			\
 	__kevp__->data = (e);			\
 	__kevp__->udata = (f);			\
+} while(0)
+
+#define EV_SET64(kevp, a, b, c, d, e, f, g, h) do {	\
+	struct kevent64_s *__kevp__ = (kevp);		\
+	__kevp__->ident = (a);				\
+	__kevp__->filter = (b);				\
+	__kevp__->flags = (c);				\
+	__kevp__->fflags = (d);				\
+	__kevp__->data = (e);				\
+	__kevp__->udata = (f);				\
+	__kevp__->ext[0] = (g);				\
+	__kevp__->ext[1] = (h);				\
 } while(0)
 
 /* actions */
@@ -123,6 +152,7 @@ struct user_kevent {
 /* flags */
 #define EV_ONESHOT	0x0010		/* only report one occurrence */
 #define EV_CLEAR	0x0020		/* clear event state after reporting */
+#define EV_DISPATCH     0x0080          /* disable event after reporting */
 
 #define EV_SYSFLAGS	0xF000		/* reserved by system */
 #define EV_FLAG0	0x1000		/* filter-specific flag */
@@ -154,6 +184,30 @@ struct user_kevent {
 #define EV_OOBAND	EV_FLAG1
 
 /*
+ * data/hint fflags for EVFILT_USER, shared with userspace
+ */
+
+/*
+ * On input, NOTE_TRIGGER causes the event to be triggered for output.
+ */
+#define NOTE_TRIGGER	0x01000000
+#define EV_TRIGGER      0x0100 /*deprecated--for backwards compatibility only*/
+
+/*
+ * On input, the top two bits of fflags specifies how the lower twenty four 
+ * bits should be applied to the stored value of fflags.
+ *
+ * On output, the top two bits will always be set to NOTE_FFNOP and the
+ * remaining twenty four bits will contain the stored fflags value.
+ */
+#define NOTE_FFNOP      0x00000000              /* ignore input fflags */
+#define NOTE_FFAND      0x40000000              /* and fflags */
+#define NOTE_FFOR       0x80000000              /* or fflags */
+#define NOTE_FFCOPY     0xc0000000              /* copy fflags */
+#define NOTE_FFCTRLMASK 0xc0000000              /* mask for operations */
+#define NOTE_FFLAGSMASK	0x00ffffff 
+
+/*
  * data/hint fflags for EVFILT_{READ|WRITE}, shared with userspace
  *
  * The default behavior for EVFILT_READ is to make the determination
@@ -170,6 +224,7 @@ struct user_kevent {
 #define	NOTE_LINK	0x00000010		/* link count changed */
 #define	NOTE_RENAME	0x00000020		/* vnode was renamed */
 #define	NOTE_REVOKE	0x00000040		/* vnode access was revoked */
+#define NOTE_NONE	0x00000080		/* No specific vnode event: to test for EVFILT_READ activation*/
 
 /*
  * data/hint fflags for EVFILT_PROC, shared with userspace
@@ -200,7 +255,49 @@ struct user_kevent {
 #define NOTE_NSECONDS	0x00000004		/* data is nanoseconds     */
 #define NOTE_ABSOLUTE	0x00000008		/* absolute timeout        */
 						/* ... implicit EV_ONESHOT */
- 
+/*
+ * data/hint fflags for EVFILT_MACHPORT, shared with userspace.
+ *
+ * Only portsets are support at this time.
+ *
+ * The fflags field can optionally contain the MACH_RCV_MSG, MACH_RCV_LARGE,
+ * and related trailer receive options as defined in <mach/message.h>.
+ * The presence of these flags directs the kevent64() call to attempt to receive
+ * the message during kevent delivery, rather than just indicate that a message exists.
+ * On setup, The ext[0] field contains the receive buffer pointer and ext[1] contains
+ * the receive buffer length.  Upon event delivery, the actual received message size
+ * is returned in ext[1].  As with mach_msg(), the buffer must be large enough to
+ * receive the message and the requested (or default) message trailers.  In addition,
+ * the fflags field contains the return code normally returned by mach_msg().
+ *
+ * If no message receipt options were provided in the fflags field on setup, no
+ * message is received by this call. Instead, on output, the data field simply
+ * contains the name of the actual port detected with a message waiting.
+ */
+
+/*
+ * data/hint fflags for EVFILT_SESSION, shared with userspace.
+ *
+ * The kevent ident field should be set to AU_SESSION_ANY_ASID if interested
+ * in events for any session.
+ *
+ * NOTE_AS_UPDATE may be going away since struct auditinfo_addr may become 
+ * immutable once initially set.
+ */
+#define	NOTE_AS_START	0x00000001		/* start of new session */
+#define	NOTE_AS_END	0x00000002		/* start of new session */
+#define	NOTE_AS_ERR	0x00000004		/* error tracking new session */
+#define	NOTE_AS_CLOSE	0x00000008		/* currently unsupported */
+#define	NOTE_AS_UPDATE	0x00000010		/* session data updated */
+
+/*
+ * Kevent ident value for any session.
+ */
+#define	AS_ANY_ASID	0xFFFFFFFF
+
+struct au_sentry;	/* Audit session entry */
+
+
 /*
  * DEPRECATED!!!!!!!!!
  * NOTE_TRACK, NOTE_TRACKERR, and NOTE_CHILD are no longer supported as of 10.5
@@ -240,12 +337,14 @@ struct knote {
 	union {
 		struct		fileproc *p_fp;	/* file data pointer */
 		struct		proc *p_proc;	/* proc pointer */
+		struct          ipc_pset *p_pset;       /* pset pointer */
+		struct		au_sentry *p_se; 	/* Audit session ptr */
 	} kn_ptr;
 	struct			filterops *kn_fop;
 	int			kn_status;	/* status bits */
 	int			kn_sfflags;	/* saved filter flags */
-	struct 			kevent kn_kevent;
-	caddr_t			kn_hook;
+	struct 			kevent64_s kn_kevent;
+	void			*kn_hook;
 	int			kn_hookid;
 	int64_t			kn_sdata;	/* saved data field */
 
@@ -254,24 +353,36 @@ struct knote {
 #define KN_DISABLED	0x04			/* event is disabled */
 #define KN_DROPPING	0x08			/* knote is being dropped */
 #define KN_USEWAIT	0x10			/* wait for knote use */
-#define KN_DROPWAIT	0x20			/* wait for knote drop */
+#define KN_ATTACHING	0x20			/* event is pending attach */
+#define KN_STAYQUEUED	0x40			/* force event to stay on queue */
 
 #define kn_id		kn_kevent.ident
 #define kn_filter	kn_kevent.filter
 #define kn_flags	kn_kevent.flags
 #define kn_fflags	kn_kevent.fflags
 #define kn_data		kn_kevent.data
+#define kn_udata	kn_kevent.udata
+#define kn_ext		kn_kevent.ext
 #define kn_fp		kn_ptr.p_fp
 };
+
+/* Hint values for f_touch filter operation */
+#define EVENT_REGISTER  1
+#define EVENT_PROCESS   2
 
 struct filterops {
 	int	f_isfd;		/* true if ident == filedescriptor */
 	int	(*f_attach)(struct knote *kn);
 	void	(*f_detach)(struct knote *kn);
 	int	(*f_event)(struct knote *kn, long hint);
+	/* Optional f_touch operation, called only if !f_isfd && non-NULL */
+	void    (*f_touch)(struct knote *kn, struct kevent64_s *kev, long type);
+	/* Optional f_peek operation, called only if KN_STAYQUEUED is set */
+	int	(*f_peek)(struct knote *kn);
 };
 
 struct proc;
+struct wait_queue;
 
 SLIST_HEAD(klist, knote);
 extern void	knote_init(void) __attribute__((section("__TEXT, initcode")));
@@ -285,6 +396,8 @@ extern void	klist_init(struct klist *list);
 extern void	knote(struct klist *list, long hint);
 extern int	knote_attach(struct klist *list, struct knote *kn);
 extern int	knote_detach(struct klist *list, struct knote *kn);
+extern int	knote_link_wait_queue(struct knote *kn, struct wait_queue *wq);	
+extern void	knote_unlink_wait_queue(struct knote *kn, struct wait_queue *wq);
 extern void	knote_fdclose(struct proc *p, int fd);
 
 #endif /* !KERNEL_PRIVATE */
@@ -299,17 +412,12 @@ int     kqueue(void);
 int     kevent(int kq, const struct kevent *changelist, int nchanges,
 		    struct kevent *eventlist, int nevents,
 		    const struct timespec *timeout);
+int     kevent64(int kq, const struct kevent64_s *changelist, 
+		    int nchanges, struct kevent64_s *eventlist, 
+		    int nevents, unsigned int flags, 
+		    const struct timespec *timeout);
 __END_DECLS
 
-
-#ifdef PRIVATE
-#include <mach/port.h>
-
-__BEGIN_DECLS
-mach_port_t	kqueue_portset_np(int kq);
-int	kqueue_from_portset_np(mach_port_t portset);
-__END_DECLS
-#endif /* PRIVATE */
 
 #endif /* KERNEL */
 

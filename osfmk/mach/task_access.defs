@@ -49,4 +49,11 @@ routine check_task_access(
 		target_pid				: int32_t;
 		ServerAuditToken	caller_cred 	: audit_token_t);
 
+/*
+ *	Search for a code signature for unsigned executables
+ */
+routine find_code_signature(
+		task_access_port			: mach_port_t;
+		new_pid					: int32_t);
+
 /* vim: set ft=c : */

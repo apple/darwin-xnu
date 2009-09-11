@@ -42,7 +42,11 @@
 
 struct zone ;
 
+#ifndef __LP64__
 struct wait_queue { unsigned int opaque[2]; uintptr_t opaquep[2]; } ;
+#else
+struct wait_queue { unsigned char opaque[32]; };
+#endif
 
 #endif	/* MACH_KERNEL_PRIVATE */
 
@@ -74,6 +78,7 @@ typedef int wait_result_t;
 #define THREAD_TIMED_OUT	1		/* timeout expired */
 #define THREAD_INTERRUPTED	2		/* aborted/interrupted */
 #define THREAD_RESTART		3		/* restart operation entirely */
+#define THREAD_NOT_WAITING      10              /* thread didn't need to wait */
 
 typedef	void (*thread_continue_t)(void *, wait_result_t);
 #define	THREAD_CONTINUE_NULL	((thread_continue_t) 0)

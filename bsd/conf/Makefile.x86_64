@@ -1,0 +1,49 @@
+######################################################################
+#BEGIN  Machine dependent Makefile fragment for x86_64
+######################################################################
+ 
+# files to build with certain warnings turned off
+dis_tables.o_CFLAGS_ADD += -Wno-cast-qual
+fbt_x86.o_CFLAGS_ADD += -Wno-cast-qual
+
+
+# Enable -Werror for x86_64 builds
+CFLAGS+=$(WERROR)
+CWARNFLAGS= $(filter-out -Wbad-function-cast, $(CWARNFLAGS_STD))
+
+# Objects that don't compile cleanly:
+OBJS_NO_WERROR =		\
+	fifo_vnops.o	\
+	aescrypt.o		\
+	aeskey.o		\
+	des_setkey.o		\
+	sha2.o			\
+	if_ethersubr.o		\
+	if_media.o		\
+	kext_net.o		\
+	dhcp_options.o		\
+	in_bootp.o		\
+	krpc_subr.o		\
+	ux_exception.o		\
+	unix_startup.o 		\
+	randomdev.o		\
+	vnode_pager.o	\
+	dp_backing_file.o \
+	vm_unix.o		\
+	mem.o			\
+	km.o			\
+	init_sysent.o		\
+	drv_dep.o		\
+	sdt_x86.o       \
+	dtrace_isa.o		\
+	aes_modes.o
+
+
+OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
+
+$(OBJS_WERROR):		WERROR=-Werror
+
+######################################################################
+#END    Machine dependent Makefile fragment for x86_64
+######################################################################
+

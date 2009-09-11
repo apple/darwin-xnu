@@ -3,25 +3,27 @@
  *  xnu_quick_test
  *
  *  Created by Jerry Cottingham on 3/25/05.
- *  Copyright 2005 Apple Computer Inc. All rights reserved.
+ *  Copyright 2008 Apple Inc. All rights reserved.
  *
  */
 
 #include "tests.h"
-#include <sys/event.h>		/* for kqueue tests */
 #include <sys/ipc.h>		/* for message queue tests */
 #include <sys/msg.h>		/* for message queue tests */
 #include <sys/syscall.h>	/* for get / settid */
 #include <sys/sysctl.h>		/* for determining hw */
 #include <AvailabilityMacros.h>	/* for determination of Mac OS X version (tiger, leopard, etc.) */
 #include <libkern/OSByteOrder.h> /* for OSSwap32() */
-
+#include <mach/mach.h>
 
 extern char		g_target_path[ PATH_MAX ];
 extern int		g_skip_setuid_tests;
 extern int		g_is_under_rosetta;
+extern int		g_is_single_user;
 
- 
+
+void print_acct_debug_strings( char * my_ac_comm );
+
 
 #if TEST_SYSTEM_CALLS /* system calls to do */
 	"reboot",             /* 55 = reboot */
@@ -68,13 +70,14 @@ int syscall_test( void * the_argp )
 {
 	int			my_err;
 	int			my_fd = -1;
-	char *		my_pathp;
+	char *			my_pathp;
+	kern_return_t           my_kr;
 	
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
 	*my_pathp = 0x00;
 	strcpy( my_pathp, &g_target_path[0] );
@@ -107,7 +110,7 @@ test_passed_exit:
 		close( my_fd );
 	if ( my_pathp != NULL ) {
 		remove( my_pathp );	
-		free( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
 	 }
 	return( my_err );
 }
@@ -179,26 +182,27 @@ int fork_wait4_exit_test( void * the_argp )
  */
 int read_write_test( void * the_argp )
 {
-	int				my_fd = -1;
-	int				my_err;
+	int			my_fd = -1;
+	int			my_err;
 	char *			my_pathp = NULL;
 	char *			my_bufp = NULL;
 	ssize_t			my_result;
 	off_t			my_current_offset;
-	struct iovec	my_iovs[2];
+	struct iovec		my_iovs[2];
 	struct stat		my_sb;
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
-	my_bufp = (char *) malloc( MY_BUFFER_SIZE );
-	if ( my_bufp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_bufp, MY_BUFFER_SIZE, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
@@ -225,10 +229,10 @@ int read_write_test( void * the_argp )
 	}
 	if ( my_result != 0 ) {
 		if ( sizeof( ssize_t ) > sizeof( int ) ) {
-			printf( "read call failed - should have read 0 bytes on empty file - read %lld \n", my_result );
+			printf( "read call failed - should have read 0 bytes on empty file - read %ld \n", (long int) my_result );
 		}
 		else {
-			printf( "read call failed - should have read 0 bytes on empty file - read %d \n", my_result );
+			printf( "read call failed - should have read 0 bytes on empty file - read %d \n", (int) my_result );
 		}
 		goto test_failed_exit;
 	}
@@ -238,10 +242,10 @@ int read_write_test( void * the_argp )
 	my_err = errno;
 	if ( my_result != -1 ) {
 		if ( sizeof( ssize_t ) > sizeof( int ) ) {
-			printf( "write should have failed for read only fd -  %lld \n", my_result );
+			printf( "write should have failed for read only fd -  %ld \n", (long int) my_result );
 		}
 		else {
-			printf( "write should have failed for read only fd -  %d \n", my_result );
+			printf( "write should have failed for read only fd -  %d \n", (int) my_result );
 		}
 		goto test_failed_exit;
 	}
@@ -292,7 +296,7 @@ int read_write_test( void * the_argp )
 		goto test_failed_exit;
 	}
 	if ( my_result != 32 ) {
-		printf( "readv failed to get all the data - asked for %d got back %d\n", MY_BUFFER_SIZE, my_result );
+		printf( "readv failed to get all the data - asked for %d got back %d\n", MY_BUFFER_SIZE, (int) my_result );
 		goto test_failed_exit;
 	}
 	if ( *my_bufp != 'j' || *(my_bufp + (MY_BUFFER_SIZE - 1)) != 'j' ) {
@@ -330,7 +334,7 @@ int read_write_test( void * the_argp )
 		goto test_failed_exit;
 	}
 	if ( my_result != 16 ) {
-		printf( "writev failed to get all the data - asked for %d got back %d\n", MY_BUFFER_SIZE, my_result );
+		printf( "writev failed to get all the data - asked for %d got back %d\n", MY_BUFFER_SIZE, (int) my_result );
 		goto test_failed_exit;
 	}
 
@@ -348,7 +352,7 @@ int read_write_test( void * the_argp )
 		goto test_failed_exit;
 	}
 	if ( my_result != 16 ) {
-		printf( "readv failed to get all the data - asked for %d got back %d\n", MY_BUFFER_SIZE, my_result );
+		printf( "readv failed to get all the data - asked for %d got back %d\n", MY_BUFFER_SIZE, (int) my_result );
 		goto test_failed_exit;
 	}
 	if ( *my_bufp != 'z' || *(my_bufp + (MY_BUFFER_SIZE - 1)) != 'z' ) {
@@ -429,11 +433,11 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	if ( my_bufp != NULL )
-		free( my_bufp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_bufp, MY_BUFFER_SIZE);
 	return( my_err );
 }
 
@@ -443,19 +447,20 @@ test_passed_exit:
  */
 int open_close_test( void * the_argp )
 {
-	int			my_err;
-	int			my_fd = -1;
+	int		my_err;
+	int		my_fd = -1;
 	char *		my_pathp = NULL;
 	ssize_t		my_result;
 	long		my_pconf_result;
 	struct stat	my_sb;
 	char		my_buffer[32];
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
@@ -484,7 +489,7 @@ int open_close_test( void * the_argp )
 //	printf( "_PC_PATH_MAX %ld \n", my_pconf_result );
 	/* results look OK? */
 	if ( my_pconf_result < PATH_MAX ) {
-		printf( "pathconf - _PC_PATH_MAX - looks like wrong resutls \n" );
+		printf( "pathconf - _PC_PATH_MAX - looks like wrong results \n" );
 		goto test_failed_exit;
 	} 
 
@@ -496,7 +501,7 @@ int open_close_test( void * the_argp )
 //	printf( "_PC_NAME_MAX %ld \n", my_pconf_result );
 	/* results look OK? */
 	if ( my_pconf_result < 6 ) {
-		printf( "fpathconf - _PC_NAME_MAX - looks like wrong resutls \n" );
+		printf( "fpathconf - _PC_NAME_MAX - looks like wrong results \n" );
 		goto test_failed_exit;
 	} 
 
@@ -505,10 +510,10 @@ int open_close_test( void * the_argp )
 	my_err = errno;
 	if ( my_result != 3 ) {
 		if ( sizeof( ssize_t ) > sizeof( int ) ) {
-			printf( "write failed.  should have written 3 bytes actually wrote -  %lld \n", my_result );
+			printf( "write failed.  should have written 3 bytes actually wrote -  %ld \n", (long int) my_result );
 		}
 		else {
-			printf( "write failed.  should have written 3 bytes actually wrote -  %ld \n", my_result );
+			printf( "write failed.  should have written 3 bytes actually wrote -  %d \n", (int) my_result );
 		}
 		goto test_failed_exit;
 	}
@@ -549,10 +554,10 @@ int open_close_test( void * the_argp )
 	my_err = errno;
 	if ( my_result != 3 ) {
 		if ( sizeof( ssize_t ) > sizeof( int ) ) {
-			printf( "write failed.  should have written 3 bytes actually wrote -  %lld \n", my_result );
+			printf( "write failed.  should have written 3 bytes actually wrote -  %ld \n", (long int) my_result );
 		}
 		else {
-			printf( "write failed.  should have written 3 bytes actually wrote -  %ld \n", my_result );
+			printf( "write failed.  should have written 3 bytes actually wrote -  %d \n", (int) my_result );
 		}
 		goto test_failed_exit;
 	}
@@ -563,10 +568,10 @@ int open_close_test( void * the_argp )
 	my_err = errno;
 	if ( my_result != 3 ) {
 		if ( sizeof( ssize_t ) > sizeof( int ) ) {
-			printf( "write failed.  should have written 3 bytes actually wrote -  %lld \n", my_result );
+			printf( "write failed.  should have written 3 bytes actually wrote -  %ld \n", (long int) my_result );
 		}
 		else {
-			printf( "write failed.  should have written 3 bytes actually wrote -  %ld \n", my_result );
+			printf( "write failed.  should have written 3 bytes actually wrote -  %d \n", (int) my_result );
 		}
 		goto test_failed_exit;
 	}
@@ -609,8 +614,8 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
 }
@@ -621,24 +626,26 @@ test_passed_exit:
  */
 int link_stat_unlink_test( void * the_argp )
 {
-	int				my_err;
-	int				my_fd = -1;
+	int			my_err;
+	int			my_fd = -1;
 	char *			my_pathp = NULL;
 	char *			my_path2p = NULL;
 	nlink_t			my_link_count;
 	ssize_t			my_result;
 	struct stat		my_sb;
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
-	my_path2p = (char *) malloc( PATH_MAX );
-	if ( my_path2p == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_path2p, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
 	*my_pathp = 0x00;
 	*my_path2p = 0x00;
@@ -681,10 +688,10 @@ int link_stat_unlink_test( void * the_argp )
 	my_err = errno;
 	if ( my_result != 3 ) {
 		if ( sizeof( ssize_t ) > sizeof( int ) ) {
-			printf( "write failed.  should have written 3 bytes actually wrote -  %lld \n", my_result );
+			printf( "write failed.  should have written 3 bytes actually wrote -  %ld \n", (long int) my_result );
 		}
 		else {
-			printf( "write failed.  should have written 3 bytes actually wrote -  %ld \n", my_result );
+			printf( "write failed.  should have written 3 bytes actually wrote -  %d \n", (int) my_result );
 		}
 		goto test_failed_exit;
 	}
@@ -742,12 +749,12 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	}
 	if ( my_path2p != NULL ) {
 		remove( my_path2p );	
-		free( my_path2p );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_path2p, PATH_MAX);
 	}
 	return( my_err );
 }
@@ -758,20 +765,22 @@ test_passed_exit:
  */
 int chdir_fchdir_test( void * the_argp )
 {
-	int				my_err;
-	int				my_fd = -1;
+	int			my_err;
+	int			my_fd = -1;
 	char *			my_pathp = NULL;
 	char *			my_file_namep;
 	struct stat		my_sb;
 	struct stat		my_sb2;
+	kern_return_t           my_kr;
 
 	char *cwd = getwd(NULL);	/* Save current working directory so we can restore later */
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -870,8 +879,8 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	if ( chdir(cwd) != 0)	/* Changes back to original directory, don't screw up the env. */
 		my_err = -1;
@@ -884,16 +893,17 @@ test_passed_exit:
  */
 int access_chmod_fchmod_test( void * the_argp )
 {
-	int				my_err;
-	int				my_fd = -1;
-	char *			my_pathp = NULL;
+	int			my_err;
+	int			my_fd = -1;
+	char *		my_pathp = NULL;
 	struct stat		my_sb;
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
@@ -994,7 +1004,7 @@ test_passed_exit:
 		close( my_fd );
 	if ( my_pathp != NULL ) {
 		remove( my_pathp );	
-		free( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
 	 }
 	return( my_err );
 }
@@ -1006,8 +1016,8 @@ test_passed_exit:
 int chown_fchown_lchown_lstat_symlink_test( void * the_argp )
 {
 #if !TARGET_OS_EMBEDDED
-	int				my_err, my_group_count, i;
-	int				my_fd = -1;
+	int			my_err, my_group_count, i;
+	int			my_fd = -1;
 	char *			my_pathp = NULL;
 	char *			my_link_pathp = NULL;
 	uid_t			my_orig_uid;
@@ -1016,12 +1026,13 @@ int chown_fchown_lchown_lstat_symlink_test( void * the_argp )
 	struct stat		my_sb;
 	gid_t			my_groups[ NGROUPS_MAX ];
 	char			my_buffer[ 64 ];
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
@@ -1033,11 +1044,11 @@ int chown_fchown_lchown_lstat_symlink_test( void * the_argp )
 		goto test_failed_exit;
 	}
 
-	my_link_pathp = (char *) malloc( PATH_MAX );
-	if ( my_link_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_link_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
 	*my_link_pathp = 0x00;
 	strcat( my_link_pathp, &g_target_path[0] );
@@ -1051,7 +1062,6 @@ int chown_fchown_lchown_lstat_symlink_test( void * the_argp )
 	
 	/* set up by getting a list of groups */
 	my_group_count = getgroups( NGROUPS_MAX, &my_groups[0] );
-	printf("my_group_count: %d\n", my_group_count);
 	
 	if ( my_group_count == -1 || my_group_count < 1 ) {
 		printf( "getgroups call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
@@ -1067,8 +1077,6 @@ int chown_fchown_lchown_lstat_symlink_test( void * the_argp )
 	/* now change group owner to something other than current value */
 	my_orig_gid = my_sb.st_gid;
 	my_orig_uid = my_sb.st_uid;
-	
-	printf( "st_gid: %d, st_uid: %d, my_group_count: %d\n" );
 	
 	for ( i = 0; i < my_group_count; i++ ) {
 		if ( my_orig_gid != my_groups[ i ] ) {
@@ -1183,12 +1191,12 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	if ( my_link_pathp != NULL ) {
 		unlink( my_link_pathp );	
-		free( my_link_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_link_pathp, PATH_MAX);
 	 }
 	return( my_err );
 #else
@@ -1213,32 +1221,38 @@ typedef struct vol_attr_buf vol_attr_buf;
 
 int fs_stat_tests( void * the_argp )
 {
-	int					my_err, my_count, i;
-	int					my_buffer_size, my_buffer64_size;
-	int					my_fd = -1;
-	int					is_ufs = 0;
+	int			my_err, my_count, i;
+	int			my_buffer_size, my_buffer64_size;
+	int			my_fd = -1;
+	int			is_ufs = 0;
+	long		my_io_size;
+	fsid_t		my_fsid;
+	struct attrlist 	my_attrlist;
+	vol_attr_buf        my_attr_buf;
 	void *				my_bufferp = NULL;
-	void *				my_buffer64p = NULL;
 	struct statfs *		my_statfsp;
+	kern_return_t       my_kr;
+
+#if !TARGET_OS_EMBEDDED	
+	void * my_buffer64p = NULL;
 	struct statfs64 *	my_statfs64p;
-	long				my_io_size;
-	fsid_t				my_fsid;
-	struct attrlist		my_attrlist;
-	vol_attr_buf		my_attr_buf;
 
-	my_buffer_size = (sizeof(struct statfs) * 10);
 	my_buffer64_size = (sizeof(struct statfs64) * 10);
-	my_bufferp = malloc( my_buffer_size );
-	if ( my_bufferp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
+
+	my_kr = vm_allocate((vm_map_t) mach_task_self(),(vm_address_t*) &my_buffer64p, my_buffer64_size, VM_FLAGS_ANYWHERE);
+	if(my_kr != KERN_SUCCESS){
+	  printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+	  goto test_failed_exit;
 	}
 
-	my_buffer64p = malloc( my_buffer64_size );
-	if ( my_buffer64p == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+#endif	
+	my_buffer_size = (sizeof(struct statfs) * 10);
+     
+	my_kr = vm_allocate((vm_map_t) mach_task_self(),(vm_address_t*) &my_bufferp, my_buffer_size, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
 	my_statfsp = (struct statfs *) my_bufferp;
 	my_err = statfs( "/", my_statfsp );
@@ -1272,6 +1286,7 @@ int fs_stat_tests( void * the_argp )
 		goto test_failed_exit;
 	}
 
+#if !TARGET_OS_EMBEDDED
 	/* now try statfs64 */
 	my_statfs64p = (struct statfs64 *) my_buffer64p;
 	my_err = statfs64( "/", my_statfs64p );
@@ -1306,6 +1321,7 @@ int fs_stat_tests( void * the_argp )
 		printf( "getfsstat64 call failed.  could not find valid f_fstypename! \n" );
 		goto test_failed_exit;
 	}
+#endif
 
 	/* set up to validate results via multiple sources.  we use getattrlist to get volume
 	 * related attributes to verify against results from fstatfs and statfs - but only if
@@ -1329,6 +1345,7 @@ int fs_stat_tests( void * the_argp )
 		goto test_failed_exit;
 	}
 	
+#if !TARGET_OS_EMBEDDED
 	/* testing fstatfs64 */
 	my_statfs64p = (struct statfs64 *) my_buffer64p;
 	my_err = fstatfs64( my_fd, my_statfs64p );
@@ -1343,6 +1360,7 @@ int fs_stat_tests( void * the_argp )
 		printf( "fstatfs64 call failed.  could not find valid f_fstypename! \n" );
 		goto test_failed_exit;
 	}
+#endif
 	
 	/* testing fstatfs */
 	my_statfsp = (struct statfs *) my_bufferp;
@@ -1352,7 +1370,7 @@ int fs_stat_tests( void * the_argp )
 		goto test_failed_exit;
 	}
 	
-	/* validate resutls */
+	/* validate results */
 	if ( !(memcmp( &my_statfsp->f_fstypename[0], "hfs", 3 ) == 0 ||
 		   memcmp( &my_statfsp->f_fstypename[0], "ufs", 3 ) == 0) ) {
 		printf( "fstatfs call failed.  could not find valid f_fstypename! \n" );
@@ -1372,7 +1390,7 @@ int fs_stat_tests( void * the_argp )
 		goto test_failed_exit;
 	}
 
-	/* validate resutls */
+	/* validate results */
 	if ( my_io_size != my_statfsp->f_iosize || my_fsid.val[0] != my_statfsp->f_fsid.val[0] ||
 		 my_fsid.val[1] != my_statfsp->f_fsid.val[1] ) {
 		printf( "statfs call failed.  wrong f_iosize or f_fsid! \n" );
@@ -1393,11 +1411,13 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_bufferp != NULL ) {
-		free( my_bufferp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_bufferp, my_buffer_size);
 	 }
+#if !TARGET_OS_EMBEDDED	
 	 if ( my_buffer64p != NULL ) {
-		free( my_buffer64p );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_buffer64p, my_buffer64_size);
 	 }
+#endif
 	 
 	return( my_err );
 }
@@ -1509,7 +1529,7 @@ test_passed_exit:
 
 
 /*  **************************************************************************************************************
- *	Test getauid, gettid, getuid, geteuid, issetugid, setauid, seteuid, settid, settid_with_pid, setuid system calls.
+ *	Test getauid, gettid, getuid, geteuid, issetugid, setaudit_addr, seteuid, settid, settid_with_pid, setuid system calls.
  *  **************************************************************************************************************
  */
 int uid_tests( void * the_argp )
@@ -1523,18 +1543,23 @@ int uid_tests( void * the_argp )
 		goto test_passed_exit;
 	}
 
-	/* test issetugid - should return 1 when not root and 0 when root */
-	my_err = issetugid( );
-	if ( getuid( ) == 0 ) {
-		if ( my_err == 1 ) {
-			printf( "issetugid should return false \n" );
-			goto test_failed_exit;
+	/* test issetugid - should return 1 when not root and 0 when root
+	 * Figuring out setugid will not work in single-user mode; skip
+	 * this test in that case.
+	 */
+	if (!g_is_single_user) {
+		my_err = issetugid( );
+		if ( getuid( ) == 0 ) {
+			if ( my_err == 1 ) {
+				printf( "issetugid should return false \n" );
+				goto test_failed_exit;
+			}
 		}
-	}
-	else {
-		if ( my_err == 0 ) {
-			printf( "issetugid should return true \n" );
-			goto test_failed_exit;
+		else {
+			if ( my_err == 0 ) {
+				printf( "issetugid should return true \n" );
+				goto test_failed_exit;
+			}
 		}
 	}
 
@@ -1550,10 +1575,10 @@ int uid_tests( void * the_argp )
 		/* 
 		 * child process 
 		 */
-		uid_t		my_ruid, my_euid;
-		uid_t		my_uid, my_temp_uid;
-		gid_t		my_gid, my_temp_gid;
-		au_id_t		my_au_id, my_temp_au_id;
+		uid_t			my_ruid, my_euid;
+		uid_t			my_uid, my_temp_uid;
+		gid_t			my_gid, my_temp_gid;
+		auditinfo_addr_t	my_aia;
 		
 		my_ruid = getuid( );
 		my_euid = geteuid( );
@@ -1561,7 +1586,7 @@ int uid_tests( void * the_argp )
 			exit( 0 );
 		}
 
-		/* Test getauid, gettid, setauid, settid, settid_with_pid */
+		/* Test getauid, gettid, setaudit_addr, settid, settid_with_pid */
 		/* get our current uid and gid for comparison later */
 		my_uid = getuid( );
 		my_gid = getgid( );
@@ -1629,54 +1654,32 @@ int uid_tests( void * the_argp )
 		}
 		
 		/*
-		 * test to make sure setauid doesn't cause audit info to get lost from 
+		 * test to make sure setaudit_addr doesn't cause audit info to get lost from 
 		 * the credential.
 		 */
-		my_err = getauid( &my_au_id );
+		bzero( &my_aia, sizeof(my_aia) );
+		my_aia.ai_auid = 442344;
+		my_aia.ai_asid = AU_ASSIGN_ASID;
+		my_aia.ai_termid.at_type = AU_IPv4;
+		my_err = setaudit_addr( &my_aia, sizeof(my_aia) );
 		if (my_err != 0) {
-			printf( "getauid - failed with error %d - \"%s\" \n", errno, strerror( errno) );
-			exit( -1 );
-		}
-		//printf("current au_id is %d \n", my_au_id);
-		
-		my_temp_au_id = 442344;
-		my_err = setauid( &my_temp_au_id );
-		if (my_err != 0) {
-			printf( "setauid - failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			printf( "setaudit_addr - failed with error %d - \"%s\" \n", errno, strerror( errno) );
 			exit( -1 );
 		}
 
-		my_temp_au_id = 0;
-		my_err = getauid( &my_temp_au_id );
+		my_aia.ai_auid = 0;
+		my_err = getaudit_addr( &my_aia, sizeof(my_aia) );
 		if (my_err != 0) {
-			printf( "getauid - failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			printf( "getaudit_addr - failed with error %d - \"%s\" \n", errno, strerror( errno) );
 			exit( -1 );
 		}
-		//printf("new au_id is %d \n", my_temp_au_id);
+		//printf("new audit ID is %d \n", my_aia.ai_auid);
 
-		if (my_temp_au_id != 442344) {
-			printf("test failed - wrong au_id was set - %d \n", my_temp_au_id);
+		if (my_aia.ai_auid != 442344) {
+			printf("test failed - wrong audit ID was set - %d \n", my_aia.ai_auid);
 			exit( -1 );
 		}
 		
-		my_err = setauid( &my_au_id );
-		if (my_err != 0) {
-			printf( "setauid - failed with error %d - \"%s\" \n", errno, strerror( errno) );
-			exit( -1 );
-		}
-
-		my_temp_au_id = 0;
-		my_err = getauid( &my_temp_au_id );
-		if (my_err != 0) {
-			printf( "getauid - failed with error %d - \"%s\" \n", errno, strerror( errno) );
-			exit( -1 );
-		}
-
-		if (my_temp_au_id != my_au_id) {
-			printf("test failed - wrong au_id was set - %d \n", my_temp_au_id);
-			exit( -1 );
-		}
-	
 		/* change real uid and effective uid to current euid */
 		my_err = setuid( my_euid );
 		if ( my_err == -1 ) {
@@ -1751,7 +1754,8 @@ test_passed_exit:
 int mknod_sync_test( void * the_argp )
 {
 	int			my_err;
-	char *		my_pathp = NULL;
+	char *	my_pathp =      NULL;
+	kern_return_t           my_kr;
 
 	if ( g_skip_setuid_tests != 0 ) {
 		printf("\t skipping this test \n");
@@ -1759,11 +1763,11 @@ int mknod_sync_test( void * the_argp )
 		goto test_passed_exit;
 	}
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
 	*my_pathp = 0x00;
 	strcat( my_pathp, "/dev/" );
@@ -1791,8 +1795,8 @@ test_failed_exit:
 	
 test_passed_exit:
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
 	 }
 	return( my_err );
 }
@@ -1808,12 +1812,13 @@ int chflags_fchflags_test( void * the_argp )
 	u_int			my_flags;
 	char *			my_pathp = NULL;
 	struct stat		my_sb;
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
@@ -1887,8 +1892,8 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
 	 }
 	return( my_err );
 }
@@ -1937,7 +1942,13 @@ int execve_kill_vfork_test( void * the_argp )
 	}
 	
 	if (get_architecture() == INTEL) {
-		if	(bits == 64 && sizeof(long) == 8) {
+		int ppc_fail_flag = 0;
+		struct stat sb;
+
+		if (stat("/usr/libexec/oah/translate", &sb))
+			ppc_fail_flag = 1;
+
+		if (bits == 64 && sizeof(long) == 8) {
 			/*
 			 * Running on x86_64 hardware and running in 64-bit mode.
 			 * Check cases 1, 2, 3 and fork a child to check 4, 5, 6. 
@@ -1959,17 +1970,19 @@ int execve_kill_vfork_test( void * the_argp )
 			argvs[0] = "launch-i386";
 			if (do_execve_test("helpers/launch-i386", argvs, NULL, 1) != 0)		goto test_failed_exit;
 
-			/* Test posix_spawn for ppc64 (should fail), i386, x86_64, and ppc (should succeed) */
+			/* Test posix_spawn for i386, x86_64, and ppc (should succeed) */
 			errmsg = NULL;
-			if (do_spawn_test(CPU_TYPE_POWERPC64, 1))
-				goto test_failed_exit;
 			if (do_spawn_test(CPU_TYPE_I386, 0))
 				goto test_failed_exit;
 			if (do_spawn_test(CPU_TYPE_X86_64, 0))
 				goto test_failed_exit;
-			if (do_spawn_test(CPU_TYPE_POWERPC, 0))
-				goto test_failed_exit;
-
+			/*
+			 * Note: rosetta is no go in single-user mode
+			 */
+			if (!g_is_single_user) {
+				if (do_spawn_test(CPU_TYPE_POWERPC, ppc_fail_flag))
+					goto test_failed_exit;
+			}
 		}
 		else if (bits == 64 && sizeof(long) == 4) {
 			/*
@@ -1993,16 +2006,19 @@ int execve_kill_vfork_test( void * the_argp )
 			argvs[0] = "launch-x86_64";
 			if (do_execve_test("helpers/launch-x86_64", argvs, NULL, 1) != 0)	goto test_failed_exit;
 
-			/* Test posix_spawn for ppc64 (should fail), i386, x86_64, and ppc (should succeed) */
+			/* Test posix_spawn for i386, x86_64, and ppc (should succeed) */
 			errmsg = NULL;
-			if (do_spawn_test(CPU_TYPE_POWERPC64, 1))
-				goto test_failed_exit;
 			if (do_spawn_test(CPU_TYPE_I386, 0))
 				goto test_failed_exit;
 			if (do_spawn_test(CPU_TYPE_X86_64, 0))
 				goto test_failed_exit;
-			if (do_spawn_test(CPU_TYPE_POWERPC, 0))
-				goto test_failed_exit;
+			/*
+			 * Note: rosetta is no go in single-user mode
+			 */
+			if (!g_is_single_user) {
+				if (do_spawn_test(CPU_TYPE_POWERPC, ppc_fail_flag))
+					goto test_failed_exit;
+			}
 		}
 		else if (bits == 32) {
 			/* Running on i386 hardware. Check cases 4. */
@@ -2016,70 +2032,36 @@ int execve_kill_vfork_test( void * the_argp )
 				goto test_failed_exit;
 			if (do_spawn_test(CPU_TYPE_I386, 0))
 				goto test_failed_exit;
-			if (do_spawn_test(CPU_TYPE_POWERPC, 0))
-				goto test_failed_exit;
+			/*
+			 * Note: rosetta is no go in single-user mode
+			 */
+			if (!g_is_single_user) {
+				if (do_spawn_test(CPU_TYPE_POWERPC, ppc_fail_flag))
+					goto test_failed_exit;
+			}
 		}
 	}
 	else if (get_architecture() == POWERPC) {
 		if	(bits == 64 && sizeof(long) == 8) {
 			/*
 			 * Running on PPC64 hardware and running in 64-bit mode.
-			 * Check cases 1, 2, 3 and fork a child to check 4, 5, 6. 
+			 * No longer supported on SnowLeopard.
 			 */ 
-			errmsg = "execve failed: from ppc64 forking and exec()ing 64-bit ppc process w/ 4G pagezero.\n";
-			argvs[0] = "sleep-ppc64-4G";
-			if (do_execve_test("helpers/sleep-ppc64-4G", argvs, NULL, 1))		goto test_failed_exit;
-
-			errmsg = "execve failed: from ppc64 forking and exec()ing 64-bit ppc process w/ 4K pagezero.\n";
-			argvs[0] = "sleep-ppc64-4K";
-			if (do_execve_test("helpers/sleep-ppc64-4K", argvs, NULL, 1))		goto test_failed_exit;
-
-			errmsg = "execve failed: from ppc64 forking and exec()ing 32 bit ppc process.\n";
-			argvs[0] = "sleep-ppc32";
-			if (do_execve_test("helpers/sleep-ppc32", argvs, NULL, 1))		goto test_failed_exit;	
-
-			/* Fork off a helper process and load a 32-bit program in it to test 32->64 bit exec(). */
-			errmsg = "execve failed to exec the helper process.\n";
-			argvs[0] = "launch-ppc";
-			if (do_execve_test("helpers/launch-ppc", argvs, NULL, 1) != 0)		goto test_failed_exit;
-			
-			/* Test posix_spawn for i386 (should fail), ppc64, and ppc (should succeed) */
-			errmsg = NULL;
-			if (do_spawn_test(CPU_TYPE_I386, 1))
-				goto test_failed_exit;
-			if (do_spawn_test(CPU_TYPE_POWERPC64, 0))
-				goto test_failed_exit;
-			if (do_spawn_test(CPU_TYPE_POWERPC, 0))
-				goto test_failed_exit;
-
+			errmsg = "runnning ppc64 on snowleopard";
+			goto test_failed_exit;
 		}
 		else if	(bits == 64 && sizeof(long) == 4) {
 			/*
-			 * Running on PPC64 hardware, but actually running in 32-bit mode.
+			 * Running as PPC on PPC64 hardware or under Rosetta on x86_64 hardware.
 			 * Check cases 4, 5, 6 and fork a child to check 1, 2, 3. 
 			 */ 
 			errmsg = "execve failed: from ppc forking and exec()ing ppc process.\n";
 			argvs[0] = "sleep-ppc32";
 			if (do_execve_test("helpers/sleep-ppc32", argvs, NULL, 0))	goto test_failed_exit;
 
-			errmsg = "execve failed: from ppc forking and exec()ing ppc64 process w/ 4G pagezero.\n";
-			argvs[0] = "sleep-ppc64-4G";
-			if (do_execve_test("helpers/sleep-ppc64-4G", argvs, NULL, 0))	goto test_failed_exit;
-
-			errmsg = "execve failed: from ppc forking and exec()ing ppc64 process w/ 4K pagezero.\n";
-			argvs[0] = "sleep-ppc64-4K";
-			if (do_execve_test("helpers/sleep-ppc64-4K", argvs, NULL, 0))	goto test_failed_exit;
-
-			/* Fork off a helper process and load a 64-bit program in it to test 64->32 bit exec(). */
-			errmsg = "execve failed to exec the helper process.\n";
-			argvs[0] = "launch-ppc";
-			if (do_execve_test("helpers/launch-ppc64", argvs, NULL, 1) != 0)		goto test_failed_exit;
-
-			/* Test posix_spawn for i386 (should fail), ppc64, and ppc (should succeed) */
+			/* Test posix_spawn for i386 and ppc */
 			errmsg = NULL;
-			if (do_spawn_test(CPU_TYPE_I386, 1))
-				goto test_failed_exit;
-			if (do_spawn_test(CPU_TYPE_POWERPC64, 0))
+			if (do_spawn_test(CPU_TYPE_I386, (g_is_under_rosetta ? 0 : 1)))
 				goto test_failed_exit;
 			if (do_spawn_test(CPU_TYPE_POWERPC, 0))
 				goto test_failed_exit;
@@ -2154,7 +2136,6 @@ int groups_test( void * the_argp )
 
 	/* start by getting list of groups the current user belongs to */
 	my_orig_group_count = getgroups( NGROUPS_MAX, &my_groups[0] );
-	printf("my_orig_group_count: %d\n", my_orig_group_count);
 
 	if ( my_orig_group_count == -1 || my_orig_group_count < 1 ) {
 		printf( "getgroups call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
@@ -2188,7 +2169,6 @@ int groups_test( void * the_argp )
 	}
 
 	my_group_count = getgroups( NGROUPS_MAX, &my_groups[0] );
-	printf("my_group_count: %d\n", my_group_count);
 	
 	if ( my_group_count == -1 || my_group_count < 1 ) {
 		printf( "getgroups call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
@@ -2286,12 +2266,13 @@ int dup_test( void * the_argp )
 	char *		my_pathp = NULL;
 	ssize_t		my_count;
 	char		my_buffer[64];
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
@@ -2394,37 +2375,21 @@ test_passed_exit:
 	if ( my_newfd != -1 )
 		close( my_newfd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
 }
 
 
 /*  **************************************************************************************************************
- *	Test profil, getrusage system calls.
- *  todo - how do we really test profil is working?
+ *	Test getrusage system call.
  *  **************************************************************************************************************
  */
-int getrusage_profil_test( void * the_argp )
+int getrusage_test( void * the_argp )
 {
 	int				my_err;
-	char *			my_bufferp = NULL;
 	struct rusage	my_rusage;
-
-	my_bufferp = (char *) malloc( (1024 * 1000) );
-	if ( my_bufferp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
-	bzero( (void *)my_bufferp, (1024 * 1000) );
-	
-	/* turn on profiling */
-	my_err = profil( my_bufferp, (1024 * 1000), 0, 32768 );	
-	if ( my_err == -1 ) {
-		printf( "profil failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
 
 	my_err = getrusage( RUSAGE_SELF, &my_rusage );	
 	if ( my_err == -1 ) {
@@ -2442,13 +2407,6 @@ int getrusage_profil_test( void * the_argp )
 		goto test_failed_exit;
 	}
 			
-	/* turn off profiling (scale value of 0 turns off profiling) */
-	my_err = profil( my_bufferp, (1024 * 1000), 0, 0 );	
-	if ( my_err == -1 ) {
-		printf( "profil failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
-	
 	my_err = 0;
 	goto test_passed_exit;
 
@@ -2456,9 +2414,6 @@ test_failed_exit:
 	my_err = -1;
 	
 test_passed_exit:
-	if ( my_bufferp != NULL ) {
-		free( my_bufferp );
-	 }
 	return( my_err );
 }
 
@@ -2493,12 +2448,13 @@ int signals_test( void * the_argp )
 	int			my_fd = -1;
 	char *		my_pathp = NULL;
 	pid_t		my_pid, my_wait_pid;
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
 
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
@@ -2729,8 +2685,8 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
 }
@@ -2743,6 +2699,7 @@ int getlogin_setlogin_test( void * the_argp )
 {
 	int			my_err, my_status;
 	pid_t		my_pid, my_wait_pid;
+	kern_return_t           my_kr;	
 
 	if ( g_skip_setuid_tests != 0 ) {
 		printf("\t skipping this test \n");
@@ -2762,32 +2719,36 @@ int getlogin_setlogin_test( void * the_argp )
 		/* 
 		 * child process - do getlogin and setlogin testing.
 		 */
-		char *		my_namep;
-		int			my_len;
+		char *		my_namep = NULL;
+		int		my_len;
 		char *		my_new_namep = NULL;
-		
+
 		my_namep = getlogin( );
 		if ( my_namep == NULL ) {
 			printf( "getlogin returned NULL name pointer \n" );
 			my_err = -1;
 			goto exit_child;
 		}
+
 		my_len = strlen( my_namep ) + 4;
 
-		my_new_namep = (char *) malloc( my_len );
-		if ( my_new_namep == NULL ) {
-			printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-			my_err = -1;
+	        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_new_namep, my_len, VM_FLAGS_ANYWHERE);
+       		 if(my_kr != KERN_SUCCESS){
+                	printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+               		my_err = -1; 
 			goto exit_child;
-		}
+        	}
+
 		bzero( (void *)my_new_namep, my_len );
+
 		strcat( my_new_namep, my_namep );
 		strcat( my_new_namep, "2" );
+
 
 		/* set new name */
 		my_err = setlogin( my_new_namep );
 		if ( my_err == -1 ) {
-			printf( "setlogin failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			printf( "When setting new login name, setlogin failed with error %d - \"%s\" \n", errno, strerror( errno) );
 			my_err = -1;
 			goto exit_child;
 		}
@@ -2799,16 +2760,29 @@ int getlogin_setlogin_test( void * the_argp )
 			my_err = -1;
 			goto exit_child;
 		}
+
 		if ( memcmp( my_namep, my_new_namep, strlen( my_new_namep ) ) != 0 ) {
 			printf( "setlogin failed to set the new name \n" );
 			my_err = -1;
 			goto exit_child;
 		}
+
+		/* reset to original name */
+		my_len = strlen ( my_namep );
+		my_namep[ my_len - 1 ] = '\0';
+
+		my_err = setlogin( my_namep );
+		if ( my_err == -1 ) {
+			printf( "When resetting login name, setlogin failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			my_err = -1;
+			goto exit_child;
+		}
+
 	 
 		my_err = 0;
 exit_child:
 		if ( my_new_namep != NULL ) {
-			free( my_new_namep );
+			vm_deallocate(mach_task_self(), (vm_address_t)my_new_namep, my_len);
 		}
 		exit( my_err );
 	}
@@ -2841,13 +2815,14 @@ test_passed_exit:
  */
 int acct_test( void * the_argp )
 {
-	int				my_err, my_status;
-	int				my_fd = -1;
-	char *			my_pathp = NULL;
+	int		my_err, my_status;
+	int		my_fd = -1;
+	char *		my_pathp = NULL;
 	struct acct *	my_acctp;
-	pid_t			my_pid, my_wait_pid;
-	ssize_t			my_count;
-	char			my_buffer[ (sizeof(struct acct) + 32) ];
+	pid_t		my_pid, my_wait_pid;
+	ssize_t		my_count;
+	char		my_buffer[ (sizeof(struct acct) + 32) ];
+	kern_return_t           my_kr;
 
 	if ( g_skip_setuid_tests != 0 ) {
 		printf("\t skipping this test \n");
@@ -2855,11 +2830,12 @@ int acct_test( void * the_argp )
 		goto test_passed_exit;
 	}
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -2886,10 +2862,14 @@ int acct_test( void * the_argp )
 		goto test_failed_exit;
 	}
 	if ( my_pid == 0 ) {
+		char *argv[2];		/* supply valid argv array to execv() */
+		argv[0] = "/usr/bin/true";
+		argv[1] = 0;
+
 		/* 
 		 * child process - do a little work then exit.
 		 */
-		my_err = execv( "/usr/bin/true", (char **) 0 );
+		my_err = execv( argv[0], argv);
 		exit( 0 );
 	}
 	
@@ -2903,10 +2883,11 @@ int acct_test( void * the_argp )
 	}
 
 	if ( WIFEXITED( my_status ) && WEXITSTATUS( my_status ) != 0 ) {
+		printf("unexpected child exit status for accounting test load: %d\n", WEXITSTATUS( my_status));
 		goto test_failed_exit;
 	}
 
-	/* diable process accounting */
+	/* disable process accounting */
 	my_err =  acct( NULL );	
 	if ( my_err == -1 ) {
 		printf( "acct failed with error %d - \"%s\" \n", errno, strerror( errno) );
@@ -2929,6 +2910,7 @@ int acct_test( void * the_argp )
 	}
 
 	my_acctp = (struct acct *) &my_buffer[0];
+
 	/* first letters in ac_comm should match the name of the executable */
 	if ( getuid( ) != my_acctp->ac_uid || getgid( ) != my_acctp->ac_gid ||
 			my_acctp->ac_comm[0] != 't' || my_acctp->ac_comm[1] != 'r' ) {
@@ -2939,7 +2921,14 @@ int acct_test( void * the_argp )
 					getgid( ) != OSSwapInt32(my_acctp->ac_gid) ||
 					my_acctp->ac_comm[0] != 't' || 
 					my_acctp->ac_comm[1] != 'r' ) {
-				printf( "accounting data does not look correct under Rosetta.\n" );
+				printf( "accounting data does not look correct under Rosetta:\n" );
+				printf( "------------------------\n" );
+				printf( "my_acctp->ac_uid = %lu (should be: %lu)\n",
+					(unsigned long) OSSwapInt32( my_acctp->ac_uid ), (unsigned long) getuid() );
+				printf( "my_acctp->ac_gid = %lu (should be: %lu)\n", 
+					(unsigned long) OSSwapInt32( my_acctp->ac_gid ), (unsigned long) getgid() );
+
+				print_acct_debug_strings(my_acctp->ac_comm);
 			}
 			else {
 				// is cool under Rosetta 
@@ -2948,8 +2937,14 @@ int acct_test( void * the_argp )
 			}
 		}
 		else {
-			printf( "accounting data does not look correct \n" );
+			printf( "accounting data does not look correct:\n" );
+			printf( "------------------------\n" );
+			printf( "my_acctp->ac_uid = %lu (should be: %lu)\n", (unsigned long) my_acctp->ac_uid, (unsigned long) getuid() );
+			printf( "my_acctp->ac_gid = %lu (should be: %lu)\n", (unsigned long) my_acctp->ac_gid, (unsigned long) getgid() );
+
+			print_acct_debug_strings(my_acctp->ac_comm);
 		}
+		
 		goto test_failed_exit;
 	}
 	my_err = 0;
@@ -2962,10 +2957,31 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
+}
+
+void print_acct_debug_strings( char * my_ac_comm )
+{
+	char	my_cmd_str[11]; /* sizeof(acct_cmd) + 1 for '\0' if acct_cmd is bogus */
+	char	my_hex_str[128];
+	int 	i;
+	
+	my_hex_str[0] = '\0';
+	for(i = 0; i < 10; i++)
+	{
+		sprintf( my_hex_str, "%s \'0x%x\' ", my_hex_str, my_ac_comm[i]);
+	}
+
+	memccpy(my_cmd_str, my_ac_comm, '\0', 10);
+	my_cmd_str[10] = '\0'; /* In case ac_comm was bogus */
+	
+
+	printf( "my_acctp->ac_comm = \"%s\" (should begin with: \"tr\")\n", my_cmd_str);
+	printf( "my_acctp->ac_comm = \"%s\"\n", my_hex_str);
+	printf( "------------------------\n" );
 }
 
 
@@ -3050,12 +3066,14 @@ int mkdir_rmdir_umask_test( void * the_argp )
 	char *			my_pathp = NULL;
 	mode_t			my_orig_mask;
 	struct stat		my_sb;
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -3105,8 +3123,8 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		rmdir( my_pathp );	
-		free( my_pathp );
+		rmdir( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	 if ( did_umask != 0 ) {
 		umask( my_orig_mask );	
@@ -3124,6 +3142,7 @@ int chroot_test( void * the_argp )
 	int			my_err, my_status;
 	pid_t		my_pid, my_wait_pid;
 	char *		my_pathp = NULL;
+	kern_return_t           my_kr;
 
 	if ( g_skip_setuid_tests != 0 ) {
 		printf("\t skipping this test \n");
@@ -3131,11 +3150,12 @@ int chroot_test( void * the_argp )
 		goto test_passed_exit;
 	}
 		
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -3213,7 +3233,7 @@ test_passed_exit:
 		if ( my_err != 0 ) {
 			printf( "rmdir failed with error %d - \"%s\" path %p\n", errno, strerror( errno), my_pathp );
 		}
-		free( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);
 	}
 	return( my_err );
 }
@@ -3301,12 +3321,14 @@ int fcntl_test( void * the_argp )
 	int			my_err, my_result, my_tmep;
 	int			my_fd = -1;
 	char *		my_pathp = NULL;
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -3365,8 +3387,8 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
 }
@@ -3441,6 +3463,7 @@ int time_tests( void * the_argp )
 	struct timeval		my_utimes[4];
 	struct timezone		my_tz;
 	struct stat			my_sb;
+	kern_return_t           my_kr;
 
 	if ( g_skip_setuid_tests != 0 ) {
 		printf( "\t skipping this test \n" );
@@ -3448,11 +3471,12 @@ int time_tests( void * the_argp )
 		goto test_passed_exit;
 	}
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -3567,8 +3591,8 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
 }
@@ -3584,12 +3608,14 @@ int rename_test( void * the_argp )
 	char *			my_new_pathp = NULL;
 	ino_t			my_file_id;
 	struct stat		my_sb;
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -3600,11 +3626,12 @@ int rename_test( void * the_argp )
 		goto test_failed_exit;
 	}
 
-	my_new_pathp = (char *) malloc( PATH_MAX );
-	if ( my_new_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_new_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_new_pathp = 0x00;
 	strcat( my_new_pathp, &g_target_path[0] );
 	strcat( my_new_pathp, "/" );
@@ -3656,12 +3683,12 @@ test_failed_exit:
 	
 test_passed_exit:
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	if ( my_new_pathp != NULL ) {
-		remove( my_new_pathp );	
-		free( my_new_pathp );
+		remove( my_new_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_new_pathp, PATH_MAX);	
 	 }
 	return( my_err );
 }
@@ -3676,12 +3703,14 @@ int locking_test( void * the_argp )
 	pid_t		my_pid, my_wait_pid;
 	int			my_fd = -1;
 	char *		my_pathp = NULL;
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -3776,8 +3805,8 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
 }
@@ -3794,12 +3823,14 @@ int mkfifo_test( void * the_argp )
 	char *		my_pathp = NULL;
 	ssize_t		my_result;
 	off_t		my_current_offset;
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -3902,8 +3933,8 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
 }
@@ -3998,6 +4029,7 @@ int limit_tests( void * the_argp )
 			printf( "soft limits - current %lld should be %lld \n", my_rlimit.rlim_cur, my_current_rlimit.rlim_cur );
 			goto test_failed_exit;
 		}
+
 #if CONFORMANCE_CHANGES_IN_XNU // can't do this check until conformance changes get into xnu 
 		printf( "hard limits - current %lld should be %lld \n", my_rlimit.rlim_max, my_current_rlimit.rlim_max );
 		if ( my_rlimit.rlim_max != my_current_rlimit.rlim_max ) {
@@ -4005,6 +4037,30 @@ int limit_tests( void * the_argp )
 			goto test_failed_exit;
 		}
 #endif
+
+		/* 
+		 * A test for a limit that won't fit in a signed 32 bits, a la 5414697 
+		 * Note: my_rlimit should still have a valid rlim_max.
+		 */
+		long long biglim = 2147483649ll;	/* Just over 2^31 */
+		my_rlimit.rlim_cur = biglim; 			
+		my_err = setrlimit(RLIMIT_CPU, &my_rlimit); 	
+		if (my_err == -1) {
+			printf("failed to set large limit.\n");
+			goto test_failed_exit;
+		}
+
+		bzero(&my_rlimit, sizeof(struct rlimit)); 	
+		my_err = getrlimit(RLIMIT_CPU, &my_rlimit);
+		if (my_err == -1) {
+			printf("after setting large value, failed to getrlimit().\n");
+			goto test_failed_exit;
+		}
+
+		if (my_rlimit.rlim_cur != biglim) {
+			printf("didn't retrieve large limit.\n");
+			goto test_failed_exit;
+		}
 	}
 	
 	my_err = 0;
@@ -4018,7 +4074,7 @@ test_passed_exit:
 }
 
 /*  **************************************************************************************************************
- *	Test getattrlist, getdirentries, getdirentriesattr, setattrlist system calls.
+ *	Test getattrlist, getdirentriesattr, setattrlist system calls.
  *  **************************************************************************************************************
  */
 struct test_attr_buf {
@@ -4052,6 +4108,7 @@ int directory_tests( void * the_argp )
 	struct attrlist		my_attrlist;
 	test_attr_buf		my_attr_buf[4];
 	struct statfs 		my_statfs_buf;
+	kern_return_t           my_kr;
 
 	/* need to know type of file system */
 	my_err = statfs( &g_target_path[0], &my_statfs_buf );
@@ -4063,17 +4120,18 @@ int directory_tests( void * the_argp )
 		is_ufs = 1;
 	}
 
-	my_bufp = (char *) malloc( (1024 * 5) );
-	if ( my_bufp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
-	
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_bufp, (1024 * 5), VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -4092,37 +4150,6 @@ int directory_tests( void * the_argp )
 	my_fd = open( &g_target_path[0], (O_RDONLY), 0 );
 	if ( my_fd == -1 ) {
 		printf( "open failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
-	
-	done = found_it = 0;
-	while ( done == 0 ) {
-		int					my_result, i;
-		struct dirent *		my_dirent_p;
-		
-		my_result = getdirentries( my_fd, my_bufp, (1024 * 5), &my_base );
-		if ( my_result <= 0 )
-			break;
-		for ( i = 0; i < my_result; ) {
-			my_dirent_p = (struct dirent *) (my_bufp + i);
-#if DEBUG
-			printf( "d_ino %d d_reclen %d d_type %d d_namlen %d \"%s\" \n", 
-					 my_dirent_p->d_ino, my_dirent_p->d_reclen, my_dirent_p->d_type,
-					 my_dirent_p->d_namlen, &my_dirent_p->d_name[0] );
-#endif
-
-			i += my_dirent_p->d_reclen;
-			/* validate results by looking for our test file */
-			if ( my_dirent_p->d_type == DT_REG && my_dirent_p->d_ino != 0 &&
-				 strlen( my_file_namep ) == my_dirent_p->d_namlen &&
-				 memcmp( &my_dirent_p->d_name[0], my_file_namep, my_dirent_p->d_namlen ) == 0 ) {
-				done = found_it = 1;
-				break;
-			}
-		}
-	}
-	if ( found_it == 0 ) {
-		printf( "getdirentries failed to find test file. \n" );
 		goto test_failed_exit;
 	}
 
@@ -4206,11 +4233,11 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	if ( my_bufp != NULL ) {
-		free( my_bufp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_bufp, (1024 * 5));
 	 }
 	return( my_err );
 }
@@ -4229,6 +4256,7 @@ int exchangedata_test( void * the_argp )
 	ssize_t			my_result;
 	char			my_buffer[16];
 	struct statfs	my_statfs_buf;
+	kern_return_t           my_kr;
 
 	/* need to know type of file system */
 	my_err = statfs( &g_target_path[0], &my_statfs_buf );
@@ -4242,11 +4270,12 @@ int exchangedata_test( void * the_argp )
 		goto test_passed_exit;
 	}
 
-	my_file1_pathp = (char *) malloc( PATH_MAX );
-	if ( my_file1_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_file1_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_file1_pathp = 0x00;
 	strcat( my_file1_pathp, &g_target_path[0] );
 	strcat( my_file1_pathp, "/" );
@@ -4268,11 +4297,12 @@ int exchangedata_test( void * the_argp )
 		goto test_failed_exit;
 	}
 
-	my_file2_pathp = (char *) malloc( PATH_MAX );
-	if ( my_file2_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_file2_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_file2_pathp = 0x00;
 	strcat( my_file2_pathp, &g_target_path[0] );
 	strcat( my_file2_pathp, "/" );
@@ -4333,14 +4363,14 @@ test_passed_exit:
 	if ( my_fd1 != -1 )
 		close( my_fd1 );
 	if ( my_file1_pathp != NULL ) {
-		remove( my_file1_pathp );	
-		free( my_file1_pathp );
+		remove( my_file1_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_file1_pathp, PATH_MAX);	
 	 }
 	if ( my_fd2 != -1 )
 		close( my_fd2 );
 	if ( my_file2_pathp != NULL ) {
-		remove( my_file2_pathp );	
-		free( my_file2_pathp );
+		remove( my_file2_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_file2_pathp, PATH_MAX);	
 	 }
 	return( my_err );
 }
@@ -4373,10 +4403,11 @@ typedef struct packed_result packed_result;
 typedef struct packed_result * packed_result_p;
 
 #define MAX_MATCHES	10
+#define MAX_EBUSY_RETRIES 5
 
 int searchfs_test( void * the_argp )
 {
-	int						my_err, my_items_found = 0;
+	int						my_err, my_items_found = 0, my_ebusy_count;
 	char *					my_pathp = NULL;
     unsigned long			my_matches;
     unsigned long			my_search_options;
@@ -4387,6 +4418,7 @@ int searchfs_test( void * the_argp )
     struct packed_attr_ref	my_info2;
     packed_result			my_result_buffer[ MAX_MATCHES ];
 	struct statfs			my_statfs_buf;
+	kern_return_t           my_kr;
 
 	/* need to know type of file system */
 	my_err = statfs( &g_target_path[0], &my_statfs_buf );
@@ -4400,11 +4432,12 @@ int searchfs_test( void * the_argp )
 		goto test_passed_exit;
 	}
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -4433,9 +4466,14 @@ int searchfs_test( void * the_argp )
 		printf( "failed to create a test file name in \"%s\" \n", my_pathp );
 		goto test_failed_exit;
 	}
-	
+
+    /* EBUSY count  updated below the catalogue_changed label */	
+    my_ebusy_count = 0; 
+
+catalogue_changed:
 	/* search target volume for all file system objects with "foo" in the name */
     /* Set up the attributes we're searching on. */
+    my_items_found = 0; /* Set this here in case we're completely restarting */
     my_search_blk.searchattrs.bitmapcount = ATTR_BIT_MAP_COUNT;
     my_search_blk.searchattrs.reserved = 0;
     my_search_blk.searchattrs.commonattr = ATTR_CMN_NAME;
@@ -4524,6 +4562,11 @@ int searchfs_test( void * the_argp )
                     break;
             }
         }
+
+	/* EBUSY indicates catalogue change; retry a few times. */
+	if ((my_err == EBUSY) && (my_ebusy_count++ < MAX_EBUSY_RETRIES)) {
+		goto catalogue_changed;
+	}
 	if ( !(my_err == 0 || my_err == EAGAIN) ) {
 		printf( "searchfs failed with error %d - \"%s\" \n", my_err, strerror( my_err) );
 	}
@@ -4554,8 +4597,8 @@ test_passed_exit:
 		remove( my_pathp );	
 		*my_ptr = 0x00;
 		strcat( my_pathp, "xxxfoo" );
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
 }
@@ -4580,6 +4623,7 @@ int aio_tests( void * the_argp )
 	struct aiocb *		my_aiocb_list[ AIO_TESTS_OUR_COUNT ];
 	struct aiocb		my_aiocbs[ AIO_TESTS_OUR_COUNT ];
 	char *				my_file_paths[ AIO_TESTS_OUR_COUNT ];
+	kern_return_t           my_kr;
 
 	/* set up to have the ability to fire off up to AIO_TESTS_OUR_COUNT async IOs at once */
 	memset( &my_fd_list[0], 0xFF, sizeof( my_fd_list ) );
@@ -4587,17 +4631,18 @@ int aio_tests( void * the_argp )
 	memset( &my_aiocb_list[0], 0x00, sizeof( my_aiocb_list ) );
 	memset( &my_file_paths[0], 0x00, sizeof( my_file_paths ) );
 	for ( i = 0; i < AIO_TESTS_OUR_COUNT; i++ ) {
-		my_buffers[ i ] = malloc( AIO_TESTS_BUFFER_SIZE );
-		if ( my_buffers[ i ] == NULL ) {
-			printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-			goto test_failed_exit;
-		}
+	    	my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_buffers[ i ], AIO_TESTS_BUFFER_SIZE, VM_FLAGS_ANYWHERE);
+		if(my_kr != KERN_SUCCESS){
+                	printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                	goto test_failed_exit;
+       		}
 
-		my_file_paths[ i ] = malloc( PATH_MAX );
-		if ( my_file_paths[ i ] == NULL ) {
-			printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-			goto test_failed_exit;
-		}
+	        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_file_paths[ i ], PATH_MAX, VM_FLAGS_ANYWHERE);
+                if(my_kr != KERN_SUCCESS){
+                        printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                        goto test_failed_exit;
+                }
+
 		my_pathp = my_file_paths[ i ];
 		*my_pathp = 0x00;
 		strcat( my_pathp, &g_target_path[0] );
@@ -4822,12 +4867,12 @@ test_passed_exit:
 			my_fd_list[ i ] = -1;
 		}
 		if ( my_file_paths[ i ] != NULL ) {
-			remove( my_file_paths[ i ] );	
-			free( my_file_paths[ i ] );
+			remove( my_file_paths[ i ] );
+			vm_deallocate(mach_task_self(), (vm_address_t)my_file_paths[ i ], PATH_MAX);	
 			my_file_paths[ i ] = NULL;
 		}
 		if ( my_buffers[ i ] != NULL ) {
-			free( my_buffers[ i ] );
+			vm_deallocate(mach_task_self(), (vm_address_t)my_buffers[ i ], AIO_TESTS_BUFFER_SIZE);
 			my_buffers[ i ] = NULL;
 		}
 	}
@@ -4836,202 +4881,6 @@ test_passed_exit:
 	printf( "\t--> Not supported on EMBEDDED TARGET\n" );
 	return 0;
 #endif
-}
-
-
-/*  **************************************************************************************************************
- *	Test kevent, kqueue system calls.
- *  **************************************************************************************************************
- */
-int kqueue_tests( void * the_argp )
-{
-	int				my_err, my_status;
-	int				my_kqueue = -1;
-	int				my_fd = -1;
-	char *			my_pathp = NULL;
-    pid_t			my_pid, my_wait_pid;
-	size_t			my_count;
-	int				my_sockets[ 2 ] = {-1, -1};
-	struct kevent	my_kevent;
-	struct timespec	my_timeout;
-	char			my_buffer[ 16 ];
-
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
-	*my_pathp = 0x00;
-	strcat( my_pathp, &g_target_path[0] );
-	strcat( my_pathp, "/" );
-
-	/* create a test file */
-	my_err = create_random_name( my_pathp, 1 );
-	if ( my_err != 0 ) {
-		goto test_failed_exit;
-	}
-	
-	my_fd = open( my_pathp, O_RDWR, 0 );
-	if ( my_fd == -1 ) {
-		printf( "open call failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
-
-	my_err = socketpair( AF_UNIX, SOCK_STREAM, 0, &my_sockets[0] );
-	if ( my_err == -1 ) {
-		printf( "socketpair failed with errno %d - %s \n", errno, strerror( errno ) );
-		goto test_failed_exit;
-	}
-
-	/* fork here and use pipe to communicate */
-	my_pid = fork( );
-	if ( my_pid == -1 ) {
-		printf( "fork failed with errno %d - %s \n", errno, strerror( errno ) );
-		goto test_failed_exit;
-	}
-	else if ( my_pid == 0 ) {
-		/* 
-		 * child process - tell parent we are ready to go.
-		 */
-		my_count = write( my_sockets[1], "r", 1 );
-		if ( my_count == -1 ) {
-			printf( "write call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
-			exit( -1 );
-		}
-
-		my_count = read( my_sockets[1], &my_buffer[0], 1 );
-		if ( my_count == -1 ) {
-			printf( "read call failed with error %d - \"%s\" \n", errno, strerror( errno) );
-			exit( -1 );
-		}
-		if ( my_buffer[0] != 'g' ) {
-			printf( "read call on socket failed to get \"all done\" message \n" );
-			exit( -1 );
-		}
-
-		/* now do some work that will trigger events our parent will track */
-		my_count = write( my_fd, "11111111", 8 );
-		if ( my_count == -1 ) {
-			printf( "write call failed with error %d - \"%s\" \n", errno, strerror( errno) );
-			exit( -1 );
-		}
-	
-		my_err = unlink( my_pathp );
-		if ( my_err == -1 ) {
-			printf( "unlink failed with error %d - \"%s\" \n", errno, strerror( errno) );
-			exit( -1 );
-		}
-
-		/* wait for parent to tell us to exit */
-		my_count = read( my_sockets[1], &my_buffer[0], 1 );
-		if ( my_count == -1 ) {
-			printf( "read call failed with error %d - \"%s\" \n", errno, strerror( errno) );
-			exit( -1 );
-		}
-		if ( my_buffer[0] != 'e' ) {
-			printf( "read call on socket failed to get \"all done\" message \n" );
-			exit( -1 );
-		}
-		exit(0);
-	}
-	
-	/* parent process - wait for child to spin up */
-	my_count = read( my_sockets[0], &my_buffer[0], sizeof(my_buffer) );
-	if ( my_count == -1 ) {
-		printf( "read call failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
-	if ( my_buffer[0] != 'r' ) {
-		printf( "read call on socket failed to get \"ready to go message\" \n" );
-		goto test_failed_exit;
-	}
-
-	/* set up a kqueue and register for some events */
-	my_kqueue = kqueue( );
-	if ( my_kqueue == -1 ) {
-		printf( "kqueue call failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
-
-	/* look for our test file to get unlinked or written to */
-	EV_SET( &my_kevent, my_fd, EVFILT_VNODE, (EV_ADD | EV_CLEAR), (NOTE_DELETE | NOTE_WRITE), 0, 0 );
-
-	my_timeout.tv_sec = 0;
-	my_timeout.tv_nsec = 0;
-	my_err = kevent( my_kqueue, &my_kevent, 1, NULL, 0, &my_timeout);
-	if ( my_err == -1 ) {
-		printf( "kevent call to register events failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
-
-	/* tell child to get to work */
-	my_count = write( my_sockets[0], "g", 1 );
-	if ( my_count == -1 ) {
-		printf( "write call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
-		goto test_failed_exit;
-	}
-
-	/* go get vnode events */
-	EV_SET( &my_kevent, my_fd, EVFILT_VNODE, (EV_CLEAR), 0, 0, 0 );
-	my_err = kevent( my_kqueue, NULL, 0, &my_kevent, 1, NULL );
-	if ( my_err == -1 ) {
-		printf( "kevent call to get vnode events failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
-	if ( my_err == 0 ) {
-		printf( "kevent call to get vnode events did not return any when it should have \n" );
-		goto test_failed_exit;
-	}
-	if ( (my_kevent.fflags & (NOTE_DELETE | NOTE_WRITE)) == 0 ) {
-		printf( "kevent call to get vnode events did not return NOTE_DELETE or NOTE_WRITE \n" );
-		printf( "fflags 0x%02X \n", my_kevent.fflags );
-		goto test_failed_exit;
-	}
-
-	/* tell child to get to exit */
-	my_count = write( my_sockets[0], "e", 1 );
-	if ( my_count == -1 ) {
-		printf( "write call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
-		goto test_failed_exit;
-	}
-
-	my_wait_pid = wait4( my_pid, &my_status, 0, NULL );
-	if ( my_wait_pid == -1 ) {
-		printf( "wait4 failed with errno %d - %s \n", errno, strerror( errno ) );
-		goto test_failed_exit;
-	}
-
-	/* wait4 should return our child's pid when it exits */
-	if ( my_wait_pid != my_pid ) {
-		printf( "wait4 did not return child pid - returned %d should be %d \n", my_wait_pid, my_pid );
-		goto test_failed_exit;
-	}
-
-	if ( WIFEXITED( my_status ) && WEXITSTATUS( my_status ) != 0 ) {
-		printf( "wait4 returned wrong exit status - 0x%02X \n", my_status );
-		goto test_failed_exit;
-	}
-	
-	my_err = 0;
-	goto test_passed_exit;
-
-test_failed_exit:
-	my_err = -1;
-	
-test_passed_exit:
-	if ( my_sockets[0] != -1 )
-		close( my_sockets[0] );
-	if ( my_sockets[1] != -1 )
-		close( my_sockets[1] );
-	if ( my_kqueue != -1 )
-		close( my_kqueue );
-	if ( my_fd != -1 )
-		close( my_fd );
-	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
-	 }
-	return( my_err );
 }
 
 
@@ -5144,6 +4993,60 @@ test_passed_exit:
 }
 
 
+/*  **************************************************************************************************************
+ *	Test execution from data and stack areas.
+ *  **************************************************************************************************************
+ */
+int data_exec_tests( void * the_argp )
+{
+	int my_err = 0;
+	int arch, bits;
+
+	if ((arch = get_architecture()) == -1) {
+		printf("data_exec_test: couldn't determine architecture\n");
+		goto test_failed_exit;
+	}
+
+	bits = get_bits();
+
+	/*
+	 * If the machine is 64-bit capable, run both the 32 and 64 bit versions of the test.
+	 * Otherwise, just run the 32-bit version.
+	 */
+
+	if (arch == INTEL) {
+		if (bits == 64) {
+			if (system("arch -arch x86_64 helpers/data_exec") != 0) {
+				printf("data_exec-x86_64 failed\n");
+				goto test_failed_exit;
+			}
+		}
+
+		if (system("arch -arch i386 helpers/data_exec") != 0) {
+			printf("data_exec-i386 failed\n");
+			goto test_failed_exit;
+		}
+	}
+
+	if (arch == POWERPC) {
+		if (system("arch -arch ppc helpers/data_exec") != 0) {
+			printf("data_exec-ppc failed\n");
+			goto test_failed_exit;
+		}
+	}
+
+	/* Add new architectures here similar to the above. */
+
+	goto test_passed_exit;
+
+test_failed_exit:
+	my_err = -1;
+
+test_passed_exit:
+	return my_err;
+}
+
+
 #if TEST_SYSTEM_CALLS 
 
 /*  **************************************************************************************************************
@@ -5155,12 +5058,14 @@ int sample_test( void * the_argp )
 	int			my_err;
 	int			my_fd = -1;
 	char *		my_pathp = NULL;
+	kern_return_t           my_kr;
 
-	my_pathp = (char *) malloc( PATH_MAX );
-	if ( my_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_pathp, PATH_MAX, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                  printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                  goto test_failed_exit;
+        }
+
 	*my_pathp = 0x00;
 	strcat( my_pathp, &g_target_path[0] );
 	strcat( my_pathp, "/" );
@@ -5184,8 +5089,8 @@ test_passed_exit:
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
-		remove( my_pathp );	
-		free( my_pathp );
+		remove( my_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_pathp, PATH_MAX);	
 	 }
 	return( my_err );
 }

@@ -1,0 +1,14 @@
+_acpi_install_wake_handler
+_acpi_sleep_kernel
+_add_fsevent
+_apic_table
+_cpu_to_lapic
+_cpuid_features
+_cpuid_info
+_gOSKextUnresolved
+_lapic_end_of_interrupt
+_mp_broadcast
+_mp_cpus_call
+_need_fsevent
+_smp_initialized
+_lapic_unmask_perfcnt_interrupt

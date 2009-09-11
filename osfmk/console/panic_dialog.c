@@ -158,7 +158,6 @@ panic_dialog_test( void )
 	unsigned long o_panic_caller = panic_caller;
 	unsigned int o_panicDebugging = panicDebugging;
 
-
 	panicDebugging = TRUE;
 	panic_caller = (unsigned long)(char *)__builtin_return_address(0);
 	logPanicDataToScreen = FALSE;
@@ -197,8 +196,8 @@ draw_panic_dialog( void )
 			/* set up to draw background box */
 			/* by locating where the upper left corner is placed */
 
-			pd_x = (vinfo.v_width/2) - panic_dialog->pd_width/2;
-			pd_y = (vinfo.v_height/2) - panic_dialog->pd_height/2;
+			pd_x = (int)((vinfo.v_width/2) - panic_dialog->pd_width/2);
+			pd_y = (int)((vinfo.v_height/2) - panic_dialog->pd_height/2);
 		
 			/*  draw panic dialog at pd_x/pd_y */
 			panic_blit_rect(pd_x, pd_y, panic_dialog->pd_width,
@@ -233,7 +232,7 @@ draw_panic_dialog( void )
 					panic_dialog_info[panic_dialog_count].pixels += pixels_needed_to_blit_digit( ':' );
 
 					for ( count=8; count != 0; count-- ) {
-						nibble = (panic_caller >> ((count-1)<<2)) &0xF;
+						nibble = (int)((panic_caller >> ((count-1)<<2)) &0xF);
 						panic_num_chars[indx++] = nibble;
 						panic_dialog_info[panic_dialog_count].pixels += pixels_needed_to_blit_digit( nibble );
 					}
@@ -326,13 +325,13 @@ draw_panic_dialog( void )
 
 
 				/* vertical alignment for information to be displayed */
-				panic_info_y = (vinfo.v_height/2) + panic_dialog->pd_height/2 - (panic_dialog->pd_info_height);
+				panic_info_y = (int)((vinfo.v_height/2) + panic_dialog->pd_height/2 - (panic_dialog->pd_info_height));
 
 				/* blit out all the information we gathered */
 
 				switch ( panic_dialog_count ) {
 					case 1 :	/* one item is centered */
-							panic_info_x = (vinfo.v_width/2) - (panic_dialog_info[0].pixels/2);
+							panic_info_x = (int)((vinfo.v_width/2) - (panic_dialog_info[0].pixels/2));
 							for (indx=1; indx < panic_dialog_info[0].chars[0]; indx++)
 								blit_digit(panic_dialog_info[0].chars[indx]);
 
@@ -340,13 +339,13 @@ draw_panic_dialog( void )
 
 					case 2 : /* left centered and right centered */
 							x1 = ((panic_dialog->pd_width/2) - panic_dialog_info[0].pixels)/2;
-							panic_info_x = ((vinfo.v_width/2) - (panic_dialog->pd_width/2)) + x1;
+							panic_info_x = (int)(((vinfo.v_width/2) - (panic_dialog->pd_width/2)) + x1);
 
 							for (indx=1; indx < panic_dialog_info[0].chars[0]; indx++)
 								blit_digit(panic_dialog_info[0].chars[indx]);
 
 							x2 = ((panic_dialog->pd_width/2) - panic_dialog_info[1].pixels)/2;
-							panic_info_x = (vinfo.v_width/2) + x2;
+							panic_info_x = (int)((vinfo.v_width/2) + x2);
 
 							for (indx=1; indx < panic_dialog_info[1].chars[0]; indx++)
 								blit_digit(panic_dialog_info[1].chars[indx]);
@@ -355,18 +354,18 @@ draw_panic_dialog( void )
 
 					case 3 : /* left centered, middle and right centered */
 							x1 = ((panic_dialog->pd_width/2) - panic_dialog_info[0].pixels - (panic_dialog_info[1].pixels/2))/2;
-							panic_info_x = ((vinfo.v_width/2) - (panic_dialog->pd_width/2)) + x1;
+							panic_info_x = (int)(((vinfo.v_width/2) - (panic_dialog->pd_width/2)) + x1);
 
 							for (indx=1; indx < panic_dialog_info[0].chars[0]; indx++)
 								blit_digit(panic_dialog_info[0].chars[indx]);
 
-							panic_info_x = (vinfo.v_width/2) - (panic_dialog_info[1].pixels/2);
+							panic_info_x = (int)((vinfo.v_width/2) - (panic_dialog_info[1].pixels/2));
 
 							for (indx=1; indx < panic_dialog_info[1].chars[0]; indx++)
 								blit_digit(panic_dialog_info[1].chars[indx]);
 
 							x2 = ((panic_dialog->pd_width/2) - panic_dialog_info[2].pixels - (panic_dialog_info[1].pixels/2))/2;
-							panic_info_x = (vinfo.v_width/2) + x2 + (panic_dialog_info[1].pixels/2);
+							panic_info_x = (int)((vinfo.v_width/2) + x2 + (panic_dialog_info[1].pixels/2));
 
 							for (indx=1; indx < panic_dialog_info[2].chars[0]; indx++)
 								blit_digit(panic_dialog_info[2].chars[indx]);
@@ -402,7 +401,7 @@ panic_dialog_set_image( const unsigned char * ptr, unsigned int size )
 	/* if ptr is NULL, restore panic image to built-in default */
 	if ( ptr == NULL ) {
 		newimage = &panic_dialog_default;
-		newsize = sizeof(struct panicimage) + newimage->pd_dataSize;
+		newsize = (unsigned int)(sizeof(struct panicimage) + newimage->pd_dataSize);
 	}
 	else {
 		newimage = (const struct panicimage *)ptr;
@@ -448,7 +447,7 @@ panic_dialog_verify( const struct panicimage * newimage, unsigned int size )
 	if ( size < (sizeof(struct panicimage) + newimage->pd_dataSize) )
 		return EINVAL;
 
-	if ( newimage->pd_tag != 'RNMp' )
+	if ( newimage->pd_tag != 0x524E4D70 /* 'RNMp' */ )
 		return EINVAL;
 
 	size = newimage->pd_dataSize-CLUT_SIZE;
@@ -477,6 +476,9 @@ static void panic_blit_rect_16(unsigned int x, unsigned int y,
 			       unsigned int width, unsigned int height,
 			       int transparent, const unsigned char *dataPtr);
 static void panic_blit_rect_32(unsigned int x, unsigned int y,
+			       unsigned int width, unsigned int height,
+			       int transparent, const unsigned char *dataPtr);
+static void panic_blit_rect_30(unsigned int x, unsigned int y,
 			       unsigned int width, unsigned int height,
 			       int transparent, const unsigned char *dataPtr);
 static int decode_rle(const unsigned char *dataPtr,
@@ -562,6 +564,9 @@ panic_blit_rect(unsigned int x, unsigned int y, unsigned int width,
 	case 32:
 	    panic_blit_rect_32( x, y, width, height, transparent, dataPtr);
 	    break;
+	case 30:
+	    panic_blit_rect_30( x, y, width, height, transparent, dataPtr);
+	    break;
     }
 }
 
@@ -613,7 +618,7 @@ panic_blit_rect_8(unsigned int x, unsigned int y, unsigned int width,
 			}
 		}
 		
-		dst = (volatile unsigned char *) (((int)dst) + vinfo.v_rowbytes);
+		dst = (volatile unsigned char *) (((uintptr_t)dst) + vinfo.v_rowbytes);
 	}
 }
 
@@ -663,7 +668,7 @@ panic_blit_rect_16(unsigned int x, unsigned int y, unsigned int width,
 			}
 		}
 
-		dst = (volatile unsigned short *) (((int)dst) + vinfo.v_rowbytes);
+		dst = (volatile unsigned short *) (((uintptr_t)dst) + vinfo.v_rowbytes);
 	}
  }
 
@@ -713,9 +718,64 @@ panic_blit_rect_32(unsigned int x, unsigned int y, unsigned int width,
 			}
 		}
 		
-		dst = (volatile unsigned int *) (((int)dst) + vinfo.v_rowbytes);
+		dst = (volatile unsigned int *) (((uintptr_t)dst) + vinfo.v_rowbytes);
 	}
 }
+
+/*
+ *	 panic_blit_rect_30 decodes the RLE encoded image data on the fly, and fills
+ *	 in each of the three pixel values from the clut (RGB) for each pixel and 
+ *	 writes it to the screen.
+ */	
+
+static void 
+panic_blit_rect_30(unsigned int x, unsigned int y, unsigned int width,
+		   unsigned int height, __unused int transparent,
+		   const unsigned char *dataPtr)
+{
+	volatile unsigned int * dst;
+	unsigned int line, col, i;
+	unsigned int quantity, index, data, depth;
+	const unsigned char *value;
+	unsigned int in;
+
+	dst = (volatile unsigned int *) (vinfo.v_baseaddr +
+									(y * vinfo.v_rowbytes) +
+									(x * 4));
+	
+	quantity = 0;
+	i = 0;
+	
+	for( line = 0; line < height; line++) {
+		for( col = 0; col < width; col++) {
+
+			if (quantity == 0) {
+				dataPtr += decode_rle(dataPtr, &quantity, &depth, &value);
+				i = 0;
+			}
+
+			index = value[i++] * 3;
+			in = panic_dialog_clut[index + 0];
+			data = (in << 2) | (in >> 6);
+
+			in = panic_dialog_clut[index + 1];
+			data |= (in << (2 + 10)) | ((3 << 10) & (in << 4));
+
+			in = panic_dialog_clut[index + 2];
+			data |= (in << (2 + 20)) | ((3 << 20) & (in << 14));
+		
+			*(dst + col) = data;
+
+			if ( i == depth ) {
+				i = 0;
+				quantity--;
+			}
+		}
+		
+		dst = (volatile unsigned int *) (((uintptr_t)dst) + vinfo.v_rowbytes);
+	}
+}
+
 
 /* 	
     decode_rle decodes a single quantity/value run of a "modified-RLE" encoded
@@ -782,24 +842,26 @@ decode_rle(const unsigned char *dataPtr, unsigned int *quantity,
 void 
 dim_screen(void)
 {
-	unsigned long *p, *endp, *row;
+	unsigned int *p, *endp, *row;
 	int      col, rowline, rowlongs;
-	register unsigned long mask;
+	register unsigned int mask;
 
 	if(!vinfo.v_depth)
 		return;
 
 	if ( vinfo.v_depth == 32 )
 		mask = 0x007F7F7F;
+	else if ( vinfo.v_depth == 30 )
+		mask = (0x1ff<<20) | (0x1ff<<10) | 0x1ff;
 	else if ( vinfo.v_depth == 16 )
 		mask = 0x3DEF3DEF;
 	else
 		return;
 
-	rowline = vinfo.v_rowscanbytes / 4;
-	rowlongs = vinfo.v_rowbytes / 4;
+	rowline = (int)(vinfo.v_rowscanbytes / 4);
+	rowlongs = (int)(vinfo.v_rowbytes / 4);
 
-	p = (unsigned long*) vinfo.v_baseaddr;
+	p = (unsigned int*) vinfo.v_baseaddr;
 	endp = p + (rowlongs * vinfo.v_height);
 
 	for (row = p ; row < endp ; row += rowlongs) {

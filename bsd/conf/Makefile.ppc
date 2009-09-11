@@ -2,103 +2,34 @@
 #BEGIN  Machine dependent Makefile fragment for ppc
 ######################################################################
  
+# files to build with certain warnings turned off
+dis_tables.o_CFLAGS_ADD += -Wno-cast-qual
+fbt_ppc.o_CFLAGS_ADD += -Wno-cast-qual -Wno-pointer-to-int-cast
+
+
 # Enable -Werror for ppc builds
 CFLAGS+=$(WERROR)
 CWARNFLAGS= $(filter-out -Wbad-function-cast, $(CWARNFLAGS_STD))
 
 # Objects that don't compile cleanly:
 OBJS_NO_WERROR =		\
-	vfs_xattr.o		\
-	vfs_fsevents.o	\
 	fifo_vnops.o	\
-	subr_log.o		\
-	ioconf.o		\
 	aescrypt.o		\
 	aeskey.o		\
 	des_setkey.o		\
 	sha2.o			\
 	shadow.o		\
-	vn.o			\
-	cd9660_lookup.o		\
-	cd9660_node.o		\
-	cd9660_rrip.o		\
-	cd9660_util.o		\
-	cd9660_vfsops.o		\
-	cd9660_vnops.o		\
-	bsd_init.o		\
-	bsd_stubs.o		\
-	kern_newsysctl.o	\
-	kern_prot.o		\
-	kpi_socket.o		\
-	kpi_socketfilter.o	\
-	uipc_domain.o		\
-	uipc_proto.o		\
-	uipc_usrreq.o		\
-	ether_if_module.o	\
 	if_ethersubr.o		\
-	if_gif.o		\
 	if_media.o		\
-	if_stf.o		\
 	kext_net.o		\
-	netisr.o		\
-	rtsock.o		\
 	dhcp_options.o		\
-	if_ether.o		\
-	igmp.o			\
 	in_bootp.o		\
-	in_cksum.o		\
-	ip_fw2.o		\
-	ip_fw2_compat.o		\
-	kpi_ipfilter.o		\
-	in_gif.o		\
-	ip_divert.o		\
-	ip_dummynet.o		\
-	ip_icmp.o		\
-	ip_input.o		\
-	ip_mroute.o		\
-	ip_output.o		\
-	tcp_input.o		\
-	tcp_subr.o		\
-	tcp_timer.o		\
-	ah_core.o		\
-	esp_core.o		\
-	esp_input.o		\
-	esp_rijndael.o		\
-	in6_gif.o		\
-	in6_proto.o		\
-	in6_src.o		\
-	ip6_output.o		\
-	ipsec.o			\
-	raw_ip6.o		\
-	key.o			\
-	keydb.o			\
 	krpc_subr.o		\
-	ffs_alloc.o		\
-	ffs_balloc.o		\
-	ffs_inode.o		\
-	ffs_subr.o		\
-	ffs_vfsops.o		\
-	ffs_vnops.o		\
-	ufs_attrlist.o		\
-	ufs_bmap.o		\
-	ufs_byte_order.o	\
-	ufs_ihash.o		\
-	ufs_inode.o		\
-	ufs_lockf.o		\
-	ufs_lookup.o		\
-	ufs_quota.o		\
-	ufs_readwrite.o		\
-	ufs_vfsops.o		\
-	ufs_vnops.o		\
 	ux_exception.o		\
-	vfs_journal.o		\
-	vfs_syscalls.o		\
 	sysctl.o		\
 	unix_startup.o 		\
 	randomdev.o		\
-	sha1mod.o		\
 	devtimer.o		\
-	in_arp.o		\
 	vnode_pager.o	\
 	dp_backing_file.o \
 	vm_unix.o		\
@@ -106,16 +37,7 @@ OBJS_NO_WERROR =		\
 	km.o			\
 	at.o			\
 	drv_dep.o		\
-	dtrace.o		\
-	lockstat.o		\
-	profile_prvd.o		\
-	systrace.o		\
-	blist.o			\
-	dtrace_glue.o		\
-	fbt.o			\
 	fbt_ppc.o		\
-	sdt.o		\
-	sdt_subr.o		\
 	sdt_ppc.o		\
 	dtrace_isa.o		\
 	dtrace_subr_ppc.o

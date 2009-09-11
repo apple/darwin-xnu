@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
-/*-
+/*
  * Copyright (c) 1982, 1986, 1991, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -367,5 +367,6 @@ typedef __darwin_fsblkcnt_t		fsblkcnt_t;
 #define _FSFILCNT_T
 typedef __darwin_fsfilcnt_t		fsfilcnt_t;
 #endif
+
 
 #endif /* !_SYS_TYPES_H_ */

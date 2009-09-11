@@ -99,7 +99,14 @@ struct fileproc {
 #define FP_INCREATE 	0x0001
 #define FP_INCLOSE 	0x0002
 #define FP_INSELECT	0x0004
+/*
+ * see <rdar://problem/6647955>
+ */
+#if CONFIG_EMBEDDED
+#define FP_INCHRREAD	0x0000
+#else
 #define FP_INCHRREAD	0x0008
+#endif
 #define FP_WRITTEN	0x0010
 #define FP_CLOSING	0x0020
 #define FP_WAITCLOSE	0x0040
@@ -175,6 +182,7 @@ extern struct filelist filehead;	/* head of list of open files */
 extern struct fmsglist fmsghead;	/* head of list of open files */
 extern int maxfiles;			/* kernel limit on number of open files */
 extern int nfiles;			/* actual number of open files */
+extern int maxfilesperproc;
 #endif /* __APPLE_API_PRIVATE */
 
 
@@ -216,6 +224,8 @@ void procfdtbl_markclosefd(struct proc * p, int fd);
 void procfdtbl_releasefd(struct proc * p, int fd, struct fileproc * fp);
 void procfdtbl_waitfd(struct proc * p, int fd);
 void procfdtbl_clearfd(struct proc * p, int fd);
+boolean_t filetype_issendable(file_type_t type);
+extern int fdgetf_noref(proc_t, int, struct fileproc **);
 __END_DECLS
 
 #endif /* __APPLE_API_UNSTABLE */

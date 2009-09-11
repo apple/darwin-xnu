@@ -94,9 +94,12 @@ uint32_t
 hibernate_sum(uint8_t *buf, int32_t len);
 
 extern vm_offset_t sectHIBB;
-extern int         sectSizeHIB;
+extern unsigned long sectSizeHIB;
 extern vm_offset_t sectDATAB;
-extern int         sectSizeDATA;
+extern unsigned long sectSizeDATA;
+#if defined(__i386__) || defined(__x86_64__)
+extern vm_offset_t sectINITPTB;
+#endif
 
 extern vm_offset_t gIOHibernateWakeMap;	    // ppnum
 extern vm_size_t   gIOHibernateWakeMapSize;

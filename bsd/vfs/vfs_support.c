@@ -540,16 +540,17 @@ err_readdir(__unused struct vnop_readdir_args *ap)
 
 
 struct vnop_readdirattr_args /* {
-	struct vnode *a_vp;
+	struct vnodeop_desc *a_desc;
+	vnode_t a_vp;
 	struct attrlist *a_alist;
 	struct uio *a_uio;
 	u_long a_maxcount;
-        u_long a_options;
-        int *a_newstate;
+	u_long a_options;
+	u_long *a_newstate;
 	int *a_eofflag;
-   	u_long *a_actualcount;
+	u_long *a_actualcount;
 	vfs_context_t a_context;
-} */;
+} */ ;
 
 int
 nop_readdirattr(struct vnop_readdirattr_args *ap)
@@ -643,7 +644,7 @@ err_strategy(__unused struct vnop_strategy_args *ap)
 struct vnop_pathconf_args /* {
 	struct vnode *a_vp;
 	int a_name;
-	register_t *a_retval;
+	int32_t *a_retval;
 	vfs_context_t a_context;
 } */;
 

@@ -31,7 +31,7 @@
 #include <libkern/OSBase.h>
 
 #ifdef KERNEL
-#define MACH_ASSERT	1
+#define MACH_ASSERT 1
 #endif
 
 __BEGIN_DECLS
@@ -40,7 +40,7 @@ __BEGIN_DECLS
 #include <sys/systm.h>
 
 #include <kern/assert.h>
-#ifdef	KERNEL_PRIVATE
+#ifdef KERNEL_PRIVATE
 #include <kern/kalloc.h>
 #endif
 

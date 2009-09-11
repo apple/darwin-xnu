@@ -301,6 +301,33 @@ _munge_wwlwww:
         
         blr
 
+        .align  5
+        .globl  _munge_wwwwlw	// 4 'w's and an l an w
+_munge_wwwwlw:
+        li      r0,0
+        lwz     r5,0*8+4(r3)
+        lwz     r6,1*8+4(r3)
+        lwz     r7,2*8+4(r3)
+        lwz     r8,3*8+4(r3)
+        lwz     r9,4*8+4(r3)
+        lwz     r10,5*8+4(r3)
+        lwz     r11,6*8+4(r3)
+        
+        stw     r0,0*8+0(r4)
+        stw     r5,0*8+4(r4)
+        stw     r0,1*8+0(r4)
+        stw     r6,1*8+4(r4)
+        stw     r0,2*8+0(r4)
+        stw     r7,2*8+4(r4)
+        stw     r0,3*8+0(r4)
+        stw     r8,3*8+4(r4)
+        stw     r9,4*8+0(r4)
+        stw     r10,4*8+4(r4)
+        stw     r0,5*8+0(r4)
+        stw     r11,5*8+4(r4)
+        
+        blr
+
 
         .align  5
         .globl  _munge_wwwwl	// 4 'w's and an l
@@ -416,3 +443,35 @@ _munge_wwwsw:
         stw     r9,4*8+4(r4)
 
         blr
+
+		.align 5
+		.globl	_munge_llllll
+_munge_llllll:
+		li		r0,0
+		lwz		r5,0*8+4(r3)	// l1
+		lwz		r6,1*8+4(r3)
+		lwz		r7,2*8+4(r3)	// l2
+		lwz		r8,3*8+4(r3)
+		lwz		r9,4*8+4(r3)	// l3
+		lwz		r10,5*8+4(r3)
+		lwz		r11,6*8+4(r3)	// l4
+
+		stw		r5,0*8+0(r4)
+		stw		r6,0*8+4(r4)
+		stw		r7,1*8+0(r4)
+		stw		r8,1*8+4(r4)
+		stw		r9,2*8+0(r4)
+		stw		r10,2*8+4(r4)
+		stw		r11,3*8+0(r4)
+
+		// the rest spill to the stack (r1)
+		// we'll zero fill for now
+		// and make the syscall handler
+		// do the copyin from the user stack
+		stw		r0,3*8+4(r4)
+		stw		r0,4*8+0(r4)
+		stw		r0,4*8+4(r4)
+		stw		r0,5*8+0(r4)
+		stw		r0,5*8+4(r4)
+
+		blr

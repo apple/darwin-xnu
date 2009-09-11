@@ -106,6 +106,19 @@ typedef struct thread_basic_info  *thread_basic_info_t;
 #define THREAD_BASIC_INFO_COUNT   ((mach_msg_type_number_t) \
                 (sizeof(thread_basic_info_data_t) / sizeof(natural_t)))
 
+#define THREAD_IDENTIFIER_INFO		4     /* thread id and other information */
+
+struct thread_identifier_info {
+	uint64_t	thread_id;	/* system-wide unique 64-bit thread id */
+	uint64_t	thread_handle;	/* handle to be used by libproc */
+	uint64_t	dispatch_qaddr;	/* libdispatch queue address */
+};
+
+typedef struct thread_identifier_info  thread_identifier_info_data_t;
+typedef struct thread_identifier_info  *thread_identifier_info_t;
+#define THREAD_IDENTIFIER_INFO_COUNT   ((mach_msg_type_number_t) \
+                (sizeof(thread_identifier_info_data_t) / sizeof(natural_t)))
+
 /*
  *	Scale factor for usage field.
  */

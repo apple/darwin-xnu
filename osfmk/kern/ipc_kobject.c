@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -84,6 +84,7 @@
 #include <mach/mig_errors.h>
 #include <mach/notify.h>
 #include <mach/ndr.h>
+#include <mach/vm_param.h>
 
 #include <mach/mach_vm_server.h>
 #include <mach/mach_port_server.h>
@@ -101,15 +102,20 @@
 #include <mach/memory_object_name_server.h>
 #include <mach/processor_server.h>
 #include <mach/processor_set_server.h>
-#include <mach/semaphore_server.h>
 #include <mach/task_server.h>
-#include <mach/vm_map_server.h>
+#if VM32_SUPPORT
+#include <mach/vm32_map_server.h>
+#endif
 #include <mach/thread_act_server.h>
 
 #include <device/device_types.h>
 #include <device/device_server.h>
 
 #include <UserNotification/UNDReplyServer.h>
+
+#if	CONFIG_AUDIT
+#include <kern/audit_sessionport.h>
+#endif
 
 #if     MACH_MACHINE_ROUTINES
 #include <machine/machine_routines.h>
@@ -183,10 +189,11 @@ const struct mig_subsystem *mig_e[] = {
         (const struct mig_subsystem *)&memory_object_name_subsystem,
 	(const struct mig_subsystem *)&lock_set_subsystem,
 	(const struct mig_subsystem *)&ledger_subsystem,
-	(const struct mig_subsystem *)&semaphore_subsystem,
 	(const struct mig_subsystem *)&task_subsystem,
 	(const struct mig_subsystem *)&thread_act_subsystem,
-	(const struct mig_subsystem *)&vm_map_subsystem,
+#if VM32_SUPPORT
+	(const struct mig_subsystem *)&vm32_map_subsystem,
+#endif
 	(const struct mig_subsystem *)&UNDReply_subsystem,
 	(const struct mig_subsystem *)&default_pager_object_subsystem,
 
@@ -546,7 +553,13 @@ ipc_kobject_notify(
 			   reply_header->msgh_remote_port = MACH_PORT_NULL;
 			   return TRUE;
 		   }
-				
+#if	CONFIG_AUDIT
+		   if (ip_kotype(port) == IKOT_AU_SESSIONPORT) {
+			   audit_session_nosenders(request_header);
+			   return TRUE;
+		   }
+#endif
+
 	  	   break;
 
 		case MACH_NOTIFY_PORT_DELETED:

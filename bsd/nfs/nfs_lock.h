@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2007 Apple Inc.  All rights reserved.
+ * Copyright (c) 2002-2008 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -90,6 +90,7 @@ typedef struct nfs_lock_msg {
 #define LOCKD_MSG_TEST		0x0002	/* just a lock test */
 #define LOCKD_MSG_NFSV3		0x0004  /* NFSv3 request */
 #define LOCKD_MSG_CANCEL	0x0008  /* cancelling blocked request */
+#define LOCKD_MSG_DENIED_GRACE	0x0010	/* lock denied due to grace period */
 
 /* The structure used to maintain the pending request queue */
 typedef struct nfs_lock_msg_request {
@@ -124,6 +125,7 @@ struct lockd_ans {
 #define LOCKD_ANS_GRANTED	0x0001	/* NLM_GRANTED request */
 #define LOCKD_ANS_LOCK_INFO	0x0002	/* lock info valid */
 #define LOCKD_ANS_LOCK_EXCL	0x0004	/* lock is exclusive */
+#define LOCKD_ANS_DENIED_GRACE	0x0008	/* lock denied due to grace period */
 
 
 #ifdef KERNEL

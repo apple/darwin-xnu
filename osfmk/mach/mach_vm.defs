@@ -401,7 +401,7 @@ routine vm_region_64(
  *	THIS INTERFACE IS STILL EVOLVING.
  */
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
-#if !defined(__LP64__)
+#if !defined(__LP64__) || KERNEL_SERVER || XNU_KERNEL_PRIVATE || LIBSYSCALL_INTERFACE
 routine _mach_make_memory_entry(
 #else
 routine mach_make_memory_entry(
@@ -433,6 +433,16 @@ routine vm_purgable_control(
 		control		: vm_purgable_t;
 	inout	state		: int);
 
+
+#if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
+routine mach_vm_page_info(
+			target_task		: vm_map_t;
+			address			: mach_vm_address_t;
+			flavor			: vm_page_info_flavor_t;
+	out		info			: vm_page_info_t, CountInOut);
+#else
+skip;
+#endif
 
 /****************************** Legacy section ***************************/
 /*  The following definitions are exist to provide compatibility with    */

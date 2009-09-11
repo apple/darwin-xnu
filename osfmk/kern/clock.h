@@ -44,6 +44,18 @@
 
 #include <sys/cdefs.h>
 
+#ifdef	__LP64__
+
+typedef unsigned long		clock_sec_t;
+typedef unsigned int		clock_usec_t, clock_nsec_t;
+
+#else	/* __LP64__ */
+
+typedef uint32_t			clock_sec_t;
+typedef uint32_t			clock_usec_t, clock_nsec_t;
+
+#endif	/* __LP64__ */
+
 #ifdef	MACH_KERNEL_PRIVATE
 
 #include <kern/queue.h>
@@ -102,8 +114,8 @@ extern void			clock_gettimeofday_set_commpage(
 						uint64_t				abstime,
 						uint64_t				epoch,
 						uint64_t				offset,
-						uint32_t				*secs,
-						uint32_t				*microsecs);
+						clock_sec_t				*secs,
+						clock_usec_t			*microsecs);
 
 extern void			machine_delay_until(
 						uint64_t		deadline);
@@ -123,12 +135,12 @@ extern uint32_t		hz_tick_interval;
 
 extern void		absolutetime_to_nanotime(
 					uint64_t		abstime,
-					uint32_t		*secs,
-					uint32_t		*nanosecs);
+					clock_sec_t		*secs,
+					clock_nsec_t	*nanosecs);
 
 extern void		nanotime_to_absolutetime(
-				    uint32_t		secs,
-					uint32_t		nanosecs,
+					clock_sec_t		secs,
+					clock_nsec_t	nanosecs,
 					uint64_t		*result);
 
 #endif /* MACH_KERNEL_PRIVATE */
@@ -138,63 +150,60 @@ __BEGIN_DECLS
 #ifdef	XNU_KERNEL_PRIVATE
 
 extern void			clock_adjtime(
-						int32_t		*secs,
-						int32_t		*microsecs);
+						long		*secs,
+						int			*microsecs);
 
 extern void			clock_initialize_calendar(void);
 
 extern void			clock_wakeup_calendar(void);
 
 extern void			clock_gettimeofday(
-                        uint32_t			*secs,
-                        uint32_t			*microsecs);
+						clock_sec_t			*secs,
+						clock_usec_t		*microsecs);
 
 extern void			clock_set_calendar_microtime(
-						uint32_t			secs,
-						uint32_t			microsecs);
+						clock_sec_t			secs,
+						clock_usec_t		microsecs);
 
 extern void			clock_get_boottime_nanotime(
-						uint32_t			*secs,
-						uint32_t			*nanosecs);
+						clock_sec_t			*secs,
+						clock_nsec_t		*nanosecs);
 
 extern void			absolutetime_to_microtime(
-						uint64_t		abstime,
-						uint32_t		*secs,
-						uint32_t		*microsecs);
+						uint64_t			abstime,
+						clock_sec_t			*secs,
+						clock_usec_t		*microsecs);
 
 extern void			clock_deadline_for_periodic_event(
 						uint64_t			interval,
 						uint64_t			abstime,
 						uint64_t			*deadline);
 
+#if	CONFIG_DTRACE
+
+extern void			clock_get_calendar_nanotime_nowait(
+						clock_sec_t			*secs,
+						clock_nsec_t		*nanosecs);
+
+#endif	/* CONFIG_DTRACE */
+
 #endif	/* XNU_KERNEL_PRIVATE */
 
 extern void			clock_get_calendar_microtime(
-						uint32_t			*secs,
-						uint32_t			*microsecs);
+						clock_sec_t			*secs,
+						clock_usec_t		*microsecs);
 
 extern void			clock_get_calendar_nanotime(
-						uint32_t			*secs,
-						uint32_t			*nanosecs);
-
-/*
- * Gah! This file is included everywhere. The other domains do not correctly
- * include config_dtrace headers, so this isn't being defined. The last test
- * I ran stopped with a build failure in pexpert/i386/kd.c
- */
-#if CONFIG_DTRACE
-extern void			clock_get_calendar_nanotime_nowait(
-						uint32_t			*secs,
-						uint32_t			*nanosecs);
-#endif /* CONFIG_DTRACE */
+						clock_sec_t			*secs,
+						clock_nsec_t		*nanosecs);
 
 extern void			clock_get_system_microtime(
-						uint32_t			*secs,
-						uint32_t			*microsecs);
+						clock_sec_t			*secs,
+						clock_usec_t		*microsecs);
 
 extern void			clock_get_system_nanotime(
-						uint32_t			*secs,
-						uint32_t			*nanosecs);
+						clock_sec_t			*secs,
+						clock_nsec_t		*nanosecs);
 
 extern void				clock_timebase_info(
 							mach_timebase_info_t	info);
@@ -233,6 +242,8 @@ extern void             nanoseconds_to_absolutetime(
  * Obsolete interfaces.
  */
 
+#ifndef	__LP64__
+
 #define MACH_TIMESPEC_SEC_MAX		(0 - 1)
 #define MACH_TIMESPEC_NSEC_MAX		(NSEC_PER_SEC - 1)
 
@@ -261,10 +272,23 @@ extern mach_timespec_t	clock_get_system_value(void);
 
 extern mach_timespec_t	clock_get_calendar_value(void);
 
+#else	/* __LP64__ */
+
+#ifdef	XNU_KERNEL_PRIVATE
+
+#define MACH_TIMESPEC_ZERO	((mach_timespec_t) { 0, 0 } )
+
+#endif	/* XNU_KERNEL_PRIVATE */
+
+#endif	/* __LP64__ */
+
 extern void				delay_for_interval(
 							uint32_t		interval,
 							uint32_t		scale_factor);
+
 #ifndef	MACH_KERNEL_PRIVATE
+
+#ifndef	__LP64__
 
 #ifndef	ABSOLUTETIME_SCALAR_TYPE
 
@@ -294,7 +318,9 @@ extern void				delay_for_interval(
 
 #endif	/* ABSOLUTETIME_SCALAR_TYPE */
 
-#endif	/* !MACH_KERNEL_PRIVATE */
+#endif	/* __LP64__ */
+
+#endif	/* MACH_KERNEL_PRIVATE */
 
 #endif	/* KERNEL_PRIVATE */
 

@@ -105,6 +105,8 @@ typedef	__darwin_mode_t	mode_t;
 typedef	__int32_t	key_t;
 #endif
 
+#pragma pack(4)
+
 /*
  * Technically, we should force all code references to the new structure
  * definition, not in just the standards conformance case, and leave the
@@ -148,6 +150,8 @@ struct __ipc_perm_old {
 };
 #endif	/* !__DARWIN_UNIX03 */
 
+#pragma pack()
+
 /*
  * [XSI] Definitions shall be provided for the following constants:
  */
@@ -185,7 +189,7 @@ struct __ipc_perm_old {
 /* Macros to convert between ipc ids and array indices or sequence ids */
 #define	IPCID_TO_IX(id)		((id) & 0xffff)
 #define	IPCID_TO_SEQ(id)	(((id) >> 16) & 0xffff)
-#define	IXSEQ_TO_IPCID(ix,perm)	(((perm._seq) << 16L) | (ix & 0xffff))
+#define	IXSEQ_TO_IPCID(ix,perm)	(((perm._seq) << 16L) | ((ix) & 0xffff))
 
 struct ucred;
 

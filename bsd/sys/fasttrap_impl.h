@@ -20,7 +20,7 @@
  */
 
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
@@ -28,7 +28,7 @@
 #define	_FASTTRAP_IMPL_H
 
 /*
- * #pragma ident	"@(#)fasttrap_impl.h	1.12	06/06/12 SMI"
+ * #pragma ident	"@(#)fasttrap_impl.h	1.14	08/04/09 SMI"
  */
 
 #include <sys/types.h>
@@ -38,7 +38,8 @@
 #include <sys/fasttrap.h>
 #include <sys/fasttrap_isa.h>
 
-#define proc_t struct proc
+/* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
+#define proc_t struct proc /* Steer clear of the Darwin typedef for proc_t */
 
 #ifdef	__cplusplus
 extern "C" {
@@ -52,7 +53,9 @@ extern "C" {
  * providers. Those providers are each represented by a fasttrap_provider_t.
  * All providers for a given process have a pointer to a shared
  * fasttrap_proc_t. The fasttrap_proc_t has two states: active or defunct.
- * It becomes defunct when the process performs an exit or an exec.
+ * When the count of active providers goes to zero it becomes defunct; a
+ * provider drops its active count when it is removed individually or as part
+ * of a mass removal when a process exits or performs an exec.
  *
  * Each probe is represented by a fasttrap_probe_t which has a pointer to
  * its associated provider as well as a list of fasttrap_id_tp_t structures
@@ -61,8 +64,8 @@ extern "C" {
  * and it contains two lists of fasttrap_id_t structures (to be fired pre-
  * and post-instruction emulation) that identify the probes attached to the
  * tracepoint. Tracepoints also have a pointer to the fasttrap_proc_t for the
- * process they trace which is used when looking up a tracepoint both at
- * probe fire time and when enabling and disabling probes.
+ * process they trace which is used when looking up a tracepoint both when a
+ * probe fires and when enabling and disabling probes.
  *
  * It's important to note that probes are preallocated with the necessary
  * number of tracepoints, but that tracepoints can be shared by probes and
@@ -79,9 +82,9 @@ extern "C" {
 
 typedef struct fasttrap_proc {
 	pid_t ftpc_pid;				/* process ID for this proc */
-	uint_t ftpc_defunct;			/* denotes a lame duck proc */
-	uint64_t ftpc_count;			/* reference count */
-	lck_mtx_t ftpc_mtx;			/* proc lock */
+	uint64_t ftpc_acount;			/* count of active providers */
+	uint64_t ftpc_rcount;			/* count of extant providers */
+	lck_mtx_t ftpc_mtx;			/* lock on all but acount */
 	struct fasttrap_proc *ftpc_next;	/* next proc in hash chain */
 } fasttrap_proc_t;
 

@@ -653,7 +653,7 @@ read_symtab_from_file(fp, symtab_name)
 	table_size = sizeof(int) + symsize + strsize;
 	table_size = (table_size + sizeof(int)-1) & ~(sizeof(int)-1);
 
-	result = kmem_alloc_wired(kernel_map, &symtab, table_size);
+	result = kmem_alloc_kobject(kernel_map, &symtab, table_size);
 	if (result) {
 	    boot_printf("[ error %d allocating space for %s symbol table ]\n",
 			result, symtab_name);

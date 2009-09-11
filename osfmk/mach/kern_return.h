@@ -310,6 +310,11 @@
 		/* Some thread-oriented operation (semaphore_wait) timed out
 		 */
 
+#define KERN_CODESIGN_ERROR		50
+		/* During a page fault, indicates that the page was rejected
+		 * as a result of a signature check.
+		 */
+
 #define	KERN_RETURN_MAX			0x100
 		/* Maximum return value allowable
 		 */

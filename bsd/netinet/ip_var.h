@@ -98,7 +98,7 @@ struct ipq {
 	u_short	ipq_id;			/* sequence id for reassembly */
 	struct mbuf *ipq_frags;		/* to ip headers of fragments */
 	struct	in_addr ipq_src,ipq_dst;
-	u_long	ipq_nfrags;
+	u_int32_t	ipq_nfrags;
 	TAILQ_ENTRY(ipq) ipq_list;
 #if CONFIG_MACF_NET
 	struct label *ipq_label;	/* MAC label */
@@ -138,7 +138,7 @@ struct ip_moptions {
 	u_char	imo_multicast_loop;	/* 1 => hear sends if a member */
 	u_short	imo_num_memberships;	/* no. memberships this socket */
 	struct	in_multi *imo_membership[IP_MAX_MEMBERSHIPS];
-	u_long	imo_multicast_vif;	/* vif num outgoing multicasts */
+	u_int32_t	imo_multicast_vif;	/* vif num outgoing multicasts */
 	struct	in_addr imo_multicast_addr; /* ifindex/addr on MULTICAST_IF */
 };
 
@@ -219,7 +219,7 @@ extern struct protosw *ip_protox[];
 extern struct socket *ip_rsvpd;	/* reservation protocol daemon */
 extern struct socket *ip_mrouter; /* multicast routing daemon */
 extern int	(*legal_vif_num)(int);
-extern u_long	(*ip_mcast_src)(int);
+extern u_int32_t	(*ip_mcast_src)(int);
 extern int rsvp_on;
 extern struct	pr_usrreqs rip_usrreqs;
 extern int	ip_doscopedroute;
@@ -234,8 +234,7 @@ extern int ip_output(struct mbuf *, struct mbuf *, struct route *, int,
     struct ip_moptions *, struct ip_out_args *);
 extern int ip_output_list(struct mbuf *, int, struct mbuf *, struct route *,
     int, struct ip_moptions *, struct ip_out_args *);
-struct in_ifaddr *
-	 ip_rtaddr(struct in_addr, struct route *);
+struct in_ifaddr *ip_rtaddr(struct in_addr);
 void	 ip_savecontrol(struct inpcb *, struct mbuf **, struct ip *,
 		struct mbuf *);
 void	 ip_slowtimo(void);
@@ -250,8 +249,8 @@ int	rip_ctloutput(struct socket *, struct sockopt *);
 void	rip_ctlinput(int, struct sockaddr *, void *);
 void	rip_init(void) __attribute__((section("__TEXT, initcode")));
 void	rip_input(struct mbuf *, int);
-int	rip_output(struct mbuf *, struct socket *, u_long);
-int	rip_unlock(struct socket *, int, int);
+int	rip_output(struct mbuf *, struct socket *, u_int32_t);
+int	rip_unlock(struct socket *, int, void *);
 void	ipip_input(struct mbuf *, int);
 void	rsvp_input(struct mbuf *, int);
 int	ip_rsvp_init(struct socket *);
@@ -270,6 +269,8 @@ extern void udp_out_cksum_stats(u_int32_t);
 
 int rip_send(struct socket *, int , struct mbuf *, struct sockaddr *, 
 			struct mbuf *, struct proc *);
+
+extern int ip_fragment(struct mbuf *, struct ifnet *, unsigned long, int);
 
 #endif /* KERNEL_PRIVATE */
 #endif /* !_NETINET_IP_VAR_H_ */

@@ -35,7 +35,11 @@
 #define super IOEventSource
 
 OSDefineMetaClassAndStructors(IOCommandGate, IOEventSource)
+#if __LP64__
 OSMetaClassDefineReservedUnused(IOCommandGate, 0);
+#else
+OSMetaClassDefineReservedUsed(IOCommandGate, 0);
+#endif
 OSMetaClassDefineReservedUnused(IOCommandGate, 1);
 OSMetaClassDefineReservedUnused(IOCommandGate, 2);
 OSMetaClassDefineReservedUnused(IOCommandGate, 3);
@@ -126,7 +130,7 @@ IOReturn IOCommandGate::runAction(Action inAction,
         return kIOReturnBadArgument;
 
     IOTimeStampConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-			(unsigned int) inAction, (unsigned int) owner);
+			(uintptr_t) inAction, (uintptr_t) owner);
 
     // closeGate is recursive needn't worry if we already hold the lock.
     closeGate();
@@ -179,7 +183,7 @@ IOReturn IOCommandGate::attemptAction(Action inAction,
         res = kIOReturnNotPermitted;
     else {
 	IOTimeStampConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-			    (unsigned int) inAction, (unsigned int) owner);
+			    (uintptr_t) inAction, (uintptr_t) owner);
 
 	res = (*inAction)(owner, arg0, arg1, arg2, arg3);
     }
@@ -195,6 +199,14 @@ IOReturn IOCommandGate::commandSleep(void *event, UInt32 interruptible)
         return kIOReturnNotPermitted;
 
     return sleepGate(event, interruptible);
+}
+
+IOReturn IOCommandGate::commandSleep(void *event, AbsoluteTime deadline, UInt32 interruptible)
+{
+    if (!workLoop->inGate())
+        return kIOReturnNotPermitted;
+
+    return sleepGate(event, deadline, interruptible);
 }
 
 void IOCommandGate::commandWakeup(void *event, bool oneThread)

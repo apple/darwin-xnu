@@ -242,13 +242,7 @@ static void _profile_reset_alloc(struct profile_vars *,
 extern void _bogus_function(void);
 
 
-#if NCPUS > 1
-struct profile_vars *_profile_vars_cpus[NCPUS] = { &_profile_vars };
-struct profile_vars _profile_vars_aux[NCPUS-1];
-#define PROFILE_VARS(cpu) (_profile_vars_cpus[(cpu)])
-#else
 #define PROFILE_VARS(cpu) (&_profile_vars)
-#endif
 
 void *
 _profile_alloc_pages (size_t size)

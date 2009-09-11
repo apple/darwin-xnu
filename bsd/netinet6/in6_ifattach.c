@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -95,8 +95,9 @@ struct in6_ifstat **in6_ifstat = NULL;
 struct icmp6_ifstat **icmp6_ifstat = NULL;
 size_t in6_ifstatmax = 0;
 size_t icmp6_ifstatmax = 0;
-unsigned long in6_maxmtu = 0;
+u_int32_t in6_maxmtu = 0;
 extern lck_mtx_t *nd6_mutex;
+extern lck_mtx_t *inet6_domain_mutex;
 
 #if IP6_AUTO_LINKLOCAL
 int ip6_auto_linklocal = IP6_AUTO_LINKLOCAL;
@@ -104,10 +105,9 @@ int ip6_auto_linklocal = IP6_AUTO_LINKLOCAL;
 int ip6_auto_linklocal = 1;	/* enable by default */
 #endif
 
-int loopattach6_done = 0;
-
 extern struct inpcbinfo udbinfo;
 extern struct inpcbinfo ripcbinfo;
+extern lck_mtx_t *ip6_mutex;
 
 static int get_rand_ifid(struct ifnet *, struct in6_addr *);
 static int generate_tmp_ifid(u_int8_t *, const u_int8_t *, u_int8_t *);
@@ -487,7 +487,8 @@ in6_ifattach_linklocal(
 	 */
 	strncpy(ifra.ifra_name, if_name(ifp), sizeof(ifra.ifra_name));
 
-	if (ifp->if_type == IFT_PPP && ifra_passed != NULL)  /* PPP provided both addresses for us */
+	if (((ifp->if_type == IFT_PPP) ||  ((ifp->if_eflags & IFEF_NOAUTOIPV6LL) != 0)) &&
+			 ifra_passed != NULL)  /* PPP provided both addresses for us */
 		bcopy(&ifra_passed->ifra_addr, &(ifra.ifra_addr), sizeof(struct sockaddr_in6));
 	else {
 		ifra.ifra_addr.sin6_family = AF_INET6;
@@ -538,7 +539,7 @@ in6_ifattach_linklocal(
 	 * we know there's no other link-local address on the interface
 	 * and therefore we are adding one (instead of updating one).
 	 */
-	if ((error = in6_update_ifa(ifp, &ifra, NULL)) != 0) {
+	if ((error = in6_update_ifa(ifp, &ifra, NULL, M_WAITOK)) != 0) {
 		/*
 		 * XXX: When the interface does not support IPv6, this call
 		 * would fail in the SIOCSIFADDR ioctl.  I believe the
@@ -604,11 +605,17 @@ in6_ifattach_linklocal(
 	 * valid with referring to the old link-local address.
 	 */
 	if ((pr = nd6_prefix_lookup(&pr0)) == NULL) {
-		if ((error = nd6_prelist_add(&pr0, NULL, &pr)) != 0)
+		if ((error = nd6_prelist_add(&pr0, NULL, &pr)) != 0) {
+			printf("in6_ifattach_linklocal: nd6_prelist_add failed %d\n", error);
+			ifafree(&ia->ia_ifa);
 			return(error);
+		}
 	}
 
-	in6_post_msg(ifp, KEV_INET6_NEW_LL_ADDR, ia);
+	if (ia != NULL) {
+		in6_post_msg(ifp, KEV_INET6_NEW_LL_ADDR, ia);
+		ifafree(&ia->ia_ifa);
+	}
 
 	/* Drop use count held above during lookup/add */
 	if (pr != NULL)
@@ -662,7 +669,7 @@ in6_ifattach_loopback(
 	 * We are sure that this is a newly assigned address, so we can set
 	 * NULL to the 3rd arg.
 	 */
-	if ((error = in6_update_ifa(ifp, &ifra, NULL)) != 0) {
+	if ((error = in6_update_ifa(ifp, &ifra, NULL, M_WAITOK)) != 0) {
 		log(LOG_ERR, "in6_ifattach_loopback: failed to configure "
 		    "the loopback address on %s (errno=%d)\n",
 		    if_name(ifp), error);
@@ -791,7 +798,7 @@ in6_nigroup_detach(
  * nodelocal address needs to be configured onto only one of them.
  * XXX multiple link-local address case
  */
-void
+int
 in6_ifattach(
 	struct ifnet *ifp,
 	struct ifnet *altifp,	/* secondary EUI64 source */
@@ -799,7 +806,7 @@ in6_ifattach(
 {
 	static size_t if_indexlim = 8;
 	struct in6_ifaddr *ia;
-	struct in6_addr in6;
+	int error;
 
 	/*
 	 * We have some arrays that should be indexed by if_index.
@@ -809,44 +816,85 @@ in6_ifattach(
 	 */
 	if (in6_ifstat == NULL || icmp6_ifstat == NULL ||
 	    if_index >= if_indexlim) {
-		size_t n;
-		caddr_t q;
-		size_t olim;
-
-		olim = if_indexlim;
 		while (if_index >= if_indexlim)
 			if_indexlim <<= 1;
-
-		/* grow in6_ifstat */
+	}
+    
+	lck_mtx_lock(ip6_mutex);
+	/* grow in6_ifstat */
+	if (in6_ifstatmax < if_indexlim) {
+		size_t n;
+		caddr_t q;
+        
 		n = if_indexlim * sizeof(struct in6_ifstat *);
 		q = (caddr_t)_MALLOC(n, M_IFADDR, M_WAITOK);
+		if (q == NULL) {
+			lck_mtx_unlock(ip6_mutex);
+			return ENOBUFS;
+		}
 		bzero(q, n);
 		if (in6_ifstat) {
 			bcopy((caddr_t)in6_ifstat, q,
-				olim * sizeof(struct in6_ifstat *));
+				in6_ifstatmax * sizeof(struct in6_ifstat *));
 			FREE((caddr_t)in6_ifstat, M_IFADDR);
 		}
 		in6_ifstat = (struct in6_ifstat **)q;
 		in6_ifstatmax = if_indexlim;
+	}
+    
+	if (in6_ifstat[ifp->if_index] == NULL) {
+		in6_ifstat[ifp->if_index] = (struct in6_ifstat *)
+			_MALLOC(sizeof(struct in6_ifstat), M_IFADDR, M_WAITOK);
+		if (in6_ifstat[ifp->if_index] == NULL) {
+			lck_mtx_unlock(ip6_mutex);
+			return ENOBUFS;
+		}
+		bzero(in6_ifstat[ifp->if_index], sizeof(struct in6_ifstat));
+	}
+	lck_mtx_unlock(ip6_mutex);
 
-		/* grow icmp6_ifstat */
+	/* grow icmp6_ifstat, use inet6_domain_mutex as that is used in 
+         * icmp6 routines 
+         */
+	lck_mtx_lock(inet6_domain_mutex);
+	if (icmp6_ifstatmax < if_indexlim) {
+		size_t n;
+		caddr_t q;
+        
 		n = if_indexlim * sizeof(struct icmp6_ifstat *);
 		q = (caddr_t)_MALLOC(n, M_IFADDR, M_WAITOK);
+		if (q == NULL) {
+			lck_mtx_unlock(inet6_domain_mutex);
+			return ENOBUFS;
+		}
 		bzero(q, n);
 		if (icmp6_ifstat) {
 			bcopy((caddr_t)icmp6_ifstat, q,
-				olim * sizeof(struct icmp6_ifstat *));
+				icmp6_ifstatmax * sizeof(struct icmp6_ifstat *));
 			FREE((caddr_t)icmp6_ifstat, M_IFADDR);
 		}
 		icmp6_ifstat = (struct icmp6_ifstat **)q;
 		icmp6_ifstatmax = if_indexlim;
 	}
 
+	if (icmp6_ifstat[ifp->if_index] == NULL) {
+		icmp6_ifstat[ifp->if_index] = (struct icmp6_ifstat *)
+			_MALLOC(sizeof(struct icmp6_ifstat), M_IFADDR, M_WAITOK);
+		if (icmp6_ifstat[ifp->if_index] == NULL) {
+			lck_mtx_unlock(inet6_domain_mutex);
+			return ENOBUFS;
+		}
+		bzero(icmp6_ifstat[ifp->if_index], sizeof(struct icmp6_ifstat));
+	}
+	lck_mtx_unlock(inet6_domain_mutex);
+
 	/* initialize NDP variables */
-	nd6_ifattach(ifp);
+	if ((error = nd6_ifattach(ifp)) != 0)
+		return error;
 
 	/* initialize scope identifiers */
-	scope6_ifattach(ifp);
+	if ((error = scope6_ifattach(ifp)) != 0)
+		return error;
 
 	/*
 	 * quirks based on interface type
@@ -873,7 +921,7 @@ in6_ifattach(
 		log(LOG_INFO, "in6_ifattach: "
 		    "%s is not multicast capable, IPv6 not enabled\n",
 		    if_name(ifp));
-		return;
+		return EINVAL;
 	}
 
 	/*
@@ -881,19 +929,8 @@ in6_ifattach(
 	 * XXX multiple loopback interface case.
 	 */
 	if ((ifp->if_flags & IFF_LOOPBACK) != 0) {
-		struct in6_ifaddr *ia6 = NULL;
-		if (!OSCompareAndSwap(0, 1, (UInt32 *)&loopattach6_done)) {
-			in6 = in6addr_loopback;
-			if ((ia6 = in6ifa_ifpwithaddr(ifp, &in6)) == NULL) {
-				if (in6_ifattach_loopback(ifp) != 0) {
-					OSCompareAndSwap(1, 0, (UInt32 *)&loopattach6_done);
-					return;
-				}
-			}
-			else {
-				ifafree(&ia6->ia_ifa);
-			}
-		}
+		if (in6_ifattach_loopback(ifp) != 0)
+			printf("in6_ifattach: in6_ifattach_loopback failed\n");
 	}
 
 	/*
@@ -905,11 +942,13 @@ in6_ifattach(
 			if (in6_ifattach_linklocal(ifp, altifp, ifra) == 0) {
 				/* linklocal address assigned */
 			} else {
-				log(LOG_INFO, "in6_ifattach: "
-		    			"%s failed to attach a linklocal address.\n",
-		    			if_name(ifp));
+				log(LOG_INFO, "in6_ifattach: %s failed to "
+				    "attach a linklocal address.\n",
+				    if_name(ifp));
 				/* failed to assign linklocal address. bark? */
 			}
+		} else {
+			ifafree(&ia->ia_ifa);
 		}
 	}
 
@@ -921,16 +960,7 @@ statinit:
 	if (in6_maxmtu < ifp->if_mtu)
 		in6_maxmtu = ifp->if_mtu;
 
-	if (in6_ifstat[ifp->if_index] == NULL) {
-		in6_ifstat[ifp->if_index] = (struct in6_ifstat *)
-			_MALLOC(sizeof(struct in6_ifstat), M_IFADDR, M_WAITOK);
-		bzero(in6_ifstat[ifp->if_index], sizeof(struct in6_ifstat));
-	}
-	if (icmp6_ifstat[ifp->if_index] == NULL) {
-		icmp6_ifstat[ifp->if_index] = (struct icmp6_ifstat *)
-			_MALLOC(sizeof(struct icmp6_ifstat), M_IFADDR, M_WAITOK);
-		bzero(icmp6_ifstat[ifp->if_index], sizeof(struct icmp6_ifstat));
-	}
+    return 0;
 }
 
 /*
@@ -945,7 +975,6 @@ in6_ifdetach(
 	struct in6_ifaddr *ia, *oia, *nia;
 	struct ifaddr *ifa, *next;
 	struct rtentry *rt;
-	short rtflags;
 	struct sockaddr_in6 sin6;
 
 	/* nuke prefix list.  this may try to remove some of ifaddrs as well */
@@ -981,22 +1010,18 @@ in6_ifdetach(
 		ia = (struct in6_ifaddr *)ifa;
 
 		/* remove from the routing table */
-		lck_mtx_lock(rt_mtx);
 		if ((ia->ia_flags & IFA_ROUTE) &&
-		    (rt = rtalloc1_locked((struct sockaddr *)&ia->ia_addr, 0, 0UL))) {
-			rtflags = rt->rt_flags;
-			rtfree_locked(rt);
-			rtrequest_locked(RTM_DELETE,
+		    (rt = rtalloc1((struct sockaddr *)&ia->ia_addr, 0, 0))) {
+			(void) rtrequest(RTM_DELETE,
 				(struct sockaddr *)&ia->ia_addr,
 				(struct sockaddr *)&ia->ia_addr,
 				(struct sockaddr *)&ia->ia_prefixmask,
-				rtflags, (struct rtentry **)0);
+				rt->rt_flags, (struct rtentry **)0);
+			rtfree(rt);
 		}
-		lck_mtx_unlock(rt_mtx);
 
 		/* remove from the linked list */
 		if_detach_ifa(ifp, &ia->ia_ifa);
-		ifafree(&ia->ia_ifa);
 
 		/* also remove from the IPv6 address chain(itojun&jinmei) */
 		oia = ia;
@@ -1036,16 +1061,24 @@ in6_ifdetach(
 	sin6.sin6_family = AF_INET6;
 	sin6.sin6_addr = in6addr_linklocal_allnodes;
 	sin6.sin6_addr.s6_addr16[1] = htons(ifp->if_index);
-	lck_mtx_lock(rt_mtx);
-	rt = rtalloc1_locked((struct sockaddr *)&sin6, 0, 0UL);
+	rt = rtalloc1((struct sockaddr *)&sin6, 0, 0);
 	if (rt != NULL) {
+		RT_LOCK(rt);
 	        if (rt->rt_ifp == ifp) {
-			rtrequest_locked(RTM_DELETE, (struct sockaddr *)rt_key(rt),
-				rt->rt_gateway, rt_mask(rt), rt->rt_flags, 0);
+			/*
+			 * Prevent another thread from modifying rt_key,
+			 * rt_gateway via rt_setgate() after the rt_lock
+			 * is dropped by marking the route as defunct.
+			 */
+			rt->rt_flags |= RTF_CONDEMNED;
+			RT_UNLOCK(rt);
+			(void) rtrequest(RTM_DELETE, rt_key(rt), rt->rt_gateway,
+			    rt_mask(rt), rt->rt_flags, 0);
+		} else {
+			RT_UNLOCK(rt);
 		}
-		rtfree_locked(rt);
+		rtfree(rt);
 	}
-	lck_mtx_unlock(rt_mtx);
 }
 
 void
@@ -1056,8 +1089,10 @@ in6_get_tmpifid(
 	int generate)
 {
 	u_int8_t nullbuf[8];
-	struct nd_ifinfo *ndi = &nd_ifinfo[ifp->if_index];
+	struct nd_ifinfo *ndi;
 
+	lck_rw_lock_shared(nd_if_rwlock);
+	ndi = &nd_ifinfo[ifp->if_index];
 	bzero(nullbuf, sizeof(nullbuf));
 	if (bcmp(ndi->randomid, nullbuf, sizeof(nullbuf)) == 0) {
 		/* we've never created a random ID.  Create a new one. */
@@ -1072,9 +1107,9 @@ in6_get_tmpifid(
 					ndi->randomid);
 	}
 	bcopy(ndi->randomid, retbuf, 8);
+	lck_rw_done(nd_if_rwlock);
 }
 
-extern size_t nd_ifinfo_indexlim;
 void
 in6_tmpaddrtimer(
 	__unused void *ignored_arg)
@@ -1088,7 +1123,7 @@ in6_tmpaddrtimer(
 		       ip6_temp_regen_advance) * hz);
 
 	if (ip6_use_tempaddr) {
-		
+		lck_rw_lock_shared(nd_if_rwlock);
 		bzero(nullbuf, sizeof(nullbuf));
 		for (i = 1; i < nd_ifinfo_indexlim + 1; i++) {
 			ndi = &nd_ifinfo[i];
@@ -1104,5 +1139,6 @@ in6_tmpaddrtimer(
 							ndi->randomid);
 			}
 		}
+		lck_rw_done(nd_if_rwlock);
 	}
 }

@@ -44,7 +44,7 @@
 #include <sys/ioctl.h>
 #include <sys/tty.h>
 #include <sys/conf.h>
-#include <dev/ppc/cons.h>
+#include <machine/cons.h>
 
 
 struct bdevsw	bdevsw[] =
@@ -96,7 +96,6 @@ extern struct tty *km_tty[];
 
 dev_t chrtoblk(dev_t dev);
 int chrtoblk_set(int cdev, int bdev);
-int isdisk(dev_t dev, int type);
 int iskmemdev(dev_t dev);
 
 
@@ -129,7 +128,6 @@ extern d_close_t	ptsclose;
 extern d_read_t		ptsread;
 extern d_write_t	ptswrite;
 extern d_stop_t		ptsstop;
-extern d_putc_t		ptsputc;
 extern d_open_t		ptcopen;
 extern d_close_t	ptcclose;
 extern d_read_t		ptcread;
@@ -142,7 +140,6 @@ extern d_ioctl_t	ptyioctl;
 #define ptsread		eno_rdwrt
 #define ptswrite	eno_rdwrt
 #define	ptsstop		nulldev
-#define ptsputc		nulldev
 
 #define ptcopen		eno_opcl
 #define ptcclose	eno_opcl
@@ -176,7 +173,7 @@ struct cdevsw	cdevsw[] =
 	consioctl,	((stop_fcn_t *)&nulldev),
 					((reset_fcn_t *)&nulldev),
 							0,	consselect,
-	eno_mmap,	eno_strat,	cons_getc,	cons_putc, D_TTY
+	eno_mmap,	eno_strat,	eno_getc,	eno_putc, D_TTY
    },
     NO_CDEVICE,								/* 1*/
     {
@@ -225,7 +222,7 @@ struct cdevsw	cdevsw[] =
 	kmioctl,	((stop_fcn_t *)&nulldev),
 					((reset_fcn_t *)&nulldev),
 							km_tty,		ttselect,
-	eno_mmap,	eno_strat,	kmgetc,		kmputc,		0
+	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	0
     },
     NO_CDEVICE,								/*13*/
     NO_CDEVICE,								/*14*/

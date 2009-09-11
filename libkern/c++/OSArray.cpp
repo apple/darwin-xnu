@@ -218,8 +218,9 @@ void OSArray::flushCollection()
     unsigned int i;
 
     haveUpdated();
-    for (i = 0; i < count; i++)
+    for (i = 0; i < count; i++) {
         array[i]->taggedRelease(OSTypeID(OSCollection));
+    }
     count = 0;
 }
 

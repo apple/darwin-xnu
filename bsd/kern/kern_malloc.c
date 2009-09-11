@@ -96,10 +96,7 @@
 #include <sys/resourcevar.h>
 #include <sys/signalvar.h>
 
-#include <ufs/ufs/inode.h>
-
 #include <hfs/hfs_cnode.h>
-#include <isofs/cd9660/cd9660_node.h>
 
 #include <miscfs/specfs/specdev.h>
 
@@ -165,11 +162,7 @@ const char *memname[] = {
 #else
 	"",				/* 27 M_DQUOT */ 
 #endif
-#if FFS
-	"UFS mount",	/* 28 M_UFSMNT */ 
-#else
 	"",				/* 28 M_UFSMNT */ 
-#endif
 #if (SYSV_SEM || SYSV_MSG || SYSV_SHM)
 	"shm",			/* 29 M_SHM */ 
 #else
@@ -190,11 +183,7 @@ const char *memname[] = {
 	"pstats",		/* 42 M_SUBPROC */ 
 	"LFS segment",	/* 43 M_SEGMENT */ 
 	"LFS node",		/* 44 M_LFSNODE */ 
-#if FFS
-	"FFS node",		/* 45 M_FFSNODE */ 
-#else
 	"",				/* 45 M_FFSNODE */ 
-#endif
 	"MFS node",		/* 46 M_MFSNODE */ 
 	"NQNFS Lease",	/* 47 M_NQLEASE */ 
 	"NQNFS Host",	/* 48 M_NQMHOST */ 
@@ -212,13 +201,8 @@ const char *memname[] = {
 	"in_multi",		/* 54 M_IPMADDR */ 
 	"ether_multi",	/* 55 M_IFMADDR */ 
 	"mrt",			/* 56 M_MRTABLE */ 
-#if CD9660
-	"ISOFS mount",	/* 57 M_ISOFSMNT */ 
-	"ISOFS node",	/* 58 M_ISOFSNODE */ 
-#else
-	"",				/* 57 M_ISOFSMNT */ 
-	"",				/* 58 M_ISOFSNODE */ 
-#endif
+	"",		/* 57 unused entry */ 
+	"",		/* 58 unused entry */ 
 #if (NFSCLIENT || NFSSERVER)
 	"NFSV3 srvdesc",/* 59 M_NFSRVDESC */ 
 	"NFSV3 diroff",	/* 60 M_NFSDIROFF */ 
@@ -289,7 +273,11 @@ const char *memname[] = {
 	"fileglob",		/* 99 M_FILEGLOB */ 
 	"kauth",		/* 100 M_KAUTH */ 
 	"dummynet",		/* 101 M_DUMMYNET */ 
+#ifndef __LP64__
 	"unsafe_fsnode",	/* 102 M_UNSAFEFS */ 
+#else
+	"",			/* 102 M_UNSAFEFS */ 
+#endif /* __LP64__ */
 	"macpipelabel", /* 103 M_MACPIPELABEL */
 	"mactemp",      /* 104 M_MACTEMP */
 	"sbuf",         /* 105 M_SBUF */
@@ -300,6 +288,11 @@ const char *memname[] = {
 #else
 	"", /* 108 M_TRAFFIC_MGT */
 #endif
+#if HFS_COMPRESSION
+	"decmpfs_cnode",/* 109 M_DECMPFS_CNODE */
+#else
+	"",             /* 109 M_DECMPFS_CNODE */
+#endif /* HFS_COMPRESSION */
 };
 
 /* for use with kmzones.kz_zalloczone */
@@ -333,7 +326,7 @@ struct kmzones {
 	{ SOS(ucred),	KMZ_CREATEZONE },	/* 16 M_CRED */
 	{ SOS(pgrp),	KMZ_CREATEZONE },	/* 17 M_PGRP */
 	{ SOS(session),	KMZ_CREATEZONE },	/* 18 M_SESSION */
-	{ SOS(iovec_32),	KMZ_LOOKUPZONE },	/* 19 M_IOV32 */
+	{ SOS(user32_iovec),	KMZ_LOOKUPZONE },	/* 19 M_IOV32 */
 	{ SOS(mount),	KMZ_CREATEZONE },	/* 20 M_MOUNT */
 	{ 0,		KMZ_MALLOC },		/* 21 M_FHANDLE */
 #if (NFSCLIENT || NFSSERVER)
@@ -352,11 +345,7 @@ struct kmzones {
 #else
 	{ 0,		KMZ_MALLOC },		/* 27 M_DQUOT */
 #endif
-#if FFS
-	{ SOX(ufsmount),	KMZ_LOOKUPZONE },	/* 28 M_UFSMNT */
-#else
 	{ 0,		KMZ_MALLOC },		/* 28 M_UFSMNT */
-#endif
 	{ 0,		KMZ_MALLOC },		/* 29 M_CGSUM */
 	{ SOS(plimit),	KMZ_CREATEZONE },	/* 30 M_PLIMIT */
 	{ SOS(sigacts),	KMZ_CREATEZONE },	/* 31 M_SIGACTS */
@@ -373,11 +362,7 @@ struct kmzones {
 	{ SOS(pstats),	KMZ_CREATEZONE },	/* 42 M_PSTATS */
 	{ 0,		KMZ_MALLOC },		/* 43 M_SEGMENT */
 	{ M_FFSNODE,	KMZ_SHAREZONE },	/* 44 M_LFSNODE */
-#if FFS
-	{ SOS(inode),	KMZ_CREATEZONE },	/* 45 M_FFSNODE */
-#else
 	{ 0,		KMZ_MALLOC },		/* 45 M_FFSNODE */
-#endif
 	{ M_FFSNODE,	KMZ_SHAREZONE },	/* 46 M_MFSNODE */
 	{ 0,		KMZ_MALLOC },		/* 47 M_NQLEASE */
 	{ 0,		KMZ_MALLOC },		/* 48 M_NQMHOST */
@@ -399,13 +384,8 @@ struct kmzones {
 	{ SOX(ether_multi),
 			KMZ_LOOKUPZONE },	/* 55 M_IFMADDR */
 	{ SOX(mrt),	KMZ_CREATEZONE },	/* 56 M_MRTABLE */
-#if CD9660
-	{ SOX(iso_mnt),	KMZ_LOOKUPZONE },	/* 57 M_ISOFSMNT */
-	{ SOS(iso_node),	KMZ_CREATEZONE },	/* 58 M_ISOFSNODE */
-#else
-	{ 0,		KMZ_MALLOC },		/* 57 M_ISOFSMNT */
-	{ 0,		KMZ_MALLOC },		/* 58 M_ISOFSNODE */
-#endif
+	{ 0,		KMZ_MALLOC },		/* 57 unused entry */
+	{ 0,		KMZ_MALLOC },		/* 58 unused entry */
 #if (NFSCLIENT || NFSSERVER)
 	{ SOS(nfsrv_descript),
 			KMZ_CREATEZONE },	/* 59 M_NFSRVDESC */
@@ -468,17 +448,26 @@ struct kmzones {
 #endif
 	{ SOS(cl_readahead),  KMZ_CREATEZONE },	/* 96 M_CLRDAHEAD */
 	{ SOS(cl_writebehind),KMZ_CREATEZONE },	/* 97 M_CLWRBEHIND */
-	{ SOS(iovec_64),	KMZ_LOOKUPZONE },	/* 98 M_IOV64 */
+	{ SOS(user64_iovec),	KMZ_LOOKUPZONE },	/* 98 M_IOV64 */
 	{ SOS(fileglob),	KMZ_CREATEZONE },	/* 99 M_FILEGLOB */
 	{ 0,		KMZ_MALLOC },		/* 100 M_KAUTH */
 	{ 0,		KMZ_MALLOC },		/* 101 M_DUMMYNET */
+#ifndef __LP64__
 	{ SOS(unsafe_fsnode),KMZ_CREATEZONE },	/* 102 M_UNSAFEFS */
+#else 
+	{ 0,		KMZ_MALLOC },		/* 102 M_UNSAFEFS */
+#endif /* __LP64__ */
 	{ 0,		KMZ_MALLOC },		/* 103 M_MACPIPELABEL */
 	{ 0,		KMZ_MALLOC },		/* 104 M_MACTEMP */
 	{ 0,		KMZ_MALLOC },		/* 105 M_SBUF */
 	{ 0,		KMZ_MALLOC },		/* 106 M_HFS_EXTATTR */
 	{ 0,		KMZ_MALLOC },		/* 107 M_LCTX */
 	{ 0,		KMZ_MALLOC },		/* 108 M_TRAFFIC_MGT */
+#if HFS_COMPRESSION
+	{ SOS(decmpfs_cnode),KMZ_CREATEZONE },	/* 109 M_DECMPFS_CNODE */
+#else
+	{ 0,		KMZ_MALLOC },		/* 109 M_DECMPFS_CNODE */
+#endif /* HFS_COMPRESSION */
 #undef	SOS
 #undef	SOX
 };
@@ -564,6 +553,21 @@ _MALLOC(
 		mem = (void *)kalloc_noblock(memsize);
 	} else {
 		mem = (void *)kalloc(memsize);
+
+		if (mem == NULL) {
+
+			/*
+			 * We get here when the caller told us to block waiting for memory, but
+			 * kalloc said there's no memory left to get.  Generally, this means there's a 
+			 * leak or the caller asked for an impossibly large amount of memory.  Since there's
+			 * nothing left to wait for and the caller isn't expecting a NULL return code, we
+			 * just panic.  This is less than ideal, but returning NULL doesn't help since the
+			 * majority of callers don't check the return value and will just dereference the pointer and
+			 * trap anyway.  We may as well get a more descriptive message out while we can.
+			 */
+
+			panic("_MALLOC: kalloc returned NULL (potential leak), size %llu", (uint64_t) size);
+		}
 	}
 	if (!mem)
 		return (0);

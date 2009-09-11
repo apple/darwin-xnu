@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -84,7 +84,7 @@
 #include <sys/syscall.h>
 #include <sys/ubc_internal.h>
 #include <sys/fcntl.h>
-#include <sys/uio_internal.h>
+#include <sys/uio.h>
 #include <sys/domain.h>
 #include <libkern/OSAtomic.h>
 #include <kern/thread_call.h>
@@ -185,9 +185,23 @@ nfstov_type(nfstype nvtype, int nfsvers)
 int
 vtonfsv2_mode(enum vtype vtype, mode_t m)
 {
-	if (vtype == VFIFO)
+	switch (vtype) {
+	case VNON:
+	case VREG:
+	case VDIR:
+	case VBLK:
+	case VCHR:
+	case VLNK:
+	case VSOCK:
+		return vnode_makeimode(vtype, m);
+	case VFIFO:
 		return vnode_makeimode(VCHR, m);
-	return vnode_makeimode(vtype, m);
+	case VBAD:
+	case VSTR:
+	case VCPLX:
+	default:
+		return vnode_makeimode(VNON, m);
+	}
 }
 
 #if NFSSERVER
@@ -425,7 +439,7 @@ nfsm_chain_add_opaque_nopad_f(struct nfsm_chain *nmc, const u_char *buf, uint32_
  * Add "len" bytes of data from "uio" to the given chain.
  */
 int
-nfsm_chain_add_uio(struct nfsm_chain *nmc, struct uio *uiop, uint32_t len)
+nfsm_chain_add_uio(struct nfsm_chain *nmc, uio_t uio, uint32_t len)
 {
 	uint32_t paddedlen, tlen;
 	int error;
@@ -443,7 +457,7 @@ nfsm_chain_add_uio(struct nfsm_chain *nmc, struct uio *uiop, uint32_t len)
 			if (len) {
 				if (tlen > len)
 					tlen = len;
-				uiomove(nmc->nmc_ptr, tlen, uiop);
+				uiomove(nmc->nmc_ptr, tlen, uio);
 			} else {
 				bzero(nmc->nmc_ptr, tlen);
 			}
@@ -739,7 +753,7 @@ nfsm_chain_get_opaque_f(struct nfsm_chain *nmc, uint32_t len, u_char *buf)
  * The nfsm_chain is advanced by nfsm_rndup("len") bytes.
  */
 int
-nfsm_chain_get_uio(struct nfsm_chain *nmc, uint32_t len, struct uio *uiop)
+nfsm_chain_get_uio(struct nfsm_chain *nmc, uint32_t len, uio_t uio)
 {
 	uint32_t cplen, padlen;
 	int error = 0;
@@ -751,7 +765,7 @@ nfsm_chain_get_uio(struct nfsm_chain *nmc, uint32_t len, struct uio *uiop)
 		/* copy as much as we need/can */
 		cplen = MIN(nmc->nmc_left, len);
 		if (cplen) {
-			error = uiomove(nmc->nmc_ptr, cplen, uiop);
+			error = uiomove(nmc->nmc_ptr, cplen, uio);
 			if (error)
 				return (error);
 			nmc->nmc_ptr += cplen;
@@ -934,6 +948,36 @@ nfsm_chain_get_wcc_data_f(
 }
 
 /*
+ * Get the next RPC transaction ID (XID)
+ */
+void
+nfs_get_xid(uint64_t *xidp)
+{
+	struct timeval tv;
+
+	lck_mtx_lock(nfs_request_mutex);
+	if (!nfs_xid) {
+		/*
+		 * Derive initial xid from system time.
+		 *
+		 * Note: it's OK if this code inits nfs_xid to 0 (for example,
+		 * due to a broken clock) because we immediately increment it
+		 * and we guarantee to never use xid 0.  So, nfs_xid should only
+		 * ever be 0 the first time this function is called.
+		 */
+		microtime(&tv);
+		nfs_xid = tv.tv_sec << 12;
+	}
+	if (++nfs_xid == 0) {
+		/* Skip zero xid if it should ever happen. */
+		nfs_xidwrap++;
+		nfs_xid++;
+	}
+	*xidp = nfs_xid + ((uint64_t)nfs_xidwrap << 32);
+	lck_mtx_unlock(nfs_request_mutex);
+}
+
+/*
  * Build the RPC header and fill in the authorization info.
  * Returns the head of the mbuf list and the xid.
  */
@@ -962,7 +1006,6 @@ nfsm_rpchead2(int sotype, int prog, int vers, int proc, int auth_type, int auth_
 	mbuf_t mreq, mb;
 	int error, i, grpsiz, authsiz, reqlen;
 	size_t headlen;
-	struct timeval tv;
 	struct nfsm_chain nmreq;
 
 	/* allocate the packet */
@@ -992,33 +1035,11 @@ nfsm_rpchead2(int sotype, int prog, int vers, int proc, int auth_type, int auth_
 	 * it may be a higher-level resend with a GSSAPI credential.
 	 * Otherwise, allocate a new one.
 	 */
-	if (*xidp == 0) {
-		lck_mtx_lock(nfs_request_mutex);
-		if (!nfs_xid) {
-			/*
-			 * Derive initial xid from system time.
-			 *
-			 * Note: it's OK if this code inits nfs_xid to 0 (for example,
-			 * due to a broken clock) because we immediately increment it
-			 * and we guarantee to never use xid 0.  So, nfs_xid should only
-			 * ever be 0 the first time this function is called.
-			 */
-			microtime(&tv);
-			nfs_xid = tv.tv_sec << 12;
-		}
-		if (++nfs_xid == 0) {
-			/* Skip zero xid if it should ever happen. */
-			nfs_xidwrap++;
-			nfs_xid++;
-		}
-		*xidp = nfs_xid + ((u_int64_t)nfs_xidwrap << 32);
-		lck_mtx_unlock(nfs_request_mutex);
-	}
+	if (*xidp == 0)
+		nfs_get_xid(xidp);
 
 	/* build the header(s) */
-	nmreq.nmc_mcur = nmreq.nmc_mhead = mreq;
-	nmreq.nmc_ptr = mbuf_data(nmreq.nmc_mcur);
-	nmreq.nmc_left = mbuf_trailingspace(nmreq.nmc_mcur);
+	nfsm_chain_init(&nmreq, mreq);
 
 	/* First, if it's a TCP stream insert space for an RPC record mark */
 	if (sotype == SOCK_STREAM)
@@ -1288,29 +1309,29 @@ nfs_loadattrcache(
 	npnvap = &np->n_vattr;
 	bcopy((caddr_t)nvap, (caddr_t)npnvap, sizeof(*nvap));
 
-	if (nvap->nva_size != np->n_size) {
-		/*
-		 * n_size is protected by the data lock, so we need to
-		 * defer updating it until it's safe.  We save the new size
-		 * and set a flag and it'll get updated the next time we get/drop
-		 * the data lock or the next time we do a getattr.
-		 */
-		np->n_newsize = nvap->nva_size;
+	if (!vp || (nvap->nva_type != VREG)) {
+		np->n_size = nvap->nva_size;
+	} else if (nvap->nva_size != np->n_size) {
 		FSDBG(527, np, nvap->nva_size, np->n_size, (nvap->nva_type == VREG) | (np->n_flag & NMODIFIED ? 6 : 4));
-		SET(np->n_flag, NUPDATESIZE);
-		if (vp && (nvap->nva_type == VREG)) {
-			if (!UBCINFOEXISTS(vp) || (dontshrink && (np->n_newsize < np->n_size))) {
-				/* asked not to shrink, so stick with current size */
-				FSDBG(527, np, np->n_size, np->n_vattr.nva_size, 0xf00d0001);
-				nvap->nva_size = np->n_size;
-				CLR(np->n_flag, NUPDATESIZE);
-				NATTRINVALIDATE(np);
-			} else if ((np->n_flag & NMODIFIED) && (nvap->nva_size < np->n_size)) {
-				/* if we've modified, use larger size */
-				FSDBG(527, np, np->n_size, np->n_vattr.nva_size, 0xf00d0002);
-				nvap->nva_size = np->n_size;
-				CLR(np->n_flag, NUPDATESIZE);
-			}
+		if (!UBCINFOEXISTS(vp) || (dontshrink && (nvap->nva_size < np->n_size))) {
+			/* asked not to shrink, so stick with current size */
+			FSDBG(527, np, np->n_size, np->n_vattr.nva_size, 0xf00d0001);
+			nvap->nva_size = np->n_size;
+			NATTRINVALIDATE(np);
+		} else if ((np->n_flag & NMODIFIED) && (nvap->nva_size < np->n_size)) {
+			/* if we've modified, stick with larger size */
+			FSDBG(527, np, np->n_size, np->n_vattr.nva_size, 0xf00d0002);
+			nvap->nva_size = np->n_size;
+			npnvap->nva_size = np->n_size;
+		} else {
+			/*
+			 * n_size is protected by the data lock, so we need to
+			 * defer updating it until it's safe.  We save the new size
+			 * and set a flag and it'll get updated the next time we get/drop
+			 * the data lock or the next time we do a getattr.
+			 */
+			np->n_newsize = nvap->nva_size;
+			SET(np->n_flag, NUPDATESIZE);
 		}
 	}
 
@@ -1351,7 +1372,7 @@ nfs_attrcachetimeout(nfsnode_t np)
 		/* Note that if the client and server clocks are way out of sync, */
 		/* timeout will probably get clamped to a min or max value */
 		microtime(&now);
-		timeo = (now.tv_sec - (np)->n_mtime.tv_sec) / 10;
+		timeo = (now.tv_sec - (np)->n_vattr.nva_timesec[NFSTIME_MODIFY]) / 10;
 		if (isdir) {
 			if (timeo < nmp->nm_acdirmin)
 				timeo = nmp->nm_acdirmin;
@@ -1369,28 +1390,21 @@ nfs_attrcachetimeout(nfsnode_t np)
 }
 
 /*
- * Check the time stamp
+ * Check the attribute cache time stamp.
  * If the cache is valid, copy contents to *nvaper and return 0
- * otherwise return an error
+ * otherwise return an error.
+ * Must be called with the node locked.
  */
 int
-nfs_getattrcache(nfsnode_t np, struct nfs_vattr *nvaper, int alreadylocked)
+nfs_getattrcache(nfsnode_t np, struct nfs_vattr *nvaper)
 {
 	struct nfs_vattr *nvap;
 	struct timeval nowup;
 	int32_t timeo;
 
-	if (!alreadylocked && nfs_lock(np, NFS_NODE_LOCK_SHARED)) {
-		FSDBG(528, np, 0, 0xffffff00, ENOENT);
-		OSAddAtomic(1, (SInt32*)&nfsstats.attrcache_misses);
-		return (ENOENT);
-	}
-
 	if (!NATTRVALID(np)) {
-		if (!alreadylocked)
-			nfs_unlock(np);
 		FSDBG(528, np, 0, 0xffffff01, ENOENT);
-		OSAddAtomic(1, (SInt32*)&nfsstats.attrcache_misses);
+		OSAddAtomic(1, &nfsstats.attrcache_misses);
 		return (ENOENT);
 	}
 
@@ -1398,37 +1412,31 @@ nfs_getattrcache(nfsnode_t np, struct nfs_vattr *nvaper, int alreadylocked)
 
 	microuptime(&nowup);
 	if ((nowup.tv_sec - np->n_attrstamp) >= timeo) {
-		if (!alreadylocked)
-			nfs_unlock(np);
 		FSDBG(528, np, 0, 0xffffff02, ENOENT);
-		OSAddAtomic(1, (SInt32*)&nfsstats.attrcache_misses);
+		OSAddAtomic(1, &nfsstats.attrcache_misses);
 		return (ENOENT);
 	}
 
 	nvap = &np->n_vattr;
 	FSDBG(528, np, nvap->nva_size, np->n_size, 0xcace);
-	OSAddAtomic(1, (SInt32*)&nfsstats.attrcache_hits);
+	OSAddAtomic(1, &nfsstats.attrcache_hits);
 
-	if (nvap->nva_size != np->n_size) {
-		/*
-		 * n_size is protected by the data lock, so we need to
-		 * defer updating it until it's safe.  We save the new size
-		 * and set a flag and it'll get updated the next time we get/drop
-		 * the data lock or the next time we do a getattr.
-		 */
-		if (!alreadylocked) {
-			/* need to upgrade shared lock to exclusive */
-			if (lck_rw_lock_shared_to_exclusive(&np->n_lock) == FALSE)
-				lck_rw_lock_exclusive(&np->n_lock);
-		}
-		np->n_newsize = nvap->nva_size;
+	if (nvap->nva_type != VREG) {
+		np->n_size = nvap->nva_size;
+	} else if (nvap->nva_size != np->n_size) {
 		FSDBG(528, np, nvap->nva_size, np->n_size, (nvap->nva_type == VREG) | (np->n_flag & NMODIFIED ? 6 : 4));
-		SET(np->n_flag, NUPDATESIZE);
-		if ((nvap->nva_type == VREG) && (np->n_flag & NMODIFIED) &&
-		    (nvap->nva_size < np->n_size)) {
-			/* if we've modified, use larger size */
+		if ((np->n_flag & NMODIFIED) && (nvap->nva_size < np->n_size)) {
+			/* if we've modified, stick with larger size */
 			nvap->nva_size = np->n_size;
-			CLR(np->n_flag, NUPDATESIZE);
+		} else {
+			/*
+			 * n_size is protected by the data lock, so we need to
+			 * defer updating it until it's safe.  We save the new size
+			 * and set a flag and it'll get updated the next time we get/drop
+			 * the data lock or the next time we do a getattr.
+			 */
+			np->n_newsize = nvap->nva_size;
+			SET(np->n_flag, NUPDATESIZE);
 		}
 	}
 
@@ -1443,83 +1451,7 @@ nfs_getattrcache(nfsnode_t np, struct nfs_vattr *nvaper, int alreadylocked)
 			nvaper->nva_timensec[NFSTIME_MODIFY] = np->n_mtim.tv_nsec;
 		}
 	}
-	if (!alreadylocked)
-		nfs_unlock(np);
 	return (0);
-}
-
-
-static nfsuint64 nfs_nullcookie = { { 0, 0 } };
-/*
- * This function finds the directory cookie that corresponds to the
- * logical byte offset given.
- */
-nfsuint64 *
-nfs_getcookie(nfsnode_t dnp, off_t off, int add)
-{
-	struct nfsdmap *dp, *dp2;
-	int pos;
-
-	pos = off / NFS_DIRBLKSIZ;
-	if (pos == 0)
-		return (&nfs_nullcookie);
-	pos--;
-	dp = dnp->n_cookies.lh_first;
-	if (!dp) {
-		if (add) {
-			MALLOC_ZONE(dp, struct nfsdmap *, sizeof(struct nfsdmap),
-					M_NFSDIROFF, M_WAITOK);
-			if (!dp)
-				return ((nfsuint64 *)0);
-			dp->ndm_eocookie = 0;
-			LIST_INSERT_HEAD(&dnp->n_cookies, dp, ndm_list);
-		} else
-			return ((nfsuint64 *)0);
-	}
-	while (pos >= NFSNUMCOOKIES) {
-		pos -= NFSNUMCOOKIES;
-		if (dp->ndm_list.le_next) {
-			if (!add && dp->ndm_eocookie < NFSNUMCOOKIES &&
-				pos >= dp->ndm_eocookie)
-				return ((nfsuint64 *)0);
-			dp = dp->ndm_list.le_next;
-		} else if (add) {
-			MALLOC_ZONE(dp2, struct nfsdmap *, sizeof(struct nfsdmap),
-					M_NFSDIROFF, M_WAITOK);
-			if (!dp2)
-				return ((nfsuint64 *)0);
-			dp2->ndm_eocookie = 0;
-			LIST_INSERT_AFTER(dp, dp2, ndm_list);
-			dp = dp2;
-		} else
-			return ((nfsuint64 *)0);
-	}
-	if (pos >= dp->ndm_eocookie) {
-		if (add)
-			dp->ndm_eocookie = pos + 1;
-		else
-			return ((nfsuint64 *)0);
-	}
-	return (&dp->ndm_cookies[pos]);
-}
-
-/*
- * Invalidate cached directory information, except for the actual directory
- * blocks (which are invalidated separately).
- * Done mainly to avoid the use of stale offset cookies.
- */
-void
-nfs_invaldir(nfsnode_t dnp)
-{
-	if (vnode_vtype(NFSTOV(dnp)) != VDIR) {
-		printf("nfs: invaldir not dir\n");
-		return;
-	}
-	dnp->n_direofoffset = 0;
-	dnp->n_cookieverf.nfsuquad[0] = 0;
-	dnp->n_cookieverf.nfsuquad[1] = 0;
-	if (dnp->n_cookies.lh_first)
-		dnp->n_cookies.lh_first->ndm_eocookie = 0;
 }
 
 #endif /* NFSCLIENT */
@@ -1540,8 +1472,16 @@ nfs_interval_timer_start(thread_call_t call, int interval)
 
 #if NFSSERVER
 
-static void nfsrv_init_user_list(struct nfs_active_user_list *);
-static void nfsrv_free_user_list(struct nfs_active_user_list *);
+int nfsrv_cmp_secflavs(struct nfs_sec *, struct nfs_sec *);
+int nfsrv_hang_addrlist(struct nfs_export *, struct user_nfs_export_args *);
+int nfsrv_free_netopt(struct radix_node *, void *);
+int nfsrv_free_addrlist(struct nfs_export *, struct user_nfs_export_args *);
+struct nfs_export_options *nfsrv_export_lookup(struct nfs_export *, mbuf_t);
+struct nfs_export *nfsrv_fhtoexport(struct nfs_filehandle *);
+int nfsrv_cmp_sockaddr(struct sockaddr_storage *, struct sockaddr_storage *);
+struct nfs_user_stat_node *nfsrv_get_user_stat_node(struct nfs_active_user_list *, struct sockaddr_storage *, uid_t);
+void nfsrv_init_user_list(struct nfs_active_user_list *);
+void nfsrv_free_user_list(struct nfs_active_user_list *);
 
 /*
  * add NFSv3 WCC data to an mbuf chain
@@ -1634,6 +1574,7 @@ nfsrv_namei(
 	vnode_t dp;
 	int error;
 	struct componentname *cnp = &nip->ni_cnd;
+	uint32_t cnflags;
 	char *tmppn;
 
 	*retdirp = NULL;
@@ -1664,16 +1605,23 @@ nfsrv_namei(
 	/*
 	 * And call lookup() to do the real work
 	 */
-	error = lookup(nip);
+	cnflags = nip->ni_cnd.cn_flags; /* store in case we have to restore */
+	while ((error = lookup(nip)) == ERECYCLE) {
+		nip->ni_cnd.cn_flags = cnflags;
+		cnp->cn_nameptr = cnp->cn_pnbuf;
+		nip->ni_usedvp = nip->ni_dvp = nip->ni_startdir = dp;
+	}
 	if (error)
 		goto out;
 
 	/* Check for encountering a symbolic link */
 	if (cnp->cn_flags & ISSYMLINK) {
+#ifndef __LP64__
 	        if ((cnp->cn_flags & FSNODELOCKHELD)) {
 		        cnp->cn_flags &= ~FSNODELOCKHELD;
 			unlock_fsnode(nip->ni_dvp, NULL);
 		}
+#endif /* __LP64__ */
 		if (cnp->cn_flags & (LOCKPARENT | WANTPARENT))
 			vnode_put(nip->ni_dvp);
 		if (nip->ni_vp) {
@@ -1693,7 +1641,7 @@ out:
 }
 
 /*
- * A fiddled version of m_adj() that ensures null fill to a long
+ * A fiddled version of m_adj() that ensures null fill to a 4-byte
  * boundary and only trims off the back end
  */
 void
@@ -1861,7 +1809,7 @@ nfsm_chain_get_sattr(
 	struct nfsm_chain *nmc,
 	struct vnode_attr *vap)
 {
-	int error = 0, nullflag = 0;
+	int error = 0;
 	uint32_t val = 0;
 	uint64_t val64;
 	struct timespec now;
@@ -1932,10 +1880,11 @@ nfsm_chain_get_sattr(
 			vap->va_access_time.tv_sec,
 			vap->va_access_time.tv_nsec);
 		VATTR_SET_ACTIVE(vap, va_access_time);
+		vap->va_vaflags &= ~VA_UTIMES_NULL;
 		break;
 	case NFS_TIME_SET_TO_SERVER:
 		VATTR_SET(vap, va_access_time, now);
-		nullflag = VA_UTIMES_NULL;
+		vap->va_vaflags |= VA_UTIMES_NULL;
 		break;
 	}
 	nfsm_chain_get_32(error, nmc, val);
@@ -1945,10 +1894,12 @@ nfsm_chain_get_sattr(
 			vap->va_modify_time.tv_sec,
 			vap->va_modify_time.tv_nsec);
 		VATTR_SET_ACTIVE(vap, va_modify_time);
+		vap->va_vaflags &= ~VA_UTIMES_NULL;
 		break;
 	case NFS_TIME_SET_TO_SERVER:
 		VATTR_SET(vap, va_modify_time, now);
-		vap->va_vaflags |= nullflag;
+		if (!VATTR_IS_ACTIVE(vap, va_access_time))
+			vap->va_vaflags |= VA_UTIMES_NULL;
 		break;
 	}
 
@@ -1958,7 +1909,7 @@ nfsm_chain_get_sattr(
 /*
  * Compare two security flavor structs
  */
-static int
+int
 nfsrv_cmp_secflavs(struct nfs_sec *sf1, struct nfs_sec *sf2)
 {
 	int i;
@@ -1975,7 +1926,7 @@ nfsrv_cmp_secflavs(struct nfs_sec *sf1, struct nfs_sec *sf2)
  * Build hash lists of net addresses and hang them off the NFS export.
  * Called by nfsrv_export() to set up the lists of export addresses.
  */
-static int
+int
 nfsrv_hang_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 {
 	struct nfs_export_net_args nxna;
@@ -2116,7 +2067,7 @@ struct nfsrv_free_netopt_arg {
 	struct radix_node_head *rnh;
 };
 
-static int
+int
 nfsrv_free_netopt(struct radix_node *rn, void *w)
 {
 	struct nfsrv_free_netopt_arg *fna = (struct nfsrv_free_netopt_arg *)w;
@@ -2135,7 +2086,7 @@ nfsrv_free_netopt(struct radix_node *rn, void *w)
 /*
  * Free the net address hash lists that are hanging off the mount points.
  */
-static int
+int
 nfsrv_free_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 {
 	struct nfs_export_net_args nxna;
@@ -2226,6 +2177,39 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 	char path[MAXPATHLEN];
 	int expisroot;
 
+	if (unxa->nxa_flags == NXA_CHECK) {
+		/* just check if the path is an NFS-exportable file system */
+		error = copyinstr(unxa->nxa_fspath, path, MAXPATHLEN, (size_t *)&pathlen);
+		if (error)
+			return (error);
+		NDINIT(&mnd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
+			UIO_SYSSPACE, CAST_USER_ADDR_T(path), ctx);
+		error = namei(&mnd);
+		if (error)
+			return (error);
+		mvp = mnd.ni_vp;
+		mp = vnode_mount(mvp);
+		/* make sure it's the root of a file system */
+		if (!vnode_isvroot(mvp))
+			error = EINVAL;
+		/* make sure the file system is NFS-exportable */
+		if (!error) {
+			nfh.nfh_len = NFSV3_MAX_FID_SIZE;
+			error = VFS_VPTOFH(mvp, (int*)&nfh.nfh_len, &nfh.nfh_fid[0], NULL);
+		}
+		if (!error && (nfh.nfh_len > (int)NFSV3_MAX_FID_SIZE))
+			error = EIO;
+		if (!error && !(mp->mnt_vtable->vfc_vfsflags & VFC_VFSREADDIR_EXTENDED))
+			error = EISDIR;
+		vnode_put(mvp);
+		nameidone(&mnd);
+		return (error);
+	}
+
+	/* all other operations: must be super user */
+	if ((error = vfs_context_suser(ctx)))
+		return (error);
+
 	if (unxa->nxa_flags & NXA_DELETE_ALL) {
 		/* delete all exports on all file systems */
 		lck_rw_lock_exclusive(&nfsrv_export_rwlock);
@@ -2252,6 +2236,11 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 			FREE(nxfs->nxfs_path, M_TEMP);
 			FREE(nxfs, M_TEMP);
 		}
+		if (nfsrv_export_hashtbl) {
+			/* all exports deleted, clean up export hash table */
+			FREE(nfsrv_export_hashtbl, M_TEMP);
+			nfsrv_export_hashtbl = NULL;
+		}
 		lck_rw_done(&nfsrv_export_rwlock);
 		return (0);
 	}
@@ -2261,6 +2250,13 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 		return (error);
 
 	lck_rw_lock_exclusive(&nfsrv_export_rwlock);
+
+	/* init export hash table if not already */
+	if (!nfsrv_export_hashtbl) {
+		if (nfsrv_export_hash_size <= 0)
+			nfsrv_export_hash_size = NFSRVEXPHASHSZ;
+		nfsrv_export_hashtbl = hashinit(nfsrv_export_hash_size, M_TEMP, &nfsrv_export_hash);
+	}
 
 	// first check if we've already got an exportfs with the given ID
 	LIST_FOREACH(nxfs, &nfsrv_exports, nxfs_next) {
@@ -2328,6 +2324,8 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 				error = VFS_VPTOFH(mvp, (int*)&nfh.nfh_len, &nfh.nfh_fid[0], NULL);
 				if (!error && (nfh.nfh_len > (int)NFSV3_MAX_FID_SIZE))
 					error = EIO;
+				if (!error && !(mp->mnt_vtable->vfc_vfsflags & VFC_VFSREADDIR_EXTENDED))
+					error = EISDIR;
 				if (error)
 					goto out;
 			}
@@ -2491,7 +2489,11 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 					xnd.ni_startdir = mvp;
 					xnd.ni_usedvp   = mvp;
 					xnd.ni_cnd.cn_context = ctx;
-					error = lookup(&xnd);
+					while ((error = lookup(&xnd)) == ERECYCLE) {
+						xnd.ni_cnd.cn_flags = LOCKLEAF;
+						xnd.ni_cnd.cn_nameptr = xnd.ni_cnd.cn_pnbuf;
+						xnd.ni_usedvp = xnd.ni_dvp = xnd.ni_startdir = mvp;
+					}
 					if (error)
 						goto out1;
 					xvp = xnd.ni_vp;
@@ -2602,7 +2604,7 @@ unlock_out:
 	return (error);
 }
 
-static struct nfs_export_options *
+struct nfs_export_options *
 nfsrv_export_lookup(struct nfs_export *nx, mbuf_t nam)
 {
 	struct nfs_export_options *nxo = NULL;
@@ -2630,13 +2632,15 @@ nfsrv_export_lookup(struct nfs_export *nx, mbuf_t nam)
 }
 
 /* find an export for the given handle */
-static struct nfs_export *
+struct nfs_export *
 nfsrv_fhtoexport(struct nfs_filehandle *nfhp)
 {
 	struct nfs_exphandle *nxh = (struct nfs_exphandle*)nfhp->nfh_fhp;
 	struct nfs_export *nx;
 	uint32_t fsid, expid;
 
+	if (!nfsrv_export_hashtbl)
+		return (NULL);
 	fsid = ntohl(nxh->nxh_fsid);
 	expid = ntohl(nxh->nxh_expid);
 	nx = NFSRVEXPHASH(fsid, expid)->lh_first;
@@ -2647,7 +2651,7 @@ nfsrv_fhtoexport(struct nfs_filehandle *nfhp)
 			continue;
 		break;
 	}
-	return nx;
+	return (nx);
 }
 
 /*
@@ -2728,7 +2732,7 @@ nfsrv_fhtovp(
 	}
 
 	if (nxo && (nxo->nxo_flags & NX_OFFLINE))
-		return ((nd->nd_vers == NFS_VER2) ? ESTALE : NFSERR_TRYLATER);
+		return ((nd == NULL || nd->nd_vers == NFS_VER2) ? ESTALE : NFSERR_TRYLATER);
 
 	/* find mount structure */
 	mp = vfs_getvfs_by_mntonname((*nxp)->nx_fs->nxfs_path);
@@ -2737,7 +2741,7 @@ nfsrv_fhtovp(
 		 * We have an export, but no mount?
 		 * Perhaps the export just hasn't been marked offline yet.
 		 */
-		return ((nd->nd_vers == NFS_VER2) ? ESTALE : NFSERR_TRYLATER);
+		return ((nd == NULL || nd->nd_vers == NFS_VER2) ? ESTALE : NFSERR_TRYLATER);
 	}
 
 	fidp = nfhp->nfh_fhp + sizeof(*nxh);
@@ -2863,7 +2867,7 @@ nfsrv_fhmatch(struct nfs_filehandle *fh1, struct nfs_filehandle *fh2)
  * Compare address fields of two sockaddr_storage structures.
  * Returns zero if they match.
  */
-static int
+int
 nfsrv_cmp_sockaddr(struct sockaddr_storage *sock1, struct sockaddr_storage *sock2)
 {
 	struct sockaddr_in	*ipv4_sock1, *ipv4_sock2;
@@ -2908,7 +2912,7 @@ nfsrv_cmp_sockaddr(struct sockaddr_storage *sock1, struct sockaddr_storage *sock
  *
  * The list's user_mutex lock MUST be held.
  */
-static struct nfs_user_stat_node *
+struct nfs_user_stat_node *
 nfsrv_get_user_stat_node(struct nfs_active_user_list *list, struct sockaddr_storage *sock, uid_t uid)
 {
 	struct nfs_user_stat_node		*unode;
@@ -2944,7 +2948,7 @@ nfsrv_get_user_stat_node(struct nfs_active_user_list *list, struct sockaddr_stor
 			return NULL;
 
 		/* increment node count */
-		OSAddAtomic(1, (SInt32*)&nfsrv_user_stat_node_count);
+		OSAddAtomic(1, &nfsrv_user_stat_node_count);
 		list->node_count++;
 	} else {
 		/* reuse the oldest node in the lru list */
@@ -3014,7 +3018,7 @@ nfsrv_update_user_stat(struct nfs_export *nx, struct nfsrv_descript *nd, uid_t u
 }
 
 /* initialize an active user list */
-static void
+void
 nfsrv_init_user_list(struct nfs_active_user_list *ulist)
 {
 	uint i;
@@ -3031,7 +3035,7 @@ nfsrv_init_user_list(struct nfs_active_user_list *ulist)
 }
 
 /* Free all nodes in an active user list */
-static void
+void
 nfsrv_free_user_list(struct nfs_active_user_list *ulist)
 {
 	struct nfs_user_stat_node *unode;
@@ -3046,7 +3050,7 @@ nfsrv_free_user_list(struct nfs_active_user_list *ulist)
 		FREE(unode, M_TEMP);
 
 		/* decrement node count */
-		OSAddAtomic(-1, (SInt32*)&nfsrv_user_stat_node_count);
+		OSAddAtomic(-1, &nfsrv_user_stat_node_count);
 	}
 	ulist->node_count = 0;
 
@@ -3090,7 +3094,7 @@ nfsrv_active_user_list_reclaim(void)
 				LIST_INSERT_HEAD(&oldlist, unode, hash_link);
 
 				/* decrement node count */
-				OSAddAtomic(-1, (SInt32*)&nfsrv_user_stat_node_count);
+				OSAddAtomic(-1, &nfsrv_user_stat_node_count);
 				ulist->node_count--;
 			}
 			/* can unlock this export's list now */

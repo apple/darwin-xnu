@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -199,10 +199,10 @@ ether_inet6_resolve_multi(
 
 static errno_t
 ether_inet6_prmod_ioctl(
-	ifnet_t						ifp,
+	ifnet_t				ifp,
 	__unused protocol_family_t	protocol_family,
-	u_int32_t					command,
-	void*						data)
+	u_long				command,
+	void				*data)
 {
     struct ifreq *ifr = (struct ifreq *) data;
     int error = 0;

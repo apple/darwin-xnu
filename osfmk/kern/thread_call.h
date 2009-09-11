@@ -96,6 +96,8 @@ __BEGIN_DECLS
  * Obsolete interfaces.
  */
 
+#ifndef	__LP64__
+
 extern boolean_t	thread_call_is_delayed(
 						thread_call_t		call,
 						uint64_t			*deadline);
@@ -115,7 +117,27 @@ extern boolean_t	thread_call_func_cancel(
 						thread_call_param_t		param,
 						boolean_t				cancel_all);
 
+#else	/* __LP64__ */
+
+#ifdef	XNU_KERNEL_PRIVATE
+
+extern void		thread_call_func_delayed(
+					thread_call_func_t		func,
+					thread_call_param_t		param,
+					uint64_t				deadline);
+
+extern boolean_t	thread_call_func_cancel(
+						thread_call_func_t		func,
+						thread_call_param_t		param,
+						boolean_t				cancel_all);
+
+#endif	/* XNU_KERNEL_PRIVATE */
+
+#endif	/* __LP64__ */
+
 #ifndef	MACH_KERNEL_PRIVATE
+
+#ifndef	__LP64__
 
 #ifndef	ABSOLUTETIME_SCALAR_TYPE
 
@@ -132,6 +154,8 @@ extern boolean_t	thread_call_func_cancel(
 	thread_call_func_delayed((a), (b), __OSAbsoluteTime(c))
 
 #endif	/* ABSOLUTETIME_SCALAR_TYPE */
+
+#endif	/* __LP64__ */
 
 #endif	/* MACH_KERNEL_PRIVATE */
 

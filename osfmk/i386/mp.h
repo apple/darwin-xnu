@@ -61,9 +61,6 @@
 #ifndef _I386_MP_H_
 #define _I386_MP_H_
 
-#ifndef	DEBUG
-#include <debug.h>
-#endif
 //#define	MP_DEBUG 1
 
 #include <i386/apic.h>
@@ -77,6 +74,7 @@
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <mach/i386/thread_status.h>
+#include <mach/vm_types.h>
 #include <kern/lock.h>
 
 __BEGIN_DECLS
@@ -105,12 +103,14 @@ extern	int	kdb_debug;
 extern	int	kdb_active[];
 
 extern	volatile boolean_t mp_kdp_trap;
-extern  volatile boolean_t force_immediate_debugger_NMI;
+extern 	volatile boolean_t force_immediate_debugger_NMI;
 extern  volatile boolean_t pmap_tlb_flush_timeout;
+extern	uint64_t	LastDebuggerEntryAllowance;
 
 extern	void	mp_kdp_enter(void);
 extern	void	mp_kdp_exit(void);
 
+extern	boolean_t	mp_recent_debugger_activity(void);
 #if MACH_KDB
 extern void mp_kdb_exit(void);
 #endif
@@ -136,6 +136,14 @@ extern void mp_rendezvous_break_lock(void);
 extern void mp_broadcast(
 		void (*action_func)(void *),
 		void *arg);
+#if MACH_KDP
+typedef long (*kdp_x86_xcpu_func_t) (void *arg0, void *arg1, uint16_t lcpu);
+
+extern  long kdp_x86_xcpu_invoke(const uint16_t lcpu, 
+                                 kdp_x86_xcpu_func_t func, 
+                                 void *arg0, void *arg1);
+typedef enum	{KDP_XCPU_NONE = 0xffff, KDP_CURRENT_LCPU = 0xfffe} kdp_cpu_t;
+#endif
 
 typedef uint32_t cpu_t;
 typedef uint32_t cpumask_t;
@@ -226,7 +234,7 @@ extern cpu_signal_event_log_t	*cpu_handle[];
 			(vm_offset_t *) hdl_logpp,			\
 			sizeof(cpu_signal_event_log_t)) != KERN_SUCCESS)\
 		panic("DBGLOG_CPU_INIT cpu_handle allocation failed\n");\
-	bzero(*sig_logpp, sizeof(cpu_signal_event_log_t));		\
+	bzero(*hdl_logpp, sizeof(cpu_signal_event_log_t));		\
 }
 #else	/* MP_DEBUG */
 #define DBGLOG(log,_cpu,_event)
@@ -235,7 +243,16 @@ extern cpu_signal_event_log_t	*cpu_handle[];
 
 #endif	/* ASSEMBLER */
 
-#define i_bit(bit, word)	((long)(*(word)) & ((long)1 << (bit)))
+#ifdef ASSEMBLER
+#define i_bit(bit, word)	((long)(*(word)) & (1L << (bit)))
+#else
+// Workaround for 6640051
+static inline long 
+i_bit_impl(long word, long bit) {
+	return word & 1L << bit;
+}
+#define i_bit(bit, word)	i_bit_impl((long)(*(word)), bit)
+#endif
 
 
 /* 
@@ -262,6 +279,9 @@ extern cpu_signal_event_log_t	*cpu_handle[];
 #define MP_DEV_OP_CALLB	3	/* If lock busy, register a pending callback */
 
 #if	MACH_RT
+
+#if defined(__i386__)
+
 #define _DISABLE_PREEMPTION 					\
 	incl	%gs:CPU_PREEMPTION_LEVEL
 
@@ -280,7 +300,26 @@ extern cpu_signal_event_log_t	*cpu_handle[];
 #define _ENABLE_PREEMPTION_NO_CHECK				\
 	decl	%gs:CPU_PREEMPTION_LEVEL
 
-#if	MACH_ASSERT
+#elif defined(__x86_64__)
+
+#define _DISABLE_PREEMPTION 					\
+	incl	%gs:CPU_PREEMPTION_LEVEL
+
+#define _ENABLE_PREEMPTION 					\
+	decl	%gs:CPU_PREEMPTION_LEVEL		;	\
+	jne	9f					;	\
+	call	EXT(kernel_preempt_check)		;	\
+9:	
+
+#define _ENABLE_PREEMPTION_NO_CHECK				\
+	decl	%gs:CPU_PREEMPTION_LEVEL
+
+#else
+#error Unsupported architecture
+#endif
+
+/* x86_64 just calls through to the other macro directly */
+#if	MACH_ASSERT && defined(__i386__)
 #define DISABLE_PREEMPTION					\
 	pushl	%eax;						\
 	pushl	%ecx;						\

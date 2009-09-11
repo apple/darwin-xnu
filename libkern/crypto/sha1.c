@@ -231,9 +231,9 @@ void sha1_hardware_hook(Boolean option, InKernelPerformSHA1Func func, void *ref)
 {
 	if(option) {
 		// Establish the hook. The hardware is ready.
-		OSCompareAndSwap((uintptr_t)NULL, (uintptr_t)ref, (uintptr_t *)&SHA1Ref); 
+		OSCompareAndSwapPtr((void*)NULL, (void*)ref, (void * volatile*)&SHA1Ref); 
 
-		if(!OSCompareAndSwap((uintptr_t)NULL, (uintptr_t)func, (uintptr_t *)&performSHA1WithinKernelOnly)) {
+		if(!OSCompareAndSwapPtr((void *)NULL, (void *)func, (void * volatile *)&performSHA1WithinKernelOnly)) {
 			panic("sha1_hardware_hook: Called twice.. Should never happen\n");
 		}
 	}

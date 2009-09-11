@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/esp_rijndael.c,v 1.1.2.1 2001/07/03 11:01:50 ume Exp $	*/
 /*	$KAME: esp_rijndael.c,v 1.4 2001/03/02 05:53:05 itojun Exp $	*/
 
@@ -73,8 +101,8 @@ esp_aes_schedule(
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_OWNED);
 	aes_ctx *ctx = (aes_ctx*)sav->sched;
 	
-	aes_decrypt_key(_KEYBUF(sav->key_enc), _KEYLEN(sav->key_enc), &ctx->decrypt);
-	aes_encrypt_key(_KEYBUF(sav->key_enc), _KEYLEN(sav->key_enc), &ctx->encrypt);
+	aes_decrypt_key((const unsigned char *) _KEYBUF(sav->key_enc), _KEYLEN(sav->key_enc), &ctx->decrypt);
+	aes_encrypt_key((const unsigned char *) _KEYBUF(sav->key_enc), _KEYLEN(sav->key_enc), &ctx->encrypt);
 	
 	return 0;
 }
@@ -146,7 +174,7 @@ esp_cbc_decrypt_aes(m, off, sav, algo, ivlen)
 
 	if (m->m_pkthdr.len < bodyoff) {
 		ipseclog((LOG_ERR, "esp_cbc_decrypt %s: bad len %d/%lu\n",
-		    algo->name, m->m_pkthdr.len, (unsigned long)bodyoff));
+		    algo->name, m->m_pkthdr.len, (u_int32_t)bodyoff));
 		m_freem(m);
 		return EINVAL;
 	}
@@ -159,7 +187,7 @@ esp_cbc_decrypt_aes(m, off, sav, algo, ivlen)
 	}
 
 	/* grab iv */
-	m_copydata(m, ivoff, ivlen, iv);
+	m_copydata(m, ivoff, ivlen, (caddr_t) iv);
 
 	s = m;
 	soff = sn = dn = 0;
@@ -192,7 +220,7 @@ esp_cbc_decrypt_aes(m, off, sav, algo, ivlen)
 			len -= len % AES_BLOCKLEN;	// full blocks only
 		} else {
 			/* body is non-continuous */
-			m_copydata(s, sn, AES_BLOCKLEN, sbuf);
+			m_copydata(s, sn, AES_BLOCKLEN, (caddr_t) sbuf);
 			sp = sbuf;
 			len = AES_BLOCKLEN;			// 1 block only in sbuf
 		}
@@ -305,11 +333,11 @@ esp_cbc_encrypt_aes(
 
 	/* put iv into the packet */
 	m_copyback(m, ivoff, ivlen, sav->iv);
-	ivp = sav->iv;
+	ivp = (u_int8_t *) sav->iv;
 
 	if (m->m_pkthdr.len < bodyoff) {
 		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: bad len %d/%lu\n",
-		    algo->name, m->m_pkthdr.len, (unsigned long)bodyoff));
+		    algo->name, m->m_pkthdr.len, (u_int32_t)bodyoff));
 		m_freem(m);
 		return EINVAL;
 	}
@@ -352,7 +380,7 @@ esp_cbc_encrypt_aes(
 			len -= len % AES_BLOCKLEN;	// full blocks only
 		} else {
 			/* body is non-continuous */
-			m_copydata(s, sn, AES_BLOCKLEN, sbuf);
+			m_copydata(s, sn, AES_BLOCKLEN, (caddr_t) sbuf);
 			sp = sbuf;
 			len = AES_BLOCKLEN;			// 1 block only in sbuf
 		}

@@ -157,8 +157,13 @@
  * Integer types used.
  */
 
-typedef	long		prof_ptrint_t;	/* hold either pointer or signed int */
-typedef	unsigned long	prof_uptrint_t;	/* hold either pointer or unsigned int */
+/*
+ * These hold either a pointer or a signed/unsigned int.
+ * They are 32 bit on i386 and 64 bit on x86_64.
+ */
+typedef	long		prof_ptrint_t;
+typedef	unsigned long	prof_uptrint_t;
+
 typedef	long		prof_lock_t;	/* lock word type */
 typedef unsigned char	prof_flag_t;	/* type for boolean flags */
 
@@ -166,11 +171,17 @@ typedef unsigned char	prof_flag_t;	/* type for boolean flags */
  * Double precision counter.
  */
 
+/* These are 64 bit on both i386 and x86_64 */
+#ifdef __i386__
 typedef struct prof_cnt_t {
 	prof_uptrint_t	low;		/* low 32 bits of counter */
 	prof_uptrint_t	high;		/* high 32 bits of counter */
 } prof_cnt_t;
+#else
+typedef unsigned long prof_cnt_t;
+#endif
 
+#ifdef __i386__
 #if defined(__GNUC__) && !defined(lint)
 #define PROF_CNT_INC(cnt)					\
 	__asm__("addl $1,%0; adcl $0,%1"			\
@@ -207,6 +218,14 @@ typedef struct prof_cnt_t {
 #define PROF_CNT_LADD(cnt,val)	(PROF_CNT_ADD(cnt,(val).low), (cnt).high += (val).high)
 #define PROF_CNT_SUB(cnt,val)	(((((cnt).low - (val)) > (cnt).low) ? ((cnt).high--) : 0), ((cnt).low -= (val)))
 #define PROF_CNT_LSUB(cnt,val)	(PROF_CNT_SUB(cnt,(val).low), (cnt).high -= (val).high)
+#endif
+#else
+/* x86_64 */
+#define PROF_CNT_INC(cnt)	(cnt++)
+#define PROF_CNT_ADD(cnt,val)	(cnt+=val)
+#define PROF_CNT_LADD(cnt,val)	(cnt+=val)
+#define PROF_CNT_SUB(cnt,val)	(cnt-=val)
+#define PROF_CNT_LSUB(cnt,val)	(cnt-=val)
 #endif
 
 #define PROF_ULONG_TO_CNT(cnt,val)	(((cnt).high = 0), ((cnt).low = val))

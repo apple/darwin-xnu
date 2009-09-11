@@ -40,9 +40,7 @@
 
 // void bcopy(const void *src, void *dst, size_t len);
  
-        .text
-        .align	5, 0x90
-Lbcopy_sse42:				// void bcopy(const void *src, void *dst, size_t len)
+COMMPAGE_FUNCTION_START(bcopy_sse42, 32, 5)
 	pushl	%ebp			// set up a frame for backtraces
 	movl	%esp,%ebp
         pushl   %esi

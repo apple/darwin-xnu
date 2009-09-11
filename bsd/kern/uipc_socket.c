@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -100,25 +100,21 @@
 #include <machine/limits.h>
 #include <libkern/OSAtomic.h>
 #include <pexpert/pexpert.h>
+#include <kern/assert.h>
 
 #if CONFIG_MACF
 #include <security/mac.h>
 #include <security/mac_framework.h>
 #endif /* MAC */
 
-/* how a timeval looks to a 64-bit process */
-struct timeval64 {
-	int64_t		tv_sec;
-	int32_t		tv_usec;
-};
-
 int			so_cache_hw = 0;
 int			so_cache_timeouts = 0;
 int			so_cache_max_freed = 0;
 int			cached_sock_count = 0;
+__private_extern__ int	max_cached_sock_count = MAX_CACHED_SOCKETS;
 struct socket		*socket_cache_head = 0;
 struct socket		*socket_cache_tail = 0;
-u_long			so_cache_time = 0;
+u_int32_t			so_cache_time = 0;
 int			so_cache_init_done = 0;
 struct zone		*so_cache_zone;
 
@@ -133,7 +129,6 @@ static void	filt_sordetach(struct knote *kn);
 static int	filt_soread(struct knote *kn, long hint);
 static void	filt_sowdetach(struct knote *kn);
 static int	filt_sowrite(struct knote *kn, long hint);
-static int	filt_solisten(struct knote *kn, long hint);
 
 static int
 sooptcopyin_timeval(struct sockopt *sopt, struct timeval * tv_p);
@@ -141,12 +136,16 @@ sooptcopyin_timeval(struct sockopt *sopt, struct timeval * tv_p);
 static int
 sooptcopyout_timeval(struct sockopt *sopt, const struct timeval * tv_p);
 
-static struct filterops solisten_filtops =
-	{ 1, NULL, filt_sordetach, filt_solisten };
-static struct filterops soread_filtops =
-	{ 1, NULL, filt_sordetach, filt_soread };
-static struct filterops sowrite_filtops =
-	{ 1, NULL, filt_sowdetach, filt_sowrite };
+static struct filterops soread_filtops = {
+        .f_isfd = 1,
+        .f_detach = filt_sordetach,
+        .f_event = filt_soread,
+};
+static struct filterops sowrite_filtops = {
+        .f_isfd = 1,
+        .f_detach = filt_sowdetach,
+        .f_event = filt_sowrite,
+};
 
 #define	EVEN_MORE_LOCKING_DEBUG 0
 int socket_debug = 0;
@@ -233,6 +232,7 @@ static void cached_sock_free(struct socket *);
 static void so_cache_timer(void *);
 
 void soclose_wait_locked(struct socket *so);
+int so_isdstlocal(struct socket *so);
 
 
 void
@@ -286,7 +286,7 @@ static void
 cached_sock_alloc(struct socket **so, int waitok)
 {
 	caddr_t	temp;
-	register u_long offset;
+	register uintptr_t offset;
 
 	lck_mtx_lock(so_cache_mtx);
 
@@ -333,18 +333,16 @@ cached_sock_alloc(struct socket **so, int waitok)
 		 * Define offsets for extra structures into our single block of
 		 * memory. Align extra structures on longword boundaries.
 		 */
-		offset = (u_long) *so;
+
+		offset = (uintptr_t) *so;
 		offset += sizeof (struct socket);
-		if (offset & 0x3) {
-			offset += 4;
-			offset &= 0xfffffffc;
-		}
+
+		offset = ALIGN(offset);
+
 		(*so)->so_saved_pcb = (caddr_t)offset;
 		offset += get_inpcb_str_size();
-		if (offset & 0x3) {
-			offset += 4;
-			offset &= 0xfffffffc;
-		}
+
+		offset = ALIGN(offset);
 
 		((struct inpcb *)(*so)->so_saved_pcb)->inp_saved_ppcb =
 		    (caddr_t)offset;
@@ -364,7 +362,7 @@ cached_sock_free(struct socket *so)
 
 	lck_mtx_lock(so_cache_mtx);
 
-	if (++cached_sock_count > MAX_CACHED_SOCKETS) {
+	if (++cached_sock_count > max_cached_sock_count) {
 		--cached_sock_count;
 		lck_mtx_unlock(so_cache_mtx);
 #if TEMPDEBUG
@@ -507,7 +505,7 @@ socreate(int dom, struct socket **aso, int type, int proto)
 	}
 	if (prp->pr_type != type)
 		return (EPROTOTYPE);
-	so = soalloc(p != 0, dom, type);
+	so = soalloc(1, dom, type);
 	if (so == 0)
 		return (ENOBUFS);
 
@@ -515,11 +513,10 @@ socreate(int dom, struct socket **aso, int type, int proto)
 	TAILQ_INIT(&so->so_comp);
 	so->so_type = type;
 
-	if (p != 0) {
-		so->so_uid = kauth_cred_getuid(kauth_cred_get());
-		if (!suser(kauth_cred_get(), NULL))
-			so->so_state = SS_PRIV;
-	}
+	so->so_uid = kauth_cred_getuid(kauth_cred_get());
+	if (!suser(kauth_cred_get(), NULL))
+		so->so_state = SS_PRIV;
+
 	so->so_proto = prp;
 #ifdef __APPLE__
 	so->so_rcv.sb_flags |= SB_RECV;	/* XXX */
@@ -1087,13 +1084,17 @@ soacceptfilter(struct socket *so)
 	struct socket *head = so->so_head;
 
 	/*
-	 * There's no need to hold the lock; this socket
+	 * Hold the lock even if this socket
 	 * has not been made visible to the filter(s).
+	 * For sockets with global locks, this protect against the 
+	 * head or peer going away
 	 */
-	if ((sock_getaddr(so, &remote, 1) != 0) ||
-	    sock_getaddr(so, &local, 0) != 0) {
+	socket_lock(so, 1);
+	if (sogetaddr_locked(so, &remote, 1) != 0 ||
+	    sogetaddr_locked(so, &local, 0) != 0) {
 		so->so_state &= ~(SS_NOFDREF | SS_COMP);
 		so->so_head = NULL;
+		socket_unlock(so, 1);
 		soclose(so);
 		/* Out of resources; try it again next time */
 		error = ECONNABORTED;
@@ -1105,7 +1106,6 @@ soacceptfilter(struct socket *so)
 	 * so we know it won't be going away.  Do the same for the newly
 	 * accepted socket while we invoke the accept callback routine.
 	 */
-	socket_lock(so, 1);
 	for (filter = so->so_filt; filter != NULL && error == 0;
 	    filter = filter->sfe_next_onsocket) {
 		if (filter->sfe_filter->sf_filter.sf_accept != NULL) {
@@ -1330,11 +1330,11 @@ sodisconnect(struct socket *so)
  *	[so_error]:???
  */
 static int
-sosendcheck(struct socket *so, struct sockaddr *addr, long resid, long clen,
-    long atomic, int flags, int *sblocked)
+sosendcheck(struct socket *so, struct sockaddr *addr, int32_t resid, int32_t clen,
+    int32_t atomic, int flags, int *sblocked)
 {
-	int error = 0;
-	long space;
+	int 	error = 0;
+	int32_t space;
 	int	assumelock = 0;
 
 restart:
@@ -1392,7 +1392,7 @@ restart:
 	    clen > so->so_snd.sb_hiwat)
 		return (EMSGSIZE);
 	if (space < resid + clen &&
-	    (atomic || space < (long)so->so_snd.sb_lowat || space < clen)) {
+	    (atomic || space < (int32_t)so->so_snd.sb_lowat || space < clen)) {
 		if ((so->so_state & SS_NBIO) || (flags & MSG_NBIO) ||
 		    assumelock) {
 			return (EWOULDBLOCK);
@@ -1474,7 +1474,7 @@ sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 {
 	struct mbuf **mp;
 	register struct mbuf *m, *freelist = NULL;
-	register long space, len, resid;
+	register int32_t space, len, resid;
 	int clen = 0, error, dontroute, mlen, sendflags;
 	int atomic = sosendallatonce(so) || top;
 	int sblocked = 0;
@@ -1515,8 +1515,7 @@ sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 	dontroute =
 	    (flags & MSG_DONTROUTE) && (so->so_options & SO_DONTROUTE) == 0 &&
 	    (so->so_proto->pr_flags & PR_ATOMIC);
-	if (p)
-		OSIncrementAtomic(&p->p_stats->p_ru.ru_msgsnd);	
+	OSIncrementAtomicLong(&p->p_stats->p_ru.ru_msgsnd);
 	if (control)
 		clen = control->m_len;
 
@@ -1547,7 +1546,7 @@ sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 				int bytes_to_copy;
 				boolean_t jumbocl;
 
-				bytes_to_copy = min(resid, space);
+				bytes_to_copy = imin(resid, space);
 
 				if (sosendminchain > 0) {
 					chainlength = 0;
@@ -1684,16 +1683,15 @@ sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 						    MHLEN - m_leadingspace(m);
 					else
 						mlen = MLEN;
-					len = min(mlen, bytes_to_copy);
+					len = imin(mlen, bytes_to_copy);
 
 					chainlength += len;
 
 					space -= len;
 
 					error = uiomove(mtod(m, caddr_t),
-					    (int)len, uio);
+					    len, uio);
 
-					// LP64todo - fix this!
 					resid = uio_resid(uio);
 
 					m->m_len = len;
@@ -1900,7 +1898,6 @@ soreceive(struct socket *so, struct sockaddr **psa, struct uio *uio,
 	struct protosw *pr = so->so_proto;
 	struct mbuf *nextrecord;
 	int moff, type = 0;
-		// LP64todo - fix this!
 	int orig_resid = uio_resid(uio);
 	struct mbuf *free_list;
 	int delayed_copy_len;
@@ -1967,9 +1964,8 @@ soreceive(struct socket *so, struct sockaddr **psa, struct uio *uio,
 			goto bad;
 		socket_unlock(so, 0);
 		do {
-		// LP64todo - fix this!
 			error = uiomove(mtod(m, caddr_t),
-			    (int)min(uio_resid(uio), m->m_len), uio);
+			    imin(uio_resid(uio), m->m_len), uio);
 			m = m_free(m);
 		} while (uio_resid(uio) && error == 0 && m);
 		socket_lock(so, 0);
@@ -2063,7 +2059,7 @@ restart:
 		 * which could put the application in a bad state.
 		 */
 		if (m == NULL && so->so_rcv.sb_cc != 0)
-			panic("soreceive corrupted so_rcv: m %p cc %lu",
+			panic("soreceive corrupted so_rcv: m %p cc %u",
 			    m, so->so_rcv.sb_cc);
 
 		if (so->so_error) {
@@ -2122,19 +2118,7 @@ restart:
 		goto restart;
 	}
 dontblock:
-#ifndef __APPLE__
-	if (uio->uio_procp)
-		uio->uio_procp->p_stats->p_ru.ru_msgrcv++;
-#else	/* __APPLE__ */
-	/*
-	 * 2207985
-	 * This should be uio->uio-procp; however, some callers of this
-	 * function use auto variables with stack garbage, and fail to
-	 * fill out the uio structure properly.
-	 */
-	if (p)
-		OSIncrementAtomic(&p->p_stats->p_ru.ru_msgrcv);
-#endif	/* __APPLE__ */
+	OSIncrementAtomicLong(&p->p_stats->p_ru.ru_msgrcv);
 	SBLASTRECORDCHK(&so->so_rcv, "soreceive 1");
 	SBLASTMBUFCHK(&so->so_rcv, "soreceive 1");
 	nextrecord = m->m_nextpkt;
@@ -2387,7 +2371,6 @@ dontblock:
 			flags |= MSG_OOB;
 		}
 		so->so_state &= ~SS_RCVATMARK;
-		// LP64todo - fix this!
 		len = uio_resid(uio) - delayed_copy_len;
 		if (so->so_oobmark && len > so->so_oobmark - offset)
 			len = so->so_oobmark - offset;
@@ -2825,18 +2808,7 @@ sorflush(struct socket *so)
 	if (asb.sb_flags & SB_UNIX)
 		sb->sb_flags |= SB_UNIX;
 	if ((pr->pr_flags & PR_RIGHTS) && pr->pr_domain->dom_dispose) {
-		boolean_t unp = (pr->pr_domain->dom_dispose == unp_dispose);
-		/*
-		 * Currently AF_UNIX domain uses a global domain mutex;
-		 * unp_dispose() may end up calling soclose() on another
-		 * AF_UNIX socket and therefore the lock must not be held
-		 * across the call.
-		 */
-		if (unp)
-			socket_unlock(so, 0);
 		(*pr->pr_domain->dom_dispose)(asb.sb_mb);
-		if (unp)
-			socket_lock(so, 0);
 	}
 	sbrelease(&asb);
 }
@@ -2868,7 +2840,7 @@ sooptcopyin(struct sockopt *sopt, void *buf, size_t len, size_t minlen)
 	if (valsize > len)
 		sopt->sopt_valsize = valsize = len;
 
-	if (sopt->sopt_p != 0)
+	if (sopt->sopt_p != kernproc)
 		return (copyin(sopt->sopt_val, buf, valsize));
 
 	bcopy(CAST_DOWN(caddr_t, sopt->sopt_val), buf, valsize);
@@ -2886,17 +2858,21 @@ static int
 sooptcopyin_timeval(struct sockopt *sopt, struct timeval * tv_p)
 {
 	int			error;
-		
+
 	if (proc_is64bit(sopt->sopt_p)) {
-		struct timeval64	tv64;
+		struct user64_timeval	tv64;
 
 		if (sopt->sopt_valsize < sizeof(tv64)) {
 			return (EINVAL);
 		}
 		sopt->sopt_valsize = sizeof(tv64);
-		error = copyin(sopt->sopt_val, &tv64, sizeof(tv64));
-		if (error != 0) {
-			return (error);
+		if (sopt->sopt_p != kernproc) {
+			error = copyin(sopt->sopt_val, &tv64, sizeof(tv64));
+			if (error != 0)
+				return (error);
+		} else {
+			bcopy(CAST_DOWN(caddr_t, sopt->sopt_val), &tv64,
+				sizeof(tv64));
 		}
 		if (tv64.tv_sec < 0 || tv64.tv_sec > LONG_MAX 
 		    || tv64.tv_usec < 0 || tv64.tv_usec >= 1000000) {
@@ -2905,23 +2881,29 @@ sooptcopyin_timeval(struct sockopt *sopt, struct timeval * tv_p)
 		tv_p->tv_sec = tv64.tv_sec;
 		tv_p->tv_usec = tv64.tv_usec;
 	} else {
-		if (sopt->sopt_valsize < sizeof(*tv_p)) {
+		struct user32_timeval	tv32;
+
+		if (sopt->sopt_valsize < sizeof(tv32)) {
 			return (EINVAL);
 		}
-		sopt->sopt_valsize = sizeof(*tv_p);
-		if (sopt->sopt_p != 0) {
-			error = copyin(sopt->sopt_val, tv_p, sizeof(*tv_p));
+		sopt->sopt_valsize = sizeof(tv32);
+		if (sopt->sopt_p != kernproc) {
+			error = copyin(sopt->sopt_val, &tv32, sizeof(tv32));
 			if (error != 0) {
 				return (error);
 			}
 		} else {
-			bcopy(CAST_DOWN(caddr_t, sopt->sopt_val), tv_p,
-			      sizeof(*tv_p));
+			bcopy(CAST_DOWN(caddr_t, sopt->sopt_val), &tv32,
+			      sizeof(tv32));
 		}
-		if (tv_p->tv_sec < 0 || tv_p->tv_sec > LONG_MAX 
-		    || tv_p->tv_usec < 0 || tv_p->tv_usec >= 1000000) {
+#ifndef __LP64__ // K64todo "comparison is always false due to limited range of data type"
+		if (tv32.tv_sec < 0 || tv32.tv_sec > LONG_MAX 
+		    || tv32.tv_usec < 0 || tv32.tv_usec >= 1000000) {
 			return (EDOM);
 		}
+#endif
+		tv_p->tv_sec = tv32.tv_sec;
+		tv_p->tv_usec = tv32.tv_usec;
 	}
 	return (0);
 }
@@ -2960,7 +2942,8 @@ sosetopt(struct socket *so, struct sockopt *sopt)
 
 	socket_lock(so, 1);
 	if ((so->so_state & (SS_CANTRCVMORE | SS_CANTSENDMORE))
-	    == (SS_CANTRCVMORE | SS_CANTSENDMORE)) {
+	    == (SS_CANTRCVMORE | SS_CANTSENDMORE) && 
+	    (so->so_flags & SOF_NPX_SETOPTSHUT) == 0) {
 		/* the socket has been shutdown, no more sockopt's */
 		error = EINVAL;
 		goto bad;
@@ -3066,7 +3049,7 @@ sosetopt(struct socket *so, struct sockopt *sopt)
 			case SO_RCVBUF:
 				if (sbreserve(sopt->sopt_name == SO_SNDBUF ?
 				    &so->so_snd : &so->so_rcv,
-				    (u_long) optval) == 0) {
+				    (u_int32_t) optval) == 0) {
 					error = ENOBUFS;
 					goto bad;
 				}
@@ -3212,6 +3195,39 @@ sosetopt(struct socket *so, struct sockopt *sopt)
 			break;
 #endif
 
+		case SO_RANDOMPORT:
+			error = sooptcopyin(sopt, &optval, sizeof (optval),
+			    sizeof (optval));
+			if (error)
+				goto bad;
+			if (optval)
+				so->so_flags |= SOF_BINDRANDOMPORT;
+			else
+				so->so_flags &= ~SOF_BINDRANDOMPORT;
+			break;
+
+		case SO_NP_EXTENSIONS: {
+			struct so_np_extensions sonpx;
+
+			error = sooptcopyin(sopt, &sonpx, sizeof(sonpx), sizeof(sonpx));
+			if (error)
+				goto bad;
+			if (sonpx.npx_mask & ~SONPX_MASK_VALID) {
+				error = EINVAL;
+				goto bad;
+			}
+			/*
+			 * Only one bit defined for now
+			 */
+			if ((sonpx.npx_mask & SONPX_SETOPTSHUT)) {
+				if ((sonpx.npx_flags & SONPX_SETOPTSHUT))
+					so->so_flags |= SOF_NPX_SETOPTSHUT;
+				else
+					so->so_flags &= ~SOF_NPX_SETOPTSHUT;
+			}
+			break;
+		}
+
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -3246,7 +3262,7 @@ sooptcopyout(struct sockopt *sopt, void *buf, size_t len)
 	valsize = min(len, sopt->sopt_valsize);
 	sopt->sopt_valsize = valsize;
 	if (sopt->sopt_val != USER_ADDR_NULL) {
-		if (sopt->sopt_p != 0)
+		if (sopt->sopt_p != kernproc)
 			error = copyout(buf, sopt->sopt_val, valsize);
 		else
 			bcopy(buf, CAST_DOWN(caddr_t, sopt->sopt_val), valsize);
@@ -3259,24 +3275,27 @@ sooptcopyout_timeval(struct sockopt *sopt, const struct timeval * tv_p)
 {
 	int			error;
 	size_t			len;
-	struct timeval64	tv64;
+	struct user64_timeval	tv64;
+	struct user32_timeval	tv32;
 	const void *		val;
 	size_t			valsize;
-		
+
 	error = 0;
 	if (proc_is64bit(sopt->sopt_p)) {
-		len = sizeof(struct timeval64);
+		len = sizeof(tv64);
 		tv64.tv_sec = tv_p->tv_sec;
 		tv64.tv_usec = tv_p->tv_usec;
 		val = &tv64;
 	} else {
-		len = sizeof(struct timeval);
-		val = tv_p;
+		len = sizeof(tv32);
+		tv32.tv_sec = tv_p->tv_sec;
+		tv32.tv_usec = tv_p->tv_usec;
+		val = &tv32;
 	}
 	valsize = min(len, sopt->sopt_valsize);
 	sopt->sopt_valsize = valsize;
 	if (sopt->sopt_val != USER_ADDR_NULL) {
-		if (sopt->sopt_p != 0)
+		if (sopt->sopt_p != kernproc)
 			error = copyout(val, sopt->sopt_val, valsize);
 		else
 			bcopy(val, CAST_DOWN(caddr_t, sopt->sopt_val), valsize);
@@ -3485,7 +3504,19 @@ integer:
 			optval = (so->so_flags & SOF_UPCALLCLOSEWAIT);
 			goto integer;
 #endif
+		case SO_RANDOMPORT:
+			optval = (so->so_flags & SOF_BINDRANDOMPORT);
+			goto integer;
 
+		case SO_NP_EXTENSIONS: {
+			struct so_np_extensions sonpx;
+
+			sonpx.npx_flags = (so->so_flags & SOF_NPX_SETOPTSHUT) ? SONPX_SETOPTSHUT : 0;
+			sonpx.npx_mask = SONPX_MASK_VALID;
+
+			error = sooptcopyout(sopt, &sonpx, sizeof(struct so_np_extensions));
+			break;	
+		}
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -3501,15 +3532,17 @@ soopt_getm(struct sockopt *sopt, struct mbuf **mp)
 {
 	struct mbuf *m, *m_prev;
 	int sopt_size = sopt->sopt_valsize;
+	int how;
 
 	if (sopt_size > MAX_SOOPTGETM_SIZE)
 		return (EMSGSIZE);
 
-	MGET(m, sopt->sopt_p ? M_WAIT : M_DONTWAIT, MT_DATA);
+	how = sopt->sopt_p != kernproc ? M_WAIT : M_DONTWAIT;
+	MGET(m, how, MT_DATA);
 	if (m == 0)
 		return (ENOBUFS);
 	if (sopt_size > MLEN) {
-		MCLGET(m, sopt->sopt_p ? M_WAIT : M_DONTWAIT);
+		MCLGET(m, how);
 		if ((m->m_flags & M_EXT) == 0) {
 			m_free(m);
 			return (ENOBUFS);
@@ -3523,13 +3556,13 @@ soopt_getm(struct sockopt *sopt, struct mbuf **mp)
 	m_prev = m;
 
 	while (sopt_size) {
-		MGET(m, sopt->sopt_p ? M_WAIT : M_DONTWAIT, MT_DATA);
+		MGET(m, how, MT_DATA);
 		if (m == 0) {
 			m_freem(*mp);
 			return (ENOBUFS);
 		}
 		if (sopt_size > MLEN) {
-			MCLGET(m, sopt->sopt_p ? M_WAIT : M_DONTWAIT);
+			MCLGET(m, how);
 			if ((m->m_flags & M_EXT) == 0) {
 				m_freem(*mp);
 				return (ENOBUFS);
@@ -3554,7 +3587,7 @@ soopt_mcopyin(struct sockopt *sopt, struct mbuf *m)
 	if (sopt->sopt_val == USER_ADDR_NULL)
 		return (0);
 	while (m != NULL && sopt->sopt_valsize >= m->m_len) {
-		if (sopt->sopt_p != NULL) {
+		if (sopt->sopt_p != kernproc) {
 			int error;
 
 			error = copyin(sopt->sopt_val, mtod(m, char *),
@@ -3586,7 +3619,7 @@ soopt_mcopyout(struct sockopt *sopt, struct mbuf *m)
 	if (sopt->sopt_val == USER_ADDR_NULL)
 		return (0);
 	while (m != NULL && sopt->sopt_valsize >= m->m_len) {
-		if (sopt->sopt_p != NULL) {
+		if (sopt->sopt_p != kernproc) {
 			int error;
 
 			error = copyout(mtod(m, char *), sopt->sopt_val,
@@ -3686,10 +3719,7 @@ soo_kqfilter(__unused struct fileproc *fp, struct knote *kn,
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
-		if (so->so_options & SO_ACCEPTCONN)
-			kn->kn_fop = &solisten_filtops;
-		else
-			kn->kn_fop = &soread_filtops;
+		kn->kn_fop = &soread_filtops;
 		sb = &so->so_rcv;
 		break;
 	case EVFILT_WRITE:
@@ -3727,6 +3757,25 @@ filt_soread(struct knote *kn, long hint)
 
 	if ((hint & SO_FILT_HINT_LOCKED) == 0)
 		socket_lock(so, 1);
+
+	if (so->so_options & SO_ACCEPTCONN) {
+		int isempty;
+
+		/* Radar 6615193 handle the listen case dynamically
+		 * for kqueue read filter. This allows to call listen() after registering
+		 * the kqueue EVFILT_READ.
+		 */
+
+		kn->kn_data = so->so_qlen;
+		isempty = ! TAILQ_EMPTY(&so->so_comp);
+
+		if ((hint & SO_FILT_HINT_LOCKED) == 0)
+			socket_unlock(so, 1);
+
+		return (isempty);
+	}
+
+	/* socket isn't a listener */
 
 	kn->kn_data = so->so_rcv.sb_cc - so->so_rcv.sb_ctl;
 
@@ -3824,29 +3873,29 @@ filt_sowrite(struct knote *kn, long hint)
 	return (kn->kn_data >= so->so_snd.sb_lowat);
 }
 
-/*ARGSUSED*/
-static int
-filt_solisten(struct knote *kn, long hint)
+#define SO_LOCK_HISTORY_STR_LEN (2 * SO_LCKDBG_MAX * (2 + sizeof(void *) + 1) + 1)
+
+__private_extern__ const char * solockhistory_nr(struct socket *so)
 {
-	struct socket *so = (struct socket *)kn->kn_fp->f_fglob->fg_data;
-	int isempty;
+        size_t n = 0;
+        int i;
+        static char lock_history_str[SO_LOCK_HISTORY_STR_LEN];
 
-	if ((hint & SO_FILT_HINT_LOCKED) == 0)
-		socket_lock(so, 1);
-	kn->kn_data = so->so_qlen;
-	isempty = ! TAILQ_EMPTY(&so->so_comp);
-	if ((hint & SO_FILT_HINT_LOCKED) == 0)
-		socket_unlock(so, 1);
-	return (isempty);
+        for (i = SO_LCKDBG_MAX - 1; i >= 0; i--) {
+                n += snprintf(lock_history_str + n, SO_LOCK_HISTORY_STR_LEN - n, "%lx:%lx ",
+                        (uintptr_t) so->lock_lr[(so->next_lock_lr + i) % SO_LCKDBG_MAX],
+                        (uintptr_t) so->unlock_lr[(so->next_unlock_lr + i) % SO_LCKDBG_MAX]);
+	}
+        return lock_history_str;
 }
-
 
 int
 socket_lock(struct socket *so, int refcount)
 {
-	int error = 0, lr_saved;
+	int error = 0;
+	void *lr_saved;
 
-	lr_saved = (unsigned int) __builtin_return_address(0);
+	lr_saved = __builtin_return_address(0);
 
 	if (so->so_proto->pr_lock) {
 		error = (*so->so_proto->pr_lock)(so, refcount, lr_saved);
@@ -3858,7 +3907,7 @@ socket_lock(struct socket *so, int refcount)
 		lck_mtx_lock(so->so_proto->pr_domain->dom_mtx);
 		if (refcount)
 			so->so_usecount++;
-		so->lock_lr[so->next_lock_lr] = (u_int32_t)lr_saved;
+		so->lock_lr[so->next_lock_lr] = lr_saved;
 		so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
 	}
 
@@ -3868,10 +3917,11 @@ socket_lock(struct socket *so, int refcount)
 int
 socket_unlock(struct socket *so, int refcount)
 {
-	int error = 0, lr_saved;
+	int error = 0;
+	void *lr_saved;
 	lck_mtx_t *mutex_held;
 
-	lr_saved = (unsigned int) __builtin_return_address(0);
+	lr_saved = __builtin_return_address(0);
 
 	if (so->so_proto == NULL)
 		panic("socket_unlock null so_proto so=%p\n", so);
@@ -3883,13 +3933,16 @@ socket_unlock(struct socket *so, int refcount)
 #ifdef MORE_LOCKING_DEBUG
 		lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
 #endif
-		so->unlock_lr[so->next_unlock_lr] = (u_int32_t)lr_saved;
+		so->unlock_lr[so->next_unlock_lr] = lr_saved;
 		so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 
 		if (refcount) {
 			if (so->so_usecount <= 0)
-				panic("socket_unlock: bad refcount so=%p "
-				    "value=%d\n", so, so->so_usecount);
+				panic("socket_unlock: bad refcount=%d so=%p (%d, %d, %d) lrh=%s",
+				    so->so_usecount, so, so->so_proto->pr_domain->dom_family,
+				    so->so_type, so->so_proto->pr_protocol, 
+				    solockhistory_nr(so));
+			
 			so->so_usecount--;
 			if (so->so_usecount == 0) {
 				sofreelastref(so, 1);
@@ -3942,4 +3995,17 @@ somultipages(struct socket *so, boolean_t set)
 		so->so_flags |= SOF_MULTIPAGES;
 	else
 		so->so_flags &= ~SOF_MULTIPAGES;
+}
+
+int
+so_isdstlocal(struct socket *so) {
+
+	struct inpcb *inp = (struct inpcb *)so->so_pcb;
+
+	if (so->so_proto->pr_domain->dom_family == AF_INET) {
+		return inaddr_local(inp->inp_faddr);
+	} else if (so->so_proto->pr_domain->dom_family == AF_INET6) {
+		return in6addr_local(&inp->in6p_faddr);
+	} 
+	return 0;
 }

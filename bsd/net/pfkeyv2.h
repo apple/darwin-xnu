@@ -102,7 +102,8 @@ you leave this credit intact on any copies of this file.
 #define SADB_X_SPDSETIDX  20
 #define SADB_X_SPDEXPIRE  21
 #define SADB_X_SPDDELETE2 22	/* by policy id */
-#define SADB_MAX          22
+#define SADB_GETSASTAT    23
+#define SADB_MAX          23
 
 struct sadb_msg {
   u_int8_t sadb_msg_version;
@@ -293,6 +294,30 @@ struct sadb_x_ipsecrequest {
    */
 };
 
+struct sadb_session_id {
+        u_int16_t            sadb_session_id_len;
+        u_int16_t            sadb_session_id_exttype;
+       /* [0] is an arbitrary handle that means something only for requester
+        * [1] is a global session id for lookups in the kernel and racoon.
+        */
+        u_int64_t            sadb_session_id_v[2];
+} __attribute__ ((aligned(8)));
+
+struct sastat {
+	u_int32_t            spi;		/* SPI Value, network byte order */
+	u_int32_t            created;	        /* for lifetime */
+	struct sadb_lifetime lft_c;	        /* CURRENT lifetime. */
+}; // no need to align
+
+struct sadb_sastat {
+        u_int16_t            sadb_sastat_len;
+        u_int16_t            sadb_sastat_exttype;
+        u_int32_t            sadb_sastat_dir;
+        u_int32_t            sadb_sastat_reserved;
+        u_int32_t            sadb_sastat_list_len;
+        /* list of struct sastat comes after */
+} __attribute__ ((aligned(8)));
+
 #define SADB_EXT_RESERVED             0
 #define SADB_EXT_SA                   1
 #define SADB_EXT_LIFETIME_CURRENT     2
@@ -313,7 +338,9 @@ struct sadb_x_ipsecrequest {
 #define SADB_X_EXT_KMPRIVATE          17
 #define SADB_X_EXT_POLICY             18
 #define SADB_X_EXT_SA2                19
-#define SADB_EXT_MAX                  19
+#define SADB_EXT_SESSION_ID           20
+#define SADB_EXT_SASTAT               21
+#define SADB_EXT_MAX                  21
 
 #define SADB_SATYPE_UNSPEC	0
 #define SADB_SATYPE_AH		2

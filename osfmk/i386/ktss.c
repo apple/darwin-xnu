@@ -63,9 +63,10 @@
  * only to hold the kernel stack pointer for the current thread.
  */
 #include <i386/tss.h>
-#include <i386/seg.h>
+#include <i386/pmap.h>
 #include <mach_kdb.h>
 
+#ifdef __i386__
 struct i386_tss	master_ktss
 	__attribute__ ((section ("__DESC, master_ktss")))
 	__attribute__ ((aligned (4096))) = {
@@ -99,6 +100,7 @@ struct i386_tss	master_ktss
 					   beyond end of TSS segment,
 					   so no bitmap */
 };
+#endif
 
 /*
  * The transient stack for sysenter.
@@ -116,6 +118,7 @@ struct x86_64_tss master_ktss64 __attribute__ ((aligned (4096))) = {
 };
 #endif	/* X86_64 */
 
+#ifdef __i386__
 /*
  * Task structure for double-fault handler:
  */
@@ -129,7 +132,7 @@ struct i386_tss	master_dftss
 	0,				/* ss1 */
 	0,				/* esp2 */
 	0,				/* ss2 */
-	0,				/* cr3 */
+	(int) IdlePDPT,				/* cr3 */
 	(int) &df_task_start,		/* eip */
 	0,				/* eflags */
 	0,				/* eax */
@@ -141,7 +144,7 @@ struct i386_tss	master_dftss
 	0,				/* esi */
 	0,				/* edi */
 	KERNEL_DS,			/* es */
-	KERNEL_CS,			/* cs */
+	KERNEL32_CS,			/* cs */
 	KERNEL_DS,			/* ss */
 	KERNEL_DS,			/* ds */
 	KERNEL_DS,			/* fs */
@@ -167,7 +170,7 @@ struct i386_tss	master_mctss
 	0,				/* ss1 */
 	0,				/* esp2 */
 	0,				/* ss2 */
-	0,				/* cr3 */
+	(int) IdlePDPT,				/* cr3 */
 	(int) &mc_task_start,		/* eip */
 	0,				/* eflags */
 	0,				/* eax */
@@ -179,7 +182,7 @@ struct i386_tss	master_mctss
 	0,				/* esi */
 	0,				/* edi */
 	KERNEL_DS,			/* es */
-	KERNEL_CS,			/* cs */
+	KERNEL32_CS,			/* cs */
 	KERNEL_DS,			/* ss */
 	KERNEL_DS,			/* ds */
 	KERNEL_DS,			/* fs */
@@ -203,7 +206,7 @@ struct i386_tss	master_dbtss
 	0,				/* ss1 */
 	0,				/* esp2 */
 	0,				/* ss2 */
-	0,				/* cr3 */
+	(int) IdlePDPT,		/* cr3 */
 	0,				/* eip */
 	0,				/* eflags */
 	0,				/* eax */
@@ -215,7 +218,7 @@ struct i386_tss	master_dbtss
 	0,				/* esi */
 	0,				/* edi */
 	KERNEL_DS,			/* es */
-	KERNEL_CS,			/* cs */
+	KERNEL32_CS,			/* cs */
 	KERNEL_DS,			/* ss */
 	KERNEL_DS,			/* ds */
 	KERNEL_DS,			/* fs */
@@ -228,3 +231,4 @@ struct i386_tss	master_dbtss
 };
 
 #endif	/* MACH_KDB */
+#endif

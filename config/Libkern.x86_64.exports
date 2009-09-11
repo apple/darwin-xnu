@@ -1,0 +1,8 @@
+_OSAddAtomic64
+_OSCompareAndSwap64
+__ZN12OSOrderedSet12withCapacityEjPFiPK15OSMetaClassBaseS2_PvES3_
+__ZN12OSOrderedSet16initWithCapacityEjPFiPK15OSMetaClassBaseS2_PvES3_
+_gOSKextUnresolved
+_sprintf
+_strcat
+_strcpy

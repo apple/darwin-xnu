@@ -87,7 +87,7 @@ struct	sigacts {
 	sigset_t ps_siginfo;		/* signals that want SA_SIGINFO args */
 	sigset_t ps_oldmask;		/* saved mask from before sigpause */
 	int	ps_flags;		/* signal flags, below */
-	struct user_sigaltstack ps_sigstk;	/* sp, length & flags */
+	struct kern_sigaltstack ps_sigstk;	/* sp, length & flags */
 	int	ps_sig;			/* for core dump/debugger XXX */
 	int	ps_code;		/* for core dump/debugger XXX */
 	int	ps_addr;		/* for core dump/debugger XXX */
@@ -196,8 +196,7 @@ void	execsigs(struct proc *p, thread_t thread);
 void	gsignal(int pgid, int sig);
 int	issignal(struct proc *p);
 int	CURSIG(struct proc *p);
-int clear_procsiglist(struct proc *p, int bit);
-int clear_procsigmask(struct proc *p, int bit);
+int clear_procsiglist(struct proc *p, int bit, int in_signalstart);
 int set_procsigmask(struct proc *p, int bit);
 void	postsig(int sig);
 void	siginit(struct proc *p) __attribute__((section("__TEXT, initcode")));
@@ -209,7 +208,7 @@ int	hassigprop(int sig, int prop);
  * Machine-dependent functions:
  */
 void	sendsig(struct proc *, /*sig_t*/ user_addr_t  action, int sig,
-	int returnmask, u_long code);
+	int returnmask, uint32_t code);
 
 void	psignal(struct proc *p, int sig);
 void	psignal_locked(struct proc *, int);

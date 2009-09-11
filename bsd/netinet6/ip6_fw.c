@@ -196,6 +196,10 @@ static void	ip6fw_report __P((struct ip6_fw *f, struct ip6_hdr *ip6,
 static int	ip6_fw_chk __P((struct ip6_hdr **pip6,
 			struct ifnet *oif, u_int16_t *cookie, struct mbuf **m));
 static int	ip6_fw_ctl __P((struct sockopt *));
+static void cp_to_user_64( struct ip6_fw_64 *userrule_64, struct ip6_fw *rule);
+static void cp_from_user_64( struct ip6_fw_64 *userrule_64, struct ip6_fw *rule);
+static void cp_to_user_32( struct ip6_fw_32 *userrule_32, struct ip6_fw *rule);
+static void cp_from_user_32( struct ip6_fw_32 *userrule_32, struct ip6_fw *rule);
 
 static char err_prefix[] = "ip6_fw_ctl:";
 extern lck_mtx_t *ip6_mutex;
@@ -554,7 +558,7 @@ ip6_fw_chk(struct ip6_hdr **pip6,
 	struct ip6_fw_chain *chain;
 	struct ip6_fw *rule = NULL;
 	struct ip6_hdr *ip6 = *pip6;
-	struct ifnet *const rif = (*m)->m_pkthdr.rcvif;
+	struct ifnet *const rif = ((*m)->m_flags & M_LOOP) ? ifunit("lo0") : (*m)->m_pkthdr.rcvif;
 	u_short offset = 0;
 	int off = sizeof(struct ip6_hdr), nxt = ip6->ip6_nxt;
 	u_short src_port, dst_port;
@@ -1137,124 +1141,6 @@ check_ip6fw_struct(struct ip6_fw *frwl)
 	return frwl;
 }
 
-/*#####*/
-#if 0
-static int
-ip6_fw_ctl(int stage, struct mbuf **mm)
-{
-	int error;
-	struct mbuf *m;
-
-	if (stage == IPV6_FW_GET) {
-		struct ip6_fw_chain *fcp = ip6_fw_chain.lh_first;
-		*mm = m = m_get(M_WAIT, MT_DATA); /* XXX */
-		if (!m)
-			return(ENOBUFS);
-		if (sizeof *(fcp->rule) > MLEN) {
-			MCLGET(m, M_WAIT);
-			if ((m->m_flags & M_EXT) == 0) {
-				m_free(m);
-				return(ENOBUFS);
-			}
-		}
-		for (; fcp; fcp = fcp->chain.le_next) {
-			bcopy(fcp->rule, m->m_data, sizeof *(fcp->rule));
-			m->m_len = sizeof *(fcp->rule);
-			m->m_next = m_get(M_WAIT, MT_DATA); /* XXX */
-			if (!m->m_next) {
-				m_freem(*mm);
-				return(ENOBUFS);
-			}
-			m = m->m_next;
-			if (sizeof *(fcp->rule) > MLEN) {
-				MCLGET(m, M_WAIT);
-				if ((m->m_flags & M_EXT) == 0) {
-					m_freem(*mm);
-					return(ENOBUFS);
-				}
-			}
-			m->m_len = 0;
-		}
-		return (0);
-	}
-	m = *mm;
-	/* only allow get calls if secure mode > 2 */
-	if (securelevel > 2) {
-		if (m) {
-			(void)m_freem(m);
-			*mm = 0;
-		}
-		return(EPERM);
-	}
-	if (stage == IPV6_FW_FLUSH) {
-		while (ip6_fw_chain.lh_first != NULL &&
-		    ip6_fw_chain.lh_first->rule->fw_number != (u_short)-1) {
-			struct ip6_fw_chain *fcp = ip6_fw_chain.lh_first;
-			int s = splnet();
-			LIST_REMOVE(ip6_fw_chain.lh_first, chain);
-			splx(s);
-			FREE(fcp->rule, M_IP6FW);
-			FREE(fcp, M_IP6FW);
-		}
-		if (m) {
-			(void)m_freem(m);
-			*mm = 0;
-		}
-		return (0);
-	}
-	if (stage == IPV6_FW_ZERO) {
-		error = zero_entry6(m);
-		if (m) {
-			(void)m_freem(m);
-			*mm = 0;
-		}
-		return (error);
-	}
-	if (m == NULL) {
-		printf("%s NULL mbuf ptr\n", err_prefix);
-		return (EINVAL);
-	}
-
-	if (stage == IPV6_FW_ADD) {
-		struct ip6_fw *frwl = check_ip6fw_mbuf(m);
-
-		if (!frwl)
-			error = EINVAL;
-		else
-			error = add_entry6(&ip6_fw_chain, frwl);
-		if (m) {
-			(void)m_freem(m);
-			*mm = 0;
-		}
-		return error;
-	}
-	if (stage == IPV6_FW_DEL) {
-		if (m->m_len != sizeof(struct ip6_fw)) {
-			dprintf(("%s len=%ld, want %lu\n", err_prefix, m->m_len,
-			    sizeof(struct ip6_fw)));
-			error = EINVAL;
-		} else if (mtod(m, struct ip6_fw *)->fw_number == (u_short)-1) {
-			dprintf(("%s can't delete rule 65535\n", err_prefix));
-			error = EINVAL;
-		} else
-			error = del_entry6(&ip6_fw_chain,
-			    mtod(m, struct ip6_fw *)->fw_number);
-		if (m) {
-			(void)m_freem(m);
-			*mm = 0;
-		}
-		return error;
-	}
-
-	dprintf(("%s unknown request %d\n", err_prefix, stage));
-	if (m) {
-		(void)m_freem(m);
-		*mm = 0;
-	}
-	return (EINVAL);
-}
-#endif
-
 static void
 ip6fw_kev_post_msg(u_int32_t event_code)
 {
@@ -1272,6 +1158,121 @@ ip6fw_kev_post_msg(u_int32_t event_code)
 }
 
 
+static void
+cp_to_user_64( struct ip6_fw_64 *userrule_64, struct ip6_fw *rule)
+{
+	userrule_64->version = rule->version;
+	userrule_64->context = CAST_USER_ADDR_T(rule->context);
+	userrule_64->fw_pcnt = rule->fw_pcnt;
+	userrule_64->fw_bcnt = rule->fw_bcnt;
+	userrule_64->fw_src = rule->fw_src;
+	userrule_64->fw_dst = rule->fw_dst;
+	userrule_64->fw_smsk = rule->fw_smsk;
+	userrule_64->fw_dmsk = rule->fw_dmsk;
+	userrule_64->fw_number = rule->fw_number;
+	userrule_64->fw_flg = rule->fw_flg;
+	userrule_64->fw_ipflg = rule->fw_ipflg;
+	bcopy( rule->fw_pts, userrule_64->fw_pts, IPV6_FW_MAX_PORTS);
+	userrule_64->fw_ip6opt= rule->fw_ip6opt;
+	userrule_64->fw_ip6nopt = rule->fw_ip6nopt;
+	userrule_64->fw_tcpf = rule->fw_tcpf;
+	userrule_64->fw_tcpnf = rule->fw_tcpnf;
+	bcopy( rule->fw_icmp6types, userrule_64->fw_icmp6types, sizeof(userrule_64->fw_icmp6types));
+	userrule_64->fw_in_if = rule->fw_in_if;
+	userrule_64->fw_out_if = rule->fw_out_if;
+	userrule_64->timestamp = rule->timestamp;
+	userrule_64->fw_un.fu_divert_port = rule->fw_un.fu_divert_port;
+	userrule_64->fw_prot = rule->fw_prot;
+	userrule_64->fw_nports = rule->fw_nports;
+}
+
+
+static void
+cp_from_user_64( struct ip6_fw_64 *userrule_64, struct ip6_fw *rule)
+{
+	rule->version = userrule_64->version;
+	rule->context = CAST_DOWN(void *, userrule_64->context);
+	rule->fw_pcnt = userrule_64->fw_pcnt;
+	rule->fw_bcnt = userrule_64->fw_bcnt;
+	rule->fw_src = userrule_64->fw_src;
+	rule->fw_dst = userrule_64->fw_dst;
+	rule->fw_smsk = userrule_64->fw_smsk;
+	rule->fw_dmsk = userrule_64->fw_dmsk;
+	rule->fw_number = userrule_64->fw_number;
+	rule->fw_flg = userrule_64->fw_flg;
+	rule->fw_ipflg = userrule_64->fw_ipflg;
+	bcopy( userrule_64->fw_pts, rule->fw_pts, IPV6_FW_MAX_PORTS);
+	rule->fw_ip6opt  = userrule_64->fw_ip6opt;
+	rule->fw_ip6nopt = userrule_64->fw_ip6nopt;
+	rule->fw_tcpf = userrule_64->fw_tcpf;
+	rule->fw_tcpnf = userrule_64->fw_tcpnf;
+	bcopy( userrule_64->fw_icmp6types, rule->fw_icmp6types, sizeof(userrule_64->fw_icmp6types));
+	rule->fw_in_if = userrule_64->fw_in_if;
+	rule->fw_out_if = userrule_64->fw_out_if;
+	rule->timestamp = CAST_DOWN( long, userrule_64->timestamp);
+	rule->fw_un.fu_divert_port = userrule_64->fw_un.fu_divert_port;
+	rule->fw_prot = userrule_64->fw_prot;
+	rule->fw_nports = userrule_64->fw_nports;
+}
+
+
+static void
+cp_to_user_32( struct ip6_fw_32 *userrule_32, struct ip6_fw *rule)
+{
+	userrule_32->version = rule->version;
+	userrule_32->context = CAST_DOWN_EXPLICIT( user32_addr_t, rule->context);
+	userrule_32->fw_pcnt = rule->fw_pcnt;
+	userrule_32->fw_bcnt = rule->fw_bcnt;
+	userrule_32->fw_src = rule->fw_src;
+	userrule_32->fw_dst = rule->fw_dst;
+	userrule_32->fw_smsk = rule->fw_smsk;
+	userrule_32->fw_dmsk = rule->fw_dmsk;
+	userrule_32->fw_number = rule->fw_number;
+	userrule_32->fw_flg = rule->fw_flg;
+	userrule_32->fw_ipflg = rule->fw_ipflg;
+	bcopy( rule->fw_pts, userrule_32->fw_pts, IPV6_FW_MAX_PORTS);
+	userrule_32->fw_ip6opt = rule->fw_ip6opt ;
+	userrule_32->fw_ip6nopt = rule->fw_ip6nopt;
+	userrule_32->fw_tcpf = rule->fw_tcpf;
+	userrule_32->fw_tcpnf = rule->fw_tcpnf;
+	bcopy( rule->fw_icmp6types, userrule_32->fw_icmp6types, sizeof(rule->fw_icmp6types));
+	userrule_32->fw_in_if = rule->fw_in_if;
+	userrule_32->fw_out_if = rule->fw_out_if;
+	userrule_32->timestamp = rule->timestamp;
+	userrule_32->fw_un.fu_divert_port = rule->fw_un.fu_divert_port;
+	userrule_32->fw_prot = rule->fw_prot;
+	userrule_32->fw_nports = rule->fw_nports;
+}
+
+
+static void
+cp_from_user_32( struct ip6_fw_32 *userrule_32, struct ip6_fw *rule)
+{
+	rule->version = userrule_32->version;
+	rule->context = CAST_DOWN(void *, userrule_32->context);
+	rule->fw_pcnt = userrule_32->fw_pcnt;
+	rule->fw_bcnt = userrule_32->fw_bcnt;
+	rule->fw_src = userrule_32->fw_src;
+	rule->fw_dst = userrule_32->fw_dst;
+	rule->fw_smsk = userrule_32->fw_smsk;
+	rule->fw_dmsk = userrule_32->fw_dmsk;
+	rule->fw_number = userrule_32->fw_number;
+	rule->fw_flg = userrule_32->fw_flg;
+	rule->fw_ipflg = userrule_32->fw_ipflg;
+	bcopy( userrule_32->fw_pts, rule->fw_pts, IPV6_FW_MAX_PORTS);
+	rule->fw_ip6opt  = userrule_32->fw_ip6opt;
+	rule->fw_ip6nopt = userrule_32->fw_ip6nopt;
+	rule->fw_tcpf = userrule_32->fw_tcpf;
+	rule->fw_tcpnf = userrule_32->fw_tcpnf;
+	bcopy( userrule_32->fw_icmp6types, rule->fw_icmp6types, sizeof(userrule_32->fw_icmp6types));
+	rule->fw_in_if = userrule_32->fw_in_if;
+	rule->fw_out_if = userrule_32->fw_out_if;
+	rule->timestamp = CAST_DOWN(long, userrule_32->timestamp);
+	rule->fw_un.fu_divert_port = userrule_32->fw_un.fu_divert_port;
+	rule->fw_prot = userrule_32->fw_prot;
+	rule->fw_nports = userrule_32->fw_nports;
+}
+
 static int
 ip6_fw_ctl(struct sockopt *sopt)
 {
@@ -1279,22 +1280,45 @@ ip6_fw_ctl(struct sockopt *sopt)
 	int spl;
 	int valsize;
 	struct ip6_fw rule;
+	int is64user=0;
+	size_t	userrulesize;
 
 	if (securelevel >= 3 &&
 		(sopt->sopt_dir != SOPT_GET || sopt->sopt_name != IPV6_FW_GET))
 		return (EPERM);
 
+	if ( proc_is64bit(sopt->sopt_p) ){
+		is64user = 1;
+		userrulesize = sizeof( struct ip6_fw_64 );
+	} else
+		userrulesize = sizeof( struct ip6_fw_32 );
+	
 	/* We ALWAYS expect the client to pass in a rule structure so that we can
 	 * check the version of the API that they are using.  In the case of a
 	 * IPV6_FW_GET operation, the first rule of the output buffer passed to us
 	 * must have the version set. */
-	if (!sopt->sopt_val || sopt->sopt_valsize < sizeof rule) return EINVAL;
+	if (!sopt->sopt_val || sopt->sopt_valsize < userrulesize) return EINVAL;
 
 	/* save sopt->sopt_valsize */
 	valsize = sopt->sopt_valsize;
-	if ((error = sooptcopyin(sopt, &rule, sizeof(rule), sizeof(rule))))
-		return error;
-
+	
+	if (is64user){
+		struct ip6_fw_64 userrule_64;
+		
+		if ((error = sooptcopyin(sopt, &userrule_64, userrulesize, userrulesize)))
+			return error;
+		
+		cp_from_user_64( &userrule_64, &rule );
+	}
+	else {
+		struct ip6_fw_32 userrule_32;
+		
+		if ((error = sooptcopyin(sopt, &userrule_32, userrulesize, userrulesize)))
+			return error;
+		
+		cp_from_user_32( &userrule_32, &rule );
+	}
+	
 	if (rule.version != IPV6_FW_CURRENT_API_VERSION) return EINVAL;
 	rule.version = 0xFFFFFFFF;	/* version is meaningless once rules "make it in the door". */
 
@@ -1305,21 +1329,38 @@ ip6_fw_ctl(struct sockopt *sopt)
 			struct ip6_fw_chain *fcp;
 			struct ip6_fw *buf;
 			size_t size = 0;
+			size_t rulesize = 0;
 
 			spl = splnet();
+			
+			if ( is64user )
+				rulesize = sizeof(struct ip6_fw_64 );
+			else
+				rulesize = sizeof(struct ip6_fw_32 );
+			
 			LIST_FOREACH(fcp, &ip6_fw_chain, chain)
-				size += sizeof *buf;
+				size += rulesize;
 
 			buf = _MALLOC(size, M_TEMP, M_WAITOK);
 			if (!buf) error = ENOBUFS;
 			else
 			{
-				struct ip6_fw *bp = buf;
+				//struct ip6_fw *bp = buf;
+				caddr_t bp = (caddr_t)buf;
+				
 				LIST_FOREACH(fcp, &ip6_fw_chain, chain)
 				{
-					bcopy(fcp->rule, bp, sizeof *bp);
-					bp->version = IPV6_FW_CURRENT_API_VERSION;
-					bp++;
+					//bcopy(fcp->rule, bp, sizeof *bp);
+					if ( is64user ){
+						cp_to_user_64( (struct ip6_fw_64*)bp, fcp->rule);
+					}
+					else {
+						cp_to_user_32( (struct ip6_fw_32*)bp, fcp->rule);
+					}
+
+					( (struct ip6_fw*)bp)->version = IPV6_FW_CURRENT_API_VERSION;
+					//bp++;
+					bp += rulesize;
 				}
 			}
 

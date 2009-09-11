@@ -115,5 +115,7 @@ extern int badport_bandlim(int);
 #define BANDLIM_RST_CLOSEDPORT 3 /* No connection, and no listeners */
 #define BANDLIM_RST_OPENPORT 4   /* No connection, listener */
 #define BANDLIM_MAX 4
-#endif KERNEL_PRIVATE
+
+extern struct	icmpstat icmpstat;
+#endif /* KERNEL_PRIVATE */
 #endif /* _NETINET_ICMP_VAR_H_ */

@@ -36,6 +36,7 @@
 
 #ifndef _NETINET6_IPSEC_H_
 #define _NETINET6_IPSEC_H_
+#include <sys/cdefs.h>
 #include <sys/appleapiopts.h>
 
 #include <net/pfkeyv2.h>
@@ -43,10 +44,10 @@
 #include <netkey/keydb.h>
 
 /* lock for IPSec stats */
-lck_grp_t         *sadb_stat_mutex_grp;
-lck_grp_attr_t    *sadb_stat_mutex_grp_attr;
-lck_attr_t        *sadb_stat_mutex_attr;
-lck_mtx_t         *sadb_stat_mutex;
+extern lck_grp_t         *sadb_stat_mutex_grp;
+extern lck_grp_attr_t    *sadb_stat_mutex_grp_attr;
+extern lck_attr_t        *sadb_stat_mutex_attr;
+extern lck_mtx_t         *sadb_stat_mutex;
 
 
 #define IPSEC_STAT_INCREMENT(x)	\
@@ -346,15 +347,17 @@ extern struct socket *ipsec_getsocket(struct mbuf *);
 extern int ipsec_addhist(struct mbuf *, int, u_int32_t); 
 extern struct ipsec_history *ipsec_gethist(struct mbuf *, int *);
 extern void ipsec_clearhist(struct mbuf *);
-#endif KERNEL
-#endif KERNEL_PRIVATE
+#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
 
 #ifndef KERNEL
+__BEGIN_DECLS
 extern caddr_t ipsec_set_policy(char *, int);
 extern int ipsec_get_policylen(caddr_t);
 extern char *ipsec_dump_policy(caddr_t, char *);
 
 extern const char *ipsec_strerror(void);
-#endif KERNEL
+__END_DECLS
+#endif /* KERNEL */
 
 #endif /* _NETINET6_IPSEC_H_ */

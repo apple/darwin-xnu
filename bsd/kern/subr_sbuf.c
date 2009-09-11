@@ -208,12 +208,12 @@ sbuf_uionew(struct sbuf *s, struct uio *uio, int *error)
 	KASSERT(error != NULL,
 	    ("%s called with NULL error pointer", __func__));
 
-	s = sbuf_new(s, NULL, uio->uio_resid + 1, 0);
+	s = sbuf_new(s, NULL, uio_resid(uio) + 1, 0);
 	if (s == NULL) {
 		*error = ENOMEM;
 		return (NULL);
 	}
-	*error = uiomove(s->s_buf, uio->uio_resid, uio);
+	*error = uiomove(s->s_buf, uio_resid(uio), uio);
 	if (*error != 0) {
 		sbuf_delete(s);
 		return (NULL);

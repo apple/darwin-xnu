@@ -63,4 +63,5 @@ options		CONFIG_DTRACE 	# dtrace support	# <config_dtrace>
 options		CONFIG_NO_PANIC_STRINGS			# <no_panic_str>
 options		CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
 options		CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
+options		CONFIG_FSE	# file system events	# <config_fse>
 

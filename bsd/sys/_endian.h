@@ -107,10 +107,10 @@ __END_DECLS
 
 #elif __DARWIN_BYTE_ORDER == __DARWIN_BIG_ENDIAN
 
-#define ntohl(x)        (x)
-#define ntohs(x)        (x)
-#define htonl(x)        (x)
-#define htons(x)        (x)
+#define ntohl(x)        ((__uint32_t)(x))
+#define ntohs(x)        ((__uint16_t)(x))
+#define htonl(x)        ((__uint32_t)(x))
+#define htons(x)        ((__uint16_t)(x))
 
 #if     defined(KERNEL) || (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
 #define NTOHL(x)        (x)

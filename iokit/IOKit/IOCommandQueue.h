@@ -41,9 +41,6 @@ HISTORY
 
 #include <IOKit/IOEventSource.h>
 
-
-#define DEPRECATED __attribute__((deprecated))
-
 class IOCommandQueue;
 
 typedef void (*IOCommandQueueAction)
@@ -70,16 +67,16 @@ public:
     static IOCommandQueue *commandQueue(OSObject *inOwner,
                                         IOCommandQueueAction inAction = 0,
                                         int inSize = kIOCQDefaultSize) 
-	DEPRECATED;
+	APPLE_KEXT_DEPRECATED;
     virtual bool init(OSObject *inOwner,
                       IOCommandQueueAction inAction = 0,
                       int inSize = kIOCQDefaultSize)
-	DEPRECATED;
+	APPLE_KEXT_DEPRECATED;
 
     virtual kern_return_t enqueueCommand(bool gotoSleep = true,
                                          void *field0 = 0, void *field1 = 0,
                                          void *field2 = 0, void *field3 = 0)
-	DEPRECATED;
+	APPLE_KEXT_DEPRECATED;
 
     // WARNING:  This function can only be safely called from the appropriate
     // work loop context.  You should check IOWorkLoop::onThread is true.
@@ -89,7 +86,7 @@ public:
     // If the input fields are zero then the queue's owner/action will be used.
     virtual int performAndFlush(OSObject *target = 0,
                                 IOCommandQueueAction inAction = 0)
-	DEPRECATED;
+	APPLE_KEXT_DEPRECATED;
 };
 
 #endif /* !_IOKIT_IOCOMMANDQUEUE_H */

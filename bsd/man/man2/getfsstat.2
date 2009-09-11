@@ -33,7 +33,7 @@
 .\"
 .\"	@(#)getfsstat.2	8.1 (Berkeley) 6/9/93
 .\"
-.Dd June 9, 1993
+.Dd Oct 28, 2008
 .Dt GETFSSTAT 2
 .Os
 .Sh NAME
@@ -45,20 +45,100 @@
 .Fd #include <sys/mount.h>
 .Ft int
 .Fn getfsstat "struct statfs *buf" "int bufsize" "int flags"
+.Sh TRANSITIIONAL SYNOPSIS (NOW DEPRECATED)
+.Ft int
+.br
+.Fn getfsstat64 "struct statfs64 *buf" "int bufsize" "int flags" ;
 .Sh DESCRIPTION
-.Fn Getfsstat
-returns information about all mounted file systems.
-.Fa Buf
-is a pointer to an array of
+The
+.Fn getfsstat
+function returns information about all mounted file systems.
+The
+.Fa buf
+argument is a pointer to an array of
 .Xr statfs
-structures defined as follows:
+structures.
+.Pp
+As of Mac OS X 10.6, the default size of the
+.Ft ino_t
+type is 64 bits (the macro
+.Dv _DARWIN_FEATURE_64_BIT_INODE
+will be defined).
+While there is no
+.Ft ino_t
+type used in the
+.Xr statfs
+structure, the changes to
+.Fn getfsstat
+are grouped together with the 64-bit inode changes.
+The string fields in the
+.Xr statfs
+structure are larger and the variant symbol
+.Li _getfsstat$INODE64
+will be automatically used.
+The
+.Xr statfs
+structure is defined as:
 .Bd -literal
 typedef struct { int32_t val[2]; } fsid_t;
 
-#define MFSNAMELEN   15 /* length of fs type name, not inc. nul */
-#define MNAMELEN     90	/* length of buffer for returned name */
+#define MFSTYPENAMELEN  16 /* length of fs type name including null */
+#define MAXPATHLEN      1024	
+#define MNAMELEN        MAXPATHLEN
 
-struct statfs {
+struct statfs { /* when _DARWIN_FEATURE_64_BIT_INODE is defined */
+    uint32_t    f_bsize;        /* fundamental file system block size */ 
+    int32_t     f_iosize;       /* optimal transfer block size */ 
+    uint64_t    f_blocks;       /* total data blocks in file system */ 
+    uint64_t    f_bfree;        /* free blocks in fs */ 
+    uint64_t    f_bavail;       /* free blocks avail to non-superuser */ 
+    uint64_t    f_files;        /* total file nodes in file system */ 
+    uint64_t    f_ffree;        /* free file nodes in fs */ 
+    fsid_t      f_fsid;         /* file system id */ 
+    uid_t       f_owner;        /* user that mounted the filesystem */ 
+    uint32_t    f_type;         /* type of filesystem */ 
+    uint32_t    f_flags;        /* copy of mount exported flags */ 
+    uint32_t    f_fssubtype;    /* fs sub-type (flavor) */ 
+    char        f_fstypename[MFSTYPENAMELEN];   /* fs type name */ 
+    char        f_mntonname[MAXPATHLEN];        /* directory on which mounted */ 
+    char        f_mntfromname[MAXPATHLEN];      /* mounted filesystem */ 
+    uint32_t    f_reserved[8];  /* For future use */ 
+};
+.Ed
+.Pp
+(In 10.5, 64-bit
+.Ft ino_t ,
+larger
+.Xr statfs
+structure and variant symbol were available if the macro
+.Dv _DARWIN_USE_64_BIT_INODE
+is defined before any header files are included; this macro is optional in
+10.6.)
+.Pp
+If the macro
+.Dv _DARWIN_NO_64_BIT_INODE
+is defined before any header files are included, or if the deployment target
+is less than 10.6, the legacy
+.Xr statfs
+structure will be in effect.
+The
+.Ft ino_t
+type will be 32 bits (the
+.Dv _DARWIN_FEATURE_64_BIT_INODE
+macro will not be defined), the strings in the
+.Xr statfs
+structure will be their smaller legacy size (and long mount paths may no longer
+fit) and the undecorated symbol
+.Li _getfsstat
+will be used.
+This legacy
+.Fa statfs
+structure is defined as:
+.Bd -literal
+#define MFSNAMELEN      15 /* length of fs type name, not inc. nul */
+#define MNAMELEN        90 /* length of buffer for returned name */
+
+struct statfs { /* when _DARWIN_FEATURE_64_BIT_INODE is NOT defined */
     short   f_otype;	/* type of file system (reserved: zero) */
     short   f_oflags;	/* copy of mount flags (reserved: zero) */
     long    f_bsize;	/* fundamental file system block size */
@@ -68,7 +148,7 @@ struct statfs {
     long    f_bavail;	/* free blocks avail to non-superuser */
     long    f_files;	/* total file nodes in file system */
     long    f_ffree;	/* free file nodes in fs */
-    fsid_t  f_fsid;	/* file system id (super-user only) */
+    fsid_t  f_fsid;	/* file system id */
     uid_t   f_owner;	/* user that mounted the file system */
     short   f_reserved1;	/* reserved for future use */
     short   f_type;	/* type of file system (reserved) */
@@ -107,6 +187,8 @@ Some of the information returned may be out of date, however; if
 .Fa flags
 is set to
 .Dv MNT_WAIT
+or
+.Dv MNT_DWAIT
 instead,
 .Fn getfsstat
 will request updated information from each mounted filesystem before
@@ -123,13 +205,23 @@ is set to indicate the error.
 fails if one or more of the following are true:
 .Bl -tag -width Er
 .It Bq Er EFAULT
-.Fa Buf
-points to an invalid address.
+The
+.Fa buf
+argument points to an invalid address.
 .It Bq Er EIO
 An
 .Tn I/O
 error occurred while reading from or writing to the file system.
 .El
+.Sh TRANSITIONAL DESCRIPTION (NOW DEPRECATED)
+The
+.Fn getfsstat64
+routine is equivalent to the default
+.Fn getfstat
+(when
+.Dv _DARWIN_FEATURE_64_BIT_INODE
+is defined), so there is no longer any reason to use it (it will be removed
+in the future).
 .Sh SEE ALSO
 .Xr statfs 2 ,
 .Xr fstab 5 ,

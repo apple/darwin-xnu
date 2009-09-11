@@ -87,7 +87,7 @@
 #include <sys/uio_internal.h>
 #include <sys/kauth.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <sys/kdebug.h>
 #include <sys/sysproto.h>
@@ -133,9 +133,9 @@ static pid_t last_pid_4056224 = 0;
 int falloc_locked(proc_t, struct fileproc **, int *, vfs_context_t, int);
 
 static int sendit(struct proc *, int, struct user_msghdr *, uio_t, int,
-    register_t *);
+    int32_t *);
 static int recvit(struct proc *, int, struct user_msghdr *, uio_t, user_addr_t,
-    register_t *);
+    int32_t *);
 static int getsockaddr(struct socket *, struct sockaddr **, user_addr_t,
     size_t, boolean_t);
 static int getsockaddr_s(struct socket *, struct sockaddr_storage *,
@@ -166,7 +166,7 @@ extern	struct fileops socketops;
  *	socreate:???			[other protocol families, IPSEC]
  */
 int
-socket(struct proc *p, struct socket_args *uap, register_t *retval)
+socket(struct proc *p, struct socket_args *uap, int32_t *retval)
 {
 	struct socket *so;
 	struct fileproc *fp;
@@ -230,7 +230,7 @@ socket(struct proc *p, struct socket_args *uap, register_t *retval)
  */
 /* ARGSUSED */
 int
-bind(__unused proc_t p, struct bind_args *uap, __unused register_t *retval)
+bind(__unused proc_t p, struct bind_args *uap, __unused int32_t *retval)
 {
 	struct sockaddr_storage ss;
 	struct sockaddr *sa = NULL;
@@ -287,7 +287,7 @@ out:
  */
 int
 listen(__unused struct proc *p, struct listen_args *uap,
-    __unused register_t *retval)
+    __unused int32_t *retval)
 {
 	int error;
 	struct socket *so;
@@ -332,7 +332,7 @@ listen(__unused struct proc *p, struct listen_args *uap,
  */
 int
 accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
-    register_t *retval)
+    int32_t *retval)
 {
 	struct fileproc *fp;
 	struct sockaddr *sa = NULL;
@@ -498,8 +498,6 @@ accept_nocancel(struct proc *p, struct accept_nocancel_args *uap,
 		namelen = 0;
 		if (uap->name)
 			goto gotnoname;
-		if (dosocklock)
-			socket_unlock(so, 1);
 		error = 0;
 		goto releasefd;
 	}
@@ -521,6 +519,7 @@ gotnoname:
 	}
 	FREE(sa, M_SONAME);
 
+releasefd:
 	/*
 	 * If the socket has been marked as inactive by soacceptfilter(),
 	 * disallow further operations on it.  We explicitly call shutdown
@@ -537,7 +536,6 @@ gotnoname:
 	if (dosocklock)
 		socket_unlock(so, 1);
 
-releasefd:
 	proc_fdlock(p);
 	procfdtbl_releasefd(p, newfd, NULL);
 	fp_drop(p, newfd, fp, 1);
@@ -549,7 +547,7 @@ out:
 }
 
 int
-accept(struct proc *p, struct accept_args *uap, register_t *retval)
+accept(struct proc *p, struct accept_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
 	return(accept_nocancel(p, (struct accept_nocancel_args *)uap, retval));
@@ -579,14 +577,14 @@ accept(struct proc *p, struct accept_args *uap, register_t *retval)
  */
 /* ARGSUSED */
 int
-connect(struct proc *p, struct connect_args *uap, register_t *retval)
+connect(struct proc *p, struct connect_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
 	return(connect_nocancel(p, (struct connect_nocancel_args *)uap, retval));
 }
 
 int
-connect_nocancel(__unused proc_t p, struct connect_nocancel_args *uap, __unused register_t *retval)
+connect_nocancel(__unused proc_t p, struct connect_nocancel_args *uap, __unused int32_t *retval)
 {
 	struct socket *so;
 	struct sockaddr_storage ss;
@@ -700,7 +698,7 @@ out:
  */
 int
 socketpair(struct proc *p, struct socketpair_args *uap,
-    __unused register_t *retval)
+    __unused int32_t *retval)
 {
 	struct fileproc *fp1, *fp2;
 	struct socket *so1, *so2;
@@ -810,7 +808,7 @@ free1:
  */
 static int
 sendit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
-    int flags, register_t *retval)
+    int flags, int32_t *retval)
 {
 	struct mbuf *control = NULL;
 	struct sockaddr_storage ss;
@@ -898,14 +896,14 @@ out:
  *	write:???			[4056224: applicable for pipes]
  */
 int
-sendto(struct proc *p, struct sendto_args *uap, register_t *retval)
+sendto(struct proc *p, struct sendto_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
 	return(sendto_nocancel(p, (struct sendto_nocancel_args *)uap, retval));
 }
 
 int
-sendto_nocancel(struct proc *p, struct sendto_nocancel_args *uap, register_t *retval)
+sendto_nocancel(struct proc *p, struct sendto_nocancel_args *uap, int32_t *retval)
 {
 	struct user_msghdr msg;
 	int error;
@@ -984,34 +982,32 @@ sendto_nocancel(struct proc *p, struct sendto_nocancel_args *uap, register_t *re
  *	sendit:???			[see sendit definition in this file]
  */
 int
-sendmsg(struct proc *p, struct sendmsg_args *uap, register_t *retval)
+sendmsg(struct proc *p, struct sendmsg_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
 	return(sendmsg_nocancel(p, (struct sendmsg_nocancel_args *)uap, retval));
 }
 
 int
-sendmsg_nocancel(struct proc *p, struct sendmsg_nocancel_args *uap, register_t *retval)
+sendmsg_nocancel(struct proc *p, struct sendmsg_nocancel_args *uap, int32_t *retval)
 {
-	struct msghdr msg;
+	struct user32_msghdr msg32;
+	struct user64_msghdr msg64;
 	struct user_msghdr user_msg;
 	caddr_t msghdrp;
 	int	size_of_msghdr;
 	int error;
-	int size_of_iovec;
 	uio_t auio = NULL;
 	struct user_iovec *iovp;
 
 	KERNEL_DEBUG(DBG_FNC_SENDMSG | DBG_FUNC_START, 0, 0, 0, 0, 0);
 	AUDIT_ARG(fd, uap->s);
 	if (IS_64BIT_PROCESS(p)) {
-		msghdrp = (caddr_t)&user_msg;
-		size_of_msghdr = sizeof (user_msg);
-		size_of_iovec = sizeof (struct user_iovec);
+		msghdrp = (caddr_t)&msg64;
+		size_of_msghdr = sizeof (msg64);
 	} else {
-		msghdrp = (caddr_t)&msg;
-		size_of_msghdr = sizeof (msg);
-		size_of_iovec = sizeof (struct iovec);
+		msghdrp = (caddr_t)&msg32;
+		size_of_msghdr = sizeof (msg32);
 	}
 	error = copyin(uap->msg, msghdrp, size_of_msghdr);
 	if (error) {
@@ -1019,15 +1015,22 @@ sendmsg_nocancel(struct proc *p, struct sendmsg_nocancel_args *uap, register_t *
 		return (error);
 	}
 
-	/* only need to copy if user process is not 64-bit */
-	if (!IS_64BIT_PROCESS(p)) {
-		user_msg.msg_flags = msg.msg_flags;
-		user_msg.msg_controllen = msg.msg_controllen;
-		user_msg.msg_control = CAST_USER_ADDR_T(msg.msg_control);
-		user_msg.msg_iovlen = msg.msg_iovlen;
-		user_msg.msg_iov = CAST_USER_ADDR_T(msg.msg_iov);
-		user_msg.msg_namelen = msg.msg_namelen;
-		user_msg.msg_name = CAST_USER_ADDR_T(msg.msg_name);
+	if (IS_64BIT_PROCESS(p)) {
+		user_msg.msg_flags = msg64.msg_flags;
+		user_msg.msg_controllen = msg64.msg_controllen;
+		user_msg.msg_control = msg64.msg_control;
+		user_msg.msg_iovlen = msg64.msg_iovlen;
+		user_msg.msg_iov = msg64.msg_iov;
+		user_msg.msg_namelen = msg64.msg_namelen;
+		user_msg.msg_name = msg64.msg_name;
+	} else {
+		user_msg.msg_flags = msg32.msg_flags;
+		user_msg.msg_controllen = msg32.msg_controllen;
+		user_msg.msg_control = msg32.msg_control;
+		user_msg.msg_iovlen = msg32.msg_iovlen;
+		user_msg.msg_iov = msg32.msg_iov;
+		user_msg.msg_namelen = msg32.msg_namelen;
+		user_msg.msg_name = msg32.msg_name;
 	}
 
 	if (user_msg.msg_iovlen <= 0 || user_msg.msg_iovlen > UIO_MAXIOV) {
@@ -1055,8 +1058,9 @@ sendmsg_nocancel(struct proc *p, struct sendmsg_nocancel_args *uap, register_t *
 			error = ENOBUFS;
 			goto done;
 		}
-		error = copyin(user_msg.msg_iov, (caddr_t)iovp,
-		    (user_msg.msg_iovlen * size_of_iovec));
+		error = copyin_user_iovec_array(user_msg.msg_iov,
+			IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32,
+			user_msg.msg_iovlen, iovp);
 		if (error)
 			goto done;
 		user_msg.msg_iov = CAST_USER_ADDR_T(iovp);
@@ -1104,7 +1108,7 @@ done:
  */
 static int
 recvit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
-    user_addr_t namelenp, register_t *retval)
+    user_addr_t namelenp, int32_t *retval)
 {
 	int len, error;
 	struct mbuf *m, *control = 0;
@@ -1155,7 +1159,9 @@ recvit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
 	error = so->so_proto->pr_usrreqs->pru_soreceive(so, &fromsa, uiop,
 	    (struct mbuf **)0, mp->msg_control ? &control : (struct mbuf **)0,
 	    &mp->msg_flags);
-	AUDIT_ARG(sockaddr, vfs_context_cwd(vfs_context_current()), fromsa);
+	if (fromsa)
+		AUDIT_ARG(sockaddr, vfs_context_cwd(vfs_context_current()),
+		    fromsa);
 	if (error) {
 		if (uio_resid(uiop) != len && (error == ERESTART ||
 		    error == EINTR || error == EWOULDBLOCK))
@@ -1198,18 +1204,61 @@ recvit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
 
 		while (m && len > 0) {
 			unsigned int tocopy;
+			struct cmsghdr *cp = mtod(m, struct cmsghdr *);
+	
+			/* 
+			 * SCM_TIMESTAMP hack because  struct timeval has a 
+			 * different size for 32 bits and 64 bits processes
+			 */
+			if (cp->cmsg_level == SOL_SOCKET &&  cp->cmsg_type == SCM_TIMESTAMP) {
+				unsigned char tmp_buffer[CMSG_SPACE(sizeof(struct user64_timeval))];
+				struct cmsghdr *tmp_cp = (struct cmsghdr *)tmp_buffer;
+				int tmp_space;
+				struct timeval *tv = (struct timeval *)CMSG_DATA(cp);
+				
+				tmp_cp->cmsg_level = SOL_SOCKET;
+				tmp_cp->cmsg_type = SCM_TIMESTAMP;
+				
+				if (proc_is64bit(p)) {
+					struct user64_timeval *tv64 = (struct user64_timeval *)CMSG_DATA(tmp_cp);
 
-			if (len >= m->m_len) {
-				tocopy = m->m_len;
+					tv64->tv_sec = tv->tv_sec;
+					tv64->tv_usec = tv->tv_usec;
+
+					tmp_cp->cmsg_len = CMSG_LEN(sizeof(struct user64_timeval));
+					tmp_space = CMSG_SPACE(sizeof(struct user64_timeval));
+				} else {
+					struct user32_timeval *tv32 = (struct user32_timeval *)CMSG_DATA(tmp_cp);
+					
+					tv32->tv_sec = tv->tv_sec;
+					tv32->tv_usec = tv->tv_usec;
+
+					tmp_cp->cmsg_len = CMSG_LEN(sizeof(struct user32_timeval));
+					tmp_space = CMSG_SPACE(sizeof(struct user32_timeval));
+				}
+				if (len >= tmp_space) {
+					tocopy = tmp_space;
+				} else {
+					mp->msg_flags |= MSG_CTRUNC;
+					tocopy = len;
+				}
+				error = copyout(tmp_buffer, ctlbuf, tocopy);
+				if (error)
+					goto out;
+
 			} else {
-				mp->msg_flags |= MSG_CTRUNC;
-				tocopy = len;
+				if (len >= m->m_len) {
+					tocopy = m->m_len;
+				} else {
+					mp->msg_flags |= MSG_CTRUNC;
+					tocopy = len;
+				}
+	
+				error = copyout((caddr_t)mtod(m, caddr_t), ctlbuf,
+					tocopy);
+				if (error)
+					goto out;
 			}
-
-			error = copyout((caddr_t)mtod(m, caddr_t), ctlbuf,
-			    tocopy);
-			if (error)
-				goto out;
 
 			ctlbuf += tocopy;
 			len -= tocopy;
@@ -1245,14 +1294,14 @@ out1:
  *		the block header for the recvit function.
  */
 int
-recvfrom(struct proc *p, struct recvfrom_args *uap, register_t *retval)
+recvfrom(struct proc *p, struct recvfrom_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
 	return(recvfrom_nocancel(p, (struct recvfrom_nocancel_args *)uap, retval));
 }
 
 int
-recvfrom_nocancel(struct proc *p, struct recvfrom_nocancel_args *uap, register_t *retval)
+recvfrom_nocancel(struct proc *p, struct recvfrom_nocancel_args *uap, int32_t *retval)
 {
 	struct user_msghdr msg;
 	int error;
@@ -1342,35 +1391,33 @@ recvfrom_nocancel(struct proc *p, struct recvfrom_nocancel_args *uap, register_t
  *		the block header for the recvit function.
  */
 int
-recvmsg(struct proc *p, struct recvmsg_args *uap, register_t *retval)
+recvmsg(struct proc *p, struct recvmsg_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
 	return(recvmsg_nocancel(p, (struct recvmsg_nocancel_args *)uap, retval));
 }
 
 int
-recvmsg_nocancel(struct proc *p, struct recvmsg_nocancel_args *uap, register_t *retval)
+recvmsg_nocancel(struct proc *p, struct recvmsg_nocancel_args *uap, int32_t *retval)
 {
-	struct msghdr msg;
+	struct user32_msghdr msg32;
+	struct user64_msghdr msg64;
 	struct user_msghdr user_msg;
 	caddr_t msghdrp;
 	int	size_of_msghdr;
 	user_addr_t uiov;
 	int error;
-	int size_of_iovec;
 	uio_t auio = NULL;
 	struct user_iovec *iovp;
 
 	KERNEL_DEBUG(DBG_FNC_RECVMSG | DBG_FUNC_START, 0, 0, 0, 0, 0);
 	AUDIT_ARG(fd, uap->s);
 	if (IS_64BIT_PROCESS(p)) {
-		msghdrp = (caddr_t)&user_msg;
-		size_of_msghdr = sizeof (user_msg);
-		size_of_iovec = sizeof (struct user_iovec);
+		msghdrp = (caddr_t)&msg64;
+		size_of_msghdr = sizeof (msg64);
 	} else {
-		msghdrp = (caddr_t)&msg;
-		size_of_msghdr = sizeof (msg);
-		size_of_iovec = sizeof (struct iovec);
+		msghdrp = (caddr_t)&msg32;
+		size_of_msghdr = sizeof (msg32);
 	}
 	error = copyin(uap->msg, msghdrp, size_of_msghdr);
 	if (error) {
@@ -1379,14 +1426,22 @@ recvmsg_nocancel(struct proc *p, struct recvmsg_nocancel_args *uap, register_t *
 	}
 
 	/* only need to copy if user process is not 64-bit */
-	if (!IS_64BIT_PROCESS(p)) {
-		user_msg.msg_flags = msg.msg_flags;
-		user_msg.msg_controllen = msg.msg_controllen;
-		user_msg.msg_control = CAST_USER_ADDR_T(msg.msg_control);
-		user_msg.msg_iovlen = msg.msg_iovlen;
-		user_msg.msg_iov = CAST_USER_ADDR_T(msg.msg_iov);
-		user_msg.msg_namelen = msg.msg_namelen;
-		user_msg.msg_name = CAST_USER_ADDR_T(msg.msg_name);
+	if (IS_64BIT_PROCESS(p)) {
+		user_msg.msg_flags = msg64.msg_flags;
+		user_msg.msg_controllen = msg64.msg_controllen;
+		user_msg.msg_control = msg64.msg_control;
+		user_msg.msg_iovlen = msg64.msg_iovlen;
+		user_msg.msg_iov = msg64.msg_iov;
+		user_msg.msg_namelen = msg64.msg_namelen;
+		user_msg.msg_name = msg64.msg_name;
+	} else {
+		user_msg.msg_flags = msg32.msg_flags;
+		user_msg.msg_controllen = msg32.msg_controllen;
+		user_msg.msg_control = msg32.msg_control;
+		user_msg.msg_iovlen = msg32.msg_iovlen;
+		user_msg.msg_iov = msg32.msg_iov;
+		user_msg.msg_namelen = msg32.msg_namelen;
+		user_msg.msg_name = msg32.msg_name;
 	}
 
 	if (user_msg.msg_iovlen <= 0 || user_msg.msg_iovlen > UIO_MAXIOV) {
@@ -1417,8 +1472,9 @@ recvmsg_nocancel(struct proc *p, struct recvmsg_nocancel_args *uap, register_t *
 	}
 	uiov = user_msg.msg_iov;
 	user_msg.msg_iov = CAST_USER_ADDR_T(iovp);
-	error = copyin(uiov, (caddr_t)iovp,
-	    (user_msg.msg_iovlen * size_of_iovec));
+	error = copyin_user_iovec_array(uiov,
+		IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32,
+		user_msg.msg_iovlen, iovp);
 	if (error)
 		goto done;
 
@@ -1428,18 +1484,22 @@ recvmsg_nocancel(struct proc *p, struct recvmsg_nocancel_args *uap, register_t *
 	error = recvit(p, uap->s, &user_msg, auio, 0, retval);
 	if (!error) {
 		user_msg.msg_iov = uiov;
-		/* only need to copy if user process is not 64-bit */
-		if (!IS_64BIT_PROCESS(p)) {
-			// LP64todo - do all these change?  if not, then no need to copy all of them!
-			msg.msg_flags = user_msg.msg_flags;
-			msg.msg_controllen = user_msg.msg_controllen;
-			msg.msg_control =
-			    CAST_DOWN(caddr_t, user_msg.msg_control);
-			msg.msg_iovlen = user_msg.msg_iovlen;
-			msg.msg_iov = (struct iovec *)
-			    CAST_DOWN(caddr_t, user_msg.msg_iov);
-			msg.msg_namelen = user_msg.msg_namelen;
-			msg.msg_name = CAST_DOWN(caddr_t, user_msg.msg_name);
+		if (IS_64BIT_PROCESS(p)) {
+			msg64.msg_flags = user_msg.msg_flags;
+			msg64.msg_controllen = user_msg.msg_controllen;
+			msg64.msg_control = user_msg.msg_control;
+			msg64.msg_iovlen = user_msg.msg_iovlen;
+			msg64.msg_iov = user_msg.msg_iov;
+			msg64.msg_namelen = user_msg.msg_namelen;
+			msg64.msg_name = user_msg.msg_name;
+		} else {
+			msg32.msg_flags = user_msg.msg_flags;
+			msg32.msg_controllen = user_msg.msg_controllen;
+			msg32.msg_control = user_msg.msg_control;
+			msg32.msg_iovlen = user_msg.msg_iovlen;
+			msg32.msg_iov = user_msg.msg_iov;
+			msg32.msg_namelen = user_msg.msg_namelen;
+			msg32.msg_name = user_msg.msg_name;
 		}
 		error = copyout(msghdrp, uap->msg, size_of_msghdr);
 	}
@@ -1474,7 +1534,7 @@ done:
 /* ARGSUSED */
 int
 shutdown(__unused struct proc *p, struct shutdown_args *uap,
-    __unused register_t *retval)
+    __unused int32_t *retval)
 {
 	struct socket *so;
 	int error;
@@ -1511,7 +1571,7 @@ out:
 /* ARGSUSED */
 int
 setsockopt(struct proc *p, struct setsockopt_args *uap,
-    __unused register_t *retval)
+    __unused int32_t *retval)
 {
 	struct socket *so;
 	struct sockopt sopt;
@@ -1563,7 +1623,7 @@ out:
  */
 int
 getsockopt(struct proc *p, struct getsockopt_args  *uap,
-    __unused register_t *retval)
+    __unused int32_t *retval)
 {
 	int		error;
 	socklen_t	valsize;
@@ -1627,7 +1687,7 @@ out:
 /* ARGSUSED */
 int
 getsockname(__unused struct proc *p, struct getsockname_args *uap,
-    __unused register_t *retval)
+    __unused int32_t *retval)
 {
 	struct socket *so;
 	struct sockaddr *sa;
@@ -1714,7 +1774,7 @@ out:
 /* ARGSUSED */
 int
 getpeername(__unused struct proc *p, struct getpeername_args *uap,
-    __unused register_t *retval)
+    __unused int32_t *retval)
 {
 	struct socket *so;
 	struct sockaddr *sa;
@@ -1806,22 +1866,31 @@ sockargs(struct mbuf **mp, user_addr_t data, int buflen, int type)
 	struct mbuf *m;
 	int error;
 
-	if ((u_int)buflen > MLEN) {
-		if (type == MT_SONAME && (u_int)buflen <= 112)
-			buflen = MLEN;		/* unix domain compat. hack */
-		else if ((u_int)buflen > MCLBYTES)
+	int alloc_buflen = buflen;
+#ifdef __LP64__
+	/* The fd's in the buffer must expand to be pointers, thus we need twice as much space */
+	if(type == MT_CONTROL)
+		alloc_buflen = ((buflen - sizeof(struct cmsghdr))*2) + sizeof(struct cmsghdr);
+#endif
+	if ((u_int)alloc_buflen > MLEN) {
+		if (type == MT_SONAME && (u_int)alloc_buflen <= 112)
+			alloc_buflen = MLEN;		/* unix domain compat. hack */
+		else if ((u_int)alloc_buflen > MCLBYTES)
 			return (EINVAL);
 	}
 	m = m_get(M_WAIT, type);
 	if (m == NULL)
 		return (ENOBUFS);
-	if ((u_int)buflen > MLEN) {
+	if ((u_int)alloc_buflen > MLEN) {
 		MCLGET(m, M_WAIT);
 		if ((m->m_flags & M_EXT) == 0) {
 			m_free(m);
 			return (ENOBUFS);
 		}
 	}
+	/* K64: We still copyin the original buflen because it gets expanded later
+	 * and we lie about the size of the mbuf because it only affects unp_* functions
+	 */
 	m->m_len = buflen;
 	error = copyin(data, mtod(m, caddr_t), (u_int)buflen);
 	if (error) {
@@ -2011,18 +2080,22 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 	struct socket *so;
 	struct writev_nocancel_args nuap;
 	user_ssize_t writev_retval;
-	struct sf_hdtr hdtr;
 	struct user_sf_hdtr user_hdtr;
+	struct user32_sf_hdtr user32_hdtr;
+	struct user64_sf_hdtr user64_hdtr;
 	off_t off, xfsize;
 	off_t nbytes = 0, sbytes = 0;
 	int error = 0;
 	size_t sizeof_hdtr;
-	size_t size_of_iovec;
 	off_t file_size;
 	struct vfs_context context = *vfs_context_current();
 
 	KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE | DBG_FUNC_START), uap->s,
 	    0, 0, 0, 0);
+
+	AUDIT_ARG(fd, uap->fd);
+	AUDIT_ARG(value32, uap->s);
+
 	/*
 	 * Do argument checking. Must be a regular file in, stream
 	 * type and connected socket out, positive offset.
@@ -2092,23 +2165,25 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 
 		bzero(&user_hdtr, sizeof (user_hdtr));
 		if (IS_64BIT_PROCESS(p)) {
-			hdtrp = (caddr_t)&user_hdtr;
-			sizeof_hdtr = sizeof (user_hdtr);
-			size_of_iovec = sizeof (struct user_iovec);
+			hdtrp = (caddr_t)&user64_hdtr;
+			sizeof_hdtr = sizeof (user64_hdtr);
 		} else {
-			hdtrp = (caddr_t)&hdtr;
-			sizeof_hdtr = sizeof (hdtr);
-			size_of_iovec = sizeof (struct iovec);
+			hdtrp = (caddr_t)&user32_hdtr;
+			sizeof_hdtr = sizeof (user32_hdtr);
 		}
 		error = copyin(uap->hdtr, hdtrp, sizeof_hdtr);
 		if (error)
 			goto done2;
-		/*  need to copy if user process is not 64-bit */
-		if (!IS_64BIT_PROCESS(p)) {
-			user_hdtr.headers = CAST_USER_ADDR_T(hdtr.headers);
-			user_hdtr.hdr_cnt = hdtr.hdr_cnt;
-			user_hdtr.trailers = CAST_USER_ADDR_T(hdtr.trailers);
-			user_hdtr.trl_cnt = hdtr.trl_cnt;
+		if (IS_64BIT_PROCESS(p)) {
+			user_hdtr.headers = user64_hdtr.headers;
+			user_hdtr.hdr_cnt = user64_hdtr.hdr_cnt;
+			user_hdtr.trailers = user64_hdtr.trailers;
+			user_hdtr.trl_cnt = user64_hdtr.trl_cnt;
+		} else {
+			user_hdtr.headers = user32_hdtr.headers;
+			user_hdtr.hdr_cnt = user32_hdtr.hdr_cnt;
+			user_hdtr.trailers = user32_hdtr.trailers;
+			user_hdtr.trl_cnt = user32_hdtr.trl_cnt;
 		}
 
 		/*
@@ -2203,7 +2278,7 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 		socket_unlock(so, 0);
 		alloc_sendpkt(M_WAIT, xfsize, &nbufs, &m0, jumbocl);
 		pktlen = mbuf_pkt_maxlen(m0);
-		if (pktlen < xfsize)
+		if (pktlen < (size_t)xfsize)
 			xfsize = pktlen;
 
 		auio = uio_createwithbuffer(nbufs, off, UIO_SYSSPACE,
@@ -2217,11 +2292,11 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 		}
 
 		for (i = 0, m = m0, uiolen = 0;
-		    i < nbufs && m != NULL && uiolen < xfsize;
+		    i < nbufs && m != NULL && uiolen < (size_t)xfsize;
 		    i++, m = mbuf_next(m)) {
 			size_t mlen = mbuf_maxlen(m);
 
-			if (mlen + uiolen > xfsize)
+			if (mlen + uiolen > (size_t)xfsize)
 				mlen = xfsize - uiolen;
 			mbuf_setlen(m, mlen);
 			uio_addiov(auio, CAST_USER_ADDR_T(mbuf_datastart(m)),
@@ -2264,7 +2339,7 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 		    i++, m = mbuf_next(m)) {
 			size_t mlen = mbuf_maxlen(m);
 
-			if (rlen + mlen > xfsize)
+			if (rlen + mlen > (size_t)xfsize)
 				mlen = xfsize - rlen;
 			mbuf_setlen(m, mlen);
 

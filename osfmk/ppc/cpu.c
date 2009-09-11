@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -59,7 +59,7 @@
 #include <ppc/machine_cpu.h>
 #include <ppc/rtclock.h>
 
-decl_mutex_data(static,ppt_lock);
+#include <libkern/OSAtomic.h>
 
 unsigned int		real_ncpus = 1;
 unsigned int		max_ncpus  = MAX_CPUS;
@@ -104,7 +104,6 @@ cpu_bootstrap(
 {
 	simple_lock_init(&rht_lock,0);
 	simple_lock_init(&SignalReadyLock,0);
-	mutex_init(&ppt_lock,0);
 }
 
 
@@ -195,7 +194,7 @@ cpu_machine_init(
 	proc_info->cpu_flags |= BootDone|SignalReady;
 	if (proc_info != mproc_info) {
 		if (proc_info->ppXFlags & SignalReadyWait) {
-			(void)hw_atomic_and(&proc_info->ppXFlags, ~SignalReadyWait);
+			hw_atomic_and_noret(&proc_info->ppXFlags, ~SignalReadyWait);
 			thread_wakeup(&proc_info->cpu_flags);
 		}
 		simple_unlock(&SignalReadyLock);
@@ -223,7 +222,7 @@ cpu_per_proc_alloc(
 		return (struct per_proc_info *)NULL;
 	}
 
-	if ((debugger_stack = kalloc(KERNEL_STACK_SIZE)) == 0) {
+	if ((debugger_stack = kalloc(kernel_stack_size)) == 0) {
 		kfree(proc_info, sizeof(struct per_proc_info));
 		kfree(interrupt_stack, INTSTACK_SIZE);
 		return (struct per_proc_info *)NULL;
@@ -239,7 +238,7 @@ cpu_per_proc_alloc(
 	proc_info->pf = BootProcInfo.pf;
 	proc_info->istackptr = (vm_offset_t)interrupt_stack + INTSTACK_SIZE - FM_SIZE;
 	proc_info->intstack_top_ss = proc_info->istackptr;
-	proc_info->debstackptr = (vm_offset_t)debugger_stack + KERNEL_STACK_SIZE - FM_SIZE;
+	proc_info->debstackptr = (vm_offset_t)debugger_stack + kernel_stack_size - FM_SIZE;
 	proc_info->debstack_top_ss = proc_info->debstackptr;
 
 	queue_init(&proc_info->rtclock_timer.queue);
@@ -262,7 +261,7 @@ cpu_per_proc_free(
 	if (proc_info->cpu_number == master_cpu)
 		return;
 	kfree((void *)(proc_info->intstack_top_ss - INTSTACK_SIZE + FM_SIZE), INTSTACK_SIZE);
-	kfree((void *)(proc_info->debstack_top_ss -  KERNEL_STACK_SIZE + FM_SIZE), KERNEL_STACK_SIZE);
+	kfree((void *)(proc_info->debstack_top_ss -  kernel_stack_size + FM_SIZE), kernel_stack_size);
 	kfree((void *)proc_info, sizeof(struct per_proc_info));			/* Release the per_proc */
 }
 
@@ -276,20 +275,18 @@ cpu_per_proc_register(
 	struct per_proc_info	*proc_info
 )
 {
-	int						cpu;
-
-	mutex_lock(&ppt_lock);
-	if (real_ncpus >= max_ncpus) {
-		mutex_unlock(&ppt_lock);
+	int	cpu;
+	
+	cpu = OSIncrementAtomic(&real_ncpus);
+	
+	if (real_ncpus > max_ncpus) {
 		return KERN_FAILURE;
 	}
-	cpu = real_ncpus;
+	
 	proc_info->cpu_number = cpu;
 	PerProcTable[cpu].ppe_vaddr = proc_info;
 	PerProcTable[cpu].ppe_paddr = (addr64_t)pmap_find_phys(kernel_pmap, (addr64_t)(unsigned int)proc_info) << PAGE_SHIFT;
 	eieio();
-	real_ncpus++;
-	mutex_unlock(&ppt_lock);
 	return KERN_SUCCESS;
 }
 
@@ -373,7 +370,7 @@ cpu_start(
 		} else {
 			simple_lock(&SignalReadyLock);
 			if (!((*(volatile short *)&proc_info->cpu_flags) & SignalReady)) {
-				(void)hw_atomic_or(&proc_info->ppXFlags, SignalReadyWait);
+				hw_atomic_or_noret(&proc_info->ppXFlags, SignalReadyWait);
 				thread_sleep_simple_lock((event_t)&proc_info->cpu_flags,
 				                          &SignalReadyLock, THREAD_UNINT);
 			}
@@ -431,10 +428,8 @@ cpu_sleep(
 
 	proc_info->running = FALSE;
 
-	if (proc_info->cpu_number != master_cpu) {
-		timer_queue_shutdown(&proc_info->rtclock_timer.queue);
-		proc_info->rtclock_timer.deadline = EndOfAllTime;
-	}
+	timer_queue_shutdown(&proc_info->rtclock_timer.queue);
+	proc_info->rtclock_timer.deadline = EndOfAllTime;
 
 	fowner = proc_info->FPU_owner;					/* Cache this */
 	if(fowner) /* If anyone owns FPU, save it */

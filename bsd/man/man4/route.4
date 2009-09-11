@@ -194,11 +194,11 @@ Messages include:
 A message header consists of:
 .Bd -literal
 struct rt_msghdr {
-    u_short rmt_msglen;  /* to skip over non-understood messages */
+    u_short rtm_msglen;  /* to skip over non-understood messages */
     u_char  rtm_version; /* future binary compatibility */
     u_char  rtm_type;    /* message type */
-    u_short rmt_index;   /* index for associated ifp */
-    pid_t   rmt_pid;     /* identify sender */
+    u_short rtm_index;   /* index for associated ifp or interface scope */
+    pid_t   rtm_pid;     /* identify sender */
     int     rtm_addrs;   /* bitmask identifying sockaddrs in msg */
     int     rtm_seq;     /* for sender to identify action */
     int     rtm_errno;   /* why failed */
@@ -241,6 +241,7 @@ Flags include the values:
 #define	RTF_BLACKHOLE 0x1000    /* just discard pkts (during updates) */
 #define	RTF_PROTO2    0x4000    /* protocol specific routing flag #1 */
 #define	RTF_PROTO1    0x8000    /* protocol specific routing flag #2 */
+#define	RTF_IFSCOPE   0x1000000 /* has valid interface scope */
 .Ed
 .Pp
 Specifiers for metric values in rmx_locks and rtm_inits are:

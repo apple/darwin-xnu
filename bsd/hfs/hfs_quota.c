@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -227,7 +227,7 @@ hfs_chkdqchg(cp, change, cred, type)
 		if ((dq->dq_flags & DQ_BLKS) == 0 &&
 		    cp->c_uid == kauth_cred_getuid(cred)) {
 #if 0	
-			printf("\nwrite failed, %s disk limit reached\n",
+			printf("\nhfs: write failed, %s disk limit reached\n",
 			    quotatypes[type]);
 #endif
 			dq->dq_flags |= DQ_BLKS;
@@ -249,18 +249,18 @@ hfs_chkdqchg(cp, change, cred, type)
 			    VTOHFS(vp)->hfs_qfiles[type].qf_btime;
 #if 0
 			if (cp->c_uid == kauth_cred_getuid(cred))
-				printf("\nwarning, %s %s\n",
+				printf("\nhfs: warning, %s %s\n",
 				    quotatypes[type], "disk quota exceeded");
 #endif
 			dqunlock(dq);
 
 			return (0);
 		}
-		if (tv.tv_sec > dq->dq_btime) {
+		if (tv.tv_sec > (time_t)dq->dq_btime) {
 			if ((dq->dq_flags & DQ_BLKS) == 0 &&
 			    cp->c_uid == kauth_cred_getuid(cred)) {
 #if 0
-				printf("\nwrite failed, %s %s\n",
+				printf("\nhfs: write failed, %s %s\n",
 				    quotatypes[type],
 				    "disk quota exceeded for too long");
 #endif
@@ -282,7 +282,7 @@ hfs_chkdqchg(cp, change, cred, type)
 int
 hfs_chkiq(cp, change, cred, flags)
 	register struct cnode *cp;
-	long change;
+	int32_t change;
 	kauth_cred_t cred;
 	int flags;
 {
@@ -347,6 +347,66 @@ hfs_chkiq(cp, change, cred, flags)
 	return (error);
 }
 
+
+/*
+ * Check to see if a change to a user's allocation should be permitted or not.
+ * Issue an error message if it should not be permitted.  Return 0 if 
+ * it should be allowed.
+ */
+int hfs_isiqchg_allowed(dq, hfsmp, change, cred, type, uid)
+	struct dquot* dq;
+	struct hfsmount* hfsmp;
+	int32_t change;
+	kauth_cred_t cred;
+	int type;
+	uid_t uid;
+{
+	u_int32_t ncurinodes;
+
+	dqlock(dq);
+
+	ncurinodes = dq->dq_curinodes + change;
+	/*
+	 * If user would exceed their hard limit, disallow cnode allocation.
+	 */
+	if (ncurinodes >= dq->dq_ihardlimit && dq->dq_ihardlimit) {
+		if ((dq->dq_flags & DQ_INODS) == 0 &&
+		    uid == kauth_cred_getuid(cred)) {
+			dq->dq_flags |= DQ_INODS;
+		}
+		dqunlock(dq);
+
+		return (EDQUOT);
+	}
+	/*
+	 * If user is over their soft limit for too long, disallow cnode
+	 * allocation. Reset time limit as they cross their soft limit.
+	 */
+	if (ncurinodes >= dq->dq_isoftlimit && dq->dq_isoftlimit) {
+		struct timeval tv;
+		
+		microuptime(&tv);
+		if (dq->dq_curinodes < dq->dq_isoftlimit) {
+			dq->dq_itime = tv.tv_sec + hfsmp->hfs_qfiles[type].qf_itime;
+			dqunlock(dq);
+			return (0);
+		}
+		if (tv.tv_sec > (time_t)dq->dq_itime) {
+			if (((dq->dq_flags & DQ_INODS) == 0) &&
+			    (uid == kauth_cred_getuid(cred))) {
+				dq->dq_flags |= DQ_INODS;
+			}
+			dqunlock(dq);
+
+			return (EDQUOT);
+		}
+	}
+	dqunlock(dq);
+
+	return (0);
+}
+
+
 /*
  * Check for a valid change to a users allocation.
  * Issue an error message if appropriate.
@@ -354,12 +414,12 @@ hfs_chkiq(cp, change, cred, flags)
 int
 hfs_chkiqchg(cp, change, cred, type)
 	struct cnode *cp;
-	long change;
+	int32_t change;
 	kauth_cred_t cred;
 	int type;
 {
 	register struct dquot *dq = cp->c_dquot[type];
-	unsigned long ncurinodes;
+	u_int32_t ncurinodes;
 	struct vnode *vp = cp->c_vp ? cp->c_vp : cp->c_rsrc_vp;
 
 	dqlock(dq);
@@ -372,7 +432,7 @@ hfs_chkiqchg(cp, change, cred, type)
 		if ((dq->dq_flags & DQ_INODS) == 0 &&
 		    cp->c_uid == kauth_cred_getuid(cred)) {
 #if 0
-			printf("\nwrite failed, %s cnode limit reached\n",
+			printf("\nhfs: write failed, %s cnode limit reached\n",
 			    quotatypes[type]);
 #endif
 			dq->dq_flags |= DQ_INODS;
@@ -394,18 +454,18 @@ hfs_chkiqchg(cp, change, cred, type)
 			    VTOHFS(vp)->hfs_qfiles[type].qf_itime;
 #if 0
 			if (cp->c_uid == kauth_cred_getuid(cred))
-				printf("\nwarning, %s %s\n",
+				printf("\nhfs: warning, %s %s\n",
 				    quotatypes[type], "cnode quota exceeded");
 #endif
 			dqunlock(dq);
 
 			return (0);
 		}
-		if (tv.tv_sec > dq->dq_itime) {
+		if (tv.tv_sec > (time_t)dq->dq_itime) {
 			if ((dq->dq_flags & DQ_INODS) == 0 &&
 			    cp->c_uid == kauth_cred_getuid(cred)) {
 #if 0
-				printf("\nwrite failed, %s %s\n",
+				printf("\nhfs: write failed, %s %s\n",
 				    quotatypes[type],
 				    "cnode quota exceeded for too long");
 #endif
@@ -607,7 +667,7 @@ hfs_quotaoff(__unused struct proc *p, struct mount *mp, register int type)
 	/*
 	 * Search vnodes associated with this mount point,
 	 * deleting any references to quota file being closed.
-         *
+     *
 	 * hfs_quotaoff_callback will be called for each vnode
 	 * hung off of this mount point
 	 * the vnode will be in an 'unbusy' state (VNODE_WAIT) and 
@@ -644,12 +704,74 @@ hfs_quotaoff(__unused struct proc *p, struct mount *mp, register int type)
 }
 
 /*
+ * hfs_quotacheck - checks quotas mountwide for a hypothetical situation.  It probes
+ * the quota data structures to see if adding an inode would be allowed or not.  If it
+ * will be allowed, the change is made.  Otherwise, it reports an error back out so the
+ * caller will know not to proceed with inode allocation in the HFS Catalog.
+ * 
+ * Note that this function ONLY tests for addition of inodes, not subtraction.
+ */
+int hfs_quotacheck(hfsmp, change, uid, gid, cred)
+	struct hfsmount *hfsmp;
+	int change;
+	uid_t uid;
+	gid_t gid;
+	kauth_cred_t cred;
+{
+	struct dquot *dq = NULL;
+	struct proc *p;
+	int error = 0;
+	int i;
+	id_t id = uid;
+
+	p = current_proc();
+	if (!IS_VALID_CRED(cred)) {
+		/* This use of proc_ucred() is safe because kernproc credential never changes */
+		cred = proc_ucred(kernproc);
+	}
+
+	if (suser(cred, NULL) || proc_forcequota(p)) {
+		for (i = 0; i < MAXQUOTAS; i++) {
+			/* Select if user or group id should be used */
+			if (i == USRQUOTA)
+				id = uid;
+			else if (i == GRPQUOTA)
+				id = gid;
+
+			error = dqget(id, &hfsmp->hfs_qfiles[i], i, &dq);
+			if (error && (error != EINVAL))
+				break;
+
+			error = 0;
+			if (dq == NODQUOT)
+				continue;
+
+			/* Check quota information */
+			error = hfs_isiqchg_allowed(dq, hfsmp, change, cred, i, id);
+			if (error) {
+				dqrele(dq);
+				break;
+			}
+			
+			dqlock(dq);
+			/* Update quota information */
+			dq->dq_curinodes += change;
+			dqunlock(dq);
+			dqrele(dq);
+		}
+	}
+
+	return error;
+}
+
+
+/*
  * Q_GETQUOTA - return current values in a dqblk structure.
  */
 int
 hfs_getquota(mp, id, type, datap)
 	struct mount *mp;
-	u_long id;
+	u_int32_t id;
 	int type;
 	caddr_t datap;
 {
@@ -675,7 +797,7 @@ hfs_getquota(mp, id, type, datap)
 int
 hfs_setquota(mp, id, type, datap)
 	struct mount *mp;
-	u_long id;
+	u_int32_t id;
 	int type;
 	caddr_t datap;
 {
@@ -737,7 +859,7 @@ hfs_setquota(mp, id, type, datap)
 int
 hfs_setuse(mp, id, type, datap)
 	struct mount *mp;
-	u_long id;
+	u_int32_t id;
 	int type;
 	caddr_t datap;
 {

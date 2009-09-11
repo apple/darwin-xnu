@@ -93,6 +93,7 @@ SInt32	OSAddAtomic(SInt32 amount, SInt32 * value)
 */
 
     ENTRY	_OSAddAtomic
+    ENTRY	_OSAddAtomicLong
 
     mr		r5,r3		/* Save the increment */
 .L_AAretry:

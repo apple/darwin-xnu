@@ -74,6 +74,8 @@
 #include <machine/pmap.h>
 #include <device/device_types.h>
 
+#include <libkern/OSKextLibPrivate.h>
+
 #include <mach/vm_param.h>
 #include <mach/clock_types.h>
 #include <mach/machine.h>
@@ -450,10 +452,8 @@ print_backtrace(struct savearea *ssp)
 
 	while(pbtcnt);							/* Wait for completion */
 pbt_exit:
-	panic_display_system_configuration();
-	panic_display_zprint();
-        dump_kext_info(&kdb_log);
-	return;
+    panic_display_system_configuration();
+    return;
 }
 
 void
@@ -527,7 +527,7 @@ void dump_backtrace(struct savearea *sv, unsigned int stackptr, unsigned int fen
 	}
 	kdb_printf("\n");
 	if(i >= DUMPFRAMES) kdb_printf("      backtrace continues...\n");	/* Say we terminated early */
-	if(i) kmod_dump((vm_offset_t *)&bframes[0], i);	/* Show what kmods are in trace */
+	if(i) kmod_panic_dump((vm_offset_t *)&bframes[0], i);	/* Show what kmods are in trace */
 	
 }
 	

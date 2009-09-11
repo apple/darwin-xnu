@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -64,7 +64,7 @@ struct nreserve {
 #define	NR_CACHE 17
 
 #define NR_HASH(btvp, tag) \
-	(&nr_hashtbl[((((int)(btvp)) >> 8) ^ ((int)(tag) >> 4)) & nr_hashmask])
+	(&nr_hashtbl[((((intptr_t)(btvp)) >> 8) ^ ((intptr_t)(tag) >> 4)) & nr_hashmask])
 
 LIST_HEAD(nodereserve, nreserve) *nr_hashtbl;
 
@@ -90,7 +90,7 @@ void
 BTReserveSetup()
 {
 	if (sizeof(struct nreserve) != sizeof(cat_cookie_t))
-		panic("BTReserveSetup: nreserve size != opaque struct size");
+		panic("hfs: BTReserveSetup: nreserve size != opaque struct size");
 
 	nr_hashtbl = hashinit(NR_CACHE, M_HFSMNT, &nr_hashmask);
 
@@ -290,7 +290,7 @@ nr_delete(struct vnode * btvp, struct nreserve *nrp, int *nodecnt)
 	lck_mtx_lock(&nr_mutex);
 	if (nrp->nr_tag) {
 		if ((nrp->nr_tag != tag) || (nrp->nr_btvp != btvp))
-			panic("nr_delete: invalid NR (%p)", nrp);
+			panic("hfs: nr_delete: invalid NR (%p)", nrp);
 		LIST_REMOVE(nrp, nr_hash);
 		*nodecnt = nrp->nr_nodecnt;
 		bzero(nrp, sizeof(struct nreserve));

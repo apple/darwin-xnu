@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -43,33 +43,35 @@
 #include <kern/sched_prim.h>
 #include <kern/misc_protos.h>
 #include <kern/assert.h>
+#include <kern/debug.h>
 #include <kern/spl.h>
 #include <kern/syscall_sw.h>
 #include <ipc/ipc_port.h>
 #include <vm/vm_kern.h>
 #include <vm/pmap.h>
 
-#include <i386/cpu_data.h>
 #include <i386/cpu_number.h>
-#include <i386/thread.h>
 #include <i386/eflags.h>
 #include <i386/proc_reg.h>
-#include <i386/seg.h>
 #include <i386/tss.h>
 #include <i386/user_ldt.h>
 #include <i386/fpu.h>
 #include <i386/machdep_call.h>
-#include <i386/misc_protos.h>
-#include <i386/cpu_data.h>
-#include <i386/cpu_number.h>
-#include <i386/mp_desc.h>
 #include <i386/vmparam.h>
+#include <i386/mp_desc.h>
+#include <i386/misc_protos.h>
+#include <i386/thread.h>
 #include <i386/trap.h>
+#include <i386/seg.h>
 #include <mach/i386/syscall_sw.h>
 #include <sys/syscall.h>
 #include <sys/kdebug.h>
 #include <sys/errno.h>
 #include <../bsd/sys/sysent.h>
+
+#ifdef MACH_BSD
+extern void	mach_kauth_cred_uthread_update(void);
+#endif
 
 kern_return_t
 thread_userstack(
@@ -98,13 +100,8 @@ unsigned int get_msr_nbits(void);
 
 unsigned int get_msr_rbits(void);
 
-kern_return_t
-thread_compose_cthread_desc(unsigned int addr, pcb_t pcb);
-
-void IOSleep(int);
 extern void throttle_lowpri_io(boolean_t);
 
-void thread_set_cthreadself(thread_t thread, uint64_t pself, int isLP64);
 
 /*
  * thread_userstack:
@@ -205,7 +202,6 @@ thread_entrypoint(
 	return (KERN_SUCCESS);
 }
 
-
 /*
  * Duplicate parent state in child
  * for U**X fork.
@@ -270,6 +266,7 @@ void thread_set_child(thread_t child, int pid);
 void
 thread_set_child(thread_t child, int pid)
 {
+
 	if (thread_is_64bit(child)) {
 		x86_saved_state64_t	*iss64;
 
@@ -295,6 +292,7 @@ void thread_set_parent(thread_t parent, int pid);
 void
 thread_set_parent(thread_t parent, int pid)
 {
+
 	if (thread_is_64bit(parent)) {
 		x86_saved_state64_t	*iss64;
 
@@ -339,6 +337,9 @@ machdep_syscall(x86_saved_state_t *state)
 #if DEBUG_TRACE
 	kprintf("machdep_syscall(0x%08x) code=%d\n", regs, trapno);
 #endif
+
+	DEBUG_KPRINT_SYSCALL_MDEP(
+		"machdep_syscall: trapno=%d\n", trapno);
 
 	if (trapno < 0 || trapno >= machdep_call_count) {
 		regs->eax = (unsigned int)kern_invalid(NULL);
@@ -395,6 +396,8 @@ machdep_syscall(x86_saved_state_t *state)
 	if (current_thread()->funnel_lock)
 		(void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
 
+	DEBUG_KPRINT_SYSCALL_MDEP("machdep_syscall: retval=%u\n", regs->eax);
+
 	throttle_lowpri_io(TRUE);
 
 	thread_exception_return();
@@ -412,7 +415,10 @@ machdep_syscall64(x86_saved_state_t *state)
 	assert(is_saved_state64(state));
 	regs = saved_state64(state);
     
-	trapno = regs->rax & SYSCALL_NUMBER_MASK;
+	trapno = (int)(regs->rax & SYSCALL_NUMBER_MASK);
+
+	DEBUG_KPRINT_SYSCALL_MDEP(
+		"machdep_syscall64: trapno=%d\n", trapno);
 
 	if (trapno < 0 || trapno >= machdep_call_count) {
 		regs->rax = (unsigned int)kern_invalid(NULL);
@@ -435,114 +441,76 @@ machdep_syscall64(x86_saved_state_t *state)
 	if (current_thread()->funnel_lock)
 		(void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
 
+	DEBUG_KPRINT_SYSCALL_MDEP("machdep_syscall: retval=%llu\n", regs->rax);
+
 	throttle_lowpri_io(TRUE);
 
 	thread_exception_return();
 	/* NOTREACHED */
 }
 
-
-kern_return_t
-thread_compose_cthread_desc(unsigned int addr, pcb_t pcb)
-{
-  struct real_descriptor desc;
-
-  mp_disable_preemption();
-
-  desc.limit_low = 1;
-  desc.limit_high = 0;
-  desc.base_low = addr & 0xffff;
-  desc.base_med = (addr >> 16) & 0xff;
-  desc.base_high = (addr >> 24) & 0xff;
-  desc.access = ACC_P|ACC_PL_U|ACC_DATA_W;
-  desc.granularity = SZ_32|SZ_G;
-  pcb->cthread_desc = desc;
-  *ldt_desc_p(USER_CTHREAD) = desc;
-
-  mp_enable_preemption();
-
-  return(KERN_SUCCESS);
-}
-
-kern_return_t
-thread_set_cthread_self(uint32_t self)
-{
-	current_thread()->machine.pcb->cthread_self = (uint64_t) self;
-
-	return (KERN_SUCCESS);
-}
-
-kern_return_t
-thread_get_cthread_self(void)
-{
-	return ((kern_return_t)current_thread()->machine.pcb->cthread_self);
-}
-
+/*
+ * thread_fast_set_cthread_self: Sets the machine kernel thread ID of the
+ * current thread to the given thread ID; fast version for 32-bit processes
+ *
+ * Parameters:    self                    Thread ID to set
+ *                
+ * Returns:        0                      Success
+ *                !0                      Not success
+ */
 kern_return_t
 thread_fast_set_cthread_self(uint32_t self)
 {
-	pcb_t			pcb;
-	x86_saved_state32_t	*iss;
+	thread_t thread = current_thread();
+	pcb_t pcb = thread->machine.pcb;
+	struct real_descriptor desc = {
+		.limit_low = 1,
+		.limit_high = 0,
+		.base_low = self & 0xffff,
+		.base_med = (self >> 16) & 0xff,
+		.base_high = (self >> 24) & 0xff,
+		.access = ACC_P|ACC_PL_U|ACC_DATA_W,
+		.granularity = SZ_32|SZ_G,
+	};
 
-	pcb = (pcb_t)current_thread()->machine.pcb;
-	thread_compose_cthread_desc(self, pcb);
-	pcb->cthread_self = (uint64_t) self; /* preserve old func too */
-	iss = saved_state32(pcb->iss);
-	iss->gs = USER_CTHREAD;
+	current_thread()->machine.pcb->cthread_self = (uint64_t) self;	/* preserve old func too */
+
+	/* assign descriptor */
+	mp_disable_preemption();
+	pcb->cthread_desc = desc;
+	*ldt_desc_p(USER_CTHREAD) = desc;
+	saved_state32(pcb->iss)->gs = USER_CTHREAD;
+	mp_enable_preemption();
 
 	return (USER_CTHREAD);
 }
 
-void 
-thread_set_cthreadself(thread_t thread, uint64_t pself, int isLP64)
-{
-	if (isLP64 == 0) {
-		pcb_t			pcb;
-		x86_saved_state32_t	*iss;
-
-		pcb = (pcb_t)thread->machine.pcb;
-		thread_compose_cthread_desc(pself, pcb);
-		pcb->cthread_self = (uint64_t) pself; /* preserve old func too */
-		iss = saved_state32(pcb->iss);
-		iss->gs = USER_CTHREAD;
-	} else {
-		pcb_t			pcb;
-		x86_saved_state64_t	*iss;
-
-		pcb = thread->machine.pcb;
-
-	/* check for canonical address, set 0 otherwise  */
-		if (!IS_USERADDR64_CANONICAL(pself))
-			pself = 0ULL;
-		pcb->cthread_self = pself;
-
-		/* XXX for 64-in-32 */
-		iss = saved_state64(pcb->iss);
-		iss->gs = USER_CTHREAD;
-		thread_compose_cthread_desc((uint32_t) pself, pcb);
-	}
-}
-
-
+/*
+ * thread_fast_set_cthread_self64: Sets the machine kernel thread ID of the
+ * current thread to the given thread ID; fast version for 64-bit processes 
+ *
+ * Parameters:    self                    Thread ID
+ *                
+ * Returns:        0                      Success
+ *                !0                      Not success
+ */
 kern_return_t
 thread_fast_set_cthread_self64(uint64_t self)
 {
-	pcb_t			pcb;
-	x86_saved_state64_t	*iss;
-
-	pcb = current_thread()->machine.pcb;
+	pcb_t pcb = current_thread()->machine.pcb;
 
 	/* check for canonical address, set 0 otherwise  */
 	if (!IS_USERADDR64_CANONICAL(self))
 		self = 0ULL;
+
 	pcb->cthread_self = self;
+	mp_disable_preemption();
+#if defined(__x86_64__)
+	if (current_cpu_datap()->cpu_uber.cu_user_gs_base != self)
+		wrmsr64(MSR_IA32_KERNEL_GS_BASE, self);
+#endif
 	current_cpu_datap()->cpu_uber.cu_user_gs_base = self;
-
-	/* XXX for 64-in-32 */
-	iss = saved_state64(pcb->iss);
-	iss->gs = USER_CTHREAD;
-	thread_compose_cthread_desc((uint32_t) self, pcb);
-
+	mp_enable_preemption();
 	return (USER_CTHREAD);
 }
 
@@ -669,6 +637,8 @@ mach_call_arg_munger32(uint32_t sp, int nargs, int call_number, struct mach_call
 
 __private_extern__ void mach_call_munger(x86_saved_state_t *state);
 
+extern const char *mach_syscall_name_table[];
+
 void
 mach_call_munger(x86_saved_state_t *state)
 {
@@ -683,6 +653,10 @@ mach_call_munger(x86_saved_state_t *state)
 	regs = saved_state32(state);
 
 	call_number = -(regs->eax);
+
+	DEBUG_KPRINT_SYSCALL_MACH(
+		"mach_call_munger: code=%d(%s)\n",
+		call_number, mach_syscall_name_table[call_number]);
 #if DEBUG_TRACE
 	kprintf("mach_call_munger(0x%08x) code=%d\n", regs, call_number);
 #endif
@@ -694,6 +668,8 @@ mach_call_munger(x86_saved_state_t *state)
 	mach_call = (mach_call_t)mach_trap_table[call_number].mach_trap_function;
 
 	if (mach_call == (mach_call_t)kern_invalid) {
+		DEBUG_KPRINT_SYSCALL_MACH(
+			"mach_call_munger: kern_invalid 0x%x\n", regs->eax);
 		i386_exception(EXC_SYSCALL, call_number, 1);
 		/* NOTREACHED */
 	}
@@ -704,14 +680,23 @@ mach_call_munger(x86_saved_state_t *state)
 		if (retval != KERN_SUCCESS) {
 			regs->eax = retval;
 
+			DEBUG_KPRINT_SYSCALL_MACH(
+				"mach_call_munger: retval=0x%x\n", retval);
+
 			thread_exception_return();
 			/* NOTREACHED */
 		}
 	}
+
+#ifdef MACH_BSD
+	mach_kauth_cred_uthread_update();
+#endif
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_START,
-			(int) args.arg1, (int) args.arg2, (int) args.arg3, (int) args.arg4, 0);
+			args.arg1, args.arg2, args.arg3, args.arg4, 0);
 
 	retval = mach_call(&args);
+
+	DEBUG_KPRINT_SYSCALL_MACH("mach_call_munger: retval=0x%x\n", retval);
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC,(call_number)) | DBG_FUNC_END,
 			retval, 0, 0, 0, 0);
@@ -737,12 +722,16 @@ mach_call_munger64(x86_saved_state_t *state)
 	assert(is_saved_state64(state));
 	regs = saved_state64(state);
 
-	call_number = regs->rax & SYSCALL_NUMBER_MASK;
+	call_number = (int)(regs->rax & SYSCALL_NUMBER_MASK);
+
+	DEBUG_KPRINT_SYSCALL_MACH(
+		"mach_call_munger64: code=%d(%s)\n",
+		call_number, mach_syscall_name_table[call_number]);
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC,
 					   (call_number)) | DBG_FUNC_START,
-			      (int) regs->rdi, (int) regs->rsi,
-			      (int) regs->rdx, (int) regs->r10, 0);
+			      regs->rdi, regs->rsi,
+			      regs->rdx, regs->r10, 0);
 	
 	if (call_number < 0 || call_number >= mach_trap_count) {
 	        i386_exception(EXC_SYSCALL, regs->rax, 1);
@@ -759,7 +748,7 @@ mach_call_munger64(x86_saved_state_t *state)
 	if (argc > 6) {
 	        int copyin_count;
 
-		copyin_count = (argc - 6) * sizeof(uint64_t);
+		copyin_count = (argc - 6) * (int)sizeof(uint64_t);
 
 	        if (copyin((user_addr_t)(regs->isf.rsp + sizeof(user_addr_t)), (char *)&regs->v_arg6, copyin_count)) {
 		        regs->rax = KERN_INVALID_ARGUMENT;
@@ -768,11 +757,18 @@ mach_call_munger64(x86_saved_state_t *state)
 			/* NOTREACHED */
 		}
 	}
+
+#ifdef MACH_BSD
+	mach_kauth_cred_uthread_update();
+#endif
+
 	regs->rax = (uint64_t)mach_call((void *)(&regs->rdi));
 	
+	DEBUG_KPRINT_SYSCALL_MACH( "mach_call_munger64: retval=0x%llx\n", regs->rax);
+
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC,
 					   (call_number)) | DBG_FUNC_END,
-			      (int)regs->rax, 0, 0, 0, 0);
+			      regs->rax, 0, 0, 0, 0);
 
 	throttle_lowpri_io(TRUE);
 
@@ -803,7 +799,7 @@ thread_setuserstack(
 
 		iss32 = USER_REGS32(thread);
 
-		iss32->uesp = CAST_DOWN(unsigned int, user_stack);
+		iss32->uesp = CAST_DOWN_EXPLICIT(unsigned int, user_stack);
 	}
 }
 
@@ -857,7 +853,7 @@ thread_setentrypoint(thread_t thread, mach_vm_address_t entry)
 
 		iss32 = USER_REGS32(thread);
 
-		iss32->eip = CAST_DOWN(unsigned int, entry);
+		iss32->eip = CAST_DOWN_EXPLICIT(unsigned int, entry);
 	}
 }
 
@@ -879,8 +875,12 @@ thread_setsinglestep(thread_t thread, int on)
 
 		iss32 = USER_REGS32(thread);
 
-		if (on)
+		if (on) {
 			iss32->efl |= EFL_TF;
+			/* Ensure IRET */
+			if (iss32->cs == SYSENTER_CS)
+				iss32->cs = SYSENTER_TF_CS;
+		}
 		else
 			iss32->efl &= ~EFL_TF;
 	}
@@ -913,9 +913,9 @@ get_user_regs(thread_t th)
  * DTrace would like to have a peek at the kernel interrupt state, if available.
  * Based on osfmk/chud/i386/chud_thread_i386.c:chudxnu_thread_get_state(), which see.
  */
-x86_saved_state32_t *find_kern_regs(thread_t);
+x86_saved_state_t *find_kern_regs(thread_t);
 
-x86_saved_state32_t *
+x86_saved_state_t *
 find_kern_regs(thread_t thread)
 {
 	if (thread == current_thread() && 
@@ -923,7 +923,7 @@ find_kern_regs(thread_t thread)
 		!(USER_STATE(thread) == current_cpu_datap()->cpu_int_state &&
 		  current_cpu_datap()->cpu_interrupt_level == 1)) {
 
-		return saved_state32(current_cpu_datap()->cpu_int_state);
+		return current_cpu_datap()->cpu_int_state;
 	} else {
 		return NULL;
 	}

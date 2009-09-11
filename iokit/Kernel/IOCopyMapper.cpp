@@ -102,7 +102,7 @@ typedef struct ActiveDARTEntry {
 
 static SYSCTL_UINT(_kern, OID_AUTO, copyregionmax, 
 				CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, 
-				 NULL, 0, "");
+				 (unsigned int *)NULL, 0, "");
 
 static SYSCTL_UINT(_kern, OID_AUTO, lowpagemax, 
 				CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, 
@@ -214,7 +214,7 @@ ppnum_t IOCopyMapper::iovmAlloc(IOItemCount pages)
     // Can't alloc anything bigger than 1/2 table
     if (pages >= fMapperRegionSize/2)
     {
-	panic("iovmAlloc 0x%lx", pages);
+	panic("iovmAlloc 0x%lx", (long) pages);
 	return 0;
     }
 
@@ -288,7 +288,7 @@ void IOCopyMapper::iovmFree(ppnum_t addr, IOItemCount pages)
     FreeDARTEntry *freeDART = (FreeDARTEntry *) fTable;
 
     if (addr < fBufferPage)
-	IOPanic("addr < fBufferPage");
+	panic("addr < fBufferPage");
     addr -= fBufferPage;
 
     // Can't free anything of less than minumum
@@ -376,7 +376,7 @@ addr64_t IOCopyMapper::mapAddr(IOPhysicalAddress addr)
 	    return (ptoa_64(mappedPage.fPPNum) | offset);
 	}
 
-	panic("%s::mapAddr(0x%08lx) not mapped for I/O\n", getName(), addr);
+	panic("%s::mapAddr(0x%08lx) not mapped for I/O\n", getName(), (long) addr);
 	return 0;
     }
 }

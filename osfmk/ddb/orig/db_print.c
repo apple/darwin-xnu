@@ -1335,19 +1335,6 @@ db_show_runq(
 	boolean_t showedany = FALSE;
 
 	queue_iterate(&all_psets, pset, processor_set_t, all_psets) {
-#if NCPUS > 1	/* This code has not been tested. */
-	    queue_iterate(&pset->processors, proc, processor_t, processors) {
-		runq = &proc->runq;
-		if (runq->count > 0) {
-		    db_printf("PROCESSOR %x IN SET %x\n", proc, pset);
-		    db_show_one_runq(runq);
-		    showedany = TRUE;
-		}
-	    }
-#endif	/* NCPUS > 1 */
-#ifndef NCPUS
-#error NCPUS undefined
-#endif
 	    runq = &pset->runq;
 	    if (runq->count > 0) {
 		db_printf("PROCESSOR SET %x\n", pset);

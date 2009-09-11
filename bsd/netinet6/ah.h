@@ -74,7 +74,7 @@ struct ah_algorithm {
 	void (*result)(struct ah_algorithm_state *, caddr_t);
 };
 
-#define	AH_MAXSUMSIZE	16
+#define	AH_MAXSUMSIZE	64 // sha2-512's output size
 
 extern const struct ah_algorithm *ah_algorithm_lookup(int);
 
@@ -86,6 +86,6 @@ extern void ah4_input(struct mbuf *, int);
 extern int ah4_output(struct mbuf *, struct secasvar *);
 extern int ah4_calccksum(struct mbuf *, caddr_t, size_t,
 	const struct ah_algorithm *, struct secasvar *);
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
 #endif /* _NETINET6_AH_H_ */

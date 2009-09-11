@@ -205,7 +205,7 @@ static int FindNextLeafNode(	BTScanState *scanState, Boolean avoidIO )
 		 */
 		err = hfs_swap_BTNode(&block, fref, kSwapBTNodeBigToHost, true);
 		if ( err != noErr ) {
-			printf("FindNextLeafNode: Error from hfs_swap_BTNode (node %u)\n", scanState->nodeNum);
+			printf("hfs: FindNextLeafNode: Error from hfs_swap_BTNode (node %u)\n", scanState->nodeNum);
 			continue;
 		}
 

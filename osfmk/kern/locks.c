@@ -92,11 +92,12 @@
 static queue_head_t	lck_grp_queue;
 static unsigned int	lck_grp_cnt;
 
-decl_mutex_data(static,lck_grp_lock)
+decl_lck_mtx_data(static,lck_grp_lock)
+static lck_mtx_ext_t lck_grp_lock_ext;
 
 lck_grp_attr_t	LockDefaultGroupAttr;
-lck_grp_t	LockCompatGroup;
-lck_attr_t	LockDefaultLckAttr;
+lck_grp_t		LockCompatGroup;
+lck_attr_t		LockDefaultLckAttr;
 
 /*
  * Routine:	lck_mod_init
@@ -107,11 +108,30 @@ lck_mod_init(
 	void)
 {
 	queue_init(&lck_grp_queue);
-	mutex_init(&lck_grp_lock, 0);
-	lck_grp_cnt = 0;
-	lck_grp_attr_setdefault( &LockDefaultGroupAttr);
-	lck_grp_init( &LockCompatGroup, "Compatibility APIs", LCK_GRP_ATTR_NULL);
+	
+	/* 
+	 * Need to bootstrap the LockCompatGroup instead of calling lck_grp_init() here. This avoids
+	 * grabbing the lck_grp_lock before it is initialized.
+	 */
+	
+	bzero(&LockCompatGroup, sizeof(lck_grp_t));
+	(void) strncpy(LockCompatGroup.lck_grp_name, "Compatibility APIs", LCK_GRP_MAX_NAME);
+	
+	if (LcksOpts & enaLkStat)
+		LockCompatGroup.lck_grp_attr = LCK_GRP_ATTR_STAT;
+    else
+		LockCompatGroup.lck_grp_attr = LCK_ATTR_NONE;
+	
+	LockCompatGroup.lck_grp_refcnt = 1;
+	
+	enqueue_tail(&lck_grp_queue, (queue_entry_t)&LockCompatGroup);
+	lck_grp_cnt = 1;
+	
+	lck_grp_attr_setdefault(&LockDefaultGroupAttr);
 	lck_attr_setdefault(&LockDefaultLckAttr);
+	
+	lck_mtx_init_ext(&lck_grp_lock, &lck_grp_lock_ext, &LockCompatGroup, &LockDefaultLckAttr);
+	
 }
 
 /*
@@ -211,10 +231,10 @@ lck_grp_init(
 
 	grp->lck_grp_refcnt = 1;
 
-	mutex_lock(&lck_grp_lock);
+	lck_mtx_lock(&lck_grp_lock);
 	enqueue_tail(&lck_grp_queue, (queue_entry_t)grp);
 	lck_grp_cnt++;
-	mutex_unlock(&lck_grp_lock);
+	lck_mtx_unlock(&lck_grp_lock);
 
 }
 
@@ -227,10 +247,10 @@ void
 lck_grp_free(
 	lck_grp_t	*grp)
 {
-	mutex_lock(&lck_grp_lock);
+	lck_mtx_lock(&lck_grp_lock);
 	lck_grp_cnt--;
 	(void)remque((queue_entry_t)grp);
-	mutex_unlock(&lck_grp_lock);
+	lck_mtx_unlock(&lck_grp_lock);
 	lck_grp_deallocate(grp);
 }
 
@@ -477,8 +497,12 @@ lck_mtx_sleep(
 	if (res == THREAD_WAITING) {
 		lck_mtx_unlock(lck);
 		res = thread_block(THREAD_CONTINUE_NULL);
-		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK))
-			lck_mtx_lock(lck);
+		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK)) {
+			if ((lck_sleep_action & LCK_SLEEP_SPIN))
+				lck_mtx_lock_spin(lck);
+			else
+				lck_mtx_lock(lck);
+		}
 	}
 	else
 	if (lck_sleep_action & LCK_SLEEP_UNLOCK)
@@ -571,7 +595,7 @@ lck_mtx_lock_wait (
 				holder->sched_pri < priority		) {
 		KERNEL_DEBUG_CONSTANT(
 			MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
-					holder->sched_pri, priority, (int)holder, (int)lck, 0);
+					holder->sched_pri, priority, holder, lck, 0);
 
 		set_sched_pri(holder, priority);
 	}
@@ -652,7 +676,7 @@ lck_mtx_lock_acquire(
 		if (thread->sched_pri < priority) {
 			KERNEL_DEBUG_CONSTANT(
 				MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
-						thread->sched_pri, priority, 0, (int)lck, 0);
+						thread->sched_pri, priority, 0, lck, 0);
 
 			set_sched_pri(thread, priority);
 		}
@@ -701,7 +725,7 @@ lck_mtx_unlock_wakeup (
 			if (thread->sched_mode & TH_MODE_ISDEPRESSED) {
 				KERNEL_DEBUG_CONSTANT(
 					MACHDBG_CODE(DBG_MACH_SCHED,MACH_DEMOTE) | DBG_FUNC_NONE,
-						  thread->sched_pri, DEPRESSPRI, 0, (int)lck, 0);
+						  thread->sched_pri, DEPRESSPRI, 0, lck, 0);
 
 				set_sched_pri(thread, DEPRESSPRI);
 			}
@@ -711,7 +735,7 @@ lck_mtx_unlock_wakeup (
 						MACHDBG_CODE(DBG_MACH_SCHED,MACH_DEMOTE) |
 															DBG_FUNC_NONE,
 							thread->sched_pri, thread->priority,
-									0, (int)lck, 0);
+									0, lck, 0);
 				}
 
 				compute_priority(thread, FALSE);
@@ -785,26 +809,27 @@ unsigned int mutex_yield_wait = 0;
 unsigned int mutex_yield_no_wait = 0;
 
 void
-mutex_yield(
-	    mutex_t	*mutex)
+lck_mtx_yield(
+	    lck_mtx_t	*lck)
 {
-        lck_mtx_t	*lck;
-
+	int	waiters;
+	
 #if DEBUG
-	_mutex_assert(mutex, MA_OWNED);
+	lck_mtx_assert(lck, LCK_MTX_ASSERT_OWNED);
 #endif /* DEBUG */
-
-	lck = (lck_mtx_t *) mutex;
+	
 	if (lck->lck_mtx_tag == LCK_MTX_TAG_INDIRECT)
-	        lck = &lck->lck_mtx_ptr->lck_mtx;
+	        waiters = lck->lck_mtx_ptr->lck_mtx.lck_mtx_waiters;
+	else
+	        waiters = lck->lck_mtx_waiters;
 
-	if (! lck->lck_mtx_waiters) {
+	if ( !waiters) {
 	        mutex_yield_no_wait++;
 	} else {
 	        mutex_yield_wait++;
-		mutex_unlock(mutex);
+		lck_mtx_unlock(lck);
 		mutex_pause(0);
-		mutex_lock(mutex);
+		lck_mtx_lock(lck);
 	}
 }
 
@@ -902,13 +927,13 @@ host_lockgroup_info(
 	if (host == HOST_NULL)
 		return KERN_INVALID_HOST;
 
-	mutex_lock(&lck_grp_lock);
+	lck_mtx_lock(&lck_grp_lock);
 
 	lockgroup_info_size = round_page(lck_grp_cnt * sizeof *lockgroup_info);
 	kr = kmem_alloc_pageable(ipc_kernel_map,
 						 &lockgroup_info_addr, lockgroup_info_size);
 	if (kr != KERN_SUCCESS) {
-		mutex_unlock(&lck_grp_lock);
+		lck_mtx_unlock(&lck_grp_lock);
 		return(kr);
 	}
 
@@ -952,7 +977,7 @@ host_lockgroup_info(
 	}
 
 	*lockgroup_infoCntp = lck_grp_cnt;
-	mutex_unlock(&lck_grp_lock);
+	lck_mtx_unlock(&lck_grp_lock);
 
 	used = (*lockgroup_infoCntp) * sizeof *lockgroup_info;
 
@@ -983,22 +1008,18 @@ extern void		lock_write_to_read_EXT(lck_rw_t	*lock);
 extern wait_result_t	thread_sleep_lock_write_EXT( 
 				event_t event, lck_rw_t *lock, wait_interrupt_t interruptible);
 
-extern lck_mtx_t	*mutex_alloc_EXT(unsigned short tag);
-extern void		mutex_free_EXT(lck_mtx_t *mutex);
-extern void		mutex_init_EXT(lck_mtx_t *mutex, unsigned short tag);
-extern void		mutex_lock_EXT(lck_mtx_t *mutex);
-extern boolean_t	mutex_try_EXT(lck_mtx_t *mutex);
-extern void		mutex_unlock_EXT(lck_mtx_t *mutex);
-extern wait_result_t	thread_sleep_mutex_EXT(
-				event_t event, lck_mtx_t *mutex, wait_interrupt_t interruptible);
-extern wait_result_t	thread_sleep_mutex_deadline_EXT(
-				event_t event, lck_mtx_t *mutex, uint64_t deadline, wait_interrupt_t interruptible);
-
 extern void		usimple_lock_EXT(lck_spin_t *lock);
 extern void		usimple_lock_init_EXT(lck_spin_t *lock, unsigned short tag);
 extern unsigned int	usimple_lock_try_EXT(lck_spin_t *lock);
 extern void		usimple_unlock_EXT(lck_spin_t *lock);
 extern wait_result_t	thread_sleep_usimple_lock_EXT(event_t event, lck_spin_t *lock, wait_interrupt_t interruptible);
+
+
+lck_mtx_t*		mutex_alloc_EXT(__unused unsigned short tag);
+void 			mutex_free_EXT(lck_mtx_t *mutex);
+void 			mutex_init_EXT(lck_mtx_t *mutex, __unused unsigned short tag);
+wait_result_t		thread_sleep_mutex_EXT(event_t event, lck_mtx_t *mutex, wait_interrupt_t interruptible);
+wait_result_t		thread_sleep_mutex_deadline_EXT(event_t event, lck_mtx_t *mutex, uint64_t deadline, wait_interrupt_t interruptible);
 
 lck_rw_t * 
 lock_alloc_EXT(
@@ -1070,68 +1091,6 @@ thread_sleep_lock_write_EXT(
 	return( lck_rw_sleep(lock, LCK_SLEEP_EXCLUSIVE, event, interruptible));
 }
 
-lck_mtx_t *
-mutex_alloc_EXT(
-	__unused unsigned short		tag)
-{
-	return(lck_mtx_alloc_init(&LockCompatGroup, LCK_ATTR_NULL));
-}
-
-void
-mutex_free_EXT(
-	lck_mtx_t		*mutex)
-{
-	lck_mtx_free(mutex, &LockCompatGroup);	
-}
-
-void
-mutex_init_EXT(
-	lck_mtx_t		*mutex,
-	__unused unsigned short	tag)
-{
-	lck_mtx_init(mutex, &LockCompatGroup, LCK_ATTR_NULL);	
-}
-
-void
-mutex_lock_EXT(
-	lck_mtx_t		*mutex)
-{
-	lck_mtx_lock(mutex);
-}
-
-boolean_t
-mutex_try_EXT(
-	lck_mtx_t		*mutex)
-{
-	return(lck_mtx_try_lock(mutex));
-}
-
-void
-mutex_unlock_EXT(
-	lck_mtx_t		*mutex)
-{
-	lck_mtx_unlock(mutex);
-}
-
-wait_result_t
-thread_sleep_mutex_EXT(
-	event_t			event,
-	lck_mtx_t		*mutex,
-	wait_interrupt_t        interruptible)
-{
-	return( lck_mtx_sleep(mutex, LCK_SLEEP_DEFAULT, event, interruptible));
-}
-
-wait_result_t
-thread_sleep_mutex_deadline_EXT(
-	event_t			event,
-	lck_mtx_t		*mutex,
-	uint64_t		deadline,
-	wait_interrupt_t        interruptible)
-{
-	return( lck_mtx_sleep_deadline(mutex, LCK_SLEEP_DEFAULT, event, interruptible, deadline));
-}
-
 void
 usimple_lock_EXT(
 	lck_spin_t		*lock)
@@ -1168,4 +1127,44 @@ thread_sleep_usimple_lock_EXT(
 	wait_interrupt_t	interruptible)
 {
 	return( lck_spin_sleep(lock, LCK_SLEEP_DEFAULT, event, interruptible));
+}
+lck_mtx_t *
+mutex_alloc_EXT(
+        __unused unsigned short         tag) 
+{
+        return(lck_mtx_alloc_init(&LockCompatGroup, LCK_ATTR_NULL));
+}
+
+void
+mutex_free_EXT(
+        lck_mtx_t               *mutex)
+{
+        lck_mtx_free(mutex, &LockCompatGroup);  
+}
+
+void
+mutex_init_EXT(
+        lck_mtx_t               *mutex,
+        __unused unsigned short tag) 
+{
+        lck_mtx_init(mutex, &LockCompatGroup, LCK_ATTR_NULL);   
+}
+
+wait_result_t
+thread_sleep_mutex_EXT(
+	event_t                 event,
+	lck_mtx_t               *mutex,
+	wait_interrupt_t        interruptible)
+{
+	return( lck_mtx_sleep(mutex, LCK_SLEEP_DEFAULT, event, interruptible));
+}
+
+wait_result_t
+thread_sleep_mutex_deadline_EXT(
+	event_t                 event,
+	lck_mtx_t               *mutex,
+	uint64_t                deadline,
+	wait_interrupt_t        interruptible)
+{
+	return( lck_mtx_sleep_deadline(mutex, LCK_SLEEP_DEFAULT, event, interruptible, deadline));
 }

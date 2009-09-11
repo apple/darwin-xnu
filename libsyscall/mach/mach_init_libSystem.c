@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007, 2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -32,6 +32,7 @@ extern void pthread_init(void);				// from libc.a
 extern void __libc_init(const struct ProgramVars* vars);	// from libc.a
 extern void __keymgr_initializer(void);		// from libkeymgr.a
 extern void _dyld_initializer(void);		// from libdyld.a
+extern void libdispatch_init(void);		// from libdispatch.a
 
 /*
  * libsyscall_initializer() initializes all of libSystem.dylib <rdar://problem/4892197>
@@ -44,6 +45,7 @@ void libSystem_initializer(int argc, const char* argv[], const char* envp[], con
 	__libc_init(vars);
 	__keymgr_initializer();
 	_dyld_initializer();
+	libdispatch_init();
 }
 
 /*  

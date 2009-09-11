@@ -76,6 +76,11 @@
 
 
 #ifdef KERNEL
+
+__BEGIN_DECLS
+#include <kern/locks.h>
+__END_DECLS
+
 /*
  * NetBSD Clists are actually ring buffers. The c_cc, c_cf, c_cl fields have
  * exactly the same behaviour as in true clists.
@@ -107,6 +112,8 @@ struct clist {
  * (low, high, timeout).
  */
 struct tty {
+	lck_mtx_t	t_lock;		/* Per tty lock */
+
 	struct	clist t_rawq;		/* Device raw input queue. */
 	long	t_rawcc;		/* Raw input queue statistics. */
 	struct	clist t_canq;		/* Device canonical queue. */
@@ -136,6 +143,7 @@ struct tty {
 	int	t_hiwat;		/* High water mark. */
 	int	t_lowat;		/* Low water mark. */
 	int	t_gen;			/* Generation number. */
+	void	*t_iokit;		/* IOKit management */
 };
 
 #define TTY_NULL (struct tty *)0
@@ -273,17 +281,26 @@ void	cinit(void);
 void	clrbits(u_char *cp, int off, int len);
 
 #ifdef KERNEL_PRIVATE
+void	tty_init(void);
+/*
+ * The locked version of this function is used from routines which hold
+ * the tty_lock(), such as ttcompat() in tty_compat.c
+ */
+int	ttioctl_locked(struct tty *tp, u_long com, caddr_t data, int flag,
+	    struct proc *p);
+
 int	ttcompat(struct tty *tp, u_long com, caddr_t data, int flag,
 	    struct proc *p);
-int	ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term);
 #endif /* KERNEL_PRIVATE */
+
+void tty_lock(struct tty *tp);
+void tty_unlock(struct tty *tp);
 
 void	 termioschars(struct termios *t);
 int	 tputchar(int c, struct tty *tp);
 int	 ttioctl(struct tty *tp, u_long com, caddr_t data, int flag,
 	    struct proc *p);
 int	 ttread(struct tty *tp, struct uio *uio, int flag);
-void	 ttrstrt(void *tp);
 int	 ttyselect(struct tty *tp, int rw, void * wql, struct proc *p);
 int	 ttselect(dev_t dev, int rw, void * wql, struct proc *p);
 void	 ttsetwater(struct tty *tp);
@@ -293,11 +310,11 @@ void	 ttwakeup(struct tty *tp);
 int	 ttwrite(struct tty *tp, struct uio *uio, int flag);
 void	 ttwwakeup(struct tty *tp);
 void	 ttyblock(struct tty *tp);
-void	 ttychars(struct tty *tp);
 int	 ttycheckoutq(struct tty *tp, int wait);
-int	 ttyclose(struct tty *tp);
+int	 ttyclose(struct tty *tp);	/* LEGACY: avoid using */
 void	 ttyflush(struct tty *tp, int rw);
 void	 ttyinfo(struct tty *tp);
+void	 ttyinfo_locked(struct tty *tp);
 int	 ttyinput(int c, struct tty *tp);
 int	 ttylclose(struct tty *tp, int flag);
 int	 ttymodem(struct tty *tp, int flag);

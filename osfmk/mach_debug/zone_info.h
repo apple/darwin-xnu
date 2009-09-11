@@ -78,10 +78,10 @@ typedef zone_name_t *zone_name_array_t;
 
 typedef struct zone_info {
 	integer_t	zi_count;	/* Number of elements used now */
-	natural_t	zi_cur_size;	/* current memory utilization */
-	natural_t	zi_max_size;	/* how large can this zone grow */
-	natural_t	zi_elem_size;	/* size of an element */
-	natural_t	zi_alloc_size;	/* size used for more memory */
+	vm_size_t	zi_cur_size;	/* current memory utilization */
+	vm_size_t	zi_max_size;	/* how large can this zone grow */
+	vm_size_t	zi_elem_size;	/* size of an element */
+	vm_size_t	zi_alloc_size;	/* size used for more memory */
 	integer_t	zi_pageable;	/* zone pageable? */
 	integer_t	zi_sleepable;	/* sleep if empty? */
 	integer_t	zi_exhaustible;	/* merely return if empty? */

@@ -21,6 +21,7 @@ int sema_tests( void * the_argp )
 	int				my_err, i;
 	int				my_sem_id = -1;
  	union semun		my_sem_union;
+	struct sembuf	my_sembuf;
 
 	srand( (unsigned int)getpid() );
 	my_sem_id = semget( (key_t)1234, 1, (0666 | IPC_CREAT) );
@@ -29,13 +30,6 @@ int sema_tests( void * the_argp )
 		goto test_failed_exit;
 	}
 
-#if 1 // todo - remove this once 4149385 is fixed
-	/* workaround for bug in the xnu implementation of semctl */
-	if ( sizeof( long ) == 8 ) {
-		my_sem_union.array = (void *)1;
-	}
-	else
-#endif
  	my_sem_union.val = 1;
 	my_err = semctl( my_sem_id, 0, SETVAL, my_sem_union );
 	if ( my_sem_id == -1 ) {
@@ -43,9 +37,15 @@ int sema_tests( void * the_argp )
 		goto test_failed_exit;
 	}
 
-	for ( i = 0; i < 10000; i++ ) {
-		struct sembuf		my_sembuf;
+	/* verify semop failure for bad nsop values */
+	my_err = semop( my_sem_id, &my_sembuf, 10000);
+	if (my_err != -1 || errno != E2BIG) {
+		printf( "semop did not fail with E2BIG - instead %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
 
+	}
+
+	for ( i = 0; i < 10000; i++ ) {
 		my_sembuf.sem_num = 0;
 		my_sembuf.sem_op  = -1;
 		my_sembuf.sem_flg = SEM_UNDO;
@@ -56,7 +56,7 @@ int sema_tests( void * the_argp )
 			goto test_failed_exit;
 		}
 
-        my_err = semctl( my_sem_id, 0, GETVAL, 0 );
+		my_err = semctl( my_sem_id, 0, GETVAL, 0 );
 		if ( my_err == -1 ) {
 			printf( "semctl failed with error %d - \"%s\" \n", errno, strerror( errno) );
 			goto test_failed_exit;

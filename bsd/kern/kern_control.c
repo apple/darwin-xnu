@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -52,7 +52,6 @@
 #include <net/if_var.h>
 
 #include <mach/vm_types.h>
-#include <mach/kmod.h>
 
 #include <kern/thread.h>
 
@@ -93,10 +92,10 @@ static struct kctl *ctl_find_by_name(const char *);
 static struct kctl *ctl_find_by_id_unit(u_int32_t id, u_int32_t unit);
 
 static struct ctl_cb *kcb_find(struct kctl *, u_int32_t unit);
-static void ctl_post_msg(u_long event_code, u_int32_t id);
+static void ctl_post_msg(u_int32_t event_code, u_int32_t id);
 
-static int ctl_lock(struct socket *, int, int);
-static int ctl_unlock(struct socket *, int, int);
+static int ctl_lock(struct socket *, int, void *);
+static int ctl_unlock(struct socket *, int, void *);
 static lck_mtx_t * ctl_getlock(struct socket *, int);
 
 static struct pr_usrreqs ctl_usrreqs =
@@ -509,7 +508,7 @@ ctl_enqueuedata(void *kctlref, u_int32_t unit, void *data, size_t len, u_int32_t
 		return EINVAL;
 	
 	socket_lock(so, 1);
-	if (sbspace(&so->so_rcv) < (long)len) {
+	if (sbspace(&so->so_rcv) < (int)len) {
 		error = ENOBUFS;
 		goto bye;
 	}
@@ -896,7 +895,7 @@ kcb_find(struct kctl *kctl, u_int32_t unit)
  * Must be called witout lock
  */
 static void 
-ctl_post_msg(u_long event_code, u_int32_t id) 
+ctl_post_msg(u_int32_t event_code, u_int32_t id) 
 {
     struct ctl_event_data  	ctl_ev_data;
     struct kev_msg  		ev_msg;
@@ -919,24 +918,29 @@ ctl_post_msg(u_long event_code, u_int32_t id)
 }
 
 static int
-ctl_lock(struct socket *so, int refcount, int lr)
- {
-	uint32_t lr_saved;
-	if (lr == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
-	else lr_saved = lr;
-	
-	if (so->so_pcb) {
+ctl_lock(struct socket *so, int refcount, void *lr)
+{
+	void *lr_saved;
+
+	if (lr == NULL)
+		lr_saved = __builtin_return_address(0);
+	else
+		lr_saved = lr;
+
+	if (so->so_pcb != NULL) {
 		lck_mtx_lock(((struct ctl_cb *)so->so_pcb)->mtx);
 	} else  {
-		panic("ctl_lock: so=%p NO PCB! lr=%x\n", so, lr_saved);
-		lck_mtx_lock(so->so_proto->pr_domain->dom_mtx);
+		panic("ctl_lock: so=%p NO PCB! lr=%p lrh= %s\n", 
+		    so, lr_saved, solockhistory_nr(so));
+		/* NOTREACHED */
 	}
-	
-	if (so->so_usecount < 0)
-		panic("ctl_lock: so=%p so_pcb=%p lr=%x ref=%x\n",
-		so, so->so_pcb, lr_saved, so->so_usecount);
-	
+
+	if (so->so_usecount < 0) {
+		panic("ctl_lock: so=%p so_pcb=%p lr=%p ref=%x lrh= %s\n",
+		    so, so->so_pcb, lr_saved, so->so_usecount, solockhistory_nr(so));
+		/* NOTREACHED */
+	}
+
 	if (refcount)
 		so->so_usecount++;
 
@@ -946,38 +950,44 @@ ctl_lock(struct socket *so, int refcount, int lr)
 }
 
 static int
-ctl_unlock(struct socket *so, int refcount, int lr)
+ctl_unlock(struct socket *so, int refcount, void *lr)
 {
-	uint32_t lr_saved;
-	lck_mtx_t * mutex_held;
-	
-	if (lr == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
-	else lr_saved = lr;
-	
+	void *lr_saved;
+	lck_mtx_t *mutex_held;
+
+	if (lr == NULL)
+		lr_saved = __builtin_return_address(0);
+	else
+		lr_saved = lr;
+
 #ifdef MORE_KCTLLOCK_DEBUG
-	printf("ctl_unlock: so=%x sopcb=%x lock=%x ref=%x lr=%x\n",
-			so, so->so_pcb, ((struct ctl_cb *)so->so_pcb)->mtx, so->so_usecount, lr_saved);
+	printf("ctl_unlock: so=%x sopcb=%x lock=%x ref=%x lr=%p\n",
+	    so, so->so_pcb, ((struct ctl_cb *)so->so_pcb)->mtx,
+	    so->so_usecount, lr_saved);
 #endif
 	if (refcount)
 		so->so_usecount--;
-	
-	if (so->so_usecount < 0)
-		panic("ctl_unlock: so=%p usecount=%x\n", so, so->so_usecount);
-	if (so->so_pcb == NULL) {
-		panic("ctl_unlock: so=%p NO PCB usecount=%x lr=%x\n", so, so->so_usecount, lr_saved);
-		mutex_held = so->so_proto->pr_domain->dom_mtx;
-	} else {
-		mutex_held = ((struct ctl_cb *)so->so_pcb)->mtx;
+
+	if (so->so_usecount < 0) {
+		panic("ctl_unlock: so=%p usecount=%x lrh= %s\n", 
+		    so, so->so_usecount, solockhistory_nr(so));
+		/* NOTREACHED */
 	}
+	if (so->so_pcb == NULL) {
+		panic("ctl_unlock: so=%p NO PCB usecount=%x lr=%p lrh= %s\n", 
+		    so, so->so_usecount, (void *)lr_saved, solockhistory_nr(so));
+		/* NOTREACHED */
+	}
+	mutex_held = ((struct ctl_cb *)so->so_pcb)->mtx;
+
 	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
 	so->unlock_lr[so->next_unlock_lr] = lr_saved;
 	so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 	lck_mtx_unlock(mutex_held);
-	
+
 	if (so->so_usecount == 0)
 		ctl_sofreelastref(so);
-	
+
 	return (0);
 }
 
@@ -988,10 +998,12 @@ ctl_getlock(struct socket *so, __unused int locktype)
 	
 	if (so->so_pcb)  {
 		if (so->so_usecount < 0)
-			panic("ctl_getlock: so=%p usecount=%x\n", so, so->so_usecount);
+			panic("ctl_getlock: so=%p usecount=%x lrh= %s\n", 
+			    so, so->so_usecount, solockhistory_nr(so));
 		return(kcb->mtx);
 	} else {
-		panic("ctl_getlock: so=%p NULL so_pcb\n", so);
+		panic("ctl_getlock: so=%p NULL NO so_pcb %s\n", 
+		    so, solockhistory_nr(so));
 		return (so->so_proto->pr_domain->dom_mtx);
 	}
 }

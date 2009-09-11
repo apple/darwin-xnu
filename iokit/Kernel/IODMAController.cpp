@@ -37,7 +37,7 @@ const OSSymbol *IODMAController::createControllerName(UInt32 phandle)
 #define CREATE_BUF_LEN 48
   char           buf[CREATE_BUF_LEN];
   
-  snprintf(buf, CREATE_BUF_LEN, "IODMAController%08lX", phandle);
+  snprintf(buf, CREATE_BUF_LEN, "IODMAController%08X", (uint32_t)phandle);
   
   return OSSymbol::withCString(buf);
 }

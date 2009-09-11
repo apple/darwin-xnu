@@ -38,8 +38,27 @@ static void
 thread_recompute_priority(
 	thread_t		thread);
 
+
+
 kern_return_t
 thread_policy_set(
+	thread_t				thread,
+	thread_policy_flavor_t	flavor,
+	thread_policy_t			policy_info,
+	mach_msg_type_number_t	count)
+{
+
+	if (thread == THREAD_NULL)
+		return (KERN_INVALID_ARGUMENT);
+
+	if (thread->static_param)
+		return (KERN_SUCCESS);
+
+	return (thread_policy_set_internal(thread, flavor, policy_info, count));
+}
+
+kern_return_t
+thread_policy_set_internal(
 	thread_t				thread,
 	thread_policy_flavor_t	flavor,
 	thread_policy_t			policy_info,
@@ -48,22 +67,12 @@ thread_policy_set(
 	kern_return_t			result = KERN_SUCCESS;
 	spl_t					s;
 
-	if (thread == THREAD_NULL)
-		return (KERN_INVALID_ARGUMENT);
-
 	thread_mtx_lock(thread);
 	if (!thread->active) {
 		thread_mtx_unlock(thread);
 
 		return (KERN_TERMINATED);
 	}
-
-	if (thread->static_param) {
-		thread_mtx_unlock(thread);
-
-		return (KERN_SUCCESS);
-	}
-
 	switch (flavor) {
 
 	case THREAD_EXTENDED_POLICY:
@@ -170,7 +179,6 @@ thread_policy_set(
 			result = KERN_INVALID_ARGUMENT;
 			break;
 		}
-
 		info = (thread_precedence_policy_t)policy_info;
 
 		s = splsched();
@@ -215,7 +223,6 @@ thread_policy_set(
 	}
 
 	thread_mtx_unlock(thread);
-
 	return (result);
 }
 

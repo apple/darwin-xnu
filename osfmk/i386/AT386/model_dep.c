@@ -84,15 +84,18 @@
 #include <kern/clock.h>
 #include <kern/cpu_data.h>
 #include <kern/machine.h>
+#include <i386/postcode.h>
+#include <i386/mp_desc.h>
+#include <i386/misc_protos.h>
+#include <i386/thread.h>
+#include <i386/trap.h>
+#include <i386/machine_routines.h>
+#include <i386/mp.h>		/* mp_rendezvous_break_lock */
+#include <i386/cpuid.h>
 #include <i386/fpu.h>
 #include <i386/ipl.h>
-#include <i386/misc_protos.h>
 #include <i386/mtrr.h>
-#include <i386/machine_routines.h>
 #include <i386/pmCPU.h>
-#include <i386/postcode.h>
-#include <i386/trap.h>
-#include <i386/mp.h>		/* mp_rendezvous_break_lock */
 #include <architecture/i386/pio.h> /* inb() */
 #include <pexpert/i386/boot.h>
 #if	MACH_KDB
@@ -103,22 +106,16 @@
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 
-#include <i386/mp_desc.h>
-#include <i386/mp.h>
-#include <i386/cpuid.h>
-
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOHibernatePrivate.h>
 
 #include <pexpert/i386/efi.h>
 
 #include <kern/thread.h>
-#include <i386/thread.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
 
-void	enable_bluebox(void);
-void	disable_bluebox(void);
+#include <libkern/kernel_mach_header.h>
 
 static void machine_conf(void);
 
@@ -133,10 +130,26 @@ volatile int pbtcpu = -1;
 hw_lock_data_t pbtlock;		/* backtrace print lock */
 uint32_t pbtcnt = 0;
 
+#if defined (__i386__)
+#define PRINT_ARGS_FROM_STACK_FRAME	1
+#elif defined (__x86_64__)
+#define PRINT_ARGS_FROM_STACK_FRAME	0
+#else
+#error unsupported architecture
+#endif
+
+#ifdef __LP64__
+typedef struct nlist_64 kernel_nlist_t;
+#else
+typedef struct nlist kernel_nlist_t;
+#endif
+
 typedef struct _cframe_t {
     struct _cframe_t	*prev;
-    unsigned		caller;
+    uintptr_t		caller;
+#if PRINT_ARGS_FROM_STACK_FRAME
     unsigned		args[0];
+#endif
 } cframe_t;
 
 static unsigned panic_io_port;
@@ -242,7 +255,7 @@ machine_startup(void)
 static void
 machine_conf(void)
 {
-	machine_info.memory_size = mem_size;
+	machine_info.memory_size = (typeof(machine_info.memory_size))mem_size;
 }
 
 
@@ -376,15 +389,26 @@ efi_set_tables_64(EFI_SYSTEM_TABLE_64 * system_table)
             break;
         }
 
-	gPEEFISystemTable     = system_table;
+        gPEEFISystemTable     = system_table;
 
+
+        if (!cpu_mode_is64bit()) {
+            kprintf("Skipping 64-bit EFI runtime services for 32-bit legacy mode\n");			
+            break;
+        }
+
+        if(system_table->RuntimeServices == 0) {
+            kprintf("No runtime table present\n");
+            break;
+        }
         kprintf("RuntimeServices table at 0x%qx\n", system_table->RuntimeServices);
-        runtime = (EFI_RUNTIME_SERVICES_64 *) (uintptr_t)system_table->RuntimeServices; // XXX
+        // 64-bit virtual address is OK for 64-bit EFI and 64/32-bit kernel.
+        runtime = (EFI_RUNTIME_SERVICES_64 *) (uintptr_t)system_table->RuntimeServices;
         kprintf("Checking runtime services table %p\n", runtime);
-	if (runtime->Hdr.Signature != EFI_RUNTIME_SERVICES_SIGNATURE) {
-	    kprintf("Bad EFI runtime table signature\n");
-	    break;
-	}
+        if (runtime->Hdr.Signature != EFI_RUNTIME_SERVICES_SIGNATURE) {
+            kprintf("Bad EFI runtime table signature\n");
+            break;
+        }
 
 	// Verify signature of runtime services table
 	hdr_cksum = runtime->Hdr.CRC32;
@@ -404,16 +428,16 @@ efi_set_tables_64(EFI_SYSTEM_TABLE_64 * system_table)
 }
 
 static void
-efi_set_tables_32(EFI_SYSTEM_TABLE * system_table)
+efi_set_tables_32(EFI_SYSTEM_TABLE_32 * system_table)
 {
-    EFI_RUNTIME_SERVICES *runtime;
+    EFI_RUNTIME_SERVICES_32 *runtime;
     uint32_t hdr_cksum;
     uint32_t cksum;
 
     kprintf("Processing 32-bit EFI tables at %p\n", system_table);
     do {
         if (system_table->Hdr.Signature != EFI_SYSTEM_TABLE_SIGNATURE) {
-	    kprintf("Bad EFI system table signature\n");
+            kprintf("Bad EFI system table signature\n");
             break;
         }
         // Verify signature of the system table
@@ -428,14 +452,21 @@ efi_set_tables_32(EFI_SYSTEM_TABLE * system_table)
             break;
         }
 
-	gPEEFISystemTable     = system_table;
+        gPEEFISystemTable     = system_table;
 
-	kprintf("RuntimeServices table at %p\n", system_table->RuntimeServices);
-        runtime = (EFI_RUNTIME_SERVICES *) system_table->RuntimeServices;
-	if (runtime->Hdr.Signature != EFI_RUNTIME_SERVICES_SIGNATURE) {
-	    kprintf("Bad EFI runtime table signature\n");
-	    break;
-	}
+
+        if(system_table->RuntimeServices == 0) {
+            kprintf("No runtime table present\n");
+            break;
+        }
+        kprintf("RuntimeServices table at 0x%x\n", system_table->RuntimeServices);
+        // 32-bit virtual address is OK for 32-bit EFI and 32-bit kernel.
+        // For a 64-bit kernel, booter will ensure pointer is zeroed out
+        runtime = (EFI_RUNTIME_SERVICES_32 *) (intptr_t)system_table->RuntimeServices;
+        if (runtime->Hdr.Signature != EFI_RUNTIME_SERVICES_SIGNATURE) {
+            kprintf("Bad EFI runtime table signature\n");
+            break;
+        }
 
 	// Verify signature of runtime services table
 	hdr_cksum = runtime->Hdr.CRC32;
@@ -474,26 +505,31 @@ efi_init(void)
 	msize = args->MemoryMapDescriptorSize;
 	mcount = args->MemoryMapSize / msize;
 
-	mptr = (EfiMemoryRange *)args->MemoryMap;
+	mptr = (EfiMemoryRange *)ml_static_ptovirt(args->MemoryMap);
 	for (i=0; i < mcount; i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize)) {
 	    if (((mptr->Attribute & EFI_MEMORY_RUNTIME) == EFI_MEMORY_RUNTIME) ) {
-		vm_size = i386_ptob((uint32_t)mptr->NumberOfPages);
+		vm_size = (vm_offset_t)i386_ptob((uint32_t)mptr->NumberOfPages);
 		vm_addr =   (vm_offset_t) mptr->VirtualStart;
 		phys_addr = (vm_map_offset_t) mptr->PhysicalStart;
-		pmap_map(vm_addr, phys_addr, phys_addr + round_page(vm_size),
+#if defined(__i386__)
+		pmap_map
+#elif defined(__x86_64__)
+		pmap_map_bd /* K64todo resolve pmap layer inconsistency */
+#endif
+			(vm_addr, phys_addr, phys_addr + round_page(vm_size),
 		     (mptr->Type == kEfiRuntimeServicesCode) ? VM_PROT_READ | VM_PROT_EXECUTE : VM_PROT_READ|VM_PROT_WRITE,
 		     (mptr->Type == EfiMemoryMappedIO)       ? VM_WIMG_IO   : VM_WIMG_USE_DEFAULT);
 	    }
 	}
 
-        if (args->Version > 1)
-                panic("Incompatible boot args version %d\n", args->Version);
+        if ((args->Version != kBootArgsVersion1) || (args->Version == kBootArgsVersion1 && args->Revision < kBootArgsRevision1_5 ))
+            panic("Incompatible boot args version %d revision %d\n", args->Version, args->Revision);
 
         kprintf("Boot args version %d revision %d mode %d\n", args->Version, args->Revision, args->efiMode);
-        if (args->Revision >= 4 && args->efiMode == kBootArgsEfiMode64) {
-                efi_set_tables_64((EFI_SYSTEM_TABLE_64 *) args->efiSystemTable);
+        if (args->efiMode == kBootArgsEfiMode64) {
+            efi_set_tables_64((EFI_SYSTEM_TABLE_64 *) ml_static_ptovirt(args->efiSystemTable));
         } else {
-                efi_set_tables_32((EFI_SYSTEM_TABLE *) args->efiSystemTable);
+            efi_set_tables_32((EFI_SYSTEM_TABLE_32 *) ml_static_ptovirt(args->efiSystemTable));
         }
     }
     while (FALSE);
@@ -509,7 +545,7 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 
     kprintf("Reinitializing EFI runtime services\n");
 
-    if (args->Revision < 3)
+    if (args->Version != kBootArgsVersion1)
 	return;
     do
     {
@@ -532,15 +568,15 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 	kprintf("Old map:\n");
 	msize = args->MemoryMapDescriptorSize;
 	mcount = args->MemoryMapSize / msize;
-	mptr = (EfiMemoryRange *)args->MemoryMap;
+	mptr = (EfiMemoryRange *)ml_static_ptovirt(args->MemoryMap);
 	for (i=0; i < mcount; i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize)) {
 	    if ((mptr->Attribute & EFI_MEMORY_RUNTIME) == EFI_MEMORY_RUNTIME) {
 
-		vm_size = i386_ptob((uint32_t)mptr->NumberOfPages);
+		vm_size = (vm_offset_t)i386_ptob((uint32_t)mptr->NumberOfPages);
 		vm_addr =   (vm_offset_t) mptr->VirtualStart;
 		phys_addr = (vm_map_offset_t) mptr->PhysicalStart;
 
-		kprintf("mapping[%u] %qx @ %x, %llu\n", mptr->Type, phys_addr, vm_addr, mptr->NumberOfPages);
+		kprintf("mapping[%u] %qx @ %lx, %llu\n", mptr->Type, phys_addr, (unsigned long)vm_addr, mptr->NumberOfPages);
 	    }
 	}
 
@@ -549,31 +585,36 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 
 	kprintf("New map:\n");
 	msize = args->MemoryMapDescriptorSize;
-	mcount = map_size / msize;
+	mcount = (unsigned int )(map_size / msize);
 	mptr = map;
 	for (i=0; i < mcount; i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize)) {
 	    if ((mptr->Attribute & EFI_MEMORY_RUNTIME) == EFI_MEMORY_RUNTIME) {
 
-		vm_size = i386_ptob((uint32_t)mptr->NumberOfPages);
+		vm_size = (vm_offset_t)i386_ptob((uint32_t)mptr->NumberOfPages);
 		vm_addr =   (vm_offset_t) mptr->VirtualStart;
 		phys_addr = (vm_map_offset_t) mptr->PhysicalStart;
 
-		kprintf("mapping[%u] %qx @ %x, %llu\n", mptr->Type, phys_addr, vm_addr, mptr->NumberOfPages);
+		kprintf("mapping[%u] %qx @ %lx, %llu\n", mptr->Type, phys_addr, (unsigned long)vm_addr, mptr->NumberOfPages);
 
-		pmap_map(vm_addr, phys_addr, phys_addr + round_page(vm_size),
+#if defined(__i386__)
+		pmap_map
+#elif defined(__x86_64__)
+		pmap_map_bd /* K64todo resolve pmap layer inconsistency */
+#endif
+			(vm_addr, phys_addr, phys_addr + round_page(vm_size),
 			 (mptr->Type == kEfiRuntimeServicesCode) ? VM_PROT_READ | VM_PROT_EXECUTE : VM_PROT_READ|VM_PROT_WRITE,
 			 (mptr->Type == EfiMemoryMappedIO)       ? VM_WIMG_IO   : VM_WIMG_USE_DEFAULT);
 	    }
 	}
 
-        if (args->Version > 1)
-                panic("Incompatible boot args version %d\n", args->Version);
+        if ((args->Version != kBootArgsVersion1) || (args->Version == kBootArgsVersion1 && args->Revision < kBootArgsRevision1_5 ))
+            panic("Incompatible boot args version %d revision %d\n", args->Version, args->Revision);
 
         kprintf("Boot args version %d revision %d mode %d\n", args->Version, args->Revision, args->efiMode);
-        if (args->Revision >= 4 && args->efiMode == kBootArgsEfiMode64) {
-                efi_set_tables_64((EFI_SYSTEM_TABLE_64 *) args->efiSystemTable);
+        if (args->efiMode == kBootArgsEfiMode64) {
+	    efi_set_tables_64((EFI_SYSTEM_TABLE_64 *) ml_static_ptovirt(args->efiSystemTable));
         } else {
-                efi_set_tables_32((EFI_SYSTEM_TABLE *) args->efiSystemTable);
+	    efi_set_tables_32((EFI_SYSTEM_TABLE_32 *) ml_static_ptovirt(args->efiSystemTable));
         }
     }
     while (FALSE);
@@ -627,9 +668,9 @@ machine_init(void)
 	pat_init();
 
 	/*
-	 * Free lowmem pages
+	 * Free lowmem pages and complete other setup
 	 */
-	x86_lowmem_free();
+	pmap_lowmem_finalize();
 }
 
 /*
@@ -714,10 +755,14 @@ Debugger(
 		panic_io_port_read();
 
 		/* Obtain current frame pointer */
+#if defined (__i386__)
 		__asm__ volatile("movl %%ebp, %0" : "=m" (stackptr));
+#elif defined (__x86_64__)
+		__asm__ volatile("movq %%rbp, %0" : "=m" (stackptr));
+#endif
 
 		/* Print backtrace - callee is internally synchronized */
-		panic_i386_backtrace(stackptr, 16, NULL, FALSE, NULL);
+		panic_i386_backtrace(stackptr, 20, NULL, FALSE, NULL);
 
 		/* everything should be printed now so copy to NVRAM
 		 */
@@ -729,8 +774,8 @@ Debugger(
 		    if (commit_paniclog_to_nvram) {
 			unsigned int bufpos;
 			uintptr_t cr0;
-
-                        debug_putc(0);
+			
+			debug_putc(0);
 
 			/* Now call the compressor */
 			/* XXX Consider using the WKdm compressor in the
@@ -752,6 +797,7 @@ Debugger(
 			 * This call must save data synchronously,
 			 * since we can subsequently halt the system.
 			 */
+
 			kprintf("Attempting to commit panic log to NVRAM\n");
 /* The following sequence is a workaround for:
  * <rdar://problem/5915669> SnowLeopard10A67: AppleEFINVRAM should not invoke
@@ -760,11 +806,10 @@ Debugger(
  */
 			cr0 = get_cr0();
 			clear_ts();
-
-                        pi_size = PESavePanicInfo((unsigned char *)debug_buf,
-			    pi_size );
+			
+			pi_size = PESavePanicInfo((unsigned char *)debug_buf,
+					(uint32_t)pi_size );
 			set_cr0(cr0);
-
 			/* Uncompress in-place, to permit examination of
 			 * the panic log by debuggers.
 			 */
@@ -799,16 +844,6 @@ Debugger(
 	hw_atomic_sub(&debug_mode, 1);   
 }
 
-void
-enable_bluebox(void)
-{
-}
-
-void
-disable_bluebox(void)
-{
-}
-
 char *
 machine_boot_info(char *buf, __unused vm_size_t size)
 {
@@ -835,25 +870,22 @@ typedef struct pasc pasc_t;
  */
 
 static int
-panic_print_macho_symbol_name(struct mach_header *mh, vm_address_t search)
+panic_print_macho_symbol_name(kernel_mach_header_t *mh, vm_address_t search)
 {
-    struct nlist			*sym = NULL;
+    kernel_nlist_t	*sym = NULL;
     struct load_command		*cmd;
-    struct segment_command	*orig_ts = NULL, *orig_le = NULL;
+    kernel_segment_command_t	*orig_ts = NULL, *orig_le = NULL;
     struct symtab_command	*orig_st = NULL;
     unsigned int			i;
     char					*strings, *bestsym = NULL;
     vm_address_t			bestaddr = 0, diff, curdiff;
-    
-    if (mh->magic != MH_MAGIC) {
-        /* bad magic number */
-        return 0;
-    }
+
+    /* Assume that if it's loaded and linked into the kernel, it's a valid Mach-O */
     
     cmd = (struct load_command *) &mh[1];
     for (i = 0; i < mh->ncmds; i++) {
-        if (cmd->cmd == LC_SEGMENT) {
-            struct segment_command *orig_sg = (struct segment_command *) cmd;
+        if (cmd->cmd == LC_SEGMENT_KERNEL) {
+            kernel_segment_command_t *orig_sg = (kernel_segment_command_t *) cmd;
             
             if (strncmp(SEG_TEXT, orig_sg->segname,
 				    sizeof(orig_sg->segname)) == 0)
@@ -868,7 +900,7 @@ panic_print_macho_symbol_name(struct mach_header *mh, vm_address_t search)
         else if (cmd->cmd == LC_SYMTAB)
             orig_st = (struct symtab_command *) cmd;
         
-        cmd = (struct load_command *) ((caddr_t) cmd + cmd->cmdsize);
+        cmd = (struct load_command *) ((uintptr_t) cmd + cmd->cmdsize);
     }
     
     if ((orig_ts == NULL) || (orig_st == NULL) || (orig_le == NULL))
@@ -876,7 +908,7 @@ panic_print_macho_symbol_name(struct mach_header *mh, vm_address_t search)
     
     /* kexts don't have a LINKEDIT segment for now, so we'll never get this far for kexts */
     
-    vm_address_t slide = ((vm_address_t)mh) - orig_ts->vmaddr;
+    vm_offset_t slide = ((vm_address_t)mh) - orig_ts->vmaddr;
     if (slide != 0)
         search -= slide; /* adjusting search since the binary has slid */
     
@@ -886,11 +918,13 @@ panic_print_macho_symbol_name(struct mach_header *mh, vm_address_t search)
         return 0;
     }
     
-    sym = (struct nlist *)orig_le->vmaddr;
-    strings = ((char *)sym) + orig_st->nsyms * sizeof(struct nlist);
+    sym = (kernel_nlist_t *)(uintptr_t)(orig_le->vmaddr + orig_st->symoff - orig_le->fileoff);
+    strings = (char *)(uintptr_t)(orig_le->vmaddr + orig_st->stroff - orig_le->fileoff);
     diff = search;
     
     for (i = 0; i < orig_st->nsyms; i++) {
+        if (sym[i].n_type & N_STAB) continue;
+
         if (sym[i].n_value <= search) {
             curdiff = search - (vm_address_t)sym[i].n_value;
             if (curdiff < diff) {
@@ -903,9 +937,9 @@ panic_print_macho_symbol_name(struct mach_header *mh, vm_address_t search)
     
     if (bestsym != NULL) {
         if (diff != 0) {
-            kdb_printf("%s + 0x%08x \n", bestsym, diff);
+            kdb_printf("%s + 0x%lx", bestsym, (unsigned long)diff);
         } else {
-            kdb_printf("%s \n", bestsym);
+            kdb_printf("%s", bestsym);
         }
         return 1;
     }
@@ -927,11 +961,9 @@ panic_print_kmod_symbol_name(vm_address_t search)
     }
     if (current_kmod != NULL) {
         /* if kexts had symbol table loaded, we'd call search_symbol_name again; alas, they don't */
-        kdb_printf("%s + %d \n", current_kmod->name, search - current_kmod->address);
+      kdb_printf("%s + %lu \n", current_kmod->name, (unsigned long)search - current_kmod->address);
     }
 }
-
-extern struct mach_header _mh_execute_header; /* the kernel's mach header */
 
 static void
 panic_print_symbol_name(vm_address_t search)
@@ -974,12 +1006,27 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 	PE_parse_boot_argn("keepsyms", &keepsyms, sizeof (keepsyms));
 
 	if (msg != NULL) {
-		kdb_printf(msg);
+		kdb_printf("%s", msg);
 	}
 
 	if ((regdump == TRUE) && (regs != NULL)) {
+#if defined(__x86_64__)
+		x86_saved_state64_t	*ss64p = saved_state64(regs);
+		kdb_printf(
+		    "RAX: 0x%016llx, RBX: 0x%016llx, RCX: 0x%016llx, RDX: 0x%016llx\n"
+		    "RSP: 0x%016llx, RBP: 0x%016llx, RSI: 0x%016llx, RDI: 0x%016llx\n"
+		    "R8:  0x%016llx, R9:  0x%016llx, R10: 0x%016llx, R11: 0x%016llx\n"
+		    "R12: 0x%016llx, R13: 0x%016llx, R14: 0x%016llx, R15: 0x%016llx\n"
+		    "RFL: 0x%016llx, RIP: 0x%016llx, CS:  0x%016llx, SS:  0x%016llx\n",
+		    ss64p->rax, ss64p->rbx, ss64p->rcx, ss64p->rdx,
+		    ss64p->isf.rsp, ss64p->rbp, ss64p->rsi, ss64p->rdi,
+		    ss64p->r8,  ss64p->r9,  ss64p->r10, ss64p->r11,
+		    ss64p->r12, ss64p->r13, ss64p->r14, ss64p->r15,
+		    ss64p->isf.rflags, ss64p->isf.rip, ss64p->isf.cs,
+		    ss64p->isf.ss);
+		PC = ss64p->isf.rip;
+#else
 		x86_saved_state32_t	*ss32p = saved_state32(regs);
-
 		kdb_printf(
 		    "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
 		    "CR2: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
@@ -988,10 +1035,15 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 		    ss32p->cr2,ss32p->ebp,ss32p->esi,ss32p->edi,
 		    ss32p->efl,ss32p->eip,ss32p->cs, ss32p->ds);
 		PC = ss32p->eip;
+#endif
 	}
 
 	kdb_printf("Backtrace (CPU %d), "
-		"Frame : Return Address (4 potential args on stack)\n", cpu_number());
+#if PRINT_ARGS_FROM_STACK_FRAME
+	"Frame : Return Address (4 potential args on stack)\n", cpu_number());
+#else
+	"Frame : Return Address\n", cpu_number());
+#endif
 
 	for (frame_index = 0; frame_index < nframes; frame_index++) {
 		vm_offset_t curframep = (vm_offset_t) frame;
@@ -1010,14 +1062,16 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 			goto invalid;
 		}
 
-		kdb_printf("%p : 0x%x ", frame, frame->caller);
+		kdb_printf("%p : 0x%lx ", frame, frame->caller);
 		if (frame_index < DUMPFRAMES)
 			raddrs[frame_index] = frame->caller;
 
+#if PRINT_ARGS_FROM_STACK_FRAME
 		if (kvtophys((vm_offset_t)&(frame->args[3])))
-			kdb_printf("(0x%x 0x%x 0x%x 0x%x) \n",
+			kdb_printf("(0x%x 0x%x 0x%x 0x%x) ",
 			    frame->args[0], frame->args[1],
 			    frame->args[2], frame->args[3]);
+#endif
 
 		/* Display address-symbol translation only if the "keepsyms"
 		 * boot-arg is suppplied, since we unload LINKEDIT otherwise.
@@ -1027,11 +1081,8 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 		if (keepsyms)
 			panic_print_symbol_name((vm_address_t)frame->caller);
 		
-		/* Stack grows downward */
-		if (frame->prev < frame) {
-			frame = frame->prev;
-			goto invalid;
-		}
+		kdb_printf("\n");
+
 		frame = frame->prev;
 	}
 
@@ -1049,14 +1100,12 @@ out:
 	 * the kmod list safely.
 	 */
 	if (frame_index)
-		kmod_dump((vm_offset_t *)&raddrs[0], frame_index);
+		kmod_panic_dump((vm_offset_t *)&raddrs[0], frame_index);
 
 	if (PC != 0)
-		kmod_dump(&PC, 1);
+		kmod_panic_dump(&PC, 1);
 
 	panic_display_system_configuration();
-	panic_display_zprint();
-	dump_kext_info(&kdb_log);
 
 	/* Release print backtrace lock, to permit other callers in the
 	 * event of panics on multiple processors.
@@ -1069,3 +1118,5 @@ out:
 	bt_tsc_timeout = rdtsc64() + PBT_TIMEOUT_CYCLES;
 	while(*ppbtcnt && (rdtsc64() < bt_tsc_timeout));
 }
+
+void *apic_table = NULL;

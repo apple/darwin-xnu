@@ -20,12 +20,12 @@
  */
 
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 /*
- * #pragma ident	"@(#)dtrace_subr.c	1.7	06/04/24 SMI"
+ * #pragma ident	"@(#)dtrace_subr.c	1.8	07/06/05 SMI"
  */
 
 #include <stdarg.h>
@@ -37,7 +37,8 @@
 #include <kern/debug.h>
 
 #if defined(__APPLE__)
-#define proc_t struct proc
+/* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
+#define proc_t struct proc /* Steer clear of the Darwin typedef for proc_t */
 #endif
 
 /* Copied from an arch specific dtrace_subr.c. */
@@ -56,9 +57,6 @@ void (*dtrace_helpers_cleanup)(proc_t *);
 void (*dtrace_helpers_fork)(proc_t *, proc_t *);
 void (*dtrace_cpustart_init)(void);
 void (*dtrace_cpustart_fini)(void);
-
-void (*dtrace_kreloc_init)(void);
-void (*dtrace_kreloc_fini)(void);
 
 void (*dtrace_debugger_init)(void);
 void (*dtrace_debugger_fini)(void);

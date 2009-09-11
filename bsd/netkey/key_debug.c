@@ -149,6 +149,12 @@ kdebug_sadb(base)
 		case SADB_X_EXT_SA2:
 			kdebug_sadb_x_sa2(ext);
 			break;
+                case SADB_EXT_SESSION_ID:
+			kdebug_sadb_session_id(ext);
+		        break;
+                case SADB_EXT_SASTAT:
+			kdebug_sadb_sastat(ext);
+		        break;
 		default:
 			printf("kdebug_sadb: invalid ext_type %u was passed.\n",
 			    ext->sadb_ext_type);
@@ -197,15 +203,15 @@ kdebug_sadb_prop(ext)
 			"soft_bytes=%lu hard_bytes=%lu\n",
 			comb->sadb_comb_soft_allocations,
 			comb->sadb_comb_hard_allocations,
-			(unsigned long)comb->sadb_comb_soft_bytes,
-			(unsigned long)comb->sadb_comb_hard_bytes);
+			(u_int32_t)comb->sadb_comb_soft_bytes,
+			(u_int32_t)comb->sadb_comb_hard_bytes);
 
 		printf("  soft_alloc=%lu hard_alloc=%lu "
 			"soft_bytes=%lu hard_bytes=%lu }\n",
-			(unsigned long)comb->sadb_comb_soft_addtime,
-			(unsigned long)comb->sadb_comb_hard_addtime,
-			(unsigned long)comb->sadb_comb_soft_usetime,
-			(unsigned long)comb->sadb_comb_hard_usetime);
+			(u_int32_t)comb->sadb_comb_soft_addtime,
+			(u_int32_t)comb->sadb_comb_hard_addtime,
+			(u_int32_t)comb->sadb_comb_soft_usetime,
+			(u_int32_t)comb->sadb_comb_hard_usetime);
 		comb++;
 	}
 	printf("}\n");
@@ -230,7 +236,7 @@ kdebug_sadb_identity(ext)
 	switch (id->sadb_ident_type) {
 	default:
 		printf(" type=%d id=%lu",
-			id->sadb_ident_type, (u_long)id->sadb_ident_id);
+			id->sadb_ident_type, (u_int32_t)id->sadb_ident_id);
 		if (len) {
 #ifdef KERNEL
 			ipsec_hexdump((caddr_t)(id + 1), len); /*XXX cast ?*/
@@ -385,6 +391,47 @@ kdebug_sadb_x_sa2(ext)
 	printf("  reserved1=%u reserved2=%u sequence=%u }\n",
 	    sa2->sadb_x_sa2_reserved1, sa2->sadb_x_sa2_reserved2,
 	    sa2->sadb_x_sa2_sequence);
+
+	return;
+}
+
+static void
+kdebug_sadb_session_id(ext)
+	struct sadb_ext *ext;
+{
+       struct sadb_session_id *p = (__typeof__(p))ext;
+
+	/* sanity check */
+	if (ext == NULL)
+	        panic("kdebug_sadb_session_id: NULL pointer was passed.\n");
+
+	printf("sadb_session_id{ id0=%llx, id1=%llx}\n",
+	        p->sadb_session_id_v[0],
+	        p->sadb_session_id_v[1]);
+
+	return;
+}
+
+static void
+kdebug_sadb_sastat(ext)
+	struct sadb_ext *ext;
+{
+       struct sadb_sastat *p = (__typeof__(p))ext;
+	struct sastat      *stats;
+	int    i;
+
+	/* sanity check */
+	if (ext == NULL)
+	        panic("kdebug_sadb_sastat: NULL pointer was passed.\n");
+
+	printf("sadb_sastat{ dir=%u num=%u\n",
+	        p->sadb_sastat_dir, p->sadb_sastat_list_len);
+	stats = (__typeof__(stats))(p + 1);
+	for (i = 0; i < p->sadb_sastat_list_len; i++) {
+	       printf("  spi=%x,\n",
+		      stats[i].spi);
+	}
+	printf("}\n");
 
 	return;
 }

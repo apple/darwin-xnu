@@ -109,6 +109,6 @@ void    fddi_ifattach(struct ifnet *);
 void    fddi_input(struct ifnet *, struct fddi_header *, struct mbuf *);
 int     fddi_output(struct ifnet *,
            struct mbuf *, struct sockaddr *, struct rtentry *); 
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
-#endif _NETINET_IF_FDDI_H_
+#endif /* _NETINET_IF_FDDI_H_ */

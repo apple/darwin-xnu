@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,6 +73,25 @@
 #include <kern/syscall_subr.h>
 #include <mach/mach_host_server.h>
 #include <mach/mach_syscalls.h>
+
+
+#ifdef MACH_BSD
+extern void workqueue_thread_yielded(void);
+#endif /* MACH_BSD */
+
+
+/* Called from commpage to take a delayed preemption when exiting
+ * the "Preemption Free Zone" (PFZ).
+ */
+kern_return_t
+pfz_exit(
+__unused	struct pfz_exit_args *args)
+{
+	/* For now, nothing special to do.  We'll pick up the ASTs on kernel exit. */
+
+	return (KERN_SUCCESS);
+}
+
 
 /*
  *	swtch and swtch_pri both attempt to context switch (logic in
@@ -220,6 +239,8 @@ thread_switch(
 	default:
 	    return (KERN_INVALID_ARGUMENT);
     }
+
+    workqueue_thread_yielded();
 
 	/*
 	 * Translate the port name if supplied.

@@ -139,7 +139,7 @@ xprbootstrap(void)
 	/* leave room at the end for a saved copy of xprptr */
 	size = nxprbufs * sizeof(struct xprbuf) + sizeof xprptr;
 
-	kr = kmem_alloc_wired(kernel_map, &addr, size);
+	kr = kmem_alloc_kobject(kernel_map, &addr, size);
 	if (kr != KERN_SUCCESS)
 		panic("xprbootstrap");
 

@@ -55,9 +55,7 @@
 // Return conditions:
 //	%eax, %edi, %esi, %ecx, and %edx all trashed
 
-        .text
-        .align  5, 0x90
-Lmemset_pattern_sse2:
+COMMPAGE_FUNCTION_START(memset_pattern_sse2, 32, 5)
         cmpl    $(kShort),%edx		// long enough to bother aligning?
         ja	LNotShort		// yes
 	jmp	LShort			// no
@@ -182,4 +180,4 @@ LNoMoreChunks:
 	jge	LLoopBy16		// yes
 	jmp	LLessThan16		// handle up to 15 remaining bytes
 
-	COMMPAGE_DESCRIPTOR(memset_pattern_sse2,_COMM_PAGE_MEMSET_PATTERN,kHasSSE2,0)
+COMMPAGE_DESCRIPTOR(memset_pattern_sse2,_COMM_PAGE_MEMSET_PATTERN,kHasSSE2,0)

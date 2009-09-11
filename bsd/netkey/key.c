@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netkey/key.c,v 1.16.2.13 2002/07/24 18:17:40 ume Exp $	*/
 /*	$KAME: key.c,v 1.191 2001/06/27 10:46:49 sakane Exp $	*/
 
@@ -148,7 +176,7 @@ static u_int key_larval_lifetime = 30;	/* interval to expire acquiring, 30(s)*/
 static int key_blockacq_count = 10;	/* counter for blocking SADB_ACQUIRE.*/
 static int key_blockacq_lifetime = 20;	/* lifetime for blocking SADB_ACQUIRE.*/
 static int key_preferred_oldsa = 0;	/* preferred old sa rather than new sa.*/
-static int natt_keepalive_interval = 20;	/* interval between natt keepalives.*/
+__private_extern__ int natt_keepalive_interval = 20;	/* interval between natt keepalives.*/
 static int ipsec_policy_count = 0;
 static int ipsec_sav_count = 0;
 
@@ -209,6 +237,8 @@ static const int minsize[] = {
 	0,				/* SADB_X_EXT_KMPRIVATE */
 	sizeof(struct sadb_x_policy),	/* SADB_X_EXT_POLICY */
 	sizeof(struct sadb_x_sa2),	/* SADB_X_SA2 */
+	sizeof(struct sadb_session_id), /* SADB_EXT_SESSION_ID */
+	sizeof(struct sadb_sastat),     /* SADB_EXT_SASTAT */
 };
 static const int maxsize[] = {
 	sizeof(struct sadb_msg),	/* SADB_EXT_RESERVED */
@@ -231,6 +261,8 @@ static const int maxsize[] = {
 	0,				/* SADB_X_EXT_KMPRIVATE */
 	0,				/* SADB_X_EXT_POLICY */
 	sizeof(struct sadb_x_sa2),	/* SADB_X_SA2 */
+	0,                              /* SADB_EXT_SESSION_ID */
+	0,                              /* SADB_EXT_SASTAT */
 };
 
 static int ipsec_esp_keymin = 256;
@@ -333,21 +365,21 @@ do { \
 
 #if 1
 #define KMALLOC_WAIT(p, t, n)                                                     \
-	((p) = (t) _MALLOC((unsigned long)(n), M_SECA, M_WAITOK))
+	((p) = (t) _MALLOC((u_int32_t)(n), M_SECA, M_WAITOK))
 #define KMALLOC_NOWAIT(p, t, n)                                              \
-	((p) = (t) _MALLOC((unsigned long)(n), M_SECA, M_NOWAIT))
+	((p) = (t) _MALLOC((u_int32_t)(n), M_SECA, M_NOWAIT))
 #define KFREE(p)                                                             \
 	_FREE((caddr_t)(p), M_SECA);
 #else
 #define KMALLOC_WAIT(p, t, n) \
 do { \
-	((p) = (t)_MALLOC((unsigned long)(n), M_SECA, M_WAITOK));             \
+	((p) = (t)_MALLOC((u_int32_t)(n), M_SECA, M_WAITOK));             \
 	printf("%s %d: %p <- KMALLOC_WAIT(%s, %d)\n",                             \
 		__FILE__, __LINE__, (p), #t, n);                             \
 } while (0)
 #define KMALLOC_NOWAIT(p, t, n) \
 	do { \
-		((p) = (t)_MALLOC((unsigned long)(n), M_SECA, M_NOWAIT));             \
+		((p) = (t)_MALLOC((u_int32_t)(n), M_SECA, M_NOWAIT));             \
 		printf("%s %d: %p <- KMALLOC_NOWAIT(%s, %d)\n",                             \
 		       __FILE__, __LINE__, (p), #t, n);                             \
 	} while (0)
@@ -384,13 +416,13 @@ do { \
 	(idx)->proto = (p);                                                  \
 	(idx)->mode = (m);                                                   \
 	(idx)->reqid = (r);                                                  \
-	bcopy((s), &(idx)->src, ((struct sockaddr *)(s))->sa_len);           \
-	bcopy((d), &(idx)->dst, ((struct sockaddr *)(d))->sa_len);           \
+	bcopy((s), &(idx)->src, ((const struct sockaddr *)(s))->sa_len);           \
+	bcopy((d), &(idx)->dst, ((const struct sockaddr *)(d))->sa_len);           \
 } while (0)
 
 /* key statistics */
 struct _keystat {
-	u_long getspi_count; /* the avarage of count to try to get new SPI */
+	u_int32_t getspi_count; /* the avarage of count to try to get new SPI */
 } keystat;
 
 struct sadb_msghdr {
@@ -425,7 +457,7 @@ static struct mbuf *key_setdumpsp(struct secpolicy *,
 	u_int8_t, u_int32_t, u_int32_t);
 static u_int key_getspreqmsglen(struct secpolicy *);
 static int key_spdexpire(struct secpolicy *);
-static struct secashead *key_newsah(struct secasindex *);
+static struct secashead *key_newsah(struct secasindex *, u_int8_t);
 static void key_delsah(struct secashead *);
 static struct secasvar *key_newsav(struct mbuf *,
 	const struct sadb_msghdr *, struct secashead *, int *);
@@ -455,6 +487,7 @@ static void *key_newbuf(const void *, u_int);
 #if INET6
 static int key_ismyaddr6(struct sockaddr_in6 *);
 #endif
+static void key_update_natt_keepalive_timestamp(struct secasvar *, struct secasvar *);
 
 /* flags for key_cmpsaidx() */
 #define CMP_HEAD	0x1	/* protocol, addresses. */
@@ -521,13 +554,13 @@ static int key_validate_ext(const struct sadb_ext *, int);
 static int key_align(struct mbuf *, struct sadb_msghdr *);
 static void key_sa_chgstate(struct secasvar *, u_int8_t);
 static struct mbuf *key_alloc_mbuf(int);
+static int key_getsastat (struct socket *, struct mbuf *, const struct sadb_msghdr *);
 
 extern int ipsec_bypass;
-void ipsec_send_natt_keepalive(struct secasvar *sav);
+extern int esp_udp_encap_port;
+int ipsec_send_natt_keepalive(struct secasvar *sav);
 
 void key_init(void);
-
-static errno_t ipsecif_register_control(void);
 
 
 
@@ -564,9 +597,6 @@ key_init(void)
 		LIST_INIT(&spihash[i]);
 
 	raw_init();
-
-	/* register ip_if application of kernel control */
-	ipsecif_register_control();
 	
 }
 
@@ -2939,8 +2969,9 @@ key_spdexpire(sp)
  *	others	: pointer to new SA head.
  */
 static struct secashead *
-key_newsah(saidx)
+key_newsah(saidx, dir)
 	struct secasindex *saidx;
+	u_int8_t           dir;
 {
 	struct secashead *newsah;
 
@@ -2976,6 +3007,7 @@ key_newsah(saidx)
 			break;
         }
 
+	newsah->dir = dir;
 	/* add to saidxtree */
 	newsah->state = SADB_SASTATE_MATURE;
 	LIST_INSERT_HEAD(&sahtree, newsah, chain);
@@ -3390,12 +3422,12 @@ key_setsaval(sav, m, mhp)
 		 */
 		if ((sav->flags & SADB_X_EXT_NATT) != 0) {
 			if (mhp->extlen[SADB_EXT_SA] < sizeof(struct sadb_sa_2) ||
-				 ((struct sadb_sa_2*)(sa0))->sadb_sa_natt_port == 0) {
+				 ((const struct sadb_sa_2*)(sa0))->sadb_sa_natt_port == 0) {
 				ipseclog((LOG_DEBUG, "key_setsaval: natt port not set.\n"));
 				error = EINVAL;
 				goto fail;
 			}
-			sav->remote_ike_port = ((struct sadb_sa_2*)(sa0))->sadb_sa_natt_port;
+			sav->remote_ike_port = ((const struct sadb_sa_2*)(sa0))->sadb_sa_natt_port;
 		}
 		
 		/*
@@ -3671,7 +3703,9 @@ key_mature(sav)
 	switch (sav->sah->saidx.proto) {
 	case IPPROTO_ESP:
 	case IPPROTO_AH:
-		if (ntohl(sav->spi) >= 0 && ntohl(sav->spi) <= 255) {
+
+		/* No reason to test if this is >= 0, because ntohl(sav->spi) is unsigned. */
+		if (ntohl(sav->spi) <= 255) {
 			ipseclog((LOG_DEBUG,
 			    "key_mature: illegal range of SPI %u.\n",
 			    (u_int32_t)ntohl(sav->spi)));
@@ -4109,6 +4143,76 @@ key_setsadbaddr(exttype, saddr, prefixlen, ul_proto)
 	return m;
 }
 
+/*
+ * set data into sadb_session_id
+ */
+static struct mbuf *
+key_setsadbsession_id (u_int64_t session_ids[])
+{
+	struct mbuf *m;
+	struct sadb_session_id *p;
+	size_t len;
+
+	len = PFKEY_ALIGN8(sizeof(*p));
+	m = key_alloc_mbuf(len);
+	if (!m || m->m_next) {	/*XXX*/
+		if (m)
+			m_freem(m);
+		return NULL;
+	}
+
+	p = mtod(m, __typeof__(p));
+
+	bzero(p, len);
+	p->sadb_session_id_len = PFKEY_UNIT64(len);
+	p->sadb_session_id_exttype = SADB_EXT_SESSION_ID;
+	p->sadb_session_id_v[0] = session_ids[0];
+	p->sadb_session_id_v[1] = session_ids[1];
+
+	return m;
+}
+
+/*
+ * copy stats data into sadb_sastat type.
+ */
+static struct mbuf *
+key_setsadbsastat (u_int32_t      dir,
+		   struct sastat *stats,
+		   u_int32_t      max_stats)
+{
+	struct mbuf        *m;
+	struct sadb_sastat *p;
+	int                 list_len, len;
+
+	if (!stats) {
+	        return NULL;
+	}
+
+	list_len = sizeof(*stats) * max_stats;
+	len = PFKEY_ALIGN8(sizeof(*p)) + PFKEY_ALIGN8(list_len);
+	m = key_alloc_mbuf(len);
+	if (!m || m->m_next) {	/*XXX*/
+		if (m)
+			m_freem(m);
+		return NULL;
+	}
+
+	p = mtod(m, __typeof__(p));
+
+	bzero(p, len);
+	p->sadb_sastat_len      = PFKEY_UNIT64(len);
+	p->sadb_sastat_exttype  = SADB_EXT_SASTAT;
+	p->sadb_sastat_dir      = dir;
+	p->sadb_sastat_list_len = max_stats;
+	if (list_len) {
+	        bcopy(stats,
+		      mtod(m, caddr_t) + PFKEY_ALIGN8(sizeof(*p)),
+		      list_len);
+	}
+
+	return m;
+}
+
 #if 0
 /*
  * set data into sadb_ident.
@@ -4263,7 +4367,7 @@ key_ismyaddr(sa)
 	switch (sa->sa_family) {
 #if INET
 	case AF_INET:
-		lck_mtx_lock(rt_mtx);
+		lck_rw_lock_shared(in_ifaddr_rwlock);
 		sin = (struct sockaddr_in *)sa;
 		for (ia = in_ifaddrhead.tqh_first; ia;
 		     ia = ia->ia_link.tqe_next)
@@ -4272,11 +4376,11 @@ key_ismyaddr(sa)
 			    sin->sin_len == ia->ia_addr.sin_len &&
 			    sin->sin_addr.s_addr == ia->ia_addr.sin_addr.s_addr)
 			{
-				lck_mtx_unlock(rt_mtx);
+				lck_rw_done(in_ifaddr_rwlock);
 				return 1;
 			}
 		}
-		lck_mtx_unlock(rt_mtx);
+		lck_rw_done(in_ifaddr_rwlock);
 		break;
 #endif
 #if INET6
@@ -4319,7 +4423,9 @@ key_ismyaddr6(sin6)
 		 * XXX scope
 		 */
 		in6m = NULL;
+		ifnet_lock_shared(ia->ia_ifp);
 		IN6_LOOKUP_MULTI(sin6->sin6_addr, ia->ia_ifp, in6m);
+		ifnet_lock_done(ia->ia_ifp);
 		if (in6m) {
 			lck_mtx_unlock(nd6_mutex);
 			return 1;
@@ -4731,7 +4837,7 @@ key_timehandler(void)
 				empty_sah_count++;
 				continue;
 			}
-	
+
 			/* if LARVAL entry doesn't become MATURE, delete it. */
 			for (sav = LIST_FIRST(&sah->savtree[SADB_SASTATE_LARVAL]);
 				 sav != NULL;
@@ -4758,9 +4864,7 @@ key_timehandler(void)
 			 */
 			if (savkabuf && savkacount < savbufcount) {
 				sav = LIST_FIRST(&sah->savtree[SADB_SASTATE_MATURE]);	//%%% should we check dying list if this is empty???
-				if (natt_keepalive_interval && sav && (sav->flags & SADB_X_EXT_NATT_KEEPALIVE) != 0 &&
-					(natt_now - sav->natt_last_activity) >= natt_keepalive_interval) {
-					//ipsec_send_natt_keepalive(sav);
+				if (natt_keepalive_interval && sav && (sav->flags & SADB_X_EXT_NATT_KEEPALIVE) != 0) {
 					sav->refcnt++;
 					*savkaptr++ = sav;
 					savkacount++;
@@ -4832,7 +4936,7 @@ key_timehandler(void)
 					savexcount++;
 				}
 			}
-	
+
 			/* check DYING entry to change status to DEAD. */
 			for (sav = LIST_FIRST(&sah->savtree[SADB_SASTATE_DYING]);
 				 sav != NULL;
@@ -4997,9 +5101,20 @@ key_timehandler(void)
 			key_spdexpire(*(--spptr));
 	}
 	if (savkabuf && savkacount > 0) {
-		cnt = savkacount;
-		while (cnt--)
-			ipsec_send_natt_keepalive(*(--savkaptr));
+		struct secasvar **savkaptr_sav = savkaptr;
+		int               cnt_send = savkacount;
+
+		while (cnt_send--) {
+			if (ipsec_send_natt_keepalive(*(--savkaptr))) {
+				// <rdar://6768487> iterate (all over again) and update timestamps
+				struct secasvar **savkaptr_update = savkaptr_sav;
+				int               cnt_update = savkacount;
+				while (cnt_update--) {
+					key_update_natt_keepalive_timestamp(*savkaptr,
+									    *(--savkaptr_update));
+				}
+			}
+		}
 	}
 	if (savexbuf && savexcount > 0) {
 		cnt = savexcount;
@@ -5055,10 +5170,10 @@ key_srandom()
 	return;
 }
 
-u_long
+u_int32_t
 key_random()
 {
-	u_long value;
+	u_int32_t value;
 
 	key_randomfill(&value, sizeof(value));
 	return value;
@@ -5074,7 +5189,7 @@ key_randomfill(p, l)
 	read_random(p, (u_int)l);
 #else
 	size_t n;
-	u_long v;
+	u_int32_t v;
 	static int warn = 1;
 
 	n = 0;
@@ -5255,8 +5370,8 @@ key_getspi(so, m, mhp)
 
 	/* get a SA index */
 	if ((newsah = key_getsah(&saidx)) == NULL) {
-		/* create a new SA index */
-		if ((newsah = key_newsah(&saidx)) == NULL) {
+		/* create a new SA index: key_addspi is always used for inbound spi */
+		if ((newsah = key_newsah(&saidx, IPSEC_DIR_INBOUND)) == NULL) {
 			lck_mtx_unlock(sadb_mutex);
 			ipseclog((LOG_DEBUG, "key_getspi: No more memory.\n"));
 			return key_senderror(so, m, ENOBUFS);
@@ -5409,14 +5524,14 @@ key_do_getnewspi(spirange, saidx)
 
 	} else {
 	
-		u_long range = keymax - keymin + 1;  /* overflow value of zero means full range */
+		u_int32_t range = keymax - keymin + 1;  /* overflow value of zero means full range */
 
 		/* init SPI */
 		newspi = 0;
 
 		/* when requesting to allocate spi ranged */
 		while (count--) {
-			u_long rand_val = key_random();
+			u_int32_t rand_val = key_random();
 			
 			/* generate pseudo-random SPI value ranged. */
 			newspi = (range == 0 ? rand_val : keymin + (rand_val % range));
@@ -5741,8 +5856,8 @@ key_add(so, m, mhp)
 	
 	/* get a SA header */
 	if ((newsah = key_getsah(&saidx)) == NULL) {
-		/* create a new SA header */
-		if ((newsah = key_newsah(&saidx)) == NULL) {
+		/* create a new SA header: key_addspi is always used for outbound spi */
+		if ((newsah = key_newsah(&saidx, IPSEC_DIR_OUTBOUND)) == NULL) {
 			lck_mtx_unlock(sadb_mutex);
 			ipseclog((LOG_DEBUG, "key_add: No more memory.\n"));
 			return key_senderror(so, m, ENOBUFS);
@@ -6232,6 +6347,82 @@ key_get(so, m, mhp)
 	m_freem(m);
 	return key_sendup_mbuf(so, n, KEY_SENDUP_ONE);
     }
+}
+
+/*
+ * get SA stats by spi.
+ * OUT:	-1	: not found
+ *	0	: found, arg pointer to a SA stats is updated.
+ */
+static int
+key_getsastatbyspi_one (u_int32_t      spi,
+			struct sastat *stat)
+{
+	struct secashead *sah;
+	struct secasvar  *sav = NULL;
+
+	if ((void *)stat == NULL) {
+	        return -1;
+	}
+
+	lck_mtx_lock(sadb_mutex);
+	
+	/* get a SA header */
+	LIST_FOREACH(sah, &sahtree, chain) {
+		if (sah->state == SADB_SASTATE_DEAD)
+			continue;
+
+		/* get a SA with SPI. */
+		sav = key_getsavbyspi(sah, spi);
+		if (sav) {
+		        stat->spi = sav->spi;
+			stat->created = sav->created;
+			if (sav->lft_c) {
+			        bcopy(sav->lft_c,&stat->lft_c, sizeof(stat->lft_c));
+			} else {
+			        bzero(&stat->lft_c, sizeof(stat->lft_c));
+			}
+			lck_mtx_unlock(sadb_mutex);
+			return 0;
+		}
+	}
+
+	lck_mtx_unlock(sadb_mutex);
+
+	return -1;
+}
+
+/*
+ * get SA stats collection by indices.
+ * OUT:	-1	: not found
+ *	0	: found, arg pointers to a SA stats and 'maximum stats' are updated.
+ */
+static int
+key_getsastatbyspi (struct sastat *stat_arg,
+		    u_int32_t      max_stat_arg,
+		    struct sastat *stat_res,
+		    u_int32_t     *max_stat_res)
+{
+        int cur, found = 0;
+
+	if (stat_arg == NULL ||
+	    stat_res == NULL || 
+	    max_stat_res == NULL) {
+	        return -1;
+	}
+
+	for (cur = 0; cur < max_stat_arg; cur++) {
+	        if (key_getsastatbyspi_one(stat_arg[cur].spi,
+					   &stat_res[found]) == 0) {
+		        found++;
+		}
+	}
+	*max_stat_res = found;
+
+	if (found) {
+	        return 0;
+	}
+	return -1;
 }
 
 /* XXX make it sysctl-configurable? */
@@ -6899,10 +7090,11 @@ key_acquire2(so, m, mhp)
 		return key_senderror(so, m, EINVAL);
 	}
 
-	src0 = (struct sadb_address *)mhp->ext[SADB_EXT_ADDRESS_SRC];
-	dst0 = (struct sadb_address *)mhp->ext[SADB_EXT_ADDRESS_DST];
+	src0 = (const struct sadb_address *)mhp->ext[SADB_EXT_ADDRESS_SRC];
+	dst0 = (const struct sadb_address *)mhp->ext[SADB_EXT_ADDRESS_DST];
 
 	/* XXX boundary check against sa_len */
+	/* cast warnings */
 	KEY_SETSECASIDX(proto, IPSEC_MODE_ANY, 0, src0 + 1, dst0 + 1, &saidx);
 
 	/* get a SA index */
@@ -7564,6 +7756,7 @@ static int (*key_typesw[])(struct socket *, struct mbuf *,
 	key_spdadd,	/* SADB_X_SPDSETIDX */
 	NULL,		/* SADB_X_SPDEXPIRE */
 	key_spddelete2,	/* SADB_X_SPDDELETE2 */
+	key_getsastat,   /* SADB_GETSASTAT */
 };
 
 /*
@@ -7908,6 +8101,8 @@ key_align(m, mhp)
 		case SADB_EXT_SPIRANGE:
 		case SADB_X_EXT_POLICY:
 		case SADB_X_EXT_SA2:
+		case SADB_EXT_SESSION_ID:
+		case SADB_EXT_SASTAT:
 			/* duplicate check */
 			/*
 			 * XXX Are there duplication payloads of either
@@ -7992,7 +8187,7 @@ key_validate_ext(ext, len)
 		break;
 	case SADB_EXT_IDENTITY_SRC:
 	case SADB_EXT_IDENTITY_DST:
-		if (((struct sadb_ident *)ext)->sadb_ident_type ==
+		if (((const struct sadb_ident *)ext)->sadb_ident_type ==
 		    SADB_X_IDENTTYPE_ADDR) {
 			baselen = PFKEY_ALIGN8(sizeof(struct sadb_ident));
 			checktype = ADDR;
@@ -8008,7 +8203,8 @@ key_validate_ext(ext, len)
 	case NONE:
 		break;
 	case ADDR:
-		sa = (struct sockaddr *)((caddr_t)ext + baselen);
+		sa = (struct sockaddr *)((caddr_t)(uintptr_t)ext + baselen);		
+		
 		if (len < baselen + sal)
 			return EINVAL;
 		if (baselen + PFKEY_ALIGN8(sa->sa_len) != len)
@@ -8239,654 +8435,197 @@ key_alloc_mbuf(l)
 	return m;
 }
 
-
-/* ----------------------------------------------------------------------------------
-Application of kernel control for interface creation
-
-Theory of operation:
-ipsecif acts as glue between kernel control sockets and ipsec network interfaces. This
-kernel control will register an interface for every client that connects. 
-ipsec interface do not send or receive packets, an they are intercepted by ipsec before 
-they reach the interface. ipsec needs interface to attach tunnel ip addresses.
-In the future, we may want to change the control mechanism to use PF_KEY to create 
-interfaces for ipsec
----------------------------------------------------------------------------------- */
-
-#include <sys/systm.h>
-//#include "if_ip.h" 
-#include <sys/kern_control.h>
-#include <net/kpi_protocol.h>
-#include <net/kpi_interface.h>
-#include <net/if.h>
-#include <net/if_types.h>
-#include <net/bpf.h>
-#include <libkern/OSMalloc.h>
-#include <libkern/OSAtomic.h>
-#include <sys/mbuf.h> /* Until leopard, our ugly bpf protocol prepend will need this */
-#include <sys/sockio.h>
-#include <netinet/in.h>
-#include <netinet6/in6_var.h>
-
-/*
-*/
-
-#define IPSECIF_CONTROL_NAME "com.apple.net.ipsecif_control"
-
-/* Kernel Control functions */
-static errno_t	ipsecif_ctl_connect(kern_ctl_ref kctlref, struct sockaddr_ctl *sac,
-								 void **unitinfo);
-static errno_t	ipsecif_ctl_disconnect(kern_ctl_ref kctlref, u_int32_t unit,
-									void *unitinfo);
-static errno_t	ipsecif_ctl_send(kern_ctl_ref kctlref, u_int32_t unit,
-							  void *unitinfo, mbuf_t m, int flags);
-
-/* Network Interface functions */
-static errno_t	ipsecif_output(ifnet_t interface, mbuf_t data);
-static errno_t	ipsecif_demux(ifnet_t interface, mbuf_t data, char *frame_header,
-						   protocol_family_t *protocol);
-static errno_t	ipsecif_add_proto(ifnet_t interface, protocol_family_t protocol,
-							   const struct ifnet_demux_desc *demux_array,
-							   u_int32_t demux_count);
-static errno_t	ipsecif_del_proto(ifnet_t interface, protocol_family_t protocol);
-static errno_t	ipsecif_ioctl(ifnet_t interface, u_int32_t cmd, void *data);
-static errno_t	ipsecif_settap(ifnet_t interface, bpf_tap_mode mode,
-							bpf_packet_func callback);
-static void		ipsecif_detached(ifnet_t interface);
-
-/* Protocol handlers */
-static errno_t	ipsecif_attach_proto(ifnet_t interface, protocol_family_t proto);
-static errno_t	ipsecif_proto_input(ifnet_t interface, protocol_family_t protocol,
-								 mbuf_t m, char *frame_header);
-
-/* Control block allocated for each kernel control connection */
-struct ipsecif_pcb {
-	kern_ctl_ref	ctlref;
-	u_int32_t		unit;
-	ifnet_t			ifp;
-	bpf_tap_mode	mode;
-	bpf_packet_func	tap;
-};
-
-static kern_ctl_ref	ipsecif_kctlref;
-static u_int32_t	ipsecif_family;
-static OSMallocTag	ipsecif_malloc_tag;
-static SInt32		ipsecif_ifcount = 0;
-
-/* Prepend length */
-static void*
-ipsecif_alloc(size_t size)
+static struct mbuf *
+key_setdumpsastats (u_int32_t      dir,
+		    struct sastat *stats,
+		    u_int32_t      max_stats,
+		    u_int64_t      session_ids[],
+		    u_int32_t      seq,
+		    u_int32_t      pid)
 {
-	size_t	*mem = OSMalloc(size + sizeof(size_t), ipsecif_malloc_tag);
-	
-	if (mem) {
-		*mem = size + sizeof(size_t);
-		mem++;
-	}
-	
-	return (void*)mem;
-}
+        struct mbuf *result = NULL, *m = NULL;
 
-static void
-ipsecif_free(void *ptr)
-{
-	size_t	*size = ptr;
-	size--;
-	OSFree(size, *size, ipsecif_malloc_tag);
-}
+        m = key_setsadbmsg(SADB_GETSASTAT, 0, 0, seq, pid, 0);
+        if (!m) {
+	        goto fail;
+	}
+        result = m;
 
-static errno_t
-ipsecif_register_control(void)
-{
-	struct kern_ctl_reg	kern_ctl;
-	errno_t				result = 0;
-	
-	/* Create a tag to allocate memory */
-	ipsecif_malloc_tag = OSMalloc_Tagalloc(IPSECIF_CONTROL_NAME, OSMT_DEFAULT);
-	
-	/* Find a unique value for our interface family */
-	result = mbuf_tag_id_find(IPSECIF_CONTROL_NAME, &ipsecif_family);
-	if (result != 0) {
-		printf("ipsecif_register_control - mbuf_tag_id_find_internal failed: %d\n", result);
-		return result;
+	m = key_setsadbsession_id(session_ids);
+	if (!m) {
+	        goto fail;
 	}
-	
-	bzero(&kern_ctl, sizeof(kern_ctl));
-	strncpy(kern_ctl.ctl_name, IPSECIF_CONTROL_NAME, sizeof(kern_ctl.ctl_name));
-	kern_ctl.ctl_name[sizeof(kern_ctl.ctl_name) - 1] = 0;
-	kern_ctl.ctl_flags = CTL_FLAG_PRIVILEGED; /* Require root */
-	kern_ctl.ctl_connect = ipsecif_ctl_connect;
-	kern_ctl.ctl_disconnect = ipsecif_ctl_disconnect;
-	kern_ctl.ctl_send = ipsecif_ctl_send;
-	
-	result = ctl_register(&kern_ctl, &ipsecif_kctlref);
-	if (result != 0) {
-		printf("ipsecif_register_control - ctl_register failed: %d\n", result);
-		return result;
-	}
-	
-	/* Register the protocol plumbers */
-	if ((result = proto_register_plumber(PF_INET, ipsecif_family,
-										 ipsecif_attach_proto, NULL)) != 0) {
-		printf("ipsecif_register_control - proto_register_plumber(PF_INET, %d) failed: %d\n",
-			   ipsecif_family, result);
-		ctl_deregister(ipsecif_kctlref);
-		return result;
-	}
-	
-	/* Register the protocol plumbers */
-	if ((result = proto_register_plumber(PF_INET6, ipsecif_family,
-										 ipsecif_attach_proto, NULL)) != 0) {
-		proto_unregister_plumber(PF_INET, ipsecif_family);
-		ctl_deregister(ipsecif_kctlref);
-		printf("ipsecif_register_control - proto_register_plumber(PF_INET6, %d) failed: %d\n",
-			   ipsecif_family, result);
-		return result;
-	}
-	
-	return 0;
-}
+        m_cat(result, m);
 
-/* Kernel control functions */
-
-static errno_t
-ipsecif_ctl_connect(
-	kern_ctl_ref		kctlref,
-	struct sockaddr_ctl	*sac, 
-	void				**unitinfo)
-{
-	struct ifnet_init_params	ipsecif_init;
-	struct ipsecif_pcb				*pcb;
-	errno_t						result;
-	
-	/* kernel control allocates, interface frees */
-	pcb = ipsecif_alloc(sizeof(*pcb));
-	if (pcb == NULL)
-		return ENOMEM;
-	
-	/* Setup the protocol control block */
-	bzero(pcb, sizeof(*pcb));
-	*unitinfo = pcb;
-	pcb->ctlref = kctlref;
-	pcb->unit = sac->sc_unit;
-	printf("ipsecif_ctl_connect: creating unit ip%d\n", pcb->unit);
-	
-	/* Create the interface */
-	bzero(&ipsecif_init, sizeof(ipsecif_init));
-	ipsecif_init.name = "ipsec";
-	ipsecif_init.unit = pcb->unit;
-	ipsecif_init.family = ipsecif_family;
-	ipsecif_init.type = IFT_OTHER;
-	ipsecif_init.output = ipsecif_output;
-	ipsecif_init.demux = ipsecif_demux;
-	ipsecif_init.add_proto = ipsecif_add_proto;
-	ipsecif_init.del_proto = ipsecif_del_proto;
-	ipsecif_init.softc = pcb;
-	ipsecif_init.ioctl = ipsecif_ioctl;
-	ipsecif_init.set_bpf_tap = ipsecif_settap;
-	ipsecif_init.detach = ipsecif_detached;
-	
-	result = ifnet_allocate(&ipsecif_init, &pcb->ifp);
-	if (result != 0) {
-		printf("ipsecif_ctl_connect - ifnet_allocate failed: %d\n", result);
-		ipsecif_free(pcb);
-		return result;
+	m = key_setsadbsastat(dir,
+			      stats,
+			      max_stats);
+	if (!m) {
+	        goto fail;
 	}
-	OSIncrementAtomic(&ipsecif_ifcount);
-	
-	/* Set flags and additional information. */
-	ifnet_set_mtu(pcb->ifp, 1280);
-	ifnet_set_flags(pcb->ifp, IFF_UP | IFF_MULTICAST | IFF_BROADCAST, 0xffff);
-//	ifnet_set_flags(pcb->ifp, IFF_UP | IFF_MULTICAST | IFF_POINTOPOINT, 0xffff);
-	
-	/* Attach the interface */
-	result = ifnet_attach(pcb->ifp, NULL);
-	if (result != 0) {
-		printf("ipsecif_ctl_connect - ifnet_allocate failed: %d\n", result);
-		ifnet_release(pcb->ifp);
-		ipsecif_free(pcb);
-	}
-	
-	/* Attach to bpf */
-	if (result == 0)
-		bpfattach(pcb->ifp, DLT_NULL, 4);
+        m_cat(result, m);
 
-	return result;
+        if ((result->m_flags & M_PKTHDR) == 0) {
+		goto fail;
+        }
+
+        if (result->m_len < sizeof(struct sadb_msg)) {
+	        result = m_pullup(result, sizeof(struct sadb_msg));
+		if (result == NULL) {
+			goto fail;
+		}
+        }
+
+        result->m_pkthdr.len = 0;
+        for (m = result; m; m = m->m_next) {
+	        result->m_pkthdr.len += m->m_len;
+	}
+
+        mtod(result, struct sadb_msg *)->sadb_msg_len =
+	  PFKEY_UNIT64(result->m_pkthdr.len);
+
+        return result;
+
+ fail:
+	if (result) {
+	        m_freem(result);
+	}
+        return NULL;
 }
 
 /*
- * These defines are marked private but it's impossible to remove an interface
- * without them.
+ * SADB_GETSASTAT processing
+ * dump all stats for matching entries in SAD.
+ *
+ * m will always be freed.
  */
-#ifndef SIOCPROTODETACH
-#define	SIOCPROTODETACH	_IOWR('i', 81, struct ifreq)	/* detach proto from interface */
-#endif /* SIOCPROTODETACH */
-
-#ifndef SIOCPROTODETACH_IN6
-#define SIOCPROTODETACH_IN6 _IOWR('i', 111, struct in6_ifreq)    /* detach proto from interface */
-#endif /* SIOCPROTODETACH */
-
-
-static errno_t
-ipsecif_detach_ip(
-	ifnet_t				interface,
-	protocol_family_t	protocol,
-	socket_t			pf_socket)
+ 
+static int
+key_getsastat (struct socket *so,
+	       struct mbuf *m,
+	       const struct sadb_msghdr *mhp)
 {
-	errno_t result = EPROTONOSUPPORT;
-	
-	/* Attempt a detach */
-	if (protocol == PF_INET) {
-		struct ifreq	ifr;
-		
-		bzero(&ifr, sizeof(ifr));
-		snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s%d",
-				 ifnet_name(interface), ifnet_unit(interface));
-		
-		result = sock_ioctl(pf_socket, SIOCPROTODETACH, &ifr);
+	struct sadb_session_id *session_id;
+	u_int32_t               bufsize, arg_count, res_count;
+	struct sadb_sastat     *sa_stats_arg;
+	struct sastat          *sa_stats_sav = NULL;
+	struct mbuf            *n;
+	int                     error = 0;
+
+	/* sanity check */
+	if (so == NULL || m == NULL || mhp == NULL || mhp->msg == NULL)
+	        panic("%s: NULL pointer is passed.\n", __FUNCTION__);
+
+        if (mhp->ext[SADB_EXT_SESSION_ID] == NULL) {
+	        printf("%s: invalid message is passed. missing session-id.\n", __FUNCTION__);
+		return key_senderror(so, m, EINVAL);
+        }
+	if (mhp->extlen[SADB_EXT_SESSION_ID] < sizeof(struct sadb_session_id)) {
+	        printf("%s: invalid message is passed. short session-id.\n", __FUNCTION__);
+		return key_senderror(so, m, EINVAL);
+        }
+	if (mhp->ext[SADB_EXT_SASTAT] == NULL) {
+	        printf("%s: invalid message is passed. missing stat args.\n", __FUNCTION__);
+		return key_senderror(so, m, EINVAL);
+        }
+        if (mhp->extlen[SADB_EXT_SASTAT] < sizeof(*sa_stats_arg)) {
+	        printf("%s: invalid message is passed. short stat args.\n", __FUNCTION__);
+		return key_senderror(so, m, EINVAL);
+        }
+
+	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+
+	// exit early if there are no active SAs
+	if (ipsec_sav_count <= 0) {
+	        printf("%s: No active SAs.\n", __FUNCTION__);
+		error = ENOENT;
+		goto end;
 	}
-	else if (protocol == PF_INET6) {
-		struct in6_ifreq	ifr6;
-		
-		bzero(&ifr6, sizeof(ifr6));
-		snprintf(ifr6.ifr_name, sizeof(ifr6.ifr_name), "%s%d",
-				 ifnet_name(interface), ifnet_unit(interface));
-		
-		result = sock_ioctl(pf_socket, SIOCPROTODETACH_IN6, &ifr6);
+	bufsize = (ipsec_sav_count + 1) * sizeof(*sa_stats_sav);
+
+	KMALLOC_WAIT(sa_stats_sav, __typeof__(sa_stats_sav), bufsize);
+	if (sa_stats_sav == NULL) {
+	        printf("%s: No more memory.\n", __FUNCTION__);
+		error = ENOMEM;
+		goto end;
 	}
-	
-	return result;
+	bzero(sa_stats_sav, bufsize);
+
+       sa_stats_arg = (__typeof__(sa_stats_arg))mhp->ext[SADB_EXT_SASTAT];
+	arg_count = sa_stats_arg->sadb_sastat_list_len;
+	// exit early if there are no requested SAs
+	if (arg_count == 0) {
+	        printf("%s: No SAs requested.\n", __FUNCTION__);
+		error = ENOENT;
+		goto end;
+	}
+	res_count = 0;
+
+	if (key_getsastatbyspi((struct sastat *)(sa_stats_arg + 1),
+			       arg_count,
+			       sa_stats_sav,
+			       &res_count)) {
+	        printf("%s: Error finding SAs.\n", __FUNCTION__);
+		error = ENOENT;
+		goto end;
+	}
+	if (!res_count) {
+	        printf("%s: No SAs found.\n", __FUNCTION__);
+		error = ENOENT;
+		goto end;
+	}
+
+	session_id = (__typeof__(session_id))mhp->ext[SADB_EXT_SESSION_ID];
+
+	/* send this to the userland. */
+	n = key_setdumpsastats(sa_stats_arg->sadb_sastat_dir,
+			       sa_stats_sav,
+			       res_count,
+			       session_id->sadb_session_id_v,
+			       mhp->msg->sadb_msg_seq,
+			       mhp->msg->sadb_msg_pid);
+        if (!n) {
+	        printf("%s: No bufs to dump stats.\n", __FUNCTION__);
+		error = ENOBUFS;
+		goto end;
+	}
+
+       key_sendup_mbuf(so, n, KEY_SENDUP_ALL);
+end:
+	if (sa_stats_sav) {
+		KFREE(sa_stats_sav);
+	}
+
+	if (error)
+		return key_senderror(so, m, error);
+
+	m_freem(m);
+	return 0;
 }
 
 static void
-ipsecif_remove_address(
-	ifnet_t				interface,
-	protocol_family_t	protocol,
-	ifaddr_t			address,
-	socket_t			pf_socket)
+key_update_natt_keepalive_timestamp (struct secasvar *sav_sent,
+				     struct secasvar *sav_update)
 {
-	errno_t result = 0;
-	
-	/* Attempt a detach */
-	if (protocol == PF_INET) {
-		struct ifreq	ifr;
-		
-		bzero(&ifr, sizeof(ifr));
-		snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s%d",
-				 ifnet_name(interface), ifnet_unit(interface));
-		result = ifaddr_address(address, &ifr.ifr_addr, sizeof(ifr.ifr_addr));
-		if (result != 0) {
-			printf("ipsecif_remove_address - ifaddr_address failed: %d", result);
-		}
-		else {
-			result = sock_ioctl(pf_socket, SIOCDIFADDR, &ifr);
-			if (result != 0) {
-				printf("ipsecif_remove_address - SIOCDIFADDR failed: %d", result);
-			}
-		}
-	}
-	else if (protocol == PF_INET6) {
-		struct in6_ifreq	ifr6;
-		
-		bzero(&ifr6, sizeof(ifr6));
-		snprintf(ifr6.ifr_name, sizeof(ifr6.ifr_name), "%s%d",
-				 ifnet_name(interface), ifnet_unit(interface));
-		result = ifaddr_address(address, (struct sockaddr*)&ifr6.ifr_addr,
-								sizeof(ifr6.ifr_addr));
-		if (result != 0) {
-			printf("ipsecif_remove_address - ifaddr_address failed (v6): %d",
-				   result);
-		}
-		else {
-			result = sock_ioctl(pf_socket, SIOCDIFADDR_IN6, &ifr6);
-			if (result != 0) {
-				printf("ipsecif_remove_address - SIOCDIFADDR_IN6 failed: %d",
-					   result);
-			}
-		}
-	}
-}
+	struct secasindex saidx_swap_sent_addr;
 
-static void
-ipsecif_cleanup_family(
-	ifnet_t				interface,
-	protocol_family_t	protocol)
-{
-	errno_t		result = 0;
-	socket_t	pf_socket = NULL;
-	ifaddr_t	*addresses = NULL;
-	int			i;
-	
-	if (protocol != PF_INET && protocol != PF_INET6) {
-		printf("ipsecif_cleanup_family - invalid protocol family %d\n", protocol);
+	// exit early if two SAs are identical, or if sav_update is current
+	if (sav_sent == sav_update ||
+	    sav_update->natt_last_activity == natt_now) {
 		return;
 	}
-	
-	/* Create a socket for removing addresses and detaching the protocol */
-	result = sock_socket(protocol, SOCK_DGRAM, 0, NULL, NULL, &pf_socket);
-	if (result != 0) {
-		if (result != EAFNOSUPPORT)
-			printf("ipsecif_cleanup_family - failed to create %s socket: %d\n",
-				protocol == PF_INET ? "IP" : "IPv6", result);
-		goto cleanup;
+
+	// assuming that (sav_update->remote_ike_port != 0 && (esp_udp_encap_port & 0xFFFF) != 0)
+
+	bzero(&saidx_swap_sent_addr, sizeof(saidx_swap_sent_addr));
+	memcpy(&saidx_swap_sent_addr.src, &sav_sent->sah->saidx.dst, sizeof(saidx_swap_sent_addr.src));
+	memcpy(&saidx_swap_sent_addr.dst, &sav_sent->sah->saidx.src, sizeof(saidx_swap_sent_addr.dst));
+	saidx_swap_sent_addr.proto = sav_sent->sah->saidx.proto;
+	saidx_swap_sent_addr.mode = sav_sent->sah->saidx.mode;
+	// we ignore reqid for split-tunnel setups
+
+	if (key_cmpsaidx(&sav_sent->sah->saidx, &sav_update->sah->saidx, CMP_MODE | CMP_PORT) ||
+	    key_cmpsaidx(&saidx_swap_sent_addr, &sav_update->sah->saidx, CMP_MODE | CMP_PORT)) {
+		sav_update->natt_last_activity = natt_now;
 	}
-	
-	result = ipsecif_detach_ip(interface, protocol, pf_socket);
-	if (result == 0 || result == ENXIO) {
-		/* We are done! We either detached or weren't attached. */
-		goto cleanup;
-	}
-	else if (result != EBUSY) {
-		/* Uh, not really sure what happened here... */
-		printf("ipsecif_cleanup_family - ipsecif_detach_ip failed: %d\n", result);
-		goto cleanup;
-	}
-	
-	/*
-	 * At this point, we received an EBUSY error. This means there are
-	 * addresses attached. We should detach them and then try again.
-	 */
-	result = ifnet_get_address_list_family(interface, &addresses, protocol);
-	if (result != 0) {
-		printf("fnet_get_address_list_family(%s%d, 0xblah, %s) - failed: %d\n",
-			ifnet_name(interface), ifnet_unit(interface), 
-			protocol == PF_INET ? "PF_INET" : "PF_INET6", result);
-		goto cleanup;
-	}
-	
-	for (i = 0; addresses[i] != 0; i++) {
-		ipsecif_remove_address(interface, protocol, addresses[i], pf_socket);
-	}
-	ifnet_free_address_list(addresses);
-	addresses = NULL;
-	
-	/*
-	 * The addresses should be gone, we should try the remove again.
-	 */
-	result = ipsecif_detach_ip(interface, protocol, pf_socket);
-	if (result != 0 && result != ENXIO) {
-		printf("ipsecif_cleanup_family - ipsecif_detach_ip failed: %d\n", result);
-	}
-	
-cleanup:
-	if (pf_socket != NULL)
-		sock_close(pf_socket);
-	
-	if (addresses != NULL)
-		ifnet_free_address_list(addresses);
 }
-
-static errno_t
-ipsecif_ctl_disconnect(
-	__unused kern_ctl_ref	kctlref,
-	__unused u_int32_t		unit,
-	void					*unitinfo)
-{
-	struct ipsecif_pcb	*pcb = unitinfo;
-	ifnet_t			ifp = pcb->ifp;
-	errno_t			result = 0;
-	
-	pcb->ctlref = NULL;
-	pcb->unit = 0;
-	
-	/*
-	 * We want to do everything in our power to ensure that the interface
-	 * really goes away when the socket is closed. We must remove IP/IPv6
-	 * addresses and detach the protocols. Finally, we can remove and
-	 * release the interface.
-	 */
-	ipsecif_cleanup_family(ifp, AF_INET);
-	ipsecif_cleanup_family(ifp, AF_INET6);
-	
-	if ((result = ifnet_detach(ifp)) != 0) {
-		printf("ipsecif_ctl_disconnect - ifnet_detach failed: %d\n", result);
-	}
-	
-	if ((result = ifnet_release(ifp)) != 0) {
-		printf("ipsecif_ctl_disconnect - ifnet_release failed: %d\n", result);
-	}
-	
-	return 0;
-}
-
-static inline void
-call_bpf_tap(
-	ifnet_t			ifp,
-	bpf_packet_func	tap,
-	mbuf_t			m)
-{
-	struct m_hdr	hack_hdr;
-	struct mbuf		*n;
-	int				af;
-	
-	if (!tap)
-		return;
-	
-	af = (((*(char*)(mbuf_data(m))) & 0xf0) >> 4); // 4 or 6
-	if(af == 4) {
-		af = AF_INET;
-	}
-	else if (af == 6) {
-		af = AF_INET6;
-	}
-	else {
-		/* Uh...this ain't right */
-		af = 0;
-	}
-	
-	hack_hdr.mh_next = (struct mbuf*)m;
-	hack_hdr.mh_nextpkt = NULL;
-	hack_hdr.mh_len = 4;
-	hack_hdr.mh_data = (char *)&af;
-	hack_hdr.mh_type = ((struct mbuf*)m)->m_type;
-	hack_hdr.mh_flags = 0;
-	
-	n = (struct mbuf*)&hack_hdr;
-	
-	tap(ifp, (mbuf_t)n);
-}
-	
-
-static errno_t
-ipsecif_ctl_send(
-	__unused kern_ctl_ref	kctlref,
-	__unused u_int32_t		unit,
-	void					*unitinfo,
-	mbuf_t					m,
-	__unused int			flags)
-{
-	struct ipsecif_pcb						*pcb = unitinfo;
-	struct ifnet_stat_increment_param	incs;
-	errno_t								result;
-	
-	bzero(&incs, sizeof(incs));
-	
-	mbuf_pkthdr_setrcvif(m, pcb->ifp);
-	
-	if (pcb->mode & BPF_MODE_INPUT) {
-		call_bpf_tap(pcb->ifp, pcb->tap, m);
-	}
-	
-	incs.packets_in = 1;
-	incs.bytes_in = mbuf_pkthdr_len(m);
-	result = ifnet_input(pcb->ifp, m, &incs);
-	if (result != 0) {
-		ifnet_stat_increment_in(pcb->ifp, 0, 0, 1);
-		printf("ipsecif_ctl_send - ifnet_input failed: %d\n", result);
-		mbuf_freem(m);
-	}
-	
-	return 0;
-}
-
-/* Network Interface functions */
-static errno_t
-ipsecif_output(
-			   ifnet_t	interface,
-			   mbuf_t	data)
-{
-	struct ipsecif_pcb	*pcb = ifnet_softc(interface);
-	errno_t			result;
-	
-	if (pcb->mode & BPF_MODE_OUTPUT) {
-		call_bpf_tap(interface, pcb->tap, data);
-	}
-	
-	// no packet should go to the ipsec interface
-	mbuf_freem(data);
-
-#if 0	
-	if (pcb->ctlref) {
-		int	length = mbuf_pkthdr_len(data);
-		result = ctl_enqueuembuf(pcb->ctlref, pcb->unit, data, CTL_DATA_EOR);
-		if (result != 0) {
-			mbuf_freem(data);
-			printf("ipsecif_output - ctl_enqueuembuf failed: %d\n", result);
-			ifnet_stat_increment_out(interface, 0, 0, 1);
-		}
-		else {
-			ifnet_stat_increment_out(interface, 1, length, 0);
-		}
-	}
-	else 
-		mbuf_freem(data);
-#endif
-	
-	return 0;
-}
-
-/* Network Interface functions */
-static errno_t
-ipsecif_demux(
-	__unused ifnet_t	interface,
-	mbuf_t				data,
-	__unused char		*frame_header,
-	protocol_family_t	*protocol)
-{
-	u_int8_t	*vers;
-	
-	while (data != NULL && mbuf_len(data) < 1) {
-		data = mbuf_next(data);
-	}
-	
-	if (data != NULL) {
-		vers = mbuf_data(data);
-		switch(((*vers) & 0xf0) >> 4) {
-			case 4:
-				*protocol = PF_INET;
-				return 0;
-	
-			case 6:
-				*protocol = PF_INET6;
-				return 0;
-		}
-	}
-	
-	return ENOENT;
-}
-
-static errno_t
-ipsecif_add_proto(
-	__unused ifnet_t						interface,
-	protocol_family_t						protocol,
-	__unused const struct ifnet_demux_desc	*demux_array,
-	__unused u_int32_t						demux_count)
-{
-	switch(protocol) {
-		case PF_INET:
-			return 0;
-		case PF_INET6:
-			return 0;
-		default:
-			break;
-	}
-	
-	return ENOPROTOOPT;
-}
-
-static errno_t
-ipsecif_del_proto(
-	__unused ifnet_t 			interface,
-	__unused protocol_family_t	protocol)
-{
-	return 0;
-}
-
-static errno_t
-ipsecif_ioctl(
-	__unused ifnet_t	interface,
-	__unused u_int32_t	command,
-	__unused void		*data)
-{
-	errno_t	result = 0;
-	
-	switch(command) {
-		case SIOCSIFMTU:
-			ifnet_set_mtu(interface, ((struct ifreq*)data)->ifr_mtu);
-			break;
-		
-		default:
-			result = EOPNOTSUPP;
-	}
-	
-	return result;
-}
-
-static errno_t
-ipsecif_settap(
-	ifnet_t			interface,
-	bpf_tap_mode	mode,
-	bpf_packet_func	callback)
-{
-	struct ipsecif_pcb	*pcb = ifnet_softc(interface);
-	
-	pcb->mode = mode;
-	pcb->tap = callback;
-	
-	return 0;
-}
-
-static void
-ipsecif_detached(
-	ifnet_t	interface)
-{
-	struct ipsecif_pcb	*pcb = ifnet_softc(interface);
-	
-	ipsecif_free(pcb);
-	
-	OSDecrementAtomic(&ipsecif_ifcount);
-}
-
-/* Protocol Handlers */
-
-static errno_t
-ipsecif_proto_input(
-	__unused ifnet_t	interface,
-	protocol_family_t	protocol,
-	mbuf_t				m,
-	__unused char		*frame_header)
-{
-	proto_input(protocol, m);
-	
-	return 0;
-}
-
-static errno_t
-ipsecif_attach_proto(
-	ifnet_t				interface,
-	protocol_family_t	protocol)
-{
-	struct ifnet_attach_proto_param	proto;
-	errno_t							result;
-	
-	bzero(&proto, sizeof(proto));
-	proto.input = ipsecif_proto_input;
-	
-	result = ifnet_attach_protocol(interface, protocol, &proto);
-	if (result != 0 && result != EEXIST) {
-		printf("ipsecif_attach_inet - ifnet_attach_protocol %d failed: %d\n",
-			protocol, result);
-	}
-	
-	return result;
-}
-

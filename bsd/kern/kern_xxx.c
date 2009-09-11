@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -79,7 +79,7 @@
 #include <sys/sysctl.h>
 #include <sys/buf.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <sys/mount_internal.h>
 #include <sys/sysproto.h>
@@ -88,11 +88,11 @@
 #endif
 
 int
-reboot(struct proc *p, register struct reboot_args *uap, __unused register_t *retval)
+reboot(struct proc *p, register struct reboot_args *uap, __unused int32_t *retval)
 {
 	char command[64];
 	int error=0;
-	int dummy=0;
+	size_t dummy=0;
 #if CONFIG_MACF
 	kauth_cred_t my_cred;
 #endif
@@ -101,10 +101,8 @@ reboot(struct proc *p, register struct reboot_args *uap, __unused register_t *re
 
 	command[0] = '\0';
 
-#ifndef CONFIG_EMBEDDED
 	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
 		return(error);	
-#endif	
 	
 	if (uap->opt & RB_COMMAND)
 		error = copyinstr(uap->command,
@@ -117,7 +115,7 @@ reboot(struct proc *p, register struct reboot_args *uap, __unused register_t *re
 	kauth_cred_unref(&my_cred);
 #endif
 	if (!error) {
-		OSBitOrAtomic(P_REBOOT, (UInt32 *)&p->p_flag);  /* No more signals for this proc */
+		OSBitOrAtomic(P_REBOOT, &p->p_flag);  /* No more signals for this proc */
 		boot(RB_BOOT, uap->opt, command);
 	}
 	return(error);

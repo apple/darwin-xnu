@@ -34,34 +34,44 @@
 #include <sys/mount_internal.h>
 #include <sys/uio_internal.h>
 #include <sys/xattr.h>
+#include "../bsd/sys/fsevents.h"
 
 #include <security/mac_internal.h>
 
 /*
- * Caller holds reference or sets VNODE_LABEL_NEEDREF to non-zero.
- *
- * Function will drop lock and reference on return.
+ * Caller holds I/O reference on vnode
  */
 int
 vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 	    struct componentname *cnp, int flags, vfs_context_t ctx)
 {
-	int error;
+	int error = 0;
 
-	error = 0;
 
-	vnode_lock(vp);
+	/* fast path checks... */
 
-	if (vp->v_lflag & VL_LABELED) {
-		if (!(flags & VNODE_LABEL_NEEDREF))
-			vnode_put_locked(vp);
-		vnode_unlock(vp);
-		return (0);
+	/* are we labeling vnodes? If not still notify of create */
+	if (mac_label_vnodes == 0) {
+		if (flags & VNODE_LABEL_CREATE)
+			error = mac_vnode_notify_create(ctx,
+			    mp, dvp, vp, cnp);
+		return 0;
 	}
 
-	if ((flags & VNODE_LABEL_NEEDREF) && vnode_get_locked(vp)) {
+	/* if already VL_LABELED */
+	if (vp->v_lflag & VL_LABELED)
+		return (0);
+
+	vnode_lock_spin(vp);
+
+	/*
+	 * must revalidate state once we hold the lock
+	 * since we could have blocked and someone else
+	 * has since labeled this vnode
+	 */
+	if (vp->v_lflag & VL_LABELED) {
 		vnode_unlock(vp);
-		return (ENOENT);
+		return (0);
 	}
 
 	if ((vp->v_lflag & VL_LABEL) == 0) {
@@ -69,12 +79,17 @@ vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 
 		/* Could sleep on disk I/O, drop lock. */
 		vnode_unlock(vp);
+
+		if (vp->v_label == NULL)
+			vp->v_label = mac_vnode_label_alloc();
+
 		if (flags & VNODE_LABEL_CREATE)
 			error = mac_vnode_notify_create(ctx,
 			    mp, dvp, vp, cnp);
 		else
 			error = mac_vnode_label_associate(mp, vp, ctx);
-		vnode_lock(vp);
+
+		vnode_lock_spin(vp);
 
 		if ((error == 0) && (vp->v_flag & VNCACHEABLE))
 			vp->v_lflag |= VL_LABELED;
@@ -82,10 +97,8 @@ vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 
 		if (vp->v_lflag & VL_LABELWAIT) {
 			vp->v_lflag &= ~VL_LABELWAIT;
-			wakeup(vp->v_label);
+			wakeup(&vp->v_label);
 		}
-		vnode_put_locked(vp);
-		vnode_unlock(vp);
 	} else {
 		struct timespec ts;
 
@@ -94,18 +107,19 @@ vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 
 		while (vp->v_lflag & VL_LABEL) {
 			vp->v_lflag |= VL_LABELWAIT;
-			error = msleep(vp->v_label, &vp->v_lock, PVFS|PDROP,
-			    "vnode_label", &ts);
-			vnode_lock(vp);
+
+			error = msleep(&vp->v_label, &vp->v_lock, PVFS|PDROP,
+				       "vnode_label", &ts);
+			vnode_lock_spin(vp);
+
 			if (error == EWOULDBLOCK) {
 				vprint("vnode label timeout", vp);
 				break;
 			}
 		}
 		/* XXX: what should be done if labeling failed (above)? */
-		vnode_put_locked(vp);
-		vnode_unlock(vp);
 	}
+	vnode_unlock(vp);
 
 	return (error);
 }
@@ -126,7 +140,7 @@ vnode_relabel(struct vnode *vp)
 	/* Wait for any other labeling to complete. */
 	while (vp->v_lflag & VL_LABEL) {
 		vp->v_lflag |= VL_LABELWAIT;
-		(void)msleep(vp->v_label, &vp->v_lock, PVFS, "vnode_relabel", 0);
+		(void)msleep(&vp->v_label, &vp->v_lock, PVFS, "vnode_relabel", 0);
 	}
 
 	/* Clear labeled flag */
@@ -157,6 +171,13 @@ mac_vnop_setxattr (struct vnode *vp, const char *name, char *buf, size_t len)
 	uio_addiov(auio, CAST_USER_ADDR_T(buf), len);
 
 	error = vn_setxattr(vp, name, auio, options, ctx);
+#if CONFIG_FSE
+	if (error == 0) {
+		add_fsevent(FSE_XATTR_MODIFIED, ctx,
+		    FSE_ARG_VNODE, vp,
+		    FSE_ARG_DONE);
+	}
+#endif
 
 	return (error);
 }
@@ -192,6 +213,13 @@ mac_vnop_removexattr (struct vnode *vp, const char *name)
 		return (EROFS);
 
 	error = vn_removexattr(vp, name, options, ctx);
+#if CONFIG_FSE
+	if (error == 0) {
+		add_fsevent(FSE_XATTR_REMOVED, ctx,
+		    FSE_ARG_VNODE, vp,
+		    FSE_ARG_DONE);
+	}
+#endif
 
 	return (error);
 }

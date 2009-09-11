@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -113,7 +113,15 @@ extern struct pset_node	pset_node0;
 
 extern queue_head_t		tasks, threads;
 extern int				tasks_count, threads_count;
-decl_mutex_data(extern,tasks_threads_lock)
+decl_lck_mtx_data(extern,tasks_threads_lock)
+
+struct processor_meta {
+	queue_head_t		idle_queue;
+	processor_t			primary;
+};
+
+typedef struct processor_meta	*processor_meta_t;
+#define PROCESSOR_META_NULL		((processor_meta_t) 0)
 
 struct processor {
 	queue_chain_t		processor_queue;/* idle/active queue link,
@@ -127,7 +135,7 @@ struct processor {
 	processor_set_t		processor_set;	/* assigned set */
 
 	int					current_pri;	/* priority of current thread */
-	int					cpu_num;		/* platform numeric id */
+	int					cpu_id;			/* platform numeric id */
 
 	timer_call_data_t	quantum_timer;	/* timer for quantum expiration */
 	uint64_t			quantum_end;	/* time when current quantum ends */
@@ -137,9 +145,9 @@ struct processor {
 	int					timeslice;		/* quanta before timeslice ends */
 
 	struct run_queue	runq;			/* runq for this processor */
+	processor_meta_t	processor_meta;
 
 	struct ipc_port *	processor_self;	/* port for operations */
-	decl_simple_lock_data(,lock)
 
 	processor_t			processor_list;	/* all existing processors */
 	processor_data_t	processor_data;	/* per-processor data */
@@ -176,10 +184,6 @@ extern processor_t	cpu_to_processor(
 #define pset_unlock(p)			simple_unlock(&(p)->sched_lock)
 #define pset_lock_init(p)		simple_lock_init(&(p)->sched_lock, 0)
 
-#define processor_lock(p)		simple_lock(&(p)->lock)
-#define processor_unlock(p)		simple_unlock(&(p)->lock)
-#define processor_lock_init(p)	simple_lock_init(&(p)->lock, 0)
-
 /* Update hints */
 
 #define pset_pri_hint(ps, p, pri)		\
@@ -208,8 +212,12 @@ extern void		processor_bootstrap(void) __attribute__((section("__TEXT, initcode"
 
 extern void		processor_init(
 					processor_t		processor,
-					int				cpu_num,
+					int				cpu_id,
 					processor_set_t	processor_set) __attribute__((section("__TEXT, initcode")));
+
+extern void		processor_meta_init(
+					processor_t		processor,
+					processor_t		primary);
 
 extern kern_return_t	processor_shutdown(
 							processor_t		processor);
@@ -236,11 +244,11 @@ extern kern_return_t	processor_info_count(
 #define pset_deallocate(x)
 #define pset_reference(x)
 
-extern void		machine_run_count(
-					uint32_t	count);
+extern void			machine_run_count(
+						uint32_t	count);
 
 extern boolean_t	machine_cpu_is_inactive(
-						int				num);
+						int			cpu_id);
 
 #else	/* MACH_KERNEL_PRIVATE */
 

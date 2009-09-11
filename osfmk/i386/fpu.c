@@ -70,18 +70,18 @@
 #include <kern/spl.h>
 #include <kern/assert.h>
 
-#include <i386/thread.h>
-#include <i386/fpu.h>
-#include <i386/trap.h>
 #include <architecture/i386/pio.h>
 #include <i386/cpuid.h>
-#include <i386/misc_protos.h>
+#include <i386/fpu.h>
 #include <i386/proc_reg.h>
+#include <i386/misc_protos.h>
+#include <i386/thread.h>
+#include <i386/trap.h>
 
 int		fp_kind = FP_NO;	/* not inited */
 zone_t		ifps_zone;		/* zone for FPU save area */
 
-#define ALIGNED(addr,size)	(((unsigned)(addr)&((size)-1))==0)
+#define ALIGNED(addr,size)	(((uintptr_t)(addr)&((size)-1))==0)
 
 /* Forward */
 
@@ -113,7 +113,6 @@ configure_mxcsr_capability_mask(struct x86_fpsave_state *ifps)
 	bzero(ifps, sizeof(*ifps));
 	/* Disable FPU/SSE Device Not Available exceptions */
 	clear_ts();
-
 	__asm__ volatile("fxsave %0" : "=m" (ifps->fx_save_state));
 	mxcsr_capability_mask = ifps->fx_save_state.fx_MXCSR_MASK;
 
@@ -215,7 +214,7 @@ fpu_module_init(void)
 	struct x86_fpsave_state *new_ifps;
 	
 	ifps_zone = zinit(sizeof(struct x86_fpsave_state),
-			  THREAD_MAX * sizeof(struct x86_fpsave_state),
+			  thread_max * sizeof(struct x86_fpsave_state),
 			  THREAD_CHUNK * sizeof(struct x86_fpsave_state),
 			  "x86 fpsave state");
 	new_ifps = fp_state_alloc();
@@ -479,7 +478,7 @@ fpinit(void)
 
 	/* Initialize SSE/SSE2 */
 		__builtin_ia32_ldmxcsr(0x1f80);
-	}
+}
 
 /*
  * Coprocessor not present.
@@ -638,6 +637,7 @@ fp_save(
 		/* registers are in FPU */
 		ifps->fp_valid = TRUE;
 
+#if defined(__i386__)
 		if (!thread_is_64bit(thr_act)) {
 			/* save the compatibility/legacy mode XMM+x87 state */
 			fxsave(&ifps->fx_save_state);
@@ -647,6 +647,10 @@ fp_save(
 			fxsave64(&ifps->fx_save_state);
 			ifps->fp_save_layout = FXSAVE64;
 		}
+#elif defined(__x86_64__)
+		fxsave(&ifps->fx_save_state);
+		ifps->fp_save_layout = thread_is_64bit(thr_act) ? FXSAVE64 : FXSAVE32;
+#endif
 	}
 }
 
@@ -675,6 +679,7 @@ fp_load(
 		fpinit();
 	} else {
 		assert(ifps->fp_save_layout == FXSAVE32 || ifps->fp_save_layout == FXSAVE64);
+#if defined(__i386__)
 		if (ifps->fp_save_layout == FXSAVE32) {
 			/* Restore the compatibility/legacy mode XMM+x87 state */
 			fxrstor(&ifps->fx_save_state);
@@ -682,6 +687,9 @@ fp_load(
 		else if (ifps->fp_save_layout == FXSAVE64) {
 			fxrstor64(&ifps->fx_save_state);
 		}
+#elif defined(__x86_64__)
+		fxrstor(&ifps->fx_save_state);
+#endif
 	}
 	ifps->fp_valid = FALSE;		/* in FPU */
 }
@@ -734,7 +742,7 @@ fpSSEexterrflt(void)
 	assert(ifps->fp_save_layout == FXSAVE32 || ifps->fp_save_layout == FXSAVE64);
 	i386_exception(EXC_ARITHMETIC,
 		       EXC_I386_SSEEXTERR,
-		       ifps->fx_save_state.fx_status);
+		       ifps->fx_save_state.fx_MXCSR);
 	/*NOTREACHED*/
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -36,6 +36,7 @@ static int argstrcpy2(char *from,char *to, unsigned maxlen);
 #define	NUM	0
 #define	STR	1
 
+#if !defined(__LP64__) && !defined(__arm__)
 boolean_t 
 PE_parse_boot_arg(
 	const char  *arg_string,
@@ -50,6 +51,7 @@ PE_parse_boot_arg(
 
 	return PE_parse_boot_argn(arg_string, arg_ptr, max_len);
 }
+#endif
 
 boolean_t
 PE_parse_boot_argn(
@@ -69,7 +71,7 @@ PE_parse_boot_argn(
 
 	arg_found = FALSE;
 
-	while(isargsep(*args)) args++;
+	while(*args && isargsep(*args)) args++;
 
 	while (*args)
 	{
@@ -95,7 +97,7 @@ PE_parse_boot_argn(
 			arg_found = TRUE;
 			break;
 		} else {
-			while (isargsep (*cp))
+			while (*cp && isargsep (*cp))
 				cp++;
 			if (*cp == '=' && c != '=') {
 				args = cp+1;

@@ -20,7 +20,7 @@ EXPINC_SUBDIRS_PPC = \
 EXPINC_SUBDIRS_I386 = \
 
 DATAFILES = \
-	vfs_support.h vfs_journal.h
+	vfs_support.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 

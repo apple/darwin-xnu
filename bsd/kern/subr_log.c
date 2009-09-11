@@ -448,11 +448,12 @@ SYSCTL_LONG(_kern, OID_AUTO, msgbuf, CTLFLAG_RD, &temp_msgbuf.msg_size, "");
  * It returns as much data still in the buffer as possible.
  */
 int
-log_dmesg(user_addr_t buffer, uint32_t buffersize, register_t * retval) {
-	unsigned long i;
+log_dmesg(user_addr_t buffer, uint32_t buffersize, int32_t * retval) {
+	uint32_t i;
+	uint32_t localbuff_size = (msgbufp->msg_size + 2);
 	int error = 0, newl, skip;
 	char *localbuff, *p, *copystart, ch;
-	long localbuff_size = msgbufp->msg_size+2, copysize;
+	long copysize;	
 
 	if (!(localbuff = (char *)kalloc(localbuff_size))) {
 		printf("log_dmesg: unable to allocate memory\n");

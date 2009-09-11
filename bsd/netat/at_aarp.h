@@ -30,7 +30,7 @@
 #include <sys/appleapiopts.h>
 #ifdef KERNEL_PRIVATE
 #include <netat/at_var.h>
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
 #ifdef __APPLE_API_OBSOLETE
 

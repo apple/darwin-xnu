@@ -62,8 +62,8 @@
 
 #include <sys/kdebug.h>
 
-perfCallback perfTrapHook; /* Pointer to CHUD trap hook routine */
-perfCallback perfASTHook;  /* Pointer to CHUD AST hook routine */
+volatile perfCallback perfTrapHook; /* Pointer to CHUD trap hook routine */
+volatile perfCallback perfASTHook;  /* Pointer to CHUD AST hook routine */
 
 #if CONFIG_DTRACE
 extern kern_return_t dtrace_user_probe(ppc_saved_state_t *sv);
@@ -143,16 +143,18 @@ struct savearea *trap(int trapno,
 #endif /* MACH_BSD */
 
 	myast = ast_pending();
-	if(perfASTHook) {
+	perfCallback fn = perfASTHook;
+	if(fn) {
 		if(*myast & AST_CHUD_ALL) {
-			perfASTHook(trapno, ssp, dsisr, (unsigned int)dar);
+			fn(trapno, ssp, dsisr, (unsigned int)dar);
 		}
 	} else {
 		*myast &= ~AST_CHUD_ALL;
 	}
 
-	if(perfTrapHook) {							/* Is there a hook? */
-		if(perfTrapHook(trapno, ssp, dsisr, (unsigned int)dar) == KERN_SUCCESS) return ssp;	/* If it succeeds, we are done... */
+	fn = perfTrapHook;
+	if(fn) {							/* Is there a hook? */
+		if(fn(trapno, ssp, dsisr, (unsigned int)dar) == KERN_SUCCESS) return ssp;	/* If it succeeds, we are done... */
 	}
 
 #if CONFIG_DTRACE
@@ -950,7 +952,7 @@ void unresolved_kernel_trap(int trapno,
 	 */
 	if( panicDebugging )
 		(void)Call_Debugger(trapno, ssp);
-	panic_plain(message);
+	panic_plain("%s", message);
 }
 
 const char *corr[2] = {"uncorrected", "corrected  "};

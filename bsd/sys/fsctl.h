@@ -71,12 +71,71 @@
 
 #include <sys/ioccom.h>
 
+#define FSIOC_SYNC_VOLUME	_IOW('A', 1, uint32_t)
+#define	FSCTL_SYNC_VOLUME	IOCBASECMD(FSIOC_SYNC_VOLUME)
+
+#define	FSCTL_SYNC_FULLSYNC	(1<<0)	/* Flush the data fully to disk, if supported by the filesystem */
+#define	FSCTL_SYNC_WAIT		(1<<1)	/* Wait for the sync to complete */
+
+
+typedef struct package_ext_info {
+    const char *strings;
+    uint32_t    num_entries;
+    uint32_t    max_width;
+} package_ext_info;
+
+#define FSIOC_SET_PACKAGE_EXTS	_IOW('A', 2, struct package_ext_info)
+#define	FSCTL_SET_PACKAGE_EXTS	IOCBASECMD(FSIOC_SET_PACKAGE_EXTS)
+
+#define FSIOC_WAIT_FOR_SYNC	_IOR('A', 3, int32_t)
+#define	FSCTL_WAIT_FOR_SYNC	IOCBASECMD(FSIOC_WAIT_FOR_SYNC)
+
+
+//
+// Spotlight and fseventsd use these fsctl()'s to find out 
+// the mount time of a volume and the last time it was 
+// unmounted.  Both HFS and ZFS support these calls.
+//
+// User space code should pass the "_IOC_" macros while the 
+// kernel should test for the "_FSCTL_" variant of the macro 
+// in its vnop_ioctl function.
+//
+// NOTE: the values for these defines should _not_ be changed
+//       or else it will break binary compatibility with mds
+//       and fseventsd.
+//
+#define SPOTLIGHT_IOC_GET_MOUNT_TIME _IOR('h', 18, u_int32_t)
+#define SPOTLIGHT_FSCTL_GET_MOUNT_TIME IOCBASECMD(SPOTLIGHT_IOC_GET_MOUNT_TIME)
+#define SPOTLIGHT_IOC_GET_LAST_MTIME _IOR('h', 19, u_int32_t)
+#define SPOTLIGHT_FSCTL_GET_LAST_MTIME IOCBASECMD(SPOTLIGHT_IOC_GET_LAST_MTIME)
+
+
+#ifdef KERNEL
+
+typedef struct user64_package_ext_info {
+    user64_addr_t strings;
+    uint32_t      num_entries;
+    uint32_t      max_width;
+} user64_package_ext_info;
+
+typedef struct user32_package_ext_info {
+    user32_addr_t strings;
+    uint32_t      num_entries;
+    uint32_t      max_width;
+} user32_package_ext_info;
+
+#endif  // KERNEL
+
+
 #ifndef KERNEL
 
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
-int	fsctl(const char *, unsigned long, void *, unsigned long);
+
+int	fsctl(const char *,unsigned long,void*,unsigned int);
+int	ffsctl(int,unsigned long,void*,unsigned int);
+
 __END_DECLS
 
 #endif /* !KERNEL */

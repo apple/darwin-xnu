@@ -27,6 +27,7 @@
  */
 
 #include <IOKit/IODeviceMemory.h>
+#include <IOKit/IOSubMemoryDescriptor.h>
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -34,8 +35,8 @@ IODeviceMemory * IODeviceMemory::withRange(
 	IOPhysicalAddress	start,
 	IOPhysicalLength	length )
 {
-    return( (IODeviceMemory *) IOMemoryDescriptor::withPhysicalAddress(
-			start, length, kIODirectionNone ));
+    return( (IODeviceMemory *) IOMemoryDescriptor::withAddressRange(
+			start, length, kIODirectionNone | kIOMemoryMapperNone, NULL ));
 }
 
 
@@ -44,7 +45,7 @@ IODeviceMemory * IODeviceMemory::withSubRange(
 	IOPhysicalAddress	offset,
 	IOPhysicalLength	length )
 {
-    return( (IODeviceMemory *) IOMemoryDescriptor::withSubRange(
+    return( (IODeviceMemory *) IOSubMemoryDescriptor::withSubRange(
 		of, offset, length, kIODirectionNone ));
 }
 

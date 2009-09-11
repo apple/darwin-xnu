@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -105,7 +105,7 @@
 #include <netinet/if_ether.h>
 #include <netatalk/at.h>
 #include <netatalk/at_var.h>
-#endif NETATALK
+#endif /* NETATALK */
 
 #include "bpfilter.h"
 
@@ -171,7 +171,6 @@ dummyoutput(ifp, m, dst, rt)
 	struct sockaddr *dst;
 	register struct rtentry *rt;
 {
-
 	if ((m->m_flags & M_PKTHDR) == 0)
 		panic("dummyoutput no HDR");
 #if NBPFILTER > 0
@@ -192,10 +191,13 @@ dummyoutput(ifp, m, dst, rt)
 #endif
 	m->m_pkthdr.rcvif = ifp;
 
-	if (rt && rt->rt_flags & (RTF_REJECT|RTF_BLACKHOLE)) {
-		m_freem(m);
-		return (rt->rt_flags & RTF_BLACKHOLE ? 0 :
-		        rt->rt_flags & RTF_HOST ? EHOSTUNREACH : ENETUNREACH);
+	if (rt != NULL) {
+		u_int32_t rt_flags = rt->rt_flags;
+		if (rt_flags & (RTF_REJECT | RTF_BLACKHOLE)) {
+			m_freem(m);
+			return ((rt_flags & RTF_BLACKHOLE) ? 0 :
+			    (rt_flags & RTF_HOST) ? EHOSTUNREACH : ENETUNREACH);
+		}
 	}
 	ifp->if_opackets++;
 	ifp->if_obytes += m->m_pkthdr.len;
@@ -212,7 +214,8 @@ dummyrtrequest(cmd, rt, sa)
 	struct rtentry *rt;
 	struct sockaddr *sa;
 {
-	if (rt) {
+	if (rt != NULL) {
+		RT_LOCK_ASSERT_HELD(rt);
 		rt->rt_rmx.rmx_mtu = rt->rt_ifp->if_mtu; /* for ISO */
 		/*
 		 * For optimal performance, the send and receive buffers

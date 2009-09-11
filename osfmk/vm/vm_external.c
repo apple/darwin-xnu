@@ -106,12 +106,12 @@
 #define	SMALL_SIZE	KALLOC_MINSIZE
 #define	LARGE_SIZE	PAGE_SIZE
 
-static vm_size_t power_of_2(vm_size_t size);
+static vm_object_size_t power_of_2(vm_object_size_t size);
 
-static vm_size_t
-power_of_2(vm_size_t size)
+static vm_object_size_t
+power_of_2(vm_object_size_t size)
 {
-	vm_size_t power;
+	vm_object_size_t power;
 
 	power = 2 * SMALL_SIZE;
 	while (power < size) {
@@ -122,21 +122,25 @@ power_of_2(vm_size_t size)
 
 vm_external_map_t
 vm_external_create(
-	vm_offset_t	size)
+	vm_object_offset_t	size)
 {
-	vm_size_t		bytes;
+	vm_object_size_t	bytes;
 	vm_external_map_t	result = VM_EXTERNAL_NULL;
 
 	bytes = stob(size);
 	if (bytes <= SMALL_SIZE) {
-		if ((result = (vm_external_map_t)kalloc(SMALL_SIZE)) != NULL) {
+		result = (vm_external_map_t)kalloc(SMALL_SIZE);
+		if (result != NULL) {
 			memset(result, 0, SMALL_SIZE);
 		}
 	} else if (bytes <= LARGE_SIZE) {
 		bytes = power_of_2(bytes);
 
-		if ((result = (vm_external_map_t)kalloc(bytes)) != NULL) {
-			memset(result, 0, bytes);
+		assert((vm_size_t) bytes == bytes);
+		result = (vm_external_map_t)kalloc((vm_size_t)bytes);
+		if (result != NULL) {
+			assert((size_t) bytes == bytes);
+			memset(result, 0, (size_t) bytes);
 		}
 	}
 	return(result);
@@ -145,9 +149,9 @@ vm_external_create(
 void
 vm_external_destroy(
 	vm_external_map_t	map,
-	vm_size_t		size)
+	vm_object_size_t	size)
 {
-	vm_size_t bytes;
+	vm_object_size_t bytes;
 
 	if (map == VM_EXTERNAL_NULL)
 		return;
@@ -158,7 +162,8 @@ vm_external_destroy(
 	} else {
 		bytes = power_of_2(bytes);
 	}
-	kfree(map, bytes);
+	assert((vm_size_t) bytes == bytes);
+	kfree(map, (vm_size_t) bytes);
 }
 
 /*
@@ -166,11 +171,11 @@ vm_external_destroy(
  * size of the object to be mapped, i.e. the size of the map that was
  * created by vm_external_create.
  */
-vm_size_t
+vm_object_size_t
 vm_external_map_size(
-	vm_offset_t	size)
+	vm_object_size_t	size)
 {
-	vm_size_t	bytes;
+	vm_object_size_t	bytes;
 
 	bytes = stob(size);
 	if (bytes != 0) {
@@ -186,9 +191,11 @@ vm_external_map_size(
 void
 vm_external_copy(
 	vm_external_map_t	old_map,
-	vm_size_t		old_size,
+	vm_object_size_t	old_size,
 	vm_external_map_t	new_map)
 {
+	vm_object_size_t	bytes;
+
 	/*
 	 * Cannot copy non-existent maps
 	 */
@@ -198,16 +205,18 @@ vm_external_copy(
 	/*
 	 * Copy old map to new
 	 */
-	memcpy(new_map, old_map, stob(old_size));
+	bytes = stob(old_size);
+	assert((size_t) bytes == bytes);
+	memcpy(new_map, old_map, (size_t) bytes);
 }
 
 boolean_t
 vm_external_within(
-	vm_size_t	new_size,
-	vm_size_t	old_size)
+	vm_object_size_t	new_size,
+	vm_object_size_t	old_size)
 {
-	vm_size_t 	new_bytes;
-	vm_size_t 	old_bytes;
+	vm_object_size_t 	new_bytes;
+	vm_object_size_t 	old_bytes;
 
 	assert(new_size >= old_size);
 
@@ -232,14 +241,13 @@ vm_external_within(
 vm_external_state_t
 _vm_external_state_get(
 	vm_external_map_t	map,
-	vm_offset_t		offset)
+	vm_object_offset_t	offset)
 {
-	unsigned
-	int		bit, byte;
+	uint64_t		bit, byte;
 
 	assert (map != VM_EXTERNAL_NULL);
 
-	bit = atop_32(offset);
+	bit = atop_64(offset);
 	byte = bit >> 3;
 	if (map[byte] & (1 << (bit & 07))) {
 		return VM_EXTERNAL_STATE_EXISTS;
@@ -251,15 +259,14 @@ _vm_external_state_get(
 void
 vm_external_state_set(
 	vm_external_map_t	map,
-	vm_offset_t		offset)
+	vm_object_offset_t	offset)
 {
-	unsigned
-	int		bit, byte;
+	uint64_t		bit, byte;
 
 	if (map == VM_EXTERNAL_NULL)
 		return;
 
-	bit = atop_32(offset);
+	bit = atop_64(offset);
 	byte = bit >> 3;
 	map[byte] |= (1 << (bit & 07));
 }
@@ -267,15 +274,14 @@ vm_external_state_set(
 void
 vm_external_state_clr(
 	vm_external_map_t	map,
-	vm_offset_t		offset)
+	vm_object_offset_t	offset)
 {
-	unsigned
-	int		bit, byte;
+	uint64_t		bit, byte;
 
 	if (map == VM_EXTERNAL_NULL)
 		return;
 
-	bit = atop_32(offset);
+	bit = atop_64(offset);
 	byte = bit >> 3;
 	map[byte] &= ~(1 << (bit & 07));
 }

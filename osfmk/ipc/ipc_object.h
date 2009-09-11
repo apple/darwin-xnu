@@ -87,8 +87,6 @@ typedef natural_t ipc_object_bits_t;
 typedef natural_t ipc_object_type_t;
 
 /*
- * There is no lock in the ipc_object; it is in the enclosing kernel
- * data structure (rpc_common_data) used by both ipc_port and ipc_pset.
  * The ipc_object is used to both tag and reference count these two data
  * structures, and (Noto Bene!) pointers to either of these or the
  * ipc_object at the head of these are freely cast back and forth; hence
@@ -100,17 +98,28 @@ typedef natural_t ipc_object_type_t;
  * (with which lock size varies).
  */
 struct ipc_object {
-	ipc_object_refs_t io_references;
 	ipc_object_bits_t io_bits;
-	mach_port_name_t  io_receiver_name;
-	decl_mutex_data(,	io_lock_data)
+	ipc_object_refs_t io_references;
+	decl_lck_mtx_data(,	io_lock_data)
+};
+
+/*
+ * If another object type needs to participate in io_kotype()-based
+ * dispatching, it must include a stub structure as the first
+ * element
+ */
+struct ipc_object_header {
+	ipc_object_bits_t io_bits;
+#ifdef __LP64__
+	natural_t         io_padding; /* pad to natural boundary */
+#endif
 };
 
 /*
  * Legacy defines.  Should use IPC_OBJECT_NULL, etc...
  */
 #define	IO_NULL			((ipc_object_t) 0)
-#define	IO_DEAD			((ipc_object_t) -1)
+#define	IO_DEAD			((ipc_object_t) ~0UL)
 #define	IO_VALID(io)		(((io) != IO_NULL) && ((io) != IO_DEAD))
 
 /*
@@ -147,33 +156,24 @@ extern zone_t ipc_object_zones[IOT_NUMBER];
 #define	io_alloc(otype)		\
 		((ipc_object_t) zalloc(ipc_object_zones[(otype)]))
 
-#if MACH_ASSERT || CONFIG_MACF_MACH
-/*
- *	Call the routine for io_free so that checking can be performed.
- */
 extern void	io_free(
 			unsigned int	otype,
 			ipc_object_t	object);
 
-#else	/* MACH_ASSERT || MAC_MACH */
-#define io_free(otype, io)  \
-	zfree(ipc_object_zones[(otype)], (io))
-#endif	/* MACH_ASSERT || MAC_MACH */
-
 /*
- * Here we depend on the ipc_object being first within the ipc_common_data,
- * which is first within the rpc_common_data, which in turn must be first
- * within any kernel data structure needing to lock an ipc_object
+ * Here we depend on the ipc_object being first within the kernel struct
  * (ipc_port and ipc_pset).
  */
 #define io_lock_init(io) \
-	mutex_init(&(io)->io_lock_data, 0)
+	lck_mtx_init(&(io)->io_lock_data, &ipc_lck_grp, &ipc_lck_attr)
+#define io_lock_destroy(io) \
+	lck_mtx_destroy(&(io)->io_lock_data, &ipc_lck_grp)
 #define	io_lock(io) \
-	mutex_lock(&(io)->io_lock_data)
+	lck_mtx_lock(&(io)->io_lock_data)
 #define	io_lock_try(io) \
-	mutex_try(&(io)->io_lock_data)
+	lck_mtx_try_lock(&(io)->io_lock_data)
 #define	io_unlock(io) \
-	mutex_unlock(&(io)->io_lock_data)
+	lck_mtx_unlock(&(io)->io_lock_data)
 
 #define _VOLATILE_ volatile
 

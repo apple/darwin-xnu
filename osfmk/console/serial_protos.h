@@ -54,7 +54,7 @@ void switch_to_old_console(int old_console);
 struct console_ops {
 	void	(*putc)(int, int, int);
 	int	(*getc)(int, int, boolean_t, boolean_t);
-} console_ops;
+};
 
 #define SERIAL_CONS_OPS 0
 #define VC_CONS_OPS 1

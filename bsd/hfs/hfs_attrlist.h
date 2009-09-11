@@ -63,9 +63,7 @@ struct attrblock {
 	 ATTR_CMN_FNDRINFO |ATTR_CMN_OWNERID |		\
 	 ATTR_CMN_GRPID | ATTR_CMN_ACCESSMASK |		\
 	 ATTR_CMN_FLAGS | ATTR_CMN_USERACCESS |		\
-	 ATTR_CMN_EXTENDED_SECURITY | ATTR_CMN_UUID |	\
-	 ATTR_CMN_GRPUUID | ATTR_CMN_FILEID |		\
-	 ATTR_CMN_PARENTID )
+	 ATTR_CMN_FILEID | ATTR_CMN_PARENTID )
 
 #define HFS_ATTR_DIR_VALID				\
 	(ATTR_DIR_LINKCOUNT | ATTR_DIR_ENTRYCOUNT | ATTR_DIR_MOUNTSTATUS)
@@ -74,20 +72,19 @@ struct attrblock {
 	(ATTR_FILE_LINKCOUNT |ATTR_FILE_TOTALSIZE |	  \
 	 ATTR_FILE_ALLOCSIZE | ATTR_FILE_IOBLOCKSIZE |	  \
 	 ATTR_FILE_CLUMPSIZE | ATTR_FILE_DEVTYPE |	  \
-	 ATTR_FILE_FORKCOUNT | ATTR_FILE_FORKLIST |	  \
 	 ATTR_FILE_DATALENGTH | ATTR_FILE_DATAALLOCSIZE | \
 	 ATTR_FILE_RSRCLENGTH | ATTR_FILE_RSRCALLOCSIZE)
 
 
 extern int hfs_attrblksize(struct attrlist *attrlist);
 
-extern unsigned long DerivePermissionSummary(uid_t obj_uid, gid_t obj_gid,
+extern u_int32_t DerivePermissionSummary(uid_t obj_uid, gid_t obj_gid,
 			mode_t obj_mode, struct mount *mp,
 			kauth_cred_t cred, struct proc *p);
 
 extern void hfs_packattrblk(struct attrblock *abp, struct hfsmount *hfsmp,
 		struct vnode *vp, struct cat_desc *descp, struct cat_attr *attrp,
-		struct cat_fork *datafork, struct cat_fork *rsrcfork, struct proc *p);
+		struct cat_fork *datafork, struct cat_fork *rsrcfork, struct vfs_context *ctx);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

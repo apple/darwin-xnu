@@ -80,7 +80,6 @@
 #define RB_ASKNAME	0x01	/* ask for file name to reboot from */
 #define RB_SINGLE	0x02	/* reboot to single user only */
 #define RB_NOSYNC	0x04	/* dont sync before reboot */
-#define RB_KDB		0x04	/* load kernel debugger */
 #define RB_HALT		0x08	/* don't reboot, just halt */
 #define RB_INITNAME	0x10	/* name given for /etc/init */
 #define RB_DFLTROOT	0x20	/* use compiled-in rootdev */
@@ -138,6 +137,8 @@
 __BEGIN_DECLS
 void	boot(int, int, char *);
 __END_DECLS
+
+#define PROC_SHUTDOWN_LOG "/var/log/kernel-shutdown.log"
 
 #endif /* BSD_KERNEL_PRIVATE */
 

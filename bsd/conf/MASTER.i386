@@ -44,16 +44,17 @@
 #  
 #  Standard Apple Research Configurations:
 #  -------- ----- -------- ---------------
-#  BASE =        [ intel mach medium config_dtrace vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug compat_43_tty sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue ]
-#  FILESYS =	 [ devfs revfs hfs journaling fdesc config_fse quota namedstreams fifo ffs union cd9660 config_volfs ]
-#  NETWORKING =  [ inet inet6 compat_oldsock mrouting tcpdrop_synfin bpfilter ipdivert netat ipfirewall ipv6firewall ipfw2 dummynet traffic_mgt sendfile netmibs bond vlan gif stf zlib randomipid ifnet_input_chk config_mbuf_jumbo ]
+#  BASE =        [ intel mach medium config_dtrace vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue psynch ]
+#  FILESYS =	 [ devfs revfs hfs journaling fdesc config_fse quota namedstreams fifo union config_volfs hfs_compression ]
+#  NETWORKING =  [ inet inet6 compat_oldsock mrouting tcpdrop_synfin bpfilter ipdivert ipfirewall ipv6firewall ipfw2 dummynet traffic_mgt sendfile netmibs bond vlan gif stf zlib randomipid ifnet_input_chk config_mbuf_jumbo ipflow ]
 #  NFS =         [ nfsclient nfsserver ]
 #  VPN =         [ ipsec ]
 #  RELEASE =     [ BASE NETWORKING NFS VPN FILESYS libdriver ]
 #  PROFILE =     [ RELEASE profile ]
-#  DEBUG =       [ BASE NETWORKING NFS VPN FILESYS libdriver_g debug xpr_debug mach_assert ]
+#  DEBUG =       [ BASE NETWORKING NFS VPN FILESYS libdriver_g debug xpr_debug mach_assert pf pflog ]
 #
-#  EMBEDDED_BASE =	[ intel mach bsmall vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug compat_43_tty sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue ]
+#
+#  EMBEDDED_BASE =	[ intel mach bsmall vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue psynch ]
 #  EMBEDDED_FILESYS =	[ devfs hfs journaling fdesc fifo ]
 #  EMBEDDED_NET =	[ inet compat_oldsock mrouting tcpdrop_synfin bpfilter config_mbuf_noexpand ]
 #  EMBEDDED =		[ EMBEDDED_BASE EMBEDDED_NET VPN EMBEDDED_FILESYS libdriver no_printf_str no_kprintf_str no_kdebug ]
@@ -78,8 +79,10 @@ options		UXPR		# user-level XPR package	# <uxpr>
 config		mach_kernel	swap generic			# <mach>
 options		EVENT						# <event>
 
+options     NO_NESTED_PMAP                  # <no_nested_pmap>
+
 #
-# Note: MAC options must be set in all the bsd/conf, osfmk/conf, and 
+# Note: MAC/AUDIT options must be set in all the bsd/conf, osfmk/conf, and 
 # security/conf MASTER files.
 #
 options		CONFIG_MACF					# Mandatory Access Control Framework
@@ -88,6 +91,7 @@ options		CONFIG_MACF_SOCKET_SUBSET	# MAC socket subest (no labels)
 #options	CONFIG_MACF_NET					# mbuf
 #options	CONFIG_MACF_DEBUG
 #options	CONFIG_MACF_MACH
+options		CONFIG_AUDIT			# Kernel auditing 
 
 # app-profiling i.e. pre-heating - off? 
 options   CONFIG_APP_PROFILE=0  

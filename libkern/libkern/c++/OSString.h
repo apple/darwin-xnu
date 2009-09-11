@@ -35,138 +35,385 @@
 
 class OSData;
 
-enum { kOSStringNoCopy = 0x00000001 };
 
 /*!
-    @class OSString
-    @abstract A container class for managing strings.
-    @discussion
-    OSString is a container class for managing arrays of characters.  Strings come in two varieties, mutable and immutable.  An immutable OSString string is one which was created or initialized with the "NoCopy" functions, all other strings are mutable.  When modifying an immutable string, the function called to perform the action will fail.
-*/
+ * @header
+ *
+ * @abstract
+ * This header declares the OSString container class.
+ */
+ 
+ 
+ /* Not to be included in headerdoc.
+  *
+  * For internal use.
+  */
+ enum { kOSStringNoCopy = 0x00000001 };
+
+
+/*!
+ * @class OSString
+ *
+ * @abstract
+ * OSString wraps a C string in a C++ object for use in Libkern collections.
+ *
+ * @discussion
+ * OSString is a container class for managing arrays of characters.
+ * An OSString normally maintains its own character buffer and allows changes,
+ * but you can create an "immutable" OSString
+ * that references an external C string
+ * buffer using the "NoCopy" creator functions.
+ * Functions called to change the contents of an immutable OSString will fail.
+ *
+ * <b>Encodings</b>
+ *
+ * OSString makes no provisions for different character encodings and
+ * assumes that a string is a nul-terminated sequence of single-byte characters.
+ * User-space code must either assume an encoding (typically ASCII or UTF-8)
+ * or determine it in some other way (such as an IORegistryEntry property).
+ *
+ * <b>Altering Strings</b>
+ *
+ * OSString's indended use is as a reference-counted object container
+ * for a C string and little more.
+ * While OSString provides full access to the underlying C string,
+ * it provides little in the way of string object manipulation;
+ * there are no append or insert functions,
+ * only a set-character function.
+ * If you need to manipulate OSStrings,
+ * it's generally best to get the C strings,
+ * alter them as necessary, and create a new OSString object
+ * from the resulting C string.
+ *
+ * <b>Use Restrictions</b>
+ *
+ * With very few exceptions in the I/O Kit, all Libkern-based C++
+ * classes, functions, and macros are <b>unsafe</b>
+ * to use in a primary interrupt context.
+ * Consult the I/O Kit documentation related to primary interrupts 
+ * for more information.
+ *
+ * OSString provides no concurrency protection;
+ * it's up to the usage context to provide any protection necessary.
+ * Some portions of the I/O Kit, such as
+ * @link //apple_ref/doc/class/IORegistryEntry IORegistryEntry@/link,
+ * handle synchronization via defined member functions for setting
+ * properties.
+ */
 class OSString : public OSObject
 {
     OSDeclareDefaultStructors(OSString)
 
 protected:
-    unsigned int    flags;
-    unsigned int    length;
-    char	   *string;
+    unsigned int   flags;
+    unsigned int   length;
+    char         * string;
 
 public:
-    /*!
-        @function withString
-        @abstract Static constructor function to create and initialize an instance of OSString from another OSString.
-        @param aString An OSString object.
-        @result Returns an instance of OSString or 0 on error.
-    */
-    static OSString *withString(const OSString *aString);
-    /*!
-        @function withCString
-        @abstract Static constructor function to create and initialize an instance of OSString.
-        @param cString A simple c-string.
-        @result Returns an instance of OSString or 0 on error.
-    */
-    static OSString *withCString(const char *cString);
-    /*!
-        @function withCStringNoCopy
-        @abstract Static constructor function to create and initialize an instance of OSString but does not copy the original c-string into container.
-        @param cString A simple c-string.
-        @result Returns an instance of OSString or 0 on error.
-    */
-    static OSString *withCStringNoCopy(const char *cString);
 
-    /*!
-        @function initWithString
-        @abstract Member function to initialize an instance of OSString from another OSString object.
-        @param aString An OSString object.
-        @result Returns true on success, false otherwise.
+
+   /*!
+    * @function withString
+    *
+    * @abstract
+    * Creates and initializes an OSString from another OSString.
+    *
+    * @param aString   The OSString object whose contents to copy.
+    *
+    * @result
+    * An instance of OSString representing
+    * the same characters as <code>aString</code>,
+    * and with a reference count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * The new OSString is a distinct instance from <code>aString</code>,
+    * and is not merely the original object
+    * with the reference count incremented.
+    * Changes to one will not be reflected in the other.
     */
-    virtual bool initWithString(const OSString *aString);
-    /*!
-        @function initWithCString
-        @abstract Member function to initialize an instance of OSString with a simple c-string.
-        @param cString A simple c-string.
-        @result Returns true on success, false otherwise.
+    static OSString * withString(const OSString * aString);
+
+
+   /*!
+    * @function withCString
+    *
+    * @abstract
+    * Creates and initializes an OSString from a C string.
+    *
+    * @param cString   The C string to copy into the new OSString.
+    *
+    * @result
+    * An instance of OSString representing
+    * the same characters as <code>aString</code>,
+    * and with a reference count of 1;
+    * <code>NULL</code> on failure.
     */
-    virtual bool initWithCString(const char *cString);
-    /*!
-        @function initWithCStringNoCopy
-        @abstract Member function to initialize an instance of OSString with a simple c-string but does not copy the string into the container.
-        @param cString A simple c-string.
-        @result Returns true on success, false otherwise.
+    static OSString * withCString(const char * cString);
+
+
+   /*!
+    * @function withCStringNoCopy
+    *
+    * @abstract
+    * Creates and initializes an immutable OSString
+    * that shares the provided C string buffer.
+    *
+    * @param cString   The C string to reference.
+    *
+    * @result
+    * An instance of OSString containing <code>cString</code>,
+    * and with a reference count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * An OSString object created with this function
+    * does not claim ownership of the C string,
+    * but shares it with the caller.
+    * When the caller determines that the OSString object has actually been freed,
+    * it can safely dispose of the data buffer.
+    * Conversely, if it frees the shared data buffer,
+    * it must not attempt to use the OSString object and should release it.
+    *
+    * An OSString object created with this function does not
+    * allow changing the string via <code>@link setChar setChar@/link</code>.
     */
-    virtual bool initWithCStringNoCopy(const char *cString);
-    /*!
-        @function free
-        @abstract Releases all resources used by the OSString object.
-        @discussion This function should not be called directly, use release() instead.
+    static OSString * withCStringNoCopy(const char * cString);
+
+
+   /*!
+    * @function initWithString
+    *
+    * @abstract
+    * Initializes an OSString from another OSString.
+    *
+    * @param aString   The OSString object whose contents to copy.
+    *
+    * @result
+    * <code>true</code> on success, <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link withString withString@/link</code> instead.
+    */
+    virtual bool initWithString(const OSString * aString);
+
+
+   /*!
+    * @function initWithCString
+    *
+    * @abstract
+    * Initializes an OSString from a C string.
+    *
+    * @param cString   The C string to copy into the new OSString.
+    *
+    * @result
+    * <code>true</code> on success, <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link withCString withCString@/link</code> instead.
+    */
+    virtual bool initWithCString(const char * cString);
+
+
+   /*!
+    * @function initWithCStringNoCopy
+    *
+    * @abstract
+    * Initializes an immutable OSString
+    * to share the provided C string buffer.
+    *
+    * @param cString   The C string to reference.
+    *
+    * @result
+    * <code>true</code> on success, <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link withCStringNoCopy withCStringNoCopy@/link</code> instead.
+    *
+    * An OSString object initialized with this function
+    * does not claim ownership of the C string,
+    * but shares it with the caller.
+    * When the caller determines that the OSString object has actually been freed,
+    * it can safely dispose of the data buffer.
+    * Conversely, if it frees the shared data buffer,
+    * it must not attempt to use the OSString object and should release it.
+    *
+    * An OSString object created with this function does not
+    * allow changing the string via <code>@link setChar setChar@/link</code>.
+    */
+    virtual bool initWithCStringNoCopy(const char * cString);
+
+
+   /*!
+    * @function free
+    *
+    * @abstract
+    * Deallocates or releases any resources
+    * used by the OSString instance.
+    *
+    * @discussion
+    * This function should not be called directly;
+    * use
+    * <code>@link
+    * //apple_ref/cpp/instm/OSObject/release/virtualvoid/()
+    * release@/link</code>
+    * instead.
     */
     virtual void free();
 
-    /*!
-        @function getLength
-        @abstract A member function to return the length of the string.
-        @result Returns the length of the string.
+
+   /*!
+    * @function getLength
+    *
+    * @abstract
+    * Returns the number of characters in the OSString object.
+    *
+    * @result
+    * The number of characters in the OSString object.
     */
     virtual unsigned int getLength() const;
-    /*!
-        @function getChar
-        @abstract Returns a character at a particular index in the string object.
-        @param index The index into the string.
-        @result Returns a character.
+
+
+   /*!
+    * @function getChar
+    *
+    * @abstract
+    * Returns the character at a given index in the string object.
+    *
+    * @param index The index into the string.
+    *
+    * @result
+    * The character at <code>index</code> within the string,
+    * or <code>'\0'</code> if index is past the end of the string.
     */
     virtual char getChar(unsigned int index) const;
-    /*!
-        @function setChar
-        @abstract Replaces a character at a particular index in the string object.
-        @param index The index into the string.
-        @result Returns true if the character was successfully replaced or false if the string is immutable or index was beyond the bounds of the character array.
+
+
+   /*!
+    * @function setChar
+    *
+    * @abstract
+    * Replaces a character at a given index in the string object.
+    *
+    * @param aChar The character value to set.
+    * @param index The index into the string.
+    *
+    * @result
+    * <code>true</code> if the character was replaced,
+    * <code>false</code> if the was created "NoCopy"
+    * or <code>index</code> is past the end of the string.
     */
     virtual bool setChar(char aChar, unsigned int index);
 
-    /*!
-        @function getCStringNoCopy
-        @abstract Returns a pointer to the internal c-string array.
-        @result Returns a pointer to the internal c-string array.
-    */
-    virtual const char *getCStringNoCopy() const;
 
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality of two OSString objects.
-        @param aString An OSString object.
-        @result Returns true if the two strings are equal, false otherwise.
+   /*!
+    * @function getCStringNoCopy
+    *
+    * @abstract
+    * Returns a pointer to the internal C string buffer.
+    *
+    * @result
+    * A pointer to the internal C string buffer.
     */
-    virtual bool isEqualTo(const OSString *aString) const;
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality of c-string and the internal string array of the receiving OSString object.
-        @param aCString A simple c-string.
-        @result Returns true if the two strings are equal, false otherwise.
-    */
-    virtual bool isEqualTo(const char *aCString) const;
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality of an unknown OSObject derived object and the OSString instance.
-        @param obj An OSObject derived object.
-        @result Returns true if the two objects are equivalent, false otherwise.
-    */
-    virtual bool isEqualTo(const OSMetaClassBase *obj) const;
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality of an unknown OSData object and the OSString instance.
-        @param obj An OSData object.
-        @result Returns true if the two objects are equivalent, false otherwise.
-    */
-    virtual bool isEqualTo(const OSData *obj) const;
+    virtual const char * getCStringNoCopy() const;
 
-    /*!
-        @function serialize
-        @abstract A member function which archives the receiver.
-        @param s The OSSerialize object.
-        @result Returns true if serialization was successful, false if not.
+
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract
+    * Tests the equality of two OSString objects.
+    *
+    * @param aString  The OSString object being compared against the receiver.
+    *
+    * @result
+    * <code>true</code> if the two OSString objects are equivalent,
+    * <code>false</code> otherwise.
+    *
+    * @discussion
+    * Two OSString objects are considered equal if they have same length
+    * and if their byte buffers hold the same contents.
     */
-    virtual bool serialize(OSSerialize *s) const;
+    virtual bool isEqualTo(const OSString * aString) const;
+
+
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract
+    * Tests the equality of an OSString object with a C string.
+    *
+    * @param cString  The C string to compare against the receiver.
+    *
+    * @result
+    * <code>true</code> if the OSString's characters
+    * are equivalent to the C string's,
+    * <code>false</code> otherwise.
+    */
+    virtual bool isEqualTo(const char * cString) const;
+
+
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract
+    * Tests the equality of an OSString object to an arbitrary object.
+    *
+    * @param anObject The object to be compared against the receiver.
+    * 
+    * @result
+    * Returns <code>true</code> if the two objects are equivalent,
+    * <code>false</code> otherwise.
+    *
+    * @discussion
+    * An OSString is considered equal to another object
+    * if that object is derived from OSString
+    * and contains the equivalent bytes of the same length.
+    */
+    virtual bool isEqualTo(const OSMetaClassBase * anObject) const;
+
+
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract
+    * Tests the equality of an OSData object and the OSString instance.
+    *
+    * @param aDataObject An OSData object.
+    *
+    * @result
+    * <code>true</code> if the two objects are equivalent, <code>false</code> otherwise.
+    *
+    * @discussion
+    * This function compares the bytes of the OSData object
+    * against those of the OSString,
+    * accounting for the possibility that an OSData
+    * might explicitly include a nul
+    * character as part of its total length.
+    * Thus, for example, an OSData object containing
+    * either the bytes <'u', 's', 'b', '\0'>
+    * or  <'u', 's', 'b'>
+    * will compare as equal to the OSString containing "usb".
+    */
+    virtual bool isEqualTo(const OSData * aDataObject) const;
+
+
+   /*!
+    * @function serialize
+    *
+    * @abstract
+    * Archives the receiver into the provided
+    * @link //apple_ref/doc/class/OSSerialize OSSerialize@/link object.
+    *
+    * @param serializer The OSSerialize object.
+    *
+    * @result
+    * <code>true</code> if serialization succeeds, <code>false</code> if not.
+    */
+    virtual bool serialize(OSSerialize * serializer) const;
 
     OSMetaClassDeclareReservedUnused(OSString,  0);
     OSMetaClassDeclareReservedUnused(OSString,  1);

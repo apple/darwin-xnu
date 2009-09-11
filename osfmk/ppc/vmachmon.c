@@ -140,7 +140,7 @@ static pmap_vmm_ext *vmm_build_shadow_hash(pmap_t pmap)
 		panic("vmm_build_shadow_hash: too little pmap_vmm_ext free space\n");
 	}
 	
-	ret = kmem_alloc_wired(kernel_map, (vm_offset_t *)&ext, PAGE_SIZE);
+	ret = kmem_alloc_kobject(kernel_map, (vm_offset_t *)&ext, PAGE_SIZE);
 															/* Allocate a page-sized extension block */
 	if (ret != KERN_SUCCESS) return (NULL);					/* Return NULL for failed allocate */
 	bzero((char *)ext, PAGE_SIZE);							/* Zero the entire extension block page */
@@ -169,7 +169,7 @@ static pmap_vmm_ext *vmm_build_shadow_hash(pmap_t pmap)
 	for (idx = 0; idx < pages; idx++) {
 		mapping_t *map;
 		uint32_t mapIdx;
-		ret = kmem_alloc_wired(kernel_map, &ext->vmxHashPgList[idx], PAGE_SIZE);
+		ret = kmem_alloc_kobject(kernel_map, &ext->vmxHashPgList[idx], PAGE_SIZE);
 															/* Allocate a hash-table page */
 		if (ret != KERN_SUCCESS) goto fail;					/* Allocation failed, exit through cleanup */
 		bzero((char *)ext->vmxHashPgList[idx], PAGE_SIZE);	/* Zero the page */
@@ -1939,7 +1939,7 @@ int vmm_stop_vm(struct savearea *save)
 
 	for(cvi = 0; cvi < kVmmMaxContexts; cvi++) {	/* Search slots */
 		if((0x80000000 & vmmask) && (CTable->vmmc[cvi].vmmFlags & vmmInUse)) {	/* See if we need to stop and if it is in use */
-			(void)hw_atomic_or(&CTable->vmmc[cvi].vmmFlags, vmmXStop);	/* Set this one to stop */
+			hw_atomic_or_noret(&CTable->vmmc[cvi].vmmFlags, vmmXStop);	/* Set this one to stop */
 		}
 		vmmask = vmmask << 1;					/* Slide mask over */
 	}

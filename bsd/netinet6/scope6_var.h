@@ -35,13 +35,13 @@
 #include <sys/appleapiopts.h>
 
 #ifdef KERNEL_PRIVATE
-void	scope6_ifattach(struct ifnet *);
+int	scope6_ifattach(struct ifnet *);
 int	scope6_set(struct ifnet *, u_int32_t *);
 int	scope6_get(struct ifnet *, u_int32_t *);
 void	scope6_setdefault(struct ifnet *);
 int	scope6_get_default(u_int32_t *);
 u_int32_t scope6_in6_addrscope(struct in6_addr *);
 u_int32_t scope6_addr2default(struct in6_addr *);
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
-#endif _NETINET6_SCOPE6_VAR_H_
+#endif /* _NETINET6_SCOPE6_VAR_H_ */

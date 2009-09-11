@@ -3,7 +3,7 @@ honest most) system calls we support in xnu.
 
 WARNING - this is not meant to be a full regression test of all the
 system calls.  The intent is to have a quick test of each system call that
-can be run very easily and quickly when a new kerenl is built.
+can be run very easily and quickly when a new kernel is built.
 
 This tool is meant to grow as we find xnu problems that could have be
 caught before we submit to a build train.  So please add more tests and
@@ -15,7 +15,7 @@ will stop running it.
 LP64 testing tip - when adding or modifying tests, keep in mind the
 variants in the LP64 world.  If xnu gets passed a structure the varies in
 size between 32 and 64-bit processes, try to test that a field in the 
-sructure contains valid data.  For example if we know foo structure
+structure contains valid data.  For example, if we know foo structure
 looks like:
 struct foo {
              int             an_int;
@@ -82,11 +82,11 @@ List of all tests this tool performs...
  8         chown, fchown, lchown, lstat, readlink, symlink 
  9         fstatfs, getattrlist, getfsstat, statfs 
  10        getpid, getppid, pipe 
- 11        getauid, gettid, getuid, geteuid, issetugid, setauid, seteuid, settid, settid_with_pid, setuid 
+ 11        getauid, gettid, getuid, geteuid, issetugid, setaudit_addr, seteuid, settid, settid_with_pid, setuid 
  12        mkdir, rmdir, umask 
  13        mknod, sync 
  14        fsync, getsockopt, poll, select, setsockopt, socketpair 
- 15        accept, bind, connect, getpeername, getsockname, listen, socket, recvmsg, sendmsg, sendto 
+ 15        accept, bind, connect, getpeername, getsockname, listen, socket, recvmsg, sendmsg, sendto, sendfile
  16        chflags, fchflags 
  17        kill, vfork, execve 
  18        getegid, getgid, getgroups, setegid, setgid, setgroups 

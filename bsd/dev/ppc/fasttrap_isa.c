@@ -48,12 +48,12 @@
  */
 
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 /*
- * #pragma ident	"@(#)fasttrap_isa.c	1.23	06/09/19 SMI"
+ * #pragma ident	"@(#)fasttrap_isa.c	1.27	08/04/09 SMI"
  */
 
 #ifdef KERNEL
@@ -78,7 +78,8 @@
 #include <vm/vm_map.h> /* All the bits we care about are guarded by MACH_KERNEL_PRIVATE :-( */
 extern dtrace_id_t dtrace_probeid_error;
 
-#define proc_t struct proc
+/* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
+#define proc_t struct proc /* Steer clear of the Darwin typedef for proc_t */
 
 static int32_t branchtaken(int32_t bo, int32_t bi, ppc_saved_state_t *sv);
 static int32_t dtrace_decode_ppc(uint32_t inst);
@@ -335,7 +336,7 @@ fasttrap_return_common(ppc_saved_state_t *sv, user_addr_t pc, pid_t pid, user_ad
 
 	for (tp = bucket->ftb_data; tp != NULL; tp = tp->ftt_next) {
 		if (pid == tp->ftt_pid && pc == tp->ftt_pc &&
-		    !tp->ftt_proc->ftpc_defunct)
+		    tp->ftt_proc->ftpc_acount != 0)
 			break;
 	}
 
@@ -448,7 +449,7 @@ fasttrap_pid_probe(ppc_saved_state_t *sv)
 	 */
 	for (tp = bucket->ftb_data; tp != NULL; tp = tp->ftt_next) {
 		if (pid == tp->ftt_pid && (sv->save_srr0 == tp->ftt_pc) &&
-		    !tp->ftt_proc->ftpc_defunct)
+		    tp->ftt_proc->ftpc_acount != 0)
 			break;
 	}
 

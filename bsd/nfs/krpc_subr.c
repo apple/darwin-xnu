@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -76,7 +76,6 @@
 #include <sys/socketvar.h>
 #include <sys/systm.h>
 #include <sys/reboot.h>
-#include <sys/uio_internal.h>
 
 #include <net/if.h>
 #include <netinet/in.h>
@@ -336,7 +335,7 @@ krpc_call(sa, sotype, prog, vers, func, data, from_p)
 	 */
 	if (sotype == SOCK_STREAM) {
 		/* first, fill in RPC record marker */
-		u_long *recmark = mbuf_data(mhead);
+		u_int32_t *recmark = mbuf_data(mhead);
 		*recmark = htonl(0x80000000 | (mbuf_pkthdr_len(mhead) - 4));
 		call = (struct rpc_call *)(recmark + 1);
 	} else {
@@ -401,11 +400,11 @@ krpc_call(sa, sotype, prog, vers, func, data, from_p)
 			}
 			if (sotype == SOCK_STREAM) {
 				int maxretries = 60;
-				struct iovec_32 aio;
-				aio.iov_base = (uintptr_t) &len;
-				aio.iov_len = sizeof(u_long);
+				struct iovec aio;
+				aio.iov_base = &len;
+				aio.iov_len = sizeof(u_int32_t);
 				bzero(&msg, sizeof(msg));
-				msg.msg_iov = (struct iovec *) &aio;
+				msg.msg_iov = &aio;
 				msg.msg_iovlen = 1;
 				do {
 				   error = sock_receive(so, &msg, MSG_WAITALL, &readlen);
@@ -416,7 +415,7 @@ krpc_call(sa, sotype, prog, vers, func, data, from_p)
 				    /* only log a message if we got a partial word */
 				    if (readlen != 0)
 					    printf("short receive (%ld/%ld) from server " IP_FORMAT "\n",
-						 readlen, sizeof(u_long), IP_LIST(&(sin->sin_addr.s_addr)));
+						 readlen, sizeof(u_int32_t), IP_LIST(&(sin->sin_addr.s_addr)));
 				    error = EPIPE;
 				}
 				if (error)

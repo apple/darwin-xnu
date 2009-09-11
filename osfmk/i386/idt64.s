@@ -573,27 +573,27 @@ L_32bit_return:
 	/*
 	 * Restore registers into the machine state for iret.
 	 */
-	movl	R_EIP(%rsp), %eax
+	movl	R32_EIP(%rsp), %eax
 	movl	%eax, ISC32_RIP(%rsp)
-	movl	R_EFLAGS(%rsp), %eax
+	movl	R32_EFLAGS(%rsp), %eax
 	movl	%eax, ISC32_RFLAGS(%rsp)
-	movl	R_CS(%rsp), %eax
+	movl	R32_CS(%rsp), %eax
 	movl	%eax, ISC32_CS(%rsp)
-	movl	R_UESP(%rsp), %eax
+	movl	R32_UESP(%rsp), %eax
 	movl	%eax, ISC32_RSP(%rsp)
-	movl	R_SS(%rsp), %eax
+	movl	R32_SS(%rsp), %eax
 	movl	%eax, ISC32_SS(%rsp)
 
 	/*
 	 * Restore general 32-bit registers
 	 */
-	movl	R_EAX(%rsp), %eax
-	movl	R_EBX(%rsp), %ebx
-	movl	R_ECX(%rsp), %ecx
-	movl	R_EDX(%rsp), %edx
-	movl	R_EBP(%rsp), %ebp
-	movl	R_ESI(%rsp), %esi
-	movl	R_EDI(%rsp), %edi
+	movl	R32_EAX(%rsp), %eax
+	movl	R32_EBX(%rsp), %ebx
+	movl	R32_ECX(%rsp), %ecx
+	movl	R32_EDX(%rsp), %edx
+	movl	R32_EBP(%rsp), %ebp
+	movl	R32_ESI(%rsp), %esi
+	movl	R32_EDI(%rsp), %edi
 
 	/*
 	 * Restore segment registers. We make take an exception here but
@@ -602,13 +602,13 @@ L_32bit_return:
 	 */
 	swapgs
 EXT(ret32_set_ds):	
-	movw	R_DS(%rsp), %ds
+	movw	R32_DS(%rsp), %ds
 EXT(ret32_set_es):
-	movw	R_ES(%rsp), %es
+	movw	R32_ES(%rsp), %es
 EXT(ret32_set_fs):
-	movw	R_FS(%rsp), %fs
+	movw	R32_FS(%rsp), %fs
 EXT(ret32_set_gs):
-	movw	R_GS(%rsp), %gs
+	movw	R32_GS(%rsp), %gs
 
 	add	$(ISC32_OFFSET)+8+8, %rsp	/* pop compat frame +
 						   trapno/trapfn and error */	
@@ -752,7 +752,7 @@ L_syscall_continue:
 	mov	%gs:CPU_UBER_TMP, %rcx
 	mov	%rcx, ISF64_RSP(%rsp)		/* user stack */
 	mov	%rax, ISF64_ERR(%rsp)		/* err/rax - syscall code */
-	movl	$(0), ISF64_TRAPNO(%rsp)	/* trapno */
+	movl	$(T_SYSCALL), ISF64_TRAPNO(%rsp)	/* trapno */
 	movl	$(LO_SYSCALL), ISF64_TRAPFN(%rsp)
 	jmp	L_64bit_enter		/* this can only be a 64-bit task */
 
@@ -794,7 +794,7 @@ Entry(hi64_sysenter)
 L_sysenter_continue:
 	push	%rdx			/* eip */
 	push	%rax			/* err/eax - syscall code */
-	push	$(0)
+	push	$(T_SYSENTER)
 	orl	$(EFL_IF), ISF64_RFLAGS(%rsp)
 	movl	$(LO_MACH_SCALL), ISF64_TRAPFN(%rsp)
 	testl	%eax, %eax
@@ -839,45 +839,49 @@ L_32bit_enter:
 	/*
 	 * Save segment regs
 	 */
-	mov	%ds, R_DS(%rsp)
-	mov	%es, R_ES(%rsp)
-	mov	%fs, R_FS(%rsp)
-	mov	%gs, R_GS(%rsp)
+	mov	%ds, R32_DS(%rsp)
+	mov	%es, R32_ES(%rsp)
+	mov	%fs, R32_FS(%rsp)
+	mov	%gs, R32_GS(%rsp)
 
 	/*
 	 * Save general 32-bit registers
 	 */
-	mov	%eax, R_EAX(%rsp)
-	mov	%ebx, R_EBX(%rsp)
-	mov	%ecx, R_ECX(%rsp)
-	mov	%edx, R_EDX(%rsp)
-	mov	%ebp, R_EBP(%rsp)
-	mov	%esi, R_ESI(%rsp)
-	mov	%edi, R_EDI(%rsp)
+	mov	%eax, R32_EAX(%rsp)
+	mov	%ebx, R32_EBX(%rsp)
+	mov	%ecx, R32_ECX(%rsp)
+	mov	%edx, R32_EDX(%rsp)
+	mov	%ebp, R32_EBP(%rsp)
+	mov	%esi, R32_ESI(%rsp)
+	mov	%edi, R32_EDI(%rsp)
 
 	/* Unconditionally save cr2; only meaningful on page faults */
 	mov	%cr2, %rax
-	mov	%eax, R_CR2(%rsp)
+	mov	%eax, R32_CR2(%rsp)
 
 	/*
 	 * Copy registers already saved in the machine state 
 	 * (in the interrupt stack frame) into the compat save area.
 	 */
 	mov	ISC32_RIP(%rsp), %eax
-	mov	%eax, R_EIP(%rsp)
+	mov	%eax, R32_EIP(%rsp)
 	mov	ISC32_RFLAGS(%rsp), %eax
-	mov	%eax, R_EFLAGS(%rsp)
+	mov	%eax, R32_EFLAGS(%rsp)
 	mov	ISC32_CS(%rsp), %eax
-	mov	%eax, R_CS(%rsp)
+	mov	%eax, R32_CS(%rsp)
+	testb	$3, %al
+	jz	1f
+	xor	%ebp, %ebp
+1:	
 	mov	ISC32_RSP(%rsp), %eax
-	mov	%eax, R_UESP(%rsp)
+	mov	%eax, R32_UESP(%rsp)
 	mov	ISC32_SS(%rsp), %eax
-	mov	%eax, R_SS(%rsp)
+	mov	%eax, R32_SS(%rsp)
 L_32bit_enter_after_fault:
 	mov	ISC32_TRAPNO(%rsp), %ebx	/* %ebx := trapno for later */
-	mov	%ebx, R_TRAPNO(%rsp)
+	mov	%ebx, R32_TRAPNO(%rsp)
 	mov	ISC32_ERR(%rsp), %eax
-	mov	%eax, R_ERR(%rsp)
+	mov	%eax, R32_ERR(%rsp)
 	mov	ISC32_TRAPFN(%rsp), %edx
 
 /*
@@ -934,7 +938,6 @@ L_enter_lohandler2:
 	movl	%ecx, %dr7
 1:
 	addl	$1,%gs:hwIntCnt(,%ebx,4)	// Bump the trap/intr count
-	
 	/* Dispatch the designated lo handler */
 	jmp	*%edx
 
@@ -991,6 +994,10 @@ L_64bit_enter_after_fault:
 	mov	R64_TRAPNO(%rsp), %ebx
 	mov	R64_TRAPFN(%rsp), %edx
 
+	testb	$3, ISF64_CS+ISS64_OFFSET(%rsp)
+	jz	1f
+	xor	%rbp, %rbp
+1:
 	jmp	L_enter_lohandler2
 
 Entry(hi64_page_fault)

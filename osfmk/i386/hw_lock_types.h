@@ -90,7 +90,7 @@
  *	later in kern/lock.h..
  */
 struct hslock {
-	int		lock_data;
+	long	lock_data;
 };
 typedef struct hslock hw_lock_data_t, *hw_lock_t;
 #define hw_lock_addr(hwl)	(&((hwl).lock_data))

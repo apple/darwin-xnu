@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -195,10 +195,9 @@ typedef struct parser_state {
 
 #undef yyerror 	
 #define yyerror(s)	OSUnserializeerror(STATE, (s))
-static int		OSUnserializeerror(parser_state_t *state, char *s);
+static int		OSUnserializeerror(parser_state_t *state, const char *s);
 
 static int		yylex(YYSTYPE *lvalp, parser_state_t *state);
-static int		yyparse(void * state);
 
 static object_t 	*newObject(parser_state_t *state);
 static void 		freeObject(parser_state_t *state, object_t *o);
@@ -218,10 +217,6 @@ extern "C" {
 extern void		*kern_os_malloc(size_t size);
 extern void		*kern_os_realloc(void * addr, size_t size);
 extern void		kern_os_free(void * addr);
-
-//XXX shouldn't have to define these
-extern long		strtol(const char *, char **, int);
-extern unsigned long	strtoul(const char *, char **, int);
 
 } /* extern "C" */
 
@@ -262,7 +257,7 @@ typedef int YYSTYPE;
 
 
 /* Line 216 of yacc.c.  */
-#line 216 "OSUnserializeXML.tab.c"
+#line 211 "OSUnserializeXML.tab.c"
 
 #ifdef short
 # undef short
@@ -312,7 +307,7 @@ typedef short int yytype_int16;
 #define YYSIZE_MAXIMUM ((YYSIZE_T) -1)
 
 #ifndef YY_
-# if YYENABLE_NLS
+# if defined YYENABLE_NLS && YYENABLE_NLS
 #  if ENABLE_NLS
 #   include <libintl.h> /* INFRINGES ON USER NAME SPACE */
 #   define YY_(msgid) dgettext ("bison-runtime", msgid)
@@ -554,10 +549,10 @@ static const yytype_int8 yyrhs[] =
 /* YYRLINE[YYN] -- source line where rule number YYN was defined.  */
 static const yytype_uint8 yyrline[] =
 {
-       0,   150,   150,   153,   158,   163,   164,   165,   166,   167,
-     168,   169,   170,   183,   186,   189,   192,   193,   198,   207,
-     212,   215,   218,   221,   224,   227,   230,   233,   240,   243,
-     246,   249,   252
+       0,   145,   145,   148,   153,   158,   159,   160,   161,   162,
+     163,   164,   165,   178,   181,   184,   187,   188,   193,   202,
+     207,   210,   213,   216,   219,   222,   225,   228,   235,   238,
+     241,   244,   247
 };
 #endif
 
@@ -754,7 +749,7 @@ while (YYID (0))
    we won't break user code: when these are the locations we know.  */
 
 #ifndef YY_LOCATION_PRINT
-# if YYLTYPE_IS_TRIVIAL
+# if defined YYLTYPE_IS_TRIVIAL && YYLTYPE_IS_TRIVIAL
 #  define YY_LOCATION_PRINT(File, Loc)			\
      fprintf (File, "%d.%d-%d.%d",			\
 	      (Loc).first_line, (Loc).first_column,	\
@@ -1495,14 +1490,14 @@ yyreduce:
   switch (yyn)
     {
         case 2:
-#line 150 "OSUnserializeXML.y"
+#line 145 "OSUnserializeXML.y"
     { yyerror("unexpected end of buffer");
 				  YYERROR;
 				;}
     break;
 
   case 3:
-#line 153 "OSUnserializeXML.y"
+#line 148 "OSUnserializeXML.y"
     { STATE->parsedObject = (yyvsp[(1) - (1)])->object;
 				  (yyvsp[(1) - (1)])->object = 0;
 				  freeObject(STATE, (yyvsp[(1) - (1)]));
@@ -1511,49 +1506,49 @@ yyreduce:
     break;
 
   case 4:
-#line 158 "OSUnserializeXML.y"
+#line 153 "OSUnserializeXML.y"
     { yyerror("syntax error");
 				  YYERROR;
 				;}
     break;
 
   case 5:
-#line 163 "OSUnserializeXML.y"
+#line 158 "OSUnserializeXML.y"
     { (yyval) = buildDictionary(STATE, (yyvsp[(1) - (1)])); ;}
     break;
 
   case 6:
-#line 164 "OSUnserializeXML.y"
+#line 159 "OSUnserializeXML.y"
     { (yyval) = buildArray(STATE, (yyvsp[(1) - (1)])); ;}
     break;
 
   case 7:
-#line 165 "OSUnserializeXML.y"
+#line 160 "OSUnserializeXML.y"
     { (yyval) = buildSet(STATE, (yyvsp[(1) - (1)])); ;}
     break;
 
   case 8:
-#line 166 "OSUnserializeXML.y"
+#line 161 "OSUnserializeXML.y"
     { (yyval) = buildString(STATE, (yyvsp[(1) - (1)])); ;}
     break;
 
   case 9:
-#line 167 "OSUnserializeXML.y"
+#line 162 "OSUnserializeXML.y"
     { (yyval) = buildData(STATE, (yyvsp[(1) - (1)])); ;}
     break;
 
   case 10:
-#line 168 "OSUnserializeXML.y"
+#line 163 "OSUnserializeXML.y"
     { (yyval) = buildNumber(STATE, (yyvsp[(1) - (1)])); ;}
     break;
 
   case 11:
-#line 169 "OSUnserializeXML.y"
+#line 164 "OSUnserializeXML.y"
     { (yyval) = buildBoolean(STATE, (yyvsp[(1) - (1)])); ;}
     break;
 
   case 12:
-#line 170 "OSUnserializeXML.y"
+#line 165 "OSUnserializeXML.y"
     { (yyval) = retrieveObject(STATE, (yyvsp[(1) - (1)])->idref);
 				  if ((yyval)) {
 				    (yyval)->object->retain();
@@ -1566,28 +1561,28 @@ yyreduce:
     break;
 
   case 13:
-#line 183 "OSUnserializeXML.y"
+#line 178 "OSUnserializeXML.y"
     { (yyval) = (yyvsp[(1) - (2)]);
 				  (yyval)->elements = NULL;
 				;}
     break;
 
   case 14:
-#line 186 "OSUnserializeXML.y"
+#line 181 "OSUnserializeXML.y"
     { (yyval) = (yyvsp[(1) - (3)]);
 				  (yyval)->elements = (yyvsp[(2) - (3)]);
 				;}
     break;
 
   case 17:
-#line 193 "OSUnserializeXML.y"
+#line 188 "OSUnserializeXML.y"
     { (yyval) = (yyvsp[(2) - (2)]);
 				  (yyval)->next = (yyvsp[(1) - (2)]);
 				;}
     break;
 
   case 18:
-#line 198 "OSUnserializeXML.y"
+#line 193 "OSUnserializeXML.y"
     { (yyval) = (yyvsp[(1) - (2)]);
 				  (yyval)->key = (OSString *)(yyval)->object;
 				  (yyval)->object = (yyvsp[(2) - (2)])->object;
@@ -1598,47 +1593,47 @@ yyreduce:
     break;
 
   case 19:
-#line 207 "OSUnserializeXML.y"
+#line 202 "OSUnserializeXML.y"
     { (yyval) = buildString(STATE, (yyvsp[(1) - (1)])); ;}
     break;
 
   case 20:
-#line 212 "OSUnserializeXML.y"
+#line 207 "OSUnserializeXML.y"
     { (yyval) = (yyvsp[(1) - (2)]);
 				  (yyval)->elements = NULL;
 				;}
     break;
 
   case 21:
-#line 215 "OSUnserializeXML.y"
+#line 210 "OSUnserializeXML.y"
     { (yyval) = (yyvsp[(1) - (3)]);
 				  (yyval)->elements = (yyvsp[(2) - (3)]);
 				;}
     break;
 
   case 23:
-#line 221 "OSUnserializeXML.y"
+#line 216 "OSUnserializeXML.y"
     { (yyval) = (yyvsp[(1) - (2)]);
 				  (yyval)->elements = NULL;
 				;}
     break;
 
   case 24:
-#line 224 "OSUnserializeXML.y"
+#line 219 "OSUnserializeXML.y"
     { (yyval) = (yyvsp[(1) - (3)]);
 				  (yyval)->elements = (yyvsp[(2) - (3)]);
 				;}
     break;
 
   case 26:
-#line 230 "OSUnserializeXML.y"
+#line 225 "OSUnserializeXML.y"
     { (yyval) = (yyvsp[(1) - (1)]); 
 				  (yyval)->next = NULL; 
 				;}
     break;
 
   case 27:
-#line 233 "OSUnserializeXML.y"
+#line 228 "OSUnserializeXML.y"
     { (yyval) = (yyvsp[(2) - (2)]);
 				  (yyval)->next = (yyvsp[(1) - (2)]);
 				;}
@@ -1646,7 +1641,7 @@ yyreduce:
 
 
 /* Line 1267 of yacc.c.  */
-#line 1600 "OSUnserializeXML.tab.c"
+#line 1595 "OSUnserializeXML.tab.c"
       default: break;
     }
   YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
@@ -1860,19 +1855,18 @@ yyreturn:
 }
 
 
-#line 255 "OSUnserializeXML.y"
+#line 250 "OSUnserializeXML.y"
 
 
 int
-OSUnserializeerror(parser_state_t * state, char *s)  /* Called by yyparse on errors */
+OSUnserializeerror(parser_state_t * state, const char *s)  /* Called by yyparse on errors */
 {
-    char tempString[128];
-
     if (state->errorString) {
+	char tempString[128];
 	snprintf(tempString, 128, "OSUnserializeXML: %s near line %d\n", s, state->lineNumber);
 	*(state->errorString) = OSString::withCString(tempString);
     }
-
+    
     return 0;
 }
 
@@ -1882,7 +1876,7 @@ OSUnserializeerror(parser_state_t * state, char *s)  /* Called by yyparse on err
 #define TAG_START		1
 #define TAG_END			2
 #define TAG_EMPTY		3
-#define TAG_COMMENT		4
+#define TAG_IGNORE		4
 
 #define currentChar()	(state->parseBuffer[state->parseBufferIndex])
 #define nextChar()	(state->parseBuffer[++state->parseBufferIndex])
@@ -1911,16 +1905,50 @@ getTag(parser_state_t *state,
 	if (c != '<') return TAG_BAD;
         c = nextChar();		// skip '<'
 
-        if (c == '?' || c == '!') {
-                while ((c = nextChar()) != 0) {
-                        if (c == '\n') state->lineNumber++;
-                        if (c == '>') {
-                                (void)nextChar();
-                                return TAG_COMMENT;
-                        }
-                }
-        }
 
+	// <!TAG   declarations     >
+	// <!--     comments      -->
+        if (c == '!') {
+	    c = nextChar();  
+	    bool isComment = (c == '-') && ((c = nextChar()) != 0) && (c == '-');
+	    if (!isComment && !isAlpha(c)) return TAG_BAD;   // <!1, <!-A, <!eos
+
+	    while (c && (c = nextChar()) != 0) {
+		if (c == '\n') state->lineNumber++;
+		if (isComment) {
+		    if (c != '-') continue;
+		    c = nextChar();
+		    if (c != '-') continue;
+		    c = nextChar();
+		}
+		if (c == '>') {
+		    (void)nextChar();
+		    return TAG_IGNORE;
+		}
+		if (isComment) break;
+	    }
+	    return TAG_BAD;
+	}
+
+	else
+
+	// <? Processing Instructions  ?>
+        if (c == '?') {
+	    while ((c = nextChar()) != 0) {
+		if (c == '\n') state->lineNumber++;
+		if (c != '?') continue;
+		c = nextChar();
+		if (c == '>') {
+		    (void)nextChar();
+		    return TAG_IGNORE;
+		}
+	    }
+	    return TAG_BAD;
+	}
+
+	else
+
+	// </ end tag >    
 	if (c == '/') {
 		c = nextChar();		// skip '/'
 		tagType = TAG_END;
@@ -2255,7 +2283,7 @@ yylex(YYSTYPE *lvalp, parser_state_t *state)
 
 	tagType = getTag(STATE, tag, &attributeCount, attributes, values);
 	if (tagType == TAG_BAD) return SYNTAX_ERROR;
-	if (tagType == TAG_COMMENT) goto top;
+	if (tagType == TAG_IGNORE) goto top;
 
 	// handle allocation and check for "ID" and "IDREF" tags up front
 	*lvalp = object = newObject(STATE);
@@ -2658,7 +2686,7 @@ buildNumber(parser_state_t *state, object_t *o)
 };
 
 object_t *
-buildBoolean(parser_state_t *state, object_t *o)
+buildBoolean(parser_state_t *state __unused, object_t *o)
 {
 	o->object = ((o->number == 0) ? kOSBooleanFalse : kOSBooleanTrue);
 	o->object->retain();

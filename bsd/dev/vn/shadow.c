@@ -72,7 +72,7 @@
 
 #include "shadow.h"
 
-#define ULONG_ALL_ONES			((u_long)(-1))
+#define UINT32_ALL_ONES			((uint32_t)(-1))
 #define USHORT_ALL_ONES			((u_short)(-1))
 #define UCHAR_ALL_ONES			((u_char)(-1))
 
@@ -87,20 +87,20 @@ typedef u_short	band_number_t;
 #define BAND_MAX			((band_number_t)65535)
 
 struct shadow_map {
-    u_long		blocks_per_band;/* size in blocks */
-    u_long		block_size;
+    uint32_t		blocks_per_band;/* size in blocks */
+    uint32_t		block_size;
     u_char *		block_bitmap;		/* 1 bit per block; 1=written */
     band_number_t *	bands;			/* band map array */
-    u_long		file_size_blocks;	/* size of file in bands */
-    u_long		shadow_size_bands;	/* size of shadow in bands */
-    u_long 		next_band;		/* next free band */
-    u_long		zeroth_band;		/* special-case 0th band */
+    uint32_t		file_size_blocks;	/* size of file in bands */
+    uint32_t		shadow_size_bands;	/* size of shadow in bands */
+    uint32_t 		next_band;		/* next free band */
+    uint32_t		zeroth_band;		/* special-case 0th band */
 };
 
 
 typedef struct {
-    u_long	byte;
-    u_long	bit;
+    uint32_t	byte;
+    uint32_t	bit;
 } bitmap_offset_t;
 
 static __inline__ u_char
@@ -151,7 +151,7 @@ bitmap_offset(off_t where)
  *   units, using longs, then a short, then a byte, then bits.
  */
 static void
-bitmap_set(u_char * map, u_long start_bit, u_long bit_count)
+bitmap_set(u_char * map, uint32_t start_bit, uint32_t bit_count)
 {
     bitmap_offset_t 	start;
     bitmap_offset_t	end;
@@ -159,7 +159,7 @@ bitmap_set(u_char * map, u_long start_bit, u_long bit_count)
     start = bitmap_offset(start_bit);
     end = bitmap_offset(start_bit + bit_count);
     if (start.byte < end.byte) {
-	u_long n_bytes;
+	uint32_t n_bytes;
 
 	if (start.bit) {
 	    map[start.byte] |= byte_set_bits(start.bit, NBBY - 1);
@@ -171,10 +171,10 @@ bitmap_set(u_char * map, u_long start_bit, u_long bit_count)
 			
 	n_bytes = end.byte - start.byte;
 	
-	while (n_bytes >= (sizeof(u_long))) {
-	    *((u_long *)(map + start.byte)) = ULONG_ALL_ONES;
-	    start.byte += sizeof(u_long);
-	    n_bytes -= sizeof(u_long);
+	while (n_bytes >= (sizeof(uint32_t))) {
+	    *((uint32_t *)(map + start.byte)) = UINT32_ALL_ONES;
+	    start.byte += sizeof(uint32_t);
+	    n_bytes -= sizeof(uint32_t);
 	}
 	if (n_bytes >= sizeof(u_short)) {
 	    *((u_short *)(map + start.byte)) = USHORT_ALL_ONES;
@@ -208,11 +208,11 @@ bitmap_set(u_char * map, u_long start_bit, u_long bit_count)
  *   a byte, then any remaining bits to find the bit that is different.
  */
 
-static u_long
-bitmap_get(u_char * map, u_long start_bit, u_long bit_count, 
+static uint32_t
+bitmap_get(u_char * map, uint32_t start_bit, uint32_t bit_count, 
 	   boolean_t * ret_is_set)
 {
-    u_long		count;
+    uint32_t		count;
     int			i;
     boolean_t		is_set;
     bitmap_offset_t 	start;
@@ -225,7 +225,7 @@ bitmap_get(u_char * map, u_long start_bit, u_long bit_count,
     count = 0;
 
     if (start.byte < end.byte) {
-	u_long n_bytes;
+	uint32_t n_bytes;
 
 	if (start.bit) { /* try to align to a byte */
 	    for (i = start.bit; i < NBBY; i++) {
@@ -246,9 +246,9 @@ bitmap_get(u_char * map, u_long start_bit, u_long bit_count,
 	n_bytes = end.byte - start.byte;
 
 	/* check for 4 bytes of the same bits */
-	while (n_bytes >= sizeof(u_long)) {
-	    u_long * valPtr = (u_long *)(map + start.byte);
-	    if ((is_set && *valPtr == ULONG_ALL_ONES) 
+	while (n_bytes >= sizeof(uint32_t)) {
+	    uint32_t * valPtr = (uint32_t *)(map + start.byte);
+	    if ((is_set && *valPtr == UINT32_ALL_ONES) 
 		|| (!is_set && *valPtr == 0)) {
 		count += sizeof(*valPtr) * NBBY;
 		start.byte += sizeof(*valPtr);
@@ -310,7 +310,7 @@ bitmap_get(u_char * map, u_long start_bit, u_long bit_count,
 }
 
 static __inline__ band_number_t
-shadow_map_block_to_band(shadow_map_t * map, unsigned long block)
+shadow_map_block_to_band(shadow_map_t * map, uint32_t block)
 {
     return (block / map->blocks_per_band);
 }
@@ -361,16 +361,16 @@ shadow_map_mapped_band(shadow_map_t * map, band_number_t band,
  *
  *   If called with is_write = TRUE, this function will map bands as it goes.
  */
-static u_long
-shadow_map_contiguous(shadow_map_t * map, u_long start_block,
-		      u_long num_blocks, boolean_t is_write)
+static uint32_t
+shadow_map_contiguous(shadow_map_t * map, uint32_t start_block,
+		      uint32_t num_blocks, boolean_t is_write)
 {
     band_number_t	band = shadow_map_block_to_band(map, start_block);
-    u_long		end_block = start_block + num_blocks;
+    uint32_t		end_block = start_block + num_blocks;
     boolean_t		is_mapped;
     band_number_t	mapped_band;
-    u_long		ret_end_block = end_block;
-    u_long		p;
+    uint32_t		ret_end_block = end_block;
+    uint32_t		p;
 
     is_mapped = shadow_map_mapped_band(map, band, is_write, &mapped_band);
     if (is_write == FALSE && is_mapped == FALSE) {
@@ -419,8 +419,8 @@ shadow_map_contiguous(shadow_map_t * map, u_long start_block,
  *   particularly since most of the bits will be zero.
  *   A sparse bitmap would really help in this case.
  */
-static __inline__ u_long
-block_bitmap_size(off_t file_size, u_long block_size)
+static __inline__ uint32_t
+block_bitmap_size(off_t file_size, uint32_t block_size)
 {
     off_t blocks = howmany(file_size, block_size);
     return (howmany(blocks, NBBY));
@@ -448,15 +448,15 @@ block_bitmap_size(off_t file_size, u_long block_size)
  *   should be read.
  */
 boolean_t
-shadow_map_read(shadow_map_t * map, u_long block_offset, u_long block_count,
-		u_long * incr_block_offset, u_long * incr_block_count)
+shadow_map_read(shadow_map_t * map, uint32_t block_offset, uint32_t block_count,
+		uint32_t * incr_block_offset, uint32_t * incr_block_count)
 {
     boolean_t		written = FALSE;
-    u_long		n_blocks;
+    uint32_t		n_blocks;
 
     if (block_offset >= map->file_size_blocks
 	|| (block_offset + block_count) > map->file_size_blocks) {
-	printf("shadow_map_read: request (%ld, %ld) exceeds file size %ld\n",
+	printf("shadow_map_read: request (%d, %d) exceeds file size %d\n",
 	       block_offset, block_count, map->file_size_blocks);
 	*incr_block_count = 0;
     }
@@ -468,7 +468,7 @@ shadow_map_read(shadow_map_t * map, u_long block_offset, u_long block_count,
     }
     else { /* start has been written, and therefore mapped */
 	band_number_t	mapped_band;
-	u_long		band_limit;
+	uint32_t		band_limit;
 	
 	mapped_band = map->bands[shadow_map_block_to_band(map, block_offset)];
 	*incr_block_offset = mapped_band * map->blocks_per_band
@@ -500,17 +500,17 @@ shadow_map_read(shadow_map_t * map, u_long block_offset, u_long block_count,
  *   TRUE if the shadow file was grown, FALSE otherwise. 
  */
 boolean_t
-shadow_map_write(shadow_map_t * map, u_long block_offset, 
-		 u_long block_count, u_long * incr_block_offset, 
-		 u_long * incr_block_count)
+shadow_map_write(shadow_map_t * map, uint32_t block_offset, 
+		 uint32_t block_count, uint32_t * incr_block_offset, 
+		 uint32_t * incr_block_count)
 {
-    u_long		band_limit;
+    uint32_t		band_limit;
     band_number_t	mapped_band;
     boolean_t		shadow_grew = FALSE;
 
     if (block_offset >= map->file_size_blocks
 	|| (block_offset + block_count) > map->file_size_blocks) {
-	printf("shadow_map_write: request (%ld, %ld) exceeds file size %ld\n",
+	printf("shadow_map_write: request (%d, %d) exceeds file size %d\n",
 	       block_offset, block_count, map->file_size_blocks);
 	*incr_block_count = 0;
     }
@@ -532,7 +532,7 @@ shadow_map_write(shadow_map_t * map, u_long block_offset,
 }
 
 boolean_t
-shadow_map_is_written(shadow_map_t * map, u_long block_offset)
+shadow_map_is_written(shadow_map_t * map, uint32_t block_offset)
 {
     bitmap_offset_t 	b;
 
@@ -546,7 +546,7 @@ shadow_map_is_written(shadow_map_t * map, u_long block_offset)
  * Purpose:
  *   To return the size of the shadow file in blocks.
  */
-u_long
+uint32_t
 shadow_map_shadow_size(shadow_map_t * map)
 {
     return (map->shadow_size_bands * map->blocks_per_band);
@@ -563,13 +563,13 @@ shadow_map_shadow_size(shadow_map_t * map)
  */
 shadow_map_t *
 shadow_map_create(off_t file_size, off_t shadow_size, 
-		  u_long band_size, u_long block_size)
+		  uint32_t band_size, uint32_t block_size)
 {
     void *		block_bitmap = NULL;
-    u_long		bitmap_size;
+    uint32_t		bitmap_size;
     band_number_t *	bands = NULL;
     shadow_map_t *	map;
-    u_long		n_bands = 0;
+    uint32_t		n_bands = 0;
 
     if (band_size == 0) {
 	band_size = BAND_SIZE_DEFAULT;
@@ -577,7 +577,7 @@ shadow_map_create(off_t file_size, off_t shadow_size,
 
     n_bands = howmany(file_size, band_size);
     if (n_bands > (BAND_MAX + 1)) {
-	printf("file is too big: %ld > %d\n",
+	printf("file is too big: %d > %d\n",
 	       n_bands, BAND_MAX);
 	goto failure;
     }
@@ -650,8 +650,8 @@ enum {
 
 typedef struct {
     int		type;
-    u_long	offset;
-    u_long	count;
+    uint32_t	offset;
+    uint32_t	count;
 } block_request_t;
 
 int
@@ -675,8 +675,8 @@ main()
 	exit(1);
     }
     for (i = 0; TRUE; i++) {
-	u_long		offset;
-	u_long		resid;
+	uint32_t		offset;
+	uint32_t		resid;
 	boolean_t	shadow_grew;
 	boolean_t	read_shadow;
 
@@ -691,8 +691,8 @@ main()
 	switch (requests[i].type) {
 	case WriteRequest:
 	    while (resid > 0) {
-		u_long this_offset;
-		u_long this_count;
+		uint32_t this_offset;
+		uint32_t this_count;
 		
 		shadow_grew = shadow_map_write(map, offset,
 					       resid,
@@ -710,8 +710,8 @@ main()
 	    break;
 	case ReadRequest:
 	    while (resid > 0) {
-		u_long this_offset;
-		u_long this_count;
+		uint32_t this_offset;
+		uint32_t this_count;
 		
 		read_shadow = shadow_map_read(map, offset,
 					      resid,

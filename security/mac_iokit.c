@@ -57,7 +57,7 @@
 #include <sys/vnode_internal.h>
 #include <sys/queue.h>  
 #include <bsd/bsm/audit.h>
-#include <bsd/bsm/audit_kernel.h>
+#include <bsd/security/audit/audit.h>
 #include <bsd/sys/malloc.h>
 #include <vm/vm_kern.h>
 #include <kern/kalloc.h>

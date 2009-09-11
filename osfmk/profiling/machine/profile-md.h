@@ -30,7 +30,7 @@
 
 #if defined (__ppc__)
 #include "profiling/ppc/profile-md.h"
-#elif defined (__i386__)
+#elif defined (__i386__) || defined (__x86_64__)
 #include "profiling/i386/profile-md.h"
 #else
 #error architecture not supported

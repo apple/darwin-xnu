@@ -20,14 +20,14 @@
  */
 
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 #ifndef _SYS_DTRACE_IMPL_H
 #define	_SYS_DTRACE_IMPL_H
 
-/* #pragma ident	"@(#)dtrace_impl.h	1.21	06/05/19 SMI" */
+/* #pragma ident	"@(#)dtrace_impl.h	1.23	07/02/16 SMI" */
 
 #ifdef	__cplusplus
 extern "C" {
@@ -910,6 +910,8 @@ typedef struct dtrace_mstate {
 	int dtms_ipl;				/* cached interrupt pri lev */
 	int dtms_fltoffs;			/* faulting DIFO offset */
 	uintptr_t dtms_strtok;			/* saved strtok() pointer */
+	uint32_t dtms_access;			/* memory access rights */
+	dtrace_difo_t *dtms_difo;		/* current dif object */
 } dtrace_mstate_t;
 
 #define	DTRACE_COND_OWNER	0x1
@@ -917,6 +919,12 @@ typedef struct dtrace_mstate {
 #define	DTRACE_COND_ZONEOWNER	0x4
 
 #define	DTRACE_PROBEKEY_MAXDEPTH	8	/* max glob recursion depth */
+
+/*
+ * Access flag used by dtrace_mstate.dtms_access.
+ */
+#define	DTRACE_ACCESS_KERNEL	0x1		/* the priv to read kmem */
+
 
 /*
  * DTrace Activity
@@ -970,6 +978,7 @@ typedef enum dtrace_activity {
 	DTRACE_ACTIVITY_KILLED			/* killed */
 } dtrace_activity_t;
 
+#if defined(__APPLE__)
 /*
  * DTrace dof modes
  *
@@ -999,6 +1008,7 @@ typedef enum dtrace_activity {
 #define DTRACE_DOF_MODE_LAZY_ON		1
 #define DTRACE_DOF_MODE_LAZY_OFF	2
 #define DTRACE_DOF_MODE_NON_LAZY	3
+#endif /* __APPLE__ */
 
 /*
  * DTrace Helper Implementation
@@ -1222,7 +1232,7 @@ typedef struct dtrace_anon {
 /*
  * DTrace Error Debugging
  */
-#ifdef DEBUG
+#if DEBUG
 #define	DTRACE_ERRDEBUG
 #endif
 
@@ -1259,21 +1269,21 @@ typedef struct dtrace_toxrange {
 } dtrace_toxrange_t;
 
 extern uint64_t dtrace_getarg(int, int);
-extern greg_t dtrace_getfp(void);
 extern int dtrace_getipl(void);
 extern uintptr_t dtrace_caller(int);
 extern uint32_t dtrace_cas32(uint32_t *, uint32_t, uint32_t);
 extern void *dtrace_casptr(void *, void *, void *);
 #if !defined(__APPLE__)
-extern void dtrace_copyin(uintptr_t, uintptr_t, size_t);
-extern void dtrace_copyinstr(uintptr_t, uintptr_t, size_t);
-extern void dtrace_copyout(uintptr_t, uintptr_t, size_t);
-extern void dtrace_copyoutstr(uintptr_t, uintptr_t, size_t);
+extern void dtrace_copyin(uintptr_t, uintptr_t, size_t, volatile uint16_t *);
+extern void dtrace_copyinstr(uintptr_t, uintptr_t, size_t, volatile uint16_t *);
+extern void dtrace_copyout(uintptr_t, uintptr_t, size_t, volatile uint16_t *);
+extern void dtrace_copyoutstr(uintptr_t, uintptr_t, size_t,
+    volatile uint16_t *);
 #else
-extern void dtrace_copyin(user_addr_t, uintptr_t, size_t);
-extern void dtrace_copyinstr(user_addr_t, uintptr_t, size_t);
-extern void dtrace_copyout(uintptr_t, user_addr_t, size_t);
-extern void dtrace_copyoutstr(uintptr_t, user_addr_t, size_t);
+extern void dtrace_copyin(user_addr_t, uintptr_t, size_t, volatile uint16_t *);
+extern void dtrace_copyinstr(user_addr_t, uintptr_t, size_t, volatile uint16_t *);
+extern void dtrace_copyout(uintptr_t, user_addr_t, size_t, volatile uint16_t *);
+extern void dtrace_copyoutstr(uintptr_t, user_addr_t, size_t, volatile uint16_t *);
 #endif /* __APPLE__ */
 extern void dtrace_getpcstack(pc_t *, int, int, uint32_t *);
 #if !defined(__APPLE__)
@@ -1312,7 +1322,7 @@ extern uint_t dtrace_getotherwin(void);
 extern uint_t dtrace_getfprs(void);
 #else
 extern void dtrace_copy(uintptr_t, uintptr_t, size_t);
-extern void dtrace_copystr(uintptr_t, uintptr_t, size_t);
+extern void dtrace_copystr(uintptr_t, uintptr_t, size_t, volatile uint16_t *);
 #endif
 
 /*
@@ -1328,7 +1338,7 @@ extern void dtrace_copystr(uintptr_t, uintptr_t, size_t);
  * ASSERT.)
  */
 #undef ASSERT
-#ifdef DEBUG
+#if DEBUG
 #define	ASSERT(EX)	((void)((EX) || \
 			dtrace_assfail(#EX, __FILE__, __LINE__)))
 #else

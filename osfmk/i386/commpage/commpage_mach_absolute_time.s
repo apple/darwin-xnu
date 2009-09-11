@@ -33,19 +33,15 @@
 
 #include <assym.s>
 
-        .text
-        .align  2, 0x90
-
-Lmach_absolute_time:
+COMMPAGE_FUNCTION_START(mach_absolute_time, 32, 4)
 	int	$0x3
 	ret
+COMMPAGE_DESCRIPTOR(mach_absolute_time,_COMM_PAGE_ABSOLUTE_TIME,0,0)
 
-	COMMPAGE_DESCRIPTOR(mach_absolute_time,_COMM_PAGE_ABSOLUTE_TIME,0,0)
 
- 
 /* return nanotime in %edx:%eax */
 
-Lnanotime:
+COMMPAGE_FUNCTION_START(nanotime, 32, 4)
 	pushl	%ebp
 	movl	%esp,%ebp
 	pushl	%esi
@@ -83,12 +79,11 @@ Lnanotime:
 	popl	%esi
 	popl	%ebp
 	ret
-
-	COMMPAGE_DESCRIPTOR(nanotime,_COMM_PAGE_NANOTIME,0,kSlow)
+COMMPAGE_DESCRIPTOR(nanotime,_COMM_PAGE_NANOTIME,0,kSlow)
 
 
 /* nanotime routine for machines slower than ~1Gz (SLOW_TSC_THRESHOLD) */
-Lnanotime_slow:
+COMMPAGE_FUNCTION_START(nanotime_slow, 32, 4)
 	push	%ebp
 	mov	%esp,%ebp
 	push	%esi
@@ -146,17 +141,13 @@ Lnanotime_slow:
 	pop	%esi
 	pop	%ebp
 	ret					/* result in edx:eax */
-
-	COMMPAGE_DESCRIPTOR(nanotime_slow,_COMM_PAGE_NANOTIME,kSlow,0)
+COMMPAGE_DESCRIPTOR(nanotime_slow,_COMM_PAGE_NANOTIME,kSlow,0)
 
 
 /* The 64-bit version.  We return the 64-bit nanotime in %rax,
  * and by convention we must preserve %r9, %r10, and %r11.
  */
-	.text
-	.align	2
-	.code64
-Lnanotime_64:					// NB: must preserve r9, r10, and r11
+COMMPAGE_FUNCTION_START(nanotime_64, 64, 4)
 	pushq	%rbp				// set up a frame for backtraces
 	movq	%rsp,%rbp
 	movq	$_COMM_PAGE_32_TO_64(_COMM_PAGE_TIME_DATA_START),%rsi
@@ -179,5 +170,4 @@ Lnanotime_64:					// NB: must preserve r9, r10, and r11
 	jne	1b
 	popq	%rbp
 	ret
-
-	COMMPAGE_DESCRIPTOR(nanotime_64,_COMM_PAGE_NANOTIME,0,kSlow)
+COMMPAGE_DESCRIPTOR(nanotime_64,_COMM_PAGE_NANOTIME,0,kSlow)

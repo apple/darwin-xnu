@@ -131,8 +131,13 @@ typedef struct _lck_mtx_ext_ {
 typedef struct {
     unsigned int   		 opaque[3];
 } lck_mtx_t;
+
+typedef struct {
+    unsigned int   		 opaque[16];
+} lck_mtx_ext_t;
 #else
-typedef struct __lck_mtx_t__	lck_mtx_t;
+typedef struct __lck_mtx_t__		lck_mtx_t;
+typedef struct __lck_mtx_ext_t__	lck_mtx_ext_t;
 #endif
 #endif
 

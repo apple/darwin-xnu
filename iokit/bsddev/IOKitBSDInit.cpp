@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -39,7 +39,11 @@ extern "C" {
 #include <uuid/uuid.h>
 
 // how long to wait for matching root device, secs
-#define ROOTDEVICETIMEOUT	60
+#if DEBUG
+#define ROOTDEVICETIMEOUT       120
+#else
+#define ROOTDEVICETIMEOUT       60
+#endif
 
 extern dev_t mdevadd(int devid, ppnum_t base, unsigned int size, int phys);
 extern dev_t mdevlookup(int devid);
@@ -49,7 +53,7 @@ kern_return_t
 IOKitBSDInit( void )
 {
     IOService::publishResource("IOBSD");
- 
+
     return( kIOReturnSuccess );
 }
 
@@ -569,7 +573,7 @@ kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 			if(data) {											/* We found one */
 
 				ramdParms = (UInt32 *)data->getBytesNoCopy();	/* Point to the ram disk base and size */
-				(void)mdevadd(-1, ramdParms[0] >> 12, ramdParms[1] >> 12, 0);	/* Initialize it and pass back the device number */
+				(void)mdevadd(-1, ml_static_ptovirt(ramdParms[0]) >> 12, ramdParms[1] >> 12, 0);	/* Initialize it and pass back the device number */
 			}
 			regEntry->release();								/* Toss the entry */
 		}
@@ -704,11 +708,14 @@ kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 
     if ( service && findHFSChild ) {
         bool waiting = true;
+        uint64_t    timeoutNS;
+
         // wait for children services to finish registering
         while ( waiting ) {
-            t.tv_sec = ROOTDEVICETIMEOUT;
-            t.tv_nsec = 0;
-            if ( service->waitQuiet( &t ) == kIOReturnSuccess ) {
+            timeoutNS = ROOTDEVICETIMEOUT;
+            timeoutNS *= kSecondScale;
+            
+            if ( (service->waitQuiet(timeoutNS) ) == kIOReturnSuccess) {
                 waiting = false;
             } else {
                 IOLog( "Waiting for child registration\n" );
@@ -855,6 +862,121 @@ kern_return_t IOBSDGetPlatformUUID( uuid_t uuid, mach_timespec_t timeout )
     uuid_parse( string->getCStringNoCopy( ), uuid );
 
     return KERN_SUCCESS;
+}
+
+kern_return_t IOBSDGetPlatformSerialNumber( char *serial_number_str, u_int32_t len )
+{
+    OSDictionary * platform_dict;
+    IOService *platform;
+    OSString *  string;
+
+    if (len < 1) {
+	    return 0;
+    }
+    serial_number_str[0] = '\0';
+
+    platform_dict = IOService::serviceMatching( "IOPlatformExpertDevice" );
+    if (platform_dict == NULL) {
+	    return KERN_NOT_SUPPORTED;
+    }
+
+    platform = IOService::waitForService( platform_dict );
+    if (platform) {
+	    string = ( OSString * ) platform->getProperty( kIOPlatformSerialNumberKey );
+	    if ( string == 0 ) {
+		    return KERN_NOT_SUPPORTED;
+	    } else {
+		    strlcpy( serial_number_str, string->getCStringNoCopy( ), len );
+	    }
+    }
+    
+    return KERN_SUCCESS;
+}
+
+dev_t IOBSDGetMediaWithUUID( const char *uuid_cstring, char *bsd_name, int bsd_name_len, int timeout)
+{
+    dev_t dev = 0;
+    OSDictionary *dictionary;
+    OSString *uuid_string;
+
+    if (bsd_name_len < 1) {
+	return 0;
+    }
+    bsd_name[0] = '\0';
+    
+    dictionary = IOService::serviceMatching( "IOMedia" );
+    if( dictionary ) {
+	uuid_string = OSString::withCString( uuid_cstring );
+	if( uuid_string ) {
+	    IOService *service;
+	    mach_timespec_t tv = { timeout, 0 };    // wait up to "timeout" seconds for the device
+
+	    dictionary->setObject( "UUID", uuid_string );
+	    dictionary->retain();
+	    service = IOService::waitForService( dictionary, &tv );
+	    if( service ) {
+		OSNumber *dev_major = (OSNumber *) service->getProperty( kIOBSDMajorKey );
+		OSNumber *dev_minor = (OSNumber *) service->getProperty( kIOBSDMinorKey );
+		OSString *iostr = (OSString *) service->getProperty( kIOBSDNameKey );
+
+		if( iostr)
+		    strlcpy( bsd_name, iostr->getCStringNoCopy(), bsd_name_len );
+
+		if ( dev_major && dev_minor )
+		    dev = makedev( dev_major->unsigned32BitValue(), dev_minor->unsigned32BitValue() );
+	    }
+	    uuid_string->release();
+	}
+	dictionary->release();
+    }
+
+    return dev;
+}
+
+
+void IOBSDIterateMediaWithContent(const char *content_uuid_cstring, int (*func)(const char *bsd_dev_name, const char *uuid_str, void *arg), void *arg)
+{
+    OSDictionary *dictionary;
+    OSString *content_uuid_string;
+
+    dictionary = IOService::serviceMatching( "IOMedia" );
+    if( dictionary ) {
+	content_uuid_string = OSString::withCString( content_uuid_cstring );
+	if( content_uuid_string ) {
+	    IOService *service;
+	    OSIterator *iter;
+
+	    dictionary->setObject( "Content", content_uuid_string );
+	    dictionary->retain();
+
+	    iter = IOService::getMatchingServices(dictionary);
+	    while (iter && (service = (IOService *)iter->getNextObject())) {
+		    if( service ) {
+			    OSString *iostr = (OSString *) service->getProperty( kIOBSDNameKey );
+			    OSString *uuidstr = (OSString *) service->getProperty( "UUID" );
+			    const char *uuid;
+
+			    if( iostr) {
+				    if (uuidstr) {
+					    uuid = uuidstr->getCStringNoCopy();
+				    } else {
+					    uuid = "00000000-0000-0000-0000-000000000000";
+				    }
+
+				    // call the callback
+				    if (func && func(iostr->getCStringNoCopy(), uuid, arg) == 0) {
+					    break;
+				    }
+			    }
+		    }
+	    }
+	    if (iter)
+		    iter->release();
+	    
+	    content_uuid_string->release();
+	}
+	dictionary->release();
+    }
 }
 
 

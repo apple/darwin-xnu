@@ -56,4 +56,4 @@ multicast_list_program(struct multicast_list * mc_list,
 int
 multicast_list_remove(struct multicast_list * mc_list);
 
-#endif _NET_MULTICAST_LIST_H
+#endif /* _NET_MULTICAST_LIST_H */

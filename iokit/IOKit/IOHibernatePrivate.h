@@ -73,11 +73,11 @@ struct IOHibernateImageHeader
 
     uint32_t    runtimePages;
     uint32_t    runtimePageCount;
-
-    uint8_t	reserved2[16];
+    uint64_t    runtimeVirtualPages __attribute__ ((packed));
+    uint8_t     reserved2[8];
     
-    uint64_t	encryptStart;
-    uint64_t	machineSignature;
+    uint64_t	encryptStart __attribute__ ((packed));
+    uint64_t	machineSignature __attribute__ ((packed));
 
     uint32_t    previewSize;
     uint32_t    previewPageListSize;
@@ -90,13 +90,19 @@ struct IOHibernateImageHeader
     uint32_t    memoryMapSize;
     uint32_t    systemTableOffset;
 
-    uint32_t	reserved[77];		// make sizeof == 512
+    uint32_t	debugFlags;
+
+    uint32_t	reserved[76];		// make sizeof == 512
 
     uint32_t		fileExtentMapSize;
     IOPolledFileExtent	fileExtentMap[2];
 };
 typedef struct IOHibernateImageHeader IOHibernateImageHeader;
 
+enum
+{
+    kIOHibernateDebugRestoreLogs = 0x00000001
+};
 
 struct hibernate_bitmap_t
 {
@@ -241,6 +247,11 @@ kern_return_t
 hibernate_processor_setup(IOHibernateImageHeader * header);
 
 void
+hibernate_gobble_pages(uint32_t gobble_count, uint32_t free_page_time);
+void
+hibernate_free_gobble_pages(void);
+
+void
 hibernate_vm_lock(void);
 void
 hibernate_vm_unlock(void);
@@ -303,6 +314,7 @@ hibernate_newruntime_map(void * map, vm_size_t map_size,
 
 extern uint32_t    gIOHibernateState;
 extern uint32_t    gIOHibernateMode;
+extern uint32_t    gIOHibernateDebugFlags;
 extern uint32_t    gIOHibernateFreeTime;	// max time to spend freeing pages (ms)
 extern uint8_t     gIOHibernateRestoreStack[];
 extern uint8_t     gIOHibernateRestoreStackEnd[];

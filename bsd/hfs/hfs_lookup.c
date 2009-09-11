@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -362,7 +362,7 @@ found:
 			}
 			goto exit;
 		}
-		
+
 		/* 
 		 * Save the origin info for file and directory hardlinks.  Directory hardlinks 
 		 * need the origin for '..' lookups, and file hardlinks need it to ensure that 
@@ -370,7 +370,7 @@ found:
 		 * We want to restrict saving the cache entries to LOOKUP namei operations, since
 		 * we're really doing this to protect getattr.
 		 */
-		if ((cnp->cn_nameiop == LOOKUP) && (VTOC(tvp)->c_flag & C_HARDLINK)) {
+		if ((nameiop == LOOKUP) && (VTOC(tvp)->c_flag & C_HARDLINK)) {
 			hfs_savelinkorigin(VTOC(tvp), VTOC(dvp)->c_fileid);
 		}
 		*cnode_locked = 1;
@@ -379,7 +379,7 @@ found:
 		if (rsrc_warn) {
 			if ((VTOC(tvp)->c_flag & C_WARNED_RSRC) == 0) {
 				VTOC(tvp)->c_flag |= C_WARNED_RSRC;
-				printf("%.200s: file access by '/rsrc' was deprecated in 10.4\n",
+				printf("hfs: %.200s: file access by '/rsrc' was deprecated in 10.4\n",
 				       cnp->cn_nameptr);
 			}
 		}
@@ -482,19 +482,23 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 			desc.cd_cnid = 0;
 			desc.cd_flags = S_ISDIR(cp->c_mode) ? CD_ISDIR : 0;
 	
+
 			lockflags = hfs_systemfile_lock(VTOHFS(dvp), SFL_CATALOG, HFS_SHARED_LOCK);		
 			if (cat_lookup(VTOHFS(vp), &desc, 0, &desc, NULL, NULL, NULL) == 0)
 				replace_desc(cp, &desc);
 			hfs_systemfile_unlock(VTOHFS(dvp), lockflags);
+
+			/* 
+			 * Save the origin info for file and directory hardlinks.  Directory hardlinks 
+			 * need the origin for '..' lookups, and file hardlinks need it to ensure that 
+			 * competing lookups do not cause us to vend different hardlinks than the ones requested.
+			 * We want to restrict saving the cache entries to LOOKUP namei operations, since
+			 * we're really doing this to protect getattr.
+			 */
+			if (cnp->cn_nameiop == LOOKUP) {
+				hfs_savelinkorigin(cp, dcp->c_fileid);
+			}
 		}
-
-		/* Save the lookup result in the origin list for future lookups, but
-		 * only if it was through a LOOKUP nameiop
-		 */
-		if (cnp->cn_nameiop == LOOKUP) {
-			hfs_savelinkorigin(cp, dcp->c_fileid);
-		}	   
-
 		hfs_unlock(cp);
 	}
 #if NAMEDRSRCFORK
@@ -519,7 +523,7 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 		hfs_lock(cp, HFS_FORCE_LOCK);
 		if ((cp->c_flag & C_WARNED_RSRC) == 0) {
 			cp->c_flag |= C_WARNED_RSRC;
-			printf("%.200s: file access by '/rsrc' was deprecated in 10.4\n", cnp->cn_nameptr);
+			printf("hfs: %.200s: file access by '/rsrc' was deprecated in 10.4\n", cnp->cn_nameptr);
 		}
 		hfs_unlock(cp);
 	}

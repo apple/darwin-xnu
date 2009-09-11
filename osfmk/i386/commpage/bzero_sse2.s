@@ -41,10 +41,9 @@
 #define kShort		80		// too short to bother with SSE (must be >=80)
 #define	kVeryLong	(1024*1024)
 
+// void	bzero(void *b, size_t len);
 
-        .text
-        .align  5, 0x90
-Lbzero_sse2:                            // void	bzero(void *b, size_t len);
+COMMPAGE_FUNCTION_START(bzero_sse2, 32, 5)
 	pushl	%ebp			// set up a frame for backtraces
 	movl	%esp,%ebp
         pushl   %edi
@@ -160,5 +159,4 @@ LVeryLong:
         sfence                          // required by non-temporal stores
 	jmp	Lshort
 
-
-	COMMPAGE_DESCRIPTOR(bzero_sse2,_COMM_PAGE_BZERO,kHasSSE2,kHasSSE4_2)
+COMMPAGE_DESCRIPTOR(bzero_sse2,_COMM_PAGE_BZERO,kHasSSE2,kHasSSE4_2)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -45,7 +45,7 @@ __BEGIN_DECLS
 
 /*!
 	@typedef iff_input_func
-	
+
 	@discussion iff_input_func is used to filter incoming packets. The
 		interface is only valid for the duration of the filter call. If
 		you need to keep a reference to the interface, be sure to call
@@ -55,7 +55,7 @@ __BEGIN_DECLS
 		passed in separately from the rest of the packet. The outbound
 		data filters is passed the whole packet including the frame
 		header.
-		
+
 		The frame header usually preceeds the data in the mbuf. This
 		ensures that the frame header will be a valid pointer as long as
 		the mbuf is not freed. If you need to change the frame header to
@@ -74,16 +74,19 @@ __BEGIN_DECLS
 		frame header length can be found by inspecting the interface's
 		frame header length (ifnet_hdrlen).
 	@result Return:
-		0 - The caller will continue with normal processing of the packet.
-		EJUSTRETURN - The caller will stop processing the packet, the packet will not be freed.
-		Anything Else - The caller will free the packet and stop processing.
+		0 - The caller will continue with normal processing of the
+			packet.
+		EJUSTRETURN - The caller will stop processing the packet,
+			the packet will not be freed.
+		Anything Else - The caller will free the packet and stop
+			processing.
 */
-typedef	errno_t (*iff_input_func)(void* cookie, ifnet_t interface, protocol_family_t protocol,
-								  mbuf_t *data, char **frame_ptr);
+typedef	errno_t (*iff_input_func)(void *cookie, ifnet_t interface,
+    protocol_family_t protocol, mbuf_t *data, char **frame_ptr);
 
 /*!
 	@typedef iff_output_func
-	
+
 	@discussion iff_output_func is used to filter fully formed outbound
 		packets. The interface is only valid for the duration of the
 		filter call. If you need to keep a reference to the interface,
@@ -94,16 +97,19 @@ typedef	errno_t (*iff_input_func)(void* cookie, ifnet_t interface, protocol_fami
 		The frame header is already included. The filter function may
 		modify the packet or return a different mbuf chain.
 	@result Return:
-		0 - The caller will continue with normal processing of the packet.
-		EJUSTRETURN - The caller will stop processing the packet, the packet will not be freed.
-		Anything Else - The caller will free the packet and stop processing.
+		0 - The caller will continue with normal processing of the
+			packet.
+		EJUSTRETURN - The caller will stop processing the packet,
+			the packet will not be freed.
+		Anything Else - The caller will free the packet and stop
+			processing.
 */
-typedef	errno_t (*iff_output_func)(void* cookie, ifnet_t interface, protocol_family_t protocol,
-								   mbuf_t *data);
+typedef	errno_t (*iff_output_func)(void *cookie, ifnet_t interface,
+    protocol_family_t protocol, mbuf_t *data);
 
 /*!
 	@typedef iff_event_func
-	
+
 	@discussion iff_event_func is used to filter interface specific
 		events. The interface is only valid for the duration of the
 		filter call. If you need to keep a reference to the interface,
@@ -112,17 +118,17 @@ typedef	errno_t (*iff_output_func)(void* cookie, ifnet_t interface, protocol_fam
 	@param interface The interface the packet is being transmitted on.
 	@param event_msg The kernel event, may not be changed.
 */
-typedef	void (*iff_event_func)(void* cookie, ifnet_t interface, protocol_family_t protocol,
-							   const struct kev_msg *event_msg);
+typedef	void (*iff_event_func)(void *cookie, ifnet_t interface,
+    protocol_family_t protocol, const struct kev_msg *event_msg);
 
 /*!
 	@typedef iff_ioctl_func
-	
+
 	@discussion iff_ioctl_func is used to filter ioctls sent to an
 		interface. The interface is only valid for the duration of the
 		filter call. If you need to keep a reference to the interface,
 		be sure to call ifnet_reference and ifnet_release.
-		
+
 		All undefined ioctls are reserved for future use by Apple. If
 		you need to communicate with your kext using an ioctl, please
 		use SIOCSIFKPI and SIOCGIFKPI.
@@ -132,16 +138,19 @@ typedef	void (*iff_event_func)(void* cookie, ifnet_t interface, protocol_family_
 	@param ioctl_arg A pointer to the ioctl argument.
 	@result Return:
 		0 - This filter function handled the ioctl.
-		EOPNOTSUPP - This filter function does not understand/did not handle this ioctl.
-		EJUSTRETURN - This filter function handled the ioctl, processing should stop.
-		Anything Else - Processing will stop, the error will be returned.
+		EOPNOTSUPP - This filter function does not understand/did not
+			handle this ioctl.
+		EJUSTRETURN - This filter function handled the ioctl,
+			processing should stop.
+		Anything Else - Processing will stop, the error will be
+			returned.
 */
-typedef	errno_t (*iff_ioctl_func)(void* cookie, ifnet_t interface, protocol_family_t protocol,
-								  u_long ioctl_cmd, void* ioctl_arg);
+typedef	errno_t (*iff_ioctl_func)(void *cookie, ifnet_t interface,
+    protocol_family_t protocol, unsigned long ioctl_cmd, void *ioctl_arg);
 
 /*!
 	@typedef iff_detached_func
-	
+
 	@discussion iff_detached_func is called to notify the filter that it
 		has been detached from an interface. This is the last call to
 		the filter that will be made. A filter may be detached if the
@@ -152,7 +161,7 @@ typedef	errno_t (*iff_ioctl_func)(void* cookie, ifnet_t interface, protocol_fami
 	@param cookie The cookie specified when this filter was attached.
 	@param interface The interface this filter was detached from.
 */
-typedef	void (*iff_detached_func)(void* cookie, ifnet_t interface);
+typedef	void (*iff_detached_func)(void *cookie, ifnet_t interface);
 
 /*!
 	@struct iff_filter
@@ -177,8 +186,8 @@ typedef	void (*iff_detached_func)(void* cookie, ifnet_t interface);
 */
 
 struct iff_filter {
-	void*				iff_cookie;
-	const char*			iff_name;
+	void			*iff_cookie;
+	const char		*iff_name;
 	protocol_family_t	iff_protocol;
 	iff_input_func		iff_input;
 	iff_output_func		iff_output;
@@ -195,15 +204,15 @@ struct iff_filter {
 	@param filter_ref A reference to the filter used to detach.
 	@result 0 on success otherwise the errno error.
  */
-errno_t iflt_attach(ifnet_t interface, const struct iff_filter* filter,
-				    interface_filter_t *filter_ref);
+extern errno_t iflt_attach(ifnet_t interface, const struct iff_filter *filter,
+    interface_filter_t *filter_ref);
 
 /*!
 	@function iflt_detach
 	@discussion Detaches an interface filter from an interface.
 	@param filter_ref The reference to the filter from iflt_attach.
  */
-void iflt_detach(interface_filter_t filter_ref);
+extern void iflt_detach(interface_filter_t filter_ref);
 
 __END_DECLS
-#endif
+#endif /* __KPI_INTERFACEFILTER__ */

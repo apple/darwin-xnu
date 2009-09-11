@@ -31,6 +31,7 @@
  */
 #include <sys/types.h>
 #include <mach/vm_param.h>
+#include <machine/machine_routines.h>
 #include <pexpert/protos.h>
 #include <pexpert/pexpert.h>
 #include <pexpert/boot.h>
@@ -74,6 +75,7 @@ int PE_initialize_console( PE_Video * info, int op )
 
         case kPEEnableScreen:
             initialize_screen(info, op);
+	    if (info) PE_state.video = *info;
             kprintf("kPEEnableScreen %d\n", last_console);
             if( last_console != -1)
                 switch_to_old_console( last_console);
@@ -101,7 +103,7 @@ void PE_init_iokit(void)
     boolean_t norootInitialized = FALSE;
     DTEntry             entry;
     unsigned int	size;
-    void **		map;
+    uint32_t		*map;
 	boot_progress_element *bootPict;
 
     PE_init_kprintf(TRUE);
@@ -115,12 +117,14 @@ void PE_init_iokit(void)
 
     if( kSuccess == DTLookupEntry(NULL, "/chosen/memory-map", &entry)) {
 	if( kSuccess == DTGetProperty(entry, "BootCLUT", (void **) &map, &size)) {
-	    bcopy( map[0], appleClut8, sizeof(appleClut8) );
-            bootClutInitialized = TRUE;
-        }
+	    if (sizeof(appleClut8) <= map[1]) {
+	        bcopy( (void *)ml_static_ptovirt(map[0]), appleClut8, sizeof(appleClut8) );
+		bootClutInitialized = TRUE;
+	    }
+	}
 
 	if( kSuccess == DTGetProperty(entry, "Pict-FailedBoot", (void **) &map, &size)) {
-	    bootPict = (boot_progress_element *) map[0];
+	    bootPict = (boot_progress_element *) ml_static_ptovirt(map[0]);
 	    default_noroot.width  = bootPict->width;
 	    default_noroot.height = bootPict->height;
 	    default_noroot.dx     = 0;
@@ -165,8 +169,8 @@ void PE_init_platform(boolean_t vm_initialized, void * _args)
 
         // New EFI-style
         PE_state.bootArgs           = _args;
-        PE_state.deviceTreeHead	    = (void *) args->deviceTreeP;
-        PE_state.video.v_baseAddr   = args->Video.v_baseAddr;
+        PE_state.deviceTreeHead	    = (void *) ml_static_ptovirt(args->deviceTreeP);
+        PE_state.video.v_baseAddr   = args->Video.v_baseAddr; // remains physical address
         PE_state.video.v_rowBytes   = args->Video.v_rowBytes;
         PE_state.video.v_width	    = args->Video.v_width;
         PE_state.video.v_height	    = args->Video.v_height;

@@ -103,7 +103,7 @@ static u_int32_t quotamagic[MAXQUOTAS] = INITQMAGICS;
  * Code pertaining to management of the in-core dquot data structures.
  */
 #define DQHASH(dqvp, id) \
-	(&dqhashtbl[((((int)(dqvp)) >> 8) + id) & dqhash])
+	(&dqhashtbl[((((intptr_t)(dqvp)) >> 8) + id) & dqhash])
 LIST_HEAD(dqhash, dquot) *dqhashtbl;
 u_long dqhash;
 
@@ -120,7 +120,7 @@ TAILQ_HEAD(dqfreelist, dquot) dqfreelist;
 TAILQ_HEAD(dqdirtylist, dquot) dqdirtylist;
 
 
-static int  dqlookup(struct quotafile *, u_long, struct	dqblk *, u_int32_t *);
+static int  dqlookup(struct quotafile *, u_int32_t, struct	dqblk *, u_int32_t *);
 static int  dqsync_locked(struct dquot *dq);
 
 static void qf_lock(struct quotafile *);
@@ -494,7 +494,7 @@ dqfileclose(struct quotafile *qfp, __unused int type)
  * reading the information from the file if necessary.
  */
 int
-dqget(u_long id, struct quotafile *qfp, int type, struct dquot **dqp)
+dqget(u_int32_t id, struct quotafile *qfp, int type, struct dquot **dqp)
 {
 	struct dquot *dq;
 	struct dquot *ndq = NULL;
@@ -784,13 +784,13 @@ relookup:
  * one is inserted.  The actual hash table index is returned.
  */
 static int
-dqlookup(struct quotafile *qfp, u_long id, struct dqblk *dqb, uint32_t *index)
+dqlookup(struct quotafile *qfp, u_int32_t id, struct dqblk *dqb, uint32_t *index)
 {
 	struct vnode *dqvp;
 	struct vfs_context context;
 	uio_t auio;
 	int i, skip, last;
-	u_long mask;
+	u_int32_t mask;
 	int error = 0;
 	char uio_buf[ UIO_SIZEOF(1) ];
 
@@ -814,11 +814,11 @@ dqlookup(struct quotafile *qfp, u_long id, struct dqblk *dqb, uint32_t *index)
 		uio_addiov(auio, CAST_USER_ADDR_T(dqb), sizeof (struct dqblk));
 		error = VNOP_READ(dqvp, auio, 0, &context);
 		if (error) {
-			printf("dqlookup: error %d looking up id %lu at index %d\n", error, id, i);
+			printf("dqlookup: error %d looking up id %u at index %d\n", error, id, i);
 			break;
 		} else if (uio_resid(auio)) {
 			error = EIO;
-			printf("dqlookup: error looking up id %lu at index %d\n", id, i);
+			printf("dqlookup: error looking up id %u at index %d\n", id, i);
 			break;
 		}
 		/*

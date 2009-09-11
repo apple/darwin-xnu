@@ -57,6 +57,12 @@ typedef int	vm_purgable_t;
  */
 #define VM_PURGABLE_SET_STATE	((vm_purgable_t) 0)	/* set state of purgeable object */
 #define VM_PURGABLE_GET_STATE	((vm_purgable_t) 1)	/* get state of purgeable object */
+#define VM_PURGABLE_PURGE_ALL	((vm_purgable_t) 2)	/* purge all volatile objects now */
+
+#define VM_PURGABLE_DEBUG_SHIFT	12
+#define VM_PURGABLE_DEBUG_MASK	(0x3 << VM_PURGABLE_DEBUG_SHIFT)
+#define VM_PURGABLE_DEBUG_EMPTY	(0x1 << VM_PURGABLE_DEBUG_SHIFT)
+#define VM_PURGABLE_DEBUG_FAULT	(0x2 << VM_PURGABLE_DEBUG_SHIFT)
 
 /*
  * Volatile memory ordering groups (group zero objects are purged before group 1, etc...
@@ -119,4 +125,10 @@ typedef int	vm_purgable_t;
 #define VM_PURGABLE_EMPTY		2		/* purgeable object is volatile and empty */
 #define VM_PURGABLE_DENY		3		/* (mark) object not purgeable */
 
+#define VM_PURGABLE_ALL_MASKS	(VM_PURGABLE_STATE_MASK | \
+				 VM_VOLATILE_ORDER_MASK | \
+				 VM_PURGABLE_ORDERING_MASK | \
+				 VM_PURGABLE_BEHAVIOR_MASK | \
+				 VM_VOLATILE_GROUP_MASK | \
+				 VM_PURGABLE_DEBUG_MASK)
 #endif	/* _MACH_VM_PURGABLE_H_ */

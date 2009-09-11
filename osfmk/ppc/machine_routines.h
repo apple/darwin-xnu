@@ -37,6 +37,11 @@
 #include <kern/kern_types.h>
 #include <pexpert/pexpert.h>
 
+#include <sys/cdefs.h>
+#include <sys/appleapiopts.h>
+
+__BEGIN_DECLS
+
 /* Get Interrupts Enabled */
 extern boolean_t	ml_get_interrupts_enabled(
 						void);
@@ -216,6 +221,9 @@ extern void				bzero_phys_nc(
 							addr64_t			phys_address,
 							uint32_t			length);
 
+/* Bytes available on current stack */
+vm_offset_t ml_stack_remaining(void);
+
 #endif /* KERNEL_PRIVATE */
 
 #ifdef	XNU_KERNEL_PRIVATE
@@ -323,5 +331,7 @@ extern uint32_t 		ml_hdec_ratio(void);
 extern int boffSettingsInit;
 
 #endif /* KERNEL_PRIVATE */
+
+__END_DECLS
 
 #endif /* _PPC_MACHINE_ROUTINES_H_ */

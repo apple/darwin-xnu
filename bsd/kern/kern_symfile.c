@@ -79,7 +79,7 @@ struct kern_direct_file_io_ref_t
 
 static int file_ioctl(void * p1, void * p2, int theIoctl, caddr_t result)
 {
-    dev_t device = (dev_t) p1;
+    dev_t device = *(dev_t*) p1;
 
     return ((*bdevsw[major(device)].d_ioctl)
 		    (device, theIoctl, result, S_IFBLK, p2));
@@ -149,7 +149,7 @@ kern_open_file_for_direct_io(const char * name,
 	    goto out;
 
         device = va.va_fsid;
-        p1 = (void *) device;
+        p1 = &device;
         p2 = p;
         do_ioctl = &file_ioctl;
     }
@@ -279,7 +279,7 @@ kern_write_file(struct kern_direct_file_io_ref_t * ref, off_t offset, caddr_t ad
 {
     return (vn_rdwr(UIO_WRITE, ref->vp,
 			addr, len, offset,
-			UIO_SYSSPACE32, IO_SYNC|IO_NODELOCKED|IO_UNIT, 
+			UIO_SYSSPACE, IO_SYNC|IO_NODELOCKED|IO_UNIT, 
                         vfs_context_ucred(ref->ctx), (int *) 0,
 			vfs_context_proc(ref->ctx)));
 }

@@ -59,6 +59,17 @@
 #define	POSIX_SPAWN_SETEXEC		0x0040
 #define	POSIX_SPAWN_START_SUSPENDED	0x0080
 
+/*
+ * Possible values to be set for the process control actions on resource starvation.
+ * POSIX_SPAWN_PCONTROL_THROTTLE indicates that the process is to be throttled on starvation.
+ * POSIX_SPAWN_PCONTROL_SUSPEND indicates that the process is to be suspended on starvation.
+ * POSIX_SPAWN_PCONTROL_KILL indicates that the process is to be terminated  on starvation.
+ */
+#define POSIX_SPAWN_PCONTROL_NONE	0x0000
+#define POSIX_SPAWN_PCONTROL_THROTTLE	0x0001
+#define POSIX_SPAWN_PCONTROL_SUSPEND	0x0002
+#define POSIX_SPAWN_PCONTROL_KILL	0x0003
+
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 #endif	/* _SYS_SPAWN_H_ */

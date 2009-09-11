@@ -282,25 +282,37 @@ __END_DECLS
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_STRING|access, \
 		arg, len, sysctl_handle_string, "A", descr)
 
+#define SYSCTL_COMPAT_INT(parent, nbr, name, access, ptr, val, descr) \
+	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
+               ptr, val, sysctl_handle_int, "I", descr)
+
+#define SYSCTL_COMPAT_UINT(parent, nbr, name, access, ptr, val, descr) \
+	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
+		ptr, val, sysctl_handle_int, "IU", descr)
+
 /* Oid for an int.  If ptr is NULL, val is returned. */
 #define SYSCTL_INT(parent, nbr, name, access, ptr, val, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
-		ptr, val, sysctl_handle_int, "I", descr)
+               ptr, val, sysctl_handle_int, "I", descr); \
+	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(int)) ? 0 : -1];
 
 /* Oid for an unsigned int.  If ptr is NULL, val is returned. */
 #define SYSCTL_UINT(parent, nbr, name, access, ptr, val, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
-		ptr, val, sysctl_handle_int, "IU", descr)
+		ptr, val, sysctl_handle_int, "IU", descr); \
+	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(unsigned int)) ? 0 : -1];
 
 /* Oid for a long.  The pointer must be non NULL. */
 #define SYSCTL_LONG(parent, nbr, name, access, ptr, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
-		ptr, 0, sysctl_handle_long, "L", descr)
+		ptr, 0, sysctl_handle_long, "L", descr); \
+	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(long)) ? 0 : -1];
 
 /* Oid for a quad.  The pointer must be non NULL. */
 #define SYSCTL_QUAD(parent, nbr, name, access, ptr, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_QUAD|access, \
-		ptr, 0, sysctl_handle_quad, "Q", descr)
+		ptr, 0, sysctl_handle_quad, "Q", descr); \
+	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(long long)) ? 0 : -1];
 
 /* Oid for an opaque object.  Specified by a pointer and a length. */
 #define SYSCTL_OPAQUE(parent, nbr, name, access, ptr, len, fmt, descr) \
@@ -429,7 +441,7 @@ SYSCTL_DECL(_user);
 #define	KERN_SUGID_COREDUMP	52	/* int: whether to dump SUGID cores */
 #define	KERN_PROCDELAYTERM	53	/* int: set/reset current proc for delayed termination during shutdown */
 #define KERN_SHREG_PRIVATIZABLE	54	/* int: can shared regions be privatized ? */
-#define	KERN_PROC_LOW_PRI_IO	55	/* int: set/reset current proc for low priority I/O */
+                             /* 55 was KERN_PROC_LOW_PRI_IO... now deprecated */
 #define	KERN_LOW_PRI_WINDOW	56	/* int: set/reset throttle window - milliseconds */
 #define	KERN_LOW_PRI_DELAY	57	/* int: set/reset throttle delay - milliseconds */
 #define	KERN_POSIX		58	/* node: posix tunables */
@@ -445,7 +457,8 @@ SYSCTL_DECL(_user);
 #define KERN_RAGEVNODE		68
 #define KERN_TTY		69	/* node: tty settings */
 #define KERN_CHECKOPENEVT       70      /* spi: check the VOPENEVT flag on vnodes at open time */
-#define	KERN_MAXID		71	/* number of valid kern ids */
+#define	KERN_THREADNAME		71	/* set/get thread name */
+#define	KERN_MAXID		72	/* number of valid kern ids */
 /*
  * Don't add any more sysctls like this.  Instead, use the SYSCTL_*() macros
  * and OID_AUTO. This will have the added benefit of not having to recompile
@@ -573,7 +586,8 @@ SYSCTL_DECL(_user);
 	{ "lctx", CTLTYPE_NODE }, \
 	{ "rage_vnode", CTLTYPE_INT }, \
 	{ "tty", CTLTYPE_NODE },	\
-	{ "check_openevt", CTLTYPE_INT } \
+	{ "check_openevt", CTLTYPE_INT }, \
+	{ "thread_name", CTLTYPE_STRING } \
 }
 
 /*
@@ -601,10 +615,11 @@ SYSCTL_DECL(_user);
 #define	KERN_LCTX_ALL		0	/* everything */
 #define	KERN_LCTX_LCID		1	/* by login context id */
 
+
+#if defined(XNU_KERNEL_PRIVATE) || !defined(KERNEL) 
 /* 
  * KERN_PROC subtype ops return arrays of augmented proc structures:
  */
-#ifdef __APPLE_API_UNSTABLE
 
 struct _pcred {
 	char	pc_lock[72];		/* opaque content */
@@ -662,6 +677,8 @@ struct kinfo_lctx {
 	int	mc;	/* Member Count */
 };
 
+#endif /* defined(XNU_KERNEL_PRIVATE) || !defined(KERNEL) */
+
 #ifdef BSD_KERNEL_PRIVATE
 #include <sys/proc_internal.h>
 
@@ -670,26 +687,64 @@ struct kinfo_lctx {
  * WARNING - keep in sync with _pcred
  */
 
-struct user_pcred {
+struct user32_pcred {
 	char	pc_lock[72];		/* opaque content */
-	user_addr_t	pc_ucred;	/* Current credentials. */
+	user32_addr_t	pc_ucred;	/* Current credentials. */
 	uid_t	p_ruid;			/* Real user id. */
 	uid_t	p_svuid;		/* Saved effective user id. */
 	gid_t	p_rgid;			/* Real group id. */
 	gid_t	p_svgid;		/* Saved effective group id. */
-	int	p_refcnt __attribute((aligned(8)));		/* Number of references. */
+	int	p_refcnt;		/* Number of references. */
+};
+struct user64_pcred {
+	char	pc_lock[72];		/* opaque content */
+	user64_addr_t	pc_ucred;	/* Current credentials. */
+	uid_t	p_ruid;			/* Real user id. */
+	uid_t	p_svuid;		/* Saved effective user id. */
+	gid_t	p_rgid;			/* Real group id. */
+	gid_t	p_svgid;		/* Saved effective group id. */
+	int	p_refcnt;		/* Number of references. */
 };
 
 /* LP64 version of kinfo_proc.  all pointers 
  * grow when we're dealing with a 64-bit process.
  * WARNING - keep in sync with kinfo_proc
  */
-struct user_kinfo_proc {
-	struct	user_extern_proc kp_proc;	/* proc structure */
-	struct	user_eproc {
+struct user32_kinfo_proc {
+	struct	user32_extern_proc kp_proc;	/* proc structure */
+	struct	user32_eproc {
+		user32_addr_t e_paddr;		/* address of proc */
+		user32_addr_t e_sess;			/* session pointer */
+		struct	user32_pcred e_pcred;		/* process credentials */
+		struct	_ucred e_ucred;		/* current credentials */
+		struct	user32_vmspace e_vm; /* address space */
+		pid_t	e_ppid;			/* parent process id */
+		pid_t	e_pgid;			/* process group id */
+		short	e_jobc;			/* job control counter */
+		dev_t	e_tdev;			/* controlling tty dev */
+		pid_t	e_tpgid;		/* tty process group id */
+		user32_addr_t	e_tsess;	/* tty session pointer */
+		char	e_wmesg[WMESGLEN+1];	/* wchan message */
+		segsz_t e_xsize;		/* text size */
+		short	e_xrssize;		/* text rss */
+		short	e_xccount;		/* text references */
+		short	e_xswrss;
+		int32_t	e_flag;
+		char	e_login[COMAPT_MAXLOGNAME];	/* short setlogin() name */
+#if CONFIG_LCTX
+		pid_t	e_lcid;
+		int32_t	e_spare[3];
+#else
+		int32_t	e_spare[4];
+#endif
+	} kp_eproc;
+};
+struct user64_kinfo_proc {
+	struct	user64_extern_proc kp_proc;	/* proc structure */
+	struct	user64_eproc {
 		user_addr_t e_paddr;		/* address of proc */
 		user_addr_t e_sess;			/* session pointer */
-		struct	user_pcred e_pcred;		/* process credentials */
+		struct	user64_pcred e_pcred;		/* process credentials */
 		struct	_ucred e_ucred;		/* current credentials */
 		struct	 user_vmspace e_vm; /* address space */
 		pid_t	e_ppid;			/* parent process id */
@@ -697,7 +752,7 @@ struct user_kinfo_proc {
 		short	e_jobc;			/* job control counter */
 		dev_t	e_tdev;			/* controlling tty dev */
 		pid_t	e_tpgid;		/* tty process group id */
-		user_addr_t	e_tsess __attribute((aligned(8)));	/* tty session pointer */
+		user64_addr_t	e_tsess __attribute((aligned(8)));	/* tty session pointer */
 		char	e_wmesg[WMESGLEN+1];	/* wchan message */
 		segsz_t e_xsize;		/* text size */
 		short	e_xrssize;		/* text rss */
@@ -715,8 +770,6 @@ struct user_kinfo_proc {
 };
 
 #endif	/* BSD_KERNEL_PRIVATE */
-
-#endif /* __APPLE_API_UNSTABLE */
 
 /*
  * KERN_IPC identifiers
@@ -774,9 +827,14 @@ extern struct loadavg averunnable;
 
 #ifdef BSD_KERNEL_PRIVATE
 
-struct user_loadavg {
+struct user32_loadavg {
 	fixpt_t	ldavg[3];
-        user_long_t	fscale __attribute((aligned(8)));
+    user32_long_t	fscale;
+};
+
+struct user64_loadavg {
+	fixpt_t	ldavg[3];
+    user64_long_t	fscale;
 };
 
 #endif	/* BSD_KERNEL_PRIVATE */
@@ -988,13 +1046,13 @@ struct user_loadavg {
 #define	CTL_DEBUG_MAXID		20
 
 
-#if (CTL_MAXID != 9) || (KERN_MAXID != 71) || (VM_MAXID != 6) || (HW_MAXID != 26) || (USER_MAXID != 21) || (CTL_DEBUG_MAXID != 20)
+#if (CTL_MAXID != 9) || (KERN_MAXID != 72) || (VM_MAXID != 6) || (HW_MAXID != 26) || (USER_MAXID != 21) || (CTL_DEBUG_MAXID != 20)
 #error Use the SYSCTL_*() macros and OID_AUTO instead!
 #endif
 
 
 #ifdef	KERNEL
-#ifdef DEBUG
+#if DEBUG
 /*
  * CTL_DEBUG variables.
  *
@@ -1031,7 +1089,7 @@ void	sysctl_mib_init(void) __attribute__((section("__TEXT, initcode")));
 int	kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old,
 		      size_t *oldlenp, void *newp, size_t newlen);
 int	userland_sysctl(struct proc *p, int *name, u_int namelen, user_addr_t old,
-			size_t *oldlenp, int inkernel, user_addr_t newp, size_t newlen,
+			size_t *oldlenp, user_addr_t newp, size_t newlen,
 			size_t *retval);
 
 /*

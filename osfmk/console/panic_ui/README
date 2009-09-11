@@ -1,8 +1,10 @@
 Creating a Panic UI image (either the default or loadable)
 
-The key steps are: create an indexed image using the MacOS X system 8 clut, saved
-in QuickTime uncompressed 256 color format. Run it through the genimage tool
-to create a C structure or a kernel loadable file.
+The key steps are: create an indexed image using the MacOS X system
+8 clut, saved in QuickTime uncompressed 256 color format. Run it
+through the genimage tool to create a C structure or a kernel
+loadable file.  This code all has byte dependencies in it, therefore
+this all must be done on a PowerPC machine.
 
 
 ===== Create the image 
@@ -33,21 +35,28 @@ Save the completed image as a TIFF (still indexed off the CLUT).
 
 ===== Convert the TIFF indexed image to QuickTime RAW
 
-Using Preview, open the TIFF image. Use File:Export to save the TIFF image in
-QuickTime image format with options of "None" for compression and "256 Colors"
-for the depth.  Quality should be "Best".  The saved results should be a .qtif
+Using the Preview application from 10.3.x, open the TIFF image. Use
+File:Export to save the TIFF image in QuickTime image format with
+options of "None" for compression and "256 Colors" for the depth.
+Quality should be "Best".  The saved results should be a .qtif
 formatted RAW image.
 
 
 ===== Generate an image for the kernel.
 
 To generate the default kernel panic image file "panic_image.c", in your working
-directory, execute:
+directory, build the program genimage:
+cc -o genimage genimage.c
+
+execute:
 
 genimage -i <your .qtif image> -n <lines> -fg <24-bit color> -bg <24-bit color> 
 ** options other than -i are optional.
 
-To genertate a kernel loadable panic image file, execute:
+To genertate a kernel loadable panic image file, build the qtif2kraw binary:
+cc -o qtif2kraw qtif2kraw.c
+
+execute:
 
 qtif2kraw -i <your .qtif image> -o <your .kraw file> -n <lines> -fg <24-bit color> -bg <24-bit color> 
 ** options other than -i and -o are optional.

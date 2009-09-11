@@ -141,7 +141,6 @@ options		CONFIG_DTRACE	#		# <config_dtrace>
 # 
 options		MACH_COUNTERS	#		# <debug>
 
-options		UPL_DEBUG	# 		# <debug>
 
 ##########################################################
 #
@@ -188,6 +187,10 @@ options		CRYPTO                  # <crypto>
 #
 options		HIBERNATION		#		# <hibernation>
 
+# CONFIG_SLEEP - include sleep power state code
+#
+options		CONFIG_SLEEP		#		# <config_sleep>
+
 #
 #  configurable kernel related resources (CONFIG_THREAD_MAX needs to stay in 
 #  sync with bsd/conf/MASTER until we fix the config system... todo XXX
@@ -227,9 +230,6 @@ options   CONFIG_EMBEDDED                       # <config_embedded>
 #
 options   CONFIG_ENFORCE_SIGNED_CODE		# <config_embedded>
 
-#  jettison_kernel_linker - jettison kernel linker after kernel init; don't wait for kextd to launch
-options   CONFIG_JETTISON_KERNEL_LINKER		# <jettison_kernel_linker>
-
 # vc_progress_white - make the progress gear white instead of black
 options	  CONFIG_VC_PROGRESS_WHITE		# <vc_progress_white>
 
@@ -241,3 +241,8 @@ options		SECURE_KERNEL		# <secure_kernel>
 # must be set in all the bsd/conf and osfmk/conf MASTER files
 #
 options		CONFIG_CODE_DECRYPTION	# <config_embedded>
+
+#
+# Context switched counters 
+#
+options		CONFIG_COUNTERS			# <config_counters>

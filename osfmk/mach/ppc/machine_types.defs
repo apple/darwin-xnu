@@ -111,6 +111,16 @@ type mach_vm_size_t = uint64_t;
 
 #endif	/* MACH_IPC_COMPAT */
 
+/*
+ * These are types used internal to Mach to implement the
+ * legacy 32-bit VM APIs published by the kernel.
+ */
+#define	VM32_SUPPORT	1
+
+type vm32_address_t = uint32_t;
+type vm32_offset_t = uint32_t;
+type vm32_size_t = uint32_t;
+
 #endif	/* _PPC_VM_TYPES_DEFS_ */
 
 /* vim: set ft=c : */

@@ -35,19 +35,21 @@
 
 #include <mach_assert.h>
 
-#if	defined(__GNUC__)
-
 #include <kern/assert.h>
 #include <kern/kern_types.h>
+#include <kern/queue.h>
 #include <kern/processor.h>
 #include <kern/pms.h>
 #include <pexpert/pexpert.h>
 #include <mach/i386/thread_status.h>
+#include <mach/i386/vm_param.h>
 #include <i386/rtclock.h>
 #include <i386/pmCPU.h>
 #include <i386/cpu_topology.h>
 
+#if CONFIG_VMX
 #include <i386/vmx/vmx_cpu.h>
+#endif
 
 /*
  * Data structures referenced (anonymously) from per-cpu data:
@@ -68,15 +70,19 @@ typedef struct rtclock_timer {
 } rtclock_timer_t;
 
 
+#if defined(__i386__)
+
 typedef struct {
 	struct i386_tss         *cdi_ktss;
 #if    MACH_KDB
 	struct i386_tss         *cdi_dbtss;
 #endif /* MACH_KDB */
-	struct fake_descriptor  *cdi_gdt;
-	struct fake_descriptor  *cdi_idt;
-	struct fake_descriptor  *cdi_ldt;
-	vm_offset_t		cdi_sstk;
+	struct __attribute__((packed)) {
+		uint16_t size;
+		struct fake_descriptor *ptr;
+	} cdi_gdt, cdi_idt;
+	struct fake_descriptor	*cdi_ldt;
+	vm_offset_t				cdi_sstk;
 } cpu_desc_index_t;
 
 typedef enum {
@@ -84,6 +90,31 @@ typedef enum {
 	TASK_MAP_64BIT,			/* 64-bit, separate address space */ 
 	TASK_MAP_64BIT_SHARED		/* 64-bit, kernel-shared addr space */
 } task_map_t;
+
+#elif defined(__x86_64__)
+
+
+typedef struct {
+	struct x86_64_tss		*cdi_ktss;
+#if    MACH_KDB
+	struct x86_64_tss		*cdi_dbtss;
+#endif /* MACH_KDB */
+	struct __attribute__((packed)) {
+		uint16_t size;
+		void *ptr;
+	} cdi_gdt, cdi_idt;
+	struct fake_descriptor	*cdi_ldt;
+	vm_offset_t				cdi_sstk;
+} cpu_desc_index_t;
+
+typedef enum {
+	TASK_MAP_32BIT,			/* 32-bit user, compatibility mode */ 
+	TASK_MAP_64BIT,			/* 64-bit user thread, shared space */ 
+} task_map_t;
+
+#else
+#error Unsupported architecture
+#endif
 
 /*
  * This structure is used on entry into the (uber-)kernel on syscall from
@@ -96,6 +127,7 @@ typedef struct {
 	uint64_t	cu_tmp;		/* temporary scratch */	
         addr64_t	cu_user_gs_base;
 } cpu_uber_t;
+
 
 /*
  * Per-cpu data.
@@ -134,15 +166,17 @@ typedef struct cpu_data
 	rtclock_timer_t		rtclock_timer;
 	boolean_t		cpu_is64bit;
 	task_map_t		cpu_task_map;
-	addr64_t		cpu_task_cr3;
-	addr64_t		cpu_active_cr3;
+	volatile addr64_t	cpu_task_cr3;
+	volatile addr64_t	cpu_active_cr3;
 	addr64_t		cpu_kernel_cr3;
 	cpu_uber_t		cpu_uber;
 	void			*cpu_chud;
 	void			*cpu_console_buf;
 	struct x86_lcpu		lcpu;
 	struct processor	*cpu_processor;
+#if NCOPY_WINDOWS > 0
 	struct cpu_pmap		*cpu_pmap;
+#endif
 	struct cpu_desc_table	*cpu_desc_tablep;
 	struct fake_descriptor	*cpu_ldtp;
 	cpu_desc_index_t	cpu_desc_index;
@@ -160,18 +194,27 @@ typedef struct cpu_data
 	boolean_t		cpu_boot_complete;
 	int			cpu_hibernate;
 
+#if NCOPY_WINDOWS > 0
 	vm_offset_t		cpu_copywindow_base;
 	uint64_t		*cpu_copywindow_pdp;
 
 	vm_offset_t		cpu_physwindow_base;
 	uint64_t		*cpu_physwindow_ptep;
 	void 			*cpu_hi_iss;
-	boolean_t		cpu_tlb_invalid;
+#endif
+
+
+
+	volatile boolean_t	cpu_tlb_invalid;
 	uint32_t		cpu_hwIntCnt[256];	/* Interrupt counts */
 	uint64_t		cpu_dr7; /* debug control register */
 	uint64_t		cpu_int_event_time;	/* intr entry/exit time */
+#if CONFIG_VMX
 	vmx_cpu_t		cpu_vmx;		/* wonderful world of virtualization */
+#endif
+#if CONFIG_MCA
 	struct mca_state	*cpu_mca_state;		/* State at MC fault */
+#endif
 	uint64_t		cpu_uber_arg_store;	/* Double mapped address
 							 * of current thread's
 							 * uu_arg array.
@@ -182,7 +225,8 @@ typedef struct cpu_data
 							   * validity flag.
 							   */
 	rtc_nanotime_t		*cpu_nanotime;		/* Nanotime info */
-							  
+	thread_t		csw_old_thread;
+	thread_t		csw_new_thread;
 } cpu_data_t;
 
 extern cpu_data_t	*cpu_data_ptr[];  
@@ -194,7 +238,7 @@ extern cpu_data_t	cpu_data_master;
 #endif /* offsetof */
 #define CPU_DATA_GET(member,type)					\
 	type ret;							\
-	__asm__ volatile ("movl %%gs:%P1,%0"				\
+	__asm__ volatile ("mov %%gs:%P1,%0"				\
 		: "=r" (ret)						\
 		: "i" (offsetof(cpu_data_t,member)));			\
 	return ret;
@@ -212,12 +256,16 @@ get_active_thread(void)
 #define current_thread_fast()		get_active_thread()
 #define current_thread()		current_thread_fast()
 
+#if defined(__i386__)
 static inline boolean_t
 get_is64bit(void)
 {
 	CPU_DATA_GET(cpu_is64bit, boolean_t)
 }
 #define cpu_mode_is64bit()		get_is64bit()
+#elif defined(__x86_64__)
+#define cpu_mode_is64bit()		TRUE
+#endif
 
 static inline int
 get_preemption_level(void)
@@ -244,6 +292,7 @@ get_cpu_phys_number(void)
 {
 	CPU_DATA_GET(cpu_phys_number,int)
 }
+
 
 static inline void
 disable_preemption(void)
@@ -310,9 +359,5 @@ cpu_datap(int cpu)
 }
 
 extern cpu_data_t *cpu_data_alloc(boolean_t is_boot_cpu);
-
-#else	/* !defined(__GNUC__) */
-
-#endif	/* defined(__GNUC__) */
 
 #endif	/* I386_CPU_DATA */

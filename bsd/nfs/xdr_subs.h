@@ -84,16 +84,16 @@
  * but we cannot count on their alignment anyway.
  */
 
-#define	fxdr_unsigned(t, v)	((t)ntohl((long)(v)))
-#define	txdr_unsigned(v)	(htonl((long)(v)))
+#define	fxdr_unsigned(t, v)	((t)ntohl((uint32_t)(v)))
+#define	txdr_unsigned(v)	(htonl((uint32_t)(v)))
 
 #define	fxdr_hyper(f, t) { \
-	((long *)(t))[_QUAD_HIGHWORD] = ntohl(((long *)(f))[0]); \
-	((long *)(t))[_QUAD_LOWWORD] = ntohl(((long *)(f))[1]); \
+	((uint32_t *)(t))[_QUAD_HIGHWORD] = ntohl(((uint32_t *)(f))[0]); \
+	((uint32_t *)(t))[_QUAD_LOWWORD] = ntohl(((uint32_t *)(f))[1]); \
 }
 #define	txdr_hyper(f, t) { \
-	((long *)(t))[0] = htonl(((long *)(f))[_QUAD_HIGHWORD]); \
-	((long *)(t))[1] = htonl(((long *)(f))[_QUAD_LOWWORD]); \
+	((uint32_t *)(t))[0] = htonl(((uint32_t *)(f))[_QUAD_HIGHWORD]); \
+	((uint32_t *)(t))[1] = htonl(((uint32_t *)(f))[_QUAD_LOWWORD]); \
 }
 
 #endif /* __APPLE_API_PRIVATE */

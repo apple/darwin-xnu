@@ -373,10 +373,9 @@ m_tag_alloc(u_int32_t id, u_int16_t type, int len, int wait)
 
 	if (len < 0)
 		return NULL;
-#ifndef __APPLE__
-	t = malloc(len + sizeof(struct m_tag), M_PACKET_TAGS, wait);
+#if CONFIG_MBUF_TAGS_MALLOC
+	t = _MALLOC(len + sizeof (struct m_tag), M_TEMP, wait);
 #else
-	/*MALLOC(t, struct m_tag *, len + sizeof(struct m_tag), M_TEMP, M_WAITOK);*/
         if (len + sizeof(struct m_tag) <= MLEN) {
 		struct mbuf *m = m_get(wait, MT_TAG);
 		if (m == NULL)
@@ -406,10 +405,9 @@ m_tag_free(struct m_tag *t)
 	    t->m_tag_type == KERNEL_TAG_TYPE_MACLABEL)
 		mac_mbuf_tag_destroy(t);
 #endif
-#ifndef __APPLE__
-	free(t, M_PACKET_TAGS);
+#if CONFIG_MBUF_TAGS_MALLOC
+	_FREE(t, M_TEMP);
 #else
-	/* FREE(t, M_TEMP); */
 	if (t == NULL)
 		return;
 	if (t->m_tag_len + sizeof(struct m_tag) <= MLEN) {
@@ -548,6 +546,9 @@ void
 m_tag_init(struct mbuf *m)
 {
 	SLIST_INIT(&m->m_pkthdr.tags);
+#if PF_PKTHDR
+	bzero(&m->m_pkthdr.pf_mtag, sizeof (m->m_pkthdr.pf_mtag));
+#endif
 }
 
 /* Get first tag in chain. */

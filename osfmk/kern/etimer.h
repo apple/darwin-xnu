@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -37,12 +37,13 @@
  *				real-time clock.
  */
 
-#ifndef _ETIMER_H_
-#define _ETIMER_H_
+#ifdef	KERNEL_PRIVATE
+
+#ifndef _KERN_ETIMER_H_
+#define _KERN_ETIMER_H_
 
 #define EndOfAllTime	0xFFFFFFFFFFFFFFFFULL
 
-/* extern void rtclock_intr(int inuser, uint64_t iaddr);  - this is currently MD */
 typedef	void (*etimer_intr_t)(int, uint64_t);
 
 extern int setTimerReq(void);
@@ -53,18 +54,6 @@ extern int setPop(uint64_t time);
 
 extern void etimer_resync_deadlines(void);
 
-#if 0 /* this is currently still MD */
-#pragma pack(push,4)
-struct rtclock_timer_t  {
-	uint64_t		deadline;
-	uint32_t
-	/*boolean_t*/	is_set:1,
-					has_expired:1,
-					:0;
-};
-#pragma pack(pop)
-typedef struct rtclock_timer_t rtclock_timer_t;
-#endif /* MD */
+#endif /* _KERN_ETIMER_H_ */
 
-
-#endif /* _ETIMER_H_ */
+#endif	/* KERNEL_PRIVATE */

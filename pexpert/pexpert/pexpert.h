@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -56,7 +56,6 @@ void PE_enter_debugger(
 void PE_init_platform(
 	boolean_t vm_initialized, 
 	void *args);
-
 
 
 
@@ -130,8 +129,16 @@ void PE_install_interrupt_handler(
 void kprintf(const char *fmt, ...) __printflike(1,2);
 #endif
 
+#if KERNEL_PRIVATE
+void _consume_kprintf_args(int, ...);
+#endif
+
 #if CONFIG_NO_KPRINTF_STRINGS
+#if KERNEL_PRIVATE
+#define kprintf(x, ...) _consume_kprintf_args( 0, ## __VA_ARGS__ )
+#else
 #define kprintf(x, ...) do {} while (0)
+#endif
 #endif
 
 void init_display_putc(unsigned char *baseaddr, int rowbytes, int height);
@@ -203,14 +210,22 @@ extern int PE_initialize_console(
 extern void PE_display_icon( unsigned int flags,
 			     const char * name );
 
+#if !CONFIG_EMBEDDED
+
+extern void
+vc_enable_progressmeter(int new_value);
+extern void
+vc_set_progressmeter(int new_value);
+extern int vc_progress_meter_enable;
+extern int vc_progress_meter_value;
+
+#endif /* !CONFIG_EMBEDDED */
+
 typedef struct PE_state {
 	boolean_t	initialized;
 	PE_Video	video;
 	void		*deviceTreeHead;
 	void		*bootArgs;
-#if defined(i386) || defined(arm)
-	void		*fakePPCBootArgs;
-#endif
 } PE_state_t;
 
 extern PE_state_t PE_state;
@@ -218,9 +233,11 @@ extern PE_state_t PE_state;
 extern char * PE_boot_args(
 	void);
 
+#if !defined(__LP64__) && !defined(__arm__)
 extern boolean_t PE_parse_boot_arg(
 	const char	*arg_string,
-	void    	*arg_ptr);
+	void    	*arg_ptr) __deprecated;
+#endif
 
 extern boolean_t PE_parse_boot_argn(
 	const char	*arg_string,

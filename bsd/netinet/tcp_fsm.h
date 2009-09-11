@@ -127,12 +127,12 @@ static u_char	tcp_outflags[TCP_NSTATES] = {
 	TH_ACK,			/* 10, TIME_WAIT */
 };	
 #endif
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
 #if KPROF
 #ifdef KERNEL_PRIVATE
 int	tcp_acounts[TCP_NSTATES][PRU_NREQ];
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 #endif
 
 #ifdef	TCPSTATES

@@ -39,6 +39,7 @@
 #error IOLib.h is for kernel use only
 #endif
 
+#include <stdarg.h>
 #include <sys/cdefs.h>
 
 #include <sys/appleapiopts.h>
@@ -107,7 +108,7 @@ void * IOMallocAligned(vm_size_t size, vm_offset_t alignment);
 void   IOFreeAligned(void * address, vm_size_t size);
 
 /*! @function IOMallocContiguous
-    @abstract Allocates wired memory in the kernel map, with an alignment restriction and physically contiguous.
+    @abstract Deprecated - use IOBufferMemoryDescriptor. Allocates wired memory in the kernel map, with an alignment restriction and physically contiguous.
     @discussion This is a utility to allocate memory in the kernel, with an alignment restriction which is specified as a byte count, and will allocate only physically contiguous memory. The request may fail if memory is fragmented, and may cause large amounts of paging activity. This function may block and so should not be called from interrupt level or while a simple lock is held.
     @param size Size of the memory requested.
     @param alignment Byte count of the alignment for the memory. For example, pass 256 to get memory allocated at an address with bits 0-7 zero.
@@ -115,15 +116,15 @@ void   IOFreeAligned(void * address, vm_size_t size);
     @result Virtual address of the allocated memory, or zero on failure. */
 
 void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
-			   IOPhysicalAddress * physicalAddress);
+			   IOPhysicalAddress * physicalAddress) __attribute__((deprecated));
 
 /*! @function IOFreeContiguous
-    @abstract Frees memory allocated with IOMallocContiguous.
+    @abstract Deprecated - use IOBufferMemoryDescriptor. Frees memory allocated with IOMallocContiguous.
     @discussion This function frees memory allocated with IOMallocContiguous, it may block and so should not be called from interrupt level or while a simple lock is held.
     @param address Virtual address of the allocated memory.
     @param size Size of the memory allocated. */
 
-void   IOFreeContiguous(void * address, vm_size_t size);
+void   IOFreeContiguous(void * address, vm_size_t size) __attribute__((deprecated));
 
 
 /*! @function IOMallocPageable
@@ -253,19 +254,19 @@ IOReturn IOFlushProcessorCache( task_t task, IOVirtualAddress address,
 #define IOThreadSelf() (current_thread())
 
 /*! @function IOCreateThread
-    @abstract Create a kernel thread.
+    @abstract Deprecated function - use kernel_thread_start(). Create a kernel thread.
     @discussion This function creates a kernel thread, and passes the caller supplied argument to the new thread.  Warning: the value returned by this function is not 100% reliable.  There is a race condition where it is possible that the new thread has already terminated before this call returns.  Under that circumstance the IOThread returned will be invalid.  In general there is little that can be done with this value except compare it against 0.  The thread itself can call IOThreadSelf() 100% reliably and that is the prefered mechanism to manipulate the IOThreads state.
     @param function A C-function pointer where the thread will begin execution.
     @param argument Caller specified data to be passed to the new thread.
     @result An IOThread identifier for the new thread, equivalent to an osfmk thread_t. */
 
-IOThread IOCreateThread(IOThreadFunc function, void *argument);
+IOThread IOCreateThread(IOThreadFunc function, void *argument) __attribute__((deprecated));
 
 /*! @function IOExitThread
-    @abstract Terminate exceution of current thread.
+    @abstract Deprecated function - use thread_terminate(). Terminate execution of current thread.
     @discussion This function destroys the currently running thread, and does not return. */
 
-void IOExitThread(void) __dead2;
+void IOExitThread(void) __attribute__((deprecated));
 
 /*! @function IOSleep
     @abstract Sleep the calling thread for a number of milliseconds.
@@ -291,11 +292,19 @@ void IOPause(unsigned nanoseconds);
 /*! @function IOLog
     @abstract Log a message to console in text mode, and /var/log/system.log.
     @discussion This function allows a driver to log diagnostic information to the screen during verbose boots, and to a log file found at /var/log/system.log. IOLog should not be called from interrupt context.
-    @param format A printf() style format string (see printf() documentation).
+    @param format A printf() style format string (see printf(3) documentation).
     @param other arguments described by the format string. */
 
 void IOLog(const char *format, ...)
 __attribute__((format(printf, 1, 2)));
+
+/*! @function IOLogv
+    @abstract Log a message to console in text mode, and /var/log/system.log.
+    @discussion This function allows a driver to log diagnostic information to the screen during verbose boots, and to a log file found at /var/log/system.log. IOLogv should not be called from interrupt context.
+    @param format A printf() style format string (see printf(3) documentation).
+    @param ap stdarg(3) style variable arguments. */
+
+void IOLogv(const char *format, va_list ap);
 
 #ifndef _FN_KPRINTF
 #define	_FN_KPRINTF
@@ -326,6 +335,11 @@ IOReturn IOFindValueForName(const char *string,
     @param reason A C-string to describe why the debugger is being entered. */
  
 void Debugger(const char * reason);
+#if __LP64__
+#define IOPanic(reason) panic("%s", reason)
+#else
+void IOPanic(const char *reason) __attribute__((deprecated));
+#endif
 
 struct OSDictionary * IOBSDNameMatching( const char * name );
 struct OSDictionary * IOOFPathMatching( const char * path, char * buf, int maxLen );
@@ -361,22 +375,24 @@ static inline IOFixed IOFixedDivide(IOFixed a, IOFixed b)
         (((value) / (multiple)) * (multiple));
 
 
-#ifdef __APPLE_API_OBSOLETE
+#if defined(__APPLE_API_OBSOLETE)
 
 /* The following API is deprecated */
+
+/* The API exported by kern/clock.h
+   should be used for high resolution timing. */
+
+void IOGetTime( mach_timespec_t * clock_time) __attribute__((deprecated));
+
+#if !defined(__LP64__)
 
 #undef eieio
 #define eieio() \
     OSSynchronizeIO()
 
-void IOPanic(const char *reason);
-
-/* The API exported by kern/clock.h
-   should be used for high resolution timing. */
-
-void IOGetTime( mach_timespec_t * clock_time);
-
 extern mach_timespec_t IOZeroTvalspec;
+
+#endif /* !defined(__LP64__) */
 
 #endif /* __APPLE_API_OBSOLETE */
 

@@ -62,6 +62,29 @@
  *	User-exported virtual memory functions.
  */
 
+/*
+ * There are three implementations of the "XXX_allocate" functionality in
+ * the kernel: mach_vm_allocate (for any task on the platform), vm_allocate
+ * (for a task with the same address space size, especially the current task),
+ * and vm32_vm_allocate (for the specific case of a 32-bit task). vm_allocate
+ * in the kernel should only be used on the kernel_task. vm32_vm_allocate only
+ * makes sense on platforms where a user task can either be 32 or 64, or the kernel
+ * task can be 32 or 64. mach_vm_allocate makes sense everywhere, and is preferred
+ * for new code.
+ *
+ * The entrypoints into the kernel are more complex. All platforms support a
+ * mach_vm_allocate-style API (subsystem 4800) which operates with the largest
+ * size types for the platform. On platforms that only support U32/K32,
+ * subsystem 4800 is all you need. On platforms that support both U32 and U64,
+ * subsystem 3800 is used disambiguate the size of parameters, and they will
+ * always be 32-bit and call into the vm32_vm_allocate APIs. On non-U32/K32 platforms,
+ * the MIG glue should never call into vm_allocate directly, because the calling
+ * task and kernel_task are unlikely to use the same size parameters
+ *
+ * New VM call implementations should be added here and to mach_vm.defs
+ * (subsystem 4800), and use mach_vm_* "wide" types.
+ */
+
 #include <debug.h>
 
 #include <vm_cpm.h>
@@ -463,6 +486,8 @@ mach_vm_read(
 	if (map == VM_MAP_NULL)
 		return(KERN_INVALID_ARGUMENT);
 
+	if ((mach_msg_type_number_t) size != size)
+		return KERN_INVALID_ARGUMENT;
 	
 	error = vm_map_copyin(map,
 			(vm_map_address_t)addr,
@@ -472,7 +497,8 @@ mach_vm_read(
 
 	if (KERN_SUCCESS == error) {
 		*data = (pointer_t) ipc_address;
-		*data_size = size;
+		*data_size = (mach_msg_type_number_t) size;
+		assert(*data_size == size);
 	}
 	return(error);
 }
@@ -501,6 +527,16 @@ vm_read(
 	if (map == VM_MAP_NULL)
 		return(KERN_INVALID_ARGUMENT);
 
+	if (size > (unsigned)(mach_msg_type_number_t) -1) {
+		/*
+		 * The kernel could handle a 64-bit "size" value, but
+		 * it could not return the size of the data in "*data_size"
+		 * without overflowing.
+		 * Let's reject this "size" as invalid.
+		 */
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	error = vm_map_copyin(map,
 			(vm_map_address_t)addr,
 			(vm_map_size_t)size,
@@ -509,7 +545,8 @@ vm_read(
 
 	if (KERN_SUCCESS == error) {
 		*data = (pointer_t) ipc_address;
-		*data_size = size;
+		*data_size = (mach_msg_type_number_t) size;
+		assert(*data_size == size);
 	}
 	return(error);
 }
@@ -889,7 +926,7 @@ vm_map_64(
 	kr = mach_vm_map(target_map, &map_addr, map_size, map_mask, flags,
 			 port, offset, copy, 
 			 cur_protection, max_protection, inheritance);
-	*address = CAST_DOWN(vm_address_t, map_addr);
+	*address = CAST_DOWN(vm_offset_t, map_addr);
 	return kr;
 }
 
@@ -922,7 +959,7 @@ vm_map(
 	kr = mach_vm_map(target_map, &map_addr, map_size, map_mask, flags,
 			 port, obj_offset, copy, 
 			 cur_protection, max_protection, inheritance);
-	*address = CAST_DOWN(vm_address_t, map_addr);
+	*address = CAST_DOWN(vm_offset_t, map_addr);
 	return kr;
 }
 
@@ -1050,7 +1087,7 @@ mach_vm_wire(
 	if (map == VM_MAP_NULL)
 		return KERN_INVALID_TASK;
 
-	if (access & ~VM_PROT_ALL)
+	if (access & ~VM_PROT_ALL || (start + size < start))
 		return KERN_INVALID_ARGUMENT;
 
 	if (access != VM_PROT_NONE) {
@@ -1611,9 +1648,9 @@ mach_vm_page_query(
 	if (VM_MAP_NULL == map)
 		return KERN_INVALID_ARGUMENT;
 
-	return vm_map_page_info(map,
-				vm_map_trunc_page(offset),
-				disposition, ref_count);
+	return vm_map_page_query_internal(map,
+					  vm_map_trunc_page(offset),
+					  disposition, ref_count);
 }
 
 kern_return_t
@@ -1626,9 +1663,27 @@ vm_map_page_query(
 	if (VM_MAP_NULL == map)
 		return KERN_INVALID_ARGUMENT;
 
-	return vm_map_page_info(map,
-				vm_map_trunc_page(offset),
-				disposition, ref_count);
+	return vm_map_page_query_internal(map,
+					  vm_map_trunc_page(offset),
+					  disposition, ref_count);
+}
+
+kern_return_t
+mach_vm_page_info(
+	vm_map_t		map,
+	mach_vm_address_t	address,
+	vm_page_info_flavor_t	flavor,
+	vm_page_info_t		info,
+	mach_msg_type_number_t	*count)
+{
+	kern_return_t	kr;
+
+	if (map == VM_MAP_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	kr = vm_map_page_info(map, address, flavor, info, count);
+	return kr;
 }
 
 /* map a (whole) upl into an address space */
@@ -1636,7 +1691,7 @@ kern_return_t
 vm_upl_map(
 	vm_map_t		map, 
 	upl_t			upl, 
-	vm_offset_t		*dst_addr)
+	vm_address_t		*dst_addr)
 {
 	vm_map_offset_t		map_addr;
 	kern_return_t		kr;
@@ -1645,7 +1700,7 @@ vm_upl_map(
 		return KERN_INVALID_ARGUMENT;
 
 	kr = vm_map_enter_upl(map, upl, &map_addr);
-	*dst_addr = CAST_DOWN(vm_offset_t, map_addr);
+	*dst_addr = CAST_DOWN(vm_address_t, map_addr);
 	return kr;
 }
 
@@ -1840,9 +1895,9 @@ mach_make_memory_entry_64(
 		/*
 		 * Force the creation of the VM object now.
 		 */
-		if (map_size > (vm_map_size_t) VM_MAX_ADDRESS) {
+		if (map_size > (vm_map_size_t) ANON_MAX_SIZE) {
 			/*
-			 * LP64todo - for now, we can only allocate 4GB
+			 * LP64todo - for now, we can only allocate 4GB-4096
 			 * internal objects because the default pager can't
 			 * page bigger ones.  Remove this when it can.
 			 */
@@ -2567,7 +2622,7 @@ mach_memory_entry_purgable_control(
 		return(KERN_INVALID_ARGUMENT);
 
 	if (control == VM_PURGABLE_SET_STATE &&
-	    (((*state & ~(VM_PURGABLE_STATE_MASK|VM_VOLATILE_ORDER_MASK|VM_PURGABLE_ORDERING_MASK|VM_PURGABLE_BEHAVIOR_MASK|VM_VOLATILE_GROUP_MASK)) != 0) ||
+	    (((*state & ~(VM_PURGABLE_ALL_MASKS)) != 0) ||
 	     ((*state & VM_PURGABLE_STATE_MASK) > VM_PURGABLE_STATE_MASK)))
 		return(KERN_INVALID_ARGUMENT);
 
@@ -2640,7 +2695,7 @@ mach_destroy_memory_entry(
 	assert(ip_kotype(port) == IKOT_NAMED_ENTRY);
 #endif /* MACH_ASSERT */
 	named_entry = (vm_named_entry_t)port->ip_kobject;
-	mutex_lock(&(named_entry)->Lock);
+	lck_mtx_lock(&(named_entry)->Lock);
 	named_entry->ref_count -= 1;
 	if(named_entry->ref_count == 0) {
 		if (named_entry->is_sub_map) {
@@ -2650,12 +2705,12 @@ mach_destroy_memory_entry(
 			vm_object_deallocate(named_entry->backing.object);
 		} /* else JMM - need to drop reference on pager in that case */
 
-		mutex_unlock(&(named_entry)->Lock);
+		lck_mtx_unlock(&(named_entry)->Lock);
 
 		kfree((void *) port->ip_kobject,
 		      sizeof (struct vm_named_entry));
 	} else
-		mutex_unlock(&(named_entry)->Lock);
+		lck_mtx_unlock(&(named_entry)->Lock);
 }
 
 /* Allow manipulation of individual page state.  This is actually part of */
@@ -2752,7 +2807,7 @@ mach_memory_entry_range_op(
 				offset_beg,
 				offset_end,
 				ops,
-				range);
+				(uint32_t *) range);
 
 	vm_object_deallocate(object);
 
@@ -3044,7 +3099,7 @@ vm_map_get_phys_page(
 kern_return_t kernel_object_iopl_request(	/* forward */
 	vm_named_entry_t	named_entry,
 	memory_object_offset_t	offset,
-	vm_size_t		*upl_size,
+	upl_size_t		*upl_size,
 	upl_t			*upl_ptr,
 	upl_page_info_array_t	user_page_list,
 	unsigned int		*page_list_count,
@@ -3054,7 +3109,7 @@ kern_return_t
 kernel_object_iopl_request(
 	vm_named_entry_t	named_entry,
 	memory_object_offset_t	offset,
-	vm_size_t		*upl_size,
+	upl_size_t		*upl_size,
 	upl_t			*upl_ptr,
 	upl_page_info_array_t	user_page_list,
 	unsigned int		*page_list_count,
@@ -3079,7 +3134,9 @@ kernel_object_iopl_request(
 	if(*upl_size == 0) {
 		if(offset >= named_entry->size)
 			return(KERN_INVALID_RIGHT);
-		*upl_size = named_entry->size - offset;
+		*upl_size = (upl_size_t) (named_entry->size - offset);
+		if (*upl_size != named_entry->size - offset)
+			return KERN_INVALID_ARGUMENT;
 	}
 	if(caller_flags & UPL_COPYOUT_FROM) {
 		if((named_entry->protection & VM_PROT_READ) 

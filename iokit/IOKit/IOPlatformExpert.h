@@ -45,6 +45,8 @@
 extern "C" {
 #endif
 
+#include <libkern/OSTypes.h>
+
 extern boolean_t PEGetMachineName( char * name, int maxLength );
 extern boolean_t PEGetModelName( char * name, int maxLength );
 extern int PEGetPlatformEpoch( void );
@@ -61,7 +63,7 @@ extern int (*PE_halt_restart)(unsigned int type);
 extern int PEHaltRestart(unsigned int type);
 
 // Save the Panic Info.  Returns the number of bytes saved.
-extern unsigned long PESavePanicInfo(unsigned char *buffer, unsigned long  length);
+extern UInt32 PESavePanicInfo(UInt8 *buffer, UInt32 length);
 
 extern long PEGetGMTTimeOfDay( void );
 extern void PESetGMTTimeOfDay( long secs );

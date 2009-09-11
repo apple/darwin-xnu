@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -221,7 +221,7 @@
  *		Apple API extensions in scope.
  *
  *		Most users will use this compilation environment to avoid
- *		behavioural differences between 32 and 64 bit code.
+ *		behavioral differences between 32 and 64 bit code.
  *
  * LEGACY	Defining _NONSTD_SOURCE will get pre-POSIX APIs plus Apple
  *		API extensions in scope.
@@ -246,7 +246,7 @@
  *
  * In any compilation environment, for correct symbol resolution to occur,
  * function prototypes must be in scope.  It is recommended that all Apple
- * tools users add etiher the "-Wall" or "-Wimplicit-function-declaration"
+ * tools users add either the "-Wall" or "-Wimplicit-function-declaration"
  * compiler flags to their projects to be warned when a function is being
  * used without a prototype in scope.
  */
@@ -256,6 +256,8 @@
 #define __DARWIN_ONLY_64_BIT_INO_T	0
 #define __DARWIN_ONLY_UNIX_CONFORMANCE	0
 #define __DARWIN_ONLY_VERS_1050		0
+#define	__DARWIN_SUF_DARWIN10	"_darwin10"
+#define	__DARWIN10_ALIAS(sym)	__asm("_" __STRING(sym) __DARWIN_SUF_DARWIN10)
 #else /* !KERNEL */
 #ifdef PRODUCT_AppleTV
 /* Product: AppleTV */
@@ -279,19 +281,19 @@
 
 /*
  * The __DARWIN_ALIAS macros are used to do symbol renaming; they allow
- * legacy code to use the old symbol, thus maintiang binary compatability
+ * legacy code to use the old symbol, thus maintaining binary compatibility
  * while new code can use a standards compliant version of the same function.
  *
  * __DARWIN_ALIAS is used by itself if the function signature has not
  * changed, it is used along with a #ifdef check for __DARWIN_UNIX03
- * if the signature has changed.  Because the __LP64__ enviroment
- * only supports UNIX03 sementics it causes __DARWIN_UNIX03 to be
+ * if the signature has changed.  Because the __LP64__ environment
+ * only supports UNIX03 semantics it causes __DARWIN_UNIX03 to be
  * defined, but causes __DARWIN_ALIAS to do no symbol mangling.
  *
  * As a special case, when XCode is used to target a specific version of the
  * OS, the manifest constant __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__
  * will be defined by the compiler, with the digits representing major version
- * time 100 + minor version times 10 (e.g. 10.5 := 1050).  If we are targetting
+ * time 100 + minor version times 10 (e.g. 10.5 := 1050).  If we are targeting
  * pre-10.5, and it is the default compilation environment, revert the
  * compilation environment to pre-__DARWIN_UNIX03.
  */
@@ -343,8 +345,10 @@
 #  else /* default */
 #    if __DARWIN_ONLY_64_BIT_INO_T
 #      define __DARWIN_64_BIT_INO_T 1
-#    else /* !__DARWIN_ONLY_64_BIT_INO_T */
+#    elif defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0) < 1060) || __DARWIN_UNIX03 == 0
 #      define __DARWIN_64_BIT_INO_T 0
+#    else /* default */
+#      define __DARWIN_64_BIT_INO_T 1
 #    endif /* __DARWIN_ONLY_64_BIT_INO_T */
 #  endif
 #endif /* !__DARWIN_64_BIT_INO_T */
@@ -354,10 +358,10 @@
 #    define __DARWIN_VERS_1050 0
 #  elif __DARWIN_ONLY_VERS_1050
 #    define __DARWIN_VERS_1050 1
-#  elif defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0) >= 1050)
-#    define __DARWIN_VERS_1050 1
-#  else /* default */
+#  elif defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0) < 1050) || __DARWIN_UNIX03 == 0
 #    define __DARWIN_VERS_1050 0
+#  else /* default */
+#    define __DARWIN_VERS_1050 1
 #  endif
 #endif /* !__DARWIN_VERS_1050 */
 
@@ -430,6 +434,17 @@
 
 #define __DARWIN_EXTSN(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_EXTSN)
 #define __DARWIN_EXTSN_C(sym)		__asm("_" __STRING(sym) __DARWIN_SUF_EXTSN __DARWIN_SUF_NON_CANCELABLE)
+
+/*
+ * symbol release macros
+ */
+#if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0) < 1060)
+#undef __DARWIN_10_6_AND_LATER
+#define __DARWIN_10_6_AND_LATER_ALIAS(x)	/* nothing */
+#else /* 10.6 and beyond */
+#define __DARWIN_10_6_AND_LATER
+#define __DARWIN_10_6_AND_LATER_ALIAS(x)	x
+#endif
 
 
 /*
@@ -581,6 +596,16 @@
  */
 #if __DARWIN_UNIX03
 #define _DARWIN_FEATURE_UNIX_CONFORMANCE	3
+#endif
+
+/* 
+ * This macro casts away the qualifier from the variable
+ *
+ * Note: use at your own risk, removing qualifiers can result in
+ * catastrophic run-time failures.
+ */
+#ifndef __CAST_AWAY_QUALIFIER
+#define __CAST_AWAY_QUALIFIER(variable, qualifier, type)  (type) ((char *)0 + ((qualifier char *)(variable) - (qualifier char *)0) ) 
 #endif
 
 #endif /* !_CDEFS_H_ */

@@ -78,8 +78,11 @@
 #include <i386/tss.h>
 #include <i386/eflags.h>
 
+#include <i386/cpu_data.h>
+
+
 /*
- *	x86_saved_state32/64:
+ *	i386_saved_state:
  *
  *	Has been exported to servers.  See: mach/i386/thread_status.h
  *
@@ -107,14 +110,14 @@ struct x86_fpsave_state {
 
 
 /*
- *	x86_kernel_state32:
+ *	x86_kernel_state:
  *
  *	This structure corresponds to the state of kernel registers
  *	as saved in a context-switch.  It lives at the base of the stack.
- *      kernel only runs in 32 bit mode for now
  */
 
-struct x86_kernel_state32 {
+#ifdef __i386__
+struct x86_kernel_state {
 	int			k_ebx;	/* kernel context */
 	int			k_esp;
 	int			k_ebp;
@@ -123,12 +126,24 @@ struct x86_kernel_state32 {
 	int			k_eip;
 	/*
 	 * Kernel stacks are 16-byte aligned with a 4-byte i386_exception_link at
-	 * the top, followed by an x86_kernel_state32.  After both structs have
+	 * the top, followed by an x86_kernel_state.  After both structs have
 	 * been pushed, we want to be 16-byte aligned.  A dummy int gets us there.
 	 */
 	int			dummy;
 };
-
+#else
+struct x86_kernel_state {
+	unsigned long k_rbx;	/* kernel context */
+	unsigned long k_rsp;
+	unsigned long k_rbp;
+	unsigned long k_r12;
+	unsigned long k_r13;
+	unsigned long k_r14;
+	unsigned long k_r15;
+	unsigned long k_rip;
+	unsigned long dummy;
+};
+#endif
 
 typedef struct pcb {
 	void			*sf;
@@ -146,7 +161,6 @@ typedef struct pcb {
 	void		*ids;
 	uint32_t	arg_store_valid;
 } *pcb_t;
-
 
 /*
  * Maps state flavor to number of words in the state:
@@ -171,11 +185,11 @@ struct machine_thread {
 	pcb_t pcb;
 
 	uint32_t	specFlags;
-#define		OnProc	0x1
-#if CONFIG_DTRACE
-#define		CopyIOActive 0x2 /* Checked to ensure DTrace actions do not re-enter copyio(). */
-#endif /* CONFIG_DTRACE */
+#define		OnProc		0x1
+#define		CopyIOActive 	0x2 /* Checked to ensure DTrace actions do not re-enter copyio(). */
   
+#if NCOPY_WINDOWS > 0
+
         struct {
 	        user_addr_t	user_base;
 	} copy_window[NCOPY_WINDOWS];
@@ -187,6 +201,7 @@ struct machine_thread {
 #define		WINDOWS_OPENED	3
         uint64_t	physwindow_pte;
         int		physwindow_busy;
+#endif
 };
 
 
@@ -210,21 +225,43 @@ struct i386_exception_link {
 /*
  *	On the kernel stack is:
  *	stack:	...
- *		struct i386_exception_link
- *		struct i386_kernel_state
- *	stack+KERNEL_STACK_SIZE
+ *		struct i386_exception_link (pointer to user state)
+ *		struct x86_kernel_state
+ *	stack+kernel_stack_size
  */
 
 #define STACK_IKS(stack)	\
-	((struct x86_kernel_state32 *)((stack) + KERNEL_STACK_SIZE) - 1)
+	((struct x86_kernel_state *)((stack) + kernel_stack_size) - 1)
 #define STACK_IEL(stack)	\
 	((struct i386_exception_link *)STACK_IKS(stack) - 1)
+
+/*
+ * Return the current stack depth
+ * including x86_kernel_state and i386_exception_link
+ */
+static inline vm_offset_t
+current_stack_depth(void)
+{
+	vm_offset_t	stack_ptr;
+
+	assert(get_preemption_level() > 0 || !ml_get_interrupts_enabled());
+
+#if defined(__x86_64__)
+       __asm__ volatile("mov %%rsp, %0" : "=m" (stack_ptr));
+#else
+       __asm__ volatile("mov %%esp, %0" : "=m" (stack_ptr));
+#endif
+	return (current_cpu_datap()->cpu_kernel_stack
+		+ sizeof(struct x86_kernel_state)
+		+ sizeof(struct i386_exception_link *)
+		- stack_ptr); 
+}
 
 /*
  * Return address of the function that called current function, given
  *	address of the first parameter of current function.
  */
-#define	GET_RETURN_PC(addr)	(*((vm_offset_t *)addr - 1))
+#define	GET_RETURN_PC(addr)	(__builtin_return_address(0))
 
 /*
  * Defining this indicates that MD code will supply an exception()

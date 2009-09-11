@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -90,15 +90,15 @@ struct buf {
 	LIST_ENTRY(buf) b_vnbufs;	/* Buffer's associated vnode. */
 	TAILQ_ENTRY(buf) b_freelist;	/* Free list position if not active. */
 	int	b_timestamp;		/* timestamp for queuing operation */
-	long	b_whichq;		/* the free list the buffer belongs to */
-	volatile long	b_flags;	/* B_* flags. */
-	volatile long	b_lflags;	/* BL_BUSY | BL_WANTED flags... protected by buf_mtx */
+	int	b_whichq;		/* the free list the buffer belongs to */
+	volatile uint32_t	b_flags;	/* B_* flags. */
+	volatile uint32_t	b_lflags;	/* BL_BUSY | BL_WANTED flags... protected by buf_mtx */
 	int	b_error;		/* errno value. */
-	long	b_bufsize;		/* Allocated buffer size. */
-	long	b_bcount;		/* Valid bytes in buffer. */
-	long	b_resid;		/* Remaining I/O. */
+	int	b_bufsize;		/* Allocated buffer size. */
+	int	b_bcount;		/* Valid bytes in buffer. */
+	int	b_resid;		/* Remaining I/O. */
 	dev_t	b_dev;			/* Device associated with buffer. */
-        uintptr_t	b_datap;	/* Memory, superblocks, indirect etc.*/
+	uintptr_t	b_datap;	/* Memory, superblocks, indirect etc.*/
 	daddr64_t	b_lblkno;	/* Logical block number. */
 	daddr64_t	b_blkno;	/* Underlying physical block number. */
 	void	(*b_iodone)(buf_t, void *);	/* Function to call upon completion. */
@@ -109,7 +109,7 @@ struct buf {
 	buf_t	b_real_bp;		/* used to track bp generated through cluster_bp */
 	TAILQ_ENTRY(buf)	b_act;	/* Device driver queue when active */
 	void *	b_drvdata;		/* Device driver private use */
-        void *  b_fsprivate;		/* filesystem private use */
+	void *  b_fsprivate;		/* filesystem private use */
 	void *	b_transaction;		/* journal private use */
 	int	b_dirtyoff;		/* Offset in buffer of dirty region. */
 	int	b_dirtyend;		/* Offset of end of dirty region. */
@@ -120,8 +120,8 @@ struct buf {
         void *	b_owner;
         int     b_tag;
         void *  b_lastbrelse;
-        int	b_stackbrelse[6];
-        int	b_stackgetblk[6];
+        void *	b_stackbrelse[6];
+        void *	b_stackgetblk[6];
 #endif
 };
 
@@ -141,17 +141,23 @@ struct buf {
 #define	BL_WANTED	0x00000002	/* Process wants this buffer. */
 #define BL_IOBUF	0x00000004	/* buffer allocated via 'buf_alloc' */
 #define BL_CALLDONE	0x00000008	/* callback routine on B_CALL bp has completed */
+#define BL_WANTDEALLOC	0x00000010	/* buffer should be put on empty list when clean */
+
+/*
+ * Parameters for buffer cache garbage collection 
+ */
+#define BUF_STALE_THRESHHOLD 	30	/* Collect if untouched in the last 30 seconds */
 
 /*
  * mask used by buf_flags... these are the readable external flags
  */
 #define BUF_X_RDFLAGS (B_PHYS | B_RAW | B_LOCKED | B_ASYNC | B_READ | B_WRITE | B_PAGEIO |\
-		       B_META | B_CLUSTER | B_DELWRI | B_FUA | B_PASSIVE)
+		       B_META | B_CLUSTER | B_DELWRI | B_FUA | B_PASSIVE | B_IOSTREAMING | B_THROTTLED_IO)
 /*
  * mask used by buf_clearflags/buf_setflags... these are the writable external flags
  */
 #define BUF_X_WRFLAGS (B_PHYS | B_RAW | B_LOCKED | B_ASYNC | B_READ | B_WRITE | B_PAGEIO |\
-		       B_NOCACHE | B_FUA | B_PASSIVE)
+		       B_NOCACHE | B_FUA | B_PASSIVE | B_IOSTREAMING)
 
 /*
  * These flags are kept in b_flags... access is lockless
@@ -181,10 +187,6 @@ struct buf {
  */
 #define B_NEED_IODONE   0x20000000	/* need biodone on the real_bp associated with a cluster_io */
 #define B_COMMIT_UPL    0x40000000	/* commit/abort the UPL on I/O success/failure */
-/*
- * can we deprecate?
- */
-#define	B_TAPE		0x80000000	/* Magnetic tape I/O. */
 
 
 /* Flags to low-level allocation routines. */
@@ -220,8 +222,6 @@ void	free_io_buf(buf_t);
 
 int	allocbuf(struct buf *, int);
 void	bufinit(void) __attribute__((section("__TEXT, initcode")));
-
-void	buf_setfilter(buf_t, void (*)(buf_t, void *), void *, void **, void **);
 
 /*
  * Flags for buf_acquire

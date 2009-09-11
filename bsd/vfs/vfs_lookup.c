@@ -89,7 +89,7 @@
 #include <sys/uio_internal.h>
 #include <sys/kauth.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -160,8 +160,10 @@ namei(struct nameidata *ndp)
 	struct componentname *cnp = &ndp->ni_cnd;
 	vfs_context_t ctx = cnp->cn_context;
 	proc_t p = vfs_context_proc(ctx);
+#if CONFIG_AUDIT
 /* XXX ut should be from context */
 	uthread_t ut = (struct uthread *)get_bsdthread_info(current_thread());
+#endif
 	char *tmppn;
 	char uio_buf[ UIO_SIZEOF(1) ];
 
@@ -186,7 +188,9 @@ vnode_recycled:
 		cnp->cn_pnlen = PATHBUFLEN;
 	}
 #if LP64_DEBUG
-	if (IS_VALID_UIO_SEGFLG(ndp->ni_segflg) == 0) {
+	if ((UIO_SEG_IS_USER_SPACE(ndp->ni_segflg) == 0)
+		&& (ndp->ni_segflg != UIO_SYSSPACE)
+		&& (ndp->ni_segflg != UIO_SYSSPACE32)) {
 		panic("%s :%d - invalid ni_segflg\n", __FILE__, __LINE__); 
 	}
 #endif /* LP64_DEBUG */
@@ -233,9 +237,15 @@ retry_copy:
 		/* Attempt to resolve a legacy volfs style pathname. */
 		MALLOC_ZONE(realpath, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
 		if (realpath) {
+			/* 
+			 * We only error out on the ENAMETOOLONG cases where we know that
+			 * vfs_getrealpath translation succeeded but the path could not fit into
+			 * MAXPATHLEN characters.  In other failure cases, we may be dealing with a path
+			 * that legitimately looks like /.vol/1234/567 and is not meant to be translated
+			 */
 			if ((realpath_err= vfs_getrealpath(&cnp->cn_pnbuf[6], realpath, MAXPATHLEN, ctx))) {
 				FREE_ZONE(realpath, MAXPATHLEN, M_NAMEI);
-				if (realpath_err == ENOSPC){
+				if (realpath_err == ENOSPC || realpath_err == ENAMETOOLONG){
 					error = ENAMETOOLONG;
 					goto error_out;
 				}
@@ -250,13 +260,15 @@ retry_copy:
 			}
 		}
 	}
- #endif /* CONFIG_VOLFS */
+#endif /* CONFIG_VOLFS */
 
+#if CONFIG_AUDIT
 	/* If we are auditing the kernel pathname, save the user pathname */
 	if (cnp->cn_flags & AUDITVNPATH1)
 		AUDIT_ARG(upath, ut->uu_cdir, cnp->cn_pnbuf, ARG_UPATH1); 
 	if (cnp->cn_flags & AUDITVNPATH2)
 		AUDIT_ARG(upath, ut->uu_cdir, cnp->cn_pnbuf, ARG_UPATH2); 
+#endif /* CONFIG_AUDIT */
 
 	/*
 	 * Do not allow empty pathnames
@@ -299,7 +311,7 @@ retry_copy:
 
 	for (;;) {
 	        int need_newpathbuf;
-		int linklen;
+		u_int linklen;
 
 		ndp->ni_startdir = dp;
 
@@ -312,10 +324,13 @@ retry_copy:
 		if ((cnp->cn_flags & ISSYMLINK) == 0) {
 			return (0);
 		}
+#ifndef __LP64__
 		if ((cnp->cn_flags & FSNODELOCKHELD)) {
 		        cnp->cn_flags &= ~FSNODELOCKHELD;
 			unlock_fsnode(ndp->ni_dvp, NULL);
 		}	
+#endif /* __LP64__ */
+
 		if (ndp->ni_loopcnt++ >= MAXSYMLINKS) {
 			error = ELOOP;
 			break;
@@ -348,8 +363,13 @@ retry_copy:
 				FREE_ZONE(cp, MAXPATHLEN, M_NAMEI);
 			break;
 		}
-		// LP64todo - fix this
-		linklen = MAXPATHLEN - uio_resid(auio);
+
+		/* 
+		 * Safe to set unsigned with a [larger] signed type here
+		 * because 0 <= uio_resid <= MAXPATHLEN and MAXPATHLEN
+		 * is only 1024.
+		 */
+		linklen = MAXPATHLEN - (u_int)uio_resid(auio);
 		if (linklen + ndp->ni_pathlen > MAXPATHLEN) {
 			if (need_newpathbuf)
 				FREE_ZONE(cp, MAXPATHLEN, M_NAMEI);
@@ -652,10 +672,12 @@ lookup_error:
 		if ((error == ENOENT) &&
 		    (dp->v_flag & VROOT) && (dp->v_mount != NULL) &&
 		    (dp->v_mount->mnt_flag & MNT_UNION)) {
+#ifndef __LP64__
 		        if ((cnp->cn_flags & FSNODELOCKHELD)) {
 			        cnp->cn_flags &= ~FSNODELOCKHELD;
 				unlock_fsnode(dp, NULL);
 			}	
+#endif /* __LP64__ */
 			tdp = dp;
 			dp = tdp->v_mount->mnt_vnodecovered;
 
@@ -721,12 +743,12 @@ returned_from_lookup_path:
 		ndp->ni_pathlen -= cnp->cn_consume;
 		cnp->cn_consume = 0;
 	} else {
+		int isdot_or_dotdot;
+		isdot_or_dotdot = (cnp->cn_namelen == 1 && cnp->cn_nameptr[0] == '.') || (cnp->cn_flags & ISDOTDOT);
+
 	        if (dp->v_name == NULL || dp->v_parent == NULLVP) {
-		        int isdot_or_dotdot;
 			int  update_flags = 0;
 
-			isdot_or_dotdot = (cnp->cn_namelen == 1 && cnp->cn_nameptr[0] == '.') || (cnp->cn_flags & ISDOTDOT);
-	    
 			if (isdot_or_dotdot == 0) {
 			        if (dp->v_name == NULL)
 					update_flags |= VNODE_UPDATE_NAME;
@@ -751,7 +773,7 @@ returned_from_lookup_path:
 			 * rechecked behind the name cache lock, but if it
 			 * already fails to match, no need to go any further
 			 */
-		        if (ndp->ni_dvp != NULLVP && (nc_generation == ndp->ni_dvp->v_nc_generation))
+		        if (ndp->ni_dvp != NULLVP && (nc_generation == ndp->ni_dvp->v_nc_generation) && (!isdot_or_dotdot))
 			        cache_enter_with_gen(ndp->ni_dvp, dp, cnp, nc_generation);
 		}
 	}
@@ -823,8 +845,7 @@ check_mounted_on:
 
 #if CONFIG_MACF
 	if (vfs_flags(vnode_mount(dp)) & MNT_MULTILABEL) {
-		error = vnode_label(vnode_mount(dp), NULL, dp, NULL,
-		    VNODE_LABEL_NEEDREF, ctx);
+		error = vnode_label(vnode_mount(dp), NULL, dp, NULL, 0, ctx);
 		if (error)
 		        goto bad2;
 	}
@@ -834,7 +855,7 @@ check_mounted_on:
 	        mp = mounted_on_dp->v_mountedhere;
 
 		if (mp) {
-		        mount_lock(mp);
+		        mount_lock_spin(mp);
 			mp->mnt_realrootvp_vid = dp->v_id;
 			mp->mnt_realrootvp = dp;
 			mp->mnt_generation = current_mount_generation;
@@ -937,19 +958,17 @@ nextname:
 		case DELETE:
 			if (cnp->cn_flags & CN_ALLOWRSRCFORK) {
 				nsop = NS_DELETE;
-			}
-			else {
+			} else {
 				error = EPERM;
-				goto bad;
+				goto bad2;
 			}
 			break;
 		case CREATE:
 			if (cnp->cn_flags & CN_ALLOWRSRCFORK) {
 				nsop = NS_CREATE;
-			}
-			else {
+			} else {
 				error = EPERM;
-				goto bad;
+				goto bad2;
 			}
 			break;
 		case LOOKUP:
@@ -978,10 +997,12 @@ nextname:
 		/* The "parent" of the stream is the file. */
 		if (wantparent) {
 			if (ndp->ni_dvp) {
+#ifndef __LP64__
 				if (ndp->ni_cnd.cn_flags & FSNODELOCKHELD) {
 					ndp->ni_cnd.cn_flags &= ~FSNODELOCKHELD;
 					unlock_fsnode(ndp->ni_dvp, NULL);
 				}	
+#endif /* __LP64__ */
 				vnode_put(ndp->ni_dvp);
 			}
 			ndp->ni_dvp = dp;
@@ -1042,10 +1063,12 @@ emptyname:
 	return (0);
 
 bad2:
+#ifndef __LP64__
 	if ((cnp->cn_flags & FSNODELOCKHELD)) {
 	        cnp->cn_flags &= ~FSNODELOCKHELD;
 		unlock_fsnode(ndp->ni_dvp, NULL);
 	}
+#endif /* __LP64__ */
 	if (ndp->ni_dvp)
 	        vnode_put(ndp->ni_dvp);
 	if (dp)
@@ -1057,10 +1080,12 @@ bad2:
 	return (error);
 
 bad:
+#ifndef __LP64__
 	if ((cnp->cn_flags & FSNODELOCKHELD)) {
 	        cnp->cn_flags &= ~FSNODELOCKHELD;
 		unlock_fsnode(ndp->ni_dvp, NULL);
 	}	
+#endif /* __LP64__ */
 	if (dp)
 	        vnode_put(dp);
 	ndp->ni_vp = NULLVP;
@@ -1186,10 +1211,12 @@ bad:
 void
 nameidone(struct nameidata *ndp)
 {
+#ifndef __LP64__
 	if ((ndp->ni_cnd.cn_flags & FSNODELOCKHELD)) {
 	        ndp->ni_cnd.cn_flags &= ~FSNODELOCKHELD;
 		unlock_fsnode(ndp->ni_dvp, NULL);
 	}	
+#endif /* __LP64__ */
 	if (ndp->ni_cnd.cn_flags & HASBUF) {
 		char *tmp = ndp->ni_cnd.cn_pnbuf;
 
@@ -1267,7 +1294,7 @@ kdebug_lookup(struct vnode *dp, struct componentname *cnp)
 	if (dbg_namelen <= 12)
 		code |= DBG_FUNC_END;
 
-	KERNEL_DEBUG_CONSTANT(code, (unsigned int)dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
+	KERNEL_DEBUG_CONSTANT(code, dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
 
 	code &= ~DBG_FUNC_START;
 
@@ -1303,7 +1330,7 @@ vfs_getrealpath(const char * path, char * realpath, size_t bufsize, vfs_context_
 	struct mount *mp = NULL;
 	char  *str;
 	char ch;
-	unsigned long  id;
+	uint32_t  id;
 	ino64_t ino;
 	int error;
 	int length;

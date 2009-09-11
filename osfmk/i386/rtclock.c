@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -57,15 +57,14 @@
 #include <vm/vm_kern.h>		/* for kernel_map */
 #include <i386/ipl.h>
 #include <architecture/i386/pio.h>
-#include <i386/misc_protos.h>
-#include <i386/proc_reg.h>
 #include <i386/machine_cpu.h>
-#include <i386/lapic.h>
 #include <i386/cpuid.h>
-#include <i386/cpu_data.h>
 #include <i386/cpu_threads.h>
-#include <i386/perfmon.h>
+#include <i386/mp.h>
 #include <i386/machine_routines.h>
+#include <i386/proc_reg.h>
+#include <i386/misc_protos.h>
+#include <i386/lapic.h>
 #include <pexpert/pexpert.h>
 #include <machine/limits.h>
 #include <machine/commpage.h>
@@ -82,6 +81,8 @@ int		rtclock_config(void);
 int		rtclock_init(void);
 
 uint64_t	rtc_decrementer_min;
+
+uint64_t	tsc_rebase_abs_time = 0;
 
 void			rtclock_intr(x86_saved_state_t *regs);
 static uint64_t		maxDec;			/* longest interval our hardware timer can handle (nsec) */
@@ -101,6 +102,7 @@ rtc_nanotime_t	rtc_nanotime_info = {0,0,0,0,1,0};
 static inline uint64_t
 _tsc_to_nanoseconds(uint64_t value)
 {
+#if defined(__i386__)
     asm volatile("movl	%%edx,%%esi	;"
 		 "mull	%%ecx		;"
 		 "movl	%%edx,%%edi	;"
@@ -111,8 +113,58 @@ _tsc_to_nanoseconds(uint64_t value)
 		 : "+A" (value)
 		 : "c" (current_cpu_datap()->cpu_nanotime->scale)
 		 : "esi", "edi");
+#elif defined(__x86_64__)
+    asm volatile("mul %%rcx;"
+		 "shrq $32, %%rax;"
+		 "shlq $32, %%rdx;"
+		 "orq %%rdx, %%rax;"
+		 : "=a"(value)
+		 : "a"(value), "c"(rtc_nanotime_info.scale)
+		 : "rdx", "cc" );
+#else
+#error Unsupported architecture
+#endif
 
     return (value);
+}
+
+static inline uint32_t
+_absolutetime_to_microtime(uint64_t abstime, clock_sec_t *secs, clock_usec_t *microsecs)
+{
+	uint32_t remain;
+#if defined(__i386__)
+	asm volatile(
+			"divl %3"
+				: "=a" (*secs), "=d" (remain)
+				: "A" (abstime), "r" (NSEC_PER_SEC));
+	asm volatile(
+			"divl %3"
+				: "=a" (*microsecs)
+				: "0" (remain), "d" (0), "r" (NSEC_PER_USEC));
+#elif defined(__x86_64__)
+	*secs = abstime / (uint64_t)NSEC_PER_SEC;
+	remain = (uint32_t)(abstime % (uint64_t)NSEC_PER_SEC);
+	*microsecs = remain / NSEC_PER_USEC;
+#else
+#error Unsupported architecture
+#endif
+	return remain;
+}
+
+static inline void
+_absolutetime_to_nanotime(uint64_t abstime, clock_sec_t *secs, clock_usec_t *nanosecs)
+{
+#if defined(__i386__)
+	asm volatile(
+			"divl %3"
+			: "=a" (*secs), "=d" (*nanosecs)
+			: "A" (abstime), "r" (NSEC_PER_SEC));
+#elif defined(__x86_64__)
+	*secs = abstime / (uint64_t)NSEC_PER_SEC;
+	*nanosecs = (clock_usec_t)(abstime % (uint64_t)NSEC_PER_SEC);
+#else
+#error Unsupported architecture
+#endif
 }
 
 static uint32_t
@@ -123,10 +175,10 @@ deadline_to_decrementer(
 	uint64_t	delta;
 
 	if (deadline <= now)
-		return rtc_decrementer_min;
+		return (uint32_t)rtc_decrementer_min;
 	else {
 		delta = deadline - now;
-		return MIN(MAX(rtc_decrementer_min,delta),maxDec); 
+		return (uint32_t)MIN(MAX(rtc_decrementer_min,delta),maxDec); 
 	}
 }
 
@@ -359,12 +411,15 @@ static void
 rtc_set_timescale(uint64_t cycles)
 {
 	rtc_nanotime_t	*rntp = current_cpu_datap()->cpu_nanotime;
-	rntp->scale = ((uint64_t)NSEC_PER_SEC << 32) / cycles;
+	rntp->scale = (uint32_t)(((uint64_t)NSEC_PER_SEC << 32) / cycles);
 
 	if (cycles <= SLOW_TSC_THRESHOLD)
-		rntp->shift = cycles;
+		rntp->shift = (uint32_t)cycles;
 	else
 		rntp->shift = 32;
+
+	if (tsc_rebase_abs_time == 0)
+		tsc_rebase_abs_time = mach_absolute_time();
 
 	rtc_nanotime_init(0);
 }
@@ -395,33 +450,22 @@ rtc_export_speed(uint64_t cyc_per_sec)
 
 void
 clock_get_system_microtime(
-	uint32_t			*secs,
-	uint32_t			*microsecs)
+	clock_sec_t			*secs,
+	clock_usec_t		*microsecs)
 {
 	uint64_t	now = rtc_nanotime_read();
-	uint32_t	remain;
 
-	asm volatile(
-			"divl %3"
-				: "=a" (*secs), "=d" (remain)
-				: "A" (now), "r" (NSEC_PER_SEC));
-	asm volatile(
-			"divl %3"
-				: "=a" (*microsecs)
-				: "0" (remain), "d" (0), "r" (NSEC_PER_USEC));
+	_absolutetime_to_microtime(now, secs, microsecs);
 }
 
 void
 clock_get_system_nanotime(
-	uint32_t			*secs,
-	uint32_t			*nanosecs)
+	clock_sec_t			*secs,
+	clock_nsec_t		*nanosecs)
 {
 	uint64_t	now = rtc_nanotime_read();
 
-	asm volatile(
-			"divl %3"
-				: "=a" (*secs), "=d" (*nanosecs)
-				: "A" (now), "r" (NSEC_PER_SEC));
+	_absolutetime_to_nanotime(now, secs, nanosecs);
 }
 
 void
@@ -429,24 +473,15 @@ clock_gettimeofday_set_commpage(
 	uint64_t				abstime,
 	uint64_t				epoch,
 	uint64_t				offset,
-	uint32_t				*secs,
-	uint32_t				*microsecs)
+	clock_sec_t				*secs,
+	clock_usec_t			*microsecs)
 {
-	uint64_t	now = abstime;
+	uint64_t	now = abstime + offset;
 	uint32_t	remain;
 
-	now += offset;
+	remain = _absolutetime_to_microtime(now, secs, microsecs);
 
-	asm volatile(
-			"divl %3"
-				: "=a" (*secs), "=d" (remain)
-				: "A" (now), "r" (NSEC_PER_SEC));
-	asm volatile(
-			"divl %3"
-				: "=a" (*microsecs)
-				: "0" (remain), "d" (0), "r" (NSEC_PER_USEC));
-
-	*secs += epoch;
+	*secs += (clock_sec_t)epoch;
 
 	commpage_set_timestamp(abstime - remain, *secs);
 }
@@ -484,7 +519,8 @@ rtclock_intr(
 		  
 		regs = saved_state64(tregs);
 
-		user_mode = TRUE;
+		if (regs->isf.cs & 0x03)
+			user_mode = TRUE;
 		rip = regs->isf.rip;
 	} else {
 	        x86_saved_state32_t	*regs;
@@ -499,7 +535,7 @@ rtclock_intr(
 	/* Log the interrupt service latency (-ve value expected by tool) */
 	KERNEL_DEBUG_CONSTANT(
 		MACHDBG_CODE(DBG_MACH_EXCP_DECI, 0) | DBG_FUNC_NONE,
-		-latency, (uint32_t)rip, user_mode, 0, 0);
+		-(int32_t)latency, (uint32_t)rip, user_mode, 0, 0);
 
 	/* call the generic etimer */
 	etimer_intr(user_mode, rip);
@@ -508,6 +544,7 @@ rtclock_intr(
 /*
  *	Request timer pop from the hardware 
  */
+
 
 int
 setPop(
@@ -545,37 +582,25 @@ clock_interval_to_absolutetime_interval(
 void
 absolutetime_to_microtime(
 	uint64_t			abstime,
-	uint32_t			*secs,
-	uint32_t			*microsecs)
+	clock_sec_t			*secs,
+	clock_usec_t		*microsecs)
 {
-	uint32_t	remain;
-
-	asm volatile(
-			"divl %3"
-				: "=a" (*secs), "=d" (remain)
-				: "A" (abstime), "r" (NSEC_PER_SEC));
-	asm volatile(
-			"divl %3"
-				: "=a" (*microsecs)
-				: "0" (remain), "d" (0), "r" (NSEC_PER_USEC));
+	_absolutetime_to_microtime(abstime, secs, microsecs);
 }
 
 void
 absolutetime_to_nanotime(
 	uint64_t			abstime,
-	uint32_t			*secs,
-	uint32_t			*nanosecs)
+	clock_sec_t			*secs,
+	clock_nsec_t		*nanosecs)
 {
-	asm volatile(
-			"divl %3"
-			: "=a" (*secs), "=d" (*nanosecs)
-			: "A" (abstime), "r" (NSEC_PER_SEC));
+	_absolutetime_to_nanotime(abstime, secs, nanosecs);
 }
 
 void
 nanotime_to_absolutetime(
-	uint32_t			secs,
-	uint32_t			nanosecs,
+	clock_sec_t			secs,
+	clock_nsec_t		nanosecs,
 	uint64_t			*result)
 {
 	*result = ((uint64_t)secs * NSEC_PER_SEC) + nanosecs;

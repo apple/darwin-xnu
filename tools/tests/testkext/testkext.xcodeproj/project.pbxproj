@@ -1,0 +1,207 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 45;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		C68D22B30EB2441400C3A06C /* testvmx.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C68D22B20EB2441400C3A06C /* testvmx.cpp */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		8DA8362C06AD9B9200E5AC22 /* Kernel.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Kernel.framework; path = /System/Library/Frameworks/Kernel.framework; sourceTree = "<absolute>"; };
+		C68D22A80EB243BC00C3A06C /* testvmx.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = testvmx.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+		C68D22A90EB243BC00C3A06C /* testvmx-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "testvmx-Info.plist"; sourceTree = "<group>"; };
+		C68D22B10EB2441400C3A06C /* testvmx.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = testvmx.h; sourceTree = "<group>"; };
+		C68D22B20EB2441400C3A06C /* testvmx.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = testvmx.cpp; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C68D22A60EB243BC00C3A06C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		089C166AFE841209C02AAC07 /* testkext */ = {
+			isa = PBXGroup;
+			children = (
+				247142CAFF3F8F9811CA285C /* Source */,
+				8DA8362C06AD9B9200E5AC22 /* Kernel.framework */,
+				19C28FB6FE9D52B211CA2CBB /* Products */,
+			);
+			name = testkext;
+			sourceTree = "<group>";
+		};
+		19C28FB6FE9D52B211CA2CBB /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C68D22A80EB243BC00C3A06C /* testvmx.kext */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		247142CAFF3F8F9811CA285C /* Source */ = {
+			isa = PBXGroup;
+			children = (
+				C68D22B10EB2441400C3A06C /* testvmx.h */,
+				C68D22B20EB2441400C3A06C /* testvmx.cpp */,
+				C68D22A90EB243BC00C3A06C /* testvmx-Info.plist */,
+			);
+			name = Source;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		C68D22A70EB243BC00C3A06C /* testvmx */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C68D22AC0EB243BD00C3A06C /* Build configuration list for PBXNativeTarget "testvmx" */;
+			buildPhases = (
+				C68D22A40EB243BC00C3A06C /* Sources */,
+				C68D22A50EB243BC00C3A06C /* Resources */,
+				C68D22A60EB243BC00C3A06C /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = testvmx;
+			productName = testvmx;
+			productReference = C68D22A80EB243BC00C3A06C /* testvmx.kext */;
+			productType = "com.apple.product-type.kernel-extension.iokit";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		089C1669FE841209C02AAC07 /* Project object */ = {
+			isa = PBXProject;
+			buildConfigurationList = 1DEB91DD08733DB10010E9CD /* Build configuration list for PBXProject "testkext" */;
+			compatibilityVersion = "Xcode 3.1";
+			hasScannedForEncodings = 1;
+			mainGroup = 089C166AFE841209C02AAC07 /* testkext */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C68D22A70EB243BC00C3A06C /* testvmx */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C68D22A50EB243BC00C3A06C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C68D22A40EB243BC00C3A06C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C68D22B30EB2441400C3A06C /* testvmx.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		1DEB91DE08733DB10010E9CD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD_32_64_BIT)";
+				GCC_C_LANGUAGE_STANDARD = gnu99;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				PREBINDING = NO;
+			};
+			name = Debug;
+		};
+		1DEB91DF08733DB10010E9CD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD_32_64_BIT)";
+				GCC_C_LANGUAGE_STANDARD = gnu99;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				PREBINDING = NO;
+			};
+			name = Release;
+		};
+		C68D22AA0EB243BD00C3A06C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_ENABLE_FIX_AND_CONTINUE = NO;
+				GCC_MODEL_TUNING = G5;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				INFOPLIST_FILE = "testvmx-Info.plist";
+				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
+				MODULE_NAME = com.yourcompany.driver.testvmx;
+				MODULE_VERSION = 1.0.0d1;
+				PREBINDING = NO;
+				PRODUCT_NAME = testvmx;
+				VALID_ARCHS = "i386 x86_64";
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Debug;
+		};
+		C68D22AB0EB243BD00C3A06C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				COPY_PHASE_STRIP = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_ENABLE_FIX_AND_CONTINUE = NO;
+				GCC_MODEL_TUNING = G5;
+				INFOPLIST_FILE = "testvmx-Info.plist";
+				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
+				MODULE_NAME = com.yourcompany.driver.testvmx;
+				MODULE_VERSION = 1.0.0d1;
+				PREBINDING = NO;
+				PRODUCT_NAME = testvmx;
+				VALID_ARCHS = "i386 x86_64";
+				WRAPPER_EXTENSION = kext;
+				ZERO_LINK = NO;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		1DEB91DD08733DB10010E9CD /* Build configuration list for PBXProject "testkext" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1DEB91DE08733DB10010E9CD /* Debug */,
+				1DEB91DF08733DB10010E9CD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C68D22AC0EB243BD00C3A06C /* Build configuration list for PBXNativeTarget "testvmx" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C68D22AA0EB243BD00C3A06C /* Debug */,
+				C68D22AB0EB243BD00C3A06C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 089C1669FE841209C02AAC07 /* Project object */;
+}

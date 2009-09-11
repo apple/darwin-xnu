@@ -139,6 +139,12 @@ static struct radix_node *in6_matroute_args(void *, struct radix_node_head *,
 #define RTPRF_OURS		RTF_PROTO3	/* set on routes we manage */
 
 /*
+ * Accessed by in6_addroute(), in6_deleteroute() and in6_rtqkill(), during
+ * which the routing lock (rnh_lock) is held and thus protects the variable.
+ */
+static int	in6dynroutes;
+
+/*
  * Do what we need to do when inserting a route.
  */
 static struct radix_node *
@@ -148,6 +154,21 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 	struct rtentry *rt = (struct rtentry *)treenodes;
 	struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)rt_key(rt);
 	struct radix_node *ret;
+
+	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	RT_LOCK_ASSERT_HELD(rt);
+
+	/*
+	 * If this is a dynamic route (which is created via Redirect) and
+	 * we already have the maximum acceptable number of such route entries,
+	 * reject creating a new one.  We could initiate garbage collection to
+	 * make available space right now, but the benefit would probably not
+	 * be worth the cleaning overhead; we only have to endure a slightly
+	 * suboptimal path even without the redirecbted route.
+	 */
+	if ((rt->rt_flags & RTF_DYNAMIC) != 0 &&
+	    ip6_maxdynroutes >= 0 && in6dynroutes >= ip6_maxdynroutes)
+		return (NULL);
 
 	/*
 	 * For IPv6, all unicast non-host routes are automatically cloning.
@@ -186,7 +207,7 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		rt->rt_rmx.rmx_mtu = rt->rt_ifp->if_mtu;
 
 	ret = rn_addroute(v_arg, n_arg, head, treenodes);
-	if (ret == NULL && rt->rt_flags & RTF_HOST) {
+	if (ret == NULL && (rt->rt_flags & RTF_HOST)) {
 		struct rtentry *rt2;
 		/*
 		 * We are trying to add a host route, but can't.
@@ -196,20 +217,29 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		rt2 = rtalloc1_locked((struct sockaddr *)sin6, 0,
 				RTF_CLONING | RTF_PRCLONING);
 		if (rt2) {
-			if (rt2->rt_flags & RTF_LLINFO &&
-				rt2->rt_flags & RTF_HOST &&
-				rt2->rt_gateway &&
-				rt2->rt_gateway->sa_family == AF_LINK) {
-				rtrequest_locked(RTM_DELETE,
-					  (struct sockaddr *)rt_key(rt2),
-					  rt2->rt_gateway,
-					  rt_mask(rt2), rt2->rt_flags, 0);
+			RT_LOCK(rt2);
+			if ((rt2->rt_flags & RTF_LLINFO) &&
+			    (rt2->rt_flags & RTF_HOST) &&
+			    rt2->rt_gateway != NULL &&
+			    rt2->rt_gateway->sa_family == AF_LINK) {
+				/*
+				 * Safe to drop rt_lock and use rt_key,
+				 * rt_gateway, since holding rnh_lock here
+				 * prevents another thread from calling
+				 * rt_setgate() on this route.
+				 */
+				RT_UNLOCK(rt2);
+				(void) rtrequest_locked(RTM_DELETE, rt_key(rt2),
+				    rt2->rt_gateway, rt_mask(rt2),
+				    rt2->rt_flags, 0);
 				ret = rn_addroute(v_arg, n_arg, head,
 					treenodes);
+			} else {
+				RT_UNLOCK(rt2);
 			}
 			rtfree_locked(rt2);
 		}
-	} else if (ret == NULL && rt->rt_flags & RTF_CLONING) {
+	} else if (ret == NULL && (rt->rt_flags & RTF_CLONING)) {
 		struct rtentry *rt2;
 		/*
 		 * We are trying to add a net route, but can't.
@@ -226,6 +256,7 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		rt2 = rtalloc1_locked((struct sockaddr *)sin6, 0,
 				RTF_CLONING | RTF_PRCLONING);
 		if (rt2) {
+			RT_LOCK(rt2);
 			if ((rt2->rt_flags & (RTF_CLONING|RTF_HOST|RTF_GATEWAY))
 					== RTF_CLONING
 			 && rt2->rt_gateway
@@ -233,10 +264,34 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 			 && rt2->rt_ifp == rt->rt_ifp) {
 				ret = rt2->rt_nodes;
 			}
+			RT_UNLOCK(rt2);
 			rtfree_locked(rt2);
 		}
 	}
+
+	if (ret != NULL && (rt->rt_flags & RTF_DYNAMIC) != 0)
+		in6dynroutes++;
+
 	return ret;
+}
+
+static struct radix_node *
+in6_deleteroute(void * v_arg, void *netmask_arg, struct radix_node_head *head)
+{
+	struct radix_node *rn;
+
+	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+
+	rn = rn_delete(v_arg, netmask_arg, head);
+	if (rn != NULL) {
+		struct rtentry *rt = (struct rtentry *)rn;
+		RT_LOCK_SPIN(rt);
+		if ((rt->rt_flags & RTF_DYNAMIC) != 0)
+			in6dynroutes--;
+		RT_UNLOCK(rt);
+	}
+
+	return (rn);
 }
 
 /*
@@ -260,11 +315,14 @@ in6_matroute_args(void *v_arg, struct radix_node_head *head,
 	struct radix_node *rn = rn_match_args(v_arg, head, f, w);
 	struct rtentry *rt = (struct rtentry *)rn;
 
-	if (rt && rt->rt_refcnt == 0) { /* this is first reference */
-		if (rt->rt_flags & RTPRF_OURS) {
+	/* This is first reference? */
+	if (rt != NULL) {
+		RT_LOCK_SPIN(rt);
+		if (rt->rt_refcnt == 0 && (rt->rt_flags & RTPRF_OURS)) {
 			rt->rt_flags &= ~RTPRF_OURS;
 			rt->rt_rmx.rmx_expire = 0;
 		}
+		RT_UNLOCK(rt);
 	}
 	return (rn);
 }
@@ -275,17 +333,17 @@ static int rtq_reallyold = 60*60;
 	/* one hour is ``really old'' */
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RTEXPIRE, rtexpire,
 	CTLFLAG_RW, &rtq_reallyold , 0, "");
-				
+
 static int rtq_minreallyold = 10;
 	/* never automatically crank down to less */
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RTMINEXPIRE, rtminexpire,
 	CTLFLAG_RW, &rtq_minreallyold , 0, "");
-				
+
 static int rtq_toomany = 128;
 	/* 128 cached routes is ``too many'' */
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RTMAXCACHE, rtmaxcache,
 	CTLFLAG_RW, &rtq_toomany , 0, "");
-				
+
 
 /*
  * On last reference drop, mark the route as belong to us so that it can be
@@ -296,13 +354,19 @@ in6_clsroute(struct radix_node *rn, __unused struct radix_node_head *head)
 {
 	struct rtentry *rt = (struct rtentry *)rn;
 
+	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	RT_LOCK_ASSERT_HELD(rt);
+
 	if (!(rt->rt_flags & RTF_UP))
 		return;		/* prophylactic measures */
 
 	if ((rt->rt_flags & (RTF_LLINFO | RTF_HOST)) != RTF_HOST)
 		return;
 
-	if ((rt->rt_flags & (RTF_WASCLONED | RTPRF_OURS)) != RTF_WASCLONED)
+	if (rt->rt_flags & RTPRF_OURS)
+		return;
+
+	if (!(rt->rt_flags & (RTF_WASCLONED | RTF_DYNAMIC)))
 		return;
 
 	/*
@@ -316,11 +380,18 @@ in6_clsroute(struct radix_node *rn, __unused struct radix_node_head *head)
 		 * called when the route's reference count is 0, don't
 		 * deallocate it until we return from this routine by
 		 * telling rtrequest that we're interested in it.
+		 * Safe to drop rt_lock and use rt_key, rt_gateway,
+		 * since holding rnh_lock here prevents another thread
+		 * from calling rt_setgate() on this route.
 		 */
-		if (rtrequest_locked(RTM_DELETE, (struct sockaddr *)rt_key(rt),
+		RT_UNLOCK(rt);
+		if (rtrequest_locked(RTM_DELETE, rt_key(rt),
 		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, &rt) == 0) {
 			/* Now let the caller free it */
-			rtunref(rt);
+			RT_LOCK(rt);
+			RT_REMREF_LOCKED(rt);
+		} else {
+			RT_LOCK(rt);
 		}
 	} else {
 		struct timeval timenow;
@@ -343,8 +414,10 @@ struct rtqk_arg {
 
 /*
  * Get rid of old routes.  When draining, this deletes everything, even when
- * the timeout is not expired yet.  When updating, this makes sure that
- * nothing has a timeout longer than the current value of rtq_reallyold.
+ * the timeout is not expired yet.  This also applies if the route is dynamic
+ * and there are sufficiently large number of such routes (more than a half of
+ * maximum).  When updating, this makes sure that nothing has a timeout longer
+ * than the current value of rtq_reallyold.
  */
 static int
 in6_rtqkill(struct radix_node *rn, void *rock)
@@ -355,19 +428,31 @@ in6_rtqkill(struct radix_node *rn, void *rock)
 	struct timeval timenow;
 
 	getmicrotime(&timenow);
-	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
+	RT_LOCK(rt);
 	if (rt->rt_flags & RTPRF_OURS) {
 		ap->found++;
 
-		if (ap->draining || rt->rt_rmx.rmx_expire <= timenow.tv_sec) {
+		if (ap->draining || rt->rt_rmx.rmx_expire <= timenow.tv_sec ||
+		    ((rt->rt_flags & RTF_DYNAMIC) != 0 &&
+		    ip6_maxdynroutes >= 0 &&
+		    in6dynroutes > ip6_maxdynroutes / 2)) {
 			if (rt->rt_refcnt > 0)
 				panic("rtqkill route really not free");
 
-			err = rtrequest_locked(RTM_DELETE,
-					(struct sockaddr *)rt_key(rt),
-					rt->rt_gateway, rt_mask(rt),
-					rt->rt_flags, 0);
+			/*
+			 * Delete this route since we're done with it;
+			 * the route may be freed afterwards, so we
+			 * can no longer refer to 'rt' upon returning
+			 * from rtrequest().  Safe to drop rt_lock and
+			 * use rt_key, rt_gateway, since holding rnh_lock
+			 * here prevents another thread from calling
+			 * rt_setgate() on this route.
+			 */
+			RT_UNLOCK(rt);
+			err = rtrequest_locked(RTM_DELETE, rt_key(rt),
+			    rt->rt_gateway, rt_mask(rt), rt->rt_flags, 0);
 			if (err) {
 				log(LOG_WARNING, "in6_rtqkill: error %d", err);
 			} else {
@@ -382,7 +467,10 @@ in6_rtqkill(struct radix_node *rn, void *rock)
 			}
 			ap->nextstop = lmin(ap->nextstop,
 					    rt->rt_rmx.rmx_expire);
+			RT_UNLOCK(rt);
 		}
+	} else {
+		RT_UNLOCK(rt);
 	}
 
 	return 0;
@@ -400,7 +488,7 @@ in6_rtqtimo(void *rock)
 	static time_t last_adjusted_timeout = 0;
 	struct timeval timenow;
 
-	lck_mtx_lock(rt_mtx);
+	lck_mtx_lock(rnh_lock);
 	/* Get the timestamp after we acquire the lock for better accuracy */
 	getmicrotime(&timenow);
 
@@ -438,7 +526,7 @@ in6_rtqtimo(void *rock)
 
 	atv.tv_usec = 0;
 	atv.tv_sec = arg.nextstop - timenow.tv_sec;
-	lck_mtx_unlock(rt_mtx);
+	lck_mtx_unlock(rnh_lock);
 	timeout(in6_rtqtimo, rock, tvtohz(&atv));
 }
 
@@ -463,6 +551,7 @@ in6_mtuexpire(struct radix_node *rn, void *rock)
 	if (!rt)
 		panic("rt == NULL in in6_mtuexpire");
 
+	RT_LOCK(rt);
 	if (rt->rt_rmx.rmx_expire && !(rt->rt_flags & RTF_PROBEMTU)) {
 		if (rt->rt_rmx.rmx_expire <= timenow.tv_sec) {
 			rt->rt_flags |= RTF_PROBEMTU;
@@ -471,6 +560,7 @@ in6_mtuexpire(struct radix_node *rn, void *rock)
 					rt->rt_rmx.rmx_expire);
 		}
 	}
+	RT_UNLOCK(rt);
 
 	return 0;
 }
@@ -489,7 +579,7 @@ in6_mtutimo(void *rock)
 
 	arg.rnh = rnh;
 	arg.nextstop = timenow.tv_sec + MTUTIMO_DEFAULT;
-	lck_mtx_lock(rt_mtx);
+	lck_mtx_lock(rnh_lock);
 	rnh->rnh_walktree(rnh, in6_mtuexpire, &arg);
 
 	atv.tv_usec = 0;
@@ -501,7 +591,7 @@ in6_mtutimo(void *rock)
 		arg.nextstop = timenow.tv_sec + 30;	/*last resort*/
 	}
 	atv.tv_sec -= timenow.tv_sec;
-	lck_mtx_unlock(rt_mtx);
+	lck_mtx_unlock(rnh_lock);
 	timeout(in6_mtutimo, rock, tvtohz(&atv));
 }
 
@@ -539,6 +629,7 @@ in6_inithead(void **head, int off)
 
 	rnh = *head;
 	rnh->rnh_addaddr = in6_addroute;
+	rnh->rnh_deladdr = in6_deleteroute;
 	rnh->rnh_matchaddr = in6_matroute;
 	rnh->rnh_matchaddr_args = in6_matroute_args;
 	rnh->rnh_close = in6_clsroute;

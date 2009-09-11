@@ -96,12 +96,9 @@ typedef	__darwin_ssize_t	ssize_t;
 
 /* [XSI] Used for the number of messages in the message queue */
 typedef unsigned long		msgqnum_t;
-typedef unsigned long long	user_msgqnum_t;
 
 /* [XSI] Used for the number of bytes allowed in a message queue */
 typedef unsigned long		msglen_t;
-typedef unsigned long long	user_msglen_t;
-
 
 /*
  * Possible values for the fifth parameter to msgrcv(), in addition to the
@@ -186,6 +183,15 @@ struct __msqid_ds_old {
 #pragma options align=natural
 #endif
 
+typedef user_ulong_t	user_msgqnum_t;
+typedef user64_ulong_t	user64_msgqnum_t;
+typedef user32_ulong_t	user32_msgqnum_t;
+
+typedef user_ulong_t	user_msglen_t;
+typedef user64_ulong_t	user64_msglen_t;
+typedef user32_ulong_t	user32_msglen_t;
+
+/* kernel version */
 struct user_msqid_ds {
 	struct ipc_perm	msg_perm;	/* [XSI] msg queue permissions */
 	struct msg	*msg_first;	/* first message in the queue */
@@ -202,6 +208,47 @@ struct user_msqid_ds {
 	user_time_t	msg_ctime;	/* [XSI] time of last msgctl() */
 	__int32_t	msg_pad3;	/* RESERVED: DO NOT USE */
 	__int32_t	msg_pad4[4];
+};
+
+/*
+ * user64 version - this structure only has to be correct if
+ * compiled LP64, because the 32 bit kernel doesn't need it
+ */
+struct user64_msqid_ds {
+	struct ipc_perm	msg_perm;	/* [XSI] msg queue permissions */
+	__int32_t	msg_first;	/* RESERVED: kernel use only */
+	__int32_t	msg_last;	/* RESERVED: kernel use only */
+	user64_msglen_t	msg_cbytes;	/* # of bytes on the queue */
+	user64_msgqnum_t	msg_qnum;	/* [XSI] number of msgs on the queue */
+	user64_msglen_t	msg_qbytes;	/* [XSI] max bytes on the queue */
+	pid_t		msg_lspid;	/* [XSI] pid of last msgsnd() */
+	pid_t		msg_lrpid;	/* [XSI] pid of last msgrcv() */
+	user64_time_t	msg_stime;	/* [XSI] time of last msgsnd() */
+	__int32_t	msg_pad1;	/* RESERVED: DO NOT USE */
+	user64_time_t	msg_rtime;	/* [XSI] time of last msgrcv() */
+	__int32_t	msg_pad2;	/* RESERVED: DO NOT USE */
+	user64_time_t	msg_ctime;	/* [XSI] time of last msgctl() */
+	__int32_t	msg_pad3;	/* RESERVED: DO NOT USE */
+	__int32_t	msg_pad4[4];
+} __attribute__((__packed__));
+
+struct user32_msqid_ds
+{
+	struct __ipc_perm_new	msg_perm; /* [XSI] msg queue permissions */
+	__int32_t	msg_first;	/* RESERVED: kernel use only */
+	__int32_t	msg_last;	/* RESERVED: kernel use only */
+	user32_msglen_t	msg_cbytes;	/* # of bytes on the queue */
+	user32_msgqnum_t	msg_qnum;	/* [XSI] number of msgs on the queue */
+	user32_msglen_t	msg_qbytes;	/* [XSI] max bytes on the queue */
+	pid_t		msg_lspid;	/* [XSI] pid of last msgsnd() */
+	pid_t		msg_lrpid;	/* [XSI] pid of last msgrcv() */
+	user32_time_t		msg_stime;	/* [XSI] time of last msgsnd() */
+	__int32_t	msg_pad1;	/* RESERVED: DO NOT USE */
+	user32_time_t		msg_rtime;	/* [XSI] time of last msgrcv() */
+	__int32_t	msg_pad2;	/* RESERVED: DO NOT USE */
+	user32_time_t		msg_ctime;	/* [XSI] time of last msgctl() */
+	__int32_t	msg_pad3;	/* RESERVED: DO NOT USE */
+	__int32_t	msg_pad4[4];	/* RESERVED: DO NOT USE */
 };
 
 #if __DARWIN_ALIGN_NATURAL

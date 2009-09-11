@@ -40,7 +40,7 @@
 
 #if defined(KERNEL)
 /*
- * For the kernel, set an explicit global label do the symbol can be located
+ * For the kernel, set an explicit global label so the symbol can be located
  */
 #define DTRACE_LAB(p, n)                                                                        \
     "__dtrace_probe$" DTRACE_TOSTRING(__LINE__) DTRACE_STRINGIFY(_##p##___##n)

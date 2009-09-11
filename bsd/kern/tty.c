@@ -101,7 +101,7 @@
 #include <sys/file_internal.h>
 #include <sys/conf.h>
 #include <sys/dkstat.h>
-#include <sys/uio.h>
+#include <sys/uio_internal.h>
 #include <sys/kernel.h>
 #include <sys/vnode.h>
 #include <sys/syslog.h>
@@ -113,6 +113,22 @@
 #include <dev/kmreg_com.h>
 #include <machine/cons.h>
 #include <sys/resource.h>	/* averunnable */
+
+/*
+ * Debugging assertions for tty locks
+ */
+#define TTY_DEBUG 1
+#if TTY_DEBUG
+#define	TTY_LOCK_OWNED(tp) do {lck_mtx_assert(&tp->t_lock, LCK_MTX_ASSERT_OWNED); } while (0)
+#define	TTY_LOCK_NOTOWNED(tp) do {lck_mtx_assert(&tp->t_lock, LCK_MTX_ASSERT_NOTOWNED); } while (0)
+#else
+#define TTY_LOCK_OWNED(tp)
+#define TTY_LOCK_NOTOWNED(tp)
+#endif
+
+static lck_grp_t	*tty_lck_grp;
+static lck_grp_attr_t	*tty_lck_grp_attr;
+static lck_attr_t      *tty_lck_attr;
 
 static int	ttnread(struct tty *tp);
 static void	ttyecho(int c, struct tty *tp);
@@ -218,7 +234,7 @@ static u_char const char_type[] = {
 #define	I_LOW_WATER	((TTYHOG - 2 * 256) * 7 / 8)	/* XXX */
 
 static void
-termios32to64(struct termios *in, struct user_termios *out)
+termios32to64(struct termios32 *in, struct user_termios *out)
 {
 	out->c_iflag = (user_tcflag_t)in->c_iflag;
 	out->c_oflag = (user_tcflag_t)in->c_oflag;
@@ -233,7 +249,7 @@ termios32to64(struct termios *in, struct user_termios *out)
 }
 
 static void
-termios64to32(struct user_termios *in, struct termios *out)
+termios64to32(struct user_termios *in, struct termios32 *out)
 {
 	out->c_iflag = (tcflag_t)in->c_iflag;
 	out->c_oflag = (tcflag_t)in->c_oflag;
@@ -249,17 +265,84 @@ termios64to32(struct user_termios *in, struct termios *out)
 
 
 /*
+ * tty_init
+ *
+ * Initialize the tty line discipline subsystem.
+ *
+ * Parameters:	void
+ *
+ * Returns:	void
+ *
+ * Locks:	No ttys can be allocated and no tty locks can be used
+ *		until after this function is called
+ *
+ * Notes:	The intent of this is to set up a log group attribute,
+ *		lock group, and loc atribute for subsequent per-tty locks.
+ *		This function is called early in bsd_init(), prior to the
+ *		console device initialization.
+ */
+void
+tty_init(void)
+{
+	tty_lck_grp_attr = lck_grp_attr_alloc_init();
+	tty_lck_grp = lck_grp_alloc_init("tty",  tty_lck_grp_attr);
+	tty_lck_attr = lck_attr_alloc_init();
+}
+
+
+/*
+ * tty_lock
+ *
+ * Lock the requested tty structure.
+ *
+ * Parameters:	tp				The tty we want to lock
+ *
+ * Returns:	void
+ *
+ * Locks:	On return, tp is locked
+ */
+void
+tty_lock(struct tty *tp)
+{
+	TTY_LOCK_NOTOWNED(tp);	/* debug assert */
+	lck_mtx_lock(&tp->t_lock);
+}
+
+
+/*
+ * tty_unlock
+ *
+ * Unlock the requested tty structure.
+ *
+ * Parameters:	tp				The tty we want to unlock
+ *
+ * Returns:	void
+ *
+ * Locks:	On return, tp is unlocked
+ */
+void
+tty_unlock(struct tty *tp)
+{
+	TTY_LOCK_OWNED(tp);	/* debug assert */
+	lck_mtx_unlock(&tp->t_lock);
+}
+
+
+/*
+ * ttyopen (LDISC)
+ *
  * Initial open of tty, or (re)entry to standard tty line discipline.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 int
 ttyopen(dev_t device, struct tty *tp)
 {
-	boolean_t funnel_state;
 	proc_t p = current_proc();
 	struct pgrp * pg, * oldpg;
 	struct session *sessp, *oldsess;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	tp->t_dev = device;
 
@@ -284,8 +367,8 @@ ttyopen(dev_t device, struct tty *tp)
 		session_lock(sessp);
 	    	if ((sessp->s_flags & S_NOCTTY) == 0) {	/* and no O_NOCTTY */
 			/* Hold on to the reference */
-			sessp->s_ttyp = tp;
-			OSBitOrAtomic(P_CONTROLT, (UInt32 *)&p->p_flag);
+			sessp->s_ttyp = tp;	/* XXX NOT A REFERENCE */
+			OSBitOrAtomic(P_CONTROLT, &p->p_flag);
 			session_unlock(sessp);
 			proc_list_lock();
 			oldpg = tp->t_pgrp;
@@ -296,39 +379,51 @@ ttyopen(dev_t device, struct tty *tp)
 			tp->t_pgrp = pg;
 			sessp->s_ttypgrpid = pg->pg_id;
 			proc_list_unlock();
+			/* SAFE: All callers drop the lock on return */
+			tty_unlock(tp);
 			if (oldpg != PGRP_NULL)
 				pg_rele(oldpg);
 			if (oldsess != SESSION_NULL)
 				session_rele(oldsess);	
+			tty_lock(tp);
 			goto out;
 	     	}
 		session_unlock(sessp);
 	}
 
+	/* SAFE: All callers drop the lock on return */
+	tty_unlock(tp);
 	if (sessp != SESSION_NULL)
 		session_rele(sessp);
 	if (pg != PGRP_NULL)
 		pg_rele(pg);
+	tty_lock(tp);
 
 out:
-	thread_funnel_set(kernel_flock, funnel_state);
 
+	/* XXX may be an error code */
 	return (0);
 }
 
 /*
+ * ttyclose
+ *
  * Handle close() on a tty line: flush and set to initial state,
  * bumping generation number so that pending read/write calls
  * can detect recycling of the tty.
  * XXX our caller should have done `spltty(); l_close(); ttyclose();'
  * and l_close() should have flushed, but we repeat the spltty() and
  * the flush in case there are buggy callers.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 int
 ttyclose(struct tty *tp)
 {
 	struct pgrp * oldpg;
 	struct session * oldsessp;
+
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	if (constty == tp) {
 		constty = NULL;
@@ -355,10 +450,13 @@ ttyclose(struct tty *tp)
 		oldsessp->s_ttypgrpid = NO_PID;
 	proc_list_unlock();
 	/* drop the reference on prev session and pgrp */
+	/* SAFE: All callers drop the lock on return */
+	tty_unlock(tp);
 	if (oldsessp != SESSION_NULL)
 		session_rele(oldsessp);
 	if (oldpg != PGRP_NULL)
 		pg_rele(oldpg);
+	tty_lock(tp);
 	tp->t_state = 0;
 	selthreadclear(&tp->t_wsel);
 	selthreadclear(&tp->t_rsel);
@@ -377,17 +475,26 @@ ttyclose(struct tty *tp)
 	 (c) != _POSIX_VDISABLE))
 
 /*
+ * ttyinput (LDISC)
+ *
  * Process input of a single character received on a tty.
+ *
+ * Parameters:	c			The character received
+ *		tp			The tty on which it was received
+ *
+ * Returns:	.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 int
 ttyinput(int c, struct tty *tp)
 {
 	tcflag_t iflag, lflag;
 	cc_t *cc;
-	int i, err, retval;
-	boolean_t funnel_state;
+	int i, err;
+	int retval = 0;			/* default return value */
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	TTY_LOCK_OWNED(tp);	/* debug assert */
         
 	/*
 	 * If input is pending take it first.
@@ -427,12 +534,14 @@ ttyinput(int c, struct tty *tp)
 		CLR(c, TTY_ERRORMASK);
 		if (ISSET(err, TTY_BI)) {
 			if (ISSET(iflag, IGNBRK)) {
-				thread_funnel_set(kernel_flock, funnel_state);
-				return (0);
+				goto out;
                         }
 			if (ISSET(iflag, BRKINT)) {
 				ttyflush(tp, FREAD | FWRITE);
+				/* SAFE: All callers drop the lock on return */
+				tty_unlock(tp);
 				tty_pgsignal(tp, SIGINT, 1);
+				tty_lock(tp);
 				goto endcase;
 			}
 			if (ISSET(iflag, PARMRK))
@@ -440,8 +549,7 @@ ttyinput(int c, struct tty *tp)
 		} else if ((ISSET(err, TTY_PE) && ISSET(iflag, INPCK))
 			|| ISSET(err, TTY_FE)) {
 			if (ISSET(iflag, IGNPAR)) {
-				thread_funnel_set(kernel_flock, funnel_state);
-				return (0);
+				goto out;
 			}
 			else if (ISSET(iflag, PARMRK)) {
 parmrk:
@@ -512,15 +620,29 @@ parmrk:
 				if (!ISSET(lflag, NOFLSH))
 					ttyflush(tp, FREAD | FWRITE);
 				ttyecho(c, tp);
+				/*
+				 * SAFE: All callers drop the lock on return;
+				 * SAFE: if we lose a threaded race on change
+				 * SAFE: of the interrupt character, we could
+				 * SAFE: have lost that race anyway due to the
+				 * SAFE: scheduler executing threads in
+				 * SAFE: priority order rather than "last
+				 * SAFE: active thread" order (FEATURE).
+				 */
+				tty_unlock(tp);
 				tty_pgsignal(tp,
 				    CCEQ(cc[VINTR], c) ? SIGINT : SIGQUIT, 1);
+				tty_lock(tp);
 				goto endcase;
 			}
 			if (CCEQ(cc[VSUSP], c)) {
 				if (!ISSET(lflag, NOFLSH))
 					ttyflush(tp, FREAD);
 				ttyecho(c, tp);
+				/* SAFE: All callers drop the lock on return */
+				tty_unlock(tp);
 				tty_pgsignal(tp, SIGTSTP, 1);
+				tty_lock(tp);
 				goto endcase;
 			}
 		}
@@ -532,12 +654,10 @@ parmrk:
 				if (!ISSET(tp->t_state, TS_TTSTOP)) {
 					SET(tp->t_state, TS_TTSTOP);
                                         ttystop(tp, 0);
-					thread_funnel_set(kernel_flock, funnel_state);
-					return (0);
+					goto out;
 				}
 				if (!CCEQ(cc[VSTART], c)) {
-					thread_funnel_set(kernel_flock, funnel_state);
-					return (0);
+					goto out;
                                 }
 				/*
 				 * if VSTART == VSTOP then toggle
@@ -552,8 +672,7 @@ parmrk:
 		 */
 		if (c == '\r') {
 			if (ISSET(iflag, IGNCR)) {
-				thread_funnel_set(kernel_flock, funnel_state);
-				return (0);
+				goto out;
                         }
 			else if (ISSET(iflag, ICRNL))
 				c = '\n';
@@ -650,10 +769,14 @@ parmrk:
 		 * ^T - kernel info and generate SIGINFO
 		 */
 		if (CCEQ(cc[VSTATUS], c) && ISSET(lflag, IEXTEN)) {
-			if (ISSET(lflag, ISIG))
+			if (ISSET(lflag, ISIG)) {
+				/* SAFE: All callers drop the lock on return */
+				tty_unlock(tp);
 				tty_pgsignal(tp, SIGINFO, 1);
+				tty_lock(tp);
+			}
 			if (!ISSET(lflag, NOKERNINFO))
-				ttyinfo(tp);
+				ttyinfo_locked(tp);
 			goto endcase;
 		}
 	}
@@ -709,35 +832,52 @@ input_overflow:
 			}
 		}
 	}
+
 endcase:
 	/*
 	 * IXANY means allow any character to restart output.
 	 */
 	if (ISSET(tp->t_state, TS_TTSTOP) &&
 	    !ISSET(iflag, IXANY) && cc[VSTART] != cc[VSTOP]) {
-		thread_funnel_set(kernel_flock, funnel_state);
-		return (0);
+	    	goto out;
         }
+
 restartoutput:
 	CLR(tp->t_lflag, FLUSHO);
 	CLR(tp->t_state, TS_TTSTOP);
+
 startoutput:
-    retval = ttstart(tp);
-	thread_funnel_set(kernel_flock, funnel_state);
+	/* Start the output */
+	retval = ttstart(tp);
+
+out:
 	return (retval);
 }
 
+
 /*
+ * ttyoutput
+ *
  * Output a single character on a tty, doing output processing
  * as needed (expanding tabs, newline processing, etc.).
- * Returns < 0 if succeeds, otherwise returns char to resend.
- * Must be recursive.
+ *
+ * Parameters:	c			The character to output
+ *		tp			The tty on which to output on the tty
+ *
+ * Returns:	< 0			Success
+ *		>= 0			Character to resend (failure)
+ *
+ * Locks:	Assumes tp is locked on entry, remains locked on exit
+ *
+ * Notes:	Must be recursive.
  */
 static int
 ttyoutput(int c, struct tty *tp)
 {
 	tcflag_t oflag;
 	int col;
+
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	oflag = tp->t_oflag;
 	if (!ISSET(oflag, OPOST)) {
@@ -814,20 +954,103 @@ ttyoutput(int c, struct tty *tp)
 	return (-1);
 }
 
+
 /*
- * Ioctls for all tty devices.  Called after line-discipline specific ioctl
- * has been called to do discipline-specific functions and/or reject any
- * of these ioctl commands.
+ * ttioctl
+ *
+ * Identical to ttioctl_locked, only the lock is not held
+ *
+ * Parameters:	<See ttioctl_locked()>
+ *
+ * Returns:	<See ttioctl_locked()>
+ *
+ * Locks:	This function assumes the tty_lock() is not held on entry;
+ *		it takes the lock, and releases it before returning.
+ *
+ * Notes:	This is supported to ensure the line discipline interfaces
+ *		all have the same locking semantics.
+ *
+ *		This function is called from 
  */
 int
-ttioctl(struct tty *tp,
-	u_long cmd, caddr_t data, int flag,
-	proc_t p)
+ttioctl(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
+{
+	int	retval;
+
+	tty_lock(tp);
+	retval = ttioctl_locked(tp, cmd, data, flag, p);
+	tty_unlock(tp);
+
+	return (retval);
+}
+
+
+/*
+ * ttioctl_locked
+ *
+ * Ioctls for all tty devices.
+ *
+ * Parameters:	tp			Tty on which ioctl() is being called
+ *		cmd			ioctl() command parameter
+ *		data			ioctl() data argument (if any)
+ *		flag			fileglob open modes from fcntl.h;
+ *					if called internally, this is usually
+ *					set to 0, rather than something useful
+ *		p			Process context for the call; if the
+ *					call is proxied to a worker thread,
+ *					this will not be the current process!!!
+ *
+ * Returns:	0			Success
+ *		EIO			I/O error (no process group, job
+ *					control, etc.)
+ *		EINTR			Interrupted by signal
+ *		EBUSY			Attempt to become the console while
+ *					the console is busy
+ *		ENOTTY			TIOCGPGRP on a non-controlling tty
+ *		EINVAL			Invalid baud rate
+ *		ENXIO			TIOCSETD of invalid line discipline
+ *		EPERM			TIOCSTI, not root, not open for read
+ *		EACCES			TIOCSTI, not root, not your controlling
+ *					tty
+ *		EPERM			TIOCSCTTY failed
+ *		ENOTTY/EINVAL/EPERM	TIOCSPGRP failed
+ *		EPERM			TIOCSDRAINWAIT as non-root user
+ *	suser:EPERM			Console control denied
+ *	ttywait:EIO			t_timeout too small/expired
+ *	ttywait:ERESTART		Upper layer must redrive the call;
+ *					this is usually done by the Libc
+ *					stub in user space
+ *	ttywait:EINTR			Interrupted (usually a signal)
+ *	ttcompat:EINVAL
+ *	ttcompat:ENOTTY
+ *	ttcompat:EIOCTL
+ *	ttcompat:ENOTTY			TIOCGSID, if no session or session
+ *					leader
+ *	ttcompat:ENOTTY			All unrecognized ioctls
+ *	*tp->t_param:?			TIOCSETA* underlying function
+ *	*linesw[t].l_open:?		TIOCSETD line discipline open failure
+ *
+ *
+ * Locks:	This function assumes that the tty_lock() is held for the
+ *		tp at the time of the call.  The lock remains held on return.
+ *
+ * Notes:	This function is called after line-discipline specific ioctl
+ *		has been called to do discipline-specific functions and/or
+ *		reject any of these ioctl() commands.
+ *
+ *		This function calls ttcompat(), which can re-call ttioctl()
+ *		to a depth of one (FORTRAN style mutual recursion); at some
+ *		point, we should just in-line ttcompat() here.
+ */
+int
+ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 {
 	int error = 0;
 	struct uthread *ut;
 	struct pgrp * pg, *oldpg;
 	struct session *sessp, * oldsessp;
+
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	ut = (struct uthread *)get_bsdthread_info(current_thread());
 	/* If the ioctl involves modification, signal if in the background. */
@@ -838,18 +1061,17 @@ ttioctl(struct tty *tp,
 	case  TIOCFLUSH:
 	case TIOCSTOP:
 	case TIOCSTART:
-	case  TIOCSETA:
+	case  TIOCSETA_32:
 	case  TIOCSETA_64:
 	case  TIOCSETD:
-	case  TIOCSETAF:
+	case  TIOCSETAF_32:
 	case  TIOCSETAF_64:
-	case  TIOCSETAW:
+	case  TIOCSETAW_32:
 	case  TIOCSETAW_64:
 	case  TIOCSPGRP:
 	case  TIOCSTAT:
 	case  TIOCSTI:
 	case  TIOCSWINSZ:
-#if COMPAT_43_TTY || defined(COMPAT_SUNOS)
 	case  TIOCLBIC:
 	case  TIOCLBIS:
 	case  TIOCLSET:
@@ -858,7 +1080,6 @@ ttioctl(struct tty *tp,
 	case  TIOCSETN:
 	case  TIOCSETP:
 	case  TIOCSLTC:
-#endif
 		while (isbackground(p, tp) &&
 		    (p->p_lflag & P_LPPWAIT) == 0 &&
 		    (p->p_sigignore & sigmask(SIGTTOU)) == 0 &&
@@ -868,13 +1089,17 @@ ttioctl(struct tty *tp,
 				error = EIO;
 				goto out;
 			}
+			/* SAFE: All callers drop the lock on return */
+			tty_unlock(tp);
 			if (pg->pg_jobc == 0) {
 				pg_rele(pg);
+				tty_lock(tp);
 				error = EIO;
 				goto out;
 			}
 			pgsignal(pg, SIGTTOU, 1);
 			pg_rele(pg);
+			tty_lock(tp);
 
 
 			/*
@@ -935,8 +1160,8 @@ ttioctl(struct tty *tp,
 			constty = NULL;
 		}
 		if (constty) {
-			(*cdevsw[major(cons.t_dev)].d_ioctl)
-				(cons.t_dev, KMIOCDISABLCONS, NULL, 0, p);
+			(*cdevsw[major(constty->t_dev)].d_ioctl)
+				(constty->t_dev, KMIOCDISABLCONS, NULL, 0, p);
 		} else {
 			(*cdevsw[major(tp->t_dev)].d_ioctl)
 				(tp->t_dev, KMIOCDISABLCONS, NULL, 0, p);
@@ -948,15 +1173,20 @@ ttioctl(struct tty *tp,
 		if (error)
 			goto out;
 		break;
-	case TIOCGETA:		/* get termios struct */
-	case TIOCGETA_64: {		/* get termios struct */
-		if (IS_64BIT_PROCESS(p)) {
-			termios32to64(&tp->t_termios, (struct user_termios *)data);
-		} else {
-			bcopy(&tp->t_termios, data, sizeof(struct termios));
-		}
+	case TIOCGETA_32:		/* get termios struct */
+#ifdef __LP64__
+		termios64to32((struct user_termios *)&tp->t_termios, (struct termios32 *)data);
+#else
+		bcopy(&tp->t_termios, data, sizeof(struct termios));
+#endif
 		break;
-	}
+	case TIOCGETA_64:		/* get termios struct */
+#ifdef __LP64__
+		bcopy(&tp->t_termios, data, sizeof(struct termios));
+#else
+		termios32to64((struct termios32 *)&tp->t_termios, (struct user_termios *)data);
+#endif
+		break;
 	case TIOCGETD:			/* get line discipline */
 		*(int *)data = tp->t_line;
 		break;
@@ -981,19 +1211,27 @@ ttioctl(struct tty *tp,
 	case TIOCOUTQ:			/* output queue size */
 		*(int *)data = tp->t_outq.c_cc;
 		break;
-	case TIOCSETA:			/* set termios struct */
+	case TIOCSETA_32:			/* set termios struct */
 	case TIOCSETA_64:
-	case TIOCSETAW:			/* drain output, set */
+	case TIOCSETAW_32:			/* drain output, set */
 	case TIOCSETAW_64:
-	case TIOCSETAF:		/* drn out, fls in, set */
-	case TIOCSETAF_64: {		/* drn out, fls in, set */
+	case TIOCSETAF_32:		/* drn out, fls in, set */
+	case TIOCSETAF_64:
+	{		/* drn out, fls in, set */
 		struct termios *t = (struct termios *)data;
 		struct termios lcl_termios;
 
-		if (IS_64BIT_PROCESS(p)) {
-			termios64to32((struct user_termios *)data, &lcl_termios);
+#ifdef __LP64__
+		if (cmd==TIOCSETA_32 || cmd==TIOCSETAW_32 || cmd==TIOCSETAF_32) {
+			termios32to64((struct termios32 *)data, (struct user_termios *)&lcl_termios);
 			t = &lcl_termios;
 		}
+#else
+		if (cmd==TIOCSETA_64 || cmd==TIOCSETAW_64 || cmd==TIOCSETAF_64) {
+			termios64to32((struct user_termios *)data, (struct termios32 *)&lcl_termios);
+			t = &lcl_termios;
+		}
+#endif
 #if 0
 	/* XXX bogus test; always false */
 		if (t->c_ispeed < 0 || t->c_ospeed < 0) {
@@ -1003,13 +1241,13 @@ ttioctl(struct tty *tp,
 #endif	/* 0 - leave in; may end up being a conformance issue */
 		if (t->c_ispeed == 0)
 			t->c_ispeed = t->c_ospeed;
-		if (cmd == TIOCSETAW || cmd == TIOCSETAF ||
+		if (cmd == TIOCSETAW_32 || cmd == TIOCSETAF_32 ||
 		    cmd == TIOCSETAW_64 || cmd == TIOCSETAF_64) {
 			error = ttywait(tp);
 			if (error) {
 				goto out;
 			}
-			if (cmd == TIOCSETAF || cmd == TIOCSETAF_64)
+			if (cmd == TIOCSETAF_32 || cmd == TIOCSETAF_64)
 				ttyflush(tp, FREAD);
 		}
 		if (!ISSET(t->c_cflag, CIGNORE)) {
@@ -1045,7 +1283,7 @@ ttioctl(struct tty *tp,
 			ttsetwater(tp);
 		}
 		if (ISSET(t->c_lflag, ICANON) != ISSET(tp->t_lflag, ICANON) &&
-		    cmd != TIOCSETAF && cmd != TIOCSETAF_64) {
+		    cmd != TIOCSETAF_32 && cmd != TIOCSETAF_64) {
 			if (ISSET(t->c_lflag, ICANON))
 				SET(tp->t_lflag, PENDIN);
 			else {
@@ -1091,10 +1329,15 @@ ttioctl(struct tty *tp,
 			error = ENXIO;
 			goto out;
 		}
+		/*
+		 * If the new line discipline is not equal to the old one,
+		 * close the old one and open the new one.
+		 */
 		if (t != tp->t_line) {
 			(*linesw[tp->t_line].l_close)(tp, flag);
 			error = (*linesw[t].l_open)(device, tp);
 			if (error) {
+				/* This is racy; it's possible to lose both */
 				(void)(*linesw[tp->t_line].l_open)(device, tp);
 				goto out;
 			}
@@ -1140,10 +1383,13 @@ ttioctl(struct tty *tp,
 		if (!SESS_LEADER(p, sessp) ||
 		    ((sessp->s_ttyvp || tp->t_session) &&
 		    (tp->t_session != sessp))) {
+			/* SAFE: All callers drop the lock on return */
+			tty_unlock(tp);
 			if (sessp != SESSION_NULL)
 				session_rele(sessp);
 			if (pg != PGRP_NULL)
 				pg_rele(pg);
+			tty_lock(tp);
 			error = EPERM;
 			goto out;
 		}
@@ -1158,14 +1404,17 @@ ttioctl(struct tty *tp,
 		tp->t_pgrp = pg;
 		proc_list_unlock();
 		session_lock(sessp);
-		sessp->s_ttyp = tp;
+		sessp->s_ttyp = tp;	/* XXX NOT A REFERENCE */
 		session_unlock(sessp);
-		OSBitOrAtomic(P_CONTROLT, (UInt32 *)&p->p_flag);
+		OSBitOrAtomic(P_CONTROLT, &p->p_flag);
+		/* SAFE: All callers drop the lock on return */
+		tty_unlock(tp);
 		/* drop the reference on prev session and pgrp */
 		if (oldsessp != SESSION_NULL)
 			session_rele(oldsessp);
 		if (oldpg != PGRP_NULL)
 			pg_rele(oldpg);
+		tty_lock(tp);
 		break;
 
 	case TIOCSPGRP: {		/* set pgrp of tty */
@@ -1184,9 +1433,12 @@ ttioctl(struct tty *tp,
 			error = EINVAL;
 			goto out;
 		 } else if (pgrp->pg_session != sessp) {
+			/* SAFE: All callers drop the lock on return */
+			tty_unlock(tp);
 			if (sessp != SESSION_NULL)
 				session_rele(sessp);
 			pg_rele(pgrp);
+			tty_lock(tp);
 			error = EPERM;
 			goto out;
 		}
@@ -1195,20 +1447,26 @@ ttioctl(struct tty *tp,
 		tp->t_pgrp = pgrp;
 		sessp->s_ttypgrpid = pgrp->pg_id;
 		proc_list_unlock();
+		/* SAFE: All callers drop the lock on return */
+		tty_unlock(tp);
 		if (oldpg != PGRP_NULL)
 			pg_rele(oldpg);
 		if (sessp != SESSION_NULL)
 			session_rele(sessp);
+		tty_lock(tp);
 		break;
 	}
 	case TIOCSTAT:			/* simulate control-T */
-		ttyinfo(tp);
+		ttyinfo_locked(tp);
 		break;
 	case TIOCSWINSZ:		/* set window size */
 		if (bcmp((caddr_t)&tp->t_winsize, data,
 		    sizeof (struct winsize))) {
 			tp->t_winsize = *(struct winsize *)data;
+			/* SAFE: All callers drop the lock on return */
+			tty_unlock(tp);
 			tty_pgsignal(tp, SIGWINCH, 1);
+			tty_lock(tp);
 		}
 		break;
 	case TIOCSDRAINWAIT:
@@ -1224,11 +1482,7 @@ ttioctl(struct tty *tp,
 		*(int *)data = tp->t_timeout / hz;
 		break; 
 	default:
-#if COMPAT_43_TTY || defined(COMPAT_SUNOS)
 		error = ttcompat(tp, cmd, data, flag, p);
-#else
-		error = ENOTTY;
-#endif
 		goto out;
 	}
 
@@ -1237,11 +1491,17 @@ out:
 	return(error);
 }
 
+
+/*
+ * Locks:	Assumes tp is locked on entry, remains locked on exit
+ */
 int
 ttyselect(struct tty *tp, int rw, void *wql, proc_t p)
 {
 	if (tp == NULL)
 		return (ENXIO);
+
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	switch (rw) {
 	case FREAD:
@@ -1261,23 +1521,36 @@ ttyselect(struct tty *tp, int rw, void *wql, proc_t p)
 	return (0);
 }
 
+
 /*
  * This is a wrapper for compatibility with the select vector used by
  * cdevsw.  It relies on a proper xxxdevtotty routine.
+ *
+ * Locks:	Assumes tty_lock() is not held prior to calling.
  */
 int
 ttselect(dev_t dev, int rw, void *wql, proc_t p)
 {
-	return ttyselect(cdevsw[major(dev)].d_ttys[minor(dev)], rw, wql, p);
+	int	rv;
+	struct tty *tp = cdevsw[major(dev)].d_ttys[minor(dev)];
+
+	tty_lock(tp);
+	rv =  ttyselect(tp, rw, wql, p);
+	tty_unlock(tp);
+
+	return (rv);
 }
 
+
 /*
- * Must be called at spltty().
+ * Locks:	Assumes tp is locked on entry, remains locked on exit
  */
 static int
 ttnread(struct tty *tp)
 {
 	int nread;
+
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	if (ISSET(tp->t_lflag, PENDIN))
 		ttypend(tp);
@@ -1290,13 +1563,31 @@ ttnread(struct tty *tp)
 	return (nread);
 }
 
+
 /*
+ * ttywait
+ *
  * Wait for output to drain.
+ *
+ * Parameters:	tp			Tty on which to wait for output to drain
+ *
+ * Returns:	0			Success
+ *		EIO			t_timeout too small/expired
+ *	ttysleep:ERESTART		Upper layer must redrive the call;
+ *					this is usually done by the Libc
+ *					stub in user space
+ *	ttysleep:EINTR			Interrupted (usually a signal)
+ *
+ * Notes:	Called from proc_exit() and vproc_exit().
+ *
+ * Locks:	Assumes tp is locked on entry, remains locked on exit
  */
 int
 ttywait(struct tty *tp)
 {
 	int error;
+
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	error = 0;
 	while ((tp->t_outq.c_cc || ISSET(tp->t_state, TS_BUSY)) &&
@@ -1321,19 +1612,30 @@ ttywait(struct tty *tp)
 	return (error);
 }
 
+/*
+ * Stop the underlying device driver.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
+ */
 static void
 ttystop(struct tty *tp, int rw)
 {
+	TTY_LOCK_OWNED(tp);	/* debug assert */
+
 	(*cdevsw[major(tp->t_dev)].d_stop)(tp, rw);
 }
 
 /*
  * Flush if successfully wait.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 static int
 ttywflush(struct tty *tp)
 {
 	int error;
+
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	if ((error = ttywait(tp)) == 0)
 		ttyflush(tp, FREAD);
@@ -1342,10 +1644,14 @@ ttywflush(struct tty *tp)
 
 /*
  * Flush tty read and/or write queues, notifying anyone waiting.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 void
 ttyflush(struct tty *tp, int rw)
 {
+	TTY_LOCK_OWNED(tp);	/* debug assert */
+
 #if 0
 again:
 #endif
@@ -1407,6 +1713,10 @@ again:
 
 /*
  * Copy in the default termios characters.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
+ *
+ * Notes:	No assertion; tp is not in scope.
  */
 void
 termioschars(struct termios *t)
@@ -1414,23 +1724,19 @@ termioschars(struct termios *t)
 	bcopy(ttydefchars, t->c_cc, sizeof t->c_cc);
 }
 
-/*
- * Old interface.
- */
-void
-ttychars(struct tty *tp)
-{
-	termioschars(&tp->t_termios);
-}
 
 /*
  * Handle input high water.  Send stop character for the IXOFF case.  Turn
  * on our input flow control bit and propagate the changes to the driver.
  * XXX the stop character should be put in a special high priority queue.
+ *
+ * Locks:	Assumes tty_lock() is held for the call.
  */
 void
 ttyblock(struct tty *tp)
 {
+	TTY_LOCK_OWNED(tp);	/* debug assert */
+
 	SET(tp->t_state, TS_TBLOCK);
 	if (ISSET(tp->t_iflag, IXOFF) && tp->t_cc[VSTOP] != _POSIX_VDISABLE &&
 	    putc(tp->t_cc[VSTOP], &tp->t_outq) != 0)
@@ -1438,14 +1744,19 @@ ttyblock(struct tty *tp)
 	ttstart(tp);
 }
 
+
 /*
  * Handle input low water.  Send start character for the IXOFF case.  Turn
  * off our input flow control bit and propagate the changes to the driver.
  * XXX the start character should be put in a special high priority queue.
+ *
+ * Locks:	Assumes tty_lock() is held for the call.
  */
 static void
 ttyunblock(struct tty *tp)
 {
+	TTY_LOCK_OWNED(tp);	/* debug assert */
+
 	CLR(tp->t_state, TS_TBLOCK);
 	if (ISSET(tp->t_iflag, IXOFF) && tp->t_cc[VSTART] != _POSIX_VDISABLE &&
 	    putc(tp->t_cc[VSTART], &tp->t_outq) != 0)
@@ -1453,65 +1764,69 @@ ttyunblock(struct tty *tp)
 	ttstart(tp);
 }
 
-/* FreeBSD: Not used by any current (i386) drivers. */
+
 /*
- * Restart after an inter-char delay.
+ * ttstart
+ *
+ * Start tty output
+ *
+ * Parameters:	tp			tty on which to start output
+ *
+ * Returns:	0			Success
+ *
+ * Locks:	Assumes tty_lock() is held for the call.
+ *
+ * Notes:	This function might as well be void; it always returns success
+ *
+ *		Called from ttioctl_locked(), LDISC routines, and
+ *		ttycheckoutq(), ttyblock(), ttyunblock(), and tputchar()
  */
-void
-ttrstrt(void *tp_arg)
-{
-	struct tty *tp;
-
-#if DIAGNOSTIC
-	if (tp_arg == NULL)
-		panic("ttrstrt");
-#endif
-	tp = tp_arg;
-
-	CLR(tp->t_state, TS_TIMEOUT);
-	ttstart(tp);
-
-}
-
 int
 ttstart(struct tty *tp)
 {
-	boolean_t funnel_state;
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	if (tp->t_oproc != NULL)	/* XXX: Kludge for pty. */
 		(*tp->t_oproc)(tp);
-	thread_funnel_set(kernel_flock, funnel_state);
+
 	return (0);
 }
 
+
 /*
+ * ttylclose (LDISC)
+ *
  * "close" a line discipline
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 int
 ttylclose(struct tty *tp, int flag)
 {
-	boolean_t funnel_state;
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	if ( (flag & FNONBLOCK) || ttywflush(tp))
 		ttyflush(tp, FREAD | FWRITE);
-	thread_funnel_set(kernel_flock, funnel_state);
+
 	return (0);
 }
 
+
 /*
+ * ttymodem (LDISC)
+ *
  * Handle modem control transition on a tty.
  * Flag indicates new state of carrier.
  * Returns 0 if the line should be turned off, otherwise 1.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 int
 ttymodem(struct tty *tp, int flag)
 {
-	boolean_t funnel_state;
+	int rval = 1;		/* default return value */
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	if (ISSET(tp->t_state, TS_CARR_ON) && ISSET(tp->t_cflag, MDMBUF)) {
 		/*
@@ -1540,8 +1855,8 @@ ttymodem(struct tty *tp, int flag)
 			if (tp->t_session && tp->t_session->s_leader)
 				psignal(tp->t_session->s_leader, SIGHUP);
 			ttyflush(tp, FREAD | FWRITE);
-			thread_funnel_set(kernel_flock, funnel_state);
-			return (0);
+			rval = 0;
+			goto out;
 		}
 	} else {
 		/*
@@ -1554,19 +1869,25 @@ ttymodem(struct tty *tp, int flag)
 		ttwakeup(tp);
 		ttwwakeup(tp);
 	}
-	thread_funnel_set(kernel_flock, funnel_state);
-	return (1);
+
+out:
+	return (rval);
 }
+
 
 /*
  * Reinput pending characters after state switch
  * call at spltty().
+ *
+ * Locks:	Assumes tty_lock() is held for the call.
  */
 static void
 ttypend(struct tty *tp)
 {
 	struct clist tq;
 	int c;
+
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	CLR(tp->t_lflag, PENDIN);
 	SET(tp->t_state, TS_TYPEN);
@@ -1578,8 +1899,13 @@ ttypend(struct tty *tp)
 	CLR(tp->t_state, TS_TYPEN);
 }
 
+
 /*
+ * ttread (LDISC)
+ *
  * Process a read call on a tty device.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 int
 ttread(struct tty *tp, struct uio *uio, int flag)
@@ -1592,11 +1918,10 @@ ttread(struct tty *tp, struct uio *uio, int flag)
 	int first, error = 0;
 	int has_etime = 0, last_cc = 0;
 	long slp = 0;		/* XXX this should be renamed `timo'. */
-	boolean_t funnel_state;
 	struct uthread *ut;
 	struct pgrp * pg;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	ut = (struct uthread *)get_bsdthread_info(current_thread());
 
@@ -1617,21 +1942,27 @@ loop:
 		if ((p->p_sigignore & sigmask(SIGTTIN)) ||
 		   (ut->uu_sigmask & sigmask(SIGTTIN)) ||
 		    p->p_lflag & P_LPPWAIT) {
-			thread_funnel_set(kernel_flock, funnel_state);
-			return (EIO);
+		    	error = EIO;
+			goto err;
 		}
 		pg = proc_pgrp(p);
 		if (pg == PGRP_NULL) {
-			thread_funnel_set(kernel_flock, funnel_state);
-			return (EIO);
+		    	error = EIO;
+			goto err;
 		}
 		if (pg->pg_jobc == 0) {
+			/* SAFE: All callers drop the lock on return */
+			tty_unlock(tp);
 			pg_rele(pg);
-			thread_funnel_set(kernel_flock, funnel_state);
-			return (EIO);
+			tty_lock(tp);
+		    	error = EIO;
+			goto err;
 		}
+		/* SAFE: All callers drop the lock on return */
+		tty_unlock(tp);
 		pgsignal(pg, SIGTTIN, 1);
 		pg_rele(pg);
+		tty_lock(tp);
 
 		/*
 		 * We signalled ourself, so we need to act as if we
@@ -1639,13 +1970,13 @@ loop:
 		 * the signal.  If it's a signal that stops the
 		 * process, that's handled in the signal sending code.
 		 */
-			thread_funnel_set(kernel_flock, funnel_state);
-		return (EINTR);
+		error = EINTR;
+		goto err;
 	}
 
 	if (ISSET(tp->t_state, TS_ZOMBIE)) {
-		thread_funnel_set(kernel_flock, funnel_state);
-		return (0);	/* EOF */
+		/* EOF - returning 0 */
+		goto err;
 	}
 
 	/*
@@ -1659,12 +1990,11 @@ loop:
 	if (flag & IO_NDELAY) {
 		if (qp->c_cc > 0)
 			goto read;
-		if (!ISSET(lflag, ICANON) && cc[VMIN] == 0) {
-			thread_funnel_set(kernel_flock, funnel_state);
-			return (0);
+		if (ISSET(lflag, ICANON) || cc[VMIN] != 0) {
+		    	error = EWOULDBLOCK;
 		}
-		thread_funnel_set(kernel_flock, funnel_state);
-		return (EWOULDBLOCK);
+		/* else polling - returning 0 */
+		goto err;
 	}
 	if (!ISSET(lflag, ICANON)) {
 		int m = cc[VMIN];
@@ -1687,8 +2017,7 @@ loop:
 				goto read;
 
 			/* m, t and qp->c_cc are all 0.  0 is enough input. */
-			thread_funnel_set(kernel_flock, funnel_state);
-			return (0);
+			goto err;
 		}
 		t *= 100000;		/* time in us */
 #define diff(t1, t2) (((t1).tv_sec - (t2).tv_sec) * 1000000 + \
@@ -1739,8 +2068,7 @@ loop:
 			} else {
 			        if (timercmp(&etime, &timecopy, <=)) {
 					/* Timed out, but 0 is enough input. */
-					thread_funnel_set(kernel_flock, funnel_state);
-					return (0);
+					goto err;
 				}
 				slp = diff(etime, timecopy);
 			}
@@ -1755,7 +2083,7 @@ loop:
 		 * is large (divide by `tick' and/or arrange to
 		 * use hzto() if hz is large).
 		 */
-		slp = (long) (((u_long)slp * hz) + 999999) / 1000000;
+		slp = (long) (((u_int32_t)slp * hz) + 999999) / 1000000;
 		goto sleep;
 	}
 	if (qp->c_cc <= 0) {
@@ -1769,8 +2097,7 @@ sleep:
 		if (error == EWOULDBLOCK)
 			error = 0;
 		else if (error) {
-			thread_funnel_set(kernel_flock, funnel_state);
-			return (error);
+			goto err;
 		}
 		/*
 		 * XXX what happens if another process eats some input
@@ -1825,7 +2152,14 @@ slowcase:
 		 */
 		if (CCEQ(cc[VDSUSP], c) &&
 		    ISSET(lflag, IEXTEN | ISIG) == (IEXTEN | ISIG)) {
+			/*
+			 * SAFE: All callers drop the lock on return and
+			 * SAFE: current thread will not change out from
+			 * SAFE: under us in the "goto loop" case.
+			 */
+			tty_unlock(tp);
 			tty_pgsignal(tp, SIGTSTP, 1);
+			tty_lock(tp);
 			if (first) {
 				error = ttysleep(tp, &lbolt, TTIPRI | PCATCH,
 						 "ttybg3", 0);
@@ -1867,9 +2201,10 @@ out:
 	    tp->t_rawq.c_cc + tp->t_canq.c_cc <= I_LOW_WATER)
 		ttyunblock(tp);
 
-	thread_funnel_set(kernel_flock, funnel_state);
+err:
 	return (error);
 }
+
 
 /*
  * Check the output queue on tp for space for a kernel message (from uprintf
@@ -1877,6 +2212,10 @@ out:
  * lose messages due to normal flow control, but don't let the tty run amok.
  * Sleeps here are not interruptible, but we return prematurely if new signals
  * arrive.
+ *
+ * Locks:	Assumes tty_lock() is held before calling
+ *
+ * Notes:	This function is called from tprintf() in subr_prf.c
  */
 int
 ttycheckoutq(struct tty *tp, int wait)
@@ -1884,6 +2223,8 @@ ttycheckoutq(struct tty *tp, int wait)
 	int hiwat;
 	sigset_t oldsig;
 	struct uthread *ut;
+
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	ut = (struct uthread *)get_bsdthread_info(current_thread());
 
@@ -1898,13 +2239,18 @@ ttycheckoutq(struct tty *tp, int wait)
 				return (0);
 			}
 			SET(tp->t_state, TS_SO_OLOWAT);
-			tsleep(TSA_OLOWAT(tp), PZERO - 1, "ttoutq", hz);
+			ttysleep(tp, TSA_OLOWAT(tp), PZERO - 1, "ttoutq", hz);
 		}
 	return (1);
 }
 
+
 /*
+ * ttwrite (LDISC)
+ *
  * Process a write call on a tty device.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 int
 ttwrite(struct tty *tp, struct uio *uio, int flag)
@@ -1912,17 +2258,16 @@ ttwrite(struct tty *tp, struct uio *uio, int flag)
 	char *cp = NULL;
 	int cc, ce;
 	proc_t p;
-	int i, hiwat, count, error;
+	int i, hiwat, error;
+	user_ssize_t count;
 	char obuf[OBUFSIZ];
-	boolean_t funnel_state;
 	struct uthread *ut;
 	struct pgrp * pg;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	ut = (struct uthread *)get_bsdthread_info(current_thread());
 	hiwat = tp->t_hiwat;
-	// LP64todo - fix this!
 	count = uio_resid(uio);
 	error = 0;
 	cc = 0;
@@ -1958,12 +2303,18 @@ loop:
 			goto out;
 		}
 		if (pg->pg_jobc == 0) {
+			/* SAFE: All callers drop the lock on return */
+			tty_unlock(tp);
 			pg_rele(pg);
+			tty_lock(tp);
 			error = EIO;
 			goto out;
 		}
+		/* SAFE: All callers drop the lock on return */
+		tty_unlock(tp);
 		pgsignal(pg, SIGTTOU, 1);
 		pg_rele(pg);
+		tty_lock(tp);
 		/*
 		 * We signalled ourself, so we need to act as if we
 		 * have been "interrupted" from a "sleep" to act on
@@ -1981,7 +2332,6 @@ loop:
 	while (uio_resid(uio) > 0 || cc > 0) {
 		if (ISSET(tp->t_lflag, FLUSHO)) {
 			uio_setresid(uio, 0);
-			thread_funnel_set(kernel_flock, funnel_state);
 			return (0);
 		}
 		if (tp->t_outq.c_cc > hiwat)
@@ -2063,7 +2413,6 @@ out:
 	 * (the call will either return short or restart with a new uio).
 	 */
 	uio_setresid(uio, (uio_resid(uio) + cc));
-	thread_funnel_set(kernel_flock, funnel_state);
 	return (error);
 
 overfull:
@@ -2087,7 +2436,6 @@ ovhiwat:
 	}
 	if (flag & IO_NDELAY) {
 		uio_setresid(uio, (uio_resid(uio) + cc));
-		thread_funnel_set(kernel_flock, funnel_state);
 		return (uio_resid(uio) == count ? EWOULDBLOCK : 0);
 	}
 	SET(tp->t_state, TS_SO_OLOWAT);
@@ -2100,9 +2448,12 @@ ovhiwat:
 	goto loop;
 }
 
+
 /*
  * Rubout one character from the rawq of tp
  * as cleanly as possible.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 static void
 ttyrub(int c, struct tty *tp)
@@ -2110,6 +2461,8 @@ ttyrub(int c, struct tty *tp)
 	u_char *cp;
 	int savecol;
 	int tabc;
+
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	if (!ISSET(tp->t_lflag, ECHO) || ISSET(tp->t_lflag, EXTPROC))
 		return;
@@ -2182,12 +2535,17 @@ ttyrub(int c, struct tty *tp)
 	--tp->t_rocount;
 }
 
+
 /*
  * Back over count characters, erasing them.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 static void
 ttyrubo(struct tty *tp, int count)
 {
+	TTY_LOCK_OWNED(tp);	/* debug assert */
+
 	while (count-- > 0) {
 		(void)ttyoutput('\b', tp);
 		(void)ttyoutput(' ', tp);
@@ -2195,16 +2553,21 @@ ttyrubo(struct tty *tp, int count)
 	}
 }
 
+
 /*
  * ttyretype --
  *	Reprint the rawq line.  Note, it is assumed that c_cc has already
  *	been checked.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 static void
 ttyretype(struct tty *tp)
 {
 	u_char *cp;
 	int c;
+
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	/* Echo the reprint character. */
 	if (tp->t_cc[VREPRINT] != _POSIX_VDISABLE)
@@ -2227,12 +2590,17 @@ ttyretype(struct tty *tp)
 	tp->t_rocol = 0;
 }
 
+
 /*
  * Echo a typed character to the terminal.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 static void
 ttyecho(int c, struct tty *tp)
 {
+	TTY_LOCK_OWNED(tp);	/* debug assert */
+
 	if (!ISSET(tp->t_state, TS_CNTTB))
 		CLR(tp->t_lflag, FLUSHO);
 	if ((!ISSET(tp->t_lflag, ECHO) &&
@@ -2252,26 +2620,52 @@ ttyecho(int c, struct tty *tp)
 	(void)ttyoutput(c, tp);
 }
 
+
 /*
  * Wake up any readers on a tty.
+ *
+ * Locks:	Assumes tty_lock() is held for the call.
  */
 void
 ttwakeup(struct tty *tp)
 {
+	TTY_LOCK_OWNED(tp);	/* debug assert */
+
 	selwakeup(&tp->t_rsel);
-	if (ISSET(tp->t_state, TS_ASYNC))
+	KNOTE(&tp->t_rsel.si_note, 1);
+	if (ISSET(tp->t_state, TS_ASYNC)) {
+		/*
+		 * XXX: Callers may not revalidate it the tty is closed
+		 * XXX: out from under them by another thread, but we do
+		 * XXX: not support queued signals.  This should be safe,
+		 * XXX: since the process we intend to wakeup is in the
+		 * XXX: process group, and will wake up because of the
+		 * XXX: signal anyway.
+		 */
+		tty_unlock(tp);
 		tty_pgsignal(tp, SIGIO, 1);
+		tty_lock(tp);
+	}
 	wakeup(TSA_HUP_OR_INPUT(tp));
 }
 
+
 /*
+ * ttwwakeup (LDISC)
+ *
  * Wake up any writers on a tty.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 void
 ttwwakeup(struct tty *tp)
 {
-	if (tp->t_outq.c_cc <= tp->t_lowat)
+	TTY_LOCK_OWNED(tp);	/* debug assert */
+
+	if (tp->t_outq.c_cc <= tp->t_lowat) {
 		selwakeup(&tp->t_wsel);
+		KNOTE(&tp->t_wsel.si_note, 1);
+	}
 	if (ISSET(tp->t_state, TS_BUSY | TS_SO_OCOMPLETE) ==
 	    TS_SO_OCOMPLETE && tp->t_outq.c_cc == 0) {
 		CLR(tp->t_state, TS_SO_OCOMPLETE);
@@ -2284,9 +2678,13 @@ ttwwakeup(struct tty *tp)
 	}
 }
 
+
 /*
  * Look up a code for a specified speed in a conversion table;
  * used by drivers to map software speed values to hardware parameters.
+ *
+ * Notes:	No locks are assumed for this function; it does not
+ *		directly access struct tty.
  */
 int
 ttspeedtab(int speed, struct speedtab *table)
@@ -2297,18 +2695,22 @@ ttspeedtab(int speed, struct speedtab *table)
 	return (-1);
 }
 
+
 /*
  * Set tty hi and low water marks.
  *
  * Try to arrange the dynamics so there's about one second
  * from hi to low water.
  *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 void
 ttsetwater(struct tty *tp)
 {
 	int cps;
 	unsigned int x;
+
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 #define CLAMP(x, h, l)	((x) > h ? h : ((x) < l) ? l : (x))
 
@@ -2329,11 +2731,14 @@ extern kern_return_t	thread_info_internal(thread_t thread,
 				thread_info_t thread_info_out,
 				mach_msg_type_number_t *thread_info_count);
 
+
 /*
  * Report on state of foreground process group.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
  */
 void
-ttyinfo(struct tty *tp)
+ttyinfo_locked(struct tty *tp)
 {
 	int		load;
 	thread_t	thread;
@@ -2348,6 +2753,7 @@ ttyinfo(struct tty *tp)
 	mach_msg_type_number_t		mmtn = THREAD_BASIC_INFO_COUNT;
 	struct pgrp * pg;
 
+	TTY_LOCK_OWNED(tp);	/* debug assert */
 
 	if (ttycheckoutq(tp,0) == 0)
 		return;
@@ -2394,7 +2800,10 @@ ttyinfo(struct tty *tp)
 		}
 	}
 	pgrp_unlock(pg);
+	/* SAFE: All callers drop the lock on return */
+	tty_unlock(tp);
 	pg_rele(pg);
+	tty_lock(tp);
 
 	pick = proc_find(pickpid);
 	if (pick == PROC_NULL)
@@ -2434,7 +2843,7 @@ ttyinfo(struct tty *tp)
 	proc_rele(pick);
 
 	/* Print command, pid, state, utime, and stime */
-	ttyprintf(tp, " cmd: %s %d %s %ld.%02ldu %ld.%02lds\n",
+	ttyprintf(tp, " cmd: %s %d %s %ld.%02du %ld.%02ds\n",
 		pick->p_comm,
 		pick->p_pid,
 		state,
@@ -2442,6 +2851,7 @@ ttyinfo(struct tty *tp)
 		(long)stime.tv_sec, stime.tv_usec / 10000);
 	tp->t_rocount = 0;
 }
+
 
 /*
  * Returns 1 if p2 is "better" than p1
@@ -2461,6 +2871,11 @@ ttyinfo(struct tty *tp)
 #define ONLYB   1
 #define BOTH    3
 
+/*
+ * Locks:	pgrp_lock(p2) held on call to this function
+ *		tty_lock(tp) for p2's tty, for which p2 is the foreground
+ *			process, held on call to this function
+ */
 static int
 proc_compare(proc_t p1, proc_t p2)
 {
@@ -2513,12 +2928,19 @@ proc_compare(proc_t p1, proc_t p2)
 	return (p2->p_pid > p1->p_pid);		/* tie - return highest pid */
 }
 
+
 /*
  * Output char to tty; console putchar style.
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
+ *
+ * Notes:	Only ever called from putchar() in subr_prf.c
  */
 int
 tputchar(int c, struct tty *tp)
 {
+	TTY_LOCK_OWNED(tp);	/* debug assert */
+
 	if (!ISSET(tp->t_state, TS_CONNECTED)) {
 		return (-1);
 	}
@@ -2529,9 +2951,33 @@ tputchar(int c, struct tty *tp)
 	return (0);
 }
 
+
 /*
+ * ttysleep
+ *
+ * Sleep on a wait channel waiting for an interrupt or a condition to come
+ * true so that we are woken up.
+ *
+ * Parameters:	tp			Tty going to sleep
+ *		chan			The sleep channel (usually an address
+ *					of a structure member)
+ *		pri			priority and flags
+ *		wmesg			Wait message; shows up in debugger,
+ *					should show up in "ps", but doesn't
+ *		timo			Timeout for the sleep
+ *
+ * Returns:	0			Condition came true
+ *		ERESTART		Upper layer must redrive the call;
+ *					this is usually done by the Libc
+ *					stub in user space
+ *	msleep0:EINTR			Interrupted (usually a signal)
+ *	msleep0:ERESTART		Interrupted (usually a masked signal)
+ *	msleep0:EWOULDBLOCK		Timeout (timo) already expired
+ *
+ * Locks:	Assumes tty_lock() is held prior to calling.
+ *
  * Sleep on chan, returning ERESTART if tty changed while we napped and
- * returning any errors (e.g. EINTR/EWOULDBLOCK) reported by tsleep.  If
+ * returning any errors (e.g. EINTR/EWOULDBLOCK) reported by msleep0.  If
  * the tty is revoked, restarting a pending call will redo validation done
  * at the start of the call.
  */
@@ -2541,12 +2987,16 @@ ttysleep(struct tty *tp, void *chan, int pri, const char *wmesg, int timo)
 	int error;
 	int gen;
 
+	TTY_LOCK_OWNED(tp);
+
 	gen = tp->t_gen;
-	error = tsleep(chan, pri, wmesg, timo);
+	/* Use of msleep0() avoids conversion timo/timespec/timo */
+	error = msleep0(chan, &tp->t_lock, pri, wmesg, timo, (int (*)(int))0);
 	if (error)
 		return (error);
 	return (tp->t_gen == gen ? 0 : ERESTART);
 }
+
 
 /*
  * Allocate a tty structure and its associated buffers.
@@ -2555,6 +3005,9 @@ ttysleep(struct tty *tp, void *chan, int pri, const char *wmesg, int timo)
  *
  * Returns:	!NULL				Address of new struct tty
  *		NULL				Error ("ENOMEM")
+ *
+ * Locks:	The tty_lock() of the returned tty is not held when it
+ *		is returned.
  */
 struct tty *
 ttymalloc(void)
@@ -2568,26 +3021,40 @@ ttymalloc(void)
 		clalloc(&tp->t_canq, TTYCLSIZE, 1);
 		/* output queue doesn't need quoting */
 		clalloc(&tp->t_outq, TTYCLSIZE, 0);
+		lck_mtx_init(&tp->t_lock, tty_lck_grp, tty_lck_attr);
 	}
 	return(tp);
 }
 
+
 /*
  * Free a tty structure and its buffers.
+ *
+ * Locks:	The tty_lock() is assumed to not be held at the time of
+ *		the free; this functions destroys the mutex.
  */
 void
 ttyfree(struct tty *tp)
 {
+	TTY_LOCK_NOTOWNED(tp);	/* debug assert */
+
 	clfree(&tp->t_rawq);
 	clfree(&tp->t_canq);
 	clfree(&tp->t_outq);
+	lck_mtx_destroy(&tp->t_lock, tty_lck_grp);
 	FREE(tp, M_TTYS);
 }
 
+
+/*
+ * Locks:	Assumes tty_lock() is held prior to calling.
+ */
 int
 isbackground(proc_t p, struct tty  *tp)
 {
-	return (isctty(p, tp) && (p->p_pgrp != tp->t_pgrp));
+	TTY_LOCK_OWNED(tp);
+
+	return (tp->t_session != NULL && p->p_pgrp != NULL && (p->p_pgrp != tp->t_pgrp) && isctty_sp(p, tp, p->p_pgrp->pg_session));
 }
 
 static int 

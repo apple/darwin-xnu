@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -156,7 +156,11 @@ routine host_get_clock_service(
 		clock_id	: clock_id_t;
 	out	clock_serv	: clock_serv_t);
 
-
+/*
+ * kernel module interface (obsolete as of SnowLeopard)
+ * see mach/kmod.h
+ */
+/* kmod_ MIG calls now return KERN_NOT_SUPPORTED on PPC/i386/x86_64. */
 routine	kmod_get_info(
 		host		: host_t;
 	out	modules		: kmod_args_t);
@@ -192,18 +196,8 @@ routine host_ipc_hash_info(
 	out	info		: hash_info_bucket_array_t,
 					Dealloc);
 
-/*
- * JMM - These routines should be on the host_priv port.  We need
- * to verify the move before putting them there.
- */
-routine enable_bluebox(
-		host			: host_t;
-	in	taskID			: unsigned;
-	in	TWI_TableStart	: unsigned;
-	in	Desc_TableStart	: unsigned);
-
-routine disable_bluebox(
-		host		: host_t);
+skip; /* was enable_bluebox */
+skip; /* was disable_bluebox */
 
 /*
  * JMM - Keep processor_set related items at the end for easy
@@ -254,5 +248,14 @@ routine host_lockgroup_info(
 		host		: host_t;
 	out	lockgroup_info	: lockgroup_info_array_t,
 					Dealloc);
+
+/*
+ *	Return 64-bit statistics from this host.
+ */
+routine host_statistics64(
+		host_priv	: host_t;
+		flavor		: host_flavor_t;
+	out	host_info64_out	: host_info64_t, CountInOut);
+
 
 /* vim: set ft=c : */

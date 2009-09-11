@@ -59,26 +59,13 @@
 
 #include <architecture/ppc/mode_independent_asm.h>
 
-/* From rhapsody kernel mach/ppc/syscall_sw.h */
-#define	kernel_trap_args_0
-#define	kernel_trap_args_1
-#define	kernel_trap_args_2
-#define	kernel_trap_args_3
-#define	kernel_trap_args_4
-#define	kernel_trap_args_5
-#define	kernel_trap_args_6
-#define	kernel_trap_args_7
-#define	kernel_trap_args_8
-/* End of rhapsody kernel mach/ppc/syscall_sw.h */
-
 /*
  * Macros.
  */
 
 #define	SYSCALL(name, nargs)			\
 	.globl	cerror				@\
-    MI_ENTRY_POINT(_##name)     @\
-	kernel_trap_args_##nargs    @\
+	MI_ENTRY_POINT(_##name)     @\
 	li	r0,SYS_##name			@\
 	sc                          @\
 	b	1f                      @\
@@ -88,7 +75,6 @@
 
 #define	SYSCALL_NONAME(name, nargs)		\
 	.globl	cerror				@\
-	kernel_trap_args_##nargs    @\
 	li	r0,SYS_##name			@\
 	sc                          @\
 	b	1f                      @\

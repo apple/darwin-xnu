@@ -107,11 +107,41 @@
 #include <security/mac_framework.h>
 #endif
 
-static void	devfs_release_busy(devnode_t *);
+#if FDESC
+#include "fdesc.h"
+#endif
+
+typedef struct devfs_vnode_event {
+	vnode_t 		dve_vp;
+	uint32_t 		dve_vid;
+	uint32_t		dve_events;
+} *devfs_vnode_event_t;
+
+/* 
+ * Size of stack buffer (fast path) for notifications.  If 
+ * the number of mounts is small, no need to malloc a buffer.
+ */
+#define NUM_STACK_ENTRIES 5 
+
+typedef struct devfs_event_log {
+	size_t 			del_max;
+	size_t 			del_used;
+	devfs_vnode_event_t 	del_entries;
+} *devfs_event_log_t;
+	
+
 static void	dev_free_hier(devdirent_t *);
-static int	devfs_propogate(devdirent_t *, devdirent_t *);
-static int	dev_finddir(const char *, devnode_t *, int, devnode_t **);
+static int	devfs_propogate(devdirent_t *, devdirent_t *, devfs_event_log_t);
+static int	dev_finddir(const char *, devnode_t *, int, devnode_t **, devfs_event_log_t);
 static int	dev_dup_entry(devnode_t *, devdirent_t *, devdirent_t **, struct devfsmount *);
+void		devfs_ref_node(devnode_t *);
+void 		devfs_rele_node(devnode_t *);
+static void	devfs_record_event(devfs_event_log_t, devnode_t*, uint32_t);
+static int 	devfs_init_event_log(devfs_event_log_t, uint32_t, devfs_vnode_event_t);
+static void	devfs_release_event_log(devfs_event_log_t, int);
+static void	devfs_bulk_notify(devfs_event_log_t);
+static devdirent_t *devfs_make_node_internal(dev_t, devfstype_t type, uid_t, gid_t, int, 
+			int (*clone)(dev_t dev, int action), const char *fmt, va_list ap);
 
 
 lck_grp_t	* devfs_lck_grp;
@@ -122,11 +152,14 @@ lck_mtx_t  	  devfs_mutex;
 devdirent_t *		dev_root = NULL; 	/* root of backing tree */
 struct devfs_stats	devfs_stats;		/* hold stats */
 
+static ino_t		devfs_unique_fileno = 0;
+
 #ifdef HIDDEN_MOUNTPOINT
 static struct mount *devfs_hidden_mount;
 #endif /* HIDDEN_MOINTPOINT */
 
 static int devfs_ready = 0;
+static uint32_t devfs_nmountplanes = 0; /* The first plane is not used for a mount */
 
 #define DEVFS_NOCREATE	FALSE
 #define DEVFS_CREATE	TRUE
@@ -249,7 +282,8 @@ static int
 dev_finddir(const char * path, 
 	    devnode_t * dirnode,
 	    int create, 
-	    devnode_t * * dn_pp)
+	    devnode_t * * dn_pp,
+	    devfs_event_log_t delp)
 {
 	devnode_t *	dnp = NULL;
 	int		error = 0;
@@ -320,7 +354,7 @@ dev_finddir(const char * path,
 		    strlen(dirnode->dn_typeinfo.Dir.myname->de_name),
 		    dnp, fullpath);
 #endif
-		devfs_propogate(dirnode->dn_typeinfo.Dir.myname, dirent_p);
+		devfs_propogate(dirnode->dn_typeinfo.Dir.myname, dirent_p, delp);
 	    }
 	    dirnode = dnp; /* continue relative to this directory */
 	}
@@ -542,6 +576,9 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 #endif
 	}
 	dnp->dn_dvm = dvm;
+	dnp->dn_refcount = 0;
+	dnp->dn_ino = devfs_unique_fileno;
+	devfs_unique_fileno++;
 
 	/*
 	 * fill out the dev node according to type
@@ -598,6 +635,15 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 		dnp->dn_ops = &devfs_spec_vnodeop_p;
 		dnp->dn_typeinfo.dev = typeinfo->dev;
 		break;
+
+	#if FDESC
+	/* /dev/fd is special */
+	case DEV_DEVFD:
+		dnp->dn_ops = &devfs_devfd_vnodeop_p;
+		dnp->dn_mode |= 0555;	/* default perms */
+		break;
+
+	#endif /* FDESC */
 	default:
 		return EINVAL;
 	}
@@ -614,10 +660,6 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 void
 devnode_free(devnode_t * dnp)
 {
-    if (dnp->dn_lflags & DN_BUSY) {
-            dnp->dn_lflags |= DN_DELETE;
-	    return;
-    }
 #if CONFIG_MACF
 	mac_devfs_label_destroy(dnp);
 #endif
@@ -645,11 +687,13 @@ devfs_dn_free(devnode_t * dnp)
 			dnp->dn_nextsibling->dn_prevsiblingp = prevp;
 			
 		}
-		if (dnp->dn_vn == NULL) {
-		    devnode_free(dnp); /* no accesses/references */
+
+		/* Can only free if there are no references; otherwise, wait for last vnode to be reclaimed */
+		if (dnp->dn_refcount == 0) {
+		    devnode_free(dnp); 
 		}
 		else {
-		    dnp->dn_delete = TRUE;
+		    dnp->dn_lflags |= DN_DELETE;
 		}
 	}
 }
@@ -674,7 +718,7 @@ devfs_dn_free(devnode_t * dnp)
  * called with DEVFS_LOCK held
  ***********************************************************************/
 static int
-devfs_propogate(devdirent_t * parent,devdirent_t * child)
+devfs_propogate(devdirent_t * parent,devdirent_t * child, devfs_event_log_t delp)
 {
 	int	error;
 	devdirent_t * newnmp;
@@ -682,6 +726,12 @@ devfs_propogate(devdirent_t * parent,devdirent_t * child)
 	devnode_t *	pdnp = parent->de_dnp;
 	devnode_t *	adnp = parent->de_dnp;
 	int type = child->de_dnp->dn_type;
+	uint32_t events;
+	
+	events = (dnp->dn_type == DEV_DIR ? VNODE_EVENT_DIR_CREATED : VNODE_EVENT_FILE_CREATED);
+	if (delp != NULL) {
+		devfs_record_event(delp, pdnp, events);
+	}
 
 	/***********************************************
 	 * Find the other instances of the parent node
@@ -699,11 +749,45 @@ devfs_propogate(devdirent_t * parent,devdirent_t * child)
 					   NULL, dnp, adnp->dn_dvm, 
 					   &newnmp)) != 0) {
 			printf("duplicating %s failed\n",child->de_name);
+		} else {
+			if (delp != NULL) {
+				devfs_record_event(delp, adnp, events);
+
+				/* 
+				 * Slightly subtle.  We're guaranteed that there will
+				 * only be a vnode hooked into this devnode if we're creating
+				 * a new link to an existing node; otherwise, the devnode is new
+				 * and no one can have looked it up yet. If we're making a link,
+				 * then the buffer is large enough for two nodes in each 
+				 * plane; otherwise, there's no vnode and this call will
+				 * do nothing.
+				 */
+				devfs_record_event(delp, newnmp->de_dnp, VNODE_EVENT_LINK);
+			}
 		}
 	}
 	return 0;	/* for now always succeed */
 }
 
+static uint32_t
+remove_notify_count(devnode_t *dnp)
+{
+	uint32_t notify_count = 0;
+	devnode_t *dnp2;
+
+	/* 
+	 * Could need to notify for one removed node on each mount and 
+	 * one parent for each such node.
+	 */
+	notify_count = devfs_nmountplanes;
+	notify_count += dnp->dn_links;	
+	for (dnp2 = dnp->dn_nextsibling; dnp2 != dnp; dnp2 = dnp2->dn_nextsibling) {
+		notify_count += dnp2->dn_links;	
+	}
+
+	return notify_count;
+
+}
 
 /***********************************************************************
  * remove all instances of this devicename [for backing nodes..]
@@ -721,12 +805,48 @@ devfs_remove(void *dirent_p)
 	devnode_t * dnp = ((devdirent_t *)dirent_p)->de_dnp;
 	devnode_t * dnp2;
 	boolean_t   lastlink;
-
+	struct devfs_event_log event_log;
+	uint32_t    log_count = 0;
+	int	    do_notify = 0;
+	int	    need_free = 0;
+	struct devfs_vnode_event stackbuf[NUM_STACK_ENTRIES];
+	
 	DEVFS_LOCK();
 
 	if (!devfs_ready) {
 		printf("devfs_remove: not ready for devices!\n");
 		goto out;
+	}
+
+	log_count = remove_notify_count(dnp);
+
+	if (log_count > NUM_STACK_ENTRIES) {
+		uint32_t new_count;
+wrongsize:
+		DEVFS_UNLOCK();
+		if (devfs_init_event_log(&event_log, log_count, NULL) == 0) {
+			do_notify = 1;
+			need_free = 1;
+		} 	
+		DEVFS_LOCK();
+
+		new_count = remove_notify_count(dnp);
+		if (need_free && (new_count > log_count)) {
+			devfs_release_event_log(&event_log, 1);
+			need_free = 0;
+			do_notify = 0;
+			log_count = log_count * 2;
+			goto wrongsize;
+		}
+	} else {
+		if (devfs_init_event_log(&event_log, NUM_STACK_ENTRIES, &stackbuf[0]) == 0) {
+			do_notify = 1;
+		}
+	}
+
+	/* This file has been deleted */
+	if (do_notify != 0) {
+		devfs_record_event(&event_log, dnp, VNODE_EVENT_DELETE);
 	}
 
 	/* keep removing the next sibling till only we exist. */
@@ -739,9 +859,19 @@ devfs_remove(void *dirent_p)
 		dnp->dn_nextsibling->dn_prevsiblingp = &(dnp->dn_nextsibling);
 		dnp2->dn_nextsibling = dnp2;
 		dnp2->dn_prevsiblingp = &(dnp2->dn_nextsibling);
+				
+		/* This file has been deleted in this plane */
+		if (do_notify != 0) {
+			devfs_record_event(&event_log, dnp2, VNODE_EVENT_DELETE);
+		}
+
 		if (dnp2->dn_linklist) {
 			do {
 				lastlink = (1 == dnp2->dn_links);
+				/* Each parent of a link to this file has lost a child in this plane */
+				if (do_notify != 0) {
+					devfs_record_event(&event_log, dnp2->dn_linklist->de_parent, VNODE_EVENT_FILE_REMOVED);
+				}
 				dev_free_name(dnp2->dn_linklist);
 			} while (!lastlink);
 		}
@@ -755,11 +885,19 @@ devfs_remove(void *dirent_p)
 	if (dnp->dn_linklist) {
 		do {
 			lastlink = (1 == dnp->dn_links);
+			/* Each parent of a link to this file has lost a child */
+			if (do_notify != 0) {
+				devfs_record_event(&event_log, dnp->dn_linklist->de_parent, VNODE_EVENT_FILE_REMOVED);
+			}
 			dev_free_name(dnp->dn_linklist);
 		} while (!lastlink);
 	}
 out:
 	DEVFS_UNLOCK();
+	if (do_notify != 0) {
+		devfs_bulk_notify(&event_log);
+		devfs_release_event_log(&event_log, need_free);
+	}
 
 	return ;
 }
@@ -783,6 +921,7 @@ dev_dup_plane(struct devfsmount *devfs_mp_p)
 	if ((error = dev_dup_entry(NULL, dev_root, &new, devfs_mp_p)))
 	        return error;
 	devfs_mp_p->plane_root = new;
+	devfs_nmountplanes++;
 	return error;
 }
 
@@ -804,6 +943,11 @@ devfs_free_plane(struct devfsmount *devfs_mp_p)
 		dev_free_name(dirent_p);
 	}
 	devfs_mp_p->plane_root = NULL;
+	devfs_nmountplanes--;
+
+	if (devfs_nmountplanes > (devfs_nmountplanes+1)) {
+		panic("plane count wrapped around.\n");
+	}
 }
 
 
@@ -970,23 +1114,37 @@ dev_free_hier(devdirent_t * dirent_p)
  * associated, or get a new one and associate it with the dev_node
  *
  * called with DEVFS_LOCK held
- ***************************************************************/
+ *
+ * If an error is returned, then the dnp may have been freed (we
+ * raced with a delete and lost).  A devnode should not be accessed
+ * after devfs_dntovn() fails.
+ ****************************************************************/
 int
 devfs_dntovn(devnode_t * dnp, struct vnode **vn_pp, __unused struct proc * p)
 {
 	struct vnode *vn_p;
-	struct vnode ** vnptr;
 	int error = 0;
 	struct vnode_fsparam vfsp;
 	enum vtype vtype = 0;
 	int markroot = 0;
 	int n_minor = DEVFS_CLONE_ALLOC; /* new minor number for clone device */
+	
+	/*
+	 * We should never come in and find that our devnode has been marked for delete.
+	 * The lookup should have held the lock from entry until now; it should not have
+	 * been able to find a removed entry. Any other pathway would have just created
+	 * the devnode and come here without dropping the devfs lock, so no one would
+	 * have a chance to delete.
+	 */
+	if (dnp->dn_lflags & DN_DELETE) {
+		panic("devfs_dntovn: DN_DELETE set on a devnode upon entry.");
+	}
+
+	devfs_ref_node(dnp);
 
 retry:
 	*vn_pp = NULL;
 	vn_p = dnp->dn_vn;
-
-	dnp->dn_lflags |= DN_BUSY;
 
 	if (vn_p) { /* already has a vnode */
 	        uint32_t vid;
@@ -1012,20 +1170,25 @@ retry:
 				 */
 			        vnode_put(vn_p);
 			}
-			/*
-			 * set the error to EAGAIN
-			 * which will cause devfs_lookup
-			 * to retry this node
+			
+			/* 
+			 * This entry is no longer in the namespace.  This is only 
+			 * possible for lookup: no other path would not find an existing
+			 * vnode.  Therefore, ENOENT is a valid result.
 			 */
-			error = EAGAIN;
+			error = ENOENT;
 		}
 		if ( !error)
 		        *vn_pp = vn_p;
 
-		devfs_release_busy(dnp);
-
-		return error;
+		goto out;
 	}
+
+	/* 
+	 * If we get here, then we've beaten any deletes; 
+	 * if someone sets DN_DELETE during a subsequent drop
+	 * of the devfs lock, we'll still vend a vnode.
+	 */
 
 	if (dnp->dn_lflags & DN_CREATE) {
 		dnp->dn_lflags |= DN_CREATEWAIT;
@@ -1049,6 +1212,11 @@ retry:
 		case	DEV_CDEV:
 		    	vtype = (dnp->dn_type == DEV_BDEV) ? VBLK : VCHR;
 			break;
+#if FDESC
+		case 	DEV_DEVFD:
+			vtype = VDIR;
+			break;
+#endif /* FDESC */
 	}
 	vfsp.vnfs_mp = dnp->dn_dvm->mount;
 	vfsp.vnfs_vtype = vtype;
@@ -1069,8 +1237,8 @@ retry:
 
 			n_minor = (*dnp->dn_clone)(dnp->dn_typeinfo.dev, DEVFS_CLONE_ALLOC);
 			if (n_minor == -1) {
-				devfs_release_busy(dnp);
-				return ENOMEM;
+				error = ENOMEM;
+				goto out;
 			}
 
 			vfsp.vnfs_rdev = makedev(n_major, n_minor);;
@@ -1088,28 +1256,38 @@ retry:
 
 	DEVFS_UNLOCK();
 
-	if (dnp->dn_clone == NULL)
-		vnptr = &dnp->dn_vn;
-	else
-		vnptr = &vn_p;	
-	error = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, vnptr);
+	error = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, &vn_p);
+	
+	/* Do this before grabbing the lock */
+	if (error == 0) {
+		vnode_setneedinactive(vn_p);
+	}
 
 	DEVFS_LOCK();
 
 	if (error == 0) {
+			vnode_settag(vn_p, VT_DEVFS);
+
 			if ((dnp->dn_clone != NULL) && (dnp->dn_vn != NULLVP) )
-				panic("devnode already has a vnode?");
-			/*
-			 * Don't cache the vnode for the next open, if the
-			 * device is a cloning device (each open gets it's
-			 * own per-device instance vnode).
+				panic("devfs_dntovn: cloning device with a vnode?\n");
+
+			*vn_pp = vn_p;
+
+			/* 
+			 * Another vnode that has this devnode as its v_data.
+			 * This reference, unlike the one taken at the start
+			 * of the function, persists until a VNOP_RECLAIM
+			 * comes through for this vnode.
+			 */
+			devfs_ref_node(dnp);
+
+			/* 
+			 * A cloned vnode is not hooked into the devnode; every lookup
+			 * gets a new vnode.
 			 */
 			if (dnp->dn_clone == NULL) {
-				*vn_pp = dnp->dn_vn;
-			 } else {
-				*vn_pp = vn_p;
-			}
-
+				dnp->dn_vn = vn_p;
+			} 
 	} else if (n_minor != DEVFS_CLONE_ALLOC) {
 		/*
 		 * If we failed the create, we need to release the cloned minor
@@ -1129,22 +1307,41 @@ retry:
 		wakeup(&dnp->dn_lflags);
 	}
 
-	devfs_release_busy(dnp);
+out:
+	/* 
+	 * Release the reference we took to prevent deletion while we weren't holding the lock.
+	 * If not returning success, then dropping this reference could delete the devnode;
+	 * no one should access a devnode after a call to devfs_dntovn fails.
+	 */
+	devfs_rele_node(dnp);
 
 	return error;
 }
 
+/*
+ * Increment refcount on a devnode; prevents free of the node
+ * while the devfs lock is not held.
+ */
+void
+devfs_ref_node(devnode_t *dnp) 
+{
+	dnp->dn_refcount++;
+}
 
-/***********************************************************************
- * called with DEVFS_LOCK held
- ***********************************************************************/
-static void
-devfs_release_busy(devnode_t *dnp) {
+/*
+ * Release a reference on a devnode.  If the devnode is marked for 
+ * free and the refcount is dropped to zero, do the free.
+ */
+void 
+devfs_rele_node(devnode_t *dnp)
+{
+	dnp->dn_refcount--;
+	if (dnp->dn_refcount < 0) {
+		panic("devfs_rele_node: devnode with a negative refcount!\n");
+	} else if ((dnp->dn_refcount == 0) && (dnp->dn_lflags & DN_DELETE))  {
+		devnode_free(dnp);
+	}
 
-        dnp->dn_lflags &= ~DN_BUSY;
-
-	if (dnp->dn_lflags & DN_DELETE)
-	        devnode_free(dnp);
 }
 
 /***********************************************************************
@@ -1177,6 +1374,69 @@ dev_add_entry(const char *name, devnode_t * parent, int type, devnode_type_t * t
 	return error;
 }
 
+static void
+devfs_bulk_notify(devfs_event_log_t delp) 
+{
+	uint32_t i;
+	for (i = 0; i < delp->del_used; i++) {
+		devfs_vnode_event_t dvep = &delp->del_entries[i];
+		if (vnode_getwithvid(dvep->dve_vp, dvep->dve_vid) == 0) {
+			vnode_notify(dvep->dve_vp, dvep->dve_events, NULL);
+			vnode_put(dvep->dve_vp);
+		}
+	}
+}
+
+static void 
+devfs_record_event(devfs_event_log_t delp, devnode_t *dnp, uint32_t events)
+{
+	if (delp->del_used >= delp->del_max) {
+		panic("devfs event log overflowed.\n");
+	}
+
+	/* Can only notify for nodes that have an associated vnode */
+	if (dnp->dn_vn != NULLVP && vnode_ismonitored(dnp->dn_vn)) {
+		devfs_vnode_event_t dvep = &delp->del_entries[delp->del_used];
+		dvep->dve_vp = dnp->dn_vn;
+		dvep->dve_vid = vnode_vid(dnp->dn_vn);
+		dvep->dve_events = events;
+		delp->del_used++;
+	}
+}
+
+static int
+devfs_init_event_log(devfs_event_log_t delp, uint32_t count, devfs_vnode_event_t buf) 
+{
+	devfs_vnode_event_t dvearr;
+
+	if (buf == NULL)  {
+		MALLOC(dvearr, devfs_vnode_event_t, count * sizeof(struct devfs_vnode_event), M_TEMP, M_WAITOK | M_ZERO);
+		if (dvearr == NULL) {
+			return ENOMEM;
+		}
+	} else {
+		dvearr = buf;
+	}
+
+	delp->del_max = count;
+	delp->del_used = 0;
+	delp->del_entries = dvearr;
+	return 0;
+}
+
+static void
+devfs_release_event_log(devfs_event_log_t delp, int need_free)
+{
+	if (delp->del_entries == NULL) {
+		panic("Free of devfs notify info that has not been intialized.\n");
+	}
+
+	if (need_free) {
+		FREE(delp->del_entries, M_TEMP);
+	}
+
+	delp->del_entries = NULL;
+}
 
 /*
  * Function: devfs_make_node
@@ -1200,64 +1460,24 @@ devfs_make_node_clone(dev_t dev, int chrblk, uid_t uid,
 		const char *fmt, ...)
 {
 	devdirent_t *	new_dev = NULL;
-	devnode_t *	dnp;	/* devnode for parent directory */
-	devnode_type_t	typeinfo;
-
-	char *name, buf[256]; /* XXX */
-	const char *path;
-	int i;
+	devfstype_t 	type; 
 	va_list ap;
 
-
-	DEVFS_LOCK();
-
-	if (!devfs_ready) {
-		printf("devfs_make_node: not ready for devices!\n");
-		goto out;
+	switch (chrblk) {
+		case DEVFS_CHAR:
+			type = DEV_CDEV;
+			break;
+		case DEVFS_BLOCK:
+			type = DEV_BDEV;
+			break;
+		default:
+			goto out;
 	}
-	if (chrblk != DEVFS_CHAR && chrblk != DEVFS_BLOCK)
-		goto out;
-
-	DEVFS_UNLOCK();
 
 	va_start(ap, fmt);
-	vsnprintf(buf, sizeof(buf), fmt, ap);
+	new_dev = devfs_make_node_internal(dev, type, uid, gid, perms, clone, fmt, ap);
 	va_end(ap);
-
-	name = NULL;
-
-	for(i=strlen(buf); i>0; i--)
-		if(buf[i] == '/') {
-			name=&buf[i];
-			buf[i]=0;
-			break;
-		}
-
-	if (name) {
-		*name++ = '\0';
-		path = buf;
-	} else {
-		name = buf;
-		path = "/";
-	}
-	DEVFS_LOCK();
-
-	/* find/create directory path ie. mkdir -p */
-	if (dev_finddir(path, NULL, DEVFS_CREATE, &dnp) == 0) {
-	    typeinfo.dev = dev;
-	    if (dev_add_entry(name, dnp, 
-			      (chrblk == DEVFS_CHAR) ? DEV_CDEV : DEV_BDEV, 
-			      &typeinfo, NULL, NULL, &new_dev) == 0) {
-		new_dev->de_dnp->dn_gid = gid;
-		new_dev->de_dnp->dn_uid = uid;
-		new_dev->de_dnp->dn_mode |= perms;
-		new_dev->de_dnp->dn_clone = clone;
-		devfs_propogate(dnp->dn_typeinfo.Dir.myname, new_dev);
-	    }
-	}
 out:
-	DEVFS_UNLOCK();
-
 	return new_dev;
 }
 
@@ -1282,32 +1502,42 @@ devfs_make_node(dev_t dev, int chrblk, uid_t uid,
 		gid_t gid, int perms, const char *fmt, ...)
 {
 	devdirent_t *	new_dev = NULL;
-	devnode_t *	dnp;	/* devnode for parent directory */
-	devnode_type_t	typeinfo;
-
-	char *name, buf[256]; /* XXX */
-	const char *path;
-#if CONFIG_MACF
-	char buff[sizeof(buf)];
-#endif
-	int i;
+	devfstype_t type;
 	va_list ap;
 
-
-	DEVFS_LOCK();
-
-	if (!devfs_ready) {
-		printf("devfs_make_node: not ready for devices!\n");
-		goto out;
-	}
 	if (chrblk != DEVFS_CHAR && chrblk != DEVFS_BLOCK)
 		goto out;
 
-	DEVFS_UNLOCK();
+	type = (chrblk == DEVFS_BLOCK ? DEV_BDEV : DEV_CDEV);
 
 	va_start(ap, fmt);
-	vsnprintf(buf, sizeof(buf), fmt, ap);
+	new_dev = devfs_make_node_internal(dev, type, uid, gid, perms, NULL, fmt, ap);
 	va_end(ap);
+	
+out:
+	return new_dev;
+}
+
+static devdirent_t *
+devfs_make_node_internal(dev_t dev, devfstype_t type, uid_t uid, 
+		gid_t gid, int perms, int (*clone)(dev_t dev, int action), const char *fmt, va_list ap)
+{
+	devdirent_t *	new_dev = NULL;
+	devnode_t * dnp;
+	devnode_type_t	typeinfo;
+
+	char 		*name, buf[256]; /* XXX */
+	const char 	*path;
+#if CONFIG_MACF
+	char buff[sizeof(buf)];
+#endif
+	int 		i;
+	uint32_t 	log_count;
+	struct devfs_event_log event_log;
+	struct devfs_vnode_event stackbuf[NUM_STACK_ENTRIES];
+	int		need_free = 0;
+
+	vsnprintf(buf, sizeof(buf), fmt, ap);
 
 #if CONFIG_MACF
 	bcopy(buf, buff, sizeof(buff));
@@ -1329,28 +1559,55 @@ devfs_make_node(dev_t dev, int chrblk, uid_t uid,
 		name = buf;
 		path = "/";
 	}
+
+	log_count = devfs_nmountplanes;
+	if (log_count > NUM_STACK_ENTRIES) {
+wrongsize:
+		need_free = 1;
+		if (devfs_init_event_log(&event_log, log_count, NULL) != 0) {
+			return NULL;
+		}
+	} else {
+		need_free = 0;
+		log_count = NUM_STACK_ENTRIES;
+		if (devfs_init_event_log(&event_log, log_count, &stackbuf[0]) != 0) {
+			return NULL;
+		}
+	}
+
 	DEVFS_LOCK();
+	if (log_count < devfs_nmountplanes) {
+		DEVFS_UNLOCK();
+		devfs_release_event_log(&event_log, need_free);
+		log_count = log_count * 2;
+		goto wrongsize;
+	}
+	
+	if (!devfs_ready) {
+		printf("devfs_make_node: not ready for devices!\n");
+		goto out;
+	}
 
 	/* find/create directory path ie. mkdir -p */
-	if (dev_finddir(path, NULL, DEVFS_CREATE, &dnp) == 0) {
+	if (dev_finddir(path, NULL, DEVFS_CREATE, &dnp, &event_log) == 0) {
 	    typeinfo.dev = dev;
-	    if (dev_add_entry(name, dnp, 
-			      (chrblk == DEVFS_CHAR) ? DEV_CDEV : DEV_BDEV, 
-			      &typeinfo, NULL, NULL, &new_dev) == 0) {
+	    if (dev_add_entry(name, dnp, type, &typeinfo, NULL, NULL, &new_dev) == 0) {
 		new_dev->de_dnp->dn_gid = gid;
 		new_dev->de_dnp->dn_uid = uid;
 		new_dev->de_dnp->dn_mode |= perms;
-		new_dev->de_dnp->dn_clone = NULL;
-
+		new_dev->de_dnp->dn_clone = clone;
 #if CONFIG_MACF
 		mac_devfs_label_associate_device(dev, new_dev->de_dnp, buff);
 #endif
-		devfs_propogate(dnp->dn_typeinfo.Dir.myname, new_dev);
+		devfs_propogate(dnp->dn_typeinfo.Dir.myname, new_dev, &event_log);
 	    }
 	}
+
 out:
 	DEVFS_UNLOCK();
 
+	devfs_bulk_notify(&event_log);
+	devfs_release_event_log(&event_log, need_free);
 	return new_dev;
 }
 
@@ -1369,6 +1626,8 @@ devfs_make_link(void *original, char *fmt, ...)
 	devdirent_t *	new_dev = NULL;
 	devdirent_t *	orig = (devdirent_t *) original;
 	devnode_t *	dirnode;	/* devnode for parent directory */
+	struct devfs_event_log event_log;
+	uint32_t	log_count;
 
 	va_list ap;
 	char *p, buf[256]; /* XXX */
@@ -1377,8 +1636,9 @@ devfs_make_link(void *original, char *fmt, ...)
 	DEVFS_LOCK();
 
 	if (!devfs_ready) {
+		DEVFS_UNLOCK();
 		printf("devfs_make_link: not ready for devices!\n");
-		goto out;
+		return -1;
 	}
 	DEVFS_UNLOCK();
 
@@ -1395,23 +1655,43 @@ devfs_make_link(void *original, char *fmt, ...)
 				break;
 		}
 	}
+	
+	/* 
+	 * One slot for each directory, one for each devnode 
+	 * whose link count changes 
+	 */
+	log_count = devfs_nmountplanes * 2;
+wrongsize:
+	if (devfs_init_event_log(&event_log, log_count, NULL) != 0) {
+		/* No lock held, no allocations done, can just return */
+		return -1;
+	}
+
 	DEVFS_LOCK();
+
+	if (log_count < devfs_nmountplanes) {
+		DEVFS_UNLOCK();
+		devfs_release_event_log(&event_log, 1);
+		log_count = log_count * 2;
+		goto wrongsize;
+	}
 
 	if (p) {
 	        *p++ = '\0';
 
-		if (dev_finddir(buf, NULL, DEVFS_CREATE, &dirnode)
+		if (dev_finddir(buf, NULL, DEVFS_CREATE, &dirnode, &event_log)
 		    || dev_add_name(p, dirnode, NULL, orig->de_dnp, &new_dev))
 		        goto fail;
 	} else {
-	        if (dev_finddir("", NULL, DEVFS_CREATE, &dirnode)
+	        if (dev_finddir("", NULL, DEVFS_CREATE, &dirnode, &event_log)
 		    || dev_add_name(buf, dirnode, NULL, orig->de_dnp, &new_dev))
 		        goto fail;
 	}
-	devfs_propogate(dirnode->dn_typeinfo.Dir.myname, new_dev);
+	devfs_propogate(dirnode->dn_typeinfo.Dir.myname, new_dev, &event_log);
 fail:
-out:
 	DEVFS_UNLOCK();
+	devfs_bulk_notify(&event_log);
+	devfs_release_event_log(&event_log, 1);
 
 	return ((new_dev != NULL) ? 0 : -1);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -81,6 +81,7 @@
 #include <mach/policy.h>
 #include <machine/trap.h> // for CHUD AST hook
 
+
 void
 ast_init(void)
 {
@@ -98,21 +99,21 @@ ast_taken(
 	boolean_t		preempt_trap = (reasons == AST_PREEMPTION);
 	ast_t			*myast = ast_pending();
 	thread_t		thread = current_thread();
+	perfCallback	perf_hook = perfASTHook;
 
 	/*
 	 * CHUD hook - all threads including idle processor threads
 	 */
-	if(perfASTHook) {
-		if(*myast & AST_CHUD_ALL) {
-			perfASTHook(0, NULL, 0, 0);
+	if (perf_hook) {
+		if (*myast & AST_CHUD_ALL) {
+			(*perf_hook)(0, NULL, 0, 0);
 			
-			if(*myast == AST_NONE) {
-				return; // nothing left to do
-			}
+			if (*myast == AST_NONE)
+				return;
 		}
-	} else {
-		*myast &= ~AST_CHUD_ALL;
 	}
+	else
+		*myast &= ~AST_CHUD_ALL;
 
 	reasons &= *myast;
 	*myast &= ~reasons;

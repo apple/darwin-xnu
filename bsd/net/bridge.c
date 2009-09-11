@@ -133,7 +133,7 @@
     quad_t ticks;
     DDB(ticks = rdtsc();)
     ... interesting code ...
-    DDB(bdg_fw_ticks += (u_long)(rdtsc() - ticks) ; bdg_fw_count++ ;)
+    DDB(bdg_fw_ticks += (u_int32_t)(rdtsc() - ticks) ; bdg_fw_count++ ;)
 
  *
  */
@@ -411,31 +411,33 @@ static void
 bdg_timeout(void *dummy)
 {
     static int slowtimer = 0 ;
-
-    if (do_bridge) {
-	static int age_index = 0 ; /* index of table position to age */
-	int l = age_index + HASH_SIZE/4 ;
-	/*
-	 * age entries in the forwarding table.
-	 */
-	if (l > HASH_SIZE)
-	    l = HASH_SIZE ;
-	for (; age_index < l ; age_index++)
-	    if (bdg_table[age_index].used)
-		bdg_table[age_index].used = 0 ;
-	    else if (bdg_table[age_index].name) {
-		/* printf("xx flushing stale entry %d\n", age_index); */
-		bdg_table[age_index].name = NULL ;
-	    }
-	if (age_index >= HASH_SIZE)
-	    age_index = 0 ;
-
-	if (--slowtimer <= 0 ) {
-	    slowtimer = 5 ;
-
-	    bdg_promisc_on() ; /* we just need unmute, really */
-	    bdg_loops = 0 ;
-	}
+    
+    if (bdg_inted == 0) {
+        bdg_init2(0);
+    } else if (do_bridge) {
+        static int age_index = 0 ; /* index of table position to age */
+        int l = age_index + HASH_SIZE/4 ;
+        /*
+         * age entries in the forwarding table.
+         */
+        if (l > HASH_SIZE)
+            l = HASH_SIZE ;
+        for (; age_index < l ; age_index++)
+            if (bdg_table[age_index].used)
+                bdg_table[age_index].used = 0 ;
+            else if (bdg_table[age_index].name) {
+                /* printf("xx flushing stale entry %d\n", age_index); */
+                bdg_table[age_index].name = NULL ;
+            }
+        if (age_index >= HASH_SIZE)
+            age_index = 0 ;
+        
+        if (--slowtimer <= 0 ) {
+            slowtimer = 5 ;
+            
+            bdg_promisc_on() ; /* we just need unmute, really */
+            bdg_loops = 0 ;
+        }
     }
     timeout(bdg_timeout, (void *)0, 2*hz );
 }
@@ -451,24 +453,47 @@ int bdg_ports ;
  * initialization of bridge code. This needs to be done after all
  * interfaces have been configured.
  */
+
+static int bdg_inited = 0;
+
+static void
+bdg_init2(void)
+{
+    if (bdg_inited != 0)
+        return;
+    
+    if (bdg_table == NULL) {
+        bdg_table = (struct hash_table *)
+            _MALLOC(HASH_SIZE * sizeof(struct hash_table),
+                    M_IFADDR, M_WAITOK);
+        if (bdg_table == NULL)
+            return;
+
+        flush_table();
+    }
+
+    if (ifp2sc == NULL) {
+        ifp2sc = _MALLOC(BDG_MAX_PORTS * sizeof(struct bdg_softc),
+                         M_IFADDR, M_WAITOK );
+        if (ifp2sc == NULL)
+            return;
+        
+        bzero(ifp2sc, BDG_MAX_PORTS * sizeof(struct bdg_softc) );
+        bdgtakeifaces();
+    }
+    
+    bdg_inited = 1;
+}
+
 static void
 bdginit(void *dummy)
 {
-
-    if (bdg_table == NULL)
-	bdg_table = (struct hash_table *)
-		_MALLOC(HASH_SIZE * sizeof(struct hash_table),
-		    M_IFADDR, M_WAITOK);
-    flush_table();
-
-    ifp2sc = _MALLOC(BDG_MAX_PORTS * sizeof(struct bdg_softc),
-		M_IFADDR, M_WAITOK );
-    bzero(ifp2sc, BDG_MAX_PORTS * sizeof(struct bdg_softc) );
-
+    /* Initialize first what can't fail */
     bzero(&bdg_stats, sizeof(bdg_stats) );
-    bdgtakeifaces();
-    bdg_timeout(0);
     do_bridge=0;
+    
+    /* Attempt to initialize the rest and start the timer */
+    bdg_timeout(0);
 }
     
 void
@@ -875,7 +900,7 @@ forward:
 	if (ifp == NULL)
 	    once = 1 ;
     }
-    DEB(bdg_fw_ticks += (u_long)(rdtsc() - ticks) ; bdg_fw_count++ ;
+    DEB(bdg_fw_ticks += (u_int32_t)(rdtsc() - ticks) ; bdg_fw_count++ ;
 	if (bdg_fw_count != 0) bdg_fw_avg = bdg_fw_ticks/bdg_fw_count; )
     return m0 ;
 }

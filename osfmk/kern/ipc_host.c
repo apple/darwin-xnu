@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -81,14 +81,6 @@
  * Forward declarations
  */
 
-void
-ipc_processor_terminate(
-	processor_t	processor);
-
-void
-ipc_processor_disable(
-	processor_t	processor);
-
 boolean_t
 ref_pset_port_locked(
 	ipc_port_t port, boolean_t matchn, processor_set_t *ppset);
@@ -97,12 +89,15 @@ ref_pset_port_locked(
  *	ipc_host_init: set up various things.
  */
 
+extern lck_grp_t		host_notify_lock_grp;
+extern lck_attr_t		host_notify_lock_attr;
+
 void ipc_host_init(void)
 {
 	ipc_port_t	port;
 	int i;
 
-	mutex_init(&realhost.lock, 0);
+	lck_mtx_init(&realhost.lock, &host_notify_lock_grp, &host_notify_lock_attr);
 
 	/*
 	 *	Allocate and set up the two host ports.
@@ -204,51 +199,6 @@ ipc_processor_enable(
 
 	myport = processor->processor_self;
 	ipc_kobject_set(myport, (ipc_kobject_t) processor, IKOT_PROCESSOR);
-}
-
-/*
- *	ipc_processor_disable:
- *
- *	Disable ipc control of processor by clearing port object.
- */
-void
-ipc_processor_disable(
-	processor_t	processor)
-{
-	ipc_port_t	myport;
-
-	myport = processor->processor_self;
-	if (myport == IP_NULL)
-		return;
-	ipc_kobject_set(myport, IKO_NULL, IKOT_NONE);
-}
-
-/*
- *	ipc_processor_terminate:
- *
- *	Processor is off-line.  Destroy ipc control port.
- */
-void
-ipc_processor_terminate(
-	processor_t	processor)
-{
-	ipc_port_t	myport;
-	spl_t		s;
-
-	s = splsched();
-	processor_lock(processor);
-	myport = processor->processor_self;
-	if (myport == IP_NULL) {
-		processor_unlock(processor);
-		splx(s);
-		return;
-	}
-
-	processor->processor_self = IP_NULL;
-	processor_unlock(processor);
-	splx(s);
-
-	ipc_port_dealloc_kernel(myport);
 }
 	
 /*
@@ -480,6 +430,7 @@ convert_host_to_port(
  *	Purpose:
  *		Convert from a processor to a port.
  *		Produces a naked send right which may be invalid.
+ *		Processors are not reference counted, so nothing to release.
  *	Conditions:
  *		Nothing locked.
  */
@@ -488,20 +439,10 @@ ipc_port_t
 convert_processor_to_port(
 	processor_t		processor)
 {
-	ipc_port_t port;
-	spl_t	s;
+	ipc_port_t port = processor->processor_self;
 
-	s = splsched();
-	processor_lock(processor);
-
-	if (processor->processor_self != IP_NULL)
-		port = ipc_port_make_send(processor->processor_self);
-	else
-		port = IP_NULL;
-
-	processor_unlock(processor);
-	splx(s);
-
+	if (port != IP_NULL)
+		port = ipc_port_make_send(port);
 	return port;
 }
 
@@ -509,8 +450,8 @@ convert_processor_to_port(
  *	Routine:	convert_pset_to_port
  *	Purpose:
  *		Convert from a pset to a port.
- *		Produces a naked send right
- *		which may be invalid.
+ *		Produces a naked send right which may be invalid.
+ *		Processor sets are not reference counted, so nothing to release.
  *	Conditions:
  *		Nothing locked.
  */
@@ -531,8 +472,8 @@ convert_pset_to_port(
  *	Routine:	convert_pset_name_to_port
  *	Purpose:
  *		Convert from a pset to a port.
- *		Produces a naked send right
- *		which may be invalid.
+ *		Produces a naked send right which may be invalid.
+ *		Processor sets are not reference counted, so nothing to release.
  *	Conditions:
  *		Nothing locked.
  */
@@ -608,7 +549,7 @@ host_set_exception_ports(
 
 	assert(host_priv == &realhost);
 
-	if (exception_mask & ~EXC_MASK_ALL) {
+	if (exception_mask & ~EXC_MASK_VALID) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -685,7 +626,7 @@ host_get_exception_ports(
 	if (host_priv == HOST_PRIV_NULL)
 		return KERN_INVALID_ARGUMENT;
 
-	if (exception_mask & ~EXC_MASK_ALL) {
+	if (exception_mask & ~EXC_MASK_VALID) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -750,7 +691,7 @@ host_swap_exception_ports(
 	if (host_priv == HOST_PRIV_NULL)
 		return KERN_INVALID_ARGUMENT;
 
-	if (exception_mask & ~EXC_MASK_ALL) {
+	if (exception_mask & ~EXC_MASK_VALID) {
 		return KERN_INVALID_ARGUMENT;
 	}
 

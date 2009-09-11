@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -31,9 +31,8 @@
 #include <i386/cpu_threads.h>
 #include <i386/cpuid.h>
 #include <i386/machine_cpu.h>
-#include <i386/lock.h>
-#include <i386/perfmon.h>
 #include <i386/pmCPU.h>
+#include <i386/lock.h>
 
 //#define TOPO_DEBUG		1
 #if TOPO_DEBUG
@@ -43,8 +42,11 @@ void debug_topology_print(void);
 #define DBG(x...)
 #endif /* TOPO_DEBUG */
 
+
 void validate_topology(void);
 
+/* Only for 32bit values */
+#define bit(n)                 (1U << (n))
 #define bitmask(h,l)	((bit(h)|(bit(h)-1)) & ~(bit(l)-1))
 #define bitfield(x,h,l)	(((x) & bitmask(h,l)) >> l)
 
@@ -314,6 +316,9 @@ x86_cache_list(void)
 
 	cur->type = bitfield(cache_info[eax], 4, 0);
 	cur->level = bitfield(cache_info[eax], 7, 5);
+	cur->nlcpus = (bitfield(cache_info[eax], 25, 14) + 1);
+	if (cpuid_info()->cpuid_model == 26)
+		cur->nlcpus /= cpu_is_hyperthreaded() ? 1 : 2;
 	cur->maxcpus = (bitfield(cache_info[eax], 25, 14) + 1);
 	cur->line_size = bitfield(cache_info[ebx], 11, 0) + 1;
 	cur->partitions = bitfield(cache_info[ebx], 21, 12) + 1;
@@ -340,7 +345,7 @@ static x86_cpu_cache_t *
 x86_match_cache(x86_cpu_cache_t *list, x86_cpu_cache_t *matcher)
 {
     x86_cpu_cache_t	*cur_cache;
-
+ 
     cur_cache = list;
     while (cur_cache != NULL) {
 	if (cur_cache->maxcpus  == matcher->maxcpus
@@ -860,13 +865,6 @@ cpu_thread_alloc(int cpu)
     phys_cpu = cpup->cpu_phys_number;
 
     x86_lcpu_init(cpu);
-
-     /*
-     * Allocate performance counter structure.
-     */
-    simple_unlock(&x86_topo_lock);
-    cpup->lcpu.pmc = pmc_alloc();
-    simple_lock(&x86_topo_lock);
 
     /*
      * Assume that all cpus have the same features.

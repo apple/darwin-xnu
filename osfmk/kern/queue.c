@@ -219,13 +219,12 @@ insque(
 	pred->next = entry;
 }
 
-int
+void
 remque(
 	register queue_entry_t elt)
 {
 	(elt->next)->prev = elt->prev;
 	(elt->prev)->next = elt->next;
-	return((int)elt);
 }
 
 #endif

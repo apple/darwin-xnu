@@ -55,6 +55,7 @@ osfmk/ppc/PseudoKernel.c	standard
 osfmk/ppc/interrupt.c		standard
 osfmk/ppc/machine_routines.c		standard
 osfmk/ppc/machine_routines_asm.s		standard
+osfmk/ppc/machine_task.c	standard
 osfmk/ppc/Emulate.s			standard
 osfmk/ppc/Emulate64.s		standard
 osfmk/ppc/AltiAssist.s		standard

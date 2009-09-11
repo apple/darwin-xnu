@@ -26,7 +26,9 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <sys/param.h>
 #include <mac.h>
+#include <security/audit/audit.h>
 
 #if !CONFIG_MACF
 /*
@@ -592,10 +594,6 @@ int vop_stdsetlabel_ea(void)
 {
 	return 0;
 }
-int kau_will_audit(void)
-{
-	return 0;
-}
 int mac_kalloc(void)
 {
 	return 0;
@@ -677,3 +675,10 @@ int mac_set_enforce_proc(void)
 	return 0;
 }
 #endif /* CONFIG_MACF */
+
+#if !CONFIG_AUDIT
+int kau_will_audit(void)
+{
+	return 0;
+}
+#endif

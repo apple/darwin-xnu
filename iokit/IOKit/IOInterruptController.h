@@ -50,7 +50,7 @@ struct IOInterruptVector {
   volatile char               interruptRegistered;
   IOLock *                    interruptLock;
   IOService *                 nub;
-  long                        source;
+  int                         source;
   void *                      target;
   IOInterruptHandler          handler;
   void *                      refCon;
@@ -59,6 +59,11 @@ struct IOInterruptVector {
 
 typedef struct IOInterruptVector IOInterruptVector;
 
+#if __LP64__
+typedef int32_t IOInterruptVectorNumber;
+#else
+typedef long IOInterruptVectorNumber;
+#endif
 
 class IOInterruptController : public IOService
 {
@@ -91,12 +96,12 @@ public:
   
   // Methods to be overridden for simplifed interrupt controller subclasses.
   
-  virtual bool vectorCanBeShared(long vectorNumber, IOInterruptVector *vector);
-  virtual void initVector(long vectorNumber, IOInterruptVector *vector);
-  virtual int  getVectorType(long vectorNumber, IOInterruptVector *vector);
-  virtual void disableVectorHard(long vectorNumber, IOInterruptVector *vector);
-  virtual void enableVector(long vectorNumber, IOInterruptVector *vector);
-  virtual void causeVector(long vectorNumber, IOInterruptVector *vector);
+  virtual bool vectorCanBeShared(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector);
+  virtual void initVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector);
+  virtual int  getVectorType(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector);
+  virtual void disableVectorHard(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector);
+  virtual void enableVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector);
+  virtual void causeVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector);
 
   OSMetaClassDeclareReservedUnused(IOInterruptController, 0);
   OSMetaClassDeclareReservedUnused(IOInterruptController, 1);
@@ -116,7 +121,7 @@ private:
   int               numVectors;
   int               vectorsRegistered;
   int               vectorsEnabled;
-  volatile long     controllerDisabled;
+  volatile int      controllerDisabled;
   bool              sourceIsLevel;
 
   struct ExpansionData { };

@@ -99,7 +99,7 @@ typedef struct dbgBits {
 extern dbgBits_t 	dbgBits;
 
 	/* macros for debugging */
-#ifdef DEBUG
+#if DEBUG
 #define dPrintf(mod, lev, p) \
 	if (((mod) & dbgBits.dbgMod) && ((lev) & dbgBits.dbgLev)) {\
 		 printf p;  \

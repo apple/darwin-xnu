@@ -60,6 +60,7 @@
 #define VM_VM_EXTERNAL_H_
 
 #include <mach/boolean.h>
+#include <mach/vm_types.h>
 #include <mach/machine/vm_types.h>
 
 /*
@@ -85,7 +86,7 @@ typedef int	vm_external_state_t;
 /*
  * Useful macros
  */
-#define stob(s)	((atop_32((s)) + 07) >> 3)
+#define stob(s)	((atop_64((s)) + 07) >> 3)
 
 /*
  *	Routines exported by this module.
@@ -96,34 +97,34 @@ extern void			vm_external_module_initialize(void);
 
 extern vm_external_map_t	vm_external_create(
 					/* Create a vm_external_map_t */
-					vm_offset_t		size);
+					vm_object_size_t	size);
 
 extern void			vm_external_destroy(
 					/* Destroy one */
 					vm_external_map_t	map,
-					vm_size_t		size);
+					vm_object_size_t	size);
 
-extern vm_size_t		vm_external_map_size(
+extern vm_object_size_t		vm_external_map_size(
 					/* Return size of map in bytes */
-					vm_offset_t	size);
+					vm_object_size_t	size);
 
 extern void			vm_external_copy(
 					/* Copy one into another */
 					vm_external_map_t	old_map,
-					vm_size_t		old_size,
+					vm_object_size_t	old_size,
 					vm_external_map_t	new_map);
 
 extern void			vm_external_state_set(	
 					/* Set state of a page to
 					 * VM_EXTERNAL_STATE_EXISTS */
 					vm_external_map_t	map,
-					vm_offset_t		offset);
+					vm_object_offset_t	offset);
 
 extern void			vm_external_state_clr(	
 					/* clear page state
 					 */
 					vm_external_map_t	map,
-					vm_offset_t		offset);
+					vm_object_offset_t	offset);
 
 #define	vm_external_state_get(map, offset)			  	\
 			(((map) != VM_EXTERNAL_NULL) ? 			\
@@ -135,11 +136,11 @@ extern void			vm_external_state_clr(
 extern vm_external_state_t	_vm_external_state_get(
 					/* HIDDEN routine */
 					vm_external_map_t	map,
-					vm_offset_t		offset);
+					vm_object_offset_t	offset);
 
 boolean_t			vm_external_within(
 					/* Check if new object size
 					 * fits in current map */
-					vm_size_t	new_size, 
-					vm_size_t	old_size);
+					vm_object_size_t	new_size, 
+					vm_object_size_t	old_size);
 #endif	/* VM_VM_EXTERNAL_H_ */

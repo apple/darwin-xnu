@@ -283,18 +283,14 @@
 
 #include <assert.h>
 #include <ctype.h>
-#include <errno.h>
+#include <sys/errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef	LONG_BIT
-#define LONG_BIT	(CHAR_BIT * sizeof (long))
-#endif	/* LONG_BIT */
-
 #define MAXfunction 32		/* Max function name length. */
-#define MAXBITS LONG_BIT	/* Max bitstring length. */
+#define MAXBITS 32			/* Max bitstring length. */
 typedef unsigned long bits;
 enum type {T_ERROR, T_UNKNOWN, T_INTEGER, T_STRING};
 const char *const typename[] = {"error", "unknown", "integer", "string"};
@@ -1257,7 +1253,7 @@ int parsefunctioncall(struct function *fp, char *start, char **stringp,
     p = *stringp;
     if (*p != '(') {
 	fprintf(stderr, "%s: %s(%d): missing ( after function %.*s\n", progname,
-		filename, lineno, p - start, start);
+			filename, lineno, (int)(p - start), start);
 	return 1;
     }
     sp->type = S_FUNCTIONCALL;
@@ -1565,7 +1561,7 @@ void dis_done()\n\
 const char concatdeclarations[] = "\
 #include <string.h>\n\
 #include <stdlib.h>\n\
-#include <errno.h>\n\
+#include <sys/errno.h>\n\
 \n\
 extern void *dis_realloc(void *p, size_t size); /* User-provided. */\n\
 void *dis_alloc(size_t size);\n\
@@ -1802,7 +1798,7 @@ void functionheader(FILE *f, struct function *fp) {
 	last = ", ";
     }
     for (ap = fp->args; ap != NULL; ap = ap->next) {
-	fprintf(f, last);
+	fprintf(f, "%s", last);
 	compiletype(f, &ap->type);
 	putc(ap->name, f);
 	last = ", ";
@@ -2060,7 +2056,7 @@ int compileconcat(struct string *sp, enum type type) {
     }
     last = "";
     for (sp1 = sp; sp1 != NULL; sp1 = sp1->next) {
-	printf(last);
+	printf("%s", last);
 	if (type != T_INTEGER)
 	    last = ", ";
 	if (sp1->type == S_ARRAY)
@@ -2167,7 +2163,7 @@ int compilefunctioncall(struct string *sp) {
 	    putc('\n', stderr);
 	    return 1;
 	}
-	printf(last);
+	printf("%s", last);
 	last = ", ";
 	if (compileconcat(actualp->string, formaltype) != 0)
 	    return 1;
@@ -2255,7 +2251,7 @@ void compilesimplearray(enum type *tp, char *name, int num, struct array *ap) {
     else
 	compiletype(stdout, tp);
     if (name != NULL)
-	printf(name);
+	printf("%s", name);
     else
 	compiletemp(num);
     printf("[]");
@@ -2299,7 +2295,7 @@ void compilebitsplice(struct bitsplice *splicep) {
 
     printf("(");
     for (bsp = splicep->splice; bsp != NULL; bsp = bsp->next) {
-	printf(last);
+	printf("%s", last);
 	last = " | ";
 	if (bsp->type == S_PARAMETER)
 	    putchar(bsp->value.arg->name);

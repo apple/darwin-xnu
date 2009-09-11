@@ -65,7 +65,7 @@ typedef struct ipc_labelh
 	int               lh_type;
 	struct label      lh_label;
 	ipc_port_t        lh_port;
-	decl_mutex_data(,	lh_lock_data)
+	decl_lck_mtx_data(,	lh_lock_data)
 } *ipc_labelh_t;
 
 #define	LABELH_TYPE_KERN	0
@@ -88,9 +88,9 @@ MACRO_END
 
 extern zone_t ipc_labelh_zone;
 
-#define lh_lock_init(lh)	mutex_init(&(lh)->lh_lock_data, 0)
-#define lh_lock(lh)		mutex_lock(&(lh)->lh_lock_data)
-#define lh_unlock(lh)		mutex_unlock(&(lh)->lh_lock_data)
+#define lh_lock_init(lh)	lck_mtx_init(&(lh)->lh_lock_data, &ipc_lck_grp, &ipc_lck_attr)
+#define lh_lock(lh)			lck_mtx_lock(&(lh)->lh_lock_data)
+#define lh_unlock(lh)		lck_mtx_unlock(&(lh)->lh_lock_data)
 
 /*
  * Check the number of references the label handle has left.

@@ -74,7 +74,7 @@
 #include <sys/tty.h>
 #include <sys/conf.h>
 #include <sys/file_internal.h>
-#include <sys/uio.h>
+#include <sys/uio_internal.h>
 #include <sys/kernel.h>
 #include <sys/vnode.h>
 #include <sys/user.h>
@@ -179,16 +179,14 @@ ptsopen(dev_t dev, int flag, __unused int devtype, __unused struct proc *p)
 {
 	struct tty *tp;
 	int error;
-	boolean_t   funnel_state;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	/*
 	 * You will see this sort of code coming up in diffs later both
 	 * the ttymalloc and the tp indirection.
 	 */
 	if (minor(dev) >= npty) {
 	        error = ENXIO;
-		goto out;
+		goto err;
 	}
 	if (!pt_tty[minor(dev)]) {
 		/*
@@ -197,12 +195,15 @@ ptsopen(dev_t dev, int flag, __unused int devtype, __unused struct proc *p)
 		 */
 		if ((tp = pt_tty[minor(dev)] = ttymalloc()) == NULL) {
 			error = ENXIO;
-			goto out;
+			goto err;
 		}
 	} else
 		tp = pt_tty[minor(dev)];
+
+	tty_lock(tp);
+
 	if ((tp->t_state & TS_ISOPEN) == 0) {
-		ttychars(tp);		/* Set up default chars */
+		termioschars(&tp->t_termios);	/* Set up default chars */
 		tp->t_iflag = TTYDEF_IFLAG;
 		tp->t_oflag = TTYDEF_OFLAG;
 		tp->t_lflag = TTYDEF_LFLAG;
@@ -226,8 +227,10 @@ ptsopen(dev_t dev, int flag, __unused int devtype, __unused struct proc *p)
 	error = (*linesw[tp->t_line].l_open)(dev, tp);
 	if (error == 0)
 		ptcwakeup(tp, FREAD|FWRITE);
+
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
+err:
 	return (error);
 }
 
@@ -236,7 +239,7 @@ ptsclose(dev_t dev, int flag, __unused int mode, __unused proc_t p)
 {
 	struct tty *tp;
 	int err;
-	boolean_t   funnel_state;
+
 	/*
 	 * This is temporary until the VSX conformance tests
 	 * are fixed.  They are hanging with a deadlock
@@ -246,9 +249,9 @@ ptsclose(dev_t dev, int flag, __unused int mode, __unused proc_t p)
 #ifdef	FIX_VSX_HANG
 	int save_timeout;
 #endif
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	tp = pt_tty[minor(dev)];
+	tty_lock(tp);
 #ifdef	FIX_VSX_HANG
 	save_timeout = tp->t_timeout;
 	tp->t_timeout = 60;
@@ -259,7 +262,7 @@ ptsclose(dev_t dev, int flag, __unused int mode, __unused proc_t p)
 #ifdef	FIX_VSX_HANG
 	tp->t_timeout = save_timeout;
 #endif
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
 	return (err);
 }
 
@@ -271,11 +274,9 @@ ptsread(dev_t dev, struct uio *uio, int flag)
 	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	int error = 0;
 	struct uthread *ut;
-	boolean_t   funnel_state;
 	struct pgrp *pg;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-
+	tty_lock(tp);
 
 	ut = (struct uthread *)get_bsdthread_info(current_thread());
 again:
@@ -294,13 +295,20 @@ again:
 				error = EIO;
 				goto out;
 			}
+			/*
+			 * SAFE: We about to drop the lock ourselves by
+			 * SAFE: erroring out or sleeping anyway.
+			 */
+			tty_unlock(tp);
 			if (pg->pg_jobc == 0) {
 				pg_rele(pg);
+				tty_lock(tp);
 				error = EIO;
 				goto out;
 			}
 			pgsignal(pg, SIGTTIN, 1);
 			pg_rele(pg);
+			tty_lock(tp);
 
 			error = ttysleep(tp, &lbolt, TTIPRI | PCATCH | PTTYBLOCK, "ptsbg",
 					 0);
@@ -308,8 +316,10 @@ again:
 			        goto out;
 		}
 		if (tp->t_canq.c_cc == 0) {
-			if (flag & IO_NDELAY)
-				return (EWOULDBLOCK);
+			if (flag & IO_NDELAY) {
+				error = EWOULDBLOCK;
+				goto out;
+			}
 			error = ttysleep(tp, TSA_PTS_READ(tp), TTIPRI | PCATCH,
 					 "ptsin", 0);
 			if (error)
@@ -337,7 +347,7 @@ again:
 			error = (*linesw[tp->t_line].l_read)(tp, uio, flag);
 	ptcwakeup(tp, FWRITE);
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
 	return (error);
 }
 
@@ -351,31 +361,33 @@ ptswrite(dev_t dev, struct uio *uio, int flag)
 {
 	struct tty *tp;
 	int error;
-	boolean_t   funnel_state;
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	tp = pt_tty[minor(dev)];
+
+	tty_lock(tp);
+
 	if (tp->t_oproc == 0)
 		error = EIO;
 	else
 	        error = (*linesw[tp->t_line].l_write)(tp, uio, flag);
 
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
+
 	return (error);
 }
 
 /*
  * Start output on pseudo-tty.
  * Wake up process selecting or sleeping for input from controlling tty.
+ *
+ * t_oproc for this driver; called from within the line discipline
+ *
+ * Locks:	Assumes tp is locked on entry, remains locked on exit
  */
 static void
 ptsstart(struct tty *tp)
 {
 	struct pt_ioctl *pti = &pt_ioctl[minor(tp->t_dev)];
-	boolean_t   funnel_state;
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	if (tp->t_state & TS_TTSTOP)
 	        goto out;
@@ -385,17 +397,16 @@ ptsstart(struct tty *tp)
 	}
 	ptcwakeup(tp, FREAD);
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
 	return;
 }
 
+/*
+ * Locks:	Assumes tty_lock() is held over this call.
+ */
 static void
 ptcwakeup(struct tty *tp, int flag)
 {
 	struct pt_ioctl *pti = &pt_ioctl[minor(tp->t_dev)];
-	boolean_t   funnel_state;
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	if (flag & FREAD) {
 		selwakeup(&pti->pt_selr);
@@ -405,7 +416,6 @@ ptcwakeup(struct tty *tp, int flag)
 		selwakeup(&pti->pt_selw);
 		wakeup(TSA_PTC_WRITE(tp));
 	}
-	(void) thread_funnel_set(kernel_flock, funnel_state);
 }
 
 __private_extern__ int
@@ -414,9 +424,6 @@ ptcopen(dev_t dev, __unused int flag, __unused int devtype, __unused proc_t p)
 	struct tty *tp;
 	struct pt_ioctl *pti;
 	int error = 0;
-	boolean_t   funnel_state;
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	if (minor(dev) >= npty) {
 		error = ENXIO;
@@ -426,36 +433,39 @@ ptcopen(dev_t dev, __unused int flag, __unused int devtype, __unused proc_t p)
 		tp = pt_tty[minor(dev)] = ttymalloc();
 	} else
 		tp = pt_tty[minor(dev)];
+
+	tty_lock(tp);
+
 	/* If master is open OR slave is still draining, pty is still busy */
 	if (tp->t_oproc || (tp->t_state & TS_ISOPEN)) {
 		error = EBUSY;
-		goto out;
-	}
-	tp->t_oproc = ptsstart;
-	CLR(tp->t_state, TS_ZOMBIE);
+	} else {
+		tp->t_oproc = ptsstart;
+		CLR(tp->t_state, TS_ZOMBIE);
 #ifdef sun4c
-	tp->t_stop = ptsstop;
+		tp->t_stop = ptsstop;
 #endif
-	(void)(*linesw[tp->t_line].l_modem)(tp, 1);
-	tp->t_lflag &= ~EXTPROC;
-	pti = &pt_ioctl[minor(dev)];
-	pti->pt_flags = 0;
-	pti->pt_send = 0;
-	pti->pt_ucntl = 0;
+		(void)(*linesw[tp->t_line].l_modem)(tp, 1);
+		tp->t_lflag &= ~EXTPROC;
+		pti = &pt_ioctl[minor(dev)];
+		pti->pt_flags = 0;
+		pti->pt_send = 0;
+		pti->pt_ucntl = 0;
+	}
+
+	tty_unlock(tp);
+
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
 	return (error);
 }
 
 __private_extern__ int
 ptcclose(dev_t dev, __unused int flags, __unused int fmt, __unused proc_t p)
 {
-	struct tty *tp;
-	boolean_t   funnel_state;
+	struct tty *tp = pt_tty[minor(dev)];
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tty_lock(tp);
 
-	tp = pt_tty[minor(dev)];
 	(void)(*linesw[tp->t_line].l_modem)(tp, 0);
 
 	/*
@@ -474,7 +484,8 @@ ptcclose(dev_t dev, __unused int flags, __unused int fmt, __unused proc_t p)
 
 	tp->t_oproc = 0;		/* mark closed */
 
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
+
 	return (0);
 }
 
@@ -485,9 +496,8 @@ ptcread(dev_t dev, struct uio *uio, int flag)
 	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	char buf[BUFSIZ];
 	int error = 0, cc;
-	boolean_t   funnel_state;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tty_lock(tp);
 
 	/*
 	 * We want to block until the slave
@@ -526,7 +536,7 @@ ptcread(dev_t dev, struct uio *uio, int flag)
 			error = EWOULDBLOCK;
 			goto out;
 		}
-		error = tsleep(TSA_PTC_READ(tp), TTIPRI | PCATCH, "ptcin", 0);
+		error = ttysleep(tp, TSA_PTC_READ(tp), TTIPRI | PCATCH, "ptcin", 0);
 		if (error)
 		        goto out;
 	}
@@ -541,18 +551,23 @@ ptcread(dev_t dev, struct uio *uio, int flag)
 	(*linesw[tp->t_line].l_start)(tp);
 
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
+
 	return (error);
 }
 
+/*
+ * Line discipline callback
+ *
+ * Locks:	tty_lock() is assumed held on entry and exit.
+ */
 __private_extern__ void
 ptsstop(struct tty *tp, int flush)
 {
-	struct pt_ioctl *pti = &pt_ioctl[minor(tp->t_dev)];
+	struct pt_ioctl *pti;
 	int flag;
-	boolean_t   funnel_state;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	pti = &pt_ioctl[minor(tp->t_dev)];
 
 	/* note: FLUSHREAD and FLUSHWRITE already ok */
 	if (flush == 0) {
@@ -568,8 +583,6 @@ ptsstop(struct tty *tp, int flush)
 	if (flush & FWRITE)
 		flag |= FREAD;
 	ptcwakeup(tp, flag);
-
-	(void) thread_funnel_set(kernel_flock, funnel_state);
 }
 
 __private_extern__ int
@@ -578,9 +591,8 @@ ptcselect(dev_t dev, int rw, void *wql, struct proc *p)
 	struct tty *tp = pt_tty[minor(dev)];
 	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	int retval = 0;
-	boolean_t   funnel_state;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tty_lock(tp);
 
 	if ((tp->t_state & TS_CONNECTED) == 0) {
 		retval = 1;
@@ -633,7 +645,8 @@ ptcselect(dev_t dev, int rw, void *wql, struct proc *p)
 
 	}
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
+
 	return (retval);
 }
 
@@ -647,9 +660,8 @@ ptcwrite(dev_t dev, struct uio *uio, int flag)
 	int wcnt = 0;
 	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	int error = 0;
-	boolean_t   funnel_state;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tty_lock(tp);
 
 again:
 	if ((tp->t_state&TS_ISOPEN) == 0)
@@ -723,8 +735,10 @@ again:
 		cc = 0;
 	}
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
+
 	return (error);
+
 block:
 	/*
 	 * Come here to wait for slave to open, for space
@@ -743,7 +757,7 @@ block:
 			error = EWOULDBLOCK;
 		goto out;
 	}
-	error = tsleep(TSA_PTC_WRITE(tp), TTOPRI | PCATCH, "ptcout", 0);
+	error = ttysleep(tp, TSA_PTC_WRITE(tp), TTOPRI | PCATCH, "ptcout", 0);
 	if (error) {
 		/* adjust for data copied in but not written */
 		uio_setresid(uio, (uio_resid(uio) + cc));
@@ -759,9 +773,8 @@ ptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 	struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	u_char *cc = tp->t_cc;
 	int stop, error = 0;
-	boolean_t   funnel_state;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	tty_lock(tp);
 
 	/*
 	 * IF CONTROLLER STTY THEN MUST FLUSH TO PREVENT A HANG.
@@ -830,14 +843,15 @@ ptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 			ttyflush(tp, FREAD|FWRITE);
 			goto out;
 
-#if COMPAT_43_TTY
 		case TIOCSETP:
 		case TIOCSETN:
-#endif
 		case TIOCSETD:
-		case TIOCSETA:
-		case TIOCSETAW:
-		case TIOCSETAF:
+		case TIOCSETA_32:
+		case TIOCSETAW_32:
+		case TIOCSETAF_32:
+		case TIOCSETA_64:
+		case TIOCSETAW_64:
+		case TIOCSETAF_64:
 			ndflush(&tp->t_outq, tp->t_outq.c_cc);
 			break;
 
@@ -849,10 +863,18 @@ ptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 			}
 			if ((tp->t_lflag&NOFLSH) == 0)
 				ttyflush(tp, FREAD|FWRITE);
-			tty_pgsignal(tp, *(unsigned int *)data, 1);
 			if ((*(unsigned int *)data == SIGINFO) &&
 			    ((tp->t_lflag&NOKERNINFO) == 0))
-				ttyinfo(tp);
+				ttyinfo_locked(tp);
+			/*
+			 * SAFE: All callers drop the lock on return and
+			 * SAFE: the linesw[] will short circut this call
+			 * SAFE: if the ioctl() is eaten before the lower
+			 * SAFE: level code gets to see it.
+			 */
+			tty_unlock(tp);
+			tty_pgsignal(tp, *(unsigned int *)data, 1);
+			tty_lock(tp);
 			goto out;
 
 		case TIOCPTYGRANT:	/* grantpt(3) */
@@ -887,7 +909,7 @@ ptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 		}
 	error = (*linesw[tp->t_line].l_ioctl)(tp, cmd, data, flag, p);
 	if (error == ENOTTY) {
-		error = ttioctl(tp, cmd, data, flag, p);
+		error = ttioctl_locked(tp, cmd, data, flag, p);
 		if (error == ENOTTY) {
 			if (pti->pt_flags & PF_UCNTL && (cmd & ~0xff) == UIOCCMD(0)) {
 				/* Process the UIOCMD ioctl group */
@@ -917,20 +939,19 @@ ptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 	 */
 	if ((tp->t_lflag&EXTPROC) && (pti->pt_flags & PF_PKT)) {
 		switch(cmd) {
-		case TIOCSETA:
-		case TIOCSETAW:
-		case TIOCSETAF:
-#if COMPAT_43_TTY
+		case TIOCSETA_32:
+		case TIOCSETAW_32:
+		case TIOCSETAF_32:
+		case TIOCSETA_64:
+		case TIOCSETAW_64:
+		case TIOCSETAF_64:
 		case TIOCSETP:
 		case TIOCSETN:
-#endif
-#if COMPAT_43_TTY || defined(COMPAT_SUNOS)
 		case TIOCSETC:
 		case TIOCSLTC:
 		case TIOCLBIS:
 		case TIOCLBIC:
 		case TIOCLSET:
-#endif
 			pti->pt_send |= TIOCPKT_IOCTL;
 			ptcwakeup(tp, FREAD);
 		default:
@@ -955,6 +976,7 @@ ptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 		}
 	}
 out:
-	(void) thread_funnel_set(kernel_flock, funnel_state);
+	tty_unlock(tp);
+
 	return (error);
 }

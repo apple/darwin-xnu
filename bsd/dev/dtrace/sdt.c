@@ -19,11 +19,11 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
-/* #pragma ident	"@(#)sdt.c	1.6	06/03/24 SMI" */
+/* #pragma ident	"@(#)sdt.c	1.9	08/07/01 SMI" */
 
 #ifdef KERNEL
 #ifndef _KERNEL
@@ -69,6 +69,12 @@ extern kern_return_t fbt_perfCallback(int, struct savearea_t *, int, int);
 
 #define	SDT_PROBETAB_SIZE	0x1000		/* 4k entries -- 16K total */
 
+#if defined(__x86_64__)
+#define DTRACE_PROBE_PREFIX "_dtrace_probeDOLLAR"
+#else
+#define DTRACE_PROBE_PREFIX "_dtrace_probe$"
+#endif
+
 static dev_info_t		*sdt_devi;
 static int			sdt_verbose = 0;
 sdt_probe_t		**sdt_probetab;
@@ -96,16 +102,17 @@ __sdt_provide_module(void *arg, struct modctl *ctl)
 			return;
 	}
 
-	if (mp->sdt_nprobes != 0 || (sdpd = mp->sdt_probes) == NULL)
+	if (!mp || mp->sdt_nprobes != 0 || (sdpd = mp->sdt_probes) == NULL)
 		return;
 
 	for (sdpd = mp->sdt_probes; sdpd != NULL; sdpd = sdpd->sdpd_next) {
-		char *name = sdpd->sdpd_name, *func, *nname;
+	    const char *name = sdpd->sdpd_name, *func;
+	    char *nname;
 		int i, j;
 		dtrace_id_t id;
 
 		for (prov = sdt_providers; prov->sdtp_prefix != NULL; prov++) {
-			char *prefpart, *prefix = prov->sdtp_prefix;
+			const char *prefpart, *prefix = prov->sdtp_prefix;
 
 			if ((prefpart = strstr(name, prefix))) {
 				name = prefpart + strlen(prefix);
@@ -275,10 +282,12 @@ sdt_enable(void *arg, dtrace_id_t id, void *parg)
 
 	while (sdp != NULL) {
 		(void)ml_nofault_copy( (vm_offset_t)&sdp->sdp_patchval, (vm_offset_t)sdp->sdp_patchpoint, 
-								sizeof(sdp->sdp_patchval));
+		                       (vm_size_t)sizeof(sdp->sdp_patchval));
 		sdp = sdp->sdp_next;
 	}
+#if !defined(__APPLE__)
 err:
+#endif /* __APPLE__ */
 	;
 }
 
@@ -299,12 +308,21 @@ sdt_disable(void *arg, dtrace_id_t id, void *parg)
 
 	while (sdp != NULL) {
 		(void)ml_nofault_copy( (vm_offset_t)&sdp->sdp_savedval, (vm_offset_t)sdp->sdp_patchpoint, 
-								sizeof(sdp->sdp_savedval));
+		                       (vm_size_t)sizeof(sdp->sdp_savedval));
 		sdp = sdp->sdp_next;
 	}
 
+#if !defined(__APPLE__)
 err:
+#endif /* __APPLE__ */	
 	;
+}
+
+static uint64_t
+sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
+{
+#pragma unused(arg,id,parg)	/* __APPLE__ */
+	return dtrace_getarg(argno, aframes);
 }
 
 static dtrace_pops_t sdt_pops = {
@@ -315,7 +333,7 @@ static dtrace_pops_t sdt_pops = {
 	NULL,
 	NULL,
 	sdt_getargdesc,
-	NULL,
+	sdt_getarg,
 	NULL,
 	sdt_destroy
 };
@@ -519,10 +537,16 @@ static int gSDTInited = 0;
 static struct modctl g_sdt_kernctl;
 static struct module g_sdt_mach_module;
 
-#include <mach-o/loader.h>
 #include <mach-o/nlist.h>
+#include <libkern/kernel_mach_header.h>
 
-extern struct mach_header _mh_execute_header; /* the kernel's mach header */
+#if defined(__LP64__)
+#define KERNEL_MAGIC MH_MAGIC_64
+typedef struct nlist_64 kernel_nlist_t;
+#else
+#define KERNEL_MAGIC MH_MAGIC
+typedef struct nlist kernel_nlist_t;
+#endif
 
 void sdt_init( void )
 {
@@ -536,17 +560,17 @@ void sdt_init( void )
 			return;
 		}
 
-		if (MH_MAGIC != _mh_execute_header.magic) {
+		if (KERNEL_MAGIC != _mh_execute_header.magic) {
         	g_sdt_kernctl.address = (vm_address_t)NULL;
         	g_sdt_kernctl.size = 0;
 		} else {
-		struct mach_header          *mh;
+		kernel_mach_header_t        *mh;
     		struct load_command         *cmd;
-    		struct segment_command      *orig_ts = NULL, *orig_le = NULL;
+    		kernel_segment_command_t    *orig_ts = NULL, *orig_le = NULL;
     		struct symtab_command       *orig_st = NULL;
-    		struct nlist                *sym = NULL;
+    		kernel_nlist_t		    *sym = NULL;
     		char                        *strings;
-    		unsigned int i;
+    		unsigned int 		    i;
 
 		g_sdt_mach_module.sdt_nprobes = 0;
 		g_sdt_mach_module.sdt_probes = NULL;
@@ -556,34 +580,34 @@ void sdt_init( void )
 		strncpy((char *)&(g_sdt_kernctl.mod_modname), "mach_kernel", KMOD_MAX_NAME);
 
 		mh = &_mh_execute_header;
-    		cmd = (struct load_command *) &mh[1];
+    		cmd = (struct load_command*) &mh[1];
     		for (i = 0; i < mh->ncmds; i++) {
-        		if (cmd->cmd == LC_SEGMENT) {
-            		struct segment_command *orig_sg = (struct segment_command *) cmd;
+        		if (cmd->cmd == LC_SEGMENT_KERNEL) {
+            		kernel_segment_command_t *orig_sg = (kernel_segment_command_t *) cmd;
 
-            		if (strcmp(SEG_TEXT, orig_sg->segname) == 0)
+            		if (LIT_STRNEQL(orig_sg->segname, SEG_TEXT))
                 		orig_ts = orig_sg;
-            		else if (strcmp(SEG_LINKEDIT, orig_sg->segname) == 0)
+            		else if (LIT_STRNEQL(orig_sg->segname, SEG_LINKEDIT))
                 		orig_le = orig_sg;
-            		else if (strcmp("", orig_sg->segname) == 0)
+            		else if (LIT_STRNEQL(orig_sg->segname, ""))
                 		orig_ts = orig_sg; /* kexts have a single unnamed segment */
         		}
         		else if (cmd->cmd == LC_SYMTAB)
             		orig_st = (struct symtab_command *) cmd;
 	
-        		cmd = (struct load_command *) ((caddr_t) cmd + cmd->cmdsize);
+        		cmd = (struct load_command *) ((uintptr_t) cmd + cmd->cmdsize);
     		}
 	
     		if ((orig_ts == NULL) || (orig_st == NULL) || (orig_le == NULL))
         		return;
 
-    		sym = (struct nlist *)orig_le->vmaddr;
-    		strings = ((char *)sym) + orig_st->nsyms * sizeof(struct nlist);
+		sym = (kernel_nlist_t *)(orig_le->vmaddr + orig_st->symoff - orig_le->fileoff);
+		strings = (char *)(orig_le->vmaddr + orig_st->stroff - orig_le->fileoff);
 
     		for (i = 0; i < orig_st->nsyms; i++) {
         		uint8_t n_type = sym[i].n_type & (N_TYPE | N_EXT);
         		char *name = strings + sym[i].n_un.n_strx;
-				char *prev_name;
+				const char *prev_name;
 				unsigned long best;
 				unsigned int j;
 
@@ -598,7 +622,7 @@ void sdt_init( void )
         		if (*name == '_')
             		name += 1;
 
-				if (strstr(name, "_dtrace_probe$")) {
+				if (strstr(name, DTRACE_PROBE_PREFIX)) {
 					sdt_probedesc_t *sdpd = kmem_alloc(sizeof(sdt_probedesc_t), KM_SLEEP);
 					int len = strlen(name) + 1;
 
@@ -607,19 +631,21 @@ void sdt_init( void )
 
 					prev_name = "<unknown>";
 					best = 0;
+					
+					/* Avoid shadow build warnings */
 					for (j = 0; j < orig_st->nsyms; j++) {
-						uint8_t n_type = sym[j].n_type & (N_TYPE | N_EXT);
-						char *name = strings + sym[j].n_un.n_strx;
+						uint8_t jn_type = sym[j].n_type & (N_TYPE | N_EXT);
+						char *jname = strings + sym[j].n_un.n_strx;
 
-						if (((N_SECT | N_EXT) != n_type && (N_ABS | N_EXT) != n_type))
+						if (((N_SECT | N_EXT) != jn_type && (N_ABS | N_EXT) != jn_type))
 							continue;
 
 						if (0 == sym[j].n_un.n_strx) /* iff a null, "", name. */
 							continue;
 
-						if (*name == '_')
-							name += 1;
-						if (strstr(name, "_dtrace_probe$"))
+						if (*jname == '_')
+							jname += 1;
+						if (strstr(jname, DTRACE_PROBE_PREFIX))
 							continue;
 
 						if (*(unsigned long *)sym[i].n_value <= (unsigned long)sym[j].n_value)
@@ -627,7 +653,7 @@ void sdt_init( void )
 
 						if ((unsigned long)sym[j].n_value > best) {
 							best = (unsigned long)sym[j].n_value;
-							prev_name = name;
+							prev_name = jname;
 						}
 					}
 
@@ -644,12 +670,13 @@ void sdt_init( void )
 			}
 		}
 
-		sdt_attach( (dev_info_t	*)majdevno, DDI_ATTACH );
+		sdt_attach( (dev_info_t	*)(uintptr_t)majdevno, DDI_ATTACH );
 
 		gSDTInited = 1;
 	} else
 		panic("sdt_init: called twice!\n");
 }
+
 #undef SDT_MAJOR
 
 /*ARGSUSED*/

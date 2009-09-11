@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -24,9 +24,11 @@
  * limitations under the License.
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
- */
-/* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
-/*
+ *
+ *
+ * Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved
+ * 
+ *
  * Copyright (c) 1982, 1986, 1989, 1990, 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -64,18 +66,19 @@
  * SUCH DAMAGE.
  *
  *	@(#)kern_prot.c	8.9 (Berkeley) 2/14/95
- */
-/*
+ * 
+ *
  * NOTICE: This file was modified by McAfee Research in 2004 to introduce
  * support for mandatory and extensible security protections.  This notice
  * is included in support of clause 2.2 (b) of the Apple Public License,
  * Version 2.0.
- */
-/*
+ *
+ *
  * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
  * support for mandatory and extensible security protections.  This notice
  * is included in support of clause 2.2 (b) of the Apple Public License,
  * Version 2.0.
+ *
  */
 
 /*
@@ -93,7 +96,7 @@
 #include <sys/times.h>
 #include <sys/malloc.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #if CONFIG_LCTX
 #include <sys/lctx.h>
@@ -115,8 +118,6 @@
 #include <kern/task.h>		/* for current_task() */
 #include <kern/assert.h>
 
-
-int groupmember(gid_t gid, kauth_cred_t cred);
 
 /*
  * Credential debugging; we can track entry into a function that might
@@ -152,9 +153,9 @@ extern void kauth_cred_print(kauth_cred_t cred);
  * XXX:		Belongs in kern_proc.c
  */
 int
-setprivexec(proc_t p, struct setprivexec_args *uap, register_t *retval)
+setprivexec(proc_t p, struct setprivexec_args *uap, int32_t *retval)
 {
-	AUDIT_ARG(value, uap->flag);
+	AUDIT_ARG(value32, uap->flag);
 	*retval = p->p_debugger;
 	p->p_debugger = (uap->flag != 0);
 	return(0);
@@ -173,7 +174,7 @@ setprivexec(proc_t p, struct setprivexec_args *uap, register_t *retval)
  * XXX:		Belongs in kern_proc.c
  */
 int
-getpid(proc_t p, __unused struct getpid_args *uap, register_t *retval)
+getpid(proc_t p, __unused struct getpid_args *uap, int32_t *retval)
 {
 
 	*retval = p->p_pid;
@@ -193,7 +194,7 @@ getpid(proc_t p, __unused struct getpid_args *uap, register_t *retval)
  * XXX:		Belongs in kern_proc.c
  */
 int
-getppid(proc_t p, __unused struct getppid_args *uap, register_t *retval)
+getppid(proc_t p, __unused struct getppid_args *uap, int32_t *retval)
 {
 
 	*retval = p->p_ppid;
@@ -213,7 +214,7 @@ getppid(proc_t p, __unused struct getppid_args *uap, register_t *retval)
  * XXX:		Belongs in kern_proc.c
  */
 int
-getpgrp(proc_t p, __unused struct getpgrp_args *uap, register_t *retval)
+getpgrp(proc_t p, __unused struct getpgrp_args *uap, int32_t *retval)
 {
 
 	*retval = p->p_pgrpid;
@@ -238,7 +239,7 @@ getpgrp(proc_t p, __unused struct getpgrp_args *uap, register_t *retval)
  * XXX:		Belongs in kern_proc.c
  */
 int
-getpgid(proc_t p, struct getpgid_args *uap, register_t *retval)
+getpgid(proc_t p, struct getpgid_args *uap, int32_t *retval)
 {
 	proc_t pt;
 	int refheld = 0;
@@ -275,7 +276,7 @@ found:
  * XXX:		Belongs in kern_proc.c
  */
 int
-getsid(proc_t p, struct getsid_args *uap, register_t *retval)
+getsid(proc_t p, struct getsid_args *uap, int32_t *retval)
 {
 	proc_t pt;
 	int refheld = 0;
@@ -309,7 +310,7 @@ found:
  * Returns:	uid_t				The real uid of the caller
  */
 int
-getuid(__unused proc_t p, __unused struct getuid_args *uap, register_t *retval)
+getuid(__unused proc_t p, __unused struct getuid_args *uap, int32_t *retval)
 {
 
  	*retval = kauth_getruid();
@@ -327,7 +328,7 @@ getuid(__unused proc_t p, __unused struct getuid_args *uap, register_t *retval)
  * Returns:	uid_t				The effective uid of the caller
  */
 int
-geteuid(__unused proc_t p, __unused struct geteuid_args *uap, register_t *retval)
+geteuid(__unused proc_t p, __unused struct geteuid_args *uap, int32_t *retval)
 {
 
  	*retval = kauth_getuid();
@@ -347,7 +348,7 @@ geteuid(__unused proc_t p, __unused struct geteuid_args *uap, register_t *retval
  *		ESRCH				No per thread identity active
  */
 int
-gettid(__unused proc_t p, struct gettid_args *uap, register_t *retval)
+gettid(__unused proc_t p, struct gettid_args *uap, int32_t *retval)
 {
 	struct uthread *uthread = get_bsdthread_info(current_thread());
 	int	error;
@@ -379,7 +380,7 @@ gettid(__unused proc_t p, struct gettid_args *uap, register_t *retval)
  * Returns:	gid_t				The real gid of the caller
  */
 int
-getgid(__unused proc_t p, __unused struct getgid_args *uap, register_t *retval)
+getgid(__unused proc_t p, __unused struct getgid_args *uap, int32_t *retval)
 {
 
 	*retval = kauth_getrgid();
@@ -403,7 +404,7 @@ getgid(__unused proc_t p, __unused struct getgid_args *uap, register_t *retval)
  *		detail.
  */
 int
-getegid(__unused proc_t p, __unused struct getegid_args *uap, register_t *retval)
+getegid(__unused proc_t p, __unused struct getegid_args *uap, int32_t *retval)
 {
 
 	*retval = kauth_getgid();
@@ -442,7 +443,7 @@ getegid(__unused proc_t p, __unused struct getegid_args *uap, register_t *retval
  *		be returned by this call.
  */
 int
-getgroups(__unused proc_t p, struct getgroups_args *uap, register_t *retval)
+getgroups(__unused proc_t p, struct getgroups_args *uap, int32_t *retval)
 {
 	int ngrp;
 	int error;
@@ -475,23 +476,27 @@ getgroups(__unused proc_t p, struct getgroups_args *uap, register_t *retval)
 
 /*
  * Return the per-thread/per-process supplementary groups list.
+ *
+ * XXX implement getsgroups
+ *
  */
-#warning XXX implement getsgroups
+
 int
-getsgroups(__unused proc_t p, __unused struct getsgroups_args *uap, __unused register_t *retval)
+getsgroups(__unused proc_t p, __unused struct getsgroups_args *uap, __unused int32_t *retval)
 {
-	/* XXX implement */
 	return(ENOTSUP);
 }
 
 /*
  * Return the per-thread/per-process whiteout groups list.
+ * 
+ * XXX implement getwgroups
+ *
  */
-#warning XXX implement getwgroups
+
 int
-getwgroups(__unused proc_t p, __unused struct getwgroups_args *uap, __unused register_t *retval)
+getwgroups(__unused proc_t p, __unused struct getwgroups_args *uap, __unused int32_t *retval)
 {
-	/* XXX implement */
 	return(ENOTSUP);
 }
 
@@ -521,7 +526,7 @@ getwgroups(__unused proc_t p, __unused struct getwgroups_args *uap, __unused reg
  * XXX:		Belongs in kern_proc.c
  */
 int
-setsid(proc_t p, __unused struct setsid_args *uap, register_t *retval)
+setsid(proc_t p, __unused struct setsid_args *uap, int32_t *retval)
 {
 	struct pgrp * pg = PGRP_NULL;
 
@@ -576,7 +581,7 @@ setsid(proc_t p, __unused struct setsid_args *uap, register_t *retval)
  * XXX:		Belongs in kern_proc.c
  */
 int
-setpgid(proc_t curp, register struct setpgid_args *uap, __unused register_t *retval)
+setpgid(proc_t curp, register struct setpgid_args *uap, __unused int32_t *retval)
 {
 	proc_t targp = PROC_NULL;	/* target process */
 	struct pgrp *pg = PGRP_NULL;	/* target pgrp */
@@ -666,7 +671,7 @@ out:
  *		execution.
  */
 int
-issetugid(proc_t p, __unused struct issetugid_args *uap, register_t *retval)
+issetugid(proc_t p, __unused struct issetugid_args *uap, int32_t *retval)
 {
 	/*
 	 * Note: OpenBSD sets a P_SUGIDEXEC flag set at execve() time,
@@ -703,7 +708,7 @@ issetugid(proc_t p, __unused struct issetugid_args *uap, register_t *retval)
  *		flag the process as having set privilege since the last exec.
  */
 int
-setuid(proc_t p, struct setuid_args *uap, __unused register_t *retval)
+setuid(proc_t p, struct setuid_args *uap, __unused int32_t *retval)
 {
 	uid_t uid;
 	uid_t svuid = KAUTH_UID_NONE;
@@ -718,7 +723,7 @@ setuid(proc_t p, struct setuid_args *uap, __unused register_t *retval)
 	my_cred = kauth_cred_proc_ref(p);
 
 	DEBUG_CRED_ENTER("setuid (%d/%d): %p %d\n", p->p_pid, (p->p_pptr ? p->p_pptr->p_pid : 0), my_cred, uap->uid);
-	AUDIT_ARG(uid, uid, 0, 0, 0);
+	AUDIT_ARG(uid, uid);
 
 	if (uid != my_cred->cr_ruid &&	/* allow setuid(getuid()) */
 	    uid != my_cred->cr_svuid &&	/* allow setuid(saved uid) */
@@ -742,7 +747,7 @@ setuid(proc_t p, struct setuid_args *uap, __unused register_t *retval)
 		 * chgproccnt uses list lock for protection
 		 */
 		(void)chgproccnt(uid, 1);
-		(void)chgproccnt(kauth_getruid(), -1);
+		(void)chgproccnt(my_cred->cr_ruid, -1);
 	}
 
 	/* get current credential and take a reference while we muck with it */
@@ -786,7 +791,7 @@ setuid(proc_t p, struct setuid_args *uap, __unused register_t *retval)
 				continue;
 			}
 			p->p_ucred = my_new_cred;
-			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag);
+			OSBitOrAtomic(P_SUGID, &p->p_flag);
 			proc_unlock(p);
 		}
 		break;
@@ -818,7 +823,7 @@ setuid(proc_t p, struct setuid_args *uap, __unused register_t *retval)
  *		flag the process as having set privilege since the last exec.
  */
 int
-seteuid(proc_t p, struct seteuid_args *uap, __unused register_t *retval)
+seteuid(proc_t p, struct seteuid_args *uap, __unused int32_t *retval)
 {
 	uid_t euid;
 	int error;
@@ -827,7 +832,7 @@ seteuid(proc_t p, struct seteuid_args *uap, __unused register_t *retval)
 	DEBUG_CRED_ENTER("seteuid: %d\n", uap->euid);
 
 	euid = uap->euid;
-	AUDIT_ARG(uid, 0, euid, 0, 0);
+	AUDIT_ARG(euid, euid);
 
 	my_cred = kauth_cred_proc_ref(p);
 
@@ -871,7 +876,7 @@ seteuid(proc_t p, struct seteuid_args *uap, __unused register_t *retval)
 				continue;
 			}
 			p->p_ucred = my_new_cred;
-			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag);
+			OSBitOrAtomic(P_SUGID, &p->p_flag);
 			proc_unlock(p);
 		}
 		break;
@@ -916,7 +921,7 @@ seteuid(proc_t p, struct seteuid_args *uap, __unused register_t *retval)
  *		flag the process as having set privilege since the last exec.
  */
 int
-setreuid(proc_t p, struct setreuid_args *uap, __unused register_t *retval)
+setreuid(proc_t p, struct setreuid_args *uap, __unused int32_t *retval)
 {
 	uid_t ruid, euid;
 	int error;
@@ -930,7 +935,8 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused register_t *retval)
 		ruid = KAUTH_UID_NONE;
 	if (euid == (uid_t)-1)
 		euid = KAUTH_UID_NONE;
-	AUDIT_ARG(uid, euid, ruid, 0, 0);
+	AUDIT_ARG(euid, euid);
+	AUDIT_ARG(ruid, ruid);
 
 	my_cred = kauth_cred_proc_ref(p);
 
@@ -970,7 +976,7 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused register_t *retval)
 		if (euid == KAUTH_UID_NONE && my_cred->cr_uid != euid) {
 			/* changing the effective UID */
 			new_euid = euid;
-			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag);
+			OSBitOrAtomic(P_SUGID, &p->p_flag);
 		}
 		if (ruid != KAUTH_UID_NONE && my_cred->cr_ruid != ruid) {
 			/* changing the real UID; must do user accounting */
@@ -978,7 +984,7 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused register_t *retval)
 			(void)chgproccnt(ruid, 1);
 			(void)chgproccnt(my_cred->cr_ruid, -1);
 			new_ruid = ruid;
-			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag);
+			OSBitOrAtomic(P_SUGID, &p->p_flag);
 		}
 		/*
 		 * If the newly requested real uid or effective uid does
@@ -989,7 +995,7 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused register_t *retval)
 		if (my_cred->cr_svuid != uap->ruid &&
 		    my_cred->cr_svuid != uap->euid) {
 		    	svuid = new_euid;
-			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag);
+			OSBitOrAtomic(P_SUGID, &p->p_flag);
 		}
 
 		my_new_cred = kauth_cred_setresuid(my_cred, ruid, euid, svuid, my_cred->cr_gmuid);
@@ -1013,7 +1019,7 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused register_t *retval)
 				continue;
 			}
 			p->p_ucred = my_new_cred;
-			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag); /* XXX redundant? */
+			OSBitOrAtomic(P_SUGID, &p->p_flag); /* XXX redundant? */
 			proc_unlock(p);
 		}
 		break;
@@ -1052,7 +1058,7 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused register_t *retval)
  *		the supplementary group list unchanged.
  */
 int
-setgid(proc_t p, struct setgid_args *uap, __unused register_t *retval)
+setgid(proc_t p, struct setgid_args *uap, __unused int32_t *retval)
 {
 	gid_t gid;
 	gid_t rgid = KAUTH_GID_NONE;
@@ -1063,7 +1069,7 @@ setgid(proc_t p, struct setgid_args *uap, __unused register_t *retval)
 	DEBUG_CRED_ENTER("setgid(%d/%d): %d\n", p->p_pid, (p->p_pptr ? p->p_pptr->p_pid : 0), uap->gid);
 
 	gid = uap->gid;
-	AUDIT_ARG(gid, gid, 0, 0, 0);
+	AUDIT_ARG(gid, gid);
 
 	my_cred = kauth_cred_proc_ref(p);
 
@@ -1113,7 +1119,7 @@ setgid(proc_t p, struct setgid_args *uap, __unused register_t *retval)
 				continue;
 			}
 			p->p_ucred = my_new_cred;
-			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag);
+			OSBitOrAtomic(P_SUGID, &p->p_flag);
 			proc_unlock(p);
 		}
 		break;
@@ -1150,7 +1156,7 @@ setgid(proc_t p, struct setgid_args *uap, __unused register_t *retval)
  *		the supplementary group list unchanged.
  */
 int
-setegid(proc_t p, struct setegid_args *uap, __unused register_t *retval)
+setegid(proc_t p, struct setegid_args *uap, __unused int32_t *retval)
 {
 	gid_t egid;
 	int error;
@@ -1159,7 +1165,7 @@ setegid(proc_t p, struct setegid_args *uap, __unused register_t *retval)
 	DEBUG_CRED_ENTER("setegid %d\n", uap->egid);
 
 	egid = uap->egid;
-	AUDIT_ARG(gid, 0, egid, 0, 0);
+	AUDIT_ARG(egid, egid);
 
 	my_cred = kauth_cred_proc_ref(p);
 
@@ -1199,7 +1205,7 @@ setegid(proc_t p, struct setegid_args *uap, __unused register_t *retval)
 				continue;
 			}
 			p->p_ucred = my_new_cred;
-			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag);
+			OSBitOrAtomic(P_SUGID, &p->p_flag);
 			proc_unlock(p);
 		}
 		break;
@@ -1250,7 +1256,7 @@ setegid(proc_t p, struct setegid_args *uap, __unused register_t *retval)
  *		the supplementary group list unchanged.
  */
 int
-setregid(proc_t p, struct setregid_args *uap, __unused register_t *retval)
+setregid(proc_t p, struct setregid_args *uap, __unused int32_t *retval)
 {
 	gid_t rgid, egid;
 	int error;
@@ -1265,7 +1271,8 @@ setregid(proc_t p, struct setregid_args *uap, __unused register_t *retval)
 		rgid = KAUTH_GID_NONE;
 	if (egid == (uid_t)-1)
 		egid = KAUTH_GID_NONE;
-	AUDIT_ARG(gid, egid, rgid, 0, 0);
+	AUDIT_ARG(egid, egid);
+	AUDIT_ARG(rgid, rgid);
 
 	my_cred = kauth_cred_proc_ref(p);
 
@@ -1300,12 +1307,12 @@ setregid(proc_t p, struct setregid_args *uap, __unused register_t *retval)
 		if (egid == KAUTH_UID_NONE && my_cred->cr_groups[0] != egid) {
 			/* changing the effective GID */
 			new_egid = egid;
-			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag);
+			OSBitOrAtomic(P_SUGID, &p->p_flag);
 		}
 		if (rgid != KAUTH_UID_NONE && my_cred->cr_rgid != rgid) {
 			/* changing the real GID */
 			new_rgid = rgid;
-			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag);
+			OSBitOrAtomic(P_SUGID, &p->p_flag);
 		}
 		/*
 		 * If the newly requested real gid or effective gid does
@@ -1316,7 +1323,7 @@ setregid(proc_t p, struct setregid_args *uap, __unused register_t *retval)
 		if (my_cred->cr_svgid != uap->rgid &&
 		    my_cred->cr_svgid != uap->egid) {
 		    	svgid = new_egid;
-			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag);
+			OSBitOrAtomic(P_SUGID, &p->p_flag);
 		}
 
 		my_new_cred = kauth_cred_setresgid(my_cred, rgid, egid, svgid);
@@ -1338,7 +1345,7 @@ setregid(proc_t p, struct setregid_args *uap, __unused register_t *retval)
 				continue;
 			}
 			p->p_ucred = my_new_cred;
-			OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag); /* XXX redundant? */
+			OSBitOrAtomic(P_SUGID, &p->p_flag); /* XXX redundant? */
 			proc_unlock(p);
 		}
 		break;
@@ -1360,7 +1367,7 @@ setregid(proc_t p, struct setregid_args *uap, __unused register_t *retval)
  * thread to the requested UID and single GID, and clears all other GIDs.
  */
 int
-settid(proc_t p, struct settid_args *uap, __unused register_t *retval)
+settid(proc_t p, struct settid_args *uap, __unused int32_t *retval)
 {
 	kauth_cred_t uc;
 	struct uthread *uthread = get_bsdthread_info(current_thread());
@@ -1369,7 +1376,8 @@ settid(proc_t p, struct settid_args *uap, __unused register_t *retval)
 
 	uid = uap->uid;
 	gid = uap->gid;
-	AUDIT_ARG(uid, uid, gid, gid, 0);
+	AUDIT_ARG(uid, uid);
+	AUDIT_ARG(gid, gid);
 
 	if (proc_suser(p) != 0) 
 		return (EPERM);
@@ -1431,14 +1439,14 @@ settid(proc_t p, struct settid_args *uap, __unused register_t *retval)
  * When the assume argument is zero we revert back to our normal identity.
  */
 int
-settid_with_pid(proc_t p, struct settid_with_pid_args *uap, __unused register_t *retval)
+settid_with_pid(proc_t p, struct settid_with_pid_args *uap, __unused int32_t *retval)
 {
 	proc_t target_proc;
 	struct uthread *uthread = get_bsdthread_info(current_thread());
 	kauth_cred_t my_cred, my_target_cred, my_new_cred;
 
 	AUDIT_ARG(pid, uap->pid);
-	AUDIT_ARG(value, uap->assume);
+	AUDIT_ARG(value32, uap->assume);
 
 	if (proc_suser(p) != 0) {
 		return (EPERM);
@@ -1551,7 +1559,7 @@ settid_with_pid(proc_t p, struct settid_with_pid_args *uap, __unused register_t 
  *		flag the process as having set privilege since the last exec.
  */
 static int
-setgroups1(proc_t p, u_int gidsetsize, user_addr_t gidset, uid_t gmuid, __unused register_t *retval)
+setgroups1(proc_t p, u_int gidsetsize, user_addr_t gidset, uid_t gmuid, __unused int32_t *retval)
 {
 	u_int ngrp;
 	gid_t	newgroups[NGROUPS] = { 0 };
@@ -1639,7 +1647,7 @@ setgroups1(proc_t p, u_int gidsetsize, user_addr_t gidset, uid_t gmuid, __unused
 					continue;
 				}
 				p->p_ucred = my_new_cred;
-				OSBitOrAtomic(P_SUGID, (UInt32 *)&p->p_flag);
+				OSBitOrAtomic(P_SUGID, &p->p_flag);
 				proc_unlock(p);
 			}
 			break;
@@ -1686,7 +1694,7 @@ setgroups1(proc_t p, u_int gidsetsize, user_addr_t gidset, uid_t gmuid, __unused
  * See also:	setgroups1()
  */
 int
-initgroups(proc_t p, struct initgroups_args *uap, __unused register_t *retval)
+initgroups(proc_t p, struct initgroups_args *uap, __unused int32_t *retval)
 {
 	DEBUG_CRED_ENTER("initgroups\n");
 
@@ -1720,7 +1728,7 @@ initgroups(proc_t p, struct initgroups_args *uap, __unused register_t *retval)
  * See also:	setgroups1()
  */
 int
-setgroups(proc_t p, struct setgroups_args *uap, __unused register_t *retval)
+setgroups(proc_t p, struct setgroups_args *uap, __unused int32_t *retval)
 {
 	DEBUG_CRED_ENTER("setgroups\n");
 
@@ -1730,20 +1738,26 @@ setgroups(proc_t p, struct setgroups_args *uap, __unused register_t *retval)
 
 /*
  * Set the per-thread/per-process supplementary groups list.
+ * 
+ * XXX implement setsgroups
+ *
  */
-#warning XXX implement setsgroups
+
 int
-setsgroups(__unused proc_t p, __unused struct setsgroups_args *uap, __unused register_t *retval)
+setsgroups(__unused proc_t p, __unused struct setsgroups_args *uap, __unused int32_t *retval)
 {
 	return(ENOTSUP);
 }
 
 /*
  * Set the per-thread/per-process whiteout groups list.
+ * 
+ * XXX implement setwgroups
+ *
  */
-#warning XXX implement setwgroups
+
 int
-setwgroups(__unused proc_t p, __unused struct setwgroups_args *uap, __unused register_t *retval)
+setwgroups(__unused proc_t p, __unused struct setwgroups_args *uap, __unused int32_t *retval)
 {
 	return(ENOTSUP);
 }
@@ -1859,7 +1873,7 @@ is_suser1(void)
  * XXX:		Belongs in kern_proc.c
  */
 int
-getlogin(proc_t p, struct getlogin_args *uap, __unused register_t *retval)
+getlogin(proc_t p, struct getlogin_args *uap, __unused int32_t *retval)
 {
 	char buffer[MAXLOGNAME+1];
 	struct session * sessp;
@@ -1899,10 +1913,10 @@ getlogin(proc_t p, struct getlogin_args *uap, __unused register_t *retval)
  * XXX:		Belongs in kern_proc.c
  */
 int
-setlogin(proc_t p, struct setlogin_args *uap, __unused register_t *retval)
+setlogin(proc_t p, struct setlogin_args *uap, __unused int32_t *retval)
 {
 	int error;
-	int dummy=0;
+	size_t dummy=0;
 	char buffer[MAXLOGNAME+1];
 	struct session * sessp;
 
@@ -1979,13 +1993,13 @@ set_security_token(proc_t p)
 	 * the user of the trailer from future representation
 	 * changes.
 	 */
-	audit_token.val[0] = my_cred->cr_au.ai_auid;
+	audit_token.val[0] = my_cred->cr_audit.as_aia_p->ai_auid;
 	audit_token.val[1] = my_cred->cr_uid;
 	audit_token.val[2] = my_cred->cr_gid;
 	audit_token.val[3] = my_cred->cr_ruid;
 	audit_token.val[4] = my_cred->cr_rgid;
 	audit_token.val[5] = p->p_pid;
-	audit_token.val[6] = my_cred->cr_au.ai_asid;
+	audit_token.val[6] = my_cred->cr_audit.as_aia_p->ai_asid;
 	audit_token.val[7] = p->p_idversion;
 
 #if CONFIG_MACF_MACH
@@ -2032,7 +2046,7 @@ cru2x(kauth_cred_t cr, struct xucred *xcr)
  *	    LCTX by its own locks.
  */
 int
-setlcid(proc_t p0, struct setlcid_args *uap, __unused register_t *retval)
+setlcid(proc_t p0, struct setlcid_args *uap, __unused int32_t *retval)
 {
 	proc_t p;
 	struct lctx *l;
@@ -2040,7 +2054,7 @@ setlcid(proc_t p0, struct setlcid_args *uap, __unused register_t *retval)
 	int refheld = 0;
 
 	AUDIT_ARG(pid, uap->pid);
-	AUDIT_ARG(value, uap->lcid);
+	AUDIT_ARG(value32, uap->lcid);
 	if (uap->pid == LCID_PROC_SELF) {	/* Create/Join/Leave */
 		p = p0;
 	} else {				/* Adopt/Orphan */
@@ -2138,7 +2152,7 @@ out:
  *	    protected by the all-context lock.
  */
 int
-getlcid(proc_t p0, struct getlcid_args *uap, register_t *retval)
+getlcid(proc_t p0, struct getlcid_args *uap, int32_t *retval)
 {
 	proc_t p;
 	int error = 0;
@@ -2175,14 +2189,14 @@ getlcid(proc_t p0, struct getlcid_args *uap, register_t *retval)
 }
 #else	/* LCTX */
 int
-setlcid(proc_t p0, struct setlcid_args *uap, register_t *retval)
+setlcid(proc_t p0, struct setlcid_args *uap, int32_t *retval)
 {
 
 	return (ENOSYS);
 }
 
 int
-getlcid(proc_t p0, struct getlcid_args *uap, register_t *retval)
+getlcid(proc_t p0, struct getlcid_args *uap, int32_t *retval)
 {
 
 	return (ENOSYS);

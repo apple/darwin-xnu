@@ -354,6 +354,7 @@ typedef struct x86_saved_state32 x86_saved_state32_t;
 #define x86_SAVED_STATE32_COUNT	((mach_msg_type_number_t) \
 	(sizeof (x86_saved_state32_t)/sizeof(unsigned int)))
 
+#pragma pack(4)
 struct x86_saved_state32_tagged {
 	uint32_t			tag;
 	struct x86_saved_state32	state;
@@ -381,7 +382,12 @@ typedef struct x86_sframe32 x86_sframe32_t;
  */
 struct x86_64_intr_stack_frame {
 	uint32_t	trapno;
+#if defined(__LP64__) && defined(KERNEL)
+	uint32_t 	_pad;
+	uint64_t	trapfn;
+#else
 	uint32_t	trapfn;
+#endif
 	uint64_t	err;
 	uint64_t	rip;
 	uint64_t	cs;
@@ -398,14 +404,20 @@ typedef struct x86_64_intr_stack_frame x86_64_intr_stack_frame_t;
  */
 struct x86_saved_state_compat32 {
 	struct x86_saved_state32_tagged	iss32;
+#if defined(__LP64__) && defined(KERNEL)
+#else
 	uint32_t			pad_for_16byte_alignment[2];
+#endif
 	struct	x86_64_intr_stack_frame	isf64;
 };
 typedef struct x86_saved_state_compat32 x86_saved_state_compat32_t;
 
 struct x86_sframe_compat32 {
         struct x86_64_intr_stack_frame  slf;
-	uint32_t			pad_for_16byte_alignment[2];
+#if defined(__LP64__) && defined(KERNEL)
+#else
+	uint32_t	pad_for_16byte_alignment[2];
+#endif
         struct x86_saved_state_compat32 ssf;
 	uint32_t			empty[4];
 };
@@ -454,6 +466,9 @@ struct x86_saved_state64 {
 
 	uint32_t	gs;
 	uint32_t	fs;
+#ifdef __x86_64__
+	uint32_t		_pad_for_alignment[3];
+#endif
 	struct	x86_64_intr_stack_frame	isf;
 };
 typedef struct x86_saved_state64 x86_saved_state64_t;
@@ -468,7 +483,9 @@ typedef struct x86_saved_state64_tagged x86_saved_state64_tagged_t;
 
 struct x86_sframe64 {
         struct x86_64_intr_stack_frame	slf;
-	uint32_t			pad_for_16byte_alignment[3];
+#ifdef __i386__
+		uint32_t		_pad_for_alignment[3];
+#endif
         struct x86_saved_state64_tagged	ssf;
 };
 typedef struct x86_sframe64 x86_sframe64_t;
@@ -487,6 +504,7 @@ typedef struct {
 } x86_saved_state_t;
 #define	ss_32	uss.ss_32
 #define	ss_64	uss.ss_64
+#pragma pack()
 
 static inline boolean_t
 is_saved_state64(x86_saved_state_t *iss)

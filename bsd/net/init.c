@@ -73,8 +73,7 @@ net_init_add(
 			kfree(entry, sizeof(*entry));
 			return EALREADY;
 		}
-	} while(!OSCompareAndSwap((UInt32)entry->next, (UInt32)entry,
-							  (UInt32*)&list_head));
+	} while(!OSCompareAndSwapPtr(entry->next, entry, &list_head));
 	
 	return 0;
 }
@@ -92,8 +91,7 @@ net_init_run(void)
 	 */
 	do {
 		backward_head = list_head;
-	} while (!OSCompareAndSwap((UInt32)backward_head, (UInt32)LIST_RAN,
-							   (UInt32*)&list_head));
+	} while (!OSCompareAndSwapPtr(backward_head, LIST_RAN, &list_head));
 	
 	/* Reverse the order of the list */
 	while (backward_head != 0) {

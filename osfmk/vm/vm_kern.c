@@ -112,6 +112,7 @@ kmem_alloc_contig(
 	vm_size_t		size,
 	vm_offset_t 		mask,
 	ppnum_t			max_pnum,
+	ppnum_t			pnum_mask,
 	int 			flags)
 {
 	vm_object_t		object;
@@ -123,7 +124,7 @@ kmem_alloc_contig(
 	vm_page_t		m, pages;
 	kern_return_t		kr;
 
-	if (map == VM_MAP_NULL || (flags && (flags ^ KMA_KOBJECT))) 
+	if (map == VM_MAP_NULL || (flags & ~(KMA_KOBJECT | KMA_LOMEM | KMA_NOPAGEWAIT))) 
 		return KERN_INVALID_ARGUMENT;
 	
 	if (size == 0) {
@@ -154,13 +155,13 @@ kmem_alloc_contig(
 
 	entry->object.vm_object = object;
 	entry->offset = offset = (object == kernel_object) ? 
-		        map_addr - VM_MIN_KERNEL_ADDRESS : 0;
+		        map_addr : 0;
 
 	/* Take an extra object ref in case the map entry gets deleted */
 	vm_object_reference(object);
 	vm_map_unlock(map);
 
-	kr = cpm_allocate(CAST_DOWN(vm_size_t, map_size), &pages, max_pnum, FALSE);
+	kr = cpm_allocate(CAST_DOWN(vm_size_t, map_size), &pages, max_pnum, pnum_mask, FALSE, flags);
 
 	if (kr != KERN_SUCCESS) {
 		vm_map_remove(map, vm_map_trunc_page(map_addr),
@@ -198,7 +199,8 @@ kmem_alloc_contig(
 	if (object == kernel_object)
 		vm_map_simplify(map, map_addr);
 
-	*addrp = map_addr;
+	*addrp = (vm_offset_t) map_addr;
+	assert((vm_map_offset_t) *addrp == map_addr);
 	return KERN_SUCCESS;
 }
 
@@ -229,13 +231,18 @@ kernel_memory_allocate(
 {
 	vm_object_t 		object;
 	vm_object_offset_t 	offset;
+	vm_object_offset_t 	pg_offset;
 	vm_map_entry_t 		entry;
 	vm_map_offset_t 	map_addr, fill_start;
 	vm_map_offset_t		map_mask;
 	vm_map_size_t		map_size, fill_size;
-	vm_map_size_t		i;
 	kern_return_t 		kr;
 	vm_page_t		mem;
+	vm_page_t		guard_page_list = NULL;
+	vm_page_t		wired_page_list = NULL;
+	int			guard_page_count = 0;
+	int			wired_page_count = 0;
+	int			i;
 	int			vm_alloc_flags;
 
 	if (! vm_kernel_ready) {
@@ -257,6 +264,16 @@ kernel_memory_allocate(
 	map_mask = (vm_map_offset_t) mask;
 	vm_alloc_flags = 0;
 
+
+	/*
+	 * limit the size of a single extent of wired memory
+	 * to try and limit the damage to the system if
+	 * too many pages get wired down
+	 */
+        if (map_size > (1 << 30)) {
+                return KERN_RESOURCE_SHORTAGE;
+        }
+
 	/*
 	 * Guard pages:
 	 *
@@ -274,6 +291,7 @@ kernel_memory_allocate(
 
 	fill_start = 0;
 	fill_size = map_size;
+
 	if (flags & KMA_GUARD_FIRST) {
 		vm_alloc_flags |= VM_FLAGS_GUARD_BEFORE;
 		fill_start += PAGE_SIZE_64;
@@ -283,6 +301,7 @@ kernel_memory_allocate(
 			*addrp = 0;
 			return KERN_INVALID_ARGUMENT;
 		}
+		guard_page_count++;
 	}
 	if (flags & KMA_GUARD_LAST) {
 		vm_alloc_flags |= VM_FLAGS_GUARD_AFTER;
@@ -292,6 +311,53 @@ kernel_memory_allocate(
 			*addrp = 0;
 			return KERN_INVALID_ARGUMENT;
 		}
+		guard_page_count++;
+	}
+	wired_page_count = (int) (fill_size / PAGE_SIZE_64);
+	assert(wired_page_count * PAGE_SIZE_64 == fill_size);
+
+	for (i = 0; i < guard_page_count; i++) {
+		for (;;) {
+			mem = vm_page_grab_guard();
+
+			if (mem != VM_PAGE_NULL)
+				break;
+			if (flags & KMA_NOPAGEWAIT) {
+				kr = KERN_RESOURCE_SHORTAGE;
+				goto out;
+			}
+			vm_page_more_fictitious();
+		}
+		mem->pageq.next = (queue_entry_t)guard_page_list;
+		guard_page_list = mem;
+	}
+
+	for (i = 0; i < wired_page_count; i++) {
+		uint64_t	unavailable;
+		
+		for (;;) {
+		        if (flags & KMA_LOMEM)
+			        mem = vm_page_grablo();
+			else
+			        mem = vm_page_grab();
+
+		        if (mem != VM_PAGE_NULL)
+			        break;
+
+			if (flags & KMA_NOPAGEWAIT) {
+				kr = KERN_RESOURCE_SHORTAGE;
+				goto out;
+			}
+			unavailable = (vm_page_wire_count + vm_page_free_target) * PAGE_SIZE;
+
+			if (unavailable > max_mem || map_size > (max_mem - unavailable)) {
+				kr = KERN_RESOURCE_SHORTAGE;
+				goto out;
+			}
+			VM_PAGE_WAIT();
+		}
+		mem->pageq.next = (queue_entry_t)wired_page_list;
+		wired_page_list = mem;
 	}
 
 	/*
@@ -310,100 +376,85 @@ kernel_memory_allocate(
 			       vm_alloc_flags, &entry);
 	if (KERN_SUCCESS != kr) {
 		vm_object_deallocate(object);
-		return kr;
+		goto out;
 	}
 
 	entry->object.vm_object = object;
 	entry->offset = offset = (object == kernel_object) ? 
-		        map_addr - VM_MIN_KERNEL_ADDRESS : 0;
+		        map_addr : 0;
 
-	vm_object_reference(object);
-	vm_map_unlock(map);
+	entry->wired_count++;
+
+	if (flags & KMA_PERMANENT)
+		entry->permanent = TRUE;
+
+	if (object != kernel_object)
+		vm_object_reference(object);
 
 	vm_object_lock(object);
+	vm_map_unlock(map);
 
-	/*
-	 * Allocate the lower guard page if one was requested.  The guard
-	 * page extends up to fill_start which is where the real memory
-	 * begins.
-	 */
+	pg_offset = 0;
 
-	for (i = 0; i < fill_start; i += PAGE_SIZE) {
-		for (;;) {
-			mem = vm_page_alloc_guard(object, offset + i);
-			if (mem != VM_PAGE_NULL)
-				break;
-			if (flags & KMA_NOPAGEWAIT) {
-				kr = KERN_RESOURCE_SHORTAGE;
-				goto nopage;
-			}
-			vm_object_unlock(object);
-			vm_page_more_fictitious();
-			vm_object_lock(object);
-		}
+	if (fill_start) {
+		if (guard_page_list == NULL)
+			panic("kernel_memory_allocate: guard_page_list == NULL");
+
+		mem = guard_page_list;
+		guard_page_list = (vm_page_t)mem->pageq.next;
+		mem->pageq.next = NULL;
+
+		vm_page_insert(mem, object, offset + pg_offset);
+
+		mem->busy = FALSE;
+		pg_offset += PAGE_SIZE_64;
+	}
+	for (pg_offset = fill_start; pg_offset < fill_start + fill_size; pg_offset += PAGE_SIZE_64) {
+		if (wired_page_list == NULL)
+			panic("kernel_memory_allocate: wired_page_list == NULL");
+
+		mem = wired_page_list;
+		wired_page_list = (vm_page_t)mem->pageq.next;
+		mem->pageq.next = NULL;
+		mem->wire_count++;
+
+		vm_page_insert(mem, object, offset + pg_offset);
+
+		mem->busy = FALSE;
+		mem->pmapped = TRUE;
+		mem->wpmapped = TRUE;
+
+		PMAP_ENTER(kernel_pmap, map_addr + pg_offset, mem, 
+			   VM_PROT_READ | VM_PROT_WRITE, object->wimg_bits & VM_WIMG_MASK, TRUE);
+	}
+	if ((fill_start + fill_size) < map_size) {
+		if (guard_page_list == NULL)
+			panic("kernel_memory_allocate: guard_page_list == NULL");
+
+		mem = guard_page_list;
+		guard_page_list = (vm_page_t)mem->pageq.next;
+		mem->pageq.next = NULL;
+
+		vm_page_insert(mem, object, offset + pg_offset);
+
 		mem->busy = FALSE;
 	}
+	if (guard_page_list || wired_page_list)
+		panic("kernel_memory_allocate: non empty list\n");
 
-	/*
-	 * Allocate the real memory here.  This extends from offset fill_start
-	 * for fill_size bytes.
-	 */
+	vm_page_lockspin_queues();
+	vm_page_wire_count += wired_page_count;
+	vm_page_unlock_queues();
 
-	for (i = fill_start; i < fill_start + fill_size; i += PAGE_SIZE) {
-		for (;;) {
-		        if (flags & KMA_LOMEM)
-			        mem = vm_page_alloclo(object, offset + i);
-			else
-			        mem = vm_page_alloc(object, offset + i);
-
-		        if (mem != VM_PAGE_NULL)
-			        break;
-
-			if (flags & KMA_NOPAGEWAIT) {
-				kr = KERN_RESOURCE_SHORTAGE;
-				goto nopage;
-			}
-			vm_object_unlock(object);
-			VM_PAGE_WAIT();
-			vm_object_lock(object);
-		}
-		mem->busy = FALSE;
-	}
-
-	/*
-	 * Lastly, allocate the ending guard page if requested.  This starts at the ending
-	 * address from the loop above up to the map_size that was originaly 
-	 * requested.
-	 */
-
-	for (i = fill_start + fill_size; i < map_size; i += PAGE_SIZE) {
-		for (;;) {
-			mem = vm_page_alloc_guard(object, offset + i);
-			if (mem != VM_PAGE_NULL)
-				break;
-			if (flags & KMA_NOPAGEWAIT) {
-				kr = KERN_RESOURCE_SHORTAGE;
-				goto nopage;
-			}
-			vm_object_unlock(object);
-			vm_page_more_fictitious();
-			vm_object_lock(object);
-		}
-		mem->busy = FALSE;
-	}
 	vm_object_unlock(object);
 
-	kr = vm_map_wire(map, map_addr, map_addr + map_size,
-			 VM_PROT_DEFAULT, FALSE);
-	if (kr != KERN_SUCCESS) {
-		vm_object_lock(object);
-		goto nopage;
-	}
-
-	/* now that the page is wired, we no longer have to fear coalesce */
-	vm_object_deallocate(object);
+	/*
+	 * now that the pages are wired, we no longer have to fear coalesce
+	 */
 	if (object == kernel_object)
 		vm_map_simplify(map, map_addr);
+	else
+		vm_object_deallocate(object);
 
 	/*
 	 *	Return the memory, not zeroed.
@@ -411,13 +462,14 @@ kernel_memory_allocate(
 	*addrp = CAST_DOWN(vm_offset_t, map_addr);
 	return KERN_SUCCESS;
 
-nopage:
-	if (object == kernel_object)
-		vm_object_page_remove(object, offset, offset + i);
-	vm_object_unlock(object);
-	vm_map_remove(map, map_addr, map_addr + map_size, 0);
-	vm_object_deallocate(object);
-	return KERN_RESOURCE_SHORTAGE;
+out:
+	if (guard_page_list)
+		vm_page_free_list(guard_page_list, FALSE);
+
+	if (wired_page_list)
+		vm_page_free_list(wired_page_list, FALSE);
+
+	return kr;
 }
 
 /*
@@ -516,9 +568,7 @@ kmem_realloc(
 		for(offset = oldmapsize; 
 		    offset < newmapsize; offset += PAGE_SIZE) {
 	    		if ((mem = vm_page_lookup(object, offset)) != VM_PAGE_NULL) {
-				vm_page_lock_queues();
-				vm_page_free(mem);
-				vm_page_unlock_queues();
+				VM_PAGE_FREE(mem);
 			}
 		}
 		object->size = oldmapsize;
@@ -542,9 +592,7 @@ kmem_realloc(
 		vm_object_lock(object);
 		for(offset = oldsize; offset < newmapsize; offset += PAGE_SIZE) {
 	    		if ((mem = vm_page_lookup(object, offset)) != VM_PAGE_NULL) {
-				vm_page_lock_queues();
-				vm_page_free(mem);
-				vm_page_unlock_queues();
+				VM_PAGE_FREE(mem);
 			}
 		}
 		object->size = oldmapsize;
@@ -559,7 +607,7 @@ kmem_realloc(
 }
 
 /*
- *	kmem_alloc_wired:
+ *	kmem_alloc_kobject:
  *
  *	Allocate wired-down memory in the kernel's address map
  *	or a submap.  The memory is not zero-filled.
@@ -570,7 +618,7 @@ kmem_realloc(
  */
 
 kern_return_t
-kmem_alloc_wired(
+kmem_alloc_kobject(
 	vm_map_t	map,
 	vm_offset_t	*addrp,
 	vm_size_t	size)
@@ -581,7 +629,7 @@ kmem_alloc_wired(
 /*
  *	kmem_alloc_aligned:
  *
- *	Like kmem_alloc_wired, except that the memory is aligned.
+ *	Like kmem_alloc_kobject, except that the memory is aligned.
  *	The size should be a power-of-2.
  */
 
@@ -635,7 +683,7 @@ kmem_alloc_pageable(
  *	kmem_free:
  *
  *	Release a region of kernel virtual memory allocated
- *	with kmem_alloc, kmem_alloc_wired, or kmem_alloc_pageable,
+ *	with kmem_alloc, kmem_alloc_kobject, or kmem_alloc_pageable,
  *	and return the physical pages associated with that region.
  */
 
@@ -647,7 +695,16 @@ kmem_free(
 {
 	kern_return_t kr;
 
+	assert(addr >= VM_MIN_KERNEL_AND_KEXT_ADDRESS);
+
 	TRACE_MACHLEAKS(KMEM_FREE_CODE, KMEM_FREE_CODE_2, size, addr);
+
+	if(size == 0) {
+#if MACH_ASSERT
+		printf("kmem_free called with size==0 for map: %p with addr: 0x%llx\n",map,(uint64_t)addr);
+#endif
+		return;
+	}
 
 	kr = vm_map_remove(map, vm_map_trunc_page(addr),
 				vm_map_round_page(addr + size), 
@@ -748,6 +805,10 @@ kmem_remap_pages(
 	     *	Enter it in the kernel pmap.  The page isn't busy,
 	     *	but this shouldn't be a problem because it is wired.
 	     */
+
+	    mem->pmapped = TRUE;
+	    mem->wpmapped = TRUE;
+
 	    PMAP_ENTER(kernel_pmap, map_start, mem, protection, 
 			((unsigned int)(mem->object->wimg_bits))
 					& VM_WIMG_MASK,
@@ -871,26 +932,24 @@ kmem_init(
          * This may include inaccessible "holes" as determined by what
          * the machine-dependent init code includes in max_mem.
          */
-        vm_page_wire_count = (atop_64(max_mem) - (vm_page_free_count
-                                                + vm_page_active_count
-                                                + vm_page_inactive_count));
+	assert(atop_64(max_mem) == (unsigned int) atop_64(max_mem));
+        vm_page_wire_count = ((unsigned int) atop_64(max_mem) -
+			      (vm_page_free_count +
+			       vm_page_active_count +
+			       vm_page_inactive_count));
 
 	/*
 	 * Set the default global user wire limit which limits the amount of
-	 * memory that can be locked via mlock().  We set this to the total number of
-	 * pages that are potentially usable by a user app (max_mem) minus
-	 * 1000 pages.  This keeps 4MB in reserve for the kernel which will hopefully be
-	 * enough to avoid memory deadlocks. If for some reason the system has less than
-	 * 2000 pages of memory at this point, then we'll allow users to lock up to 80%
-	 * of that.  This can be overridden via a sysctl.
+	 * memory that can be locked via mlock().  We set this to the total
+	 * amount of memory that are potentially usable by a user app (max_mem)
+	 * minus a certain amount.  This can be overridden via a sysctl.
 	 */
-
-	if (max_mem > 2000)
-		vm_global_user_wire_limit = max_mem - 1000;
-	else
-		vm_global_user_wire_limit = max_mem * 100 / 80;
+	vm_global_no_user_wire_amount = MIN(max_mem*20/100,
+					    VM_NOT_USER_WIREABLE);
+	vm_global_user_wire_limit = max_mem - vm_global_no_user_wire_amount;
 	
-	vm_user_wire_limit = vm_global_user_wire_limit;		/* the default per user limit is the same as the global limit */
+	/* the default per user limit is the same as the global limit */
+	vm_user_wire_limit = vm_global_user_wire_limit;
 }
 
 

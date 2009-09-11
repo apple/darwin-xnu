@@ -39,26 +39,26 @@ __END_DECLS
 #include <libkern/c++/OSContainers.h>
 #include <iokit/IOLib.h>
 
-char *testBuffer = "
-{ string	= \"this is a 'string' with spaces\";
-  string2	= 'this is also a \"string\" with spaces';
-  offset	= 16384:32;
-  true          = .true.;
-  false         = .false.;
-  data		= <0123 4567 89abcdef>;
-  array		= (1:8, 2:16, 3:32, 4:64 );
-  set		= [ one, two, three, four ];
-  emptydict	= { }@1;
-  emptyarray	= ( )@2;
-  emptyset	= [ ]@3;
-  emptydata	= < >@4;
-  emptydict2	= @1;
-  emptyarray2	= @2;
-  emptyset2	= @3;
-  emptydata2	= @4;
-  dict2		= { string = asdfasdf; };
-  dict3		= { string = asdfasdf; };
-}@0";
+const char *testBuffer = ""
+"{ string	= \"this is a 'string' with spaces\";"
+"  string2	= 'this is also a \"string\" with spaces';"
+"  offset	= 16384:32;"
+"  true          = .true.;"
+"  false         = .false.;"
+"  data		= <0123 4567 89abcdef>;"
+"  array		= (1:8, 2:16, 3:32, 4:64 );"
+"  set		= [ one, two, three, four ];"
+"  emptydict	= { }@1;"
+"  emptyarray	= ( )@2;"
+"  emptyset	= [ ]@3;"
+"  emptydata	= < >@4;"
+"  emptydict2	= @1;"
+"  emptyarray2	= @2;"
+"  emptyset2	= @3;"
+"  emptydata2	= @4;"
+"  dict2		= { string = asdfasdf; };"
+"  dict3		= { string = asdfasdf; };"
+"}@0";
 
 kern_return_t
 test1_start(struct kmod_info *ki, void *data)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -43,9 +43,11 @@
 #include <sys/filio.h>
 #include <sys/uio_internal.h>
 #include <kern/lock.h>
+#include <netinet/in.h>
 
 extern int soclose_locked(struct socket *so);
 extern void soclose_wait_locked(struct socket *so);
+extern int so_isdstlocal(struct socket *so);
 
 errno_t sock_send_internal(
 	socket_t			sock,
@@ -194,7 +196,7 @@ sock_bind(
 {
 	if (sock == NULL || to == NULL) return EINVAL;
 	
-	return sobind(sock, (struct sockaddr*)to);
+	return sobind(sock, (struct sockaddr*)(uintptr_t)to);
 }
 
 errno_t
@@ -216,7 +218,7 @@ sock_connect(
 		socket_unlock(sock, 1);
 		return EALREADY;
 	}
-	error = soconnectlock(sock, (struct sockaddr*)to, 0);
+	error = soconnectlock(sock, (struct sockaddr*)(uintptr_t)to, 0);
 	if (!error) {
 		if ((sock->so_state & SS_ISCONNECTING) &&
 			((sock->so_state & SS_NBIO) != 0 || (flags & MSG_DONTWAIT) != 0)) {
@@ -346,7 +348,7 @@ sock_getpeername(socket_t sock, struct sockaddr	*peername, int peernamelen)
 		socket_unlock(sock, 1);
 		return (ENOTCONN);
 	}
-	error = sock_getaddr(sock, &sa, 1);
+	error = sogetaddr_locked(sock, &sa, 1);
 	socket_unlock(sock, 1);
 	if (error == 0) {
 		if (peernamelen > sa->sa_len)
@@ -367,13 +369,34 @@ sock_getsockname(socket_t sock, struct sockaddr	*sockname, int socknamelen)
 		return (EINVAL);
 
 	socket_lock(sock, 1);
-	error = sock_getaddr(sock, &sa, 0);
+	error = sogetaddr_locked(sock, &sa, 0);
 	socket_unlock(sock, 1);
 	if (error == 0) {
 		if (socknamelen > sa->sa_len)
 			socknamelen = sa->sa_len;
 		memcpy(sockname, sa, socknamelen);
 		FREE(sa, M_SONAME);
+	}
+	return (error);
+}
+
+__private_extern__ int
+sogetaddr_locked(struct socket *so, struct sockaddr **psa, int peer)
+{
+	int error;
+
+	if (so == NULL || psa == NULL)
+		return (EINVAL);
+
+	*psa = NULL;
+	error = peer ? so->so_proto->pr_usrreqs->pru_peeraddr(so, psa) :
+	    so->so_proto->pr_usrreqs->pru_sockaddr(so, psa);
+
+	if (error == 0 && *psa == NULL) {
+		error = ENOMEM;
+	} else if (error != 0 && *psa != NULL) {
+		FREE(*psa, M_SONAME);
+		*psa = NULL;
 	}
 	return (error);
 }
@@ -386,16 +409,10 @@ sock_getaddr(socket_t sock, struct sockaddr **psa, int peer)
 	if (sock == NULL || psa == NULL)
 		return (EINVAL);
 
-	*psa = NULL;
-	error = peer ? sock->so_proto->pr_usrreqs->pru_peeraddr(sock, psa) :
-	    sock->so_proto->pr_usrreqs->pru_sockaddr(sock, psa);
-
-	if (error == 0 && *psa == NULL) {
-		error = ENOMEM;
-	} else if (error != 0 && *psa != NULL) {
-		FREE(*psa, M_SONAME);
-		*psa = NULL;
-	}
+	socket_lock(sock, 1);
+	error = sogetaddr_locked(sock, psa, peer);
+	socket_unlock(sock, 1);
+	
 	return (error);
 }
 
@@ -423,7 +440,7 @@ sock_getsockopt(
 	sopt.sopt_name = optname;
 	sopt.sopt_val = CAST_USER_ADDR_T(optval); 
 	sopt.sopt_valsize = *optlen;
-	sopt.sopt_p = NULL;
+	sopt.sopt_p = kernproc;
 	error = sogetopt(sock, &sopt); /* will lock socket */
 	if (error == 0) *optlen = sopt.sopt_valsize;
 	return error;
@@ -435,7 +452,7 @@ sock_ioctl(
 	unsigned long request,
 	void *argp)
 {
-	return soioctl(sock, request, argp, NULL); /* will lock socket */
+	return soioctl(sock, request, argp, kernproc); /* will lock socket */
 }
 
 errno_t
@@ -454,8 +471,110 @@ sock_setsockopt(
 	sopt.sopt_name = optname;
 	sopt.sopt_val = CAST_USER_ADDR_T(optval);
 	sopt.sopt_valsize = optlen;
-	sopt.sopt_p = NULL;
+	sopt.sopt_p = kernproc;
 	return sosetopt(sock, &sopt); /* will lock socket */
+}
+
+errno_t
+sock_settclassopt(
+	socket_t	sock,
+	const void	*optval,
+	size_t		optlen) {
+
+	errno_t error = 0;
+	struct sockopt sopt;
+
+	if (sock == NULL || optval == NULL || optlen == 0) return EINVAL;
+
+	sopt.sopt_dir = SOPT_SET;
+	sopt.sopt_val = CAST_USER_ADDR_T(optval);
+	sopt.sopt_valsize = optlen;
+	sopt.sopt_p = kernproc;
+
+	socket_lock(sock, 1);
+	if (!(sock->so_state & SS_ISCONNECTED)) {
+		/* If the socket is not connected then we don't know 
+		 * if the destination is on LAN  or not. Skip
+		 * setting traffic class in this case
+		 */
+		error = ENOTCONN;
+		goto out;
+	}
+
+	if (sock->so_proto == NULL || sock->so_proto->pr_domain == NULL || sock->so_pcb == NULL) {
+		error = EINVAL;
+		goto out;
+	}
+
+	/* Check if the destination address is LAN or link local address.
+	 * We do not want to set traffic class bits if the destination
+	 * is not local 
+	 */ 
+	if (!so_isdstlocal(sock)) {
+		goto out;
+	}
+
+	switch (sock->so_proto->pr_domain->dom_family) {
+	case AF_INET:
+		sopt.sopt_level = IPPROTO_IP;
+		sopt.sopt_name = IP_TOS;
+		break;
+	case AF_INET6:
+		sopt.sopt_level = IPPROTO_IPV6;
+		sopt.sopt_name = IPV6_TCLASS;
+		break;
+	default:
+		error = EINVAL;
+		goto out;
+	}
+	
+	socket_unlock(sock, 1);
+	return sosetopt(sock, &sopt);
+out:
+	socket_unlock(sock, 1);
+	return error;
+}
+
+errno_t
+sock_gettclassopt(
+	socket_t	sock,
+	void		*optval,
+	size_t		*optlen) {
+
+	errno_t		error = 0;
+	struct sockopt	sopt;
+	
+	if (sock == NULL || optval == NULL || optlen == NULL) return EINVAL;
+
+	sopt.sopt_dir = SOPT_GET;
+	sopt.sopt_val = CAST_USER_ADDR_T(optval); 
+	sopt.sopt_valsize = *optlen;
+	sopt.sopt_p = kernproc;
+
+	socket_lock(sock, 1);
+	if (sock->so_proto == NULL || sock->so_proto->pr_domain == NULL) {
+		socket_unlock(sock, 1);
+		return EINVAL;
+	}
+
+	switch (sock->so_proto->pr_domain->dom_family) {
+	case AF_INET:
+		sopt.sopt_level = IPPROTO_IP;
+		sopt.sopt_name = IP_TOS;
+		break;
+	case AF_INET6:
+		sopt.sopt_level = IPPROTO_IPV6;
+		sopt.sopt_name = IPV6_TCLASS;
+		break;
+	default:
+		socket_unlock(sock, 1);
+		return EINVAL;
+
+	}
+	socket_unlock(sock, 1);
+	error = sogetopt(sock, &sopt); /* will lock socket */
+	if (error == 0) *optlen = sopt.sopt_valsize;
+	return error;
 }
 
 errno_t
@@ -489,7 +608,7 @@ sock_receive_internal(
 								  &uio_buf[0], sizeof(uio_buf));
 	if (msg && data == NULL) {
 		int i;
-		struct iovec_32 *tempp = (struct iovec_32 *) msg->msg_iov;
+		struct iovec *tempp = msg->msg_iov;
 		
 		for (i = 0; i < msg->msg_iovlen; i++) {
 			uio_addiov(auio, CAST_USER_ADDR_T((tempp + i)->iov_base), (tempp + i)->iov_len);
@@ -503,19 +622,10 @@ sock_receive_internal(
 	
 	if (recvdlen)
 		*recvdlen = 0;
-	
-	if (msg && msg->msg_control) {
-		if ((size_t)msg->msg_controllen < sizeof(struct cmsghdr)) return EINVAL;
-		if ((size_t)msg->msg_controllen > MLEN) return EINVAL;
-		control = m_get(M_NOWAIT, MT_CONTROL);
-		if (control == NULL) return ENOMEM;
-		memcpy(mtod(control, caddr_t), msg->msg_control, msg->msg_controllen);
-		control->m_len = msg->msg_controllen;
-	}
 
 	/* let pru_soreceive handle the socket locking */	
 	error = sock->so_proto->pr_usrreqs->pru_soreceive(sock, &fromsa, auio,
-				data, control ? &control : NULL, &flags);
+	    data, (msg && msg->msg_control) ? &control : NULL, &flags);
 	if (error) goto cleanup;
 	
 	if (recvdlen)
@@ -559,7 +669,7 @@ sock_receive_internal(
 				clen -= tocopy;
 				m = m->m_next;
 			}
-			msg->msg_controllen = (u_int32_t)ctlbuf - (u_int32_t)msg->msg_control;
+			msg->msg_controllen = (uintptr_t)ctlbuf - (uintptr_t)msg->msg_control;
 		}
 	}
 
@@ -618,7 +728,7 @@ sock_send_internal(
 	}
 	
 	if (data == 0 && msg != NULL) {
-		struct iovec_32 *tempp = (struct iovec_32 *) msg->msg_iov;
+		struct iovec *tempp = msg->msg_iov;
 
 		auio = uio_createwithbuffer(msg->msg_iovlen, 0, UIO_SYSSPACE, UIO_WRITE, 
 								  &uio_buf[0], sizeof(uio_buf));

@@ -29,10 +29,6 @@
 
 #include <sys/cdefs.h>
 
-__BEGIN_DECLS
-extern unsigned long strtoul(const char *, char **, int);
-__END_DECLS
-
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSString.h>
 #include <libkern/c++/OSSerialize.h>
@@ -53,30 +49,30 @@ OSMetaClassDefineReservedUnused(OSNumber, 5);
 OSMetaClassDefineReservedUnused(OSNumber, 6);
 OSMetaClassDefineReservedUnused(OSNumber, 7);
 
-bool OSNumber::init(unsigned long long inValue, unsigned int numberOfBits)
+bool OSNumber::init(unsigned long long inValue, unsigned int newNumberOfBits)
 {
     if (!super::init())
         return false;
 
-    size = numberOfBits;
+    size = newNumberOfBits;
     value = (inValue & sizeMask);
 
     return true;
 }
 
-bool OSNumber::init(const char *value, unsigned int numberOfBits)
+bool OSNumber::init(const char *newValue, unsigned int newNumberOfBits)
 {
-    return init((unsigned long long)strtoul(value, NULL, 0), numberOfBits);
+    return init((unsigned long long)strtoul(newValue, NULL, 0), newNumberOfBits);
 }
 
 void OSNumber::free() { super::free(); }
 
 OSNumber *OSNumber::withNumber(unsigned long long value,
-                           unsigned int numberOfBits)
+                           unsigned int newNumberOfBits)
 {
     OSNumber *me = new OSNumber;
 
-    if (me && !me->init(value, numberOfBits)) {
+    if (me && !me->init(value, newNumberOfBits)) {
         me->release();
         return 0;
     }
@@ -84,11 +80,11 @@ OSNumber *OSNumber::withNumber(unsigned long long value,
     return me;
 }
 
-OSNumber *OSNumber::withNumber(const char *value, unsigned int numberOfBits)
+OSNumber *OSNumber::withNumber(const char *value, unsigned int newNumberOfBits)
 {
     OSNumber *me = new OSNumber;
 
-    if (me && !me->init(value, numberOfBits)) {
+    if (me && !me->init(value, newNumberOfBits)) {
         me->release();
         return 0;
     }

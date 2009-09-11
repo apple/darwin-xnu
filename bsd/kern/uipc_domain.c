@@ -76,7 +76,6 @@
 
 #include <pexpert/pexpert.h>
 
-void domaininit(void) __attribute__((section("__TEXT, initcode")));
 void init_domain(struct domain *dp) __attribute__((section("__TEXT, initcode")));
 void concat_domain(struct domain *dp) __attribute__((section("__TEXT, initcode")));
 
@@ -87,8 +86,6 @@ void	pfslowtimo(void *);
 struct protosw *pffindprotonotype(int, int);
 struct protosw *pffindprotonotype_locked(int , int , int);
 struct domain *pffinddomain(int);
-void concat_domain(struct domain *);
-void init_domain(struct domain *);
 
 /*
  * Add/delete 'domain': Link structure into system list,
@@ -101,6 +98,8 @@ lck_attr_t	*domain_proto_mtx_attr;
 static lck_grp_attr_t	*domain_proto_mtx_grp_attr;
 lck_mtx_t		*domain_proto_mtx;
 extern int		do_reclaim;
+
+extern sysctlfn net_sysctl;
 
 static void
 init_proto(struct protosw *pr)
@@ -489,7 +488,7 @@ found:
 	for (pr = dp->dom_protosw; pr; pr = pr->pr_next)
 		if (pr->pr_protocol == protocol && pr->pr_sysctl) {
 			error = (*pr->pr_sysctl)(name + 2, namelen - 2,
-			    oldp, oldlenp, newp, newlen);
+			    (void *)(uintptr_t)oldp, oldlenp, (void *)(uintptr_t)newp, newlen);
 			lck_mtx_unlock(domain_proto_mtx);
 			return (error);
 		}

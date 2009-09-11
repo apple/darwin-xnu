@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -59,7 +59,9 @@
 extern struct zone	*ubc_info_zone;
 
 
-#define MAX_CLUSTERS 4	/* maximum number of vfs clusters per vnode */
+#define MAX_CLUSTERS 8		/* maximum number of vfs clusters per vnode */
+#define SPARSE_PUSH_LIMIT 4	/* limit on number of concurrent sparse pushes outside of the cl_lockw */
+                                /* once we reach this limit, we'll hold the lock */
 
 struct cl_extent {
 	daddr64_t	b_addr;
@@ -82,7 +84,8 @@ struct cl_readahead {
 struct cl_writebehind {
 	lck_mtx_t	cl_lockw;
         void	*	cl_scmap;			/* pointer to sparse cluster map */
-        int		cl_scdirty;			/* number of dirty pages in the sparse cluster map */
+	int		cl_sparse_pushes;		/* number of pushes outside of the cl_lockw in progress */
+	int		cl_sparse_wait;			/* synchronous push is in progress */
 	int		cl_number;			/* number of packed write behind clusters currently valid */
 	struct cl_wextent cl_clusters[MAX_CLUSTERS];	/* packed write behind clusters */
 };
@@ -92,9 +95,9 @@ struct cs_blob {
 	struct cs_blob	*csb_next;
 	cpu_type_t	csb_cpu_type;
 	unsigned int	csb_flags;
-	off_t		csb_base_offset;
-	off_t		csb_start_offset;
-	off_t		csb_end_offset;
+	off_t		csb_base_offset;	/* Offset of Mach-O binary in fat binary */
+	off_t		csb_start_offset;	/* Blob coverage area start, from csb_base_offset */
+	off_t		csb_end_offset;		/* Blob coverage area end, from csb_base_offset */
 	ipc_port_t	csb_mem_handle;
 	vm_size_t	csb_mem_size;
 	vm_offset_t	csb_mem_offset;
@@ -109,7 +112,7 @@ struct cs_blob {
 struct ubc_info {
 	memory_object_t		ui_pager;	/* pager */
 	memory_object_control_t	ui_control;	/* VM control for the pager */
-	long			ui_flags;	/* flags */
+	uint32_t		ui_flags;	/* flags */
 	vnode_t 		ui_vnode;	/* vnode for this ubc_info */
 	kauth_cred_t	 	ui_ucred;	/* holds credentials for NFS paging */
 	off_t			ui_size;	/* file size for the vnode */
@@ -135,7 +138,7 @@ struct ubc_info {
  */
 
 __BEGIN_DECLS
-__private_extern__ void ubc_init(void);
+__private_extern__ void ubc_init(void) __attribute__((section("__TEXT, initcode")));;
 __private_extern__ int	ubc_umount(mount_t mp);
 __private_extern__ void	ubc_unmountall(void);
 __private_extern__ memory_object_t ubc_getpager(vnode_t);
@@ -144,8 +147,8 @@ __private_extern__ void	ubc_destroy_named(vnode_t);
 /* internal only */
 __private_extern__ void	cluster_release(struct ubc_info *);
 __private_extern__ uint32_t cluster_max_io_size(mount_t, int);
- 
- 
+__private_extern__ uint32_t cluster_hard_throttle_limit(vnode_t, uint32_t *, uint32_t);
+
 
 /* Flags for ubc_getobject() */
 #define UBC_FLAGS_NONE		0x0000
@@ -161,12 +164,11 @@ void	ubc_info_deallocate(struct ubc_info *);
 int	ubc_isinuse(vnode_t, int);
 int	ubc_isinuse_locked(vnode_t, int, int);
 
-int	ubc_page_op(vnode_t, off_t, int, ppnum_t *, int *);
-int	ubc_range_op(vnode_t, off_t, off_t, int, int *);
-
 int	ubc_getcdhash(vnode_t, off_t, unsigned char *);
 
+#ifdef XNU_KERNEL_PRIVATE
 int UBCINFOEXISTS(vnode_t);
+#endif /* XNU_KERNEL_PRIVATE */
 
 /* code signing */
 struct cs_blob;

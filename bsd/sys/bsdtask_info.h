@@ -51,6 +51,7 @@ struct proc_taskinfo_internal {
 	int32_t                 pti_priority;           /* task priority*/
 };
 
+#define MAXTHREADNAMESIZE 64
 
 struct proc_threadinfo_internal {
 	uint64_t		pth_user_time;      /* user run time */
@@ -63,7 +64,7 @@ struct proc_threadinfo_internal {
 	int32_t			pth_curpri;		/* cur priority*/
 	int32_t			pth_priority;		/*  priority*/
 	int32_t			pth_maxpriority;		/* max priority*/
-	char *			pth_name[64];		/* thread name, if any */
+	char			pth_name[MAXTHREADNAMESIZE];		/* thread name, if any */
 };
 
 
@@ -99,16 +100,17 @@ struct proc_regioninfo_internal {
 
 void  vm_map_region_top_walk(vm_map_entry_t entry, vm_region_top_info_t top);
 void vm_map_region_walk(vm_map_t map, vm_map_offset_t a, vm_map_entry_t entry, vm_object_offset_t offset, vm_object_size_t range, vm_region_extended_info_t extended);
-kern_return_t vnode_pager_get_object_vnode(memory_object_t mem_obj,uint32_t * vnodeaddr, uint32_t * vid);
+kern_return_t vnode_pager_get_object_vnode(memory_object_t mem_obj, uintptr_t * vnodeaddr, uint32_t * vid);
 extern uint32_t vnode_vid(void *vp);
 
 #endif /* MACH_KERNEL_PRIVATE */
 
-extern int fill_procregioninfo(task_t t, uint64_t arg, struct proc_regioninfo_internal *pinfo, uint32_t *vp, uint32_t *vid);
+extern int fill_procregioninfo(task_t t, uint64_t arg, struct proc_regioninfo_internal *pinfo, uintptr_t *vp, uint32_t *vid);
 void fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo);
 int fill_taskthreadinfo(task_t task, uint64_t thaddr, struct proc_threadinfo_internal * ptinfo, void *, int *);
 int fill_taskthreadlist(task_t task, void * buffer, int thcount);
 int get_numthreads(task_t);
+void bsd_getthreadname(void *uth, char* buffer);
 void bsd_threadcdir(void * uth, void *vptr, int *vidp);
 
 #endif /*_SYS_BSDTASK_INFO_H */

@@ -105,6 +105,7 @@ int	ubc_setcred(struct vnode *, struct proc *);
 #include <vm/vm_map.h>
 
 #include <miscfs/specfs/specdev.h>
+#include <miscfs/fifofs/fifo.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -122,6 +123,8 @@ static int vn_select( struct fileproc *fp, int which, void * wql,
 			vfs_context_t ctx);
 static int vn_kqfilt_add(struct fileproc *fp, struct knote *kn,
 			vfs_context_t ctx);
+static void filt_vndetach(struct knote *kn);
+static int filt_vnode(struct knote *kn, long hint);
 #if 0
 static int vn_kqfilt_remove(struct vnode *vp, uintptr_t ident,
 			vfs_context_t ctx);
@@ -129,6 +132,13 @@ static int vn_kqfilt_remove(struct vnode *vp, uintptr_t ident,
 
 struct 	fileops vnops =
 	{ vn_read, vn_write, vn_ioctl, vn_select, vn_closefile, vn_kqfilt_add, NULL };
+
+struct  filterops vnode_filtops = { 
+	.f_isfd = 1, 
+	.f_attach = NULL, 
+	.f_detach = filt_vndetach, 
+	.f_event = filt_vnode
+};
 
 /*
  * Common code for vnode open operations.
@@ -206,26 +216,28 @@ vn_open_auth(struct nameidata *ndp, int *fmodep, struct vnode_attr *vap)
 	vfs_context_t ctx = ndp->ni_cnd.cn_context;
 	int error;
 	int fmode;
+	uint32_t origcnflags;
 	kauth_action_t action;
 
 again:
 	vp = NULL;
 	dvp = NULL;
 	fmode = *fmodep;
+	origcnflags = ndp->ni_cnd.cn_flags;
 	if (fmode & O_CREAT) {
 	        if ( (fmode & O_DIRECTORY) ) {
 		        error = EINVAL;
 			goto out;
 		}
 		ndp->ni_cnd.cn_nameiop = CREATE;
-		/* Inherit USEDVP flag only */
-		ndp->ni_cnd.cn_flags &= USEDVP;
+		/* Inherit USEDVP, vnode_open() supported flags only */
+		ndp->ni_cnd.cn_flags &= (USEDVP | NOCROSSMOUNT | DOWHITEOUT);
 		ndp->ni_cnd.cn_flags |= LOCKPARENT | LOCKLEAF | AUDITVNPATH1;
 #if NAMEDRSRCFORK
 		/* open calls are allowed for resource forks. */
 		ndp->ni_cnd.cn_flags |= CN_ALLOWRSRCFORK;
 #endif
-		if ((fmode & O_EXCL) == 0 && (fmode & O_NOFOLLOW) == 0)
+		if ((fmode & O_EXCL) == 0 && (fmode & O_NOFOLLOW) == 0 && (origcnflags & FOLLOW) != 0)
 			ndp->ni_cnd.cn_flags |= FOLLOW;
 		if ( (error = namei(ndp)) )
 			goto out;
@@ -279,6 +291,8 @@ again:
 
 #if CONFIG_FSE
 				if (need_fsevent(FSE_CREATE_FILE, vp)) {
+					vnode_put(dvp);
+					dvp = NULL;
 				        add_fsevent(FSE_CREATE_FILE, ctx,
 						    FSE_ARG_VNODE, vp,
 						    FSE_ARG_DONE);
@@ -294,13 +308,17 @@ again:
 badcreate:
 			nameidone(ndp);
 			ndp->ni_dvp = NULL;
-			vnode_put(dvp);
+
+			if (dvp) {
+				vnode_put(dvp);
+			}
 
 			if (error) {
 				/*
-				 * Check for a creation race.
+				 * Check for a creation or unlink race.
 				 */
-				if ((error == EEXIST) && !(fmode & O_EXCL)) {
+				if (((error == EEXIST) && !(fmode & O_EXCL)) ||
+					   ((error == ENOENT) && (fmode & O_CREAT))){
 					goto again;
 				}
 				goto bad;
@@ -319,14 +337,15 @@ badcreate:
 		}
 	} else {
 		ndp->ni_cnd.cn_nameiop = LOOKUP;
-		/* Inherit USEDVP flag only */
-		ndp->ni_cnd.cn_flags &= USEDVP;
+		/* Inherit USEDVP, vnode_open() supported flags only */
+		ndp->ni_cnd.cn_flags &= (USEDVP | NOCROSSMOUNT | DOWHITEOUT);
 		ndp->ni_cnd.cn_flags |= FOLLOW | LOCKLEAF | AUDITVNPATH1;
 #if NAMEDRSRCFORK
 		/* open calls are allowed for resource forks. */
 		ndp->ni_cnd.cn_flags |= CN_ALLOWRSRCFORK;
 #endif
-		if (fmode & O_NOFOLLOW || fmode & O_SYMLINK) {
+		/* preserve NOFOLLOW from vnode_open() */
+		if (fmode & O_NOFOLLOW || fmode & O_SYMLINK || (origcnflags & FOLLOW) == 0) {
 		    ndp->ni_cnd.cn_flags &= ~FOLLOW;
 		}
 
@@ -425,9 +444,11 @@ bad:
 	ndp->ni_vp = NULL;
 	if (vp) {
 #if NAMEDRSRCFORK
-		if ((vnode_isnamedstream(vp)) && (vp->v_parent != NULLVP) &&
-					(vnode_isshadow (vp))) {
-			vnode_recycle(vp);
+		/* Aggressively recycle shadow files if we error'd out during open() */
+		if ((vnode_isnamedstream(vp)) &&
+			(vp->v_parent != NULLVP) && 
+			(vnode_isshadow(vp))) {
+				vnode_recycle(vp);
 		}
 #endif
 		vnode_put(vp);
@@ -495,7 +516,7 @@ vn_close(struct vnode *vp, int flags, vfs_context_t ctx)
 	/* Sync data from resource fork shadow file if needed. */
 	if ((vp->v_flag & VISNAMEDSTREAM) && 
 	    (vp->v_parent != NULLVP) &&
-	    (vnode_isshadow(vp))) {
+	    vnode_isshadow(vp)) {
 		if (flags & FWASWRITTEN) {
 			(void) vnode_flushnamedstream(vp->v_parent, vp, ctx);
 		}
@@ -503,12 +524,12 @@ vn_close(struct vnode *vp, int flags, vfs_context_t ctx)
 #endif
 	
 	/* work around for foxhound */
-	if (vp->v_type == VBLK)
+	if (vnode_isspec(vp))
 		(void)vnode_rele_ext(vp, flags, 0);
 
 	error = VNOP_CLOSE(vp, flags, ctx);
 
-	if (vp->v_type != VBLK)
+	if (!vnode_isspec(vp))
 		(void)vnode_rele_ext(vp, flags, 0);
 	
 	return (error);
@@ -519,15 +540,17 @@ vn_read_swapfile(
 	struct vnode	*vp,
 	uio_t		uio)
 {
-	static char *swap_read_zero_page = NULL;
 	int	error;
 	off_t	swap_count, this_count;
 	off_t	file_end, read_end;
 	off_t	prev_resid;
+	char 	*my_swap_page;
 
 	/*
-	 * Reading from a swap file will get you all zeroes.
+	 * Reading from a swap file will get you zeroes.
 	 */
+
+	my_swap_page = NULL;
 	error = 0;
 	swap_count = uio_resid(uio);
 
@@ -542,55 +565,30 @@ vn_read_swapfile(
 	}
 
 	while (swap_count > 0) {
-		if (swap_read_zero_page == NULL) {
-			char *my_zero_page;
-			int funnel_state;
-
-			/*
-			 * Take kernel funnel so that only one thread
-			 * sets up "swap_read_zero_page".
-			 */
-			funnel_state = thread_funnel_set(kernel_flock, TRUE);
-
-			if (swap_read_zero_page == NULL) {
-				MALLOC(my_zero_page, char *, PAGE_SIZE,
-				       M_TEMP, M_WAITOK);
-				memset(my_zero_page, '?', PAGE_SIZE);
-				/*
-				 * Adding a newline character here
-				 * and there prevents "less(1)", for
-				 * example, from getting too confused
-				 * about a file with one really really
-				 * long line.
-				 */
-				my_zero_page[PAGE_SIZE-1] = '\n';
-				if (swap_read_zero_page == NULL) {
-					swap_read_zero_page = my_zero_page;
-				} else {
-					FREE(my_zero_page, M_TEMP);
-				}
-			} else {
-				/*
-				 * Someone else raced us here and won;
-				 * just use their page.
-				 */
-			}
-			thread_funnel_set(kernel_flock, funnel_state);
+		if (my_swap_page == NULL) {
+			MALLOC(my_swap_page, char *, PAGE_SIZE,
+			       M_TEMP, M_WAITOK);
+			memset(my_swap_page, '\0', PAGE_SIZE);
+			/* add an end-of-line to keep line counters happy */
+			my_swap_page[PAGE_SIZE-1] = '\n';
 		}
-
 		this_count = swap_count;
 		if (this_count > PAGE_SIZE) {
 			this_count = PAGE_SIZE;
 		}
 
 		prev_resid = uio_resid(uio);
-		error = uiomove((caddr_t) swap_read_zero_page,
+		error = uiomove((caddr_t) my_swap_page,
 				this_count,
 				uio);
 		if (error) {
 			break;
 		}
 		swap_count -= (prev_resid - uio_resid(uio));
+	}
+	if (my_swap_page != NULL) {
+		FREE(my_swap_page, M_TEMP);
+		my_swap_page = NULL;
 	}
 
 	return error;
@@ -611,7 +609,10 @@ vn_rdwr(
 	int *aresid,
 	proc_t p)
 {
-	return vn_rdwr_64(rw,
+	int64_t resid;
+	int result;
+	
+	result = vn_rdwr_64(rw,
 			vp,
 			(uint64_t)(uintptr_t)base,
 			(int64_t)len,
@@ -619,8 +620,15 @@ vn_rdwr(
 			segflg,
 			ioflg,
 			cred,
-			aresid,
+			&resid,
 			p);
+
+	/* "resid" should be bounded above by "len," which is an int */
+	if (aresid != NULL) {
+		*aresid = resid;
+	}
+
+	return result;
 }
 
 
@@ -634,7 +642,7 @@ vn_rdwr_64(
 	enum uio_seg segflg,
 	int ioflg,
 	kauth_cred_t cred,
-	int *aresid,
+	int64_t *aresid,
 	proc_t p)
 {
 	uio_t auio;
@@ -672,7 +680,7 @@ vn_rdwr_64(
 
 	if (error == 0) {
 		if (rw == UIO_READ) {
-			if (vp->v_flag & VSWAP) {
+			if (vnode_isswap(vp)) {
 				error = vn_read_swapfile(vp, auio);
 			} else {
 				error = VNOP_READ(vp, auio, ioflg, &context);
@@ -683,7 +691,6 @@ vn_rdwr_64(
 	}
 
 	if (aresid)
-		// LP64todo - fix this
 		*aresid = uio_resid(auio);
 	else
 		if (uio_resid(auio) && error == 0)
@@ -726,7 +733,7 @@ vn_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 		uio->uio_offset = fp->f_fglob->fg_offset;
 	count = uio_resid(uio);
 
-	if (vp->v_flag & VSWAP) {
+	if (vnode_isswap(vp)) {
 		/* special case for swap files */
 		error = vn_read_swapfile(vp, uio);
 	} else {
@@ -775,9 +782,17 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 		ioflag |= IO_NDELAY;
 	if ((fp->f_fglob->fg_flag & FNOCACHE) || vnode_isnocache(vp))
 	        ioflag |= IO_NOCACHE;
-	if ((fp->f_fglob->fg_flag & O_FSYNC) ||
-		(vp->v_mount && (vp->v_mount->mnt_flag & MNT_SYNCHRONOUS)))
+	/*
+	 * Treat synchronous mounts and O_FSYNC on the fd as equivalent.
+	 *
+	 * XXX We treat O_DSYNC as O_FSYNC for now, since we can not delay
+	 * XXX the non-essential metadata without some additional VFS work;
+	 * XXX the intent at this point is to plumb the interface for it.
+	 */
+	if ((fp->f_fglob->fg_flag & (O_FSYNC|O_DSYNC)) ||
+		(vp->v_mount && (vp->v_mount->mnt_flag & MNT_SYNCHRONOUS))) {
 		ioflag |= IO_SYNC;
+	}
 
 	if ((flags & FOF_OFFSET) == 0) {
 		uio->uio_offset = fp->f_fglob->fg_offset;
@@ -785,8 +800,8 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	}
 	if (((flags & FOF_OFFSET) == 0) &&
 	 	vfs_context_proc(ctx) && (vp->v_type == VREG) &&
-            (((rlim_t)(uio->uio_offset + uio_uio_resid(uio)) > p->p_rlimit[RLIMIT_FSIZE].rlim_cur) ||
-             ((rlim_t)uio_uio_resid(uio) > (p->p_rlimit[RLIMIT_FSIZE].rlim_cur - uio->uio_offset)))) {
+            (((rlim_t)(uio->uio_offset + uio_resid(uio)) > p->p_rlimit[RLIMIT_FSIZE].rlim_cur) ||
+             ((rlim_t)uio_resid(uio) > (p->p_rlimit[RLIMIT_FSIZE].rlim_cur - uio->uio_offset)))) {
 	     	/*
 		 * If the requested residual would cause us to go past the
 		 * administrative limit, then we need to adjust the residual
@@ -794,10 +809,10 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 		 * we can't do that (e.g. the residual is already 1 byte),
 		 * then we fail the write with EFBIG.
 		 */
-		residcount = uio_uio_resid(uio);
-            	if ((rlim_t)(uio->uio_offset + uio_uio_resid(uio)) > p->p_rlimit[RLIMIT_FSIZE].rlim_cur) {
-			clippedsize =  (uio->uio_offset + uio_uio_resid(uio)) - p->p_rlimit[RLIMIT_FSIZE].rlim_cur;
-		} else if ((rlim_t)uio_uio_resid(uio) > (p->p_rlimit[RLIMIT_FSIZE].rlim_cur - uio->uio_offset)) {
+		residcount = uio_resid(uio);
+            	if ((rlim_t)(uio->uio_offset + uio_resid(uio)) > p->p_rlimit[RLIMIT_FSIZE].rlim_cur) {
+			clippedsize =  (uio->uio_offset + uio_resid(uio)) - p->p_rlimit[RLIMIT_FSIZE].rlim_cur;
+		} else if ((rlim_t)uio_resid(uio) > (p->p_rlimit[RLIMIT_FSIZE].rlim_cur - uio->uio_offset)) {
 			clippedsize = (p->p_rlimit[RLIMIT_FSIZE].rlim_cur - uio->uio_offset);
 		}
 		if (clippedsize >= residcount) {
@@ -818,10 +833,10 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 		return (EFBIG);
 	}
 		if (p && (vp->v_type == VREG) &&
-			((rlim_t)(uio->uio_offset + uio_uio_resid(uio)) > p->p_rlimit[RLIMIT_FSIZE].rlim_cur)) {
+			((rlim_t)(uio->uio_offset + uio_resid(uio)) > p->p_rlimit[RLIMIT_FSIZE].rlim_cur)) {
 			//Debugger("vn_bwrite:overstepping the bounds");
-			residcount = uio_uio_resid(uio);
-			clippedsize =  (uio->uio_offset + uio_uio_resid(uio)) - p->p_rlimit[RLIMIT_FSIZE].rlim_cur;
+			residcount = uio_resid(uio);
+			clippedsize =  (uio->uio_offset + uio_resid(uio)) - p->p_rlimit[RLIMIT_FSIZE].rlim_cur;
 			partialwrite = 1;
 			uio_setresid(uio, residcount-clippedsize);
 		}
@@ -885,7 +900,7 @@ vn_stat_noauth(struct vnode *vp, void *sbptr, kauth_filesec_t *xsec, int isstat6
 		sb64 = (struct stat64 *)sbptr;
 	else
 		sb = (struct stat *)sbptr;
-
+	memset(&va, 0, sizeof(va));
 	VATTR_INIT(&va);
 	VATTR_WANTED(&va, va_fsid);
 	VATTR_WANTED(&va, va_fileid);
@@ -1186,16 +1201,6 @@ vn_select(struct fileproc *fp, int which, void *wql, __unused vfs_context_t ctx)
 }
 
 /*
- * Check that the vnode is still valid, and if so
- * acquire requested lock.
- */
-int
-vn_lock(__unused vnode_t vp, __unused int flags, __unused proc_t p)
-{
-	return (0);
-}
-
-/*
  * File table vnode close routine.
  */
 static int
@@ -1227,7 +1232,7 @@ vn_closefile(struct fileglob *fg, vfs_context_t ctx)
  *	VNOP_PATHCONF:???
  */
 int
-vn_pathconf(vnode_t vp, int name, register_t *retval, vfs_context_t ctx)
+vn_pathconf(vnode_t vp, int name, int32_t *retval, vfs_context_t ctx)
 {
 	int	error = 0;
 
@@ -1279,48 +1284,217 @@ vn_pathconf(vnode_t vp, int name, register_t *retval, vfs_context_t ctx)
 static int
 vn_kqfilt_add(struct fileproc *fp, struct knote *kn, vfs_context_t ctx)
 {
-	struct vnode *vp = (struct vnode *)fp->f_fglob->fg_data;
 	int error;
-	int funnel_state;
+	struct vnode *vp;
 	
-	if ( (error = vnode_getwithref(vp)) == 0 ) {
+	vp = (struct vnode *)fp->f_fglob->fg_data;
+
+	/*
+	 * Don't attach a knote to a dead vnode.
+	 */
+	if ((error = vget_internal(vp, 0, VNODE_NODEAD)) == 0) {
+		switch (kn->kn_filter) {
+			case EVFILT_READ:
+			case EVFILT_WRITE:
+				if (vnode_isfifo(vp)) {
+					/* We'll only watch FIFOs that use our fifofs */
+					if (!(vp->v_fifoinfo && vp->v_fifoinfo->fi_readsock)) {
+						error = ENOTSUP;
+					}
+
+				} else if (!vnode_isreg(vp)) {
+					if (vnode_isspec(vp) && 
+							(error = spec_kqfilter(vp, kn)) == 0) {
+						/* claimed by a special device */
+						vnode_put(vp);
+						return 0;
+					}
+
+					error = EINVAL;
+				}
+				break;
+			case EVFILT_VNODE:
+				break;
+			default:
+				error = EINVAL;
+		}
+
+		if (error) {
+			vnode_put(vp);
+			return error;
+		}
 
 #if CONFIG_MACF
 		error = mac_vnode_check_kqfilter(ctx, fp->f_fglob->fg_cred, kn, vp);
 		if (error) {
-			(void)vnode_put(vp);
-			return (error);
+			vnode_put(vp);
+			return error;
 		}
 #endif
 
-	        funnel_state = thread_funnel_set(kernel_flock, TRUE);
-		error = VNOP_KQFILT_ADD(vp, kn, ctx);
-		thread_funnel_set(kernel_flock, funnel_state);
+		kn->kn_hook = (void*)vp;
+		kn->kn_hookid = vnode_vid(vp);
+		kn->kn_fop = &vnode_filtops;
 
-		(void)vnode_put(vp);
+		vnode_lock(vp);
+		KNOTE_ATTACH(&vp->v_knotes, kn);
+		vnode_unlock(vp);
+
+		/* Ask the filesystem to provide remove notifications, but ignore failure */
+		VNOP_MONITOR(vp, 0, VNODE_MONITOR_BEGIN, (void*) kn,  ctx);
+
+		vnode_put(vp);
 	}
+
 	return (error);
 }
 
-#if 0
-/* No one calls this yet. */
-static int
-vn_kqfilt_remove(vp, ident, ctx)
-	struct vnode *vp;
-	uintptr_t ident;
-	vfs_context_t ctx;
+static void
+filt_vndetach(struct knote *kn)
 {
-	int error;
-	int funnel_state;
+	vfs_context_t ctx = vfs_context_current();
+	struct vnode *vp; 
+	vp = (struct vnode *)kn->kn_hook;
+	if (vnode_getwithvid(vp, kn->kn_hookid))
+		return;
+
+	vnode_lock(vp);
+	KNOTE_DETACH(&vp->v_knotes, kn);
+	vnode_unlock(vp);
 	
-	if ( (error = vnode_getwithref(vp)) == 0 ) {
-
-		funnel_state = thread_funnel_set(kernel_flock, TRUE);
-		error = VNOP_KQFILT_REMOVE(vp, ident, ctx);
-		thread_funnel_set(kernel_flock, funnel_state);
-
-		(void)vnode_put(vp);
-	}
-	return (error);
+	/* 
+	 * Tell a (generally networked) filesystem that we're no longer watching 
+	 * If the FS wants to track contexts, it should still be using the one from
+	 * the VNODE_MONITOR_BEGIN.
+	 */
+	VNOP_MONITOR(vp, 0, VNODE_MONITOR_END, (void*)kn, ctx);
+	vnode_put(vp);
 }
-#endif
+
+
+/*
+ * Used for EVFILT_READ
+ *
+ * Takes only VFIFO or VREG. vnode is locked.  We handle the "poll" case
+ * differently than the regular case for VREG files.  If not in poll(),
+ * then we need to know current fileproc offset for VREG.
+ */
+static intptr_t
+vnode_readable_data_count(vnode_t vp, off_t current_offset, int ispoll)
+{
+	if (vnode_isfifo(vp)) {
+		int cnt;
+		int err = fifo_charcount(vp, &cnt);
+		if (err == 0) {
+			return (intptr_t)cnt;
+		} else {
+			return (intptr_t)0;
+		}
+	} else if (vnode_isreg(vp)) {
+		if (ispoll) {
+			return (intptr_t)1;
+		}
+
+		off_t amount;
+		amount = vp->v_un.vu_ubcinfo->ui_size - current_offset;
+		if (amount > (off_t)INTPTR_MAX) {
+			return INTPTR_MAX;
+		} else if (amount < (off_t)INTPTR_MIN) {
+			return INTPTR_MIN;
+		} else {
+			return (intptr_t)amount;
+		} 
+	} else {
+		panic("Should never have an EVFILT_READ except for reg or fifo.");
+		return 0;
+	}
+}
+
+/*
+ * Used for EVFILT_WRITE.  
+ *
+ * For regular vnodes, we can always write (1).  For named pipes,
+ * see how much space there is in the buffer.  Nothing else is covered.
+ */
+static intptr_t
+vnode_writable_space_count(vnode_t vp) 
+{
+	if (vnode_isfifo(vp)) {
+		long spc;
+		int err = fifo_freespace(vp, &spc);
+		if (err == 0) {
+			return (intptr_t)spc;
+		} else {
+			return (intptr_t)0;
+		}
+	} else if (vnode_isreg(vp)) {
+		return (intptr_t)1;
+	} else {
+		panic("Should never have an EVFILT_READ except for reg or fifo.");
+		return 0;
+	}
+}
+
+/* 
+ * Determine whether this knote should be active
+ * 
+ * This is kind of subtle.  
+ * 	--First, notice if the vnode has been revoked: in so, override hint
+ * 	--EVFILT_READ knotes are checked no matter what the hint is
+ * 	--Other knotes activate based on hint.  
+ * 	--If hint is revoke, set special flags and activate
+ */
+static int
+filt_vnode(struct knote *kn, long hint)
+{
+	struct vnode *vp = (struct vnode *)kn->kn_hook;
+	int activate = 0;
+
+	if (0 == hint) {
+		if ((vnode_getwithvid(vp, kn->kn_hookid) != 0)) {
+			hint = NOTE_REVOKE;
+		} else {
+			vnode_put(vp);
+		}
+	}    
+
+	/* NOTE_REVOKE is special, as it is only sent during vnode reclaim */
+	if (NOTE_REVOKE == hint) {
+		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
+		activate = 1;
+
+		if ((kn->kn_filter == EVFILT_VNODE) && (kn->kn_sfflags & NOTE_REVOKE)) {
+			kn->kn_fflags |= NOTE_REVOKE;
+		}
+	} else {
+		switch(kn->kn_filter) {
+			case EVFILT_READ:
+				kn->kn_data = vnode_readable_data_count(vp, kn->kn_fp->f_fglob->fg_offset, (kn->kn_flags & EV_POLL));
+
+				if (kn->kn_data != 0) {
+					activate = 1;
+				}
+				break;
+			case EVFILT_WRITE: 
+				kn->kn_data = vnode_writable_space_count(vp);
+
+				if (kn->kn_data != 0) {
+					activate = 1;
+				}
+				break;
+			case EVFILT_VNODE:
+				/* Check events this note matches against the hint */
+				if (kn->kn_sfflags & hint) {
+					kn->kn_fflags |= hint; /* Set which event occurred */
+				}
+				if (kn->kn_fflags != 0) {
+					activate = 1;
+				}
+				break;
+			default:
+				panic("Invalid knote filter on a vnode!\n");
+		}
+	}
+
+	return (activate);
+}

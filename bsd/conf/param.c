@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -77,7 +77,6 @@
 #include <sys/domain.h>
 #include <sys/kernel.h>
 #include <sys/quota.h>
-#include <ufs/ufs/inode.h>
 #include <miscfs/fifofs/fifo.h>
 #include <sys/shm_internal.h>
 #include <sys/aio_kern.h>
@@ -98,7 +97,7 @@ int    desiredvnodes = CONFIG_VNODES;
 int	maxfiles = MAXFILES;
 
 unsigned int	ncallout = 16 + 2*NPROC;
-int nmbclusters = NMBCLUSTERS;
+unsigned int nmbclusters = NMBCLUSTERS;
 int	nport = NPROC / 2;
 
 #define MAXSOCKETS NMBCLUSTERS

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -118,12 +118,12 @@ SYSCTL_STRUCT(_net_inet_igmp, IGMPCTL_STATS, stats, CTLFLAG_RD,
 	&igmpstat, igmpstat, "");
 
 static int igmp_timers_are_running;
-static u_long igmp_all_hosts_group;
-static u_long igmp_all_rtrs_group;
+static uint32_t igmp_all_hosts_group;
+static uint32_t igmp_all_rtrs_group;
 static struct mbuf *router_alert;
 static struct router_info *Head;
 
-static void igmp_sendpkt(struct in_multi *, int, unsigned long);
+static void igmp_sendpkt(struct in_multi *, int, uint32_t);
 
 void
 igmp_init(void)
@@ -141,7 +141,7 @@ igmp_init(void)
 	/*
 	 * Construct a Router Alert option to use in outgoing packets
 	 */
-	MGET(router_alert, M_DONTWAIT, MT_DATA);
+	MGET(router_alert, M_WAIT, MT_DATA);
 	ra = mtod(router_alert, struct ipoption *);
 	ra->ipopt_dst.s_addr = 0;
 	ra->ipopt_list[0] = IPOPT_RA;	/* Router Alert Option */
@@ -309,7 +309,7 @@ igmp_input(
 		 * - Use the value specified in the query message as
 		 *   the maximum timeout.
 		 */
-		lck_mtx_lock(rt_mtx);
+		lck_mtx_lock(rnh_lock);
 		IN_FIRST_MULTI(step, inm);
 		while (inm != NULL) {
 			if (inm->inm_ifp == ifp &&
@@ -325,7 +325,7 @@ igmp_input(
 			}
 			IN_NEXT_MULTI(step, inm);
 		}
-		lck_mtx_unlock(rt_mtx);
+		lck_mtx_unlock(rnh_lock);
 
 		break;
 
@@ -338,17 +338,24 @@ igmp_input(
 		 * router, so discard reports sourced by me.
 		 */
 		IFP_TO_IA(ifp, ia);
-		if (ia && ip->ip_src.s_addr == IA_SIN(ia)->sin_addr.s_addr)
+		if (ia && ip->ip_src.s_addr == IA_SIN(ia)->sin_addr.s_addr) {
+			ifafree(&ia->ia_ifa);
 			break;
+		}
 
 		++igmpstat.igps_rcv_reports;
 
-		if (ifp->if_flags & IFF_LOOPBACK)
+		if (ifp->if_flags & IFF_LOOPBACK) {
+			if (ia != NULL)
+				ifafree(&ia->ia_ifa);
 			break;
+		}
 
 		if (!IN_MULTICAST(ntohl(igmp->igmp_group.s_addr))) {
 			++igmpstat.igps_rcv_badreports;
 			m_freem(m);
+			if (ia != NULL)
+				ifafree(&ia->ia_ifa);
 			return;
 		}
 
@@ -379,6 +386,8 @@ igmp_input(
 			inm->inm_state = IGMP_OTHERMEMBER;
 		}
 
+		if (ia != NULL)
+			ifafree(&ia->ia_ifa);
 		break;
 	}
 
@@ -473,7 +482,7 @@ igmp_slowtimo(void)
 static struct route igmprt;
 
 static void
-igmp_sendpkt(struct in_multi *inm, int type, unsigned long addr)
+igmp_sendpkt(struct in_multi *inm, int type, uint32_t addr)
 {
         struct mbuf *m;
         struct igmp *igmp;

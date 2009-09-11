@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
@@ -30,7 +30,7 @@
 #ifndef _DIS_TABLES_H
 #define	_DIS_TABLES_H
 
-/* #pragma ident	"@(#)dis_tables.h	1.8	06/05/30 SMI" */
+/* #pragma ident	"@(#)dis_tables.h	1.10	07/07/10 SMI" */
 
 /*
  * Constants and prototypes for the IA32 disassembler backend.  See dis_tables.c
@@ -87,7 +87,7 @@ typedef struct dis86 {
 	uint_t		d86_opnd_size;
 	uint_t		d86_addr_size;
 	uint_t		d86_got_modrm;
-	struct d86opnd	d86_opnd[3];		/* up to 3 operands */
+	struct d86opnd	d86_opnd[4];		/* up to 4 operands */
 	int		(*d86_check_func)(void *);
 	int		(*d86_get_byte)(void *);
 #ifdef DIS_TEXT
@@ -102,6 +102,7 @@ typedef struct dis86 {
 extern int dtrace_disx86(dis86_t *x, uint_t cpu_mode);
 
 #define	DIS_F_OCTAL	0x1	/* Print all numbers in octal */
+#define	DIS_F_NOIMMSYM	0x2	/* Don't print symbols for immediates (.o) */
 
 #ifdef DIS_TEXT
 extern void dtrace_disx86_str(dis86_t *x, uint_t cpu_mode, uint64_t pc,

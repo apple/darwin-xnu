@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/ipsec.c,v 1.3.2.7 2001/07/19 06:37:23 kris Exp $	*/
 /*	$KAME: ipsec.c,v 1.103 2001/05/24 07:14:18 sakane Exp $	*/
 
@@ -130,6 +158,7 @@ int ip4_ipsec_ecn = 0;		/* ECN ignore(-1)/forbidden(0)/allowed(1) */
 int ip4_esp_randpad = -1;
 int	esp_udp_encap_port = 0;
 static int sysctl_def_policy SYSCTL_HANDLER_ARGS;
+extern int natt_keepalive_interval;
 extern u_int32_t natt_now;
 
 struct ipsec_tag;
@@ -245,13 +274,15 @@ static int ipsec64_encapsulate(struct mbuf *, struct secasvar *);
 static struct ipsec_tag *ipsec_addaux(struct mbuf *);
 static struct ipsec_tag *ipsec_findaux(struct mbuf *);
 static void ipsec_optaux(struct mbuf *, struct ipsec_tag *);
-void ipsec_send_natt_keepalive(struct secasvar *sav);
+int ipsec_send_natt_keepalive(struct secasvar *sav);
 
 static int
 sysctl_def_policy SYSCTL_HANDLER_ARGS
 {
 	int old_policy = ip4_def_policy.policy;
 	int error = sysctl_handle_int(oidp, oidp->oid_arg1, oidp->oid_arg2, req);
+
+#pragma unused(arg1, arg2)
 
 	if (ip4_def_policy.policy != IPSEC_POLICY_NONE &&
 		ip4_def_policy.policy != IPSEC_POLICY_DISCARD) {
@@ -2089,7 +2120,7 @@ ipsec4_hdrsiz(m, dir, inp)
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 		printf("DP ipsec4_hdrsiz call free SP:%p\n", sp));
 	KEYDEBUG(KEYDEBUG_IPSEC_DATA,
-		printf("ipsec4_hdrsiz: size:%lu.\n", (unsigned long)size));
+		printf("ipsec4_hdrsiz: size:%lu.\n", (u_int32_t)size));
 	key_freesp(sp, KEY_SADB_UNLOCKED);
 
 	return size;
@@ -2129,7 +2160,7 @@ ipsec6_hdrsiz(m, dir, in6p)
 	KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 		printf("DP ipsec6_hdrsiz call free SP:%p\n", sp));
 	KEYDEBUG(KEYDEBUG_IPSEC_DATA,
-		printf("ipsec6_hdrsiz: size:%lu.\n", (unsigned long)size));
+		printf("ipsec6_hdrsiz: size:%lu.\n", (u_int32_t)size));
 	key_freesp(sp, KEY_SADB_UNLOCKED);
 
 	return size;
@@ -2933,9 +2964,10 @@ ipsec4_output(
 			state->ro = &sav->sah->sa_route;
 			state->dst = (struct sockaddr *)&state->ro->ro_dst;
 			dst4 = (struct sockaddr_in *)state->dst;
-			if (state->ro->ro_rt
-			 && ((state->ro->ro_rt->rt_flags & RTF_UP) == 0
-			  || dst4->sin_addr.s_addr != ip->ip_dst.s_addr)) {
+			if (state->ro->ro_rt != NULL &&
+			    (state->ro->ro_rt->generation_id != route_generation ||
+			    !(state->ro->ro_rt->rt_flags & RTF_UP) ||
+			    dst4->sin_addr.s_addr != ip->ip_dst.s_addr)) {
 				rtfree(state->ro->ro_rt);
 				state->ro->ro_rt = NULL;
 			}
@@ -2946,12 +2978,20 @@ ipsec4_output(
 				rtalloc(state->ro);
 			}
 			if (state->ro->ro_rt == 0) {
-				OSAddAtomic(1, (SInt32*)&ipstat.ips_noroute);
+				OSAddAtomic(1, &ipstat.ips_noroute);
 				error = EHOSTUNREACH;
 				goto bad;
 			}
 
-			/* adjust state->dst if tunnel endpoint is offlink */
+			/*
+			 * adjust state->dst if tunnel endpoint is offlink
+			 *
+			 * XXX: caching rt_gateway value in the state is
+			 * not really good, since it may point elsewhere
+			 * when the gateway gets modified to a larger
+			 * sockaddr via rt_setgate().  This is currently
+			 * addressed by SA_SIZE roundup in that routine.
+			 */
 			if (state->ro->ro_rt->rt_flags & RTF_GATEWAY) {
 				state->dst = (struct sockaddr *)state->ro->ro_rt->rt_gateway;
 				dst4 = (struct sockaddr_in *)state->dst;
@@ -3367,9 +3407,10 @@ ipsec6_output_tunnel(
 
 				ro4 = &sav->sah->sa_route;
 				dst4 = (struct sockaddr_in *)&ro4->ro_dst;
-				if (ro4->ro_rt
-				 && ((ro4->ro_rt->rt_flags & RTF_UP) == 0
-				  || dst4->sin_addr.s_addr != ip->ip_dst.s_addr)) {
+				if (ro4->ro_rt != NULL &&
+				    (ro4->ro_rt->generation_id != route_generation ||
+				    !(ro4->ro_rt->rt_flags & RTF_UP) ||
+				    dst4->sin_addr.s_addr != ip->ip_dst.s_addr)) {
 					rtfree(ro4->ro_rt);
 					ro4->ro_rt = NULL;
 				}
@@ -3380,7 +3421,7 @@ ipsec6_output_tunnel(
 					rtalloc(ro4);
 				}
 				if (ro4->ro_rt == NULL) {
-					OSAddAtomic(1, (SInt32*)&ipstat.ips_noroute);
+					OSAddAtomic(1, &ipstat.ips_noroute);
 					error = EHOSTUNREACH;
 					goto bad;
 				}
@@ -3448,9 +3489,10 @@ ipsec6_output_tunnel(
 			state->ro = &sav->sah->sa_route;
 			state->dst = (struct sockaddr *)&state->ro->ro_dst;
 			dst6 = (struct sockaddr_in6 *)state->dst;
-			if (state->ro->ro_rt
-			 && ((state->ro->ro_rt->rt_flags & RTF_UP) == 0
-			  || !IN6_ARE_ADDR_EQUAL(&dst6->sin6_addr, &ip6->ip6_dst))) {
+			if (state->ro->ro_rt != NULL &&
+			    (state->ro->ro_rt->generation_id != route_generation ||
+			    !(state->ro->ro_rt->rt_flags & RTF_UP) ||
+			    !IN6_ARE_ADDR_EQUAL(&dst6->sin6_addr, &ip6->ip6_dst))) {
 				rtfree(state->ro->ro_rt);
 				state->ro->ro_rt = NULL;
 			}
@@ -3468,7 +3510,15 @@ ipsec6_output_tunnel(
 				goto bad;
 			}
 
-			/* adjust state->dst if tunnel endpoint is offlink */
+			/*
+			 * adjust state->dst if tunnel endpoint is offlink
+			 *
+			 * XXX: caching rt_gateway value in the state is
+			 * not really good, since it may point elsewhere
+			 * when the gateway gets modified to a larger
+			 * sockaddr via rt_setgate().  This is currently
+			 * addressed by SA_SIZE roundup in that routine.
+			 */
 			if (state->ro->ro_rt->rt_flags & RTF_GATEWAY) {
 				state->dst = (struct sockaddr *)state->ro->ro_rt->rt_gateway;
 				dst6 = (struct sockaddr_in6 *)state->dst;
@@ -3832,9 +3882,7 @@ ipsec_copypkt(m)
 					MGETHDR(mnew, M_DONTWAIT, MT_HEADER); /* MAC-OK */
 					if (mnew == NULL)
 						goto fail;
-					mnew->m_pkthdr = n->m_pkthdr;
 					M_COPY_PKTHDR(mnew, n);
-					mnew->m_flags = n->m_flags & M_COPYFLAGS;
 				}
 				else {
 					MGET(mnew, M_DONTWAIT, MT_DATA);
@@ -4076,7 +4124,7 @@ ipsec_clearhist(
 	ipsec_optaux(m, itag);
 }
 
-__private_extern__ void
+__private_extern__ int
 ipsec_send_natt_keepalive(
 	struct secasvar *sav)
 {
@@ -4087,10 +4135,13 @@ ipsec_send_natt_keepalive(
 
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
-	if ((esp_udp_encap_port & 0xFFFF) == 0 || sav->remote_ike_port == 0) return;
-	
+	if ((esp_udp_encap_port & 0xFFFF) == 0 || sav->remote_ike_port == 0) return FALSE;
+
+	// natt timestamp may have changed... reverify
+	if ((natt_now - sav->natt_last_activity) < natt_keepalive_interval) return FALSE;
+
 	m = m_gethdr(M_NOWAIT, MT_DATA);
-	if (m == NULL) return;
+	if (m == NULL) return FALSE;
 	
 	/*
 	 * Create a UDP packet complete with IP header.
@@ -4108,8 +4159,13 @@ ipsec_send_natt_keepalive(
 	ip->ip_len = m->m_len;
 	ip->ip_ttl = ip_defttl;
 	ip->ip_p = IPPROTO_UDP;
-	ip->ip_src = ((struct sockaddr_in*)&sav->sah->saidx.src)->sin_addr;
-	ip->ip_dst = ((struct sockaddr_in*)&sav->sah->saidx.dst)->sin_addr;
+	if (sav->sah->dir != IPSEC_DIR_INBOUND) {
+		ip->ip_src = ((struct sockaddr_in*)&sav->sah->saidx.src)->sin_addr;
+		ip->ip_dst = ((struct sockaddr_in*)&sav->sah->saidx.dst)->sin_addr;
+	} else {
+		ip->ip_src = ((struct sockaddr_in*)&sav->sah->saidx.dst)->sin_addr;
+		ip->ip_dst = ((struct sockaddr_in*)&sav->sah->saidx.src)->sin_addr;
+	}
 	uh->uh_sport = htons((u_short)esp_udp_encap_port);
 	uh->uh_dport = htons(sav->remote_ike_port);
 	uh->uh_ulen = htons(1 + sizeof(struct udphdr));
@@ -4117,7 +4173,9 @@ ipsec_send_natt_keepalive(
 	*(u_int8_t*)((char*)m_mtod(m) + sizeof(struct ip) + sizeof(struct udphdr)) = 0xFF;
 	
 	error = ip_output(m, NULL, &sav->sah->sa_route, IP_NOIPSEC, NULL, NULL);
-	if (error == 0)
+	if (error == 0) {
 		sav->natt_last_activity = natt_now;
-
+		return TRUE;
+	}
+	return FALSE;
 }

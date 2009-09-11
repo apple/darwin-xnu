@@ -154,6 +154,8 @@ ether_resolvemulti(
 			return EADDRNOTAVAIL;
 		MALLOC(sdl, struct sockaddr_dl *, sizeof *sdl, M_IFMADDR,
 		       M_WAITOK);
+		if (sdl == NULL)
+			return ENOBUFS;
 		sdl->sdl_len = sizeof *sdl;
 		sdl->sdl_family = AF_LINK;
 		sdl->sdl_index = ifp->if_index;
@@ -181,6 +183,8 @@ ether_resolvemulti(
                 }
                 MALLOC(sdl, struct sockaddr_dl *, sizeof *sdl, M_IFMADDR,
                        M_WAITOK);
+		if (sdl == NULL)
+			return ENOBUFS;
                 sdl->sdl_len = sizeof *sdl;
                 sdl->sdl_family = AF_LINK;
                 sdl->sdl_index = ifp->if_index;

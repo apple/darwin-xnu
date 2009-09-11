@@ -32,7 +32,7 @@
 .\"	From: @(#)sigaction.2	8.2 (Berkeley) 4/3/94
 .\" $FreeBSD: src/lib/libc/sys/sigaction.2,v 1.48 2003/03/24 16:07:19 charnier Exp $
 .\"
-.Dd April 3, 1994
+.Dd September 18, 2008 
 .Dt SIGACTION 2
 .Os
 .Sh NAME
@@ -43,17 +43,22 @@
 .Sh SYNOPSIS
 .In signal.h
 .Bd -literal
+
 struct  sigaction {
-        union {
-                void    (*__sa_handler)(int);
-                void    (*__sa_sigaction)(int, struct __siginfo *, void *);
-        } __sigaction_u;                /* signal handler */
-        int     sa_flags;               /* see signal options below */
+        union __sigaction_u __sigaction_u;  /* signal handler */
         sigset_t sa_mask;               /* signal mask to apply */
+        int     sa_flags;               /* see signal options below */
+};
+
+union __sigaction_u {
+	void    (*__sa_handler)(int);
+	void    (*__sa_sigaction)(int, struct __siginfo *,
+		       void *);
 };
 
 #define	sa_handler	__sigaction_u.__sa_handler
 #define	sa_sigaction	__sigaction_u.__sa_sigaction
+
 .Ed
 .Ft int
 .Fo sigaction
@@ -416,17 +421,11 @@ Base Interfaces:
 Realtime Interfaces:
 .Pp
 .Fn aio_error ,
-.Fn clock_gettime ,
 .Fn sigpause ,
-.Fn timer_getoverrun ,
 .Fn aio_return ,
-.Fn fdatasync ,
-.Fn sigqueue ,
-.Fn timer_gettime ,
 .Fn aio_suspend ,
 .Fn sem_post ,
-.Fn sigset ,
-.Fn timer_settime .
+.Fn sigset .
 .Pp
 ANSI C Interfaces:
 .Pp

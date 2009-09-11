@@ -83,6 +83,16 @@ normally returns information from the target of
 if it is a symbolic link.  With this option,
 .Fn getxattr
 will return extended attribute data from the symbolic link instead.
+.It Dv XATTR_SHOWCOMPRESSION
+.Fn getxattr
+and 
+.Fn fgetxattr
+will return HFS Plus Compression extended attribute
+.Fa name
+(if present) for the file referred to by
+.Fa path
+or
+.Fa fd .
 .El
 .Pp
 .Fn fgetxattr

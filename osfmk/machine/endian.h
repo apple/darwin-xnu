@@ -30,7 +30,7 @@
 
 #if defined (__ppc__)
 #include "ppc/endian.h"
-#elif defined (__i386__)
+#elif defined (__i386__) || defined (__x86_64__)
 #include "i386/endian.h"
 #else
 #error architecture not supported

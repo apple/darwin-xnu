@@ -34,9 +34,40 @@
 #include <libkern/c++/OSObject.h>
 
 /*!
-    @class OSNumber
-    @abstract A container class for numeric values.
-*/
+ * @header
+ *
+ * @abstract
+ * This header declares the OSNumber container class.
+ */
+ 
+ 
+/*!
+ * @class OSNumber
+ *
+ * @abstract
+ * OSNumber wraps an integer value in a C++ object
+ * for use in Libkern collections.
+ *
+ * @discussion
+ * OSNumber represents an integer of 8, 16, 32, or 64 bits
+ * as a Libkern C++ object.
+ * OSNumber objects are mutable: you can add to or set their values.
+ *
+ * <b>Use Restrictions</b>
+ *
+ * With very few exceptions in the I/O Kit, all Libkern-based C++
+ * classes, functions, and macros are <b>unsafe</b>
+ * to use in a primary interrupt context.
+ * Consult the I/O Kit documentation related to primary interrupts 
+ * for more information.
+ *
+ * OSNumber provides no concurrency protection;
+ * it's up to the usage context to provide any protection necessary.
+ * Some portions of the I/O Kit, such as
+ * @link //apple_ref/doc/class/IORegistryEntry IORegistryEntry@/link,
+ * handle synchronization via defined member functions for setting
+ * properties.
+ */
 class OSNumber : public OSObject
 {
     OSDeclareDefaultStructors(OSNumber)
@@ -47,126 +78,340 @@ protected:
 
     struct ExpansionData { };
     
-    /*! @var reserved
-        Reserved for future use.  (Internal use only)  */
-    ExpansionData *reserved;
+    /* Reserved for future use.  (Internal use only)  */
+    ExpansionData * reserved;
 
 public:
-    /*!
-        @function withNumber
-        @abstract A static constructor function to create and initialize an instance of OSNumber with a given value.
-        @param value The numeric integer value.
-        @param numberOfBits The number of bit required to represent the value.
-        @result Returns an instance of OSNumber or 0 if an error occurred.
-    */
-    static OSNumber *withNumber(unsigned long long value,
-                            unsigned int numberOfBits);
-    /*!
-        @function withNumber
-        @abstract A static constructor function to create and initialize an instance of OSNumber with a given value represented as a simple c-string.
-        @discussion This function does not work on IOKit versions prior to 8.0 (prior to 10.4).  For IOKit version 8.0 and later, it works but is limited to parsing unsigned 32 bit quantities  The format of the c-string may be decimal, hexadecimal ("0x" prefix), binary ("0b" prefix, or octal ("0" prefix).
-        @param value A c-string representing a numeric value.
-        @param numberOfBits The number of bit required to represent the value.
-        @result Returns an instance of OSNumber or 0 if an error occurred.
-    */
-    static OSNumber *withNumber(const char *value, unsigned int numberOfBits);
 
-    /*!
-        @function init
-        @abstract A member function to initialize an instance of OSNumber.
-        @param value An integer value.
-        @param numberOfBits The number of bit required to represent the value.
-        @result Returns true if instance was successfully initialized, false otherwise.
+
+   /*!
+    * @function withNumber
+    *
+    * @abstract
+    * Creates and initializes an instance of OSNumber
+    * with an integer value.
+    *
+    * @param value        The numeric integer value for the OSNumber to store.
+    * @param numberOfBits The number of bits to limit storage to.
+    *
+    * @result
+    * An instance of OSNumber with a reference count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * <code>value</code> is masked to the provided <code>numberOfBits</code>
+    * when the OSNumber object is initialized.
+    *
+    * You can change the value of an OSNumber later
+    * using <code>@link setValue setValue@/link</code>
+    * and <code>@link addValue addValue@/link</code>,
+    * but you can't change the bit size.
     */
-    virtual bool init(unsigned long long value, unsigned int numberOfBits);
-    /*!
-        @function init
-        @abstract A member function to initialize an instance of OSNumber.
-        @param value A c-string representation of a numeric value.
-        @param numberOfBits The number of bit required to represent the value.
-        @result Returns true if instance was successfully initialized, false otherwise.
+    static OSNumber * withNumber(
+        unsigned long long value,
+        unsigned int       numberOfBits);
+
+
+   /*!
+    * @function withNumber
+    *
+    * @abstract
+    * Creates and initializes an instance of OSNumber
+    * with an unsigned integer value represented as a C string.
+    *
+    * @param valueString  A C string representing a numeric value
+    *                     for the OSNumber to store.
+    * @param numberOfBits The number of bits to limit storage to.
+    *
+    * @result
+    * An instance of OSNumber with a reference count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * This function does not work in I/O Kit versions prior to 8.0 (Mac OS X 10.4).
+    * In I/O Kit version 8.0 and later, it works
+    * but is limited to parsing unsigned 32 bit quantities.
+    * The format of the C string may be decimal, hexadecimal ("0x" prefix),
+    * binary ("0b" prefix), or octal ("0" prefix).
+    *
+    * The parsed value is masked to the provided <code>numberOfBits</code>
+    * when the OSNumber object is initialized.
+    *
+    * You can change the value of an OSNumber later
+    * using <code>@link setValue setValue@/link</code>
+    * and <code>@link addValue addValue@/link</code>,
+    * but you can't change the bit size.
     */
-    virtual bool init(const char *value, unsigned int numberOfBits);
-    /*!
-        @function free
-        @abstract Releases and deallocates resources created by the OSNumber instances.
-        @discussion This function should not be called directly, use release() instead.
+    static OSNumber * withNumber(
+        const char   * valueString,
+        unsigned int   numberOfBits);
+
+
+   /*!
+    * @function init
+    *
+    * @abstract
+    * Initializes an instance of OSNumber with an integer value.
+    *
+    * @param value        The numeric integer value for the OSNumber to store.
+    * @param numberOfBits The number of bits to limit storage to.
+    *
+    * @result
+    * <code>true</code> if initialization succeeds,
+    * <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link
+    * //apple_ref/cpp/clm/OSNumber/withNumber/staticOSNumber*\/(constchar*,unsignedint)
+    * withNumber(unsigned long long, unsigned int)@/link</code>
+    * instead.
+    */
+    virtual bool init(
+        unsigned long long value,
+        unsigned int       numberOfBits);
+
+
+   /*!
+    * @function init
+    *
+    * @abstract
+    * Initializes an instance of OSNumber
+    * with an unsigned integer value represented as a C string.
+    *
+    * @param valueString  A C string representing a numeric value
+    *                     for the OSNumber to store.
+    * @param numberOfBits The number of bits to limit storage to.
+    *
+    * @result
+    * <code>true</code> if initialization succeeds,
+    * <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link
+    * //apple_ref/cpp/clm/OSNumber/withNumber/staticOSNumber*\/(constchar*,unsignedint)
+    * withNumber(const char *, unsigned int)@/link</code>
+    * instead.
+    */
+    virtual bool init(
+        const char   * valueString,
+        unsigned int   numberOfBits);
+
+
+   /*!
+    * @function free
+    *
+    * @abstract
+    * Deallocates or releases any resources
+    * used by the OSNumber instance.
+    *
+    * @discussion
+    * This function should not be called directly;
+    * use
+    * <code>@link
+    * //apple_ref/cpp/instm/OSObject/release/virtualvoid/()
+    * release@/link</code>
+    * instead.
     */
     virtual void free();
 
-    /*!
-        @function numberOfBits
-        @abstract A member function which returns the number of bits used to represent the value.
-        @result Returns the number of bits required to represent the value.
+
+   /*!
+    * @function numberOfBits
+    *
+    * @abstract
+    * Returns the number of bits used to represent
+    * the OSNumber object's integer value.
+    *
+    * @result
+    * The number of bits used to represent
+    * the OSNumber object's integer value.
+    *
+    * @discussion
+    * The number of bits is used to limit the stored value of the OSNumber.
+    * Any change to its value is performed as an <code>unsigned long long</code>
+    * and then truncated to the number of bits.
     */
     virtual unsigned int numberOfBits() const;
-    /*!
-        @function numberOfBytes
-        @abstract A member function which returns the number of bytes used to represent the value.
-        @result Returns the number of bytes required to represent the value.
+
+
+   /*!
+    * @function numberOfBytes
+    *
+    * @abstract
+    * Returns the number of bytes used to represent 
+    * the OSNumber object's integer value.
+    *
+    * @result
+    * The number of bytes used to represent
+    * the OSNumber object's integer value.
+    * See <code>@link numberOfBits numberOfBits@/link</code>.
     */
     virtual unsigned int numberOfBytes() const;
 
-    /*!
-        @function unsigned8BitValue
-        @abstract A member function which returns its internal value as an 8-bit value.
-        @result Returns the internal value as an 8-bit value.
+
+// xx-review: should switch to explicitly-sized int types
+// xx-review: but that messes up C++ mangled symbols :-(
+
+
+   /*!
+    * @function unsigned8BitValue
+    *
+    * @abstract
+    * Returns the OSNumber object's integer value
+    * cast as an unsigned 8-bit integer.
+    *
+    * @result
+    * The OSNumber object's integer value
+    * cast as an unsigned 8-bit integer.
+    *
+    * @discussion
+    * This function merely casts the internal integer value,
+    * giving no indication of truncation or other potential conversion problems.
     */
     virtual unsigned char unsigned8BitValue() const;
-    /*!
-        @function unsigned16BitValue
-        @abstract A member function which returns its internal value as an 16-bit value.
-        @result Returns the internal value as an 16-bit value.
+
+
+   /*!
+    * @function unsigned16BitValue
+    *
+    * @abstract
+    * Returns the OSNumber object's integer value
+    * cast as an unsigned 16-bit integer.
+    *
+    * @result
+    * Returns the OSNumber object's integer value
+    * cast as an unsigned 16-bit integer.
+    *
+    * @discussion
+    * This function merely casts the internal integer value,
+    * giving no indication of truncation or other potential conversion problems.
     */
     virtual unsigned short unsigned16BitValue() const;
-    /*!
-        @function unsigned32BitValue
-        @abstract A member function which returns its internal value as an 32-bit value.
-        @result Returns the internal value as an 32-bit value.
+
+
+   /*!
+    * @function unsigned32BitValue
+    *
+    * @abstract
+    * Returns the OSNumber object's integer value
+    * cast as an unsigned 32-bit integer.
+    *
+    * @result
+    * Returns the OSNumber object's integer value
+    * cast as an unsigned 32-bit integer.
+    *
+    * @discussion
+    * This function merely casts the internal integer value,
+    * giving no indication of truncation or other potential conversion problems.
     */
     virtual unsigned int unsigned32BitValue() const;
-    /*!
-        @function unsigned64BitValue
-        @abstract A member function which returns its internal value as an 64-bit value.
-        @result Returns the internal value as an 64-bit value.
+
+
+   /*!
+    * @function unsigned64BitValue
+    *
+    * @abstract
+    * Returns the OSNumber object's integer value
+    * cast as an unsigned 64-bit integer.
+    *
+    * @result
+    * Returns the OSNumber object's integer value
+    * cast as an unsigned 64-bit integer.
+    *
+    * @discussion
+    * This function merely casts the internal integer value,
+    * giving no indication of truncation or other potential conversion problems.
     */
     virtual unsigned long long unsigned64BitValue() const;
 
-    /*!
-        @function addValue
-        @abstract A member function which adds an integer value to the internal numeric value of the OSNumber object.
-        @param value The value to be added.
+// xx-review: wow, there's no addNumber(OSNumber *)!
+
+   /*!
+    * @function addValue
+    *
+    * @abstract
+    * Adds a signed integer value to the internal integer value
+    * of the OSNumber object.
+    *
+    * @param value  The value to be added.
+    *
+    * @discussion
+    * This function adds values as 64-bit integers,
+    * but masks the result by the bit size
+    * (see <code>@link numberOfBits numberOfBits@/link</code>),
+    * so addition overflows will not necessarily
+    * be the same as for plain C integers.
     */
     virtual void addValue(signed long long value);
-    /*!
-        @function setValue
-        @abstract Replaces the current internal numeric value of the OSNumber object by the value given.
-        @param value The new value for the OSNumber object.
+
+
+   /*!
+    * @function setValue
+    *
+    * @abstract
+    * Replaces the current internal integer value
+    * of the OSNumber object by the value given.
+    *
+    * @param value  The new value for the OSNumber object,
+    *               which is truncated by the bit size of the OSNumber object
+    *               (see <code>@link numberOfBits numberOfBits@/link</code>).
     */
     virtual void setValue(unsigned long long value);
 
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality of two OSNumber objects.
-        @param integer The OSNumber object to be compared against the receiver.
-        @result Returns true if the two objects are equivalent, false otherwise.
-    */
-    virtual bool isEqualTo(const OSNumber *integer) const;
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality of an arbitrary OSObject derived object and an OSNumber object.
-        @param obj The OSObject derived object to be compared to the receiver.
-        @result Returns true if the two objects are equivalent, false otherwise.
-    */
-    virtual bool isEqualTo(const OSMetaClassBase *obj) const;
 
-    /*!
-        @function serialize
-        @abstract A member function which archives the receiver.
-        @param s The OSSerialize object.
-        @result Returns true if serialization was successful, false if not.
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract
+    * Tests the equality of two OSNumber objects.
+    *
+    * @param aNumber     The OSNumber to be compared against the receiver.
+    *
+    * @result
+    * <code>true</code> if the OSNumber objects are equal,
+    * <code>false</code> if not.
+    *
+    * @discussion
+    * Two OSNumber objects are considered equal
+    * if they represent the same C integer value.
     */
-    virtual bool serialize(OSSerialize *s) const;
+    virtual bool isEqualTo(const OSNumber * aNumber) const;
+
+
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract
+    * Tests the equality an OSNumber to an arbitrary object.
+    *
+    * @param anObject An object to be compared against the receiver.
+    *
+    * @result
+    * <code>true</code> if the objects are equal,
+    * <code>false</code> if not.
+    *
+    * @discussion
+    * An OSNumber is considered equal to another object if that object is
+    * derived from OSNumber and represents the same C integer value.
+    */
+    virtual bool isEqualTo(const OSMetaClassBase * anObject) const;
+
+
+   /*!
+    * @function serialize
+    *
+    * @abstract
+    * Archives the receiver into the provided
+    * @link //apple_ref/doc/class/OSSerialize OSSerialize@/link object.
+    *
+    * @param serializer The OSSerialize object.
+    *
+    * @result
+    * <code>true</code> if serialization succeeds, <code>false</code> if not.
+    */
+    virtual bool serialize(OSSerialize * serializer) const;
 
 
     OSMetaClassDeclareReservedUnused(OSNumber, 0);

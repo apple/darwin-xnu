@@ -35,6 +35,8 @@
 #include <sys/utfconv.h>
 #include <kern/host.h>
 #include <mach/host_priv.h>
+#include <libkern/OSKextLib.h>
+#include <libkern/OSKextLibPrivate.h>
 
 #include "hfs.h"
 
@@ -205,14 +207,13 @@ hfs_relconverter(u_int32_t encoding)
 			
 			/* if converter is no longer in use, release it */
 			if (encp->refcount <= 0 && encp->kmod_id != 0) {
-				int id = encp->kmod_id;
+				uint32_t loadTag = (uint32_t)encp->kmod_id;
 
 				SLIST_REMOVE(&hfs_encoding_list, encp, hfs_encoding, link);
 				lck_mtx_unlock(&encodinglst_mutex);
  
  				FREE(encp, M_TEMP);
-                record_kext_unload(id);
-   				kmod_destroy((host_priv_t) host_priv_self(), id);
+   				(void)OSKextUnloadKextWithLoadTag(loadTag);
 				return (0);
 			}
 			lck_mtx_unlock(&encodinglst_mutex);

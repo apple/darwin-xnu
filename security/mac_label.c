@@ -79,3 +79,23 @@ mac_labelzone_free(struct label *l)
 	bzero(l, sizeof(struct label));
 	zfree(zone_label, l);
 }
+
+/*
+ * Functions used by policy modules to get and set label values.
+ */
+intptr_t
+mac_label_get(struct label *l, int slot)
+{
+	KASSERT(l != NULL, ("mac_label_get: NULL label"));
+
+	return ((intptr_t) (l->l_perpolicy[slot].l_ptr));
+}
+
+void
+mac_label_set(struct label *l, int slot, intptr_t v)
+{
+	KASSERT(l != NULL, ("mac_label_set: NULL label"));
+
+	l->l_perpolicy[slot].l_ptr = (void *) v;
+}
+

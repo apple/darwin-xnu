@@ -83,7 +83,7 @@
 #include <ddb/db_output.h>
 
 extern jmp_buf_t *db_recover;
-struct x86_kernel_state32 ddb_null_kregs;
+struct x86_kernel_state ddb_null_kregs;
 extern kmod_info_t *kmod;
 
 
@@ -116,12 +116,12 @@ struct i386_kregs {
 	char	*name;
 	unsigned int offset;
 } i386_kregs[] = {
-	{ "ebx", (unsigned int)(&((struct x86_kernel_state32 *)0)->k_ebx) },
-	{ "esp", (unsigned int)(&((struct x86_kernel_state32 *)0)->k_esp) },
-	{ "ebp", (unsigned int)(&((struct x86_kernel_state32 *)0)->k_ebp) },
-	{ "edi", (unsigned int)(&((struct x86_kernel_state32 *)0)->k_edi) },
-	{ "esi", (unsigned int)(&((struct x86_kernel_state32 *)0)->k_esi) },
-	{ "eip", (unsigned int)(&((struct x86_kernel_state32 *)0)->k_eip) },
+	{ "ebx", (unsigned int)(&((struct x86_kernel_state *)0)->k_ebx) },
+	{ "esp", (unsigned int)(&((struct x86_kernel_state *)0)->k_esp) },
+	{ "ebp", (unsigned int)(&((struct x86_kernel_state *)0)->k_ebp) },
+	{ "edi", (unsigned int)(&((struct x86_kernel_state *)0)->k_edi) },
+	{ "esi", (unsigned int)(&((struct x86_kernel_state *)0)->k_esi) },
+	{ "eip", (unsigned int)(&((struct x86_kernel_state *)0)->k_eip) },
 	{ 0 }
 };
 
@@ -592,7 +592,7 @@ next_thread:
 				    callpc = (db_addr_t) (iss32->eip);
 		    } else {
 			    if (cpu == real_ncpus) {
-			    register struct x86_kernel_state32 *iks;
+			    register struct x86_kernel_state *iks;
 			    int r;
 
 			    iks = STACK_IKS(th->kernel_stack);
@@ -811,7 +811,7 @@ thread_done:
 	}
 }
 
-extern int kdp_vm_read(caddr_t, caddr_t, unsigned int );
+extern mach_vm_size_t kdp_machine_vm_read(mach_vm_address_t, caddr_t, mach_vm_size_t);
 extern boolean_t kdp_trans_off;
 /*
  *		Print out 256 bytes of real storage
@@ -829,11 +829,11 @@ db_display_real(db_expr_t addr, boolean_t have_addr, db_expr_t count,
 	for(i=0; i<8; i++) {
 
 /*
- * Do a physical read using kdp_vm_read(), rather than replicating the same
+ * Do a physical read using kdp_machine_vm_read(), rather than replicating the same
  * facility
  */
 		kdp_trans_off = 1;
-		read_result = kdp_vm_read(addr, &xbuf[0], 32);
+		read_result = kdp_machine_vm_read(addr, &xbuf[0], 32);
 		kdp_trans_off = 0;
 
 		if (read_result != 32)

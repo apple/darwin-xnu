@@ -50,16 +50,39 @@ The
 system call
 allows a process to obtain information about whether pages are
 core resident.
-Here the current core residency of the pages is returned
+The current core residency of the pages is returned
 in the character array 
+.Fa vec .
+For each entry in the character array
 .Fa vec ,
-with a value of 1 meaning that the page is in-core.
+the following bit values may be set
+depending upon the state of the page:
+.Bd -literal -offset indent
+.nf
+MINCORE_INCORE           0x1     /* Page is incore */
+MINCORE_REFERENCED       0x2     /* Page has been referenced by us */
+MINCORE_MODIFIED         0x4     /* Page has been modified by us */
+MINCORE_REFERENCED_OTHER 0x8     /* Page has been referenced */
+MINCORE_MODIFIED_OTHER  0x10     /* Page has been modified */
+.fi
+.Ed
 .Sh RETURN VALUES
 Upon successful completion,
 a value of 0 is returned.
 Otherwise, a value of -1 is returned and
 .Va errno
 is set to indicate the error.
+.Sh ERRORS
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EINVAL
+.Fa addr
+is not a valid address for user mode.
+.\" ===========
+.It Bq Er EFAULT
+an error occurred trying to copy to the output character array
+.Fa vec .
+.El
 .Sh SEE ALSO
 .Xr madvise 2 ,
 .Xr minherit 2 ,

@@ -1214,7 +1214,7 @@ void rtmp_send_port(ifID)
 		rtmp_send_table(ifID, DestNet, 0xFF, 1, RTMP_SOCKET, 0);
 	}
 
-#ifdef DEBUG
+#if DEBUG
 	if (ifID == ifID_home)
 		dPrintf(D_M_RTMP_LOW, D_L_VERBOSE,
 			("I:%5d O:%5d H:%5d dropped:%d\n",

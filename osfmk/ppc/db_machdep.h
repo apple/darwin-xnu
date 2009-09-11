@@ -75,7 +75,7 @@ typedef	addr64_t db_addr_t;	/* address - unsigned */
 typedef	uint64_t db_expr_t;	/* expression - signed???  try unsigned */
 
 typedef struct savearea db_regs_t;
-db_regs_t	ddb_regs;	/* register state */
+extern db_regs_t	ddb_regs;	/* register state */
 #define	DDB_REGS	(&ddb_regs)
 extern int	db_active;	/* ddb is active */
 

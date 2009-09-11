@@ -148,6 +148,6 @@ extern struct	ifqueue arpintrq;
 int	arpresolve(struct ifnet *, struct rtentry *, struct mbuf *,
 			struct sockaddr *, u_char *, struct rtentry *);
 void	arp_ifinit(struct ifnet *, struct ifaddr *);
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
 #endif /* _NETINET_IF_ETHER_H_ */

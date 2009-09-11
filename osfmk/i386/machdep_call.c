@@ -43,8 +43,8 @@
 extern kern_return_t	kern_invalid(void);
 
 machdep_call_t		machdep_call_table[] = {
-	MACHDEP_CALL_ROUTINE(thread_get_cthread_self,0),
-	MACHDEP_CALL_ROUTINE(thread_set_cthread_self,1),
+	MACHDEP_CALL_ROUTINE(kern_invalid,0),
+	MACHDEP_CALL_ROUTINE(kern_invalid,0),
 	MACHDEP_CALL_ROUTINE(kern_invalid,0),
 	MACHDEP_CALL_ROUTINE(thread_fast_set_cthread_self,1),
 	MACHDEP_CALL_ROUTINE(thread_set_user_ldt,3),

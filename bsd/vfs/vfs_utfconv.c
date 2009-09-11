@@ -80,7 +80,7 @@
  * Similar to __CFUniCharIsNonBaseCharacter except that
  * unicode_combinable also includes Hangul Jamo characters.
  */
-static inline int
+inline int
 unicode_combinable(u_int16_t character)
 {
 	const u_int8_t *bitmap = __CFUniCharCombiningBitmap;
@@ -105,7 +105,7 @@ unicode_combinable(u_int16_t character)
  *
  * Similar to __CFUniCharIsDecomposableCharacter.
  */
-static inline int
+inline int
 unicode_decomposeable(u_int16_t character) {
 	const u_int8_t *bitmap = __CFUniCharDecomposableBitmap;
 	u_int8_t value;
@@ -591,6 +591,12 @@ escape:
 		if ((ucsp + 2) >= bufend)
 			goto toolong;
 
+		/* Make a previous combining sequence canonical. */
+		if (combcharcnt > 1) {
+			priortysort(ucsp - combcharcnt, combcharcnt);
+		}
+		combcharcnt = 0;
+		
 		ucs_ch = '%';
 		*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : (u_int16_t)ucs_ch;
 		ucs_ch =  hexdigits[byte >> 4];

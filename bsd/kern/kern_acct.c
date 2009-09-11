@@ -114,7 +114,7 @@
  * The former's operation is described in Leffler, et al., and the latter
  * was provided by UCB with the 4.4BSD-Lite release
  */
-comp_t	encode_comp_t(u_long, u_long);
+comp_t	encode_comp_t(uint32_t, uint32_t);
 void	acctwatch(void *);
 void	acctwatch_funnel(void *);
 
@@ -227,7 +227,7 @@ acct_process(proc_t p)
 	struct vnode *vp;
 	kauth_cred_t safecred;
 	struct session * sessp;
-	boolean_t fstate;
+	struct  tty *tp;
 
 	/* If accounting isn't enabled, don't bother */
 	vp = acctp;
@@ -277,10 +277,10 @@ acct_process(proc_t p)
 	/* (7) The terminal from which the process was started */
 	
 	sessp = proc_session(p);
-	if ((p->p_flag & P_CONTROLT) && (sessp != SESSION_NULL) && (sessp->s_ttyp != TTY_NULL)) {
-		fstate = thread_funnel_set(kernel_flock, TRUE);
-		an_acct.ac_tty = sessp->s_ttyp->t_dev;
-		(void) thread_funnel_set(kernel_flock, fstate);
+	if ((p->p_flag & P_CONTROLT) && (sessp != SESSION_NULL) && ((tp = SESSION_TP(sessp)) != TTY_NULL)) {
+		tty_lock(tp);
+		an_acct.ac_tty = tp->t_dev;
+		tty_unlock(tp);
 	 }else
 		an_acct.ac_tty = NODEV;
 
@@ -295,7 +295,7 @@ acct_process(proc_t p)
 	 */
 	if ((error = vnode_getwithref(vp)) == 0) {
 	        error = vn_rdwr(UIO_WRITE, vp, (caddr_t)&an_acct, sizeof (an_acct),
-				(off_t)0, UIO_SYSSPACE32, IO_APPEND|IO_UNIT, safecred,
+				(off_t)0, UIO_SYSSPACE, IO_APPEND|IO_UNIT, safecred,
 				(int *)0, p);
 		vnode_put(vp);
 	}
@@ -315,7 +315,7 @@ acct_process(proc_t p)
 #define	MAXFRACT	((1 << MANTSIZE) - 1)	/* Maximum fractional value. */
 
 comp_t
-encode_comp_t(u_long s, u_long us)
+encode_comp_t(uint32_t s, uint32_t us)
 {
 	int exp, rnd;
 
@@ -342,6 +342,7 @@ encode_comp_t(u_long s, u_long us)
 	return (exp);
 }
 
+/* XXX The acctwatch() thread need to be protected by a mutex instead. */
 void
 acctwatch_funnel(void *a)
 {

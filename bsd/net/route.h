@@ -64,6 +64,7 @@
 #ifndef _NET_ROUTE_H_
 #define _NET_ROUTE_H_
 #include <sys/appleapiopts.h>
+#include <stdint.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 
@@ -82,10 +83,14 @@
 #ifdef PRIVATE
 struct  rtentry;
 struct route {
-	struct	rtentry *ro_rt;
-	struct	sockaddr ro_dst;
-	u_int32_t	ro_flags;	/* route flags (see below) */
-	u_int32_t	reserved;	/* for future use if needed */
+	/*
+	 * N.B: struct route must begin with ro_rt and ro_flags
+	 * because the code does some casts of a 'struct route_in6 *'
+	 * to a 'struct route *'.
+	 */
+	struct rtentry	*ro_rt;
+	uint32_t	ro_flags;	/* route flags (see below) */
+	struct sockaddr	ro_dst;
 };
 
 #define	ROF_SRCIF_SELECTED	0x1 /* source interface was selected */
@@ -118,10 +123,6 @@ struct rt_metrics {
 #define	RTM_RTTUNIT	1000000	/* units for rtt, rttvar, as units per sec */
 
 /*
- * XXX kernel function pointer `rt_output' is visible to applications.
- */
-
-/*
  * We distinguish between routes to hosts and routes to networks,
  * preferring the former if available.  For each route we infer
  * the interface to use from the gateway address supplied when
@@ -129,51 +130,40 @@ struct rt_metrics {
  * gateways are marked so that the output routines know to address the
  * gateway rather than the ultimate destination.
  */
-#ifdef PRIVATE
+#ifdef KERNEL_PRIVATE
+#include <kern/locks.h>
 #ifndef RNF_NORMAL
 #include <net/radix.h>
 #endif
+/*
+ * Kernel routing entry structure (private).
+ */
 struct rtentry {
 	struct	radix_node rt_nodes[2];	/* tree glue, and other values */
 #define	rt_key(r)	((struct sockaddr *)((r)->rt_nodes->rn_key))
 #define	rt_mask(r)	((struct sockaddr *)((r)->rt_nodes->rn_mask))
 	struct	sockaddr *rt_gateway;	/* value */
 	int32_t	rt_refcnt;		/* # held references */
-	u_long	rt_flags;		/* up/down?, host/net */
+	uint32_t rt_flags;		/* up/down?, host/net */
 	struct	ifnet *rt_ifp;		/* the answer: interface to use */
-        u_long  rt_dlt;			/* DLIL dl_tag */
-	struct	ifaddr *rt_ifa;		/* the answer: interface to use */
+	struct	ifaddr *rt_ifa;		/* the answer: interface addr to use */
 	struct	sockaddr *rt_genmask;	/* for generation of cloned routes */
-	caddr_t	rt_llinfo;		/* pointer to link level info cache */
+	void	*rt_llinfo;		/* pointer to link level info cache */
+	void	(*rt_llinfo_free)(void *); /* link level info free function */
 	struct	rt_metrics rt_rmx;	/* metrics used by rx'ing protocols */
 	struct	rtentry *rt_gwroute;	/* implied entry for gatewayed routes */
-	int	(*rt_output)(struct ifnet *, struct mbuf *,
-			     struct sockaddr *, struct rtentry *);
-					/* output routine for this (rt,if) */
 	struct	rtentry *rt_parent;	/* cloning parent of this route */
-	u_long	generation_id;		/* route generation id */
+	uint32_t generation_id;		/* route generation id */
+	/*
+	 * See bsd/net/route.c for synchronization notes.
+	 */
+	decl_lck_mtx_data(, rt_lock);	/* lock for routing entry */
 };
-#endif /* PRIVATE */
+#endif /* KERNEL_PRIVATE */
 
-#ifdef __APPLE_API_OBSOLETE
-/*
- * Following structure necessary for 4.3 compatibility;
- * We should eventually move it to a compat file.
- */
-struct ortentry {
-	u_long	rt_hash;		/* to speed lookups */
-	struct	sockaddr rt_dst;	/* key */
-	struct	sockaddr rt_gateway;	/* value */
-	short	rt_flags;		/* up/down?, host/net */
-	short	rt_refcnt;		/* # held references */
-	u_long	rt_use;			/* raw # packets forwarded */
-	struct	ifnet *rt_ifp;		/* the answer: interface to use */
-};
-#endif /* __APPLE_API_OBSOLETE */
-
-#ifdef PRIVATE
+#ifdef KERNEL_PRIVATE
 #define rt_use rt_rmx.rmx_pksent
-#endif /* PRIVATE */
+#endif /* KERNEL_PRIVATE */
 
 #define	RTF_UP		0x1		/* route usable */
 #define	RTF_GATEWAY	0x2		/* destination is a gateway */
@@ -200,7 +190,8 @@ struct ortentry {
 #define	RTF_BROADCAST	0x400000	/* route represents a bcast address */
 #define	RTF_MULTICAST	0x800000	/* route represents a mcast address */
 #define RTF_IFSCOPE	0x1000000	/* has valid interface scope */
-					/* 0x2000000 and up unassigned */
+#define RTF_CONDEMNED	0x2000000	/* defunct; no longer modifiable */
+					/* 0x4000000 and up unassigned */
 
 /*
  * Routing statistics.
@@ -270,7 +261,7 @@ struct rt_msghdr2 {
 #define	RTM_DELMADDR	0x10	/* mcast group membership being deleted */
 #ifdef PRIVATE
 #define RTM_GET_SILENT	0x11
-#endif PRIVATE
+#endif /* PRIVATE */
 #define RTM_IFINFO2	0x12	/* */
 #define RTM_NEWMADDR2	0x13	/* */
 #define RTM_GET2	0x14	/* */
@@ -326,22 +317,115 @@ struct route_cb {
 	int	any_count;
 };
 
-#ifdef KERNEL_PRIVATE
+#ifdef PRIVATE
 /*
  * For scoped routing; a zero interface scope value means nil/no scope.
  */
 #define	IFSCOPE_NONE	0
+#endif /* PRIVATE */
 
-#define RTFREE(rt)	rtfree(rt)
+#ifdef KERNEL_PRIVATE
+/*
+ * Generic call trace used by some subsystems (e.g. route, ifaddr)
+ */
+#define	CTRACE_STACK_SIZE	8		/* depth of stack trace */
+#define	CTRACE_HIST_SIZE	4		/* refcnt history size */
+typedef struct ctrace {
+	void	*th;				/* thread ptr */
+	void	*pc[CTRACE_STACK_SIZE];		/* PC stack trace */
+} ctrace_t;
+
+extern void ctrace_record(ctrace_t *);
+
+#define	RT_LOCK_ASSERT_HELD(_rt)					\
+	lck_mtx_assert(&(_rt)->rt_lock, LCK_MTX_ASSERT_OWNED)
+
+#define	RT_LOCK_ASSERT_NOTHELD(_rt)					\
+	lck_mtx_assert(&(_rt)->rt_lock, LCK_MTX_ASSERT_NOTOWNED)
+
+#define	RT_LOCK(_rt) do {						\
+	if (!rte_debug)							\
+		lck_mtx_lock(&(_rt)->rt_lock);				\
+	else								\
+		rt_lock(_rt, FALSE);					\
+} while (0)
+
+#define	RT_LOCK_SPIN(_rt) do {						\
+	if (!rte_debug)							\
+		lck_mtx_lock_spin(&(_rt)->rt_lock);			\
+	else								\
+		rt_lock(_rt, TRUE);					\
+} while (0)
+
+#define	RT_CONVERT_LOCK(_rt) do {					\
+	RT_LOCK_ASSERT_HELD(_rt);					\
+	lck_mtx_convert_spin(&(_rt)->rt_lock);				\
+} while (0)
+
+#define	RT_UNLOCK(_rt) do {						\
+	if (!rte_debug)							\
+		lck_mtx_unlock(&(_rt)->rt_lock);			\
+	else								\
+		rt_unlock(_rt);						\
+} while (0)
+
+#define	RT_ADDREF_LOCKED(_rt) do {					\
+	if (!rte_debug) {						\
+		RT_LOCK_ASSERT_HELD(_rt);				\
+		if (++(_rt)->rt_refcnt == 0)				\
+			panic("RT_ADDREF(%p) bad refcnt\n", _rt);	\
+	} else {							\
+		rtref(_rt);						\
+	}								\
+} while (0)
+
+/*
+ * Spin variant mutex is used here; caller is responsible for
+ * converting any previously-held similar lock to full mutex.
+ */
+#define	RT_ADDREF(_rt) do {						\
+	RT_LOCK_SPIN(_rt);						\
+	RT_ADDREF_LOCKED(_rt);						\
+	RT_UNLOCK(_rt);							\
+} while (0)
+
+#define	RT_REMREF_LOCKED(_rt) do {					\
+	if (!rte_debug) {						\
+		RT_LOCK_ASSERT_HELD(_rt);				\
+		if ((_rt)->rt_refcnt == 0)				\
+			panic("RT_REMREF(%p) bad refcnt\n", _rt);	\
+		--(_rt)->rt_refcnt;					\
+	} else {							\
+		(void) rtunref(_rt);					\
+	}								\
+} while (0)
+
+/*
+ * Spin variant mutex is used here; caller is responsible for
+ * converting any previously-held similar lock to full mutex.
+ */
+#define	RT_REMREF(_rt) do {						\
+	RT_LOCK_SPIN(_rt);						\
+	RT_REMREF_LOCKED(_rt);						\
+	RT_UNLOCK(_rt);							\
+} while (0)
+
+#define RTFREE(_rt)		rtfree(_rt)
+#define RTFREE_LOCKED(_rt)	rtfree_locked(_rt)
+
 extern struct route_cb route_cb;
 extern struct radix_node_head *rt_tables[AF_MAX+1];
+__private_extern__ lck_mtx_t *rnh_lock;
+__private_extern__ int use_routegenid;
+__private_extern__ uint32_t route_generation;
+__private_extern__ int rttrash;
+__private_extern__ unsigned int rte_debug;
 
 struct ifmultiaddr;
 struct proc;
 
-__private_extern__ int rttrash;
-
 extern void route_init(void) __attribute__((section("__TEXT, initcode")));
+extern void routegenid_update(void);
 extern void rt_ifmsg(struct ifnet *);
 extern void rt_missmsg(int, struct rt_addrinfo *, int, int);
 extern void rt_newaddrmsg(int, struct ifaddr *, int, struct rtentry *);
@@ -353,13 +437,16 @@ extern boolean_t rt_inet_default(struct rtentry *, struct sockaddr *);
 extern struct rtentry *rt_lookup(boolean_t, struct sockaddr *,
     struct sockaddr *, struct radix_node_head *, unsigned int);
 extern void rtalloc(struct route *);
-extern void rtalloc_ign(struct route *, u_long);
-extern void rtalloc_ign_locked(struct route *, u_long);
-extern void rtalloc_scoped_ign_locked(struct route *, u_long, unsigned int);
-extern struct rtentry *rtalloc1(struct sockaddr *, int, u_long);
-extern struct rtentry *rtalloc1_locked(struct sockaddr *, int, u_long);
+extern void rtalloc_ign(struct route *, uint32_t);
+extern void rtalloc_ign_locked(struct route *, uint32_t);
+extern void rtalloc_scoped_ign(struct route *, uint32_t, unsigned int);
+extern void rtalloc_scoped_ign_locked(struct route *, uint32_t, unsigned int);
+extern struct rtentry *rtalloc1(struct sockaddr *, int, uint32_t);
+extern struct rtentry *rtalloc1_locked(struct sockaddr *, int, uint32_t);
+extern struct rtentry *rtalloc1_scoped(struct sockaddr *, int, uint32_t,
+    unsigned int);
 extern struct rtentry *rtalloc1_scoped_locked(struct sockaddr *, int,
-    u_long, unsigned int);
+    uint32_t, unsigned int);
 extern void rtfree(struct rtentry *);
 extern void rtfree_locked(struct rtentry *);
 extern void rtref(struct rtentry *);
@@ -368,11 +455,11 @@ extern void rtref(struct rtentry *);
  * the refcount has reached zero and the route is not up.
  * Unless you have good reason to do otherwise, use rtfree.
  */
-extern void rtunref(struct rtentry *);
+extern int rtunref(struct rtentry *);
 extern void rtsetifa(struct rtentry *, struct ifaddr *);
 extern int rtinit(struct ifaddr *, int, int);
 extern int rtinit_locked(struct ifaddr *, int, int);
-extern int rtioctl(int, caddr_t, struct proc *);
+extern int rtioctl(unsigned long, caddr_t, struct proc *);
 extern void rtredirect(struct ifnet *, struct sockaddr *, struct sockaddr *,
     struct sockaddr *, int, struct sockaddr *, struct rtentry **);
 extern int rtrequest(int, struct sockaddr *,
@@ -381,9 +468,11 @@ extern int rtrequest_locked(int, struct sockaddr *,
     struct sockaddr *, struct sockaddr *, int, struct rtentry **);
 extern int rtrequest_scoped_locked(int, struct sockaddr *, struct sockaddr *,
     struct sockaddr *, int, struct rtentry **, unsigned int);
-extern struct rtentry *rte_alloc(void);
-extern void rte_free(struct rtentry *);
 extern unsigned int sa_get_ifscope(struct sockaddr *);
-#endif KERNEL_PRIVATE
+extern void rt_lock(struct rtentry *, boolean_t);
+extern void rt_unlock(struct rtentry *);
+extern struct sockaddr *rtm_scrub_ifscope(int, struct sockaddr *,
+    struct sockaddr *, struct sockaddr_storage *);
+#endif /* KERNEL_PRIVATE */
 
 #endif

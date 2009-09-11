@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -290,18 +290,29 @@ type host_security_t = mach_port_t
 #endif	/* KERNEL_SERVER */
 		;
 
-		/* host_info_t: variable-sized inline array that can contain:
-		 * host_basic_info_old_t (5 ints)
-		 * host_basic_info_t (12 ints)
-		 * host_sched_info_t (2 ints)
-		 * kernel_resource_sizes_t (5 ints)
-		 * host_load_info_t (6 ints)
-		 * vm_statistics_t (15 ints)
+		/* 
+		 * host_info_t: variable-sized inline array that can contain:
+		 * 
+		 * 	host_basic_info_old_t (5 ints)
+		 * 	host_basic_info_t (12 ints)
+		 * 	host_sched_info_t (2 ints)
+		 * 	kernel_resource_sizes_t (5 ints)
+		 * 	host_load_info_t (6 ints)
+		 * 	vm_statistics32_t (15 ints)
+		 * 
 		 * If other host_info flavors are added, this definition may
 		 * need to be changed. (See mach/{host_info,vm_statistics}.h)
 		 */
 type host_flavor_t		= int;
 type host_info_t 		= array[*:15] of integer_t;
+
+
+		/* 
+		 * host_info64_t: variable-sized inline array that can contain:
+		 * 
+		 *	vm_statistics_t (6 ints and 9 longs)
+		 */
+type host_info64_t		= array[*:256] of integer_t;
 
 type processor_t = mach_port_t
 #if	KERNEL_SERVER
@@ -416,8 +427,14 @@ type vm_region_flavor_t		= int;
 type vm_region_info_t		= array[*:10] of int;
 type vm_region_recurse_info_t	= array[*:19] of int;
 
+type vm_page_info_flavor_t	= int;
+type vm_page_info_t		= array[*:32] of int;
+
 type mach_vm_read_entry_t = array[512] of mach_vm_offset_t;
 type vm_read_entry_t = array[512] of vm_offset_t;
+#if VM32_SUPPORT
+type vm32_read_entry_t = array[512] of vm32_offset_t;
+#endif
 
 type exception_mask_t		= int;
 type exception_behavior_t	= int;

@@ -1,0 +1,18 @@
+######################################################################
+#
+#  RELEASE	= [ intel mach libkerncpp networking config_dtrace crypto zlib config_kxld ]
+#  PROFILE	= [ RELEASE profile ]
+#  DEBUG	= [ RELEASE debug mach_kdb ]
+#
+#
+#  EMBEDDED	= [ intel mach libkerncpp networking crypto zlib ]
+#  DEVELOPMENT	= [ EMBEDDED ]
+#
+######################################################################
+
+machine		"x86_64"					# <intel>
+cpu		"x86_64"					# <intel>
+
+options		MACH_KDB	#				# <mach_kdb>
+
+options     NO_NESTED_PMAP                  # <no_nested_pmap>

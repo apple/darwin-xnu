@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -42,7 +42,7 @@ extern "C" {
 #include <pexpert/pexpert.h>
 }
 
-bool RootRegistered( OSObject * us, void *, IOService * yourDevice );
+bool RootRegistered( OSObject * us, void *, IOService * yourDevice, __unused IONotifier * yourNotifier );
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -70,7 +70,7 @@ bool AppleNMI::start(IOService *provider)
       mask_NMI = TRUE;         // Flag to mask/unmask NMI @ sleep/wake
 
   // Get notified when Root Domain registers
-  addNotification( gIOPublishNotification, serviceMatching("IOPMrootDomain"), (IOServiceNotificationHandler)RootRegistered, this, 0 );
+  addMatchingNotification( gIOPublishNotification, serviceMatching("IOPMrootDomain"), (IOServiceMatchingNotificationHandler) RootRegistered, this, 0 );
 
   // Register the interrupt.
   IOInterruptAction handler = OSMemberFunctionCast(IOInterruptAction,
@@ -85,7 +85,7 @@ bool AppleNMI::start(IOService *provider)
 // The Root Power Domain has registered, so now we register as an interested driver
 // so we know when the system is going to sleep or wake
 // **********************************************************************************
-bool RootRegistered( OSObject * us, void *, IOService * yourDevice )
+bool RootRegistered( OSObject * us, void *, IOService * yourDevice, __unused IONotifier * yourNotifier)
 {
     if ( yourDevice != NULL ) {
         ((AppleNMI *)us)->rootDomain = yourDevice;

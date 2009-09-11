@@ -2,7 +2,7 @@
 #	@(#)makesyscalls.sh	8.1 (Berkeley) 6/10/93
 # $FreeBSD: src/sys/kern/makesyscalls.sh,v 1.60 2003/04/01 01:12:24 jeff Exp $
 #
-# Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+# Copyright (c) 2004-2008 Apple Inc. All rights reserved.
 #
 # @APPLE_OSREFERENCE_LICENSE_HEADER_START@
 # 
@@ -26,13 +26,23 @@
 
 set -e
 
+input_file="" # first argument
+
+# output type:
+output_syscallnamesfile=0
+output_sysprotofile=0
+output_syshdrfile=0
+output_syscalltablefile=0
+output_auditevfile=0
+
 # output files:
 syscallnamesfile="syscalls.c"
-sysprotofile="../sys/sysproto.h"
+sysprotofile="sysproto.h"
 sysproto_h=_SYS_SYSPROTO_H_
-syshdrfile="../sys/syscall.h"
+syshdrfile="syscall.h"
 syscall_h=_SYS_SYSCALL_H_
 syscalltablefile="init_sysent.c"
+auditevfile="audit_kevents.c"
 syscallprefix="SYS_"
 switchname="sysent"
 namesname="syscallnames"
@@ -45,20 +55,54 @@ sysarg="sysarg.switch.$$"
 sysprotoend="sysprotoend.$$"
 syscallnamestempfile="syscallnamesfile.$$"
 syshdrtempfile="syshdrtempfile.$$"
+audittempfile="audittempfile.$$"
 
-trap "rm $syslegal $sysent $sysinc $sysarg $sysprotoend $syscallnamestempfile $syshdrtempfile" 0
+trap "rm $syslegal $sysent $sysinc $sysarg $sysprotoend $syscallnamestempfile $syshdrtempfile $audittempfile" 0
 
-touch $syslegal $sysent $sysinc $sysarg $sysprotoend $syscallnamestempfile $syshdrtempfile
+touch $syslegal $sysent $sysinc $sysarg $sysprotoend $syscallnamestempfile $syshdrtempfile $audittempfile
 
 case $# in
-    0)	echo "usage: $0 input-file <config-file>" 1>&2
+    0)
+	echo "usage: $0 input-file [<names|proto|header|table|audit> [<config-file>]]" 1>&2
 	exit 1
 	;;
 esac
 
-if [ -n "$2" -a -f "$2" ]; then
-	. $2
+input_file="$1"
+shift
+
+if [ -n "$1" ]; then
+    case $1 in
+	names)
+	    output_syscallnamesfile=1
+	    ;;
+	proto)
+	    output_sysprotofile=1
+	    ;;
+	header)
+	    output_syshdrfile=1
+	    ;;
+	table)
+	    output_syscalltablefile=1
+	    ;;
+	audit)
+	    output_auditevfile=1
+	    ;;
+    esac
+    shift;
+else
+    output_syscallnamesfile=1
+    output_sysprotofile=1
+    output_syshdrfile=1
+    output_syscalltablefile=1
+    output_auditevfile=1
 fi
+
+if [ -n "$1" -a -f "$1" ]; then
+	. $1
+fi
+
+
 
 sed -e '
 s/\$//g
@@ -72,7 +116,7 @@ s/\$//g
 2,${
 	/^#/!s/\([{}()*,;]\)/ \1 /g
 }
-' < $1 | awk "
+' < "$input_file" | awk "
 	BEGIN {
 		syslegal = \"$syslegal\"
 		sysprotofile = \"$sysprotofile\"
@@ -87,14 +131,15 @@ s/\$//g
 		syscallnamestempfile = \"$syscallnamestempfile\"
 		syshdrfile = \"$syshdrfile\"
 		syshdrtempfile = \"$syshdrtempfile\"
+		audittempfile = \"$audittempfile\"
 		syscallprefix = \"$syscallprefix\"
 		switchname = \"$switchname\"
 		namesname = \"$namesname\"
-		infile = \"$1\"
+		infile = \"$input_file\"
 		"'
 
 		printf "/*\n" > syslegal
-		printf " * Copyright (c) 2004-2007 Apple Inc. All rights reserved.\n" > syslegal
+		printf " * Copyright (c) 2004-2008 Apple Inc. All rights reserved.\n" > syslegal
 		printf " * \n" > syslegal
 		printf " * @APPLE_OSREFERENCE_LICENSE_HEADER_START@\n" > syslegal
 		printf " * \n" > syslegal
@@ -149,8 +194,8 @@ s/\$//g
 		printf "#define\tPAD_(t)\t(sizeof(uint64_t) <= sizeof(t) \\\n " > sysarg
 		printf "\t\t? 0 : sizeof(uint64_t) - sizeof(t))\n" > sysarg
 		printf "#else\n" > sysarg
-		printf "#define\tPAD_(t)\t(sizeof(register_t) <= sizeof(t) \\\n" > sysarg
-		printf " 		? 0 : sizeof(register_t) - sizeof(t))\n" > sysarg
+		printf "#define\tPAD_(t)\t(sizeof(uint32_t) <= sizeof(t) \\\n" > sysarg
+		printf " 		? 0 : sizeof(uint32_t) - sizeof(t))\n" > sysarg
 		printf "#endif\n" > sysarg
 		printf "#if BYTE_ORDER == LITTLE_ENDIAN\n"> sysarg
 		printf "#define\tPADL_(t)\t0\n" > sysarg
@@ -174,13 +219,18 @@ s/\$//g
 		printf "void munge_wl(const void *, void *);  \n" > sysarg
 		printf "void munge_wlw(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwl(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwlw(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwlww(const void *, void *);  \n" > sysarg
 		printf "void munge_wwlwww(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwwlw(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwwl(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwwwl(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwwwwll(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwwwwlw(const void *, void *);  \n" > sysarg
 		printf "void munge_wsw(const void *, void *);  \n" > sysarg
 		printf "void munge_wws(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwsw(const void *, void *);  \n" > sysarg
+		printf "void munge_llllll(const void *, void *); \n" > sysarg
 		printf "#else \n" > sysarg
 		printf "#define munge_w  NULL \n" > sysarg
 		printf "#define munge_ww  NULL \n" > sysarg
@@ -193,13 +243,17 @@ s/\$//g
 		printf "#define munge_wl  NULL \n" > sysarg
 		printf "#define munge_wlw  NULL \n" > sysarg
 		printf "#define munge_wwwl  NULL \n" > sysarg
+		printf "#define munge_wwwlw  NULL \n" > sysarg
 		printf "#define munge_wwwlww  NULL\n" > sysarg
 		printf "#define munge_wwlwww  NULL \n" > sysarg
 		printf "#define munge_wwwwl  NULL \n" > sysarg
+		printf "#define munge_wwwwlw  NULL \n" > sysarg
 		printf "#define munge_wwwwwl  NULL \n" > sysarg
+		printf "#define munge_wwwwwwlw  NULL \n" > sysarg
 		printf "#define munge_wsw  NULL \n" > sysarg
 		printf "#define munge_wws  NULL \n" > sysarg
 		printf "#define munge_wwwsw  NULL \n" > sysarg
+		printf "#define munge_llllll  NULL \n" > sysarg
 		printf "#endif // ! __arm__\n" > sysarg
 		printf "#ifdef __ppc__\n" > sysarg
 		printf "void munge_d(const void *, void *);  \n" > sysarg
@@ -225,6 +279,13 @@ s/\$//g
 		printf "\n" > sysarg
 
 		printf "const char *%s[] = {\n", namesname > syscallnamestempfile
+
+		printf "#include <sys/param.h>\n" > audittempfile
+		printf "#include <sys/types.h>\n\n" > audittempfile
+		printf "#include <bsm/audit.h>\n" > audittempfile
+		printf "#include <bsm/audit_kevents.h>\n\n" > audittempfile
+		printf "#if CONFIG_AUDIT\n\n" > audittempfile
+		printf "au_event_t sys_au_event[] = {\n" > audittempfile
 		next
 	}
 	NF == 0 || $1 ~ /^;/ {
@@ -239,6 +300,7 @@ s/\$//g
 		print > sysarg
 		print > syscallnamestempfile
 		print > sysprotoend
+		print > audittempfile
 		savesyscall = syscall_num
 		skip_for_header = 0
 		next
@@ -248,6 +310,7 @@ s/\$//g
 		print > sysarg
 		print > syscallnamestempfile
 		print > sysprotoend
+		print > audittempfile
 		syscall_num = savesyscall
 		skip_for_header = 1
 		next
@@ -257,6 +320,7 @@ s/\$//g
 		print > sysarg
 		print > syscallnamestempfile
 		print > sysprotoend
+		print > audittempfile
 		skip_for_header = 0
 		next
 	}
@@ -282,7 +346,7 @@ s/\$//g
 	
 	function parseline() {
 		funcname = ""
-		current_field = 3
+		current_field = 4	# skip number, audit event, type
 		args_start = 0
 		args_end = 0
 		comments_start = 0
@@ -398,7 +462,11 @@ s/\$//g
 		if (argc != 0)
 			argssize = "AC(" argalias ")"
 	}
-	
+
+	{
+		auditev = $2;
+	}
+
 	{
 		add_sysent_entry = 1
 		add_sysnames_entry = 1
@@ -410,33 +478,33 @@ s/\$//g
 		my_flags = "0"
 
 
-		if ($2 != "ALL" && $2 != "UALL") {
+		if ($3 != "ALL" && $3 != "UALL") {
 			files_keyword_OK = 0
 			add_sysent_entry = 0
 			add_sysnames_entry = 0
 			add_sysheader_entry = 0
 			add_sysproto_entry = 0
 			
-			if (match($2, "[T]") != 0) {
+			if (match($3, "[T]") != 0) {
 				add_sysent_entry = 1
 				files_keyword_OK = 1
 			}
-			if (match($2, "[N]") != 0) {
+			if (match($3, "[N]") != 0) {
 				add_sysnames_entry = 1
 				files_keyword_OK = 1
 			}
-			if (match($2, "[H]") != 0) {
+			if (match($3, "[H]") != 0) {
 				add_sysheader_entry = 1
 				files_keyword_OK = 1
 			}
-			if (match($2, "[P]") != 0) {
+			if (match($3, "[P]") != 0) {
 				add_sysproto_entry = 1
 				files_keyword_OK = 1
 			}
-			if (match($2, "[U]") != 0) {
+			if (match($3, "[U]") != 0) {
 				add_64bit_unsafe = 1
 			}
-			if (match($2, "[F]") != 0) {
+			if (match($3, "[F]") != 0) {
 				add_64bit_fakesafe = 1
 			}
 			
@@ -445,7 +513,7 @@ s/\$//g
 				exit 1
 			}
 		}
-		else if ($2 == "UALL") {
+		else if ($3 == "UALL") {
 			add_64bit_unsafe = 1;
 		}
 		
@@ -522,8 +590,9 @@ s/\$//g
 							 argtype[i] == "uid_t" || argtype[i] == "pid_t" ||
 							 argtype[i] == "id_t" || argtype[i] == "idtype_t" ||
 							 argtype[i] == "socklen_t" || argtype[i] == "uint32_t" || argtype[i] == "int32_t" ||
-							 argtype[i] == "sigset_t" || argtype[i] == "gid_t" ||
-							 argtype[i] == "mode_t" || argtype[i] == "key_t" || argtype[i] == "time_t") {
+							 argtype[i] == "sigset_t" || argtype[i] == "gid_t" || argtype[i] == "unsigned int" ||
+							 argtype[i] == "mode_t" || argtype[i] == "key_t" ||
+							 argtype[i] == "mach_port_name_t") {
 						munge32 = munge32 "w"
 						munge64 = munge64 "d"
 						size32 += 4
@@ -553,7 +622,7 @@ s/\$//g
 				}
 			}
 			else if (add_sysproto_entry == 1) { 
-				printf("struct %s {\n\tregister_t dummy;\n};\n", argalias) > sysarg
+				printf("struct %s {\n\tint32_t dummy;\n};\n", argalias) > sysarg
 			}
 		}
 		
@@ -582,7 +651,10 @@ s/\$//g
 			else if (returntype == "int") {
 				munge_ret = "_SYSCALL_RET_INT_T"
 			}
-			else if (returntype == "u_int") {
+			else if (returntype == "u_int" || returntype == "mach_port_name_t") {
+				munge_ret = "_SYSCALL_RET_UINT_T"
+			}
+			else if (returntype == "uint32_t") {
 				munge_ret = "_SYSCALL_RET_UINT_T"
 			}
 			else if (returntype == "off_t") {
@@ -657,7 +729,7 @@ s/\$//g
 		# output function prototypes to sysproto.h
 		if (add_sysproto_entry == 1) {
 			if (funcname =="exit") {
-				printf("void %s(struct proc *, struct %s *, int *);\n", 
+				printf("void %s(struct proc *, struct %s *, int32_t *);\n", 
 						funcname, argalias) > sysprotoend
 			}
 			else if ((funcname != "nosys" && funcname != "enosys") || (syscall_num == 0 && funcname == "nosys")) {
@@ -665,6 +737,10 @@ s/\$//g
 						funcname, argalias, returntype) > sysprotoend
 			}
 		}
+
+		# output to audit_kevents.c
+		printf("\t%s,\t\t", auditev) > audittempfile
+		printf("/* %d = %s%s*/\n", syscall_num, tempname, additional_comments) > audittempfile 
 		
 		syscall_num++
 		next
@@ -692,13 +768,30 @@ s/\$//g
 		    > syshdrtempfile
 		printf("\n#endif /* __APPLE_API_PRIVATE */\n") > syshdrtempfile
 		printf("#endif /* !%s */\n", syscall_h) > syshdrtempfile
+		printf("};\n\n") > audittempfile
+		printf("#endif /* AUDIT */\n") > audittempfile
 	} '
 
 # define value in syscall table file to permit redifintion because of the way
 # __private_extern__ (doesn't) work.
-cat $syslegal > $syscalltablefile
-printf "#define __INIT_SYSENT_C__ 1\n" >> $syscalltablefile
-cat $sysinc $sysent >> $syscalltablefile
-cat $syslegal $sysarg $sysprotoend > $sysprotofile
-cat $syslegal $syscallnamestempfile > $syscallnamesfile
-cat $syslegal $syshdrtempfile > $syshdrfile
+if [ $output_syscalltablefile -eq 1 ]; then
+    cat $syslegal > $syscalltablefile
+    printf "#define __INIT_SYSENT_C__ 1\n" >> $syscalltablefile
+    cat $sysinc $sysent >> $syscalltablefile
+fi
+
+if [ $output_syscallnamesfile -eq 1 ]; then
+    cat $syslegal $syscallnamestempfile > $syscallnamesfile
+fi
+
+if [ $output_sysprotofile -eq 1 ]; then
+    cat $syslegal $sysarg $sysprotoend > $sysprotofile
+fi
+
+if [ $output_syshdrfile -eq 1 ]; then
+    cat $syslegal $syshdrtempfile > $syshdrfile
+fi
+
+if [ $output_auditevfile -eq 1 ]; then
+    cat $syslegal $audittempfile > $auditevfile
+fi

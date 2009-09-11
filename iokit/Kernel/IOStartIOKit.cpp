@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -26,13 +26,14 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (c) 1998,1999 Apple Computer, Inc.  All rights reserved. 
+ * Copyright (c) 1998,1999 Apple Inc.  All rights reserved. 
  *
  * HISTORY
  *
  */
 
 #include <libkern/c++/OSUnserialize.h>
+#include <libkern/c++/OSKext.h>
 #include <libkern/version.h>
 #include <IOKit/IORegistryEntry.h>
 #include <IOKit/IODeviceTreeSupport.h>
@@ -52,6 +53,8 @@
 extern "C" {
 
 extern void OSlibkernInit (void);
+
+void iokit_post_constructor_init(void) __attribute__((section("__TEXT, initcode")));
 
 #include <kern/clock.h>
 #include <sys/time.h>
@@ -74,7 +77,8 @@ void IOKitInitializeTime( void )
 
 void IOKitResetTime( void )
 {
-    uint32_t secs, microsecs;
+    clock_sec_t		secs;
+	clock_usec_t	microsecs;
 
     clock_initialize_calendar();
 
@@ -83,85 +87,10 @@ void IOKitResetTime( void )
     gIOLastWakeTime.tv_usec = microsecs;
 }
 
-
-// From <osfmk/kern/debug.c>
-extern int debug_mode;
-
-void StartIOKit( void * p1, void * p2, void * p3, void * p4 )
+void iokit_post_constructor_init(void)
 {
-    IOPlatformExpertDevice *	rootNub;
-    int				debugFlags;
     IORegistryEntry *		root;
     OSObject *			obj;
-    extern const char *         gIOKernelKmods;
-    OSString *                  errorString = NULL; // must release
-    OSDictionary *              fakeKmods;  // must release
-    OSCollectionIterator *      kmodIter;   // must release
-    OSString *                  kmodName;   // don't release
-
-    if( PE_parse_boot_argn( "io", &debugFlags, sizeof (debugFlags) ))
-	gIOKitDebug = debugFlags;
-
-    // Check for the log synchronous bit set in io
-    if (gIOKitDebug & kIOLogSynchronous)
-        debug_mode = true;
-
-    //
-    // Have to start IOKit environment before we attempt to start
-    // the C++ runtime environment.  At some stage we have to clean up
-    // the initialisation path so that OS C++ can initialise independantly
-    // of iokit basic service initialisation, or better we have IOLib stuff
-    // initialise as basic OS services.
-    //
-    IOLibInit(); 
-    OSlibkernInit();
-
-   /*****
-    * Declare the fake kmod_info structs for built-in components
-    * that must be tracked as independent units for dependencies.
-    */
-    fakeKmods = OSDynamicCast(OSDictionary,
-        OSUnserialize(gIOKernelKmods, &errorString));
-
-    if (!fakeKmods) {
-        if (errorString) {
-            panic("Kernel kmod list syntax error: %s\n",
-                    errorString->getCStringNoCopy());
-            errorString->release();
-        } else {
-            panic("Error loading kernel kmod list.\n");
-        }
-    }
-
-    kmodIter = OSCollectionIterator::withCollection(fakeKmods);
-    if (!kmodIter) {
-        panic("Can't declare in-kernel kmods.\n");
-    }
-    while ((kmodName = OSDynamicCast(OSString, kmodIter->getNextObject()))) {
-
-        OSString * kmodVersion = OSDynamicCast(OSString,
-            fakeKmods->getObject(kmodName));
-        if (!kmodVersion) {
-            panic("Can't declare in-kernel kmod; \"%s\" has "
-                "an invalid version.\n",
-                kmodName->getCStringNoCopy());
-        }
-
-	// empty version strings get replaced with current kernel version
-	const char *vers = (strlen(kmodVersion->getCStringNoCopy())
-				 ? kmodVersion->getCStringNoCopy()
-				 : osrelease);
-
-        if (KERN_SUCCESS != kmod_create_fake(kmodName->getCStringNoCopy(), vers)) {
-            panic("Failure declaring in-kernel kmod \"%s\".\n",
-                kmodName->getCStringNoCopy());
-        }
-    }
-
-    kmodIter->release();
-    fakeKmods->release();
-
-
 
     root = IORegistryEntry::initialize();
     assert( root );
@@ -185,15 +114,49 @@ void StartIOKit( void * p1, void * p2, void * p3, void * p4 )
 	obj->release();
     }
 
+}
+
+// From <osfmk/kern/debug.c>
+extern int debug_mode;
+
+/*****
+ * Pointer into bootstrap KLD segment for functions never used past startup.
+ */
+void (*record_startup_extensions_function)(void) = 0;
+
+void StartIOKit( void * p1, void * p2, void * p3, void * p4 )
+{
+    IOPlatformExpertDevice *	rootNub;
+    int				debugFlags;
+
+    if( PE_parse_boot_argn( "io", &debugFlags, sizeof (debugFlags) ))
+	gIOKitDebug = debugFlags;
+
+    // Check for the log synchronous bit set in io
+    if (gIOKitDebug & kIOLogSynchronous)
+        debug_mode = true;
+
+    //
+    // Have to start IOKit environment before we attempt to start
+    // the C++ runtime environment.  At some stage we have to clean up
+    // the initialisation path so that OS C++ can initialise independantly
+    // of iokit basic service initialisation, or better we have IOLib stuff
+    // initialise as basic OS services.
+    //
+    IOLibInit(); 
+    OSlibkernInit();
+
     rootNub = new IOPlatformExpertDevice;
 
     if( rootNub && rootNub->initWithArgs( p1, p2, p3, p4)) {
         rootNub->attach( 0 );
 
-       /* Enter into the catalogue the drivers
-        * provided by BootX.
+       /* If the bootstrap segment set up a function to record startup
+        * extensions, call it now.
         */
-        gIOCatalogue->recordStartupExtensions();
+        if (record_startup_extensions_function) {
+            record_startup_extensions_function();
+        }
 
         rootNub->registerService();
 

@@ -551,7 +551,7 @@ IOReturn IODTNVRAM::writeNVRAMPartition(const OSSymbol *partitionID,
   return kIOReturnSuccess;
 }
 
-UInt32 IODTNVRAM::savePanicInfo(UInt8 *buffer, IOByteCount length)
+IOByteCount IODTNVRAM::savePanicInfo(UInt8 *buffer, IOByteCount length)
 {
   if ((_piImage == 0) || (length <= 0)) return 0;
   
@@ -1117,9 +1117,9 @@ bool IODTNVRAM::convertObjectToProp(UInt8 *buffer, UInt32 *length,
     if (tmpValue == 0xFFFFFFFF) {
       strlcpy((char *)buffer, "-1", *length - propNameLength);
     } else if (tmpValue < 1000) {
-      snprintf((char *)buffer, *length - propNameLength, "%ld", tmpValue);
+      snprintf((char *)buffer, *length - propNameLength, "%d", (uint32_t)tmpValue);
     } else {
-      snprintf((char *)buffer, *length - propNameLength, "0x%lx", tmpValue);
+      snprintf((char *)buffer, *length - propNameLength, "0x%x", (uint32_t)tmpValue);
     }
     break;
     
@@ -1244,7 +1244,6 @@ enum {
   kMaxNVDataLength = 8
 };
 
-#pragma options align=mac68k
 struct NVRAMProperty
 {
   IONVRAMDescriptor   header;
@@ -1253,7 +1252,6 @@ struct NVRAMProperty
   UInt8               dataLength;
   UInt8               data[ kMaxNVDataLength ];
 };
-#pragma options align=reset
 
 bool IODTNVRAM::searchNVRAMProperty(IONVRAMDescriptor *hdr, UInt32 *where)
 {

@@ -35,13 +35,37 @@
 class OSObject;
 class OSString;
 
-/*! @function OSUnserializeXML
-    @abstract Recreates an OS Container object from its previously serialized OS Container class instance data.
-    @param buffer pointer to buffer containing XML data representing the object to be recreated.
-    @param errorString if this is a valid pointer and the XML parser finds a error in buffer, errorString contains text indicating the line number and type of error encountered.
-    @result Pointer to the recreated object, or zero on failure. */
+/*!
+ * @header
+ *
+ * @abstract
+ * This header declares the <code>OSUnserializeXML</code> function.
+ */
+ 
 
-extern OSObject* OSUnserializeXML(const char *buffer, OSString **errorString = 0);
+/*!
+ * @function OSUnserializeXML
+ *
+ * @abstract
+ * Recreates an OSContainer object
+ * from its previously serialized OSContainer class instance data.
+ *
+ * @param buffer      A buffer containing nul-terminated XML data
+ *                    representing the object to be recreated.
+ * @param errorString If non-</code>NULL</code>, and the XML parser
+ *                    finds an error in <code>buffer</code>,
+ *                    <code>*errorString</code> indicates the line number
+ *                    and type of error encountered.
+ *
+ * @result
+ * The recreated object, or <code>NULL</code> on failure.
+ *
+ * @discussion
+ * <b>Not safe</b> to call in a primary interrupt handler.
+ */
+extern OSObject * OSUnserializeXML(
+    const char  * buffer,
+    OSString   ** errorString = 0);
 
 #ifdef __APPLE_API_OBSOLETE
 extern OSObject* OSUnserialize(const char *buffer, OSString **errorString = 0);

@@ -143,9 +143,9 @@ WKdm_decompress (WK_word* src_buf,
 
 #ifdef WK_DEBUG
   printf("\nIn DECOMPRESSOR\n");
-  printf("tempTagsArray is at %u\n", (unsigned long int) tempTagsArray);
-  printf("tempQPosArray is at %u\n", (unsigned long int) tempQPosArray);
-  printf("tempLowBitsArray is at %u\n", (unsigned long int) tempLowBitsArray);
+  printf("tempTagsArray is at %p\n", tempTagsArray);
+  printf("tempQPosArray is at %p\n", tempQPosArray);
+  printf("tempLowBitsArray is at %p\n", tempLowBitsArray);
 
   printf(" first four words of source buffer are:\n");
   printf("   %u\n   %u\n   %u\n   %u\n",
@@ -274,10 +274,10 @@ WKdm_decompress (WK_word* src_buf,
 
 #ifdef WK_DEBUG        
     printf("AFTER DECOMPRESSING\n");
-    printf("next_output is %u\n", (unsigned long int) next_output);
-    printf("next_tag is %u\n", (unsigned long int) next_tag);
-    printf("next_full_word is %u\n", (unsigned long int) next_full_word);
-    printf("next_q_pos is %u\n", (unsigned long int) next_q_pos);
+    printf("next_output is %p\n", next_output);
+    printf("next_tag is %p\n", next_tag);
+    printf("next_full_word is %p\n", next_full_word);
+    printf("next_q_pos is %p\n", next_q_pos);
 #endif
   }
 }

@@ -30,7 +30,7 @@
 
 #if defined (__ppc__)
 #include "ppc/vm_tuning.h"
-#elif defined (__i386__)
+#elif defined (__i386__) || defined (__x86_64__)
 #include "i386/vm_tuning.h"
 #else
 #error architecture not supported

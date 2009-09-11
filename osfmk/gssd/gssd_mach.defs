@@ -40,6 +40,8 @@ type string_t = c_string[*:1024];
 type byte_buffer = array [] of uint8_t;
 type gssd_verifier =  uint64_t;
 type gid_list = array [*:16] of uint32_t;
+type gss_ctx = uint64_t;
+type gss_cred = uint64_t;
 
 subsystem
 #if KERNEL_USER
@@ -57,9 +59,10 @@ routine mach_gss_init_sec_context(
 	in  princ_namestr	: string_t;
 	in  svc_namestr		: string_t;
 	in  flags		: uint32_t;
-	inout verifier		: gssd_verifier;
-	inout context		: uint32_t;
-	inout cred_handle	: uint32_t;
+	in  gssd_flags		: uint32_t;
+	inout context		: gss_ctx;
+	inout cred_handle	: gss_cred;
+	out  ret_flags		: uint32_t;
 	out  key		: byte_buffer, dealloc;
 	out outtoken		: byte_buffer, dealloc;
 	out major_stat		: uint32_t;
@@ -70,10 +73,10 @@ routine mach_gss_accept_sec_context(
 	server			: mach_port_t;
 	in  intoken		: byte_buffer;
 	in  svc_namestr		: string_t;
-	in  flags		: uint32_t;
-	inout verifier		: gssd_verifier;
-	inout context		: uint32_t;
-	inout cred_handle	: uint32_t;
+	in  gssd_flags		: uint32_t;
+	inout context		: gss_ctx;
+	inout cred_handle	: gss_cred;
+	out flags		: uint32_t;
 	out uid			: uint32_t;
 	out gids		: gid_list;
 	out  key		: byte_buffer, dealloc;

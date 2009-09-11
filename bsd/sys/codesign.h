@@ -45,6 +45,7 @@
 #define	CS_OPS_MARKKILL		3	/* set KILL flag (sticky) */
 #define	CS_OPS_PIDPATH		4	/* get executable's pathname */
 #define	CS_OPS_CDHASH		5	/* get code directory hash */
+#define CS_OPS_PIDOFFSET	6	/* get offset of active Mach-o slice */
 
 #ifndef KERNEL
 

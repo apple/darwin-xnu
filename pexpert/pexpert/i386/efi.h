@@ -29,12 +29,14 @@
 #ifndef _PEXPERT_I386_EFI_H
 #define _PEXPERT_I386_EFI_H
 
+#include <stdint.h>
+
 typedef uint8_t   EFI_UINT8;
 typedef uint16_t  EFI_UINT16;
 typedef uint32_t  EFI_UINT32;
 typedef uint64_t  EFI_UINT64;
 
-typedef uint32_t  EFI_UINTN;
+typedef uint32_t  EFI_UINTN; /* natural size for firmware, not kernel */
 
 typedef int8_t    EFI_INT8;
 typedef int16_t   EFI_INT16;
@@ -47,9 +49,11 @@ typedef int32_t   EFI_CHAR32;
 typedef int64_t   EFI_CHAR64;
 
 typedef uint32_t  EFI_STATUS;
-typedef boolean_t EFI_BOOLEAN;
+typedef uint8_t   EFI_BOOLEAN;
 typedef void      VOID;
-typedef VOID *    EFI_HANDLE;
+
+typedef uint32_t  EFI_PTR32;
+typedef uint32_t  EFI_HANDLE32;
 
 typedef uint64_t  EFI_PTR64;
 typedef uint64_t  EFI_HANDLE64;
@@ -141,7 +145,7 @@ typedef struct {
 
 typedef union {
   EFI_GUID  Guid;
-  EFI_UINT8     Raw[16];
+  EFI_UINT8 Raw[16];
 } EFI_GUID_UNION;
 
 //
@@ -405,29 +409,29 @@ typedef struct {
   //
   // Time services
   //
-  EFI_GET_TIME                  GetTime;
-  EFI_SET_TIME                  SetTime;
-  EFI_GET_WAKEUP_TIME           GetWakeupTime;
-  EFI_SET_WAKEUP_TIME           SetWakeupTime;
+  EFI_PTR32                     GetTime;
+  EFI_PTR32                     SetTime;
+  EFI_PTR32                     GetWakeupTime;
+  EFI_PTR32                     SetWakeupTime;
 
   //
   // Virtual memory services
   //
-  EFI_SET_VIRTUAL_ADDRESS_MAP   SetVirtualAddressMap;
-  EFI_CONVERT_POINTER           ConvertPointer;
+  EFI_PTR32                     SetVirtualAddressMap;
+  EFI_PTR32                     ConvertPointer;
 
   //
   // Variable services
   //
-  EFI_GET_VARIABLE              GetVariable;
-  EFI_GET_NEXT_VARIABLE_NAME    GetNextVariableName;
-  EFI_SET_VARIABLE              SetVariable;
+  EFI_PTR32                     GetVariable;
+  EFI_PTR32                     GetNextVariableName;
+  EFI_PTR32                     SetVariable;
 
   //
   // Misc
   //
-  EFI_GET_NEXT_HIGH_MONO_COUNT  GetNextHighMonotonicCount;
-  EFI_RESET_SYSTEM              ResetSystem;
+  EFI_PTR32                     GetNextHighMonotonicCount;
+  EFI_PTR32                     ResetSystem;
 
 #ifdef TIANO_EXTENSION_FLAG
   //
@@ -435,10 +439,10 @@ typedef struct {
   // Extended EFI Services
     //////////////////////////////////////////////////////
   //
-  EFI_REPORT_STATUS_CODE  ReportStatusCode;
+  EFI_PTR32                     ReportStatusCode;
 #endif
 
-} __attribute__((aligned(8))) EFI_RUNTIME_SERVICES;
+} __attribute__((aligned(8))) EFI_RUNTIME_SERVICES_32;
 
 typedef struct {
   EFI_TABLE_HEADER              Hdr;
@@ -446,29 +450,29 @@ typedef struct {
   //
   // Time services
   //
-  EFI_PTR64                  GetTime;
-  EFI_PTR64                  SetTime;
-  EFI_PTR64           GetWakeupTime;
-  EFI_PTR64           SetWakeupTime;
+  EFI_PTR64                     GetTime;
+  EFI_PTR64                     SetTime;
+  EFI_PTR64                     GetWakeupTime;
+  EFI_PTR64                     SetWakeupTime;
 
   //
   // Virtual memory services
   //
-  EFI_PTR64   SetVirtualAddressMap;
-  EFI_PTR64           ConvertPointer;
+  EFI_PTR64                     SetVirtualAddressMap;
+  EFI_PTR64                     ConvertPointer;
 
   //
   // Variable services
   //
-  EFI_PTR64             GetVariable;
-  EFI_PTR64    GetNextVariableName;
-  EFI_PTR64              SetVariable;
+  EFI_PTR64                     GetVariable;
+  EFI_PTR64                     GetNextVariableName;
+  EFI_PTR64                     SetVariable;
 
   //
   // Misc
   //
-  EFI_PTR64  GetNextHighMonotonicCount;
-  EFI_PTR64              ResetSystem;
+  EFI_PTR64                     GetNextHighMonotonicCount;
+  EFI_PTR64                     ResetSystem;
 
 #ifdef TIANO_EXTENSION_FLAG
   //
@@ -476,7 +480,7 @@ typedef struct {
   // Extended EFI Services
     //////////////////////////////////////////////////////
   //
-  EFI_PTR64 ReportStatusCode;
+  EFI_PTR64                     ReportStatusCode;
 #endif
 
 } __attribute__((aligned(8))) EFI_RUNTIME_SERVICES_64;
@@ -486,8 +490,8 @@ typedef struct {
 //
 typedef struct {
   EFI_GUID  VendorGuid;
-  VOID      *VendorTable;
-} EFI_CONFIGURATION_TABLE;
+  EFI_PTR32 VendorTable;
+} EFI_CONFIGURATION_TABLE_32;
 
 typedef struct {
   EFI_GUID  VendorGuid;
@@ -503,28 +507,28 @@ typedef struct {
 #define EFI_1_02_SYSTEM_TABLE_REVISION  ((1 << 16) | 02)
 #define EFI_1_10_SYSTEM_TABLE_REVISION  ((1 << 16) | 10)
 
-typedef struct EFI_SYSTEM_TABLE {
+typedef struct EFI_SYSTEM_TABLE_32 {
   EFI_TABLE_HEADER              Hdr;
 
-  EFI_CHAR16                    *FirmwareVendor;
+  EFI_PTR32                     FirmwareVendor;
   EFI_UINT32                    FirmwareRevision;
 
-  EFI_HANDLE                    ConsoleInHandle;
-  VOID				*ConIn;
+  EFI_HANDLE32                  ConsoleInHandle;
+  EFI_PTR32                     ConIn;
 
-  EFI_HANDLE                    ConsoleOutHandle;
-  VOID				*ConOut;
+  EFI_HANDLE32                  ConsoleOutHandle;
+  EFI_PTR32                     ConOut;
 
-  EFI_HANDLE                    StandardErrorHandle;
-  VOID				*StdErr;
+  EFI_HANDLE32                  StandardErrorHandle;
+  EFI_PTR32                     StdErr;
 
-  EFI_RUNTIME_SERVICES          *RuntimeServices;
-  VOID				*BootServices;
+  EFI_PTR32                     RuntimeServices;
+  EFI_PTR32                     BootServices;
 
-  EFI_UINTN                     NumberOfTableEntries;
-  EFI_CONFIGURATION_TABLE       *ConfigurationTable;
+  EFI_UINT32                    NumberOfTableEntries;
+  EFI_PTR32                     ConfigurationTable;
 
-} __attribute__((aligned(8))) EFI_SYSTEM_TABLE;
+} __attribute__((aligned(8))) EFI_SYSTEM_TABLE_32;
 
 typedef struct EFI_SYSTEM_TABLE_64 {
   EFI_TABLE_HEADER              Hdr;
@@ -535,16 +539,16 @@ typedef struct EFI_SYSTEM_TABLE_64 {
   EFI_UINT32                    __pad;
 
   EFI_HANDLE64                  ConsoleInHandle;
-  EFI_PTR64			ConIn;
+  EFI_PTR64                     ConIn;
 
   EFI_HANDLE64                  ConsoleOutHandle;
-  EFI_PTR64			ConOut;
+  EFI_PTR64                     ConOut;
 
   EFI_HANDLE64                  StandardErrorHandle;
-  EFI_PTR64			StdErr;
+  EFI_PTR64                     StdErr;
 
   EFI_PTR64                     RuntimeServices;
-  EFI_PTR64			BootServices;
+  EFI_PTR64                     BootServices;
 
   EFI_UINT64                    NumberOfTableEntries;
   EFI_PTR64                     ConfigurationTable;

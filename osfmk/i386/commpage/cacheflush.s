@@ -29,13 +29,10 @@
 #include <machine/cpu_capabilities.h>
 #include <machine/commpage.h>
 
-        .text
-        .align  2, 0x90
-
 // void sysFlushDcache( void *p, size_t len );
 // 32-bit version
 
-Lsys_flush_dcache:
+COMMPAGE_FUNCTION_START(sys_flush_dcache, 32, 4)
 	movl	8(%esp),%ecx		// get length
 	movl	4(%esp),%edx		// get ptr
 	testl	%ecx,%ecx		// length 0?
@@ -50,14 +47,13 @@ Lsys_flush_dcache:
 	mfence				// make sure memory is updated before we return
 2:
 	ret
-
-	COMMPAGE_DESCRIPTOR(sys_flush_dcache,_COMM_PAGE_FLUSH_DCACHE,kCache64,0)
+COMMPAGE_DESCRIPTOR(sys_flush_dcache,_COMM_PAGE_FLUSH_DCACHE,kCache64,0)
 
 
 // void sysFlushDcache( void *p, size_t len );
 // 64-bit version
-	.code64
-Lsys_flush_dcache_64:			// %rdi = ptr,  %rsi = length
+// %rdi = ptr,  %rsi = length
+COMMPAGE_FUNCTION_START(sys_flush_dcache_64, 64, 4)
 	testq	%rsi,%rsi		// length 0?
 	jz	2f			// yes
 	mfence				// ensure previous stores make it to memory
@@ -70,17 +66,14 @@ Lsys_flush_dcache_64:			// %rdi = ptr,  %rsi = length
 	mfence				// make sure memory is updated before we return
 2:
 	ret
-	.code32
-	COMMPAGE_DESCRIPTOR(sys_flush_dcache_64,_COMM_PAGE_FLUSH_DCACHE,kCache64,0)
-
+COMMPAGE_DESCRIPTOR(sys_flush_dcache_64,_COMM_PAGE_FLUSH_DCACHE,kCache64,0)
 
 // void sysIcacheInvalidate( void *p, size_t len );
 
-Lsys_icache_invalidate:
+COMMPAGE_FUNCTION_START(sys_icache_invalidate, 32, 4)
 	// This is a NOP on intel processors, since the intent of the API
 	// is to make data executable, and Intel L1Is are coherent with L1D.
 	// We can use same routine both in 32 and 64-bit mode, since it is
 	// just a RET instruction.
 	ret
-
-	COMMPAGE_DESCRIPTOR(sys_icache_invalidate,_COMM_PAGE_FLUSH_ICACHE,0,0)
+COMMPAGE_DESCRIPTOR(sys_icache_invalidate,_COMM_PAGE_FLUSH_ICACHE,0,0)

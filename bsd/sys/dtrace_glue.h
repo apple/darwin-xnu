@@ -43,12 +43,6 @@
 #include <mach/kmod.h>
 #include <libkern/OSAtomic.h>
 
-#ifdef QUIET_PLEASE
-  #ifndef NULL
-  #define NULL ((void *)0) /* quiets many warnings */
-  #endif
-#endif
-
 /*
  * cmn_err
  */
@@ -64,8 +58,8 @@ extern void cmn_err( int, const char *, ... );
  * pid/proc
  */
 
-typedef struct proc SUN_PROC_T; /* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
-#define proc_t SUN_PROC_T /* replace all the original uses of (Solaris) proc_t */
+/* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
+#define proc_t struct proc /* Steer clear of the Darwin typedef for proc_t */
 #define curproc ((struct proc *)current_proc()) /* Called from probe context, must blacklist */
 
 proc_t* sprlock(pid_t pid);
@@ -126,19 +120,18 @@ extern cpu_t *cpu_list;
  * the structure is sized to avoid false sharing.
  */
 #define	CPU_CACHE_COHERENCE_SIZE	64
-#define	CPUC_SIZE		(sizeof (uint16_t))
-#define	CPUC_PADSIZE		CPU_CACHE_COHERENCE_SIZE - CPUC_SIZE
 
 typedef struct cpu_core {
-	uint16_t	cpuc_dtrace_flags;      /* DTrace flags */
-	uint8_t		cpuc_pad[CPUC_PADSIZE];	/* padding */
 	uint64_t	cpuc_dtrace_illval;     /* DTrace illegal value */
 	lck_mtx_t	cpuc_pid_lock;          /* DTrace pid provider lock */
+	uint16_t	cpuc_dtrace_flags;      /* DTrace flags */
+        uint64_t	cpuc_missing_tos;	/* Addr. of top most stack frame if missing */
+        uint8_t		cpuc_pad[CPU_CACHE_COHERENCE_SIZE - sizeof(uint64_t) - sizeof(lck_mtx_t) - sizeof(uint16_t) - sizeof(uint64_t) ];	/* padding */
 } cpu_core_t;
 
-extern cpu_core_t *cpu_core; /* XXX TLB lockdown? */
+extern cpu_core_t *cpu_core;
 extern unsigned int real_ncpus;
-extern int cpu_number(void); /* XXX #include <kern/cpu_number.h>. Called from probe context, must blacklist. */
+extern int cpu_number(void); /* From #include <kern/cpu_number.h>. Called from probe context, must blacklist. */
 
 #define	CPU		(&(cpu_list[cpu_number()]))	/* Pointer to current CPU */
 #define	CPU_ON_INTR(cpup) ml_at_interrupt_context() /* always invoked on current cpu */
@@ -185,11 +178,13 @@ extern void unregister_cpu_setup_func(cpu_setup_func_t *, void *);
 #endif
 #define CPU_DTRACE_USTACK_FP	0x0400  /* pid provider hint to ustack() */
 #define	CPU_DTRACE_ENTRY	0x0800	/* pid provider hint to ustack() */
+#define CPU_DTRACE_BADSTACK 0x1000  /* DTrace fault: bad stack */
 
 #define	CPU_DTRACE_FAULT	(CPU_DTRACE_BADADDR | CPU_DTRACE_BADALIGN | \
 				CPU_DTRACE_DIVZERO | CPU_DTRACE_ILLOP | \
 				CPU_DTRACE_NOSCRATCH | CPU_DTRACE_KPRIV | \
-				CPU_DTRACE_UPRIV | CPU_DTRACE_TUPOFLOW)
+				CPU_DTRACE_UPRIV | CPU_DTRACE_TUPOFLOW | \
+				CPU_DTRACE_BADSTACK)
 #define	CPU_DTRACE_ERROR	(CPU_DTRACE_FAULT | CPU_DTRACE_DROP)
 
 /*
@@ -313,7 +308,7 @@ extern void ddi_soft_state_fini(void **);
 int ddi_getprop(dev_t dev, dev_info_t *dip, int flags, const char *name, int defvalue);
 
 extern int ddi_prop_free(void *);
-extern int ddi_prop_lookup_int_array(dev_t, dev_info_t *, uint_t, char *, int **, uint_t *);
+extern int ddi_prop_lookup_int_array(dev_t, dev_info_t *, uint_t, const char *, int **, uint_t *);
 
 extern int ddi_driver_major(dev_info_t *);
 
@@ -323,7 +318,6 @@ extern void ddi_remove_minor_node(dev_info_t *, char *);
 extern major_t getemajor(dev_t);
 extern minor_t getminor(dev_t);
 
-extern int _dtrace_dev;
 extern dev_t makedevice(major_t, minor_t);
 
 /*
@@ -383,7 +377,7 @@ extern void *dt_kmem_zalloc_aligned(size_t, size_t, int);
 extern void dt_kmem_free_aligned(void*, size_t);
 
 extern kmem_cache_t *
-kmem_cache_create(char *, size_t, size_t, int (*)(void *, void *, int),
+kmem_cache_create(const char *, size_t, size_t, int (*)(void *, void *, int),
 	void (*)(void *, void *), void (*)(void *), void *, vmem_t *, int);
 extern void *kmem_cache_alloc(kmem_cache_t *, int);
 extern void kmem_cache_free(kmem_cache_t *, void *);
@@ -399,7 +393,9 @@ typedef struct _kthread kthread_t; /* For dtrace_vtime_switch(), dtrace_panicked
  * Loadable Modules
  */
 
+#if 0 /* kmod_lock has been removed */
 decl_simple_lock_data(extern,kmod_lock)
+#endif /* 0 */
 
 /* Want to use Darwin's kmod_info in place of the Solaris modctl.
    Can't typedef since the (many) usages in the code are "struct modctl *" */
@@ -468,8 +464,24 @@ extern void vmem_free(vmem_t *vmp, void *vaddr, size_t size);
 
 static inline void atomic_add_32( uint32_t *theValue, int32_t theAmount )
 {
-	(void)OSAddAtomic( theAmount, (SInt32 *)theValue );
+	(void)OSAddAtomic( theAmount, theValue );
 }
+
+#if defined(__i386__) || defined(__x86_64__)
+static inline void atomic_add_64( uint64_t *theValue, int64_t theAmount )
+{
+	(void)OSAddAtomic64( theAmount, (SInt64 *)theValue );
+}
+#elif defined(__ppc__)
+static inline void atomic_add_64( uint64_t *theValue, int64_t theAmount )
+{
+	// FIXME
+	// atomic_add_64() is at present only called from fasttrap.c to increment
+	// or decrement a 64bit counter. Narrow to 32bits since ppc32 (G4) has
+	// no convenient 64bit atomic op.
+	(void)OSAddAtomic( (int32_t)theAmount, &(((SInt32 *)theValue)[1]));
+}
+#endif
 
 /*
  * Miscellaneous
@@ -480,7 +492,6 @@ typedef uintptr_t greg_t; /* For dtrace_impl.h prototype of dtrace_getfp() */
 extern struct regs *find_user_regs( thread_t thread);
 extern vm_offset_t dtrace_get_cpu_int_stack_top(void);
 extern vm_offset_t max_valid_stack_address(void); /* kern/thread.h */
-extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va); /* machine/pmap.h */
 
 extern volatile int panicwait; /* kern/debug.c */
 #define panic_quiesce (panicwait)
@@ -491,14 +502,27 @@ extern void delay( int ); /* kern/clock.h */
 
 extern int vuprintf(const char *, va_list);
 
-extern boolean_t dtxnu_is_RAM_page(ppnum_t);
-
 extern hrtime_t dtrace_abs_to_nano(uint64_t);
 
-__private_extern__ char * strstr(const char *, const char *);
+__private_extern__ const char * strstr(const char *, const char *);
 
 #undef proc_t
 
+/*
+ * Safe counted string compare against a literal string. The sizeof() intentionally
+ * counts the trailing NUL, and so ensures that all the characters in the literal
+ * can participate in the comparison.
+ */
+#define LIT_STRNEQL(s1, lit_s2) (0 == strncmp( (s1), (lit_s2), sizeof((lit_s2)) ))
+
+/*
+ * Safe counted string compare of a literal against the beginning of a string. Here
+ * the sizeof() is reduced by 1 so that the trailing null of the literal does not
+ * participate in the comparison.
+ */
+#define LIT_STRNSTART(s1, lit_s2) (0 == strncmp( (s1), (lit_s2), sizeof((lit_s2)) - 1 ))
+
+#define KERNELBASE VM_MIN_KERNEL_ADDRESS
 #endif /* KERNEL_BUILD */
 #endif /* _DTRACE_GLUE_H */
 

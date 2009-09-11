@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -58,11 +58,11 @@ static void packnameattr(struct attrblock *abp, struct vnode *vp,
 
 static void packcommonattr(struct attrblock *abp, struct hfsmount *hfsmp,
 			struct vnode *vp, struct cat_desc * cdp,
-			struct cat_attr * cap, struct proc *p);
+			struct cat_attr * cap, struct vfs_context *ctx);
 
 static void packfileattr(struct attrblock *abp, struct hfsmount *hfsmp,
 			struct cat_attr *cattrp, struct cat_fork *datafork,
-			struct cat_fork *rsrcfork);
+			struct cat_fork *rsrcfork, struct vnode *vp);
 
 static void packdirattr(struct attrblock *abp, struct hfsmount *hfsmp,
 			struct vnode *vp, struct cat_desc * descp,
@@ -101,7 +101,6 @@ hfs_vnop_readdirattr(ap)
 	struct attrlist *alist = ap->a_alist;
 	uio_t uio = ap->a_uio;
 	int maxcount = ap->a_maxcount;
-	struct proc *p = vfs_context_proc(ap->a_context);
 	u_int32_t fixedblocksize;
 	u_int32_t maxattrblocksize;
 	u_int32_t currattrbufsize;
@@ -118,6 +117,7 @@ hfs_vnop_readdirattr(ap)
 	unsigned int tag;
 	int maxentries;
 	int lockflags;
+	u_int32_t dirchg = 0;
 
 	*(ap->a_actualcount) = 0;
 	*(ap->a_eofflag) = 0;
@@ -148,6 +148,7 @@ hfs_vnop_readdirattr(ap)
 	hfsmp = VTOHFS(dvp);
 
 	dir_entries = dcp->c_entries;
+	dirchg = dcp->c_dirchangecnt;
 
 	/* Extract directory index and tag (sequence number) from uio_offset */
 	index = uio_offset(uio) & HFS_INDEX_MASK;
@@ -164,6 +165,10 @@ hfs_vnop_readdirattr(ap)
 	if (alist->commonattr & ATTR_CMN_NAME) 
 		maxattrblocksize += kHFSPlusMaxFileNameBytes + 1;
 	MALLOC(attrbufptr, void *, maxattrblocksize, M_TEMP, M_WAITOK);
+	if (attrbufptr == NULL) {
+		error = ENOMEM;
+		goto exit2;
+	}
 	attrptr = attrbufptr;
 	varptr = (char *)attrbufptr + fixedblocksize;  /* Point to variable-length storage */
 
@@ -185,7 +190,6 @@ hfs_vnop_readdirattr(ap)
 	 * Constrain our list size.
 	 */
 	maxentries = uio_resid(uio) / (fixedblocksize + HFS_AVERAGE_NAME_SIZE);
-	maxentries = min(maxentries, dcp->c_entries - index);
 	maxentries = min(maxentries, maxcount);
 	maxentries = min(maxentries, MAXCATENTRIES);
 	if (maxentries < 1) {
@@ -195,6 +199,10 @@ hfs_vnop_readdirattr(ap)
 
 	/* Initialize a catalog entry list. */
 	MALLOC(ce_list, struct cat_entrylist *, CE_LIST_SIZE(maxentries), M_TEMP, M_WAITOK);
+	if (ce_list == NULL) {
+		error = ENOMEM;
+		goto exit2;
+	}
 	bzero(ce_list, CE_LIST_SIZE(maxentries));
 	ce_list->maxentries = maxentries;
 
@@ -253,7 +261,7 @@ hfs_vnop_readdirattr(ap)
 			}
 		} else if (!(ap->a_options & FSOPT_NOINMEMUPDATE)) {
 			/* Get in-memory cnode data (if any). */
-			vp = hfs_chash_getvnode(hfsmp->hfs_raw_dev, cattrp->ca_fileid, 0, 0);
+			vp = hfs_chash_getvnode(hfsmp, cattrp->ca_fileid, 0, 0);
 		}
 		if (vp != NULL) {
 			cp = VTOC(vp);
@@ -284,7 +292,7 @@ hfs_vnop_readdirattr(ap)
 		attrblk.ab_context = ap->a_context;
 
 		/* Pack catalog entries into attribute buffer. */
-		hfs_packattrblk(&attrblk, hfsmp, vp, cdescp, cattrp, &c_datafork, &c_rsrcfork, p);
+		hfs_packattrblk(&attrblk, hfsmp, vp, cdescp, cattrp, &c_datafork, &c_rsrcfork, ap->a_context);
 		currattrbufsize = ((char *)varptr - (char *)attrbufptr);
 	
 		/* All done with vnode. */
@@ -315,8 +323,7 @@ hfs_vnop_readdirattr(ap)
 			if ((--maxcount <= 0) ||
 			    // LP64todo - fix this!
 			    uio_resid(uio) < 0 ||
-			    ((u_int32_t)uio_resid(uio) < (fixedblocksize + HFS_AVERAGE_NAME_SIZE)) ||
-			    (index >= dir_entries)) {
+			    ((u_int32_t)uio_resid(uio) < (fixedblocksize + HFS_AVERAGE_NAME_SIZE))){
 				break;
 			}
 		}
@@ -374,7 +381,7 @@ exit1:
 	dirhint->dh_index |= tag;
 
 exit2:
-	*ap->a_newstate = dcp->c_dirchangecnt;
+	*ap->a_newstate = dirchg;
 
 	/* Drop directory hint on error or if there are no more entries */
 	if (dirhint) {
@@ -407,18 +414,18 @@ hfs_packattrblk(struct attrblock *abp,
 		struct cat_attr *attrp,
 		struct cat_fork *datafork,
 		struct cat_fork *rsrcfork,
-		struct proc *p)
+		struct vfs_context *ctx)
 {
 	struct attrlist *attrlistp = abp->ab_attrlist;
 
 	if (attrlistp->commonattr)
-		packcommonattr(abp, hfsmp, vp, descp, attrp, p);
+		packcommonattr(abp, hfsmp, vp, descp, attrp, ctx);
 
 	if (attrlistp->dirattr && S_ISDIR(attrp->ca_mode))
 		packdirattr(abp, hfsmp, vp, descp,attrp);
 
 	if (attrlistp->fileattr && !S_ISDIR(attrp->ca_mode))
-		packfileattr(abp, hfsmp, attrp, datafork, rsrcfork);
+		packfileattr(abp, hfsmp, attrp, datafork, rsrcfork, vp);
 }
 
 
@@ -515,18 +522,18 @@ packcommonattr(
 	struct vnode *vp,
 	struct cat_desc * cdp,
 	struct cat_attr * cap,
-	struct proc *p)
+	struct vfs_context * ctx)
 {
 	attrgroup_t attr = abp->ab_attrlist->commonattr;
 	struct mount *mp = HFSTOVFS(hfsmp);
 	void *attrbufptr = *abp->ab_attrbufpp;
 	void *varbufptr = *abp->ab_varbufpp;
-	boolean_t is_64_bit = proc_is64bit(p);
+	boolean_t is_64_bit = proc_is64bit(vfs_context_proc(ctx));
 	uid_t cuid = 1;
 	int isroot = 0;
 
 	if (attr & (ATTR_CMN_OWNERID | ATTR_CMN_GRPID)) {
-		cuid = kauth_cred_getuid(proc_ucred(p));
+		cuid = kauth_cred_getuid(vfs_context_ucred(ctx));
 		isroot = cuid == 0;
 	}
 	
@@ -588,62 +595,62 @@ packcommonattr(
 	}
 	if (ATTR_CMN_CRTIME & attr) {
 	    if (is_64_bit) {
-            ((struct user_timespec *)attrbufptr)->tv_sec = cap->ca_itime;
-            ((struct user_timespec *)attrbufptr)->tv_nsec = 0;
-			attrbufptr = ((struct user_timespec *)attrbufptr) + 1;
+            ((struct user64_timespec *)attrbufptr)->tv_sec = cap->ca_itime;
+            ((struct user64_timespec *)attrbufptr)->tv_nsec = 0;
+			attrbufptr = ((struct user64_timespec *)attrbufptr) + 1;
 	    }
 	    else {
-            ((struct timespec *)attrbufptr)->tv_sec = cap->ca_itime;
-            ((struct timespec *)attrbufptr)->tv_nsec = 0;
-			attrbufptr = ((struct timespec *)attrbufptr) + 1;
+            ((struct user32_timespec *)attrbufptr)->tv_sec = cap->ca_itime;
+            ((struct user32_timespec *)attrbufptr)->tv_nsec = 0;
+			attrbufptr = ((struct user32_timespec *)attrbufptr) + 1;
 	    }
 	}
 	if (ATTR_CMN_MODTIME & attr) {
 	    if (is_64_bit) {
-             ((struct user_timespec *)attrbufptr)->tv_sec = cap->ca_mtime;
-             ((struct user_timespec *)attrbufptr)->tv_nsec = 0;
-			 attrbufptr = ((struct user_timespec *)attrbufptr) + 1;
+             ((struct user64_timespec *)attrbufptr)->tv_sec = cap->ca_mtime;
+             ((struct user64_timespec *)attrbufptr)->tv_nsec = 0;
+			 attrbufptr = ((struct user64_timespec *)attrbufptr) + 1;
 	    }
 	    else {
-            ((struct timespec *)attrbufptr)->tv_sec = cap->ca_mtime;
-            ((struct timespec *)attrbufptr)->tv_nsec = 0;
-			attrbufptr = ((struct timespec *)attrbufptr) + 1;
+            ((struct user32_timespec *)attrbufptr)->tv_sec = cap->ca_mtime;
+            ((struct user32_timespec *)attrbufptr)->tv_nsec = 0;
+			attrbufptr = ((struct user32_timespec *)attrbufptr) + 1;
 	    }
 	}
 	if (ATTR_CMN_CHGTIME & attr) {
 	    if (is_64_bit) {
-            ((struct user_timespec *)attrbufptr)->tv_sec = cap->ca_ctime;
-            ((struct user_timespec *)attrbufptr)->tv_nsec = 0;
-			attrbufptr = ((struct user_timespec *)attrbufptr) + 1;
+            ((struct user64_timespec *)attrbufptr)->tv_sec = cap->ca_ctime;
+            ((struct user64_timespec *)attrbufptr)->tv_nsec = 0;
+			attrbufptr = ((struct user64_timespec *)attrbufptr) + 1;
 	    }
 	    else {
-            ((struct timespec *)attrbufptr)->tv_sec = cap->ca_ctime;
-            ((struct timespec *)attrbufptr)->tv_nsec = 0;
-			attrbufptr = ((struct timespec *)attrbufptr) + 1;
+            ((struct user32_timespec *)attrbufptr)->tv_sec = cap->ca_ctime;
+            ((struct user32_timespec *)attrbufptr)->tv_nsec = 0;
+			attrbufptr = ((struct user32_timespec *)attrbufptr) + 1;
 	    }
 	}
 	if (ATTR_CMN_ACCTIME & attr) {
 	    if (is_64_bit) {
-            ((struct user_timespec *)attrbufptr)->tv_sec = cap->ca_atime;
-            ((struct user_timespec *)attrbufptr)->tv_nsec = 0;
-			attrbufptr = ((struct user_timespec *)attrbufptr) + 1;
+            ((struct user64_timespec *)attrbufptr)->tv_sec = cap->ca_atime;
+            ((struct user64_timespec *)attrbufptr)->tv_nsec = 0;
+			attrbufptr = ((struct user64_timespec *)attrbufptr) + 1;
 	    }
 	    else {
-            ((struct timespec *)attrbufptr)->tv_sec = cap->ca_atime;
-            ((struct timespec *)attrbufptr)->tv_nsec = 0;
-			attrbufptr = ((struct timespec *)attrbufptr) + 1;
+            ((struct user32_timespec *)attrbufptr)->tv_sec = cap->ca_atime;
+            ((struct user32_timespec *)attrbufptr)->tv_nsec = 0;
+			attrbufptr = ((struct user32_timespec *)attrbufptr) + 1;
 	    }
 	}
 	if (ATTR_CMN_BKUPTIME & attr) {
 	    if (is_64_bit) {
-            ((struct user_timespec *)attrbufptr)->tv_sec = cap->ca_btime;
-            ((struct user_timespec *)attrbufptr)->tv_nsec = 0;
-			attrbufptr = ((struct user_timespec *)attrbufptr) + 1;
+            ((struct user64_timespec *)attrbufptr)->tv_sec = cap->ca_btime;
+            ((struct user64_timespec *)attrbufptr)->tv_nsec = 0;
+			attrbufptr = ((struct user64_timespec *)attrbufptr) + 1;
 	    }
 	    else {
-            ((struct timespec *)attrbufptr)->tv_sec = cap->ca_btime;
-            ((struct timespec *)attrbufptr)->tv_nsec = 0;
-			attrbufptr = ((struct timespec *)attrbufptr) + 1;
+            ((struct user32_timespec *)attrbufptr)->tv_sec = cap->ca_btime;
+            ((struct user32_timespec *)attrbufptr)->tv_nsec = 0;
+			attrbufptr = ((struct user32_timespec *)attrbufptr) + 1;
 	    }
 	}
 	if (ATTR_CMN_FNDRINFO & attr) {
@@ -675,7 +682,7 @@ packcommonattr(
 		gid_t ngid = cap->ca_gid;
 
 		if (!isroot) {
-			gid_t cgid = kauth_cred_getgid(proc_ucred(p));
+			gid_t cgid = kauth_cred_getgid(vfs_context_ucred(ctx));
 			if (((unsigned int)vfs_flags(HFSTOVFS(hfsmp))) & MNT_UNKNOWNPERMISSIONS)
 				ngid = cgid;
 			else if (ngid == UNKNOWNUID)
@@ -791,8 +798,12 @@ packfileattr(
 	struct hfsmount *hfsmp,
 	struct cat_attr *cattrp,
 	struct cat_fork *datafork,
-	struct cat_fork *rsrcfork)
+	struct cat_fork *rsrcfork,
+	struct vnode *vp)
 {
+#if !HFS_COMPRESSION
+#pragma unused(vp)
+#endif
 	attrgroup_t attr = abp->ab_attrlist->fileattr;
 	void *attrbufptr = *abp->ab_attrbufpp;
 	void *varbufptr = *abp->ab_varbufpp;
@@ -800,12 +811,25 @@ packfileattr(
 
 	allocblksize = HFSTOVCB(hfsmp)->blockSize;
 
+	off_t datasize = datafork->cf_size;
+	off_t totalsize = datasize + rsrcfork->cf_size;
+#if HFS_COMPRESSION
+	if ( cattrp->ca_flags & UF_COMPRESSED ) {
+		if (attr & (ATTR_FILE_DATALENGTH|ATTR_FILE_TOTALSIZE)) {
+			if ( 0 == hfs_uncompressed_size_of_compressed_file(hfsmp, vp, cattrp->ca_fileid, &datasize, 1) ) { /* 1 == don't take the cnode lock */
+				/* total size of a compressed file is just the data size */
+				totalsize = datasize;
+			}
+		}
+	}
+#endif
+
 	if (ATTR_FILE_LINKCOUNT & attr) {
 		*((u_int32_t *)attrbufptr) = cattrp->ca_linkcount;
 		attrbufptr = ((u_int32_t *)attrbufptr) + 1;
 	}
 	if (ATTR_FILE_TOTALSIZE & attr) {
-		*((off_t *)attrbufptr) = datafork->cf_size + rsrcfork->cf_size;
+		*((off_t *)attrbufptr) = totalsize;
 		attrbufptr = ((off_t *)attrbufptr) + 1;
 	}
 	if (ATTR_FILE_ALLOCSIZE & attr) {
@@ -828,23 +852,48 @@ packfileattr(
 			*((u_int32_t *)attrbufptr) = 0;
 		attrbufptr = ((u_int32_t *)attrbufptr) + 1;
 	}
+	
 	if (ATTR_FILE_DATALENGTH & attr) {
-		*((off_t *)attrbufptr) = datafork->cf_size;
+		*((off_t *)attrbufptr) = datasize;
 		attrbufptr = ((off_t *)attrbufptr) + 1;
 	}
-	if (ATTR_FILE_DATAALLOCSIZE & attr) {
-		*((off_t *)attrbufptr) =
-			(off_t)datafork->cf_blocks * (off_t)allocblksize;
-		attrbufptr = ((off_t *)attrbufptr) + 1;
+	
+#if HFS_COMPRESSION
+	/* fake the data fork size on a decmpfs compressed file to reflect the 
+	 * uncompressed size. This ensures proper reading and copying of these files.
+	 * NOTE: we may need to get the vnode here because the vnode parameter
+	 * passed by hfs_vnop_readdirattr() may be null. 
+	 */
+	
+	if ( cattrp->ca_flags & UF_COMPRESSED ) {
+		if (attr & ATTR_FILE_DATAALLOCSIZE) {
+			*((off_t *)attrbufptr) = (off_t)rsrcfork->cf_blocks * (off_t)allocblksize;
+			attrbufptr = ((off_t *)attrbufptr) + 1;
+		}
+		if (attr & ATTR_FILE_RSRCLENGTH) {
+			*((off_t *)attrbufptr) = 0;
+			attrbufptr = ((off_t *)attrbufptr) + 1;
+		}
+		if (attr & ATTR_FILE_RSRCALLOCSIZE) {
+			*((off_t *)attrbufptr) = 0;
+			attrbufptr = ((off_t *)attrbufptr) + 1;
+		}
 	}
-	if (ATTR_FILE_RSRCLENGTH & attr) {
-		*((off_t *)attrbufptr) = rsrcfork->cf_size;
-		attrbufptr = ((off_t *)attrbufptr) + 1;
-	}
-	if (ATTR_FILE_RSRCALLOCSIZE & attr) {
-		*((off_t *)attrbufptr) =
-			(off_t)rsrcfork->cf_blocks * (off_t)allocblksize;
-		attrbufptr = ((off_t *)attrbufptr) + 1;
+	else
+#endif
+	{
+		if (ATTR_FILE_DATAALLOCSIZE & attr) {
+			*((off_t *)attrbufptr) = (off_t)datafork->cf_blocks * (off_t)allocblksize;
+			attrbufptr = ((off_t *)attrbufptr) + 1;
+		}
+		if (ATTR_FILE_RSRCLENGTH & attr) {
+			*((off_t *)attrbufptr) = rsrcfork->cf_size;
+			attrbufptr = ((off_t *)attrbufptr) + 1;
+		}
+		if (ATTR_FILE_RSRCALLOCSIZE & attr) {
+			*((off_t *)attrbufptr) = (off_t)rsrcfork->cf_blocks * (off_t)allocblksize;
+			attrbufptr = ((off_t *)attrbufptr) + 1;
+		}
 	}
 	*abp->ab_attrbufpp = attrbufptr;
 	*abp->ab_varbufpp = varbufptr;
@@ -863,9 +912,9 @@ hfs_attrblksize(struct attrlist *attrlist)
 	boolean_t is_64_bit = proc_is64bit(current_proc());
 	
     if (is_64_bit) 
-        sizeof_timespec = sizeof(struct user_timespec);
+        sizeof_timespec = sizeof(struct user64_timespec);
     else
-        sizeof_timespec = sizeof(struct timespec);
+        sizeof_timespec = sizeof(struct user32_timespec);
 
 	DBG_ASSERT((attrlist->commonattr & ~ATTR_CMN_VALIDMASK) == 0);
 
@@ -967,11 +1016,11 @@ hfs_real_user_access(vnode_t vp, vfs_context_t ctx)
 		
 
 __private_extern__
-unsigned long
+u_int32_t
 DerivePermissionSummary(uid_t obj_uid, gid_t obj_gid, mode_t obj_mode,
 		struct mount *mp, kauth_cred_t cred, __unused struct proc *p)
 {
-	unsigned long permissions;
+	u_int32_t permissions;
 
 	if (obj_uid == UNKNOWNUID)
 		obj_uid = kauth_cred_getuid(cred);
@@ -984,7 +1033,7 @@ DerivePermissionSummary(uid_t obj_uid, gid_t obj_gid, mode_t obj_mode,
 
 	/* Otherwise, check the owner. */
 	if (hfs_owner_rights(VFSTOHFS(mp), obj_uid, cred, NULL, false) == 0) {
-		permissions = ((unsigned long)obj_mode & S_IRWXU) >> 6;
+		permissions = ((u_int32_t)obj_mode & S_IRWXU) >> 6;
 		goto Exit;
 	}
 
@@ -993,13 +1042,13 @@ DerivePermissionSummary(uid_t obj_uid, gid_t obj_gid, mode_t obj_mode,
 		int is_member;
 
 		if (kauth_cred_ismember_gid(cred, obj_gid, &is_member) == 0 && is_member) {
-			permissions = ((unsigned long)obj_mode & S_IRWXG) >> 3;
+			permissions = ((u_int32_t)obj_mode & S_IRWXG) >> 3;
 			goto Exit;
 		}
 	}
 
 	/* Otherwise, settle for 'others' access. */
-	permissions = (unsigned long)obj_mode & S_IRWXO;
+	permissions = (u_int32_t)obj_mode & S_IRWXO;
 
 Exit:
 	return (permissions);    

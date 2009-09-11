@@ -34,12 +34,49 @@
 
 class OSDictionary;
 
+
 /*!
-    @class OSCollection
-    @abstract Abstract super class for all collections.
-    @discussion
-    OSCollection is the abstract super class for all OSObject derived collections and provides the necessary interfaces for managing storage space and iteration through a collection.
-*/
+ * @header
+ *
+ * @abstract
+ * This header declares the OSDictionary collection class.
+ */
+ 
+ 
+/*!
+ * @class OSCollection
+ *
+ * @abstract
+ * The abstract superclass for Libkern collections.
+ *
+ * @discussion
+ * OSCollection is the abstract superclass
+ * for all Libkern C++ object collections.
+ * It defines the necessary interfaces for managing storage space
+ * and iterating through an arbitrary collection
+ * (see the
+ * @link //apple_ref/cpp/class/OSIterator OSIterator@/link
+ * and
+ * @link //apple_ref/cpp/class/OSCollectionIterator OSCollectionIterator@/link
+ * classes).
+ * It is up to concrete subclasses
+ * to define their specific content management functions.
+ *
+ * <b>Use Restrictions</b>
+ *
+ * With very few exceptions in the I/O Kit, all Libkern-based C++
+ * classes, functions, and macros are <b>unsafe</b>
+ * to use in a primary interrupt context.
+ * Consult the I/O Kit documentation related to primary interrupts 
+ * for more information.
+ *
+ * OSCollection provides no concurrency protection;
+ * it's up to the usage context to provide any protection necessary.
+ * Some portions of the I/O Kit, such as
+ * @link //apple_ref/doc/class/IORegistryEntry IORegistryEntry@/link,
+ * handle synchronization via defined member functions for setting
+ * properties.
+ */
 class OSCollection : public OSObject
 {
     friend class OSCollectionIterator;
@@ -49,179 +86,363 @@ class OSCollection : public OSObject
     struct ExpansionData { };
     
 protected:
+   /* Not to be included in headerdoc.
+    *
+    * @var updateStamp
+    *
+    * @abstract
+    * A counter for changes to the collection object.
+    *
+    * @discussion
+    * The update stamp is used primarily to track validity
+    * of iteration contexts.
+    * See @link //apple_ref/cpp/class/OSIterator OSIterator@/link and
+    * @link //apple_ref/cpp/class/OSCollectionIterator OSCollectionIterator@/link
+    * for more information.
+    */
     unsigned int updateStamp;
 
 private:
     /* Reserved for future use.  (Internal use only)  */
-    // ExpansionData *reserved;
+    // ExpansionData * reserved;
     unsigned int fOptions;
 
 protected:
     // Member functions used by the OSCollectionIterator class.
-    /*
-        @function iteratorSize
-        @abstract A pure virtual member function to return the size of the iterator context.
-        @result Returns an integer size for the storage space required to contain context necessary for iterating through a collection.
-        @discussion
-        This member function is called by an OSCollectionIterator object to allow it to allocate enough storage space for the iterator context.  This context contains the data necessary to iterate through the collection when getNextObjectForIterator() is called.
+
+
+   /*!
+    * @function iteratorSize
+    *
+    * @abstract
+    * Returns the size in bytes of a subclass's iteration context.
+    *
+    * @result
+    * The size in bytes of the iteration context
+    * needed by the subclass of OSCollection.
+    *
+    * @discussion
+    * This pure virtual member function, which subclasses must implement,
+    * is called by an 
+    * @link //apple_ref/doc/class/OSCollectionIterator OSCollectionIterator@/link
+    * object so that it can allocate the storage needed
+    * for the iteration context.
+    * An iteration context contains the data necessary
+    * to iterate through the collection.
     */
     virtual unsigned int iteratorSize() const = 0;
-    /*
-        @function initIterator
-        @abstract Pure virtual member function to allocate and initialize the iterator context data.
-        @param iterator The iterator context.
-        @result Returns true if initialization was successful, false otherwise.
-    */
-    virtual bool initIterator(void *iterator) const = 0;
-    /*
-        @function getNextObjectForIterator
-        @abstract A pure virtual member function which returns the next member of a collection.
-        @param iterator The iterator context.
-        @param ret The object returned to the caller.
-        @result Returns true if an object was found, false otherwise.
-        @discussion
-        This is the entry point used by an OSCollectionIterator object to advance to next object in the collection.  The iterator context is passed to the receiver to allow it to find the location of the current object and then advance the iterator context to the next object.
-    */
-    virtual bool getNextObjectForIterator(void *iterator, OSObject **ret) const = 0;
 
-    /*
-        @function init
-        @abstract A member function to initialize the OSCollection object.
-        @result Returns true if an object was initialized successfully, false otherwise.
-        @discussion
-        This function is used to initialize state within a newly created OSCollection object.
+
+   /*!
+    * @function initIterator
+    *
+    * @abstract
+    * Initializes the iteration context for a collection subclass.
+    *
+    * @param iterationContext  The iteration context to initialize.
+    *
+    * @result
+    * <code>true</code> if initialization was successful,
+    * <code>false</code> otherwise.
+    *
+    * @discussion
+    * This pure virtual member function, which subclasses must implement,
+    * is called by an 
+    * @link //apple_ref/doc/class/OSCollectionIterator OSCollectionIterator@/link
+    * object to initialize an iteration context for a collection.
+    * The collection object should interpret <code>iterationContext</code> appropriately
+    * and initialize its contents to begin an iteration.
+    *
+    * This function can be called repeatedly for a given context,
+    * whenever the iterator is reset via the
+    * @link //apple_ref/cpp/instm/OSCollectionIterator/reset/virtualvoid/()
+    * OSCollectionIterator::reset@/link
+    * function.
+    */
+    virtual bool initIterator(void * iterationContext) const = 0;
+
+
+   /*!
+    * @function getNextObjectForIterator
+    *
+    * @abstract
+    * Returns the next member of a collection.
+    *
+    * @param iterationContext  The iteration context.
+    * @param nextObject        The object returned by reference to the caller.
+    * 
+    * @result
+    * <code>true</code> if an object was found, <code>false</code> otherwise.
+    *
+    * @discussion
+    * This pure virtual member function, which subclasses must implement,
+    * is called by an 
+    * @link //apple_ref/doc/class/OSCollectionIterator OSCollectionIterator@/link
+    * to get the next object for a given iteration context.
+    * The collection object should interpret
+    * <code>iterationContext</code> appropriately,
+    * advance the context from its current object
+    * to the next object (if it exists),
+    * return that object by reference in <code>nextObject</code>,
+    * and return <code>true</code> for the function call.
+    * If there is no next object, the collection object must return <code>false</code>.
+    *
+    * For associative collections, the object returned should be the key
+    * used to access its associated value, and not the value itself.
+    */
+    virtual bool getNextObjectForIterator(
+        void      * iterationContext,
+        OSObject ** nextObject) const = 0;
+
+
+   /*!
+    * @function init
+    *
+    * @abstract
+    * Initializes the OSCollection object.
+    *
+    * @result
+    * <code>true</code> on success, <code>false</code> otherwise.
+    *
+    * @discussion
+    * This function is used to initialize state
+    * within a newly created OSCollection object.
     */
     virtual bool init();
 
 public:
-    enum {
-	kImmutable = 0x00000001,
-	kMASK	   = (unsigned) -1
-    };
 
-    /*
-        @function haveUpdated
-        @abstract A member function to track of all updates to the collection.
+   /*!
+    * @typedef _OSCollectionFlags
+    *
+    * @const kImmutable
+    * @discussion
+    * Used with <code>@link setOptions setOptions@/link</code>
+    * to indicate the collection's contents should
+    * or should not change.
+    *
+    * An @link //apple_ref/doc/class/IORegistryEntry IORegistryEntry@/link
+    * object marks collections immutable when set
+    * as properties of a registry entry that's attached to a plane.
+    * This is generally an advisory flag, used for debugging;
+    * setting it does not mean a collection will in fact
+    * disallow modifications.
+    */
+    typedef enum {
+        kImmutable  = 0x00000001,
+        kMASK       = (unsigned) -1
+    } _OSCollectionFlags;
+
+// xx-review: should be protected, not public
+
+   /*!
+    * @function haveUpdated
+    *
+    * @abstract
+    * Tracks updates to the collection.
+    *
+    * @discussion
+    * Subclasses call this function <i>before</i>
+    * making any change to their contents (not after, as the name implies).
+    * Update tracking is used for collection iterators,
+    * and to enforce certain protections in the IORegistry.
     */
     void haveUpdated();
 
-    /*
-        @function getCount
-        @abstract A pure virtual member function which returns the number of objects in the collection subclass.
-        @results Returns the number objects in a collection.
-     */
+
+   /*!
+    * @function getCount
+    *
+    * @abstract
+    * Returns the number of objects in the collection.
+    *
+    * @result
+    * The number of objects in the collection.
+    *
+    * @discussion
+    * Subclasses must implement this pure virtual member function.
+    */
     virtual unsigned int getCount() const = 0;
-    /*
-        @function getCapacity
-        @abstract A pure virtual member function which returns the storage space in the collection subclass.
-        @results Returns the number objects in a collection.
-     */
+
+
+   /*!
+    * @function getCapacity
+    *
+    * @abstract
+    * Returns the number of objects the collection
+    * can store without reallocating.
+    *
+    * @result
+    * The number objects the collection
+    * can store without reallocating.
+    *
+    * @discussion
+    * Subclasses must implement this pure virtual member function.
+    */
     virtual unsigned int getCapacity() const = 0;
-    /*
-        @function getCapacityIncrement
-        @abstract A pure virtual member function which returns the growth factor of the collection subclass.
-        @results Returns the size by which the collection subclass should grow.
-     */
+
+
+   /*!
+    * @function getCapacityIncrement
+    *
+    * @abstract
+    * Returns the storage increment of the collection.
+    *
+    * @result
+    * The storage increment of the collection.
+    *
+    * @discussion
+    * Subclasses must implement this pure virtual member function.
+    * Most collection subclasses allocate their storage
+    * in multiples of the capacity increment.
+    *
+    * See
+    * <code>@link
+    * //apple_ref/cpp/instm/OSCollection/ensureCapacity/virtualunsignedint/(unsignedint)
+    * ensureCapacity@/link</code>
+    * for how the capacity increment is used.
+    */
     virtual unsigned int getCapacityIncrement() const = 0;
-    /*
-        @function setCapacityIncrement
-        @abstract A pure virtual member function which sets the growth factor of the collection subclass.
-        @param increment The new size by which the capacity of the collection should grow.
-        @results Returns the new capacity increment.
-     */
+
+
+   /*!
+    * @function setCapacityIncrement
+    *
+    * @abstract
+    * Sets the storage increment of the collection.
+    *
+    * @result
+    * The new storage increment of the collection,
+    * which may be different from the number requested.
+    *
+    * @discussion
+    * Subclasses must implement this pure virtual member function.
+    * Most collection subclasses allocate their storage
+    * in multiples of the capacity increment.
+    *
+    * Collection subclasses should gracefully handle
+    * an <code>increment</code> of zero
+    * by applying (and returning) a positive minimum capacity.
+    *
+    * Setting the capacity increment does not trigger an immediate adjustment
+    * of a collection's storage.
+    *
+    * See
+    * @link
+    * //apple_ref/cpp/instm/OSCollection/ensureCapacity/virtualunsignedint/(unsignedint)
+    * ensureCapacity@/link
+    * for how the capacity increment is used.
+    */
     virtual unsigned int setCapacityIncrement(unsigned increment) = 0;
 
-    /*
-        @function ensureCapacity
-        @abstract A pure virtual member function which
-        @param newCapacity
-        @result
-     */
+
+   /*!
+    * @function ensureCapacity
+    *
+    * @abstract
+    * Ensures the collection has enough space to store
+    * the requested number of objects.
+    *
+    * @param newCapacity  The total number of objects the collection
+    *                     should be able to store.
+    *
+    * @result 
+    * The new capacity of the collection,
+    * which may be different from the number requested
+    * (if smaller, reallocation of storage failed).
+    *
+    * @discussion
+    * Subclasses implement this pure virtual member function
+    * to adjust their storage so that they can hold
+    * at least <code>newCapacity</code> objects.
+    * Libkern collections generally allocate storage
+    * in multiples of their capacity increment.
+    *
+    * Subclass methods that add objects to the collection
+    * should call this function before adding any object,
+    * and should check the return value for success.
+    *
+    * Collection subclasses may reduce their storage
+    * when the number of contained objects falls below some threshold,
+    * but no Libkern collections currently do.
+    */
     virtual unsigned int ensureCapacity(unsigned int newCapacity) = 0;
 
-    /*
-        @function flushCollection
-        @abstract A pure virtual member function which
-     */
+
+   /*!
+    * @function flushCollection
+    *
+    * @abstract
+    * Empties the collection, releasing any objects retained.
+    *
+    * @discussion
+    * Subclasses implement this pure virtual member function
+    * to remove their entire contents.
+    * This must not release the collection itself.
+    */
     virtual void flushCollection() = 0;
 
-    /*!
-        @function setOptions
-        @abstract This function is used to recursively set option bits in this collection and all child collections.
-	@discussion setOptions is a recursive function but the OSCollection class itself does not know the structure of the particular collection.  This means that all derived classes are expected to override this method and recurse if the old value of the option was NOT set, which is why the old value is returned.  As this function is a reserved function override it is very multi purpose.  It can be used to get & set the options,
-        @param options Set the (options & mask) bits.
-        @param mask The mask of bits which need to be set, 0 to get the current value.
-        @result The options before the set operation, NB setOptions(?,0) returns the current value of this collection.
-     */
-    OSMetaClassDeclareReservedUsed(OSCollection, 0);
-    virtual unsigned setOptions(unsigned options, unsigned mask, void * = 0);
 
-    /*!
-        @function copyCollection
-        @abstract Do a deep copy of a collection tree.
-	@discussion This function copies this collection and all of the contained collections recursively.  Objects that don't derive from OSContainter are NOT copied, that is objects like OSString and OSData.  To a derive from OSConnection::copyCollection some code is required to be implemented in the derived class, below is the skeleton pseudo code to copy a collection.
-
-OSCollection * <MyCollection>::copyCollection(OSDictionary *inCycleDict)
-{
-    bool allocDict = !cycleDict;
-    OSCollection *ret = 0;
-    <MyCollection> *newMyColl = 0;
-
-    if (allocDict)
-	cycleDict = OSDictionary::withCapacity(16);
-    if (!cycleDict)
-	return 0;
-
-    do {
-	// Check to see if we already have a copy of the new dictionary
-	ret = super::copyCollection(cycleDict);
-	if (ret)
-	    continue;
-	
-	// Your code goes here to copy your collection,
-	// see OSArray & OSDictionary for examples.
-	newMyColl = <MyCollection>::with<MyCollection>(this);
-	if (!newMyColl)
-	    continue;
-
-	// Insert object into cycle Dictionary
-	cycleDict->setObject((const OSSymbol *) this, newMyColl);
-
-	// Duplicate any collections in us
-	for (unsigned int i = 0; i < count; i++) {
-	    OSObject *obj = getObject(i);
-	    OSCollection *coll = OSDynamicCast(OSCollection, obj);
-
-	    if (coll) {
-		OSCollection *newColl = coll->copyCollection(cycleDict);
-		if (!newColl)
-		    goto abortCopy;
-
-		newMyColl->replaceObject(i, newColl);
-		newColl->release();
-	    };
-	};
-
-	ret = newMyColl;
-	newMyColl = 0;
-
-    } while (false);
-
-abortCopy:
-    if (newMyColl)
-	newMyColl->release();
-
-    if (allocDict)
-	cycleDict->release();
-
-    return ret;
-}
-
-	@param cycleDict Is a dictionary of all of the collections that have been, to start the copy at the top level just leave this field 0.
-	@result The newly copied collecton or 0 if insufficient memory
+   /*!
+    * @function setOptions
+    *
+    * @abstract
+    * Recursively sets option bits in this collection
+    * and all child collections.
+    *
+    * @param options  A bitfield whose values turn the options on (1) or off (0).
+    * @param mask     A mask indicating which bits
+    *                 in <code>options</code> to change.
+    *                 Pass 0 to get the whole current options bitfield
+    *                 without changing any settings.
+    * @param context  Unused.
+    *
+    * @result
+    * The options bitfield as it was before the set operation.
+    *
+    * @discussion
+    * Kernel extensions should not call this function.
+    *
+    * The only option currently in use is
+    * <code>@link //apple_ref/doc/title:econst/OSCollectionFlags/kImmutable
+    * kImmutable@/link</code>.
+    *
+    * Subclasses should override this function to recursively apply
+    * the options to their contents if the options actually change.
     */
-    virtual OSCollection *copyCollection(OSDictionary *cycleDict = 0);
+    virtual unsigned setOptions(
+        unsigned   options,
+        unsigned   mask,
+        void     * context = 0);
+    OSMetaClassDeclareReservedUsed(OSCollection, 0);
+
+   /*!
+    * @function copyCollection
+    *
+    * @abstract
+    * Creates a deep copy of a collection.
+    *
+    * @param cycleDict  A dictionary of all of the collections
+    *                   that have been copied so far,
+    *                   to start the copy at the top level
+    *                   pass <code>NULL</code> for <code>cycleDict</code>.
+    *
+    * @result
+    * The newly copied collecton,
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * This function copies the collection
+    * and all of the contained collections recursively.
+    * Objects that are not derived from OSCollection are retained
+    * rather than copied.
+    *
+    * Subclasses of OSCollection must override this function
+    * to properly support deep copies.
+    */
+    virtual OSCollection *copyCollection(OSDictionary * cycleDict = 0);
     OSMetaClassDeclareReservedUsed(OSCollection, 1);
+
 
     OSMetaClassDeclareReservedUnused(OSCollection, 2);
     OSMetaClassDeclareReservedUnused(OSCollection, 3);

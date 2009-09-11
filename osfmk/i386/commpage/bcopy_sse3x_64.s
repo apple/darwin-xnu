@@ -40,14 +40,10 @@
 #define kVeryLong   (500*1024)          // large enough for non-temporal stores (>=8192 and <2GB)
 #define kFastUCode  ((16*1024)-15)	// cutoff for microcode fastpath for "rep/movsl"
 
-
 // void bcopy(const void *src, void *dst, size_t len);
  
-        .text
-	.code64
-        .align 5, 0x90
+COMMPAGE_FUNCTION_START(bcopy_sse3x_64, 64, 5)
 LZero:
-Lbcopy_sse3x_64:				// void bcopy(const void *src, void *dst, size_t len)
 	pushq	%rbp			// set up a frame for backtraces
 	movq	%rsp,%rbp
 	movq	%rsi,%rax		// copy dest ptr
@@ -151,10 +147,19 @@ LDestAligned:
         andl    $63,%edx                // get remaining bytes for LShort
 	andl	$15,%eax		// mask to low 4 bits of source address
         andq    $-64,%rcx               // get number of bytes we will copy in inner loop
-// We'd like to use lea with rip-relative addressing, but cannot in a .code64 block.
-//	lea	LTable(%rip),%r8	// point to dispatch table
-	movq	$(_COMM_PAGE_32_TO_64(_COMM_PAGE_BCOPY)),%r8 // work around 4586528
-	addq	$(LTable-LZero),%r8	// work around 4586528
+// We'd like to use lea with rip-relative addressing, but cannot in a .code64 block in
+// a 32-bit object file (4586528). Generate the leaq opcode manually.
+#if defined(__i386__)
+        .byte 0x4c
+        .byte 0x8d
+        .byte 0x05
+        .long LTable-LRIP
+LRIP:	
+#elif defined(__x86_64__)
+        leaq	LTable(%rip), %r8
+#else
+#error Unsupported architecture
+#endif
         addq    %rcx,%rsi               // point to 1st byte not copied
         addq    %rcx,%rdi
 	movl	(%r8,%rax,4),%eax	// get offset of routine
@@ -164,22 +169,41 @@ LDestAligned:
 
 	.align	2
 LTable:					// table of copy loop addresses
-	.long	(LMod0 - LTable)
-	.long	(LMod1 - LTable)
-	.long	(LMod2 - LTable)
-	.long	(LMod3 - LTable)
-	.long	(LMod4 - LTable)
-	.long	(LMod5 - LTable)
-	.long	(LMod6 - LTable)
-	.long	(LMod7 - LTable)
-	.long	(LMod8 - LTable)
-	.long	(LMod9 - LTable)
-	.long	(LMod10 - LTable)
-	.long	(LMod11 - LTable)
-	.long	(LMod12 - LTable)
-	.long	(LMod13 - LTable)
-	.long	(LMod14 - LTable)
-	.long	(LMod15 - LTable)
+// force generation of assembly-time constants. Otherwise assembler
+// creates subtractor relocations relative to first external symbol,
+// and this file has none
+.set LMod0Offset, LMod0 - LTable
+.set LMod1Offset, LMod1 - LTable
+.set LMod2Offset, LMod2 - LTable
+.set LMod3Offset, LMod3 - LTable
+.set LMod4Offset, LMod4 - LTable
+.set LMod5Offset, LMod5 - LTable
+.set LMod6Offset, LMod6 - LTable
+.set LMod7Offset, LMod7 - LTable
+.set LMod8Offset, LMod8 - LTable
+.set LMod9Offset, LMod9 - LTable
+.set LMod10Offset, LMod10 - LTable
+.set LMod11Offset, LMod11 - LTable
+.set LMod12Offset, LMod12 - LTable
+.set LMod13Offset, LMod13 - LTable
+.set LMod14Offset, LMod14 - LTable
+.set LMod15Offset, LMod15 - LTable
+	.long LMod0Offset
+	.long LMod1Offset
+	.long LMod2Offset
+	.long LMod3Offset
+	.long LMod4Offset
+	.long LMod5Offset
+	.long LMod6Offset
+	.long LMod7Offset
+	.long LMod8Offset
+	.long LMod9Offset
+	.long LMod10Offset
+	.long LMod11Offset
+	.long LMod12Offset
+	.long LMod13Offset
+	.long LMod14Offset
+	.long LMod15Offset
 
 
 // Very long forward moves.  These are at least several pages.  They are special cased
@@ -793,5 +817,4 @@ LReverseUnalignedLoop:                  // loop over 64-byte chunks
         
         jmp     LReverseShort           // copy remaining 0..63 bytes and done
 
-
-	COMMPAGE_DESCRIPTOR(bcopy_sse3x_64,_COMM_PAGE_BCOPY,kHasSSE2+kHasSupplementalSSE3+kCache64,kHasSSE4_2)
+COMMPAGE_DESCRIPTOR(bcopy_sse3x_64,_COMM_PAGE_BCOPY,kHasSSE2+kHasSupplementalSSE3+kCache64,kHasSSE4_2)

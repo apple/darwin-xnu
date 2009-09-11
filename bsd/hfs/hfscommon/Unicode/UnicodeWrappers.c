@@ -121,7 +121,7 @@ GetFilenameExtension(ItemCount length, ConstUniCharArrayPtr unicodeStr, char * e
 /*
  * Count filename extension characters (if any)
  */
-static u_int32_t
+__private_extern__ u_int32_t
 CountFilenameExtensionChars( const unsigned char * filename, u_int32_t length )
 {
 	u_int32_t	i;

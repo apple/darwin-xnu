@@ -66,7 +66,8 @@ argument specifies how many bytes should be sent with 0 having the special
 meaning to send until the end of file has been reached.
 On return the value pointed to by the 
 .Fa len
-argument indicates how many bytes have been sent.
+argument indicates how many bytes have been sent, except when a header or 
+trailer is specified as shown below.
 The 
 .Fa len
 pointer may not be NULL.
@@ -102,6 +103,15 @@ arrays is specified by
 .Fa hdr_cnt
 and
 .Fa trl_cnt .
+.Pp
+When a header or trailer is specified the value of 
+.Fa len
+returned will include the size of header or trailer sent. The user should
+provide sufficiently large value of 
+.Fa len
+as argument including the size of header or trailer, 
+otherwise only part of file data will be sent
+following the header.
 .Pp
 The
 .Fa flags

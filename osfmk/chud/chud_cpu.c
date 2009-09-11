@@ -38,7 +38,9 @@
 
 #include <chud/chud_xnu.h>
 
+#if 0
 #pragma mark **** cpu count ****
+#endif
 
 __private_extern__ int 
 chudxnu_logical_cpu_count(void)
@@ -67,7 +69,9 @@ chudxnu_cpu_number(void)
     return cpu_number();
 }
 
+#if 0
 #pragma mark **** interrupts enable/disable ****
+#endif
 
 __private_extern__ boolean_t
 chudxnu_get_interrupts_enabled(void)
@@ -93,7 +97,9 @@ chudxnu_cause_interrupt(void)
     ml_cause_interrupt();
 }
 
+#if 0
 #pragma mark **** preemption enable/disable ****
+#endif
 
 __private_extern__ void
 chudxnu_enable_preemption(void)
@@ -111,14 +117,5 @@ __private_extern__ int
 chudxnu_get_preemption_level(void)
 {
 	return get_preemption_level();
-}
-
-#pragma mark *** deprecated ***
-
-//DEPRECATED
-__private_extern__ int
-chudxnu_avail_cpu_count(void)
-{
-	return machine_info.logical_cpu;
 }
 

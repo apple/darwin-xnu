@@ -14,6 +14,10 @@ INSTINC_SUBDIRS_PPC = pexpert
 
 INSTINC_SUBDIRS_I386 = pexpert
 
+
+INSTINC_SUBDIRS_X86_64 = pexpert
+
+
 INSTINC_SUBDIRS_ARM = pexpert
 
 
@@ -24,6 +28,10 @@ EXPINC_SUBDIRS_PPC = pexpert
 
 
 EXPINC_SUBDIRS_I386 = pexpert
+
+
+EXPINC_SUBDIRS_X86_64 = pexpert
+
 
 EXPINC_SUBDIRS_ARM = pexpert
 

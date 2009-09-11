@@ -103,7 +103,7 @@ sysctl_dopanicinfo(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 				return (ENOMEM);
 
 			/* allocate some kernel wired memory for the new image */
-			kret = kmem_alloc(kernel_map, &newimage, (vm_size_t)round_page_32(newlen));
+			kret = kmem_alloc(kernel_map, &newimage, (vm_size_t)round_page(newlen));
 
 			if (kret != KERN_SUCCESS) {
 				switch (kret) {
@@ -164,8 +164,8 @@ sysctl_dopanicinfo(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 
 			/* free the wired memory used by the previous image */
 			if ( prev_image_ptr != NULL ) {
-				(void)kmem_free(kernel_map, (vm_offset_t) prev_image_ptr, (vm_size_t)round_page_32(prev_image_size));
-				printf("Panic UI memory freed (%d)\n", round_page_32(prev_image_size));
+				(void)kmem_free(kernel_map, (vm_offset_t) prev_image_ptr, (vm_size_t)round_page(prev_image_size));
+				printf("Panic UI memory freed (%p)\n", (void *)round_page(prev_image_size));
 			}
 		}
 
@@ -173,7 +173,7 @@ sysctl_dopanicinfo(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 
 errout:
 		if ( newimage != (vm_offset_t )NULL )
-			(void)kmem_free(kernel_map, newimage, (vm_size_t)round_page_32(newlen));
+			(void)kmem_free(kernel_map, newimage, (vm_size_t)round_page(newlen));
 
 		return (error);
 	}

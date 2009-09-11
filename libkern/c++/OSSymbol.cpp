@@ -79,7 +79,7 @@ private:
     Bucket *buckets;
     unsigned int nBuckets;
     unsigned int count;
-    mutex_t *poolGate;
+    lck_mtx_t *poolGate;
 
     static inline void hashSymbol(const char *s,
                                   unsigned int *hashP,
@@ -115,8 +115,8 @@ public:
 
     bool init();
 
-    inline void closeGate() { mutex_lock(poolGate); };
-    inline void openGate()  { mutex_unlock(poolGate); };
+    inline void closeGate() { lck_mtx_lock(poolGate); };
+    inline void openGate()  { lck_mtx_unlock(poolGate); };
 
     OSSymbol *findSymbol(const char *cString) const;
     OSSymbol *insertSymbol(OSSymbol *sym);
@@ -142,6 +142,8 @@ void OSSymbolPool::operator delete(void *mem, size_t size)
     ACCUMSIZE(-size);
 }
 
+extern lck_grp_t *IOLockGroup;
+
 bool OSSymbolPool::init()
 {
     count = 0;
@@ -153,7 +155,7 @@ bool OSSymbolPool::init()
 
     bzero(buckets, nBuckets * sizeof(Bucket));
 
-    poolGate = mutex_alloc(0);
+    poolGate = lck_mtx_alloc_init(IOLockGroup, LCK_ATTR_NULL);
 
     return poolGate != 0;
 }
@@ -175,7 +177,7 @@ OSSymbolPool::~OSSymbolPool()
     }
 
     if (poolGate)
-        kfree(poolGate, 36 * 4);
+        lck_mtx_free(poolGate, IOLockGroup);
 }
 
 unsigned long OSSymbolPool::log2(unsigned int x)
@@ -273,7 +275,7 @@ OSSymbol *OSSymbolPool::findSymbol(const char *cString) const
         probeSymbol = (OSSymbol *) thisBucket->symbolP;
 
         if (inLen == probeSymbol->length
-        &&  (strcmp(probeSymbol->string, cString) == 0))
+        &&  (strncmp(probeSymbol->string, cString, probeSymbol->length) == 0))
             return probeSymbol;
 	return 0;
     }
@@ -281,7 +283,7 @@ OSSymbol *OSSymbolPool::findSymbol(const char *cString) const
     for (list = thisBucket->symbolP; j--; list++) {
         probeSymbol = *list;
         if (inLen == probeSymbol->length
-        &&  (strcmp(probeSymbol->string, cString) == 0))
+        &&  (strncmp(probeSymbol->string, cString, probeSymbol->length) == 0))
             return probeSymbol;
     }
 
@@ -310,7 +312,7 @@ OSSymbol *OSSymbolPool::insertSymbol(OSSymbol *sym)
         probeSymbol = (OSSymbol *) thisBucket->symbolP;
 
         if (inLen == probeSymbol->length
-        &&  strcmp(probeSymbol->string, cString) == 0)
+        &&  strncmp(probeSymbol->string, cString, probeSymbol->length) == 0)
             return probeSymbol;
 
         list = (OSSymbol **) kalloc(2 * sizeof(OSSymbol *));
@@ -329,7 +331,7 @@ OSSymbol *OSSymbolPool::insertSymbol(OSSymbol *sym)
     for (list = thisBucket->symbolP; j--; list++) {
         probeSymbol = *list;
         if (inLen == probeSymbol->length
-        &&  strcmp(probeSymbol->string, cString) == 0)
+        &&  strncmp(probeSymbol->string, cString, probeSymbol->length) == 0)
             return probeSymbol;
     }
 

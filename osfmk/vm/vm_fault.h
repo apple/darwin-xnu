@@ -81,6 +81,7 @@ typedef	kern_return_t	vm_fault_return_t;
 #define VM_FAULT_MEMORY_SHORTAGE 	3
 #define VM_FAULT_FICTITIOUS_SHORTAGE 	4
 #define VM_FAULT_MEMORY_ERROR		5
+#define VM_FAULT_SUCCESS_NO_VM_PAGE	6	/* success but no VM page */
 
 /*
  *	Page fault handling based on vm_map (or entries therein)

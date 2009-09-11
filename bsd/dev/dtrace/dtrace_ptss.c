@@ -70,16 +70,16 @@ dtrace_ptss_claim_entry_locked(struct proc* p) {
 			// CAS the entries onto the free list.
 			do {
 				page->entries[DTRACE_PTSS_ENTRIES_PER_PAGE-1].next = p->p_dtrace_ptss_free_list;
-			} while (!OSCompareAndSwap((UInt32)page->entries[DTRACE_PTSS_ENTRIES_PER_PAGE-1].next,
-						   (UInt32)&page->entries[0],
-						   (volatile UInt32 *)&p->p_dtrace_ptss_free_list));
+			} while (!OSCompareAndSwapPtr((void *)page->entries[DTRACE_PTSS_ENTRIES_PER_PAGE-1].next,
+						   (void *)&page->entries[0],
+						   (void * volatile *)&p->p_dtrace_ptss_free_list));
 				 
 			// Now that we've added to the free list, try again.
 			continue;
 		}
 
 		// Claim temp
-		if (!OSCompareAndSwap((UInt32)temp, (UInt32)temp->next, (volatile UInt32 *)&p->p_dtrace_ptss_free_list))
+		if (!OSCompareAndSwapPtr((void *)temp, (void *)temp->next, (void * volatile *)&p->p_dtrace_ptss_free_list))
 			continue;
 
 		// At this point, we own temp.
@@ -113,7 +113,7 @@ dtrace_ptss_claim_entry(struct proc* p) {
 		}
 
 		// Claim temp
-		if (!OSCompareAndSwap((UInt32)temp, (UInt32)temp->next, (volatile UInt32 *)&p->p_dtrace_ptss_free_list))
+		if (!OSCompareAndSwapPtr((void *)temp, (void *)temp->next, (void * volatile *)&p->p_dtrace_ptss_free_list))
 			continue;
 
 		// At this point, we own temp.
@@ -133,7 +133,7 @@ dtrace_ptss_release_entry(struct proc* p, struct dtrace_ptss_page_entry* e) {
 	if (p && e) {
 		do {
 			e->next = p->p_dtrace_ptss_free_list;
-		} while (!OSCompareAndSwap((UInt32)e->next, (UInt32)e, (volatile UInt32 *)&p->p_dtrace_ptss_free_list));
+		} while (!OSCompareAndSwapPtr((void *)e->next, (void *)e, (void * volatile *)&p->p_dtrace_ptss_free_list));
 	}
 }
 

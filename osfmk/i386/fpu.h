@@ -62,11 +62,11 @@
  * floating-point processor.
  */
 #include <kern/thread.h>
-#include <i386/thread.h>
 #include <kern/kern_types.h>
 #include <mach/i386/kern_return.h>
 #include <mach/i386/thread_status.h>
 #include <i386/proc_reg.h>
+#include <i386/thread.h>
 
 extern int		fp_kind;
 
@@ -89,8 +89,10 @@ extern void		fpexterrflt(void);
 extern void		fpSSEexterrflt(void);
 extern void		fpflush(thread_t);
 extern void		fp_setvalid(boolean_t);
+#ifdef __i386__
 extern void		fxsave64(struct x86_fx_save *);
 extern void		fxrstor64(struct x86_fx_save *);
+#endif
 
 /*
  * FPU instructions.
@@ -135,6 +137,7 @@ static inline void clear_fpu(void)
 	set_ts();
 }
 
+
 /*
  * Save thread`s FPU context.
  */
@@ -155,6 +158,7 @@ static inline void fpu_save_context(thread_t thread)
 		/* registers are in FPU - save to memory */
 		ifps->fp_valid = TRUE;
 
+#if defined(__i386__)
 		if (!thread_is_64bit(thread) || is_saved_state32(thread->machine.pcb->iss)) {
 			/* save the compatibility/legacy mode XMM+x87 state */
 			fxsave(&ifps->fx_save_state);
@@ -167,6 +171,13 @@ static inline void fpu_save_context(thread_t thread)
 			fxsave64(&ifps->fx_save_state);
 			ifps->fp_save_layout = FXSAVE64;
 		}
+#elif defined(__x86_64__)
+		/* for a 64-bit long mode kernel, we can always use plain fxsave */
+		fxsave(&ifps->fx_save_state);
+		ifps->fp_save_layout = thread_is_64bit(thread) ? FXSAVE64
+			: FXSAVE32;
+
+#endif
 	}
 	set_ts();
 }

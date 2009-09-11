@@ -13,26 +13,32 @@ LIB=syscall
 SHLIB_MAJOR= 1
 SHLIB_MINOR= 0
 .if (${MACHINE_ARCH} == unknown)
+.ifdef RC_ARCHS
+MACHINE_ARCH != echo $(RC_ARCHS) | cut -f 1 -d " "
+.else
 MACHINE_ARCH != /usr/bin/arch
-.endif 
+.endif
+.endif
 .if !empty $(MACHINE_ARCH:M*64)
 LP64 = 1
 .endif
-CC = gcc
+SDKROOT ?= /
+CC = xcrun -sdk $(SDKROOT) gcc
+MIG = xcrun -sdk $(SDKROOT) mig
+MIGCC != xcrun -find -sdk $(SDKROOT) gcc
 .ifdef ALTFRAMEWORKSPATH
 PRIVINC = -F${ALTFRAMEWORKSPATH} -I${ALTFRAMEWORKSPATH}/System.framework/PrivateHeaders
 .else
 PRIVINC = -I${SDKROOT}/System/Library/Frameworks/System.framework/PrivateHeaders
 .endif
 CFLAGS += ${PRIVINC}
-.if empty $(MACHINE_ARCH:Marm*)
-CFLAGS += -force_cpusubtype_ALL
-AINC= -force_cpusubtype_ALL
-.endif
 CFLAGS += -no-cpp-precomp
 CFLAGS += -fno-common -pipe -Wmost -g
-AINC+= -no-cpp-precomp
+CFLAGS += -DCF_EXCLUDE_CSTD_HEADERS -DCF_OPEN_SOURCE
+CFLAGS += -isysroot ${SDKROOT}
+AINC= -no-cpp-precomp
 AINC+= -arch ${MACHINE_ARCH} -g
+MIGDEFINES ?=
 CLEANFILES+=tags
 INSTALL_PIC_ARCHIVE=	yes
 PRECIOUSLIB=	yes

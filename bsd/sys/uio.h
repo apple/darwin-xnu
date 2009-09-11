@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -119,15 +119,15 @@ enum uio_rw { UIO_READ, UIO_WRITE };
  * NOTES - 
  *	UIO_USERSPACE is equivalent to UIO_USERSPACE32, but UIO_USERSPACE32
  *		is preferred.  UIO_USERSPACE remains for backwards compatibility.
- *	UIO_SYSSPACE is equivalent to UIO_SYSSPACE32, but UIO_SYSSPACE32
- *		is preferred.  UIO_SYSSPACE remains for backwards compatibility.
+ *	UIO_SYSSPACE is equivalent to UIO_SYSSPACE32, but UIO_SYSSPACE
+ *		is preferred.
  */
 enum uio_seg {
 	UIO_USERSPACE 		= 0,	/* kernel address is virtual,  to/from user virtual */
 	UIO_SYSSPACE 		= 2,	/* kernel address is virtual,  to/from system virtual */
 	UIO_USERSPACE32 	= 5,	/* kernel address is virtual,  to/from user 32-bit virtual */
 	UIO_USERSPACE64 	= 8,	/* kernel address is virtual,  to/from user 64-bit virtual */
-	UIO_SYSSPACE32 		= 11	/* kernel address is virtual,  to/from system virtual */
+	UIO_SYSSPACE32 		= 11	/* deprecated */
 };
 
 #define UIO_SEG_IS_USER_SPACE( a_uio_seg )  \
@@ -258,9 +258,7 @@ user_size_t uio_curriovlen( uio_t a_uio );
 #define UIO_SMALLIOV	8		/* 8 on stack, else malloc */
 
 extern int uiomove(const char * cp, int n, struct uio *uio);
-extern int uiomove64(const unsigned long long cp, int n, struct uio *uio);
-extern int ureadc(int c, struct uio *uio);
-extern int uwritec(struct uio *uio);
+extern int uiomove64(const __uint64_t cp, int n, struct uio *uio);
 __END_DECLS
 
 #endif /* KERNEL */

@@ -32,24 +32,28 @@
 #ifndef	_I386_MISC_PROTOS_H_
 #define	_I386_MISC_PROTOS_H_
 
-#include <i386/thread.h>
+#include <machine/thread.h>
 
 struct boot_args;
 struct cpu_data;
 
+extern void		vstart(vm_offset_t);
 extern void		i386_init(vm_offset_t);
-extern void		i386_macho_zerofill(void);
 extern void		i386_vm_init(
 				uint64_t,
 				boolean_t,
 				struct boot_args *);
+#ifdef __i386__
 extern void		cpu_IA32e_enable(struct cpu_data *);
 extern void		cpu_IA32e_disable(struct cpu_data *);
 extern void		ml_load_desc64(void);
-extern void		ml_64bit_wrmsr64(uint32_t msr, uint64_t value);
 extern void		ml_64bit_lldt(int);
+#endif
+
+#if NCOPY_WINDOWS > 0
 extern void             cpu_userwindow_init(int);
 extern void             cpu_physwindow_init(int);
+#endif
 
 extern void		machine_startup(void);
 
@@ -64,7 +68,9 @@ extern void		remote_kdb(void);
 extern void		clear_kdb_intr(void);
 extern void             draw_panic_dialog(void);
 extern void		cpu_init(void);
+#ifdef __i386__
 extern void		cpu_shutdown(void);
+#endif
 extern void		fix_desc(
 				void		* desc,
 				int		num_desc);
@@ -84,6 +90,7 @@ extern void		blkclr(
 			       const char	*from,
 			       int		nbytes);
 
+#ifdef __i386__
 extern unsigned int	div_scale(
 				unsigned int	dividend,
 				unsigned int	divisor,
@@ -93,9 +100,12 @@ extern unsigned int	mul_scale(
 				unsigned int	multiplicand,
 				unsigned int	multiplier,
 				unsigned int	*scale);
+#endif
 
 /* Move arbitrarily-aligned data from one physical address to another */
 extern void bcopy_phys(addr64_t from, addr64_t to, vm_size_t nbytes);
+
+extern void ml_copy_phys(addr64_t, addr64_t, vm_size_t);
 
 /* Flush all cachelines for a page. */
 extern void cache_flush_page_phys(ppnum_t pa);
@@ -128,8 +138,30 @@ extern void	rtc_clock_stepped(
 			uint32_t old_frequency);
 extern void	rtc_clock_napped(uint64_t, uint64_t);
 
-extern void     x86_lowmem_free(void);
+extern void     pmap_lowmem_finalize(void);
 
 thread_t Switch_context(thread_t, thread_continue_t, thread_t);
+thread_t Shutdown_context(thread_t thread, void (*doshutdown)(processor_t),processor_t  processor);
+
+#ifdef __x86_64__
+uint64_t x86_64_pre_sleep(void);
+void x86_64_post_sleep(uint64_t new_cr3);
+#endif
+
+boolean_t 
+debug_state_is_valid32(x86_debug_state32_t *ds);
+
+boolean_t 
+debug_state_is_valid64(x86_debug_state64_t *ds);
+
+void 
+copy_debug_state32(x86_debug_state32_t *src, x86_debug_state32_t *target, boolean_t all);
+
+void 
+copy_debug_state64(x86_debug_state64_t *src, x86_debug_state64_t *target, boolean_t all);
+
+/* Fast-restart parameters */
+#define FULL_SLAVE_INIT	(NULL)
+#define FAST_SLAVE_INIT	((void *)(uintptr_t)1)
 
 #endif /* _I386_MISC_PROTOS_H_ */

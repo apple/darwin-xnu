@@ -26,6 +26,9 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#ifndef _OSCPPDEBUG_H
+#define _OSCPPDEBUG_H
+
 #include <libkern/OSBase.h>
 
 #define OSCPP_DEBUG
@@ -34,14 +37,21 @@
 
 __BEGIN_DECLS
 
-extern int 	debug_malloc_size;
-extern int	debug_iomalloc_size;
-extern int 	debug_container_malloc_size;
-extern int 	debug_ivars_size;
+// xx-review: Do we want to document these?
 
-void OSPrintMemory( void );
+// xx-review: exported in IOKit.kext
+extern int debug_malloc_size;
+extern int debug_iomalloc_size;
+extern int debug_container_malloc_size;
+
+// xx-review: exported in Libkern.kext
+extern int debug_ivars_size;
+
+// xx-review: exported in IOKit.kext
+void OSPrintMemory(void);
 
 __END_DECLS
 
 #endif
 
+#endif    /* _OSCPPDEBUG_H */

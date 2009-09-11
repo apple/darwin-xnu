@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -86,9 +86,10 @@ int _NumCPUs( void )
  */
  
 #define	_COMM_PAGE32_AREA_LENGTH	( 19 * 4096 )				/* reserved length of entire comm area */
-#define _COMM_PAGE32_BASE_ADDRESS	( -20 * 4096 )				/* base address of allocated memory */
-#define _COMM_PAGE32_START_ADDRESS	( -16 * 4096 )				/* address traditional commpage code starts on */
+#define _COMM_PAGE32_BASE_ADDRESS	( 0xfffec000 )				/* base address of allocated memory, -20 pages */
+#define _COMM_PAGE32_START_ADDRESS	( 0xffff0000 )				/* address traditional commpage code starts on, -16 pages */
 #define _COMM_PAGE32_AREA_USED		( 19 * 4096 )				/* this is the amt actually allocated */
+#define _COMM_PAGE32_SIGS_OFFSET	0x8000					/* offset to routine signatures */
 
 #define	_COMM_PAGE64_AREA_LENGTH	( 2 * 1024 * 1024 )			/* reserved length of entire comm area (2MB) */
 #define _COMM_PAGE64_BASE_ADDRESS	( 0x00007fffffe00000ULL )		/* base address of allocated memory */
@@ -101,13 +102,24 @@ int _NumCPUs( void )
 #define _COMM_PAGE64_OBJC_SIZE		0ULL
 #define _COMM_PAGE64_OBJC_BASE		0ULL
 
+#ifdef KERNEL_PRIVATE
+
+/* Inside the kernel, comm page addresses are absolute addresses
+ * assuming they are a part of the 32-bit commpage. They may
+ * be mapped somewhere else, especially for the 64-bit commpage.
+ */
+#define _COMM_PAGE_START_ADDRESS	_COMM_PAGE32_START_ADDRESS
+#define _COMM_PAGE_SIGS_OFFSET		_COMM_PAGE32_SIGS_OFFSET
+
+#else /* !KERNEL_PRIVATE */
+
 #if defined(__i386__)
 
 #define	_COMM_PAGE_AREA_LENGTH		_COMM_PAGE32_AREA_LENGTH
 #define _COMM_PAGE_BASE_ADDRESS		_COMM_PAGE32_BASE_ADDRESS
 #define _COMM_PAGE_START_ADDRESS	_COMM_PAGE32_START_ADDRESS
 #define _COMM_PAGE_AREA_USED		_COMM_PAGE32_AREA_USED
-#define _COMM_PAGE_SIGS_OFFSET		0x8000					/* offset to routine signatures */
+#define _COMM_PAGE_SIGS_OFFSET		_COMM_PAGE32_SIGS_OFFSET
 
 #elif defined(__x86_64__)
 
@@ -120,26 +132,40 @@ int _NumCPUs( void )
 #error architecture not supported
 #endif
  
+#endif /* !KERNEL_PRIVATE */
+
 /* data in the comm page */
  
 #define _COMM_PAGE_SIGNATURE		(_COMM_PAGE_START_ADDRESS+0x000)	/* first few bytes are a signature */
 #define _COMM_PAGE_VERSION		(_COMM_PAGE_START_ADDRESS+0x01E)	/* 16-bit version# */
-#define	_COMM_PAGE_THIS_VERSION		7					/* version of the commarea format */
+#define _COMM_PAGE_THIS_VERSION		11					/* version of the commarea format */
   
 #define _COMM_PAGE_CPU_CAPABILITIES	(_COMM_PAGE_START_ADDRESS+0x020)	/* uint32_t _cpu_capabilities */
 #define _COMM_PAGE_NCPUS		(_COMM_PAGE_START_ADDRESS+0x022)	/* uint8_t number of configured CPUs */
 #define _COMM_PAGE_CACHE_LINESIZE	(_COMM_PAGE_START_ADDRESS+0x026)	/* uint16_t cache line size */
 
 #define _COMM_PAGE_SCHED_GEN		(_COMM_PAGE_START_ADDRESS+0x028)	/* uint32_t scheduler generation number (count of pre-emptions) */
+#define _COMM_PAGE_MEMORY_PRESSURE	(_COMM_PAGE_START_ADDRESS+0x02c)	/* uint32_t copy of vm_memory_pressure */
+#define	_COMM_PAGE_SPIN_COUNT		(_COMM_PAGE_START_ADDRESS+0x030)	/* uint32_t max spin count for mutex's */
 
-#define _COMM_PAGE_UNUSED1		(_COMM_PAGE_START_ADDRESS+0x02c)	/* 20 unused bytes */
- 
+#define _COMM_PAGE_UNUSED1		(_COMM_PAGE_START_ADDRESS+0x034)	/* 12 unused bytes */
+
+#ifdef KERNEL_PRIVATE
+
+/* slots defined in all cases, but commpage setup code must not populate for 64-bit commpage */
+#define _COMM_PAGE_2_TO_52		(_COMM_PAGE_START_ADDRESS+0x040)	/* double float constant 2**52 */
+#define _COMM_PAGE_10_TO_6		(_COMM_PAGE_START_ADDRESS+0x048)	/* double float constant 10**6 */
+
+#else /* !KERNEL_PRIVATE */
+
 #if defined(__i386__)								/* following are not defined in 64-bit */
 #define _COMM_PAGE_2_TO_52		(_COMM_PAGE_START_ADDRESS+0x040)	/* double float constant 2**52 */
 #define _COMM_PAGE_10_TO_6		(_COMM_PAGE_START_ADDRESS+0x048)	/* double float constant 10**6 */
 #else
 #define _COMM_PAGE_UNUSED2		(_COMM_PAGE_START_ADDRESS+0x040)	/* 16 unused bytes */
 #endif
+
+#endif /* !KERNEL_PRIVATE */
 
 #define	_COMM_PAGE_TIME_DATA_START	(_COMM_PAGE_START_ADDRESS+0x050)	/* base of offsets below (_NT_SCALE etc) */
 #define _COMM_PAGE_NT_TSC_BASE		(_COMM_PAGE_START_ADDRESS+0x050)	/* used by nanotime() */
@@ -164,8 +190,9 @@ int _NumCPUs( void )
 #define	_GTOD_SEC_BASE			40
  
  /* jump table (jmp to this address, which may be a branch to the actual code somewhere else) */
- /* When new jump table entries are added, corresponding symbols should be added below         */
-
+ /* When new jump table entries are added, corresponding symbols should be added below        */
+ /* New slots should be allocated with at least 16-byte alignment. Some like bcopy require    */
+ /* 32-byte alignment, and should be aligned as such in the assembly source before they are relocated */
 #define _COMM_PAGE_COMPARE_AND_SWAP32   (_COMM_PAGE_START_ADDRESS+0x080)	/* compare-and-swap word */
 #define _COMM_PAGE_COMPARE_AND_SWAP64   (_COMM_PAGE_START_ADDRESS+0x0c0)	/* compare-and-swap doubleword */
 #define _COMM_PAGE_ENQUEUE              (_COMM_PAGE_START_ADDRESS+0x100)	/* enqueue */
@@ -174,7 +201,7 @@ int _NumCPUs( void )
 #define _COMM_PAGE_ATOMIC_ADD32         (_COMM_PAGE_START_ADDRESS+0x1a0)	/* add atomic word */
 #define _COMM_PAGE_ATOMIC_ADD64         (_COMM_PAGE_START_ADDRESS+0x1c0)	/* add atomic doubleword */
 
-#define	_COMM_PAGE_UNUSED4		(_COMM_PAGE_START_ADDRESS+0x1e0)	/* 32 unused bytes */
+#define	_COMM_PAGE_CPU_NUMBER		(_COMM_PAGE_START_ADDRESS+0x1e0)	/* user-level cpu_number() */
 
 #define _COMM_PAGE_ABSOLUTE_TIME	(_COMM_PAGE_START_ADDRESS+0x200)	/* mach_absolute_time() */
 #define _COMM_PAGE_SPINLOCK_TRY		(_COMM_PAGE_START_ADDRESS+0x220)	/* spinlock_try() */
@@ -186,7 +213,7 @@ int _NumCPUs( void )
 #define _COMM_PAGE_FLUSH_ICACHE		(_COMM_PAGE_START_ADDRESS+0x520)	/* sys_icache_invalidate() */
 #define _COMM_PAGE_PTHREAD_SELF		(_COMM_PAGE_START_ADDRESS+0x580)	/* pthread_self() */
 
-#define _COMM_PAGE_UNUSED5		(_COMM_PAGE_START_ADDRESS+0x5a0)	/* 32 unused bytes */
+#define _COMM_PAGE_PREEMPT		(_COMM_PAGE_START_ADDRESS+0x5a0)	/* used by PFZ code */
 
 #define _COMM_PAGE_RELINQUISH		(_COMM_PAGE_START_ADDRESS+0x5c0)	/* used by spinlocks */ 
 #define _COMM_PAGE_BTS		        (_COMM_PAGE_START_ADDRESS+0x5e0)	/* bit test-and-set */
@@ -202,11 +229,25 @@ int _NumCPUs( void )
 #define	_COMM_PAGE_LONGCOPY		(_COMM_PAGE_START_ADDRESS+0x1200)	/* used by bcopy() for very long operands */
 #define	_COMM_PAGE_LONGCOPY_END		(_COMM_PAGE_START_ADDRESS+0x15ff)	/* used by rosetta */
 
-#define _COMM_PAGE_UNUSED6		(_COMM_PAGE_START_ADDRESS+0x1600)	/* unused */
-
+#define _COMM_PAGE_BACKOFF		(_COMM_PAGE_START_ADDRESS+0x1600)	/* called from PFZ */
+#define _COMM_PAGE_FIFO_ENQUEUE		(_COMM_PAGE_START_ADDRESS+0x1680)	/* FIFO enqueue */
+#define _COMM_PAGE_FIFO_DEQUEUE		(_COMM_PAGE_START_ADDRESS+0x16c0)	/* FIFO dequeue */
 #define	_COMM_PAGE_NANOTIME		(_COMM_PAGE_START_ADDRESS+0x1700)	/* nanotime() */
+#define	_COMM_PAGE_MUTEX_LOCK		(_COMM_PAGE_START_ADDRESS+0x1780)	/* pthread_mutex_lock() */
 
-#define _COMM_PAGE_END			(_COMM_PAGE_START_ADDRESS+0x1780)	/* end of common page - insert new stuff here */
+#define	_COMM_PAGE_UNUSED5		(_COMM_PAGE_START_ADDRESS+0x17e0)	/* unused space for regular code up to 0x1c00 */
+
+#define _COMM_PAGE_PFZ_START		(_COMM_PAGE_START_ADDRESS+0x1c00)	/* start of Preemption Free Zone */
+
+#define _COMM_PAGE_PFZ_ENQUEUE		(_COMM_PAGE_START_ADDRESS+0x1c00)	/* internal routine for FIFO enqueue */
+#define _COMM_PAGE_PFZ_DEQUEUE		(_COMM_PAGE_START_ADDRESS+0x1c80)	/* internal routine for FIFO dequeue */
+#define	_COMM_PAGE_PFZ_MUTEX_LOCK	(_COMM_PAGE_START_ADDRESS+0x1d00)	/* internal routine for pthread_mutex_lock() */
+
+#define	_COMM_PAGE_UNUSED6		(_COMM_PAGE_START_ADDRESS+0x1d80)	/* unused space for PFZ code up to 0x1fff */
+
+#define _COMM_PAGE_PFZ_END		(_COMM_PAGE_START_ADDRESS+0x1fff)	/* end of Preemption Free Zone */
+
+#define _COMM_PAGE_END			(_COMM_PAGE_START_ADDRESS+0x1fff)	/* end of common page - insert new stuff here */
 
 /* _COMM_PAGE_COMPARE_AND_SWAP{32,64}B are not used on x86 and are
  * maintained here for source compatability.  These will be removed at
@@ -230,6 +271,7 @@ symbol_name: nop
 	CREATE_COMM_PAGE_SYMBOL(___memory_barrier, _COMM_PAGE_MEMORY_BARRIER)
 	CREATE_COMM_PAGE_SYMBOL(___atomic_add32, _COMM_PAGE_ATOMIC_ADD32)
 	CREATE_COMM_PAGE_SYMBOL(___atomic_add64, _COMM_PAGE_ATOMIC_ADD64)
+	CREATE_COMM_PAGE_SYMBOL(___cpu_number, _COMM_PAGE_CPU_NUMBER)
 	CREATE_COMM_PAGE_SYMBOL(___mach_absolute_time, _COMM_PAGE_ABSOLUTE_TIME)
 	CREATE_COMM_PAGE_SYMBOL(___spin_lock_try, _COMM_PAGE_SPINLOCK_TRY)
 	CREATE_COMM_PAGE_SYMBOL(___spin_lock, _COMM_PAGE_SPINLOCK_LOCK)
@@ -239,6 +281,7 @@ symbol_name: nop
 	CREATE_COMM_PAGE_SYMBOL(___sys_dcache_flush, _COMM_PAGE_FLUSH_DCACHE)
 	CREATE_COMM_PAGE_SYMBOL(___sys_icache_invalidate, _COMM_PAGE_FLUSH_ICACHE)
 	CREATE_COMM_PAGE_SYMBOL(___pthread_self, _COMM_PAGE_PTHREAD_SELF)
+	CREATE_COMM_PAGE_SYMBOL(___pfz_preempt, _COMM_PAGE_PREEMPT)
 	CREATE_COMM_PAGE_SYMBOL(___spin_lock_relinquish, _COMM_PAGE_RELINQUISH)
 	CREATE_COMM_PAGE_SYMBOL(___bit_test_and_set, _COMM_PAGE_BTS)
 	CREATE_COMM_PAGE_SYMBOL(___bit_test_and_clear, _COMM_PAGE_BTC)
@@ -248,7 +291,14 @@ symbol_name: nop
 /*	CREATE_COMM_PAGE_SYMBOL(___memmove, _COMM_PAGE_MEMMOVE) */
 	CREATE_COMM_PAGE_SYMBOL(___memset_pattern, _COMM_PAGE_MEMSET_PATTERN)
 	CREATE_COMM_PAGE_SYMBOL(___longcopy, _COMM_PAGE_LONGCOPY)
+	CREATE_COMM_PAGE_SYMBOL(___backoff, _COMM_PAGE_BACKOFF)
+	CREATE_COMM_PAGE_SYMBOL(___fifo_enqueue, _COMM_PAGE_FIFO_ENQUEUE)
+	CREATE_COMM_PAGE_SYMBOL(___fifo_dequeue, _COMM_PAGE_FIFO_DEQUEUE)
 	CREATE_COMM_PAGE_SYMBOL(___nanotime, _COMM_PAGE_NANOTIME)
+	CREATE_COMM_PAGE_SYMBOL(___mutex_lock, _COMM_PAGE_MUTEX_LOCK)
+	CREATE_COMM_PAGE_SYMBOL(___pfz_enqueue, _COMM_PAGE_PFZ_ENQUEUE)
+	CREATE_COMM_PAGE_SYMBOL(___pfz_dequeue, _COMM_PAGE_PFZ_DEQUEUE)
+	CREATE_COMM_PAGE_SYMBOL(___pfz_mutex_lock, _COMM_PAGE_PFZ_MUTEX_LOCK)
 	CREATE_COMM_PAGE_SYMBOL(___end_comm_page, _COMM_PAGE_END)
 
 	.data		/* Required to make a well behaved symbol file */

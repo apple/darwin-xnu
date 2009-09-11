@@ -33,6 +33,12 @@
 #ifndef SYS_KERN_MEMORYSTATUS_H
 #define SYS_KERN_MEMORYSTATUS_H
 
+#ifndef MACH_KERNEL_PRIVATE
+
+#include <stdint.h>
+#include <sys/time.h>
+#include <sys/proc.h>
+
 /*
  * Define Memory Status event subclass.
  * Subclass of KEV_SYSTEM_CLASS
@@ -45,12 +51,65 @@
 #define KEV_MEMORYSTATUS_SUBCLASS        3
 
 enum {
+	kMemoryStatusLevelNote = 1,
+	kMemoryStatusSnapshotNote = 2
+};
+
+enum {
 	kMemoryStatusLevelAny = -1,
 	kMemoryStatusLevelNormal = 0,
 	kMemoryStatusLevelWarning = 1,
 	kMemoryStatusLevelUrgent = 2,
 	kMemoryStatusLevelCritical = 3
 };
+
+typedef struct jetsam_priority_entry {
+	pid_t pid;
+	uint32_t flags;
+} jetsam_priority_entry_t;
+
+/*
+** maximum killable processes to keep track of
+*/
+#define kMaxPriorityEntries 64 
+
+typedef struct jetsam_snapshot_entry {
+	pid_t pid;
+	char name[MAXCOMLEN+1];
+	uint32_t pages;
+	uint32_t flags;
+	uint8_t uuid[16];
+} jetsam_snapshot_entry_t;
+
+/*
+** how many processes to snapshot
+*/
+#define kMaxSnapshotEntries 128 
+
+typedef struct jetsam_kernel_stats {
+	uint32_t free_pages;
+	uint32_t active_pages;
+	uint32_t inactive_pages;
+	uint32_t purgeable_pages;
+	uint32_t wired_pages;
+} jetsam_kernel_stats_t;
+
+/*
+** This is a variable-length struct.
+** Allocate a buffer of the size returned by the sysctl, cast to a jetsam_snapshot_t *
+*/
+
+typedef struct jetsam_snapshot {
+	jetsam_kernel_stats_t stats;
+	size_t entry_count;
+	jetsam_snapshot_entry_t entries[1];
+} jetsam_snapshot_t;
+
+enum {
+	kJetsamFlagsFrontmost =	(1 << 0),
+	kJetsamFlagsKilled =	(1 << 1)
+};
+#endif /* !MACH_KERNEL_PRIVATE */
 
 #ifdef KERNEL
 extern void kern_memorystatus_init(void) __attribute__((section("__TEXT, initcode")));

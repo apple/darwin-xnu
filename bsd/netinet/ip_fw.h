@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -42,8 +42,6 @@
 
 #ifndef _IP_FW_H
 #define _IP_FW_H
-
-#if !__LP64__
 
 #include <sys/appleapiopts.h>
 
@@ -323,8 +321,7 @@ extern int fw_one_pass;
 extern int fw_enable;
 #define IPFW_LOADED     (ip_fw_chk_ptr != NULL)
 extern struct ipfw_flow_id last_pkt ;
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
-#endif /* !__LP64__ */
-#endif !IPFW2
+#endif /* !IPFW2 */
 #endif /* _IP_FW_H */

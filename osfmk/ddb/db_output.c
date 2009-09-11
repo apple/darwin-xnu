@@ -292,7 +292,7 @@ db_printf(const char *fmt, ...)
 	va_list	listp;
 
 	va_start(listp, fmt);
-	_doprnt(fmt, &listp, db_putchar, db_radix);
+	_doprnt(fmt, &listp, db_putchar, (int)db_radix);
 	va_end(listp);
 }
 
@@ -304,7 +304,7 @@ kdbprintf(const char *fmt, ...)
 	va_list	listp;
 
 	va_start(listp, fmt);
-	_doprnt(fmt, &listp, db_putchar, db_radix);
+	_doprnt(fmt, &listp, db_putchar, (int)db_radix);
 	va_end(listp);
 }
 
@@ -331,7 +331,7 @@ iprintf(const char *fmt, ...)
 	}
 
 	va_start(listp, fmt);
-	_doprnt(fmt, &listp, db_putchar, db_radix);
+	_doprnt(fmt, &listp, db_putchar, (int)db_radix);
 	va_end(listp);
 }
 

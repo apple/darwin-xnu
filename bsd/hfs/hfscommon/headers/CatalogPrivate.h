@@ -90,9 +90,6 @@
 //
 
 
-extern	OSErr	LocateCatalogNode(	const ExtendedVCB *volume, HFSCatalogNodeID folderID, const CatalogName *name,
-									u_int32_t hint, CatalogKey *key, CatalogRecord *data, u_int32_t *newHint);
-
 extern OSErr	LocateCatalogNodeByKey ( const ExtendedVCB *volume, u_int32_t hint, CatalogKey *keyPtr,
 										 CatalogRecord *dataPtr, u_int32_t *newHint );
 

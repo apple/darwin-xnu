@@ -64,11 +64,12 @@
 #define KQEXTENT	256		/* linear growth by this amount */
 
 struct kqueue {
-	decl_lck_spin_data( ,kq_lock)		/* kqueue lock */
+	wait_queue_set_t kq_wqs;	/* private wait queue set */
+	decl_lck_spin_data( ,kq_lock)	/* kqueue lock */
 	int		kq_state;
-	int		kq_count;		/* number of queued events */
-	struct kqtailq	kq_head;		/* list of queued events */
-	struct kqtailq	kq_inprocess;		/* list of in-process events */
+	int		kq_count;	/* number of queued events */
+	uint32_t        kq_nprocess;	/* atomic counter for kqueue_process */
+	struct kqtailq	kq_head;	/* list of queued events */
 	struct selinfo	kq_sel;		/* parent select/kqueue info */
 	struct proc	*kq_p;		/* process containing kqueue */
 	int		kq_level;	/* nesting level */
@@ -76,16 +77,18 @@ struct kqueue {
 #define KQ_SEL		0x01
 #define KQ_SLEEP	0x02
 #define KQ_PROCWAIT	0x04
+#define KQ_KEV32	0x08
+#define KQ_KEV64	0x10
 };
 
 extern struct kqueue *kqueue_alloc(struct proc *);
 extern void kqueue_dealloc(struct kqueue *);
 
-typedef int (*kevent_callback_t)(struct kqueue *, struct kevent *, void *);
-typedef void (*kevent_continue_t)(struct kqueue *, void *, int);
+typedef int (*kevent_callback_t)(struct kqueue *, struct kevent64_s *, void *);
+typedef void (*kqueue_continue_t)(struct kqueue *, void *, int);
 
-extern int kevent_register(struct kqueue *, struct kevent *, struct proc *);
-extern int kevent_scan(struct kqueue *, kevent_callback_t, kevent_continue_t,
+extern int kevent_register(struct kqueue *, struct kevent64_s *, struct proc *);
+extern int kqueue_scan(struct kqueue *, kevent_callback_t, kqueue_continue_t,
 		       void *, struct timeval *, struct proc *);
 
 #endif /* !_SYS_EVENTVAR_H_ */

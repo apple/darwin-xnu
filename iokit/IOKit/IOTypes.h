@@ -75,53 +75,66 @@ typedef UInt32		IOVersion;
 typedef UInt32		IOItemCount;
 typedef UInt32  	IOCacheMode;
 
-typedef UInt32	 	IOByteCount;
+typedef UInt32	 	IOByteCount32;
+typedef UInt64	 	IOByteCount64;
 
-  /* LP64todo - these will need to expand to mach_vm_address_t */
-typedef vm_address_t	 IOVirtualAddress;
-typedef IOVirtualAddress IOLogicalAddress;
+typedef UInt32	IOPhysicalAddress32;
+typedef UInt64	IOPhysicalAddress64;
+typedef UInt32	IOPhysicalLength32;
+typedef UInt64	IOPhysicalLength64;
 
-#if 0
+#ifdef __LP64__
+typedef mach_vm_address_t	IOVirtualAddress;
+#else
+typedef vm_address_t		IOVirtualAddress;
+#endif
 
-typedef UInt64	IOPhysicalAddress;
-typedef UInt64	IOPhysicalLength;
+#if defined(__LP64__) && defined(KERNEL)
+typedef IOByteCount64		IOByteCount;
+#else
+typedef IOByteCount32	 	IOByteCount;
+#endif
+
+typedef IOVirtualAddress    IOLogicalAddress;
+
+#if defined(__LP64__) && defined(KERNEL)
+
+typedef IOPhysicalAddress64	 IOPhysicalAddress;
+typedef IOPhysicalLength64	 IOPhysicalLength;
 #define IOPhysical32( hi, lo )		((UInt64) lo + ((UInt64)(hi) << 32))
 #define IOPhysSize	64
 
 #else
 
-typedef UInt32	IOPhysicalAddress;
-typedef UInt32	IOPhysicalLength;
+typedef IOPhysicalAddress32	 IOPhysicalAddress;
+typedef IOPhysicalLength32	 IOPhysicalLength;
 #define IOPhysical32( hi, lo )		(lo)
 #define IOPhysSize	32
 
 #endif
 
 
-#if __cplusplus
-struct IOVirtualRange
+typedef struct
 {
-    IOVirtualAddress	address;
+    IOPhysicalAddress	address;
     IOByteCount		length;
-};
-struct IOAddressRange
-{
-    mach_vm_address_t	address;
-    mach_vm_size_t	length;
-};
-#else
+} IOPhysicalRange;
+
 typedef struct 
 {
     IOVirtualAddress	address;
     IOByteCount		length;
 } IOVirtualRange;
 
+#ifdef __LP64__
+typedef IOVirtualRange	IOAddressRange;
+#else /* !__LP64__ */
 typedef struct 
 {
     mach_vm_address_t	address;
     mach_vm_size_t	length;
 } IOAddressRange;
-#endif
+#endif /* !__LP64__ */
 
 /*
  * Map between #defined or enum'd constants and text description.
@@ -200,8 +213,10 @@ enum {
 
     kIOMapStatic		= 0x01000000,
     kIOMapReference		= 0x02000000,
-    kIOMapUnique		= 0x04000000,
-    kIOMap64Bit			= 0x08000000
+    kIOMapUnique		= 0x04000000
+#ifdef XNU_KERNEL_PRIVATE
+    , kIOMap64Bit		= 0x08000000
+#endif
 };
 
 /*! @enum Scale Factors
@@ -223,18 +238,8 @@ enum {
 /* compatibility types */
 
 #ifndef KERNEL
-/*
- * Machine-independent caching specification.
- */
-typedef enum {
-        IO_CacheOff,                    // cache inhibit
-        IO_WriteThrough,
-        IO_CopyBack
-} IOCache;
 
-//typedef char OSString[64];
 typedef unsigned int IODeviceNumber;
-typedef unsigned int IOObjectNumber;
 
 #endif
 

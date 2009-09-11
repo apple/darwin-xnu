@@ -349,6 +349,7 @@ dhcpol_get(dhcpol_t * list, int tag, int * len_p)
 	    else {
 		data = my_realloc(data, data_len, data_len + len);
 	    }
+		FIX ME: test data NULL
 	    bcopy(option + DHCP_OPTION_OFFSET, data + data_len, len);
 	    data_len += len;
 	}
@@ -356,7 +357,7 @@ dhcpol_get(dhcpol_t * list, int tag, int * len_p)
     *len_p = data_len;
     return (data);
 }
-#endif 0
+#endif
 
 /*
  * Function: dhcpol_parse_packet

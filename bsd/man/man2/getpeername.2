@@ -38,7 +38,7 @@
 .Os BSD 4.2
 .Sh NAME
 .Nm getpeername
-.Nd get name of connected peer
+.Nd get address of connected peer
 .Sh SYNOPSIS
 .Fd #include <sys/socket.h>
 .Ft int
@@ -48,18 +48,20 @@
 .Fa "socklen_t *restrict address_len"
 .Fc
 .Sh DESCRIPTION
-.Fn Getpeername
-returns the name of the peer connected to
-socket
-.Fa socket .
+The
+.Fn getpeername
+function returns the address of the peer connected to the specified 
+socket. 
+.Pp
 The
 .Fa address_len
 parameter should be initialized to indicate
 the amount of space pointed to by
-.Fa name .
-On return it contains the actual size of the name
+.Fa address .
+On return it contains the actual size of the address
 returned (in bytes).
-The name is truncated if the buffer provided is too small.
+.Pp
+The address is truncated if the buffer provided is too small.
 .Sh RETURN VALUES
 .Rv -std getpeername
 .Sh ERRORS

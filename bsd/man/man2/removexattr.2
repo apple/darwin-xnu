@@ -59,6 +59,16 @@ acts on the target of
 if it is a symbolic link.  With this option,
 .Fn removexattr
 will act on the link itself.
+.It Dv XATTR_SHOWCOMPRESSION
+.Fn removexattr
+and 
+.Fn fremovexattr
+will remove HFS Plus Compression extended attribute
+.Fa name
+(if present) for the file referred to by
+.Fa path
+or
+.Fa fd .
 .El
 .Pp
 .Fn fremovexattr

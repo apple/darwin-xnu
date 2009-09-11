@@ -114,6 +114,12 @@ extern	int		vm_page_shift;
 #define round_page(x)	trunc_page((x) + (vm_page_size - 1))
 
 /*
+ *	Page-size rounding macros for the fixed-width VM types.
+ */
+#define mach_vm_trunc_page(x) ((mach_vm_offset_t)(x) & ~((signed)PAGE_MASK))
+#define mach_vm_round_page(x) (((mach_vm_offset_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
+
+/*
  *	fprintf_stderr uses vprintf_stderr_func to produce
  *	error messages, this can be overridden by a user
  *	application to point to a user-specified output function

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -198,7 +198,7 @@ uint32_t			gIOHibernateFreeTime  = 0*1000;	// max time to spend freeing pages (m
 
 static IODTNVRAM *		gIOOptionsEntry;
 static IORegistryEntry *	gIOChosenEntry;
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 static const OSSymbol *         gIOCreateEFIDevicePathSymbol;
 #endif
 
@@ -243,7 +243,7 @@ IOMemoryDescriptorWriteFromPhysical(IOMemoryDescriptor * md,
         addr64_t    dstAddr64;
         IOByteCount dstLen;
 
-        dstAddr64 = md->getPhysicalSegment64(offset, &dstLen);
+        dstAddr64 = md->getPhysicalSegment(offset, &dstLen, kIOMemoryMapperNone);
         if (!dstAddr64)
             break;
 
@@ -281,7 +281,7 @@ IOMemoryDescriptorReadToPhysical(IOMemoryDescriptor * md,
         addr64_t    srcAddr64;
         IOByteCount dstLen;
 
-        srcAddr64 = md->getPhysicalSegment64(offset, &dstLen);
+        srcAddr64 = md->getPhysicalSegment(offset, &dstLen, kIOMemoryMapperNone);
         if (!srcAddr64)
             break;
 
@@ -591,6 +591,7 @@ IOPolledFileOpen( const char * filename, IOBufferMemoryDescriptor * ioBuffer,
 	    err = kIOReturnNoSpace;
 	    break;
 	}
+	gIOHibernateFileRef = vars->fileRef;
 	HIBLOG("Opened file %s, size %qd, partition base 0x%qx, maxio %qx\n", filename, ctx.size, 
                     vars->block0, maxiobytes);
 	if (ctx.size < 1*1024*1024)		// check against image size estimate!
@@ -665,7 +666,7 @@ IOPolledFileOpen( const char * filename, IOBufferMemoryDescriptor * ioBuffer,
                 && child->isParent(next, gIOServicePlane, true));
 
 	HIBLOG("hibernate image major %d, minor %d, blocksize %ld, pollers %d\n",
-		    major, minor, vars->blockSize, vars->pollers->getCount());
+		    major, minor, (long)vars->blockSize, vars->pollers->getCount());
 	if (vars->pollers->getCount() < kIOHibernateMinPollersNeeded)
 	    continue;
 
@@ -686,7 +687,7 @@ IOPolledFileOpen( const char * filename, IOBufferMemoryDescriptor * ioBuffer,
 	{
 	    char str2[24];
 
-#if __i386__
+#if defined(__i386__) || defined(__x86_64__)
 	    if (!gIOCreateEFIDevicePathSymbol)
 		gIOCreateEFIDevicePathSymbol = OSSymbol::withCString("CreateEFIDevicePath");
 
@@ -725,7 +726,10 @@ IOPolledFileOpen( const char * filename, IOBufferMemoryDescriptor * ioBuffer,
     {
         HIBLOG("error 0x%x opening hibernation file\n", err);
 	if (vars->fileRef)
+	{
 	    kern_close_file_for_direct_io(vars->fileRef);
+	    gIOHibernateFileRef = vars->fileRef = NULL;
+	}
     }
 
     if (part)
@@ -742,8 +746,6 @@ IOPolledFileClose( IOPolledFileIOVars * vars )
 	IOHibernatePollerClose(vars, kIOPolledPostflightState);
         vars->pollers->release();
     }
-
-    gIOHibernateFileRef = vars->fileRef;
 
     bzero(vars, sizeof(IOPolledFileIOVars));
 
@@ -977,7 +979,7 @@ if (vars->position & (vars->blockSize - 1)) HIBLOG("misaligned file pos %qx\n", 
                                 vars->buffer + vars->bufferHalf,
                                 &cryptvars->ctx.decrypt);
             }
-#endif CRYPTO
+#endif /* CRYPTO */
 	}
     }
     while (size);
@@ -1004,6 +1006,10 @@ IOHibernateSystemSleep(void)
 	return (kIOReturnSuccess);
 
     gIOHibernateState = kIOHibernateStateInactive;
+
+    gIOHibernateDebugFlags = 0;
+    if (kIOLogHibernate & gIOKitDebug)
+	gIOHibernateDebugFlags |= kIOHibernateDebugRestoreLogs;
 
     /* The invocation of IOPMSleepSystemWithOptions() may override
      * existing hibernation settings.
@@ -1106,6 +1112,7 @@ IOHibernateSystemSleep(void)
 	}
 
 	bzero(gIOHibernateCurrentHeader, sizeof(IOHibernateImageHeader));
+	gIOHibernateCurrentHeader->debugFlags = gIOHibernateDebugFlags;
 
         boolean_t encryptedswap;
         err = hibernate_setup(gIOHibernateCurrentHeader, 
@@ -1155,7 +1162,7 @@ IOHibernateSystemSleep(void)
             }
             data->release();
 
-#ifdef __ppc__
+#if defined(__ppc__)
             size_t	      len;
             char              valueString[16];
 
@@ -1179,7 +1186,7 @@ IOHibernateSystemSleep(void)
                 {
                     vars->haveFastBoot = true;
 
-                    len = sprintf(valueString, "0x%lx", *((UInt32 *)data->getBytesNoCopy()));
+                    len = snprintf(valueString, sizeof(valueString), "0x%lx", *((UInt32 *)data->getBytesNoCopy()));
                     data = OSData::withBytes(valueString, len + 1);
                     sym = OSSymbol::withCStringNoCopy(kIOHibernateMemorySignatureEnvKey);
                     if (sym && data)
@@ -1194,7 +1201,7 @@ IOHibernateSystemSleep(void)
                     gIOHibernateCurrentHeader->machineSignature = *((UInt32 *)data->getBytesNoCopy());
             }
 #endif /* __ppc__ */
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 	    struct AppleRTCHibernateVars
 	    {
 		uint8_t     signature[4];
@@ -1258,7 +1265,7 @@ IOHibernateSystemSleep(void)
                 if (data)
                     gIOHibernateCurrentHeader->machineSignature = *((UInt32 *)data->getBytesNoCopy());
             }
-#else /* !__i386__ */
+#else /* !i386 && !x86_64 */
             if (kIOHibernateModeEncrypt & gIOHibernateMode)
             {
                 data = OSData::withBytes(&vars->wiredCryptKey[0], sizeof(vars->wiredCryptKey));
@@ -1312,7 +1319,7 @@ IOHibernateSystemSleep(void)
                                             &newVolume, sizeof(newVolume));
                 }
             }
-#endif /* !__i386__ */
+#endif /* !i386 && !x86_64 */
 	}
 	// --
 
@@ -1467,7 +1474,7 @@ IOHibernateSystemHasSlept(void)
 	IOService::getPMRootDomain()->getProperty(kIOHibernatePreviewActiveKey))))
     {
 	UInt32 flags = *((UInt32 *)data->getBytesNoCopy());
-	HIBPRINT("kIOHibernatePreviewActiveKey %08lx\n", flags);
+	HIBPRINT("kIOHibernatePreviewActiveKey %08lx\n", (long)flags);
 
 	IOService::getPMRootDomain()->removeProperty(kIOHibernatePreviewActiveKey);
 
@@ -1515,7 +1522,7 @@ IOHibernateSystemWake(void)
             IOUnmapPages(kernel_map, vars->videoMapping, vars->videoMapSize);
         if (vars->videoAllocSize)
             // dealloc range
-            kmem_free(kernel_map, trunc_page_32(vars->videoMapping), vars->videoAllocSize);
+            kmem_free(kernel_map, trunc_page(vars->videoMapping), vars->videoAllocSize);
     }
 
     if (vars->previewBuffer)
@@ -1587,7 +1594,7 @@ IOHibernateSystemWake(void)
     }
 #endif
 
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 	IOService::getPMRootDomain()->removeProperty(kIOHibernateRTCVariablesKey);
 
 	/*
@@ -1783,6 +1790,8 @@ hibernate_write_image(void)
     AbsoluteTime_to_scalar(&decoTime) = 0;
 
     clock_get_uptime(&allTime);
+    IOService::getPMRootDomain()->pmStatsRecordEvent( 
+                        kIOPMStatsHibernateImageWrite | kIOPMStatsEventStartFlag, allTime);
 
     do 
     {
@@ -1813,17 +1822,27 @@ hibernate_write_image(void)
                 break;
         }
 
+        uintptr_t hibernateBase;
+        uintptr_t hibernateEnd;
+
+#if defined(__i386__) || defined(__x86_64__)
+        hibernateBase = sectINITPTB;
+#else
+        hibernateBase = sectHIBB;
+#endif
+
+        hibernateEnd = (sectHIBB + sectSizeHIB);
         // copy out restore1 code
     
-        page = atop_32(sectHIBB);
-        count = atop_32(round_page(sectHIBB + sectSizeHIB)) - page;
+        page = atop_32(hibernateBase);
+        count = atop_32(round_page(hibernateEnd)) - page;
         header->restore1CodePage = page;
         header->restore1PageCount = count;
-        header->restore1CodeOffset = ((uint32_t) &hibernate_machine_entrypoint)      - sectHIBB;
-        header->restore1StackOffset = ((uint32_t) &gIOHibernateRestoreStackEnd[0]) - 64 - sectHIBB;
+        header->restore1CodeOffset = ((uintptr_t) &hibernate_machine_entrypoint)      - hibernateBase;
+        header->restore1StackOffset = ((uintptr_t) &gIOHibernateRestoreStackEnd[0]) - 64 - hibernateBase;
 
         // sum __HIB sect, with zeros for the stack
-        src = (uint8_t *) trunc_page(sectHIBB);
+        src = (uint8_t *) trunc_page(hibernateBase);
         for (page = 0; page < count; page++)
         {
             if ((src < &gIOHibernateRestoreStack[0]) || (src >= &gIOHibernateRestoreStackEnd[0]))
@@ -1836,8 +1855,8 @@ hibernate_write_image(void)
     
         // write the __HIB sect, with zeros for the stack
 
-        src = (uint8_t *) trunc_page(sectHIBB);
-        count = ((uint32_t) &gIOHibernateRestoreStack[0]) - trunc_page(sectHIBB);
+        src = (uint8_t *) trunc_page(hibernateBase);
+        count = ((uintptr_t) &gIOHibernateRestoreStack[0]) - trunc_page(hibernateBase);
         if (count)
         {
             err = IOPolledFileWrite(vars->fileVars, src, count, cryptvars);
@@ -1851,7 +1870,7 @@ hibernate_write_image(void)
         if (kIOReturnSuccess != err)
             break;
         src = &gIOHibernateRestoreStackEnd[0];
-        count = round_page(sectHIBB + sectSizeHIB) - ((uint32_t) src);
+        count = round_page(hibernateEnd) - ((uintptr_t) src);
         if (count)
         {
             err = IOPolledFileWrite(vars->fileVars, src, count, cryptvars);
@@ -1870,7 +1889,7 @@ hibernate_write_image(void)
             count = 0;
             do
             {
-                phys64 = vars->previewBuffer->getPhysicalSegment64(count, &segLen);
+                phys64 = vars->previewBuffer->getPhysicalSegment(count, &segLen, kIOMemoryMapperNone);
                 pageAndCount[0] = atop_64(phys64);
                 pageAndCount[1] = atop_32(segLen);
                 err = IOPolledFileWrite(vars->fileVars, 
@@ -1885,7 +1904,7 @@ hibernate_write_image(void)
             if (kIOReturnSuccess != err)
                 break;
 
-            src = (uint8_t *) vars->previewBuffer->getSourceSegment(0, NULL);
+            src = (uint8_t *) vars->previewBuffer->getPhysicalSegment(0, NULL, _kIOMemorySourceSegment);
             count = vars->previewBuffer->getLength();
 
             header->previewPageListSize = ppnum;
@@ -1902,7 +1921,7 @@ hibernate_write_image(void)
         // mark areas for no save
     
         for (count = 0;
-            (phys64 = vars->ioBuffer->getPhysicalSegment64(count, &segLen));
+            (phys64 = vars->ioBuffer->getPhysicalSegment(count, &segLen, kIOMemoryMapperNone));
             count += segLen)
         {
             hibernate_set_page_state(vars->page_list, vars->page_list_wired, 
@@ -1912,7 +1931,7 @@ hibernate_write_image(void)
         }
     
         for (count = 0;
-            (phys64 = vars->srcBuffer->getPhysicalSegment64(count, &segLen));
+            (phys64 = vars->srcBuffer->getPhysicalSegment(count, &segLen, kIOMemoryMapperNone));
             count += segLen)
         {
             hibernate_set_page_state(vars->page_list, vars->page_list_wired, 
@@ -1934,15 +1953,15 @@ hibernate_write_image(void)
 
 	hibernate_page_list_set_volatile(vars->page_list, vars->page_list_wired, &pageCount);
     
-        page = atop_32(sectHIBB);
-        count = atop_32(round_page(sectHIBB + sectSizeHIB)) - page;
+        page = atop_32(hibernateBase);
+        count = atop_32(round_page(hibernateEnd)) - page;
         hibernate_set_page_state(vars->page_list, vars->page_list_wired,
                                         page, count,
                                         kIOHibernatePageStateFree);
         pageCount -= count;
 
         if (vars->previewBuffer) for (count = 0;
-                                        (phys64 = vars->previewBuffer->getPhysicalSegment64(count, &segLen));
+                                        (phys64 = vars->previewBuffer->getPhysicalSegment(count, &segLen, kIOMemoryMapperNone));
                                         count += segLen)
         {
             hibernate_set_page_state(vars->page_list, vars->page_list_wired, 
@@ -1980,7 +1999,7 @@ hibernate_write_image(void)
                 err = IOMemoryDescriptorWriteFromPhysical(vars->srcBuffer, 0, ptoa_64(ppnum), page_size);
                 if (err)
                 {
-                    HIBLOG("IOMemoryDescriptorWriteFromPhysical %d [%d] %x\n", __LINE__, ppnum, err);
+                    HIBLOG("IOMemoryDescriptorWriteFromPhysical %d [%ld] %x\n", __LINE__, (long)ppnum, err);
                     break;
                 }
     
@@ -2126,6 +2145,10 @@ hibernate_write_image(void)
     while (false);
     
     clock_get_uptime(&endTime);
+
+    IOService::getPMRootDomain()->pmStatsRecordEvent( 
+                        kIOPMStatsHibernateImageWrite | kIOPMStatsEventStopFlag, endTime);
+
     SUB_ABSOLUTETIME(&endTime, &allTime);
     absolutetime_to_nanoseconds(endTime, &nsec);
     HIBLOG("all time: %qd ms, ", 
@@ -2362,7 +2385,7 @@ hibernate_machine_init(void)
 	    err = IOMemoryDescriptorReadToPhysical(vars->srcBuffer, decoOffset, ptoa_64(ppnum), page_size);
 	    if (err)
 	    {
-		HIBLOG("IOMemoryDescriptorReadToPhysical [%d] %x\n", ppnum, err);
+		HIBLOG("IOMemoryDescriptorReadToPhysical [%ld] %x\n", (long)ppnum, err);
 		break;
 	    }
 
@@ -2412,6 +2435,12 @@ hibernate_machine_init(void)
                         (uint8_t *) vars->videoMapping, 0, kIOHibernateProgressCount);
 
     clock_get_uptime(&endTime);
+
+    IOService::getPMRootDomain()->pmStatsRecordEvent( 
+                        kIOPMStatsHibernateImageRead | kIOPMStatsEventStartFlag, allTime);
+    IOService::getPMRootDomain()->pmStatsRecordEvent( 
+                        kIOPMStatsHibernateImageRead | kIOPMStatsEventStopFlag, endTime);
+
     SUB_ABSOLUTETIME(&endTime, &allTime);
     absolutetime_to_nanoseconds(endTime, &nsec);
 

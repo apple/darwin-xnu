@@ -157,7 +157,7 @@ ppc_init(
 	BootProcInfo.cpu_flags = 0;
 	BootProcInfo.istackptr = 0;							/* we're on the interrupt stack */
 	BootProcInfo.intstack_top_ss = (vm_offset_t)&intstack + INTSTACK_SIZE - FM_SIZE;
-	BootProcInfo.debstack_top_ss = (vm_offset_t)&debstack + KERNEL_STACK_SIZE - FM_SIZE;
+	BootProcInfo.debstack_top_ss = (vm_offset_t)&debstack + kernel_stack_size - FM_SIZE;
 	BootProcInfo.debstackptr = BootProcInfo.debstack_top_ss;
 	BootProcInfo.interrupts_enabled = 0;
 	BootProcInfo.pending_ast = AST_NONE;

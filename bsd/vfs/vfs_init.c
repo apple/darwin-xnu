@@ -286,6 +286,8 @@ lck_grp_attr_t * mnt_list_lck_grp_attr;
 lck_attr_t * mnt_list_lck_attr;
 lck_mtx_t * mnt_list_mtx_lock;
 
+lck_mtx_t *pkg_extensions_lck;
+
 struct mount * dead_mountp;
 /*
  * Initialize the vnode structures and initialize each file system type.
@@ -310,6 +312,9 @@ vfsinit(void)
 
 	/* Allocate spec hash list lock */
 	spechash_mtx_lock = lck_mtx_alloc_init(vnode_list_lck_grp, vnode_list_lck_attr);
+
+	/* Allocate the package extensions table lock */
+	pkg_extensions_lck = lck_mtx_alloc_init(vnode_list_lck_grp, vnode_list_lck_attr);
 
 	/* allocate vnode lock group attribute and group */
 	vnode_lck_grp_attr= lck_grp_attr_alloc_init();
@@ -380,16 +385,24 @@ vfsinit(void)
 	 */
 	numused_vfsslots = maxtypenum = 0;
 	for (vfsp = vfsconf, i = 0; i < maxvfsslots; i++, vfsp++) {
+		struct vfsconf vfsc;
 		if (vfsp->vfc_vfsops == (struct	vfsops *)0)
 			break;
 		if (i) vfsconf[i-1].vfc_next = vfsp;
 		if (maxtypenum <= vfsp->vfc_typenum)
 			maxtypenum = vfsp->vfc_typenum + 1;
-		/* a vfsconf is a prefix subset of a vfstable... */
-		(*vfsp->vfc_vfsops->vfs_init)((struct vfsconf *)vfsp);
 		
-		lck_mtx_init(&vfsp->vfc_lock, fsconf_lck_grp, fsconf_lck_attr);
-		
+		bzero(&vfsc, sizeof(struct vfsconf));
+		vfsc.vfc_reserved1 = 0;
+		bcopy(vfsp->vfc_name, vfsc.vfc_name, sizeof(vfsc.vfc_name));
+		vfsc.vfc_typenum = vfsp->vfc_typenum;
+		vfsc.vfc_refcount = vfsp->vfc_refcount;
+		vfsc.vfc_flags = vfsp->vfc_flags;
+		vfsc.vfc_reserved2 = 0;
+		vfsc.vfc_reserved3 = 0;
+
+		(*vfsp->vfc_vfsops->vfs_init)(&vfsc);
+
 		numused_vfsslots++;
 	}
 	/* next vfc_typenum to be used */
@@ -410,9 +423,9 @@ vfsinit(void)
 	/* 
 	 * create a mount point for dead vnodes
 	 */
-	MALLOC_ZONE(mp, struct mount *, (u_long)sizeof(struct mount),
+	MALLOC_ZONE(mp, struct mount *, sizeof(struct mount),
 		M_MOUNT, M_WAITOK);
-	bzero((char *)mp, (u_long)sizeof(struct mount));
+	bzero((char *)mp, sizeof(struct mount));
 	/* Initialize the default IO constraints */
 	mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
 	mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
@@ -420,6 +433,8 @@ vfsinit(void)
 	mp->mnt_maxsegwritesize = mp->mnt_maxwritecnt;
 	mp->mnt_devblocksize = DEV_BSIZE;
 	mp->mnt_alignmentmask = PAGE_MASK;
+	mp->mnt_ioqueue_depth = MNT_DEFAULT_IOQUEUE_DEPTH;
+	mp->mnt_ioscale = 1;
 	mp->mnt_ioflags = 0;
 	mp->mnt_realrootvp = NULLVP;
 	mp->mnt_authcache_ttl = CACHED_LOOKUP_RIGHT_TTL;
@@ -502,21 +517,30 @@ struct vfstable *
 vfstable_add(struct vfstable  *nvfsp)
 {
 	int slot;
-	struct vfstable *slotp;
+	struct vfstable *slotp, *allocated = NULL;
 
 	/*
 	 * Find the next empty slot; we recognize an empty slot by a
 	 * NULL-valued ->vfc_vfsops, so if we delete a VFS, we must
 	 * ensure we set the entry back to NULL.
 	 */
+findslot:
+	mount_list_lock();
 	for (slot = 0; slot < maxvfsslots; slot++) {
 		if (vfsconf[slot].vfc_vfsops == NULL)
 			break;
 	}
 	if (slot == maxvfsslots) {
-		/* out of static slots; allocate one instead */
-		MALLOC(slotp, struct vfstable *, sizeof(struct vfstable),
-							M_TEMP, M_WAITOK);
+		if (allocated == NULL) {
+			mount_list_unlock();
+			/* out of static slots; allocate one instead */
+			MALLOC(allocated, struct vfstable *, sizeof(struct vfstable),
+					M_TEMP, M_WAITOK);
+			goto findslot;
+		} else {
+			slotp = allocated;
+			allocated = NULL;
+		}
 	} else {
 		slotp = &vfsconf[slot];
 	}
@@ -529,7 +553,6 @@ vfstable_add(struct vfstable  *nvfsp)
 	 * with the value of 'maxvfslots' in the allocation case.
 	 */
 	bcopy(nvfsp, slotp, sizeof(struct vfstable));
-	lck_mtx_init(&slotp->vfc_lock, fsconf_lck_grp, fsconf_lck_attr);
 	if (slot != 0) {
 		slotp->vfc_next = vfsconf[slot - 1].vfc_next;
 		vfsconf[slot - 1].vfc_next = slotp;
@@ -537,6 +560,12 @@ vfstable_add(struct vfstable  *nvfsp)
 		slotp->vfc_next = NULL;
 	}
 	numused_vfsslots++;
+
+	mount_list_unlock();
+
+	if (allocated != NULL) {
+		FREE(allocated, M_TEMP);
+	}
 
 	return(slotp);
 }
@@ -560,6 +589,10 @@ vfstable_del(struct vfstable  * vtbl)
 	struct vfstable **vcpp;
 	struct vfstable *vcdelp;
 
+#if DEBUG
+	lck_mtx_assert(mnt_list_mtx_lock, LCK_MTX_ASSERT_OWNED);
+#endif /* DEBUG */
+
 	/*
 	 * Traverse the list looking for vtbl; if found, *vcpp
 	 * will contain the address of the pointer to the entry to
@@ -577,8 +610,6 @@ vfstable_del(struct vfstable  * vtbl)
 	vcdelp = *vcpp;
 	*vcpp = (*vcpp)->vfc_next;
 
-	lck_mtx_destroy(&vcdelp->vfc_lock, fsconf_lck_grp);
-
 	/*
 	 * Is this an entry from our static table?  We find out by
 	 * seeing if the pointer to the object to be deleted places
@@ -595,8 +626,14 @@ vfstable_del(struct vfstable  * vtbl)
 		 * vfsconf onto our list, but it may not be persistent
 		 * because of the previous (copying) implementation.
 		 */
-		 FREE(vcdelp, M_TEMP);
+		mount_list_unlock();
+		FREE(vcdelp, M_TEMP);
+		mount_list_lock();
 	}
+
+#if DEBUG
+	lck_mtx_assert(mnt_list_mtx_lock, LCK_MTX_ASSERT_OWNED);
+#endif /* DEBUG */
 
 	return(0);
 }

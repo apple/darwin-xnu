@@ -12,7 +12,6 @@ INSTINC_SUBDIRS = \
 	crypto \
 	dev \
 	hfs \
-	isofs \
 	libkern \
 	machine \
 	miscfs \
@@ -22,8 +21,8 @@ INSTINC_SUBDIRS = \
 	netinet6 \
 	netkey \
 	nfs \
+	security \
 	sys \
-	ufs \
 	uuid \
 	vfs
 
@@ -31,6 +30,9 @@ INSTINC_SUBDIRS_PPC = \
 	ppc 
 
 INSTINC_SUBDIRS_I386 = \
+	i386 
+
+INSTINC_SUBDIRS_X86_64 = \
 	i386 
 
 INSTINC_SUBDIRS_ARM = \
@@ -41,7 +43,6 @@ EXPINC_SUBDIRS = \
 	crypto \
 	dev \
 	hfs \
-	isofs \
 	libkern \
 	machine \
 	miscfs \
@@ -51,8 +52,8 @@ EXPINC_SUBDIRS = \
 	netinet6 \
 	netkey \
 	nfs \
+	security \
 	sys \
-	ufs \
 	uuid \
 	vfs \
 	vm
@@ -61,6 +62,9 @@ EXPINC_SUBDIRS_PPC = \
 	ppc 
 
 EXPINC_SUBDIRS_I386 = \
+	i386 
+
+EXPINC_SUBDIRS_X86_64 = \
 	i386 
 
 EXPINC_SUBDIRS_ARM = \

@@ -1,3 +1,26 @@
+.\"
+.\" Copyright (c) 2008 Apple Inc.  All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this
+.\" file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.\"
 .\"	$NetBSD: open.2,v 1.8 1995/02/27 12:35:14 cgd Exp $
 .\"
 .\" Copyright (c) 1980, 1991, 1993
@@ -33,7 +56,7 @@
 .\"
 .\"     @(#)open.2	8.2 (Berkeley) 11/16/93
 .\"
-.Dd November 16, 1993
+.Dd October 7, 2008
 .Dt OPEN 2
 .Os BSD 4
 .Sh NAME
@@ -90,6 +113,7 @@ O_SHLOCK	atomically obtain a shared lock
 O_EXLOCK	atomically obtain an exclusive lock
 O_NOFOLLOW	do not follow symlinks
 O_SYMLINK	allow open of symlinks
+O_EVTONLY	descriptor requested for event notifications only
 .Ed
 .Pp
 Opening a file with
@@ -153,6 +177,12 @@ is used in the mask and the target file passed to
 is a symbolic link then the
 .Fn open
 will be for the symbolic link itself, not what it links to.
+.Pp
+The
+.Dv O_EVTONLY
+flag is only intended for monitoring a file for changes (e.g. kqueue). Note: when 
+this flag is used, the opened file will not prevent an unmount 
+of the volume that contains the file.
 .Pp
 If successful,
 .Fn open

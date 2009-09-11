@@ -35,6 +35,8 @@
 #ifndef _OS_OSTYPES_H
 #define _OS_OSTYPES_H
 
+#define OSTYPES_K64_REV		2
+
 typedef unsigned int 	   UInt;
 typedef signed int         SInt;
 
@@ -86,10 +88,38 @@ typedef	struct wide {
 #endif
 
 typedef SInt32				OSStatus;
+
+#if defined(__LP64__) && defined(KERNEL)
+#ifndef ABSOLUTETIME_SCALAR_TYPE
+#define ABSOLUTETIME_SCALAR_TYPE    1
+#endif
+typedef UInt64		AbsoluteTime;
+#else
 typedef UnsignedWide		AbsoluteTime;
+#endif
+
 typedef UInt32				OptionBits;
 
+#if defined(KERNEL) && defined(__LP64__)
+/*
+ * Use intrinsic boolean types for the LP64 kernel, otherwise maintain
+ * source and binary backward compatibility.  This attempts to resolve
+ * the "(x == true)" vs. "(x)" conditional issue.
+ */
+#ifdef __cplusplus
+typedef bool Boolean;
+#else	/* !__cplusplus */
+#if defined(__STDC_VERSION__) && ((__STDC_VERSION__ - 199901L) > 0L)
+/* only use this if we are sure we are using a c99 compiler */
+typedef _Bool Boolean;
+#else	/* !c99 */
+/* Fall back to previous definition unless c99 */
 typedef unsigned char Boolean;
+#endif	/* !c99 */
+#endif	/* !__cplusplus */
+#else	/* !(KERNEL && __LP64__) */
+typedef unsigned char Boolean;
+#endif	/* !(KERNEL && __LP64__) */
 
 #endif /* __TYPES__ */
 #endif /* __MACTYPES__ */

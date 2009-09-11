@@ -74,8 +74,8 @@ for my $dir (@ARGV) {
     while(($count = scalar(@compress)) > 0) {
 	$_ = $count > $N ? $N : $count;
 	my @args = splice(@compress, 0, $_);
-	print "gzip -f @args\n";
-	system('gzip', '-f', @args) == 0 or die "gzip failed\n";;
+	print "gzip -f -n @args\n";
+	system('gzip', '-f', '-n', @args) == 0 or die "gzip failed\n";;
     }
     foreach my $list (@links) {
 	my $main = shift(@$list);

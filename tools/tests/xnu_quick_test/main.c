@@ -41,6 +41,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <grp.h>
 #include <unistd.h>
 #include <sys/mount.h>
 #include <sys/param.h>
@@ -50,6 +51,9 @@
 #include <sys/types.h>
 #include <sys/ucred.h>
 #include <sys/uio.h>
+#include <mach-o/ldsyms.h>
+#include <mach-o/loader.h>
+#include <mach-o/arch.h>
 #include "tests.h"
 
 #if !TARGET_OS_EMBEDDED
@@ -69,18 +73,21 @@ struct test_entry   g_tests[] =
 	{1, &chdir_fchdir_test, NULL, "chdir, fchdir"},
 	{1, &access_chmod_fchmod_test, NULL, "access, chmod, fchmod"},
 	{1, &chown_fchown_lchown_lstat_symlink_test, NULL, "chown, fchown, lchown, lstat, readlink, symlink"},
-	{1, &fs_stat_tests, NULL, "fstatfs, getattrlist, getfsstat, statfs, getfsstat64, statfs64, fstatfs64"},
+	{1, &fs_stat_tests, NULL, "fstatfs, getfsstat, statfs, fstatfs64, getfsstat64, statfs64"},
+#if !TARGET_OS_EMBEDDED
+	{1, &statfs_32bit_inode_tests, NULL, "32-bit inode versions: fstatfs, getfsstat, statfs"},
+#endif
 	{1, &getpid_getppid_pipe_test, NULL, "getpid, getppid, pipe"},
-	{1, &uid_tests, NULL, "getauid, gettid, getuid, geteuid, issetugid, setauid, seteuid, settid, settid_with_pid, setuid"},
+	{1, &uid_tests, NULL, "getauid, gettid, getuid, geteuid, issetugid, setaudit_addr, seteuid, settid, settid_with_pid, setuid"},
 	{1, &mkdir_rmdir_umask_test, NULL, "mkdir, rmdir, umask"},
 	{1, &mknod_sync_test, NULL, "mknod, sync"},
 	{1, &socket2_tests, NULL, "fsync, getsockopt, poll, select, setsockopt, socketpair"},
-	{1, &socket_tests, NULL, "accept, bind, connect, getpeername, getsockname, listen, socket, recvmsg, sendmsg, sendto"},
+	{1, &socket_tests, NULL, "accept, bind, connect, getpeername, getsockname, listen, socket, recvmsg, sendmsg, sendto, sendfile"},
 	{1, &chflags_fchflags_test, NULL, "chflags, fchflags"},
 	{1, &execve_kill_vfork_test, NULL, "kill, vfork, execve, posix_spawn"},
 	{1, &groups_test, NULL, "getegid, getgid, getgroups, setegid, setgid, setgroups"},
 	{1, &dup_test, NULL, "dup, dup2, getdtablesize"},
-	{1, &getrusage_profil_test, NULL, "getrusage, profil"},
+	{1, &getrusage_test, NULL, "getrusage"},
 	{1, &signals_test, NULL, "getitimer, setitimer, sigaction, sigpending, sigprocmask, sigsuspend, sigwait"},
 	{1, &acct_test, NULL, "acct"},
 	{1, &ioctl_test, NULL, "ioctl"},
@@ -96,7 +103,10 @@ struct test_entry   g_tests[] =
 	{1, &mkfifo_test, NULL, "mkfifo, read, write"},
 	{1, &quotactl_test, NULL, "quotactl"},
 	{1, &limit_tests, NULL, "getrlimit, setrlimit"},
-	{1, &directory_tests, NULL, "getattrlist, getdirentries, getdirentriesattr, setattrlist"},
+	{1, &directory_tests, NULL, "getattrlist, getdirentriesattr, setattrlist"},
+#if !TARGET_OS_EMBEDDED
+	{1, &getdirentries_test, NULL, "getdirentries"},
+#endif
 	{1, &exchangedata_test, NULL, "exchangedata"},
 	{1, &searchfs_test, NULL, "searchfs"},
 	{1, &sema2_tests, NULL, "sem_close, sem_open, sem_post, sem_trywait, sem_unlink, sem_wait"},
@@ -107,6 +117,8 @@ struct test_entry   g_tests[] =
 	{1, &aio_tests, NULL, "aio_cancel, aio_error, aio_read, aio_return, aio_suspend, aio_write, fcntl, lio_listio"},
 	{1, &kqueue_tests, NULL, "kevent, kqueue"},
 	{1, &message_queue_tests, NULL, "msgctl, msgget, msgrcv, msgsnd"},
+	{1, &data_exec_tests, NULL, "data/stack execution"},
+	{1, &machvm_tests, NULL, "Mach VM calls"},
 	{0, NULL, NULL, "last one"}
 };
 
@@ -115,6 +127,8 @@ static void list_all_tests( void );
 static void mark_tests_to_run( long my_start, long my_end );
 static int parse_tests_to_run( int argc, const char * argv[], int * indexp );
 static void usage( void );
+static int setgroups_if_single_user(void);
+static const char *current_arch( void );
 
 /* globals */
 long		g_max_failures = 0;
@@ -123,6 +137,7 @@ int		g_xilog_active = 0;
 const char *	g_cmd_namep;
 char		g_target_path[ PATH_MAX ];
 int		g_is_under_rosetta = 0;
+int		g_is_single_user = 0;
  
 int main( int argc, const char * argv[] ) 
 {
@@ -253,6 +268,11 @@ int main( int argc, const char * argv[] )
 		g_is_under_rosetta = val ? 0 : 1;
 	}
 #endif
+
+	/* Populate groups list if we're in single user mode */
+	if (setgroups_if_single_user()) {
+		return 1;
+	}
     
 	if ( list_the_tests != 0 ) {
 		list_all_tests( );
@@ -274,7 +294,7 @@ int main( int argc, const char * argv[] )
 	 * files and directories.
 	 */
 	create_target_directory( my_targetp );
-	printf( "Will allow %d failures before testing is aborted \n", g_max_failures );
+	printf( "Will allow %ld failures before testing is aborted \n", g_max_failures );
 	
         if (g_is_under_rosetta) {
                 printf("Running under Rosetta.\n");
@@ -282,7 +302,8 @@ int main( int argc, const char * argv[] )
         
 	my_start_time = time( NULL );
 	printf( "\nBegin testing - %s \n", ctime_r( &my_start_time, &my_buffer[0] ) );
-	
+	printf( "Current architecture is %s\n", current_arch() );
+
 	/* run each test that is marked to run in our table until we complete all of them or
 	 * hit the maximum number of failures.
 	 */
@@ -382,7 +403,7 @@ static int parse_tests_to_run( int argc, const char * argv[], int * indexp )
 		}
 
 		if ( strlen( my_ptr ) > (sizeof( my_buffer ) - 1) ) {
-			printf( "-run argument has too many test parameters (max of %d characters) \n", sizeof( my_buffer ) );
+			printf( "-run argument has too many test parameters (max of %lu characters) \n", sizeof( my_buffer ) );
 			return -1;
 		}
 		/* get a local copy of the parameter string to work with - break range into two strings */
@@ -485,21 +506,6 @@ static void create_target_directory( const char * the_targetp )
 } /* create_target_directory */
 
 
-static void list_all_tests( void )
-{
-	int		i, my_tests_count;
-	
-	my_tests_count = (sizeof( g_tests ) / sizeof( g_tests[0] ));
-	printf( "\nList of all tests this tool performs... \n" );
-
-	for ( i = 0; i < (my_tests_count - 1); i++ ) {
-		printf( " %d \t   %s \n", (i + 1), g_tests[ i ].test_infop );
-	}
-	
-	return;
-} /* list_all_tests */
-
-
 static void mark_tests_to_run( long my_start, long my_end )
 {
 	int			my_tests_count, i;
@@ -543,3 +549,88 @@ static void usage( void )
 
 } /* usage */
 
+/* This is a private API between Libinfo, Libc, and the DirectoryService daemon.
+ * Since we are trying to determine if an external provider will back group
+ * lookups, we can use this, without relying on additional APIs or tools
+ * that might not work yet */
+extern int _ds_running(void);
+
+#define NUM_GROUPS	6
+static int
+setgroups_if_single_user(void)
+{
+	int i, retval = -1;
+	struct group *grp;
+	gid_t gids[NUM_GROUPS];
+
+	if (!_ds_running()) {
+		printf("In single-user mode.\n");
+		g_is_single_user = 1;		
+
+		/* We skip 'nobody' and 'anyone' */
+		getgrent();
+		getgrent();
+		for (i = 0; i < NUM_GROUPS; i++) {
+			grp = getgrent();
+			if (!grp) {
+				break;
+			}
+
+			gids[i] = grp->gr_gid;
+		}
+		
+		endgrent();
+		
+		/* Only succeed if we find at least NUM_GROUPS */
+		if (i == NUM_GROUPS) {
+			retval = setgroups(NUM_GROUPS, gids);
+			if (retval == 0) { 
+				getgroups(NUM_GROUPS, gids);
+				printf("After single-user hack, groups are: ");
+				for (i = 0; i < NUM_GROUPS; i++) {
+					printf("%d, ", gids[i]);
+				}
+				putchar('\n');
+			} else {
+				printf("Setgroups failed.\n");
+			}
+		} else {
+			printf("Couldn't get sufficient number of groups.\n");
+		}
+	} else {
+		printf("Not in single user mode.\n");
+		retval = 0;
+	}
+
+
+	return retval;
+}
+
+static const char *current_arch( void )
+{
+	cpu_type_t cputype = _mh_execute_header.cputype;
+	cpu_subtype_t cpusubtype = _mh_execute_header.cpusubtype;
+
+	const NXArchInfo *arch = NXGetArchInfoFromCpuType(cputype, cpusubtype);
+
+	if (arch) {
+		return arch->name;
+	} else {
+		return "<unknown>";
+	}
+}
+
+#undef printf	/* this makes the "-l" output easier to read */
+static void list_all_tests( void )
+{
+	int		i, my_tests_count;
+	
+	my_tests_count = (sizeof( g_tests ) / sizeof( g_tests[0] ));
+	printf( "\nList of all tests this tool performs... \n" );
+
+	for ( i = 0; i < (my_tests_count - 1); i++ ) {
+		printf( " %d \t   %s \n", (i + 1), g_tests[ i ].test_infop );
+	}
+	
+	return;
+} /* list_all_tests */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -106,8 +106,12 @@
 #include <machine/machine_cpu.h>
 
 #include <pexpert/pexpert.h>
+#include <sys/kdebug.h>
 
 #include "iso_font.c"
+#if !CONFIG_EMBEDDED
+#include "progress_meter_data.c"
+#endif
 
 #include "sys/msgbuf.h"
 
@@ -145,9 +149,9 @@ static struct {
 static unsigned char *gc_buffer_attributes;
 static unsigned char *gc_buffer_characters;
 static unsigned char *gc_buffer_colorcodes;
-static unsigned long gc_buffer_columns;
-static unsigned long gc_buffer_rows;
-static unsigned long gc_buffer_size;
+static uint32_t gc_buffer_columns;
+static uint32_t gc_buffer_rows;
+static uint32_t gc_buffer_size;
 
 #ifdef __i386__
 decl_simple_lock_data(static, vcputc_lock);
@@ -318,7 +322,7 @@ gc_clear_screen(unsigned int xx, unsigned int yy, int top, unsigned int bottom,
 
 	if ( xx < gc_buffer_columns && yy < gc_buffer_rows && bottom <= gc_buffer_rows )
 	{
-		unsigned long start, end;
+		uint32_t start, end;
 
 		switch (which) {
 			case 0:		/* To end of screen	 */
@@ -353,9 +357,9 @@ gc_enable( boolean_t enable )
 	unsigned char *buffer_attributes = NULL;
 	unsigned char *buffer_characters = NULL;
 	unsigned char *buffer_colorcodes = NULL;
-	unsigned long buffer_columns = 0;
-	unsigned long buffer_rows = 0;
-	unsigned long buffer_size = 0;
+	uint32_t buffer_columns = 0;
+	uint32_t buffer_rows = 0;
+	uint32_t buffer_size = 0;
 	spl_t s;
 
 	if ( enable == FALSE )
@@ -461,7 +465,7 @@ gc_hide_cursor(unsigned int xx, unsigned int yy)
 {
 	if ( xx < gc_buffer_columns && yy < gc_buffer_rows )
 	{
-		unsigned long index = (yy * gc_buffer_columns) + xx;
+		uint32_t index = (yy * gc_buffer_columns) + xx;
 		unsigned char attribute = gc_buffer_attributes[index];
 		unsigned char character = gc_buffer_characters[index];
 		unsigned char colorcode = gc_buffer_colorcodes[index];
@@ -503,7 +507,7 @@ gc_paint_char(unsigned int xx, unsigned int yy, unsigned char ch, int attrs)
 {
 	if ( xx < gc_buffer_columns && yy < gc_buffer_rows )
 	{
-		unsigned long index = (yy * gc_buffer_columns) + xx;
+		uint32_t index = (yy * gc_buffer_columns) + xx;
  
 		gc_buffer_attributes[index] = attrs;
 		gc_buffer_characters[index] = ch;
@@ -991,8 +995,8 @@ gc_scroll_down(int num, unsigned int top, unsigned int bottom)
 	if ( bottom <= gc_buffer_rows )
 	{
 		unsigned char colorcodesave = gc_color_code;
-		unsigned long column, row;
-		unsigned long index, jump;
+		uint32_t column, row;
+		uint32_t index, jump;
 
 		jump = num * gc_buffer_columns;
 
@@ -1100,8 +1104,8 @@ gc_scroll_up(int num, unsigned int top, unsigned int bottom)
 	if ( bottom <= gc_buffer_rows )
 	{
 		unsigned char colorcodesave = gc_color_code;
-		unsigned long column, row;
-		unsigned long index, jump;
+		uint32_t column, row;
+		uint32_t index, jump;
 
 		jump = num * gc_buffer_columns;
 
@@ -1206,7 +1210,7 @@ gc_show_cursor(unsigned int xx, unsigned int yy)
 {
 	if ( xx < gc_buffer_columns && yy < gc_buffer_rows )
 	{
-		unsigned long index = (yy * gc_buffer_columns) + xx;
+		uint32_t index = (yy * gc_buffer_columns) + xx;
 		unsigned char attribute = gc_buffer_attributes[index];
 		unsigned char character = gc_buffer_characters[index];
 		unsigned char colorcode = gc_buffer_colorcodes[index];
@@ -1262,22 +1266,22 @@ vcputc(__unused int l, __unused int u, int c)
  */
 static unsigned char vc_color_index_table[33] = 
 	{  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-	   1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2 };
+	   1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 2 };
 
-static unsigned long vc_colors[8][3] = {
-	{ 0xFFFFFFFF, 0x00000000, 0x00000000 },	/* black */
-	{ 0x23232323, 0x7C007C00, 0x00FF0000 },	/* red	*/
-	{ 0xb9b9b9b9, 0x03e003e0, 0x0000FF00 },	/* green */
-	{ 0x05050505, 0x7FE07FE0, 0x00FFFF00 },	/* yellow */
-	{ 0xd2d2d2d2, 0x001f001f, 0x000000FF},	/* blue	 */
-//	{ 0x80808080, 0x31933193, 0x00666699 },	/* blue	 */
-	{ 0x18181818, 0x7C1F7C1F, 0x00FF00FF },	/* magenta */
-	{ 0xb4b4b4b4, 0x03FF03FF, 0x0000FFFF },	/* cyan	*/
-	{ 0x00000000, 0x7FFF7FFF, 0x00FFFFFF }	/* white */
+static uint32_t vc_colors[8][4] = {
+	{ 0xFFFFFFFF, 0x00000000, 0x00000000, 0x00000000 },	/* black */
+	{ 0x23232323, 0x7C007C00, 0x00FF0000, 0x3FF00000 },	/* red	*/
+	{ 0xb9b9b9b9, 0x03e003e0, 0x0000FF00, 0x000FFC00 },	/* green */
+	{ 0x05050505, 0x7FE07FE0, 0x00FFFF00, 0x3FFFFC00 },	/* yellow */
+	{ 0xd2d2d2d2, 0x001f001f, 0x000000FF, 0x000003FF },	/* blue	 */
+//	{ 0x80808080, 0x31933193, 0x00666699, 0x00000000 },	/* blue	 */
+	{ 0x18181818, 0x7C1F7C1F, 0x00FF00FF, 0x3FF003FF },	/* magenta */
+	{ 0xb4b4b4b4, 0x03FF03FF, 0x0000FFFF, 0x000FFFFF },	/* cyan	*/
+	{ 0x00000000, 0x7FFF7FFF, 0x00FFFFFF, 0x3FFFFFFF }	/* white */
 };
 
-static unsigned long vc_color_fore = 0;
-static unsigned long vc_color_back = 0;
+static uint32_t vc_color_fore = 0;
+static uint32_t vc_color_back = 0;
 
 /* 
  * New Rendering code from Michel Pollet
@@ -1287,7 +1291,7 @@ static unsigned long vc_color_back = 0;
 static unsigned char *vc_rendered_font = NULL;
 
 /* Rendered Font Size */
-static unsigned long vc_rendered_font_size = 0;
+static uint32_t vc_rendered_font_size = 0;
 
 /* Size of a character in the table (bytes) */
 static int vc_rendered_char_size = 0;
@@ -1299,7 +1303,7 @@ static void
 vc_clear_screen(unsigned int xx, unsigned int yy, unsigned int scrreg_top,
 		unsigned int scrreg_bottom, int which)
 {
-	unsigned long *p, *endp, *row;
+	uint32_t *p, *endp, *row;
 	int      linelongs, col;
 	int      rowline, rowlongs;
 
@@ -1310,8 +1314,8 @@ vc_clear_screen(unsigned int xx, unsigned int yy, unsigned int scrreg_top,
 	rowline = vinfo.v_rowscanbytes >> 2;
 	rowlongs = vinfo.v_rowbytes >> 2;
 
-	p = (unsigned long*) vinfo.v_baseaddr;
-	endp = (unsigned long*) vinfo.v_baseaddr;
+	p = (uint32_t*) vinfo.v_baseaddr;
+	endp = (uint32_t*) vinfo.v_baseaddr;
 
 	switch (which) {
 	case 0:		/* To end of screen	 */
@@ -1350,7 +1354,7 @@ vc_initialize(__unused struct vc_info * vinfo_p)
 
 	vinfo.v_rows = vinfo.v_height / ISO_CHAR_HEIGHT;
 	vinfo.v_columns = vinfo.v_width / ISO_CHAR_WIDTH;
-	vinfo.v_rowscanbytes = (vinfo.v_depth / 8) * vinfo.v_width;
+	vinfo.v_rowscanbytes = ((vinfo.v_depth + 7) / 8) * vinfo.v_width;
 }
 
 static void
@@ -1359,7 +1363,7 @@ vc_render_char(unsigned char ch, unsigned char *renderptr, short newdepth)
 	union {
 		unsigned char  *charptr;
 		unsigned short *shortptr;
-		unsigned long  *longptr;
+		uint32_t  *longptr;
 	} current; 	/* current place in rendered font, multiple types. */
 	unsigned char *theChar;	/* current char in iso_font */
 	int line;
@@ -1378,6 +1382,7 @@ vc_render_char(unsigned char ch, unsigned char *renderptr, short newdepth)
 				*current.shortptr++ = (*theChar & mask) ? 0xFFFF : 0;
 				break;
 
+			case 30: 
 			case 32: 
 				*current.longptr++ = (*theChar & mask) ? 0xFFFFFFFF : 0;
 				break;
@@ -1392,35 +1397,35 @@ static void
 vc_paint_char_8(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
 		__unused unsigned char ch_previous, __unused int attrs_previous)
 {
-	unsigned long *theChar;
-	unsigned long *where;
+	uint32_t *theChar;
+	uint32_t *where;
 	int i;
 	
 	if (vc_rendered_font) {
-		theChar = (unsigned long*)(vc_rendered_font + (ch * vc_rendered_char_size));
+		theChar = (uint32_t*)(vc_rendered_font + (ch * vc_rendered_char_size));
 	} else {
 		vc_render_char(ch, vc_rendered_char, 8);
-		theChar = (unsigned long*)(vc_rendered_char);
+		theChar = (uint32_t*)(vc_rendered_char);
 	}
-	where = (unsigned long*)(vinfo.v_baseaddr + 
+	where = (uint32_t*)(vinfo.v_baseaddr + 
 					(yy * ISO_CHAR_HEIGHT * vinfo.v_rowbytes) + 
 					(xx * ISO_CHAR_WIDTH));
 
 	if (!attrs) for (i = 0; i < ISO_CHAR_HEIGHT; i++) {	/* No attr? FLY !*/
-		unsigned long *store = where;
+		uint32_t *store = where;
 		int x;
 		for (x = 0; x < 2; x++) {
-			unsigned long val = *theChar++;
+			uint32_t val = *theChar++;
 			val = (vc_color_back & ~val) | (vc_color_fore & val);
 			*store++ = val;
 		}
 		
-		where = (unsigned long*)(((unsigned char*)where)+vinfo.v_rowbytes);
+		where = (uint32_t*)(((unsigned char*)where)+vinfo.v_rowbytes);
 	} else for (i = 0; i < ISO_CHAR_HEIGHT; i++) {	/* a little slower */
-		unsigned long *store = where, lastpixel = 0;
+		uint32_t *store = where, lastpixel = 0;
 		int x;
 		for (x = 0 ; x < 2; x++) {
-			unsigned long val = *theChar++, save = val;
+			uint32_t val = *theChar++, save = val;
 			if (attrs & ATTR_BOLD) {	/* bold support */
 				if (lastpixel && !(save & 0xFF000000))
 					val |= 0xff000000;
@@ -1439,7 +1444,7 @@ vc_paint_char_8(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
 			lastpixel = save & 0xff;
 		}
 		
-		where = (unsigned long*)(((unsigned char*)where)+vinfo.v_rowbytes);		
+		where = (uint32_t*)(((unsigned char*)where)+vinfo.v_rowbytes);		
 	}
 
 }
@@ -1449,35 +1454,35 @@ vc_paint_char_16(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
 		 __unused unsigned char ch_previous,
 		 __unused int attrs_previous) 
 {
-	unsigned long *theChar;
-	unsigned long *where;
+	uint32_t *theChar;
+	uint32_t *where;
 	int i;
 	
 	if (vc_rendered_font) {
-		theChar = (unsigned long*)(vc_rendered_font + (ch * vc_rendered_char_size));
+		theChar = (uint32_t*)(vc_rendered_font + (ch * vc_rendered_char_size));
 	} else {
 		vc_render_char(ch, vc_rendered_char, 16);
-		theChar = (unsigned long*)(vc_rendered_char);
+		theChar = (uint32_t*)(vc_rendered_char);
 	}
-	where = (unsigned long*)(vinfo.v_baseaddr + 
+	where = (uint32_t*)(vinfo.v_baseaddr + 
 				 (yy * ISO_CHAR_HEIGHT * vinfo.v_rowbytes) + 
 				 (xx * ISO_CHAR_WIDTH * 2));
 
 	if (!attrs) for (i = 0; i < ISO_CHAR_HEIGHT; i++) {	/* No attrs ? FLY ! */
-		unsigned long *store = where;
+		uint32_t *store = where;
 		int x;
 		for (x = 0; x < 4; x++) {
-			unsigned long val = *theChar++;
+			uint32_t val = *theChar++;
 			val = (vc_color_back & ~val) | (vc_color_fore & val);
 			*store++ = val;
 		}
 		
-		where = (unsigned long*)(((unsigned char*)where)+vinfo.v_rowbytes);
+		where = (uint32_t*)(((unsigned char*)where)+vinfo.v_rowbytes);
 	} else for (i = 0; i < ISO_CHAR_HEIGHT; i++) { /* a little bit slower */
-		unsigned long *store = where, lastpixel = 0;
+		uint32_t *store = where, lastpixel = 0;
 		int x;
 		for (x = 0 ; x < 4; x++) {
-			unsigned long val = *theChar++, save = val;
+			uint32_t val = *theChar++, save = val;
 			if (attrs & ATTR_BOLD) {	/* bold support */
 				if (save == 0xFFFF0000) val |= 0xFFFF;
 				else if (lastpixel && !(save & 0xFFFF0000))
@@ -1492,7 +1497,7 @@ vc_paint_char_16(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
 			lastpixel = save & 0x7fff;
 		}
 		
-		where = (unsigned long*)(((unsigned char*)where)+vinfo.v_rowbytes);		
+		where = (uint32_t*)(((unsigned char*)where)+vinfo.v_rowbytes);		
 	}
 
 }
@@ -1501,17 +1506,17 @@ static void
 vc_paint_char_32(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
 		 unsigned char ch_previous, int attrs_previous) 
 {
-	unsigned long *theChar;
-	unsigned long *theCharPrevious;
-	unsigned long *where;
+	uint32_t *theChar;
+	uint32_t *theCharPrevious;
+	uint32_t *where;
 	int i;
 	
 	if (vc_rendered_font) {
-		theChar = (unsigned long*)(vc_rendered_font + (ch * vc_rendered_char_size));
-		theCharPrevious = (unsigned long*)(vc_rendered_font + (ch_previous * vc_rendered_char_size));
+		theChar = (uint32_t*)(vc_rendered_font + (ch * vc_rendered_char_size));
+		theCharPrevious = (uint32_t*)(vc_rendered_font + (ch_previous * vc_rendered_char_size));
 	} else {
 		vc_render_char(ch, vc_rendered_char, 32);
-		theChar = (unsigned long*)(vc_rendered_char);
+		theChar = (uint32_t*)(vc_rendered_char);
 		theCharPrevious = NULL;
 	}
 	if (!ch_previous) {
@@ -1520,15 +1525,15 @@ vc_paint_char_32(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
 	if (attrs_previous) {
 		theCharPrevious = NULL;
 	}
-	where = (unsigned long*)(vinfo.v_baseaddr + 
+	where = (uint32_t*)(vinfo.v_baseaddr + 
 					(yy * ISO_CHAR_HEIGHT * vinfo.v_rowbytes) + 
 					(xx * ISO_CHAR_WIDTH * 4));
 
 	if (!attrs) for (i = 0; i < ISO_CHAR_HEIGHT; i++) {	/* No attrs ? FLY ! */
-		unsigned long *store = where;
+		uint32_t *store = where;
 		int x;
 		for (x = 0; x < 8; x++) {
-			unsigned long val = *theChar++;
+			uint32_t val = *theChar++;
 			if (theCharPrevious == NULL || val != *theCharPrevious++ ) {
 				val = (vc_color_back & ~val) | (vc_color_fore & val);
 				*store++ = val;
@@ -1537,12 +1542,12 @@ vc_paint_char_32(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
 			}
 		}
 		
-		where = (unsigned long*)(((unsigned char*)where)+vinfo.v_rowbytes);
+		where = (uint32_t *)(((unsigned char*)where)+vinfo.v_rowbytes);
 	} else for (i = 0; i < ISO_CHAR_HEIGHT; i++) {	/* a little slower */
-		unsigned long *store = where, lastpixel = 0;
+		uint32_t *store = where, lastpixel = 0;
 		int x;
 		for (x = 0 ; x < 8; x++) {
-			unsigned long val = *theChar++, save = val;
+			uint32_t val = *theChar++, save = val;
 			if (attrs & ATTR_BOLD) {	/* bold support */
 				if (lastpixel && !save)
 					val = 0xFFFFFFFF;
@@ -1555,7 +1560,7 @@ vc_paint_char_32(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
 			lastpixel = save;
 		}
 		
-		where = (unsigned long*)(((unsigned char*)where)+vinfo.v_rowbytes);		
+		where = (uint32_t*)(((unsigned char*)where)+vinfo.v_rowbytes);		
 	}
 
 }
@@ -1575,6 +1580,7 @@ vc_paint_char(unsigned int xx, unsigned int yy, unsigned char ch, int attrs,
 		vc_paint_char_16(xx, yy, ch, attrs, ch_previous,
 				 attrs_previous);
 		break;
+	case 30:
 	case 32:
 		vc_paint_char_32(xx, yy, ch, attrs, ch_previous,
 				 attrs_previous);
@@ -1589,7 +1595,7 @@ vc_render_font(short newdepth)
 
 	int charindex;	/* index in ISO font */
 	unsigned char *rendered_font;
-	unsigned long rendered_font_size;
+	unsigned int rendered_font_size;
 	int rendered_char_size;
 	spl_t s;
 
@@ -1620,7 +1626,7 @@ vc_render_font(short newdepth)
 	}
 
 	if (newdepth) {
-		rendered_char_size = ISO_CHAR_HEIGHT * ((newdepth / 8) * ISO_CHAR_WIDTH);
+		rendered_char_size = ISO_CHAR_HEIGHT * (((newdepth + 7) / 8) * ISO_CHAR_WIDTH);
 		rendered_font_size = (ISO_CHAR_MAX-ISO_CHAR_MIN+1) * rendered_char_size;
 		rendered_font = (unsigned char *) kalloc(rendered_font_size);
 	}
@@ -1655,13 +1661,13 @@ vc_enable(boolean_t enable)
 static void
 vc_reverse_cursor(unsigned int xx, unsigned int yy)
 {
-	unsigned long *where;
+	uint32_t *where;
 	int line, col;
 
 	if(!vinfo.v_depth)
 		return;
 
-	where = (unsigned long*)(vinfo.v_baseaddr + 
+	where = (uint32_t*)(vinfo.v_baseaddr + 
 			(yy * ISO_CHAR_HEIGHT * vinfo.v_rowbytes) + 
 			(xx /** ISO_CHAR_WIDTH*/ * vinfo.v_depth));
 	for (line = 0; line < ISO_CHAR_HEIGHT; line++) {
@@ -1679,14 +1685,14 @@ vc_reverse_cursor(unsigned int xx, unsigned int yy)
 					where[col] = ~where[col];
 				break;
 		}
-		where = (unsigned long*)(((unsigned char*)where)+vinfo.v_rowbytes);		
+		where = (uint32_t*)(((unsigned char*)where)+vinfo.v_rowbytes);
 	}
 }
 
 static void 
 vc_scroll_down(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 {
-	unsigned long *from, *to,  linelongs, i, line, rowline, rowscanline;
+	uint32_t *from, *to,  linelongs, i, line, rowline, rowscanline;
 
 	if(!vinfo.v_depth)
 		return;
@@ -1695,7 +1701,7 @@ vc_scroll_down(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 	rowline = vinfo.v_rowbytes >> 2;
 	rowscanline = vinfo.v_rowscanbytes >> 2;
 
-	to = (unsigned long *) vinfo.v_baseaddr + (linelongs * scrreg_bottom)
+	to = (uint32_t *) vinfo.v_baseaddr + (linelongs * scrreg_bottom)
 		- (rowline - rowscanline);
 	from = to - (linelongs * num);	/* handle multiple line scroll (Michel Pollet) */
 
@@ -1706,9 +1712,9 @@ vc_scroll_down(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 			/*
 			 * Only copy what is displayed
 			 */
-			video_scroll_down((unsigned int) from, 
-					(unsigned int) (from-(vinfo.v_rowscanbytes >> 2)), 
-					(unsigned int) to);
+			video_scroll_down(from, 
+					(from-(vinfo.v_rowscanbytes >> 2)), 
+					to);
 
 			from -= rowline;
 			to -= rowline;
@@ -1719,7 +1725,7 @@ vc_scroll_down(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 static void 
 vc_scroll_up(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 {
-	unsigned long *from, *to, linelongs, i, line, rowline, rowscanline;
+	uint32_t *from, *to, linelongs, i, line, rowline, rowscanline;
 
 	if(!vinfo.v_depth)
 		return;
@@ -1728,7 +1734,7 @@ vc_scroll_up(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 	rowline = vinfo.v_rowbytes >> 2;
 	rowscanline = vinfo.v_rowscanbytes >> 2;
 
-	to = (unsigned long *) vinfo.v_baseaddr + (scrreg_top * linelongs);
+	to = (uint32_t *) vinfo.v_baseaddr + (scrreg_top * linelongs);
 	from = to + (linelongs * num);	/* handle multiple line scroll (Michel Pollet) */
 
 	i = (scrreg_bottom - scrreg_top) - num;
@@ -1738,9 +1744,9 @@ vc_scroll_up(int num, unsigned int scrreg_top, unsigned int scrreg_bottom)
 			/*
 			 * Only copy what is displayed
 			 */
-			video_scroll_up((unsigned int) from, 
-					(unsigned int) (from+(vinfo.v_rowscanbytes >> 2)), 
-					(unsigned int) to);
+			video_scroll_up(from, 
+					(from+(vinfo.v_rowscanbytes >> 2)), 
+					to);
 
 			from += rowline;
 			to += rowline;
@@ -1796,29 +1802,54 @@ static void *			vc_saveunder;
 static vm_size_t		vc_saveunder_len;
 decl_simple_lock_data(,vc_progress_lock)
 
-static void vc_blit_rect(    int x, int y, int width, int height,
-                             const unsigned char * dataPtr, const unsigned char * alphaPtr,
-                             void * backBuffer, boolean_t save, boolean_t static_alpha );
-static void vc_blit_rect_8(  int x, int y, int width, int height,
-                             const unsigned char * dataPtr, const unsigned char * alphaPtr,
-                             unsigned char * backBuffer, boolean_t save, boolean_t static_alpha );
-static void vc_blit_rect_16( int x, int y, int width, int height,
-                             const unsigned char * dataPtr, const unsigned char * alphaPtr,
-                             unsigned short * backBuffer, boolean_t save, boolean_t static_alpha );
-static void vc_blit_rect_32( int x, int y, int width, int height,
-                             const unsigned char * dataPtr, const unsigned char * alphaPtr,
-                             unsigned int * backBuffer, boolean_t save, boolean_t static_alpha );
+enum {
+    kSave = 0x01,
+    kDataIndexed = 0x02,
+    kDataAlpha = 0x04,
+    kDataBack = 0x08,
+};
+
+static void vc_blit_rect(int x, int y, int bx,
+                            int width, int height,
+			    int sourceRow, int backRow,
+			    const unsigned char * dataPtr,
+			    void * backBuffer,
+			    unsigned int flags);
+static void vc_blit_rect_8(int x, int y, int bx,
+                            int width, int height,
+			    int sourceRow, int backRow,
+			    const unsigned char * dataPtr,
+			    unsigned char * backBuffer,
+			    unsigned int flags);
+static void vc_blit_rect_16(int x, int y, int bx,
+                            int width, int height,
+			    int sourceRow, int backRow,
+			    const unsigned char * dataPtr,
+			    unsigned short * backBuffer,
+			    unsigned int flags);
+static void vc_blit_rect_32(int x, int y, int bx,
+                            int width, int height,
+			    int sourceRow, int backRow,
+			    const unsigned char * dataPtr,
+			    unsigned int * backBuffer,
+			    unsigned int flags);
+static void vc_blit_rect_30(int x, int y, int bx,
+                            int width, int height,
+			    int sourceRow, int backRow,
+			    const unsigned char * dataPtr,
+			    unsigned int * backBuffer,
+			    unsigned int flags);
 extern void vc_display_icon( vc_progress_element * desc, const unsigned char * data );
 extern void vc_progress_initialize( vc_progress_element * desc, const unsigned char * data, const unsigned char * clut );
-static void vc_progress_set(boolean_t enable, uint32_t vc_delay);
+void vc_progress_set(boolean_t enable, uint32_t vc_delay);
 static void vc_progress_task( void * arg0, void * arg );
 
-static void vc_blit_rect(	int x, int y,
-                                int width, int height,
-                                const unsigned char * dataPtr,
-                                const unsigned char * alphaPtr,
-                                void * backBuffer,
-                                boolean_t save, boolean_t static_alpha )
+static void vc_blit_rect(int x, int y, int bx,
+			    int width, int height,
+			    int sourceRow, int backRow,
+			    const unsigned char * dataPtr,
+			    void * backBuffer,
+			    unsigned int flags)
 {
     if(!vinfo.v_depth)
         return;
@@ -1826,39 +1857,53 @@ static void vc_blit_rect(	int x, int y,
     switch( vinfo.v_depth) {
 	case 8:
             if( vc_clut8 == vc_clut)
-                vc_blit_rect_8( x, y, width, height, dataPtr, alphaPtr, (unsigned char *) backBuffer, save, static_alpha );
+                vc_blit_rect_8( x, y, bx, width, height, sourceRow, backRow, dataPtr, (unsigned char *) backBuffer, flags );
 	    break;
 	case 16:
-	    vc_blit_rect_16( x, y, width, height, dataPtr, alphaPtr, (unsigned short *) backBuffer, save, static_alpha );
+	    vc_blit_rect_16( x, y, bx, width, height, sourceRow, backRow, dataPtr, (unsigned short *) backBuffer, flags );
 	    break;
 	case 32:
-	    vc_blit_rect_32( x, y, width, height, dataPtr, alphaPtr, (unsigned int *) backBuffer, save, static_alpha );
+	    vc_blit_rect_32( x, y, bx, width, height, sourceRow, backRow, dataPtr, (unsigned int *) backBuffer, flags );
+	    break;
+	case 30:
+	    vc_blit_rect_30( x, y, bx, width, height, sourceRow, backRow, dataPtr, (unsigned int *) backBuffer, flags );
 	    break;
     }
 }
 
 static void
-vc_blit_rect_8(int x, int y, int width, int height,
-	       const unsigned char * dataPtr, const unsigned char * alphaPtr,
-	       __unused unsigned char * backPtr, __unused boolean_t save,
-	       __unused boolean_t static_alpha)
+vc_blit_rect_8(int x, int y, __unused int bx,
+	       int width, int height,
+	       int sourceRow, __unused int backRow,
+	       const unsigned char * dataPtr,
+	       __unused unsigned char * backBuffer,
+	       __unused unsigned int flags)
 {
-    volatile unsigned char * dst;
+    volatile unsigned short * dst;
     int line, col;
-    unsigned int data;
+    unsigned int data = 0, out = 0;
 
-    dst = (unsigned char *)(vinfo.v_baseaddr +
-                            (y * vinfo.v_rowbytes) +
-                            (x));
+    if (!sourceRow)
+	data = (unsigned int)(uintptr_t)dataPtr;
+    dst = (volatile unsigned short *) (vinfo.v_baseaddr +
+                                    (y * vinfo.v_rowbytes) +
+                                    (x * 4));
 
-    for( line = 0; line < height; line++) {
-        for( col = 0; col < width; col++) {
-            data = 0;
-            if( dataPtr != 0) data = *dataPtr++;
-            else if( alphaPtr != 0) data = vc_revclut8[*alphaPtr++];
-                *(dst + col) = data;
-        }
-        dst = (volatile unsigned char *) (((int)dst) + vinfo.v_rowbytes);
+    for( line = 0; line < height; line++)
+    {
+        for( col = 0; col < width; col++)
+	{
+	    if (col < sourceRow)
+		data = *dataPtr++;
+	    if (kDataAlpha & flags)
+		out = vc_revclut8[data];
+            else
+		out = data;
+            *(dst + col) = out;
+	}
+        dst = (volatile unsigned short *) (((volatile char*)dst) + vinfo.v_rowbytes);
+	if (sourceRow > width)
+	    dataPtr += sourceRow - width;
     }
 }
 
@@ -1877,151 +1922,178 @@ vc_blit_rect_8(int x, int y, int width, int height,
 #define MASK_G_8	0x01fe0
 #define MASK_B_8	0x000ff
 
-static void vc_blit_rect_16(	int x, int y,
-                                int width, int height,
-                                const unsigned char * dataPtr,
-                                const unsigned char * alphaPtr,
-                                unsigned short *  backPtr,
-                                boolean_t save, boolean_t static_alpha )
+static void vc_blit_rect_16( int x, int y, int bx,
+			     int width, int height,
+			     int sourceRow, int backRow,
+			     const unsigned char * dataPtr,
+			     unsigned short * backPtr,
+			     unsigned int flags)
 {
     volatile unsigned short * dst;
     int line, col;
-    unsigned int data = 0, index = 0, alpha, back;
+    unsigned int data = 0, out = 0, back = 0;
 
-    dst = (volatile unsigned short *)(vinfo.v_baseaddr +
+    if (backPtr)
+	backPtr += bx;
+    if (!sourceRow)
+	data = (unsigned int)(uintptr_t)dataPtr;
+    dst = (volatile unsigned short *) (vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
                                     (x * 2));
 
-    for( line = 0; line < height; line++) {
-        for( col = 0; col < width; col++) {
-	    if( dataPtr != 0) {
-	        index = *dataPtr++;
-                index *= 3;
+    for( line = 0; line < height; line++)
+    {
+        for( col = 0; col < width; col++)
+	{
+	    if (col < sourceRow)
+		data = *dataPtr++;
+
+	    if (backPtr) {
+		if (kSave & flags) {
+		    back = *(dst + col);
+		    *backPtr++ = back;
+		} else
+		    back = *backPtr++;
 	    }
-
-            if( alphaPtr && backPtr) {
-
-		alpha = *alphaPtr++;
-                data = 0;
-		if( dataPtr != 0) {
-                    if( vc_clut[index + 0] > alpha)
-                        data |= (((vc_clut[index + 0] - alpha) & CLUT_MASK_R) CLUT_SHIFT_R);
-                    if( vc_clut[index + 1] > alpha)
-                        data |= (((vc_clut[index + 1] - alpha) & CLUT_MASK_G) CLUT_SHIFT_G);
-                    if( vc_clut[index + 2] > alpha)
-                        data |= (((vc_clut[index + 2] - alpha) & CLUT_MASK_B) CLUT_SHIFT_B);
-		}
+	    if (kDataIndexed & flags) {
+		out = ( (CLUT_MASK_R & (vc_clut[data*3 + 0])) CLUT_SHIFT_R)
+		       | ( (CLUT_MASK_G & (vc_clut[data*3 + 1])) CLUT_SHIFT_G)
+		       | ( (CLUT_MASK_B & (vc_clut[data*3 + 2])) CLUT_SHIFT_B);
+	    } else if (kDataAlpha & flags) {
+		out = (((((back & MASK_R) * data) + MASK_R_8) >> 8) & MASK_R)
+		     | (((((back & MASK_G) * data) + MASK_G_8) >> 8) & MASK_G)
+		     | (((((back & MASK_B) * data) + MASK_B_8) >> 8) & MASK_B);
 #ifdef CONFIG_VC_PROGRESS_WHITE
-		else {
-		    data |= (((0xff - alpha) & CLUT_MASK_R) CLUT_SHIFT_R);
-		    data |= (((0xff - alpha) & CLUT_MASK_G) CLUT_SHIFT_G);
-		    data |= (((0xff - alpha) & CLUT_MASK_B) CLUT_SHIFT_B);
-		}
+		out += (((0xff - data) & CLUT_MASK_R) CLUT_SHIFT_R)
+		     | (((0xff - data) & CLUT_MASK_G) CLUT_SHIFT_G)
+		     | (((0xff - data) & CLUT_MASK_B) CLUT_SHIFT_B);
 #endif
-
-                if( save) {
-                    back = *(dst + col);
-                    if ( !static_alpha)
-                        *backPtr++ = back;
-                        back = (((((back & MASK_R) * alpha) + MASK_R_8) >> 8) & MASK_R)
-                             | (((((back & MASK_G) * alpha) + MASK_G_8) >> 8) & MASK_G)
-                             | (((((back & MASK_B) * alpha) + MASK_B_8) >> 8) & MASK_B);
-                    if ( static_alpha)
-                        *backPtr++ = back;
-                } else {
-                    back = *backPtr++;
-                    if ( !static_alpha) {
-                        back = (((((back & MASK_R) * alpha) + MASK_R_8) >> 8) & MASK_R)
-                             | (((((back & MASK_G) * alpha) + MASK_G_8) >> 8) & MASK_G)
-                             | (((((back & MASK_B) * alpha) + MASK_B_8) >> 8) & MASK_B);
-                    }
-                }
-
-                data += back;
-
             } else
-                if( dataPtr != 0) {
-            	    data = ( (CLUT_MASK_R & (vc_clut[index + 0])) CLUT_SHIFT_R)
-                           | ( (CLUT_MASK_G & (vc_clut[index + 1])) CLUT_SHIFT_G)
-                           | ( (CLUT_MASK_B & (vc_clut[index + 2])) CLUT_SHIFT_B);
-		}
-
-            *(dst + col) = data;
+		out = back;
+            *(dst + col) = out;
 	}
-        dst = (volatile unsigned short *) (((int)dst) + vinfo.v_rowbytes);
+        dst = (volatile unsigned short *) (((volatile char*)dst) + vinfo.v_rowbytes);
+	if (backPtr)
+	    backPtr += backRow - width;
+	if (sourceRow > width)
+	    dataPtr += sourceRow - width;
     }
 }
 
-static void vc_blit_rect_32(	int x, int y,
-                                int width, int height,
-                                const unsigned char * dataPtr,
-                                const unsigned char * alphaPtr,
-                                unsigned int *  backPtr,
-                                boolean_t save, boolean_t static_alpha )
+static void vc_blit_rect_32(int x, int y, int bx, 
+                            int width, int height,
+			    int sourceRow, int backRow,
+			    const unsigned char * dataPtr,
+			    unsigned int * backPtr,
+			    unsigned int flags)
 {
     volatile unsigned int * dst;
     int line, col;
-    unsigned int data = 0, index = 0, alpha, back;
+    unsigned int data = 0, out = 0, back = 0;
 
+    if (backPtr)
+	backPtr += bx;
+    if (!sourceRow)
+	data = (unsigned int)(uintptr_t)dataPtr;
     dst = (volatile unsigned int *) (vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
                                     (x * 4));
 
-    for( line = 0; line < height; line++) {
-        for( col = 0; col < width; col++) {
-            if( dataPtr != 0) {
-	        index = *dataPtr++;
-                index *= 3;
+    for( line = 0; line < height; line++)
+    {
+        for( col = 0; col < width; col++)
+	{
+	    if (col < sourceRow)
+		data = *dataPtr++;
+
+	    if (backPtr) {
+		if (kSave & flags) {
+		    back = *(dst + col);
+		    *backPtr++ = back;
+		} else
+		    back = *backPtr++;
 	    }
-
-            if( alphaPtr && backPtr) {
-
-		alpha = *alphaPtr++;
-                data = 0;
-                if( dataPtr != 0) {
-                    if( vc_clut[index + 0] > alpha)
-                        data |= ((vc_clut[index + 0] - alpha) << 16);
-                    if( vc_clut[index + 1] > alpha)
-                        data |= ((vc_clut[index + 1] - alpha) << 8);
-                    if( vc_clut[index + 2] > alpha)
-                        data |= ((vc_clut[index + 2] - alpha));
-		}
+	    if (kDataIndexed & flags) {
+		out =     (vc_clut[data*3 + 0] << 16)
+			| (vc_clut[data*3 + 1] << 8)
+			| (vc_clut[data*3 + 2]);
+	    } else if (kDataAlpha & flags) {
+		out = (((((back & 0x00ff00ff) * data) + 0x00ff00ff) >> 8) & 0x00ff00ff)
+		     | (((((back & 0x0000ff00) * data) + 0x0000ff00) >> 8) & 0x0000ff00);
 #ifdef CONFIG_VC_PROGRESS_WHITE
-		else {
-		    data |= (0xff - alpha) << 16;
-		    data |= (0xff - alpha) << 8;
-		    data |= (0xff - alpha);
-		}
+		out += ((0xff - data) << 16)
+		     | ((0xff - data) << 8)
+		     |  (0xff - data);
 #endif
-
-                if( save) {
-                    back = *(dst + col);
-                    if ( !static_alpha)
-                        *backPtr++ = back;
-                    back = (((((back & 0x00ff00ff) * alpha) + 0x00ff00ff) >> 8) & 0x00ff00ff)
-                         | (((((back & 0x0000ff00) * alpha) + 0x0000ff00) >> 8) & 0x0000ff00);
-                    if ( static_alpha)
-                        *backPtr++ = back;
-                } else {
-                    back = *backPtr++;
-                    if ( !static_alpha) {
-                        back = (((((back & 0x00ff00ff) * alpha) + 0x00ff00ff) >> 8) & 0x00ff00ff)
-                             | (((((back & 0x0000ff00) * alpha) + 0x0000ff00) >> 8) & 0x0000ff00);
-                    }
-		}
-
-                data += back;
-
             } else
-                if( dataPtr != 0) {
-                    data =    (vc_clut[index + 0] << 16)
-                            | (vc_clut[index + 1] << 8)
-                            | (vc_clut[index + 2]);
-		}
-
-            *(dst + col) = data;
+		out = back;
+            *(dst + col) = out;
 	}
-        dst = (volatile unsigned int *) (((int)dst) + vinfo.v_rowbytes);
+        dst = (volatile unsigned int *) (((volatile char*)dst) + vinfo.v_rowbytes);
+	if (backPtr)
+	    backPtr += backRow - width;
+	if (sourceRow > width)
+	    dataPtr += sourceRow - width;
+    }
+}
+
+static void vc_blit_rect_30(int x, int y, int bx, 
+                            int width, int height,
+			    int sourceRow, int backRow,
+			    const unsigned char * dataPtr,
+			    unsigned int * backPtr,
+			    unsigned int flags)
+{
+    volatile unsigned int * dst;
+    int line, col;
+    unsigned int data = 0, out = 0, back = 0;
+    unsigned long long exp;
+
+    if (backPtr)
+	backPtr += bx;
+    if (!sourceRow)
+	data = (unsigned int)(uintptr_t)dataPtr;
+    dst = (volatile unsigned int *) (vinfo.v_baseaddr +
+                                    (y * vinfo.v_rowbytes) +
+                                    (x * 4));
+
+    for( line = 0; line < height; line++)
+    {
+        for( col = 0; col < width; col++)
+	{
+	    if (col < sourceRow)
+		data = *dataPtr++;
+
+	    if (backPtr) {
+		if (kSave & flags) {
+		    back = *(dst + col);
+		    *backPtr++ = back;
+		} else
+		    back = *backPtr++;
+	    }
+	    if (kDataIndexed & flags) {
+		out =     (vc_clut[data*3 + 0] << 22)
+			| (vc_clut[data*3 + 1] << 12)
+			| (vc_clut[data*3 + 2] << 2);
+	    } else if (kDataAlpha & flags) {
+		exp = back;
+		exp =  (((((exp & 0x3FF003FF) * data) + 0x0FF000FF) >> 8) & 0x3FF003FF)
+		     | (((((exp & 0x000FFC00) * data) + 0x0003FC00) >> 8) & 0x000FFC00);
+		out = (unsigned int)exp;
+#ifdef CONFIG_VC_PROGRESS_WHITE
+		out += ((0xFF - data) << 22)
+		     | ((0xFF - data) << 12)
+		     | ((0xFF - data) << 2);
+#endif
+            } else
+		out = back;
+            *(dst + col) = out;
+	}
+        dst = (volatile unsigned int *) (((volatile char*)dst) + vinfo.v_rowbytes);
+	if (backPtr)
+	    backPtr += backRow - width;
+	if (sourceRow > width)
+	    dataPtr += sourceRow - width;
     }
 }
 
@@ -2040,7 +2112,7 @@ void vc_display_icon( vc_progress_element * desc,
 	    x += ((vinfo.v_width - width) / 2);
 	    y += ((vinfo.v_height - height) / 2);
 	}
-	vc_blit_rect( x, y, width, height, data, NULL, NULL, FALSE, TRUE );
+	vc_blit_rect( x, y, 0, width, height, width, 0, data, NULL, kDataIndexed );
     }
 }
 
@@ -2069,10 +2141,10 @@ vc_progress_initialize( vc_progress_element * desc,
     thread_call_setup(&vc_progress_call, vc_progress_task, NULL);
 
     clock_interval_to_absolutetime_interval(vc_progress->time, 1000 * 1000, &abstime);
-    vc_progress_interval = abstime;
+    vc_progress_interval = (uint32_t)abstime;
 }
 
-static void
+void
 vc_progress_set(boolean_t enable, uint32_t vc_delay)
 {
     spl_t	     s;
@@ -2166,11 +2238,12 @@ vc_progress_set(boolean_t enable, uint32_t vc_delay)
         kfree( saveBuf, saveLen );
 }
 
+
 static void
 vc_progress_task(__unused void *arg0, void *arg)
 {
     spl_t		s;
-    int			count = (int) arg;
+    int			count = (int)(uintptr_t) arg;
     int			x, y, width, height;
     const unsigned char * data;
 
@@ -2178,6 +2251,8 @@ vc_progress_task(__unused void *arg0, void *arg)
     simple_lock(&vc_progress_lock);
 
     if( vc_progress_enable) {
+
+	KERNEL_DEBUG_CONSTANT(0x7020008, count, 0, 0, 0, 0);
 
         count++;
         if( count >= vc_progress->count)
@@ -2193,13 +2268,14 @@ vc_progress_task(__unused void *arg0, void *arg)
 	    x += ((vinfo.v_width - width) / 2);
 	    y += ((vinfo.v_height - height) / 2);
 	}
-	vc_blit_rect( x, y, width, height,
-		      NULL, data, vc_saveunder,
-			vc_needsave, (0 == (4 & vc_progress->flags)) );
+	vc_blit_rect( x, y, 0, 
+		      width, height, width, width,
+		      data, vc_saveunder,
+		      kDataAlpha | (vc_needsave ? kSave : 0) );
         vc_needsave = FALSE;
 
         clock_deadline_for_periodic_event(vc_progress_interval, mach_absolute_time(), &vc_progress_deadline);
-        thread_call_enter1_delayed(&vc_progress_call, (void *)count, vc_progress_deadline);
+        thread_call_enter1_delayed(&vc_progress_call, (void *)(uintptr_t)count, vc_progress_deadline);
     }
     simple_unlock(&vc_progress_lock);
     splx(s);
@@ -2210,25 +2286,24 @@ vc_progress_task(__unused void *arg0, void *arg)
  * -------------------------------------------
  */
 
-#ifdef __i386__
-#include <console/i386/text_console.h>
+#if defined (__i386__) || defined (__x86_64__)
 #include <pexpert/i386/boot.h>
-#endif /* __i386__ */
+#endif
 
 static boolean_t gc_acquired      = FALSE;
 static boolean_t gc_graphics_boot = FALSE;
 static boolean_t gc_desire_text   = FALSE;
 
 static unsigned int lastVideoPhys   = 0;
-static unsigned int lastVideoVirt   = 0;
-static unsigned int lastVideoSize   = 0;
+static vm_offset_t  lastVideoVirt   = 0;
+static vm_size_t lastVideoSize   = 0;
 static boolean_t    lastVideoMapped = FALSE;
 
 void
 initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 {
 	unsigned int fbsize = 0;
-	unsigned int newVideoVirt = 0;
+	vm_offset_t newVideoVirt = 0;
 	boolean_t graphics_now;
 	ppnum_t fbppage;
 
@@ -2242,33 +2317,20 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		 *	First, check if we are changing the size and/or location of the framebuffer
 		 */
 		new_vinfo.v_name[0]  = 0;
-		new_vinfo.v_width    = boot_vinfo->v_width;
-		new_vinfo.v_height   = boot_vinfo->v_height;
-		new_vinfo.v_depth    = boot_vinfo->v_depth;
-		new_vinfo.v_rowbytes = boot_vinfo->v_rowBytes;
+		new_vinfo.v_width    = (unsigned int)boot_vinfo->v_width;
+		new_vinfo.v_height   = (unsigned int)boot_vinfo->v_height;
+		new_vinfo.v_depth    = (unsigned int)boot_vinfo->v_depth;
+		new_vinfo.v_rowbytes = (unsigned int)boot_vinfo->v_rowBytes;
 		new_vinfo.v_physaddr = boot_vinfo->v_baseAddr;		/* Get the physical address */
-#ifdef __i386__
-                new_vinfo.v_type     = boot_vinfo->v_display;
+#if defined(__i386__) || defined(__x86_64__)
+                new_vinfo.v_type     = (unsigned int)boot_vinfo->v_display;
 #else
                 new_vinfo.v_type = 0;
 #endif
      
 		if (!lastVideoMapped)
-		    kprintf("initialize_screen: b=%08lX, w=%08lX, h=%08lX, r=%08lX, d=%08lX\n",                  /* (BRINGUP) */
+		    kprintf("initialize_screen: b=%08lX, w=%08X, h=%08X, r=%08X, d=%08X\n",                  /* (BRINGUP) */
 			    new_vinfo.v_physaddr, new_vinfo.v_width,  new_vinfo.v_height,  new_vinfo.v_rowbytes, new_vinfo.v_type);     /* (BRINGUP) */
-
-#ifdef __i386__
-                if ( (new_vinfo.v_type == VGA_TEXT_MODE) )
-                {
-                    if (new_vinfo.v_physaddr == 0) {
-                        new_vinfo.v_physaddr = 0xb8000;
-                        new_vinfo.v_width = 80;
-                        new_vinfo.v_height = 25;
-                        new_vinfo.v_depth = 8;
-                        new_vinfo.v_rowbytes = 0x8000;
-                    }
-                }
-#endif /* __i386__ */
 
 		if (!new_vinfo.v_physaddr)							/* Check to see if we have a framebuffer */
 		{
@@ -2296,19 +2358,14 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		    }
     
 		    if (boot_vinfo->v_length != 0)
-			    fbsize = round_page_32(boot_vinfo->v_length);
+			    fbsize = (unsigned int) round_page(boot_vinfo->v_length);
 		    else
-			    fbsize = round_page_32(new_vinfo.v_height * new_vinfo.v_rowbytes);			/* Remember size */
+			    fbsize = (unsigned int) round_page(new_vinfo.v_height * new_vinfo.v_rowbytes);			/* Remember size */
 
     
 		    if ((lastVideoPhys != new_vinfo.v_physaddr) || (fbsize > lastVideoSize))		/* Did framebuffer change location or get bigger? */
 		    {
-			    unsigned int
-#if FALSE
-			    flags = (new_vinfo.v_type == VGA_TEXT_MODE) ? VM_WIMG_IO : VM_WIMG_WCOMB;
-#else
-			    flags = VM_WIMG_IO;
-#endif
+			    unsigned int flags = VM_WIMG_IO;
 			    newVideoVirt = io_map_spec((vm_offset_t)new_vinfo.v_physaddr, fbsize, flags);	/* Allocate address space for framebuffer */
     		    }
 		}
@@ -2317,6 +2374,11 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		    new_vinfo.v_baseaddr = newVideoVirt + boot_vinfo->v_offset;				/* Set the new framebuffer address */
 		else
 		    new_vinfo.v_baseaddr = lastVideoVirt + boot_vinfo->v_offset;				/* Set the new framebuffer address */
+
+#if defined(__x86_64__)
+		// Adjust the video buffer pointer to point to where it is in high virtual (above the hole)
+		new_vinfo.v_baseaddr |= VM_MIN_KERNEL_ADDRESS;
+#endif
 
 		/* Update the vinfo structure atomically with respect to the vc_progress task if running */
 		if (vc_progress)
@@ -2347,29 +2409,12 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 					kmem_free(kernel_map, lastVideoVirt, lastVideoSize);	/* Toss kernel addresses */
 				}
 			}
-			lastVideoPhys = new_vinfo.v_physaddr;					/* Remember the framebuffer address */
+			lastVideoPhys = (unsigned int)new_vinfo.v_physaddr;					/* Remember the framebuffer address */
 			lastVideoSize = fbsize;							/* Remember the size */
 			lastVideoVirt = newVideoVirt;						/* Remember the virtual framebuffer address */
 			lastVideoMapped  = (NULL != kernel_map);
 		}
 
-#ifdef __i386__
-		if ( (vinfo.v_type == VGA_TEXT_MODE) )
-		{
-			// Text mode setup by the booter.
-
-			gc_ops.initialize   = tc_initialize;
-			gc_ops.enable       = tc_enable;
-			gc_ops.paint_char   = tc_paint_char;
-			gc_ops.clear_screen = tc_clear_screen;
-			gc_ops.scroll_down  = tc_scroll_down;
-			gc_ops.scroll_up    = tc_scroll_up;
-			gc_ops.hide_cursor  = tc_hide_cursor;
-			gc_ops.show_cursor  = tc_show_cursor;
-			gc_ops.update_color = tc_update_color;
-		}
-		else
-#endif /* __i386__ */
 		{
 			// Graphics mode setup by the booter.
 
@@ -2401,6 +2446,7 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 
 		case kPETextMode:
 			panicDialogDesired = FALSE;
+			disable_debug_output = FALSE;
 			gc_graphics_boot = FALSE;
 			break;
 
@@ -2421,6 +2467,7 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 			if ( console_is_serial() ) break;
 
 			panicDialogDesired = FALSE;
+			disable_debug_output = FALSE;
 			if ( gc_acquired == FALSE )
 			{
 				gc_desire_text = TRUE;
@@ -2429,6 +2476,9 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 			if ( gc_graphics_boot == FALSE ) break;
 
 			vc_progress_set( FALSE, 0 );
+#if !CONFIG_EMBEDDED
+			vc_enable_progressmeter( FALSE );
+#endif
 			gc_enable( TRUE );
 			break;
 
@@ -2441,6 +2491,9 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 			gc_desire_text = FALSE;
 			gc_enable( FALSE );
 			vc_progress_set( FALSE, 0 );
+#if !CONFIG_EMBEDDED
+			vc_enable_progressmeter( FALSE );
+#endif
 
 			vc_clut8 = NULL;
 #ifdef GRATEFULDEBUGGER
@@ -2482,3 +2535,139 @@ vcattach(void)
 		}
 	}
 }
+
+#if !CONFIG_EMBEDDED
+
+int vc_progress_meter_enable;
+int vc_progress_meter_value;
+
+static void * vc_progress_meter_backbuffer;
+static int vc_progress_meter_drawn;
+
+static void
+vc_draw_progress_meter(int select, unsigned int flags, int x1, int x2)
+{
+    const unsigned char * data;
+    int x, w;
+    int ox, oy;
+
+    ox = ((vinfo.v_width - kProgressBarWidth) / 2);
+    oy = vinfo.v_height - (((vinfo.v_height / 2) - vc_progress->dy + kProgressBarHeight) / 2);
+
+    if (kDataBack == flags)
+    {
+	// restore back bits
+	vc_blit_rect(ox + x1, oy, x1,
+		    x2, kProgressBarHeight, 0, kProgressBarWidth,
+		    NULL, vc_progress_meter_backbuffer, flags);
+	return;
+    }
+
+    for (x = x1; x < x2; x += w)
+    {
+	if (x < kProgressBarCapWidth)
+	{
+	    if (x2 < kProgressBarCapWidth)
+		w = x2 - x;
+	    else
+		w = kProgressBarCapWidth - x;
+	    data = &progressmeter_leftcap[select & 1][0];
+	    data += x;
+	    vc_blit_rect(ox + x, oy, x, 
+			    w, kProgressBarHeight, kProgressBarCapWidth, kProgressBarWidth,
+			    data, vc_progress_meter_backbuffer, flags);
+	}
+	else if (x < (kProgressBarWidth - kProgressBarCapWidth))
+	{
+	    if (x2 < (kProgressBarWidth - kProgressBarCapWidth))
+		w = x2 - x;
+	    else
+		w = (kProgressBarWidth - kProgressBarCapWidth) - x;
+	    data = &progressmeter_middle[select & 1][0];
+	    vc_blit_rect(ox + x, oy, x, 
+			    w, kProgressBarHeight, 1, kProgressBarWidth,
+			    data, vc_progress_meter_backbuffer, flags);
+	}
+	else
+	{
+	    w = x2 - x;
+	    data =  &progressmeter_rightcap[select & 1][0];
+	    data += x - (kProgressBarWidth - kProgressBarCapWidth);
+	    vc_blit_rect(ox + x, oy, x,
+			    w,  kProgressBarHeight,  kProgressBarCapWidth, kProgressBarWidth,
+			    data, vc_progress_meter_backbuffer, flags);
+	}
+    }
+}
+
+void
+vc_enable_progressmeter(int new_value)
+{
+    spl_t s;
+    void * new_buffer = NULL;
+
+    if (new_value)
+	new_buffer = kalloc(kProgressBarWidth * kProgressBarHeight * sizeof(int));
+
+    s = splhigh();
+    simple_lock(&vc_progress_lock);
+
+    if (gc_enabled || !gc_acquired || !gc_graphics_boot)
+	new_value = FALSE;
+
+    if (new_value != vc_progress_meter_enable)
+    {
+	if (new_value)
+	{
+	    vc_progress_meter_backbuffer = new_buffer;
+	    vc_draw_progress_meter(FALSE, kDataAlpha | kSave, 0, kProgressBarWidth);
+	    vc_progress_meter_enable = TRUE;
+	    new_buffer = NULL;
+	    vc_progress_meter_drawn = 0;
+	}
+	else if (vc_progress_meter_backbuffer)
+	{
+	    vc_draw_progress_meter(0, kDataBack, 0, kProgressBarWidth);
+	    new_buffer = vc_progress_meter_backbuffer;
+	    vc_progress_meter_backbuffer = NULL;
+	    vc_progress_meter_enable = FALSE;
+ 
+	}
+    }
+
+    simple_unlock(&vc_progress_lock);
+    splx(s);
+
+    if (new_buffer)
+	kfree(new_buffer, kProgressBarWidth * kProgressBarHeight * sizeof(int));
+}
+
+void
+vc_set_progressmeter(int new_value)
+{
+    spl_t s;
+    int x2;
+
+    if ((new_value < 0) | (new_value > 100))
+	return;
+
+    s = splhigh();
+    simple_lock(&vc_progress_lock);
+
+    if (vc_progress_meter_enable)
+    {
+	vc_progress_meter_value = new_value;
+	x2 = ((kProgressBarWidth - 1) * new_value) / 100;
+	if (x2 > vc_progress_meter_drawn)
+	    vc_draw_progress_meter(TRUE, kDataAlpha, vc_progress_meter_drawn, x2);
+	else
+	    vc_draw_progress_meter(FALSE, kDataAlpha, x2, vc_progress_meter_drawn);
+	vc_progress_meter_drawn = x2;
+    }
+   
+    simple_unlock(&vc_progress_lock);
+    splx(s);
+}
+
+#endif /* !CONFIG_EMBEDDED */
+

@@ -43,7 +43,7 @@
 #include <sys/kauth.h>
 #include <sys/stat.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <sys/mount.h>
 #include <sys/sysproto.h>
@@ -873,6 +873,7 @@ kauth_acl_inherit(vnode_t dvp, kauth_acl_t initial, kauth_acl_t *product, int is
 			if (inherit->acl_ace[i].ace_flags & (isdir ? KAUTH_ACE_DIRECTORY_INHERIT : KAUTH_ACE_FILE_INHERIT)) {
 				result->acl_ace[index] = inherit->acl_ace[i];
 				result->acl_ace[index].ace_flags |= KAUTH_ACE_INHERITED;
+				result->acl_ace[index].ace_flags &= ~KAUTH_ACE_ONLY_INHERIT;
 				/*
 				 * We do not re-inherit inheritance flags
 				 * if the ACE from the container has a
@@ -947,7 +948,7 @@ kauth_copyinfilesec(user_addr_t xsecurity, kauth_filesec_t *xsecdestpp)
 	 * The upper bound must be less than KAUTH_ACL_MAX_ENTRIES.  The
 	 * value here is fairly arbitrary.  It's ok to have a zero count.
 	 */
-	known_bound = xsecurity + sizeof(struct kauth_filesec);
+	known_bound = xsecurity +  KAUTH_FILESEC_SIZE(0);
 	uaddr = mach_vm_round_page(known_bound);
 	count = (uaddr - known_bound) / sizeof(struct kauth_ace);
 	if (count > 32)
@@ -988,6 +989,7 @@ out:
 			kauth_filesec_free(fsec);
 	} else {
 		*xsecdestpp = fsec;
+		AUDIT_ARG(opaque, fsec, copysize);
 	}
 	return(error);
 }

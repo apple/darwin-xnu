@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -221,7 +221,6 @@ struct thread {
 	timer_data_t		system_timer;		/* system mode timer */
 	processor_t			bound_processor;	/* bound to a processor? */
 	processor_t			last_processor;		/* processor last dispatched on */
-	uint64_t			last_switch;		/* time of last context switch */
 
 	/* Fail-safe computation since last unblock or qualifying yield */
 	uint64_t			computation_metered;
@@ -277,6 +276,7 @@ struct thread {
 			mach_msg_size_t		msize;		/* max size for recvd msg */
 		  	mach_msg_option_t	option;		/* options for receive */
 		  	mach_msg_size_t		slist_size;	/* scatter list size */
+			mach_port_name_t	receiver_name;	/* the receive port name */
 			struct ipc_kmsg		*kmsg;		/* received message */
 			mach_port_seqno_t	seqno;		/* seqno of recvd message */
 			mach_msg_continue_t	continuation;
@@ -299,10 +299,10 @@ struct thread {
 	mach_port_t ith_rpc_reply;			/* reply port for kernel RPCs */
 
 	/* Ast/Halt data structures */
-	vm_offset_t			recover;		/* page fault recover(copyin/out) */
+	vm_offset_t					recover;		/* page fault recover(copyin/out) */
 	uint32_t					ref_count;		/* number of references to me */
 
-	queue_chain_t		threads;		/* global list of all threads */
+	queue_chain_t				threads;		/* global list of all threads */
 
 	/* Activation */
 		queue_chain_t			task_threads;
@@ -314,7 +314,7 @@ struct thread {
 		struct task				*task;
 		vm_map_t				map;
 
-		decl_mutex_data(,mutex)
+		decl_lck_mtx_data(,mutex)
 
 		/* Kernel holds on this thread  */
 		int						suspend_count;
@@ -357,7 +357,15 @@ struct thread {
 		int64_t t_dtrace_tracing;       /* Thread time under dtrace_probe() */
 		int64_t t_dtrace_vtime;
 #endif
+
+#define T_CHUD_MARKED		0x1		/* this thread is marked by CHUD */
+#define T_IN_CHUD			0x2		/* this thread is already in a CHUD handler */
+#define THREAD_PMC_FLAG		0x4		/* Bit in "t_chud" signifying PMC interest */
+	        uint32_t    t_page_creation_count;
+	        clock_sec_t t_page_creation_time;
+
 		uint32_t t_chud;	/* CHUD flags, used for Shark */
+		uint64_t thread_id;	/*system wide unique thread-id*/
 };
 
 #define ith_state		saved.receive.state
@@ -366,6 +374,7 @@ struct thread {
 #define ith_msize		saved.receive.msize
 #define	ith_option		saved.receive.option
 #define ith_scatter_list_size	saved.receive.slist_size
+#define ith_receiver_name	saved.receive.receiver_name
 #define ith_continuation	saved.receive.continuation
 #define ith_kmsg		saved.receive.kmsg
 #define ith_seqno		saved.receive.seqno
@@ -416,6 +425,7 @@ extern void			thread_hold(
 
 extern void			thread_release(
 						thread_t	thread);
+
 
 #define	thread_lock_init(th)	simple_lock_init(&(th)->sched_lock, 0)
 #define thread_lock(th)			simple_lock(&(th)->sched_lock)
@@ -544,6 +554,9 @@ extern kern_return_t	machine_thread_get_kern_state(
 							thread_state_t			tstate,
 							mach_msg_type_number_t	*count);
 
+extern kern_return_t	machine_thread_inherit_taskwide(
+							thread_t		thread,
+							task_t			parent_task);
 
 /*
  * XXX Funnel locks XXX
@@ -559,9 +572,9 @@ struct funnel_lock {
 
 typedef struct ReturnHandler		ReturnHandler;
 
-#define	thread_mtx_lock(thread)			mutex_lock(&(thread)->mutex)
-#define	thread_mtx_try(thread)			mutex_try(&(thread)->mutex)
-#define	thread_mtx_unlock(thread)		mutex_unlock(&(thread)->mutex)
+#define	thread_mtx_lock(thread)			lck_mtx_lock(&(thread)->mutex)
+#define	thread_mtx_try(thread)			lck_mtx_try_lock(&(thread)->mutex)
+#define	thread_mtx_unlock(thread)		lck_mtx_unlock(&(thread)->mutex)
 
 extern void			act_execute_returnhandlers(void);
 
@@ -573,6 +586,15 @@ extern void			special_handler(
 						thread_t		thread);
 
 void act_machine_sv_free(thread_t, int);
+
+vm_offset_t			min_valid_stack_address(void);
+vm_offset_t			max_valid_stack_address(void);
+
+extern void 		funnel_lock(
+						struct funnel_lock	*lock);
+
+extern void 		funnel_unlock(
+						struct funnel_lock	*lock);
 
 #else	/* MACH_KERNEL_PRIVATE */
 
@@ -592,32 +614,21 @@ __END_DECLS
 
 #ifdef	KERNEL_PRIVATE
 
-typedef struct funnel_lock		funnel_t;
-
-#ifdef	MACH_KERNEL_PRIVATE
-
-extern void 		funnel_lock(
-						funnel_t	*lock);
-
-extern void 		funnel_unlock(
-						funnel_t	*lock);
-
-vm_offset_t			min_valid_stack_address(void);
-vm_offset_t			max_valid_stack_address(void);
-
-#endif	/* MACH_KERNEL_PRIVATE */
-
 __BEGIN_DECLS
 
-extern funnel_t		*thread_funnel_get(void);
-
-extern boolean_t	thread_funnel_set(
-						funnel_t	*lock,
-						boolean_t	 funneled);
+#ifndef	__LP64__
 
 extern thread_t		kernel_thread(
 						task_t		task,
 						void		(*start)(void));
+
+#endif	/* __LP64__ */
+
+extern uint64_t	 		thread_tid(
+						thread_t thread);
+
+extern uint64_t	 		thread_dispatchqaddr(
+						thread_t thread);
 
 __END_DECLS
 
@@ -627,12 +638,14 @@ __BEGIN_DECLS
 
 #ifdef	XNU_KERNEL_PRIVATE
 
+extern kern_return_t	thread_create_workq(
+							task_t			task,
+							thread_t		*new_thread);
+
 extern	void	thread_yield_internal(
 	mach_msg_timeout_t	interval);
 
-/*
- * XXX Funnel locks XXX
- */
+typedef struct funnel_lock		funnel_t;
 
 #define THR_FUNNEL_NULL (funnel_t *)0
 
@@ -641,6 +654,12 @@ extern funnel_t		 *funnel_alloc(
 
 extern void			funnel_free(
 						funnel_t	*lock);
+
+extern funnel_t		*thread_funnel_get(void);
+
+extern boolean_t	thread_funnel_set(
+						funnel_t	*lock,
+						boolean_t	 funneled);
 
 extern void			thread_read_times(
 						thread_t 		thread,
@@ -686,6 +705,13 @@ extern void		thread_static_param(
 					thread_t		thread,
 					boolean_t		state);
 
+extern kern_return_t	thread_policy_set_internal(
+	                                thread_t		thread,
+					thread_policy_flavor_t	flavor,
+					thread_policy_t		policy_info,
+					mach_msg_type_number_t	count);
+
+
 extern task_t	get_threadtask(thread_t);
 #define thread_is_64bit(thd)	\
 	task_has_64BitAddr(get_threadtask(thd))
@@ -693,7 +719,7 @@ extern task_t	get_threadtask(thread_t);
 
 extern void		*get_bsdthread_info(thread_t);
 extern void		set_bsdthread_info(thread_t, void *);
-extern void		*uthread_alloc(task_t, thread_t);
+extern void		*uthread_alloc(task_t, thread_t, int);
 extern void		uthread_cleanup(task_t, void *, void *); 
 extern void		uthread_zone_free(void *); 
 extern void		uthread_cred_free(void *); 
@@ -715,6 +741,7 @@ extern void dtrace_set_thread_vtime(thread_t, int64_t);
 extern void dtrace_set_thread_tracing(thread_t, int64_t);
 extern void dtrace_set_thread_reentering(thread_t, boolean_t);
 extern vm_offset_t dtrace_set_thread_recover(thread_t, vm_offset_t);
+extern void dtrace_thread_bootstrap(void);
 
 extern int64_t dtrace_calc_thread_recent_vtime(thread_t);
 
@@ -727,7 +754,20 @@ extern void		thread_set_wq_state64(
 					      thread_t          thread,
 					      thread_state_t    tstate);
 
+extern vm_offset_t	kernel_stack_mask;
+extern vm_offset_t	kernel_stack_size;
+extern vm_offset_t	kernel_stack_depth_max;
+
 #endif	/* XNU_KERNEL_PRIVATE */
+
+/*! @function kernel_thread_start
+    @abstract Create a kernel thread.
+    @discussion This function takes three input parameters, namely reference to the function that the thread should execute, caller specified data and a reference which is used to return the newly created kernel thread. The function returns KERN_SUCCESS on success or an appropriate kernel code type indicating the error. It may be noted that the caller is responsible for explicitly releasing the reference to the created thread when no longer needed. This should be done by calling thread_deallocate(new_thread).
+    @param continuation A C-function pointer where the thread will begin execution.
+    @param parameter Caller specified data to be passed to the new thread.
+    @param new_thread Reference to the new thread is returned in this parameter.
+    @result Returns KERN_SUCCESS on success or an appropriate kernel code type.
+*/
 
 extern kern_return_t	kernel_thread_start(
 							thread_continue_t	continuation,

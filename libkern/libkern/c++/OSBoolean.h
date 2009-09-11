@@ -35,9 +35,31 @@
 class OSString;
 
 /*!
-    @class OSBoolean
-    @abstract Container class for boolean values.
-*/
+ * @header
+ *
+ * @abstract
+ * This header declares the OSBoolean container class.
+ */
+ 
+
+/*!
+ * @class OSBoolean
+ *
+ * @abstract
+ * OSBoolean wraps a boolean value in a C++ object
+ * for use in Libkern collections.
+ *
+ * @discussion
+ * OSBoolean represents a boolean <code>true</code>/<code>false</code> value
+ * as a Libkern C++ object.
+ * There are only two instances of OSBoolean,
+ * <code>@link kOSBooleanTrue kOSBooleanTrue@/link</code>
+ * and <code>@link kOSBooleanFalse kOSBooleanFalse@/link</code>.
+ * These are shared globally and returned by the instance-creation function
+ * <code>@link withBoolean withBoolean@/link</code>.
+ * Thus, you can use pointer comparison
+ * to test whether two OSBoolean objects are equal.
+ */
 class OSBoolean : public OSObject
 {
     OSDeclareDefaultStructors(OSBoolean)
@@ -45,76 +67,164 @@ class OSBoolean : public OSObject
 protected:
     bool value;
 
-    /*D @function taggedRelease
-	@abstract Overrides tagged release mechanism.
-	@param when Unused. 
+   /*!
+    * @function taggedRelease
+    *
+    * @abstract
+    * Overrides the reference counting mechanism
+    * for the shared global instances.
+    *
+    * @param tag  Unused. 
+    * @param when Unused. 
     */
-    virtual void taggedRelease(const void *tag, const int when) const;
+    virtual void taggedRelease(
+        const void * tag,
+        const int    when) const;
 
 public:
     static void initialize();
 
-    /*D
-        @function withBoolean
-        @abstract A static constructor function to create and initialize an instance of OSBoolean.
-        @param value A boolean value.
-        @result Returns and instance of OSBoolean, or 0 if an error occurred.
+   /*!
+    * @function withBoolean
+    *
+    * @abstract
+    * Returns one of the global instances of OSBoolean.
+    *
+    * @param value   A boolean value.
+    *
+    * @result
+    * The global instance of OSBoolean with the boolean <code>value</code>.
+    *
+    * @discussion
+    * This function actually returns either
+    * <code>@link kOSBooleanTrue kOSBooleanTrue@/link</code> or
+    * <code>@link kOSBooleanFalse kOSBooleanFalse@/link</code>,
+    * so that you can always use pointer comparison with OSBoolean objects.
     */
-    static OSBoolean *withBoolean(bool value);
+    static OSBoolean * withBoolean(bool value);
 
-    /*D
-        @function free
-        @abstract A member function to release all resources used by the OSBoolean instance.
-        @discussion This function should not be called directly, use release() instead.
+   /*!
+    * @function free
+    *
+    * @abstract
+    * Overridden to prevent deallocation of the shared global instances.
+    *
+    * @discussion
+    * This function should never be called.
     */
     virtual void free();
 
-    /*D @function taggedRetain
-	@abstract Override tagged retain mechanism. */
-    virtual void taggedRetain(const void *tag) const;
 
-    /*!
-        @function isTrue
-        @abstract A member function to test if the boolean object is true.
-        @result Returns true if the OSBoolean object is true, false otherwise.
+   /*!
+    * @function taggedRetain
+    *
+    * @abstract
+    * Overrides the reference counting mechanism for the shared global instances.
+    *
+    * @param tag  Unused. 
+    */
+    virtual void taggedRetain(const void * tag) const;
+
+
+   /*!
+    * @function isTrue
+    *
+    * @abstract
+    * Checks whether the OSBoolean object
+    * represents a <code>true</code> <code>bool</code> value.
+    *
+    * @result
+    * <code>true</code> if the OSBoolean object is <code>true</code>,
+    * <code>false</code> otherwise.
+    *
+    * @discussion
+    * You can also use <code>==</code> against
+    * <code>@link kOSBooleanTrue kOSBooleanTrue@/link</code>.
     */
     virtual bool isTrue() const;
-    /*!
-        @function isFalse
-        @abstract A member function to test if the boolean object is false.
-        @result Returns true if the OSBoolean object is false, false otherwise.
+
+
+   /*!
+    * @function isFalse
+    *
+    * @abstract
+    * Checks whether the OSBoolean object
+    * represents a <code>false</code> <code>bool</code> value.
+    *
+    * @result
+    * <code>true</code> if the OSBoolean object is <code>false</code>,
+    * <code>true</code> otherwise.
+    *
+    * @discussion
+    * You can also use <code>==</code> against
+    * <code>@link kOSBooleanFalse kOSBooleanFalse@/link</code>.
     */
     virtual bool isFalse() const;
 
-    /*!
-        @function getValue
-        @abstract Obtains the value of the OSBoolean object as the standard C++ type bool.
-        @result The value of the OSBoolean object. 
+
+   /*!
+    * @function getValue
+    *
+    * @abstract
+    * Returns the C++ <code>bool</code> value for the OSBoolean object.
+    *
+    * @result
+    * Returns the C++ <code>bool</code> value of the OSBoolean object. 
     */
     virtual bool getValue() const;
 
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality of two OSBoolean objects.
-        @param boolean An OSBoolean object to be compared against the receiver.
-        @result Returns true if the two objects are equivalent.
-    */
-    virtual bool isEqualTo(const OSBoolean *boolean) const;
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality between an arbitrary OSObject derived object and an OSBoolean object.
-        @param obj An OSObject derived object to be compared against the receiver.
-        @result Returns true if the two objects are equivalent.
-    */
-    virtual bool isEqualTo(const OSMetaClassBase *obj) const;
 
-    /*!
-        @function serialize
-        @abstract A member function that archives the receiver.
-        @param s The OSSerialize object.
-        @result Returns true if serialization was successful, false if not.
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract
+    * Tests the equality of two OSBoolean objects.
+    *
+    * @param aBoolean    The OSBoolean to be compared against the receiver.
+    *
+    * @result
+    * <code>true</code> if the OSBoolean objects are equal,
+    * <code>false</code> if not.
+    *
+    * @discussion
+    * Two OSBoolean objects are considered equal
+    * if they are the same exact object (pointer equality).
     */
-    virtual bool serialize(OSSerialize *s) const;
+    virtual bool isEqualTo(const OSBoolean * aBoolean) const;
+
+
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract
+    * Tests the equality an OSBoolean to an arbitrary object.
+    *
+    * @param anObject  An object to be compared against the receiver.
+    *
+    * @result
+    * <code>true</code> if the objects are equal, <code>false</code> if not.
+    *
+    * @discussion
+    * An OSBoolean is considered equal to another object
+    * if that object is derived from OSBoolean
+    * and represents the same C++ <code>bool</code> value.
+    */
+    virtual bool isEqualTo(const OSMetaClassBase * anObject) const;
+
+
+   /*!
+    * @function serialize
+    *
+    * @abstract
+    * Archives the receiver into the provided
+    * @link //apple_ref/doc/class/OSSerialize OSSerialize@/link object.
+    *
+    * @param serializer  The OSSerialize object.
+    *
+    * @result
+    * <code>true</code> if serialization succeeds, <code>false</code> if not.
+    */
+    virtual bool serialize(OSSerialize * serializer) const;
 
     OSMetaClassDeclareReservedUnused(OSBoolean, 0);
     OSMetaClassDeclareReservedUnused(OSBoolean, 1);
@@ -127,17 +237,35 @@ public:
 };
 
 /*!
-    @const kOSBooleanTrue
-    @abstract The OSBoolean constant for "true".
-    @discussion The OSBoolean constant for "true".  The object does not need to be retained or released.  Comparisons of the form (booleanObject == kOSBooleanTrue) are acceptable and would be equivalent to (booleanObject->getValue() == true).
-*/
+ * @const kOSBoolean<code>true</code>
+ *
+ * @abstract
+ * The OSBoolean constant for <code>true</code>.
+ *
+ * @discussion
+ * The OSBoolean constant for <code>true</code>.
+ * This object does not need to be retained or released (but it can be).
+ * Comparisons of the form
+ * booleanObject == kOSBooleanTrue</code> are acceptable
+ * and are equivalent to 
+ * <code>booleanObject->getValue() == true</code>.
+ */
 extern OSBoolean * const & kOSBooleanTrue;
 
 /*!
-    @const kOSBooleanFalse
-    @abstract The OSBoolean constant for "false".
-    @discussion The OSBoolean constant for "false".  The object does not need to be retained or released.  Comparisons of the form (booleanObject == kOSBooleanFalse) are acceptable and would be equivalent to (booleanObject->getValue() == false).
-*/
+ * @const kOSBoolean<code>false</code>
+ *
+ * @abstract
+ * The OSBoolean constant for <code>false</code>.
+ *
+ * @discussion
+ * The OSBoolean constant for <code>false</code>.
+ * This object does not need to be retained or released (but it can be).
+ * Comparisons of the form
+ * <code>booleanObject == kOSBooleanFalse</code>
+ * are acceptable and are equivalent to
+ * <code>booleanObject->getValue() == <code>false</code>.
+ */
 extern OSBoolean * const & kOSBooleanFalse;
 
 #endif /* !_OS_OSBOOLEAN_H */

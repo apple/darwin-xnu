@@ -19,6 +19,9 @@ INSTINC_SUBDIRS_ARM = \
 INSTINC_SUBDIRS_I386 = \
 	i386
 
+INSTINC_SUBDIRS_X86_64 = \
+	i386
+
 EXPINC_SUBDIRS = \
 	machine
 
@@ -26,6 +29,9 @@ EXPINC_SUBDIRS_PPC = \
 	ppc
 
 EXPINC_SUBDIRS_I386 = \
+	i386
+
+EXPINC_SUBDIRS_X86_64 = \
 	i386
 
 EXPINC_SUBDIRS_ARM = \
@@ -67,7 +73,8 @@ MACH_PRIVATE_DEFS = \
 	memory_object_control.defs \
 	memory_object_default.defs \
 	memory_object_name.defs \
-	upl.defs
+	upl.defs \
+	vm32_map.defs
 
 #
 # MIG-generated headers that are traditionally used by user
@@ -176,10 +183,6 @@ INSTALL_KF_MI_LCL_LIST = \
 	mach_interface.h \
 	$(filter-out mach_traps.h mach_syscalls.h thread_switch.h, ${DATAFILES})
 
-INSTALL_MI_LCL_LIST = kext_panic_report.h \
-	bootstrap.h \
-	${DATAFILES}
-
 INSTALL_MI_GEN_LIST =
 
 INSTALL_MI_DIR = mach
@@ -282,11 +285,11 @@ MIG_KSHDRS = \
 	processor_server.h \
 	processor_set_server.h \
 	security_server.h \
-	semaphore_server.h \
 	task_server.h \
 	thread_act_server.h \
 	upl_server.h \
-	vm_map_server.h
+	vm_map_server.h \
+	vm32_map_server.h
 
 MIG_KSSRC = \
 	clock_server.c \
@@ -308,11 +311,11 @@ MIG_KSSRC = \
 	processor_server.c \
 	processor_set_server.c \
 	security_server.c \
-	semaphore_server.c \
 	task_server.c \
 	thread_act_server.c \
 	upl_server.c \
-	vm_map_server.c
+	vm_map_server.c \
+	vm32_map_server.c
 
 #
 # JMM -

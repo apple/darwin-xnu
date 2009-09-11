@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/frag6.c,v 1.2.2.5 2001/07/03 11:01:50 ume Exp $	*/
 /*	$KAME: frag6.c,v 1.31 2001/05/17 13:45:34 jinmei Exp $	*/
 
@@ -147,8 +175,9 @@ frag6_input(mp, offp)
 	int first_frag = 0;
 	int fragoff, frgpartlen;	/* must be larger than u_int16_t */
 	struct ifnet *dstifp;
+	struct ifaddr *ifa = NULL;
 #ifdef IN6_IFSTAT_STRICT
-	static struct route_in6 ro;
+	struct route_in6 ro;
 	struct sockaddr_in6 *dst;
 #endif
 
@@ -165,22 +194,23 @@ frag6_input(mp, offp)
 	dstifp = NULL;
 #ifdef IN6_IFSTAT_STRICT
 	/* find the destination interface of the packet. */
+	bzero(&ro, sizeof (ro));
 	dst = (struct sockaddr_in6 *)&ro.ro_dst;
-	if (ro.ro_rt
-	 && ((ro.ro_rt->rt_flags & RTF_UP) == 0
-	  || !IN6_ARE_ADDR_EQUAL(&dst->sin6_addr, &ip6->ip6_dst))) {
-		rtfree(ro.ro_rt);
-		ro.ro_rt = (struct rtentry *)0;
-	}
-	if (ro.ro_rt == NULL) {
-		bzero(dst, sizeof(*dst));
-		dst->sin6_family = AF_INET6;
-		dst->sin6_len = sizeof(struct sockaddr_in6);
-		dst->sin6_addr = ip6->ip6_dst;
-	}
+	dst->sin6_family = AF_INET6;
+	dst->sin6_len = sizeof (struct sockaddr_in6);
+	dst->sin6_addr = ip6->ip6_dst;
+
 	rtalloc((struct route *)&ro);
-	if (ro.ro_rt != NULL && ro.ro_rt->rt_ifa != NULL)
-		dstifp = ((struct in6_ifaddr *)ro.ro_rt->rt_ifa)->ia_ifp;
+	if (ro.ro_rt != NULL) {
+		RT_LOCK(ro.ro_rt);
+		if ((ifa = ro.ro_rt->rt_ifa) != NULL) {
+			ifaref(ifa);
+			dstifp = ((struct in6_ifaddr *)ro.ro_rt->rt_ifa)->ia_ifp;
+		}
+		RT_UNLOCK(ro.ro_rt);
+		rtfree(ro.ro_rt);
+		ro.ro_rt = NULL;
+	}
 #else
 	/* we are violating the spec, this is not the destination interface */
 	if ((m->m_flags & M_PKTHDR) != 0)
@@ -191,6 +221,8 @@ frag6_input(mp, offp)
 	if (ip6->ip6_plen == 0) {
 		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER, offset);
 		in6_ifstat_inc(dstifp, ifs6_reass_fail);
+		if (ifa != NULL)
+			ifafree(ifa);
 		return IPPROTO_DONE;
 	}
 
@@ -206,6 +238,8 @@ frag6_input(mp, offp)
 			    ICMP6_PARAMPROB_HEADER,
 			    offsetof(struct ip6_hdr, ip6_plen));
 		in6_ifstat_inc(dstifp, ifs6_reass_fail);
+		if (ifa != NULL)
+			ifafree(ifa);
 		return IPPROTO_DONE;
 	}
 
@@ -297,6 +331,8 @@ frag6_input(mp, offp)
 				    offset - sizeof(struct ip6_frag) +
 					offsetof(struct ip6_frag, ip6f_offlg));
 			frag6_doing_reass = 0;
+			if (ifa != NULL)
+				ifafree(ifa);
 			return(IPPROTO_DONE);
 		}
 	}
@@ -305,6 +341,8 @@ frag6_input(mp, offp)
 			    offset - sizeof(struct ip6_frag) +
 				offsetof(struct ip6_frag, ip6f_offlg));
 		frag6_doing_reass = 0;
+		if (ifa != NULL)
+			ifafree(ifa);
 		return(IPPROTO_DONE);
 	}
 	/*
@@ -462,12 +500,16 @@ insert:
 	     af6 = af6->ip6af_down) {
 		if (af6->ip6af_off != next) {
 			frag6_doing_reass = 0;
+			if (ifa != NULL)
+				ifafree(ifa);
 			return IPPROTO_DONE;
 		}
 		next += af6->ip6af_frglen;
 	}
 	if (af6->ip6af_up->ip6af_mff) {
 		frag6_doing_reass = 0;
+		if (ifa != NULL)
+			ifafree(ifa);
 		return IPPROTO_DONE;
 	}
 
@@ -553,6 +595,8 @@ insert:
 	*offp = offset;
 
 	frag6_doing_reass = 0;
+	if (ifa != NULL)
+		ifafree(ifa);
 	return nxt;
 
  dropfrag:
@@ -560,6 +604,8 @@ insert:
 	ip6stat.ip6s_fragdropped++;
 	m_freem(m);
 	frag6_doing_reass = 0;
+	if (ifa != NULL)
+		ifafree(ifa);
 	return IPPROTO_DONE;
 }
 

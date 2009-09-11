@@ -329,7 +329,7 @@ mach_port_space_info(
 		if (entry->ie_request)
 			iin->iin_type |= MACH_PORT_TYPE_DNREQUEST;
 		iin->iin_urefs = IE_BITS_UREFS(bits);
-		iin->iin_object = (vm_offset_t) entry->ie_object;
+		iin->iin_object = (natural_t)(uintptr_t)entry->ie_object;
 		iin->iin_next = entry->ie_next;
 		iin->iin_hash = entry->ie_index;
 	}
@@ -352,7 +352,7 @@ mach_port_space_info(
 		if (entry->ie_request)
 			iin->iin_type |= MACH_PORT_TYPE_DNREQUEST;
 		iin->iin_urefs = IE_BITS_UREFS(bits);
-		iin->iin_object = (vm_offset_t) entry->ie_object;
+		iin->iin_object = (natural_t)(uintptr_t)entry->ie_object;
 		iin->iin_next = entry->ie_next;
 		iin->iin_hash = entry->ie_index;
 
@@ -482,10 +482,13 @@ mach_port_dnrequest_info(
 #endif /* MACH_IPC_DEBUG */
 
 /*
- *	Routine:	mach_port_kernel_object [kernel call]
+ *	Routine:	mach_port_kobject [kernel call]
  *	Purpose:
  *		Retrieve the type and address of the kernel object
- *		represented by a send or receive right.
+ *		represented by a send or receive right. Returns
+ *		the kernel address in a mach_vm_address_t to
+ *		mask potential differences in kernel address space
+ *		size.
  *	Conditions:
  *		Nothing locked.
  *	Returns:
@@ -499,21 +502,21 @@ mach_port_dnrequest_info(
 
 #if !MACH_IPC_DEBUG
 kern_return_t
-mach_port_kernel_object(
+mach_port_kobject(
 	__unused ipc_space_t		space,
 	__unused mach_port_name_t	name,
-	__unused unsigned int	*typep,
-	__unused vm_offset_t		*addrp)
+	__unused natural_t		*typep,
+	__unused mach_vm_address_t	*addrp)
 {
         return KERN_FAILURE;
 }
 #else
 kern_return_t
-mach_port_kernel_object(
+mach_port_kobject(
 	ipc_space_t			space,
 	mach_port_name_t		name,
-	unsigned int			*typep,
-	vm_offset_t			*addrp)
+	natural_t			*typep,
+	mach_vm_address_t		*addrp)
 {
 	ipc_entry_t entry;
 	ipc_port_t port;
@@ -544,9 +547,53 @@ mach_port_kernel_object(
 	}
 
 	*typep = (unsigned int) ip_kotype(port);
-	*addrp = (vm_offset_t) port->ip_kobject;
+	*addrp = (mach_vm_address_t)port->ip_kobject;
 	ip_unlock(port);
 	return KERN_SUCCESS;
 
+}
+#endif /* MACH_IPC_DEBUG */
+/*
+ *	Routine:	mach_port_kernel_object [Legacy kernel call]
+ *	Purpose:
+ *		Retrieve the type and address of the kernel object
+ *		represented by a send or receive right. Hard-coded
+ *		to return only the low-order 32-bits of the kernel
+ *		object.
+ *	Conditions:
+ *		Nothing locked.
+ *	Returns:
+ *		KERN_SUCCESS		Retrieved kernel object info.
+ *		KERN_INVALID_TASK	The space is null.
+ *		KERN_INVALID_TASK	The space is dead.
+ *		KERN_INVALID_NAME	The name doesn't denote a right.
+ *		KERN_INVALID_RIGHT	Name doesn't denote
+ *					send or receive rights.
+ */
+
+#if !MACH_IPC_DEBUG
+kern_return_t
+mach_port_kernel_object(
+	__unused ipc_space_t		space,
+	__unused mach_port_name_t	name,
+	__unused unsigned int		*typep,
+	__unused unsigned int		*addrp)
+{
+        return KERN_FAILURE;
+}
+#else
+kern_return_t
+mach_port_kernel_object(
+	ipc_space_t			space,
+	mach_port_name_t		name,
+	unsigned int			*typep,
+	unsigned int			*addrp)
+{
+	mach_vm_address_t addr = 0;
+	kern_return_t kr;
+
+	kr = mach_port_kobject(space, name, typep, &addr);
+	*addrp = (unsigned int) addr;
+	return kr;
 }
 #endif /* MACH_IPC_DEBUG */

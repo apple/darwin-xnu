@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999, 2000-2002, 2009 Apple, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -26,6 +26,17 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+/*
+	WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING!
+	
+	THIS FILE IS NEEDED TO PASS FIPS ACCEPTANCE FOR THE RANDOM NUMBER GENERATOR.
+	IF YOU ALTER IT IN ANY WAY, WE WILL NEED TO GO THOUGH FIPS ACCEPTANCE AGAIN,
+	AN OPERATION THAT IS VERY EXPENSIVE AND TIME CONSUMING.  IN OTHER WORDS,
+	DON'T MESS WITH THIS FILE.
+
+	WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING! WARNING!
+*/
+
 #ifndef __DEV_RANDOMDEV_H__
 #define __DEV_RANDOMDEV_H__
 
@@ -42,7 +53,7 @@ int random_close(dev_t dev, int flags, int mode, struct proc *pp);
 int random_read(dev_t dev, struct uio *uio, int ioflag);
 int random_write(dev_t dev, struct uio *uio, int ioflag);
 
-u_long RandomULong( void );
+u_int32_t RandomULong( void );
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* __DEV_RANDOMDEV_H__ */

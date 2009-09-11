@@ -61,10 +61,10 @@
 typedef unsigned short i386_ioport_t;
 
 #if defined(__GNUC__)
-static __inline__ unsigned long	inl(
+static __inline__ unsigned int	inl(
 				i386_ioport_t port)
 {
-	unsigned long datum;
+	unsigned int datum;
 	__asm__ volatile("inl %w1, %0" : "=a" (datum) : "Nd" (port));
 	return(datum);
 }
@@ -87,7 +87,7 @@ static __inline__ unsigned char inb(
 
 static __inline__ void outl(
 				i386_ioport_t port,
-				unsigned long datum)
+				unsigned int datum)
 {
 	__asm__ volatile("outl %0, %w1" : : "a" (datum), "Nd" (port));
 }

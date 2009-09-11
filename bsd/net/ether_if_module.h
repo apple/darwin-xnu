@@ -38,4 +38,4 @@ extern void ether_detach_inet6(ifnet_t ifp, protocol_family_t protocol_family);
 extern errno_t ether_attach_at(struct ifnet *ifp, protocol_family_t proto_family);
 extern void ether_detach_at(struct ifnet *ifp, protocol_family_t proto_family);
 
-#endif _NET_ETHER_IF_MODULE_H
+#endif /* _NET_ETHER_IF_MODULE_H */

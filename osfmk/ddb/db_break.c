@@ -329,7 +329,7 @@ db_set_breakpoint(
 		return;
 	    }
 	} else {
-	    if (!DB_CHECK_ACCESS(addr, BKPT_SIZE, task)) {
+	    if (!DB_CHECK_ACCESS((vm_offset_t)addr, BKPT_SIZE, task)) {
 		if (task) {
 		    db_printf("Warning: non-resident page for breakpoint at %llX",
 			      (unsigned long long)addr);
@@ -428,7 +428,7 @@ db_find_breakpoint_here(
                 && bkpt->address == addr)
 		return(TRUE);
 	    if ((bkpt->flags & BKPT_USR_GLOBAL) == 0 &&
-		  DB_PHYS_EQ(task, addr, bkpt->task, bkpt->address))
+		  DB_PHYS_EQ(task, (vm_offset_t)addr, bkpt->task, (vm_offset_t)bkpt->address))
 		return (TRUE);
 	}
 	return(FALSE);
@@ -461,12 +461,12 @@ db_set_breakpoints(void)
 		    } else
 			bkpt->flags &= ~BKPT_1ST_SET;
 		}
-		if (DB_CHECK_ACCESS(bkpt->address, BKPT_SIZE, task)) {
+		if (DB_CHECK_ACCESS((vm_offset_t)bkpt->address, BKPT_SIZE, task)) {
 		    inst = db_get_task_value(bkpt->address, BKPT_SIZE, FALSE,
 								task);
 		    if (inst == BKPT_SET(inst))
 			continue;
-		    bkpt->bkpt_inst = inst;
+		    bkpt->bkpt_inst = (vm_size_t)inst;
 		    db_put_task_value(bkpt->address,
 				BKPT_SIZE,
 				BKPT_SET(bkpt->bkpt_inst), task);
@@ -501,7 +501,7 @@ db_clear_breakpoints(void)
 		    task = cur_task;
 		}
 		if ((bkpt->flags & BKPT_SET_IN_MEM)
-		    && DB_CHECK_ACCESS(bkpt->address, BKPT_SIZE, task)) {
+		    && DB_CHECK_ACCESS((vm_offset_t)bkpt->address, BKPT_SIZE, task)) {
 		    inst = db_get_task_value(bkpt->address, BKPT_SIZE, FALSE, 
 								task);
 		    if (inst != BKPT_SET(inst)) {
@@ -551,7 +551,7 @@ db_set_temp_breakpoint(
 	    db_printf("Too many thread_breakpoints.\n");
 	    return 0;
 	}
-	bkpt->bkpt_inst = db_get_task_value(bkpt->address, BKPT_SIZE, 
+	bkpt->bkpt_inst = (vm_size_t)db_get_task_value(bkpt->address, BKPT_SIZE, 
 						FALSE, task);
 	db_put_task_value(bkpt->address, BKPT_SIZE, 
 				BKPT_SET(bkpt->bkpt_inst), task);
@@ -706,7 +706,7 @@ db_delete_cmd(void)
 		db_printf("Bad break point number #%s\n", db_tok_string);
 		db_error(0);
 	    }
-	    if ((tbp = db_find_breakpoint_number(db_tok_number, &bkpt)) == 0) {
+	    if ((tbp = db_find_breakpoint_number((int)db_tok_number, &bkpt)) == 0) {
 	        db_printf("No such break point #%d\n", db_tok_number);
 	        db_error(0);
 	    }
@@ -796,14 +796,14 @@ db_breakpoint_cmd(db_expr_t addr, __unused boolean_t have_addr, db_expr_t count,
 			 && thr_act->task != db_current_space())
 		    db_error("Cannot set break point in inactive user space\n");
 		db_set_breakpoint(db_target_space(thr_act, user_space), 
-					(db_addr_t)addr, count,
+					(db_addr_t)addr, (int)count,
 					(user_global)? THREAD_NULL: thr_act,
 					task_bpt);
 	    }
 	} else {
 	    db_set_breakpoint(db_target_space(THREAD_NULL, user_space),
 				 (db_addr_t)addr,
-				 count, THREAD_NULL, FALSE);
+				 (int)count, THREAD_NULL, FALSE);
 	}
 }
 

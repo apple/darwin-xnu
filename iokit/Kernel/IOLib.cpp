@@ -36,6 +36,7 @@
 #include <IOKit/system.h>
 #include <mach/sync_policy.h>
 #include <machine/machine_routines.h>
+#include <vm/vm_kern.h>
 #include <libkern/c++/OSCPPDebug.h>
 
 #include <IOKit/assert.h>
@@ -62,13 +63,16 @@ mach_timespec_t IOZeroTvalspec = { 0, 0 };
 
 extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
 
-extern kern_return_t	kmem_suballoc(
-				vm_map_t	parent,
-				vm_offset_t	*addr,
-				vm_size_t	size,
-				boolean_t	pageable,
-				boolean_t	anywhere,
-				vm_map_t	*new_map);
+int
+__doprnt(
+	const char		*fmt,
+	va_list			argp,
+	void			(*putc)(int, void *),
+	void                    *arg,
+	int			radix);
+
+extern void conslog_putc(char);
+
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -97,9 +101,8 @@ enum { kIOMaxPageableMaps = 16 };
 enum { kIOPageableMapSize = 96 * 1024 * 1024 };
 enum { kIOPageableMaxMapSize = 96 * 1024 * 1024 };
 
-/* LP64todo - these need to expand */
 typedef struct {
-    vm_map_t	map;
+    vm_map_t		map;
     vm_offset_t	address;
     vm_offset_t	end;
 } IOMapData;
@@ -198,10 +201,10 @@ void IOFree(void * address, vm_size_t size)
 void * IOMallocAligned(vm_size_t size, vm_size_t alignment)
 {
     kern_return_t	kr;
-    vm_address_t	address;
-    vm_address_t	allocationAddress;
+    vm_offset_t		address;
+    vm_offset_t		allocationAddress;
     vm_size_t		adjustedSize;
-    vm_offset_t		alignMask;
+    uintptr_t		alignMask;
 
     if (size == 0)
         return 0;
@@ -237,8 +240,8 @@ void * IOMallocAligned(vm_size_t size, vm_size_t alignment)
                     + (sizeof(vm_size_t) + sizeof(vm_address_t)))
                     & (~alignMask);
 
-            *((vm_size_t *)(address - sizeof(vm_size_t)
-                            - sizeof(vm_address_t))) = adjustedSize;
+            *((vm_size_t *)(address - sizeof(vm_size_t) - sizeof(vm_address_t))) 
+			    = adjustedSize;
             *((vm_address_t *)(address - sizeof(vm_address_t)))
                             = allocationAddress;
 	} else
@@ -259,7 +262,7 @@ void * IOMallocAligned(vm_size_t size, vm_size_t alignment)
 void IOFreeAligned(void * address, vm_size_t size)
 {
     vm_address_t	allocationAddress;
-    vm_size_t		adjustedSize;
+    vm_size_t	adjustedSize;
 
     if( !address)
 	return;
@@ -269,10 +272,10 @@ void IOFreeAligned(void * address, vm_size_t size)
     adjustedSize = size + sizeof(vm_size_t) + sizeof(vm_address_t);
     if (adjustedSize >= page_size) {
 
-        kmem_free( kernel_map, (vm_address_t) address, size);
+        kmem_free( kernel_map, (vm_offset_t) address, size);
 
     } else {
-        adjustedSize = *((vm_size_t *)( (vm_address_t) address
+      	adjustedSize = *((vm_size_t *)( (vm_address_t) address
                                 - sizeof(vm_address_t) - sizeof(vm_size_t)));
         allocationAddress = *((vm_address_t *)( (vm_address_t) address
 				- sizeof(vm_address_t) ));
@@ -304,7 +307,7 @@ IOKernelFreeContiguous(mach_vm_address_t address, mach_vm_size_t size)
     adjustedSize = (2 * size) + sizeof(mach_vm_size_t) + sizeof(mach_vm_address_t);
     if (adjustedSize >= page_size) {
 
-	kmem_free( kernel_map, (vm_address_t) address, size);
+	kmem_free( kernel_map, (vm_offset_t) address, size);
 
     } else {
 
@@ -321,7 +324,8 @@ IOKernelFreeContiguous(mach_vm_address_t address, mach_vm_size_t size)
 }
 
 mach_vm_address_t
-IOKernelAllocateContiguous(mach_vm_size_t size, mach_vm_size_t alignment)
+IOKernelAllocateContiguous(mach_vm_size_t size, mach_vm_address_t maxPhys, 
+			    mach_vm_size_t alignment)
 {
     kern_return_t	kr;
     mach_vm_address_t	address;
@@ -341,10 +345,10 @@ IOKernelAllocateContiguous(mach_vm_size_t size, mach_vm_size_t alignment)
     {
 	vm_offset_t virt;
 	adjustedSize = size;
-	if (adjustedSize > page_size)
+	if ((adjustedSize > page_size) || (alignment > page_size) || maxPhys)
 	{
 	    kr = kmem_alloc_contig(kernel_map, &virt, size,
-				   alignMask, 0, 0);
+				   alignMask, atop(maxPhys), atop(alignMask), 0);
 	}
 	else
 	{
@@ -368,7 +372,7 @@ IOKernelAllocateContiguous(mach_vm_size_t size, mach_vm_size_t alignment)
                     & (~alignMask);
 
             if (atop_32(address) != atop_32(address + size - 1))
-                address = round_page_32(address);
+                address = round_page(address);
 
             *((mach_vm_size_t *)(address - sizeof(mach_vm_size_t)
                             - sizeof(mach_vm_address_t))) = adjustedSize;
@@ -380,8 +384,8 @@ IOKernelAllocateContiguous(mach_vm_size_t size, mach_vm_size_t alignment)
 
 #if IOALLOCDEBUG
     if (address) {
-		debug_iomalloc_size += size;
-	}
+	debug_iomalloc_size += size;
+    }
 #endif
 
     return (address);
@@ -410,16 +414,17 @@ void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
     /* Do we want a physical address? */
     if (!physicalAddress)
     {
-	address = IOKernelAllocateContiguous(size, alignment);
+	address = IOKernelAllocateContiguous(size, 0 /*maxPhys*/, alignment);
     }
     else do
     {
 	IOBufferMemoryDescriptor * bmd;
 	mach_vm_address_t          physicalMask;
-        vm_offset_t		   alignMask;
+	vm_offset_t		   alignMask;
 
 	alignMask = alignment - 1;
-	physicalMask = 0xFFFFFFFF ^ (alignMask & PAGE_MASK);
+	physicalMask = (0xFFFFFFFF ^ alignMask);
+
 	bmd = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
 		kernel_task, kIOMemoryPhysicallyContiguous, size, physicalMask);
 	if (!bmd)
@@ -555,7 +560,7 @@ kern_return_t IOIteratePageableMaps(vm_size_t size,
 
 struct IOMallocPageableRef
 {
-    vm_address_t address;
+    vm_offset_t address;
     vm_size_t	 size;
 };
 
@@ -586,13 +591,13 @@ void * IOMallocPageable(vm_size_t size, vm_size_t alignment)
 
 #if IOALLOCDEBUG
     if( ref.address)
-       debug_iomallocpageable_size += round_page_32(size);
+       debug_iomallocpageable_size += round_page(size);
 #endif
 
     return( (void *) ref.address );
 }
 
-vm_map_t IOPageableMapForAddress( vm_address_t address )
+vm_map_t IOPageableMapForAddress( uintptr_t address )
 {
     vm_map_t	map = 0;
     UInt32	index;
@@ -605,7 +610,7 @@ vm_map_t IOPageableMapForAddress( vm_address_t address )
         }
     }
     if( !map)
-        IOPanic("IOPageableMapForAddress: null");
+        panic("IOPageableMapForAddress: null");
 
     return( map );
 }
@@ -619,10 +624,10 @@ void IOFreePageable(void * address, vm_size_t size)
         kmem_free( map, (vm_offset_t) address, size);
 
 #if IOALLOCDEBUG
-    debug_iomallocpageable_size -= round_page_32(size);
+    debug_iomallocpageable_size -= round_page(size);
 #endif
 }
-
+    
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 IOReturn IOSetProcessorCacheMode( task_t task, IOVirtualAddress address,
@@ -633,9 +638,13 @@ IOReturn IOSetProcessorCacheMode( task_t task, IOVirtualAddress address,
 
     if( task != kernel_task)
 	return( kIOReturnUnsupported );
-
-    length = round_page_32(address + length) - trunc_page_32( address );
-    address = trunc_page_32( address );
+    if ((address | length) & PAGE_MASK)
+    {
+//	OSReportWithBacktrace("IOSetProcessorCacheMode(0x%x, 0x%x, 0x%x) fails\n", address, length, cacheMode);
+	return( kIOReturnUnsupported );
+    }
+    length = round_page(address + length) - trunc_page( address );
+    address = trunc_page( address );
 
     // make map mode
     cacheMode = (cacheMode << kIOMapCacheShift) & kIOMapCacheMask;
@@ -671,13 +680,9 @@ IOReturn IOFlushProcessorCache( task_t task, IOVirtualAddress address,
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-SInt32 OSKernelStackRemaining( void )
+vm_offset_t OSKernelStackRemaining( void )
 {
-   SInt32 stack;
-
-   stack = (((SInt32) &stack) & (KERNEL_STACK_SIZE - 1));
-
-   return( stack );
+    return (ml_stack_remaining());
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -708,21 +713,31 @@ void IOPause(unsigned nanoseconds)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+static void _iolog_putc(int ch, void *arg __unused)
+{
+	conslog_putc(ch);
+}
+
 void IOLog(const char *format, ...)
 {
 	va_list ap;
-	extern void conslog_putc(char);
-	extern void logwakeup(void);
 
 	va_start(ap, format);
-	_doprnt(format, &ap, conslog_putc, 16);
+	__doprnt(format, ap, _iolog_putc, NULL, 16);
 	va_end(ap);
 }
 
+void IOLogv(const char *format, va_list ap)
+{
+	__doprnt(format, ap, _iolog_putc, NULL, 16);
+}
+
+#if !__LP64__
 void IOPanic(const char *reason)
 {
 	panic("%s", reason);
 }
+#endif
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 

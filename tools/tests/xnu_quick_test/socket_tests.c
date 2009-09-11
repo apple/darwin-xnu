@@ -9,8 +9,10 @@
 
 #include "tests.h"
 #include <poll.h>
+#include <mach/mach.h>
 
 extern char  g_target_path[ PATH_MAX ];
+extern int		g_is_under_rosetta;
 
 /*  **************************************************************************************************************
  *	Test accept, bind, connect, listen, socket, recvmsg, sendmsg, recvfrom, sendto, getpeername, getsockname
@@ -33,17 +35,19 @@ int socket_tests( void * the_argp )
 	char			my_parent_socket_name[sizeof(struct sockaddr) + 64];
 	char			my_child_socket_name[sizeof(struct sockaddr) + 64];
 	char			my_accept_buffer[sizeof(struct sockaddr) + 64];
+	kern_return_t           my_kr;
 
 	/* generate 2 names for binding to the sockets (one socket in the parent and one in the child) */
-	my_parent_pathp = (char *) malloc( 128 );
-	if ( my_parent_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
-	}
-	my_child_pathp = (char *) malloc( 128 );
-	if ( my_child_pathp == NULL ) {
-		printf( "malloc failed with error %d - \"%s\" \n", errno, strerror( errno) );
-		goto test_failed_exit;
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_parent_pathp, 128, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
+        }
+
+        my_kr = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t*)&my_child_pathp, 128, VM_FLAGS_ANYWHERE);
+        if(my_kr != KERN_SUCCESS){
+                printf( "vm_allocate failed with error %d - \"%s\" \n", errno, strerror( errno) );
+                goto test_failed_exit;
 	}
 
 	*my_parent_pathp = 0x00;
@@ -121,7 +125,7 @@ int socket_tests( void * the_argp )
 		 */
 		int					my_child_fd = -1;
 		struct msghdr		my_msghdr;
-		struct iovec		my_iov;
+		struct iovec		my_iov[4];
 		char				my_buffer[128];
 
 		my_child_fd = socket( AF_UNIX, SOCK_STREAM, 0 );
@@ -170,13 +174,13 @@ int socket_tests( void * the_argp )
 	}
 
 		my_buffer[0] = 'j';
-		my_iov.iov_base = &my_buffer[0];
-		my_iov.iov_len = 1;
+		my_iov[0].iov_base = &my_buffer[0];
+		my_iov[0].iov_len = 1;
 		
 		my_sockaddr = (struct sockaddr *) &my_parent_socket_name[0];
 		my_msghdr.msg_name = my_sockaddr;
 		my_msghdr.msg_namelen = my_sockaddr->sa_len;
-		my_msghdr.msg_iov = &my_iov;
+		my_msghdr.msg_iov = &my_iov[0];
 		my_msghdr.msg_iovlen = 1;
 		my_msghdr.msg_control = NULL;
 		my_msghdr.msg_controllen = 0;
@@ -207,6 +211,55 @@ int socket_tests( void * the_argp )
 		}
 #endif
 		
+#if 1
+		/* sendfile test. Open libsystem, set up some headers, and send it */
+		if (!g_is_under_rosetta) {
+			struct sf_hdtr		my_sf_hdtr;
+			int					my_libsys_fd;
+			off_t				my_libsys_len;
+
+			my_libsys_fd = open("/usr/lib/libSystem.dylib", O_RDONLY, 0644);
+			if (my_libsys_fd < 0) {
+				printf( "test failed - could not open /usr/lib/libSystem.dylib\n" );
+			 	close ( my_child_fd );
+				exit ( -1 );
+			}
+
+			my_libsys_len = 7+2; /* 2 bytes of header */
+			my_buffer[0] = 's';
+			my_iov[0].iov_base = &my_buffer[0];
+			my_iov[0].iov_len = 1;
+			my_buffer[1] = 'e';
+			my_iov[1].iov_base = &my_buffer[1];
+			my_iov[1].iov_len = 1;
+			my_buffer[2] = 'n';
+			my_iov[2].iov_base = &my_buffer[2];
+			my_iov[2].iov_len = 1;
+			my_buffer[3] = 'd';
+			my_iov[3].iov_base = &my_buffer[3];
+			my_iov[3].iov_len = 1;
+
+			my_sf_hdtr.headers = &my_iov[0];
+			my_sf_hdtr.hdr_cnt = 2;
+			my_sf_hdtr.trailers = &my_iov[2];
+			my_sf_hdtr.trl_cnt = 2;
+			
+	 		my_result = sendfile(my_libsys_fd, my_child_fd, 3, &my_libsys_len, &my_sf_hdtr, 0);
+			if (my_result < 0 || my_libsys_len != 11) {
+				printf( "sendfile failed with error %d - \"%s\" \n", errno, strerror( errno) );
+				close( my_child_fd );
+				exit( -1 );
+			}
+
+			my_result = close ( my_libsys_fd );
+			if ( my_libsys_fd < 0 ) {
+				printf ( "close failed with error %d - \"%s\" \n", errno, strerror( errno) );
+				close ( my_child_fd );
+				exit ( -1 );
+			}
+		}		
+#endif
+
 		/* tell parent we're done */
 		my_result = write( my_child_fd, "all done", 8 );
 		if ( my_result == -1 ) {
@@ -278,7 +331,37 @@ int socket_tests( void * the_argp )
 		}
 #endif
 
-		/* see if child is done */
+#if 1
+		if (!g_is_under_rosetta) {
+			size_t neededBytes = 11;
+			
+			/* Check for sendfile output */
+			bzero( (void *)&my_parent_buffer[0], sizeof(my_parent_buffer) );
+			while (neededBytes > 0) {
+				my_result = read( my_accepted_socket, &my_parent_buffer[11-neededBytes], neededBytes );
+				if ( my_result == -1 ) {
+					printf( "read call failed with error %d - \"%s\" \n", errno, strerror( errno) );
+					goto test_failed_exit;
+				} else if (my_result == 0) {
+					break;
+				}
+				neededBytes -= my_result;
+			}
+			
+			if ( neededBytes > 0 ) {
+				printf( "read call returned %ld bytes instead of 11\n", 11 - neededBytes );
+				goto test_failed_exit;
+			}
+
+			if ( ! (my_parent_buffer[0] == 's' && my_parent_buffer[1] == 'e' && my_parent_buffer[9] == 'n' && my_parent_buffer[10] == 'd') ) {
+				printf( "read wrong sendfile message from child \n" );
+				goto test_failed_exit;
+			}
+		}
+		
+#endif
+
+		/* see if child is done. bzero so that string is NUL terminated */
 		bzero( (void *)&my_parent_buffer[0], sizeof(my_parent_buffer) );
 		my_result = read( my_accepted_socket, &my_parent_buffer[0], sizeof(my_parent_buffer) );
 		if ( my_result == -1 ) {
@@ -315,11 +398,11 @@ test_passed_exit:
 		close( my_accepted_socket );
 	if ( my_parent_pathp != NULL ) {
 		remove( my_parent_pathp );	
-		free( my_parent_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_parent_pathp, 128);
 	 }
 	if ( my_child_pathp != NULL ) {
 		remove( my_child_pathp );	
-		free( my_child_pathp );
+		vm_deallocate(mach_task_self(), (vm_address_t)my_child_pathp, 128);
 	 }
 	return( my_err );
 }

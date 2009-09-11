@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -64,6 +64,7 @@
 
 #include <mach/error.h>
 #include "errorlib.h"
+#include "err_libkern.sub"
 #include "err_iokit.sub"
 #include "err_ipc.sub"
 #include "err_kern.sub"
@@ -131,7 +132,14 @@ __private_extern__ struct error_system _mach_errors[err_max_system+1] = {
 	/* 0x30 */ errorlib_system_null, /* 0x31 */ errorlib_system_null,
 	/* 0x32 */ errorlib_system_null, /* 0x33 */ errorlib_system_null,
 	/* 0x34 */ errorlib_system_null, /* 0x35 */ errorlib_system_null,
-	/* 0x36 */ errorlib_system_null, /* 0x37 */ errorlib_system_null,
+	/* 0x36 */ errorlib_system_null,
+
+	/* 0x37; err_libkern */
+	{
+		errlib_count(err_libkern_sub),
+		"(libkern/?) unknown subsystem error",
+		err_libkern_sub,
+	},
 
 	/* 0x38; err_iokit */
 	{

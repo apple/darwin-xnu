@@ -1,5 +1,5 @@
 .\"
-.\" Copyright (c) 2007 Apple Inc. All rights reserved.
+.\" Copyright (c) 2008 Apple Inc. All rights reserved.
 .\"
 .\" @APPLE_LICENSE_HEADER_START@
 .\" 
@@ -20,59 +20,76 @@
 .\" 
 .\" @APPLE_LICENSE_HEADER_END@
 .\"
-.Dd July 30, 2007
+.Dd April 19, 2005
 .Dt AUDIT 2
-.Os Darwin
+.Os
 .Sh NAME
 .Nm audit
-.Nd submit a record to the kernel for auditing 
+.Nd "commit BSM audit record to audit log"
 .Sh SYNOPSIS
-.Fd #include <bsm/audit.h>
+.In bsm/audit.h
 .Ft int
-.Fn audit "const void * record" "int length"
+.Fn audit "const char *record" "u_int length"
 .Sh DESCRIPTION
 The
 .Fn audit
-function submits a record to the kernel for inclusion in the global audit 
-trail. The record must already be in BSM format. To protect the integrity
-of the audit trail, this system call must be made with sufficient privileges.
-.Fa Libbsm
-can be used to create and manipulate BSM data.
-.Fa Length
-is the length in bytes of the BSM record and
+system call
+submits a completed BSM audit record to the system audit log.
+.Pp
+The
 .Fa record
-points to the data.
+argument
+is a pointer to the specific event to be recorded and
+.Fa length
+is the size in bytes of the data to be written.
 .Sh RETURN VALUES
-Upon successful completion a value of 0 is returned.
-Otherwise, a value of -1 is returned and
-.Va errno
-is set to indicate the error.
+.Rv -std
 .Sh ERRORS
-.Bl -tag -width Er
 The
 .Fn audit
-system call will fail if:
-.\" ===========
+system call will fail and the data never written if:
+.Bl -tag -width Er
+.It Bq Er EFAULT
+The
+.Fa record
+argument is beyond the allocated address space of the process.
 .It Bq Er EINVAL
-.Fa Length
-is greater than MAX_AUDIT_RECORD_SIZE, less than zero, greater than the
-internal buffer size, or the record fails verification.
-.\" ===========
-.It Bq Er ENOTSUP
-The security auditing service is not available.
-.\" ===========
+The token ID is invalid or
+.Va length
+is larger than
+.Dv MAXAUDITDATA .
 .It Bq Er EPERM
-The call was made with insufficient privileges to complete.
-.\" ===========
+The process does not have sufficient permission to complete
+the operation.
 .El
 .Sh SEE ALSO
 .Xr auditon 2 ,
-.Xr auditctl 2 ,
-.Xr getauid 2 ,
-.Xr setauid 2 ,
 .Xr getaudit 2 ,
-.Xr setaudit 2
+.Xr getaudit_addr 2 ,
+.Xr getauid 2 ,
+.Xr setaudit 2 ,
+.Xr setaudit_addr 2 ,
+.Xr setauid 2 ,
+.Xr libbsm 3
 .Sh HISTORY
-The
-.Fn audit
-function call first appeared in Mac OS X 10.3 (Panther).
+The OpenBSM implementation was created by McAfee Research, the security
+division of McAfee Inc., under contract to Apple Computer Inc.\& in 2004.
+It was subsequently adopted by the TrustedBSD Project as the foundation for
+the OpenBSM distribution.
+.Sh AUTHORS
+.An -nosplit
+This software was created by McAfee Research, the security research division
+of McAfee, Inc., under contract to Apple Computer Inc.
+Additional authors include
+.An Wayne Salamon ,
+.An Robert Watson ,
+and SPARTA Inc.
+.Pp
+The Basic Security Module (BSM) interface to audit records and audit event
+stream format were defined by Sun Microsystems.
+.Pp
+This manual page was written by
+.An Tom Rhodes Aq trhodes@FreeBSD.org .
+.Sh BUGS
+The kernel does not fully validate that the argument passed is syntactically
+valid BSM.  Submitting invalid audit records may corrupt the audit log.

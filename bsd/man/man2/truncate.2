@@ -53,20 +53,29 @@
 .Fa "off_t length"
 .Fc
 .Sh DESCRIPTION
-.Fn Truncate
-causes the file named by
-.Fa path
+.Fn ftruncate
+and
+.Fn truncate
+cause the file named by
+.Fa path ,
 or referenced by
-.Fa fildes
-to be truncated or extended to
+.Fa fildes ,
+to be truncated (or extended) to
 .Fa length
-bytes in size.  If the file previously
-was larger than this size, the extra data
-is lost. If the file was smaller than this size, it will be extended as
-if by writing bytes with the value zero.
-With
-.Fn ftruncate ,
-the file must be open for writing.
+bytes in size. If the file size exceeds 
+.Fa length ,
+any extra data is discarded. If the file size is smaller than 
+.Fa length , 
+the file is extended and filled with zeros to the indicated length.
+The
+.Fn ftruncate
+form requires the file to be open for writing.
+.Pp
+Note: 
+.Fn ftruncate 
+and
+.Fn truncate
+do not modify the current file offset for any open file descriptions associated with the file.
 .Sh RETURN VALUES
 A value of 0 is returned if the call succeeds.  If the call
 fails a -1 is returned, and the global variable

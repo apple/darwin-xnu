@@ -32,6 +32,8 @@
 
 #include <kdp/kdp.h>
 #include <kdp/kdp_protocol.h>
+#include <mach/vm_types.h>
+#include <libsa/types.h>
 
 typedef struct {
     unsigned short		reply_port;
@@ -58,6 +60,7 @@ extern volatile int	kdp_flag;
 #define PANIC_CORE_ON_NMI 0x20 
 #define DBG_POST_CORE     0x40
 #define PANIC_LOG_DUMP    0x80
+#define REBOOT_POST_CORE  0x100
 typedef boolean_t
 (*kdp_dispatch_t) (
     kdp_pkt_t *,
@@ -103,7 +106,7 @@ kdp_panic(
 
 extern
 void
-kdp_reboot(
+kdp_machine_reboot(
     void
 );
 
@@ -155,12 +158,46 @@ kdp_sync_cache(
     void
 );
 
-unsigned int
-kdp_ml_get_breakinsn(
-    void
+/* Return a byte array that can be byte-copied to a memory address
+ * to trap into the debugger. Must be 4 bytes or less in the current
+ * implementation
+ */
+#define MAX_BREAKINSN_BYTES 4
+
+void
+kdp_machine_get_breakinsn(
+						  uint8_t *bytes,
+						  uint32_t *size
 );
 
 extern void
 kdp_ml_enter_debugger(
 	void
 );
+
+mach_vm_size_t
+kdp_machine_vm_read( mach_vm_address_t, caddr_t, mach_vm_size_t);
+
+mach_vm_size_t
+kdp_machine_vm_write( caddr_t, mach_vm_address_t, mach_vm_size_t);
+
+mach_vm_size_t
+kdp_machine_phys_read(kdp_readphysmem64_req_t *rq, caddr_t /* data */,
+                      uint16_t /* lcpu */);
+
+mach_vm_size_t
+kdp_machine_phys_write(kdp_writephysmem64_req_t *rq, caddr_t /* data */,
+                       uint16_t /* lcpu */);
+
+int
+kdp_machine_ioport_read(kdp_readioport_req_t *, caddr_t /* data */, uint16_t /* lcpu */);
+
+int
+kdp_machine_ioport_write(kdp_writeioport_req_t *, caddr_t /* data */, uint16_t /* lcpu */);
+
+int
+kdp_machine_msr64_read(kdp_readmsr64_req_t *, caddr_t /* data */, uint16_t /* lcpu */);
+
+int
+kdp_machine_msr64_write(kdp_writemsr64_req_t *, caddr_t /* data */, uint16_t /* lcpu */);
+

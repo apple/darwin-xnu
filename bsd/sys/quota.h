@@ -151,9 +151,9 @@ struct dqfilehdr {
 	u_int32_t dqh_maxentries;	/* must be a power of 2 */
 	u_int32_t dqh_entrycnt;		/* count of active entries */
 	u_int32_t dqh_flags;		/* reserved for now (0) */
-	time_t	  dqh_chktime;		/* time of last quota check */
-	time_t	  dqh_btime;		/* time limit for excessive disk use */
-	time_t	  dqh_itime;		/* time limit for excessive files */
+	u_int32_t dqh_chktime;		/* time of last quota check */
+	u_int32_t dqh_btime;		/* time limit for excessive disk use */
+	u_int32_t dqh_itime;		/* time limit for excessive files */
 	char      dqh_string[16];	/* tag string */
 	u_int32_t dqh_spare[4];		/* pad struct to power of 2 */
 };
@@ -165,8 +165,8 @@ struct dqblk {
 	u_int32_t dqb_ihardlimit;	/* maximum # allocated inodes + 1 */
 	u_int32_t dqb_isoftlimit;	/* preferred inode limit */
 	u_int32_t dqb_curinodes;	/* current # allocated inodes */
-	time_t	  dqb_btime;		/* time limit for excessive disk use */
-	time_t	  dqb_itime;		/* time limit for excessive files */
+	u_int32_t dqb_btime;		/* time limit for excessive disk use */
+	u_int32_t dqb_itime;		/* time limit for excessive files */
 	u_int32_t dqb_id;		/* identifier (0 for empty entries) */
 	u_int32_t dqb_spare[4];		/* pad struct to power of 2 */
 };
@@ -185,8 +185,8 @@ struct user_dqblk {
 	u_int32_t dqb_ihardlimit;	/* maximum # allocated inodes + 1 */
 	u_int32_t dqb_isoftlimit;	/* preferred inode limit */
 	u_int32_t dqb_curinodes;	/* current # allocated inodes */
-	user_time_t	  dqb_btime __attribute((aligned(8)));		/* time limit for excessive disk use */
-	user_time_t	  dqb_itime;		/* time limit for excessive files */
+	u_int32_t dqb_btime;		/* time limit for excessive disk use */
+	u_int32_t dqb_itime;		/* time limit for excessive files */
 	u_int32_t dqb_id;		/* identifier (0 for empty entries) */
 	u_int32_t dqb_spare[4];		/* pad struct to power of 2 */
 };
@@ -215,7 +215,7 @@ struct user_dqblk {
  * golden ratio to the machine's word size.
  */
 #define dqhash1(id, shift, mask)  \
-	((((id) * 2654435761UL) >> (shift)) & (mask))
+	((((id) * 2654435761U) >> (shift)) & (mask))
 
 #define dqhash2(id, mask)  \
 	(dqhash1((id), 11, (mask)>>1) | 1)
@@ -229,10 +229,10 @@ struct user_dqblk {
  * Compute the hash shift value.
  * It is the word size, in bits, minus the hash table size, in bits.
  */
-static __inline int dqhashshift(u_long);
+static __inline int dqhashshift(u_int32_t);
 
 static __inline int
-dqhashshift(u_long size)
+dqhashshift(u_int32_t size)
 {
 	int shift;
 
@@ -262,8 +262,8 @@ struct quotafile {
 	int           qf_shift;      /* primary hash shift */
 	int           qf_maxentries; /* size of hash table (power of 2) */
 	int           qf_entrycnt;   /* count of active entries */
-	time_t        qf_btime;      /* block quota time limit */
-	time_t        qf_itime;      /* inode quota time limit */
+	u_int32_t     qf_btime;      /* block quota time limit */
+	u_int32_t     qf_itime;      /* inode quota time limit */
 
                                      /* the following 2 fields are protected */
                                      /* by the quota list lock  */
@@ -340,6 +340,7 @@ struct dquot {
 #define	CHOWN	0x02	/* (advisory) change initiated by chown */
 
 
+#ifdef XNU_KERNEL_PRIVATE
 /*
  * Functions that manage the in-core dquot and the
  * on-disk dqblk data structures.
@@ -349,7 +350,7 @@ void	dqfileinit(struct quotafile *);
 int	dqfileopen(struct quotafile *, int);
 void	dqfileclose(struct quotafile *, int);
 void	dqflush(struct vnode *);
-int	dqget(u_long, struct quotafile *, int, struct dquot **);
+int	dqget(u_int32_t, struct quotafile *, int, struct dquot **);
 void	dqhashinit(void);
 void	dqinit(void);
 int	dqisinitialized(void);
@@ -366,6 +367,7 @@ void	qf_put(struct quotafile *, int type);
 
 __private_extern__ void  munge_dqblk(struct dqblk *dqblkp, struct user_dqblk *user_dqblkp, boolean_t to64);
 __END_DECLS
+#endif /* XNU_KERNEL_PRIVATE */
 
 #endif /* KERNEL_PRIVATE */
 

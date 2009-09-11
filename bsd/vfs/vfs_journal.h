@@ -43,15 +43,21 @@
 #include <sys/types.h>
 #include <kern/locks.h>
 
+typedef struct _blk_info {
+    int32_t    bsize;
+    union {
+	int32_t    cksum;
+	uint32_t   sequence_num;
+    } b;
+} _blk_info;
+
 typedef struct block_info {
     off_t       bnum;                // block # on the file system device
-    size_t      bsize;               // in bytes
     union {
-	int32_t     cksum;
-	uint32_t    sequence_num;    // only used in block_list_header->binfo[0]
+	_blk_info   bi;
 	struct buf *bp;
-    } b;
-} block_info;
+    } u;
+} __attribute__((__packed__)) block_info;
 
 typedef struct block_list_header {
     u_int16_t   max_blocks;          // max number of blocks in this chunk
@@ -133,6 +139,7 @@ typedef struct journal {
     int32_t             tbuffer_size;      // default transaction buffer size
 
     char               *header_buf;        // in-memory copy of the journal header
+    int32_t             header_buf_size;
     journal_header     *jhdr;              // points to the first byte of header_buf
 
     off_t               max_read_size;

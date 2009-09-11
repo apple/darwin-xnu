@@ -2,9 +2,8 @@
  * CDDL HEADER START
  *
  * The contents of this file are subject to the terms of the
- * Common Development and Distribution License, Version 1.0 only
- * (the "License").  You may not use this file except in compliance
- * with the License.
+ * Common Development and Distribution License (the "License").
+ * You may not use this file except in compliance with the License.
  *
  * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
  * or http://www.opensolaris.org/os/licensing.
@@ -20,11 +19,11 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
-/* #pragma ident	"@(#)fbt.c	1.15	05/09/19 SMI" */
+/* #pragma ident	"@(#)fbt.c	1.18	07/01/10 SMI" */
 
 #ifdef KERNEL
 #ifndef _KERNEL
@@ -33,9 +32,7 @@
 #endif
 
 #include <mach-o/loader.h> 
-#include <kern/mach_header.h>
-
-extern struct mach_header _mh_execute_header; /* the kernel's mach header */
+#include <libkern/kernel_mach_header.h>
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -251,22 +248,26 @@ fbt_getargdesc(void *arg, dtrace_id_t id, void *parg, dtrace_argdesc_t *desc)
 	 * If we have a parent container, we must manually import it.
 	 */
 	if ((parent = ctf_parent_name(fp)) != NULL) {
-		struct modctl *mod;
+		struct modctl *mp = &modules;
+		struct modctl *mod = NULL;
 
 		/*
 		 * We must iterate over all modules to find the module that
 		 * is our parent.
 		 */
-		for (mod = &modules; mod != NULL; mod = mod->mod_next) {
-			if (strcmp(mod->mod_filename, parent) == 0)
+		do {
+			if (strcmp(mp->mod_modname, parent) == 0) {
+				mod = mp;
 				break;
-		}
+			}
+		} while ((mp = mp->mod_next) != &modules);
 
 		if (mod == NULL)
 			goto err;
 
-		if ((pfp = ctf_modopen(mod->mod_mp, &error)) == NULL)
+		if ((pfp = ctf_modopen(mod->mod_mp, &error)) == NULL) {
 			goto err;
+		}
 
 		if (ctf_import(fp, pfp) != 0) {
 			ctf_close(pfp);
@@ -326,7 +327,7 @@ static dtrace_pops_t fbt_pops = {
 #if !defined(__APPLE__)
 	fbt_getargdesc,
 #else
-	NULL, /* XXX where to look for xnu? */
+	NULL, /* FIXME: where to look for xnu? */
 #endif /* __APPLE__ */
 	NULL,
 	NULL,
@@ -364,6 +365,7 @@ fbt_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 
 	dtrace_invop_add(fbt_invop);
 
+#if !defined(__APPLE__)
 	if (ddi_create_minor_node(devi, "fbt", S_IFCHR, 0,
 	    DDI_PSEUDO, NULL) == DDI_FAILURE ||
 	    dtrace_register("fbt", &fbt_attr, DTRACE_PRIV_KERNEL, NULL,
@@ -371,6 +373,15 @@ fbt_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		fbt_cleanup(devi);
 		return (DDI_FAILURE);
 	}
+#else
+	if (ddi_create_minor_node(devi, "fbt", S_IFCHR, 0,
+	    DDI_PSEUDO, 0) == DDI_FAILURE ||
+	    dtrace_register("fbt", &fbt_attr, DTRACE_PRIV_KERNEL, NULL,
+	    &fbt_pops, NULL, &fbt_id) != 0) {
+		fbt_cleanup(devi);
+		return (DDI_FAILURE);
+	}
+#endif /* __APPLE__ */
 
 	ddi_report_dev(devi);
 	fbt_devi = devi;
@@ -426,7 +437,7 @@ fbt_init( void )
 	if (0 == gDisableFBT)
 	{
 		int majdevno = cdevsw_add(FBT_MAJOR, &fbt_cdevsw);
-		int size = 0, header_size, round_size;
+		unsigned long size = 0, header_size, round_size;
 	   	kern_return_t ret;
 		void *p, *q;
 		
@@ -439,16 +450,17 @@ fbt_init( void )
 		 * Capture the kernel's mach_header in its entirety and the contents of
 		 * its LINKEDIT segment (and only that segment). This is sufficient to
 		 * build all the fbt probes lazily the first time a client looks to
-		 * the fbt provider. Remeber thes on the global struct modctl g_fbt_kernctl.
+		 * the fbt provider. Remeber these on the global struct modctl g_fbt_kernctl.
 		 */
-		header_size = sizeof(struct mach_header) + _mh_execute_header.sizeofcmds;
+		header_size = sizeof(kernel_mach_header_t) + _mh_execute_header.sizeofcmds;
 		p = getsegdatafromheader(&_mh_execute_header, SEG_LINKEDIT, &size);
 
-        round_size = round_page_32(header_size + size);
+        round_size = round_page(header_size + size);
+		/* "q" will accomodate copied kernel_mach_header_t, its load commands, and LINKEIT segment. */
 		ret = kmem_alloc_pageable(kernel_map, (vm_offset_t *)&q, round_size);
 
 		if (p && (ret == KERN_SUCCESS)) {
-			struct segment_command *sgp;
+			kernel_segment_command_t *sgp;
 
 			bcopy( (void *)&_mh_execute_header, q, header_size);
 			bcopy( p, (char *)q + header_size, size);
@@ -456,7 +468,7 @@ fbt_init( void )
 			sgp = getsegbynamefromheader(q, SEG_LINKEDIT);
 
 			if (sgp) {
-				sgp->vmaddr = (unsigned long)((char *)q + header_size);
+				sgp->vmaddr = (uintptr_t)((char *)q + header_size);
 				g_fbt_kernctl.address = (vm_address_t)q;
 				g_fbt_kernctl.size = header_size + size;
 			} else {
@@ -472,8 +484,9 @@ fbt_init( void )
 		}
 
 		strncpy((char *)&(g_fbt_kernctl.mod_modname), "mach_kernel", KMOD_MAX_NAME);
+		((char *)&(g_fbt_kernctl.mod_modname))[KMOD_MAX_NAME -1] = '\0';
 
-		fbt_attach( (dev_info_t	*)majdevno, DDI_ATTACH );
+		fbt_attach( (dev_info_t	*)(uintptr_t)majdevno, DDI_ATTACH );
 
 		gDisableFBT = 1; /* Ensure this initialization occurs just one time. */
 	}

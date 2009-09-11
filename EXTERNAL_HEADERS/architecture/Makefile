@@ -15,6 +15,9 @@ INSTINC_SUBDIRS_PPC = 	\
 INSTINC_SUBDIRS_I386 =	\
 	i386
 
+INSTINC_SUBDIRS_X86_64 =	\
+	i386
+
 INSTINC_SUBDIRS_ARM =	\
 	arm
 
@@ -24,6 +27,8 @@ INSTALL_MI_LIST =
 
 INSTALL_MI_DIR = architecture
 
+INSTALL_KF_MI_LIST = byte_order.h
+
 EXPORT_MI_LIST = ${EXPORT_FILES}
 
 EXPORT_MI_DIR = architecture
@@ -31,7 +36,3 @@ EXPORT_MI_DIR = architecture
 include $(MakeInc_rule)
 include $(MakeInc_dir)
 
-
-build_installhdrs_mi::
-	$(MKDIR) $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)
-	$(LN) ../../../../../../../../usr/include/architecture/byte_order.h $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/byte_order.h 

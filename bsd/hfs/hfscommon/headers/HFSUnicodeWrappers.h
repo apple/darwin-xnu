@@ -111,6 +111,7 @@ extern int32_t FastRelString( ConstStr255Param str1, ConstStr255Param str2 );
 
 
 extern HFSCatalogNodeID GetEmbeddedFileID( ConstStr31Param filename, u_int32_t length, u_int32_t *prefixLength );
+extern u_int32_t CountFilenameExtensionChars( const unsigned char * filename, u_int32_t length );
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

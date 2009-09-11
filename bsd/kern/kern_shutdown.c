@@ -51,19 +51,13 @@
 #include <sys/tty.h>
 #include <kern/task.h>
 #include <sys/quota.h>
-#include <ufs/ufs/inode.h>
-#if	NCPUS > 1
-#include <kern/processor.h>
-#include <kern/thread.h>
-#include <sys/lock.h>
-#endif	/* NCPUS > 1 */
 #include <vm/vm_kern.h>
 #include <mach/vm_param.h>
 #include <sys/filedesc.h>
 #include <mach/host_priv.h>
 #include <mach/host_reboot.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <kern/sched_prim.h>		/* for thread_block() */
 #include <kern/host.h>			/* for host_priv_self() */
@@ -74,14 +68,21 @@
 #include <sys/sysproto.h>		/* abused for sync() */
 #include <kern/clock.h>			/* for delay_for_interval() */
 
+#include <sys/kdebug.h>
+
+int system_inshutdown = 0;
+
 /* XXX should be in a header file somewhere, but isn't */
 extern void md_prepare_for_shutdown(int, int, char *);
+extern void (*unmountroot_pre_hook)(void);
 
 int	waittime = -1;
-static int shutting_down = 0;
+unsigned int proc_shutdown_exitcount = 0;
 
+static int  sd_openlog(vfs_context_t);
+static int  sd_closelog(vfs_context_t);
+static void sd_log(vfs_context_t, const char *, ...);
 static void proc_shutdown(void);
-int in_shutdown(void);
 
 extern void IOSystemShutdownNotification(void);
 
@@ -92,9 +93,15 @@ struct sd_filterargs{
 
 
 struct sd_iterargs {
-	int signo;	/* the signal to be posted */
-	int setsdstate;  /* shutdown state to be set */
+	int signo;		/* the signal to be posted */
+	int setsdstate;  	/* shutdown state to be set */
+	int countproc;		/* count processes on action */
+	int activecount; 	/* number of processes on which action was done */
 };
+
+static vnode_t sd_logvp = NULLVP;
+static off_t sd_log_offset = 0;
+
 
 static int sd_filt1(proc_t, void *);
 static int sd_filt2(proc_t, void *);
@@ -109,6 +116,8 @@ boot(int paniced, int howto, char *command)
 	int hostboot_option=0;
 	int funnel_state;
 
+	system_inshutdown = 1;
+
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
        /*
@@ -117,11 +126,16 @@ boot(int paniced, int howto, char *command)
 	*/
 	IOSystemShutdownNotification();
 
-	shutting_down = 1;
-	    
 	md_prepare_for_shutdown(paniced, howto, command);
 
-	if ((howto&RB_NOSYNC)==0 && waittime < 0) {
+	if ((howto&RB_QUICK)==RB_QUICK && waittime < 0) {
+		waittime = 0;
+		printf("Quick reboot...\n");
+		if ((howto&RB_NOSYNC)==0) {
+			sync(p, (void *)NULL, (int *)NULL);
+		}
+	}
+	else if ((howto&RB_NOSYNC)==0 && waittime < 0) {
 		int iter, nbusy;
 
 		waittime = 0;
@@ -135,9 +149,12 @@ boot(int paniced, int howto, char *command)
 		/* handle live procs (deallocate their root and current directories). */		
 		proc_shutdown();
 
-#if AUDIT
+#if CONFIG_AUDIT
  		audit_shutdown();
 #endif
+
+		if (unmountroot_pre_hook != NULL)
+			unmountroot_pre_hook();
 
 		sync(p, (void *)NULL, (int *)NULL);
 
@@ -148,6 +165,9 @@ boot(int paniced, int howto, char *command)
 
 		if (initproc && p != initproc)
 			task_suspend(initproc->task);
+
+		if (kdebug_enable)
+			kdbg_dump_trace_to_file("/var/log/shutdown/shutdown.trace");
 
 		/*
 		 * Unmount filesystems
@@ -194,6 +214,67 @@ boot(int paniced, int howto, char *command)
 }
 
 static int
+sd_openlog(vfs_context_t ctx)
+{
+	int error = 0;
+	struct timeval tv;
+	
+	/* Open shutdown log */
+	if ((error = vnode_open(PROC_SHUTDOWN_LOG, (O_CREAT | FWRITE | O_NOFOLLOW), 0644, 0, &sd_logvp, ctx))) {
+		printf("Failed to open %s: error %d\n", PROC_SHUTDOWN_LOG, error);
+		sd_logvp = NULLVP;
+		return error;
+	}
+
+	vnode_setsize(sd_logvp, (off_t)0, 0, ctx);
+
+	/* Write a little header */
+	microtime(&tv);
+	sd_log(ctx, "Process shutdown log.  Current time is %lu (in seconds).\n\n", tv.tv_sec);
+
+	return 0;
+}
+
+static int
+sd_closelog(vfs_context_t ctx)
+{
+	int error = 0;
+	if (sd_logvp != NULLVP) {
+		VNOP_FSYNC(sd_logvp, MNT_WAIT, ctx);
+		error = vnode_close(sd_logvp, FWRITE, ctx);
+	}
+
+	return error;
+}
+
+static void
+sd_log(vfs_context_t ctx, const char *fmt, ...) 
+{
+	int resid, log_error, len;
+	char logbuf[100];
+	va_list arglist;
+
+	/* If the log isn't open yet, open it */
+	if (sd_logvp == NULLVP) {
+		if (sd_openlog(ctx) != 0) {
+			/* Couldn't open, we fail out */
+			return;
+		}
+	}
+
+	va_start(arglist, fmt);
+	len = vsnprintf(logbuf, sizeof(logbuf), fmt, arglist);
+	log_error = vn_rdwr(UIO_WRITE, sd_logvp, (caddr_t)logbuf, len, sd_log_offset,
+			UIO_SYSSPACE, IO_UNIT | IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
+	if (log_error == EIO || log_error == 0) {
+		sd_log_offset += (len - resid);
+	}
+
+	va_end(arglist);
+
+}
+
+static int
 sd_filt1(proc_t p, void * args)
 {
 	proc_t self = current_proc();
@@ -219,16 +300,25 @@ sd_callback1(proc_t p, void * args)
 	struct sd_iterargs * sd = (struct sd_iterargs *)args;
 	int signo = sd->signo;
 	int setsdstate = sd->setsdstate;
+	int countproc = sd->countproc;
 
 	proc_lock(p);
 	p->p_shutdownstate = setsdstate;
 	if (p->p_stat != SZOMB) {
 		proc_unlock(p);
+		if (countproc != 0) {
+			proc_list_lock();
+			p->p_listflag |= P_LIST_EXITCOUNT;
+			proc_shutdown_exitcount++;
+			proc_list_unlock();
+		}
+
 		psignal(p, signo);
+		if (countproc !=  0)
+			sd->activecount++;
 	} else
 		proc_unlock(p);
 	return(PROC_RETURNED);
-
 }
 
 static int
@@ -255,12 +345,21 @@ sd_callback2(proc_t p, void * args)
 	struct sd_iterargs * sd = (struct sd_iterargs *)args;
 	int signo = sd->signo;
 	int setsdstate = sd->setsdstate;
+	int countproc = sd->countproc;
 
 	proc_lock(p);
 	p->p_shutdownstate = setsdstate;
 	if (p->p_stat != SZOMB) {
 		proc_unlock(p);
+		if (countproc !=  0) {
+			proc_list_lock();
+			p->p_listflag |= P_LIST_EXITCOUNT;
+			proc_shutdown_exitcount++;
+			proc_list_unlock();
+		}
 		psignal(p, signo);
+		if (countproc !=  0)
+			sd->activecount++;
 	} else
 		proc_unlock(p);
 
@@ -272,6 +371,8 @@ static int
 sd_callback3(proc_t p, void * args)
 {
 	struct sd_iterargs * sd = (struct sd_iterargs *)args;
+	vfs_context_t ctx = vfs_context_current();
+
 	int setsdstate = sd->setsdstate;
 
 	proc_lock(p);
@@ -291,7 +392,13 @@ sd_callback3(proc_t p, void * args)
 		} else {
 			p->exit_thread = current_thread();
 			printf(".");
+
+			sd_log(ctx, "%s[%d] had to be forced closed with exit1().\n", p->p_comm, p->p_pid);
+
 			proc_unlock(p);
+			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_FRCEXIT) | DBG_FUNC_NONE,
+					      p->p_pid, 0, 1, 0, 0);
+			sd->activecount++;
 			exit1(p, 1, (int *)NULL);
 		}
 	} else
@@ -316,11 +423,13 @@ sd_callback3(proc_t p, void * args)
 static void
 proc_shutdown(void)
 {
-	struct proc	*p, *self;
-	int		i, TERM_catch;
+	vfs_context_t ctx = vfs_context_current();
+	struct proc *p, *self;
 	int delayterm = 0;
 	struct sd_filterargs sfargs;
 	struct sd_iterargs sdargs;
+	int error = 0;
+	struct timespec ts;
 
 	/*
 	 *	Kill as many procs as we can.  (Except ourself...)
@@ -347,39 +456,39 @@ sigterm_loop:
 	sfargs.shutdownstate = 0;
 	sdargs.signo = SIGTERM;
 	sdargs.setsdstate = 1;
+	sdargs.countproc = 1;
+	sdargs.activecount = 0;
 
+	error = 0;
 	/* post a SIGTERM to all that catch SIGTERM and not marked for delay */
 	proc_rebootscan(sd_callback1, (void *)&sdargs, sd_filt1, (void *)&sfargs);
 
-	/*
-	 * now wait for up to 30 seconds to allow those procs catching SIGTERM
-	 * to digest it
-	 * as soon as these procs have exited, we'll continue on to the next step
-	 */
-	for (i = 0; i < 300; i++) {
-	        /*
-		 * sleep for a tenth of a second
-		 * and then check to see if the tasks that were sent a
-		 * SIGTERM have exited
-		 */
-		delay_for_interval(100, 1000 * 1000);
-		TERM_catch = 0;
-
-
+	if (sdargs.activecount != 0 && proc_shutdown_exitcount!= 0) {
 		proc_list_lock();
-
-		for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-			if (p->p_shutdownstate == 1) {
-				TERM_catch++;
+		if (proc_shutdown_exitcount != 0) {
+			/*
+	 		* now wait for up to 30 seconds to allow those procs catching SIGTERM
+	 		* to digest it
+	 		* as soon as these procs have exited, we'll continue on to the next step
+	 		*/
+			ts.tv_sec = 30;
+			ts.tv_nsec = 0;
+			error = msleep(&proc_shutdown_exitcount, proc_list_mlock, PWAIT, "shutdownwait", &ts);
+			if (error != 0) {
+				for (p = allproc.lh_first; p; p = p->p_list.le_next) {
+					if ((p->p_listflag & P_LIST_EXITCOUNT) == P_LIST_EXITCOUNT)
+						p->p_listflag &= ~P_LIST_EXITCOUNT;
+				}
+				for (p = zombproc.lh_first; p; p = p->p_list.le_next) {
+					if ((p->p_listflag & P_LIST_EXITCOUNT) == P_LIST_EXITCOUNT)
+						p->p_listflag &= ~P_LIST_EXITCOUNT;
+				}
 			}
+			
 		}
-
 		proc_list_unlock();
-
-		if (TERM_catch == 0)
-		        break;
 	}
-	if (TERM_catch) {
+	if (error == ETIMEDOUT) {
 		/*
 		 * log the names of the unresponsive tasks
 		 */
@@ -387,9 +496,10 @@ sigterm_loop:
 
 		proc_list_lock();
 
-	        for (p = allproc.lh_first; p; p = p->p_list.le_next) {
+		for (p = allproc.lh_first; p; p = p->p_list.le_next) {
 			if (p->p_shutdownstate == 1) {
-				  printf("%s[%d]: didn't act on SIGTERM\n", p->p_comm, p->p_pid);
+				printf("%s[%d]: didn't act on SIGTERM\n", p->p_comm, p->p_pid);
+				sd_log(ctx, "%s[%d]: didn't act on SIGTERM\n", p->p_comm, p->p_pid);
 			}
 		}
 
@@ -405,31 +515,36 @@ sigterm_loop:
 	sfargs.shutdownstate = 2;
 	sdargs.signo = SIGKILL;
 	sdargs.setsdstate = 2;
+	sdargs.countproc = 1;
+	sdargs.activecount = 0;
 
-	/* post a SIGTERM to all that catch SIGTERM and not marked for delay */
+	/* post a SIGKILL to all that catch SIGTERM and not marked for delay */
 	proc_rebootscan(sd_callback2, (void *)&sdargs, sd_filt2, (void *)&sfargs);
 
-	/*
-	 * wait for up to 60 seconds to allow these procs to exit normally
-	 *
-	 * History:	The delay interval was changed from 100 to 200
-	 *		for NFS requests in particular.
-	 */
-	for (i = 0; i < 300; i++) {
-		delay_for_interval(200, 1000 * 1000);
-
-
+	if (sdargs.activecount != 0 && proc_shutdown_exitcount!= 0) {
 		proc_list_lock();
-
-	        for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-				if (p->p_shutdownstate == 2)
-			        break;
+		if (proc_shutdown_exitcount != 0) {
+			/*
+	 		* wait for up to 60 seconds to allow these procs to exit normally
+	 		*
+	 		* History:	The delay interval was changed from 100 to 200
+	 		*		for NFS requests in particular.
+	 		*/
+			ts.tv_sec = 60;
+			ts.tv_nsec = 0;
+			error = msleep(&proc_shutdown_exitcount, proc_list_mlock, PWAIT, "shutdownwait", &ts);
+			if (error != 0) {
+				for (p = allproc.lh_first; p; p = p->p_list.le_next) {
+					if ((p->p_listflag & P_LIST_EXITCOUNT) == P_LIST_EXITCOUNT)
+						p->p_listflag &= ~P_LIST_EXITCOUNT;
+				}
+				for (p = zombproc.lh_first; p; p = p->p_list.le_next) {
+					if ((p->p_listflag & P_LIST_EXITCOUNT) == P_LIST_EXITCOUNT)
+						p->p_listflag &= ~P_LIST_EXITCOUNT;
+				}
+			}
 		}
-
 		proc_list_unlock();
-
-		if (!p)
-		        break;
 	}
 
 	/*
@@ -439,6 +554,8 @@ sigterm_loop:
 	sfargs.shutdownstate = 3;
 	sdargs.signo = 0;
 	sdargs.setsdstate = 3;
+	sdargs.countproc = 0;
+	sdargs.activecount = 0;
 
 	/* post a SIGTERM to all that catch SIGTERM and not marked for delay */
 	proc_rebootscan(sd_callback3, (void *)&sdargs, sd_filt2, (void *)&sfargs);
@@ -449,16 +566,11 @@ sigterm_loop:
 		delayterm = 1;
 		goto  sigterm_loop;
 	}
+
+	sd_closelog(ctx);
+
 	/* drop the ref on initproc */
 	proc_rele(initproc);
 	printf("continuing\n");
 }
 
-/*
- * Check whether the system has begun its shutdown sequence. 
- */
-int
-in_shutdown(void)
-{
-	return shutting_down;
-}

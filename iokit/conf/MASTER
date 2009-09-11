@@ -63,7 +63,10 @@ options		IOKITCPP	# C++ implementation		# <iokitcpp>
 options		KDEBUG		# kernel tracing		# <kdebug>
 options		NETWORKING	# kernel networking		# <networking>
 options		CRYPTO		# want crypto code		# <crypto>
-options     CONFIG_DTRACE # enable dtrace       # <config_dtrace>
+options		CONFIG_DTRACE	# enable dtrace			# <config_dtrace>
+
+options		CONFIG_SLEEP	#				# <config_sleep>
+
 
 #makeoptions	LIBDRIVER = "libDriver_kern.o"			# <libdriver>
 #makeoptions	LIBOBJC   = "libkobjc.o"			# <kernobjc>

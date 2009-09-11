@@ -46,7 +46,7 @@
 #include <ppc/POWERMAC/video_pdm.h>
 
 #ifdef	__MACHO__
-#include <mach-o/mach_header.h>
+#include <libkern/kernel_mach_header.h>
 #endif
 
 /* External references */
@@ -98,15 +98,14 @@ vm_offset_t first_avail;
 
 
 #ifdef __MACHO__
-extern struct mach_header _mh_execute_header;
 void *sectTEXTB;
-int sectSizeTEXT;
+unsigned long sectSizeTEXT;
 void *sectDATAB;
-int sectSizeDATA;
+unsigned long sectSizeDATA;
 void *sectOBJCB;
-int sectSizeOBJC;
+unsigned long sectSizeOBJC;
 void *sectLINKB;
-int sectSizeLINK;
+unsigned long sectSizeLINK;
 
 vm_offset_t end, etext, edata;
 #define	ETEXT	etext
@@ -120,9 +119,6 @@ void ppc_vm_init(unsigned int memory_size, boot_args *args)
 	unsigned int i;
 	vm_offset_t  addr;
 	int boot_task_end_offset;
-#if	NCPUS > 1
-	const char *cpus;
-#endif	/* NCPUS > 1 */
 
 	printf("mem_size = %d M\n",memory_size / (1024 * 1024));
 

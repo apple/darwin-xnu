@@ -447,7 +447,7 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 	if (err != btNotFound)
 	{
 		if ( DEBUG_BUILD )
-			DebugStr("\pUnexpected error from SearchBTreeRecord");
+			DebugStr("Unexpected error from SearchBTreeRecord");
 		
 		if (err == noErr)			//	If we found such a bogus extent record, then the tree is really messed up
 			err = cmBadNews;		//	so return an error that conveys the disk is hosed.
@@ -507,7 +507,7 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 				if ( err == btExists )
 				{
 					if ( DEBUG_BUILD )
-						DebugStr("\pCan't insert record -- already exists");
+						DebugStr("Can't insert record -- already exists");
 					return( cmBadNews );
 				}
 				else
@@ -522,7 +522,7 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 		{
 			err = DeleteExtents( vcb, srcFileID, isHFSPlus );	//	Now delete all the extent entries with the sourceID
 			if ( DEBUG_BUILD && err != noErr )
-				DebugStr("\pError from DeleteExtents");
+				DebugStr("Error from DeleteExtents");
 			break;									//	we're done!
 		}
 	} while ( true );

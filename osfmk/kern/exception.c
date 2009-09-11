@@ -117,7 +117,7 @@ kern_return_t exception_deliver(
 	mach_exception_data_t	code,
 	mach_msg_type_number_t  codeCnt,
 	struct exception_action *excp,
-	mutex_t			*mutex);
+	lck_mtx_t			*mutex);
 
 #ifdef MACH_BSD
 kern_return_t bsd_exception(
@@ -145,7 +145,7 @@ exception_deliver(
 	mach_exception_data_t	code,
 	mach_msg_type_number_t  codeCnt,
 	struct exception_action *excp,
-	mutex_t			*mutex)
+	lck_mtx_t			*mutex)
 {
 	ipc_port_t		exc_port;
 	exception_data_type_t	small_code[EXCEPTION_CODE_MAX];
@@ -168,16 +168,16 @@ exception_deliver(
 	 * the port from disappearing between now and when
 	 * ipc_object_copyin_from_kernel is finally called.
 	 */
-	mutex_lock(mutex);
+	lck_mtx_lock(mutex);
 	exc_port = excp->port;
 	if (!IP_VALID(exc_port)) {
-		mutex_unlock(mutex);
+		lck_mtx_unlock(mutex);
 		return KERN_FAILURE;
 	}
 	ip_lock(exc_port);
 	if (!ip_active(exc_port)) {
 		ip_unlock(exc_port);
-		mutex_unlock(mutex);
+		lck_mtx_unlock(mutex);
 		return KERN_FAILURE;
 	}
 	ip_reference(exc_port);	
@@ -186,14 +186,14 @@ exception_deliver(
 
 	flavor = excp->flavor;
 	behavior = excp->behavior;
-	mutex_unlock(mutex);
+	lck_mtx_unlock(mutex);
 
 	code64 = (behavior & MACH_EXCEPTION_CODES);
 	behavior &= ~MACH_EXCEPTION_CODES;
 
 	if (!code64) {
-		small_code[0] = CAST_DOWN(exception_data_type_t, code[0]);
-		small_code[1] = CAST_DOWN(exception_data_type_t, code[1]);
+		small_code[0] = CAST_DOWN_EXPLICIT(exception_data_type_t, code[0]);
+		small_code[1] = CAST_DOWN_EXPLICIT(exception_data_type_t, code[1]);
 	}
 
 
@@ -323,7 +323,7 @@ exception_triage(
 	task_t			task;
 	host_priv_t		host_priv;
 	struct exception_action *excp;
-	mutex_t			*mutex;
+	lck_mtx_t			*mutex;
 	kern_return_t		kr;
 
 	assert(exception != EXC_RPC_ALERT);
@@ -335,7 +335,7 @@ exception_triage(
 	 * Try to raise the exception at the activation level.
 	 */
 	thread = current_thread();
-	mutex = mutex_addr(thread->mutex);
+	mutex = &thread->mutex;
 	excp = &thread->exc_actions[exception];
 	kr = exception_deliver(thread, exception, code, codeCnt, excp, mutex);
 	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
@@ -345,7 +345,7 @@ exception_triage(
 	 * Maybe the task level will handle it.
 	 */
 	task = current_task();
-	mutex = mutex_addr(task->lock);
+	mutex = &task->lock;
 	excp = &task->exc_actions[exception];
 	kr = exception_deliver(thread, exception, code, codeCnt, excp, mutex);
 	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
@@ -355,7 +355,7 @@ exception_triage(
 	 * How about at the host level?
 	 */
 	host_priv = host_priv_self();
-	mutex = mutex_addr(host_priv->lock);
+	mutex = &host_priv->lock;
 	excp = &host_priv->exc_actions[exception];
 	kr = exception_deliver(thread, exception, code, codeCnt, excp, mutex);
 	if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
@@ -393,7 +393,7 @@ bsd_exception(
 {
 	task_t			task;
 	struct exception_action *excp;
-	mutex_t			*mutex;
+	lck_mtx_t		*mutex;
 	thread_t		self = current_thread();
 	kern_return_t		kr;
 
@@ -401,7 +401,7 @@ bsd_exception(
 	 * Maybe the task level will handle it.
 	 */
 	task = current_task();
-	mutex = mutex_addr(task->lock);
+	mutex = &task->lock;
 	excp = &task->exc_actions[exception];
 
 	kr = exception_deliver(self, exception, code, codeCnt, excp, mutex);
@@ -438,6 +438,7 @@ kern_return_t abnormal_exit_notify(mach_exception_data_type_t exccode,
  */
 kern_return_t sys_perf_notify(thread_t thread, int pid) 
 {
+
 	host_priv_t		hostp;
 	struct exception_action *excp;
 	ipc_port_t		xport;

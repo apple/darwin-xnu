@@ -82,6 +82,8 @@
 #include <sys/syslog.h>
 #include <sys/sysctl.h>
 
+#include <machine/endian.h>
+
 #include <net/if.h>
 #include <net/if_arp.h>
 #include <net/if_dl.h>
@@ -110,14 +112,13 @@
 #endif
 #endif
 
-extern u_long route_generation;
-extern int use_routegenid;
 extern int dlil_multithreaded_input;
 extern struct dlil_threading_info *dlil_lo_thread_ptr;
 
 #if CONFIG_MACF_NET 
 #include <security/mac_framework.h>
 #endif
+
 
 /*
  * System initialization
@@ -132,9 +133,9 @@ static int if_rtmtu(struct radix_node *, void *);
 static void if_rtmtu_update(struct ifnet *);
 
 static struct	if_clone *if_clone_lookup(const char *, int *);
-#ifdef IF_CLONE_LIST
+#if IF_CLONE_LIST
 static int	if_clone_list(int count, int * total, user_addr_t dst);
-#endif
+#endif /* IF_CLONE_LIST */
 
 MALLOC_DEFINE(M_IFADDR, "ifaddr", "interface address");
 MALLOC_DEFINE(M_IFMADDR, "ether_multi", "link-level multicast address");
@@ -175,11 +176,11 @@ if_attach_ifa(
 	struct ifaddr *ifa)
 {
 	ifnet_lock_assert(ifp, LCK_MTX_ASSERT_OWNED);
-	if (ifa->ifa_debug & IFA_ATTACHED) {
+	if (ifa->ifa_debug & IFD_ATTACHED) {
 		panic("if_attach_ifa: Attempted to attach address that's already attached!\n");
 	}
 	ifaref(ifa);
-	ifa->ifa_debug |= IFA_ATTACHED;
+	ifa->ifa_debug |= IFD_ATTACHED;
 	TAILQ_INSERT_TAIL(&ifp->if_addrhead, ifa, ifa_link);
 }
 
@@ -191,8 +192,8 @@ if_detach_ifa(
 	ifnet_lock_assert(ifp, LCK_MTX_ASSERT_OWNED);
 #if 1
 	/* Debugging code */
-	if ((ifa->ifa_debug & IFA_ATTACHED) == 0) {
-		printf("if_detach_ifa: ifa is not attached to any interface! flags=%lu\n", ifa->ifa_debug);
+	if ((ifa->ifa_debug & IFD_ATTACHED) == 0) {
+		printf("if_detach_ifa: ifa is not attached to any interface! flags=%u\n", ifa->ifa_debug);
 		return;
 	}
 	else {
@@ -207,7 +208,7 @@ if_detach_ifa(
 	}
 #endif
 	TAILQ_REMOVE(&ifp->if_addrhead, ifa, ifa_link);
-	ifa->ifa_debug &= ~IFA_ATTACHED;
+	ifa->ifa_debug &= ~IFD_ATTACHED;
 	ifafree(ifa);
 }
 
@@ -252,6 +253,11 @@ if_next_index(void)
 		/* allocate space for the larger arrays */
 		n = (2 * new_if_indexlim + 1) * sizeof(caddr_t);
 		new_ifnet_addrs = _MALLOC(n, M_IFADDR, M_WAITOK);
+		if (new_ifnet_addrs == NULL) {
+			--if_index;
+			return -1;
+		}
+
 		new_ifindex2ifnet = new_ifnet_addrs 
 			+ new_if_indexlim * sizeof(caddr_t);
 		bzero(new_ifnet_addrs, n);
@@ -432,7 +438,7 @@ if_clone_lookup(const char *name, int *unitp)
 /*
  * Register a network interface cloner.
  */
-void
+int
 if_clone_attach(struct if_clone *ifc)
 {
 	int bytoff, bitoff;
@@ -452,6 +458,8 @@ if_clone_attach(struct if_clone *ifc)
 	if ((len << 3) < maxclone)
 		len++;
 	ifc->ifc_units = _MALLOC(len, M_CLONE, M_WAITOK | M_ZERO);
+	if (ifc->ifc_units == NULL)
+		return ENOBUFS;
 	bzero(ifc->ifc_units, len);
 	ifc->ifc_bmlen = len;
 
@@ -469,6 +477,8 @@ if_clone_attach(struct if_clone *ifc)
 		bitoff = unit - (bytoff << 3);
 		ifc->ifc_units[bytoff] |= (1 << bitoff);
 	}
+
+	return 0;
 }
 
 /*
@@ -483,7 +493,7 @@ if_clone_detach(struct if_clone *ifc)
 	if_cloners_count--;
 }
 
-#ifdef IF_CLONE_LIST
+#if IF_CLONE_LIST
 /*
  * Provide list of interface cloners to userspace.
  */
@@ -515,36 +525,38 @@ if_clone_list(int count, int * total, user_addr_t dst)
 
 	return (error);
 }
-#endif IF_CLONE_LIST
+#endif /* IF_CLONE_LIST */
 
-__private_extern__ int
-ifa_foraddr(
-	unsigned int addr)
+/*
+ * Similar to ifa_ifwithaddr, except that this is IPv4 specific
+ * and that it matches only the local (not broadcast) address.
+ */
+__private_extern__ struct in_ifaddr *
+ifa_foraddr(unsigned int addr)
 {
-	struct ifnet *ifp;
-	struct ifaddr *ifa;
-	unsigned int addr2;
-	int	result = 0;
-	
-	ifnet_head_lock_shared();
-	for (ifp = ifnet_head.tqh_first; ifp && !result; ifp = ifp->if_link.tqe_next) {
-		ifnet_lock_shared(ifp);
-	    for (ifa = ifp->if_addrhead.tqh_first; ifa;
-		 ifa = ifa->ifa_link.tqe_next) {
-			if (ifa->ifa_addr->sa_family != AF_INET)
-				continue;
-			addr2 = IA_SIN(ifa)->sin_addr.s_addr;
-			
-			if (addr == addr2) {
-				result = 1;
-				break;
-			}
-		}
-		ifnet_lock_done(ifp);
+	return (ifa_foraddr_scoped(addr, IFSCOPE_NONE));
+}
+
+/*
+ * Similar to ifa_foraddr, except with the added interface scope
+ * constraint (unless the caller passes in IFSCOPE_NONE in which
+ * case there is no scope restriction).
+ */
+__private_extern__ struct in_ifaddr *
+ifa_foraddr_scoped(unsigned int addr, unsigned int scope)
+{
+	struct in_ifaddr *ia = NULL;
+
+	lck_rw_lock_shared(in_ifaddr_rwlock);
+	TAILQ_FOREACH(ia, INADDR_HASH(addr), ia_hash) {
+		if (ia->ia_addr.sin_addr.s_addr == addr &&
+		    (scope == IFSCOPE_NONE || ia->ia_ifp->if_index == scope))
+			break;
 	}
-	ifnet_head_done();
-	
-	return result;
+	if (ia != NULL)
+		ifaref(&ia->ia_ifa);
+	lck_rw_done(in_ifaddr_rwlock);
+	return (ia);
 }
 
 /*
@@ -669,7 +681,8 @@ ifa_ifwithaddr_scoped(const struct sockaddr *addr, unsigned int ifscope)
 
 		/*
 		 * This is suboptimal; there should be a better way
-		 * to search for a given address of an interface.
+		 * to search for a given address of an interface
+		 * for any given address family.
 		 */
 		ifnet_lock_shared(ifp);
 		for (ifa = ifp->if_addrhead.tqh_first; ifa != NULL;
@@ -791,18 +804,6 @@ next:				continue;
 					continue;
 
 				/*
-				 * if we have a special address handler,
-				 * then use it instead of the generic one.
-				 */
-	          		if (ifa->ifa_claim_addr) {
-					if (ifa->ifa_claim_addr(ifa, addr)) {
-						break;
-					} else {
-						continue;
-					}
-				}
-
-				/*
 				 * Scan all the bits in the ifa's address.
 				 * If a bit dissagrees with what we are
 				 * looking for, mask it with the netmask
@@ -895,7 +896,7 @@ ifaof_ifpforaddr(
 			continue;
 		}
 		if (ifp->if_flags & IFF_POINTOPOINT) {
-			if (equal(addr, ifa->ifa_dstaddr))
+			if (ifa->ifa_dstaddr && equal(addr, ifa->ifa_dstaddr))
 				break;
 		} else {
 		    	if (equal(addr, ifa->ifa_addr)) {
@@ -944,6 +945,9 @@ link_rtrequest(int cmd, struct rtentry *rt, struct sockaddr *sa)
 	struct ifaddr *ifa;
 	struct sockaddr *dst;
 	struct ifnet *ifp;
+
+	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+	RT_LOCK_ASSERT_HELD(rt);
 
 	if (cmd != RTM_ADD || ((ifa = rt->rt_ifa) == 0) ||
 	    ((ifp = ifa->ifa_ifp) == 0) || ((dst = rt_key(rt)) == 0))
@@ -1161,18 +1165,19 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	struct net_event_data ev_data;
 
 	switch (cmd) {
-	case SIOCGIFCONF:
-	case OSIOCGIFCONF:
+	case OSIOCGIFCONF32:
+	case SIOCGIFCONF32: {
+		struct ifconf32 *ifc = (struct ifconf32 *)data;
+		return (ifconf(cmd, CAST_USER_ADDR_T(ifc->ifc_req),
+		    &ifc->ifc_len));
+		/* NOTREACHED */
+	}
 	case SIOCGIFCONF64:
-	    {
-	    	struct ifconf64 *	ifc = (struct ifconf64 *)data;
-		user_addr_t		user_addr;
-		
-		user_addr = proc_is64bit(p)
-		    ? ifc->ifc_req64 : CAST_USER_ADDR_T(ifc->ifc_req);
-		return (ifconf(cmd, user_addr, &ifc->ifc_len));
-	    }
-	    break;
+	case OSIOCGIFCONF64: {
+		struct ifconf64 *ifc = (struct ifconf64 *)data;
+		return (ifconf(cmd, ifc->ifc_req, &ifc->ifc_len));
+		/* NOTREACHED */
+	}
 	}
 	ifr = (struct ifreq *)data;
 	switch (cmd) {
@@ -1185,17 +1190,20 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 			if_clone_create(ifr->ifr_name, sizeof(ifr->ifr_name)) :
 			if_clone_destroy(ifr->ifr_name));
 #if IF_CLONE_LIST
-	case SIOCIFGCLONERS:
-	case SIOCIFGCLONERS64:
-	    {
-		struct if_clonereq64 *	ifcr = (struct if_clonereq64 *)data;
-		user_addr = proc_is64bit(p)
-		    ? ifcr->ifcr_ifcru.ifcru_buffer64
-		    : CAST_USER_ADDR_T(ifcr->ifcr_ifcru.ifcru_buffer32);
+	case SIOCIFGCLONERS32: {
+		struct if_clonereq32 *ifcr = (struct if_clonereq32 *)data;
 		return (if_clone_list(ifcr->ifcr_count, &ifcr->ifcr_total,
-				      user_data));
+		    CAST_USER_ADDR_T(ifcr->ifcru_buffer)));
+		/* NOTREACHED */
+
+	}
+	case SIOCIFGCLONERS64: {
+		struct if_clonereq64 *ifcr = (struct if_clonereq64 *)data;
+		return (if_clone_list(ifcr->ifcr_count, &ifcr->ifcr_total,
+		    ifcr->ifcru_buffer));
+		/* NOTREACHED */
 	    }
-#endif IF_CLONE_LIST
+#endif /* IF_CLONE_LIST */
 	}
 
 	ifp = ifunit(ifr->ifr_name);
@@ -1244,20 +1252,20 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		error = ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family, 
 				   			cmd, data);
 
-		if (error == 0) {
-			 ev_msg.vendor_code    = KEV_VENDOR_APPLE;
-			 ev_msg.kev_class      = KEV_NETWORK_CLASS;
-			 ev_msg.kev_subclass   = KEV_DL_SUBCLASS;
+		/* Send the event even upon error from the driver because we changed the flags */
+		ev_msg.vendor_code    = KEV_VENDOR_APPLE;
+		ev_msg.kev_class      = KEV_NETWORK_CLASS;
+		ev_msg.kev_subclass   = KEV_DL_SUBCLASS;
+		
+		ev_msg.event_code = KEV_DL_SIFFLAGS;
+		strlcpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
+		ev_data.if_family = ifp->if_family;
+		ev_data.if_unit   = (u_int32_t) ifp->if_unit;
+		ev_msg.dv[0].data_length = sizeof(struct net_event_data);
+		ev_msg.dv[0].data_ptr    = &ev_data;
+		ev_msg.dv[1].data_length = 0;
+		kev_post_msg(&ev_msg);
 
-			 ev_msg.event_code = KEV_DL_SIFFLAGS;
-			 strlcpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
-			 ev_data.if_family = ifp->if_family;
-			 ev_data.if_unit   = (unsigned long) ifp->if_unit;
-			 ev_msg.dv[0].data_length = sizeof(struct net_event_data);
-			 ev_msg.dv[0].data_ptr    = &ev_data;
-			 ev_msg.dv[1].data_length = 0;
-			 kev_post_msg(&ev_msg);
-		}
 		ifnet_touch_lastchange(ifp);
 		break;
 
@@ -1282,7 +1290,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		ev_msg.event_code = KEV_DL_SIFMETRICS;
 		strlcpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
 		ev_data.if_family = ifp->if_family;
-		ev_data.if_unit   = (unsigned long) ifp->if_unit;
+		ev_data.if_unit   = (u_int32_t) ifp->if_unit;
 		ev_msg.dv[0].data_length = sizeof(struct net_event_data);
 		ev_msg.dv[0].data_ptr    = &ev_data;
 
@@ -1308,7 +1316,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 			ev_msg.event_code = KEV_DL_SIFPHYS;
 			strlcpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
 			ev_data.if_family = ifp->if_family;
-			ev_data.if_unit   = (unsigned long) ifp->if_unit;
+			ev_data.if_unit   = (u_int32_t) ifp->if_unit;
 			ev_msg.dv[0].data_length = sizeof(struct net_event_data);
 			ev_msg.dv[0].data_ptr    = &ev_data;
 			ev_msg.dv[1].data_length = 0;
@@ -1320,7 +1328,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 
 	case SIOCSIFMTU:
 	{
-		u_long oldmtu = ifp->if_mtu;
+		u_int32_t oldmtu = ifp->if_mtu;
 
 		error = proc_suser(p);
 		if (error)
@@ -1341,7 +1349,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		     ev_msg.event_code = KEV_DL_SIFMTU;
 		     strlcpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
 		     ev_data.if_family = ifp->if_family;
-		     ev_data.if_unit   = (unsigned long) ifp->if_unit;
+		     ev_data.if_unit   = (u_int32_t) ifp->if_unit;
 		     ev_msg.dv[0].data_length = sizeof(struct net_event_data);
 		     ev_msg.dv[0].data_ptr    = &ev_data;
 		     ev_msg.dv[1].data_length = 0;
@@ -1394,7 +1402,7 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		     strlcpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
 	
 		     ev_data.if_family = ifp->if_family;
-		     ev_data.if_unit   = (unsigned long) ifp->if_unit;
+		     ev_data.if_unit   = (u_int32_t) ifp->if_unit;
 		     ev_msg.dv[0].data_length = sizeof(struct net_event_data);
 		     ev_msg.dv[0].data_ptr    = &ev_data;
 		     ev_msg.dv[1].data_length = 0;
@@ -1407,7 +1415,8 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCSIFPHYADDR:
 	case SIOCDIFPHYADDR:
 #if INET6
-	case SIOCSIFPHYADDR_IN6:
+	case SIOCSIFPHYADDR_IN6_32:
+	case SIOCSIFPHYADDR_IN6_64:
 #endif
 	case SIOCSLIFPHYADDR:
 	case SIOCSIFMEDIA:
@@ -1434,7 +1443,8 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCGIFPSRCADDR:
 	case SIOCGIFPDSTADDR:
 	case SIOCGLIFPHYADDR:
-	case SIOCGIFMEDIA:
+	case SIOCGIFMEDIA32:
+	case SIOCGIFMEDIA64:
 	case SIOCGIFGENERIC:
 	case SIOCGIFDEVMTU:
 		return ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family, 
@@ -1444,6 +1454,12 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		return ifnet_ioctl(ifp, so->so_proto->pr_domain->dom_family, 
 				   		   cmd, data);
 
+	case SIOCGIFWAKEFLAGS:
+		ifnet_lock_shared(ifp);
+		ifr->ifr_wake_flags = ifnet_get_wake_flags(ifp);
+		ifnet_lock_done(ifp);
+		break;
+		
 	default:
 		oif_flags = ifp->if_flags;
 		if (so->so_proto == 0)
@@ -1629,7 +1645,7 @@ ifconf(u_long cmd, user_addr_t ifrp, int * ret_space)
 				continue;
 #endif
 			addrs++;
-			if (cmd == OSIOCGIFCONF) {
+			if (cmd == OSIOCGIFCONF32 || cmd == OSIOCGIFCONF64) {
 				struct osockaddr *osa =
 					 (struct osockaddr *)&ifr.ifr_addr;
 				ifr.ifr_addr = *sa;
@@ -1713,7 +1729,7 @@ void
 ifma_reference(
 	struct ifmultiaddr *ifma)
 {
-	if (OSIncrementAtomic((SInt32 *)&ifma->ifma_refcount) <= 0)
+	if (OSIncrementAtomic(&ifma->ifma_refcount) <= 0)
 		panic("ifma_reference: ifma already released or invalid\n");
 }
 
@@ -1723,7 +1739,7 @@ ifma_release(
 {
 	while (ifma) {
 		struct ifmultiaddr *next;
-		int32_t prevValue = OSDecrementAtomic((SInt32 *)&ifma->ifma_refcount);
+		int32_t prevValue = OSDecrementAtomic(&ifma->ifma_refcount);
 		if (prevValue < 1)
 			panic("ifma_release: ifma already released or invalid\n");
 		if (prevValue != 1)
@@ -2154,48 +2170,53 @@ if_down_all(void)
  *
  */
 static int
-if_rtdel(
-	struct radix_node	*rn,
-	void			*arg)
+if_rtdel(struct radix_node *rn, void *arg)
 {
 	struct rtentry	*rt = (struct rtentry *)rn;
 	struct ifnet	*ifp = arg;
 	int		err;
 
-	if (rt != NULL && rt->rt_ifp == ifp) {
-		
+	if (rt == NULL)
+		return (0);
+	/*
+	 * Checking against RTF_UP protects against walktree
+	 * recursion problems with cloned routes.
+	 */
+	RT_LOCK(rt);
+	if (rt->rt_ifp == ifp && (rt->rt_flags & RTF_UP)) {
 		/*
-		 * Protect (sorta) against walktree recursion problems
-		 * with cloned routes
+		 * Safe to drop rt_lock and use rt_key, rt_gateway,
+		 * since holding rnh_lock here prevents another thread
+		 * from calling rt_setgate() on this route.
 		 */
-		if ((rt->rt_flags & RTF_UP) == 0)
-			return (0);
-
+		RT_UNLOCK(rt);
 		err = rtrequest_locked(RTM_DELETE, rt_key(rt), rt->rt_gateway,
-				rt_mask(rt), rt->rt_flags,
-				(struct rtentry **) NULL);
+		    rt_mask(rt), rt->rt_flags, NULL);
 		if (err) {
 			log(LOG_WARNING, "if_rtdel: error %d\n", err);
 		}
+	} else {
+		RT_UNLOCK(rt);
 	}
-
 	return (0);
 }
 
 /*
- * Removes routing table reference to a given interfacei
+ * Removes routing table reference to a given interface
  * for a given protocol family
  */
-void if_rtproto_del(struct ifnet *ifp, int protocol)
+void
+if_rtproto_del(struct ifnet *ifp, int protocol)
 {
 	struct radix_node_head  *rnh;
-	if (use_routegenid) 
-		route_generation++;
+
+	if (use_routegenid)
+		routegenid_update();
 	if ((protocol <= AF_MAX) && (protocol >= 0) &&
 		((rnh = rt_tables[protocol]) != NULL) && (ifp != NULL)) {
-		lck_mtx_lock(rt_mtx);
+		lck_mtx_lock(rnh_lock);
 		(void) rnh->rnh_walktree(rnh, if_rtdel, ifp);
-		lck_mtx_unlock(rt_mtx);
+		lck_mtx_unlock(rnh_lock);
 	}
 }
 
@@ -2205,6 +2226,7 @@ if_rtmtu(struct radix_node *rn, void *arg)
 	struct rtentry *rt = (struct rtentry *)rn;
 	struct ifnet *ifp = arg;
 
+	RT_LOCK(rt);
 	if (rt->rt_ifp == ifp) {
 		/*
 		 * Update the MTU of this entry only if the MTU
@@ -2214,6 +2236,7 @@ if_rtmtu(struct radix_node *rn, void *arg)
 		if (!(rt->rt_rmx.rmx_locks & RTV_MTU) && rt->rt_rmx.rmx_mtu)
 			rt->rt_rmx.rmx_mtu = ifp->if_mtu;
 	}
+	RT_UNLOCK(rt);
 
 	return (0);
 }
@@ -2233,13 +2256,13 @@ void if_rtmtu_update(struct ifnet *ifp)
 		if ((rnh = rt_tables[p]) == NULL)
 			continue;
 
-		lck_mtx_lock(rt_mtx);
+		lck_mtx_lock(rnh_lock);
 		(void) rnh->rnh_walktree(rnh, if_rtmtu, ifp);
-		lck_mtx_unlock(rt_mtx);
+		lck_mtx_unlock(rnh_lock);
 	}
 
 	if (use_routegenid)
-		route_generation++;
+		routegenid_update();
 }
 
 __private_extern__ void
@@ -2285,7 +2308,8 @@ if_data_internal_to_if_data(
 	COPYFIELD32(ifi_noproto);
 	COPYFIELD32(ifi_recvtiming);
 	COPYFIELD32(ifi_xmittiming);
-	COPYFIELD(ifi_lastchange);
+	if_data->ifi_lastchange.tv_sec = if_data_int->ifi_lastchange.tv_sec;
+	if_data->ifi_lastchange.tv_usec = if_data_int->ifi_lastchange.tv_usec;
 	lck_mtx_unlock(thread->input_lck);
 	
 #if IF_LASTCHANGEUPTIME
@@ -2337,7 +2361,8 @@ if_data_internal_to_if_data64(
 	COPYFIELD(ifi_noproto);
 	COPYFIELD(ifi_recvtiming);
 	COPYFIELD(ifi_xmittiming);
-	COPYFIELD(ifi_lastchange);
+	if_data64->ifi_lastchange.tv_sec = if_data_int->ifi_lastchange.tv_sec;
+	if_data64->ifi_lastchange.tv_usec = if_data_int->ifi_lastchange.tv_usec;
 	lck_mtx_unlock(thread->input_lck);
 	
 #if IF_LASTCHANGEUPTIME
@@ -2345,4 +2370,45 @@ if_data_internal_to_if_data64(
 #endif
 
 #undef COPYFIELD
+}
+
+void
+ifafree(struct ifaddr *ifa)
+{
+	int oldval;
+
+	oldval = OSAddAtomic(-1, &ifa->ifa_refcnt);
+	if (oldval >= 1 && ifa->ifa_trace != NULL)
+		(*ifa->ifa_trace)(ifa, FALSE);
+	if (oldval == 0) {
+		panic("%s: ifa %p negative refcnt\n", __func__, ifa);
+	} else if (oldval == 1) {
+		if  (ifa->ifa_debug & IFD_ATTACHED)
+			panic("ifa %p attached to ifp is being freed\n", ifa);
+		/*
+		 * Some interface addresses are allocated either statically
+		 * or carved out of a larger block; e.g. AppleTalk addresses.
+		 * Only free it if it was allocated via MALLOC or via the
+		 * corresponding per-address family allocator.  Otherwise,
+		 * leave it alone.
+		 */
+		if (ifa->ifa_debug & IFD_ALLOC) {
+			if (ifa->ifa_free == NULL)
+				FREE(ifa, M_IFADDR);
+			else
+				(*ifa->ifa_free)(ifa);
+		}
+	}
+}
+
+void
+ifaref(struct ifaddr *ifa)
+{
+	int oldval;
+
+	oldval = OSAddAtomic(1, &ifa->ifa_refcnt);
+	if (oldval < 0)
+		panic("%s: ifa %p negative refcnt\n", __func__, ifa);
+	else if (ifa->ifa_trace != NULL)
+		(*ifa->ifa_trace)(ifa, TRUE);
 }

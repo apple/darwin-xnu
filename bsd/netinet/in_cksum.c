@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -66,6 +66,7 @@
 #include <kern/debug.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <libkern/libkern.h>
 
 #define DBG_FNC_IN_CKSUM	NETDBG_CODE(DBG_NETIP, (3 << 8))
 
@@ -117,10 +118,6 @@ inet_cksum_simple(struct mbuf *m, int len)
 	return (inet_cksum(m, 0, 0, len));
 }
 
-#if defined(__ppc__)
-
-extern u_short xsum_assym(u_short *p, int len, u_short xsum, int odd);
-
 inline u_short
 in_addword(u_short a, u_short b)
 {
@@ -143,6 +140,10 @@ in_pseudo(u_int a, u_int b, u_int c)
         return (sum);
 
 }
+
+#if defined(__ppc__)
+
+extern u_short xsum_assym(u_short *p, int len, u_short xsum, int odd);
 
 u_int16_t
 inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
@@ -210,29 +211,38 @@ skip_start:
 	return (~sum & 0xffff);
 }
 
+#elif defined(__arm__) && __ARM_ARCH__ >= 6
+
+extern int cpu_in_cksum(struct mbuf *m, int len, int off, uint32_t initial_sum);
+
+u_int16_t
+inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
+    unsigned int len)
+{
+	u_int32_t sum = 0;
+
+	/* sanity check */
+	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.len < skip + len) {
+		panic("inet_cksum: mbuf len (%d) < off+len (%d+%d)\n",
+		    m->m_pkthdr.len, skip, len);
+	}
+
+	/* include pseudo header checksum? */
+	if (nxt != 0) {
+		struct ip *iph;
+
+		if (m->m_len < sizeof (struct ip))
+			panic("inet_cksum: bad mbuf chain");
+
+		iph = mtod(m, struct ip *);
+		sum = in_pseudo(iph->ip_src.s_addr, iph->ip_dst.s_addr,
+		    htonl(len + nxt));
+	}
+
+	return (cpu_in_cksum(m, len, skip, sum));
+}
+
 #else
-
-inline u_short
-in_addword(u_short a, u_short b)
-{
-        union l_util l_util;
-        u_int32_t sum = a + b;
-
-        REDUCE(sum);
-        return (sum);
-}
-
-inline u_short
-in_pseudo(u_int a, u_int b, u_int c)
-{
-        u_int64_t sum;
-        union q_util q_util;
-        union l_util l_util;
-
-        sum = (u_int64_t) a + b + c;
-        REDUCE16;
-        return (sum);
-}
 
 u_int16_t
 inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
@@ -306,7 +316,7 @@ skip_start:
 		/*
 		 * Force to even boundary.
 		 */
-		if ((1 & (int) w) && (mlen > 0)) {
+		if ((1 & (uintptr_t) w) && (mlen > 0)) {
 			REDUCE;
 			sum <<= 8;
 			s_util.c[0] = *(u_char *)w;

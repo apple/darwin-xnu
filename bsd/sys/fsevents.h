@@ -94,10 +94,11 @@
 //
 #define FSE_MODE_HLINK         (1 << 31)    // notification is for a hard-link
 #define FSE_MODE_LAST_HLINK    (1 << 30)    // link count == 0 on a hard-link delete 
-
+#define FSE_REMOTE_DIR_EVENT   (1 << 29)    // this is a remotely generated directory-level granularity event
+#define FSE_TRUNCATED_PATH     (1 << 28)    // the path for this item had to be truncated
 
 // ioctl's on /dev/fsevents
-#if defined(__x86_64__) || defined(__ppc64__)
+#if __LP64__
 typedef struct fsevent_clone_args {
     int8_t  *event_list;
     int32_t  num_events;
@@ -119,11 +120,13 @@ typedef struct fsevent_clone_args {
 
 
 // ioctl's on the cloned fd
-#if defined(__x86_64__) || defined(__ppc64__)
+#if __LP64__
+#pragma pack(push, 4)
 typedef struct fsevent_dev_filter_args {
     uint32_t  num_devices;
     dev_t    *devices;
 } fsevent_dev_filter_args;
+#pragma pack(pop)
 #else
 typedef struct fsevent_dev_filter_args {
     uint32_t  num_devices;
@@ -135,6 +138,7 @@ typedef struct fsevent_dev_filter_args {
 #define	FSEVENTS_DEVICE_FILTER		_IOW('s', 100, fsevent_dev_filter_args)
 #define	FSEVENTS_WANT_COMPACT_EVENTS	_IO('s', 101)
 #define	FSEVENTS_WANT_EXTENDED_INFO	_IO('s', 102)
+#define	FSEVENTS_GET_CURRENT_ID		_IOR('s', 103, uint64_t)
 
 
 #ifdef KERNEL
@@ -143,6 +147,8 @@ void fsevents_init(void);
 int  need_fsevent(int type, vnode_t vp);
 int  add_fsevent(int type, vfs_context_t, ...);
 void fsevent_unmount(struct mount *mp);
+struct vnode_attr;
+void create_fsevent_from_kevent(vnode_t vp, uint32_t kevents, struct vnode_attr *vap);
 
 // misc utility functions for fsevent info and pathbuffers...
 typedef struct fse_info {

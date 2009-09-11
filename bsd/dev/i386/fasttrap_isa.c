@@ -20,12 +20,12 @@
  */
 
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 /*
- * #pragma ident	"@(#)fasttrap_isa.c	1.23	06/09/19 SMI"
+ * #pragma ident	"@(#)fasttrap_isa.c	1.27	08/04/09 SMI"
  */
 
 #ifdef KERNEL
@@ -45,7 +45,8 @@ extern dtrace_id_t dtrace_probeid_error;
 #include <sys/dtrace_ptss.h>
 #include <kern/debug.h>
 
-#define proc_t struct proc
+/* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
+#define proc_t struct proc /* Steer clear of the Darwin typedef for proc_t */
 
 /*
  * Lossless User-Land Tracing on x86
@@ -247,7 +248,7 @@ fasttrap_anarg(x86_saved_state_t *regs, int function_entry, int argno)
 		value = dtrace_fuword64(stack);
 		DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT | CPU_DTRACE_BADADDR);
 	} else {
-		uint32_t *stack = (uint32_t *)regs32->uesp;
+		uint32_t *stack = (uint32_t *)(uintptr_t)(regs32->uesp);
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
 		value = dtrace_fuword32((user_addr_t)(unsigned long)&stack[argno + shift]);
 		DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT | CPU_DTRACE_BADADDR);
@@ -396,6 +397,7 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp, user_addr_t pc,
 			tp->ftt_type = FASTTRAP_T_JCC;
 			tp->ftt_code = (instr[start + 1] & 0x0f) | FASTTRAP_JO;
 			tp->ftt_dest = pc + tp->ftt_size +
+			    /* LINTED - alignment */
 			    *(int32_t *)&instr[start + 2];
 			break;
 		}
@@ -466,12 +468,14 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp, user_addr_t pc,
 				i = 2;
 			}
 
-			if (sz == 1)
+			if (sz == 1) {
 				tp->ftt_dest = *(int8_t *)&instr[start + i];
-			else if (sz == 4)
+			} else if (sz == 4) {
+				/* LINTED - alignment */
 				tp->ftt_dest = *(int32_t *)&instr[start + i];
-			else
+			} else {
 				tp->ftt_dest = 0;
+			}
 		}
 	} else {
 		switch (instr[start]) {
@@ -481,6 +485,7 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp, user_addr_t pc,
 
 		case FASTTRAP_RET16:
 			tp->ftt_type = FASTTRAP_T_RET16;
+			/* LINTED - alignment */
 			tp->ftt_dest = *(uint16_t *)&instr[start + 1];
 			break;
 
@@ -524,6 +529,7 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp, user_addr_t pc,
 		case FASTTRAP_CALL:
 			tp->ftt_type = FASTTRAP_T_CALL;
 			tp->ftt_dest = pc + tp->ftt_size +
+			    /* LINTED - alignment */
 			    *(int32_t *)&instr[start + 1];
 			tp->ftt_code = 0;
 			break;
@@ -531,6 +537,7 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp, user_addr_t pc,
 		case FASTTRAP_JMP32:
 			tp->ftt_type = FASTTRAP_T_JMP;
 			tp->ftt_dest = pc + tp->ftt_size +
+				/* LINTED - alignment */
 			    *(int32_t *)&instr[start + 1];
 			break;
 		case FASTTRAP_JMP8:
@@ -671,6 +678,8 @@ fasttrap_return_common(x86_saved_state_t *regs, user_addr_t pc, pid_t pid,
 	x86_saved_state32_t *regs32;
 	unsigned int p_model;
 
+	dtrace_icookie_t cookie;
+
         if (is_saved_state64(regs)) {
                 regs64 = saved_state64(regs);
 		regs32 = NULL;
@@ -692,7 +701,7 @@ fasttrap_return_common(x86_saved_state_t *regs, user_addr_t pc, pid_t pid,
 
 	for (tp = bucket->ftb_data; tp != NULL; tp = tp->ftt_next) {
 		if (pid == tp->ftt_pid && pc == tp->ftt_pc &&
-		    !tp->ftt_proc->ftpc_defunct)
+		    tp->ftt_proc->ftpc_acount != 0)
 			break;
 	}
 
@@ -718,6 +727,13 @@ fasttrap_return_common(x86_saved_state_t *regs, user_addr_t pc, pid_t pid,
 		    id->fti_probe->ftp_fsize)
 			continue;
 
+		/*
+		 * Provide a hint to the stack trace functions to add the
+		 * following pc to the top of the stack since it's missing
+		 * on a return probe yet highly desirable for consistency.
+		 */
+		cookie = dtrace_interrupt_disable();
+		cpu_core[CPU->cpu_id].cpuc_missing_tos = pc;
 		if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
 			dtrace_probe(dtrace_probeid_error, 0 /* state */, id->fti_probe->ftp_id, 
 				     1 /* ndx */, -1 /* offset */, DTRACEFLT_UPRIV);
@@ -730,6 +746,9 @@ fasttrap_return_common(x86_saved_state_t *regs, user_addr_t pc, pid_t pid,
 				     pc - id->fti_probe->ftp_faddr,
 				     regs32->eax, regs32->edx, 0, 0);
 		}
+		/* remove the hint */
+		cpu_core[CPU->cpu_id].cpuc_missing_tos = 0;
+		dtrace_interrupt_enable(cookie);
 	}
 
 	lck_mtx_unlock(pid_mtx);
@@ -786,7 +805,7 @@ fasttrap_usdt_args32(fasttrap_probe_t *probe, x86_saved_state32_t *regs32, int a
     uint32_t *argv)
 {
 	int i, x, cap = MIN(argc, probe->ftp_nargs);
-	uint32_t *stack = (uint32_t *)regs32->uesp;
+	uint32_t *stack = (uint32_t *)(uintptr_t)(regs32->uesp);
 
 	for (i = 0; i < cap; i++) {
 		x = probe->ftp_argmap[i];
@@ -989,7 +1008,7 @@ fasttrap_pid_probe32(x86_saved_state_t *regs)
 	 */
 	for (tp = bucket->ftb_data; tp != NULL; tp = tp->ftt_next) {
 		if (pid == tp->ftt_pid && pc == tp->ftt_pc &&
-		    !tp->ftt_proc->ftpc_defunct)
+		    tp->ftt_proc->ftpc_acount != 0)
 			break;
 	}
 
@@ -1013,7 +1032,7 @@ fasttrap_pid_probe32(x86_saved_state_t *regs)
 		fasttrap_id_t *id;
 		
 		uint32_t s0, s1, s2, s3, s4, s5;
-		uint32_t *stack = (uint32_t *)regs32->uesp;
+		uint32_t *stack = (uint32_t *)(uintptr_t)(regs32->uesp);
 		
 		/*
 		 * In 32-bit mode, all arguments are passed on the
@@ -1341,7 +1360,7 @@ fasttrap_pid_probe32(x86_saved_state_t *regs)
 		case FASTTRAP_T_COMMON:
 		{
 			user_addr_t addr;
-			uint8_t scratch[2 * FASTTRAP_MAX_INSTR_SIZE + 5 + 2];
+			uint8_t scratch[2 * FASTTRAP_MAX_INSTR_SIZE + 7];
 			uint_t i = 0;
 
 			/*
@@ -1402,6 +1421,7 @@ fasttrap_pid_probe32(x86_saved_state_t *regs)
 			 * the size of the traced instruction cancels out.
 			 */
 			scratch[i++] = FASTTRAP_JMP32;
+			/* LINTED - alignment */
 			*(uint32_t *)&scratch[i] = pc - addr - 5;
 			i += sizeof (uint32_t);
 
@@ -1411,6 +1431,8 @@ fasttrap_pid_probe32(x86_saved_state_t *regs)
 			scratch[i++] = FASTTRAP_INT;
 			scratch[i++] = T_DTRACE_RET;
 			
+			ASSERT(i <= sizeof (scratch));
+
 			if (fasttrap_copyout(scratch, addr, i)) {
 				fasttrap_sigtrap(p, uthread, pc);
 				new_pc = pc;
@@ -1545,7 +1567,7 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 	 */
 	for (tp = bucket->ftb_data; tp != NULL; tp = tp->ftt_next) {
 		if (pid == tp->ftt_pid && pc == tp->ftt_pc &&
-		    !tp->ftt_proc->ftpc_defunct)
+		    tp->ftt_proc->ftpc_acount != 0)
 			break;
 	}
 
@@ -1878,7 +1900,7 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 		case FASTTRAP_T_COMMON:
 		{
 			user_addr_t addr;
-			uint8_t scratch[2 * FASTTRAP_MAX_INSTR_SIZE + 5 + 2];
+			uint8_t scratch[2 * FASTTRAP_MAX_INSTR_SIZE + 22];
 			uint_t i = 0;
 			
 			/*
@@ -2025,6 +2047,7 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 						panic("unhandled ripmode in fasttrap_pid_probe64");
 				}
 				
+				/* LINTED - alignment */
 				*(uint64_t *)&scratch[i] = *reg;
 				uthread->t_dtrace_regv = *reg;
 				*reg = pc + tp->ftt_size;
@@ -2040,8 +2063,10 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 			 */
 			scratch[i++] = FASTTRAP_GROUP5_OP;
 			scratch[i++] = FASTTRAP_MODRM(0, 4, 5);
+			/* LINTED - alignment */
 			*(uint32_t *)&scratch[i] = 0;
 			i += sizeof (uint32_t);
+			/* LINTED - alignment */
 			*(uint64_t *)&scratch[i] = pc + tp->ftt_size;
 			i += sizeof (uint64_t);
 
@@ -2050,6 +2075,8 @@ fasttrap_pid_probe64(x86_saved_state_t *regs)
 			i += tp->ftt_size;
 			scratch[i++] = FASTTRAP_INT;
 			scratch[i++] = T_DTRACE_RET;
+
+			ASSERT(i <= sizeof (scratch));
 
 			if (fasttrap_copyout(scratch, addr, i)) {
 				fasttrap_sigtrap(p, uthread, pc);
@@ -2180,6 +2207,7 @@ fasttrap_return_probe(x86_saved_state_t *regs)
 	return (0);
 }
 
+
 uint64_t
 fasttrap_pid_getarg(void *arg, dtrace_id_t id, void *parg, int argno,
     int aframes)
@@ -2223,6 +2251,20 @@ fasttrap_getreg(x86_saved_state_t *regs, uint_t reg)
 			case REG_R13:		return regs64->r13;
 			case REG_R14:		return regs64->r14;
 			case REG_R15:		return regs64->r15;
+			case REG_TRAPNO:	return regs64->isf.trapno;
+			case REG_ERR:		return regs64->isf.err;
+			case REG_RIP:		return regs64->isf.rip;
+			case REG_CS:		return regs64->isf.cs;
+			case REG_RFL:		return regs64->isf.rflags;
+			case REG_SS:		return regs64->isf.ss;
+			case REG_FS:		return regs64->fs;
+			case REG_GS:		return regs64->gs;
+			case REG_ES:
+			case REG_DS:
+			case REG_FSBASE:
+			case REG_GSBASE:
+				// Important to distinguish these requests (which should be legal) from other values.
+				panic("dtrace: unimplemented x86_64 getreg()");
 		}
 
 		panic("dtrace: unhandled x86_64 getreg() constant");

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -90,7 +90,12 @@ static void	ux_exception(int exception, mach_exception_code_t code,
 				mach_exception_subcode_t subcode,
 				int *ux_signal, mach_exception_code_t *ux_code);
 
+#if defined(__x86_64__)
+mach_port_t			ux_exception_port;
+#else
 mach_port_name_t		ux_exception_port;
+#endif /* __x86_64__ */
+
 static task_t			ux_handler_self;
 
 static
@@ -155,7 +160,7 @@ ux_handler(void)
 	mach_port_name_t	reply_port;
 	kern_return_t	 result;
 
-	exc_msg.Head.msgh_local_port = (mach_port_t)exc_set_name;
+	exc_msg.Head.msgh_local_port = CAST_MACH_NAME_TO_PORT(exc_set_name);
 	exc_msg.Head.msgh_size = sizeof (exc_msg);
 #if 0
 	result = mach_msg_receive(&exc_msg.Head);
@@ -166,14 +171,15 @@ ux_handler(void)
 			     0);
 #endif
 	if (result == MACH_MSG_SUCCESS) {
-	    reply_port = (mach_port_name_t)exc_msg.Head.msgh_remote_port;
+	    reply_port = CAST_MACH_PORT_TO_NAME(exc_msg.Head.msgh_remote_port);
 
-	    if (mach_exc_server(&exc_msg.Head, &rep_msg.Head))
-		(void) mach_msg_send(&rep_msg.Head, MACH_SEND_MSG,
+	    if (mach_exc_server(&exc_msg.Head, &rep_msg.Head)) {
+		result = mach_msg_send(&rep_msg.Head, MACH_SEND_MSG,
 			sizeof (rep_msg),MACH_MSG_TIMEOUT_NONE,MACH_PORT_NULL);
+		if (reply_port != 0 && result != MACH_MSG_SUCCESS)
+			mach_port_deallocate(get_task_ipcspace(ux_handler_self), reply_port);
+	    }
 
-	    if (reply_port != MACH_PORT_NULL)
-		(void) mach_port_deallocate(get_task_ipcspace(ux_handler_self), reply_port);
 	}
 	else if (result == MACH_RCV_TOO_LARGE)
 		/* ignore oversized messages */;
@@ -185,8 +191,11 @@ ux_handler(void)
 void
 ux_handler_init(void)
 {
+	thread_t	thread = THREAD_NULL;
+
 	ux_exception_port = MACH_PORT_NULL;
-	(void) kernel_thread(kernel_task, ux_handler);
+	(void) kernel_thread_start((thread_continue_t)ux_handler, NULL, &thread);
+	thread_deallocate(thread);
 	proc_list_lock();
 	if (ux_exception_port == MACH_PORT_NULL)  {
 		(void)msleep(&ux_exception_port, proc_list_mlock, 0, "ux_handler_wait", 0);
@@ -236,8 +245,8 @@ catch_mach_exception_raise(
 	int			ux_signal = 0;
 	mach_exception_code_t 	ucode = 0;
 	struct uthread 		*ut;
-	mach_port_name_t thread_name = (mach_port_name_t)thread; /* XXX */
-	mach_port_name_t task_name = (mach_port_name_t)task;	/* XXX */
+	mach_port_name_t thread_name = CAST_MACH_PORT_TO_NAME(thread);
+	mach_port_name_t task_name = CAST_MACH_PORT_TO_NAME(task);
 
 	/*
 	 *	Convert local thread name to global port.
@@ -345,10 +354,9 @@ catch_mach_exception_raise(
     	result = KERN_INVALID_ARGUMENT;
 
     /*
-     *	Delete our send rights to the task and thread ports.
+     *	Delete our send rights to the task port.
      */
     (void)mach_port_deallocate(get_task_ipcspace(ux_handler_self), task_name);
-    (void)mach_port_deallocate(get_task_ipcspace(ux_handler_self), thread_name);
 
     return (result);
 }

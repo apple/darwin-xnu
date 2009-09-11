@@ -95,6 +95,12 @@
 #define KEV_FIREWALL_CLASS	5
 
 /*!
+	@defined KEV_IEEE80211_CLASS
+	@discussion IEEE 802.11 kernel event class.
+*/
+#define KEV_IEEE80211_CLASS	6
+
+/*!
 	@struct kern_event_msg
 	@discussion This structure is prepended to all kernel events. This structure
 		is used to determine the format of the remainder of the kernel event.

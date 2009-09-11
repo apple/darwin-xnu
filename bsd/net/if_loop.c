@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -169,8 +169,10 @@ lo_framer(
 	struct loopback_header  *header;
 
 	M_PREPEND(*m, sizeof(struct loopback_header), M_WAITOK);
+	if (*m == NULL)
+		return EJUSTRETURN; /* Tell caller not to try to free passed-in mbuf */
 	header = mtod(*m, struct loopback_header*);
-	header->protocol = *(const u_long*)frame_type;
+	header->protocol = *(const u_int32_t*)frame_type;
 	return 0;
 }
 
@@ -263,15 +265,19 @@ lo_pre_output(
 	if (((*m)->m_flags & M_PKTHDR) == 0)
 		panic("looutput no HDR");
 
-	if (rt && rt->rt_flags & (RTF_REJECT|RTF_BLACKHOLE)) {
-		if (rt->rt_flags & RTF_BLACKHOLE) {
-			m_freem(*m);
-			return EJUSTRETURN;
+	if (rt != NULL) {
+		u_int32_t rt_flags = rt->rt_flags;
+		if (rt_flags & (RTF_REJECT | RTF_BLACKHOLE)) {
+			if (rt_flags & RTF_BLACKHOLE) {
+				m_freem(*m);
+				return EJUSTRETURN;
+			} else {
+				return ((rt_flags & RTF_HOST) ?
+				    EHOSTUNREACH : ENETUNREACH);
+			}
 		}
-		else
-			return ((rt->rt_flags & RTF_HOST) ? EHOSTUNREACH : ENETUNREACH);
 	}
-	
+
 	*(protocol_family_t*)frame_type = protocol_family;
 
 	return 0;
@@ -302,7 +308,8 @@ lortrequest(
 	struct rtentry *rt,
 	__unused struct sockaddr *sa)
 {
-	if (rt) {
+	if (rt != NULL) {
+		RT_LOCK_ASSERT_HELD(rt);
 		rt->rt_rmx.rmx_mtu = rt->rt_ifp->if_mtu; /* for ISO */
 		/*
 		 * For optimal performance, the send and receive buffers
@@ -320,7 +327,7 @@ lortrequest(
 static errno_t
 loioctl(
 	ifnet_t		ifp,
-	u_int32_t	cmd,
+	u_long		cmd,
 	void*		data)
 {
 	register struct ifaddr *ifa;

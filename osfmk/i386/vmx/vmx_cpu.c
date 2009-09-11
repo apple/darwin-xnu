@@ -29,6 +29,7 @@
 #include <pexpert/pexpert.h>
 #include <i386/cpuid.h>
 #include <i386/cpu_data.h>
+#include <i386/mp.h>
 #include <i386/proc_reg.h>
 #include <i386/vmx.h>
 #include <i386/vmx/vmx_asm.h>
@@ -36,12 +37,11 @@
 #include <i386/vmx/vmx_cpu.h>
 #include <i386/mtrr.h>
 #include <mach/mach_host.h>             /* for host_info() */
-#include <i386/mp.h>
 
 #define VMX_KPRINTF(x...) /* kprintf("vmx: " x) */
 
 int vmx_use_count = 0;
-int vmx_exclusive = 0;
+boolean_t vmx_exclusive = FALSE;
 decl_simple_lock_data(static,vmx_use_count_lock)
 
 /* -----------------------------------------------------------------------------
@@ -72,7 +72,7 @@ vmxon_is_enabled(void)
 static inline boolean_t
 vmx_is_cr0_valid(vmx_specs_t *specs)
 {
-	uint32_t cr0 = get_cr0();
+	uintptr_t cr0 = get_cr0();
 	return (0 == ((~cr0 & specs->cr0_fixed_0)|(cr0 & ~specs->cr0_fixed_1)));
 }
 
@@ -83,7 +83,7 @@ vmx_is_cr0_valid(vmx_specs_t *specs)
 static inline boolean_t
 vmx_is_cr4_valid(vmx_specs_t *specs)
 {
-	uint32_t cr4 = get_cr4();
+	uintptr_t cr4 = get_cr4();
 	return (0 == ((~cr4 & specs->cr4_fixed_0)|(cr4 & ~specs->cr4_fixed_1)));
 }
 
@@ -142,29 +142,29 @@ vmx_get_specs()
 #define bitfield(x,f)	((x >> f##_BIT) & f##_MASK)
 	/* Obtain and decode VMX general capabilities */	
 	msr_image = rdmsr64(MSR_IA32_VMX_BASIC);
-	specs->vmcs_id       = msr_image & VMX_VCR_VMCS_REV_ID;
+	specs->vmcs_id       = (uint32_t)(msr_image & VMX_VCR_VMCS_REV_ID);
 	specs->vmcs_mem_type = bitfield(msr_image, VMX_VCR_VMCS_MEM_TYPE) != 0;
 	specs->vmcs_size = bitfield(msr_image, VMX_VCR_VMCS_SIZE);
 							  
 	/* Obtain allowed settings for pin-based execution controls */
 	msr_image = rdmsr64(MSR_IA32_VMXPINBASED_CTLS);
-	specs->pin_exctls_0 = msr_image & 0xFFFFFFFF;
-	specs->pin_exctls_1 = msr_image >> 32;
+	specs->pin_exctls_0 = (uint32_t)(msr_image & 0xFFFFFFFF);
+	specs->pin_exctls_1 = (uint32_t)(msr_image >> 32);
 	
 	/* Obtain allowed settings for processor-based execution controls */
 	msr_image = rdmsr64(MSR_IA32_PROCBASED_CTLS);
-	specs->proc_exctls_0 = msr_image & 0xFFFFFFFF;
-	specs->proc_exctls_1 = msr_image >> 32;
+	specs->proc_exctls_0 = (uint32_t)(msr_image & 0xFFFFFFFF);
+	specs->proc_exctls_1 = (uint32_t)(msr_image >> 32);
 	
 	/* Obtain allowed settings for VM-exit controls */
 	msr_image = rdmsr64(MSR_IA32_VMX_EXIT_CTLS);
-	specs->exit_ctls_0 = msr_image & 0xFFFFFFFF;
-	specs->exit_ctls_1 = msr_image >> 32;
+	specs->exit_ctls_0 = (uint32_t)(msr_image & 0xFFFFFFFF);
+	specs->exit_ctls_1 = (uint32_t)(msr_image >> 32);
 	
 	/* Obtain allowed settings for VM-entry controls */
 	msr_image = rdmsr64(MSR_IA32_VMX_ENTRY_CTLS);
-	specs->enter_ctls_0 = msr_image & 0xFFFFFFFF;
-	specs->enter_ctls_0 = msr_image >> 32;
+	specs->enter_ctls_0 = (uint32_t)(msr_image & 0xFFFFFFFF);
+	specs->enter_ctls_0 = (uint32_t)(msr_image >> 32);
 	
 	/* Obtain and decode miscellaneous capabilities */
 	msr_image = rdmsr64(MSR_IA32_VMX_MISC);
@@ -173,16 +173,16 @@ vmx_get_specs()
 	specs->act_SIPI     = bitfield(msr_image, VMX_VCR_ACT_SIPI) != 0;
 	specs->act_CSTATE   = bitfield(msr_image, VMX_VCR_ACT_CSTATE) != 0;
 	specs->cr3_targs    = bitfield(msr_image, VMX_VCR_CR3_TARGS);
-	specs->max_msrs     = 512 * (1 + bitfield(msr_image, VMX_VCR_MAX_MSRS));
-	specs->mseg_id      = bitfield(msr_image, VMX_VCR_MSEG_ID);
+	specs->max_msrs     = (uint32_t)(512 * (1 + bitfield(msr_image, VMX_VCR_MAX_MSRS)));
+	specs->mseg_id      = (uint32_t)bitfield(msr_image, VMX_VCR_MSEG_ID);
 	
 	/* Obtain VMX-fixed bits in CR0 */
-	specs->cr0_fixed_0 = rdmsr64(MSR_IA32_VMX_CR0_FIXED0) & 0xFFFFFFFF;
-	specs->cr0_fixed_1 = rdmsr64(MSR_IA32_VMX_CR0_FIXED1) & 0xFFFFFFFF;
+	specs->cr0_fixed_0 = (uint32_t)rdmsr64(MSR_IA32_VMX_CR0_FIXED0) & 0xFFFFFFFF;
+	specs->cr0_fixed_1 = (uint32_t)rdmsr64(MSR_IA32_VMX_CR0_FIXED1) & 0xFFFFFFFF;
 	
 	/* Obtain VMX-fixed bits in CR4 */
-	specs->cr4_fixed_0 = rdmsr64(MSR_IA32_VMX_CR4_FIXED0) & 0xFFFFFFFF;
-	specs->cr4_fixed_1 = rdmsr64(MSR_IA32_VMX_CR4_FIXED1) & 0xFFFFFFFF;
+	specs->cr4_fixed_0 = (uint32_t)rdmsr64(MSR_IA32_VMX_CR4_FIXED0) & 0xFFFFFFFF;
+	specs->cr4_fixed_1 = (uint32_t)rdmsr64(MSR_IA32_VMX_CR4_FIXED1) & 0xFFFFFFFF;
 }
 
 /* -----------------------------------------------------------------------------
@@ -299,6 +299,7 @@ int
 host_vmxon(boolean_t exclusive)
 {
 	int error;
+	boolean_t do_it = FALSE; /* do the cpu sync outside of the area holding the lock */
 
 	if (!vmx_globally_available())
 		return VMX_UNSUPPORTED;
@@ -307,20 +308,22 @@ host_vmxon(boolean_t exclusive)
 
 	if (vmx_exclusive) {
 		error = VMX_INUSE;
-		goto out;
+	} else {
+		vmx_use_count++;
+		if (vmx_use_count == 1) /* was turned off before */
+			do_it = TRUE;
+		vmx_exclusive = exclusive;
+
+		VMX_KPRINTF("VMX use count: %d\n", vmx_use_count);
+		error = VMX_OK;
 	}
-	vmx_use_count++;
-	if (vmx_use_count == 1) { /* was turned off before */
+
+	simple_unlock(&vmx_use_count_lock);
+
+	if (do_it) {
 		vmx_allocate_vmxon_regions();
 		mp_rendezvous(NULL, (void (*)(void *))vmx_on, NULL, NULL);
 	}
-	vmx_exclusive = exclusive;
-
-	VMX_KPRINTF("VMX use count: %d\n", vmx_use_count);
-	error = VMX_OK;
-out:
-	simple_unlock(&vmx_use_count_lock);
-
 	return error;
 }
 
@@ -331,18 +334,23 @@ out:
 void
 host_vmxoff()
 {
+	boolean_t do_it = FALSE; /* do the cpu sync outside of the area holding the lock */
+
 	simple_lock(&vmx_use_count_lock);
 
 	if (vmx_use_count) {
 		vmx_use_count--;
-		vmx_exclusive = 0;
-		if (!vmx_use_count) {
-			mp_rendezvous(NULL, (void (*)(void *))vmx_off, NULL, NULL);
-			vmx_free_vmxon_regions();
-		}
+		vmx_exclusive = FALSE;
+		if (!vmx_use_count)
+			do_it = TRUE;
 	}
 
 	simple_unlock(&vmx_use_count_lock);
+
+	if (do_it) {
+		mp_rendezvous(NULL, (void (*)(void *))vmx_off, NULL, NULL);
+		vmx_free_vmxon_regions();
+	}
 
 	VMX_KPRINTF("VMX use count: %d\n", vmx_use_count);
 }

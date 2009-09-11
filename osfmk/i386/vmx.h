@@ -29,6 +29,12 @@
 #ifndef _I386_VMX_H_
 #define _I386_VMX_H_
 
+#if defined(__cplusplus)
+extern "C" {
+#endif
+
+#include <mach/boolean.h>
+
 /*
  * Error codes
  */
@@ -37,7 +43,11 @@
 #define VMX_INUSE		2 /* VT is being exclusively used already */
 
 /* SPI */
-int host_vmxon(int exclusive);
+int host_vmxon(boolean_t exclusive);
 void host_vmxoff(void);
+
+#if defined(__cplusplus)
+}
+#endif
 
 #endif

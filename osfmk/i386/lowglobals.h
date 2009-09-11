@@ -32,6 +32,12 @@
 #ifndef	_LOW_MEMORY_GLOBALS_H_
 #define	_LOW_MEMORY_GLOBALS_H_
 
+#if defined(__x86_64__)
+#include <x86_64/lowglobals.h>
+#elif !defined(__i386__)
+#error	Wrong architecture - this file is meant for i386
+#endif
+
 #include <mach/mach_types.h>
 #include <mach/vm_types.h>
 #include <mach/machine/vm_types.h>

@@ -70,6 +70,6 @@ void in_gif_input(struct mbuf *, int);
 int in_gif_output(struct ifnet *, int, struct mbuf *, struct rtentry *);
 int gif_encapcheck4(const struct mbuf *, int, int, void *);
 
-#endif KERNEL_PRIVATE
-#endif KERNEL
-#endif _NETINET_IN_GIF_H_
+#endif /* KERNEL_PRIVATE */
+#endif /* KERNEL */
+#endif /* _NETINET_IN_GIF_H_ */

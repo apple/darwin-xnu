@@ -55,21 +55,40 @@
 void hfs_generate_volume_notifications(struct hfsmount *hfsmp) 
 {
 	fsid_t fsid;
+	u_int32_t freeblks, state=999;
 		
 	fsid.val[0] = (long)hfsmp->hfs_raw_dev;
 	fsid.val[1] = (long)vfs_typenum(HFSTOVFS(hfsmp));
 	
-	if (hfsmp->hfs_notification_conditions & VQ_LOWDISK) {
-		/* Check to see whether the free space is back above the minimal level: */
-		if (hfs_freeblks(hfsmp, 1) > hfsmp->hfs_freespace_notify_desiredlevel) {
-            hfsmp->hfs_notification_conditions &= ~VQ_LOWDISK;
-            vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, (intptr_t)NULL);
+	freeblks = hfs_freeblks(hfsmp, 1);
+
+	if (freeblks < hfsmp->hfs_freespace_notify_dangerlimit) {
+		state = 2;
+	} else if (freeblks < hfsmp->hfs_freespace_notify_warninglimit) {
+		state = 1;
+	} else if (freeblks >= hfsmp->hfs_freespace_notify_desiredlevel) {
+		state = 0;
+	}
+
+	if (state == 2 && !(hfsmp->hfs_notification_conditions & VQ_VERYLOWDISK)) {
+		hfsmp->hfs_notification_conditions |= (VQ_VERYLOWDISK|VQ_LOWDISK);
+		vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, (intptr_t)NULL);
+	} else if (state == 1) {
+		if (!(hfsmp->hfs_notification_conditions & VQ_LOWDISK)) {
+			hfsmp->hfs_notification_conditions |= VQ_LOWDISK;
+			vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, (intptr_t)NULL);
+		} else if (hfsmp->hfs_notification_conditions & VQ_VERYLOWDISK) {
+			hfsmp->hfs_notification_conditions &= ~VQ_VERYLOWDISK;
+			vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, (intptr_t)NULL);
 		}
-	} else {
-		/* Check to see whether the free space fell below the requested limit: */
-		if (hfs_freeblks(hfsmp, 1) < hfsmp->hfs_freespace_notify_warninglimit) {
-            hfsmp->hfs_notification_conditions |= VQ_LOWDISK;
-            vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, (intptr_t)NULL);
+	} else if (state == 0) {
+		if (hfsmp->hfs_notification_conditions & (VQ_LOWDISK|VQ_VERYLOWDISK)) {
+			hfsmp->hfs_notification_conditions &= ~(VQ_VERYLOWDISK|VQ_LOWDISK);
+			if (hfsmp->hfs_notification_conditions == 0) {
+				vfs_event_signal(&fsid, VQ_UPDATE, (intptr_t)NULL);
+			} else {
+				vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, (intptr_t)NULL);
+			}
 		}
-	};
+	}
 }

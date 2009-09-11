@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -165,7 +165,7 @@ void OSObject::taggedRetain(const void *tag) const
 
 #if !DEBUG
 		break;	// Break out of update loop which pegs the reference
-#else DEBUG
+#else /* DEBUG */
                 // @@@ gvdl: eventually need to make this panic optional
                 // based on a boot argument i.e. debug= boot flag
                 msg = "About to wrap the reference count, reference leak?";
@@ -175,7 +175,7 @@ void OSObject::taggedRetain(const void *tag) const
         }
 
 	newCount = origCount + inc;
-    } while (!OSCompareAndSwap(origCount, newCount, (UInt32 *) countP));
+    } while (!OSCompareAndSwap(origCount, newCount, const_cast<UInt32 *>(countP)));
 }
 
 void OSObject::taggedRelease(const void *tag) const
@@ -212,7 +212,7 @@ void OSObject::taggedRelease(const void *tag, const int when) const
 
 #if !DEBUG
 		return;	// return out of function which pegs the reference
-#else DEBUG
+#else /* DEBUG */
                 // @@@ gvdl: eventually need to make this panic optional
                 // based on a boot argument i.e. debug= boot flag
                 panic("OSObject::refcount: %s",
@@ -226,23 +226,28 @@ void OSObject::taggedRelease(const void *tag, const int when) const
         else
             newCount = actualCount;
 
-    } while (!OSCompareAndSwap(origCount, newCount, (UInt32 *) countP));
+    } while (!OSCompareAndSwap(origCount, newCount, const_cast<UInt32 *>(countP)));
 
     //
     // This panic means that we have just attempted to release an object
-    // who's retain count has gone to less than the number of collections
+    // whose retain count has gone to less than the number of collections
     // it is a member off.  Take a panic immediately.
-    // In Fact the panic MAY not be a registry corruption but it is 
+    // In fact the panic MAY not be a registry corruption but it is 
     // ALWAYS the wrong thing to do.  I call it a registry corruption 'cause
     // the registry is the biggest single use of a network of collections.
     //
-    if ((UInt16) actualCount < (actualCount >> 16))
-	panic("A driver releasing a(n) %s has corrupted the registry\n",
-	    getClassName(this));
+// xxx - this error message is overly-specific;
+// xxx - any code in the kernel could trip this,
+// xxx - and it applies as noted to all collections, not just the registry
+    if ((UInt16) actualCount < (actualCount >> 16)) {
+        panic("A kext releasing a(n) %s has corrupted the registry.",
+            getClassName(this));
+    }
 
     // Check for a 'free' condition and that if we are first through
-    if (newCount == 0xffff)
-	((OSObject *) this)->free();
+    if (newCount == 0xffff) {
+        (const_cast<OSObject *>(this))->free();
+    }
 }
 
 void OSObject::release() const

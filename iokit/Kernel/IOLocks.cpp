@@ -25,15 +25,6 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
- *
- * HISTORY
- *
- */
-
-
-#define	IOLOCKS_CPP	1
 
 #include <IOKit/system.h>
 
@@ -195,11 +186,33 @@ int IORecursiveLockSleep(IORecursiveLock *_lock, void *event, UInt32 interType)
     int res;
 
     assert(lock->thread == IOThreadSelf());
-    assert(lock->count == 1 || interType == THREAD_UNINT);
     
     lock->count = 0;
     lock->thread = 0;
     res = lck_mtx_sleep(lock->mutex, LCK_SLEEP_DEFAULT, (event_t) event, (wait_interrupt_t) interType);
+
+    // Must re-establish the recursive lock no matter why we woke up
+    // otherwise we would potentially leave the return path corrupted.
+    assert(lock->thread == 0);
+    assert(lock->count == 0);
+    lock->thread = IOThreadSelf();
+    lock->count = count;
+    return res;
+}
+
+int	IORecursiveLockSleepDeadline( IORecursiveLock * _lock, void *event,
+                                  AbsoluteTime deadline, UInt32 interType)
+{
+    _IORecursiveLock * lock = (_IORecursiveLock *)_lock;
+    UInt32 count = lock->count;
+    int res;
+
+    assert(lock->thread == IOThreadSelf());
+    
+    lock->count = 0;
+    lock->thread = 0;
+    res = lck_mtx_sleep_deadline(lock->mutex, LCK_SLEEP_DEFAULT, (event_t) event, 
+								 (wait_interrupt_t) interType, __OSAbsoluteTime(deadline));
 
     // Must re-establish the recursive lock no matter why we woke up
     // otherwise we would potentially leave the return path corrupted.

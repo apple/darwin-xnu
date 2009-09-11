@@ -92,4 +92,4 @@ devtimer_current_time(void);
 int32_t
 devtimer_current_secs(void);
 
-#endif _NET_DEVTIMER_H
+#endif /* _NET_DEVTIMER_H */

@@ -86,15 +86,17 @@ int	debug_mask = 0;
 vm_size_t	cthread_stack_size = 16 *1024;
 extern vm_size_t cthread_wait_stack_size;
 
+#ifndef MACH_KERNEL
 unsigned long long	vm_page_mask;
 int		vm_page_shift;
+#endif
 
 int 		norma_mk;
 
 boolean_t	verbose;
 
 /* task_t default_pager_self; */	/* Our task port. */
-mutex_t			dpt_lock;       /* lock for the dpt array struct */
+lck_mtx_t				dpt_lock;       /* lock for the dpt array struct */
 default_pager_thread_t	**dpt_array;
 
 memory_object_default_t default_pager_object; /* for memory_object_create. */
@@ -132,6 +134,7 @@ unsigned int	d_to_i(char *);			/* forward; */
 
 extern int vstruct_def_clshift;
 
+struct global_stats global_stats;
 
 /*
  * Initialize and Run the default pager
@@ -304,8 +307,11 @@ start_def_pager( __unused char *bs_device )
 
 	/* setup read buffers, etc */
 	default_pager_initialize();
+
+#ifndef MACH_KERNEL	
 	default_pager();
-	
+#endif
+
 	/* start the backing store monitor, it runs on a callout thread */
 	default_pager_backing_store_monitor_callout = 
 		thread_call_allocate(default_pager_backing_store_monitor, NULL);
@@ -321,15 +327,15 @@ default_pager_info(
 	memory_object_default_t	pager,
 	default_pager_info_t	*infop)
 {
-	vm_size_t	pages_total, pages_free;
+	uint64_t	pages_total, pages_free;
 
 	if (pager != default_pager_object)
 		return KERN_INVALID_ARGUMENT; 
 
 	bs_global_info(&pages_total, &pages_free);
 
-	infop->dpi_total_space = ptoa_32(pages_total);
-	infop->dpi_free_space = ptoa_32(pages_free);
+	infop->dpi_total_space = (vm_size_t) ptoa_64(pages_total);
+	infop->dpi_free_space = (vm_size_t) ptoa_64(pages_free);
 	infop->dpi_page_size = vm_page_size;
 
 	return KERN_SUCCESS;
@@ -341,7 +347,7 @@ default_pager_info_64(
 	memory_object_default_t	pager,
 	default_pager_info_64_t	*infop)
 {
-	vm_size_t	pages_total, pages_free;
+	uint64_t	pages_total, pages_free;
 
 	if (pager != default_pager_object)
 		return KERN_INVALID_ARGUMENT; 
@@ -359,6 +365,11 @@ default_pager_info_64(
 	return KERN_SUCCESS;
 }
 
+lck_grp_t		default_pager_lck_grp;
+lck_grp_attr_t	default_pager_lck_grp_attr;
+lck_attr_t		default_pager_lck_attr;
+
+
 
 void
 default_pager_initialize(void)
@@ -366,12 +377,18 @@ default_pager_initialize(void)
 	kern_return_t		kr;
 	__unused static char	here[] = "default_pager_initialize";
 
+	lck_grp_attr_setdefault(&default_pager_lck_grp_attr);
+	lck_grp_init(&default_pager_lck_grp, "default_pager", &default_pager_lck_grp_attr);
+	lck_attr_setdefault(&default_pager_lck_attr);	
 
 	/*
 	 * Vm variables.
 	 */
+#ifndef MACH_KERNEL
 	vm_page_mask = vm_page_size - 1;
-	vm_page_shift = local_log2(vm_page_size);
+	assert((unsigned int) vm_page_size == vm_page_size);
+	vm_page_shift = local_log2((unsigned int) vm_page_size);
+#endif
 
 	/*
 	 * List of all vstructs.
@@ -379,6 +396,7 @@ default_pager_initialize(void)
 	vstruct_zone = zinit(sizeof(struct vstruct),
 			     10000 * sizeof(struct vstruct),
 			     8192, "vstruct zone");
+	
 	VSL_LOCK_INIT();
 	queue_init(&vstruct_list.vsl_queue);
 	vstruct_list.vsl_count = 0;
@@ -406,11 +424,12 @@ default_pager_initialize(void)
 	}
 #else	/* USER_PAGER */
 	{
-		int clsize;
+		unsigned int clsize;
 		memory_object_default_t dmm;
 
 		dmm = default_pager_object;
-		clsize = (vm_page_size << vstruct_def_clshift);
+		assert((unsigned int) vm_page_size == vm_page_size);
+		clsize = ((unsigned int) vm_page_size << vstruct_def_clshift);
 		kr = host_default_memory_manager(host_priv_self(), &dmm, clsize);
 		if ((kr != KERN_SUCCESS) ||
 		    (dmm != MEMORY_OBJECT_DEFAULT_NULL))

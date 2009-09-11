@@ -33,10 +33,7 @@
 #define NSEC_PER_SEC	1000*1000*1000
 #define NSEC_PER_USEC	1000
 
-        .text
-        .align  2, 0x90
-
-Lgettimeofday:
+COMMPAGE_FUNCTION_START(gettimeofday, 32, 4)
 	push	%ebp
 	mov	%esp,%ebp
 	push	%esi
@@ -80,15 +77,11 @@ Lgettimeofday:
 4:				/* fail */
 	movl	$1,%eax
 	jmp	3b
+COMMPAGE_DESCRIPTOR(gettimeofday,_COMM_PAGE_GETTIMEOFDAY,0,0)
 
-	COMMPAGE_DESCRIPTOR(gettimeofday,_COMM_PAGE_GETTIMEOFDAY,0,0)
 
-
-	.code64
-        .text
-        .align  2, 0x90
-
-Lgettimeofday_64:			// %rdi = ptr to timeval
+COMMPAGE_FUNCTION_START(gettimeofday_64, 64, 4)
+	// %rdi = ptr to timeval
 	pushq	%rbp			// set up a frame for backtraces
 	movq	%rsp,%rbp
 	movq	%rdi,%r9		// save ptr to timeval
@@ -126,5 +119,4 @@ Lgettimeofday_64:			// %rdi = ptr to timeval
 4:					// fail
 	movl	$1,%eax
 	jmp	3b
-
-	COMMPAGE_DESCRIPTOR(gettimeofday_64,_COMM_PAGE_GETTIMEOFDAY,0,0)
+COMMPAGE_DESCRIPTOR(gettimeofday_64,_COMM_PAGE_GETTIMEOFDAY,0,0)

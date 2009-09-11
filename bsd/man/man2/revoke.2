@@ -98,6 +98,10 @@ The named file is neither a character special or block
 special file.
 .It Bq Er EPERM
 The caller is neither the owner of the file nor the super user.
+.It Bq Er ENOTSUP
+The path does not represent a block or character device.
+.It Bq Er EBUSY
+The path represents a block device which is providing the backing for a mounted volume. 
 .El
 .Sh SEE ALSO
 .Xr close 2

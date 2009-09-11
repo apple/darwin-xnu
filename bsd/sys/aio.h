@@ -48,6 +48,10 @@
  * In our case, this is limited to struct timespec, off_t and ssize_t.
  */
 #define __need_struct_timespec
+#ifdef KERNEL
+#define __need_struct_user64_timespec
+#define __need_struct_user32_timespec
+#endif /* KERNEL */
 #include <sys/_structs.h>
 
 #ifndef _OFF_T
@@ -58,6 +62,21 @@ typedef __darwin_off_t	off_t;
 #ifndef	_SSIZE_T
 #define	_SSIZE_T
 typedef	__darwin_ssize_t	ssize_t;
+#endif
+
+/*
+ * A aio_fsync() options that the calling thread is to continue execution
+ * while the lio_listio() operation is being performed, and no notification
+ * is given when the operation is complete
+ *
+ * [XSI] from <fcntl.h>
+ */
+#ifndef O_SYNC		/* allow simultaneous inclusion of <fcntl.h> */
+#define	O_SYNC			0x0080		/* synch I/O file integrity */
+#endif
+
+#ifndef O_DSYNC		/* allow simultaneous inclusion of <fcntl.h> */
+#define	O_DSYNC			0x400000	/* synch I/O data integrity */
 #endif
 
 
@@ -75,11 +94,31 @@ struct aiocb {
 
 struct user_aiocb {
 	int		aio_fildes;		/* File descriptor */
-	off_t		aio_offset __attribute((aligned(8))); /* File offset */
-	user_addr_t	aio_buf __attribute((aligned(8)));		/* Location of buffer */
+	off_t		aio_offset; /* File offset */
+	user_addr_t	aio_buf;		/* Location of buffer */
 	user_size_t	aio_nbytes;		/* Length of transfer */
 	int		aio_reqprio;	/* Request priority offset */
-	struct user_sigevent aio_sigevent __attribute((aligned(8)));	/* Signal number and value */
+	struct user_sigevent aio_sigevent;	/* Signal number and value */
+	int		aio_lio_opcode;		/* Operation to be performed */
+};
+
+struct user64_aiocb {
+	int		aio_fildes;		/* File descriptor */
+	user64_off_t		aio_offset; /* File offset */
+	user64_addr_t	aio_buf;		/* Location of buffer */
+	user64_size_t	aio_nbytes;		/* Length of transfer */
+	int		aio_reqprio;	/* Request priority offset */
+	struct user64_sigevent aio_sigevent;	/* Signal number and value */
+	int		aio_lio_opcode;		/* Operation to be performed */
+};
+
+struct user32_aiocb {
+	int		aio_fildes;		/* File descriptor */
+	user32_off_t		aio_offset;		/* File offset */
+	user32_addr_t	aio_buf;		/* Location of buffer */
+	user32_size_t	aio_nbytes;		/* Length of transfer */
+	int		aio_reqprio;		/* Request priority offset */
+	struct user32_sigevent	aio_sigevent;		/* Signal number and value */
 	int		aio_lio_opcode;		/* Operation to be performed */
 };
 
@@ -137,19 +176,6 @@ struct user_aiocb {
  */
 #define	AIO_LISTIO_MAX		16
 
-/*
- * A aio_fsync() options
- * that the calling thread is to continue execution while
- * the lio_listio() operation is being performed, and no
- * notification is given when the operation is complete
- */
-
-#ifndef O_SYNC	/* XXX investigate documentation error */
-#define	O_SYNC			0x0080 	/* queued IO is completed as if by fsync() */
-#endif
-#if 0 /* O_DSYNC - NOT SUPPORTED */
-#define	O_DSYNC			0x1		/* queued async IO is completed as if by fdatasync() */
-#endif
 
 #ifndef KERNEL
 /*

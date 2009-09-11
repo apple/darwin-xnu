@@ -53,6 +53,25 @@
 
 __BEGIN_DECLS
 
+
+/*
+ * unicode_combinable - Test for a combining unicode character.
+ *
+ * This function is similar to __CFUniCharIsNonBaseCharacter except
+ * that it also includes Hangul Jamo characters.
+ */
+
+int unicode_combinable(u_int16_t character);
+
+/*
+ * Test for a precomposed character.
+ * 
+ * Similar to __CFUniCharIsDecomposableCharacter.
+ */
+
+int unicode_decomposeable(u_int16_t character);
+
+
 /*
  * utf8_encodelen - Calculate the UTF-8 encoding length
  *

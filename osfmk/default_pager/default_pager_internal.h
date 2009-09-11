@@ -99,28 +99,11 @@
 #define UP(stuff)
 #endif	/* USER_PAGER */
 
-#ifndef MACH_KERNEL
-extern struct mutex dprintf_lock;
-#define PRINTF_LOCK_INIT()	mutex_init(&dprintf_lock)
-#define PRINTF_LOCK()		mutex_lock(&dprintf_lock)
-#define PRINTF_UNLOCK()		mutex_unlock(&dprintf_lock)
-#endif
-
-#ifndef MACH_KERNEL
-#define dprintf(args)							\
-	do {								\
-		PRINTF_LOCK();						\
-		printf("%s[%d]: ", my_name, dp_thread_id());		\
-		printf args;						\
-		PRINTF_UNLOCK();					\
-	} while (0)
-#else
 #define dprintf(args)						\
 	do {							\
 		printf("%s[KERNEL]: ", my_name);		\
 		printf args;					\
 	} while (0)
-#endif
 
 /*
  * Debug.
@@ -179,23 +162,25 @@ extern char *mach_error_string(kern_return_t);
  * VM and IPC globals.
  */
 #ifdef MACH_KERNEL
-#define vm_page_size page_size
+#define vm_page_size PAGE_SIZE
+#define vm_page_mask PAGE_MASK
+#define vm_page_shift PAGE_SHIFT
 #else
 extern vm_object_size_t	vm_page_size;
-#endif
 extern unsigned long long	vm_page_mask;
 extern int		vm_page_shift;
+#endif
 
 #ifndef MACH_KERNEL
 #define	ptoa(p)	((p)*vm_page_size)
 #define	atop(a)	((a)/vm_page_size)
 #endif
-#define	howmany(a,b)	(((a) + (b) - 1)/(b))
+#define	howmany(a,b)	((((a) % (b)) == 0) ? ((a) / (b)) : (((a) / (b)) + 1))
 
 extern memory_object_default_t	default_pager_object;
 
 #ifdef MACH_KERNEL
-extern mutex_t		dpt_lock;	/* Lock for the dpt array */
+extern lck_mtx_t		dpt_lock;	/* Lock for the dpt array */
 extern int	default_pager_internal_count;
 extern MACH_PORT_FACE	default_pager_host_port;
 /* extern task_t		default_pager_self; */  /* dont need or want */
@@ -209,6 +194,10 @@ extern mach_port_t	default_pager_internal_set;
 extern mach_port_t	default_pager_external_set;
 extern mach_port_t	default_pager_default_set;
 #endif
+
+typedef vm32_offset_t dp_offset_t;
+typedef vm32_size_t dp_size_t;
+typedef vm32_address_t dp_address_t;
 
 typedef struct default_pager_thread {
 #ifndef MACH_KERNEL
@@ -231,7 +220,7 @@ extern default_pager_thread_t	**dpt_array;
 /*
  * Global statistics.
  */
-struct {
+struct global_stats {
 	unsigned int	gs_pageout_calls;	/* # pageout calls */
 	unsigned int	gs_pagein_calls;	/* # pagein calls */
 	unsigned int	gs_pages_in;		/* # pages paged in (total) */
@@ -240,7 +229,8 @@ struct {
 	unsigned int	gs_pages_init;		/* # page init requests */
 	unsigned int	gs_pages_init_writes;	/* # page init writes */
 	VSTATS_LOCK_DECL(gs_lock)
-} global_stats;
+};
+extern struct global_stats global_stats;
 #define GSTAT(clause)	VSTATS_ACTION(&global_stats.gs_lock, (clause))
 
 /*
@@ -276,15 +266,17 @@ struct {
 #define BS_FULLPRI	-2
 
 /*
+ * Quick way to access the emergency segment backing store structures
+ * without a full-blown search.
+ */
+extern MACH_PORT_FACE		emergency_segment_backing_store;
+
+/*
  * Mapping between backing store port and backing store object.
  */
 struct backing_store {
 	queue_chain_t	bs_links;	/* link in backing_store_list */
-#ifdef MACH_KERNEL
-	mutex_t		bs_lock;	/* lock for the structure */
-#else
-	struct mutex	bs_lock;	/* lock for the structure */
-#endif
+	lck_mtx_t		bs_lock;	/* lock for the structure */
 	MACH_PORT_FACE	bs_port;	/* backing store port */
 	int		bs_priority;
 	int		bs_clsize;	/* cluster size in pages */
@@ -302,31 +294,21 @@ typedef struct backing_store 	*backing_store_t;
 #define BS_STAT(bs, clause)	VSTATS_ACTION(&(bs)->bs_lock, (clause))
 
 #ifdef MACH_KERNEL
-#define BS_LOCK_INIT(bs)	mutex_init(&(bs)->bs_lock, 0)
-#else
-#define BS_LOCK_INIT(bs)	mutex_init(&(bs)->bs_lock)
-#endif
-#define BS_LOCK(bs)		mutex_lock(&(bs)->bs_lock)
-#define BS_UNLOCK(bs)		mutex_unlock(&(bs)->bs_lock)
+#define BS_LOCK_INIT(bs)	lck_mtx_init(&(bs)->bs_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define BS_LOCK(bs)			lck_mtx_lock(&(bs)->bs_lock)
+#define BS_UNLOCK(bs)		lck_mtx_unlock(&(bs)->bs_lock)
 
 struct backing_store_list_head {
 	queue_head_t	bsl_queue;
-#ifdef MACH_KERNEL
-	mutex_t 	bsl_lock;
-#else
-	struct mutex 	bsl_lock;
+	lck_mtx_t 	bsl_lock;
 #endif
 };
 extern struct backing_store_list_head	backing_store_list;
 extern int	backing_store_release_trigger_disable;
 
-#ifdef MACH_KERNEL
-#define	BSL_LOCK_INIT()	mutex_init(&backing_store_list.bsl_lock, 0)
-#else
-#define	BSL_LOCK_INIT()	mutex_init(&backing_store_list.bsl_lock)
-#endif
-#define BSL_LOCK()	mutex_lock(&backing_store_list.bsl_lock)
-#define BSL_UNLOCK()	mutex_unlock(&backing_store_list.bsl_lock)
+#define	BSL_LOCK_INIT()		lck_mtx_init(&backing_store_list.bsl_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define BSL_LOCK()			lck_mtx_lock(&backing_store_list.bsl_lock)
+#define BSL_UNLOCK()		lck_mtx_unlock(&backing_store_list.bsl_lock)
 
 /*
  * 	Paging segment management.
@@ -340,8 +322,8 @@ struct paging_segment {
 	} storage_type;
 	unsigned int	ps_segtype;	/* file type or partition */
 	MACH_PORT_FACE	ps_device;	/* Port to device */
-	vm_offset_t	ps_offset;	/* Offset of segment within device */
-	vm_offset_t	ps_recnum;	/* Number of device records in segment*/
+	dp_offset_t	ps_offset;	/* Offset of segment within device */
+	dp_offset_t	ps_recnum;	/* Number of device records in segment*/
 	unsigned int	ps_pgnum;	/* Number of pages in segment */
 	unsigned int	ps_record_shift;/* Bit shift: pages to device records */
 
@@ -350,21 +332,26 @@ struct paging_segment {
 	unsigned int	ps_ncls;	/* Number of clusters in segment */
 	unsigned int	ps_clcount;	/* Number of free clusters */
 	unsigned int	ps_pgcount;	/* Number of free pages */
-	unsigned long	ps_hint;	/* Hint of where to look next. */
+	unsigned int	ps_hint;	/* Hint of where to look next. */
+	unsigned int	ps_special_clusters; /* Clusters that might come in while we've 
+					* released the locks doing a ps_delete.
+					*/
 
 	/* bitmap */
-#ifdef MACH_KERNEL
-	mutex_t		ps_lock;	/* Lock for contents of struct */
-#else
-	struct mutex	ps_lock;	/* Lock for contents of struct */
-#endif
+	lck_mtx_t		ps_lock;	/* Lock for contents of struct */
 	unsigned char	*ps_bmap;	/* Map of used clusters */
 	
 	/* backing store */
 	backing_store_t	ps_bs;		/* Backing store segment belongs to */
-
-	boolean_t	ps_going_away;	/* Destroy attempt in progress */
+#define	PS_CAN_USE		0x1
+#define	PS_GOING_AWAY		0x2
+#define PS_EMERGENCY_SEGMENT	0x4
+	unsigned int	ps_state;
 };
+
+#define IS_PS_OK_TO_USE(ps)		((ps->ps_state & PS_CAN_USE) == PS_CAN_USE)
+#define IS_PS_GOING_AWAY(ps)		((ps->ps_state & PS_GOING_AWAY) == PS_GOING_AWAY)
+#define IS_PS_EMERGENCY_SEGMENT(ps)	((ps->ps_state & PS_EMERGENCY_SEGMENT) == PS_EMERGENCY_SEGMENT)
 
 #define ps_vnode	storage_type.vnode
 #define ps_device	storage_type.dev
@@ -375,18 +362,14 @@ typedef struct paging_segment *paging_segment_t;
 
 #define PAGING_SEGMENT_NULL	((paging_segment_t) 0)
 
-#ifdef MACH_KERNEL
-#define PS_LOCK_INIT(ps)	mutex_init(&(ps)->ps_lock, 0)
-#else
-#define PS_LOCK_INIT(ps)	mutex_init(&(ps)->ps_lock)
-#endif
-#define PS_LOCK(ps)		mutex_lock(&(ps)->ps_lock)
-#define PS_UNLOCK(ps)		mutex_unlock(&(ps)->ps_lock)
+#define PS_LOCK_INIT(ps)	lck_mtx_init(&(ps)->ps_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define PS_LOCK(ps)			lck_mtx_lock(&(ps)->ps_lock)
+#define PS_UNLOCK(ps)		lck_mtx_unlock(&(ps)->ps_lock)
 
 typedef unsigned int	pseg_index_t;
 
 #define	INVALID_PSEG_INDEX	((pseg_index_t)-1)
-#define NULL_PSEG_INDEX		((pseg_index_t) 0)
+#define EMERGENCY_PSEG_INDEX		((pseg_index_t) 0)
 /*
  * MAX_PSEG_INDEX value is related to struct vs_map below.
  * "0" is reserved for empty map entries (no segment).
@@ -396,22 +379,14 @@ typedef unsigned int	pseg_index_t;
 
 /* paging segments array */
 extern paging_segment_t	paging_segments[MAX_NUM_PAGING_SEGMENTS];
-#ifdef MACH_KERNEL
-extern mutex_t paging_segments_lock;
-#else
-extern struct mutex paging_segments_lock;
-#endif
+extern lck_mtx_t paging_segments_lock;
 extern int	paging_segment_count;	/* number of active paging segments */
 extern int	paging_segment_max;	/* highest used paging segment index */
 extern int ps_select_array[DEFAULT_PAGER_BACKING_STORE_MAXPRI+1];
 
-#ifdef MACH_KERNEL
-#define	PSL_LOCK_INIT()	mutex_init(&paging_segments_lock, 0)
-#else
-#define	PSL_LOCK_INIT()	mutex_init(&paging_segments_lock)
-#endif
-#define PSL_LOCK()	mutex_lock(&paging_segments_lock)
-#define PSL_UNLOCK()	mutex_unlock(&paging_segments_lock)
+#define	PSL_LOCK_INIT()	lck_mtx_init(&paging_segments_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define PSL_LOCK()		lck_mtx_lock(&paging_segments_lock)
+#define PSL_UNLOCK()	lck_mtx_unlock(&paging_segments_lock)
 
 /*
  * Vstruct manipulation.  The vstruct is the pager's internal
@@ -462,7 +437,7 @@ typedef struct vs_map *vs_map_t;
  * Exported macros for manipulating the vs_map structure --
  * checking status, getting and setting bits.
  */
-#define	VSCLSIZE(vs)		(1UL << (vs)->vs_clshift)
+#define	VSCLSIZE(vs)		(1U << (vs)->vs_clshift)
 #define	VSM_ISCLR(vsm)		(((vsm).vsmap_entry == VSM_ENTRY_NULL) &&   \
 					((vsm).vsmap_error == 0))
 #define	VSM_ISERR(vsm)		((vsm).vsmap_error)
@@ -492,11 +467,11 @@ typedef struct vs_map *vs_map_t;
  * map vm objects to backing storage (paging files and clusters).
  */
 #define CLMAP_THRESHOLD	512 	/* bytes */
-#define	CLMAP_ENTRIES		(CLMAP_THRESHOLD/sizeof(struct vs_map))
-#define	CLMAP_SIZE(ncls)	(ncls*sizeof(struct vs_map))
+#define	CLMAP_ENTRIES		(CLMAP_THRESHOLD/(int)sizeof(struct vs_map))
+#define	CLMAP_SIZE(ncls)	(ncls*(int)sizeof(struct vs_map))
 
 #define	INDIRECT_CLMAP_ENTRIES(ncls) (((ncls-1)/CLMAP_ENTRIES) + 1)
-#define INDIRECT_CLMAP_SIZE(ncls) (INDIRECT_CLMAP_ENTRIES(ncls) * sizeof(struct vs_map *))
+#define INDIRECT_CLMAP_SIZE(ncls) (INDIRECT_CLMAP_ENTRIES(ncls) * (int)sizeof(struct vs_map *))
 #define INDIRECT_CLMAP(size)	(CLMAP_SIZE(size) > CLMAP_THRESHOLD)
 
 #define RMAPSIZE(blocks) 	(howmany(blocks,NBBY))
@@ -545,33 +520,20 @@ typedef struct vstruct_alias {
 	struct vstruct *vs;
 } vstruct_alias_t;
 
-#ifdef MACH_KERNEL
-#define DPT_LOCK_INIT(lock)	mutex_init(&(lock), 0)
-#define DPT_LOCK(lock)		mutex_lock(&(lock))
-#define DPT_UNLOCK(lock)	mutex_unlock(&(lock))
-#define DPT_SLEEP(lock, e, i)	thread_sleep_mutex(&(lock), (event_t)(e), i)
-#define VS_LOCK_TYPE		hw_lock_data_t
-#define VS_LOCK_INIT(vs)	hw_lock_init(&(vs)->vs_lock)
-#define VS_TRY_LOCK(vs)		(VS_LOCK(vs),TRUE)
-#define VS_LOCK(vs)		hw_lock_lock(&(vs)->vs_lock)
-#define VS_UNLOCK(vs)		hw_lock_unlock(&(vs)->vs_lock)
-#define VS_MAP_LOCK_TYPE	mutex_t
-#define VS_MAP_LOCK_INIT(vs)	mutex_init(&(vs)->vs_map_lock, 0)
-#define VS_MAP_LOCK(vs)		mutex_lock(&(vs)->vs_map_lock)
-#define VS_MAP_TRY_LOCK(vs)	mutex_try(&(vs)->vs_map_lock)
-#define VS_MAP_UNLOCK(vs)	mutex_unlock(&(vs)->vs_map_lock)
-#else
-#define VS_LOCK_TYPE		struct mutex
-#define VS_LOCK_INIT(vs)	mutex_init(&(vs)->vs_lock, 0)
-#define VS_TRY_LOCK(vs)		mutex_try(&(vs)->vs_lock)
-#define VS_LOCK(vs)		mutex_lock(&(vs)->vs_lock)
-#define VS_UNLOCK(vs)		mutex_unlock(&(vs)->vs_lock)
-#define VS_MAP_LOCK_TYPE	struct mutex
-#define VS_MAP_LOCK_INIT(vs)	mutex_init(&(vs)->vs_map_lock)
-#define VS_MAP_LOCK(vs)		mutex_lock(&(vs)->vs_map_lock)
-#define VS_MAP_TRY_LOCK(vs)	mutex_try(&(vs)->vs_map_lock)
-#define VS_MAP_UNLOCK(vs)	mutex_unlock(&(vs)->vs_map_lock)
-#endif
+#define DPT_LOCK_INIT(lock)		lck_mtx_init(&(lock), &default_pager_lck_grp, &default_pager_lck_attr)
+#define DPT_LOCK(lock)			lck_mtx_lock(&(lock))
+#define DPT_UNLOCK(lock)		lck_mtx_unlock(&(lock))
+#define DPT_SLEEP(lock, e, i)	lck_mtx_sleep(&(lock), LCK_SLEEP_DEFAULT, (event_t)(e), i)
+#define VS_LOCK_TYPE			hw_lock_data_t
+#define VS_LOCK_INIT(vs)		hw_lock_init(&(vs)->vs_lock)
+#define VS_TRY_LOCK(vs)			(VS_LOCK(vs),TRUE)
+#define VS_LOCK(vs)				hw_lock_lock(&(vs)->vs_lock)
+#define VS_UNLOCK(vs)			hw_lock_unlock(&(vs)->vs_lock)
+#define VS_MAP_LOCK_TYPE		lck_mtx_t
+#define VS_MAP_LOCK_INIT(vs)	lck_mtx_init(&(vs)->vs_map_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define VS_MAP_LOCK(vs)			lck_mtx_lock(&(vs)->vs_map_lock)
+#define VS_MAP_TRY_LOCK(vs)		lck_mtx_try_lock(&(vs)->vs_map_lock)
+#define VS_MAP_UNLOCK(vs)		lck_mtx_unlock(&(vs)->vs_map_lock)
 
 
 /*
@@ -582,8 +544,8 @@ typedef struct vstruct_alias {
  * The start of this structure MUST match a "struct memory_object".
  */
 typedef struct vstruct {
+	struct ipc_object_header	vs_pager_header;	/* fake ip_kotype() */
 	memory_object_pager_ops_t vs_pager_ops; /* == &default_pager_ops */
-	int			vs_mem_obj_ikot;/* JMM:fake ip_kotype() */
 	memory_object_control_t vs_control;	/* our mem obj control ref */
 	VS_LOCK_TYPE		vs_lock;	/* data for the lock */
 
@@ -593,7 +555,6 @@ typedef struct vstruct {
 	unsigned int		vs_readers;	/* Reads in progress */
 	unsigned int		vs_writers;	/* Writes in progress */
 
-#ifdef MACH_KERNEL
 	unsigned int
 	/* boolean_t */		vs_waiting_seqno:1,	/* to wait on seqno */
 	/* boolean_t */		vs_waiting_read:1, 	/* waiting on reader? */
@@ -601,14 +562,6 @@ typedef struct vstruct {
 	/* boolean_t */		vs_waiting_async:1,	/* waiting on async? */
 	/* boolean_t */		vs_indirect:1,		/* map indirect? */
 	/* boolean_t */		vs_xfer_pending:1;	/* xfer out of seg? */
-#else
-	event_t			vs_waiting_seqno;/* to wait on seqno */
-	event_t			vs_waiting_read; /* to wait on readers */
-	event_t			vs_waiting_write;/* to wait on writers */
-	event_t			vs_waiting_async;/* to wait on async_pending */
-	int			vs_indirect:1,	/* Is the map indirect ? */
-				vs_xfer_pending:1; /* xfering out of a seg ? */
-#endif
 
 	unsigned int		vs_async_pending;/* pending async write count */
 	unsigned int		vs_errors;	/* Pageout error count */
@@ -618,11 +571,7 @@ typedef struct vstruct {
 
 	unsigned int		vs_clshift;	/* Bit shift: clusters->pages */
 	unsigned int		vs_size;	/* Object size in clusters */
-#ifdef MACH_KERNEL
-	mutex_t		vs_map_lock;	/* to protect map below */
-#else
-	struct mutex	vs_map_lock;	/* to protect map below */
-#endif
+	lck_mtx_t		vs_map_lock;	/* to protect map below */
 	union {
 		struct vs_map	*vsu_dmap;	/* Direct map of clusters */
 		struct vs_map	**vsu_imap;	/* Indirect map of clusters */
@@ -677,7 +626,6 @@ struct vs_async {
 	paging_segment_t vsa_ps;	/* the paging segment used */
 	int		vsa_flags;	/* flags */
 	int		vsa_error;	/* error, if there is one */
-	mutex_t		vsa_lock;
 	MACH_PORT_FACE	reply_port;	/* associated reply port */
 };
 
@@ -696,11 +644,7 @@ struct vs_async {
  */
 struct vstruct_list_head {
 	queue_head_t	vsl_queue;
-#ifdef MACH_KERNEL
-	mutex_t		vsl_lock;
-#else
-	struct mutex	vsl_lock;
-#endif
+	lck_mtx_t		vsl_lock;
 	int		vsl_count;	/* saves code */
 };
 
@@ -710,15 +654,14 @@ __private_extern__ void vstruct_list_insert(vstruct_t vs);
 __private_extern__ void vstruct_list_delete(vstruct_t vs);
 
 
-#ifdef MACH_KERNEL
-#define VSL_LOCK_INIT()	mutex_init(&vstruct_list.vsl_lock, 0)
-#else
-#define VSL_LOCK_INIT()	mutex_init(&vstruct_list.vsl_lock)
-#endif
-#define VSL_LOCK()	mutex_lock(&vstruct_list.vsl_lock)
-#define VSL_LOCK_TRY()	mutex_try(&vstruct_list.vsl_lock)
-#define VSL_UNLOCK()	mutex_unlock(&vstruct_list.vsl_lock)
-#define VSL_SLEEP(e,i)	thread_sleep_mutex((e), &vstruct_list.vsl_lock, (i))
+extern lck_grp_t		default_pager_lck_grp;
+extern lck_attr_t		default_pager_lck_attr;
+
+#define VSL_LOCK_INIT()		lck_mtx_init(&vstruct_list.vsl_lock, &default_pager_lck_grp, &default_pager_lck_attr)
+#define VSL_LOCK()			lck_mtx_lock(&vstruct_list.vsl_lock)
+#define VSL_LOCK_TRY()		lck_mtx_try_lock(&vstruct_list.vsl_lock)
+#define VSL_UNLOCK()		lck_mtx_unlock(&vstruct_list.vsl_lock)
+#define VSL_SLEEP(e,i)		lck_mtx_sleep(&vstruct_list.vsl_lock, LCK_SLEEP_DEFAULT, (e), (i))
 
 #ifdef MACH_KERNEL
 __private_extern__ zone_t	vstruct_zone;
@@ -788,15 +731,15 @@ extern void		default_pager_no_senders(memory_object_t,
 
 extern int		local_log2(unsigned int);
 extern void		bs_initialize(void);
-extern void		bs_global_info(vm_size_t *,
-				       vm_size_t *);
+extern void		bs_global_info(uint64_t *,
+				       uint64_t *);
 extern boolean_t	bs_add_device(char *,
 				      MACH_PORT_FACE);
-extern vstruct_t	ps_vstruct_create(vm_size_t);
+extern vstruct_t	ps_vstruct_create(dp_size_t);
 extern void		ps_vstruct_dealloc(vstruct_t);
 extern kern_return_t	pvs_cluster_read(vstruct_t,
-					 vm_offset_t,
-					 vm_size_t,
+					 dp_offset_t,
+					 dp_size_t,
 					 void *);
 extern kern_return_t	vs_cluster_write(vstruct_t,
 					 upl_t,
@@ -804,16 +747,16 @@ extern kern_return_t	vs_cluster_write(vstruct_t,
 					 upl_size_t,
 					 boolean_t,
 					 int);
-extern vm_offset_t	ps_clmap(vstruct_t,
-				 vm_offset_t,
+extern dp_offset_t	ps_clmap(vstruct_t,
+				 dp_offset_t,
 				 struct clmap *,
 				 int,
-				 vm_size_t,
+				 dp_size_t,
 				 int);
 extern vm_size_t	ps_vstruct_allocated_size(vstruct_t);
-extern size_t		ps_vstruct_allocated_pages(vstruct_t,
+extern unsigned int	ps_vstruct_allocated_pages(vstruct_t,
 						   default_pager_page_t *,
-						   size_t);
+						   unsigned int);
 extern boolean_t	bs_set_default_clsize(unsigned int);
 
 extern boolean_t	verbose;

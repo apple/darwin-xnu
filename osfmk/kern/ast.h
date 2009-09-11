@@ -182,11 +182,11 @@ MACRO_END
  *  be followed by ast_propagate().
  */
 #define thread_ast_set(act, reason)		\
-						((void)hw_atomic_or(&(act)->ast, (reason)))
+						(hw_atomic_or_noret(&(act)->ast, (reason)))
 #define thread_ast_clear(act, reason)	\
-						((void)hw_atomic_and(&(act)->ast, ~(reason)))
+						(hw_atomic_and_noret(&(act)->ast, ~(reason)))
 #define thread_ast_clear_all(act)		\
-						((void)hw_atomic_and(&(act)->ast, AST_NONE))
+						(hw_atomic_and_noret(&(act)->ast, AST_NONE))
 
 #ifdef MACH_BSD
 

@@ -32,7 +32,7 @@
 #ifndef	_SYS_NETPORT_H_
 #define _SYS_NETPORT_H_
 
-typedef unsigned long	netaddr_t;
+typedef uint32_t	netaddr_t;
 
 /*
  * Network Port structure.

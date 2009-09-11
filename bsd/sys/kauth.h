@@ -38,6 +38,7 @@
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
 #include <mach/boolean.h>
+#include <sys/_types.h>		/* __offsetof() */
 
 #ifdef __APPLE_API_EVOLVING
 
@@ -105,6 +106,12 @@ struct kauth_identity_extlookup {
 #define KAUTH_EXTLOOKUP_WANT_MEMBERSHIP	(1<<12)
 #define KAUTH_EXTLOOKUP_VALID_MEMBERSHIP (1<<13)
 #define KAUTH_EXTLOOKUP_ISMEMBER	(1<<14)
+
+	__darwin_pid_t	el_info_pid;		/* request on behalf of PID */
+	u_int32_t	el_info_reserved_1;	/* reserved (APPLE) */
+	u_int32_t	el_info_reserved_2;	/* reserved (APPLE) */
+	u_int32_t	el_info_reserved_3;	/* reserved (APPLE) */
+
 	uid_t		el_uid;		/* user ID */
 	guid_t		el_uguid;	/* user GUID */
 	u_int32_t	el_uguid_valid;	/* TTL on translation result (seconds) */
@@ -121,6 +128,7 @@ struct kauth_identity_extlookup {
 #define KAUTH_EXTLOOKUP_REGISTER	(0)
 #define KAUTH_EXTLOOKUP_RESULT		(1<<0)
 #define KAUTH_EXTLOOKUP_WORKER		(1<<1)
+#define	KAUTH_EXTLOOKUP_DEREGISTER	(1<<2)
 
 
 #ifdef KERNEL
@@ -169,7 +177,8 @@ struct kauth_cred {
 	int	kc_nwhtgroups;		/* whiteout group list */
 	gid_t	*kc_whtgroups;
 	
-	struct auditinfo cr_au;		/* user auditing data */
+	struct auditinfo  cr_au;
+	struct au_session cr_audit;	/* user auditing data */
 
 	int	kc_nsupplement;		/* entry count in supplemental data pointer array */
 	kauth_cred_supplement_t *kc_supplement;
@@ -186,30 +195,21 @@ __BEGIN_DECLS
 extern uid_t	kauth_getuid(void);
 extern uid_t	kauth_getruid(void);
 extern gid_t	kauth_getgid(void);
-extern gid_t	kauth_getrgid(void);
 extern kauth_cred_t kauth_cred_get(void);
 extern kauth_cred_t kauth_cred_get_with_ref(void);
 extern kauth_cred_t kauth_cred_proc_ref(proc_t procp);
-extern kauth_cred_t kauth_cred_alloc(void);
 extern kauth_cred_t kauth_cred_create(kauth_cred_t cred);
 extern void	kauth_cred_ref(kauth_cred_t _cred);
+#ifndef __LP64__
 /* Use kauth_cred_unref(), not kauth_cred_rele() */
 extern void	kauth_cred_rele(kauth_cred_t _cred) __deprecated;
-extern kauth_cred_t kauth_cred_dup(kauth_cred_t cred);
-extern kauth_cred_t kauth_cred_copy_real(kauth_cred_t cred);
+#endif
 extern void	kauth_cred_unref(kauth_cred_t *_cred);
-extern kauth_cred_t	kauth_cred_setresuid(kauth_cred_t cred, uid_t ruid, uid_t euid, uid_t svuid, uid_t gmuid);
-extern kauth_cred_t	kauth_cred_setresgid(kauth_cred_t cred, gid_t rgid, gid_t egid, gid_t svgid);
-extern kauth_cred_t kauth_cred_setuidgid(kauth_cred_t cred, uid_t uid, gid_t gid);
-extern kauth_cred_t kauth_cred_setsvuidgid(kauth_cred_t cred, uid_t uid, gid_t gid);
-extern kauth_cred_t	kauth_cred_setgroups(kauth_cred_t cred, gid_t *groups, int groupcount, uid_t gmuid);
-struct uthread;
-extern void	kauth_cred_uthread_update(struct uthread *, proc_t);
+
 #if CONFIG_MACF
 struct label;
 extern kauth_cred_t	kauth_cred_label_update(kauth_cred_t cred, struct label *label);
 extern int kauth_proc_label_update(struct proc *p, struct label *label);
-extern int kauth_proc_label_update_execve(struct proc *p, struct vfs_context *ctx, struct vnode *vp, struct label *scriptlabel, struct label *execlabel);
 #else
 /* this is a temp hack to cover us when MAC is not built in a kernel configuration. 
  * Since we cannot build our export list based on the kernel configuration we need
@@ -220,8 +220,6 @@ extern int kauth_proc_label_update(struct proc *p, void *label);
 #endif
 
 extern kauth_cred_t kauth_cred_find(kauth_cred_t cred);
-extern int	kauth_cred_getgroups(gid_t *_groups, int *_groupcount);
-extern int	kauth_cred_assume(uid_t _uid);
 extern uid_t	kauth_cred_getuid(kauth_cred_t _cred);
 extern gid_t	kauth_cred_getgid(kauth_cred_t _cred);
 extern int      kauth_cred_guid2uid(guid_t *_guid, uid_t *_uidp);
@@ -238,14 +236,8 @@ extern int      kauth_cred_gid2ntsid(gid_t _gid, ntsid_t *_sidp);
 extern int      kauth_cred_guid2ntsid(guid_t *_guid, ntsid_t *_sidp);
 extern int	kauth_cred_ismember_gid(kauth_cred_t _cred, gid_t _gid, int *_resultp);
 extern int	kauth_cred_ismember_guid(kauth_cred_t _cred, guid_t *_guidp, int *_resultp);
-extern int	kauth_cred_gid_subset(kauth_cred_t _cred1, kauth_cred_t _cred2, int *_resultp);
 
-struct auditinfo;
-extern kauth_cred_t kauth_cred_setauditinfo(kauth_cred_t, struct auditinfo *);
-
-extern int	kauth_cred_supplementary_register(const char *name, int *ident);
-extern int	kauth_cred_supplementary_add(kauth_cred_t cred, int ident, const void *data, size_t datasize);
-extern int	kauth_cred_supplementary_remove(kauth_cred_t cred, int ident);
+extern int 	groupmember(gid_t gid, kauth_cred_t cred);
 
 /* currently only exported in unsupported for use by seatbelt */
 extern int	kauth_cred_issuser(kauth_cred_t _cred);
@@ -254,8 +246,11 @@ extern int	kauth_cred_issuser(kauth_cred_t _cred);
 /* GUID, NTSID helpers */
 extern guid_t	kauth_null_guid;
 extern int	kauth_guid_equal(guid_t *_guid1, guid_t *_guid2);
+#ifdef XNU_KERNEL_PRIVATE
 extern int	kauth_ntsid_equal(ntsid_t *_sid1, ntsid_t *_sid2);
+#endif /* XNU_KERNEL_PRIVATE */
 
+#ifdef XNU_KERNEL_PRIVATE
 extern int	kauth_wellknown_guid(guid_t *_guid);
 #define KAUTH_WKG_NOT		0	/* not a well-known GUID */
 #define KAUTH_WKG_OWNER		1
@@ -263,8 +258,31 @@ extern int	kauth_wellknown_guid(guid_t *_guid);
 #define KAUTH_WKG_NOBODY	3
 #define KAUTH_WKG_EVERYBODY	4
 
+extern kauth_cred_t kauth_cred_dup(kauth_cred_t cred);
+extern gid_t	kauth_getrgid(void);
+extern kauth_cred_t kauth_cred_alloc(void);
 extern int	cantrace(proc_t cur_procp, kauth_cred_t creds, proc_t traced_procp, int *errp);
+extern kauth_cred_t kauth_cred_copy_real(kauth_cred_t cred);
+extern kauth_cred_t	kauth_cred_setresuid(kauth_cred_t cred, uid_t ruid, uid_t euid, uid_t svuid, uid_t gmuid);
+extern kauth_cred_t	kauth_cred_setresgid(kauth_cred_t cred, gid_t rgid, gid_t egid, gid_t svgid);
+extern kauth_cred_t kauth_cred_setuidgid(kauth_cred_t cred, uid_t uid, gid_t gid);
+extern kauth_cred_t kauth_cred_setsvuidgid(kauth_cred_t cred, uid_t uid, gid_t gid);
+extern kauth_cred_t	kauth_cred_setgroups(kauth_cred_t cred, gid_t *groups, int groupcount, uid_t gmuid);
+struct uthread;
+extern void	kauth_cred_uthread_update(struct uthread *, proc_t);
+#ifdef CONFIG_MACF
+extern int kauth_proc_label_update_execve(struct proc *p, struct vfs_context *ctx, struct vnode *vp, struct label *scriptlabel, struct label *execlabel);
+#endif
+extern int	kauth_cred_getgroups(gid_t *_groups, int *_groupcount);
+extern int	kauth_cred_assume(uid_t _uid);
+extern int	kauth_cred_gid_subset(kauth_cred_t _cred1, kauth_cred_t _cred2, int *_resultp);
+struct auditinfo_addr;
+extern kauth_cred_t kauth_cred_setauditinfo(kauth_cred_t, au_session_t *);
+extern int	kauth_cred_supplementary_register(const char *name, int *ident);
+extern int	kauth_cred_supplementary_add(kauth_cred_t cred, int ident, const void *data, size_t datasize);
+extern int	kauth_cred_supplementary_remove(kauth_cred_t cred, int ident);
 
+#endif /* XNU_KERNEL_PRIVATE */
 __END_DECLS
 
 #endif /* KERNEL */
@@ -318,7 +336,7 @@ struct kauth_acl {
 	u_int32_t	acl_entrycount;
 	u_int32_t	acl_flags;
 	
-	struct kauth_ace acl_ace[];
+	struct kauth_ace acl_ace[1];
 };
 
 /*
@@ -353,7 +371,7 @@ struct kauth_acl {
  * entry (Windows treats this as "deny all") from one that merely indicates a
  * file group and/or owner guid values.
  */
-#define KAUTH_ACL_SIZE(c)	(sizeof(struct kauth_acl) + ((u_int32_t)(c) != KAUTH_FILESEC_NOACL ? ((c) * sizeof(struct kauth_ace)) : 0))
+#define KAUTH_ACL_SIZE(c)	(__offsetof(struct kauth_acl, acl_ace) + ((u_int32_t)(c) != KAUTH_FILESEC_NOACL ? ((c) * sizeof(struct kauth_ace)) : 0))
 #define KAUTH_ACL_COPYSIZE(p)	KAUTH_ACL_SIZE((p)->acl_entrycount)
 
 
@@ -399,10 +417,10 @@ struct kauth_filesec {
 typedef struct kauth_filesec *kauth_filesec_t;
 #endif
 
-#define KAUTH_FILESEC_SIZE(c)		(sizeof(struct kauth_filesec) + (c) * sizeof(struct kauth_ace))
+#define KAUTH_FILESEC_SIZE(c)		(__offsetof(struct kauth_filesec, fsec_acl) + __offsetof(struct kauth_acl, acl_ace) + (c) * sizeof(struct kauth_ace))
 #define KAUTH_FILESEC_COPYSIZE(p)	KAUTH_FILESEC_SIZE(((p)->fsec_entrycount == KAUTH_FILESEC_NOACL) ? 0 : (p)->fsec_entrycount)
-#define KAUTH_FILESEC_COUNT(s)		((s  - sizeof(struct kauth_filesec)) / sizeof(struct kauth_ace))
-#define KAUTH_FILESEC_VALID(s)		((s) >= sizeof(struct kauth_filesec) && (((s) - sizeof(struct kauth_filesec)) % sizeof(struct kauth_ace)) == 0)
+#define KAUTH_FILESEC_COUNT(s)		(((s)  - KAUTH_FILESEC_SIZE(0)) / sizeof(struct kauth_ace))
+#define KAUTH_FILESEC_VALID(s)		((s) >= KAUTH_FILESEC_SIZE(0) && (((s) - KAUTH_FILESEC_SIZE(0)) % sizeof(struct kauth_ace)) == 0)
 
 #define KAUTH_FILESEC_XATTR	"com.apple.system.Security"
 
@@ -415,13 +433,6 @@ typedef struct kauth_filesec *kauth_filesec_t;
 
 #ifdef KERNEL
 
-/* KPI */
-__BEGIN_DECLS
-kauth_filesec_t	kauth_filesec_alloc(int size);
-void		kauth_filesec_free(kauth_filesec_t fsp);
-int		kauth_copyinfilesec(user_addr_t xsecurity, kauth_filesec_t *xsecdestpp);
- void		kauth_filesec_acl_setendian(int, kauth_filesec_t, kauth_acl_t);
-__END_DECLS	
 
 /*
  * Scope management.
@@ -467,18 +478,29 @@ struct kauth_acl_eval {
 typedef struct kauth_acl_eval *kauth_acl_eval_t;
 	
 __BEGIN_DECLS
+kauth_filesec_t	kauth_filesec_alloc(int size);
+void		kauth_filesec_free(kauth_filesec_t fsp);
 extern kauth_scope_t kauth_register_scope(const char *_identifier, kauth_scope_callback_t _callback, void *_idata);
 extern void	kauth_deregister_scope(kauth_scope_t _scope);
 extern kauth_listener_t kauth_listen_scope(const char *_identifier, kauth_scope_callback_t _callback, void *_idata);
 extern void	kauth_unlisten_scope(kauth_listener_t _scope);
 extern int	kauth_authorize_action(kauth_scope_t _scope, kauth_cred_t _credential, kauth_action_t _action,
 			uintptr_t _arg0, uintptr_t _arg1, uintptr_t _arg2, uintptr_t _arg3);
-extern int	kauth_acl_evaluate(kauth_cred_t _credential, kauth_acl_eval_t _eval);
-extern int	kauth_acl_inherit(vnode_t _dvp, kauth_acl_t _initial, kauth_acl_t *_product, int _isdir, vfs_context_t _ctx);
 
 /* default scope handlers */
 extern int	kauth_authorize_allow(kauth_cred_t _credential, void *_idata, kauth_action_t _action,
     uintptr_t _arg0, uintptr_t _arg1, uintptr_t _arg2, uintptr_t _arg3);
+	
+
+#ifdef XNU_KERNEL_PRIVATE
+void		kauth_filesec_acl_setendian(int, kauth_filesec_t, kauth_acl_t);
+int		kauth_copyinfilesec(user_addr_t xsecurity, kauth_filesec_t *xsecdestpp);
+extern int	kauth_acl_evaluate(kauth_cred_t _credential, kauth_acl_eval_t _eval);
+extern int	kauth_acl_inherit(vnode_t _dvp, kauth_acl_t _initial, kauth_acl_t *_product, int _isdir, vfs_context_t _ctx);
+
+#endif /* XNU_KERNEL_PRIVATE */
+
+
 __END_DECLS
 
 /*
@@ -489,9 +511,11 @@ __END_DECLS
 /* Actions */
 #define KAUTH_GENERIC_ISSUSER			1
 
+#ifdef XNU_KERNEL_PRIVATE
 __BEGIN_DECLS
 extern int	kauth_authorize_generic(kauth_cred_t credential, kauth_action_t action);
 __END_DECLS
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*
  * Process/task scope.
@@ -558,7 +582,9 @@ __END_DECLS
 #define KAUTH_FILEOP_CLOSE_MODIFIED			(1<<1)
 
 __BEGIN_DECLS
+#ifdef XNU_KERNEL_PRIVATE
 extern int	kauth_authorize_fileop_has_listeners(void);
+#endif /* XNU_KERNEL_PRIVATE */
 extern int	kauth_authorize_fileop(kauth_cred_t _credential, kauth_action_t _action,
     uintptr_t _arg0, uintptr_t _arg1);
 __END_DECLS
@@ -722,6 +748,7 @@ void kprintf(const char *fmt, ...);
  * Initialisation.
  */
 extern lck_grp_t *kauth_lck_grp;
+#ifdef XNU_KERNEL_PRIVATE
 __BEGIN_DECLS
 extern void	kauth_init(void) __attribute__((section("__TEXT, initcode")));
 extern void	kauth_identity_init(void) __attribute__((section("__TEXT, initcode")));
@@ -729,6 +756,8 @@ extern void	kauth_groups_init(void) __attribute__((section("__TEXT, initcode")))
 extern void	kauth_cred_init(void) __attribute__((section("__TEXT, initcode")));
 extern void	kauth_resolver_init(void) __attribute__((section("__TEXT, initcode")));
 __END_DECLS
+#endif /* XNU_KERNEL_PRIVATE */
+
 #endif	/* KERNEL */
 
 #endif /* __APPLE_API_EVOLVING */

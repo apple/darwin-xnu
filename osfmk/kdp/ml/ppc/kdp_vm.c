@@ -58,13 +58,9 @@
 pmap_t kdp_pmap;
 boolean_t kdp_trans_off;
 boolean_t kdp_read_io;
-uint32_t kdp_src_high32;
-
-unsigned kdp_vm_read( caddr_t, caddr_t, unsigned);
-unsigned kdp_vm_write( caddr_t, caddr_t, unsigned);
 
 extern vm_offset_t sectTEXTB, sectDATAB, sectLINKB, sectPRELINKB;
-extern int sectSizeTEXT, sectSizeDATA, sectSizeLINK, sectSizePRELINK;
+extern unsigned long sectSizeTEXT, sectSizeDATA, sectSizeLINK, sectSizePRELINK;
 
 static addr64_t	kdp_vtophys(pmap_t pmap, addr64_t va);
 int             kern_dump(void);
@@ -87,8 +83,6 @@ typedef struct {
   mythread_state_flavor_t *flavors;
   int tstate_size;
 } tir_t;
-
-unsigned int not_in_kdp = 1; /* Cleared when we begin to access vm functions in kdp */
 
 char command_buffer[512];
 
@@ -115,10 +109,8 @@ kdp_vtophys(
  * when translating src.
  */
 
-unsigned kdp_vm_read(
-	caddr_t src, 
-	caddr_t dst, 
-	unsigned len)
+mach_vm_size_t
+kdp_machine_vm_read( mach_vm_address_t src, caddr_t dst, mach_vm_size_t len)
 {
 	addr64_t cur_virt_src, cur_virt_dst;
 	addr64_t cur_phys_src, cur_phys_dst;
@@ -127,11 +119,11 @@ unsigned kdp_vm_read(
 	pmap_t pmap;
 
 #ifdef KDP_VM_READ_DEBUG
-    kprintf("kdp_vm_read1: src %x dst %x len %x - %08X %08X\n", src, dst, len, ((unsigned long *)src)[0], ((unsigned long *)src)[1]);
+    kprintf("kdp_machine_vm_read1: src %llx dst %llx len %x - %08X %08X\n", src, dst, len, ((unsigned long *)src)[0], ((unsigned long *)src)[1]);
 #endif
 
-	cur_virt_src = (addr64_t)((unsigned int)src | (((uint64_t)kdp_src_high32) << 32));
-	cur_virt_dst = (addr64_t)((unsigned int)dst);
+	cur_virt_src = (addr64_t)src;
+	cur_virt_dst = (addr64_t)(intptr_t)dst;
 	
 	if (kdp_trans_off) {
 		resid = len;	/* Get the length to copy */
@@ -182,7 +174,7 @@ unsigned kdp_vm_read(
 			if (cnt > resid) cnt = resid;
 
 #ifdef KDP_VM_READ_DEBUG
-				kprintf("kdp_vm_read2: pmap %08X, virt %016LLX, phys %016LLX\n", 
+				kprintf("kdp_machine_vm_read2: pmap %08X, virt %016LLX, phys %016LLX\n", 
 					pmap, cur_virt_src, cur_phys_src);
 #endif
 
@@ -195,19 +187,23 @@ unsigned kdp_vm_read(
 	}
 exit:
 #ifdef KDP_VM_READ_DEBUG
-	kprintf("kdp_vm_read: ret %08X\n", len-resid);
+	kprintf("kdp_machine_vm_read: ret %08X\n", len-resid);
 #endif
         return (len - resid);
+}
+
+mach_vm_size_t
+kdp_machine_phys_read(kdp_readphysmem64_req_t *rq __unused, caddr_t dst __unused, uint16_t lcpu __unused)
+{
+    return 0; /* unimplemented */
 }
 
 /*
  * 
  */
-unsigned kdp_vm_write(
-        caddr_t src,
-        caddr_t dst,
-        unsigned len)
-{       
+mach_vm_size_t
+kdp_machine_vm_write( caddr_t src, mach_vm_address_t dst, mach_vm_size_t len)
+{
 	addr64_t cur_virt_src, cur_virt_dst;
 	addr64_t cur_phys_src, cur_phys_dst;
 	unsigned resid, cnt, cnt_src, cnt_dst;
@@ -216,8 +212,8 @@ unsigned kdp_vm_write(
 	printf("kdp_vm_write: src %x dst %x len %x - %08X %08X\n", src, dst, len, ((unsigned long *)src)[0], ((unsigned long *)src)[1]);
 #endif
 
-	cur_virt_src = (addr64_t)((unsigned int)src);
-	cur_virt_dst = (addr64_t)((unsigned int)dst);
+	cur_virt_src = (addr64_t)(intptr_t)src;
+	cur_virt_dst = (addr64_t)dst;
 
 	resid = len;
 
@@ -249,6 +245,12 @@ exit:
 	return (len - resid);
 }
 
+mach_vm_size_t
+kdp_machine_phys_write(kdp_writephysmem64_req_t *rq __unused, caddr_t src __unused,
+		       uint16_t lcpu __unused)
+{
+    return 0; /* unimplemented */
+}
 
 static void
 kern_collectth_state(thread_t thread, tir_t *t)
@@ -342,7 +344,6 @@ kern_dump(void)
   unsigned int num_sects_txed = 0;
 
   map = kernel_map;
-  not_in_kdp = 0; /* Tell vm functions not to acquire locks */
 
   thread_count = 1;
   segment_count = get_vmmap_entries(map); 

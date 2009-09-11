@@ -92,7 +92,6 @@ kernel_trap(semaphore_timedwait_trap,-38,3)
 kernel_trap(semaphore_timedwait_signal_trap,-39,4)
 
 #if		!defined(__LP64__)
-kernel_trap(init_process,-41,0)
 kernel_trap(map_fd,-43,5)
 #endif	/* __LP64__ */
 
@@ -100,13 +99,16 @@ kernel_trap(task_name_for_pid,-44,3)
 kernel_trap(task_for_pid,-45,3)
 kernel_trap(pid_for_task,-46,2)
 
-#if		!defined(__LP64__)
+#if defined(__LP64__)
 kernel_trap(macx_swapon,-48, 4)
 kernel_trap(macx_swapoff,-49, 2)
+#else	/* __LP64__ */
+kernel_trap(macx_swapon,-48, 5)
+kernel_trap(macx_swapoff,-49, 3)
+#endif	/* __LP64__ */
 kernel_trap(macx_triggers,-51, 4)
 kernel_trap(macx_backing_store_suspend,-52, 1)
 kernel_trap(macx_backing_store_recovery,-53, 1)
-#endif	/* __LP64__ */
 
 /* These are currently used by pthreads even on LP64 */
 /* But as soon as that is fixed - they will go away there */

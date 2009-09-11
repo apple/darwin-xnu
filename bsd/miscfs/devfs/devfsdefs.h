@@ -74,6 +74,7 @@
 
 #include <security/mac.h>
 
+__BEGIN_DECLS
 #ifdef __APPLE_API_PRIVATE
 #define DEVMAXNAMESIZE 	32 		/* XXX */
 #define DEVMAXPATHSIZE 	128		/* XXX */
@@ -82,7 +83,10 @@ typedef enum {
     DEV_DIR,
     DEV_BDEV,
     DEV_CDEV,
-    DEV_SLNK
+    DEV_SLNK,
+#if FDESC
+    DEV_DEVFD
+#endif /* FDESC */
 } devfstype_t;
 
 extern int (**devfs_vnodeop_p)(void *);	/* our own vector array for dirs */
@@ -118,7 +122,18 @@ union devnode_type {
 struct devnode
 {
     devfstype_t		dn_type;
-    int			dn_flags;
+    /* 
+     * Number of vnodes that point to this devnode.  Note, we do not
+     * add another reference for a lookup which finds an existing
+     * vnode; a reference is added when a vnode is created and removed
+     * when a vnode is reclaimed.  A devnode will not be freed while
+     * there are outstanding references.  A refcount can be added to
+     * prevent the free of a devnode in situations where there is not
+     * guaranteed to be a vnode holding a ref, but it is important to
+	 * make sure that a deferred delete eventually happens if it is
+ 	 * blocked behind that reference.
+     */
+    int			dn_refcount;
     u_short		dn_mode;
     uid_t		dn_uid; 
     gid_t		dn_gid;
@@ -134,19 +149,18 @@ struct devnode
     devnode_t *		dn_nextsibling;	/* the list of equivalent nodes */
     devnode_t * *	dn_prevsiblingp;/* backpointer for the above */
     devnode_type_t	dn_typeinfo;
-    int			dn_delete;	/* mark for deletion */
     int			dn_change;
     int			dn_update;
     int			dn_access;
-  int			dn_lflags;
+    int			dn_lflags;
+    ino_t		dn_ino;
     int			(*dn_clone)(dev_t dev, int action); /* get minor # */
     struct label *	dn_label;	/* security label */
 };
 
-#define	DN_BUSY			0x01
 #define	DN_DELETE		0x02
 #define	DN_CREATE		0x04
-#define	DN_CREATEWAIT	0x08
+#define	DN_CREATEWAIT		0x08
 
 
 struct devdirent
@@ -210,49 +224,49 @@ struct devfsmount
 static __inline__ void
 DEVFS_INCR_ENTRIES(void)
 {
-    OSAddAtomic(1, (SInt32 *)&devfs_stats.entries);
+    OSAddAtomic(1, &devfs_stats.entries);
 }
 
 static __inline__ void
 DEVFS_DECR_ENTRIES(void)
 {
-    OSAddAtomic(-1, (SInt32 *)&devfs_stats.entries);
+    OSAddAtomic(-1, &devfs_stats.entries);
 }
 
 static __inline__ void
 DEVFS_INCR_NODES(void)
 {
-    OSAddAtomic(1, (SInt32 *)&devfs_stats.nodes);
+    OSAddAtomic(1, &devfs_stats.nodes);
 }
 
 static __inline__ void
 DEVFS_DECR_NODES(void)
 {
-    OSAddAtomic(-1, (SInt32 *)&devfs_stats.nodes);
+    OSAddAtomic(-1, &devfs_stats.nodes);
 }
 
 static __inline__ void
 DEVFS_INCR_MOUNTS(void)
 {
-    OSAddAtomic(1, (SInt32 *)&devfs_stats.mounts);
+    OSAddAtomic(1, &devfs_stats.mounts);
 }
 
 static __inline__ void
 DEVFS_DECR_MOUNTS(void)
 {
-    OSAddAtomic(-1, (SInt32 *)&devfs_stats.mounts);
+    OSAddAtomic(-1, &devfs_stats.mounts);
 }
 
 static __inline__ void
 DEVFS_INCR_STRINGSPACE(int space)
 {
-    OSAddAtomic(space, (SInt32 *)&devfs_stats.stringspace);
+    OSAddAtomic(space, &devfs_stats.stringspace);
 }
 
 static __inline__ void
 DEVFS_DECR_STRINGSPACE(int space)
 {
-    OSAddAtomic(-space, (SInt32 *)&devfs_stats.stringspace);
+    OSAddAtomic(-space, &devfs_stats.stringspace);
 }
 
 static __inline__ void
@@ -285,5 +299,13 @@ dn_copy_times(devnode_t * target, devnode_t * source)
     target->dn_ctime = source->dn_ctime;
     return;
 }
+
+#ifdef BSD_KERNEL_PRIVATE
+int 	devfs_make_symlink(devnode_t *dir_p, char *name, int mode, char *target, devdirent_t **newent);
+#endif /* BSD_KERNEL_PRIVATE */
+
 #endif /* __APPLE_API_PRIVATE */
+
+__END_DECLS
+
 #endif /* __DEVFS_DEVFSDEFS_H__ */

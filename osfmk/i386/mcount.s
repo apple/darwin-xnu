@@ -41,6 +41,10 @@ Entry(mcount)
 	// Check that this cpu is ready.
 	// This delays the start of mcounting until a cpu is really prepared.
 	//
+        mov		%gs, %ax
+		test	%ax, %ax
+	jz	1f
+
         movl	%gs:CPU_RUNNING,%eax
         testl	%eax,%eax
 	jz	1f

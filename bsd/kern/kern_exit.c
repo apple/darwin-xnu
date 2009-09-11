@@ -98,13 +98,14 @@
 #include <sys/aio_kern.h>
 #include <sys/sysproto.h>
 #include <sys/signalvar.h>
+#include <sys/kdebug.h>
 #include <sys/filedesc.h>	/* fdfree */
 #if SYSV_SHM
 #include <sys/shm_internal.h>	/* shmexit */
 #endif
 #include <sys/acct.h>		/* acct_process */
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 #include <bsm/audit_kevents.h>
 
 #include <mach/mach_types.h>
@@ -133,7 +134,6 @@ extern void dtrace_lazy_dofs_destroy(proc_t);
 #include <mach/mach_types.h>
 #include <mach/task.h>
 #include <mach/thread_act.h>
-#include <mach/mach_traps.h>	/* init_process */
 
 #include <sys/sdt.h>
 
@@ -141,7 +141,8 @@ extern char init_task_failure_data[];
 void proc_prepareexit(proc_t p, int rv);
 void vfork_exit(proc_t p, int rv);
 void vproc_exit(proc_t p);
-__private_extern__ void munge_rusage(struct rusage *a_rusage_p, struct user_rusage *a_user_rusage_p);
+__private_extern__ void munge_user64_rusage(struct rusage *a_rusage_p, struct user64_rusage *a_user_rusage_p);
+__private_extern__ void munge_user32_rusage(struct rusage *a_rusage_p, struct user32_rusage *a_user_rusage_p);
 static int reap_child_locked(proc_t parent, proc_t child, int deadparent, int locked, int droplock);
 
 /*
@@ -155,7 +156,6 @@ int	*get_bsduthreadrval(thread_t);
 kern_return_t sys_perf_notify(thread_t thread, int pid);
 kern_return_t abnormal_exit_notify(mach_exception_data_type_t code, 
 		mach_exception_data_type_t subcode);
-int 	in_shutdown(void);
 void workqueue_exit(struct proc *);
 void	delay(int);
 			
@@ -164,7 +164,7 @@ void	delay(int);
  * XXX Should share code with bsd/dev/ppc/unix_signal.c
  */
 static void
-siginfo_64to32(user_siginfo_t *in, siginfo_t *out)
+siginfo_user_to_user32(user_siginfo_t *in, user32_siginfo_t *out)
 {
 	out->si_signo	= in->si_signo;
 	out->si_errno	= in->si_errno;
@@ -172,11 +172,25 @@ siginfo_64to32(user_siginfo_t *in, siginfo_t *out)
 	out->si_pid	= in->si_pid;
 	out->si_uid	= in->si_uid;
 	out->si_status	= in->si_status;
-	out->si_addr	= CAST_DOWN(void *,in->si_addr);
+	out->si_addr	= CAST_DOWN_EXPLICIT(user32_addr_t,in->si_addr);
 	/* following cast works for sival_int because of padding */
-	out->si_value.sival_ptr	= CAST_DOWN(void *,in->si_value.sival_ptr);
+	out->si_value.sival_ptr	= CAST_DOWN_EXPLICIT(user32_addr_t,in->si_value.sival_ptr);
 	out->si_band	= in->si_band;			/* range reduction */
-	out->__pad[0]	= in->pad[0];			/* mcontext.ss.r1 */
+}
+
+static void
+siginfo_user_to_user64(user_siginfo_t *in, user64_siginfo_t *out)
+{
+	out->si_signo	= in->si_signo;
+	out->si_errno	= in->si_errno;
+	out->si_code	= in->si_code;
+	out->si_pid	= in->si_pid;
+	out->si_uid	= in->si_uid;
+	out->si_status	= in->si_status;
+	out->si_addr	= in->si_addr;
+	/* following cast works for sival_int because of padding */
+	out->si_value.sival_ptr	= in->si_value.sival_ptr;
+	out->si_band	= in->si_band;			/* range reduction */
 }
 
 /*
@@ -228,6 +242,13 @@ exit1(proc_t p, int rv, int *retval)
 	 * which is currently required by mac_audit_postselect().
 	 */
 
+	/* 
+	 * The BSM token contains two components: an exit status as passed
+	 * to exit(), and a return value to indicate what sort of exit it 
+	 * was.  The exit status is WEXITSTATUS(rv), but it's not clear
+ 	 * what the return value is.
+	 */
+	AUDIT_ARG(exit, WEXITSTATUS(rv), 0);
 	AUDIT_SYSCALL_EXIT(SYS_exit, p, ut, 0); /* Exit is always successfull */
 
 	DTRACE_PROC1(exit, int, CLD_EXITED);
@@ -279,7 +300,7 @@ proc_prepareexit(proc_t p, int rv)
 	ut = get_bsdthread_info(self);
 
  	/* If a core should be generated, notify crash reporter */
-	if (!in_shutdown() && hassigprop(WTERMSIG(rv), SA_CORE)) {
+	if (hassigprop(WTERMSIG(rv), SA_CORE)) {
 		/* 
 		 * Workaround for processes checking up on PT_DENY_ATTACH:
 		 * should be backed out post-Leopard (details in 5431025).
@@ -342,11 +363,12 @@ proc_exit(proc_t p)
 	proc_t q;
 	proc_t pp;
 	struct task *task = p->task;
-	boolean_t fstate;
 	vnode_t tvp = NULLVP;
 	struct pgrp * pg;
 	struct session *sessp;
 	struct uthread * uth;
+	pid_t pid;
+	int exitval;
 
 	/* This can happen if thread_terminate of the single thread
 	 * process 
@@ -364,6 +386,10 @@ proc_exit(proc_t p)
 
 	p->p_lflag |= P_LPEXIT;
 	proc_unlock(p);
+	pid = p->p_pid;
+	exitval = p->p_xstat;
+	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_START,
+					      pid, exitval, 0, 0, 0);
 
 #if CONFIG_DTRACE
 	/*
@@ -421,7 +447,7 @@ proc_exit(proc_t p)
 	if (uth->uu_lowpri_window) {
 	        /*
 		 * task is marked as a low priority I/O type
-		 * and the I/O we issued while flushing files on close
+		 * and the I/O we issued while in flushing files on close
 		 * collided with normal I/O operations...
 		 * no need to throttle this thread since its going away
 		 * but we do need to update our bookeeping w/r to throttled threads
@@ -439,11 +465,12 @@ proc_exit(proc_t p)
 	semexit(p);
 #endif
 	
+#if PSYNCH
+	pth_proc_hashdelete(p);
+#endif /* PSYNCH */
+
 	sessp = proc_session(p);
 	if (SESS_LEADER(p, sessp)) {
-
-		/* Protected by funnel for tty accesses */
-		fstate = thread_funnel_set(kernel_flock, TRUE);
 
 		if (sessp->s_ttyvp != NULLVP) {
 			struct vnode *ttyvp;
@@ -458,26 +485,29 @@ proc_exit(proc_t p)
 			 * drain controlling terminal
 			 * and revoke access to controlling terminal.
 			 */
-			tp = sessp->s_ttyp;
+			tp = SESSION_TP(sessp);
 
 			if ((tp != TTY_NULL) && (tp->t_session == sessp)) {
 				tty_pgsignal(tp, SIGHUP, 1);
-				(void) ttywait(tp);
-				/*
-				 * The tty could have been revoked
-				 * if we blocked.
-				 */
 
 				session_lock(sessp);
+				/* reget potentially tp due to revocation */
+				tp = SESSION_TP(sessp);
 				ttyvp = sessp->s_ttyvp;
 				ttyvid = sessp->s_ttyvid;
-				sessp->s_ttyvp = NULL;
+				sessp->s_ttyvp = NULLVP;
 				sessp->s_ttyvid = 0;
-				sessp->s_ttyp = NULL;
+				sessp->s_ttyp = TTY_NULL;
 				sessp->s_ttypgrpid = NO_PID;
 				session_unlock(sessp);
 
 				if ((ttyvp != NULLVP) && (vnode_getwithvid(ttyvp, ttyvid) == 0)) {
+
+					if (tp != TTY_NULL) {
+						tty_lock(tp);
+						(void) ttywait(tp);
+						tty_unlock(tp);
+					}
 					context.vc_thread = proc_thread(p); /* XXX */
 					context.vc_ucred = kauth_cred_proc_ref(p);
 					VNOP_REVOKE(ttyvp, REVOKEALL, &context);
@@ -486,10 +516,12 @@ proc_exit(proc_t p)
 				}
 			} else {
 				session_lock(sessp);
+				/* reget potentially tp due to revocation */
+				tp = SESSION_TP(sessp);
 				ttyvp = sessp->s_ttyvp;
-				sessp->s_ttyvp = NULL;
+				sessp->s_ttyvp = NULLVP;
 				sessp->s_ttyvid = 0;
-				sessp->s_ttyp = NULL;
+				sessp->s_ttyp = TTY_NULL;
 				sessp->s_ttypgrpid = NO_PID;
 				session_unlock(sessp);
 			}
@@ -502,7 +534,6 @@ proc_exit(proc_t p)
 			 */
 		}
 		
-		(void) thread_funnel_set(kernel_flock, fstate);
 		session_lock(sessp);
 		sessp->s_leader = NULL;
 		session_unlock(sessp);
@@ -517,6 +548,14 @@ proc_exit(proc_t p)
 	(void)acct_process(p);
 
 	proc_list_lock();
+
+	if ((p->p_listflag & P_LIST_EXITCOUNT) == P_LIST_EXITCOUNT) {
+		p->p_listflag &= ~P_LIST_EXITCOUNT;
+		proc_shutdown_exitcount--;
+		if (proc_shutdown_exitcount == 0)
+			wakeup(&proc_shutdown_exitcount);
+	}
+
 	/* wait till parentrefs are dropped and grant no more */
 	proc_childdrainstart(p);
 	while ((q = p->p_children.lh_first) != NULL) {
@@ -590,50 +629,7 @@ proc_exit(proc_t p)
 	if (p->p_ru != NULL) {
 	    *p->p_ru = p->p_stats->p_ru;
 
-	    timerclear(&p->p_ru->ru_utime);
-	    timerclear(&p->p_ru->ru_stime);
-
-	    if (task) {
-		task_basic_info_32_data_t tinfo;
-		task_thread_times_info_data_t ttimesinfo;
-		task_events_info_data_t teventsinfo;
-		mach_msg_type_number_t task_info_stuff, task_ttimes_stuff;
-		mach_msg_type_number_t task_events_stuff;
-		struct timeval ut,st;
-
-		task_info_stuff	= TASK_BASIC_INFO_32_COUNT;
-		task_info(task, TASK_BASIC2_INFO_32,
-			  (task_info_t)&tinfo, &task_info_stuff);
-		p->p_ru->ru_utime.tv_sec = tinfo.user_time.seconds;
-		p->p_ru->ru_utime.tv_usec = tinfo.user_time.microseconds;
-		p->p_ru->ru_stime.tv_sec = tinfo.system_time.seconds;
-		p->p_ru->ru_stime.tv_usec = tinfo.system_time.microseconds;
-
-		p->p_ru->ru_maxrss = tinfo.resident_size;
-
-		task_ttimes_stuff = TASK_THREAD_TIMES_INFO_COUNT;
-		task_info(task, TASK_THREAD_TIMES_INFO,
-			  (task_info_t)&ttimesinfo, &task_ttimes_stuff);
-
-		ut.tv_sec = ttimesinfo.user_time.seconds;
-		ut.tv_usec = ttimesinfo.user_time.microseconds;
-		st.tv_sec = ttimesinfo.system_time.seconds;
-		st.tv_usec = ttimesinfo.system_time.microseconds;
-		timeradd(&ut,&p->p_ru->ru_utime,&p->p_ru->ru_utime);
-		timeradd(&st,&p->p_ru->ru_stime,&p->p_ru->ru_stime);
-
-		task_events_stuff = TASK_EVENTS_INFO_COUNT;
-		task_info(task, TASK_EVENTS_INFO,
-			  (task_info_t)&teventsinfo, &task_events_stuff);
-
-		p->p_ru->ru_minflt = (teventsinfo.faults -
-				      teventsinfo.pageins);
-		p->p_ru->ru_majflt = teventsinfo.pageins;
-		p->p_ru->ru_nivcsw = (teventsinfo.csw -
-				      p->p_ru->ru_nvcsw);
-		if (p->p_ru->ru_nivcsw < 0)
-			p->p_ru->ru_nivcsw = 0;
-	    }
+	    calcru(p, &p->p_ru->ru_utime, &p->p_ru->ru_stime, NULL);
 
 	    ruadd(p->p_ru, &p->p_stats->p_cru);
 	}
@@ -748,6 +744,8 @@ proc_exit(proc_t p)
 		 * The write is to an int and is coherent. Also parent is
 		 *  keyed off of list lock for reaping
 		 */
+		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_END,
+					      pid, exitval, 0, 0, 0);
 		p->p_stat = SZOMB;
 		/* 
 		 * The current process can be reaped so, no one
@@ -769,6 +767,8 @@ proc_exit(proc_t p)
 		 *  keyed off of list lock for reaping
 		 */
 		proc_list_lock();
+		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_END,
+					      pid, exitval, 0, 0, 0);
 		p->p_stat = SZOMB;
 		/* check for sysctl zomb lookup */
 		while ((p->p_listflag & P_LIST_WAITING) == P_LIST_WAITING) {
@@ -822,15 +822,23 @@ proc_exit(proc_t p)
 static int
 reap_child_locked(proc_t parent, proc_t child, int deadparent, int locked, int droplock)
 {
-	proc_t trace_parent;	/* Traced parent process, if tracing */
+	proc_t trace_parent = PROC_NULL;	/* Traced parent process, if tracing */
 
+	if (locked == 1)
+		proc_list_unlock();
+	
 	/*
 	 * If we got the child via a ptrace 'attach',
 	 * we need to give it back to the old parent.
+	 *
+	 * Exception: someone who has been reparented to launchd before being
+	 * ptraced can simply be reaped, refer to radar 5677288
+	 * 	p_oppid 		 -> ptraced
+	 * 	trace_parent == initproc -> away from launchd
+	 * 	P_LIST_DEADPARENT	 -> came to launchd by reparenting
 	 */
-	if (locked == 1)
-		proc_list_unlock();
-	if (child->p_oppid && (trace_parent = proc_find(child->p_oppid))) {
+	if (child->p_oppid && (trace_parent = proc_find(child->p_oppid)) 
+			&& !((trace_parent == initproc) && (child->p_lflag & P_LIST_DEADPARENT))) {
 		proc_lock(child);
 		child->p_oppid = 0;
 		proc_unlock(child);
@@ -859,8 +867,13 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int locked, int d
 			proc_list_lock();
 		return (0);
 	}
-
+	
+	if (trace_parent != PROC_NULL) {
+		proc_rele(trace_parent);
+	}
+	
 	proc_knote(child, NOTE_REAP);
+	proc_knote_drain(child);
 
 	child->p_xstat = 0;
 	if (child->p_ru) {
@@ -882,6 +895,8 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int locked, int d
 	} else {
 		printf("Warning : lost p_ru for %s\n", child->p_comm);
 	}
+
+	AUDIT_SESSION_PROCEXIT(child->p_ucred);
 
 	/*
 	 * Decrement the count of procs running with this uid.
@@ -930,12 +945,22 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int locked, int d
 
 	proc_list_unlock();
 
+#ifdef CONFIG_EMBEDDED
 	lck_mtx_destroy(&child->p_mlock, proc_lck_grp);
 	lck_mtx_destroy(&child->p_fdmlock, proc_lck_grp);
 #if CONFIG_DTRACE
 	lck_mtx_destroy(&child->p_dtrace_sprlock, proc_lck_grp);
 #endif
 	lck_spin_destroy(&child->p_slock, proc_lck_grp);
+
+#else	
+	lck_mtx_destroy(&child->p_mlock, proc_mlock_grp);
+	lck_mtx_destroy(&child->p_fdmlock, proc_fdmlock_grp);
+#if CONFIG_DTRACE
+	lck_mtx_destroy(&child->p_dtrace_sprlock, proc_lck_grp);
+#endif
+	lck_spin_destroy(&child->p_slock, proc_slock_grp);
+#endif
 	workqueue_destroy_lock(child);
 
 	FREE_ZONE(child, sizeof *child, M_PROC);
@@ -965,18 +990,21 @@ wait1continue(int result)
 }
 
 int
-wait4(proc_t q, struct wait4_args *uap, register_t *retval)
+wait4(proc_t q, struct wait4_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
 	return(wait4_nocancel(q, (struct wait4_nocancel_args *)uap, retval));
 }
 
 int
-wait4_nocancel(proc_t q, struct wait4_nocancel_args *uap, register_t *retval)
+wait4_nocancel(proc_t q, struct wait4_nocancel_args *uap, int32_t *retval)
 {
 	int nfound;
+	int sibling_count;
 	proc_t p;
 	int status, error;
+
+	AUDIT_ARG(pid, uap->pid);
 
 	if (uap->pid == 0)
 		uap->pid = -q->p_pgrpid;
@@ -985,7 +1013,11 @@ loop:
 	proc_list_lock();
 loop1:
 	nfound = 0;
+	sibling_count = 0;
+
 	for (p = q->p_children.lh_first; p != 0; p = p->p_sibling.le_next) {
+		if ( p->p_sibling.le_next != 0 )
+			sibling_count++;
 		if (uap->pid != WAIT_ANY &&
 		    p->p_pid != uap->pid &&
 		    p->p_pgrpid != -(uap->pid))
@@ -1023,16 +1055,18 @@ loop1:
 					error = ENOMEM;
 				} else {
 					if (IS_64BIT_PROCESS(q)) {
-						struct user_rusage	my_rusage;
-						munge_rusage(p->p_ru, &my_rusage);
+						struct user64_rusage	my_rusage;
+						munge_user64_rusage(p->p_ru, &my_rusage);
 						error = copyout((caddr_t)&my_rusage,
 							uap->rusage,
 							sizeof (my_rusage));
 					}
 					else {
-						error = copyout((caddr_t)p->p_ru,
+						struct user32_rusage	my_rusage;
+						munge_user32_rusage(p->p_ru, &my_rusage);
+						error = copyout((caddr_t)&my_rusage,
 							uap->rusage,
-							sizeof (struct rusage));
+							sizeof (my_rusage));
 					}
 				}
 				/* information unavailable? */
@@ -1040,13 +1074,28 @@ loop1:
 					goto out;
 			}
 
-			/* Clean up */
-			if (!reap_child_locked(q, p, 0, 0, 0)) {
-				proc_list_lock();
-				p->p_listflag &= ~P_LIST_WAITING;
-				wakeup(&p->p_stat);
-				proc_list_unlock();
+			/* Conformance change for 6577252.
+			 * When SIGCHLD is blocked and wait() returns because the status
+			 * of a child process is available and there are no other 
+			 * children processes, then any pending SIGCHLD signal is cleared.
+			 */
+			if ( sibling_count == 0 ) {
+				int mask = sigmask(SIGCHLD);
+				uthread_t uth = (struct uthread *)get_bsdthread_info(current_thread());
+
+				if ( (uth->uu_sigmask & mask) != 0 ) {
+					/* we are blocking SIGCHLD signals.  clear any pending SIGCHLD.
+					 * This locking looks funny but it is protecting access to the 
+					 * thread via p_uthlist.
+					 */
+					proc_lock(q); 
+					uth->uu_siglist &= ~mask;	/* clear pending signal */
+					proc_unlock(q);
+				}
 			}
+			
+			/* Clean up */
+			(void)reap_child_locked(q, p, 0, 0, 0);
 
 			return (0);
 		}
@@ -1083,7 +1132,7 @@ loop1:
 #endif
 
 			/* Prevent other process for waiting for this event */
-			OSBitAndAtomic(~((uint32_t)P_CONTINUED), (UInt32 *)&p->p_flag);
+			OSBitAndAtomic(~((uint32_t)P_CONTINUED), &p->p_flag);
 			retval[0] = p->p_pid;
 			if (uap->status) {
 				status = W_STOPCODE(SIGCONT);
@@ -1152,14 +1201,14 @@ waitidcontinue(int result)
  *		!0			Error returning status to user space
  */
 int
-waitid(proc_t q, struct waitid_args *uap, register_t *retval)
+waitid(proc_t q, struct waitid_args *uap, int32_t *retval)
 {
 	__pthread_testcancel(1);
 	return(waitid_nocancel(q, (struct waitid_nocancel_args *)uap, retval));
 }
 
 int
-waitid_nocancel(proc_t q, struct waitid_nocancel_args *uap, __unused register_t *retval)
+waitid_nocancel(proc_t q, struct waitid_nocancel_args *uap, __unused int32_t *retval)
 {
 	user_siginfo_t	collect64;	/* siginfo data to return to caller */
 
@@ -1247,15 +1296,21 @@ loop1:
 			collect64.si_band = 0;
 
 			if (IS_64BIT_PROCESS(p)) {
-				error = copyout((caddr_t)&collect64,
+				user64_siginfo_t sinfo64;
+				
+				siginfo_user_to_user64(&collect64, &sinfo64);
+				
+				error = copyout((caddr_t)&sinfo64,
 					uap->infop,
-					sizeof(collect64));
+					sizeof(sinfo64));
 			} else {
-				siginfo_t collect;
-				siginfo_64to32(&collect64,&collect);
-				error = copyout((caddr_t)&collect,
-					uap->infop,
-					sizeof(collect));
+				user32_siginfo_t sinfo32;
+				
+				siginfo_user_to_user32(&collect64, &sinfo32);
+				
+				error = copyout((caddr_t)&sinfo32,
+								uap->infop,
+								sizeof(sinfo32));
 			}
 			/* information unavailable? */
 			if (error) 
@@ -1264,12 +1319,7 @@ loop1:
 			/* Prevent other process for waiting for this event? */
 			if (!(uap->options & WNOWAIT)) {
 				/* Clean up */
-				if (!reap_child_locked(q, p, 0, 0, 0)) {
-					proc_list_lock();
-					p->p_listflag &= ~P_LIST_WAITING;
-					wakeup(&p->p_stat);
-					proc_list_unlock();
-				}
+				(void)reap_child_locked(q, p, 0, 0, 0);
 			} else {
 				proc_list_lock();
 				p->p_listflag &= ~P_LIST_WAITING;
@@ -1309,15 +1359,21 @@ loop1:
 			collect64.si_band = 0;
 
 			if (IS_64BIT_PROCESS(p)) {
-				error = copyout((caddr_t)&collect64,
-					uap->infop,
-					sizeof(collect64));
+				user64_siginfo_t sinfo64;
+				
+				siginfo_user_to_user64(&collect64, &sinfo64);
+				
+				error = copyout((caddr_t)&sinfo64,
+								uap->infop,
+								sizeof(sinfo64));
 			} else {
-				siginfo_t collect;
-				siginfo_64to32(&collect64,&collect);
-				error = copyout((caddr_t)&collect,
-					uap->infop,
-					sizeof(collect));
+				user32_siginfo_t sinfo32;
+				
+				siginfo_user_to_user32(&collect64, &sinfo32);
+				
+				error = copyout((caddr_t)&sinfo32,
+								uap->infop,
+								sizeof(sinfo32));
 			}
 			/* information unavailable? */
 			if (error)
@@ -1362,15 +1418,21 @@ loop1:
 			proc_unlock(p);
 
 			if (IS_64BIT_PROCESS(p)) {
-				error = copyout((caddr_t)&collect64,
-					uap->infop,
-					sizeof(collect64));
+				user64_siginfo_t sinfo64;
+				
+				siginfo_user_to_user64(&collect64, &sinfo64);
+				
+				error = copyout((caddr_t)&sinfo64,
+								uap->infop,
+								sizeof(sinfo64));
 			} else {
-				siginfo_t collect;
-				siginfo_64to32(&collect64,&collect);
-				error = copyout((caddr_t)&collect,
-					uap->infop,
-					sizeof(collect));
+				user32_siginfo_t sinfo32;
+				
+				siginfo_user_to_user32(&collect64, &sinfo32);
+				
+				error = copyout((caddr_t)&sinfo32,
+								uap->infop,
+								sizeof(sinfo32));
 			}
 			/* information unavailable? */
 			if (error)
@@ -1378,7 +1440,7 @@ loop1:
 
 			/* Prevent other process for waiting for this event? */
 			if (!(uap->options & WNOWAIT)) {
-				OSBitAndAtomic(~((uint32_t)P_CONTINUED), (UInt32 *)&p->p_flag);
+				OSBitAndAtomic(~((uint32_t)P_CONTINUED), &p->p_flag);
 			}
 
 			error = 0;
@@ -1432,7 +1494,7 @@ proc_reparentlocked(proc_t child, proc_t parent, int cansignal, int locked)
 	oldparent = child->p_pptr;
 #if __PROC_INTERNAL_DEBUG
 	if (oldparent == PROC_NULL)
-		panic("proc_reparent: process %x does not have a parent\n", (unsigned int)child);
+		panic("proc_reparent: process %p does not have a parent\n", child);
 #endif
 
 	LIST_REMOVE(child, p_sibling);
@@ -1457,44 +1519,6 @@ proc_reparentlocked(proc_t child, proc_t parent, int cansignal, int locked)
 	if (locked == 1)
 		proc_list_lock();
 }
-
-/*
- *	Make the current process an "init" process, meaning
- *	that it doesn't have a parent, and that it won't be
- *	gunned down by kill(-1, 0).
- */
-kern_return_t
-init_process(__unused struct init_process_args *args)
-{
-	proc_t p = current_proc();
-
-	AUDIT_MACH_SYSCALL_ENTER(AUE_INITPROCESS);
-	if (suser(kauth_cred_get(), &p->p_acflag)) {
-		AUDIT_MACH_SYSCALL_EXIT(KERN_NO_ACCESS);
-		return(KERN_NO_ACCESS);
-	}
-
-	if (p->p_pid != 1 && p->p_pgrpid != p->p_pid)
-		enterpgrp(p, p->p_pid, 0);
-	OSBitOrAtomic(P_SYSTEM, (UInt32 *)&p->p_flag);
-
-	/*
-	 *	Take us out of the sibling chain, and
-	 *	out of our parent's child chain.
-	 */
-	proc_list_lock();
-	LIST_REMOVE(p, p_sibling);
-	p->p_sibling.le_prev = NULL;
-	p->p_sibling.le_next = NULL;
-	p->p_pptr = kernproc;
-	p->p_ppid = 0;
-	proc_list_unlock();
-
-
-	AUDIT_MACH_SYSCALL_EXIT(KERN_SUCCESS);
-	return(KERN_SUCCESS);
-}
-
 
 /*
  * Exit: deallocate address space and other resources, change proc state
@@ -1605,7 +1629,6 @@ vproc_exit(proc_t p)
 #endif
 	struct pgrp * pg;
 	struct session *sessp;
-	boolean_t fstate;
 
 	/* XXX Zombie allocation may fail, in which case stats get lost */
 	MALLOC_ZONE(p->p_ru, struct rusage *,
@@ -1623,9 +1646,6 @@ vproc_exit(proc_t p)
 	sessp = proc_session(p);
 	if (SESS_LEADER(p, sessp)) {
 		
-		/* Protected by funnel for tty accesses */
-		fstate = thread_funnel_set(kernel_flock, TRUE);
-
 		if (sessp->s_ttyvp != NULLVP) {
 			struct vnode *ttyvp;
 			int ttyvid;
@@ -1638,22 +1658,26 @@ vproc_exit(proc_t p)
 			 * drain controlling terminal
 			 * and revoke access to controlling terminal.
 			 */
-			tp = sessp->s_ttyp;
+			tp = SESSION_TP(sessp);
 
 			if ((tp != TTY_NULL) && (tp->t_session == sessp)) {
 				tty_pgsignal(tp, SIGHUP, 1);
+				tty_lock(tp);
 				(void) ttywait(tp);
+				tty_unlock(tp);
 				/*
 				 * The tty could have been revoked
 				 * if we blocked.
 				 */
 
 				session_lock(sessp);
+				/* reget in case of race */
+				tp = SESSION_TP(sessp);
 				ttyvp = sessp->s_ttyvp;
 				ttyvid = sessp->s_ttyvid;
 				sessp->s_ttyvp = NULL;
 				sessp->s_ttyvid = 0;
-				sessp->s_ttyp = NULL;
+				sessp->s_ttyp = TTY_NULL;
 				sessp->s_ttypgrpid = NO_PID;
 				session_unlock(sessp);
 
@@ -1669,7 +1693,7 @@ vproc_exit(proc_t p)
 				ttyvp = sessp->s_ttyvp;
 				sessp->s_ttyvp = NULL;
 				sessp->s_ttyvid = 0;
-				sessp->s_ttyp = NULL;
+				sessp->s_ttyp = TTY_NULL;
 				sessp->s_ttypgrpid = NO_PID;
 				session_unlock(sessp);
 			}
@@ -1681,7 +1705,6 @@ vproc_exit(proc_t p)
 			 * (for logging and informational purposes)
 			 */
 		}
-		(void) thread_funnel_set(kernel_flock, fstate);
 
 		session_lock(sessp);
 		sessp->s_leader = NULL;
@@ -1896,11 +1919,11 @@ vproc_exit(proc_t p)
 /*
  * munge_rusage
  *	LP64 support - long is 64 bits if we are dealing with a 64 bit user
- *	process.  We munge the kernel (32 bit) version of rusage into the
+ *	process.  We munge the kernel version of rusage into the
  *	64 bit version.
  */
 __private_extern__  void 
-munge_rusage(struct rusage *a_rusage_p, struct user_rusage *a_user_rusage_p)
+munge_user64_rusage(struct rusage *a_rusage_p, struct user64_rusage *a_user_rusage_p)
 {
 	/* timeval changes size, so utime and stime need special handling */
 	a_user_rusage_p->ru_utime.tv_sec = a_rusage_p->ru_utime.tv_sec;
@@ -1910,6 +1933,35 @@ munge_rusage(struct rusage *a_rusage_p, struct user_rusage *a_user_rusage_p)
 	/*
 	 * everything else can be a direct assign, since there is no loss
 	 * of precision implied boing 32->64.
+	 */
+	a_user_rusage_p->ru_maxrss = a_rusage_p->ru_maxrss;
+	a_user_rusage_p->ru_ixrss = a_rusage_p->ru_ixrss;
+	a_user_rusage_p->ru_idrss = a_rusage_p->ru_idrss;
+	a_user_rusage_p->ru_isrss = a_rusage_p->ru_isrss;
+	a_user_rusage_p->ru_minflt = a_rusage_p->ru_minflt;
+	a_user_rusage_p->ru_majflt = a_rusage_p->ru_majflt;
+	a_user_rusage_p->ru_nswap = a_rusage_p->ru_nswap;
+	a_user_rusage_p->ru_inblock = a_rusage_p->ru_inblock;
+	a_user_rusage_p->ru_oublock = a_rusage_p->ru_oublock;
+	a_user_rusage_p->ru_msgsnd = a_rusage_p->ru_msgsnd;
+	a_user_rusage_p->ru_msgrcv = a_rusage_p->ru_msgrcv;
+	a_user_rusage_p->ru_nsignals = a_rusage_p->ru_nsignals;
+	a_user_rusage_p->ru_nvcsw = a_rusage_p->ru_nvcsw;
+	a_user_rusage_p->ru_nivcsw = a_rusage_p->ru_nivcsw;
+}
+
+/* For a 64-bit kernel and 32-bit userspace, munging may be needed */
+__private_extern__  void 
+munge_user32_rusage(struct rusage *a_rusage_p, struct user32_rusage *a_user_rusage_p)
+{
+	/* timeval changes size, so utime and stime need special handling */
+	a_user_rusage_p->ru_utime.tv_sec = a_rusage_p->ru_utime.tv_sec;
+	a_user_rusage_p->ru_utime.tv_usec = a_rusage_p->ru_utime.tv_usec;
+	a_user_rusage_p->ru_stime.tv_sec = a_rusage_p->ru_stime.tv_sec;
+	a_user_rusage_p->ru_stime.tv_usec = a_rusage_p->ru_stime.tv_usec;
+	/*
+	 * everything else can be a direct assign. We currently ignore
+	 * the loss of precision
 	 */
 	a_user_rusage_p->ru_maxrss = a_rusage_p->ru_maxrss;
 	a_user_rusage_p->ru_ixrss = a_rusage_p->ru_ixrss;

@@ -111,10 +111,16 @@ vm_map_t ipc_kernel_copy_map;
 vm_size_t ipc_kernel_copy_map_size = IPC_KERNEL_COPY_MAP_SIZE;
 vm_size_t ipc_kmsg_max_vm_space = (IPC_KERNEL_COPY_MAP_SIZE * 7)/8;
 
-int ipc_space_max = SPACE_MAX;
-int ipc_tree_entry_max = ITE_MAX;
-int ipc_port_max = PORT_MAX;
-int ipc_pset_max = SET_MAX;
+int ipc_space_max;
+int ipc_tree_entry_max;
+int ipc_port_max;
+int ipc_pset_max;
+
+
+lck_grp_t 		ipc_lck_grp;
+lck_attr_t 		ipc_lck_attr;
+
+static lck_grp_attr_t	ipc_lck_grp_attr;
 
 extern void ikm_cache_init(void);
 
@@ -129,7 +135,11 @@ void
 ipc_bootstrap(void)
 {
 	kern_return_t kr;
-
+	
+	lck_grp_attr_setdefault(&ipc_lck_grp_attr);
+	lck_grp_init(&ipc_lck_grp, "ipc", &ipc_lck_grp_attr);
+	lck_attr_setdefault(&ipc_lck_attr);
+	
 	ipc_port_multiple_lock_init();
 
 	ipc_port_timestamp_lock_init();

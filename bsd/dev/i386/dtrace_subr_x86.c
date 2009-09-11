@@ -20,12 +20,12 @@
  */
 
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 /*
- * #pragma ident	"@(#)dtrace_subr.c	1.13	06/06/12 SMI"
+ * #pragma ident	"@(#)dtrace_subr.c	1.16	07/09/18 SMI"
  */
 
 #include <sys/dtrace.h>
@@ -154,7 +154,7 @@ dtrace_user_probe(x86_saved_state_t *regs)
 
 		return KERN_SUCCESS;
 	} else if (trapno == T_INT3) {
-		uint8_t instr;
+		uint8_t instr, instr2;
 		rwp = &CPU->cpu_ft_lock;
 
 		/*
@@ -189,7 +189,8 @@ dtrace_user_probe(x86_saved_state_t *regs)
 		 * that case, return to user land to retry the instuction.
 		 */
 		user_addr_t pc = (regs64) ? regs64->isf.rip : (user_addr_t)regs32->eip;
-		if (fuword8(pc - 1, &instr) == 0 && instr != FASTTRAP_INSTR) {
+		if (fuword8(pc - 1, &instr) == 0 && instr != FASTTRAP_INSTR && // neither single-byte INT3 (0xCC)
+			!(instr == 3 && fuword8(pc - 2, &instr2) == 0 && instr2 == 0xCD)) { // nor two-byte INT 3 (0xCD03)
 			if (regs64) {
 				regs64->isf.rip--;
 			} else {

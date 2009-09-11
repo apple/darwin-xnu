@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2000 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
+ * Copyright (c) 1998 Apple Inc.  All rights reserved. 
  *
  * HISTORY
  *
@@ -62,7 +62,12 @@ private:
     IOLock *                 lock;
     SInt32                   generation;
 
+/* This stuff is no longer used at all but was exported in prior
+ * releases, so we keep it around for PPC/i386 only.
+ */
+#if __ppc__ || __i386__
     IOLock *                 kld_lock;
+#endif /* __ppc__ || __i386__ */
 
 public:
     /*!
@@ -209,7 +214,19 @@ public:
     virtual bool serialize(OSSerialize * s) const;
 
     bool serializeData(IOOptionBits kind, OSSerialize * s) const;
+    
+    /*!
+        @function removePersonalities
+        @abstract Remove exact personalities from the database.
+        @param personalitiesArray  An array of personalities to remove.
+        @result Returns true if all personalities are removed successfully. Failure is due to a memory allocation failure.
+    */
+    bool removePersonalities(OSArray * personalitiesArray);
 
+/* This stuff is no longer used at all we keep it around for PPC/i386
+ * binary compatibility only. Symbols are no longer exported.
+ */
+#if __ppc__ || __i386__
     /*!
         @function recordStartupExtensions
         @abstract Records extensions made available by the primary booter.
@@ -244,8 +261,7 @@ public:
             removed or wasn't present, KERN_FAILURE otherwise.
     */
     virtual kern_return_t removeKernelLinker(void);
-
-    static void disableExternalLinker(void);
+#endif /* __ppc__ || __i386__ */
 
 private:
 
@@ -257,21 +273,8 @@ private:
     IOReturn unloadModule( OSString * moduleName ) const;
 };
 
-__BEGIN_DECLS
-/*!
-    @function IOKitRelocStart
-    @abstract Deprecated API.
-*/
-kmod_start_func_t IOKitRelocStart;
-/*!
-    @function IOKitRelocStop
-    @abstract Deprecated API.
-*/
-kmod_stop_func_t IOKitRelocStop;
-__END_DECLS
-
-extern const OSSymbol *		gIOClassKey;
-extern const OSSymbol *		gIOProbeScoreKey;
-extern IOCatalogue *            gIOCatalogue;
+extern const OSSymbol * gIOClassKey;
+extern const OSSymbol * gIOProbeScoreKey;
+extern IOCatalogue    * gIOCatalogue;
 
 #endif /* ! _IOKIT_IOCATALOGUE_H */

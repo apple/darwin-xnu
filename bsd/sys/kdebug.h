@@ -57,6 +57,8 @@ __BEGIN_DECLS
 #define DBG_CACHE_HIT_FAULT   4
 #define DBG_NZF_PAGE_FAULT    5
 #define DBG_GUARD_FAULT	      6	
+#define DBG_PAGEINV_FAULT     7
+#define DBG_PAGEIND_FAULT     8
 
 
 /* The debug code consists of the following 
@@ -88,6 +90,7 @@ __BEGIN_DECLS
 #define DBG_DYLD            31
 #define DBG_QT              32
 #define DBG_APPS            33
+#define DBG_LAUNCHD         34
 #define DBG_MIG				255
 
 /* **** The Kernel Debug Sub Classes for Mach (DBG_MACH) **** */
@@ -120,9 +123,10 @@ __BEGIN_DECLS
 #define MACH_CALLOUT            0x4     /* callouts */
 #define MACH_STACK_DETACH       0x5
 #define MACH_MAKE_RUNNABLE      0x6     /* make thread runnable */
-#define	MACH_PROMOTE			0x7		/* promoted due to resource */
-#define	MACH_DEMOTE				0x8		/* promotion undone */
-#define MACH_IDLE				0x9		/* processor idling */
+#define	MACH_PROMOTE            0x7	/* promoted due to resource */
+#define	MACH_DEMOTE             0x8	/* promotion undone */
+#define MACH_IDLE               0x9	/* processor idling */
+#define MACH_STACK_DEPTH        0xa	/* stack depth at switch */
 
 /* Codes for pmap (DBG_MACH_PMAP) */     
 #define PMAP__CREATE		0x0
@@ -171,8 +175,9 @@ __BEGIN_DECLS
 #define DBG_IOMCURS			5	/* Memory Cursor */
 #define DBG_IOMDESC			6	/* Memory Descriptors */
 #define DBG_IOPOWER			7	/* Power Managerment */
+#define DBG_IOSERVICE			8	/* Matching etc. */
 
-/* **** 8-32 reserved for internal IOKit usage **** */
+/* **** 9-32 reserved for internal IOKit usage **** */
 
 #define DBG_IOSTORAGE		32	/* Storage layers */
 #define	DBG_IONETWORK		33	/* Network layers */
@@ -234,16 +239,24 @@ __BEGIN_DECLS
 #define DBG_FSVN      3       /* vnode operations (inc. locking/unlocking) */
 #define DBG_FSLOOOKUP 4       /* namei and other lookup-related operations */
 #define DBG_JOURNAL   5       /* journaling operations */
+#define DBG_IOCTL     6       /* ioctl to the disk */
+#define DBG_BOOTCACHE 7       /* bootcache operations */
 
 /* The Kernel Debug Sub Classes for BSD */
+#define DBG_BSD_PROC		0x01	/* process/signals related */
 #define	DBG_BSD_EXCP_SC		0x0C	/* System Calls */
 #define	DBG_BSD_AIO		0x0D	/* aio (POSIX async IO) */
 #define DBG_BSD_SC_EXTENDED_INFO 0x0E	/* System Calls, extended info */
 #define DBG_BSD_SC_EXTENDED_INFO2 0x0F	/* System Calls, extended info */
 
+
+/* The Codes for BSD subcode class DBG_BSD_PROC */
+#define BSD_PROC_EXIT		1	/* process exit */
+#define BSD_PROC_FRCEXIT 	2	/* Kernel force termination */
 /* The Kernel Debug Sub Classes for DBG_TRACE */
 #define DBG_TRACE_DATA      0
 #define DBG_TRACE_STRING    1
+#define	DBG_TRACE_INFO	    2
 
 /* The Kernel Debug Sub Classes for DBG_MISC */
 #define DBG_EVENT	0x10
@@ -328,16 +341,18 @@ extern unsigned int kdebug_enable;
 
 #if	(!defined(NO_KDEBUG))
 
-#define KERNEL_DEBUG_CONSTANT(x,a,b,c,d,e)    \
-do {					\
-    if (kdebug_enable)			\
-        kernel_debug(x,a,b,c,d,e);	\
+#define KERNEL_DEBUG_CONSTANT(x,a,b,c,d,e)				\
+do {									\
+    if (kdebug_enable)							\
+        kernel_debug(x,(uintptr_t)a,(uintptr_t)b,(uintptr_t)c,		\
+		       (uintptr_t)d,(uintptr_t)e);			\
 } while(0)
 
-#define KERNEL_DEBUG_CONSTANT1(x,a,b,c,d,e)    \
-do {					\
-    if (kdebug_enable)			\
-        kernel_debug1(x,a,b,c,d,e);	\
+#define KERNEL_DEBUG_CONSTANT1(x,a,b,c,d,e)				\
+do {									\
+    if (kdebug_enable)							\
+        kernel_debug1(x,(uintptr_t)a,(uintptr_t)b,(uintptr_t)c,		\
+			(uintptr_t)d,(uintptr_t)e);			\
 } while(0)
 
 #else
@@ -348,32 +363,37 @@ do {					\
 #define __kdebug_constant_only __unused
 #endif
 
-extern void kernel_debug(unsigned int debugid, unsigned int arg1, unsigned int arg2, unsigned int arg3,  unsigned int arg4, unsigned int arg5);
+extern void kernel_debug(
+		uint32_t  debugid,
+		uintptr_t arg1,
+		uintptr_t arg2,
+		uintptr_t arg3,
+		uintptr_t arg4,
+		uintptr_t arg5);
 
-extern void kernel_debug1(unsigned int debugid, unsigned int arg1, unsigned int arg2, unsigned int arg3,  unsigned int arg4, unsigned int arg5);
+extern void kernel_debug1(
+		uint32_t  debugid,
+		uintptr_t arg1,
+		uintptr_t arg2,
+		uintptr_t arg3,
+		uintptr_t arg4,
+		uintptr_t arg5);
 
-/*
- * LP64todo - for some reason these are problematic
- */
-struct proc;
-extern void kdbg_trace_data(struct proc *proc, long *arg_pid);
-
-extern void kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *arg3, long *arg4);
 
 #if	(KDEBUG && (!defined(NO_KDEBUG)))
 
-#define KERNEL_DEBUG(x,a,b,c,d,e)	\
-do {					\
-    if (kdebug_enable)			\
-        kernel_debug((unsigned int)x, (unsigned int)a, (unsigned int)b, \
-		     (unsigned int)c, (unsigned int)d, (unsigned int)e); \
+#define KERNEL_DEBUG(x,a,b,c,d,e)					\
+do {									\
+    if (kdebug_enable)							\
+        kernel_debug((uint32_t)x,  (uintptr_t)a, (uintptr_t)b,		\
+		     (uintptr_t)c, (uintptr_t)d, (uintptr_t)e);		\
 } while(0)
 
-#define KERNEL_DEBUG1(x,a,b,c,d,e)	\
-do {					\
-    if (kdebug_enable)			\
-        kernel_debug1((unsigned int)x, (unsigned int)a, (unsigned int)b, \
-		      (unsigned int)c, (unsigned int)d, (unsigned int)e); \
+#define KERNEL_DEBUG1(x,a,b,c,d,e)					\
+do {									\
+    if (kdebug_enable)							\
+        kernel_debug1((uint32_t)x,  (uintptr_t)a, (uintptr_t)b,		\
+		      (uintptr_t)c, (uintptr_t)d, (uintptr_t)e);	\
 } while(0)
 
 #define __kdebug_only
@@ -386,7 +406,16 @@ do {					\
 #define __kdebug_only __unused
 #endif
 
+#ifdef KERNEL_PRIVATE
+struct proc;
+extern void kdbg_trace_data(struct proc *proc, long *arg_pid);
+
+extern void kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *arg3, long *arg4);
+
+extern void kdbg_dump_trace_to_file(const char *);
 void start_kern_tracing(unsigned int);
+#endif  /* KERNEL_PRIVATE */
+
 
 #endif /* __APPLE_API_UNSTABLE */
 __END_DECLS
@@ -400,28 +429,90 @@ __END_DECLS
 
 typedef struct {
 	uint64_t	timestamp;
-	unsigned int	arg1;
-	unsigned int	arg2;
-	unsigned int	arg3;
-	unsigned int	arg4;
-	unsigned int	arg5;       /* will hold current thread */
-	unsigned int	debugid;
+	uintptr_t	arg1;
+	uintptr_t	arg2;
+	uintptr_t	arg3;
+	uintptr_t	arg4;
+	uintptr_t	arg5;       /* will hold current thread */
+	uint32_t	debugid;
+#if defined(__LP64__)
+	uint32_t	cpuid;
+	uintptr_t	unused;
+#endif
 } kd_buf;
 
-#define KDBG_TIMESTAMP_MASK 0x00ffffffffffffffULL
-#define KDBG_CPU_MASK       0x0f00000000000000ULL
-#define KDBG_CPU_SHIFT	56
+#if !defined(__LP64__)
+#define KDBG_TIMESTAMP_MASK		0x00ffffffffffffffULL
+#define KDBG_CPU_MASK			0x0f00000000000000ULL
+#define KDBG_CPU_SHIFT			56
+static inline void
+kdbg_set_cpu(kd_buf *kp, int cpu)
+{
+	kp->timestamp = (kp->timestamp & KDBG_TIMESTAMP_MASK) | 
+				(((uint64_t) cpu) << KDBG_CPU_SHIFT);
+}
+static inline int
+kdbg_get_cpu(kd_buf *kp)
+{
+	return (int) (((kp)->timestamp & KDBG_CPU_MASK) >> KDBG_CPU_SHIFT);
+}
+static inline void
+kdbg_set_timestamp(kd_buf *kp, uint64_t time)
+{
+	kp->timestamp = time & KDBG_TIMESTAMP_MASK;
+}
+static inline uint64_t
+kdbg_get_timestamp(kd_buf *kp)
+{
+	return kp->timestamp & KDBG_TIMESTAMP_MASK;
+}
+static inline void
+kdbg_set_timestamp_and_cpu(kd_buf *kp, uint64_t time, int cpu)
+{
+	kp->timestamp = (time & KDBG_TIMESTAMP_MASK) | 
+				(((uint64_t) cpu) << KDBG_CPU_SHIFT);
+}
+#else
+#define KDBG_TIMESTAMP_MASK		0xffffffffffffffffULL
+static inline void
+kdbg_set_cpu(kd_buf *kp, int cpu)
+{
+	kp->cpuid = cpu;
+}
+static inline int
+kdbg_get_cpu(kd_buf *kp)
+{
+	return kp->cpuid;
+}
+static inline void
+kdbg_set_timestamp(kd_buf *kp, uint64_t time)
+{
+	kp->timestamp = time;
+}
+static inline uint64_t
+kdbg_get_timestamp(kd_buf *kp)
+{
+	return kp->timestamp;
+}
+static inline void
+kdbg_set_timestamp_and_cpu(kd_buf *kp, uint64_t time, int cpu)
+{
+	kdbg_set_timestamp(kp, time);
+	kdbg_set_cpu(kp, cpu);
+}
+#endif
 
 /* Debug Flags */
-#define	KDBG_INIT	0x1
-#define	KDBG_NOWRAP	0x2
-#define	KDBG_FREERUN	0x4
-#define	KDBG_WRAPPED	0x8
+#define	KDBG_INIT	0x001
+#define	KDBG_NOWRAP	0x002
+#define	KDBG_FREERUN	0x004
+#define	KDBG_WRAPPED	0x008
 #define	KDBG_USERFLAGS	(KDBG_FREERUN|KDBG_NOWRAP|KDBG_INIT)
-#define KDBG_PIDCHECK   0x10
-#define KDBG_MAPINIT    0x20
-#define KDBG_PIDEXCLUDE 0x40
-#define KDBG_LOCKINIT	0x80
+#define KDBG_PIDCHECK   0x010
+#define KDBG_MAPINIT    0x020
+#define KDBG_PIDEXCLUDE 0x040
+#define KDBG_LOCKINIT	0x080
+#define KDBG_LP64	0x100
 
 typedef struct {
 	unsigned int	type;
@@ -434,18 +525,17 @@ typedef struct {
 
 typedef struct
 {
-    int nkdbufs;
-    int nolog;
-    int flags;
-    int nkdthreads;
-    int bufid;
+	int		nkdbufs;
+	int		nolog;
+	int		flags;
+	int		nkdthreads;
+	int		bufid;
 } kbufinfo_t;
 
-typedef struct
-{
-  unsigned int thread;
-  int          valid;
-  char         command[20];
+typedef struct {
+	uintptr_t	thread;
+	int		valid;
+	char		command[20];
 } kd_threadmap;
 
 #define	KDBG_CLASSTYPE		0x10000

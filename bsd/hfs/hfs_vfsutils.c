@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -38,6 +38,7 @@
 #include <sys/malloc.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
+#include <sys/mount_internal.h>
 #include <sys/buf.h>
 #include <sys/buf_internal.h>
 #include <sys/ubc.h>
@@ -46,6 +47,7 @@
 #include <sys/kauth.h>
 #include <sys/fcntl.h>
 #include <sys/vnode_internal.h>
+#include <kern/clock.h>
 
 #include <libkern/OSAtomic.h>
 
@@ -612,6 +614,14 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 
 		retval = hfs_late_journal_init(hfsmp, vhp, args);
 		if (retval != 0) {
+			if (retval == EROFS) {
+				// EROFS is a special error code that means the volume has an external
+				// journal which we couldn't find.  in that case we do not want to
+				// rewrite the volume header - we'll just refuse to mount the volume.
+				retval = EINVAL;
+				goto ErrorExit;
+			}
+
 			hfsmp->jnl = NULL;
 			
 			// if the journal failed to open, then set the lastMountedVersion
@@ -626,6 +636,7 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 				    
 				mdb_offset = (daddr64_t)((embeddedOffset / blockSize) + HFS_PRI_SECTOR(blockSize));
 
+				bp = NULL;
 				retval = (int)buf_meta_bread(hfsmp->hfs_devvp, 
 						HFS_PHYSBLK_ROUNDDOWN(mdb_offset, hfsmp->hfs_log_per_phys),
 						hfsmp->hfs_physical_block_size, cred, &bp);
@@ -691,7 +702,12 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		    vcb->nextAllocation <= hfsmp->hfs_metazone_end) {	    
 			HFS_UPDATE_NEXT_ALLOCATION(hfsmp, hfsmp->hfs_metazone_end + 1);
 		}
+	} else {
+		if (vcb->nextAllocation <= 1) {
+			vcb->nextAllocation = hfsmp->hfs_min_alloc_start;
+		}
 	}
+	vcb->sparseAllocation = hfsmp->hfs_min_alloc_start;
 
 	/* Setup private/hidden directories for hardlinks. */
 	hfs_privatedir_init(hfsmp, FILE_HARDLINKS);
@@ -700,6 +716,14 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	if ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0) 
 		hfs_remove_orphans(hfsmp);
 
+	/* See if we need to erase unused Catalog nodes due to <rdar://problem/6947811>. */
+	if ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0)
+	{
+		retval = hfs_erase_unused_nodes(hfsmp);
+		if (retval)
+			goto ErrorExit;
+	}
+	
 	if ( !(vcb->vcbAtrb & kHFSVolumeHardwareLockMask) )	// if the disk is not write protected
 	{
 		MarkVCBDirty( vcb );	// mark VCB dirty so it will be written
@@ -816,7 +840,7 @@ __private_extern__
 int
 overflow_extents(struct filefork *fp)
 {
-	u_long blocks;
+	u_int32_t blocks;
 
 	//
 	// If the vnode pointer is NULL then we're being called
@@ -1044,20 +1068,20 @@ void RequireFileLock(FileReference vp, int shareable)
 	if (!locked && !shareable) {
 		switch (VTOC(vp)->c_fileid) {
 		case kHFSExtentsFileID:
-			panic("extents btree not locked! v: 0x%08X\n #\n", (u_int)vp);
+			panic("hfs: extents btree not locked! v: 0x%08X\n #\n", (u_int)vp);
 			break;
 		case kHFSCatalogFileID:
-			panic("catalog btree not locked! v: 0x%08X\n #\n", (u_int)vp);
+			panic("hfs: catalog btree not locked! v: 0x%08X\n #\n", (u_int)vp);
 			break;
 		case kHFSAllocationFileID:
 			/* The allocation file can hide behind the jornal lock. */
 			if (VTOHFS(vp)->jnl == NULL)
-				panic("allocation file not locked! v: 0x%08X\n #\n", (u_int)vp);
+				panic("hfs: allocation file not locked! v: 0x%08X\n #\n", (u_int)vp);
 			break;
 		case kHFSStartupFileID:
-			panic("startup file not locked! v: 0x%08X\n #\n", (u_int)vp);
+			panic("hfs: startup file not locked! v: 0x%08X\n #\n", (u_int)vp);
 		case kHFSAttributesFileID:
-			panic("attributes btree not locked! v: 0x%08X\n #\n", (u_int)vp);
+			panic("hfs: attributes btree not locked! v: 0x%08X\n #\n", (u_int)vp);
 			break;
 		}
 	}
@@ -1094,15 +1118,15 @@ hfs_owner_rights(struct hfsmount *hfsmp, uid_t cnode_uid, kauth_cred_t cred,
 }
 
 
-unsigned long BestBlockSizeFit(unsigned long allocationBlockSize,
-                               unsigned long blockSizeLimit,
-                               unsigned long baseMultiple) {
+u_int32_t BestBlockSizeFit(u_int32_t allocationBlockSize,
+                               u_int32_t blockSizeLimit,
+                               u_int32_t baseMultiple) {
     /*
        Compute the optimal (largest) block size (no larger than allocationBlockSize) that is less than the
        specified limit but still an even multiple of the baseMultiple.
      */
     int baseBlockCount, blockCount;
-    unsigned long trialBlockSize;
+    u_int32_t trialBlockSize;
 
     if (allocationBlockSize % baseMultiple != 0) {
         /*
@@ -1138,7 +1162,7 @@ unsigned long BestBlockSizeFit(unsigned long allocationBlockSize,
 
 
 __private_extern__
-u_long
+u_int32_t
 GetFileInfo(ExtendedVCB *vcb, __unused u_int32_t dirid, const char *name,
 			struct cat_attr *fattr, struct cat_fork *forkinfo)
 {
@@ -1197,7 +1221,8 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 	int started_tr = 0;
 	int lockflags;
 	int result;
-	int orphanedlinks = 0;
+	int orphaned_files = 0;
+	int orphaned_dirs = 0;
 
 	bzero(&cookie, sizeof(cookie));
 
@@ -1313,7 +1338,7 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 					}
 
 					if (TruncateFileC(vcb, (FCB*)&dfork, fsize, false) != 0) {
-						printf("error truncting data fork!\n");
+						printf("hfs: error truncting data fork!\n");
 						break;
 					}
 
@@ -1345,7 +1370,7 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 				cnode.c_datafork = NULL;
 				cnode.c_rsrcfork = &rfork;
 				if (TruncateFileC(vcb, (FCB*)&rfork, 0, false) != 0) {
-					printf("error truncting rsrc fork!\n");
+					printf("hfs: error truncting rsrc fork!\n");
 					break;
 				}
 			}
@@ -1358,7 +1383,13 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 				hfs_volupdate(hfsmp, VOL_UPDATE, 0);
 				break;
 			}
-			++orphanedlinks;
+			
+			if (cnode.c_attr.ca_mode & S_IFDIR) {
+				orphaned_dirs++;
+			}
+			else {
+				orphaned_files++;
+			}
 
 			/* Update parent and volume counts */	
 			hfsmp->hfs_private_attr[FILE_HARDLINKS].ca_entries--;
@@ -1392,8 +1423,8 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 
 		} /* end if */
 	} /* end for */
-	if (orphanedlinks > 0)
-		printf("HFS: Removed %d orphaned unlinked files or directories \n", orphanedlinks);
+	if (orphaned_files > 0 || orphaned_dirs > 0)
+		printf("hfs: Removed %d orphaned / unlinked files and %d directories \n", orphaned_files, orphaned_dirs);
 exit:
 	if (catlock) {
 		hfs_systemfile_unlock(hfsmp, lockflags);
@@ -1518,6 +1549,9 @@ hfs_freeblks(struct hfsmount * hfsmp, int wantreserve)
 			else
 				vfreeblks = 0;
 
+			if (hfsmp->hfs_backingfs_maxblocks) {
+				vfreeblks = MIN(vfreeblks, hfsmp->hfs_backingfs_maxblocks);
+			}
 			freeblks = MIN(vfreeblks, freeblks);
 			HFS_MOUNT_UNLOCK(hfsmp, TRUE);
 		}
@@ -1772,6 +1806,133 @@ out:
 }
 
 
+typedef struct jopen_cb_info {
+	off_t   jsize;
+	char   *desired_uuid;
+        struct  vnode *jvp;
+	size_t  blksize;
+	int     need_clean;
+	int     need_init;
+} jopen_cb_info;
+
+static int
+journal_open_cb(const char *bsd_dev_name, const char *uuid_str, void *arg)
+{
+	struct nameidata nd;
+	jopen_cb_info *ji = (jopen_cb_info *)arg;
+	char bsd_name[256];
+	int error;
+	
+	strlcpy(&bsd_name[0], "/dev/", sizeof(bsd_name));
+	strlcpy(&bsd_name[5], bsd_dev_name, sizeof(bsd_name)-5);
+
+	if (ji->desired_uuid && ji->desired_uuid[0] && strcmp(uuid_str, ji->desired_uuid) != 0) {
+		return 1;   // keep iterating
+	}
+
+	// if we're here, either the desired uuid matched or there was no
+	// desired uuid so let's try to open the device for writing and
+	// see if it works.  if it does, we'll use it.
+	
+	NDINIT(&nd, LOOKUP, LOCKLEAF, UIO_SYSSPACE32, CAST_USER_ADDR_T(bsd_name), vfs_context_kernel());
+	if ((error = namei(&nd))) {
+		printf("hfs: journal open cb: error %d looking up device %s (dev uuid %s)\n", error, bsd_name, uuid_str);
+		return 1;   // keep iterating
+	}
+
+	ji->jvp = nd.ni_vp;
+	nameidone(&nd);
+
+	if (ji->jvp == NULL) {
+		printf("hfs: journal open cb: did not find %s (error %d)\n", bsd_name, error);
+	} else {
+		error = VNOP_OPEN(ji->jvp, FREAD|FWRITE, vfs_context_kernel());
+		if (error == 0) {
+			// if the journal is dirty and we didn't specify a desired
+			// journal device uuid, then do not use the journal.  but
+			// if the journal is just invalid (e.g. it hasn't been
+			// initialized) then just set the need_init flag.
+			if (ji->need_clean && ji->desired_uuid && ji->desired_uuid[0] == '\0') {
+				error = journal_is_clean(ji->jvp, 0, ji->jsize, (void *)1, ji->blksize);
+				if (error == EBUSY) {
+					VNOP_CLOSE(ji->jvp, FREAD|FWRITE, vfs_context_kernel());
+					vnode_put(ji->jvp);
+					ji->jvp = NULL;
+					return 1;    // keep iterating
+				} else if (error == EINVAL) {
+					ji->need_init = 1;
+				}
+			}
+
+			if (ji->desired_uuid && ji->desired_uuid[0] == '\0') {
+				strlcpy(ji->desired_uuid, uuid_str, 128);
+			}
+			vnode_setmountedon(ji->jvp);
+			// printf("hfs: journal open cb: got device %s (%s)\n", bsd_name, uuid_str);
+			return 0;   // stop iterating
+		} else {
+			vnode_put(ji->jvp);
+			ji->jvp = NULL;
+		}
+	}
+
+	return 1;   // keep iterating
+}
+
+extern dev_t IOBSDGetMediaWithUUID(const char *uuid_cstring, char *bsd_name, int bsd_name_len, int timeout);
+extern void IOBSDIterateMediaWithContent(const char *uuid_cstring, int (*func)(const char *bsd_dev_name, const char *uuid_str, void *arg), void *arg);
+extern kern_return_t IOBSDGetPlatformUUID(__darwin_uuid_t uuid, mach_timespec_t timeoutp);
+kern_return_t IOBSDGetPlatformSerialNumber(char *serial_number_str, u_int32_t len);
+
+
+static vnode_t
+open_journal_dev(const char *vol_device,
+		 int need_clean,
+		 char *uuid_str,
+		 char *machine_serial_num,
+		 off_t jsize,
+		 size_t blksize,
+		 int *need_init)
+{
+    int retry_counter=0;
+    jopen_cb_info ji;
+
+    ji.jsize        = jsize;
+    ji.desired_uuid = uuid_str;
+    ji.jvp          = NULL;
+    ji.blksize      = blksize;
+    ji.need_clean   = need_clean;
+    ji.need_init    = 0;
+
+//    if (uuid_str[0] == '\0') {
+//	    printf("hfs: open journal dev: %s: locating any available non-dirty external journal partition\n", vol_device);
+//    } else {
+//	    printf("hfs: open journal dev: %s: trying to find the external journal partition w/uuid %s\n", vol_device, uuid_str);
+//    }
+    while (ji.jvp == NULL && retry_counter++ < 4) {
+	    if (retry_counter > 1) {
+		    if (uuid_str[0]) {
+			    printf("hfs: open_journal_dev: uuid %s not found.  waiting 10sec.\n", uuid_str);
+		    } else {
+			    printf("hfs: open_journal_dev: no available external journal partition found.  waiting 10sec.\n");
+		    }
+		    delay_for_interval(10* 1000000, NSEC_PER_USEC);    // wait for ten seconds and then try again
+	    }
+
+	    IOBSDIterateMediaWithContent(EXTJNL_CONTENT_TYPE_UUID, journal_open_cb, &ji);
+    }
+
+    if (ji.jvp == NULL) {
+	    printf("hfs: volume: %s: did not find jnl device uuid: %s from machine serial number: %s\n",
+		   vol_device, uuid_str, machine_serial_num);
+    }
+
+    *need_init = ji.need_init;
+
+    return ji.jvp;
+}
+
+
 __private_extern__
 int
 hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
@@ -1781,15 +1942,20 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	JournalInfoBlock *jibp;
 	struct buf       *jinfo_bp, *bp;
 	int               sectors_per_fsblock, arg_flags=0, arg_tbufsz=0;
-	int               retval;
+	int               retval, write_jibp = 0;
 	uint32_t		  blksize = hfsmp->hfs_logical_block_size;
 	struct vnode     *devvp;
 	struct hfs_mount_args *args = _args;
 	u_int32_t	  jib_flags;
 	u_int64_t	  jib_offset;
 	u_int64_t	  jib_size;
+	const char *dev_name;
 	
 	devvp = hfsmp->hfs_devvp;
+	dev_name = vnode_name(devvp);
+	if (dev_name == NULL) {
+		dev_name = "unknown-dev";
+	}
 
 	if (args != NULL && (args->flags & HFSFSMNT_EXTENDED_ARGS)) {
 		arg_flags  = args->journal_flags;
@@ -1798,24 +1964,56 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 
 	sectors_per_fsblock = SWAP_BE32(vhp->blockSize) / blksize;
 				
+	jinfo_bp = NULL;
 	retval = (int)buf_meta_bread(devvp,
 						(daddr64_t)((embeddedOffset/blksize) + 
-						(SWAP_BE32(vhp->journalInfoBlock)*sectors_per_fsblock)),
-						SWAP_BE32(vhp->blockSize), cred, &jinfo_bp);
-	if (retval)
+						((u_int64_t)SWAP_BE32(vhp->journalInfoBlock)*sectors_per_fsblock)),
+						hfsmp->hfs_physical_block_size, cred, &jinfo_bp);
+	if (retval) {
+		if (jinfo_bp) {
+			buf_brelse(jinfo_bp);
+		}
 		return retval;
-
+	}
+	
 	jibp = (JournalInfoBlock *)buf_dataptr(jinfo_bp);
 	jib_flags  = SWAP_BE32(jibp->flags);
-	jib_offset = SWAP_BE64(jibp->offset);
 	jib_size   = SWAP_BE64(jibp->size);
 
 	if (jib_flags & kJIJournalInFSMask) {
 		hfsmp->jvp = hfsmp->hfs_devvp;
+		jib_offset = SWAP_BE64(jibp->offset);
 	} else {
-		printf("hfs: journal not stored in fs! don't know what to do.\n");
+	    int need_init=0;
+	
+	    // if the volume was unmounted cleanly then we'll pick any
+	    // available external journal partition
+	    //
+	    if (SWAP_BE32(vhp->attributes) & kHFSVolumeUnmountedMask) {
+		    *((char *)&jibp->ext_jnl_uuid[0]) = '\0';
+	    }
+
+	    hfsmp->jvp = open_journal_dev(dev_name,
+					  !(jib_flags & kJIJournalNeedInitMask),
+					  (char *)&jibp->ext_jnl_uuid[0],
+					  (char *)&jibp->machine_serial_num[0],
+					  jib_size,
+					  hfsmp->hfs_logical_block_size,
+					  &need_init);
+	    if (hfsmp->jvp == NULL) {
 		buf_brelse(jinfo_bp);
-		return EINVAL;
+		return EROFS;
+	    } else {
+		    if (IOBSDGetPlatformSerialNumber(&jibp->machine_serial_num[0], sizeof(jibp->machine_serial_num)) != KERN_SUCCESS) {
+			    strlcpy(&jibp->machine_serial_num[0], "unknown-machine-uuid", sizeof(jibp->machine_serial_num));
+		    }
+	    }
+
+	    jib_offset = 0;
+	    write_jibp = 1;
+	    if (need_init) {
+		    jib_flags |= kJIJournalNeedInitMask;
+	    }
 	}
 
 	// save this off for the hack-y check in hfs_remove()
@@ -1827,18 +2025,21 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	    // if it is, then we can allow the mount.  otherwise we have to
 	    // return failure.
 	    retval = journal_is_clean(hfsmp->jvp,
-		                      jib_offset + embeddedOffset,
+				      jib_offset + embeddedOffset,
 				      jib_size,
 				      devvp,
-		                      hfsmp->hfs_logical_block_size);
+				      hfsmp->hfs_logical_block_size);
 
 	    hfsmp->jnl = NULL;
 
 	    buf_brelse(jinfo_bp);
 
 	    if (retval) {
+		const char *name = vnode_getname(devvp);
 	      printf("hfs: early journal init: volume on %s is read-only and journal is dirty.  Can not mount volume.\n",
-                     vnode_name(devvp));
+                     name ? name : "");
+		if (name)
+			vnode_putname(name);
 	    }
 
 	    return retval;
@@ -1877,7 +2078,11 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 								  arg_tbufsz,
 								  hfs_sync_metadata, hfsmp->hfs_mp);
 
-		buf_brelse(jinfo_bp);
+		if (write_jibp) {
+			buf_bwrite(jinfo_bp);
+		} else {
+			buf_brelse(jinfo_bp);
+		}
 		jinfo_bp = NULL;
 		jibp     = NULL;
 
@@ -1887,11 +2092,14 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 			if (mdb_offset == 0) {
 				mdb_offset = (daddr64_t)((embeddedOffset / blksize) + HFS_PRI_SECTOR(blksize));
 			}
+			bp = NULL;
 			retval = (int)buf_meta_bread(devvp, 
 					HFS_PHYSBLK_ROUNDDOWN(mdb_offset, hfsmp->hfs_log_per_phys),
 					hfsmp->hfs_physical_block_size, cred, &bp);
 			if (retval) {
-				buf_brelse(bp);
+				if (bp) {
+					buf_brelse(bp);
+				}
 				printf("hfs: failed to reload the mdb after opening the journal (retval %d)!\n",
 					   retval);
 				return retval;
@@ -1941,7 +2149,7 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 	struct cat_attr   jib_attr, jattr;
 	struct cat_fork   jib_fork, jfork;
 	ExtendedVCB      *vcb;
-	u_long            fid;
+	u_int32_t            fid;
 	struct hfs_mount_args *args = _args;
 	u_int32_t	  jib_flags;
 	u_int64_t	  jib_offset;
@@ -1980,11 +2188,15 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 
 
 	sectors_per_fsblock = SWAP_BE32(vhp->blockSize) / hfsmp->hfs_logical_block_size;
+	jinfo_bp = NULL;
 	retval = (int)buf_meta_bread(devvp,
-						(daddr64_t)(vcb->hfsPlusIOPosOffset / hfsmp->hfs_logical_block_size + 
-						(SWAP_BE32(vhp->journalInfoBlock)*sectors_per_fsblock)),
-						SWAP_BE32(vhp->blockSize), NOCRED, &jinfo_bp);
+						(vcb->hfsPlusIOPosOffset / hfsmp->hfs_logical_block_size + 
+						((u_int64_t)SWAP_BE32(vhp->journalInfoBlock)*sectors_per_fsblock)),
+						hfsmp->hfs_physical_block_size, NOCRED, &jinfo_bp);
 	if (retval) {
+		if (jinfo_bp) {
+			buf_brelse(jinfo_bp);
+		}
 		printf("hfs: can't read journal info block. disabling journaling.\n");
 		vcb->vcbAtrb &= ~kHFSVolumeJournaledMask;
 		return 0;
@@ -2006,7 +2218,7 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 	hfsmp->hfs_jnlfileid = fid;
 
 	// make sure the journal file begins where we think it should.
-	if ((jib_offset / (u_int64_t)vcb->blockSize) != jfork.cf_extents[0].startBlock) {
+	if ((jib_flags & kJIJournalInFSMask) && (jib_offset / (u_int64_t)vcb->blockSize) != jfork.cf_extents[0].startBlock) {
 		printf("hfs: The journal file moved (was: %lld; is: %d).  Fixing up\n",
 			   (jib_offset / (u_int64_t)vcb->blockSize), jfork.cf_extents[0].startBlock);
 
@@ -2027,10 +2239,41 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 	
 	if (jib_flags & kJIJournalInFSMask) {
 		hfsmp->jvp = hfsmp->hfs_devvp;
+		jib_offset += (off_t)vcb->hfsPlusIOPosOffset;
 	} else {
-		printf("hfs: journal not stored in fs! don't know what to do.\n");
+	    const char *dev_name;
+	    int need_init = 0;
+
+	    dev_name = vnode_name(devvp);
+	    if (dev_name == NULL) {
+		    dev_name = "unknown-dev";
+	    }
+
+            // since the journal is empty, just use any available external journal
+	    *((char *)&jibp->ext_jnl_uuid[0]) = '\0';
+
+	    // this fills in the uuid of the device we actually get
+	    hfsmp->jvp = open_journal_dev(dev_name,
+					  !(jib_flags & kJIJournalNeedInitMask),
+					  (char *)&jibp->ext_jnl_uuid[0],
+					  (char *)&jibp->machine_serial_num[0],
+					  jib_size,
+					  hfsmp->hfs_logical_block_size,
+					  &need_init);
+	    if (hfsmp->jvp == NULL) {
 		buf_brelse(jinfo_bp);
-		return EINVAL;
+		return EROFS;
+	    } else {
+		    if (IOBSDGetPlatformSerialNumber(&jibp->machine_serial_num[0], sizeof(jibp->machine_serial_num)) != KERN_SUCCESS) {
+			    strlcpy(&jibp->machine_serial_num[0], "unknown-machine-serial-num", sizeof(jibp->machine_serial_num));
+		    }
+	    } 
+	    jib_offset = 0;
+	    recreate_journal = 1;
+	    write_jibp = 1;
+	    if (need_init) {
+		    jib_flags |= kJIJournalNeedInitMask;
+	    }
 	}
 
 	// save this off for the hack-y check in hfs_remove()
@@ -2042,7 +2285,7 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 	    // if it is, then we can allow the mount.  otherwise we have to
 	    // return failure.
 	    retval = journal_is_clean(hfsmp->jvp,
-		                      jib_offset + (off_t)vcb->hfsPlusIOPosOffset,
+				      jib_offset,
 				      jib_size,
 				      devvp,
 		                      hfsmp->hfs_logical_block_size);
@@ -2052,8 +2295,11 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 	    buf_brelse(jinfo_bp);
 
 	    if (retval) {
+		const char *name = vnode_getname(devvp);
 	      printf("hfs: late journal init: volume on %s is read-only and journal is dirty.  Can not mount volume.\n",
-		     vnode_name(devvp));
+		     name ? name : "");
+		if (name)
+			vnode_putname(name);
 	    }
 
 	    return retval;
@@ -2061,9 +2307,9 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 
 	if ((jib_flags & kJIJournalNeedInitMask) || recreate_journal) {
 		printf("hfs: Initializing the journal (joffset 0x%llx sz 0x%llx)...\n",
-			   jib_offset + (off_t)vcb->hfsPlusIOPosOffset, jib_size);
+			   jib_offset, jib_size);
 		hfsmp->jnl = journal_create(hfsmp->jvp,
-									jib_offset + (off_t)vcb->hfsPlusIOPosOffset,
+									jib_offset,
 									jib_size,
 									devvp,
 									hfsmp->hfs_logical_block_size,
@@ -2088,11 +2334,11 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 		arg_flags |= JOURNAL_RESET;
 		
 		//printf("hfs: Opening the journal (joffset 0x%llx sz 0x%llx vhp_blksize %d)...\n",
-		//	   jib_offset + (off_t)vcb->hfsPlusIOPosOffset,
+		//	   jib_offset,
 		//	   jib_size, SWAP_BE32(vhp->blockSize));
 				
 		hfsmp->jnl = journal_open(hfsmp->jvp,
-								  jib_offset + (off_t)vcb->hfsPlusIOPosOffset,
+								  jib_offset,
 								  jib_size,
 								  devvp,
 								  hfsmp->hfs_logical_block_size,
@@ -2114,7 +2360,7 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 	jinfo_bp = NULL;
 	jibp     = NULL;
 
-	//printf("journal @ 0x%x\n", hfsmp->jnl);
+	//printf("hfs: journal @ 0x%x\n", hfsmp->jnl);
 	
 	// if we expected the journal to be there and we couldn't
 	// create it or open it then we have to bail out.
@@ -2164,7 +2410,7 @@ hfs_metadatazone_init(struct hfsmount *hfsmp)
 	u_int64_t  temp;
 	u_int64_t  filesize;
 	u_int32_t  blk;
-	int  items;
+	int  items, really_do_it=1;
 
 	vcb = HFSTOVCB(hfsmp);
 	fs_size = (u_int64_t)vcb->blockSize * (u_int64_t)vcb->totalBlocks;
@@ -2172,50 +2418,65 @@ hfs_metadatazone_init(struct hfsmount *hfsmp)
 	/*
 	 * For volumes less than 10 GB, don't bother.
 	 */
-	if (fs_size < ((u_int64_t)10 * GIGABYTE))
-		return;
+	if (fs_size < ((u_int64_t)10 * GIGABYTE)) {
+		really_do_it = 0;
+	}
+	
 	/*
 	 * Skip non-journaled volumes as well.
 	 */
-	if (hfsmp->jnl == NULL)
-		return;
+	if (hfsmp->jnl == NULL) {
+		really_do_it = 0;
+	}
 
 	/*
-	 * Start with allocation bitmap (a fixed size).
+	 * Start with space for the boot blocks and Volume Header.
+	 * 1536 = byte offset from start of volume to end of volume header:
+	 * 1024 bytes is the offset from the start of the volume to the
+	 * start of the volume header (defined by the volume format)
+	 * + 512 bytes (the size of the volume header).
 	 */
-	zonesize = roundup(vcb->totalBlocks / 8, vcb->vcbVBMIOSize);
-
+	zonesize = roundup(1536, hfsmp->blockSize);
+	
 	/*
-	 * Overflow Extents file gets 4 MB per 100 GB.
+	 * Add the on-disk size of allocation bitmap.
 	 */
-	items = fs_size / ((u_int64_t)100 * GIGABYTE);
-	filesize = (u_int64_t)(items + 1) * OVERFLOW_DEFAULT_SIZE;
-	if (filesize > OVERFLOW_MAXIMUM_SIZE)
-		filesize = OVERFLOW_MAXIMUM_SIZE;
-	zonesize += filesize;
-	hfsmp->hfs_overflow_maxblks = filesize / vcb->blockSize;
-
+	zonesize += hfsmp->hfs_allocation_cp->c_datafork->ff_blocks * hfsmp->blockSize;
+	
+	/* 
+	 * Add space for the Journal Info Block and Journal (if they're in
+	 * this file system).
+	 */
+	if (hfsmp->jnl && hfsmp->jvp == hfsmp->hfs_devvp) {
+		zonesize += hfsmp->blockSize + hfsmp->jnl_size;
+	}
+	
 	/*
-	 * Plan for at least 8 MB of journal for each
-	 * 100 GB of disk space (up to a 512 MB).
+	 * Add the existing size of the Extents Overflow B-tree.
+	 * (It rarely grows, so don't bother reserving additional room for it.)
 	 */
-	items = fs_size / ((u_int64_t)100 * GIGABYTE);
-	filesize = (u_int64_t)(items + 1) * JOURNAL_DEFAULT_SIZE;
-	if (filesize > JOURNAL_MAXIMUM_SIZE)
-		filesize = JOURNAL_MAXIMUM_SIZE;
-	zonesize += filesize;
-
+	zonesize += hfsmp->hfs_extents_cp->c_datafork->ff_blocks * hfsmp->blockSize;
+	
 	/*
-	 * Catalog file gets 10 MB per 1 GB.
-	 *
-	 * How about considering the current catalog size (used nodes * node size)
-	 * and the current file data size to help estimate the required
-	 * catalog size.
+	 * If there is an Attributes B-tree, leave room for 11 clumps worth.
+	 * newfs_hfs allocates one clump, and leaves a gap of 10 clumps.
+	 * When installing a full OS install onto a 20GB volume, we use
+	 * 7 to 8 clumps worth of space (depending on packages), so that leaves
+	 * us with another 3 or 4 clumps worth before we need another extent.
 	 */
-	filesize = MIN((fs_size / 1024) * 10, GIGABYTE);
-	hfsmp->hfs_catalog_maxblks = filesize / vcb->blockSize;
-	zonesize += filesize;
-
+	if (hfsmp->hfs_attribute_cp) {
+		zonesize += 11 * hfsmp->hfs_attribute_cp->c_datafork->ff_clumpsize;
+	}
+	
+	/*
+	 * Leave room for 11 clumps of the Catalog B-tree.
+	 * Again, newfs_hfs allocates one clump plus a gap of 10 clumps.
+	 * When installing a full OS install onto a 20GB volume, we use
+	 * 7 to 8 clumps worth of space (depending on packages), so that leaves
+	 * us with another 3 or 4 clumps worth before we need another extent.
+	 */
+	zonesize += 11 * hfsmp->hfs_catalog_cp->c_datafork->ff_clumpsize;
+	
 	/*
 	 * Add space for hot file region.
 	 *
@@ -2229,38 +2490,40 @@ hfs_metadatazone_init(struct hfsmount *hfsmp)
 	/*
 	 * Calculate user quota file requirements.
 	 */
-	items = QF_USERS_PER_GB * (fs_size / GIGABYTE);
-	if (items < QF_MIN_USERS)
-		items = QF_MIN_USERS;
-	else if (items > QF_MAX_USERS)
-		items = QF_MAX_USERS;
-	if (!powerof2(items)) {
-		int x = items;
-		items = 4;
-		while (x>>1 != 1) {
-			x = x >> 1;
-			items = items << 1;
+	if (hfsmp->hfs_flags & HFS_QUOTAS) {
+		items = QF_USERS_PER_GB * (fs_size / GIGABYTE);
+		if (items < QF_MIN_USERS)
+			items = QF_MIN_USERS;
+		else if (items > QF_MAX_USERS)
+			items = QF_MAX_USERS;
+		if (!powerof2(items)) {
+			int x = items;
+			items = 4;
+			while (x>>1 != 1) {
+				x = x >> 1;
+				items = items << 1;
+			}
 		}
-	}
-	filesize += (items + 1) * sizeof(struct dqblk);
-	/*
-	 * Calculate group quota file requirements.
-	 *
-	 */
-	items = QF_GROUPS_PER_GB * (fs_size / GIGABYTE);
-	if (items < QF_MIN_GROUPS)
-		items = QF_MIN_GROUPS;
-	else if (items > QF_MAX_GROUPS)
-		items = QF_MAX_GROUPS;
-	if (!powerof2(items)) {
-		int x = items;
-		items = 4;
-		while (x>>1 != 1) {
-			x = x >> 1;
-			items = items << 1;
+		filesize += (items + 1) * sizeof(struct dqblk);
+		/*
+		 * Calculate group quota file requirements.
+		 *
+		 */
+		items = QF_GROUPS_PER_GB * (fs_size / GIGABYTE);
+		if (items < QF_MIN_GROUPS)
+			items = QF_MIN_GROUPS;
+		else if (items > QF_MAX_GROUPS)
+			items = QF_MAX_GROUPS;
+		if (!powerof2(items)) {
+			int x = items;
+			items = 4;
+			while (x>>1 != 1) {
+				x = x >> 1;
+				items = items << 1;
+			}
 		}
+		filesize += (items + 1) * sizeof(struct dqblk);
 	}
-	filesize += (items + 1) * sizeof(struct dqblk);
 	zonesize += filesize;
 
 	/*
@@ -2269,6 +2532,22 @@ hfs_metadatazone_init(struct hfsmount *hfsmp)
 	 */
 	temp = zonesize;
 	zonesize = roundup(zonesize, (u_int64_t)vcb->vcbVBMIOSize * 8 * vcb->blockSize);
+	hfsmp->hfs_min_alloc_start = zonesize / vcb->blockSize;
+	/*
+	 * If doing the round up for hfs_min_alloc_start would push us past
+	 * totalBlocks, then just reset it back to 0.  Though using a value 
+	 * bigger than totalBlocks would not cause damage in the block allocator
+	 * code, this value could get stored in the volume header and make it out 
+	 * to disk, making the volume header technically corrupt.
+	 */
+	if (hfsmp->hfs_min_alloc_start >= hfsmp->totalBlocks) {
+		hfsmp->hfs_min_alloc_start = 0;
+	}
+
+	if (really_do_it == 0) {
+		return;
+	}
+	
 	temp = zonesize - temp;  /* temp has extra space */
 	filesize += temp / 3;
 	hfsmp->hfs_catalog_maxblks += (temp - (temp / 3)) / vcb->blockSize;
@@ -2287,9 +2566,9 @@ hfs_metadatazone_init(struct hfsmount *hfsmp)
 	hfsmp->hfs_hotfile_end = hfsmp->hfs_metazone_end;
 	hfsmp->hfs_hotfile_freeblks = hfs_hotfile_freeblocks(hfsmp);
 #if 0
-	printf("HFS: metadata zone is %d to %d\n", hfsmp->hfs_metazone_start, hfsmp->hfs_metazone_end);
-	printf("HFS: hot file band is %d to %d\n", hfsmp->hfs_hotfile_start, hfsmp->hfs_hotfile_end);
-	printf("HFS: hot file band free blocks = %d\n", hfsmp->hfs_hotfile_freeblks);
+	printf("hfs: metadata zone is %d to %d\n", hfsmp->hfs_metazone_start, hfsmp->hfs_metazone_end);
+	printf("hfs: hot file band is %d to %d\n", hfsmp->hfs_hotfile_start, hfsmp->hfs_hotfile_end);
+	printf("hfs: hot file band free blocks = %d\n", hfsmp->hfs_hotfile_freeblks);
 #endif
 	hfsmp->hfs_flags |= HFS_METADATA_ZONE;
 }
@@ -2347,7 +2626,6 @@ hfs_virtualmetafile(struct cnode *cp)
 }
 
 
-
 //
 // Fire off a timed callback to sync the disk if the
 // volume is on ejectable media.
@@ -2357,11 +2635,19 @@ void
 hfs_sync_ejectable(struct hfsmount *hfsmp)
 {
 	if (hfsmp->hfs_syncer)	{
-		uint32_t secs, usecs;
+		clock_sec_t secs;
+		clock_usec_t usecs;
 		uint64_t now;
 
 		clock_get_calendar_microtime(&secs, &usecs);
-		now = ((uint64_t)secs * 1000000) + usecs;
+		now = ((uint64_t)secs * 1000000ULL) + (uint64_t)usecs;
+
+		if (hfsmp->hfs_sync_incomplete && hfsmp->hfs_mp->mnt_pending_write_size >= hfsmp->hfs_max_pending_io) {
+			// if we have a sync scheduled but i/o is starting to pile up,
+			// don't call thread_call_enter_delayed() again because that
+			// will defer the sync.
+			return;
+		}
 
 		if (hfsmp->hfs_sync_scheduled == 0) {
 			uint64_t deadline;
@@ -2431,7 +2717,7 @@ hfs_start_transaction(struct hfsmount *hfsmp)
     if (hfsmp->jnl) {
 	ret = journal_start_transaction(hfsmp->jnl);
 	if (ret == 0) {
-	    OSAddAtomic(1, (SInt32 *)&hfsmp->hfs_global_lock_nesting);
+	    OSAddAtomic(1, &hfsmp->hfs_global_lock_nesting);
 	}
     } else {
 	ret = 0;
@@ -2454,7 +2740,7 @@ hfs_end_transaction(struct hfsmount *hfsmp)
 
     if (    hfsmp->jnl == NULL
 	|| (   journal_owner(hfsmp->jnl) == current_thread()
-	    && (OSAddAtomic(-1, (SInt32 *)&hfsmp->hfs_global_lock_nesting) == 1)) ) {
+	    && (OSAddAtomic(-1, &hfsmp->hfs_global_lock_nesting) == 1)) ) {
 
 	    need_unlock = 1;
     } 
@@ -2472,4 +2758,96 @@ hfs_end_transaction(struct hfsmount *hfsmp)
     }
 
     return ret;
+}
+
+
+__private_extern__
+int
+hfs_journal_flush(struct hfsmount *hfsmp)
+{
+	int ret;
+
+	if (hfsmp->jnl) {
+		lck_rw_lock_shared(&hfsmp->hfs_global_lock);
+		ret = journal_flush(hfsmp->jnl);
+		lck_rw_unlock_shared(&hfsmp->hfs_global_lock);
+	} else {
+		ret = 0;
+	}
+
+	return ret;
+}
+
+
+/*
+ * hfs_erase_unused_nodes
+ *
+ * Check wheter a volume may suffer from unused Catalog B-tree nodes that
+ * are not zeroed (due to <rdar://problem/6947811>).  If so, just write
+ * zeroes to the unused nodes.
+ *
+ * How do we detect when a volume needs this repair?  We can't always be
+ * certain.  If a volume was created after a certain date, then it may have
+ * been created with the faulty newfs_hfs.  Since newfs_hfs only created one
+ * clump, we can assume that if a Catalog B-tree is larger than its clump size,
+ * that means that the entire first clump must have been written to, which means
+ * there shouldn't be unused and unwritten nodes in that first clump, and this
+ * repair is not needed.
+ *
+ * We have defined a bit in the Volume Header's attributes to indicate when the
+ * unused nodes have been repaired.  A newer newfs_hfs will set this bit.
+ * As will fsck_hfs when it repairs the unused nodes.
+ */
+__private_extern__
+int hfs_erase_unused_nodes(struct hfsmount *hfsmp)
+{
+	int result; 
+	struct filefork *catalog;
+	int lockflags;
+	
+	if (hfsmp->vcbAtrb & kHFSUnusedNodeFixMask)
+	{
+		/* This volume has already been checked and repaired. */
+		return 0;
+	}
+
+	if ((hfsmp->localCreateDate < kHFSUnusedNodesFixDate))
+	{
+		/* This volume is too old to have had the problem. */
+		hfsmp->vcbAtrb |= kHFSUnusedNodeFixMask;
+		return 0;
+	}
+
+	catalog = hfsmp->hfs_catalog_cp->c_datafork;
+	if (catalog->ff_size > catalog->ff_clumpsize)
+	{
+		/* The entire first clump must have been in use at some point. */
+		hfsmp->vcbAtrb |= kHFSUnusedNodeFixMask;
+		return 0;
+	}
+	
+	/*
+	 * If we get here, we need to zero out those unused nodes.
+	 *
+	 * We start a transaction and lock the catalog since we're going to be
+	 * making on-disk changes.  But note that BTZeroUnusedNodes doens't actually
+	 * do its writing via the journal, because that would be too much I/O
+	 * to fit in a transaction, and it's a pain to break it up into multiple
+	 * transactions.  (It behaves more like growing a B-tree would.)
+	 */
+	printf("hfs_erase_unused_nodes: updating volume %s.\n", hfsmp->vcbVN);
+	result = hfs_start_transaction(hfsmp);
+	if (result)
+		goto done;
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_EXCLUSIVE_LOCK);
+	result = BTZeroUnusedNodes(catalog);
+	vnode_waitforwrites(hfsmp->hfs_catalog_vp, 0, 0, 0, "hfs_erase_unused_nodes");
+	hfs_systemfile_unlock(hfsmp, lockflags);
+	hfs_end_transaction(hfsmp);
+	if (result == 0)
+		hfsmp->vcbAtrb |= kHFSUnusedNodeFixMask;
+	printf("hfs_erase_unused_nodes: done updating volume %s.\n", hfsmp->vcbVN);
+
+done:
+	return result;
 }

@@ -32,65 +32,8 @@
 #define super IOMemoryDescriptor
 OSDefineMetaClassAndStructors(IOInterleavedMemoryDescriptor, IOMemoryDescriptor)
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-bool IOInterleavedMemoryDescriptor::initWithAddress(
-                                  void *      /* address       */ ,
-                                  IOByteCount /* withLength    */ ,
-                                  IODirection /* withDirection */ )
-{
-    return false;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-bool IOInterleavedMemoryDescriptor::initWithAddress(
-                                  vm_address_t /* address       */ ,
-                                  IOByteCount  /* withLength    */ ,
-                                  IODirection  /* withDirection */ ,
-                                  task_t       /* withTask      */ )
-{
-    return false;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-bool IOInterleavedMemoryDescriptor::initWithPhysicalAddress(
-                                  IOPhysicalAddress /* address       */ ,
-                                  IOByteCount       /* withLength    */ ,
-                                  IODirection       /* withDirection */ )
-{
-    return false;
-}
-
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-bool IOInterleavedMemoryDescriptor::initWithPhysicalRanges(
-                                  IOPhysicalRange * /* ranges        */ ,
-                                  UInt32            /* withCount     */ ,
-                                  IODirection       /* withDirection */ ,
-                                  bool              /* asReference   */ )
-{
-    return false;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-bool IOInterleavedMemoryDescriptor::initWithRanges(
-                                  IOVirtualRange * /* ranges        */ ,
-                                  UInt32           /* withCount     */ ,
-                                  IODirection      /* withDirection */ ,
-                                  task_t           /* withTask      */ ,
-                                  bool             /* asReference   */ )
-{
-    return false;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 IOInterleavedMemoryDescriptor * IOInterleavedMemoryDescriptor::withCapacity(
-                                  UInt32                capacity,
+                                  IOByteCount           capacity,
                                   IODirection           direction )
 {
     //
@@ -112,10 +55,8 @@ IOInterleavedMemoryDescriptor * IOInterleavedMemoryDescriptor::withCapacity(
     return me;
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 bool IOInterleavedMemoryDescriptor::initWithCapacity(
-                                  UInt32                capacity,
+                                  IOByteCount           capacity,
                                   IODirection           direction )
 {
     //
@@ -131,7 +72,10 @@ bool IOInterleavedMemoryDescriptor::initWithCapacity(
     
     // Initialize our minimal state.
 
-    _direction              = direction;
+    _flags                  = direction;
+#ifndef __LP64__
+    _direction              = (IODirection) (_flags & kIOMemoryDirectionMask);
+#endif /* !__LP64__ */
     _length                 = 0;
     _mappings               = 0;
     _tag                    = 0;
@@ -148,8 +92,6 @@ bool IOInterleavedMemoryDescriptor::initWithCapacity(
     return true;
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 void IOInterleavedMemoryDescriptor::clearMemoryDescriptors( IODirection direction )
 {
     UInt32 index;
@@ -157,7 +99,7 @@ void IOInterleavedMemoryDescriptor::clearMemoryDescriptors( IODirection directio
     for ( index = 0; index < _descriptorCount; index++ )
     {
         if ( _descriptorPrepared )
-	    _descriptors[index]->complete(_direction);
+	    _descriptors[index]->complete(getDirection());
 
 	_descriptors[index]->release();
 	_descriptors[index] = 0;
@@ -167,7 +109,12 @@ void IOInterleavedMemoryDescriptor::clearMemoryDescriptors( IODirection directio
     }
 
     if ( direction != kIODirectionNone )
-        _direction = direction;
+    {
+        _flags = (_flags & ~kIOMemoryDirectionMask) | direction;
+#ifndef __LP64__
+        _direction = (IODirection) (_flags & kIOMemoryDirectionMask);
+#endif /* !__LP64__ */
+    }
 
     _descriptorCount = 0;
     _length = 0;
@@ -175,8 +122,6 @@ void IOInterleavedMemoryDescriptor::clearMemoryDescriptors( IODirection directio
     _tag = 0;
 
 };
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 bool IOInterleavedMemoryDescriptor::setMemoryDescriptor(
                                              IOMemoryDescriptor * descriptor,
@@ -189,7 +134,7 @@ bool IOInterleavedMemoryDescriptor::setMemoryDescriptor(
     if ( (offset + length) > descriptor->getLength() )
         return false;
 
-//    if ( descriptor->getDirection() != _direction )
+//    if ( descriptor->getDirection() != getDirection() )
 //        return false;
 
     descriptor->retain();
@@ -203,8 +148,6 @@ bool IOInterleavedMemoryDescriptor::setMemoryDescriptor(
 
     return true;
 }
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 void IOInterleavedMemoryDescriptor::free()
 {
@@ -230,8 +173,6 @@ void IOInterleavedMemoryDescriptor::free()
     super::free();
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 IOReturn IOInterleavedMemoryDescriptor::prepare(IODirection forDirection)
 {
     //
@@ -248,7 +189,7 @@ IOReturn IOInterleavedMemoryDescriptor::prepare(IODirection forDirection)
 
     if ( forDirection == kIODirectionNone )
     {
-        forDirection = _direction;
+        forDirection = getDirection();
     }
 
     for ( index = 0; index < _descriptorCount; index++ ) 
@@ -271,8 +212,6 @@ IOReturn IOInterleavedMemoryDescriptor::prepare(IODirection forDirection)
     return status;
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 IOReturn IOInterleavedMemoryDescriptor::complete(IODirection forDirection)
 {
     //
@@ -288,7 +227,7 @@ IOReturn IOInterleavedMemoryDescriptor::complete(IODirection forDirection)
 
     if ( forDirection == kIODirectionNone )
     {
-        forDirection = _direction;
+        forDirection = getDirection();
     }
 
     for ( unsigned index = 0; index < _descriptorCount; index++ ) 
@@ -303,10 +242,10 @@ IOReturn IOInterleavedMemoryDescriptor::complete(IODirection forDirection)
     return statusFinal;
 }
 
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-addr64_t IOInterleavedMemoryDescriptor::getPhysicalSegment64( 
-				    IOByteCount   offset, IOByteCount * length )
+addr64_t IOInterleavedMemoryDescriptor::getPhysicalSegment( 
+                                                       IOByteCount   offset,
+                                                       IOByteCount * length,
+                                                       IOOptionBits  options )
 {
     //
     // This method returns the physical address of the byte at the given offset
@@ -322,7 +261,7 @@ addr64_t IOInterleavedMemoryDescriptor::getPhysicalSegment64(
     {
         if ( offset < _descriptorLengths[index] )
         {
-            pa = _descriptors[index]->getPhysicalSegment64(_descriptorOffsets[index] + offset, length);
+            pa = _descriptors[index]->getPhysicalSegment(_descriptorOffsets[index] + offset, length, options);
 	    if ((_descriptorLengths[index] - offset) < *length) *length = _descriptorLengths[index] - offset;
             return pa;
         }
@@ -331,76 +270,5 @@ addr64_t IOInterleavedMemoryDescriptor::getPhysicalSegment64(
 
     if ( length )  *length = 0;
 
-    return 0;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-IOPhysicalAddress IOInterleavedMemoryDescriptor::getPhysicalSegment( 
-				    IOByteCount   offset, IOByteCount * length )
-{
-    //
-    // This method returns the physical address of the byte at the given offset
-    // into the memory,  and optionally the length of the physically contiguous
-    // segment from that offset.
-    //
-
-    IOPhysicalAddress pa;
-
-    assert(offset <= _length);
-
-    for ( unsigned index = 0; index < _descriptorCount; index++ ) 
-    {
-        if ( offset < _descriptorLengths[index] )
-        {
-            pa = _descriptors[index]->getPhysicalSegment(_descriptorOffsets[index] + offset, length);
-	    if ((_descriptorLengths[index] - offset) < *length) *length = _descriptorLengths[index] - offset;
-            return pa;
-        }
-        offset -= _descriptorLengths[index];
-    }
-
-    if ( length )  *length = 0;
-
-    return 0;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-IOPhysicalAddress IOInterleavedMemoryDescriptor::getSourceSegment(
-                                                       IOByteCount   offset,
-                                                       IOByteCount * length )
-{
-    //
-    // This method returns the physical address of the byte at the given offset
-    // into the memory,  and optionally the length of the physically contiguous
-    // segment from that offset.
-    //
-
-    IOPhysicalAddress pa;
-
-    assert(offset <= _length);
-
-    for ( unsigned index = 0; index < _descriptorCount; index++ ) 
-    {
-        if ( offset < _descriptorLengths[index] )
-        {
-            pa = _descriptors[index]->getSourceSegment(_descriptorOffsets[index] + offset, length);
-	    if ((_descriptorLengths[index] - offset) < *length) *length = _descriptorLengths[index] - offset;
-            return pa;
-        }
-        offset -= _descriptorLengths[index];
-    }
-
-    if ( length )  *length = 0;
-
-    return 0;
-}
-
-// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-void * IOInterleavedMemoryDescriptor::getVirtualSegment( IOByteCount   /* offset */ ,
-                                                   IOByteCount * /* length */ )
-{
     return 0;
 }

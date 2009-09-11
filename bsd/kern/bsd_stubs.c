@@ -36,17 +36,17 @@
 #include <sys/conf.h>
 #include <sys/proc_internal.h>
 #include <sys/buf.h>	/* for SET */
+#include <sys/kernel.h>
 #include <sys/user.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
 
 /* XXX these should be in a common header somwhere, but aren't */
 extern int chrtoblk_set(int, int);
-extern vm_offset_t kmem_mb_alloc(vm_map_t, int);
+extern vm_offset_t kmem_mb_alloc(vm_map_t, int, int);
 
 /* XXX most of these just exist to export; there's no good header for them*/
 void	pcb_synch(void);
-int	issingleuser(void);
 void	tbeproc(void *);
 
 
@@ -54,16 +54,22 @@ void	tbeproc(void *);
 int     dmmin, dmmax, dmtext;
 
 vm_offset_t
-kmem_mb_alloc(vm_map_t  mbmap, int size) 
+kmem_mb_alloc(vm_map_t  mbmap, int size, int physContig) 
 {
-        vm_offset_t addr;
-	if (kernel_memory_allocate(mbmap, &addr, size,
-   		0,
-		KMA_NOPAGEWAIT|KMA_KOBJECT|KMA_LOMEM) == KERN_SUCCESS)
-   			return(addr);
+        vm_offset_t addr = 0;
+	kern_return_t kr = KERN_SUCCESS;
+
+	if(!physContig)
+		kr = kernel_memory_allocate(mbmap, &addr, size,
+			0, KMA_NOPAGEWAIT|KMA_KOBJECT|KMA_LOMEM);
 	else
-		return(0);
-		
+		kr = kmem_alloc_contig(mbmap, &addr, size, PAGE_MASK, 
+			0xfffff, 0, KMA_NOPAGEWAIT | KMA_KOBJECT | KMA_LOMEM);
+
+	if( kr != KERN_SUCCESS)
+		addr = 0;
+
+	return addr;
 }
 
 /*
@@ -299,32 +305,34 @@ cdevsw_add_with_bdev(int index, struct cdevsw * csw, int bdev)
 
 #include <pexpert/pexpert.h>	/* for PE_parse_boot_arg */
 
-/*
- * Notes:	This function is used solely by UFS, apparently in an effort
- *		to work around an issue with single user mounts.
- *
- *		It's not technically correct to reference PE_parse_boot_arg()
- *		from this file.
- */
-int
-issingleuser(void)
-{
-	char namep[16];
-
-	if (PE_parse_boot_argn("-s", namep, sizeof(namep))) {
-		return(1);
-	} else {
-		return(0);
-	}
-}
-
 void
 tbeproc(void *procp)
 {
 	struct proc *p = procp;
 
 	if (p)
-		OSBitOrAtomic(P_TBE, (UInt32 *)&p->p_flag);
+		OSBitOrAtomic(P_TBE, &p->p_flag);
 	return;
+}
+
+/*
+ * Copy the "hostname" variable into a caller-provided buffer
+ * Returns: 0 for success, ENAMETOOLONG for insufficient buffer space.
+ * On success, "len" will be set to the number of characters preceding 
+ * the NULL character in the hostname.
+ */
+int
+bsd_hostname(char *buf, int bufsize, int *len)
+{
+	/*
+ 	 * "hostname" is null-terminated, and "hostnamelen" is equivalent to strlen(hostname).
+	 */
+	if (hostnamelen < bufsize) {
+		strlcpy(buf, hostname, bufsize);
+		*len = hostnamelen;
+		return 0;
+	} else {
+		return ENAMETOOLONG;
+	}    
 }
 

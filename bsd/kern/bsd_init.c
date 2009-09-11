@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -24,8 +24,8 @@
  * limitations under the License.
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
- */
-/*
+ * 
+ *
  * Copyright (c) 1982, 1986, 1989, 1991, 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -95,7 +95,7 @@
 #include <sys/systm.h>
 #include <sys/mman.h>
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #include <sys/malloc.h>
 #include <sys/dkstat.h>
@@ -105,6 +105,7 @@
 #include <kern/thread.h>
 #include <kern/task.h>
 #include <kern/ast.h>
+#include <kern/kalloc.h>
 
 #include <mach/vm_param.h>
 
@@ -147,6 +148,9 @@
 #include <vm/vm_kern.h>			/* for kmem_suballoc() */
 #include <sys/semaphore.h>		/* for psem_lock_init() */
 #include <sys/msgbuf.h>			/* for log_setsize() */
+#include <sys/tty.h>			/* for tty_init() */
+#include <net/if_utun.h>		/* for utun_register_control() */
+#include <net/net_str_id.h>		/* for net_str_id_init() */
 
 #include <net/init.h>
 
@@ -162,13 +166,23 @@
 #include <sys/imageboot.h>
 #endif
 
+#if PFLOG
+#include <net/if_pflog.h>
+#endif
+
 #include <pexpert/pexpert.h>
+
+#if CONFIG_EMBEDDED
+#include <libkern/OSKextLib.h>
+#endif
 
 void * get_user_regs(thread_t);		/* XXX kludge for <machine/thread.h> */
 void IOKitInitializeTime(void);		/* XXX */
+void IOSleep(unsigned int);		/* XXX */
 void loopattach(void);			/* XXX */
+void vc_progress_set(boolean_t, uint32_t); /* XXX */
 
-char    copyright[] =
+const char    copyright[] =
 "Copyright (c) 1982, 1986, 1989, 1991, 1993\n\t"
 "The Regents of the University of California. "
 "All rights reserved.\n\n";
@@ -204,10 +218,11 @@ char	hostname[MAXHOSTNAMELEN];
 int		hostnamelen;
 char	domainname[MAXDOMNAMELEN];
 int		domainnamelen;
-#if __i386__
+#if defined(__i386__) || defined(__x86_64__)
 struct exec_archhandler exec_archhandler_ppc = {
 	.path = "/usr/libexec/oah/translate",
 };
+const char * const kRosettaStandIn_str = "/usr/libexec/oah/RosettaNonGrata";
 #else /* __i386__ */
 struct exec_archhandler exec_archhandler_ppc;
 #endif /* __i386__ */
@@ -235,18 +250,27 @@ extern void bsd_bufferinit(void);
 extern int srv;
 extern int ncl;
 
-#define BSD_SIMUL_EXECS       33 /* 32 , allow for rounding */
-#define	BSD_PAGABLE_MAP_SIZE	(BSD_SIMUL_EXECS * (NCARGS + PAGE_SIZE))
 vm_map_t	bsd_pageable_map;
 vm_map_t	mb_map;
-semaphore_t execve_semaphore;
+
+static  int bsd_simul_execs = BSD_SIMUL_EXECS;
+static int bsd_pageable_map_size = BSD_PAGABLE_MAP_SIZE;
+__private_extern__ int execargs_cache_size = BSD_SIMUL_EXECS;
+__private_extern__ int execargs_free_count = BSD_SIMUL_EXECS;
+__private_extern__ vm_offset_t * execargs_cache = NULL;
+
+void bsd_exec_setup(int);
+
+/*
+ * Set to disable grading 64 bit Mach-o binaries as executable, for testing;
+ * Intel only.
+ */
+__private_extern__ int bootarg_no64exec = 0;
 
 int	cmask = CMASK;
 extern int customnbuf;
 
 void bsd_init(void) __attribute__((section("__TEXT, initcode")));
-__private_extern__ void ubc_init(void )  __attribute__((section("__TEXT, initcode")));
-void vfsinit(void) __attribute__((section("__TEXT, initcode")));
 kern_return_t bsd_autoconf(void) __attribute__((section("__TEXT, initcode")));
 void bsd_utaskbootstrap(void) __attribute__((section("__TEXT, initcode")));
 
@@ -283,6 +307,13 @@ int turn_on_log_leaks = 0;
 
 extern void stackshot_lock_init(void);
 
+
+/* If we are using CONFIG_DTRACE */
+#if CONFIG_DTRACE
+	extern void dtrace_postinit(void);
+#endif
+
+
 /*
  * Initialization code.
  * Called from cold start routine as
@@ -314,19 +345,25 @@ struct rlimit vm_initial_limit_stack = { DFLSSIZ, MAXSSIZ - PAGE_SIZE };
 struct rlimit vm_initial_limit_data = { DFLDSIZ, MAXDSIZ };
 struct rlimit vm_initial_limit_core = { DFLCSIZ, MAXCSIZ };
 
-extern thread_t	cloneproc(proc_t, int);
+extern thread_t	cloneproc(task_t, proc_t, int);
 extern int 	(*mountroot)(void);
 extern int 	netboot_mountroot(void); 	/* netboot.c */
 extern int	netboot_setup(void);
 
 lck_grp_t * proc_lck_grp;
+lck_grp_t * proc_slock_grp;
+lck_grp_t * proc_fdmlock_grp;
+lck_grp_t * proc_mlock_grp;
 lck_grp_attr_t * proc_lck_grp_attr;
 lck_attr_t * proc_lck_attr;
 lck_mtx_t * proc_list_mlock;
 lck_mtx_t * proc_klist_mlock;
 
+extern lck_mtx_t * execargs_cache_lock;
+
 /* hook called after root is mounted XXX temporary hack */
 void (*mountroot_post_hook)(void);
+void (*unmountroot_pre_hook)(void);
 
 /*
  * This function is called very early on in the Mach startup, from the
@@ -345,10 +382,9 @@ void (*mountroot_post_hook)(void);
 void
 bsd_init(void)
 {
-	proc_t p;
 	struct uthread *ut;
 	unsigned int i;
-#if __i386__
+#if __i386__ || __x86_64__
 	int error;
 #endif	
 	struct vfs_context context;
@@ -378,25 +414,28 @@ bsd_init(void)
 	bsd_init_kprintf("calling procinit\n");
 	procinit();
 
-	kernproc = &proc0;
+	/* Initialize the ttys (MUST be before kminit()/bsd_autoconf()!)*/
+	tty_init();
 
-	p = kernproc;
+	kernproc = &proc0;	/* implicitly bzero'ed */
 
 	/* kernel_task->proc = kernproc; */
-	set_bsdtask_info(kernel_task,(void *)p);
-	p->p_pid = 0;
-	p->p_ppid = 0;
+	set_bsdtask_info(kernel_task,(void *)kernproc);
 
 	/* give kernproc a name */
 	bsd_init_kprintf("calling process_name\n");
-	process_name("kernel_task", p);
+	process_name("kernel_task", kernproc);
 
 	/* allocate proc lock group attribute and group */
 	bsd_init_kprintf("calling lck_grp_attr_alloc_init\n");
 	proc_lck_grp_attr= lck_grp_attr_alloc_init();
-	
-	proc_lck_grp = lck_grp_alloc_init("proc",  proc_lck_grp_attr);
 
+	proc_lck_grp = lck_grp_alloc_init("proc",  proc_lck_grp_attr);
+#ifndef CONFIG_EMBEDDED
+	proc_slock_grp = lck_grp_alloc_init("proc-slock",  proc_lck_grp_attr);
+	proc_fdmlock_grp = lck_grp_alloc_init("proc-fdmlock",  proc_lck_grp_attr);
+	proc_mlock_grp = lck_grp_alloc_init("proc-mlock",  proc_lck_grp_attr);
+#endif
 	/* Allocate proc lock attribute */
 	proc_lck_attr = lck_attr_alloc_init();
 #if 0
@@ -405,12 +444,26 @@ bsd_init(void)
 #endif
 #endif
 
+#ifdef CONFIG_EMBEDDED
 	proc_list_mlock = lck_mtx_alloc_init(proc_lck_grp, proc_lck_attr);
 	proc_klist_mlock = lck_mtx_alloc_init(proc_lck_grp, proc_lck_attr);
-	lck_mtx_init(&p->p_mlock, proc_lck_grp, proc_lck_attr);
-	lck_mtx_init(&p->p_fdmlock, proc_lck_grp, proc_lck_attr);
-	lck_spin_init(&p->p_slock, proc_lck_grp, proc_lck_attr);
+	lck_mtx_init(&kernproc->p_mlock, proc_lck_grp, proc_lck_attr);
+	lck_mtx_init(&kernproc->p_fdmlock, proc_lck_grp, proc_lck_attr);
+	lck_spin_init(&kernproc->p_slock, proc_lck_grp, proc_lck_attr);
+#else	
+	proc_list_mlock = lck_mtx_alloc_init(proc_mlock_grp, proc_lck_attr);
+	proc_klist_mlock = lck_mtx_alloc_init(proc_mlock_grp, proc_lck_attr);
+	lck_mtx_init(&kernproc->p_mlock, proc_mlock_grp, proc_lck_attr);
+	lck_mtx_init(&kernproc->p_fdmlock, proc_fdmlock_grp, proc_lck_attr);
+	lck_spin_init(&kernproc->p_slock, proc_slock_grp, proc_lck_attr);
+#endif
 
+	execargs_cache_lock = lck_mtx_alloc_init(proc_lck_grp, proc_lck_attr);
+	execargs_cache_size = bsd_simul_execs;
+	execargs_free_count = bsd_simul_execs;
+	execargs_cache = (vm_offset_t *)kalloc(bsd_simul_execs * sizeof(vm_offset_t));
+	bzero(execargs_cache, bsd_simul_execs * sizeof(vm_offset_t));
+	
 	if (current_task() != kernel_task)
 		printf("bsd_init: We have a problem, "
 				"current task is not kernel task\n");
@@ -423,86 +476,96 @@ bsd_init(void)
 	 * Initialize the MAC Framework
 	 */
 	mac_policy_initbsd();
-	p->p_mac_enforce = 0;
+	kernproc->p_mac_enforce = 0;
 #endif /* MAC */
 
 	/*
 	 * Create process 0.
 	 */
 	proc_list_lock();
-	LIST_INSERT_HEAD(&allproc, p, p_list);
-	p->p_pgrp = &pgrp0;
+	LIST_INSERT_HEAD(&allproc, kernproc, p_list);
+	kernproc->p_pgrp = &pgrp0;
 	LIST_INSERT_HEAD(PGRPHASH(0), &pgrp0, pg_hash);
 	LIST_INIT(&pgrp0.pg_members);
-	lck_mtx_init(&pgrp0.pg_mlock, proc_lck_grp, proc_lck_attr);
+#ifdef CONFIG_EMBEDDED
+	lck_mtx_init(&pgrp0.pg_mlock, proc_lck_grp, proc_lck_attr);	
+#else
+	lck_mtx_init(&pgrp0.pg_mlock, proc_mlock_grp, proc_lck_attr);
+#endif
 	/* There is no other bsd thread this point and is safe without pgrp lock */
-	LIST_INSERT_HEAD(&pgrp0.pg_members, p, p_pglist);
-	p->p_listflag |= P_LIST_INPGRP;
-	p->p_pgrpid = 0;
+	LIST_INSERT_HEAD(&pgrp0.pg_members, kernproc, p_pglist);
+	kernproc->p_listflag |= P_LIST_INPGRP;
+	kernproc->p_pgrpid = 0;
 
 	pgrp0.pg_session = &session0;
 	pgrp0.pg_membercnt = 1;
 
 	session0.s_count = 1;
-	session0.s_leader = p;
+	session0.s_leader = kernproc;
 	session0.s_listflags = 0;
+#ifdef CONFIG_EMBEDDED
 	lck_mtx_init(&session0.s_mlock, proc_lck_grp, proc_lck_attr);
+#else
+	lck_mtx_init(&session0.s_mlock, proc_mlock_grp, proc_lck_attr);
+#endif
 	LIST_INSERT_HEAD(SESSHASH(0), &session0, s_hash);
 	proc_list_unlock();
 
 #if CONFIG_LCTX
-	p->p_lctx = NULL;
+	kernproc->p_lctx = NULL;
 #endif
 
-	p->task = kernel_task;
+	kernproc->task = kernel_task;
 	
-	p->p_stat = SRUN;
-	p->p_flag = P_SYSTEM;
-	p->p_nice = NZERO;
-	p->p_pptr = p;
+	kernproc->p_stat = SRUN;
+	kernproc->p_flag = P_SYSTEM;
+	kernproc->p_nice = NZERO;
+	kernproc->p_pptr = kernproc;
 
-	TAILQ_INIT(&p->p_uthlist);
-	TAILQ_INSERT_TAIL(&p->p_uthlist, ut, uu_list);
+	TAILQ_INIT(&kernproc->p_uthlist);
+	TAILQ_INSERT_TAIL(&kernproc->p_uthlist, ut, uu_list);
 	
-	p->sigwait = FALSE;
-	p->sigwait_thread = THREAD_NULL;
-	p->exit_thread = THREAD_NULL;
-	p->p_csflags = CS_VALID;
+	kernproc->sigwait = FALSE;
+	kernproc->sigwait_thread = THREAD_NULL;
+	kernproc->exit_thread = THREAD_NULL;
+	kernproc->p_csflags = CS_VALID;
 
 	/*
 	 * Create credential.  This also Initializes the audit information.
-	 * XXX It is not clear what the initial values should be for audit ID,
-	 * XXX session ID, etc..
 	 */
 	bsd_init_kprintf("calling bzero\n");
 	bzero(&temp_cred, sizeof(temp_cred));
 	temp_cred.cr_ngroups = 1;
 
+	temp_cred.cr_audit.as_aia_p = &audit_default_aia;
+        /* XXX the following will go away with cr_au */
+	temp_cred.cr_au.ai_auid = AU_DEFAUDITID;
+
 	bsd_init_kprintf("calling kauth_cred_create\n");
-	p->p_ucred = kauth_cred_create(&temp_cred); 
+	kernproc->p_ucred = kauth_cred_create(&temp_cred); 
 
 	/* give the (already exisiting) initial thread a reference on it */
 	bsd_init_kprintf("calling kauth_cred_ref\n");
-	kauth_cred_ref(p->p_ucred);
-	ut->uu_context.vc_ucred = p->p_ucred;
+	kauth_cred_ref(kernproc->p_ucred);
+	ut->uu_context.vc_ucred = kernproc->p_ucred;
 	ut->uu_context.vc_thread = current_thread();
 
-	TAILQ_INIT(&p->aio_activeq);
-	TAILQ_INIT(&p->aio_doneq);
-	p->aio_active_count = 0;
-	p->aio_done_count = 0;
+	TAILQ_INIT(&kernproc->p_aio_activeq);
+	TAILQ_INIT(&kernproc->p_aio_doneq);
+	kernproc->p_aio_total_count = 0;
+	kernproc->p_aio_active_count = 0;
 
 	bsd_init_kprintf("calling file_lock_init\n");
 	file_lock_init();
 
 #if CONFIG_MACF
-	mac_cred_label_associate_kernel(p->p_ucred);
-	mac_task_label_update_cred (p->p_ucred, (struct task *) p->task);
+	mac_cred_label_associate_kernel(kernproc->p_ucred);
+	mac_task_label_update_cred (kernproc->p_ucred, (struct task *) kernproc->task);
 #endif
 
 	/* Create the file descriptor table. */
 	filedesc0.fd_refcnt = 1+1;	/* +1 so shutdown will not _FREE_ZONE */
-	p->p_fd = &filedesc0;
+	kernproc->p_fd = &filedesc0;
 	filedesc0.fd_cmask = cmask;
 	filedesc0.fd_knlistsize = -1;
 	filedesc0.fd_knlist = NULL;
@@ -510,8 +573,8 @@ bsd_init(void)
 	filedesc0.fd_knhashmask = 0;
 
 	/* Create the limits structures. */
-	p->p_limit = &limit0;
-	for (i = 0; i < sizeof(p->p_rlimit)/sizeof(p->p_rlimit[0]); i++)
+	kernproc->p_limit = &limit0;
+	for (i = 0; i < sizeof(kernproc->p_rlimit)/sizeof(kernproc->p_rlimit[0]); i++)
 		limit0.pl_rlimit[i].rlim_cur = 
 			limit0.pl_rlimit[i].rlim_max = RLIM_INFINITY;
 	limit0.pl_rlimit[RLIMIT_NOFILE].rlim_cur = NOFILE;
@@ -522,8 +585,8 @@ bsd_init(void)
 	limit0.pl_rlimit[RLIMIT_CORE] = vm_initial_limit_core;
 	limit0.pl_refcnt = 1;
 
-	p->p_stats = &pstats0;
-	p->p_sigacts = &sigacts0;
+	kernproc->p_stats = &pstats0;
+	kernproc->p_sigacts = &sigacts0;
 
 	/*
 	 * Charge root for two  processes: init and mach_init.
@@ -541,7 +604,7 @@ bsd_init(void)
 		bsd_init_kprintf("calling kmem_suballoc\n");
 		ret = kmem_suballoc(kernel_map,
 				&minimum,
-				(vm_size_t)BSD_PAGABLE_MAP_SIZE,
+				(vm_size_t)bsd_pageable_map_size,
 				TRUE,
 				VM_FLAGS_ANYWHERE,
 				&bsd_pageable_map);
@@ -561,8 +624,7 @@ bsd_init(void)
 
 	/* Initialize the execve() semaphore */
 	bsd_init_kprintf("calling semaphore_create\n");
-	ret = semaphore_create(kernel_task, &execve_semaphore,
-			       SYNC_POLICY_FIFO, BSD_SIMUL_EXECS -1);
+
 	if (ret != KERN_SUCCESS)
 		panic("bsd_init: Failed to create execve semaphore");
 
@@ -592,13 +654,14 @@ bsd_init(void)
 	/* Initialize mbuf's. */
 	bsd_init_kprintf("calling mbinit\n");
 	mbinit();
+	net_str_id_init(); /* for mbuf tags */
 #endif /* SOCKETS */
 
 	/*
 	 * Initializes security event auditing.
 	 * XXX: Should/could this occur later?
 	 */
-#if AUDIT
+#if CONFIG_AUDIT
 	bsd_init_kprintf("calling audit_init\n");
  	audit_init();  
 #endif
@@ -673,8 +736,8 @@ bsd_init(void)
 	domaininit();
 #endif /* SOCKETS */
 
-	p->p_fd->fd_cdir = NULL;
-	p->p_fd->fd_rdir = NULL;
+	kernproc->p_fd->fd_cdir = NULL;
+	kernproc->p_fd->fd_rdir = NULL;
 
 #ifdef GPROF
 	/* Initialize kernel profiling. */
@@ -689,7 +752,6 @@ bsd_init(void)
 	bsd_autoconf();
 
 #if CONFIG_DTRACE
-	extern void dtrace_postinit(void);
 	dtrace_postinit();
 #endif
 
@@ -703,7 +765,12 @@ bsd_init(void)
 	bsd_init_kprintf("calling loopattach\n");
 	loopattach();			/* XXX */
 #endif
-        
+
+#if PFLOG
+	/* Initialize packet filter log interface */
+	pfloginit();
+#endif /* PFLOG */
+
 #if NETHER > 0
 	/* Register the built-in dlil ethernet interface family */
 	bsd_init_kprintf("calling ether_family_init\n");
@@ -714,6 +781,9 @@ bsd_init(void)
 	/* Call any kext code that wants to run just after network init */
 	bsd_init_kprintf("calling net_init_run\n");
 	net_init_run();
+	
+	/* register user tunnel kernel control handler */
+	utun_register_control();
 #endif /* NETWORKING */
 
 	bsd_init_kprintf("calling vnode_pager_bootstrap\n");
@@ -750,7 +820,7 @@ bsd_init(void)
 			"Pages zero filled:\t\t%u.\n"
 			"Pages reactivated:\t\t%u.\n"
 			"Pageins:\t\t\t%u.\n"
-			"Pageouts:\t\t\t\%u.\n"
+			"Pageouts:\t\t\t%u.\n"
 			"Object cache: %u hits of %u lookups (%d%% hit rate)\n",
 
 			stat.free_count,
@@ -783,9 +853,15 @@ bsd_init(void)
 		rootdevice[0] = '\0';
 #if NFSCLIENT
 		if (mountroot == netboot_mountroot) {
-			printf("bsd_init: netboot_mountroot failed,"
-			       " errno = %d\n", err);
-			panic("bsd_init: failed to mount network root: %s", PE_boot_args());
+			PE_display_icon( 0, "noroot");  /* XXX a netboot-specific icon would be nicer */
+			vc_progress_set(FALSE, 0);
+			for (i=1; 1; i*=2) {
+				printf("bsd_init: failed to mount network root, error %d, %s\n",
+					err, PE_boot_args());
+				printf("We are hanging here...\n");
+				IOSleep(i*60*1000);
+			}
+			/*NOTREACHED*/
 		}
 #endif
 		printf("cannot mount root, errno = %d\n", err);
@@ -795,7 +871,7 @@ bsd_init(void)
 	IOSecureBSDRoot(rootdevice);
 
 	context.vc_thread = current_thread();
-	context.vc_ucred = p->p_ucred;
+	context.vc_ucred = kernproc->p_ucred;
 	mountlist.tqh_first->mnt_flag |= MNT_ROOTFS;
 
 	bsd_init_kprintf("calling VFS_ROOT\n");
@@ -812,7 +888,15 @@ bsd_init(void)
 		int err;
 		/* post mount setup */
 		if ((err = netboot_setup()) != 0) {
-			panic("bsd_init: NetBoot could not find root, %d: %s", err, PE_boot_args());
+			PE_display_icon( 0, "noroot");  /* XXX a netboot-specific icon would be nicer */
+			vc_progress_set(FALSE, 0);
+			for (i=1; 1; i*=2) {
+				printf("bsd_init: NetBoot could not find root, error %d: %s\n",
+					err, PE_boot_args());
+				printf("We are hanging here...\n");
+				IOSleep(i*60*1000);
+			}
+			/*NOTREACHED*/
 		}
 	}
 #endif
@@ -839,9 +923,9 @@ bsd_init(void)
 	}
 #endif /* CONFIG_IMAGEBOOT */
   
-	microtime(&p->p_stats->p_start);	/* for compat sake */
-	microtime(&p->p_start);
-	p->p_rtime.tv_sec = p->p_rtime.tv_usec = 0;
+	/* set initial time; all other resource data is  already zero'ed */
+	microtime(&kernproc->p_start);
+	kernproc->p_stats->p_start = kernproc->p_start;	/* for compat */
 
 #if DEVFS
 	{
@@ -854,14 +938,24 @@ bsd_init(void)
 	
 	/* Initialize signal state for process 0. */
 	bsd_init_kprintf("calling siginit\n");
-	siginit(p);
+	siginit(kernproc);
 
 	bsd_init_kprintf("calling bsd_utaskbootstrap\n");
 	bsd_utaskbootstrap();
 
-#if __i386__
+#if defined(__LP64__)
+	kernproc->p_flag |= P_LP64;
+	printf("Kernel is LP64\n");
+#endif
+#if __i386__ || __x86_64__
 	/* this should be done after the root filesystem is mounted */
-	error = set_archhandler(p, CPU_TYPE_POWERPC);
+	error = set_archhandler(kernproc, CPU_TYPE_POWERPC);
+	// 10/30/08 - gab: <rdar://problem/6324501>
+	// if default 'translate' can't be found, see if the understudy is available
+	if (ENOENT == error) {
+		strlcpy(exec_archhandler_ppc.path, kRosettaStandIn_str, MAXPATHLEN);
+		error = set_archhandler(kernproc, CPU_TYPE_POWERPC);
+	}
 	if (error) /* XXX make more generic */
 		exec_archhandler_ppc.path[0] = 0;
 #endif	
@@ -873,10 +967,19 @@ bsd_init(void)
 		mountroot_post_hook();
 
 #if 0 /* not yet */
-	IOKitJettisonKLD();
-	consider_zone_gc();
+	consider_zone_gc(FALSE);
 #endif
-	
+
+#if CONFIG_EMBEDDED
+	/*
+	 * XXX workaround for:
+	 * <rdar://problem/6378731> Kirkwood7A135: PPP KEXT no longer loads
+	 */
+	OSKextLoadKextWithIdentifier("com.apple.nke.ppp");
+	OSKextLoadKextWithIdentifier("com.apple.nke.l2tp");
+	OSKextLoadKextWithIdentifier("com.apple.nke.pptp");
+#endif
+
 	bsd_init_kprintf("done\n");
 }
 
@@ -894,11 +997,8 @@ bsdinit_task(void)
 
 	thread = current_thread();
 	(void) host_set_exception_ports(host_priv_self(),
-					EXC_MASK_ALL & ~(EXC_MASK_SYSCALL |
-							 EXC_MASK_MACH_SYSCALL |
-							 EXC_MASK_RPC_ALERT |
-							 EXC_MASK_CRASH),
-					(mach_port_t)ux_exception_port,
+					EXC_MASK_ALL & ~(EXC_MASK_RPC_ALERT),//pilotfish (shark) needs this port
+					(mach_port_t) ux_exception_port,
 					EXCEPTION_DEFAULT| MACH_EXCEPTION_CODES,
 					0);
 
@@ -991,17 +1091,24 @@ bsd_utaskbootstrap(void)
 	thread_t thread;
 	struct uthread *ut;
 
-	thread = cloneproc(kernproc, 0);
+	/*
+	 * Clone the bootstrap process from the kernel process, without
+	 * inheriting either task characteristics or memory from the kernel;
+	 */
+	thread = cloneproc(TASK_NULL, kernproc, FALSE);
+
 	/* Hold the reference as it will be dropped during shutdown */
 	initproc = proc_find(1);				
 #if __PROC_INTERNAL_DEBUG
 	if (initproc == PROC_NULL)
 		panic("bsd_utaskbootstrap: initproc not set\n");
 #endif
-	/* Set the launch time for init */
-	microtime(&initproc->p_start);
-	microtime(&initproc->p_stats->p_start);	/* for compat sake */
-	
+	/*
+	 * Since we aren't going back out the normal way to our parent,
+	 * we have to drop the transition locks explicitly.
+	 */
+	proc_signalend(initproc, 0);
+	proc_transend(initproc, 0);
 
 	ut = (struct uthread *)get_bsdthread_info(thread);
 	ut->uu_sigmask = 0;
@@ -1027,9 +1134,13 @@ parse_bsd_args(void)
 	if (PE_parse_boot_argn("-l", namep, sizeof (namep))) /* leaks logging */
 		turn_on_log_leaks = 1;
 
-	PE_parse_boot_argn("srv", &srv, sizeof (srv));
+	/* disable 64 bit grading */
+	if (PE_parse_boot_argn("-no64exec", namep, sizeof (namep)))
+		bootarg_no64exec = 1;
+
 	PE_parse_boot_argn("ncl", &ncl, sizeof (ncl));
-	if (PE_parse_boot_argn("nbuf", &max_nbuf_headers, sizeof (max_nbuf_headers))) {
+	if (PE_parse_boot_argn("nbuf", &max_nbuf_headers,
+				sizeof (max_nbuf_headers))) {
 		customnbuf = 1;
 	}
 #if !defined(SECURE_KERNEL)
@@ -1040,6 +1151,35 @@ parse_bsd_args(void)
 	if (PE_parse_boot_argn("msgbuf", &msgbuf, sizeof (msgbuf))) {
 		log_setsize(msgbuf);
 	}
+}
+
+void
+bsd_exec_setup(int scale)
+{
+
+	switch (scale) {
+		case 0:
+		case 1:
+			bsd_simul_execs = BSD_SIMUL_EXECS;
+			break;
+		case 2:
+		case 3:
+			bsd_simul_execs = 65;
+			break;
+		case 4:
+		case 5:
+			bsd_simul_execs = 129;
+			break;
+		case 6:
+		case 7:
+			bsd_simul_execs = 257;
+			break;
+		default:
+			bsd_simul_execs = 513;
+			break;
+			
+	}
+	bsd_pageable_map_size = (bsd_simul_execs * (NCARGS + PAGE_SIZE));
 }
 
 #if !NFSCLIENT

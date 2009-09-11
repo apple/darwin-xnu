@@ -205,7 +205,7 @@ bool OSOrderedSet::setLastObject(const OSMetaClassBase *anObject)
 
 
 #define ORDER(obj1,obj2) \
-    (ordering ? ((*ordering)( (OSObject *) obj1, (OSObject *) obj2, orderingRef)) : 0)
+    (ordering ? ((*ordering)( (const OSObject *) obj1, (const OSObject *) obj2, orderingRef)) : 0)
 
 bool OSOrderedSet::setObject(const OSMetaClassBase *anObject )
 {
@@ -264,13 +264,13 @@ OSObject *OSOrderedSet::getObject( unsigned int index ) const
 //    if( pri)
 //	*pri = array[index].pri;
 
-    return( (OSObject *) array[index].obj );
+    return( const_cast<OSObject *>((const OSObject *) array[index].obj) );
 }
 
 OSObject *OSOrderedSet::getFirstObject() const
 {
     if( count)
-        return( (OSObject *) array[0].obj );
+        return( const_cast<OSObject *>((const OSObject *) array[0].obj) );
     else
 	return( 0 );
 }
@@ -278,7 +278,7 @@ OSObject *OSOrderedSet::getFirstObject() const
 OSObject *OSOrderedSet::getLastObject() const
 {
     if( count)
-        return( (OSObject *) array[count-1].obj );
+        return( const_cast<OSObject *>((const OSObject *) array[count-1].obj) );
     else
 	return( 0 );
 }
@@ -342,7 +342,7 @@ getNextObjectForIterator(void *inIterator, OSObject **ret) const
     unsigned int index = (*iteratorP)++;
 
     if (index < count)
-        *ret = (OSObject *) array[index].obj;
+        *ret = const_cast<OSObject *>((const OSObject *) array[index].obj);
     else
         *ret = 0;
 

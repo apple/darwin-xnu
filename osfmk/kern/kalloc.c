@@ -92,7 +92,10 @@ vm_size_t kalloc_kernmap_size;	/* size of kallocs that can come from kernel map 
 unsigned int kalloc_large_inuse;
 vm_size_t    kalloc_large_total;
 vm_size_t    kalloc_large_max;
-vm_size_t    kalloc_largest_allocated = 0;
+volatile vm_size_t    kalloc_largest_allocated = 0;
+
+vm_offset_t	kalloc_map_min;
+vm_offset_t	kalloc_map_max;
 
 /*
  *	All allocations of size less than kalloc_max are rounded to the
@@ -185,19 +188,25 @@ kalloc_init(
 
 	/* 
 	 * Scale the kalloc_map_size to physical memory size: stay below 
-	 * 1/8th the total zone map size, or 128 MB.
+	 * 1/8th the total zone map size, or 128 MB (for a 32-bit kernel).
 	 */
-	kalloc_map_size = sane_size >> 5;
+	kalloc_map_size = (vm_size_t)(sane_size >> 5);
+#if !__LP64__
 	if (kalloc_map_size > KALLOC_MAP_SIZE_MAX)
 		kalloc_map_size = KALLOC_MAP_SIZE_MAX;
+#endif /* !__LP64__ */
 	if (kalloc_map_size < KALLOC_MAP_SIZE_MIN)
 		kalloc_map_size = KALLOC_MAP_SIZE_MIN;
 
 	retval = kmem_suballoc(kernel_map, &min, kalloc_map_size,
-			       FALSE, VM_FLAGS_ANYWHERE, &kalloc_map);
+			       FALSE, VM_FLAGS_ANYWHERE | VM_FLAGS_PERMANENT,
+			       &kalloc_map);
 
 	if (retval != KERN_SUCCESS)
 		panic("kalloc_init: kmem_suballoc failed");
+
+	kalloc_map_min = min;
+	kalloc_map_max = min + kalloc_map_size - 1;
 
 	/*
 	 *	Ensure that zones up to size 8192 bytes exist.
@@ -212,6 +221,7 @@ kalloc_init(
 	kalloc_max_prerounded = kalloc_max / 2 + 1;
 	/* size it to be more than 16 times kalloc_max (256k) for allocations from kernel map */
 	kalloc_kernmap_size = (kalloc_max * 16) + 1;
+	kalloc_largest_allocated = kalloc_kernmap_size;
 
 	/*
 	 *	Allocate a zone for each size we are going to handle.
@@ -242,7 +252,7 @@ kalloc_canblock(
 
 	/*
 	 * If size is too large for a zone, then use kmem_alloc.
-	 * (We use kmem_alloc instead of kmem_alloc_wired so that
+	 * (We use kmem_alloc instead of kmem_alloc_kobject so that
 	 * krealloc can use kmem_realloc.)
 	 */
 
@@ -255,17 +265,27 @@ kalloc_canblock(
 		}
 
 		if (size >= kalloc_kernmap_size) {
+			volatile vm_offset_t prev_largest;
 		        alloc_map = kernel_map;
-
-			if (size > kalloc_largest_allocated)
-			        kalloc_largest_allocated = size;
+			/* Thread-safe version of the workaround for 4740071
+			 * (a double FREE())
+			 */
+			do {
+				prev_largest = kalloc_largest_allocated;
+			} while ((size > prev_largest) && !OSCompareAndSwap((UInt32)prev_largest, (UInt32)size, (volatile UInt32 *) &kalloc_largest_allocated));
 		} else
 			alloc_map = kalloc_map;
 
-		if (kmem_alloc(alloc_map, (vm_offset_t *)&addr, size) != KERN_SUCCESS) 
-			addr = NULL;
+		if (kmem_alloc(alloc_map, (vm_offset_t *)&addr, size) != KERN_SUCCESS) {
+			if (alloc_map != kernel_map) {
+				if (kmem_alloc(kernel_map, (vm_offset_t *)&addr, size) != KERN_SUCCESS)
+					addr = NULL;
+		}
+			else
+				addr = NULL;
+		}
 
-		if (addr) {
+		if (addr != NULL) {
 		        kalloc_large_inuse++;
 		        kalloc_large_total += size;
 
@@ -453,6 +473,8 @@ kget(
 	return(zget(k_zone[zindex]));
 }
 
+volatile SInt32 kfree_nop_count = 0;
+
 void
 kfree(
 	void 		*data,
@@ -460,15 +482,14 @@ kfree(
 {
 	register int zindex;
 	register vm_size_t freesize;
-	vm_map_t alloc_map = VM_MAP_NULL;
+	vm_map_t alloc_map = kernel_map;
 
 	/* if size was too large for a zone, then use kmem_free */
 
 	if (size >= kalloc_max_prerounded) {
-	        if (size >=  kalloc_kernmap_size) {
-			alloc_map = kernel_map;
-
-			if (size > kalloc_largest_allocated)
+		if ((((vm_offset_t) data) >= kalloc_map_min) && (((vm_offset_t) data) <= kalloc_map_max))
+			alloc_map = kalloc_map;
+		if (size > kalloc_largest_allocated) {
 			        /*
 				 * work around double FREEs of small MALLOCs
 				 * this use to end up being a nop
@@ -488,9 +509,10 @@ kfree(
 				 * to the above scenario, but it would still be wrong and
 				 * cause serious damage.
 				 */
+
+				OSAddAtomic(1, &kfree_nop_count);
 			        return;
-		} else
-			alloc_map = kalloc_map;
+		}
 		kmem_free(alloc_map, (vm_offset_t)data, size);
 
 		kalloc_large_total -= size;

@@ -141,9 +141,11 @@
 			 EXC_MASK_SYSCALL |			\
 			 EXC_MASK_MACH_SYSCALL |		\
 			 EXC_MASK_RPC_ALERT |			\
-			 EXC_MASK_CRASH |			\
 			 EXC_MASK_MACHINE)
 
+#ifdef	KERNEL_PRIVATE
+#define EXC_MASK_VALID	(EXC_MASK_ALL | EXC_MASK_CRASH)
+#endif /* KERNEL_PRIVATE */
 
 #define FIRST_EXCEPTION		1	/* ZERO is illegal */
 

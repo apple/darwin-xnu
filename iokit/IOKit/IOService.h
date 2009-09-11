@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2009 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -56,6 +56,10 @@
 extern "C" {
 #include <kern/thread_call.h>
 }
+
+#ifndef UINT64_MAX
+#define UINT64_MAX        18446744073709551615ULL
+#endif
 
 enum {
     kIODefaultProbeScore 	= 0
@@ -147,6 +151,10 @@ typedef void (*IOInterruptAction)( OSObject * target, void * refCon,
 
 typedef bool (*IOServiceNotificationHandler)( void * target, void * refCon,
                   IOService * newService );
+
+typedef bool (*IOServiceMatchingNotificationHandler)( void * target, void * refCon,
+                  IOService * newService,
+				  IONotifier * notifier );
 
 /*! @typedef IOServiceInterestHandler
     @param target Reference supplied when the notification was registered.
@@ -272,7 +280,7 @@ The class name that the service will attempt to allocate when a user client conn
 	<code>kIOKitDebugKey, extern const OSSymbol * gIOKitDebugKey, "IOKitDebug"</code>
 <br>
 Set some debug flags for logging the driver loading process. Flags are defined in <code>IOKit/IOKitDebug.h</code>, but <code>65535</code> works well.*/
-    
+
 class IOService : public IORegistryEntry
 {
     OSDeclareDefaultStructors(IOService)
@@ -292,7 +300,8 @@ private:
     SInt32		__providerGeneration;
     IOService *		__owner;
     IOOptionBits	__state[2];
-    IOOptionBits	__reserved[4];
+    uint64_t		__timeBusy;
+    uint64_t		__accumBusy;
     IOServicePM *	pwrMgt;
 
 protected:
@@ -301,7 +310,7 @@ protected:
 
 public:
     // DEPRECATED
-    IOPMprot * 	 	pm_vars;
+    void *          pm_vars;
 
 public:
     /* methods available in Mac OS X 10.1 or later */
@@ -357,14 +366,31 @@ public:
 
     virtual void systemWillShutdown( IOOptionBits specifier );
 
+/*! @function copyClientWithCategory
+    @availability Mac OS X v10.6 and later
+    @param category An OSSymbol corresponding to an IOMatchCategory matching property.
+	@result Returns a reference to the IOService child with the given category. The result should be released by the caller.
+*/
+
+    virtual IOService * copyClientWithCategory( const OSSymbol * category );
+
 private:
+#if __LP64__
+    OSMetaClassDeclareReservedUnused(IOService, 0);
+    OSMetaClassDeclareReservedUnused(IOService, 1);
+    OSMetaClassDeclareReservedUnused(IOService, 2);
+    OSMetaClassDeclareReservedUnused(IOService, 3);
+    OSMetaClassDeclareReservedUnused(IOService, 4);
+    OSMetaClassDeclareReservedUnused(IOService, 5);
+#else
     OSMetaClassDeclareReservedUsed(IOService, 0);
     OSMetaClassDeclareReservedUsed(IOService, 1);
     OSMetaClassDeclareReservedUsed(IOService, 2);
     OSMetaClassDeclareReservedUsed(IOService, 3);
     OSMetaClassDeclareReservedUsed(IOService, 4);
+    OSMetaClassDeclareReservedUsed(IOService, 5);
+#endif
 
-    OSMetaClassDeclareReservedUnused(IOService, 5);
     OSMetaClassDeclareReservedUnused(IOService, 6);
     OSMetaClassDeclareReservedUnused(IOService, 7);
     OSMetaClassDeclareReservedUnused(IOService, 8);
@@ -592,13 +618,17 @@ public:
 
     virtual void adjustBusy( SInt32 delta );
 
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+	IOReturn waitQuiet(mach_timespec_t * timeout)
+	APPLE_KEXT_DEPRECATED;
+
 /*! @function waitQuiet
     @abstract Waits for an IOService object's <code>busyState</code> to be zero.
     @discussion Blocks the caller until an IOService object is non busy.
-    @param timeout Specifies a maximum time to wait.
+	@param timeout The maximum time to wait in nanoseconds. Default is to wait forever.
     @result Returns an error code if Mach synchronization primitives fail, <code>kIOReturnTimeout</code>, or <code>kIOReturnSuccess</code>. */
     
-    virtual IOReturn waitQuiet( mach_timespec_t * timeout = 0 );
+    IOReturn waitQuiet(uint64_t timeout = UINT64_MAX);
 
     /* Matching */
 
@@ -644,7 +674,7 @@ public:
     /* Notifications */
 
 /*! @function addNotification
-    @abstract Adds a persistant notification handler to be notified of IOService events.
+    @abstract Deprecated use addMatchingNotification(). Adds a persistant notification handler to be notified of IOService events.
     @discussion IOService will deliver notifications of changes in state of an IOService object to registered clients. The type of notification is specified by a symbol, for example <code>gIOMatchedNotification</code> or <code>gIOTerminatedNotification</code>, and notifications will only include IOService objects that match the supplied matching dictionary. Notifications are ordered by a priority set with <code>addNotification</code>. When the notification is installed, its handler will be called with each of any currently existing IOService objects that are in the correct state (eg. registered) and match the supplied matching dictionary, avoiding races between finding preexisting and new IOService events. The notification request is identified by an instance of an IONotifier object, through which it can be enabled, disabled, or removed. <code>addNotification</code> consumes a retain count on the matching dictionary when the notification is removed.
     @param type An OSSymbol identifying the type of notification and IOService state:
 <br>	<code>gIOPublishNotification</code> Delivered when an IOService object is registered.
@@ -663,10 +693,33 @@ public:
                             const OSSymbol * type, OSDictionary * matching,
                             IOServiceNotificationHandler handler,
                             void * target, void * ref = 0,
+                            SInt32 priority = 0 )
+	APPLE_KEXT_DEPRECATED;
+
+/*! @function addMatchingNotification
+    @abstract Adds a persistant notification handler to be notified of IOService events.
+    @discussion IOService will deliver notifications of changes in state of an IOService object to registered clients. The type of notification is specified by a symbol, for example <code>gIOMatchedNotification</code> or <code>gIOTerminatedNotification</code>, and notifications will only include IOService objects that match the supplied matching dictionary. Notifications are ordered by a priority set with <code>addNotification</code>. When the notification is installed, its handler will be called with each of any currently existing IOService objects that are in the correct state (eg. registered) and match the supplied matching dictionary, avoiding races between finding preexisting and new IOService events. The notification request is identified by an instance of an IONotifier object, through which it can be enabled, disabled, or removed. <code>addMatchingNotification</code> does not consume a reference on the matching dictionary when the notification is removed, unlike addNotification.
+    @param type An OSSymbol identifying the type of notification and IOService state:
+<br>	<code>gIOPublishNotification</code> Delivered when an IOService object is registered.
+<br>	<code>gIOFirstPublishNotification</code> Delivered when an IOService object is registered, but only once per IOService instance. Some IOService objects may be reregistered when their state is changed.
+<br>	<code>gIOMatchedNotification</code> Delivered when an IOService object has been matched with all client drivers, and they have been probed and started.
+<br>	<code>gIOFirstMatchNotification</code> Delivered when an IOService object has been matched with all client drivers, but only once per IOService instance. Some IOService objects may be reregistered when their state is changed.
+<br>	<code>gIOTerminatedNotification</code> Delivered after an IOService object has been terminated, during its finalize stage.
+    @param matching A matching dictionary to restrict notifications to only matching IOService objects. The dictionary is retained while the notification is installed. (Differs from addNotification).
+    @param handler A C function callback to deliver notifications.
+    @param target An instance reference for the callback's use.
+    @param ref A reference constant for the callback's use.
+    @param priority A constant ordering all notifications of a each type.
+    @result An instance of an IONotifier object that can be used to control or destroy the notification request. */
+
+    static IONotifier * addMatchingNotification(
+                            const OSSymbol * type, OSDictionary * matching,
+                            IOServiceMatchingNotificationHandler handler,
+                            void * target, void * ref = 0,
                             SInt32 priority = 0 );
 
 /*! @function waitForService
-    @abstract Waits for a matching to service to be published.
+    @abstract Deprecated use waitForMatchingService(). Waits for a matching to service to be published.
     @discussion Provides a method of waiting for an IOService object matching the supplied matching dictionary to be registered and fully matched. 
     @param matching The matching dictionary describing the desired IOService object. <code>waitForService</code> consumes one reference of the matching dictionary.
     @param timeout The maximum time to wait.
@@ -674,6 +727,16 @@ public:
 
     static IOService * waitForService( OSDictionary * matching,
                             mach_timespec_t * timeout = 0);
+
+/*! @function waitForMatchingService
+    @abstract Waits for a matching to service to be published.
+    @discussion Provides a method of waiting for an IOService object matching the supplied matching dictionary to be registered and fully matched. 
+    @param matching The matching dictionary describing the desired IOService object. (Does not consume a reference of the matching dictionary - differs from waitForService() which does consume a reference on the matching dictionary.)
+	@param timeout The maximum time to wait in nanoseconds. Default is to wait forever.
+    @result A published IOService object matching the supplied dictionary. waitForMatchingService returns a reference to the IOService which should be released by the caller. (Differs from waitForService() which does not retain the returned object.) */
+
+    static IOService * waitForMatchingService( OSDictionary * matching,
+                            uint64_t timeout = UINT64_MAX);
 
 /*! @function getMatchingServices
     @abstract Finds the set of current published IOService objects matching a matching dictionary.
@@ -683,24 +746,7 @@ public:
 
     static OSIterator * getMatchingServices( OSDictionary * matching );
 
-/*! @function installNotification
-    @abstract Adds a persistant notification handler to be notified of IOService events.
-    @discussion A lower level interface to @link addNotification addNotification@/link that installs a handler and returns the current set of IOService objects that are in the specified state and match the matching dictionary.
-    @param type See <code>addNotification</code>.
-    @param matching See <code>addNotification</code>.
-    @param handler See <code>addNotification</code>.
-    @param self See <code>addNotification</code>.
-    @param ref See <code>addNotification</code>.
-    @param priority See <code>addNotification</code>.
-    @param existing Returns an iterator over the set of IOService objects that are currently in the specified state and match the matching dictionary.
-    @result See <code>addNotification</code>.  */
-
-    static IONotifier * installNotification(
-			const OSSymbol * type, OSDictionary * matching,
-			IOServiceNotificationHandler handler,
-			void * target, void * ref,
-			SInt32 priority, OSIterator ** existing );
-
+public:
     /* Helpers to make matching dictionaries for simple cases,
      * they add keys to an existing dictionary, or create one. */
 
@@ -775,6 +821,17 @@ public:
 
     static OSDictionary * propertyMatching( const OSSymbol * key, const OSObject * value,
 			OSDictionary * table = 0 );
+
+/*! @function registryEntryIDMatching
+    @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a IORegistryEntryID match.
+    @discussion <code>registryEntryIDMatching</code> creates a matching dictionary that specifies the IOService object with the assigned registry entry ID (returned by <code>IORegistryEntry::getRegistryEntryID()</code>). An existing dictionary may be passed in, in which case the matching properties will be added to that dictionary rather than creating a new one.
+    @param name The service's ID. Matching is successful on the IOService object that return that ID from the <code>IORegistryEntry::getRegistryEntryID()</code> method.
+    @param table If zero, <code>registryEntryIDMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
+    @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
+
+    static OSDictionary * registryEntryIDMatching( uint64_t entryID,
+			OSDictionary * table = 0 );
+
 
 /*! @function addLocation
     @abstract Adds a location matching property to an existing dictionary.
@@ -1057,9 +1114,10 @@ public:
 /*! @function messageClient
     @abstract Sends a generic message to an attached client.
     @discussion A provider may deliver messages via the @link message message@/link method to its clients informing them of state changes, such as <code>kIOMessageServiceIsTerminated</code> or <code>kIOMessageServiceIsSuspended</code>. Certain messages are defined by the I/O Kit in <code>IOMessage.h</code> while others may be family dependent. This method may be called in the provider to send a message to the specified client, which may be useful for overrides.
-    @param type A type defined in <code>IOMessage.h</code> or defined by the provider family.
+    @param messageType A type defined in <code>IOMessage.h</code> or defined by the provider family.
     @param client A client of the IOService to send the message.
-    @param argument An argument defined by the provider family, not used by IOService.
+    @param messageArgument An argument defined by the provider family, not used by IOService.
+    @param argSize Specifies the size of messageArgument, in bytes.  If argSize is non-zero, messageArgument is treated as a pointer to argSize bytes of data.  If argSize is 0 (the default), messageArgument is treated as an ordinal and passed by value.
     @result The return code from the client message call. */
     
     virtual IOReturn messageClient( UInt32 messageType, OSObject * client,
@@ -1070,6 +1128,7 @@ public:
     @discussion A provider may deliver messages via the @link message message@/link method to its clients informing them of state changes, such as <code>kIOMessageServiceIsTerminated</code> or <code>kIOMessageServiceIsSuspended</code>. Certain messages are defined by the I/O Kit in <code>IOMessage.h</code> while others may be family dependent. This method may be called in the provider to send a message to all the attached clients, via the @link messageClient messageClient@/link method.
     @param type A type defined in <code>IOMessage.h</code> or defined by the provider family.
     @param argument An argument defined by the provider family, not used by IOService.
+    @param argSize Specifies the size of argument, in bytes.  If argSize is non-zero, argument is treated as a pointer to argSize bytes of data.  If argSize is 0 (the default), argument is treated as an ordinal and passed by value.
     @result Any non-<code>kIOReturnSuccess</code> return codes returned by the clients, or <code>kIOReturnSuccess</code> if all return <code>kIOReturnSuccess</code>. */
 
     virtual IOReturn messageClients( UInt32 type,
@@ -1130,64 +1189,119 @@ public:
     virtual int errnoFromReturn( IOReturn rtn );
 
     /* * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-    /* * * * * * * * * * * * Internals * * * * * * * * * * * */
+    /* * * * * * * * * * end of IOService API  * * * * * * * */
     /* * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-public:
+    /* for IOInterruptController implementors */
+
     int               _numInterruptSources;
     IOInterruptSource *_interruptSources;
 
-    static void initialize( void );
-    
+    /* overrides */
     virtual bool serializeProperties( OSSerialize * s ) const;
 
+#ifdef KERNEL_PRIVATE
+    /* Apple only SPI to control CPU low power modes */
+    void   setCPUSnoopDelay(UInt32 ns);
+    UInt32 getCPUSnoopDelay();
+#endif
+    void   requireMaxBusStall(UInt32 ns);
+    void   requireMaxInterruptDelay(uint32_t ns);
+
+    /* * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+    /* * * * * * * * * * * * Internals * * * * * * * * * * * */
+    /* * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#ifdef XNU_KERNEL_PRIVATE
+public:
+	// called from other xnu components
+    static void initialize( void );
     static void setPlatform( IOPlatformExpert * platform);
     static void setPMRootDomain( class IOPMrootDomain * rootDomain );
-
     static IOReturn catalogNewDrivers( OSOrderedSet * newTables );
+    uint64_t getAccumulatedBusyTime( void );
+
+private:
     static IOReturn waitMatchIdle( UInt32 ms );
+    static IONotifier * installNotification(
+			const OSSymbol * type, OSDictionary * matching,
+			IOServiceMatchingNotificationHandler handler,
+			void * target, void * ref,
+			SInt32 priority, OSIterator ** existing );
+#if !defined(__LP64__)
+    static IONotifier * installNotification(
+			const OSSymbol * type, OSDictionary * matching,
+			IOServiceNotificationHandler handler,
+			void * target, void * ref,
+			SInt32 priority, OSIterator ** existing);
+#endif /* !defined(__LP64__) */
+#endif
 
-    static IOService * resources( void );
-    virtual bool checkResources( void );
-    virtual bool checkResource( OSObject * matching );
+private:
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+	bool checkResources( void );
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    bool checkResource( OSObject * matching );
 
-    virtual void probeCandidates( OSOrderedSet * matches );
-    virtual bool startCandidate( IOService * candidate );
-    virtual IOService * getClientWithCategory( const OSSymbol * category );
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    void probeCandidates( OSOrderedSet * matches );
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    bool startCandidate( IOService * candidate );
 
-    virtual bool passiveMatch( OSDictionary * matching, bool changesOK = false);
+public:
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IOService * getClientWithCategory( const OSSymbol * category )
+	APPLE_KEXT_DEPRECATED;
+	// copyClientWithCategory is the public replacement
 
-    virtual void startMatching( IOOptionBits options = 0 );
-    virtual void doServiceMatch( IOOptionBits options );
-    virtual void doServiceTerminate( IOOptionBits options );
+#ifdef XNU_KERNEL_PRIVATE
+    /* Callable within xnu source only - but require vtable entries to be visible */
+public:
+#else
+private:
+#endif
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    bool passiveMatch( OSDictionary * matching, bool changesOK = false);
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    void startMatching( IOOptionBits options = 0 );
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    void doServiceMatch( IOOptionBits options );
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    void doServiceTerminate( IOOptionBits options );
 
-    static OSObject * getExistingServices( OSDictionary * matching,
+private:
+    static OSObject * copyExistingServices( OSDictionary * matching,
 		 IOOptionBits inState, IOOptionBits options = 0 );
 
     static IONotifier * setNotification(
 			const OSSymbol * type, OSDictionary * matching,
-                    	IOServiceNotificationHandler handler,
+                    	IOServiceMatchingNotificationHandler handler,
                         void * target, void * ref,
                         SInt32 priority = 0 );
 
     static IONotifier * doInstallNotification(
 			const OSSymbol * type, OSDictionary * matching,
-			IOServiceNotificationHandler handler,
+			IOServiceMatchingNotificationHandler handler,
 			void * target, void * ref,
 			SInt32 priority, OSIterator ** existing );
 
     static bool syncNotificationHandler( void * target, void * ref,
-			IOService * newService );
+			IOService * newService, IONotifier * notifier  );
 
-    virtual void deliverNotification( const OSSymbol * type,
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+	void deliverNotification( const OSSymbol * type,
                             IOOptionBits orNewState, IOOptionBits andNewState );
 
     bool invokeNotifer( class _IOServiceNotifier * notify );
 
-    virtual void unregisterAllInterest( void );
+	APPLE_KEXT_COMPATIBILITY_VIRTUAL
+	void unregisterAllInterest( void );
 
-    virtual IOReturn waitForState( UInt32 mask, UInt32 value,
+	APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IOReturn waitForState( UInt32 mask, UInt32 value,
 				 mach_timespec_t * timeout = 0 );
+
+    IOReturn waitForState( UInt32 mask, UInt32 value, uint64_t timeout );
 
     UInt32 _adjustBusy( SInt32 delta );
 
@@ -1195,7 +1309,7 @@ public:
     void scheduleTerminatePhase2( IOOptionBits options = 0 );
     void scheduleStop( IOService * provider );
     void scheduleFinalize( void );
-    static void terminateThread( void * arg );
+    static void terminateThread( void * arg, wait_result_t unused );
     static void terminateWorker( IOOptionBits options );
     static void actionWillTerminate( IOService * victim, IOOptionBits options, 
                                         OSArray * doPhase2List );
@@ -1203,514 +1317,448 @@ public:
     static void actionFinalize( IOService * victim, IOOptionBits options );
     static void actionStop( IOService * client, IOService * provider );
 
-    virtual IOReturn resolveInterrupt(IOService *nub, int source);
-    virtual IOReturn lookupInterrupt(int source, bool resolve, IOInterruptController **interruptController);
+	APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IOReturn resolveInterrupt(IOService *nub, int source);
+	APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IOReturn lookupInterrupt(int source, bool resolve, IOInterruptController **interruptController);
 
-    // SPI to control CPU low power modes
-    void  setCPUSnoopDelay(UInt32 ns);
-    UInt32 getCPUSnoopDelay();
-    void   requireMaxBusStall(UInt32 ns);
-
-    void PMfree( void );
+#ifdef XNU_KERNEL_PRIVATE
+    /* end xnu internals */
+#endif
 
     /* power management */
-    
+public:
+
 /*! @function PMinit
     @abstract Initializes power management for a driver.
     @discussion <code>PMinit</code> allocates and initializes the power management instance variables, and it should be called before accessing those variables or calling the power management methods. This method should be called inside the driver's <code>start</code> routine and must be paired with a call to @link PMstop PMstop@/link.
-    
-    Most calls to <code>PMinit</code> are followed by calls to @link joinPMtree joinPMtree@/link and @link registerPowerDriver registerPowerDriver@/link.
-*/
-    virtual void PMinit (void );
+    Most calls to <code>PMinit</code> are followed by calls to @link joinPMtree joinPMtree@/link and @link registerPowerDriver registerPowerDriver@/link. */
+
+    virtual void PMinit( void );
 
 /*! @function PMstop
     @abstract Frees and removes the driver from power management.
-    @discussion The power managment variables don't exist after this call and the power managment methods in the caller shouldn't be called. 
-    
-    Calling <code>PMstop</code> cleans up for the three power management initialization calls: @link PMinit PMinit@/link, @link joinPMtree joinPMtree@/link, and @link registerPowerDriver registerPowerDriver@/link.
-*/
-    virtual void PMstop ( void );
+    @discussion The power managment variables don't exist after this call and the power managment methods in the caller shouldn't be called.    
+    Calling <code>PMstop</code> cleans up for the three power management initialization calls: @link PMinit PMinit@/link, @link joinPMtree joinPMtree@/link, and @link registerPowerDriver registerPowerDriver@/link. */
+
+    virtual void PMstop( void );
 
 /*! @function joinPMtree
-    @abstract Joins the driver into the power plane of the I/O Registry .
-    @discussion A driver uses this method to call its nub when initializing (usually in its <code>start</code> routine after calling @link PMinit PMinit@/link), to be attached into the power management hierarchy (i.e., the power plane). A driver usually calls this method on the driver for the device that provides it power (this is frequently the nub).
-    
-    Before this call returns, the caller will probably be called at @link setPowerParent setPowerParent@/link and @link setAggressiveness setAggressiveness@/link and possibly at @link addPowerChild addPowerChild@/link as it is added to the hierarchy. 
+    @abstract Joins the driver into the power plane of the I/O Registry.
+    @discussion A driver uses this method to call its nub when initializing (usually in its <code>start</code> routine after calling @link PMinit PMinit@/link), to be attached into the power management hierarchy (i.e., the power plane). A driver usually calls this method on the driver for the device that provides it power (this is frequently the nub).    
+    Before this call returns, the caller will probably be called at @link setPowerParent setPowerParent@/link and @link setAggressiveness setAggressiveness@/link and possibly at @link addPowerChild addPowerChild@/link as it is added to the hierarchy. This method may be overridden by a nub subclass.
+    @param driver The driver to be added to the power plane, usually <code>this</code>. */
 
-    This method may be overridden by a nub subclass.
-    @param driver The driver to be added to the power plane, usually <code>this</code>.
-*/
-    virtual void joinPMtree ( IOService * driver );
+    virtual void joinPMtree( IOService * driver );
 
 /*! @function registerPowerDriver
     @abstract Registers a set of power states that the driver supports.
-    
     @discussion A driver defines its array of supported power states with power management in its power management initialization (its <code>start</code> routine). If successful, power management will call the driver to instruct it to change its power state through @link setPowerState setPowerState@/link.
-    
     Most drivers do not need to override <code>registerPowerDriver</code>. A nub may override <code>registerPowerDriver</code> if it needs to arrange its children in the power plane differently than the default placement, but this is uncommon.
-    
     @param controllingDriver A pointer to the calling driver, usually <code>this</code>.
     @param powerStates A driver-defined array of power states that the driver and device support. Power states are defined in <code>pwr_mgt/IOPMpowerState.h</code>.
-    @param numberOfStates The number of power states in the array. 
-    @result </code>IOPMNoErr</code>. All errors are logged via <code>kprintf</code>.
-*/
-    virtual IOReturn registerPowerDriver ( 
-                    IOService* controllingDriver, 
-                    IOPMPowerState* powerStates, 
-                    unsigned long numberOfStates );
+    @param numberOfStates The number of power states in the array.
+    @result </code>IOPMNoErr</code>. All errors are logged via <code>kprintf</code>. */
 
-/*! 
-    @function registerInterestedDriver
+    virtual IOReturn registerPowerDriver(
+                        IOService *      controllingDriver,
+                        IOPMPowerState * powerStates,
+                        unsigned long    numberOfStates );
+
+/*! @function registerInterestedDriver
     @abstract Allows an IOService object to register interest in the changing power state of a power-managed IOService object.
     @discussion Call <code>registerInterestedDriver</code> on the IOService object you are interested in receiving power state messages from, and pass a pointer to the interested driver (<code>this</code>) as an argument.
-    
     The interested driver should override @link powerStateWillChangeTo powerStateWillChangeTo@/link and @link powerStateDidChangeTo powerStateDidChangeTo@/link to receive these power change messages.
-    
     Interested drivers must acknowledge power changes in <code>powerStateWillChangeTo</code> or <code>powerStateDidChangeTo</code>, either via return value or later calls to @link acknowledgePowerChange acknowledgePowerChange@/link.
-    
-    Most drivers do not need to override <code>registerInterestedDriver</code>.
-    @param theDriver The driver of interest adds this pointer to the list of interested drivers. It informs drivers on this list before and after the power change. 
-    @result Flags describing the capability of the device in its current power state. If the current power state is not yet defined, zero is returned (this is the case when the driver is not yet in the power domain hierarchy or hasn't fully registered with power management yet). 
-*/
-    virtual IOPMPowerFlags registerInterestedDriver ( IOService* theDriver );
+    @param theDriver The driver of interest adds this pointer to the list of interested drivers. It informs drivers on this list before and after the power change.
+    @result Flags describing the capability of the device in its current power state. If the current power state is not yet defined, zero is returned (this is the case when the driver is not yet in the power domain hierarchy or hasn't fully registered with power management yet). */
+
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IOPMPowerFlags registerInterestedDriver( IOService * theDriver );
 
 /*! @function deRegisterInterestedDriver
     @abstract De-registers power state interest from a previous call to <code>registerInterestedDriver</code>.
     @discussion Most drivers do not need to override <code>deRegisterInterestedDriver</code>.
     @param theDriver The interested driver previously passed into @link registerInterestedDriver registerInterestedDriver@/link.
-    @result A return code that can be ignored by the caller.
-*/
-    virtual IOReturn deRegisterInterestedDriver ( IOService * theDriver );
+    @result A return code that can be ignored by the caller. */
+
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IOReturn deRegisterInterestedDriver( IOService * theDriver );
 
 /*! @function acknowledgePowerChange
     @abstract Acknowledges an in-progress power state change.
-    @discussion When power management informs an interested object (via @link powerStateWillChangeTo powerStateWillChangeTo@/link or @link powerStateDidChangeTo powerStateDidChangeTo@/link), the object can return an immediate acknowledgement via a return code, or it may return an indication that it will acknowledge later by calling <code>acknowledgePowerChange</code>. 
-
-    Interested objects are those that have registered as interested drivers, as well as power plane children of the power changing driver. 
-    
-    A driver that calls @link registerInterestedDriver registerInterestedDriver@/link must call <code>acknowledgePowerChange</code>, or use an immediate acknowledgement return from <code>powerStateWillChangeTo</code> or <code>powerStateDidChangeTo</code>. 
-    
-    Most drivers do not need to override <code>acknowledgePowerChange</code>.
-
+    @discussion When power management informs an interested object (via @link powerStateWillChangeTo powerStateWillChangeTo@/link or @link powerStateDidChangeTo powerStateDidChangeTo@/link), the object can return an immediate acknowledgement via a return code, or it may return an indication that it will acknowledge later by calling <code>acknowledgePowerChange</code>.
+    Interested objects are those that have registered as interested drivers, as well as power plane children of the power changing driver. A driver that calls @link registerInterestedDriver registerInterestedDriver@/link must call <code>acknowledgePowerChange</code>, or use an immediate acknowledgement return from <code>powerStateWillChangeTo</code> or <code>powerStateDidChangeTo</code>.
     @param whichDriver A pointer to the calling driver. The called object tracks all interested parties to ensure that all have acknowledged the power state change.
-    @result <code>IOPMNoErr</code>. 
-*/
-    virtual IOReturn acknowledgePowerChange ( IOService * whichDriver );
+    @result <code>IOPMNoErr</code>. */
 
-
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IOReturn acknowledgePowerChange( IOService * whichDriver );
 
 /*! @function acknowledgeSetPowerState
     @abstract Acknowledges the belated completion of a driver's <code>setPowerState</code> power state change.
     @discussion After power management instructs a driver to change its state via @link setPowerState setPowerState@/link, that driver must acknowledge the change when its device has completed its transition. The acknowledgement may be immediate, via a return code from <code>setPowerState</code>, or delayed, via this call to <code>acknowledgeSetPowerState</code>.
-    
-    Any driver that does not return <code>kIOPMAckImplied</code> from its <code>setPowerState</code> implementation must later call <code>acknowledgeSetPowerState</code>. 
-    
-    Most drivers do not need to override <code>acknowledgeSetPowerState</code>.
-    @result <code>IOPMNoErr</code>.
-*/
-    virtual IOReturn acknowledgeSetPowerState ( void );
+    Any driver that does not return <code>kIOPMAckImplied</code> from its <code>setPowerState</code> implementation must later call <code>acknowledgeSetPowerState</code>.
+    @result <code>IOPMNoErr</code>. */
 
-/*! @function powerDomainWillChangeTo
-    @abstract Notifies a driver that its power domain is about to change state.
-    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-*/
-    IOReturn powerDomainWillChangeTo ( 
-                    IOPMPowerFlags newPowerStateFlags, 
-                    IOPowerConnection * whichParent );
-
-/*! @function powerDomainDidChangeTo
-    @abstract Notifies a driver that its power domain is about to change state.
-    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-*/
-    IOReturn powerDomainDidChangeTo ( 
-                    IOPMPowerFlags newPowerStateFlags, 
-                    IOPowerConnection * whichParent );
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IOReturn acknowledgeSetPowerState( void );
 
 /*! @function requestPowerDomainState
     @abstract Tells a driver to adjust its power state.
-    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-*/
-    virtual IOReturn requestPowerDomainState ( 
-                    IOPMPowerFlags desiredState, 
-                    IOPowerConnection * whichChild, 
-                    unsigned long specificationFlags );
+    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers. */
+
+    virtual IOReturn requestPowerDomainState(
+                        IOPMPowerFlags desiredState,
+                        IOPowerConnection * whichChild,
+                        unsigned long specificationFlags );
 
 /*! @function makeUsable
     @abstract Requests that a device become usable.
     @discussion This method is called when some client of a device (or the device's own driver) is asking for the device to become usable. Power management responds by telling the object upon which this method is called to change to its highest power state.
-    
-    <code>makeUsable</code> is implemented using @link changePowerStateToPriv changePowerStateToPriv@/link.
-    
-    Subsequent requests for lower power, such as from <code>changePowerStateToPriv</code>, will pre-empt this request.
-    @result A return code that can be ignored by the caller.
-*/
-    virtual IOReturn makeUsable ( void );
+    <code>makeUsable</code> is implemented using @link changePowerStateToPriv changePowerStateToPriv@/link. Subsequent requests for lower power, such as from <code>changePowerStateToPriv</code>, will pre-empt this request.
+    @result A return code that can be ignored by the caller. */
+
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IOReturn makeUsable( void );
 
 /*! @function temporaryPowerClampOn
     @abstract A driver calls this method to hold itself in the highest power state until it has children.
-    @discussion Use <code>temporaryPowerClampOn</code> to hold your driver in its highest power state while waiting for child devices to attach. After children have attached, the clamp is released and the device's power state is controlled by the children's requirements. 
-    @result A return code that can be ignored by the caller.
-*/
-    virtual IOReturn temporaryPowerClampOn ( void );
-    
+    @discussion Use <code>temporaryPowerClampOn</code> to hold your driver in its highest power state while waiting for child devices to attach. After children have attached, the clamp is released and the device's power state is controlled by the children's requirements.
+    @result A return code that can be ignored by the caller. */
+
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IOReturn temporaryPowerClampOn( void );
+
 /*! @function changePowerStateTo
     @abstract Sets a driver's power state.
-    @discussion This function is one of several that are used to set a driver's power state. In most circumstances, however, you should call @link changePowerStateToPriv changePowerStateToPriv@/link instead. 
-	
+    @discussion This function is one of several that are used to set a driver's power state. In most circumstances, however, you should call @link changePowerStateToPriv changePowerStateToPriv@/link instead.
 	Calls to <code>changePowerStateTo</code>, <code>changePowerStateToPriv</code>, and a driver's power children all affect the power state of a driver. For legacy design reasons, they have overlapping functionality. Although you should call <code>changePowerStateToPriv</code> to change your device's power state, you might need to call <code>changePowerStateTo</code> in the following circumstances:
-    
     <ul><li>If a driver will be using <code>changePowerStateToPriv</code> to change its power state, it should call <code>changePowerStateTo(0)</code> in its <code>start</code> routine to eliminate the influence <code>changePowerStateTo</code> has on power state calculations.
-    
     <li>Call <code>changePowerStateTo</code> in conjunction with @link setIdleTimerPeriod setIdleTimerPeriod@/link and @link activityTickle activityTickle@/link to idle a driver into a low power state. For a driver with 3 power states, for example, <code>changePowerStateTo(1)</code> sets a minimum level of power state 1, such that the idle timer period may not set your device's power any lower than state 1.</ul>
-
     @param ordinal The number of the desired power state in the power state array. 
     @result A return code that can be ignored by the caller. */
-    virtual IOReturn changePowerStateTo ( unsigned long ordinal );
+
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IOReturn changePowerStateTo( unsigned long ordinal );
 
 /*! @function currentCapability
     @abstract Finds out the capability of a device's current power state.
-    @result A copy of the <code>capabilityFlags</code> field for the current power state in the power state array. 
-    */
-   virtual  IOPMPowerFlags currentCapability ( void );
+    @result A copy of the <code>capabilityFlags</code> field for the current power state in the power state array. */
+
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    IOPMPowerFlags currentCapability( void );
 
 /*! @function currentPowerConsumption
     @abstract Finds out the current power consumption of a device.
     @discussion Most Mac OS X power managed drivers do not report their power consumption via the <code>staticPower</code> field. Thus this call will not accurately reflect power consumption for most drivers.
-    @result A copy of the <code>staticPower</code> field for the current power state in the power state array. 
-*/
-    virtual  unsigned long currentPowerConsumption ( void );
+    @result A copy of the <code>staticPower</code> field for the current power state in the power state array. */
+
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    unsigned long currentPowerConsumption( void );
 
 /*! @function activityTickle
     @abstract Informs power management when a power-managed device is in use, so that power management can track when it is idle and adjust its power state accordingly.
     @discussion The <code>activityTickle</code> method is provided for objects in the system (or for the driver itself) to tell a driver that its device is being used.
-
     The IOService superclass can manage idleness determination with a simple idle timer mechanism and this <code>activityTickle</code> call. To start this up, the driver calls its superclass's <code>setIdleTimerPeriod</code>. This starts a timer for the time interval specified in the call. When the timer expires, the superclass checks to see if there has been any activity since the last timer expiration. (It checks to see if <code>activityTickle</code> has been called). If there has been activity, it restarts the timer, and this process continues. When the timer expires, and there has been no device activity, the superclass lowers the device power state to the next lower state. This can continue until the device is in state zero.
-
-    After the device has been powered down by at least one power state, a subsequent call to <code>activityTickle</code> causes the device to be switched to a higher state required for the activity.
-    
+    After the device has been powered down by at least one power state, a subsequent call to <code>activityTickle</code> causes the device to be switched to a higher state required for the activity.    
     If the driver is managing the idleness determination totally on its own, the value of the <code>type</code> parameter should be <code>kIOPMSubclassPolicy</code>, and the driver should override the <code>activityTickle</code> method. The superclass IOService implementation of <code>activityTickle</code> does nothing with the <code>kIOPMSubclassPolicy</code> argument.
+    @param type When <code>type</code> is <code>kIOPMSubclassPolicy</code>, <code>activityTickle</code> is not handled in IOService and should be intercepted by the subclass. When <code>type</code> is <code>kIOPMSuperclassPolicy1</code>, an activity flag is set and the device state is checked. If the device has been powered down, it is powered up again.
+    @param stateNumber When <code>type</code> is <code>kIOPMSuperclassPolicy1</code>, <code>stateNumber</code> contains the desired power state ordinal for the activity. If the device is in a lower state, the superclass will switch it to this state. This is for devices that can handle some accesses in lower power states; the device is powered up only as far as it needs to be for the activity.
+    @result When <code>type</code> is <code>kIOPMSuperclassPolicy1</code>, the superclass returns <code>true</code> if the device is currently in the state specified by <code>stateNumber</code>. If the device is in a lower state and must be powered up, the superclass returns <code>false</code>; in this case the superclass will initiate a power change to power the device up. */
 
-    @param type When <code>type</code> is <code>kIOPMSubclassPolicy</code>, <code>activityTickle</code> is not handled in IOService and should be intercepted by the subclass. When <code>type</code> is <code>kIOPMSuperclassPolicy1</code>, an activity flag is set and the device state is checked. If the device has been powered down, it is powered up again. 
-    @param stateNumber When <code>type</code> is <code>kIOPMSuperclassPolicy1</code>, <code>stateNumber</code> contains the desired power state ordinal for the activity. If the device is in a lower state, the superclass will switch it to this state. This is for devices that can handle some accesses in lower power states; the device is powered up only as far as it needs to be for the activity. 
-    @result When <code>type</code> is <code>kIOPMSuperclassPolicy1</code>, the superclass returns <code>true</code> if the device is currently in the state specified by <code>stateNumber</code>. If the device is in a lower state and must be powered up, the superclass returns <code>false</code>; in this case the superclass will initiate a power change to power the device up. 
-*/
-    virtual bool activityTickle ( 
-                unsigned long type, 
-                unsigned long stateNumber=0 );
+    virtual bool activityTickle(
+                        unsigned long type,
+                        unsigned long stateNumber = 0 );
 
 /*! @function setAggressiveness
     @abstract Broadcasts an aggressiveness factor from the parent of a driver to the driver.
-
     @discussion Implement <code>setAggressiveness</code> to receive a notification when an "aggressiveness Aggressiveness factors are a loose set of power management variables that contain values for system sleep timeout, display sleep timeout, whether the system is on battery or AC, and other power management features. There are several aggressiveness factors that can be broadcast and a driver may take action on whichever factors apply to it.
-
     A driver that has joined the power plane via @link joinPMtree joinPMtree@/link will receive <code>setAgressiveness</code> calls when aggressiveness factors change.
-    
     A driver may override this call if it needs to do something with the new factor (such as change its idle timeout). If overridden, the driver must  call its superclass's <code>setAgressiveness</code> method in its own <code>setAgressiveness</code> implementation.
-    
     Most drivers do not need to implement <code>setAgressiveness</code>.
-    
     @param type The aggressiveness factor type, such as <code>kPMMinutesToDim</code>, <code>kPMMinutesToSpinDown</code>, <code>kPMMinutesToSleep</code>, and <code>kPMPowerSource</code>. (Aggressiveness factors are defined in <code>pwr_mgt/IOPM.h</code>.)
-    
-    @param newLevel The aggressiveness factor's new value. 
-    @result <code>IOPMNoErr</code>. 
-*/
-    virtual  IOReturn setAggressiveness ( 
-                unsigned long type, 
-                unsigned long newLevel );
+    @param newLevel The aggressiveness factor's new value.
+    @result <code>IOPMNoErr</code>. */
+
+    virtual IOReturn setAggressiveness(
+                        unsigned long type,
+                        unsigned long newLevel );
 
 /*! @function getAggressiveness
-    @abstract Returns the current aggressiveness value for the given type. 
+    @abstract Returns the current aggressiveness value for the given type.
     @param type The aggressiveness factor to query.
     @param currentLevel Upon successful return, contains the value of aggressiveness factor <code>type</code>.
-    @result <code>kIOReturnSuccess</code> upon success; an I/O Kit error code otherwise.
- */
-    virtual IOReturn getAggressiveness ( 
-                unsigned long type, 
-                unsigned long *currentLevel );
+    @result <code>kIOReturnSuccess</code> upon success; an I/O Kit error code otherwise. */
 
+    virtual IOReturn getAggressiveness(
+                        unsigned long type,
+                        unsigned long * currentLevel );
+
+#ifndef __LP64__
 /*! @function systemWake
-    @abstract Tells every driver in the power plane that the system is waking up.  
-    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-*/
-    virtual  IOReturn systemWake ( void );
+    @abstract Tells every driver in the power plane that the system is waking up.
+    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers. */
+
+    virtual IOReturn systemWake( void )
+    APPLE_KEXT_DEPRECATED;
 
 /*! @function temperatureCriticalForZone
-    @abstract Alerts a driver to a critical temperature in some thermal zone.  
-    @discussion This call is unused by power management. It is not intended to be called or overridden.
-*/
-    virtual  IOReturn temperatureCriticalForZone ( IOService * whichZone );
+    @abstract Alerts a driver to a critical temperature in some thermal zone.
+    @discussion This call is unused by power management. It is not intended to be called or overridden. */
+
+    virtual IOReturn temperatureCriticalForZone( IOService * whichZone )
+    APPLE_KEXT_DEPRECATED;
 
 /*! @function youAreRoot
-    @abstract Informs the root power domain IOService object that is is the root power domain.
-    @discussion The Platform Expert instantiates the root power domain IOService object and calls it with this method to inform it that it is the root power domain.
-	
-	This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-*/
-    virtual IOReturn youAreRoot ( void );
+    @abstract Informs power management which IOService object is the power plane root.
+    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers. */
+
+    virtual IOReturn youAreRoot( void )
+    APPLE_KEXT_DEPRECATED;
 
 /*! @function setPowerParent
-    @abstract For internal use only; deprecated; not intended to be called or overridden.
-*/
-    virtual IOReturn setPowerParent ( 
-                IOPowerConnection * theParent, 
-                bool stateKnown, 
-                IOPMPowerFlags currentState );
+    @abstract This call is handled internally by power management. It is not intended to be overridden or called by drivers. */
+
+    virtual IOReturn setPowerParent(
+                        IOPowerConnection * parent,
+                        bool stateKnown,
+                        IOPMPowerFlags currentState )
+    APPLE_KEXT_DEPRECATED;
+#endif /* !__LP64__ */
 
 /*! @function addPowerChild
-    @abstract Informs a driver that it has a new child. 
-    @discussion The Platform Expert uses this method to call a driver and introduce it to a new child.
-	
-	This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-    @param theChild A pointer to the child IOService object.
-*/
-    virtual IOReturn addPowerChild ( IOService * theChild );
+    @abstract Informs a driver that it has a new child.
+    @discussion The Platform Expert uses this method to call a driver and introduce it to a new child. This call is handled internally by power management. It is not intended to be overridden or called by drivers.
+    @param theChild A pointer to the child IOService object. */
+
+    virtual IOReturn addPowerChild( IOService * theChild );
 
 /*! @function removePowerChild
-    @abstract Informs a power managed driver that one of its power plane childen is disappearing. 
-    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers.
+    @abstract Informs a power managed driver that one of its power plane childen is disappearing.
+    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers. */
 
-*/
-    virtual IOReturn removePowerChild ( IOPowerConnection * theChild );
+    virtual IOReturn removePowerChild( IOPowerConnection * theChild );
 
-/* @function command_received
-    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-*/
-    virtual void command_received ( void *, void * , void * , void *);
+#ifndef __LP64__
+/*! @function command_received
+    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers. */
 
-/* @function start_PM_idle_timer
-    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-*/
-    virtual void start_PM_idle_timer ( void );
+    virtual void command_received( void *, void * , void * , void * );
+#endif
 
-/* @function PM_idle_timer_expiration
-    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-*/
-    virtual void PM_idle_timer_expiration ( void );
+/*! @function start_PM_idle_timer
+    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers. */
 
-/* @function PM_Clamp_Timer_Expired
-    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-*/
-    virtual void PM_Clamp_Timer_Expired (void);
+    APPLE_KEXT_COMPATIBILITY_VIRTUAL
+    void start_PM_idle_timer( void );
+
+#ifndef __LP64__
+/*! @function PM_idle_timer_expiration
+    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers. */
+
+    virtual void PM_idle_timer_expiration( void )
+    APPLE_KEXT_DEPRECATED;
+
+/*! @function PM_Clamp_Timer_Expired
+    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers. */
+
+    virtual void PM_Clamp_Timer_Expired( void )
+    APPLE_KEXT_DEPRECATED;
+#endif
 
 /*! @function setIdleTimerPeriod
     @abstract Sets or changes the idle timer period.
-    @discussion A driver using the idleness determination provided by IOService calls its superclass with this method to set or change the idle timer period. See @link activityTickle activityTickle@/link for a description of this type of idleness determination. 
-    @param period The desired idle timer period in seconds. 
-    @result <code>kIOReturnSuccess</code> if successful. May return <code>kIOReturnError</code> if there was difficulty creating the timer event or the command queue. 
-*/
-    virtual IOReturn  setIdleTimerPeriod ( unsigned long );
+    @discussion A driver using the idleness determination provided by IOService calls its superclass with this method to set or change the idle timer period. See @link activityTickle activityTickle@/link for a description of this type of idleness determination.
+    @param period The desired idle timer period in seconds.
+    @result <code>kIOReturnSuccess</code> upon success; an I/O Kit error code otherwise. */
 
+    virtual IOReturn setIdleTimerPeriod( unsigned long );
+
+#ifndef __LP64__
 /*! @function getPMworkloop
     @abstract Returns a pointer to the system-wide power management work loop.
-    @discussion Most drivers should create their own work loops to synchronize their code; drivers should not run arbitrary code on the power management work loop.
-*/
-    virtual IOWorkLoop *getPMworkloop ( void );
+    @availability Deprecated in Mac OS X version 10.6.
+    @discussion Most drivers should create their own work loops to synchronize their code; drivers should not run arbitrary code on the power management work loop. */
+
+    virtual IOWorkLoop * getPMworkloop( void )
+    APPLE_KEXT_DEPRECATED;
+#endif
 
 /*! @function getPowerState
     @abstract Determines a device's power state.
     @discussion A device's "current power state" is updated at the end of each power state transition (e.g. transition from state 1 to state 0, or state 0 to state 2). This transition includes the time spent powering on or off any power plane children. Thus, if a child calls <code>getPowerState</code> on its power parent during system wake from sleep, the call will return the index to the device's off state rather than its on state.
-    @result The current power state's index into the device's power state array.
-*/
-    UInt32 getPowerState();
+    @result The current power state's index into the device's power state array. */
 
-
-/* @function ack_timer_ticked
-    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-*/
-    void ack_timer_ticked ( void );
-
-/* @function settleTimerExpired
-   @abstract For internal use only.
-*/
-    void settleTimerExpired ( void );
-    
-/* @function serializedAllowPowerChange2
-    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-*/
-    IOReturn serializedAllowPowerChange2 ( unsigned long );
-
-/* @function serializedCancelPowerChange2
-    @discussion This call is handled internally by power management. It is not intended to be overridden or called by drivers.
-*/
-    IOReturn serializedCancelPowerChange2 ( unsigned long );
-
+    UInt32 getPowerState( void );
 
 /*! @function setPowerState
     @abstract Requests a power managed driver to change the power state of its device.
-
     @discussion A power managed driver must override <code>setPowerState</code> to take part in system power management. After a driver is registered with power management, the system uses <code>setPowerState</code> to power the device off and on for system sleep and wake.
-    
-    Calls to @link PMinit PMinit@/link and @link registerPowerDriver registerPowerDriver@/link enable power management to change a device's power state using <code>setPowerState</code>.
-    
-    <code>setPowerState</code> is called in a clean and separate thread context.
-
+    Calls to @link PMinit PMinit@/link and @link registerPowerDriver registerPowerDriver@/link enable power management to change a device's power state using <code>setPowerState</code>. <code>setPowerState</code> is called in a clean and separate thread context.
     @param powerStateOrdinal The number in the power state array of the state the driver is being instructed to switch to. 
-
     @param whatDevice A pointer to the power management object which registered to manage power for this device. In most cases, <code>whatDevice</code> will be equal to your driver's own <code>this</code> pointer.
-    @result The driver must return <code>IOPMAckImplied</code> if it has complied with the request when it returns. Otherwise if it has started the process of changing power state but not finished it, the driver should return a number of microseconds which is an upper limit of the time it will need to finish. Then, when it has completed the power switch, it should call @link acknowledgeSetPowerState acknowledgeSetPowerState@/link. 
-*/
-virtual IOReturn setPowerState ( 
-                unsigned long powerStateOrdinal, 
-                IOService* whatDevice );
+    @result The driver must return <code>IOPMAckImplied</code> if it has complied with the request when it returns. Otherwise if it has started the process of changing power state but not finished it, the driver should return a number of microseconds which is an upper limit of the time it will need to finish. Then, when it has completed the power switch, it should call @link acknowledgeSetPowerState acknowledgeSetPowerState@/link. */
 
+    virtual IOReturn setPowerState(
+                        unsigned long powerStateOrdinal,
+                        IOService *   whatDevice );
+
+#ifndef __LP64__
 /*! @function clampPowerOn
-    @abstract Deprecated. Do not use.
- */
-virtual void clampPowerOn (unsigned long duration);
+    @abstract Deprecated. Do not use. */
+
+    virtual void clampPowerOn( unsigned long duration );
+#endif
 
 /*! @function maxCapabilityForDomainState
-    @abstract Determines a driver's highest power state possible for a given power domain state. 
-    @discussion This happens when the power domain is changing state and power management needs to determine which state the device is capable of in the new domain state. 
-
+    @abstract Determines a driver's highest power state possible for a given power domain state.
+    @discussion This happens when the power domain is changing state and power management needs to determine which state the device is capable of in the new domain state.
     Most drivers do not need to implement this method, and can rely upon the default IOService implementation. The IOService implementation scans the power state array looking for the highest state whose <code>inputPowerRequirement</code> field exactly matches the value of the <code>domainState</code> parameter. If more intelligent determination is required, the driver itself should implement the method and override the superclass's implementation.
-    
-    @param domainState Flags that describe the character of "domain power"; they represent the <code>outputPowerCharacter</code> field of a state in the power domain's power state array. 
+    @param domainState Flags that describe the character of "domain power"; they represent the <code>outputPowerCharacter</code> field of a state in the power domain's power state array.
+    @result A state number. */
 
-    @result A state number. 
- */
-virtual unsigned long maxCapabilityForDomainState ( 
-                IOPMPowerFlags domainState );
+    virtual unsigned long maxCapabilityForDomainState( IOPMPowerFlags domainState );
 
 /*! @function initialPowerStateForDomainState
     @abstract Determines which power state a device is in, given the current power domain state.
     @discussion Power management calls this method once, when the driver is initializing power management.
+    Most drivers do not need to implement this method, and can rely upon the default IOService implementation. The IOService implementation scans the power state array looking for the highest state whose <code>inputPowerRequirement</code> field exactly matches the value of the <code>domainState</code> parameter. If more intelligent determination is required, the power managed driver should implement the method and override the superclass's implementation.
+    @param domainState Flags that describe the character of "domain power"; they represent the <code>outputPowerCharacter</code> field of a state in the power domain's power state array.
+    @result A state number. */
 
-    Most drivers do not need to implement this method, and can rely upon the default IOService implementation. The IOService implementation scans the power state array looking for the highest state whose <code>inputPowerRequirement</code> field exactly matches the value of the <code>domainState</code> parameter. If more intelligent determination is required, the power managed driver should implement the method and override the superclass's implementation. 
-
-    @param domainState Flags that describe the character of "domain power"; they represent the <code>outputPowerCharacter</code> field of a state in the power domain's power state array. 
-    @result A state number. 
-*/
-virtual unsigned long initialPowerStateForDomainState ( 
-                IOPMPowerFlags domainState);
+    virtual unsigned long initialPowerStateForDomainState( IOPMPowerFlags domainState );
 
 /*! @function powerStateForDomainState
-    @abstract Determines what power state the device would be in for a given power domain state. 
-    @discussion Power management calls a driver with this method to find out what power state the device would be in for a given power domain state. This happens when the power domain is changing state and power management needs to determine the effect of the change. 
-
+    @abstract Determines what power state the device would be in for a given power domain state.
+    @discussion Power management calls a driver with this method to find out what power state the device would be in for a given power domain state. This happens when the power domain is changing state and power management needs to determine the effect of the change.
     Most drivers do not need to implement this method, and can rely upon the default IOService implementation. The IOService implementation scans the power state array looking for the highest state whose <code>inputPowerRequirement</code> field exactly matches the value of the <code>domainState</code> parameter. If more intelligent determination is required, the power managed driver should implement the method and override the superclass's implementation.
+    @param domainState Flags that describe the character of "domain power"; they represent the <code>outputPowerCharacter</code> field of a state in the power domain's power state array.
+    @result A state number. */
 
-    @param domainState Flags that describe the character of "domain power"; they represent the <code>outputPowerCharacter</code> field of a state in the power domain's power state array. 
-
-    @result A state number. 
-*/
-virtual unsigned long powerStateForDomainState ( IOPMPowerFlags domainState );
+    virtual unsigned long powerStateForDomainState( IOPMPowerFlags domainState );
 
 /*! @function powerStateWillChangeTo
     @abstract Informs interested parties that a device is about to change its power state.
     @discussion Power management informs interested parties that a device is about to change to a different power state. Interested parties are those that have registered for this notification via @link registerInterestedDriver registerInterestedDriver@/link. If you have called <code>registerInterestedDriver</code> on a power managed driver, you must implement <code>powerStateWillChangeTo</code> and @link powerStateDidChangeTo powerStateDidChangeTo@/link to receive the notifications.
+    <code>powerStateWillChangeTo</code> is called in a clean and separate thread context. <code>powerStateWillChangeTo</code> is called before a power state transition takes place; <code>powerStateDidChangeTo</code> is called after the transition has completed.
+    @param capabilities Flags that describe the capability of the device in the new power state (they come from the <code>capabilityFlags</code> field of the new state in the power state array).
+	@param stateNumber The number of the state in the state array that the device is switching to.
+    @param whatDevice A pointer to the driver that is changing. It can be used by a driver that is receiving power state change notifications for multiple devices to distinguish between them.
+    @result The driver returns <code>IOPMAckImplied</code> if it has prepared for the power change when it returns. If it has started preparing but not finished, it should return a number of microseconds which is an upper limit of the time it will need to finish preparing. Then, when it has completed its preparations, it should call @link acknowledgePowerChange acknowledgePowerChange@/link. */
 
-    <code>powerStateWillChangeTo</code> is called in a clean and separate thread context.
-    
-    <code>powerStateWillChangeTo</code> is called before a power state transition takes place; <code>powerStateDidChangeTo</code> is called after the transition has completed.
-    
-    @param capabilities Flags that describe the capability of the device in the new power state (they come from the <code>capabilityFlags</code> field of the new state in the power state array). 
-	@param stateNumber The number of the state in the state array that the device is switching to. 
-    @param whatDevice A pointer to the driver that is changing. It can be used by a driver that is receiving power state change notifications for multiple devices to distinguish between them. 
-    @result The driver returns <code>IOPMAckImplied</code> if it has prepared for the power change when it returns. If it has started preparing but not finished, it should return a number of microseconds which is an upper limit of the time it will need to finish preparing. Then, when it has completed its preparations, it should call @link acknowledgePowerChange acknowledgePowerChange@/link. 
-*/
-virtual IOReturn powerStateWillChangeTo ( 
-                    IOPMPowerFlags  capabilities, 
-                    unsigned long   stateNumber, 
-                    IOService*      whatDevice);
+    virtual IOReturn powerStateWillChangeTo(
+                        IOPMPowerFlags  capabilities,
+                        unsigned long   stateNumber,
+                        IOService *     whatDevice );
 
 /*! @function powerStateDidChangeTo
     @abstract Informs interested parties that a device has changed to a different power state.
     @discussion Power management informs interested parties that a device has changed to a different power state. Interested parties are those that have registered for this notification via @link registerInterestedDriver registerInterestedDriver@/link. If you have called <code>registerInterestedDriver</code> on a power managed driver, you must implemnt @link powerStateWillChangeTo powerStateWillChangeTo@/link and <code>powerStateDidChangeTo</code> to receive the notifications.
-    
-    <code>powerStateDidChangeTo</code> is called in a clean and separate thread context.
-    
-    <code>powerStateWillChangeTo</code> is called before a power state transition takes place; <code>powerStateDidChangeTo</code> is called after the transition has completed.
-    
-    @param capabilities Flags that describe the capability of the device in the new power state (they come from the <code>capabilityFlags</code> field of the new state in the power state array). 
-	@param stateNumber The number of the state in the state array that the device is switching to. 
-    @param whatDevice A pointer to the driver that is changing. It can be used by a driver that is receiving power state change notifications for multiple devices to distinguish between them. 
-    @result The driver returns <code>IOPMAckImplied</code> if it has prepared for the power change when it returns. If it has started preparing but not finished, it should return a number of microseconds which is an upper limit of the time it will need to finish preparing. Then, when it has completed its preparations, it should call @link acknowledgePowerChange acknowledgePowerChange@/link. 
-*/
-virtual IOReturn powerStateDidChangeTo ( 
-                    IOPMPowerFlags  capabilities, 
-                    unsigned long   stateNumber, 
-                    IOService*      whatDevice);
+    <code>powerStateDidChangeTo</code> is called in a clean and separate thread context. <code>powerStateWillChangeTo</code> is called before a power state transition takes place; <code>powerStateDidChangeTo</code> is called after the transition has completed.
+    @param capabilities Flags that describe the capability of the device in the new power state (they come from the <code>capabilityFlags</code> field of the new state in the power state array).
+	@param stateNumber The number of the state in the state array that the device is switching to.
+    @param whatDevice A pointer to the driver that is changing. It can be used by a driver that is receiving power state change notifications for multiple devices to distinguish between them.
+    @result The driver returns <code>IOPMAckImplied</code> if it has prepared for the power change when it returns. If it has started preparing but not finished, it should return a number of microseconds which is an upper limit of the time it will need to finish preparing. Then, when it has completed its preparations, it should call @link acknowledgePowerChange acknowledgePowerChange@/link. */
 
+    virtual IOReturn powerStateDidChangeTo(
+                        IOPMPowerFlags  capabilities,
+                        unsigned long   stateNumber,
+                        IOService *     whatDevice );
+
+#ifndef __LP64__
 /*! @function didYouWakeSystem
-    @abstract Asks a driver if its device is the one that just woke the system from sleep. 
+    @abstract Asks a driver if its device is the one that just woke the system from sleep.
+    @availability Deprecated in Mac OS X version 10.6.
     @discussion Power management calls a power managed driver with this method to ask if its device is the one that just woke the system from sleep. If a device is capable of waking the system from sleep, its driver should implement <code>didYouWakeSystem</code> and return <code>true</code> if its device was responsible for waking the system.
-    @result <code>true</code> if the driver's device did wake the system and <code>false</code> if it didn't. 
-*/
-virtual bool didYouWakeSystem  ( void );
+    @result <code>true</code> if the driver's device woke the system and <code>false</code> otherwise. */
+
+    virtual bool didYouWakeSystem( void )
+    APPLE_KEXT_DEPRECATED;
 
 /*! @function newTemperature
-    @abstract (Deprecated. Do not use.) Tells a power managed driver that the temperature in the thermal zone has changed.
-    @discussion A thermal-zone driver calls a power managed driver with this method to tell it that the temperature in the zone has changed. This method is not intended to be overridden or called by drivers. This method is deprecated.
-*/
-virtual IOReturn newTemperature  ( long currentTemp, IOService * whichZone );
+    @abstract Tells a power managed driver that the temperature in the thermal zone has changed.
+    @discussion This call is unused by power management. It is not intended to be called or overridden. */
 
-    virtual bool askChangeDown ( unsigned long );
-    virtual bool tellChangeDown ( unsigned long );
-    bool tellChangeDown1 ( unsigned long );
-    bool tellChangeDown2 ( unsigned long );
+    virtual IOReturn newTemperature( long currentTemp, IOService * whichZone )
+    APPLE_KEXT_DEPRECATED;
+#endif
+
+    virtual bool askChangeDown( unsigned long );
+    virtual bool tellChangeDown( unsigned long );
     virtual void tellNoChangeDown ( unsigned long );
-    virtual void tellChangeUp ( unsigned long );
-    virtual IOReturn allowPowerChange ( unsigned long refcon );
-    virtual IOReturn cancelPowerChange ( unsigned long refcon );
+    virtual void tellChangeUp( unsigned long );
+    virtual IOReturn allowPowerChange( unsigned long refcon );
+    virtual IOReturn cancelPowerChange( unsigned long refcon );
 
-
-    protected:
+protected:
 /*! @function changePowerStateToPriv 
     @abstract Tells a driver's superclass to change the power state of its device.
-    @discussion A driver uses this method to tell its superclass to change the power state of the device. This is the recommended way to change the power state of a device. 
-    
-    Three things affect driver power state: @link changePowerStateTo changePowerStateTo@/link, <code>changePowerStateToPriv</code>, and the desires of the driver's power plane children. Power management puts the device into the maximum state governed by those three entities. 
-    
+    @discussion A driver uses this method to tell its superclass to change the power state of the device. This is the recommended way to change the power state of a device.
+    Three things affect driver power state: @link changePowerStateTo changePowerStateTo@/link, <code>changePowerStateToPriv</code>, and the desires of the driver's power plane children. Power management puts the device into the maximum state governed by those three entities.
     Drivers may eliminate the influence of the <code>changePowerStateTo</code> method on power state one of two ways. See @link powerOverrideOnPriv powerOverrideOnPriv@/link to ignore the method's influence, or call <code>changePowerStateTo(0)</code> in the driver's <code>start</code> routine to remove the <code>changePowerStateTo</code> method's power request.
-    
-    @param ordinal The number of the desired power state in the power state array. 
-    @result A return code that can be ignored by the caller. 
-*/
-    IOReturn changePowerStateToPriv ( unsigned long ordinal );
+    @param ordinal The number of the desired power state in the power state array.
+    @result A return code that can be ignored by the caller. */
+
+    IOReturn changePowerStateToPriv( unsigned long ordinal );
 
 /*! @function powerOverrideOnPriv
     @abstract Allows a driver to ignore its children's power management requests and only use changePowerStateToPriv to define its own power state.
+    @discussion Power management normally keeps a device at the highest state required by its requests via @link changePowerStateTo changePowerStateTo@/link, @link changePowerStateToPriv changePowerStateToPriv@/link, and its children. However, a driver may ensure a lower power state than otherwise required by itself and its children using <code>powerOverrideOnPriv</code>. When the override is on, power management keeps the device's power state in the state specified by <code>changePowerStateToPriv</code>. Turning on the override will initiate a power change if the driver's <code>changePowerStateToPriv</code> desired power state is different from the maximum of the <code>changePowerStateTo</code> desired power state and the children's desires.
+    @result A return code that can be ignored by the caller. */
 
-    @discussion Power management normally keeps a device at the highest state required by its requests via @link changePowerStateTo changePowerStateTo@/link, @link changePowerStateToPriv changePowerStateToPriv@/link, and its children. However, a driver may ensure a lower power state than otherwise required by itself and its children using <code>powerOverrideOnPriv</code>.
-    
-    When the override is on, power management keeps the device's power state in the state specified by <code>changePowerStateToPriv</code>.
-    
-    Turning on the override will initiate a power change if the driver's <code>changePowerStateToPriv</code> desired power state is different from the maximum of the <code>changePowerStateTo</code> desired power state and the children's desires. 
-    
-    @result A return code that can be ignored by the caller.
-
-*/
-    IOReturn powerOverrideOnPriv ( void );
+    IOReturn powerOverrideOnPriv( void );
 
 /*! @function powerOverrideOffPriv
     @abstract Allows a driver to disable a power override.
+    @discussion When a driver has enabled an override via @link powerOverrideOnPriv powerOverrideOnPriv@/link, it can disable it again by calling this method in its superclass. Disabling the override reverts to the default algorithm for determining a device's power state. The superclass will now keep the device at the highest state required by <code>changePowerStateTo</code>, <code>changePowerStateToPriv</code>, and its children. Turning off the override will initiate a power change if the driver's desired power state is different from the maximum of the power managed driver's desire and the children's desires.
+    @result A return code that can be ignored by the caller. */
 
-    @discussion When a driver has enabled an override via @link powerOverrideOnPriv powerOverrideOnPriv@/link, it can disable it again by calling this method in its superclass. Disabling the override reverts to the default algorithm for determining a device's power state. The superclass will now keep the device at the highest state required by <code>changePowerStateTo</code>, <code>changePowerStateToPriv</code>, and its children.
-    
-    Turning off the override will initiate a power change if the driver's desired power state is different from the maximum of the power managed driver's desire and the children's desires. 
-    
-    @result A return code that can be ignored by the caller.
-*/
-    IOReturn powerOverrideOffPriv ( void );
+    IOReturn powerOverrideOffPriv( void );
 
-        /*! @function powerChangeDone
-    @abstract Tells a driver when a power change is complete.
-    
-    @discussion Power management uses this method to call into a driver when a power change is completely done, when all interested parties have acknowledged the @link powerStateDidChangeTo powerStateDidChangeTo@/link call. The default implementation of this method is null; the method is meant to be overridden by subclassed power managed drivers. A driver should use this method to find out if a power change it initiated is complete. 
-    @param stateNumber The number of the state in the state array that the device has switched from.
-*/
-    virtual void powerChangeDone ( unsigned long stateNumber);
-    
-    bool tellClientsWithResponse ( int messageType );
-    void tellClients ( int messageType );
+/*! @function powerChangeDone
+    @abstract Tells a driver when a power state change is complete.
+    @discussion Power management uses this method to inform a driver when a power change is completely done, when all interested parties have acknowledged the @link powerStateDidChangeTo powerStateDidChangeTo@/link call. The default implementation of this method is null; the method is meant to be overridden by subclassed power managed drivers. A driver should use this method to find out if a power change it initiated is complete.
+    @param stateNumber The number of the state in the state array that the device has switched from. */
+
+    virtual void powerChangeDone( unsigned long stateNumber );
+#ifdef XNU_KERNEL_PRIVATE
+    /* Power management internals */
+public:
+    void settleTimerExpired( void );
+    IOReturn synchronizePowerTree( void );
+    bool assertPMThreadCall( void );
+    void deassertPMThreadCall( void );
+
+#ifdef __LP64__
+    static IOWorkLoop * getPMworkloop( void );
+#endif
+
+protected:
+    bool tellClientsWithResponse( int messageType );
+    bool tellClientsWithResponse( int messageType, bool (*)(OSObject *, void *) );
+    void tellClients( int messageType );
+    void tellClients( int messageType, bool (*)(OSObject *, void *) );
+    IOReturn changePowerStateWithOverrideTo( unsigned long ordinal );
 
 private:
-    IOReturn enqueuePowerChange ( unsigned long, unsigned long, unsigned long, IOPowerConnection *, unsigned long );
+#ifndef __LP64__
+    void ack_timer_ticked ( void );
+    IOReturn serializedAllowPowerChange2 ( unsigned long );
+    IOReturn serializedCancelPowerChange2 ( unsigned long );
+    IOReturn powerDomainWillChangeTo( IOPMPowerFlags, IOPowerConnection * );
+    IOReturn powerDomainDidChangeTo( IOPMPowerFlags, IOPowerConnection * );
+#endif
+    void PMfree( void );
+    bool tellChangeDown1 ( unsigned long );
+    bool tellChangeDown2 ( unsigned long );
+    IOReturn startPowerChange ( unsigned long, unsigned long, unsigned long, IOPowerConnection *, unsigned long );
 	void setParentInfo ( IOPMPowerFlags, IOPowerConnection *, bool );
-    IOReturn notifyAll ( bool is_prechange );
+    IOReturn notifyAll ( int nextMachineState, bool is_prechange );
     bool notifyChild ( IOPowerConnection * nextObject, bool is_prechange );
 
     // power change initiated by driver
+	void OurChangeStart( void );
     void OurChangeTellClientsPowerDown ( void );
     void OurChangeTellPriorityClientsPowerDown ( void );
     void OurChangeNotifyInterestedDriversWillChange ( void );
@@ -1718,27 +1766,27 @@ private:
     void OurChangeWaitForPowerSettle ( void );
     void OurChangeNotifyInterestedDriversDidChange ( void );
     void OurChangeFinish ( void );
-    
+    void OurSyncStart ( void );
+
     // downward power change initiated by a power parent
+	IOReturn ParentChangeStart( void );
     void ParentDownTellPriorityClientsPowerDown ( void );
     void ParentDownNotifyInterestedDriversWillChange ( void );
     void ParentDownNotifyDidChangeAndAcknowledgeChange ( void );
     void ParentDownSetPowerState ( void );
     void ParentDownWaitForPowerSettle ( void );
-    void ParentDownAcknowledgeChange ( void );
+    void ParentAcknowledgePowerChange ( void );
     
     // upward power change initiated by a power parent
     void ParentUpSetPowerState ( void );
     void ParentUpWaitForSettleTime ( void );
     void ParentUpNotifyInterestedDriversDidChange ( void );
-    void ParentUpAcknowledgePowerChange ( void );
     
     void all_done ( void );
     void start_ack_timer ( void );
     void stop_ack_timer ( void );
     unsigned long compute_settle_time ( void );
     IOReturn startSettleTimer ( unsigned long delay );
-    IOReturn changeState ( void );
     IOReturn ask_parent ( unsigned long requestedState );
     bool checkForDone ( void );
     bool responseValid ( unsigned long x, int pid );
@@ -1748,7 +1796,7 @@ private:
 	static void ack_timer_expired( thread_call_param_t, thread_call_param_t );
 	static IOReturn actionAckTimerExpired(OSObject *, void *, void *, void *, void * );
  	static IOReturn actionDriverCalloutDone(OSObject *, void *, void *, void *, void * );
-	static IOPMRequest * acquirePMRequest( IOService * target, UInt32 type );
+	static IOPMRequest * acquirePMRequest( IOService * target, IOOptionBits type, IOPMRequest * active = 0 );
 	static void releasePMRequest( IOPMRequest * request );
 	static void pmDriverCallout( IOService * from );
 	static void pmTellClientWithResponse( OSObject * object, void * context );
@@ -1757,18 +1805,18 @@ private:
 	void addPowerChild1( IOPMRequest * request );
 	void addPowerChild2( IOPMRequest * request );
 	void addPowerChild3( IOPMRequest * request );
-    void adjustPowerState( void );
+	void adjustPowerState( uint32_t clamp = 0 );
 	void start_ack_timer( UInt32 value, UInt32 scale );
 	void handlePMstop( IOPMRequest * request );
 	void handleRegisterPowerDriver( IOPMRequest * request );
 	bool handleAcknowledgePowerChange( IOPMRequest * request );
 	void handlePowerDomainWillChangeTo( IOPMRequest * request );
 	void handlePowerDomainDidChangeTo( IOPMRequest * request );
-	void handleMakeUsable( IOPMRequest * request );
-	void handleChangePowerStateTo( IOPMRequest * request );
-	void handleChangePowerStateToPriv( IOPMRequest * request );
+	void handleRequestPowerState( IOPMRequest * request );
 	void handlePowerOverrideChanged( IOPMRequest * request );
+	void handleActivityTickle( IOPMRequest * request );
 	void handleInterestChanged( IOPMRequest * request );
+    void handleSynchronizePowerTree( IOPMRequest * request );
 	void submitPMRequest( IOPMRequest * request );
 	void submitPMRequest( IOPMRequest ** request, IOItemCount count );
 	void executePMRequest( IOPMRequest * request );
@@ -1776,7 +1824,7 @@ private:
 	bool retirePMRequest(  IOPMRequest * request, IOPMWorkQueue * queue );
 	bool servicePMRequestQueue( IOPMRequest * request, IOPMRequestQueue * queue );
 	bool servicePMReplyQueue( IOPMRequest * request, IOPMRequestQueue * queue );
-	bool servicePMFreeQueue( IOPMRequest * request, IOPMRequestQueue * queue );
+	bool servicePMFreeQueue( IOPMRequest * request, IOPMCompletionQueue * queue );
 	bool notifyInterestedDrivers( void );
 	void notifyInterestedDriversDone( void );
 	bool notifyControllingDriver( void );
@@ -1784,11 +1832,15 @@ private:
 	void driverSetPowerState( void );
 	void driverInformPowerChange( void );
 	bool isPMBlocked( IOPMRequest * request, int count );
-	void start_our_change( const changeNoteItem * changeNote );
-	IOReturn start_parent_change( const changeNoteItem * changeNote );
 	void notifyChildren( void );
 	void notifyChildrenDone( void );
     void cleanClientResponses ( bool logErrors );
+    void idleTimerExpired( IOTimerEventSource * );
+	void updatePowerClient( const OSSymbol * client, uint32_t powerState );
+	void removePowerClient( const OSSymbol * client );
+	uint32_t getPowerStateForClient( const OSSymbol * client );
+    IOReturn requestPowerState( const OSSymbol * client, uint32_t state );
+#endif /* XNU_KERNEL_PRIVATE */
 };
 
 #endif /* ! _IOKIT_IOSERVICE_H */

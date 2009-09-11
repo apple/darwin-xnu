@@ -70,6 +70,7 @@
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/protosw.h>
+#include <sys/domain.h>
 #include <kern/locks.h>
 
 #include <kern/cpu_number.h>	/* before tcp_seq.h, for tcp_random18() */
@@ -88,6 +89,9 @@
 #include <netinet/tcp_seq.h>
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
+#if INET6
+#include <netinet6/tcp6_var.h>
+#endif
 #include <netinet/tcpip.h>
 #if TCPDEBUG
 #include <netinet/tcp_debug.h>
@@ -151,6 +155,26 @@ static int	always_keepalive = 0;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, always_keepalive, CTLFLAG_RW, 
     &always_keepalive , 0, "Assume SO_KEEPALIVE on all TCP connections");
 
+/*
+ * See tcp_syn_backoff[] for interval values between SYN retransmits;
+ * the value set below defines the number of retransmits, before we
+ * disable the timestamp and window scaling options during subsequent
+ * SYN retransmits.  Setting it to 0 disables the dropping off of those
+ * two options.
+ */
+static int tcp_broken_peer_syn_rxmit_thres = 7;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, broken_peer_syn_rxmit_thres, CTLFLAG_RW,
+    &tcp_broken_peer_syn_rxmit_thres, 0, "Number of retransmitted SYNs before "
+    "TCP disables rfc1323 and rfc1644 during the rest of attempts");
+
+int	tcp_pmtud_black_hole_detect = 1 ;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, pmtud_blackhole_detection, CTLFLAG_RW,
+    &tcp_pmtud_black_hole_detect, 0, "Path MTU Discovery Black Hole Detection");
+
+int	tcp_pmtud_black_hole_mss = 1200 ;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, pmtud_blackhole_mss, CTLFLAG_RW,
+    &tcp_pmtud_black_hole_mss, 0, "Path MTU Discovery Black Hole Detection lowered MSS");
+
 static int	tcp_keepcnt = TCPTV_KEEPCNT;
 static int	tcp_gc_done = FALSE;	/* perfromed garbage collection of "used" sockets */
 	/* max idle probes */
@@ -161,11 +185,12 @@ int	tcp_maxidle;
 struct	inpcbhead	time_wait_slots[N_TIME_WAIT_SLOTS];
 int		cur_tw_slot = 0;
 
-u_long		*delack_bitmask;
+u_int32_t		*delack_bitmask;
 
 void	add_to_time_wait_locked(struct tcpcb *tp);
 void	add_to_time_wait(struct tcpcb *tp) ;
 
+static void tcp_garbage_collect(struct inpcb *, int);
 
 void	add_to_time_wait_locked(struct tcpcb *tp) 
 {
@@ -218,8 +243,9 @@ void	add_to_time_wait(struct tcpcb *tp)
  * Fast timeout routine for processing delayed acks
  */
 void
-tcp_fasttimo()
+tcp_fasttimo(void *arg)
 {
+#pragma unused(arg)
     struct inpcb *inp;
     register struct tcpcb *tp;
     struct socket *so;
@@ -242,9 +268,6 @@ tcp_fasttimo()
     LIST_FOREACH(inp, &tcb, inp_list) {
 
 	so = inp->inp_socket;
-
-	if (so == &tcbinfo.nat_dummy_socket)
-		continue;
 
 	if (in_pcb_checkstate(inp, WNT_ACQUIRE, 0) == WNT_STOPUSING) 
 		continue;
@@ -300,63 +323,96 @@ tpgone:
     timeout(tcp_fasttimo, 0, hz/TCP_RETRANSHZ);
 }
 
-void 
-tcp_garbage_collect(inp, istimewait)
-	struct inpcb *inp;
-	int istimewait;
+static void
+tcp_garbage_collect(struct inpcb *inp, int istimewait)
 {
 	struct socket *so;
 	struct tcpcb *tp;
 
+	so = inp->inp_socket;
+	tp = intotcpcb(inp);
 
-		if (inp->inp_socket == &tcbinfo.nat_dummy_socket)
-				return;
+	/*
+	 * Skip if still in use or busy; it would have been more efficient
+	 * if we were to test so_usecount against 0, but this isn't possible
+	 * due to the current implementation of tcp_dropdropablreq() where
+	 * overflow sockets that are eligible for garbage collection have
+	 * their usecounts set to 1.
+	 */
+	if (so->so_usecount > 1 || !lck_mtx_try_lock_spin(inp->inpcb_mtx))
+		return;
 
+	/* Check again under the lock */
+	if (so->so_usecount > 1) {
+		lck_mtx_unlock(inp->inpcb_mtx);
+		return;
+	}
 
-		if (!lck_mtx_try_lock(inp->inpcb_mtx)) /* skip if still in use */
-			return;
+	/*
+	 * Overflowed socket dropped from the listening queue?  Do this
+	 * only if we are called to clean up the time wait slots, since
+	 * tcp_dropdropablreq() considers a socket to have been fully
+	 * dropped after add_to_time_wait() is finished.
+	 * Also handle the case of connections getting closed by the peer while in the queue as
+	 * seen with rdar://6422317
+	 * 
+	 */
+	if (so->so_usecount == 1 && 
+	    ((istimewait && (so->so_flags & SOF_OVERFLOW)) ||
+	    ((tp != NULL) && (tp->t_state == TCPS_CLOSED) && (so->so_head != NULL)
+	    	 && ((so->so_state & (SS_INCOMP|SS_CANTSENDMORE|SS_CANTRCVMORE)) ==
+			 (SS_INCOMP|SS_CANTSENDMORE|SS_CANTRCVMORE))))) {
 
-		so = inp->inp_socket;
-		tp = intotcpcb(inp);
-
-		if ((so->so_usecount == 1) && 
-		     	(so->so_flags & SOF_OVERFLOW)) {
-				in_pcbdetach(inp);
-				so->so_usecount--; 
-				lck_mtx_unlock(inp->inpcb_mtx);
-				return;
+		if (inp->inp_state != INPCB_STATE_DEAD) {
+			/* Become a regular mutex */
+			lck_mtx_convert_spin(inp->inpcb_mtx);
+#if INET6
+			if (INP_CHECK_SOCKAF(so, AF_INET6))
+				in6_pcbdetach(inp);
+			else
+#endif /* INET6 */
+			in_pcbdetach(inp);
 		}
-		else {
-			if (inp->inp_wantcnt != WNT_STOPUSING) {
-				lck_mtx_unlock(inp->inpcb_mtx);
-				return;
-			}
-		}
+		so->so_usecount--;
+		lck_mtx_unlock(inp->inpcb_mtx);
+		return;
+	} else if (inp->inp_wantcnt != WNT_STOPUSING) {
+		lck_mtx_unlock(inp->inpcb_mtx);
+		return;
+	}
 
-
-		if (so->so_usecount == 0) 
-			in_pcbdispose(inp);
-		else {
-			/* Special case:
-			 * - Check for embryonic socket stuck on listener queue (4023660)
-			 * - overflowed socket dropped from the listening queue
-			 * and dispose of remaining reference
-			 */
-			if ((so->so_usecount == 1) && 
-			  (((tp->t_state == TCPS_CLOSED) && (so->so_head != NULL) && (so->so_state & SS_INCOMP)) || 
-			     	(istimewait && (so->so_flags & SOF_OVERFLOW)))) {
-					so->so_usecount--; 
-					in_pcbdispose(inp);
-			} else
-				lck_mtx_unlock(inp->inpcb_mtx);
+	/*
+	 * We get here because the PCB is no longer searchable (WNT_STOPUSING);
+	 * detach (if needed) and dispose if it is dead (usecount is 0).  This
+	 * covers all cases, including overflow sockets and those that are
+	 * considered as "embryonic", i.e. created by sonewconn() in TCP input
+	 * path, and have not yet been committed.  For the former, we reduce
+	 * the usecount to 0 as done by the code above.  For the latter, the
+	 * usecount would have reduced to 0 as part calling soabort() when the
+	 * socket is dropped at the end of tcp_input().
+	 */
+	if (so->so_usecount == 0) {
+		/* Become a regular mutex */
+		lck_mtx_convert_spin(inp->inpcb_mtx);
+		if (inp->inp_state != INPCB_STATE_DEAD) {
+#if INET6
+			if (INP_CHECK_SOCKAF(so, AF_INET6))
+				in6_pcbdetach(inp);
+			else
+#endif /* INET6 */
+			in_pcbdetach(inp);
 		}
+		in_pcbdispose(inp);
+	} else {
+		lck_mtx_unlock(inp->inpcb_mtx);
+	}
 }
 
 static int bg_cnt = 0;
 #define BG_COUNTER_MAX 3
 
 void
-tcp_slowtimo()
+tcp_slowtimo(void)
 {
 	struct inpcb *inp, *nxt;
 	struct tcpcb *tp;
@@ -366,7 +422,9 @@ tcp_slowtimo()
 	int ostate;
 #endif
 
+#if  KDEBUG
 	static int tws_checked = 0;
+#endif
 
 	struct inpcbinfo *pcbinfo		= &tcbinfo;
 
@@ -381,9 +439,6 @@ tcp_slowtimo()
     	LIST_FOREACH(inp, &tcb, inp_list) {
 
 		so = inp->inp_socket;
-	
-		if (so == &tcbinfo.nat_dummy_socket)
-			continue;
 
 		if (in_pcb_checkstate(inp, WNT_ACQUIRE, 0) == WNT_STOPUSING) 
 			continue;
@@ -584,8 +639,8 @@ tcp_timers(tp, timer)
 {
 	register int rexmt;
 	struct socket *so_tmp;
-	struct inpcbinfo *pcbinfo		= &tcbinfo;
 	struct tcptemp *t_template;
+	int optlen = 0;
 
 #if TCPDEBUG
 	int ostate;
@@ -612,7 +667,7 @@ tcp_timers(tp, timer)
 		if (tp->t_state != TCPS_TIME_WAIT &&
 		    tp->t_state != TCPS_FIN_WAIT_2 &&
 		    tp->t_rcvtime < tcp_maxidle) {
-			tp->t_timer[TCPT_2MSL] = (unsigned long)tcp_keepintvl;
+			tp->t_timer[TCPT_2MSL] = (u_int32_t)tcp_keepintvl;
 		}
 		else {
 			tp = tcp_close(tp);
@@ -665,14 +720,60 @@ tcp_timers(tp, timer)
 		tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;
 
 		/*
-		 * Disable rfc1323 and rfc1644 if we havn't got any response to
-		 * our third SYN to work-around some broken terminal servers 
-		 * (most of which have hopefully been retired) that have bad VJ 
-		 * header compression code which trashes TCP segments containing 
-		 * unknown-to-them TCP options.
+		 * Check for potential Path MTU Discovery Black Hole 
 		 */
-		if ((tp->t_state == TCPS_SYN_SENT) && (tp->t_rxtshift == 3))
-				tp->t_flags &= ~(TF_REQ_SCALE|TF_REQ_TSTMP|TF_REQ_CC);
+
+		if (tcp_pmtud_black_hole_detect && (tp->t_state == TCPS_ESTABLISHED)) {
+			if (((tp->t_flags & (TF_PMTUD|TF_MAXSEGSNT)) == (TF_PMTUD|TF_MAXSEGSNT)) && (tp->t_rxtshift == 2)) {
+				/* 
+				 * Enter Path MTU Black-hole Detection mechanism:
+				 * - Disable Path MTU Discovery (IP "DF" bit).
+				 * - Reduce MTU to lower value than what we negociated with peer.
+				 */
+
+				tp->t_flags &= ~TF_PMTUD; /* Disable Path MTU Discovery for now */
+				tp->t_flags |= TF_BLACKHOLE; /* Record that we may have found a black hole */
+				optlen = tp->t_maxopd - tp->t_maxseg;
+				tp->t_pmtud_saved_maxopd = tp->t_maxopd; /* Keep track of previous MSS */
+				if (tp->t_maxopd > tcp_pmtud_black_hole_mss)
+					tp->t_maxopd = tcp_pmtud_black_hole_mss; /* Reduce the MSS to intermediary value */
+				else {
+					tp->t_maxopd = 	/* use the default MSS */
+#if INET6
+						isipv6 ? tcp_v6mssdflt :
+#endif /* INET6 */
+							tcp_mssdflt;
+				}
+				tp->t_maxseg = tp->t_maxopd - optlen;
+			}
+			/*
+			 * If further retransmissions are still unsuccessful with a lowered MTU,
+			 * maybe this isn't a Black Hole and we restore the previous MSS and
+			 * blackhole detection flags.
+			 */
+			else {
+	
+				if ((tp->t_flags & TF_BLACKHOLE) && (tp->t_rxtshift > 4)) {
+					tp->t_flags |= TF_PMTUD; 
+					tp->t_flags &= ~TF_BLACKHOLE; 
+					optlen = tp->t_maxopd - tp->t_maxseg;
+					tp->t_maxopd = tp->t_pmtud_saved_maxopd;
+					tp->t_maxseg = tp->t_maxopd - optlen;
+				}
+			}
+		}
+
+
+		/*
+		 * Disable rfc1323 and rfc1644 if we haven't got any response to
+		 * our SYN (after we reach the threshold) to work-around some
+		 * broken terminal servers (most of which have hopefully been
+		 * retired) that have bad VJ header compression code which
+		 * trashes TCP segments containing unknown-to-them TCP options.
+		 */
+		if ((tp->t_state == TCPS_SYN_SENT) &&
+		    (tp->t_rxtshift == tcp_broken_peer_syn_rxmit_thres))
+			tp->t_flags &= ~(TF_REQ_SCALE|TF_REQ_TSTMP|TF_REQ_CC);
 		/*
 		 * If losing, let the lower level know and try for
 		 * a better route.  Also, if we backed off this far,
@@ -783,7 +884,7 @@ tcp_timers(tp, timer)
 		if ((always_keepalive ||
 		    tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) &&
 		    (tp->t_state <= TCPS_CLOSING || tp->t_state == TCPS_FIN_WAIT_2)) {
-		    	if (tp->t_rcvtime >= TCP_KEEPIDLE(tp) + (unsigned long)tcp_maxidle)
+		    	if (tp->t_rcvtime >= TCP_KEEPIDLE(tp) + (u_int32_t)tcp_maxidle)
 				goto dropit;
 			/*
 			 * Send a packet designed to force a response

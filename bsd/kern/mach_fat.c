@@ -35,6 +35,7 @@
 #include <kern/cpu_number.h>
 #include <mach-o/fat.h>
 #include <kern/mach_loader.h>
+#include <kern/mach_fat.h>
 #include <libkern/OSByteOrder.h>
 #include <machine/exec.h>
 
@@ -110,13 +111,13 @@ fatfile_getarch2(
 	 * only PAGE_SIZE bytes
 	 */
 	if (end_of_archs > PAGE_SIZE ||
-	    end_of_archs < (sizeof(struct fat_header)+sizeof(struct fat_arch)))
+	    end_of_archs < (off_t)(sizeof(struct fat_header)+sizeof(struct fat_arch)))
 		return(LOAD_BADMACHO);
 
 	/*
 	 * 	Round size of fat_arch structures up to page boundry.
 	 */
-	size = round_page_32(end_of_archs);
+	size = round_page(end_of_archs);
 	if (size == 0)
 		return(LOAD_BADMACHO);
 

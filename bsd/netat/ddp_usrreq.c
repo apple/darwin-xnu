@@ -185,6 +185,8 @@ int	ddp_pru_send(struct socket *so, __unused int flags, struct mbuf *m,
 	if (!(pcb->ddp_flags & DDPFLG_HDRINCL)) {
 		/* prepend a DDP header */
 		M_PREPEND(m, DDP_X_HDR_SIZE, M_WAIT);
+		if (m == NULL)
+			return ENOBUFS;
 		ddp = mtod(m, at_ddp_t *);
 	}
 

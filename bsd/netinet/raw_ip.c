@@ -94,6 +94,10 @@
 #include <netinet/ip_var.h>
 #include <netinet/ip_mroute.h>
 
+#if INET6
+#include <netinet6/in6_pcb.h>
+#endif /* INET6 */
+
 #include <netinet/ip_fw.h>
 
 #if IPSEC
@@ -120,7 +124,6 @@ int rip_shutdown(struct socket *);
 extern int ipsec_bypass;
 #endif
 
-extern u_long  route_generation;
 struct	inpcbhead ripcb;
 struct	inpcbinfo ripcbinfo;
 
@@ -271,7 +274,7 @@ rip_input(m, iphlen)
 		if (ipsec4_in_reject_so(m, last->inp_socket)) {
 			m_freem(m);
 			IPSEC_STAT_INCREMENT(ipsecstat.in_polvio);
-			OSAddAtomic(1, (SInt32*)&ipstat.ips_delivered);
+			OSAddAtomic(1, &ipstat.ips_delivered);
 			/* do not inject data to pcb */
 			skipit = 1;
 		}
@@ -301,8 +304,8 @@ rip_input(m, iphlen)
 			}
 		} else {
 			m_freem(m);
-			OSAddAtomic(1, (SInt32*)&ipstat.ips_noproto);
-			OSAddAtomic(-1, (SInt32*)&ipstat.ips_delivered);
+			OSAddAtomic(1, &ipstat.ips_noproto);
+			OSAddAtomic(-1, &ipstat.ips_delivered);
 		}
 	}
 }
@@ -315,7 +318,7 @@ int
 rip_output(m, so, dst)
 	register struct mbuf *m;
 	struct socket *so;
-	u_long dst;
+	u_int32_t dst;
 {
 	register struct ip *ip;
 	register struct inpcb *inp = sotoinpcb(so);
@@ -337,6 +340,8 @@ rip_output(m, so, dst)
 			return(EMSGSIZE);
 		}
 		M_PREPEND(m, sizeof(struct ip), M_WAIT);
+		if (m == NULL)
+			return ENOBUFS;
 		ip = mtod(m, struct ip *);
 		ip->ip_tos = inp->inp_ip_tos;
 		ip->ip_off = 0;
@@ -368,7 +373,7 @@ rip_output(m, so, dst)
 #endif
 		/* XXX prevent ip_output from overwriting header fields */
 		flags |= IP_RAWOUTPUT;
-		OSAddAtomic(1, (SInt32*)&ipstat.ips_rawout);
+		OSAddAtomic(1, &ipstat.ips_rawout);
 	}
 
 #if IPSEC
@@ -378,18 +383,21 @@ rip_output(m, so, dst)
 	}
 #endif /*IPSEC*/
 
-	if (inp->inp_route.ro_rt && inp->inp_route.ro_rt->generation_id != route_generation) {
+	if (inp->inp_route.ro_rt != NULL &&
+	    inp->inp_route.ro_rt->generation_id != route_generation) {
 		rtfree(inp->inp_route.ro_rt);
-		inp->inp_route.ro_rt = (struct rtentry *)0;
+		inp->inp_route.ro_rt = NULL;
 	}
 
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_inpcb(inp, m);
 #endif
 
-#if CONFIG_IP_EDGEHOLE
-	ip_edgehole_mbuf_tag(inp, m);
-#endif
+	/*
+	 * The domain lock is held across ip_output, so it is okay
+	 * to pass the PCB cached route pointer directly to IP and
+	 * the modules beneath it.
+	 */
 	return (ip_output(m, inp->inp_options, &inp->inp_route, flags,
 	    inp->inp_moptions, &ipoa));
 }
@@ -453,7 +461,7 @@ rip_ctloutput(so, sopt)
 			else
 				error = ENOPROTOOPT;
 			break;
-#endif IPFIREWALL
+#endif /* IPFIREWALL */
 
 #if DUMMYNET
 		case IP_DUMMYNET_GET:
@@ -595,15 +603,19 @@ rip_ctlinput(
 	struct in_ifaddr *ia;
 	struct ifnet *ifp;
 	int err;
-	int flags;
+	int flags, done = 0;
 
 	switch (cmd) {
 	case PRC_IFDOWN:
-		lck_mtx_lock(rt_mtx);
+		lck_rw_lock_shared(in_ifaddr_rwlock);
 		for (ia = in_ifaddrhead.tqh_first; ia;
 		     ia = ia->ia_link.tqe_next) {
 			if (ia->ia_ifa.ifa_addr == sa
 			    && (ia->ia_flags & IFA_ROUTE)) {
+				done = 1;
+				ifaref(&ia->ia_ifa);
+				lck_rw_done(in_ifaddr_rwlock);
+				lck_mtx_lock(rnh_lock);
 				/*
 				 * in_ifscrub kills the interface route.
 				 */
@@ -615,23 +627,29 @@ rip_ctlinput(
 				 * a routing process they will come back.
 				 */
 				in_ifadown(&ia->ia_ifa, 1);
+				lck_mtx_unlock(rnh_lock);
+				ifafree(&ia->ia_ifa);
 				break;
 			}
 		}
-		lck_mtx_unlock(rt_mtx);
+		if (!done)
+			lck_rw_done(in_ifaddr_rwlock);
 		break;
 
 	case PRC_IFUP:
-		lck_mtx_lock(rt_mtx);
+		lck_rw_lock_shared(in_ifaddr_rwlock);
 		for (ia = in_ifaddrhead.tqh_first; ia;
 		     ia = ia->ia_link.tqe_next) {
 			if (ia->ia_ifa.ifa_addr == sa)
 				break;
 		}
 		if (ia == 0 || (ia->ia_flags & IFA_ROUTE)) {
-			lck_mtx_unlock(rt_mtx);
+			lck_rw_done(in_ifaddr_rwlock);
 			return;
 		}
+		ifaref(&ia->ia_ifa);
+		lck_rw_done(in_ifaddr_rwlock);
+
 		flags = RTF_UP;
 		ifp = ia->ia_ifa.ifa_ifp;
 
@@ -639,16 +657,16 @@ rip_ctlinput(
 		    || (ifp->if_flags & IFF_POINTOPOINT))
 			flags |= RTF_HOST;
 
-		err = rtinit_locked(&ia->ia_ifa, RTM_ADD, flags);
-		lck_mtx_unlock(rt_mtx);
+		err = rtinit(&ia->ia_ifa, RTM_ADD, flags);
 		if (err == 0)
 			ia->ia_flags |= IFA_ROUTE;
+		ifafree(&ia->ia_ifa);
 		break;
 	}
 }
 
-u_long	rip_sendspace = RIPSNDQ;
-u_long	rip_recvspace = RIPRCVQ;
+u_int32_t	rip_sendspace = RIPSNDQ;
+u_int32_t	rip_recvspace = RIPRCVQ;
 
 SYSCTL_INT(_net_inet_raw, OID_AUTO, maxdgram, CTLFLAG_RW,
     &rip_sendspace, 0, "Maximum outgoing raw IP datagram size");
@@ -768,7 +786,7 @@ rip_send(struct socket *so, __unused int flags, struct mbuf *m, struct sockaddr 
 	 __unused struct mbuf *control, __unused struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
-	register u_long dst;
+	register u_int32_t dst;
 
 	if (so->so_state & SS_ISCONNECTED) {
 		if (nam) {
@@ -790,29 +808,41 @@ rip_send(struct socket *so, __unused int flags, struct mbuf *m, struct sockaddr 
  * it will handle the socket dealloc on last reference 
  * */
 int
-rip_unlock(struct socket *so, int refcount, int debug)
+rip_unlock(struct socket *so, int refcount, void *debug)
 {
-	int lr_saved;
+	void *lr_saved;
 	struct inpcb *inp = sotoinpcb(so);
 
-	if (debug == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
-	else lr_saved = debug;
+	if (debug == NULL)
+		lr_saved = __builtin_return_address(0);
+	else
+		lr_saved = debug;
 
 	if (refcount) {
-		if (so->so_usecount <= 0)
-			panic("rip_unlock: bad refoucnt so=%p val=%x\n", so, so->so_usecount);
+		if (so->so_usecount <= 0) {
+			panic("rip_unlock: bad refoucnt so=%p val=%x lrh= %s\n",
+			    so, so->so_usecount, solockhistory_nr(so));
+			/* NOTREACHED */
+		}
 		so->so_usecount--;
 		if (so->so_usecount == 0 && (inp->inp_wantcnt == WNT_STOPUSING)) {
 			/* cleanup after last reference */
 			lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
 			lck_rw_lock_exclusive(ripcbinfo.mtx);
+			if (inp->inp_state != INPCB_STATE_DEAD) {
+#if INET6
+				if (INP_CHECK_SOCKAF(so, AF_INET6))
+					in6_pcbdetach(inp);
+				else
+#endif /* INET6 */
+				in_pcbdetach(inp);
+			}
 			in_pcbdispose(inp);
 			lck_rw_done(ripcbinfo.mtx);
 			return(0);
 		}
 	}
-	so->unlock_lr[so->next_unlock_lr] = (u_int32_t)lr_saved;
+	so->unlock_lr[so->next_unlock_lr] = lr_saved;
 	so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 	lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
 	return(0);
@@ -919,6 +949,111 @@ rip_pcblist SYSCTL_HANDLER_ARGS
 
 SYSCTL_PROC(_net_inet_raw, OID_AUTO/*XXX*/, pcblist, CTLFLAG_RD, 0, 0,
 	    rip_pcblist, "S,xinpcb", "List of active raw IP sockets");
+
+#if !CONFIG_EMBEDDED
+
+static int
+rip_pcblist64 SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+        int error, i, n;
+        struct inpcb *inp, **inp_list;
+        inp_gen_t gencnt;
+        struct xinpgen xig;
+
+        /*
+         * The process of preparing the TCB list is too time-consuming and
+         * resource-intensive to repeat twice on every request.
+         */
+        lck_rw_lock_exclusive(ripcbinfo.mtx);
+        if (req->oldptr == USER_ADDR_NULL) {
+                n = ripcbinfo.ipi_count;
+                req->oldidx = 2 * (sizeof xig)
+                        + (n + n/8) * sizeof(struct xinpcb64);
+                lck_rw_done(ripcbinfo.mtx);
+                return 0;
+        }
+
+        if (req->newptr != USER_ADDR_NULL) {
+                lck_rw_done(ripcbinfo.mtx);
+                return EPERM;
+        }
+
+        /*
+         * OK, now we're committed to doing something.
+         */
+        gencnt = ripcbinfo.ipi_gencnt;
+        n = ripcbinfo.ipi_count;
+
+        bzero(&xig, sizeof(xig));
+        xig.xig_len = sizeof xig;
+        xig.xig_count = n;
+        xig.xig_gen = gencnt;
+        xig.xig_sogen = so_gencnt;
+        error = SYSCTL_OUT(req, &xig, sizeof xig);
+        if (error) {
+                lck_rw_done(ripcbinfo.mtx);
+                return error;
+        }
+    /*
+     * We are done if there is no pcb
+     */
+    if (n == 0) {
+        lck_rw_done(ripcbinfo.mtx);
+        return 0;
+    }
+
+        inp_list = _MALLOC(n * sizeof *inp_list, M_TEMP, M_WAITOK);
+        if (inp_list == 0) {
+                lck_rw_done(ripcbinfo.mtx);
+                return ENOMEM;
+        }
+
+        for (inp = ripcbinfo.listhead->lh_first, i = 0; inp && i < n;
+             inp = inp->inp_list.le_next) {
+                if (inp->inp_gencnt <= gencnt && inp->inp_state != INPCB_STATE_DEAD)
+                        inp_list[i++] = inp;
+        }
+        n = i;
+
+        error = 0;
+        for (i = 0; i < n; i++) {
+                inp = inp_list[i];
+                if (inp->inp_gencnt <= gencnt && inp->inp_state != INPCB_STATE_DEAD) {
+                        struct xinpcb64 xi;
+
+                        bzero(&xi, sizeof(xi));
+                        xi.xi_len = sizeof xi;
+                        inpcb_to_xinpcb64(inp, &xi);
+                        if (inp->inp_socket)
+                                sotoxsocket64(inp->inp_socket, &xi.xi_socket);
+                        error = SYSCTL_OUT(req, &xi, sizeof xi);
+                }
+        }
+        if (!error) {
+                /*
+                 * Give the user an updated idea of our state.
+                 * If the generation differs from what we told
+                 * her before, she knows that something happened
+                 * while we were processing this request, and it
+                 * might be necessary to retry.
+                 */
+                bzero(&xig, sizeof(xig));
+                xig.xig_len = sizeof xig;
+                xig.xig_gen = ripcbinfo.ipi_gencnt;
+                xig.xig_sogen = so_gencnt;
+                xig.xig_count = ripcbinfo.ipi_count;
+                error = SYSCTL_OUT(req, &xig, sizeof xig);
+        }
+        FREE(inp_list, M_TEMP);
+        lck_rw_done(ripcbinfo.mtx);
+        return error;
+}
+
+SYSCTL_PROC(_net_inet_raw, OID_AUTO, pcblist64, CTLFLAG_RD, 0, 0,
+            rip_pcblist64, "S,xinpcb64", "List of active raw IP sockets");
+
+#endif /* !CONFIG_EMBEDDED */
 
 struct pr_usrreqs rip_usrreqs = {
 	rip_abort, pru_accept_notsupp, rip_attach, rip_bind, rip_connect,

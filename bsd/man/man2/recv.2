@@ -196,6 +196,7 @@ and
 specify the destination address if the socket is unconnected;
 .Fa msg_name
 may be given as a null pointer if no names are desired or required.
+.Pp
 The
 .Fa msg_iov
 and
@@ -203,6 +204,18 @@ and
 arguments
 describe scatter gather locations, as discussed in
 .Xr read 2 .
+.Fa msg_iovlen 
+shall be set to the dimension of this array. In each 
+.Fa iovec 
+structure, the 
+.Fa iov_base 
+field specifies a storage area and the 
+.Fa iov_len 
+field gives its size in bytes. Each storage area indicated by 
+.Fa msg_iov 
+is filled with received data in turn until all of the received data 
+is stored or all of the areas have been filled.
+.Pp
 The
 .Fa msg_control
 argument,
@@ -332,7 +345,12 @@ call may also fail if:
 .Bl -tag -width Er
 .\" ===========
 .It Bq Er EMSGSIZE
-The requested message size is invalid.
+The 
+.Fa msg_iovlen 
+member of the 
+.Fa msghdr 
+structure pointed to by message is less than or equal to 0, or is greater than 
+.Dv IOV_MAX .
 .\" ===========
 .It Bq Er ENOMEM
 Insufficient memory is available.

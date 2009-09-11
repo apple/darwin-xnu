@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -136,6 +136,7 @@
 #include <ppc/hw_perfmon.h>
 #endif
 
+
 /*
  * Exported interfaces
  */
@@ -152,8 +153,17 @@
 #include <security/mac_mach_internal.h>
 #endif
 
-task_t	kernel_task;
-zone_t	task_zone;
+#if CONFIG_COUNTERS
+#include <pmc/pmc.h>
+#endif /* CONFIG_COUNTERS */
+
+task_t			kernel_task;
+zone_t			task_zone;
+lck_attr_t      task_lck_attr;
+lck_grp_t       task_lck_grp;
+lck_grp_attr_t  task_lck_grp_attr;
+
+int task_max = CONFIG_TASK_MAX; /* Max number of tasks */
 
 /* Forwards */
 
@@ -173,6 +183,9 @@ kern_return_t	task_set_ledger(
 			ledger_t	wired,
 			ledger_t	paged);
 
+int check_for_tasksuspend(
+			task_t task);
+
 void
 task_backing_store_privileged(
 			task_t task)
@@ -189,7 +202,7 @@ task_set_64bit(
 		task_t task,
 		boolean_t is64bit)
 {
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 	thread_t thread;
 #endif /* __i386__ */
 	int	vm_flags = 0;
@@ -214,7 +227,6 @@ task_set_64bit(
 				     MACH_VM_MAX_ADDRESS,
 				     0);
 #ifdef __ppc__
-		/* LP64todo - make this clean */
 		/*
 		 * PPC51: ppc64 is limited to 51-bit addresses.
 		 * Memory mapped above that limit is handled specially
@@ -238,26 +250,50 @@ task_set_64bit(
 	 * certain routines may observe the thread as being in an inconsistent
 	 * state with respect to its task's 64-bitness.
 	 */
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
+	task_lock(task);
 	queue_iterate(&task->threads, thread, thread_t, task_threads) {
+		thread_mtx_lock(thread);
 		machine_thread_switch_addrmode(thread);
+		thread_mtx_unlock(thread);
 	}
+	task_unlock(task);
 #endif /* __i386__ */
+}
+
+
+void
+task_set_dyld_info(task_t task, mach_vm_address_t addr, mach_vm_size_t size)
+{
+	task_lock(task);
+	task->all_image_info_addr = addr;
+	task->all_image_info_size = size;
+	task_unlock(task);
 }
 
 void
 task_init(void)
 {
+
+	lck_grp_attr_setdefault(&task_lck_grp_attr);
+	lck_grp_init(&task_lck_grp, "task", &task_lck_grp_attr);
+	lck_attr_setdefault(&task_lck_attr);
+	lck_mtx_init(&tasks_threads_lock, &task_lck_grp, &task_lck_attr);
+
 	task_zone = zinit(
 			sizeof(struct task),
-			TASK_MAX * sizeof(struct task),
+			task_max * sizeof(struct task),
 			TASK_CHUNK * sizeof(struct task),
 			"tasks");
 
 	/*
 	 * Create the kernel task as the first task.
 	 */
+#ifdef __LP64__
+	if (task_create_internal(TASK_NULL, FALSE, TRUE, &kernel_task) != KERN_SUCCESS)
+#else
 	if (task_create_internal(TASK_NULL, FALSE, FALSE, &kernel_task) != KERN_SUCCESS)
+#endif
 		panic("task_init\n");
 
 	vm_map_deallocate(kernel_task->map);
@@ -338,6 +374,7 @@ task_create_internal(
 	/* one ref for just being alive; one for our caller */
 	new_task->ref_count = 2;
 
+	/* if inherit_memory is true, parent_task MUST not be NULL */
 	if (inherit_memory)
 		new_task->map = vm_map_fork(parent_task->map);
 	else
@@ -347,17 +384,17 @@ task_create_internal(
 
 	/* Inherit memlock limit from parent */
 	if (parent_task)
-		vm_map_set_user_wire_limit(new_task->map, parent_task->map->user_wire_limit);
+		vm_map_set_user_wire_limit(new_task->map, (vm_size_t)parent_task->map->user_wire_limit);
 
-	mutex_init(&new_task->lock, 0);
+	lck_mtx_init(&new_task->lock, &task_lck_grp, &task_lck_attr);
 	queue_init(&new_task->threads);
 	new_task->suspend_count = 0;
 	new_task->thread_count = 0;
 	new_task->active_thread_count = 0;
 	new_task->user_stop_count = 0;
-	new_task->pset_hint = PROCESSOR_SET_NULL;
 	new_task->role = TASK_UNSPECIFIED;
 	new_task->active = TRUE;
+	new_task->halting = FALSE;
 	new_task->user_data = NULL;
 	new_task->faults = 0;
 	new_task->cow_faults = 0;
@@ -375,8 +412,10 @@ task_create_internal(
 	new_task->bsd_info = NULL;
 #endif /* MACH_BSD */
 
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 	new_task->i386_ldt = 0;
+	new_task->task_debug = NULL;
+
 #endif
 
 #ifdef __ppc__
@@ -389,7 +428,6 @@ task_create_internal(
 	new_task->lock_sets_owned = 0;
 
 #if CONFIG_MACF_MACH
-	/*mutex_init(&new_task->labellock, ETAP_NO_TRACE);*/
 	new_task->label = labelh_new(1);
 	mac_task_label_init (&new_task->maclabel);
 #endif
@@ -405,6 +443,10 @@ task_create_internal(
 
 	new_task->affinity_space = NULL;
 
+#if CONFIG_COUNTERS
+	new_task->t_chud = 0U;
+#endif
+
 	if (parent_task != TASK_NULL) {
 		new_task->sec_token = parent_task->sec_token;
 		new_task->audit_token = parent_task->audit_token;
@@ -419,19 +461,29 @@ task_create_internal(
 			convert_port_to_ledger(parent_task->paged_ledger_port));
 		if(task_has_64BitAddr(parent_task))
 			task_set_64BitAddr(new_task);
+		new_task->all_image_info_addr = parent_task->all_image_info_addr;
+		new_task->all_image_info_size = parent_task->all_image_info_size;
 
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 		if (inherit_memory && parent_task->i386_ldt)
 			new_task->i386_ldt = user_ldt_copy(parent_task->i386_ldt);
 #endif
 		if (inherit_memory && parent_task->affinity_space)
 			task_affinity_create(parent_task, new_task);
+
+		new_task->pset_hint = parent_task->pset_hint = task_choose_pset(parent_task);
 	}
 	else {
 		new_task->sec_token = KERNEL_SECURITY_TOKEN;
 		new_task->audit_token = KERNEL_AUDIT_TOKEN;
 		new_task->wired_ledger_port = ledger_copy(root_wired_ledger);
 		new_task->paged_ledger_port = ledger_copy(root_paged_ledger);
+#ifdef __LP64__
+		if(is_64bit)
+			task_set_64BitAddr(new_task);
+#endif
+
+		new_task->pset_hint = PROCESSOR_SET_NULL;
 	}
 
 	if (kernel_task == TASK_NULL) {
@@ -443,10 +495,10 @@ task_create_internal(
 		new_task->max_priority = MAXPRI_USER;
 	}
 	
-	mutex_lock(&tasks_threads_lock);
+	lck_mtx_lock(&tasks_threads_lock);
 	queue_enter(&tasks, new_task, task_t, tasks);
 	tasks_count++;
-	mutex_unlock(&tasks_threads_lock);
+	lck_mtx_unlock(&tasks_threads_lock);
 
 	if (vm_backing_store_low && parent_task != NULL)
 		new_task->priv_flags |= (parent_task->priv_flags&VM_BACKING_STORE_PRIV);
@@ -479,6 +531,8 @@ task_deallocate(
 
 	vm_map_deallocate(task->map);
 	is_release(task->itk_space);
+
+	lck_mtx_destroy(&task->lock, &task_lck_grp);
 
 #if CONFIG_MACF_MACH
 	labelh_release(task->label);
@@ -611,7 +665,6 @@ task_terminate_internal(
 	ipc_space_destroy(task->itk_space);
 
 #ifdef __ppc__
-	/* LP64todo - make this clean */
 	/*
 	 * PPC51: ppc64 is limited to 51-bit addresses.
 	 */
@@ -637,10 +690,10 @@ task_terminate_internal(
 	/* release our shared region */
 	vm_shared_region_set(task, NULL);
 
-	mutex_lock(&tasks_threads_lock);
+	lck_mtx_lock(&tasks_threads_lock);
 	queue_remove(&tasks, task, task_t, tasks);
 	tasks_count--;
-	mutex_unlock(&tasks_threads_lock);
+	lck_mtx_unlock(&tasks_threads_lock);
 
 	/*
 	 * We no longer need to guard against being aborted, so restore
@@ -661,16 +714,15 @@ task_terminate_internal(
 }
 
 /*
- * task_halt:
+ * task_start_halt:
  *
  * 	Shut the current task down (except for the current thread) in
  *	preparation for dramatic changes to the task (probably exec).
- *	We hold the task, terminate all other threads in the task and
- *	wait for them to terminate, clean up the portspace, and when
- *	all done, let the current thread go.
+ *	We hold the task and mark all other threads in the task for
+ *	termination.
  */
 kern_return_t
-task_halt(
+task_start_halt(
 	task_t		task)
 {
 	thread_t	thread, self;
@@ -684,7 +736,7 @@ task_halt(
 
 	task_lock(task);
 
-	if (!task->active || !self->active) {
+	if (task->halting || !task->active || !self->active) {
 		/*
 		 *	Task or current thread is already being terminated.
 		 *	Hurry up and return out of the current kernel context
@@ -696,7 +748,10 @@ task_halt(
 		return (KERN_FAILURE);
 	}
 
+	task->halting = TRUE;
+
 	if (task->thread_count > 1) {
+
 		/*
 		 * Mark all the threads to keep them from starting any more
 		 * user-level execution.  The thread_terminate_internal code
@@ -715,15 +770,47 @@ task_halt(
 
 		task_release_locked(task);
 	}
+	task_unlock(task);
+	return KERN_SUCCESS;
+}
+
+
+/*
+ * task_complete_halt:
+ *
+ *	Complete task halt by waiting for threads to terminate, then clean
+ *	up task resources (VM, port namespace, etc...) and then let the
+ *	current thread go in the (practically empty) task context.
+ */
+void
+task_complete_halt(task_t task)
+{
+	task_lock(task);
+	assert(task->halting);
+	assert(task == current_task());
 
 	/*
 	 *	Give the machine dependent code a chance
-	 *	to perform cleanup before ripping apart
-	 *	the task.
+	 *	to perform cleanup of task-level resources
+	 *	associated with the current thread before
+	 *	ripping apart the task.
+	 *
+	 *	This must be done with the task	locked.
 	 */
 	machine_thread_terminate_self();
 
-	task_unlock(task);
+	/*
+	 *	Wait for the other threads to get shut down.
+	 *      When the last other thread is reaped, we'll be
+	 *	worken up.
+	 */
+	if (task->thread_count > 1) {
+		assert_wait((event_t)&task->halting, THREAD_UNINT);
+		task_unlock(task);
+		thread_block(THREAD_CONTINUE_NULL);
+	} else {
+		task_unlock(task);
+	}
 
 	/*
 	 *	Destroy all synchronizers owned by the task.
@@ -743,7 +830,7 @@ task_halt(
 	vm_map_remove(task->map, task->map->min_offset,
 		      task->map->max_offset, VM_MAP_NO_FLAGS);
 
-	return (KERN_SUCCESS);
+	task->halting = FALSE;
 }
 
 /*
@@ -1184,8 +1271,17 @@ task_info(
 	task_info_t				task_info_out,
 	mach_msg_type_number_t	*task_info_count)
 {
+	kern_return_t error = KERN_SUCCESS;
+
 	if (task == TASK_NULL)
 		return (KERN_INVALID_ARGUMENT);
+
+	task_lock(task);
+
+	if ((task != current_task()) && (!task->active)) {
+		task_unlock(task);
+		return (KERN_INVALID_ARGUMENT);
+	}
 
 	switch (flavor) {
 
@@ -1193,15 +1289,19 @@ task_info(
 	case TASK_BASIC2_INFO_32:
 	{
 		task_basic_info_32_t	basic_info;
-		vm_map_t			map;
+		vm_map_t				map;
+		clock_sec_t				secs;
+		clock_usec_t			usecs;
 
-		if (*task_info_count < TASK_BASIC_INFO_32_COUNT)
-		    return (KERN_INVALID_ARGUMENT);
+		if (*task_info_count < TASK_BASIC_INFO_32_COUNT) {
+		    error = KERN_INVALID_ARGUMENT;
+		    break;
+		}
 
 		basic_info = (task_basic_info_32_t)task_info_out;
 
 		map = (task == kernel_task)? kernel_map: task->map;
-		basic_info->virtual_size  = CAST_DOWN(vm_offset_t,map->size);
+		basic_info->virtual_size = (typeof(basic_info->virtual_size))map->size;
 		if (flavor == TASK_BASIC2_INFO_32) {
 			/*
 			 * The "BASIC2" flavor gets the maximum resident
@@ -1213,18 +1313,19 @@ task_info(
 		}
 		basic_info->resident_size *= PAGE_SIZE;
 
-		task_lock(task);
 		basic_info->policy = ((task != kernel_task)?
 										  POLICY_TIMESHARE: POLICY_RR);
 		basic_info->suspend_count = task->user_stop_count;
 
-		absolutetime_to_microtime(task->total_user_time,
-					  (unsigned *)&basic_info->user_time.seconds,
-					  (unsigned *)&basic_info->user_time.microseconds);
-		absolutetime_to_microtime(task->total_system_time,
-					  (unsigned *)&basic_info->system_time.seconds,
-					  (unsigned *)&basic_info->system_time.microseconds);
-		task_unlock(task);
+		absolutetime_to_microtime(task->total_user_time, &secs, &usecs);
+		basic_info->user_time.seconds = 
+			(typeof(basic_info->user_time.seconds))secs;
+		basic_info->user_time.microseconds = usecs;
+
+		absolutetime_to_microtime(task->total_system_time, &secs, &usecs);
+		basic_info->system_time.seconds = 
+			(typeof(basic_info->system_time.seconds))secs;
+		basic_info->system_time.microseconds = usecs;
 
 		*task_info_count = TASK_BASIC_INFO_32_COUNT;
 		break;
@@ -1233,10 +1334,14 @@ task_info(
 	case TASK_BASIC_INFO_64:
 	{
 		task_basic_info_64_t	basic_info;
-		vm_map_t			map;
+		vm_map_t				map;
+		clock_sec_t				secs;
+		clock_usec_t			usecs;
 
-		if (*task_info_count < TASK_BASIC_INFO_64_COUNT)
-		    return (KERN_INVALID_ARGUMENT);
+		if (*task_info_count < TASK_BASIC_INFO_64_COUNT) {
+		    error = KERN_INVALID_ARGUMENT;
+		    break;
+		}
 
 		basic_info = (task_basic_info_64_t)task_info_out;
 
@@ -1246,18 +1351,19 @@ task_info(
 			(mach_vm_size_t)(pmap_resident_count(map->pmap))
 			* PAGE_SIZE_64;
 
-		task_lock(task);
 		basic_info->policy = ((task != kernel_task)?
 										  POLICY_TIMESHARE: POLICY_RR);
 		basic_info->suspend_count = task->user_stop_count;
 
-		absolutetime_to_microtime(task->total_user_time,
-					  (unsigned *)&basic_info->user_time.seconds,
-					  (unsigned *)&basic_info->user_time.microseconds);
-		absolutetime_to_microtime(task->total_system_time,
-					  (unsigned *)&basic_info->system_time.seconds,
-					  (unsigned *)&basic_info->system_time.microseconds);
-		task_unlock(task);
+		absolutetime_to_microtime(task->total_user_time, &secs, &usecs);
+		basic_info->user_time.seconds = 
+			(typeof(basic_info->user_time.seconds))secs;
+		basic_info->user_time.microseconds = usecs;
+
+		absolutetime_to_microtime(task->total_system_time, &secs, &usecs);
+		basic_info->system_time.seconds =
+			(typeof(basic_info->system_time.seconds))secs;
+		basic_info->system_time.microseconds = usecs;
 
 		*task_info_count = TASK_BASIC_INFO_64_COUNT;
 		break;
@@ -1268,8 +1374,10 @@ task_info(
 		register task_thread_times_info_t	times_info;
 		register thread_t					thread;
 
-		if (*task_info_count < TASK_THREAD_TIMES_INFO_COUNT)
-		    return (KERN_INVALID_ARGUMENT);
+		if (*task_info_count < TASK_THREAD_TIMES_INFO_COUNT) {
+		    error = KERN_INVALID_ARGUMENT;
+		    break;
+		}
 
 		times_info = (task_thread_times_info_t) task_info_out;
 		times_info->user_time.seconds = 0;
@@ -1277,7 +1385,6 @@ task_info(
 		times_info->system_time.seconds = 0;
 		times_info->system_time.microseconds = 0;
 
-		task_lock(task);
 
 		queue_iterate(&task->threads, thread, thread_t, task_threads) {
 		    time_value_t	user_time, system_time;
@@ -1288,7 +1395,6 @@ task_info(
 		    time_value_add(&times_info->system_time, &system_time);
 		}
 
-		task_unlock(task);
 
 		*task_info_count = TASK_THREAD_TIMES_INFO_COUNT;
 		break;
@@ -1299,13 +1405,14 @@ task_info(
 		task_absolutetime_info_t	info;
 		register thread_t			thread;
 
-		if (*task_info_count < TASK_ABSOLUTETIME_INFO_COUNT)
-			return (KERN_INVALID_ARGUMENT);
+		if (*task_info_count < TASK_ABSOLUTETIME_INFO_COUNT) {
+			error = KERN_INVALID_ARGUMENT;
+			break;
+		}
 
 		info = (task_absolutetime_info_t)task_info_out;
 		info->threads_user = info->threads_system = 0;
 
-		task_lock(task);
 
 		info->total_user = task->total_user_time;
 		info->total_system = task->total_system_time;
@@ -1322,9 +1429,23 @@ task_info(
 			info->total_system += tval;
 		}
 
-		task_unlock(task);
 
 		*task_info_count = TASK_ABSOLUTETIME_INFO_COUNT;
+		break;
+	}
+
+	case TASK_DYLD_INFO:
+	{
+		task_dyld_info_t info;
+
+		if (*task_info_count < TASK_DYLD_INFO_COUNT) {
+			error = KERN_INVALID_ARGUMENT;
+			break;
+		}
+		info = (task_dyld_info_t)task_info_out;
+		info->all_image_info_addr = task->all_image_info_addr;
+		info->all_image_info_size = task->all_image_info_size;
+		*task_info_count = TASK_DYLD_INFO_COUNT;
 		break;
 	}
 
@@ -1332,10 +1453,12 @@ task_info(
 	case TASK_SCHED_FIFO_INFO:
 	{
 
-		if (*task_info_count < POLICY_FIFO_BASE_COUNT)
-			return (KERN_INVALID_ARGUMENT);
+		if (*task_info_count < POLICY_FIFO_BASE_COUNT) {
+			error = KERN_INVALID_ARGUMENT;
+			break;
+		}
 
-		return (KERN_INVALID_POLICY);
+		error = KERN_INVALID_POLICY;
 	}
 
 	/* OBSOLETE */
@@ -1343,19 +1466,19 @@ task_info(
 	{
 		register policy_rr_base_t	rr_base;
 
-		if (*task_info_count < POLICY_RR_BASE_COUNT)
-			return (KERN_INVALID_ARGUMENT);
+		if (*task_info_count < POLICY_RR_BASE_COUNT) {
+			error = KERN_INVALID_ARGUMENT;
+			break;
+		}
 
 		rr_base = (policy_rr_base_t) task_info_out;
 
-		task_lock(task);
 		if (task != kernel_task) {
-			task_unlock(task);
-			return (KERN_INVALID_POLICY);
+			error = KERN_INVALID_POLICY;
+			break;
 		}
 
 		rr_base->base_priority = task->priority;
-		task_unlock(task);
 
 		rr_base->quantum = std_quantum_us / 1000;
 
@@ -1368,19 +1491,19 @@ task_info(
 	{
 		register policy_timeshare_base_t	ts_base;
 
-		if (*task_info_count < POLICY_TIMESHARE_BASE_COUNT)
-			return (KERN_INVALID_ARGUMENT);
+		if (*task_info_count < POLICY_TIMESHARE_BASE_COUNT) {
+			error = KERN_INVALID_ARGUMENT;
+			break;
+		}
 
 		ts_base = (policy_timeshare_base_t) task_info_out;
 
-		task_lock(task);
 		if (task == kernel_task) {
-			task_unlock(task);
-			return (KERN_INVALID_POLICY);
+			error = KERN_INVALID_POLICY;
+			break;
 		}
 
 		ts_base->base_priority = task->priority;
-		task_unlock(task);
 
 		*task_info_count = POLICY_TIMESHARE_BASE_COUNT;
 		break;
@@ -1390,14 +1513,14 @@ task_info(
 	{
 		register security_token_t	*sec_token_p;
 
-		if (*task_info_count < TASK_SECURITY_TOKEN_COUNT)
-		    return (KERN_INVALID_ARGUMENT);
+		if (*task_info_count < TASK_SECURITY_TOKEN_COUNT) {
+		    error = KERN_INVALID_ARGUMENT;
+		    break;
+		}
 
 		sec_token_p = (security_token_t *) task_info_out;
 
-		task_lock(task);
 		*sec_token_p = task->sec_token;
-		task_unlock(task);
 
 		*task_info_count = TASK_SECURITY_TOKEN_COUNT;
 		break;
@@ -1407,33 +1530,34 @@ task_info(
 	{
 		register audit_token_t	*audit_token_p;
 
-		if (*task_info_count < TASK_AUDIT_TOKEN_COUNT)
-		    return (KERN_INVALID_ARGUMENT);
+		if (*task_info_count < TASK_AUDIT_TOKEN_COUNT) {
+		    error = KERN_INVALID_ARGUMENT;
+		    break;
+		}
 
 		audit_token_p = (audit_token_t *) task_info_out;
 
-		task_lock(task);
 		*audit_token_p = task->audit_token;
-		task_unlock(task);
 
 		*task_info_count = TASK_AUDIT_TOKEN_COUNT;
 		break;
 	}
             
 	case TASK_SCHED_INFO:
-		return (KERN_INVALID_ARGUMENT);
+		error = KERN_INVALID_ARGUMENT;
 
 	case TASK_EVENTS_INFO:
 	{
 		register task_events_info_t	events_info;
 		register thread_t			thread;
 
-		if (*task_info_count < TASK_EVENTS_INFO_COUNT)
-		    return (KERN_INVALID_ARGUMENT);
+		if (*task_info_count < TASK_EVENTS_INFO_COUNT) {
+		   error = KERN_INVALID_ARGUMENT;
+		   break;
+		}
 
 		events_info = (task_events_info_t) task_info_out;
 
-		task_lock(task);
 
 		events_info->faults = task->faults;
 		events_info->pageins = task->pageins;
@@ -1449,24 +1573,26 @@ task_info(
 			events_info->csw += thread->c_switch;
 		}
 
-		task_unlock(task);
 
 		*task_info_count = TASK_EVENTS_INFO_COUNT;
 		break;
 	}
 	case TASK_AFFINITY_TAG_INFO:
 	{
-		if (*task_info_count < TASK_AFFINITY_TAG_INFO_COUNT)
-		    return (KERN_INVALID_ARGUMENT);
+		if (*task_info_count < TASK_AFFINITY_TAG_INFO_COUNT) {
+		    error = KERN_INVALID_ARGUMENT;
+		    break;
+		}
 
-		return task_affinity_info(task, task_info_out, task_info_count);
+		error = task_affinity_info(task, task_info_out, task_info_count);
 	}
 
 	default:
-		return (KERN_INVALID_ARGUMENT);
+		error = KERN_INVALID_ARGUMENT;
 	}
 
-	return (KERN_SUCCESS);
+	task_unlock(task);
+	return (error);
 }
 
 void
@@ -1530,38 +1656,43 @@ __unused
 	uint32_t	*microsecs)
 {
 	thread_t	thread = current_thread();
-	uint32_t	tdelt, secs;
+	uint32_t	tdelt;
+	clock_sec_t	secs;
 	uint64_t	tsum;
 
 	assert(task == current_task());
 
 	assert(task->vtimers & which);
 
-	tdelt = secs = 0;
+	secs = tdelt = 0;
 
 	switch (which) {
 
 	case TASK_VTIMER_USER:
-		tdelt = timer_delta(&thread->user_timer,
+		tdelt = (uint32_t)timer_delta(&thread->user_timer,
 								&thread->vtimer_user_save);
+		absolutetime_to_microtime(tdelt, &secs, microsecs);
 		break;
 
 	case TASK_VTIMER_PROF:
 		tsum = timer_grab(&thread->user_timer);
 		tsum += timer_grab(&thread->system_timer);
-		tdelt = tsum - thread->vtimer_prof_save;
-		thread->vtimer_prof_save = tsum;
+		tdelt = (uint32_t)(tsum - thread->vtimer_prof_save);
+		absolutetime_to_microtime(tdelt, &secs, microsecs);
+		/* if the time delta is smaller than a usec, ignore */
+		if (*microsecs != 0)
+			thread->vtimer_prof_save = tsum;
 		break;
 
 	case TASK_VTIMER_RLIM:
 		tsum = timer_grab(&thread->user_timer);
 		tsum += timer_grab(&thread->system_timer);
-		tdelt = tsum - thread->vtimer_rlim_save;
+		tdelt = (uint32_t)(tsum - thread->vtimer_rlim_save);
 		thread->vtimer_rlim_save = tsum;
+		absolutetime_to_microtime(tdelt, &secs, microsecs);
 		break;
 	}
 
-	absolutetime_to_microtime(tdelt, &secs, microsecs);
 }
 
 /*
@@ -1707,6 +1838,70 @@ task_synchronizer_destroy_all(task_t task)
 }
 
 /*
+ * Install default (machine-dependent) initial thread state 
+ * on the task.  Subsequent thread creation will have this initial
+ * state set on the thread by machine_thread_inherit_taskwide().
+ * Flavors and structures are exactly the same as those to thread_set_state()
+ */
+kern_return_t 
+task_set_state(
+	task_t task, 
+	int flavor, 
+	thread_state_t state, 
+	mach_msg_type_number_t state_count)
+{
+	kern_return_t ret;
+
+	if (task == TASK_NULL) {
+		return (KERN_INVALID_ARGUMENT);
+	}
+
+	task_lock(task);
+
+	if (!task->active) {
+		task_unlock(task);
+		return (KERN_FAILURE);
+	}
+
+	ret = machine_task_set_state(task, flavor, state, state_count);
+
+	task_unlock(task);
+	return ret;
+}
+
+/*
+ * Examine the default (machine-dependent) initial thread state 
+ * on the task, as set by task_set_state().  Flavors and structures
+ * are exactly the same as those passed to thread_get_state().
+ */
+kern_return_t 
+task_get_state(
+	task_t 	task, 
+	int	flavor,
+	thread_state_t state,
+	mach_msg_type_number_t *state_count)
+{
+	kern_return_t ret;
+
+	if (task == TASK_NULL) {
+		return (KERN_INVALID_ARGUMENT);
+	}
+
+	task_lock(task);
+
+	if (!task->active) {
+		task_unlock(task);
+		return (KERN_FAILURE);
+	}
+
+	ret = machine_task_get_state(task, flavor, state, state_count);
+
+	task_unlock(task);
+	return ret;
+}
+
+
+/*
  * We need to export some functions to other components that
  * are currently implemented in macros within the osfmk
  * component.  Just export them as functions of the same name.
@@ -1717,6 +1912,16 @@ boolean_t is_kerneltask(task_t t)
 		return (TRUE);
 
 	return (FALSE);
+}
+
+int
+check_for_tasksuspend(task_t task)
+{
+
+	if (task == TASK_NULL)
+		return (0);
+
+	return (task->suspend_count > 0);
 }
 
 #undef current_task

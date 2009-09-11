@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -60,67 +60,51 @@
 /*
  * Global descriptor table.
  */
-#include <mach/machine.h>
-#include <mach/i386/vm_param.h>
-#include <kern/thread.h>
-#include <i386/cpu_data.h>
-#include <i386/mp_desc.h>
+#include <i386/seg.h>
 
-struct fake_descriptor master_gdt[GDTSZ] __attribute__ ((aligned (4096))) = {
-	[SEL_TO_INDEX(KERNEL_CS)] {	/* kernel code */
-		0,
-		  0xfffff,
-		  SZ_32|SZ_G,
-		ACC_P|ACC_PL_K|ACC_CODE_R,
-	},
-	[SEL_TO_INDEX(KERNEL_DS)] {	/* kernel data */
-		0,
-		  0xfffff,
-		  SZ_32|SZ_G,
-		  ACC_P|ACC_PL_K|ACC_DATA_W
-	},
-	[SEL_TO_INDEX(KERNEL_LDT)] {	/* local descriptor table */
-		(uint32_t) &master_ldt,
-		  LDTSZ_MIN*sizeof(struct fake_descriptor)-1,
-		  0,
-		  ACC_P|ACC_PL_K|ACC_LDT
-	},				/* The slot KERNEL_LDT_2 is reserved. */
-	[SEL_TO_INDEX(KERNEL_TSS)] {	/* TSS for this processor */
-		(uint32_t) &master_ktss,
-		  sizeof(struct i386_tss)-1,
-		  0,
-		  ACC_P|ACC_PL_K|ACC_TSS
-	},				/* The slot KERNEL_TSS_2 is reserved. */
-	[SEL_TO_INDEX(CPU_DATA_GS)] {	/* per-CPU current thread address */
-		(uint32_t) &cpu_data_master,
-		  sizeof(cpu_data_t)-1,
-		  SZ_32,
-		  ACC_P|ACC_PL_K|ACC_DATA_W
-	},
-	[SEL_TO_INDEX(USER_LDT)] {	/* user local descriptor table */
-		(uint32_t) &master_ldt,
-		  LDTSZ_MIN*sizeof(struct fake_descriptor)-1,
-		  0,
-		  ACC_P|ACC_PL_K|ACC_LDT
-	},
-	[SEL_TO_INDEX(KERNEL64_CS)] {	/* kernel 64-bit code */ 
+struct real_descriptor master_gdt[GDTSZ] __attribute__ ((section("__INITGDT,__data")))= {
+	[SEL_TO_INDEX(KERNEL32_CS)] MAKE_REAL_DESCRIPTOR(	/* kernel 32-bit code */ 
 		0,
 		0xfffff,
-		SZ_64|SZ_G,
+		SZ_32|SZ_G,
 		ACC_P|ACC_PL_K|ACC_CODE_R
-	},
-	[SEL_TO_INDEX(KERNEL64_SS)] {	/* kernel 64-bit syscall stack */ 
+	),
+	[SEL_TO_INDEX(KERNEL_DS)] MAKE_REAL_DESCRIPTOR(	/* kernel data */
 		0,
 		0xfffff,
 		SZ_32|SZ_G,
 		ACC_P|ACC_PL_K|ACC_DATA_W
-	},
-#if	MACH_KDB
-	[SEL_TO_INDEX(DEBUG_TSS)] {	/* TSS for this processor */
-		(uint32_t)&master_dbtss,
-		  sizeof(struct i386_tss)-1,
-		  0,
-		  ACC_P|ACC_PL_K|ACC_TSS
-	},
-#endif	/* MACH_KDB */
+	),
+	[SEL_TO_INDEX(KERNEL64_CS)] MAKE_REAL_DESCRIPTOR(	/* kernel 64-bit code */ 
+		0,
+		0xfffff,
+		SZ_64|SZ_G,
+		ACC_P|ACC_PL_K|ACC_CODE_R
+	),
+	[SEL_TO_INDEX(KERNEL64_SS)] MAKE_REAL_DESCRIPTOR(	/* kernel 64-bit syscall stack */ 
+		0,
+		0xfffff,
+		SZ_32|SZ_G,
+		ACC_P|ACC_PL_K|ACC_DATA_W
+	),
+#ifdef __x86_64__
+	[SEL_TO_INDEX(USER_CS)] MAKE_REAL_DESCRIPTOR(	/* 32-bit user code segment */
+		0,
+		0xfffff,
+ 		SZ_32|SZ_G,
+		ACC_P|ACC_PL_U|ACC_CODE_R
+	),
+	[SEL_TO_INDEX(USER_DS)] MAKE_REAL_DESCRIPTOR(	/* 32-bit user data segment */
+		0,
+		0xfffff,
+		SZ_32|SZ_G,
+		ACC_P|ACC_PL_U|ACC_DATA_W
+	),
+	[SEL_TO_INDEX(USER64_CS)] MAKE_REAL_DESCRIPTOR(	/* user 64-bit code segment */
+		0,
+		0xfffff,
+		SZ_64|SZ_G,
+		ACC_P|ACC_PL_U|ACC_CODE_R
+	),
+#endif
 };

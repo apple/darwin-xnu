@@ -74,63 +74,6 @@ __BEGIN_DECLS
 
 #ifndef	MACH_KERNEL_PRIVATE
 
-typedef struct __mutex__ mutex_t;
-
-#else	/* MACH_KERNEL_PRIVATE */
-
-#define	decl_mutex_data(class,name)	class mutex_t name;
-#define mutex_addr(m)			(&(m))
-
-extern void			mutex_init(
-						mutex_t		*mutex,
-						unsigned short	tag);
-
-#ifdef i386
-extern void			mutex_try_spin(
-						mutex_t		*mutex);
-
-extern void			mutex_lock_spin(
-						mutex_t		*mutex);
-
-extern void			mutex_convert_spin(
-						mutex_t		*mutex);
-#else
-#define	mutex_try_spin(l)	mutex_try(l)
-#define	mutex_lock_spin(l)	mutex_lock(l)
-#define	mutex_convert_spin(l)	do {} while (0)
-#endif
-
-#endif	/* MACH_KERNEL_PRIVATE */
-
-extern mutex_t		*mutex_alloc(
-						unsigned short	tag);
-
-extern void			mutex_free(
-						mutex_t		*mutex);
-
-extern void			mutex_lock(
-						mutex_t		*mutex);
-
-extern void			mutex_unlock(
-						mutex_t		*mutex);
-
-extern boolean_t	mutex_try(
-						mutex_t		*mutex);
-
-extern void			mutex_pause(uint32_t);
-extern void			mutex_yield(mutex_t *);
-
-#define MA_OWNED        0x01
-#define MA_NOTOWNED     0x02
- 
-void 				_mutex_assert (
-						mutex_t		*mutex,
-						unsigned int	what);
-
-#define mutex_assert(a, b)	_mutex_assert(a, b)
-
-#ifndef	MACH_KERNEL_PRIVATE
-
 typedef struct __lock__ lock_t;
 
 #else	/* MACH_KERNEL_PRIVATE */
@@ -174,19 +117,6 @@ extern boolean_t	 lock_read_to_write(
 extern wait_result_t	thread_sleep_usimple_lock(
 							event_t				event,
 							usimple_lock_t		lock,
-							wait_interrupt_t	interruptible);
-
-/* Sleep, unlocking and then relocking a mutex in the process */
-extern wait_result_t	thread_sleep_mutex(
-							event_t				event,
-							mutex_t				*mutex,
-							wait_interrupt_t	interruptible);
-										
-/* Sleep with a deadline, unlocking and then relocking a mutex in the process */
-extern wait_result_t	thread_sleep_mutex_deadline(
-							event_t				event,
-							mutex_t				*mutex,
-							uint64_t			deadline,
 							wait_interrupt_t	interruptible);
 
 /* Sleep, unlocking and then relocking a write lock in the process */

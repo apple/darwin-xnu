@@ -82,9 +82,12 @@ static struct protosw localsw[] = {
 	{
 		.pr_type = SOCK_STREAM,
 		.pr_domain = &localdomain,
-		.pr_flags = PR_CONNREQUIRED|PR_WANTRCVD|PR_RIGHTS,
+		.pr_flags = PR_CONNREQUIRED|PR_WANTRCVD|PR_RIGHTS|PR_PCBLOCK,
 		.pr_ctloutput = uipc_ctloutput,
 		.pr_usrreqs = &uipc_usrreqs,
+		.pr_lock = unp_lock,
+		.pr_unlock = unp_unlock,
+		.pr_getlock = unp_getlock
 	},
 	{
 		.pr_type = SOCK_DGRAM,
@@ -92,6 +95,9 @@ static struct protosw localsw[] = {
 		.pr_flags = PR_ATOMIC|PR_ADDR|PR_RIGHTS,
 		.pr_ctloutput = uipc_ctloutput,
 		.pr_usrreqs = &uipc_usrreqs,
+		.pr_lock = unp_lock,
+		.pr_unlock = unp_unlock,
+		.pr_getlock = unp_getlock
 	},
 	{
 		.pr_ctlinput  = raw_ctlinput,
@@ -104,7 +110,6 @@ int local_proto_count = (sizeof (localsw) / sizeof (struct protosw));
 static void
 pre_unp_init(void)
 {
-	static int localdomain_initted = 0;
 	int i;
 	struct protosw *pr;
 	struct domain *dp = &localdomain;

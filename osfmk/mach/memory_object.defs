@@ -171,7 +171,7 @@ routine	memory_object_data_initialize(
 routine	memory_object_data_unlock(
 		memory_object		: memory_object_t;
 		offset			: memory_object_offset_t;
-		size			: memory_object_cluster_size_t;
+		size			: memory_object_size_t;
 		desired_access		: vm_prot_t);
 
 
@@ -186,7 +186,7 @@ routine	memory_object_data_unlock(
 routine memory_object_synchronize(
 		memory_object           : memory_object_t;
 		offset          	: memory_object_offset_t;
-		size	          	: memory_object_cluster_size_t;
+		size	          	: memory_object_size_t;
 		sync_flags 	     	: vm_sync_t );
 
 /*

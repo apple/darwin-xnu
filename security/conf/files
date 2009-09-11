@@ -6,6 +6,7 @@ OPTIONS/config_macf			optional config_macf
 OPTIONS/config_macf_socket_subset	optional config_macf_socket_subset
 OPTIONS/config_macf_socket		optional config_macf_socket
 OPTIONS/config_macf_net			optional config_macf_net
+OPTIONS/config_fse			optional config_fse
 
 # security
 

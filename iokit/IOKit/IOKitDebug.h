@@ -54,48 +54,54 @@ public:
     virtual bool serialize(OSSerialize *s) const;
 private:
     static void updateOffset( OSDictionary * dict,
-			UInt32 value, const char * name );
+            UInt32 value, const char * name );
 };
 
-#endif	__cplusplus
+#endif /* __cplusplus */
 
 enum {
-// loggage
-    kIOLogAttach	= 0x00000001ULL,
-    kIOLogProbe 	= 0x00000002ULL,
-    kIOLogStart 	= 0x00000004ULL,
-    kIOLogRegister 	= 0x00000008ULL,
-    kIOLogMatch 	= 0x00000010ULL,
-    kIOLogConfig 	= 0x00000020ULL,
-    kIOLogYield 	= 0x00000040ULL,
-    kIOLogPower 	= 0x00000080ULL,
-    kIOLogMapping 	= 0x00000100ULL,
-    kIOLogCatalogue 	= 0x00000200ULL,
-    kIOLogTracePower 	= 0x00000400ULL,
-    kIOLogDebugPower 	= 0x00000800ULL,
-    kIOLogServiceTree 	= 0x00001000ULL,
-    kIOLogDTree 	= 0x00002000ULL,
-    kIOLogMemory 	= 0x00004000ULL,
-    kIOLogKextMemory 	= 0x00008000ULL,
-    kOSLogRegistryMods  = 0x00010000ULL,	// Log attempts to modify registry collections
+    // loggage
+    kIOLogAttach        =         0x00000001ULL,
+    kIOLogProbe         =         0x00000002ULL,
+    kIOLogStart         =         0x00000004ULL,
+    kIOLogRegister      =         0x00000008ULL,
+    kIOLogMatch         =         0x00000010ULL,
+    kIOLogConfig        =         0x00000020ULL,
+    kIOLogYield         =         0x00000040ULL,
+    kIOLogPower         =         0x00000080ULL,
+    kIOLogMapping       =         0x00000100ULL,
+    kIOLogCatalogue     =         0x00000200ULL,
+    kIOLogTracePower    =         0x00000400ULL,
+    kIOLogDebugPower    =         0x00000800ULL,
+    kIOLogServiceTree   =         0x00001000ULL,
+    kIOLogDTree         =         0x00002000ULL,
+    kIOLogMemory        =         0x00004000ULL,
+    kIOLogKextMemory    =         0x00008000ULL,
+    kOSLogRegistryMods  =         0x00010000ULL,  // Log attempts to modify registry collections
+    kIOLogPMRootDomain  =         0x00020000ULL,
+    kOSRegistryModsMode =         0x00040000ULL,  // Change default registry modification handling - panic vs. log
+    kIOTraceIOService   =         0x00080000ULL,
+    kIOLogHibernate     =         0x00100000ULL,
 
-// debug aids - change behaviour
-    kIONoFreeObjects 	= 0x00100000ULL,
-    kIOLogSynchronous   = 0x00200000ULL,	// IOLog completes synchrounsly
-    kOSTraceObjectAlloc	= 0x00400000ULL,
+    // debug aids - change behaviour
+    kIONoFreeObjects    =         0x00100000ULL,
+    kIOLogSynchronous   =         0x00200000ULL,  // IOLog completes synchronously
+    kOSTraceObjectAlloc =         0x00400000ULL,
 
-    _kIODebugTopFlag    = 0x8000000000000000ULL // force enum to be 64 bits
+    _kIODebugTopFlag    = 0x8000000000000000ULL   // force enum to be 64 bits
 };
 
-extern SInt64	gIOKitDebug;
+extern SInt64    gIOKitDebug;
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 struct IORegistryPlane;
-extern void	IOPrintPlane( const struct IORegistryPlane * plane );
-extern void	OSPrintMemory( void );
+extern void    IOPrintPlane( const struct IORegistryPlane * plane );
+#ifndef _OSCPPDEBUG_H
+extern void    OSPrintMemory( void );
+#endif
 #define IOPrintMemory OSPrintMemory
 
 #ifdef __cplusplus

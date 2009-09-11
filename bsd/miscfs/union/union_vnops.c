@@ -1550,7 +1550,7 @@ union_pagein(struct vnop_pagein_args *ap)
 	struct vnop_pagein_args {
 	   	struct vnode 	*a_vp,
 	   	upl_t		a_pl,
-		vm_offset_t	a_pl_offset,
+		upl_offset_t	a_pl_offset,
 		off_t		a_f_offset,
 		size_t		a_size,
 		int		a_flags

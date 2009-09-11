@@ -178,7 +178,7 @@ nullsys(void)
  */
 /* ARGSUSED */
 int
-nosys(struct proc *p, __unused struct nosys_args *args, __unused register_t *retval)
+nosys(struct proc *p, __unused struct nosys_args *args, __unused int32_t *retval)
 {
 	psignal(p, SIGSYS);
 	return (ENOSYS);

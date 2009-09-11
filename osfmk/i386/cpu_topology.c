@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -31,12 +31,12 @@
 #include <kern/kalloc.h>
 #include <i386/cpu_affinity.h>
 #include <i386/cpu_topology.h>
-#include <i386/cpu_data.h>
 #include <i386/cpu_threads.h>
 #include <i386/machine_cpu.h>
-#include <i386/machine_routines.h>
 #include <i386/lock.h>
+#include <i386/cpu_data.h>
 #include <i386/lapic.h>
+#include <i386/machine_routines.h>
 
 //#define TOPO_DEBUG 1
 #if TOPO_DEBUG
@@ -60,7 +60,7 @@ x86_affinity_set_t	*x86_affinities = NULL;
 static int		x86_affinity_count = 0;
 
 /*
- * cpu_topology_start() is called after all processors have been registered
+ * cpu_topology_sort() is called after all processors have been registered
  * but before any non-boot processor id started.
  * We establish canonical logical processor numbering - logical cpus must be
  * contiguous, zero-based and assigned in physical (local apic id) order.
@@ -70,18 +70,18 @@ static int		x86_affinity_count = 0;
  * of processors - in particular, for stopping/starting from CHUD.
  */ 
 void
-cpu_topology_start(void)
+cpu_topology_sort(int ncpus)
 {
-	int		ncpus = machine_info.max_cpus;
 	int		i;
 	boolean_t	istate;
+	processor_t		lprim = NULL;
 
 	assert(machine_info.physical_cpu == 1);
 	assert(machine_info.logical_cpu == 1);
 	assert(master_cpu == 0);
 	assert(cpu_number() == 0);
 	assert(cpu_datap(0)->cpu_number == 0);
-	
+
 	/* Lights out for this */
 	istate = ml_set_interrupts_enabled(FALSE);
 
@@ -127,9 +127,9 @@ cpu_topology_start(void)
 		assert(pkg != NULL);
 
 		if (cpup->cpu_number != i) {
-			kprintf("cpu_datap(%d):0x%08x local apic id 0x%x "
+			kprintf("cpu_datap(%d):%p local apic id 0x%x "
 				"remapped from %d\n",
-				i, (unsigned) cpup, cpup->cpu_phys_number,
+				i, cpup, cpup->cpu_phys_number,
 				cpup->cpu_number);
 		}
 		cpup->cpu_number = i;
@@ -187,17 +187,35 @@ cpu_topology_start(void)
 
 		if (i != master_cpu)
 			processor_init(cpup->cpu_processor, i, aset->pset);
-	}
 
-	/*
-	 * Finally we start all processors (including the boot cpu we're
-	 * running on).
-	 */
+		if (lcpup->core->num_lcpus > 1) {
+			if (lcpup->lnum == 0)
+				lprim = cpup->cpu_processor;
+
+			processor_meta_init(cpup->cpu_processor, lprim);
+		}
+	}
+}
+
+/* We got a request to start a CPU. Check that this CPU is within the
+ * max cpu limit set before we do.
+ */
+kern_return_t
+cpu_topology_start_cpu( int cpunum )
+{
+	int		ncpus = machine_info.max_cpus;
+	int		i = cpunum;
+
+	/* Decide whether to start a CPU, and actually start it */
 	DBG("cpu_topology_start() processor_start():\n");
-	for (i = 0; i < ncpus; i++) {
+	if( i < ncpus)
+	{
 		DBG("\tlcpu %d\n", cpu_datap(i)->cpu_number);
 		processor_start(cpu_datap(i)->cpu_processor); 
+		return KERN_SUCCESS;
 	}
+	else
+	    return KERN_FAILURE;
 }
 
 static int

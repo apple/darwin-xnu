@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -186,8 +186,11 @@ struct icmp {
 #define		ICMP_REDIRECT_HOST	1		/* for host */
 #define		ICMP_REDIRECT_TOSNET	2		/* for tos and net */
 #define		ICMP_REDIRECT_TOSHOST	3		/* for tos and host */
+#define	ICMP_ALTHOSTADDR	6		/* alternate host address */
 #define	ICMP_ECHO		8		/* echo service */
 #define	ICMP_ROUTERADVERT	9		/* router advertisement */
+#define		ICMP_ROUTERADVERT_NORMAL	 0  /* normal advertisement */
+#define		ICMP_ROUTERADVERT_NOROUTE_COMMON 16 /* selective routing */
 #define	ICMP_ROUTERSOLICIT	10		/* router solicitation */
 #define	ICMP_TIMXCEED		11		/* time exceeded, code: */
 #define		ICMP_TIMXCEED_INTRANS	0		/* ttl==0 in transit */
@@ -202,8 +205,20 @@ struct icmp {
 #define	ICMP_IREQREPLY		16		/* information reply */
 #define	ICMP_MASKREQ		17		/* address mask request */
 #define	ICMP_MASKREPLY		18		/* address mask reply */
+#define	ICMP_TRACEROUTE		30		/* traceroute */
+#define	ICMP_DATACONVERR	31		/* data conversion error */
+#define	ICMP_MOBILE_REDIRECT	32		/* mobile host redirect */
+#define	ICMP_IPV6_WHEREAREYOU	33		/* IPv6 where-are-you */
+#define	ICMP_IPV6_IAMHERE	34		/* IPv6 i-am-here */
+#define	ICMP_MOBILE_REGREQUEST	35		/* mobile registration req */
+#define	ICMP_MOBILE_REGREPLY	36		/* mobile registration reply */
+#define	ICMP_SKIP		39		/* SKIP */
+#define	ICMP_PHOTURIS		40		/* Photuris */
+#define		ICMP_PHOTURIS_UNKNOWN_INDEX	1	/* unknown sec index */
+#define		ICMP_PHOTURIS_AUTH_FAILED	2	/* auth failed */
+#define		ICMP_PHOTURIS_DECRYPT_FAILED	3	/* decrypt failed */
 
-#define	ICMP_MAXTYPE		18
+#define	ICMP_MAXTYPE		40
 
 #define	ICMP_INFOTYPE(type) \
 	((type) == ICMP_ECHOREPLY || (type) == ICMP_ECHO || \
@@ -213,8 +228,9 @@ struct icmp {
 	(type) == ICMP_MASKREQ || (type) == ICMP_MASKREPLY)
 
 #ifdef KERNEL_PRIVATE
-void	icmp_error(struct mbuf *, int, int, n_long, struct ifnet *);
+void	icmp_error(struct mbuf *, int, int, n_long, u_int32_t);
 void	icmp_input(struct mbuf *, int);
-#endif KERNEL_PRIVATE
+int     ip_next_mtu(int, int);
+#endif /* KERNEL_PRIVATE */
 
 #endif

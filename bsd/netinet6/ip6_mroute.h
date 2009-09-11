@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/ip6_mroute.h,v 1.2.2.2 2001/07/03 11:01:53 ume Exp $	*/
 /*	$KAME: ip6_mroute.h,v 1.17 2001/02/10 02:05:52 itojun Exp $	*/
 
@@ -80,7 +108,7 @@ typedef	u_int32_t	if_mask;
 #define	NIFBITS	(sizeof(if_mask) * NBBY)	/* bits per mask */
 
 #ifndef howmany
-#define	howmany(x, y)	(((x) + ((y) - 1)) / (y))
+#define	howmany(x, y)	((((x) % (y)) == 0) ? ((x) / (y)) : (((x) / (y)) + 1))
 #endif
 
 typedef	struct if_set {
@@ -144,7 +172,7 @@ struct mrt6stat {
  * XXX old version, superseded by mrt6msg.
  */
 struct omrt6msg {
-	u_long	    unused1;
+	u_int32_t	    unused1;
 	u_char	    im6_msgtype;		/* what type of message	    */
 #if 0
 #define MRT6MSG_NOCACHE	1
@@ -157,7 +185,7 @@ struct omrt6msg {
 	struct in6_addr  im6_src, im6_dst;
 };
 #endif
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
 /*
  * Structure used to communicate from kernel to multicast router.
@@ -200,6 +228,24 @@ struct sioc_mif_req6 {
 	u_quad_t ibytes;	/* Input byte count on mif		*/
 	u_quad_t obytes;	/* Output byte count on mif		*/
 };
+
+#if defined(KERNEL_PRIVATE)
+struct sioc_mif_req6_32 {
+	mifi_t mifi;
+	u_quad_t icount;
+	u_quad_t ocount;
+	u_quad_t ibytes;
+	u_quad_t obytes;
+} __attribute__((aligned(4), packed));
+
+struct sioc_mif_req6_64 {
+	mifi_t mifi;
+	u_quad_t icount __attribute__((aligned(8)));
+	u_quad_t ocount;
+	u_quad_t ibytes;
+	u_quad_t obytes;
+} __attribute__((aligned(8)));
+#endif /* KERNEL_PRIVATE */
 
 #ifdef PRIVATE
 /*
@@ -267,14 +313,14 @@ struct rtdetq {		/* XXX: rtdetq is also defined in ip_mroute.h */
 };
 #endif /* _NETINET_IP_MROUTE_H_ */
 
-#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 extern struct mrt6stat mrt6stat;
 
-int	ip6_mrouter_set(struct socket *so, struct sockopt *sopt);
-int	ip6_mrouter_get(struct socket *so, struct sockopt *sopt);
-int	ip6_mrouter_done(void);
-int	mrt6_ioctl(int, caddr_t);
-#endif /* KERNEL */
+extern int ip6_mrouter_set(struct socket *, struct sockopt *);
+extern int ip6_mrouter_get(struct socket *, struct sockopt *);
+extern int ip6_mrouter_done(void);
+extern int mrt6_ioctl(u_long, caddr_t);
+#endif /* KERNEL_PRIVATE */
 #endif /* PRIVATE */
 
 #endif /* !_NETINET6_IP6_MROUTE_H_ */

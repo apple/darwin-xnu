@@ -34,12 +34,14 @@
 #include <stdarg.h>
 #include <mach/mach_types.h>
 #include <mach/kmod.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 
 #include <libkern/libkern.h>	// From bsd's libkern directory
 #include <mach/vm_param.h>
 
 #include <sys/kdebug.h>
+#include <kern/thread.h>
+
 extern int etext;
 __BEGIN_DECLS
 // From osmfk/kern/thread.h but considered to be private
@@ -53,11 +55,13 @@ extern addr64_t kvtophys(vm_offset_t va);
 
 __END_DECLS
 
-static mutex_t *sOSReportLock = mutex_alloc(0);
+extern lck_grp_t *IOLockGroup;
+
+static lck_mtx_t *sOSReportLock = lck_mtx_alloc_init(IOLockGroup, LCK_ATTR_NULL);
 
 /* Use kernel_debug() to log a backtrace */ 
 void
-trace_backtrace(unsigned int debugid, unsigned int debugid2, int size, int data) {
+trace_backtrace(uint32_t debugid, uint32_t debugid2, uintptr_t size, uintptr_t data) {
 	void *bt[16];
 	const unsigned cnt = sizeof(bt) / sizeof(bt[0]);
   	unsigned i;
@@ -78,7 +82,7 @@ trace_backtrace(unsigned int debugid, unsigned int debugid2, int size, int data)
 	 */
 	if (!found) i=2;
 
-#define safe_bt(a) (int)(a<cnt ? bt[a] : 0)
+#define safe_bt(a) (uintptr_t)(a<cnt ? bt[a] : 0)
 	kernel_debug(debugid, data, size, safe_bt(i), safe_bt(i+1), 0);
 	kernel_debug(debugid2, safe_bt(i+2), safe_bt(i+3), safe_bt(i+4), safe_bt(i+5), 0);
 }
@@ -99,13 +103,13 @@ OSReportWithBacktrace(const char *str, ...)
     vsnprintf(buf, sizeof(buf), str, listp);
     va_end(listp);
 
-    mutex_lock(sOSReportLock);
+    lck_mtx_lock(sOSReportLock);
     {
-	printf("%s\nBacktrace %p %p %p %p %p %p %p\n",
-		buf, bt[2], bt[3], bt[4], bt[5], bt[6], bt[7], bt[8]);
-	kmod_dump_log((vm_offset_t *) &bt[2], cnt - 2);
+        printf("%s\nBacktrace %p %p %p %p %p %p %p\n",
+            buf, bt[2], bt[3], bt[4], bt[5], bt[6], bt[7], bt[8]);
+        kmod_dump_log((vm_offset_t *) &bt[2], cnt - 2);
     }
-    mutex_unlock(sOSReportLock);
+    lck_mtx_unlock(sOSReportLock);
 }
 
 static vm_offset_t minstackaddr = min_valid_stack_address();
@@ -139,10 +143,42 @@ i386_validate_stackptr(vm_offset_t stackptr)
 static unsigned int
 i386_validate_raddr(vm_offset_t raddr)
 {
-	return ((raddr > VM_MIN_KERNEL_ADDRESS) &&
+	return ((raddr > VM_MIN_KERNEL_AND_KEXT_ADDRESS) &&
 	    (raddr < VM_MAX_KERNEL_ADDRESS));
 }
 #endif
+
+#if __x86_64__
+#define x86_64_RETURN_OFFSET 8
+static unsigned int
+x86_64_validate_raddr(vm_offset_t raddr)
+{
+	return ((raddr > VM_MIN_KERNEL_AND_KEXT_ADDRESS) &&
+	    (raddr < VM_MAX_KERNEL_ADDRESS));
+}
+static unsigned int
+x86_64_validate_stackptr(vm_offset_t stackptr)
+{
+	/* Existence and alignment check
+	 */
+	if (!stackptr || (stackptr & 0x7) || !x86_64_validate_raddr(stackptr))
+		return 0;
+  
+	/* Is a virtual->physical translation present?
+	 */
+	if (!kvtophys(stackptr))
+		return 0;
+  
+	/* Check if the return address lies on the same page;
+	 * If not, verify that a translation exists.
+	 */
+	if (((PAGE_SIZE - (stackptr & PAGE_MASK)) < x86_64_RETURN_OFFSET) &&
+	    !kvtophys(stackptr + x86_64_RETURN_OFFSET))
+		return 0;
+	return 1;
+}
+#endif
+
 
 unsigned OSBacktrace(void **bt, unsigned maxAddrs)
 {
@@ -165,7 +201,7 @@ unsigned OSBacktrace(void **bt, unsigned maxAddrs)
 
 	stackptr_prev = stackptr;
 	stackptr = mem[stackptr_prev >> 2];
-	if ((stackptr_prev ^ stackptr) > 8 * 1024)	// Sanity check
+	if ((stackptr - stackptr_prev) > 8 * 1024)	// Sanity check
 	    break;
 
 	vm_offset_t addr = mem[(stackptr >> 2) + 2]; 
@@ -178,7 +214,7 @@ unsigned OSBacktrace(void **bt, unsigned maxAddrs)
     for ( ; i < maxAddrs; i++)
 	    bt[i] = (void *) 0;
 #elif __i386__
-#define SANE_i386_FRAME_SIZE 8*1024
+#define SANE_i386_FRAME_SIZE (kernel_stack_size >> 1)
     vm_offset_t stackptr, stackptr_prev, raddr;
     unsigned frame_index = 0;
 /* Obtain current frame pointer */
@@ -204,7 +240,7 @@ unsigned OSBacktrace(void **bt, unsigned maxAddrs)
 	    if (stackptr < stackptr_prev)
 		    break;
 
-	    if ((stackptr_prev ^ stackptr) > SANE_i386_FRAME_SIZE)
+	    if ((stackptr - stackptr_prev) > SANE_i386_FRAME_SIZE)
 		    break;
 
 	    raddr = *((vm_offset_t *) (stackptr + i386_RETURN_OFFSET));
@@ -219,8 +255,52 @@ pad:
 
     for ( ; frame_index < maxAddrs; frame_index++)
 	    bt[frame_index] = (void *) 0;
+#elif __x86_64__
+#define SANE_x86_64_FRAME_SIZE (kernel_stack_size >> 1)
+    vm_offset_t stackptr, stackptr_prev, raddr;
+    unsigned frame_index = 0;
+/* Obtain current frame pointer */
+
+    __asm__ volatile("movq %%rbp, %0" : "=m" (stackptr)); 
+
+    if (!x86_64_validate_stackptr(stackptr))
+	    goto pad;
+
+    raddr = *((vm_offset_t *) (stackptr + x86_64_RETURN_OFFSET));
+
+    if (!x86_64_validate_raddr(raddr))
+	    goto pad;
+
+    bt[frame_index++] = (void *) raddr;
+
+    for ( ; frame_index < maxAddrs; frame_index++) {
+	    stackptr_prev = stackptr;
+	    stackptr = *((vm_offset_t *) stackptr_prev);
+
+	    if (!x86_64_validate_stackptr(stackptr))
+		    break;
+	/* Stack grows downwards */
+	    if (stackptr < stackptr_prev)
+		    break;
+
+	    if ((stackptr - stackptr_prev) > SANE_x86_64_FRAME_SIZE)
+		    break;
+
+	    raddr = *((vm_offset_t *) (stackptr + x86_64_RETURN_OFFSET));
+
+	    if (!x86_64_validate_raddr(raddr))
+		    break;
+
+	    bt[frame_index] = (void *) raddr;
+    }
+pad:
+    frame = frame_index;
+
+    for ( ; frame_index < maxAddrs; frame_index++)
+	    bt[frame_index] = (void *) 0;
 #else
 #error arch
 #endif
     return frame;
 }
+

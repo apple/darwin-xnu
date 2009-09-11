@@ -35,10 +35,6 @@
 #include <i386/eflags.h>
 #include <i386/seg.h>
 
-#ifndef DEBUG
-#include <debug.h>
-#endif
-
 #define VMX_FAIL_INVALID	-1
 #define VMX_FAIL_VALID		-2
 #define VMX_SUCCEED			0
@@ -61,7 +57,7 @@ static inline void enter_compat_mode(void) {
 		".word   %P0					\n\t"
 		".code32					\n\t"
 	"5:"
-		:: "i" (KERNEL_CS)
+		:: "i" (KERNEL32_CS)
 	);
 }
 
@@ -99,6 +95,9 @@ static inline int
 __vmxoff(void)
 {
 	int result;
+#if defined (__x86_64__)
+	__VMXOFF(result);
+#else
 	if (ml_is64bit()) {
 		/* don't put anything between these lines! */
 		enter_64bit_mode();
@@ -107,6 +106,7 @@ __vmxoff(void)
 	} else {
 		__VMXOFF(result);
 	}
+#endif
 	return result;
 }
 
@@ -118,6 +118,9 @@ __vmxoff(void)
 __vmxon(addr64_t *v)
  {
 	int result;
+#if defined (__x86_64__)
+	__VMXON(v, result);
+#else
 	if (ml_is64bit()) {
 		/* don't put anything between these lines! */
 		enter_64bit_mode();
@@ -126,6 +129,7 @@ __vmxon(addr64_t *v)
 	} else {
 		__VMXON(v, result);
 	}
+#endif
 	return result;
 }
 

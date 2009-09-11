@@ -32,26 +32,25 @@
 #include <IOKit/IOKitKeys.h>
 
 // properties found in the registry root
-#define kIOConsoleUsersKey		"IOConsoleUsers"		/* value is OSArray */
-#define kIOMaximumMappedIOByteCountKey  "IOMaximumMappedIOByteCount"    /* value is OSNumber */
-#define kIOStartupMkextCRC		"IOStartupMkextCRC"		/* value is 32-bit OSNumber */
+#define kIOConsoleUsersKey                      "IOConsoleUsers"        /* value is OSArray */
+#define kIOMaximumMappedIOByteCountKey          "IOMaximumMappedIOByteCount"    /* value is OSNumber */
 
 // properties found in the console user dict
 
-#define kIOConsoleSessionIDKey		"kCGSSessionIDKey"		/* value is OSNumber */
+#define kIOConsoleSessionIDKey                  "kCGSSessionIDKey"        /* value is OSNumber */
 
-#define kIOConsoleSessionUserNameKey	"kCGSSessionUserNameKey"	/* value is OSString */
-#define kIOConsoleSessionUIDKey		"kCGSSessionUserIDKey"		/* value is OSNumber */
-#define kIOConsoleSessionConsoleSetKey	"kCGSSessionConsoleSetKey"	/* value is OSNumber */
-#define kIOConsoleSessionOnConsoleKey	"kCGSSessionOnConsoleKey"	/* value is OSBoolean */
-#define kIOConsoleSessionSecureInputPIDKey	"kCGSSessionSecureInputPID"	/* value is OSNumber */
+#define kIOConsoleSessionUserNameKey            "kCGSSessionUserNameKey"    /* value is OSString */
+#define kIOConsoleSessionUIDKey                 "kCGSSessionUserIDKey"        /* value is OSNumber */
+#define kIOConsoleSessionConsoleSetKey          "kCGSSessionConsoleSetKey"    /* value is OSNumber */
+#define kIOConsoleSessionOnConsoleKey           "kCGSSessionOnConsoleKey"    /* value is OSBoolean */
+#define kIOConsoleSessionSecureInputPIDKey      "kCGSSessionSecureInputPID"    /* value is OSNumber */
 
 // IOResources property
-#define kIOConsoleUsersSeedKey		"IOConsoleUsersSeed"		/* value is OSNumber */
+#define kIOConsoleUsersSeedKey                  "IOConsoleUsersSeed"        /* value is OSNumber */
 
 // private keys for clientHasPrivilege
-#define kIOClientPrivilegeConsoleUser "console"
-#define kIOClientPrivilegeSecureConsoleProcess "secureprocess"
+#define kIOClientPrivilegeConsoleUser           "console"
+#define kIOClientPrivilegeSecureConsoleProcess  "secureprocess"
 
 // clientHasPrivilege security token for kIOClientPrivilegeSecureConsoleProcess
 typedef struct _IOUCProcessToken {
@@ -59,22 +58,22 @@ typedef struct _IOUCProcessToken {
     UInt32  pid;
 } IOUCProcessToken;
 
-#define kIOKernelHasSafeSleep		1
+#define kIOKernelHasSafeSleep        1
 
 enum { kIOPrepareToPhys32 = 0x04 };
 
 #define kIODirectionPrepareToPhys32 ((IODirection) kIOPrepareToPhys32)
 
-#define kIOPlatformSleepActionKey	"IOPlatformSleepAction"		/* value is OSNumber (priority) */
-#define kIOPlatformWakeActionKey	"IOPlatformWakeAction"		/* value is OSNumber (priority) */
-#define kIOPlatformQuiesceActionKey	"IOPlatformQuiesceAction"	/* value is OSNumber (priority) */
-#define kIOPlatformActiveActionKey	"IOPlatformActiveAction"	/* value is OSNumber (priority) */
+#define kIOPlatformSleepActionKey                    "IOPlatformSleepAction"        /* value is OSNumber (priority) */
+#define kIOPlatformWakeActionKey                     "IOPlatformWakeAction"        /* value is OSNumber (priority) */
+#define kIOPlatformQuiesceActionKey                  "IOPlatformQuiesceAction"    /* value is OSNumber (priority) */
+#define kIOPlatformActiveActionKey                   "IOPlatformActiveAction"    /* value is OSNumber (priority) */
 
-#define kIOPlatformFunctionHandlerSet			"IOPlatformFunctionHandlerSet"
-#if defined(__i386__)
-#define kIOPlatformFunctionHandlerMaxBusDelay		"IOPlatformFunctionHandlerMaxBusDelay"
-#define kIOPlatformFunctionHandlerMaxInterruptDelay	"IOPlatformFunctionHandlerMaxInterruptDelay"
-#endif /* defined(__i386__) */
+#define kIOPlatformFunctionHandlerSet                "IOPlatformFunctionHandlerSet"
+#if defined(__i386__) || defined(__x86_64__)
+#define kIOPlatformFunctionHandlerMaxBusDelay        "IOPlatformFunctionHandlerMaxBusDelay"
+#define kIOPlatformFunctionHandlerMaxInterruptDelay  "IOPlatformFunctionHandlerMaxInterruptDelay"
+#endif /* defined(__i386__) || defined(__x86_64__) */
 
 
 #endif /* ! _IOKIT_IOKITKEYSPRIVATE_H */

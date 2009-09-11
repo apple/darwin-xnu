@@ -70,7 +70,7 @@
 #ifndef	ASSEMBLER
 
 #include <ppc/_types.h>
-#include <ppc/vmparam.h>
+#include <mach/ppc/vm_param.h>
 #include <stdint.h>
 
 /*
@@ -133,7 +133,7 @@ typedef uint64_t		vm_map_size_t;
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#ifdef	VM32_SUPPORT
+#if VM32_SUPPORT
 
 /*
  * These are types used internal to Mach to implement the

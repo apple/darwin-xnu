@@ -54,52 +54,63 @@ enum {
  * Like standards, there are a lot of atomic ops to choose from!
  */
 
+#if !defined(__ppc__) && !defined(__i386__) && !defined(__x86_64__)
+/* Implemented in assembly for ppc and i386 and x86_64 */
+#undef OSAddAtomic
+SInt32
+OSAddAtomic(SInt32 amount, volatile SInt32 * value)
+{
+	SInt32 oldValue;
+	SInt32 newValue;
+
+	do {
+		oldValue = *value;
+		newValue = oldValue + amount;
+	} while (!OSCompareAndSwap((UInt32)oldValue,
+				(UInt32)newValue,
+				(volatile UInt32 *) value));
+	return oldValue;
+}
+
+long
+OSAddAtomicLong(long theAmount, volatile long *address)
+{
+#if __LP64__
+#error Unimplemented
+#else
+	return (long)OSAddAtomic((SInt32)theAmount, address);
+#endif
+}
+
+/* Implemented as an assembly alias for i386 and linker alias for ppc */
+#undef OSCompareAndSwapPtr
+Boolean OSCompareAndSwapPtr(void *oldValue, void *newValue,
+			    void * volatile *address)
+{
+#if __LP64__
+  return OSCompareAndSwap64((UInt64)oldValue, (UInt64)newValue,
+			  (volatile UInt64 *)address);
+#else
+  return OSCompareAndSwap((UInt32)oldValue, (UInt32)newValue,
+			  (volatile UInt32 *)address);
+#endif
+}
+#endif
+
 #ifndef __ppc__
+/* Implemented as assembly for ppc */
 
-
+#undef OSIncrementAtomic
 SInt32	OSIncrementAtomic(volatile SInt32 * value)
 {
 	return OSAddAtomic(1, value);
 }
 
+#undef OSDecrementAtomic
 SInt32	OSDecrementAtomic(volatile SInt32 * value)
 {
 	return OSAddAtomic(-1, value);
 }
-
-#ifdef CMPXCHG8B
-void *	OSDequeueAtomic(void * volatile * inList, SInt32 inOffset)
-{
-	/* The _pointer_ is volatile, not the listhead itself */
-	void * volatile	oldListHead;
-	void * volatile	newListHead;
-	
-	do {
-		oldListHead = *inList;
-		if (oldListHead == NULL) {
-			break;
-		}
-		
-		newListHead = *(void * volatile *) (((char *) oldListHead) + inOffset);
-	} while (! OSCompareAndSwap((UInt32)oldListHead,
-					(UInt32)newListHead, (volatile UInt32 *)inList));
-	return oldListHead;
-}
-
-void	OSEnqueueAtomic(void * volatile * inList, void * inNewLink, SInt32 inOffset)
-{
-	/* The _pointer_ is volatile, not the listhead itself */
-	void * volatile	oldListHead;
-	void * volatile	newListHead = inNewLink;
-	void * volatile * newLinkNextPtr = (void * volatile *) (((char *) inNewLink) + inOffset);
-	
-	do {
-		oldListHead = *inList;
-		*newLinkNextPtr = oldListHead;
-	} while (! OSCompareAndSwap((UInt32)oldListHead, (UInt32)newListHead,
-					(volatile UInt32 *)inList));
-}
-#endif /* CMPXCHG8B */
 #endif	/* !__ppc__ */
 
 static UInt32	OSBitwiseAtomic(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, volatile UInt32 * value)
@@ -115,16 +126,19 @@ static UInt32	OSBitwiseAtomic(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, 
 	return oldValue;
 }
 
+#undef OSBitAndAtomic
 UInt32	OSBitAndAtomic(UInt32 mask, volatile UInt32 * value)
 {
 	return OSBitwiseAtomic(mask, 0, 0, value);
 }
 
+#undef OSBitOrAtomic
 UInt32	OSBitOrAtomic(UInt32 mask, volatile UInt32 * value)
 {
 	return OSBitwiseAtomic((UInt32) -1, mask, 0, value);
 }
 
+#undef OSBitXorAtomic
 UInt32	OSBitXorAtomic(UInt32 mask, volatile UInt32 * value)
 {
 	return OSBitwiseAtomic((UInt32) -1, 0, mask, value);
@@ -133,10 +147,10 @@ UInt32	OSBitXorAtomic(UInt32 mask, volatile UInt32 * value)
 static Boolean OSCompareAndSwap8(UInt8 oldValue8, UInt8 newValue8, volatile UInt8 * value8)
 {
 	UInt32				mask		= 0x000000ff;
-	UInt32				alignment	= ((UInt32) value8) & (sizeof(UInt32) - 1);
+	UInt32				alignment	= (UInt32)((unsigned long) value8) & (sizeof(UInt32) - 1);
 	UInt32				shiftValues = (24 << 24) | (16 << 16) | (8 << 8);
 	int					shift		= (UInt32) *(((UInt8 *) &shiftValues) + alignment);
-	volatile UInt32 *	value32		= (volatile UInt32 *) (value8 - alignment);
+	volatile UInt32 *	value32		= (volatile UInt32 *) ((uintptr_t)value8 - alignment);
 	UInt32				oldValue;
 	UInt32				newValue;
 
@@ -237,10 +251,10 @@ UInt8	OSBitXorAtomic8(UInt32 mask, volatile UInt8 * value)
 static Boolean OSCompareAndSwap16(UInt16 oldValue16, UInt16 newValue16, volatile UInt16 * value16)
 {
 	UInt32				mask		= 0x0000ffff;
-	UInt32				alignment	= ((UInt32) value16) & (sizeof(UInt32) - 1);
+	UInt32				alignment	= (UInt32)((unsigned long) value16) & (sizeof(UInt32) - 1);
 	UInt32				shiftValues = (16 << 24) | (16 << 16);
 	UInt32				shift		= (UInt32) *(((UInt8 *) &shiftValues) + alignment);
-	volatile UInt32 *	value32		= (volatile UInt32 *) (((UInt32) value16) - alignment);
+	volatile UInt32 *	value32		= (volatile UInt32 *) (((unsigned long) value16) - alignment);
 	UInt32				oldValue;
 	UInt32				newValue;
 

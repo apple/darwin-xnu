@@ -44,293 +44,863 @@ class OSSymbol;
 class OSString;
 
 /*!
-    @class OSDictionary
-    @abstract A collection class whose instances maintain a list of object references.  Objects in the collection are acquired with unique associative keys.
-    @discussion
-    An instance of OSDictionary is a mutable container which contains a list of OSMetaClassBase derived object references and these objects are identified and acquired by unique associative keys.  When an object is placed into a dictionary, a unique identifier or key must provided to identify the object within the collection. The key then must be provided to find the object within the collection.  If an object is not found within the collection, a 0 is returned.  Placing an object into a dictionary for a key, which already identifies an object within that dictionary, will replace the current object with the new object.
-    
-    Objects placed into a dictionary are automatically retained and objects removed or replaced are automatically released.  All objects are released when the collection is freed.
-*/
+ * @header
+ *
+ * @abstract
+ * This header declares the OSDictionary collection class.
+ */
+ 
+ 
+/*!
+ * @class OSDictionary
+ *
+ * @abstract
+ * OSDictionary provides an associative store using strings for keys.
+ *
+ * @discussion
+ * OSDictionary is a container for Libkern C++ objects
+ * (those derived from
+ * @link //apple_ref/doc/class/OSMetaClassBase OSMetaClassBase@/link,
+ * in particular @link //apple_ref/doc/class/OSObject OSObject@/link).
+ * Storage and access are associative, based on string-valued keys
+ * (C string, @link //apple_ref/cpp/cl/OSString OSString@/link,
+ * or @link //apple_ref/cpp/cl/OSSymbol OSSymbol@/link).
+ * When adding an object to an OSDictionary, you provide a string identifier,
+ * which can then used to retrieve that object or remove it from the dictionary.
+ * Setting an object with a key that already has an associated object
+ * replaces the original object.
+ *
+ * You must generally cast retrieved objects from
+ * @link //apple_ref/cpp/cl/OSObject OSObject@/link
+ * to the desired class using
+ * <code>@link //apple_ref/cpp/macro/OSDynamicCast OSDynamicCast@/link</code>.
+ * This macro returns the object cast to the desired class,
+ * or <code>NULL</code> if the object isn't derived from that class.
+ *
+ * When iterating an OSDictionary using
+ * @link //apple_ref/doc/class/OSCollectionIterator OSCollectionIterator@/link,
+ * the objects returned from
+ * <code>@link //apple_ref/doc/function/OSCollectionIterator::getNextObject
+ * getNextObject@/link</code>
+ * are dictionary keys (not the object values for those keys).
+ * You can use the keys to retrieve their associated object values.
+ *
+ * As with all Libkern collection classes,
+ * OSDictionary retains keys and objects added to it,
+ * and releases keys and objects removed from it (or replaced).
+ * An OSDictionary also grows as necessary to accommodate new key/value pairs,
+ * <i>unlike</i> Core Foundation collections (it does not, however, shrink).
+ *
+ * <b>Note:</b> OSDictionary currently uses a linear search algorithm,
+ * and is not designed for high-performance access of many values.
+ * It is intended as a simple associative-storage mechanism only.
+ *
+ * <b>Use Restrictions</b>
+ *
+ * With very few exceptions in the I/O Kit, all Libkern-based C++
+ * classes, functions, and macros are <b>unsafe</b>
+ * to use in a primary interrupt context.
+ * Consult the I/O Kit documentation related to primary interrupts 
+ * for more information.
+ *
+ * OSDictionary provides no concurrency protection;
+ * it's up to the usage context to provide any protection necessary.
+ * Some portions of the I/O Kit, such as
+ * @link //apple_ref/doc/class/IORegistryEntry IORegistryEntry@/link,
+ * handle synchronization via defined member functions for setting
+ * properties.
+ */
 class OSDictionary : public OSCollection
 {
     OSDeclareDefaultStructors(OSDictionary)
 
 protected:
     struct dictEntry {
-        const OSSymbol *key;
-        const OSMetaClassBase *value;
+        const OSSymbol        * key;
+        const OSMetaClassBase * value;
     };
-    dictEntry *dictionary;
-    unsigned int count;
-    unsigned int capacity;
-    unsigned int capacityIncrement;
+    dictEntry    * dictionary;
+    unsigned int   count;
+    unsigned int   capacity;
+    unsigned int   capacityIncrement;
 
     struct ExpansionData { };
-    
-    /*! @var reserved
-        Reserved for future use.  (Internal use only)  */
-    ExpansionData *reserved;
+
+   /* Reserved for future use.  (Internal use only)  */
+    ExpansionData * reserved;
 
     // Member functions used by the OSCollectionIterator class.
     virtual unsigned int iteratorSize() const;
-    virtual bool initIterator(void *iterator) const;
-    virtual bool getNextObjectForIterator(void *iterator, OSObject **ret) const;
+    virtual bool initIterator(void * iterator) const;
+    virtual bool getNextObjectForIterator(void * iterator, OSObject ** ret) const;
 
 public:
-    /*!
-        @function withCapacity
-        @abstract A static constructor function to create and initialize an instance of OSDictionary.
-        @param capacity The initial storage capacity of the dictionary object.
-        @result Returns an instance of OSDictionary or 0 on failure.
-    */
-    static OSDictionary *withCapacity(unsigned int capacity);
-    /*!
-        @function withObjects
-        @abstract A static constructor function to create and initialize an instance of OSDictionary and populate it with objects provided.
-        @param objects A static array of OSMetaClassBase derived objects.
-        @param keys A static array of OSSymbol keys.
-        @param count The number of items to be placed into the dictionary.
-        @param capacity The initial storage capacity of the dictionary object.  If 0, the capacity will be set to the size of 'count', else this value must be greater or equal to 'count'.
-        @result Returns an instance of OSDictionary or 0 on failure.
-    */
-    static OSDictionary *withObjects(const OSObject *objects[],
-                                     const OSSymbol *keys[],
-                                     unsigned int count,
-                                     unsigned int capacity = 0);
-    /*!
-        @function withObjects
-        @abstract A static constructor function to create and initialize an instance of OSDictionary and populate it with objects provided.
-        @param objects A static array of OSMetaClassBase derived objects.
-        @param keys A static array of OSString keys.
-        @param count The number of items to be placed into the dictionary.
-        @param capacity The initial storage capacity of the dictionary object.  If 0, the capacity will be set to the size of 'count', else this value must be greater or equal to 'count'.
-        @result Returns an instance of OSDictionary or 0 on failure.
-    */
-    static OSDictionary *withObjects(const OSObject *objects[],
-                                     const OSString *keys[],
-                                     unsigned int count,
-                                     unsigned int capacity = 0);
-    /*!
-        @function withDictionary
-        @abstract A static constructor function to create and initialize an instance of OSDictionary and populate it with objects from another dictionary.
-        @param dict A dictionary whose contents will be placed in the new instance.
-        @param capacity The initial storage capacity of the dictionary object.  If 0, the capacity will be set to the number of elements in the dictionary object, else the capacity must be greater than or equal to the number of elements in the dictionary.
-        @result Returns an instance of OSDictionary or 0 on failure.
-    */
-    static OSDictionary *withDictionary(const OSDictionary *dict,
-                                        unsigned int capacity = 0);
 
-    /*!
-        @function initWithCapacity
-        @abstract A member function to initialize an instance of OSDictionary.
-        @param capacity The initial storage capacity of the dictionary object.
-        @result Returns true if initialization succeeded or false on failure.
+   /*!
+    * @function withCapacity
+    *
+    * @abstract
+    * Creates and initializes an empty OSDictionary.
+    * 
+    * @param  capacity  The initial storage capacity of the new dictionary object.
+    *
+    * @result 
+    * An empty instance of OSDictionary
+    * with a retain count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * <code>capacity</code> must be nonzero.
+    * The new dictionary will grow as needed to accommodate more key/object pairs
+    * (<i>unlike</i> @link //apple_ref/doc/uid/20001497 CFMutableDictionary@/link,
+    * for which the initial capacity is a hard limit).
+    */
+    static OSDictionary * withCapacity(unsigned int capacity);
+
+
+   /*!
+    * @function withObjects
+    *
+    * @abstract Creates and initializes an OSDictionary
+    *           populated with keys and objects provided.
+    *
+    * @param objects   A C array of OSMetaClassBase-derived objects.
+    * @param keys      A C array of OSSymbol keys
+    *                  for the corresponding objects in <code>objects</code>.
+    * @param count     The number of keys and objects
+    *                  to be placed into the dictionary.
+    * @param capacity  The initial storage capacity of the new dictionary object.
+    *                  If 0, <code>count</code> is used; otherwise this value
+    *                  must be greater than or equal to <code>count</code>.
+    *
+    * @result
+    * An instance of OSDictionary
+    * containing the key/object pairs provided,
+    * with a retain count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * <code>objects</code> and <code>keys</code> must be non-<code>NULL</code>,
+    * and <code>count</code> must be nonzero.
+    * If <code>capacity</code> is nonzero,
+    * it must be greater than or equal to <code>count</code>.
+    * The new dictionary will grow as needed
+    * to accommodate more key/object pairs
+    * (<i>unlike</i>
+    * @link //apple_ref/doc/uid/20001497 CFMutableDictionary@/link,
+    * for which the initial capacity is a hard limit).
+    */
+    static OSDictionary * withObjects(
+        const OSObject * objects[],
+        const OSSymbol * keys[],
+        unsigned int     count,
+        unsigned int     capacity = 0);
+
+   /*!
+    * @function withObjects
+    *
+    * @abstract
+    * Creates and initializes an OSDictionary
+    * populated with keys and objects provided.
+    *
+    * @param objects   A C array of OSMetaClassBase-derived objects.
+    * @param keys      A C array of OSString keys for the corresponding objects
+    *                  in <code>objects</code>.
+    * @param count     The number of keys and objects
+    *                  to be placed into the dictionary.
+    * @param capacity  The initial storage capacity of the new dictionary object.
+    *                  If 0, <code>count</code> is used; otherwise this value
+    *                  must be greater than or equal to <code>count</code>.
+    *
+    * @result
+    * An instance of OSDictionary
+    * containing the key/object pairs provided,
+    * with a retain count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * <code>objects</code> and <code>keys</code> must be non-<code>NULL</code>,
+    * and <code>count</code> must be nonzero.
+    * If <code>capacity</code> is nonzero, it must be greater than or equal to <code>count</code>.
+    * The new dictionary will grow as needed
+    * to accommodate more key/object pairs
+    * (<i>unlike</i>
+    * @link //apple_ref/doc/uid/20001497 CFMutableDictionary@/link,
+    * for which the initial capacity is a hard limit).
+    */
+    static OSDictionary * withObjects(
+        const OSObject * objects[],
+        const OSString * keys[],
+        unsigned int     count,
+        unsigned int     capacity = 0);
+
+
+   /*!
+    * @function withDictionary
+    *
+    * @abstract
+    * Creates and initializes an OSDictionary
+    * populated with the contents of another dictionary.
+    *
+    * @param dict      A dictionary whose contents will be stored
+    *                  in the new instance.
+    * @param capacity  The initial storage capacity of the new dictionary object.
+    *                  If 0, the capacity is set to the number of key/value pairs
+    *                  in <code>dict</code>;
+    *                  otherwise <code>capacity</code> must be greater than or equal to
+    *                  the number of key/value pairs in <code>dict</code>.
+    *
+    * @result
+    * An instance of OSDictionary
+    * containing the key/value pairs of <code>dict</code>,
+    * with a retain count of 1;
+    * <code>NULL</code> on failure.
+    *
+    * @discussion
+    * <code>dict</code> must be non-<code>NULL</code>.
+    * If <code>capacity</code> is nonzero, it must be greater than or equal to <code>count</code>.
+    * The new dictionary will grow as needed
+    * to accommodate more key/object pairs
+    * (<i>unlike</i>
+    *  @link //apple_ref/doc/uid/20001497 CFMutableDictionary@/link,
+    * for which the initial capacity is a hard limit).
+    *
+    * The keys and objects in <code>dict</code> are retained for storage
+    * in the new OSDictionary,
+    * not copied.
+    */
+    static OSDictionary * withDictionary(
+        const OSDictionary * dict,
+        unsigned int         capacity = 0);
+
+
+   /*!
+    * @function initWithCapacity
+    *
+    * @abstract
+    * Initializes a new instance of OSDictionary.
+    *
+    * @param capacity  The initial storage capacity of the new dictionary object.
+    * @result
+    * <code>true</code> on success, <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link //apple_ref/cpp/clm/OSDictionary/withCapacity/staticOSDictionary*\/(unsignedint)
+    * withCapacity@/link</code>
+    * instead.
+    *
+    * <code>capacity</code> must be nonzero.
+    * The new dictionary will grow as needed
+    * to accommodate more key/object pairs
+    * (<i>unlike</i>
+    * @link //apple_ref/doc/uid/20001497 CFMutableDictionary@/link,
+    * for which the initial capacity is a hard limit).
     */
     virtual bool initWithCapacity(unsigned int capacity);
-    /*!
-        @function initWithObjects
-        @abstract A member function to initialize an instance of OSDictionary and populate it with the provided objects and keys.
-        @param objects A static array of OSMetaClassBase derived objects to be placed into the dictionary.
-        @param keys A static array of OSSymbol keys which identify the corresponding objects provided in the 'objects' parameter.
-        @param count The number of objects provided to the dictionary.
-        @param capacity The initial storage capacity of the dictionary object.  If 0, the capacity will be set to the size of 'count', else the capacity must be greater than or equal to the value of 'count'.
-        @result Returns true if initialization succeeded or false on failure.
+
+
+   /*!
+    * @function initWithObjects
+    *
+    * @abstract Initializes a new OSDictionary with keys and objects provided.
+    *
+    * @param objects   A C array of OSMetaClassBase-derived objects.
+    * @param keys      A C array of OSSymbol keys
+    *                  for the corresponding objects in <code>objects</code>.
+    * @param count     The number of keys and objects to be placed
+    *                  into the dictionary.
+    * @param capacity  The initial storage capacity of the new dictionary object.
+    *                  If 0, <code>count</code> is used; otherwise this value
+    *                  must be greater than or equal to <code>count</code>.
+    *
+    * @result
+    * <code>true</code> on success, <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link
+    * //apple_ref/cpp/clm/OSDictionary/withObjects/staticOSDictionary*\/(constOSObject*,constOSString*,unsignedint,unsignedint)
+    * withObjects@/link</code>
+    * instead.
+    *
+    * <code>objects</code> and <code>keys</code> must be non-<code>NULL</code>,
+    * and <code>count</code> must be nonzero.
+    * If <code>capacity</code> is nonzero,
+    * it must be greater than or equal to <code>count</code>.
+    * The new dictionary will grow as neede
+    * to accommodate more key/object pairs
+    * (<i>unlike</i>
+    * @link //apple_ref/doc/uid/20001497 CFMutableDictionary@/link,
+    * for which the initial capacity is a hard limit).
     */
-    virtual bool initWithObjects(const OSObject *objects[],
-                                 const OSSymbol *keys[],
-                                 unsigned int count,
-                                 unsigned int capacity = 0);
-    /*!
-        @function initWithObjects
-        @abstract A member function to initialize an instance of OSDictionary and populate it with the provided objects and keys.
-        @param objects A static array of OSMetaClassBase derived objects to be placed into the dictionary.
-        @param keys A static array of OSString keys which identify the corresponding objects provided in the 'objects' parameter.
-        @param count The number of objects provided to the dictionary.
-        @param capacity The initial storage capacity of the dictionary object.  If 0, the capacity will be set to the size of 'count', else the capacity must be greater than or equal to the value of 'count'.
-        @result Returns true if initialization succeeded or false on failure.
+    virtual bool initWithObjects(
+        const OSObject * objects[],
+        const OSSymbol * keys[],
+        unsigned int     count,
+        unsigned int     capacity = 0);
+
+
+   /*!
+    * @function initWithObjects
+    *
+    * @abstract
+    * Initializes a new OSDictionary with keys and objects provided.
+    *
+    * @param objects   A C array of OSMetaClassBase-derived objects.
+    * @param keys      A C array of OSString keys
+    *                  for the corresponding objects in <code>objects</code>.
+    * @param count     The number of keys and objects
+    *                  to be placed into the dictionary.
+    * @param capacity  The initial storage capacity of the new dictionary object.
+    *                  If 0, <code>count</code> is used; otherwise this value
+    *                  must be greater than or equal to <code>count</code>.
+    *
+    * @result
+    * <code>true</code> on success, <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link
+    * //apple_ref/cpp/clm/OSDictionary/withObjects/staticOSDictionary*\/(constOSObject*,constOSString*,unsignedint,unsignedint)
+    * withObjects@/link</code>
+    * instead.
+    *
+    * <code>objects</code> and <code>keys</code> must be non-<code>NULL</code>,
+    * and <code>count</code> must be nonzero.
+    * If <code>capacity</code> is nonzero, it must be greater than or equal to <code>count</code>.
+    * The new dictionary will grow as needed
+    * to accommodate more key/object pairs
+    * (<i>unlike</i>
+    * @link //apple_ref/doc/uid/20001497 CFMutableDictionary@/link,
+    * for which the initial capacity is a hard limit).
     */
-    virtual bool initWithObjects(const OSObject *objects[],
-                                 const OSString *keys[],
-                                 unsigned int count,
-                                 unsigned int capacity = 0);
-    /*!
-        @function initWithDictionary
-        @abstract A member function to initialize an instance of OSDictionary and populate it with the contents of another dictionary.
-        @param dict The dictionary containing the objects to be used to populate the receiving dictionary.
-        @param capacity The initial storage capacity of the dictionary.  If 0, the value of capacity will be set to the number of elements in the dictionary object, else the value of capacity must be greater than or equal to the number of elements in the dictionary object.
-        @result Returns true if initialization succeeded or false on failure.
+    virtual bool initWithObjects(
+        const OSObject * objects[],
+        const OSString * keys[],
+        unsigned int     count,
+        unsigned int     capacity = 0);
+
+
+   /*!
+    * @function initWithDictionary
+    *
+    * @abstract
+    * Initializes a new OSDictionary
+    * with the contents of another dictionary.
+    *
+    * @param dict      A dictionary whose contents will be placed
+    *                  in the new instance.
+    * @param capacity  The initial storage capacity of the new dictionary object.
+    *                  If 0, the capacity is set to the number of key/value pairs
+    *                  in <code>dict</code>;
+    *                  otherwise <code>capacity</code> must be greater than or equal to
+    *                  the number of key/value pairs in <code>dict</code>.
+    *
+    * @result
+    * <code>true</code> on success, <code>false</code> on failure.
+    *
+    * @discussion
+    * Not for general use. Use the static instance creation method
+    * <code>@link withDictionary withDictionary@/link</code> instead.
+    *
+    * <code>dict</code> must be non-<code>NULL</code>.
+    * If <code>capacity</code> is nonzero,
+    * it must be greater than or equal to <code>count</code>.
+    * The new dictionary will grow as needed
+    * to accommodate more key/object pairs
+    * (<i>unlike</i>
+    * @link //apple_ref/doc/uid/20001497 CFMutableDictionary@/link,
+    * for which the initial capacity is a hard limit).
+    *
+    * The keys and objects in <code>dict</code> are retained for storage
+    * in the new OSDictionary,
+    * not copied.
     */
-    virtual bool initWithDictionary(const OSDictionary *dict,
-                                    unsigned int capacity = 0);
-    /*!
-        @function free
-        @abstract A member functions to deallocate and release all resources used by the OSDictionary instance.
-        @discussion This function should not be called directly, use release() instead.
+    virtual bool initWithDictionary(
+        const OSDictionary * dict,
+        unsigned int         capacity = 0);
+
+
+   /*!
+    * @function free
+    *
+    * @abstract
+    * Deallocates or releases any resources
+    * used by the OSDictionary instance.
+    *
+    * @discussion
+    * This function should not be called directly,
+    * use
+    * <code>@link
+    * //apple_ref/cpp/instm/OSObject/release/virtualvoid/()
+    * release@/link</code>
+    * instead.
     */
     virtual void free();
 
-    /*!
-        @function getCount
-        @abstract A member function which returns the current number of objects within the collection.
-        @result Returns the number of objects contained within the dictionary.
+
+   /*!
+    * @function getCount
+    *
+    * @abstract
+    * Returns the current number of key/object pairs
+    * contained within the dictionary.
+    *
+    * @result
+    * The current number of key/object pairs
+    * contained within the dictionary.
     */
     virtual unsigned int getCount() const;
-    /*!
-        @function getCapacity
-        @abstract A member function which returns the storage capacity of the collection.
-        @result Returns the storage capacity of the dictionary.
+
+
+   /*!
+    * @function getCapacity
+    *
+    * @abstract
+    * Returns the number of objects the dictionary can store without reallocating.
+    *
+    * @result
+    * The number objects the dictionary can store without reallocating.
+    *
+    * @discussion
+    * OSDictionary objects grow when full
+    * to accommodate additional key/object pairs.
+    * See
+    * <code>@link
+    * //apple_ref/cpp/instm/OSDictionary/getCapacityIncrement/virtualunsignedint/()
+    * getCapacityIncrement@/link</code>
+    * and
+    * <code>@link
+    * //apple_ref/cpp/instm/OSDictionary/ensureCapacity/virtualunsignedint/(unsignedint)
+    * ensureCapacity@/link</code>.
     */
     virtual unsigned int getCapacity() const;
-    /*!
-        @function getCapacityIncrement
-        @abstract A member function which returns the growth size for the collection.
+
+
+   /*!
+    * @function getCapacityIncrement
+    *
+    * @abstract
+    * Returns the storage increment of the dictionary.
+    *
+    * @result
+    * The storage increment of the dictionary.
+    *
+    * @discussion
+    * An OSDictionary allocates storage for key/object pairs in multiples
+    * of the capacity increment.
     */
     virtual unsigned int getCapacityIncrement() const;
-    /*!
-        @function setCapacityIncrement
-        @abstract A member function to set the growth size of the collection.
-        @param increment The new growth size.
-        @result Returns the new capacity increment.
+
+
+   /*!
+    * @function setCapacityIncrement
+    *
+    * @abstract
+    * Sets the storage increment of the dictionary.
+    *
+    * @result
+    * The new storage increment of the dictionary,
+    * which may be different from the number requested.
+    *
+    * @discussion
+    * An OSDictionary allocates storage for key/object pairs in multiples
+    * of the capacity increment.
+    * Calling this function does not immediately reallocate storage.
     */
     virtual unsigned int setCapacityIncrement(unsigned increment);
 
-    /*!
-        @function ensureCapacity
-        @abstract Member function to grow the size of the collection.
-        @param newCapacity The new capacity for the dictionary to expand to.
-        @result Returns the new capacity of the dictionary or the previous capacity upon error.
+
+   /*!
+    * @function ensureCapacity
+    *
+    * @abstract
+    * Ensures the dictionary has enough space
+    * to store the requested number of key/object  pairs.
+    *
+    * @param newCapacity  The total number of key/object pairs the dictionary
+    *                     should be able to store.
+    *
+    * @result
+    * The new capacity of the dictionary,
+    * which may be different from the number requested
+    * (if smaller, reallocation of storage failed).
+    *
+    * @discussion
+    * This function immediately resizes the dictionary, if necessary,
+    * to accommodate at least <code>newCapacity</code> key/object pairs.
+    * If <code>newCapacity</code> is not greater than the current capacity,
+    * or if an allocation error occurs, the original capacity is returned.
+    *
+    * There is no way to reduce the capacity of an OSDictionary.
     */
     virtual unsigned int ensureCapacity(unsigned int newCapacity);
 
-    /*!
-        @function flushCollection
-        @abstract A member function which removes and releases all objects within the collection.
+
+   /*!
+    * @function flushCollection
+    *
+    * @abstract
+    * Removes and releases all keys and objects within the dictionary.
+    *
+    * @discussion
+    * The dictionary's capacity (and therefore direct memory consumption)
+    * is not reduced by this function.
     */
     virtual void flushCollection();
 
-    /*!
-        @function setObject
-        @abstract A member function which places an object into the dictionary and identified by a unique key.
-        @param aKey A unique OSSymbol identifying the object placed within the collection.
-        @param anObject The object to be stored in the dictionary.  It is automatically retained.
-        @result Returns true if the addition of an object was successful, false otherwise.
+
+   /*!
+    * @function setObject
+    *
+    * @abstract
+    * Stores an object in the dictionary under a key.
+    *
+    * @param aKey      An OSSymbol identifying the object
+    *                  placed within the dictionary.
+    *                  It is automatically retained.
+    * @param anObject  The object to be stored in the dictionary.
+    *                  It is automatically retained.
+    *
+    * @result
+    * <code>true</code> if the addition was successful,
+    * <code>false</code> otherwise.
+    *
+    * @discussion
+    * An object already stored under <code>aKey</code> is released.
     */
-    virtual bool setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject);
-    /*!
-        @function setObject
-        @abstract A member function which places an object into the dictionary and identified by a unique key.
-        @param aKey A unique OSString identifying the object placed within the collection.
-        @param anObject The object to be stored in the dictionary.  It is automatically retained.
-        @result Returns true if the addition of an object was successful, false otherwise.
+    virtual bool setObject(
+        const OSSymbol        * aKey,
+        const OSMetaClassBase * anObject);
+
+
+   /*!
+    * @function setObject
+    *
+    * @abstract Stores an object in the dictionary under a key.
+    *
+    * @param aKey      An OSString identifying the object
+    *                  placed within the dictionary.
+    * @param anObject  The object to be stored in the dictionary.
+    *                  It is automatically retained.
+    *
+    * @result
+    * <code>true</code> if the addition was successful,
+    * <code>false</code> otherwise.
+    *
+    * @discussion
+    * An OSSymbol for <code>aKey</code> is created internally.
+    * An object already stored under <code>aKey</code> is released.
     */
-    virtual bool setObject(const OSString *aKey, const OSMetaClassBase *anObject);
-    /*!
-        @function setObject
-        @abstract A member function which places an object into the dictionary and identified by a unique key.
-        @param aKey A unique string identifying the object placed within the collection.
-        @param anObject The object to be stored in the dictionary.  It is automatically retained.
-        @result Returns true if the addition of an object was successful, false otherwise.
+    virtual bool setObject(
+        const OSString        * aKey,
+        const OSMetaClassBase * anObject);
+
+
+   /*!
+    * @function setObject
+    *
+    * @abstract
+    * Stores an object in the dictionary under a key.
+    *
+    * @param aKey      A C string identifying the object
+    *                  placed within the dictionary.
+    * @param anObject  The object to be stored in the dictionary.
+    *                  It is automatically retained.
+    *
+    * @result
+    * <code>true</code> if the addition was successful,
+    * <code>false</code> otherwise.
+    *
+    * @discussion
+    * An OSSymbol for <code>aKey</code> is created internally.
+    * An object already stored under <code>aKey</code> is released.
     */
-    virtual bool setObject(const char *aKey, const OSMetaClassBase *anObject);
+    virtual bool setObject(
+        const char            * aKey,
+        const OSMetaClassBase * anObject);
     
-    /*!
-        @function removeObject
-        @abstract A member function which removes an object from the dictionary.  The removed object is automatically released.
-        @param aKey A unique OSSymbol identifying the object to be removed from the dictionary.
-    */
-    virtual void removeObject(const OSSymbol *aKey);
-    /*!
-        @function removeObject
-        @abstract A member function which removes an object from the dictionary.  The removed object is automatically released.
-        @param aKey A unique OSString identifying the object to be removed from the dictionary.
-    */
-    virtual void removeObject(const OSString *aKey);
-    /*!
-        @function removeObject
-        @abstract A member function which removes an object from the dictionary.  The removed object is automatically released.
-        @param aKey A unique string identifying the object to be removed from the dictionary.
-    */
-    virtual void removeObject(const char *aKey);
 
-    /*!
-        @function merge
-        @abstract A member function which merges the contents of a dictionary into the receiver.
-        @param aDictionary The dictionary whose contents are to be merged with the receiver.
-        @result Returns true if the merger is successful, false otherwise.
-        @discussion If there are keys in 'aDictionary' which match keys in the receiving dictionary, then the objects in the receiver are replaced by those from 'aDictionary', the replaced objects are released.  
+   /*!
+    * @function removeObject
+    *
+    * @abstract
+    * Removes a key/object pair from the dictionary.
+    *
+    * @param aKey  An OSSymbol identifying the object
+    *              to be removed from the dictionary.
+    *
+    * @discussion
+    * The removed key (not necessarily <code>aKey</code> itself)
+    * and object are automatically released.
     */
-    virtual bool merge(const OSDictionary *aDictionary);
-    
-    /*!
-        @function getObject
-        @abstract A member function to find an object in the dictionary associated by a given key.
-        @param aKey The unique OSSymbol key identifying the object to be returned to caller.
-        @result Returns a reference to the object corresponding to the given key, or 0 if the key does not exist in the dictionary.
-    */
-    virtual OSObject *getObject(const OSSymbol *aKey) const;
-    /*!
-        @function getObject
-        @abstract A member function to find an object in the dictionary associated by a given key.
-        @param aKey The unique OSString key identifying the object to be returned to caller.
-        @result Returns a reference to the object corresponding to the given key, or 0 if the key does not exist in the dictionary.
-    */
-    virtual OSObject *getObject(const OSString *aKey) const;
-    /*!
-        @function getObject
-        @abstract A member function to find an object in the dictionary associated by a given key.
-        @param aKey The unique string identifying the object to be returned to caller.
-        @result Returns a reference to the object corresponding to the given key, or 0 if the key does not exist in the dictionary.
-    */
-    virtual OSObject *getObject(const char *aKey) const;
+    virtual void removeObject(const OSSymbol * aKey);
 
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality of the intersections of two dictionaries.
-        @param aDictionary The dictionary to be compared against the receiver.
-        @param keys An OSArray or OSDictionary containing the keys describing the intersection for the comparison.
-        @result Returns true if the intersections of the two dictionaries are equal.
-    */
-    virtual bool isEqualTo(const OSDictionary *aDictionary, const OSCollection *keys) const;
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality of two dictionaries.
-        @param aDictionary The dictionary to be compared against the receiver.
-        @result Returns true if the dictionaries are equal.
-    */
-    virtual bool isEqualTo(const OSDictionary *aDictionary) const;
-    /*!
-        @function isEqualTo
-        @abstract A member function to test the equality between the receiver and an unknown object.
-        @param anObject An object to be compared against the receiver.
-        @result Returns true if the objects are equal.
-    */
-    virtual bool isEqualTo(const OSMetaClassBase *anObject) const;
-    
-    /*!
-        @function serialize
-        @abstract A member function which archives the receiver.
-        @param s The OSSerialize object.
-        @result Returns true if serialization was successful, false if not.
-    */
-    virtual bool serialize(OSSerialize *s) const;
 
-    /*!
-        @function setOptions
-        @abstract This function is used to recursively set option bits in this dictionary and all child collections.
-	@param options Set the (options & mask) bits.
-        @param mask The mask of bits which need to be set, 0 to get the current value.
-        @result The options before the set operation, NB setOptions(?,0) returns the current value of this collection.
-     */
-    virtual unsigned setOptions(unsigned options, unsigned mask, void * = 0);
-
-    /*!
-        @function copyCollection
-        @abstract Do a deep copy of this dictionary and its collections.
-	@discussion This function copies this dictionary and all included collections recursively.  Objects that don't derive from OSContainter are NOT copied, that is objects like OSString and OSData.
-        @param cycleDict Is a dictionary of all of the collections that have been, to start the copy at the top level just leave this field 0.
-        @result The newly copied collecton or 0 if insufficient memory
+   /*!
+    * @function removeObject
+    *
+    * @abstract
+    * Removes a key/object pair from the dictionary.
+    *
+    * @param aKey  A OSString identifying the object
+    *              to be removed from the dictionary.
+    *
+    * @discussion
+    * The removed key (not necessarily <code>aKey</code> itself)
+    * and object are automatically released.
     */
-    OSCollection *copyCollection(OSDictionary *cycleDict = 0);
+    virtual void removeObject(const OSString * aKey);
+
+
+   /*!
+    * @function removeObject
+    *
+    * @abstract
+    * Removes a key/object pair from the dictionary.
+    *
+    * @param aKey  A C string identifying the object
+    *              to be removed from the dictionary.
+    *
+    * @discussion
+    * The removed key (internally an OSSymbol)
+    * and object are automatically released.
+    */
+    virtual void removeObject(const char * aKey);
+
+
+   /*!
+    * @function merge
+    *
+    * @abstract
+    * Merges the contents of a dictionary into the receiver.
+    *
+    * @param aDictionary  The dictionary whose contents
+    *                     are to be merged with the receiver.
+    * @result
+    * <code>true</code> if the merge succeeds, <code>false</code> otherwise.
+    *
+    * @discussion
+    * If there are keys in <code>aDictionary</code> that match keys
+    * in the receiving dictionary,
+    * then the objects in the receiver are replaced
+    * by those from <code>aDictionary</code>,
+    * and the replaced objects are released.  
+    */
+    virtual bool merge(const OSDictionary * aDictionary);
+
+
+   /*!
+    * @function getObject
+    *
+    * @abstract
+    * Returns the object stored under a given key.
+    *
+    * @param aKey  An OSSymbol key identifying the object
+    *              to be returned to the caller.
+    *
+    * @result
+    * The object stored under <code>aKey</code>,
+    * or <code>NULL</code> if the key does not exist in the dictionary.
+    *
+    * @discussion
+    * The returned object will be released if removed from the dictionary;
+    * if you plan to store the reference, you should call
+    * <code>@link
+    * //apple_ref/cpp/instm/OSObject/retain/virtualvoid/()
+    * retain@/link</code>
+    * on that object.
+    */
+    virtual OSObject * getObject(const OSSymbol * aKey) const;
+
+
+   /*!
+    * @function getObject
+    *
+    * @abstract Returns the object stored under a given key.
+    *
+    * @param aKey  An OSString key identifying the object
+    *              to be returned to caller.
+    *
+    * @result
+    * The object stored under <code>aKey</code>,
+    * or <code>NULL</code> if the key does not exist in the dictionary.
+    *
+    * @discussion
+    * The returned object will be released if removed from the dictionary;
+    * if you plan to store the reference, you should call
+    * <code>@link
+    * //apple_ref/cpp/instm/OSObject/retain/virtualvoid/()
+    * retain@/link</code>
+    * on that object.
+    */
+    virtual OSObject * getObject(const OSString * aKey) const;
+
+
+   /*!
+    * @function getObject
+    *
+    * @abstract
+    * Returns the object stored under a given key.
+    *
+    * @param aKey  A C string key identifying the object
+    *              to be returned to caller.
+    *
+    * @result
+    * The object stored under <code>aKey</code>,
+    * or <code>NULL</code> if the key does not exist in the dictionary.
+    *
+    * @discussion
+    * The returned object will be released if removed from the dictionary;
+    * if you plan to store the reference, you should call
+    * <code>@link
+    * //apple_ref/cpp/instm/OSObject/retain/virtualvoid/()
+    * retain@/link</code>
+    * on that object.
+    */
+    virtual OSObject * getObject(const char * aKey) const;
+
+
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract Tests the equality of two OSDictionary objects
+    * over a subset of keys.
+    *
+    * @param aDictionary  The dictionary to be compared against the receiver.
+    * @param keys         An OSArray or OSDictionary containing the keys
+    *                     (as @link //apple_ref/cpp/cl/OSString OSStrings@/link or
+    *                     @link //apple_ref/cpp/cl/OSSymbol OSSymbols@/link)
+    *                     describing the intersection for the comparison.
+    *
+    * @result
+    * <code>true</code> if the intersections
+    * of the two dictionaries are equal.
+    *
+    * @discussion
+    * Two OSDictionary objects are considered equal by this function
+    * if both have objects stored for all keys provided,
+    * and if the objects stored in each under 
+    * a given key compare as equal using
+    * <code>@link
+    * //apple_ref/cpp/instm/OSMetaClassBase/isEqualTo/virtualbool/(constOSMetaClassBase*)
+    * isEqualTo@/link</code>.
+    */
+    virtual bool isEqualTo(
+        const OSDictionary * aDictionary,
+        const OSCollection * keys) const;
+
+
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract Tests the equality of two OSDictionary objects.
+    *
+    * @param aDictionary  The dictionary to be compared against the receiver.
+    *
+    * @result
+    * <code>true</code> if the dictionaries are equal,
+    * <code>false</code> if not.
+    *
+    * @discussion
+    * Two OSDictionary objects are considered equal if they have same count,
+    * the same keys, and if the objects stored in each under 
+    * a given key compare as equal using
+    * <code>@link
+    * //apple_ref/cpp/instm/OSMetaClassBase/isEqualTo/virtualbool/(constOSMetaClassBase*)
+    * isEqualTo@/link</code>.
+    */
+    virtual bool isEqualTo(const OSDictionary * aDictionary) const;
+
+
+   /*!
+    * @function isEqualTo
+    *
+    * @abstract
+    * Tests the equality of an OSDictionary to an arbitrary object.
+    *
+    * @param anObject An object to be compared against the receiver.
+    *
+    * @result
+    * <code>true</code> if the objects are equal.
+    *
+    * @discussion
+    * An OSDictionary is considered equal to another object
+    * if that object is derived from OSDictionary
+    * and contains the same or equivalent objects.
+    */
+    virtual bool isEqualTo(const OSMetaClassBase * anObject) const;
+
+
+   /*!
+    * @function serialize
+    *
+    * @abstract
+    * Archives the receiver into the provided
+    * @link //apple_ref/doc/class/OSSerialize OSSerialize@/link object.
+    *
+    * @param serializer  The OSSerialize object.
+    *
+    * @result
+    * <code>true</code> if serialization succeeds, <code>false</code> if not.
+    */
+    virtual bool serialize(OSSerialize * serializer) const;
+
+
+   /*!
+    * @function setOptions
+    *
+    * @abstract
+    * Recursively sets option bits in the dictionary
+    * and all child collections.
+    *
+    * @param options  A bitfield whose values turn the options on (1) or off (0).
+    * @param mask     A mask indicating which bits
+    *                 in <code>options</code> to change.
+    *                 Pass 0 to get the whole current options bitfield
+    *                 without changing any settings.
+    * @param context  Unused.
+    *
+    * @result
+    * The options bitfield as it was before the set operation.
+    *
+    * @discussion
+    * Kernel extensions should not call this function.
+    *
+    * Child collections' options are changed only if the receiving dictionary's
+    * options actually change.
+    */
+    virtual unsigned setOptions(
+        unsigned   options,
+        unsigned   mask,
+        void     * context = 0);
+
+
+   /*!
+    * @function copyCollection
+    *
+    * @abstract
+    * Creates a deep copy of the dictionary
+    * and its child collections.
+    *
+    * @param cycleDict  A dictionary of all of the collections
+    *                   that have been copied so far,
+    *                   which is used to track circular references.
+    *                   To start the copy at the top level,
+    *                   pass <code>NULL</code>.
+    *
+    * @result
+    * The newly copied dictionary, with a retain count of 1,
+    * or <code>NULL</code> if there is insufficient memory to do the copy.
+    *
+    * @discussion
+    * The receiving dictionary, and any collections it contains, recursively,
+    * are copied.
+    * Objects that are not derived from OSCollection are retained
+    * rather than copied.
+    */
+    OSCollection * copyCollection(OSDictionary * cycleDict = 0);
 
 
     OSMetaClassDeclareReservedUnused(OSDictionary, 0);

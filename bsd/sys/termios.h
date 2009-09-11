@@ -277,8 +277,8 @@ struct termios {
 };
 
 #ifdef KERNEL
-typedef unsigned long long	user_tcflag_t;
-typedef unsigned long long	user_speed_t;
+typedef __uint64_t	user_tcflag_t;
+typedef __uint64_t	user_speed_t;
 
 /*
  * LP64 version of struct termios.  tcflag_t and speed_t are long and must
@@ -294,6 +294,17 @@ struct user_termios {
 	cc_t		c_cc[NCCS];	/* control chars */
 	user_speed_t	c_ispeed __attribute((aligned(8)));	/* input speed */
 	user_speed_t	c_ospeed;	/* output speed */
+};
+
+/* 32 bit version */
+struct termios32 {
+	__uint32_t	c_iflag;	/* input flags */
+	__uint32_t	c_oflag;	/* output flags */
+	__uint32_t	c_cflag;	/* control flags */
+	__uint32_t	c_lflag;	/* local flags */
+	cc_t		c_cc[NCCS];	/* control chars */
+	__uint32_t	c_ispeed;	/* input speed */
+	__uint32_t	c_ospeed;	/* output speed */
 };
 
 #endif	/* KERNEL */

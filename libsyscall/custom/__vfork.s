@@ -158,6 +158,7 @@ LEAF(___vfork, 0)
 	movq		$ SYSCALL_CONSTRUCT_UNIX(SYS_vfork), %rax	// code for vfork -> rax
 	UNIX_SYSCALL_TRAP			// do the system call
 	jnb		L1					// jump if CF==0
+	pushq		%rdi			// put return address back on stack for cerror
 	movq		__current_pid@GOTPCREL(%rip), %rcx
 	lock
 	addq		$1, (%rcx)

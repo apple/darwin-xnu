@@ -45,15 +45,15 @@
 #  Standard Apple Research Configurations:
 #  -------- ----- -------- ---------------
 #
-#  BASE =        [ ppc mach medium config_dtrace vol pst gdb noprofiling simple_clock kernstack compat_43_tty sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue ]
-#  FILESYS =	 [ devfs revfs hfs journaling fdesc config_fse quota namedstreams fifo ffs union cd9660 config_volfs ]
-#  NETWORKING =  [ inet inet6 compat_oldsock mrouting tcpdrop_synfin bpfilter ipdivert netat ipfirewall ipv6firewall ipfw2 dummynet traffic_mgt sendfile netmibs bond vlan gif stf zlib randomipid ifnet_input_chk ]
+#  BASE =        [ ppc mach medium config_dtrace vol pst gdb noprofiling simple_clock kernstack sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue ]
+#  FILESYS =	 [ devfs revfs hfs journaling fdesc config_fse quota namedstreams fifo union config_volfs hfs_compression ]
+#  NETWORKING =  [ inet inet6 compat_oldsock mrouting tcpdrop_synfin bpfilter ipdivert ipfirewall ipv6firewall ipfw2 dummynet traffic_mgt sendfile netmibs bond vlan gif stf zlib randomipid ifnet_input_chk ipflow ]
 #  NFS =         [ nfsclient nfsserver ]
 #  VPN =         [ ipsec ]
 #  RELEASE =     [ BASE NETWORKING NFS VPN FILESYS libdriver ]
 #  DEVELOPMENT = [ RELEASE ]
 #  PROFILE =     [ RELEASE profile ]
-#  DEBUG =       [ BASE NETWORKING NFS VPN FILESYS libdriver_g debug xpr_debug mach_assert ]
+#  DEBUG =       [ BASE NETWORKING NFS VPN FILESYS libdriver_g debug xpr_debug mach_assert pf pflog ]
 #
 ######################################################################
 #
@@ -69,7 +69,7 @@ options		UXPR		# user-level XPR package	# <uxpr>
 config		mach_kernel	swap generic			# <mach>
 
 #
-# Note: MAC options must be set in all the bsd/conf, osfmk/conf, and 
+# Note: MAC/AUDIT options must be set in all the bsd/conf, osfmk/conf, and 
 # security/conf MASTER files.
 #
 options		CONFIG_MACF			# Mandatory Access Control Framework
@@ -78,6 +78,7 @@ options		CONFIG_MACF_SOCKET_SUBSET	# MAC socket subest (no labels)
 #options	CONFIG_MACF_NET			# mbuf
 #options	CONFIG_MACF_DEBUG
 #options	CONFIG_MACF_MACH
+options		CONFIG_AUDIT			# Kernel auditing         
 
 options		EVENT						# <event>
 

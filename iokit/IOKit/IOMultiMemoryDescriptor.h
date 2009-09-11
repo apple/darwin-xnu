@@ -47,45 +47,6 @@ protected:
 
     virtual void free();
 
-    /*
-     * These methods are not supported under this subclass.
-     */
-
-    virtual bool initWithAddress( void *      address,       /* not supported */
-                                  IOByteCount withLength,
-                                  IODirection withDirection );
-
-    virtual bool initWithAddress( vm_address_t address,      /* not supported */
-                                  IOByteCount  withLength,
-                                  IODirection  withDirection,
-                                  task_t       withTask );
-
-    virtual bool initWithPhysicalAddress( 
-                                  IOPhysicalAddress address, /* not supported */
-                                  IOByteCount       withLength,
-                                  IODirection       withDirection );
-
-    virtual bool initWithPhysicalRanges( 
-                                  IOPhysicalRange * ranges,  /* not supported */
-                                  UInt32            withCount,
-                                  IODirection       withDirection,
-                                  bool              asReference = false );
-
-    virtual bool initWithRanges(  IOVirtualRange * ranges,   /* not supported */
-                                  UInt32           withCount,
-                                  IODirection      withDirection,
-                                  task_t           withTask,
-                                  bool             asReference = false );
-
-    virtual void * getVirtualSegment( IOByteCount   offset,  /* not supported */
-                                      IOByteCount * length );
-
-    IOMemoryDescriptor::withAddress;                         /* not supported */
-    IOMemoryDescriptor::withPhysicalAddress;                 /* not supported */
-    IOMemoryDescriptor::withPhysicalRanges;                  /* not supported */
-    IOMemoryDescriptor::withRanges;                          /* not supported */
-    IOMemoryDescriptor::withSubRange;                        /* not supported */
-
 public:
 
 /*! @function withDescriptors
@@ -118,16 +79,16 @@ public:
                                   IODirection           withDirection,
                                   bool                  asReference = false );
 
-/*! @function getPhysicalAddress
-    @abstract Return the physical address of the first byte in the memory.
-    @discussion This method returns the physical address of the  first byte in the memory. It is most useful on memory known to be physically contiguous.
-    @result A physical address. */
+/*! @function getPhysicalSegment
+    @abstract Break a memory descriptor into its physically contiguous segments.
+    @discussion This method returns the physical address of the byte at the given offset into the memory, and optionally the length of the physically contiguous segment from that offset.
+    @param offset A byte offset into the memory whose physical address to return.
+    @param length If non-zero, getPhysicalSegment will store here the length of the physically contiguous segement at the given offset.
+    @result A physical address, or zero if the offset is beyond the length of the memory. */
 
-    virtual IOPhysicalAddress getPhysicalSegment( IOByteCount   offset,
-                                                  IOByteCount * length );
-
-    virtual addr64_t getPhysicalSegment64(        IOByteCount   offset,
-                                                  IOByteCount * length );
+    virtual addr64_t getPhysicalSegment( IOByteCount   offset,
+                                         IOByteCount * length,
+                                         IOOptionBits  options = 0 );
 
 /*! @function prepare
     @abstract Prepare the memory for an I/O transfer.
@@ -144,33 +105,6 @@ public:
     @result An IOReturn code. */
 
     virtual IOReturn complete(IODirection forDirection = kIODirectionNone);
-
-/*! @function readBytes
-    @abstract Copy data from the memory descriptor's buffer to the specified buffer.
-    @discussion This method copies data from the memory descriptor's memory at the given offset, to the caller's buffer.
-    @param offset A byte offset into the memory descriptor's memory.
-    @param bytes The caller supplied buffer to copy the data to.
-    @param withLength The length of the data to copy.
-    @result The number of bytes copied, zero will be returned if the specified offset is beyond the length of the descriptor. */
-
-    virtual IOByteCount readBytes( IOByteCount offset,
-                                   void *      bytes,
-                                   IOByteCount withLength );
-
-/*! @function writeBytes
-    @abstract Copy data to the memory descriptor's buffer from the specified buffer.
-    @discussion This method copies data to the memory descriptor's memory at the given offset, from the caller's buffer.
-    @param offset A byte offset into the memory descriptor's memory.
-    @param bytes The caller supplied buffer to copy the data from.
-    @param withLength The length of the data to copy.
-    @result The number of bytes copied, zero will be returned if the specified offset is beyond the length of the descriptor. */
-
-    virtual IOByteCount writeBytes( IOByteCount  offset,
-                                    const void * bytes,
-                                    IOByteCount  withLength );
-
-    virtual IOPhysicalAddress getSourceSegment(IOByteCount offset,
-                                               IOByteCount * length);
 };
 
 #endif /* !_IOMULTIMEMORYDESCRIPTOR_H */

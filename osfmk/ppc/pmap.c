@@ -1733,7 +1733,7 @@ kern_return_t pmap_unnest(pmap_t grand, addr64_t vaddr, uint64_t size) {
 		panic("pmap_unnest: Attempt to unnest something that is not at start of nest - va = %016llX\n", vaddr);
 	}
 
-	(void)hw_atomic_and(&mp->mpFlags, ~mpPerm);			/* Show that this mapping is now removable */
+	hw_atomic_and_noret(&mp->mpFlags, ~mpPerm);			/* Show that this mapping is now removable */
 	
 	mapping_drop_busy(mp);								/* Go ahead and release the mapping now */
 
@@ -1781,6 +1781,9 @@ kern_return_t pmap_unnest(pmap_t grand, addr64_t vaddr, uint64_t size) {
 	return KERN_SUCCESS;								/* Bye, bye, butterfly... */
 }
 
+boolean_t pmap_adjust_unnest_parameters(__unused pmap_t p, __unused vm_map_offset_t *s, __unused vm_map_offset_t *e) {
+	return FALSE; /* Not implemented on PowerPC */
+}
 
 /*
  *	void MapUserMemoryWindowInit(void)

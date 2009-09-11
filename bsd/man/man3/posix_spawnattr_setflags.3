@@ -67,13 +67,12 @@ The argument
 is either 0 or a logical OR of one or more of the following flags:
 .Bl -tag -width POSIX_SPAWN_START_SUSPENDED
 .It Dv POSIX_SPAWN_RESETIDS
-If the set group bit is set on the process image being spawned, this
-bit has no effect; otherwise, if not set, the child process will
-inherit the effective group ID of the parent process, and if set, the
-child process will inherit the real group ID of the parent process.
+If this bit is set, the child process will inherit the real (rather than the effective) user and
+group ID of the parent process. NOTE: This flag has no effect when the set-group bit is set on the
+process image being spawned.
 .It Dv POSIX_SPAWN_SETPGROUP
 If this bit is not set, then the child process inherits the parent
-process group; if set, then the child process shall behave as if the
+process group; if it is set, then the child process will behave as if the
 .Xr setpgid 2
 function had been called with a
 .Fa pid

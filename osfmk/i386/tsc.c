@@ -53,19 +53,18 @@
 #include <vm/vm_kern.h>		/* for kernel_map */
 #include <i386/ipl.h>
 #include <architecture/i386/pio.h>
-#include <i386/misc_protos.h>
-#include <i386/proc_reg.h>
 #include <i386/machine_cpu.h>
-#include <i386/mp.h>
-#include <i386/cpu_data.h>
 #include <i386/cpuid.h>
+#include <i386/mp.h>
 #include <i386/machine_routines.h>
+#include <i386/proc_reg.h>
+#include <i386/tsc.h>
+#include <i386/misc_protos.h>
 #include <pexpert/pexpert.h>
 #include <machine/limits.h>
 #include <machine/commpage.h>
 #include <sys/kdebug.h>
 #include <pexpert/device_tree.h>
-#include <i386/tsc.h>
 
 uint64_t	busFCvtt2n = 0;
 uint64_t	busFCvtn2t = 0;
@@ -172,14 +171,10 @@ tsc_init(void)
 		 * value. See 6036811.
 		 */
 		if (busFreq == 0)
-			busFreq = BASE_NHM_CLOCK_SOURCE;
+		    busFreq = BASE_NHM_CLOCK_SOURCE;
 
 		cpu_mhz = tscGranularity * BASE_NHM_CLOCK_SOURCE;
 
-	        kprintf("[NHM] Maximum Non-Turbo Ratio = [%d]\n",
-			(uint32_t)tscGranularity);
-	        kprintf("[NHM] CPU: Frequency          = %6d.%04dMhz\n", 
-			(uint32_t)(cpu_mhz / Mega), (uint32_t)(cpu_mhz % Mega));
 		break;
             }
 	default: {

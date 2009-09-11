@@ -56,7 +56,7 @@
 #define ENTER_COMPAT_MODE()			\
 	ljmp	*(%rip)				;\
 	.long	4f				;\
-	.word	KERNEL_CS			;\
+	.word	KERNEL32_CS			;\
 	.code32					;\
 4:
 

@@ -174,13 +174,11 @@ retry:
 			if ( (error = socreate(AF_LOCAL, &rso, SOCK_STREAM, 0)) ) {
 			        goto bad1;
 			}
-			fip->fi_readsock = rso;
 
 			if ( (error = socreate(AF_LOCAL, &wso, SOCK_STREAM, 0)) ) {
 				(void)soclose(rso);
 			        goto bad1;
 			}
-			fip->fi_writesock = wso;
 
 			if ( (error = soconnect2(wso, rso)) ) {
 				(void)soclose(wso);
@@ -189,22 +187,22 @@ retry:
 			}
 			fip->fi_readers = fip->fi_writers = 0;
 
-	        socket_lock(wso, 1);
+			/* Lock ordering between wso and rso does not matter here 
+		 	 * because they are just created and no one has a reference to them
+		 	 */
+	        	socket_lock(wso, 1);
 			wso->so_state |= SS_CANTRCVMORE;
 			wso->so_snd.sb_lowat = PIPE_BUF;
-#if 0
-			/* Because all the unp is protected by single mutex 
-			 * doing it in two step may actually cause problems
-			 * as it opens up window between the drop and acquire
-			 */
-	        socket_unlock(wso, 1);
+	        	socket_unlock(wso, 1);
 
-	        socket_lock(rso, 1);
-#endif
+	        	socket_lock(rso, 1);
 			rso->so_state |= SS_CANTSENDMORE;
-	        socket_unlock(wso, 1);
+	        	socket_unlock(rso, 1);
 
 			vnode_lock(vp);
+			fip->fi_readsock = rso;
+			fip->fi_writesock = wso;
+
 			fip->fi_flags |= FIFO_CREATED;
 			fip->fi_flags &= ~FIFO_INCREATE;
 			
@@ -301,7 +299,8 @@ fifo_read(struct vnop_read_args *ap)
 {
 	struct uio *uio = ap->a_uio;
 	struct socket *rso = ap->a_vp->v_fifoinfo->fi_readsock;
-	int error, startresid;
+	user_ssize_t startresid;
+	int error;
 	int rflags;
 
 #if DIAGNOSTIC
@@ -313,7 +312,6 @@ fifo_read(struct vnop_read_args *ap)
 
 	rflags = (ap->a_ioflag & IO_NDELAY) ? MSG_NBIO : 0;
 
-	// LP64todo - fix this!
 	startresid = uio_resid(uio);
 
 	/* fifo conformance - if we have a reader open on the fifo but no 
@@ -500,7 +498,6 @@ fifo_close_internal(vnode_t vp, int fflag, __unused vfs_context_t context, int l
 	return (error2);
 }
 
-#if !CONFIG_NO_PRINTF_STRINGS
 /*
  * Print out internal contents of a fifo vnode.
  */
@@ -512,7 +509,6 @@ fifo_printinfo(struct vnode *vp)
 	printf(", fifo with %ld readers and %ld writers",
 		fip->fi_readers, fip->fi_writers);
 }
-#endif /* !CONFIG_NO_PRINTF_STRINGS */
 
 /*
  * Return POSIX pathconf information applicable to fifo's.
@@ -556,3 +552,26 @@ fifo_advlock(__unused struct vnop_advlock_args *ap)
 	return (ENOTSUP);
 }
 
+
+/* You'd certainly better have an iocount on the vnode! */
+int
+fifo_freespace(struct vnode *vp, long *count) 
+{
+	struct socket *rsock;
+	rsock = vp->v_fifoinfo->fi_readsock;
+	socket_lock(rsock, 1);
+	*count = sbspace(&rsock->so_rcv);
+	socket_unlock(rsock, 1);
+	return 0;
+}
+
+int
+fifo_charcount(struct vnode *vp, int *count) 
+{
+	int mcount;
+	int err = sock_ioctl(vp->v_fifoinfo->fi_readsock, FIONREAD, (void*)&mcount);
+	if (err == 0) {
+		*count = mcount;
+	}
+	return err;
+}

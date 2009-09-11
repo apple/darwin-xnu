@@ -28,12 +28,35 @@ OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
 
 $(OBJS_WERROR):         WERROR=-Werror
 
+export bsd_vm.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export device_vm.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export memory_object.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm32_user.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_apple_protect.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_debug.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_external.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_fault.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_init.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_kern.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_map.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_object.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_pageout.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_purgeable.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_resident.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_shared_region.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_swapfile_pager.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export vm_user.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+
+export default_pager.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export dp_backing_store.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+export dp_memory_object.o_CFLAGS_ADD=-Werror -Wshorten-64-to-32
+
 #
 # KDB support
 #
 
 makedis: $(SRCROOT)/osfmk/ddb/makedis.c
-	$(CC) -o $@ $<
+	$(HOST_CC) -Werror -Wall -o $@ $<
 
 ppc_disasm.o_CFLAGS_ADD = -Dperror=db_printf -Dexit=db_error -Dmalloc=db_disasm_malloc
 

@@ -105,7 +105,7 @@ the descriptor is first deallocated as if a
 .Xr close 2
 call had been done first.
 .Sh RETURN VALUES
-Upon successful completion, a value of 0 is returned.
+Upon successful completion, the new file descriptor is returned.
 Otherwise, a value of -1 is returned and the global integer variable
 .Va errno
 is set to indicate the error.
@@ -119,8 +119,6 @@ system calls will fail if:
 .\" ==========
 .It Bq Er EBADF
 .Fa fildes
-or
-.Fa fildes2
 is not an active, valid file descriptor.
 .\" ==========
 .It Bq Er EINTR
@@ -128,6 +126,16 @@ Execution is interrupted by a signal.
 .\" ==========
 .It Bq Er EMFILE
 Too many file descriptors are active.
+.El
+.Pp
+The
+.Fn dup2
+system call will fail if:
+.Bl -tag -width Er
+.\" ==========
+.It Bq Er EBADF
+.Fa fildes2
+is negative or greater than the maximum allowable number (see getdtablesize(2)).
 .El
 .Sh SEE ALSO
 .Xr accept 2 ,

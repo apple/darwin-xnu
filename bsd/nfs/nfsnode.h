@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -88,32 +88,16 @@ struct nfs_sillyrename {
 };
 
 /*
- * This structure is used to save the logical directory offset to
- * NFS cookie mappings.
- * The mappings are stored in a list headed
- * by n_cookies, as required.
- * There is one mapping for each NFS_DIRBLKSIZ bytes of directory information
- * stored in increasing logical offset byte order.
- */
-#define NFSNUMCOOKIES		31
-
-struct nfsdmap {
-	LIST_ENTRY(nfsdmap)	ndm_list;
-	int			ndm_eocookie;
-	nfsuint64		ndm_cookies[NFSNUMCOOKIES];
-};
-
-/*
  * The nfsbuf is the nfs equivalent to a struct buf.
  */
 struct nfsbuf {
 	LIST_ENTRY(nfsbuf)	nb_hash;	/* hash chain */
 	LIST_ENTRY(nfsbuf)	nb_vnbufs;	/* nfsnode's nfsbuf chain */
 	TAILQ_ENTRY(nfsbuf)	nb_free;	/* free list position if not active. */
-	volatile long		nb_flags;	/* NB_* flags. */
-	volatile long		nb_lflags;	/* NBL_* flags. */
-	volatile long		nb_refs;	/* outstanding references. */
-	long			nb_bufsize;	/* buffer size */
+	volatile uint32_t	nb_flags;	/* NB_* flags. */
+	volatile uint32_t	nb_lflags;	/* NBL_* flags. */
+	volatile uint32_t	nb_refs;	/* outstanding references. */
+	uint32_t		nb_bufsize;	/* buffer size */
 	daddr64_t		nb_lblkno;	/* logical block number. */
 	uint64_t		nb_verf;	/* V3 write verifier */
 	int			nb_commitlevel;	/* lowest write commit level */
@@ -210,7 +194,7 @@ struct nfsbuf {
 LIST_HEAD(nfsbuflists, nfsbuf);
 TAILQ_HEAD(nfsbuffreehead, nfsbuf);
 
-#define NFSNOLIST ((struct nfsbuf *)0xdeadbeef)
+#define NFSNOLIST ((void*)0xdeadbeef)
 
 __private_extern__ lck_mtx_t *nfs_buf_mutex;
 __private_extern__ int nfsbufcnt, nfsbufmin, nfsbufmax, nfsbufmetacnt, nfsbufmetamax;
@@ -247,6 +231,65 @@ __private_extern__ struct nfsbuffreehead nfsbuffree, nfsbufdelwri;
 #else
 #define NFSBUFCNTCHK()
 #endif
+
+/*
+ * NFS directory buffer
+ *
+ * Each buffer for a directory consists of:
+ *
+ * - a small header
+ * - a packed list of direntry structures
+ *   (if RDIRPLUS is enabled, a file handle and attrstamp are
+ *   packed after the direntry name.)
+ * - free/unused space
+ * - if RDIRPLUS is enabled, an array of attributes
+ *   that is indexed backwards from the end of the buffer.
+ */
+struct nfs_dir_buf_header {
+	uint16_t	ndbh_flags;	/* flags (see below) */
+	uint16_t	ndbh_count;	/* # of entries */
+	uint32_t	ndbh_entry_end;	/* end offset of direntry data */
+	uint32_t	ndbh_ncgen;	/* name cache generation# */
+	uint32_t	ndbh_pad;	/* reserved */
+};
+/* ndbh_flags */
+#define NDB_FULL	0x0001	/* buffer has been filled */
+#define NDB_EOF		0x0002	/* buffer contains EOF */
+
+#define NFS_DIR_BUF_FIRST_DIRENTRY(BP) \
+	((struct direntry*)((char*)((BP)->nb_data) + sizeof(*ndbhp)))
+#define NFS_DIR_BUF_NVATTR(BP, IDX) \
+	(&((struct nfs_vattr*)((char*)((BP)->nb_data) + (BP)->nb_bufsize))[-((IDX)+1)])
+#define NFS_DIRENTRY_LEN(namlen) \
+	((sizeof(struct direntry) + (namlen) - (MAXPATHLEN-1) + 7) & ~7)
+#define NFS_DIRENT_LEN(namlen) \
+	((sizeof(struct dirent) - (NAME_MAX+1)) + (((namlen) + 1 + 3) &~ 3))
+#define NFS_DIRENTRY_NEXT(DP) \
+	((struct direntry*)((char*)(DP) + (DP)->d_reclen))
+#define NFS_DIR_COOKIE_POTENTIALLY_TRUNCATED(C) \
+	((C) && ((((C) >> 32) == 0) || (((C) & 0x80000000ULL) && (((C) >> 32) == 0xffffffff))))
+#define NFS_DIR_COOKIE_SAME32(C1, C2) \
+	(((C1) & 0xffffffffULL) == ((C2) & 0xffffffffULL))
+
+/*
+ * NFS directory cookie cache
+ *
+ * This structure is used to cache cookie-to-buffer mappings for
+ * cookies recently returned from READDIR.  The entries are kept in an
+ * array.  The most-recently-used (MRU) list is headed by the entry at
+ * index "mru".  The index of the next entry in the list is kept in the
+ * "next" array.  (An index value of -1 marks an invalid entry.)
+ */
+#define NFSNUMCOOKIES		14
+struct nfsdmap {
+	int8_t		free;			/* next unused slot */
+	int8_t		mru;			/* head of MRU list */
+	int8_t		next[NFSNUMCOOKIES];	/* MRU list links */
+	struct {
+	    uint64_t	key;			/* cookie */
+	    uint64_t	lbn;			/* lbn of buffer */
+	} cookies[NFSNUMCOOKIES];		/* MRU list entries */
+};
 
 /*
  * NFS vnode attribute structure
@@ -291,6 +334,10 @@ struct nfs_vattr {
 #define NFS_FFLAG_HIDDEN	0x0002
 #define NFS_FFLAG_NAMED_ATTR	0x0004	/* file has named attributes */
 
+/* flags for nfs_getattr() */
+#define NGA_CACHED	0
+#define NGA_UNCACHED	1
+
 /*
  * macros for detecting node changes
  *
@@ -323,6 +370,135 @@ struct nfs_vattr {
 			NFS_COPY_TIME(&(NP)->n_ncmtime, (NVAP), MODIFY); \
 	} while (0)
 
+
+__private_extern__ lck_grp_t *nfs_open_grp;
+__private_extern__ uint32_t nfs_open_owner_seqnum, nfs_lock_owner_seqnum;
+
+/*
+ * NFSv4 open owner structure - one per cred per mount
+ */
+struct nfs_open_owner {
+	TAILQ_ENTRY(nfs_open_owner)	noo_link;	/* List of open owners (on mount) */
+	lck_mtx_t			noo_lock;	/* owner mutex */
+	struct nfsmount *		noo_mount;	/* NFS mount */
+	uint32_t			noo_refcnt;	/* # outstanding references */
+	uint32_t			noo_flags;	/* see below */
+	kauth_cred_t			noo_cred;	/* credentials of open owner */
+	uint32_t			noo_name;	/* unique name used otw */
+	uint32_t			noo_seqid;	/* client-side sequence ID */
+	TAILQ_HEAD(,nfs_open_file)	noo_opens;	/* list of open files */
+};
+/* noo_flags */
+#define NFS_OPEN_OWNER_LINK	0x1	/* linked into mount's open owner list */
+#define NFS_OPEN_OWNER_BUSY	0x2	/* open state-modifying operation in progress */
+#define NFS_OPEN_OWNER_WANT	0x4	/* someone else wants to mark busy */
+
+/*
+ * NFS open file structure - one per open owner per nfsnode
+ */
+struct nfs_open_file {
+	lck_mtx_t			nof_lock;		/* open file mutex */
+	TAILQ_ENTRY(nfs_open_file)	nof_link;		/* list of open files */
+	TAILQ_ENTRY(nfs_open_file)	nof_oolink;		/* list of open owner's open files */
+	struct nfs_open_owner *		nof_owner;		/* open owner */
+	nfsnode_t			nof_np;			/* nfsnode this open is for */
+	nfs_stateid			nof_stateid;		/* open stateid */
+	thread_t			nof_creator;		/* thread that created file */
+	uint32_t			nof_opencnt;		/* open file count */
+	uint16_t			nof_flags;		/* see below */
+	uint8_t				nof_access:4;		/* access mode for this open */
+	uint8_t				nof_deny:4;		/* deny mode for this open */
+	uint8_t				nof_mmap_access:4;	/* mmap open access mode */
+	uint8_t				nof_mmap_deny:4;	/* mmap open deny mode */
+	/* counts of access/deny mode open combinations */
+	uint32_t			nof_r;			/* read opens (deny none) */
+	uint32_t			nof_w;			/* write opens (deny none) */
+	uint32_t			nof_rw;			/* read/write opens (deny none) */
+	uint32_t			nof_r_dw;		/* read deny-write opens */
+	/* the rest of the counts have a max of 2 (1 for open + 1 for mmap) */
+	uint32_t			nof_w_dw:4;		/* write deny-write opens (max 2) */
+	uint32_t			nof_rw_dw:4;		/* read/write deny-write opens (max 2) */
+	uint32_t			nof_r_drw:4;		/* read deny-read/write opens (max 2) */
+	uint32_t			nof_w_drw:4;		/* write deny-read/write opens (max 2) */
+	uint32_t			nof_rw_drw:4;		/* read/write deny-read/write opens (max 2) */
+};
+/* nof_flags */
+#define NFS_OPEN_FILE_BUSY	0x0001	/* open state-modifying operation in progress */
+#define NFS_OPEN_FILE_WANT	0x0002	/* someone else wants to mark busy */
+#define NFS_OPEN_FILE_CREATE	0x0004	/* has an open(RW) from a VNOP_CREATE call */
+#define NFS_OPEN_FILE_NEEDCLOSE	0x0008	/* has an open(R) from an (unopen) VNOP_READ call */
+#define NFS_OPEN_FILE_SETATTR	0x0020	/* has an open(W) to perform a SETATTR(size) */
+#define NFS_OPEN_FILE_POSIXLOCK	0x0040	/* server supports POSIX locking semantics */
+#define NFS_OPEN_FILE_LOST	0x0080	/* open state has been lost */
+#define NFS_OPEN_FILE_REOPEN	0x0100	/* file needs to be reopened */
+#define NFS_OPEN_FILE_REOPENING	0x0200	/* file is being reopened */
+
+struct nfs_lock_owner;
+/*
+ * NFS file lock
+ *
+ * Each lock request (pending or granted) has an
+ * nfs_file_lock structure representing its state.
+ */
+struct nfs_file_lock {
+	TAILQ_ENTRY(nfs_file_lock)	nfl_link;	/* List of locks on nfsnode */
+	TAILQ_ENTRY(nfs_file_lock)	nfl_lolink;	/* List of locks held by locker */
+	struct nfs_lock_owner *		nfl_owner;	/* lock owner that holds this lock */
+	uint64_t			nfl_start;	/* starting offset */
+	uint64_t			nfl_end;	/* ending offset (inclusive) */
+	uint32_t			nfl_blockcnt;	/* # locks blocked on this lock */
+	uint16_t			nfl_flags;	/* see below */
+	uint8_t				nfl_type;	/* lock type: read/write */
+};
+/* nfl_flags */
+#define NFS_FILE_LOCK_ALLOC		0x01	/* lock was allocated */
+#define NFS_FILE_LOCK_STYLE_POSIX	0x02	/* POSIX-style fcntl() lock */
+#define NFS_FILE_LOCK_STYLE_FLOCK	0x04	/* flock(2)-style lock */
+#define NFS_FILE_LOCK_STYLE_MASK	0x06	/* lock style mask */
+#define NFS_FILE_LOCK_WAIT		0x08	/* may block on conflicting locks */
+#define NFS_FILE_LOCK_BLOCKED		0x10	/* request is blocked */
+#define NFS_FILE_LOCK_DEAD		0x20	/* lock (request) no longer exists */
+
+TAILQ_HEAD(nfs_file_lock_queue, nfs_file_lock);
+
+/*
+ * Calculate length of lock range given the endpoints.
+ * Note that struct flock has "to EOF" reported as 0 but
+ * the NFSv4 protocol has "to EOF" reported as UINT64_MAX.
+ */
+#define NFS_FLOCK_LENGTH(S, E)	(((E) == UINT64_MAX) ? 0 : ((E) - (S) + 1))
+#define NFS_LOCK_LENGTH(S, E)	(((E) == UINT64_MAX) ? UINT64_MAX : ((E) - (S) + 1))
+
+/*
+ * NFSv4 lock owner structure - per open owner per process per nfsnode
+ *
+ * A lock owner is a process + an nfsnode.
+ *
+ * Note that flock(2) locks technically should have the lock owner be
+ * an fglob pointer instead of a process.  However, implementing that
+ * correctly would not be trivial.  So, for now, flock(2) locks are
+ * essentially treated like whole-file POSIX locks.
+ */
+struct nfs_lock_owner {
+	lck_mtx_t			nlo_lock;	/* owner mutex */
+	TAILQ_ENTRY(nfs_lock_owner)	nlo_link;	/* List of lock owners (on nfsnode) */
+	struct nfs_open_owner *		nlo_open_owner;	/* corresponding open owner */
+	struct nfs_file_lock_queue	nlo_locks;	/* list of locks held */
+	struct nfs_file_lock		nlo_alock;	/* most lockers will only ever have one */
+	struct timeval			nlo_pid_start;	/* Start time of process id */
+	pid_t				nlo_pid;	/* lock-owning process ID */
+	uint32_t			nlo_refcnt;	/* # outstanding references */
+	uint32_t			nlo_flags;	/* see below */
+	uint32_t			nlo_name;	/* unique name used otw */
+	uint32_t			nlo_seqid;	/* client-side sequence ID */
+	uint32_t			nlo_stategenid;	/* mount state generation ID */
+	nfs_stateid			nlo_stateid;	/* lock stateid */
+};
+/* nlo_flags */
+#define NFS_LOCK_OWNER_LINK	0x1	/* linked into mount's lock owner list */
+#define NFS_LOCK_OWNER_BUSY	0x2	/* lock state-modifying operation in progress */
+#define NFS_LOCK_OWNER_WANT	0x4	/* someone else wants to mark busy */
+
 /*
  * The nfsnode is the NFS equivalent of an inode.
  * There is a unique nfsnode for each NFS vnode.
@@ -334,8 +510,7 @@ struct nfs_vattr {
 #define NFS_ACCESS_CACHE_SIZE	3
 
 struct nfsnode {
-	lck_rw_t		n_lock;		/* nfs node lock */
-	void			*n_lockowner;	/* nfs node lock owner (exclusive) */
+	lck_mtx_t		n_lock;		/* nfs node lock */
 	lck_rw_t		n_datalock;	/* nfs node data lock */
 	void			*n_datalockowner;/* nfs node data lock owner (exclusive) */
 	LIST_ENTRY(nfsnode)	n_hash;		/* Hash chain */
@@ -363,17 +538,18 @@ struct nfsnode {
 	mount_t			n_mount;	/* associated mount (NHINIT) */
 	int			n_error;	/* Save write error value */
 	union {
-		struct timespec	nf_atim;	/* Special file times */
-		nfsuint64	nd_cookieverf;	/* Cookie verifier (dir only) */
+		struct timespec	ns_atim;	/* Special file times */
+		daddr64_t	nf_lastread;	/* last block# read from (for readahead) */
+		uint64_t	nd_cookieverf;	/* Cookie verifier (dir only) */
 	} n_un1;
 	union {
-		struct timespec	nf_mtim;	/* Special file times */
-		daddr64_t	nf_lastread;	/* last block# read from (for readahead) */
-		off_t		nd_direof;	/* Dir. EOF offset cache */
+		struct timespec	ns_mtim;	/* Special file times */
+		daddr64_t	nf_lastrahead;	/* last block# read ahead */
+		uint64_t	nd_eofcookie;	/* Dir. EOF cookie cache */
 	} n_un2;
 	union {
 		struct nfs_sillyrename *nf_silly;/* Ptr to silly rename struct */
-		LIST_HEAD(, nfsdmap) nd_cook;	/* cookies */
+		struct nfsdmap *nd_cookiecache; /* dir cookie cache */
 	} n_un3;
 	u_short			n_fhsize;	/* size in bytes, of fh */
 	u_short			n_flag;		/* node flags */
@@ -382,14 +558,31 @@ struct nfsnode {
 	u_char			n_fh[NFS_SMALLFH];/* Small File Handle */
 	struct nfsbuflists	n_cleanblkhd;	/* clean blocklist head */
 	struct nfsbuflists	n_dirtyblkhd;	/* dirty blocklist head */
-	int			n_wrbusy;	/* # threads in write/fsync */
-	int			n_needcommitcnt;/* # bufs that need committing */
+	union {
+		int		nf_wrbusy;	/* # threads in write/fsync */
+		uint32_t	nd_ncgen;	/* dir name cache generation# */
+	} n_un5;
+	union {
+		int		nf_needcommitcnt;/* # bufs that need committing */
+		daddr64_t	nd_lastdbl;	/* last dir buf lookup block# */
+	} n_un6;
 	int			n_bufiterflags;	/* buf iterator flags */
+	int			n_numoutput;	/* I/O in progress */
+	/* open state */
+	lck_mtx_t		n_openlock;	/* nfs node open lock */
+	uint32_t		n_openflags;	/* open state flags */
+	uint32_t		n_openrefcnt;	/* # non-file opens */
+	TAILQ_HEAD(,nfs_open_file) n_opens;	/* list of open files */
+	/* lock state */
+	TAILQ_HEAD(, nfs_lock_owner) n_lock_owners; /* list of lock owners */
+	struct nfs_file_lock_queue n_locks;	/* list of locks */
+	/* delegation state */
+	nfs_stateid		n_dstateid;	/* delegation stateid */
+	TAILQ_ENTRY(nfsnode)	n_dlink;	/* delegation recall list link */
 };
 
-#define NFS_NODE_LOCK_SHARED	1
-#define NFS_NODE_LOCK_EXCLUSIVE	2
-#define NFS_NODE_LOCK_FORCE	3
+#define NFS_DATA_LOCK_SHARED	1
+#define NFS_DATA_LOCK_EXCLUSIVE	2
 
 #define nfstimespeccmp(tvp, uvp, cmp)		\
 	(((tvp)->tv_sec == (uvp)->tv_sec) ?	\
@@ -404,13 +597,18 @@ struct nfsnode {
 		} \
 	} while (0)
 
-#define n_atim			n_un1.nf_atim
-#define n_mtim			n_un2.nf_mtim
-#define n_lastread		n_un2.nf_lastread
+#define n_atim			n_un1.ns_atim
+#define n_mtim			n_un2.ns_mtim
+#define n_lastread		n_un1.nf_lastread
+#define n_lastrahead		n_un2.nf_lastrahead
 #define n_sillyrename		n_un3.nf_silly
+#define n_wrbusy		n_un5.nf_wrbusy
+#define n_needcommitcnt		n_un6.nf_needcommitcnt
 #define n_cookieverf		n_un1.nd_cookieverf
-#define n_direofoffset		n_un2.nd_direof
-#define n_cookies		n_un3.nd_cook
+#define n_eofcookie		n_un2.nd_eofcookie
+#define n_cookiecache		n_un3.nd_cookiecache
+#define n_ncgen			n_un5.nd_ncgen
+#define n_lastdbl		n_un6.nd_lastdbl
 #define n_mtime			n_un4.v3.n3_mtime
 #define n_ncmtime		n_un4.v3.n3_ncmtime
 #define n_change		n_un4.v4.n4_change
@@ -423,10 +621,14 @@ struct nfsnode {
 #define	NMODIFIED	0x0004	/* Might have a modified buffer in bio */
 #define	NWRITEERR	0x0008	/* Flag write errors so close will know */
 #define	NNEEDINVALIDATE	0x0010	/* need to call vinvalbuf() */
+#define	NGETATTRINPROG	0x0020	/* GETATTR RPC in progress */
+#define	NGETATTRWANT	0x0040	/* waiting for GETATTR RPC */
 #define	NACC		0x0100	/* Special file accessed */
 #define	NUPD		0x0200	/* Special file updated */
 #define	NCHG		0x0400	/* Special file times changed */
 #define	NNEGNCENTRIES	0x0800	/* directory has negative name cache entries */
+#define	NBUSY		0x1000	/* node is busy */
+#define	NBUSYWANT	0x2000	/* waiting on busy node */
 
 /*
  * Flags for n_hflag
@@ -445,6 +647,16 @@ struct nfsnode {
 #define	NBFLUSHWANT	0x0002	/* waiting for nfs_flush() to complete */
 #define	NBINVALINPROG	0x0004	/* Avoid multiple calls to nfs_vinvalbuf() */
 #define	NBINVALWANT	0x0008	/* waiting for nfs_vinvalbuf() to complete */
+
+/*
+ * n_openflags
+ * Note: protected by n_openlock
+ */
+#define N_OPENBUSY		0x0001	/* open state is busy - being updated */
+#define N_OPENWANT		0x0002	/* someone wants to mark busy */
+#define N_DELEG_READ		0x0004	/* we have a read delegation */
+#define N_DELEG_WRITE		0x0008	/* we have a write delegation */
+#define N_DELEG_MASK		0x000c	/* delegation mask */
 
 /* attr/mode timestamp macros */
 #define NATTRVALID(np)		((np)->n_attrstamp != ~0)
@@ -468,6 +680,7 @@ struct nfsnode {
  */
 #define	NG_MARKROOT	0x0001	/* mark vnode as root of FS */
 #define	NG_MAKEENTRY	0x0002	/* add name cache entry for vnode */
+#define	NG_NOCREATE	0x0004	/* don't create a new node, return existing one */
 
 /*
  * Convert between nfsnode pointers and vnode pointers
@@ -504,28 +717,37 @@ extern	vnop_t	**spec_nfsv4nodeop_p;
 /*
  * Prototypes for NFS vnode operations
  */
-int	nfs_vnop_write(struct vnop_write_args *);
 #define nfs_vnop_revoke nop_revoke
 int	nfs_vnop_inactive(struct vnop_inactive_args *);
 int	nfs_vnop_reclaim(struct vnop_reclaim_args *);
 
-int nfs_lock(nfsnode_t, int);
-void nfs_unlock(nfsnode_t);
-int nfs_lock2(nfsnode_t, nfsnode_t, int);
-void nfs_unlock2(nfsnode_t, nfsnode_t);
-int nfs_lock4(nfsnode_t, nfsnode_t, nfsnode_t, nfsnode_t, int);
-void nfs_unlock4(nfsnode_t, nfsnode_t, nfsnode_t, nfsnode_t);
+int nfs_node_lock(nfsnode_t);
+int nfs_node_lock_internal(nfsnode_t, int);
+void nfs_node_lock_force(nfsnode_t);
+void nfs_node_unlock(nfsnode_t);
+int nfs_node_lock2(nfsnode_t, nfsnode_t);
+void nfs_node_unlock2(nfsnode_t, nfsnode_t);
+int nfs_node_set_busy(nfsnode_t, thread_t);
+int nfs_node_set_busy2(nfsnode_t, nfsnode_t, thread_t);
+int nfs_node_set_busy4(nfsnode_t, nfsnode_t, nfsnode_t, nfsnode_t, thread_t);
+void nfs_node_clear_busy(nfsnode_t);
+void nfs_node_clear_busy2(nfsnode_t, nfsnode_t);
+void nfs_node_clear_busy4(nfsnode_t, nfsnode_t, nfsnode_t, nfsnode_t);
 void nfs_data_lock(nfsnode_t, int);
-void nfs_data_lock2(nfsnode_t, int, int);
+void nfs_data_lock_noupdate(nfsnode_t, int);
+void nfs_data_lock_internal(nfsnode_t, int, int);
 void nfs_data_unlock(nfsnode_t);
-void nfs_data_unlock2(nfsnode_t, int);
+void nfs_data_unlock_noupdate(nfsnode_t);
+void nfs_data_unlock_internal(nfsnode_t, int);
 void nfs_data_update_size(nfsnode_t, int);
 
 /* other stuff */
 int nfs_removeit(struct nfs_sillyrename *);
 int nfs_nget(mount_t,nfsnode_t,struct componentname *,u_char *,int,struct nfs_vattr *,u_int64_t *,int,nfsnode_t*);
-nfsuint64 *nfs_getcookie(nfsnode_t, off_t, int);
+void nfs_dir_cookie_cache(nfsnode_t, uint64_t, uint64_t);
+int nfs_dir_cookie_to_lbn(nfsnode_t, uint64_t, int *, uint64_t *);
 void nfs_invaldir(nfsnode_t);
+uint32_t nfs_dir_buf_freespace(struct nfsbuf *, int);
 
 /* nfsbuf functions */
 void nfs_nbinit(void);
@@ -533,7 +755,7 @@ void nfs_buf_timer(void *, void *);
 void nfs_buf_remfree(struct nfsbuf *);
 boolean_t nfs_buf_is_incore(nfsnode_t, daddr64_t);
 struct nfsbuf * nfs_buf_incore(nfsnode_t, daddr64_t);
-int nfs_buf_get(nfsnode_t, daddr64_t, int, thread_t, int, struct nfsbuf **);
+int nfs_buf_get(nfsnode_t, daddr64_t, uint32_t, thread_t, int, struct nfsbuf **);
 int nfs_buf_upl_setup(struct nfsbuf *bp);
 void nfs_buf_upl_check(struct nfsbuf *bp);
 void nfs_buf_normalize_valid_range(nfsnode_t, struct nfsbuf *);
@@ -551,7 +773,8 @@ errno_t nfs_buf_acquire(struct nfsbuf *, int, int, int);
 int nfs_buf_iterprepare(nfsnode_t, struct nfsbuflists *, int);
 void nfs_buf_itercomplete(nfsnode_t, struct nfsbuflists *, int);
 
-int nfs_bioread(nfsnode_t, struct uio *, int, int *, vfs_context_t);
+int nfs_bioread(nfsnode_t, uio_t, int, vfs_context_t);
+int nfs_buf_readahead(nfsnode_t, int, daddr64_t *, daddr64_t, thread_t, kauth_cred_t);
 int nfs_buf_readdir(struct nfsbuf *, vfs_context_t);
 int nfs_buf_read(struct nfsbuf *);
 void nfs_buf_read_finish(struct nfsbuf *);
@@ -565,10 +788,18 @@ int nfs_buf_write_dirty_pages(struct nfsbuf *, thread_t, kauth_cred_t);
 
 int nfs_flushcommits(nfsnode_t, int);
 int nfs_flush(nfsnode_t, int, thread_t, int);
+void nfs_buf_delwri_push(int);
+void nfs_buf_delwri_service(void);
+void nfs_buf_delwri_thread(void *, wait_result_t);;
 
 int nfsiod_start(void);
+void nfsiod_terminate(struct nfsiod *);
+void nfsiod_thread(void);
+int nfsiod_continue(int);
 void nfs_asyncio_finish(struct nfsreq *);
 void nfs_asyncio_resend(struct nfsreq *);
+int nfs_async_write_start(struct nfsmount *);
+void nfs_async_write_done(struct nfsmount *);
 
 #endif /* KERNEL */
 

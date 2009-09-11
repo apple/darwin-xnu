@@ -37,6 +37,9 @@
 #include <mach/mach_time.h>
 #include <machine/machine_routines.h>
 
+#if defined(__i386__) || defined(__x86_64__)
+#include <i386/rtclock.h>
+#endif
 #include <kern/thread.h>
 #include <kern/task.h>
 #include <kern/debug.h>
@@ -44,7 +47,12 @@
 #include <sys/lock.h>
 
 #include <sys/malloc.h>
+#include <sys/mcache.h>
 #include <sys/kauth.h>
+
+#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
+#include <sys/fcntl.h>
 
 #include <mach/mach_host.h>		/* for host_info() */
 #include <libkern/OSAtomic.h>
@@ -54,11 +62,11 @@ void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
 int cpu_number(void);	/* XXX <machine/...> include path broken */
 
 /* XXX should probably be static, but it's debugging code... */
-int kdbg_read(user_addr_t, size_t *);
+int kdbg_read(user_addr_t, size_t *, vnode_t, vfs_context_t);
 void kdbg_control_chud(int, void *);
 int kdbg_control(int *, u_int, user_addr_t, size_t *);
 int kdbg_getentropy (user_addr_t, size_t *, int);
-int kdbg_readmap(user_addr_t, size_t *);
+int kdbg_readmap(user_addr_t, size_t *, vnode_t, vfs_context_t);
 int kdbg_getreg(kd_regtype *);
 int kdbg_setreg(kd_regtype *);
 int kdbg_setrtcdec(kd_regtype *);
@@ -85,38 +93,59 @@ uint64_t * 		  kd_entropy_buffer = 0;
 unsigned int      kd_entropy_bufsize = 0;
 unsigned int      kd_entropy_count  = 0;
 unsigned int      kd_entropy_indx   = 0;
-unsigned int      kd_entropy_buftomem = 0;
+vm_offset_t       kd_entropy_buftomem = 0;
 
 
 #define SLOW_NOLOG	0x01
 #define SLOW_CHECKS	0x02
 #define SLOW_ENTROPY	0x04
 
-unsigned int kdebug_slowcheck=SLOW_NOLOG;
+unsigned int kdebug_slowcheck = SLOW_NOLOG;
 
 unsigned int kd_cpus;
 
-struct kd_bufinfo {
-        kd_buf * kd_stop;
-        kd_buf * kd_bufptr;
-        kd_buf * kd_buffer;
-        kd_buf * kd_buflast;
-        kd_buf * kd_readlast;
-        int      kd_wrapped;	/* plus, the global flag KDBG_WRAPPED is set if one of the buffers has wrapped */
-        uint64_t kd_prev_timebase;
-        int	 kd_pad[24];	/* pad out to 128 bytes so that no cache line is shared between CPUs */
+#define EVENTS_PER_STORAGE_UNIT		2048
+#define MIN_STORAGE_UNITS_PER_CPU	4
 
+struct kd_storage {
+	struct	kd_storage *kds_next;
+	kd_buf	*kds_bufptr;
+	kd_buf	*kds_buflast;
+	kd_buf	*kds_readlast;
+
+	kd_buf	kds_records[EVENTS_PER_STORAGE_UNIT];
 };
+
+#define MAX_BUFFER_SIZE			(1024 * 1024 * 128)
+#define N_STORAGE_UNITS_PER_BUFFER	(MAX_BUFFER_SIZE / sizeof(struct kd_storage))
+
+
+struct kd_storage_buffers {
+	struct	kd_storage	*kdsb_addr;
+	uint32_t		kdsb_size;
+};
+
+
+struct kd_storage *kds_free_list = NULL;
+struct kd_storage_buffers *kd_bufs = NULL;
+int	n_storage_units = 0;
+int	n_storage_buffers = 0;
+
+struct kd_bufinfo {
+	struct  kd_storage *kd_list_head;
+	struct  kd_storage *kd_list_tail;
+	struct	kd_storage *kd_active;
+        uint64_t kd_prev_timebase;
+} __attribute__(( aligned(CPU_CACHE_SIZE) ));
 
 struct kd_bufinfo *kdbip = NULL;
 
-#define KDCOPYBUF_COUNT	1024
+#define KDCOPYBUF_COUNT	2048
 #define KDCOPYBUF_SIZE	(KDCOPYBUF_COUNT * sizeof(kd_buf))
 kd_buf *kdcopybuf = NULL;
 
 
 unsigned int nkdbufs = 8192;
-unsigned int kd_bufsize = 0;
 unsigned int kdebug_flags = 0;
 unsigned int kdlog_beg=0;
 unsigned int kdlog_end=0;
@@ -125,6 +154,7 @@ unsigned int kdlog_value2=0;
 unsigned int kdlog_value3=0;
 unsigned int kdlog_value4=0;
 
+static lck_spin_t * kds_spin_lock;
 static lck_mtx_t  * kd_trace_mtx_sysctl;
 static lck_grp_t  * kd_trace_mtx_sysctl_grp;
 static lck_attr_t * kd_trace_mtx_sysctl_attr;
@@ -138,7 +168,7 @@ static lck_mtx_t        stackshot_subsys_mutex;
 void *stackshot_snapbuf = NULL;
 
 int
-stack_snapshot2(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t options, register_t *retval);
+stack_snapshot2(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t options, int32_t *retval);
 
 extern void
 kdp_snapshot_preflight(int pid, void  *tracebuf, uint32_t tracebuf_size, uint32_t options);
@@ -151,7 +181,9 @@ kdp_stack_snapshot_bytes_traced(void);
 kd_threadmap *kd_mapptr = 0;
 unsigned int kd_mapsize = 0;
 unsigned int kd_mapcount = 0;
-unsigned int kd_maptomem = 0;
+vm_offset_t kd_maptomem = 0;
+
+off_t	RAW_file_offset = 0;
 
 pid_t global_state_pid = -1;       /* Used to control exclusive use of kd_buffer */
 
@@ -178,9 +210,9 @@ struct krt
 typedef struct krt krt_t;
 
 /* This is for the CHUD toolkit call */
-typedef void (*kd_chudhook_fn) (unsigned int debugid, unsigned int arg1,
-				unsigned int arg2, unsigned int arg3,
-				unsigned int arg4, unsigned int arg5);
+typedef void (*kd_chudhook_fn) (uint32_t debugid, uintptr_t arg1,
+				uintptr_t arg2, uintptr_t arg3,
+				uintptr_t arg4, uintptr_t arg5);
 
 kd_chudhook_fn kdebug_chudhook = 0;   /* pointer to CHUD toolkit function */
 
@@ -188,7 +220,7 @@ __private_extern__ void stackshot_lock_init( void ) __attribute__((section("__TE
 
 /* Support syscall SYS_kdebug_trace */
 int
-kdebug_trace(__unused struct proc *p, struct kdebug_trace_args *uap, __unused register_t *retval)
+kdebug_trace(__unused struct proc *p, struct kdebug_trace_args *uap, __unused int32_t *retval)
 {
     if ( (kdebug_enable == 0) )
         return(EINVAL);
@@ -197,146 +229,322 @@ kdebug_trace(__unused struct proc *p, struct kdebug_trace_args *uap, __unused re
     return(0);
 }
 
+
 static int
 create_buffers(void)
 {
-        unsigned int	cpu, i;
-	int     nentries;
+        int	i;
+	int	p_buffer_size;
+	int	f_buffer_size;
+	int	f_buffers;
+	int	error = 0;
 
-	nentries = nkdbufs / kd_cpus;
-	nkdbufs = nentries * kd_cpus;
+	if (nkdbufs < (kd_cpus * EVENTS_PER_STORAGE_UNIT * MIN_STORAGE_UNITS_PER_CPU))
+		n_storage_units = kd_cpus * MIN_STORAGE_UNITS_PER_CPU;
+	else
+		n_storage_units = nkdbufs / EVENTS_PER_STORAGE_UNIT;
 
-	kd_bufsize = nentries * sizeof(kd_buf);
+	nkdbufs = n_storage_units * EVENTS_PER_STORAGE_UNIT;
 
-	bzero((char *)kdbip, sizeof(struct kd_bufinfo) * kd_cpus);
+	f_buffers = n_storage_units / N_STORAGE_UNITS_PER_BUFFER;
+	n_storage_buffers = f_buffers;
+
+	f_buffer_size = N_STORAGE_UNITS_PER_BUFFER * sizeof(struct kd_storage);
+	p_buffer_size = (n_storage_units % N_STORAGE_UNITS_PER_BUFFER) * sizeof(struct kd_storage);
+
+	if (p_buffer_size)
+		n_storage_buffers++;
+
+	kd_bufs = NULL;
 
 	if (kdcopybuf == 0) {
-	        if (kmem_alloc(kernel_map, (unsigned int *)&kdcopybuf, (vm_size_t)KDCOPYBUF_SIZE) != KERN_SUCCESS)
-		        return(ENOMEM);
+	        if (kmem_alloc(kernel_map, (vm_offset_t *)&kdcopybuf, (vm_size_t)KDCOPYBUF_SIZE) != KERN_SUCCESS) {
+			error = ENOSPC;
+			goto out;
+		}
 	}
-	for (cpu = 0; cpu < kd_cpus; cpu++) {
-	        if (kmem_alloc(kernel_map, (unsigned int *)&kdbip[cpu].kd_buffer, kd_bufsize) != KERN_SUCCESS)
-		        break;
+	if (kmem_alloc(kernel_map, (vm_offset_t *)&kd_bufs, (vm_size_t)(n_storage_buffers * sizeof(struct kd_storage_buffers))) != KERN_SUCCESS) {
+		error = ENOSPC;
+		goto out;
 	}
-	if (cpu < kd_cpus) {
-	        for (i = 0; i < cpu; i++)
-		        kmem_free(kernel_map, (vm_offset_t)kdbip[i].kd_buffer, kd_bufsize);
-		kd_bufsize = 0;
+	bzero(kd_bufs, n_storage_buffers * sizeof(struct kd_storage_buffers));
 
-		kmem_free(kernel_map, (vm_offset_t)kdcopybuf, KDCOPYBUF_SIZE);
-		kdcopybuf = NULL;
-		
-		return(ENOMEM);
+	for (i = 0; i < f_buffers; i++) {
+		if (kmem_alloc(kernel_map, (vm_offset_t *)&kd_bufs[i].kdsb_addr, (vm_size_t)f_buffer_size) != KERN_SUCCESS) {
+			error = ENOSPC;
+			goto out;
+		}
+		kd_bufs[i].kdsb_size = f_buffer_size;
 	}
-	for (cpu = 0; cpu < kd_cpus; cpu++) {
-		kdbip[cpu].kd_bufptr = kdbip[cpu].kd_buffer;
-		kdbip[cpu].kd_buflast = &kdbip[cpu].kd_bufptr[nentries];
-		kdbip[cpu].kd_readlast = kdbip[cpu].kd_bufptr;
+	if (p_buffer_size) {
+		if (kmem_alloc(kernel_map, (vm_offset_t *)&kd_bufs[i].kdsb_addr, (vm_size_t)p_buffer_size) != KERN_SUCCESS) {
+			error = ENOSPC;
+			goto out;
+		}
+		kd_bufs[i].kdsb_size = p_buffer_size;
 	}
+
+	for (i = 0; i < n_storage_buffers; i++) {
+		struct kd_storage *kds;
+		int	n_elements;
+		int	n;
+
+		n_elements = kd_bufs[i].kdsb_size / sizeof(struct kd_storage);
+		kds = kd_bufs[i].kdsb_addr;
+
+		for (n = 0; n < n_elements; n++) {
+			kds[n].kds_next = kds_free_list;
+			kds_free_list = &kds[n];
+
+			kds[n].kds_buflast = &kds[n].kds_records[EVENTS_PER_STORAGE_UNIT];
+		}
+	}
+	bzero((char *)kdbip, sizeof(struct kd_bufinfo) * kd_cpus);
+
 	kdebug_flags |= KDBG_BUFINIT;
+out:
+	if (error)
+		delete_buffers();
 
-	return(0);
+	return(error);
 }
 
 
 static void
 delete_buffers(void)
 {
-        unsigned int	cpu;
+	int 	i;
+	
+	if (kd_bufs) {
+		for (i = 0; i < n_storage_buffers; i++) {
+			if (kd_bufs[i].kdsb_addr)
+				kmem_free(kernel_map, (vm_offset_t)kd_bufs[i].kdsb_addr, (vm_size_t)kd_bufs[i].kdsb_size);
+		}
+		kmem_free(kernel_map, (vm_offset_t)kd_bufs, (vm_size_t)(n_storage_buffers * sizeof(struct kd_storage_buffers)));
 
-	if (kd_bufsize && (kdebug_flags & KDBG_BUFINIT)) {
-	        for (cpu = 0; cpu < kd_cpus; cpu++)
-		        kmem_free(kernel_map, (vm_offset_t)kdbip[cpu].kd_buffer, kd_bufsize);
-		kd_bufsize = 0;
+		kd_bufs = NULL;
+		n_storage_buffers = 0;
 	}
 	if (kdcopybuf) {
 		kmem_free(kernel_map, (vm_offset_t)kdcopybuf, KDCOPYBUF_SIZE);
+
 		kdcopybuf = NULL;
 	}
+	kds_free_list = NULL;
+
 	kdebug_flags &= ~KDBG_BUFINIT;
 }
 
 
 static void
-kernel_debug_internal(unsigned int debugid, unsigned int arg1, unsigned int arg2, unsigned int arg3,
-		      unsigned int arg4, unsigned int arg5, int entropy_flag)
+release_storage_unit(struct kd_bufinfo *kdbp, struct kd_storage *kdsp)
 {
-	int s;
-	kd_buf * kd;
-	struct proc *curproc;
-	unsigned long long now;
-	int cpu;
+
+	int s = 0;
+	s = ml_set_interrupts_enabled(FALSE);
+	lck_spin_lock(kds_spin_lock);
+
+	if (kdsp == kdbp->kd_list_head) {
+		/*
+		 * its possible for the storage unit pointed to
+		 * by kdsp to have already been stolen... so
+		 * check to see if its still the head of the list
+		 * now that we're behind the lock that protects 
+		 * adding and removing from the queue...
+		 * since we only ever release and steal units from
+		 * that position, if its no longer the head
+		 * we having nothing to do in this context
+		 */
+		kdbp->kd_list_head = kdsp->kds_next;
 	
+		kdsp->kds_next = kds_free_list;
+		kds_free_list = kdsp;
+	}
+	lck_spin_unlock(kds_spin_lock);
+	ml_set_interrupts_enabled(s);
+}
+
+
+/*
+ * Interrupts are disabled when we enter this routine.
+ */
+static struct kd_storage *
+allocate_storage_unit(struct kd_bufinfo *kdbp)
+{
+	struct	kd_storage *kdsp;
+	struct  kd_bufinfo *kdbp_vict, *kdbp_try;
+	uint64_t	oldest_ts, ts;
+		
+	lck_spin_lock(kds_spin_lock);
+
+	if ((kdsp = kds_free_list))
+		kds_free_list = kdsp->kds_next;
+	else {
+		if (kdebug_flags & KDBG_NOWRAP) {
+                        kdebug_slowcheck |= SLOW_NOLOG;
+			goto out;
+		}
+		kdbp_vict = NULL;
+		oldest_ts = (uint64_t)-1;
+
+		for (kdbp_try = &kdbip[0]; kdbp_try < &kdbip[kd_cpus]; kdbp_try++) {
+
+			if ((kdsp = kdbp_try->kd_list_head) == NULL) {
+				/*
+				 * no storage unit to steal
+				 */
+				continue;
+			}
+			if (kdsp == kdbp_try->kd_active) {
+				/*
+				 * make sure we don't steal the storage unit
+				 * being actively recorded to...  this state
+				 * also implies that this is the only unit assigned
+				 * to this CPU, so we can immediately move on 
+				 */
+				continue;
+			}
+			ts = kdbg_get_timestamp(&(kdbp_try->kd_list_head->kds_records[0]));
+
+			if (ts < oldest_ts) {
+				/*
+				 * when 'wrapping', we want to steal the
+				 * storage unit that has the 'earliest' time
+				 * associated with it (first event time)
+				 */
+				oldest_ts = ts;
+				kdbp_vict = kdbp_try;
+			}
+		}
+#if 1
+		if (kdbp_vict == NULL) {
+			kdebug_enable = 0;
+
+			panic("allocate_storage_unit: no storage units available\n");
+		}
+#endif
+		kdsp = kdbp_vict->kd_list_head;
+
+		kdbp_vict->kd_list_head = kdsp->kds_next;
+
+		kdebug_flags |= KDBG_WRAPPED;
+	}
+	kdsp->kds_next     = NULL;
+	kdsp->kds_bufptr   = &kdsp->kds_records[0];
+	kdsp->kds_readlast = kdsp->kds_bufptr;
+
+	if (kdbp->kd_list_head == NULL)
+		kdbp->kd_list_head = kdsp;
+	else
+		kdbp->kd_list_tail->kds_next = kdsp;
+	kdbp->kd_list_tail = kdsp;
+out:
+	lck_spin_unlock(kds_spin_lock);
+
+	return (kdsp);
+}
+
+
+
+static void
+kernel_debug_internal(
+	uint32_t	debugid,
+	uintptr_t	arg1,
+	uintptr_t	arg2,
+	uintptr_t	arg3,
+	uintptr_t	arg4,
+	uintptr_t	arg5,
+	int		entropy_flag)
+{
+	struct proc 	*curproc;
+	uint64_t 	now;
+	int		s;
+	kd_buf		*kd;
+	int		cpu;
+	struct kd_bufinfo *kdbp;
+	struct kd_storage *kdsp;
+
 	s = ml_set_interrupts_enabled(FALSE);
 
 	now = mach_absolute_time() & KDBG_TIMESTAMP_MASK;
 	cpu = cpu_number();
 
 	if (kdebug_enable & KDEBUG_ENABLE_CHUD) {
-	    if (kdebug_chudhook)
-	        kdebug_chudhook(debugid, arg1, arg2, arg3, arg4, arg5);
+		if (kdebug_chudhook)
+			kdebug_chudhook(debugid, arg1, arg2, arg3, arg4, arg5);
 
-	    if ( !(kdebug_enable & (KDEBUG_ENABLE_ENTROPY | KDEBUG_ENABLE_TRACE)))
-	        goto out;
+		if ( !(kdebug_enable & (KDEBUG_ENABLE_ENTROPY | KDEBUG_ENABLE_TRACE)))
+			goto out;
+	}
+	if (kdebug_slowcheck == 0)
+		goto record_trace;
+
+	if (entropy_flag && (kdebug_enable & KDEBUG_ENABLE_ENTROPY)) {
+		if (kd_entropy_indx < kd_entropy_count)	{
+			kd_entropy_buffer [ kd_entropy_indx] = mach_absolute_time();
+			kd_entropy_indx++;
+		}
+	    
+		if (kd_entropy_indx == kd_entropy_count) {
+			/*
+			 * Disable entropy collection
+			 */
+			kdebug_enable &= ~KDEBUG_ENABLE_ENTROPY;
+			kdebug_slowcheck &= ~SLOW_ENTROPY;
+		}
+	}
+	if ( (kdebug_slowcheck & SLOW_NOLOG) )
+		goto out;
+	
+	if (kdebug_flags & KDBG_PIDCHECK) {
+		/*
+		 * If kdebug flag is not set for current proc, return
+		 */
+		curproc = current_proc();
+
+		if ((curproc && !(curproc->p_kdebug)) &&
+		    ((debugid & 0xffff0000) != (MACHDBG_CODE(DBG_MACH_SCHED, 0) | DBG_FUNC_NONE)))
+			goto out;
+	}
+	else if (kdebug_flags & KDBG_PIDEXCLUDE) {
+		/*
+		 * If kdebug flag is set for current proc, return
+		 */
+		curproc = current_proc();
+
+		if ((curproc && curproc->p_kdebug) &&
+		    ((debugid & 0xffff0000) != (MACHDBG_CODE(DBG_MACH_SCHED, 0) | DBG_FUNC_NONE)))
+			goto out;
+	}
+	if (kdebug_flags & KDBG_RANGECHECK) {
+		if ((debugid < kdlog_beg)
+		    || ((debugid >= kdlog_end) && (debugid >> 24 != DBG_TRACE)))
+			goto out;
+	}
+	else if (kdebug_flags & KDBG_VALCHECK) {
+		if ((debugid & DBG_FUNC_MASK) != kdlog_value1 &&
+		    (debugid & DBG_FUNC_MASK) != kdlog_value2 &&
+		    (debugid & DBG_FUNC_MASK) != kdlog_value3 &&
+		    (debugid & DBG_FUNC_MASK) != kdlog_value4 &&
+		    (debugid >> 24 != DBG_TRACE))
+			goto out;
 	}
 
-	if (kdebug_slowcheck == 0)
-	    goto record_trace;
-
-	if (entropy_flag && (kdebug_enable & KDEBUG_ENABLE_ENTROPY))
-	  {
-	    if (kd_entropy_indx < kd_entropy_count)
-	      {
-		kd_entropy_buffer [ kd_entropy_indx] = mach_absolute_time();
-		kd_entropy_indx++;
-	      }
-	    
-	    if (kd_entropy_indx == kd_entropy_count)
-	      {
-		/* Disable entropy collection */
-		kdebug_enable &= ~KDEBUG_ENABLE_ENTROPY;
-		kdebug_slowcheck &= ~SLOW_ENTROPY;
-	      }
-	  }
-
-	if ( (kdebug_slowcheck & SLOW_NOLOG) )
-	    goto out;
-	
-	if (kdebug_flags & KDBG_PIDCHECK)
-	  {
-	    /* If kdebug flag is not set for current proc, return  */
-	    curproc = current_proc();
-	    if ((curproc && !(curproc->p_kdebug)) &&
-		((debugid&0xffff0000) != (MACHDBG_CODE(DBG_MACH_SCHED, 0) | DBG_FUNC_NONE)))
-		goto out;
-	  }
-	else if (kdebug_flags & KDBG_PIDEXCLUDE)
-	  {
-	    /* If kdebug flag is set for current proc, return  */
-	    curproc = current_proc();
-	    if ((curproc && curproc->p_kdebug) &&
-		((debugid&0xffff0000) != (MACHDBG_CODE(DBG_MACH_SCHED, 0) | DBG_FUNC_NONE)))
-		goto out;
-	  }
-
-	if (kdebug_flags & KDBG_RANGECHECK)
-	  {
-	    if ((debugid < kdlog_beg)
-	        || ((debugid >= kdlog_end) && (debugid >> 24 != DBG_TRACE)))
-		goto out;
-	  }
-	else if (kdebug_flags & KDBG_VALCHECK)
-	  {
-	    if ((debugid & DBG_FUNC_MASK) != kdlog_value1 &&
-		(debugid & DBG_FUNC_MASK) != kdlog_value2 &&
-		(debugid & DBG_FUNC_MASK) != kdlog_value3 &&
-		(debugid & DBG_FUNC_MASK) != kdlog_value4 &&
-		(debugid >> 24 != DBG_TRACE))
-		goto out;
-	  }
-
 record_trace:
-	kd = kdbip[cpu].kd_bufptr;
+	kdbp = &kdbip[cpu];
+
+	if ((kdsp = kdbp->kd_active) == NULL) {
+		if ((kdsp = allocate_storage_unit(kdbp)) == NULL) {
+			/*
+			 * this can only happen if wrapping
+			 * has been disabled
+			 */
+			goto out;
+		}
+		kdbp->kd_active = kdsp;
+	}
+	kd = kdsp->kds_bufptr;
+
 	kd->debugid = debugid;
 	kd->arg1 = arg1;
 	kd->arg2 = arg2;
@@ -344,48 +552,36 @@ record_trace:
 	kd->arg4 = arg4;
 	kd->arg5 = arg5;
 	          
-	/*
-	 * Watch for out of order timestamps
-	 */	
-	if (now < kdbip[cpu].kd_prev_timebase)
-	  {
-	    /*
-	     * if so, just store the previous timestamp + a cycle
-	     */
-	    now = ++kdbip[cpu].kd_prev_timebase & KDBG_TIMESTAMP_MASK;
-	  }
-	else
-	  {
-	    kdbip[cpu].kd_prev_timebase = now;
-	  }
-	kd->timestamp = now | (((uint64_t)cpu) << KDBG_CPU_SHIFT);
+	kdbg_set_timestamp_and_cpu(kd, now, cpu);
 
-	kdbip[cpu].kd_bufptr++;
+	kdsp->kds_bufptr++;
 
-	if (kdbip[cpu].kd_bufptr >= kdbip[cpu].kd_buflast)
-	  	kdbip[cpu].kd_bufptr = kdbip[cpu].kd_buffer;
-
-	if (kdbip[cpu].kd_bufptr == kdbip[cpu].kd_readlast) {
-	        if (kdebug_flags & KDBG_NOWRAP)
-			kdebug_slowcheck |= SLOW_NOLOG;
-		kdbip[cpu].kd_wrapped = 1;
-		kdebug_flags |= KDBG_WRAPPED;
-	}
-
+	if (kdsp->kds_bufptr >= kdsp->kds_buflast)
+	  	kdbp->kd_active = NULL;
 out:
 	ml_set_interrupts_enabled(s);
 }
 
 void
-kernel_debug(unsigned int debugid, unsigned int arg1, unsigned int arg2, unsigned int arg3,
-		      unsigned int arg4, __unused unsigned int arg5)
+kernel_debug(
+	uint32_t	debugid,
+	uintptr_t	arg1,
+	uintptr_t	arg2,
+	uintptr_t	arg3,
+	uintptr_t	arg4,
+	__unused uintptr_t arg5)
 {
-	kernel_debug_internal(debugid, arg1, arg2, arg3, arg4, (int)current_thread(), 1);
+	kernel_debug_internal(debugid, arg1, arg2, arg3, arg4, (uintptr_t)thread_tid(current_thread()), 1);
 }
 
 void
-kernel_debug1(unsigned int debugid, unsigned int arg1, unsigned int arg2, unsigned int arg3,
-		      unsigned int arg4, unsigned int arg5)
+kernel_debug1(
+	uint32_t	debugid,
+	uintptr_t	arg1,
+	uintptr_t	arg2,
+	uintptr_t	arg3,
+	uintptr_t	arg4,
+	uintptr_t	arg5)
 {
 	kernel_debug_internal(debugid, arg1, arg2, arg3, arg4, arg5, 0);
 }
@@ -404,7 +600,7 @@ kdbg_lock_init(void)
 	host_info((host_t)BSD_HOST, HOST_BASIC_INFO, (host_info_t)&hinfo, &count);
 	kd_cpus = hinfo.logical_cpu_max;
 
-	if (kmem_alloc(kernel_map, (unsigned int *)&kdbip,
+	if (kmem_alloc(kernel_map, (vm_offset_t *)&kdbip,
 		       sizeof(struct kd_bufinfo) * kd_cpus) != KERN_SUCCESS)
 	        return;
 
@@ -424,6 +620,7 @@ kdbg_lock_init(void)
 	 * allocate and initialize spin lock and mutex
 	 */
 	kd_trace_mtx_sysctl = lck_mtx_alloc_init(kd_trace_mtx_sysctl_grp, kd_trace_mtx_sysctl_attr);
+	kds_spin_lock = lck_spin_alloc_init(kd_trace_mtx_sysctl_grp, kd_trace_mtx_sysctl_attr);
 
 	kdebug_flags |= KDBG_LOCKINIT;
 }
@@ -440,138 +637,133 @@ kdbg_bootstrap(void)
 int
 kdbg_reinit(void)
 {
-    int ret=0;
+	int ret = 0;
 
-    /*
-     * Disable trace collecting
-     * First make sure we're not in
-     * the middle of cutting a trace
-     */
+	/*
+	 * Disable trace collecting
+	 * First make sure we're not in
+	 * the middle of cutting a trace
+	 */
+	kdebug_enable &= ~KDEBUG_ENABLE_TRACE;
+	kdebug_slowcheck |= SLOW_NOLOG;
 
-    kdebug_enable &= ~KDEBUG_ENABLE_TRACE;
-    kdebug_slowcheck |= SLOW_NOLOG;
+	/*
+	 * make sure the SLOW_NOLOG is seen
+	 * by everyone that might be trying
+	 * to cut a trace..
+	 */
+	IOSleep(100);
 
-    /*
-     * make sure the SLOW_NOLOG is seen
-     * by everyone that might be trying
-     * to cut a trace..
-     */
-    IOSleep(100);
+	delete_buffers();
 
-    delete_buffers();
+	if ((kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr) {
+		kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
+		kdebug_flags &= ~KDBG_MAPINIT;
+		kd_mapsize = 0;
+		kd_mapptr = (kd_threadmap *) 0;
+		kd_mapcount = 0;
+	}  
+	ret = kdbg_bootstrap();
 
-    if ((kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr)
-      {
-	kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
-	kdebug_flags &= ~KDBG_MAPINIT;
-	kd_mapsize = 0;
-	kd_mapptr = (kd_threadmap *) 0;
-	kd_mapcount = 0;
-      }  
-
-    ret = kdbg_bootstrap();
-
-    return(ret);
+	return(ret);
 }
 
 void
 kdbg_trace_data(struct proc *proc, long *arg_pid)
 {
-    if (!proc)
-        *arg_pid = 0;
-    else
-	*arg_pid = proc->p_pid;
-    
-    return;
+	if (!proc)
+		*arg_pid = 0;
+	else
+		*arg_pid = proc->p_pid;
 }
 
 
 void
 kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *arg3, long *arg4)
 {
-    char *dbg_nameptr; 
-    int dbg_namelen;
-    long dbg_parms[4];
-    if (!proc)
-      {
-	*arg1 = 0;
-	*arg2 = 0;
-	*arg3 = 0;
-	*arg4 = 0;
-	return;
-      }
+	char *dbg_nameptr; 
+	int dbg_namelen;
+	long dbg_parms[4];
 
-    /* Collect the pathname for tracing */
-    dbg_nameptr = proc->p_comm;
-    dbg_namelen = strlen(proc->p_comm);
-    dbg_parms[0]=0L;
-    dbg_parms[1]=0L;
-    dbg_parms[2]=0L;
-    dbg_parms[3]=0L;
+	if (!proc) {
+		*arg1 = 0;
+		*arg2 = 0;
+		*arg3 = 0;
+		*arg4 = 0;
+		return;
+	}
+	/*
+	 * Collect the pathname for tracing
+	 */
+	dbg_nameptr = proc->p_comm;
+	dbg_namelen = (int)strlen(proc->p_comm);
+	dbg_parms[0]=0L;
+	dbg_parms[1]=0L;
+	dbg_parms[2]=0L;
+	dbg_parms[3]=0L;
   
-    if(dbg_namelen > (int)sizeof(dbg_parms))
-      dbg_namelen = sizeof(dbg_parms);
+	if(dbg_namelen > (int)sizeof(dbg_parms))
+		dbg_namelen = (int)sizeof(dbg_parms);
     
-    strncpy((char *)dbg_parms, dbg_nameptr, dbg_namelen);
+	strncpy((char *)dbg_parms, dbg_nameptr, dbg_namelen);
 
-    *arg1=dbg_parms[0];
-    *arg2=dbg_parms[1];
-    *arg3=dbg_parms[2];
-    *arg4=dbg_parms[3];
+	*arg1=dbg_parms[0];
+	*arg2=dbg_parms[1];
+	*arg3=dbg_parms[2];
+	*arg4=dbg_parms[3];
 }
 
 static void
 kdbg_resolve_map(thread_t th_act, void *opaque)
 {
-  kd_threadmap *mapptr;
-  krt_t *t = (krt_t *)opaque;
+	kd_threadmap *mapptr;
+	krt_t *t = (krt_t *)opaque;
 
-  if(t->count < t->maxcount)
-    {
-      mapptr=&t->map[t->count];
-      mapptr->thread  = (unsigned int)th_act;
-      (void) strlcpy (mapptr->command, t->atts->task_comm,
-		      sizeof(t->atts->task_comm));
+	if (t->count < t->maxcount) {
+		mapptr = &t->map[t->count];
+		mapptr->thread  = (uintptr_t)thread_tid(th_act);
 
-      /*
-	Some kernel threads have no associated pid.
-	We still need to mark the entry as valid.
-      */
-      if (t->atts->pid)
-	  mapptr->valid = t->atts->pid;
-      else
-	  mapptr->valid = 1;
+		(void) strlcpy (mapptr->command, t->atts->task_comm,
+				sizeof(t->atts->task_comm));
+		/*
+		 * Some kernel threads have no associated pid.
+		 * We still need to mark the entry as valid.
+		 */
+		if (t->atts->pid)
+			mapptr->valid = t->atts->pid;
+		else
+			mapptr->valid = 1;
 
-      t->count++;
-    }
+		t->count++;
+	}
 }
 
 void
 kdbg_mapinit(void)
 {
-	struct proc *p;
-	struct krt akrt;
-	int tts_count;    /* number of task-to-string structures */
-	struct tts *tts_mapptr;
-	unsigned int tts_mapsize = 0;
-	unsigned int tts_maptomem=0;
-	int i;
-
+	struct proc	*p;
+	struct krt	akrt;
+	int		tts_count;    /* number of task-to-string structures */
+	struct tts	*tts_mapptr;
+	unsigned int	tts_mapsize = 0;
+	vm_offset_t	tts_maptomem=0;
+	int		i;
 
         if (kdebug_flags & KDBG_MAPINIT)
-	  return;
+		return;
 
-	/* need to use PROC_SCANPROCLIST with proc_iterate */
+	/*
+	 * need to use PROC_SCANPROCLIST with proc_iterate
+	 */
 	proc_list_lock();
 
-	/* Calculate the sizes of map buffers*/
-	for (p = allproc.lh_first, kd_mapcount=0, tts_count=0; p; 
-	     p = p->p_list.le_next)
-	  {
-	    kd_mapcount += get_task_numacts((task_t)p->task);
-	    tts_count++;
-	  }
-
+	/*
+	 * Calculate the sizes of map buffers
+	 */
+	for (p = allproc.lh_first, kd_mapcount=0, tts_count=0; p; p = p->p_list.le_next) {
+		kd_mapcount += get_task_numacts((task_t)p->task);
+		tts_count++;
+	}
 	proc_list_unlock();
 
 	/*
@@ -584,38 +776,33 @@ kdbg_mapinit(void)
 	tts_count += tts_count/10;
 
 	kd_mapsize = kd_mapcount * sizeof(kd_threadmap);
-	if((kmem_alloc(kernel_map, & kd_maptomem,
-		       (vm_size_t)kd_mapsize) == KERN_SUCCESS))
-	{
-	    kd_mapptr = (kd_threadmap *) kd_maptomem;
-	    bzero(kd_mapptr, kd_mapsize);
-	}
-	else
-	    kd_mapptr = (kd_threadmap *) 0;
+
+	if ((kmem_alloc(kernel_map, & kd_maptomem, (vm_size_t)kd_mapsize) == KERN_SUCCESS)) {
+		kd_mapptr = (kd_threadmap *) kd_maptomem;
+		bzero(kd_mapptr, kd_mapsize);
+	} else
+		kd_mapptr = (kd_threadmap *) 0;
 
 	tts_mapsize = tts_count * sizeof(struct tts);
-	if((kmem_alloc(kernel_map, & tts_maptomem,
-		       (vm_size_t)tts_mapsize) == KERN_SUCCESS))
-	{
-	    tts_mapptr = (struct tts *) tts_maptomem;
-	    bzero(tts_mapptr, tts_mapsize);
-	}
-	else
-	    tts_mapptr = (struct tts *) 0;
 
+	if ((kmem_alloc(kernel_map, & tts_maptomem, (vm_size_t)tts_mapsize) == KERN_SUCCESS)) {
+		tts_mapptr = (struct tts *) tts_maptomem;
+		bzero(tts_mapptr, tts_mapsize);
+	} else
+		tts_mapptr = (struct tts *) 0;
 
 	/* 
 	 * We need to save the procs command string
 	 * and take a reference for each task associated
 	 * with a valid process
 	 */
-
 	if (tts_mapptr) {
-		/* should use proc_iterate */
+		/*
+		 * should use proc_iterate
+		 */
 		proc_list_lock();
 
-	        for (p = allproc.lh_first, i=0; p && i < tts_count; 
-		     p = p->p_list.le_next) {
+	        for (p = allproc.lh_first, i=0; p && i < tts_count; p = p->p_list.le_next) {
 	                if (p->p_lflag & P_LEXIT)
 		                continue;
 
@@ -630,26 +817,25 @@ kdbg_mapinit(void)
 		tts_count = i;
 
 		proc_list_unlock();
-
 	}
 
+	if (kd_mapptr && tts_mapptr) {
+		kdebug_flags |= KDBG_MAPINIT;
 
-	if (kd_mapptr && tts_mapptr)
-	  {
-	    kdebug_flags |= KDBG_MAPINIT;
-	    /* Initialize thread map data */
-	    akrt.map = kd_mapptr;
-	    akrt.count = 0;
-	    akrt.maxcount = kd_mapcount;
+		/*
+		 * Initialize thread map data
+		 */
+		akrt.map = kd_mapptr;
+		akrt.count = 0;
+		akrt.maxcount = kd_mapcount;
 	    
-	    for (i=0; i < tts_count; i++)
-	      {
-		akrt.atts = &tts_mapptr[i];
-		task_act_iterate_wth_args(tts_mapptr[i].task, kdbg_resolve_map, &akrt);
-		task_deallocate((task_t) tts_mapptr[i].task);
-	      }
-	    kmem_free(kernel_map, (vm_offset_t)tts_mapptr, tts_mapsize);
-	  }
+		for (i = 0; i < tts_count; i++) {
+			akrt.atts = &tts_mapptr[i];
+			task_act_iterate_wth_args(tts_mapptr[i].task, kdbg_resolve_map, &akrt);
+			task_deallocate((task_t) tts_mapptr[i].task);
+		}
+		kmem_free(kernel_map, (vm_offset_t)tts_mapptr, tts_mapsize);
+	}
 }
 
 static void
@@ -683,8 +869,10 @@ kdbg_clear(void)
 
 	/* Clean up the thread map buffer */
 	kdebug_flags &= ~KDBG_MAPINIT;
-	kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
-	kd_mapptr = (kd_threadmap *) 0;
+	if (kd_mapptr) {
+		kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
+		kd_mapptr = (kd_threadmap *) 0;
+	}
 	kd_mapsize = 0;
 	kd_mapcount = 0;
 }
@@ -692,91 +880,100 @@ kdbg_clear(void)
 int
 kdbg_setpid(kd_regtype *kdr)
 {
-  pid_t pid;
-  int flag, ret=0;
-  struct proc *p;
+	pid_t pid;
+	int flag, ret=0;
+	struct proc *p;
 
-  pid = (pid_t)kdr->value1;
-  flag = (int)kdr->value2;
+	pid = (pid_t)kdr->value1;
+	flag = (int)kdr->value2;
 
-  if (pid > 0)
-    {
-      if ((p = proc_find(pid)) == NULL)
-	ret = ESRCH;
-      else
-	{
-	  if (flag == 1)  /* turn on pid check for this and all pids */
-	    {
-	      kdebug_flags |= KDBG_PIDCHECK;
-	      kdebug_flags &= ~KDBG_PIDEXCLUDE;
-	      kdebug_slowcheck |= SLOW_CHECKS;
-
-	      p->p_kdebug = 1;
-	    }
-	  else  /* turn off pid check for this pid value */
-	    {
-	      /* Don't turn off all pid checking though */
-	      /* kdebug_flags &= ~KDBG_PIDCHECK;*/   
-	      p->p_kdebug = 0;
-	    }
-	proc_rele(p);
+	if (pid > 0) {
+		if ((p = proc_find(pid)) == NULL)
+			ret = ESRCH;
+		else {
+			if (flag == 1) {
+				/*
+				 * turn on pid check for this and all pids
+				 */
+				kdebug_flags |= KDBG_PIDCHECK;
+				kdebug_flags &= ~KDBG_PIDEXCLUDE;
+				kdebug_slowcheck |= SLOW_CHECKS;
+				
+				p->p_kdebug = 1;
+			} else {
+				/*
+				 * turn off pid check for this pid value
+				 * Don't turn off all pid checking though
+				 *
+				 * kdebug_flags &= ~KDBG_PIDCHECK;
+				 */   
+				p->p_kdebug = 0;
+			}
+			proc_rele(p);
+		}
 	}
-    }
-  else
-    ret = EINVAL;
-  return(ret);
+	else
+		ret = EINVAL;
+
+	return(ret);
 }
 
 /* This is for pid exclusion in the trace buffer */
 int
 kdbg_setpidex(kd_regtype *kdr)
 {
-  pid_t pid;
-  int flag, ret=0;
-  struct proc *p;
+	pid_t pid;
+	int flag, ret=0;
+	struct proc *p;
 
-  pid = (pid_t)kdr->value1;
-  flag = (int)kdr->value2;
+	pid = (pid_t)kdr->value1;
+	flag = (int)kdr->value2;
 
-  if (pid > 0)
-    {
-      if ((p = proc_find(pid)) == NULL)
-	ret = ESRCH;
-      else
-	{
-	  if (flag == 1)  /* turn on pid exclusion */
-	    {
-	      kdebug_flags |= KDBG_PIDEXCLUDE;
-	      kdebug_flags &= ~KDBG_PIDCHECK;
-	      kdebug_slowcheck |= SLOW_CHECKS;
+	if (pid > 0) {
+		if ((p = proc_find(pid)) == NULL)
+			ret = ESRCH;
+		else {
+			if (flag == 1) {
+				/*
+				 * turn on pid exclusion
+				 */
+				kdebug_flags |= KDBG_PIDEXCLUDE;
+				kdebug_flags &= ~KDBG_PIDCHECK;
+				kdebug_slowcheck |= SLOW_CHECKS;
 
-	      p->p_kdebug = 1;
-	    }
-	  else  /* turn off pid exclusion for this pid value */
-	    {
-	      /* Don't turn off all pid exclusion though */
-	      /* kdebug_flags &= ~KDBG_PIDEXCLUDE;*/   
-	      p->p_kdebug = 0;
-	    }
-	proc_rele(p);
-	}
-    }
-  else
-    ret = EINVAL;
-  return(ret);
+				p->p_kdebug = 1;
+			}
+			else {
+				/*
+				 * turn off pid exclusion for this pid value
+				 * Don't turn off all pid exclusion though
+				 *
+				 * kdebug_flags &= ~KDBG_PIDEXCLUDE;
+				 */   
+				p->p_kdebug = 0;
+			}
+			proc_rele(p);
+		}
+	} else
+		ret = EINVAL;
+
+	return(ret);
 }
 
-/* This is for setting a maximum decrementer value */
+
+/*
+ * This is for setting a maximum decrementer value
+ */
 int
 kdbg_setrtcdec(kd_regtype *kdr)
 {
-  int ret=0;
-  natural_t decval;
+	int ret = 0;
+	natural_t decval;
 
-  decval = (natural_t)kdr->value1;
+	decval = (natural_t)kdr->value1;
 
-  if (decval && decval < KDBG_MINRTCDEC)
-	ret = EINVAL;
+	if (decval && decval < KDBG_MINRTCDEC)
+		ret = EINVAL;
 #ifdef ppc
 	else {
 		maxDec = decval ? decval : 0x7FFFFFFF;	/* Set or reset the max decrementer */
@@ -786,7 +983,7 @@ kdbg_setrtcdec(kd_regtype *kdr)
 		ret = ENOTSUP;
 #endif /* ppc */
 
-  return(ret);
+	return(ret);
 }
 
 int
@@ -899,105 +1096,128 @@ kdbg_getreg(__unused kd_regtype * kdr)
 
 
 int
-kdbg_readmap(user_addr_t buffer, size_t *number)
+kdbg_readmap(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx)
 {
-  int avail = *number;
-  int ret = 0;
-  unsigned int count = 0;
+	int avail = *number;
+	int ret = 0;
+	uint32_t count = 0;
 
-  count = avail/sizeof (kd_threadmap);
+	count = avail/sizeof (kd_threadmap);
 
-  if (count && (count <= kd_mapcount))
-    {
-      if((kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr)
+	if (count && (count <= kd_mapcount))
 	{
-	  if (*number < kd_mapsize)
-	    ret=EINVAL;
-	  else
-	    {
-	      if (copyout(kd_mapptr, buffer, kd_mapsize))
-		ret=EINVAL;
-	    }
+		if ((kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr)
+		{
+			if (*number < kd_mapsize)
+				ret = EINVAL;
+			else
+			{
+				if (vp) {
+					vn_rdwr(UIO_WRITE, vp, (caddr_t)&count, sizeof(uint32_t), RAW_file_offset,
+						UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT, vfs_context_ucred(ctx), (int *) 0, vfs_context_proc(ctx));
+					RAW_file_offset += sizeof(uint32_t);
+
+					vn_rdwr(UIO_WRITE, vp, (caddr_t)kd_mapptr, kd_mapsize, RAW_file_offset,
+						UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT, vfs_context_ucred(ctx), (int *) 0, vfs_context_proc(ctx));
+					RAW_file_offset += kd_mapsize;
+
+				} else {
+					if (copyout(kd_mapptr, buffer, kd_mapsize))
+						ret = EINVAL;
+				}
+			}
+		}
+		else
+			ret = EINVAL;
 	}
-      else
-	ret=EINVAL;
-    }
-  else
-    ret=EINVAL;
+	else
+		ret = EINVAL;
 
-  if ((kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr)
-    {
-      kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
-      kdebug_flags &= ~KDBG_MAPINIT;
-      kd_mapsize = 0;
-      kd_mapptr = (kd_threadmap *) 0;
-      kd_mapcount = 0;
-    }  
+	if (ret && vp) {
+		count = 0;
 
-  return(ret);
+		vn_rdwr(UIO_WRITE, vp, (caddr_t)&count, sizeof(uint32_t), RAW_file_offset,
+			UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT, vfs_context_ucred(ctx), (int *) 0, vfs_context_proc(ctx));
+		RAW_file_offset += sizeof(uint32_t);
+	}
+	if ((kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr)
+	{
+		kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
+		kdebug_flags &= ~KDBG_MAPINIT;
+		kd_mapsize = 0;
+		kd_mapptr = (kd_threadmap *) 0;
+		kd_mapcount = 0;
+	}  
+
+	return(ret);
 }
 
 int
 kdbg_getentropy (user_addr_t buffer, size_t *number, int ms_timeout)
 {
-  int avail = *number;
-  int ret = 0;
+	int avail = *number;
+	int ret = 0;
 
-  if (kd_entropy_buffer)
-    return(EBUSY);
+	if (kd_entropy_buffer)
+		return(EBUSY);
 
-  kd_entropy_count = avail/sizeof(mach_timespec_t);
-  kd_entropy_bufsize = kd_entropy_count * sizeof(mach_timespec_t);
-  kd_entropy_indx = 0;
+	kd_entropy_count = avail/sizeof(mach_timespec_t);
+	kd_entropy_bufsize = kd_entropy_count * sizeof(mach_timespec_t);
+	kd_entropy_indx = 0;
 
-  /* Enforce maximum entropy entries here if needed */
+	/*
+	 * Enforce maximum entropy entries here if needed
+	 * allocate entropy buffer
+	 */
+	if (kmem_alloc(kernel_map, &kd_entropy_buftomem,
+		       (vm_size_t)kd_entropy_bufsize) == KERN_SUCCESS) {
+		kd_entropy_buffer = (uint64_t *) kd_entropy_buftomem;
+	} else {
+		kd_entropy_buffer = (uint64_t *) 0;
+		kd_entropy_count = 0;
+		kd_entropy_indx = 0;
+		return (EINVAL);
+	}
 
-  /* allocate entropy buffer */
-  if (kmem_alloc(kernel_map, &kd_entropy_buftomem,
-		 (vm_size_t)kd_entropy_bufsize) == KERN_SUCCESS)
-    {
-      kd_entropy_buffer = (uint64_t *) kd_entropy_buftomem;
-    }
-  else
-    {
-      kd_entropy_buffer = (uint64_t *) 0;
-      kd_entropy_count = 0;
-      kd_entropy_indx = 0;
-      return (EINVAL);
-    }
+	if (ms_timeout < 10)
+		ms_timeout = 10;
 
-  if (ms_timeout < 10)
-    ms_timeout = 10;
+	/*
+	 * Enable entropy sampling
+	 */
+	kdebug_enable |= KDEBUG_ENABLE_ENTROPY;
+	kdebug_slowcheck |= SLOW_ENTROPY;
 
-  /* Enable entropy sampling */
-  kdebug_enable |= KDEBUG_ENABLE_ENTROPY;
-  kdebug_slowcheck |= SLOW_ENTROPY;
+	ret = tsleep (kdbg_getentropy, PRIBIO | PCATCH, "kd_entropy", (ms_timeout/(1000/HZ)));
 
-  ret = tsleep (kdbg_getentropy, PRIBIO | PCATCH, "kd_entropy", (ms_timeout/(1000/HZ)));
+	/*
+	 * Disable entropy sampling
+	 */
+	kdebug_enable &= ~KDEBUG_ENABLE_ENTROPY;
+	kdebug_slowcheck &= ~SLOW_ENTROPY;
 
-  /* Disable entropy sampling */
-  kdebug_enable &= ~KDEBUG_ENABLE_ENTROPY;
-  kdebug_slowcheck &= ~SLOW_ENTROPY;
+	*number = 0;
+	ret = 0;
 
-  *number = 0;
-  ret = 0;
-
-  if (kd_entropy_indx > 0)
-    {
-      /* copyout the buffer */
-      if (copyout(kd_entropy_buffer, buffer, kd_entropy_indx * sizeof(mach_timespec_t)))
-	  ret = EINVAL;
-      else
-	  *number = kd_entropy_indx;
-    }
-
-  /* Always cleanup */
-  kd_entropy_count = 0;
-  kd_entropy_indx = 0;
-  kd_entropy_buftomem = 0;
-  kmem_free(kernel_map, (vm_offset_t)kd_entropy_buffer, kd_entropy_bufsize);
-  kd_entropy_buffer = (uint64_t *) 0;
-  return(ret);
+	if (kd_entropy_indx > 0) {
+		/*
+		 * copyout the buffer
+		 */
+		if (copyout(kd_entropy_buffer, buffer, kd_entropy_indx * sizeof(mach_timespec_t)))
+			ret = EINVAL;
+		else
+			*number = kd_entropy_indx;
+	}
+	/*
+	 * Always cleanup
+	 */
+	kd_entropy_count = 0;
+	kd_entropy_indx = 0;
+	kd_entropy_buftomem = 0;
+	kmem_free(kernel_map, (vm_offset_t)kd_entropy_buffer, kd_entropy_bufsize);
+	kd_entropy_buffer = (uint64_t *) 0;
+	
+	return(ret);
 }
 
 
@@ -1005,10 +1225,10 @@ static void
 kdbg_set_nkdbufs(unsigned int value)
 {
         /*
-	 * We allow a maximum buffer size of 25% of either ram or max mapped address, whichever is smaller
+	 * We allow a maximum buffer size of 50% of either ram or max mapped address, whichever is smaller
 	 * 'value' is the desired number of trace entries
 	 */
-        unsigned int max_entries = (sane_size/4) / sizeof(kd_buf);
+        unsigned int max_entries = (sane_size/2) / sizeof(kd_buf);
 
 	if (value <= max_entries)
 		nkdbufs = value;
@@ -1045,8 +1265,8 @@ kdbg_control_chud(int val, void *fn)
 int
 kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 {
-        int ret=0;
-	size_t size=*sizep;
+	int ret = 0;
+	size_t size = *sizep;
 	unsigned int value = 0;
 	kd_regtype kd_Reg;
 	kbufinfo_t kd_bufinfo;
@@ -1067,92 +1287,84 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 	kdbg_lock_init();
 
 	if ( !(kdebug_flags & KDBG_LOCKINIT))
-	        return(ENOMEM);
+	        return(ENOSPC);
 
 	lck_mtx_lock(kd_trace_mtx_sysctl);
 
 	if (name[0] == KERN_KDGETBUF) {
-	    /* 
-	     * Does not alter the global_state_pid
-	     * This is a passive request.
-	     */
-	    if (size < sizeof(kd_bufinfo.nkdbufs)) {
-	        /* 
-		 * There is not enough room to return even
-		 * the first element of the info structure.
+		/* 
+		 * Does not alter the global_state_pid
+		 * This is a passive request.
 		 */
-	        lck_mtx_unlock(kd_trace_mtx_sysctl);
+		if (size < sizeof(kd_bufinfo.nkdbufs)) {
+			/* 
+			 * There is not enough room to return even
+			 * the first element of the info structure.
+			 */
+			ret = EINVAL;
+			goto out;
+		}
+		kd_bufinfo.nkdbufs = nkdbufs;
+		kd_bufinfo.nkdthreads = kd_mapsize / sizeof(kd_threadmap);
 
-		return(EINVAL);
-	    }
-	    kd_bufinfo.nkdbufs = nkdbufs;
-	    kd_bufinfo.nkdthreads = kd_mapsize / sizeof(kd_threadmap);
+		if ( (kdebug_slowcheck & SLOW_NOLOG) )
+			kd_bufinfo.nolog = 1;
+		else
+			kd_bufinfo.nolog = 0;
 
-	    if ( (kdebug_slowcheck & SLOW_NOLOG) )
-	        kd_bufinfo.nolog = 1;
-	    else
-	        kd_bufinfo.nolog = 0;
-	    kd_bufinfo.flags = kdebug_flags;
-	    kd_bufinfo.bufid = global_state_pid;
+		kd_bufinfo.flags = kdebug_flags;
+#if defined(__LP64__)
+		kd_bufinfo.flags |= KDBG_LP64;
+#endif
+		kd_bufinfo.bufid = global_state_pid;
 	   
-	    if (size >= sizeof(kd_bufinfo)) {
-            /*
-		     * Provide all the info we have
-		    */
-	        if (copyout (&kd_bufinfo, where, sizeof(kd_bufinfo))) {
-		        lck_mtx_unlock(kd_trace_mtx_sysctl);
-
-                return(EINVAL);
-		    }
-	    }
-	    else {
-	        /* 
+		if (size >= sizeof(kd_bufinfo)) {
+			/*
+			 * Provide all the info we have
+			 */
+			if (copyout(&kd_bufinfo, where, sizeof(kd_bufinfo)))
+				ret = EINVAL;
+		} else {
+			/* 
 		 	 * For backwards compatibility, only provide
 		 	 * as much info as there is room for.
 		 	 */
-	        if (copyout (&kd_bufinfo, where, size)) {
-		        lck_mtx_unlock(kd_trace_mtx_sysctl);
+			if (copyout(&kd_bufinfo, where, size))
+				ret = EINVAL;
+		}
+		goto out;
 
-		        return(EINVAL);
-		    }
-	    }
-	    lck_mtx_unlock(kd_trace_mtx_sysctl);
-
-	    return(0);
-	} else if (name[0] == KERN_KDGETENTROPY) {
-	    if (kd_entropy_buffer)
-	        ret = EBUSY;
-	    else
-	        ret = kdbg_getentropy(where, sizep, value);
-	    lck_mtx_unlock(kd_trace_mtx_sysctl);
-
-	    return (ret);
+	} else if (name[0] == KERN_KDGETENTROPY) {		
+		if (kd_entropy_buffer)
+			ret = EBUSY;
+		else
+			ret = kdbg_getentropy(where, sizep, value);
+		goto out;
 	}
 	
 	if ((curproc = current_proc()) != NULL)
-	    curpid = curproc->p_pid;
+		curpid = curproc->p_pid;
 	else {
-	    lck_mtx_unlock(kd_trace_mtx_sysctl);
-
-	    return (ESRCH);
+		ret = ESRCH;
+		goto out;
 	}
         if (global_state_pid == -1)
-	    global_state_pid = curpid;
+		global_state_pid = curpid;
 	else if (global_state_pid != curpid) {
-	    if ((p = proc_find(global_state_pid)) == NULL) {
-	        /*
-		 * The global pid no longer exists
-		 */
-	        global_state_pid = curpid;
-	    } else {
-	        /*
-		 * The global pid exists, deny this request
-		 */
-		proc_rele(p);
-	        lck_mtx_unlock(kd_trace_mtx_sysctl);
+		if ((p = proc_find(global_state_pid)) == NULL) {
+			/*
+			 * The global pid no longer exists
+			 */
+			global_state_pid = curpid;
+		} else {
+			/*
+			 * The global pid exists, deny this request
+			 */
+			proc_rele(p);
 
-		return(EBUSY);
-	    }
+			ret = EBUSY;
+			goto out;
+		}
 	}
 
 	switch(name[0]) {
@@ -1164,58 +1376,60 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 			value &= KDBG_USERFLAGS;
 			kdebug_flags &= ~value;
 			break;
-	        case KERN_KDENABLE:    /* used to enable or disable */
-		  if (value)
-		    {
-		      /* enable only if buffer is initialized */
-		      if (!(kdebug_flags & KDBG_BUFINIT))
-			{
-			  ret=EINVAL;
-			  break;
-			}
-		      kdbg_mapinit();
+		case KERN_KDENABLE:
+			/*
+			 * used to enable or disable
+			 */
+			if (value) {
+				/*
+				 * enable only if buffer is initialized
+				 */
+				if (!(kdebug_flags & KDBG_BUFINIT)) {
+					ret = EINVAL;
+					break;
+				}
+				kdbg_mapinit();
 
-		      kdebug_enable |= KDEBUG_ENABLE_TRACE;
-		      kdebug_slowcheck &= ~SLOW_NOLOG;
-		    }
-		  else
-		    {
-		      kdebug_enable &= ~KDEBUG_ENABLE_TRACE;
-		      kdebug_slowcheck |= SLOW_NOLOG;
-		    }
-		  break;
+				kdebug_enable |= KDEBUG_ENABLE_TRACE;
+				kdebug_slowcheck &= ~SLOW_NOLOG;
+			}
+			else {
+				kdebug_enable &= ~KDEBUG_ENABLE_TRACE;
+				kdebug_slowcheck |= SLOW_NOLOG;
+			}
+			break;
 		case KERN_KDSETBUF:
 			kdbg_set_nkdbufs(value);
 			break;
 		case KERN_KDSETUP:
-			ret=kdbg_reinit();
+			ret = kdbg_reinit();
 			break;
 		case KERN_KDREMOVE:
 			kdbg_clear();
 			break;
 		case KERN_KDSETREG:
 			if(size < sizeof(kd_regtype)) {
-				ret=EINVAL;
+				ret = EINVAL;
 				break;
 			}
 			if (copyin(where, &kd_Reg, sizeof(kd_regtype))) {
-				ret= EINVAL;
+				ret = EINVAL;
 				break;
 			}
 			ret = kdbg_setreg(&kd_Reg);
 			break;
 		case KERN_KDGETREG:
-			if(size < sizeof(kd_regtype)) {
+			if (size < sizeof(kd_regtype)) {
 				ret = EINVAL;
 				break;
 			}
 			ret = kdbg_getreg(&kd_Reg);
-		 	if (copyout(&kd_Reg, where, sizeof(kd_regtype))){
-				ret=EINVAL;
+		 	if (copyout(&kd_Reg, where, sizeof(kd_regtype))) {
+				ret = EINVAL;
 			}
 			break;
 		case KERN_KDREADTR:
-			ret = kdbg_read(where, sizep);
+			ret = kdbg_read(where, sizep, NULL, NULL);
 			break;
 		case KERN_KDPIDTR:
 			if (size < sizeof(kd_regtype)) {
@@ -1223,7 +1437,7 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 				break;
 			}
 			if (copyin(where, &kd_Reg, sizeof(kd_regtype))) {
-				ret= EINVAL;
+				ret = EINVAL;
 				break;
 			}
 			ret = kdbg_setpid(&kd_Reg);
@@ -1234,13 +1448,13 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 				break;
 			}
 			if (copyin(where, &kd_Reg, sizeof(kd_regtype))) {
-				ret= EINVAL;
+				ret = EINVAL;
 				break;
 			}
 			ret = kdbg_setpidex(&kd_Reg);
 			break;
 	        case KERN_KDTHRMAP:
-		        ret = kdbg_readmap(where, sizep);
+		        ret = kdbg_readmap(where, sizep, NULL, NULL);
 		        break;
         	case KERN_KDSETRTCDEC:
 			if (size < sizeof(kd_regtype)) {
@@ -1248,15 +1462,16 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 				break;
 			}
 			if (copyin(where, &kd_Reg, sizeof(kd_regtype))) {
-				ret= EINVAL;
+				ret = EINVAL;
 				break;
 			}
 			ret = kdbg_setrtcdec(&kd_Reg);
 			break;
 		       
 		default:
-			ret= EINVAL;
+			ret = EINVAL;
 	}
+out:
 	lck_mtx_unlock(kd_trace_mtx_sysctl);
 
 	return(ret);
@@ -1264,25 +1479,27 @@ kdbg_control(int *name, u_int namelen, user_addr_t where, size_t *sizep)
 
 
 /*
- * This code can run concurrently with kernel_debug_internal()
- * without the need of any locks, because all reads of kd_bufptr[i],
- * which get modified by kernel_debug_internal(), are safe.
+ * This code can run for the most part concurrently with kernel_debug_internal()...
+ * 'release_storage_unit' will take the kds_spin_lock which may cause us to briefly
+ * synchronize with the recording side of this puzzle... otherwise, we are able to
+ * move through the lists w/o use of any locks
  */
 int
-kdbg_read(user_addr_t buffer, size_t *number)
+kdbg_read(user_addr_t buffer, size_t *number, vnode_t vp, vfs_context_t ctx)
 {
 	unsigned int count;
-	unsigned int cpu;
-	int mincpu;
-	uint64_t  mintime, t, last_wrap_time;
-	int last_wrap_cpu;
-	int error = 0;
+	unsigned int cpu, mincpu;
+	uint64_t  mintime, t;
+	int error = 0,s = 0;
 	kd_buf *tempbuf;
+	kd_buf *rcursor;
+	kd_buf *min_rcursor;
+	struct kd_storage *kdsp;
+	struct kd_bufinfo *kdbp;
 	uint32_t tempbuf_count;
 	uint32_t tempbuf_number;
-	unsigned int old_kdebug_flags, new_kdebug_flags;
-	unsigned int old_kdebug_slowcheck, new_kdebug_slowcheck;
-	boolean_t first_event = TRUE;
+	uint32_t old_kdebug_flags;
+	uint32_t old_kdebug_slowcheck;
 
 	count = *number/sizeof(kd_buf);
 	*number = 0;
@@ -1293,50 +1510,27 @@ kdbg_read(user_addr_t buffer, size_t *number)
 	/*
 	 * because we hold kd_trace_mtx_sysctl, no other control threads can 
 	 * be playing with kdebug_flags... the code that cuts new events could
-	 * be running, but it only reads kdebug_flags, it doesn't write it..
-	 * use an OSCompareAndSwap to make sure the other processors see the 
-	 * change of state immediately, not to protect against 2 threads racing to update it
+	 * be running, but it grabs kds_spin_lock if it needs to acquire a new
+	 * storage chunk which is where it examines kdebug_flags... it its adding
+	 * to the same chunk we're reading from, no problem... 
 	 */
+	s = ml_set_interrupts_enabled(FALSE);
+	lck_spin_lock(kds_spin_lock);
+
 	old_kdebug_slowcheck = kdebug_slowcheck;
-	do {
-	        old_kdebug_flags = kdebug_flags;
-		new_kdebug_flags = old_kdebug_flags & ~KDBG_WRAPPED;
-		new_kdebug_flags |= KDBG_NOWRAP;
-	} while ( !OSCompareAndSwap((UInt32)old_kdebug_flags, (UInt32)new_kdebug_flags, (UInt32 *)&kdebug_flags));
+	old_kdebug_flags = kdebug_flags;
 
-	last_wrap_time = 0;
-	last_wrap_cpu  = -1;
+	kdebug_flags &= ~KDBG_WRAPPED;
+	kdebug_flags |= KDBG_NOWRAP;
 
-	for (cpu = 0; cpu < kd_cpus; cpu++) {
-	        kd_buf *cur_bufptr;
-		
-		if ((cur_bufptr = kdbip[cpu].kd_bufptr) >= kdbip[cpu].kd_buflast)
-		        cur_bufptr = kdbip[cpu].kd_buffer;
+	lck_spin_unlock(kds_spin_lock);
+	ml_set_interrupts_enabled(s);
 
-		if (kdbip[cpu].kd_wrapped) {
-		        kdbip[cpu].kd_wrapped = 0;
-			kdbip[cpu].kd_readlast = cur_bufptr;
-			kdbip[cpu].kd_stop = cur_bufptr;
-
-			if (kd_cpus > 1 && ((cur_bufptr->timestamp & KDBG_TIMESTAMP_MASK) > last_wrap_time)) {
-			        last_wrap_time = cur_bufptr->timestamp & KDBG_TIMESTAMP_MASK;
-				last_wrap_cpu = cpu;
-			}
-		} else {
-		        if (kdbip[cpu].kd_readlast == cur_bufptr)
-			        kdbip[cpu].kd_stop = 0;
-			else
-			        kdbip[cpu].kd_stop = cur_bufptr;
-		}
-	}
 	if (count > nkdbufs)
 		count = nkdbufs;
 
 	if ((tempbuf_count = count) > KDCOPYBUF_COUNT)
 	        tempbuf_count = KDCOPYBUF_COUNT;
-
-	if (last_wrap_cpu == -1)
-	        first_event = FALSE;
 
 	while (count) {
 	        tempbuf = kdcopybuf;
@@ -1345,78 +1539,83 @@ kdbg_read(user_addr_t buffer, size_t *number)
 	        while (tempbuf_count) {
 			mintime = 0xffffffffffffffffULL; /* all actual timestamps are below */
 			mincpu = -1;
+			min_rcursor = NULL;
 
-			for (cpu = 0; cpu < kd_cpus; cpu++) {
-			        if (kdbip[cpu].kd_stop == 0)     /* empty buffer */
+			for (cpu = 0, kdbp = &kdbip[0]; cpu < kd_cpus; cpu++, kdbp++) {
+
+				if ((kdsp = kdbp->kd_list_head) == NULL)
 				        continue;
-				t = kdbip[cpu].kd_readlast[0].timestamp & KDBG_TIMESTAMP_MASK;
+				rcursor = kdsp->kds_readlast;
+
+				if (rcursor == kdsp->kds_bufptr)
+					continue;
+				t = kdbg_get_timestamp(rcursor);
 
 				if (t < mintime) {
-				        mintime = t;
 					mincpu = cpu;
+				        mintime = t;
+					min_rcursor = rcursor;
 				}
 			}
-			if (mincpu < 0)
+			if (mincpu == (unsigned int)-1)
 			        /*
-				 * all buffers ran empty early
+				 * all buffers ran empty
 				 */
 			        break;
+			
+			kdbp = &kdbip[mincpu];
+			kdsp = kdbp->kd_list_head;
 
-                        if (first_event == TRUE) {
-			        /*
-				 * make sure we leave room for the
-				 * LAST_WRAPPER event we inject
-				 * by throwing away the first event
-				 * it's better to lose that one
-				 * than the last one
-				 */	
-			        first_event = FALSE;
+			*tempbuf = *min_rcursor;
 
-				kdbip[mincpu].kd_readlast++;
-
-				if (kdbip[mincpu].kd_readlast == kdbip[mincpu].kd_buflast)
-				        kdbip[mincpu].kd_readlast = kdbip[mincpu].kd_buffer;
-				if (kdbip[mincpu].kd_readlast == kdbip[mincpu].kd_stop)
-				        kdbip[mincpu].kd_stop = 0;
-
+			if (mintime != kdbg_get_timestamp(tempbuf)) {
+				/*
+				 * we stole this storage unit and used it
+				 * before we could slurp the selected event out
+				 * so we need to re-evaluate
+				 */
 				continue;
 			}
-			if (last_wrap_cpu == mincpu) {
-			        tempbuf->debugid = MISCDBG_CODE(DBG_BUFFER, 0) | DBG_FUNC_NONE;
-				tempbuf->arg1 = kd_bufsize / sizeof(kd_buf);
-				tempbuf->arg2 = kd_cpus;
-				tempbuf->arg3 = 0;
-				tempbuf->arg4 = 0;
-				tempbuf->arg5 = (int)current_thread();
-	          
-				tempbuf->timestamp = last_wrap_time | (((uint64_t)last_wrap_cpu) << KDBG_CPU_SHIFT);
+			/*
+			 * Watch for out of order timestamps
+			 */	
+			if (mintime < kdbp->kd_prev_timebase) {
+				/*
+				 * if so, use the previous timestamp + 1 cycle
+				 */
+				kdbp->kd_prev_timebase++;
+				kdbg_set_timestamp_and_cpu(tempbuf, kdbp->kd_prev_timebase, mincpu);
+			} else
+				kdbp->kd_prev_timebase = mintime;
 
-			        tempbuf++;
+			if (min_rcursor == kdsp->kds_readlast)
+				kdsp->kds_readlast++;
 
-				last_wrap_cpu = -1;
+			if (kdsp->kds_readlast == kdsp->kds_buflast)
+				release_storage_unit(kdbp, kdsp);
 
-			} else {
-			        *(tempbuf++) = kdbip[mincpu].kd_readlast[0];
-
-				kdbip[mincpu].kd_readlast++;
-
-				if (kdbip[mincpu].kd_readlast == kdbip[mincpu].kd_buflast)
-				        kdbip[mincpu].kd_readlast = kdbip[mincpu].kd_buffer;
-				if (kdbip[mincpu].kd_readlast == kdbip[mincpu].kd_stop)
-				        kdbip[mincpu].kd_stop = 0;
-			}
 			tempbuf_count--;
 			tempbuf_number++;
+			tempbuf++;
 		}
 		if (tempbuf_number) {
-		        if ((error = copyout(kdcopybuf, buffer, tempbuf_number * sizeof(kd_buf)))) {
-			        *number = 0;
+
+			if (vp) {
+				error = vn_rdwr(UIO_WRITE, vp, (caddr_t)kdcopybuf, tempbuf_number * sizeof(kd_buf), RAW_file_offset,
+						UIO_SYSSPACE, IO_NODELOCKED|IO_UNIT, vfs_context_ucred(ctx), (int *) 0, vfs_context_proc(ctx));
+
+				RAW_file_offset += (tempbuf_number * sizeof(kd_buf));
+			} else {
+				error = copyout(kdcopybuf, buffer, tempbuf_number * sizeof(kd_buf));
+				buffer += (tempbuf_number * sizeof(kd_buf));
+			}
+			if (error) {
+				*number = 0;
 				error = EINVAL;
 				break;
 			}
 			count   -= tempbuf_number;
 			*number += tempbuf_number;
-			buffer  += (tempbuf_number * sizeof(kd_buf));
 		}
 		if (tempbuf_count)
 		       /*
@@ -1428,17 +1627,17 @@ kdbg_read(user_addr_t buffer, size_t *number)
 		        tempbuf_count = KDCOPYBUF_COUNT;
 	}
 	if ( !(old_kdebug_flags & KDBG_NOWRAP)) {
-	        do {
-		        old_kdebug_flags = kdebug_flags;
-			new_kdebug_flags = old_kdebug_flags & ~KDBG_NOWRAP;
-		} while ( !OSCompareAndSwap((UInt32)old_kdebug_flags, (UInt32)new_kdebug_flags, (UInt32 *)&kdebug_flags));
 
-		if ( !(old_kdebug_slowcheck & SLOW_NOLOG)) {
-		        do {
-			        old_kdebug_slowcheck = kdebug_slowcheck;
-				new_kdebug_slowcheck = old_kdebug_slowcheck & ~SLOW_NOLOG;
-			} while ( !OSCompareAndSwap((UInt32)old_kdebug_slowcheck, (UInt32)new_kdebug_slowcheck, (UInt32 *)&kdebug_slowcheck));
-		}
+		s = ml_set_interrupts_enabled(FALSE);
+		lck_spin_lock(kds_spin_lock);
+
+		kdebug_flags &= ~KDBG_NOWRAP;
+
+		if ( !(old_kdebug_slowcheck & SLOW_NOLOG))
+			kdebug_slowcheck &= ~SLOW_NOLOG;
+
+		lck_spin_unlock(kds_spin_lock);
+		ml_set_interrupts_enabled(s);
 	}
 	return (error);
 }
@@ -1453,7 +1652,7 @@ unsigned char *getProcName(struct proc *proc) {
 
 #define STACKSHOT_SUBSYS_LOCK() lck_mtx_lock(&stackshot_subsys_mutex)
 #define STACKSHOT_SUBSYS_UNLOCK() lck_mtx_unlock(&stackshot_subsys_mutex)
-#ifdef __i386__
+#if defined(__i386__) || defined (__x86_64__)
 #define TRAP_DEBUGGER __asm__ volatile("int3");
 #endif
 #ifdef __ppc__
@@ -1498,8 +1697,9 @@ stackshot_lock_init( void )
  *		     tracebuffer exhaustion, we copyout as much as possible.
  */
 int
-stack_snapshot(struct proc *p, register struct stack_snapshot_args *uap, register_t *retval) {
+stack_snapshot(struct proc *p, register struct stack_snapshot_args *uap, int32_t *retval) {
 	int error = 0;
+
 
 	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
                 return(error);
@@ -1509,7 +1709,7 @@ stack_snapshot(struct proc *p, register struct stack_snapshot_args *uap, registe
 }
 
 int
-stack_snapshot2(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t options, register_t *retval)
+stack_snapshot2(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t options, int32_t *retval)
 {
 	int error = 0;
 	unsigned bytesTraced = 0;
@@ -1581,5 +1781,56 @@ start_kern_tracing(unsigned int new_nkdbufs) {
 	kdebug_enable |= KDEBUG_ENABLE_TRACE;
 	kdebug_slowcheck &= ~SLOW_NOLOG;
 	kdbg_mapinit();
+
+#if defined(__i386__) || defined(__x86_64__)
+	uint64_t now = mach_absolute_time();
+
+        KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_INFO, 1)) | DBG_FUNC_NONE,
+                              (uint32_t)(tsc_rebase_abs_time >> 32), (uint32_t)tsc_rebase_abs_time,
+                              (uint32_t)(now >> 32), (uint32_t)now,
+                              0);
+#endif
 	printf("kernel tracing started\n");
+}
+
+void
+kdbg_dump_trace_to_file(const char *filename)
+{
+	vfs_context_t	ctx;
+	vnode_t		vp;
+	int		error;
+	size_t		number;
+
+
+	if (kdebug_enable & (KDEBUG_ENABLE_CHUD | KDEBUG_ENABLE_ENTROPY))
+		return;
+
+        if (global_state_pid != -1) {
+		if ((proc_find(global_state_pid)) != NULL) {
+			/*
+			 * The global pid exists, we're running
+			 * due to fs_usage, latency, etc...
+			 * don't cut the panic/shutdown trace file
+			 */
+			return;
+		}
+	}
+	KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_INFO, 0)) | DBG_FUNC_NONE, 0, 0, 0, 0, 0);
+
+	kdebug_enable = 0;
+
+	ctx = vfs_context_kernel();
+
+	if ((error = vnode_open(filename, (O_CREAT | FWRITE | O_NOFOLLOW), 0600, 0, &vp, ctx)))
+		return;
+
+	number = kd_mapsize;
+	kdbg_readmap(0, &number, vp, ctx);
+
+	number = nkdbufs*sizeof(kd_buf);
+	kdbg_read(0, &number, vp, ctx);
+	
+	vnode_close(vp, FWRITE, ctx);
+
+	sync(current_proc(), (void *)NULL, (int *)NULL);
 }

@@ -85,9 +85,9 @@ extern struct savearea*	trap(int trapno,
 typedef kern_return_t (*perfCallback)(int trapno, struct savearea *ss, 
 	unsigned int dsisr, addr64_t dar);
 
-extern perfCallback perfTrapHook;
-extern perfCallback perfASTHook;
-extern perfCallback perfIntHook;
+extern volatile perfCallback perfTrapHook;
+extern volatile perfCallback perfASTHook;
+extern volatile perfCallback perfIntHook;
 
 extern struct savearea* interrupt(int intno,
 					 struct savearea *ss,

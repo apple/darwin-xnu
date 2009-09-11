@@ -76,9 +76,7 @@
 
 #include <machine/types.h>
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=natural
-#endif
+#pragma pack(4)
 
 struct user_shmid_ds {
 	struct ipc_perm shm_perm;	/* operation permission structure */
@@ -86,15 +84,25 @@ struct user_shmid_ds {
 	pid_t		shm_lpid;	/* PID of last shared memory op */
 	pid_t		shm_cpid;	/* PID of creator */
 	short		shm_nattch;	/* number of current attaches */
-	time_t		shm_atime;	/* time of last shmat() */
-	time_t		shm_dtime;	/* time of last shmdt() */
-	time_t		shm_ctime;	/* time of last change by shmctl() */
+	user_time_t	shm_atime;	/* time of last shmat() */
+	user_time_t	shm_dtime;	/* time of last shmdt() */
+	user_time_t	shm_ctime;	/* time of last change by shmctl() */
 	user_addr_t	shm_internal;	/* reserved for kernel use */
 };
 
-#if __DARWIN_ALIGN_NATURAL
-#pragma options align=reset
-#endif
+struct user32_shmid_ds {
+	struct ipc_perm shm_perm;	/* operation permission structure */
+	uint32_t	shm_segsz;	/* size of segment in bytes */
+	pid_t		shm_lpid;	/* PID of last shared memory op */
+	pid_t		shm_cpid;	/* PID of creator */
+	short		shm_nattch;	/* number of current attaches */
+	uint32_t		shm_atime;	/* time of last shmat() */
+	uint32_t		shm_dtime;	/* time of last shmdt() */
+	uint32_t		shm_ctime;	/* time of last change by shmctl() */
+	user32_addr_t	shm_internal;	/* reserved for kernel use */
+};
+
+#pragma pack()
 
 /*
  * System 5 style catch-all structure for shared memory constants that

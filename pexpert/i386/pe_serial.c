@@ -159,7 +159,7 @@ int serial_init( void )
 {
     unsigned serial_baud_rate = 0;
 	
-    if ( /*uart_initted ||*/ uart_probe() == 0 ) return 0;
+    if ( uart_probe() == 0 ) return 0;
 
     /* Disable hardware interrupts */
 
@@ -197,6 +197,7 @@ int serial_init( void )
 
     return 1;
 }
+
 
 void serial_putc( char c )
 {

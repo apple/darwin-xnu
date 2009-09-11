@@ -107,7 +107,6 @@ struct pipebuf {
 /*
  * Information to support direct transfers between processes for pipes.
  */
-/* LP64todo - not 64bit safe */
 struct pipemapping {
 	vm_offset_t	kva;		/* kernel virtual address */
 	vm_size_t	cnt;		/* number of chars in buffer */
@@ -130,7 +129,9 @@ struct pipemapping {
 #define PIPE_LWANT	0x200	/* Process wants exclusive access to pointers/data. */
 #define PIPE_DIRECTW	0x400	/* Pipe direct write active. */
 #define PIPE_DIRECTOK	0x800	/* Direct mode ok. */
-#define PIPE_KNOTE     0x1000   /* Pipe has kernel events activated */
+#define PIPE_KNOTE	0x1000   /* Pipe has kernel events activated */
+#define PIPE_DRAIN	0x2000  /* Waiting for I/O to drop for a close.  Treated like EOF;
+					only separate for easier debugging. */
 
 #ifdef	KERNEL
 

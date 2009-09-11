@@ -235,7 +235,7 @@ OSStatus	SearchTree	(BTreeControlBlockPtr	 btreePtr,
         //
         if (curNodeNum == 0)
         {
-//          Panic("\pSearchTree: curNodeNum is zero!");
+//          Panic("SearchTree: curNodeNum is zero!");
             err = btBadNode;
             goto ErrorExit;
         }
@@ -254,7 +254,7 @@ OSStatus	SearchTree	(BTreeControlBlockPtr	 btreePtr,
         //
         if (((BTNodeDescriptor*)nodeRec.buffer)->height != level)
         {
-//		Panic("\pIncorrect node height");
+//		Panic("Incorrect node height");
                 err = btBadNode;
                 goto ReleaseAndExit;
         }
@@ -264,7 +264,7 @@ OSStatus	SearchTree	(BTreeControlBlockPtr	 btreePtr,
             //	Nodes at level 1 must be leaves, by definition
             if (nodeKind != kBTLeafNode)
             {
- //		Panic("\pIncorrect node type: expected leaf");
+ //		Panic("Incorrect node type: expected leaf");
                 err = btBadNode;
                 goto ReleaseAndExit;           
             }
@@ -274,7 +274,7 @@ OSStatus	SearchTree	(BTreeControlBlockPtr	 btreePtr,
             //	A node at any other depth must be an index node
             if (nodeKind != kBTIndexNode)
             {
-//		Panic("\pIncorrect node type: expected index");
+//		Panic("Incorrect node type: expected index");
                 err = btBadNode;
                 goto ReleaseAndExit;
             }
@@ -399,7 +399,7 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 	InsertKey			insertKey;
 
 #if defined(applec) && !defined(__SC__)
-	PanicIf ((level == 1) && (((NodeDescPtr)targetNode->buffer)->kind != kBTLeafNode), "\P InsertLevel: non-leaf at level 1! ");
+	PanicIf ((level == 1) && (((NodeDescPtr)targetNode->buffer)->kind != kBTLeafNode), " InsertLevel: non-leaf at level 1! ");
 #endif
 	leftNode.buffer = nil;
 	leftNode.blockHeader = nil;
@@ -444,7 +444,7 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 		M_ExitOnError (err);
 		
 		if ( DEBUG_BUILD && updateParent && newRoot )
-			DebugStr("\p InsertLevel: New root from primary key, update from secondary key...");
+			DebugStr(" InsertLevel: New root from primary key, update from secondary key...");
 	}
 
 	//////////////////////// Update Parent(s) ///////////////////////////////
@@ -462,7 +462,7 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 
 		secondaryKey = nil;
 		
-		PanicIf ( (level == btreePtr->treeDepth), "\p InsertLevel: unfinished insert!?");
+		PanicIf ( (level == btreePtr->treeDepth), " InsertLevel: unfinished insert!?");
 
 		++level;
 
@@ -470,13 +470,13 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 		index = treePathTable [level].index;
 		parentNodeNum = treePathTable [level].node;
 
-		PanicIf ( parentNodeNum == 0, "\p InsertLevel: parent node is zero!?");
+		PanicIf ( parentNodeNum == 0, " InsertLevel: parent node is zero!?");
 
 		err = GetNode (btreePtr, parentNodeNum, 0, &parentNode);	// released as target node in next level up
 		M_ExitOnError (err);
 #if defined(applec) && !defined(__SC__)
 		if (DEBUG_BUILD && level > 1)
-			PanicIf ( ((NodeDescPtr)parentNode.buffer)->kind != kBTIndexNode, "\P InsertLevel: parent node not an index node! ");
+			PanicIf ( ((NodeDescPtr)parentNode.buffer)->kind != kBTIndexNode, " InsertLevel: parent node not an index node! ");
 #endif
 		////////////////////////// Update Parent Index //////////////////////////////
 	
@@ -487,7 +487,7 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 
 			//€€ debug: check if ptr == targetNodeNum
 			GetRecordByIndex (btreePtr, parentNode.buffer, index, &keyPtr, &recPtr, &recSize);
-			PanicIf( (*(u_int32_t *) recPtr) != targetNodeNum, "\p InsertLevel: parent ptr doesn't match target node!");
+			PanicIf( (*(u_int32_t *) recPtr) != targetNodeNum, " InsertLevel: parent ptr doesn't match target node!");
 			
 			// need to delete and re-insert this parent key/ptr
 			// we delete it here and it gets re-inserted in the
@@ -544,7 +544,7 @@ ErrorExit:
 	(void) ReleaseNode (btreePtr, targetNode);
 	(void) ReleaseNode (btreePtr, &leftNode);
 
-	Panic ("\p InsertLevel: an error occurred!");
+	Panic (" InsertLevel: an error occurred!");
 
 	return	err;
 
@@ -577,7 +577,7 @@ static OSErr	InsertNode	(BTreeControlBlockPtr	 btreePtr,
 
 	*rootSplit = false;
 	
-	PanicIf ( rightNode->buffer == leftNode->buffer, "\p InsertNode: rightNode == leftNode, huh?");
+	PanicIf ( rightNode->buffer == leftNode->buffer, " InsertNode: rightNode == leftNode, huh?");
 	
 	leftNodeNum = ((NodeDescPtr) rightNode->buffer)->bLink;
 
@@ -616,7 +616,7 @@ static OSErr	InsertNode	(BTreeControlBlockPtr	 btreePtr,
 	
 	if ( !recordFit && leftNodeNum > 0 )
 	{
-		PanicIf ( leftNode->buffer != nil, "\p InsertNode: leftNode already acquired!");
+		PanicIf ( leftNode->buffer != nil, " InsertNode: leftNode already acquired!");
 
 		if ( leftNode->buffer == nil )
 		{
@@ -626,7 +626,7 @@ static OSErr	InsertNode	(BTreeControlBlockPtr	 btreePtr,
 			ModifyBlockStart(btreePtr->fileRefNum, leftNode);
 		}
 
-		PanicIf ( ((NodeDescPtr) leftNode->buffer)->fLink != node, "\p InsertNode, RotateLeft: invalid sibling link!" );
+		PanicIf ( ((NodeDescPtr) leftNode->buffer)->fLink != node, " InsertNode, RotateLeft: invalid sibling link!" );
 
 		if ( !key->skipRotate )		// are rotates allowed?
 		{
@@ -717,7 +717,7 @@ OSStatus	DeleteTree			(BTreeControlBlockPtr		 btreePtr,
 
 	targetNodeNum = treePathTable[level].node;
 	targetNodePtr = targetNode->buffer;
-	PanicIf (targetNodePtr == nil, "\pDeleteTree: targetNode has nil buffer!");
+	PanicIf (targetNodePtr == nil, "DeleteTree: targetNode has nil buffer!");
 
 	// XXXdbg
 	ModifyBlockStart(btreePtr->fileRefNum, targetNode);
@@ -829,7 +829,7 @@ OSStatus	DeleteTree			(BTreeControlBlockPtr		 btreePtr,
 
 			//€€ debug: check if ptr == targetNodeNum
 			GetRecordByIndex (btreePtr, parentNode.buffer, index, &keyPtr, &recPtr, &recSize);
-			PanicIf( (*(u_int32_t *) recPtr) != targetNodeNum, "\p DeleteTree: parent ptr doesn't match targetNodeNum!!");
+			PanicIf( (*(u_int32_t *) recPtr) != targetNodeNum, " DeleteTree: parent ptr doesn't match targetNodeNum!!");
 			
 			// need to delete and re-insert this parent key/ptr
 			DeleteRecord (btreePtr, parentNode.buffer, index);
@@ -1055,7 +1055,7 @@ static OSStatus	RotateLeft		(BTreeControlBlockPtr		 btreePtr,
 										keyPtr, keyLength, recPtr, recSize);
 			if ( !didItFit )
 			{
-				Panic ("\pRotateLeft: InsertKeyRecord (left) returned false!");
+				Panic ("RotateLeft: InsertKeyRecord (left) returned false!");
 				err = fsBTBadRotateErr;
 				goto ErrorExit;
 			}
@@ -1068,7 +1068,7 @@ static OSStatus	RotateLeft		(BTreeControlBlockPtr		 btreePtr,
 			didItFit = RotateRecordLeft (btreePtr, leftNode, rightNode);
 			if ( !didItFit )
 			{
-				Panic ("\pRotateLeft: RotateRecordLeft returned false!");
+				Panic ("RotateLeft: RotateRecordLeft returned false!");
 				err = fsBTBadRotateErr;
 				goto ErrorExit;
 			}
@@ -1085,7 +1085,7 @@ static OSStatus	RotateLeft		(BTreeControlBlockPtr		 btreePtr,
 									keyPtr, keyLength, recPtr, recSize);
 		if ( !didItFit )
 		{
-			Panic ("\pRotateLeft: InsertKeyRecord (right) returned false!");
+			Panic ("RotateLeft: InsertKeyRecord (right) returned false!");
 			err = fsBTBadRotateErr;
 			goto ErrorExit;
 		}
@@ -1137,7 +1137,7 @@ static OSStatus	SplitLeft		(BTreeControlBlockPtr		 btreePtr,
 	right = rightNode->buffer;
 	left  = leftNode->buffer;
 	
-	PanicIf ( right->bLink != 0 && left == 0, "\p SplitLeft: left sibling missing!?" );
+	PanicIf ( right->bLink != 0 && left == 0, " SplitLeft: left sibling missing!?" );
 	
 	/* type should be kBTLeafNode or kBTIndexNode */
 	
@@ -1269,8 +1269,8 @@ static OSStatus	AddNewRootNode	(BTreeControlBlockPtr	 btreePtr,
 	rootNode.buffer = nil;
 	rootNode.blockHeader = nil;
 
-	PanicIf (leftNode == nil, "\pAddNewRootNode: leftNode == nil");
-	PanicIf (rightNode == nil, "\pAddNewRootNode: rightNode == nil");
+	PanicIf (leftNode == nil, "AddNewRootNode: leftNode == nil");
+	PanicIf (rightNode == nil, "AddNewRootNode: rightNode == nil");
 	
 	
 	/////////////////////// Initialize New Root Node ////////////////////////////
@@ -1296,7 +1296,7 @@ static OSStatus	AddNewRootNode	(BTreeControlBlockPtr	 btreePtr,
 	didItFit = InsertKeyRecord ( btreePtr, rootNode.buffer, 0, keyPtr, keyLength,
 								 (u_int8_t *) &rightNode->bLink, 4 );
 
-	PanicIf ( !didItFit, "\pAddNewRootNode:InsertKeyRecord failed for left index record");
+	PanicIf ( !didItFit, "AddNewRootNode:InsertKeyRecord failed for left index record");
 
 
 	//////////////////// Insert Right Node Index Record /////////////////////////
@@ -1307,7 +1307,7 @@ static OSStatus	AddNewRootNode	(BTreeControlBlockPtr	 btreePtr,
 	didItFit = InsertKeyRecord ( btreePtr, rootNode.buffer, 1, keyPtr, keyLength,
 								 (u_int8_t *) &leftNode->fLink, 4 );
 
-	PanicIf ( !didItFit, "\pAddNewRootNode:InsertKeyRecord failed for right index record");
+	PanicIf ( !didItFit, "AddNewRootNode:InsertKeyRecord failed for right index record");
 
 	
 	/////////////////////////// Release Root Node ///////////////////////////////

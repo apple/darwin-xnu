@@ -179,9 +179,9 @@ _OSWriteInt64(
 
 /* Host endianess to big endian byte swapping macros for constants. */
 
-#define OSSwapHostToBigConstInt16(x) (x)
-#define OSSwapHostToBigConstInt32(x) (x)
-#define OSSwapHostToBigConstInt64(x) (x)
+#define OSSwapHostToBigConstInt16(x) ((uint16_t)(x))
+#define OSSwapHostToBigConstInt32(x) ((uint32_t)(x))
+#define OSSwapHostToBigConstInt64(x) ((uint64_t)(x))
 
 /* Generic host endianess to big endian byte swapping functions. */
 
@@ -203,9 +203,9 @@ _OSWriteInt64(
 
 /* Big endian to host endianess byte swapping macros for constants. */
     
-#define OSSwapBigToHostConstInt16(x) (x)
-#define OSSwapBigToHostConstInt32(x) (x)
-#define OSSwapBigToHostConstInt64(x) (x)
+#define OSSwapBigToHostConstInt16(x) ((uint16_t)(x))
+#define OSSwapBigToHostConstInt32(x) ((uint32_t)(x))
+#define OSSwapBigToHostConstInt64(x) ((uint64_t)(x))
 
 /* Generic big endian to host endianess byte swapping functions. */
 
@@ -265,9 +265,9 @@ _OSWriteInt64(
 
 /* Host endianess to little endian byte swapping macros for constants. */
 
-#define OSSwapHostToLittleConstInt16(x) (x)
-#define OSSwapHostToLittleConstInt32(x) (x)
-#define OSSwapHostToLittleConstInt64(x) (x) 
+#define OSSwapHostToLittleConstInt16(x) ((uint16_t)(x))
+#define OSSwapHostToLittleConstInt32(x) ((uint32_t)(x))
+#define OSSwapHostToLittleConstInt64(x) ((uint64_t)(x)) 
 
 /* Generic host endianess to little endian byte swapping functions. */
 
@@ -289,9 +289,9 @@ _OSWriteInt64(
 
 /* Little endian to host endianess byte swapping macros for constants. */
 
-#define OSSwapLittleToHostConstInt16(x) (x)
-#define OSSwapLittleToHostConstInt32(x) (x)
-#define OSSwapLittleToHostConstInt64(x) (x)
+#define OSSwapLittleToHostConstInt16(x) ((uint16_t)(x))
+#define OSSwapLittleToHostConstInt32(x) ((uint32_t)(x))
+#define OSSwapLittleToHostConstInt64(x) ((uint64_t)(x))
 
 /* Generic little endian to host endianess byte swapping functions. */
 

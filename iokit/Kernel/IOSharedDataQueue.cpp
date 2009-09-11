@@ -75,7 +75,7 @@ Boolean IOSharedDataQueue::initWithCapacity(UInt32 size)
         return false;
     }
     
-    dataQueue = (IODataQueueMemory *)IOMallocAligned(round_page_32(size + DATA_QUEUE_MEMORY_HEADER_SIZE + DATA_QUEUE_MEMORY_APPENDIX_SIZE), PAGE_SIZE);
+    dataQueue = (IODataQueueMemory *)IOMallocAligned(round_page(size + DATA_QUEUE_MEMORY_HEADER_SIZE + DATA_QUEUE_MEMORY_APPENDIX_SIZE), PAGE_SIZE);
     if (dataQueue == 0) {
         return false;
     }
@@ -95,7 +95,7 @@ Boolean IOSharedDataQueue::initWithCapacity(UInt32 size)
 void IOSharedDataQueue::free()
 {
     if (dataQueue) {
-        IOFreeAligned(dataQueue, round_page_32(dataQueue->queueSize + DATA_QUEUE_MEMORY_HEADER_SIZE + DATA_QUEUE_MEMORY_APPENDIX_SIZE));
+        IOFreeAligned(dataQueue, round_page(dataQueue->queueSize + DATA_QUEUE_MEMORY_HEADER_SIZE + DATA_QUEUE_MEMORY_APPENDIX_SIZE));
         dataQueue = NULL;
     }
 

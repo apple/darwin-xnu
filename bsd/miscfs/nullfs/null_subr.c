@@ -90,7 +90,7 @@
  */
 
 #define	NULL_NHASH(vp) \
-	(&null_node_hashtbl[(((u_long)vp)>>LOG2_SIZEVNODE) & null_node_hash])
+	(&null_node_hashtbl[(((uintptr_t)vp)>>LOG2_SIZEVNODE) & null_node_hash])
 LIST_HEAD(null_node_hashhead, null_node) *null_node_hashtbl;
 u_long null_node_hash;
 
@@ -274,9 +274,9 @@ null_checkvp(vp, fil, lno)
 #endif
 	if (a->null_lowervp == NULL) {
 		/* Should never happen */
-		int i; u_long *p;
+		int i; uint32_t *p;
 		printf("vp = %x, ZERO ptr\n", vp);
-		for (p = (u_long *) a, i = 0; i < 8; i++)
+		for (p = (uint32_t *) a, i = 0; i < 8; i++)
 			printf(" %x", p[i]);
 		printf("\n");
 		/* wait for debugger */
@@ -284,9 +284,9 @@ null_checkvp(vp, fil, lno)
 		panic("null_checkvp");
 	}
 	if (a->null_lowervp->v_usecount < 1) {
-		int i; u_long *p;
+		int i; uint32_t *p;
 		printf("vp = %x, unref'ed lowervp\n", vp);
-		for (p = (u_long *) a, i = 0; i < 8; i++)
+		for (p = (uint32_t *) a, i = 0; i < 8; i++)
 			printf(" %x", p[i]);
 		printf("\n");
 		/* wait for debugger */

@@ -273,9 +273,9 @@ timer_queue_expire(
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI,
 							   2)
 							| DBG_FUNC_START,
-					      (unsigned int)func,
-					      (unsigned int)param0,
-					      (unsigned int)param1, 0, 0);
+					      func,
+					      param0,
+					      param1, 0, 0);
 
 #if CONFIG_DTRACE && (DEVELOPMENT || DEBUG )
 			DTRACE_TMR3(callout__start, timer_call_func_t, func, 
@@ -294,9 +294,9 @@ timer_queue_expire(
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI,
 							   2)
 							| DBG_FUNC_END,
-					      (unsigned int)func,
-					      (unsigned int)param0,
-					      (unsigned int)param1, 0, 0);
+					      func,
+					      param0,
+					      param1, 0, 0);
 
 			simple_lock(&timer_call_lock);
 		}

@@ -174,12 +174,17 @@ typedef uint32_t lapic_timer_count_t;
 #define LAPIC_ERROR_INTERRUPT		0xB
 #define LAPIC_SPURIOUS_INTERRUPT	0xA
 #define LAPIC_CMCI_INTERRUPT		0x9
+#define LAPIC_PMC_SW_INTERRUPT		0x8
+#define LAPIC_PM_INTERRUPT		0x7
+
+#define LAPIC_PMC_SWI_VECTOR		(LAPIC_DEFAULT_INTERRUPT_BASE + LAPIC_PMC_SW_INTERRUPT)
+
 /* The vector field is ignored for NMI interrupts via the LAPIC
  * or otherwise, so this is not an offset from the interrupt
  * base.
  */
 #define LAPIC_NMI_INTERRUPT		0x2
-#define LAPIC_FUNC_TABLE_SIZE		LAPIC_PERFCNT_INTERRUPT
+#define LAPIC_FUNC_TABLE_SIZE		(LAPIC_PERFCNT_INTERRUPT + 1)
 
 #define LAPIC_WRITE(reg,val) \
 	*((volatile uint32_t *)(lapic_start + LAPIC_##reg)) = (val)
@@ -206,11 +211,15 @@ extern void		lapic_dump(void);
 extern int		lapic_interrupt(
 				int interrupt, x86_saved_state_t *state);
 extern void		lapic_end_of_interrupt(void);
+extern void		lapic_unmask_perfcnt_interrupt(void);
+extern void		lapic_send_ipi(int cpu, int interupt);
+
 extern int		lapic_to_cpu[];
 extern int		cpu_to_lapic[];
 extern int		lapic_interrupt_base;
 extern void		lapic_cpu_map(int lapic, int cpu_num);
 extern uint32_t		ml_get_apicid(uint32_t cpu);
+extern uint32_t		ml_get_cpuid(uint32_t lapic_index);
 
 extern void		lapic_set_timer(
 				boolean_t		interrupt,
@@ -242,6 +251,10 @@ static inline void	lapic_set_thermal_func(i386_intr_func_t func)
 static inline void	lapic_set_cmci_func(i386_intr_func_t func)
 {
 	lapic_set_intr_func(LAPIC_VECTOR(CMCI), func);
+}
+static inline void	lapic_set_pm_func(i386_intr_func_t func)
+{
+	lapic_set_intr_func(LAPIC_VECTOR(PM), func);
 }
 
 #ifdef MP_DEBUG

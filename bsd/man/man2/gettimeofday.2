@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)gettimeofday.2	8.2 (Berkeley) 5/26/95
 .\"
-.Dd May 26, 1995
+.Dd August 5, 2008
 .Dt GETTIMEOFDAY 2
 .Os BSD 4
 .Sh NAME
@@ -53,9 +53,6 @@
 .Fa "const struct timezone *tzp"
 .Fc
 .Sh DESCRIPTION
-.Bf -symbolic
-Note: timezone is no longer used; this information is kept outside
-the kernel.
 .Ef
 .Pp
 The system's notion of the current Greenwich time and the current time
@@ -68,10 +65,24 @@ since midnight (0 hour), January 1, 1970.  The resolution of the system
 clock is hardware dependent, and the time may be updated continuously or
 in ``ticks.''  If
 .Fa tp
-or
+is NULL
+and
 .Fa tzp
-is NULL, the associated time
-information will not be returned or set.
+is non-NULL,
+.Fn gettimeofday
+will populate the timezone struct in 
+.Fa tzp .
+If 
+.Fa tp
+is non-NULL and
+.Fa tzp 
+is NULL, then only the timeval struct in
+.Fa tp
+is populated. If both
+.Fa tp
+and
+.Fa tzp
+are NULL, nothing is returned.
 .Pp
 The structures pointed to by
 .Fa tp
@@ -82,6 +93,7 @@ are defined in
 as:
 .Pp
 .Bd -literal
+
 struct timeval {
 	time_t       tv_sec;   /* seconds since Jan. 1, 1970 */
 	suseconds_t  tv_usec;  /* and microseconds */
@@ -91,6 +103,7 @@ struct timezone {
 	int	tz_minuteswest; /* of Greenwich */
 	int	tz_dsttime;	/* type of dst correction to apply */
 };
+
 .Ed
 .Pp
 The 

@@ -124,7 +124,6 @@ struct vop_setlabel_args;
 
 /*@ macros */
 #define	VNODE_LABEL_CREATE	1
-#define	VNODE_LABEL_NEEDREF	2
 
 #if CONFIG_MACF_MACH
 #define mac_task_label_update_cred(cred, task)				\
@@ -318,11 +317,11 @@ int	mac_proc_check_getaudit(proc_t proc);
 int	mac_proc_check_getauid(proc_t proc);
 int     mac_proc_check_getlcid(proc_t proc1, proc_t proc2,
 	    pid_t pid);
-int	mac_proc_check_map_prot_copy_allow(proc_t proc);
 int	mac_proc_check_mprotect(proc_t proc,
 	    user_addr_t addr, user_size_t size, int prot);
+int	mac_proc_check_run_cs_invalid(proc_t proc);
 int	mac_proc_check_sched(proc_t proc, proc_t proc2);
-int	mac_proc_check_setaudit(proc_t proc, struct auditinfo *ai);
+int	mac_proc_check_setaudit(proc_t proc, struct auditinfo_addr *ai);
 int	mac_proc_check_setauid(proc_t proc, uid_t auid);
 int     mac_proc_check_setlcid(proc_t proc1, proc_t proc2,
 	    pid_t pid1, pid_t pid2);
@@ -486,6 +485,9 @@ int	mac_vnode_check_stat(vfs_context_t ctx,
 	    kauth_cred_t file_cred, struct vnode *vp);
 int	mac_vnode_check_truncate(vfs_context_t ctx,
 	    kauth_cred_t file_cred, struct vnode *vp);
+int	mac_vnode_check_uipc_bind(vfs_context_t ctx, struct vnode *dvp,
+	    struct componentname *cnp, struct vnode_attr *vap);
+int	mac_vnode_check_uipc_connect(vfs_context_t ctx, struct vnode *vp);
 int	mac_vnode_check_unlink(vfs_context_t ctx, struct vnode *dvp,
 	    struct vnode *vp, struct componentname *cnp);
 int	mac_vnode_check_write(vfs_context_t ctx,
@@ -505,6 +507,7 @@ void	mac_vnode_label_destroy(struct vnode *vp);
 int	mac_vnode_label_externalize_audit(struct vnode *vp, struct mac *mac);
 void	mac_vnode_label_free(struct label *label);
 void	mac_vnode_label_init(struct vnode *vp);
+int	mac_vnode_label_init_needed(struct vnode *vp);
 void	mac_vnode_label_recycle(struct vnode *vp);
 void	mac_vnode_label_update(vfs_context_t ctx, struct vnode *vp,
 	    struct label *newlabel);

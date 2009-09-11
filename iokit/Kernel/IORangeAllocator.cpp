@@ -91,7 +91,7 @@ bool IORangeAllocator::init( IORangeScalar endOfRange,
     return( true );
 }
 
-IORangeAllocator * IORangeAllocator:: withRange(
+IORangeAllocator * IORangeAllocator::withRange(
 					IORangeScalar endOfRange,
 				        IORangeScalar defaultAlignment,
 				        UInt32 capacity,

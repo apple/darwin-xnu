@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -350,7 +350,7 @@ ifvlan_flags_set_detaching(ifvlan_ref ifv)
 SYSCTL_DECL(_net_link);
 SYSCTL_NODE(_net_link, IFT_L2VLAN, vlan, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "IEEE 802.1Q VLAN");
 SYSCTL_NODE(_net_link_vlan, PF_LINK, link, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "for consistency");
-#endif 0
+#endif
 
 #define M_VLAN 		M_DEVBUF
 
@@ -359,7 +359,7 @@ static	void vlan_clone_destroy(struct ifnet *);
 static	int vlan_input(ifnet_t ifp, protocol_family_t protocol,
 					   mbuf_t m, char *frame_header);
 static	int vlan_output(struct ifnet *ifp, struct mbuf *m);
-static	int vlan_ioctl(ifnet_t ifp, u_int32_t cmd, void * addr);
+static	int vlan_ioctl(ifnet_t ifp, u_long cmd, void * addr);
 static  int vlan_set_bpf_tap(ifnet_t ifp, bpf_tap_mode mode,
 			     bpf_packet_func func);
 static 	int vlan_attach_protocol(struct ifnet *ifp);
@@ -377,9 +377,9 @@ static struct if_clone vlan_cloner = IF_CLONE_INITIALIZER(VLANNAME,
 							  vlan_clone_destroy, 
 							  0, 
 							  IF_MAXUNIT);
-static	void interface_link_event(struct ifnet * ifp, u_long event_code);
+static	void interface_link_event(struct ifnet * ifp, u_int32_t event_code);
 static	void vlan_parent_link_event(vlan_parent_ref vlp, 
-				    u_long event_code);
+				    u_int32_t event_code);
 extern void dlil_input_packet_list(struct ifnet  *ifp, struct mbuf *m);
 
 static int
@@ -771,12 +771,16 @@ vlan_parent_remove_vlan(__unused vlan_parent_ref vlp, ifvlan_ref ifv)
     return;
 }
 
-static void
+static int
 vlan_clone_attach(void)
 {
-    if_clone_attach(&vlan_cloner);
+    int error;
+
+    error = if_clone_attach(&vlan_cloner);
+    if (error != 0)
+        return error;
     vlan_lock_init();
-    return;
+    return 0;
 }
 
 static int
@@ -792,6 +796,8 @@ vlan_clone_create(struct if_clone *ifc, int unit)
 		return (error);
 	}
 	ifv = _MALLOC(sizeof(struct ifvlan), M_VLAN, M_WAITOK);
+	if (ifv == NULL)
+		return ENOBUFS;
 	bzero(ifv, sizeof(struct ifvlan));
 	multicast_list_init(&ifv->ifv_multicast);
 	
@@ -832,7 +838,7 @@ vlan_clone_create(struct if_clone *ifc, int unit)
 	/* NB: flags are not set here */
 	ifnet_set_link_mib_data(ifp, &ifv->ifv_mib, sizeof ifv->ifv_mib);
 	/* NB: mtu is not set here */
-#endif 0
+#endif
 	
 	ifnet_set_offload(ifp, 0);
 	ifnet_set_addrlen(ifp, ETHER_ADDR_LEN); /* XXX ethernet specific */
@@ -1126,6 +1132,7 @@ vlan_config(struct ifnet * ifp, struct ifnet * p, int tag)
     ifvlan_ref 		ifv = NULL;
     vlan_parent_ref	new_vlp = NULL;
     int			need_vlp_release = 0;
+    ifnet_offload_t	offload;
     u_int16_t		parent_flags;
     u_int32_t		progress = 0;
     vlan_parent_ref	vlp = NULL;
@@ -1253,14 +1260,9 @@ vlan_config(struct ifnet * ifp, struct ifnet * p, int tag)
     ifnet_set_flags(ifp, parent_flags,
 		    IFF_BROADCAST | IFF_MULTICAST | IFF_SIMPLEX);
 
-    /*
-     * If the parent interface can do hardware-assisted
-     * VLAN encapsulation, then propagate its hardware-
-     * assisted checksumming flags.
-     */
-    if (ifnet_offload(p) & IF_HWASSIST_VLAN_TAGGING) {
-	ifnet_set_offload(ifp, IF_HWASSIST_CSUM_FLAGS(ifnet_offload(p)));
-    }
+    /* use hwassist bits from parent interface, but exclude VLAN bits */
+    offload = ifnet_offload(p) & ~(IFNET_VLAN_TAGGING | IFNET_VLAN_MTU);
+    ifnet_set_offload(ifp, offload);
 
     ifnet_set_flags(ifp, IFF_RUNNING, IFF_RUNNING);
     ifvlan_flags_set_ready(ifv);
@@ -1312,7 +1314,7 @@ vlan_link_event(struct ifnet * ifp, struct ifnet * p)
 	     "%s%d", ifnet_name(p), ifnet_unit(p));
 	if (ifnet_ioctl(p, 0, SIOCGIFMEDIA, &ifmr) == 0
 	&& ifmr.ifm_count > 0 && ifmr.ifm_status & IFM_AVALID) {
-	u_long	event;
+	u_int32_t	event;
 	
 	event = (ifmr.ifm_status & IFM_ACTIVE)
 	    ? KEV_DL_LINK_ON : KEV_DL_LINK_OFF;
@@ -1546,12 +1548,12 @@ vlan_set_mtu(struct ifnet * ifp, int mtu)
 }
 
 static int
-vlan_ioctl(ifnet_t ifp, u_int32_t cmd, void * data)
+vlan_ioctl(ifnet_t ifp, u_long cmd, void * data)
 {
     struct ifdevmtu *	devmtu_p;
     int 		error = 0;
     struct ifaddr *	ifa;
-    struct ifmediareq64 * ifmr;
+    struct ifmediareq	*ifmr;
     struct ifreq *	ifr;
     ifvlan_ref		ifv;
     struct ifnet *	p;
@@ -1571,8 +1573,8 @@ vlan_ioctl(ifnet_t ifp, u_int32_t cmd, void * data)
     ifnet_set_flags(ifp, IFF_UP, IFF_UP);
 	break;
 
+    case SIOCGIFMEDIA32:
     case SIOCGIFMEDIA64:
-    case SIOCGIFMEDIA:
 	vlan_lock();
 	ifv = (ifvlan_ref)ifnet_softc(ifp);
 	if (ifv == NULL || ifvlan_flags_detaching(ifv)) {
@@ -1581,12 +1583,12 @@ vlan_ioctl(ifnet_t ifp, u_int32_t cmd, void * data)
 	}
 	p = (ifv->ifv_vlp == NULL) ? NULL : ifv->ifv_vlp->vlp_ifp;
 	vlan_unlock();
-	ifmr = (struct ifmediareq64 *)data;
-	user_addr =  proc_is64bit(current_proc())
-	    ? ifmr->ifm_ifmu.ifmu_ulist64
-	    : CAST_USER_ADDR_T(ifmr->ifm_ifmu.ifmu_ulist32);
+	ifmr = (struct ifmediareq *)data;
+	user_addr =  (cmd == SIOCGIFMEDIA64) ?
+	    ((struct ifmediareq64 *)ifmr)->ifmu_ulist :
+	    CAST_USER_ADDR_T(((struct ifmediareq32 *)ifmr)->ifmu_ulist);
 	if (p != NULL) {
-	    struct ifmediareq64		p_ifmr;
+	    struct ifmediareq p_ifmr;
 
 	    bzero(&p_ifmr, sizeof(p_ifmr));
 	    error = ifnet_ioctl(p, 0, SIOCGIFMEDIA, &p_ifmr);
@@ -1808,11 +1810,11 @@ vlan_event(struct ifnet	* p, __unused protocol_family_t protocol,
 }
 
 static void
-interface_link_event(struct ifnet * ifp, u_long event_code)
+interface_link_event(struct ifnet * ifp, u_int32_t event_code)
 {
     struct {
 	struct kern_event_msg	header;
-	u_long			unit;
+	u_int32_t			unit;
 	char			if_name[IFNAMSIZ];
     } event;
 
@@ -1822,14 +1824,14 @@ interface_link_event(struct ifnet * ifp, u_long event_code)
     event.header.kev_subclass  = KEV_DL_SUBCLASS;
     event.header.event_code    = event_code;
     event.header.event_data[0] = ifnet_family(ifp);
-    event.unit                 = (u_long) ifnet_unit(ifp);
+    event.unit                 = (u_int32_t) ifnet_unit(ifp);
     strncpy(event.if_name, ifnet_name(ifp), IFNAMSIZ);
     ifnet_event(ifp, &event.header);
     return;
 }
 
 static void
-vlan_parent_link_event(vlan_parent_ref vlp, u_long event_code)
+vlan_parent_link_event(vlan_parent_ref vlp, u_int32_t event_code)
 {
     ifvlan_ref ifv;
 
@@ -1919,6 +1921,7 @@ vlan_detach_inet6(struct ifnet *ifp, protocol_family_t protocol_family)
 }
 #endif /* INET6 */
 
+#if NETAT
 static errno_t
 vlan_attach_at(struct ifnet *ifp, protocol_family_t protocol_family)
 {
@@ -1930,6 +1933,7 @@ vlan_detach_at(struct ifnet *ifp, protocol_family_t protocol_family)
 {
     ether_detach_at(ifp, protocol_family);
 }
+#endif /* NETAT */
 
 __private_extern__ int
 vlan_family_init(void)
@@ -1952,6 +1956,7 @@ vlan_family_init(void)
 	goto done;
     }
 #endif
+#if NETAT
     error = proto_register_plumber(PF_APPLETALK, IFNET_FAMILY_VLAN, 
 				  vlan_attach_at, vlan_detach_at);
     if (error != 0) {
@@ -1959,7 +1964,14 @@ vlan_family_init(void)
 	       error);
 	goto done;
     }
-    vlan_clone_attach();
+#endif /* NETAT */
+    error = vlan_clone_attach();
+    if (error != 0) {
+        printf("proto_register_plumber failed vlan_clone_attach error=%d\n",
+               error);
+        goto done;
+    }
+
 
  done:
     return (error);

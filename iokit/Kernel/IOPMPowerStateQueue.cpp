@@ -27,53 +27,16 @@
  */
  
 #include "IOPMPowerStateQueue.h"
-#include "IOKit/IOLocks.h"
-#undef super
+
 #define super IOEventSource
-OSDefineMetaClassAndStructors(IOPMPowerStateQueue, IOEventSource);
+OSDefineMetaClassAndStructors( IOPMPowerStateQueue, IOEventSource )
 
-#ifndef __ppc__ /* ppc does this right and doesn't need these routines */
-static
-void *	OSDequeueAtomic(void * volatile * inList, SInt32 inOffset)
-{	
-	/* The _pointer_ is volatile, not the listhead itself */
-	void * volatile	oldListHead;
-	void * volatile	newListHead;
-
-	do {
-		oldListHead = *inList;
-		if (oldListHead == NULL) {
-			break;
-		}
-		
-		newListHead = *(void * volatile *) (((char *) oldListHead) + inOffset);
-	} while (! OSCompareAndSwap((UInt32)oldListHead,
-					(UInt32)newListHead, (volatile UInt32 *)inList));
-	return oldListHead;
-}
-
-static
-void	OSEnqueueAtomic(void * volatile * inList, void * inNewLink, SInt32 inOffset)
+IOPMPowerStateQueue * IOPMPowerStateQueue::PMPowerStateQueue(
+    OSObject * inOwner, Action inAction )
 {
-	/* The _pointer_ is volatile, not the listhead itself */
-	void *	volatile oldListHead;
-	void *	volatile newListHead = inNewLink;
-	void * volatile *	newLinkNextPtr = (void * volatile *) (((char *) inNewLink) + inOffset);
+    IOPMPowerStateQueue * me = new IOPMPowerStateQueue;
 
-	do {
-		oldListHead = *inList;
-		*newLinkNextPtr = oldListHead;
-	} while (! OSCompareAndSwap((UInt32)oldListHead, (UInt32)newListHead,
-					(volatile UInt32 *)inList));
-}
-#endif /* ! __ppc__ */
-
-
-IOPMPowerStateQueue *IOPMPowerStateQueue::PMPowerStateQueue(OSObject *inOwner)
-{
-    IOPMPowerStateQueue     *me = new IOPMPowerStateQueue;
-
-    if(me && !me->init(inOwner, 0) )
+    if (me && !me->init(inOwner, inAction))
     {
         me->release();
         return NULL;
@@ -82,109 +45,60 @@ IOPMPowerStateQueue *IOPMPowerStateQueue::PMPowerStateQueue(OSObject *inOwner)
     return me;
 }
 
-bool IOPMPowerStateQueue::init(OSObject *owner, Action action)
+bool IOPMPowerStateQueue::init( OSObject * inOwner, Action inAction )
 {
-    if(!(super::init(owner, (IOEventSource::Action) action))) return false;
+    if (!inAction || !(super::init(inOwner, inAction)))
+        return false;
 
-    // Queue of powerstate changes
-    changes = NULL;
-#ifndef __ppc__
-    if (!(tmpLock = IOLockAlloc()))  panic("IOPMPowerStateQueue::init can't alloc lock");
-#endif
+    queue_init( &queueHead );
+
+    queueLock = IOLockAlloc();
+    if (!queueLock)
+        return false;
+
     return true;
 }
 
-
-bool IOPMPowerStateQueue::unIdleOccurred(IOService *inTarget, unsigned long inState)
+bool IOPMPowerStateQueue::submitPowerEvent(
+     uint32_t eventType,
+     void *   arg0,
+     void *   arg1 )
 {
-    PowerChangeEntry             *new_one = NULL;
+    PowerEventEntry * entry;
 
-    new_one = (PowerChangeEntry *)IOMalloc(sizeof(PowerChangeEntry));
-    if(!new_one) return false;
-    
-    new_one->actionType = IOPMPowerStateQueue::kUnIdle;
-    new_one->state = inState;
-    new_one->target = inTarget;
-    
-    // Change to queue
-#ifndef __ppc__
-    IOLockLock(tmpLock);
-#endif
-    OSEnqueueAtomic((void **)&changes, (void *)new_one, 0);
-#ifndef __ppc__
-    IOLockUnlock(tmpLock);
-#endif
+    entry = IONew(PowerEventEntry, 1);
+    if (!entry)
+        return false;
+
+    entry->eventType = eventType;
+    entry->args[0]   = arg0;
+    entry->args[1]   = arg1;
+
+    IOLockLock(queueLock);
+    queue_enter(&queueHead, entry, PowerEventEntry *, chain);
+    IOLockUnlock(queueLock);
     signalWorkAvailable();
 
     return true;
 }
 
-bool IOPMPowerStateQueue::featureChangeOccurred(
-    uint32_t inState, 
-    IOService *inTarget)
+bool IOPMPowerStateQueue::checkForWork( void )
 {
-    PowerChangeEntry             *new_one = NULL;
+    IOPMPowerStateQueueAction queueAction = (IOPMPowerStateQueueAction) action;
+    PowerEventEntry * entry;
 
-    new_one = (PowerChangeEntry *)IOMalloc(sizeof(PowerChangeEntry));
-    if(!new_one) return false;
-    
-    new_one->actionType = IOPMPowerStateQueue::kPMFeatureChange;
-    new_one->state = inState;
-    new_one->target = inTarget;
-    
-    // Change to queue
-#ifdef __i386__
-    IOLockLock(tmpLock);
-#endif
-    OSEnqueueAtomic((void **)&changes, (void *)new_one, 0);
-#ifdef __i386__
-    IOLockUnlock(tmpLock);
-#endif
-    signalWorkAvailable();
+	IOLockLock(queueLock);
+	while (!queue_empty(&queueHead))
+	{
+		queue_remove_first(&queueHead, entry, PowerEventEntry *, chain);		
+		IOLockUnlock(queueLock);
 
-    return true;
-}
+        (*queueAction)(owner, entry->eventType, entry->args[0], entry->args[1]);        
+        IODelete(entry, PowerEventEntry, 1);
 
+        IOLockLock(queueLock);
+	}
+	IOLockUnlock(queueLock);
 
-// checkForWork() is called in a gated context
-bool IOPMPowerStateQueue::checkForWork()
-{
-    PowerChangeEntry            *theNode;
-    uint32_t                    theState;
-    IOService                   *theTarget;
-    uint16_t                    theAction;
-    
-    // Dequeue and process the state change request
-#ifndef __ppc__
-    IOLockLock(tmpLock);
-#endif
-    if((theNode = (PowerChangeEntry *)OSDequeueAtomic((void **)&changes, 0)))
-    {
-#ifndef __ppc__
-      IOLockUnlock(tmpLock);
-#endif
-        theState = theNode->state;
-        theTarget = theNode->target;
-        theAction = theNode->actionType;
-        IOFree((void *)theNode, sizeof(PowerChangeEntry));
-        
-        switch (theAction)
-        {
-            case kUnIdle:
-                theTarget->command_received((void *)theState, 0, 0, 0);
-                break;
-                
-            case kPMFeatureChange:
-                theTarget->messageClients(theState, theTarget);
-                break;
-        }
-    }
-#ifndef __ppc__
-    else {
-      IOLockUnlock(tmpLock);
-    }
-#endif
-    // Return true if there's more work to be done
-    if(changes) return true;
-    else return false;
+    return false;
 }

@@ -149,6 +149,17 @@ struct ip {
 #define	IPTOS_PREC_PRIORITY		0x20
 #define	IPTOS_PREC_ROUTINE		0x00
 
+#ifdef PRIVATE
+/*
+ * Definitions of traffic class for use within wireless LAN. 
+ * Mainly used by AFP for backup. Not recommended for general use.
+ */
+#define IP_TCLASS_BE			0x00	/* standard, best effort */
+#define IP_TCLASS_BK			0x20	/* Background, low priority */
+#define IP_TCLASS_VI			0x80	/* Interactive */
+#define IP_TCLASS_VO			0xc0	/* Signalling */
+
+#endif
 /*
  * Definitions for options.
  */

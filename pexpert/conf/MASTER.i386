@@ -3,14 +3,17 @@
 #  Standard Apple Mac OS Configurations:
 #  -------- ----- ------ ---------------
 #
-#  RELEASE	= [ i386 mach mach_pe panic_info config_dtrace ]
+#  RELEASE	= [ intel mach mach_pe panic_info config_dtrace ]
 #  PROFILE	= [ RELEASE profile ]
 #  DEBUG	= [ RELEASE debug ]
 #
-#  EMBEDDED	= [ i386 mach mach_pe panic_info ]
+#
+#  EMBEDDED	= [ intel mach mach_pe panic_info ]
 #  DEVELOPMENT	= [ EMBEDDED config_dtrace ]
 #
 ######################################################################
 
-machine		"i386"					# <i386>
-cpu		"i386"					# <i386>
+machine		"i386"					# <intel>
+cpu		"i386"					# <intel>
+
+options     NO_NESTED_PMAP                  # <no_nested_pmap>

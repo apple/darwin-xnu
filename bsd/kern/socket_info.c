@@ -59,7 +59,7 @@ fill_sockbuf_info(struct sockbuf *sb, struct sockbuf_info *sbi)
 	sbi->sbi_mbmax = sb->sb_mbmax;
 	sbi->sbi_lowat = sb->sb_lowat;
 	sbi->sbi_flags = sb->sb_flags;
-	sbi->sbi_timeo = (u_long)(sb->sb_timeo.tv_sec * hz) + sb->sb_timeo.tv_usec / tick;
+	sbi->sbi_timeo = (u_int32_t)(sb->sb_timeo.tv_sec * hz) + sb->sb_timeo.tv_usec / tick;
 	if (sbi->sbi_timeo == 0 && sb->sb_timeo.tv_usec != 0)
 		sbi->sbi_timeo = 1;
 }
@@ -132,7 +132,7 @@ fill_socketinfo(struct socket *so, struct socket_info *si)
 			insi->insi_v4.in4_tos = inp->inp_depend4.inp4_ip_tos;
 			insi->insi_v6.in6_hlim = inp->inp_depend6.inp6_hlim;
 			insi->insi_v6.in6_cksum = inp->inp_depend6.inp6_cksum;
-			insi->insi_v6.in6_ifindex = inp->inp6_ifindex;
+			insi->insi_v6.in6_ifindex = inp->inp_depend6.inp6_ifindex;
 			insi->insi_v6.in6_hops = inp->inp_depend6.inp6_hops;
 
 			if (type == SOCK_STREAM && (protocol == 0 || protocol == IPPROTO_TCP) && inp->inp_ppcb != 0) {

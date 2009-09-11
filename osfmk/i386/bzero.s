@@ -87,7 +87,7 @@ ENTRY(memset)
 	ret
 
 /*
- * void bzero(char * addr, unsigned int length)
+ * void bzero(char * addr, size_t length)
  */
 Entry(blkclr)
 ENTRY(bzero)

@@ -62,7 +62,7 @@
 #include <security/mac_framework.h>
 #endif
 
-#include <bsm/audit_kernel.h>
+#include <security/audit/audit.h>
 
 #if SYSV_SEM
 
@@ -173,10 +173,20 @@ sysv_semtime(void)
  * NOTE: Source and target may *NOT* overlap! (target is smaller)
  */
 static void
-semid_ds_64to32(struct user_semid_ds *in, struct semid_ds *out)
+semid_ds_kernelto32(struct user_semid_ds *in, struct user32_semid_ds *out)
 {
 	out->sem_perm = in->sem_perm;
-	out->sem_base = (__int32_t)in->sem_base;
+	out->sem_base = CAST_DOWN_EXPLICIT(__int32_t,in->sem_base);
+	out->sem_nsems = in->sem_nsems;
+	out->sem_otime = in->sem_otime;		/* XXX loses precision */
+	out->sem_ctime = in->sem_ctime;		/* XXX loses precision */
+}
+
+static void
+semid_ds_kernelto64(struct user_semid_ds *in, struct user64_semid_ds *out)
+{
+	out->sem_perm = in->sem_perm;
+	out->sem_base = CAST_DOWN_EXPLICIT(__int32_t,in->sem_base);
 	out->sem_nsems = in->sem_nsems;
 	out->sem_otime = in->sem_otime;		/* XXX loses precision */
 	out->sem_ctime = in->sem_ctime;		/* XXX loses precision */
@@ -193,25 +203,50 @@ semid_ds_64to32(struct user_semid_ds *in, struct semid_ds *out)
  * XXX is the same.
  */
 static void
-semid_ds_32to64(struct semid_ds *in, struct user_semid_ds *out)
+semid_ds_32tokernel(struct user32_semid_ds *in, struct user_semid_ds *out)
 {
 	out->sem_ctime = in->sem_ctime;
 	out->sem_otime = in->sem_otime;
 	out->sem_nsems = in->sem_nsems;
-	out->sem_base = (void *)in->sem_base;
+	out->sem_base = (void *)(uintptr_t)in->sem_base;
+	out->sem_perm = in->sem_perm;
+}
+
+static void
+semid_ds_64tokernel(struct user64_semid_ds *in, struct user_semid_ds *out)
+{
+	out->sem_ctime = in->sem_ctime;
+	out->sem_otime = in->sem_otime;
+	out->sem_nsems = in->sem_nsems;
+	out->sem_base = (void *)(uintptr_t)in->sem_base;
 	out->sem_perm = in->sem_perm;
 }
 
 
 /*
- * Entry point for all SEM calls
+ * semsys
  *
- * In Darwin this is no longer the entry point.  It will be removed after
- *  the code has been tested better.
+ * Entry point for all SEM calls: semctl, semget, semop
+ *
+ * Parameters:	p	Process requesting the call
+ * 		uap	User argument descriptor (see below)
+ * 		retval	Return value of the selected sem call
+ *
+ * Indirect parameters:	uap->which	sem call to invoke (index in array of sem calls)
+ * 			uap->a2		User argument descriptor
+ *                 
+ * Returns:	0	Success
+ *		!0	Not success
+ *
+ * Implicit returns: retval	Return value of the selected sem call
+ *
+ * DEPRECATED:  This interface should not be used to call the other SEM
+ * 		functions (semctl, semget, semop). The correct usage is
+ * 		to call the other SEM functions directly.
+ *
  */
-/* XXX actually varargs. */
 int
-semsys(struct proc *p, struct semsys_args *uap, register_t *retval)
+semsys(struct proc *p, struct semsys_args *uap, int32_t *retval)
 {
 
 	/* The individual calls handling the locking now */
@@ -639,7 +674,7 @@ semundo_clear(int semid, int semnum)
  * because the alignment is the same in user and kernel space.
  */
 int
-semctl(struct proc *p, struct semctl_args *uap, register_t *retval)
+semctl(struct proc *p, struct semctl_args *uap, int32_t *retval)
 {
 	int semid = uap->semid;
 	int semnum = uap->semnum;
@@ -649,7 +684,6 @@ semctl(struct proc *p, struct semctl_args *uap, register_t *retval)
 	int i, rval, eval;
 	struct user_semid_ds sbuf;
 	struct semid_kernel *semakptr;
-	struct user_semid_ds uds;
 	
 
 	AUDIT_ARG(svipc_cmd, cmd);
@@ -714,11 +748,13 @@ semctl(struct proc *p, struct semctl_args *uap, register_t *retval)
 				goto semctlout;
 
 		if (IS_64BIT_PROCESS(p)) {
-			eval = copyin(user_arg.buf, &sbuf, sizeof(struct user_semid_ds));
+			struct user64_semid_ds ds64;
+			eval = copyin(user_arg.buf, &ds64, sizeof(ds64));
+			semid_ds_64tokernel(&ds64, &sbuf);
 		} else {
-			eval = copyin(user_arg.buf, &sbuf, sizeof(struct semid_ds));
-			/* convert in place; ugly, but safe */
-			semid_ds_32to64((struct semid_ds *)&sbuf, &sbuf);
+			struct user32_semid_ds ds32;
+			eval = copyin(user_arg.buf, &ds32, sizeof(ds32));
+			semid_ds_32tokernel(&ds32, &sbuf);
 		}
 		
 		if (eval != 0) {
@@ -735,13 +771,15 @@ semctl(struct proc *p, struct semctl_args *uap, register_t *retval)
 	case IPC_STAT:
 		if ((eval = ipcperm(cred, &semakptr->u.sem_perm, IPC_R)))
 				goto semctlout;
-		bcopy((caddr_t)&semakptr->u, &uds, sizeof(struct user_semid_ds));
+
 		if (IS_64BIT_PROCESS(p)) {
-			eval = copyout(&uds, user_arg.buf, sizeof(struct user_semid_ds));
+			struct user64_semid_ds semid_ds64;
+			semid_ds_kernelto64(&semakptr->u, &semid_ds64);
+			eval = copyout(&semid_ds64, user_arg.buf, sizeof(semid_ds64));
 		} else {
-			struct semid_ds semid_ds32;
-			semid_ds_64to32(&uds, &semid_ds32);
-			eval = copyout(&semid_ds32, user_arg.buf, sizeof(struct semid_ds));
+			struct user32_semid_ds semid_ds32;
+			semid_ds_kernelto32(&semakptr->u, &semid_ds32);
+			eval = copyout(&semid_ds32, user_arg.buf, sizeof(semid_ds32));
 		}
 		break;
 
@@ -820,7 +858,7 @@ semctl(struct proc *p, struct semctl_args *uap, register_t *retval)
 		 * to avoid introducing endieness and a pad field into the
 		 * header file.  Ugly, but it works.
 		 */
-		semakptr->u.sem_base[semnum].semval = CAST_DOWN(int,user_arg.buf);
+		semakptr->u.sem_base[semnum].semval = CAST_DOWN_EXPLICIT(int,user_arg.buf);
 		semakptr->u.sem_base[semnum].sempid = p->p_pid;
 		/* XXX scottl Should there be a MAC call here? */
 		semundo_clear(semid, semnum);
@@ -858,7 +896,7 @@ semctlout:
 }
 
 int
-semget(__unused struct proc *p, struct semget_args *uap, register_t *retval)
+semget(__unused struct proc *p, struct semget_args *uap, int32_t *retval)
 {
 	int semid, eval;
 	int key = uap->key;
@@ -1002,7 +1040,7 @@ semgetout:
 }
 
 int
-semop(struct proc *p, struct semop_args *uap, register_t *retval)
+semop(struct proc *p, struct semop_args *uap, int32_t *retval)
 {
 	int semid = uap->semid;
 	int nsops = uap->nsops;
@@ -1524,18 +1562,22 @@ IPCS_sem_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	int error;
 	int cursor;
 	union {
-		struct IPCS_command u32;
+		struct user32_IPCS_command u32;
 		struct user_IPCS_command u64;
 	} ipcs;
-	struct semid_ds semid_ds32;	/* post conversion, 32 bit version */
+	struct user32_semid_ds semid_ds32;	/* post conversion, 32 bit version */
+	struct user64_semid_ds semid_ds64;	/* post conversion, 64 bit version */
 	void *semid_dsp;
-	size_t ipcs_sz = sizeof(struct user_IPCS_command);
-	size_t semid_ds_sz = sizeof(struct user_semid_ds);
+	size_t ipcs_sz;
+	size_t semid_ds_sz;
 	struct proc *p = current_proc();
 
-	if (!IS_64BIT_PROCESS(p)) {
-		ipcs_sz = sizeof(struct IPCS_command);
-		semid_ds_sz = sizeof(struct semid_ds);
+	if (IS_64BIT_PROCESS(p)) {
+		ipcs_sz = sizeof(struct user_IPCS_command);
+		semid_ds_sz = sizeof(struct user64_semid_ds);
+	} else {
+		ipcs_sz = sizeof(struct user32_IPCS_command);
+		semid_ds_sz = sizeof(struct user32_semid_ds);
 	}
 
 	/* Copy in the command structure */
@@ -1592,13 +1634,21 @@ IPCS_sem_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 		 * descriptor to a 32 bit user one.
 		 */
 		if (!IS_64BIT_PROCESS(p)) {
-			semid_ds_64to32(semid_dsp, &semid_ds32);
+			semid_ds_kernelto32(semid_dsp, &semid_ds32);
 			semid_dsp = &semid_ds32;
+		} else {
+			semid_ds_kernelto64(semid_dsp, &semid_ds64);
+			semid_dsp = &semid_ds64;
 		}
+
 		error = copyout(semid_dsp, ipcs.u64.ipcs_data, ipcs.u64.ipcs_datalen);
 		if (!error) {
 			/* update cursor */
 			ipcs.u64.ipcs_cursor = cursor + 1;
+
+			if (!IS_64BIT_PROCESS(p))       /* convert in place */
+				ipcs.u32.ipcs_data = CAST_DOWN_EXPLICIT(user32_addr_t,ipcs.u64.ipcs_data);
+
 			error = SYSCTL_OUT(req, &ipcs, ipcs_sz);
 		}
 		break;

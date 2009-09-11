@@ -68,7 +68,7 @@ struct tun_softc {
 #endif
 };
 
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
 /* ioctl's for get/set debug */
 #define	TUNSDEBUG	_IOW('t', 90, int)

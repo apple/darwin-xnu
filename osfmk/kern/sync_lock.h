@@ -46,35 +46,35 @@
 #include <kern/wait_queue.h>
 #include <kern/macro_help.h>
 #include <kern/queue.h>
-#include <kern/lock.h>
+#include <kern/locks.h>
 
 typedef struct ulock {
-	queue_chain_t	thread_link;	/* ulocks owned by a thread  	    */
+	queue_chain_t	thread_link;	/* ulocks owned by thread MUST BE FIRST */
 	queue_chain_t	held_link;	/* ulocks held in the lock set	    */
 	queue_chain_t	handoff_link;	/* ulocks w/ active handoffs	    */
-
-	decl_mutex_data(,lock)		/* ulock lock			    */
-
 	struct lock_set *lock_set;	/* the retaining lock set	    */
-	thread_t	holder;		/* thread that holds the lock   */
+	thread_t	holder;		/* thread that holds the lock       */
+
+	struct wait_queue wait_queue;	/* queue of blocked threads	    */
+
+	decl_lck_mtx_data(,lock)	/* ulock lock			    */
+
 	unsigned int			/* flags                            */
 	/* boolean_t */ blocked:1,	/*     did threads block waiting?   */
 	/* boolean_t */	unstable:1,	/*     unstable? (holder died)	    */
 	/* boolean_t */ ho_wait:1,	/*     handoff thread waiting?	    */
 	/* boolean_t */ accept_wait:1,	/*     accepting thread waiting?    */
 			:0;		/*     force to long boundary       */
-
-	struct wait_queue wait_queue;	/* queue of blocked threads	    */
 } Ulock;
 
 typedef struct ulock *ulock_t;
 
 typedef struct lock_set {
-	queue_chain_t	task_link;   /* chain of lock sets owned by a task  */
-	decl_mutex_data(,lock)	     /* lock set lock			    */
+	queue_chain_t	task_link;   /* lock sets owned by a task MUST BE FIRST */
 	task_t		owner;	     /* task that owns the lock set	    */
 	ipc_port_t	port;	     /* lock set port			    */
-	int		ref_count;   /* reference count			    */
+	decl_lck_mtx_data(,lock)     /* lock set lock			    */
+	uint32_t	ref_count;   /* reference count			    */
 
 	boolean_t	active;	     /* active status			    */
 	int		n_ulocks;    /* number of ulocks in the lock set    */
@@ -87,19 +87,22 @@ typedef struct lock_set {
 #define ULOCK_FREE	0
 #define ULOCK_HELD	1
 
+extern lck_grp_t	lock_set_grp;
+extern lck_attr_t	lock_set_attr;
+
 /*
  *  Data structure internal lock macros
  */
 
-#define lock_set_lock_init(ls)		mutex_init(&(ls)->lock, 0)
-#define lock_set_lock(ls)		mutex_lock(&(ls)->lock)
-#define lock_set_unlock(ls)		mutex_unlock(&(ls)->lock)
+#define lock_set_lock_init(ls)	lck_mtx_init(&(ls)->lock, &lock_set_grp, &lock_set_attr)
+#define lock_set_lock(ls)		lck_mtx_lock(&(ls)->lock)
+#define lock_set_unlock(ls)		lck_mtx_unlock(&(ls)->lock)
 
-#define ulock_lock_init(ul)		mutex_init(&(ul)->lock, 0)
-#define ulock_lock(ul)			mutex_lock(&(ul)->lock)
-#define ulock_unlock(ul)		mutex_unlock(&(ul)->lock)
+#define ulock_lock_init(ul)		lck_mtx_init(&(ul)->lock, &lock_set_grp, &lock_set_attr)
+#define ulock_lock(ul)			lck_mtx_lock(&(ul)->lock)
+#define ulock_unlock(ul)		lck_mtx_unlock(&(ul)->lock)
 
-extern void lock_set_init(void);
+extern void lock_set_init(void) __attribute__((section("__TEXT, initcode")));
 
 extern	kern_return_t	ulock_release_internal(
 					ulock_t		ulock,

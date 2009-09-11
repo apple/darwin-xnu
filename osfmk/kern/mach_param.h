@@ -69,23 +69,23 @@
 #ifndef	_KERN_MACH_PARAM_H_
 #define _KERN_MACH_PARAM_H_
 
-#define THREAD_MAX		CONFIG_THREAD_MAX	/* Max number of threads */
-#define TASK_MAX		CONFIG_TASK_MAX		/* Max number of tasks */
+extern int thread_max, task_threadmax, task_max;
+
 
 #define THREAD_CHUNK	64		/* Allocation chunk */
 #define TASK_CHUNK		64		/* Allocation chunk */
 
-#define PORT_MAX	((TASK_MAX * 3 + THREAD_MAX)	/* kernel */ \
-				+ (THREAD_MAX * 2)	/* user */ \
+#define PORT_MAX	((task_max * 3 + thread_max)	/* kernel */ \
+				+ (thread_max * 2)	/* user */ \
 				+ 40000)		/* slop for objects */
 					/* Number of ports, system-wide */
 
-#define SET_MAX		(TASK_MAX + THREAD_MAX + 200)
+#define SET_MAX		(task_max + thread_max + 200)
 					/* Max number of port sets */
 
 #define	ITE_MAX		(1 << 16)	/* Max number of splay tree entries */
 
-#define	SPACE_MAX	(TASK_MAX + 5)	/* Max number of IPC spaces */
+#define	SPACE_MAX	(task_max + 5)	/* Max number of IPC spaces */
 
 #define SEMAPHORE_MAX   (PORT_MAX >> 1)	/* Maximum number of semaphores */
 

@@ -53,11 +53,22 @@ is created with the access permissions specified by
 .Fa mode
 and restricted by the
 .Xr umask 2
-of the calling process.
+of the calling process. See
+.Xr chmod 2
+for the possible permission bit masks for
+.Fa mode . 
 .Pp
 The directory's owner ID is set to the process's effective user ID.
 The directory's group ID is set to that of the parent directory in
 which it is created.
+.Pp
+Note: the behavior of
+.Fn mkdir
+is undefined when mode bits other than the low 9 bits are used. Use
+.Xr chmod 2
+after
+.Fn mkdir
+to explicitly set the other bits (See example below).
 .Sh RETURN VALUES
 A 0 return value indicates success.  A -1 return value
 indicates an error, and an error code is stored in
@@ -127,6 +138,21 @@ A component of the path prefix is not a directory.
 .It Bq Er EROFS
 The parent directory resides on a read-only file system.
 .El
+.Sh EXAMPLE
+.Bd -literal -offset indent
+
+int main (int argc, const char * argv[]) 
+{
+	/* The behavior of mkdir is undefined for anything other than the "permission" bits */
+	if (mkdir("/tmp/blah", 0777))
+		perror("/tmp/blah");	
+
+	/* So we need to set the sticky/executable bits explicitly with chmod after calling mkdir */
+	if (chmod("/tmp/blah", 07777))
+		perror("/tmp/blah");	
+}
+
+.Ed 
 .Sh LEGACY SYNOPSIS
 .Fd #include <sys/types.h>
 .Fd #include <sys/stat.h>

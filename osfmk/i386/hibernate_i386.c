@@ -42,7 +42,7 @@
 
 #include <IOKit/IOHibernatePrivate.h>
 #include <vm/vm_page.h>
-#include "i386_lowmem.h"
+#include <i386/i386_lowmem.h>
 
 #define MAX_BANKS	32
 
@@ -63,7 +63,7 @@ hibernate_page_list_allocate(void)
     hibernate_bitmap_t	    dram_ranges[MAX_BANKS];
     boot_args *		    args = (boot_args *) PE_state.bootArgs;
 
-    mptr = (EfiMemoryRange *)args->MemoryMap;
+    mptr = (EfiMemoryRange *)ml_static_ptovirt(args->MemoryMap);
     if (args->MemoryMapDescriptorSize == 0)
 	panic("Invalid memory map descriptor size");
     msize = args->MemoryMapDescriptorSize;
@@ -89,14 +89,31 @@ hibernate_page_list_allocate(void)
 	    case kEfiACPIMemoryNVS:
 	    case kEfiPalCode:
 
-		if (!num_banks || (base != (1 + dram_ranges[num_banks - 1].last_page)))
+		for (bank = 0; bank < num_banks; bank++)
+		{
+		    if (dram_ranges[bank].first_page <= base)
+			continue;
+		    if ((base + num) == dram_ranges[bank].first_page)
+		    {
+			dram_ranges[bank].first_page = base;
+			num = 0;
+		    }
+		    break;
+		}
+		if (!num) break;
+		
+		if (bank && (base == (1 + dram_ranges[bank - 1].last_page)))
+		    bank--;
+		else
 		{
 		    num_banks++;
-		    if (num_banks >= MAX_BANKS)
-			break;
-		    dram_ranges[num_banks - 1].first_page = base;
+		    if (num_banks >= MAX_BANKS) break;
+		    bcopy(&dram_ranges[bank], 
+			  &dram_ranges[bank + 1], 
+			  (num_banks - bank - 1) * sizeof(hibernate_bitmap_t));
+		    dram_ranges[bank].first_page = base;
 		}
-		dram_ranges[num_banks - 1].last_page = base + num - 1;
+		dram_ranges[bank].last_page = base + num - 1;
 		break;
 
 	    // runtime services will be restarted, so no save
@@ -129,7 +146,7 @@ hibernate_page_list_allocate(void)
     if (!list)
 	return (list);
 	
-    list->list_size  = size;
+    list->list_size  = (uint32_t)size;
     list->page_count = page_count;
     list->bank_count = num_banks;
 
@@ -168,10 +185,12 @@ hibernate_page_list_set_volatile( hibernate_page_list_t * page_list,
 {
     boot_args * args = (boot_args *) PE_state.bootArgs;
 
+#if !defined(x86_64)
     hibernate_set_page_state(page_list, page_list_wired, 
 		I386_HIB_PAGETABLE, I386_HIB_PAGETABLE_COUNT, 
 		kIOHibernatePageStateFree);
     *pagesOut -= I386_HIB_PAGETABLE_COUNT;
+#endif
 
     if (args->efiRuntimeServicesPageStart)
     {
@@ -192,6 +211,11 @@ hibernate_processor_setup(IOHibernateImageHeader * header)
 
     header->runtimePages     = args->efiRuntimeServicesPageStart;
     header->runtimePageCount = args->efiRuntimeServicesPageCount;
+    if (args->Version == kBootArgsVersion1 && args->Revision >= kBootArgsRevision1_5) {
+        header->runtimeVirtualPages = args->efiRuntimeServicesVirtualPageStart;
+    } else {
+        header->runtimeVirtualPages = 0;
+    }
 
     return (KERN_SUCCESS);
 }
@@ -202,7 +226,19 @@ hibernate_vm_lock(void)
     if (current_cpu_datap()->cpu_hibernate)
     {
         vm_page_lock_queues();
-        mutex_lock(&vm_page_queue_free_lock);
+        lck_mtx_lock(&vm_page_queue_free_lock);
+
+	if (vm_page_local_q) {
+		uint32_t  i;
+
+		for (i = 0; i < vm_page_local_q_count; i++) {
+			struct vpl	*lq;
+
+			lq = &vm_page_local_q[i].vpl_un.vpl;
+
+			VPL_LOCK(&lq->vpl_lock);
+		}
+	}
     }
 }
 
@@ -211,7 +247,18 @@ hibernate_vm_unlock(void)
 {
     if (current_cpu_datap()->cpu_hibernate)
     {
-        mutex_unlock(&vm_page_queue_free_lock);
+	if (vm_page_local_q) {
+		uint32_t  i;
+
+		for (i = 0; i < vm_page_local_q_count; i++) {
+			struct vpl	*lq;
+
+			lq = &vm_page_local_q[i].vpl_un.vpl;
+
+			VPL_UNLOCK(&lq->vpl_lock);
+		}
+	}
+        lck_mtx_unlock(&vm_page_queue_free_lock);
         vm_page_unlock_queues();
     }
 }

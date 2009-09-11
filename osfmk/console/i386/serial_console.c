@@ -208,6 +208,10 @@ _cnputc(char c)
 	mp_enable_preemption();
 }
 
+void cnputc_unbuffered(char c) {
+	_cnputc(c);
+}
+
 void
 cnputcusr(char c)
 {

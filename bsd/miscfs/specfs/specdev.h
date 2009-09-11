@@ -98,6 +98,7 @@ struct specinfo {
  * Flags for specinfo
  */
 #define	SI_MOUNTEDON	0x0001	/* block special device is mounted on */
+#define SI_ALIASED	0x0002  /* multiple active vnodes refer to this device */
 
 /*
  * Special device management
@@ -121,6 +122,15 @@ struct	flock;
 struct	buf;
 struct	uio;
 
+__BEGIN_DECLS
+#ifdef BSD_KERNEL_PRIVATE
+int spec_blktooff (struct  vnop_blktooff_args *);
+int spec_offtoblk (struct  vnop_offtoblk_args *);
+int	spec_fsync_internal (vnode_t, int, vfs_context_t);
+int spec_blockmap (struct  vnop_blockmap_args *);
+int spec_kqfilter (vnode_t vp, struct knote *kn);
+#endif /* BSD_KERNEL_PRIVATE */
+
 int	spec_ebadf(void *);
 
 int	spec_lookup (struct vnop_lookup_args *);
@@ -138,7 +148,6 @@ int	spec_select (struct vnop_select_args *);
 #define spec_revoke (int (*) (struct  vnop_access_args *))nop_revoke
 #define spec_mmap (int (*) (struct  vnop_access_args *))err_mmap
 int	spec_fsync (struct  vnop_fsync_args *);
-int	spec_fsync_internal (vnode_t, int, vfs_context_t);
 #define spec_remove (int (*) (struct  vnop_access_args *))err_remove
 #define spec_link (int (*) (struct  vnop_access_args *))err_link
 #define spec_rename (int (*) (struct  vnop_access_args *))err_rename
@@ -159,9 +168,7 @@ int	spec_pathconf (struct vnop_pathconf_args *);
 #define spec_valloc (int (*) (struct  vnop_access_args *))err_valloc
 #define spec_vfree (int (*) (struct  vnop_access_args *))err_vfree
 #define spec_bwrite (int (*) (struct  vnop_bwrite_args *))nop_bwrite
-int spec_blktooff (struct  vnop_blktooff_args *);
-int spec_offtoblk (struct  vnop_offtoblk_args *);
-int spec_blockmap (struct  vnop_blockmap_args *);
+__END_DECLS
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* _MISCFS_SPECFS_SPECDEV_H_ */

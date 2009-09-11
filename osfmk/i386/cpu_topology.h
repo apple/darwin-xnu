@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -144,7 +144,6 @@ typedef struct x86_lcpu
     uint64_t		rtcPop;		/* when etimer wants a timer pop */
     uint64_t		rtcDeadline;
     x86_cpu_cache_t	*caches[MAX_CACHE_DEPTH];
-    struct pmc		*pmc;		/* Pointer to perfmon data */
     void		*pmStats;	/* Power management stats for lcpu */
     void		*pmState;	/* Power management state for lcpu */
 } x86_lcpu_t;
@@ -154,7 +153,6 @@ typedef struct x86_lcpu
 #define X86CORE_FL_HAS_HPET	0x10000000	/* core has HPET assigned */
 #define X86CORE_FL_HALTED	0x00008000	/* core is halted */
 #define X86CORE_FL_IDLE		0x00004000	/* core is idle */
-#define X86CORE_FL_WAKEUP	0x00002000	/* wakeup is pending */
 
 typedef struct x86_core
 {
@@ -212,7 +210,7 @@ typedef struct x86_pkg
 } x86_pkg_t;
 
 extern x86_pkg_t	*x86_pkgs;	/* root of all CPU packages */
- 
+
 typedef struct x86_topology_parameters
 {
     uint32_t		LLCDepth;
@@ -235,7 +233,9 @@ typedef struct x86_topology_parameters
 } x86_topology_parameters_t;
 
 /* Called after cpu discovery */
-extern void		cpu_topology_start(void);
+extern void		cpu_topology_sort(int ncpus);
+extern kern_return_t	cpu_topology_start_cpu(int cpunum);
+
 
 #endif /* _I386_CPU_TOPOLOGY_H_ */
 #endif /* KERNEL_PRIVATE */

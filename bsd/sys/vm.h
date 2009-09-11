@@ -106,6 +106,18 @@ struct vmspace {
  * WARNING - keep in sync with vmspace
  */
 
+struct user32_vmspace {
+	int     	vm_refcnt;      /* number of references */
+	uint32_t	vm_shm;			/* SYS5 shared memory private data XXX */
+	segsz_t 	vm_rssize;		/* current resident set size in pages */
+	segsz_t 	vm_swrss;		/* resident set size before last swap */
+	segsz_t 	vm_tsize;		/* text size (pages) XXX */
+	segsz_t		vm_dsize;		/* data size (pages) XXX */
+	segsz_t 	vm_ssize;		/* stack size (pages) */
+	uint32_t	vm_taddr;       /* user virtual address of text XXX */
+	uint32_t	vm_daddr;       /* user virtual address of data XXX */
+	uint32_t vm_maxsaddr; 	/* user VA at max stack growth */
+};
 struct user_vmspace {
 	int     	vm_refcnt;      /* number of references */
 	user_addr_t	vm_shm __attribute((aligned(8)));			/* SYS5 shared memory private data XXX */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -69,6 +69,7 @@
 #include <i386/cpu_data.h>
 #include <i386/machine_routines.h>
 #include <i386/cpuid.h>
+#include <i386/vmx.h>
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -76,6 +77,7 @@
 
 #include <libkern/OSAtomic.h>
 #include <sys/kdebug.h>
+
 
 #if 0
 
@@ -103,10 +105,13 @@ void machine_callstack(natural_t *buf, vm_size_t callstack_max);
 #define value_64bit(value)  ((value) & 0xFFFFFFFF00000000LL)
 #define low32(x)  ((unsigned int)((x) & 0x00000000FFFFFFFFLL))
 
+
+
+
 void
 bzero_phys_nc(
 	      addr64_t src64,
-	      vm_size_t bytes)
+	      uint32_t bytes)
 {
   bzero_phys(src64,bytes);
 }
@@ -114,7 +119,7 @@ bzero_phys_nc(
 void
 bzero_phys(
 	   addr64_t src64,
-	   vm_size_t bytes)
+	   uint32_t bytes)
 {
         mapwindow_t *map;
 
@@ -188,7 +193,7 @@ ovbcopy(
 
 
 /*
- *  Read data from a physical address. Memory should not be cache inhibited.
+ *  Read data from a physical address.
  */
 
 
@@ -244,8 +249,6 @@ ml_phys_read_long_long(pmap_paddr_t paddr )
         return result;
 }
 
-
-
 unsigned int ml_phys_read( vm_offset_t paddr)
 {
         return ml_phys_read_data((pmap_paddr_t)paddr, 4);
@@ -299,7 +302,7 @@ unsigned long long ml_phys_read_double_64(addr64_t paddr64)
 
 
 /*
- *  Write data to a physical address. Memory should not be cache inhibited.
+ *  Write data to a physical address.
  */
 
 static void
@@ -414,7 +417,7 @@ ml_probe_read(vm_offset_t paddr, unsigned int *val)
     if ((PAGE_SIZE - (paddr & PAGE_MASK)) < 4)
         return FALSE;
 
-    *val = ml_phys_read((pmap_paddr_t)paddr);
+    *val = ml_phys_read(paddr);
 
     return TRUE;
 }
@@ -559,13 +562,13 @@ void dcache_incoherent_io_store64(addr64_t pa, unsigned int count)
 
         istate = ml_set_interrupts_enabled(FALSE);
 
-        offset = pa & (linesize - 1);
+        offset = (uint32_t)(pa & (linesize - 1));
         addr   = pa - offset;
 
         map = pmap_get_mapwindow((pt_entry_t)(i386_ptob(atop_64(addr)) | INTEL_PTE_VALID));
 
         count += offset;
-        offset = addr & ((addr64_t) (page_size - 1));
+        offset = (uint32_t)(addr & ((addr64_t) (page_size - 1)));
         chunk  = page_size - offset;
 
         do
@@ -735,7 +738,6 @@ static int copyio_phys(addr64_t, addr64_t, vm_size_t, int);
 #define COPYOUTPHYS	4
 
 
-
 void inval_copy_windows(thread_t thread)
 {
         int	i;
@@ -746,7 +748,7 @@ void inval_copy_windows(thread_t thread)
 	thread->machine.nxt_window = 0;
 	thread->machine.copyio_state = WINDOWS_DIRTY;
 
-	KERNEL_DEBUG(0xeff70058 | DBG_FUNC_NONE, (int)thread, (int)thread->map, 0, 0, 0);
+	KERNEL_DEBUG(0xeff70058 | DBG_FUNC_NONE, (uintptr_t)thread_tid(thread), (int)thread->map, 0, 0, 0);
 }
 
 
@@ -825,7 +827,7 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 		return (error);
 	}
 	user_base = user_addr & ~((user_addr_t)(NBPDE - 1));
-	user_offset = user_addr & (NBPDE - 1);
+	user_offset = (vm_offset_t)(user_addr & (NBPDE - 1));
 
 	KERNEL_DEBUG(debug_type | DBG_FUNC_NONE, (int)(user_base >> 32), (int)user_base,
 		     (int)user_offset, 0, 0);
@@ -892,7 +894,7 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 			kpdp += window_index;
 
 			if ((*kpdp & PG_FRAME) != (*updp & PG_FRAME)) {
-				panic("copyio: user pdp mismatch - kpdp = 0x%x,  updp = 0x%x\n", kpdp, updp);
+				panic("copyio: user pdp mismatch - kpdp = 0x%qx,  updp = 0x%qx\n", *kpdp, *updp);
 			}
 			(void) ml_set_interrupts_enabled(istate);
 		}
@@ -1079,6 +1081,7 @@ copyio_phys(addr64_t source, addr64_t sink, vm_size_t csize, int which)
 			 * flushing the tlb after it reloaded the page table from machine.physwindow_pte
 			 */
 			istate = ml_set_interrupts_enabled(FALSE);
+
 			pmap_store_pte((current_cpu_datap()->cpu_physwindow_ptep), pentry);
 			(void) ml_set_interrupts_enabled(istate);
 
@@ -1121,13 +1124,13 @@ copyinstr(const user_addr_t user_addr,  char *kernel_addr, vm_size_t nbytes, vm_
 int
 copyoutmsg(const char *kernel_addr, user_addr_t user_addr, vm_size_t nbytes)
 {
-        return (copyio(COPYOUT, user_addr, kernel_addr, nbytes, NULL, 0));
+	return (copyio(COPYOUT, user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL, 0));
 }
 
 int
 copyout(const void *kernel_addr, user_addr_t user_addr, vm_size_t nbytes)
 {
-        return (copyio(COPYOUT, user_addr, kernel_addr, nbytes, NULL, 0));
+	return (copyio(COPYOUT, user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL, 0));
 }
 
 
@@ -1206,5 +1209,17 @@ copypv(addr64_t src64, addr64_t snk64, unsigned int size, int which)
 void
 kdp_register_callout(void)
 {
+}
+#endif
+
+#if !CONFIG_VMX
+int host_vmxon(boolean_t exclusive __unused)
+{
+	return VMX_UNSUPPORTED;
+}
+
+void host_vmxoff(void)
+{
+	return;
 }
 #endif

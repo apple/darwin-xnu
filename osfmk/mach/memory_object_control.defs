@@ -97,7 +97,7 @@ routine memory_object_change_attributes(
 routine memory_object_synchronize_completed (
 		memory_control	: memory_object_control_t;
 		offset		: memory_object_offset_t;
-		length		: vm_offset_t);
+		length		: memory_object_size_t);
 
 /*
  *	Control use of the data associated with the given
@@ -148,7 +148,7 @@ routine memory_object_destroy(
 routine memory_object_upl_request(
 		memory_control	: memory_object_control_t;
 	in	offset		: memory_object_offset_t;
-	in	size		: vm_size_t;
+	in	size		: upl_size_t;
 	out	upl		: upl_t;
 	out	page_list	: upl_page_info_array_t, CountInOut;
 	in	cntrl_flags	: integer_t);
@@ -156,8 +156,8 @@ routine memory_object_upl_request(
 routine memory_object_super_upl_request(
 		memory_control		: memory_object_control_t;
 	in	offset		: memory_object_offset_t;
-	in	size		: vm_size_t;
-	in	super_size	: vm_size_t;
+	in	size		: upl_size_t;
+	in	super_size	: upl_size_t;
 	out	upl		: upl_t;
 	out	page_list	: upl_page_info_array_t, CountInOut;
 	in	cntrl_flags	: integer_t);
@@ -167,6 +167,7 @@ routine memory_object_cluster_size(
 		control		: memory_object_control_t;
 	out	start		: memory_object_offset_t;
 	out	length		: vm_size_t;
+	out	io_streaming	: uint32_t;
 	in	fault_info	: memory_object_fault_info_t);
 
 /*

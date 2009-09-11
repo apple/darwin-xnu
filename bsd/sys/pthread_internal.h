@@ -33,135 +33,35 @@
 
 #include <kern/thread_call.h>
 
-/*
- * Mutex attributes
- */
-typedef struct 
-{
-	long sig;		     /* Unique signature for this structure */
-	int prioceiling;
-	u_int32_t protocol:2,		/* protocol attribute */
-		type:2,			/* mutex type */
-		pshared:2,
-		rfu:26;
-} pthread_mutexattr_t;
-
-#undef pthread_mutex_t
-/*
- * Mutex variables
- */
-typedef struct _pthread_mutex
-{
-	long	       sig;	      /* Unique signature for this structure */
-	lck_mtx_t *	mutex;		/* the kernel internal mutex */
-	lck_mtx_t *	lock;
-	thread_t      owner;	      /* Which thread has this mutex locked */
-	proc_t      owner_proc;	      /* Which thread has this mutex locked */
-	u_int32_t	 protocol:2,		/* protocol */
-		type:2,			/* mutex type */
-		pshared:2,			/* mutex type */
-		refcount:10,
-		lock_count:16;
-	int16_t       prioceiling;
-	int16_t	       priority;      /* Priority to restore when mutex unlocked */
-} pthread_mutex_t;
-
-#define MTX_LOCK lck_mtx_lock
-#define MTX_UNLOCK lck_mtx_unlock
-
-/*
- * Condition variable attributes
- */
-#undef pthread_condattr_t
-typedef struct 
-{
-	long	       sig;	     /* Unique signature for this structure */
-	u_int32_t	 pshared:2,		/* pshared */
-		unsupported:30;
-} pthread_condattr_t;
-
-/*
- * Condition variables
- */
-#undef pthread_cond_t
-typedef struct _pthread_cond
-{
-	long	       sig;	     /* Unique signature for this structure */
-	lck_mtx_t *	 lock;	     /* Used for internal mutex on structure */
-	u_int32_t	waiters:15,	/* Number of threads waiting */
-		   sigpending:15,	/* Number of outstanding signals */
-			pshared:2;
-	int 	refcount;
-	pthread_mutex_t * mutex;
-	proc_t      owner_proc;	      /* Which thread has this mutex locked */
-	semaphore_t	sem;
-} pthread_cond_t;
-#define COND_LOCK lck_mtx_lock
-#define COND_UNLOCK lck_mtx_unlock
-
-#undef pthread_rwlockattr_t
-typedef struct {
-	long	       sig;	      /* Unique signature for this structure */
-	int             pshared;
-	int		rfu[2];		/* reserved for future use */
-} pthread_rwlockattr_t;
-
-#undef pthread_rwlock_t
-typedef struct {
-	long 		sig;
-	lck_rw_t * rwlock;
-	int             pshared;
-	thread_t		owner;
-	int	rfu[2];
-} pthread_rwlock_t;
-
-#define _PTHREAD_NO_SIG			0x00000000
-#define _PTHREAD_MUTEX_ATTR_SIG		0x4D545841  /* 'MTXA' */
-#define _PTHREAD_MUTEX_SIG		0x4D555458  /* 'MUTX' */
-#define _PTHREAD_MUTEX_SIG_init		0x32AAABA7  /* [almost] ~'MUTX' */
-#define _PTHREAD_COND_ATTR_SIG		0x434E4441  /* 'CNDA' */
-#define _PTHREAD_COND_SIG		0x434F4E44  /* 'COND' */
-#define _PTHREAD_COND_SIG_init		0x3CB0B1BB  /* [almost] ~'COND' */
-#define _PTHREAD_ATTR_SIG		0x54484441  /* 'THDA' */
-#define _PTHREAD_ONCE_SIG		0x4F4E4345  /* 'ONCE' */
-#define _PTHREAD_ONCE_SIG_init		0x30B1BCBA  /* [almost] ~'ONCE' */
-#define _PTHREAD_SIG			0x54485244  /* 'THRD' */
-#define _PTHREAD_RWLOCK_ATTR_SIG	0x52574C41  /* 'RWLA' */
-#define _PTHREAD_RWLOCK_SIG		0x52574C4B  /* 'RWLK' */
-#define _PTHREAD_RWLOCK_SIG_init	0x2DA8B3B4  /* [almost] ~'RWLK' */
-
-#define _PTHREAD_KERN_COND_SIG		0x12345678  /*  */
-#define _PTHREAD_KERN_MUTEX_SIG		0x34567812  /*  */
-#define _PTHREAD_KERN_RWLOCK_SIG	0x56781234  /*  */
-
-
-#define PTHREAD_PROCESS_SHARED 1
-#define PTHREAD_PROCESS_PRIVATE 2
-
-#define WORKQUEUE_MAXTHREADS 64
 #define WORKITEM_SIZE 64
-#define WORKQUEUE_NUMPRIOS 5
+#define WORKQUEUE_NUMPRIOS 3
+
+#define WORKQUEUE_OVERCOMMIT	0x10000
 
 struct threadlist {
 	TAILQ_ENTRY(threadlist) th_entry;
 	thread_t th_thread;
 	int	 th_flags;
-	uint32_t th_unparked;
-	uint32_t th_affinity_tag;
+	uint32_t th_suspended;
+	uint16_t th_affinity_tag;
+	uint8_t	 th_priority;
+	uint8_t  th_policy;
 	struct workqueue *th_workq;
 	mach_vm_size_t th_stacksize;
 	mach_vm_size_t th_allocsize;
 	mach_vm_offset_t th_stackaddr;
-	mach_port_t th_thport;
+	mach_port_name_t th_thport;
 };
 #define TH_LIST_INITED 		0x01
 #define TH_LIST_RUNNING 	0x02
 #define TH_LIST_BLOCKED 	0x04
 #define TH_LIST_SUSPENDED 	0x08
+#define TH_LIST_BUSY		0x10
 
 struct workitem {
 	TAILQ_ENTRY(workitem) wi_entry;
 	user_addr_t wi_item;
+	uint32_t wi_affinity;
 };
 
 struct workitemlist {
@@ -169,44 +69,61 @@ struct workitemlist {
 	TAILQ_HEAD(, workitem) wl_freelist;
 };
 
-
 struct workqueue {
 	struct workitem wq_array[WORKITEM_SIZE * WORKQUEUE_NUMPRIOS];
         proc_t		wq_proc;
         vm_map_t	wq_map;
         task_t		wq_task;
-        thread_call_t	wq_timer_call;
+        thread_call_t	wq_atimer_call;
 	int 		wq_flags;
+	int		wq_lflags;
         int		wq_itemcount;
-        struct timeval	wq_lastran_ts;
-        struct timeval	wq_reduce_ts;
-        uint32_t	wq_stalled_count;
-        uint32_t	wq_max_threads_scheduled;
+	uint64_t 	wq_thread_yielded_timestamp;
+	uint32_t	wq_thread_yielded_count;
+	uint32_t	wq_timer_interval;
         uint32_t	wq_affinity_max;
         uint32_t	wq_threads_scheduled;
 	uint32_t	wq_nthreads;
-        uint32_t	wq_nextaffinitytag;
-	struct workitemlist  wq_list[WORKQUEUE_NUMPRIOS]; /* prio based item list */
+        uint32_t      	wq_thidlecount;
+	uint32_t	wq_reqconc[WORKQUEUE_NUMPRIOS];	  /* requested concurrency for each priority level */
+	struct workitemlist  wq_list[WORKQUEUE_NUMPRIOS]; /* priority based item list */
+	uint32_t	wq_list_bitmap;
 	TAILQ_HEAD(, threadlist) wq_thrunlist;
-	TAILQ_HEAD(wq_thidlelist, threadlist) * wq_thidlelist;
-        uint32_t      *	wq_thactivecount;
-        uint32_t      *	wq_thcount;
+	TAILQ_HEAD(, threadlist) wq_thidlelist;
+        uint32_t	*wq_thactive_count[WORKQUEUE_NUMPRIOS];
+        uint32_t	*wq_thscheduled_count[WORKQUEUE_NUMPRIOS];
+        uint64_t	*wq_lastblocked_ts[WORKQUEUE_NUMPRIOS];
 };
 #define WQ_LIST_INITED		0x01
-#define WQ_BUSY			0x02
-#define WQ_TIMER_RUNNING	0x04
-#define WQ_TIMER_WATCH		0x08
-#define WQ_ADD_TO_POOL		0x10
+#define WQ_ATIMER_RUNNING	0x02
+#define WQ_EXITING		0x04
 
-#define WQ_STALLED_WINDOW_USECS		20000
-#define WQ_REDUCE_POOL_WINDOW_USECS	3000000
-#define WQ_MAX_RUN_LATENCY_USECS	500
-#define	WQ_TIMER_INTERVAL_MSECS		40
+#define WQL_ATIMER_BUSY		0x01
+#define WQL_ATIMER_WAITING	0x02
 
-/* workq_ops commands */
+
+#define WQ_VECT_SET_BIT(vector, bit)	\
+	vector[(bit) / 32] |= (1 << ((bit) % 32))
+
+#define WQ_VECT_CLEAR_BIT(vector, bit)	\
+	vector[(bit) / 32] &= ~(1 << ((bit) % 32))
+
+#define WQ_VECT_TEST_BIT(vector, bit)	\
+	vector[(bit) / 32] & (1 << ((bit) % 32))
+
+
+#define WORKQUEUE_MAXTHREADS		512
+#define WQ_YIELDED_THRESHOLD		2000
+#define WQ_YIELDED_WINDOW_USECS		30000
+#define WQ_STALLED_WINDOW_USECS		200
+#define WQ_REDUCE_POOL_WINDOW_USECS	5000000
+#define	WQ_MAX_TIMER_INTERVAL_USECS	50000
+
+/* workq_kernreturn commands */
 #define WQOPS_QUEUE_ADD 1
 #define WQOPS_QUEUE_REMOVE 2
 #define WQOPS_THREAD_RETURN 4
+#define WQOPS_THREAD_SETCONC  8
 
 #define PTH_DEFAULT_STACKSIZE 512*1024
 #define PTH_DEFAULT_GUARDSIZE 4*1024
@@ -214,17 +131,10 @@ struct workqueue {
 
 void workqueue_exit(struct proc *);
 
-pthread_mutex_t * pthread_id_to_mutex(int mutexid);
-int	pthread_id_mutex_add(pthread_mutex_t *);
-void	pthread_id_mutex_remove(int);
-void pthread_mutex_release(pthread_mutex_t *);
-pthread_cond_t * pthread_id_to_cond(int condid);
-int	pthread_id_cond_add(pthread_cond_t *);
-void	pthread_id_cond_remove(int);
-void pthread_cond_release(pthread_cond_t *);
-
-void pthread_list_lock(void);
-void pthread_list_unlock(void);
+void pthread_init(void);
+extern lck_grp_attr_t   *pthread_lck_grp_attr;
+extern lck_grp_t    *pthread_lck_grp;
+extern lck_attr_t   *pthread_lck_attr;
 
 #endif /* _SYS_PTHREAD_INTERNAL_H_ */
 

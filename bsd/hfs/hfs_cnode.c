@@ -92,8 +92,12 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 
 	/*
 	 * Ignore nodes related to stale file handles.
+	 * We are peeking at the cnode flag without the lock, but if C_NOEXISTS
+	 * is set, that means the cnode doesn't have any backing store in the 
+	 * catalog anymore, and is otherwise safe to force a recycle
 	 */
-	if (cp->c_mode == 0) {
+	
+	if (cp->c_flag & C_NOEXISTS) {
 		vnode_recycle(vp);
 		return (0);
 	}
@@ -105,16 +109,22 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 
 	(void) hfs_lock(cp, HFS_FORCE_LOCK);
 
+	if (cp->c_datafork)
+		++forkcount;
+	if (cp->c_rsrcfork)
+		++forkcount;
+
 	/*
 	 * We should lock cnode before checking the flags in the 
 	 * condition below and should unlock the cnode before calling 
 	 * ubc_setsize() as cluster code can call other HFS vnops which
 	 * will try to acquire the same cnode lock and cause deadlock.
+	 * Only call ubc_setsize to 0 if we are the last fork.
 	 */
 	if ((v_type == VREG || v_type == VLNK) &&
-	    (cp->c_flag & C_DELETED) &&
-	    (VTOF(vp)->ff_blocks != 0)) {
-	    	hfs_unlock(cp); 
+			(cp->c_flag & C_DELETED) &&
+			(VTOF(vp)->ff_blocks != 0) && (forkcount == 1)) {
+		hfs_unlock(cp); 
 		ubc_setsize(vp, 0);
 		(void) hfs_lock(cp, HFS_FORCE_LOCK);
 	}
@@ -128,34 +138,59 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 	if (v_type == VDIR) {
 		hfs_reldirhints(cp, 0);
 	}
-	
 	if (cp->c_flag & C_HARDLINK) {
 		hfs_relorigins(cp);
 	}
 
-	if (cp->c_datafork)
-		++forkcount;
-	if (cp->c_rsrcfork)
-		++forkcount;
+	/* Hurry the recycling process along if we're an open-unlinked file */
+	if((v_type == VREG || v_type == VLNK) && (cp->c_flag & C_DELETED)) {
+		recycle = 1;	
+	}
 
-	/* If needed, get rid of any fork's data for a deleted file */
-	if ((v_type == VREG || v_type == VLNK) && (cp->c_flag & C_DELETED)) {
+	/*
+	 * This check is slightly complicated.  We should only truncate data 
+	 * in very specific cases for open-unlinked files.  This is because
+	 * we want to ensure that the resource fork continues to be available
+	 * if the caller has the data fork open.  However, this is not symmetric; 
+	 * someone who has the resource fork open need not be able to access the data
+	 * fork once the data fork has gone inactive.
+	 * 
+	 * If we're the last fork, then we have cleaning up to do.
+	 * 
+	 * A) last fork, and vp == c_vp
+	 *	Truncate away own fork dat. If rsrc fork is not in core, truncate it too.
+	 *
+	 * B) last fork, and vp == c_rsrc_vp
+	 *	Truncate ourselves, assume data fork has been cleaned due to C).
+	 *
+	 * If we're not the last fork, then things are a little different:
+	 *
+	 * C) not the last fork, vp == c_vp
+	 *	Truncate ourselves.  Once the file has gone out of the namespace,
+	 *	it cannot be further opened.  Further access to the rsrc fork may 
+	 *	continue, however.
+	 *
+	 * D) not the last fork, vp == c_rsrc_vp
+	 *	Don't enter the block below, just clean up vnode and push it out of core.
+	 */
+
+	if ((v_type == VREG || v_type == VLNK) && (cp->c_flag & C_DELETED) &&
+			((forkcount == 1) || (!VNODE_IS_RSRC(vp)))) {
 		if (VTOF(vp)->ff_blocks != 0) {
 			/*
 			 * Since we're already inside a transaction,
 			 * tell hfs_truncate to skip the ubc_setsize.
 			 */
-			error = hfs_truncate(vp, (off_t)0, IO_NDELAY, 1, ap->a_context);
+			error = hfs_truncate(vp, (off_t)0, IO_NDELAY, 1, 0, ap->a_context);
 			if (error)
 				goto out;
 			truncated = 1;
 		}
-		recycle = 1;
 
-		/*
-		 * Check if there's any resource fork blocks that need to
-		 * be reclaimed.  This covers the case where there is a
-		 * resource fork but its not in core.
+		/* 
+		 * If c_blocks > 0 and we are the last fork (data fork), then
+		 * we can go and and truncate away the rsrc fork blocks if
+		 * they were not in core.
 		 */
 		if ((cp->c_blocks > 0) && (forkcount == 1) && (vp != cp->c_rsrc_vp)) {
 			struct vnode *rvp = NULLVP;
@@ -167,20 +202,21 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 			 * Defer the vnode_put and ubc_setsize on rvp until hfs_unlock().
 			 */
 			cp->c_flag |= C_NEED_RVNODE_PUT | C_NEED_RSRC_SETSIZE;
-			error = hfs_truncate(rvp, (off_t)0, IO_NDELAY, 1, ap->a_context);
+			error = hfs_truncate(rvp, (off_t)0, IO_NDELAY, 1, 0, ap->a_context);
 			if (error)
 				goto out;
 			vnode_recycle(rvp);  /* all done with this vnode */
 		}
 	}
 
-	// If needed, get rid of any xattrs that this file may have.
+	// If needed, get rid of any xattrs that this file (or directory) may have.
 	// Note that this must happen outside of any other transactions
 	// because it starts/ends its own transactions and grabs its
 	// own locks.  This is to prevent a file with a lot of attributes
 	// from creating a transaction that is too large (which panics).
 	//
-	if ((cp->c_attr.ca_recflags & kHFSHasAttributesMask) != 0 && (cp->c_flag & C_DELETED)) {
+	if ((cp->c_attr.ca_recflags & kHFSHasAttributesMask) != 0 && 
+			(cp->c_flag & C_DELETED) && (forkcount <= 1)) {
 		hfs_removeallattr(hfsmp, cp->c_fileid);
 	}
 
@@ -193,12 +229,12 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 		 * Mark cnode in transit so that no one can get this 
 		 * cnode from cnode hash.
 		 */
-	        // hfs_chash_mark_in_transit(cp);
+	        // hfs_chash_mark_in_transit(hfsmp, cp);
 	        // XXXdbg - remove the cnode from the hash table since it's deleted
 	        //          otherwise someone could go to sleep on the cnode and not
 	        //          be woken up until this vnode gets recycled which could be
 	        //          a very long time...
-		hfs_chashremove(cp);
+		hfs_chashremove(hfsmp, cp);
 
 		cp->c_flag |= C_NOEXISTS;   // XXXdbg
 		cp->c_rdev = 0;
@@ -264,8 +300,8 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 		if (hfsmp->hfs_flags & HFS_QUOTAS)
 			(void)hfs_chkiq(cp, -1, NOCRED, 0);
 #endif /* QUOTA */
-
-		cp->c_mode = 0;
+		
+		/* Already set C_NOEXISTS at the beginning of this block */
 		cp->c_flag &= ~C_DELETED;
 		cp->c_touch_chgtime = TRUE;
 		cp->c_touch_modtime = TRUE;
@@ -282,9 +318,9 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 	 */
 	if ((cp->c_flag & C_MODIFIED) ||
 	    cp->c_touch_acctime || cp->c_touch_chgtime || cp->c_touch_modtime) {
-		if ((cp->c_flag & C_MODIFIED) || cp->c_touch_modtime){
+	    if ((cp->c_flag & C_MODIFIED) || cp->c_touch_modtime){
 			cp->c_flag |= C_FORCEUPDATE;
-		}
+		}	
 		hfs_update(vp, 0);
 	}
 out:
@@ -296,6 +332,13 @@ out:
 	    hfs_end_transaction(hfsmp);
 	    started_tr = 0;
 	}
+	/* 
+	 * This has been removed from the namespace and has no backing store
+	 * in the catalog, so we should force a reclaim as soon as possible.
+	 * Also, we want to check the flag while we still have the cnode lock.
+	 */
+	if (cp->c_flag & C_NOEXISTS) 
+		recycle = 1;
 
 	hfs_unlock(cp);
 
@@ -306,7 +349,7 @@ out:
 	 * If we are done with the vnode, reclaim it
 	 * so that it can be reused immediately.
 	 */
-	if (cp->c_mode == 0 || recycle)
+	if (recycle)
 		vnode_recycle(vp);
 
 	return (error);
@@ -321,8 +364,9 @@ hfs_filedone(struct vnode *vp, vfs_context_t context)
 	struct cnode *cp;
 	struct filefork *fp;
 	struct hfsmount *hfsmp;
+	struct rl_entry *invalid_range;
 	off_t leof;
-	u_long blks, blocksize;
+	u_int32_t blks, blocksize;
 
 	cp = VTOC(vp);
 	fp = VTOF(vp);
@@ -340,8 +384,7 @@ hfs_filedone(struct vnode *vp, vfs_context_t context)
 	 * Explicitly zero out the areas of file
 	 * that are currently marked invalid.
 	 */
-	while (!CIRCLEQ_EMPTY(&fp->ff_invalidranges)) {
-		struct rl_entry *invalid_range = CIRCLEQ_FIRST(&fp->ff_invalidranges);
+	while ((invalid_range = TAILQ_FIRST(&fp->ff_invalidranges))) {
 		off_t start = invalid_range->rl_start;
 		off_t end = invalid_range->rl_end;
 	
@@ -368,7 +411,7 @@ hfs_filedone(struct vnode *vp, vfs_context_t context)
 	 * Shrink the peof to the smallest size neccessary to contain the leof.
 	 */
 	if (blks < fp->ff_blocks)
-		(void) hfs_truncate(vp, leof, IO_NDELAY, 0, context);
+		(void) hfs_truncate(vp, leof, IO_NDELAY, 0, 0, context);
 	hfs_unlock(cp);
 	(void) cluster_push(vp, IO_CLOSE);
 	hfs_lock(cp, HFS_FORCE_LOCK);
@@ -396,28 +439,12 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 	struct cnode *cp;
 	struct filefork *fp = NULL;
 	struct filefork *altfp = NULL;
+	struct hfsmount *hfsmp = VTOHFS(vp);
 	int reclaim_cnode = 0;
 
 	(void) hfs_lock(VTOC(vp), HFS_FORCE_LOCK);
 	cp = VTOC(vp);
-
-	/*
-	 * Check if a deleted resource fork vnode missed a
-	 * VNOP_INACTIVE call and requires truncation.
-	 */
-	if (VNODE_IS_RSRC(vp) &&
-	    (cp->c_flag & C_DELETED) &&
-	    (VTOF(vp)->ff_blocks != 0)) {
-		hfs_unlock(cp);
-		ubc_setsize(vp, 0);
-
-		hfs_lock_truncate(cp, TRUE);
-		(void) hfs_lock(VTOC(vp), HFS_FORCE_LOCK);
-
-		(void) hfs_truncate(vp, (off_t)0, IO_NDELAY, 1, ap->a_context);
-
-		hfs_unlock_truncate(cp, TRUE);
-	}
+	
 	/*
 	 * A file may have had delayed allocations, in which case hfs_update
 	 * would not have updated the catalog record (cat_update).  We need
@@ -425,10 +452,10 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 	 * force the update, or hfs_update will again skip the cat_update.
 	 */
 	if ((cp->c_flag & C_MODIFIED) ||
-		cp->c_touch_acctime || cp->c_touch_chgtime || cp->c_touch_modtime) {
-		if ((cp->c_flag & C_MODIFIED) || cp->c_touch_modtime){
+	    cp->c_touch_acctime || cp->c_touch_chgtime || cp->c_touch_modtime) {
+	    if ((cp->c_flag & C_MODIFIED) || cp->c_touch_modtime){
 			cp->c_flag |= C_FORCEUPDATE;
-		}	
+		}
 		hfs_update(vp, 0);
 	}
 
@@ -459,14 +486,14 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 		cp->c_rsrcfork = NULL;
 		cp->c_rsrc_vp = NULL;
 	} else {
-	        panic("hfs_vnop_reclaim: vp points to wrong cnode\n");
+	        panic("hfs_vnop_reclaim: vp points to wrong cnode (vp=%p cp->c_vp=%p cp->c_rsrc_vp=%p)\n", vp, cp->c_vp, cp->c_rsrc_vp);
 	}
 	/*
 	 * On the last fork, remove the cnode from its hash chain.
 	 */
 	if (altfp == NULL) {
 		/* If we can't remove it then the cnode must persist! */
-		if (hfs_chashremove(cp) == 0)
+		if (hfs_chashremove(hfsmp, cp) == 0)
 			reclaim_cnode = 1;
 		/* 
 		 * Remove any directory hints
@@ -474,11 +501,10 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 		if (vnode_isdir(vp)) {
 			hfs_reldirhints(cp, 0);
 		}
-	
-		if (cp->c_flag & C_HARDLINK) {
+		
+		if(cp->c_flag & C_HARDLINK) {
 			hfs_relorigins(cp);
 		}
-
 	}
 	/* Release the file fork and related data */
 	if (fp) {
@@ -493,7 +519,7 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 	 * If there was only one active fork then we can release the cnode.
 	 */
 	if (reclaim_cnode) {
-		hfs_chashwakeup(cp, H_ALLOC | H_TRANSIT);
+		hfs_chashwakeup(hfsmp, cp, H_ALLOC | H_TRANSIT);
 		hfs_reclaim_cnode(cp);
 	} else /* cnode in use */ {
 		hfs_unlock(cp);
@@ -505,6 +531,7 @@ hfs_vnop_reclaim(struct vnop_reclaim_args *ap)
 
 
 extern int (**hfs_vnodeop_p) (void *);
+extern int (**hfs_std_vnodeop_p) (void *);
 extern int (**hfs_specop_p)  (void *);
 #if FIFO
 extern int (**hfs_fifoop_p)  (void *);
@@ -533,6 +560,7 @@ hfs_getnewvnode(
 	struct vnode *tvp = NULLVP;
 	struct cnode *cp = NULL;
 	struct filefork *fp = NULL;
+	int hfs_standard = 0;
 	int retval;
 	int issystemfile;
 	int wantrsrc;
@@ -541,6 +569,8 @@ hfs_getnewvnode(
 #if QUOTA
 	int i;
 #endif /* QUOTA */
+
+	hfs_standard = (hfsmp->hfs_flags & HFS_STANDARD);
 
 	if (attrp->ca_fileid == 0) {
 		*vpp = NULL;
@@ -573,7 +603,7 @@ hfs_getnewvnode(
 	/*
 	 * Get a cnode (new or existing)
 	 */
-	cp = hfs_chash_getcnode(hfsmp->hfs_raw_dev, attrp->ca_fileid, vpp, wantrsrc, (flags & GNV_SKIPLOCK));
+	cp = hfs_chash_getcnode(hfsmp, attrp->ca_fileid, vpp, wantrsrc, (flags & GNV_SKIPLOCK));
 
 	/*
 	 * If the id is no longer valid for lookups we'll get back a NULL cp.
@@ -595,11 +625,14 @@ hfs_getnewvnode(
 	 */
 	if (ISSET(cp->c_hflag, H_ALLOC)) {
 		lck_rw_init(&cp->c_truncatelock, hfs_rwlock_group, hfs_lock_attr);
+#if HFS_COMPRESSION
+		cp->c_decmp = NULL;
+#endif
 
 		/* Make sure its still valid (ie exists on disk). */
 		if (!(flags & GNV_CREATE) &&
 		    !hfs_valid_cnode(hfsmp, dvp, (wantrsrc ? NULL : cnp), cp->c_fileid)) {
-			hfs_chash_abort(cp);
+			hfs_chash_abort(hfsmp, cp);
 			hfs_reclaim_cnode(cp);
 			*vpp = NULL;
 			return (ENOENT);
@@ -730,16 +763,24 @@ hfs_getnewvnode(
 		vfsp.vnfs_cnp = cnp;
 	}
 	vfsp.vnfs_fsnode = cp;
+
+	/*
+	 * Special Case HFS Standard VNOPs from HFS+, since
+	 * HFS standard is readonly/deprecated as of 10.6 
+	 */
+
 #if FIFO
-	if (vtype == VFIFO )
+	if (vtype == VFIFO ) 
 		vfsp.vnfs_vops = hfs_fifoop_p;
 	else
 #endif
 	if (vtype == VBLK || vtype == VCHR)
 		vfsp.vnfs_vops = hfs_specop_p;
-	else
+	else if (hfs_standard)
+		vfsp.vnfs_vops = hfs_std_vnodeop_p;
+	else 
 		vfsp.vnfs_vops = hfs_vnodeop_p;
-		
+
 	if (vtype == VBLK || vtype == VCHR)
 		vfsp.vnfs_rdev = attrp->ca_rdev;
 	else
@@ -777,11 +818,11 @@ hfs_getnewvnode(
 		 * occurred during the attachment, then cleanup the cnode.
 		 */
 		if ((cp->c_vp == NULL) && (cp->c_rsrc_vp == NULL)) {
-			hfs_chash_abort(cp);
+			hfs_chash_abort(hfsmp, cp);
 			hfs_reclaim_cnode(cp);
 		} 
 		else {
-			hfs_chashwakeup(cp, H_ALLOC | H_ATTACH);
+			hfs_chashwakeup(hfsmp, cp, H_ALLOC | H_ATTACH);
 			if ((flags & GNV_SKIPLOCK) == 0){
 				hfs_unlock(cp);
 			}
@@ -800,11 +841,16 @@ hfs_getnewvnode(
 	 * have the chance to process the resource fork.
 	 */
 	if (VNODE_IS_RSRC(vp)) {
+		int err;
+		KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW, 37)), cp->c_vp, cp->c_rsrc_vp, 0, 0, 0);
+
 		/* Force VL_NEEDINACTIVE on this vnode */
-		vnode_ref(vp);
-		vnode_rele(vp);
+		err = vnode_ref(vp);
+		if (err == 0) {
+			vnode_rele(vp);
+		}
 	}
-	hfs_chashwakeup(cp, H_ALLOC | H_ATTACH);
+	hfs_chashwakeup(hfsmp, cp, H_ALLOC | H_ATTACH);
 
 	/*
 	 * Stop tracking an active hot file.
@@ -847,6 +893,12 @@ hfs_reclaim_cnode(struct cnode *cp)
 
 	lck_rw_destroy(&cp->c_rwlock, hfs_rwlock_group);
 	lck_rw_destroy(&cp->c_truncatelock, hfs_rwlock_group);
+#if HFS_COMPRESSION
+	if (cp->c_decmp) {
+		decmpfs_cnode_destroy(cp->c_decmp);
+		FREE_ZONE(cp->c_decmp, sizeof(*(cp->c_decmp)), M_DECMPFS_CNODE);
+	}
+#endif
 	bzero(cp, sizeof(struct cnode));
 	FREE_ZONE(cp, sizeof(struct cnode), M_HFSNODE);
 }
@@ -917,11 +969,13 @@ hfs_touchtimes(struct hfsmount *hfsmp, struct cnode* cp)
 	 *	. MNT_NOATIME is set
 	 *	. a file system freeze is in progress
 	 *	. a file system resize is in progress
+	 *	. the vnode associated with this cnode is marked for rapid aging
 	 */
 	if (cp->c_touch_acctime) {
 		if ((vfs_flags(hfsmp->hfs_mp) & MNT_NOATIME) ||
 		    (hfsmp->hfs_freezing_proc != NULL) ||
-		    (hfsmp->hfs_flags & HFS_RESIZE_IN_PROGRESS))
+		    (hfsmp->hfs_flags & HFS_RESIZE_IN_PROGRESS) ||
+		    (cp->c_vp && vnode_israge(cp->c_vp)))
 			cp->c_touch_acctime = FALSE;
 	}
 	if (cp->c_touch_acctime || cp->c_touch_chgtime || cp->c_touch_modtime) {
@@ -1121,7 +1175,7 @@ hfs_isordered(struct cnode *cp1, struct cnode *cp2)
 __private_extern__
 int
 hfs_lockfour(struct cnode *cp1, struct cnode *cp2, struct cnode *cp3,
-             struct cnode *cp4, enum hfslocktype locktype)
+             struct cnode *cp4, enum hfslocktype locktype, struct cnode **error_cnode)
 {
 	struct cnode * a[3];
 	struct cnode * b[3];
@@ -1129,6 +1183,9 @@ hfs_lockfour(struct cnode *cp1, struct cnode *cp2, struct cnode *cp3,
 	struct cnode * tmp;
 	int i, j, k;
 	int error;
+	if (error_cnode) {
+		*error_cnode = NULL;
+	}
 
 	if (hfs_isordered(cp1, cp2)) {
 		a[0] = cp1; a[1] = cp2;
@@ -1159,6 +1216,10 @@ hfs_lockfour(struct cnode *cp1, struct cnode *cp2, struct cnode *cp3,
 	for (i = 0; i < k; ++i) {
 		if (list[i])
 			if ((error = hfs_lock(list[i], locktype))) {
+				/* Only stuff error_cnode if requested */
+				if (error_cnode) {
+					*error_cnode = list[i];
+				}
 				/* Drop any locks we acquired. */
 				while (--i >= 0) {
 					if (list[i])

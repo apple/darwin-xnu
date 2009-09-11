@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -113,11 +113,11 @@ static OSErr ReadBitmapBlock(
 	ExtendedVCB		*vcb,
 	u_int32_t		bit,
 	u_int32_t		**buffer,
-	u_int32_t		*blockRef);
+	uintptr_t		*blockRef);
 
 static OSErr ReleaseBitmapBlock(
 	ExtendedVCB		*vcb,
-	u_int32_t		blockRef,
+	uintptr_t		blockRef,
 	Boolean			dirty);
 
 static OSErr BlockAllocateAny(
@@ -195,6 +195,39 @@ static OSErr BlockAllocateKnown(
 ;	 The volume bitmap is read and updated; the volume bitmap cache may be changed.
 ;________________________________________________________________________________
 */
+static void
+sanity_check_free_ext(__unused ExtendedVCB *vcb, __unused int check_allocated)
+{
+#if DEBUG
+	u_int32_t i, j;
+
+	for(i=0; i < vcb->vcbFreeExtCnt; i++) {
+		u_int32_t start, nblocks;
+
+		start   = vcb->vcbFreeExt[i].startBlock;
+		nblocks = vcb->vcbFreeExt[i].blockCount;
+
+
+		if (nblocks == 0) {
+			panic("hfs: %p: slot %d in the free extent array had a zero count (%d)\n", vcb, i, start);
+		}
+
+		if (check_allocated && hfs_isallocated(vcb, start, nblocks)) {
+			panic("hfs: %p: slot %d in the free extent array is bad (%d / %d)\n",
+			      vcb, i, start, nblocks);
+		}
+
+		for(j=i+1; j < vcb->vcbFreeExtCnt; j++) {
+			if (start == vcb->vcbFreeExt[j].startBlock) {
+				panic("hfs: %p: slot %d/%d are dups?! (%d / %d ; %d / %d)\n",
+				      vcb, i, j, start, nblocks, vcb->vcbFreeExt[i].startBlock,
+				      vcb->vcbFreeExt[i].blockCount);
+			}
+		}
+	}
+#endif
+}
+
 
 __private_extern__
 OSErr BlockAllocate (
@@ -248,7 +281,11 @@ OSErr BlockAllocate (
 	//
 	if (startingBlock == 0) {
 		HFS_MOUNT_LOCK(vcb, TRUE);
-		startingBlock = vcb->nextAllocation;
+		if (vcb->hfs_flags & HFS_HAS_SPARSE_DEVICE) {
+			startingBlock = vcb->sparseAllocation;
+		} else {
+			startingBlock = vcb->nextAllocation;
+		}
 		HFS_MOUNT_UNLOCK(vcb, TRUE);
 		updateAllocPtr = true;
 	}
@@ -271,9 +308,8 @@ OSErr BlockAllocate (
 		    (*actualStartBlock > startingBlock) &&
 		    ((*actualStartBlock < VCBTOHFS(vcb)->hfs_metazone_start) ||
 	    	     (*actualStartBlock > VCBTOHFS(vcb)->hfs_metazone_end))) {
-			HFS_MOUNT_LOCK(vcb, TRUE);
-			HFS_UPDATE_NEXT_ALLOCATION(vcb, *actualStartBlock);
-			HFS_MOUNT_UNLOCK(vcb, TRUE);
+
+			updateAllocPtr = true;
 		}
 	} else {
 		/*
@@ -301,6 +337,8 @@ Exit:
 	// still need to update things like the free block count).
 	//
 	if (*actualNumBlocks != 0) {
+		int i,j;
+
 		//
 		//	If we used the volume's roving allocation pointer, then we need to update it.
 		//	Adding in the length of the current allocation might reduce the next allocate
@@ -311,17 +349,50 @@ Exit:
 		//
 		HFS_MOUNT_LOCK(vcb, TRUE);
 
+		if (vcb->vcbFreeExtCnt == 0 && vcb->hfs_freed_block_count == 0) {
+			vcb->sparseAllocation = *actualStartBlock;
+		}
+		if (*actualNumBlocks < vcb->hfs_freed_block_count) {
+			vcb->hfs_freed_block_count -= *actualNumBlocks;
+		} else {
+			vcb->hfs_freed_block_count = 0;
+		}
+		
 		if (updateAllocPtr &&
 		    ((*actualStartBlock < VCBTOHFS(vcb)->hfs_metazone_start) ||
 	    	     (*actualStartBlock > VCBTOHFS(vcb)->hfs_metazone_end))) {
 			HFS_UPDATE_NEXT_ALLOCATION(vcb, *actualStartBlock);
 		}
+
+		for(i=0; i < (int)vcb->vcbFreeExtCnt; i++) {
+			u_int32_t start, end;
+
+			start = vcb->vcbFreeExt[i].startBlock;
+			end   = start + vcb->vcbFreeExt[i].blockCount;
+
+			if (   (*actualStartBlock >= start && *actualStartBlock < end)
+			    || ((*actualStartBlock + *actualNumBlocks) > start && *actualStartBlock < start)) {
+
+				for(j=i; j < (int)vcb->vcbFreeExtCnt-1; j++) {
+					vcb->vcbFreeExt[j] = vcb->vcbFreeExt[j+1];
+				}
+
+				vcb->vcbFreeExtCnt--;
+				i--;   // so we'll check the guy we just copied down...
+				
+				// keep looping because we may have invalidated more
+				// than one entry in the array
+			}
+		}
+		
 		//
 		//	Update the number of free blocks on the volume
 		//
 		vcb->freeBlocks -= *actualNumBlocks;
 		MarkVCBDirty(vcb);
 		HFS_MOUNT_UNLOCK(vcb, TRUE);
+
+		sanity_check_free_ext(vcb, 1);
 
 		hfs_generate_volume_notifications(VCBTOHFS(vcb));
 	}
@@ -357,6 +428,7 @@ OSErr BlockDeallocate (
 	u_int32_t		numBlocks)		//	Number of contiguous blocks to deallocate
 {
 	OSErr			err;
+	u_int32_t		tempWord;
 	
 	//
 	//	If no blocks to deallocate, then exit early
@@ -378,10 +450,67 @@ OSErr BlockDeallocate (
 	//
 	HFS_MOUNT_LOCK(vcb, TRUE);
 	vcb->freeBlocks += numBlocks;
-	if (vcb->nextAllocation == (firstBlock + numBlocks))
+	vcb->hfs_freed_block_count += numBlocks;
+	if (firstBlock < vcb->sparseAllocation) {
+		vcb->sparseAllocation = firstBlock;
+	}
+
+	if (vcb->nextAllocation == (firstBlock + numBlocks)) {
 		HFS_UPDATE_NEXT_ALLOCATION(vcb, (vcb->nextAllocation - numBlocks));
+	}
+
+	tempWord = vcb->vcbFreeExtCnt;
+	//	Add this free chunk to the free extent list
+	if (vcb->hfs_flags & HFS_HAS_SPARSE_DEVICE) {
+		// Sorted by start block
+		if (tempWord == kMaxFreeExtents && vcb->vcbFreeExt[kMaxFreeExtents-1].startBlock > firstBlock)
+			--tempWord;
+		if (tempWord < kMaxFreeExtents)
+		{
+			//	We're going to add this extent.  Bubble any smaller extents down in the list.
+			while (tempWord && vcb->vcbFreeExt[tempWord-1].startBlock > firstBlock)
+			{
+				vcb->vcbFreeExt[tempWord] = vcb->vcbFreeExt[tempWord-1];
+				if (vcb->vcbFreeExt[tempWord].startBlock < vcb->sparseAllocation) {
+					vcb->sparseAllocation = vcb->vcbFreeExt[tempWord].startBlock;
+				}
+				--tempWord;
+			}
+			vcb->vcbFreeExt[tempWord].startBlock = firstBlock;
+			vcb->vcbFreeExt[tempWord].blockCount = numBlocks;
+			
+			if (vcb->vcbFreeExtCnt < kMaxFreeExtents) {
+				++vcb->vcbFreeExtCnt;
+			}
+		}
+	} else {
+		// Sorted by num blocks
+		if (tempWord == kMaxFreeExtents && vcb->vcbFreeExt[kMaxFreeExtents-1].blockCount < numBlocks)
+			--tempWord;
+		if (tempWord < kMaxFreeExtents)
+		{
+			//	We're going to add this extent.  Bubble any smaller extents down in the list.
+			while (tempWord && vcb->vcbFreeExt[tempWord-1].blockCount < numBlocks)
+			{
+				vcb->vcbFreeExt[tempWord] = vcb->vcbFreeExt[tempWord-1];
+				if (vcb->vcbFreeExt[tempWord].startBlock < vcb->sparseAllocation) {
+					vcb->sparseAllocation = vcb->vcbFreeExt[tempWord].startBlock;
+				}
+				--tempWord;
+			}
+			vcb->vcbFreeExt[tempWord].startBlock = firstBlock;
+			vcb->vcbFreeExt[tempWord].blockCount = numBlocks;
+			
+			if (vcb->vcbFreeExtCnt < kMaxFreeExtents) {
+				++vcb->vcbFreeExtCnt;
+			}
+		}
+	}
+
 	MarkVCBDirty(vcb);
   	HFS_MOUNT_UNLOCK(vcb, TRUE); 
+
+	sanity_check_free_ext(vcb, 1);
 
 	hfs_generate_volume_notifications(VCBTOHFS(vcb));
 Exit:
@@ -401,7 +530,7 @@ MetaZoneFreeBlocks(ExtendedVCB *vcb)
 {
 	u_int32_t freeblocks;
 	u_int32_t *currCache;
-	u_int32_t blockRef;
+	uintptr_t blockRef;
 	u_int32_t bit;
 	u_int32_t lastbit;
 	int bytesleft;
@@ -494,7 +623,7 @@ static OSErr ReadBitmapBlock(
 	ExtendedVCB		*vcb,
 	u_int32_t		bit,
 	u_int32_t		**buffer,
-	u_int32_t		*blockRef)
+	uintptr_t		*blockRef)
 {
 	OSErr			err;
 	struct buf *bp = NULL;
@@ -526,7 +655,7 @@ static OSErr ReadBitmapBlock(
 			*blockRef = 0;
 			*buffer = NULL;
 		} else {
-			*blockRef = (u_int32_t)bp;
+			*blockRef = (uintptr_t)bp;
 			*buffer = (u_int32_t *)buf_dataptr(bp);
 		}
 	}
@@ -550,14 +679,14 @@ static OSErr ReadBitmapBlock(
 */
 static OSErr ReleaseBitmapBlock(
 	ExtendedVCB		*vcb,
-	u_int32_t		blockRef,
+	uintptr_t		blockRef,
 	Boolean			dirty)
 {
 	struct buf *bp = (struct buf *)blockRef;
 	
 	if (blockRef == 0) {
 		if (dirty)
-			panic("ReleaseBitmapBlock: missing bp");
+			panic("hfs: ReleaseBitmapBlock: missing bp");
 		return (0);
 	}
 
@@ -684,7 +813,7 @@ static OSErr BlockAllocateAny(
 	register u_int32_t	wordsLeft;		//	Number of words left in this bitmap block
 	u_int32_t  *buffer = NULL;
 	u_int32_t  *currCache = NULL;
-	u_int32_t  blockRef;
+	uintptr_t  blockRef;
 	u_int32_t  bitsPerBlock;
 	u_int32_t  wordsPerBlock;
 	Boolean dirty = false;
@@ -865,7 +994,7 @@ Exit:
 
 	// sanity check
 	if ((*actualStartBlock + *actualNumBlocks) > vcb->allocLimit)
-		panic("BlockAllocateAny: allocation overflow on \"%s\"", vcb->vcbVN);
+		panic("hfs: BlockAllocateAny: allocation overflow on \"%s\"", vcb->vcbVN);
 	}
 	else {
 		*actualStartBlock = 0;
@@ -899,6 +1028,7 @@ Returns:
 	dskFulErr		Free extent cache is empty
 _______________________________________________________________________
 */
+
 static OSErr BlockAllocateKnown(
 	ExtendedVCB		*vcb,
 	u_int32_t		maxBlocks,
@@ -909,8 +1039,8 @@ static OSErr BlockAllocateKnown(
 	u_int32_t		i;
 	u_int32_t		foundBlocks;
 	u_int32_t		newStartBlock, newBlockCount;
-	
-	if (vcb->vcbFreeExtCnt == 0)
+
+	if (vcb->vcbFreeExtCnt == 0 || vcb->vcbFreeExt[0].blockCount == 0)
 		return dskFulErr;
 
 	//	Just grab up to maxBlocks of the first (largest) free exent.
@@ -920,9 +1050,26 @@ static OSErr BlockAllocateKnown(
 		foundBlocks = maxBlocks;
 	*actualNumBlocks = foundBlocks;
 	
+	if (vcb->hfs_flags & HFS_HAS_SPARSE_DEVICE) {
+		// since sparse volumes keep the free extent list sorted by starting
+		// block number, the list won't get re-ordered, it may only shrink
+		//
+		vcb->vcbFreeExt[0].startBlock += foundBlocks;
+		vcb->vcbFreeExt[0].blockCount -= foundBlocks;
+		if (vcb->vcbFreeExt[0].blockCount == 0) {
+			for(i=1; i < vcb->vcbFreeExtCnt; i++) {
+				vcb->vcbFreeExt[i-1] = vcb->vcbFreeExt[i];
+			}
+			vcb->vcbFreeExtCnt--;
+		}
+
+		goto done;
+	}
+
 	//	Adjust the start and length of that extent.
 	newStartBlock = vcb->vcbFreeExt[0].startBlock + foundBlocks;
 	newBlockCount = vcb->vcbFreeExt[0].blockCount - foundBlocks;
+		
 	
 	//	The first extent might not be the largest anymore.  Bubble up any
 	//	(now larger) extents to the top of the list.
@@ -942,9 +1089,9 @@ static OSErr BlockAllocateKnown(
 	//	If this is now the smallest known free extent, then it might be smaller than
 	//	other extents we didn't keep track of.  So, just forget about this extent.
 	//	After the previous loop, (i-1) is the index of the extent we just allocated from.
-	if (i == vcb->vcbFreeExtCnt)
+	if (newBlockCount == 0)
 	{
-		//	It's now the smallest extent, so forget about it
+		// then just reduce the number of free extents since this guy got deleted
 		--vcb->vcbFreeExtCnt;
 	}
 	else
@@ -953,7 +1100,8 @@ static OSErr BlockAllocateKnown(
 		vcb->vcbFreeExt[i-1].startBlock = newStartBlock;
 		vcb->vcbFreeExt[i-1].blockCount = newBlockCount;
 	}
-	
+
+done:
 	// sanity check
 	if ((*actualStartBlock + *actualNumBlocks) > vcb->allocLimit) 
 	{
@@ -970,6 +1118,8 @@ static OSErr BlockAllocateKnown(
 		//
 		err = BlockMarkAllocated(vcb, *actualStartBlock, *actualNumBlocks);
 	}
+
+	sanity_check_free_ext(vcb, 1);
 
 	return err;
 }
@@ -1004,7 +1154,7 @@ OSErr BlockMarkAllocated(
 	u_int32_t		firstBit;		//	Bit index within word of first bit to allocate
 	u_int32_t		numBits;		//	Number of bits in word to allocate
 	u_int32_t		*buffer = NULL;
-	u_int32_t  blockRef;
+	uintptr_t  blockRef;
 	u_int32_t  bitsPerBlock;
 	u_int32_t  wordsPerBlock;
 	// XXXdbg
@@ -1052,7 +1202,7 @@ OSErr BlockMarkAllocated(
 		}
 #if DEBUG_BUILD
 		if ((*currentWord & SWAP_BE32 (bitMask)) != 0) {
-			panic("BlockMarkAllocated: blocks already allocated!");
+			panic("hfs: BlockMarkAllocated: blocks already allocated!");
 		}
 #endif
 		*currentWord |= SWAP_BE32 (bitMask);		//	set the bits in the bitmap
@@ -1090,7 +1240,7 @@ OSErr BlockMarkAllocated(
 		}
 #if DEBUG_BUILD
 		if (*currentWord != 0) {
-			panic("BlockMarkAllocated: blocks already allocated!");
+			panic("hfs: BlockMarkAllocated: blocks already allocated!");
 		}
 #endif
 		*currentWord = SWAP_BE32 (bitMask);
@@ -1128,7 +1278,7 @@ OSErr BlockMarkAllocated(
 		}
 #if DEBUG_BUILD
 		if ((*currentWord & SWAP_BE32 (bitMask)) != 0) {
-			panic("BlockMarkAllocated: blocks already allocated!");
+			panic("hfs: BlockMarkAllocated: blocks already allocated!");
 		}
 #endif
 		*currentWord |= SWAP_BE32 (bitMask);			//	set the bits in the bitmap
@@ -1173,7 +1323,7 @@ OSErr BlockMarkFree(
 	u_int32_t			firstBit;		//	Bit index within word of first bit to allocate
 	u_int32_t			numBits;		//	Number of bits in word to allocate
 	u_int32_t			*buffer = NULL;
-	u_int32_t  blockRef;
+	uintptr_t  blockRef;
 	u_int32_t  bitsPerBlock;
 	u_int32_t  wordsPerBlock;
     // XXXdbg
@@ -1329,7 +1479,7 @@ Exit:
 
 Corruption:
 #if DEBUG_BUILD
-	panic("BlockMarkFree: blocks not allocated!");
+	panic("hfs: BlockMarkFree: blocks not allocated!");
 #else
 	printf ("hfs: BlockMarkFree() trying to free unallocated blocks on volume %s\n", vcb->vcbVN);
 	hfs_mark_volume_inconsistent(vcb);
@@ -1386,8 +1536,9 @@ static OSErr BlockFindContiguous(
 	register u_int32_t	bitMask;
 	register u_int32_t	wordsLeft;
 	register u_int32_t	tempWord;
-	u_int32_t  blockRef;
+	uintptr_t  blockRef;
 	u_int32_t  wordsPerBlock;
+	u_int32_t  j, updated_free_extents = 0, really_add;
 
 	/*
 	 * When we're skipping the metadata zone and the start/end
@@ -1625,23 +1776,71 @@ FoundUsed:
 
 		//	This free chunk wasn't big enough.  Try inserting it into the free extent cache in case
 		//	the allocation wasn't forced contiguous.
-		tempWord = vcb->vcbFreeExtCnt;
-		if (tempWord == kMaxFreeExtents && vcb->vcbFreeExt[kMaxFreeExtents-1].blockCount < foundBlocks)
-			--tempWord;
-		if (tempWord < kMaxFreeExtents)
-		{
-			//	We're going to add this extent.  Bubble any smaller extents down in the list.
-			while (tempWord && vcb->vcbFreeExt[tempWord-1].blockCount < foundBlocks)
-			{
-				vcb->vcbFreeExt[tempWord] = vcb->vcbFreeExt[tempWord-1];
-				--tempWord;
+		really_add = 0;
+		for(j=0; j < vcb->vcbFreeExtCnt; j++) {
+			u_int32_t start, end;
+
+			start = vcb->vcbFreeExt[j].startBlock;
+			end   = start + vcb->vcbFreeExt[j].blockCount;
+
+			if (   (firstBlock >= start && firstBlock < end)
+			    || ((firstBlock + foundBlocks) > start && firstBlock < start)) {
+
+				// there's overlap with an existing entry so do not add this
+				break;
 			}
-			vcb->vcbFreeExt[tempWord].startBlock = firstBlock;
-			vcb->vcbFreeExt[tempWord].blockCount = foundBlocks;
 			
-			if (vcb->vcbFreeExtCnt < kMaxFreeExtents)
-				++vcb->vcbFreeExtCnt;
 		}
+
+		if (j >= vcb->vcbFreeExtCnt) {
+			really_add = 1;
+		}
+
+		tempWord = vcb->vcbFreeExtCnt;
+		if (really_add && (vcb->hfs_flags & HFS_HAS_SPARSE_DEVICE)) {
+			// Sorted by starting block
+			if (tempWord == kMaxFreeExtents && vcb->vcbFreeExt[kMaxFreeExtents-1].startBlock > firstBlock)
+				--tempWord;
+			if (tempWord < kMaxFreeExtents)
+			{
+				//	We're going to add this extent.  Bubble any smaller extents down in the list.
+				while (tempWord && vcb->vcbFreeExt[tempWord-1].startBlock > firstBlock)
+				{
+					vcb->vcbFreeExt[tempWord] = vcb->vcbFreeExt[tempWord-1];
+					--tempWord;
+				}
+				vcb->vcbFreeExt[tempWord].startBlock = firstBlock;
+				vcb->vcbFreeExt[tempWord].blockCount = foundBlocks;
+			
+				if (vcb->vcbFreeExtCnt < kMaxFreeExtents) {
+					++vcb->vcbFreeExtCnt;
+				}
+				updated_free_extents = 1;
+			}
+		} else if (really_add) {
+			// Sorted by blockCount
+			if (tempWord == kMaxFreeExtents && vcb->vcbFreeExt[kMaxFreeExtents-1].blockCount < foundBlocks)
+				--tempWord;
+			if (tempWord < kMaxFreeExtents)
+			{
+				//	We're going to add this extent.  Bubble any smaller extents down in the list.
+				while (tempWord && vcb->vcbFreeExt[tempWord-1].blockCount < foundBlocks)
+				{
+					vcb->vcbFreeExt[tempWord] = vcb->vcbFreeExt[tempWord-1];
+					--tempWord;
+				}
+				vcb->vcbFreeExt[tempWord].startBlock = firstBlock;
+				vcb->vcbFreeExt[tempWord].blockCount = foundBlocks;
+			
+				if (vcb->vcbFreeExtCnt < kMaxFreeExtents) {
+					++vcb->vcbFreeExtCnt;
+				}
+				updated_free_extents = 1;
+			}
+		}
+
+		sanity_check_free_ext(vcb, 0);
+
 	} while (currentBlock < stopBlock);
 LoopExit:
 
@@ -1663,14 +1862,37 @@ ErrorExit:
 		 * Sanity check for overflow
 		 */
 		if ((firstBlock + foundBlocks) > vcb->allocLimit) {
-			panic("blk allocation overflow on \"%s\" sb:0x%08x eb:0x%08x cb:0x%08x fb:0x%08x stop:0x%08x min:0x%08x found:0x%08x",
+			panic("hfs: blk allocation overflow on \"%s\" sb:0x%08x eb:0x%08x cb:0x%08x fb:0x%08x stop:0x%08x min:0x%08x found:0x%08x",
 				vcb->vcbVN, startingBlock, endingBlock, currentBlock,
 				firstBlock, stopBlock, minBlocks, foundBlocks);
 		}
 	}
 	
+	if (updated_free_extents && (vcb->hfs_flags & HFS_HAS_SPARSE_DEVICE)) {
+		int i;
+		u_int32_t min_start = vcb->totalBlocks;
+			
+		// set the nextAllocation pointer to the smallest free block number
+		// we've seen so on the next mount we won't rescan unnecessarily
+		for(i=0; i < (int)vcb->vcbFreeExtCnt; i++) {
+			if (vcb->vcbFreeExt[i].startBlock < min_start) {
+				min_start = vcb->vcbFreeExt[i].startBlock;
+			}
+		}
+		if (min_start != vcb->totalBlocks) {
+			if (min_start < vcb->nextAllocation) {
+				vcb->nextAllocation = min_start;
+			}
+			if (min_start < vcb->sparseAllocation) {
+				vcb->sparseAllocation = min_start;
+			}
+		}
+	}
+	
 	if (buffer)
 		(void) ReleaseBitmapBlock(vcb, blockRef, false);
+
+	sanity_check_free_ext(vcb, 1);
 
 	return err;
 }
@@ -1682,7 +1904,7 @@ ErrorExit:
  */
 __private_extern__
 int 
-hfs_isallocated(struct hfsmount *hfsmp, u_long startingBlock, u_long numBlocks)
+hfs_isallocated(struct hfsmount *hfsmp, u_int32_t startingBlock, u_int32_t numBlocks)
 {
 	u_int32_t  *currentWord;   // Pointer to current word within bitmap block
 	u_int32_t  wordsLeft;      // Number of words left in this bitmap block
@@ -1690,7 +1912,7 @@ hfs_isallocated(struct hfsmount *hfsmp, u_long startingBlock, u_long numBlocks)
 	u_int32_t  firstBit;       // Bit index within word of first bit to allocate
 	u_int32_t  numBits;        // Number of bits in word to allocate
 	u_int32_t  *buffer = NULL;
-	u_int32_t  blockRef;
+	uintptr_t  blockRef;
 	u_int32_t  bitsPerBlock;
 	u_int32_t  wordsPerBlock;
 	int  inuse = 0;

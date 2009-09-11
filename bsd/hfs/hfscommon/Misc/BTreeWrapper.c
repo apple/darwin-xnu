@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2002, 2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2002, 2005-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -34,66 +34,6 @@ static OSErr	CheckBTreeKey(const BTreeKey *key, const BTreeControlBlock *btcb);
 static Boolean	ValidHFSRecord(const void *record, const BTreeControlBlock *btcb, u_int16_t recordSize);
 
 
-
-
-OSErr SearchBTreeRecord(__unused FileReference refNum, __unused const void* key, __unused u_int32_t hint, __unused void* foundKey, __unused void* data, __unused u_int16_t *dataSize, __unused u_int32_t *newHint)
-{
-	panic("SearchBTreeRecord is dead code!");
-	return (-1);
-#if 0
-	FSBufferDescriptor	 btRecord;
-	BTreeIterator		 searchIterator;
-	FCB					*fcb;
-	BTreeControlBlock	*btcb;
-	OSStatus			 result;
-
-
-	fcb = GetFileControlBlock(refNum);
-	btcb = (BTreeControlBlock*) fcb->fcbBTCBPtr;
-
-	btRecord.bufferAddress = data;
-	btRecord.itemCount = 1;
-	if ( btcb->maxKeyLength == kHFSExtentKeyMaximumLength )
-		btRecord.itemSize = sizeof(HFSExtentRecord);
-	else if ( btcb->maxKeyLength == kHFSPlusExtentKeyMaximumLength )
-		btRecord.itemSize = sizeof(HFSPlusExtentRecord);
-	else
-		btRecord.itemSize = sizeof(CatalogRecord);
-
-	searchIterator.hint.writeCount = 0;	// clear these out for debugging...
-	searchIterator.hint.reserved1 = 0;
-	searchIterator.hint.reserved2 = 0;
-
-	searchIterator.hint.nodeNum = hint;
-	searchIterator.hint.index = 0;
-
-	result = CheckBTreeKey((BTreeKey *) key, btcb);
-	ExitOnError(result);
-
-	BlockMoveData(key, &searchIterator.key, CalcKeySize(btcb, (BTreeKey *) key));		//€€ should we range check against maxkeylen?
-	
-	result = BTSearchRecord( fcb, &searchIterator, &btRecord, dataSize, &searchIterator );
-
-	if (result == noErr)
-	{
-		*newHint = searchIterator.hint.nodeNum;
-
-		result = CheckBTreeKey(&searchIterator.key, btcb);
-		ExitOnError(result);
-
-		BlockMoveData(&searchIterator.key, foundKey, CalcKeySize(btcb, &searchIterator.key));	//€€ warning, this could overflow user's buffer!!!
-
-		if ( DEBUG_BUILD && !ValidHFSRecord(data, btcb, *dataSize) )
-			DebugStr("\pSearchBTreeRecord: bad record?");
-	}
-
-ErrorExit:
-
-	return result;
-#endif
-}
-
-
 OSErr ReplaceBTreeRecord(FileReference refNum, const void* key, u_int32_t hint, void *newData, u_int16_t dataSize, u_int32_t *newHint)
 {
 	FSBufferDescriptor	btRecord;
@@ -118,7 +58,7 @@ OSErr ReplaceBTreeRecord(FileReference refNum, const void* key, u_int32_t hint, 
 	BlockMoveData(key, &iterator.key, CalcKeySize(btcb, (const BTreeKey *) key));		//€€ should we range check against maxkeylen?
 
 	if ( DEBUG_BUILD && !ValidHFSRecord(newData, btcb, dataSize) )
-		DebugStr("\pReplaceBTreeRecord: bad record?");
+		DebugStr("ReplaceBTreeRecord: bad record?");
 
 	result = BTReplaceRecord( fcb, &iterator, &btRecord, dataSize );
 
@@ -145,7 +85,7 @@ static OSErr CheckBTreeKey(const BTreeKey *key, const BTreeControlBlock *btcb)
 	if ( (keyLen < 6) || (keyLen > btcb->maxKeyLength) )
 	{
 		if ( DEBUG_BUILD )
-			DebugStr("\pCheckBTreeKey: bad key length!");
+			DebugStr("CheckBTreeKey: bad key length!");
 		return fsBTInvalidKeyLengthErr;
 	}
 	

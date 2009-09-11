@@ -76,7 +76,7 @@ struct	ether_vlan_header {
 /* sysctl(3) tags, for compatibility purposes */
 #define	VLANCTL_PROTO	1
 #define	VLANCTL_MAX	2
-#endif 0
+#endif
 
 /*
  * Configuration structure for SIOCSETVLAN and SIOCGETVLAN ioctls.
@@ -88,5 +88,5 @@ struct	vlanreq {
 
 #ifdef KERNEL_PRIVATE
 int vlan_family_init(void) __attribute__((section("__TEXT, initcode")));
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 #endif /* _NET_IF_VLAN_VAR_H_ */

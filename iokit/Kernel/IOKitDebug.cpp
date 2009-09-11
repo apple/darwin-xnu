@@ -62,6 +62,11 @@ int 		debug_container_malloc_size;
 
 extern "C" {
 
+#if 0
+#define DEBG(fmt, args...)   { kprintf(fmt, ## args); }
+#else
+#define DEBG(fmt, args...)   { IOLog(fmt, ## args); }
+#endif
 
 void IOPrintPlane( const IORegistryPlane * plane )
 {
@@ -75,23 +80,23 @@ void IOPrintPlane( const IORegistryPlane * plane )
     assert( iter );
     all = iter->iterateAll();
     if( all) {
-        IOLog("Count %d\n", all->getCount() );
+        DEBG("Count %d\n", all->getCount() );
         all->release();
     } else
-	IOLog("Empty\n");
+	DEBG("Empty\n");
 
     iter->reset();
     while( (next = iter->getNextObjectRecursive())) {
 	snprintf(format + 1, sizeof(format) - 1, "%ds", 2 * next->getDepth( plane ));
-	IOLog( format, "");
-	IOLog( "\033[33m%s", next->getName( plane ));
+	DEBG( format, "");
+	DEBG( "\033[33m%s", next->getName( plane ));
 	if( (next->getLocation( plane )))
-            IOLog("@%s", next->getLocation( plane ));
-	IOLog("\033[0m <class %s", next->getMetaClass()->getClassName());
+            DEBG("@%s", next->getLocation( plane ));
+	DEBG("\033[0m <class %s", next->getMetaClass()->getClassName());
         if( (service = OSDynamicCast(IOService, next)))
-            IOLog(", busy %ld", service->getBusyState());
-	IOLog( ">\n");
-	IOSleep(250);
+            DEBG(", busy %ld", (long) service->getBusyState());
+	DEBG( ">\n");
+//	IOSleep(250);
     }
     iter->release();
 }

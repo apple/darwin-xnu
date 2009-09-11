@@ -77,8 +77,6 @@
 
 #include <mach/rpc.h>
 
-#include <mach/sdt.h>
-
 void			act_abort(thread_t);
 void			install_special_handler_locked(thread_t);
 void			special_handler_continue(void);
@@ -87,9 +85,12 @@ void			special_handler_continue(void);
  * Internal routine to mark a thread as started.
  * Always called with the thread locked.
  *
- * Note: function intentionall declared with the noinline attribute to
+ * Note: function intentionally declared with the noinline attribute to
  * prevent multiple declaration of probe symbols in this file; we would
  * prefer "#pragma noinline", but gcc does not support it.
+ * PR-6385749 -- the lwp-start probe should fire from within the context
+ * of the newly created thread.  Commented out for now, in case we
+ * turn it into a dead code probe.
  */
 void
 thread_start_internal(
@@ -97,7 +98,7 @@ thread_start_internal(
 {
 	clear_wait(thread, THREAD_AWAKENED);
 	thread->started = TRUE;
-	DTRACE_PROC1(lwp__start, thread_t, thread);
+	// DTRACE_PROC1(lwp__start, thread_t, thread);
 }
 
 /*
@@ -109,8 +110,6 @@ thread_terminate_internal(
 	thread_t			thread)
 {
 	kern_return_t		result = KERN_SUCCESS;
-
-	DTRACE_PROC(lwp__exit);
 
 	thread_mtx_lock(thread);
 

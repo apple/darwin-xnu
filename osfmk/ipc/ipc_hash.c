@@ -211,15 +211,15 @@ ipc_hash_index_t ipc_hash_global_mask;
 	 ipc_hash_global_mask)
 
 typedef struct ipc_hash_global_bucket {
-	decl_mutex_data(,	ihgb_lock_data)
+	decl_lck_mtx_data(,	ihgb_lock_data)
 	ipc_tree_entry_t	ihgb_head;
 } *ipc_hash_global_bucket_t;
 
 #define	IHGB_NULL	((ipc_hash_global_bucket_t) 0)
 
-#define	ihgb_lock_init(ihgb)	mutex_init(&(ihgb)->ihgb_lock_data, 0)
-#define	ihgb_lock(ihgb)		mutex_lock(&(ihgb)->ihgb_lock_data)
-#define	ihgb_unlock(ihgb)	mutex_unlock(&(ihgb)->ihgb_lock_data)
+#define	ihgb_lock_init(ihgb)	lck_mtx_init(&(ihgb)->ihgb_lock_data, &ipc_lck_grp, &ipc_lck_attr)
+#define	ihgb_lock(ihgb)			lck_mtx_lock(&(ihgb)->ihgb_lock_data)
+#define	ihgb_unlock(ihgb)		lck_mtx_unlock(&(ihgb)->ihgb_lock_data)
 
 ipc_hash_global_bucket_t ipc_hash_global_table;
 
@@ -394,7 +394,7 @@ ipc_hash_global_delete(
  */
 
 #define	IH_LOCAL_HASH(obj, size)				\
-		((((mach_port_index_t) (obj)) >> 6) % (size))
+		((mach_port_index_t)((((uintptr_t) (obj)) >> 6) % (size)))
 
 /*
  *	Routine:	ipc_hash_local_lookup

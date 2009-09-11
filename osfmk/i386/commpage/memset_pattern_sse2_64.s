@@ -56,10 +56,7 @@
 //	%rax, %rdi, %rsi, %rcx, and %rdx all trashed
 //	we preserve %r8, %r9, %r10, and %r11
 
-        .text
-        .align  5, 0x90
-	.code64
-Lmemset_pattern_sse2_64:
+COMMPAGE_FUNCTION_START(memset_pattern_sse2_64, 64, 5)
         cmpq    $(kShort),%rdx		// long enough to bother aligning?
         ja	LNotShort		// yes
 	jmp	LShort			// no
@@ -184,4 +181,4 @@ LNoMoreChunks:
 	jge	LLoopBy16		// yes
 	jmp	LLessThan16		// handle up to 15 remaining bytes
 
-	COMMPAGE_DESCRIPTOR(memset_pattern_sse2_64,_COMM_PAGE_MEMSET_PATTERN,kHasSSE2,0)
+COMMPAGE_DESCRIPTOR(memset_pattern_sse2_64,_COMM_PAGE_MEMSET_PATTERN,kHasSSE2,0)

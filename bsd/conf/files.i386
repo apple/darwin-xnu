@@ -11,7 +11,6 @@ bsd/dev/i386/kern_machdep.c	standard
 bsd/dev/i386/memmove.c		standard
 bsd/dev/i386/stubs.c		standard
 bsd/dev/i386/systemcalls.c	standard
-bsd/dev/i386/lock_stubs.c	standard
 bsd/dev/i386/sysctl.c           standard
 bsd/dev/i386/unix_signal.c	standard
 bsd/dev/i386/munge.s		standard

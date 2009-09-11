@@ -53,6 +53,7 @@
 typedef enum {
 	PSPA_SPECIAL = 0,
 	PSPA_EXCEPTION = 1,
+	PSPA_AU_SESSION = 2,
 } pspa_t;
 
 /*
@@ -99,6 +100,7 @@ typedef struct _posix_spawnattr {
 	pid_t		psa_pgroup;		/* pgroup to spawn into */
 	cpu_type_t	psa_binprefs[NBINPREFS];   /* cpu affinity prefs*/
 	_posix_spawn_port_actions_t	psa_ports; /* special/exception ports */
+	int		psa_pcontrol;		/* process control bits on resource starvation */
 } *_posix_spawnattr_t;
 
 
@@ -199,6 +201,15 @@ struct _posix_spawn_args_desc {
 #if __DARWIN_ALIGN_NATURAL
 #pragma options align=natural
 #endif
+
+struct user32__posix_spawn_args_desc {
+	uint32_t		attr_size;	/* size of attributes block */
+	uint32_t		attrp;		/* pointer to block */
+	uint32_t	file_actions_size;	/* size of file actions block */
+	uint32_t		file_actions;	/* pointer to block */
+	uint32_t	port_actions_size;	/* size of port actions block */
+	uint32_t		port_actions;	/* pointer to block */
+};
 
 struct user__posix_spawn_args_desc {
 	user_size_t		attr_size;	/* size of attributes block */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -79,7 +79,7 @@ int nfsm_rpchead2(int, int, int, int, int, int, kauth_cred_t, struct nfsreq *, m
 int nfsm_chain_new_mbuf(struct nfsm_chain *, size_t);
 int nfsm_chain_add_opaque_f(struct nfsm_chain *, const u_char *, uint32_t);
 int nfsm_chain_add_opaque_nopad_f(struct nfsm_chain *, const u_char *, uint32_t);
-int nfsm_chain_add_uio(struct nfsm_chain *, struct uio *, uint32_t);
+int nfsm_chain_add_uio(struct nfsm_chain *, uio_t, uint32_t);
 int nfsm_chain_add_fattr4_f(struct nfsm_chain *, struct vnode_attr *, struct nfsmount *);
 int nfsm_chain_add_v2sattr_f(struct nfsm_chain *, struct vnode_attr *, uint32_t);
 int nfsm_chain_add_v3sattr_f(struct nfsm_chain *, struct vnode_attr *);
@@ -89,7 +89,7 @@ int nfsm_chain_offset(struct nfsm_chain *);
 int nfsm_chain_reverse(struct nfsm_chain *, uint32_t);
 int nfsm_chain_get_opaque_pointer_f(struct nfsm_chain *, uint32_t, u_char **);
 int nfsm_chain_get_opaque_f(struct nfsm_chain *, uint32_t, u_char *);
-int nfsm_chain_get_uio(struct nfsm_chain *, uint32_t, struct uio *);
+int nfsm_chain_get_uio(struct nfsm_chain *, uint32_t, uio_t);
 int nfsm_chain_get_fh_attr(struct nfsm_chain *, nfsnode_t,
 	vfs_context_t, int, uint64_t *, fhandle_t *, struct nfs_vattr *);
 int nfsm_chain_get_wcc_data_f(struct nfsm_chain *, nfsnode_t, struct timespec *, int *, u_int64_t *);
@@ -420,12 +420,18 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 	} while (0)
 
 /* add NFSv4 COMPOUND header */
+#define NFS4_TAG_LENGTH	12
 #define nfsm_chain_add_compound_header(E, NMC, TAG, NUMOPS) \
 	do { \
-		if ((TAG) && strlen(TAG)) \
-			nfsm_chain_add_string((E), (NMC), (TAG), strlen(TAG)); \
-		else \
+		if ((TAG) && strlen(TAG)) { \
+			/* put tags into a fixed-length space-padded field */ \
+			char __nfstag[NFS4_TAG_LENGTH+1]; \
+			snprintf(__nfstag, sizeof(__nfstag), "%-*s", NFS4_TAG_LENGTH, (TAG)); \
+			nfsm_chain_add_32((E), (NMC), NFS4_TAG_LENGTH); \
+			nfsm_chain_add_opaque((E), (NMC), __nfstag, NFS4_TAG_LENGTH); \
+		} else { \
 			nfsm_chain_add_32((E), (NMC), 0); \
+		} \
 		nfsm_chain_add_32((E), (NMC), 0); /*minorversion*/ \
 		nfsm_chain_add_32((E), (NMC), (NUMOPS)); \
 	} while (0)
@@ -446,6 +452,26 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 		nfsm_chain_add_32((E), (NMC), (LEN)); \
 		for (__i=0; __i < (LEN); __i++) \
 			nfsm_chain_add_32((E), (NMC), ((B)[__i] & (MASK)[__i])); \
+	} while (0)
+
+/* Add an NFSv4 "stateid" structure to an mbuf chain */
+#define nfsm_chain_add_stateid(E, NMC, SID) \
+	do { \
+		nfsm_chain_add_32((E), (NMC), (SID)->seqid); \
+		nfsm_chain_add_32((E), (NMC), (SID)->other[0]); \
+		nfsm_chain_add_32((E), (NMC), (SID)->other[1]); \
+		nfsm_chain_add_32((E), (NMC), (SID)->other[2]); \
+	} while (0)
+
+/* add an NFSv4 lock owner structure to an mbuf chain */
+#define nfsm_chain_add_lock_owner4(E, NMC, NMP, NLOP) \
+	do { \
+		nfsm_chain_add_64((E), (NMC), (NMP)->nm_clientid); \
+		nfsm_chain_add_32((E), (NMC), 5*NFSX_UNSIGNED); \
+		nfsm_chain_add_32((E), (NMC), (NLOP)->nlo_name); \
+		nfsm_chain_add_32((E), (NMC), (NLOP)->nlo_pid); \
+		nfsm_chain_add_64((E), (NMC), (NLOP)->nlo_pid_start.tv_sec); \
+		nfsm_chain_add_32((E), (NMC), (NLOP)->nlo_pid_start.tv_usec); \
 	} while (0)
 
 /*
@@ -634,20 +660,31 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 /* get NFSv4 attr bitmap */
 #define nfsm_chain_get_bitmap(E, NMC, B, LEN) \
 	do { \
-		uint32_t __len, __i; \
+		uint32_t __len = 0, __i; \
 		nfsm_chain_get_32((E), (NMC), __len); \
 		if (E) break; \
 		for (__i=0; __i < MIN(__len, (LEN)); __i++) \
 			nfsm_chain_get_32((E), (NMC), (B)[__i]); \
 		if (E) break; \
+		for (; __i < __len; __i++) \
+			nfsm_chain_adv((E), (NMC), NFSX_UNSIGNED); \
 		for (; __i < (LEN); __i++) \
 			(B)[__i] = 0; \
 		(LEN) = __len; \
 	} while (0)
 
+/* get an NFSv4 "stateid" structure from an mbuf chain */
+#define nfsm_chain_get_stateid(E, NMC, SID) \
+	do { \
+		nfsm_chain_get_32((E), (NMC), (SID)->seqid); \
+		nfsm_chain_get_32((E), (NMC), (SID)->other[0]); \
+		nfsm_chain_get_32((E), (NMC), (SID)->other[1]); \
+		nfsm_chain_get_32((E), (NMC), (SID)->other[2]); \
+	} while (0)
+
 #define nfsm_chain_skip_tag(E, NMC) \
 	do { \
-		uint32_t __val; \
+		uint32_t __val = 0; \
 		nfsm_chain_get_32((E), (NMC), __val); \
 		nfsm_chain_adv((E), (NMC), nfsm_rndup(__val)); \
 	} while (0)
@@ -669,10 +706,12 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 		nfsm_chain_get_64((E), (NMC), __ci_before); \
 		nfsm_chain_get_64((E), (NMC), __ci_after); \
 		if (E) break; \
-		if (__ci_atomic && (__ci_before == (DNP)->n_ncchange)) \
+		if (__ci_atomic && (__ci_before == (DNP)->n_ncchange)) { \
 			(DNP)->n_ncchange = __ci_after; \
-		else \
+		} else { \
 			cache_purge(NFSTOV(DNP)); \
+			(DNP)->n_ncgen++; \
+		} \
 	} while (0)
 
 #endif /* __APPLE_API_PRIVATE */

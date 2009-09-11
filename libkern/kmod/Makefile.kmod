@@ -7,6 +7,7 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
+
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -15,9 +16,10 @@ KMOD_NAME =		libkmod
 KMODCPP_NAME =		libkmodc++
 LIB_INSTALL_FLAGS = 	-p -m 444
 
-CFLAGS += -Wall -Wno-four-char-constants
-CFLAGS_PPC += -mlong-branch
-CFLAGS_ARM += -mlong-calls
+# -mkernel implies -mlong-branch/-mlong-calls/-mno-red-zone as needed for
+# code linked into kexts
+CFLAGS_KMOD = $(filter-out -O0 -O1 -O2 -O3 -O4 -Os -Oz,$(CFLAGS)) \
+	    -Os -mkernel -Wall
 
 ifneq ($(MACHINE_CONFIG), DEFAULT)
 COMPOBJROOT = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)_$(MACHINE_CONFIG)/$(COMPONENT)/kmod
@@ -26,6 +28,7 @@ else
 COMPOBJROOT = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/kmod
 INSTOBJROOT = $(OBJROOT)/$(INSTALL_TYPE)_$(ARCH_CONFIG)/$(COMPONENT)/kmod
 endif
+
 
 KMOD_CFILES    = c_start.c c_stop.c
 KMODCPP_CFILES = cplus_start.c cplus_stop.c
@@ -37,23 +40,23 @@ ALL_OFILES = $(KMOD_OFILES) $(KMODCPP_OFILES)
 
 $(ALL_OFILES): %.o : %.c
 	@echo CC $@
-	$(_v)${KCC} -c ${CFLAGS} ${${join $@,_CFLAGS}} ${INCFLAGS} ${${join $@,_INCFLAGS}} -o $(COMPOBJROOT)/$(*F).o $<
+	$(_v)${KCC} -c ${CFLAGS_KMOD} ${${join $@,_CFLAGS}} ${INCFLAGS} ${${join $@,_INCFLAGS}} -o $(COMPOBJROOT)/$(*F).o $<
 
 $(COMPOBJROOT)/$(KMOD_NAME).a: $(KMOD_OFILES)
-	@echo LIBTOOL $@
-	$(_v)libtool -static -o $@ $^
+	@echo LIBTOOL $(notdir $@)
+	$(_v)$(LIBTOOL) -static -o $@ $^ $(_vstdout) 2>&1
 
 $(COMPOBJROOT)/$(KMODCPP_NAME).a: $(KMODCPP_OFILES)
-	@echo LIBTOOL $@
-	$(_v)libtool -static -o $@ $^
+	@echo LIBTOOL $(notdir $@)
+	$(_v)$(LIBTOOL) -static -o $@ $^ $(_vstdout) 2>&1
 
 do_build_all: $(COMPOBJROOT)/$(KMOD_NAME).a $(COMPOBJROOT)/$(KMODCPP_NAME).a
 
 $(INSTALL_DIR)/%.a: $(INSTOBJROOT)/%.a
 	@echo Installing $< in $@;
-	$(RM) $@ || true;						\
+	$(_v)$(RM) $@ || true;						\
 	${MKDIR} $(INSTALL_DIR) $(SYMROOT);				\
-	$(_v)if [ $(MACHINE_CONFIG) = DEFAULT ] ; then			\
+	if [ $(MACHINE_CONFIG) = DEFAULT ]; then			\
 		allarchs="";						\
 		for onearch in $(INSTALL_ARCHS); do			\
 			archdir=$(OBJROOT)/$(KERNEL_CONFIG)_$${onearch}/$(COMPONENT); \

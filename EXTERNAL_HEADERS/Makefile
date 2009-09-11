@@ -9,20 +9,19 @@ include $(MakeInc_def)
 
 INSTINC_SUBDIRS =	\
 	architecture	\
-	machine		\
 	mach-o
 
 INSTINC_SUBDIRS_PPC = 	\
-	architecture	\
-	ppc
+	architecture
 
 INSTINC_SUBDIRS_I386 =	\
-	architecture	\
-	i386
+	architecture
+
+INSTINC_SUBDIRS_X86_64 =	\
+	architecture
 
 INSTINC_SUBDIRS_ARM =	\
-	architecture	\
-	arm
+	architecture
 
 EXPORT_FILES = \
 	AppleSecureBootEpoch.h \

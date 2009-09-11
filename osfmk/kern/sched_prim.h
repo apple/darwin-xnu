@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -181,6 +181,9 @@ extern void		thread_setrun(
 #define SCHED_HEADQ		2
 #define SCHED_PREEMPT	4
 
+extern processor_set_t	task_choose_pset(
+							task_t			task);
+
 /* Bind the current thread to a particular processor */
 extern processor_t		thread_bind(
 							processor_t		processor);
@@ -269,6 +272,8 @@ extern boolean_t		preemption_enabled(void);
 
 #ifdef	KERNEL_PRIVATE
 
+#ifndef	__LP64__
+
 /*
  * Obsolete interfaces.
  */
@@ -292,6 +297,8 @@ extern void		thread_cancel_timer(void);
 #endif	/* ABSOLUTETIME_SCALAR_TYPE */
 
 #endif	/* MACH_KERNEL_PRIVATE */
+
+#endif	/* __LP64__ */
 
 #endif	/* KERNEL_PRIVATE */
 

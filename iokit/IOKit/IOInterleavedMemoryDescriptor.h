@@ -41,7 +41,7 @@ class IOInterleavedMemoryDescriptor : public IOMemoryDescriptor
 
 protected:
 
-    UInt32                _descriptorCapacity;
+    IOByteCount           _descriptorCapacity;
     UInt32                _descriptorCount;
     IOMemoryDescriptor ** _descriptors;
     IOByteCount         * _descriptorOffsets;
@@ -49,45 +49,6 @@ protected:
     bool                  _descriptorPrepared;
 
     virtual void free();
-
-    /*
-     * These methods are not supported under this subclass.
-     */
-
-    virtual bool initWithAddress( void *      address,       /* not supported */
-                                  IOByteCount withLength,
-                                  IODirection withDirection );
-
-    virtual bool initWithAddress( vm_address_t address,      /* not supported */
-                                  IOByteCount  withLength,
-                                  IODirection  withDirection,
-                                  task_t       withTask );
-
-    virtual bool initWithPhysicalAddress( 
-                                  IOPhysicalAddress address, /* not supported */
-                                  IOByteCount       withLength,
-                                  IODirection       withDirection );
-
-    virtual bool initWithPhysicalRanges( 
-                                  IOPhysicalRange * ranges,  /* not supported */
-                                  UInt32            withCount,
-                                  IODirection       withDirection,
-                                  bool              asReference = false );
-
-    virtual bool initWithRanges(  IOVirtualRange * ranges,   /* not supported */
-                                  UInt32           withCount,
-                                  IODirection      withDirection,
-                                  task_t           withTask,
-                                  bool             asReference = false );
-
-    virtual void * getVirtualSegment( IOByteCount   offset,  /* not supported */
-                                      IOByteCount * length );
-
-    IOMemoryDescriptor::withAddress;                         /* not supported */
-    IOMemoryDescriptor::withPhysicalAddress;                 /* not supported */
-    IOMemoryDescriptor::withPhysicalRanges;                  /* not supported */
-    IOMemoryDescriptor::withRanges;                          /* not supported */
-    IOMemoryDescriptor::withSubRange;                        /* not supported */
 
 public:
 
@@ -98,7 +59,7 @@ public:
     @param direction An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
     @result The created IOInterleavedMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
-    static IOInterleavedMemoryDescriptor * withCapacity( UInt32		       capacity,
+    static IOInterleavedMemoryDescriptor * withCapacity( IOByteCount	       capacity,
                                                          IODirection           direction);
 
 /*! @function initWithCapacity
@@ -108,7 +69,7 @@ public:
     @param direction An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
     @result The created IOInterleavedMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
-    virtual bool initWithCapacity( UInt32                capacity,
+    virtual bool initWithCapacity( IOByteCount           capacity,
                                    IODirection           direction );
 
 /*! @function clearMemoryDescriptors
@@ -137,11 +98,9 @@ public:
     @param length If non-zero, getPhysicalSegment will store here the length of the physically contiguous segement at the given offset.
     @result A physical address, or zero if the offset is beyond the length of the memory. */
 
-    virtual IOPhysicalAddress getPhysicalSegment( IOByteCount   offset,
-                                                  IOByteCount * length );
-
-    virtual addr64_t getPhysicalSegment64(        IOByteCount   offset,
-                                                  IOByteCount * length );
+    virtual addr64_t getPhysicalSegment( IOByteCount   offset,
+                                         IOByteCount * length,
+                                         IOOptionBits  options = 0 );
 
 /*! @function prepare
     @abstract Prepare the memory for an I/O transfer.
@@ -158,9 +117,6 @@ public:
     @result An IOReturn code. */
 
     virtual IOReturn complete(IODirection forDirection = kIODirectionNone);
-
-    virtual IOPhysicalAddress getSourceSegment(IOByteCount offset,
-                                               IOByteCount * length);
 };
 
 #endif /* !_IOINTERLEAVEDMEMORYDESCRIPTOR_H */

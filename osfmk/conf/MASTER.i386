@@ -9,14 +9,14 @@
 #  Standard Apple MacOS X Configurations:
 #  -------- ---- -------- ---------------
 #
-#  RELEASE = [ medium intel pc iokit mach_pe mach mach_kdp config_serial_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation crypto config_dtrace]
-#  DEBUG_KDP = [ RELEASE osf_debug debug ]
-#  DEBUG= [ RELEASE osf_debug debug mach_kdb mach_assert ]
+#  RELEASE = [ medium intel pc iokit mach_pe mach mach_kdp config_serial_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation config_sleep crypto config_dtrace config_mca config_vmx config_counters ]
+#  DEBUG= [ RELEASE osf_debug debug mach_kdb mach_assert]
 #  PROFILE = [ RELEASE profile ]
 #
-#  EMBEDDED_BASE = [ bsmall intel pc iokit mach_pe mach mach_kdp serial_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation crypto ]
+#
+#  EMBEDDED_BASE = [ bsmall intel pc iokit mach_pe mach mach_kdp config_serial_kdp event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 hibernation config_sleep crypto ]
 #  EMBEDDED = [ EMBEDDED_BASE no_printf_str no_kprintf_str no_kdebug ]
-#  DEVELOPMENT = [ EMBEDDED_BASE mach_assert config_dtrace ]
+#  DEVELOPMENT = [ EMBEDDED_BASE mach_assert config_dtrace config_counters ]
 #
 ######################################################################
 #
@@ -60,14 +60,20 @@ options		X86_64
 options		DISPATCH_COUNTS
 
 #
-# Note: MAC options must be set in all the bsd/conf, osfmk/conf, and 
+# Note: MAC/AUDIT options must be set in all the bsd/conf, osfmk/conf, and 
 # security/conf MASTER files.
 #
 options		CONFIG_MACF		# Mandatory Access Control Framework
 #options	CONFIG_MACF_MACH	# MACF applied to Mach services
+options		CONFIG_AUDIT		# Kernel auditing
 
 #
 # code decryption... used on i386 for DSMOS
 # must be set in all the bsd/conf and osfmk/conf MASTER files
 #
 options		CONFIG_CODE_DECRYPTION
+
+options	    CONFIG_MCA			    # Machine Check Architecture	# <config_mca>
+options	    CONFIG_VMX			    # Virtual Machine Extensions	# <config_vmx>
+
+options     NO_NESTED_PMAP                  # <no_nested_pmap>

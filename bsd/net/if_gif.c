@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -127,7 +127,7 @@ static int gif_encapcheck(const struct mbuf*, int, int, void*);
 static errno_t gif_output(ifnet_t ifp, mbuf_t m);
 static errno_t gif_input(ifnet_t ifp, protocol_family_t protocol_family,
 						 mbuf_t m, char *frame_header);
-static errno_t gif_ioctl(ifnet_t ifp, u_int32_t cmd, void *data);
+static errno_t gif_ioctl(ifnet_t ifp, u_long cmd, void *data);
 
 int ngif = 0;		/* number of interfaces */
 #endif
@@ -397,7 +397,7 @@ gif_encapcheck(
 		return 0;
 	}
 
-	mbuf_copydata(m, 0, sizeof(ip), &ip);
+	mbuf_copydata((struct mbuf *)(size_t)m, 0, sizeof(ip), &ip);
 
 	switch (ip.ip_v) {
 #if INET
@@ -515,7 +515,7 @@ gif_input(
 static errno_t
 gif_ioctl(
 	ifnet_t			ifp,
-	u_int32_t		cmd,
+	u_long			cmd,
 	void			*data)
 {
 	struct gif_softc *sc  = ifnet_softc(ifp);
@@ -525,11 +525,11 @@ gif_ioctl(
 	struct sockaddr *sa;
 	struct ifnet *ifp2;
 	struct gif_softc *sc2;
-		
+
 	switch (cmd) {
 	case SIOCSIFADDR:
 		break;
-		
+
 	case SIOCSIFDSTADDR:
 		break;
 
@@ -543,7 +543,7 @@ gif_ioctl(
 
 	case SIOCSIFMTU:
 		{
-			u_long mtu;
+			u_int32_t mtu;
 			mtu = ifr->ifr_mtu;
 			if (mtu < GIF_MTU_MIN || mtu > GIF_MTU_MAX) {
 				return (EINVAL);
@@ -555,7 +555,8 @@ gif_ioctl(
 
 	case SIOCSIFPHYADDR:
 #if INET6
-	case SIOCSIFPHYADDR_IN6:
+	case SIOCSIFPHYADDR_IN6_32:
+	case SIOCSIFPHYADDR_IN6_64:
 #endif /* INET6 */
 	case SIOCSLIFPHYADDR:
 		switch (cmd) {
@@ -568,12 +569,23 @@ gif_ioctl(
 			break;
 #endif
 #if INET6
-		case SIOCSIFPHYADDR_IN6:
-			src = (struct sockaddr *)
-				&(((struct in6_aliasreq *)data)->ifra_addr);
-			dst = (struct sockaddr *)
-				&(((struct in6_aliasreq *)data)->ifra_dstaddr);
+		case SIOCSIFPHYADDR_IN6_32: {
+			struct in6_aliasreq_32 *ifra_32 =
+			    (struct in6_aliasreq_32 *)data;
+
+			src = (struct sockaddr *)&ifra_32->ifra_addr;
+			dst = (struct sockaddr *)&ifra_32->ifra_dstaddr;
 			break;
+		}
+
+		case SIOCSIFPHYADDR_IN6_64: {
+			struct in6_aliasreq_64 *ifra_64 =
+			    (struct in6_aliasreq_64 *)data;
+
+			src = (struct sockaddr *)&ifra_64->ifra_addr;
+			dst = (struct sockaddr *)&ifra_64->ifra_dstaddr;
+			break;
+		}
 #endif
 		case SIOCSLIFPHYADDR:
 			src = (struct sockaddr *)
@@ -627,7 +639,8 @@ gif_ioctl(
 				break;
 			return EAFNOSUPPORT;
 #if INET6
-		case SIOCSIFPHYADDR_IN6:
+		case SIOCSIFPHYADDR_IN6_32:
+		case SIOCSIFPHYADDR_IN6_64:
 			if (src->sa_family == AF_INET6)
 				break;
 			return EAFNOSUPPORT;
@@ -688,12 +701,16 @@ gif_ioctl(
 		if (sc->gif_psrc)
 			FREE((caddr_t)sc->gif_psrc, M_IFADDR);
 		sa = (struct sockaddr *)_MALLOC(src->sa_len, M_IFADDR, M_WAITOK);
+		if (sa == NULL)
+			return ENOBUFS;
 		bcopy((caddr_t)src, (caddr_t)sa, src->sa_len);
 		sc->gif_psrc = sa;
 
 		if (sc->gif_pdst)
 			FREE((caddr_t)sc->gif_pdst, M_IFADDR);
 		sa = (struct sockaddr *)_MALLOC(dst->sa_len, M_IFADDR, M_WAITOK);
+		if (sa == NULL)
+			return ENOBUFS;	
 		bcopy((caddr_t)dst, (caddr_t)sa, dst->sa_len);
 		sc->gif_pdst = sa;
 

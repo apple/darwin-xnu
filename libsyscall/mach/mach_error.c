@@ -68,9 +68,9 @@
 int fprintf_stderr(const char *format, ...);
 
 void
-mach_error( str, err )	
-	char	*str;
-	mach_error_t		err;
+mach_error( str, err )
+	const char *str; 
+	mach_error_t err;
 {
 	char * err_str;
 	char buf[1024];

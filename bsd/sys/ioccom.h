@@ -64,6 +64,8 @@
 #ifndef	_SYS_IOCCOM_H_
 #define	_SYS_IOCCOM_H_
 
+#include <sys/_types.h>
+
 /*
  * Ioctl's have the command encoded in the lower word, and the size of
  * any in or out parameters in the upper word.  The high 3 bits of the
@@ -76,15 +78,15 @@
 
 #define	IOCPARM_MAX	(IOCPARM_MASK + 1)	/* max size of ioctl args */
 				/* no parameters */
-#define	IOC_VOID	(unsigned long)0x20000000
+#define	IOC_VOID	(__uint32_t)0x20000000
 				/* copy parameters out */
-#define	IOC_OUT		(unsigned long)0x40000000
+#define	IOC_OUT		(__uint32_t)0x40000000
 				/* copy parameters in */
-#define	IOC_IN		(unsigned long)0x80000000
+#define	IOC_IN		(__uint32_t)0x80000000
 				/* copy paramters in and out */
 #define	IOC_INOUT	(IOC_IN|IOC_OUT)
 				/* mask for IN/OUT/VOID */
-#define	IOC_DIRMASK	(unsigned long)0xe0000000
+#define	IOC_DIRMASK	(__uint32_t)0xe0000000
 
 #define	_IOC(inout,group,num,len) \
 	(inout | ((len & IOCPARM_MASK) << 16) | ((group) << 8) | (num))

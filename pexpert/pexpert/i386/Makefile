@@ -10,7 +10,6 @@ include $(MakeInc_def)
 DATAFILES = \
         boot.h \
         efi.h \
-	fb_entries.h \
 	protos.h
 
 INSTALL_MD_LIST	= ${DATAFILES}

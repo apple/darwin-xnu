@@ -51,18 +51,8 @@ extern "C" {
 #define	LS_LCK_MTX_TRY_LOCK_ACQUIRE		8
 #define	LS_LCK_MTX_TRY_SPIN_LOCK_ACQUIRE	9
 #define	LS_LCK_MTX_UNLOCK_RELEASE		10
-/*
- * Although theoretically deprecated, there's still lots of uses of mutex_lock() style locks.
- * Block and spin events share code with lck_mtx_lock() and friends, so we only need events
- * for the acquire and release events.
- */
-#define LS_MUTEX_LOCK_ACQUIRE			11
-#define LS_MUTEX_TRY_LOCK_ACQUIRE		12
-#define	LS_MUTEX_TRY_SPIN_ACQUIRE		13
-#define	LS_MUTEX_UNLOCK_RELEASE			14
-#define	LS_MUTEX_LOCK_SPIN_ACQUIRE		15
 
-#define	LS_MUTEX_CONVERT_SPIN_ACQUIRE		16
+#define LS_LCK_MTX_LOCK_SPIN_ACQUIRE		39
 /*
  * Provide a parallel set for indirect mutexes
  */
@@ -99,7 +89,7 @@ extern "C" {
 #define	LS_LCK_RW_LOCK_EXCL_TO_SHARED_DOWNGRADE	37
 #define	LS_LCK_RW_LOCK_EXCL_TO_SHARED_ILK_SPIN	38
 
-#define	LS_NPROBES			39
+#define	LS_NPROBES			40
 
 /*
  * Name the various locking functions...
@@ -112,12 +102,8 @@ extern "C" {
 #define	LS_LCK_MTX_EXT_LOCK		"lck_mtx_ext_lock"
 #define	LS_LCK_MTX_EXT_UNLOCK		"lck_mtx_ext_unlock"
 #define	LS_LCK_MTX_EXT_TRY_LOCK		"lck_mtx_ext_try_lock"
-#define	LS_MUTEX_CONVERT_SPIN		"mutex_convert_spin"
-#define	LS_MUTEX_LOCK			"mutex_lock"
-#define	LS_MUTEX_UNLOCK			"mutex_unlock"
-#define	LS_MUTEX_TRY_LOCK		"mutex_try_lock"
-#define	LS_MUTEX_TRY_SPIN		"mutex_try_spin"
-#define	LS_MUTEX_LOCK_SPIN		"mutex_lock_spin"
+#define	LS_LCK_MTX_LOCK_SPIN_LOCK	"lck_mtx_lock_spin"
+
 #define	LS_LCK_SPIN_LOCK		"lck_spin_lock"
 #define	LS_LCK_SPIN_TRY_LOCK		"lck_spin_try_lock"
 #define	LS_LCK_SPIN_UNLOCK		"lck_spin_unlock"
@@ -185,9 +171,6 @@ extern void (*lockstat_probe)(dtrace_id_t, uint64_t, uint64_t,
 #ifdef _KERNEL
 
 #if	CONFIG_DTRACE
-extern int lockstat_depth(void);
-extern void lockstat_hot_patch(boolean_t);
-
 /*
  * Macros to record lockstat probes.
  */

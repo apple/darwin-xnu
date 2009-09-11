@@ -64,4 +64,4 @@
 #ifndef	_I386_SCHED_PARAM_H_
 #define	_I386_SCHED_PARAM_H_
 
-#endif	_I386_SCHED_PARAM_H_
+#endif /* _I386_SCHED_PARAM_H_ */

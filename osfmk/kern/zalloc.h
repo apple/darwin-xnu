@@ -118,7 +118,7 @@ struct zone {
 };
 
 extern void		zone_gc(void);
-extern void		consider_zone_gc(void);
+extern void		consider_zone_gc(boolean_t);
 
 /* Steal memory for zone module */
 extern void		zone_steal_memory(void);

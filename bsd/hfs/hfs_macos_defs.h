@@ -159,7 +159,7 @@ enum {
 #endif  /*  !TYPE_BOOL */
 
 
-EXTERN_API( void ) DebugStr(ConstStr255Param debuggerMsg);
+EXTERN_API( void ) DebugStr(const char * debuggerMsg);
 
 /*********************************************************************************
 

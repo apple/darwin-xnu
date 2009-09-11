@@ -111,10 +111,20 @@
 
 #define PTESHIFT        12
 
+
+#define INITPT_SEG_BASE  0x100000
+#define INITGDT_SEG_BASE 0x106000
+#define SLEEP_SEG_BASE   0x107000
+
+#ifdef __x86_64__
+#define LOW_4GB_MASK	((vm_offset_t)0x00000000FFFFFFFFUL)
+#endif
+
 #define PDESIZE		sizeof(pd_entry_t) /* for assembly files */
 #define PTESIZE		sizeof(pt_entry_t) /* for assembly files */
 
 #define INTEL_OFFMASK	(I386_PGBYTES - 1)
+#define INTEL_LOFFMASK	(I386_LPGBYTES - 1)
 #define PG_FRAME        0x000FFFFFFFFFF000ULL
 #define NPTEPG          (PAGE_SIZE/(sizeof (pt_entry_t)))
 #define NPTDPG          (PAGE_SIZE/(sizeof (pd_entry_t)))
@@ -124,6 +134,8 @@
 #define NPDEPG          (PAGE_SIZE/(sizeof (pd_entry_t)))
 #define NBPDE           (1 << PDESHIFT)
 #define PDEMASK         (NBPDE - 1)
+
+#define PTE_PER_PAGE	512 /* number of PTE's per page on any level */
 
  /* cleanly define parameters for all the page table levels */
 typedef uint64_t        pml4_entry_t;
@@ -160,12 +172,20 @@ typedef uint64_t        pt_entry_t;
 
 typedef uint64_t  pmap_paddr_t;
 
+/* superpages */
+#ifdef __x86_64__
+#define SUPERPAGE_NBASEPAGES 512
+#else
+#define SUPERPAGE_NBASEPAGES 1	/* we don't support superpages on i386 */
+#endif
+
 /*
  * Atomic 64-bit store of a page table entry.
  */
 static inline void
 pmap_store_pte(pt_entry_t *entryp, pt_entry_t value)
 {
+#ifdef __i386__
 	/*
 	 * Load the new value into %ecx:%ebx
 	 * Load the old value into %edx:%eax
@@ -184,6 +204,13 @@ pmap_store_pte(pt_entry_t *entryp, pt_entry_t value)
 		  "b" ((uint32_t)value),
 		  "c" ((uint32_t)(value >> 32))
 		: "eax", "edx", "memory");
+#else
+	/*
+	 * In the 32-bit kernel a compare-and-exchange loop was
+	 * required to provide atomicity. For K64, life is easier:
+	 */
+	*entryp = value;
+#endif
 }
 
 /*
@@ -194,6 +221,7 @@ pmap_cmpx_pte(pt_entry_t *entryp, pt_entry_t old, pt_entry_t new)
 {
 	boolean_t		ret;
 
+#ifdef __i386__
 	/*
 	 * Load the old value into %edx:%eax
 	 * Load the new value into %ecx:%ebx
@@ -212,6 +240,24 @@ pmap_cmpx_pte(pt_entry_t *entryp, pt_entry_t old, pt_entry_t new)
 		  "b" ((uint32_t)new),
 		  "c" ((uint32_t)(new >> 32))
 		: "memory");
+#else
+	/*
+	 * Load the old value into %rax
+	 * Load the new value into another register
+	 * Compare-exchange-quad at address entryp
+	 * If the compare succeeds, the new value is stored, return TRUE.
+	 * Otherwise, no swap is made, return FALSE.
+	 */
+	asm volatile(
+		"	lock; cmpxchgq %2,(%3)	\n\t"
+		"	setz	%%al		\n\t"
+		"	movzbl	%%al,%0"
+		: "=a" (ret)
+		: "a" (old),
+		  "r" (new),
+		  "r" (entryp)
+		: "memory");
+#endif
 	return ret;
 }
 
@@ -225,6 +271,7 @@ pmap_cmpx_pte(pt_entry_t *entryp, pt_entry_t old, pt_entry_t new)
 #define NPDEPGS         (NPDPTPGS * (PAGE_SIZE/(sizeof (pd_entry_t))))
 #define NPTEPGS         (NPDEPGS * (PAGE_SIZE/(sizeof (pt_entry_t))))
 
+#ifdef __i386__
 /*
  * The 64-bit kernel is remapped in uber-space which is at the base
  * the highest 4th-level directory (KERNEL_UBER_PML4_INDEX). That is,
@@ -233,6 +280,13 @@ pmap_cmpx_pte(pt_entry_t *entryp, pt_entry_t old, pt_entry_t new)
 #define KERNEL_UBER_PML4_INDEX	511
 #define KERNEL_UBER_BASE	(0ULL - NBPML4)
 #define KERNEL_UBER_BASE_HI32	((uint32_t)(KERNEL_UBER_BASE >> 32))
+#else
+#define KERNEL_PML4_INDEX	511
+#define KERNEL_KEXTS_INDEX	510	/* Home of KEXTs - the basement */
+#define KERNEL_PHYSMAP_INDEX	509	/* virtual to physical map */ 
+#define KERNEL_BASE		(0ULL - NBPML4)
+#define KERNEL_BASEMENT		(KERNEL_BASE - NBPML4)
+#endif
 
 #define	VM_WIMG_COPYBACK	VM_MEM_COHERENT
 #define	VM_WIMG_DEFAULT		VM_MEM_COHERENT
@@ -246,8 +300,18 @@ pmap_cmpx_pte(pt_entry_t *entryp, pt_entry_t old, pt_entry_t new)
 /*
  * Pte related macros
  */
+#ifdef __i386__
 #define VADDR(pdi, pti) ((vm_offset_t)(((pdi)<<PDESHIFT)|((pti)<<PTESHIFT)))
 #define VADDR64(pmi, pdi, pti) ((vm_offset_t)(((pmi)<<PLM4SHIFT))((pdi)<<PDESHIFT)|((pti)<<PTESHIFT))
+#else
+#define KVADDR(pmi, pdpi, pdi, pti)		  \
+	 ((vm_offset_t)			  \
+		((uint64_t) -1    << 47)        | \
+		((uint64_t)(pmi)  << PML4SHIFT) | \
+		((uint64_t)(pdpi) << PDPTSHIFT) | \
+		((uint64_t)(pdi)  << PDESHIFT)  | \
+		((uint64_t)(pti)  << PTESHIFT))
+#endif
 
 /*
  * Size of Kernel address space.  This is the number of page table pages
@@ -266,6 +330,7 @@ pmap_cmpx_pte(pt_entry_t *entryp, pt_entry_t old, pt_entry_t new)
 #endif
 
 
+#ifdef __i386__
 enum high_cpu_types {
   HIGH_CPU_ISS0,
   HIGH_CPU_ISS1,
@@ -311,15 +376,28 @@ enum  high_fixed_addresses {
 
 #define HIGH_MEM_BASE  ((uint32_t)( -NBPDE) )  /* shared gdt etc seg addr */ /* XXX64 ?? */
 #define pmap_index_to_virt(x)  (HIGH_MEM_BASE | ((unsigned)(x) << PAGE_SHIFT))
+#endif
 
 /*
  *	Convert address offset to page descriptor index
  */
-#define pdenum(pmap, a) (((vm_offset_t)(a) >> PDESHIFT) & PDEMASK)
+#define pdptnum(pmap, a) (((vm_offset_t)(a) >> PDPTSHIFT) & PDPTMASK)
+#define pdenum(pmap, a)	(((vm_offset_t)(a) >> PDESHIFT) & PDEMASK)
+#define PMAP_INVALID_PDPTNUM (~0ULL)
 
+#ifdef __i386__
 #define pdeidx(pmap, a)    (((a) >> PDSHIFT)   & ((1ULL<<(48 - PDSHIFT)) -1))
 #define pdptidx(pmap, a)   (((a) >> PDPTSHIFT) & ((1ULL<<(48 - PDPTSHIFT)) -1))
 #define pml4idx(pmap, a)   (((a) >> PML4SHIFT) & ((1ULL<<(48 - PML4SHIFT)) -1))
+#else
+#define VAMASK		   ((1ULL<<48)-1)
+#define pml4idx(pmap, a)   ((((a) & VAMASK) >> PML4SHIFT) &	\
+				((1ULL<<(48 - PML4SHIFT))-1))
+#define pdptidx(pmap, a)   ((((a) & PML4MASK) >> PDPTSHIFT) &	\
+				((1ULL<<(48 - PDPTSHIFT))-1))
+#define pdeidx(pmap, a)    ((((a) & PML4MASK) >> PDSHIFT) &	\
+				((1ULL<<(48 - PDSHIFT)) - 1))
+#endif
 
 /*
  *	Convert page descriptor index to user virtual address
@@ -344,11 +422,12 @@ enum  high_fixed_addresses {
 #define INTEL_PTE_NCACHE 	0x00000010
 #define INTEL_PTE_REF		0x00000020
 #define INTEL_PTE_MOD		0x00000040
-#define INTEL_PTE_PS            0x00000080
-#define INTEL_PTE_GLOBAL        0x00000100
-#define INTEL_PTE_WIRED		0x00000200
-#define INTEL_PTE_PFN		PG_FRAME
+#define INTEL_PTE_PS		0x00000080
 #define INTEL_PTE_PTA		0x00000080
+#define INTEL_PTE_GLOBAL	0x00000100
+#define INTEL_PTE_WIRED		0x00000200
+#define INTEL_PDPTE_NESTED	0x00000400
+#define INTEL_PTE_PFN		PG_FRAME
 
 #define INTEL_PTE_NX		(1ULL << 63)
 
@@ -379,31 +458,43 @@ enum  high_fixed_addresses {
  * and directories.
  */
 
-extern pt_entry_t PTmap[], APTmap[], Upte;
-extern pd_entry_t PTD[], APTD[], PTDpde[], APTDpde[], Upde;
+#ifdef __i386__
+extern pt_entry_t	PTmap[], APTmap[], Upte;
+extern pd_entry_t	PTD[], APTD[], PTDpde[], APTDpde[], Upde;
+extern pmap_paddr_t	lo_kernel_cr3;
+extern pdpt_entry_t	*IdlePDPT64;
+#else
+extern pt_entry_t	*PTmap;
+#endif
+extern boolean_t	no_shared_cr3;
+extern addr64_t		kernel64_cr3;
+extern pd_entry_t	*IdlePTD;	/* physical addr of "Idle" state PTD */
+extern pdpt_entry_t	IdlePDPT[];
+extern pml4_entry_t	IdlePML4[];
 
-extern pd_entry_t *IdlePTD;	/* physical address of "Idle" state directory */
-extern pdpt_entry_t *IdlePDPT;
+extern uint64_t		pmap_pv_hashlist_walks;
+extern uint64_t		pmap_pv_hashlist_cnts;
+extern uint32_t		pmap_pv_hashlist_max;
+extern uint32_t		pmap_kernel_text_ps;
 
-extern pmap_paddr_t lo_kernel_cr3;
-
-extern pml4_entry_t *IdlePML4;
-extern pdpt_entry_t *IdlePDPT64;
-extern addr64_t     kernel64_cr3;
-extern boolean_t    no_shared_cr3;
-
-extern uint64_t pmap_pv_hashlist_walks;
-extern uint64_t pmap_pv_hashlist_cnts;
-extern uint32_t pmap_pv_hashlist_max;
-
+#ifdef __i386__
 /*
+ * ** i386 **
  * virtual address to page table entry and
  * to physical address. Likewise for alternate address space.
  * Note: these work recursively, thus vtopte of a pte will give
  * the corresponding pde that in turn maps it.
  */
-#define	vtopte(va)	(PTmap + i386_btop((vm_offset_t)va))
 
+#define	vtopte(va)	(PTmap + i386_btop((vm_offset_t)va))
+#endif
+
+#ifdef __x86_64__
+#define ID_MAP_VTOP(x)	((void *)(((uint64_t)(x)) & LOW_4GB_MASK))
+
+#define PHYSMAP_BASE	KVADDR(KERNEL_PHYSMAP_INDEX,0,0,0)
+#define PHYSMAP_PTOV(x)	((void *)(((uint64_t)(x)) + PHYSMAP_BASE))
+#endif
 
 typedef	volatile long	cpu_set;	/* set of CPUs - must be <= 32 */
 					/* changed by other processors */
@@ -422,14 +513,18 @@ struct md_page {
 
 struct pmap {
         pd_entry_t      *dirbase;        /* page directory pointer */
+#ifdef __i386__
 	pmap_paddr_t    pdirbase;        /* phys. address of dirbase */
+#endif
         vm_object_t     pm_obj;         /* object to hold pde's */
 	int		ref_count;	/* reference count */
         int		nx_enabled;
         task_map_t      pm_task_map;
 	decl_simple_lock_data(,lock)	/* lock on map */
 	struct pmap_statistics	stats;	/* map statistics */
+#ifdef __i386__
 	vm_offset_t     pm_hold;        /* true pdpt zalloc addr */
+#endif
 	pmap_paddr_t    pm_cr3;         /* physical addr */
         pdpt_entry_t    *pm_pdpt;       /* KVA of 3rd level page */
 	pml4_entry_t    *pm_pml4;       /* VKA of top level */
@@ -440,6 +535,7 @@ struct pmap {
 };
 
 
+#if NCOPY_WINDOWS > 0
 #define PMAP_PDPT_FIRST_WINDOW 0
 #define PMAP_PDPT_NWINDOWS 4
 #define PMAP_PDE_FIRST_WINDOW (PMAP_PDPT_NWINDOWS)
@@ -466,7 +562,7 @@ typedef struct cpu_pmap {
 
 extern mapwindow_t *pmap_get_mapwindow(pt_entry_t pentry);
 extern void         pmap_put_mapwindow(mapwindow_t *map);
-
+#endif
 
 typedef struct pmap_memory_regions {
   ppnum_t base;
@@ -475,16 +571,31 @@ typedef struct pmap_memory_regions {
   uint32_t type;
 } pmap_memory_region_t;
 
-unsigned pmap_memory_region_count;
-unsigned pmap_memory_region_current;
+extern unsigned pmap_memory_region_count;
+extern unsigned pmap_memory_region_current;
 
 #define PMAP_MEMORY_REGIONS_SIZE 128
 
 extern pmap_memory_region_t pmap_memory_regions[];
 
-static inline void set_dirbase(pmap_t tpmap, __unused int tcpu) {
-    	current_cpu_datap()->cpu_task_cr3 = (pmap_paddr_t)((tpmap)->pm_cr3);
+static inline void
+set_dirbase(pmap_t tpmap, __unused thread_t thread) {
+	current_cpu_datap()->cpu_task_cr3 = tpmap->pm_cr3;
 	current_cpu_datap()->cpu_task_map = tpmap->pm_task_map;
+#ifndef __i386__
+	/*
+	 * Switch cr3 if necessary
+	 * - unless running with no_shared_cr3 debugging mode
+	 *   and we're not on the kernel's cr3 (after pre-empted copyio)
+	 */
+	if (!no_shared_cr3) {
+		if (get_cr3() != tpmap->pm_cr3)
+			set_cr3(tpmap->pm_cr3);
+	} else {
+		if (get_cr3() != current_cpu_datap()->cpu_kernel_cr3)
+			set_cr3(current_cpu_datap()->cpu_kernel_cr3);
+	}
+#endif
 }
 
 /*
@@ -547,6 +658,7 @@ extern int		pmap_list_resident_pages(
 				vm_offset_t	*listp,
 				int		space);
 
+#ifdef __i386__
 extern void             pmap_commpage32_init(
 					   vm_offset_t kernel,
 					   vm_offset_t user,
@@ -556,10 +668,14 @@ extern void             pmap_commpage64_init(
 					   vm_map_offset_t user,
 					   int count);
 
+#endif
+
+#if NCOPY_WINDOWS > 0
 extern struct cpu_pmap	*pmap_cpu_alloc(
 				boolean_t	is_boot_cpu);
 extern void		pmap_cpu_free(
 				struct cpu_pmap	*cp);
+#endif
 
 extern void		pmap_map_block(
 				pmap_t pmap, 
@@ -576,6 +692,7 @@ extern ppnum_t          pmap_find_phys(pmap_t map, addr64_t va);
 
 extern void pmap_cpu_init(void);
 extern void pmap_disable_NX(pmap_t pmap);
+#ifdef __i386__
 extern void pmap_set_4GB_pagezero(pmap_t pmap);
 extern void pmap_clear_4GB_pagezero(pmap_t pmap);
 extern void pmap_load_kernel_cr3(void);
@@ -584,6 +701,7 @@ extern vm_offset_t pmap_high_map_vaddr(enum high_cpu_types);
 extern vm_offset_t pmap_high_map(pt_entry_t, enum high_cpu_types);
 extern vm_offset_t pmap_cpu_high_shared_remap(int, enum high_cpu_types, vm_offset_t, int);
 extern vm_offset_t pmap_high_shared_remap(enum high_fixed_addresses, vm_offset_t, int);
+#endif
 
 extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_size_t *, int *, int *);
 
@@ -596,54 +714,23 @@ extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_s
 
 #include <kern/spl.h>
 
-#if defined(PMAP_ACTIVATE_KERNEL)
-#undef PMAP_ACTIVATE_KERNEL
-#undef PMAP_DEACTIVATE_KERNEL
-#undef PMAP_ACTIVATE_USER
-#undef PMAP_DEACTIVATE_USER
-#endif
-
-
-#define PMAP_ACTIVATE_KERNEL(my_cpu)  {					\
-        spl_t		spl;						\
-                                                                        \
-        spl = splhigh();						\
-	if (current_cpu_datap()->cpu_tlb_invalid)			\
-	        process_pmap_updates();					\
-        splx(spl);							\
-}
-
-#define PMAP_DEACTIVATE_KERNEL(my_cpu) {				\
-        spl_t		spl;						\
-                                                                        \
-        spl = splhigh();						\
-	process_pmap_updates();						\
-        splx(spl);							\
-}
-
-
-#define PMAP_ACTIVATE_MAP(map, my_cpu)	{				\
+				  
+#define PMAP_ACTIVATE_MAP(map, thread)	{				\
 	register pmap_t		tpmap;					\
                                                                         \
         tpmap = vm_map_pmap(map);					\
-        set_dirbase(tpmap, my_cpu);					\
+        set_dirbase(tpmap, thread);					\
 }
 
-#define PMAP_DEACTIVATE_MAP(map, my_cpu)				\
+#ifdef __i386__
+#define PMAP_DEACTIVATE_MAP(map, thread)				\
 	if (vm_map_pmap(map)->pm_task_map == TASK_MAP_64BIT_SHARED)	\
 		pmap_load_kernel_cr3();
-	
+#else
+#define PMAP_DEACTIVATE_MAP(map, my_cpu)
+#endif
 
-#define PMAP_ACTIVATE_USER(th, my_cpu)  {				\
-        spl_t		spl;						\
-                                                                        \
-        spl = splhigh();						\
-        PMAP_ACTIVATE_MAP(th->map, my_cpu)				\
-        splx(spl);							\
-}
-
-#define PMAP_DEACTIVATE_USER(th, my_cpu)
-
+#if   defined(__i386__)
 
 #define	PMAP_SWITCH_CONTEXT(old_th, new_th, my_cpu) {			\
 	spl_t		spl;						\
@@ -654,9 +741,9 @@ extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_s
                                                                         \
         need_flush = 0;							\
         spl = splhigh();						\
-	if (old_th->map != new_th->map) {				\
-		PMAP_DEACTIVATE_MAP(old_th->map, my_cpu);		\
-		PMAP_ACTIVATE_MAP(new_th->map, my_cpu);			\
+	if ((old_th->map != new_th->map) || (new_th->task != old_th->task)) {	\
+		PMAP_DEACTIVATE_MAP(old_th->map, old_th);		\
+		PMAP_ACTIVATE_MAP(new_th->map, new_th);			\
 	}								\
         kpdp = current_cpu_datap()->cpu_copywindow_pdp;			\
         for (i = 0; i < NCOPY_WINDOWS; i++) {				\
@@ -682,16 +769,41 @@ extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_s
                 flush_tlb();						\
 }
 
+#else /* __x86_64__ */
+#define	PMAP_SWITCH_CONTEXT(old_th, new_th, my_cpu) {			\
+	spl_t		spl;						\
+                                                                        \
+        spl = splhigh();						\
+	if (old_th->map != new_th->map) {				\
+		PMAP_DEACTIVATE_MAP(old_th->map, old_th);		\
+		PMAP_ACTIVATE_MAP(new_th->map, new_th);			\
+	}								\
+	splx(spl);							\
+}
+#endif /* __i386__ */
+
+#ifdef __i386__
 #define	PMAP_SWITCH_USER(th, new_map, my_cpu) {				\
 	spl_t		spl;						\
 									\
 	spl = splhigh();						\
-	PMAP_DEACTIVATE_MAP(th->map, my_cpu);				\
+	PMAP_DEACTIVATE_MAP(th->map, th);				\
 	th->map = new_map;						\
-	PMAP_ACTIVATE_MAP(th->map, my_cpu);				\
+	PMAP_ACTIVATE_MAP(th->map, th);					\
 	splx(spl);							\
         inval_copy_windows(th);						\
 }
+#else
+#define	PMAP_SWITCH_USER(th, new_map, my_cpu) {				\
+	spl_t		spl;						\
+									\
+	spl = splhigh();						\
+	PMAP_DEACTIVATE_MAP(th->map, th);				\
+	th->map = new_map;						\
+	PMAP_ACTIVATE_MAP(th->map, th);					\
+	splx(spl);							\
+}
+#endif
 
 /*
  * Marking the current cpu's cr3 inactive is achieved by setting its lsb.
@@ -712,6 +824,24 @@ extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_s
 #define CPU_GET_ACTIVE_CR3(cpu)						\
 	(cpu_datap(cpu)->cpu_active_cr3 & ~1)
 
+#define CPU_GET_TASK_CR3(cpu)						\
+	(cpu_datap(cpu)->cpu_task_cr3)
+
+/*
+ *	Mark this cpu idle, and remove it from the active set,
+ *	since it is not actively using any pmap.  Signal_cpus
+ *	will notice that it is idle, and avoid signaling it,
+ *	but will queue the update request for when the cpu
+ *	becomes active.
+ */
+#if   defined(__x86_64__)
+#define MARK_CPU_IDLE(my_cpu)	{					\
+	int	s = splhigh();						\
+	CPU_CR3_MARK_INACTIVE();					\
+	__asm__ volatile("mfence");					\
+	splx(s);							\
+}
+#else /* __i386__ native */
 #define MARK_CPU_IDLE(my_cpu)	{					\
 	/*								\
 	 *	Mark this cpu idle, and remove it from the active set,	\
@@ -729,6 +859,7 @@ extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_s
 	__asm__ volatile("mfence");					\
 	splx(s);							\
 }
+#endif /* __i386__ */
 
 #define MARK_CPU_ACTIVE(my_cpu) {					\
 									\
@@ -770,6 +901,7 @@ extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_s
 extern boolean_t pmap_is_empty(pmap_t		pmap,
 			       vm_map_offset_t	start,
 			       vm_map_offset_t	end);
+
 
 #endif	/* ASSEMBLER */
 

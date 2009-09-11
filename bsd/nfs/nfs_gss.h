@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -30,9 +30,8 @@
 #define _NFS_NFS_GSS_H_
 
 #include <gssd/gssd_mach.h>
-#include <libkern/crypto/md5.h>
-#include <crypto/des/des_locl.h>
 #include <sys/param.h>
+#include <crypto/des/des.h>
 
 #define RPCSEC_GSS			6
 #define	RPCSEC_GSS_VERS_1		1
@@ -63,7 +62,33 @@ enum rpcsec_gss_service {
 #define GSS_CLNT_SEQLISTMAX		32		// Max length of req seq num list
 #define GSS_CLNT_SYS_VALID		300		// Valid time (sec) for failover ctx
 
+
 #define SKEYLEN	8			// length of DES key
+#define SKEYLEN3 24			// length of DES3 keyboard
+#define MAX_SKEYLEN	SKEYLEN3
+
+typedef struct {
+	uint32_t type; 		// See defines below
+	uint32_t keybytes; 	// Session key length bytes;
+	uint32_t hash_len;
+	u_char   skey[MAX_SKEYLEN];	   	// Session key;
+	union {
+		struct {
+			des_cblock  *key;
+			des_key_schedule gss_sched;
+			des_key_schedule gss_sched_Ke;
+		} des;
+		struct {
+			des_cblock		(*key)[3];
+			des_cblock		ckey[3];
+			des_key_schedule	gss_sched[3];
+		} des3;
+	} ks_u;
+} gss_key_info;
+
+#define NFS_GSS_0DES	0 // Not DES or uninitialized
+#define NFS_GSS_1DES	1 // Single DES with DES_MAC_MD5
+#define NFS_GSS_3DES	2 // Triple EDE DES KD with SHA1
 
 /*
  * The client's RPCSEC_GSS context information
@@ -85,14 +110,13 @@ struct nfs_gss_clnt_ctx {
 	uint32_t		*gss_clnt_seqbits;	// Bitmap to track seq numbers in use
 	mach_port_t		gss_clnt_mport;		// Mach port for gssd upcall
 	u_char			*gss_clnt_verf;		// RPC verifier from server
-	uint64_t		gss_clnt_gssd_verf;	// Verifier from gssd
 	char			*gss_clnt_svcname;	// Service name e.g. "nfs/big.apple.com"
-	uint32_t		gss_clnt_cred_handle;	// Opaque cred handle from gssd
-	uint32_t		gss_clnt_context;	// Opaque context handle from gssd
+	gss_cred		gss_clnt_cred_handle;	// Opaque cred handle from gssd
+	gss_ctx			gss_clnt_context;	// Opaque context handle from gssd
 	u_char			*gss_clnt_token;	// GSS token exchanged via gssd & server
 	uint32_t		gss_clnt_tokenlen;	// Length of token
-	u_char			gss_clnt_skey[SKEYLEN];	// Context session key (DES)
-	des_key_schedule	gss_clnt_sched;		// Schedule derived from key
+	gss_key_info		gss_clnt_kinfo;		// GSS key info
+	uint32_t		gss_clnt_gssd_flags;	// Special flag bits to gssd
 	uint32_t		gss_clnt_major;		// GSS major result from gssd or server
 	uint32_t		gss_clnt_minor;		// GSS minor result from gssd or server
 };
@@ -116,17 +140,15 @@ struct nfs_gss_svc_ctx {
 	uid_t			gss_svc_uid;		// UID of this user
 	gid_t			gss_svc_gids[NGROUPS];	// GIDs of this user
 	uint32_t		gss_svc_ngroups;	// Count of gids
-	uint64_t		gss_svc_expiretime;	// Delete ctx if we exceed this
+	uint64_t		gss_svc_incarnation;	// Delete ctx if we exceed this + ttl value
 	uint32_t		gss_svc_seqmax;		// Current max GSS sequence number
 	uint32_t		gss_svc_seqwin;		// GSS sequence number window
 	uint32_t		*gss_svc_seqbits;	// Bitmap to track seq numbers
-	uint64_t		gss_svc_gssd_verf;	// Verifier from gssd
-	uint32_t		gss_svc_cred_handle;	// Opaque cred handle from gssd
-	uint32_t		gss_svc_context;	// Opaque context handle from gssd
+	gss_cred		gss_svc_cred_handle;	// Opaque cred handle from gssd
+	gss_ctx			gss_svc_context;	// Opaque context handle from gssd
 	u_char			*gss_svc_token;		// GSS token exchanged via gssd & client
 	uint32_t		gss_svc_tokenlen;	// Length of token
-	u_char			gss_svc_skey[SKEYLEN];	// Context session key (DES)
-	des_key_schedule	gss_svc_sched;		// Schedule derived from key
+	gss_key_info		gss_svc_kinfo;		// Session key info
 	uint32_t		gss_svc_major;		// GSS major result from gssd
 	uint32_t		gss_svc_minor;		// GSS minor result from gssd
 };
@@ -147,6 +169,7 @@ LIST_HEAD(nfs_gss_svc_ctx_hashhead, nfs_gss_svc_ctx);
  */
 #define GSS_CTX_PEND		5 		// seconds
 #define GSS_CTX_EXPIRE		(8 * 3600)	// seconds
+#define GSS_CTX_TTL_MIN		1		// seconds
 #define GSS_TIMER_PERIOD	300		// seconds
 #define MSECS_PER_SEC		1000
 

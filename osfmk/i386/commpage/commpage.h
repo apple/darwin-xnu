@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -31,11 +31,25 @@
 
 #ifndef	__ASSEMBLER__
 #include <stdint.h>
+#include <mach/boolean.h>
+#include <mach/vm_types.h>
+#include <machine/cpu_capabilities.h>
 #endif /* __ASSEMBLER__ */
+
+/* When trying to acquire a spinlock or mutex, we will spin in
+ * user mode for awhile, before entering the kernel to relinquish.
+ * MP_SPIN_TRIES is the initial value of _COMM_PAGE_SPIN_COUNT.
+ * The idea is that _COMM_PAGE_SPIN_COUNT will be adjusted up or
+ * down as the machine is plugged in/out, etc.
+ * At present spinlocks do not use _COMM_PAGE_SPIN_COUNT.
+ * They use MP_SPIN_TRIES directly.
+ */
+#define	MP_SPIN_TRIES	1000
+
 
 /* The following macro is used to generate the 64-bit commpage address for a given
  * routine, based on its 32-bit address.  This is used in the kernel to compile
- * the 64-bit commpage.  Since the kernel is a 32-bit object, cpu_capabilities.h
+ * the 64-bit commpage.  Since the kernel can be a 32-bit object, cpu_capabilities.h
  * only defines the 32-bit address.
  */
 #define	_COMM_PAGE_32_TO_64( ADDRESS )	( ADDRESS + _COMM_PAGE64_START_ADDRESS - _COMM_PAGE32_START_ADDRESS )
@@ -43,18 +57,68 @@
 
 #ifdef	__ASSEMBLER__
 
+#define COMMPAGE_DESCRIPTOR_NAME(label)  _commpage_ ## label
+
+#if defined (__i386__)
+
+#define COMMPAGE_DESCRIPTOR_FIELD_POINTER .long
+#define COMMPAGE_DESCRIPTOR_REFERENCE(label) \
+	.long COMMPAGE_DESCRIPTOR_NAME(label)
+
+#elif defined (__x86_64__)
+
+#define COMMPAGE_DESCRIPTOR_FIELD_POINTER .quad
+#define COMMPAGE_DESCRIPTOR_REFERENCE(label) \
+	.quad COMMPAGE_DESCRIPTOR_NAME(label)
+
+#else
+#error unsupported architecture
+#endif
+
+#define COMMPAGE_FUNCTION_START(label,codetype,alignment) \
+.text								;\
+.code ## codetype						;\
+.align alignment, 0x90						;\
+L ## label ## :
+
 #define	COMMPAGE_DESCRIPTOR(label,address,must,cant)	\
-L ## label ## _end:					;\
-.const_data						;\
-L ## label ## _size = L ## label ## _end - L ## label	;\
-.private_extern _commpage_ ## label			;\
-_commpage_ ## label ## :				;\
-    .long	L ## label 				;\
-    .long	L ## label ## _size			;\
-    .long	address					;\
-    .long	must					;\
-    .long	cant					;\
+L ## label ## _end:						;\
+.set L ## label ## _size, L ## label ## _end - L ## label	;\
+.const_data							;\
+.private_extern COMMPAGE_DESCRIPTOR_NAME(label)			;\
+COMMPAGE_DESCRIPTOR_NAME(label) ## :				;\
+    COMMPAGE_DESCRIPTOR_FIELD_POINTER	L ## label 		;\
+    .long				L ## label ## _size	;\
+    .long				address			;\
+    .long				must			;\
+    .long				cant			;\
 .text
+
+
+/* COMMPAGE_CALL(target,from,start)
+ *
+ * This macro compiles a relative near call to one
+ * commpage routine from another.
+ * The assembler cannot handle this directly because the code
+ * is not being assembled at the address at which it will execute.
+ * The alternative to this macro would be to use an
+ * indirect call, which is slower because the target of an
+ * indirect branch is poorly predicted.
+ * The macro arguments are:
+ *	target = the commpage routine we are calling
+ *	from   = the commpage routine we are in now
+ *	start  = the label at the start of the code for this func
+ * This is admitedly ugly and fragile.  Is there a better way?
+ */
+#define COMMPAGE_CALL(target,from,start)			\
+	COMMPAGE_CALL_INTERNAL(target,from,start,__LINE__)
+
+#define COMMPAGE_CALL_INTERNAL(target,from,start,unique)	\
+	.byte 0xe8						;\
+.set UNIQUEID(unique), L ## start - . + target - from - 4	;\
+	.long	UNIQUEID(unique)
+
+#define UNIQUEID(name)	L ## name
 
 #else /* __ASSEMBLER__ */
 
@@ -64,11 +128,11 @@ _commpage_ ## label ## :				;\
  */
  
 typedef	struct	commpage_descriptor	{
-    void	*code_address;					// address of code
-    long 	code_length;					// length in bytes
-    long	commpage_address;				// put at this address (_COMM_PAGE_BCOPY etc)
-    long	musthave;					// _cpu_capability bits we must have
-    long	canthave;					// _cpu_capability bits we can't have
+    void		*code_address;				// address of code
+    uint32_t	 	code_length;				// length in bytes
+    uint32_t		commpage_address;			// put at this address (_COMM_PAGE_BCOPY etc)
+    uint32_t		musthave;				// _cpu_capability bits we must have
+    uint32_t		canthave;				// _cpu_capability bits we can't have
 } commpage_descriptor;
 
 
@@ -91,12 +155,14 @@ extern	char	*commPagePtr32;				// virt address of 32-bit commpage in kernel map
 extern	char	*commPagePtr64;				// ...and of 64-bit commpage
 
 extern	void	commpage_set_timestamp(uint64_t abstime, uint64_t secs);
-
 extern	void	commpage_disable_timestamp( void );
-
 extern  void	commpage_set_nanotime(uint64_t tsc_base, uint64_t ns_base, uint32_t scale, uint32_t shift);
-
+extern	void	commpage_set_memory_pressure(unsigned int  pressure);
+extern	void	commpage_set_spin_count(unsigned int  count);
 extern	void	commpage_sched_gen_inc(void);
+
+extern	uint32_t	commpage_is_in_pfz32(uint32_t);
+extern	uint32_t	commpage_is_in_pfz64(addr64_t);
 
 #endif	/* __ASSEMBLER__ */
 

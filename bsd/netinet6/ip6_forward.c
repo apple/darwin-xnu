@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/ip6_forward.c,v 1.16 2002/10/16 02:25:05 sam Exp $	*/
 /*	$KAME: ip6_forward.c,v 1.69 2001/05/17 03:48:30 itojun Exp $	*/
 
@@ -73,6 +101,10 @@ extern lck_mtx_t *ip6_mutex;
 
 #include <net/net_osdep.h>
 
+#if PF
+#include <net/pfvar.h>
+#endif /* PF */
+
 /*
  * Forward a packet.  If some error occurs return the sender
  * an icmp packet.  Note we can't always generate a meaningful
@@ -95,7 +127,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	struct rtentry *rt;
 	int error, type = 0, code = 0;
 	struct mbuf *mcopy = NULL;
-	struct ifnet *origifp;	/* maybe unnecessary */
+	struct ifnet *ifp, *origifp;	/* maybe unnecessary */
 #if IPSEC
 	struct secpolicy *sp = NULL;
 #endif
@@ -302,23 +334,46 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
     skip_ipsec:
 #endif /* IPSEC */
 
+	/*
+	 * If "locked", ip6forward_rt points to the globally defined
+	 * struct route cache which requires ip6_mutex, e.g. when this
+	 * is called from ip6_input().  Else the caller is responsible
+	 * for the struct route and its serialization (if needed), e.g.
+	 * when this is called from ip6_rthdr0().
+	 */
+	if (locked)
+		lck_mtx_assert(ip6_mutex, LCK_MTX_ASSERT_OWNED);
 	dst = (struct sockaddr_in6 *)&ip6forward_rt->ro_dst;
+	if ((rt = ip6forward_rt->ro_rt) != NULL) {
+		RT_LOCK(rt);
+		/* Take an extra ref for ourselves */
+		RT_ADDREF_LOCKED(rt);
+	}
+
 	if (!srcrt) {
 		/*
 		 * ip6forward_rt->ro_dst.sin6_addr is equal to ip6->ip6_dst
 		 */
-		if (ip6forward_rt->ro_rt == 0 ||
-		    (ip6forward_rt->ro_rt->rt_flags & RTF_UP) == 0) {
-			if (ip6forward_rt->ro_rt) {
-				rtfree(ip6forward_rt->ro_rt);
-				ip6forward_rt->ro_rt = 0;
+		if (rt == NULL || !(rt->rt_flags & RTF_UP) ||
+		    rt->generation_id != route_generation) {
+			if (rt != NULL) {
+				/* Release extra ref */
+				RT_REMREF_LOCKED(rt);
+				RT_UNLOCK(rt);
+				rtfree(rt);
+				ip6forward_rt->ro_rt = NULL;
 			}
 			/* this probably fails but give it a try again */
 			rtalloc_ign((struct route *)ip6forward_rt,
-				    RTF_PRCLONING);
+			    RTF_PRCLONING);
+			if ((rt = ip6forward_rt->ro_rt) != NULL) {
+				RT_LOCK(rt);
+				/* Take an extra ref for ourselves */
+				RT_ADDREF_LOCKED(rt);
+			}
 		}
 
-		if (ip6forward_rt->ro_rt == 0) {
+		if (rt == NULL) {
 			ip6stat.ip6s_noroute++;
 			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_noroute);
 			if (mcopy) {
@@ -332,34 +387,41 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			m_freem(m);
 			return;
 		}
-	} else if ((rt = ip6forward_rt->ro_rt) == 0 ||
-		 !IN6_ARE_ADDR_EQUAL(&ip6->ip6_dst, &dst->sin6_addr)) {
-		if (ip6forward_rt->ro_rt) {
-			rtfree(ip6forward_rt->ro_rt);
-			ip6forward_rt->ro_rt = 0;
+		RT_LOCK_ASSERT_HELD(rt);
+	} else if (rt == NULL || !(rt->rt_flags & RTF_UP) ||
+	    !IN6_ARE_ADDR_EQUAL(&ip6->ip6_dst, &dst->sin6_addr) ||
+	    rt->generation_id != route_generation) {
+		if (rt != NULL) {
+			/* Release extra ref */
+			RT_REMREF_LOCKED(rt);
+			RT_UNLOCK(rt);
+			rtfree(rt);
+			ip6forward_rt->ro_rt = NULL;
 		}
 		bzero(dst, sizeof(*dst));
 		dst->sin6_len = sizeof(struct sockaddr_in6);
 		dst->sin6_family = AF_INET6;
 		dst->sin6_addr = ip6->ip6_dst;
 
-  		rtalloc_ign((struct route *)ip6forward_rt, RTF_PRCLONING);
-		if (ip6forward_rt->ro_rt == 0) {
+		rtalloc_ign((struct route *)ip6forward_rt, RTF_PRCLONING);
+		if ((rt = ip6forward_rt->ro_rt) == NULL) {
 			ip6stat.ip6s_noroute++;
 			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_noroute);
 			if (mcopy) {
 				if (locked)
 					lck_mtx_unlock(ip6_mutex);
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
-					    ICMP6_DST_UNREACH_NOROUTE, 0);
+				    ICMP6_DST_UNREACH_NOROUTE, 0);
 				if (locked)
 					lck_mtx_lock(ip6_mutex);
 			}
 			m_freem(m);
 			return;
 		}
+		RT_LOCK(rt);
+		/* Take an extra ref for ourselves */
+		RT_ADDREF_LOCKED(rt);
 	}
-	rt = ip6forward_rt->ro_rt;
 
 	/*
 	 * Scope check: if a packet can't be delivered to its destination
@@ -384,6 +446,9 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			    ip6->ip6_nxt,
 			    if_name(m->m_pkthdr.rcvif), if_name(rt->rt_ifp));
 		}
+		/* Release extra ref */
+		RT_REMREF_LOCKED(rt);
+		RT_UNLOCK(rt);
 		if (mcopy) {
 			if (locked)
 				lck_mtx_unlock(ip6_mutex);
@@ -399,7 +464,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	if (m->m_pkthdr.len > rt->rt_ifp->if_mtu) {
 		in6_ifstat_inc(rt->rt_ifp, ifs6_in_toobig);
 		if (mcopy) {
-			u_long mtu;
+			uint32_t mtu;
 #if IPSEC
 			struct secpolicy *sp2;
 			int ipsecerror;
@@ -431,11 +496,18 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			if (mtu < IPV6_MMTU)
 				mtu = IPV6_MMTU;
 #endif
+			/* Release extra ref */
+			RT_REMREF_LOCKED(rt);
+			RT_UNLOCK(rt);
 			if (locked)
 				lck_mtx_unlock(ip6_mutex);
 			icmp6_error(mcopy, ICMP6_PACKET_TOO_BIG, 0, mtu);
 			if (locked)
 				lck_mtx_lock(ip6_mutex);
+		} else {
+			/* Release extra ref */
+			RT_REMREF_LOCKED(rt);
+			RT_UNLOCK(rt);
 		}
 		m_freem(m);
 		return;
@@ -466,6 +538,8 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			 * type/code is based on suggestion by Rich Draves.
 			 * not sure if it is the best pick.
 			 */
+			RT_REMREF_LOCKED(rt);	/* Release extra ref */
+			RT_UNLOCK(rt);
 			if (locked)
 				lck_mtx_unlock(ip6_mutex);
 			icmp6_error(mcopy, ICMP6_DST_UNREACH,
@@ -483,13 +557,19 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	 */
 	if (ip6_fw_enable && ip6_fw_chk_ptr) {
 		u_short port = 0;
+		ifp = rt->rt_ifp;
+		/* Drop the lock but retain the extra ref */
+		RT_UNLOCK(rt);
 		/* If ipfw says divert, we have to just drop packet */
-		if (ip6_fw_chk_ptr(&ip6, rt->rt_ifp, &port, &m)) {
+		if (ip6_fw_chk_ptr(&ip6, ifp, &port, &m)) {
 			m_freem(m);
 			goto freecopy;
 		}
-		if (!m)
+		if (!m) {
 			goto freecopy;
+		}
+		/* We still have the extra ref on rt */
+		RT_LOCK(rt);
 	}
 
 	/*
@@ -538,28 +618,61 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	in6_clearscope(&ip6->ip6_dst);
 #endif
 
-	error = nd6_output(rt->rt_ifp, origifp, m, dst, rt, locked);
+	ifp = rt->rt_ifp;
+	/* Drop the lock but retain the extra ref */
+	RT_UNLOCK(rt);
+
+#if PF
+	if (locked)
+		lck_mtx_unlock(ip6_mutex);
+
+	/* Invoke outbound packet filter */
+	error = pf_af_hook(ifp, NULL, &m, AF_INET6, FALSE);
+
+	if (locked)
+		lck_mtx_lock(ip6_mutex);
+
 	if (error) {
-		in6_ifstat_inc(rt->rt_ifp, ifs6_out_discard);
+		if (m != NULL) {
+			panic("%s: unexpected packet %p\n", __func__, m);
+			/* NOTREACHED */
+		}
+		/* Already freed by callee */
+		goto senderr;
+	}
+	ip6 = mtod(m, struct ip6_hdr *);
+#endif /* PF */
+
+	error = nd6_output(ifp, origifp, m, dst, rt, locked);
+	if (error) {
+		in6_ifstat_inc(ifp, ifs6_out_discard);
 		ip6stat.ip6s_cantforward++;
 	} else {
 		ip6stat.ip6s_forward++;
-		in6_ifstat_inc(rt->rt_ifp, ifs6_out_forward);
+		in6_ifstat_inc(ifp, ifs6_out_forward);
 		if (type)
 			ip6stat.ip6s_redirectsent++;
 		else {
-			if (mcopy)
+			if (mcopy) {
 				goto freecopy;
+			}
 		}
 	}
-	if (mcopy == NULL)
+#if PF
+senderr:
+#endif /* PF */
+	if (mcopy == NULL) {
+		/* Release extra ref */
+		RT_REMREF(rt);
 		return;
-
+	}
 	switch (error) {
 	case 0:
 #if 1
 		if (type == ND_REDIRECT) {
 			icmp6_redirect_output(mcopy, rt);
+			/* Release extra ref */
+			RT_REMREF(rt);
 			return;
 		}
 #endif
@@ -587,9 +700,13 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	icmp6_error(mcopy, type, code, 0);
 	if (locked)
 		lck_mtx_lock(ip6_mutex);
+	/* Release extra ref */
+	RT_REMREF(rt);
 	return;
 
  freecopy:
 	m_freem(mcopy);
+	/* Release extra ref */
+	RT_REMREF(rt);
 	return;
 }

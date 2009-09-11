@@ -135,6 +135,13 @@ LEXT(tmrCvt)
 
 			ret						// Leave...
 
+
+/* void             _rtc_nanotime_store(uint64_t                tsc,
+	                                uint64_t                nsec,
+	                                uint32_t                scale,
+	                                uint32_t                shift,
+	                                rtc_nanotime_t  *dst) ;
+*/
 			.globl	EXT(_rtc_nanotime_store)
 			.align	FALIGN
 

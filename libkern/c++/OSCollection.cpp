@@ -60,9 +60,21 @@ bool OSCollection::init()
 
 void OSCollection::haveUpdated()
 {
-    if ( (gIOKitDebug & kOSLogRegistryMods) && (fOptions & kImmutable) )
-	OSReportWithBacktrace("Trying to change a collection in the registry");
-
+    if (fOptions & kImmutable)
+    {
+#if __LP64__
+	if (!(gIOKitDebug & kOSRegistryModsMode))
+#else
+	if (gIOKitDebug & kOSRegistryModsMode)
+#endif
+	{
+	    panic("Trying to change a collection in the registry");
+	}
+	else
+	{
+	    OSReportWithBacktrace("Trying to change a collection in the registry");
+	}
+    }
     updateStamp++;
 }
 

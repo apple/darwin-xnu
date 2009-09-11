@@ -68,9 +68,7 @@
  *      J.T. Conklin (jtc@wimsey.com), Winning Strategies, Inc.
  */
 
-.text
-.align 5, 0x90
-Lbzero_scalar:
+COMMPAGE_FUNCTION_START(bzero_scalar, 32, 4)
 	pushl	%ebp			/* set up a frame for backtraces */
 	movl	%esp,%ebp
         pushl   %edi
@@ -114,4 +112,4 @@ L1:     rep
 	popl	%ebp
 	ret
 
-	COMMPAGE_DESCRIPTOR(bzero_scalar,_COMM_PAGE_BZERO,0,kHasSSE2)
+COMMPAGE_DESCRIPTOR(bzero_scalar,_COMM_PAGE_BZERO,0,kHasSSE2)

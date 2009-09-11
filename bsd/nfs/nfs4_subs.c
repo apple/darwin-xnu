@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -44,7 +44,6 @@
 #include <sys/ubc_internal.h>
 #include <sys/fcntl.h>
 #include <sys/quota.h>
-#include <sys/uio_internal.h>
 #include <sys/domain.h>
 #include <libkern/OSAtomic.h>
 #include <kern/thread_call.h>
@@ -72,71 +71,187 @@
 
 
 /*
- * NFSv4 SETCLIENTID
+ * Create the unique client ID to use for this mount.
+ *
+ * Format: unique ID + en0_address + server_address + mntfromname + mntonname
+ *
+ * We could possibly use one client ID for all mounts of the same server;
+ * however, that would complicate some aspects of state management.
+ *
+ * Each mount socket connection sends a SETCLIENTID.  If the ID is the same but
+ * the verifier (mounttime) changes, then all previous (mounts') state gets dropped.
+ *
+ * State is typically managed per-mount and in order to keep it that way
+ * each mount needs to use a separate client ID.  However, we also need to
+ * make sure that each mount uses the same client ID each time.
+ *
+ * In an attempt to differentiate mounts we include the mntfromname and mntonname
+ * strings to the client ID (as long as they fit).  We also make sure that the
+ * value does not conflict with any existing values in use.
  */
 int
-nfs4_setclientid(struct nfsmount *nmp)
+nfs4_init_clientid(struct nfsmount *nmp)
 {
+	struct nfs_client_id *ncip, *ncip2;
 	struct sockaddr *saddr;
-	uint64_t verifier;
-	char id[128];
-	int idlen, len, error = 0, status, numops;
-	u_int64_t xid;
-	vfs_context_t ctx;
-	thread_t thd;
-	kauth_cred_t cred;
-	struct nfsm_chain nmreq, nmrep;
+	int error, len, len2, cmp;
+	struct vfsstatfs *vsfs;
 
 	static uint8_t en0addr[6];
 	static uint8_t en0addr_set = 0;
 
-	lck_mtx_lock(nfs_request_mutex);
+	lck_mtx_lock(nfs_global_mutex);
 	if (!en0addr_set) {
 		ifnet_t interface = NULL;
 		error = ifnet_find_by_name("en0", &interface);
 		if (!error)
 			error = ifnet_lladdr_copy_bytes(interface, en0addr, sizeof(en0addr));
 		if (error)
-			printf("nfs4_setclientid: error getting en0 address, %d\n", error);
+			printf("nfs4_init_clientid: error getting en0 address, %d\n", error);
 		if (!error)
 			en0addr_set = 1;
-		error = 0;
 		if (interface)
 			ifnet_release(interface);
 	}
-	lck_mtx_unlock(nfs_request_mutex);
+	lck_mtx_unlock(nfs_global_mutex);
 
-	ctx = vfs_context_kernel(); /* XXX */
-	thd = vfs_context_thread(ctx);
-	cred = vfs_context_ucred(ctx);
+	MALLOC(ncip, struct nfs_client_id *, sizeof(struct nfs_client_id), M_TEMP, M_WAITOK);
+	if (!ncip)
+		return (ENOMEM);
+
+	vsfs = vfs_statfs(nmp->nm_mountp);
+	saddr = mbuf_data(nmp->nm_nam);
+	ncip->nci_idlen = sizeof(uint32_t) + sizeof(en0addr) + saddr->sa_len +
+		strlen(vsfs->f_mntfromname) + 1 + strlen(vsfs->f_mntonname) + 1;
+	if (ncip->nci_idlen > NFS4_OPAQUE_LIMIT)
+		ncip->nci_idlen = NFS4_OPAQUE_LIMIT;
+	MALLOC(ncip->nci_id, char *, ncip->nci_idlen, M_TEMP, M_WAITOK);
+	if (!ncip->nci_id) {
+		FREE(ncip, M_TEMP);
+		return (ENOMEM);
+	}
+
+	*(uint32_t*)ncip->nci_id = 0;
+	len = sizeof(uint32_t);
+	len2 = min(sizeof(en0addr), ncip->nci_idlen-len);
+	bcopy(en0addr, &ncip->nci_id[len], len2);
+	len += sizeof(en0addr);
+	len2 = min(saddr->sa_len, ncip->nci_idlen-len);
+	bcopy(saddr, &ncip->nci_id[len], len2);
+	len += len2;
+	if (len < ncip->nci_idlen) {
+		len2 = strlcpy(&ncip->nci_id[len], vsfs->f_mntfromname, ncip->nci_idlen-len);
+		if (len2 < (ncip->nci_idlen - len))
+			len += len2 + 1;
+		else
+			len = ncip->nci_idlen;
+	}
+	if (len < ncip->nci_idlen) {
+		len2 = strlcpy(&ncip->nci_id[len], vsfs->f_mntonname, ncip->nci_idlen-len);
+		if (len2 < (ncip->nci_idlen - len))
+			len += len2 + 1;
+		else
+			len = ncip->nci_idlen;
+	}
+
+	/* make sure the ID is unique, and add it to the sorted list */
+	lck_mtx_lock(nfs_global_mutex);
+	TAILQ_FOREACH(ncip2, &nfsclientids, nci_link) {
+		if (ncip->nci_idlen > ncip2->nci_idlen)
+			continue;
+		if (ncip->nci_idlen < ncip2->nci_idlen)
+			break;
+		cmp = bcmp(ncip->nci_id + sizeof(uint32_t),
+			ncip2->nci_id + sizeof(uint32_t),
+			ncip->nci_idlen - sizeof(uint32_t));
+		if (cmp > 0)
+			continue;
+		if (cmp < 0)
+			break;
+		if (*(uint32_t*)ncip->nci_id > *(uint32_t*)ncip2->nci_id)
+			continue;
+		if (*(uint32_t*)ncip->nci_id < *(uint32_t*)ncip2->nci_id)
+			break;
+		*(uint32_t*)ncip->nci_id += 1;
+	}
+	if (*(uint32_t*)ncip->nci_id)
+		printf("nfs client ID collision (%d) for %s on %s\n", *(uint32_t*)ncip->nci_id,
+			vsfs->f_mntfromname, vsfs->f_mntonname);
+	if (ncip2)
+		TAILQ_INSERT_BEFORE(ncip2, ncip, nci_link);
+	else
+		TAILQ_INSERT_TAIL(&nfsclientids, ncip, nci_link);
+	nmp->nm_longid = ncip;
+	lck_mtx_unlock(nfs_global_mutex);
+
+	return (0);
+}
+
+/*
+ * NFSv4 SETCLIENTID
+ */
+int
+nfs4_setclientid(struct nfsmount *nmp)
+{
+	uint64_t verifier, xid;
+	int error = 0, status, numops;
+	uint32_t bitmap[NFS_ATTR_BITMAP_LEN];
+	thread_t thd;
+	kauth_cred_t cred;
+	struct nfsm_chain nmreq, nmrep;
+	struct sockaddr_in sin;
+	uint8_t *addr;
+	char raddr[32];
+	int ralen = 0;
+
+	thd = current_thread();
+	cred = IS_VALID_CRED(nmp->nm_mcred) ? nmp->nm_mcred : vfs_context_ucred(vfs_context_kernel());
+	kauth_cred_ref(cred);
 
 	nfsm_chain_null(&nmreq);
 	nfsm_chain_null(&nmrep);
 
-	/* ID: en0_address + server_address */
-	idlen = len = sizeof(en0addr);
-	bcopy(en0addr, &id[0], len);
-	saddr = mbuf_data(nmp->nm_nam);
-	len = min(saddr->sa_len, sizeof(id)-idlen);
-	bcopy(saddr, &id[idlen], len);
-	idlen += len;
+	if (!nmp->nm_longid)
+		error = nfs4_init_clientid(nmp);
 
 	// SETCLIENTID
 	numops = 1;
-	nfsm_chain_build_alloc_init(error, &nmreq, 14 * NFSX_UNSIGNED + idlen);
-	nfsm_chain_add_compound_header(error, &nmreq, "setclientid", numops);
+	nfsm_chain_build_alloc_init(error, &nmreq, 14 * NFSX_UNSIGNED + nmp->nm_longid->nci_idlen);
+	nfsm_chain_add_compound_header(error, &nmreq, "setclid", numops);
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_SETCLIENTID);
 	/* nfs_client_id4  client; */
 	nfsm_chain_add_64(error, &nmreq, nmp->nm_mounttime);
-	nfsm_chain_add_32(error, &nmreq, idlen);
-	nfsm_chain_add_opaque(error, &nmreq, id, idlen);
+	nfsm_chain_add_32(error, &nmreq, nmp->nm_longid->nci_idlen);
+	nfsm_chain_add_opaque(error, &nmreq, nmp->nm_longid->nci_id, nmp->nm_longid->nci_idlen);
 	/* cb_client4      callback; */
-	/* We don't provide callback info yet */
-	nfsm_chain_add_32(error, &nmreq, 0); /* callback program */
-	nfsm_chain_add_string(error, &nmreq, "", 0); /* callback r_netid */
-	nfsm_chain_add_string(error, &nmreq, "", 0); /* callback r_addr */
-	nfsm_chain_add_32(error, &nmreq, 0); /* callback_ident */
+	if (nmp->nm_cbid && nfs4_cb_port &&
+	    !(error = sock_getsockname(nmp->nm_so, (struct sockaddr*)&sin, sizeof(sin)))) {
+		/* assemble r_addr = h1.h2.h3.h4.p1.p2 */
+		/* h = source address of nmp->nm_so */
+		/* p = nfs4_cb_port */
+		addr = (uint8_t*)&sin.sin_addr.s_addr;
+		ralen = snprintf(raddr, sizeof(raddr), "%d.%d.%d.%d.%d.%d", 
+				addr[0], addr[1], addr[2], addr[3],
+				((nfs4_cb_port >> 8) & 0xff),
+				(nfs4_cb_port & 0xff));
+		/* make sure it fit, give up if it didn't */
+		if (ralen >= (int)sizeof(raddr))
+			ralen = 0;
+	}
+	if (ralen > 0) {
+		/* add callback info */
+		nfsm_chain_add_32(error, &nmreq, NFS4_CALLBACK_PROG); /* callback program */
+		nfsm_chain_add_string(error, &nmreq, "tcp", 3); /* callback r_netid */
+		nfsm_chain_add_string(error, &nmreq, raddr, ralen); /* callback r_addr */
+		nfsm_chain_add_32(error, &nmreq, nmp->nm_cbid); /* callback_ident */
+	} else {
+		/* don't provide valid callback info */
+		nfsm_chain_add_32(error, &nmreq, 0); /* callback program */
+		nfsm_chain_add_string(error, &nmreq, "", 0); /* callback r_netid */
+		nfsm_chain_add_string(error, &nmreq, "", 0); /* callback r_addr */
+		nfsm_chain_add_32(error, &nmreq, 0); /* callback_ident */
+	}
 	nfsm_chain_build_done(error, &nmreq);
 	nfsm_assert(error, (numops == 0), EPROTO);
 	nfsmout_if(error);
@@ -152,14 +267,25 @@ nfs4_setclientid(struct nfsmount *nmp)
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
 
-	// SETCLIENTID_CONFIRM
-	numops = 1;
-	nfsm_chain_build_alloc_init(error, &nmreq, 13 * NFSX_UNSIGNED);
-	nfsm_chain_add_compound_header(error, &nmreq, "setclientid_confirm", numops);
+	// SETCLIENTID_CONFIRM, PUTFH, GETATTR(FS)
+	numops = nmp->nm_dnp ? 3 : 1;
+	nfsm_chain_build_alloc_init(error, &nmreq, 28 * NFSX_UNSIGNED);
+	nfsm_chain_add_compound_header(error, &nmreq, "setclid_conf", numops);
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_SETCLIENTID_CONFIRM);
 	nfsm_chain_add_64(error, &nmreq, nmp->nm_clientid);
 	nfsm_chain_add_64(error, &nmreq, verifier);
+	if (nmp->nm_dnp) {
+		/* refresh fs attributes too */
+		numops--;
+		nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTFH);
+		nfsm_chain_add_fh(error, &nmreq, nmp->nm_vers, nmp->nm_dnp->n_fhp, nmp->nm_dnp->n_fhsize);
+		numops--;
+		nfsm_chain_add_32(error, &nmreq, NFS_OP_GETATTR);
+		NFS_CLEAR_ATTRIBUTES(bitmap);
+		NFS4_PER_FS_ATTRIBUTES(bitmap);
+		nfsm_chain_add_bitmap(error, &nmreq, bitmap, NFS_ATTR_BITMAP_LEN);
+	}
 	nfsm_chain_build_done(error, &nmreq);
 	nfsm_assert(error, (numops == 0), EPROTO);
 	nfsmout_if(error);
@@ -169,27 +295,37 @@ nfs4_setclientid(struct nfsmount *nmp)
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_SETCLIENTID_CONFIRM);
 	if (error)
 		printf("nfs4_setclientid: confirm error %d\n", error);
+	if (nmp->nm_dnp) {
+		nfsm_chain_op_check(error, &nmrep, NFS_OP_PUTFH);
+		nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
+		nfsmout_if(error);
+		lck_mtx_lock(&nmp->nm_lock);
+		error = nfs4_parsefattr(&nmrep, &nmp->nm_fsattr, NULL, NULL, NULL);
+		lck_mtx_unlock(&nmp->nm_lock);
+	}
+
 nfsmout:
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
+	kauth_cred_unref(&cred);
 	if (error)
 		printf("nfs4_setclientid failed, %d\n", error);
 	return (error);
 }
 
 /*
- * periodic timer to renew lease state on server
+ * renew/check lease state on server
  */
-void
-nfs4_renew_timer(void *param0, __unused void *param1)
+int
+nfs4_renew(struct nfsmount *nmp, int rpcflag)
 {
-	struct nfsmount *nmp = param0;
-	int error = 0, status, numops, interval;
+	int error = 0, status, numops;
 	u_int64_t xid;
-	vfs_context_t ctx;
 	struct nfsm_chain nmreq, nmrep;
+	kauth_cred_t cred;
 
-	ctx = vfs_context_kernel(); /* XXX */
+	cred = IS_VALID_CRED(nmp->nm_mcred) ? nmp->nm_mcred : vfs_context_ucred(vfs_context_kernel());
+	kauth_cred_ref(cred);
 
 	nfsm_chain_null(&nmreq);
 	nfsm_chain_null(&nmrep);
@@ -204,19 +340,55 @@ nfs4_renew_timer(void *param0, __unused void *param1)
 	nfsm_chain_build_done(error, &nmreq);
 	nfsm_assert(error, (numops == 0), EPROTO);
 	nfsmout_if(error);
-	error = nfs_request(NULL, nmp->nm_mountp, &nmreq, NFSPROC4_COMPOUND, ctx, &nmrep, &xid, &status);
+	error = nfs_request2(NULL, nmp->nm_mountp, &nmreq, NFSPROC4_COMPOUND,
+			current_thread(), cred, rpcflag, &nmrep, &xid, &status);
 	nfsm_chain_skip_tag(error, &nmrep);
 	nfsm_chain_get_32(error, &nmrep, numops);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_RENEW);
 nfsmout:
-	if (error)
-		printf("nfs4_renew_timer: error %d\n", error);
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
+	kauth_cred_unref(&cred);
+	return (error);
+}
+
+
+/*
+ * periodic timer to renew lease state on server
+ */
+void
+nfs4_renew_timer(void *param0, __unused void *param1)
+{
+	struct nfsmount *nmp = param0;
+	u_int64_t clientid;
+	int error = 0, interval;
+
+	lck_mtx_lock(&nmp->nm_lock);
+	clientid = nmp->nm_clientid;
+	if ((nmp->nm_state & NFSSTA_RECOVER) || !(nmp->nm_sockflags & NMSOCK_READY)) {
+		lck_mtx_unlock(&nmp->nm_lock);
+		goto out;
+	}
+	lck_mtx_unlock(&nmp->nm_lock);
+
+	error = nfs4_renew(nmp, R_RECOVER);
+out:
+	if (error == ETIMEDOUT)
+		nfs_need_reconnect(nmp);
+	else if (error)
+		printf("nfs4_renew_timer: error %d\n", error);
+	lck_mtx_lock(&nmp->nm_lock);
+	if (error && (error != ETIMEDOUT) &&
+	    (nmp->nm_clientid == clientid) && !(nmp->nm_state & NFSSTA_RECOVER)) {
+		printf("nfs4_renew_timer: error %d, initiating recovery\n", error);
+		nmp->nm_state |= NFSSTA_RECOVER;
+		nfs_mount_sock_thread_wake(nmp);
+	}
 
 	interval = nmp->nm_fsattr.nfsa_lease / (error ? 4 : 2);
-	if (interval < 1)
+	if ((interval < 1) || (nmp->nm_state & NFSSTA_RECOVER))
 		interval = 1;
+	lck_mtx_unlock(&nmp->nm_lock);
 	nfs_interval_timer_start(nmp->nm_renew_timer, interval * 1000);
 }
 
@@ -327,7 +499,7 @@ nfs4_parsefattr(
 		if (val & ~0xff)
 			printf("nfs: warning unknown fh type: 0x%x\n", val);
 		nfsap->nfsa_flags &= ~NFS_FSFLAG_FHTYPE_MASK;
-		nfsap->nfsa_flags |= val << 24;
+		nfsap->nfsa_flags |= val << NFS_FSFLAG_FHTYPE_SHIFT;
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_CHANGE)) {
@@ -551,7 +723,8 @@ nfs4_parsefattr(
 		nvap->nva_nlink = val;
 		attrbytes -= NFSX_UNSIGNED;
 	}
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_OWNER)) { /* XXX ugly hack for now */
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_OWNER)) {
+		/* XXX Need ID mapping infrastructure - use ugly hack for now */
 		nfsm_chain_get_32(error, nmc, len);
 		nfsm_chain_get_opaque_pointer(error, nmc, len, s);
 		attrbytes -= NFSX_UNSIGNED + nfsm_rndup(len);
@@ -565,7 +738,8 @@ nfs4_parsefattr(
 		else
 			nvap->nva_uid = 99; /* unknown */
 	}
-	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_OWNER_GROUP)) { /* XXX ugly hack for now */
+	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_OWNER_GROUP)) {
+		/* XXX Need ID mapping infrastructure - use ugly hack for now */
 		nfsm_chain_get_32(error, nmc, len);
 		nfsm_chain_get_opaque_pointer(error, nmc, len, s);
 		attrbytes -= NFSX_UNSIGNED + nfsm_rndup(len);
@@ -746,22 +920,34 @@ nfsm_chain_add_fattr4_f(struct nfsm_chain *nmc, struct vnode_attr *vap, struct n
 		attrbytes += NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_OWNER)) {
-		slen = snprintf(s, sizeof(s), "%d", vap->va_uid);
+		/* XXX Need ID mapping infrastructure - use ugly hack for now */
+		if (vap->va_uid == 0)
+			slen = snprintf(s, sizeof(s), "root@localdomain");
+		else if (vap->va_uid == (uid_t)-2)
+			slen = snprintf(s, sizeof(s), "nobody@localdomain");
+		else
+			slen = snprintf(s, sizeof(s), "%d", vap->va_uid);
 		nfsm_chain_add_string(error, nmc, s, slen);
 		attrbytes += NFSX_UNSIGNED + nfsm_rndup(slen);
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_OWNER_GROUP)) {
-		slen = snprintf(s, sizeof(s), "%d", vap->va_gid);
+		/* XXX Need ID mapping infrastructure - use ugly hack for now */
+		if (vap->va_gid == 0)
+			slen = snprintf(s, sizeof(s), "root@localdomain");
+		else if (vap->va_gid == (gid_t)-2)
+			slen = snprintf(s, sizeof(s), "nobody@localdomain");
+		else
+			slen = snprintf(s, sizeof(s), "%d", vap->va_gid);
 		nfsm_chain_add_string(error, nmc, s, slen);
 		attrbytes += NFSX_UNSIGNED + nfsm_rndup(slen);
 	}
 	// NFS_BITMAP_SET(bitmap, NFS_FATTR_SYSTEM)
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_ACCESS_SET)) {
 		if (vap->va_vaflags & VA_UTIMES_NULL) {
-			nfsm_chain_add_32(error, nmc, NFS_TIME_SET_TO_SERVER);
+			nfsm_chain_add_32(error, nmc, NFS4_TIME_SET_TO_SERVER);
 			attrbytes += NFSX_UNSIGNED;
 		} else {
-			nfsm_chain_add_32(error, nmc, NFS_TIME_SET_TO_CLIENT);
+			nfsm_chain_add_32(error, nmc, NFS4_TIME_SET_TO_CLIENT);
 			nfsm_chain_add_64(error, nmc, vap->va_access_time.tv_sec);
 			nfsm_chain_add_32(error, nmc, vap->va_access_time.tv_nsec);
 			attrbytes += 4*NFSX_UNSIGNED;
@@ -779,10 +965,10 @@ nfsm_chain_add_fattr4_f(struct nfsm_chain *nmc, struct vnode_attr *vap, struct n
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_TIME_MODIFY_SET)) {
 		if (vap->va_vaflags & VA_UTIMES_NULL) {
-			nfsm_chain_add_32(error, nmc, NFS_TIME_SET_TO_SERVER);
+			nfsm_chain_add_32(error, nmc, NFS4_TIME_SET_TO_SERVER);
 			attrbytes += NFSX_UNSIGNED;
 		} else {
-			nfsm_chain_add_32(error, nmc, NFS_TIME_SET_TO_CLIENT);
+			nfsm_chain_add_32(error, nmc, NFS4_TIME_SET_TO_CLIENT);
 			nfsm_chain_add_64(error, nmc, vap->va_modify_time.tv_sec);
 			nfsm_chain_add_32(error, nmc, vap->va_modify_time.tv_nsec);
 			attrbytes += 4*NFSX_UNSIGNED;
@@ -793,5 +979,206 @@ nfsm_chain_add_fattr4_f(struct nfsm_chain *nmc, struct vnode_attr *vap, struct n
 	*pattrbytes = txdr_unsigned(attrbytes);
 nfsmout:
 	return (error);
+}
+
+/*
+ * Recover state for an NFS mount.
+ *
+ * Iterates over all open files, reclaiming opens and lock state.
+ */
+void
+nfs4_recover(struct nfsmount *nmp)
+{
+	struct timespec ts = { 1, 0 };
+	int error, lost, reopen;
+	struct nfs_open_owner *noop;
+	struct nfs_open_file *nofp;
+	struct nfs_file_lock *nflp, *nextnflp;
+	struct nfs_lock_owner *nlop;
+	thread_t thd = current_thread();
+
+restart:
+	error = 0;
+	lck_mtx_lock(&nmp->nm_lock);
+	/*
+	 * First, wait for the state inuse count to go to zero so
+	 * we know there are no state operations in progress.
+	 */
+	do {
+		if ((error = nfs_sigintr(nmp, NULL, NULL, 1)))
+			break;
+		if (!(nmp->nm_sockflags & NMSOCK_READY))
+			error = EPIPE;
+		if (nmp->nm_state & NFSSTA_FORCE)
+			error = ENXIO;
+		if (nmp->nm_sockflags & NMSOCK_UNMOUNT)
+			error = ENXIO;
+		if (error)
+			break;
+		if (nmp->nm_stateinuse)
+			msleep(&nmp->nm_stateinuse, &nmp->nm_lock, (PZERO-1), "nfsrecoverstartwait", &ts);
+	} while (nmp->nm_stateinuse);
+	if (error) {
+		if (error == EPIPE)
+			printf("nfs recovery reconnecting\n");
+		else
+			printf("nfs recovery aborted\n");
+		lck_mtx_unlock(&nmp->nm_lock);
+		return;
+	}
+
+	printf("nfs recovery started\n");
+	if (++nmp->nm_stategenid == 0)
+		++nmp->nm_stategenid;
+	lck_mtx_unlock(&nmp->nm_lock);
+
+	/* for each open owner... */
+	TAILQ_FOREACH(noop, &nmp->nm_open_owners, noo_link) {
+		/* for each of its opens... */
+		TAILQ_FOREACH(nofp, &noop->noo_opens, nof_oolink) {
+			if (!nofp->nof_access || (nofp->nof_flags & NFS_OPEN_FILE_LOST))
+				continue;
+			lost = reopen = 0;
+			if (nofp->nof_rw_drw)
+				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_BOTH, NFS_OPEN_SHARE_DENY_BOTH);
+			if (!error && nofp->nof_w_drw)
+				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_WRITE, NFS_OPEN_SHARE_DENY_BOTH);
+			if (!error && nofp->nof_r_drw)
+				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_BOTH);
+			if (!error && nofp->nof_rw_dw)
+				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_BOTH, NFS_OPEN_SHARE_DENY_WRITE);
+			if (!error && nofp->nof_w_dw)
+				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_WRITE, NFS_OPEN_SHARE_DENY_WRITE);
+			if (!error && nofp->nof_r_dw)
+				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_WRITE);
+			/*
+			 * deny-none opens with no locks can just be reopened (later) if reclaim fails.
+			 */
+			if (!error && nofp->nof_rw) {
+				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_BOTH, NFS_OPEN_SHARE_DENY_NONE);
+				if ((error == NFSERR_ADMIN_REVOKED) || (error == NFSERR_EXPIRED) || (error == NFSERR_NO_GRACE))
+					reopen = 1;
+			}
+			if (!error && nofp->nof_w) {
+				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_WRITE, NFS_OPEN_SHARE_DENY_NONE);
+				if ((error == NFSERR_ADMIN_REVOKED) || (error == NFSERR_EXPIRED) || (error == NFSERR_NO_GRACE))
+					reopen = 1;
+			}
+			if (!error && nofp->nof_r) {
+				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_NONE);
+				if ((error == NFSERR_ADMIN_REVOKED) || (error == NFSERR_EXPIRED) || (error == NFSERR_NO_GRACE))
+					reopen = 1;
+			}
+
+			if (error) {
+				/* restart recovery? */
+				if ((error == ETIMEDOUT) || nfs_mount_state_error_should_restart(error)) {
+					if (error == ETIMEDOUT)
+						nfs_need_reconnect(nmp);
+					tsleep(&lbolt, (PZERO-1), "nfsrecoverrestart", 0);
+					printf("nfs recovery restarting %d\n", error);
+					goto restart;
+				}
+				if (reopen && (nfs4_check_for_locks(noop, nofp) == 0)) {
+					/* just reopen the file on next access */
+					const char *vname = vnode_getname(NFSTOV(nofp->nof_np));
+					printf("nfs4_recover: %d, need reopen for %s\n", error, vname ? vname : "???");
+					vnode_putname(vname);
+					lck_mtx_lock(&nofp->nof_lock);
+					nofp->nof_flags |= NFS_OPEN_FILE_REOPEN;
+					lck_mtx_unlock(&nofp->nof_lock);
+					error = 0;
+				} else {
+					/* open file state lost */
+					lost = 1;
+					error = 0;
+					lck_mtx_lock(&nofp->nof_lock);
+					nofp->nof_flags &= ~NFS_OPEN_FILE_REOPEN;
+					lck_mtx_unlock(&nofp->nof_lock);
+				}
+			} else {
+				/* no error, so make sure the reopen flag isn't set */
+				lck_mtx_lock(&nofp->nof_lock);
+				nofp->nof_flags &= ~NFS_OPEN_FILE_REOPEN;
+				lck_mtx_unlock(&nofp->nof_lock);
+			}
+			/*
+			 * Scan this node's lock owner list for entries with this open owner,
+			 * then walk the lock owner's held lock list recovering each lock.
+			 */
+rescanlocks:
+			TAILQ_FOREACH(nlop, &nofp->nof_np->n_lock_owners, nlo_link) {
+				if (nlop->nlo_open_owner != noop)
+					continue;
+				TAILQ_FOREACH_SAFE(nflp, &nlop->nlo_locks, nfl_lolink, nextnflp) {
+					if (nflp->nfl_flags & (NFS_FILE_LOCK_DEAD|NFS_FILE_LOCK_BLOCKED))
+						continue;
+					if (!lost) {
+						error = nfs4_lock_rpc(nofp->nof_np, nofp, nflp, 1, thd, noop->noo_cred);
+						if (!error)
+							continue;
+						/* restart recovery? */
+						if ((error == ETIMEDOUT) || nfs_mount_state_error_should_restart(error)) {
+							if (error == ETIMEDOUT)
+								nfs_need_reconnect(nmp);
+							tsleep(&lbolt, (PZERO-1), "nfsrecoverrestart", 0);
+							printf("nfs recovery restarting %d\n", error);
+							goto restart;
+						}
+						/* lock state lost - attempt to close file */ 
+						lost = 1;
+						error = nfs4_close_rpc(nofp->nof_np, nofp, NULL, noop->noo_cred, R_RECOVER);
+						if ((error == ETIMEDOUT) || nfs_mount_state_error_should_restart(error)) {
+							if (error == ETIMEDOUT)
+								nfs_need_reconnect(nmp);
+							tsleep(&lbolt, (PZERO-1), "nfsrecoverrestart", 0);
+							printf("nfs recovery restarting %d\n", error);
+							goto restart;
+						}
+						error = 0;
+						/* rescan locks so we can drop them all */
+						goto rescanlocks;
+					}
+					if (lost) {
+						/* kill/remove the lock */
+						lck_mtx_lock(&nofp->nof_np->n_openlock);
+						nflp->nfl_flags |= NFS_FILE_LOCK_DEAD;
+						lck_mtx_lock(&nlop->nlo_lock);
+						nextnflp = TAILQ_NEXT(nflp, nfl_lolink);
+						TAILQ_REMOVE(&nlop->nlo_locks, nflp, nfl_lolink);
+						lck_mtx_unlock(&nlop->nlo_lock);
+						if (nflp->nfl_blockcnt) {
+							/* wake up anyone blocked on this lock */
+							wakeup(nflp);
+						} else {
+							/* remove nflp from lock list and destroy */
+							TAILQ_REMOVE(&nofp->nof_np->n_locks, nflp, nfl_link);
+							nfs_file_lock_destroy(nflp);
+						}
+						lck_mtx_unlock(&nofp->nof_np->n_openlock);
+					}
+				}
+			}
+			if (lost) {
+				/* revoke open file state */
+				lck_mtx_lock(&nofp->nof_lock);
+				nofp->nof_flags |= NFS_OPEN_FILE_LOST;
+				lck_mtx_unlock(&nofp->nof_lock);
+				const char *vname = vnode_getname(NFSTOV(nofp->nof_np));
+				printf("nfs4_recover: state lost for %s\n", vname ? vname : "???");
+				vnode_putname(vname);
+			}
+		}
+	}
+
+	if (!error) {
+		lck_mtx_lock(&nmp->nm_lock);
+		nmp->nm_state &= ~NFSSTA_RECOVER;
+		wakeup(&nmp->nm_state);
+		printf("nfs recovery completed\n");
+		lck_mtx_unlock(&nmp->nm_lock);
+	} else {
+		printf("nfs recovery failed %d\n", error);
+	}
 }
 

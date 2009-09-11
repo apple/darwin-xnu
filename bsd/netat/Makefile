@@ -26,29 +26,28 @@ COMP_SUBDIRS = 	\
 
 INST_SUBDIRS =	\
 
-DATAFILES = appletalk.h atp.h asp.h aurp.h \
-	    ddp.h ep.h lap.h nbp.h pap.h zip.h \
-	    adsp.h at_pat.h  at_snmp.h at_aarp.h \
-	    rtmp.h
+DATAFILES =
 
 PRIVATE_DATAFILES = \
-	 debug.h routing_tables.h sysglue.h at_var.h
+	    appletalk.h atp.h asp.h aurp.h \
+	    ddp.h ep.h lap.h nbp.h pap.h zip.h \
+	    adsp.h at_pat.h  at_snmp.h at_aarp.h \
+	    rtmp.h	 debug.h routing_tables.h sysglue.h at_var.h \
+		adsp_internal.h at_ddp_brt.h at_pcb.h
 
-PRIVATE_KERNELFILES = \
-	adsp_internal.h at_ddp_brt.h at_pcb.h
-	
+PRIVATE_KERNELFILES = 
 
-INSTALL_MI_LIST	= ${DATAFILES}
+INSTALL_MI_LIST	= 
 
-INSTALL_MI_DIR = netat
+INSTALL_MI_DIR = 
 
-EXPORT_MI_LIST	= ${DATAFILES}
+EXPORT_MI_LIST	=
 
 EXPORT_MI_DIR = netat
 
-INSTALL_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
+INSTALL_MI_LCL_LIST = 
 
-INSTALL_KF_MI_LCL_LIST = ${INSTALL_MI_LCL_LIST} ${PRIVATE_KERNELFILES}
+INSTALL_KF_MI_LCL_LIST =
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

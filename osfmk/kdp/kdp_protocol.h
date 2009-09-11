@@ -26,11 +26,15 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#ifndef _KDP_PROTOCOL_H_
+#define _KDP_PROTOCOL_H_
+
 /*
  * Definition of remote debugger protocol.
  */
 
 #include	<mach/vm_prot.h>
+#include	<stdint.h>
 
 /*
  * Retransmit parameters
@@ -41,6 +45,8 @@
 #define	KDP_REXMIT_SECS		3	/* rexmit if no ack in 3 secs */
 #endif	/* DDEBUG_DEBUG || DEBUG_DEBUG */
 #define	KDP_REXMIT_TRIES	8	/* xmit 8 times, then give up */
+
+#define KDP_PACKED __attribute__((packed))
 
 /*
  * (NMI) Attention Max Wait Time
@@ -98,19 +104,40 @@ typedef enum {
 	KDP_REATTACH,
 
 	/* remote reboot request */
-	KDP_HOSTREBOOT
+	KDP_HOSTREBOOT,
+
+	/* memory access (64-bit wide addresses). Version 11 protocol */
+	KDP_READMEM64,	KDP_WRITEMEM64,
+
+	/* breakpoint control (64-bit wide addresses). Version 11 protocol */
+	KDP_BREAKPOINT64_SET, KDP_BREAKPOINT64_REMOVE,
+	
+	/* kernel version string, like "xnu-1234.5~6". Version 11 protocol */
+	KDP_KERNELVERSION,
+	
+	/* physical memory access (64-bit wide addresses). Version 12 protocol */
+	KDP_READPHYSMEM64,	KDP_WRITEPHYSMEM64,
+
+        /* ioport access (8-, 16-, and 32-bit) */
+	KDP_READIOPORT,	KDP_WRITEIOPORT,
+
+        /* msr access (64-bit) */
+	KDP_READMSR64,	KDP_WRITEMSR64,
+
+	/* keep this last */
+	KDP_INVALID_REQUEST
 } kdp_req_t;
 
 /*
  * Common KDP packet header
  */
 typedef struct {
-	kdp_req_t	request:7;	/* request type */
+	kdp_req_t	request:7;	/* kdp_req_t, request type */
 	unsigned	is_reply:1;	/* 0 => request, 1 => reply */
 	unsigned	seq:8;		/* sequence number within session */
 	unsigned	len:16;		/* length of entire pkt including hdr */
 	unsigned	key;		/* session key */
-} kdp_hdr_t;
+} KDP_PACKED kdp_hdr_t;
 
 /*
  * KDP errors
@@ -119,7 +146,11 @@ typedef enum {
 	KDPERR_NO_ERROR = 0,
 	KDPERR_ALREADY_CONNECTED,
 	KDPERR_BAD_NBYTES,
-	KDPERR_BADFLAVOR		/* bad flavor in w/r regs */
+	KDPERR_BADFLAVOR,		/* bad flavor in w/r regs */
+	KDPERR_MAX_BREAKPOINTS = 100,
+	KDPERR_BREAKPOINT_NOT_FOUND = 101,
+	KDPERR_BREAKPOINT_ALREADY_SET = 102
+
 } kdp_error_t;
 
 /*
@@ -131,163 +162,289 @@ typedef enum {
  */
 typedef struct {			/* KDP_CONNECT request */
 	kdp_hdr_t	hdr;
-	unsigned short	req_reply_port;	/* udp port which to send replies */
-	unsigned short	exc_note_port;	/* udp port which to send exc notes */
-	char		greeting[0];	/* "greetings", null-terminated */
-} kdp_connect_req_t;
+	uint16_t	req_reply_port;	/* udp port which to send replies */
+	uint16_t	exc_note_port;	/* udp port which to send exc notes */
+	char		greeting[0];	/* "greetings", nul-terminated */
+} KDP_PACKED kdp_connect_req_t;
 
 typedef struct {			/* KDP_CONNECT reply */
 	kdp_hdr_t	hdr;
 	kdp_error_t	error;
-} kdp_connect_reply_t;
+} KDP_PACKED kdp_connect_reply_t;
 
 /*
  * KDP_DISCONNECT
  */
 typedef struct {			/* KDP_DISCONNECT request */
 	kdp_hdr_t	hdr;
-} kdp_disconnect_req_t;
+} KDP_PACKED kdp_disconnect_req_t;
 
 typedef struct {			/* KDP_DISCONNECT reply */
 	kdp_hdr_t	hdr;
-} kdp_disconnect_reply_t;
+} KDP_PACKED kdp_disconnect_reply_t;
 
 /*
  * KDP_REATTACH
  */
 typedef struct {
   kdp_hdr_t hdr;
-  unsigned short req_reply_port; /* udp port which to send replies */
-} kdp_reattach_req_t;
+  uint16_t req_reply_port; /* udp port which to send replies */
+} KDP_PACKED kdp_reattach_req_t;
 
 /*
  * KDP_HOSTINFO
  */
 typedef struct {			/* KDP_HOSTINFO request */
 	kdp_hdr_t	hdr;
-} kdp_hostinfo_req_t;
+} KDP_PACKED kdp_hostinfo_req_t;
 
 typedef struct {
-	unsigned	cpus_mask;	/* bit is 1 if cpu present */
-	int		cpu_type;
-	int		cpu_subtype;
-} kdp_hostinfo_t;
+	uint32_t		cpus_mask;	/* bit is 1 if cpu present */
+	uint32_t		cpu_type;
+	uint32_t		cpu_subtype;
+} KDP_PACKED kdp_hostinfo_t;
 
 typedef struct {			/* KDP_HOSTINFO reply */
 	kdp_hdr_t	hdr;
 	kdp_hostinfo_t	hostinfo;
-} kdp_hostinfo_reply_t;
+} KDP_PACKED kdp_hostinfo_reply_t;
 
 /*
  * KDP_VERSION
  */
 typedef struct {			/* KDP_VERSION request */
 	kdp_hdr_t	hdr;
-} kdp_version_req_t;
+} KDP_PACKED kdp_version_req_t;
 
 #define	KDP_FEATURE_BP	0x1	/* local breakpoint support */
 
-typedef struct {			/* KDP_REGIONS reply */
+typedef struct {			/* KDP_VERSION reply */
 	kdp_hdr_t	hdr;
-	unsigned	version;
-	unsigned	feature;
-	unsigned	pad0;
-	unsigned	pad1;
-} kdp_version_reply_t;
+	uint32_t	version;
+	uint32_t	feature;
+	uint32_t	pad0;
+	uint32_t	pad1;
+} KDP_PACKED kdp_version_reply_t;
+
+#define	VM_PROT_VOLATILE	((vm_prot_t) 0x08)	/* not cacheable */
+#define	VM_PROT_SPARSE		((vm_prot_t) 0x10)	/* sparse addr space */
 
 /*
  * KDP_REGIONS
  */
 typedef struct {			/* KDP_REGIONS request */
 	kdp_hdr_t	hdr;
-} kdp_regions_req_t;
-
-#define	VM_PROT_VOLATILE	((vm_prot_t) 0x08)	/* not cacheable */
-#define	VM_PROT_SPARSE		((vm_prot_t) 0x10)	/* sparse addr space */
+} KDP_PACKED kdp_regions_req_t;
 
 typedef struct {
-	void		*address;
-	unsigned	nbytes;
-	vm_prot_t	protection;
-} kdp_region_t;
+	uint32_t	address;
+	uint32_t	nbytes;
+	uint32_t	protection;	/* vm_prot_t */
+} KDP_PACKED kdp_region_t;
 
 typedef struct {			/* KDP_REGIONS reply */
 	kdp_hdr_t	hdr;
-	unsigned	nregions;
+	uint32_t	nregions;
 	kdp_region_t	regions[0];
-} kdp_regions_reply_t;
+} KDP_PACKED kdp_regions_reply_t;
 
 /*
  * KDP_MAXBYTES
  */
 typedef struct {			/* KDP_MAXBYTES request */
 	kdp_hdr_t	hdr;
-} kdp_maxbytes_req_t;
+} KDP_PACKED kdp_maxbytes_req_t;
 
 typedef struct {			/* KDP_MAXBYTES reply */
 	kdp_hdr_t	hdr;
-	unsigned	max_bytes;
-} kdp_maxbytes_reply_t;
+	uint32_t	max_bytes;
+} KDP_PACKED kdp_maxbytes_reply_t;
 
 /*
  * KDP_READMEM
  */
 typedef struct {			/* KDP_READMEM request */
 	kdp_hdr_t	hdr;
-	void		*address;
-	unsigned	nbytes;
-} kdp_readmem_req_t;
+	uint32_t	address;
+	uint32_t	nbytes;
+} KDP_PACKED kdp_readmem_req_t;
 
 typedef struct {			/* KDP_READMEM reply */
 	kdp_hdr_t	hdr;
 	kdp_error_t	error;
 	char		data[0];
-} kdp_readmem_reply_t;
+} KDP_PACKED kdp_readmem_reply_t;
+
+/*
+ * KDP_READMEM64
+ */
+typedef struct {			/* KDP_READMEM64 request */
+	kdp_hdr_t	hdr;
+	uint64_t	address;
+	uint32_t	nbytes;
+} KDP_PACKED kdp_readmem64_req_t;
+
+typedef struct {			/* KDP_READMEM64 reply */
+	kdp_hdr_t	hdr;
+	kdp_error_t	error;
+	char		data[0];
+} KDP_PACKED kdp_readmem64_reply_t;
+
+/*
+ * KDP_READPHYSMEM64
+ */
+typedef struct {			/* KDP_READPHYSMEM64 request */
+	kdp_hdr_t	hdr;
+	uint64_t	address;
+	uint32_t	nbytes;
+	uint16_t        lcpu;
+} KDP_PACKED kdp_readphysmem64_req_t;
+
+typedef struct {			/* KDP_READPHYSMEM64 reply */
+	kdp_hdr_t	hdr;
+	kdp_error_t	error;
+	char		data[0];
+} KDP_PACKED kdp_readphysmem64_reply_t;
 
 /*
  * KDP_WRITEMEM
  */
 typedef struct {			/* KDP_WRITEMEM request */
 	kdp_hdr_t	hdr;
-	void		*address;
-	unsigned	nbytes;
+	uint32_t	address;
+	uint32_t	nbytes;
 	char		data[0];
-} kdp_writemem_req_t;
+} KDP_PACKED kdp_writemem_req_t;
 
 typedef struct {			/* KDP_WRITEMEM reply */
 	kdp_hdr_t	hdr;
 	kdp_error_t	error;
-} kdp_writemem_reply_t;
+} KDP_PACKED kdp_writemem_reply_t;
+
+/*
+ * KDP_WRITEMEM64
+ */
+typedef struct {			/* KDP_WRITEMEM64 request */
+	kdp_hdr_t	hdr;
+	uint64_t	address;
+	uint32_t	nbytes;
+	char		data[0];
+} KDP_PACKED kdp_writemem64_req_t;
+
+typedef struct {			/* KDP_WRITEMEM64 reply */
+	kdp_hdr_t	hdr;
+	kdp_error_t	error;
+} KDP_PACKED kdp_writemem64_reply_t;
+
+/*
+ * KDP_WRITEPHYSMEM64
+ */
+typedef struct {			/* KDP_WRITEPHYSMEM64 request */
+	kdp_hdr_t	hdr;
+	uint64_t	address;
+	uint32_t	nbytes;
+	uint16_t        lcpu;
+	char		data[0];
+} KDP_PACKED kdp_writephysmem64_req_t;
+
+typedef struct {			/* KDP_WRITEPHYSMEM64 reply */
+	kdp_hdr_t	hdr;
+	kdp_error_t	error;
+} KDP_PACKED kdp_writephysmem64_reply_t;
+
+/*
+ * KDP_WRITEIOPORT
+ */
+typedef struct {			/* KDP_WRITEIOPORT request */
+	kdp_hdr_t	hdr;
+	uint16_t	lcpu;
+	uint16_t	address;
+	uint16_t	nbytes;
+	char		data[0];
+} KDP_PACKED kdp_writeioport_req_t;
+
+typedef struct {			/* KDP_WRITEIOPORT reply */
+	kdp_hdr_t	hdr;
+	kdp_error_t	error;
+} KDP_PACKED kdp_writeioport_reply_t;
+
+/*
+ * KDP_READIOPORT
+ */
+typedef struct {			/* KDP_READIOPORT request */
+	kdp_hdr_t	hdr;
+	uint16_t	lcpu;
+	uint16_t	address;
+	uint16_t	nbytes;
+} KDP_PACKED kdp_readioport_req_t;
+
+typedef struct {			/* KDP_READIOPORT reply */
+	kdp_hdr_t	hdr;
+	kdp_error_t	error;
+	char		data[0];
+} KDP_PACKED kdp_readioport_reply_t;
+
+
+/*
+ * KDP_WRITEMSR64
+ */
+typedef struct {			/* KDP_WRITEMSR64 request */
+	kdp_hdr_t	hdr;
+	uint32_t	address;
+	uint16_t	lcpu;
+	char		data[0];
+} KDP_PACKED kdp_writemsr64_req_t;
+
+typedef struct {			/* KDP_WRITEMSR64 reply */
+	kdp_hdr_t	hdr;
+	kdp_error_t	error;
+} KDP_PACKED kdp_writemsr64_reply_t;
+
+/*
+ * KDP_READMSR64
+ */
+typedef struct {			/* KDP_READMSR64 request */
+	kdp_hdr_t	hdr;
+	uint32_t	address;
+	uint16_t	lcpu;
+} KDP_PACKED kdp_readmsr64_req_t;
+
+typedef struct {			/* KDP_READMSR64 reply */
+	kdp_hdr_t	hdr;
+	kdp_error_t	error;
+	char		data[0];
+} KDP_PACKED kdp_readmsr64_reply_t;
+
 
 /*
  * KDP_READREGS
  */
 typedef struct {			/* KDP_READREGS request */
 	kdp_hdr_t	hdr;
-	unsigned	cpu;
-	unsigned	flavor;
-} kdp_readregs_req_t;
+	uint32_t	cpu;
+	uint32_t	flavor;
+} KDP_PACKED kdp_readregs_req_t;
 
 typedef struct {			/* KDP_READREGS reply */
 	kdp_hdr_t	hdr;
 	kdp_error_t	error;		/* could be KDPERR_BADFLAVOR */
 	char		data[0];
-} kdp_readregs_reply_t;
+} KDP_PACKED kdp_readregs_reply_t;
 
 /*
  * KDP_WRITEREGS
  */
 typedef struct {			/* KDP_WRITEREGS request */
 	kdp_hdr_t	hdr;
-	unsigned	cpu;
-	unsigned	flavor;
+	uint32_t	cpu;
+	uint32_t	flavor;
 	char		data[0];
-} kdp_writeregs_req_t;
+} KDP_PACKED kdp_writeregs_req_t;
 
 typedef struct {			/* KDP_WRITEREGS reply */
 	kdp_hdr_t	hdr;
 	kdp_error_t	error;
-} kdp_writeregs_reply_t;
+} KDP_PACKED kdp_writeregs_reply_t;
 
 /*
  * KDP_LOAD
@@ -295,57 +452,75 @@ typedef struct {			/* KDP_WRITEREGS reply */
 typedef struct {			/* KDP_LOAD request */
 	kdp_hdr_t	hdr;
 	char		file_args[0];
-} kdp_load_req_t;
+} KDP_PACKED kdp_load_req_t;
 
 typedef struct {			/* KDP_LOAD reply */
 	kdp_hdr_t	hdr;
 	kdp_error_t	error;
-} kdp_load_reply_t;
+} KDP_PACKED kdp_load_reply_t;
 
 /*
  * KDP_IMAGEPATH
  */
 typedef struct {			/* KDP_IMAGEPATH request */
 	kdp_hdr_t	hdr;
-} kdp_imagepath_req_t;
+} KDP_PACKED kdp_imagepath_req_t;
 
 typedef struct {			/* KDP_IMAGEPATH reply */
 	kdp_hdr_t	hdr;
 	char		path[0];
-} kdp_imagepath_reply_t;
+} KDP_PACKED kdp_imagepath_reply_t;
 
 /*
  * KDP_SUSPEND
  */
 typedef struct {			/* KDP_SUSPEND request */
 	kdp_hdr_t	hdr;
-} kdp_suspend_req_t;
+} KDP_PACKED kdp_suspend_req_t;
 
 typedef struct {			/* KDP_SUSPEND reply */
 	kdp_hdr_t	hdr;
-} kdp_suspend_reply_t;
+} KDP_PACKED kdp_suspend_reply_t;
 
 /*
  * KDP_RESUMECPUS
  */
 typedef struct {			/* KDP_RESUMECPUS request */
 	kdp_hdr_t	hdr;
-	unsigned	cpu_mask;
-} kdp_resumecpus_req_t;
+	uint32_t	cpu_mask;
+} KDP_PACKED kdp_resumecpus_req_t;
 
 typedef struct {			/* KDP_RESUMECPUS reply */
 	kdp_hdr_t	hdr;
-} kdp_resumecpus_reply_t;
+} KDP_PACKED kdp_resumecpus_reply_t;
+
+/*
+ * KDP_BREAKPOINT_SET and KDP_BREAKPOINT_REMOVE
+ */
 
 typedef struct {
   kdp_hdr_t hdr;
-  unsigned long address;
-} kdp_breakpoint_req_t;
+  uint32_t	address;
+} KDP_PACKED kdp_breakpoint_req_t;
 
 typedef struct {
   kdp_hdr_t hdr;
   kdp_error_t error;
-} kdp_breakpoint_reply_t;
+} KDP_PACKED kdp_breakpoint_reply_t;
+
+/*
+ * KDP_BREAKPOINT64_SET and KDP_BREAKPOINT64_REMOVE
+ */
+
+typedef struct {
+	kdp_hdr_t hdr;
+	uint64_t	address;
+} KDP_PACKED kdp_breakpoint64_req_t;
+
+typedef struct {
+	kdp_hdr_t hdr;
+	kdp_error_t error;
+} KDP_PACKED kdp_breakpoint64_reply_t;
 
 /*
  * Exception notifications
@@ -353,25 +528,38 @@ typedef struct {
  * the remote debugger to the gdb agent KDB.)
  */
 typedef struct {			/* exc. info for one cpu */
-	unsigned	cpu;
+	uint32_t	cpu;
 	/*
 	 * Following info is defined as
 	 * per <mach/exception.h>
 	 */
-	unsigned	exception;
-	unsigned	code;
-	unsigned	subcode;
-} kdp_exc_info_t;
+	uint32_t	exception;
+	uint32_t	code;
+	uint32_t	subcode;
+} KDP_PACKED kdp_exc_info_t;
 
 typedef struct {			/* KDP_EXCEPTION notification */
 	kdp_hdr_t	hdr;
-	unsigned	n_exc_info;
+	uint32_t	n_exc_info;
 	kdp_exc_info_t	exc_info[0];
-} kdp_exception_t;
+} KDP_PACKED kdp_exception_t;
 
 typedef struct {			/* KDP_EXCEPTION acknowledgement */
 	kdp_hdr_t	hdr;
-} kdp_exception_ack_t;
+} KDP_PACKED kdp_exception_ack_t;
+
+/*
+ * KDP_KERNELVERSION
+ */
+typedef struct {			/* KDP_KERNELVERSION request */
+	kdp_hdr_t	hdr;
+} KDP_PACKED kdp_kernelversion_req_t;
+
+typedef struct {			/* KDP_KERNELVERSION reply */
+	kdp_hdr_t	hdr;
+	char		version[0];
+} KDP_PACKED kdp_kernelversion_reply_t;
+
 
 /*
  * Child termination messages
@@ -386,13 +574,13 @@ typedef enum {
 
 typedef struct {			/* KDP_TERMINATION notification */
 	kdp_hdr_t		hdr;
-	kdp_termination_code_t	term_code;
-	unsigned		exit_code;
-} kdp_termination_t;
+	uint32_t		term_code;	/* kdp_termination_code_t */
+	uint32_t		exit_code;
+} KDP_PACKED kdp_termination_t;
 
 typedef struct {
 	kdp_hdr_t	hdr;
-} kdp_termination_ack_t;
+} KDP_PACKED kdp_termination_ack_t;
 
 typedef union {
 	kdp_hdr_t		hdr;
@@ -408,8 +596,16 @@ typedef union {
 	kdp_maxbytes_reply_t	maxbytes_reply;
 	kdp_readmem_req_t	readmem_req;
 	kdp_readmem_reply_t	readmem_reply;
+	kdp_readmem64_req_t	readmem64_req;
+	kdp_readmem64_reply_t	readmem64_reply;
+	kdp_readphysmem64_req_t	readphysmem64_req;
+	kdp_readphysmem64_reply_t	readphysmem64_reply;
 	kdp_writemem_req_t	writemem_req;
 	kdp_writemem_reply_t	writemem_reply;
+	kdp_writemem64_req_t	writemem64_req;
+	kdp_writemem64_reply_t	writemem64_reply;
+	kdp_writephysmem64_req_t	writephysmem64_req;
+	kdp_writephysmem64_reply_t	writephysmem64_reply;
 	kdp_readregs_req_t	readregs_req;
 	kdp_readregs_reply_t	readregs_reply;
 	kdp_writeregs_req_t	writeregs_req;
@@ -428,10 +624,24 @@ typedef union {
 	kdp_termination_ack_t	termination_ack;
 	kdp_breakpoint_req_t	breakpoint_req;
 	kdp_breakpoint_reply_t	breakpoint_reply;
+	kdp_breakpoint64_req_t	breakpoint64_req;
+	kdp_breakpoint64_reply_t	breakpoint64_reply;
 	kdp_reattach_req_t	reattach_req;
 	kdp_regions_req_t	regions_req;
 	kdp_regions_reply_t	regions_reply;
+	kdp_kernelversion_req_t	kernelversion_req;
+	kdp_kernelversion_reply_t	kernelversion_reply;
+	kdp_readioport_req_t	readioport_req;
+	kdp_readioport_reply_t	readioport_reply;
+	kdp_writeioport_req_t	writeioport_req;
+	kdp_writeioport_reply_t	writeioport_reply;
+	kdp_readmsr64_req_t	readmsr64_req;
+	kdp_readmsr64_reply_t	readmsr64_reply;
+	kdp_writemsr64_req_t	writemsr64_req;
+	kdp_writemsr64_reply_t	writemsr64_reply;
 } kdp_pkt_t;
 
 #define MAX_KDP_PKT_SIZE	1200	/* max packet size */
 #define MAX_KDP_DATA_SIZE	1024	/* max r/w data per packet */
+
+#endif // _KDP_PROTOCOL_H_

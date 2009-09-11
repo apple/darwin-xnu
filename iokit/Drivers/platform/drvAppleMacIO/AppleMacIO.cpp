@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -44,6 +44,8 @@ extern "C" {
 #include <IOKit/IOPlatformExpert.h>
 
 #include <IOKit/pci/IOPCIDevice.h>
+
+#include <IOKit/IOBufferMemoryDescriptor.h>
 
 #include <IOKit/platform/AppleMacIO.h>
 
@@ -171,6 +173,7 @@ bool AppleMacIO::selfTest( void )
     UInt32				i;
     UInt32				status;
     IODBDMADescriptor			*dmaDesc;
+    IOBufferMemoryDescriptor		*buffer;
     volatile IODBDMAChannelRegisters	*ioBaseDMA;
     bool				ok = false;
     enum { 				kTestChannel = 0x8000 };
@@ -180,7 +183,9 @@ bool AppleMacIO::selfTest( void )
 		+ kTestChannel );
 
     do {
-        dmaDescriptors = (IODBDMADescriptor *)IOMallocContiguous(page_size, 1, & dmaDescriptorsPhys);
+	buffer = IOBufferMemoryDescriptor::withCapacity(page_size, kIODirectionOutIn, true);
+	dmaDescriptors = (IODBDMADescriptor*)buffer->getBytesNoCopy();
+
         if (!dmaDescriptors)
 	    continue;
 
@@ -205,6 +210,8 @@ bool AppleMacIO::selfTest( void )
                             0 );
 
         dmaDesc++;
+
+	dmaDescriptorsPhys = (UInt32) (buffer->getPhysicalSegment(0, NULL, 0));
 
         IOMakeDBDMADescriptorDep( dmaDesc,
                                 kdbdmaStoreQuad,
@@ -249,9 +256,8 @@ bool AppleMacIO::selfTest( void )
 
     } while (false);
 
-    if (dmaDescriptors)
-	IOFreeContiguous(dmaDescriptors, page_size);
-
+    if (buffer)
+	    buffer->release();
 
     return ok;
 }

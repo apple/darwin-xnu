@@ -32,6 +32,10 @@
 
 #include <mach/machine/sdt_isa.h>
 
+#ifdef KERNEL
+
+#if CONFIG_DTRACE
+
 /*
  * The following macros are used to create static probes. The argument types
  * should be no greater than uintptr_t in size each. The behavior of larger
@@ -148,9 +152,6 @@
 }
 
 
-#ifdef KERNEL
-
-#if CONFIG_DTRACE
 
 #define	DTRACE_SCHED(name)						\
 	DTRACE_PROBE(__sched_, name);

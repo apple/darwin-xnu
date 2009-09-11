@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -29,8 +29,7 @@
 #ifndef _CHUD_THREAD_H_
 #define _CHUD_THREAD_H_
 
-/* Flags for the t_chud element of a thread_t structure. */
-#define T_CHUD_MARKED   0x1	/* this thread is marked by CHUD */
-#define T_IN_CHUD       0x2	/* this thread is already in a CHUD handler */
+
+#include <kern/thread.h>
 
 #endif /* _CHUD_THREAD_H_ */

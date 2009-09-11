@@ -59,6 +59,10 @@ private:
                                                  unsigned long newLevel, 
                                                  int *return_code );
 
+    IOReturn            secureSetMaintenanceWakeCalendar(
+                                void * p1, void * p2, void * p3,
+                                void * p4, void * p5, void * p6 );
+
 public:
 
     virtual IOReturn clientClose( void );

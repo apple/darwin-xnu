@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -144,8 +144,8 @@ struct protosw {
 #endif
 	struct	pr_usrreqs *pr_usrreqs;	/* supersedes pr_usrreq() */
 #if __APPLE__
-	int	(*pr_lock) 	(struct socket *so, int locktype, int debug); /* lock function for protocol */
-	int	(*pr_unlock) 	(struct socket *so, int locktype, int debug); /* unlock for protocol */
+	int	(*pr_lock) 	(struct socket *so, int locktype, void *debug); /* lock function for protocol */
+	int	(*pr_unlock) 	(struct socket *so, int locktype, void *debug); /* unlock for protocol */
 #ifdef _KERN_LOCKS_H_
 	lck_mtx_t *	(*pr_getlock) 	(struct socket *so, int locktype);
 #else
@@ -156,7 +156,7 @@ struct protosw {
 /* Implant hooks */
 	TAILQ_HEAD(, socket_filter) pr_filter_head;
 	struct protosw *pr_next;	/* Chain for domain */
-	u_long	reserved[1];		/* Padding for future use */
+	u_int32_t	reserved[1];		/* Padding for future use */
 #endif
 };
 
@@ -406,7 +406,7 @@ char	*prcorequests[] = {
 #ifdef KERNEL
 
 __BEGIN_DECLS
-void	domaininit(void);
+void domaininit(void) __attribute__((section("__TEXT, initcode")));
 
 void	pfctlinput(int, struct sockaddr *);
 void	pfctlinput2(int, struct sockaddr *, void *);

@@ -52,6 +52,11 @@
 
 #pragma pack(4)
 
+// LP64todo: all the current tools are 32bit, obviously never worked for 64b
+// so probably should be a real 32b ID vs. ptr.
+// Current users just check for equality
+typedef uint32_t vm32_object_id_t;
+
 /*
  *	Types defined:
  *
@@ -204,7 +209,7 @@ struct vm_region_submap_info {
         unsigned char           share_mode;	/* see enumeration */
 	boolean_t		is_submap;	/* submap vs obj */
 	vm_behavior_t		behavior;	/* access behavior hint */
-	vm_offset_t		object_id;	/* obj/map name, not a handle */
+	vm32_object_id_t		object_id;	/* obj/map name, not a handle */
 	unsigned short		user_wired_count; 
 };
 
@@ -230,7 +235,7 @@ struct vm_region_submap_info_64 {
         unsigned char           share_mode;	/* see enumeration */
 	boolean_t		is_submap;	/* submap vs obj */
 	vm_behavior_t		behavior;	/* access behavior hint */
-	vm_offset_t		object_id;	/* obj/map name, not a handle */
+	vm32_object_id_t		object_id;	/* obj/map name, not a handle */
 	unsigned short		user_wired_count; 
 };
 
@@ -252,7 +257,7 @@ struct vm_region_submap_short_info_64 {
         unsigned char           share_mode;	/* see enumeration */
 	boolean_t		is_submap;	/* submap vs obj */
 	vm_behavior_t		behavior;	/* access behavior hint */
-	vm_offset_t		object_id;	/* obj/map name, not a handle */
+	vm32_object_id_t		object_id;	/* obj/map name, not a handle */
 	unsigned short		user_wired_count; 
 };
 
@@ -273,11 +278,43 @@ struct vm_read_entry {
 	vm_size_t	size;
 };
 
+#if VM32_SUPPORT
+struct vm32_read_entry {
+	vm32_address_t	address;
+	vm32_size_t	size;
+};
+#endif
+
+
 #define VM_MAP_ENTRY_MAX  (256)
 
 typedef struct mach_vm_read_entry	mach_vm_read_entry_t[VM_MAP_ENTRY_MAX];
 typedef struct vm_read_entry		vm_read_entry_t[VM_MAP_ENTRY_MAX];
+#if VM32_SUPPORT
+typedef struct vm32_read_entry		vm32_read_entry_t[VM_MAP_ENTRY_MAX];
+#endif
 
 #pragma pack()
+
+
+#define VM_PAGE_INFO_MAX 
+typedef int *vm_page_info_t;
+typedef int vm_page_info_data_t[VM_PAGE_INFO_MAX];
+typedef int vm_page_info_flavor_t;
+
+#define VM_PAGE_INFO_BASIC		1
+struct vm_page_info_basic {
+	int			disposition;
+	int			ref_count;
+	vm_object_id_t		object_id;
+	memory_object_offset_t	offset;
+	int			depth;
+};
+typedef struct vm_page_info_basic		*vm_page_info_basic_t;
+typedef struct vm_page_info_basic		vm_page_info_basic_data_t;
+
+#define VM_PAGE_INFO_BASIC_COUNT	((mach_msg_type_number_t) \
+	(sizeof(vm_page_info_basic_data_t)/sizeof(int)))
+
 
 #endif	/*_MACH_VM_REGION_H_*/

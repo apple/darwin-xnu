@@ -81,15 +81,7 @@
 #endif
 #include <mach/boolean.h>
 
-#ifdef XNU_KERNEL_PRIVATE
-#define PROC_DEF_ENABLED
-#else
-#ifndef KERNEL
-#define PROC_DEF_ENABLED
-#endif
-#endif
-
-#ifdef PROC_DEF_ENABLED
+#if defined(XNU_KERNEL_PRIVATE) || !defined(KERNEL) 
 
 struct session;
 struct pgrp;
@@ -134,7 +126,7 @@ struct extern_proc {
 	u_quad_t p_iticks;		/* Statclock hits processing intr. */
 	int	p_traceflag;		/* Kernel trace points. */
 	struct	vnode *p_tracep;	/* Trace to vnode. */
-	int	p_siglist;		/* DEPRECATED */
+	int	p_siglist;		/* DEPRECATED. */
 	struct	vnode *p_textvp;	/* Vnode of executable. */
 	int	p_holdcnt;		/* If non-zero, don't swap. */
 	sigset_t p_sigmask;	/* DEPRECATED. */
@@ -215,7 +207,7 @@ struct extern_proc {
 #define	P_FSTRACE	0		/* Obsolete: retained for compilation */
 #define	P_SSTEP		0		/* Obsolete: retained for compilation */
 
-#endif /* PROC_DEF_ENABLED */
+#endif /* XNU_KERNEL_PRIVATE || !KERNEL */
 
 #ifdef KERNEL
 __BEGIN_DECLS
@@ -226,7 +218,6 @@ extern int proc_is_classic(proc_t p);
 proc_t current_proc_EXTERNAL(void);
 
 extern int	msleep(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, struct timespec * ts );
-extern void	unsleep(proc_t);
 extern void	wakeup(void *chan);
 extern void wakeup_one(caddr_t chan);
 
@@ -272,18 +263,27 @@ extern int proc_exiting(proc_t);
 int proc_suser(proc_t p);
 /* returns the cred assicaited with the process; temporary api */
 kauth_cred_t proc_ucred(proc_t p);
-#ifdef __APPLE_API_UNSTABLE
-/* returns the first thread_t in the process, or NULL XXX for NFS, DO NOT USE */
-thread_t proc_thread(proc_t);
-#endif
-// mark a process as being allowed to call vfs_markdependency()
-void bsd_set_dependency_capable(task_t task);
 
-extern int proc_pendingsignals(proc_t, sigset_t);
 extern int proc_tbe(proc_t);
 
+/*!
+ @function proc_selfpgrpid
+ @abstract Get the process group id for the current process, as with proc_pgrpid().
+ @return pgrpid of current process.
+ */
+pid_t proc_selfpgrpid(void);
+
+/*!
+ @function proc_pgrpid
+ @abstract Get the process group id for the passed-in process.
+ @param p Process whose pgrpid to grab.
+ @return pgrpid for "p".
+ */
+pid_t proc_pgrpid(proc_t);
+
 #ifdef KERNEL_PRIVATE
-/* LP64todo - figure out how to identify 64-bit processes if NULL procp */
+// mark a process as being allowed to call vfs_markdependency()
+void bsd_set_dependency_capable(task_t task);
 extern int IS_64BIT_PROCESS(proc_t);
 
 extern int	tsleep(void *chan, int pri, const char *wmesg, int timo);

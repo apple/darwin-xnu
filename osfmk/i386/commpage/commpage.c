@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -48,15 +48,18 @@
 #include <mach/mach_types.h>
 #include <mach/machine.h>
 #include <mach/vm_map.h>
+#include <mach/mach_vm.h>
+#include <i386/tsc.h>
+#include <i386/rtclock.h>
+#include <i386/cpu_data.h>
 #include <i386/machine_routines.h>
 #include <i386/misc_protos.h>
-#include <i386/tsc.h>
-#include <i386/cpu_data.h>
 #include <machine/cpu_capabilities.h>
 #include <machine/commpage.h>
 #include <machine/pmap.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
+
 #include <ipc/ipc_port.h>
 
 #include <kern/page_decrypt.h>
@@ -78,12 +81,14 @@ int     _cpu_capabilities = 0;          // define the capability vector
 
 int	noVMX = 0;		/* if true, do not set kHasAltivec in ppc _cpu_capabilities */
 
-static uintptr_t next;			// next available byte in comm page
-static int     	cur_routine;		// comm page address of "current" routine
-static int     	matched;		// true if we've found a match for "current" routine
+typedef uint32_t commpage_address_t;
+
+static commpage_address_t	next;			// next available address in comm page
+static commpage_address_t	cur_routine;		// comm page address of "current" routine
+static boolean_t		matched;		// true if we've found a match for "current" routine
 
 static char    *commPagePtr;		// virtual addr in kernel map of commpage we are working on
-static size_t	commPageBaseOffset;	// add to 32-bit runtime address to get offset in commpage
+static commpage_address_t	commPageBaseOffset; // subtract from 32-bit runtime address to get offset in virtual commpage in kernel map
 
 static	commpage_time_data	*time_data32 = NULL;
 static	commpage_time_data	*time_data64 = NULL;
@@ -150,16 +155,16 @@ commpage_allocate(
 
 	ipc_port_release(handle);
 
-	return (void*) kernel_addr;                     // return address in kernel map
+	return (void*)(intptr_t)kernel_addr;                     // return address in kernel map
 }
 
 /* Get address (in kernel map) of a commpage field. */
 
 static void*
 commpage_addr_of(
-    int     addr_at_runtime )
+    commpage_address_t     addr_at_runtime )
 {
-    return  (void*) ((uintptr_t)commPagePtr + addr_at_runtime - commPageBaseOffset);
+	return  (void*) ((uintptr_t)commPagePtr + (addr_at_runtime - commPageBaseOffset));
 }
 
 /* Determine number of CPUs on this system.  We cannot rely on
@@ -257,23 +262,23 @@ _get_cpu_capabilities(void)
 
 static void
 commpage_stuff(
-    int 	address,
+    commpage_address_t 	address,
     const void 	*source,
     int 	length	)
 {    
     void	*dest = commpage_addr_of(address);
     
-    if ((uintptr_t)dest < next)
-        panic("commpage overlap at address 0x%x, %p < 0x%lx", address, dest, next);
+    if (address < next)
+    	panic("commpage overlap at address 0x%p, 0x%x < 0x%x", dest, address, next);
     
     bcopy(source,dest,length);
     
-    next = ((uintptr_t)dest + length);
+    next = address + length;
 }
 
 static void
 commpage_stuff_swap(
-	int	address,
+	commpage_address_t	address,
 	void	*source,
 	int	length,
 	int	legacy )
@@ -297,7 +302,7 @@ commpage_stuff_swap(
 
 static void
 commpage_stuff2(
-	int	address,
+	commpage_address_t	address,
 	void	*source,
 	int	length,
 	int	legacy )
@@ -312,11 +317,11 @@ static void
 commpage_stuff_routine(
     commpage_descriptor	*rd	)
 {
-    int		must,cant;
+    uint32_t		must,cant;
     
     if (rd->commpage_address != cur_routine) {
         if ((cur_routine!=0) && (matched==0))
-            panic("commpage no match for last, next address %08lx", rd->commpage_address);
+            panic("commpage no match for last, next address %08x", rd->commpage_address);
         cur_routine = rd->commpage_address;
         matched = 0;
     }
@@ -326,7 +331,7 @@ commpage_stuff_routine(
     
     if ((must == rd->musthave) && (cant == 0)) {
         if (matched)
-            panic("commpage multiple matches for address %08lx", rd->commpage_address);
+            panic("commpage multiple matches for address %08x", rd->commpage_address);
         matched = 1;
         
         commpage_stuff(rd->commpage_address,rd->code_address,rd->code_length);
@@ -343,31 +348,32 @@ commpage_populate_one(
 	vm_map_t	submap,		// commpage32_map or compage64_map
 	char **		kernAddressPtr,	// &commPagePtr32 or &commPagePtr64
 	size_t		area_used,	// _COMM_PAGE32_AREA_USED or _COMM_PAGE64_AREA_USED
-	size_t		base_offset,	// will become commPageBaseOffset
+	commpage_address_t base_offset,	// will become commPageBaseOffset
 	commpage_descriptor** commpage_routines, // list of routine ptrs for this commpage
 	boolean_t	legacy,		// true if 32-bit commpage
 	commpage_time_data** time_data,	// &time_data32 or &time_data64
 	const char*	signature )	// "commpage 32-bit" or "commpage 64-bit"
 {
    	short   c2;
+	int	c4;
 	static double   two52 = 1048576.0 * 1048576.0 * 4096.0; // 2**52
 	static double   ten6 = 1000000.0;                       // 10**6
 	commpage_descriptor **rd;
 	short   version = _COMM_PAGE_THIS_VERSION;
 	int		swapcaps;
 
-	next = (uintptr_t) NULL;
+	next = 0;
 	cur_routine = 0;
 	commPagePtr = (char *)commpage_allocate( submap, (vm_size_t) area_used );
 	*kernAddressPtr = commPagePtr;				// save address either in commPagePtr32 or 64
 	commPageBaseOffset = base_offset;
-	
+
 	*time_data = commpage_addr_of( _COMM_PAGE_TIME_DATA_START );
 
 	/* Stuff in the constants.  We move things into the comm page in strictly
 	* ascending order, so we can check for overlap and panic if so.
 	*/
-	commpage_stuff(_COMM_PAGE_SIGNATURE,signature,strlen(signature));
+	commpage_stuff(_COMM_PAGE_SIGNATURE,signature,(int)strlen(signature));
 	commpage_stuff2(_COMM_PAGE_VERSION,&version,sizeof(short),legacy);
 	commpage_stuff(_COMM_PAGE_CPU_CAPABILITIES,&_cpu_capabilities,sizeof(int));
 
@@ -391,6 +397,9 @@ commpage_populate_one(
 	else if (_cpu_capabilities & kCache128)
 		c2 = 128;
 	commpage_stuff(_COMM_PAGE_CACHE_LINESIZE,&c2,2);
+	
+	c4 = MP_SPIN_TRIES;
+	commpage_stuff(_COMM_PAGE_SPIN_COUNT,&c4,4);
 
 	if ( legacy ) {
 		commpage_stuff2(_COMM_PAGE_2_TO_52,&two52,8,legacy);
@@ -403,15 +412,15 @@ commpage_populate_one(
 	if (!matched)
 		panic("commpage no match on last routine");
 
-	if (next > (uintptr_t)_COMM_PAGE_END)
-		panic("commpage overflow: next = 0x%08lx, commPagePtr = 0x%08lx", next, (uintptr_t)commPagePtr);
+	if (next > _COMM_PAGE_END)
+		panic("commpage overflow: next = 0x%08x, commPagePtr = 0x%p", next, commPagePtr);
 
 	if ( legacy ) {
-		next = (uintptr_t) NULL;
+		next = 0;
 		for( rd = ba_descriptors; *rd != NULL ; rd++ )
 			commpage_stuff_routine(*rd);
 
-		next = (uintptr_t) NULL;
+		next = 0;
 		commpage_stuff_routine(&sigdata_descriptor);
 	}	
 }
@@ -437,22 +446,25 @@ commpage_populate( void )
 				TRUE,			/* legacy (32-bit) commpage */
 				&time_data32,
 				"commpage 32-bit");
+#ifndef __LP64__
 	pmap_commpage32_init((vm_offset_t) commPagePtr32, _COMM_PAGE32_BASE_ADDRESS, 
 			   _COMM_PAGE32_AREA_USED/INTEL_PGBYTES);
-			   
+#endif			   
 	time_data64 = time_data32;			/* if no 64-bit commpage, point to 32-bit */
 
 	if (_cpu_capabilities & k64Bit) {
 		commpage_populate_one(	commpage64_map, 
 					&commPagePtr64,
 					_COMM_PAGE64_AREA_USED,
-					_COMM_PAGE32_START_ADDRESS, /* because kernel is built 32-bit */
+					_COMM_PAGE32_START_ADDRESS, /* commpage address are relative to 32-bit commpage placement */
 					commpage_64_routines, 
 					FALSE,		/* not a legacy commpage */
 					&time_data64,
 					"commpage 64-bit");
+#ifndef __LP64__
 		pmap_commpage64_init((vm_offset_t) commPagePtr64, _COMM_PAGE64_BASE_ADDRESS, 
 				   _COMM_PAGE64_AREA_USED/INTEL_PGBYTES);
+#endif
 	}
 
 	rtc_nanotime_init_commpage();
@@ -555,3 +567,83 @@ commpage_disable_timestamp( void )
 	p32->gtod_generation = next_gen;	/* mark data as valid */
 	p64->gtod_generation = next_gen;
 }
+
+
+/* Update _COMM_PAGE_MEMORY_PRESSURE.  Called periodically from vm's compute_memory_pressure()  */
+
+void
+commpage_set_memory_pressure(
+	unsigned int 	pressure )
+{
+	char	    *cp;
+	uint32_t    *ip;
+	
+	cp = commPagePtr32;
+	if ( cp ) {
+		cp += (_COMM_PAGE_MEMORY_PRESSURE - _COMM_PAGE32_BASE_ADDRESS);
+		ip = (uint32_t*) cp;
+		*ip = (uint32_t) pressure;
+	}
+	
+	cp = commPagePtr64;
+	if ( cp ) {
+		cp += (_COMM_PAGE_MEMORY_PRESSURE - _COMM_PAGE32_START_ADDRESS);
+		ip = (uint32_t*) cp;
+		*ip = (uint32_t) pressure;
+	}
+
+}
+
+
+/* Update _COMM_PAGE_SPIN_COUNT.  We might want to reduce when running on a battery, etc. */
+
+void
+commpage_set_spin_count(
+	unsigned int 	count )
+{
+	char	    *cp;
+	uint32_t    *ip;
+	
+	if (count == 0)	    /* we test for 0 after decrement, not before */
+	    count = 1;
+	    
+	cp = commPagePtr32;
+	if ( cp ) {
+		cp += (_COMM_PAGE_SPIN_COUNT - _COMM_PAGE32_BASE_ADDRESS);
+		ip = (uint32_t*) cp;
+		*ip = (uint32_t) count;
+	}
+	
+	cp = commPagePtr64;
+	if ( cp ) {
+		cp += (_COMM_PAGE_SPIN_COUNT - _COMM_PAGE32_START_ADDRESS);
+		ip = (uint32_t*) cp;
+		*ip = (uint32_t) count;
+	}
+
+}
+
+
+/* Check to see if a given address is in the Preemption Free Zone (PFZ) */
+
+uint32_t
+commpage_is_in_pfz32(uint32_t addr32)
+{
+	if ( (addr32 >= _COMM_PAGE_PFZ_START) && (addr32 < _COMM_PAGE_PFZ_END)) {
+		return 1;
+	}
+	else
+		return 0;
+}
+
+uint32_t
+commpage_is_in_pfz64(addr64_t addr64)
+{
+	if ( (addr64 >= _COMM_PAGE_32_TO_64(_COMM_PAGE_PFZ_START))
+	     && (addr64 <  _COMM_PAGE_32_TO_64(_COMM_PAGE_PFZ_END))) {
+		return 1;
+	}
+	else
+		return 0;
+}
+

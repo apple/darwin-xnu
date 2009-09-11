@@ -54,9 +54,14 @@
 #define VSTATS_UNLOCK(l)
 #define VSTATS_LOCK_INIT(l)
 #else
-#define VSTATS_LOCK_DECL(name)	struct mutex name;
-#define VSTATS_LOCK(l)		mutex_lock(l)
-#define VSTATS_UNLOCK(l)	mutex_unlock(l)
-#define VSTATS_LOCK_INIT(l)	mutex_init(l)
+
+extern lck_grp_t	default_pager_lck_grp;
+extern lck_attr_t	default_pager_lck_attr;
+
+
+#define VSTATS_LOCK_DECL(name)	struct lck_mtx_t name;
+#define VSTATS_LOCK(l)		lck_mtx_lock(l)
+#define VSTATS_UNLOCK(l)	lck_mtx_unlock(l)
+#define VSTATS_LOCK_INIT(l)	lck_mtx_init(l, &default_pager_lck_grp, &default_pager_lck_attr )
 #endif	/* VAGUE_STATS */
 

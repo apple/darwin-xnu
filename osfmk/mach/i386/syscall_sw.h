@@ -60,7 +60,6 @@
 
 #include <architecture/i386/asm_help.h>
 
-#if defined(__i386__)
 /*
  * Software interrupt codes for 32-bit system call entry:
  */
@@ -68,6 +67,8 @@
 #define MACH_INT     0x81
 #define MACHDEP_INT  0x82
 #define DIAG_INT     0x83
+
+#if defined(__i386__)
 
 #ifndef KERNEL
 /*
@@ -88,7 +89,8 @@ LEAF(_##trap_name,0) ;\
 	call	__sysenter_trap		;\
 END(_##trap_name)
 
-#endif
+#endif /* !KERNEL */
+
 #endif /* defined(__i386__) */
 
 #if defined(__x86_64__)
@@ -114,7 +116,8 @@ LEAF(_##trap_name,0) ;\
 	syscall		;\
 END(_##trap_name)
 
-#endif
+#endif /* !KERNEL */
+
 #endif /* defined(__x86_64__) */
 
 /*
@@ -146,6 +149,7 @@ END(_##trap_name)
 #define SYSCALL_CLASS_UNIX	2	/* Unix/BSD */
 #define SYSCALL_CLASS_MDEP	3	/* Machine-dependent */
 #define SYSCALL_CLASS_DIAG	4	/* Diagnostics */
+#define SYSCALL_CLASS_IPC	5	/* Mach IPC */
 
 /* Macros to simpllfy constructing syscall numbers. */
 #define SYSCALL_CONSTRUCT_MACH(syscall_number) \

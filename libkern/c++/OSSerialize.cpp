@@ -79,6 +79,7 @@ bool OSSerialize::previouslySerialized(const OSMetaClassBase *o)
 	// look it up
 	tagString = (OSString *)tags->getObject((const OSSymbol *) o);
 
+// xx-review: no error checking here for addString calls!
 	// does it exist?
 	if (tagString) {
 		addString("<reference IDREF=\"");

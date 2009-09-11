@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -92,6 +92,10 @@
 #include <sys/lock.h>
 #include <sys/queue.h>
 
+#if PF_PKTHDR
+#include <net/pf_mtag.h>
+#endif /* PF_PKTHDR */
+
 /*
  * Mbufs are of a single size, MSIZE (machine/param.h), which
  * includes overhead.  An mbuf may add a single "mbuf cluster" of size
@@ -100,8 +104,21 @@
  * at least MINCLSIZE of data must be stored.
  */
 
-#define	MLEN		(MSIZE - sizeof(struct m_hdr))	/* normal data len */
-#define	MHLEN		(MLEN - sizeof(struct pkthdr))	/* data len w/pkthdr */
+/*
+ * These macros are mapped to the appropriate KPIs, so that private code
+ * can be simply recompiled in order to be forward-compatible with future
+ * changes toward the struture sizes.
+ */
+#define	MLEN		mbuf_get_mlen()		/* normal data len */
+#define	MHLEN		mbuf_get_mhlen()	/* data len w/pkthdr */
+
+/*
+ * The following _MLEN and _MHLEN macros are private to xnu.  Private code
+ * that are outside of xnu must use the mbuf_get_{mlen,mhlen} routines since
+ * the sizes of the structures are dependent upon specific xnu configs.
+ */
+#define	_MLEN		(MSIZE - sizeof(struct m_hdr))	/* normal data len */
+#define	_MHLEN		(_MLEN - sizeof(struct pkthdr))	/* data len w/pkthdr */
 
 #define	MINCLSIZE	(MHLEN + MLEN)	/* smallest amount to put in cluster */
 #define	M_MAXCOMPRESS	(MHLEN / 2)	/* max amount to copy for compression */
@@ -120,7 +137,7 @@
 struct m_hdr {
 	struct	mbuf *mh_next;		/* next buffer in chain */
 	struct	mbuf *mh_nextpkt;	/* next chain in queue/record */
-	long	mh_len;			/* amount of data in this mbuf */
+	int32_t     mh_len;		/* amount of data in this mbuf */
 	caddr_t	mh_data;		/* location of data */
 	short	mh_type;		/* type of data in this mbuf */
 	short	mh_flags;		/* flags; see below */
@@ -144,19 +161,21 @@ struct	pkthdr {
 	/* variables for ip and tcp reassembly */
 	void	*header;		/* pointer to packet header */
         /* variables for hardware checksum */
-#ifdef KERNEL_PRIVATE
     	/* Note: csum_flags is used for hardware checksum and VLAN */
-#endif KERNEL_PRIVATE
         int     csum_flags;             /* flags regarding checksum */       
         int     csum_data;              /* data field used by csum routines */
-	void	*reserved0;		/* unused, for future use */
-#ifdef KERNEL_PRIVATE
+	u_int	tso_segsz;		/* TSO segment size (actual MSS) */
 	u_short	vlan_tag;		/* VLAN tag, host byte order */
 	u_short socket_id;		/* socket id */
-#else KERNEL_PRIVATE
-	u_int	reserved1;		/* for future use */
-#endif KERNEL_PRIVATE
         SLIST_HEAD(packet_tags, m_tag) tags; /* list of packet tags */
+#if PF_PKTHDR
+	/*
+	 * Be careful; {en,dis}abling PF_PKTHDR will require xnu recompile;
+	 * private code outside of xnu must use mbuf_get_mhlen() instead
+	 * of MHLEN.
+	 */
+	struct pf_mtag pf_mtag;
+#endif /* PF_PKTHDR */
 };
 
 
@@ -175,6 +194,9 @@ struct m_ext {
 	} *ext_refflags;
 };
 
+/* define m_ext to a type since it gets redefined below */
+typedef struct m_ext _m_ext_t;
+
 struct mbuf {
 	struct	m_hdr m_hdr;
 	union {
@@ -182,10 +204,10 @@ struct mbuf {
 			struct	pkthdr MH_pkthdr;	/* M_PKTHDR set */
 			union {
 				struct	m_ext MH_ext;	/* M_EXT set */
-				char	MH_databuf[MHLEN];
+				char	MH_databuf[_MHLEN];
 			} MH_dat;
 		} MH;
-		char	M_databuf[MLEN];		/* !M_PKTHDR, !M_EXT */
+		char	M_databuf[_MLEN];		/* !M_PKTHDR, !M_EXT */
 	} M_dat;
 };
 
@@ -247,7 +269,11 @@ struct mbuf {
 
 /* VLAN tag present */
 #define CSUM_VLAN_TAG_VALID	0x10000		/* vlan_tag field is valid */
-#endif KERNEL_PRIVATE
+
+/* TCP Segment Offloading requested on this mbuf */
+#define CSUM_TSO_IPV4          	0x100000          /* This mbuf needs to be segmented by the NIC */
+#define CSUM_TSO_IPV6          	0x200000          /* This mbuf needs to be segmented by the NIC */
+#endif /* KERNEL_PRIVATE */
 
 
 /* mbuf types */
@@ -399,7 +425,8 @@ union m16kcluster {
 /* compatiblity with 4.3 */
 #define  m_copy(m, o, l)	m_copym((m), (o), (l), M_DONTWAIT)
 
-#define MBSHIFT         20                              /* 1MB */
+#define	MBSHIFT		20				/* 1MB */
+#define	GBSHIFT		30				/* 1GB */
 
 #endif /* KERNEL_PRIVATE */
 
@@ -451,6 +478,33 @@ struct ombstat {
  */
 #define	MAX_MBUF_CNAME	15
 
+#if defined(KERNEL_PRIVATE)
+/* For backwards compatibility with 32-bit userland process */
+struct omb_class_stat {
+	char		mbcl_cname[MAX_MBUF_CNAME + 1]; /* class name */
+	u_int32_t	mbcl_size;	/* buffer size */
+	u_int32_t	mbcl_total;	/* # of buffers created */
+	u_int32_t	mbcl_active;	/* # of active buffers */
+	u_int32_t	mbcl_infree;	/* # of available buffers */
+	u_int32_t	mbcl_slab_cnt;	/* # of available slabs */
+	u_int64_t	mbcl_alloc_cnt;	/* # of times alloc is called */
+	u_int64_t	mbcl_free_cnt;	/* # of times free is called */
+	u_int64_t	mbcl_notified;	/* # of notified wakeups */
+	u_int64_t	mbcl_purge_cnt;	/* # of purges so far */
+	u_int64_t	mbcl_fail_cnt;	/* # of allocation failures */
+	u_int32_t	mbcl_ctotal;	/* total only for this class */
+	/*
+	 * Cache layer statistics
+	 */
+	u_int32_t	mbcl_mc_state;	/* cache state (see below) */
+	u_int32_t	mbcl_mc_cached;	/* # of cached buffers */
+	u_int32_t	mbcl_mc_waiter_cnt;  /* # waiters on the cache */
+	u_int32_t	mbcl_mc_wretry_cnt;  /* # of wait retries */
+	u_int32_t	mbcl_mc_nwretry_cnt; /* # of no-wait retry attempts */
+	u_int64_t	mbcl_reserved[4];    /* for future use */
+} __attribute__((__packed__));
+#endif /* KERNEL_PRIVATE */
+
 typedef struct mb_class_stat {
 	char		mbcl_cname[MAX_MBUF_CNAME + 1]; /* class name */
 	u_int32_t	mbcl_size;	/* buffer size */
@@ -458,6 +512,9 @@ typedef struct mb_class_stat {
 	u_int32_t	mbcl_active;	/* # of active buffers */
 	u_int32_t	mbcl_infree;	/* # of available buffers */
 	u_int32_t	mbcl_slab_cnt;	/* # of available slabs */
+#if defined(KERNEL) || defined(__LP64__)
+	u_int32_t	mbcl_pad;	/* padding */
+#endif /* KERNEL || __LP64__ */
 	u_int64_t	mbcl_alloc_cnt;	/* # of times alloc is called */
 	u_int64_t	mbcl_free_cnt;	/* # of times free is called */
 	u_int64_t	mbcl_notified;	/* # of notified wakeups */
@@ -480,8 +537,19 @@ typedef struct mb_class_stat {
 #define	MCS_PURGING	2	/* cache is being purged */
 #define	MCS_OFFLINE	3	/* cache is offline (resizing) */
 
+#if defined(KERNEL_PRIVATE)
+/* For backwards compatibility with 32-bit userland process */
+struct omb_stat {
+	u_int32_t		mbs_cnt;	/* number of classes */
+	struct omb_class_stat	mbs_class[1];	/* class array */
+} __attribute__((__packed__));
+#endif /* KERNEL_PRIVATE */
+
 typedef struct mb_stat {
 	u_int32_t	mbs_cnt;	/* number of classes */
+#if defined(KERNEL) || defined(__LP64__)
+	u_int32_t	mbs_pad;	/* padding */
+#endif /* KERNEL || __LP64__ */
 	mb_class_stat_t	mbs_class[1];	/* class array */
 } mb_stat_t;
 
@@ -491,7 +559,7 @@ typedef struct mb_stat {
 extern union 	mcluster *mbutl;	/* virtual address of mclusters */
 extern union 	mcluster *embutl;	/* ending virtual address of mclusters */
 extern struct 	mbstat mbstat;		/* statistics */
-extern int 	nmbclusters;		/* number of mapped clusters */
+extern unsigned int nmbclusters;	/* number of mapped clusters */
 extern int	njcl;			/* # of clusters for jumbo sizes */
 extern int	njclbytes;		/* size of a jumbo cluster */
 extern int	max_linkhdr;		/* largest link-level header */
@@ -501,6 +569,7 @@ extern int	max_datalen;		/* MHLEN - max_hdr */
 
 __BEGIN_DECLS
 /* Not exported */
+__private_extern__ unsigned int mbuf_default_ncl(int, uint64_t);
 __private_extern__ void mbinit(void);
 __private_extern__ struct mbuf *m_clattach(struct mbuf *, int, caddr_t,
     void (*)(caddr_t , u_int, caddr_t), u_int, caddr_t, int);
@@ -510,6 +579,8 @@ __private_extern__ struct mbuf *m_mbigget(struct mbuf *, int);
 __private_extern__ caddr_t m_16kalloc(int);
 __private_extern__ void m_16kfree(caddr_t, u_int, caddr_t);
 __private_extern__ struct mbuf *m_m16kget(struct mbuf *, int);
+__private_extern__ void mbuf_growth_aggressive(void);
+__private_extern__ void mbuf_growth_normal(void);
 
 /* Exported */
 struct	mbuf *m_copym(struct mbuf *, int, int, int);
@@ -531,6 +602,7 @@ struct	mbuf *m_devget(char *, int, int, struct ifnet *, void (*)(const void *, v
 char   *mcl_to_paddr(char *);
 struct mbuf *m_pulldown(struct mbuf*, int, int, int*);
 
+extern struct mbuf *m_getcl(int, int, int);
 struct mbuf *m_mclget(struct mbuf *, int);
 caddr_t m_mclalloc(int);
 void m_mclfree(caddr_t p);
@@ -552,8 +624,10 @@ struct mbuf *m_normalize(struct mbuf *m);
 void m_mchtype(struct mbuf *m, int t);
 void m_mcheck(struct mbuf*);
 
-void m_copyback(struct mbuf *, int , int , caddr_t);
-void m_copydata(struct mbuf *, int , int , caddr_t);
+extern void m_copyback(struct mbuf *, int , int , const void *);
+extern struct mbuf *m_copyback_cow(struct mbuf *, int, int, const void *, int);
+extern int m_makewritable(struct mbuf **, int, int, int);
+void m_copydata(struct mbuf *, int , int , void *);
 struct mbuf* m_dup(struct mbuf *m, int how);
 void m_cat(struct mbuf *, struct mbuf *);
 struct  mbuf *m_copym_with_hdrs(struct mbuf*, int, int, int, struct mbuf**, int*);
@@ -604,7 +678,8 @@ enum {
 	KERNEL_TAG_TYPE_MAC_POLICY_LABEL	= 6,
 	KERNEL_TAG_TYPE_ENCAP			= 8,
 	KERNEL_TAG_TYPE_INET6			= 9,
-	KERNEL_TAG_TYPE_IPSEC			= 10
+	KERNEL_TAG_TYPE_IPSEC			= 10,
+	KERNEL_TAG_TYPE_PF			= 11
 };
 
 /*
@@ -645,5 +720,5 @@ __END_DECLS
 #endif /* KERNEL_PRIVATE */
 #ifdef KERNEL
 #include <sys/kpi_mbuf.h>
-#endif
+#endif /* KERNEL */
 #endif	/* !_SYS_MBUF_H_ */

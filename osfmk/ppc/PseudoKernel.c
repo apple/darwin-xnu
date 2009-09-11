@@ -217,6 +217,11 @@ void bbSetRupt(ReturnHandler *rh, thread_t act) {
 
 }
 
+kern_return_t
+enable_bluebox(host_t host, unsigned _taskID, unsigned _TWI_TableStart,
+			   unsigned _Desc_TableStart);
+kern_return_t disable_bluebox( host_t host );
+
 /*
  * This function is used to enable the firmware assist code for bluebox traps, system calls
  * and interrupts.

@@ -120,7 +120,6 @@ typedef _STRUCT_MCONTEXT64	*mcontext64_t;
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 /*
- * LP64todo - Have to decide how to handle this.
  * For now, just duplicate the 32-bit context as the generic one.
  */
 #ifdef __need_struct_sigcontext

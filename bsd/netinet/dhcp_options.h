@@ -196,7 +196,7 @@ const void *		dhcpol_find(dhcpol_t * list, int tag, int * len_p,
 				    int * start);
 #if 0
 void *			dhcpol_get(dhcpol_t * list, int tag, int * len_p);
-#endif 0
+#endif
 boolean_t		dhcpol_parse_packet(dhcpol_t * options, 
 					    const struct dhcp * pkt, int len);
 void			dhcpol_print(dhcpol_t * list);
@@ -257,7 +257,7 @@ dhcpoa_add_dhcpmsg(dhcpoa_t * oa_p, dhcp_msgtype_t msgtype);
 dhcpoa_ret_t
 dhcpoa_vendor_add(dhcpoa_t * oa_p, dhcpoa_t * vendor_oa_p,
 		  dhcptag_t tag, int len, void * option);
-#endif 0
+#endif
 
 int
 dhcpoa_used(dhcpoa_t * oa_p);
@@ -274,5 +274,5 @@ dhcpoa_freespace(dhcpoa_t * oa_p);
 int
 dhcpoa_size(dhcpoa_t * oa_p);
 
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 #endif /* _NETINET_DHCP_OPTIONS_H */

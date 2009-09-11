@@ -82,10 +82,10 @@ struct fileInfoSpec
 struct searchinfospec
 {
 	u_char			name[kHFSPlusMaxFileNameBytes];
-	u_long			nameLength;
+	u_int32_t			nameLength;
 	char			attributes;		// see IM:Files 2-100
-	u_long			nodeID;
-	u_long			parentDirID;
+	u_int32_t			nodeID;
+	u_int32_t			parentDirID;
 	struct timespec		creationDate;		
 	struct timespec		modificationDate;		
 	struct timespec		changeDate;	
@@ -104,7 +104,7 @@ static void ResolveHardlink(struct hfsmount *hfsmp, HFSPlusCatalogFile *recp);
 
 
 static int UnpackSearchAttributeBlock(struct hfsmount *hfsmp, struct attrlist *alist,
-		searchinfospec_t *searchInfo, void *attributeBuffer);
+		searchinfospec_t *searchInfo, void *attributeBuffer, int firstblock);
 
 static int CheckCriteria(	ExtendedVCB *vcb, 
 							u_long searchBits,
@@ -119,7 +119,7 @@ static int CheckAccess(ExtendedVCB *vcb, u_long searchBits, CatalogKey *key, str
 static int InsertMatch(struct hfsmount *hfsmp, uio_t a_uio, CatalogRecord *rec,
 			CatalogKey *key, struct attrlist *returnAttrList,
 			void *attributesBuffer, void *variableBuffer,
-			u_long * nummatches );
+			uint32_t * nummatches );
 
 static Boolean CompareRange(u_long val, u_long low, u_long high);
 static Boolean CompareWideRange(u_int64_t val, u_int64_t low, u_int64_t high);
@@ -179,10 +179,10 @@ hfs_vnop_search(ap)
 	FCB * catalogFCB;
 	searchinfospec_t searchInfo1;
 	searchinfospec_t searchInfo2;
-	void *attributesBuffer;
+	void *attributesBuffer = NULL;
 	void *variableBuffer;
-	u_long fixedBlockSize;
-	u_long eachReturnBufferSize;
+	u_int32_t fixedBlockSize;
+	u_int32_t eachReturnBufferSize;
 	struct proc *p = current_proc();
 	int err = E_NONE;
 	int isHFSPlus;
@@ -254,10 +254,10 @@ hfs_vnop_search(ap)
 
 	/* UnPack the search boundries, searchInfo1, searchInfo2 */
 	err = UnpackSearchAttributeBlock(hfsmp, ap->a_searchattrs,
-				&searchInfo1, ap->a_searchparams1);
+				&searchInfo1, ap->a_searchparams1, 1);
 	if (err) return err;
 	err = UnpackSearchAttributeBlock(hfsmp, ap->a_searchattrs,
-				&searchInfo2, ap->a_searchparams2);
+				&searchInfo2, ap->a_searchparams2, 0);
 	if (err) return err;
 
 	//shadow search bits if 64-bit file/parent ids are used	
@@ -274,6 +274,10 @@ hfs_vnop_search(ap)
 		eachReturnBufferSize += kHFSPlusMaxFileNameBytes + 1;
 
 	MALLOC( attributesBuffer, void *, eachReturnBufferSize, M_TEMP, M_WAITOK );
+	if (attributesBuffer == NULL) {
+		err = ENOMEM;
+		goto ExitThisRoutine;
+	}
 	variableBuffer = (void*)((char*) attributesBuffer + fixedBlockSize);
 
 	// XXXdbg - have to lock the user's buffer so we don't fault
@@ -303,7 +307,7 @@ hfs_vnop_search(ap)
 		(void) hfs_fsync(vcb->catalogRefNum, MNT_WAIT, 0, p);
 		if (hfsmp->jnl) {
 		    hfs_systemfile_unlock(hfsmp, lockflags);
-		    journal_flush(hfsmp->jnl);
+		    hfs_journal_flush(hfsmp);
 		    lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 		}
 
@@ -405,7 +409,8 @@ hfs_vnop_search(ap)
 	}
 
 ExitThisRoutine:
-    FREE( attributesBuffer, M_TEMP );
+	if (attributesBuffer)
+		FREE(attributesBuffer, M_TEMP);
 
 	if (hfsmp->jnl && user_start) {
 		vsunlock(user_start, user_len, TRUE);
@@ -518,30 +523,6 @@ ComparePartialPascalName ( register ConstStr31Param str, register ConstStr31Para
 }
 
 
-//
-// Determine if a name is "inappropriate" where the definition
-// of "inappropriate" is up to higher level execs.  Currently
-// that's limited to /System.
-//
-static int
-is_inappropriate_name(const char *name, int len)
-{
-    const char *bad_names[] = { "System" };
-    int   bad_len[]   = {        6 };
-    int  i;
-    
-    for(i=0; i < (int) (sizeof(bad_names) / sizeof(bad_names[0])); i++) {
-	if (len == bad_len[i] && strncmp(name, bad_names[i], strlen(bad_names[i]) + 1) == 0) {
-	    return 1;
-	}
-    }
-
-    // if we get here, no name matched
-    return 0;
-}
-
-
-
 /*
  * Check to see if caller has access rights to this item
  */
@@ -594,7 +575,7 @@ CheckAccess(ExtendedVCB *theVCBPtr, u_long searchBits, CatalogKey *theKeyPtr, st
 
 		if ( searchBits & SRCHFS_SKIPINAPPROPRIATE ) {
 		    if ( cp->c_parentcnid == kRootDirID && cp->c_desc.cd_nameptr != NULL &&
-			     is_inappropriate_name((const char *)cp->c_desc.cd_nameptr, cp->c_desc.cd_namelen) ) {
+			     vn_searchfs_inappropriate_name((const char *)cp->c_desc.cd_nameptr, cp->c_desc.cd_namelen) ) {
 				myResult = 0;
 				goto ExitThisRoutine;
 		    }
@@ -794,7 +775,25 @@ CheckCriteria(	ExtendedVCB *vcb,
 		}
 		else if ((attrList->fileattr & ATTR_FILE_VALIDMASK) != 0) {
 		searchAttributes = attrList->fileattr;
-	
+
+#if HFS_COMPRESSION
+			if ( c_attr.ca_flags & UF_COMPRESSED ) {
+				/* for compressed files, set the data length to the uncompressed data size */
+				if (( searchAttributes & ATTR_FILE_DATALENGTH ) || 
+					( searchAttributes & ATTR_FILE_DATAALLOCSIZE ) ) {
+					if ( 0 == hfs_uncompressed_size_of_compressed_file(vcb, NULL, c_attr.ca_fileid, &datafork.cf_size, 1) ) { /* 1 == don't take the cnode lock */
+						datafork.cf_blocks = rsrcfork.cf_blocks;
+					}	
+				}
+			/* treat compressed files as if their resource fork is empty */
+				if (( searchAttributes & ATTR_FILE_RSRCLENGTH ) || 
+					( searchAttributes & ATTR_FILE_RSRCALLOCSIZE ) ) {
+					rsrcfork.cf_size = 0;
+					rsrcfork.cf_blocks = 0;
+				}
+			}
+#endif /* HFS_COMPRESSION */
+			
 		/* File logical length (data fork) */
 		if ( searchAttributes & ATTR_FILE_DATALENGTH ) {
 			matched = CompareWideRange(
@@ -1003,12 +1002,12 @@ TestDone:
 static int
 InsertMatch(struct hfsmount *hfsmp, uio_t a_uio, CatalogRecord *rec,
             CatalogKey *key, struct attrlist *returnAttrList,
-            void *attributesBuffer, void *variableBuffer, u_long * nummatches)
+            void *attributesBuffer, void *variableBuffer, uint32_t * nummatches)
 {
 	int err;
 	void *rovingAttributesBuffer;
 	void *rovingVariableBuffer;
-	u_long packedBufferSize;
+	long packedBufferSize;
 	struct attrblock attrblk;
 	struct cat_desc c_desc;
 	struct cat_attr c_attr;
@@ -1017,7 +1016,7 @@ InsertMatch(struct hfsmount *hfsmp, uio_t a_uio, CatalogRecord *rec,
 
 	bzero(&c_desc, sizeof(c_desc));
 	bzero(&c_attr, sizeof(c_attr));
-	rovingAttributesBuffer = (char*)attributesBuffer + sizeof(u_long); /* Reserve space for length field */
+	rovingAttributesBuffer = (char*)attributesBuffer + sizeof(u_int32_t); /* Reserve space for length field */
 	rovingVariableBuffer = variableBuffer;
 
 	/* Convert catalog record into cat_attr format. */
@@ -1055,7 +1054,7 @@ InsertMatch(struct hfsmount *hfsmp, uio_t a_uio, CatalogRecord *rec,
 	attrblk.ab_blocksize = 0;
 	attrblk.ab_context = vfs_context_current();
 
-	hfs_packattrblk(&attrblk, hfsmp, NULL, &c_desc, &c_attr, &datafork, &rsrcfork, current_proc());
+	hfs_packattrblk(&attrblk, hfsmp, NULL, &c_desc, &c_attr, &datafork, &rsrcfork, vfs_context_current());
 
 	packedBufferSize = (char*)rovingVariableBuffer - (char*)attributesBuffer;
 
@@ -1064,7 +1063,7 @@ InsertMatch(struct hfsmount *hfsmp, uio_t a_uio, CatalogRecord *rec,
 
    	(* nummatches)++;
 	
-	*((u_long *)attributesBuffer) = packedBufferSize;	/* Store length of fixed + var block */
+	*((u_int32_t *)attributesBuffer) = packedBufferSize;	/* Store length of fixed + var block */
 	
 	err = uiomove( (caddr_t)attributesBuffer, packedBufferSize, a_uio );	/* XXX should be packedBufferSize */
 exit:
@@ -1075,10 +1074,11 @@ exit:
 
 
 static int
-UnpackSearchAttributeBlock( struct hfsmount *hfsmp, struct attrlist	*alist, searchinfospec_t *searchInfo, void *attributeBuffer )
+UnpackSearchAttributeBlock( struct hfsmount *hfsmp, struct attrlist	*alist, 
+		searchinfospec_t *searchInfo, void *attributeBuffer, int firstblock)
 {
 	attrgroup_t		a;
-	u_long			bufferSize;
+	u_int32_t			bufferSize;
 	boolean_t       is_64_bit;
 
     DBG_ASSERT(searchInfo != NULL);
@@ -1097,42 +1097,44 @@ UnpackSearchAttributeBlock( struct hfsmount *hfsmp, struct attrlist	*alist, sear
 	a = alist->commonattr;
 	if ( a != 0 ) {
 		if ( a & ATTR_CMN_NAME ) {
-			char *s;
-			u_int32_t len;
+			if (firstblock) {
+				/* Only use the attrreference_t for the first searchparams */
+				char *s;
+				u_int32_t len;
 
-            s = (char*) attributeBuffer + ((attrreference_t *) attributeBuffer)->attr_dataoffset;
-            len = ((attrreference_t *) attributeBuffer)->attr_length;
+				s = (char*) attributeBuffer + ((attrreference_t *) attributeBuffer)->attr_dataoffset;
+				len = ((attrreference_t *) attributeBuffer)->attr_length;
 
-			if (len > sizeof(searchInfo->name))
-				return (EINVAL);
+				if (len > sizeof(searchInfo->name))
+					return (EINVAL);
 
-			if (hfsmp->hfs_flags & HFS_STANDARD) {
-				/* Convert name to pascal string to match HFS B-Tree names */
+				if (hfsmp->hfs_flags & HFS_STANDARD) {
+					/* Convert name to pascal string to match HFS B-Tree names */
 
-				if (len > 0) {
-					if (utf8_to_hfs(HFSTOVCB(hfsmp), len-1, (u_char *)s, (u_char*)searchInfo->name) != 0)
-						return (EINVAL);
+					if (len > 0) {
+						if (utf8_to_hfs(HFSTOVCB(hfsmp), len-1, (u_char *)s, (u_char*)searchInfo->name) != 0)
+							return (EINVAL);
 
-					searchInfo->nameLength = searchInfo->name[0];
+						searchInfo->nameLength = searchInfo->name[0];
+					} else {
+						searchInfo->name[0] = searchInfo->nameLength = 0;
+					}
 				} else {
-					searchInfo->name[0] = searchInfo->nameLength = 0;
-				}
-				attributeBuffer = (attrreference_t *)attributeBuffer + 1;
-			} else {
-				size_t ucslen;
-				/* Convert name to Unicode to match HFS Plus B-Tree names */
+					size_t ucslen;
+					/* Convert name to Unicode to match HFS Plus B-Tree names */
 
-				if (len > 0) {
-					if (utf8_decodestr((u_int8_t *)s, len-1, (UniChar*)searchInfo->name, &ucslen,
-					    sizeof(searchInfo->name), ':', UTF_DECOMPOSED | UTF_ESCAPE_ILLEGAL))
-						return (EINVAL);
+					if (len > 0) {
+						if (utf8_decodestr((u_int8_t *)s, len-1, (UniChar*)searchInfo->name, &ucslen,
+									sizeof(searchInfo->name), ':', UTF_DECOMPOSED | UTF_ESCAPE_ILLEGAL))
+							return (EINVAL);
 
-					searchInfo->nameLength = ucslen / sizeof(UniChar);
-				} else {
-					searchInfo->nameLength = 0;
+						searchInfo->nameLength = ucslen / sizeof(UniChar);
+					} else {
+						searchInfo->nameLength = 0;
+					}
 				}
-				attributeBuffer = (attrreference_t *)attributeBuffer + 1;
 			}
+			attributeBuffer = (attrreference_t*) attributeBuffer +1;
 		}
 		if ( a & ATTR_CMN_OBJID ) {
 			searchInfo->nodeID = ((fsobj_id_t *) attributeBuffer)->fid_objno;	/* ignore fid_generation */
@@ -1145,67 +1147,82 @@ UnpackSearchAttributeBlock( struct hfsmount *hfsmp, struct attrlist	*alist, sear
 
 		if ( a & ATTR_CMN_CRTIME ) {
             if (is_64_bit) {
-                struct user_timespec tmp;
-                tmp = *((struct user_timespec *)attributeBuffer);
+                struct user64_timespec tmp;
+                tmp = *((struct user64_timespec *)attributeBuffer);
                 searchInfo->creationDate.tv_sec = (time_t)tmp.tv_sec;
                 searchInfo->creationDate.tv_nsec = tmp.tv_nsec;
-				attributeBuffer = (struct user_timespec *)attributeBuffer + 1;
+				attributeBuffer = (struct user64_timespec *)attributeBuffer + 1;
             }
             else {
-                searchInfo->creationDate = *((struct timespec *)attributeBuffer);
-				attributeBuffer = (struct timespec *)attributeBuffer + 1;
+                struct user32_timespec tmp;
+                tmp = *((struct user32_timespec *)attributeBuffer);
+                searchInfo->creationDate.tv_sec = (time_t)tmp.tv_sec;
+                searchInfo->creationDate.tv_nsec = tmp.tv_nsec;
+				attributeBuffer = (struct user32_timespec *)attributeBuffer + 1;
             }
 		}
 		if ( a & ATTR_CMN_MODTIME ) {
             if (is_64_bit) {
-                struct user_timespec tmp;
-                tmp = *((struct user_timespec *)attributeBuffer);
+                struct user64_timespec tmp;
+                tmp = *((struct user64_timespec *)attributeBuffer);
                 searchInfo->modificationDate.tv_sec = (time_t)tmp.tv_sec;
                 searchInfo->modificationDate.tv_nsec = tmp.tv_nsec;
-				attributeBuffer = (struct user_timespec *)attributeBuffer + 1;
+				attributeBuffer = (struct user64_timespec *)attributeBuffer + 1;
             }
             else {
-                searchInfo->modificationDate = *((struct timespec *)attributeBuffer);
-				attributeBuffer = (struct timespec *)attributeBuffer + 1;
+                struct user32_timespec tmp;
+                tmp = *((struct user32_timespec *)attributeBuffer);
+                searchInfo->modificationDate.tv_sec = (time_t)tmp.tv_sec;
+                searchInfo->modificationDate.tv_nsec = tmp.tv_nsec;
+				attributeBuffer = (struct user32_timespec *)attributeBuffer + 1;
             }
 		}
 		if ( a & ATTR_CMN_CHGTIME ) {
             if (is_64_bit) {
-                struct user_timespec tmp;
-                tmp = *((struct user_timespec *)attributeBuffer);
+                struct user64_timespec tmp;
+                tmp = *((struct user64_timespec *)attributeBuffer);
                 searchInfo->changeDate.tv_sec = (time_t)tmp.tv_sec;
                 searchInfo->changeDate.tv_nsec = tmp.tv_nsec;
-				attributeBuffer = (struct user_timespec *)attributeBuffer + 1;
+				attributeBuffer = (struct user64_timespec *)attributeBuffer + 1;
             }
             else {
-                searchInfo->changeDate = *((struct timespec *)attributeBuffer);
-				attributeBuffer = (struct timespec *)attributeBuffer + 1;
+                struct user32_timespec tmp;
+                tmp = *((struct user32_timespec *)attributeBuffer);
+                searchInfo->changeDate.tv_sec = (time_t)tmp.tv_sec;
+                searchInfo->changeDate.tv_nsec = tmp.tv_nsec;
+				attributeBuffer = (struct user32_timespec *)attributeBuffer + 1;
             }
 		}
 		if ( a & ATTR_CMN_ACCTIME ) {
             if (is_64_bit) {
-                struct user_timespec tmp;
-                tmp = *((struct user_timespec *)attributeBuffer);
+                struct user64_timespec tmp;
+                tmp = *((struct user64_timespec *)attributeBuffer);
                 searchInfo->accessDate.tv_sec = (time_t)tmp.tv_sec;
                 searchInfo->accessDate.tv_nsec = tmp.tv_nsec;
-				attributeBuffer = (struct user_timespec *)attributeBuffer + 1;
+				attributeBuffer = (struct user64_timespec *)attributeBuffer + 1;
             }
             else {
-                searchInfo->accessDate = *((struct timespec *)attributeBuffer);
-				attributeBuffer = (struct timespec *)attributeBuffer + 1;
+                struct user32_timespec tmp;
+                tmp = *((struct user32_timespec *)attributeBuffer);
+                searchInfo->accessDate.tv_sec = (time_t)tmp.tv_sec;
+                searchInfo->accessDate.tv_nsec = tmp.tv_nsec;
+				attributeBuffer = (struct user32_timespec *)attributeBuffer + 1;
             }
 		}
 		if ( a & ATTR_CMN_BKUPTIME ) {
             if (is_64_bit) {
-                struct user_timespec tmp;
-                tmp = *((struct user_timespec *)attributeBuffer);
+                struct user64_timespec tmp;
+                tmp = *((struct user64_timespec *)attributeBuffer);
                 searchInfo->lastBackupDate.tv_sec = (time_t)tmp.tv_sec;
                 searchInfo->lastBackupDate.tv_nsec = tmp.tv_nsec;
-				attributeBuffer = (struct user_timespec *)attributeBuffer + 1;
+				attributeBuffer = (struct user64_timespec *)attributeBuffer + 1;
             }
             else {
-                searchInfo->lastBackupDate = *((struct timespec *)attributeBuffer);
-				attributeBuffer = (struct timespec *)attributeBuffer + 1;
+                struct user32_timespec tmp;
+                tmp = *((struct user32_timespec *)attributeBuffer);
+                searchInfo->lastBackupDate.tv_sec = (time_t)tmp.tv_sec;
+                searchInfo->lastBackupDate.tv_nsec = tmp.tv_nsec;
+				attributeBuffer = (struct user32_timespec *)attributeBuffer + 1;
             }
 		}
 		if ( a & ATTR_CMN_FNDRINFO ) {
