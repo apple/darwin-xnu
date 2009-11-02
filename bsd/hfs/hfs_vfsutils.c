@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*	@(#)hfs_vfsutils.c	4.0
 *
@@ -747,14 +741,7 @@ overflow_extents(struct filefork *fp)
 {
 	u_long blocks;
 
-       //
-       // If the vnode pointer is NULL then we're being called
-       // from hfs_remove_orphans() with a faked-up filefork
-       // and therefore it has to be an HFS+ volume.  Otherwise
-       // we check through the volume header to see what type
-       // of volume we're on.
-       //
-       if (FTOV(fp) == NULL || VTOVCB(FTOV(fp))->vcbSigWord == kHFSPlusSigWord) {
+	if (VTOVCB(FTOV(fp))->vcbSigWord == kHFSPlusSigWord) {
 		if (fp->ff_extents[7].blockCount == 0)
 			return (0);
 
@@ -1318,7 +1305,7 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 				cnode.c_rsrcfork = NULL;
 				fsize = (u_int64_t)dfork.ff_blocks * (u_int64_t)HFSTOVCB(hfsmp)->blockSize;
 				while (fsize > 0) {
-					if (fsize > HFS_BIGFILE_SIZE && overflow_extents(&dfork)) {
+					if (fsize > HFS_BIGFILE_SIZE) {
 						fsize -= HFS_BIGFILE_SIZE;
 					} else {
 						fsize = 0;
@@ -2196,7 +2183,7 @@ hfs_metadatazone_init(struct hfsmount *hfsmp)
 	 * The extra space goes to the catalog file and hot file area.
 	 */
 	temp = zonesize;
-	zonesize = roundup(zonesize, vcb->vcbVBMIOSize * 8 * vcb->blockSize);
+	zonesize = roundup(zonesize, (u_int64_t)vcb->vcbVBMIOSize * 8 * vcb->blockSize);
 	temp = zonesize - temp;  /* temp has extra space */
 	filesize += temp / 3;
 	hfsmp->hfs_catalog_maxblks += (temp - (temp / 3)) / vcb->blockSize;

@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1988, 1989, 1993
@@ -513,6 +507,7 @@ rn_addmask(n_arg, search, skip)
 		R_Free(saved_x);
 		return (x);
 	}
+	mask_rnhead->rnh_cnt++;
 	/*
 	 * Calculate index of mask, and check for normalcy.
 	 */
@@ -651,6 +646,7 @@ rn_addroute(v_arg, n_arg, head, treenodes)
 		tt->rn_bit = -1;
 		tt->rn_flags = RNF_ACTIVE;
 	}
+	head->rnh_cnt++;
 	/*
 	 * Put mask in tree.
 	 */
@@ -799,6 +795,7 @@ on1:
 	 */
 	if (tt->rn_flags & RNF_ROOT)
 		return (0);
+	head->rnh_cnt--;
 #ifdef RN_DEBUG
 	/* Get us out of the creation list */
 	for (t = rn_clist; t && t->rn_ybro != tt; t = t->rn_ybro) {}
@@ -926,28 +923,40 @@ rn_walktree_from(h, a, m, f, w)
 	struct radix_node *base, *next;
 	u_char *xa = (u_char *)a;
 	u_char *xm = (u_char *)m;
-	register struct radix_node *rn, *last = 0 /* shut up gcc */;
-	int stopping = 0;
+	struct radix_node *rn, *last;
+	int stopping;
 	int lastb;
+	int rnh_cnt;
+
+	/*
+	 * This gets complicated because we may delete the node while
+	 * applying the function f to it; we cannot simply use the next
+	 * leaf as the successor node in advance, because that leaf may
+	 * be removed as well during deletion when it is a clone of the
+	 * current node.  When that happens, we would end up referring
+	 * to an already-freed radix node as the successor node.  To get
+	 * around this issue, if we detect that the radix tree has changed
+	 * in dimension (smaller than before), we simply restart the walk
+	 * from the top of tree.
+	 */
+restart:
+	last = NULL;
+	stopping = 0;
+	rnh_cnt = h->rnh_cnt;
 
 	/*
 	 * rn_search_m is sort-of-open-coded here.
 	 */
-	/* printf("about to search\n"); */
 	for (rn = h->rnh_treetop; rn->rn_bit >= 0; ) {
 		last = rn;
-		/* printf("rn_bit %d, rn_bmask %x, xm[rn_offset] %x\n",
-		       rn->rn_bit, rn->rn_bmask, xm[rn->rn_offset]); */
-		if (!(rn->rn_bmask & xm[rn->rn_offset])) {
+		if (!(rn->rn_bmask & xm[rn->rn_offset]))
 			break;
-		}
-		if (rn->rn_bmask & xa[rn->rn_offset]) {
+
+		if (rn->rn_bmask & xa[rn->rn_offset])
 			rn = rn->rn_right;
-		} else {
+		else
 			rn = rn->rn_left;
-		}
 	}
-	/* printf("done searching\n"); */
 
 	/*
 	 * Two cases: either we stepped off the end of our mask,
@@ -958,18 +967,11 @@ rn_walktree_from(h, a, m, f, w)
 	rn = last;
 	lastb = rn->rn_bit;
 
-	/* printf("rn %p, lastb %d\n", rn, lastb);*/
-
-	/*
-	 * This gets complicated because we may delete the node
-	 * while applying the function f to it, so we need to calculate
-	 * the successor node in advance.
-	 */
+	/* First time through node, go left */
 	while (rn->rn_bit >= 0)
 		rn = rn->rn_left;
 
 	while (!stopping) {
-		/* printf("node %p (%d)\n", rn, rn->rn_bit); */
 		base = rn;
 		/* If at right child go back up, otherwise, go right */
 		while (rn->rn_parent->rn_right == rn
@@ -977,31 +979,35 @@ rn_walktree_from(h, a, m, f, w)
 			rn = rn->rn_parent;
 
 			/* if went up beyond last, stop */
-			if (rn->rn_bit < lastb) {
+			if (rn->rn_bit <= lastb) {
 				stopping = 1;
-				/* printf("up too far\n"); */
+				/*
+				 * XXX we should jump to the 'Process leaves'
+				 * part, because the values of 'rn' and 'next'
+				 * we compute will not be used. Not a big deal
+				 * because this loop will terminate, but it is
+				 * inefficient and hard to understand!
+				 */
 			}
 		}
 
-		/* Find the next *leaf* since next node might vanish, too */
+		/* Find the next *leaf* to start from */
 		for (rn = rn->rn_parent->rn_right; rn->rn_bit >= 0;)
 			rn = rn->rn_left;
 		next = rn;
 		/* Process leaves */
 		while ((rn = base) != 0) {
 			base = rn->rn_dupedkey;
-			/* printf("leaf %p\n", rn); */
 			if (!(rn->rn_flags & RNF_ROOT)
 			    && (error = (*f)(rn, w)))
 				return (error);
 		}
+		/* If one or more nodes got deleted, restart from top */
+		if (h->rnh_cnt < rnh_cnt)
+			goto restart;
 		rn = next;
-
-		if (rn->rn_flags & RNF_ROOT) {
-			/* printf("root, stopping"); */
+		if (rn->rn_flags & RNF_ROOT)
 			stopping = 1;
-		}
-
 	}
 	return 0;
 }
@@ -1014,44 +1020,48 @@ rn_walktree(h, f, w)
 {
 	int error;
 	struct radix_node *base, *next;
-	register struct radix_node *rn = h->rnh_treetop;
+	struct radix_node *rn;
+	int rnh_cnt;
+
 	/*
-	 * This gets complicated because we may delete the node
-	 * while applying the function f to it, so we need to calculate
-	 * the successor node in advance.
+	 * This gets complicated because we may delete the node while
+	 * applying the function f to it; we cannot simply use the next
+	 * leaf as the successor node in advance, because that leaf may
+	 * be removed as well during deletion when it is a clone of the
+	 * current node.  When that happens, we would end up referring
+	 * to an already-freed radix node as the successor node.  To get
+	 * around this issue, if we detect that the radix tree has changed
+	 * in dimension (smaller than before), we simply restart the walk
+	 * from the top of tree.
 	 */
+restart:
+	rn = h->rnh_treetop;
+	rnh_cnt = h->rnh_cnt;
+
 	/* First time through node, go left */
-	while (rn->rn_bit >= 0) 
-		if (rn)
-			rn = rn->rn_left;
-		else return(0);
+	while (rn->rn_bit >= 0)
+		rn = rn->rn_left;
 	for (;;) {
 		base = rn;
 		/* If at right child go back up, otherwise, go right */
-		while (rn != NULL && rn->rn_parent != NULL && rn->rn_parent->rn_right == rn
-		       && (rn->rn_flags & RNF_ROOT) == 0)
+		while (rn->rn_parent->rn_right == rn &&
+		    (rn->rn_flags & RNF_ROOT) == 0)
 			rn = rn->rn_parent;
-		/* Find the next *leaf* since next node might vanish, too */
-		if (rn == NULL || rn->rn_parent == NULL || rn->rn_parent->rn_right == NULL)
-			return (0);
-		for (rn = rn->rn_parent->rn_right; rn->rn_bit >= 0;) {
-			if (rn == NULL || rn->rn_parent == NULL || rn->rn_parent->rn_right == NULL || rn->rn_left == NULL)
-				return(0);
+		/* Find the next *leaf* to start from */
+		for (rn = rn->rn_parent->rn_right; rn->rn_bit >= 0;)
 			rn = rn->rn_left;
-		}
 		next = rn;
 		/* Process leaves */
-		while ((rn = base)) {
-			if (rn == NULL)
-				return(0);
+		while ((rn = base) != NULL) {
 			base = rn->rn_dupedkey;
 			if (!(rn->rn_flags & RNF_ROOT)
 			    && (error = (*f)(rn, w)))
 				return (error);
 		}
+		/* If one or more nodes got deleted, restart from top */
+		if (h->rnh_cnt < rnh_cnt)
+			goto restart;
 		rn = next;
-		if (rn == NULL)
-			return (0);
 		if (rn->rn_flags & RNF_ROOT)
 			return (0);
 	}
@@ -1088,6 +1098,7 @@ rn_inithead(head, off)
 	rnh->rnh_walktree = rn_walktree;
 	rnh->rnh_walktree_from = rn_walktree_from;
 	rnh->rnh_treetop = t;
+	rnh->rnh_cnt = 3;
 	return (1);
 }
 

@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -88,7 +82,6 @@
 #include <sys/xattr.h>
 #include <sys/ubc_internal.h>
 #include <sys/uio_internal.h>
-#include <sys/resourcevar.h>
 
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
@@ -135,51 +128,6 @@ vn_open_modflags(struct nameidata *ndp, int *fmodep, int cmode)
 	return(vn_open_auth(ndp, fmodep, &va));
 }
 
-/*
- * Open a file with authorization, updating the contents of the structures
- * pointed to by ndp, fmodep, and vap as necessary to perform the requested
- * operation.  This function is used for both opens of existing files, and
- * creation of new files.
- *
- * Parameters:	ndp			The nami data pointer describing the
- *					file
- *		fmodep			A pointer to an int containg the mode
- *					information to be used for the open
- *		vap			A pointer to the vnode attribute
- *					descriptor to be used for the open
- *
- * Indirect:	*			Contents of the data structures pointed
- *					to by the parameters are modified as
- *					necessary to the requested operation.
- *
- * Returns:	0			Success
- *		!0			errno value
- *
- * Notes:	The kauth_filesec_t in 'vap', if any, is in host byte order.
- *
- *		The contents of '*ndp' will be modified, based on the other
- *		arguments to this function, and to return file and directory
- *		data necessary to satisfy the requested operation.
- *
- *		If the file does not exist and we are creating it, then the
- *		O_TRUNC flag will be cleared in '*fmodep' to indicate to the
- *		caller that the file was not truncated.
- *
- *		If the file exists and the O_EXCL flag was not specified, then
- *		the O_CREAT flag will be cleared in '*fmodep' to indicate to
- *		the caller that the existing file was merely opened rather
- *		than created.
- *
- *		The contents of '*vap' will be modified as necessary to
- *		complete the operation, including setting of supported
- *		attribute, clearing of fields containing unsupported attributes
- *		in the request, if the request proceeds without them, etc..
- *
- * XXX:		This function is too complicated in actings on its arguments
- *
- * XXX:		We should enummerate the possible errno values here, and where
- *		in the code they originated.
- */
 int
 vn_open_auth(struct nameidata *ndp, int *fmodep, struct vnode_attr *vap)
 {
@@ -195,10 +143,6 @@ again:
 	dvp = NULL;
 	fmode = *fmodep;
 	if (fmode & O_CREAT) {
-	        if ( (fmode & O_DIRECTORY) ) {
-		        error = EINVAL;
-			goto out;
-		}
 		ndp->ni_cnd.cn_nameiop = CREATE;
 		ndp->ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF | AUDITVNPATH1;
 
@@ -287,11 +231,6 @@ badcreate:
 		vp = ndp->ni_vp;
 		nameidone(ndp);
 		ndp->ni_dvp = NULL;
-
-		if ( (fmode & O_DIRECTORY) && vp->v_type != VDIR ) {
-		        error = ENOTDIR;
-			goto bad;
-		}
 	}
 	if (vp->v_type == VSOCK && vp->v_tag != VT_FDESC) {
 		error = EOPNOTSUPP;	/* Operation not supported on socket */
@@ -846,7 +785,7 @@ vn_ioctl(fp, com, data, p)
 		return(error);
 	}
 	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX kauth_cred_get() ??? */
+	context.vc_ucred = p->p_ucred;	/* XXX kauth_cred_get() ??? */
 
 	switch (vp->v_type) {
 
@@ -913,7 +852,6 @@ vn_ioctl(fp, com, data, p)
 	}
 out:
 	(void)vnode_put(vp);
-	kauth_cred_unref(&context.vc_ucred);
 	return(error);
 }
 
@@ -1005,14 +943,13 @@ vn_kqfilt_add(fp, kn, p)
 	
 	if ( (error = vnode_getwithref(vp)) == 0 ) {
 		context.vc_proc = p;
-		context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX kauth_cred_get() ??? */
+		context.vc_ucred = p->p_ucred;	/* XXX kauth_cred_get() ??? */
 
 	        funnel_state = thread_funnel_set(kernel_flock, TRUE);
 		error = VNOP_KQFILT_ADD(vp, kn, &context);
 		thread_funnel_set(kernel_flock, funnel_state);
 
 		(void)vnode_put(vp);
-		kauth_cred_unref(&context.vc_ucred);
 	}
 	return (error);
 }
@@ -1031,14 +968,13 @@ vn_kqfilt_remove(vp, ident, p)
 	
 	if ( (error = vnode_getwithref(vp)) == 0 ) {
 	        context.vc_proc = p;
-		context.vc_ucred = kauth_cred_proc_ref(p);	/* XXX kauth_cred_get() ??? */
+		context.vc_ucred = p->p_ucred;	/* XXX kauth_cred_get() ??? */
 
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 		error = VNOP_KQFILT_REMOVE(vp, ident, &context);
 		thread_funnel_set(kernel_flock, funnel_state);
 
 		(void)vnode_put(vp);
-		kauth_cred_unref(&context.vc_ucred);
 	}
 	return (error);
 }

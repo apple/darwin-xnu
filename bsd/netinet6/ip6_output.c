@@ -427,6 +427,7 @@ ip6_output(
 				ipf_unref();
 				lck_mtx_lock(ip6_mutex);
 			}
+			ip6 = mtod(m, struct ip6_hdr *);
 			/* Hack: cleanup embedded scope_id if we put it there */
 			if (fixscope)
 				ip6->ip6_dst.s6_addr16[1] = 0;

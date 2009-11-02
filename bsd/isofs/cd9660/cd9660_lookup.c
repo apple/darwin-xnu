@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: cd9660_lookup.c,v 1.13 1994/12/24 15:30:03 cgd Exp $	*/
 
@@ -196,6 +190,9 @@ cd9660_lookup(struct vnop_lookup_args *ap)
 	if ((imp->iso_ftype == ISO_FTYPE_JOLIET) &&
 	    !((len == 1 && *name == '.') || (flags & ISDOTDOT))) {
 		int flags1 = UTF_PRECOMPOSED;
+
+		if (BYTE_ORDER != BIG_ENDIAN)
+			flags1 |= UTF_REVERSE_ENDIAN;
 
 		(void) utf8_decodestr(name, len, (u_int16_t*) altname, &altlen,
 					sizeof(altname), 0, flags1);

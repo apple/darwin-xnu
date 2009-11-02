@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995, 1997 Apple Computer, Inc. All Rights Reserved */
 /*
@@ -112,6 +106,7 @@ int fdgetf_noref(struct proc *p, int fd, struct fileproc **resultfp);
 void fg_drop(struct fileproc * fp);
 void fg_free(struct fileglob *fg);
 void fg_ref(struct fileproc * fp);
+int fp_getfpshm(struct proc *p, int fd, struct fileproc **resultfp, struct pshmnode  **resultpshm);
 
 static int closef_finish(struct fileproc *fp, struct fileglob *fg, struct proc *p);
 
@@ -154,11 +149,13 @@ file_lock_init(void)
 
 	/* allocate file lock group attribute and group */
 	file_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(file_lck_grp_attr);
 
 	file_lck_grp = lck_grp_alloc_init("file",  file_lck_grp_attr);
 
 	/* Allocate file lock attribute */
 	file_lck_attr = lck_attr_alloc_init();
+	//lck_attr_setdebug(file_lck_attr);
 
 	uipc_lock = lck_mtx_alloc_init(file_lck_grp, file_lck_attr);
 	file_iterate_lcok = lck_mtx_alloc_init(file_lck_grp, file_lck_attr);
@@ -205,21 +202,70 @@ ogetdtablesize(struct proc *p, __unused void *uap, register_t *retval)
 	return (0);
 }
 
-static __inline__ void
-_fdrelse(struct filedesc *fdp, int fd)
+void
+procfdtbl_reservefd(struct proc * p, int fd)
 {
+	p->p_fd->fd_ofiles[fd] = NULL;
+        p->p_fd->fd_ofileflags[fd] |= UF_RESERVED;
+}
+
+void
+procfdtbl_markclosefd(struct proc * p, int fd)
+{
+        p->p_fd->fd_ofileflags[fd] |= (UF_RESERVED | UF_CLOSING);
+}
+
+void
+procfdtbl_releasefd(struct proc * p, int fd, struct fileproc * fp)
+{
+	if (fp != NULL)
+        	p->p_fd->fd_ofiles[fd] = fp;
+        p->p_fd->fd_ofileflags[fd] &= ~UF_RESERVED;
+	if ((p->p_fd->fd_ofileflags[fd] & UF_RESVWAIT) == UF_RESVWAIT) {
+		p->p_fd->fd_ofileflags[fd] &= ~UF_RESVWAIT;
+		wakeup(&p->p_fd);
+	}
+}
+
+void 
+procfdtbl_waitfd(struct proc * p, int fd)
+{
+        p->p_fd->fd_ofileflags[fd] |= UF_RESVWAIT;
+	msleep(&p->p_fd, &p->p_fdmlock, PRIBIO, "ftbl_waitfd", NULL);
+}
+
+
+void
+procfdtbl_clearfd(struct proc * p, int fd)
+{
+	int waiting;
+
+	waiting = (p->p_fd->fd_ofileflags[fd] & UF_RESVWAIT);
+	p->p_fd->fd_ofiles[fd] = NULL;       
+	p->p_fd->fd_ofileflags[fd] = 0;
+	if ( waiting == UF_RESVWAIT) {
+		wakeup(&p->p_fd);
+	}
+}
+
+
+static __inline__ void
+_fdrelse(struct proc *p, int fd)
+{
+struct filedesc *fdp = p->p_fd;
+int nfd = 0;
+
 	if (fd < fdp->fd_freefile)
 		fdp->fd_freefile = fd;
 #if DIAGNOSTIC
 	if (fd > fdp->fd_lastfile)
 		panic("fdrelse: fd_lastfile inconsistent");
 #endif
-	fdp->fd_ofiles[fd] = NULL;
-	fdp->fd_ofileflags[fd] = 0;
+	procfdtbl_clearfd(p, fd);
 
-	while ((fd = fdp->fd_lastfile) > 0 &&
-			fdp->fd_ofiles[fd] == NULL &&
-			!(fdp->fd_ofileflags[fd] & UF_RESERVED))
+	while ((nfd = fdp->fd_lastfile) > 0 &&
+			fdp->fd_ofiles[nfd] == NULL &&
+			!(fdp->fd_ofileflags[nfd] & UF_RESERVED))
 		fdp->fd_lastfile--;
 }
 
@@ -268,10 +314,11 @@ dup2(p, uap, retval)
 	register struct filedesc *fdp = p->p_fd;
 	register int old = uap->from, new = uap->to;
 	int i, error;
-	struct fileproc *fp;
+	struct fileproc *fp, *nfp;
 
 	proc_fdlock(p);
 
+startover:
 	if ( (error = fp_lookup(p, old, &fp, 1)) ) {
 		proc_fdunlock(p);
 		return(error);
@@ -296,28 +343,24 @@ dup2(p, uap, retval)
 			return (error);
 		}
 		if (new != i) {
-			_fdrelse(fdp, i);
+			_fdrelse(p, i);
 			goto closeit;
 		}
 	} else {
-		struct fileproc **fpp;
-		char flags;
 closeit:
-		flags = fdp->fd_ofileflags[new];
-		if ((flags & (UF_RESERVED | UF_CLOSING)) == UF_RESERVED) {
-			fp_drop(p, old, fp, 1);
-			proc_fdunlock(p);
-			return (EBADF);
+		while ((fdp->fd_ofileflags[new] & UF_RESERVED) == UF_RESERVED)  {
+				fp_drop(p, old, fp, 1);
+				procfdtbl_waitfd(p, new);
+				goto startover;
 		}
 
-		/*
-		 * dup2() must succeed even if the close has an error.
-		 */
-		if (*(fpp = &fdp->fd_ofiles[new])) {
-			struct fileproc *nfp = *fpp;
-
-			close_internal(p, new, nfp, (CLOSEINT_LOCKED | CLOSEINT_WAITONCLOSE | CLOSEINT_NOFDRELSE | CLOSEINT_NOFDNOREF));
-			*fpp = NULL;
+		if ((fdp->fd_ofiles[new] != NULL)  && ((error = fp_lookup(p, new, &nfp, 1)) == 0)) {
+			fp_drop(p, old, fp, 1);
+			close_internal(p, new, nfp, CLOSEINT_LOCKED | CLOSEINT_NOFDRELSE);
+			procfdtbl_clearfd(p, new);
+			goto startover;
+		} else  {
+			procfdtbl_reservefd(p, new);
 		}
 	}
 	error = finishdup(p, fdp, old, new, retval);
@@ -949,7 +992,7 @@ finishdup(struct proc * p, struct filedesc *fdp, int old, int new, register_t *r
 
 	if ((ofp = fdp->fd_ofiles[old]) == NULL ||
 			(fdp->fd_ofileflags[old] & UF_RESERVED)) {
-		_fdrelse(fdp, new);
+		_fdrelse(p, new);
 		return (EBADF);
 	}
 	fg_ref(ofp);
@@ -959,14 +1002,13 @@ finishdup(struct proc * p, struct filedesc *fdp, int old, int new, register_t *r
 	bzero(nfp, sizeof(struct fileproc));
 
 	proc_fdlock(p);
-	nfp->f_flags = ofp->f_flags;
+	nfp->f_flags = 0;
 	nfp->f_fglob = ofp->f_fglob;
 	nfp->f_iocount = 0;
 
-	fdp->fd_ofiles[new] = nfp;
-	fdp->fd_ofileflags[new] = fdp->fd_ofileflags[old] &~ UF_EXCLOSE;
 	if (new > fdp->fd_lastfile)
 		fdp->fd_lastfile = new;
+	procfdtbl_releasefd(p, new, nfp);
 	*retval = new;
 	return (0);
 }
@@ -988,7 +1030,7 @@ close(struct proc *p, struct close_args *uap, __unused register_t *retval)
 		return(error);
 	}
 
-	error = close_internal(p, fd, fp, CLOSEINT_LOCKED | CLOSEINT_WAITONCLOSE);
+	error = close_internal(p, fd, fp, CLOSEINT_LOCKED);
 
 	proc_fdunlock(p);
 
@@ -1014,20 +1056,12 @@ close_internal(struct proc *p, int fd, struct fileproc *fp, int flags)
 		proc_fdlock(p);
 
 	/* Keep people from using the filedesc while we are closing it */
-	fdp->fd_ofileflags[fd] |= UF_RESERVED;
-
-	fdp->fd_ofileflags[fd] |= UF_CLOSING;
-
-
-	if ((waitonclose && ((fp->f_flags & FP_CLOSING) == FP_CLOSING))) {
-			if (nofdref == 0)
-				fp_drop(p, fd, fp, 1);
-			fp->f_flags |= FP_WAITCLOSE;
-			if (!locked)
-				slpstate |= PDROP;
-			msleep(&fp->f_flags, &p->p_fdmlock, slpstate, "close wait",0) ;	
-			return(EBADF);
+	procfdtbl_markclosefd(p, fd);
+	if ((fp->f_flags & FP_CLOSING) == FP_CLOSING) {
+		panic("close_internal_locked:  being called on already closing fd\n");
 	}
+
+
 
 	fp->f_flags |= FP_CLOSING;
 	if (nofdref)
@@ -1069,7 +1103,7 @@ close_internal(struct proc *p, int fd, struct fileproc *fp, int flags)
 	if ((fp->f_flags & FP_INCHRREAD) == 0)
 		fileproc_drain(p, fp);
 	if (norelse == 0)
-		_fdrelse(fdp, fd);
+		_fdrelse(p, fd);
 	error = closef_locked(fp, fp->f_fglob, p);
 	if ((fp->f_flags & FP_WAITCLOSE) == FP_WAITCLOSE)
 		wakeup(&fp->f_flags);
@@ -1299,7 +1333,7 @@ fdalloc(p, want, result)
 	register int i;
 	int lim, last, numfiles, oldnfiles;
 	struct fileproc **newofiles, **ofiles;
-	char *newofileflags, *ofileflags;
+	char *newofileflags;
 
 	/*
 	 * Search for a free descriptor starting at the higher
@@ -1311,11 +1345,9 @@ fdalloc(p, want, result)
 		last = min(fdp->fd_nfiles, lim);
 		if ((i = want) < fdp->fd_freefile)
 			i = fdp->fd_freefile;
-		ofiles = &fdp->fd_ofiles[i];
-		ofileflags = &fdp->fd_ofileflags[i];
 		for (; i < last; i++) {
-			if (*ofiles == NULL && !(*ofileflags & UF_RESERVED)) {
-				*ofileflags = UF_RESERVED;
+			if (fdp->fd_ofiles[i] == NULL && !(fdp->fd_ofileflags[i] & UF_RESERVED)) {
+				procfdtbl_reservefd(p, i);
 				if (i > fdp->fd_lastfile)
 					fdp->fd_lastfile = i;
 				if (want <= fdp->fd_freefile)
@@ -1323,7 +1355,6 @@ fdalloc(p, want, result)
 				*result = i;
 				return (0);
 			}
-			ofiles++; ofileflags++;
 		}
 
 		/*
@@ -1404,7 +1435,7 @@ fdrelse(p, fd)
 	struct proc *p;
 	int fd;
 {
-	_fdrelse(p->p_fd, fd);
+	_fdrelse(p, fd);
 }
 
 void
@@ -1504,42 +1535,6 @@ fp_getfvp(p, fd, resultfp, resultvp)
 	return (0);
 }
 
-
-
-int
-fp_getfvpandvid(p, fd, resultfp, resultvp, vidp)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct vnode  **resultvp;
-	uint32_t * vidp;
-{
-	struct filedesc *fdp = p->p_fd;
-	struct fileproc *fp;
-
-	proc_fdlock(p);
-	if (fd < 0 || fd >= fdp->fd_nfiles ||
-			(fp = fdp->fd_ofiles[fd]) == NULL ||
-			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
-		proc_fdunlock(p);
-		return (EBADF);
-	}
-	if (fp->f_type != DTYPE_VNODE) {
-		proc_fdunlock(p);
-		return(ENOTSUP);
-	}
-	fp->f_iocount++;
-
-	if (resultfp)
-		*resultfp = fp;
-	if (resultvp)
-		*resultvp = (struct vnode *)fp->f_data;
-	if (vidp)
-		*vidp = (uint32_t)vnode_vid((struct vnode *)fp->f_data);
-	proc_fdunlock(p);
-
-	return (0);
-}
 
 /*
  * Returns:	EBADF			The file descriptor is invalid
@@ -1679,74 +1674,6 @@ fp_getfpsem(p, fd, resultfp, resultpsem)
 
 	return (0);
 }
-
-
-int
-fp_getfpipe(p, fd, resultfp, resultpipe)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct pipe  **resultpipe;
-{
-	struct filedesc *fdp = p->p_fd;
-	struct fileproc *fp;
-
-	proc_fdlock(p);
-	if (fd < 0 || fd >= fdp->fd_nfiles ||
-			(fp = fdp->fd_ofiles[fd]) == NULL ||
-			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
-		proc_fdunlock(p);
-		return (EBADF);
-	}
-	if (fp->f_type != DTYPE_PIPE) {
-		proc_fdunlock(p);
-		return(EBADF);
-	}
-	fp->f_iocount++;
-
-	if (resultfp)
-		*resultfp = fp;
-	if (resultpipe)
-		*resultpipe = (struct pipe *)fp->f_data;
-	proc_fdunlock(p);
-
-	return (0);
-}
-
-
-#define DTYPE_ATALK -1
-int
-fp_getfatalk(p, fd, resultfp, resultatalk)
-	struct proc *p;
-	int fd;
-	struct fileproc **resultfp;
-	struct atalk  **resultatalk;
-{
-	struct filedesc *fdp = p->p_fd;
-	struct fileproc *fp;
-
-	proc_fdlock(p);
-	if (fd < 0 || fd >= fdp->fd_nfiles ||
-			(fp = fdp->fd_ofiles[fd]) == NULL ||
-			(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
-		proc_fdunlock(p);
-		return (EBADF);
-	}
-	if (fp->f_type != (DTYPE_ATALK+1)) {
-		proc_fdunlock(p);
-		return(EBADF);
-	}
-	fp->f_iocount++;
-
-	if (resultfp)
-		*resultfp = fp;
-	if (resultatalk)
-		*resultatalk = (struct atalk *)fp->f_data;
-	proc_fdunlock(p);
-
-	return (0);
-}
-
 int
 fp_lookup(p, fd, resultfp, locked)
 	struct proc *p;
@@ -2029,13 +1956,17 @@ void
 fg_free(fg)
 	struct fileglob *fg;
 {
+	kauth_cred_t cred;
+
 	lck_mtx_lock(file_flist_lock);
 	LIST_REMOVE(fg, f_list);
 	nfiles--;
 	lck_mtx_unlock(file_flist_lock);
 
-	if (IS_VALID_CRED(fg->fg_cred)) {
-		kauth_cred_unref(&fg->fg_cred);
+	cred = fg->fg_cred;
+	if (cred != NOCRED) {
+		fg->fg_cred = NOCRED;
+		kauth_cred_rele(cred);
 	}
 	lck_mtx_destroy(&fg->fg_lock, file_lck_grp);
 
@@ -2048,28 +1979,29 @@ fdexec(p)
 {
 	struct filedesc *fdp = p->p_fd;
 	int i = fdp->fd_lastfile;
-	struct fileproc **fpp = &fdp->fd_ofiles[i];
-	char *flags = &fdp->fd_ofileflags[i];
+	struct fileproc *fp;
 	int funnel_state;
 
 	funnel_state = thread_funnel_set(kernel_flock, FALSE);
 	proc_fdlock(p);
 
 	while (i >= 0) {
-		if ((*flags & (UF_RESERVED|UF_EXCLOSE)) == UF_EXCLOSE) {
-			struct fileproc *fp = *fpp;
+		fp = fdp->fd_ofiles[i];
+		if ((fdp->fd_ofileflags[i] & (UF_RESERVED|UF_EXCLOSE)) == UF_EXCLOSE) {
 
-                        if (i < fdp->fd_knlistsize)
-                                knote_fdclose(p, i);
+			if (i < fdp->fd_knlistsize)
+					knote_fdclose(p, i);
 
-			*fpp = NULL; *flags = 0;
+			procfdtbl_clearfd(p, i);
 			if (i == fdp->fd_lastfile && i > 0)
 				fdp->fd_lastfile--;
+			if (i < fdp->fd_freefile)
+				fdp->fd_freefile = i;
 			closef_locked(fp, fp->f_fglob, p);
 			FREE_ZONE(fp, sizeof *fp, M_FILEPROC);
 		}
 
-		i--; fpp--; flags--;
+		i--;
 	}
 	proc_fdunlock(p);
 	thread_funnel_set(kernel_flock, funnel_state);
@@ -2088,7 +2020,7 @@ fdcopy(p)
 	vnode_t	v_dir;
 
 	MALLOC_ZONE(newfdp, struct filedesc *,
-			sizeof *newfdp, M_FILEDESC, M_WAITOK);
+			sizeof(*newfdp), M_FILEDESC, M_WAITOK);
 	if (newfdp == NULL)
 		return(NULL);
 
@@ -2097,7 +2029,7 @@ fdcopy(p)
 	/*
 	 * the FD_CHROOT flag will be inherited via this copy
 	 */
-	(void) memcpy(newfdp, fdp, sizeof *newfdp);
+	(void) memcpy(newfdp, fdp, sizeof(*newfdp));
 
 	/*
 	 * for both fd_cdir and fd_rdir make sure we get
@@ -2183,6 +2115,7 @@ fdcopy(p)
 		FREE_ZONE(newfdp, sizeof *newfdp, M_FILEDESC);
 		return(NULL);
 	}
+	(void) memset(newfdp->fd_ofiles, 0, i * OFILESIZE);
 	proc_fdlock(p);
 
 	newfdp->fd_ofileflags = (char *) &newfdp->fd_ofiles[i];
@@ -2193,9 +2126,9 @@ fdcopy(p)
 		char *flags;
 
 		(void) memcpy(newfdp->fd_ofiles, fdp->fd_ofiles,
-					i * sizeof *fdp->fd_ofiles);
+					(newfdp->fd_lastfile + 1) * sizeof *fdp->fd_ofiles);
 		(void) memcpy(newfdp->fd_ofileflags, fdp->fd_ofileflags,
-					i * sizeof *fdp->fd_ofileflags);
+					(newfdp->fd_lastfile + 1) * sizeof *fdp->fd_ofileflags);
 
 		/*
 		 * kq descriptors cannot be copied.
@@ -2219,7 +2152,7 @@ fdcopy(p)
 		fpp = newfdp->fd_ofiles;
 		flags = newfdp->fd_ofileflags;
 
-		for (i = newfdp->fd_lastfile; i-- >= 0; fpp++, flags++)
+		for (i = newfdp->fd_lastfile + 1; --i >= 0; fpp++, flags++)
 			if ((ofp = *fpp) != NULL && !(*flags & UF_RESERVED)) {
 				MALLOC_ZONE(fp, struct fileproc *, sizeof(struct fileproc), M_FILEPROC, M_WAITOK);
 				bzero(fp, sizeof(struct fileproc));
@@ -2230,11 +2163,12 @@ fdcopy(p)
 				(void)fg_ref(fp);
 				*fpp = fp;
 			} else {
+				if (i < newfdp->fd_freefile)
+					newfdp->fd_freefile = i;
 				*fpp = NULL;
 				*flags = 0;
 			}
-	} else
-		(void) memset(newfdp->fd_ofiles, 0, i * OFILESIZE);
+	}
 
 	proc_fdunlock(p);
 	return (newfdp);
@@ -2275,8 +2209,7 @@ fdfree(p)
 				/* closef drops the iocount ... */
 				if ((fp->f_flags & FP_INCHRREAD) != 0) 
 					fp->f_iocount++;
-			    fdp->fd_ofiles[i] = NULL;
-				fdp->fd_ofileflags[i] |= UF_RESERVED;
+				procfdtbl_reservefd(p, i);
 
 				if (i < fdp->fd_knlistsize)
 					knote_fdclose(p, i);
@@ -2616,26 +2549,6 @@ dupfdopen(fdp, indx, dfd, mode, error)
 	        proc_fdunlock(p);
 		return (0);
 
-	case ENXIO:
-		/*
-		 * Steal away the file pointer from dfd, and stuff it into indx.
-		 */
-		if (indx > fdp->fd_lastfile)
-			fdp->fd_lastfile = indx;
-
-		if (fp->f_fglob)
-		        fg_free(fp->f_fglob);
-		fp->f_fglob = wfp->f_fglob;
-
-		fdp->fd_ofileflags[indx] = fdp->fd_ofileflags[dfd];
-		_fdrelse(fdp, dfd);
-
-	        proc_fdunlock(p);
-
-		FREE_ZONE(wfp, sizeof *fp, M_FILEPROC);	
-
-		return (0);
-
 	default:
 	        proc_fdunlock(p);
 		return (error);
@@ -2689,6 +2602,7 @@ int insertque = 0;
 
 	if (insertque) {
 		lck_mtx_lock(uipc_lock);
+		unp_gc_wait();
 		LIST_INSERT_HEAD(&fmsghead, fg, f_msglist);
 		lck_mtx_unlock(uipc_lock);
 		lck_mtx_lock(&fg->fg_lock);
@@ -2721,6 +2635,7 @@ int removeque = 0;
 
 	if (removeque) {
 		lck_mtx_lock(uipc_lock);
+		unp_gc_wait();
 		LIST_REMOVE(fg, f_msglist);
 		lck_mtx_unlock(uipc_lock);
 		lck_mtx_lock(&fg->fg_lock);

@@ -345,4 +345,4 @@ extern char *ipsec_dump_policy(caddr_t, char *);
 extern const char *ipsec_strerror(void);
 #endif KERNEL
 
-#endif /* _NETINET6_IPSEC_H_ */
+#endif _NETINET6_IPSEC_H_

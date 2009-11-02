@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
  
  /*
@@ -33,7 +27,7 @@
 #include <sys/param.h>
 #include <sys/utfconv.h>
 #include <sys/errno.h>
-#include <libkern/OSByteOrder.h>
+#include <architecture/byte_order.h>
 
 /*
  * UTF-8 (Unicode Transformation Format)
@@ -181,7 +175,7 @@ utf8_encodelen(const u_int16_t * ucsp, size_t ucslen, u_int16_t altslash,
 		ucs_ch = *ucsp++;
 
 		if (swapbytes)
-			ucs_ch = OSSwapInt16(ucs_ch);
+			ucs_ch = NXSwapShort(ucs_ch);
 		if (ucs_ch == '/')
 			ucs_ch = altslash ? altslash : '_';
 		else if (ucs_ch == '\0')
@@ -238,7 +232,7 @@ utf8_encodestr(const u_int16_t * ucsp, size_t ucslen, u_int8_t * utf8p,
 			--extra;
 			ucs_ch = *chp++;
 		} else {
-			ucs_ch = swapbytes ? OSSwapInt16(*ucsp++) : *ucsp++;
+			ucs_ch = swapbytes ? NXSwapShort(*ucsp++) : *ucsp++;
 
 			if (decompose && unicode_decomposeable(ucs_ch)) {
 				extra = unicode_decompose(ucs_ch, sequence) - 1;
@@ -282,7 +276,7 @@ utf8_encodestr(const u_int16_t * ucsp, size_t ucslen, u_int8_t * utf8p,
 				u_int16_t ch2;
 				u_int32_t pair;
 
-				ch2 = swapbytes ? OSSwapInt16(*ucsp) : *ucsp;
+				ch2 = swapbytes ? NXSwapShort(*ucsp) : *ucsp;
 				if (ch2 >= SP_LOW_FIRST && ch2 <= SP_LOW_LAST) {
 					pair = ((ucs_ch - SP_HIGH_FIRST) << SP_HALF_SHIFT)
 						+ (ch2 - SP_LOW_FIRST) + SP_HALF_BASE;
@@ -420,13 +414,13 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 				ucs_ch = (ch >> SP_HALF_SHIFT) + SP_HIGH_FIRST;
 				if (ucs_ch < SP_HIGH_FIRST || ucs_ch > SP_HIGH_LAST)
 					goto invalid;
-				*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : ucs_ch;
+				*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
 				if (ucsp >= bufend)
 					goto toolong;
 				ucs_ch = (ch & SP_HALF_MASK) + SP_LOW_FIRST;
 				if (ucs_ch < SP_LOW_FIRST || ucs_ch > SP_LOW_LAST)
 					goto invalid;
-				*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : ucs_ch;
+				*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
 			        continue;
 			default:
 				goto invalid;
@@ -436,22 +430,30 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 					u_int16_t sequence[8];
 					int count, i;
 
+					/* Before decomposing a new unicode character, sort
+				 	 * previous combining characters, if any, and reset
+					 * the counter
+					 */
+					if (combcharcnt > 1){
+						priortysort(ucsp - combcharcnt, combcharcnt);
+					}
+					combcharcnt = 0;
 					count = unicode_decompose(ucs_ch, sequence);
 
 					for (i = 0; i < count; ++i) {
 						ucs_ch = sequence[i];
-						*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : ucs_ch;
+						*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
 						if (ucsp >= bufend)
 							goto toolong;
 					}
 					combcharcnt += count - 1;
-					continue;			
+                	continue;			
 				}
 			} else if (precompose && (ucsp != bufstart)) {
 				u_int16_t composite, base;
 
 				if (unicode_combinable(ucs_ch)) {
-					base = swapbytes ? OSSwapInt16(*(ucsp - 1)) : *(ucsp - 1);
+					base = swapbytes ? NXSwapShort(*(ucsp - 1)) : *(ucsp - 1);
 					composite = unicode_combine(base, ucs_ch);
 					if (composite) {
 						--ucsp;
@@ -476,7 +478,7 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 			}
 			combcharcnt = 0;  /* start over */
 		}
-		*ucsp++ = swapbytes ? OSSwapInt16(ucs_ch) : ucs_ch;
+		*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
 	}
 	/*
 	 * Make a previous combining sequence canonical

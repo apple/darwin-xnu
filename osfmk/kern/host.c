@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -536,7 +530,7 @@ host_processor_info(
 	unsigned int			icount, tcount;
 	unsigned int			pcount, i;
 	vm_offset_t				addr;
-	vm_size_t				size;
+	vm_size_t				size, needed;
 	vm_map_copy_t			copy;
 
 	if (host == HOST_NULL)
@@ -549,7 +543,8 @@ host_processor_info(
 	pcount = processor_count;
 	assert(pcount != 0);
 
-	size = round_page(pcount * icount * sizeof(natural_t));
+	needed = pcount * icount * sizeof(natural_t);
+	size = round_page(needed);
 	result = kmem_alloc(ipc_kernel_map, &addr, size);
 	if (result != KERN_SUCCESS)
 		return (KERN_RESOURCE_SHORTAGE);
@@ -579,6 +574,9 @@ host_processor_info(
 			}
 		}
 	}
+
+	if (size != needed) 
+		bzero((char *) addr + needed, size - needed);
 
 	result = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr),
 			       vm_map_round_page(addr + size), FALSE);

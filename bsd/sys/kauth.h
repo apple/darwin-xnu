@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 
 #ifndef _SYS_KAUTH_H
@@ -185,7 +179,7 @@ extern void	kauth_cred_ref(kauth_cred_t _cred);
 extern void	kauth_cred_rele(kauth_cred_t _cred);
 extern kauth_cred_t kauth_cred_dup(kauth_cred_t cred);
 extern kauth_cred_t kauth_cred_copy_real(kauth_cred_t cred);
-extern void	kauth_cred_unref(kauth_cred_t *_cred);
+extern void	kauth_cred_unref(kauth_cred_t _cred);
 extern kauth_cred_t	kauth_cred_setuid(kauth_cred_t cred, uid_t uid);
 extern kauth_cred_t	kauth_cred_seteuid(kauth_cred_t cred, uid_t euid);
 extern kauth_cred_t	kauth_cred_setgid(kauth_cred_t cred, gid_t gid);
@@ -307,17 +301,7 @@ struct kauth_acl {
 /* this ACL must not be overwritten as part of an inheritance operation */
 #define KAUTH_ACL_NO_INHERIT	(1<<17)
 
-/* acl_entrycount that tells us the ACL is not valid */
-#define KAUTH_FILESEC_NOACL ((u_int32_t)(-1))
-
-/*
- * If the acl_entrycount field is KAUTH_FILESEC_NOACL, then the size is the
- * same as a kauth_acl structure; the intent is to put an actual entrycount of
- * KAUTH_FILESEC_NOACL on disk to distinguish a kauth_filesec_t with an empty
- * entry (Windows treats this as "deny all") from one that merely indicates a
- * file group and/or owner guid values.
- */
-#define KAUTH_ACL_SIZE(c)	(sizeof(struct kauth_acl) + ((u_int32_t)(c) != KAUTH_FILESEC_NOACL ? ((c) * sizeof(struct kauth_ace)) : 0))
+#define KAUTH_ACL_SIZE(c)	(sizeof(struct kauth_acl) + (c) * sizeof(struct kauth_ace))
 #define KAUTH_ACL_COPYSIZE(p)	KAUTH_ACL_SIZE((p)->acl_entrycount)
 
 
@@ -346,6 +330,8 @@ struct kauth_filesec {
 	guid_t		fsec_group;
 
 	struct kauth_acl fsec_acl;
+	/* acl_entrycount that tells us the ACL is not valid */
+#define KAUTH_FILESEC_NOACL ((u_int32_t)(-1))
 };
 
 /* backwards compatibility */
@@ -366,19 +352,13 @@ typedef struct kauth_filesec *kauth_filesec_t;
 #define KAUTH_FILESEC_SIZE(c)		(sizeof(struct kauth_filesec) + (c) * sizeof(struct kauth_ace))
 #define KAUTH_FILESEC_COPYSIZE(p)	KAUTH_FILESEC_SIZE(((p)->fsec_entrycount == KAUTH_FILESEC_NOACL) ? 0 : (p)->fsec_entrycount)
 #define KAUTH_FILESEC_COUNT(s)		((s  - sizeof(struct kauth_filesec)) / sizeof(struct kauth_ace))
-#define KAUTH_FILESEC_VALID(s)		((s) >= sizeof(struct kauth_filesec) && (((s) - sizeof(struct kauth_filesec)) % sizeof(struct kauth_ace)) == 0)
 
 #define KAUTH_FILESEC_XATTR	"com.apple.system.Security"
-
-/* Allowable first arguments to kauth_filesec_acl_setendian() */
-#define	KAUTH_ENDIAN_HOST	0x00000001	/* set host endianness */
-#define	KAUTH_ENDIAN_DISK	0x00000002	/* set disk endianness */
 
 __BEGIN_DECLS
 kauth_filesec_t	kauth_filesec_alloc(int size);
 void		kauth_filesec_free(kauth_filesec_t fsp);
 int		kauth_copyinfilesec(user_addr_t xsecurity, kauth_filesec_t *xsecdestpp);
- void		kauth_filesec_acl_setendian(int, kauth_filesec_t, kauth_acl_t);
 __END_DECLS	
 
 #endif /* KERNEL || <sys/acl.h> */

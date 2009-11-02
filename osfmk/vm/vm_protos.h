@@ -1,29 +1,23 @@
 /*
- * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 
 #ifdef	XNU_KERNEL_PRIVATE
@@ -63,7 +57,6 @@ extern kern_return_t device_close(
  */
 extern int start_def_pager(
 	char *bs_device);
-extern int default_pager_init_flag;
 
 /*
  * osfmk
@@ -72,8 +65,6 @@ extern int default_pager_init_flag;
 /* these should be exported cleanly from OSFMK since BSD needs them */
 extern ipc_port_t convert_task_to_port(
 	task_t		task);
-extern ipc_port_t convert_task_name_to_port(
-	task_name_t	task_name);
 #endif /* _KERN_IPC_TT_H_ */
 #ifndef _IPC_IPC_PORT_H_
 extern mach_port_name_t ipc_port_copyout_send(
@@ -142,22 +133,13 @@ extern mach_vm_offset_t mach_get_vm_end(vm_map_t);
 extern vm_offset_t get_vm_start(vm_map_t);
 extern vm_offset_t get_vm_end(vm_map_t);
 
+#ifdef __PPC__
 /*
  * LP64todo - map in the commpage cleanly and remove these.
  */
 extern void vm_map_commpage64( vm_map_t );
-extern void vm_map_remove_commpage( vm_map_t );
-#ifdef __i386__
-extern void vm_map_commpage32(vm_map_t);
-extern kern_return_t vm_map_apple_protected(
-	vm_map_t	map,
-	vm_map_offset_t	start,
-	vm_map_offset_t	end);
-extern void apple_protect_pager_bootstrap(void);
-extern memory_object_t apple_protect_pager_setup(vm_object_t backing_object);
-extern void apple_protect_pager_map(memory_object_t mem_obj);
-#endif	/* __i386__ */
-
+extern void vm_map_remove_commpage64( vm_map_t );
+#endif /* __PPC__ */
 
 /*
  * bsd
@@ -198,14 +180,6 @@ extern memory_object_t vnode_pager_setup(
 	struct vnode *, memory_object_t);
 extern vm_object_offset_t vnode_pager_get_filesize(
 	struct vnode *);
-extern kern_return_t vnode_pager_get_pathname(
-	struct vnode	*vp,
-	char		*pathname,
-	vm_size_t	*length_p);
-extern kern_return_t vnode_pager_get_filename(
-	struct vnode	*vp,
-	char		**filename);
-	
 #endif /* _VNODE_PAGER_ */
 extern void vnode_pager_bootstrap(void);
 extern kern_return_t
@@ -221,13 +195,6 @@ extern kern_return_t vnode_pager_init(
 extern kern_return_t vnode_pager_get_object_size(
 	memory_object_t,
 	memory_object_offset_t *);
-extern kern_return_t vnode_pager_get_object_pathname(
-	memory_object_t	mem_obj,
-	char		*pathname,
-	vm_size_t	*length_p);
-extern kern_return_t vnode_pager_get_object_filename(
-	memory_object_t	mem_obj,
-	char		**filename);
 extern kern_return_t vnode_pager_data_request( 
 	memory_object_t, 
 	memory_object_offset_t, 
@@ -265,6 +232,9 @@ extern void vnode_pager_release_from_cache(
 	int	*);
 extern void ubc_unmap(
 	struct vnode *vp);
+
+extern int	vnode_pager_workaround;
+extern int	device_pager_workaround;
 
 extern void   dp_memory_object_reference(memory_object_t);
 extern void   dp_memory_object_deallocate(memory_object_t);
@@ -316,8 +286,6 @@ extern	kern_return_t   device_pager_data_request(memory_object_t,
 extern kern_return_t device_pager_data_return(memory_object_t,
 					      memory_object_offset_t,
 					      vm_size_t,
-					      memory_object_offset_t *,
-					      int *,
 					      boolean_t,
 					      boolean_t,
 					      int);
@@ -356,8 +324,6 @@ extern int macx_swapinfo(
 	memory_object_size_t	*avail_p,
 	vm_size_t		*pagesize_p,
 	boolean_t		*encrypted_p);
-
-extern void log_nx_failure(addr64_t vaddr, vm_prot_t prot);
 
 #endif	/* _VM_VM_PROTOS_H_ */
 

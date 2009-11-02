@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1988, 1990, 1993, 1995
@@ -205,10 +199,12 @@ udp_init()
 	 * allocate lock group attribute and group for udp pcb mutexes
 	 */
 	pcbinfo->mtx_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setdefault(pcbinfo->mtx_grp_attr);
 
 	pcbinfo->mtx_grp = lck_grp_alloc_init("udppcb", pcbinfo->mtx_grp_attr);
 		
 	pcbinfo->mtx_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(pcbinfo->mtx_attr);
 
 	if ((pcbinfo->mtx = lck_rw_alloc_init(pcbinfo->mtx_grp, pcbinfo->mtx_attr)) == NULL)
 		return;	/* pretty much dead if this fails... */
@@ -942,7 +938,7 @@ udp_output(inp, m, addr, control, p)
 	if (inp->inp_route.ro_rt && inp->inp_route.ro_rt->generation_id != route_generation) {
 		if (ifa_foraddr(inp->inp_laddr.s_addr) == 0) { /* src address is gone */
 			if (inp->inp_flags & INP_INADDR_ANY)
-				inp->inp_faddr.s_addr = INADDR_ANY; /* new src will be set later */
+				inp->inp_laddr.s_addr = INADDR_ANY; /* new src will be set later */
 			else {
 				error = EADDRNOTAVAIL;
 				goto release;
@@ -1226,22 +1222,27 @@ udp_lock(so, refcount, debug)
 	int refcount, debug;
 {
 	int lr_saved;
-	if (debug == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
+#ifdef __ppc__
+	if (debug == 0) {
+		__asm__ volatile("mflr %0" : "=r" (lr_saved));
+	}
 	else lr_saved = debug;
+#endif
 
 	if (so->so_pcb) {
 		lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_NOTOWNED);
 		lck_mtx_lock(((struct inpcb *)so->so_pcb)->inpcb_mtx);
 	}
-	else 
+	else {
 		panic("udp_lock: so=%x NO PCB! lr=%x\n", so, lr_saved);
+		lck_mtx_assert(so->so_proto->pr_domain->dom_mtx, LCK_MTX_ASSERT_NOTOWNED);
+		lck_mtx_lock(so->so_proto->pr_domain->dom_mtx);
+	}
 
 	if (refcount) 
 		so->so_usecount++;
 
-	so->lock_lr[so->next_lock_lr] = (void *)lr_saved;
-	so->next_lock_lr = (so->next_lock_lr+1) % SO_LCKDBG_MAX;
+	so->reserved3= lr_saved;
 	return (0);
 }
 
@@ -1254,11 +1255,12 @@ udp_unlock(so, refcount, debug)
 	int lr_saved;
 	struct inpcb *inp = sotoinpcb(so);
     	struct inpcbinfo *pcbinfo	= &udbinfo;
-
-	if (debug == 0) 
-		lr_saved = (unsigned int) __builtin_return_address(0);
+#ifdef __ppc__
+	if (debug == 0) {
+		__asm__ volatile("mflr %0" : "=r" (lr_saved));
+	}
 	else lr_saved = debug;
-
+#endif
 	if (refcount) {
 		so->so_usecount--;
 #if 0
@@ -1271,16 +1273,18 @@ udp_unlock(so, refcount, debug)
 		}
 #endif
 	}
-	if (so->so_pcb == NULL) 
+	if (so->so_pcb == NULL) {
 		panic("udp_unlock: so=%x NO PCB! lr=%x\n", so, lr_saved);
+		lck_mtx_assert(so->so_proto->pr_domain->dom_mtx, LCK_MTX_ASSERT_OWNED);
+		lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
+	}
 	else {
 		lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
-		so->unlock_lr[so->next_unlock_lr] = (void *)lr_saved;
-		so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
 		lck_mtx_unlock(((struct inpcb *)so->so_pcb)->inpcb_mtx);
 	}
 
 
+	so->reserved4 = lr_saved;
 	return (0);
 }
 

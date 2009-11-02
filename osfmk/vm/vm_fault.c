@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -1681,7 +1675,7 @@ no_clustering:
 			 */     
 
 			vm_object_paging_end(object); 
-			vm_object_collapse(object, offset, TRUE);
+			vm_object_collapse(object, offset);
 			vm_object_paging_begin(object);
 
 		}
@@ -2157,8 +2151,10 @@ vm_fault(
 	unsigned int		cache_attr;
 	int			write_startup_file = 0;
 	boolean_t		need_activation;
-	vm_prot_t		original_fault_type;
+	vm_prot_t		full_fault_type;
 
+	if (get_preemption_level() != 0)
+		return (KERN_FAILURE);
 
 	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 0)) | DBG_FUNC_START,
 			      vaddr,
@@ -2167,15 +2163,13 @@ vm_fault(
 			      0,
 			      0);
 
-	if (get_preemption_level() != 0) {
-	        KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 0)) | DBG_FUNC_END,
-				      vaddr,
-				      0,
-				      KERN_FAILURE,
-				      0,
-				      0);
-
-		return (KERN_FAILURE);
+	/* at present we do not fully check for execute permission */
+	/* we generally treat it is read except in certain device  */
+	/* memory settings */
+	full_fault_type = fault_type;
+	if(fault_type & VM_PROT_EXECUTE) {
+		fault_type &= ~VM_PROT_EXECUTE;
+		fault_type |= VM_PROT_READ;
 	}
 
 	interruptible_state = thread_interrupt_level(interruptible);
@@ -2190,15 +2184,12 @@ vm_fault(
 	VM_STAT(faults++);
 	current_task()->faults++;
 
-	original_fault_type = fault_type;
-
     RetryFault: ;
 
 	/*
 	 *	Find the backing store object and offset into
 	 *	it to begin the search.
 	 */
-	fault_type = original_fault_type;
 	map = original_map;
 	vm_map_lock_read(map);
 	kr = vm_map_lookup_locked(&map, vaddr, fault_type, &version,
@@ -2376,6 +2367,8 @@ vm_fault(
 FastMapInFault:
 				m->busy = TRUE;
 
+				vm_object_paging_begin(object);
+
 FastPmapEnter:
 				/*
 				 *	Check a couple of global reasons to
@@ -2445,27 +2438,35 @@ FastPmapEnter:
 				 *	move active page to back of active
 				 *	queue.  This code doesn't.
 				 */
+				vm_page_lock_queues();
+
 				if (m->clustered) {
 				        vm_pagein_cluster_used++;
 					m->clustered = FALSE;
 				}
-				if (change_wiring) {
-				        vm_page_lock_queues();
+				m->reference = TRUE;
 
+				if (change_wiring) {
 					if (wired)
 						vm_page_wire(m);
 					else
 						vm_page_unwire(m);
-
-					vm_page_unlock_queues();
 				}
+#if VM_FAULT_STATIC_CONFIG
 				else {
-				        if ((!m->active && !m->inactive) || ((need_activation == TRUE) && !m->active)) {
-					        vm_page_lock_queues();
+				        if ((!m->active && !m->inactive) || ((need_activation == TRUE) && !m->active))
 					        vm_page_activate(m);
-						vm_page_unlock_queues();
-					}
 				}
+#else				
+				else if (software_reference_bits) {
+					if (!m->active && !m->inactive)
+						vm_page_activate(m);
+				}
+				else if (!m->active) {
+					vm_page_activate(m);
+				}
+#endif
+				vm_page_unlock_queues();
 
 				/*
 				 *	That's it, clean up and return.
@@ -2482,14 +2483,12 @@ FastPmapEnter:
 				 * normal clustering behavior.
 				 */
 				if (!sequential && !object->private) {
-				        vm_object_paging_begin(object);
-
 					write_startup_file = 
 						vm_fault_tws_insert(map, real_map, vaddr, 
 					                        object, cur_offset);
-
-					vm_object_paging_end(object);
 				}
+
+				vm_object_paging_end(object);
 				vm_object_unlock(object);
 
 				vm_map_unlock_read(map);
@@ -2581,7 +2580,8 @@ FastPmapEnter:
 			 */     
  
 			vm_object_paging_end(object); 
-			vm_object_collapse(object, offset, TRUE);
+			vm_object_collapse(object, offset);
+			vm_object_paging_begin(object);
 
 			goto FastPmapEnter;
 		}
@@ -2658,6 +2658,9 @@ FastPmapEnter:
 			  	if (cur_object != object)
 					vm_object_unlock(cur_object);
 
+				vm_object_paging_begin(object);
+				vm_object_unlock(object);
+
 				/*
 				 *	Now zero fill page and map it.
 				 *	the page is probably going to 
@@ -2706,6 +2709,7 @@ FastPmapEnter:
 				m->inactive = TRUE;
 				vm_page_inactive_count++;
 				vm_page_unlock_queues();
+				vm_object_lock(object);
 
 				goto FastPmapEnter;
 		        }
@@ -2998,6 +3002,7 @@ FastPmapEnter:
 		}
 	} else {
 
+#ifndef i386
 		vm_map_entry_t		entry;
 		vm_map_offset_t		laddr;
 		vm_map_offset_t		ldelta, hdelta;
@@ -3007,13 +3012,12 @@ FastPmapEnter:
 		 * in the object 
 		 */
 
-#ifndef i386
 		/* While we do not worry about execution protection in   */
 		/* general, certian pages may have instruction execution */
 		/* disallowed.  We will check here, and if not allowed   */
 		/* to execute, we return with a protection failure.      */
 
-		if((fault_type & VM_PROT_EXECUTE) &&
+		if((full_fault_type & VM_PROT_EXECUTE) &&
 			(!pmap_eligible_for_execute((ppnum_t)
 				(object->shadow_offset >> 12)))) {
 
@@ -3025,7 +3029,6 @@ FastPmapEnter:
 			kr = KERN_PROTECTION_FAILURE;
 			goto done;
 		}
-#endif	/* !i386 */
 
 		if(real_map != map) {
 			vm_map_unlock(real_map);
@@ -3066,38 +3069,45 @@ FastPmapEnter:
 		}
 
 		if(vm_map_lookup_entry(map, laddr, &entry) && 
-		   (entry->object.vm_object != NULL) &&
-		   (entry->object.vm_object == object)) {
+					(entry->object.vm_object != NULL) &&
+					(entry->object.vm_object == object)) {
 
-			vm_map_offset_t	phys_offset;
 
-			phys_offset = (entry->object.vm_object->shadow_offset
-				       + entry->offset
-				       + laddr
-				       - entry->vme_start);
-			phys_offset -= ldelta;
 			if(caller_pmap) {
 				/* Set up a block mapped area */
-				pmap_map_block(
-					caller_pmap, 
+				pmap_map_block(caller_pmap, 
 					(addr64_t)(caller_pmap_addr - ldelta), 
-					phys_offset >> 12,
-					(ldelta + hdelta) >> 12,
-					prot,
-					(VM_WIMG_MASK &	(int)object->wimg_bits),
-					0);
+					(((vm_map_offset_t)
+				    (entry->object.vm_object->shadow_offset)) 
+					+ entry->offset + 
+					(laddr - entry->vme_start) 
+							- ldelta) >> 12,
+				((ldelta + hdelta) >> 12), prot, 
+				(VM_WIMG_MASK & (int)object->wimg_bits), 0);
 			} else { 
 				/* Set up a block mapped area */
-				pmap_map_block(
-					real_map->pmap, 
-					(addr64_t)(vaddr - ldelta), 
-					phys_offset >> 12,
-					(ldelta + hdelta) >> 12,
-					prot,
-					(VM_WIMG_MASK & (int)object->wimg_bits),
-					0);
+				pmap_map_block(real_map->pmap, 
+				   (addr64_t)(vaddr - ldelta), 
+				   (((vm_map_offset_t)
+				    (entry->object.vm_object->shadow_offset)) 
+				       + entry->offset + 
+				       (laddr - entry->vme_start) - ldelta) >> 12,
+				   ((ldelta + hdelta) >> 12), prot, 
+				   (VM_WIMG_MASK & (int)object->wimg_bits), 0);
 			}
 		}
+#else
+#ifdef notyet
+		if(caller_pmap) {
+               		pmap_enter(caller_pmap, caller_pmap_addr, 
+				object->shadow_offset>>12, prot, 0, TRUE);
+		} else {
+               		pmap_enter(pmap, vaddr, 
+				object->shadow_offset>>12, prot, 0, TRUE);
+		}
+        		/* Map it in */
+#endif
+#endif
 
 	}
 

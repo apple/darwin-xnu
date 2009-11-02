@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 #ifndef _NETAT_AT_AARP_H_
 #define _NETAT_AT_AARP_H_
@@ -109,7 +103,7 @@ typedef struct {
 /*************************************************/
 
 typedef struct {
-	struct atalk_addr	dest_at_addr;		/* net# in network byte order */
+	struct atalk_addr	dest_at_addr;
 	struct etalk_addr	dest_addr;
 	char                    dummy[2];       /* pad out to struct size of 32 */
 	time_t			last_time;	/* the last time that this addr
@@ -134,22 +128,19 @@ typedef struct {
 #define	AMT_HASH(a) 								\
 	((NET_VALUE(((struct atalk_addr *)&a)->atalk_net) + ((struct atalk_addr *)&a)->atalk_node) % AMT_NB)
 
-/* at_addr - net # in network byte order */
 #define	AMT_LOOK(at, at_addr, elapp) {							\
 	register n; 								\
 	at = &aarp_table[elapp->ifPort]->et_aarp_amt[AMT_HASH(at_addr) * AMT_BSIZ];	 		\
 	for (n = 0 ; ; at++) {					                \
-	    if (at->dest_at_addr.atalk_node == (at_addr).atalk_node &&									\
-	    	NET_EQUAL(at->dest_at_addr.atalk_net, (at_addr).atalk_net))	                        \
+	    if (ATALK_EQUAL(at->dest_at_addr, at_addr))	                        \
 		break; 							        \
 	    if (++n >= AMT_BSIZ) {					        \
 	        at = NULL;                                                      \
 		break;                                                          \
             }									\
 	}                                                                       \
-}
+        }
 
-/* at_addr - net # in network byte order */
 #define	NEW_AMT(at, at_addr, elapp) {							\
 	register n; 								\
 	register aarp_amt_t *myat;                                              \
@@ -162,7 +153,7 @@ typedef struct {
 		break;                                                          \
             }                                                                   \
 	}                                                                       \
-}
+	}
 
 #define	AARP_NET_MCAST(p, elapp)						\
  	(NET_VALUE((p)->dst_net) == elapp->ifThisNode.s_net)		\

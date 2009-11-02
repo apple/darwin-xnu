@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1996 Apple Computer, Inc. 
@@ -38,7 +32,6 @@
  * Kernel process to implement the AURP daemon:
  *  manage tunnels to remote AURP servers across IP networks
  */
-#ifdef AURP_SUPPORT
 
 #include <sys/errno.h>
 #include <sys/types.h>
@@ -110,6 +103,7 @@ aurpd_start()
 	 */
 	bzero((char *)&aurp_global.tunnel, sizeof(aurp_global.tunnel));
 	/*lock_alloc(&aurp_global.glock, LOCK_ALLOC_PIN, AURP_EVNT_LOCK, -1);*/
+	ATLOCKINIT(aurp_global.glock);
 	ATEVENTINIT(aurp_global.event_anchor);
 
 	/* open udp socket */
@@ -209,6 +203,7 @@ AURPgetmsg(err)
 		 *	     when a packet arrives
 		 */
 
+		ATDISABLE(s, aurp_global.glock);
 		events = aurp_global.event;
 		if (((*err == 0) || (*err == EWOULDBLOCK)) && events == 0)
 		  {
@@ -217,6 +212,7 @@ AURPgetmsg(err)
 		    events = aurp_global.event;
 		    aurp_global.event = 0;
 		  }	
+		ATENABLE(s, aurp_global.glock);	 
 
 		/*
 		 * Shut down if we have the AE_SHUTDOWN event or if we got
@@ -286,7 +282,9 @@ AURPgetmsg(err)
 				 * which will wake us from the sleep at
 				 * the top of the outer loop.
 				 */
+				ATDISABLE(s, aurp_global.glock);
 				aurp_global.event &= ~AE_UDPIP;
+				ATENABLE(s, aurp_global.glock);
 				dPrintf(D_M_AURP, D_L_WARNING, ("AURPgetmsg: spurious soreceive, err==%d, p_mbuf==0x%x\n", *err, (unsigned int) p_mbuf));
 			  break;
 		}
@@ -306,7 +304,9 @@ void aurp_wakeup(__unused struct socket *so, register caddr_t p, __unused int st
 	register int bit;
 
 	bit = (int) p;
+	ATDISABLE(s, aurp_global.glock);
 	aurp_global.event |= bit;
+	ATENABLE(s, aurp_global.glock);
 
 	dPrintf(D_M_AURP, D_L_STATE_CHG,
 		("aurp_wakeup: bit 0x%x, aurp_global.event now 0x%x\n",
@@ -422,10 +422,14 @@ atalk_to_ip(register gbuf_t *m)
 	domain = (aurp_domain_t *)gbuf_rptr(m);
 	*(long *) &rem_addr.sin_addr = domain->dst_address;
 
+	ATDISABLE(s, aurp_global.glock);
 	aurp_global.running++;
+	ATENABLE(s, aurp_global.glock);
 	if (aurp_global.shutdown) {
 		gbuf_freem(m);
+			ATDISABLE(s, aurp_global.glock);
 		aurp_global.running--;
+		ATENABLE(s, aurp_global.glock);
 		dPrintf(D_M_AURP, D_L_SHUTDN_INFO,
 			("atalk_to_ip: detected aurp_global.shutdown state\n"));
 		return;
@@ -438,8 +442,9 @@ atalk_to_ip(register gbuf_t *m)
 		  error));
 	}
 
+	ATDISABLE(s, aurp_global.glock);
 	aurp_global.running--;
+	ATENABLE(s, aurp_global.glock);
 	return;
 }
 
-#endif  /* AURP_SUPPORT */

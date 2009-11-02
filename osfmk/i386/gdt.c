@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -66,61 +60,65 @@
 #include <i386/cpu_data.h>
 #include <i386/mp_desc.h>
 
-struct fake_descriptor master_gdt[GDTSZ] __attribute__ ((aligned (4096))) = {
-	[SEL_TO_INDEX(KERNEL_CS)] {	/* kernel code */
-		0,
-		0xfffff,
-		SZ_32|SZ_G,
-		ACC_P|ACC_PL_K|ACC_CODE_R,
-	},
-	[SEL_TO_INDEX(KERNEL_DS)] {	/* kernel data */
-		0,
-		0xfffff,
-		SZ_32|SZ_G,
-		ACC_P|ACC_PL_K|ACC_DATA_W
-	},
-	[SEL_TO_INDEX(KERNEL_LDT)] {	/* local descriptor table */
-		(uint32_t) &master_ldt,
-		LDTSZ_MIN*sizeof(struct fake_descriptor)-1,
-		0,
-		ACC_P|ACC_PL_K|ACC_LDT
-	},				/* The slot KERNEL_LDT_2 is reserved. */
-	[SEL_TO_INDEX(KERNEL_TSS)] {	/* TSS for this processor */
-		(uint32_t) &master_ktss,
-		sizeof(struct i386_tss)-1,
-		0,
-		ACC_P|ACC_PL_K|ACC_TSS
-	},				/* The slot KERNEL_TSS_2 is reserved. */
-	[SEL_TO_INDEX(CPU_DATA_GS)] {	/* per-CPU current thread address */
-		(uint32_t) &cpu_data_master,
-		sizeof(cpu_data_t)-1,
-		SZ_32,
-		ACC_P|ACC_PL_K|ACC_DATA_W
-	},
-	[SEL_TO_INDEX(USER_LDT)] {	/* user local descriptor table */
-		(uint32_t) &master_ldt,
-		LDTSZ_MIN*sizeof(struct fake_descriptor)-1,
-		0,
-		ACC_P|ACC_PL_K|ACC_LDT
-	},
-	[SEL_TO_INDEX(KERNEL64_CS)] {	/* kernel 64-bit code */ 
-		0,
-		0xfffff,
-		SZ_64|SZ_G,
-		ACC_P|ACC_PL_K|ACC_CODE_R
-	},
-	[SEL_TO_INDEX(KERNEL64_SS)] {	/* kernel 64-bit syscall stack */ 
-		0,
-		0xfffff,
-		SZ_32|SZ_G,
-		ACC_P|ACC_PL_K|ACC_DATA_W
-	},
+#ifdef	MACH_BSD
+extern int	trap_unix_syscall(void), trap_mach25_syscall(void),
+		trap_machdep_syscall(void), syscall(void);
+#endif
+
+struct fake_descriptor gdt[GDTSZ] = {
+/* 0x000 */	{ 0, 0, 0, 0 },		/* always NULL */
+/* 0x008 */	{ 0,
+		  0xfffff,
+		  SZ_32|SZ_G,
+		  ACC_P|ACC_PL_K|ACC_CODE_R
+		},			/* kernel code */
+/* 0x010 */	{ 0,
+		  0xfffff,
+		  SZ_32|SZ_G,
+		  ACC_P|ACC_PL_K|ACC_DATA_W
+		},			/* kernel data */
+/* 0x018 */	{ (unsigned int)ldt,
+		  LDTSZ*sizeof(struct fake_descriptor)-1,
+		  0,
+		  ACC_P|ACC_PL_K|ACC_LDT
+		},			/* local descriptor table */
+/* 0x020 */	{ (unsigned int)&ktss,
+		  sizeof(struct i386_tss)-1,
+		  0,
+		  ACC_P|ACC_PL_K|ACC_TSS
+		},			/* TSS for this processor */
+#ifdef	MACH_BSD
+/* 0x28 */	{ (unsigned int) &trap_unix_syscall,
+		   KERNEL_CS,
+		   0,				/* no parameters */
+		   ACC_P|ACC_PL_U|ACC_CALL_GATE
+		},
+/* 0x30 */	{ (unsigned int) &trap_mach25_syscall,
+		   KERNEL_CS,
+		   0,				/* no parameters */
+		   ACC_P|ACC_PL_U|ACC_CALL_GATE
+		},
+/* 0x38 */	{ (unsigned int) &trap_machdep_syscall,
+		   KERNEL_CS,
+		   0,				/* no parameters */
+		   ACC_P|ACC_PL_U|ACC_CALL_GATE
+		},
+#else
+/* 0x028 */	{ 0, 0, 0, 0 },		/* per-thread LDT */
+/* 0x030 */	{ 0, 0, 0, 0 },		/* per-thread TSS for IO bitmap */
+/* 0x038 */	{ 0, 0, 0, 0 },
+#endif
+/* 0x040 */	{ 0, 0, 0, 0 },
+/* 0x048 */	{ (unsigned int)&cpu_data_master,
+		  sizeof(cpu_data_t)-1,
+		  SZ_32,
+		  ACC_P|ACC_PL_K|ACC_DATA_W
+		},			/* per-CPU current thread address */
 #if	MACH_KDB
-	[SEL_TO_INDEX(DEBUG_TSS)] {	/* TSS for this processor */
-		(uint32_t)&master_dbtss,
-		sizeof(struct i386_tss)-1,
-		0,
-		ACC_P|ACC_PL_K|ACC_TSS
-	},
+/* 0x050 */	{ (unsigned int)&dbtss,
+		  sizeof(struct i386_tss)-1,
+		  0,
+		  ACC_P|ACC_PL_K|ACC_TSS
+		}			/* TSS for this processor */
 #endif	/* MACH_KDB */
 };

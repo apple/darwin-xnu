@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -237,14 +231,8 @@ pmap_map(
 	vm_offset_t va,
 	vm_offset_t spa,
 	vm_offset_t epa,
-	vm_prot_t prot,
-	unsigned int flags)
+	vm_prot_t prot)
 {
-	unsigned int mflags;
-	mflags = 0;										/* Make sure this is initialized to nothing special */
-	if(!(flags & VM_WIMG_USE_DEFAULT)) {			/* Are they supplying the attributes? */
-		mflags = mmFlgUseAttr | (flags & VM_MEM_GUARDED) | ((flags & VM_MEM_NOT_CACHEABLE) >> 1);	/* Convert to our mapping_make flags */
-	}
 
 	addr64_t colladr;
 	
@@ -252,8 +240,7 @@ pmap_map(
 
 	assert(epa > spa);
 
-	colladr = mapping_make(kernel_pmap, (addr64_t)va, (ppnum_t)(spa >> 12),
-			       (mmFlgBlock | mmFlgPerm), (epa - spa) >> 12, (prot & VM_PROT_ALL) );
+	colladr = mapping_make(kernel_pmap, (addr64_t)va, (ppnum_t)(spa >> 12), (mmFlgBlock | mmFlgPerm), (epa - spa) >> 12, prot & VM_PROT_ALL);
 
 	if(colladr) {											/* Was something already mapped in the range? */
 		panic("pmap_map: attempt to map previously mapped range - va = %08X, pa = %08X, epa = %08X, collision = %016llX\n",
@@ -370,7 +357,6 @@ pmap_bootstrap(uint64_t msize, vm_offset_t *first_avail, unsigned int kmapsize)
 	kernel_pmap->pmap_link.prev = (queue_t)kernel_pmap;		/* Set up anchor reverse */
 	kernel_pmap->ref_count = 1;
 	kernel_pmap->pmapFlags = pmapKeyDef;					/* Set the default keys */
-	kernel_pmap->pmapFlags |= pmapNXdisabled;
 	kernel_pmap->pmapCCtl = pmapCCtlVal;					/* Initialize cache control */
 	kernel_pmap->space = PPC_SID_KERNEL;
 	kernel_pmap->pmapvr = 0;								/* Virtual = Real  */
@@ -539,7 +525,7 @@ pmap_bootstrap(uint64_t msize, vm_offset_t *first_avail, unsigned int kmapsize)
 
 	/* Map V=R the page tables */
 	pmap_map(first_used_addr, first_used_addr,
-		 round_page(first_used_addr + size), VM_PROT_READ | VM_PROT_WRITE, VM_WIMG_USE_DEFAULT);
+		 round_page(first_used_addr + size), VM_PROT_READ | VM_PROT_WRITE);
 
 	*first_avail = round_page(first_used_addr + size);		/* Set next available page */
 	first_free_virt = *first_avail;							/* Ditto */
@@ -662,7 +648,7 @@ void pmap_virtual_space(
  * only, and is bounded by that size.
  */
 pmap_t
-pmap_create(vm_map_size_t size, __unused boolean_t is_64bit)
+pmap_create(vm_map_size_t size)
 {
 	pmap_t pmap, ckpmap, fore;
 	int s;
@@ -950,7 +936,7 @@ pmap_page_protect(
 	mapping_t			*mp;
 
 
-	switch (prot & VM_PROT_ALL) {
+	switch (prot) {
 		case VM_PROT_READ:
 		case VM_PROT_READ|VM_PROT_EXECUTE:
 			remove = FALSE;
@@ -997,7 +983,7 @@ pmap_page_protect(
  *	physical page.  
  */
  
-	mapping_protect_phys(pa, (prot & VM_PROT_ALL) );		/* Change protection of all mappings to page. */
+	mapping_protect_phys(pa, prot & VM_PROT_ALL);	/* Change protection of all mappings to page. */
 
 }
 
@@ -1075,7 +1061,7 @@ void pmap_protect(
 	endva = eva & -4096LL;						/* Round end down to a page */
 
 	while(1) {									/* Go until we finish the range */
-		mapping_protect(pmap, va, (prot & VM_PROT_ALL), &va);	/* Change the protection and see what's next */
+		mapping_protect(pmap, va, prot & VM_PROT_ALL, &va);	/* Change the protection and see what's next */
 		if((va == 0) || (va >= endva)) break;	/* End loop if we finish range or run off the end */
 	}
 
@@ -1116,7 +1102,7 @@ pmap_enter(pmap_t pmap, vm_map_offset_t va, ppnum_t pa, vm_prot_t prot,
 
 	while(1) {										/* Keep trying the enter until it goes in */
 	
-		colva = mapping_make(pmap, va, pa, mflags, 1, (prot & VM_PROT_ALL) );		/* Enter the mapping into the pmap */
+		colva = mapping_make(pmap, va, pa, mflags, 1, prot & VM_PROT_ALL);	/* Enter the mapping into the pmap */
 		
 		if(!colva) break;							/* If there were no collisions, we are done... */
 		
@@ -1300,29 +1286,6 @@ pmap_attribute(
 	return KERN_INVALID_ARGUMENT;
 
 }
-
-
-
-unsigned int pmap_cache_attributes(ppnum_t pgn) {
-
-        unsigned int	flags;
-	struct phys_entry * pp;
-
-	// Find physical address
-	if ((pp = pmap_find_physentry(pgn))) {
-	        // Use physical attributes as default
-	        // NOTE: DEVICE_PAGER_FLAGS are made to line up
-	        flags = VM_MEM_COHERENT;				/* We only support coherent memory */
-		if (pp->ppLink & ppG) flags |= VM_MEM_GUARDED;		/* Add in guarded if it is */
-		if (pp->ppLink & ppI) flags |= VM_MEM_NOT_CACHEABLE;	/* Add in cache inhibited if so */
-	} else
-	        // If no physical, just hard code attributes
-	        flags = VM_WIMG_IO;
-
-	return (flags);
-}
-
-
 
 /*
  * pmap_attribute_cache_sync(vm_offset_t pa)
@@ -1993,7 +1956,7 @@ void pmap_init_sharedpage(vm_offset_t cpg){
 	addr64_t cva, cpoff;
 	ppnum_t cpphys;
 	
-	sharedPmap = pmap_create(0, FALSE);				/* Get a pmap to hold the common segment */
+	sharedPmap = pmap_create(0);				/* Get a pmap to hold the common segment */
 	if(!sharedPmap) {							/* Check for errors */
 		panic("pmap_init_sharedpage: couldn't make sharedPmap\n");
 	}
@@ -2006,7 +1969,7 @@ void pmap_init_sharedpage(vm_offset_t cpg){
 		}
 		
 		cva = mapping_make(sharedPmap, (addr64_t)((uint32_t)_COMM_PAGE_BASE_ADDRESS) + cpoff,
-			cpphys, mmFlgPerm, 1, VM_PROT_READ | VM_PROT_EXECUTE);		/* Map the page read/execute only */
+			cpphys, mmFlgPerm, 1, VM_PROT_READ);	/* Map the page read only */
 		if(cva) {								/* Check for errors */
 			panic("pmap_init_sharedpage: couldn't map commpage page - cva = %016llX\n", cva);
 		}
@@ -2092,14 +2055,4 @@ coredumpok(
 	__unused vm_offset_t va)
 {
 	return TRUE;
-}
-
-
-/*
- * disable no-execute capability on
- * the specified pmap
- */
-void pmap_disable_NX(pmap_t pmap) {
-  
-        pmap->pmapFlags |= pmapNXdisabled;
 }

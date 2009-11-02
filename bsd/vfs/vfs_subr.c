@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -1711,12 +1705,12 @@ vclean(vnode_t vp, int flags, proc_t p)
 	insmntque(vp, (struct mount *)0);
 
 	ucred = vp->v_cred;
-	vp->v_cred = NOCRED;
+	vp->v_cred = NULL;
 
 	vnode_unlock(vp);
 
-	if (IS_VALID_CRED(ucred))
-	        kauth_cred_unref(&ucred);
+	if (ucred)
+	        kauth_cred_rele(ucred);
 
 	OSAddAtomic(1, &num_recycledvnodes);
 	/*
@@ -2394,7 +2388,6 @@ vfs_unmountall()
 	struct mount *mp;
 	struct proc *p = current_proc();
 	int error;
-	int skip_listremove;
 
 	/*
 	 * Since this only runs when rebooting, it is not interlocked.
@@ -2403,21 +2396,19 @@ vfs_unmountall()
 	while(!TAILQ_EMPTY(&mountlist)) {
 		mp = TAILQ_LAST(&mountlist, mntlist);
 		mount_list_unlock();
-		skip_listremove = 0;
-		error = dounmount(mp, MNT_FORCE, &skip_listremove, p);
-		if (error) {
+		error = dounmount(mp, MNT_FORCE, 0, p);
+		if ((error != 0) && (error != EBUSY)) {
+			printf("unmount of %s failed (", mp->mnt_vfsstat.f_mntonname);
+			printf("%d)\n", error);
+
 			mount_list_lock();
-			if (skip_listremove == 0) {
-				TAILQ_REMOVE(&mountlist, mp, mnt_list);
-				printf("unmount of %s failed (", mp->mnt_vfsstat.f_mntonname);
-			}
-				
-			if (error == EBUSY)
-				printf("BUSY)\n");
-			else
-				printf("%d)\n", error);
+			TAILQ_REMOVE(&mountlist, mp, mnt_list);
 			continue;
-		}
+		} else if (error == EBUSY) {
+			/* If EBUSY is returned,  the unmount was already in progress */
+			printf("unmount of %x failed (", (unsigned int)mp);
+			printf("BUSY)\n");
+		} 
 		mount_list_lock();
 	}
 	mount_list_unlock();
@@ -2808,6 +2799,9 @@ sysctl_vfs_ctlbyfsid SYSCTL_HANDLER_ARGS
 		error = SYSCTL_IN(req, &flags, sizeof(flags));
 		if (error)
 			break;
+
+		mount_ref(mp, 0);
+		/* safedounmount consumes a ref */
 		error = safedounmount(mp, flags, p);
 		break;
 	case VFS_CTL_STATFS:
@@ -2970,7 +2964,7 @@ sysctl_vfs_noremotehang SYSCTL_HANDLER_ARGS
 		return (error);
 	}
 
-	/* XXX req->p->p_ucred -> kauth_cred_get() - current unsafe ??? */
+	/* XXX req->p->p_ucred -> kauth_cred_get() ??? */
 	/* cansignal offers us enough security. */
 	if (p != req->p && suser(req->p->p_ucred, &req->p->p_acflag) != 0)
 		return (EPERM);
@@ -4001,47 +3995,6 @@ vnode_setsize(vnode_t vp, off_t size, int ioflag, vfs_context_t ctx)
 	return(vnode_setattr(vp, &va, ctx));
 }
 
-/*
- * Create a filesystem object of arbitrary type with arbitrary attributes in
- * the spevied directory with the specified name.
- *
- * Parameters:	dvp			Pointer to the vnode of the directory
- *					in which to create the object.
- *		vpp			Pointer to the area into which to
- *					return the vnode of the created object.
- *		cnp			Component name pointer from the namei
- *					data structure, containing the name to
- *					use for the create object.
- *		vap			Pointer to the vnode_attr structure
- *					describing the object to be created,
- *					including the type of object.
- *		flags			VN_* flags controlling ACL inheritance
- *					and whether or not authorization is to
- *					be required for the operation.
- *		
- * Returns:	0			Success
- *		!0			errno value
- *
- * Implicit:	*vpp			Contains the vnode of the object that
- *					was created, if successful.
- *		*cnp			May be modified by the underlying VFS.
- *		*vap			May be modified by the underlying VFS.
- *					modified by either ACL inheritance or
- *		
- *		
- *					be modified, even if the operation is
- *					
- *
- * Notes:	The kauth_filesec_t in 'vap', if any, is in host byte order.
- *
- *		Modification of '*cnp' and '*vap' by the underlying VFS is
- *		strongly discouraged.
- *
- * XXX:		This function is a 'vn_*' function; it belongs in vfs_vnops.c
- *
- * XXX:		We should enummerate the possible errno values here, and where
- *		in the code they originated.
- */
 errno_t
 vn_create(vnode_t dvp, vnode_t *vpp, struct componentname *cnp, struct vnode_attr *vap, int flags, vfs_context_t ctx)
 {

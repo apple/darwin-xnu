@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 
 #include <mach/mach_types.h>
@@ -37,7 +31,6 @@
 #include <kern/thread.h>
 #include <kern/sched_prim.h>
 #include <kern/processor.h>
-#include <kern/pms.h>
 
 #include <vm/pmap.h>
 #include <IOKit/IOHibernatePrivate.h>
@@ -55,6 +48,7 @@
 #include <ppc/Diagnostics.h>
 #include <ppc/trap.h>
 #include <ppc/machine_cpu.h>
+#include <ppc/pms.h>
 #include <ppc/rtclock.h>
 
 decl_mutex_data(static,ppt_lock);
@@ -71,9 +65,9 @@ static unsigned int	rht_state = 0;
 decl_simple_lock_data(static,SignalReadyLock);
 
 struct SIGtimebase {
-	volatile boolean_t	avail;
-	volatile boolean_t	ready;
-	volatile boolean_t	done;
+	boolean_t	avail;
+	boolean_t	ready;
+	boolean_t	done;
 	uint64_t	abstime;
 };
 
@@ -126,9 +120,8 @@ cpu_init(
 		mttbu(proc_info->save_tbu);
 		mttb(proc_info->save_tbl);
 	}
-
-	proc_info->rtcPop = EndOfAllTime;			/* forget any existing decrementer setting */
-	etimer_resync_deadlines();				/* Now that the time base is sort of correct, request the next timer pop */
+	
+	setTimerReq();				/* Now that the time base is sort of correct, request the next timer pop */
 
 	proc_info->cpu_type = CPU_TYPE_POWERPC;
 	proc_info->cpu_subtype = (cpu_subtype_t)proc_info->pf.rptdProc;
@@ -712,7 +705,7 @@ cpu_sync_timebase(
 							(unsigned int)&syncClkSpot) != KERN_SUCCESS)
 		continue;
 
-	while (syncClkSpot.avail == FALSE)
+	while (*(volatile int *)&(syncClkSpot.avail) == FALSE)
 		continue;
 
 	isync();
@@ -730,10 +723,11 @@ cpu_sync_timebase(
 
 	syncClkSpot.ready = TRUE;
 
-	while (syncClkSpot.done == FALSE)
+	while (*(volatile int *)&(syncClkSpot.done) == FALSE)
 		continue;
 
-	etimer_resync_deadlines();									/* Start the timer */
+	setTimerReq();									/* Start the timer */
+	
 	(void)ml_set_interrupts_enabled(intr);
 }
 
@@ -766,8 +760,7 @@ cpu_timebase_signal_handler(
 						
 	timebaseAddr->avail = TRUE;
 
-	while (timebaseAddr->ready == FALSE)
-		continue;
+	while (*(volatile int *)&(timebaseAddr->ready) == FALSE);
 
 	if(proc_info->time_base_enable !=  (void(*)(cpu_id_t, boolean_t ))NULL)
 		proc_info->time_base_enable(proc_info->cpu_id, TRUE);

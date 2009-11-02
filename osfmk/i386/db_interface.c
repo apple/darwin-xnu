@@ -1,29 +1,23 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -76,8 +70,6 @@
 #include <i386/setjmp.h>
 #include <i386/pmap.h>
 #include <i386/misc_protos.h>
-#include <i386/mp.h>
-#include <i386/machine_cpu.h>
 
 #include <mach/vm_param.h>
 #include <vm/vm_map.h>
@@ -94,11 +86,9 @@
 #include <ddb/db_break.h>
 #include <ddb/db_watch.h>
 
-#include <i386/cpu_data.h>
-
 int	 db_active = 0;
-x86_saved_state32_t	*i386_last_saved_statep;
-x86_saved_state32_t	i386_nested_saved_state;
+struct	 i386_saved_state *i386_last_saved_statep;
+struct	 i386_saved_state i386_nested_saved_state;
 unsigned i386_last_kdb_sp;
 
 extern	thread_t db_default_act;
@@ -121,7 +111,7 @@ struct int_regs {
 	int	esi;
 	int	ebp;
 	int	ebx;
-	x86_saved_state32_t *is;
+	struct i386_interrupt_state *is;
 };
 
 extern char *	trap_type[];
@@ -170,29 +160,10 @@ extern jmp_buf_t *db_recover;
  * in a ktss, we hard-wire that in, rather than indexing the gdt
  * with tss_sel to derive a pointer to the desired tss.
  */
-
-/*
- * Code used to synchronize kdb among all cpus, one active at a time, switch
- * from one to another using cpu #cpu
- */
-
-decl_simple_lock_data(, kdb_lock)	/* kdb lock			*/
-
-#define	db_simple_lock_init(l, e)	hw_lock_init(&((l)->interlock))
-#define	db_simple_lock_try(l)		hw_lock_try(&((l)->interlock))
-#define	db_simple_unlock(l)		hw_lock_unlock(&((l)->interlock))
-
-int			kdb_cpu = -1;	/* current cpu running kdb	*/
-int			kdb_debug = 1;
-volatile unsigned int	cpus_holding_bkpts;	/* counter for number of cpus
-						 * holding breakpoints
-						 */
-extern boolean_t	db_breakpoints_inserted;
-
 void
 db_tss_to_frame(
 	int tss_sel,
-	x86_saved_state32_t *regs)
+	struct i386_saved_state *regs)
 {
 	extern struct i386_tss ktss;
 	int mycpu = cpu_number();
@@ -203,7 +174,7 @@ db_tss_to_frame(
 	/*
 	 * ddb will overwrite whatever's in esp, so put esp0 elsewhere, too.
 	 */
-	regs->cr2 = tss->esp0;
+	regs->esp = tss->esp0;
 	regs->efl = tss->eflags;
 	regs->eip = tss->eip;
 	regs->trapno = tss->ss0;	/* XXX */
@@ -230,7 +201,7 @@ db_tss_to_frame(
  */
 boolean_t
 db_trap_from_asm(
-	x86_saved_state32_t *regs)
+	struct i386_saved_state *regs)
 {
 	int	code;
 	int	type;
@@ -244,18 +215,12 @@ int
 kdb_trap(
 	int			type,
 	int			code,
-	x86_saved_state32_t	*regs)
+	struct i386_saved_state *regs)
 {
 	extern char 		etext;
 	boolean_t		trap_from_user;
-	spl_t			s;
-	int                     previous_console_device;
+	spl_t			s = splhigh();
 
-	s = splhigh();
-
-	previous_console_device = switch_to_serial_console();
-
-	db_printf("kdb_trap(): type %d, code %d, regs->eip 0x%x\n", type, code, regs->eip);
 	switch (type) {
 	    case T_DEBUG:	/* single_step */
 	    {
@@ -309,8 +274,8 @@ kdb_trap(
 
 	if (!IS_USER_TRAP(regs, &etext)) {
 		bzero((char *)&ddb_regs, sizeof (ddb_regs));
-		*(struct x86_saved_state32_from_kernel *)&ddb_regs =
-			*(struct x86_saved_state32_from_kernel *)regs;
+		*(struct i386_saved_state_from_kernel *)&ddb_regs =
+			*(struct i386_saved_state_from_kernel *)regs;
 		trap_from_user = FALSE;
 	}
 	else {
@@ -335,7 +300,6 @@ kdb_trap(
 	regs->ecx    = ddb_regs.ecx;
 	regs->edx    = ddb_regs.edx;
 	regs->ebx    = ddb_regs.ebx;
-
 	if (trap_from_user) {
 	    /*
 	     * user mode - saved esp and ss valid
@@ -343,7 +307,6 @@ kdb_trap(
 	    regs->uesp = ddb_regs.uesp;		/* user stack pointer */
 	    regs->ss   = ddb_regs.ss & 0xffff;	/* user stack segment */
 	}
-
 	regs->ebp    = ddb_regs.ebp;
 	regs->esi    = ddb_regs.esi;
 	regs->edi    = ddb_regs.edi;
@@ -361,12 +324,15 @@ kdb_trap(
 					       trap_from_user))
 	                      == BKPT_INST))
 	    regs->eip += BKPT_SIZE;
-	
-	switch_to_old_console(previous_console_device);
+
 kdb_exit:
 	kdb_leave();
 
 	current_cpu_datap()->cpu_kdb_saved_state = 0;
+
+#if	MACH_MP_DEBUG
+	current_cpu_datap()->cpu_masked_state_cnt = 0;
+#endif	/* MACH_MP_DEBUG */
 
 	enable_preemption();
 
@@ -397,8 +363,8 @@ kdb_kentry(
 {
 	extern char etext;
 	boolean_t trap_from_user;
-	x86_saved_state32_t *is = int_regs->is;
-	x86_saved_state32_t regs;
+	struct i386_interrupt_state *is = int_regs->is;
+	struct i386_saved_state regs;
 	spl_t s;
 
 	s = splhigh();
@@ -499,28 +465,18 @@ db_user_to_kernel_address(
 	int		flag)
 {
 	register pt_entry_t *ptp;
-	vm_offset_t src;
-
-	/*
-	 * must not pre-empted while using the pte pointer passed
-	 * back since it's been mapped through a per-cpu window
-	 */
-        mp_disable_preemption();
 	
-	ptp = pmap_pte(task->map->pmap, (vm_map_offset_t)addr);
+	ptp = pmap_pte(task->map->pmap, addr);
 	if (ptp == PT_ENTRY_NULL || (*ptp & INTEL_PTE_VALID) == 0) {
 	    if (flag) {
 		db_printf("\nno memory is assigned to address %08x\n", addr);
 		db_error(0);
 		/* NOTREACHED */
 	    }
-	    mp_enable_preemption();
 	    return(-1);
 	}
+
 	src = (vm_offset_t)pte_to_pa(*ptp);
-
-	mp_enable_preemption();
-
 	*(int *) DMAP1 = INTEL_PTE_VALID | INTEL_PTE_RW | (src & PG_FRAME) | 
 	  INTEL_PTE_REF | INTEL_PTE_MOD;
 #if defined(I386_CPU)
@@ -612,7 +568,7 @@ db_write_bytes(
 	if (addr >= VM_MIN_KERNEL_ADDRESS &&
 	    addr <= (vm_offset_t)&etext)
 	{
-	    ptep0 = pmap_pte(kernel_pmap, (vm_map_offset_t)addr);
+	    ptep0 = pmap_pte(kernel_pmap, addr);
 	    oldmap0 = *ptep0;
 	    *ptep0 |= INTEL_PTE_WRITE;
 
@@ -620,7 +576,7 @@ db_write_bytes(
 	    if (i386_trunc_page(addr) != addr1) {
 		/* data crosses a page boundary */
 
-		ptep1 = pmap_pte(kernel_pmap, (vm_map_offset_t)addr1);
+		ptep1 = pmap_pte(kernel_pmap, addr1);
 		oldmap1 = *ptep1;
 		*ptep1 |= INTEL_PTE_WRITE;
 	    }
@@ -798,6 +754,24 @@ db_task_name(
 	    db_printf(" ");
 }
 
+/*
+ * Code used to synchronize kdb among all cpus, one active at a time, switch
+ * from on to another using kdb_on! #cpu or cpu #cpu
+ */
+
+decl_simple_lock_data(, kdb_lock)	/* kdb lock			*/
+
+#define	db_simple_lock_init(l, e)	hw_lock_init(&((l)->interlock))
+#define	db_simple_lock_try(l)		hw_lock_try(&((l)->interlock))
+#define	db_simple_unlock(l)		hw_lock_unlock(&((l)->interlock))
+
+int			kdb_cpu = -1;	/* current cpu running kdb	*/
+int			kdb_debug = 0;
+volatile unsigned int	cpus_holding_bkpts;	/* counter for number of cpus holding
+						   breakpoints (ie: cpus that did not
+						   insert back breakpoints) */
+extern boolean_t	db_breakpoints_inserted;
+
 void
 db_machdep_init(void)
 {
@@ -805,14 +779,16 @@ db_machdep_init(void)
 
 	db_simple_lock_init(&kdb_lock, 0);
 	for (c = 0; c < real_ncpus; ++c) {
+		db_stacks[c] = (vm_offset_t) (db_stack_store +
+			(INTSTACK_SIZE * (c + 1)) - sizeof (natural_t));
 		if (c == master_cpu) {
-			master_dbtss.esp0 = (int)(db_task_stack_store +
+			dbtss.esp0 = (int)(db_task_stack_store +
 				(INTSTACK_SIZE * (c + 1)) - sizeof (natural_t));
-			master_dbtss.esp = master_dbtss.esp0;
-			master_dbtss.eip = (int)&db_task_start;
+			dbtss.esp = dbtss.esp0;
+			dbtss.eip = (int)&db_task_start;
 			/*
 			 * The TSS for the debugging task on each slave CPU
-			 * is set up in cpu_desc_init().
+			 * is set up in mp_desc_init().
 			 */
 		}
 	}
@@ -829,12 +805,12 @@ db_machdep_init(void)
 int
 kdb_enter(int pc)
 {
-	int my_cpu;
+	int mycpu;
 	int retval;
 
 	disable_preemption();
 
-	my_cpu = cpu_number();
+	mycpu = cpu_number();
 
 	if (current_cpu_datap()->cpu_db_pass_thru) {
 		retval = 0;
@@ -842,17 +818,16 @@ kdb_enter(int pc)
 	}
 
 	current_cpu_datap()->cpu_kdb_active++;
-
 	lock_kdb();
 
-	db_printf("kdb_enter(): cpu_number %d, kdb_cpu %d\n", my_cpu, kdb_cpu);
-	
+	if (kdb_debug)
+		db_printf("kdb_enter: cpu %d, is_slave %d, kdb_cpu %d, run mode %d pc %x (%x) holds %d\n",
+			  my_cpu, current_cpu_datap()->cpu_kdb_is_slave, kdb_cpu,
+			  db_run_mode, pc, *(int *)pc, cpus_holding_bkpts);
 	if (db_breakpoints_inserted)
 		cpus_holding_bkpts++;
-
 	if (kdb_cpu == -1 && !current_cpu_datap()->cpu_kdb_is_slave) {
 		kdb_cpu = my_cpu;
-		db_printf("Signaling other processors..\n");
 		remote_kdb();	/* stop other cpus */
 		retval = 1;
 	} else if (kdb_cpu == my_cpu) 
@@ -893,8 +868,6 @@ kdb_leave(void)
 	unlock_kdb();
 	current_cpu_datap()->cpu_kdb_active--;
 
-	mp_kdb_exit();
-
 	enable_preemption();
 
 	if (wait) {
@@ -907,12 +880,14 @@ lock_kdb(void)
 {
 	int		my_cpu;
 	register	i;
+	extern void	kdb_console(void);
 
 	disable_preemption();
 
 	my_cpu = cpu_number();
 
 	for(;;) {
+		kdb_console();
 		if (kdb_cpu != -1 && kdb_cpu != my_cpu) {
 			continue;
 		}
@@ -1007,17 +982,21 @@ kdb_on(
 	}
 }
 
-/*
- * system reboot
- */
-
-extern void kdp_reboot(void);
-
 void db_reboot(
 	db_expr_t	addr,
 	boolean_t	have_addr,
 	db_expr_t	count,
 	char		*modif)
 {
-	kdp_reboot();
+	boolean_t	reboot = TRUE;
+	char		*cp, c;
+	
+	cp = modif;
+	while ((c = *cp++) != 0) {
+		if (c == 'r')	/* reboot */
+			reboot = TRUE;
+		if (c == 'h')	/* halt */
+			reboot = FALSE;
+	}
+	halt_all_cpus(reboot);
 }

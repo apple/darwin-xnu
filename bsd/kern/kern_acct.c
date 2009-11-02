@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*-
@@ -203,7 +197,6 @@ acct_process(p)
 	int t;
 	int error;
 	struct vnode *vp;
-	kauth_cred_t safecred;
 
 	/* If accounting isn't enabled, don't bother */
 	vp = acctp;
@@ -254,17 +247,15 @@ acct_process(p)
 	/* (8) The boolean flags that tell how the process terminated, etc. */
 	an_acct.ac_flag = p->p_acflag;
 
-	safecred = kauth_cred_proc_ref(p);
 	/*
 	 * Now, just write the accounting information to the file.
 	 */
 	if ((error = vnode_getwithref(vp)) == 0) {
 	        error = vn_rdwr(UIO_WRITE, vp, (caddr_t)&an_acct, sizeof (an_acct),
-				(off_t)0, UIO_SYSSPACE32, IO_APPEND|IO_UNIT, safecred,
+				(off_t)0, UIO_SYSSPACE32, IO_APPEND|IO_UNIT, p->p_ucred,
 				(int *)0, p);
 		vnode_put(vp);
 	}
-	kauth_cred_unref(&safecred);
 	return (error);
 }
 

@@ -10,7 +10,6 @@ CWARNFLAGS= $(filter-out -Wbad-function-cast, $(CWARNFLAGS_STD))
 OBJS_NO_WERROR=		\
 	ioconf.o	\
 	bootargs.o	\
-	pe_init.o	\
 	device_tree.o
 
 OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))

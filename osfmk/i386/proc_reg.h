@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -195,17 +189,9 @@ static inline void set_cr3(unsigned int value)
 	__asm__ volatile("mov %0, %%cr3" : : "r" (value));
 }
 
-static inline uint32_t get_cr4(void)
-{
-	uint32_t cr4;
-	__asm__ volatile("mov %%cr4, %0" : "=r" (cr4));
-	return(cr4);
-}
-
-static inline void set_cr4(uint32_t value)
-{
-	__asm__ volatile("mov %0, %%cr4" : : "r" (value));
-}
+/* Implemented in locore: */
+extern uint32_t	get_cr4(void);
+extern void	set_cr4(uint32_t);
 
 static inline void clear_ts(void)
 {
@@ -224,30 +210,23 @@ static inline void set_tr(unsigned int seg)
 	__asm__ volatile("ltr %0" : : "rm" ((unsigned short)(seg)));
 }
 
-static inline unsigned short sldt(void)
+static inline unsigned short get_ldt(void)
 {
 	unsigned short seg;
 	__asm__ volatile("sldt %0" : "=rm" (seg));
 	return(seg);
 }
 
-static inline void lldt(unsigned int seg)
+static inline void set_ldt(unsigned int seg)
 {
 	__asm__ volatile("lldt %0" : : "rm" ((unsigned short)(seg)));
 }
 
-#ifdef MACH_KERNEL_PRIVATE
-extern void flush_tlb64(void);
 static inline void flush_tlb(void)
 {
 	unsigned long	cr3_temp;
-	if (cpu_mode_is64bit()) {
-		flush_tlb64();
-		return;
-	}
 	__asm__ volatile("movl %%cr3, %0; movl %0, %%cr3" : "=r" (cr3_temp) :: "memory");
 }
-#endif	/* MACH_KERNEL_PRIVATE */
 
 static inline void wbinvd(void)
 {
@@ -325,13 +304,7 @@ __END_DECLS
 #define MSR_IA32_PERFCTR0		0xc1
 #define MSR_IA32_PERFCTR1		0xc2
 
-#define MSR_PMG_CST_CONFIG_CONTROL	0xe2
-
 #define MSR_IA32_BBL_CR_CTL		0x119
-
-#define MSR_IA32_SYSENTER_CS		0x174
-#define MSR_IA32_SYSENTER_ESP		0x175
-#define MSR_IA32_SYSENTER_EIP		0x176
 
 #define MSR_IA32_MCG_CAP		0x179
 #define MSR_IA32_MCG_STATUS		0x17a
@@ -339,9 +312,6 @@ __END_DECLS
 
 #define MSR_IA32_EVNTSEL0		0x186
 #define MSR_IA32_EVNTSEL1		0x187
-
-#define MSR_IA32_PERF_STS		0x198
-#define MSR_IA32_PERF_CTL		0x199
 
 #define MSR_IA32_MISC_ENABLE		0x1a0
 
@@ -373,21 +343,5 @@ __END_DECLS
 #define MSR_IA32_MTRR_FIX4K_E8000	0x26d
 #define MSR_IA32_MTRR_FIX4K_F0000	0x26e
 #define MSR_IA32_MTRR_FIX4K_F8000	0x26f
-
-
-#define	MSR_IA32_EFER		0xC0000080
-#define	MSR_IA32_EFER_SCE		0x00000001
-#define	MSR_IA32_EFER_LME		0x00000100
-#define	MSR_IA32_EFER_LMA		0x00000400
-#define	MSR_IA32_EFER_NXE		0x00000800
-
-#define	MSR_IA32_STAR		0xC0000081
-#define	MSR_IA32_LSTAR		0xC0000082
-#define	MSR_IA32_CSTAR		0xC0000083
-#define	MSR_IA32_FMASK		0xC0000084
-
-#define MSR_IA32_FS_BASE	0xC0000100
-#define MSR_IA32_GS_BASE	0xC0000101
-#define MSR_IA32_KERNEL_GS_BASE	0xC0000102
 
 #endif	/* _I386_PROC_REG_H_ */

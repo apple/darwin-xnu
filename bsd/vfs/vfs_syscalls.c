@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 1995-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1989, 1993
@@ -102,6 +96,7 @@
 
 #include <vm/vm_pageout.h>
 
+#include <architecture/byte_order.h>
 #include <libkern/OSAtomic.h>
 
 
@@ -112,7 +107,7 @@
 uid_t console_user;
 
 static int change_dir(struct nameidata *ndp, vfs_context_t ctx);
-static void checkdirs(struct vnode *olddp, vfs_context_t ctx);
+static int checkdirs(vnode_t olddp, vfs_context_t ctx);
 void enablequotas(struct mount *mp, vfs_context_t ctx);
 static int getfsstat_callback(mount_t mp, void * arg);
 static int getutimes(user_addr_t usrtvp, struct timespec *tsp);
@@ -181,7 +176,7 @@ mount(struct proc *p, register struct mount_args *uap, __unused register_t *retv
 	struct vnode *devvp = NULLVP;
 	struct vnode *device_vnode = NULLVP;
 	struct mount *mp;
-	struct vfstable *vfsp;
+	struct vfstable *vfsp = (struct vfstable *)0;
 	int error, flag = 0;
 	struct vnode_attr va;
 	struct vfs_context context;
@@ -316,7 +311,9 @@ mount(struct proc *p, register struct mount_args *uap, __unused register_t *retv
 		error = EBUSY;
 		goto out1;
 	}
+	vnode_lock(vp);
 	SET(vp->v_flag, VMOUNT);
+	vnode_unlock(vp);
 
 	/*
 	 * Allocate and initialize the filesystem.
@@ -485,25 +482,28 @@ update:
 	/*
 	 * Put the new filesystem on the mount list after root.
 	 */
-	if (!error) {
-		CLR(vp->v_flag, VMOUNT);
-
+	if (error == 0) {
 		vnode_lock(vp);
+		CLR(vp->v_flag, VMOUNT);
 		vp->v_mountedhere = mp;
 		vnode_unlock(vp);
 
 		vnode_ref(vp);
 
-		vfs_event_signal(NULL, VQ_MOUNT, (intptr_t)NULL);
-		checkdirs(vp, &context);
-		lck_rw_done(&mp->mnt_rwlock);
-		is_rwlock_locked = FALSE;
-		mount_list_add(mp);
+		error = checkdirs(vp, &context);
+		if (error != 0)  {
+			/* Unmount the filesystem as cdir/rdirs cannot be updated */
+			goto out4;
+		}
 		/* 
 		 * there is no cleanup code here so I have made it void 
 		 * we need to revisit this
 		 */
 		(void)VFS_START(mp, 0, &context);
+
+		mount_list_add(mp);
+		lck_rw_done(&mp->mnt_rwlock);
+		is_rwlock_locked = FALSE;
 
 		/* increment the operations count */
 		OSAddAtomic(1, (SInt32 *)&vfs_nummntops);
@@ -520,8 +520,13 @@ update:
 			 */
 			vfs_init_io_attributes(device_vnode, mp);
 		} 
+
+		/* Now that mount is setup, notify the listeners */
+		vfs_event_signal(NULL, VQ_MOUNT, (intptr_t)NULL);
 	} else {
+		vnode_lock(vp);
 		CLR(vp->v_flag, VMOUNT);
+		vnode_unlock(vp);
 		mount_list_lock();
 		mp->mnt_vtable->vfc_refcount--;
 		mount_list_unlock();
@@ -546,7 +551,15 @@ update:
 	vnode_put(vp);
 
 	return(error);
-
+out4:
+	(void)VFS_UNMOUNT(mp, MNT_FORCE, &context);
+	if (device_vnode != NULLVP) {
+		VNOP_CLOSE(device_vnode, mp->mnt_flag & MNT_RDONLY ? FREAD : FREAD|FWRITE, &context);
+	}
+	vnode_lock(vp);
+	vp->v_mountedhere = (mount_t) 0;
+	vnode_unlock(vp);
+	vnode_rele(vp);
 out3:
 	vnode_rele(devvp);
 out2:
@@ -557,8 +570,12 @@ out1:
 	if (is_rwlock_locked == TRUE) {
 		lck_rw_done(&mp->mnt_rwlock);
 	}
-	if (mntalloc)
+	if (mntalloc) {
+		mount_list_lock();
+		vfsp->vfc_refcount--;
+		mount_list_unlock();
 		FREE_ZONE((caddr_t)mp, sizeof (struct mount), M_MOUNT);
+	}
 	vnode_put(vp);
 	nameidone(&nd);
 
@@ -603,7 +620,7 @@ enablequotas(struct mount *mp, vfs_context_t context)
  * or root directory onto which the new filesystem has just been
  * mounted. If so, replace them with the new mount point.
  */
-static void
+static int
 checkdirs(olddp, context)
 	struct vnode *olddp;
 	vfs_context_t context;
@@ -617,11 +634,17 @@ checkdirs(olddp, context)
 	int cdir_changed = 0;
 	int rdir_changed = 0;
 	boolean_t funnel_state;
+	int err;
 
 	if (olddp->v_usecount == 1)
-		return;
-	if (VFS_ROOT(olddp->v_mountedhere, &newdp, context))
+		return(0);
+	err = VFS_ROOT(olddp->v_mountedhere, &newdp, context);
+	if (err) {
+#if DIAGNOSTIC
 		panic("mount: lost mount");
+#endif
+		return(err);
+	}
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	for (p = allproc.lh_first; p != 0; p = p->p_list.le_next) {
@@ -665,6 +688,7 @@ checkdirs(olddp, context)
 	thread_funnel_set(kernel_flock, funnel_state);
 
 	vnode_put(newdp);
+	return(0);
 }
 
 /*
@@ -702,11 +726,14 @@ unmount(struct proc *p, register struct unmount_args *uap, __unused register_t *
 		vnode_put(vp);
 		return (EINVAL);
 	}
+	mount_ref(mp, 0);
 	vnode_put(vp);
+	/* safedounmount consumes the mount ref */
 	return (safedounmount(mp, uap->flags, p));
 }
 
 /*
+ * The mount struct comes with a mount ref which will be consumed.
  * Do the actual file system unmount, prevent some common foot shooting.
  *
  * XXX Should take a "vfs_context_t" instead of a "struct proc *"
@@ -724,26 +751,32 @@ safedounmount(mp, flags, p)
 	 * permitted to unmount this filesystem.
 	 */
 	if ((mp->mnt_vfsstat.f_owner != kauth_cred_getuid(kauth_cred_get())) &&
-	    (error = suser(kauth_cred_get(), &p->p_acflag)))
-		return (error);
+	    (error = suser(kauth_cred_get(), &p->p_acflag))) {
+		goto out;
+	}
 
 	/*
 	 * Don't allow unmounting the root file system.
 	 */
-	if (mp->mnt_flag & MNT_ROOTFS)
-		return (EBUSY); /* the root is always busy */
+	if (mp->mnt_flag & MNT_ROOTFS) {
+		error  = EBUSY;
+		goto out;
+	}
 
-	return (dounmount(mp, flags, NULL, p));
+	return (dounmount(mp, flags, 1, p));
+out:
+	mount_drop(mp, 0);
+	return(error);
 }
 
 /*
  * Do the actual file system unmount.
  */
 int
-dounmount(mp, flags, skiplistrmp, p)
+dounmount(mp, flags, withref, p)
 	register struct mount *mp;
 	int flags;
-	int * skiplistrmp;
+	int withref;
 	struct proc *p;
 {
 	struct vnode *coveredvp = (vnode_t)0;
@@ -766,13 +799,13 @@ dounmount(mp, flags, skiplistrmp, p)
 	}
 	if (mp->mnt_lflag & MNT_LUNMOUNT) {
 		mp->mnt_lflag |= MNT_LWAIT;
+		if (withref != 0)
+			mount_drop(mp, 1);
 		msleep((caddr_t)mp, &mp->mnt_mlock, (PVFS | PDROP), "dounmount", 0 );
 		/*
 		 * The prior unmount attempt has probably succeeded.
 		 * Do not dereference mp here - returning EBUSY is safest.
 		 */
-		if (skiplistrmp != NULL)
-			*skiplistrmp = 1;
 		return (EBUSY);
 	}
 	mp->mnt_kern_flag |= MNTK_UNMOUNT;
@@ -780,6 +813,8 @@ dounmount(mp, flags, skiplistrmp, p)
 	mp->mnt_flag &=~ MNT_ASYNC;
 	mount_unlock(mp);
 	lck_rw_lock_exclusive(&mp->mnt_rwlock);
+	if (withref != 0)
+		mount_drop(mp, 0);
 	fsevent_unmount(mp);  /* has to come first! */
 	error = 0;
 	if (forcedunmount == 0) {
@@ -1514,7 +1549,7 @@ open1(vfs_context_t ctx, user_addr_t upath, int uflags, struct vnode_attr *vap, 
 	vnode_put(vp);
 
 	proc_fdlock(p);
-	*fdflags(p, indx) &= ~UF_RESERVED;
+	procfdtbl_releasefd(p, indx, NULL);
 	fp_drop(p, indx, fp, 1);
 	proc_fdunlock(p);
 
@@ -1530,30 +1565,6 @@ bad:
 
 }
 
-/*
- * An open system call using an extended argument list compared to the regular
- * system call 'open'.
- *
- * Parameters:	p			Process requesting the open
- *		uap			User argument descriptor (see below)
- *		retval			Pointer to an area to receive the
- *					return calue from the system call
- *
- * Indirect:	uap->path		Path to open (same as 'open')
- *		uap->flags		Flags to open (same as 'open'
- *		uap->uid		UID to set, if creating
- *		uap->gid		GID to set, if creating
- *		uap->mode		File mode, if creating (same as 'open')
- *		uap->xsecurity		ACL to set, if creating
- *
- * Returns:	0			Success
- *		!0			errno value
- *
- * Notes:	The kauth_filesec_t in 'va', if any, is in host byte order.
- *
- * XXX:		We should enummerate the possible errno values here, and where
- *		in the code they originated.
- */
 int
 open_extended(struct proc *p, struct open_extended_args *uap, register_t *retval)
 {
@@ -1755,29 +1766,6 @@ out:
 	return error;
 }
 
-
-/*
- * A mkfifo system call using an extended argument list compared to the regular
- * system call 'mkfifo'.
- *
- * Parameters:	p			Process requesting the open
- *		uap			User argument descriptor (see below)
- *		retval			(Ignored)
- *
- * Indirect:	uap->path		Path to fifo (same as 'mkfifo')
- *		uap->uid		UID to set
- *		uap->gid		GID to set
- *		uap->mode		File mode to set (same as 'mkfifo')
- *		uap->xsecurity		ACL to set, if creating
- *
- * Returns:	0			Success
- *		!0			errno value
- *
- * Notes:	The kauth_filesec_t in 'va', if any, is in host byte order.
- *
- * XXX:		We should enummerate the possible errno values here, and where
- *		in the code they originated.
- */
 int
 mkfifo_extended(struct proc *p, struct mkfifo_extended_args *uap, __unused register_t *retval)
 {
@@ -2489,8 +2477,8 @@ out:
 		vnode_put(vp);
 	if (dvp)
 		vnode_put(dvp);
-	if (IS_VALID_CRED(context.vc_ucred))
- 		kauth_cred_unref(&context.vc_ucred);
+	if (context.vc_ucred)
+ 		kauth_cred_rele(context.vc_ucred);
 	return(error);
 }
 
@@ -2528,7 +2516,7 @@ access(__unused struct proc *p, register struct access_args *uap, __unused regis
   	nameidone(&nd);
   
 out:
- 	kauth_cred_unref(&context.vc_ucred);
+ 	kauth_cred_rele(context.vc_ucred);
  	return(error);
 }
 
@@ -2870,28 +2858,6 @@ chmod1(vfs_context_t ctx, user_addr_t path, struct vnode_attr *vap)
 	return(error);
 }
 
-/*
- * A chmod system call using an extended argument list compared to the regular
- * system call 'mkfifo'.
- *
- * Parameters:	p			Process requesting the open
- *		uap			User argument descriptor (see below)
- *		retval			(ignored)
- *
- * Indirect:	uap->path		Path to object (same as 'chmod')
- *		uap->uid		UID to set
- *		uap->gid		GID to set
- *		uap->mode		File mode to set (same as 'chmod')
- *		uap->xsecurity		ACL to set (or delete)
- *
- * Returns:	0			Success
- *		!0			errno value
- *
- * Notes:	The kauth_filesec_t in 'va', if any, is in host byte order.
- *
- * XXX:		We should enummerate the possible errno values here, and where
- *		in the code they originated.
- */
 int
 chmod_extended(struct proc *p, struct chmod_extended_args *uap, __unused register_t *retval)
 {
@@ -4674,11 +4640,10 @@ checkuseraccess (struct proc *p, register struct checkuseraccess_args *uap, __un
 	register struct vnode *vp;
 	int error;
 	struct nameidata nd;
-	struct ucred template_cred;
+	struct ucred cred;	/* XXX ILLEGAL */
 	int flags;		/*what will actually get passed to access*/
 	u_long nameiflags;
 	struct vfs_context context;
-	kauth_cred_t my_cred;
 
 	/* Make sure that the number of groups is correct before we do anything */
 
@@ -4690,18 +4655,16 @@ checkuseraccess (struct proc *p, register struct checkuseraccess_args *uap, __un
 	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
 		return(error);
 
-	/*
-	 * Fill in the template credential structure; we use a template because
-	 * lookup can attempt to take a persistent reference.
-	 */
-	template_cred.cr_uid = uap->userid;
-	template_cred.cr_ngroups = uap->ngroups;
-	if ((error = copyin(CAST_USER_ADDR_T(uap->groups), (caddr_t) &(template_cred.cr_groups), (sizeof(gid_t))*uap->ngroups)))
+	/* Fill in the credential structure */
+
+	cred.cr_ref = 0;
+	cred.cr_uid = uap->userid;
+	cred.cr_ngroups = uap->ngroups;
+	if ((error = copyin(CAST_USER_ADDR_T(uap->groups), (caddr_t) &(cred.cr_groups), (sizeof(gid_t))*uap->ngroups)))
 		return (error);
 
-	my_cred = kauth_cred_create(&template_cred);
 	context.vc_proc = p;
-	context.vc_ucred = my_cred;
+	context.vc_ucred = &cred;
 
 	/* Get our hands on the file */
 	nameiflags = 0;
@@ -4709,10 +4672,8 @@ checkuseraccess (struct proc *p, register struct checkuseraccess_args *uap, __un
 	NDINIT(&nd, LOOKUP, nameiflags | AUDITVNPATH1, 
 		UIO_USERSPACE, CAST_USER_ADDR_T(uap->path), &context);
 
-	if ((error = namei(&nd))) {
-		kauth_cred_unref(&context.vc_ucred);
+	if ((error = namei(&nd)))
        		 return (error);
-	}
 	nameidone(&nd);
 	vp = nd.ni_vp;
 	
@@ -4732,8 +4693,11 @@ checkuseraccess (struct proc *p, register struct checkuseraccess_args *uap, __un
 		    	
 	vnode_put(vp);
 
-	kauth_cred_unref(&context.vc_ucred);
-	return (error);
+	if (error) 
+ 		return (error);
+	
+	return (0); 
+
 } /* end of checkuseraccess system call */
 
 /************************************************/
@@ -4780,8 +4744,7 @@ searchfs (struct proc *p, register struct searchfs_args *uap, __unused register_
         searchblock.returnbuffer = CAST_USER_ADDR_T(tmp_searchblock.returnbuffer);
         searchblock.returnbuffersize = tmp_searchblock.returnbuffersize;
         searchblock.maxmatches = tmp_searchblock.maxmatches;
-        searchblock.timelimit.tv_sec = tmp_searchblock.timelimit.tv_sec;
-        searchblock.timelimit.tv_usec = tmp_searchblock.timelimit.tv_usec;
+        searchblock.timelimit = tmp_searchblock.timelimit;
         searchblock.searchparams1 = CAST_USER_ADDR_T(tmp_searchblock.searchparams1);
         searchblock.sizeofsearchparams1 = tmp_searchblock.sizeofsearchparams1;
         searchblock.searchparams2 = CAST_USER_ADDR_T(tmp_searchblock.searchparams2);
@@ -5513,8 +5476,6 @@ munge_statfs(struct mount *mp, struct vfsstatfs *sfsp,
  */
 void munge_stat(struct stat *sbp, struct user_stat *usbp)
 {
-        bzero(usbp, sizeof(struct user_stat));
-
 	usbp->st_dev = sbp->st_dev;
 	usbp->st_ino = sbp->st_ino;
 	usbp->st_mode = sbp->st_mode;

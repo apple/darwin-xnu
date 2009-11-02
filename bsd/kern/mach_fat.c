@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1991 NeXT Computer, Inc.  All rights reserved.
  *
@@ -44,8 +38,13 @@
 #include <kern/cpu_number.h>
 #include <mach-o/fat.h>
 #include <kern/mach_loader.h>
-#include <libkern/OSByteOrder.h>
-#include <machine/exec.h>
+#include <architecture/byte_order.h>
+
+/* XXX should be in common header */
+extern int grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype);
+
+#define CPU_TYPE_NATIVE		(cpu_type())
+#define CPU_TYPE_CLASSIC	CPU_TYPE_POWERPC
 
 /**********************************************************************
  * Routine:	fatfile_getarch2()
@@ -101,7 +100,7 @@ fatfile_getarch2(
 	 *	Map portion that must be accessible directly into
 	 *	kernel's map.
 	 */
-	nfat_arch = OSSwapBigToHostInt32(header->nfat_arch);
+	nfat_arch = NXSwapBigLongToHost(header->nfat_arch);
 
 	end_of_archs = (off_t)nfat_arch * sizeof(struct fat_arch) + 
 		sizeof(struct fat_header);
@@ -119,7 +118,6 @@ fatfile_getarch2(
 	if (end_of_archs > PAGE_SIZE ||
 		end_of_archs < (sizeof(struct fat_header)+sizeof(struct fat_arch)))
 		return(LOAD_BADMACHO);
-
 	/*
 	 * 	Round size of fat_arch structures up to page boundry.
 	 */
@@ -139,15 +137,15 @@ fatfile_getarch2(
 		/*
 		 *	Check to see if right cpu type.
 		 */
-		if(((cpu_type_t)OSSwapBigToHostInt32(arch->cputype) & ~mask_bits) != req_cpu_type)
+		if(((cpu_type_t)NXSwapBigIntToHost(arch->cputype) & ~mask_bits) != req_cpu_type)
 			continue;
 
 		/*
 		 * 	Get the grade of the cpu subtype.
 		 */
 		grade = grade_binary(
-			    OSSwapBigToHostInt32(arch->cputype),
-			    OSSwapBigToHostInt32(arch->cpusubtype));
+			    NXSwapBigIntToHost(arch->cputype),
+			    NXSwapBigIntToHost(arch->cpusubtype));
 
 		/*
 		 *	Remember it if it's the best we've seen.
@@ -165,15 +163,15 @@ fatfile_getarch2(
 		lret = LOAD_BADARCH;
 	} else {
 		archret->cputype	=
-			    OSSwapBigToHostInt32(best_arch->cputype);
+			    NXSwapBigIntToHost(best_arch->cputype);
 		archret->cpusubtype	=
-			    OSSwapBigToHostInt32(best_arch->cpusubtype);
+			    NXSwapBigIntToHost(best_arch->cpusubtype);
 		archret->offset		=
-			    OSSwapBigToHostInt32(best_arch->offset);
+			    NXSwapBigLongToHost(best_arch->offset);
 		archret->size		=
-			    OSSwapBigToHostInt32(best_arch->size);
+			    NXSwapBigLongToHost(best_arch->size);
 		archret->align		=
-			    OSSwapBigToHostInt32(best_arch->align);
+			    NXSwapBigLongToHost(best_arch->align);
 
 		lret = LOAD_SUCCESS;
 	}
@@ -184,6 +182,8 @@ fatfile_getarch2(
 	return(lret);
 }
 
+extern char classichandler[];
+
 load_return_t
 fatfile_getarch_affinity(
 		struct vnode		*vp,
@@ -192,15 +192,15 @@ fatfile_getarch_affinity(
 		int 				affinity)
 {
 		load_return_t lret;
-		int handler = (exec_archhandler_ppc.path[0] != 0);
+		int handler = (classichandler[0] != 0);
 		cpu_type_t primary_type, fallback_type;
 
 		if (handler && affinity) {
-				primary_type = CPU_TYPE_POWERPC;
-				fallback_type = cpu_type();
+				primary_type = CPU_TYPE_CLASSIC;
+				fallback_type = CPU_TYPE_NATIVE;
 		} else {
-				primary_type = cpu_type();
-				fallback_type = CPU_TYPE_POWERPC;
+				primary_type = CPU_TYPE_NATIVE;
+				fallback_type = CPU_TYPE_CLASSIC;
 		}
 		/*
 		 * Ignore the architectural bits when determining if an image
@@ -234,7 +234,7 @@ fatfile_getarch(
 	vm_offset_t 	data_ptr,
 	struct fat_arch		*archret)
 {
-	return fatfile_getarch2(vp, data_ptr, cpu_type(), 0, archret);
+	return fatfile_getarch2(vp, data_ptr, CPU_TYPE_NATIVE, 0, archret);
 }
 
 /**********************************************************************
@@ -259,6 +259,6 @@ fatfile_getarch_with_bits(
 	vm_offset_t 	data_ptr,
 	struct fat_arch		*archret)
 {
-	return fatfile_getarch2(vp, data_ptr, archbits | cpu_type(), 0, archret);
+	return fatfile_getarch2(vp, data_ptr, archbits | CPU_TYPE_NATIVE, 0, archret);
 }
 

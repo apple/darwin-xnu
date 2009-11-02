@@ -1,29 +1,23 @@
 /*
- * Copyright (c) 2004-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2007 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
  
 #include <sys/param.h>
@@ -247,13 +241,13 @@ xattr_validatename(const char *name)
 	if (name == NULL || name[0] == '\0') {
 		return (EINVAL);
 	}
-	namelen = strlen(name);
-	if (namelen > XATTR_MAXNAMELEN) {
+	namelen = strnlen(name, XATTR_MAXNAMELEN);
+	if (name[namelen] != '\0') 
 		return (ENAMETOOLONG);
-	}
-	if (utf8_validatestr(name, namelen) != 0) {
+
+	if (utf8_validatestr(name, namelen) != 0) 
 		return (EINVAL);
-	}
+	
 	return (0);
 }
 
@@ -369,7 +363,15 @@ xattr_protected(const char *attrname)
  * the attribute entries must reside within this limit.  If
  * any of the attribute data crosses the ATTR_MAX_HDR_SIZE
  * boundry, then all of the attribute data I/O is performed
- * seperately from the attribute header I/O.
+ * separately from the attribute header I/O.
+ *
+ * In particular, all of the attr_entry structures must lie
+ * completely within the first ATTR_MAX_HDR_SIZE bytes of the
+ * AppleDouble file.  However, the attribute data (i.e. the
+ * contents of the extended attributes) may extend beyond the
+ * first ATTR_MAX_HDR_SIZE bytes of the file.  Note that this
+ * limit is to allow the implementation to optimize by reading
+ * the first ATTR_MAX_HDR_SIZE bytes of the file.
  */
 
 
@@ -406,12 +408,12 @@ typedef struct attr_entry {
 } attr_entry_t;
 
 
-/* Header + entries must fit into 64K */
+/* Header + entries must fit into 64K. Data may extend beyond 64k. */
 typedef struct attr_header {
 	apple_double_header_t  appledouble;
 	u_int32_t   magic;        /* == ATTR_HDR_MAGIC */
 	u_int32_t   debug_tag;    /* for debugging == file id of owning file */
-	u_int32_t   total_size;   /* total size of attribute header + entries + data */ 
+	u_int32_t   total_size;   /* file offset of end of attribute header + entries + data */ 
 	u_int32_t   data_start;   /* file offset to attribute data area */
 	u_int32_t   data_length;  /* length of attribute data area */
 	u_int32_t   reserved[3];
@@ -454,7 +456,7 @@ typedef struct attr_info {
 	size_t                 filesize;
 	size_t                 iosize;
 	u_int8_t               *rawdata;
-	size_t                 rawsize;  /* raw size of AppleDouble file */
+	size_t                 rawsize;  /* minimum of filesize or ATTR_MAX_HDR_SIZE */ 
 	apple_double_header_t  *filehdr;
 	apple_double_entry_t   *finderinfo;
 	apple_double_entry_t   *rsrcfork;
@@ -477,7 +479,6 @@ typedef struct attr_info {
 
 #define ATTR_VALID(ae, ai)  \
 	((u_int8_t *)ATTR_NEXT(ae) <= ((ai).rawdata + (ai).rawsize))
-
 
 #define SWAP16(x)  OSSwapBigToHostInt16((x))
 #define SWAP32(x)  OSSwapBigToHostInt32((x))
@@ -513,17 +514,108 @@ static int  unlock_xattrfile(vnode_t xvp, vfs_context_t context);
 
 #if BYTE_ORDER == LITTLE_ENDIAN
   static void  swap_adhdr(apple_double_header_t *adh);
-  static void  swap_attrhdr(attr_header_t *ah);
+  static void  swap_attrhdr(attr_header_t *ah, attr_info_t* info);
 
 #else
 #define swap_adhdr(x)
-#define swap_attrhdr(x)
+#define swap_attrhdr(x,y)
 #endif
 
 static int  validate_attrhdr(attr_header_t *ah, size_t bufsize);
+static int  check_and_swap_attrhdr(attr_header_t *ah, attr_info_t* ainfop);
 static int  shift_data_down(vnode_t xvp, off_t start, size_t len, off_t delta, vfs_context_t context);
 static int  shift_data_up(vnode_t xvp, off_t start, size_t len, off_t delta, vfs_context_t context);
+/*
+ * Sanity check and swap the header of an AppleDouble file.  Assumes the buffer
+ * is in big endian (as it would exist on disk).  Verifies the following:
+ * - magic field
+ * - version field
+ * - number of entries
+ * - that each entry fits within the file size
+ *
+ * If the header is invalid, ENOATTR is returned.
+ *
+ * NOTE: Does not attempt to validate the extended attributes header that
+ * may be embedded in the Finder Info entry.
+ */
 
+static int check_and_swap_apple_double_header(attr_info_t *ainfop)
+{
+	int i, j;
+	u_int32_t header_end;
+	u_int32_t entry_end;
+	size_t rawsize;
+	apple_double_header_t *header;
+
+	rawsize = ainfop->rawsize;
+	header = (apple_double_header_t *) ainfop->rawdata;
+
+	/* Is the file big enough to contain an AppleDouble header? */
+	if (rawsize < offsetof(apple_double_header_t, entries))
+		return ENOATTR;
+
+	/* Swap the AppleDouble header fields to native order */
+	header->magic = SWAP32(header->magic);
+	header->version = SWAP32(header->version);
+	header->numEntries = SWAP16(header->numEntries);
+
+	/* Sanity check the AppleDouble header fields */
+	if (header->magic != ADH_MAGIC ||
+			header->version != ADH_VERSION ||
+			header->numEntries < 1 ||
+			header->numEntries > 15) {
+		return ENOATTR;
+	}
+
+	/* Calculate where the entries[] array ends */
+	header_end = offsetof(apple_double_header_t, entries) +
+		header->numEntries * sizeof(apple_double_entry_t);
+
+	/* Is the file big enough to contain the AppleDouble entries? */
+	if (rawsize < header_end) {
+		return ENOATTR;
+	}
+
+	/* Swap and sanity check each AppleDouble entry */
+	for (i=0; i<header->numEntries; i++) {
+		/* Swap the per-entry fields to native order */
+		header->entries[i].type   = SWAP32(header->entries[i].type);
+		header->entries[i].offset = SWAP32(header->entries[i].offset);
+		header->entries[i].length = SWAP32(header->entries[i].length);
+
+		entry_end = header->entries[i].offset + header->entries[i].length;
+
+		/*
+		 * Does the entry's content start within the header itself,
+		 * did the addition overflow, or does the entry's content
+		 * extend past the end of the file?
+		 */
+		if (header->entries[i].offset < header_end ||
+				entry_end < header->entries[i].offset  ||
+				entry_end > ainfop->filesize) {
+			return ENOATTR;
+		}
+
+		/*
+		 * Does the current entry's content overlap with a previous
+		 * entry's content?
+		 *
+		 * Yes, this is O(N**2), and there are more efficient algorithms
+		 * for testing pairwise overlap of N ranges when N is large.
+		 * But we have already ensured N < 16, and N is almost always 2.
+		 * So there's no point in using a more complex algorithm.
+		 */
+
+		for (j=0; j<i; j++) {
+			if (entry_end > header->entries[j].offset &&
+					header->entries[j].offset + header->entries[j].length > header->entries[i].offset) {
+				return ENOATTR;
+			}
+		}
+	}
+
+	return 0;
+}
 
 /*
  * Retrieve the data of an extended attribute.
@@ -1534,14 +1626,31 @@ remove_xattrfile(vnode_t xvp, vfs_context_t context)
 
 	return (error);
 }
-
+/*
+ * Read in and parse the AppleDouble header and entries, and the extended
+ * attribute header and entries if any.  Populates the fields of ainfop
+ * based on the headers and entries found.
+ *
+ * The basic idea is to:
+ * - Read in up to ATTR_MAX_HDR_SIZE bytes of the start of the file.  All
+ *   AppleDouble entries, the extended attribute header, and extended
+ *   attribute entries must lie within this part of the file; the rest of
+ *   the AppleDouble handling code assumes this.  Plus it allows us to
+ *   somewhat optimize by doing a smaller number of larger I/Os.
+ * - Swap and sanity check the AppleDouble header (including the AppleDouble
+ *   entries).
+ * - Find the Finder Info and Resource Fork entries, if any.
+ * - If we're going to be writing, try to make sure the Finder Info entry has
+ *   room to store the extended attribute header, plus some space for extended
+ *   attributes.
+ * - Swap and sanity check the extended attribute header and entries (if any).
+ */
 static int
 get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t context)
 {
 	uio_t auio = NULL;
 	void * buffer = NULL;
 	apple_double_header_t  *filehdr;
-	attr_header_t *attrhdr;
 	struct vnode_attr va;
 	size_t iosize;
 	int i;
@@ -1570,6 +1679,11 @@ get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t conte
 	}
 	ainfop->iosize = iosize;
 	MALLOC(buffer, void *, iosize, M_TEMP, M_WAITOK);
+	if (buffer == NULL){
+		error = ENOMEM;
+		goto bail;
+	}
+
 	auio = uio_create(1, 0, UIO_SYSSPACE32, UIO_READ);
 	uio_addiov(auio, (uintptr_t)buffer, iosize);
 
@@ -1580,114 +1694,75 @@ get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t conte
 	}
 	ainfop->rawsize = iosize - uio_resid(auio);
 	ainfop->rawdata = (u_int8_t *)buffer;
-	
+
 	filehdr = (apple_double_header_t *)buffer;
 
-	/* Check for Apple Double file. */
-	if (SWAP32(filehdr->magic) != ADH_MAGIC ||
-	    SWAP32(filehdr->version) != ADH_VERSION ||
-	    SWAP16(filehdr->numEntries) < 1 ||
-	    SWAP16(filehdr->numEntries) > 15) {
-		error = ENOATTR;
+	error = check_and_swap_apple_double_header(ainfop);
+	if (error)
 		goto bail;
-	}
-	if (ADHDRSIZE + (SWAP16(filehdr->numEntries) * sizeof(apple_double_entry_t)) > ainfop->rawsize) {
-		error = EINVAL;
-		goto bail;
-	}
 
-	swap_adhdr(filehdr);
 	ainfop->filehdr = filehdr;  /* valid AppleDouble header */
+
 	/* rel_xattrinfo is responsible for freeing the header buffer */
 	buffer = NULL;
 
-	/* Check the AppleDouble entries. */
+	/* Find the Finder Info and Resource Fork entries, if any */
 	for (i = 0; i < filehdr->numEntries; ++i) {
 		if (filehdr->entries[i].type == AD_FINDERINFO &&
-		    filehdr->entries[i].length > 0) {
+				filehdr->entries[i].length >= FINDERINFOSIZE) {
+			/* We found the Finder Info entry. */
 			ainfop->finderinfo = &filehdr->entries[i];
-			attrhdr = (attr_header_t *)filehdr;
 
-	    		if (bcmp((u_int8_t*)ainfop->filehdr + ainfop->finderinfo->offset,
-	    		         emptyfinfo, sizeof(emptyfinfo)) == 0) {
+			/*
+			 * Is the Finder Info "empty" (all zeroes)?  If so,
+			 * we'll pretend like the Finder Info extended attribute
+			 * does not exist.
+			 *
+			 * Note: we have to make sure the Finder Info is
+			 * contained within the buffer we have already read,
+			 * to avoid accidentally accessing a bogus address.
+			 * If it is outside the buffer, we just assume the
+			 * Finder Info is non-empty.
+			 */
+			if (ainfop->finderinfo->offset + FINDERINFOSIZE <= ainfop->rawsize &&
+					bcmp((u_int8_t*)ainfop->filehdr + ainfop->finderinfo->offset, emptyfinfo, sizeof(emptyfinfo)) == 0) {
 				ainfop->emptyfinderinfo = 1;
 			}
 
-			if (i != 0) {
-				continue;
-			}
-			/* See if we need to convert this AppleDouble file. */
-			if (filehdr->entries[0].length == FINDERINFOSIZE) {
-				size_t delta;
-				size_t writesize;
-
-				if (!setting ||
-				    filehdr->entries[1].type != AD_RESOURCE ||
-				    filehdr->numEntries > 2) {
-					continue;  /* not expected layout */
-				}
-				delta = ATTR_BUF_SIZE - (filehdr->entries[0].offset + FINDERINFOSIZE);
-				if (filehdr->entries[1].length) {
-					/* Make some room. */
-					shift_data_down(xvp,
-							filehdr->entries[1].offset,
-							filehdr->entries[1].length,
-							delta, context);
-					writesize = sizeof(attr_header_t);
-				} else {
-					rsrcfork_header_t *rsrcforkhdr;
-
-					vnode_setsize(xvp, filehdr->entries[1].offset + delta, 0, context);
-
-					/* Steal some space for an empty RF header. */
-					delta -= sizeof(rsrcfork_header_t);
-
-					bzero(&attrhdr->appledouble.pad[0], delta);
-					rsrcforkhdr = (rsrcfork_header_t *)((char *)filehdr + filehdr->entries[1].offset + delta);
-
-					/* Fill in Empty Resource Fork Header. */
-					init_empty_resource_fork(rsrcforkhdr);
-					
-					filehdr->entries[1].length = sizeof(rsrcfork_header_t);
-					writesize = ATTR_BUF_SIZE;
-				}
-				filehdr->entries[0].length += delta;
-				filehdr->entries[1].offset += delta;
-
-				/* Fill in Attribute Header. */
-				attrhdr->magic       = ATTR_HDR_MAGIC;
-				attrhdr->debug_tag   = (u_int32_t)va.va_fileid;
-				attrhdr->total_size  = filehdr->entries[1].offset;
-				attrhdr->data_start  = sizeof(attr_header_t);
-				attrhdr->data_length = 0;
-				attrhdr->reserved[0] = 0;
-				attrhdr->reserved[1] = 0;
-				attrhdr->reserved[2] = 0;
-				attrhdr->flags       = 0;
-				attrhdr->num_attrs   = 0;
-
-				/* Push out new header */
-				uio_reset(auio, 0, UIO_SYSSPACE32, UIO_WRITE);
-				uio_addiov(auio, (uintptr_t)filehdr, writesize);
-
-				swap_adhdr(filehdr);
-				swap_attrhdr(attrhdr);
-				error = VNOP_WRITE(xvp, auio, 0, context);
-				swap_adhdr(filehdr);
-				/* The attribute header gets swapped below. */
-			}
-			if (SWAP32 (attrhdr->magic) != ATTR_HDR_MAGIC ||
-			    validate_attrhdr(attrhdr, ainfop->rawsize) != 0) {
-				printf("get_xattrinfo: invalid attribute header\n");
-				continue;
-			}
-			swap_attrhdr(attrhdr);
-			ainfop->attrhdr = attrhdr;  /* valid attribute header */
-			ainfop->attr_entry = (attr_entry_t *)&attrhdr[1];
-			continue;
 		}
-		if (filehdr->entries[i].type == AD_RESOURCE &&
-		    (filehdr->entries[i].length > sizeof(rsrcfork_header_t) || setting)) {
+
+		if (filehdr->entries[i].type == AD_RESOURCE) {
+			/*
+			 * Ignore zero-length resource forks when getting.  If setting,
+			 * we need to remember the resource fork entry so it can be
+			 * updated once the new content has been written.
+			 */
+			if (filehdr->entries[i].length == 0 && !setting)
+				continue;
+
+			/*
+			 * Check to see if any "empty" resource fork is ours (i.e. is ignorable).
+			 *
+			 * The "empty" resource headers we created have a system data tag of:
+			 * "This resource fork intentionally left blank   "
+			 */
+			if (filehdr->entries[i].length == sizeof(rsrcfork_header_t) && !setting) {
+				uio_t  rf_uio;
+				u_int8_t  systemData[64];
+				int  rf_err;
+
+				/* Read the system data which starts at byte 16 */
+				rf_uio = uio_create(1, 0, UIO_SYSSPACE32, UIO_READ);
+				uio_addiov(rf_uio, (uintptr_t)systemData, sizeof(systemData));
+				uio_setoffset(rf_uio, filehdr->entries[i].offset + 16);
+				rf_err = VNOP_READ(xvp, rf_uio, 0, context);
+				uio_free(rf_uio);
+
+				if (rf_err != 0 ||
+						bcmp(systemData, RF_EMPTY_TAG, sizeof(RF_EMPTY_TAG)) == 0) {
+					continue;  /* skip this resource fork */
+				}
+			}
 			ainfop->rsrcfork = &filehdr->entries[i];
 			if (i != (filehdr->numEntries - 1)) {
 				printf("get_xattrinfo: resource fork not last entry\n");
@@ -1696,6 +1771,111 @@ get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t conte
 			continue;
 		}
 	}
+
+	/*
+	 * See if this file looks like it is laid out correctly to contain
+	 * extended attributes.  If so, then do the following:
+	 *
+	 * - If we're going to be writing, try to make sure the Finder Info
+	 *   entry has room to store the extended attribute header, plus some
+	 *   space for extended attributes.
+	 *
+	 * - Swap and sanity check the extended attribute header and entries
+	 *   (if any).
+	 */
+	if (filehdr->numEntries == 2 &&
+			ainfop->finderinfo == &filehdr->entries[0] &&
+			ainfop->rsrcfork == &filehdr->entries[1] &&
+			ainfop->finderinfo->offset == offsetof(apple_double_header_t, finfo)) {
+		attr_header_t *attrhdr;
+		attrhdr = (attr_header_t *)filehdr;
+		/*
+		 * If we're going to be writing, try to make sure the Finder
+		 * Info entry has room to store the extended attribute header,
+		 * plus some space for extended attributes.
+		 */
+		if (setting && ainfop->finderinfo->length == FINDERINFOSIZE) {
+			size_t delta;
+			size_t writesize;
+
+			delta = ATTR_BUF_SIZE - (filehdr->entries[0].offset + FINDERINFOSIZE);
+			if (ainfop->rsrcfork && filehdr->entries[1].length) {
+				/* Make some room before existing resource fork. */
+				shift_data_down(xvp,
+						filehdr->entries[1].offset,
+						filehdr->entries[1].length,
+						delta, context);
+				writesize = sizeof(attr_header_t);
+			} else {
+				/* Create a new, empty resource fork. */
+				rsrcfork_header_t *rsrcforkhdr;
+
+				vnode_setsize(xvp, filehdr->entries[1].offset + delta, 0, context);
+
+				/* Steal some space for an empty RF header. */
+				delta -= sizeof(rsrcfork_header_t);
+
+				bzero(&attrhdr->appledouble.pad[0], delta);
+				rsrcforkhdr = (rsrcfork_header_t *)((char *)filehdr + filehdr->entries[1].offset + delta);
+
+				/* Fill in Empty Resource Fork Header. */
+				init_empty_resource_fork(rsrcforkhdr);
+
+				filehdr->entries[1].length = sizeof(rsrcfork_header_t);
+				writesize = ATTR_BUF_SIZE;
+			}
+			filehdr->entries[0].length += delta;
+			filehdr->entries[1].offset += delta;
+
+			/* Fill in Attribute Header. */
+			attrhdr->magic       = ATTR_HDR_MAGIC;
+			attrhdr->debug_tag   = (u_int32_t)va.va_fileid;
+			attrhdr->total_size  = filehdr->entries[1].offset;
+			attrhdr->data_start  = sizeof(attr_header_t);
+			attrhdr->data_length = 0;
+			attrhdr->reserved[0] = 0;
+			attrhdr->reserved[1] = 0;
+			attrhdr->reserved[2] = 0;
+			attrhdr->flags       = 0;
+			attrhdr->num_attrs   = 0;
+
+			/* Push out new header */
+			uio_reset(auio, 0, UIO_SYSSPACE32, UIO_WRITE);
+			uio_addiov(auio, (uintptr_t)filehdr, writesize);
+
+			swap_adhdr(filehdr);	/* to big endian */
+			swap_attrhdr(attrhdr, ainfop);	/* to big endian */
+			error = VNOP_WRITE(xvp, auio, 0, context);
+			swap_adhdr(filehdr);	/* back to native */
+			/* The attribute header gets swapped below. */
+		}
+	}
+
+	/*
+	 * Swap and sanity check the extended attribute header and
+	 * entries (if any).  The Finder Info content must be big enough
+	 * to include the extended attribute header; if not, we just
+	 * ignore it.
+	 *
+	 * Note that we're passing the offset + length (i.e. the end)
+	 * of the Finder Info instead of rawsize to validate_attrhdr.
+	 * This ensures that all extended attributes lie within the
+	 * Finder Info content according to the AppleDouble entry.
+	 *
+	 * Sets ainfop->attrhdr and ainfop->attr_entry if a valid
+	 * header was found.
+	 */
+	if (ainfop->finderinfo &&
+			ainfop->finderinfo == &filehdr->entries[0] &&
+			ainfop->finderinfo->length >= (sizeof(attr_header_t) - sizeof(apple_double_header_t))) {
+		attr_header_t *attrhdr = (attr_header_t*)filehdr;
+		if ((error = check_and_swap_attrhdr(attrhdr, ainfop)) == 0) {
+			ainfop->attrhdr = attrhdr;  /* valid attribute header */
+			/* First attr_entry starts immediately following attribute header */
+			ainfop->attr_entry = (attr_entry_t *)&attrhdr[1];
+		}
+	}
+
 	error = 0;
 bail:
 	if (auio != NULL)
@@ -1789,13 +1969,15 @@ write_xattrinfo(attr_info_t *ainfop)
 
 	swap_adhdr(ainfop->filehdr);
 	if (ainfop->attrhdr != NULL)
-	swap_attrhdr(ainfop->attrhdr);
+	swap_attrhdr(ainfop->attrhdr, ainfop);
 
 	error = VNOP_WRITE(ainfop->filevp, auio, 0, ainfop->context);
 
 	swap_adhdr(ainfop->filehdr);
 	if (ainfop->attrhdr != NULL)
-	swap_attrhdr(ainfop->attrhdr);
+	swap_attrhdr(ainfop->attrhdr, ainfop);
+
+	uio_free(auio);
 	return (error);
 }
 
@@ -1826,7 +2008,7 @@ swap_adhdr(apple_double_header_t *adh)
  * Endian swap extended attributes header 
  */
 static void
-swap_attrhdr(attr_header_t *ah)
+swap_attrhdr(attr_header_t *ah, attr_info_t* info)
 {
 	attr_entry_t *ae;
 	int count;
@@ -1843,7 +2025,7 @@ swap_attrhdr(attr_header_t *ah)
 	ah->num_attrs   = SWAP16 (ah->num_attrs);
 
 	ae = (attr_entry_t *)(&ah[1]);
-	for (i = 0; i < count; i++, ae = ATTR_NEXT(ae)) {
+	for (i = 0; i < count && ATTR_VALID(ae, *info); i++, ae = ATTR_NEXT(ae)) {
 		ae->offset = SWAP32 (ae->offset);
 		ae->length = SWAP32 (ae->length);
 		ae->flags  = SWAP16 (ae->flags);
@@ -1852,27 +2034,92 @@ swap_attrhdr(attr_header_t *ah)
 #endif
 
 /*
- * Validate attributes header contents
+ * Validate and swap the attributes header contents, and each attribute's
+ * attr_entry_t.
+ *
+ * Note: Assumes the caller has verified that the Finder Info content is large
+ * enough to contain the attr_header structure itself.  Therefore, we can
+ * swap the header fields before sanity checking them.
  */
-static int
-validate_attrhdr(attr_header_t *ah, size_t bufsize)
+	static int
+check_and_swap_attrhdr(attr_header_t *ah, attr_info_t *ainfop)
 {
 	attr_entry_t *ae;
-	u_int8_t *bufend;
+	u_int8_t *buf_end;
+	u_int32_t end;
 	int count;
 	int i;
 
 	if (ah == NULL)
-		return (EINVAL);
+		return EINVAL;
 
-	bufend = (u_int8_t *)ah + bufsize;
-	count = (ah->magic == ATTR_HDR_MAGIC) ? ah->num_attrs : SWAP16(ah->num_attrs);
+	if (SWAP32(ah->magic) != ATTR_HDR_MAGIC)
+		return EINVAL;
 
-	ae = (attr_entry_t *)(&ah[1]);
-	for (i = 0; i < count && (u_int8_t *)ae < bufend; i++, ae = ATTR_NEXT(ae)) {
+	/* Swap the basic header fields */
+	ah->magic	= SWAP32(ah->magic);
+	ah->debug_tag   = SWAP32 (ah->debug_tag);
+	ah->total_size  = SWAP32 (ah->total_size);
+	ah->data_start  = SWAP32 (ah->data_start);
+	ah->data_length = SWAP32 (ah->data_length);
+	ah->flags       = SWAP16 (ah->flags);
+	ah->num_attrs   = SWAP16 (ah->num_attrs);
+
+	/*
+	 * Make sure the total_size fits within the Finder Info area, and the
+	 * extended attribute data area fits within total_size.
+	 */
+	end = ah->data_start + ah->data_length;
+	if (ah->total_size > ainfop->finderinfo->offset + ainfop->finderinfo->length ||
+			end < ah->data_start ||
+			end > ah->total_size) {
+		return EINVAL;
 	}
-	return (i < count ? EINVAL : 0);
+
+	/*
+	 * Make sure each of the attr_entry_t's fits within total_size.
+	 */
+	buf_end = ainfop->rawdata + ah->total_size;
+	count = ah->num_attrs;
+	ae = (attr_entry_t *)(&ah[1]);
+
+	for (i=0; i<count; i++) {
+		/* Make sure the fixed-size part of this attr_entry_t fits. */
+		if ((u_int8_t *) &ae[1] > buf_end)
+			return EINVAL;
+
+		/* Make sure the variable-length name fits (+1 is for NUL terminator) */
+		/* TODO: Make sure namelen matches strnlen(name,namelen+1)? */
+		if (&ae->name[ae->namelen+1] > buf_end)
+			return EINVAL;
+
+		/* Swap the attribute entry fields */
+		ae->offset	= SWAP32(ae->offset);
+		ae->length	= SWAP32(ae->length);
+		ae->flags	= SWAP16(ae->flags);
+
+		/* Make sure the attribute content fits. */
+		end = ae->offset + ae->length;
+		if (end < ae->offset || end > ah->total_size)
+			return EINVAL;
+
+		ae = ATTR_NEXT(ae);
+	}
+
+	/*
+	 * TODO: Make sure the contents of attributes don't overlap the header
+	 * and don't overlap each other.  The hard part is that we don't know
+	 * what the actual header size is until we have looped over all of the
+	 * variable-sized attribute entries.
+	 *
+	 * XXX  Is there any guarantee that attribute entries are stored in
+	 * XXX  order sorted by the contents' file offset?  If so, that would
+	 * XXX  make the pairwise overlap check much easier.
+	 */
+
+	return 0;
 }
+
 
 //
 // "start" & "end" are byte offsets in the file.

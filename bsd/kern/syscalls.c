@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@ 
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and 
+ * are subject to the Apple Public Source License Version 1.1 (the 
+ * "License").  You may not use this file except in compliance with the 
+ * License.  Please obtain a copy of the License at 
+ * http://www.apple.com/publicsource and read it before using this file. 
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * This Original Code and all software distributed under the License are 
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the 
+ * License for the specific language governing rights and limitations 
+ * under the License. 
  * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
- * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@ 
  * 
  * 
  * System call switch table.
@@ -140,7 +134,11 @@ const char *syscallnames[] = {
 	"getpriority",        /* 100 = getpriority */
 	"#101",               /* 101 = old send */
 	"#102",               /* 102 = old recv */
+#ifdef __ppc__
 	"#103",               /* 103 = old sigreturn */
+#else
+	"sigreturn",          /* 103 = sigreturn */
+#endif
 	"bind",               /* 104 = bind */
 	"setsockopt",         /* 105 = setsockopt */
 	"listen",             /* 106 = listen */
@@ -153,7 +151,11 @@ const char *syscallnames[] = {
 	"#113",               /* 113 = old recvmsg */
 	"#114",               /* 114 = old sendmsg */
 	"#115",               /* 115 = old vtrace */
+#ifdef __ppc__
+	"ppc_gettimeofday",   /* 116 = ppc_gettimeofday */
+#else
 	"gettimeofday",       /* 116 = gettimeofday */
+#endif
 	"getrusage",          /* 117 = getrusage */
 	"getsockopt",         /* 118 = getsockopt */
 	"#119",               /* 119 = old resuba */
@@ -229,8 +231,12 @@ const char *syscallnames[] = {
 	"setgid",             /* 181 = setgid */
 	"setegid",            /* 182 = setegid */
 	"seteuid",            /* 183 = seteuid */
+#ifdef __ppc__
 	"sigreturn",          /* 184 = sigreturn */
-	"chud",               /* 185 = chud */
+#else
+	"#184",               /* 184 = */
+#endif
+	"#185",               /* 185 = */
 	"#186",               /* 186 = */
 	"#187",               /* 187 = */
 	"stat",               /* 188 = stat */
@@ -255,6 +261,7 @@ const char *syscallnames[] = {
 	"mlock",              /* 203 = mlock */
 	"munlock",            /* 204 = munlock */
 	"undelete",           /* 205 = undelete */
+#ifdef __ppc__
 	"ATsocket",           /* 206 = ATsocket */
 	"ATgetmsg",           /* 207 = ATgetmsg */
 	"ATputmsg",           /* 208 = ATputmsg */
@@ -263,6 +270,16 @@ const char *syscallnames[] = {
 	"ATPgetreq",          /* 211 = ATPgetreq */
 	"ATPgetrsp",          /* 212 = ATPgetrsp */
 	"#213",               /* 213 = Reserved for AppleTalk */
+#else
+	"ATsocket",           /* 206 = ATsocket */
+	"ATgetmsg",           /* 207 = ATgetmsg */
+	"ATputmsg",           /* 208 = ATputmsg */
+	"ATPsndreq",          /* 209 = ATPsndreq */
+	"ATPsndrsp",          /* 210 = ATPsndrsp */
+	"ATPgetreq",          /* 211 = ATPgetreq */
+	"ATPgetrsp",          /* 212 = ATPgetrsp */
+	"#213",               /* 213 = Reserved for AppleTalk */
+#endif /* __ppc__ */
 	"kqueue_from_portset_np",  /* 214 = kqueue_from_portset_np */
 	"kqueue_portset_np",  /* 215 = kqueue_portset_np */
 	"mkcomplex",          /* 216 = mkcomplex soon to be obsolete */
@@ -394,7 +411,7 @@ const char *syscallnames[] = {
 	"__pthread_canceled",  /* 333 = __pthread_canceled */
 	"__semwait_signal",   /* 334 = __semwait_signal */
 	"utrace",             /* 335 = utrace */
-	"proc_info",          /* 336 = proc_info */
+	"#336",               /* 336 = */
 	"#337",               /* 337 = */
 	"#338",               /* 338 = */
 	"#339",               /* 339 = */
@@ -423,7 +440,7 @@ const char *syscallnames[] = {
 	"kqueue",             /* 362 = kqueue */
 	"kevent",             /* 363 = kevent */
 	"lchown",             /* 364 = lchown */
-	"stack_snapshot",     /* 365 = stack_snapshot */
+	"#365",               /* 365 = */
 	"#366",               /* 366 = */
 	"#367",               /* 367 = */
 	"#368",               /* 368 = */

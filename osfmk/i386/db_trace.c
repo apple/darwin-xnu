@@ -1,29 +1,23 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -67,13 +61,6 @@
 #include <machine/db_machdep.h>
 #include <machine/setjmp.h>
 #include <mach/machine.h>
-#include <mach/kmod.h>
-
-#include <i386/mp.h>
-#include <i386/pio.h>
-#include <i386/cpuid.h>
-#include <i386/proc_reg.h>
-#include <i386/machine_routines.h>
 
 #include <ddb/db_access.h>
 #include <ddb/db_sym.h>
@@ -83,17 +70,29 @@
 #include <ddb/db_output.h>
 
 extern jmp_buf_t *db_recover;
-struct x86_kernel_state32 ddb_null_kregs;
-extern kmod_info_t *kmod;
+extern struct i386_saved_state *saved_state[];
 
+struct i386_kernel_state ddb_null_kregs;
 
 /*
  * Stack trace.
  */
 
-#define	INKERNELSTACK(va, th) 1
+extern vm_offset_t vm_min_inks_addr;	/* set by db_clone_symtabXXX */
+#define INKSERVER(va)	(((vm_offset_t)(va)) >= vm_min_inks_addr)
 
-#define DB_NUMARGS_MAX  5
+extern vm_offset_t interrupt_stack[];
+#define	ININTSTACK(va)						\
+	(((vm_offset_t)(va)) >= interrupt_stack[cpu_number()] &&\
+	 (((vm_offset_t)(va)) < interrupt_stack[cpu_number()] +	\
+	                        INTSTACK_SIZE))
+
+#define	INKERNELSTACK(va, th)					\
+	(th == THREAD_NULL ||				\
+	 (((vm_offset_t)(va)) >= th->thread->kernel_stack &&	\
+	  (((vm_offset_t)(va)) < th->thread->kernel_stack +	\
+	                         KERNEL_STACK_SIZE)) ||		\
+         ININTSTACK(va))
 
 struct i386_frame {
 	struct i386_frame	*f_frame;
@@ -114,20 +113,20 @@ boolean_t	db_trace_symbols_found = FALSE;
 
 struct i386_kregs {
 	char	*name;
-	unsigned int offset;
+	int	offset;
 } i386_kregs[] = {
-	{ "ebx", (unsigned int)(&((struct x86_kernel_state32 *)0)->k_ebx) },
-	{ "esp", (unsigned int)(&((struct x86_kernel_state32 *)0)->k_esp) },
-	{ "ebp", (unsigned int)(&((struct x86_kernel_state32 *)0)->k_ebp) },
-	{ "edi", (unsigned int)(&((struct x86_kernel_state32 *)0)->k_edi) },
-	{ "esi", (unsigned int)(&((struct x86_kernel_state32 *)0)->k_esi) },
-	{ "eip", (unsigned int)(&((struct x86_kernel_state32 *)0)->k_eip) },
-	{ 0 }
+	{ "ebx", (int)(&((struct i386_kernel_state *)0)->k_ebx) },
+	{ "esp", (int)(&((struct i386_kernel_state *)0)->k_esp) },
+	{ "ebp", (int)(&((struct i386_kernel_state *)0)->k_ebp) },
+	{ "edi", (int)(&((struct i386_kernel_state *)0)->k_edi) },
+	{ "esi", (int)(&((struct i386_kernel_state *)0)->k_esi) },
+	{ "eip", (int)(&((struct i386_kernel_state *)0)->k_eip) },
+	{ 0 },
 };
 
 /* Forward */
 
-extern unsigned int *	db_lookup_i386_kreg(
+extern int *	db_lookup_i386_kreg(
 			char			*name,
 			int			*kregp);
 extern int	db_i386_reg_value(
@@ -152,26 +151,26 @@ extern int	_setjmp(
  * Machine register set.
  */
 struct db_variable db_regs[] = {
-	{ "cs",	(unsigned int *)&ddb_regs.cs,  db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "ds",	(unsigned int *)&ddb_regs.ds,  db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "es",	(unsigned int *)&ddb_regs.es,  db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "fs",	(unsigned int *)&ddb_regs.fs,  db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "gs",	(unsigned int *)&ddb_regs.gs,  db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "ss",	(unsigned int *)&ddb_regs.ss,  db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "eax",(unsigned int *)&ddb_regs.eax, db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "ecx",(unsigned int *)&ddb_regs.ecx, db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "edx",(unsigned int *)&ddb_regs.edx, db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "ebx",(unsigned int *)&ddb_regs.ebx, db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "esp",(unsigned int *)&ddb_regs.uesp,db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "ebp",(unsigned int *)&ddb_regs.ebp, db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "esi",(unsigned int *)&ddb_regs.esi, db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "edi",(unsigned int *)&ddb_regs.edi, db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "eip",(unsigned int *)&ddb_regs.eip, db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 },
-	{ "efl",(unsigned int *)&ddb_regs.efl, db_i386_reg_value, 0, 0, 0, 0, TRUE, 0, 0, (int *)0, 0 }
+	{ "cs",	(int *)&ddb_regs.cs,  db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "ds",	(int *)&ddb_regs.ds,  db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "es",	(int *)&ddb_regs.es,  db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "fs",	(int *)&ddb_regs.fs,  db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "gs",	(int *)&ddb_regs.gs,  db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "ss",	(int *)&ddb_regs.ss,  db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "eax",(int *)&ddb_regs.eax, db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "ecx",(int *)&ddb_regs.ecx, db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "edx",(int *)&ddb_regs.edx, db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "ebx",(int *)&ddb_regs.ebx, db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "esp",(int *)&ddb_regs.uesp,db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "ebp",(int *)&ddb_regs.ebp, db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "esi",(int *)&ddb_regs.esi, db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "edi",(int *)&ddb_regs.edi, db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "eip",(int *)&ddb_regs.eip, db_i386_reg_value, 0, 0, 0, 0, TRUE },
+	{ "efl",(int *)&ddb_regs.efl, db_i386_reg_value, 0, 0, 0, 0, TRUE },
 };
 struct db_variable *db_eregs = db_regs + sizeof(db_regs)/sizeof(db_regs[0]);
 
-unsigned int *
+int *
 db_lookup_i386_kreg(
 	char	*name,
 	int	*kregp)
@@ -180,7 +179,7 @@ db_lookup_i386_kreg(
 
 	for (kp = i386_kregs; kp->name; kp++) {
 	    if (strcmp(name, kp->name) == 0)
-		return((unsigned int *)((int)kregp + kp->offset));
+		return((int *)((int)kregp + kp->offset));
 	}
 	return(0);
 }
@@ -193,9 +192,11 @@ db_i386_reg_value(
 	db_var_aux_param_t	ap)
 {
 	extern char		etext;
-	unsigned int		*dp = 0;
+	int			*dp = 0;
 	db_expr_t		null_reg = 0;
 	register thread_t	thr_act = ap->thr_act;
+	extern unsigned		int_stack_high;
+	int			cpu;
 
 	if (db_option(ap->modif, 'u')) {
 	    if (thr_act == THREAD_NULL) {
@@ -205,36 +206,38 @@ db_i386_reg_value(
 	    if (thr_act == current_thread()) {
 		if (IS_USER_TRAP(&ddb_regs, &etext))
 		    dp = vp->valuep;
+		else if (ddb_regs.ebp < int_stack_high)
+		    db_error("cannot get/set user registers in nested interrupt\n");
 	    }
 	} else {
 	    if (thr_act == THREAD_NULL || thr_act == current_thread()) {
 		dp = vp->valuep;
 	    } else {
-	      if (thr_act &&
-	      (thr_act->continuation != THREAD_CONTINUE_NULL) &&
-	      thr_act->kernel_stack) {
+	      if (thr_act->thread &&
+		  !(thr_act->thread->state & TH_STACK_HANDOFF) && 
+			thr_act->thread->kernel_stack) {
 		int cpu;
 
 		for (cpu = 0; cpu < real_ncpus; cpu++) {
 		    if (cpu_datap(cpu)->cpu_running == TRUE &&
-			cpu_datap(cpu)->cpu_active_thread == thr_act && cpu_datap(cpu)->cpu_kdb_saved_state) {
-			dp = (unsigned int *) (((unsigned int)cpu_datap(cpu)->cpu_kdb_saved_state) +
-				      (((unsigned int) vp->valuep) -
-				       (unsigned int) &ddb_regs));
+			cpu_datap(cpu)->cpu_active_thread == thr_act->thread && saved_state[cpu]) {
+			dp = (int *) (((int)saved_state[cpu]) +
+				      (((int) vp->valuep) -
+				       (int) &ddb_regs));
 			break;
 		    }
 		}
-		if (dp == 0 && thr_act)
+		if (dp == 0 && thr_act && thr_act->thread)
 		    dp = db_lookup_i386_kreg(vp->name,
-			 (unsigned int *)(STACK_IKS(thr_act->kernel_stack)));
+			 (int *)(STACK_IKS(thr_act->thread->kernel_stack)));
 		if (dp == 0)
 		    dp = &null_reg;
-	      } else if (thr_act &&
-	      (thr_act->continuation != THREAD_CONTINUE_NULL)) {
- 		/* only EIP is valid  */
- 		if (vp->valuep == (unsigned int *) &ddb_regs.eip) {
- 		    dp = (unsigned int *)(&thr_act->continuation);
- 		} else {
+	      } else if (thr_act->thread &&
+			 (thr_act->thread->state&TH_STACK_HANDOFF)){
+		/* only EIP is valid */
+		if (vp->valuep == (int *) &ddb_regs.eip) {
+		    dp = (int *)(&thr_act->thread->continuation);
+		} else {
 		    dp = &null_reg;
 		}
 	      }
@@ -246,10 +249,10 @@ db_i386_reg_value(
 	    if (!db_option(ap->modif, 'u')) {
 		for (cpu = 0; cpu < real_ncpus; cpu++) {
 		    if (cpu_datap(cpu)->cpu_running == TRUE &&
-		    	cpu_datap(cpu)->cpu_active_thread == thr_act && cpu_datap(cpu)->cpu_kdb_saved_state) {
-		    	    dp = (unsigned int *) (((unsigned int)cpu_datap(cpu)->cpu_kdb_saved_state) +
-					  (((unsigned int) vp->valuep) -
-					   (unsigned int) &ddb_regs));
+		    	cpu_datap(cpu)->cpu_active_thread == thr_act->thread && saved_state[cpu]) {
+		    	    dp = (int *) (((int)saved_state[cpu]) +
+					  (((int) vp->valuep) -
+					   (int) &ddb_regs));
 			    break;
 		    }
 		}
@@ -257,8 +260,8 @@ db_i386_reg_value(
 	    if (dp == 0) {
 		if (!thr_act || thr_act->machine.pcb == 0)
 		    db_error("no pcb\n");
-		dp = (unsigned int *)((unsigned int)(thr_act->machine.pcb->iss) + 
-			     ((unsigned int)vp->valuep - (unsigned int)&ddb_regs));
+		dp = (int *)((int)(&thr_act->machine.pcb->iss) + 
+			     ((int)vp->valuep - (int)&ddb_regs));
 	    }
 	}
 	if (flag == DB_VAR_SET)
@@ -363,33 +366,33 @@ db_nextframe(
 	int			frame_type,	/* in */
 	thread_t		thr_act)	/* in */
 {
-        x86_saved_state32_t	*iss32;
 	extern char *	trap_type[];
 	extern int	TRAP_TYPES;
 
+	struct i386_saved_state *saved_regs;
 	struct interrupt_frame *ifp;
+	struct i386_interrupt_state *isp;
 	task_t task = (thr_act != THREAD_NULL)? thr_act->task: TASK_NULL;
 
 	switch(frame_type) {
 	case TRAP:
 	    /*
 	     * We know that trap() has 1 argument and we know that
-	     * it is an (x86_saved_state32_t *).
+	     * it is an (strcut i386_saved_state *).
 	     */
-	    iss32 = (x86_saved_state32_t *)
-	                 db_get_task_value((int)&((*fp)->f_arg0),4,FALSE,task);
-	    
-	    if (iss32->trapno >= 0 && iss32->trapno < TRAP_TYPES) {
-	            db_printf(">>>>> %s trap at ",
-			      trap_type[iss32->trapno]);
+	    saved_regs = (struct i386_saved_state *)
+			db_get_task_value((int)&((*fp)->f_arg0),4,FALSE,task);
+	    if (saved_regs->trapno >= 0 && saved_regs->trapno < TRAP_TYPES) {
+		db_printf(">>>>> %s trap at ",
+			trap_type[saved_regs->trapno]);
 	    } else {
-	            db_printf(">>>>> trap (number %d) at ",
-			      iss32->trapno & 0xffff);
+		db_printf(">>>>> trap (number %d) at ",
+			saved_regs->trapno & 0xffff);
 	    }
-	    db_task_printsym(iss32->eip, DB_STGY_PROC, task);
+	    db_task_printsym(saved_regs->eip, DB_STGY_PROC, task);
 	    db_printf(" <<<<<\n");
-	    *fp = (struct i386_frame *)iss32->ebp;
-	    *ip = (db_addr_t)iss32->eip;
+	    *fp = (struct i386_frame *)saved_regs->ebp;
+	    *ip = (db_addr_t)saved_regs->eip;
 	    break;
 	case INTERRUPT:
 	    if (*lfp == 0) {
@@ -399,21 +402,19 @@ db_nextframe(
 	    db_printf(">>>>> interrupt at "); 
 	    ifp = (struct interrupt_frame *)(*lfp);
 	    *fp = ifp->if_frame;
-	    if (ifp->if_iretaddr == db_return_to_iret_symbol_value) {
-	            *ip = ((x86_saved_state32_t *) ifp->if_edx)->eip;
-	    } else
-	            *ip = (db_addr_t) ifp->if_eip;
+	    if (ifp->if_iretaddr == db_return_to_iret_symbol_value)
+		*ip = ((struct i386_interrupt_state *) ifp->if_edx)->eip;
+	    else
+		*ip = (db_addr_t) ifp->if_eip;
 	    db_task_printsym(*ip, DB_STGY_PROC, task);
 	    db_printf(" <<<<<\n");
 	    break;
 	case SYSCALL:
 	    if (thr_act != THREAD_NULL && thr_act->machine.pcb) {
-		    iss32 = (x86_saved_state32_t *)thr_act->machine.pcb->iss;
-
-		    *ip = (db_addr_t)(iss32->eip);
-		    *fp = (struct i386_frame *)(iss32->ebp);
+		*ip = (db_addr_t) thr_act->machine.pcb->iss.eip;
+		*fp = (struct i386_frame *) thr_act->machine.pcb->iss.ebp;
+		break;
 	    }
-	    break;
 	    /* falling down for unknown case */
 	default:
 	miss_frame:
@@ -434,7 +435,6 @@ db_stack_trace_cmd(
 	char		*modif)
 {
 	struct i386_frame *frame, *lastframe;
-        x86_saved_state32_t	*iss32;
 	int		*argp;
 	db_addr_t	callpc, lastcallpc;
 	int		frame_type;
@@ -475,17 +475,17 @@ db_stack_trace_cmd(
 	    if (!have_addr && !trace_thread) {
 		have_addr = TRUE;
 		trace_thread = TRUE;
-		act_list = &(current_task()->threads);
+		act_list = &(current_task()->thr_acts);
 		addr = (db_expr_t) queue_first(act_list);
 	    } else if (trace_thread) {
 		if (have_addr) {
 		    if (!db_check_act_address_valid((thread_t)addr)) {
 			if (db_lookup_task((task_t)addr) == -1)
 			    return;
-			act_list = &(((task_t)addr)->threads);
+			act_list = &(((task_t)addr)->thr_acts);
 			addr = (db_expr_t) queue_first(act_list);
 		    } else {
-			act_list = &(((thread_t)addr)->task->threads);
+			act_list = &(((thread_t)addr)->task->thr_acts);
 			thcount = db_lookup_task_act(((thread_t)addr)->task,
 							(thread_t)addr);
 		    }
@@ -498,7 +498,7 @@ db_stack_trace_cmd(
 			return;
 		    }
 		    have_addr = TRUE;
-		    act_list = &th->task->threads;
+		    act_list = &th->task->thr_acts;
 		    addr = (db_expr_t) queue_first(act_list);
 		}
 	    }
@@ -518,13 +518,11 @@ db_stack_trace_cmd(
 	    callpc = (db_addr_t)ddb_regs.eip;
 	    th = current_thread();
 	    task = (th != THREAD_NULL)? th->task: TASK_NULL;
-	    db_printf("thread 0x%x, current_thread() is 0x%x, ebp is 0x%x, eip is 0x%x\n", th, current_thread(), ddb_regs.ebp, ddb_regs.eip);
 	} else if (trace_thread) {
 	    if (have_addr) {
 		th = (thread_t) addr;
-		if (!db_check_act_address_valid(th)) {
-			return;
-		}
+		if (!db_check_act_address_valid(th))
+		    return;
 	    } else {
 		th = db_default_act;
 		if (th == THREAD_NULL)
@@ -536,11 +534,11 @@ db_stack_trace_cmd(
 	    }
 	    if (trace_all_threads)
 		db_printf("---------- Thread 0x%x (#%d of %d) ----------\n",
-		addr, thcount, th->task->thread_count);
+		      addr, thcount, th->task->thr_act_count);
 
 	next_activation:
 	    user_frame = 0;
-//	    kprintf("th is %x, current_thread() is %x, ddb_regs.ebp is %x ddb_regs.eip is %x\n", th, current_thread(), ddb_regs.ebp, ddb_regs.eip);
+
 	    task = th->task;
 	    if (th == current_thread()) {
 	        frame = (struct i386_frame *)ddb_regs.ebp;
@@ -550,31 +548,36 @@ db_stack_trace_cmd(
 		    db_printf("thread has no pcb\n");
 		    return;
 		}
-		if (!th) {
-		    db_printf("thread has no shuttle\n");
+		if (!th->thread) {
+		    register struct i386_saved_state *iss =
+						&th->machine.pcb->iss;
 
+		    db_printf("thread has no shuttle\n");
+#if 0
+		    frame = (struct i386_frame *) (iss->ebp);
+		    callpc = (db_addr_t) (iss->eip);
+#else
 		    goto thread_done;
+#endif
 		}
-		else if ( (th->continuation != THREAD_CONTINUE_NULL) || 
-			  th->kernel_stack == 0) {
+		else if ((th->thread->state & TH_STACK_HANDOFF) ||
+			  th->thread->kernel_stack == 0) {
+		    register struct i386_saved_state *iss =
+						&th->machine.pcb->iss;
 
 		    db_printf("Continuation ");
-		    db_task_printsym((db_expr_t)th->continuation,
+		    db_task_printsym((db_expr_t)th->thread->continuation,
 							DB_STGY_PROC, task);
 		    db_printf("\n");
-
-		    iss32 = (x86_saved_state32_t *)th->machine.pcb->iss;
-
-		    frame = (struct i386_frame *) (iss32->ebp);
-		    callpc = (db_addr_t) (iss32->eip);
-
+		    frame = (struct i386_frame *) (iss->ebp);
+		    callpc = (db_addr_t) (iss->eip);
 		} else {
 		    int cpu;
 
 		    for (cpu = 0; cpu < real_ncpus; cpu++) {
 			if (cpu_datap(cpu)->cpu_running == TRUE &&
-			    cpu_datap(cpu)->cpu_active_thread == th &&
-			    cpu_datap(cpu)->cpu_kdb_saved_state) {
+			    cpu_datap(cpu)->cpu_active_thread == th->thread &&
+			    saved_state[cpu]) {
 			    break;
 			}
 		    }
@@ -584,16 +587,16 @@ db_stack_trace_cmd(
 			     * which is not the top_most one in the RPC chain:
 			     * use the activation's pcb.
 			     */
-		            iss32 = (x86_saved_state32_t *)th->machine.pcb->iss;
-
-			    frame = (struct i386_frame *) (iss32->ebp);
-			    callpc = (db_addr_t) (iss32->eip);
+			    register struct i386_saved_state *iss =
+				&th->machine.pcb->iss;
+			    frame = (struct i386_frame *) (iss->ebp);
+			    callpc = (db_addr_t) (iss->eip);
 		    } else {
-			    if (cpu == real_ncpus) {
-			    register struct x86_kernel_state32 *iks;
+			if (cpu == NCPUS) {
+			    register struct i386_kernel_state *iks;
 			    int r;
 
-			    iks = STACK_IKS(th->kernel_stack);
+			    iks = STACK_IKS(th->thread->kernel_stack);
 			    prev = db_recover;
 			    if ((r = _setjmp(db_recover = &db_jmp_buf)) == 0) {
 				frame = (struct i386_frame *) (iks->k_ebp);
@@ -615,11 +618,9 @@ db_stack_trace_cmd(
 			} else {
 			    db_printf(">>>>> active on cpu %d <<<<<\n",
 				      cpu);
-
-			    iss32 = (x86_saved_state32_t *)cpu_datap(cpu)->cpu_kdb_saved_state;
-
-			    frame = (struct i386_frame *) (iss32->ebp);
-			    callpc = (db_addr_t) (iss32->eip);
+			    frame = (struct i386_frame *)
+				saved_state[cpu]->ebp;
+			    callpc = (db_addr_t) saved_state[cpu]->eip;
 			}
 		    }
 	        }
@@ -639,18 +640,19 @@ db_stack_trace_cmd(
 	    if (kernel_only)
 		goto thread_done;
 	    user_frame++;
+	} else if (INKSERVER(callpc) && INKSERVER(frame)) {
+	    db_printf(">>>>> INKserver space <<<<<\n");
 	}
 
 	lastframe = 0;
 	lastcallpc = (db_addr_t) 0;
 	while (frame_count-- && frame != 0) {
-	    int narg = DB_NUMARGS_MAX;
+	    int narg;
 	    char *	name;
 	    db_expr_t	offset;
 	    db_addr_t call_func = 0;
 	    int r;
-	    db_addr_t	off;
-	    
+
 	    db_symbol_values(NULL,
 			     db_search_task_symbol_and_line(
 					callpc,
@@ -661,22 +663,15 @@ db_stack_trace_cmd(
 					(user_frame) ? task : 0,
 					&narg),
 			     &name, (db_expr_t *)&call_func);
-	    if ( name == NULL) {
-		    db_find_task_sym_and_offset(callpc, 
-		    &name, &off, (user_frame) ? task : 0);
-		    offset = (db_expr_t) off;
-		}
-
 	    if (user_frame == 0) {
-		if (call_func && call_func == db_user_trap_symbol_value ||
+		if (call_func == db_user_trap_symbol_value ||
 		    call_func == db_kernel_trap_symbol_value) {
 		    frame_type = TRAP;
 		    narg = 1;
-		} else if (call_func &&
-		    call_func == db_interrupt_symbol_value) {
+		} else if (call_func == db_interrupt_symbol_value) {
 		    frame_type = INTERRUPT;
 		    goto next_frame;
-		} else if (call_func && call_func == db_syscall_symbol_value) {
+		} else if (call_func == db_syscall_symbol_value) {
 		    frame_type = SYSCALL;
 		    goto next_frame;
 		} else {
@@ -764,10 +759,10 @@ db_stack_trace_cmd(
 			 (user_frame) ? th : THREAD_NULL);
 
 	    if (frame == 0) {
-		if (th->task_threads.prev != THREAD_NULL) {
+		if (th->lower != THREAD_NULL) {
 		    if (top_act == THREAD_NULL)
 			top_act = th;
-		    th = th->task_threads.prev;
+		    th = th->lower;
 		    db_printf(">>>>> next activation 0x%x ($task%d.%d) <<<<<\n",
 			      th,
 			      db_lookup_task(th->task),
@@ -784,10 +779,14 @@ db_stack_trace_cmd(
 		db_printf(">>>>> user space <<<<<\n");
 		if (kernel_only)
 		    break;
+	    } else if ((!INKSERVER(lastframe) || !INKSERVER(lastcallpc)) &&
+			(INKSERVER(callpc) && INKSERVER(frame))) {
+		db_printf(">>>>> inkserver space <<<<<\n");
 	    }
 	    if (frame <= lastframe) {
 		if ((INKERNELSTACK(lastframe, th) &&
-			!INKERNELSTACK(frame, th)))
+		     !INKERNELSTACK(frame, th)) ||
+		    (INKSERVER(lastframe) ^ INKSERVER(frame)))
 		    continue;
 		db_printf("Bad frame pointer: 0x%x\n", frame);
 		break;
@@ -798,7 +797,7 @@ db_stack_trace_cmd(
 	if (trace_all_threads) {
 	    if (top_act != THREAD_NULL)
 		th = top_act;
-	    th = (thread_t) queue_next(&th->task_threads);
+	    th = (thread_t) queue_next(&th->thr_acts);
 	    if (! queue_end(act_list, (queue_entry_t) th)) {
 		db_printf("\n");
 		addr = (db_expr_t) th;
@@ -807,64 +806,4 @@ db_stack_trace_cmd(
 
 	    }
 	}
-}
-
-extern int kdp_vm_read(caddr_t, caddr_t, unsigned int );
-extern boolean_t kdp_trans_off;
-/*
- *		Print out 256 bytes of real storage
- *		
- *		dr [entaddr]
- */
-void db_display_real(db_expr_t addr, __unused int have_addr,  __unused db_expr_t count,  __unused char * modif) {
-
-	int				i;
-	unsigned int xbuf[8];
-	unsigned read_result = 0;
-/* Print 256 bytes */
-	for(i=0; i<8; i++) {
-
-/* Do a physical read using kdp_vm_read(), rather than replicating the same
- * facility
- */
-		kdp_trans_off = 1;
-		read_result = kdp_vm_read(addr, &xbuf[0], 32);
-		kdp_trans_off = 0;
-
-		if (read_result != 32)
-			db_printf("Unable to read address\n");
-		else
-			db_printf("%016llX   %08X %08X %08X %08X  %08X %08X %08X %08X\n", addr,	/* Print a line */
-			    xbuf[0], xbuf[1], xbuf[2], xbuf[3], 
-			    xbuf[4], xbuf[5], xbuf[6], xbuf[7]);
-		addr = addr + 0x00000020;							/* Point to next address */
-	}
-	db_next = addr;
-}
-
-/*
- *	Displays all of the kmods in the system.
- *
-  *	dk
- */
-void 
-db_display_kmod(__unused db_expr_t addr, __unused int have_addr, __unused db_expr_t count, __unused char *modif)
-{
-
-	kmod_info_t    *kmd;
-	unsigned int    strt, end;
-
-	kmd = kmod;		/* Start at the start */
-
-	db_printf("info      addr      start    - end       name ver\n");
-
-	while (kmd) {		/* Dump 'em all */
-		strt = (unsigned int) kmd->address + kmd->hdr_size;
-		end = (unsigned int) kmd->address + kmd->size;
-		db_printf("%08X  %08X  %08X - %08X: %s, %s\n",
-			kmd, kmd->address, strt, end, kmd->name, kmd->version);
-		kmd = kmd->next;
-	}
-
-	return;
 }

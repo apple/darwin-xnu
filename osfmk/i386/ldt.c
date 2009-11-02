@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -65,42 +59,46 @@
 #include <mach/i386/vm_types.h>
 #include <mach/i386/vm_param.h>
 
+extern int	syscall(void);
+extern int	mach_rpc(void);
 
-struct fake_descriptor	master_ldt[LDTSZ] __attribute__ ((aligned (4096))) = {
-	[SEL_TO_INDEX(SYSENTER_CS)] {	/* kernel code (sysenter) */
-		0,
-		0xfffff,
-		SZ_32|SZ_G,
-		ACC_P|ACC_PL_K|ACC_CODE_R
-	},
-	[SEL_TO_INDEX(SYSENTER_DS)] {	/* kernel data (sysenter) */
-		0,
-		0xfffff,
-		SZ_32|SZ_G,
-		ACC_P|ACC_PL_K|ACC_DATA_W
-	},
-	[SEL_TO_INDEX(USER_CS)] {	/* user code segment */
-		0,
-		0xfffff,
-		SZ_32|SZ_G,
-		ACC_P|ACC_PL_U|ACC_CODE_R
-	},
-	[SEL_TO_INDEX(USER_DS)] {	/* user data segment */
-		0,
-		0xfffff,
-		SZ_32|SZ_G,
-		ACC_P|ACC_PL_U|ACC_DATA_W
-	},
-	[SEL_TO_INDEX(USER64_CS)] {	/* user 64-bit code segment */
-		0,
-		0xfffff,
-		SZ_64|SZ_G,
-		ACC_P|ACC_PL_U|ACC_CODE_R
-	},
-	[SEL_TO_INDEX(USER_CTHREAD)] {	/* user cthread segment */
-		0,
-		0xfffff,
-		SZ_32|SZ_G,
-		ACC_P|ACC_PL_U|ACC_DATA_W
-	},
+struct fake_descriptor	ldt[LDTSZ] = {
+/*007*/	{ (unsigned int)&syscall,
+	  KERNEL_CS,
+	  0,				/* no parameters */
+	  ACC_P|ACC_PL_U|ACC_CALL_GATE
+	},				/* call gate for system calls */
+/*00F*/	{ (unsigned int)&mach_rpc,
+          KERNEL_CS,
+          0,                            /* no parameters */
+          ACC_P|ACC_PL_U|ACC_CALL_GATE
+        },				/* call gate for mach rpc */
+/*017*/	{ 0,
+	  0xfffff,
+ 	  SZ_32|SZ_G,
+	  ACC_P|ACC_PL_U|ACC_CODE_R
+	},				/* user code segment */
+/*01F*/	{ 0,
+	  0xfffff,
+	  SZ_32|SZ_G,
+	  ACC_P|ACC_PL_U|ACC_DATA_W
+	},				/* user data segment */
+/*027*/	{ 0,
+	  0xfffff,
+	  SZ_32|SZ_G,
+	  ACC_P|ACC_PL_U|ACC_DATA_W
+	},				/* user cthread segment */
+// Storage space for user ldt entries we will make room for 10 entries initially
+// as we will probably never need many more than that
+/*02F*/	{ 0, 0, 0, 0},
+/*037*/	{ 0, 0, 0, 0},
+/*03F*/	{ 0, 0, 0, 0},
+/*047*/	{ 0, 0, 0, 0},
+/*04F*/	{ 0, 0, 0, 0},
+/*057*/	{ 0, 0, 0, 0},
+/*05F*/	{ 0, 0, 0, 0},
+/*067*/	{ 0, 0, 0, 0},
+/*06F*/	{ 0, 0, 0, 0},
+/*077*/	{ 0, 0, 0, 0},
+
 };

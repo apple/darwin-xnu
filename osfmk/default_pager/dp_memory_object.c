@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -356,20 +350,6 @@ default_pager_add(
 }
 
 #endif
-
-const struct memory_object_pager_ops default_pager_ops = {
-	dp_memory_object_reference,
-	dp_memory_object_deallocate,
-	dp_memory_object_init,
-	dp_memory_object_terminate,
-	dp_memory_object_data_request,
-	dp_memory_object_data_return,
-	dp_memory_object_data_initialize,
-	dp_memory_object_data_unlock,
-	dp_memory_object_synchronize,
-	dp_memory_object_unmap,
-	"default pager"
-};
 
 kern_return_t
 dp_memory_object_init(
@@ -729,7 +709,7 @@ dp_memory_object_data_return(
 		/* a synchronous interface */
 		/* return KERN_LOCK_OWNED; */
 		upl_t		upl;
-		unsigned int	page_list_count = 0;
+		int		page_list_count = 0;
 		memory_object_super_upl_request(vs->vs_control,
 					(memory_object_offset_t)offset,
 					size, size,
@@ -744,8 +724,8 @@ dp_memory_object_data_return(
 	if ((vs->vs_seqno != vs->vs_next_seqno++)
 			|| (vs->vs_readers)
 			|| (vs->vs_xfer_pending)) {
-		upl_t		upl;
-		unsigned int	page_list_count = 0;
+		upl_t	upl;
+		int	page_list_count = 0;
 
 		vs->vs_next_seqno--;
                 VS_UNLOCK(vs);
@@ -829,7 +809,7 @@ default_pager_memory_object_create(
 	 * and this default_pager structure
 	 */
 
-	vs->vs_pager_ops = &default_pager_ops;
+	vs->vs_mem_obj = ISVS;
 	vs->vs_mem_obj_ikot = IKOT_MEMORY_OBJECT;
 
 	/*
@@ -864,7 +844,7 @@ default_pager_object_create(
 	 * Set up associations between the default pager
 	 * and this vstruct structure
 	 */
-	vs->vs_pager_ops = &default_pager_ops;
+	vs->vs_mem_obj = ISVS;
 	vstruct_list_insert(vs);
 	*mem_objp = vs_to_mem_obj(vs);
 	return KERN_SUCCESS;

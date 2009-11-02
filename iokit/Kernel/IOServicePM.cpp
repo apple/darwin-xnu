@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 
 #include <IOKit/assert.h>
@@ -43,7 +37,6 @@
 #include <IOKit/pwr_mgt/IOPMlog.h>
 #include <IOKit/pwr_mgt/IOPowerConnection.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
-
 
 // Required for notification instrumentation
 #include "IOServicePrivate.h"
@@ -288,13 +281,8 @@ void IOService::PMinit ( void )
         pm_vars->responseFlags = NULL;
         pm_vars->doNotPowerDown = true;
         pm_vars->PMcommandGate = NULL;
-        priv->ackTimer = thread_call_allocate(
-                        (thread_call_func_t)ack_timer_expired, 
-                        (thread_call_param_t)this);
-        priv->settleTimer = thread_call_allocate(
-                        (thread_call_func_t)settle_timer_expired, 
-                        (thread_call_param_t)this);
-        
+        priv->ackTimer = thread_call_allocate((thread_call_func_t)ack_timer_expired, (thread_call_param_t)this);
+        priv->settleTimer = thread_call_allocate((thread_call_func_t)settle_timer_expired, (thread_call_param_t)this);
         initialized = true;
     }
 }
@@ -597,7 +585,7 @@ IOReturn IOService::addPowerChild ( IOService * theChild )
     // Put ourselves into a usable power state.
     // We must be in an "on" power state, as our children must be able to access
     // our hardware after joining the power plane.
-    temporaryMakeUsable();
+    makeUsable();
     
     // make a nub
     connection = new IOPowerConnection;			
@@ -643,13 +631,14 @@ IOReturn IOService::addPowerChild ( IOService * theChild )
 }
 
 
-//******************************************************************************
+//*********************************************************************************
 // removePowerChild
 //
-//******************************************************************************
+//*********************************************************************************
 IOReturn IOService::removePowerChild ( IOPowerConnection * theNub )
 {
     IORegistryEntry                         *theChild;
+    OSIterator                              *iter;
 
     pm_vars->thePlatform->PMLog(pm_vars->ourName,PMlogRemoveChild,0,0);
 
@@ -675,7 +664,7 @@ IOReturn IOService::removePowerChild ( IOPowerConnection * theNub )
             if (priv->head_note_pendingAcks != 0 ) 
             {
                 // that's one fewer ack to worry about
-                OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
+                priv->head_note_pendingAcks -= 1;
                 // is that the last?
                 if ( priv->head_note_pendingAcks == 0 ) 
                 {
@@ -704,13 +693,25 @@ IOReturn IOService::removePowerChild ( IOPowerConnection * theNub )
         return IOPMNoErr;				
     }
 
-    // Perhaps the departing child was holding up idle or system sleep - we 
-    // need to re-evaluate our childrens' requests. 
-    // Clear and re-calculate our kIOPMChildClamp and kIOPMChildClamp2 bits.
+    // Perhaps the departing child was holding up idle or system sleep - we need to re-evaluate our
+    // childrens' requests. Clear and re-calculate our kIOPMChildClamp and kIOPMChildClamp2 bits.
     rebuildChildClampBits();
     
-    // Change state if we can now tolerate lower power
+    if(!priv->clampOn)
+    {
+        // count children
+        iter = getChildIterator(gIOPowerPlane);
+        if ( !iter || !iter->getNextObject()  ) 
+        {
+            // paired to match the makeUsable() call in addPowerChild()
+            changePowerStateToPriv(0);
+        }
+        if(iter) iter->release();
+    }
+    
+    // this may be different now
     computeDesiredState();
+    // change state if we can now tolerate lower power
     changeState();
 
     return IOPMNoErr;
@@ -945,7 +946,7 @@ IOReturn IOService::acknowledgePowerChange ( IOService * whichObject )
                 // mark it acked
                 ackingObject->timer = 0;
                 // that's one fewer to worry about
-                OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
+                priv->head_note_pendingAcks -= 1;
                 // is that the last?
                 if ( priv->head_note_pendingAcks == 0 ) 
                 {
@@ -967,7 +968,7 @@ IOReturn IOService::acknowledgePowerChange ( IOService * whichObject )
             if ( ((IOPowerConnection *)whichObject)->getAwaitingAck() ) 
             {
                 // that's one fewer to worry about
-                OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
+                priv->head_note_pendingAcks -= 1;
                 ((IOPowerConnection *)whichObject)->setAwaitingAck(false);
                 theChild = (IOService *)whichObject->copyChildEntry(gIOPowerPlane);
                 if ( theChild ) 
@@ -1050,7 +1051,6 @@ IOReturn IOService::acknowledgeSetPowerState ( void )
 
 void IOService::driver_acked ( void )
 {
-
     switch (priv->machine_state) {
         case kIOPM_OurChangeWaitForPowerSettle:
             OurChangeWaitForPowerSettle();
@@ -1458,40 +1458,6 @@ IOReturn IOService::makeUsable ( void )
     return IOPMNoErr;
 }
 
-//******************************************************************************
-// temporaryMakeUsable
-//
-// Private function, called by IOService::addPowerChild to ensure that the
-// device is temporarily in a usable power state so that attached power  
-// children may properly initialize.
-//******************************************************************************
-
-IOReturn IOService::temporaryMakeUsable ( void )
-{
-    IOReturn        ret = kIOReturnSuccess;
-    unsigned long   tempDesire;
-    
-    pm_vars->thePlatform->PMLog( pm_vars->ourName,
-                                 PMlogMakeUsable,
-                                 PMlogMakeUsable,
-                                 priv->deviceDesire);
-
-    if ( pm_vars->theControllingDriver == NULL ) 
-    {
-        priv->need_to_become_usable = true;
-        return IOPMNoErr;
-    }
-    tempDesire = priv->deviceDesire;
-    priv->deviceDesire = pm_vars->theNumberOfPowerStates - 1;
-    computeDesiredState();
-    if ( inPlane(gIOPowerPlane) && (pm_vars->parentsKnowState) ) 
-    {
-        ret = changeState();
-    }
-    priv->deviceDesire = tempDesire;
-    return ret;
-}
-
 
 //*********************************************************************************
 // currentCapability
@@ -1896,13 +1862,9 @@ void IOService::PM_idle_timer_expiration ( void )
         }
         if ( pm_vars->myCurrentState > 0 ) 
         {
-        	
-        	unsigned long	newState = pm_vars->myCurrentState - 1;
-        	
             IOUnlock(priv->activityLock);
-            changePowerStateToPriv(newState);
-            if ( newState >= priv->ourDesiredPowerState )
-            	start_PM_idle_timer();
+            changePowerStateToPriv(pm_vars->myCurrentState - 1);
+            start_PM_idle_timer();
             return;
         }
         IOUnlock(priv->activityLock);
@@ -2135,12 +2097,7 @@ IOReturn IOService::powerOverrideOffPriv ( void )
 // needn't perform the previous change, so we collapse the list a little.
 //*********************************************************************************
 
-IOReturn IOService::enqueuePowerChange ( 
-    unsigned long flags,  
-    unsigned long whatStateOrdinal, 
-    unsigned long domainState, 
-    IOPowerConnection * whichParent, 
-    unsigned long singleParentState )
+IOReturn IOService::enqueuePowerChange ( unsigned long flags,  unsigned long whatStateOrdinal, unsigned long domainState, IOPowerConnection * whichParent, unsigned long singleParentState )
 {
     long                            newNote;
     long                            previousNote;
@@ -2229,35 +2186,26 @@ IOReturn IOService::notifyAll ( bool is_prechange )
     OSObject *			next;
     IOPowerConnection *	connection;
 
-    // To prevent acknowledgePowerChange from finishing the change note and 
-    // removing it from the queue if
-    // some driver calls it, we inflate the number of pending acks so it 
-    // cannot become zero.  We'll fix it later.
-    
-    if(!acquire_lock()) return IOPMAckImplied;
+    // To prevent acknowledgePowerChange from finishing the change note and removing it from the queue if
+    // some driver calls it, we inflate the number of pending acks so it cannot become zero.  We'll fix it later.
 
-    OSAddAtomic(1, (SInt32*)&priv->head_note_pendingAcks);
+    priv->head_note_pendingAcks =1;
 
-    // OK, we will go through the lists of interested drivers and 
-    // power domain children and notify each one of this change.
-    
+    // OK, we will go through the lists of interested drivers and power domain children
+    // and notify each one of this change.
+
     nextObject =  priv->interestedDrivers->firstInList();
     while (  nextObject != NULL ) {
-
-        OSAddAtomic(1, (SInt32*)&priv->head_note_pendingAcks);
-
-        IOUnlock(priv->our_lock);
-
-        inform(nextObject, is_prechange);
-        
-        if(!acquire_lock())
+        priv->head_note_pendingAcks +=1;
+        if (! inform(nextObject, is_prechange) ) 
         {
-            goto exit;
         }
-        
         nextObject  =  priv->interestedDrivers->nextInList(nextObject);
     }
 
+    if (! acquire_lock() ) {
+        return IOPMNoErr;
+    }
     // did they all ack?
     if ( priv->head_note_pendingAcks > 1 ) {
         // no
@@ -2272,34 +2220,24 @@ IOReturn IOService::notifyAll ( bool is_prechange )
     // summing their power consumption
     pm_vars->thePowerStates[priv->head_note_state].staticPower = 0;
 
-    if ( iter && acquire_lock()) 
+    if ( iter ) 
     {
         while ( (next = iter->getNextObject()) ) 
         {
             if ( (connection = OSDynamicCast(IOPowerConnection,next)) ) 
             {
-                OSAddAtomic(1, (SInt32*)&priv->head_note_pendingAcks);
-                
-                IOUnlock(priv->our_lock);
-
+                priv->head_note_pendingAcks +=1;
                 notifyChild(connection, is_prechange);
-            
-                if(!acquire_lock())
-                {
-                    goto exit;
-                }
             }
         }
         iter->release();
-        IOUnlock(priv->our_lock);
     }
 
     if (! acquire_lock() ) {
         return IOPMNoErr;
     }
     // now make this real
-    OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
-
+    priv->head_note_pendingAcks -= 1;
     // is it all acked?
     if (priv->head_note_pendingAcks == 0 ) {
         // yes, all acked
@@ -2310,9 +2248,6 @@ IOReturn IOService::notifyAll ( bool is_prechange )
 
     // not all acked
     IOUnlock(priv->our_lock);
-
-exit:           // unable to acquire_lock exit case
-
     return IOPMWillAckLater;
 }
 
@@ -2337,12 +2272,7 @@ bool IOService::notifyChild ( IOPowerConnection * theNub, bool is_prechange )
         // The child has been detached since we grabbed the child iterator.
         // Decrement pending_acks, already incremented in notifyAll,
         // to account for this unexpected departure.
-
-        if( acquire_lock() ) 
-        {
-            OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
-            IOUnlock(priv->our_lock); 
-        }
+        priv->head_note_pendingAcks--;
         return true;
     }
     
@@ -2361,12 +2291,7 @@ bool IOService::notifyChild ( IOPowerConnection * theNub, bool is_prechange )
     if ( k == IOPMAckImplied ) 
     {
         // yes
-        if( acquire_lock() ) 
-        {
-            OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
-            IOUnlock(priv->our_lock); 
-        }
-        
+        priv->head_note_pendingAcks--;
         theNub->setAwaitingAck(false);
         childPower = theChild->currentPowerConsumption();
         if ( childPower == kIOPMUnknown ) 
@@ -2419,17 +2344,19 @@ bool IOService::inform ( IOPMinformee * nextObject, bool is_prechange )
         return true;
     }
     
-    if ( (k ==IOPMAckImplied)   // no, did the return code ack?
-      || (k < 0) )              // somebody goofed
+    // no, did the return code ack?
+    if ( k ==IOPMAckImplied ) 
     {
         // yes
         nextObject->timer = 0;
-
-        if( acquire_lock() ) 
-        {
-            OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
-            IOUnlock(priv->our_lock); 
-        }
+        priv->head_note_pendingAcks -= 1;
+        return true;
+    }
+    if ( k<0 ) 
+    {
+        // somebody goofed
+        nextObject->timer = 0;
+        priv-> head_note_pendingAcks -= 1;
         return true;
     }
     
@@ -2526,18 +2453,14 @@ void IOService::OurChangeSetPowerState ( void )
 {
     priv->machine_state = kIOPM_OurChangeWaitForPowerSettle;
 
-    IOLockLock(priv->our_lock);
-
     if ( instruct_driver(priv->head_note_state) == IOPMAckImplied ) 
     {
         // it's done, carry on
-        IOLockUnlock(priv->our_lock);
         OurChangeWaitForPowerSettle();
     } else {
         // it's not, wait for it
         pm_vars->thePlatform->PMLog(pm_vars->ourName,PMlogStartAckTimer,0,0);
         start_ack_timer();
-        IOLockUnlock(priv->our_lock);
         // execution will resume via ack_timer_ticked()
     }
 }
@@ -2717,18 +2640,14 @@ IOReturn IOService::ParentDownSetPowerState_Immediate ( void )
 {
     priv->machine_state = kIOPM_ParentDownWaitForPowerSettle_Delayed;
 
-    IOLockLock(priv->our_lock);
-
     if ( instruct_driver(priv->head_note_state) == IOPMAckImplied ) 
     {
         // it's done, carry on
-        IOLockUnlock(priv->our_lock);
         return ParentDownWaitForPowerSettleAndNotifyDidChange_Immediate();
     }
     // it's not, wait for it
     pm_vars->thePlatform->PMLog(pm_vars->ourName,PMlogStartAckTimer,0,0);
     start_ack_timer();
-    IOLockUnlock(priv->our_lock);
     return IOPMWillAckLater;
 }
 
@@ -2749,18 +2668,14 @@ void IOService::ParentDownSetPowerState_Delayed ( void )
 {
     priv-> machine_state = kIOPM_ParentDownWaitForPowerSettle_Delayed;
 
-    IOLockLock(priv->our_lock);
-
     if ( instruct_driver(priv->head_note_state) == IOPMAckImplied ) 
     {
         // it's done, carry on
-        IOLockUnlock(priv->our_lock);
         ParentDownWaitForPowerSettle_Delayed();
     } else {
         // it's not, wait for it
         pm_vars->thePlatform->PMLog(pm_vars->ourName,PMlogStartAckTimer,0,0);
         start_ack_timer();
-        IOLockUnlock(priv->our_lock);
     }
 }
 
@@ -2905,18 +2820,14 @@ void IOService::ParentUpSetPowerState_Delayed ( void )
 {
     priv->machine_state = kIOPM_ParentUpWaitForSettleTime_Delayed;
  
-    IOLockLock(priv->our_lock);
- 
     if ( instruct_driver(priv->head_note_state) == IOPMAckImplied ) 
     {
         // it did it, carry on
-        IOLockUnlock(priv->our_lock);
         ParentUpWaitForSettleTime_Delayed();
     } else {
         // it didn't, wait for it
         pm_vars->thePlatform->PMLog(pm_vars->ourName,PMlogStartAckTimer,0,0);
         start_ack_timer();
-        IOLockUnlock(priv->our_lock);
     }
 }
 
@@ -2936,19 +2847,15 @@ IOReturn IOService::ParentUpSetPowerState_Immediate ( void )
 {
     priv->machine_state = kIOPM_ParentUpWaitForSettleTime_Delayed;
 
-    IOLockLock(priv->our_lock);
-
     if ( instruct_driver(priv->head_note_state) == IOPMAckImplied ) 
     {
         // it did it, carry on
-        IOLockUnlock(priv->our_lock);
         return ParentUpWaitForSettleTime_Immediate();
     }
     else {
         // it didn't, wait for it
         pm_vars->thePlatform->PMLog(pm_vars->ourName,PMlogStartAckTimer,0,0);
         start_ack_timer();
-        IOLockUnlock(priv->our_lock);
         return IOPMWillAckLater;
     }
 }
@@ -3162,7 +3069,6 @@ void IOService::all_done ( void )
             start_our_change(priv->head_note);
         } else {
             nub = priv->changeList->changeNote[priv->head_note].parent;
-            if (nub) nub->retain(); // might be released by start_parent_change()
             if ( start_parent_change(priv->head_note) == IOPMAckImplied ) 
             {
                 parent = (IOService *)nub->copyParentEntry(gIOPowerPlane);
@@ -3172,7 +3078,6 @@ void IOService::all_done ( void )
                     parent->release();
                 }
             }
-            if (nub) nub->release();
         }
     } else {
         IOLockUnlock(priv->queue_lock);
@@ -3190,9 +3095,7 @@ void IOService::all_done ( void )
 //
 //*********************************************************************************
 
-
-
-void IOService::all_acked( void )
+void IOService::all_acked ( void )
 {
     switch (priv->machine_state) {
        case kIOPM_OurChangeSetPowerState:
@@ -3377,7 +3280,7 @@ void IOService::ack_timer_ticked ( void )
                         {
                             pm_vars->thePlatform->PMLog(pm_vars->ourName,PMlogIntDriverTardy,0,0);
                             //kprintf("interested driver tardy: %s\n",nextObject->whatObject->getName());
-                            OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
+                            priv->head_note_pendingAcks -= 1;
                         }
                     }
                     nextObject  =  priv->interestedDrivers->nextInList(nextObject);
@@ -3555,19 +3458,18 @@ IOReturn IOService::add_child_to_active_change ( IOPowerConnection * newObject )
         case kIOPM_ParentDownSetPowerState_Delayed:
         case kIOPM_ParentUpSetPowerState_Delayed:
             // one for this child and one to prevent
-            OSAddAtomic(2, (SInt32*)&priv->head_note_pendingAcks);
+            priv->head_note_pendingAcks += 2;
             // incoming acks from changing our state
             IOUnlock(priv->our_lock);
             notifyChild(newObject, true);
             if (! acquire_lock() ) 
             {
                 // put it back
-                OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
+                --priv->head_note_pendingAcks;
                 return IOPMNoErr;
             }
             // are we still waiting for acks?
-            OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
-            if ( priv->head_note_pendingAcks == 0 ) 
+            if ( --priv->head_note_pendingAcks == 0 ) 
             {
                 // no, stop the timer
                 stop_ack_timer();
@@ -3582,19 +3484,18 @@ IOReturn IOService::add_child_to_active_change ( IOPowerConnection * newObject )
         case kIOPM_ParentDownAcknowledgeChange_Delayed:
         case kIOPM_ParentUpAcknowledgePowerChange_Delayed:
             // one for this child and one to prevent
-            OSAddAtomic(2, (SInt32*)&priv->head_note_pendingAcks);
+            priv->head_note_pendingAcks += 2;
             // incoming acks from changing our state
             IOUnlock(priv->our_lock);
             notifyChild(newObject, false);
             if (! acquire_lock() ) 
             {
                 // put it back
-                OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
+                --priv->head_note_pendingAcks;
                 return IOPMNoErr;
             }
             // are we still waiting for acks?
-            OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
-            if ( priv->head_note_pendingAcks == 0 ) 
+            if ( --priv->head_note_pendingAcks == 0 ) 
             {
                 // no, stop the timer
                 stop_ack_timer();
@@ -3632,7 +3533,7 @@ IOReturn IOService::add_driver_to_active_change ( IOPMinformee * newObject )
         case kIOPM_ParentDownSetPowerState_Delayed:
         case kIOPM_ParentUpSetPowerState_Delayed:
             // one for this driver and one to prevent
-            OSAddAtomic(2, (SInt32*)&priv->head_note_pendingAcks);
+            priv->head_note_pendingAcks += 2;
             // incoming acks from changing our state
             IOUnlock(priv->our_lock);
             // inform the driver
@@ -3640,12 +3541,11 @@ IOReturn IOService::add_driver_to_active_change ( IOPMinformee * newObject )
             if (! acquire_lock() ) 
             {
                 // put it back
-                OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
+                --priv->head_note_pendingAcks;
                 return IOPMNoErr;
             }
             // are we still waiting for acks?
-            OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
-            if ( priv->head_note_pendingAcks == 0 ) 
+            if ( --priv->head_note_pendingAcks == 0 ) 
             {
                 // no, stop the timer
                 stop_ack_timer();
@@ -3660,19 +3560,18 @@ IOReturn IOService::add_driver_to_active_change ( IOPMinformee * newObject )
         case kIOPM_ParentDownAcknowledgeChange_Delayed:
         case kIOPM_ParentUpAcknowledgePowerChange_Delayed:
             // one for this driver and one to prevent
-            OSAddAtomic(2, (SInt32*)&priv->head_note_pendingAcks);
+            priv->head_note_pendingAcks += 2;
             // incoming acks from changing our state
             IOUnlock(priv->our_lock);
             // inform the driver
             inform(newObject, false);
             if (! acquire_lock() ) {
                 // put it back
-                OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
+                --priv->head_note_pendingAcks;
                 return IOPMNoErr;
             }
             // are we still waiting for acks?
-            OSAddAtomic(-1, (SInt32*)&priv->head_note_pendingAcks);
-            if ( priv->head_note_pendingAcks == 0 ) {
+            if ( --priv->head_note_pendingAcks == 0 ) {
                 // no, stop the timer
                 stop_ack_timer();
                 IOUnlock(priv->our_lock);
@@ -3982,11 +3881,9 @@ IOReturn IOService::instruct_driver ( unsigned long newState )
     priv->driver_timer = -1;
 
     // yes, instruct it
-    IOLockUnlock(priv->our_lock);
     OUR_PMLog(          kPMLogProgramHardware, (UInt32) this, newState);
     delay = pm_vars->theControllingDriver->setPowerState( newState,this );
     OUR_PMLog((UInt32) -kPMLogProgramHardware, (UInt32) this, (UInt32) delay);
-    IOLockLock(priv->our_lock);
 
     // it finished
     if ( delay == IOPMAckImplied ) 

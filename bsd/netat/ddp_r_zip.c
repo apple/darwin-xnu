@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1988-1998 Apple Computer, Inc. 
@@ -446,7 +440,7 @@ static void zip_send_reply_to_query(mreceived, ifID)
 
 	/* access the number of nets requested in the Query */
 	network_count  = *((char *)(ddp_received->data) + 1);
-	NetAsked = (u_short *)(ddp_received->data + 2);
+	NetAsked = (u_short *)(ddp_received->data+ 2);
 
 	/* check the validity of the Query packet */
 
@@ -484,7 +478,7 @@ newPacket:
 	reply_length = 2;	/* 1st byte is ZIP reply code, 2nd is network count */
 
 	for (i = 0 ; i < network_count ; i ++, NetAsked++) {
-	  Entry = rt_blookup(ntohs(*NetAsked));
+	  Entry = rt_blookup(*NetAsked);
 
 	  if (Entry != NULL && ((Entry->EntryState & 0x0F) >= RTE_STATE_SUSPECT) &&
 	      RT_ALL_ZONES_KNOWN(Entry)) { /* this net is well known... */
@@ -547,7 +541,7 @@ newPacket:
 			 * and build a separate packet for each extended network requested
 			 */
 
-	    	zip_send_ext_reply_to_query(mreceived, ifID, Entry, ntohs(*NetAsked));
+	    	zip_send_ext_reply_to_query(mreceived, ifID, Entry, *NetAsked);
 
 	    }
 	  }
@@ -585,7 +579,7 @@ void zip_router_input (m, ifID)
 	register at_ddp_t	*ddp;
 	register at_atp_t	*atp;
 	register at_zip_t	*zip;
-	u_char	 user_bytes[4];
+	register u_long	 user_bytes;
 	register u_short user_byte;
 	
 	/* variables for ZipNotify processing */
@@ -768,8 +762,8 @@ void zip_router_input (m, ifID)
 
 		/* Get the user bytes in network order */
 
-		*((u_long*)user_bytes) = UAL_VALUE(atp->user_bytes);
-		user_byte = user_bytes[0]; /* Get the zeroth byte */
+		user_bytes = UAL_VALUE(atp->user_bytes);
+		user_byte = user_bytes >> 24; /* Get the zeroth byte */
 
 		dPrintf(D_M_ZIP, D_L_INPUT,
 			("zip_input: received a ZIP_ATP command=%d\n", user_byte));
@@ -1158,7 +1152,7 @@ int zip_type_packet (m)
 	register at_atp_t	*atp;
 	register at_ddp_t	*ddp;
 	register at_zip_t	*zip;
-	u_char	user_bytes[4];
+	register u_long	user_bytes;
 	register int	user_byte;
 
 	ddp = (at_ddp_t *)gbuf_rptr(m);
@@ -1177,8 +1171,8 @@ int zip_type_packet (m)
 			else
 				atp = (at_atp_t *)(gbuf_rptr(gbuf_cont(m)));
 			/* Get the user bytes in network order */
-			*((u_long*)user_bytes) = UAL_VALUE(atp->user_bytes);
-			user_byte = user_bytes[0]; /* Get the zeroth byte */
+			user_bytes = UAL_VALUE(atp->user_bytes);
+			user_byte = user_bytes >> 24; /* Get the zeroth byte */
 			if ((user_byte == ZIP_GETMYZONE) ||
 			    (user_byte == ZIP_GETZONELIST) ||
 			    (user_byte == ZIP_GETLOCALZONES))
@@ -1264,7 +1258,8 @@ int zip_handle_getmyzone(ifID, m)
         r_atp->bitmap = 0;
         UAS_UAS(r_atp->tid, atp->tid);
         ulongtmp = 1;
-		UAL_ASSIGN_HTON(r_atp->user_bytes, ulongtmp); /* no of zones */
+        ulongtmp = htonl(ulongtmp);
+	UAL_ASSIGN(r_atp->user_bytes, ulongtmp); /* no of zones */
 
         /* fill up atp data part */
         bcopy((caddr_t) &ifID->ifZoneName, (caddr_t) r_atp->data, ifID->ifZoneName.len+1);
@@ -1478,7 +1473,7 @@ zip_reply_received(m, ifID, reply_type)
 
 	/* access the number of nets provided in the ZIP Reply */
 
-	network_count  = ntohs(*(u_char *)(gbuf_rptr(m) + DDP_X_HDR_SIZE + 1));
+	network_count  = *(u_char *)(gbuf_rptr(m) + DDP_X_HDR_SIZE + 1);
 
 	PacketPtr = (char *)(gbuf_rptr(m) + DDP_X_HDR_SIZE + 2);
 
@@ -1490,7 +1485,7 @@ zip_reply_received(m, ifID, reply_type)
 
 	while (payload_len > 0 && network_count >0) {
 
-		Network = ntohs(*(at_net_al *)PacketPtr);
+		Network = *(at_net_al *)PacketPtr;
 		PacketPtr += 2;
 		zname = (at_nvestr_t *)PacketPtr;
 		if (payload_len)
@@ -1620,7 +1615,8 @@ static void zip_reply_to_getmyzone (ifID, m)
         r_atp->bitmap = 0;
         UAS_UAS(r_atp->tid, atp->tid);
         ulongtmp = 1;
-		UAL_ASSIGN_HTON(r_atp->user_bytes, ulongtmp); /* no of zones */
+        ulongtmp = htonl(ulongtmp);
+	UAL_ASSIGN(r_atp->user_bytes, ulongtmp); /* no of zones */
 
 	data_ptr = (char *)r_atp->data;
 
@@ -1717,7 +1713,7 @@ zip_reply_to_getzonelist (ifID, m)
 
 			/* get the start index from the ATP request */
 
-		StartPoint = (UAL_VALUE_NTOH(atp->user_bytes) & 0xffff) -1;
+		StartPoint = (UAL_VALUE(atp->user_bytes) & 0xffff) -1;
 
 		/* find the next zone to send */
 
@@ -1758,7 +1754,7 @@ zip_reply_to_getzonelist (ifID, m)
 				ulongtmp += 0x01000000;
 
         
-		UAL_ASSIGN_HTON(r_atp->user_bytes, ulongtmp); /* # of zones and flag*/
+		UAL_ASSIGN(r_atp->user_bytes, ulongtmp); /* # of zones and flag*/
 
         size = DDP_X_HDR_SIZE + ATP_HDR_SIZE + PacketLen;
         gbuf_winc(rm,size);
@@ -1829,7 +1825,7 @@ int zip_reply_to_getlocalzones (ifID, m)
 
 	/* get the start index from the ATP request */
 
-	Index_wanted = (UAL_VALUE_NTOH(atp->user_bytes) & 0xffff) -1;
+	Index_wanted = (UAL_VALUE(atp->user_bytes) & 0xffff) -1;
 
 	dPrintf(D_M_ZIP_LOW, D_L_INFO, 
 		("zip_r_GLZ: for station %d:%d Index_wanted = %d\n",
@@ -1957,7 +1953,7 @@ FullPacket:
         r_atp->bitmap = 0;
         UAS_UAS(r_atp->tid, atp->tid);
         ulongtmp =  ((last_flag << 24) & 0xFF000000) + ZonesInPacket; /* # of zones and flag*/
-		UAL_ASSIGN_HTON(r_atp->user_bytes, ulongtmp);
+	UAL_ASSIGN(r_atp->user_bytes, ulongtmp);
         size = DDP_X_HDR_SIZE + ATP_HDR_SIZE + packet_len;
         gbuf_winc(rm,size);
         DDPLEN_ASSIGN(r_ddp, size);

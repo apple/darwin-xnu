@@ -199,8 +199,8 @@ OBJS_NO_WERROR =		\
 	tcp_output.o		\
 	tcp_subr.o		\
 	tcp_timer.o		\
-	tcp_sack.o		\
 	tcp_usrreq.o		\
+	tcp_sack.o		\
 	udp_usrreq.o		\
 	ah_core.o		\
 	ah_input.o		\
@@ -291,75 +291,7 @@ OBJS_NO_WERROR =		\
 	sysctl.o		\
 	unix_startup.o 		\
 	memdev.o		\
-	randomdev.o		\
-	sha1mod.o		\
-	inet_ntop.o		\
-	vfs_attrlist.o	\
-	volfs_vnops.o	\
-	bpf_filter.o	\
-	devtimer.o		\
-	in_arp.o		\
-	ip_ecn.o		\
-	key_debug.o		\
-	nfs_serv.o		\
-	nfs_lock.o		\
-	kern_lockf.o	\
-	kern_subr.o		\
-	sysv_msg.o		\
-	vnode_pager.o	\
-	dp_backing_file.o \
-	vm_unix.o		\
-	param.o			\
-	mem.o			\
-	km.o			\
-	init_sysent.o		\
-	at.o			\
-	adsp.o			\
-	adsp_CLDeny.o		\
-	adsp_CLListen.o		\
-	adsp_Close.o		\
-	adsp_Control.o		\
-	adsp_Init.o		\
-	adsp_InitGlobals.o	\
-	adsp_NewCID.o		\
-	adsp_Open.o		\
-	adsp_Options.o		\
-	adsp_Packet.o		\
-	adsp_Read.o		\
-	adsp_RxAttn.o		\
-	adsp_RxData.o		\
-	adsp_Status.o		\
-	adsp_Timer.o		\
-	adsp_TimerElem.o	\
-	adsp_Write.o		\
-	adsp_attention.o	\
-	adsp_misc.o		\
-	adsp_reset.o		\
-	adsp_stream.o		\
-	at_proto.o		\
-	at_pcb.o		\
-	atp_alloc.o		\
-	atp_misc.o		\
-	atp_open.o		\
-	atp_read.o		\
-	atp_write.o		\
-	ddp_aarp.o		\
-	ddp_aep.o		\
-	ddp_brt.o		\
-	ddp_lap.o		\
-	ddp_nbp.o		\
-	ddp_proto.o		\
-	ddp_r_rtmp.o		\
-	ddp_r_zip.o		\
-	ddp_rtmp.o		\
-	ddp_rtmptable.o		\
-	ddp_sip.o		\
-	ddp.o			\
-	sys_dep.o		\
-	sys_glue.o		\
-	drv_dep.o		\
-	ddp_usrreq.o		\
-	asp_proto.o	
+	init_sysent.o
 
 OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
 

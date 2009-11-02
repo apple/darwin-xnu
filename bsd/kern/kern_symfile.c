@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1998 Apple Computer, Inc.  All rights reserved.
  *
@@ -95,7 +89,7 @@ static int
 output_kernel_symbols(struct proc *p)
 {
     struct vnode		*vp;
-    kauth_cred_t		cred = p->p_ucred;	/* XXX unsafe */
+    kauth_cred_t		cred = p->p_ucred;	/* XXX */
     struct vnode_attr		va;
     struct vfs_context		context;
     struct load_command		*cmd;
@@ -120,9 +114,6 @@ output_kernel_symbols(struct proc *p)
     orig_mh	= NULL;
     orig_st	= NULL;
     
-    context.vc_proc = p;
-    context.vc_ucred = kauth_cred_proc_ref(p);
-
     // Dispose of unnecessary gumf, the booter doesn't need to load these
     rc_mh = IODTGetLoaderInfo("Kernel-__HEADER",
 				(void **)&orig_mh, &orig_mhsize);
@@ -142,6 +133,9 @@ output_kernel_symbols(struct proc *p)
     // Check to see if the root is 'e' or 'n', is this a test for network?
     if (rootdevice[0] == 'e' && rootdevice[1] == 'n')
 	goto out;
+
+    context.vc_proc = p;
+    context.vc_ucred = cred;
 
     if ((error = vnode_open("mach.sym", (O_CREAT | FWRITE), (S_IRUSR | S_IRGRP | S_IROTH), 0, &vp, &context)))
         goto out;
@@ -331,7 +325,6 @@ out:
 	if (!error) error = error1;
     }
 
-    kauth_cred_unref(&context.vc_ucred);
     return(error);
 }
 /*
@@ -380,6 +373,7 @@ kern_open_file_for_direct_io(const char * name,
     struct kern_direct_file_io_ref_t * ref;
 
     struct proc 		*p;
+    struct ucred 		*cred;
     struct vnode_attr		va;
     int				error;
     off_t			f_offset;
@@ -403,8 +397,9 @@ kern_open_file_for_direct_io(const char * name,
 
     ref->vp = NULL;
     p = current_proc();		// kernproc;
+    cred = p->p_ucred;
     ref->context.vc_proc = p;
-    ref->context.vc_ucred = kauth_cred_proc_ref(p);
+    ref->context.vc_ucred = cred;
 
     if ((error = vnode_open(name, (O_CREAT | FWRITE), (0), 0, &ref->vp, &ref->context)))
         goto out;
@@ -541,14 +536,13 @@ out:
     kprintf("kern_open_file_for_direct_io(%d)\n", error);
 
     if (error && ref) {
-		if (ref->vp) {
-			vnode_close(ref->vp, FWRITE, &ref->context);
-			ref->vp = NULLVP;
-		}
+	if (ref->vp) {
+	    vnode_close(ref->vp, FWRITE, &ref->context);
+		ref->vp = NULLVP;
+	}
 
-		kauth_cred_unref(&ref->context.vc_ucred);
-		kfree(ref, sizeof(struct kern_direct_file_io_ref_t));
-		ref = NULL;
+	kfree(ref, sizeof(struct kern_direct_file_io_ref_t));
+	ref = NULL;
     }
 
     return(ref);
@@ -576,7 +570,6 @@ kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref)
 	    kprintf("vnode_close(%d)\n", error);
 		ref->vp = NULLVP;
 	}
-	kauth_cred_unref(&ref->context.vc_ucred);
 	kfree(ref, sizeof(struct kern_direct_file_io_ref_t));
     }
 }

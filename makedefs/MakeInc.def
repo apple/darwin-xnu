@@ -21,7 +21,7 @@ endif
 #
 ifndef COMPONENT_LIST 
 export COMPONENT_LIST 	= osfmk bsd iokit pexpert libkern libsa
-export COMPONENT_LIST_UC := $(shell printf "%s" "$(COMPONENT_LIST)" | $(TR) a-z A-Z)
+export COMPONENT_LIST_UC := $(shell echo -n $(COMPONENT_LIST) | $(TR) a-z A-Z)
 endif
 ifndef	COMPONENT
 export COMPONENT 	:= $(firstword $(subst /, ,$(shell $(RELPATH) $(SRCROOT) $(SOURCE))))
@@ -39,14 +39,14 @@ endif
 #
 ifndef ARCH_CONFIGS
 ifdef RC_ARCHS
-export ARCH_CONFIGS 	:= $(shell printf "%s" "$(RC_ARCHS)" | $(TR) a-z A-Z)
+export ARCH_CONFIGS 	:= $(shell echo -n $(RC_ARCHS) | $(TR) a-z A-Z)
 else
 export ARCH_CONFIGS 	:= $(shell arch | $(TR) a-z A-Z)
 endif
 endif
 ifdef	ARCH_CONFIG
 ifndef ARCH_CONFIG_LC
-export ARCH_CONFIG_LC 	:= $(shell printf "%s" "$(ARCH_CONFIG)" | $(TR) A-Z a-z)
+export ARCH_CONFIG_LC 	:= $(shell echo -n $(ARCH_CONFIG) | $(TR) A-Z a-z)
 endif
 endif
 
@@ -54,19 +54,10 @@ endif
 # Kernel Configuration options  
 #
 # supported configurations : RELEASE DEBUG PROFILE
-# By default, make wll build RELEASE, otherwise the value of KERNEL_CONFIG
-# will be used as kernel configuration. If KERNEL_CONFIGS (plural) is set
-# it will override KERNEL_CONFIG. Make sure to set KERNEL_CONFIGS because
-# build_all rule loops over it when building.
-
+#
 ifndef KERNEL_CONFIGS
-ifndef KERNEL_CONFIG
 export KERNEL_CONFIGS 	= RELEASE
-else
-export KERNEL_CONFIGS = $(KERNEL_CONFIG)
 endif
-endif
-
 ifndef KERNEL_CONFIG
 export KERNEL_CONFIG 	= $(firstword $(KERNEL_CONFIGS))
 endif
@@ -83,7 +74,7 @@ export INSTALL_ARCHS 	= $(ARCH_CONFIGS)
 else
 export INSTALL_ARCHS 	= $(ARCH_CONFIGS)
 endif
-export INSTALL_ARCHS_LC := $(shell printf "%s" "$(ARCH_CONFIGS)" | $(TR) A-Z a-z)
+export INSTALL_ARCHS_LC := $(shell echo -n $(ARCH_CONFIGS) | $(TR) A-Z a-z)
 endif
 
 export INSTALL_ARCH_DEFAULT	= PPC
@@ -96,8 +87,9 @@ export DEFINES = -DAPPLE -DNeXT -DKERNEL -DKERNEL_PRIVATE -DXNU_KERNEL_PRIVATE -
 #
 # Compiler command
 #
-KCC  := $(CC)
-KC++ := $(CXX)
+KCC  = /usr/bin/cc
+KC++ = /usr/bin/c++
+CC   = $(KCC)
 
 #
 # Compiler warning flags
@@ -120,9 +112,10 @@ MWARNFLAGS_STD = \
 export MWARNFLAGS ?= $(MWARNFLAGS_STD)
 
 CXXWARNFLAGS_STD = \
-	-Wall -Wno-format-y2k -W \
+	-Wall -Wno-format-y2k -W -Wstrict-prototypes -Wmissing-prototypes \
 	-Wpointer-arith -Wreturn-type -Wcast-qual -Wwrite-strings -Wswitch \
-	-Wshadow -Wcast-align -Wchar-subscripts -Winline -Wredundant-decls
+	-Wshadow -Wcast-align -Wchar-subscripts -Winline -Wredundant-decls \
+	-fpermissive
 
 export CXXWARNFLAGS ?= $(CXXWARNFLAGS_STD)
 
@@ -145,14 +138,15 @@ endif
 
 export CFLAGS_GEN = -static -g -nostdinc -nostdlib -no-cpp-precomp \
 	-fno-builtin -finline -fno-keep-inline-functions -msoft-float \
-	-fsigned-bitfields $(OTHER_CFLAGS) -force_cpusubtype_ALL
+	-fsigned-bitfields $(OTHER_CFLAGS)
 
 export CFLAGS_RELEASE 	= 
 export CFLAGS_DEBUG 	= 
 export CFLAGS_PROFILE 	=  -pg
 
 export CFLAGS_PPC 	= -arch ppc -Dppc -DPPC -D__PPC__ -DPAGE_SIZE_FIXED
-export CFLAGS_I386 	= -arch i386 -Di386 -DI386 -D__I386__ -DPAGE_SIZE_FIXED
+export CFLAGS_I386 	= -arch i386 -Di386 -DI386 -D__I386__ -DPAGE_SIZE_FIXED \
+	-march=i686 -mpreferred-stack-boundary=2 -falign-functions=4 -mcpu=pentium4 -force_cpusubtype_ALL
 
 export CFLAGS_RELEASEPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
 export CFLAGS_RELEASE_TRACEPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
@@ -168,11 +162,9 @@ export CFLAGS 	= $(CFLAGS_GEN) \
 		  $($(addsuffix $(ARCH_CONFIG), $(addsuffix $(KERNEL_CONFIG),CFLAGS_))) \
 		  $(DEFINES)
 
-export MIGCC = $(CC)
-
 # Default C++ flags
 #
-CXXFLAGS_GEN  = -fno-rtti -fno-exceptions -fcheck-new -fapple-kext
+CXXFLAGS_GEN  = -fno-rtti -fno-exceptions -fcheck-new -fapple-kext -fpermissive
 
 CXXFLAGS      = $(CXXFLAGS_GEN) \
 		  $($(addsuffix $(ARCH_CONFIG),CXXFLAGS_)) \
@@ -181,8 +173,8 @@ CXXFLAGS      = $(CXXFLAGS_GEN) \
 #
 # Assembler command
 #
-AS	= $(CC)
-S_KCC	= $(CC)
+AS	= /usr/bin/cc
+S_KCC	= /usr/bin/cc
 
 #
 # Default SFLAGS
@@ -204,7 +196,7 @@ export SFLAGS 	= $(SFLAGS_GEN) \
 #
 # Linker command
 #
-LD	= $(KC++) -nostdlib
+LD	= /usr/bin/ld
 
 #
 # Default LDFLAGS
@@ -224,16 +216,15 @@ export LDFLAGS_COMPONENT	= $(LDFLAGS_COMPONENT_GEN) \
 
 export LDFLAGS_KERNEL_GEN = \
 	-static \
-	-fapple-kext \
 	-force_cpusubtype_ALL \
-	-Wl,-e,__start \
-	-Wl,-segalign,0x1000 \
-	-Wl,-sectalign,__TEXT,__text,0x1000 \
-	-Wl,-sectalign,__DATA,__common,0x1000 \
-	-Wl,-sectalign,__DATA,__bss,0x1000 \
-	-Wl,-sectcreate,__PRELINK,__text,/dev/null \
-	-Wl,-sectcreate,__PRELINK,__symtab,/dev/null \
-	-Wl,-sectcreate,__PRELINK,__info,/dev/null
+	-e __start \
+	-segalign 0x1000 \
+	-sectalign __TEXT __text 0x1000 \
+	-sectalign __DATA __common 0x1000 \
+	-sectalign __DATA __bss 0x1000 \
+	-sectcreate __PRELINK __text /dev/null \
+	-sectcreate __PRELINK __symtab /dev/null \
+	-sectcreate __PRELINK __info /dev/null
 
 export LDFLAGS_KERNEL_RELEASE 	=
 #  -noseglinkedit
@@ -242,14 +233,14 @@ export LDFLAGS_KERNEL_PROFILE 	=
 
 export LDFLAGS_KERNEL_PPC      = \
 	-arch ppc \
-	-Wl,-segaddr,__VECTORS,0x0 \
-	-Wl,-segaddr,__HIB,0x7000  \
-	-Wl,-segaddr,__TEXT,0xe000
+	-segaddr __VECTORS 0x0 \
+	-segaddr __HIB 0x7000  \
+	-segaddr __TEXT 0xe000
  
 export LDFLAGS_KERNEL_I386     = \
 	-arch i386 \
-	-Wl,-segaddr,__HIB,0x100000 \
-	-Wl,-segaddr,__TEXT,0x111000
+	-segaddr __HIB  0xC0100000 \
+	-segaddr __TEXT 0xC0111000
 
 export LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
 		  $($(addsuffix $(ARCH_CONFIG),LDFLAGS_KERNEL_)) \

@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 
 #include <sys/errno.h>
@@ -49,6 +43,7 @@
 #include <default_pager/default_pager_object_server.h>
 
 #include <vm/vm_map.h>
+#include <vm/vm_kern.h>
 #include <vm/vm_pageout.h>
 #include <vm/memory_object.h>
 #include <vm/vm_pageout.h>
@@ -113,22 +108,11 @@ get_vm_end(
  * BSD VNODE PAGER 
  */
 
-const struct memory_object_pager_ops vnode_pager_ops = {
-	vnode_pager_reference,
-	vnode_pager_deallocate,
-	vnode_pager_init,
-	vnode_pager_terminate,
-	vnode_pager_data_request,
-	vnode_pager_data_return,
-	vnode_pager_data_initialize,
-	vnode_pager_data_unlock,
-	vnode_pager_synchronize,
-	vnode_pager_unmap,
-	"vnode pager"
-};
+/* until component support available */
+int	vnode_pager_workaround;
 
 typedef struct vnode_pager {
-	memory_object_pager_ops_t pager_ops;	/* == &vnode_pager_ops	     */
+	int 			*pager;		/* pager workaround pointer  */
 	unsigned int		pager_ikot;	/* JMM: fake ip_kotype()     */
 	unsigned int		ref_count;	/* reference count	     */
 	memory_object_control_t control_handle;	/* mem object control handle */
@@ -218,11 +202,6 @@ macx_triggers(
 		/* can't have it both ways */
 		return EINVAL;
 	}
-
-       if (default_pager_init_flag == 0) {
-               start_def_pager(NULL);
-               default_pager_init_flag = 1;
-       }
 
 	if (flags & SWAP_ENCRYPT_ON) {
 		/* ENCRYPTED SWAP: tell default_pager to encrypt */
@@ -445,9 +424,6 @@ vnode_pager_bootstrap(void)
 	size = (vm_size_t) sizeof(struct vnode_pager);
 	vnode_pager_zone = zinit(size, (vm_size_t) MAX_VNODE*size,
 				PAGE_SIZE, "vnode pager structures");
-#ifdef __i386__
-	apple_protect_pager_bootstrap();
-#endif	/* __i386__ */
 	return;
 }
 
@@ -561,51 +537,10 @@ vnode_pager_get_object_size(
 {
 	vnode_pager_t	vnode_object;
 
-	if (mem_obj->mo_pager_ops != &vnode_pager_ops) {
-		*length = 0;
-		return KERN_INVALID_ARGUMENT;
-	}
-
 	vnode_object = vnode_pager_lookup(mem_obj);
 
 	*length = vnode_pager_get_filesize(vnode_object->vnode_handle);
 	return KERN_SUCCESS;
-}
-
-kern_return_t
-vnode_pager_get_object_pathname(
-	memory_object_t		mem_obj,
-	char			*pathname,
-	vm_size_t		*length_p)
-{
-	vnode_pager_t	vnode_object;
-
-	if (mem_obj->mo_pager_ops != &vnode_pager_ops) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	vnode_object = vnode_pager_lookup(mem_obj);
-
-	return vnode_pager_get_pathname(vnode_object->vnode_handle,
-					pathname,
-					length_p);
-}
-
-kern_return_t
-vnode_pager_get_object_filename(
-	memory_object_t	mem_obj,
-	char		**filename)
-{
-	vnode_pager_t	vnode_object;
-
-	if (mem_obj->mo_pager_ops != &vnode_pager_ops) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	vnode_object = vnode_pager_lookup(mem_obj);
-
-	return vnode_pager_get_filename(vnode_object->vnode_handle,
-					filename);
 }
 
 /*
@@ -872,7 +807,7 @@ vnode_pager_cluster_read(
 	if (kret == 1) {
 		int	uplflags;
 		upl_t	upl = NULL;
-		unsigned int	count = 0;
+		int	count = 0;
 		kern_return_t	kr;
 
 		uplflags = (UPL_NO_SYNC |
@@ -911,7 +846,7 @@ vnode_pager_release_from_cache(
 		int	*cnt)
 {
 	memory_object_free_from_cache(
-			&realhost, &vnode_pager_ops, cnt);
+			&realhost, &vnode_pager_workaround, cnt);
 }
 
 /*
@@ -934,7 +869,7 @@ vnode_object_create(
 	 * we reserve the second word in the object for a fake ip_kotype
 	 * setting - that will tell vm_map to use it as a memory object.
 	 */
-	vnode_object->pager_ops = &vnode_pager_ops;
+	vnode_object->pager = &vnode_pager_workaround;
 	vnode_object->pager_ikot = IKOT_MEMORY_OBJECT;
 	vnode_object->ref_count = 1;
 	vnode_object->control_handle = MEMORY_OBJECT_CONTROL_NULL;
@@ -953,193 +888,7 @@ vnode_pager_lookup(
 	vnode_pager_t	vnode_object;
 
 	vnode_object = (vnode_pager_t)name;
-	assert(vnode_object->pager_ops == &vnode_pager_ops);
+	assert(vnode_object->pager == &vnode_pager_workaround);
 	return (vnode_object);
-}
-
-
-/*********************** proc_info implementation *************/
-
-#include <sys/bsdtask_info.h>
-
-static int fill_vnodeinfoforaddr( vm_map_entry_t entry, uint32_t * vnodeaddr, uint32_t * vid);
-
-
-int
-fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *pinfo, uint32_t  *vnodeaddr, uint32_t  *vid)
-{
-
-	vm_map_t map = task->map;
-	vm_map_offset_t	address = (vm_map_offset_t )arg;
-	vm_map_entry_t		tmp_entry;
-	vm_map_entry_t		entry;
-	vm_map_offset_t		start;
-	vm_region_extended_info_data_t extended;
-	vm_region_top_info_data_t top;
-
-
-	if (map == VM_MAP_NULL) 
-		return(0);
-
-	    vm_map_lock_read(map);
-
-	    start = address;
-	    if (!vm_map_lookup_entry(map, start, &tmp_entry)) {
-		if ((entry = tmp_entry->vme_next) == vm_map_to_entry(map)) {
-			vm_map_unlock_read(map);
-		   	return(0);
-		}
-	    } else {
-		entry = tmp_entry;
-	    }
-
-	    start = entry->vme_start;
-
-	    pinfo->pri_offset = entry->offset;
-	    pinfo->pri_protection = entry->protection;
-	    pinfo->pri_max_protection = entry->max_protection;
-	    pinfo->pri_inheritance = entry->inheritance;
-	    pinfo->pri_behavior = entry->behavior;
-	    pinfo->pri_user_wired_count = entry->user_wired_count;
-	    pinfo->pri_user_tag = entry->alias;
-
-	    if (entry->is_sub_map) {
-		pinfo->pri_flags |= PROC_REGION_SUBMAP;
-	    } else {
-		if (entry->is_shared)
-			pinfo->pri_flags |= PROC_REGION_SHARED;
-	    }
-
-
-	    extended.protection = entry->protection;
-	    extended.user_tag = entry->alias;
-	    extended.pages_resident = 0;
-	    extended.pages_swapped_out = 0;
-	    extended.pages_shared_now_private = 0;
-	    extended.pages_dirtied = 0;
-	    extended.external_pager = 0;
-	    extended.shadow_depth = 0;
-
-	    vm_map_region_walk(map, start, entry, entry->offset, entry->vme_end - start, &extended);
-
-	    if (extended.external_pager && extended.ref_count == 2 && extended.share_mode == SM_SHARED)
-	            extended.share_mode = SM_PRIVATE;
-
-	    top.private_pages_resident = 0;
-	    top.shared_pages_resident = 0;
-	    vm_map_region_top_walk(entry, &top);
-
-	
-	    pinfo->pri_pages_resident = extended.pages_resident;
-	    pinfo->pri_pages_shared_now_private = extended.pages_shared_now_private;
-	    pinfo->pri_pages_swapped_out = extended.pages_swapped_out;
-	    pinfo->pri_pages_dirtied = extended.pages_dirtied;
-	    pinfo->pri_ref_count = extended.ref_count;
-	    pinfo->pri_shadow_depth = extended.shadow_depth;
-	    pinfo->pri_share_mode = extended.share_mode;
-
-	    pinfo->pri_private_pages_resident = top.private_pages_resident;
-	    pinfo->pri_shared_pages_resident = top.shared_pages_resident;
-	    pinfo->pri_obj_id = top.obj_id;
-		
-	    pinfo->pri_address = (uint64_t)start;
-	    pinfo->pri_size = (uint64_t)(entry->vme_end - start);
-	    pinfo->pri_depth = 0;
-	
-	    if ((vnodeaddr != 0) && (entry->is_sub_map == 0)) {
-		*vnodeaddr = (uint32_t)0;
-
-		if (fill_vnodeinfoforaddr(entry, vnodeaddr, vid) ==0) {
-			vm_map_unlock_read(map);
-			return(1);
-		}
-	    }
-
-	    vm_map_unlock_read(map);
-	    return(1);
-}
-
-static int
-fill_vnodeinfoforaddr(
-	vm_map_entry_t			entry,
-	uint32_t * vnodeaddr,
-	uint32_t * vid)
-{
-	vm_object_t	top_object, object;
-	memory_object_t memory_object;
-	memory_object_pager_ops_t pager_ops;
-	kern_return_t	kr;
-	int		shadow_depth;
-
-
-	if (entry->is_sub_map) {
-		return(0);
-	} else {
-		/*
-		 * The last object in the shadow chain has the
-		 * relevant pager information.
-		 */
-		top_object = entry->object.vm_object;
-		if (top_object == VM_OBJECT_NULL) {
-			object = VM_OBJECT_NULL;
-			shadow_depth = 0;
-		} else {
-			vm_object_lock(top_object);
-			for (object = top_object, shadow_depth = 0;
-			     object->shadow != VM_OBJECT_NULL;
-			     object = object->shadow, shadow_depth++) {
-				vm_object_lock(object->shadow);
-				vm_object_unlock(object);
-			}
-		}
-	}
-
-	if (object == VM_OBJECT_NULL) {
-		return(0);
-	} else if (object->internal) {
-		vm_object_unlock(object);
-		return(0);
-	} else if (! object->pager_ready ||
-		   object->terminating ||
-		   ! object->alive) {
-		vm_object_unlock(object);
-		return(0);
-	} else {
-		memory_object = object->pager;
-		pager_ops = memory_object->mo_pager_ops;
-		if (pager_ops == &vnode_pager_ops) {
-			kr = vnode_pager_get_object_vnode(
-				memory_object,
-				vnodeaddr, vid);
-			if (kr != KERN_SUCCESS) {
-				vm_object_unlock(object);
-				return(0);
-			}
-		} else {
-			vm_object_unlock(object);
-			return(0);
-		}
-	}
-	vm_object_unlock(object);
-	return(1);
-}
-
-kern_return_t 
-vnode_pager_get_object_vnode (
-	memory_object_t		mem_obj,
-	uint32_t * vnodeaddr,
-	uint32_t * vid)
-{
-	vnode_pager_t	vnode_object;
-
-	vnode_object = vnode_pager_lookup(mem_obj);
-	if (vnode_object->vnode_handle)  {
-		*vnodeaddr = (uint32_t)vnode_object->vnode_handle;
-		*vid = (uint32_t)vnode_vid((void *)vnode_object->vnode_handle);	
-
-		return(KERN_SUCCESS);
-	}
-	
-	return(KERN_FAILURE);
 }
 

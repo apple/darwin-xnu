@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1998, 1999 Apple Computer, Inc. All Rights Reserved */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
@@ -87,7 +81,6 @@
 #define DBG_FNC_SBDROP	NETDBG_CODE(DBG_NETSOCK, 4)
 #define DBG_FNC_SBAPPEND	NETDBG_CODE(DBG_NETSOCK, 5)
 
-static int sbcompress(struct sockbuf *, struct mbuf *, struct mbuf *);
 
 /*
  * Primitive routines for operating on sockets and socket buffers
@@ -294,8 +287,6 @@ sonewconn_internal(head, connstatus)
 	so->so_pgid  = head->so_pgid;
 	so->so_uid = head->so_uid;
 	so->so_usecount = 1;
-	so->next_lock_lr = 0;
-	so->next_unlock_lr = 0;
 
 #ifdef __APPLE__
 	so->so_rcv.sb_flags |= SB_RECV;	/* XXX */
@@ -338,8 +329,8 @@ sonewconn_internal(head, connstatus)
 	head->so_qlen++;
 
 #ifdef __APPLE__
-	/* Attach socket filters for this protocol */
-	sflt_initsock(so);
+        /* Attach socket filters for this protocol */
+        sflt_initsock(so);
 #endif
 	if (connstatus) {
 		so->so_state |= connstatus;
@@ -420,13 +411,17 @@ int
 sbwait(sb)
 	struct sockbuf *sb;
 {
-	int error = 0, lr_saved;
+	int error = 0, lr, lr_saved;
 	struct socket *so = sb->sb_so;
 	lck_mtx_t *mutex_held;
 	struct timespec ts;
 
-	lr_saved = (unsigned int) __builtin_return_address(0);
+#ifdef __ppc__
+	__asm__ volatile("mflr %0" : "=r" (lr));
+	lr_saved = lr;
+#endif
 	
+
 	if (so->so_proto->pr_getlock != NULL) 
 		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
 	else 
@@ -464,7 +459,12 @@ sb_lock(sb)
 {
 	struct socket *so = sb->sb_so;
 	lck_mtx_t * mutex_held;
-	int error = 0;
+	int error = 0, lr, lr_saved;
+
+#ifdef __ppc__
+	__asm__ volatile("mflr %0" : "=r" (lr));
+	lr_saved = lr;
+#endif
 	
 	if (so == NULL)
 		panic("sb_lock: null so back pointer sb=%x\n", sb);
@@ -477,7 +477,6 @@ sb_lock(sb)
 			mutex_held = so->so_proto->pr_domain->dom_mtx;
 		if (so->so_usecount < 1)
 			panic("sb_lock: so=%x refcount=%d\n", so, so->so_usecount);
-
 		error = msleep((caddr_t)&sb->sb_flags, mutex_held,
 	    		(sb->sb_flags & SB_NOINTR) ? PSOCK : PSOCK | PCATCH, "sblock", 0);
 		if (so->so_usecount < 1)
@@ -743,7 +742,7 @@ sbcheck(sb)
 int
 sbappendrecord(sb, m0)
 	register struct sockbuf *sb;
-	struct mbuf *m0;
+	register struct mbuf *m0;
 {
 	register struct mbuf *m;
 	int result = 0;
@@ -1457,9 +1456,14 @@ sbfree(struct sockbuf *sb, struct mbuf *m)
 int
 sblock(struct sockbuf *sb, int wf)
 {
-	return(sb->sb_flags & SB_LOCK ? 
-		((wf == M_WAIT) ? sb_lock(sb) : EWOULDBLOCK) : 
-		(sb->sb_flags |= SB_LOCK), 0);
+	int error = 0;
+
+	if (sb->sb_flags & SB_LOCK)
+		error = (wf == M_WAIT) ? sb_lock(sb) : EWOULDBLOCK;
+	else
+		sb->sb_flags |= SB_LOCK;
+
+	return (error);
 }
 
 /* release lock on sockbuf sb */
@@ -1467,12 +1471,13 @@ void
 sbunlock(struct sockbuf *sb, int keeplocked)
 {
 	struct socket *so = sb->sb_so;
-	int lr_saved;
+	int lr, lr_saved;
 	lck_mtx_t *mutex_held;
 
-
-	lr_saved = (unsigned int) __builtin_return_address(0);
-
+#ifdef __ppc__
+	__asm__ volatile("mflr %0" : "=r" (lr));
+	lr_saved = lr;
+#endif
 	sb->sb_flags &= ~SB_LOCK; 
 
 	if (so->so_proto->pr_getlock != NULL) 
@@ -1494,8 +1499,7 @@ sbunlock(struct sockbuf *sb, int keeplocked)
 		so->so_usecount--;
 		if (so->so_usecount < 0)
 			panic("sbunlock: unlock on exit so=%x lr=%x sb_flags=%x\n", so, so->so_usecount,lr_saved, sb->sb_flags);
-		so->unlock_lr[so->next_unlock_lr] = (void *)lr_saved;
-		so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
+		so->reserved4= lr_saved;
 		lck_mtx_unlock(mutex_held);
 	}
 }

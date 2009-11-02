@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 
 #ifndef __HFS__
@@ -63,10 +57,10 @@
 
 #define HFS_MAX_DEFERED_ALLOC	(1024*1024)
 
-// 400 mb is a "big" file (i.e. one that when deleted
+// 32 gigs is a "big" file (i.e. one that when deleted
 // would touch enough data that we should break it into
 // multiple separate transactions
-#define HFS_BIGFILE_SIZE (400LL * 1024LL * 1024LL)
+#define HFS_BIGFILE_SIZE (32LL * 1024LL * 1024LL * 1024LL)
 
 
 enum { kMDBSize = 512 };				/* Size of I/O transfer to read entire MDB */
@@ -254,10 +248,6 @@ typedef struct hfsmount {
 	lck_mtx_t      hfs_mutex;      /* protects access to hfsmount data */
 	void          *hfs_freezing_proc;  /* who froze the fs */
 	lck_rw_t       hfs_insync;     /* protects sync/freeze interaction */
-
-	/* Resize variables: */
-	u_int32_t		hfs_resize_filesmoved;
-	u_int32_t		hfs_resize_totalfiles;
 } hfsmount_t;
 
 typedef hfsmount_t  ExtendedVCB;
@@ -285,7 +275,6 @@ typedef hfsmount_t  ExtendedVCB;
 #define HFS_FRAGMENTED_FREESPACE  0x100
 #define HFS_NEED_JNL_RESET        0x200
 #define HFS_HAS_SPARSE_DEVICE     0x400
-#define HFS_RESIZE_IN_PROGRESS    0x800
 
 
 #define HFS_MOUNT_LOCK(hfsmp, metadata)                      \
@@ -502,7 +491,6 @@ extern void hfs_checkextendedsecurity(struct hfsmount *hfsmp);
 
 extern int  hfs_extendfs(struct hfsmount *, u_int64_t, vfs_context_t);
 extern int  hfs_truncatefs(struct hfsmount *, u_int64_t, vfs_context_t);
-extern int  hfs_resize_progress(struct hfsmount *, u_int32_t *);
 
 extern int  hfs_isallocated(struct hfsmount *, u_long, u_long);
 

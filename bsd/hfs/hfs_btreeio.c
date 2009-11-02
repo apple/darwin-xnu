@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 
 #include <sys/param.h>
@@ -295,28 +289,26 @@ exit:
 }
 
 
-#define HFS_CLUMP_ADJ_LIMIT  (200*1024*1024)
-
 __private_extern__
 OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 {
 #pragma unused (maxEOF)
 
 	OSStatus	retval = 0, ret = 0;
-	UInt64		actualBytesAdded, origSize;
-	UInt64		bytesToAdd;
+	int64_t		actualBytesAdded, origSize;
+	u_int64_t	bytesToAdd;
 	u_int32_t	startAllocation;
 	u_int32_t	fileblocks;
-	BTreeInfoRec btInfo;
+	BTreeInfoRec 	btInfo;
 	ExtendedVCB	*vcb;
-	FCB			*filePtr;
-    struct proc *p = NULL;
-	UInt64 		trim = 0;
-	int  lockflags = 0;
+	FCB		*filePtr;
+    	struct proc 	*p = NULL;
+	int64_t 	trim = 0;
+	int  		lockflags = 0;
 
 	filePtr = GetFileControlBlock(vp);
 
-	if ( minEOF > filePtr->fcbEOF )
+	if ( (off_t)minEOF > filePtr->fcbEOF )
 	{
 		bytesToAdd = minEOF - filePtr->fcbEOF;
 
@@ -329,13 +321,7 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	}
 
 	vcb = VTOVCB(vp);
-
-	/* Take past growth into account when extending the catalog file. */
-	if ((VTOC(vp)->c_fileid == kHFSCatalogFileID) &&
-	    (bytesToAdd / vcb->blockSize) < filePtr->fcbExtents[0].blockCount) {
-			bytesToAdd = filePtr->fcbExtents[0].blockCount * (UInt64)vcb->blockSize;
-			bytesToAdd = MIN(bytesToAdd, HFS_CLUMP_ADJ_LIMIT);
-	}
+	
 	/*
 	 * The Extents B-tree can't have overflow extents. ExtendFileC will
 	 * return an error if an attempt is made to extend the Extents B-tree
@@ -372,27 +358,29 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	// of the btree node size.  if we can't get a contiguous chunk that
 	// is at least the node size then we break out of the loop and let
 	// the error propagate back up.
-	do {
+	while((off_t)bytesToAdd >= btInfo.nodeSize) {
+	    do {
 		retval = ExtendFileC(vcb, filePtr, bytesToAdd, 0,
-		                     kEFContigMask | kEFMetadataMask,
-		                     &actualBytesAdded);
+		                     kEFContigMask | kEFMetadataMask | kEFNoClumpMask,
+		                     (int64_t *)&actualBytesAdded);
 		if (retval == dskFulErr && actualBytesAdded == 0) {
-
-			if (bytesToAdd == btInfo.nodeSize || bytesToAdd < (minEOF - origSize)) {
-				// if we're here there's nothing else to try, we're out
-				// of space so we break and bail out.
-				break;
-			} else {
-				bytesToAdd >>= 1;
-				if (bytesToAdd < btInfo.nodeSize) {
-					bytesToAdd = btInfo.nodeSize;
-				} else if ((bytesToAdd % btInfo.nodeSize) != 0) {
-					// make sure it's an integer multiple of the nodeSize
-					bytesToAdd -= (bytesToAdd % btInfo.nodeSize);
-				}
-			}
+		    bytesToAdd >>= 1;
+		    if (bytesToAdd < btInfo.nodeSize) {
+			break;
+		    } else if ((bytesToAdd % btInfo.nodeSize) != 0) {
+			// make sure it's an integer multiple of the nodeSize
+			bytesToAdd -= (bytesToAdd % btInfo.nodeSize);
+		    }
 		}
-	} while (retval == dskFulErr && actualBytesAdded == 0);
+	    } while (retval == dskFulErr && actualBytesAdded == 0);
+
+	    if (retval == dskFulErr && actualBytesAdded == 0 && bytesToAdd <= btInfo.nodeSize) {
+		break;
+	    }
+
+	    filePtr->fcbEOF = (u_int64_t)filePtr->ff_blocks * (u_int64_t)vcb->blockSize;
+	    bytesToAdd = minEOF - filePtr->fcbEOF;
+	}
 
 	/*
 	 * If a new extent was added then move the roving allocator
@@ -412,7 +400,7 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	// it grew the file to be big enough for our needs.  If this is
 	// the case, we don't care about retval so we blow it away.
 	//
-	if (filePtr->fcbEOF >= minEOF && retval != 0) {
+	if (filePtr->fcbEOF >= (off_t)minEOF && retval != 0) {
 		retval = 0;
 	}
 
@@ -422,9 +410,9 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	// size.  otherwise we trim back to be an even multiple of the
 	// btree node size.
 	//
-	if ((filePtr->fcbEOF < minEOF) || (actualBytesAdded % btInfo.nodeSize) != 0) {
+	if ((filePtr->fcbEOF < (off_t)minEOF) || ((filePtr->fcbEOF - origSize) % btInfo.nodeSize) != 0) {
 
-		if (filePtr->fcbEOF < minEOF) {
+		if (filePtr->fcbEOF < (off_t)minEOF) {
 			retval = dskFulErr;
 			
 			if (filePtr->fcbEOF < origSize) {
@@ -433,12 +421,8 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 			}
 			
 			trim = filePtr->fcbEOF - origSize;
-			if (trim != actualBytesAdded) {
-				panic("hfs: trim == %lld but actualBytesAdded == %lld\n",
-					  trim, actualBytesAdded);
-			}
 		} else {
-			trim = (actualBytesAdded % btInfo.nodeSize);
+			trim = ((filePtr->fcbEOF - origSize) % btInfo.nodeSize);
 		}
 
 		ret = TruncateFileC(vcb, filePtr, filePtr->fcbEOF - trim, 0);
@@ -446,17 +430,16 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 
 		// XXXdbg - panic if the file didn't get trimmed back properly
 		if ((filePtr->fcbEOF % btInfo.nodeSize) != 0) {
-			panic("hfs: truncate file didn't! fcbEOF %lld nsize %d fcb 0x%x\n",
+			panic("hfs: truncate file didn't! fcbEOF %lld nsize %d fcb %p\n",
 				  filePtr->fcbEOF, btInfo.nodeSize, filePtr);
 		}
 
 		if (ret) {
 			// XXXdbg - this probably doesn't need to be a panic()
-			panic("hfs: error truncating btree files (sz 0x%llx, trim %lld, ret %d)\n",
-				  filePtr->fcbEOF, trim, ret);
+			panic("hfs: error truncating btree files (sz 0x%llx, trim %lld, ret %ld)\n",
+			      filePtr->fcbEOF, trim, ret);
 			goto out;
 		}
-		actualBytesAdded -= trim;
 	}
 
 	if(VTOC(vp)->c_fileid != kHFSExtentsFileID) {
@@ -470,7 +453,7 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	lockflags = 0;
 
 	if ((filePtr->fcbEOF % btInfo.nodeSize) != 0) {
-		panic("hfs: extendbtree: fcb 0x%x has eof 0x%llx not a multiple of 0x%x (trim %llx)\n",
+		panic("hfs: extendbtree: fcb %p has eof 0x%llx not a multiple of 0x%x (trim %llx)\n",
 			  filePtr, filePtr->fcbEOF, btInfo.nodeSize, trim);
 	}
 
@@ -490,7 +473,7 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 		(void) hfs_update(vp, TRUE);
 	}
 
-	ret = ClearBTNodes(vp, btInfo.nodeSize, filePtr->fcbEOF - actualBytesAdded, actualBytesAdded);
+	ret = ClearBTNodes(vp, btInfo.nodeSize, origSize, (filePtr->fcbEOF - origSize));
 out:
 	if (retval == 0)
 		retval = ret;

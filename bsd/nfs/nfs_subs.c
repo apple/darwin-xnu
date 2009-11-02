@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -1220,6 +1214,7 @@ nfs_init(struct vfsconf *vfsp)
 	}
 	/* init nfsiod mutex */
 	nfs_iod_lck_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(nfs_iod_lck_grp_attr);
 	nfs_iod_lck_grp = lck_grp_alloc_init("nfs_iod", nfs_iod_lck_grp_attr);
 	nfs_iod_lck_attr = lck_attr_alloc_init();
 	nfs_iod_mutex = lck_mtx_alloc_init(nfs_iod_lck_grp, nfs_iod_lck_attr);
@@ -1231,6 +1226,7 @@ nfs_init(struct vfsconf *vfsp)
 #ifndef NFS_NOSERVER
 	/* init nfsd mutex */
 	nfsd_lck_grp_attr = lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(nfsd_lck_grp_attr);
 	nfsd_lck_grp = lck_grp_alloc_init("nfsd", nfsd_lck_grp_attr);
 	nfsd_lck_attr = lck_attr_alloc_init();
 	nfsd_mutex = lck_mtx_alloc_init(nfsd_lck_grp, nfsd_lck_attr);
@@ -2158,7 +2154,7 @@ nfsrv_hang_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 			if (!cred)
 				return (ENOMEM);
 		} else {
-			cred = NOCRED;
+			cred = NULL;
 		}
 
 		if (nxna.nxna_addr.ss_len == 0) {
@@ -2202,8 +2198,7 @@ nfsrv_hang_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 					break;
 				}
 			if ((rnh = nx->nx_rtable[i]) == 0) {
-			        if (IS_VALID_CRED(cred))
-				        kauth_cred_unref(&cred);
+				kauth_cred_rele(cred);
 				_FREE(no, M_NETADDR);
 				return (ENOBUFS);
 			}
@@ -2230,8 +2225,7 @@ nfsrv_hang_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 						matched = 1;
 				}
 			}
-			if (IS_VALID_CRED(cred))
-			        kauth_cred_unref(&cred);
+			kauth_cred_rele(cred);
 			_FREE(no, M_NETADDR);
 			if (matched)
 				continue;
@@ -2262,8 +2256,8 @@ nfsrv_free_netopt(struct radix_node *rn, void *w)
 	struct nfs_netopt *nno = (struct nfs_netopt *)rn;
 
 	(*rnh->rnh_deladdr)(rn->rn_key, rn->rn_mask, rnh);
-	if (IS_VALID_CRED(nno->no_opt.nxo_cred))
-		kauth_cred_unref(&nno->no_opt.nxo_cred);
+	if (nno->no_opt.nxo_cred)
+		kauth_cred_rele(nno->no_opt.nxo_cred);
 	_FREE((caddr_t)rn, M_NETADDR);
 	*cnt -= 1;
 	return (0);
@@ -2318,8 +2312,9 @@ nfsrv_export(struct user_nfs_export_args *unxa, struct vfs_context *ctx)
 				/* delete all netopts for this export */
 				nfsrv_free_addrlist(nx);
 				nx->nx_flags &= ~NX_DEFAULTEXPORT;
-				if (IS_VALID_CRED(nx->nx_defopt.nxo_cred)) {
-					kauth_cred_unref(&nx->nx_defopt.nxo_cred);
+				if (nx->nx_defopt.nxo_cred) {
+					kauth_cred_rele(nx->nx_defopt.nxo_cred);
+					nx->nx_defopt.nxo_cred = NULL;
 				}
 				FREE(nx->nx_path, M_TEMP);
 				FREE(nx, M_TEMP);
@@ -2541,9 +2536,9 @@ nfsrv_export(struct user_nfs_export_args *unxa, struct vfs_context *ctx)
 			}
 
 			/* grab file handle */
-			nx->nx_fh.nfh_xh.nxh_version = htonl(NFS_FH_VERSION);
-			nx->nx_fh.nfh_xh.nxh_fsid = htonl(nx->nx_fs->nxfs_id);
-			nx->nx_fh.nfh_xh.nxh_expid = htonl(nx->nx_id);
+			nx->nx_fh.nfh_xh.nxh_version = NFS_FH_VERSION;
+			nx->nx_fh.nfh_xh.nxh_fsid = nx->nx_fs->nxfs_id;
+			nx->nx_fh.nfh_xh.nxh_expid = nx->nx_id;
 			nx->nx_fh.nfh_xh.nxh_flags = 0;
 			nx->nx_fh.nfh_xh.nxh_reserved = 0;
 			nx->nx_fh.nfh_len = NFS_MAX_FID_SIZE;
@@ -2573,8 +2568,9 @@ nfsrv_export(struct user_nfs_export_args *unxa, struct vfs_context *ctx)
 				/* delete all netopts for this export */
 				nfsrv_free_addrlist(nx);
 				nx->nx_flags &= ~NX_DEFAULTEXPORT;
-				if (IS_VALID_CRED(nx->nx_defopt.nxo_cred)) {
-					kauth_cred_unref(&nx->nx_defopt.nxo_cred);
+				if (nx->nx_defopt.nxo_cred) {
+					kauth_cred_rele(nx->nx_defopt.nxo_cred);
+					nx->nx_defopt.nxo_cred = NULL;
 				}
 				FREE(nx->nx_path, M_TEMP);
 				FREE(nx, M_TEMP);
@@ -2584,8 +2580,9 @@ nfsrv_export(struct user_nfs_export_args *unxa, struct vfs_context *ctx)
 			/* delete all netopts for this export */
 			nfsrv_free_addrlist(nx);
 			nx->nx_flags &= ~NX_DEFAULTEXPORT;
-			if (IS_VALID_CRED(nx->nx_defopt.nxo_cred)) {
-				kauth_cred_unref(&nx->nx_defopt.nxo_cred);
+			if (nx->nx_defopt.nxo_cred) {
+				kauth_cred_rele(nx->nx_defopt.nxo_cred);
+				nx->nx_defopt.nxo_cred = NULL;
 			}
 		}
 	}
@@ -2653,15 +2650,11 @@ static struct nfs_export *
 nfsrv_fhtoexport(struct nfs_filehandle *nfhp)
 {
 	struct nfs_export *nx;
-	uint32_t fsid, expid;
-
-	fsid = ntohl(nfhp->nfh_xh.nxh_fsid);
-	expid = ntohl(nfhp->nfh_xh.nxh_expid);
-	nx = NFSEXPHASH(fsid, expid)->lh_first;
+	nx = NFSEXPHASH(nfhp->nfh_xh.nxh_fsid, nfhp->nfh_xh.nxh_expid)->lh_first;
 	for (; nx; nx = LIST_NEXT(nx, nx_hash)) {
-		if (nx->nx_fs->nxfs_id != fsid)
+		if (nx->nx_fs->nxfs_id != nfhp->nfh_xh.nxh_fsid)
 			continue;
-		if (nx->nx_id != expid)
+		if (nx->nx_id != nfhp->nfh_xh.nxh_expid)
 			continue;
 		break;
 	}
@@ -2682,14 +2675,12 @@ nfsrv_fhtovp(
 {
 	int error;
 	struct mount *mp;
-	uint32_t v;
 
 	*vpp = NULL;
 	*nxp = NULL;
 	*nxop = NULL;
 
-	v = ntohl(nfhp->nfh_xh.nxh_version);
-	if (v != NFS_FH_VERSION) {
+	if (nfhp->nfh_xh.nxh_version != NFS_FH_VERSION) {
 		/* file handle format not supported */
 		return (ESTALE);
 	}
@@ -2697,8 +2688,7 @@ nfsrv_fhtovp(
 		return (EBADRPC);
 	if (nfhp->nfh_len < (int)sizeof(nfhp->nfh_xh))
 		return (ESTALE);
-	v = ntohs(nfhp->nfh_xh.nxh_flags);
-	if (v & NXHF_INVALIDFH)
+	if (nfhp->nfh_xh.nxh_flags & NXHF_INVALIDFH)
 		return (ESTALE);
 
 /* XXX Revisit when enabling WebNFS */
@@ -2745,9 +2735,9 @@ nfsrv_credcheck(
 	if (nxo && nxo->nxo_cred) {
 		if ((nxo->nxo_flags & NX_MAPALL) ||
 		    ((nxo->nxo_flags & NX_MAPROOT) && !suser(nfsd->nd_cr, NULL))) {
-			kauth_cred_ref(nxo->nxo_cred);
-			kauth_cred_unref(&nfsd->nd_cr);
+			kauth_cred_rele(nfsd->nd_cr);
 			nfsd->nd_cr = nxo->nxo_cred;
+			kauth_cred_ref(nfsd->nd_cr);
 		}
 	}
 	return (0);
@@ -2794,9 +2784,9 @@ nfsrv_vptofh(
 {
 	int error;
 
-	nfhp->nfh_xh.nxh_version = htonl(NFS_FH_VERSION);
-	nfhp->nfh_xh.nxh_fsid = htonl(nx->nx_fs->nxfs_id);
-	nfhp->nfh_xh.nxh_expid = htonl(nx->nx_id);
+	nfhp->nfh_xh.nxh_version = NFS_FH_VERSION;
+	nfhp->nfh_xh.nxh_fsid = nx->nx_fs->nxfs_id;
+	nfhp->nfh_xh.nxh_expid = nx->nx_id;
 	nfhp->nfh_xh.nxh_flags = 0;
 	nfhp->nfh_xh.nxh_reserved = 0;
 
@@ -2807,7 +2797,7 @@ nfsrv_vptofh(
 	if (dnfhp && nfsrv_fhmatch(dnfhp, &nx->nx_fh)) {
 		nfhp->nfh_len = v2 ? NFSX_V2FH : sizeof(nfhp->nfh_xh);
 		nfhp->nfh_xh.nxh_fidlen = 0;
-		nfhp->nfh_xh.nxh_flags = htons(NXHF_INVALIDFH);
+		nfhp->nfh_xh.nxh_flags = NXHF_INVALIDFH;
 		return (0);
 	}
 

@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  *
  */
 /*-
@@ -79,7 +73,6 @@
 #include <sys/sysproto.h>
 #include <sys/user.h>
 #include <string.h>
-#include <sys/proc_info.h>
 
 #include <kern/lock.h>
 #include <kern/clock.h>
@@ -410,6 +403,11 @@ filt_procattach(struct knote *kn)
 	int funnel_state;
 	
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	
+	if ((kn->kn_sfflags & (NOTE_TRACK | NOTE_TRACKERR | NOTE_CHILD)) != 0) {
+		thread_funnel_set(kernel_flock, funnel_state);
+		return (ENOTSUP);
+	}
 
 	p = pfind(kn->kn_id);
 	if (p == NULL) {
@@ -418,16 +416,6 @@ filt_procattach(struct knote *kn)
 	}
 
 	kn->kn_flags |= EV_CLEAR;		/* automatically set */
-	kn->kn_hookid = 1;			/* mark exit not seen */
-
-	/*
-	 * internal flag indicating registration done by kernel
-	 */
-	if (kn->kn_flags & EV_FLAG1) {
-		kn->kn_data = (int)kn->kn_sdata;	/* ppid */
-		kn->kn_fflags = NOTE_CHILD;
-		kn->kn_flags &= ~EV_FLAG1;
-	}
 
 	/* XXX lock the proc here while adding to the list? */
 	KNOTE_ATTACH(&p->p_klist, kn);
@@ -439,12 +427,11 @@ filt_procattach(struct knote *kn)
 
 /*
  * The knote may be attached to a different process, which may exit,
- * leaving nothing for the knote to be attached to.  In that case,
- * we wont be able to find the process from its pid.  But the exit
- * code may still be processing the knote list for the target process.
- * We may have to wait for that processing to complete before we can
- * return (and presumably free the knote) without actually removing
- * it from the dead process' knote list.
+ * leaving nothing for the knote to be attached to.  So when the process
+ * exits, the knote is marked as DETACHED and also flagged as ONESHOT so
+ * it will be deleted when read out.  However, as part of the knote deletion,
+ * this routine is called, so a check is needed to avoid actually performing
+ * a detach, because the original process does not exist any more.
  */
 static void
 filt_procdetach(struct knote *kn)
@@ -455,81 +442,44 @@ filt_procdetach(struct knote *kn)
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	p = pfind(kn->kn_id);
 
-	if (p != (struct proc *)NULL) {
+	if (p != (struct proc *)NULL)
 		KNOTE_DETACH(&p->p_klist, kn);
-	} else if (kn->kn_hookid != 0) {	/* if not NOTE_EXIT yet */
-		kn->kn_hookid = -1;	/* we are detaching but... */
-		assert_wait(&kn->kn_hook, THREAD_UNINT); /* have to wait */
-		thread_block(THREAD_CONTINUE_NULL);
-	}
+
 	thread_funnel_set(kernel_flock, funnel_state);
 }
 
 static int
 filt_proc(struct knote *kn, long hint)
 {
+	u_int event;
+	int funnel_state;
 
-	if (hint != 0) {
-		u_int event;
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
-		/* must hold the funnel when coming from below */
-		assert(thread_funnel_get() != (funnel_t)0);
+	/*
+	 * mask off extra data
+	 */
+	event = (u_int)hint & NOTE_PCTRLMASK;
 
-		/*
-		 * mask off extra data
-		 */
-		event = (u_int)hint & NOTE_PCTRLMASK;
+	/*
+	 * if the user is interested in this event, record it.
+	 */
+	if (kn->kn_sfflags & event)
+		kn->kn_fflags |= event;
 
-		/*
-		 * if the user is interested in this event, record it.
-		 */
-		if (kn->kn_sfflags & event)
-			kn->kn_fflags |= event;
-
-		/*
-		 * process is gone, so flag the event as finished.
-		 *
-		 * If someone was trying to detach, but couldn't
-		 * find the proc to complete the detach, wake them
-		 * up (nothing will ever need to walk the per-proc
-		 * knote list again - so its safe for them to dump
-		 * the knote now).
-		 */
-		if (event == NOTE_EXIT) {
-			boolean_t detaching = (kn->kn_hookid == -1);
-
-			kn->kn_hookid = 0;
-			kn->kn_flags |= (EV_EOF | EV_ONESHOT); 
-			if (detaching)
-				thread_wakeup(&kn->kn_hookid);
-			return (1);
-		}
-
-		/*
-		 * process forked, and user wants to track the new process,
-		 * so attach a new knote to it, and immediately report an
-		 * event with the parent's pid.
-		 */
-		if ((event == NOTE_FORK) && (kn->kn_sfflags & NOTE_TRACK)) {
-			struct kevent kev;
-			int error;
-
-			/*
-			 * register knote with new process.
-			 */
-			kev.ident = hint & NOTE_PDATAMASK;	/* pid */
-			kev.filter = kn->kn_filter;
-			kev.flags = kn->kn_flags | EV_ADD | EV_ENABLE | EV_FLAG1;
-			kev.fflags = kn->kn_sfflags;
-			kev.data = kn->kn_id;			/* parent */
-			kev.udata = kn->kn_kevent.udata;	/* preserve udata */
-			error = kevent_register(kn->kn_kq, &kev, NULL);
-			if (error)
-				kn->kn_fflags |= NOTE_TRACKERR;
-		}
+	/*
+	 * process is gone, so flag the event as finished.
+	 */
+	if (event == NOTE_EXIT) {
+		kn->kn_flags |= (EV_EOF | EV_ONESHOT); 
+		thread_funnel_set(kernel_flock, funnel_state);
+		return (1);
 	}
 
-	return (kn->kn_fflags != 0); /* atomic check - no funnel needed from above */
+	event = kn->kn_fflags;
+	thread_funnel_set(kernel_flock, funnel_state);
+
+	return (event != 0);
 }
 
 /*
@@ -903,7 +853,7 @@ kqueue(struct proc *p, __unused struct kqueue_args *uap, register_t *retval)
 	fp->f_data = (caddr_t)kq;
 
 	proc_fdlock(p);
-	*fdflags(p, fd) &= ~UF_RESERVED;
+	procfdtbl_releasefd(p, fd, NULL);
 	fp_drop(p, fd, fp, 1);
 	proc_fdunlock(p);
 
@@ -1375,45 +1325,41 @@ kevent_process(struct kqueue *kq,
 	       (kn = TAILQ_FIRST(&kq->kq_head)) != NULL) {
 
 		/*
-		 * Take note off the active queue.
-		 *
+		 * move knote to the processed queue.
+		 * this is also protected by the kq lock.
+		 */
+		assert(kn->kn_tq == &kq->kq_head);
+		TAILQ_REMOVE(&kq->kq_head, kn, kn_tqe);
+		kn->kn_tq = &kq->kq_inprocess;
+		TAILQ_INSERT_TAIL(&kq->kq_inprocess, kn, kn_tqe);
+
+		/*
 		 * Non-EV_ONESHOT events must be re-validated.
 		 *
 		 * Convert our lock to a use-count and call the event's
 		 * filter routine to update.
 		 *
-		 * If the event is valid, or triggered while the kq
-		 * is unlocked, move to the inprocess queue for processing.
+		 * If the event is dropping (or no longer valid), we
+		 * already have it off the active queue, so just
+		 * finish the job of deactivating it.
 		 */
-
 		if ((kn->kn_flags & EV_ONESHOT) == 0) {
 			int result;
-			knote_deactivate(kn);
 
 			if (kqlock2knoteuse(kq, kn)) {
 				
 				/* call the filter with just a ref */
 				result = kn->kn_fop->f_event(kn, 0);
 
-				/* if it's still alive, make sure it's active */
-				if (knoteuse2kqlock(kq, kn) && result) {
-					/* may have been reactivated in filter*/
-					if (!(kn->kn_status & KN_ACTIVE)) {
-						knote_activate(kn);
-					}
-				} else {
+				if (!knoteuse2kqlock(kq, kn) || result == 0) {
+					knote_deactivate(kn);
 					continue;
 				}
 			} else {
+				knote_deactivate(kn);
 				continue;
 			}
 		}
-
-		/* knote is active: move onto inprocess queue */
-		assert(kn->kn_tq == &kq->kq_head);
-		TAILQ_REMOVE(&kq->kq_head, kn, kn_tqe);
-		kn->kn_tq = &kq->kq_inprocess;
-		TAILQ_INSERT_TAIL(&kq->kq_inprocess, kn, kn_tqe);
 
 		/*
 		 * Got a valid triggered knote with the kqueue
@@ -1975,11 +1921,13 @@ knote_init(void)
 
 	/* allocate kq lock group attribute and group */
 	kq_lck_grp_attr= lck_grp_attr_alloc_init();
+	lck_grp_attr_setstat(kq_lck_grp_attr);
 
 	kq_lck_grp = lck_grp_alloc_init("kqueue",  kq_lck_grp_attr);
 
 	/* Allocate kq lock attribute */
 	kq_lck_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(kq_lck_attr);
 
 	/* Initialize the timer filter lock */
 	lck_mtx_init(&_filt_timerlock, kq_lck_grp, kq_lck_attr);
@@ -2073,6 +2021,7 @@ kern_event_init(void)
 	 * allocate the lock attribute for mutexes
 	 */
 	evt_mtx_attr = lck_attr_alloc_init();
+	lck_attr_setdefault(evt_mtx_attr);
   	evt_mutex = lck_mtx_alloc_init(evt_mtx_grp, evt_mtx_attr);
 	if (evt_mutex == NULL)
 			return (ENOMEM);
@@ -2297,23 +2246,4 @@ kev_control(struct socket *so,
 
 
 
-int
-fill_kqueueinfo(struct kqueue *kq, struct kqueue_info * kinfo)
-{
-	struct stat * st;
-
-	/* No need for the funnel as fd is kept alive */
-	
-	st = &kinfo->kq_stat;
-
-	st->st_size = kq->kq_count;
-	st->st_blksize = sizeof(struct kevent);
-	st->st_mode = S_IFIFO;
-	if (kq->kq_state & KQ_SEL)
-		kinfo->kq_state |=  PROC_KQUEUE_SELECT;
-	if (kq->kq_state & KQ_SLEEP)
-		kinfo->kq_state |= PROC_KQUEUE_SLEEP;
-
-	return(0);
-}
 

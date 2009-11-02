@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
@@ -1168,6 +1162,7 @@ bool IOCatalogue::addExtensionsFromArchive(OSData * mkext)
     return result;
 }
 
+
 /*********************************************************************
 * This function clears out all references to the in-kernel linker,
 * frees the list of startup extensions in extensionDict, and
@@ -1177,13 +1172,10 @@ bool IOCatalogue::addExtensionsFromArchive(OSData * mkext)
 *********************************************************************/
 kern_return_t IOCatalogue::removeKernelLinker(void) {
     kern_return_t result = KERN_SUCCESS;
-    struct segment_command * segmentLE, *segmentKLD;
-    boolean_t	keepsyms = FALSE;
-#if __ppc__
+    struct segment_command * segment;
     char * dt_segment_name;
     void * segment_paddress;
     int    segment_size;
-#endif
 
    /* This must be the very first thing done by this function.
     */
@@ -1198,8 +1190,6 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
         goto finish;
     }
 
-    PE_parse_boot_arg("keepsyms", &keepsyms);
- 
     IOLog("Jettisoning kernel linker.\n");
 
     kernelLinkerPresent = 0;
@@ -1219,24 +1209,25 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
     * memory so that any cross-dependencies (not that there
     * should be any) are handled.
     */
-    segmentKLD = getsegbyname("__KLD");
-    if (!segmentKLD) {
+    segment = getsegbyname("__KLD");
+    if (!segment) {
         IOLog("error removing kernel linker: can't find %s segment\n",
             "__KLD");
         result = KERN_FAILURE;
         goto finish;
     }
-    OSRuntimeUnloadCPPForSegment(segmentKLD);
+    OSRuntimeUnloadCPPForSegment(segment);
 
-    segmentLE = getsegbyname("__LINKEDIT");
-    if (!segmentLE) {
+    segment = getsegbyname("__LINKEDIT");
+    if (!segment) {
         IOLog("error removing kernel linker: can't find %s segment\n",
             "__LINKEDIT");
         result = KERN_FAILURE;
         goto finish;
     }
-    OSRuntimeUnloadCPPForSegment(segmentLE);
-#if __ppc__
+    OSRuntimeUnloadCPPForSegment(segment);
+
+
    /* Free the memory that was set up by bootx.
     */
     dt_segment_name = "Kernel-__KLD";
@@ -1244,29 +1235,12 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
         IODTFreeLoaderInfo(dt_segment_name, (void *)segment_paddress,
             (int)segment_size);
     }
-#elif __i386__
-    /* On x86, use the mapping data from the segment load command to
-     * unload KLD and LINKEDIT directly, unless the keepsyms boot-arg
-     * was enabled. This may invalidate any assumptions about 
-     * "avail_start" defining the lower bound for valid physical addresses.
-     */
-    if (!keepsyms && segmentKLD->vmaddr && segmentKLD->vmsize)
-	    ml_static_mfree(segmentKLD->vmaddr, segmentKLD->vmsize);
-#else
-#error arch
-#endif
-#if __ppc__
+
     dt_segment_name = "Kernel-__LINKEDIT";
     if (0 == IODTGetLoaderInfo(dt_segment_name, &segment_paddress, &segment_size)) {
         IODTFreeLoaderInfo(dt_segment_name, (void *)segment_paddress,
             (int)segment_size);
     }
-#elif __i386__
-    if (!keepsyms && segmentLE->vmaddr && segmentLE->vmsize)
-	    ml_static_mfree(segmentLE->vmaddr, segmentLE->vmsize);
-#else
-#error arch
-#endif
 
     struct section * sect;
     sect = getsectbyname("__PRELINK", "__symtab");

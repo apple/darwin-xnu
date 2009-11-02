@@ -1,29 +1,23 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -45,7 +39,6 @@
 #include <kern/cpu_data.h>
 #include <kern/assert.h>
 #include <kern/machine.h>
-#include <kern/pms.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -58,6 +51,7 @@
 #include <i386/apic.h>
 #include <i386/ipl.h>
 #include <i386/fpu.h>
+#include <i386/pio.h>
 #include <i386/cpuid.h>
 #include <i386/proc_reg.h>
 #include <i386/machine_cpu.h>
@@ -67,25 +61,6 @@
 #include <i386/perfmon.h>
 #include <i386/cpu_threads.h>
 #include <i386/mp_desc.h>
-#include <i386/trap.h>
-#include <i386/machine_routines.h>
-#include <i386/pmCPU.h>
-#include <i386/hpet.h>
-
-#include <chud/chud_xnu.h>
-#include <chud/chud_xnu_private.h>
-
-#include <sys/kdebug.h>
-#if MACH_KDB
-#include <i386/db_machdep.h>
-#include <ddb/db_aout.h>
-#include <ddb/db_access.h>
-#include <ddb/db_sym.h>
-#include <ddb/db_variables.h>
-#include <ddb/db_command.h>
-#include <ddb/db_output.h>
-#include <ddb/db_expr.h>
-#endif
 
 #if	MP_DEBUG
 #define PAUSE		delay(1000000)
@@ -95,6 +70,24 @@
 #define PAUSE
 #endif	/* MP_DEBUG */
 
+/*
+ * By default, use high vectors to leave vector space for systems
+ * with multiple I/O APIC's. However some systems that boot with
+ * local APIC disabled will hang in SMM when vectors greater than
+ * 0x5F are used. Those systems are not expected to have I/O APIC
+ * so 16 (0x50 - 0x40) vectors for legacy PIC support is perfect.
+ */
+#define LAPIC_DEFAULT_INTERRUPT_BASE	0xD0
+#define LAPIC_REDUCED_INTERRUPT_BASE	0x50
+/*
+ * Specific lapic interrupts are relative to this base:
+ */ 
+#define LAPIC_PERFCNT_INTERRUPT		0xB
+#define LAPIC_TIMER_INTERRUPT		0xC
+#define LAPIC_SPURIOUS_INTERRUPT	0xD	
+#define LAPIC_INTERPROCESSOR_INTERRUPT	0xE
+#define LAPIC_ERROR_INTERRUPT		0xF
+
 /* Initialize lapic_id so cpu_number() works on non SMP systems */
 unsigned long	lapic_id_initdata = 0;
 unsigned long	lapic_id = (unsigned long)&lapic_id_initdata;
@@ -102,7 +95,6 @@ vm_offset_t	lapic_start;
 
 static i386_intr_func_t	lapic_timer_func;
 static i386_intr_func_t	lapic_pmi_func;
-static i386_intr_func_t	lapic_thermal_func;
 
 /* TRUE if local APIC was enabled by the OS not by the BIOS */
 static boolean_t lapic_os_enabled = FALSE;
@@ -112,18 +104,8 @@ int lapic_interrupt_base = LAPIC_DEFAULT_INTERRUPT_BASE;
 
 void 		slave_boot_init(void);
 
-#if MACH_KDB
-static void	mp_kdb_wait(void);
-volatile boolean_t	mp_kdb_trap = FALSE;
-volatile long	mp_kdb_ncpus = 0;
-#endif
-
 static void	mp_kdp_wait(void);
 static void	mp_rendezvous_action(void);
-
-static int	NMIInterruptHandler(void *regs);
-static boolean_t	cpu_signal_pending(int cpu, mp_event_t event);
-static void	cpu_NMI_interrupt(int cpu);
 
 boolean_t 	smp_initialized = FALSE;
 
@@ -132,16 +114,13 @@ decl_simple_lock_data(,mp_kdp_lock);
 decl_mutex_data(static, mp_cpu_boot_lock);
 
 /* Variables needed for MP rendezvous. */
-decl_simple_lock_data(,mp_rv_lock);
 static void		(*mp_rv_setup_func)(void *arg);
 static void		(*mp_rv_action_func)(void *arg);
 static void		(*mp_rv_teardown_func)(void *arg);
 static void		*mp_rv_func_arg;
 static int		mp_rv_ncpus;
-			/* Cache-aligned barriers: */
-static volatile long	mp_rv_entry    __attribute__((aligned(64)));
-static volatile long	mp_rv_exit     __attribute__((aligned(64)));
-static volatile long	mp_rv_complete __attribute__((aligned(64)));
+static long		mp_rv_waiters[2];
+decl_simple_lock_data(,mp_rv_lock);
 
 int		lapic_to_cpu[MAX_CPUS];
 int		cpu_to_lapic[MAX_CPUS];
@@ -162,24 +141,6 @@ lapic_cpu_map(int apic_id, int cpu)
 {
 	cpu_to_lapic[cpu] = apic_id;
 	lapic_to_cpu[apic_id] = cpu;
-}
-
-/*
- * Retrieve the local apic ID a cpu.
- *
- * Returns the local apic ID for the given processor.
- * If the processor does not exist or apic not configured, returns -1.
- */
-
-uint32_t
-ml_get_apicid(uint32_t cpu)
-{
-	if(cpu >= (uint32_t)MAX_CPUS)
-		return 0xFFFFFFFF;	/* Return -1 if cpu too big */
-	
-	/* Return the apic ID (or -1 if not configured) */
-	return (uint32_t)cpu_to_lapic[cpu];
-
 }
 
 #ifdef MP_DEBUG
@@ -208,6 +169,18 @@ lapic_cpu_map_dump(void)
 #define LAPIC_DUMP()
 #endif /* MP_DEBUG */
 
+#define LAPIC_REG(reg) \
+	(*((volatile int *)(lapic_start + LAPIC_##reg)))
+#define LAPIC_REG_OFFSET(reg,off) \
+	(*((volatile int *)(lapic_start + LAPIC_##reg + (off))))
+
+#define LAPIC_VECTOR(src) \
+	(lapic_interrupt_base + LAPIC_##src##_INTERRUPT)
+
+#define LAPIC_ISR_IS_SET(base,src) \
+	(LAPIC_REG_OFFSET(ISR_BASE,((base+LAPIC_##src##_INTERRUPT)/32)*0x10) & \
+		(1 <<((base + LAPIC_##src##_INTERRUPT)%32)))
+
 #if GPROF
 /*
  * Initialize dummy structs for profiling. These aren't used but
@@ -226,6 +199,8 @@ struct profile_vars *_profile_vars_cpus[MAX_CPUS] = { &_profile_vars };
 #else
 #define GPROF_INIT()
 #endif /* GPROF */
+
+extern void	master_up(void);
 
 void
 smp_init(void)
@@ -260,22 +235,17 @@ smp_init(void)
 
 	/* Establish a map to the local apic */
 	lapic_start = vm_map_min(kernel_map);
-	result = vm_map_find_space(kernel_map,
-				   (vm_map_address_t *) &lapic_start,
-				   round_page(LAPIC_SIZE), 0,
-				   VM_MAKE_TAG(VM_MEMORY_IOKIT), &entry);
+	result = vm_map_find_space(kernel_map, &lapic_start,
+				   round_page(LAPIC_SIZE), 0, &entry);
 	if (result != KERN_SUCCESS) {
 		panic("smp_init: vm_map_find_entry FAILED (err=%d)", result);
 	}
 	vm_map_unlock(kernel_map);
-/* Map in the local APIC non-cacheable, as recommended by Intel
- * in section 8.4.1 of the "System Programming Guide".
- */
 	pmap_enter(pmap_kernel(),
 			lapic_start,
 			(ppnum_t) i386_btop(lapic_base),
-			VM_PROT_READ|VM_PROT_WRITE,
-			VM_WIMG_IO,
+		   	VM_PROT_READ|VM_PROT_WRITE,
+			VM_WIMG_USE_DEFAULT,
 			TRUE);
 	lapic_id = (unsigned long)(lapic_start + LAPIC_ID);
 
@@ -286,16 +256,19 @@ smp_init(void)
 	/* Set up the lapic_id <-> cpu_number map and add this boot processor */
 	lapic_cpu_map_init();
 	lapic_cpu_map((LAPIC_REG(ID)>>LAPIC_ID_SHIFT)&LAPIC_ID_MASK, 0);
-	kprintf("Boot cpu local APIC id 0x%x\n", cpu_to_lapic[0]);
 
 	lapic_init();
 
 	cpu_thread_init();
 
+	if (pmc_init() != KERN_SUCCESS)
+		printf("Performance counters not available\n");
+
 	GPROF_INIT();
 	DBGLOG_CPU_INIT(master_cpu);
 
 	slave_boot_init();
+	master_up();
 
 	smp_initialized = TRUE;
 
@@ -363,11 +336,6 @@ lapic_dump(void)
 		DM[(LAPIC_REG(LVT_PERFCNT)>>LAPIC_LVT_DM_SHIFT)&LAPIC_LVT_DM_MASK],
 		(LAPIC_REG(LVT_PERFCNT)&LAPIC_LVT_DS_PENDING)?"SendPending":"Idle",
 		BOOL(LAPIC_REG(LVT_PERFCNT)&LAPIC_LVT_MASKED));
-	kprintf("LVT_THERMAL: Vector 0x%02x [%s] %s %cmasked\n",
-		LAPIC_REG(LVT_THERMAL)&LAPIC_LVT_VECTOR_MASK,
-		DM[(LAPIC_REG(LVT_THERMAL)>>LAPIC_LVT_DM_SHIFT)&LAPIC_LVT_DM_MASK],
-		(LAPIC_REG(LVT_THERMAL)&LAPIC_LVT_DS_PENDING)?"SendPending":"Idle",
-		BOOL(LAPIC_REG(LVT_THERMAL)&LAPIC_LVT_MASKED));
 	kprintf("LVT_LINT0:   Vector 0x%02x [%s][%s][%s] %s %cmasked\n",
 		LAPIC_REG(LVT_LINT0)&LAPIC_LVT_VECTOR_MASK,
 		DM[(LAPIC_REG(LVT_LINT0)>>LAPIC_LVT_DM_SHIFT)&LAPIC_LVT_DM_MASK],
@@ -405,26 +373,6 @@ lapic_dump(void)
 	kprintf("\n");
 }
 
-#if MACH_KDB
-/*
- *	Displays apic junk
- *
- *	da
- */
-void 
-db_apic(__unused db_expr_t addr,
-	__unused int have_addr,
-	__unused db_expr_t count,
-	__unused char *modif)
-{
-
-	lapic_dump();
-
-	return;
-}
-
-#endif
-
 boolean_t
 lapic_probe(void)
 {
@@ -449,7 +397,7 @@ lapic_probe(void)
 		/*
 		 * Re-initialize cpu features info and re-check.
 		 */
-		cpuid_set_info();
+		set_cpu_model();
 		if (cpuid_features() & CPUID_FEATURE_APIC) {
 			printf("Local APIC discovered and enabled\n");
 			lapic_os_enabled = TRUE;
@@ -497,7 +445,7 @@ lapic_shutdown(void)
 	rdmsr(MSR_IA32_APIC_BASE, lo, hi);
 	lo &= ~MSR_IA32_APIC_BASE_ENABLE;
 	wrmsr(MSR_IA32_APIC_BASE, lo, hi);
-	cpuid_set_info();
+	set_cpu_model();
 
 	mp_enable_preemption();
 }
@@ -530,12 +478,10 @@ lapic_init(void)
 	/* Perfmon: unmasked */
 	LAPIC_REG(LVT_PERFCNT) = LAPIC_VECTOR(PERFCNT);
 
-	/* Thermal: unmasked */
-	LAPIC_REG(LVT_THERMAL) = LAPIC_VECTOR(THERMAL);
-
 	lapic_esr_clear();
 
 	LAPIC_REG(LVT_ERROR) = LAPIC_VECTOR(ERROR);
+
 }
 
 void
@@ -593,12 +539,6 @@ lapic_set_pmi_func(i386_intr_func_t func)
 	lapic_pmi_func = func;
 }
 
-void
-lapic_set_thermal_func(i386_intr_func_t func)
-{
-        lapic_thermal_func = func;
-}
-
 static inline void
 _lapic_end_of_interrupt(void)
 {
@@ -612,77 +552,42 @@ lapic_end_of_interrupt(void)
 }
 
 int
-lapic_interrupt(int interrupt, x86_saved_state_t *state)
+lapic_interrupt(int interrupt, void *state)
 {
-	int	retval = 0;
-
-	/* Did we just field an interruption for the HPET comparator? */
-	if(current_cpu_datap()->cpu_pmHpetVec == ((uint32_t)interrupt - 0x40)) {
-		/* Yes, go handle it... */
-		retval = HPETInterrupt();
-		/* Was it really handled? */
-		if(retval) {
-			/* If so, EOI the 'rupt */
-			_lapic_end_of_interrupt();
-			/*
-			 * and then leave,
-			 * indicating that this has been handled
-			 */
-			return 1;
-		}
-	}
-
 	interrupt -= lapic_interrupt_base;
-	if (interrupt < 0) {
-		if (interrupt == (LAPIC_NMI_INTERRUPT - lapic_interrupt_base)) {
-			retval = NMIInterruptHandler(state);
-			_lapic_end_of_interrupt();
-			return retval;
-		}
-		else
-			return 0;
-	}
+	if (interrupt < 0)
+		return 0;
 
 	switch(interrupt) {
 	case LAPIC_PERFCNT_INTERRUPT:
 		if (lapic_pmi_func != NULL)
-			(*lapic_pmi_func)(NULL);
+			(*lapic_pmi_func)(
+				(struct i386_interrupt_state *) state);
 		/* Clear interrupt masked */
 		LAPIC_REG(LVT_PERFCNT) = LAPIC_VECTOR(PERFCNT);
 		_lapic_end_of_interrupt();
-		retval = 1;
-		break;
+		return 1;
 	case LAPIC_TIMER_INTERRUPT:
 		_lapic_end_of_interrupt();
 		if (lapic_timer_func != NULL)
-			(*lapic_timer_func)(state);
-		retval = 1;
-		break;
-	case LAPIC_THERMAL_INTERRUPT:
-		if (lapic_thermal_func != NULL)
-			(*lapic_thermal_func)(NULL);
-		_lapic_end_of_interrupt();
-		retval = 1;
-		break;
+			(*lapic_timer_func)(
+				(struct i386_interrupt_state *) state);
+		return 1;
 	case LAPIC_ERROR_INTERRUPT:
 		lapic_dump();
 		panic("Local APIC error\n");
 		_lapic_end_of_interrupt();
-		retval = 1;
-		break;
+		return 1;
 	case LAPIC_SPURIOUS_INTERRUPT:
 		kprintf("SPIV\n");
 		/* No EOI required here */
-		retval = 1;
-		break;
+		return 1;
 	case LAPIC_INTERPROCESSOR_INTERRUPT:
+		cpu_signal_handler((struct i386_interrupt_state *) state);
 		_lapic_end_of_interrupt();
-		cpu_signal_handler(state);
-		retval = 1;
-		break;
+		return 1;
 	}
-
-	return retval;
+	return 0;
 }
 
 void
@@ -733,14 +638,8 @@ intel_startCPU(
 	DBG("intel_startCPU(%d) lapic_id=%d\n", slot_num, lapic);
 	DBG("IdlePTD(%p): 0x%x\n", &IdlePTD, (int) IdlePTD);
 
-	/*
-	 * Initialize (or re-initialize) the descriptor tables for this cpu.
-	 * Propagate processor mode to slave.
-	 */
-	if (cpu_mode_is64bit())
-		cpu_desc_init64(cpu_datap(slot_num), FALSE);
-	else
-		cpu_desc_init(cpu_datap(slot_num), FALSE);
+	/* Initialize (or re-initialize) the descriptor tables for this cpu. */
+	mp_desc_init(cpu_datap(slot_num), FALSE);
 
 	/* Serialize use of the slave boot stack. */
 	mutex_lock(&mp_cpu_boot_lock);
@@ -778,13 +677,13 @@ intel_startCPU(
 	mutex_unlock(&mp_cpu_boot_lock);
 
 	if (!cpu_datap(slot_num)->cpu_running) {
-		kprintf("Failed to start CPU %02d\n", slot_num);
+		DBG("Failed to start CPU %02d\n", slot_num);
 		printf("Failed to start CPU %02d, rebooting...\n", slot_num);
 		delay(1000000);
 		cpu_shutdown();
 		return KERN_SUCCESS;
 	} else {
-		kprintf("Started cpu %d (lapic id %p)\n", slot_num, lapic);
+		DBG("Started CPU %02d\n", slot_num);
 		printf("Started CPU %02d\n", slot_num);
 		return KERN_SUCCESS;
 	}
@@ -792,7 +691,7 @@ intel_startCPU(
 
 extern char	slave_boot_base[];
 extern char	slave_boot_end[];
-extern void	slave_pstart(void);
+extern void	pstart(void);
 
 void
 slave_boot_init(void)
@@ -810,7 +709,7 @@ slave_boot_init(void)
 	 * The slave boot code is responsible for switching to protected
 	 * mode and then jumping to the common startup, _start().
 	 */
-	bcopy_phys(kvtophys((vm_offset_t) slave_boot_base),
+	bcopy_phys((addr64_t) kvtophys((vm_offset_t) slave_boot_base),
 		   (addr64_t) MP_BOOT,
 		   slave_boot_end-slave_boot_base);
 
@@ -825,9 +724,9 @@ slave_boot_init(void)
 	 * common startup entry.
 	 */
 	DBG("writing 0x%x at phys 0x%x\n",
-		kvtophys((vm_offset_t) &slave_pstart), MP_MACH_START+MP_BOOT);
+		kvtophys((vm_offset_t) &pstart), MP_MACH_START+MP_BOOT);
 	ml_phys_write_word(MP_MACH_START+MP_BOOT,
-			   (unsigned int)kvtophys((vm_offset_t) &slave_pstart));
+			   kvtophys((vm_offset_t) &pstart));
 	
 	/* Flush caches */
 	__asm__("wbinvd");
@@ -842,7 +741,7 @@ MP_EVENT_NAME_DECL();
 #endif	/* MP_DEBUG */
 
 void
-cpu_signal_handler(x86_saved_state_t *regs)
+cpu_signal_handler(__unused struct i386_interrupt_state *regs)
 {
 	int		my_cpu;
 	volatile int	*my_word;
@@ -858,19 +757,12 @@ cpu_signal_handler(x86_saved_state_t *regs)
 	do {
 #if	MACH_KDB && MACH_ASSERT
 		if (i-- <= 0)
-		    Debugger("cpu_signal_handler: signals did not clear");
+		    Debugger("cpu_signal_handler");
 #endif	/* MACH_KDB && MACH_ASSERT */
 #if	MACH_KDP
 		if (i_bit(MP_KDP, my_word)) {
 			DBGLOG(cpu_handle,my_cpu,MP_KDP);
 			i_bit_clear(MP_KDP, my_word);
-/* Ensure that the i386_kernel_state at the base of the
- * current thread's stack (if any) is synchronized with the
- * context at the moment of the interrupt, to facilitate
- * access through the debugger.
- * XXX 64-bit state?
- */
-			sync_iss_to_iks(saved_state32(regs));
 			mp_kdp_wait();
 		} else
 #endif	/* MACH_KDP */
@@ -884,20 +776,16 @@ cpu_signal_handler(x86_saved_state_t *regs)
 			ast_check(cpu_to_processor(my_cpu));
 #if	MACH_KDB
 		} else if (i_bit(MP_KDB, my_word)) {
+			extern kdb_is_slave[];
 
 			i_bit_clear(MP_KDB, my_word);
-			current_cpu_datap()->cpu_kdb_is_slave++;
-			mp_kdb_wait();
-			current_cpu_datap()->cpu_kdb_is_slave--;
+			kdb_is_slave[my_cpu]++;
+			kdb_kintr();
 #endif	/* MACH_KDB */
 		} else if (i_bit(MP_RENDEZVOUS, my_word)) {
 			DBGLOG(cpu_handle,my_cpu,MP_RENDEZVOUS);
 			i_bit_clear(MP_RENDEZVOUS, my_word);
 			mp_rendezvous_action();
-		} else if (i_bit(MP_CHUD, my_word)) {
-			DBGLOG(cpu_handle,my_cpu,MP_CHUD);
-			i_bit_clear(MP_CHUD, my_word);
-			chudxnu_cpu_signal_handler();
 		}
 	} while (*my_word);
 
@@ -905,49 +793,19 @@ cpu_signal_handler(x86_saved_state_t *regs)
 
 }
 
-
-/* We want this to show up in backtraces, so mark it noinline
- */
-static int __attribute__((noinline))
-NMIInterruptHandler(void *regs)
-{
-	boolean_t state = ml_set_interrupts_enabled(FALSE);
-	sync_iss_to_iks_unconditionally(regs);
-	mp_kdp_wait();
-	(void) ml_set_interrupts_enabled(state);
-	return 1;
-}
-
 #ifdef	MP_DEBUG
 extern int	max_lock_loops;
 #endif	/* MP_DEBUG */
-
-int trappedalready = 0;	/* (BRINGUP */
-
 void
 cpu_interrupt(int cpu)
 {
 	boolean_t	state;
-	
-	if(cpu_datap(cpu)->cpu_signals & 6) {	/* (BRINGUP) */
-		kprintf("cpu_interrupt: sending enter debugger signal (%08X) to cpu %d\n", cpu_datap(cpu)->cpu_signals, cpu);
-	}
 
 	if (smp_initialized) {
 
-#if MACH_KDB
-//		if(!trappedalready && (cpu_datap(cpu)->cpu_signals & 6)) {	/* (BRINGUP) */
-//			if(kdb_cpu != cpu_number()) {
-//				trappedalready = 1;
-//				panic("cpu_interrupt: sending enter debugger signal (%08X) to cpu %d and I do not own debugger, owner = %08X\n", 
-//					cpu_datap(cpu)->cpu_signals, cpu, kdb_cpu);
-//			}
-//		}
-#endif
-
 		/* Wait for previous interrupt to be delivered... */
 #ifdef	MP_DEBUG
-		int     pending_busy_count = 0;
+		int	pending_busy_count = 0;
 		while (LAPIC_REG(ICR) & LAPIC_ICR_DS_PENDING) {
 			if (++pending_busy_count > max_lock_loops)
 				panic("cpus_interrupt() deadlock\n");
@@ -967,43 +825,18 @@ cpu_interrupt(int cpu)
 
 }
 
-/*
- * Send a true NMI via the local APIC to the specified CPU.
- */
-static void
-cpu_NMI_interrupt(int cpu)
-{
-	boolean_t	state;
-
-	if (smp_initialized) {
-		state = ml_set_interrupts_enabled(FALSE);
-		LAPIC_REG(ICRD) =
-			cpu_to_lapic[cpu] << LAPIC_ICRD_DEST_SHIFT;
-/* The vector is ignored in this case, the other CPU will come in on the
- * NMI vector.
- */
-		LAPIC_REG(ICR)  =
-			LAPIC_VECTOR(INTERPROCESSOR) | LAPIC_ICR_DM_NMI;
-		(void) ml_set_interrupts_enabled(state);
-	}
-
-}
-
 void
 i386_signal_cpu(int cpu, mp_event_t event, mp_sync_t mode)
 {
 	volatile int	*signals = &cpu_datap(cpu)->cpu_signals;
 	uint64_t	tsc_timeout;
-
 	
+
 	if (!cpu_datap(cpu)->cpu_running)
 		return;
 
-	if (event == MP_TLB_FLUSH)
-	        KERNEL_DEBUG(0xef800020 | DBG_FUNC_START, cpu, 0, 0, 0, 0);
-
 	DBGLOG(cpu_signal, cpu, event);
-	
+
 	i_bit_set(event, signals);
 	cpu_interrupt(cpu);
 	if (mode == SYNC) {
@@ -1018,8 +851,6 @@ i386_signal_cpu(int cpu, mp_event_t event, mp_sync_t mode)
 			goto again;
 		}
 	}
-	if (event == MP_TLB_FLUSH)
-	        KERNEL_DEBUG(0xef800020 | DBG_FUNC_END, cpu, 0, 0, 0, 0);
 }
 
 void
@@ -1070,28 +901,19 @@ mp_rendezvous_action(void)
 	if (mp_rv_setup_func != NULL)
 		mp_rv_setup_func(mp_rv_func_arg);
 	/* spin on entry rendezvous */
-	atomic_incl(&mp_rv_entry, 1);
-	while (mp_rv_entry < mp_rv_ncpus) {
-		boolean_t intr = ml_set_interrupts_enabled(FALSE);
-		/* poll for pesky tlb flushes */
-		handle_pending_TLB_flushes();
-		ml_set_interrupts_enabled(intr);
+	atomic_incl(&mp_rv_waiters[0], 1);
+	while (*((volatile long *) &mp_rv_waiters[0]) < mp_rv_ncpus)
 		cpu_pause();
-	}
 	/* action function */
 	if (mp_rv_action_func != NULL)
 		mp_rv_action_func(mp_rv_func_arg);
 	/* spin on exit rendezvous */
-	atomic_incl(&mp_rv_exit, 1);
-	while (mp_rv_exit < mp_rv_ncpus)
+	atomic_incl(&mp_rv_waiters[1], 1);
+	while (*((volatile long *) &mp_rv_waiters[1]) < mp_rv_ncpus)
 		cpu_pause();
-
 	/* teardown function */
 	if (mp_rv_teardown_func != NULL)
 		mp_rv_teardown_func(mp_rv_func_arg);
-
-	/* Bump completion count */
-	atomic_incl(&mp_rv_complete, 1);
 }
 
 void
@@ -1120,86 +942,26 @@ mp_rendezvous(void (*setup_func)(void *),
 	mp_rv_teardown_func = teardown_func;
 	mp_rv_func_arg = arg;
 
-	mp_rv_entry    = 0;
-	mp_rv_exit     = 0;
-	mp_rv_complete = 0;
+	mp_rv_waiters[0] = 0;		/* entry rendezvous count */
+	mp_rv_waiters[1] = 0;		/* exit  rendezvous count */
+	mp_rv_ncpus = i386_active_cpus();
 
 	/*
 	 * signal other processors, which will call mp_rendezvous_action()
+	 * with interrupts disabled
 	 */
-	mp_rv_ncpus = i386_active_cpus();
 	i386_signal_cpus(MP_RENDEZVOUS, ASYNC);
 
 	/* call executor function on this cpu */
 	mp_rendezvous_action();
 
-	/*
-	 * Spin for everyone to complete.
-	 * This is necessary to ensure that all processors have proceeded
-	 * from the exit barrier before we release the rendezvous structure.
-	 */
-	while (mp_rv_complete < mp_rv_ncpus) {
-		cpu_pause();
-	}
-	
 	/* release lock */
 	simple_unlock(&mp_rv_lock);
 }
 
-void
-mp_rendezvous_break_lock(void)
-{
-	simple_lock_init(&mp_rv_lock, 0);
-}
-
-static void
-setup_disable_intrs(__unused void * param_not_used)
-{
-	/* disable interrupts before the first barrier */
-	boolean_t intr = ml_set_interrupts_enabled(FALSE);
-
-	current_cpu_datap()->cpu_iflag = intr;
-	DBG("CPU%d: %s\n", get_cpu_number(), __FUNCTION__);
-}
-
-static void
-teardown_restore_intrs(__unused void * param_not_used)
-{
-	/* restore interrupt flag following MTRR changes */
-	ml_set_interrupts_enabled(current_cpu_datap()->cpu_iflag);
-	DBG("CPU%d: %s\n", get_cpu_number(), __FUNCTION__);
-}
-
-/*
- * A wrapper to mp_rendezvous() to call action_func() with interrupts disabled.
- * This is exported for use by kexts.
- */
-void
-mp_rendezvous_no_intrs(
-	      void (*action_func)(void *),
-	      void *arg)
-{
-	mp_rendezvous(setup_disable_intrs,
-		      action_func,
-		      teardown_restore_intrs,
-		      arg);	
-}
-
-void
-handle_pending_TLB_flushes(void)
-{
-	volatile int	*my_word = &current_cpu_datap()->cpu_signals;
-
-        if (i_bit(MP_TLB_FLUSH, my_word)) {
-	        DBGLOG(cpu_handle, cpu_number(), MP_TLB_FLUSH);
-		i_bit_clear(MP_TLB_FLUSH, my_word);
-		pmap_update_interrupt();
-	}
-}
-
 #if	MACH_KDP
 volatile boolean_t	mp_kdp_trap = FALSE;
-volatile long		mp_kdp_ncpus;
+long			mp_kdp_ncpus;
 boolean_t		mp_kdp_state;
 
 
@@ -1220,7 +982,6 @@ mp_kdp_enter(void)
 	 */
 	mp_kdp_state = ml_set_interrupts_enabled(FALSE);
 	simple_lock(&mp_kdp_lock);
-
 	while (mp_kdp_trap) {
 		simple_unlock(&mp_kdp_lock);
 		DBG("mp_kdp_enter() race lost\n");
@@ -1231,102 +992,53 @@ mp_kdp_enter(void)
 	mp_kdp_trap = TRUE;
 	simple_unlock(&mp_kdp_lock);
 
-	/*
-	 * Deliver a nudge to other cpus, counting how many
-	 */
+	/* Deliver a nudge to other cpus, counting how many */
 	DBG("mp_kdp_enter() signaling other processors\n");
 	for (ncpus = 1, cpu = 0; cpu < real_ncpus; cpu++) {
 		if (cpu == my_cpu || !cpu_datap(cpu)->cpu_running)
 			continue;
 		ncpus++;
-		i386_signal_cpu(cpu, MP_KDP, ASYNC);
+		i386_signal_cpu(cpu, MP_KDP, ASYNC); 
 	}
-	/*
-	 * Wait other processors to synchronize
-	 */
+
+	/* Wait other processors to spin. */
 	DBG("mp_kdp_enter() waiting for (%d) processors to suspend\n", ncpus);
-
-	tsc_timeout = rdtsc64() + (ncpus * 100 * 1000 * 1000);
-
-	while (mp_kdp_ncpus != ncpus && rdtsc64() < tsc_timeout) {
-	        /*
-		 * A TLB shootdown request may be pending... this would
-		 * result in the requesting processor waiting in
-		 * PMAP_UPDATE_TLBS() until this processor deals with it.
-		 * Process it, so it can now enter mp_kdp_wait()
-		 */
-	        handle_pending_TLB_flushes();
+	tsc_timeout = rdtsc64() + (1000*1000*1000);
+	while (*((volatile unsigned int *) &mp_kdp_ncpus) != ncpus
+		&& rdtsc64() < tsc_timeout) {
 		cpu_pause();
 	}
-/* If we've timed out, and some processor(s) are still unresponsive,
- * interrupt them with an NMI via the local APIC.
- */
-	if (mp_kdp_ncpus != ncpus) {
-		for (cpu = 0; cpu < real_ncpus; cpu++) {
-			if (cpu == my_cpu || !cpu_datap(cpu)->cpu_running)
-				continue;
-			if (cpu_signal_pending(cpu, MP_KDP))
-			    cpu_NMI_interrupt(cpu);
-		}
-	}
-
 	DBG("mp_kdp_enter() %d processors done %s\n",
 		mp_kdp_ncpus, (mp_kdp_ncpus == ncpus) ? "OK" : "timed out");
-	
 	postcode(MP_KDP_ENTER);
-}
-
-static boolean_t
-cpu_signal_pending(int cpu, mp_event_t event)
-{
-	volatile int	*signals = &cpu_datap(cpu)->cpu_signals;
-	boolean_t retval = FALSE;
-
-	if (i_bit(event, signals))
-		retval = TRUE;
-	return retval;
 }
 
 static void
 mp_kdp_wait(void)
 {
+	boolean_t	state;
+
+	state = ml_set_interrupts_enabled(TRUE);
 	DBG("mp_kdp_wait()\n");
-
-	panic_io_port_read();
-
 	atomic_incl(&mp_kdp_ncpus, 1);
 	while (mp_kdp_trap) {
-	        /*
-		 * a TLB shootdown request may be pending... this would result in the requesting
-		 * processor waiting in PMAP_UPDATE_TLBS() until this processor deals with it.
-		 * Process it, so it can now enter mp_kdp_wait()
-		 */
-	        handle_pending_TLB_flushes();
-
 		cpu_pause();
 	}
-	atomic_decl((volatile long *)&mp_kdp_ncpus, 1);
+	atomic_decl(&mp_kdp_ncpus, 1);
 	DBG("mp_kdp_wait() done\n");
+	(void) ml_set_interrupts_enabled(state);
 }
 
 void
 mp_kdp_exit(void)
 {
 	DBG("mp_kdp_exit()\n");
-	atomic_decl((volatile long *)&mp_kdp_ncpus, 1);
+	atomic_decl(&mp_kdp_ncpus, 1);
 	mp_kdp_trap = FALSE;
-	__asm__ volatile("mfence");
 
 	/* Wait other processors to stop spinning. XXX needs timeout */
 	DBG("mp_kdp_exit() waiting for processors to resume\n");
-	while (mp_kdp_ncpus > 0) {
-	        /*
-		 * a TLB shootdown request may be pending... this would result in the requesting
-		 * processor waiting in PMAP_UPDATE_TLBS() until this processor deals with it.
-		 * Process it, so it can now enter mp_kdp_wait()
-		 */
-	        handle_pending_TLB_flushes();
-
+	while (*((volatile long *) &mp_kdp_ncpus) > 0) {
 		cpu_pause();
 	}
 	DBG("mp_kdp_exit() done\n");
@@ -1353,7 +1065,6 @@ cause_ast_check(
 	}
 }
 
-#if MACH_KDB
 /*
  * invoke kdb on slave processors 
  */
@@ -1363,55 +1074,14 @@ remote_kdb(void)
 {
 	unsigned int	my_cpu = cpu_number();
 	unsigned int	cpu;
-	int kdb_ncpus;
-	uint64_t tsc_timeout = 0;
 	
-	mp_kdb_trap = TRUE;
-	mp_kdb_ncpus = 1;
-	for (kdb_ncpus = 1, cpu = 0; cpu < real_ncpus; cpu++) {
+	mp_disable_preemption();
+	for (cpu = 0; cpu < real_ncpus; cpu++) {
 		if (cpu == my_cpu || !cpu_datap(cpu)->cpu_running)
 			continue;
-		kdb_ncpus++;
-		i386_signal_cpu(cpu, MP_KDB, ASYNC);
+		i386_signal_cpu(cpu, MP_KDB, SYNC);
 	}
-	DBG("remote_kdb() waiting for (%d) processors to suspend\n",kdb_ncpus);
-
-	tsc_timeout = rdtsc64() + (kdb_ncpus * 100 * 1000 * 1000);
-
-	while (mp_kdb_ncpus != kdb_ncpus && rdtsc64() < tsc_timeout) {
-	        /*
-		 * a TLB shootdown request may be pending... this would result in the requesting
-		 * processor waiting in PMAP_UPDATE_TLBS() until this processor deals with it.
-		 * Process it, so it can now enter mp_kdp_wait()
-		 */
-	        handle_pending_TLB_flushes();
-
-		cpu_pause();
-	}
-	DBG("mp_kdp_enter() %d processors done %s\n",
-		mp_kdb_ncpus, (mp_kdb_ncpus == kdb_ncpus) ? "OK" : "timed out");
-}
-
-static void
-mp_kdb_wait(void)
-{
-	DBG("mp_kdb_wait()\n");
-
-	panic_io_port_read();
-
-	atomic_incl(&mp_kdb_ncpus, 1);
-	while (mp_kdb_trap) {
-	        /*
-		 * a TLB shootdown request may be pending... this would result in the requesting
-		 * processor waiting in PMAP_UPDATE_TLBS() until this processor deals with it.
-		 * Process it, so it can now enter mp_kdp_wait()
-		 */
-	        handle_pending_TLB_flushes();
-
-		cpu_pause();
-	}
-	atomic_decl((volatile long *)&mp_kdb_ncpus, 1);
-	DBG("mp_kdb_wait() done\n");
+	mp_enable_preemption();
 }
 
 /*
@@ -1426,34 +1096,9 @@ clear_kdb_intr(void)
 	mp_enable_preemption();
 }
 
-void
-mp_kdb_exit(void)
-{
-	DBG("mp_kdb_exit()\n");
-	atomic_decl((volatile long *)&mp_kdb_ncpus, 1);
-	mp_kdb_trap = FALSE;
-	__asm__ volatile("mfence");
-
-	while (mp_kdb_ncpus > 0) {
-	        /*
-		 * a TLB shootdown request may be pending... this would result in the requesting
-		 * processor waiting in PMAP_UPDATE_TLBS() until this processor deals with it.
-		 * Process it, so it can now enter mp_kdp_wait()
-		 */
-	        handle_pending_TLB_flushes();
-
-		cpu_pause();
-	}
-	DBG("mp_kdb_exit() done\n");
-}
-
-#endif /* MACH_KDB */
-
 /*
  * i386_init_slave() is called from pstart.
  * We're in the cpu's interrupt stack with interrupts disabled.
- * At this point we are in legacy mode. We need to switch on IA32e
- * if the mode is set to 64-bits.
  */
 void
 i386_init_slave(void)
@@ -1466,30 +1111,16 @@ i386_init_slave(void)
 	DBG("i386_init_slave() CPU%d: phys (%d) active.\n",
 		get_cpu_number(), get_cpu_phys_number());
 
-	assert(!ml_get_interrupts_enabled());
-	if (cpu_mode_is64bit()) {
-		cpu_IA32e_enable(current_cpu_datap());
-		cpu_desc_load64(current_cpu_datap());
-		fast_syscall_init64();
-	} else {
-		fast_syscall_init();
-	}
-
-	mca_cpu_init();
-
 	lapic_init();
+
 	LAPIC_DUMP();
 	LAPIC_CPU_MAP_DUMP();
-
-	init_fpu();
 
 	mtrr_update_cpu();
 
 	pat_init();
 
-	cpu_thread_init();
-
-	cpu_init();	/* Sets cpu_running which starter cpu waits for */ 
+	cpu_init();
 
 	slave_main();
 
@@ -1500,13 +1131,19 @@ void
 slave_machine_init(void)
 {
 	/*
- 	 * Here in process context, but with interrupts disabled.
+ 	 * Here in process context.
 	 */
 	DBG("slave_machine_init() CPU%d\n", get_cpu_number());
 
-	clock_init();
+	init_fpu();
 
-	cpu_machine_init();		/* Interrupts enabled hereafter */
+	cpu_thread_init();
+
+	pmc_init();
+
+	cpu_machine_init();
+
+	clock_init();
 }
 
 #undef cpu_number()
@@ -1561,5 +1198,44 @@ db_trap_hist(void)
 		
 }
 #endif	/* TRAP_DEBUG */
+
+void db_lapic(int cpu);
+unsigned int db_remote_read(int cpu, int reg);
+void db_ioapic(unsigned int);
+void kdb_console(void);
+
+void
+kdb_console(void)
+{
+}
+
+#define BOOLP(a) ((a)?' ':'!')
+
+static char *DM[8] = {
+	"Fixed",
+	"Lowest Priority",
+	"Invalid",
+	"Invalid",
+	"NMI",
+	"Reset",
+	"Invalid",
+	"ExtINT"};
+
+unsigned int
+db_remote_read(int cpu, int reg)
+{
+	return -1;
+}
+
+void
+db_lapic(int cpu)
+{
+}
+
+void
+db_ioapic(unsigned int ind)
+{
+}
+
 #endif	/* MACH_KDB */
 

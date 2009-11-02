@@ -1,29 +1,23 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 
 #include <kern/task.h>
@@ -77,7 +71,7 @@ unix_syscall(struct savearea	*regs)
 	struct proc			*proc;
 	struct sysent		*callp;
 	int					error;
-	unsigned short		code;
+	unsigned int		code;
 	boolean_t			flavor;
 	int funnel_type;
 	unsigned int cancel_enable;
@@ -122,10 +116,15 @@ unix_syscall(struct savearea	*regs)
 	if (uthread->uu_ucred != proc->p_ucred &&
 	    (uthread->uu_flag & UT_SETUID) == 0) {
 		kauth_cred_t old = uthread->uu_ucred;
-		uthread->uu_ucred = kauth_cred_proc_ref(proc);
-		if (IS_VALID_CRED(old))
-			kauth_cred_unref(&old);
+		proc_lock(proc);
+		uthread->uu_ucred = proc->p_ucred;
+		kauth_cred_ref(uthread->uu_ucred);
+		proc_unlock(proc);
+		if (old != NOCRED)
+			kauth_cred_rele(old);
 	}
+
+	uthread->uu_ar0 = (int *)regs;
 
 	callp = (code >= nsysent) ? &sysent[63] : &sysent[code];
 
@@ -322,8 +321,9 @@ unix_syscall_return(int error)
 	struct uthread				*uthread;
 	struct proc					*proc;
 	struct savearea				*regs;
-	unsigned short				code;
+	unsigned int				code;
 	struct sysent				*callp;
+	int funnel_type;
 	unsigned int cancel_enable;
 
 	thread_act = current_thread();
@@ -441,9 +441,90 @@ unix_syscall_return(int error)
 	/* NOTREACHED */
 }
 
+/* 
+ * Time of day and interval timer support.
+ *
+ * These routines provide the kernel entry points to get and set
+ * the time-of-day and per-process interval timers.  Subroutines
+ * here provide support for adding and subtracting timeval structures
+ * and decrementing interval timers, optionally reloading the interval
+ * timers when they expire.
+ */
+/*  NOTE THIS implementation is for  ppc architectures only.
+ *  It is infrequently called, since the commpage intercepts
+ *  most calls in user mode.
+ *
+ * XXX Y2038 bug because of assumed return of 32 bit seconds value, and
+ * XXX first parameter to clock_gettimeofday()
+ */
+int
+ppc_gettimeofday(__unused struct proc *p, 
+				 register struct ppc_gettimeofday_args *uap, 
+				 register_t *retval)
+{
+	int error = 0;
+	extern lck_spin_t * tz_slock;
+
+	if (uap->tp)
+		clock_gettimeofday(&retval[0], &retval[1]);
+	
+	if (uap->tzp) {
+		struct timezone ltz;
+
+		lck_spin_lock(tz_slock);
+		ltz = tz;
+		lck_spin_unlock(tz_slock);
+		error = copyout((caddr_t)&ltz, uap->tzp, sizeof (tz));
+	}
+
+	return (error);
+}
+
 #ifdef JOE_DEBUG
 joe_debug(char *p) {
 
         printf("%s\n", p);
 }
 #endif
+
+
+/* 
+ * WARNING - this is a temporary workaround for binary compatibility issues
+ * with anti-piracy software that relies on patching ptrace (3928003).
+ * This KPI will be removed in the system release after Tiger.
+ */
+uintptr_t temp_patch_ptrace(uintptr_t new_ptrace)
+{
+	struct sysent *		callp;
+	sy_call_t *			old_ptrace;
+
+	if (new_ptrace == 0)
+		return(0);
+		
+	enter_funnel_section(kernel_flock);
+	callp = &sysent[26];
+	old_ptrace = callp->sy_call;
+	
+	/* only allow one patcher of ptrace */
+	if (old_ptrace == (sy_call_t *) ptrace) {
+		callp->sy_call = (sy_call_t *) new_ptrace;
+	}
+	else {
+		old_ptrace = NULL;
+	}
+	exit_funnel_section( );
+	
+	return((uintptr_t)old_ptrace);
+}
+
+void temp_unpatch_ptrace(void)
+{
+	struct sysent *		callp;
+		
+	enter_funnel_section(kernel_flock);
+	callp = &sysent[26];
+	callp->sy_call = (sy_call_t *) ptrace;
+	exit_funnel_section( );
+	
+	return;
+}

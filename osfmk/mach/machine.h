@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /* 
  * Mach Operating System
@@ -226,7 +220,7 @@ __END_DECLS
 #define	CPU_SUBTYPE_MC68030_ONLY	((cpu_subtype_t) 3)
 
 /*
- *	I386 subtypes
+ *	I386 subtypes.
  */
 
 #define CPU_SUBTYPE_INTEL(f, m)	((cpu_subtype_t) (f) + ((m) << 4))
@@ -332,21 +326,5 @@ __END_DECLS
 #define CPU_SUBTYPE_POWERPC_7400	((cpu_subtype_t) 10)
 #define CPU_SUBTYPE_POWERPC_7450	((cpu_subtype_t) 11)
 #define CPU_SUBTYPE_POWERPC_970		((cpu_subtype_t) 100)
-
-/*
- *      CPU families (sysctl hw.cpufamily)
- *
- * NB: the encodings of the CPU families are intentionally arbitrary.
- * There is no ordering, and you should never try to deduce whether
- * or not some feature is available based on the family.
- * Use feature flags (eg, hw.optional.altivec) to test for optional
- * functionality.
- */
-#define CPUFAMILY_UNKNOWN    0
-#define CPUFAMILY_POWERPC_G3 0xcee41549
-#define CPUFAMILY_POWERPC_G4 0x77c184ae
-#define CPUFAMILY_POWERPC_G5 0xed76d8aa
-#define CPUFAMILY_INTEL_6_14 0x73d67300  /* Intel Core Solo and Intel Core Duo (32-bit Pentium-M with SSE3) */
-#define CPUFAMILY_INTEL_6_15 0x426f69ef  /* Intel Core 2 */
 
 #endif	/* _MACH_MACHINE_H_ */

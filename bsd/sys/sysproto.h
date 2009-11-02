@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@ 
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and 
+ * are subject to the Apple Public Source License Version 1.1 (the 
+ * "License").  You may not use this file except in compliance with the 
+ * License.  Please obtain a copy of the License at 
+ * http://www.apple.com/publicsource and read it before using this file. 
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * This Original Code and all software distributed under the License are 
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER 
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES, 
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, 
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the 
+ * License for the specific language governing rights and limitations 
+ * under the License. 
  * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
- * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@ 
  * 
  * 
  * System call switch table.
@@ -46,8 +40,13 @@
 
 #ifdef KERNEL
 #ifdef __APPLE_API_PRIVATE
+#ifdef __ppc__
 #define	PAD_(t)	(sizeof(uint64_t) <= sizeof(t) \
  		? 0 : sizeof(uint64_t) - sizeof(t))
+#else
+#define	PAD_(t)	(sizeof(register_t) <= sizeof(t) \
+ 		? 0 : sizeof(register_t) - sizeof(t))
+#endif
 #if BYTE_ORDER == LITTLE_ENDIAN
 #define	PADL_(t)	0
 #define	PADR_(t)	PAD_(t)
@@ -59,6 +58,7 @@
 __BEGIN_DECLS
 #ifndef __MUNGE_ONCE
 #define __MUNGE_ONCE
+#ifdef __ppc__
 void munge_w(const void *, void *);  
 void munge_ww(const void *, void *);  
 void munge_www(const void *, void *);  
@@ -67,16 +67,6 @@ void munge_wwwww(const void *, void *);
 void munge_wwwwww(const void *, void *);  
 void munge_wwwwwww(const void *, void *);  
 void munge_wwwwwwww(const void *, void *);  
-void munge_wl(const void *, void *);  
-void munge_wlw(const void *, void *);  
-void munge_wwwl(const void *, void *);  
-void munge_wwwlww(const void *, void *); 
-void munge_wwwwl(const void *, void *);  
-void munge_wwwwwl(const void *, void *);  
-void munge_wsw(const void *, void *);  
-void munge_wws(const void *, void *);  
-void munge_wwwsw(const void *, void *);  
-#ifdef __ppc__
 void munge_d(const void *, void *);  
 void munge_dd(const void *, void *);  
 void munge_ddd(const void *, void *);  
@@ -85,7 +75,23 @@ void munge_ddddd(const void *, void *);
 void munge_dddddd(const void *, void *);  
 void munge_ddddddd(const void *, void *);  
 void munge_dddddddd(const void *, void *);  
+void munge_wl(const void *, void *);  
+void munge_wlw(const void *, void *);  
+void munge_wwwl(const void *, void *);  
+void munge_wwwwl(const void *, void *);  
+void munge_wwwwwl(const void *, void *);  
+void munge_wsw(const void *, void *);  
+void munge_wws(const void *, void *);  
+void munge_wwwsw(const void *, void *);  
 #else 
+#define munge_w  NULL 
+#define munge_ww  NULL 
+#define munge_www  NULL 
+#define munge_wwww  NULL 
+#define munge_wwwww  NULL 
+#define munge_wwwwww  NULL 
+#define munge_wwwwwww  NULL 
+#define munge_wwwwwwww  NULL 
 #define munge_d  NULL 
 #define munge_dd  NULL 
 #define munge_ddd  NULL 
@@ -94,6 +100,14 @@ void munge_dddddddd(const void *, void *);
 #define munge_dddddd  NULL 
 #define munge_ddddddd  NULL 
 #define munge_dddddddd  NULL 
+#define munge_wl  NULL 
+#define munge_wlw  NULL 
+#define munge_wwwl  NULL 
+#define munge_wwwwl  NULL 
+#define munge_wwwwwl  NULL 
+#define munge_wsw  NULL 
+#define munge_wws  NULL 
+#define munge_wwwsw  NULL 
 #endif // __ppc__
 #endif /* !__MUNGE_ONCE */
 
@@ -433,6 +447,12 @@ struct getpriority_args {
 	char which_l_[PADL_(int)]; int which; char which_r_[PADR_(int)];
 	char who_l_[PADL_(int)]; int who; char who_r_[PADR_(int)];
 };
+#ifdef __ppc__
+#else
+struct sigreturn_args {
+	char sigcntxp_l_[PADL_(struct sigcontext *)]; struct sigcontext * sigcntxp; char sigcntxp_r_[PADR_(struct sigcontext *)];
+};
+#endif
 struct bind_args {
 	char s_l_[PADL_(int)]; int s; char s_r_[PADR_(int)];
 	char name_l_[PADL_(user_addr_t)]; user_addr_t name; char name_r_[PADR_(user_addr_t)];
@@ -452,10 +472,17 @@ struct listen_args {
 struct sigsuspend_args {
 	char mask_l_[PADL_(sigset_t)]; sigset_t mask; char mask_r_[PADR_(sigset_t)];
 };
+#ifdef __ppc__
+struct ppc_gettimeofday_args {
+	char tp_l_[PADL_(user_addr_t)]; user_addr_t tp; char tp_r_[PADR_(user_addr_t)];
+	char tzp_l_[PADL_(user_addr_t)]; user_addr_t tzp; char tzp_r_[PADR_(user_addr_t)];
+};
+#else
 struct gettimeofday_args {
 	char tp_l_[PADL_(user_addr_t)]; user_addr_t tp; char tp_r_[PADR_(user_addr_t)];
 	char tzp_l_[PADL_(user_addr_t)]; user_addr_t tzp; char tzp_r_[PADR_(user_addr_t)];
 };
+#endif
 struct getrusage_args {
 	char who_l_[PADL_(int)]; int who; char who_r_[PADR_(int)];
 	char rusage_l_[PADL_(user_addr_t)]; user_addr_t rusage; char rusage_r_[PADR_(user_addr_t)];
@@ -627,18 +654,13 @@ struct setegid_args {
 struct seteuid_args {
 	char euid_l_[PADL_(uid_t)]; uid_t euid; char euid_r_[PADR_(uid_t)];
 };
+#ifdef __ppc__
 struct sigreturn_args {
 	char uctx_l_[PADL_(user_addr_t)]; user_addr_t uctx; char uctx_r_[PADR_(user_addr_t)];
 	char infostyle_l_[PADL_(int)]; int infostyle; char infostyle_r_[PADR_(int)];
 };
-struct chud_args {
-	char code_l_[PADL_(int)]; int code; char code_r_[PADR_(int)];
-	char arg1_l_[PADL_(int)]; int arg1; char arg1_r_[PADR_(int)];
-	char arg2_l_[PADL_(int)]; int arg2; char arg2_r_[PADR_(int)];
-	char arg3_l_[PADL_(int)]; int arg3; char arg3_r_[PADR_(int)];
-	char arg4_l_[PADL_(int)]; int arg4; char arg4_r_[PADR_(int)];
-	char arg5_l_[PADL_(int)]; int arg5; char arg5_r_[PADR_(int)];
-};
+#else
+#endif
 struct stat_args {
 	char path_l_[PADL_(user_addr_t)]; user_addr_t path; char path_r_[PADR_(user_addr_t)];
 	char ub_l_[PADL_(user_addr_t)]; user_addr_t ub; char ub_r_[PADR_(user_addr_t)];
@@ -721,6 +743,7 @@ struct munlock_args {
 struct undelete_args {
 	char path_l_[PADL_(user_addr_t)]; user_addr_t path; char path_r_[PADR_(user_addr_t)];
 };
+#ifdef __ppc__
 struct ATsocket_args {
 	char proto_l_[PADL_(int)]; int proto; char proto_r_[PADR_(int)];
 };
@@ -757,6 +780,8 @@ struct ATPgetrsp_args {
 	char fd_l_[PADL_(int)]; int fd; char fd_r_[PADR_(int)];
 	char bdsp_l_[PADL_(unsigned char *)]; unsigned char * bdsp; char bdsp_r_[PADR_(unsigned char *)];
 };
+#else
+#endif /* __ppc__ */
 struct kqueue_from_portset_np_args {
 	char portset_l_[PADL_(int)]; int portset; char portset_r_[PADR_(int)];
 };
@@ -1235,14 +1260,6 @@ struct utrace_args {
 	char addr_l_[PADL_(user_addr_t)]; user_addr_t addr; char addr_r_[PADR_(user_addr_t)];
 	char len_l_[PADL_(user_size_t)]; user_size_t len; char len_r_[PADR_(user_size_t)];
 };
-struct proc_info_args {
-	char callnum_l_[PADL_(int32_t)]; int32_t callnum; char callnum_r_[PADR_(int32_t)];
-	char pid_l_[PADL_(int32_t)]; int32_t pid; char pid_r_[PADR_(int32_t)];
-	char flavor_l_[PADL_(uint32_t)]; uint32_t flavor; char flavor_r_[PADR_(uint32_t)];
-	char arg_l_[PADL_(uint64_t)]; uint64_t arg; char arg_r_[PADR_(uint64_t)];
-	char buffer_l_[PADL_(user_addr_t)]; user_addr_t buffer; char buffer_r_[PADR_(user_addr_t)];
-	char buffersize_l_[PADL_(int32_t)]; int32_t buffersize; char buffersize_r_[PADR_(int32_t)];
-};
 struct audit_args {
 	char record_l_[PADL_(user_addr_t)]; user_addr_t record; char record_r_[PADR_(user_addr_t)];
 	char length_l_[PADL_(int)]; int length; char length_r_[PADR_(int)];
@@ -1290,12 +1307,6 @@ struct lchown_args {
 	char path_l_[PADL_(user_addr_t)]; user_addr_t path; char path_r_[PADR_(user_addr_t)];
 	char owner_l_[PADL_(uid_t)]; uid_t owner; char owner_r_[PADR_(uid_t)];
 	char group_l_[PADL_(gid_t)]; gid_t group; char group_r_[PADR_(gid_t)];
-};
-struct stack_snapshot_args {
-	char pid_l_[PADL_(pid_t)]; pid_t pid; char pid_r_[PADR_(pid_t)];
-	char tracebuf_l_[PADL_(user_addr_t)]; user_addr_t tracebuf; char tracebuf_r_[PADR_(user_addr_t)];
-	char tracebuf_size_l_[PADL_(uint32_t)]; uint32_t tracebuf_size; char tracebuf_size_r_[PADR_(uint32_t)];
-	char options_l_[PADL_(uint32_t)]; uint32_t options; char options_r_[PADR_(uint32_t)];
 };
 int nosys(struct proc *, struct nosys_args *, int *);
 void exit(struct proc *, struct exit_args *, int *);
@@ -1381,11 +1392,19 @@ int setpriority(struct proc *, struct setpriority_args *, int *);
 int socket(struct proc *, struct socket_args *, int *);
 int connect(struct proc *, struct connect_args *, int *);
 int getpriority(struct proc *, struct getpriority_args *, int *);
+#ifdef __ppc__
+#else
+int sigreturn(struct proc *, struct sigreturn_args *, int *);
+#endif
 int bind(struct proc *, struct bind_args *, int *);
 int setsockopt(struct proc *, struct setsockopt_args *, int *);
 int listen(struct proc *, struct listen_args *, int *);
 int sigsuspend(struct proc *, struct sigsuspend_args *, int *);
+#ifdef __ppc__
+int ppc_gettimeofday(struct proc *, struct ppc_gettimeofday_args *, int *);
+#else
 int gettimeofday(struct proc *, struct gettimeofday_args *, int *);
+#endif
 int getrusage(struct proc *, struct getrusage_args *, int *);
 int getsockopt(struct proc *, struct getsockopt_args *, int *);
 int readv(struct proc *, struct readv_args *, user_ssize_t *);
@@ -1428,8 +1447,10 @@ int kdebug_trace(struct proc *, struct kdebug_trace_args *, int *);
 int setgid(struct proc *, struct setgid_args *, int *);
 int setegid(struct proc *, struct setegid_args *, int *);
 int seteuid(struct proc *, struct seteuid_args *, int *);
+#ifdef __ppc__
 int sigreturn(struct proc *, struct sigreturn_args *, int *);
-int chud(struct proc *, struct chud_args *, int *);
+#else
+#endif
 int stat(struct proc *, struct stat_args *, int *);
 int fstat(struct proc *, struct fstat_args *, int *);
 int lstat(struct proc *, struct lstat_args *, int *);
@@ -1450,6 +1471,7 @@ int __sysctl(struct proc *, struct __sysctl_args *, int *);
 int mlock(struct proc *, struct mlock_args *, int *);
 int munlock(struct proc *, struct munlock_args *, int *);
 int undelete(struct proc *, struct undelete_args *, int *);
+#ifdef __ppc__
 int ATsocket(struct proc *, struct ATsocket_args *, int *);
 int ATgetmsg(struct proc *, struct ATgetmsg_args *, int *);
 int ATputmsg(struct proc *, struct ATputmsg_args *, int *);
@@ -1457,6 +1479,8 @@ int ATPsndreq(struct proc *, struct ATPsndreq_args *, int *);
 int ATPsndrsp(struct proc *, struct ATPsndrsp_args *, int *);
 int ATPgetreq(struct proc *, struct ATPgetreq_args *, int *);
 int ATPgetrsp(struct proc *, struct ATPgetrsp_args *, int *);
+#else
+#endif /* __ppc__ */
 int kqueue_from_portset_np(struct proc *, struct kqueue_from_portset_np_args *, int *);
 int kqueue_portset_np(struct proc *, struct kqueue_portset_np_args *, int *);
 int getattrlist(struct proc *, struct getattrlist_args *, int *);
@@ -1558,7 +1582,6 @@ int __pthread_markcancel(struct proc *, struct __pthread_markcancel_args *, int 
 int __pthread_canceled(struct proc *, struct __pthread_canceled_args *, int *);
 int __semwait_signal(struct proc *, struct __semwait_signal_args *, int *);
 int utrace(struct proc *, struct utrace_args *, int *);
-int proc_info(struct proc *, struct proc_info_args *, int *);
 int audit(struct proc *, struct audit_args *, int *);
 int auditon(struct proc *, struct auditon_args *, int *);
 int getauid(struct proc *, struct getauid_args *, int *);
@@ -1571,7 +1594,6 @@ int auditctl(struct proc *, struct auditctl_args *, int *);
 int kqueue(struct proc *, struct kqueue_args *, int *);
 int kevent(struct proc *, struct kevent_args *, int *);
 int lchown(struct proc *, struct lchown_args *, int *);
-int stack_snapshot(struct proc *, struct stack_snapshot_args *, int *);
 
 __END_DECLS
 #undef PAD_

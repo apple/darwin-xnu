@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1998,1999 Apple Computer, Inc.  All rights reserved. 
@@ -382,8 +376,6 @@ private:
     OSMetaClassDeclareReservedUnused(IOService, 45);
     OSMetaClassDeclareReservedUnused(IOService, 46);
     OSMetaClassDeclareReservedUnused(IOService, 47);
-
-#ifdef __ppc__
     OSMetaClassDeclareReservedUnused(IOService, 48);
     OSMetaClassDeclareReservedUnused(IOService, 49);
     OSMetaClassDeclareReservedUnused(IOService, 50);
@@ -400,7 +392,6 @@ private:
     OSMetaClassDeclareReservedUnused(IOService, 61);
     OSMetaClassDeclareReservedUnused(IOService, 62);
     OSMetaClassDeclareReservedUnused(IOService, 63);
-#endif
 
 public:
 /*! @function getState
@@ -983,7 +974,7 @@ public:
 
 /*! @function disableInterrupt
     @abstract Disable a device interrupt.
-    @discussion Synchronously disable a device interrupt.  If the interrupt routine is running, the call will block until the routine completes.  It is the callers responsiblity to keep track of the enable state of the interrupt source.
+    @discussion Disable a device interrupt. It is the callers responsiblity to keep track of the enable state of the interrupt source.
     @param source The index of the interrupt source in the device.
     @result An IOReturn code.<br>kIOReturnNoInterrupt is returned if the source is not valid. */
 
@@ -1167,15 +1158,10 @@ public:
     static void actionFinalize( IOService * victim, IOOptionBits options );
     static void actionStop( IOService * client, IOService * provider );
 
+    void PMfree( void );
+
     virtual IOReturn resolveInterrupt(IOService *nub, int source);
     virtual IOReturn lookupInterrupt(int source, bool resolve, IOInterruptController **interruptController);
-
-    // SPI to control CPU low power modes
-    void  setCPUSnoopDelay(UInt32 ns);
-    UInt32 getCPUSnoopDelay();
-    void   requireMaxBusStall(UInt32 ns);
-
-    void PMfree( void );
 
     /* power management */
     
@@ -1855,7 +1841,6 @@ private:
     void driver_acked ( void );
     void start_ack_timer ( void );
     void stop_ack_timer ( void );
-
     unsigned long compute_settle_time ( void );
     IOReturn startSettleTimer ( unsigned long delay );
     IOReturn changeState ( void );
@@ -1871,7 +1856,6 @@ private:
     IOReturn allowCancelCommon ( void );
     void computeDesiredState ( void );
     void rebuildChildClampBits ( void );
-    IOReturn temporaryMakeUsable ( void );
 };
 
 #endif /* ! _IOKIT_IOSERVICE_H */

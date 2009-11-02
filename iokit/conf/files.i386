@@ -4,5 +4,8 @@
 iokit/Kernel/i386/IOSharedLock.s                            standard
 iokit/Kernel/i386/IOAsmSupport.s                            standard
 
+# Real Time Clock hack
+iokit/Drivers/platform/drvAppleIntelClock/IntelClock.cpp    optional iokitcpp
+
 # Power Domains
 iokit/Kernel/IOPMrootDomain.cpp    				optional iokitcpp

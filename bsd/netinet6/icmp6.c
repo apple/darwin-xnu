@@ -617,87 +617,31 @@ icmp6_input(mp, offp)
 		/* XXX: per-interface statistics? */
 		break;		/* just pass it to applications */
 
-	case ICMP6_WRUREQUEST:	/* ICMP6_FQDN_QUERY */
-	    {
-		enum { WRU, FQDN } mode;
-
+	case ICMP6_FQDN_QUERY:
 		if (!icmp6_nodeinfo)
 			break;
 
-		if (icmp6len == sizeof(struct icmp6_hdr) + 4)
-			mode = WRU;
-		else if (icmp6len >= sizeof(struct icmp6_nodeinfo))
-			mode = FQDN;
-		else
+		/* By RFC 4620 refuse to answer queries from global scope addresses */ 
+		if ((icmp6_nodeinfo & 8) != 8 && in6_addrscope(&ip6->ip6_src) == IPV6_ADDR_SCOPE_GLOBAL)
+			break;
+
+		if (icmp6len < sizeof(struct icmp6_nodeinfo))
 			goto badlen;
 
-#define hostnamelen	strlen(hostname)
-		if (mode == FQDN) {
 #ifndef PULLDOWN_TEST
-			IP6_EXTHDR_CHECK(m, off, sizeof(struct icmp6_nodeinfo),
-					 return IPPROTO_DONE);
+		IP6_EXTHDR_CHECK(m, off, sizeof(struct icmp6_nodeinfo),
+				 return IPPROTO_DONE);
 #endif
-			n = m_copy(m, 0, M_COPYALL);
-			if (n)
-				n = ni6_input(n, off);
-			/* XXX meaningless if n == NULL */
-			noff = sizeof(struct ip6_hdr);
-		} else {
-			u_char *p;
-			int maxlen, maxhlen;
-
-			if ((icmp6_nodeinfo & 5) != 5) 
-				break;
-
-			if (code != 0)
-				goto badcode;
-			maxlen = sizeof(*nip6) + sizeof(*nicmp6) + 4;
-			if (maxlen >= MCLBYTES) {
-				/* Give up remote */
-				break;
-			}
-			MGETHDR(n, M_DONTWAIT, m->m_type);
-			if (n && maxlen > MHLEN) {
-				MCLGET(n, M_DONTWAIT);
-				if ((n->m_flags & M_EXT) == 0) {
-					m_free(n);
-					n = NULL;
-				}
-			}
-			if (n == NULL) {
-				/* Give up remote */
-				break;
-			}
-			n->m_pkthdr.rcvif = NULL;
-			n->m_len = 0;
-			maxhlen = M_TRAILINGSPACE(n) - maxlen;
-			if (maxhlen > hostnamelen)
-				maxhlen = hostnamelen;
-			/*
-			 * Copy IPv6 and ICMPv6 only.
-			 */
-			nip6 = mtod(n, struct ip6_hdr *);
-			bcopy(ip6, nip6, sizeof(struct ip6_hdr));
-			nicmp6 = (struct icmp6_hdr *)(nip6 + 1);
-			bcopy(icmp6, nicmp6, sizeof(struct icmp6_hdr));
-			p = (u_char *)(nicmp6 + 1);
-			bzero(p, 4);
-			bcopy(hostname, p + 4, maxhlen); /* meaningless TTL */
-			noff = sizeof(struct ip6_hdr);
-			M_COPY_PKTHDR(n, m); /* just for rcvif */
-			n->m_pkthdr.len = n->m_len = sizeof(struct ip6_hdr) +
-				sizeof(struct icmp6_hdr) + 4 + maxhlen;
-			nicmp6->icmp6_type = ICMP6_WRUREPLY;
-			nicmp6->icmp6_code = 0;
-		}
-#undef hostnamelen
+		n = m_copy(m, 0, M_COPYALL);
+		if (n)
+			n = ni6_input(n, off);
 		if (n) {
+			noff = sizeof(struct ip6_hdr);
 			icmp6stat.icp6s_reflect++;
 			icmp6stat.icp6s_outhist[ICMP6_WRUREPLY]++;
 			icmp6_reflect(n, noff);
 		}
 		break;
-	    }
 
 	case ICMP6_WRUREPLY:
 		if (code != 0)

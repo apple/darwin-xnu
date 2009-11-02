@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1987, 1988, 1989 Apple Computer, Inc. 
@@ -94,6 +88,8 @@ void (*ddp_AURPsendx)();
 at_ifaddr_t *aurp_ifID = 0;
 extern pktsIn,pktsOut;
 int pktsDropped,pktsHome;
+atlock_t ddpall_lock;
+atlock_t ddpinp_lock;
 
 extern int *atp_pidM;
 extern int *adsp_pidM;
@@ -456,6 +452,7 @@ void ddp_notify_nbp(socket, pid, ddptype)
 
 	if (at_state.flags & AT_ST_STARTED) {
 		/* *** NBP_CLOSE_NOTE processing (from ddp_nbp.c) *** */
+   		ATDISABLE(nve_lock, NVE_LOCK);
                 for ((nve_entry = TAILQ_FIRST(&name_registry)); nve_entry; nve_entry = nve_next) {
                         nve_next = TAILQ_NEXT(nve_entry, nve_link);
 			if ((at_socket)socket == nve_entry->address.socket &&
@@ -467,6 +464,7 @@ void ddp_notify_nbp(socket, pid, ddptype)
 				nbp_delete_entry(nve_entry);
 			}
 		}
+		ATENABLE(nve_lock, NVE_LOCK);
 	}
 } /* ddp_notify_nbp */
 
@@ -481,12 +479,12 @@ static void fillin_pkt_chain(m)
 
 	if (UAS_VALUE(ddp->checksum)) {
 		tmp = ddp_checksum(m, 4);
-		UAS_ASSIGN_HTON(ddp->checksum, tmp);
+		UAS_ASSIGN(ddp->checksum, tmp);
 	}
 
 	for (tmp_m=gbuf_next(tmp_m); tmp_m; tmp_m=gbuf_next(tmp_m)) {
 		tmp_ddp = (at_ddp_t *)gbuf_rptr(tmp_m);
-		DDPLEN_ASSIGN(tmp_ddp, gbuf_msgsize(tmp_m));
+		tmp_ddp->length = gbuf_msgsize(tmp_m);
 		tmp_ddp->hopcount = 
 		  tmp_ddp->unused = 0;
 		NET_NET(tmp_ddp->src_net, ddp->src_net);
@@ -494,7 +492,7 @@ static void fillin_pkt_chain(m)
 		tmp_ddp->src_socket = ddp->src_socket;
 		if (UAS_VALUE(tmp_ddp->checksum)) {
 			tmp = ddp_checksum(tmp_m, 4);
-			UAS_ASSIGN_HTON(ddp->checksum, tmp);
+			UAS_ASSIGN(tmp_ddp->checksum, tmp);
 		}
 	}
 }
@@ -575,7 +573,7 @@ int ddp_output(mp, src_socket, src_addr_included)
 	at_ddp_stats.xmit_bytes += len;
 	at_ddp_stats.xmit_packets++;
 
-	DDPLEN_ASSIGN(ddp, len);
+	ddp->length = len;
 	ddp->hopcount = 
 	  ddp->unused = 0;
 
@@ -855,7 +853,7 @@ int ddp_output(mp, src_socket, src_addr_included)
 	     * it doesn't know net#, consequently can't do 
 	     * AMT_LOOKUP.  That task left to aarp now.
 	     */
-	    aarp_send_data(m,ifID, &dest_at_addr, loop);
+	    aarp_send_data(m,ifID,&dest_at_addr, loop);
 	    break;
 	case ET_ADDR :
 	    pat_output(ifID, m, &dest_addr, 0);
@@ -938,7 +936,7 @@ void ddp_input(mp, ifID)
 	 * {extended ddp, ... }.
 	 */
 	ddp = (at_ddp_t *)gbuf_rptr(mp);
-	len = DDPLEN_VALUE(ddp);
+	len = ddp->length;
 
 	if (msgsize != len) {
 	        if ((unsigned) msgsize > len) {
@@ -987,10 +985,10 @@ void ddp_input(mp, ifID)
 	 * if the checksum is true, then upstream wants us to calc
 	 */
 	if (UAS_VALUE(ddp->checksum) && 
-           (UAS_VALUE_NTOH(ddp->checksum) != ddp_checksum(mp, 4))) {
+           (UAS_VALUE(ddp->checksum) != ddp_checksum(mp, 4))) {
 		dPrintf(D_M_DDP, D_L_WARNING,
 			("Checksum error on incoming pkt, calc 0x%x, exp 0x%x",
-			ddp_checksum(mp, 4), UAS_VALUE_NTOH(ddp->checksum)));
+			ddp_checksum(mp, 4), UAS_VALUE(ddp->checksum)));
 		snmpStats.dd_checkSum++;
 		at_ddp_stats.rcv_bad_checksum++;
 		gbuf_freem(mp);
@@ -1149,7 +1147,6 @@ int ddp_router_output(mp, ifID, addr_type, router_net, router_node, enet_addr)
 	}
 	ddp = (at_ddp_t *)gbuf_rptr(mp);
 
-#ifdef AURP_SUPPORT
 	if (ifID->ifFlags & AT_IFF_AURP) { /* AURP link? */
 		if (ddp_AURPsendx) {
 			fillin_pkt_chain(mp);
@@ -1162,7 +1159,6 @@ int ddp_router_output(mp, ifID, addr_type, router_net, router_node, enet_addr)
 			return EPROTOTYPE;
 		}
 	}
-#endif
 
 	/* keep some of the tests for now ####### */
 
@@ -1315,14 +1311,15 @@ void rt_delete(NetStop, NetStart)
 	RT_entry *found;
 	int s;
 
+	ATDISABLE(s, ddpinp_lock);
 	if ((found = rt_bdelete(NetStop, NetStart)) != 0) {
 		bzero(found, sizeof(RT_entry));
 		found->right = RT_table_freelist;
 		RT_table_freelist = found;
 	}
+	ATENABLE(s, ddpinp_lock);
 }
 
-#ifdef AURP_SUPPORT
 int ddp_AURPfuncx(code, param, node)
 	int code;
 	void *param;
@@ -1394,7 +1391,7 @@ int ddp_AURPfuncx(code, param, node)
 
 	return 0;
 }
-#endif
+
 
 /* checks to see if address of packet is for one of our interfaces
    returns *ifID if it's for us, NULL if not

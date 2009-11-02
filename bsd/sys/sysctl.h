@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -356,10 +350,8 @@ SYSCTL_DECL(_user);
 #define	KERN_PANICINFO		41	/* node: panic UI information */
 #define	KERN_SYSV		42	/* node: System V IPC information */
 #define KERN_AFFINITY		43	/* xxx */
-#define KERN_TRANSLATE	   	44	/* xxx */
-#define KERN_CLASSIC	   	KERN_TRANSLATE	/* XXX backwards compat */
-#define KERN_EXEC		45	/* xxx */
-#define KERN_CLASSICHANDLER	KERN_EXEC /* XXX backwards compatibility */
+#define KERN_CLASSIC	   	44	/* xxx */
+#define KERN_CLASSICHANDLER	45	/* xxx */
 #define	KERN_AIOMAX		46	/* int: max aio requests */
 #define	KERN_AIOPROCMAX		47	/* int: max aio requests per process */
 #define	KERN_AIOTHREADS		48	/* int: max aio worker threads */
@@ -375,28 +367,14 @@ SYSCTL_DECL(_user);
 #define	KERN_LOW_PRI_WINDOW	56	/* int: set/reset throttle window - milliseconds */
 #define	KERN_LOW_PRI_DELAY	57	/* int: set/reset throttle delay - milliseconds */
 #define	KERN_POSIX		58	/* node: posix tunables */
-#define	KERN_USRSTACK64		59	/* LP64 user stack query */
-#define KERN_NX_PROTECTION	60	/* int: whether no-execute protection is enabled */
-#define	KERN_TFP 		61	/* Task for pid settings */
-#define	KERN_PROCNAME 		62	/* setup process program  name(2*MAXCOMLEN) */
-#define	KERN_THALTSTACK 	63	/* setup process to have per thread sigaltstack */
-#define	KERN_MAXID		64	/* number of valid kern ids */
+#define	KERN_USRSTACK64	59	/* LP64 user stack query */
+#define	KERN_MAXID		60	/* number of valid kern ids */
 
 #if defined(__LP64__)
 #define	KERN_USRSTACK KERN_USRSTACK64
 #else
 #define	KERN_USRSTACK KERN_USRSTACK32
 #endif
-
-/* KERN_TFP types */
-#define KERN_TFP_POLICY 		1
-#define KERN_TFP_READ_GROUP 	2
-#define KERN_TFP_RW_GROUP 		3
-
-/* KERN_TFP_POLICY values . All policies allow task port for self */
-#define KERN_TFP_POLICY_DENY 		0 	/* Deny Mode: None allowed except privileged */
-#define KERN_TFP_POLICY_PERMISSIVE 	1	/* Permissive Mode: related ones allowed or privileged */
-#define KERN_TFP_POLICY_RESTRICTED 	2	/* Restricted Mode: privileged or setgid and realted */
 
 /* KERN_KDEBUG types */
 #define KERN_KDEFLAGS		1
@@ -491,7 +469,7 @@ SYSCTL_DECL(_user);
 	{ "sysv", CTLTYPE_NODE }, \
 	{ "dummy", CTLTYPE_INT }, \
 	{ "dummy", CTLTYPE_INT }, \
-	{ "exec", CTLTYPE_NODE }, \
+	{ "dummy", CTLTYPE_INT }, \
 	{ "aiomax", CTLTYPE_INT }, \
 	{ "aioprocmax", CTLTYPE_INT }, \
 	{ "aiothreads", CTLTYPE_INT }, \
@@ -504,12 +482,7 @@ SYSCTL_DECL(_user);
 	{ "proc_low_pri_io", CTLTYPE_INT }, \
 	{ "low_pri_window", CTLTYPE_INT }, \
 	{ "low_pri_delay", CTLTYPE_INT }, \
-	{ "posix", CTLTYPE_NODE }, \
-	{ "usrstack64", CTLTYPE_QUAD }, \
-	{ "nx", CTLTYPE_INT }, \
-	{ "tfp", CTLTYPE_NODE }, \
-	{ "procname", CTLTYPE_STRING }, \
-	{ "threadsigaltstack", CTLTYPE_INT } \
+	{ "posix", CTLTYPE_NODE } \
 }
 
 /*
@@ -591,6 +564,10 @@ struct kinfo_proc {
  * WARNING - keep in sync with _pcred
  */
 
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
+
 struct user_pcred {
 	char	pc_lock[72];		/* opaque content */
 	user_addr_t	pc_ucred;	/* Current credentials. */
@@ -598,7 +575,7 @@ struct user_pcred {
 	uid_t	p_svuid;		/* Saved effective user id. */
 	gid_t	p_rgid;			/* Real group id. */
 	gid_t	p_svgid;		/* Saved effective group id. */
-	int	p_refcnt __attribute((aligned(8)));		/* Number of references. */
+	int	p_refcnt;		/* Number of references. */
 };
 
 /* LP64 version of kinfo_proc.  all pointers 
@@ -618,7 +595,7 @@ struct user_kinfo_proc {
 		short	e_jobc;			/* job control counter */
 		dev_t	e_tdev;			/* controlling tty dev */
 		pid_t	e_tpgid;		/* tty process group id */
-		user_addr_t	e_tsess __attribute((aligned(8)));	/* tty session pointer */
+		user_addr_t	e_tsess;	/* tty session pointer */
 		char	e_wmesg[WMESGLEN+1];	/* wchan message */
 		segsz_t e_xsize;		/* text size */
 		short	e_xrssize;		/* text rss */
@@ -629,6 +606,10 @@ struct user_kinfo_proc {
 		int32_t	e_spare[4];
 	} kp_eproc;
 };
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
 
 #endif	/* BSD_KERNEL_PRIVATE */
 
@@ -690,10 +671,17 @@ extern struct loadavg averunnable;
 // LP64todo - should this move?
 #ifdef BSD_KERNEL_PRIVATE
 
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=natural
+#endif
 struct user_loadavg {
 	fixpt_t	ldavg[3];
-        user_long_t	fscale __attribute((aligned(8)));
+	user_long_t	fscale;
 };
+
+#if __DARWIN_ALIGN_NATURAL
+#pragma options align=reset
+#endif
 
 #endif	/* BSD_KERNEL_PRIVATE */
 #endif /* __APPLE_API_PRIVATE */
@@ -811,11 +799,9 @@ struct user_loadavg {
  *   hw.l3cachesize            -
  *
  *
- * These are the selectors for optional processor features for specific processors.  Selectors that return errors are not support 
- * on the system.  Supported features will return 1 if they are recommended or 0 if they are supported but are not expected to help .
- * performance.  Future versions of these selectors may return larger values as necessary so it is best to test for non zero.
- *
- * For PowerPC:
+ * These are the selectors for optional processor features.  Selectors that return errors are not support on the system.
+ * Supported features will return 1 if they are recommended or 0 if they are supported but are not expected to help performance.
+ * Future versions of these selectors may return larger values as necessary so it is best to test for non zero.
  *
  *   hw.optional.floatingpoint - Floating Point Instructions
  *   hw.optional.altivec       - AltiVec Instructions
@@ -827,14 +813,6 @@ struct user_loadavg {
  *   hw.optional.datastreams   - Data Streams Instructions
  *   hw.optional.dcbtstreams   - Data Cache Block Touch Steams Instruction Form
  *
- * For x86 Architecture:
- * 
- *   hw.optional.floatingpoint - Floating Point Instructions
- *   hw.optional.mmx           - Original MMX vector instructions
- *   hw.optional.sse           - Streaming SIMD Extensions
- *   hw.optional.sse2          - Streaming SIMD Extensions 2
- *   hw.optional.sse3          - Streaming SIMD Extensions 3
- *   hw.optional.x86_64        - 64-bit support
  */
 
 

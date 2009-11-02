@@ -1,29 +1,23 @@
 /*
  * Copyright (c)1999-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 
 #include <sys/param.h>
@@ -90,7 +84,7 @@ typedef BlockWord Block[kBSize];
 
 void add_blocks(Block a, Block b, BlockWord carry);
 void fips_initialize(void);
-void random_block(Block b);
+void random_block(Block b, int addOptional);
 u_int32_t CalculateCRC(u_int8_t* buffer, size_t length);
 
 /*
@@ -185,18 +179,21 @@ u_int32_t CalculateCRC(u_int8_t* buffer, size_t length)
  * get a random block of data per fips 186-2
  */
 void
-random_block(Block b)
+random_block(Block b, int addOptional)
 {
 	int repeatCount = 0;
 	do
 	{
-		// do one iteration
-		Block xSeed;
-		prngOutput (gPrngRef, (BYTE*) &xSeed, sizeof (xSeed));
+		if (addOptional)
+		{
+			// do one iteration
+			Block xSeed;
+			prngOutput (gPrngRef, (BYTE*) &xSeed, sizeof (xSeed));
+			
+			// add the seed to the previous value of g_xkey
+			add_blocks (g_xkey, xSeed, 0);
+		}
 		
-		// add the seed to the previous value of g_xkey
-		add_blocks (g_xkey, xSeed, 0);
-
 		// compute "G"
 		SHA1Update (&g_sha1_ctx, (const u_int8_t *) &g_xkey, sizeof (g_xkey));
 		
@@ -294,11 +291,13 @@ PreliminarySetup(void)
 	fips_initialize ();
 }
 
+const Block kKnownAnswer = {0x92b404e5, 0x56588ced, 0x6c1acd4e, 0xbf053f68, 0x9f73a93};
+
 void
 fips_initialize(void)
 {
-	/* Read the initial value of g_xkey from yarrow */
-	prngOutput (gPrngRef, (BYTE*) &g_xkey, sizeof (g_xkey));
+	/* So that we can do the self test, set the seed to zero */
+	memset(&g_xkey, 0, sizeof(g_xkey));
 	
 	/* initialize our SHA1 generator */
 	SHA1Init (&g_sha1_ctx);
@@ -306,7 +305,20 @@ fips_initialize(void)
 	/* other initializations */
 	memset (zeros, 0, sizeof (zeros));
 	g_bytes_used = 0;
-	random_block(g_random_data);
+	random_block(g_random_data, FALSE);
+	
+	// check here to see if we got the initial data we were expecting
+	int i;
+	for (i = 0; i < kBSize; ++i)
+	{
+		if (kKnownAnswer[i] != g_random_data[i])
+		{
+			panic("FIPS random self test failed");
+		}
+	}
+
+	// now do the random block again to make sure that userland doesn't get predictable data
+	random_block(g_random_data, TRUE);
 }
 
 /*
@@ -471,7 +483,7 @@ int random_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 		int bytes_available = kBSizeInBytes - g_bytes_used;
         if (bytes_available == 0)
 		{
-			random_block(g_random_data);
+			random_block(g_random_data, TRUE);
 			g_bytes_used = 0;
 			bytes_available = kBSizeInBytes;
 		}
@@ -511,7 +523,7 @@ read_random(void* buffer, u_int numbytes)
         int bytes_to_read = min(bytes_remaining, kBSizeInBytes - g_bytes_used);
         if (bytes_to_read == 0)
 		{
-			random_block(g_random_data);
+			random_block(g_random_data, TRUE);
 			g_bytes_used = 0;
 			bytes_to_read = min(bytes_remaining, kBSizeInBytes);
 		}

@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 
 /*
@@ -1120,7 +1114,7 @@ vniocattach_file(struct vn_softc *vn,
 	int error, flags;
 
 	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_proc_ref(p);
+	context.vc_ucred = proc_ucred(p);
 	
 	flags = FREAD|FWRITE;
 	if (in_kernel) {
@@ -1134,10 +1128,8 @@ vniocattach_file(struct vn_softc *vn,
 	/* vn_open gives both long- and short-term references */
 	error = vn_open(&nd, flags, 0);
 	if (error) {
-		if (error != EACCES && error != EPERM && error != EROFS) {
-			kauth_cred_unref(&context.vc_ucred);
+		if (error != EACCES && error != EPERM && error != EROFS)
 			return (error);
-		}
 		flags &= ~FWRITE;
 		if (in_kernel) {
 			NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE32, 
@@ -1149,10 +1141,8 @@ vniocattach_file(struct vn_softc *vn,
 			       vniop->vn_file, &context);
 		}
 		error = vn_open(&nd, flags, 0);
-		if (error) {
-			kauth_cred_unref(&context.vc_ucred);
+		if (error)
 			return (error);
-		}
 	}
 	if (nd.ni_vp->v_type != VREG) {
 		error = EINVAL;
@@ -1161,19 +1151,17 @@ vniocattach_file(struct vn_softc *vn,
 		error = vnode_size(nd.ni_vp, &file_size, &context);
 	}
 	if (error != 0) {
-		(void) vn_close(nd.ni_vp, flags, context.vc_ucred, p);
+		(void) vn_close(nd.ni_vp, flags, proc_ucred(p), p);
 		vnode_put(nd.ni_vp);
-		kauth_cred_unref(&context.vc_ucred);
 		return (error);
 	}
 	cred = kauth_cred_proc_ref(p);
 	nd.ni_vp->v_flag |= VNOCACHE_DATA;
 	error = setcred(nd.ni_vp, p, cred);
 	if (error) {
-		(void)vn_close(nd.ni_vp, flags, context.vc_ucred, p);
+		(void)vn_close(nd.ni_vp, flags, proc_ucred(p), p);
 		vnode_put(nd.ni_vp);
-		kauth_cred_unref(&cred);
-		kauth_cred_unref(&context.vc_ucred);
+		kauth_cred_rele(cred);
 		return(error);
 	}
 	vn->sc_secsize = DEV_BSIZE;
@@ -1193,7 +1181,6 @@ vniocattach_file(struct vn_softc *vn,
 		vn->sc_flags |= VNF_READONLY;
 	/* lose the short-term reference */
 	vnode_put(nd.ni_vp);
-	kauth_cred_unref(&context.vc_ucred);
 	return(0);
 }
 
@@ -1208,7 +1195,7 @@ vniocattach_shadow(struct vn_softc *vn, struct user_vn_ioctl *vniop,
 	off_t file_size;
 
 	context.vc_proc = p;
-	context.vc_ucred = kauth_cred_proc_ref(p);
+	context.vc_ucred = proc_ucred(p);
 	
 	flags = FREAD|FWRITE;
 	if (in_kernel) {
@@ -1223,23 +1210,20 @@ vniocattach_shadow(struct vn_softc *vn, struct user_vn_ioctl *vniop,
 	error = vn_open(&nd, flags, 0);
 	if (error) {
 		/* shadow MUST be writable! */
-		kauth_cred_unref(&context.vc_ucred);
 		return (error);
 	}
 	if (nd.ni_vp->v_type != VREG 
 	    || (error = vnode_size(nd.ni_vp, &file_size, &context))) {
-		(void)vn_close(nd.ni_vp, flags, context.vc_ucred, p);
+		(void)vn_close(nd.ni_vp, flags, proc_ucred(p), p);
 		vnode_put(nd.ni_vp);
-		kauth_cred_unref(&context.vc_ucred);
 		return (error ? error : EINVAL);
 	}
 	map = shadow_map_create(vn->sc_fsize, file_size,
 				0, vn->sc_secsize);
 	if (map == NULL) {
-		(void)vn_close(nd.ni_vp, flags, context.vc_ucred, p);
+		(void)vn_close(nd.ni_vp, flags, proc_ucred(p), p);
 		vnode_put(nd.ni_vp);
 		vn->sc_shadow_vp = NULL;
-		kauth_cred_unref(&context.vc_ucred);
 		return (ENOMEM);
 	}
 	vn->sc_shadow_vp = nd.ni_vp;
@@ -1250,7 +1234,6 @@ vniocattach_shadow(struct vn_softc *vn, struct user_vn_ioctl *vniop,
 
 	/* lose the short-term reference */
 	vnode_put(nd.ni_vp);
-	kauth_cred_unref(&context.vc_ucred);
 	return(0);
 }
 
@@ -1316,7 +1299,8 @@ vnclear(struct vn_softc *vn, struct proc * p)
 	}
 	vn->sc_flags &= ~(VNF_INITED | VNF_READONLY);
 	if (vn->sc_cred) {
-		kauth_cred_unref(&vn->sc_cred);
+		kauth_cred_rele(vn->sc_cred);
+		vn->sc_cred = NULL;
 	}
 	vn->sc_size = 0;
 	vn->sc_fsize = 0;

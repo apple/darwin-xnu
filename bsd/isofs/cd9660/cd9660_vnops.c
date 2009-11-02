@@ -1,29 +1,23 @@
 /*
  * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: cd9660_vnops.c,v 1.22 1994/12/27 19:05:12 mycroft Exp $	*/
 
@@ -99,7 +93,7 @@
 #include <sys/lock.h>
 #include <sys/ubc_internal.h>
 #include <sys/uio_internal.h>
-#include <libkern/OSByteOrder.h>
+#include <architecture/byte_order.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>		/* kmem_alloc, kmem_free */
@@ -981,12 +975,12 @@ cd9660_xa_init(struct iso_node *ip, struct iso_directory_record *isodir)
 	sectors = ip->i_size / 2048;
 
 	strncpy(header->riff, "RIFF", 4);
-	header->fileSize = OSSwapHostToLittleInt32(sectors * CDXA_SECTOR_SIZE + sizeof(struct riff_header) - 8);
+	header->fileSize = NXSwapHostLongToLittle(sectors * CDXA_SECTOR_SIZE + sizeof(struct riff_header) - 8);
 	strncpy(header->cdxa, "CDXA", 4);
 	strncpy(header->fmt, "fmt ", 4);
-	header->fmtSize = OSSwapHostToLittleConstInt32(16);
+	header->fmtSize = NXSwapHostLongToLittle(16);
 	strncpy(header->data, "data", 4);
-	header->dataSize = OSSwapHostToLittleInt32(sectors * CDXA_SECTOR_SIZE);
+	header->dataSize = NXSwapHostLongToLittle(sectors * CDXA_SECTOR_SIZE);
 
 	/*
 	 * Copy the CD-ROM XA extended directory information into the header.  As far as
@@ -1367,6 +1361,7 @@ struct vnodeopv_entry_desc cd9660_specop_entries[] = {
 	{ &vnop_pathconf_desc, (VOPFUNC)spec_pathconf },	/* pathconf */
 	{ &vnop_advlock_desc, (VOPFUNC)spec_advlock },	/* advlock */
 	{ &vnop_bwrite_desc, (VOPFUNC)vn_bwrite },
+	{ &vnop_devblocksize_desc, (VOPFUNC)spec_devblocksize }, /* devblocksize */
 	{ &vnop_pagein_desc, (VOPFUNC)cd9660_pagein },		/* Pagein */
 	{ &vnop_pageout_desc, (VOPFUNC)cd9660_pageout },		/* Pageout */
 	{ &vnop_blktooff_desc, (VOPFUNC)cd9660_blktooff },	/* blktooff */
