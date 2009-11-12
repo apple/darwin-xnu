@@ -49,11 +49,14 @@
 #include <mach/machine.h>
 #include <mach/vm_map.h>
 #include <mach/mach_vm.h>
+#include <mach/machine.h>
+#include <i386/cpuid.h>
 #include <i386/tsc.h>
 #include <i386/rtclock.h>
 #include <i386/cpu_data.h>
 #include <i386/machine_routines.h>
 #include <i386/misc_protos.h>
+#include <i386/cpuid.h>
 #include <machine/cpu_capabilities.h>
 #include <machine/commpage.h>
 #include <machine/pmap.h>

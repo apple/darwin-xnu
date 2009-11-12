@@ -33,8 +33,18 @@
  * Definition of remote debugger protocol.
  */
 
+
+#ifdef MACH_KERNEL_PRIVATE
 #include	<mach/vm_prot.h>
 #include	<stdint.h>
+#endif
+
+#ifdef KDP_PROXY_PACK_SUPPORT
+#pragma pack(1)
+#define KDP_PACKED
+#else
+#define KDP_PACKED __attribute__((packed))
+#endif
 
 /*
  * Retransmit parameters
@@ -46,7 +56,6 @@
 #endif	/* DDEBUG_DEBUG || DEBUG_DEBUG */
 #define	KDP_REXMIT_TRIES	8	/* xmit 8 times, then give up */
 
-#define KDP_PACKED __attribute__((packed))
 
 /*
  * (NMI) Attention Max Wait Time
@@ -124,12 +133,35 @@ typedef enum {
         /* msr access (64-bit) */
 	KDP_READMSR64,	KDP_WRITEMSR64,
 
+        /* get/dump panic/corefile info */
+        KDP_DUMPINFO,
+
 	/* keep this last */
 	KDP_INVALID_REQUEST
 } kdp_req_t;
 
+typedef enum {
+        KDP_DUMPINFO_GETINFO    = 0x00000000, 
+        KDP_DUMPINFO_SETINFO    = 0x00000001, 
+        KDP_DUMPINFO_CORE       = 0x00000102, 
+        KDP_DUMPINFO_PANICLOG   = 0x00000103, 
+        KDP_DUMPINFO_SYSTEMLOG  = 0x00000104, 
+        KDP_DUMPINFO_DISABLE    = 0x00000105, 
+        KDP_DUMPINFO_MASK       = 0x00000FFF,
+        KDP_DUMPINFO_DUMP       = 0x00000100,
+
+        KDP_DUMPINFO_REBOOT     = 0x10000000,
+        KDP_DUMPINFO_NORESUME   = 0x20000000,
+        KDP_DUMPINFO_RESUME     = 0x00000000, /* default behaviour */
+        KDP_DUMPINFO_NOINTR     = 0x40000000, /* don't interrupt */
+        KDP_DUMPINFO_INTR       = 0x00000000, /* default behaviour */
+} kdp_dumpinfo_t;
+
 /*
  * Common KDP packet header
+ * NOTE: kgmacros has a non-symboled version of kdp_hdr_t so that some basic information.
+ *       can be gathered from a kernel without any symbols. changes to this structure
+ *       need to be reflected in kgmacros as well.
  */
 typedef struct {
 	kdp_req_t	request:7;	/* kdp_req_t, request type */
@@ -147,10 +179,10 @@ typedef enum {
 	KDPERR_ALREADY_CONNECTED,
 	KDPERR_BAD_NBYTES,
 	KDPERR_BADFLAVOR,		/* bad flavor in w/r regs */
+
 	KDPERR_MAX_BREAKPOINTS = 100,
 	KDPERR_BREAKPOINT_NOT_FOUND = 101,
 	KDPERR_BREAKPOINT_ALREADY_SET = 102
-
 } kdp_error_t;
 
 /*
@@ -582,6 +614,28 @@ typedef struct {
 	kdp_hdr_t	hdr;
 } KDP_PACKED kdp_termination_ack_t;
 
+/*
+ * KDP_DUMPINFO
+ */
+typedef struct {			/* KDP_DUMPINFO request */
+	kdp_hdr_t	hdr;
+        char            name[50];       
+	char            destip[16];
+	char            routerip[16];
+	uint32_t        port;
+	kdp_dumpinfo_t  type;
+} KDP_PACKED kdp_dumpinfo_req_t;
+
+typedef struct {			/* KDP_DUMPINFO reply */
+	kdp_hdr_t	hdr;
+        char            name[50];       
+	char            destip[16];
+	char            routerip[16];
+	uint32_t        port;
+	kdp_dumpinfo_t  type;
+} KDP_PACKED kdp_dumpinfo_reply_t;
+
+
 typedef union {
 	kdp_hdr_t		hdr;
 	kdp_connect_req_t	connect_req;
@@ -639,9 +693,27 @@ typedef union {
 	kdp_readmsr64_reply_t	readmsr64_reply;
 	kdp_writemsr64_req_t	writemsr64_req;
 	kdp_writemsr64_reply_t	writemsr64_reply;
+	kdp_dumpinfo_req_t	dumpinfo_req;
+	kdp_dumpinfo_reply_t	dumpinfo_reply;
 } kdp_pkt_t;
 
 #define MAX_KDP_PKT_SIZE	1200	/* max packet size */
 #define MAX_KDP_DATA_SIZE	1024	/* max r/w data per packet */
+
+/*
+ * Support relatively small request/responses here.
+ * If kgmacros needs to make a larger request, increase
+ * this buffer size
+ */
+#define KDP_MANUAL_PACKET_SIZE 128
+struct kdp_manual_pkt {
+    unsigned char	data[KDP_MANUAL_PACKET_SIZE];
+    unsigned int	len;
+    boolean_t		input;
+} KDP_PACKED;
+
+#ifdef KDP_PROXY_PACK_SUPPORT
+#pragma pack()
+#endif
 
 #endif // _KDP_PROTOCOL_H_

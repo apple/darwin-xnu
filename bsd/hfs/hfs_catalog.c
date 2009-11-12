@@ -2669,6 +2669,27 @@ getdirentries_callback(const CatalogKey *ckp, const CatalogRecord *crp,
 
 	/* We're done when parent directory changes */
 	if (state->cbs_parentID != curID) {
+		/*
+		 * If the parent ID is different from curID this means we've hit
+		 * the EOF for the directory.  To help future callers, we mark
+		 * the cbs_eof boolean.  However, we should only mark the EOF 
+		 * boolean if we're about to return from this function. 
+		 *
+		 * This is because this callback function does its own uiomove
+		 * to get the data to userspace.  If we set the boolean before determining
+		 * whether or not the current entry has enough room to write its
+		 * data to userland, we could fool the callers of this catalog function
+		 * into thinking they've hit EOF earlier than they really would have.
+		 * In that case, we'd know that we have more entries to process and
+		 * send to userland, but we didn't have enough room.  
+		 * 
+		 * To be safe, we mark cbs_eof here ONLY for the cases where we know we're 
+		 * about to return and won't write any new data back
+		 * to userland.  In the stop_after_pack case, we'll set this boolean
+		 * regardless, so it's slightly safer to let that logic mark the boolean,
+		 * especially since it's closer to the return of this function.
+		 */		 
+
 		if (state->cbs_extended) {
 			/* The last record has not been returned yet, so we 
 			 * want to stop after packing the last item 
@@ -2676,10 +2697,12 @@ getdirentries_callback(const CatalogKey *ckp, const CatalogRecord *crp,
 			if (state->cbs_hasprevdirentry) { 
 				stop_after_pack = true;
 			} else {
+				state->cbs_eof = true;
 				state->cbs_result = ENOENT;
 				return (0);	/* stop */
 			}				
 		} else {
+			state->cbs_eof = true;
 			state->cbs_result = ENOENT;
 			return (0);	/* stop */
 		}
@@ -3057,6 +3080,12 @@ cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint
 	state.cbs_nlinks = 0;
 	state.cbs_maxlinks = maxlinks;
 	state.cbs_linkinfo = (linkinfo_t *)((char *)buffer + MAXPATHLEN);
+	/*
+	 * We need to set cbs_eof to false regardless of whether or not the
+	 * control flow is actually in the extended case, since we use this
+	 * field to track whether or not we've returned EOF from the iterator function.
+	 */
+	state.cbs_eof = false;
 
 	iterator = (BTreeIterator *) ((char *)state.cbs_linkinfo + (maxlinks * sizeof(linkinfo_t)));
 	key = (CatalogKey *)&iterator->key;
@@ -3065,7 +3094,6 @@ cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint
 	if (extended) {
 		state.cbs_direntry = (struct direntry *)((char *)iterator + sizeof(BTreeIterator));
 		state.cbs_prevdirentry = state.cbs_direntry + 1;
-		state.cbs_eof = false;
 	}
 	/*
 	 * Attempt to build a key from cached filename
@@ -3186,8 +3214,14 @@ cat_getdirentries(struct hfsmount *hfsmp, int entrycnt, directoryhint_t *dirhint
 	/* Note that state.cbs_index is still valid on errors */
 	*items = state.cbs_index - index;
 	index = state.cbs_index;
-
+	
+	/*
+	 * Also note that cbs_eof is set in all cases if we ever hit EOF
+	 * during the enumeration by the catalog callback.  Mark the directory's hint
+	 * descriptor as having hit EOF.
+	 */
 	if (state.cbs_eof) {
+		dirhint->dh_desc.cd_flags |= CD_EOF;
 		*eofflag = 1;
 	}
 	

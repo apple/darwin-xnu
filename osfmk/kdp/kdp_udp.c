@@ -58,6 +58,8 @@
 
 #include <mach/memory_object_types.h>
 
+#include <sys/msgbuf.h>
+
 #include <string.h>
 
 #define DO_ALIGN	1	/* align all packet data accesses */
@@ -87,16 +89,7 @@ static struct {
     boolean_t		input;
 } pkt, saved_reply;
 
-/*
- * Support relatively small request/responses here.
- * If kgmacros needs to make a larger request, increase
- * this buffer size
- */
-static struct {
-    unsigned char	data[128];
-    unsigned int	len;
-    boolean_t		input;
-} manual_pkt;
+struct kdp_manual_pkt manual_pkt;
 
 struct {
     struct {
@@ -139,6 +132,7 @@ static uint32_t target_ip = 0;
 
 static volatile boolean_t panicd_specified = FALSE;
 static boolean_t router_specified = FALSE;
+static boolean_t corename_specified = FALSE;
 static unsigned int panicd_port = CORE_REMOTE_PORT;
 
 static struct ether_addr etherbroadcastaddr = {{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}};
@@ -150,6 +144,7 @@ static struct ether_addr current_resolved_MAC = {{0, 0, 0 , 0, 0, 0}};
 
 static boolean_t flag_panic_dump_in_progress = FALSE;
 static boolean_t flag_router_mac_initialized = FALSE;
+static boolean_t flag_dont_abort_panic_dump  = FALSE;
 
 static boolean_t flag_arp_resolved = FALSE;
 
@@ -160,6 +155,7 @@ unsigned int SEGSIZE = 512;
 
 static char panicd_ip_str[20];
 static char router_ip_str[20];
+static char corename_str[50];
 
 static unsigned int panic_block = 0;
 volatile unsigned int kdp_trigger_core_dump = 0;
@@ -286,6 +282,9 @@ kdp_register_send_receive(
 	if (!PE_parse_boot_argn("panicd_port", &panicd_port, sizeof (panicd_port)))
 		panicd_port = CORE_REMOTE_PORT;
 
+	if (PE_parse_boot_argn("_panicd_corename", &corename_str, sizeof (corename_str)))
+		corename_specified = TRUE;
+
 	kdp_flag |= KDP_READY;
 	if (current_debugger == NO_CUR_DB)
 		current_debugger = KDP_CUR_DB;
@@ -387,8 +386,9 @@ ip_sum(
 
 static void
 kdp_reply(
-	unsigned short		reply_port
-	)
+          unsigned short		reply_port,
+          const boolean_t         sideband
+          )
 {
 	struct udpiphdr		aligned_ui, *ui = &aligned_ui;
 	struct ip		aligned_ip, *ip = &aligned_ip;
@@ -447,12 +447,14 @@ kdp_reply(
 	pkt.len += (unsigned int)sizeof (struct ether_header);
     
 	// save reply for possible retransmission
-	bcopy((char *)&pkt, (char *)&saved_reply, sizeof(pkt));
+	if (!sideband)
+		bcopy((char *)&pkt, (char *)&saved_reply, sizeof(pkt));
 
 	(*kdp_en_send_pkt)(&pkt.data[pkt.off], pkt.len);
 
 	// increment expected sequence number
-	exception_seq++;
+	if (!sideband) 
+		exception_seq++;
 }
 
 static void
@@ -731,12 +733,14 @@ kdp_poll(void)
 	}
 	/* If we receive a kernel debugging packet whilst a 
 	 * core dump is in progress, abort the transfer and 
-	 * enter the debugger.
+	 * enter the debugger if not told otherwise. 
 	 */
 	else
 		if (flag_panic_dump_in_progress)
 		{
-			abort_panic_transfer();
+			if (!flag_dont_abort_panic_dump) {
+				abort_panic_transfer();
+			}
 			return;
 		}
 
@@ -875,7 +879,8 @@ kdp_handler(
 	    (*kdp_en_send_pkt)(&saved_reply.data[saved_reply.off],
 			    saved_reply.len);
 	    goto again;
-	} else if (hdr->seq != exception_seq) {
+	} else if ((hdr->seq != exception_seq) &&
+                   (hdr->request != KDP_CONNECT)) {
 	    printf("kdp: bad sequence %d (want %d)\n",
 			hdr->seq, exception_seq);
 	    goto again;
@@ -901,7 +906,24 @@ kdp_handler(
 	if (kdp_packet((unsigned char*)&pkt.data[pkt.off], 
 			(int *)&pkt.len, 
 			(unsigned short *)&reply_port)) {
-	    kdp_reply(reply_port);
+            boolean_t sideband = FALSE;
+
+            /* if it's an already connected error message, 
+             * send a sideband reply for that. for successful connects,
+             * make sure the sequence number is correct. */
+            if (hdr->request == KDP_CONNECT) {
+                kdp_connect_reply_t *rp = 
+			(kdp_connect_reply_t *) &pkt.data[pkt.off];
+                kdp_error_t err = rp->error;
+
+                if (err == KDPERR_NO_ERROR) {
+                    exception_seq = hdr->seq;
+                } else if (err == KDPERR_ALREADY_CONNECTED) {
+                    sideband = TRUE;
+                }
+            } 
+
+	    kdp_reply(reply_port, sideband);
 	}
 
 again:
@@ -1011,7 +1033,7 @@ kdp_connection_wait(void)
 		    if (kdp_packet((unsigned char *)&pkt.data[pkt.off], 
 				(int *)&pkt.len, 
 				(unsigned short *)&reply_port))
-				kdp_reply(reply_port);
+			    kdp_reply(reply_port, FALSE);
 		    if (hdr->request == KDP_REATTACH) {
 				reattach_wait = 0;
 				hdr->request=KDP_DISCONNECT;
@@ -1168,9 +1190,10 @@ kdp_raise_exception(
      */
 
     if (1 == kdp_trigger_core_dump) {
-	kdp_flag &= ~PANIC_LOG_DUMP;
 	kdp_flag |= KDP_PANIC_DUMP_ENABLED;
 	kdp_panic_dump();
+	if (kdp_flag & REBOOT_POST_CORE)
+		kdp_machine_reboot();
 	kdp_trigger_core_dump = 0;
       }
 
@@ -1206,6 +1229,7 @@ kdp_reset(void)
 	kdp.reply_port = kdp.exception_port = 0;
 	kdp.is_halted = kdp.is_conn = FALSE;
 	kdp.exception_seq = kdp.conn_seq = 0;
+        kdp.session_key = 0;
 }
 
 struct corehdr *
@@ -1299,32 +1323,52 @@ create_panic_header(unsigned int request, const char *corename,
 	return coreh;
 }
 
+static int kdp_send_crashdump_seek(char *corename, uint64_t seek_off)
+{
+	int panic_error;
+
+#if defined(__LP64__)
+	if (kdp_feature_large_crashdumps) {
+		panic_error = kdp_send_crashdump_pkt(KDP_SEEK, corename, 
+						     sizeof(seek_off),
+						     &seek_off);
+	} else
+#endif
+	{
+		uint32_t off = (uint32_t) seek_off;
+		panic_error = kdp_send_crashdump_pkt(KDP_SEEK, corename, 
+						     sizeof(off), &off);
+	}
+
+	if (panic_error < 0) {
+		printf ("kdp_send_crashdump_pkt failed with error %d\n",
+			panic_error);
+		return panic_error;
+	}
+
+	return 0;
+}
+
 int kdp_send_crashdump_data(unsigned int request, char *corename,
     uint64_t length, caddr_t txstart)
 {
-	caddr_t txend = txstart + length;
 	int panic_error = 0;
 
-	if (length <= SEGSIZE) {
-		if ((panic_error = kdp_send_crashdump_pkt(request, corename, length, (caddr_t) txstart)) < 0) {
+	while (length > 0) {
+		uint64_t chunk = MIN(SEGSIZE, length);
+		
+		panic_error = kdp_send_crashdump_pkt(request, corename, chunk,
+						     (caddr_t) txstart);
+		if (panic_error < 0) {
 			printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
-			return panic_error ;
+			return panic_error;
 		}
-	}
-	else
-	{
-		while (txstart <= (txend - SEGSIZE))  {
-			if ((panic_error = kdp_send_crashdump_pkt(KDP_DATA, NULL, SEGSIZE, txstart)) < 0) {
-				printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
-				return panic_error;
-			}
-			txstart += SEGSIZE;
-			if (!(panic_block % 2000))
-				kdb_printf_unbuffered(".");
-		}
-		if (txstart < txend) {
-			kdp_send_crashdump_pkt(request, corename, (unsigned int)(txend - txstart), txstart);
-		}
+
+		if (!(panic_block % 2000))
+			kdb_printf_unbuffered(".");
+
+		txstart += chunk;
+		length  -= chunk;
 	}
 	return 0;
 }
@@ -1362,6 +1406,13 @@ TRANSMIT_RETRY:
 	th = create_panic_header(request, corename, (unsigned)length, panic_block);
 
 	if (request == KDP_DATA) {
+		/* as all packets are SEGSIZE in length, the last packet
+		 * may end up with trailing bits. make sure that those
+		 * bits aren't confusing. */
+		if (length < SEGSIZE)
+			memset(th->th_data + length, 'X', 
+                               SEGSIZE - (uint32_t) length);
+
 		if (!kdp_machine_vm_read((mach_vm_address_t)(intptr_t)panic_data, (caddr_t) th->th_data, length)) {
 			memset ((caddr_t) th->th_data, 'X', (size_t)length);
 		}
@@ -1508,11 +1559,124 @@ kdp_get_xnu_version(char *versionbuf)
 
 extern char *inet_aton(const char *cp, struct in_addr *pin);
 
+void
+kdp_set_dump_info(const uint32_t flags, const char *filename, 
+                  const char *destipstr, const char *routeripstr,
+                  const uint32_t port)
+{
+	uint32_t cmd;
+
+	if (destipstr && (destipstr[0] != '\0')) {
+		strlcpy(panicd_ip_str, destipstr, sizeof(panicd_ip_str));
+		panicd_specified = 1;
+	}
+
+	if (routeripstr && (routeripstr[0] != '\0')) {
+		strlcpy(router_ip_str, routeripstr, sizeof(router_ip_str));
+		router_specified = 1;
+	}
+
+	if (filename && (filename[0] != '\0')) {
+		strlcpy(corename_str, filename, sizeof(corename_str));
+		corename_specified = TRUE;
+	} else {
+		corename_specified = FALSE;
+	}
+
+	if (port) 
+		panicd_port = port;
+
+        /* on a disconnect, should we stay in KDP or not? */
+        noresume_on_disconnect = (flags & KDP_DUMPINFO_NORESUME) ? 1 : 0;
+
+	if ((flags & KDP_DUMPINFO_DUMP) == 0)
+		return;
+
+	/* the rest of the commands can modify kdp_flags */
+	cmd = flags & KDP_DUMPINFO_MASK;
+        if (cmd == KDP_DUMPINFO_DISABLE) {
+		kdp_flag &= ~KDP_PANIC_DUMP_ENABLED;
+		panicd_specified       = 0;
+		kdp_trigger_core_dump  = 0;
+		return;
+        }
+
+	kdp_flag &= ~REBOOT_POST_CORE;
+	if (flags & KDP_DUMPINFO_REBOOT)
+            kdp_flag |= REBOOT_POST_CORE;
+
+	kdp_flag &= ~PANIC_LOG_DUMP;
+	if (cmd == KDP_DUMPINFO_PANICLOG)
+            kdp_flag |= PANIC_LOG_DUMP;
+	
+	kdp_flag &= ~SYSTEM_LOG_DUMP;
+	if (cmd == KDP_DUMPINFO_SYSTEMLOG)
+            kdp_flag |= SYSTEM_LOG_DUMP;
+
+	/* trigger a dump */
+	kdp_flag |= DBG_POST_CORE;
+
+	flag_dont_abort_panic_dump = (flags & KDP_DUMPINFO_NOINTR) ? 
+		TRUE : FALSE;
+
+	reattach_wait          = 1;
+	logPanicDataToScreen   = 1;
+	disableConsoleOutput   = 0;
+	disable_debug_output   = 0;
+	kdp_trigger_core_dump  = 1;
+}
+
+void
+kdp_get_dump_info(uint32_t *flags, char *filename, char *destipstr, 
+                  char *routeripstr, uint32_t *port)
+{
+	if (destipstr) {
+		if (panicd_specified)
+			strlcpy(destipstr, panicd_ip_str, 
+                                sizeof(panicd_ip_str));
+		else 
+			destipstr[0] = '\0';
+	}
+
+	if (routeripstr) {
+		if (router_specified)
+			strlcpy(routeripstr, router_ip_str,
+                                sizeof(router_ip_str));
+		else
+			routeripstr[0] = '\0';
+	}
+
+	if (filename) {
+		if (corename_specified)
+			strlcpy(filename, corename_str, 
+                                sizeof(corename_str));
+		else 
+			filename[0] = '\0';
+
+	}
+
+	if (port) 
+		*port = panicd_port;
+
+	if (flags) {
+		*flags = 0;
+                if (!panicd_specified) 
+			*flags |= KDP_DUMPINFO_DISABLE;
+                else if (kdp_flag & PANIC_LOG_DUMP)
+			*flags |= KDP_DUMPINFO_PANICLOG;
+		else
+			*flags |= KDP_DUMPINFO_CORE;
+
+		if (noresume_on_disconnect)
+			*flags |= KDP_DUMPINFO_NORESUME;
+	}
+}
+
+
 /* Primary dispatch routine for the system dump */
 void 
 kdp_panic_dump(void)
 {
-	char corename[50];
 	char coreprefix[10];
 	int panic_error;
 
@@ -1539,21 +1703,25 @@ kdp_panic_dump(void)
 
 	kdp_get_xnu_version((char *) &pkt.data[0]);
 
-	/* Panic log bit takes precedence over core dump bit */
-	if ((panicstr != (char *) 0) && (kdp_flag & PANIC_LOG_DUMP))
-		strncpy(coreprefix, "paniclog", sizeof(coreprefix));
-	else
-		strncpy(coreprefix, "core", sizeof(coreprefix));
+        if (!corename_specified) {
+            /* Panic log bit takes precedence over core dump bit */
+            if ((panicstr != (char *) 0) && (kdp_flag & PANIC_LOG_DUMP))
+		strlcpy(coreprefix, "paniclog", sizeof(coreprefix));
+            else if (kdp_flag & SYSTEM_LOG_DUMP) 
+		strlcpy(coreprefix, "systemlog", sizeof(coreprefix));
+	    else
+		strlcpy(coreprefix, "core", sizeof(coreprefix));
   
-	abstime = mach_absolute_time();
-	pkt.data[20] = '\0';
-	snprintf (corename, sizeof(corename), "%s-%s-%d.%d.%d.%d-%x", 
-	    coreprefix, &pkt.data[0],
-	    (current_ip & 0xff000000) >> 24,
-	    (current_ip & 0xff0000) >> 16,
-	    (current_ip & 0xff00) >> 8,
-	    (current_ip & 0xff),
-	    (unsigned int) (abstime & 0xffffffff));
+            abstime = mach_absolute_time();
+	    pkt.data[20] = '\0';
+	    snprintf (corename_str, sizeof(corename_str), "%s-%s-%d.%d.%d.%d-%x", 
+		      coreprefix, &pkt.data[0],
+		      (current_ip & 0xff000000) >> 24,
+		      (current_ip & 0xff0000) >> 16,
+		      (current_ip & 0xff00) >> 8,
+		      (current_ip & 0xff),
+		      (unsigned int) (abstime & 0xffffffff));
+        }
 
 	if (0 == inet_aton(panicd_ip_str, (struct in_addr *) &panic_server_ip)) {
 		printf("inet_aton() failed interpreting %s as a panic server IP\n", panicd_ip_str);
@@ -1593,9 +1761,9 @@ kdp_panic_dump(void)
 	    destination_mac.ether_addr_octet[5] & 0xff);
 
 	printf("Kernel map size is %llu\n", (unsigned long long) get_vmmap_size(kernel_map));
-	printf("Sending write request for %s\n", corename);  
+	printf("Sending write request for %s\n", corename_str);  
 
-	if ((panic_error = kdp_send_crashdump_pkt(KDP_WRQ, corename, 0 , NULL)) < 0) {
+	if ((panic_error = kdp_send_crashdump_pkt(KDP_WRQ, corename_str, 0 , NULL)) < 0) {
 		printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
 		goto panic_dump_exit;
 	}
@@ -1603,14 +1771,44 @@ kdp_panic_dump(void)
 	/* Just the panic log requested */
 	if ((panicstr != (char *) 0) && (kdp_flag & PANIC_LOG_DUMP)) {
 		printf("Transmitting panic log, please wait: ");
-		kdp_send_crashdump_data(KDP_DATA, corename, (unsigned int)(debug_buf_ptr - debug_buf), debug_buf);
+		kdp_send_crashdump_data(KDP_DATA, corename_str, 
+					debug_buf_ptr - debug_buf,
+					debug_buf);
 		kdp_send_crashdump_pkt (KDP_EOF, NULL, 0, ((void *) 0));
 		printf("Please file a bug report on this panic, if possible.\n");
 		goto panic_dump_exit;
 	}
   
+	/* maybe we wanted the systemlog */
+        if (kdp_flag & SYSTEM_LOG_DUMP) {
+		long start_off = msgbufp->msg_bufx;
+                long len;
+
+		printf("Transmitting system log, please wait: ");
+		if (start_off >= msgbufp->msg_bufr) {
+			len = msgbufp->msg_size - start_off;
+			kdp_send_crashdump_data(KDP_DATA, corename_str, len, 
+						msgbufp->msg_bufc + start_off);
+
+			/* seek to remove trailing bytes */
+			if (len & (SEGSIZE - 1))
+				kdp_send_crashdump_seek(corename_str, len);
+			start_off  = 0;
+		}
+
+		if (start_off != msgbufp->msg_bufr) {
+			len = msgbufp->msg_bufr - start_off;
+			kdp_send_crashdump_data(KDP_DATA, corename_str, len,
+						msgbufp->msg_bufc + start_off);
+		}
+
+		kdp_send_crashdump_pkt (KDP_EOF, NULL, 0, ((void *) 0));
+		goto panic_dump_exit;
+        }
+
 	/* We want a core dump if we're here */
 	kern_dump();
+
 panic_dump_exit:
 	abort_panic_transfer();
 	pkt.input = FALSE;
@@ -1623,6 +1821,7 @@ void
 abort_panic_transfer(void)
 {
 	flag_panic_dump_in_progress = FALSE;
+	flag_dont_abort_panic_dump  = FALSE;
 	not_in_kdp = 1;
 	panic_block = 0;
 }

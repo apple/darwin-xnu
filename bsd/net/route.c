@@ -1756,7 +1756,8 @@ makeroute:
 		 * it doesn't fire when we call it there because the node
 		 * hasn't been added to the tree yet.
 		 */
-		if (!(rt->rt_flags & RTF_HOST) && rt_mask(rt) != 0) {
+		if (req == RTM_ADD &&
+		    !(rt->rt_flags & RTF_HOST) && rt_mask(rt) != 0) {
 			struct rtfc_arg arg;
 			arg.rnh = rnh;
 			arg.rt0 = rt;
@@ -1842,7 +1843,7 @@ rt_fixchange(struct radix_node *rn, void *vp)
 	struct rtentry *rt0 = ap->rt0;
 	struct radix_node_head *rnh = ap->rnh;
 	u_char *xk1, *xm1, *xk2, *xmp;
-	int i, len, mlen;
+	int i, len;
 
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
@@ -1867,18 +1868,23 @@ rt_fixchange(struct radix_node *rn, void *vp)
 	xm1 = (u_char *)rt_mask(rt0);
 	xk2 = (u_char *)rt_key(rt);
 
-	/* avoid applying a less specific route */
-	xmp = (u_char *)rt_mask(rt->rt_parent);
-	mlen = rt_key(rt->rt_parent)->sa_len;
-	if (mlen > rt_key(rt0)->sa_len) {
-		RT_UNLOCK(rt);
-		return (0);
-	}
-
-	for (i = rnh->rnh_treetop->rn_offset; i < mlen; i++) {
-		if ((xmp[i] & ~(xmp[i] ^ xm1[i])) != xmp[i]) {
+	/*
+	 * Avoid applying a less specific route; do this only if the parent
+	 * route (rt->rt_parent) is a network route, since otherwise its mask
+	 * will be NULL if it is a cloning host route.
+	 */
+	if ((xmp = (u_char *)rt_mask(rt->rt_parent)) != NULL) {
+		int mlen = rt_mask(rt->rt_parent)->sa_len;
+		if (mlen > rt_mask(rt0)->sa_len) {
 			RT_UNLOCK(rt);
 			return (0);
+		}
+
+		for (i = rnh->rnh_treetop->rn_offset; i < mlen; i++) {
+			if ((xmp[i] & ~(xmp[i] ^ xm1[i])) != xmp[i]) {
+				RT_UNLOCK(rt);
+				return (0);
+			}
 		}
 	}
 

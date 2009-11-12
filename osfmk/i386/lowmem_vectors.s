@@ -96,7 +96,9 @@ EXT(lowGlo):
 	.long	EXT(osversion)		/* 0x2494 Pointer to osversion string */
 #if MACH_KDP
 	.long	EXT(flag_kdp_trigger_reboot) /* 0x2498 Pointer to debugger reboot trigger */
+	.long	EXT(manual_pkt)		     /* 0x249C Poiner to debugger manual packet address */
 #else
 	.long	0			/* 0x2498 Reserved */
+	.long	0			/* 0x249C Reserved */
 #endif
-	.fill	729, 4, 0
+	.fill	728, 4, 0

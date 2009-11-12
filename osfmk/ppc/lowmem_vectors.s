@@ -3969,6 +3969,7 @@ EXT(killresv):
 			.long	0								; 5490 Reserved for developer use
 			.long	EXT(osversion)					; 5494	Pointer to osversion string, debugging aid
 			.long	EXT(flag_kdp_trigger_reboot)					; 5498	Pointer to KDP reboot trigger, debugging aid
+			.long	EXT(manual_pkt)					; 549C	Pointer to KDP manual packet, debugging aid
 
 ;
 ;	The "shared page" is used for low-level debugging and is actually 1/2 page long

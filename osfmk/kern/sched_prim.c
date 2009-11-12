@@ -2252,16 +2252,14 @@ choose_processor(
 	 *	Prefer the last processor, when appropriate.
 	 */
 	if (processor != PROCESSOR_NULL) {
-		if (thread->sched_pri < BASEPRI_RTQUEUES && processor->processor_meta != PROCESSOR_META_NULL &&
-								processor->processor_meta->primary->state == PROCESSOR_IDLE)
+		if (processor->processor_meta != PROCESSOR_META_NULL)
 			processor = processor->processor_meta->primary;
 
 		if (processor->processor_set != pset || processor->state == PROCESSOR_INACTIVE ||
 				processor->state == PROCESSOR_SHUTDOWN || processor->state == PROCESSOR_OFF_LINE)
 			processor = PROCESSOR_NULL;
 		else
-		if (processor->state == PROCESSOR_IDLE ||
-					(thread->sched_pri > BASEPRI_DEFAULT && processor->current_pri < thread->sched_pri))
+		if (processor->state == PROCESSOR_IDLE)
 			return (processor);
 	}
 

@@ -53,7 +53,9 @@ typedef struct rtc_nanotime {
 	uint32_t	spare1;
 } rtc_nanotime_t;
 
+#if 0
 #include <kern/etimer.h>
+#endif
 
 struct cpu_data;
 

@@ -170,10 +170,12 @@ int ip6_ours_check_algorithm;
 int in6_init2done = 0;
 
 
+#if IPFW2
 /* firewall hooks */
 ip6_fw_chk_t *ip6_fw_chk_ptr;
 ip6_fw_ctl_t *ip6_fw_ctl_ptr;
 int ip6_fw_enable = 1;
+#endif
 
 struct ip6stat ip6stat;
 
@@ -481,6 +483,7 @@ ip6_input(m)
 
 	ip6stat.ip6s_nxthist[ip6->ip6_nxt]++;
 
+#if IPFW2
 	/*
 	 * Check with the firewall...
 	 */
@@ -497,6 +500,7 @@ ip6_input(m)
 			return;
 		}
 	}
+#endif
 
 	/*
 	 * Check against address spoofing/corruption.

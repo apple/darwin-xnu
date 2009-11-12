@@ -211,3 +211,6 @@ kdp_readmsr64(kdp_pkt_t *, int *, unsigned short *);
 
 static boolean_t
 kdp_writemsr64(kdp_pkt_t *, int *, unsigned short *);
+
+static boolean_t
+kdp_dumpinfo(kdp_pkt_t *, int *, unsigned short *);

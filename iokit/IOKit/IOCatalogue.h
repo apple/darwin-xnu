@@ -214,14 +214,6 @@ public:
     virtual bool serialize(OSSerialize * s) const;
 
     bool serializeData(IOOptionBits kind, OSSerialize * s) const;
-    
-    /*!
-        @function removePersonalities
-        @abstract Remove exact personalities from the database.
-        @param personalitiesArray  An array of personalities to remove.
-        @result Returns true if all personalities are removed successfully. Failure is due to a memory allocation failure.
-    */
-    bool removePersonalities(OSArray * personalitiesArray);
 
 /* This stuff is no longer used at all we keep it around for PPC/i386
  * binary compatibility only. Symbols are no longer exported.

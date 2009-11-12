@@ -190,8 +190,6 @@ static IORecursiveLock    * sKextLock                  = NULL;
 static OSDictionary       * sKextsByID                 = NULL;
 static OSArray            * sLoadedKexts               = NULL;
 
-static OSArray            * sPrelinkedPersonalities    = NULL;
-
 // Requests to kextd waiting to be picked up.
 static OSArray            * sKernelRequests            = NULL;
 // Identifier of kext load requests in sKernelRequests
@@ -867,9 +865,8 @@ OSKext::setKextdActive(Boolean active)
 {
     IORecursiveLockLock(sKextLock);
     sKextdActive = active;
-    if (sPrelinkedPersonalities) {
-        gIOCatalogue->removePersonalities(sPrelinkedPersonalities);
-        OSSafeReleaseNULL(sPrelinkedPersonalities);
+    if (sKernelRequests->getCount()) {
+        OSKextPingKextd();
     }
     IORecursiveLockUnlock(sKextLock);
 
@@ -920,7 +917,7 @@ OSKext::willShutdown(void)
         goto finish;
     }
 
-        OSKextPingKextd();
+    OSKextPingKextd();
 
 finish:
     IORecursiveLockUnlock(sKextLock);
@@ -7089,7 +7086,7 @@ OSKext::requestResource(
         goto finish;
     }
 
-        OSKextPingKextd();
+    OSKextPingKextd();
 
     result = kOSReturnSuccess;
     if (requestTagOut) {
@@ -7668,20 +7665,6 @@ finish:
     if (personalities)         personalities->release();
 
     return result;
-}
-
-/*********************************************************************
-*********************************************************************/
-/* static */
-void
-OSKext::setPrelinkedPersonalities(OSArray * personalitiesArray)
-{
-    sPrelinkedPersonalities = personalitiesArray;
-    if (sPrelinkedPersonalities) {
-        sPrelinkedPersonalities->retain();
-        gIOCatalogue->addDrivers(sPrelinkedPersonalities);
-    }
-    return;
 }
 
 /*********************************************************************

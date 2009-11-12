@@ -62,6 +62,7 @@
 #include <kern/cpu_data.h>
 #include <mach/mach_types.h>
 #include <mach/machine.h>
+#include <kern/etimer.h>
 #include <mach/vm_map.h>
 #include <mach/machine/vm_param.h>
 #include <vm/vm_kern.h>
@@ -278,11 +279,7 @@ struct fake_descriptor64 kernel_ldt_desc64 = {
 struct fake_descriptor64 kernel_tss_desc64 = {
 	0,
 	sizeof(struct x86_64_tss)-1,
-#ifdef __x86_64__
-	SZ_G,
-#else
 	0,
-#endif
 	ACC_P|ACC_PL_K|ACC_TSS,
 	0
 };
@@ -569,8 +566,6 @@ cpu_desc_init64(cpu_data_t *cdp)
 		/*
 		 * Master CPU uses the tables built at boot time.
 		 * Just set the index pointers to the low memory space.
-		 * Note that in 64-bit mode these are addressed in the
-		 * double-mapped window (uber-space).
 		 */
 		cdi->cdi_ktss = (void *)&master_ktss64;
 		cdi->cdi_sstk = (vm_offset_t) &master_sstk.top;
@@ -604,8 +599,7 @@ cpu_desc_init64(cpu_data_t *cdp)
 		cpu_desc_table64_t	*cdt = (cpu_desc_table64_t *) cdp->cpu_desc_tablep;
 		/*
 		 * Per-cpu GDT, IDT, KTSS descriptors are allocated in kernel 
-		 * heap (cpu_desc_table) . 
-		 * On K32 they're double-mapped in uber-space (over 4GB).
+		 * heap (cpu_desc_table). 
 		 * LDT descriptors are mapped into a separate area.
 		 */
 		cdi->cdi_gdt.ptr  = (struct fake_descriptor *)cdt->gdt;
@@ -694,7 +688,7 @@ cpu_desc_load64(cpu_data_t *cdp)
 	 *
  	 * Refer to commpage/cpu_number.s for the IDT limit trick.
 	 */
-	gdtptr64.length = GDTSZ * sizeof(struct real_descriptor64) - 1;
+	gdtptr64.length = GDTSZ * sizeof(struct real_descriptor) - 1;
 	gdtptr64.offset[0] = (uint32_t) cdi->cdi_gdt.ptr;
 	gdtptr64.offset[1] = KERNEL_UBER_BASE_HI32;
 	idtptr64.length = 0x1000 + cdp->cpu_number;
@@ -707,7 +701,7 @@ cpu_desc_load64(cpu_data_t *cdp)
 	ml_load_desc64();
 #else
 	/* Load the GDT, LDT, IDT and TSS */
-	cdi->cdi_gdt.size = sizeof(struct real_descriptor64)*GDTSZ - 1;
+	cdi->cdi_gdt.size = sizeof(struct real_descriptor)*GDTSZ - 1;
 	cdi->cdi_idt.size = 0x1000 + cdp->cpu_number;
 	lgdt((unsigned long *) &cdi->cdi_gdt);
 	lidt((unsigned long *) &cdi->cdi_idt);

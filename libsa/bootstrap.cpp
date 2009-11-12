@@ -437,7 +437,7 @@ KLDBootstrap::readPrelinkedExtensions(
     }
 
     if (personalitiesArray->getCount()) {
-        OSKext::setPrelinkedPersonalities(personalitiesArray);
+        gIOCatalogue->addDrivers(personalitiesArray);
     }
 
    /* Store the number of prelinked kexts in the registry so we can tell

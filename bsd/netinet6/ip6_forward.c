@@ -552,6 +552,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		type = ND_REDIRECT;
 	}
 
+#if IPFW2
 	/*
 	 * Check with the firewall...
 	 */
@@ -571,6 +572,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		/* We still have the extra ref on rt */
 		RT_LOCK(rt);
 	}
+#endif
 
 	/*
 	 * Fake scoped addresses. Note that even link-local source or

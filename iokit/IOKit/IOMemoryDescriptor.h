@@ -116,6 +116,7 @@ enum
 {
     kIOPreparationIDUnprepared = 0,
     kIOPreparationIDUnsupported = 1,
+    kIOPreparationIDAlwaysPrepared = 2,
 };
 
 /*! @class IOMemoryDescriptor : public OSObject

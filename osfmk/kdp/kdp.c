@@ -32,6 +32,7 @@
 
 #include <kdp/kdp_internal.h>
 #include <kdp/kdp_private.h>
+#include <kdp/kdp_core.h>
 
 #include <libsa/types.h>
 
@@ -80,11 +81,12 @@ static kdp_dispatch_t
 /*17 */ kdp_breakpoint64_remove,
 /*18 */ kdp_kernelversion,
 /*19 */ kdp_readphysmem64,
-/*20 */ kdp_writephysmem64,
-/*21 */ kdp_readioport,
-/*22 */ kdp_writeioport,
-/*23 */ kdp_readmsr64,
-/*24 */ kdp_writemsr64,
+/*1A */ kdp_writephysmem64,
+/*1B */ kdp_readioport,
+/*1C */ kdp_writeioport,
+/*1D */ kdp_readmsr64,
+/*1E */ kdp_writemsr64,
+/*1F */ kdp_dumpinfo,
     };
     
 kdp_glob_t	kdp;
@@ -95,7 +97,7 @@ kdp_glob_t	kdp;
  * Version 11 of the KDP Protocol adds support for 64-bit wide memory
  * addresses (read/write and breakpoints) as well as a dedicated
  * kernelversion request. Version 12 adds read/writing of physical
- * memory with 64-bit wide memory addresses.
+ * memory with 64-bit wide memory addresses. 
  */
 #define KDP_VERSION 12
 
@@ -219,31 +221,42 @@ kdp_connect(
     kdp_connect_req_t	*rq = &pkt->connect_req;
     size_t		plen = *len;
     kdp_connect_reply_t	*rp = &pkt->connect_reply;
+    uint16_t            rport, eport;
+    uint32_t            key;
+    uint8_t             seq;
 
     if (plen < sizeof (*rq))
 	return (FALSE);
 
     dprintf(("kdp_connect seq %x greeting %s\n", rq->hdr.seq, rq->greeting));
 
+    rport = rq->req_reply_port;
+    eport = rq->exc_note_port;
+    key   = rq->hdr.key;
+    seq   = rq->hdr.seq;
     if (kdp.is_conn) {
-	if (rq->hdr.seq == kdp.conn_seq)	/* duplicate request */
+	if ((seq == kdp.conn_seq) &&	/* duplicate request */
+            (rport == kdp.reply_port) &&
+            (eport == kdp.exception_port) &&
+            (key == kdp.session_key))
 	    rp->error = KDPERR_NO_ERROR;
-	else
+	else 
 	    rp->error = KDPERR_ALREADY_CONNECTED;
     }
     else { 
-	kdp.reply_port = rq->req_reply_port;
-	kdp.exception_port = rq->exc_note_port;
-	kdp.is_conn = TRUE;
-	kdp.conn_seq = rq->hdr.seq;
-    
+	kdp.reply_port     = rport;
+	kdp.exception_port = eport;
+	kdp.is_conn        = TRUE;
+	kdp.conn_seq       = seq;
+        kdp.session_key    = key;
+
 	rp->error = KDPERR_NO_ERROR;
     }
 
     rp->hdr.is_reply = 1;
     rp->hdr.len = sizeof (*rp);
     
-    *reply_port = kdp.reply_port;
+    *reply_port = rport;
     *len = rp->hdr.len;
     
     if (current_debugger == KDP_CUR_DB)    
@@ -276,6 +289,7 @@ kdp_disconnect(
     kdp.reply_port = kdp.exception_port = 0;
     kdp.is_halted = kdp.is_conn = FALSE;
     kdp.exception_seq = kdp.conn_seq = 0;
+    kdp.session_key = 0;
 
     if ((panicstr != NULL) && (return_on_panic == 0))
 	    reattach_wait = 1;
@@ -1273,6 +1287,39 @@ kdp_writemsr64(
 	rp->hdr.is_reply = 1;
 	rp->hdr.len = sizeof (*rp);
 	
+	*reply_port = kdp.reply_port;
+	*len = rp->hdr.len;
+    
+	return (TRUE);
+}
+
+static boolean_t
+kdp_dumpinfo(
+	kdp_pkt_t	*pkt,
+	int		*len,
+	unsigned short	*reply_port
+	       )
+{
+	kdp_dumpinfo_req_t   *rq = &pkt->dumpinfo_req;
+	kdp_dumpinfo_reply_t *rp = &pkt->dumpinfo_reply;
+	size_t	plen = *len;
+	
+	if (plen < sizeof (*rq))
+		return (FALSE);
+	
+	dprintf(("kdp_dumpinfo file=%s destip=%s routerip=%s\n", rq->name, rq->destip, rq->routerip));
+	rp->hdr.is_reply = 1;
+	rp->hdr.len = sizeof (*rp);
+	
+        if ((rq->type & KDP_DUMPINFO_MASK) != KDP_DUMPINFO_GETINFO) {
+            kdp_set_dump_info(rq->type, rq->name, rq->destip, rq->routerip, 
+                                rq->port);
+        }
+
+        /* gather some stats for reply */
+        kdp_get_dump_info(&rp->type, rp->name, rp->destip, rp->routerip, 
+                          &rp->port);
+
 	*reply_port = kdp.reply_port;
 	*len = rp->hdr.len;
     

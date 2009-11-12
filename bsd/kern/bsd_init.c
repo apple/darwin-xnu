@@ -172,10 +172,6 @@
 
 #include <pexpert/pexpert.h>
 
-#if CONFIG_EMBEDDED
-#include <libkern/OSKextLib.h>
-#endif
-
 void * get_user_regs(thread_t);		/* XXX kludge for <machine/thread.h> */
 void IOKitInitializeTime(void);		/* XXX */
 void IOSleep(unsigned int);		/* XXX */
@@ -968,16 +964,6 @@ bsd_init(void)
 
 #if 0 /* not yet */
 	consider_zone_gc(FALSE);
-#endif
-
-#if CONFIG_EMBEDDED
-	/*
-	 * XXX workaround for:
-	 * <rdar://problem/6378731> Kirkwood7A135: PPP KEXT no longer loads
-	 */
-	OSKextLoadKextWithIdentifier("com.apple.nke.ppp");
-	OSKextLoadKextWithIdentifier("com.apple.nke.l2tp");
-	OSKextLoadKextWithIdentifier("com.apple.nke.pptp");
 #endif
 
 	bsd_init_kprintf("done\n");

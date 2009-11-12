@@ -36,21 +36,23 @@
 #include <libsa/types.h>
 
 typedef struct {
-    unsigned short		reply_port;
-    unsigned int		conn_seq;
-    boolean_t			is_conn;
     void			*saved_state;
-    boolean_t			is_halted;
+    thread_t			kdp_thread;
+    int				kdp_cpu;
+    uint32_t                    session_key;
+    unsigned int		conn_seq;
+    unsigned short		reply_port;
     unsigned short		exception_port;
+    boolean_t			is_conn;
+    boolean_t			is_halted;
     unsigned char		exception_seq;
     boolean_t			exception_ack_needed;
-    int				kdp_cpu;
-    thread_t			kdp_thread;
 } kdp_glob_t;
 
 extern kdp_glob_t	kdp;
 
 extern volatile int	kdp_flag;
+extern int            noresume_on_disconnect;
 
 #define KDP_READY       0x1
 #define KDP_ARP         0x2
@@ -61,6 +63,7 @@ extern volatile int	kdp_flag;
 #define DBG_POST_CORE     0x40
 #define PANIC_LOG_DUMP    0x80
 #define REBOOT_POST_CORE  0x100
+#define SYSTEM_LOG_DUMP   0x200
 typedef boolean_t
 (*kdp_dispatch_t) (
     kdp_pkt_t *,
@@ -200,4 +203,3 @@ kdp_machine_msr64_read(kdp_readmsr64_req_t *, caddr_t /* data */, uint16_t /* lc
 
 int
 kdp_machine_msr64_write(kdp_writemsr64_req_t *, caddr_t /* data */, uint16_t /* lcpu */);
-

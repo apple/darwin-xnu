@@ -30,6 +30,7 @@
 #define _I386_PMCPU_H_
 
 #include <i386/cpu_topology.h>
+#include <i386/rtclock.h>
 
 #ifndef ASSEMBLER
 
@@ -37,7 +38,7 @@
  * This value should be changed each time that pmDsipatch_t or pmCallBacks_t
  * changes.
  */
-#define PM_DISPATCH_VERSION	17
+#define PM_DISPATCH_VERSION	18
 
 /*
  * Dispatch table for functions that get installed when the power
@@ -97,6 +98,7 @@ typedef struct {
     processor_t		(*ThreadBind)(processor_t proc);
     uint32_t		(*GetSavedRunCount)(void);
     void		(*pmSendIPI)(int cpu);
+    rtc_nanotime_t	*(*GetNanotimeInfo)(void);
     x86_topology_parameters_t	*topoParms;
 } pmCallBacks_t;
 

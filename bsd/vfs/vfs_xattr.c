@@ -703,6 +703,7 @@ getshadowfile(vnode_t vp, vnode_t *svpp, int makestream, size_t *rsrcsize,
 	/* Create the shadow stream file. */
 	error = VNOP_CREATE(dvp, &svp, &cn, &va, context);
 	if (error == 0) {
+		vnode_recycle(svp);
 		*creator = 1;
 	} else if ((error == EEXIST) && !makestream) {
 		error = VNOP_LOOKUP(dvp, &svp, &cn, context);

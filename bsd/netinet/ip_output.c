@@ -629,10 +629,13 @@ loopit:
 		ro->ro_rt->rt_use++;
 		if (ro->ro_rt->rt_flags & RTF_GATEWAY)
 			dst = (struct sockaddr_in *)ro->ro_rt->rt_gateway;
-		if (ro->ro_rt->rt_flags & RTF_HOST)
+		if (ro->ro_rt->rt_flags & RTF_HOST) {
 			isbroadcast = (ro->ro_rt->rt_flags & RTF_BROADCAST);
-		else
+		} else {
+			/* Become a regular mutex */
+			RT_CONVERT_LOCK(ro->ro_rt);
 			isbroadcast = in_broadcast(dst->sin_addr, ifp);
+		}
 		RT_UNLOCK(ro->ro_rt);
 	}
 
@@ -1390,11 +1393,14 @@ skip_ipsec:
 			ro_fwd->ro_rt->rt_use++;
 			if (ro_fwd->ro_rt->rt_flags & RTF_GATEWAY)
 				dst = (struct sockaddr_in *)ro_fwd->ro_rt->rt_gateway;
-			if (ro_fwd->ro_rt->rt_flags & RTF_HOST)
+			if (ro_fwd->ro_rt->rt_flags & RTF_HOST) {
 				isbroadcast =
 				    (ro_fwd->ro_rt->rt_flags & RTF_BROADCAST);
-			else
+			} else {
+				/* Become a regular mutex */
+				RT_CONVERT_LOCK(ro_fwd->ro_rt);
 				isbroadcast = in_broadcast(dst->sin_addr, ifp);
+			}
 			RT_UNLOCK(ro_fwd->ro_rt);
 			rtfree(ro->ro_rt);
 			ro->ro_rt = ro_fwd->ro_rt;

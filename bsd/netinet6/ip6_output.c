@@ -1009,6 +1009,7 @@ skip_ipsec2:;
 	in6_clearscope(&ip6->ip6_dst);
 #endif
 
+#if IPFW2
 	/*
 	 * Check with the firewall...
 	 */
@@ -1025,6 +1026,7 @@ skip_ipsec2:;
 			goto done;
 		}
 	}
+#endif
 
 	/*
 	 * If the outgoing packet contains a hop-by-hop options header,

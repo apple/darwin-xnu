@@ -111,7 +111,12 @@ document kgm
 |     resume_off     Don't resume when detaching from gdb 
 |
 |     sendcore	     Configure kernel to send a coredump to the specified IP
+|     sendsyslog     Configure kernel to send a system log to the specified IP
+|     sendpaniclog   Configure kernel to send a panic log to the specified IP
 |     disablecore    Configure the kernel to disable coredump transmission
+|     getdumpinfo    Retrieve the current remote dump parameters
+|     setdumpinfo    Configure the remote dump parameters
+|
 |     switchtocorethread Corefile version of "switchtoact"
 |     resetcorectx   Corefile version of "resetctx"
 |
@@ -208,6 +213,7 @@ document kgm
 |     showallgdbcorestacks Corefile equivalent of "showallgdbstacks"
 |     kdp-reenter	Schedule reentry into the debugger and continue.
 |     kdp-reboot	Restart remote target
+|     kdp-version       Get KDP version number
 |
 |     zstack		Print zalloc caller stack (zone leak debugging)
 |     findoldest	Find oldest zone leak debugging record
@@ -276,6 +282,26 @@ set $kgm_mtype_x86_mask = 0xFEFFFFFF
 set $kgm_mtype = ((unsigned int *)&_mh_execute_header)[1]
 set $kgm_lp64 = $kgm_mtype & 0x01000000
 
+set $kgm_manual_pkt_ppc    = 0x549C
+set $kgm_manual_pkt_i386   = 0x249C
+set $kgm_manual_pkt_x86_64 = 0xFFFFFF8000002930
+set $kgm_manual_pkt_arm    = 0xFFFF04A0
+
+set $kgm_kdp_pkt_data_len   = 128
+
+# part of data packet
+set $kgm_kdp_pkt_hdr_req_off = 0
+set $kgm_kdp_pkt_hdr_seq_off = 1
+set $kgm_kdp_pkt_hdr_len_off = 2
+set $kgm_kdp_pkt_hdr_key_off = 4
+
+# after data packet
+set $kgm_kdp_pkt_len_off     = $kgm_kdp_pkt_data_len
+set $kgm_kdp_pkt_input_off   = $kgm_kdp_pkt_data_len + 4
+
+set $kgm_kdp_pkt_hostreboot = 0x13
+set $kgm_kdp_pkt_hdr_size   = 8
+
 set $kgm_lcpu_self      = 0xFFFE
 
 set $kgm_reg_depth = 0
@@ -290,6 +316,37 @@ set $kgm_show_props = 0
 set $kgm_show_data_alwaysbytes = 0
 
 set $kgm_show_kmod_syms = 0
+
+# send a manual packet header that doesn't require knowing the location
+# of everything.
+define manualhdrint
+       set $req = $arg0
+
+       set $hdrp = (uint32_t *) $kgm_manual_pkt_i386
+       if ($kgm_mtype == $kgm_mtype_ppc)
+          set $hdrp = (uint32_t *) $kgm_manual_pkt_ppc
+          set $req = $req << 1 # shift to deal with endiannness
+       end
+       if ($kgm_mtype == $kgm_mtype_x86_64)
+          set $hdrp = (uint64_t *) $kgm_manual_pkt_x86_64
+       end
+       if ($kgm_mtype == $kgm_mtype_arm)
+          set $hdrp = (uint32_t *) $kgm_manual_pkt_arm
+       end
+
+       set $pkt_hdr = *$hdrp
+       set *((uint8_t *) ($pkt_hdr + $kgm_kdp_pkt_input_off))    = 0
+       set *((uint32_t *) ($pkt_hdr + $kgm_kdp_pkt_len_off))     = $kgm_kdp_pkt_hdr_size
+
+       set *((uint8_t *) ($pkt_hdr + $kgm_kdp_pkt_hdr_req_off))  = $req
+       set *((uint8_t *) ($pkt_hdr + $kgm_kdp_pkt_hdr_seq_off))  = 0
+       set *((uint16_t *) ($pkt_hdr + $kgm_kdp_pkt_hdr_len_off)) = $kgm_kdp_pkt_hdr_size
+       set *((uint32_t *) ($pkt_hdr + $kgm_kdp_pkt_hdr_key_off)) = 0
+       set *((uint8_t *) ($pkt_hdr + $kgm_kdp_pkt_input_off))    = 1
+
+       # dummy to make sure manual packet is executed
+       set $kgm_dummy = &_mh_execute_header
+end
 
 # Print a pointer
 define showptr
@@ -1820,18 +1877,18 @@ define switchtoact
 	if ($kgm_mtype == $kgm_mtype_i386)
 		set $kdpstatep = (struct x86_saved_state32 *) kdp.saved_state
 		if ($kdp_act_counter == 0)
-			set $kdpstate = *($kdpstatep)
+		   set $kdpstate = *($kdpstatep)
 		end	
 		set $kdp_act_counter = $kdp_act_counter + 1
 
 		set $kgm_statep = (struct x86_kernel_state *) \
 					($newact->kernel_stack + kernel_stack_size \
 					 - sizeof(struct x86_kernel_state))
-		set $kdpstatep->ebx = $kgm_statep->k_ebx 
+	   	set $kdpstatep->ebx = $kgm_statep->k_ebx 
 		set $kdpstatep->ebp = $kgm_statep->k_ebp 
 		set $kdpstatep->edi = $kgm_statep->k_edi 
 		set $kdpstatep->esi = $kgm_statep->k_esi 
-		set $kdpstatep->eip = $kgm_statep->k_eip 
+	   	set $kdpstatep->eip = $kgm_statep->k_eip 
 		flushregs
 		flushstack
 		set $pc = $kgm_statep->k_eip
@@ -1840,20 +1897,20 @@ define switchtoact
 	if ($kgm_mtype == $kgm_mtype_x86_64)
 		set $kdpstatep = (struct x86_saved_state64 *) kdp.saved_state
 		if ($kdp_act_counter == 0)
-			set $kdpstate = *($kdpstatep)
+		   set $kdpstate = *($kdpstatep)
 		end	
 		set $kdp_act_counter = $kdp_act_counter + 1
 
 		set $kgm_statep = (struct x86_kernel_state *) \
 					($newact->kernel_stack + kernel_stack_size \
 					 - sizeof(struct x86_kernel_state))
-		set $kdpstatep->rbx = $kgm_statep->k_rbx 
-		set $kdpstatep->rbp = $kgm_statep->k_rbp 
-		set $kdpstatep->r12 = $kgm_statep->k_r12 
-		set $kdpstatep->r13 = $kgm_statep->k_r13 
-		set $kdpstatep->r14 = $kgm_statep->k_r14 
-		set $kdpstatep->r15 = $kgm_statep->k_r15 
-		set $kdpstatep->isf.rsp = $kgm_statep->k_rsp 
+	   	set $kdpstatep->rbx = $kgm_statep->k_rbx 
+	   	set $kdpstatep->rbp = $kgm_statep->k_rbp 
+	   	set $kdpstatep->r12 = $kgm_statep->k_r12 
+	   	set $kdpstatep->r13 = $kgm_statep->k_r13 
+	   	set $kdpstatep->r14 = $kgm_statep->k_r14 
+	   	set $kdpstatep->r15 = $kgm_statep->k_r15 
+	   	set $kdpstatep->isf.rsp = $kgm_statep->k_rsp 
 		flushregs
 		flushstack
 		set $pc = $kgm_statep->k_rip
@@ -1914,7 +1971,7 @@ define switchtoctx
 	select 0
 	if ($kgm_mtype == $kgm_mtype_ppc)
 		if ($kdp_act_counter == 0)
-		set $kdpstate = (struct savearea *) kdp.saved_state
+		   set $kdpstate = (struct savearea *) kdp.saved_state
 		end
 		set $kdp_act_counter = $kdp_act_counter + 1
 		set (struct savearea *) kdp.saved_state=(struct savearea *) $arg0
@@ -2062,7 +2119,8 @@ define hook-detach
 end
 
 define resume_on
-	set noresume_on_disconnect = 0
+        set $resume = KDP_DUMPINFO_SETINFO | KDP_DUMPINFO_RESUME
+        dumpinfoint $resume
 end
 
 document resume_on
@@ -2072,7 +2130,8 @@ document resume_on
 end
 
 define resume_off
-	set noresume_on_disconnect = 1
+        set $noresume = KDP_DUMPINFO_SETINFO | KDP_DUMPINFO_NORESUME
+        dumpinfoint $noresume
 end
 
 document resume_off
@@ -2366,47 +2425,202 @@ Syntax: showuserstack <address of thread activation>
 |macro in some cases.
 end
 
-#Stopgap until gdb can generate the HOSTREBOOT packet
 define kdp-reboot
-#Alternatively, set *(*(unsigned **) 0x2498) = 1 (or 0x5498 on PPC)
-       set flag_kdp_trigger_reboot = 1
+# Alternatively, set *(*(unsigned **) 0x2498) = 1 
+# (or 0x5498 on PPC, 0xffffff8000002928 on x86_64, 0xffff049c on arm)
+       manualhdrint $kgm_kdp_pkt_hostreboot
        continue
 end
 
 document kdp-reboot
 Syntax: kdp-reboot
-|Reboot the remote target machine; not guaranteed to succeed. Requires symbols
-|until gdb support for the HOSTREBOOT packet is implemented.
+|Reboot the remote target machine; not guaranteed to succeed. 
+end
+
+define kdpversionint
+       # set up the manual KDP packet
+       set manual_pkt.input = 0
+       set manual_pkt.len = sizeof(kdp_version_req_t)
+       set $kgm_pkt = (kdp_version_req_t *)&manual_pkt.data
+       set $kgm_pkt->hdr.request  = KDP_VERSION
+       set $kgm_pkt->hdr.len      = sizeof(kdp_version_req_t)
+       set $kgm_pkt->hdr.is_reply = 0
+       set $kgm_pkt->hdr.seq      = 0
+       set $kgm_pkt->hdr.key      = 0
+       set manual_pkt.input       = 1
+       # dummy to make sure manual packet is executed
+       set $kgm_dummy = &_mh_execute_header
+       set $kgm_pkt = (kdp_version_reply_t *)&manual_pkt.data
+       set $kgm_kdp_version = $kgm_pkt->version
+       set $kgm_kdp_feature = $kgm_pkt->feature
+end
+
+define kdp-version
+       kdpversionint
+       printf "KDP VERSION = %d, FEATURE = 0x%x\n", $kgm_kdp_version, $kgm_kdp_feature
+end
+
+document kdp-version
+Syntax: kdp-version
+|Get the KDP protocol version being used by the kernel.
+end
+
+define dumpinfoint
+       # set up the manual KDP packet
+       set manual_pkt.input        = 0
+
+       set manual_pkt.len          = sizeof(kdp_dumpinfo_req_t)
+       set $kgm_pkt                = (kdp_dumpinfo_req_t *)manual_pkt.data
+       set $kgm_pkt->hdr.request  = KDP_DUMPINFO
+       set $kgm_pkt->hdr.len      = sizeof(kdp_dumpinfo_req_t)
+       set $kgm_pkt->hdr.is_reply = 0
+       set $kgm_pkt->hdr.seq      = 0
+       set $kgm_pkt->hdr.key      = 0
+       set $kgm_pkt->type         = $arg0 
+       set $kgm_pkt->name         = ""
+       set $kgm_pkt->destip       = ""
+       set $kgm_pkt->routerip     = ""
+       set $kgm_pkt->port         = 0
+
+       if $argc > 1
+       	  set $kgm_pkt->name      = "$arg1"
+       end
+       if $argc > 2
+          set $kgm_pkt->destip    = "$arg2"
+       end
+       if $argc > 3
+       	  set $kgm_pkt->routerip  = "$arg3"
+       end
+       if $argc > 4
+       	  set $kgm_pkt->port      = $arg4
+       end
+
+       set manual_pkt.input       = 1
+       # dummy to make sure manual packet is executed
+       set $kgm_dummy = &_mh_execute_header
 end
 
 define sendcore
-       set kdp_trigger_core_dump = 1
-       set kdp_flag |= 0x40
-       set panicd_ip_str = "$arg0"
-       set panicd_specified = 1
-       set disable_debug_output = 0
-       set disableConsoleOutput = 0
-       set logPanicDataToScreen = 1
-       set reattach_wait = 1
-       resume_off
+       if $argc > 1
+       	  dumpinfoint KDP_DUMPINFO_CORE $arg1 $arg0
+       else
+       	  dumpinfoint KDP_DUMPINFO_CORE \0 $arg0
+       end
 end
 
 document sendcore
-Syntax: sendcore <IP address>
+Syntax: sendcore <IP address> [filename]
 |Configure the kernel to transmit a kernel coredump to a server (kdumpd) 
 |at the specified IP address. This is useful when the remote target has
 |not been previously configured to transmit coredumps, and you wish to
 |preserve kernel state for later examination. NOTE: You must issue a "continue"
 |command after using this macro to trigger the kernel coredump. The kernel
 |will resume waiting in the debugger after completion of the coredump. You
-|may disable coredumps by executing the "disablecore" macro.
+|may disable coredumps by executing the "disablecore" macro. You can 
+|optionally specify the filename to be used for the generated core file.
+end
+
+define sendsyslog
+       if $argc > 1
+       	  dumpinfoint KDP_DUMPINFO_SYSTEMLOG $arg1 $arg0
+       else
+       	  dumpinfoint KDP_DUMPINFO_SYSTEMLOG \0 $arg0
+       end
+end
+
+document sendsyslog
+Syntax: sendsyslog <IP address> [filename]
+|Configure the kernel to transmit a kernel system log to a server (kdumpd) 
+|at the specified IP address. NOTE: You must issue a "continue"
+|command after using this macro to trigger the kernel system log. The kernel
+|will resume waiting in the debugger after completion. You can optionally
+|specify the name to be used for the generated system log.
+end
+
+define sendpaniclog
+       if panicstr 
+	  if $argc > 1
+	     dumpinfoint KDP_DUMPINFO_PANICLOG $arg1 $arg0
+	  else
+	     dumpinfoint KDP_DUMPINFO_PANICLOG \0 $arg0
+	  end
+       else
+	  printf "No panic log available.\n"
+       end
+end
+
+document sendpaniclog
+Syntax: sendpaniclog <IP address> [filename]
+|Configure the kernel to transmit a kernel paniclog to a server (kdumpd) 
+|at the specified IP address. NOTE: You must issue a "continue"
+|command after using this macro to trigger the kernel panic log. The kernel
+|will resume waiting in the debugger after completion. You can optionally
+|specify the name to be used for the generated panic log.
+end
+
+define getdumpinfo
+       dumpinfoint KDP_DUMPINFO_GETINFO
+       set $kgm_dumpinfo = (kdp_dumpinfo_reply_t *) manual_pkt.data
+       if $kgm_dumpinfo->type & KDP_DUMPINFO_REBOOT
+       	  printf "Sysem will reboot after kernel info gets dumped.\n"
+       else
+       	  printf "Sysem will not reboot after kernel info gets dumped.\n"
+       end
+       if $kgm_dumpinfo->type & KDP_DUMPINFO_NORESUME
+       	  printf "System will allow a re-attach after a KDP disconnect.\n"
+       else
+       	  printf "System will resume after a KDP disconnect.\n"
+       end
+       set $kgm_dumpinfo_type = $kgm_dumpinfo->type & KDP_DUMPINFO_MASK
+       if $kgm_dumpinfo_type == KDP_DUMPINFO_DISABLE
+       	  printf "Kernel not setup for remote dumps.\n"
+       else
+          printf "Remote dump type: "
+          if $kgm_dumpinfo_type == KDP_DUMPINFO_CORE
+	     printf "Core file\n"
+	  end
+          if $kgm_dumpinfo_type == KDP_DUMPINFO_PANICLOG
+	     printf "Panic log\n"
+	  end
+          if $kgm_dumpinfo_type == KDP_DUMPINFO_SYSTEMLOG
+	     printf "System log\n"
+	  end
+
+	  printf "Name: "
+	  if $kgm_dumpinfo->name[0] == '\0'
+	     printf "(autogenerated)\n"
+          else
+	     printf "%s\n", $kgm_dumpinfo->name
+          end		  
+
+	  printf "Network Info: %s[%d] ", $kgm_dumpinfo->destip, $kgm_dumpinfo->port
+	  if $kgm_dumpinfo->routerip[0] == '\0'
+	     printf "\n"
+	  else
+	     printf "Router: %s\n", $kgm_dumpinfo->routerip
+	  end
+       end
+end
+
+document getdumpinfo
+Syntax: getdumpinfo
+|Retrieve the current remote dump settings. 
+end
+
+define setdumpinfo
+       dumpinfoint KDP_DUMPINFO_SETINFO $arg0 $arg1 $arg2 $arg3
+end
+
+document setdumpinfo
+Syntax: setdumpinfo <filename> <ip> <router> <port>
+|Configure the current remote dump settings. Specify \0 if you
+|want to use the defaults (filename) or previously configured
+|settings (ip/router). Specify 0 for the port if you wish to 
+|use the previously configured/default setting for that.
 end
 
 define disablecore
-       set kdp_trigger_core_dump = 0
-       set kdp_flag |= 0x40
-       set kdp_flag &= ~0x10
-       set panicd_specified = 0
+       dumpinfoint KDP_DUMPINFO_DISABLE
 end
 
 document disablecore
@@ -3212,12 +3426,20 @@ Syntax: (gdb) findregistryprop <entry>
 end
 
 define findregistryentryint
-    set $kgm_namekey   = (OSSymbol *) $kgm_reg_plane->nameKey
-    set $kgm_childkey  = (OSSymbol *) $kgm_reg_plane->keys[1]
-    if $kgm_findregistry_verbose
-       printf "Searching"
+    if !$kgm_reg_plane
+       set $kgm_reg_plane = (IORegistryPlane *) gIOServicePlane
     end
-    findregistryentryrecurse _ $arg0 0 0
+
+    if !$kgm_reg_plane
+       printf "Please load kgmacros after KDP attaching to the target.\n"
+    else
+       set $kgm_namekey   = (OSSymbol *) $kgm_reg_plane->nameKey
+       set $kgm_childkey  = (OSSymbol *) $kgm_reg_plane->keys[1]
+       if $kgm_findregistry_verbose
+          printf "Searching"
+       end
+       findregistryentryrecurse _ $arg0 0 0
+    end
 end
 
 define _findregistryentry
@@ -3353,10 +3575,17 @@ define showregistryentryrecurse
 end
 
 define showregistryentryint
-    set $kgm_namekey   = (OSSymbol *) $kgm_reg_plane->nameKey
-    set $kgm_childkey  = (OSSymbol *) $kgm_reg_plane->keys[1]
+    if !$kgm_reg_plane
+       set $kgm_reg_plane = (IORegistryPlane *) gIOServicePlane
+    end
 
-    showregistryentryrecurse _ $arg0 0 0
+    if !$kgm_reg_plane
+       printf "Please load kgmacros after KDP attaching to the target.\n"
+    else        
+       set $kgm_namekey   = (OSSymbol *) $kgm_reg_plane->nameKey
+       set $kgm_childkey  = (OSSymbol *) $kgm_reg_plane->keys[1]
+       showregistryentryrecurse _ $arg0 0 0
+    end
 end
 
 define showregistry
@@ -7116,9 +7345,17 @@ define showregistryentryrecursepmstate
 end
 
 define showregistryentryintpmstate
-    set $kgm_namekey   = (OSSymbol *) $kgm_reg_plane->nameKey
-    set $kgm_childkey  = (OSSymbol *) $kgm_reg_plane->keys[1]
-    showregistryentryrecursepmstate _ $arg0 0 0
+    if !$kgm_reg_plane
+       set $kgm_reg_plane = (IORegistryPlane *) gIOServicePlane
+    end
+
+    if !$kgm_reg_plane
+       printf "Please load kgmacros after KDP attaching to the target.\n"
+    else
+       set $kgm_namekey   = (OSSymbol *) $kgm_reg_plane->nameKey
+       set $kgm_childkey  = (OSSymbol *) $kgm_reg_plane->keys[1]
+       showregistryentryrecursepmstate _ $arg0 0 0
+    end
 end
 
 define showregistrypmstate
@@ -9873,6 +10110,7 @@ Syntax: (gdb) showallworkloopthreads
 | best-effort guess to find any workloops that are actually not blocked in a continuation. For a
 | complete list, it is best to compare the output of this macro against the output of 'showallstacks'.
 end
+
 define showthreadfortid
 	set $kgm_id_found = 0
 	

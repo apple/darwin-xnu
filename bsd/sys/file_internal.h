@@ -99,14 +99,7 @@ struct fileproc {
 #define FP_INCREATE 	0x0001
 #define FP_INCLOSE 	0x0002
 #define FP_INSELECT	0x0004
-/*
- * see <rdar://problem/6647955>
- */
-#if CONFIG_EMBEDDED
-#define FP_INCHRREAD	0x0000
-#else
-#define FP_INCHRREAD	0x0008
-#endif
+#define FP_INCHRREAD	0x0000	/* disable FP_INCHRREAD <rdar://6986929> */
 #define FP_WRITTEN	0x0010
 #define FP_CLOSING	0x0020
 #define FP_WAITCLOSE	0x0040

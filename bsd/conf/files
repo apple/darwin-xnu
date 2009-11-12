@@ -292,7 +292,7 @@ bsd/netinet6/icmp6.c        		optional inet6
 bsd/netinet6/in6.c          		optional inet6
 bsd/netinet6/in6_cksum.c    		optional inet6
 bsd/netinet6/in6_gif.c      		optional gif inet6
-bsd/netinet6/ip6_fw.c      		    optional inet6
+bsd/netinet6/ip6_fw.c      		    optional inet6 ipfw2
 bsd/netinet6/ip6_forward.c  		optional inet6
 bsd/netinet6/in6_ifattach.c 		optional inet6
 bsd/netinet6/ip6_input.c    		optional inet6

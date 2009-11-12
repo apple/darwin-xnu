@@ -1785,9 +1785,7 @@ private:
     void all_done ( void );
     void start_ack_timer ( void );
     void stop_ack_timer ( void );
-    unsigned long compute_settle_time ( void );
-    IOReturn startSettleTimer ( unsigned long delay );
-    IOReturn ask_parent ( unsigned long requestedState );
+    void startSettleTimer( void );
     bool checkForDone ( void );
     bool responseValid ( unsigned long x, int pid );
     void computeDesiredState ( unsigned long tempDesire = 0 );
@@ -1840,6 +1838,7 @@ private:
 	void removePowerClient( const OSSymbol * client );
 	uint32_t getPowerStateForClient( const OSSymbol * client );
     IOReturn requestPowerState( const OSSymbol * client, uint32_t state );
+    IOReturn requestDomainPower( unsigned long ourPowerState, IOOptionBits options = 0 );
 #endif /* XNU_KERNEL_PRIVATE */
 };
 

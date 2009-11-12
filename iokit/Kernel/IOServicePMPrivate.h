@@ -66,6 +66,9 @@ private:
     // Power flags supplied by all parents (domain).
     unsigned long           HeadNoteDomainFlags;
 
+    // Power flags supplied by domain accounting for parent changes.
+    IOPMPowerFlags          HeadNoteDomainTargetFlags;
+
     // Connection attached to the changing parent.
     IOPowerConnection *     HeadNoteParentConnection;
     
@@ -205,6 +208,7 @@ private:
 #define fHeadNotePowerState         pwrMgt->HeadNotePowerState
 #define fHeadNotePowerArrayEntry    pwrMgt->HeadNotePowerArrayEntry
 #define fHeadNoteDomainFlags        pwrMgt->HeadNoteDomainFlags
+#define fHeadNoteDomainTargetFlags  pwrMgt->HeadNoteDomainTargetFlags
 #define fHeadNoteParentConnection   pwrMgt->HeadNoteParentConnection
 #define fHeadNoteParentFlags        pwrMgt->HeadNoteParentFlags
 #define fHeadNotePendingAcks        pwrMgt->HeadNotePendingAcks
@@ -257,7 +261,7 @@ private:
 #define fRemoveInterestSet          pwrMgt->RemoveInterestSet
 #define fStrictTreeOrder            pwrMgt->StrictTreeOrder
 #define fNotifyChildArray           pwrMgt->NotifyChildArray
-#define fIdleTimerStopped			pwrMgt->IdleTimerStopped
+#define fIdleTimerStopped           pwrMgt->IdleTimerStopped
 #define fAdjustPowerScheduled       pwrMgt->AdjustPowerScheduled
 #define fActivityTicklePowerState   pwrMgt->ActivityTicklePowerState
 #define fPMVars                     pwrMgt->PMVars
@@ -371,9 +375,9 @@ class IOPMRequest : public IOCommand
 protected:
     IOService *          fTarget;        // request target
     IOPMRequest *        fRequestNext;   // the next request in the chain
-	IOPMRequest *		 fRequestRoot;   // the root request in the issue tree
+    IOPMRequest *        fRequestRoot;   // the root request in the issue tree
     IOItemCount          fWorkWaitCount; // execution blocked if non-zero
-	IOItemCount			 fFreeWaitCount; // completion blocked if non-zero	
+    IOItemCount          fFreeWaitCount; // completion blocked if non-zero
     uint32_t             fType;          // request type
 
     IOPMCompletionAction fCompletionAction;
@@ -401,12 +405,12 @@ public:
         return fRequestNext;
     }
 
-	inline IOPMRequest * getRootRequest( void ) const
-	{
+    inline IOPMRequest * getRootRequest( void ) const
+    {
         if (fRequestRoot) return fRequestRoot;
         if (fCompletionAction) return (IOPMRequest *) this;
-		return 0;
-	}
+        return 0;
+    }
 
     inline uint32_t      getType( void ) const
     {

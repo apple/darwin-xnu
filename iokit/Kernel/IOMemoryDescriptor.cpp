@@ -1174,8 +1174,16 @@ uint64_t
 IOGeneralMemoryDescriptor::getPreparationID( void )
 {
     ioGMDData *dataP;
-    if (!_wireCount || !(dataP = getDataP(_memoryEntries)))
+
+    if (!_wireCount)
 	return (kIOPreparationIDUnprepared);
+
+    if (_flags & (kIOMemoryTypePhysical | kIOMemoryTypePhysical64))
+	return (kIOPreparationIDAlwaysPrepared);
+
+    if (!_memoryEntries || !(dataP = getDataP(_memoryEntries)))
+	return (kIOPreparationIDUnprepared);
+
     if (kIOPreparationIDUnprepared == dataP->fPreparationID)
     {
 #if defined(__ppc__ )
@@ -1229,11 +1237,11 @@ IOReturn IOGeneralMemoryDescriptor::dmaCommandOperation(DMACommandOps op, void *
 #if IOMD_DEBUG_DMAACTIVE
     } else if (kIOMDSetDMAActive == op) {
 	IOGeneralMemoryDescriptor * md = const_cast<IOGeneralMemoryDescriptor *>(this);
-	md->__iomd_reservedA++;
+	OSIncrementAtomic(&md->__iomd_reservedA);
     } else if (kIOMDSetDMAInactive == op) {
 	IOGeneralMemoryDescriptor * md = const_cast<IOGeneralMemoryDescriptor *>(this);
 	if (md->__iomd_reservedA)
-	    md->__iomd_reservedA--;
+	    OSDecrementAtomic(&md->__iomd_reservedA);
 	else
 	    panic("kIOMDSetDMAInactive");
 #endif /* IOMD_DEBUG_DMAACTIVE */
@@ -2951,7 +2959,8 @@ IOReturn IOMemoryDescriptor::doUnmap(
 	length     = ((IOMemoryMap *) __address)->fLength;
     }
 
-    if( _memEntry && (addressMap == kernel_map) && (kIOMemoryBufferPageable & _flags))
+    if ((addressMap == kernel_map) 
+        && ((kIOMemoryBufferPageable & _flags) || !_memEntry))
 	addressMap = IOPageableMapForAddress( address );
 
 #if DEBUG

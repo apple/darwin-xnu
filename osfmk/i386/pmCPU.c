@@ -41,6 +41,7 @@
 #include <kern/machine.h>
 #include <kern/pms.h>
 #include <kern/processor.h>
+#include <kern/etimer.h>
 #include <i386/cpu_threads.h>
 #include <i386/pmCPU.h>
 #include <i386/cpuid.h>
@@ -619,6 +620,12 @@ pmSendIPI(int cpu)
     lapic_send_ipi(cpu, LAPIC_PM_INTERRUPT);
 }
 
+static rtc_nanotime_t *
+pmGetNanotimeInfo(void)
+{
+    return(&rtc_nanotime_info);
+}
+
 /*
  * Called by the power management kext to register itself and to get the
  * callbacks it might need into other kernel functions.  This interface
@@ -648,6 +655,7 @@ pmKextRegister(uint32_t version, pmDispatch_t *cpuFuncs,
 	callbacks->ThreadBind           = thread_bind;
 	callbacks->GetSavedRunCount     = pmGetSavedRunCount;
 	callbacks->pmSendIPI		= pmSendIPI;
+	callbacks->GetNanotimeInfo	= pmGetNanotimeInfo;
 	callbacks->topoParms            = &topoParms;
     } else {
 	panic("Version mis-match between Kernel and CPU PM");

@@ -142,13 +142,8 @@ tsc_init(void)
 	 */
 	busFreq = EFI_FSB_frequency();
 
-	if (cpuid_info()->cpuid_family != CPU_FAMILY_PENTIUM_M) {
-		panic("tsc_init: unknown CPU family: 0x%X\n",
-			cpuid_info()->cpuid_family);
-	}
-
-	switch (cpuid_info()->cpuid_model) {
-	case CPUID_MODEL_NEHALEM: {
+	switch (cpuid_cpufamily()) {
+	case CPUFAMILY_INTEL_NEHALEM: {
 		uint64_t cpu_mhz;
 		uint64_t msr_flex_ratio;
 		uint64_t msr_platform_info;

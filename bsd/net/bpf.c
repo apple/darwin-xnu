@@ -94,7 +94,6 @@
 #include <sys/ttycom.h>
 #include <sys/filedesc.h>
 #include <sys/uio_internal.h>
-#include <sys/fcntl.h>
 #include <sys/file_internal.h>
 #include <sys/event.h>
 
@@ -470,20 +469,6 @@ bpf_attachd(struct bpf_d *d, struct bpf_if *bp)
 	bp->bif_dlist = d;
 	
 	if (first) {
-		bpf_tap_mode tap_mode;
-
-		switch ((d->bd_oflags & (FREAD | FWRITE))) {
-			case FREAD:
-				tap_mode = BPF_TAP_INPUT;
-				break;
-			case FWRITE:
-				tap_mode = BPF_TAP_OUTPUT;
-				break;
-			default:
-				tap_mode = BPF_TAP_INPUT_OUTPUT;
-				break;
-		}
-
 		/* Find the default bpf entry for this ifp */
 		if (bp->bif_ifp->if_bpf == NULL) {
 			struct bpf_if	*primary;
@@ -497,10 +482,10 @@ bpf_attachd(struct bpf_d *d, struct bpf_if *bp)
 		
 		/* Only call dlil_set_bpf_tap for primary dlt */
 		if (bp->bif_ifp->if_bpf == bp)
-			dlil_set_bpf_tap(bp->bif_ifp, tap_mode, bpf_tap_callback);
+			dlil_set_bpf_tap(bp->bif_ifp, BPF_TAP_INPUT_OUTPUT, bpf_tap_callback);
 		
 		if (bp->bif_tap)
-			error = bp->bif_tap(bp->bif_ifp, bp->bif_dlt, tap_mode);
+			error = bp->bif_tap(bp->bif_ifp, bp->bif_dlt, BPF_TAP_INPUT_OUTPUT);
 	}
 
 	return error;

@@ -4699,9 +4699,10 @@ filetype_issendable(file_type_t fdtype)
 		case DTYPE_VNODE:
 		case DTYPE_SOCKET:
 		case DTYPE_PIPE:
+		case DTYPE_PSXSHM:
 			return TRUE;
 		default:
-			/* DTYPE_KQUEUE, DTYPE_FSEVENTS, DTYPE_PSXSHM, DTYPE_PSXSEM */
+			/* DTYPE_KQUEUE, DTYPE_FSEVENTS, DTYPE_PSXSEM */
 			return FALSE;
 	}
 }

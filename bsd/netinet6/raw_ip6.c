@@ -515,11 +515,13 @@ rip6_output(
 	return(error);
 }
 
+#if IPFW2
 static void
 load_ip6fw(void)
 {
 	ip6_fw_init();
 }
+#endif
 
 /*
  * Raw IPv6 socket option processing.
@@ -545,6 +547,7 @@ rip6_ctloutput(
 	switch (sopt->sopt_dir) {
 	case SOPT_GET:
 		switch (sopt->sopt_name) {
+#if IPFW2
 		case IPV6_FW_ADD:
 		case IPV6_FW_GET:
 			if (ip6_fw_ctl_ptr == 0)
@@ -554,6 +557,7 @@ rip6_ctloutput(
 			else
 				error = ENOPROTOOPT;
 			break;
+#endif
 
 		case MRT6_INIT:
 		case MRT6_DONE:
@@ -572,6 +576,7 @@ rip6_ctloutput(
 
 	case SOPT_SET:
 		switch (sopt->sopt_name) {
+#if IPFW2
 		case IPV6_FW_ADD:
 		case IPV6_FW_DEL:
 		case IPV6_FW_FLUSH:
@@ -583,6 +588,7 @@ rip6_ctloutput(
 			else
 				error = ENOPROTOOPT;
 			break;
+#endif
 
 		case MRT6_INIT:
 		case MRT6_DONE:

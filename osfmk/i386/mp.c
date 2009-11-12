@@ -48,6 +48,7 @@
 #include <kern/machine.h>
 #include <kern/pms.h>
 #include <kern/misc_protos.h>
+#include <kern/etimer.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -99,6 +100,8 @@
 #endif	/* MP_DEBUG */
 
 
+#define ABS(v)		(((v) > 0)?(v):-(v))
+
 void 		slave_boot_init(void);
 
 #if MACH_KDB
@@ -116,6 +119,7 @@ static int		cpu_signal_handler(x86_saved_state_t *regs);
 static int		NMIInterruptHandler(x86_saved_state_t *regs);
 
 boolean_t 		smp_initialized = FALSE;
+uint32_t 		TSC_sync_margin = 0xFFF;
 volatile boolean_t	force_immediate_debugger_NMI = FALSE;
 volatile boolean_t	pmap_tlb_flush_timeout = FALSE;
 decl_simple_lock_data(,mp_kdp_lock);
@@ -216,10 +220,27 @@ smp_init(void)
 
 	install_real_mode_bootstrap(slave_pstart);
 
+	if (PE_parse_boot_argn("TSC_sync_margin",
+				&TSC_sync_margin, sizeof(TSC_sync_margin)))
+		kprintf("TSC sync Margin 0x%x\n", TSC_sync_margin);
 	smp_initialized = TRUE;
 
 	return;
 }
+
+typedef struct {
+	int			target_cpu;
+	int			target_lapic;
+	int			starter_cpu;
+} processor_start_info_t;
+static processor_start_info_t	start_info	  __attribute__((aligned(64)));
+
+/* 
+ * Cache-alignment is to avoid cross-cpu false-sharing interference.
+ */
+static volatile long		tsc_entry_barrier __attribute__((aligned(64)));
+static volatile long		tsc_exit_barrier  __attribute__((aligned(64)));
+static volatile uint64_t	tsc_target	  __attribute__((aligned(64)));
 
 /*
  * Poll a CPU to see when it has marked itself as running.
@@ -227,9 +248,9 @@ smp_init(void)
 static void
 mp_wait_for_cpu_up(int slot_num, unsigned int iters, unsigned int usecdelay)
 {
-    	while (iters-- > 0) {
+	while (iters-- > 0) {
 		if (cpu_datap(slot_num)->cpu_running)
-	    		break;
+			break;
 		delay(usecdelay);
 	}
 }
@@ -240,7 +261,7 @@ mp_wait_for_cpu_up(int slot_num, unsigned int iters, unsigned int usecdelay)
 kern_return_t
 intel_startCPU_fast(int slot_num)
 {
-    	kern_return_t	rc;
+	kern_return_t	rc;
 
 	/*
 	 * Try to perform a fast restart
@@ -271,17 +292,29 @@ intel_startCPU_fast(int slot_num)
 	 */
 	if (cpu_datap(slot_num)->cpu_running)
 		return(KERN_SUCCESS);
-    	else
+	else
 		return(KERN_FAILURE);
 }
 
-typedef struct {
-	int	target_cpu;
-	int	target_lapic;
-	int	starter_cpu;
-} processor_start_info_t;
+static void
+started_cpu(void)
+{
+	/* Here on the started cpu with cpu_running set TRUE */
 
-static processor_start_info_t start_info;
+	if (TSC_sync_margin &&
+	    start_info.target_cpu == cpu_number()) {
+		/*
+		 * I've just started-up, synchronize again with the starter cpu
+		 * and then snap my TSC.
+		 */
+		tsc_target   = 0;
+		atomic_decl(&tsc_entry_barrier, 1);
+		while (tsc_entry_barrier != 0)
+			;	/* spin for starter and target at barrier */
+		tsc_target = rdtsc64();
+		atomic_decl(&tsc_exit_barrier, 1);
+	}
+}
 
 static void
 start_cpu(void *arg)
@@ -305,6 +338,37 @@ start_cpu(void *arg)
 	i *= 10000;
 #endif
 	mp_wait_for_cpu_up(psip->target_cpu, i*100, 100);
+	if (TSC_sync_margin &&
+	    cpu_datap(psip->target_cpu)->cpu_running) {
+		/*
+		 * Compare the TSC from the started processor with ours.
+		 * Report and log/panic if it diverges by more than
+		 * TSC_sync_margin (TSC_SYNC_MARGIN) ticks. This margin
+		 * can be overriden by boot-arg (with 0 meaning no checking).
+		 */
+		uint64_t	tsc_starter;
+		int64_t		tsc_delta;
+		atomic_decl(&tsc_entry_barrier, 1);
+		while (tsc_entry_barrier != 0)
+			;	/* spin for both processors at barrier */
+		tsc_starter = rdtsc64();
+		atomic_decl(&tsc_exit_barrier, 1);
+		while (tsc_exit_barrier != 0)
+			;	/* spin for target to store its TSC */
+		tsc_delta = tsc_target - tsc_starter;
+		kprintf("TSC sync for cpu %d: 0x%016llx delta 0x%llx (%lld)\n",
+			psip->target_cpu, tsc_target, tsc_delta, tsc_delta);
+		if (ABS(tsc_delta) > (int64_t) TSC_sync_margin) { 
+#if DEBUG
+			panic(
+#else
+			printf(
+#endif
+				"Unsynchronized  TSC for cpu %d: "
+					"0x%016llx, delta 0x%llx\n",
+				psip->target_cpu, tsc_target, tsc_delta);
+		}
+	}
 }
 
 extern char	prot_mode_gdt[];
@@ -349,6 +413,8 @@ intel_startCPU(
 	start_info.starter_cpu  = cpu_number();
 	start_info.target_cpu   = slot_num;
 	start_info.target_lapic = lapic;
+	tsc_entry_barrier = 2;
+	tsc_exit_barrier = 2;
 
 	/*
 	 * Perform the processor startup sequence with all running
@@ -356,6 +422,8 @@ intel_startCPU(
 	 * the cache-disable bit is set for MTRR/PAT initialization.
 	 */
 	mp_rendezvous_no_intrs(start_cpu, (void *) &start_info);
+
+	start_info.target_cpu = 0;
 
 	ml_set_interrupts_enabled(istate);
 	lck_mtx_unlock(&mp_cpu_boot_lock);
@@ -1020,6 +1088,7 @@ i386_activate_cpu(void)
 
 	simple_lock(&x86_topo_lock);
 	cdp->cpu_running = TRUE;
+	started_cpu();
 	simple_unlock(&x86_topo_lock);
 }
 

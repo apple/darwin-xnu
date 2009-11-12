@@ -1522,6 +1522,22 @@ preout_again:
 
 	do {
 		if (raw == 0 && ifp->if_framer) {
+			int rcvif_set = 0;
+
+			/*
+			 * If this is a broadcast packet that needs to be
+			 * looped back into the system, set the inbound ifp
+			 * to that of the outbound ifp.  This will allow
+			 * us to determine that it is a legitimate packet
+			 * for the system.  Only set the ifp if it's not
+			 * already set, just to be safe.
+			 */
+			if ((m->m_flags & (M_BCAST | M_LOOP)) &&
+			    m->m_pkthdr.rcvif == NULL) {
+				m->m_pkthdr.rcvif = ifp;
+				rcvif_set = 1;
+			}
+
 			retval = ifp->if_framer(ifp, &m, dest, dst_linkaddr, frame_type); 
 			if (retval) {
 				if (retval != EJUSTRETURN) {
@@ -1529,6 +1545,18 @@ preout_again:
 				}
 				goto next;
 			}
+
+			/*
+			 * Clear the ifp if it was set above, and to be
+			 * safe, only if it is still the same as the
+			 * outbound ifp we have in context.  If it was
+			 * looped back, then a copy of it was sent to the
+			 * loopback interface with the rcvif set, and we
+			 * are clearing the one that will go down to the
+			 * layer below.
+			 */
+			if (rcvif_set && m->m_pkthdr.rcvif == ifp)
+				m->m_pkthdr.rcvif = NULL;
 		}
 	
 #if BRIDGE
@@ -2579,7 +2607,7 @@ ifnet_attach(
 #define _offsetof(t, m) ((uintptr_t)((caddr_t)&((t *)0)->m))
 		masklen = _offsetof(struct sockaddr_dl, sdl_data[0]) + namelen;
 		socksize = masklen + ifp->if_addrlen;
-#define ROUNDUP(a) (1 + (((a) - 1) | (sizeof(long) - 1)))
+#define ROUNDUP(a) (1 + (((a) - 1) | (sizeof(u_int32_t) - 1)))
 		if ((u_int32_t)socksize < sizeof(struct sockaddr_dl))
 			socksize = sizeof(struct sockaddr_dl);
 		socksize = ROUNDUP(socksize);

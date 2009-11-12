@@ -1200,7 +1200,7 @@ check_for_our_aiocbp:
 	 */
 
 	error = msleep1(&p->AIO_SUSPEND_SLEEP_CHAN, aio_proc_mutex(p), PCATCH | PWAIT | PDROP, "aio_suspend", abstime); /* XXX better priority? */
-	if ( error == THREAD_AWAKENED ) {
+	if ( error == 0 ) {
 		/* 
 		 * got our wakeup call from aio_work_thread().
 		 * Since we can get a wakeup on this channel from another thread in the 
@@ -1211,7 +1211,7 @@ check_for_our_aiocbp:
 		 */
 		goto check_for_our_aiocbp;
 	}
-	else if ( error == THREAD_TIMED_OUT ) {
+	else if ( error == EWOULDBLOCK ) {
 		/* our timeout expired */
 		error = EAGAIN;
 	}

@@ -1035,26 +1035,62 @@ findpcb:
 			head_ifscope = (inp->inp_flags & INP_BOUND_IF) ?
 			    inp->inp_boundif : IFSCOPE_NONE;
 
-#if !IPSEC
 			/*
-			 * Current IPsec implementation makes incorrect IPsec
-			 * cache if this check is done here.
-			 * So delay this until duplicated socket is created.
+			 * If the state is LISTEN then ignore segment if it contains an RST.
+			 * If the segment contains an ACK then it is bad and send a RST.
+			 * If it does not contain a SYN then it is not interesting; drop it.
+			 * If it is from this socket, drop it, it must be forged.
 			 */
 			if ((thflags & (TH_RST|TH_ACK|TH_SYN)) != TH_SYN) {
-				/*
-				 * Note: dropwithreset makes sure we don't
-				 * send a RST in response to a RST.
-				 */
+				if (thflags & TH_RST) {
+					goto drop;
+				}
 				if (thflags & TH_ACK) {
+					tp = NULL;
 					tcpstat.tcps_badsyn++;
 					rstreason = BANDLIM_RST_OPENPORT;
 					goto dropwithreset;
 				}
+
+				/* We come here if there is no SYN set */
+				tcpstat.tcps_badsyn++;
 				goto drop;
 			}
-#endif
 			KERNEL_DEBUG(DBG_FNC_TCP_NEWCONN | DBG_FUNC_START,0,0,0,0,0);
+	                if (th->th_dport == th->th_sport) {
+#if INET6
+				if (isipv6) {
+					if (IN6_ARE_ADDR_EQUAL(&ip6->ip6_dst,
+                                                       &ip6->ip6_src))
+						goto drop;
+				} else
+#endif /* INET6 */
+					if (ip->ip_dst.s_addr == ip->ip_src.s_addr)
+						goto drop;
+			}
+			/*
+			 * RFC1122 4.2.3.10, p. 104: discard bcast/mcast SYN
+			 * in_broadcast() should never return true on a received
+			 * packet with M_BCAST not set.
+			 *
+			 * Packets with a multicast source address should also
+			 * be discarded.
+			 */
+			if (m->m_flags & (M_BCAST|M_MCAST))
+				goto drop;
+#if INET6
+			if (isipv6) {
+				if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst) ||
+					IN6_IS_ADDR_MULTICAST(&ip6->ip6_src))
+					goto drop;
+			} else
+#endif
+			if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr)) ||
+				IN_MULTICAST(ntohl(ip->ip_src.s_addr)) ||
+				ip->ip_src.s_addr == htonl(INADDR_BROADCAST) ||
+				in_broadcast(ip->ip_dst, m->m_pkthdr.rcvif))
+				goto drop;
+
 
 #if INET6
 			/*
@@ -1146,8 +1182,6 @@ findpcb:
 			so = so2;
 			tcp_lock(so, 1, 0);
 			/*
-			 * This is ugly, but ....
-			 *
 			 * Mark socket as temporary until we're
 			 * committed to keeping it.  The code at
 			 * ``drop'' and ``dropwithreset'' check the
@@ -1155,9 +1189,10 @@ findpcb:
 			 * socket created here should be discarded.
 			 * We mark the socket as discardable until
 			 * we're committed to it below in TCPS_LISTEN.
+			 * There are some error conditions in which we
+			 * have to drop the temporary socket.
 			 */
 			dropsocket++;
-
 			/*
 			 * Inherit INP_BOUND_IF from listener; testing if
 			 * head_ifscope is non-zero is sufficient, since it
@@ -1179,7 +1214,7 @@ findpcb:
 				inp->inp_vflag &= ~INP_IPV6;
 				inp->inp_vflag |= INP_IPV4;
 #endif /* INET6 */
-			inp->inp_laddr = ip->ip_dst;
+				inp->inp_laddr = ip->ip_dst;
 #if INET6
 			}
 #endif /* INET6 */
@@ -1200,30 +1235,6 @@ findpcb:
 				tcp_unlock(oso, 1, 0);
 				goto drop;
 			}
-#if IPSEC
-			/*
-			 * To avoid creating incorrectly cached IPsec
-			 * association, this is need to be done here.
-			 *
-			 * Subject: (KAME-snap 748)
-			 * From: Wayne Knowles <w.knowles@niwa.cri.nz>
-			 * ftp://ftp.kame.net/pub/mail-list/snap-users/748
-			 */
-			if ((thflags & (TH_RST|TH_ACK|TH_SYN)) != TH_SYN) {
-				/*
-				 * Note: dropwithreset makes sure we don't
-				 * send a RST in response to a RST.
-				 */
-				tcp_lock(oso, 0, 0);	/* release ref on parent */
-				tcp_unlock(oso, 1, 0);
-				if (thflags & TH_ACK) {
-					tcpstat.tcps_badsyn++;
-					rstreason = BANDLIM_RST_OPENPORT;
-					goto dropwithreset;
-				}
-				goto drop;
-			}
-#endif
 #if INET6
 			if (isipv6) {
   				/*
@@ -1664,12 +1675,7 @@ findpcb:
 	switch (tp->t_state) {
 
 	/*
-	 * If the state is LISTEN then ignore segment if it contains an RST.
-	 * If the segment contains an ACK then it is bad and send a RST.
-	 * If it does not contain a SYN then it is not interesting; drop it.
-	 * If it is from this socket, drop it, it must be forged.
-	 * Don't bother responding if the destination was a broadcast.
-	 * Otherwise initialize tp->rcv_nxt, and tp->irs, select an initial
+	 * Initialize tp->rcv_nxt, and tp->irs, select an initial
 	 * tp->iss, and send a segment:
 	 *     <SEQ=ISS><ACK=RCV_NXT><CTL=SYN,ACK>
 	 * Also initialize tp->snd_nxt to tp->iss+1 and tp->snd_una to tp->iss.
@@ -1686,47 +1692,6 @@ findpcb:
 #if 1
 		lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
 #endif
-		if (thflags & TH_RST) 
-			goto drop;
-		if (thflags & TH_ACK) {
-			rstreason = BANDLIM_RST_OPENPORT;
-			goto dropwithreset;
-		}
-		if ((thflags & TH_SYN) == 0)
-			goto drop;
-		if (th->th_dport == th->th_sport) {
-#if INET6
-			if (isipv6) {
-				if (IN6_ARE_ADDR_EQUAL(&ip6->ip6_dst,
-						       &ip6->ip6_src))
-					goto drop;
-			} else
-#endif /* INET6 */
-			if (ip->ip_dst.s_addr == ip->ip_src.s_addr)
-				goto drop;
-		}
-		/*
-		 * RFC1122 4.2.3.10, p. 104: discard bcast/mcast SYN
-		 * in_broadcast() should never return true on a received
-		 * packet with M_BCAST not set.
- 		 *
- 		 * Packets with a multicast source address should also
- 		 * be discarded.
-		 */
-		if (m->m_flags & (M_BCAST|M_MCAST))
-			goto drop;
-#if INET6
-		if (isipv6) {
-			if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst) ||
-			    IN6_IS_ADDR_MULTICAST(&ip6->ip6_src))
-				goto drop;
-		} else
-#endif
-		if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr)) ||
-		    IN_MULTICAST(ntohl(ip->ip_src.s_addr)) ||
-		    ip->ip_src.s_addr == htonl(INADDR_BROADCAST) ||
-		    in_broadcast(ip->ip_dst, m->m_pkthdr.rcvif))
-			goto drop;
 #if INET6
 		if (isipv6) {
 			MALLOC(sin6, struct sockaddr_in6 *, sizeof *sin6,

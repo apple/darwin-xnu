@@ -724,19 +724,33 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		if (result) {
 			return (result);
 		}
-		/* VNOP_WRITE will update timestamps accordingly */
+		/* 
+		 * VNOP_WRITE marks the vnode as needing a modtime update.
+		 */
 		result = VNOP_WRITE(rvp, uio, 0, ap->a_context);
 		
-		/* if open unlinked, force it inactive */
+		/* if open unlinked, force it inactive and recycle */
 		if (openunlinked) {
 			int vref;
 			vref = vnode_ref (rvp);
 			if (vref == 0) {
 				vnode_rele(rvp);
 			}
-			vnode_recycle (rvp);	
+			vnode_recycle (rvp);
 		}
+		else {
+			/* re-lock the cnode so we can update the modtimes */
+			if ((result = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK))) {
+				vnode_recycle(rvp);
+				vnode_put(rvp);
+				return (result);
+			}
 
+			/* HFS fsync the resource fork to force it out to disk */
+			result = hfs_fsync (rvp, MNT_NOWAIT, 0, vfs_context_proc(ap->a_context));
+
+			hfs_unlock(cp);
+		}
 
 		vnode_put(rvp);
 		return (result);

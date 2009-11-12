@@ -217,6 +217,8 @@ hfs_vnop_mknod(struct vnop_mknod_args *ap)
 static int
 hfs_ref_data_vp(struct cnode *cp, struct vnode **data_vp, int skiplock)
 {
+	int vref = 0;
+
 	if (!data_vp || !cp) /* sanity check incoming parameters */
 		return EINVAL;
 	
@@ -227,9 +229,12 @@ hfs_ref_data_vp(struct cnode *cp, struct vnode **data_vp, int skiplock)
 	if (c_vp) {
 		/* we already have a data vnode */
 		*data_vp = c_vp;
-		vnode_ref(*data_vp);
+		vref = vnode_ref(*data_vp);
 		if (!skiplock) hfs_unlock(cp);
-		return 0;
+		if (vref == 0) {
+			return 0;
+		}
+		return EINVAL;
 	}
 	/* no data fork vnode in the cnode, so ask hfs for one. */
 
@@ -242,10 +247,13 @@ hfs_ref_data_vp(struct cnode *cp, struct vnode **data_vp, int skiplock)
 	
 	if (0 == hfs_vget(VTOHFS(cp->c_rsrc_vp), cp->c_cnid, data_vp, 1) &&
 		0 != data_vp) {
-		vnode_ref(*data_vp);
+		vref = vnode_ref(*data_vp);
 		vnode_put(*data_vp);
 		if (!skiplock) hfs_unlock(cp);
-		return 0;
+		if (vref == 0) {
+			return 0;
+		}
+		return EINVAL;
 	}
 	/* there was an error getting the vnode */
 	*data_vp = NULL;
@@ -3693,6 +3701,25 @@ hfs_vnop_readdir(ap)
 	if (index == 0) {
 		dirhint->dh_threadhint = cp->c_dirthreadhint;
 	}
+	else {
+		/*
+		 * If we have a non-zero index, there is a possibility that during the last
+		 * call to hfs_vnop_readdir we hit EOF for this directory.  If that is the case
+		 * then we don't want to return any new entries for the caller.  Just return 0
+		 * items, mark the eofflag, and bail out.  Because we won't have done any work, the 
+		 * code at the end of the function will release the dirhint for us.  
+		 *
+		 * Don't forget to unlock the catalog lock on the way out, too.
+		 */
+		if (dirhint->dh_desc.cd_flags & CD_EOF) {
+			error = 0;
+			eofflag = 1;
+			uio_setoffset(uio, startoffset);
+			hfs_systemfile_unlock (hfsmp, lockflags);
+
+			goto seekoffcalc;
+		}
+	}
 
 	/* Pack the buffer with dirent entries. */
 	error = cat_getdirentries(hfsmp, cp->c_entries, dirhint, uio, extended, &items, &eofflag);
@@ -4208,31 +4235,20 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 	if (S_ISWHT(mode)) {
 		goto exit;
 	}
-	
-	/* 
-	 * We need to release the cnode lock on dcp before calling into
-	 * hfs_getnewvnode to make sure we don't double lock this node 
-	 */
-	if (dcp) {
-		dcp->c_flag &= ~C_DIR_MODIFICATION;
-		wakeup((caddr_t)&dcp->c_flag);
-		
-		hfs_unlock(dcp);
-		/* so we don't double-unlock it later */
-		dcp = NULL;
-	}
 
 	/*
 	 * Create a vnode for the object just created.
 	 * 
-	 * NOTE: Because we have just unlocked the parent directory above (dcp), 
-	 * we are open to a race condition wherein another thread could look up the 
-	 * entry we just added to the catalog and delete it BEFORE we actually get the 
-	 * vnode out of the call below. In that case, we may return ENOENT because the 
-	 * cnode was already marked for C_DELETE. This is because we are grabbing the cnode 
-	 * out of the hash via the CNID/fileid provided in attr, and  with the parent 
-	 * directory unlocked, it is now accessible. In this case, the VFS should re-drive the
-	 * create operation to re-attempt.
+	 * NOTE: Maintaining the cnode lock on the parent directory is important,
+	 * as it prevents race conditions where other threads want to look up entries 
+	 * in the directory and/or add things as we are in the process of creating
+	 * the vnode below.  However, this has the potential for causing a 
+	 * double lock panic when dealing with shadow files on a HFS boot partition. 
+	 * The panic could occur if we are not cleaning up after ourselves properly 
+	 * when done with a shadow file or in the error cases.  The error would occur if we 
+	 * try to create a new vnode, and then end up reclaiming another shadow vnode to 
+	 * create the new one.  However, if everything is working properly, this should
+	 * be a non-issue as we would never enter that reclaim codepath.
 	 *
 	 * The cnode is locked on successful return.
 	 */
@@ -4246,8 +4262,7 @@ exit:
 	cat_releasedesc(&out_desc);
 	
 	/*
-	 * In case we get here via error handling, make sure we release cnode lock on dcp if we 
-	 * didn't do it already.
+	 * Make sure we release cnode lock on dcp.
 	 */
 	if (dcp) {
 		dcp->c_flag &= ~C_DIR_MODIFICATION;

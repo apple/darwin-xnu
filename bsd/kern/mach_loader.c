@@ -319,9 +319,13 @@ load_machfile(
 	} else
 		map = new_map;
 
+#ifndef	CONFIG_ENFORCE_SIGNED_CODE
+	/* This turns off faulting for executable pages, which allows to 
+	 * circumvent Code Signing Enforcement */
 	if ( (header->flags & MH_ALLOW_STACK_EXECUTION) )
 	        vm_map_disable_NX(map);
-		
+#endif
+	
 	if (!result)
 		result = &myresult;
 

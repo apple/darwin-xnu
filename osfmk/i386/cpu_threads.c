@@ -27,6 +27,7 @@
  */
 #include <vm/vm_kern.h>
 #include <kern/kalloc.h>
+#include <kern/etimer.h>
 #include <mach/machine.h>
 #include <i386/cpu_threads.h>
 #include <i386/cpuid.h>
@@ -180,7 +181,8 @@ x86_LLC_info(void)
      */
     topoParms.maxSharingLLC = nCPUsSharing;
 
-    topoParms.nCoresSharingLLC = nCPUsSharing;
+    topoParms.nCoresSharingLLC = nCPUsSharing / (cpuinfo->thread_count /
+						 cpuinfo->core_count);
     topoParms.nLCPUsSharingLLC = nCPUsSharing;
 
     /*
@@ -240,6 +242,12 @@ initTopoParms(void)
      */
     topoParms.nLThreadsPerPackage = topoParms.nLThreadsPerCore * topoParms.nLCoresPerPackage;
     topoParms.nPThreadsPerPackage = topoParms.nPThreadsPerCore * topoParms.nPCoresPerPackage;
+
+    DBG("\nCache Topology Parameters:\n");
+    DBG("\tLLC Depth:           %d\n", topoParms.LLCDepth);
+    DBG("\tCores Sharing LLC:   %d\n", topoParms.nCoresSharingLLC);
+    DBG("\tThreads Sharing LLC: %d\n", topoParms.nLCPUsSharingLLC);
+    DBG("\tmax Sharing of LLC:  %d\n", topoParms.maxSharingLLC);
 
     DBG("\nLogical Topology Parameters:\n");
     DBG("\tThreads per Core:  %d\n", topoParms.nLThreadsPerCore);
@@ -1087,7 +1095,7 @@ validate_topology(void)
 	    /*
 	     * Make sure that the die has the correct number of cores.
 	     */
-	    DBG("Die(%d)->cores: ");
+	    DBG("Die(%d)->cores: ", die->pdie_num);
 	    nCores = 0;
 	    core = die->cores;
 	    while (core != NULL) {
@@ -1158,7 +1166,7 @@ validate_topology(void)
 	     */
 	    nCPUs = 0;
 	    lcpu = core->lcpus;
-	    DBG("Core(%d)->lcpus: ");
+	    DBG("Core(%d)->lcpus: ", core->pcore_num);
 	    while (lcpu != NULL) {
 		if (lcpu->core == NULL)
 		    panic("CPU(%d)->core is NULL",

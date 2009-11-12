@@ -1510,17 +1510,25 @@ kevent_register(struct kqueue *kq, struct kevent64_s *kev, __unused struct proc 
 
 			error = fops->f_attach(kn);
 
-			/*
-			 * Anyone trying to drop this knote will yield to
-			 * us, since KN_ATTACHING is set.
-			 */
 			kqlock(kq);
-			if (error != 0 || (kn->kn_status & KN_DROPPING)) {
-				if (error == 0) {
-					kn->kn_fop->f_detach(kn);
-				}
+			if (error != 0) {
+				/*
+				 * Failed to attach correctly, so drop.
+				 * All other possible users/droppers
+				 * have deferred to us.
+				 */
 				kn->kn_status |= KN_DROPPING;
 				kqunlock(kq);
+				knote_drop(kn, p);
+				goto done;
+			} else if (kn->kn_status & KN_DROPPING) {
+				/*
+				 * Attach succeeded, but someone else
+				 * deferred their drop - now we have
+				 * to do it for them (after detaching).
+				 */
+				kqunlock(kq);
+				kn->kn_fop->f_detach(kn);
 				knote_drop(kn, p);
 				goto done;
 			}

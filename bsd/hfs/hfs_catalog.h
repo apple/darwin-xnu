@@ -63,9 +63,18 @@ struct cat_desc {
 	const u_int8_t * cd_nameptr; /* pointer to cnode name */
 };
 
-/* cd_flags */
+/* cd_flags 
+ *
+ * CD_EOF is used by hfs_vnop_readdir / cat_getdirentries to indicate EOF was
+ * encountered during a directory enumeration.  When this flag is observed
+ * on the next call to hfs_vnop_readdir it tells the caller that there's no
+ * need to descend into the catalog as EOF was encountered during the last call.
+ * This flag should only be set on the descriptor embedded in the directoryhint. 
+ */
+
 #define	CD_HASBUF	0x01	/* allocated filename buffer */
 #define CD_DECOMPOSED	0x02	/* name is fully decomposed */
+#define CD_EOF		0x04	/* see above */
 #define	CD_ISMETA	0x40	/* describes a metadata file */
 #define	CD_ISDIR	0x80	/* describes a directory */
 

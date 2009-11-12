@@ -609,31 +609,8 @@ sysctl_mib_init(void)
 	x86_64_flag = ((_get_cpu_capabilities() & k64Bit) == k64Bit)? 1 : 0;
 
 	/* hw.cpufamily */
-	switch (cpuid_info()->cpuid_family) {
-	case 6:
-		switch (cpuid_info()->cpuid_model) {
-		case 13:
-			cpufamily = CPUFAMILY_INTEL_6_13;
-			break;
-		case 14:
-			cpufamily = CPUFAMILY_INTEL_6_14; /* Core Solo/Duo */
-			break;
-		case 15:
-			cpufamily = CPUFAMILY_INTEL_6_15; /* Core 2 */
-			break;
-		case 23:
-			cpufamily = CPUFAMILY_INTEL_6_23;
-			break;
-		case 26:
-			cpufamily = CPUFAMILY_INTEL_6_26;
-			break;
-		default:
-			cpufamily = CPUFAMILY_UNKNOWN;
-		}
-		break;
-	default:
-		cpufamily = CPUFAMILY_UNKNOWN;
-	}
+	cpufamily = cpuid_cpufamily();
+
 	/* hw.cacheconfig */
 	cacheconfig[0] = ml_cpu_cache_sharing(0);
 	cacheconfig[1] = ml_cpu_cache_sharing(1);

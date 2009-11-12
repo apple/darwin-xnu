@@ -74,9 +74,9 @@ options		CONFIG_SLEEP	#				# <config_sleep>
 #
 #  configurable kernel related resources 
 #
-options   CONFIG_MAX_THREADS=32		# <medium,large,xlarge>
-options   CONFIG_MAX_THREADS=32		# <small,xsmall>
-options   CONFIG_MAX_THREADS=32		# <bsmall>
+options   CONFIG_MAX_THREADS=64		# <medium,large,xlarge>
+options   CONFIG_MAX_THREADS=64		# <small,xsmall>
+options   CONFIG_MAX_THREADS=64		# <bsmall>
 
 #
 #  configurable kernel - use these options to strip strings from panic

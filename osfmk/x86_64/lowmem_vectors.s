@@ -96,7 +96,9 @@ EXT(lowGlo):
 	.quad	EXT(osversion)		/* +0x920 Pointer to osversion string */
 #if MACH_KDP
 	.quad	EXT(flag_kdp_trigger_reboot) /* +0x928 Pointer to debugger reboot trigger */
+	.quad	EXT(manual_pkt)              /* +0x930 Pointer to manual packet structure */
 #else
 	.quad	0			/* +0x928 Reserved */
-#endif
-	.fill	436, 4, 0	/* pad to 0x1000 (page size) - rdar://problem/5783217 */
+	.quad	0			/* +0x930 Reserved */
+#endif	
+	.fill	434, 4, 0	/* pad to 0x1000 (page size) - rdar://problem/5783217 */

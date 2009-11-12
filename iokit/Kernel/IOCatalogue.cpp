@@ -656,64 +656,6 @@ static IOReturn _removeDrivers( OSArray * array, OSDictionary * matching )
     return ret;
 }
 
-bool IOCatalogue::removePersonalities(OSArray * personalitiesToRemove)
-{
-    bool                   result           = true;
-    OSArray              * arrayCopy        = NULL;  // do not release
-    OSCollectionIterator * iterator         = NULL;  // must release
-    OSDictionary         * personality      = NULL;  // do not release
-    OSDictionary         * checkPersonality = NULL;  // do not release
-    unsigned int           count, i;
-
-    // remove configs from catalog.
-
-    arrayCopy = OSArray::withArray(array);
-    if (!arrayCopy) {
-        result = false;
-        goto finish;
-    }
-
-    iterator = OSCollectionIterator::withCollection(arrayCopy);
-    arrayCopy->release();
-    if (!iterator) {
-        result = false;
-        goto finish;
-    }
-
-    array->flushCollection();
-
-    count = personalitiesToRemove->getCount();
-
-   /* Go through the old catalog's list of personalities and add back any that
-    * are *not* found in 'personalitiesToRemove'.
-    */
-    while ((personality = (OSDictionary *)iterator->getNextObject())) {
-        bool found = false;
-
-        for (i = 0; i < count; i++) {
-            checkPersonality = OSDynamicCast(OSDictionary,
-                personalitiesToRemove->getObject(i));
-
-           /* Do isEqualTo() with the single-arg version to make an exact
-            * comparison (unlike _removeDrivers() above).
-            */
-            if (personality->isEqualTo(checkPersonality)) {
-                found = true;
-                break;
-            }
-        }
-
-        if (!found) {
-            array->setObject(personality);
-        }
-    }
-
-finish:
-
-    OSSafeRelease(iterator);
-    return result;
-}
-
 IOReturn IOCatalogue::terminateDrivers(OSDictionary * matching)
 {
     IOReturn ret;

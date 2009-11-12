@@ -80,8 +80,12 @@ struct	corehdr {
 #define CORE_REMOTE_PORT 1069 /* hardwired, we can't really query the services file */
 
 void kdp_panic_dump (void);
-
 void abort_panic_transfer (void);
+void kdp_set_dump_info(const uint32_t flags, const char *file, const char *destip,
+                       const char *routerip, const uint32_t port);
+void kdp_get_dump_info(uint32_t *flags, char *file, char *destip, char *routerip, 
+                       uint32_t *port);
+
 
 struct corehdr *create_panic_header(unsigned int request, const char *corename, unsigned length, unsigned block);
 

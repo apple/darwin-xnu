@@ -70,7 +70,9 @@ typedef struct lowglo {
 	uint64_t	lgDevSlot2;				/* 0xffffff8000002918 For developer use */
 	uint64_t	lgOSVersion;			/* 0xffffff8000002920 Pointer to OS version string */
 	uint64_t	lgRebootFlag;			/* 0xffffff8000002928 Pointer to debugger reboot trigger */
-	uint64_t	lgRsv49C[218];			/* 0xffffff8000002930 Reserved - push to 1 page */
+	uint64_t	lgManualPktAddr;		/* 0xffffff8000002930 Pointer to manual packet structure */
+
+	uint64_t	lgRsv49C[217];			/* 0xffffff8000002938 Reserved - push to 1 page */
 } lowglo;
 #pragma pack()
 extern lowglo lowGlo;
