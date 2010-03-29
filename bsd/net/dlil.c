@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1003,6 +1003,14 @@ dlil_interface_filters_input(struct ifnet * ifp, struct mbuf * * m_p,
 			}
 		}
 	}
+
+	/*
+	 * Strip away M_PROTO1 bit prior to sending packet up the stack as 
+	 * it is meant to be local to a subsystem -- if_bridge for M_PROTO1
+	 */
+	if (*m_p != NULL)
+		(*m_p)->m_flags &= ~M_PROTO1;
+
 	return (0);
 }
 
@@ -1350,28 +1358,6 @@ preout_again:
 			}
 		}
 	
-#if BRIDGE
-		/* !!!LOCKING!!!
-		 *
-		 * Need to consider how to handle this.
-		 * Also note that return should be a goto cleanup
-		 */
-		broken-locking
-		if (do_bridge) {
-			struct mbuf *m0 = m;
-			struct ether_header *eh = mtod(m, struct ether_header *);
-			
-			if (m->m_pkthdr.rcvif)
-				m->m_pkthdr.rcvif = NULL;
-			ifp = bridge_dst_lookup(eh);
-			bdg_forward(&m0, ifp);
-			if (m0)
-				m_freem(m0);
-			
-			return 0 - should be goto cleanup?
-		}
-#endif
-
 		/* 
 		 * Let interface filters (if any) do their thing ...
 		 */
@@ -1389,6 +1375,11 @@ preout_again:
 				}
 			}
 		}
+		/*
+		 * Strip away M_PROTO1 bit prior to sending packet to the driver 
+		 * as this field may be used by the driver
+		 */
+		m->m_flags &= ~M_PROTO1;
 		
 		/*
 		 * Finally, call the driver.
@@ -1559,28 +1550,6 @@ preout_again:
 				m->m_pkthdr.rcvif = NULL;
 		}
 	
-#if BRIDGE
-		/* !!!LOCKING!!!
-		 *
-		 * Need to consider how to handle this.
-		 * Also note that return should be a goto cleanup
-		 */
-		broken-locking
-		if (do_bridge) {
-			struct mbuf *m0 = m;
-			struct ether_header *eh = mtod(m, struct ether_header *);
-			
-			if (m->m_pkthdr.rcvif)
-				m->m_pkthdr.rcvif = NULL;
-			ifp = bridge_dst_lookup(eh);
-			bdg_forward(&m0, ifp);
-			if (m0)
-				m_freem(m0);
-			
-			return 0 - should be goto cleanup?
-		}
-#endif
-
 		/* 
 		 * Let interface filters (if any) do their thing ...
 		 */
@@ -1598,6 +1567,12 @@ preout_again:
 				}
 			}
 		}
+
+		/*
+		 * Strip away M_PROTO1 bit prior to sending packet to the driver
+		 * as this field may be used by the driver
+		 */
+		m->m_flags &= ~M_PROTO1;
 
 		/*
 		 * If the underlying interface is not capable of handling a

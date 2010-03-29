@@ -68,6 +68,7 @@ libkern/stack_protector.c       standard
 libkern/kxld/kxld.c             optional config_kxld
 libkern/kxld/kxld_array.c       optional config_kxld
 libkern/kxld/kxld_copyright.c   optional config_kxld
+libkern/kxld/kxld_demangle.c    optional config_kxld
 libkern/kxld/kxld_dict.c        optional config_kxld
 libkern/kxld/kxld_kext.c        optional config_kxld
 libkern/kxld/kxld_reloc.c       optional config_kxld

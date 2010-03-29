@@ -250,7 +250,7 @@ ifeq (-arch armv6,$(ARCH_FLAGS_ARM))
 CFLAGS_ARM		+= -mthumb
 endif
 ifeq (-arch armv5,$(ARCH_FLAGS_ARM))
-CFLAGS_ARM		+= -mthumb
+CFLAGS_ARM		+= -mno-thumb
 endif
 ifeq (-arch xscale,$(ARCH_FLAGS_ARM))
 CFLAGS_ARM		+= -mthumb
@@ -394,7 +394,8 @@ export LDFLAGS_KERNEL_ARM     = \
 	-Wl,-new_linker \
 	-Wl,-pagezero_size,0x0 \
 	-Wl,-segaddr,__HIB,0xC0000000 \
-	-Wl,-image_base,0xC0008000
+	-Wl,-image_base,0xC0008000 \
+	-Wl,-exported_symbols_list,$(TARGET)/kernel-kpi.exp
 
 
 export LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \

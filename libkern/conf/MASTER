@@ -67,3 +67,6 @@ options		IPSEC			# IP security	# <ipsec>
 
 options		CONFIG_KXLD		# kxld/runtime linking of kexts # <config_kxld>
 
+# secure_kernel - secure kernel from user programs
+options     SECURE_KERNEL       # <secure_kernel> 
+

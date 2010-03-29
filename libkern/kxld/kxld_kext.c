@@ -51,6 +51,7 @@
 #define DEBUG_ASSERT_COMPONENT_NAME_STRING "kxld"
 #include <AssertMacros.h>
 
+#include "kxld_demangle.h"
 #include "kxld_dict.h"
 #include "kxld_kext.h"
 #include "kxld_reloc.h"
@@ -1096,6 +1097,10 @@ create_vtables(KXLDKext *kext)
     char class_name[KXLD_MAX_NAME_LEN];
     char vtable_name[KXLD_MAX_NAME_LEN];
     char meta_vtable_name[KXLD_MAX_NAME_LEN];
+    char *demangled_name1 = NULL;
+    char *demangled_name2 = NULL;
+    size_t demangled_length1 = 0;
+    size_t demangled_length2 = 0;
     u_int i = 0;
     u_int nvtables = 0;
 
@@ -1161,7 +1166,10 @@ create_vtables(KXLDKext *kext)
                 } else {
                     kxld_log(kKxldLogPatching, kKxldLogErr, 
                         "Warning: " kKxldLogMissingVtable, 
-                        meta_vtable_name, class_name);
+                        kxld_demangle(meta_vtable_name, &demangled_name1, 
+                            &demangled_length1), 
+                        kxld_demangle(class_name, &demangled_name2, 
+                            &demangled_length2));
                     kxld_array_resize(&kext->vtables, --nvtables);
                 }
             }
@@ -1231,6 +1239,10 @@ create_vtables(KXLDKext *kext)
     rval = KERN_SUCCESS;
 
 finish:
+
+    if (demangled_name1) kxld_free(demangled_name1, demangled_length1);
+    if (demangled_name2) kxld_free(demangled_name2, demangled_length2);
+
     return rval;
 }
 
@@ -1950,6 +1962,8 @@ resolve_symbols(KXLDKext *kext, KXLDDict *defined_symbols,
     boolean_t tests_for_weak = FALSE;
     boolean_t error = FALSE;
     boolean_t warning = FALSE;
+    char *demangled_name = NULL;
+    size_t demangled_length = 0;
 
     check(kext);
     check(defined_symbols);
@@ -1981,8 +1995,8 @@ resolve_symbols(KXLDKext *kext, KXLDDict *defined_symbols,
                     "The following symbols were defined more than once:");
             }
 
-            kxld_log(kKxldLogLinking, kKxldLogErr,
-                "\t%s: %p - %p", sym->name, 
+            kxld_log(kKxldLogLinking, kKxldLogErr, "\t%s: %p - %p", 
+                kxld_demangle(sym->name, &demangled_name, &demangled_length),
                 (void *) (uintptr_t) sym->link_addr, 
                 (void *) (uintptr_t) addr);
         }
@@ -2011,7 +2025,8 @@ resolve_symbols(KXLDKext *kext, KXLDDict *defined_symbols,
                          "The following are common symbols:");
                 }
             }
-            kxld_log(kKxldLogLinking, kKxldLogErr, "\t%s", sym->name);
+            kxld_log(kKxldLogLinking, kKxldLogErr, "\t%s", 
+                kxld_demangle(sym->name, &demangled_name, &demangled_length));
 
         } else {
 
@@ -2045,7 +2060,8 @@ resolve_symbols(KXLDKext *kext, KXLDDict *defined_symbols,
 
                 if (obsolete_symbols && kxld_dict_find(obsolete_symbols, name)) {
                     kxld_log(kKxldLogLinking, kKxldLogWarn, 
-                        "This kext uses obsolete symbol %s.", name);
+                        "This kext uses obsolete symbol %s.", 
+                        kxld_demangle(name, &demangled_name, &demangled_length));
                 }
 
             } else if (kext->link_type == KXLD_LINK_PSEUDO_KEXT) {
@@ -2058,7 +2074,8 @@ resolve_symbols(KXLDKext *kext, KXLDDict *defined_symbols,
                         "This symbol set has the following unresolved symbols:");
                     warning = TRUE;
                 }
-                kxld_log(kKxldLogLinking, kKxldLogErr, "\t%s", sym->name);
+                kxld_log(kKxldLogLinking, kKxldLogErr, "\t%s", 
+                    kxld_demangle(sym->name, &demangled_name, &demangled_length));
                 kxld_sym_delete(sym);
 
             } else if (kxld_sym_is_weak(sym)) {
@@ -2092,6 +2109,7 @@ resolve_symbols(KXLDKext *kext, KXLDDict *defined_symbols,
     rval = KERN_SUCCESS;
 
 finish:
+    if (demangled_name) kxld_free(demangled_name, demangled_length);
 
     return rval;
 }
@@ -2148,6 +2166,10 @@ patch_vtables(KXLDKext *kext, KXLDDict *patched_vtables,
     char vtable_name[KXLD_MAX_NAME_LEN];
     char super_vtable_name[KXLD_MAX_NAME_LEN];
     char final_sym_name[KXLD_MAX_NAME_LEN];
+    char *demangled_name1 = NULL;
+    char *demangled_name2 = NULL;
+    size_t demangled_length1 = 0;;
+    size_t demangled_length2 = 0;
     size_t len = 0;
     u_int nvtables = 0;
     u_int npatched = 0;
@@ -2204,7 +2226,11 @@ patch_vtables(KXLDKext *kext, KXLDDict *patched_vtables,
 
                 if (failure) {
                     kxld_log(kKxldLogPatching, kKxldLogErr, 
-                        "\t%s (super vtable %s)", vtable_name, super_vtable_name);
+                        "\t'%s' (super vtable '%s')", 
+                        kxld_demangle(vtable_name, &demangled_name1, 
+                            &demangled_length1), 
+                        kxld_demangle(super_vtable_name, &demangled_name2, 
+                            &demangled_length2));
                     continue;
                 }
 
@@ -2228,8 +2254,11 @@ patch_vtables(KXLDKext *kext, KXLDDict *patched_vtables,
                 require_action(!final_sym, finish, 
                     rval=KERN_FAILURE;
                     kxld_log(kKxldLogPatching, kKxldLogErr, 
-                        "Class %s is a subclass of final class %s.",
-                        class_name, super_class_name));
+                        "Class '%s' is a subclass of final class '%s'.",
+                        kxld_demangle(class_name, &demangled_name1, 
+                            &demangled_length1), 
+                        kxld_demangle(super_class_name, &demangled_name2, 
+                            &demangled_length2)));
 
                 /* Patch the class's vtable */
                 rval = kxld_vtable_patch(vtable, super_vtable, kext->symtab,
@@ -2297,6 +2326,9 @@ patch_vtables(KXLDKext *kext, KXLDDict *patched_vtables,
 
     rval = KERN_SUCCESS;
 finish:
+    if (demangled_name1) kxld_free(demangled_name1, demangled_length1);
+    if (demangled_name2) kxld_free(demangled_name2, demangled_length2);
+
     return rval;
 }
 
@@ -2309,6 +2341,8 @@ validate_symbols(KXLDKext *kext)
     KXLDSymtabIterator iter;
     KXLDSym *sym = NULL;
     u_int error = FALSE;
+    char *demangled_name = NULL;
+    size_t demangled_length = 0;
     
     /* Check for any unresolved symbols */
     kxld_symtab_iterator_init(&iter, kext->symtab, kxld_sym_is_unresolved, FALSE);
@@ -2318,13 +2352,15 @@ validate_symbols(KXLDKext *kext)
             kxld_log(kKxldLogLinking, kKxldLogErr, 
                 "The following symbols are unresolved for this kext:");
         }
-        kxld_log(kKxldLogLinking, kKxldLogErr, "\t%s", sym->name);
+        kxld_log(kKxldLogLinking, kKxldLogErr, "\t%s", 
+            kxld_demangle(sym->name, &demangled_name, &demangled_length));
     }
     require_noerr_action(error, finish, rval=KERN_FAILURE);
 
     rval = KERN_SUCCESS;
 
 finish:
+    if (demangled_name) kxld_free(demangled_name, demangled_length);
     return rval;
 }
 

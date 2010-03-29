@@ -499,7 +499,11 @@ mld6_sendpkt(
 	 * Request loopback of the report if we are acting as a multicast
 	 * router, so that the process-level routing daemon can hear it.
 	 */
+#if MROUTING
 	im6o.im6o_multicast_loop = (ip6_mrouter != NULL);
+#else
+	im6o.im6o_multicast_loop = 0;
+#endif
 
 	/* increment output statictics */
 	icmp6stat.icp6s_outhist[type]++;

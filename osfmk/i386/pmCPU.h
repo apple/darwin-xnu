@@ -38,7 +38,7 @@
  * This value should be changed each time that pmDsipatch_t or pmCallBacks_t
  * changes.
  */
-#define PM_DISPATCH_VERSION	18
+#define PM_DISPATCH_VERSION	19
 
 /*
  * Dispatch table for functions that get installed when the power
@@ -54,7 +54,7 @@ typedef struct
 {
     int			(*pmCPUStateInit)(void);
     void		(*cstateInit)(void);
-    uint64_t		(*cstateMachineIdle)(uint64_t maxIdleDuration);
+    uint64_t		(*MachineIdle)(uint64_t maxIdleDuration);
     uint64_t		(*GetDeadline)(x86_lcpu_t *lcpu);
     uint64_t		(*SetDeadline)(x86_lcpu_t *lcpu, uint64_t);
     void		(*Deadline)(x86_lcpu_t *lcpu);
@@ -75,6 +75,7 @@ typedef struct
     void		(*markAllCPUsOff)(void);
     void		(*pmSetRunCount)(uint32_t count);
     boolean_t		(*pmIsCPUUnAvailable)(x86_lcpu_t *lcpu);
+    int			(*pmChooseCPU)(int startCPU, int endCPU, int preferredCPU);
     int			(*pmIPIHandler)(void *state);
 } pmDispatch_t;
 

@@ -118,6 +118,7 @@ __private_extern__ void pool_sethardlimit(struct pool *, int,
 __private_extern__ void *pool_get(struct pool *, int);
 __private_extern__ void pool_put(struct pool *, void *);
 __private_extern__ u_int64_t pf_time_second(void);
+__private_extern__ u_int64_t pf_calendar_time_second(void);
 #endif /* KERNEL */
 
 union sockaddr_union {

@@ -2365,6 +2365,47 @@ SYSCTL_PROC(_kern, KERN_NETBOOT, netboot,
 		0, 0, sysctl_netboot, "I", "");
 #endif
 
+#ifdef CONFIG_IMGSRC_ACCESS
+static int
+sysctl_imgsrcdev 
+(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	vfs_context_t ctx = vfs_context_current();
+	vnode_t devvp;
+	int result;
+
+	if (!vfs_context_issuser(ctx)) {
+		return EPERM;
+	}    
+
+	if (imgsrc_rootvnode == NULL) {
+		return ENOENT;
+	}    
+
+	result = vnode_getwithref(imgsrc_rootvnode);
+	if (result != 0) {
+		return result;
+	}
+	
+	devvp = vnode_mount(imgsrc_rootvnode)->mnt_devvp;
+	result = vnode_getwithref(devvp);
+	if (result != 0) {
+		goto out;
+	}
+
+	result = sysctl_io_number(req, vnode_specrdev(devvp), sizeof(dev_t), NULL, NULL);
+
+	vnode_put(devvp);
+out:
+	vnode_put(imgsrc_rootvnode);
+	return result;
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, imgsrcdev,
+		CTLTYPE_INT | CTLFLAG_RD,
+		0, 0, sysctl_imgsrcdev, "I", ""); 
+#endif /* CONFIG_IMGSRC_ACCESS */
+
 static int
 sysctl_usrstack
 (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
@@ -2814,4 +2855,13 @@ SYSCTL_INT (_kern, OID_AUTO, stack_size,
 	    CTLFLAG_RD, (int *) &kernel_stack_size, 0, "Kernel stack size");
 SYSCTL_INT (_kern, OID_AUTO, stack_depth_max,
 	    CTLFLAG_RD, (int *) &kernel_stack_depth_max, 0, "Max kernel stack depth at interrupt or context switch");
+
+/*
+ * enable back trace for port allocations
+ */
+extern int ipc_portbt;
+
+SYSCTL_INT(_kern, OID_AUTO, ipc_portbt, 
+		CTLFLAG_RW | CTLFLAG_KERN, 
+		&ipc_portbt, 0, "");
 

@@ -30,6 +30,14 @@
  * For conditions of distribution and use, see copyright notice in zlib.h
  */
 
+
+#if defined _ARM_ARCH_6
+
+	// dummy definition, for armv6 or above, compile code from inffastS.s
+	typedef char DummyDefinition;
+
+#else	// architecture
+
 #include "zutil.h"
 #include "inftrees.h"
 #include "inflate.h"
@@ -343,3 +351,5 @@ unsigned start;         /* inflate()'s starting value for strm->avail_out */
  */
 
 #endif /* !ASMINF */
+
+#endif	// architecture

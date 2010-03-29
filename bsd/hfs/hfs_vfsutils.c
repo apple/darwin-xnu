@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1493,7 +1493,7 @@ hfs_freeblks(struct hfsmount * hfsmp, int wantreserve)
 	/*
 	 * We don't bother taking the mount lock
 	 * to look at these values since the values
-	 * themselves are each updated automically
+	 * themselves are each updated atomically
 	 * on aligned addresses.
 	 */
 	freeblks = hfsmp->freeBlocks;

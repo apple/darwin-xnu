@@ -84,6 +84,7 @@
 #define CPUID_FEATURE_PBE     _Bit(31)	/* Pend Break Enable */
 
 #define CPUID_FEATURE_SSE3    _HBit(0)	/* Streaming SIMD extensions 3 */
+
 #define CPUID_FEATURE_MONITOR _HBit(3)	/* Monitor/mwait */
 #define CPUID_FEATURE_DSCPL   _HBit(4)	/* Debug Store CPL */
 #define CPUID_FEATURE_VMX     _HBit(5)	/* VMX */
@@ -95,6 +96,7 @@
 #define CPUID_FEATURE_CX16    _HBit(13)	/* CmpXchg16b instruction */
 #define CPUID_FEATURE_xTPR    _HBit(14)	/* Send Task PRiority msgs */
 #define CPUID_FEATURE_PDCM    _HBit(15)	/* Perf/Debug Capability MSR */
+
 #define CPUID_FEATURE_DCA     _HBit(18)	/* Direct Cache Access */
 #define CPUID_FEATURE_SSE4_1  _HBit(19)	/* Streaming SIMD extensions 4.1 */
 #define CPUID_FEATURE_SSE4_2  _HBit(20)	/* Streaming SIMD extensions 4.2 */
@@ -108,10 +110,11 @@
  */
 #define CPUID_EXTFEATURE_SYSCALL   _Bit(11)	/* SYSCALL/sysret */
 #define CPUID_EXTFEATURE_XD	   _Bit(20)	/* eXecute Disable */
+
 #define CPUID_EXTFEATURE_RDTSCP	   _Bit(27)	/* RDTSCP */
 #define CPUID_EXTFEATURE_EM64T	   _Bit(29)	/* Extended Mem 64 Technology */
 
-#define CPUID_EXTFEATURE_LAHF	   _HBit(20)	/* LAFH/SAHF instructions */
+#define CPUID_EXTFEATURE_LAHF	   _HBit(0)	/* LAHF/SAHF instructions */
 
 /*
  * The CPUID_EXTFEATURE_XXX values define 64-bit values
@@ -128,7 +131,6 @@
 #define CPUID_MODEL_MEROM	15
 #define CPUID_MODEL_PENRYN	23
 #define CPUID_MODEL_NEHALEM	26
-#define CPUID_MODEL_ATOM	28
 #define CPUID_MODEL_FIELDS	30	/* Lynnfield, Clarksfield, Jasper */
 #define CPUID_MODEL_DALES	31	/* Havendale, Auburndale */
 #define CPUID_MODEL_NEHALEM_EX	46
@@ -200,6 +202,7 @@ typedef struct {
 typedef struct {
 	boolean_t	sensor;
 	boolean_t	dynamic_acceleration;
+	boolean_t	invariant_APIC_timer;
 	uint32_t	thresholds;
 	boolean_t	ACNT_MCNT;
 } cpuid_thermal_leaf_t;

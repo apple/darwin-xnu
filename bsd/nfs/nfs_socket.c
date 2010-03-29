@@ -3952,10 +3952,10 @@ nfsrv_rcv_locked(socket_t so, struct nfsrv_sock *slp, int waitflag)
 	if (slp->ns_sotype == SOCK_STREAM) {
 		/*
 		 * If there are already records on the queue, defer soreceive()
-		 * to an nfsd so that there is feedback to the TCP layer that
+		 * to an(other) nfsd so that there is feedback to the TCP layer that
 		 * the nfs servers are heavily loaded.
 		 */
-		if (slp->ns_rec && waitflag == MBUF_DONTWAIT) {
+		if (slp->ns_rec) {
 			ns_flag = SLP_NEEDQ;
 			goto dorecs;
 		}

@@ -195,6 +195,7 @@ options		QUOTA		# file system quotas		# <quota>
 options		REV_ENDIAN_FS	# Reverse Endian FS		# <revfs>
 options		NAMEDSTREAMS	# named stream vnop support	# <namedstreams>
 options		CONFIG_VOLFS	# volfs path support (legacy)	# <config_volfs>
+options		CONFIG_IMGSRC_ACCESS # source of imageboot dmg	# <config_imgsrc_access>
 
 #
 # NFS support
@@ -244,6 +245,8 @@ options			ALLCRYPTO		# <xlarge,large,medium>
 options			randomipid		# <inet,randomipid>
 
 options		ZLIB		# inflate/deflate support	# <zlib>
+
+options		IF_BRIDGE			# <if_bridge>
 
 makeoptions	LIBDRIVER = "libDriver_kern.o"			# <libdriver>
 makeoptions	LIBOBJC   = "libkobjc.o"			# <kernobjc>
@@ -305,6 +308,9 @@ options   CONFIG_VFS_NAMES=5120		# <large,xlarge>
 options   CONFIG_VFS_NAMES=4096		# <medium>
 options   CONFIG_VFS_NAMES=3072		# <small,xsmall>
 options   CONFIG_VFS_NAMES=2048		# <bsmall>
+
+options   CONFIG_MAX_CLUSTERS=8		# <xlarge,large,medium>
+options   CONFIG_MAX_CLUSTERS=4		# <small,xsmall,bsmall>
 
 #
 #  configurable kauth credential related resources 
@@ -408,6 +414,10 @@ options   CONFIG_EMBEDDED			# <config_embedded>
 # nothing more appropriate right now
 #
 options   CONFIG_ENFORCE_SIGNED_CODE		# <config_embedded>
+
+# support dynamic signing of code
+#
+options		CONFIG_DYNAMIC_CODE_SIGNING	# <dynamic_codesigning>
 
 #
 # code decryption... used on embedded for app protection

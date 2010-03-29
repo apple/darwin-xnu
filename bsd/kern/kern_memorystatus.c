@@ -315,7 +315,7 @@ sysctl_handle_kern_memorystatus_priority_list(__unused struct sysctl_oid *oid, _
 #if DEBUG 
 		printf("set jetsam priority pids = { ");
 		for (i = 0; i < jetsam_priority_list_count; i++) {
-			printf("%d ", temp_list[i].pid);
+			printf("(%d, 0x%08x, %d) ", temp_list[i].pid, temp_list[i].flags, temp_list[i].hiwat_pages);
 		}
 		printf("}\n");
 #endif /* DEBUG */
@@ -326,6 +326,10 @@ sysctl_handle_kern_memorystatus_priority_list(__unused struct sysctl_oid *oid, _
 		for (i = jetsam_priority_list_count; i < kMaxPriorityEntries; i++) {
 			jetsam_priority_list[i].pid = 0;
 			jetsam_priority_list[i].flags = 0;
+			jetsam_priority_list[i].hiwat_pages = -1;
+			jetsam_priority_list[i].hiwat_reserved1 = -1;
+			jetsam_priority_list[i].hiwat_reserved2 = -1;
+			jetsam_priority_list[i].hiwat_reserved3 = -1;
 		}
 		jetsam_priority_list_index = 0;
 		lck_mtx_unlock(jetsam_list_mlock);

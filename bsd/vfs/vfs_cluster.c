@@ -2718,7 +2718,7 @@ cluster_write_copy(vnode_t vp, struct uio *uio, u_int32_t io_req_size, off_t old
 			 * because IO_HEADZEROFILL and IO_TAILZEROFILL not set
 			 */
 		        if ((start_offset + total_size) > max_io_size)
-			        total_size -= start_offset;
+			        total_size = max_io_size - start_offset;
 		        xfer_resid = total_size;
 
 		        retval = cluster_copy_ubc_data_internal(vp, uio, &xfer_resid, 1, 1);
@@ -5614,6 +5614,14 @@ is_file_clean(vnode_t vp, off_t filesize)
 #define DRT_HASH_SMALL_MODULUS	23
 #define DRT_HASH_LARGE_MODULUS	401
 
+/*
+ * Physical memory required before the large hash modulus is permitted.
+ *
+ * On small memory systems, the large hash modulus can lead to phsyical
+ * memory starvation, so we avoid using it there.
+ */
+#define DRT_HASH_LARGE_MEMORY_REQUIRED	(1024LL * 1024LL * 1024LL)	/* 1GiB */
+
 #define DRT_SMALL_ALLOCATION	1024	/* 104 bytes spare */
 #define DRT_LARGE_ALLOCATION	16384	/* 344 bytes spare */
 
@@ -5756,8 +5764,12 @@ vfs_drt_alloc_map(struct vfs_drt_clustermap **cmapp)
 		 * see whether we should grow to the large one.
 		 */
 		if (ocmap->scm_modulus == DRT_HASH_SMALL_MODULUS) {
-			/* if the ring is nearly full */
-			if (active_buckets > (DRT_HASH_SMALL_MODULUS - 5)) {
+			/* 
+			 * If the ring is nearly full and we are allowed to
+			 * use the large modulus, upgrade.
+			 */
+			if ((active_buckets > (DRT_HASH_SMALL_MODULUS - 5)) &&
+			    (max_mem >= DRT_HASH_LARGE_MEMORY_REQUIRED)) {
 				nsize = DRT_HASH_LARGE_MODULUS;
 			} else {
 				nsize = DRT_HASH_SMALL_MODULUS;

@@ -106,6 +106,16 @@ task_policy_set(
 			}
 		}
 		else
+		if (info->role == TASK_THROTTLE_APPLICATION) {
+			task_priority(task, MAXPRI_THROTTLE, MAXPRI_THROTTLE);
+			task->role = info->role;
+		}
+		else
+		if (info->role == TASK_DEFAULT_APPLICATION) {
+			task_priority(task, BASEPRI_DEFAULT, MAXPRI_USER);
+			task->role = info->role;
+		}
+		else
 			result = KERN_INVALID_ARGUMENT;
 
 		task_unlock(task);

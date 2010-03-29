@@ -59,7 +59,7 @@ CFLAGS=-std=c99 -Wall -Wextra -Werror -pedantic -Wformat=2 -Wcast-align \
 	-isysroot $(SDKROOT)
 LDFLAGS=$(ARCHS) -dynamiclib -install_name $(LIBKXLDNAME) \
 	-compatibility_version $(COMPATIBILITY_VERSION) \
-	-current_version $(CURRENT_VERSION) -isysroot $(SDKROOT)
+	-current_version $(CURRENT_VERSION) -isysroot $(SDKROOT) -lstdc++
 INCLUDES=-I$(HDRSRC) $(INCFLAGS_EXTERN)
 
 # Tools
@@ -74,9 +74,9 @@ endif
 
 # Files
 HDR_NAMES=kxld.h kxld_types.h
-OBJ_NAMES=kxld.o kxld_array.o kxld_copyright.o kxld_dict.o kxld_kext.o kxld_reloc.o \
-	kxld_sect.o kxld_seg.o kxld_sym.o kxld_state.o kxld_symtab.o kxld_util.o \
-	kxld_uuid.o kxld_vtable.o
+OBJ_NAMES=kxld.o kxld_array.o kxld_copyright.o kxld_demangle.o kxld_dict.o \
+	kxld_kext.o kxld_reloc.o kxld_sect.o kxld_seg.o kxld_sym.o kxld_state.o \
+	kxld_symtab.o kxld_util.o kxld_uuid.o kxld_vtable.o
 HDRS=$(addprefix $(HDRSRC)/, $(HDR_NAMES))
 OBJS=$(addprefix $(OBJROOT)/, $(OBJ_NAMES))
 

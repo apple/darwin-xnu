@@ -573,6 +573,7 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		cpuid_fn(6, reg);
 		ctp->sensor 		  = bitfield32(reg[eax], 0, 0);
 		ctp->dynamic_acceleration = bitfield32(reg[eax], 1, 1);
+		ctp->invariant_APIC_timer = bitfield32(reg[eax], 2, 2);
 		ctp->thresholds		  = bitfield32(reg[ebx], 3, 0);
 		ctp->ACNT_MCNT		  = bitfield32(reg[ecx], 0, 0);
 		info_p->cpuid_thermal_leafp = ctp;
@@ -727,9 +728,9 @@ static struct {
 extfeature_map[] = {
 	{CPUID_EXTFEATURE_SYSCALL, "SYSCALL"},
 	{CPUID_EXTFEATURE_XD,      "XD"},
+	{CPUID_EXTFEATURE_RDTSCP,  "RDTSCP"},
 	{CPUID_EXTFEATURE_EM64T,   "EM64T"},
 	{CPUID_EXTFEATURE_LAHF,    "LAHF"},
-	{CPUID_EXTFEATURE_RDTSCP,  "RDTSCP"},
 	{CPUID_EXTFEATURE_TSCI,    "TSCI"},
 	{0, 0}
 };

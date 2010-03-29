@@ -690,7 +690,7 @@ mprotect(__unused proc_t p, struct mprotect_args *uap, __unused int32_t *retval)
 
 	user_addr = (mach_vm_offset_t) uap->addr;
 	user_size = (mach_vm_size_t) uap->len;
-	prot = (vm_prot_t)(uap->prot & VM_PROT_ALL);
+	prot = (vm_prot_t)(uap->prot & (VM_PROT_ALL | VM_PROT_TRUSTED));
 
 	if (user_addr & PAGE_MASK_64) {
 		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
@@ -728,6 +728,34 @@ mprotect(__unused proc_t p, struct mprotect_args *uap, __unused int32_t *retval)
 	if (error)
 		return (error);
 #endif
+
+	if(prot & VM_PROT_TRUSTED) {
+#if CONFIG_DYNAMIC_CODE_SIGNING
+		/* CODE SIGNING ENFORCEMENT - JIT support */
+		/* The special protection value VM_PROT_TRUSTED requests that we treat
+		 * this page as if it had a valid code signature.
+		 * If this is enabled, there MUST be a MAC policy implementing the 
+		 * mac_proc_check_mprotect() hook above. Otherwise, Codesigning will be
+		 * compromised because the check would always succeed and thusly any
+		 * process could sign dynamically. */
+		result = vm_map_sign(user_map, 
+				     vm_map_trunc_page(user_addr), 
+				     vm_map_round_page(user_addr+user_size));
+		switch (result) {
+			case KERN_SUCCESS:
+				break;
+			case KERN_INVALID_ADDRESS:
+				/* UNIX SPEC: for an invalid address range, return ENOMEM */
+				return ENOMEM;
+			default:
+				return EINVAL;
+		}
+#else
+		return ENOTSUP;
+#endif
+	}
+	prot &= ~VM_PROT_TRUSTED;
+	
 	result = mach_vm_protect(user_map, user_addr, user_size,
 				 FALSE, prot);
 	switch (result) {

@@ -153,6 +153,17 @@ static int munge_statfs(struct mount *mp, struct vfsstatfs *sfsp,
 static int statfs64_common(struct mount *mp, struct vfsstatfs *sfsp,
 			user_addr_t bufp);
 static int fsync_common(proc_t p, struct fsync_args *uap, int flags);
+
+#ifdef CONFIG_IMGSRC_ACCESS
+static int prepare_coveredvp(vnode_t vp, vfs_context_t ctx, struct componentname *cnp, const char *fsname);
+static int authorize_devpath_and_update_mntfromname(mount_t mp, user_addr_t devpath, vnode_t *devvpp, vfs_context_t ctx);
+static int place_mount_and_checkdirs(mount_t mp, vnode_t vp, vfs_context_t ctx);
+static void undo_place_on_covered_vp(mount_t mp, vnode_t vp);
+static int mount_begin_update(mount_t mp, vfs_context_t ctx, int flags);
+static void mount_end_update(mount_t mp);
+static int relocate_imageboot_source(vnode_t vp, struct componentname *cnp, const char *fsname, vfs_context_t ctx, boolean_t is64bit, user_addr_t fsmountargs);
+#endif /* CONFIG_IMGSRC_ACCESS */
+
 int (*union_dircheckp)(struct vnode **, struct fileproc *, vfs_context_t);
 
 __private_extern__
@@ -297,6 +308,15 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused int3
 	if (error)
 		goto out1;
 	
+#ifdef CONFIG_IMGSRC_ACCESS
+	if (uap->flags == MNT_IMGSRC) {
+		error = relocate_imageboot_source(vp, &nd.ni_cnd, fstypename, ctx, is_64bit, fsmountargs);
+		vnode_put(pvp);
+		vnode_put(vp);
+		return error;
+	}
+#endif /* CONFIG_IMGSRC_ACCESS */
+
 	if (uap->flags & MNT_UPDATE) {
 		if ((vp->v_flag & VROOT) == 0) {
 			error = EINVAL;
@@ -323,6 +343,17 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused int3
 			error = ENOTSUP;
 			goto out1;
 		}
+
+#ifdef CONFIG_IMGSRC_ACCESS 
+		/* Can't downgrade the backer of the root FS */
+		if ((mp->mnt_kern_flag & MNTK_BACKS_ROOT) &&
+			(!vfs_isrdonly(mp)) && (uap->flags & MNT_RDONLY))
+		{
+			error = ENOTSUP;
+			goto out1;
+		}
+#endif /* CONFIG_IMGSRC_ACCESS */
+
 		/*
 		 * Only root, or the user that did the original mount is
 		 * permitted to update it.
@@ -867,6 +898,368 @@ out1:
 	return(error);
 }
 
+#ifdef CONFIG_IMGSRC_ACCESS
+/* 
+ * Flush in-core data, check for competing mount attempts,
+ * and set VMOUNT
+ */
+static int
+prepare_coveredvp(vnode_t vp, vfs_context_t ctx, struct componentname *cnp, const char *fsname)
+{
+	struct vnode_attr va;
+	int error;
+
+	/*
+	 * If the user is not root, ensure that they own the directory
+	 * onto which we are attempting to mount.
+	 */
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_uid);
+	if ((error = vnode_getattr(vp, &va, ctx)) ||
+	    (va.va_uid != kauth_cred_getuid(vfs_context_ucred(ctx)) &&
+	     (!vfs_context_issuser(ctx)))) { 
+		error = EPERM;
+		goto out;
+	}
+
+	if ( (error = VNOP_FSYNC(vp, MNT_WAIT, ctx)) )
+		goto out;
+
+	if ( (error = buf_invalidateblks(vp, BUF_WRITE_DATA, 0, 0)) )
+		goto out;
+
+	if (vp->v_type != VDIR) {
+		error = ENOTDIR;
+		goto out;
+	}
+
+	if (ISSET(vp->v_flag, VMOUNT) && (vp->v_mountedhere != NULL)) {
+		error = EBUSY;
+		goto out;
+	}
+
+#if CONFIG_MACF
+	error = mac_mount_check_mount(ctx, vp,
+	    cnp, fsname);
+	if (error != 0)
+		goto out;
+#endif
+
+	vnode_lock_spin(vp);
+	SET(vp->v_flag, VMOUNT);
+	vnode_unlock(vp);
+
+out:
+	return error;
+}
+
+static int
+authorize_devpath_and_update_mntfromname(mount_t mp, user_addr_t devpath, vnode_t *devvpp, vfs_context_t ctx)
+{
+	struct nameidata nd;
+	vnode_t vp;
+	mode_t accessmode;
+	int error;
+
+	NDINIT(&nd, LOOKUP, FOLLOW, UIO_USERSPACE, devpath, ctx);
+	if ( (error = namei(&nd)) )
+		return error;
+
+	strncpy(mp->mnt_vfsstat.f_mntfromname, nd.ni_cnd.cn_pnbuf, MAXPATHLEN);
+	vp = nd.ni_vp;
+	nameidone(&nd);
+
+	if (vp->v_type != VBLK) {
+		error = ENOTBLK;
+		goto out;
+	}
+	if (major(vp->v_rdev) >= nblkdev) {
+		error = ENXIO;
+		goto out;
+	}
+	/*
+	 * If mount by non-root, then verify that user has necessary
+	 * permissions on the device.
+	 */
+	if (!vfs_context_issuser(ctx)) {
+		accessmode = KAUTH_VNODE_READ_DATA;
+		if ((mp->mnt_flag & MNT_RDONLY) == 0)
+			accessmode |= KAUTH_VNODE_WRITE_DATA;
+		if ((error = vnode_authorize(vp, NULL, accessmode, ctx)) != 0)
+			goto out;
+	}
+
+	*devvpp = vp;
+out:
+	if (error) {
+		vnode_put(vp);
+	}
+
+	return error;
+}
+
+/*
+ * Clear VMOUNT, set v_mountedhere, and mnt_vnodecovered, ref the vnode,
+ * and call checkdirs()
+ */
+static int
+place_mount_and_checkdirs(mount_t mp, vnode_t vp, vfs_context_t ctx)
+{
+	int error;
+
+	mp->mnt_vnodecovered = vp; /* XXX This is normally only set at init-time ... */
+
+	vnode_lock_spin(vp);
+	CLR(vp->v_flag, VMOUNT);
+	vp->v_mountedhere = mp;
+	vnode_unlock(vp);
+
+	/*
+	 * taking the name_cache_lock exclusively will
+	 * insure that everyone is out of the fast path who
+	 * might be trying to use a now stale copy of
+	 * vp->v_mountedhere->mnt_realrootvp
+	 * bumping mount_generation causes the cached values
+	 * to be invalidated
+	 */
+	name_cache_lock();
+	mount_generation++;
+	name_cache_unlock();
+
+	error = vnode_ref(vp);
+	if (error != 0) {
+		goto out;
+	}
+
+	error = checkdirs(vp, ctx);
+	if (error != 0)  {
+		/* Unmount the filesystem as cdir/rdirs cannot be updated */
+		vnode_rele(vp);
+		goto out;
+	}
+
+out:
+	if (error != 0) {
+		mp->mnt_vnodecovered = NULLVP;
+	}
+	return error;
+}
+
+static void
+undo_place_on_covered_vp(mount_t mp, vnode_t vp)
+{
+	vnode_rele(vp);
+	vnode_lock_spin(vp);
+	vp->v_mountedhere = (mount_t)NULL;
+	vnode_unlock(vp);
+
+	mp->mnt_vnodecovered = NULLVP;
+}
+
+static int
+mount_begin_update(mount_t mp, vfs_context_t ctx, int flags)
+{
+	int error;
+
+	/* unmount in progress return error */
+	mount_lock_spin(mp);
+	if (mp->mnt_lflag & MNT_LUNMOUNT) {
+		mount_unlock(mp);
+		return EBUSY;
+	}
+	mount_unlock(mp);
+	lck_rw_lock_exclusive(&mp->mnt_rwlock);
+
+	/*
+	 * We only allow the filesystem to be reloaded if it
+	 * is currently mounted read-only.
+	 */
+	if ((flags & MNT_RELOAD) &&
+			((mp->mnt_flag & MNT_RDONLY) == 0)) {
+		error = ENOTSUP;
+		goto out;
+	}
+
+	/*
+	 * Only root, or the user that did the original mount is
+	 * permitted to update it.
+	 */
+	if (mp->mnt_vfsstat.f_owner != kauth_cred_getuid(vfs_context_ucred(ctx)) &&
+			(!vfs_context_issuser(ctx))) { 
+		error = EPERM;
+		goto out;
+	}
+#if CONFIG_MACF
+	error = mac_mount_check_remount(ctx, mp);
+	if (error != 0) {
+		goto out;
+	}
+#endif
+
+out:
+	if (error) {
+		lck_rw_done(&mp->mnt_rwlock);
+	}
+
+	return error;
+}
+
+static void 
+mount_end_update(mount_t mp)
+{
+	lck_rw_done(&mp->mnt_rwlock);
+}
+
+static int
+relocate_imageboot_source(vnode_t vp, struct componentname *cnp, 
+		const char *fsname, vfs_context_t ctx, 
+		boolean_t is64bit, user_addr_t fsmountargs)
+{
+	int error;
+	mount_t mp;
+	boolean_t placed = FALSE;
+	vnode_t devvp;
+	struct vfstable *vfsp;
+	user_addr_t devpath;
+	char *old_mntonname;
+
+	/* If we didn't imageboot, nothing to move */
+	if (imgsrc_rootvnode == NULLVP) {
+		return EINVAL;
+	}
+
+	/* Only root can do this */
+	if (!vfs_context_issuser(ctx)) {
+		return EPERM;
+	}
+
+	error = vnode_get(imgsrc_rootvnode);
+	if (error != 0) {
+		return error;
+	}
+
+	MALLOC(old_mntonname, char*, MAXPATHLEN, M_TEMP, M_WAITOK);
+
+	/* Can only move once */
+	mp = vnode_mount(imgsrc_rootvnode);
+	if ((mp->mnt_kern_flag & MNTK_HAS_MOVED) == MNTK_HAS_MOVED) {
+		error = EBUSY;
+		goto out0;
+	}
+
+	/* Get exclusive rwlock on mount, authorize update on mp */
+	error = mount_begin_update(mp , ctx, 0);
+	if (error != 0) {
+		goto out0;
+	}
+
+	/* 
+	 * It can only be moved once.  Flag is set under the rwlock,
+	 * so we're now safe to proceed.
+	 */
+	if ((mp->mnt_kern_flag & MNTK_HAS_MOVED) == MNTK_HAS_MOVED) {
+		goto out1;
+	}
+
+	/* Mark covered vnode as mount in progress, authorize placing mount on top */
+	error = prepare_coveredvp(vp, ctx, cnp, fsname);
+	if (error != 0) {
+		goto out1;
+	}
+	
+	/* Sanity check the name caller has provided */
+	vfsp = mp->mnt_vtable;
+	if (strncmp(vfsp->vfc_name, fsname, MFSNAMELEN) != 0) {
+		error = EINVAL;
+		goto out2;
+	}
+
+	/* Check the device vnode and update mount-from name, for local filesystems */
+	if (vfsp->vfc_vfsflags & VFC_VFSLOCALARGS) {
+		if (is64bit) {
+			if ( (error = copyin(fsmountargs, (caddr_t)&devpath, sizeof(devpath))) )
+				goto out2;	
+			fsmountargs += sizeof(devpath);
+		} else {
+			user32_addr_t tmp;
+			if ( (error = copyin(fsmountargs, (caddr_t)&tmp, sizeof(tmp))) )
+				goto out2;	
+			/* munge into LP64 addr */
+			devpath = CAST_USER_ADDR_T(tmp);
+			fsmountargs += sizeof(tmp);
+		}
+
+		if (devpath != USER_ADDR_NULL) {
+			error = authorize_devpath_and_update_mntfromname(mp, devpath, &devvp, ctx);
+			if (error) {
+				goto out2;
+			}
+
+			vnode_put(devvp);
+		}
+	}
+
+	/* 
+	 * Place mp on top of vnode, ref the vnode,  call checkdirs(),
+	 * and increment the name cache's mount generation 
+	 */
+	error = place_mount_and_checkdirs(mp, vp, ctx);
+	if (error != 0) {
+		goto out2;
+	}
+
+	placed = TRUE;
+
+	strncpy(old_mntonname, mp->mnt_vfsstat.f_mntonname, MAXPATHLEN);
+	strncpy(mp->mnt_vfsstat.f_mntonname, cnp->cn_pnbuf, MAXPATHLEN);
+
+	/* Forbid future moves */
+	mount_lock(mp);
+	mp->mnt_kern_flag |= MNTK_HAS_MOVED;
+	mount_unlock(mp);
+
+	/* Finally, add to mount list, completely ready to go */
+	error = mount_list_add(mp);
+	if (error != 0) {
+		goto out3;
+	}
+
+	mount_end_update(mp);
+	vnode_put(imgsrc_rootvnode);
+	FREE(old_mntonname, M_TEMP);
+
+	return 0;
+out3:
+	strncpy(mp->mnt_vfsstat.f_mntonname, old_mntonname, MAXPATHLEN);
+
+	mount_lock(mp);
+	mp->mnt_kern_flag &= ~(MNTK_HAS_MOVED);
+	mount_unlock(mp);
+
+out2:
+	/* 
+	 * Placing the mp on the vnode clears VMOUNT,
+	 * so cleanup is different after that point 
+	 */
+	if (placed) {
+		/* Rele the vp, clear VMOUNT and v_mountedhere */
+		undo_place_on_covered_vp(mp, vp);
+	} else {
+		vnode_lock_spin(vp);
+		CLR(vp->v_flag, VMOUNT);
+		vnode_unlock(vp);
+	}
+out1:
+	mount_end_update(mp);
+
+out0:
+	vnode_put(imgsrc_rootvnode);
+	FREE(old_mntonname, M_TEMP);
+	return error;
+}
+
+#endif /* CONFIG_IMGSRC_ACCESS */
+
 void
 enablequotas(struct mount *mp, vfs_context_t ctx)
 {
@@ -1085,6 +1478,13 @@ safedounmount(struct mount *mp, int flags, vfs_context_t ctx)
 		error = EBUSY; /* the root is always busy */
 		goto out;
 	}
+
+#ifdef CONFIG_IMGSRC_ACCESS
+	if (mp->mnt_kern_flag & MNTK_BACKS_ROOT) {
+		error = EBUSY;
+		goto out;
+	}
+#endif /* CONFIG_IMGSRC_ACCESS */
 
 	return (dounmount(mp, flags, 1, ctx));
 

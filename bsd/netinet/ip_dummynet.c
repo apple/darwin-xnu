@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -99,11 +99,6 @@
 #include <netinet/ip_fw.h>
 #include <netinet/ip_dummynet.h>
 #include <netinet/ip_var.h>
-
-#if BRIDGE
-#include <netinet/if_ether.h> /* for struct arpcom */
-#include <net/bridge.h>
-#endif
 
 /*
  * We keep a private variable for the simulation time, but we could
@@ -1155,28 +1150,6 @@ dummynet_send(struct mbuf *m)
 			proto_inject(PF_INET, m);
 			break ;
 	
-#if BRIDGE
-		case DN_TO_BDG_FWD :
-			/*
-			 * The bridge requires/assumes the Ethernet header is
-			 * contiguous in the first mbuf header.  Insure this is true.
-			 */
-			if (BDG_LOADED) {
-			if (m->m_len < ETHER_HDR_LEN &&
-				(m = m_pullup(m, ETHER_HDR_LEN)) == NULL) {
-				printf("dummynet/bridge: pullup fail, dropping pkt\n");
-				break;
-			}
-			m = bdg_forward_ptr(m, pkt->ifp);
-			} else {
-			/* somebody unloaded the bridge module. Drop pkt */
-			/* XXX rate limit */
-			printf("dummynet: dropping bridged packet trapped in pipe\n");
-			}
-			if (m)
-			m_freem(m);
-			break;
-#endif		
 		default:
 			printf("dummynet: bad switch %d!\n", pkt->dn_dir);
 			m_freem(m);

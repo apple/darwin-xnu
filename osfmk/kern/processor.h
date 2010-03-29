@@ -89,6 +89,9 @@ struct processor_set {
 
 	int					processor_count;
 
+	int					cpu_set_low, cpu_set_hi;
+	int					cpu_set_count;
+
 	decl_simple_lock_data(,sched_lock)	/* lock for above */
 
 	struct ipc_port	*	pset_self;		/* port for operations */
@@ -244,11 +247,15 @@ extern kern_return_t	processor_info_count(
 #define pset_deallocate(x)
 #define pset_reference(x)
 
-extern void			machine_run_count(
-						uint32_t	count);
+extern void				machine_run_count(
+							uint32_t	count);
 
-extern boolean_t	machine_cpu_is_inactive(
-						int			cpu_id);
+extern boolean_t		machine_processor_is_inactive(
+							processor_t			processor);
+
+extern processor_t		machine_choose_processor(
+							processor_set_t		pset,
+							processor_t			processor);
 
 #else	/* MACH_KERNEL_PRIVATE */
 

@@ -566,8 +566,10 @@ rip6_ctloutput(
 		case MRT6_ADD_MFC:
 		case MRT6_DEL_MFC:
 		case MRT6_PIM:
+#if MROUTING
 			error = ip6_mrouter_get(so, sopt);
 			break;
+#endif
 		default:
 			error = ip6_ctloutput(so, sopt);
 			break;
@@ -597,8 +599,10 @@ rip6_ctloutput(
 		case MRT6_ADD_MFC:
 		case MRT6_DEL_MFC:
 		case MRT6_PIM:
+#if MROUTING
 			error = ip6_mrouter_set(so, sopt);
 			break;
+#endif
 		default:
 			error = ip6_ctloutput(so, sopt);
 			break;
@@ -649,8 +653,10 @@ rip6_detach(struct socket *so)
 	if (inp == 0)
 		panic("rip6_detach");
 	/* xxx: RSVP */
+#if MROUTING
 	if (so == ip6_mrouter)
 		ip6_mrouter_done();
+#endif
 	if (inp->in6p_icmp6filt) {
 		FREE(inp->in6p_icmp6filt, M_PCB);
 		inp->in6p_icmp6filt = NULL;

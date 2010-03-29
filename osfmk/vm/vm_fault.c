@@ -2351,7 +2351,7 @@ vm_fault_enter(vm_page_t m,
 			/* Page might have been tainted before or not; now it
 			 * definitively is. If the page wasn't tainted, we must
 			 * disconnect it from all pmaps later. */
-			must_disconnect = ~m->cs_tainted;
+			must_disconnect = !m->cs_tainted;
 			m->cs_tainted = TRUE;
 			cs_enter_tainted_accepted++;
 		}

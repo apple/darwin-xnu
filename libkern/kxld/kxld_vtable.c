@@ -32,6 +32,7 @@
 #define DEBUG_ASSERT_COMPONENT_NAME_STRING "kxld"
 #include <AssertMacros.h>
 
+#include "kxld_demangle.h"
 #include "kxld_reloc.h"
 #include "kxld_sect.h"
 #include "kxld_state.h"
@@ -73,6 +74,8 @@ kxld_vtable_init_from_kernel_macho(KXLDVTable *vtable, const KXLDSym *sym,
     const KXLDRelocator *relocator)
 {
     kern_return_t rval = KERN_FAILURE;
+    char *demangled_name = NULL;
+    size_t demangled_length = 0;
 
     check(vtable);
     check(sym);
@@ -86,7 +89,8 @@ kxld_vtable_init_from_kernel_macho(KXLDVTable *vtable, const KXLDSym *sym,
     require_action(kxld_sect_get_num_relocs(sect) == 0, finish,
         rval=KERN_FAILURE;
         kxld_log(kKxldLogPatching, kKxldLogErr, 
-            kKxldLogMalformedVTable, vtable->name));
+            kKxldLogMalformedVTable,
+            kxld_demangle(vtable->name, &demangled_name, &demangled_length)));
 
     rval = init_by_entries(vtable, symtab, relocator);
     require_noerr(rval, finish);
@@ -96,8 +100,8 @@ kxld_vtable_init_from_kernel_macho(KXLDVTable *vtable, const KXLDSym *sym,
     rval = KERN_SUCCESS;
 
 finish:
-
     if (rval) kxld_vtable_deinit(vtable);
+    if (demangled_name) kxld_free(demangled_name, demangled_length);
 
     return rval;
 }
@@ -110,6 +114,8 @@ kxld_vtable_init_from_object_macho(KXLDVTable *vtable, const KXLDSym *sym,
     const KXLDRelocator *relocator)
 {
     kern_return_t rval = KERN_FAILURE;
+    char *demangled_name = NULL;
+    size_t demangled_length = 0;
 
     check(vtable);
     check(sym);
@@ -123,7 +129,8 @@ kxld_vtable_init_from_object_macho(KXLDVTable *vtable, const KXLDSym *sym,
     require_action(kxld_sect_get_num_relocs(sect) > 0, finish,
         rval=KERN_FAILURE;
         kxld_log(kKxldLogPatching, kKxldLogErr, 
-            kKxldLogMalformedVTable, vtable->name));
+            kKxldLogMalformedVTable, 
+            kxld_demangle(vtable->name, &demangled_name, &demangled_length)));
 
     rval = init_by_relocs(vtable, sym, sect, symtab, relocator);
     require_noerr(rval, finish);
@@ -131,8 +138,8 @@ kxld_vtable_init_from_object_macho(KXLDVTable *vtable, const KXLDSym *sym,
     rval = KERN_SUCCESS;
 
 finish:
-
     if (rval) kxld_vtable_deinit(vtable);
+    if (demangled_name) kxld_free(demangled_name, demangled_length);
 
     return rval;
 }
@@ -145,6 +152,8 @@ kxld_vtable_init_from_final_macho(KXLDVTable *vtable, const KXLDSym *sym,
     const KXLDRelocator *relocator, const KXLDArray *relocs)
 {
     kern_return_t rval = KERN_FAILURE;
+    char *demangled_name = NULL;
+    size_t demangled_length = 0;
 
     check(vtable);
     check(sym);
@@ -158,7 +167,8 @@ kxld_vtable_init_from_final_macho(KXLDVTable *vtable, const KXLDSym *sym,
     require_action(kxld_sect_get_num_relocs(sect) == 0, finish,
         rval=KERN_FAILURE;
         kxld_log(kKxldLogPatching, kKxldLogErr, 
-            kKxldLogMalformedVTable, vtable->name));
+            kKxldLogMalformedVTable, 
+            kxld_demangle(vtable->name, &demangled_name, &demangled_length)));
 
     rval = init_by_entries_and_relocs(vtable, sym, symtab,
         relocator, relocs);
@@ -168,6 +178,7 @@ kxld_vtable_init_from_final_macho(KXLDVTable *vtable, const KXLDSym *sym,
 
 finish:
     if (rval) kxld_vtable_deinit(vtable);
+    if (demangled_name) kxld_free(demangled_name, demangled_length);
 
     return rval;
 }
@@ -499,6 +510,8 @@ init_by_entries_and_relocs(KXLDVTable *vtable, const KXLDSym *sym,
     kxld_addr_t entry_offset = 0;
     u_int nentries = 0;
     u_int i = 0;
+    char *demangled_name1 = NULL;
+    size_t demangled_length1 = 0;
 
     check(vtable);
     check(sym);
@@ -573,7 +586,9 @@ init_by_entries_and_relocs(KXLDVTable *vtable, const KXLDSym *sym,
             require_action(reloc, finish,
                 rval=KERN_FAILURE;
                 kxld_log(kKxldLogPatching, kKxldLogErr, 
-                    kKxldLogMalformedVTable, vtable->name));
+                    kKxldLogMalformedVTable, 
+                    kxld_demangle(vtable->name, &demangled_name1, 
+                        &demangled_length1)));
         
             tmpsym = kxld_reloc_get_symbol(relocator, reloc, 
                 /* data */ NULL, symtab);
@@ -630,6 +645,12 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
     KXLDSym *sym = NULL;
     u_int symindex = 0;
     u_int i = 0;
+    char *demangled_name1 = NULL;
+    char *demangled_name2 = NULL;
+    char *demangled_name3 = NULL;
+    size_t demangled_length1 = 0;
+    size_t demangled_length2 = 0;
+    size_t demangled_length3 = 0;
 
     check(vtable);
     check(super_vtable);
@@ -637,8 +658,8 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
     require_action(!vtable->is_patched, finish, rval=KERN_SUCCESS);
     require_action(vtable->entries.nitems >= super_vtable->entries.nitems, finish,
         rval=KERN_FAILURE;
-        kxld_log(kKxldLogPatching, kKxldLogErr, 
-            kKxldLogMalformedVTable, vtable->name));
+        kxld_log(kKxldLogPatching, kKxldLogErr, kKxldLogMalformedVTable, 
+            kxld_demangle(vtable->name, &demangled_name1, &demangled_length1)));
 
     for (i = 0; i < super_vtable->entries.nitems; ++i) {
         child_entry = kxld_array_get_item(&vtable->entries, i);
@@ -688,7 +709,11 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
         require_action(!kxld_sym_name_is_padslot(parent_entry->patched.name),
             finish, rval=KERN_FAILURE;
             kxld_log(kKxldLogPatching, kKxldLogErr, 
-                kKxldLogParentOutOfDate, super_vtable->name, vtable->name));
+                kKxldLogParentOutOfDate, 
+                kxld_demangle(super_vtable->name, &demangled_name1, 
+                    &demangled_length1), 
+                kxld_demangle(vtable->name, &demangled_name2, 
+                    &demangled_length2)));
 
 #if KXLD_USER_OR_STRICT_PATCHING
         /* 5) If we are doing strict patching, we prevent kexts from declaring
@@ -748,8 +773,11 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
         require_noerr(rval, finish);
 
         kxld_log(kKxldLogPatching, kKxldLogDetail,
-            "In vtable %s, patching %s with %s.", 
-            vtable->name, child_entry->unpatched.sym->name, sym->name);
+            "In vtable '%s', patching '%s' with '%s'.", 
+            kxld_demangle(vtable->name, &demangled_name1, &demangled_length1),
+            kxld_demangle(child_entry->unpatched.sym->name, 
+                &demangled_name2, &demangled_length2), 
+            kxld_demangle(sym->name, &demangled_name3, &demangled_length3));
 
         kxld_sym_patch(child_entry->unpatched.sym);
         child_entry->unpatched.sym = sym;
@@ -779,6 +807,10 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
     rval = KERN_SUCCESS;
 
 finish:
+    if (demangled_name1) kxld_free(demangled_name1, demangled_length1);
+    if (demangled_name2) kxld_free(demangled_name2, demangled_length2);
+    if (demangled_name3) kxld_free(demangled_name3, demangled_length3);
+    
     return rval;
 }
 

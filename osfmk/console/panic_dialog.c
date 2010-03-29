@@ -35,6 +35,7 @@
 #include <sys/errno.h>
 #include <string.h>
 #include <machine/machlimits.h>
+#include <pexpert/pexpert.h>
 
 extern struct vc_info vinfo;
 extern boolean_t panicDialogDesired;
@@ -51,7 +52,6 @@ static int panic_dialog_verify( const struct panicimage * data, unsigned int siz
 static int pixels_needed_to_blit_digit( int digit );
 static void blit_digit( int digit );
 static const char * strnstr(const char * s, const char * find, size_t slen);
-void dim_screen(void);
 static void panic_blit_rect(unsigned int x, unsigned int y, unsigned int width,
 			    unsigned int height, int transparent,
 			    const unsigned char * dataPtr);
@@ -836,40 +836,6 @@ decode_rle(const unsigned char *dataPtr, unsigned int *quantity,
 	*value = &dataPtr[i];
 
 	return i+runsize;
-}
-
-
-void 
-dim_screen(void)
-{
-	unsigned int *p, *endp, *row;
-	int      col, rowline, rowlongs;
-	register unsigned int mask;
-
-	if(!vinfo.v_depth)
-		return;
-
-	if ( vinfo.v_depth == 32 )
-		mask = 0x007F7F7F;
-	else if ( vinfo.v_depth == 30 )
-		mask = (0x1ff<<20) | (0x1ff<<10) | 0x1ff;
-	else if ( vinfo.v_depth == 16 )
-		mask = 0x3DEF3DEF;
-	else
-		return;
-
-	rowline = (int)(vinfo.v_rowscanbytes / 4);
-	rowlongs = (int)(vinfo.v_rowbytes / 4);
-
-	p = (unsigned int*) vinfo.v_baseaddr;
-	endp = p + (rowlongs * vinfo.v_height);
-
-	for (row = p ; row < endp ; row += rowlongs) {
-		for (p = &row[0], col = 0; col < rowline; col++) {
-			*p = (*p >> 1) & mask;
-			++p;
-		}
-	}
 }
 
 

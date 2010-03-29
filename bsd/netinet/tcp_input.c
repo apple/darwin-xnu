@@ -1007,6 +1007,10 @@ findpcb:
 		goto drop;
 #endif
 
+	/* Radar 7377561: Avoid processing packets while closing a listen socket */
+	if (tp->t_state == TCPS_LISTEN && (so->so_options & SO_ACCEPTCONN) == 0) 
+		goto drop;
+
 	if (so->so_options & (SO_DEBUG|SO_ACCEPTCONN)) {
 #if TCPDEBUG
 		if (so->so_options & SO_DEBUG) {
@@ -1296,7 +1300,6 @@ findpcb:
 			KERNEL_DEBUG(DBG_FNC_TCP_NEWCONN | DBG_FUNC_END,0,0,0,0,0);
 		}
 	}
-
 #if 1
 	lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
 #endif

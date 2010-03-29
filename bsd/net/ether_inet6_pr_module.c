@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -99,11 +99,6 @@
 
 #if LLC && CCITT
 extern struct ifqueue pkintrq;
-#endif
-
-
-#if BRIDGE
-#include <net/bridge.h>
 #endif
 
 /* #include "vlan.h" */

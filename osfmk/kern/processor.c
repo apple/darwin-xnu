@@ -155,6 +155,15 @@ processor_init(
 	processor_data_init(processor);
 	processor->processor_list = NULL;
 
+	pset_lock(pset);
+	if (pset->cpu_set_count++ == 0)
+		pset->cpu_set_low = pset->cpu_set_hi = cpu_id;
+	else {
+		pset->cpu_set_low = (cpu_id < pset->cpu_set_low)? cpu_id: pset->cpu_set_low;
+		pset->cpu_set_hi = (cpu_id > pset->cpu_set_hi)? cpu_id: pset->cpu_set_hi;
+	}
+	pset_unlock(pset);
+
 	simple_lock(&processor_list_lock);
 	if (processor_list == NULL)
 		processor_list = processor;
@@ -231,6 +240,8 @@ pset_init(
 	queue_init(&pset->idle_queue);
 	pset->processor_count = 0;
 	pset->low_pri = pset->low_count = PROCESSOR_NULL;
+	pset->cpu_set_low = pset->cpu_set_hi = 0;
+	pset->cpu_set_count = 0;
 	pset_lock_init(pset);
 	pset->pset_self = IP_NULL;
 	pset->pset_name_self = IP_NULL;

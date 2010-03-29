@@ -786,10 +786,6 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 	}
         pmap = thread->map->pmap;
 
-#if CONFIG_DTRACE
-	thread->machine.specFlags |= CopyIOActive;
-#endif /* CONFIG_DTRACE */
-
         if (pmap == kernel_pmap || use_kernel_map) {
 
 	        kern_vaddr = (vm_offset_t)user_addr;
@@ -819,13 +815,18 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 		KERNEL_DEBUG(debug_type | DBG_FUNC_END, (unsigned)kern_vaddr,
 			     (unsigned)kernel_addr, (unsigned)nbytes,
 			     error | 0x80000000, 0);
-
-#if CONFIG_DTRACE
-	thread->machine.specFlags &= ~CopyIOActive;
-#endif /* CONFIG_DTRACE */
-
 		return (error);
 	}
+
+#if CONFIG_DTRACE
+	thread->machine.specFlags |= CopyIOActive;
+#endif /* CONFIG_DTRACE */
+
+	if ((nbytes && (user_addr + nbytes <= user_addr)) || ((user_addr + nbytes) > vm_map_max(thread->map))) {
+		error = EFAULT;
+		goto done;
+	}
+
 	user_base = user_addr & ~((user_addr_t)(NBPDE - 1));
 	user_offset = (vm_offset_t)(user_addr & (NBPDE - 1));
 
@@ -1028,6 +1029,8 @@ copyio_phys(addr64_t source, addr64_t sink, vm_size_t csize, int which)
 		pentry = (pt_entry_t)(INTEL_PTE_VALID | (paddr & PG_FRAME));
 	}
 	window_offset = (char *)((uint32_t)paddr & (PAGE_SIZE - 1));
+
+	assert(!((current_thread()->machine.specFlags & CopyIOActive) && ((which & cppvKmap) == 0)));
 
 	if (current_thread()->machine.physwindow_busy) {
 	        pt_entry_t	old_pentry;

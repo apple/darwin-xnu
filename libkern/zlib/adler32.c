@@ -32,12 +32,19 @@
 
 /* @(#) $Id$ */
 
+#include <stdint.h> // For uintptr_t.
+
+
 #define ZLIB_INTERNAL
 #if KERNEL
     #include <libkern/zlib.h>
 #else
     #include "zlib.h"
 #endif /* KERNEL */
+
+#if defined _ARM_ARCH_6
+	extern uLong adler32_vec(uLong adler, uLong sum2, const Bytef *buf, uInt len);
+#endif
 
 #define BASE 65521UL    /* largest prime smaller than 65536 */
 #define NMAX 5552
@@ -91,7 +98,9 @@ uLong ZEXPORT adler32(adler, buf, len)
     uInt len;
 {
     unsigned long sum2;
+#if !defined _ARM_ARCH_6
     unsigned n;
+#endif
 
     /* split Adler-32 into component sums */
     sum2 = (adler >> 16) & 0xffff;
@@ -124,6 +133,20 @@ uLong ZEXPORT adler32(adler, buf, len)
         return adler | (sum2 << 16);
     }
 
+#if defined _ARM_ARCH_6
+    /* align buf to 16-byte boundary */
+    while (((uintptr_t)buf)&15) { /* not on a 16-byte boundary */
+        len--;
+        adler += *buf++;
+        sum2 += adler;
+        if (adler >= BASE) adler -= BASE;
+        MOD4(sum2);             /* only added so many BASE's */
+    }
+
+    return adler32_vec(adler, sum2, buf, len);      // armv7 neon vectorized implementation
+
+#else   //  _ARM_ARCH_6
+
     /* do length NMAX blocks -- requires just one modulo operation */
     while (len >= NMAX) {
         len -= NMAX;
@@ -153,6 +176,8 @@ uLong ZEXPORT adler32(adler, buf, len)
 
     /* return recombined sums */
     return adler | (sum2 << 16);
+
+#endif  // _ARM_ARCH_6
 }
 
 /* ========================================================================= */

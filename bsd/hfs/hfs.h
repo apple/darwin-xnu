@@ -755,7 +755,7 @@ extern int hfs_btsync(struct vnode *vp, int sync_transaction);
 extern void replace_desc(struct cnode *cp, struct cat_desc *cdp);
 
 extern int hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp,
-			struct vnode **rvpp, int can_drop_lock);
+			struct vnode **rvpp, int can_drop_lock, int error_on_unlinked);
 
 extern int hfs_update(struct vnode *, int);
 

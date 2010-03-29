@@ -227,6 +227,16 @@ enum { kFinderInvisibleMask = 1 << 14 };
 			 FTOC(fp)->c_rsrc_vp :			\
 			 FTOC(fp)->c_vp)
 
+/*
+ * This is a helper function used for determining whether or not a cnode has become open
+ * unlinked in between the time we acquired its vnode and the time we acquire the cnode lock
+ * to start manipulating it.  Due to the SMP nature of VFS, it is probably necessary to 
+ * use this macro every time we acquire a cnode lock, as the content of the Cnode may have
+ * been modified in betweeen the lookup and a VNOP.  Whether or not to call this is dependent
+ * upon the VNOP in question.  Sometimes it is OK to use an open-unlinked file, for example, in,
+ * reading.  But other times, such as on the source of a VNOP_RENAME, it should be disallowed.
+ */
+int hfs_checkdeleted (struct cnode *cp);
 
 /*
  * Test for a resource fork

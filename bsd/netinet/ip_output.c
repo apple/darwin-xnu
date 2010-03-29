@@ -2633,7 +2633,6 @@ ip_setmoptions(sopt, imop)
 	struct ip_moptions **imop;
 {
 	int error = 0;
-	int i;
 	struct in_addr addr;
 	struct ip_mreq mreq;
 	struct ifnet *ifp = NULL;
@@ -2654,20 +2653,23 @@ ip_setmoptions(sopt, imop)
 	switch (sopt->sopt_name) {
 	/* store an index number for the vif you wanna use in the send */
 #if MROUTING
-	case IP_MULTICAST_VIF:
-		if (legal_vif_num == 0) {
-			error = EOPNOTSUPP;
+	case IP_MULTICAST_VIF: 
+		{
+			int i;
+			if (legal_vif_num == 0) {
+				error = EOPNOTSUPP;
+				break;
+			}
+			error = sooptcopyin(sopt, &i, sizeof i, sizeof i);
+			if (error)
+				break;
+			if (!legal_vif_num(i) && (i != -1)) {
+				error = EINVAL;
+				break;
+			}
+			imo->imo_multicast_vif = i;
 			break;
 		}
-		error = sooptcopyin(sopt, &i, sizeof i, sizeof i);
-		if (error)
-			break;
-		if (!legal_vif_num(i) && (i != -1)) {
-			error = EINVAL;
-			break;
-		}
-		imo->imo_multicast_vif = i;
-		break;
 #endif /* MROUTING */
 
 	case IP_MULTICAST_IF:

@@ -109,7 +109,9 @@
 
 int	donice(struct proc *curp, struct proc *chgp, int n);
 int	dosetrlimit(struct proc *p, u_int which, struct rlimit *limp);
+static void do_background_socket(struct proc *curp, thread_t thread, int priority);
 static int do_background_thread(struct proc *curp, int priority);
+static int do_background_task(struct proc *curp, int priority);
 
 rlim_t maxdmap = MAXDSIZ;	/* XXX */ 
 rlim_t maxsmap = MAXSSIZ - PAGE_SIZE;	/* XXX */ 
@@ -369,7 +371,32 @@ setpriority(struct proc *curp, struct setpriority_args *uap, __unused int32_t *r
 			return (EINVAL);
 		}
 		error = do_background_thread(curp, uap->prio);
+		(void) do_background_socket(curp, current_thread(), uap->prio);
 		found++;
+		break;
+	}
+
+	case PRIO_DARWIN_PROCESS: {
+		if (uap->who == 0)
+			p = curp;
+		else {
+			p = proc_find(uap->who);
+			if (p == 0)
+				break;
+			refheld = 1;
+		}
+
+		error = do_background_task(p, uap->prio);
+		(void) do_background_socket(p, NULL, uap->prio);
+		
+		proc_lock(p);
+		p->p_iopol_disk = (uap->prio == PRIO_DARWIN_BG ? 
+				IOPOL_THROTTLE : IOPOL_DEFAULT); 
+		proc_unlock(p);
+
+		found++;
+		if (refheld != 0)
+			proc_rele(p);
 		break;
 	}
 
@@ -427,20 +454,93 @@ out:
 	return (error);
 }
 
+static int
+do_background_task(struct proc *p, int priority)
+{
+	int error = 0;
+	task_category_policy_data_t info;
+
+	if (priority & PRIO_DARWIN_BG) { 
+		info.role = TASK_THROTTLE_APPLICATION;
+	} else {
+		info.role = TASK_DEFAULT_APPLICATION;
+	}
+
+	error = task_policy_set(p->task,
+			TASK_CATEGORY_POLICY,
+			(task_policy_t) &info,
+			TASK_CATEGORY_POLICY_COUNT);
+	return (error);
+}
+
+static void 
+do_background_socket(struct proc *curp, thread_t thread, int priority)
+{
+	struct filedesc                     *fdp;
+	struct fileproc                     *fp;
+	int                                 i;
+
+	if (priority & PRIO_DARWIN_BG) {
+		/* enable network throttle process-wide (if no thread is specified) */
+		if (thread == NULL) {
+			proc_fdlock(curp);
+			fdp = curp->p_fd;
+
+			for (i = 0; i < fdp->fd_nfiles; i++) {
+				struct socket       *sockp;
+
+				fp = fdp->fd_ofiles[i];
+				if (fp == NULL || (fdp->fd_ofileflags[i] & UF_RESERVED) != 0 ||
+						fp->f_fglob->fg_type != DTYPE_SOCKET) {
+					continue;
+				}
+				sockp = (struct socket *)fp->f_fglob->fg_data;
+				sockp->so_traffic_mgt_flags |= TRAFFIC_MGT_SO_BACKGROUND;
+				sockp->so_background_thread = NULL;
+			}
+			proc_fdunlock(curp);
+		}
+
+	} else {
+		/* disable networking IO throttle.
+		 * NOTE - It is a known limitation of the current design that we 
+		 * could potentially clear TRAFFIC_MGT_SO_BACKGROUND bit for 
+		 * sockets created by other threads within this process.  
+		 */
+		proc_fdlock(curp);
+		fdp = curp->p_fd;
+		for ( i = 0; i < fdp->fd_nfiles; i++ ) {
+			struct socket       *sockp;
+
+			fp = fdp->fd_ofiles[ i ];
+			if ( fp == NULL || (fdp->fd_ofileflags[ i ] & UF_RESERVED) != 0 ||
+					fp->f_fglob->fg_type != DTYPE_SOCKET ) {
+				continue;
+			}
+			sockp = (struct socket *)fp->f_fglob->fg_data;
+			/* skip if only clearing this thread's sockets */
+			if ((thread) && (sockp->so_background_thread != thread)) {
+				continue;
+			}
+			sockp->so_traffic_mgt_flags &= ~TRAFFIC_MGT_SO_BACKGROUND;
+			sockp->so_background_thread = NULL;
+		}
+		proc_fdunlock(curp);
+	}
+}
+
+
 /*
  * do_background_thread
  * Returns:	0			Success
  * XXX - todo - does this need a MACF hook?
  */
 static int
-do_background_thread(struct proc *curp, int priority)
+do_background_thread(struct proc *curp __unused, int priority)
 {
-	int									i;
 	thread_t							thread;
 	struct uthread						*ut;
 	thread_precedence_policy_data_t		policy;
-	struct filedesc						*fdp;
-	struct fileproc						*fp;
 	
 	thread = current_thread();
 	ut = get_bsdthread_info(thread);
@@ -461,31 +561,6 @@ do_background_thread(struct proc *curp, int priority)
 		thread_policy_set( thread, THREAD_PRECEDENCE_POLICY,
 						   (thread_policy_t)&policy,
 						   THREAD_PRECEDENCE_POLICY_COUNT );
-
-		/* disable networking IO throttle.
-		 * NOTE - It is a known limitation of the current design that we 
-		 * could potentially clear TRAFFIC_MGT_SO_BACKGROUND bit for 
-		 * sockets created by other threads within this process.  
-		 */
-		proc_fdlock(curp);
-		fdp = curp->p_fd;
-		for ( i = 0; i < fdp->fd_nfiles; i++ ) {
-			struct socket		*sockp;
-			
-			fp = fdp->fd_ofiles[ i ];
-			if ( fp == NULL || (fdp->fd_ofileflags[ i ] & UF_RESERVED) != 0 || 
-				 fp->f_fglob->fg_type != DTYPE_SOCKET ) {
-				continue;
-			}
-			sockp = (struct socket *)fp->f_fglob->fg_data;
-			if ( sockp->so_background_thread != thread ) {
-				continue;
-			}
-			sockp->so_traffic_mgt_flags &= ~TRAFFIC_MGT_SO_BACKGROUND;
-			sockp->so_background_thread = NULL;
-		}
-		proc_fdunlock(curp);
-
 		return(0);
 	}
 	

@@ -867,12 +867,14 @@ skip_ipsec2:;
 			 * above, will be forwarded by the ip6_input() routine,
 			 * if necessary.
 			 */
+#if MROUTING
 			if (ip6_mrouter && (flags & IPV6_FORWARDING) == 0) {
 				if (ip6_mforward(ip6, ifp, m) != 0) {
 					m_freem(m);
 					goto done;
 				}
 			}
+#endif
 		}
 		/*
 		 * Multicasts with a hoplimit of zero may be looped back,

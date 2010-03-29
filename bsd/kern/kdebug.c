@@ -168,10 +168,10 @@ static lck_mtx_t        stackshot_subsys_mutex;
 void *stackshot_snapbuf = NULL;
 
 int
-stack_snapshot2(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t options, int32_t *retval);
+stack_snapshot2(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t flags, uint32_t dispatch_offset, int32_t *retval);
 
 extern void
-kdp_snapshot_preflight(int pid, void  *tracebuf, uint32_t tracebuf_size, uint32_t options);
+kdp_snapshot_preflight(int pid, void  *tracebuf, uint32_t tracebuf_size, uint32_t flags, uint32_t dispatch_offset);
 
 extern int
 kdp_stack_snapshot_geterror(void);
@@ -1705,11 +1705,11 @@ stack_snapshot(struct proc *p, register struct stack_snapshot_args *uap, int32_t
                 return(error);
 
 	return stack_snapshot2(uap->pid, uap->tracebuf, uap->tracebuf_size,
-	    uap->options, retval);
+	    uap->flags, uap->dispatch_offset, retval);
 }
 
 int
-stack_snapshot2(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t options, int32_t *retval)
+stack_snapshot2(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t flags, uint32_t dispatch_offset, int32_t *retval)
 {
 	int error = 0;
 	unsigned bytesTraced = 0;
@@ -1730,7 +1730,7 @@ stack_snapshot2(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_
 		goto error_exit;
 	}
 /* Preload trace parameters*/	
-	kdp_snapshot_preflight(pid, stackshot_snapbuf, tracebuf_size, options);
+	kdp_snapshot_preflight(pid, stackshot_snapbuf, tracebuf_size, flags, dispatch_offset);
 
 /* Trap to the debugger to obtain a coherent stack snapshot; this populates
  * the trace buffer

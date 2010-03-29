@@ -595,7 +595,7 @@ ipc_kmsg_alloc(
 		mach_msg_size_t max_desc = (mach_msg_size_t)(((size - sizeof(mach_msg_base_t)) /
 				           sizeof(mach_msg_ool_descriptor32_t)) *
 				           DESC_SIZE_ADJUSTMENT);
-		if (msg_and_trailer_size >= MACH_MSG_SIZE_MAX - max_desc)
+		if (msg_and_trailer_size > MACH_MSG_SIZE_MAX - max_desc)
 			return IKM_NULL;
 
 		max_expanded_size = msg_and_trailer_size + max_desc;
@@ -617,12 +617,9 @@ ipc_kmsg_alloc(
 			assert(i <= IKM_STASH);
 			kmsg = cache->entries[--i];
 			cache->avail = i;
-			ikm_check_init(kmsg, max_expanded_size);
 			enable_preemption();
-			kmsg->ikm_header = (mach_msg_header_t *)
-			                   ((vm_offset_t)(kmsg + 1) +
-					    max_expanded_size -
-					    msg_and_trailer_size);
+			ikm_check_init(kmsg, max_expanded_size);
+			ikm_set_header(kmsg, msg_and_trailer_size);
 			return (kmsg);
 		}
 		enable_preemption();
@@ -633,10 +630,7 @@ ipc_kmsg_alloc(
 
 	if (kmsg != IKM_NULL) {
 		ikm_init(kmsg, max_expanded_size);
-		kmsg->ikm_header = (mach_msg_header_t *)
-		                   ((vm_offset_t)(kmsg + 1) +
-				    max_expanded_size -
-				    msg_and_trailer_size);
+		ikm_set_header(kmsg, msg_and_trailer_size);
 	}
 
 	return(kmsg);
@@ -1072,6 +1066,23 @@ ipc_kmsg_clear_prealloc(
 	IP_CLEAR_PREALLOC(port, kmsg);
 }
 
+/*
+ *	Routine:	ipc_kmsg_prealloc
+ *	Purpose:
+ *		Wraper to ipc_kmsg_alloc() to account for
+ *		header expansion requirements.
+ */
+ipc_kmsg_t
+ipc_kmsg_prealloc(mach_msg_size_t size)
+{
+#if defined(__LP64__)
+	if (size > MACH_MSG_SIZE_MAX - LEGACY_HEADER_SIZE_DELTA)
+		return IKM_NULL;
+
+	size += LEGACY_HEADER_SIZE_DELTA;
+#endif
+	return ipc_kmsg_alloc(size);
+}
 
 
 /*
@@ -1243,10 +1254,9 @@ ipc_kmsg_get_from_kernel(
 	 * clients.  These are set up for those kernel clients
 	 * which cannot afford to wait.
 	 */
-#ifndef __LP64__
-	/* LP64todo - does the prealloc kmsg need ikm_header padding?
-	 */
 	if (IP_PREALLOC(dest_port)) {
+		mach_msg_size_t max_desc = 0;
+
 		ip_lock(dest_port);
 		if (!ip_active(dest_port)) {
 			ip_unlock(dest_port);
@@ -1254,19 +1264,26 @@ ipc_kmsg_get_from_kernel(
 		}
 		assert(IP_PREALLOC(dest_port));
 		kmsg = dest_port->ip_premsg;
-		if (msg_and_trailer_size > kmsg->ikm_size) {
-			ip_unlock(dest_port);
-			return MACH_SEND_TOO_LARGE;
-		}
 		if (ikm_prealloc_inuse(kmsg)) {
 			ip_unlock(dest_port);
 			return MACH_SEND_NO_BUFFER;
 		}
+#if !defined(__LP64__)
+		if (msg->msgh_bits & MACH_MSGH_BITS_COMPLEX) {
+			assert(size > sizeof(mach_msg_base_t));
+			max_desc = ((mach_msg_base_t *)msg)->body.msgh_descriptor_count *
+				DESC_SIZE_ADJUSTMENT;
+		}
+#endif
+		if (msg_and_trailer_size > kmsg->ikm_size - max_desc) {
+			ip_unlock(dest_port);
+			return MACH_SEND_TOO_LARGE;
+		}
 		ikm_prealloc_set_inuse(kmsg, dest_port);
+		ikm_set_header(kmsg, msg_and_trailer_size);
 		ip_unlock(dest_port);
 	}
 	else
-#endif /* !__LP64__ */
 	{
 		kmsg = ipc_kmsg_alloc(msg_and_trailer_size);
 		if (kmsg == IKM_NULL)

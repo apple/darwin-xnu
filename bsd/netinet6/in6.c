@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -528,14 +528,14 @@ in6_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 	getmicrotime(&timenow);
 
 	privileged = (proc_suser(p) == 0);
-
+#if MROUTING
 	switch (cmd) {
 	case SIOCGETSGCNT_IN6:
 	case SIOCGETMIFCNT_IN6_32:
 	case SIOCGETMIFCNT_IN6_64:
 		return (mrt6_ioctl(cmd, data));
 	}
-
+#endif
 	if (ifp == NULL)
 		return (EOPNOTSUPP);
 
@@ -724,20 +724,9 @@ in6_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 
 	case SIOCPROTOATTACH_IN6_32:
 	case SIOCPROTOATTACH_IN6_64:
-		switch (ifp->if_type) {
-#if IFT_BRIDGE	/*OpenBSD 2.8*/
-	/* some of the interfaces are inherently not IPv6 capable */
-			case IFT_BRIDGE:
-				return;
-				/* NOTREACHED */
-#endif
-			default:
-				if ((error = proto_plumb(PF_INET6, ifp)))
-					printf("SIOCPROTOATTACH_IN6: %s "
-					    "error=%d\n", if_name(ifp), error);
-				break;
-
-		}
+		if ((error = proto_plumb(PF_INET6, ifp)))
+			printf("SIOCPROTOATTACH_IN6: %s "
+				   "error=%d\n", if_name(ifp), error);
 		return (error);
 		/* NOTREACHED */
 

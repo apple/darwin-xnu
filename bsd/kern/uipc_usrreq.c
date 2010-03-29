@@ -780,6 +780,8 @@ unp_attach(struct socket *so)
 static void
 unp_detach(struct unpcb *unp)
 {
+	int so_locked = 1;
+
 	lck_rw_lock_exclusive(unp_list_mtx);
 	LIST_REMOVE(unp, unp_link);
 	lck_rw_done(unp_list_mtx);
@@ -805,13 +807,46 @@ unp_detach(struct unpcb *unp)
 	if (unp->unp_conn)
 		unp_disconnect(unp);
 	while (unp->unp_refs.lh_first) {
- 		struct unpcb *unp2 = unp->unp_refs.lh_first;
- 		socket_unlock(unp->unp_socket, 0);
- 
- 		socket_lock(unp2->unp_socket, 1);
- 		unp_drop(unp2, ECONNRESET);
- 		socket_unlock(unp2->unp_socket, 1);
+		struct unpcb *unp2 = NULL;
+
+		/* This datagram socket is connected to one or more
+		 * sockets. In order to avoid a race condition between removing
+		 * this reference and closing the connected socket, we need 
+		 * to check disconnect_in_progress
+		 */
+		if (so_locked == 1) {
+			socket_unlock(unp->unp_socket, 0);
+			so_locked = 0;
+		}
+		lck_mtx_lock(unp_disconnect_lock);
+		while (disconnect_in_progress != 0) {
+			(void)msleep((caddr_t)&disconnect_in_progress, unp_disconnect_lock,
+				PSOCK, "disconnect", NULL);
+		}
+		disconnect_in_progress = 1;
+		lck_mtx_unlock(unp_disconnect_lock);
+
+		/* Now we are sure that any unpcb socket disconnect is not happening */
+		if (unp->unp_refs.lh_first != NULL) {
+ 			unp2 = unp->unp_refs.lh_first;
+ 			socket_lock(unp2->unp_socket, 1);
+		}
+		
+		lck_mtx_lock(unp_disconnect_lock);
+		disconnect_in_progress = 0;
+		wakeup(&disconnect_in_progress);
+		lck_mtx_unlock(unp_disconnect_lock);
+			
+		if (unp2 != NULL) {
+			/* We already locked this socket and have a reference on it */
+ 			unp_drop(unp2, ECONNRESET);
+ 			socket_unlock(unp2->unp_socket, 1);
+		}
+	}
+
+	if (so_locked == 0) {
 		socket_lock(unp->unp_socket, 0);
+		so_locked = 1;
 	}
 	soisdisconnected(unp->unp_socket);
 	/* makes sure we're getting dealloced */
@@ -1160,9 +1195,7 @@ unp_connect2(struct socket *so, struct socket *so2)
 	switch (so->so_type) {
 
 	case SOCK_DGRAM:
-		lck_rw_lock_exclusive(unp_list_mtx);
 		LIST_INSERT_HEAD(&unp2->unp_refs, unp, unp_reflink);
-		lck_rw_done(unp_list_mtx);
 
 		
 		/* Avoid lock order reversals due to drop/acquire in soisconnected. */
@@ -1292,9 +1325,7 @@ try_again:
 	switch (unp->unp_socket->so_type) {
 
 	case SOCK_DGRAM:
-		lck_rw_lock_exclusive(unp_list_mtx);
 		LIST_REMOVE(unp, unp_reflink);
-		lck_rw_done(unp_list_mtx);
 		unp->unp_socket->so_state &= ~SS_ISCONNECTED;
 		socket_unlock(so2, 1);
 		break;

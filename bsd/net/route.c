@@ -1208,6 +1208,8 @@ rtioctl(unsigned long req, caddr_t data, struct proc *p)
 #if INET && MROUTING
 	return mrt_ioctl(req, data);
 #else
+#pragma unused(req)
+#pragma unused(data)
 	return ENXIO;
 #endif
 }

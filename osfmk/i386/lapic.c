@@ -37,6 +37,7 @@
 #include <kern/cpu_data.h>
 #include <kern/assert.h>
 #include <kern/machine.h>
+#include <kern/debug.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -90,12 +91,11 @@ static unsigned lapic_master_error_count = 0;
 static unsigned lapic_error_count_threshold = 5;
 static boolean_t lapic_dont_panic = FALSE;
 
-extern int	debug_boot_arg;
-
 /* Base vector for local APIC interrupt sources */
 int lapic_interrupt_base = LAPIC_DEFAULT_INTERRUPT_BASE;
 
-int		lapic_to_cpu[MAX_CPUS];
+#define		MAX_LAPICIDS	(LAPIC_ID_MAX+1)
+int		lapic_to_cpu[MAX_LAPICIDS];
 int		cpu_to_lapic[MAX_CPUS];
 
 static void
@@ -103,15 +103,17 @@ lapic_cpu_map_init(void)
 {
 	int	i;
 
-	for (i = 0; i < MAX_CPUS; i++) {
-		lapic_to_cpu[i] = -1;
+	for (i = 0; i < MAX_CPUS; i++)
 		cpu_to_lapic[i] = -1;
-	}
+	for (i = 0; i < MAX_LAPICIDS; i++)
+		lapic_to_cpu[i] = -1;
 }
 
 void
 lapic_cpu_map(int apic_id, int cpu)
 {
+	assert(apic_id < MAX_LAPICIDS);
+	assert(cpu < MAX_CPUS);
 	cpu_to_lapic[cpu] = apic_id;
 	lapic_to_cpu[apic_id] = cpu;
 }
@@ -137,7 +139,7 @@ ml_get_apicid(uint32_t cpu)
 uint32_t
 ml_get_cpuid(uint32_t lapic_index)
 {
-	if(lapic_index >= (uint32_t)MAX_CPUS)
+	if(lapic_index >= (uint32_t)MAX_LAPICIDS)
 		return 0xFFFFFFFF;	/* Return -1 if cpu too big */
 	
 	/* Return the cpu ID (or -1 if not configured) */
@@ -158,7 +160,7 @@ lapic_cpu_map_dump(void)
 		kprintf("cpu_to_lapic[%d]: %d\n",
 			i, cpu_to_lapic[i]);
 	}
-	for (i = 0; i < MAX_CPUS; i++) {
+	for (i = 0; i < MAX_LAPICIDS; i++) {
 		if (lapic_to_cpu[i] == -1)
 			continue;
 		kprintf("lapic_to_cpu[%d]: %d\n",

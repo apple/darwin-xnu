@@ -86,8 +86,8 @@ kxld_array_init(KXLDArray *array, size_t itemsize, u_int nitems)
          */
         if (array->maxitems < nitems) {
             STAILQ_FOREACH_SAFE(srcpool, &array->pools, entries, tmp) {
-                STAILQ_INSERT_TAIL(&srcpools, srcpool, entries);
                 STAILQ_REMOVE(&array->pools, srcpool, kxld_array_pool, entries);
+                STAILQ_INSERT_TAIL(&srcpools, srcpool, entries);
             }
             srcpool_capacity = array->pool_capacity;
             bzero(array, sizeof(*array));

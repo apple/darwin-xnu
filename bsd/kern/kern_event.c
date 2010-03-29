@@ -1565,6 +1565,17 @@ kevent_register(struct kqueue *kq, struct kevent64_s *kev, __unused struct proc 
 		}
 
 		/*
+		 * The user may change some filter values after the
+		 * initial EV_ADD, but doing so will not reset any 
+		 * filter which have already been triggered.
+		 */
+		kn->kn_kevent.udata = kev->udata;
+		if (fops->f_isfd || fops->f_touch == NULL) {
+	        	kn->kn_sfflags = kev->fflags;
+        		kn->kn_sdata = kev->data;
+		}
+
+		/*
 		 * If somebody is in the middle of dropping this
 		 * knote - go find/insert a new one.  But we have
 		 * wait for this one to go away first. Attaches
@@ -1578,17 +1589,11 @@ kevent_register(struct kqueue *kq, struct kevent64_s *kev, __unused struct proc 
 		}
 
 		/*
-		 * The user may change some filter values after the
-		 * initial EV_ADD, but doing so will not reset any 
-		 * filter which have already been triggered.
+		 * Call touch routine to notify filter of changes
+		 * in filter values.
 		 */
-		kn->kn_kevent.udata = kev->udata;
 		if (!fops->f_isfd && fops->f_touch != NULL)
 		        fops->f_touch(kn, kev, EVENT_REGISTER);
-		else {
-	        	kn->kn_sfflags = kev->fflags;
-        		kn->kn_sdata = kev->data;
-		}
 
 		/* We may need to push some info down to a networked filesystem */
 		if (kn->kn_filter == EVFILT_VNODE) {
@@ -1680,13 +1685,10 @@ knote_process(struct knote 	*kn,
 				}
 
 				/* capture the kevent data - using touch if specified */
-				if (result) {
-					if (touch) {
-						kn->kn_fop->f_touch(kn, &kev, EVENT_PROCESS);
-					} else {
-						kev = kn->kn_kevent;
-					}
+				if (result && touch) {
+					kn->kn_fop->f_touch(kn, &kev, EVENT_PROCESS);
 				}
+
 				/* convert back to a kqlock - bail if the knote went away */
 				if (!knoteuse2kqlock(kq, kn)) {
 					return EJUSTRETURN;
@@ -1695,6 +1697,12 @@ knote_process(struct knote 	*kn,
 					if (!(kn->kn_status & KN_ACTIVE)) {
 						knote_activate(kn, 0);
 					}
+
+					/* capture all events that occurred during filter */
+					if (!touch) {
+						kev = kn->kn_kevent;
+					}
+
 				} else if ((kn->kn_status & KN_STAYQUEUED) == 0) {
 					/* was already dequeued, so just bail on this one */
 					return EJUSTRETURN;
@@ -1724,21 +1732,26 @@ knote_process(struct knote 	*kn,
 
 	if (result == 0) {
 		return EJUSTRETURN;
-	} else if (kn->kn_flags & EV_ONESHOT) {
+	} else if ((kn->kn_flags & EV_ONESHOT) != 0) {
 		knote_deactivate(kn);
 		if (kqlock2knotedrop(kq, kn)) {
 			kn->kn_fop->f_detach(kn);
 			knote_drop(kn, p);
 		}
-	} else if (kn->kn_flags & (EV_CLEAR | EV_DISPATCH)) {
-		knote_deactivate(kn);
-		/* manually clear knotes who weren't 'touch'ed */
-		if ((touch == 0) && (kn->kn_flags & EV_CLEAR)) {
+	} else if ((kn->kn_flags & (EV_CLEAR | EV_DISPATCH)) != 0) {
+		if ((kn->kn_flags & EV_DISPATCH) != 0) {
+			/* deactivate and disable all dispatch knotes */
+			knote_deactivate(kn);
+			kn->kn_status |= KN_DISABLED;
+		} else if (!touch || kn->kn_fflags == 0) {
+			/* only deactivate if nothing since the touch */
+			knote_deactivate(kn);
+		}
+		if (!touch && (kn->kn_flags & EV_CLEAR) != 0) {
+			/* manually clear non-touch knotes */
 			kn->kn_data = 0;
 			kn->kn_fflags = 0;
 		}
-		if (kn->kn_flags & EV_DISPATCH)
-			kn->kn_status |= KN_DISABLED;
 		kqunlock(kq);
 	} else {
 		/*

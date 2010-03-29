@@ -1104,7 +1104,7 @@ thread_select(
 
 		pset_lock(pset);
 
-		inactive_state = processor->state != PROCESSOR_SHUTDOWN && machine_cpu_is_inactive(processor->cpu_id);
+		inactive_state = processor->state != PROCESSOR_SHUTDOWN && machine_processor_is_inactive(processor);
 
 		simple_lock(&rt_lock);
 
@@ -1680,8 +1680,7 @@ thread_dispatch(
 					thread->realtime.deadline = UINT64_MAX;
 					thread->reason |= AST_QUANTUM;
 				}
-			}
-			else {
+			} else {
 				/*
 				 *	For non-realtime threads treat a tiny
 				 *	remaining quantum as an expired quantum
@@ -1726,11 +1725,24 @@ thread_dispatch(
 				/*
 				 *	Waiting.
 				 */
+				boolean_t should_terminate = FALSE;
+
+				/* Only the first call to thread_dispatch
+				 * after explicit termination should add
+				 * the thread to the termination queue
+				 */
+				if ((thread->state & (TH_TERMINATE|TH_TERMINATE2)) == TH_TERMINATE) {
+					should_terminate = TRUE;
+					thread->state |= TH_TERMINATE2;
+				}
+
 				thread->state &= ~TH_RUN;
 
 				if (thread->sched_mode & TH_MODE_TIMESHARE)
 					sched_share_decr();
 				sched_run_decr();
+
+				(*thread->sched_call)(SCHED_CALL_BLOCK, thread);
 
 				if (thread->wake_active) {
 					thread->wake_active = FALSE;
@@ -1743,9 +1755,7 @@ thread_dispatch(
 
 				wake_unlock(thread);
 
-				(*thread->sched_call)(SCHED_CALL_BLOCK, thread);
-
-				if (thread->state & TH_TERMINATE)
+				if (should_terminate)
 					thread_terminate_enqueue(thread);
 			}
 		}
@@ -2232,6 +2242,7 @@ choose_next_pset(
  *	choose_processor:
  *
  *	Choose a processor for the thread, beginning at
+ *	the pset.  Accepts an optional processor hint in
  *	the pset.
  *
  *	Returns a processor, possibly from a different pset.
@@ -2242,18 +2253,24 @@ choose_next_pset(
 static processor_t
 choose_processor(
 	processor_set_t		pset,
+	processor_t			processor,
 	thread_t			thread)
 {
 	processor_set_t		nset, cset = pset;
-	processor_t			processor = thread->last_processor;
 	processor_meta_t	pmeta = PROCESSOR_META_NULL;
 
 	/*
-	 *	Prefer the last processor, when appropriate.
+	 *	Prefer the hinted processor, when appropriate.
 	 */
 	if (processor != PROCESSOR_NULL) {
+		processor_t			mprocessor;
+
 		if (processor->processor_meta != PROCESSOR_META_NULL)
 			processor = processor->processor_meta->primary;
+
+		mprocessor = machine_choose_processor(pset, processor);
+		if (mprocessor != PROCESSOR_NULL)
+			processor = mprocessor;
 
 		if (processor->processor_set != pset || processor->state == PROCESSOR_INACTIVE ||
 				processor->state == PROCESSOR_SHUTDOWN || processor->state == PROCESSOR_OFF_LINE)
@@ -2261,6 +2278,18 @@ choose_processor(
 		else
 		if (processor->state == PROCESSOR_IDLE)
 			return (processor);
+	}
+	else {
+		processor = machine_choose_processor(pset, processor);
+
+		if (processor != PROCESSOR_NULL) {
+			if (processor->processor_set != pset || processor->state == PROCESSOR_INACTIVE ||
+					processor->state == PROCESSOR_SHUTDOWN || processor->state == PROCESSOR_OFF_LINE)
+				processor = PROCESSOR_NULL;
+			else
+				if (processor->state == PROCESSOR_IDLE)
+					return (processor);
+		}
 	}
 
 	/*
@@ -2447,7 +2476,7 @@ thread_setrun(
 			pset = thread->affinity_set->aset_pset;
 			pset_lock(pset);
 
-			processor = choose_processor(pset, thread);
+			processor = choose_processor(pset, PROCESSOR_NULL, thread);
 		}
 		else
 		if (thread->last_processor != PROCESSOR_NULL) {
@@ -2468,10 +2497,10 @@ thread_setrun(
 				 */
 				if (thread->sched_pri <= processor->current_pri ||
 						thread->realtime.deadline >= processor->deadline)
-					processor = choose_processor(pset, thread);
+					processor = choose_processor(pset, PROCESSOR_NULL, thread);
 			}
 			else
-				processor = choose_processor(pset, thread);
+				processor = choose_processor(pset, processor, thread);
 		}
 		else {
 			/*
@@ -2489,7 +2518,7 @@ thread_setrun(
 			pset = choose_next_pset(pset);
 			pset_lock(pset);
 
-			processor = choose_processor(pset, thread);
+			processor = choose_processor(pset, PROCESSOR_NULL, thread);
 			task->pset_hint = processor->processor_set;
 		}
 	}
@@ -2645,7 +2674,7 @@ csw_check(
 				processor->processor_meta->primary != processor)
 		return (AST_PREEMPT);
 
-	if (machine_cpu_is_inactive(processor->cpu_id))
+	if (machine_processor_is_inactive(processor))
 		return (AST_PREEMPT);
 
 	if (processor->active_thread->state & TH_SUSP)
@@ -2925,7 +2954,7 @@ processor_idle(
 
 		(void)splsched();
 
-		if (processor->state == PROCESSOR_INACTIVE && !machine_cpu_is_inactive(processor->cpu_id))
+		if (processor->state == PROCESSOR_INACTIVE && !machine_processor_is_inactive(processor))
 			break;
 	}
 

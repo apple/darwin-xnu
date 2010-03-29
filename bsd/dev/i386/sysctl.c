@@ -314,6 +314,12 @@ SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, dynamic_acceleration,
 	    sizeof(boolean_t),
 	    cpu_thermal, "I", "Dynamic Acceleration Technology (Turbo Mode)");
 
+SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, invariant_APIC_timer,
+	    CTLTYPE_INT | CTLFLAG_RD, 
+	    (void *)offsetof(cpuid_thermal_leaf_t, invariant_APIC_timer),
+	    sizeof(boolean_t),
+	    cpu_thermal, "I", "Invariant APIC Timer");
+
 SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, thresholds,
 	    CTLTYPE_INT | CTLFLAG_RD, 
 	    (void *)offsetof(cpuid_thermal_leaf_t, thresholds),

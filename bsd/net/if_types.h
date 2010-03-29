@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -133,6 +133,7 @@
 #define	IFT_L2VLAN	0x87		/* Layer 2 Virtual LAN using 802.1Q */
 #define IFT_IEEE8023ADLAG 0x88		/* IEEE802.3ad Link Aggregate */
 #define	IFT_IEEE1394	0x90		/* IEEE1394 High Performance SerialBus*/
+#define IFT_BRIDGE	0xd1		/* Transparent bridge interface */
 
 /*
  * These are not based on IANA assignments:

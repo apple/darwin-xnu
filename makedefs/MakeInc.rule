@@ -570,6 +570,7 @@ do_build_mach_kernel: $(TARGET)/kgmacros $(TARGET)/mach_kernel
 
 $(TARGET)/mach_kernel: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) lastkernelconstructor.o
 	$(_v)${MAKE} version.o
+	$(_v)${MAKE} build_mach_kernel_exports
 	@echo LD mach_kernel.sys
 	$(_v)$(CAT) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) > mach_kernel.filelist
 	$(_v)$(LD) $(LDFLAGS_KERNEL) -filelist mach_kernel.filelist version.o lastkernelconstructor.o `if [ -e $(STATIC_KMODS) ]; then echo $(STATIC_KMODS); fi` \
@@ -605,6 +606,14 @@ lastkernelconstructor.o: $(SRCROOT)/libsa/lastkernelconstructor.c
 
 $(TARGET)/kgmacros: $(SRCROOT)/kgmacros
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $? $@
+
+.PHONY: build_mach_kernel_exports
+build_mach_kernel_exports:
+	$(_v)${MAKE}					\
+		MAKEFILES=${SOURCE}/config/Makefile	\
+		SOURCE=${SOURCE}/config			\
+		TARGET=$${TARGET}			\
+	build_mach_kernel_exports;
 
 # Special rules to install machine configuration variants
 

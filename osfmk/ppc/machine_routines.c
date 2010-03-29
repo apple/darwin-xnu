@@ -820,9 +820,15 @@ machine_run_count(__unused uint32_t count)
 }
 
 boolean_t
-machine_cpu_is_inactive(__unused int num)
+machine_processor_is_inactive(__unused processor_t processor)
 {
     return(FALSE);
+}
+
+processor_t
+machine_choose_processor(__unused processor_set_t pset, processor_t processor)
+{
+    return (processor);
 }
 
 vm_offset_t ml_stack_remaining(void)

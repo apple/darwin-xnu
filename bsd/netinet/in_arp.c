@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -74,6 +74,7 @@
 #include <net/if_arp.h>
 #include <net/if_dl.h>
 #include <net/dlil.h>
+#include <net/if_types.h>
 #include <net/route.h>
 #include <netinet/if_ether.h>
 #include <netinet/in_var.h>
@@ -937,34 +938,64 @@ arp_ip_handle_input(
 	struct llinfo_arp *llinfo;
 	errno_t	error;
 	int created_announcement = 0;
-
+	int bridged = 0, is_bridge = 0;
+	
 	/* Do not respond to requests for 0.0.0.0 */
 	if (target_ip->sin_addr.s_addr == 0 && arpop == ARPOP_REQUEST)
 		goto done;
+	
+ 	if (ifp->if_bridge)
+		bridged = 1;
+	if (ifp->if_type == IFT_BRIDGE)
+		is_bridge = 1;
 
 	/*
 	 * Determine if this ARP is for us
+	 * For a bridge, we want to check the address irrespective 
+	 * of the receive interface.
 	 */
 	lck_rw_lock_shared(in_ifaddr_rwlock);
 	TAILQ_FOREACH(ia, INADDR_HASH(target_ip->sin_addr.s_addr), ia_hash) {
-		/* do_bridge should be tested here for bridging */
-		if (ia->ia_ifp == ifp &&
+		if (((bridged && ia->ia_ifp->if_bridge != NULL) ||
+			(ia->ia_ifp == ifp)) &&
 		    ia->ia_addr.sin_addr.s_addr == target_ip->sin_addr.s_addr) {
-			best_ia = ia;
-			ifaref(&best_ia->ia_ifa);
-			lck_rw_done(in_ifaddr_rwlock);
-			goto match;
+				best_ia = ia;
+				ifaref(&best_ia->ia_ifa);
+				lck_rw_done(in_ifaddr_rwlock);
+				goto match;
 		}
 	}
 
 	TAILQ_FOREACH(ia, INADDR_HASH(sender_ip->sin_addr.s_addr), ia_hash) {
-		/* do_bridge should be tested here for bridging */
-		if (ia->ia_ifp == ifp &&
+		if (((bridged && ia->ia_ifp->if_bridge != NULL) ||
+			(ia->ia_ifp == ifp)) &&
 		    ia->ia_addr.sin_addr.s_addr == sender_ip->sin_addr.s_addr) {
-			best_ia = ia;
-			ifaref(&best_ia->ia_ifa);
-			lck_rw_done(in_ifaddr_rwlock);
-			goto match;
+				best_ia = ia;
+				ifaref(&best_ia->ia_ifa);
+				lck_rw_done(in_ifaddr_rwlock);
+				goto match;
+		}
+	}
+
+#define BDG_MEMBER_MATCHES_ARP(addr, ifp, ia)								\
+	(ia->ia_ifp->if_bridge == ifp->if_softc &&								\
+	!bcmp(ifnet_lladdr(ia->ia_ifp), ifnet_lladdr(ifp), ifp->if_addrlen) &&	\
+	addr == ia->ia_addr.sin_addr.s_addr)
+	/*
+	 * Check the case when bridge shares its MAC address with
+	 * some of its children, so packets are claimed by bridge
+	 * itself (bridge_input() does it first), but they are really
+	 * meant to be destined to the bridge member.
+	 */
+	if (is_bridge) {
+		TAILQ_FOREACH(ia, INADDR_HASH(target_ip->sin_addr.s_addr), ia_hash) {
+			if (BDG_MEMBER_MATCHES_ARP(target_ip->sin_addr.s_addr, ifp, ia)) {
+				ifp = ia->ia_ifp;
+				best_ia = ia;
+				ifaref(&best_ia->ia_ifa);
+				lck_rw_done(in_ifaddr_rwlock);
+				goto match;
+			}
 		}
 	}
 	lck_rw_done(in_ifaddr_rwlock);
@@ -980,12 +1011,16 @@ arp_ip_handle_input(
 			continue;
 		best_ia = (struct in_ifaddr *)ifa;
 		ifaref(&best_ia->ia_ifa);
-		break;
+		ifnet_lock_done(ifp);
+		goto match;
 	}
 	ifnet_lock_done(ifp);
 
-	/* If we don't have an IP address on this interface, ignore the packet */
-	if (best_ia == NULL)
+	/*
+	 * If we're not a bridge member, or if we are but there's no
+	 * IPv4 address to use for the interface, drop the packet.
+	 */
+	if (!bridged || best_ia == NULL)
 		goto done;
 
 match:
@@ -995,7 +1030,7 @@ match:
 	}
 
 	/* Check for a conflict */
-	if (sender_ip->sin_addr.s_addr == best_ia->ia_addr.sin_addr.s_addr) {
+	if (!bridged && sender_ip->sin_addr.s_addr == best_ia->ia_addr.sin_addr.s_addr) {
 		struct kev_msg        ev_msg;
 		struct kev_in_collision	*in_collision;
 		u_char	storage[sizeof(struct kev_in_collision) + MAX_HW_LEN];
@@ -1152,7 +1187,7 @@ match:
 
 	RT_LOCK_ASSERT_HELD(route);
 	gateway = SDL(route->rt_gateway);
-	if (route->rt_ifp != ifp) {
+	if (!bridged && route->rt_ifp != ifp) {
 		if (!IN_LINKLOCAL(ntohl(sender_ip->sin_addr.s_addr)) || (ifp->if_eflags & IFEF_ARPLL) == 0) {
 			if (log_arp_warnings)
 				log(LOG_ERR, "arp: %s is on %s%d but got reply from %s on %s%d\n",
@@ -1286,6 +1321,19 @@ respond:
 
 		if (error == 0) {
 			RT_LOCK_ASSERT_HELD(route);
+			/*
+			 * Return proxied ARP replies only on the interface
+			 * or bridge cluster where this network resides.
+			 * Otherwise we may conflict with the host we are
+			 * proxying for.
+			 */
+			if (route->rt_ifp != ifp &&
+				(route->rt_ifp->if_bridge != ifp->if_bridge ||
+				 ifp->if_bridge == NULL)) {
+					RT_REMREF_LOCKED(route);
+					RT_UNLOCK(route);
+					goto done;
+				}
 			proxied = *SDL(route->rt_gateway);
 			target_hw = &proxied;
 		} else {

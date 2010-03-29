@@ -663,14 +663,15 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 
         pmap = thread->map->pmap;
 
+
+	assert((vm_offset_t)kernel_addr >= VM_MIN_KERNEL_AND_KEXT_ADDRESS ||
+	       copy_type == COPYINPHYS || copy_type == COPYOUTPHYS);
+
 	/* Sanity and security check for addresses to/from a user */
-	if ((copy_type == COPYIN ||
-	     copy_type == COPYINSTR ||
-	     copy_type == COPYOUT) &&
-	    (pmap != kernel_pmap) &&
-	    ((vm_offset_t)kernel_addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS ||
-	     !IS_USERADDR64_CANONICAL(user_addr))) {
-		error = EACCES;
+
+	if (((pmap != kernel_pmap) && (use_kernel_map == 0)) &&
+	    ((nbytes && (user_addr+nbytes <= user_addr)) || ((user_addr + nbytes) > vm_map_max(thread->map)))) {
+		error = EFAULT;
 		goto out;
 	}
 

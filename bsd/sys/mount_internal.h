@@ -227,6 +227,10 @@ extern struct mount * dead_mountp;
  *		because the bits here were broken out from the high bits
  *		of the mount flags.
  */
+#ifdef CONFIG_IMGSRC_ACCESS
+#define MNTK_HAS_MOVED		0x00002000
+#define MNTK_BACKS_ROOT		0x00004000
+#endif /* CONFIG_IMGSRC_ACCESS */
 #define MNTK_AUTH_CACHE_TTL	0x00008000      /* rights cache has TTL - TTL of 0 disables cache */
 #define	MNTK_PATH_FROM_ID	0x00010000	/* mounted file system supports id-to-path lookups */
 #define	MNTK_UNMOUNT_PREFLIGHT	0x00020000	/* mounted file system wants preflight check during unmount */

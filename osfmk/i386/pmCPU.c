@@ -113,8 +113,8 @@ machine_idle(void)
 
     if (pmInitDone
 	&& pmDispatch != NULL
-	&& pmDispatch->cstateMachineIdle != NULL)
-	(*pmDispatch->cstateMachineIdle)(0x7FFFFFFFFFFFFFFFULL);
+	&& pmDispatch->MachineIdle != NULL)
+	(*pmDispatch->MachineIdle)(0x7FFFFFFFFFFFFFFFULL);
     else {
 	/*
 	 * If no power management, re-enable interrupts and halt.
@@ -562,13 +562,52 @@ machine_run_count(uint32_t count)
 }
 
 boolean_t
-machine_cpu_is_inactive(int cpu)
+machine_processor_is_inactive(processor_t processor)
 {
+    int		cpu = processor->cpu_id;
+
     if (pmDispatch != NULL
 	&& pmDispatch->pmIsCPUUnAvailable != NULL)
 	return(pmDispatch->pmIsCPUUnAvailable(cpu_to_lcpu(cpu)));
     else
 	return(FALSE);
+}
+
+processor_t
+machine_choose_processor(processor_set_t pset,
+			 processor_t preferred)
+{
+    int		startCPU;
+    int		endCPU;
+    int		preferredCPU;
+    int		chosenCPU;
+
+    if (!pmInitDone)
+	return(preferred);
+
+    if (pset == NULL) {
+	startCPU = -1;
+	endCPU = -1;
+    } else {
+	startCPU = pset->cpu_set_low;
+	endCPU = pset->cpu_set_hi;
+    }
+
+    if (preferred == NULL)
+	preferredCPU = -1;
+    else
+	preferredCPU = preferred->cpu_id;
+
+    if (pmDispatch != NULL
+	&& pmDispatch->pmChooseCPU != NULL) {
+	chosenCPU = pmDispatch->pmChooseCPU(startCPU, endCPU, preferredCPU);
+
+	if (chosenCPU == -1)
+	    return(NULL);
+	return(cpu_datap(chosenCPU)->cpu_processor);
+    }
+
+    return(preferred);
 }
 
 static uint32_t

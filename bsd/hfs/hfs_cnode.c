@@ -59,6 +59,10 @@ static void  hfs_reclaim_cnode(struct cnode *);
 
 static int hfs_isordered(struct cnode *, struct cnode *);
 
+inline int hfs_checkdeleted (struct cnode *cp) {
+	return ((cp->c_flag & (C_DELETED | C_NOEXISTS)) ? ENOENT : 0);
+}
+
 
 /*
  * Last reference to an cnode.  If necessary, write or delete it.
@@ -195,7 +199,7 @@ hfs_vnop_inactive(struct vnop_inactive_args *ap)
 		if ((cp->c_blocks > 0) && (forkcount == 1) && (vp != cp->c_rsrc_vp)) {
 			struct vnode *rvp = NULLVP;
 
-			error = hfs_vgetrsrc(hfsmp, vp, &rvp, FALSE);
+			error = hfs_vgetrsrc(hfsmp, vp, &rvp, FALSE, FALSE);
 			if (error)
 				goto out;
 			/*
@@ -612,9 +616,15 @@ hfs_getnewvnode(
 		return (ENOENT);
 	}
 
-	/* Hardlinks may need an updated catalog descriptor */
-	if ((cp->c_flag & C_HARDLINK) && descp->cd_nameptr && descp->cd_namelen > 0) {
-		replace_desc(cp, descp);
+	/* 
+	 * Hardlinks may need an updated catalog descriptor.  However, if
+	 * the cnode has already been marked as open-unlinked (C_DELETED), then don't
+	 * replace its descriptor. 
+	 */
+	if (!(hfs_checkdeleted(cp))) {
+		if ((cp->c_flag & C_HARDLINK) && descp->cd_nameptr && descp->cd_namelen > 0) {
+			replace_desc(cp, descp);
+		}
 	}
 	/* Check if we found a matching vnode */
 	if (*vpp != NULL)

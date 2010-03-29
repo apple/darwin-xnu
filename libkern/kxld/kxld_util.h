@@ -115,17 +115,17 @@ void kxld_log(KXLDLogSubsystem subsystem, KXLDLogLevel level,
 #define kKxldLogArchNotSupported        "The target architecture (cputype 0x%x) is not supported by kxld."
 #define kKxldLogArchNotFound            "The kext does not contain a fat slice for the target architecture."
 #define kKxldLogFiletypeNotSupported    "The Mach-O filetype 0x%x is not supported on the target architecture."
-#define kKxldLogTruncatedMachO          "The Mach-O file has been truncated.  Make sure the Mach-O header structures are correct."
+#define kKxldLogTruncatedMachO          "The Mach-O file has been truncated. Make sure the Mach-O header structures are correct."
 #define kKxldLogMalformedMachO          "The Mach-O file is malformed: "
-#define kKxldLogMalformedVTable         "The vtable %s is malformed.  Make sure your kext has been built against the correct headers."
-#define kKxldLogMissingVtable           "Cannot find the vtable %s for class %s.  This vtable symbol is required for binary compatibility, and it may have been stripped."
-#define kKxldLogParentOutOfDate         "The super class vtable %s for vtable %s is out of date.  Make sure your kext has been built against the correct headers."
+#define kKxldLogMalformedVTable         "The vtable '%s' is malformed. Make sure your kext has been built against the correct headers."
+#define kKxldLogMissingVtable           "Cannot find the vtable '%s' for class '%s'. This vtable symbol is required for binary compatibility, and it may have been stripped."
+#define kKxldLogParentOutOfDate         "The super class vtable '%s' for vtable '%s' is out of date. Make sure your kext has been built against the correct headers."
 #define kKxldLogNoKmodInfo              "The kext is missing its kmod_info structure."
 #define kKxldLogInvalidSectReloc        "Relocation entry %u from section %s,%s cannot be processed."
 #define kKxldLogInvalidExtReloc         "External relocation entry %u cannot be processed."
 #define kKxldLogInvalidIntReloc         "Internal relocation entry %u cannot be processed."
-#define kKxldLogRelocationOverflow      "A relocation entry has overflowed.  The kext may be too far from one " \
-                                        "of its dependencies.  Check your kext's load address."
+#define kKxldLogRelocationOverflow      "A relocation entry has overflowed. The kext may be too far from one " \
+                                        "of its dependencies. Check your kext's load address."
 
 /*******************************************************************************
 * Allocators 

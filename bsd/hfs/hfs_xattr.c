@@ -141,7 +141,7 @@ hfs_vnop_getnamedstream(struct vnop_getnamedstream_args* ap)
 		hfs_unlock(cp);
 		return (ENOATTR);
 	}
-	error = hfs_vgetrsrc(VTOHFS(vp), vp, svpp, TRUE);
+	error = hfs_vgetrsrc(VTOHFS(vp), vp, svpp, TRUE, FALSE);
 	hfs_unlock(cp);
 
 	return (error);
@@ -184,7 +184,7 @@ hfs_vnop_makenamedstream(struct vnop_makenamedstream_args* ap)
 	if ((error = hfs_lock(cp, HFS_EXCLUSIVE_LOCK))) {
 		return (error);
 	}
-	error = hfs_vgetrsrc(VTOHFS(vp), vp, svpp, TRUE);
+	error = hfs_vgetrsrc(VTOHFS(vp), vp, svpp, TRUE, FALSE);
 	hfs_unlock(cp);
 
 	return (error);
@@ -328,7 +328,7 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 				openunlinked = 1;
 			}
 			
-			result = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE);
+			result = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE, FALSE);
 			hfs_unlock(cp);
 			if (result) {
 				return (result);
@@ -719,7 +719,7 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 			openunlinked = 1;
 		}
 
-		result = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE);
+		result = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE, FALSE);
 		hfs_unlock(cp);
 		if (result) {
 			return (result);
@@ -1096,7 +1096,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 			hfs_unlock(cp);
 			return (ENOATTR);
 		}
-		result = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE);
+		result = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE, FALSE);
 		hfs_unlock(cp);
 		if (result) {
 			return (result);
@@ -2302,9 +2302,9 @@ free_attr_blks(struct hfsmount *hfsmp, int blkcnt, HFSPlusExtentDescriptor *exte
 			break;
 		}
 		(void)BlockDeallocate(hfsmp, extents[i].startBlock, extents[i].blockCount);
+		remblks -= extents[i].blockCount;
 		extents[i].startBlock = 0;
 		extents[i].blockCount = 0;
-		remblks -= extents[i].blockCount;
 
 #if HFS_XATTR_VERBOSE
 		printf("hfs: free_attr_blks: BlockDeallocate [%d, %d]\n",

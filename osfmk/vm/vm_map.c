@@ -4704,6 +4704,8 @@ vm_map_submap_pmap_clean(
 
 	submap_end = offset + (end - start);
 	submap_start = offset;
+
+	vm_map_lock_read(sub_map);
 	if(vm_map_lookup_entry(sub_map, offset, &entry)) {
 		
 		remove_size = (entry->vme_end - entry->vme_start);
@@ -4775,7 +4777,8 @@ vm_map_submap_pmap_clean(
 			}
 		}
 		entry = entry->vme_next;
-	} 
+	}
+	vm_map_unlock_read(sub_map);
 	return;
 }
 
@@ -12547,3 +12550,95 @@ void vm_map_switch_protect(vm_map_t	map,
 	map->switch_protect=val;
 	vm_map_unlock(map);
 }
+
+/* Add (generate) code signature for memory range */
+#if CONFIG_DYNAMIC_CODE_SIGNING
+kern_return_t vm_map_sign(vm_map_t map, 
+		 vm_map_offset_t start, 
+		 vm_map_offset_t end)
+{
+	vm_map_entry_t entry;
+	vm_page_t m;
+	vm_object_t object;
+	
+	/*
+	 * Vet all the input parameters and current type and state of the
+	 * underlaying object.  Return with an error if anything is amiss.
+	 */
+	if (map == VM_MAP_NULL)
+		return(KERN_INVALID_ARGUMENT);
+		
+	vm_map_lock_read(map);
+	
+	if (!vm_map_lookup_entry(map, start, &entry) || entry->is_sub_map) {
+		/*
+		 * Must pass a valid non-submap address.
+		 */
+		vm_map_unlock_read(map);
+		return(KERN_INVALID_ADDRESS);
+	}
+	
+	if((entry->vme_start > start) || (entry->vme_end < end)) {
+		/*
+		 * Map entry doesn't cover the requested range. Not handling
+		 * this situation currently.
+		 */
+		vm_map_unlock_read(map);
+		return(KERN_INVALID_ARGUMENT);
+	}
+	
+	object = entry->object.vm_object;
+	if (object == VM_OBJECT_NULL) {
+		/*
+		 * Object must already be present or we can't sign.
+		 */
+		vm_map_unlock_read(map);
+		return KERN_INVALID_ARGUMENT;
+	}
+	
+	vm_object_lock(object);
+	vm_map_unlock_read(map);
+	
+	while(start < end) {
+		uint32_t refmod;
+		
+		m = vm_page_lookup(object, start - entry->vme_start + entry->offset );
+		if (m==VM_PAGE_NULL) {
+			/* shoud we try to fault a page here? we can probably 
+			 * demand it exists and is locked for this request */
+			vm_object_unlock(object);
+			return KERN_FAILURE;
+		}
+		/* deal with special page status */
+		if (m->busy || 
+		    (m->unusual && (m->error || m->restart || m->private || m->absent))) {
+			vm_object_unlock(object);
+			return KERN_FAILURE;
+		}
+		
+		/* Page is OK... now "validate" it */
+		/* This is the place where we'll call out to create a code 
+		 * directory, later */
+		m->cs_validated = TRUE;
+
+		/* The page is now "clean" for codesigning purposes. That means
+		 * we don't consider it as modified (wpmapped) anymore. But 
+		 * we'll disconnect the page so we note any future modification
+		 * attempts. */
+		m->wpmapped = FALSE;
+		refmod = pmap_disconnect(m->phys_page);
+		
+		/* Pull the dirty status from the pmap, since we cleared the 
+		 * wpmapped bit */
+		if ((refmod & VM_MEM_MODIFIED) && !m->dirty) {
+			m->dirty = TRUE;
+		}
+		
+		/* On to the next page */
+		start += PAGE_SIZE;
+	}
+	vm_object_unlock(object);
+	
+	return KERN_SUCCESS;
+}
+#endif

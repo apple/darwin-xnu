@@ -64,6 +64,7 @@ document kgm
 |     showtaskvme    Display info about the task's vm_map entries
 |     showtaskipc    Display info about the specified task's ipc space
 |     showtaskrights Display info about the task's ipc space entries
+|     showtaskrightsbt Display info about the task's ipc space entries with back traces
 |     showtaskbusyports    Display all of the task's ports with unread messages
 |
 |     showact	     Display info about a thread specified by activation
@@ -213,7 +214,8 @@ document kgm
 |     showallgdbcorestacks Corefile equivalent of "showallgdbstacks"
 |     kdp-reenter	Schedule reentry into the debugger and continue.
 |     kdp-reboot	Restart remote target
-|     kdp-version       Get KDP version number
+|     kdp-version	Get KDP version number
+|     kdp-connect	"shorthand" connection macro
 |
 |     zstack		Print zalloc caller stack (zone leak debugging)
 |     findoldest	Find oldest zone leak debugging record
@@ -1136,6 +1138,10 @@ define showipcint
             if $kgm_ie.ie_bits & 0x001f0000
                 set $kgm_name = (($kgm_iindex << 8)|($kgm_ie.ie_bits >> 24))
                 showipceint $kgm_iep $kgm_name
+                if $arg2 != 0 && $kgm_ie.ie_object != 0 && ($kgm_ie.ie_bits & 0x00070000) && ((ipc_port_t) $kgm_ie.ie_object)->ip_callstack[0] != 0
+                    printf "              user bt: "
+                    showportbt $kgm_ie.ie_object $kgm_is.is_task
+                end
             end
             set $kgm_iindex = $kgm_iindex + 1
             set $kgm_iep = &($kgm_is.is_table[$kgm_iindex])
@@ -1151,7 +1157,7 @@ end
 define showipc
     set $kgm_isp = (ipc_space_t)$arg0
     showipcheader
-    showipcint $kgm_isp 0
+    showipcint $kgm_isp 0 0
 end
 document showipc
 Syntax: (gdb) showipc <ipc_space>
@@ -1161,7 +1167,7 @@ end
 define showrights
 	set $kgm_isp = (ipc_space_t)$arg0
     showipcheader
-	showipcint $kgm_isp 1
+	showipcint $kgm_isp 1 0
 end
 document showrights
 Syntax: (gdb) showrights <ipc_space>
@@ -1174,7 +1180,7 @@ define showtaskipc
 	showtaskheader
     showipcheader
 	showtaskint $kgm_taskp
-	showipcint $kgm_taskp->itk_space 0
+	showipcint $kgm_taskp->itk_space 0 0
 end
 document showtaskipc
 Syntax: (gdb) showtaskipc <task>
@@ -1187,11 +1193,23 @@ define showtaskrights
 	showtaskheader
     showipcheader
 	showtaskint $kgm_taskp
-	showipcint $kgm_taskp->itk_space 1
+	showipcint $kgm_taskp->itk_space 1 0
 end
 document showtaskrights
 Syntax: (gdb) showtaskrights <task>
 | Routine to print info about the ipc rights for a task
+end
+
+define showtaskrightsbt
+	set $kgm_taskp = (task_t)$arg0
+	showtaskheader
+    showipcheader
+	showtaskint $kgm_taskp
+	showipcint $kgm_taskp->itk_space 1 1
+end
+document showtaskrightsbt
+Syntax: (gdb) showtaskrightsbt <task>
+| Routine to print info about the ipc rights for a task with backtraces
 end
 
 define showallipc
@@ -1201,7 +1219,7 @@ define showallipc
         showtaskheader
         showipcheader
         showtaskint $kgm_cur_taskp
-        showipcint $kgm_cur_taskp->itk_space 0
+        showipcint $kgm_cur_taskp->itk_space 0 0
     	set $kgm_cur_taskp = (struct task *)($kgm_cur_taskp->tasks.next)
     end
 end
@@ -1218,7 +1236,7 @@ define showallrights
         showtaskheader
         showipcheader
         showtaskint $kgm_cur_taskp
-        showipcint $kgm_cur_taskp->itk_space 1
+        showipcint $kgm_cur_taskp->itk_space 1 0
     	set $kgm_cur_taskp = (struct task *)($kgm_cur_taskp->tasks.next)
     end
 end
@@ -1629,6 +1647,25 @@ define showportmember
     printf "%5d  ", $kgm_portp->ip_object.io_references
     printf "0x%08x  ", &($kgm_portp->ip_messages)
     printf "0x%08x\n", $kgm_portp->ip_messages.data.port.msgcount
+end
+
+define showportbt
+    set $kgm_iebt = ((ipc_port_t) $arg0)->ip_callstack
+    set $kgm_iepid = ((ipc_port_t) $arg0)->ip_spares[0]
+    set $kgm_procpid = ((proc_t) (((task_t) $arg1)->bsd_info))->p_pid
+    if $kgm_iebt[0] != 0
+        showptr $kgm_iebt[0]
+        set $kgm_iebt_loop_ctr = 1
+        while ($kgm_iebt_loop_ctr < 16 && $kgm_iebt[$kgm_iebt_loop_ctr])
+            printf " "
+            showptr $kgm_iebt[$kgm_iebt_loop_ctr]
+            set $kgm_iebt_loop_ctr = $kgm_iebt_loop_ctr + 1
+        end
+        if $kgm_iepid != $kgm_procpid
+            printf " (%d)", $kgm_iepid
+        end
+        printf "\n"
+    end
 end
 
 define showportint
@@ -2562,7 +2599,7 @@ define getdumpinfo
        dumpinfoint KDP_DUMPINFO_GETINFO
        set $kgm_dumpinfo = (kdp_dumpinfo_reply_t *) manual_pkt.data
        if $kgm_dumpinfo->type & KDP_DUMPINFO_REBOOT
-       	  printf "Sysem will reboot after kernel info gets dumped.\n"
+       	  printf "System will reboot after kernel info gets dumped.\n"
        else
        	  printf "Sysem will not reboot after kernel info gets dumped.\n"
        end
@@ -10181,4 +10218,18 @@ document showallbusyports
 Syntax:  showallbusyports
 |Routine to print information about all receive rights on the system that
 |have enqueued messages.
+end
+
+define kdp-connect
+    if $argc > 0
+	kdp-reattach $arg0
+    else
+    	printf "Attempting to attach to localhost...\n"
+    	kdp-reattach localhost
+    end
+end
+
+document kdp-connect
+Syntax: (gdb) kdpconnect <address-of-remote-host>
+| Attach to the machine with given hostname or IP address, or 'localhost' if blank 
 end

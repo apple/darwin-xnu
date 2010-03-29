@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -160,6 +160,22 @@
 #define SIOCGIFBOND	_IOWR('i', 71, struct ifreq)	/* get bond if config */
 #define	SIOCIFCREATE	_IOWR('i', 120, struct ifreq)	/* create clone if */
 #define	SIOCIFDESTROY	 _IOW('i', 121, struct ifreq)	/* destroy clone if */
+
+#define SIOCSDRVSPEC    _IOW('i', 123, struct ifdrv)    /* set driver-specific
+                                                                  parameters */
+#define SIOCGDRVSPEC    _IOWR('i', 123, struct ifdrv)   /* get driver-specific
+                                                                  parameters */
+#ifdef KERNEL_PRIVATE
+#define SIOCSDRVSPEC32    _IOW('i', 123, struct ifdrv32)    /* set driver-specific
+                                                                  parameters */
+#define SIOCGDRVSPEC32    _IOWR('i', 123, struct ifdrv32)   /* get driver-specific
+                                                                  parameters */
+#define SIOCSDRVSPEC64    _IOW('i', 123, struct ifdrv64)    /* set driver-specific
+                                                                  parameters */
+#define SIOCGDRVSPEC64    _IOWR('i', 123, struct ifdrv64)   /* get driver-specific
+                                                                  parameters */
+
+#endif /* KERNEL_PRIVATE */
 #define	SIOCSIFVLAN	 _IOW('i', 126, struct ifreq)	/* set VLAN config */
 #define	SIOCGIFVLAN	_IOWR('i', 127, struct ifreq)	/* get VLAN config */
 #define	SIOCSETVLAN	SIOCSIFVLAN

@@ -107,6 +107,7 @@ decl_lck_mtx_data(,	ipc_port_timestamp_lock_data)
 lck_mtx_ext_t	ipc_port_multiple_lock_data_ext;
 lck_mtx_ext_t	ipc_port_timestamp_lock_data_ext;
 ipc_port_timestamp_t	ipc_port_timestamp_data;
+int ipc_portbt;
 
 #if	MACH_ASSERT
 void	ipc_port_init_debug(
@@ -1235,8 +1236,14 @@ ipc_port_debug_init(void)
 {
 	queue_init(&port_alloc_queue);
 	lck_mtx_init_ext(&port_alloc_queue_lock, &port_alloc_queue_lock_ext, &ipc_lck_grp, &ipc_lck_attr);
+
+	if (!PE_parse_boot_argn("ipc_portbt", &ipc_portbt, sizeof (ipc_portbt)))
+		ipc_portbt = 0;
 }
 
+#ifdef MACH_BSD
+extern int proc_pid(struct proc*);
+#endif /* MACH_BSD */
 
 /*
  *	Initialize all of the debugging state in a port.
@@ -1255,12 +1262,22 @@ ipc_port_init_debug(
 	for (i = 0; i < IP_NSPARES; ++i)
 		port->ip_spares[i] = 0;
 
+#ifdef MACH_BSD
+	task_t task = current_task();
+	if (task != TASK_NULL) {
+		struct proc* proc = (struct proc*) get_bsdtask_info(task);
+		if (proc)
+			port->ip_spares[0] = proc_pid(proc);
+	}
+#endif /* MACH_BSD */
+
 	/*
 	 *	Machine-dependent routine to fill in an
 	 *	array with up to IP_CALLSTACK_MAX levels
 	 *	of return pc information.
 	 */
-	machine_callstack(&port->ip_callstack[0], IP_CALLSTACK_MAX);
+	if (ipc_portbt)
+		machine_callstack(&port->ip_callstack[0], IP_CALLSTACK_MAX);
 
 #if 0
 	lck_mtx_lock(&port_alloc_queue_lock);

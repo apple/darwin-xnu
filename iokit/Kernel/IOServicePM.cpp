@@ -2950,6 +2950,17 @@ IOReturn IOService::startPowerChange (
                         &powerState, changeFlags);
 #endif
 
+    // Invalidate the last recorded tickle power state when a power transition
+    // is about to occur, and not as a result of a tickle request.
+
+    if ((getPMRequestType() != kIOPMRequestTypeActivityTickle) &&
+        (fActivityTicklePowerState != -1))
+    {
+        IOLockLock(fActivityLock);
+        fActivityTicklePowerState = -1;
+        IOLockUnlock(fActivityLock);
+    }
+
 	// Initialize the change note.
 
     fHeadNoteFlags            = changeFlags;

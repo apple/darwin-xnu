@@ -84,6 +84,11 @@
  */
 struct mount *rootfs;
 struct vnode *rootvnode;
+
+#ifdef CONFIG_IMGSRC_ACCESS
+struct vnode *imgsrc_rootvnode;
+#endif /* IMGSRC_ACESS */
+
 int (*mountroot)(void) = NULL;
 
 /*

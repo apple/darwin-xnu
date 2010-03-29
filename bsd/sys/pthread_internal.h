@@ -42,7 +42,6 @@ struct threadlist {
 	TAILQ_ENTRY(threadlist) th_entry;
 	thread_t th_thread;
 	int	 th_flags;
-	uint32_t th_suspended;
 	uint16_t th_affinity_tag;
 	uint8_t	 th_priority;
 	uint8_t  th_policy;
@@ -57,6 +56,7 @@ struct threadlist {
 #define TH_LIST_BLOCKED 	0x04
 #define TH_LIST_SUSPENDED 	0x08
 #define TH_LIST_BUSY		0x10
+#define TH_LIST_NEED_WAKEUP	0x20
 
 struct workitem {
 	TAILQ_ENTRY(workitem) wi_entry;

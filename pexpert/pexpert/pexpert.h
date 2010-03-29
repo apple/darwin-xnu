@@ -189,6 +189,8 @@ typedef struct PE_Video       PE_Video;
 
 extern void initialize_screen(PE_Video *, unsigned int);
 
+extern void dim_screen(void);
+
 extern int PE_current_console(
 	PE_Video *info);
 
@@ -275,6 +277,12 @@ extern void PE_cpu_machine_quiesce(
 
 extern void pe_init_debug(void);
 
+extern boolean_t PE_imgsrc_mount_supported(void);
+
+
+#if KERNEL_PRIVATE
+boolean_t PE_reboot_on_panic(void);
+#endif
 
 __END_DECLS
 

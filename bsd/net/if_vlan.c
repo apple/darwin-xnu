@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2009 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -105,8 +105,6 @@
 #include <net/if_media.h>
 #include <net/multicast_list.h>
 #include <net/ether_if_module.h>
-
-#define	IF_MAXUNIT		0x7fff	/* historical value */
 
 #define VLANNAME	"vlan"
 

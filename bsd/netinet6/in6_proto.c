@@ -312,6 +312,7 @@ struct ip6protosw inet6sw[] = {
   0,		rip_unlock,	0,
   { 0, 0 }, NULL, { 0 }
 },
+#if MROUTING
 { SOCK_RAW,     &inet6domain,	IPPROTO_PIM,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   pim6_input,	rip6_pr_output,	0,              rip6_ctloutput,
   0,
@@ -321,6 +322,17 @@ struct ip6protosw inet6sw[] = {
   0,		rip_unlock,	0,
   { 0, 0 }, NULL, { 0 }
 },
+#else
+{ SOCK_RAW,     &inet6domain,	IPPROTO_PIM,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+  0,		0,		0,              rip6_ctloutput,
+  0,
+  0,		0,		0,		0,
+  0,	
+  &rip6_usrreqs,
+  0,		rip_unlock,	0,
+  { 0, 0 }, NULL, { 0 }
+},
+#endif
 /* raw wildcard */
 { SOCK_RAW,	&inet6domain,	0,		PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   rip6_input,	rip6_pr_output,	0,		rip6_ctloutput,
@@ -548,8 +560,10 @@ SYSCTL_INT(_net_inet6_ip6, IPV6CTL_AUTO_LINKLOCAL,
 	auto_linklocal, CTLFLAG_RW, &ip6_auto_linklocal,	0, "");
 SYSCTL_STRUCT(_net_inet6_ip6, IPV6CTL_RIP6STATS, rip6stats, CTLFLAG_RD,
 	&rip6stat, rip6stat, "");
+#if MROUTING
 SYSCTL_STRUCT(_net_inet6_ip6, OID_AUTO, mrt6stat, CTLFLAG_RD,
         &mrt6stat, mrt6stat, "");
+#endif
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_NEIGHBORGCTHRESH,
 	neighborgcthresh, CTLFLAG_RW,	&ip6_neighborgcthresh,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXIFPREFIXES,

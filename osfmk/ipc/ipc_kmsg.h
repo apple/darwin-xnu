@@ -162,6 +162,12 @@ MACRO_BEGIN								\
 	assert((kmsg)->ikm_next == IKM_BOGUS);				\
 MACRO_END
 
+#define ikm_set_header(kmsg, mtsize)					\
+MACRO_BEGIN								\
+	(kmsg)->ikm_header = (mach_msg_header_t *) 			\
+	((vm_offset_t)((kmsg) + 1) + (kmsg)->ikm_size - (mtsize));	\
+MACRO_END
+
 struct ipc_kmsg_queue {
 	struct ipc_kmsg *ikmq_base;
 };
@@ -267,13 +273,16 @@ extern void ipc_kmsg_destroy(
 extern void ipc_kmsg_destroy_dest(
 	ipc_kmsg_t	kmsg);
 
-
 /* Preallocate a kernel message buffer */
+extern ipc_kmsg_t ipc_kmsg_prealloc(
+	mach_msg_size_t	size);
+
+/* bind a preallocated message buffer to a port */
 extern void ipc_kmsg_set_prealloc(
 	ipc_kmsg_t	kmsg,
 	ipc_port_t	port);
 
-/* Clear a kernel message buffer */
+/* Clear preallocated message buffer binding */
 extern void ipc_kmsg_clear_prealloc(
 	ipc_kmsg_t	kmsg,
 	ipc_port_t	port);

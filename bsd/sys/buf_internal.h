@@ -147,6 +147,7 @@ struct buf {
  * Parameters for buffer cache garbage collection 
  */
 #define BUF_STALE_THRESHHOLD 	30	/* Collect if untouched in the last 30 seconds */
+#define BUF_MAX_GC_COUNT	1000	/* Generally 6-8 MB */
 
 /*
  * mask used by buf_flags... these are the readable external flags

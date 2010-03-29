@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -98,6 +98,9 @@
 #include <sys/socketvar.h>
 #include <net/if_vlan_var.h>
 #include <net/if_bond_var.h>
+#if IF_BRIDGE
+#include <net/if_bridgevar.h>
+#endif
 
 #include <net/dlil.h>
 
@@ -112,10 +115,6 @@ extern struct ifqueue pkintrq;
 extern struct ifqueue atalkintrq;
 #endif
 
-
-#if BRIDGE
-#include <net/bridge.h>
-#endif
 
 #define memcpy(x,y,z)	bcopy(y, x, z)
 
@@ -636,6 +635,9 @@ __private_extern__ int ether_family_init(void)
 #if BOND
 	bond_family_init();
 #endif /* BOND */
+#if IF_BRIDGE
+	bridgeattach(0);
+#endif
 
  done:
 

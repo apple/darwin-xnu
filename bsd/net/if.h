@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -101,6 +101,8 @@
 #endif
 
 #ifdef KERNEL_PRIVATE
+#define         IF_MAXUNIT      0x7fff  /* historical value */
+
 struct if_clonereq {
 	int	ifcr_total;		/* total cloners (out) */
 	int	ifcr_count;		/* room for this many in user buffer */
@@ -402,6 +404,34 @@ struct ifmediareq32 {
 	int	ifm_active;		/* active options */
 	int	ifm_count;		/* # entries in ifm_ulist array */
 	user32_addr_t ifmu_ulist;	/* 32-bit pointer */
+};
+#pragma pack()
+#endif /* KERNEL_PRIVATE */
+
+
+#pragma pack(4)
+struct  ifdrv {
+	char		ifd_name[IFNAMSIZ];     /* if name, e.g. "en0" */
+	unsigned long	ifd_cmd;
+	size_t		ifd_len;
+	void		*ifd_data;
+};
+#pragma pack()
+
+#ifdef KERNEL_PRIVATE
+#pragma pack(4)
+struct ifdrv32 {
+	char		ifd_name[IFNAMSIZ];     /* if name, e.g. "en0" */
+	u_int32_t	ifd_cmd;
+	u_int32_t	ifd_len;
+	user32_addr_t	ifd_data;
+};
+
+struct  ifdrv64 {
+	char		ifd_name[IFNAMSIZ];     /* if name, e.g. "en0" */
+	u_int64_t	ifd_cmd;
+	u_int64_t	ifd_len;
+	user64_addr_t	ifd_data;
 };
 #pragma pack()
 #endif /* KERNEL_PRIVATE */

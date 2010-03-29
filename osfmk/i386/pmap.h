@@ -432,7 +432,8 @@ enum  high_fixed_addresses {
 #define INTEL_PTE_NX		(1ULL << 63)
 
 #define INTEL_PTE_INVALID       0
-
+/* This is conservative, but suffices */
+#define INTEL_PTE_RSVD		((1ULL << 8) | (1ULL << 9) | (1ULL << 10) | (1ULL << 11) | (0x1FFULL << 54))
 #define	pa_to_pte(a)		((a) & INTEL_PTE_PFN) /* XXX */
 #define	pte_to_pa(p)		((p) & INTEL_PTE_PFN) /* XXX */
 #define	pte_increment_pa(p)	((p) += INTEL_OFFMASK+1)
@@ -704,7 +705,7 @@ extern vm_offset_t pmap_high_shared_remap(enum high_fixed_addresses, vm_offset_t
 #endif
 
 extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_size_t *, int *, int *);
-
+extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__printflike(1,2));
 
 
 /*

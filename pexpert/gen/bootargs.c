@@ -260,3 +260,9 @@ getval(
 	*val = 1;
 	return (NUM);
 }
+
+boolean_t 
+PE_imgsrc_mount_supported()
+{
+	return TRUE;
+}

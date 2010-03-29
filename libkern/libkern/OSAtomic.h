@@ -49,7 +49,7 @@ extern "C" {
  * reading and updating of values.
  */
  
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__) || defined(__arm__)
 
 /*!
  * @function OSCompareAndSwap64

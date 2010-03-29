@@ -195,20 +195,21 @@ static unsigned stack_snapshot_bytes_traced = 0;
 static void *stack_snapshot_buf;
 static uint32_t stack_snapshot_bufsize;
 static int stack_snapshot_pid;
-static uint32_t stack_snapshot_options;
+static uint32_t stack_snapshot_flags;
+static uint32_t stack_snapshot_dispatch_offset;
 
 static unsigned int old_debugger;
 
 void
 kdp_snapshot_preflight(int pid, void * tracebuf, uint32_t tracebuf_size,
-    uint32_t options);
+    uint32_t flags, uint32_t dispatch_offset);
 
 void
 kdp_snapshot_postflight(void);
 
 extern int
 kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size,
-    unsigned trace_options, uint32_t *pbytesTraced);
+    uint32_t flags, uint32_t dispatch_offset, uint32_t *pbytesTraced);
 
 int
 kdp_stack_snapshot_geterror(void);
@@ -308,12 +309,13 @@ kdp_unregister_send_receive(
 
 /* Cache stack snapshot parameters in preparation for a trace */
 void
-kdp_snapshot_preflight(int pid, void * tracebuf, uint32_t tracebuf_size, uint32_t options)
+kdp_snapshot_preflight(int pid, void * tracebuf, uint32_t tracebuf_size, uint32_t flags, uint32_t dispatch_offset)
 {
 	stack_snapshot_pid = pid;
 	stack_snapshot_buf = tracebuf;
 	stack_snapshot_bufsize = tracebuf_size;
-	stack_snapshot_options = options;
+	stack_snapshot_flags = flags;
+	stack_snapshot_dispatch_offset = dispatch_offset;
 	kdp_snapshot++;
 	/* Mark this debugger as active, since the polled mode driver that 
 	 * ordinarily does this may not be enabled (yet), or since KDB may be
@@ -1114,7 +1116,8 @@ kdp_raise_exception(
     if (kdp_snapshot && (!panic_active()) && (panic_caller == 0)) {
 	    stack_snapshot_ret = kdp_stackshot(stack_snapshot_pid,
 	    stack_snapshot_buf, stack_snapshot_bufsize,
-	    stack_snapshot_options, &stack_snapshot_bytes_traced);
+	    stack_snapshot_flags, stack_snapshot_dispatch_offset, 
+		&stack_snapshot_bytes_traced);
 	    return;
     }
 

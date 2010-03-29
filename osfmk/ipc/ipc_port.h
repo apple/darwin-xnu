@@ -150,8 +150,8 @@ struct ipc_port {
 #endif
 
 #if	MACH_ASSERT
-#define	IP_NSPARES		10
-#define	IP_CALLSTACK_MAX	10
+#define	IP_NSPARES		4
+#define	IP_CALLSTACK_MAX	16
 	queue_chain_t	ip_port_links;	/* all allocated ports */
 	thread_t	ip_thread;	/* who made me?  thread context */
 	unsigned long	ip_timetrack;	/* give an idea of "when" created */

@@ -136,6 +136,7 @@ static boolean_t workqueue_run_nextitem(proc_t p, struct workqueue *wq, thread_t
 static void wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlist *tl,
 		       int reuse_thread, int wake_thread, int return_directly);
 static void wq_unpark_continue(void);
+static void wq_unsuspend_continue(void);
 static int setup_wqthread(proc_t p, thread_t th, user_addr_t item, int reuse_thread, struct threadlist *tl);
 static boolean_t workqueue_addnewthread(struct workqueue *wq);
 static void workqueue_removethread(struct threadlist *tl);
@@ -445,7 +446,6 @@ bsdthread_register(struct proc *p, struct bsdthread_register_args  *uap, __unuse
 
 	return(0);
 }
-
 
 uint32_t wq_yielded_threshold		= WQ_YIELDED_THRESHOLD;
 uint32_t wq_yielded_window_usecs	= WQ_YIELDED_WINDOW_USECS;
@@ -903,15 +903,11 @@ workqueue_callback(int type, thread_t thread)
 		 * the thread lock for the thread being UNBLOCKED
 		 * is also held
 		 */
-		if (tl->th_suspended) {
-		        OSAddAtomic(-1, &tl->th_suspended);
-			KERNEL_DEBUG1(0xefffd024, wq, wq->wq_threads_scheduled, tl->th_priority, tl->th_affinity_tag, thread_tid(thread));
-		} else {
-		        OSAddAtomic(1, &wq->wq_thactive_count[tl->th_priority][tl->th_affinity_tag]);
+		 OSAddAtomic(1, &wq->wq_thactive_count[tl->th_priority][tl->th_affinity_tag]);
 
-			KERNEL_DEBUG1(0xefffd020 | DBG_FUNC_END, wq, wq->wq_threads_scheduled, tl->th_priority, tl->th_affinity_tag, thread_tid(thread));
-		}
-		break;
+		 KERNEL_DEBUG1(0xefffd020 | DBG_FUNC_END, wq, wq->wq_threads_scheduled, tl->th_priority, tl->th_affinity_tag, thread_tid(thread));
+
+		 break;
 	}
 }
 
@@ -986,7 +982,7 @@ workqueue_addnewthread(struct workqueue *wq)
 	p = wq->wq_proc;
 	workqueue_unlock(p);
 
-	kret = thread_create_workq(wq->wq_task, &th);
+	kret = thread_create_workq(wq->wq_task, (thread_continue_t)wq_unsuspend_continue, &th);
 
  	if (kret != KERN_SUCCESS)
 		goto failed;
@@ -1046,7 +1042,6 @@ workqueue_addnewthread(struct workqueue *wq)
 	tl->th_affinity_tag = -1;
 	tl->th_priority = WORKQUEUE_NUMPRIOS;
 	tl->th_policy = -1;
-	tl->th_suspended = 1;
 
 #if defined(__ppc__)
 	//ml_fp_setvalid(FALSE);
@@ -1057,7 +1052,7 @@ workqueue_addnewthread(struct workqueue *wq)
 	uth->uu_threadlist = (void *)tl;
 
         workqueue_lock_spin(p);
-
+	
 	TAILQ_INSERT_TAIL(&wq->wq_thidlelist, tl, th_entry);
 
 	wq->wq_thidlecount++;
@@ -1306,7 +1301,6 @@ workq_kernreturn(struct proc *p, struct workq_kernreturn_args  *uap, __unused in
 
 }
 
-
 void
 workqueue_exit(struct proc *p)
 {
@@ -1456,9 +1450,6 @@ workqueue_removeitem(struct workqueue *wq, int prio, user_addr_t item)
 	}
 	return (error);
 }
-
-
-
 
 static int workqueue_importance[WORKQUEUE_NUMPRIOS] = 
 {
@@ -1710,14 +1701,11 @@ grab_idle_thread:
 		tl->th_flags &= ~TH_LIST_SUSPENDED;
 		reuse_thread = 0;
 
-		thread_sched_call(tl->th_thread, workqueue_callback);
-
 	} else if ((tl->th_flags & TH_LIST_BLOCKED) == TH_LIST_BLOCKED) {
 		tl->th_flags &= ~TH_LIST_BLOCKED;
-		tl->th_flags |= TH_LIST_BUSY;
 		wake_thread = 1;
 	}
-	tl->th_flags |= TH_LIST_RUNNING;
+	tl->th_flags |= TH_LIST_RUNNING | TH_LIST_BUSY;
 
 	wq->wq_threads_scheduled++;
 	wq->wq_thscheduled_count[priority][affinity_tag]++;
@@ -1895,6 +1883,80 @@ parkit:
 
 
 static void
+wq_unsuspend_continue(void)
+{
+	struct uthread *uth = NULL;
+	thread_t th_to_unsuspend;
+	struct threadlist *tl;
+	proc_t	p;
+
+	th_to_unsuspend = current_thread();
+	uth = get_bsdthread_info(th_to_unsuspend);
+
+	if (uth != NULL && (tl = uth->uu_threadlist) != NULL) {
+		
+		if ((tl->th_flags & (TH_LIST_RUNNING | TH_LIST_BUSY)) == TH_LIST_RUNNING) {
+			/*
+			 * most likely a normal resume of this thread occurred...
+			 * it's also possible that the thread was aborted after we
+			 * finished setting it up so that it could be dispatched... if
+			 * so, thread_bootstrap_return will notice the abort and put
+			 * the thread on the path to self-destruction
+			 */
+normal_resume_to_user:
+			thread_sched_call(th_to_unsuspend, workqueue_callback);
+
+			thread_bootstrap_return();
+		}
+		/*
+		 * if we get here, it's because we've been resumed due to
+		 * an abort of this thread (process is crashing)
+		 */
+		p = current_proc();
+
+		workqueue_lock_spin(p);
+
+		if (tl->th_flags & TH_LIST_SUSPENDED) {
+			/*
+			 * thread has been aborted while still on our idle
+			 * queue... remove it from our domain...
+			 * workqueue_removethread consumes the lock
+			 */
+			workqueue_removethread(tl);
+
+			thread_bootstrap_return();
+		}
+		while ((tl->th_flags & TH_LIST_BUSY)) {
+			/*
+			 * this thread was aborted after we started making
+			 * it runnable, but before we finished dispatching it...
+			 * we need to wait for that process to finish,
+			 * and we need to ask for a wakeup instead of a
+			 * thread_resume since the abort has already resumed us
+			 */
+			tl->th_flags |= TH_LIST_NEED_WAKEUP;
+
+			assert_wait((caddr_t)tl, (THREAD_UNINT));
+
+			workqueue_unlock(p);
+
+			thread_block(THREAD_CONTINUE_NULL);
+
+			workqueue_lock_spin(p);
+		}
+		workqueue_unlock(p);
+		/*
+		 * we have finished setting up the thread's context...
+		 * thread_bootstrap_return will take us through the abort path
+		 * where the thread will self destruct
+		 */
+		goto normal_resume_to_user;
+	}
+	thread_bootstrap_return();
+}
+
+
+static void
 wq_unpark_continue(void)
 {
 	struct uthread *uth = NULL;
@@ -1996,10 +2058,18 @@ wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlist *tl,
 	} else {
 	        KERNEL_DEBUG1(0xefffd014 | DBG_FUNC_END, tl->th_workq, 0, 0, thread_tid(current_thread()), thread_tid(th));
 
-		thread_resume(th);
+		workqueue_lock_spin(p);
+
+		if (tl->th_flags & TH_LIST_NEED_WAKEUP)
+			wakeup(tl);
+		else
+			thread_resume(th);
+
+		tl->th_flags &= ~(TH_LIST_BUSY | TH_LIST_NEED_WAKEUP);
+		
+		workqueue_unlock(p);
 	}
 }
-
 
 int
 setup_wqthread(proc_t p, thread_t th, user_addr_t item, int reuse_thread, struct threadlist *tl)

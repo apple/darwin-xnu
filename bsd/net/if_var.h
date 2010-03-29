@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -487,6 +487,7 @@ struct ifnet {
 	void		*if_fwd_route_lock;
 #endif
 	struct route	if_fwd_route;	/* cached IPv4 forwarding route */
+	void	*if_bridge;		/* bridge glue */
 };
 
 #ifndef __APPLE__

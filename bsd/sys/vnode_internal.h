@@ -250,6 +250,10 @@ struct vnode {
  */
 extern	struct vnode *rootvnode;	/* root (i.e. "/") vnode */
 
+#ifdef CONFIG_IMGSRC_ACCESS
+extern	struct vnode *imgsrc_rootvnode;
+#endif /* CONFIG_IMGSRC_ACCESS */
+
 
 /*
  * Mods for exensibility.

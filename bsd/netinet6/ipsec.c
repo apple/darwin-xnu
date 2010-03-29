@@ -3384,6 +3384,7 @@ ipsec6_output_tunnel(
 				struct ip *ip;
 				struct sockaddr_in* dst4;
 				struct route *ro4 = NULL;
+				struct ip_out_args ipoa = { IFSCOPE_NONE };
 
 				/*
 				 * must be last isr because encapsulated IPv6 packet
@@ -3418,14 +3419,7 @@ ipsec6_output_tunnel(
 					dst4->sin_family = AF_INET;
 					dst4->sin_len = sizeof(*dst4);
 					dst4->sin_addr = ip->ip_dst;
-					rtalloc(ro4);
 				}
-				if (ro4->ro_rt == NULL) {
-					OSAddAtomic(1, &ipstat.ips_noroute);
-					error = EHOSTUNREACH;
-					goto bad;
-				}
-	
 				state->m = ipsec4_splithdr(state->m);
 				if (!state->m) {
 					error = ENOMEM;
@@ -3474,8 +3468,10 @@ ipsec6_output_tunnel(
 				}
 				ip = mtod(state->m, struct ip *);
 				ip->ip_len = ntohs(ip->ip_len);  /* flip len field before calling ip_output */
-				ip_output(state->m, NULL, ro4, 0, NULL, NULL);
+				error = ip_output(state->m, NULL, ro4, IP_OUTARGS, NULL, &ipoa);
 				state->m = NULL;
+				if (error != 0)
+					goto bad;
 				goto done;
 			} else {
 				ipseclog((LOG_ERR, "ipsec6_output_tunnel: "
@@ -4132,6 +4128,7 @@ ipsec_send_natt_keepalive(
 	struct udphdr *uh;
 	struct ip *ip;
 	int error;
+	struct ip_out_args ipoa = { IFSCOPE_NONE };
 
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
@@ -4172,7 +4169,7 @@ ipsec_send_natt_keepalive(
 	uh->uh_sum = 0;
 	*(u_int8_t*)((char*)m_mtod(m) + sizeof(struct ip) + sizeof(struct udphdr)) = 0xFF;
 	
-	error = ip_output(m, NULL, &sav->sah->sa_route, IP_NOIPSEC, NULL, NULL);
+	error = ip_output(m, NULL, &sav->sah->sa_route, IP_OUTARGS | IP_NOIPSEC, NULL, &ipoa);
 	if (error == 0) {
 		sav->natt_last_activity = natt_now;
 		return TRUE;

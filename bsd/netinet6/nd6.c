@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1309,7 +1309,7 @@ nd6_free(
 		dr = defrouter_lookup(&((struct sockaddr_in6 *)rt_key(rt))->
 		    sin6_addr, rt->rt_ifp);
 
-		if (ln->ln_router || dr) {
+		if ((ln && ln->ln_router) || dr) {
 			/*
 			 * rt6_flush must be called whether or not the neighbor
 			 * is in the Default Router List.
@@ -2906,6 +2906,7 @@ nd6_need_cache(
 #if IFT_IEEE80211
 	case IFT_IEEE80211:
 #endif
+	case IFT_BRIDGE:
 	case IFT_GIF:		/* XXX need more cases? */
 		return(1);
 	default:
@@ -2933,6 +2934,7 @@ nd6_storelladdr(
 #if IFT_IEEE80211
 		case IFT_IEEE80211:
 #endif
+		case IFT_BRIDGE:
 			ETHER_MAP_IPV6_MULTICAST(&SIN6(dst)->sin6_addr,
 						 desten);
 			return(1);

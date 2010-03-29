@@ -292,6 +292,9 @@ struct vfs_attr {
  * NFS export related mount flags.
  */
 #define	MNT_EXPORTED	0x00000100	/* file system is exported */
+#ifdef PRIVATE
+#define MNT_IMGSRC	0x00000200
+#endif /* CONFIG_IMGSRC_ACCESS */
 
 /*
  * MAC labeled / "quarantined" flag

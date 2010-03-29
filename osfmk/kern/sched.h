@@ -158,6 +158,7 @@
 #define BASEPRI_FOREGROUND	(BASEPRI_DEFAULT + 16)				/* 47 */
 #define BASEPRI_BACKGROUND	(BASEPRI_DEFAULT + 15)				/* 46 */
 #define BASEPRI_DEFAULT		(MAXPRI_USER - (NRQS / 4))			/* 31 */
+#define MAXPRI_THROTTLE		(MINPRI + 4)						/*  4 */
 #define MINPRI_USER			MINPRI								/*  0 */
 
 /*

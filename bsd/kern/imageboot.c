@@ -123,8 +123,8 @@ imageboot_setup()
 	error = vfs_mountroot();
 
 	if (error == 0 && rootvnode != NULL) {
-		struct vnode *tvp;
-		struct vnode *newdp;
+		vnode_t newdp, old_rootvnode;
+		mount_t new_rootfs, old_rootfs;
 
 		/*
 		 * Get the vnode for '/'.
@@ -133,17 +133,45 @@ imageboot_setup()
 		if (VFS_ROOT(TAILQ_LAST(&mountlist,mntlist), &newdp, vfs_context_kernel()))
 			panic("%s: cannot find root vnode", __FUNCTION__);
 
+		old_rootvnode = rootvnode;
+		old_rootfs = rootvnode->v_mount;
+
+		mount_list_remove(old_rootfs);
+
+		mount_lock(old_rootfs);
+#ifdef CONFIG_IMGSRC_ACCESS
+		old_rootfs->mnt_kern_flag |= MNTK_BACKS_ROOT;
+#endif /* CONFIG_IMGSRC_ACCESS */
+		old_rootfs->mnt_flag &= ~MNT_ROOTFS;
+		mount_unlock(old_rootfs);
+
+		rootvnode = newdp;
+
+		new_rootfs = rootvnode->v_mount;
+		mount_lock(new_rootfs);
+		new_rootfs->mnt_flag |= MNT_ROOTFS;
+		mount_unlock(new_rootfs);
+
 		vnode_ref(newdp);
 		vnode_put(newdp);
-		tvp = rootvnode;
-		vnode_rele(tvp);
 		filedesc0.fd_cdir = newdp;
-		rootvnode = newdp;
-		mount_list_lock();
-		TAILQ_REMOVE(&mountlist, TAILQ_FIRST(&mountlist), mnt_list);
-		mount_list_unlock();
-		mountlist.tqh_first->mnt_flag |= MNT_ROOTFS;
 		DBG_TRACE("%s: root switched\n", __FUNCTION__);
+
+#ifdef CONFIG_IMGSRC_ACCESS
+		if (PE_imgsrc_mount_supported()) {
+			imgsrc_rootvnode = old_rootvnode;
+		} else {
+			vnode_getalways(old_rootvnode);
+			vnode_rele(old_rootvnode);
+			vnode_put(old_rootvnode);
+		}
+#else 
+		vnode_getalways(old_rootvnode);
+		vnode_rele(old_rootvnode);
+		vnode_put(old_rootvnode);
+#endif /* CONFIG_IMGSRC_ACCESS */
+
+
 	}
 done:
 	FREE_ZONE(root_path, MAXPATHLEN, M_NAMEI);

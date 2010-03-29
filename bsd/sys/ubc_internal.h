@@ -58,8 +58,11 @@
 
 extern struct zone	*ubc_info_zone;
 
+/* 
+ * Maximum number of vfs clusters per vnode
+ */
+#define MAX_CLUSTERS	CONFIG_MAX_CLUSTERS
 
-#define MAX_CLUSTERS 8		/* maximum number of vfs clusters per vnode */
 #define SPARSE_PUSH_LIMIT 4	/* limit on number of concurrent sparse pushes outside of the cl_lockw */
                                 /* once we reach this limit, we'll hold the lock */
 

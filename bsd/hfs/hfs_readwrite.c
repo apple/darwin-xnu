@@ -3296,6 +3296,7 @@ hfs_vnop_pageout(struct vnop_pageout_args *ap)
 	vm_offset_t	a_pl_offset;
 	int		a_flags;
 	int is_pageoutv2 = 0;
+	kern_return_t kret;
 
 	cp = VTOC(vp);
 	fp = VTOF(vp);
@@ -3339,9 +3340,9 @@ hfs_vnop_pageout(struct vnop_pageout_args *ap)
 		else {
 			request_flags = UPL_UBC_PAGEOUT | UPL_RET_ONLY_DIRTY;
 		}
-		ubc_create_upl(vp, ap->a_f_offset, ap->a_size, &upl, &pl, request_flags); 
+		kret = ubc_create_upl(vp, ap->a_f_offset, ap->a_size, &upl, &pl, request_flags); 
 
-		if (upl == (upl_t) NULL) {
+		if ((kret != KERN_SUCCESS) || (upl == (upl_t) NULL)) {
 			retval = EINVAL;
 			goto pageout_done;
 		}

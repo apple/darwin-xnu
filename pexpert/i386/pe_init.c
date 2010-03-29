@@ -184,15 +184,15 @@ void PE_init_platform(boolean_t vm_initialized, void * _args)
 		/* Hack! FIXME.. */ 
         outb(0x21, 0xff);   /* Maskout all interrupts Pic1 */
         outb(0xa1, 0xff);   /* Maskout all interrupts Pic2 */
- 
         if (PE_state.deviceTreeHead) {
             DTInit(PE_state.deviceTreeHead);
-    }
+        }
 
         pe_identify_machine(args);
     } else {
         pe_init_debug();
     }
+
 }
 
 void PE_create_console( void )
@@ -274,5 +274,8 @@ PE_stub_poll_input(__unused unsigned int options, char * c)
 int (*PE_poll_input)(unsigned int options, char * c)
 	= PE_stub_poll_input;
 
-
-
+boolean_t
+PE_reboot_on_panic(void)
+{
+	return FALSE;
+}

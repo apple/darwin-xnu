@@ -637,7 +637,11 @@ ip6_input(m)
 		ifnet_lock_done(ifp);
 		if (in6m)
 			ours = 1;
+#if MROUTING
 		else if (!ip6_mrouter) {
+#else
+		else {
+#endif
 			ip6stat.ip6s_notmember++;
 			ip6stat.ip6s_cantforward++;
 			in6_ifstat_inc(ifp, ifs6_in_discard);
@@ -902,12 +906,14 @@ ip6_input(m)
 		 * ip6_mforward() returns a non-zero value, the packet
 		 * must be discarded, else it may be accepted below.
 		 */
+#if MROUTING
 		if (ip6_mrouter && ip6_mforward(ip6, m->m_pkthdr.rcvif, m)) {
 			ip6stat.ip6s_cantforward++;
 			m_freem(m);
 			lck_mtx_unlock(ip6_mutex);
 			return;
 		}
+#endif
 		if (!ours) {
 			m_freem(m);
 			lck_mtx_unlock(ip6_mutex);

@@ -300,8 +300,9 @@ extern int	ip6_neighborgcthresh;	/* Threshold # of NDP entries for GC */
 extern int	ip6_maxifprefixes;	/* Max acceptable prefixes via RA per IF */
 extern int	ip6_maxifdefrouters;	/* Max acceptable def routers via RA */
 extern int	ip6_maxdynroutes;	/* Max # of routes created via redirect */
-
+#ifdef MROUTING
 extern struct socket *ip6_mrouter; 	/* multicast routing daemon */
+#endif
 extern int	ip6_sendredirects;	/* send IP redirects when forwarding? */
 extern int	ip6_maxfragpackets; 	/* Maximum packets in reassembly queue */
 extern int      ip6_maxfrags;   	/* Maximum fragments in reassembly queue */

@@ -1329,7 +1329,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			error = ENOMEM;
 		} else {
 			pf_status.running = 1;
-			pf_status.since = pf_time_second();
+			pf_status.since = pf_calendar_time_second();
 			if (pf_status.stateid == 0) {
 				pf_status.stateid = pf_time_second();
 				pf_status.stateid = pf_status.stateid << 32;
@@ -1348,7 +1348,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			mbuf_growth_normal();
 			pf_detach_hooks();
 			pf_status.running = 0;
-			pf_status.since = pf_time_second();
+			pf_status.since = pf_calendar_time_second();
 			wakeup(pf_purge_thread_fn);
 			DPFPRINTF(PF_DEBUG_MISC, ("pf: stopped\n"));
 		}
@@ -1922,6 +1922,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			break;
 		}
 		pf_default_rule.states++;
+		VERIFY(pf_default_rule.states != 0);
 		break;
 	}
 
@@ -2007,7 +2008,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		bzero(pf_status.counters, sizeof (pf_status.counters));
 		bzero(pf_status.fcounters, sizeof (pf_status.fcounters));
 		bzero(pf_status.scounters, sizeof (pf_status.scounters));
-		pf_status.since = pf_time_second();
+		pf_status.since = pf_calendar_time_second();
 		if (*pf_status.ifname)
 			pfi_update_status(pf_status.ifname, NULL);
 		break;

@@ -431,16 +431,19 @@ extern const char version[];
 extern char osversion[];
 
 __private_extern__ void panic_display_system_configuration(void) {
-	static boolean_t config_displayed = FALSE;
+	static volatile boolean_t config_displayed = FALSE;
 
 	panic_display_process_name();
 	if (config_displayed == FALSE) {
+		config_displayed = TRUE;
 		kdb_printf("\nMac OS version:\n%s\n",
 		    (osversion[0] != 0) ? osversion : "Not yet set");
 		kdb_printf("\nKernel version:\n%s\n",version);
 		panic_display_model_name();
 		panic_display_uptime();
-		config_displayed = TRUE;
+#if	defined(__i386__) || defined(__x86_64__)
+		pmap_pagetable_corruption_msg_log(&kdb_printf);
+#endif /* i386 || x86_64 */
 		panic_display_zprint();
 		kext_dump_panic_lists(&kdb_log);
 	}

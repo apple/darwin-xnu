@@ -696,6 +696,18 @@ BTZeroUnusedNodes(FCB *filePtr)
 						goto ErrorExit;
 					}
 					
+					if (buf_flags(bp) & B_LOCKED) {
+						/* 
+						 * This node is already part of a transaction and will be
+						 * written when the transaction is committed so don't write it here.
+						 * If we did, then we'd hit a panic in hfs_vnop_bwrite since
+						 * B_LOCKED is still set
+						 */
+						buf_brelse(bp);
+						continue;
+					}
+
+					
 					buf_clear(bp);
 					buf_markaged(bp);
 					

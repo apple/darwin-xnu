@@ -6901,8 +6901,6 @@ errno_t rmdir_remove_orphaned_appleDouble(vnode_t vp , vfs_context_t ctx, int * 
 	} while (!eofflag);
 	/*
 	 * If we've made it here all the files in the dir are ._ files.
-	 * As we iterate through to delete them, we will verify that
-	 * they are true AppleDouble files.
 	 * We can delete the files even though the node is suspended
 	 * because we are the owner of the file.
 	 */
@@ -6943,61 +6941,12 @@ errno_t rmdir_remove_orphaned_appleDouble(vnode_t vp , vfs_context_t ctx, int * 
 					    (dp->d_namlen == 2 && dp->d_name[0] == '.' && dp->d_name[1] == '.'))
 					  ) {
 
-				/*
-				 * This is a ._ file, so verify it is actually an AppleDouble
-				 * file by checking the header before we remove it.
-				 */
-				vnode_t xvp = NULL;
-				int did_namei = 0;
-
-				NDINIT(&nd_temp, DELETE, USEDVP | LOCKPARENT,
-				       UIO_SYSSPACE, CAST_USER_ADDR_T(dp->d_name), ctx);
+				NDINIT(&nd_temp, DELETE, USEDVP, UIO_SYSSPACE, CAST_USER_ADDR_T(dp->d_name), ctx);
 				nd_temp.ni_dvp = vp;
-				error = namei(&nd_temp);
-
-				if (error) {
-					if (error == ENOENT) {
-						error = 0;
-					} else {
-						error = ENOTEMPTY;
-					}
-					goto out1;
-				}
-				did_namei = 1;
-
-				xvp = nd_temp.ni_vp;
-
-				error = check_appledouble_header(xvp, ctx);
-				if (error) {
-					error = ENOTEMPTY;
-					goto out1;
-				}
-				
-				/* Remove the file. */
-				error = VNOP_REMOVE(vp, xvp, &nd_temp.ni_cnd, 0, ctx);
-				if (error) {
-					if (error == ENOENT) {
-						error = 0;
-					}
-					goto out1;
-				}
-
-out1:
-				/* drop extra reference on vp from LOCKPARENT namei */
-				vnode_put (vp);
-
-				if (did_namei) {
-					nameidone(&nd_temp);
-					did_namei = 0;
-				}
-				if (xvp) {
-					vnode_put(xvp);
-					xvp = NULL;
-				}
-				if (error) {
+				error = unlink1(ctx, &nd_temp, 0);
+				if (error && error != ENOENT) {
 					goto outsc;
 				}
-
 			}
 			cpos += dp->d_reclen;
 			dp = (struct dirent*)cpos;

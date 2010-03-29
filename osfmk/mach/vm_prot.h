@@ -130,4 +130,12 @@ typedef int		vm_prot_t;
 #define VM_PROT_WANTS_COPY	((vm_prot_t) 0x10)
 
 
+/*
+ *	The caller wants this memory region treated as if it had a valid
+ *	code signature.
+ */
+
+#define VM_PROT_TRUSTED		((vm_prot_t) 0x20)
+
+
 #endif	/* _MACH_VM_PROT_H_ */

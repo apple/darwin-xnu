@@ -178,6 +178,7 @@ struct thread {
 #define TH_RUN			0x04			/* running or on runq */
 #define TH_UNINT		0x08			/* waiting uninteruptibly */
 #define	TH_TERMINATE	0x10			/* halted at termination */
+#define	TH_TERMINATE2	0x20			/* added to termination queue */
 
 #define TH_IDLE			0x80			/* idling processor */
 
@@ -640,6 +641,7 @@ __BEGIN_DECLS
 
 extern kern_return_t	thread_create_workq(
 							task_t			task,
+							thread_continue_t	thread_return,
 							thread_t		*new_thread);
 
 extern	void	thread_yield_internal(

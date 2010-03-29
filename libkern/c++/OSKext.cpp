@@ -3949,21 +3949,6 @@ OSKext::load(
     Boolean              alreadyLoaded                = false;
     OSKext             * lastLoadedKext               = NULL;
 
-    if (!sLoadEnabled) {
-        if (!isLoaded() || (!isStarted() && startOpt != kOSKextExcludeNone) ||
-            (startMatchingOpt != kOSKextExcludeNone)) {
-
-            OSKextLog(this,
-                kOSKextLogErrorLevel |
-                kOSKextLogLoadFlag,
-                "Kext loading is disabled "
-                "(attempt to load/start/start matching for kext %s).",
-                getIdentifierCString());
-        }
-        result = kOSKextReturnDisabled;
-        goto finish;
-    }
-
     if (isLoaded()) {
         alreadyLoaded = true;
         result = kOSReturnSuccess;
@@ -3974,6 +3959,16 @@ OSKext::load(
             "Kext %s is already loaded.",
             getIdentifierCString());
         goto loaded;
+    }
+
+    if (!sLoadEnabled) {
+        OSKextLog(this,
+            kOSKextLogErrorLevel |
+            kOSKextLogLoadFlag,
+            "Kext loading is disabled (attempt to load kext %s).",
+            getIdentifierCString());
+        result = kOSKextReturnDisabled;
+        goto finish;
     }
 
    /* If we've pushed the next available load tag to the invalid value,
@@ -4136,9 +4131,7 @@ OSKext::load(
     OSKext::saveLoadedKextPanicList();
 
 loaded:
-   /* This is a bit of a hack, because we shouldn't be handling 
-    * personalities within the load function.
-    */
+
     if (declaresExecutable() && (startOpt == kOSKextExcludeNone)) {
         result = start();
         if (result != kOSReturnSuccess) {
@@ -4152,12 +4145,32 @@ loaded:
     
    /* If not excluding matching, send the personalities to the kernel.
     * This never affects the result of the load operation.
+    * This is a bit of a hack, because we shouldn't be handling 
+    * personalities within the load function.
     */
     if (result == kOSReturnSuccess && startMatchingOpt == kOSKextExcludeNone) {
-        sendPersonalitiesToCatalog(true, personalityNames);
+        result = sendPersonalitiesToCatalog(true, personalityNames);
     }
-    
 finish:
+
+   /* More hack! If the kext doesn't declare an executable, even if we
+    * "loaded" it, we have to remove any personalities naming it, or we'll
+    * never see the registry go quiet. Errors here do not count for the
+    * load operation itself.
+    *
+    * Note that in every other regard it's perfectly ok for a kext to
+    * not declare an executable and serve only as a package for personalities
+    * naming another kext, so we do have to allow such kexts to be "loaded"
+    * so that those other personalities get added & matched.
+    */
+    if (!declaresExecutable()) {
+        OSKextLog(this,
+            kOSKextLogStepLevel | kOSKextLogLoadFlag,
+            "Kext %s has no executable; removing any personalities naming it.",
+            getIdentifierCString());
+        removePersonalitiesFromCatalog();
+    }
+
     if (result != kOSReturnSuccess) {
         OSKextLog(this,
             kOSKextLogErrorLevel |
@@ -4718,6 +4731,16 @@ OSKext::start(bool startDependenciesFlag)
             "Attempt to start nonloaded kext %s.",
             getIdentifierCString()); 
         result = kOSKextReturnInvalidArgument;
+        goto finish;
+    }
+
+    if (!sLoadEnabled) {
+        OSKextLog(this,
+            kOSKextLogErrorLevel |
+            kOSKextLogLoadFlag,
+            "Kext loading is disabled (attempt to start kext %s).",
+            getIdentifierCString());
+        result = kOSKextReturnDisabled;
         goto finish;
     }
 
@@ -7763,14 +7786,25 @@ finish:
 /*********************************************************************
 Might want to change this to a bool return?
 *********************************************************************/
-void
+OSReturn
 OSKext::sendPersonalitiesToCatalog(
     bool      startMatching,
     OSArray * personalityNames)
 {
-    OSArray      * personalitiesToSend     = NULL;  // must release
-    OSDictionary * kextPersonalities = NULL;  // do not release
+    OSReturn       result              = kOSReturnSuccess;
+    OSArray      * personalitiesToSend = NULL;  // must release
+    OSDictionary * kextPersonalities   = NULL;  // do not release
     int            count, i;
+
+    if (!sLoadEnabled) {
+        OSKextLog(this,
+            kOSKextLogErrorLevel |
+            kOSKextLogLoadFlag,
+            "Kext loading is disabled (attempt to start matching for kext %s).",
+            getIdentifierCString());
+        result = kOSKextReturnDisabled;
+        goto finish;
+    }
 
     if (sSafeBoot && !isLoadableInSafeBoot()) {
         OSKextLog(this,
@@ -7779,7 +7813,8 @@ OSKext::sendPersonalitiesToCatalog(
             "Kext %s is not loadable during safe boot; "
             "not sending personalities to the IOCatalogue.",
             getIdentifierCString());
-        return;
+        result = kOSKextReturnNotLoadable;
+        goto finish;
     }
 
     if (!personalityNames || !personalityNames->getCount()) {
@@ -7788,10 +7823,12 @@ OSKext::sendPersonalitiesToCatalog(
         kextPersonalities = OSDynamicCast(OSDictionary,
             getPropertyForHostArch(kIOKitPersonalitiesKey));
         if (!kextPersonalities || !kextPersonalities->getCount()) {
+            // not an error
             goto finish;
         }
         personalitiesToSend = OSArray::withCapacity(0);
         if (!personalitiesToSend) {
+            result = kOSKextReturnNoMemory;
             goto finish;
         }
         count = personalityNames->getCount();
@@ -7824,10 +7861,12 @@ finish:
     if (personalitiesToSend) {
         personalitiesToSend->release();
     }
-    return;
+    return result;
 }
 
 /*********************************************************************
+* xxx - We should allow removing the kext's declared personalities,
+* xxx - even with other bundle identifiers.
 *********************************************************************/
 void
 OSKext::removePersonalitiesFromCatalog(void)

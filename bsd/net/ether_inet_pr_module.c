@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -93,10 +93,6 @@
 #include <sys/socketvar.h>
 
 #include <net/dlil.h>
-
-#if BRIDGE
-#include <net/bridge.h>
-#endif
 
 /* #include "vlan.h" */
 #if NVLAN > 0

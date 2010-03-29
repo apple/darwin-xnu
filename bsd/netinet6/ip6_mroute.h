@@ -313,6 +313,7 @@ struct rtdetq {		/* XXX: rtdetq is also defined in ip_mroute.h */
 };
 #endif /* _NETINET_IP_MROUTE_H_ */
 
+#if MROUTING
 #ifdef KERNEL_PRIVATE
 extern struct mrt6stat mrt6stat;
 
@@ -322,5 +323,6 @@ extern int ip6_mrouter_done(void);
 extern int mrt6_ioctl(u_long, caddr_t);
 #endif /* KERNEL_PRIVATE */
 #endif /* PRIVATE */
+#endif
 
 #endif /* !_NETINET6_IP6_MROUTE_H_ */

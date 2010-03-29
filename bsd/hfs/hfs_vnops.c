@@ -812,8 +812,14 @@ hfs_vnop_getattr(struct vnop_getattr_args *ap)
 				
 				if (cp->c_blocks - VTOF(vp)->ff_blocks) {
 					/* We deal with rsrc fork vnode iocount at the end of the function */
-					error = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE);
+					error = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE, TRUE);
 					if (error) {
+						/* 
+						 * hfs_vgetrsrc may have returned a vnode in rvp even though
+						 * we got an error, because we specified error_on_unlinked.
+						 * We need to drop the iocount after we release the cnode lock, so
+						 * it will be taken care of at the end of the function if it's needed.
+						 */
 						goto out;
 					}
 					
@@ -2263,11 +2269,15 @@ hfs_vnop_remove(ap)
 		if ((error = hfs_lock (cp, HFS_EXCLUSIVE_LOCK))) {
 			return (error);
 		}
-
-		error = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE);
+		error = hfs_vgetrsrc(hfsmp, vp, &rvp, TRUE, TRUE);
 		hfs_unlock(cp);
 		if (error) {
-			return (error);	
+			/* We may have gotten a rsrc vp out even though we got an error back. */
+			if (rvp) {
+				vnode_put(rvp);
+				rvp = NULL;
+			}
+			return error;
 		}
 		drop_rsrc_vnode = 1;
 	}
@@ -2670,10 +2680,17 @@ hfs_removefile(struct vnode *dvp, struct vnode *vp, struct componentname *cnp,
 		if (error && error != ENXIO && error != ENOENT && truncated) {
 			if ((cp->c_datafork && cp->c_datafork->ff_size != 0) ||
 					(cp->c_rsrcfork && cp->c_rsrcfork->ff_size != 0)) {
+				off_t data_size = 0;
+				off_t rsrc_size = 0;
+				if (cp->c_datafork) {
+					data_size = cp->c_datafork->ff_size;
+				}
+				if (cp->c_rsrcfork) {
+					rsrc_size = cp->c_rsrcfork->ff_size;
+				}
 				printf("hfs: remove: couldn't delete a truncated file (%s)" 
 						"(error %d, data sz %lld; rsrc sz %lld)",
-					cp->c_desc.cd_nameptr, error, cp->c_datafork->ff_size, 
-					cp->c_rsrcfork->ff_size);
+					cp->c_desc.cd_nameptr, error, data_size, rsrc_size);
 				hfs_mark_volume_inconsistent(hfsmp);
 			} else {
 				printf("hfs: remove: strangely enough, deleting truncated file %s (%d) got err %d\n",
@@ -2850,10 +2867,17 @@ hfs_vnop_rename(ap)
 		if ((error = hfs_lock (VTOC(fvp), HFS_EXCLUSIVE_LOCK))) {
 			return (error);
 		}
-
-		error = hfs_vgetrsrc(VTOHFS(fvp), fvp, &fvp_rsrc, TRUE);
+		
+		/*
+		 * We care if we race against rename/delete with this cnode, so we'll
+		 * error out if this file becomes open-unlinked during this call.
+		 */
+		error = hfs_vgetrsrc(VTOHFS(fvp), fvp, &fvp_rsrc, TRUE, TRUE);
 		hfs_unlock (VTOC(fvp));
 		if (error) {
+			if (fvp_rsrc) {
+				vnode_put (fvp_rsrc);
+			}
 			return error;
 		}
 	}
@@ -2865,13 +2889,30 @@ hfs_vnop_rename(ap)
 		 * grab the resource fork if the lock succeeded.
 		 */
 		if (hfs_lock (VTOC(tvp), HFS_EXCLUSIVE_LOCK) == 0) {
-			error = hfs_vgetrsrc(VTOHFS(tvp), tvp, &tvp_rsrc, TRUE);
-			hfs_unlock (VTOC(tvp));
+			tcp = VTOC(tvp);
+			
+			/* 
+			 * We only care if we get an open-unlinked file on the dst so we 
+			 * know to null out tvp/tcp to make the rename operation act 
+			 * as if they never existed.  Because they're effectively out of the
+			 * namespace already it's fine to do this.  If this is true, then
+			 * make sure to unlock the cnode and drop the iocount only after the unlock.
+			 */
+			error = hfs_vgetrsrc(VTOHFS(tvp), tvp, &tvp_rsrc, TRUE, TRUE);
+			hfs_unlock (tcp);
 			if (error) {
-				if (fvp_rsrc) {
-					vnode_put (fvp_rsrc);
+				/*
+				 * Since we specify TRUE for error-on-unlinked in hfs_vgetrsrc,
+				 * we can get a rsrc fork vp even if it returns an error.
+				 */
+				tcp = NULL;
+				tvp = NULL;
+				if (tvp_rsrc) {
+					vnode_put (tvp_rsrc);
+					tvp_rsrc = NULLVP;
 				}
-				return error;
+				/* just bypass truncate lock and act as if we never got tcp/tvp */
+				goto retry;
 			}
 		}
 	}
@@ -4282,22 +4323,48 @@ exit:
 }
 
 
-/*
- * Return a referenced vnode for the resource fork
- *
- * cnode for vnode vp must already be locked.
- *
- * can_drop_lock is true if its safe to temporarily drop/re-acquire the cnode lock
+
+/* hfs_vgetrsrc acquires a resource fork vnode corresponding to the cnode that is
+ * found in 'vp'.  The rsrc fork vnode is returned with the cnode locked and iocount
+ * on the rsrc vnode.
+ * 
+ * *rvpp is an output argument for returning the pointer to the resource fork vnode.
+ * In most cases, the resource fork vnode will not be set if we return an error. 
+ * However, if error_on_unlinked is set, we may have already acquired the resource fork vnode
+ * before we discover the error (the file has gone open-unlinked).  In this case only,
+ * we may return a vnode in the output argument despite an error.
+ * 
+ * If can_drop_lock is set, then it is safe for this function to temporarily drop
+ * and then re-acquire the cnode lock.  We may need to do this, for example, in order to 
+ * acquire an iocount or promote our lock.  
+ * 
+ * error_on_unlinked is an argument which indicates that we are to return an error if we 
+ * discover that the cnode has gone into an open-unlinked state ( C_DELETED or C_NOEXISTS)
+ * is set in the cnode flags.  This is only necessary if can_drop_lock is true, otherwise 
+ * there's really no reason to double-check for errors on the cnode.
  */
+
 __private_extern__
 int
-hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp, struct vnode **rvpp, int can_drop_lock)
+hfs_vgetrsrc(struct hfsmount *hfsmp, struct vnode *vp, 
+		struct vnode **rvpp, int can_drop_lock, int error_on_unlinked)
 {
 	struct vnode *rvp;
 	struct vnode *dvp = NULLVP;
 	struct cnode *cp = VTOC(vp);
 	int error;
 	int vid;
+	int delete_status = 0;
+
+
+	/*
+	 * Need to check the status of the cnode to validate it hasn't
+	 * gone open-unlinked on us before we can actually do work with it.
+	 */
+	delete_status = hfs_checkdeleted (cp);
+	if ((delete_status) && (error_on_unlinked)) {
+		return delete_status;
+	}
 
 restart:
 	/* Attempt to use exising vnode */
@@ -4324,6 +4391,32 @@ restart:
 
 		if (can_drop_lock) {
 			(void) hfs_lock(cp, HFS_FORCE_LOCK);
+
+			/*
+			 * When we relinquished our cnode lock, the cnode could have raced
+			 * with a delete and gotten deleted.  If the caller did not want
+			 * us to ignore open-unlinked files, then re-check the C_DELETED
+			 * state and see if we need to return an ENOENT here because the item
+			 * got deleted in the intervening time.
+			 */
+			if (error_on_unlinked) {
+				if ((delete_status = hfs_checkdeleted(cp))) {
+					/* 
+					 * If error == 0, this means that we succeeded in acquiring an iocount on the 
+					 * rsrc fork vnode.  However, if we're in this block of code, that 
+					 * means that we noticed that the cnode has gone open-unlinked.  In 
+					 * this case, the caller requested that we not do any other work and 
+					 * return an errno.  The caller will be responsible for dropping the 
+					 * iocount we just acquired because we can't do it until we've released 
+					 * the cnode lock.  
+					 */
+					if (error == 0) {
+						*rvpp = rvp;
+					}
+					return delete_status;
+				}
+			}
+
 			/*
 			 * When our lock was relinquished, the resource fork
 			 * could have been recycled.  Check for this and try
@@ -4359,7 +4452,7 @@ restart:
 				return (EINVAL);
 			}
 			/*
-			 * If the upgrade fails we loose the lock and
+			 * If the upgrade fails we lose the lock and
 			 * have to take the exclusive lock on our own.
 			 */
 			if (lck_rw_lock_shared_to_exclusive(&cp->c_rwlock) == FALSE)
@@ -4372,8 +4465,16 @@ restart:
 		 * C_DELETED.  This is because we need to continue to provide rsrc
 		 * fork access to open-unlinked files.  In this case, build a fake descriptor
 		 * like in hfs_removefile.  If we don't do this, buildkey will fail in
-		 * cat_lookup because this cnode has no name in its descriptor.
+		 * cat_lookup because this cnode has no name in its descriptor. However,
+		 * only do this if the caller did not specify that they wanted us to
+		 * error out upon encountering open-unlinked files.
 		 */
+
+		if ((error_on_unlinked) && (can_drop_lock)) {
+			if ((error = hfs_checkdeleted (cp))) {
+				return error;
+			}
+		}
 
 		if ((cp->c_flag & C_DELETED ) && (cp->c_desc.cd_namelen == 0)) {
 			bzero (&to_desc, sizeof(to_desc));

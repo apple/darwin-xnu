@@ -482,7 +482,8 @@ IODMACommand::walkAll(UInt8 op)
 
 	if (state->fLocalMapper)
 	{
-	    state->fLocalMapperPageCount = atop_64(round_page(state->fPreparedLength));
+	    state->fLocalMapperPageCount = atop_64(round_page(
+	    	    state->fPreparedLength + ((state->fPreparedOffset + fMDSummary.fPageAlign) & page_mask)));
 	    state->fLocalMapperPageAlloc = fMapper->iovmAllocDMACommand(this, state->fLocalMapperPageCount);
 	    state->fMapContig = true;
 	}

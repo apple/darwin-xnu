@@ -221,5 +221,18 @@ do_build_all:	build_symbol_sets
 
 do_build_install:	install_symbol_sets 
 
+EXPORTS_FILE_LIST = $(addprefix $(SOURCE)/,$(foreach set,$(SYMBOL_COMPONENT_LIST), $(set).exports $(set).$(ARCH_CONFIG_LC).exports))
+EXPORTS_FILE_LIST_NOSYSTEM60 = $(addprefix $(SOURCE)/,$(foreach set, $(filter-out System6.0,$(SYMBOL_COMPONENT_LIST)), $(set).exports $(set).$(ARCH_CONFIG_LC).exports))
+
+# Does not include "whole-kernel" clients
+build_mach_kernel_exports:
+	$(_v)if [ $(SUPPORT_SYSTEM60_KEXT) -eq 1 ]; then \
+		$(SOURCE)/generate_linker_exports.sh $(OBJPATH)/kernel-kpi.exp \
+		 	 $(EXPORTS_FILE_LIST) || exit 1; \
+	else \
+		$(SOURCE)/generate_linker_exports.sh $(OBJPATH)/kernel-kpi.exp \
+		 	 $(EXPORTS_FILE_LIST_NOSYSTEM60) || exit 1; \
+	fi;
+
 include $(MakeInc_rule)
 include $(MakeInc_dir)

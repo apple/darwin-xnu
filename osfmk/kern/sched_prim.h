@@ -159,9 +159,6 @@ extern void		idle_thread(void);
 extern kern_return_t	idle_thread_create(
 							processor_t		processor);
 
-/* Start thread running */
-extern void		thread_bootstrap_return(void);
-
 /* Continuation return from syscall */
 extern void     thread_syscall_return(
                         kern_return_t   ret);
@@ -224,6 +221,9 @@ extern boolean_t		assert_wait_possible(void);
 extern kern_return_t clear_wait(
 						thread_t		thread,
 						wait_result_t	result);
+
+/* Start thread running */
+extern void		thread_bootstrap_return(void);
 
 /* Return from exception (BSD-visible interface) */
 extern void		thread_exception_return(void) __dead2;

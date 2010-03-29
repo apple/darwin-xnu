@@ -135,6 +135,9 @@ extern lck_mtx_t *ip6_mutex;
 struct socket  *ip6_mrouter  = NULL;
 int		ip6_mrouter_ver = 0;
 int		ip6_mrtproto = IPPROTO_PIM;    /* for netstat only */
+
+#if MROUTING
+
 struct mrt6stat	mrt6stat;
 
 #define NO_RTE_FOUND 	0x1
@@ -1905,3 +1908,4 @@ pim6_input(mp, offp)
 	rip6_input(&m, offp);
 	return(IPPROTO_DONE);
 }
+#endif
