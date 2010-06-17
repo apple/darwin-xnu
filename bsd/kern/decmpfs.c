@@ -178,6 +178,10 @@ _func_from_offset(uint32_t type, int offset)
     return funcPtr[0];
 }
 
+extern void IOServicePublishResource( const char * property, boolean_t value );
+extern boolean_t IOServiceWaitForMatchingResource( const char * property, uint64_t timeout );
+extern boolean_t IOCatalogueMatchingDriversPresent( const char * property );
+
 static void *
 _decmp_get_func(uint32_t type, int offset)
 {
@@ -194,12 +198,42 @@ _decmp_get_func(uint32_t type, int offset)
 		return _func_from_offset(type, offset);
 	}
 	
+    // does IOKit know about a kext that is supposed to provide this type?
+    char providesName[80];
+    snprintf(providesName, sizeof(providesName), "com.apple.AppleFSCompression.providesType%u", type);
+    if (IOCatalogueMatchingDriversPresent(providesName)) {
+        // there is a kext that says it will register for this type, so let's wait for it
+        char resourceName[80];
+        snprintf(resourceName, sizeof(resourceName), "com.apple.AppleFSCompression.Type%u", type);
+        printf("waiting for %s\n", resourceName);
+        while(decompressors[type] == NULL) {
+            lck_rw_done(decompressorsLock); // we have to unlock to allow the kext to register
+            if (IOServiceWaitForMatchingResource(resourceName, 60)) {
+                break;
+            }
+            if (!IOCatalogueMatchingDriversPresent(providesName)) {
+                // 
+                printf("the kext with %s is no longer present\n", providesName);
+                break;
+            }
+            printf("still waiting for %s\n", resourceName);
+            lck_rw_lock_shared(decompressorsLock);
+        }
+        // IOKit says the kext is loaded, so it should be registered too!
+        if (decompressors[type] == NULL) {
+            ErrorLog("we found %s, but the type still isn't registered\n", providesName);
+            return NULL;
+        }
+        // it's now registered, so let's return the function
+        return _func_from_offset(type, offset);
+    }
+    
 	// the compressor hasn't registered, so it never will unless someone manually kextloads it
 	ErrorLog("tried to access a compressed file of unregistered type %d\n", type);
 	return NULL;
 }
 
-#define decmp_get_func(type, func) _decmp_get_func(type, offsetof_func(func))
+#define decmp_get_func(type, func) ((typeof(((decmpfs_registration*)NULL)->func))_decmp_get_func(type, offsetof_func(func)))
 
 #pragma mark --- utilities ---
 
@@ -856,6 +890,7 @@ register_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration *r
     
     errno_t ret = 0;
     int locked = 0;
+    char resourceName[80];
     
     if ((compression_type >= CMP_MAX) ||
         (!registration) ||
@@ -872,6 +907,8 @@ register_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration *r
 		goto out;
 	}
     decompressors[compression_type] = registration;
+    snprintf(resourceName, sizeof(resourceName), "com.apple.AppleFSCompression.Type%u", compression_type);
+    IOServicePublishResource(resourceName, TRUE);
     wakeup((caddr_t)&decompressors);
     
 out:
@@ -886,7 +923,8 @@ unregister_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration 
     
     errno_t ret = 0;
     int locked = 0;
-	
+    char resourceName[80];
+
     if ((compression_type >= CMP_MAX) ||
         (!registration) ||
         (registration->decmpfs_registration != DECMPFS_REGISTRATION_VERSION)) {
@@ -900,6 +938,8 @@ unregister_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration 
         goto out;
     }
     decompressors[compression_type] = NULL;
+    snprintf(resourceName, sizeof(resourceName), "com.apple.AppleFSCompression.Type%u", compression_type);
+    IOServicePublishResource(resourceName, FALSE);
     wakeup((caddr_t)&decompressors);
     
 out:

@@ -1094,6 +1094,7 @@ const char *ikot_print_array[IKOT_MAX_TYPE] = {
 	"(UPL)              ",
 	"(MEM_OBJ_CONTROL)  ",
 	"(AU_SESSIONPORT)   ",	/* 33 */
+	"(FILEPORT)", /* 34 */
 #if CONFIG_MACF_MACH
 	"(LABELH)           ",
 #endif

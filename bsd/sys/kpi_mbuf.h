@@ -1330,6 +1330,31 @@ extern void mbuf_tag_free(mbuf_t mbuf, mbuf_tag_id_t module_id,
  */
 extern void mbuf_stats(struct mbuf_stat *stats);
 
+#ifdef KERNEL_PRIVATE
+/*
+	@enum mbuf_priority_t
+	@abstract Priority of a packet.
+	@discussion Some mbufs represent packets containing application data.
+		The priority of the application data is represented by the
+		mbuf priority, as determined by the system.
+	@constant MBUF_PRIORITY_NORMAL Indicates the packet contains
+		normal priority data.
+	@constant MBUF_PRIORITY_BACKGROUND Indicates the packet contains
+		background priority data.
+ */
+typedef enum {
+	MBUF_PRIORITY_NORMAL		= 0,
+	MBUF_PRIORITY_BACKGROUND	= 1
+} mbuf_priority_t;
+
+/*
+	@function mbuf_get_priority
+	@discussion Get the priority value of the packet.
+	@param mbuf The mbuf to obtain the priority value from.
+	@result The priority value of the packet.
+ */
+extern mbuf_priority_t mbuf_get_priority(mbuf_t mbuf);
+#endif /* KERNEL_PRIVATE */
 
 /* IF_QUEUE interaction */
 

@@ -52,6 +52,7 @@
 #define	k64Bit				0x00000200	/* processor supports EM64T (not what mode you're running in) */
 #define	kHasSSE4_1			0x00000400
 #define	kHasSSE4_2			0x00000800
+#define	kHasAES				0x00001000
 #define	kInOrderPipeline		0x00002000	/* in-order execution */
 #define	kSlow				0x00004000	/* tsc < nanosecond */
 #define	kUP				0x00008000	/* set if (kNumCPUs == 1) */

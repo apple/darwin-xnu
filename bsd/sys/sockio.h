@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -160,6 +160,7 @@
 #define SIOCGIFBOND	_IOWR('i', 71, struct ifreq)	/* get bond if config */
 #define	SIOCIFCREATE	_IOWR('i', 120, struct ifreq)	/* create clone if */
 #define	SIOCIFDESTROY	 _IOW('i', 121, struct ifreq)	/* destroy clone if */
+#define SIOCIFCREATE2   _IOWR('i', 122, struct ifreq)   /* create clone if with data */
 
 #define SIOCSDRVSPEC    _IOW('i', 123, struct ifdrv)    /* set driver-specific
                                                                   parameters */
@@ -212,5 +213,10 @@
 #define	SIOCGIFKPI	_IOWR('i', 135, struct ifreq) /* get interface kext param */
 
 #define	SIOCGIFWAKEFLAGS _IOWR('i', 136, struct ifreq) /* get interface wake property flags */
+
+#ifdef PRIVATE
+#define	SIOCGIFGETRTREFCNT _IOWR('i', 137, struct ifreq) /* get interface route refcnt */
+#endif /* PRIVATE */
+
 
 #endif /* !_SYS_SOCKIO_H_ */

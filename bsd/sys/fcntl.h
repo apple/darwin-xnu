@@ -248,6 +248,9 @@ typedef __darwin_pid_t	pid_t;
 
 #define F_ADDFILESIGS	61		/* add signature from same file (used by dyld for shared libs) */
 
+#define F_GETPROTECTIONCLASS	62		/* Get the protection class of a file from the EA, returns int */
+#define F_SETPROTECTIONCLASS	63		/* Set the protection class of a file for the EA, requires int */
+
 // FS-specific fcntl()'s numbers begin at 0x00010000 and go up
 #define FCNTL_FS_SPECIFIC_BASE  0x00010000
 
@@ -539,6 +542,17 @@ int	open(const char *, int, ...) __DARWIN_ALIAS_C(open);
 int	creat(const char *, mode_t) __DARWIN_ALIAS_C(creat);
 int	fcntl(int, int, ...) __DARWIN_ALIAS_C(fcntl);
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+
+#ifdef PRIVATE
+#ifndef _FILEPORT_T
+#define _FILEPORT_T
+typedef __darwin_mach_port_t fileport_t;
+#define FILEPORT_NULL ((fileport_t)0)
+#endif /* _FILEPORT_T */
+
+int     fileport_makeport(int, fileport_t*);
+int     fileport_makefd(fileport_t);
+#endif /* PRIVATE */
 int	openx_np(const char *, int, filesec_t);
 int	flock(int, int);
 filesec_t filesec_init(void);

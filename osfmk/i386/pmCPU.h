@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -38,7 +38,7 @@
  * This value should be changed each time that pmDsipatch_t or pmCallBacks_t
  * changes.
  */
-#define PM_DISPATCH_VERSION	19
+#define PM_DISPATCH_VERSION	20
 
 /*
  * Dispatch table for functions that get installed when the power
@@ -52,7 +52,7 @@
  */
 typedef struct
 {
-    int			(*pmCPUStateInit)(void);
+    kern_return_t	(*pmCPUStateInit)(void);
     void		(*cstateInit)(void);
     uint64_t		(*MachineIdle)(uint64_t maxIdleDuration);
     uint64_t		(*GetDeadline)(x86_lcpu_t *lcpu);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1254,6 +1254,11 @@ udp_output(inp, m, addr, control, p)
 	/* Copy the cached route and take an extra reference */
 	inp_route_copyout(inp, &ro);
 
+#if PKT_PRIORITY
+	if (soisbackground(so))
+		m_prio_background(m);
+#endif /* PKT_PRIORITY */
+
 	socket_unlock(so, 0);
 	/* XXX jgraessley please look at XXX */
 	error = ip_output_list(m, 0, inpopts, &ro, soopts, mopts, &ipoa);
@@ -1263,17 +1268,48 @@ udp_output(inp, m, addr, control, p)
 	inp_route_copyin(inp, &ro);
 
 	if (udp_dodisconnect) {
+#if IFNET_ROUTE_REFCNT
+		/* Always discard the cached route for unconnected socket */
+		if (inp->inp_route.ro_rt != NULL) {
+			rtfree(inp->inp_route.ro_rt);
+			inp->inp_route.ro_rt = NULL;
+		}
+#endif /* IFNET_ROUTE_REFCNT */
 		in_pcbdisconnect(inp);
 		inp->inp_laddr = origladdr;	/* XXX rehash? */
 	}
+#if IFNET_ROUTE_REFCNT
+	else if (inp->inp_route.ro_rt != NULL &&
+	    (inp->inp_route.ro_rt->rt_flags & (RTF_MULTICAST|RTF_BROADCAST))) {
+		/* Always discard non-unicast cached route */
+		rtfree(inp->inp_route.ro_rt);
+		inp->inp_route.ro_rt = NULL;
+	}
+#endif /* IFNET_ROUTE_REFCNT */
+
 	KERNEL_DEBUG(DBG_FNC_UDP_OUTPUT | DBG_FUNC_END, error, 0,0,0,0);
 	return (error);
 
 abort:
         if (udp_dodisconnect) {
-                in_pcbdisconnect(inp);
-                inp->inp_laddr = origladdr; /* XXX rehash? */
+#if IFNET_ROUTE_REFCNT
+		/* Always discard the cached route for unconnected socket */
+		if (inp->inp_route.ro_rt != NULL) {
+			rtfree(inp->inp_route.ro_rt);
+			inp->inp_route.ro_rt = NULL;
+		}
+#endif /* IFNET_ROUTE_REFCNT */
+		in_pcbdisconnect(inp);
+		inp->inp_laddr = origladdr; /* XXX rehash? */
         }
+#if IFNET_ROUTE_REFCNT
+	else if (inp->inp_route.ro_rt != NULL &&
+	    (inp->inp_route.ro_rt->rt_flags & (RTF_MULTICAST|RTF_BROADCAST))) {
+		/* Always discard non-unicast cached route */
+		rtfree(inp->inp_route.ro_rt);
+		inp->inp_route.ro_rt = NULL;
+	}
+#endif /* IFNET_ROUTE_REFCNT */
 
 release:
 	m_freem(m);

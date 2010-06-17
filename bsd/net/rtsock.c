@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -77,13 +77,18 @@
 
 #include <net/if.h>
 #include <net/route.h>
+#include <net/dlil.h>
 #include <net/raw_cb.h>
 #include <netinet/in.h>
+#include <netinet/in_var.h>
+#include <netinet/in_arp.h>
+#include <netinet6/nd6.h>
 
 #include <machine/spl.h>
 
 extern struct rtstat rtstat;
 extern int check_routeselfref;
+extern struct domain routedomain;
 
 MALLOC_DEFINE(M_RTABLE, "routetbl", "routing tables");
 
@@ -109,6 +114,9 @@ static int	 route_output(struct mbuf *, struct socket *);
 static void	 rt_setmetrics(u_int32_t, struct rt_metrics *, struct rt_metrics *);
 static void	rt_setif(struct rtentry *, struct sockaddr *, struct sockaddr *,
 		    struct sockaddr *, unsigned int);
+#if IFNET_ROUTE_REFCNT
+static void rt_drainall(void);
+#endif /* IFNET_ROUTE_REFCNT */
 
 #define	SIN(sa)		((struct sockaddr_in *)(size_t)(sa))
 
@@ -120,6 +128,19 @@ static void	rt_setif(struct rtentry *, struct sockaddr *, struct sockaddr *,
 #define ifpaddr	info.rti_info[RTAX_IFP]
 #define ifaaddr	info.rti_info[RTAX_IFA]
 #define brdaddr	info.rti_info[RTAX_BRD]
+
+SYSCTL_NODE(_net, OID_AUTO, idle, CTLFLAG_RW, 0, "idle network monitoring");
+
+#if IFNET_ROUTE_REFCNT
+static struct timeval last_ts;
+
+SYSCTL_NODE(_net_idle, OID_AUTO, route, CTLFLAG_RW, 0, "idle route monitoring");
+
+static int rt_if_idle_drain_interval = RT_IF_IDLE_DRAIN_INTERVAL;
+SYSCTL_INT(_net_idle_route, OID_AUTO, drain_interval, CTLFLAG_RW,
+    &rt_if_idle_drain_interval, 0, "Default interval for draining "
+    "routes when doing interface idle reference counting.");
+#endif /* IFNET_ROUTE_REFCNT */
 
 /*
  * It really doesn't make any sense at all for this code to share much
@@ -775,6 +796,15 @@ rt_setif(struct rtentry *rt, struct sockaddr *Ifpaddr, struct sockaddr *Ifaaddr,
 			if (oifa && oifa->ifa_rtrequest)
 				oifa->ifa_rtrequest(RTM_DELETE, rt, Gate);
 			rtsetifa(rt, ifa);
+#if IFNET_ROUTE_REFCNT
+			/*
+			 * Adjust route ref count for the interfaces.
+			 */
+			if (rt->rt_if_ref_fn != NULL && rt->rt_ifp != ifp) {
+				rt->rt_if_ref_fn(ifp, 1);
+				rt->rt_if_ref_fn(rt->rt_ifp, -1);
+			}
+#endif /* IFNET_ROUTE_REFCNT */
 			rt->rt_ifp = ifp;
 			/*
 			 * If this is the (non-scoped) default route, record
@@ -1446,6 +1476,53 @@ sysctl_rttrash(struct sysctl_req *req)
         return 0;
 }
 
+#if IFNET_ROUTE_REFCNT
+/*
+ * Called from pfslowtimo(), protected by domain_proto_mtx
+ */
+static void
+rt_drainall(void)
+{
+	struct timeval delta_ts, current_ts;
+
+	/*
+	 * This test is done without holding rnh_lock; in the even that
+	 * we read stale value, it will only cause an extra (or miss)
+	 * drain and is therefore harmless.
+	 */
+	if (ifnet_aggressive_drainers == 0) {
+		if (timerisset(&last_ts))
+			timerclear(&last_ts);
+		return;
+	}
+
+	microuptime(&current_ts);
+	timersub(&current_ts, &last_ts, &delta_ts);
+
+	if (delta_ts.tv_sec >= rt_if_idle_drain_interval) {
+		timerclear(&last_ts);
+
+		in_rtqdrain();		/* protocol cloned routes: INET */
+		in6_rtqdrain();		/* protocol cloned routes: INET6 */
+		in_arpdrain(NULL);	/* cloned routes: ARP */
+		nd6_drain(NULL);	/* cloned routes: ND6 */
+
+		last_ts.tv_sec = current_ts.tv_sec;
+		last_ts.tv_usec = current_ts.tv_usec;
+	}
+}
+
+void
+rt_aggdrain(int on)
+{
+	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
+
+	if (on)
+		routedomain.dom_protosw->pr_flags |= PR_AGGDRAIN;
+	else
+		routedomain.dom_protosw->pr_flags &= ~PR_AGGDRAIN;
+}
+#endif /* IFNET_ROUTE_REFCNT */
 
 static int
 sysctl_rtsock SYSCTL_HANDLER_ARGS
@@ -1506,14 +1583,16 @@ SYSCTL_NODE(_net, PF_ROUTE, routetable, CTLFLAG_RD, sysctl_rtsock, "");
 /*
  * Definitions of protocols supported in the ROUTE domain.
  */
-
-extern struct domain routedomain;		/* or at least forward */
-
 static struct protosw routesw[] = {
 { SOCK_RAW,	&routedomain,	0,		PR_ATOMIC|PR_ADDR,
   0,		route_output,	raw_ctlinput,	0,
   0,
-  raw_init,	0,		0,		0,
+  raw_init,	0,		0,
+#if IFNET_ROUTE_REFCNT
+  rt_drainall,
+#else
+  0,
+#endif /* IFNET_ROUTE_REFCNT */
   0, 
   &route_usrreqs,
   0,			0,		0,

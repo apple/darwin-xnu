@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -911,6 +911,35 @@ extern errno_t ifnet_set_eflags(ifnet_t interface, u_int32_t new_flags,
 	@result Extended flags. These flags are defined in net/if.h
  */
 extern u_int32_t ifnet_eflags(ifnet_t interface);
+
+/*!
+	@function ifnet_set_idle_flags
+	@discussion Sets the if_idle_flags to new_flags. This function
+		lets you specify which flags you want to change using the
+		mask. The kernel will effectively take the lock, then set
+		the interface's idle flags to:
+			(if_idle_flags & ~mask) | (new_flags & mask).
+		Setting the flags to any non-zero value will cause the
+		networking stack to aggressively purge expired objects,
+		such as route entries, etc.
+	@param interface The interface.
+	@param new_flags The new set of flags that should be set. These
+		flags are defined in net/if.h
+	@param mask The mask of flags to be modified.
+	@result 0 on success otherwise the errno error.  ENOTSUP is returned
+		when this call is made on non-supporting platforms.
+*/
+extern errno_t ifnet_set_idle_flags(ifnet_t interface, u_int32_t new_flags,
+    u_int32_t mask);
+
+/*!
+	@function ifnet_idle_flags
+	@discussion Returns the value of if_idle_flags.
+	@param interface Interface to retrieve the flags from.
+	@result if_idle_flags. These flags are defined in net/if.h
+*/
+extern u_int32_t ifnet_idle_flags(ifnet_t interface);
+
 #endif /* KERNEL_PRIVATE */
 
 /*!
@@ -1828,6 +1857,66 @@ extern errno_t ifmaddr_lladdress(ifmultiaddr_t ifmaddr,
  */
 extern ifnet_t ifmaddr_ifnet(ifmultiaddr_t ifmaddr);
 
+#ifdef KERNEL_PRIVATE
+/******************************************************************************/
+/* interface cloner                                                           */
+/******************************************************************************/
+
+/*
+	@typedef ifnet_clone_create_func
+	@discussion ifnet_clone_create_func is called to create an interface.
+	@param ifcloner The interface cloner.
+	@param unit The interface unit number to create.
+	@param params Additional information specific to the interface cloner.
+	@result Return zero on success or an errno error value on failure.
+ */
+typedef errno_t (*ifnet_clone_create_func)(if_clone_t ifcloner, u_int32_t unit, void *params);
+
+/*
+	@typedef ifnet_clone_destroy_func
+	@discussion ifnet_clone_create_func is called to destroy an interface created 
+		by an interface cloner.
+	@param interface The interface to destroy.
+	@result Return zero on success or an errno error value on failure.
+ */
+typedef errno_t (*ifnet_clone_destroy_func)(ifnet_t interface);
+
+/*
+	@struct ifnet_clone_params
+	@discussion This structure is used to represent an interface cloner.
+	@field ifc_name The interface name handled by this interface cloner.
+	@field ifc_create The function to create an interface.
+	@field ifc_destroy The function to destroy an interface.
+*/
+struct ifnet_clone_params {
+	const char					*ifc_name;
+	ifnet_clone_create_func		ifc_create;
+	ifnet_clone_destroy_func	ifc_destroy;
+};
+
+/*
+	@function ifnet_clone_attach
+	@discussion Attaches a new interface cloner.
+	@param cloner_params The structure that defines an interface cloner.
+	@param interface A pointer to an opaque handle that represent the interface cloner 
+		that is attached upon success.
+	@result Returns 0 on success. 
+		May return ENOBUFS if there is insufficient memory.
+		May return EEXIST if an interface cloner with the same name is already attached.
+ */
+extern errno_t ifnet_clone_attach(struct ifnet_clone_params *cloner_params, if_clone_t *ifcloner);
+
+/*
+	@function ifnet_clone_detach
+	@discussion Detaches a previously attached interface cloner.
+	@param ifcloner The opaque handle returned when the interface cloner was attached.
+	@result Returns 0 on success. 
+ */
+extern errno_t ifnet_clone_detach(if_clone_t ifcloner);
+
+#endif /* KERNEL_PRIVATE */
+
 __END_DECLS
 
 #endif /* __KPI_INTERFACE__ */
+

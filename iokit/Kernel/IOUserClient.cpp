@@ -851,6 +851,23 @@ static OSDictionary * CopyConsoleUser(UInt32 uid)
     return user;
 }
 
+static bool IOUCIsBackgroundTask(task_t task, bool * isBg)
+{
+    kern_return_t               kr;
+    task_category_policy_data_t info;
+    mach_msg_type_number_t      count = TASK_CATEGORY_POLICY_COUNT;
+    boolean_t                   get_default = false;
+
+    kr = task_policy_get(current_task(),
+                         TASK_CATEGORY_POLICY,
+                         (task_policy_t) &info,
+                         &count,
+                         &get_default);
+
+    *isBg = ((KERN_SUCCESS == kr) && (info.role == TASK_THROTTLE_APPLICATION));
+    return (kr);
+}
+
 IOReturn IOUserClient::clientHasPrivilege( void * securityToken,
                                             const char * privilegeName )
 {
@@ -860,6 +877,18 @@ IOReturn IOUserClient::clientHasPrivilege( void * securityToken,
     task_t                  task;
     OSDictionary *          user;
     bool                    secureConsole;
+
+
+    if (!strncmp(privilegeName, kIOClientPrivilegeForeground, 
+                sizeof(kIOClientPrivilegeForeground)))
+    {
+        bool isBg;
+        kern_return_t kr = IOUCIsBackgroundTask(current_task(), &isBg);
+
+        if (KERN_SUCCESS != kr)
+            return (kr);
+        return (isBg ? kIOReturnNotPrivileged : kIOReturnSuccess);
+    }
 
     if ((secureConsole = !strncmp(privilegeName, kIOClientPrivilegeSecureConsoleProcess,
             sizeof(kIOClientPrivilegeSecureConsoleProcess))))
@@ -4082,6 +4111,15 @@ IOReturn IOUserClient::externalMethod( uint32_t selector, IOExternalMethodArgume
 	if( !(method = getAsyncTargetAndMethodForIndex(&object, selector)) )
 	    return (kIOReturnUnsupported);
 
+    if (kIOUCForegroundOnly & method->flags)
+    {
+        bool isBg;
+        kern_return_t kr = IOUCIsBackgroundTask(current_task(), &isBg);
+    
+        if ((KERN_SUCCESS == kr) && isBg)
+            return (kIOReturnNotPermitted);
+    }
+
 	switch (method->flags & kIOUCTypeMask)
 	{
 	    case kIOUCScalarIStructI:
@@ -4124,6 +4162,15 @@ IOReturn IOUserClient::externalMethod( uint32_t selector, IOExternalMethodArgume
 
 	if( !(method = getTargetAndMethodForIndex(&object, selector)) )
 	    return (kIOReturnUnsupported);
+
+    if (kIOUCForegroundOnly & method->flags)
+    {
+        bool isBg;
+        kern_return_t kr = IOUCIsBackgroundTask(current_task(), &isBg);
+    
+        if ((KERN_SUCCESS == kr) && isBg)
+            return (kIOReturnNotPermitted);
+    }
 
 	switch (method->flags & kIOUCTypeMask)
 	{

@@ -563,7 +563,7 @@
 370     AUE_NULL        ALL     { int nosys(void); }   { old __semwait_signal }
 371     AUE_NULL        ALL     { int nosys(void); }   { old __semwait_signal }
 #endif
-372	AUE_NULL	ALL	{ user_addr_t thread_selfid (void) NO_SYSCALL_STUB; } 
+372	AUE_NULL	ALL	{ uint64_t thread_selfid (void) NO_SYSCALL_STUB; } 
 373	AUE_NULL	ALL	{ int nosys(void); } 
 374	AUE_NULL	ALL	{ int nosys(void); } 
 375	AUE_NULL	ALL	{ int nosys(void); } 
@@ -645,3 +645,12 @@
 427	AUE_FSGETPATH	ALL	{ user_ssize_t fsgetpath(user_addr_t buf, size_t bufsize, user_addr_t fsid, uint64_t objid) NO_SYSCALL_STUB; } { private fsgetpath (File Manager SPI) }
 428	AUE_NULL	ALL	{ mach_port_name_t audit_session_self(void); }
 429	AUE_NULL	ALL	{ int audit_session_join(mach_port_name_t port); }
+430 AUE_NULL	ALL { int pid_suspend(int pid); }
+431 AUE_NULL	ALL { int pid_resume(int pid); }
+#if CONFIG_EMBEDDED
+432	AUE_NULL	ALL	{ int fileport_makeport(int fd, user_addr_t portnamep); }
+433	AUE_NULL	ALL	{ int fileport_makefd(mach_port_name_t port); }
+#else
+432	AUE_NULL	ALL	{ int nosys(void); } 
+433	AUE_NULL	ALL	{ int nosys(void); } 
+#endif

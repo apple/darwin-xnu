@@ -1770,8 +1770,6 @@ IOReturn IOPMrootDomain::privateSleepSystem( const char *sleepReason )
         setProperty(kRootDomainSleepReasonKey, sleepReason);
     }
 
-    tracePoint(kIOPMTracePointSleepStarted);
-
     patriarch->sleepSystem();
     return kIOReturnSuccess;
 }
@@ -1985,6 +1983,7 @@ void IOPMrootDomain::wakeFromDoze( void )
 {
     if ( getPowerState() == DOZE_STATE )
     {
+        tracePoint(kIOPMTracePointSystemWakeDriversPhase);
         changePowerStateToPriv(ON_STATE);
         patriarch->wakeSystem();
     }
@@ -3708,6 +3707,11 @@ void IOPMrootDomain::handlePowerChangeStartForService(
                 gMessageClientType);
             tellClients(kIOMessageSystemWillPowerOn, clientMessageFilter);
         }
+        
+        if (SLEEP_STATE == newPowerState)
+        {
+            tracePoint(kIOPMTracePointSleepStarted);
+        }
     }
     
     if (*rdFlags & kServiceFlagTopLevelPCI)
@@ -4174,8 +4178,6 @@ void IOPMrootDomain::adjustPowerState( void )
              */
             setProperty(kRootDomainSleepReasonKey, kIOPMIdleSleepKey);
 
-            tracePoint(kIOPMTracePointSleepStarted);
-    
             sleepASAP = false;
             changePowerStateToPriv(SLEEP_STATE);
         }

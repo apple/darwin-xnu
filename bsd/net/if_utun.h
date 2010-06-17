@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -36,16 +36,33 @@ errno_t utun_register_control(void);
 
 #endif
 
-#ifdef PRIVATE
-
+/*
+ * Name registered by the utun kernel control
+ */
 #define UTUN_CONTROL_NAME "com.apple.net.utun_control"
-#define UTUN_OPT_FLAGS			1
-#define UTUN_OPT_IFNAME			2
 
-enum {
-	UTUN_FLAGS_NO_OUTPUT = 0x1,
-	UTUN_FLAGS_NO_INPUT = 0x2,
+/*
+ * Socket option names to manage utun
+ */
+#define UTUN_OPT_FLAGS					1
+#define UTUN_OPT_IFNAME					2
+#define UTUN_OPT_EXT_IFDATA_STATS		3	/* get|set (type int) */
+#define UTUN_OPT_INC_IFDATA_STATS_IN	4	/* set to increment stat counters (type struct utun_stats_param) */ 
+#define UTUN_OPT_INC_IFDATA_STATS_OUT	5	/* set to increment stat counters (type struct utun_stats_param) */ 
+
+/*
+ * Flags for by UTUN_OPT_FLAGS 
+ */
+#define	UTUN_FLAGS_NO_OUTPUT		0x0001
+#define UTUN_FLAGS_NO_INPUT			0x0002
+
+/*
+ * utun stats parameter structure
+ */
+struct utun_stats_param {
+        u_int64_t       utsp_packets;
+        u_int64_t       utsp_bytes;
+        u_int64_t       utsp_errors;
 };
 
-#endif
 #endif

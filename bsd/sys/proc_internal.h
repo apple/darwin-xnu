@@ -411,6 +411,7 @@ struct	proc {
 #define P_LSIGNALWAIT  	0x00200000 
 #define P_LRAGE_VNODES	0x00400000
 #define P_LREGISTER	0x00800000	/* thread start fns registered  */
+#define P_LBACKGROUND	0x01000000
 
 /* Process control state for resource starvation */
 #define P_PCTHROTTLE	1

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -183,6 +183,10 @@ int dlil_if_acquire(u_int32_t family, const void *uniqueid, size_t uniqueid_len,
  */
 
 void dlil_if_release(struct ifnet *ifp);
+
+#if IFNET_ROUTE_REFCNT
+extern u_int32_t ifnet_aggressive_drainers;
+#endif /* IFNET_ROUTE_REFCNT */
 
 #endif /* KERNEL_PRIVATE */
 #endif /* KERNEL */

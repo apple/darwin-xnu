@@ -968,6 +968,22 @@ buf_t	buf_getblk(vnode_t, daddr64_t, int, int, int, int);
 buf_t	buf_geteblk(int);
 #ifdef KERNEL_PRIVATE
 void	buf_setfilter(buf_t, void (*)(buf_t, void *), void *, void **, void **);
+
+/*!
+ @function buf_getcpaddr
+ @abstract Set the address of cp_entry on a buffer.
+ @param bp Buffer whose cp entry value has to be set
+ @return void.
+ */
+void buf_setcpaddr(buf_t, void *);
+
+/*!
+ @function buf_getcpaddr
+ @abstract Get the address of cp_entry on a buffer.
+ @param bp Buffer whose error value to set.
+ @return int.
+ */
+void *buf_getcpaddr(buf_t);
 #endif /* KERNEL_PRIVATE */
 
 

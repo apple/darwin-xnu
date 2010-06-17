@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2009 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -352,8 +352,8 @@ SYSCTL_NODE(_net_link_vlan, PF_LINK, link, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "for co
 
 #define M_VLAN 		M_DEVBUF
 
-static	int vlan_clone_create(struct if_clone *, int);
-static	void vlan_clone_destroy(struct ifnet *);
+static	int vlan_clone_create(struct if_clone *, u_int32_t, void *);
+static	int vlan_clone_destroy(struct ifnet *);
 static	int vlan_input(ifnet_t ifp, protocol_family_t protocol,
 					   mbuf_t m, char *frame_header);
 static	int vlan_output(struct ifnet *ifp, struct mbuf *m);
@@ -782,7 +782,7 @@ vlan_clone_attach(void)
 }
 
 static int
-vlan_clone_create(struct if_clone *ifc, int unit)
+vlan_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 {
 	int							error;
 	ifvlan_ref					ifv;
@@ -872,7 +872,7 @@ vlan_if_detach(struct ifnet * ifp)
     return;
 }
 
-static void
+static int
 vlan_clone_destroy(struct ifnet *ifp)
 {
     ifvlan_ref ifv;
@@ -881,16 +881,17 @@ vlan_clone_destroy(struct ifnet *ifp)
     ifv = ifnet_softc(ifp);
     if (ifv == NULL || ifnet_type(ifp) != IFT_L2VLAN) {
 	vlan_unlock();
-	return;
+	return 0;
     }
     if (ifvlan_flags_detaching(ifv)) {
 	vlan_unlock();
-	return;
+	return 0;
     }
     vlan_remove(ifv);
     vlan_unlock();
     vlan_if_detach(ifp);
-    return;
+
+    return 0;
 }
 
 static int 

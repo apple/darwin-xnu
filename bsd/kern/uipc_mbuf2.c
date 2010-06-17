@@ -564,3 +564,25 @@ m_tag_next(__unused struct mbuf *m, struct m_tag *t)
 {
 	return SLIST_NEXT(t, m_tag_link);
 }
+
+void
+m_prio_init(struct mbuf *m)
+{
+#if !PKT_PRIORITY
+#pragma unused(m)
+#else /* PKT_PRIORITY */
+	if (m->m_flags & M_PKTHDR)
+		m->m_pkthdr.prio = MBUF_PRIORITY_NORMAL;
+#endif /* PKT_PRIORITY */
+}
+
+void
+m_prio_background(struct mbuf *m)
+{
+#if !PKT_PRIORITY
+#pragma unused(m)
+#else /* PKT_PRIORITY */
+	if (m->m_flags & M_PKTHDR)
+		m->m_pkthdr.prio = MBUF_PRIORITY_BACKGROUND;
+#endif /* PKT_PRIORITY */
+}

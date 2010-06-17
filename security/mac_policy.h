@@ -2961,6 +2961,23 @@ typedef int mpo_proc_check_fork_t(
 	struct proc *proc
 );
 /**
+  @brief Access control over pid_suspend and pid_resume
+  @param cred Subject credential
+  @param proc Subject process trying to run pid_suspend or pid_resume 
+  @param sr Call is suspend (0) or resume (1)
+
+  Determine whether the subject identified is allowed to suspend or resume
+  other processes.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_proc_check_suspend_resume_t(
+	kauth_cred_t cred,
+	struct proc *proc,
+	int sr
+);
+/**
   @brief Access control check for retrieving audit information
   @param cred Subject credential
 
@@ -5766,6 +5783,7 @@ typedef void mpo_reserved_hook_t(void);
 /*!
   \struct mac_policy_ops
 */
+#define MAC_POLICY_OPS_VERSION 2 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t		*mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t		*mpo_audit_check_preselect;
@@ -6075,7 +6093,7 @@ struct mac_policy_ops {
 	mpo_vnode_check_uipc_bind_t		*mpo_vnode_check_uipc_bind;
 	mpo_vnode_check_uipc_connect_t		*mpo_vnode_check_uipc_connect;
 	mac_proc_check_run_cs_invalid_t		*mpo_proc_check_run_cs_invalid;
-	mpo_reserved_hook_t			*mpo_reserved4;
+	mpo_proc_check_suspend_resume_t		*mpo_proc_check_suspend_resume;
 	mpo_reserved_hook_t			*mpo_reserved5;
 	mpo_reserved_hook_t			*mpo_reserved6;
 	mpo_reserved_hook_t			*mpo_reserved7;

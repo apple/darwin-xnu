@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -530,13 +530,13 @@ pfslowtimo(__unused void *arg)
 		for (pr = dp->dom_protosw; pr; pr = pr->pr_next) {
 			if (pr->pr_slowtimo)
 				(*pr->pr_slowtimo)();
-			if (do_reclaim && pr->pr_drain)
+			if ((do_reclaim || (pr->pr_flags & PR_AGGDRAIN)) &&
+			    pr->pr_drain)
 				(*pr->pr_drain)();
 		}
 	do_reclaim = 0;
 	lck_mtx_unlock(domain_proto_mtx);
 	timeout(pfslowtimo, NULL, hz/PR_SLOWHZ);
-        
 }
 
 void

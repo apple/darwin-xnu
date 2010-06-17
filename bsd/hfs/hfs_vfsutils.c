@@ -2766,15 +2766,16 @@ int
 hfs_journal_flush(struct hfsmount *hfsmp)
 {
 	int ret;
-
+	
+	/* Only peek at hfsmp->jnl while holding the global lock */
+	lck_rw_lock_shared(&hfsmp->hfs_global_lock);
 	if (hfsmp->jnl) {
-		lck_rw_lock_shared(&hfsmp->hfs_global_lock);
 		ret = journal_flush(hfsmp->jnl);
-		lck_rw_unlock_shared(&hfsmp->hfs_global_lock);
 	} else {
 		ret = 0;
 	}
-
+	lck_rw_unlock_shared(&hfsmp->hfs_global_lock);
+	
 	return ret;
 }
 

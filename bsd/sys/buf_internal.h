@@ -116,6 +116,9 @@ struct buf {
 	int	b_validoff;		/* Offset in buffer of valid region. */
 	int	b_validend;		/* Offset of end of valid region. */
 	proc_t 	b_proc;			/* Associated proc; NULL if kernel. */
+#if CONFIG_PROTECT
+	struct cprotect *b_cpentry; 	/* address of cp_entry, to be passed further down  */
+#endif /* CONFIG_PROTECT */
 #ifdef JOE_DEBUG
         void *	b_owner;
         int     b_tag;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -149,6 +149,12 @@ cpu_topology_sort(int ncpus)
 
 	ml_set_interrupts_enabled(istate);
 	DBG("cpu_topology_start() LLC is L%d\n", topoParms.LLCDepth + 1);
+
+	/*
+	 * Let the CPU Power Management know that the topology is stable.
+	 */
+	topoParms.stable = TRUE;
+	pmCPUStateInit();
 
 	/*
 	 * Iterate over all logical cpus finding or creating the affinity set

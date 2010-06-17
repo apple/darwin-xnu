@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -199,6 +199,8 @@ static void
 initTopoParms(void)
 {
     i386_cpu_info_t	*cpuinfo;
+
+    topoParms.stable = FALSE;
 
     cpuinfo = cpuid_info();
 

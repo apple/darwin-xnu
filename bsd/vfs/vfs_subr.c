@@ -105,6 +105,7 @@
 #include <sys/kdebug.h>
 #include <sys/kauth.h>
 #include <sys/user.h>
+#include <sys/kern_memorystatus.h>
 #include <miscfs/fifofs/fifo.h>
 
 #include <string.h>
@@ -182,7 +183,7 @@ static void insmntque(vnode_t vp, mount_t mp);
 static int mount_getvfscnt(void);
 static int mount_fillfsids(fsid_t *, int );
 static void vnode_iterate_setup(mount_t);
-static int vnode_umount_preflight(mount_t, vnode_t, int);
+int vnode_umount_preflight(mount_t, vnode_t, int);
 static int vnode_iterate_prepare(mount_t);
 static int vnode_iterate_reloadq(mount_t);
 static void vnode_iterate_clear(mount_t);
@@ -450,7 +451,7 @@ vnode_iterate_setup(mount_t mp)
 
 }
 
-static int
+int
 vnode_umount_preflight(mount_t mp, vnode_t skipvp, int flags)
 {
 	vnode_t vp;
@@ -3533,7 +3534,7 @@ retry:
 	}
 
 	if (vp == NULL) {
-	        /*
+		/*
 		 * we've reached the system imposed maximum number of vnodes
 		 * but there isn't a single one available
 		 * wait a bit and then retry... if we can't get a vnode
@@ -3552,14 +3553,22 @@ retry:
 		        desiredvnodes, numvnodes, freevnodes, deadvnodes, ragevnodes);
 #if CONFIG_EMBEDDED
 		/*
-		 * Running out of vnodes tends to make a system unusable.  On an
-		 * embedded system, it's unlikely that the user can do anything
-		 * about it (or would know what to do, if they could).  So panic
-		 * the system so it will automatically restart (and hopefully we
-		 * can get a panic log that tells us why we ran out).
+		 * Running out of vnodes tends to make a system unusable. Start killing
+		 * processes that jetsam knows are killable.
 		 */
-		panic("vnode table is full\n");
+		if (jetsam_kill_top_proc() < 0) {
+			/*
+			 * If jetsam can't find any more processes to kill and there
+			 * still aren't any free vnodes, panic. Hopefully we'll get a
+			 * panic log to tell us why we ran out.
+			 */
+			panic("vnode table is full\n");
+		}
+
+		delay_for_interval(1, 1000 * 1000);
+		goto retry;
 #endif
+
 		*vpp = NULL;
 		return (ENFILE);
 	}
@@ -6733,6 +6742,14 @@ vfs_setlocklocal(mount_t mp)
 	TAILQ_FOREACH(vp, &mp->mnt_newvnodes, v_mntvnodes) {
 			vp->v_flag |= VLOCKLOCAL;
 	}
+	mount_unlock(mp);
+}
+
+void
+vfs_setunmountpreflight(mount_t mp)
+{
+	mount_lock_spin(mp);
+	mp->mnt_kern_flag |= MNTK_UNMOUNT_PREFLIGHT;
 	mount_unlock(mp);
 }
 

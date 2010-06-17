@@ -1372,7 +1372,7 @@ findpcb:
 	}
 	
 #if TRAFFIC_MGT
-	if (so->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BACKGROUND) {
+	if (so->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BG_REGULATE) {
 		tcpstat.tcps_bg_rcvtotal++;
 
 		 /* Take snapshots of pkts recv;

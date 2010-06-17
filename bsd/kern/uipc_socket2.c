@@ -306,6 +306,11 @@ sonewconn_internal(struct socket *head, int connstatus)
 	mac_socket_label_associate_accept(head, so);
 #endif
 
+	/* inherit traffic management properties of listener */
+	so->so_traffic_mgt_flags = head->so_traffic_mgt_flags &
+	    (TRAFFIC_MGT_SO_BACKGROUND | TRAFFIC_MGT_SO_BG_REGULATE);
+	so->so_background_thread = head->so_background_thread;
+
 	if (soreserve(so, head->so_snd.sb_hiwat, head->so_rcv.sb_hiwat)) {
 		sflt_termsock(so);
 		sodealloc(so);
@@ -1842,6 +1847,12 @@ sbtoxsockbuf(struct sockbuf *sb, struct xsockbuf *xsb)
 	    (sb->sb_timeo.tv_sec * hz) + sb->sb_timeo.tv_usec / tick;
 	if (xsb->sb_timeo == 0 && sb->sb_timeo.tv_usec != 0)
 		xsb->sb_timeo = 1;
+}
+
+int
+soisbackground(struct socket *so)
+{
+	return (so->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BACKGROUND);
 }
 
 /*

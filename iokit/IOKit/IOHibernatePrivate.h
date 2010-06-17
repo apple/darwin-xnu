@@ -74,7 +74,9 @@ struct IOHibernateImageHeader
     uint32_t    runtimePages;
     uint32_t    runtimePageCount;
     uint64_t    runtimeVirtualPages __attribute__ ((packed));
-    uint8_t     reserved2[8];
+
+    uint32_t    performanceDataStart;
+    uint32_t    performanceDataSize;
     
     uint64_t	encryptStart __attribute__ ((packed));
     uint64_t	machineSignature __attribute__ ((packed));

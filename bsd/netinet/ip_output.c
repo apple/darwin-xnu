@@ -2305,10 +2305,15 @@ ip_ctloutput(so, sopt)
 			if (error) 
 				break;
 
-			if (background) 
-				so->so_traffic_mgt_flags |= TRAFFIC_MGT_SO_BACKGROUND;
-			else 
-				so->so_traffic_mgt_flags &= ~TRAFFIC_MGT_SO_BACKGROUND;
+			if (background) {
+				socket_set_traffic_mgt_flags(so,
+				    TRAFFIC_MGT_SO_BACKGROUND |
+				    TRAFFIC_MGT_SO_BG_REGULATE);
+			} else {
+				socket_clear_traffic_mgt_flags(so,
+				    TRAFFIC_MGT_SO_BACKGROUND |
+				    TRAFFIC_MGT_SO_BG_REGULATE);
+			}
 
 			break;
 		}

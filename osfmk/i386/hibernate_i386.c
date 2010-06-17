@@ -85,7 +85,6 @@ hibernate_page_list_allocate(void)
 	    case kEfiBootServicesCode:
 	    case kEfiBootServicesData:
 	    case kEfiConventionalMemory:
-	    case kEfiACPIReclaimMemory:
 	    case kEfiACPIMemoryNVS:
 	    case kEfiPalCode:
 
@@ -119,6 +118,8 @@ hibernate_page_list_allocate(void)
 	    // runtime services will be restarted, so no save
 	    case kEfiRuntimeServicesCode:
 	    case kEfiRuntimeServicesData:
+	    // contents are volatile once the platform expert starts
+	    case kEfiACPIReclaimMemory:
 	    // non dram
 	    case kEfiReservedMemoryType:
 	    case kEfiUnusableMemory:
@@ -211,10 +212,13 @@ hibernate_processor_setup(IOHibernateImageHeader * header)
 
     header->runtimePages     = args->efiRuntimeServicesPageStart;
     header->runtimePageCount = args->efiRuntimeServicesPageCount;
-    if (args->Version == kBootArgsVersion1 && args->Revision >= kBootArgsRevision1_5) {
-        header->runtimeVirtualPages = args->efiRuntimeServicesVirtualPageStart;
+    header->runtimeVirtualPages = args->efiRuntimeServicesVirtualPageStart;
+    if (args->Version == kBootArgsVersion1 && args->Revision >= kBootArgsRevision1_6) {
+        header->performanceDataStart = args->performanceDataStart;
+        header->performanceDataSize = args->performanceDataSize;
     } else {
-        header->runtimeVirtualPages = 0;
+        header->performanceDataStart = 0;
+        header->performanceDataSize = 0;
     }
 
     return (KERN_SUCCESS);

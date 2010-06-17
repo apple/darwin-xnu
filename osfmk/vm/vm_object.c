@@ -288,8 +288,8 @@ static void		vm_object_deactivate_all_pages(
 #define	VM_OBJECT_HASH_COUNT		1024
 #define	VM_OBJECT_HASH_LOCK_COUNT	512
 
-static lck_mtx_t	vm_object_hashed_lock_data[VM_OBJECT_HASH_COUNT];
-static lck_mtx_ext_t	vm_object_hashed_lock_data_ext[VM_OBJECT_HASH_COUNT];
+static lck_mtx_t	vm_object_hashed_lock_data[VM_OBJECT_HASH_LOCK_COUNT];
+static lck_mtx_ext_t	vm_object_hashed_lock_data_ext[VM_OBJECT_HASH_LOCK_COUNT];
 
 static queue_head_t	vm_object_hashtable[VM_OBJECT_HASH_COUNT];
 static struct zone	*vm_object_hash_zone;
@@ -1503,7 +1503,12 @@ restart_after_sleep:
 				 *
 				 * the laundry and pageout_queue flags are cleared...
 				 */
+#if CONFIG_EMBEDDED
+				if (p->laundry) 
+					vm_pageout_throttle_up(p);
+#else
 				vm_pageout_throttle_up(p);
+#endif
 
 				/*
 				 * toss the wire count we picked up
@@ -2277,9 +2282,16 @@ deactivate_pages_in_object(
 				        m->dirty = FALSE;
 
 					clear_refmod |= VM_MEM_MODIFIED;
-#if CONFIG_EMBEDDED
-					dwp->dw_mask |= DW_move_page;
-#endif
+					if (m->throttled) {
+						/*
+						 * This page is now clean and
+						 * reclaimable.  Move it out
+						 * of the throttled queue, so
+						 * that vm_pageout_scan() can
+						 * find it.
+						 */
+						dwp->dw_mask |= DW_move_page;
+					}
 #if	MACH_PAGEMAP
 					vm_external_state_clr(object->existence_map, offset);
 #endif	/* MACH_PAGEMAP */
@@ -2291,6 +2303,13 @@ deactivate_pages_in_object(
 						object->reusable_page_count++;
 						assert(object->resident_page_count >= object->reusable_page_count);
 						reusable++;
+#if CONFIG_EMBEDDED
+					} else {
+						if (m->reusable) {
+							m->reusable = FALSE;
+							object->reusable_page_count--;
+						}
+#endif
 					}
 				}
 				pmap_clear_refmod(m->phys_page, clear_refmod);
@@ -2475,6 +2494,14 @@ vm_object_deactivate_pages(
 		all_reusable = TRUE;
 		reusable_page = FALSE;
 	}
+
+#if CONFIG_EMBEDDED
+	if ((reusable_page || all_reusable) && object->all_reusable) {
+		/* This means MADV_FREE_REUSABLE has been called twice, which 
+		 * is probably illegal. */
+		return;
+	}
+#endif
 
 	while (size) {
 		length = deactivate_a_chunk(object, offset, size, kill_page, reusable_page, all_reusable);

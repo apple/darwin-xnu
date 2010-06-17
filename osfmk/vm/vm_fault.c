@@ -174,12 +174,12 @@ extern void vm_fault_classify(vm_object_t	object,
 extern void vm_fault_classify_init(void);
 #endif
 
+unsigned long vm_pmap_enter_blocked = 0;
 
 unsigned long vm_cs_validates = 0;
 unsigned long vm_cs_revalidates = 0;
 unsigned long vm_cs_query_modified = 0;
 unsigned long vm_cs_validated_dirtied = 0;
-
 #if CONFIG_ENFORCE_SIGNED_CODE
 int cs_enforcement_disable=0;
 #else
@@ -2196,7 +2196,7 @@ vm_fault_enter(vm_page_t m,
 	       int *type_of_fault)
 {
 	unsigned int	cache_attr;
-	kern_return_t	kr;
+	kern_return_t	kr, pe_result;
 	boolean_t	previously_pmapped = m->pmapped;
 	boolean_t	must_disconnect = 0;
 	boolean_t	map_is_switched, map_is_switch_protected;
@@ -2401,7 +2401,34 @@ vm_fault_enter(vm_page_t m,
 				prot &= ~VM_PROT_EXECUTE;
 			}
 		}
-		PMAP_ENTER(pmap, vaddr, m, prot, cache_attr, wired);
+
+		/* Prevent a deadlock by not
+		 * holding the object lock if we need to wait for a page in
+		 * pmap_enter() - <rdar://problem/7138958> */
+		PMAP_ENTER_OPTIONS(pmap, vaddr, m, prot, cache_attr,
+				  wired, PMAP_OPTIONS_NOWAIT, pe_result);
+
+		if(pe_result == KERN_RESOURCE_SHORTAGE) {
+			/* The nonblocking version of pmap_enter did not succeed.
+			 * Use the blocking version instead. Requires marking
+			 * the page busy and unlocking the object */
+			boolean_t was_busy = m->busy;
+			m->busy = TRUE;
+			vm_object_unlock(m->object);
+			
+			PMAP_ENTER(pmap, vaddr, m, prot, cache_attr, wired);
+
+			/* Take the object lock again. */
+			vm_object_lock(m->object);
+			
+			/* If the page was busy, someone else will wake it up.
+			 * Otherwise, we have to do it now. */
+			assert(m->busy);
+			if(!was_busy) {
+				PAGE_WAKEUP_DONE(m);
+			}
+			vm_pmap_enter_blocked++;
+		}
 	}
 
 	/*

@@ -311,6 +311,7 @@ void	mac_posixshm_label_destroy(struct pshminfo *pshm);
 void	mac_posixshm_label_init(struct pshminfo *pshm);
 int	mac_proc_check_debug(proc_t proc1, proc_t proc2);
 int	mac_proc_check_fork(proc_t proc);
+int	mac_proc_check_suspend_resume(proc_t proc, int sr);
 int	mac_proc_check_get_task_name(kauth_cred_t cred, struct proc *p);
 int	mac_proc_check_get_task(kauth_cred_t cred, struct proc *p);
 int	mac_proc_check_getaudit(proc_t proc);

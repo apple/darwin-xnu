@@ -43,7 +43,9 @@ enum {
     kIOUCScalarIScalarO = 0,
     kIOUCScalarIStructO = 2,
     kIOUCStructIStructO = 3,
-    kIOUCScalarIStructI = 4
+    kIOUCScalarIStructI = 4,
+
+    kIOUCForegroundOnly = 0x00000010,
 };
 
 /*! @enum
@@ -93,6 +95,7 @@ enum {
 // keys for clientHasPrivilege
 #define kIOClientPrivilegeAdministrator	"root"
 #define kIOClientPrivilegeLocalUser	"local"
+#define kIOClientPrivilegeForeground	"foreground"
 
 /*! @enum
     @abstract Constants to specify the maximum number of scalar arguments in the IOExternalMethodArguments structure. These constants are documentary since the scalarInputCount, scalarOutputCount fields reflect the actual number passed.

@@ -390,12 +390,18 @@ export LDFLAGS_KERNEL_DEBUGX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
 export LDFLAGS_KERNEL_DEVELOPMENTX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
 export LDFLAGS_KERNEL_PROFILEX86_64 = $(LDFLAGS_KERNEL_RELEASEX86_64)
 
-export LDFLAGS_KERNEL_ARM     = \
+export LDFLAGS_KERNEL_RELEASEARM     = \
 	-Wl,-new_linker \
 	-Wl,-pagezero_size,0x0 \
-	-Wl,-segaddr,__HIB,0xC0000000 \
-	-Wl,-image_base,0xC0008000 \
+	-Wl,-image_base,0xC0001000 \
 	-Wl,-exported_symbols_list,$(TARGET)/kernel-kpi.exp
+
+export LDFLAGS_KERNEL_DEVELOPMENTARM     = \
+	-Wl,-new_linker \
+	-Wl,-pagezero_size,0x0 \
+	-Wl,-image_base,0xC0001000
+
+export LDFLAGS_KERNEL_DEBUGARM = $(LDFLAGS_KERNEL_DEVELOPMENTARM)
 
 
 export LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \

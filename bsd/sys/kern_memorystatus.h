@@ -110,13 +110,15 @@ typedef struct jetsam_snapshot {
 } jetsam_snapshot_t;
 
 enum {
-	kJetsamFlagsFrontmost =	(1 << 0),
-	kJetsamFlagsKilled =	(1 << 1)
+	kJetsamFlagsFrontmost =		(1 << 0),
+	kJetsamFlagsKilled =		(1 << 1),
+	kJetsamFlagsKilledHiwat =	(1 << 2)
 };
 #endif /* !MACH_KERNEL_PRIVATE */
 
 #ifdef KERNEL
 extern void kern_memorystatus_init(void) __attribute__((section("__TEXT, initcode")));
+extern int jetsam_kill_top_proc(void);
 
 extern int kern_memorystatus_wakeup;
 extern int kern_memorystatus_level;

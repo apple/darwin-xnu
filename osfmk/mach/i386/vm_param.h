@@ -265,6 +265,14 @@
 	 );						\
 	MACRO_END
 
+#define PMAP_ENTER_OPTIONS(pmap, virtual_address, page, protection,	\
+				flags, wired, options, result)		\
+	MACRO_BEGIN							\
+		result=KERN_SUCCESS;					\
+		PMAP_ENTER(pmap, virtual_address, page, protection,	\
+				flags, wired);				\
+	MACRO_END
+
 #define IS_USERADDR64_CANONICAL(addr)			\
 	((addr) < (VM_MAX_USER_PAGE_ADDRESS + PAGE_SIZE))
 

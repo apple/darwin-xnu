@@ -2858,10 +2858,9 @@ handle_mac_transition:
 		 * a setuid exec to be able to access/control the
 		 * task/thread after.
 		 */
-		if (current_task() == p->task) {
-			ipc_task_reset(p->task);
-			ipc_thread_reset(current_thread());
-		}
+		ipc_task_reset(p->task);
+		ipc_thread_reset((imgp->ip_new_thread != NULL) ?
+				 imgp->ip_new_thread : current_thread());
 
 		/*
 		 * If 'leave_sugid_clear' is non-zero, then we passed the

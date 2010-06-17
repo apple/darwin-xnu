@@ -62,8 +62,10 @@ __dtrace_register_anon_DOF
 _aes_decrypt_cbc
 _aes_decrypt_key
 _aes_decrypt_key128
+_aes_decrypt_key256
 _aes_encrypt_cbc
 _aes_encrypt_key128
+_aes_encrypt_key256
 _appleClut8
 _boot
 _cons_cinput

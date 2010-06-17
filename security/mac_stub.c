@@ -670,6 +670,10 @@ int mac_fork_proc(void)
 {
 	return 0;
 }
+int mac_proc_check_suspend_resume(void)
+{
+	return 0;
+}
 int mac_set_enforce_proc(void)
 {
 	return 0;

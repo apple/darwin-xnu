@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -25,23 +25,26 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <sys/mount.h>
+#include <sys/vnode_if.h>
+#include <sys/vnode_internal.h>
 
-kern_return_t
-IOKitBSDInit( void );
+#include <sys/cprotect.h>
+#include <sys/random.h>
+#include <sys/xattr.h>
+#include <sys/uio_internal.h>
 
-void
-IOServicePublishResource( const char * property, boolean_t value );
+#include "hfs.h"
+#include "hfs_cnode.h"
 
-boolean_t
-IOServiceWaitForMatchingResource( const char * property, uint64_t timeout );
-
-boolean_t
-IOCatalogueMatchingDriversPresent( const char * property );
-
-#ifdef __cplusplus
+int cp_key_store_action(int action __unused)
+{
+	return ENOTSUP;
 }
-#endif
+
+
+int cp_register_wraps(cp_wrap_func_t key_store_func __unused)
+{
+	return ENOTSUP;
+}
 

@@ -493,14 +493,16 @@ update:
 		mp->mnt_flag |= MNT_RDONLY;
 	else if (mp->mnt_flag & MNT_RDONLY)
 		mp->mnt_kern_flag |= MNTK_WANTRDWR;
+
 	mp->mnt_flag &= ~(MNT_NOSUID | MNT_NOEXEC | MNT_NODEV |
 			  MNT_SYNCHRONOUS | MNT_UNION | MNT_ASYNC |
 			  MNT_UNKNOWNPERMISSIONS | MNT_DONTBROWSE | MNT_AUTOMOUNTED |
-			  MNT_DEFWRITE | MNT_NOATIME | MNT_QUARANTINE);
+			  MNT_DEFWRITE | MNT_NOATIME | MNT_QUARANTINE | MNT_CPROTECT );
+
 	mp->mnt_flag |= uap->flags & (MNT_NOSUID | MNT_NOEXEC |	MNT_NODEV |
 				      MNT_SYNCHRONOUS | MNT_UNION | MNT_ASYNC |
 				      MNT_UNKNOWNPERMISSIONS | MNT_DONTBROWSE | MNT_AUTOMOUNTED | 
-					  MNT_DEFWRITE | MNT_NOATIME | MNT_QUARANTINE);
+					  MNT_DEFWRITE | MNT_NOATIME | MNT_QUARANTINE | MNT_CPROTECT );
 
 #if CONFIG_MACF
 	if (uap->flags & MNT_MULTILABEL) {
@@ -1948,21 +1950,29 @@ fstatfs(__unused proc_t p, struct fstatfs_args *uap, __unused int32_t *retval)
 	if ( (error = file_vnode(uap->fd, &vp)) )
 		return (error);
 
+	error = vnode_getwithref(vp);
+	if (error) {
+		file_drop(uap->fd);
+		return (error);
+	}
+
 	AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
 
 	mp = vp->v_mount;
 	if (!mp) {
-		file_drop(uap->fd);
-		return (EBADF);
+		error = EBADF;
+		goto out;
 	}
 	sp = &mp->mnt_vfsstat;
 	if ((error = vfs_update_vfsstat(mp,vfs_context_current(),VFS_USER_EVENT)) != 0) {
-		file_drop(uap->fd);
-		return (error);
+		goto out;
 	}
-	file_drop(uap->fd);
 
 	error = munge_statfs(mp, sp, uap->buf, NULL, IS_64BIT_PROCESS(p), TRUE);
+
+out:
+	file_drop(uap->fd);
+	vnode_put(vp);
 
 	return (error);
 }
@@ -2048,21 +2058,29 @@ fstatfs64(__unused struct proc *p, struct fstatfs64_args *uap, __unused int32_t 
 	if ( (error = file_vnode(uap->fd, &vp)) )
 		return (error);
 
+	error = vnode_getwithref(vp);
+	if (error) {
+		file_drop(uap->fd);
+		return (error);
+	}
+
 	AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
 
 	mp = vp->v_mount;
 	if (!mp) {
-		file_drop(uap->fd);
-		return (EBADF);
+		error = EBADF;
+		goto out;
 	}
 	sp = &mp->mnt_vfsstat;
 	if ((error = vfs_update_vfsstat(mp, vfs_context_current(), VFS_USER_EVENT)) != 0) {
-		file_drop(uap->fd);
-		return (error);
+		goto out;
 	}
-	file_drop(uap->fd);
 
 	error = statfs64_common(mp, sp, uap->buf);
+
+out:
+	file_drop(uap->fd);
+	vnode_put(vp);
 
 	return (error);
 }

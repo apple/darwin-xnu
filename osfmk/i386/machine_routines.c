@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -334,8 +334,6 @@ register_cpu(
 		cpu_thread_alloc(this_cpu_datap->cpu_number);
 		if (this_cpu_datap->lcpu.core == NULL)
 			goto failed;
-
-		pmCPUStateInit();
 
 #if NCOPY_WINDOWS > 0
 		this_cpu_datap->cpu_pmap = pmap_cpu_alloc(boot_cpu);

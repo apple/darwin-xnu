@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-/*	$apfw: pfvar.h,v 1.12 2008/08/27 00:01:32 jhw Exp $ */
+/*	$apfw: git commit b6bf13f8321283cd7ee82b1795e86506084b1b95 $ */
 /*	$OpenBSD: pfvar.h,v 1.259 2007/12/02 12:08:04 pascoe Exp $ */
 
 /*
@@ -63,6 +63,11 @@
 #define _NET_PFVAR_H_
 
 #ifdef PRIVATE
+/*
+ * XXX
+ * XXX Private interfaces.  Do not include this file; use pfctl(8) instead.
+ * XXX
+ */
 #if PF || !defined(KERNEL)
 
 #ifdef  __cplusplus
@@ -127,10 +132,6 @@ union sockaddr_union {
 	struct sockaddr_in6	sin6;
 };
 
-struct ip;
-struct ip6_hdr;
-struct tcphdr;
-
 #define	PF_TCPS_PROXY_SRC	((TCP_NSTATES)+0)
 #define	PF_TCPS_PROXY_DST	((TCP_NSTATES)+1)
 
@@ -138,13 +139,18 @@ struct tcphdr;
 #ifdef MD5_DIGEST_LENGTH
 #if PF_MD5_DIGEST_LENGTH != MD5_DIGEST_LENGTH
 #error
-#endif
-#endif
+#endif /* PF_MD5_DIGEST_LENGTH != MD5_DIGEST_LENGTH */
+#endif /* MD5_DIGEST_LENGTH */
 
+#ifdef KERNEL
+struct ip;
+struct ip6_hdr;
+struct tcphdr;
 #ifndef NO_APPLE_EXTENSIONS
 struct pf_grev1_hdr;
 struct pf_esp_hdr;
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
+#endif /* KERNEL */
 
 enum	{ PF_INOUT, PF_IN, PF_OUT };
 enum	{ PF_PASS, PF_DROP, PF_SCRUB, PF_NOSCRUB, PF_NAT, PF_NONAT,
@@ -170,7 +176,7 @@ enum	{ PFTM_TCP_FIRST_PACKET, PFTM_TCP_OPENING, PFTM_TCP_ESTABLISHED,
 #ifndef NO_APPLE_EXTENSIONS
 	  PFTM_GREv1_FIRST_PACKET, PFTM_GREv1_INITIATING, PFTM_GREv1_ESTABLISHED,
 	  PFTM_ESP_FIRST_PACKET, PFTM_ESP_INITIATING, PFTM_ESP_ESTABLISHED,
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 	  PFTM_OTHER_FIRST_PACKET, PFTM_OTHER_SINGLE,
 	  PFTM_OTHER_MULTIPLE, PFTM_FRAG, PFTM_INTERVAL,
 	  PFTM_ADAPTIVE_START, PFTM_ADAPTIVE_END, PFTM_SRC_NODE,
@@ -196,7 +202,7 @@ enum	{ PFTM_TCP_FIRST_PACKET, PFTM_TCP_OPENING, PFTM_TCP_ESTABLISHED,
 #define PFTM_ESP_FIRST_PACKET_VAL	120
 #define PFTM_ESP_INITIATING_VAL		30
 #define PFTM_ESP_ESTABLISHED_VAL	900
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 #define PFTM_OTHER_FIRST_PACKET_VAL	60	/* First packet */
 #define PFTM_OTHER_SINGLE_VAL		30	/* Unidirectional */
 #define PFTM_OTHER_MULTIPLE_VAL		60	/* Bidirectional */
@@ -209,7 +215,7 @@ enum	{ PF_NOPFROUTE, PF_FASTROUTE, PF_ROUTETO, PF_DUPTO, PF_REPLYTO };
 enum	{ PF_LIMIT_STATES,
 #ifndef NO_APPLE_EXTENSIONS
 	  PF_LIMIT_APP_STATES,
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 	  PF_LIMIT_SRC_NODES, PF_LIMIT_FRAGS,
 	  PF_LIMIT_TABLES, PF_LIMIT_TABLE_ENTRIES, PF_LIMIT_MAX };
 #define PF_POOL_IDMASK		0x0f
@@ -266,8 +272,13 @@ struct pf_addr_wrap {
 		u_int32_t		 rtlabel;
 	}			 v;
 	union {
+#ifdef KERNEL
 		struct pfi_dynaddr	*dyn	__attribute__((aligned(8)));
 		struct pfr_ktable	*tbl	__attribute__((aligned(8)));
+#else /* !KERNEL */
+		void			*dyn	__attribute__((aligned(8)));
+		void			*tbl	__attribute__((aligned(8)));
+#endif /* !KERNEL */
 		int			 dyncnt __attribute__((aligned(8)));
 		int			 tblcnt __attribute__((aligned(8)));
 	}			 p __attribute__((aligned(8)));
@@ -286,7 +297,7 @@ union pf_rule_xport {
 	u_int16_t		call_id;
 	u_int32_t		spi;
 };
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 
 #ifdef KERNEL
 struct pfi_dynaddr {
@@ -327,11 +338,11 @@ struct pfi_dynaddr {
 #endif /* INET6 */
 #endif /* INET */
 
-#else
+#else /* !KERNEL */
 
 #define PF_INET_INET6
 
-#endif /* KERNEL */
+#endif /* !KERNEL */
 
 /* Both IPv4 and IPv6 */
 #ifdef PF_INET_INET6
@@ -438,6 +449,7 @@ struct pfi_dynaddr {
 #endif /* PF_INET6_ONLY */
 #endif /* PF_INET_INET6 */
 
+#ifdef KERNEL
 #define	PF_MISMATCHAW(aw, x, af, neg, ifp)				\
 	(								\
 		(((aw)->type == PF_ADDR_NOROUTE &&			\
@@ -459,7 +471,7 @@ struct pfi_dynaddr {
 		    &(aw)->v.a.mask, (x), (af))))) !=			\
 		(neg)							\
 	)
-
+#endif /* KERNEL */
 
 struct pf_rule_uid {
 	uid_t		 uid[2];
@@ -478,21 +490,25 @@ struct pf_rule_addr {
 #ifndef NO_APPLE_EXTENSIONS
 	union pf_rule_xport	 xport;
 	u_int8_t		 neg;
-#else
+#else /* NO_APPLE_EXTENSIONS */
 	u_int16_t		 port[2];
 	u_int8_t		 neg;
 	u_int8_t		 port_op;
-#endif
+#endif /* NO_APPLE_EXTENSIONS */
 };
 
 struct pf_pooladdr {
 	struct pf_addr_wrap		 addr;
 	TAILQ_ENTRY(pf_pooladdr)	 entries;
 #if !defined(__LP64__)
-	u_int32_t			_pad[2];
+	u_int32_t			 _pad[2];
 #endif /* !__LP64__ */
 	char				 ifname[IFNAMSIZ];
+#ifdef KERNEL
 	struct pfi_kif			*kif	__attribute__((aligned(8)));
+#else /* !KERNEL */
+	void				*kif	__attribute__((aligned(8)));
+#endif /* !KERNEL */
 };
 
 TAILQ_HEAD(pf_palist, pf_pooladdr);
@@ -511,9 +527,13 @@ struct pf_poolhashkey {
 struct pf_pool {
 	struct pf_palist	 list;
 #if !defined(__LP64__)
-	u_int32_t		_pad[2];
+	u_int32_t		 _pad[2];
 #endif /* !__LP64__ */
+#ifdef KERNEL
 	struct pf_pooladdr	*cur		__attribute__((aligned(8)));
+#else /* !KERNEL */
+	void			*cur		__attribute__((aligned(8)));
+#endif /* !KERNEL */
 	struct pf_poolhashkey	 key		__attribute__((aligned(8)));
 	struct pf_addr		 counter;
 	int			 tblidx;
@@ -662,7 +682,7 @@ struct pf_rule {
 
 	TAILQ_ENTRY(pf_rule)	 entries;
 #if !defined(__LP64__)
-	u_int32_t		_pad[2];
+	u_int32_t		 _pad[2];
 #endif /* !__LP64__ */
 	struct pf_pool		 rpool;
 
@@ -670,9 +690,17 @@ struct pf_rule {
 	u_int64_t		 packets[2];
 	u_int64_t		 bytes[2];
 
+#ifdef KERNEL
 	struct pfi_kif		*kif		__attribute__((aligned(8)));
+#else /* !KERNEL */
+	void			*kif		__attribute__((aligned(8)));
+#endif /* !KERNEL */
 	struct pf_anchor	*anchor		__attribute__((aligned(8)));
+#ifdef KERNEL
 	struct pfr_ktable	*overload_tbl	__attribute__((aligned(8)));
+#else /* !KERNEL */
+	void			*overload_tbl	__attribute__((aligned(8)));
+#endif /* !KERNEL */
 
 	pf_osfp_t		 os_fingerprint	__attribute__((aligned(8)));
 
@@ -741,7 +769,7 @@ struct pf_rule {
 	u_int8_t		proto_variant;
 	u_int8_t		extfilter; /* Filter mode [PF_EXTFILTER_xxx] */
 	u_int8_t		extmap; /* Mapping mode [PF_EXTMAP_xxx] */
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 };
 
 /* rule flags */
@@ -782,7 +810,7 @@ enum pf_extfilter {
 	PF_EXTFILTER_AD,		/* Address-dependent filtering */
 	PF_EXTFILTER_EI			/* Endpoint-independent filtering */
 };
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 
 struct pf_threshold {
 	u_int32_t	limit;
@@ -798,7 +826,11 @@ struct pf_src_node {
 	struct pf_addr	 addr;
 	struct pf_addr	 raddr;
 	union pf_rule_ptr rule;
+#ifdef KERNEL
 	struct pfi_kif	*kif;
+#else /* !KERNEL */
+	void		*kif;
+#endif /* !KERNEL */
 	u_int64_t	 bytes[2];
 	u_int64_t	 packets[2];
 	u_int32_t	 states;
@@ -812,6 +844,7 @@ struct pf_src_node {
 
 #define PFSNODE_HIWAT		10000	/* default source node table size */
 
+#ifdef KERNEL
 struct pf_state_scrub {
 	struct timeval	pfss_last;	/* time received last packet	*/
 	u_int32_t	pfss_tsecr;	/* last echoed timestamp	*/
@@ -827,6 +860,7 @@ struct pf_state_scrub {
 	u_int8_t	pad;
 	u_int32_t	pfss_ts_mod;	/* timestamp modulation		*/
 };
+#endif /* KERNEL */
 
 #ifndef NO_APPLE_EXTENSIONS
 union pf_state_xport {
@@ -839,14 +873,15 @@ struct pf_state_host {
 	struct pf_addr			addr;
 	union pf_state_xport	xport;
 };
-#else
+#else /* NO_APPLE_EXTENSIONS */
 struct pf_state_host {
 	struct pf_addr	addr;
 	u_int16_t	port;
 	u_int16_t	pad;
 };
-#endif
+#endif /* NO_APPLE_EXTENSIONS */
 
+#ifdef KERNEL
 struct pf_state_peer {
 	u_int32_t	seqlo;		/* Max sequence number sent	*/
 	u_int32_t	seqhi;		/* Max the other end ACKd + win	*/
@@ -861,6 +896,7 @@ struct pf_state_peer {
 };
 
 TAILQ_HEAD(pf_state_queue, pf_state);
+#endif /* KERNEL */
 
 #ifndef NO_APPLE_EXTENSIONS
 #ifdef KERNEL
@@ -877,6 +913,10 @@ struct pf_pptp_state {
 	struct pf_state *grev1_state;
 };
 
+struct pf_grev1_state {
+	struct pf_state *pptp_state;
+};
+
 struct pf_ike_state {
 	u_int64_t cookie;
 };
@@ -887,13 +927,15 @@ struct pf_app_state {
 	pf_app_compare	compare_ext_gwy;
 	union {
 		struct pf_pptp_state pptp;
+		struct pf_grev1_state grev1;
 		struct pf_ike_state ike;
 	} u;
 };
 #endif /* KERNEL */
 #define PF_GRE_PPTP_VARIANT	0x01
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 
+#ifdef KERNEL
 /* keep synced with struct pf_state, used in RB_FIND */
 struct pf_state_key_cmp {
 	struct pf_state_host lan;
@@ -905,9 +947,9 @@ struct pf_state_key_cmp {
 #ifndef NO_APPLE_EXTENSIONS
 	u_int8_t	 proto_variant;
 	struct pf_app_state	*app_state;
-#else
+#else /* NO_APPLE_EXTENSIONS */
 	u_int8_t	 pad;
-#endif
+#endif /* NO_APPLE_EXTENSIONS */
 };
 
 TAILQ_HEAD(pf_statelist, pf_state);
@@ -922,9 +964,9 @@ struct pf_state_key {
 #ifndef NO_APPLE_EXTENSIONS
 	u_int8_t	 proto_variant;
 	struct pf_app_state	*app_state;
-#else
+#else /* NO_APPLE_EXTENSIONS */
 	u_int8_t	 pad;
-#endif
+#endif /* NO_APPLE_EXTENSIONS */
 
 	RB_ENTRY(pf_state_key)	 entry_lan_ext;
 	RB_ENTRY(pf_state_key)	 entry_ext_gwy;
@@ -939,10 +981,12 @@ struct pf_state_cmp {
 	u_int32_t	 creatorid;
 	u_int32_t	 pad;
 };
+#endif /* KERNEL */
 
 struct hook_desc;
 TAILQ_HEAD(hook_desc_head, hook_desc);
 
+#ifdef KERNEL
 struct pf_state {
 	u_int64_t		 id;
 	u_int32_t		 creatorid;
@@ -959,7 +1003,7 @@ struct pf_state {
 	struct pf_addr		 rt_addr;
 #ifndef NO_APPLE_EXTENSIONS
 	struct hook_desc_head unlink_hooks;
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 	struct pf_state_key	*state_key;
 	struct pfi_kif		*kif;
 	struct pfi_kif		*rt_kif;
@@ -975,10 +1019,12 @@ struct pf_state {
 	u_int8_t		 allow_opts;
 	u_int8_t		 timeout;
 	u_int8_t		 sync_flags;
+};
+#endif /* KERNEL */
+
 #define	PFSTATE_NOSYNC	 0x01
 #define	PFSTATE_FROMSYNC 0x02
 #define	PFSTATE_STALE	 0x04
-};
 
 #define	__packed	__attribute__((__packed__))
 
@@ -999,10 +1045,10 @@ struct pfsync_state_host {
 #ifndef NO_APPLE_EXTENSIONS
 	union pf_state_xport	xport;
 	u_int16_t	pad[2];
-#else
+#else /* NO_APPLE_EXTENSIONS */
 	u_int16_t	port;
 	u_int16_t	pad[3];
-#endif
+#endif /* NO_APPLE_EXTENSIONS */
 } __packed;
 
 struct pfsync_state_peer {
@@ -1031,7 +1077,7 @@ struct pfsync_state {
 #if !defined(__LP64__)
 	u_int32_t	_pad[2];
 #endif /* !__LP64__ */
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 	u_int32_t	 rule;
 	u_int32_t	 anchor;
 	u_int32_t	 nat_rule;
@@ -1042,7 +1088,7 @@ struct pfsync_state {
 	u_int32_t	 creatorid;
 #ifndef NO_APPLE_EXTENSIONS
     u_int16_t    tag;
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 	sa_family_t	 af;
 	u_int8_t	 proto;
 	u_int8_t	 direction;
@@ -1053,7 +1099,7 @@ struct pfsync_state {
 	u_int8_t	 updates;
 #ifndef NO_APPLE_EXTENSIONS
 	u_int8_t	 proto_variant;
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 } __packed;
 
 #define PFSYNC_FLAG_COMPRESS	0x01
@@ -1061,6 +1107,7 @@ struct pfsync_state {
 #define PFSYNC_FLAG_SRCNODE	0x04
 #define PFSYNC_FLAG_NATSRCNODE	0x08
 
+#ifdef KERNEL
 /* for copies to/from userland via pf_ioctl() */
 #define pf_state_peer_to_pfsync(s, d) do {	\
 	(d)->seqlo = (s)->seqlo;		\
@@ -1095,6 +1142,7 @@ struct pfsync_state {
 		(d)->scrub->pfss_ts_mod = (s)->scrub.pfss_ts_mod;	\
 	}								\
 } while (0)
+#endif /* KERNEL */
 
 #define pf_state_counter_to_pfsync(s, d) do {			\
 	d[0] = (s>>32)&0xffffffff;				\
@@ -1192,6 +1240,9 @@ enum { PFR_OP_BLOCK, PFR_OP_PASS, PFR_OP_ADDR_MAX, PFR_OP_TABLE_MAX };
 
 struct pfr_astats {
 	struct pfr_addr	 pfras_a;
+#if !defined(__LP64__)
+	u_int32_t	 _pad;
+#endif /* !__LP64__ */
 	u_int64_t	 pfras_packets[PFR_DIR_MAX][PFR_OP_ADDR_MAX];
 	u_int64_t	 pfras_bytes[PFR_DIR_MAX][PFR_OP_ADDR_MAX];
 	u_int64_t	 pfras_tzero;
@@ -1208,10 +1259,14 @@ struct pfr_tstats {
 	u_int64_t	 pfrts_tzero;
 	int		 pfrts_cnt;
 	int		 pfrts_refcnt[PFR_REFCNT_MAX];
+#if !defined(__LP64__)
+	u_int32_t	 _pad;
+#endif /* !__LP64__ */
 };
 #define	pfrts_name	pfrts_t.pfrt_name
 #define pfrts_flags	pfrts_t.pfrt_flags
 
+#ifdef KERNEL
 SLIST_HEAD(pfr_kentryworkq, pfr_kentry);
 struct pfr_kentry {
 	struct radix_node	 pfrke_node[2];
@@ -1255,33 +1310,18 @@ struct pfr_ktable {
 #define pfrkt_tzero	pfrkt_ts.pfrts_tzero
 
 RB_HEAD(pf_state_tree_lan_ext, pf_state_key);
-#ifdef KERNEL
 RB_PROTOTYPE_SC(__private_extern__, pf_state_tree_lan_ext, pf_state_key,
     entry_lan_ext, pf_state_compare_lan_ext);
-#else /* !KERNEL */
-RB_PROTOTYPE(pf_state_tree_lan_ext, pf_state_key, entry_lan_ext,
-    pf_state_compare_lan_ext);
-#endif /* !KERNEL */
 
 RB_HEAD(pf_state_tree_ext_gwy, pf_state_key);
-#ifdef KERNEL
 RB_PROTOTYPE_SC(__private_extern__, pf_state_tree_ext_gwy, pf_state_key,
     entry_ext_gwy, pf_state_compare_ext_gwy);
-#else /* !KERNEL */
-RB_PROTOTYPE(pf_state_tree_ext_gwy, pf_state_key, entry_ext_gwy,
-    pf_state_compare_ext_gwy);
-#endif /* !KERNEL */
 
 RB_HEAD(pfi_ifhead, pfi_kif);
 
 /* state tables */
-#ifdef KERNEL
 __private_extern__ struct pf_state_tree_lan_ext	 pf_statetbl_lan_ext;
 __private_extern__ struct pf_state_tree_ext_gwy	 pf_statetbl_ext_gwy;
-#else /* !KERNEL */
-extern struct pf_state_tree_lan_ext pf_statetbl_lan_ext;
-extern struct pf_state_tree_ext_gwy pf_statetbl_ext_gwy;
-#endif /* !KERNEL */
 
 /* keep synced with pfi_kif, used in RB_FIND */
 struct pfi_kif_cmp {
@@ -1308,6 +1348,22 @@ enum pfi_kif_refs {
 	PFI_KIF_REF_RULE
 };
 
+struct pfi_uif {
+#else /* !KERNEL */
+struct pfi_kif {
+#endif /* !KERNEL */
+	char				 pfik_name[IFNAMSIZ];
+	u_int64_t			 pfik_packets[2][2][2];
+	u_int64_t			 pfik_bytes[2][2][2];
+	u_int64_t			 pfik_tzero;
+	int				 pfik_flags;
+	int				 pfik_states;
+	int				 pfik_rules;
+#if !defined(__LP64__)
+	u_int32_t			 _pad;
+#endif /* !__LP64__ */
+};
+
 #define PFI_IFLAG_SKIP		0x0100	/* skip filtering on interface */
 
 #ifdef KERNEL
@@ -1329,7 +1385,7 @@ struct pf_pdesc {
 #ifndef NO_APPLE_EXTENSIONS
 		struct pf_grev1_hdr *grev1;
 		struct pf_esp_hdr *esp;
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 		void			*any;
 	} hdr;
 	struct pf_addr	 baddr;		/* address before translation */
@@ -1342,7 +1398,7 @@ struct pf_pdesc {
 #ifndef NO_APPLE_EXTENSIONS
 	struct mbuf	*mp;
 	int				lmw;	/* lazy writable offset */
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 	struct pf_mtag	*pf_mtag;
 	u_int16_t	*ip_sum;
 	u_int32_t	 p_len;		/* total length of payload */
@@ -1355,7 +1411,7 @@ struct pf_pdesc {
 	u_int8_t	 tos;
 #ifndef NO_APPLE_EXTENSIONS
 	u_int8_t	 proto_variant;
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 };
 #endif /* KERNEL */
 
@@ -1457,7 +1513,7 @@ struct pf_pdesc {
 #define PFESPS_NSTATES		3	/* number of state levels */
 
 #define PFESPS_NAMES { "NO_TRAFFIC", "INITIATING", "ESTABLISHED", NULL }
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 
 /* Other protocol state enumeration */
 #define PFOTHERS_NO_TRAFFIC	0
@@ -1483,6 +1539,7 @@ struct pf_pdesc {
 #define SCNT_SRC_NODE_REMOVALS	2
 #define SCNT_MAX		3
 
+#ifdef KERNEL
 #define ACTION_SET(a, x) \
 	do { \
 		if ((a) != NULL) \
@@ -1496,6 +1553,7 @@ struct pf_pdesc {
 		if (x < PFRES_MAX) \
 			pf_status.counters[x]++; \
 	} while (0)
+#endif /* KERNEL */
 
 struct pf_status {
 	u_int64_t	counters[PFRES_MAX];
@@ -1637,7 +1695,7 @@ struct pfioc_natlook {
 	u_int8_t	 proto;
 	u_int8_t	 proto_variant;
 	u_int8_t	 direction;
-#else
+#else /* NO_APPLE_EXTENSIONS */
 	u_int16_t	 sport;
 	u_int16_t	 dport;
 	u_int16_t	 rsport;
@@ -1645,7 +1703,7 @@ struct pfioc_natlook {
 	sa_family_t	 af;
 	u_int8_t	 proto;
 	u_int8_t	 direction;
-#endif
+#endif /* NO_APPLE_EXTENSIONS */
 };
 
 struct pfioc_state {
@@ -1666,7 +1724,7 @@ struct pfioc_state_addr_kill {
 	u_int8_t			neg;
 	union pf_rule_xport		xport;
 };
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 
 struct pfioc_state_kill {
 	/* XXX returns the number of states killed in psk_af */
@@ -1677,11 +1735,11 @@ struct pfioc_state_kill {
 	u_int8_t		_pad;
 	struct pfioc_state_addr_kill	psk_src;
 	struct pfioc_state_addr_kill	psk_dst;
-#else
+#else /* NO_APPLE_EXTENSIONS */
 	int			psk_proto;
 	struct pf_rule_addr	psk_src;
 	struct pf_rule_addr	psk_dst;
-#endif
+#endif /* NO_APPLE_EXTENSIONS */
 	char			psk_ifname[IFNAMSIZ];
 };
 
@@ -1695,15 +1753,51 @@ struct pfioc_states {
 #define ps_states	ps_u.psu_states
 };
 
+#ifdef KERNEL
+struct pfioc_states_32 {
+	int	ps_len;
+	union {
+		user32_addr_t		psu_buf;
+		user32_addr_t		psu_states;
+	} ps_u __attribute__((aligned(8)));
+};
+
+struct pfioc_states_64 {
+	int	ps_len;
+	union {
+		user64_addr_t		psu_buf;
+		user64_addr_t		psu_states;
+	} ps_u __attribute__((aligned(8)));
+};
+#endif /* KERNEL */
+
 struct pfioc_src_nodes {
 	int	psn_len;
 	union {
-		caddr_t		 psu_buf;
+		caddr_t			psu_buf;
 		struct pf_src_node	*psu_src_nodes;
 	} psn_u __attribute__((aligned(8)));
 #define psn_buf		psn_u.psu_buf
 #define psn_src_nodes	psn_u.psu_src_nodes
 };
+
+#ifdef KERNEL
+struct pfioc_src_nodes_32 {
+	int	psn_len;
+	union {
+		user32_addr_t		psu_buf;
+		user32_addr_t		psu_src_nodes;
+	} psn_u __attribute__((aligned(8)));
+};
+
+struct pfioc_src_nodes_64 {
+	int	psn_len;
+	union {
+		user64_addr_t		psu_buf;
+		user64_addr_t		psu_src_nodes;
+	} psn_u __attribute__((aligned(8)));
+};
+#endif /* KERNEL */
 
 struct pfioc_if {
 	char		 ifname[IFNAMSIZ];
@@ -1749,8 +1843,22 @@ struct pfioc_trans {
 		int		rs_num;
 		char		anchor[MAXPATHLEN];
 		u_int32_t	ticket;
-	}		*array __attribute__((aligned(8)));
+	} *array __attribute__((aligned(8)));
 };
+
+#ifdef KERNEL
+struct pfioc_trans_32 {
+	int		 size;	/* number of elements */
+	int		 esize; /* size of each element in bytes */
+	user32_addr_t	 array __attribute__((aligned(8)));
+};
+
+struct pfioc_trans_64 {
+	int		 size;	/* number of elements */
+	int		 esize; /* size of each element in bytes */
+	user64_addr_t	 array __attribute__((aligned(8)));
+};
+#endif /* KERNEL */
 
 #define PFR_FLAG_ATOMIC		0x00000001
 #define PFR_FLAG_DUMMY		0x00000002
@@ -1762,7 +1870,7 @@ struct pfioc_trans {
 #define PFR_FLAG_ALLMASK	0x0000007F
 #ifdef KERNEL
 #define PFR_FLAG_USERIOCTL	0x10000000
-#endif
+#endif /* KERNEL */
 
 struct pfioc_table {
 	struct pfr_table	 pfrio_table;
@@ -1783,6 +1891,34 @@ struct pfioc_table {
 #define pfrio_setflag	pfrio_size2
 #define pfrio_clrflag	pfrio_nadd
 
+#ifdef KERNEL
+struct pfioc_table_32 {
+	struct pfr_table	 pfrio_table;
+	user32_addr_t		 pfrio_buffer	__attribute__((aligned(8)));
+	int			 pfrio_esize	__attribute__((aligned(8)));
+	int			 pfrio_size;
+	int			 pfrio_size2;
+	int			 pfrio_nadd;
+	int			 pfrio_ndel;
+	int			 pfrio_nchange;
+	int			 pfrio_flags;
+	u_int32_t		 pfrio_ticket;
+};
+
+struct pfioc_table_64 {
+	struct pfr_table	 pfrio_table;
+	user64_addr_t		 pfrio_buffer	__attribute__((aligned(8)));
+	int			 pfrio_esize	__attribute__((aligned(8)));
+	int			 pfrio_size;
+	int			 pfrio_size2;
+	int			 pfrio_nadd;
+	int			 pfrio_ndel;
+	int			 pfrio_nchange;
+	int			 pfrio_flags;
+	u_int32_t		 pfrio_ticket;
+};
+#endif /* KERNEL */
+
 struct pfioc_iface {
 	char	 pfiio_name[IFNAMSIZ];
 	void	*pfiio_buffer			__attribute__((aligned(8)));
@@ -1792,6 +1928,25 @@ struct pfioc_iface {
 	int	 pfiio_flags;
 };
 
+#ifdef KERNEL
+struct pfioc_iface_32 {
+	char	 pfiio_name[IFNAMSIZ];
+	user32_addr_t pfiio_buffer		__attribute__((aligned(8)));
+	int	 pfiio_esize			__attribute__((aligned(8)));
+	int	 pfiio_size;
+	int	 pfiio_nzero;
+	int	 pfiio_flags;
+};
+
+struct pfioc_iface_64 {
+	char	 pfiio_name[IFNAMSIZ];
+	user64_addr_t pfiio_buffer		__attribute__((aligned(8)));
+	int	 pfiio_esize			__attribute__((aligned(8)));
+	int	 pfiio_size;
+	int	 pfiio_nzero;
+	int	 pfiio_flags;
+};
+#endif /* KERNEL */
 
 /*
  * ioctl operations
@@ -1907,7 +2062,7 @@ __private_extern__ struct pool pf_altq_pl;
 #endif /* ALTQ */
 #ifndef NO_APPLE_EXTENSIONS
 __private_extern__ struct pool pf_app_state_pl;
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 
 __private_extern__ struct thread *pf_purge_thread;
 
@@ -1951,7 +2106,7 @@ __private_extern__ void pf_addr_inc(struct pf_addr *, sa_family_t);
 #ifndef NO_APPLE_EXTENSIONS
 __private_extern__ struct mbuf *pf_lazy_makewritable(struct pf_pdesc *,
     struct mbuf *, int);
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 __private_extern__ void *pf_pull_hdr(struct mbuf *, int, void *, int,
     u_short *, u_short *, sa_family_t);
 __private_extern__ void pf_change_a(void *, u_int16_t *, u_int32_t, u_int8_t);
@@ -1967,7 +2122,7 @@ __private_extern__ int pf_match_port(u_int8_t, u_int16_t, u_int16_t, u_int16_t);
 #ifndef NO_APPLE_EXTENSIONS
 __private_extern__ int pf_match_xport(u_int8_t, u_int8_t, union pf_rule_xport *,
     union pf_state_xport *);
-#endif
+#endif /* !NO_APPLE_EXTENSIONS */
 __private_extern__ int pf_match_uid(u_int8_t, uid_t, uid_t, uid_t);
 __private_extern__ int pf_match_gid(u_int8_t, gid_t, gid_t, gid_t);
 
@@ -2007,31 +2162,31 @@ __private_extern__ struct pfr_ktable *pfr_attach_table(struct pf_ruleset *,
     char *);
 __private_extern__ void pfr_detach_table(struct pfr_ktable *);
 __private_extern__ int pfr_clr_tables(struct pfr_table *, int *, int);
-__private_extern__ int pfr_add_tables(struct pfr_table *, int, int *, int);
-__private_extern__ int pfr_del_tables(struct pfr_table *, int, int *, int);
-__private_extern__ int pfr_get_tables(struct pfr_table *, struct pfr_table *,
+__private_extern__ int pfr_add_tables(user_addr_t, int, int *, int);
+__private_extern__ int pfr_del_tables(user_addr_t, int, int *, int);
+__private_extern__ int pfr_get_tables(struct pfr_table *, user_addr_t,
     int *, int);
-__private_extern__ int pfr_get_tstats(struct pfr_table *, struct pfr_tstats *,
+__private_extern__ int pfr_get_tstats(struct pfr_table *, user_addr_t,
     int *, int);
-__private_extern__ int pfr_clr_tstats(struct pfr_table *, int, int *, int);
-__private_extern__ int pfr_set_tflags(struct pfr_table *, int, int, int, int *,
+__private_extern__ int pfr_clr_tstats(user_addr_t, int, int *, int);
+__private_extern__ int pfr_set_tflags(user_addr_t, int, int, int, int *,
     int *, int);
 __private_extern__ int pfr_clr_addrs(struct pfr_table *, int *, int);
 __private_extern__ int pfr_insert_kentry(struct pfr_ktable *, struct pfr_addr *,
     u_int64_t);
-__private_extern__ int pfr_add_addrs(struct pfr_table *, struct pfr_addr *,
+__private_extern__ int pfr_add_addrs(struct pfr_table *, user_addr_t,
     int, int *, int);
-__private_extern__ int pfr_del_addrs(struct pfr_table *, struct pfr_addr *,
+__private_extern__ int pfr_del_addrs(struct pfr_table *, user_addr_t,
     int, int *, int);
-__private_extern__ int pfr_set_addrs(struct pfr_table *, struct pfr_addr *,
+__private_extern__ int pfr_set_addrs(struct pfr_table *, user_addr_t,
     int, int *, int *, int *, int *, int, u_int32_t);
-__private_extern__ int pfr_get_addrs(struct pfr_table *, struct pfr_addr *,
+__private_extern__ int pfr_get_addrs(struct pfr_table *, user_addr_t,
     int *, int);
-__private_extern__ int pfr_get_astats(struct pfr_table *, struct pfr_astats *,
+__private_extern__ int pfr_get_astats(struct pfr_table *, user_addr_t,
     int *, int);
-__private_extern__ int pfr_clr_astats(struct pfr_table *, struct pfr_addr *,
+__private_extern__ int pfr_clr_astats(struct pfr_table *, user_addr_t,
     int, int *, int);
-__private_extern__ int pfr_tst_addrs(struct pfr_table *, struct pfr_addr *,
+__private_extern__ int pfr_tst_addrs(struct pfr_table *, user_addr_t,
     int, int *, int);
 __private_extern__ int pfr_ina_begin(struct pfr_table *, u_int32_t *, int *,
     int);
@@ -2039,7 +2194,7 @@ __private_extern__ int pfr_ina_rollback(struct pfr_table *, u_int32_t, int *,
     int);
 __private_extern__ int pfr_ina_commit(struct pfr_table *, u_int32_t, int *,
     int *, int);
-__private_extern__ int pfr_ina_define(struct pfr_table *, struct pfr_addr *,
+__private_extern__ int pfr_ina_define(struct pfr_table *, user_addr_t,
     int, int *, int *, u_int32_t, int);
 
 __private_extern__ struct pfi_kif *pfi_all;
@@ -2057,7 +2212,7 @@ __private_extern__ int pfi_dynaddr_setup(struct pf_addr_wrap *, sa_family_t);
 __private_extern__ void pfi_dynaddr_remove(struct pf_addr_wrap *);
 __private_extern__ void pfi_dynaddr_copyout(struct pf_addr_wrap *);
 __private_extern__ void pfi_update_status(const char *, struct pf_status *);
-__private_extern__ int pfi_get_ifaces(const char *, struct pfi_kif *, int *);
+__private_extern__ int pfi_get_ifaces(const char *, user_addr_t, int *);
 __private_extern__ int pfi_set_flags(const char *, int);
 __private_extern__ int pfi_clear_flags(const char *, int);
 

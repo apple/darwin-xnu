@@ -827,12 +827,16 @@ vm_pageout_cluster(vm_page_t m)
 	m->list_req_pending = TRUE;
 	m->cleaning = TRUE;
 	m->pageout = TRUE;
-        m->laundry = TRUE;
 
 	if (object->internal == TRUE)
 	        q = &vm_pageout_queue_internal;
 	else
 	        q = &vm_pageout_queue_external;
+
+        /* 
+	 * pgo_laundry count is tied to the laundry bit
+	 */
+	m->laundry = TRUE;
 	q->pgo_laundry++;
 
 	m->pageout_queue = TRUE;
@@ -862,32 +866,35 @@ vm_pageout_throttle_up(
 {
         struct vm_pageout_queue *q;
 
-	assert(m->laundry);
 	assert(m->object != VM_OBJECT_NULL);
 	assert(m->object != kernel_object);
 
 	vm_pageout_throttle_up_count++;
-
+	
 	if (m->object->internal == TRUE)
-	        q = &vm_pageout_queue_internal;
+	       	q = &vm_pageout_queue_internal;
 	else
-	        q = &vm_pageout_queue_external;
+	       	q = &vm_pageout_queue_external;
 
 	if (m->pageout_queue == TRUE) {
-		m->pageout_queue = FALSE;
 
 		queue_remove(&q->pgo_pending, m, vm_page_t, pageq);
+		m->pageout_queue = FALSE;
+
 		m->pageq.next = NULL;
 		m->pageq.prev = NULL;
 
 		vm_object_paging_end(m->object);
 	}
-	m->laundry = FALSE;
-	q->pgo_laundry--;
 
-	if (q->pgo_throttled == TRUE) {
-	        q->pgo_throttled = FALSE;
-	        thread_wakeup((event_t) &q->pgo_laundry);
+	if ( m->laundry == TRUE ) {
+
+		m->laundry = FALSE;
+		q->pgo_laundry--;
+		if (q->pgo_throttled == TRUE) {
+			q->pgo_throttled = FALSE;
+			thread_wakeup((event_t) &q->pgo_laundry);
+		}
 	}
 }
 
@@ -2135,10 +2142,10 @@ reactivate_page:
 		if (inactive_throttled == TRUE) {
 throttle_inactive:
 			if (!IP_VALID(memory_manager_default) &&
-				object->internal && 
-				(object->purgable == VM_PURGABLE_DENY ||
-				 object->purgable == VM_PURGABLE_NONVOLATILE ||
-				 object->purgable == VM_PURGABLE_VOLATILE )) {
+			    object->internal && m->dirty &&
+			    (object->purgable == VM_PURGABLE_DENY ||
+			     object->purgable == VM_PURGABLE_NONVOLATILE ||
+			     object->purgable == VM_PURGABLE_VOLATILE)) {
 			        queue_enter(&vm_page_queue_throttled, m,
 					    vm_page_t, pageq);
 				m->throttled = TRUE;
@@ -3239,7 +3246,12 @@ check_busy:
 
 				vm_page_lockspin_queues();
 
-				if (dst_page->pageout_queue == TRUE) {
+#if CONFIG_EMBEDDED
+				if (dst_page->laundry)
+#else
+				if (dst_page->pageout_queue == TRUE)
+#endif
+				{
 					/*
 					 * we've buddied up a page for a clustered pageout
 					 * that has already been moved to the pageout
@@ -6943,7 +6955,12 @@ vm_pageout_queue_steal(vm_page_t page, boolean_t queues_locked)
 	 *
 	 * the laundry and pageout_queue flags are cleared...
 	 */
+#if CONFIG_EMBEDDED
+	if (page->laundry)
+		vm_pageout_throttle_up(page);
+#else
 	vm_pageout_throttle_up(page);
+#endif
 
 	/*
 	 * toss the wire count we picked up

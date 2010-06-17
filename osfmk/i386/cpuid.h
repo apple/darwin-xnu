@@ -84,6 +84,7 @@
 #define CPUID_FEATURE_PBE     _Bit(31)	/* Pend Break Enable */
 
 #define CPUID_FEATURE_SSE3    _HBit(0)	/* Streaming SIMD extensions 3 */
+#define CPUID_FEATURE_PCLMULQDQ _HBit(1) /* PCLMULQDQ Instruction */
 
 #define CPUID_FEATURE_MONITOR _HBit(3)	/* Monitor/mwait */
 #define CPUID_FEATURE_DSCPL   _HBit(4)	/* Debug Store CPL */
@@ -102,6 +103,7 @@
 #define CPUID_FEATURE_SSE4_2  _HBit(20)	/* Streaming SIMD extensions 4.2 */
 #define CPUID_FEATURE_xAPIC   _HBit(21)	/* Extended APIC Mode */
 #define CPUID_FEATURE_POPCNT  _HBit(23)	/* POPCNT instruction */
+#define CPUID_FEATURE_AES     _HBit(25)	/* AES instructions */
 #define CPUID_FEATURE_VMM     _HBit(31)	/* VMM (Hypervisor) present */
 
 /*
@@ -111,6 +113,7 @@
 #define CPUID_EXTFEATURE_SYSCALL   _Bit(11)	/* SYSCALL/sysret */
 #define CPUID_EXTFEATURE_XD	   _Bit(20)	/* eXecute Disable */
 
+#define CPUID_EXTFEATURE_1GBPAGE   _Bit(26)     /* 1G-Byte Page support */
 #define CPUID_EXTFEATURE_RDTSCP	   _Bit(27)	/* RDTSCP */
 #define CPUID_EXTFEATURE_EM64T	   _Bit(29)	/* Extended Mem 64 Technology */
 
@@ -131,9 +134,13 @@
 #define CPUID_MODEL_MEROM	15
 #define CPUID_MODEL_PENRYN	23
 #define CPUID_MODEL_NEHALEM	26
+#define CPUID_MODEL_ATOM	28
 #define CPUID_MODEL_FIELDS	30	/* Lynnfield, Clarksfield, Jasper */
 #define CPUID_MODEL_DALES	31	/* Havendale, Auburndale */
 #define CPUID_MODEL_NEHALEM_EX	46
+#define CPUID_MODEL_DALES_32NM	37	/* Clarkdale, Arrandale */
+#define CPUID_MODEL_WESTMERE	44	/* Gulftown, Westmere-EP, Westmere-WS */
+#define CPUID_MODEL_WESTMERE_EX	47
 
 #ifndef ASSEMBLER
 #include <stdint.h>

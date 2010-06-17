@@ -46,6 +46,7 @@ Public routines:
 	BlockDeallocate
 					Deallocate a contiguous run of allocation blocks.
 
+	invalidate_free_extent_cache	Invalidate free extent cache for a given volume.
 
 Internal routines:
 	BlockMarkFree
@@ -154,6 +155,8 @@ static OSErr BlockAllocateKnown(
 	u_int32_t		*actualStartBlock,
 	u_int32_t		*actualNumBlocks);
 
+static int free_extent_cache_active(
+	ExtendedVCB 		*vcb);
 
 /*
 ;________________________________________________________________________________
@@ -459,6 +462,10 @@ OSErr BlockDeallocate (
 		HFS_UPDATE_NEXT_ALLOCATION(vcb, (vcb->nextAllocation - numBlocks));
 	}
 
+	if (free_extent_cache_active(vcb) == 0) {
+		goto skip_cache;
+	}
+
 	tempWord = vcb->vcbFreeExtCnt;
 	//	Add this free chunk to the free extent list
 	if (vcb->hfs_flags & HFS_HAS_SPARSE_DEVICE) {
@@ -507,6 +514,7 @@ OSErr BlockDeallocate (
 		}
 	}
 
+skip_cache:
 	MarkVCBDirty(vcb);
   	HFS_MOUNT_UNLOCK(vcb, TRUE); 
 
@@ -1040,8 +1048,14 @@ static OSErr BlockAllocateKnown(
 	u_int32_t		foundBlocks;
 	u_int32_t		newStartBlock, newBlockCount;
 
-	if (vcb->vcbFreeExtCnt == 0 || vcb->vcbFreeExt[0].blockCount == 0)
+	HFS_MOUNT_LOCK(vcb, TRUE);
+	if (free_extent_cache_active(vcb) == 0 ||
+	    vcb->vcbFreeExtCnt == 0 || 
+	    vcb->vcbFreeExt[0].blockCount == 0) {
+		HFS_MOUNT_UNLOCK(vcb, TRUE);
 		return dskFulErr;
+	}
+	HFS_MOUNT_UNLOCK(vcb, TRUE);
 
 	//	Just grab up to maxBlocks of the first (largest) free exent.
 	*actualStartBlock = vcb->vcbFreeExt[0].startBlock;
@@ -1774,6 +1788,13 @@ FoundUsed:
 		if (foundBlocks >= minBlocks)
 			break;		//	Found what we needed!
 
+		HFS_MOUNT_LOCK(vcb, TRUE);
+		if (free_extent_cache_active(vcb) == 0) {
+			HFS_MOUNT_UNLOCK(vcb, TRUE);
+			goto skip_cache;
+		}
+		HFS_MOUNT_UNLOCK(vcb, TRUE);
+
 		//	This free chunk wasn't big enough.  Try inserting it into the free extent cache in case
 		//	the allocation wasn't forced contiguous.
 		really_add = 0;
@@ -1838,7 +1859,7 @@ FoundUsed:
 				updated_free_extents = 1;
 			}
 		}
-
+skip_cache:
 		sanity_check_free_ext(vcb, 0);
 
 	} while (currentBlock < stopBlock);
@@ -2018,4 +2039,43 @@ Exit:
 	return (inuse);
 }
 
+/* Invalidate free extent cache for a given volume.
+ * This cache is invalidated and disabled when a volume is being resized 
+ * (via hfs_trucatefs() or hfs_extendefs()).
+ *
+ * Returns: Nothing
+ */
+void invalidate_free_extent_cache(ExtendedVCB *vcb)
+{
+	u_int32_t i;
 
+	HFS_MOUNT_LOCK(vcb, TRUE);
+	for (i = 0; i < vcb->vcbFreeExtCnt; i++) {
+		vcb->vcbFreeExt[i].startBlock = 0;
+		vcb->vcbFreeExt[i].blockCount = 0;
+	}
+	vcb->vcbFreeExtCnt = 0;
+	HFS_MOUNT_UNLOCK(vcb, TRUE);
+
+	return;
+}
+
+/* Check whether free extent cache is active or not. 
+ * This cache is invalidated and disabled when a volume is being resized 
+ * (via hfs_trucatefs() or hfs_extendefs()).
+ *
+ * This function assumes that the caller is holding the lock on 
+ * the mount point.
+ *
+ * Returns: 0 if the cache is not active,
+ *          1 if the cache is active.
+ */
+static int free_extent_cache_active(ExtendedVCB *vcb)
+{
+	int retval = 1;
+
+	if (vcb->hfs_flags & HFS_RESIZE_IN_PROGRESS) {
+		retval = 0;
+	}
+	return retval;
+}

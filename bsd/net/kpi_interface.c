@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -309,6 +309,63 @@ ifnet_eflags(
 	ifnet_t interface)
 {
 	return interface == NULL ? 0 : interface->if_eflags;
+}
+
+errno_t
+ifnet_set_idle_flags(ifnet_t ifp, u_int32_t new_flags, u_int32_t mask)
+{
+#if IFNET_ROUTE_REFCNT
+	int lock, before, after;
+
+	if (ifp == NULL)
+		return (EINVAL);
+
+	lck_mtx_lock(rnh_lock);
+
+	lock = (ifp->if_lock != NULL);
+	if (lock)
+		ifnet_lock_exclusive(ifp);
+
+	before = ifp->if_idle_flags;
+	ifp->if_idle_flags = (new_flags & mask) | (ifp->if_idle_flags & ~mask);
+	after = ifp->if_idle_flags;
+
+	if ((after - before) < 0 && ifp->if_idle_flags == 0 &&
+	    ifp->if_want_aggressive_drain != 0) {
+		ifp->if_want_aggressive_drain = 0;
+		if (ifnet_aggressive_drainers == 0)
+			panic("%s: ifp=%p negative aggdrain!", __func__, ifp);
+		if (--ifnet_aggressive_drainers == 0)
+			rt_aggdrain(0);
+	} else if ((after - before) > 0 && ifp->if_want_aggressive_drain == 0) {
+		ifp->if_want_aggressive_drain++;
+		if (++ifnet_aggressive_drainers == 0)
+			panic("%s: ifp=%p wraparound aggdrain!", __func__, ifp);
+		else if (ifnet_aggressive_drainers == 1)
+			rt_aggdrain(1);
+	}
+
+	if (lock)
+		ifnet_lock_done(ifp);
+
+	lck_mtx_unlock(rnh_lock);
+
+	return (0);
+#else
+#pragma unused(ifp, new_flags, mask)
+	return (ENOTSUP);
+#endif /* IFNET_ROUTE_REFCNT */
+}
+
+u_int32_t
+ifnet_idle_flags(ifnet_t ifp)
+{
+#if IFNET_ROUTE_REFCNT
+	return ((ifp == NULL) ? 0 : ifp->if_idle_flags);
+#else
+#pragma unused(ifp)
+	return (0);
+#endif /* IFNET_ROUTE_REFCNT */
 }
 
 static const ifnet_offload_t offload_mask = IFNET_CSUM_IP | IFNET_CSUM_TCP |
@@ -1492,3 +1549,82 @@ ifmaddr_ifnet(
 	if (ifmaddr == NULL || ifmaddr->ifma_ifp == NULL) return NULL;
 	return ifmaddr->ifma_ifp;
 }
+
+/******************************************************************************/
+/* interface cloner                                                           */
+/******************************************************************************/
+
+errno_t 
+ifnet_clone_attach(struct ifnet_clone_params *cloner_params, if_clone_t *ifcloner)
+{
+	errno_t error = 0;
+	struct if_clone *ifc = NULL;
+	size_t namelen;
+	
+	if (cloner_params == NULL || ifcloner == NULL || cloner_params->ifc_name == NULL ||
+		cloner_params->ifc_create == NULL || cloner_params->ifc_destroy == NULL ||
+		(namelen = strlen(cloner_params->ifc_name)) >= IFNAMSIZ) {
+		error = EINVAL;
+		goto fail;
+	}
+	
+	if (if_clone_lookup(cloner_params->ifc_name, NULL) != NULL) {
+		printf("ifnet_clone_attach: already a cloner for %s\n", cloner_params->ifc_name);
+		error = EEXIST;
+		goto fail;
+	}
+
+	/* Make room for name string */
+	ifc = _MALLOC(sizeof(struct if_clone) + IFNAMSIZ + 1, M_CLONE, M_WAITOK | M_ZERO);
+	if (ifc == NULL) {
+		printf("ifnet_clone_attach: _MALLOC failed\n");
+		error = ENOBUFS;
+		goto fail;
+	}
+	strlcpy((char *)(ifc + 1), cloner_params->ifc_name, IFNAMSIZ + 1);
+	ifc->ifc_name = (char *)(ifc + 1);
+	ifc->ifc_namelen = namelen;
+	ifc->ifc_maxunit = IF_MAXUNIT;
+	ifc->ifc_create = cloner_params->ifc_create;
+	ifc->ifc_destroy = cloner_params->ifc_destroy;
+
+	error = if_clone_attach(ifc);
+	if (error != 0) {
+		printf("ifnet_clone_attach: if_clone_attach failed %d\n", error);
+		goto fail;
+	}
+	*ifcloner = ifc;
+	
+	return 0;
+fail:
+	if (ifc != NULL)
+		FREE(ifc, M_CLONE);
+	return error;	
+}
+
+errno_t 
+ifnet_clone_detach(if_clone_t ifcloner)
+{
+	errno_t error = 0;
+	struct if_clone *ifc = ifcloner;
+	
+	if (ifc == NULL || ifc->ifc_name == NULL)
+		return EINVAL;
+	
+	if ((if_clone_lookup(ifc->ifc_name, NULL)) == NULL) {
+		printf("ifnet_clone_attach: no cloner for %s\n", ifc->ifc_name);
+		error = EINVAL;
+		goto fail;
+	}
+
+	if_clone_detach(ifc);
+	
+	FREE(ifc, M_CLONE);
+
+	return 0;
+fail:
+	return error;	
+}
+
+
+

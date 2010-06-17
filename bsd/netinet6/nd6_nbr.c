@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -746,13 +746,14 @@ nd6_na_input(
 			ln->ln_byhint = 0;
 			if (ln->ln_expire) {
 				lck_rw_lock_shared(nd_if_rwlock);
-				ln->ln_expire = timenow.tv_sec +
-				    nd_ifinfo[rt->rt_ifp->if_index].reachable;
+				ln->ln_expire = rt_expiry(rt, timenow.tv_sec,
+				    nd_ifinfo[rt->rt_ifp->if_index].reachable);
 				lck_rw_done(nd_if_rwlock);
 			}
 		} else {
 			ln->ln_state = ND6_LLINFO_STALE;
-			ln->ln_expire = timenow.tv_sec + nd6_gctimer;
+			ln->ln_expire = rt_expiry(rt, timenow.tv_sec,
+			    nd6_gctimer);
 		}
 		if ((ln->ln_router = is_router) != 0) {
 			/*
@@ -808,7 +809,8 @@ nd6_na_input(
 			 */
 			if (ln->ln_state == ND6_LLINFO_REACHABLE) {
 				ln->ln_state = ND6_LLINFO_STALE;
-				ln->ln_expire = timenow.tv_sec + nd6_gctimer;
+				ln->ln_expire = rt_expiry(rt, timenow.tv_sec,
+				    nd6_gctimer);
 			}
 			RT_REMREF_LOCKED(rt);
 			RT_UNLOCK(rt);
@@ -834,14 +836,16 @@ nd6_na_input(
 				ln->ln_byhint = 0;
 				if (ln->ln_expire) {
 					lck_rw_lock_shared(nd_if_rwlock);
-					ln->ln_expire = timenow.tv_sec +
-					    nd_ifinfo[ifp->if_index].reachable;
+					ln->ln_expire =
+					    rt_expiry(rt, timenow.tv_sec,
+					    nd_ifinfo[ifp->if_index].reachable);
 					lck_rw_done(nd_if_rwlock);
 				}
 			} else {
 				if (lladdr && llchange) {
 					ln->ln_state = ND6_LLINFO_STALE;
-					ln->ln_expire = timenow.tv_sec + nd6_gctimer;
+					ln->ln_expire = rt_expiry(rt,
+					    timenow.tv_sec, nd6_gctimer);
 				}
 			}
 		}

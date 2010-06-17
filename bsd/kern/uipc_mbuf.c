@@ -671,6 +671,7 @@ static struct mbuf *m_split0(struct mbuf *, int, int, int);
 		(m)->m_pkthdr.vlan_tag = 0;				\
 		(m)->m_pkthdr.socket_id = 0;				\
 		m_tag_init(m);						\
+		m_prio_init(m);						\
 	}								\
 }
 
@@ -3187,6 +3188,7 @@ m_copy_pkthdr(struct mbuf *to, struct mbuf *from)
 		m_tag_delete_chain(to, NULL);
 	to->m_pkthdr = from->m_pkthdr;		/* especially tags */
 	m_tag_init(from);			/* purge tags from src */
+	m_prio_init(from);			/* reset priority from src */
 	to->m_flags = (from->m_flags & M_COPYFLAGS) | (to->m_flags & M_EXT);
 	if ((to->m_flags & M_EXT) == 0)
 		to->m_data = to->m_pktdat;

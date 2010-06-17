@@ -220,6 +220,9 @@ BlockDeallocate					(ExtendedVCB *			vcb,
 								 u_int32_t 				firstBlock,
 								 u_int32_t 				numBlocks);
 
+EXTERN_API_C ( void )
+invalidate_free_extent_cache	(ExtendedVCB *			vcb);
+
 EXTERN_API_C( OSErr )
 BlockMarkAllocated(ExtendedVCB *vcb, u_int32_t startingBlock, u_int32_t numBlocks);
 

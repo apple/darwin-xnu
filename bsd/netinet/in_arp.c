@@ -276,12 +276,8 @@ arptfree(struct llinfo_arp *la)
 	}
 }
 
-/*
- * Timeout routine.  Age arp_tab entries periodically.
- */
-/* ARGSUSED */
-static void
-arptimer(void *ignored_arg)
+void
+in_arpdrain(void *ignored_arg)
 {
 #pragma unused (ignored_arg)
 	struct llinfo_arp *la, *ola;
@@ -300,6 +296,17 @@ arptimer(void *ignored_arg)
 			RT_UNLOCK(rt);
 	}
 	lck_mtx_unlock(rnh_lock);
+}
+
+/*
+ * Timeout routine.  Age arp_tab entries periodically.
+ */
+/* ARGSUSED */
+static void
+arptimer(void *ignored_arg)
+{
+#pragma unused (ignored_arg)
+	in_arpdrain(NULL);
 	timeout(arptimer, (caddr_t)0, arpt_prune * hz);
 }
 
@@ -431,8 +438,17 @@ arp_rtrequest(
 		     */
 			rt->rt_expire = 0;
 			ifnet_lladdr_copy_bytes(rt->rt_ifp, LLADDR(SDL(gate)), SDL(gate)->sdl_alen = 6);
-			if (useloopback)
+			if (useloopback) {
+#if IFNET_ROUTE_REFCNT
+				/* Adjust route ref count for the interfaces */
+				if (rt->rt_if_ref_fn != NULL &&
+				    rt->rt_ifp != lo_ifp) {
+					rt->rt_if_ref_fn(lo_ifp, 1);
+					rt->rt_if_ref_fn(rt->rt_ifp, -1);
+				}
+#endif /* IFNET_ROUTE_REFCNT */
 				rt->rt_ifp = lo_ifp;
+			}
 
 		}
 		break;
@@ -894,7 +910,8 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 				goto release;
 			} else {
 				route->rt_flags |= RTF_REJECT;
-				route->rt_rmx.rmx_expire += arpt_down;
+				route->rt_rmx.rmx_expire = rt_expiry(route,
+				    route->rt_rmx.rmx_expire, arpt_down);
 				llinfo->la_asked = 0;
 				llinfo->la_hold = NULL;
 				result = EHOSTUNREACH;
@@ -1232,6 +1249,14 @@ match:
 				lck_mtx_unlock(rnh_lock);
 				goto respond;
 			}
+#if IFNET_ROUTE_REFCNT
+			/* Adjust route ref count for the interfaces */
+			if (route->rt_if_ref_fn != NULL &&
+			    route->rt_ifp != ifp) {
+				route->rt_if_ref_fn(ifp, 1);
+				route->rt_if_ref_fn(route->rt_ifp, -1);
+			}
+#endif /* IFNET_ROUTE_REFCNT */
 			/* Change the interface when the existing route is on */
 			route->rt_ifp = ifp;
 			rtsetifa(route, &best_ia->ia_ifa);
@@ -1281,7 +1306,8 @@ match:
 		struct timeval timenow;
 
 		getmicrotime(&timenow);
-		route->rt_rmx.rmx_expire = timenow.tv_sec + arpt_keep;
+		route->rt_rmx.rmx_expire =
+		    rt_expiry(route, timenow.tv_sec, arpt_keep);
 	}
 	route->rt_flags &= ~RTF_REJECT;
 

@@ -1114,7 +1114,12 @@ thread_select(
 		 *	bound to a different processor, nor be in the wrong
 		 *	processor set.
 		 */
-		if (	thread->state == TH_RUN									&&
+		if (
+#if CONFIG_EMBEDDED
+				((thread->state & ~TH_SUSP) == TH_RUN)					&&
+#else
+				thread->state == TH_RUN									&&
+#endif
 				(thread->sched_pri >= BASEPRI_RTQUEUES		||
 				 processor->processor_meta == PROCESSOR_META_NULL ||
 				 processor->processor_meta->primary == processor)		&&

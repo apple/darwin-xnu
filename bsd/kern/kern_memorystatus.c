@@ -56,6 +56,7 @@ int kern_memorystatus_level = 0;
 int kern_memorystatus_last_level = 0;
 unsigned int kern_memorystatus_kev_failure_count = 0;
 int kern_memorystatus_level_critical = 5;
+#define kern_memorystatus_level_highwater (kern_memorystatus_level_critical + 5)
 
 static struct {
 	jetsam_kernel_stats_t stats;
@@ -152,20 +153,20 @@ jetsam_snapshot_procs(void)
 }
 
 static void
-jetsam_mark_pid_in_snapshot(pid_t pid)
+jetsam_mark_pid_in_snapshot(pid_t pid, int flag)
 {
 
 	int i = 0;
 
 	for (i = 0; i < jetsam_snapshot_list_count; i++) {
 		if (jetsam_snapshot_list[i].pid == pid) {
-			jetsam_snapshot_list[i].flags |= kJetsamFlagsKilled;
+			jetsam_snapshot_list[i].flags |= flag;
 			return;
 		}
 	}
 }
 
-static int
+int
 jetsam_kill_top_proc(void)
 {
 	proc_t p;
@@ -183,12 +184,11 @@ jetsam_kill_top_proc(void)
 			continue; // with lock held
 		}
 		lck_mtx_unlock(jetsam_list_mlock);
-		jetsam_mark_pid_in_snapshot(aPid);
+		jetsam_mark_pid_in_snapshot(aPid, kJetsamFlagsKilled);
 		p = proc_find(aPid);
 		if (p != NULL) {
-#if DEBUG
-			printf("jetsam: killing pid %d [%s] - memory_status_level: %d - ", aPid, p->p_comm, kern_memorystatus_level);
-#endif /* DEBUG */
+			printf("jetsam: killing pid %d [%s] - memory_status_level: %d - ", 
+					aPid, (p->p_comm ? p->p_comm : "(unknown)"), kern_memorystatus_level);
 			exit1(p, W_EXITCODE(0, SIGKILL), (int *)NULL);
 			proc_rele(p);
 #if DEBUG
@@ -197,6 +197,51 @@ jetsam_kill_top_proc(void)
 			return 0;
 		}
 	    lck_mtx_lock(jetsam_list_mlock);
+	}
+	lck_mtx_unlock(jetsam_list_mlock);
+	return -1;
+}
+
+static int
+jetsam_kill_hiwat_proc(void)
+{
+	proc_t p;
+	int i;
+	if (jetsam_snapshot_list_count == 0) {
+		jetsam_snapshot_procs();
+	}
+	lck_mtx_lock(jetsam_list_mlock);
+	for (i = jetsam_priority_list_index; i < jetsam_priority_list_count; i++) {
+		pid_t aPid;
+		int32_t hiwat;
+		aPid = jetsam_priority_list[i].pid;
+		hiwat = jetsam_priority_list[i].hiwat_pages;	
+		/* skip empty or non-hiwat slots in the list */
+		if (aPid == 0 || (hiwat < 0)) {
+			continue; // with lock held
+		}
+		lck_mtx_unlock(jetsam_list_mlock);
+		p = proc_find(aPid);
+		if (p != NULL) {
+			int32_t pages = (int32_t)jetsam_task_page_count(p->task);
+			if (pages > hiwat) {
+#if DEBUG
+				printf("jetsam: killing pid %d [%s] - %d pages > hiwat (%d)\n", aPid, p->p_comm, pages, hiwat);
+#endif /* DEBUG */
+				exit1(p, W_EXITCODE(0, SIGKILL), (int *)NULL);
+				proc_rele(p);
+#if DEBUG
+				printf("jetsam: pid %d killed - memory_status_level: %d\n", aPid, kern_memorystatus_level);
+#endif /* DEBUG */
+				jetsam_mark_pid_in_snapshot(aPid, kJetsamFlagsKilledHiwat);
+				jetsam_priority_list[i].pid = 0;
+				return 0;
+			} else {
+				proc_rele(p);
+			}
+
+		}
+		lck_mtx_lock(jetsam_list_mlock);
 	}
 	lck_mtx_unlock(jetsam_list_mlock);
 	return -1;
@@ -217,6 +262,12 @@ kern_memorystatus_thread(void)
 			}
 		}
 
+		while (kern_memorystatus_level <= kern_memorystatus_level_highwater) {
+			if (jetsam_kill_hiwat_proc() < 0) {
+				break;
+			}
+		}
+				
 		kern_memorystatus_last_level = kern_memorystatus_level;
 
 		ev_msg.vendor_code    = KEV_VENDOR_APPLE;

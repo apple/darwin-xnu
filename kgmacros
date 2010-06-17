@@ -1588,6 +1588,9 @@ define showkobject
     if ($kgm_kotype == 31)
 	printf "UPL"
     end
+    if ($kgm_kotype == 34)
+	printf "FD"
+    end
     printf ")\n"
 end
 

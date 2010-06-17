@@ -461,7 +461,7 @@ tcp_slowtimo(void)
 			goto tpgone;
 
 #if TRAFFIC_MGT
-	        if (so->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BACKGROUND && 
+	        if (so->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BG_REGULATE && 
 	        	bg_cnt > BG_COUNTER_MAX) {
 			u_int32_t	curr_recvtotal = tcpstat.tcps_rcvtotal;
 			u_int32_t	curr_bg_recvtotal = tcpstat.tcps_bg_rcvtotal;
@@ -477,7 +477,7 @@ tcp_slowtimo(void)
 					recv_change = 0;
 
 				if (recv_change > background_io_trigger) {
-					so->so_traffic_mgt_flags |= TRAFFIC_MGT_SO_BG_SUPPRESSED;
+					socket_set_traffic_mgt_flags(so, TRAFFIC_MGT_SO_BG_SUPPRESSED);
 				}
 				
 				tp->tot_recv_snapshot = curr_recvtotal;
@@ -493,7 +493,7 @@ tcp_slowtimo(void)
 				if (recv_change < background_io_trigger) {
 					// Draconian for now: if there is any change at all, keep suppressed
 					if (!tot_recvdiff) {
-						so->so_traffic_mgt_flags &= ~TRAFFIC_MGT_SO_BG_SUPPRESSED;
+						socket_clear_traffic_mgt_flags(so, TRAFFIC_MGT_SO_BG_SUPPRESSED);
 						tp->t_unacksegs = 0;
 						(void) tcp_output(tp);	// open window
 					}

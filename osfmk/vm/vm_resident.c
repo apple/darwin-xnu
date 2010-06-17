@@ -2787,10 +2787,10 @@ vm_page_deactivate_internal(
 		assert(m->pageq.next == NULL && m->pageq.prev == NULL);
 
 		if (!IP_VALID(memory_manager_default) &&
-			m->dirty && m->object->internal &&
-			(m->object->purgable == VM_PURGABLE_DENY ||
-			 m->object->purgable == VM_PURGABLE_NONVOLATILE ||
-			 m->object->purgable == VM_PURGABLE_VOLATILE )) {
+		    m->dirty && m->object->internal &&
+		    (m->object->purgable == VM_PURGABLE_DENY ||
+		     m->object->purgable == VM_PURGABLE_NONVOLATILE ||
+		     m->object->purgable == VM_PURGABLE_VOLATILE)) {
 			queue_enter(&vm_page_queue_throttled, m, vm_page_t, pageq);
 			m->throttled = TRUE;
 			vm_page_throttled_count++;
@@ -2864,10 +2864,10 @@ vm_page_activate(
 		assert(!m->laundry);
 		assert(m->pageq.next == NULL && m->pageq.prev == NULL);
 		if (!IP_VALID(memory_manager_default) && 
-			!m->fictitious && m->dirty && m->object->internal && 
-			(m->object->purgable == VM_PURGABLE_DENY ||
-			 m->object->purgable == VM_PURGABLE_NONVOLATILE ||
-			 m->object->purgable == VM_PURGABLE_VOLATILE )) {
+		    !m->fictitious && m->dirty && m->object->internal && 
+		    (m->object->purgable == VM_PURGABLE_DENY ||
+		     m->object->purgable == VM_PURGABLE_NONVOLATILE ||
+		     m->object->purgable == VM_PURGABLE_VOLATILE)) {
 			queue_enter(&vm_page_queue_throttled, m, vm_page_t, pageq);
 			m->throttled = TRUE;
 			vm_page_throttled_count++;
@@ -3432,6 +3432,7 @@ vm_page_verify_contiguous(
  */
 static unsigned int
 vm_page_verify_free_list(
+	queue_head_t	*vm_page_queue,
 	unsigned int	color,
 	vm_page_t	look_for_page,
 	boolean_t	expect_page)
@@ -3443,8 +3444,8 @@ vm_page_verify_free_list(
 
 	found_page = FALSE;
 	npages = 0;
-	prev_m = (vm_page_t) &vm_page_queue_free[color];
-	queue_iterate(&vm_page_queue_free[color],
+	prev_m = (vm_page_t) vm_page_queue;
+	queue_iterate(vm_page_queue,
 		      m,
 		      vm_page_t,
 		      pageq) {
@@ -3460,7 +3461,7 @@ vm_page_verify_free_list(
 		if ( ! m->busy )
 			panic("vm_page_verify_free_list(color=%u, npages=%u): page %p not busy\n",
 			      color, npages, m);
-		if ( (m->phys_page & vm_color_mask) != color)
+		if ( color != (unsigned int) -1 && (m->phys_page & vm_color_mask) != color)
 			panic("vm_page_verify_free_list(color=%u, npages=%u): page %p wrong color %u instead of %u\n",
 			      color, npages, m, m->phys_page & vm_color_mask, color);
 		++npages;
@@ -3478,8 +3479,14 @@ vm_page_verify_free_list(
 			     other_color++) {
 				if (other_color == color)
 					continue;
-				vm_page_verify_free_list(other_color, look_for_page, FALSE);
+				vm_page_verify_free_list(&vm_page_queue_free[other_color],
+							other_color, look_for_page, FALSE);
 			}
+			if (color != (unsigned int) -1) {
+				vm_page_verify_free_list(&vm_lopage_queue_free,
+							 (unsigned int) -1, look_for_page, FALSE);
+			}
+
 			panic("vm_page_verify_free_list(color=%u)\n", color);
 		}
 		if (!expect_page && found_page) {
@@ -3494,7 +3501,7 @@ static boolean_t vm_page_verify_free_lists_enabled = FALSE;
 static void
 vm_page_verify_free_lists( void )
 {
-	unsigned int	color, npages;
+	unsigned int	color, npages, nlopages;
 
 	if (! vm_page_verify_free_lists_enabled)
 		return;
@@ -3504,12 +3511,17 @@ vm_page_verify_free_lists( void )
 	lck_mtx_lock(&vm_page_queue_free_lock);
 
 	for( color = 0; color < vm_colors; color++ ) {
-		npages += vm_page_verify_free_list(color, VM_PAGE_NULL, FALSE);
+		npages += vm_page_verify_free_list(&vm_page_queue_free[color],
+						color, VM_PAGE_NULL, FALSE);
 	}
-	if (npages != vm_page_free_count)
-		panic("vm_page_verify_free_lists:  npages %u free_count %d",
-		      npages, vm_page_free_count);
 
+	nlopages = vm_page_verify_free_list(&vm_lopage_queue_free,
+					    (unsigned int) -1,
+					    VM_PAGE_NULL, FALSE);
+	if (npages != vm_page_free_count || nlopages != vm_lopage_free_count)
+		panic("vm_page_verify_free_lists:  "
+		      "npages %u free_count %d nlopages %u lo_free_count %u",
+		      npages, vm_page_free_count, nlopages, vm_lopage_free_count);
 	lck_mtx_unlock(&vm_page_queue_free_lock);
 }
 
@@ -3688,7 +3700,7 @@ retry:
 			 */
 			RESET_STATE_OF_RUN();
 
-		} else if (!npages & ((m->phys_page & pnum_mask) != 0)) {
+		} else if (!npages && ((m->phys_page & pnum_mask) != 0)) {
 			/*
 			 * not aligned
 			 */
@@ -3868,21 +3880,46 @@ did_consider:
 #endif
 
 			if (m1->free) {
-				unsigned int color;
+				if (  m1->phys_page <= vm_lopage_poolend &&
+					    m1->phys_page >= vm_lopage_poolstart) {
 
-				color = m1->phys_page & vm_color_mask;
+					assert( flags & KMA_LOMEM );
 #if MACH_ASSERT
-				vm_page_verify_free_list(color, m1, TRUE);
+					vm_page_verify_free_list(&vm_lopage_queue_free,
+						       		(unsigned int) -1, m1, TRUE);
 #endif
-				queue_remove(&vm_page_queue_free[color],
-					     m1,
-					     vm_page_t,
-					     pageq);
+					queue_remove(&vm_lopage_queue_free,
+						     m1,
+						     vm_page_t,
+						     pageq);
+					vm_lopage_free_count--;
+
+#if MACH_ASSERT
+					vm_page_verify_free_list(&vm_lopage_queue_free,
+								(unsigned int) -1, VM_PAGE_NULL, FALSE);
+#endif
+				} else {
+
+					unsigned int color;
+
+					color = m1->phys_page & vm_color_mask;
+#if MACH_ASSERT
+					vm_page_verify_free_list(&vm_page_queue_free[color],
+								color, m1, TRUE);
+#endif
+					queue_remove(&vm_page_queue_free[color],
+						     m1,
+						     vm_page_t,
+						     pageq);
+					vm_page_free_count--;
+#if MACH_ASSERT
+					vm_page_verify_free_list(&vm_page_queue_free[color],
+								color, VM_PAGE_NULL, FALSE);
+#endif
+				}
+
 				m1->pageq.next = NULL;
 				m1->pageq.prev = NULL;
-#if MACH_ASSERT
-				vm_page_verify_free_list(color, VM_PAGE_NULL, FALSE);
-#endif
 				/*
 				 * Clear the "free" bit so that this page
 				 * does not get considered for another
@@ -3890,8 +3927,6 @@ did_consider:
 				 */
 				m1->free = FALSE; 
 				assert(m1->busy);
-
-				vm_page_free_count--;
 			}
 		}
 		/*
@@ -4208,6 +4243,8 @@ cpm_allocate(
 }
 	
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#if HIBERNATION
 
 static vm_page_t hibernate_gobble_queue;
 
@@ -4663,6 +4700,8 @@ hibernate_page_list_discard(hibernate_page_list_t * page_list)
                 nsec / 1000000ULL,
                 count_discard_active, count_discard_inactive, count_discard_purgeable, count_discard_speculative);
 }
+
+#endif /* HIBERNATION */
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 

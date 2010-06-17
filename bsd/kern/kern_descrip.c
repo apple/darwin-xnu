@@ -107,6 +107,15 @@
 
 #include <sys/ubc_internal.h>
 
+#include <kern/ipc_misc.h>
+#include <vm/vm_protos.h>
+
+#include <mach/mach_port.h>
+
+kern_return_t ipc_object_copyin(ipc_space_t, mach_port_name_t,
+    mach_msg_type_name_t, ipc_port_t *);
+void ipc_port_release_send(ipc_port_t);
+
 struct psemnode;
 struct pshmnode;
 
@@ -117,6 +126,9 @@ int falloc_locked(proc_t p, struct fileproc **resultfp, int *resultfd, vfs_conte
 void fg_drop(struct fileproc * fp);
 void fg_free(struct fileglob *fg);
 void fg_ref(struct fileproc * fp);
+#if CONFIG_EMBEDDED
+void fileport_releasefg(struct fileglob *fg);
+#endif /* CONFIG_EMBEDDED */
 
 /* flags for close_internal_locked */
 #define FD_DUP2RESV 1
@@ -1585,6 +1597,21 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 		
 		break;
 	}
+
+	case F_GETPROTECTIONCLASS: {
+		// stub to make the API work
+		printf("Reached F_GETPROTECTIONCLASS, returning without action\n");
+		error = 0;
+		goto out;
+	}
+
+	case F_SETPROTECTIONCLASS: {
+		// stub to make the API work
+		printf("Reached F_SETPROTECTIONCLASS, returning without action\n");
+		error = 0;
+		goto out;
+	}
+
 
 	default:
 		/*
@@ -4301,6 +4328,180 @@ out1:
 	return(error);
 
 }
+
+#if CONFIG_EMBEDDED
+/*
+ * fileport_makeport
+ *
+ * Description: Obtain a Mach send right for a given file descriptor.
+ *
+ * Parameters:	p		Process calling fileport
+ * 		uap->fd		The fd to reference
+ * 		uap->portnamep  User address at which to place port name.
+ *
+ * Returns:	0		Success.
+ *     		EBADF		Bad file descriptor.
+ *     		EINVAL		File descriptor had type that cannot be sent, misc. other errors.
+ *     		EFAULT		Address at which to store port name is not valid.
+ *     		EAGAIN		Resource shortage.
+ *
+ * Implicit returns:
+ *		On success, name of send right is stored at user-specified address.		
+ */
+int
+fileport_makeport(proc_t p, struct fileport_makeport_args *uap,
+    __unused int *retval)
+{
+	int err;
+	int fd = uap->fd;
+	user_addr_t user_portaddr = uap->portnamep;
+	struct fileproc *fp = FILEPROC_NULL;
+	struct fileglob *fg = NULL;
+	ipc_port_t fileport;
+	mach_port_name_t name = MACH_PORT_NULL;
+
+	err = fp_lookup(p, fd, &fp, 0);
+	if (err != 0) {
+		goto out;
+	}
+
+	if (!filetype_issendable(fp->f_type)) {
+		err = EINVAL;
+		goto out;
+	}
+
+	/* Dropped when port is deallocated */
+	fg = fp->f_fglob;
+	fg_ref(fp);
+
+	/* Allocate and initialize a port */
+	fileport = fileport_alloc(fg);
+	if (fileport == IPC_PORT_NULL) {
+		err = EAGAIN;
+		fg_drop(fp);
+		goto out;
+	}
+	
+	/* Add an entry.  Deallocates port on failure. */
+	name = ipc_port_copyout_send(fileport, get_task_ipcspace(p->task));
+	if (!MACH_PORT_VALID(name)) {
+		err = EINVAL;
+		goto out;
+	} 
+	
+	err = copyout(&name, user_portaddr, sizeof(mach_port_name_t));
+	if (err != 0) {
+		goto out;
+	}
+
+	/* Tag the fileglob for debugging purposes */
+	lck_mtx_lock_spin(&fg->fg_lock);
+	fg->fg_lflags |= FG_PORTMADE;
+	lck_mtx_unlock(&fg->fg_lock);
+
+	fp_drop(p, fd, fp, 0);
+
+	return 0;
+
+out:
+	if (MACH_PORT_VALID(name)) {
+		/* Don't care if another thread races us to deallocate the entry */
+		(void) mach_port_deallocate(get_task_ipcspace(p->task), name);
+	}
+
+	if (fp != FILEPROC_NULL) {
+		fp_drop(p, fd, fp, 0);
+	}
+
+	return err;
+}
+
+void
+fileport_releasefg(struct fileglob *fg)
+{
+	(void)closef_locked(NULL, fg, PROC_NULL);
+
+	return;
+}
+
+
+/*
+ * fileport_makefd
+ *
+ * Description: Obtain the file descriptor for a given Mach send right.
+ *
+ * Parameters:	p		Process calling fileport
+ * 		uap->port	Name of send right to file port.
+ *
+ * Returns:	0		Success
+ *		EINVAL		Invalid Mach port name, or port is not for a file.
+ *	fdalloc:EMFILE
+ *	fdalloc:ENOMEM		Unable to allocate fileproc or extend file table.
+ *
+ * Implicit returns:
+ *		*retval (modified)		The new descriptor
+ */
+int
+fileport_makefd(proc_t p, struct fileport_makefd_args *uap, int32_t *retval)
+{
+	struct fileglob *fg;
+ 	struct fileproc *fp = FILEPROC_NULL;
+	ipc_port_t port = IPC_PORT_NULL;
+	mach_port_name_t send = uap->port;
+	kern_return_t res;
+	int fd;
+	int err;
+
+	res = ipc_object_copyin(get_task_ipcspace(p->task),
+			send, MACH_MSG_TYPE_COPY_SEND, &port);
+
+	if (res != KERN_SUCCESS) {
+		err = EINVAL;
+		goto out;
+	}
+
+	fg = fileport_port_to_fileglob(port);
+	if (fg == NULL) {
+		err = EINVAL;
+		goto out;
+	}
+	
+	MALLOC_ZONE(fp, struct fileproc *, sizeof(*fp), M_FILEPROC, M_WAITOK);
+	if (fp == FILEPROC_NULL) {
+		err = ENOMEM;
+		goto out;
+	}
+
+	bzero(fp, sizeof(*fp));
+
+	fp->f_fglob = fg;
+	fg_ref(fp);
+
+ 	proc_fdlock(p);
+	err = fdalloc(p, 0, &fd);
+	if (err != 0) {
+		proc_fdunlock(p);
+		goto out;
+	}
+
+	procfdtbl_releasefd(p, fd, fp);
+	proc_fdunlock(p);
+
+	*retval = fd;
+	err = 0;
+out:
+	if ((fp != NULL) && (0 != err)) {
+		FREE_ZONE(fp, sizeof(*fp), M_FILEPROC);
+	} 
+
+	if (IPC_PORT_NULL != port) {
+		ipc_port_release_send(port);
+	}
+
+	return err;
+}
+#endif /* CONFIG_EMBEDDED */
+
 
 /*
  * dupfdopen

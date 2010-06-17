@@ -639,6 +639,10 @@ tcp_respond(
 		return;
 	}
 #endif
+#if PKT_PRIORITY
+	if (tp != NULL && soisbackground(tp->t_inpcb->inp_socket))
+		m_prio_background(m);
+#endif /* PKT_PRIORITY */
 #if INET6
 	if (isipv6) {
 		(void)ip6_output(m, NULL, ro6, 0, NULL, NULL, 0);
@@ -2196,7 +2200,7 @@ tcp_sbspace(struct tcpcb *tp)
 		space = 0;
 
 #if TRAFFIC_MGT
-	if (tp->t_inpcb->inp_socket->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BACKGROUND) {
+	if (tp->t_inpcb->inp_socket->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BG_REGULATE) {
 		if (tcp_background_io_enabled &&
 			tp->t_inpcb->inp_socket->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BG_SUPPRESSED) {
 			tp->t_flags |= TF_RXWIN0SENT;

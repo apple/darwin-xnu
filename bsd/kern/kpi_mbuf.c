@@ -1071,3 +1071,23 @@ mbuf_get_mhlen(void)
 {
 	return (_MHLEN);
 }
+
+mbuf_priority_t
+mbuf_get_priority(struct mbuf *m)
+{
+#if !PKT_PRIORITY
+#pragma unused(m)
+	return (MBUF_PRIORITY_NORMAL);
+#else /* PKT_PRIORITY */
+	mbuf_priority_t prio = MBUF_PRIORITY_NORMAL;
+
+	if (m == NULL || !(m->m_flags & M_PKTHDR))
+		return (prio);
+
+	/* Defaults to normal; ignore anything else but background */
+	if (m->m_pkthdr.prio == MBUF_PRIORITY_BACKGROUND)
+		prio = MBUF_PRIORITY_BACKGROUND;
+
+	return (prio);
+#endif /* PKT_PRIORITY */
+}

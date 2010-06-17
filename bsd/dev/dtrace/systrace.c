@@ -219,6 +219,7 @@ dtrace_systrace_syscall(struct proc *pp, void *uap, int *rv)
 					munged_rv1 = ((u_int)rv[1]);
 					break;
 				case _SYSCALL_RET_OFF_T:
+				case _SYSCALL_RET_UINT64_T:
 					munged_rv0 = *(u_int64_t *)rv;
 					munged_rv1 = 0LL;
 					break;
@@ -302,6 +303,7 @@ dtrace_systrace_syscall_return(unsigned short code, int rval, int *rv)
 					munged_rv1 = ((u_int)rv[1]);
 					break;
 				case _SYSCALL_RET_OFF_T:
+				case _SYSCALL_RET_UINT64_T:
 					munged_rv0 = *(u_int64_t *)rv;
 					munged_rv1 = 0LL;
 					break;

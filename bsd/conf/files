@@ -107,7 +107,6 @@ OPTIONS/ipfw2				optional ipfw2
 OPTIONS/ipfirewall			optional ipfirewall
 OPTIONS/ipv6firewall		optional ipv6firewall
 OPTIONS/tcpdebug			optional tcpdebug
-OPTIONS/if_bridge			optional if_bridge
 OPTIONS/faith				optional faith
 OPTIONS/gif					optional gif
 OPTIONS/netat				optional netat
@@ -200,8 +199,6 @@ bsd/kern/decmpfs.c			standard
 
 bsd/net/bpf.c				optional bpfilter
 bsd/net/bpf_filter.c			optional bpfilter
-bsd/net/if_bridge.c			optional if_bridge
-bsd/net/bridgestp.c			optional if_bridge
 bsd/net/bsd_comp.c			optional ppp_bsdcomp
 bsd/net/if.c				optional networking
 bsd/net/if_atmsubr.c			optional atm
@@ -446,6 +443,7 @@ bsd/hfs/hfs_vfsutils.c				optional hfs
 bsd/hfs/hfs_vnops.c				optional hfs
 bsd/hfs/hfs_xattr.c				optional hfs
 bsd/hfs/MacOSStubs.c				optional hfs
+bsd/hfs/cprotect.c				optional hfs
 bsd/hfs/rangelist.c				optional hfs
 bsd/hfs/hfscommon/BTree/BTree.c			optional hfs
 bsd/hfs/hfscommon/BTree/BTreeAllocate.c		optional hfs

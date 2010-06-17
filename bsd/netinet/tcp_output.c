@@ -183,7 +183,7 @@ extern u_int32_t dlil_filter_count;
 extern u_int32_t kipf_count;
 
 static int tcp_ip_output(struct socket *, struct tcpcb *, struct mbuf *, int,
-    struct mbuf *, int, int);
+    struct mbuf *, int, int, int32_t);
 
 static __inline__ u_int16_t
 get_socket_id(struct socket * s)
@@ -578,7 +578,7 @@ after_sack_rexmit:
 
 				error = tcp_ip_output(so, tp, packetlist,
 				    packchain_listadd, tp_inp_options,
-				    (so_options & SO_DONTROUTE), (sack_rxmit | (sack_bytes_rxmt != 0)));
+				    (so_options & SO_DONTROUTE), (sack_rxmit | (sack_bytes_rxmt != 0)), 0);
 
 				tp->t_flags &= ~TF_SENDINPROG;
 			}
@@ -825,7 +825,7 @@ just_return:
 		tp->t_flags |= TF_SENDINPROG;
 
 		error = tcp_ip_output(so, tp, packetlist, packchain_listadd,
-		    tp_inp_options, (so_options & SO_DONTROUTE), (sack_rxmit | (sack_bytes_rxmt != 0)));
+		    tp_inp_options, (so_options & SO_DONTROUTE), (sack_rxmit | (sack_bytes_rxmt != 0)), recwin);
 
 		tp->t_flags &= ~TF_SENDINPROG;
 	}
@@ -1530,6 +1530,10 @@ timer:
 		}
 #endif /*IPSEC*/
 		m->m_pkthdr.socket_id = socket_id;
+#if PKT_PRIORITY
+		if (soisbackground(so))
+			m_prio_background(m);
+#endif /* PKT_PRIORITY */
 		error = ip6_output(m,
 			    inp6_pktopts,
 			    &tp->t_inpcb->in6p_route,
@@ -1618,7 +1622,7 @@ timer:
 
 			error = tcp_ip_output(so, tp, packetlist,
 			    packchain_listadd, tp_inp_options,
-			    (so_options & SO_DONTROUTE), (sack_rxmit | (sack_bytes_rxmt != 0)));
+			    (so_options & SO_DONTROUTE), (sack_rxmit | (sack_bytes_rxmt != 0)), recwin);
 
 			tp->t_flags &= ~TF_SENDINPROG;
 			if (error) {
@@ -1646,10 +1650,6 @@ timer:
 		packchain_looped++;
 		tcpstat.tcps_sndtotal++;
 
-		if (recwin > 0 && SEQ_GT(tp->rcv_nxt+recwin, tp->rcv_adv))
-			tp->rcv_adv = tp->rcv_nxt + recwin;
-		tp->last_ack_sent = tp->rcv_nxt;
-		tp->t_flags &= ~(TF_ACKNOW|TF_DELACK);
 		goto again;
 	}
    }
@@ -1726,12 +1726,18 @@ out:
 	 * Data sent (as far as we can tell).
 	 * If this advertises a larger window than any other segment,
 	 * then remember the size of the advertised window.
-	 * Any pending ACK has now been sent.
+	 * Make sure ACK/DELACK conditions are cleared before
+	 * we unlock the socket.
+	 *  NOTE: for now, this is done in tcp_ip_output for IPv4
 	 */
-	if (recwin > 0 && SEQ_GT(tp->rcv_nxt + recwin, tp->rcv_adv))
-		tp->rcv_adv = tp->rcv_nxt + recwin;
-	tp->last_ack_sent = tp->rcv_nxt;
-	tp->t_flags &= ~(TF_ACKNOW|TF_DELACK);
+#if INET6
+	if (isipv6) {
+		if (recwin > 0 && SEQ_GT(tp->rcv_nxt + recwin, tp->rcv_adv))
+			tp->rcv_adv = tp->rcv_nxt + recwin;
+		tp->last_ack_sent = tp->rcv_nxt;
+		tp->t_flags &= ~(TF_ACKNOW | TF_DELACK);
+	}
+#endif
 
 	KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END,0,0,0,0,0);
 	if (sendalot && (!tcp_do_newreno || --maxburst))
@@ -1741,7 +1747,7 @@ out:
 
 static int
 tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
-    int cnt, struct mbuf *opt, int flags, int sack_in_progress)
+    int cnt, struct mbuf *opt, int flags, int sack_in_progress, int recwin)
 {
 	int error = 0;
 	boolean_t chain;
@@ -1749,6 +1755,9 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 	struct inpcb *inp = tp->t_inpcb;
 	struct ip_out_args ipoa;
 	struct route ro;
+#if PKT_PRIORITY
+	boolean_t bg = FALSE;
+#endif /* PKT_PRIORITY */
 
 	/* If socket was bound to an ifindex, tell ip_output about it */
 	ipoa.ipoa_ifscope = (inp->inp_flags & INP_BOUND_IF) ?
@@ -1758,10 +1767,20 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 	/* Copy the cached route and take an extra reference */
 	inp_route_copyout(inp, &ro);
 
+#if PKT_PRIORITY
+	bg = soisbackground(so);
+#endif /* PKT_PRIORITY */
+
 	/*
+	 * Data sent (as far as we can tell).
+	 * If this advertises a larger window than any other segment,
+	 * then remember the size of the advertised window.
 	 * Make sure ACK/DELACK conditions are cleared before
 	 * we unlock the socket.
 	 */
+	if (recwin > 0 && SEQ_GT(tp->rcv_nxt + recwin, tp->rcv_adv))
+		tp->rcv_adv = tp->rcv_nxt + recwin;
+	tp->last_ack_sent = tp->rcv_nxt;
 	tp->t_flags &= ~(TF_ACKNOW | TF_DELACK);
 
 	/*
@@ -1810,6 +1829,10 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 			 */
 			cnt = 0;
 		}
+#if PKT_PRIORITY
+		if (bg)
+			m_prio_background(pkt);
+#endif /* PKT_PRIORITY */
 		error = ip_output_list(pkt, cnt, opt, &ro, flags, 0, &ipoa);
 		if (chain || error) {
 			/*

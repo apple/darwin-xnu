@@ -240,6 +240,10 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
 		} else {
 			buf_brelse(bp);	/* note: B-tree code will clear blockPtr->blockHeader and blockPtr->buffer */
 		}
+		
+		/* Don't let anyone else try to use this bp, it's been consumed */
+		blockPtr->blockHeader = NULL;
+		
     } else {
         if (options & kForceWriteBlock) {
 			if (hfsmp->jnl) {
@@ -252,6 +256,10 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
 			} else {
 				retval = VNOP_BWRITE(bp);
 			}
+			
+			/* Don't let anyone else try to use this bp, it's been consumed */
+			blockPtr->blockHeader = NULL;
+			
         } else if (options & kMarkBlockDirty) {
 			struct timeval tv;
 			microuptime(&tv);
@@ -292,6 +300,10 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
                 buf_clearflags(bp, B_LOCKED);
                 buf_bawrite(bp);
             }
+            
+            /* Don't let anyone else try to use this bp, it's been consumed */
+			blockPtr->blockHeader = NULL;
+			
         } else {
 			// check if we had previously called journal_modify_block_start() 
 			// on this block and if so, abort it (which will call buf_brelse()).
@@ -308,8 +320,11 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
 			} else {
 				buf_brelse(bp);	/* note: B-tree code will clear blockPtr->blockHeader and blockPtr->buffer */
 			}
-        };
-    };
+			
+			/* Don't let anyone else try to use this bp, it's been consumed */
+			blockPtr->blockHeader = NULL;
+        }
+    }
 
 exit:
     return (retval);

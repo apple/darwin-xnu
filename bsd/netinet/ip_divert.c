@@ -375,6 +375,11 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 		/* Copy the cached route and take an extra reference */
 		inp_route_copyout(inp, &ro);
 
+#if PKT_PRIORITY
+		if (soisbackground(so))
+			m_prio_background(m);
+#endif /* PKT_PRIORITY */
+
 		socket_unlock(so, 0);
 #if CONFIG_MACF_NET
 		mac_mbuf_label_associate_inpcb(inp, m);

@@ -107,7 +107,7 @@ struct vfs_context {
  
 struct uthread {
 	/* syscall parameters, results and catches */
-	user_addr_t uu_arg[8]; /* arguments to current system call */
+	u_int64_t uu_arg[8]; /* arguments to current system call */
 	int	*uu_ap;			/* pointer to arglist */
     int uu_rval[2];
 
@@ -253,6 +253,7 @@ typedef struct uthread * uthread_t;
 #define UT_PROCEXIT	0x00000200	/* this thread completed the  proc exit */
 #define UT_RAGE_VNODES	0x00000400	/* rapid age any vnodes created by this thread */	
 #define UT_BACKGROUND	0x00000800	/* this thread is in background state */	
+#define UT_BACKGROUND_TRAFFIC_MGT	0x00001000 /* background traffic is regulated */
 
 #define	UT_VFORK	0x02000000	/* thread has vfork children */
 #define	UT_SETUID	0x04000000	/* thread is settugid() */

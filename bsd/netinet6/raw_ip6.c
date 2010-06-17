@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -487,8 +487,28 @@ rip6_output(
 		in6p->in6p_route.ro_rt = NULL;
 	}
 
+#if PKT_PRIORITY
+	if (soisbackground(so))
+		m_prio_background(m);
+#endif /* PKT_PRIORITY */
+
 	error = ip6_output(m, optp, &in6p->in6p_route, 0,
 			   in6p->in6p_moptions, &oifp, 0);
+
+#if IFNET_ROUTE_REFCNT
+	/*
+	 * Always discard the cached route for unconnected socket
+	 * or if it is a multicast route.
+	 */
+	if (in6p->in6p_route.ro_rt != NULL &&
+	    ((in6p->in6p_route.ro_rt->rt_flags & RTF_MULTICAST) ||
+	    in6p->in6p_socket == NULL ||
+	    in6p->in6p_socket->so_state != SS_ISCONNECTED)) {
+		rtfree(in6p->in6p_route.ro_rt);
+		in6p->in6p_route.ro_rt = NULL;
+	}
+#endif /* IFNET_ROUTE_REFCNT */
+
 	if (so->so_proto->pr_protocol == IPPROTO_ICMPV6) {
 		if (oifp)
 			icmp6_ifoutstat_inc(oifp, type, code);

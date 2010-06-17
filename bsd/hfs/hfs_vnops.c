@@ -3798,7 +3798,7 @@ seekoffcalc:
 	}
 
 out:
-	if (hfsmp->jnl && user_start) {
+	if (user_start) {
 		vsunlock(user_start, user_len, TRUE);
 	}
 	/* If we didn't do anything then go ahead and dump the hint. */

@@ -447,8 +447,9 @@ struct ip_opts {
 
 /* Background socket configuration flags */
 #ifdef __APPLE_API_UNSTABLE
-#define TRAFFIC_MGT_SO_BACKGROUND	0x0001
-#define TRAFFIC_MGT_SO_BG_SUPPRESSED	0x0002
+#define TRAFFIC_MGT_SO_BACKGROUND	0x0001	/* background socket */
+#define TRAFFIC_MGT_SO_BG_SUPPRESSED	0x0002	/* currently throttled */
+#define TRAFFIC_MGT_SO_BG_REGULATE	0x0004	/* traffic is regulated */
 #endif /* __APPLE_API_UNSTABLE */
 
 /*

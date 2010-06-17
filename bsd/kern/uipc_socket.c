@@ -92,6 +92,7 @@
 #include <sys/ev.h>
 #include <sys/kdebug.h>
 #include <sys/un.h>
+#include <sys/user.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
@@ -221,6 +222,8 @@ extern struct domain *pffinddomain(int);
 extern struct protosw *pffindprotonotype(int, int);
 extern int soclose_locked(struct socket *);
 extern int soo_kqfilter(struct fileproc *, struct knote *, struct proc *);
+
+extern int uthread_get_background_state(uthread_t);
 
 #ifdef __APPLE__
 
@@ -484,6 +487,9 @@ socreate(int dom, struct socket **aso, int type, int proto)
 	register struct protosw *prp;
 	register struct socket *so;
 	register int error = 0;
+	thread_t thread;
+	struct uthread *ut;
+
 #if TCPDEBUG
 	extern int tcpconsdebug;
 #endif
@@ -559,6 +565,24 @@ socreate(int dom, struct socket **aso, int type, int proto)
 		so->so_options |= SO_DEBUG;
 #endif
 #endif
+	/*
+	 * If this is a background thread/task, mark the socket as such.
+	 */
+	thread = current_thread();
+	ut = get_bsdthread_info(thread);
+	if (uthread_get_background_state(ut)) {
+		socket_set_traffic_mgt_flags(so, TRAFFIC_MGT_SO_BACKGROUND);
+		so->so_background_thread = thread;
+		/*
+		 * In case setpriority(PRIO_DARWIN_THREAD) was called
+		 * on this thread, regulate network (TCP) traffics.
+		 */
+		if (ut->uu_flag & UT_BACKGROUND_TRAFFIC_MGT) {
+			socket_set_traffic_mgt_flags(so,
+			    TRAFFIC_MGT_SO_BG_REGULATE);
+		}
+	}
+
 	*aso = so;
 	return (0);
 }

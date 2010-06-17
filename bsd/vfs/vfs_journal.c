@@ -2486,6 +2486,8 @@ journal_modify_block_abort(journal *jnl, struct buf *bp)
 	}
 
     if (jnl->flags & JOURNAL_INVALID) {
+    	/* Still need to buf_brelse(). Callers assume we consume the bp. */
+    	buf_brelse(bp);
 		return EINVAL;
     }
 
@@ -2541,6 +2543,8 @@ journal_modify_block_end(journal *jnl, struct buf *bp, void (*func)(struct buf *
     CHECK_JOURNAL(jnl);
 
     if (jnl->flags & JOURNAL_INVALID) {
+    	/* Still need to buf_brelse(). Callers assume we consume the bp. */
+    	buf_brelse(bp);
 		return EINVAL;
     }
 

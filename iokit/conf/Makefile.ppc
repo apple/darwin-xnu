@@ -14,6 +14,13 @@ OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
 
 $(OBJS_WERROR):		WERROR=-Werror
 
+# Files that must go in the __HIB segment:
+UNCONFIGURED_HIB_FILES=	\
+			IOHibernateRestoreKernel.o \
+			WKdmDecompress.o
+
+HIB_FILES=$(filter $(UNCONFIGURED_HIB_FILES),$(OBJS))
+
 ######################################################################
 #END    Machine dependent Makefile fragment for ppc
 ######################################################################

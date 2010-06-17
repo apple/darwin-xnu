@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -156,7 +156,7 @@ pfi_kif_get(const char *kif_name)
 		return (NULL);
 
 	strlcpy(kif->pfik_name, kif_name, sizeof (kif->pfik_name));
-	kif->pfik_tzero = pf_time_second();
+	kif->pfik_tzero = pf_calendar_time_second();
 	TAILQ_INIT(&kif->pfik_dynaddrs);
 
 	RB_INSERT(pfi_ifhead, &pfi_ifs, kif);
@@ -419,8 +419,8 @@ pfi_table_update(struct pfr_ktable *kt, struct pfi_kif *kif, int net, int flags)
 	if (kif->pfik_ifp != NULL)
 		pfi_instance_add(kif->pfik_ifp, net, flags);
 
-	if ((e = pfr_set_addrs(&kt->pfrkt_t, pfi_buffer, pfi_buffer_cnt, &size2,
-	    NULL, NULL, NULL, 0, PFR_TFLAG_ALLMASK)))
+	if ((e = pfr_set_addrs(&kt->pfrkt_t, CAST_USER_ADDR_T(pfi_buffer),
+	    pfi_buffer_cnt, &size2, NULL, NULL, NULL, 0, PFR_TFLAG_ALLMASK)))
 		printf("pfi_table_update: cannot set %d new addresses "
 		    "into table %s: %d\n", pfi_buffer_cnt, kt->pfrkt_name, e);
 }
@@ -595,7 +595,7 @@ pfi_update_status(const char *name, struct pf_status *pfs)
 	if (pfs == NULL) {
 		bzero(p->pfik_packets, sizeof (p->pfik_packets));
 		bzero(p->pfik_bytes, sizeof (p->pfik_bytes));
-		p->pfik_tzero = pf_time_second();
+		p->pfik_tzero = pf_calendar_time_second();
 	}
 	for (i = 0; i < 2; i++)
 		for (j = 0; j < 2; j++)
@@ -608,9 +608,9 @@ pfi_update_status(const char *name, struct pf_status *pfs)
 }
 
 int
-pfi_get_ifaces(const char *name, struct pfi_kif *buf, int *size)
+pfi_get_ifaces(const char *name, user_addr_t buf, int *size)
 {
-	struct pfi_kif	*p, *nextp;
+	struct pfi_kif	 *p, *nextp;
 	int		 n = 0;
 
 	lck_mtx_assert(pf_lock, LCK_MTX_ASSERT_OWNED);
@@ -620,14 +620,29 @@ pfi_get_ifaces(const char *name, struct pfi_kif *buf, int *size)
 		if (pfi_skip_if(name, p))
 			continue;
 		if (*size > n++) {
+			struct pfi_uif u;
+
 			if (!p->pfik_tzero)
-				p->pfik_tzero = pf_time_second();
+				p->pfik_tzero = pf_calendar_time_second();
 			pfi_kif_ref(p, PFI_KIF_REF_RULE);
-			buf++;
-			if (copyout(p, CAST_USER_ADDR_T(buf), sizeof (*buf))) {
+
+			/* return the user space version of pfi_kif */
+			bzero(&u, sizeof (u));
+			bcopy(p->pfik_name, &u.pfik_name, sizeof (u.pfik_name));
+			bcopy(p->pfik_packets, &u.pfik_packets,
+			    sizeof (u.pfik_packets));
+			bcopy(p->pfik_bytes, &u.pfik_bytes,
+			    sizeof (u.pfik_bytes));
+			u.pfik_tzero = p->pfik_tzero;
+			u.pfik_flags = p->pfik_flags;
+			u.pfik_states = p->pfik_states;
+			u.pfik_rules = p->pfik_rules;
+
+			if (copyout(&u, buf, sizeof (u))) {
 				pfi_kif_unref(p, PFI_KIF_REF_RULE);
 				return (EFAULT);
 			}
+			buf += sizeof (u);
 			nextp = RB_NEXT(pfi_ifhead, &pfi_ifs, p);
 			pfi_kif_unref(p, PFI_KIF_REF_RULE);
 		}

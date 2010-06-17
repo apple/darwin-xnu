@@ -625,6 +625,11 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 		case CPUID_MODEL_NEHALEM_EX:
 			cpufamily = CPUFAMILY_INTEL_NEHALEM;
 			break;
+		case CPUID_MODEL_DALES_32NM:
+		case CPUID_MODEL_WESTMERE:
+		case CPUID_MODEL_WESTMERE_EX:
+			cpufamily = CPUFAMILY_INTEL_WESTMERE;
+			break;
 		}
 		break;
 	}
@@ -659,6 +664,17 @@ cpuid_set_info(void)
 	 * (which determines whether SMT/Hyperthreading is active).
 	 */
 	switch (info_p->cpuid_cpufamily) {
+	/*
+	 * This should be the same as Nehalem but an A0 silicon bug returns
+	 * invalid data in the top 12 bits. Hence, we use only bits [19..16]
+	 * rather than [31..16] for core count - which actually can't exceed 8. 
+	 */
+	case CPUFAMILY_INTEL_WESTMERE: {
+		uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
+		info_p->core_count   = bitfield32((uint32_t)msr, 19, 16);
+		info_p->thread_count = bitfield32((uint32_t)msr, 15,  0);
+		break;
+		}
 	case CPUFAMILY_INTEL_NEHALEM: {
 		uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
 		info_p->core_count   = bitfield32((uint32_t)msr, 31, 16);
@@ -707,6 +723,7 @@ static struct {
 	{CPUID_FEATURE_HTT,   "HTT",},
 	{CPUID_FEATURE_TM,    "TM",},
 	{CPUID_FEATURE_SSE3,    "SSE3"},
+	{CPUID_FEATURE_PCLMULQDQ, "PCLMULQDQ"},
 	{CPUID_FEATURE_MONITOR, "MON"},
 	{CPUID_FEATURE_DSCPL,   "DSCPL"},
 	{CPUID_FEATURE_VMX,     "VMX"},
@@ -722,12 +739,14 @@ static struct {
 	{CPUID_FEATURE_SSE4_2,  "SSE4.2"},
 	{CPUID_FEATURE_xAPIC,   "xAPIC"},
 	{CPUID_FEATURE_POPCNT,  "POPCNT"},
+	{CPUID_FEATURE_AES,     "AES"},
 	{CPUID_FEATURE_VMM,     "VMM"},
 	{0, 0}
 },
 extfeature_map[] = {
 	{CPUID_EXTFEATURE_SYSCALL, "SYSCALL"},
 	{CPUID_EXTFEATURE_XD,      "XD"},
+	{CPUID_EXTFEATURE_1GBPAGE, "1GBPAGE"},
 	{CPUID_EXTFEATURE_RDTSCP,  "RDTSCP"},
 	{CPUID_EXTFEATURE_EM64T,   "EM64T"},
 	{CPUID_EXTFEATURE_LAHF,    "LAHF"},

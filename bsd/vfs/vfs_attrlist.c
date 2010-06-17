@@ -1836,6 +1836,8 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 				ab.actual.fileattr |= ATTR_FILE_RSRCALLOCSIZE;
 			}
 		}
+		if (al.fileattr & ATTR_FILE_PROTECTION_CLASS) {
+		}
 	}
 	
 	/* diagnostic */
@@ -2195,6 +2197,8 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 		error = EINVAL;
 		VFS_DEBUG(ctx, vp, "ATTRLIST - XXX device type change not implemented");
 		goto out;
+	}
+	if (al.fileattr & ATTR_FILE_PROTECTION_CLASS) {
 	}
 
 	/*

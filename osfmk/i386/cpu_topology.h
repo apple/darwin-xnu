@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -230,6 +230,7 @@ typedef struct x86_topology_parameters
     uint32_t		nLCoresPerPackage;
     uint32_t		nPCoresPerPackage;
     uint32_t		nPackages;
+    boolean_t		stable;
 } x86_topology_parameters_t;
 
 /* Called after cpu discovery */

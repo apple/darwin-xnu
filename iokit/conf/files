@@ -10,7 +10,6 @@ OPTIONS/mach_assert				optional mach_assert
 
 # libIOKit
 
-
 iokit/Kernel/WKdmCompress.c				optional hibernation
 iokit/Kernel/WKdmDecompress.c				optional hibernation
 iokit/Kernel/IOHibernateIO.cpp				optional hibernation
@@ -35,6 +34,7 @@ iokit/Kernel/IOPMPowerStateQueue.cpp			optional iokitcpp
 iokit/Kernel/IOCatalogue.cpp				optional iokitcpp
 iokit/Kernel/IOPMPowerSource.cpp                        optional iokitcpp
 iokit/Kernel/IOPMPowerSourceList.cpp                    optional iokitcpp
+iokit/Kernel/IOPolledInterface.cpp			optional iokitcpp
 
 iokit/Kernel/IOWorkLoop.cpp				optional iokitcpp
 iokit/Kernel/IOEventSource.cpp				optional iokitcpp

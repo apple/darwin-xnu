@@ -252,6 +252,9 @@ commpage_init_cpu_capabilities( void )
 	if (tscFreq <= SLOW_TSC_THRESHOLD)	/* is TSC too slow for _commpage_nanotime?  */
 		bits |= kSlow;
 
+	if (cpuid_features() & CPUID_FEATURE_AES)
+		bits |= kHasAES;
+
 	_cpu_capabilities = bits;		// set kernel version for use by drivers etc
 }
 

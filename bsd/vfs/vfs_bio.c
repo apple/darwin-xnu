@@ -342,6 +342,29 @@ buf_markfua(buf_t bp) {
         SET(bp->b_flags, B_FUA);
 }
 
+#ifdef CONFIG_PROTECT
+void *
+buf_getcpaddr(buf_t bp) {
+	return bp->b_cpentry;
+}
+
+void 
+buf_setcpaddr(buf_t bp, void *cp_entry_addr) {
+	bp->b_cpentry = (struct cprotect *) cp_entry_addr;
+}
+
+#else
+void *
+buf_getcpaddr(buf_t bp __unused) {
+	return NULL;
+}
+
+void 
+buf_setcpaddr(buf_t bp __unused, void *cp_entry_addr __unused) {
+	return;
+}
+#endif /* CONFIG_PROTECT */
+
 errno_t
 buf_error(buf_t bp) {
         
@@ -749,8 +772,6 @@ buf_clear(buf_t bp) {
 	}
 	bp->b_resid = 0;
 }
-
-
 
 /*
  * Read or write a buffer that is not contiguous on disk.
@@ -2964,6 +2985,9 @@ bcleanbuf(buf_t bp, boolean_t discard)
 		bp->b_bcount = 0;
 		bp->b_dirtyoff = bp->b_dirtyend = 0;
 		bp->b_validoff = bp->b_validend = 0;
+#ifdef CONFIG_PROTECT
+		bp->b_cpentry = 0;
+#endif
 
 		lck_mtx_lock_spin(buf_mtxp);
 	}
@@ -3445,6 +3469,9 @@ alloc_io_buf(vnode_t vp, int priv)
 	bp->b_bufsize = 0;
 	bp->b_upl = NULL;
 	bp->b_vp = vp;
+#ifdef CONFIG_PROTECT
+	bp->b_cpentry = 0;
+#endif
 
 	if (vp && (vp->v_type == VBLK || vp->v_type == VCHR))
 		bp->b_dev = vp->v_rdev;

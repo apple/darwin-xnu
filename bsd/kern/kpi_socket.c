@@ -44,6 +44,7 @@
 #include <sys/uio_internal.h>
 #include <kern/lock.h>
 #include <netinet/in.h>
+#include <libkern/OSAtomic.h>
 
 extern int soclose_locked(struct socket *so);
 extern void soclose_wait_locked(struct socket *so);
@@ -986,4 +987,22 @@ socket_t
 sock_getlistener(socket_t sock)
 {
 	return (sock->so_head);
+}
+
+/*
+ * Caller must have ensured socket is valid and won't be going away.
+ */
+void
+socket_set_traffic_mgt_flags(socket_t sock, u_int32_t flags)
+{
+	(void) OSBitOrAtomic(flags, &sock->so_traffic_mgt_flags);
+}
+
+/*
+ * Caller must have ensured socket is valid and won't be going away.
+ */
+void
+socket_clear_traffic_mgt_flags(socket_t sock, u_int32_t flags)
+{
+	(void) OSBitAndAtomic(~flags, &sock->so_traffic_mgt_flags);
 }

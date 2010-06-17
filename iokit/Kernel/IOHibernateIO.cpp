@@ -168,27 +168,6 @@ to restrict I/O ops.
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-OSDefineMetaClassAndAbstractStructors(IOPolledInterface, OSObject);
-
-OSMetaClassDefineReservedUnused(IOPolledInterface, 0);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 1);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 2);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 3);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 4);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 5);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 6);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 7);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 8);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 9);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 10);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 11);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 12);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 13);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 14);
-OSMetaClassDefineReservedUnused(IOPolledInterface, 15);
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
 extern uint32_t 		gIOHibernateState;
 uint32_t			gIOHibernateMode;
 static char			gIOHibernateBootSignature[256+1];

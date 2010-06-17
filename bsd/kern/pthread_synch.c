@@ -2275,11 +2275,10 @@ out:
 	return(error);
 }
 
-int thread_selfid(__unused struct proc *p, __unused struct thread_selfid_args *uap, user_addr_t *retval)
+int thread_selfid(__unused struct proc *p, __unused struct thread_selfid_args *uap, uint64_t *retval)
 {
-	thread_t		thread = current_thread();
-	uint64_t		thread_id = thread_tid(thread);
-	*retval = thread_id;
+	thread_t thread = current_thread();
+	*retval = thread_tid(thread);
 	return KERN_SUCCESS;
 }
 

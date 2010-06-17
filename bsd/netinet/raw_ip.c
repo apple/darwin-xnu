@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -324,6 +324,7 @@ rip_output(m, so, dst)
 	register struct inpcb *inp = sotoinpcb(so);
 	int flags = (so->so_options & SO_DONTROUTE) | IP_ALLOWBROADCAST;
 	struct ip_out_args ipoa;
+	int error = 0;
 
 	/* If socket was bound to an ifindex, tell ip_output about it */
 	ipoa.ipoa_ifscope = (inp->inp_flags & INP_BOUND_IF) ?
@@ -389,6 +390,11 @@ rip_output(m, so, dst)
 		inp->inp_route.ro_rt = NULL;
 	}
 
+#if PKT_PRIORITY
+	if (soisbackground(so))
+		m_prio_background(m);
+#endif /* PKT_PRIORITY */
+
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_inpcb(inp, m);
 #endif
@@ -398,8 +404,24 @@ rip_output(m, so, dst)
 	 * to pass the PCB cached route pointer directly to IP and
 	 * the modules beneath it.
 	 */
-	return (ip_output(m, inp->inp_options, &inp->inp_route, flags,
-	    inp->inp_moptions, &ipoa));
+	error = ip_output(m, inp->inp_options, &inp->inp_route, flags,
+	    inp->inp_moptions, &ipoa);
+
+#if IFNET_ROUTE_REFCNT
+	/*
+	 * Always discard the cached route for unconnected socket
+	 * or if it is a non-unicast route.
+	 */
+	if (inp->inp_route.ro_rt != NULL &&
+	    ((inp->inp_route.ro_rt->rt_flags & (RTF_MULTICAST|RTF_BROADCAST)) ||
+	    inp->inp_socket == NULL ||
+	    inp->inp_socket->so_state != SS_ISCONNECTED)) {
+		rtfree(inp->inp_route.ro_rt);
+		inp->inp_route.ro_rt = NULL;
+	}
+#endif /* IFNET_ROUTE_REFCNT */
+
+	return (error);
 }
 
 #if IPFIREWALL

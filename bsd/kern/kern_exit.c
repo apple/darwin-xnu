@@ -769,13 +769,14 @@ proc_exit(proc_t p)
 		proc_list_lock();
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_END,
 					      pid, exitval, 0, 0, 0);
-		p->p_stat = SZOMB;
 		/* check for sysctl zomb lookup */
 		while ((p->p_listflag & P_LIST_WAITING) == P_LIST_WAITING) {
 			msleep(&p->p_stat, proc_list_mlock, PWAIT, "waitcoll", 0);
 		}
 		/* safe to use p as this is a system reap */
+		p->p_stat = SZOMB;
 		p->p_listflag |= P_LIST_WAITING;
+
 		/*
 		 * This is a named reference and it is not granted
 		 * if the reap is already in progress. So we get
@@ -1894,12 +1895,13 @@ vproc_exit(proc_t p)
 		proc_list_unlock();
 	} else {
 		proc_list_lock();
-		p->p_stat = SZOMB;
 		/* check for lookups by zomb sysctl */
 		while ((p->p_listflag & P_LIST_WAITING) == P_LIST_WAITING) {
 			msleep(&p->p_stat, proc_list_mlock, PWAIT, "waitcoll", 0);
 		}
+		p->p_stat = SZOMB;
 		p->p_listflag |= P_LIST_WAITING;
+
 		/*
 		 * This is a named reference and it is not granted
 		 * if the reap is already in progress. So we get

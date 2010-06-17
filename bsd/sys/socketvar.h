@@ -515,6 +515,7 @@ extern void soisconnected(struct socket *so);
 extern void soisconnecting(struct socket *so);
 extern void soisdisconnected(struct socket *so);
 extern void soisdisconnecting(struct socket *so);
+extern int soisbackground(struct socket *so);
 extern int solisten(struct socket *so, int backlog);
 extern struct socket *sodropablereq(struct socket *head);
 extern struct socket *sonewconn(struct socket *head, int connstatus,

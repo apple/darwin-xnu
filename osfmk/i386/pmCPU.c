@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -49,13 +49,6 @@
 #include <kern/sched_prim.h>
 #include <i386/lapic.h>
 
-/*
- * Kernel parameter determining whether threads are halted unconditionally
- * in the idle state.  This is the default behavior.
- * See machine_idle() for use.
- */
-int idlehalt					= 1;
-
 extern int disableConsoleOutput;
 
 decl_simple_lock_data(,pm_init_lock);
@@ -98,13 +91,6 @@ machine_idle(void)
     cpu_data_t		*my_cpu		= current_cpu_datap();
 
     if (my_cpu == NULL)
-	goto out;
-
-    /*
-     * If idlehalt isn't set, then don't do any power management related
-     * idle handling.
-     */
-    if (!idlehalt)
 	goto out;
 
     my_cpu->lcpu.state = LCPU_IDLE;

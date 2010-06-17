@@ -226,6 +226,11 @@ extern errno_t sock_settclassopt(socket_t so, const void* optval, size_t optlen)
 	@result 0 on success otherwise the errno error.
 */
 extern errno_t sock_gettclassopt(socket_t so, void* optval, size_t* optlen);
+
+#ifdef BSD_KERNEL_PRIVATE
+extern void socket_set_traffic_mgt_flags(socket_t so, u_int32_t flags);
+extern void socket_clear_traffic_mgt_flags(socket_t so, u_int32_t flags);
+#endif /* BSD_KERNEL_PRIVATE */
 #endif
 
 /*!

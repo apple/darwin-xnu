@@ -99,13 +99,14 @@ typedef struct Boot_Video	Boot_Video;
 /* Boot argument structure - passed into Mach kernel at boot time.
  * "Revision" can be incremented for compatible changes
  */
-#define kBootArgsRevision		5
+#define kBootArgsRevision		6
 #define kBootArgsVersion		1
 
 /* Snapshot constants of previous revisions that are supported */
 #define kBootArgsVersion1		1
 #define kBootArgsRevision1_4		4
 #define kBootArgsRevision1_5		5
+#define kBootArgsRevision1_6		6
 
 #define kBootArgsEfiMode32              32
 #define kBootArgsEfiMode64              64
@@ -135,7 +136,9 @@ typedef struct boot_args {
 
     uint8_t     efiMode;       /* 32 = 32-bit, 64 = 64-bit */
     uint8_t     __reserved1[3];
-    uint32_t    __reserved2[3];
+    uint32_t    __reserved2[1];
+    uint32_t    performanceDataStart; /* physical address of log */
+    uint32_t    performanceDataSize;
     uint64_t    efiRuntimeServicesVirtualPageStart; /* virtual address of defragmented runtime pages */
     uint32_t    __reserved3[2];
 

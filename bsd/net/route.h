@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -122,6 +122,16 @@ struct rt_metrics {
  */
 #define	RTM_RTTUNIT	1000000	/* units for rtt, rttvar, as units per sec */
 
+#ifdef KERNEL_PRIVATE
+/*
+ * New expiry value (in seconds) when dealing with interfaces which implement
+ * the if_want_aggressive_drain behavior.  Otherwise the event mechanism wouldn't
+ * fire quick enough to cause any sort of significant gains in performance.
+ */
+#define RT_IF_IDLE_EXPIRE_TIMEOUT	30
+#define RT_IF_IDLE_DRAIN_INTERVAL	10
+#endif /* KERNEL_PRIVATE */
+
 /*
  * We distinguish between routes to hosts and routes to networks,
  * preferring the former if available.  For each route we infer
@@ -158,6 +168,9 @@ struct rtentry {
 	 * See bsd/net/route.c for synchronization notes.
 	 */
 	decl_lck_mtx_data(, rt_lock);	/* lock for routing entry */
+#if IFNET_ROUTE_REFCNT
+	void	(*rt_if_ref_fn)(struct ifnet *, int); /* interface ref func */
+#endif /* IFNET_ROUTE_REFCNT */
 };
 #endif /* KERNEL_PRIVATE */
 
@@ -191,7 +204,8 @@ struct rtentry {
 #define	RTF_MULTICAST	0x800000	/* route represents a mcast address */
 #define RTF_IFSCOPE	0x1000000	/* has valid interface scope */
 #define RTF_CONDEMNED	0x2000000	/* defunct; no longer modifiable */
-					/* 0x4000000 and up unassigned */
+#define RTF_IFREF	0x4000000	/* route holds a ref to interface */
+					/* 0x8000000 and up unassigned */
 
 /*
  * Routing statistics.
@@ -473,6 +487,10 @@ extern void rt_lock(struct rtentry *, boolean_t);
 extern void rt_unlock(struct rtentry *);
 extern struct sockaddr *rtm_scrub_ifscope(int, struct sockaddr *,
     struct sockaddr *, struct sockaddr_storage *);
+extern u_int64_t rt_expiry(struct rtentry *, u_int64_t, u_int32_t);
+#if IFNET_ROUTE_REFCNT
+extern void rt_aggdrain(int);
+#endif /* IFNET_ROUTE_REFCNT */
 #endif /* KERNEL_PRIVATE */
 
 #endif

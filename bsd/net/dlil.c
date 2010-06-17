@@ -95,6 +95,19 @@
 #define DLIL_PRINTF	kprintf
 #endif
 
+#define atomic_add_32(a, n)						\
+	((void) OSAddAtomic(n, (volatile SInt32 *)a))
+
+#if PKT_PRIORITY
+#define	_CASSERT(x)	\
+	switch (0) { case 0: case (x): ; }
+
+#define	IF_DATA_REQUIRE_ALIGNED_32(f)	\
+	_CASSERT(!(offsetof(struct if_data_internal, f) % sizeof (u_int32_t)))
+
+#define	IFNET_IF_DATA_REQUIRE_ALIGNED_32(f)	\
+	_CASSERT(!(offsetof(struct ifnet, if_data.f) % sizeof (u_int32_t)))
+#endif /* PKT_PRIORITY */
 
 enum {
 	kProtoKPI_v1	= 1,
@@ -176,6 +189,16 @@ static u_int32_t dlil_read_count = 0;
 static u_int32_t dlil_detach_waiting = 0;
 u_int32_t dlil_filter_count = 0;
 extern u_int32_t	ipv4_ll_arp_aware;
+
+#if IFNET_ROUTE_REFCNT
+/*
+ * Updating this variable should be done by first acquiring the global
+ * radix node head (rnh_lock), in tandem with settting/clearing the
+ * PR_AGGDRAIN for routedomain.
+ */
+u_int32_t ifnet_aggressive_drainers;
+static u_int32_t net_rtref;
+#endif /* IFNET_ROUTE_REFCNT */
 
 static struct dlil_threading_info dlil_lo_thread;
 __private_extern__  struct dlil_threading_info *dlil_lo_thread_ptr = &dlil_lo_thread;
@@ -577,8 +600,22 @@ dlil_init(void)
 {
 	thread_t		thread = THREAD_NULL;
 
+#if PKT_PRIORITY
+	/*
+	 * The following fields must be 32-bit aligned for atomic operations.
+	 */
+	IF_DATA_REQUIRE_ALIGNED_32(ifi_obgpackets);
+	IF_DATA_REQUIRE_ALIGNED_32(ifi_obgbytes)
+
+	IFNET_IF_DATA_REQUIRE_ALIGNED_32(ifi_obgpackets);
+	IFNET_IF_DATA_REQUIRE_ALIGNED_32(ifi_obgbytes)
+#endif /* PKT_PRIORITY */
+
 	PE_parse_boot_argn("net_affinity", &net_affinity, sizeof (net_affinity));
-	
+#if IFNET_ROUTE_REFCNT
+	PE_parse_boot_argn("net_rtref", &net_rtref, sizeof (net_rtref));
+#endif /* IFNET_ROUTE_REFCNT */
+
 	TAILQ_INIT(&dlil_ifnet_head);
 	TAILQ_INIT(&ifnet_head);
 	
@@ -1612,6 +1649,13 @@ preout_again:
 		}
 		else {
 			KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START, 0,0,0,0,0);
+#if PKT_PRIORITY
+			if (mbuf_get_priority(m) == MBUF_PRIORITY_BACKGROUND) {
+				atomic_add_32(&ifp->if_obgpackets, 1);
+				atomic_add_32(&ifp->if_obgbytes,
+				    m->m_pkthdr.len);
+			}
+#endif /* PKT_PRIORITY */
 			retval = ifp->if_output(ifp, m);
 			if (retval && dlil_verbose) {
 				printf("dlil_output: output error on %s%d retval = %d\n", 
@@ -1631,6 +1675,13 @@ next:
 
 	if (send_head) {
 		KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START, 0,0,0,0,0);
+#if PKT_PRIORITY
+		if (mbuf_get_priority(send_head) == MBUF_PRIORITY_BACKGROUND) {
+			atomic_add_32(&ifp->if_obgpackets, 1);
+			atomic_add_32(&ifp->if_obgbytes,
+			    send_head->m_pkthdr.len);
+		}
+#endif /* PKT_PRIORITY */
 		retval = ifp->if_output(ifp, send_head);
 		if (retval && dlil_verbose) {
 			printf("dlil_output: output error on %s%d retval = %d\n", 
@@ -2677,6 +2728,13 @@ ifnet_attach(
 #endif /* PF */
 	dlil_write_end();
 
+#if IFNET_ROUTE_REFCNT
+	if (net_rtref) {
+		(void) ifnet_set_idle_flags(ifp, IFRF_IDLE_NOTIFY,
+		    IFRF_IDLE_NOTIFY);
+	}
+#endif /* IFNET_ROUTE_REFCNT */
+
 	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_ATTACHED, NULL, 0);
 
     return 0;
@@ -2718,6 +2776,17 @@ ifnet_detach(
 	/* Let BPF know we're detaching */
 	bpfdetach(ifp);
 	
+#if IFNET_ROUTE_REFCNT
+	/*
+	 * Check to see if this interface has previously triggered
+	 * aggressive protocol draining; if so, decrement the global
+	 * refcnt and clear PR_AGGDRAIN on the route domain if
+	 * there are no more of such an interface around.
+	 */
+	 if (ifp->if_want_aggressive_drain != 0)
+		(void) ifnet_set_idle_flags(ifp, 0, ~0);
+#endif /* IFNET_ROUTE_REFCNT */
+
 	if ((retval = dlil_write_begin()) != 0) {
 		if (retval == EDEADLK) {
 			retval = 0;

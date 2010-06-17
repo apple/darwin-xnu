@@ -132,6 +132,7 @@ typedef enum {
 #define FG_WINSMSGQ	0x04 	/* wait for the fielglob is in msgque */
 #define FG_RMMSGQ	0x08 	/* the fileglob is being removed from msgqueue */
 #define FG_WRMMSGQ	0x10 	/* wait for the fileglob to  be removed from msgqueue */
+#define FG_PORTMADE	0x20	/* a port was at some point created for this fileglob */
 
 struct fileglob {
 	LIST_ENTRY(fileglob) f_list;/* list of active files */

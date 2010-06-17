@@ -917,8 +917,8 @@ restart:
 					ps->ps_special_clusters = 0;
 					ps->ps_pgcount = ps->ps_pgnum;
 					ps->ps_clcount = ps->ps_ncls = ps->ps_pgcount >> ps->ps_clshift;
+					dp_pages_reserve += ps->ps_pgcount;
 					PS_UNLOCK(ps);
-					dp_pages_reserve += interim_pages_removed;
 				} else {
 					paging_segments[i] = PAGING_SEGMENT_NULL;
 					paging_segment_count--;

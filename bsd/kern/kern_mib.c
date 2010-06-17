@@ -432,6 +432,7 @@ int sse4_1_flag = -1;
 int sse4_2_flag = -1;
 int x86_64_flag = -1;
 int supplementalsse3_flag = -1;
+int aes_flag = -1;
 
 SYSCTL_INT(_hw_optional, OID_AUTO, mmx, CTLFLAG_RD | CTLFLAG_KERN, &mmx_flag, 0, "");
 SYSCTL_INT(_hw_optional, OID_AUTO, sse, CTLFLAG_RD | CTLFLAG_KERN, &sse_flag, 0, "");
@@ -443,6 +444,7 @@ SYSCTL_INT(_hw_optional, OID_AUTO, sse4_2, CTLFLAG_RD | CTLFLAG_KERN, &sse4_2_fl
 /* "x86_64" is actually a preprocessor symbol on the x86_64 kernel, so we have to hack this */
 #undef x86_64
 SYSCTL_INT(_hw_optional, OID_AUTO, x86_64, CTLFLAG_RD | CTLFLAG_KERN, &x86_64_flag, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, aes, CTLFLAG_RD | CTLFLAG_KERN, &aes_flag, 0, "");
 #endif /* __ppc__ */
 
 /*
@@ -607,6 +609,7 @@ sysctl_mib_init(void)
 	sse4_1_flag = ((_get_cpu_capabilities() & kHasSSE4_1) == kHasSSE4_1)? 1 : 0;
 	sse4_2_flag = ((_get_cpu_capabilities() & kHasSSE4_2) == kHasSSE4_2)? 1 : 0;
 	x86_64_flag = ((_get_cpu_capabilities() & k64Bit) == k64Bit)? 1 : 0;
+	aes_flag = ((_get_cpu_capabilities() & kHasAES) == kHasAES)? 1 : 0;
 
 	/* hw.cpufamily */
 	cpufamily = cpuid_cpufamily();

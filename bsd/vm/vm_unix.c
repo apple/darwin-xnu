@@ -705,6 +705,144 @@ tnfpout:
 	return(error);
 }
 
+kern_return_t
+pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
+{
+	task_t	target = NULL;
+	proc_t	targetproc = PROC_NULL;
+	int 	pid = args->pid;
+	int 	error = 0;
+
+#if CONFIG_MACF
+	error = mac_proc_check_suspend_resume(p, 0); /* 0 for suspend */
+	if (error) {
+		error = KERN_FAILURE;
+		goto out;
+	}
+#endif
+
+	if (pid == 0) {
+		error = KERN_FAILURE;
+		goto out;
+	}
+
+	targetproc = proc_find(pid);
+	if (!task_for_pid_posix_check(targetproc)) {
+		error = KERN_FAILURE;
+		goto out;
+	}
+
+	target = targetproc->task;
+#ifndef CONFIG_EMBEDDED
+	if (target != TASK_NULL) {
+		mach_port_t tfpport;
+
+		/* If we aren't root and target's task access port is set... */
+		if (!kauth_cred_issuser(kauth_cred_get()) &&
+			targetproc != current_proc() &&
+			(task_get_task_access_port(target, &tfpport) == 0) &&
+			(tfpport != IPC_PORT_NULL)) {
+
+			if (tfpport == IPC_PORT_DEAD) {
+				error = KERN_PROTECTION_FAILURE;
+				goto out;
+			}
+
+			/* Call up to the task access server */
+			error = check_task_access(tfpport, proc_selfpid(), kauth_getgid(), pid);
+
+			if (error != MACH_MSG_SUCCESS) {
+				if (error == MACH_RCV_INTERRUPTED)
+					error = KERN_ABORTED;
+				else
+					error = KERN_FAILURE;
+				goto out;
+			}
+		}
+	}
+#endif
+
+	task_reference(target);
+	error = task_suspend(target);
+	task_deallocate(target);
+
+out:
+	if (targetproc != PROC_NULL)
+		proc_rele(targetproc);
+	*ret = error;
+	return error;
+}
+
+kern_return_t
+pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
+{
+	task_t	target = NULL;
+	proc_t	targetproc = PROC_NULL;
+	int 	pid = args->pid;
+	int 	error = 0;
+
+#if CONFIG_MACF
+	error = mac_proc_check_suspend_resume(p, 1); /* 1 for resume */
+	if (error) {
+		error = KERN_FAILURE;
+		goto out;
+	}
+#endif
+
+	if (pid == 0) {
+		error = KERN_FAILURE;
+		goto out;
+	}
+
+	targetproc = proc_find(pid);
+	if (!task_for_pid_posix_check(targetproc)) {
+		error = KERN_FAILURE;
+		goto out;
+	}
+
+	target = targetproc->task;
+#ifndef CONFIG_EMBEDDED
+	if (target != TASK_NULL) {
+		mach_port_t tfpport;
+
+		/* If we aren't root and target's task access port is set... */
+		if (!kauth_cred_issuser(kauth_cred_get()) &&
+			targetproc != current_proc() &&
+			(task_get_task_access_port(target, &tfpport) == 0) &&
+			(tfpport != IPC_PORT_NULL)) {
+
+			if (tfpport == IPC_PORT_DEAD) {
+				error = KERN_PROTECTION_FAILURE;
+				goto out;
+			}
+
+			/* Call up to the task access server */
+			error = check_task_access(tfpport, proc_selfpid(), kauth_getgid(), pid);
+
+			if (error != MACH_MSG_SUCCESS) {
+				if (error == MACH_RCV_INTERRUPTED)
+					error = KERN_ABORTED;
+				else
+					error = KERN_FAILURE;
+				goto out;
+			}
+		}
+	}
+#endif
+
+	task_reference(target);
+	error = task_resume(target);
+	task_deallocate(target);
+
+out:
+	if (targetproc != PROC_NULL)
+		proc_rele(targetproc);
+	*ret = error;
+	return error;
+
+	return 0;
+}
+
 static int
 sysctl_settfp_policy(__unused struct sysctl_oid *oidp, void *arg1,
     __unused int arg2, struct sysctl_req *req)

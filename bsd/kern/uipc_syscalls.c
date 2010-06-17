@@ -191,17 +191,6 @@ socket(struct proc *p, struct socket_args *uap, int32_t *retval)
 	if (error) {
 		fp_free(p, fd, fp);
 	} else {
-		thread_t			thread;
-		struct uthread		*ut;
-		
-		thread = current_thread();
-		ut = get_bsdthread_info(thread);
-			
-		/* if this is a backgrounded thread then throttle all new sockets */
-		if ( (ut->uu_flag & UT_BACKGROUND) != 0 ) {
-			so->so_traffic_mgt_flags |= TRAFFIC_MGT_SO_BACKGROUND;
-			so->so_background_thread = thread;
-		}
 		fp->f_data = (caddr_t)so;
 
 		proc_fdlock(p);

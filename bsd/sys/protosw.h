@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -181,6 +181,7 @@ struct protosw {
 #define	PR_PROTOLOCK		0x80		/* protocol takes care of it's own locking */
 #define	PR_PCBLOCK		0x100	/* protocol supports per pcb finer grain locking */
 #define	PR_DISPOSE		0x200	/* protocol requires late lists disposal */
+#define	PR_AGGDRAIN		0x400	/* protocol requires aggressive draining */
 
 /*
  * The arguments to usrreq are:

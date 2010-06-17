@@ -221,6 +221,7 @@ __BEGIN_DECLS
 #define DBG_DRVFIREWIRE		16	/* FireWire */
 #define DBG_DRVINFINIBAND	17	/* Infiniband */
 #define DBG_DRVGRAPHICS		18  /* Graphics */
+#define DBG_DRVSD			19  /* Secure Digital */
 
 /* Backwards compatibility */
 #define	DBG_DRVPOINTING		DBG_DRVHID		/* OBSOLETE: Use DBG_DRVHID instead */

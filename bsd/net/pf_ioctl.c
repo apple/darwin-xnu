@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-/*	$apfw: pf_ioctl.c,v 1.16 2008/08/27 00:01:32 jhw Exp $ */
+/*	$apfw: git commit b6bf13f8321283cd7ee82b1795e86506084b1b95 $ */
 /*	$OpenBSD: pf_ioctl.c,v 1.175 2007/02/26 22:47:43 deraadt Exp $ */
 
 /*
@@ -170,8 +170,17 @@ static struct cdevsw pf_cdevsw = {
 };
 
 static void pf_attach_hooks(void);
+#if 0
+/* currently unused along with pfdetach() */
 static void pf_detach_hooks(void);
-static int pf_hooks_attached = 0;
+#endif
+
+/*
+ * This is set during DIOCSTART/DIOCSTOP with pf_perim_lock held as writer,
+ * and used in pf_af_hook() for performance optimization, such that packets
+ * will enter pf_test() or pf_test6() only when PF is running.
+ */
+static int pf_is_enabled;
 
 struct pf_rule		 pf_default_rule;
 #if ALTQ
@@ -204,6 +213,10 @@ static int pf_inet6_hook(struct ifnet *, struct mbuf **, int);
 #endif /* INET6 */
 
 #define DPFPRINTF(n, x) if (pf_status.debug >= (n)) printf x
+
+#define	PF_USER_ADDR(a, s, f)					\
+	(proc_is64bit(current_proc()) ?				\
+	((struct s##_64 *)a)->f : ((struct s##_32 *)a)->f)
 
 static lck_attr_t *pf_perim_lock_attr;
 static lck_grp_t *pf_perim_lock_grp;
@@ -332,6 +345,8 @@ pfinit(void)
 	}
 	(void) devfs_make_node(makedev(maj, 0), DEVFS_CHAR,
 	    UID_ROOT, GID_WHEEL, 0600, "pf", 0);
+
+	pf_attach_hooks();
 }
 
 #if 0
@@ -345,6 +360,8 @@ pfdetach(void)
 	u_int32_t		ticket;
 	int			i;
 	char			r = '\0';
+
+	pf_detach_hooks();
 
 	pf_status.running = 0;
 	wakeup(pf_purge_thread_fn);
@@ -1328,6 +1345,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		} else if (pf_purge_thread == NULL) {
 			error = ENOMEM;
 		} else {
+			pf_is_enabled = 1;
 			pf_status.running = 1;
 			pf_status.since = pf_calendar_time_second();
 			if (pf_status.stateid == 0) {
@@ -1335,7 +1353,6 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				pf_status.stateid = pf_status.stateid << 32;
 			}
 			mbuf_growth_aggressive();
-			pf_attach_hooks();
 			wakeup(pf_purge_thread_fn);
 			DPFPRINTF(PF_DEBUG_MISC, ("pf: started\n"));
 		}
@@ -1346,8 +1363,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 			error = ENOENT;
 		} else {
 			mbuf_growth_normal();
-			pf_detach_hooks();
 			pf_status.running = 0;
+			pf_is_enabled = 0;
 			pf_status.since = pf_calendar_time_second();
 			wakeup(pf_purge_thread_fn);
 			DPFPRINTF(PF_DEBUG_MISC, ("pf: stopped\n"));
@@ -1947,7 +1964,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCGETSTATES: {
 		struct pfioc_states	*ps = (struct pfioc_states *)addr;
 		struct pf_state		*state;
-		struct pfsync_state	*y, *pstore;
+		struct pfsync_state	*pstore;
+		user_addr_t		 buf;
 		u_int32_t		 nr = 0;
 
 		if (ps->ps_len == 0) {
@@ -1957,24 +1975,23 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		pstore = _MALLOC(sizeof (*pstore), M_TEMP, M_WAITOK);
-
-		y = ps->ps_states;
+		buf = PF_USER_ADDR(addr, pfioc_states, ps_buf);
 
 		state = TAILQ_FIRST(&state_list);
 		while (state) {
 			if (state->timeout != PFTM_UNLINKED) {
-				if ((nr+1) * sizeof (*y) > (unsigned)ps->ps_len)
+				if ((nr + 1) * sizeof (*pstore) >
+				    (unsigned)ps->ps_len)
 					break;
 
 				pf_state_export(pstore,
 				    state->state_key, state);
-				error = copyout(pstore, CAST_USER_ADDR_T(y),
-				    sizeof (*y));
+				error = copyout(pstore, buf, sizeof (*pstore));
 				if (error) {
 					_FREE(pstore, M_TEMP);
 					goto fail;
 				}
-				y++;
+				buf += sizeof (*pstore);
 				nr++;
 			}
 			state = TAILQ_NEXT(state, entry_list);
@@ -2635,72 +2652,78 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRADDTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_table)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_add_tables(io->pfrio_buffer, io->pfrio_size,
+		error = pfr_add_tables(buf, io->pfrio_size,
 		    &io->pfrio_nadd, io->pfrio_flags | PFR_FLAG_USERIOCTL);
 		break;
 	}
 
 	case DIOCRDELTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_table)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_del_tables(io->pfrio_buffer, io->pfrio_size,
+		error = pfr_del_tables(buf, io->pfrio_size,
 		    &io->pfrio_ndel, io->pfrio_flags | PFR_FLAG_USERIOCTL);
 		break;
 	}
 
 	case DIOCRGETTABLES: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_table)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_get_tables(&io->pfrio_table, io->pfrio_buffer,
+		error = pfr_get_tables(&io->pfrio_table, buf,
 		    &io->pfrio_size, io->pfrio_flags | PFR_FLAG_USERIOCTL);
 		break;
 	}
 
 	case DIOCRGETTSTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_tstats)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_get_tstats(&io->pfrio_table, io->pfrio_buffer,
+		error = pfr_get_tstats(&io->pfrio_table, buf,
 		    &io->pfrio_size, io->pfrio_flags | PFR_FLAG_USERIOCTL);
 		break;
 	}
 
 	case DIOCRCLRTSTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_table)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_clr_tstats(io->pfrio_buffer, io->pfrio_size,
+		error = pfr_clr_tstats(buf, io->pfrio_size,
 		    &io->pfrio_nzero, io->pfrio_flags | PFR_FLAG_USERIOCTL);
 		break;
 	}
 
 	case DIOCRSETTFLAGS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_table)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_set_tflags(io->pfrio_buffer, io->pfrio_size,
+		error = pfr_set_tflags(buf, io->pfrio_size,
 		    io->pfrio_setflag, io->pfrio_clrflag, &io->pfrio_nchange,
 		    &io->pfrio_ndel, io->pfrio_flags | PFR_FLAG_USERIOCTL);
 		break;
@@ -2720,12 +2743,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRADDADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_addr)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_add_addrs(&io->pfrio_table, io->pfrio_buffer,
+		error = pfr_add_addrs(&io->pfrio_table, buf,
 		    io->pfrio_size, &io->pfrio_nadd, io->pfrio_flags |
 		    PFR_FLAG_USERIOCTL);
 		break;
@@ -2733,12 +2757,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRDELADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_addr)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_del_addrs(&io->pfrio_table, io->pfrio_buffer,
+		error = pfr_del_addrs(&io->pfrio_table, buf,
 		    io->pfrio_size, &io->pfrio_ndel, io->pfrio_flags |
 		    PFR_FLAG_USERIOCTL);
 		break;
@@ -2746,12 +2771,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRSETADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_addr)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_set_addrs(&io->pfrio_table, io->pfrio_buffer,
+		error = pfr_set_addrs(&io->pfrio_table, buf,
 		    io->pfrio_size, &io->pfrio_size2, &io->pfrio_nadd,
 		    &io->pfrio_ndel, &io->pfrio_nchange, io->pfrio_flags |
 		    PFR_FLAG_USERIOCTL, 0);
@@ -2760,36 +2786,39 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRGETADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_addr)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_get_addrs(&io->pfrio_table, io->pfrio_buffer,
+		error = pfr_get_addrs(&io->pfrio_table, buf,
 		    &io->pfrio_size, io->pfrio_flags | PFR_FLAG_USERIOCTL);
 		break;
 	}
 
 	case DIOCRGETASTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_astats)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_get_astats(&io->pfrio_table, io->pfrio_buffer,
+		error = pfr_get_astats(&io->pfrio_table, buf,
 		    &io->pfrio_size, io->pfrio_flags | PFR_FLAG_USERIOCTL);
 		break;
 	}
 
 	case DIOCRCLRASTATS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_addr)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_clr_astats(&io->pfrio_table, io->pfrio_buffer,
+		error = pfr_clr_astats(&io->pfrio_table, buf,
 		    io->pfrio_size, &io->pfrio_nzero, io->pfrio_flags |
 		    PFR_FLAG_USERIOCTL);
 		break;
@@ -2797,12 +2826,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRTSTADDRS: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_addr)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_tst_addrs(&io->pfrio_table, io->pfrio_buffer,
+		error = pfr_tst_addrs(&io->pfrio_table, buf,
 		    io->pfrio_size, &io->pfrio_nmatch, io->pfrio_flags |
 		    PFR_FLAG_USERIOCTL);
 		break;
@@ -2810,12 +2840,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCRINADEFINE: {
 		struct pfioc_table *io = (struct pfioc_table *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_table, pfrio_buffer);
 
 		if (io->pfrio_esize != sizeof (struct pfr_addr)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfr_ina_define(&io->pfrio_table, io->pfrio_buffer,
+		error = pfr_ina_define(&io->pfrio_table, buf,
 		    io->pfrio_size, &io->pfrio_nadd, &io->pfrio_naddr,
 		    io->pfrio_ticket, io->pfrio_flags | PFR_FLAG_USERIOCTL);
 		break;
@@ -2837,6 +2868,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pfioc_trans_e	*ioe;
 		struct pfr_table	*table;
+		user_addr_t		 buf;
 		int			 i;
 
 		if (io->esize != sizeof (*ioe)) {
@@ -2845,9 +2877,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		ioe = _MALLOC(sizeof (*ioe), M_TEMP, M_WAITOK);
 		table = _MALLOC(sizeof (*table), M_TEMP, M_WAITOK);
-		for (i = 0; i < io->size; i++) {
-			if (copyin(CAST_USER_ADDR_T(io->array+i), ioe,
-			    sizeof (*ioe))) {
+		buf = PF_USER_ADDR(addr, pfioc_trans, array);
+		for (i = 0; i < io->size; i++, buf += sizeof (*ioe)) {
+			if (copyin(buf, ioe, sizeof (*ioe))) {
 				_FREE(table, M_TEMP);
 				_FREE(ioe, M_TEMP);
 				error = EFAULT;
@@ -2889,8 +2921,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				}
 				break;
 			}
-			if (copyout(ioe, CAST_USER_ADDR_T(io->array+i),
-			    sizeof (io->array[i]))) {
+			if (copyout(ioe, buf, sizeof (*ioe))) {
 				_FREE(table, M_TEMP);
 				_FREE(ioe, M_TEMP);
 				error = EFAULT;
@@ -2906,6 +2937,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_trans	*io = (struct pfioc_trans *)addr;
 		struct pfioc_trans_e	*ioe;
 		struct pfr_table	*table;
+		user_addr_t		 buf;
 		int			 i;
 
 		if (io->esize != sizeof (*ioe)) {
@@ -2914,9 +2946,9 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		ioe = _MALLOC(sizeof (*ioe), M_TEMP, M_WAITOK);
 		table = _MALLOC(sizeof (*table), M_TEMP, M_WAITOK);
-		for (i = 0; i < io->size; i++) {
-			if (copyin(CAST_USER_ADDR_T(io->array+i), ioe,
-			    sizeof (*ioe))) {
+		buf = PF_USER_ADDR(addr, pfioc_trans, array);
+		for (i = 0; i < io->size; i++, buf += sizeof (*ioe)) {
+			if (copyin(buf, ioe, sizeof (*ioe))) {
 				_FREE(table, M_TEMP);
 				_FREE(ioe, M_TEMP);
 				error = EFAULT;
@@ -2969,6 +3001,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		struct pfioc_trans_e	*ioe;
 		struct pfr_table	*table;
 		struct pf_ruleset	*rs;
+		user_addr_t		 _buf, buf;
 		int			 i;
 
 		if (io->esize != sizeof (*ioe)) {
@@ -2977,10 +3010,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 		ioe = _MALLOC(sizeof (*ioe), M_TEMP, M_WAITOK);
 		table = _MALLOC(sizeof (*table), M_TEMP, M_WAITOK);
+		buf = _buf = PF_USER_ADDR(addr, pfioc_trans, array);
 		/* first makes sure everything will succeed */
-		for (i = 0; i < io->size; i++) {
-			if (copyin(CAST_USER_ADDR_T(io->array+i), ioe,
-			    sizeof (*ioe))) {
+		for (i = 0; i < io->size; i++, buf += sizeof (*ioe)) {
+			if (copyin(buf, ioe, sizeof (*ioe))) {
 				_FREE(table, M_TEMP);
 				_FREE(ioe, M_TEMP);
 				error = EFAULT;
@@ -3035,10 +3068,10 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				break;
 			}
 		}
+		buf = _buf;
 		/* now do the commit - no errors should happen here */
-		for (i = 0; i < io->size; i++) {
-			if (copyin(CAST_USER_ADDR_T(io->array+i), ioe,
-			    sizeof (*ioe))) {
+		for (i = 0; i < io->size; i++, buf += sizeof (*ioe)) {
+			if (copyin(buf, ioe, sizeof (*ioe))) {
 				_FREE(table, M_TEMP);
 				_FREE(ioe, M_TEMP);
 				error = EFAULT;
@@ -3082,7 +3115,8 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCGETSRCNODES: {
 		struct pfioc_src_nodes	*psn = (struct pfioc_src_nodes *)addr;
-		struct pf_src_node	*n, *sn, *pstore;
+		struct pf_src_node	*n, *pstore;
+		user_addr_t		 buf;
 		u_int32_t		 nr = 0;
 		int			 space = psn->psn_len;
 
@@ -3094,12 +3128,13 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 		}
 
 		pstore = _MALLOC(sizeof (*pstore), M_TEMP, M_WAITOK);
+		buf = PF_USER_ADDR(addr, pfioc_src_nodes, psn_buf);
 
-		sn = psn->psn_src_nodes;
 		RB_FOREACH(n, pf_src_tree, &tree_src_tracking) {
 			uint64_t secs = pf_time_second(), diff;
 
-			if ((nr + 1) * sizeof (*sn) > (unsigned)psn->psn_len)
+			if ((nr + 1) * sizeof (*pstore) >
+			    (unsigned)psn->psn_len)
 				break;
 
 			bcopy(n, pstore, sizeof (*pstore));
@@ -3120,13 +3155,12 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 				    n->conn_rate.count * diff /
 				    n->conn_rate.seconds;
 
-			error = copyout(pstore, CAST_USER_ADDR_T(sn),
-			    sizeof (*sn));
+			error = copyout(pstore, buf, sizeof (*pstore));
 			if (error) {
 				_FREE(pstore, M_TEMP);
 				goto fail;
 			}
-			sn++;
+			buf += sizeof (*pstore);
 			nr++;
 		}
 		psn->psn_len = sizeof (struct pf_src_node) * nr;
@@ -3207,19 +3241,22 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 
 	case DIOCIGETIFACES: {
 		struct pfioc_iface *io = (struct pfioc_iface *)addr;
+		user_addr_t buf = PF_USER_ADDR(addr, pfioc_iface, pfiio_buffer);
 
-		if (io->pfiio_esize != sizeof (struct pfi_kif)) {
+		/* esize must be that of the user space version of pfi_kif */
+		if (io->pfiio_esize != sizeof (struct pfi_uif)) {
 			error = ENODEV;
 			break;
 		}
-		error = pfi_get_ifaces(io->pfiio_name, io->pfiio_buffer,
-		    &io->pfiio_size);
+		io->pfiio_name[sizeof (io->pfiio_name) - 1] = '\0';
+		error = pfi_get_ifaces(io->pfiio_name, buf, &io->pfiio_size);
 		break;
 	}
 
 	case DIOCSETIFFLAG: {
 		struct pfioc_iface *io = (struct pfioc_iface *)addr;
 
+		io->pfiio_name[sizeof (io->pfiio_name) - 1] = '\0';
 		error = pfi_set_flags(io->pfiio_name, io->pfiio_flags);
 		break;
 	}
@@ -3227,6 +3264,7 @@ pfioctl(dev_t dev, u_long cmd, caddr_t addr, int flags, struct proc *p)
 	case DIOCCLRIFFLAG: {
 		struct pfioc_iface *io = (struct pfioc_iface *)addr;
 
+		io->pfiio_name[sizeof (io->pfiio_name) - 1] = '\0';
 		error = pfi_clear_flags(io->pfiio_name, io->pfiio_flags);
 		break;
 	}
@@ -3253,7 +3291,7 @@ pf_af_hook(struct ifnet *ifp, struct mbuf **mppn, struct mbuf **mp,
 	reentry = (ifp->if_pf_curthread == curthread);
 	if (!reentry) {
 		lck_rw_lock_shared(pf_perim_lock);
-		if (!pf_hooks_attached)
+		if (!pf_is_enabled)
 			goto done;
 
 		lck_mtx_lock(pf_lock);
@@ -3404,9 +3442,6 @@ int
 pf_ifaddr_hook(struct ifnet *ifp, unsigned long cmd)
 {
 	lck_rw_lock_shared(pf_perim_lock);
-	if (!pf_hooks_attached)
-		goto done;
-
 	lck_mtx_lock(pf_lock);
 
 	switch (cmd) {
@@ -3426,7 +3461,6 @@ pf_ifaddr_hook(struct ifnet *ifp, unsigned long cmd)
 	}
 
 	lck_mtx_unlock(pf_lock);
-done:
 	lck_rw_done(pf_perim_lock);
 	return (0);
 }
@@ -3438,53 +3472,53 @@ void
 pf_ifnet_hook(struct ifnet *ifp, int attach)
 {
 	lck_rw_lock_shared(pf_perim_lock);
-	if (!pf_hooks_attached)
-		goto done;
-
 	lck_mtx_lock(pf_lock);
 	if (attach)
 		pfi_attach_ifnet(ifp);
 	else
 		pfi_detach_ifnet(ifp);
 	lck_mtx_unlock(pf_lock);
-done:
 	lck_rw_done(pf_perim_lock);
 }
 
 static void
 pf_attach_hooks(void)
 {
-	int i;
-
-	if (pf_hooks_attached)
-		return;
-
 	ifnet_head_lock_shared();
-	for (i = 0; i <= if_index; i++) {
-		struct ifnet *ifp = ifindex2ifnet[i];
-		if (ifp != NULL) {
-			pfi_attach_ifnet(ifp);
+	/*
+	 * Check against ifnet_addrs[] before proceeding, in case this
+	 * is called very early on, e.g. during dlil_init() before any
+	 * network interface is attached.
+	 */
+	if (ifnet_addrs != NULL) {
+		int i;
+
+		for (i = 0; i <= if_index; i++) {
+			struct ifnet *ifp = ifindex2ifnet[i];
+			if (ifp != NULL) {
+				pfi_attach_ifnet(ifp);
+			}
 		}
 	}
 	ifnet_head_done();
-	pf_hooks_attached = 1;
 }
 
+#if 0
+/* currently unused along with pfdetach() */
 static void
 pf_detach_hooks(void)
 {
-	int i;
-
-	if (!pf_hooks_attached)
-		return;
-
 	ifnet_head_lock_shared();
-	for (i = 0; i <= if_index; i++) {
-		struct ifnet *ifp = ifindex2ifnet[i];
-		if (ifp != NULL && ifp->if_pf_kif != NULL) {
-			pfi_detach_ifnet(ifp);
+	if (ifnet_addrs != NULL) {
+		for (i = 0; i <= if_index; i++) {
+			int i;
+
+			struct ifnet *ifp = ifindex2ifnet[i];
+			if (ifp != NULL && ifp->if_pf_kif != NULL) {
+				pfi_detach_ifnet(ifp);
+			}
 		}
 	}
 	ifnet_head_done();
-	pf_hooks_attached = 0;
 }
+#endif

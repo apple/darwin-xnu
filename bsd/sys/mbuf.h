@@ -176,6 +176,9 @@ struct	pkthdr {
 	 */
 	struct pf_mtag pf_mtag;
 #endif /* PF_PKTHDR */
+#if PKT_PRIORITY
+	u_int32_t prio;			/* packet priority */
+#endif /* PKT_PRIORITY */
 };
 
 
@@ -712,6 +715,9 @@ int              m_tag_copy_chain(struct mbuf *to, struct mbuf *from, int wait);
 void             m_tag_init(struct mbuf *);
 struct  m_tag   *m_tag_first(struct mbuf *);
 struct  m_tag   *m_tag_next(struct mbuf *, struct m_tag *);
+
+extern void m_prio_init(struct mbuf *);
+extern void m_prio_background(struct mbuf *);
 
 __END_DECLS
 

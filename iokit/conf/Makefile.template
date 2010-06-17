@@ -86,10 +86,11 @@ ${OBJS}: ${OBJSDEPS}
 LDOBJS = $(OBJS)
 
 $(COMPONENT).o: $(LDOBJS)
-	$(_v)$(SEG_HACK) __HIB IOHibernateRestoreKernel.o -o _IOHibernateRestoreKernel.o
-	$(_v)mv _IOHibernateRestoreKernel.o IOHibernateRestoreKernel.o
-	$(_v)$(SEG_HACK) __HIB WKdmDecompress.o -o _WKdmDecompress.o
-	$(_v)mv _WKdmDecompress.o WKdmDecompress.o
+	$(_v)for hib_file in ${HIB_FILES};		\
+	do	\
+                $(SEG_HACK) __HIB $${hib_file} -o $${hib_file}__; \
+                mv $${hib_file}__ $${hib_file} ; \
+	done;
 	@echo LDFILELIST $(COMPONENT)
 	$(_v)( for obj in ${LDOBJS}; do	\
 		 echo $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$${obj}; \

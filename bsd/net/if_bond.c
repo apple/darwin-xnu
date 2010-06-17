@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -646,8 +646,8 @@ bondport_collecting(bondport_ref p)
 /**
  ** bond interface/dlil specific routines
  **/
-static int bond_clone_create(struct if_clone *, int);
-static void bond_clone_destroy(struct ifnet *);
+static int bond_clone_create(struct if_clone *, u_int32_t, void *);
+static int bond_clone_destroy(struct ifnet *);
 static int bond_input(ifnet_t ifp, protocol_family_t protocol, mbuf_t m,
 					  char *frame_header);
 static int bond_output(struct ifnet *ifp, struct mbuf *m);
@@ -1117,7 +1117,7 @@ ifbond_add_slow_proto_multicast(ifbond_ref ifb)
 }
 
 static int
-bond_clone_create(struct if_clone * ifc, int unit)
+bond_clone_create(struct if_clone * ifc, u_int32_t unit, __unused void *params)
 {
 	int 						error;
 	ifbond_ref					ifb;
@@ -1244,7 +1244,7 @@ bond_if_detach(struct ifnet * ifp)
     return;
 }
 
-static void
+static int
 bond_clone_destroy(struct ifnet * ifp)
 {
     ifbond_ref ifb;
@@ -1253,16 +1253,16 @@ bond_clone_destroy(struct ifnet * ifp)
     ifb = ifnet_softc(ifp);
     if (ifb == NULL || ifnet_type(ifp) != IFT_IEEE8023ADLAG) {
 	bond_unlock();
-	return;
+	return 0;
     }
     if (ifbond_flags_if_detaching(ifb)) {
 	bond_unlock();
-	return;
+	return 0;
     }
     bond_remove(ifb);
     bond_unlock();
     bond_if_detach(ifp);
-    return;
+    return 0;
 }
 
 static int 

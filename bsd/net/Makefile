@@ -23,7 +23,7 @@ DATAFILES= \
 	bpf.h dlil.h \
 	ethernet.h if.h if_arp.h \
 	if_dl.h if_llc.h if_media.h if_mib.h \
-	if_types.h if_var.h \
+	if_types.h if_utun.h if_var.h \
 	kext_net.h ndrv.h pfkeyv2.h \
 	route.h
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -91,10 +91,11 @@ static errno_t utun_proto_pre_output(ifnet_t interface, protocol_family_t protoc
 
 /* Control block allocated for each kernel control connection */
 struct utun_pcb {
-	kern_ctl_ref	ctlref;
-	u_int32_t		unit;
-	ifnet_t			ifp;
-	u_int32_t		flags;
+	kern_ctl_ref	utun_ctlref;
+	ifnet_t			utun_ifp;
+	u_int32_t		utun_unit;
+	u_int32_t		utun_flags;
+	int				utun_ext_ifdata_stats;
 };
 
 static kern_ctl_ref	utun_kctlref;
@@ -144,6 +145,8 @@ utun_register_control(void)
 	strncpy(kern_ctl.ctl_name, UTUN_CONTROL_NAME, sizeof(kern_ctl.ctl_name));
 	kern_ctl.ctl_name[sizeof(kern_ctl.ctl_name) - 1] = 0;
 	kern_ctl.ctl_flags = CTL_FLAG_PRIVILEGED; /* Require root */
+	kern_ctl.ctl_sendsize = 64 * 1024;
+	kern_ctl.ctl_recvsize = 64 * 1024;
 	kern_ctl.ctl_connect = utun_ctl_connect;
 	kern_ctl.ctl_disconnect = utun_ctl_disconnect;
 	kern_ctl.ctl_send = utun_ctl_send;
@@ -189,6 +192,7 @@ utun_ctl_connect(
 	struct ifnet_init_params	utun_init;
 	struct utun_pcb				*pcb;
 	errno_t						result;
+	struct ifnet_stats_param 	stats;
 	
 	/* kernel control allocates, interface frees */
 	pcb = utun_alloc(sizeof(*pcb));
@@ -198,15 +202,15 @@ utun_ctl_connect(
 	/* Setup the protocol control block */
 	bzero(pcb, sizeof(*pcb));
 	*unitinfo = pcb;
-	pcb->ctlref = kctlref;
-	pcb->unit = sac->sc_unit;
+	pcb->utun_ctlref = kctlref;
+	pcb->utun_unit = sac->sc_unit;
 	
-	printf("utun_ctl_connect: creating interface utun%d\n", pcb->unit - 1);
+	printf("utun_ctl_connect: creating interface utun%d\n", pcb->utun_unit - 1);
 
 	/* Create the interface */
 	bzero(&utun_init, sizeof(utun_init));
 	utun_init.name = "utun";
-	utun_init.unit = pcb->unit - 1;
+	utun_init.unit = pcb->utun_unit - 1;
 	utun_init.family = utun_family;
 	utun_init.type = IFT_OTHER;
 	utun_init.output = utun_output;
@@ -218,7 +222,7 @@ utun_ctl_connect(
 	utun_init.ioctl = utun_ioctl;
 	utun_init.detach = utun_detached;
 	
-	result = ifnet_allocate(&utun_init, &pcb->ifp);
+	result = ifnet_allocate(&utun_init, &pcb->utun_ifp);
 	if (result != 0) {
 		printf("utun_ctl_connect - ifnet_allocate failed: %d\n", result);
 		utun_free(pcb);
@@ -227,25 +231,33 @@ utun_ctl_connect(
 	OSIncrementAtomic(&utun_ifcount);
 	
 	/* Set flags and additional information. */
-	ifnet_set_mtu(pcb->ifp, 1500);
-	ifnet_set_flags(pcb->ifp, IFF_UP | IFF_MULTICAST | IFF_POINTOPOINT, 0xffff);
+	ifnet_set_mtu(pcb->utun_ifp, 1500);
+	ifnet_set_flags(pcb->utun_ifp, IFF_UP | IFF_MULTICAST | IFF_POINTOPOINT, 0xffff);
 
 	/* The interface must generate its own IPv6 LinkLocal address,
 	 * if possible following the recommendation of RFC2472 to the 64bit interface ID
 	 */
-	ifnet_set_eflags(pcb->ifp, IFEF_NOAUTOIPV6LL, IFEF_NOAUTOIPV6LL);
+	ifnet_set_eflags(pcb->utun_ifp, IFEF_NOAUTOIPV6LL, IFEF_NOAUTOIPV6LL);
 	
+	/* Reset the stats in case as the interface may have been recycled */
+	bzero(&stats, sizeof(struct ifnet_stats_param));
+	ifnet_set_stat(pcb->utun_ifp, &stats);
+
 	/* Attach the interface */
-	result = ifnet_attach(pcb->ifp, NULL);
+	result = ifnet_attach(pcb->utun_ifp, NULL);
 	if (result != 0) {
 		printf("utun_ctl_connect - ifnet_allocate failed: %d\n", result);
-		ifnet_release(pcb->ifp);
+		ifnet_release(pcb->utun_ifp);
 		utun_free(pcb);
 	}
 	
 	/* Attach to bpf */
 	if (result == 0)
-		bpfattach(pcb->ifp, DLT_NULL, 4);
+		bpfattach(pcb->utun_ifp, DLT_NULL, 4);
+	
+	/* The interfaces resoures allocated, mark it as running */
+	if (result == 0)
+		ifnet_set_flags(pcb->utun_ifp, IFF_RUNNING, IFF_RUNNING);
 	
 	return result;
 }
@@ -406,11 +418,11 @@ utun_ctl_disconnect(
 	void					*unitinfo)
 {
 	struct utun_pcb	*pcb = unitinfo;
-	ifnet_t			ifp = pcb->ifp;
+	ifnet_t			ifp = pcb->utun_ifp;
 	errno_t			result = 0;
 	
-	pcb->ctlref = NULL;
-	pcb->unit = 0;
+	pcb->utun_ctlref = NULL;
+	pcb->utun_unit = 0;
 	
 	/*
 	 * We want to do everything in our power to ensure that the interface
@@ -441,25 +453,31 @@ utun_ctl_send(
 	__unused int			flags)
 {
 	struct utun_pcb						*pcb = unitinfo;
-	struct ifnet_stat_increment_param	incs;
 	errno_t								result;
 	
-	mbuf_pkthdr_setrcvif(m, pcb->ifp);
+	mbuf_pkthdr_setrcvif(m, pcb->utun_ifp);
 	
-	bpf_tap_in(pcb->ifp, DLT_NULL, m, 0, 0);
+	bpf_tap_in(pcb->utun_ifp, DLT_NULL, m, 0, 0);
 	
-	if (pcb->flags & UTUN_FLAGS_NO_INPUT) {
+	if (pcb->utun_flags & UTUN_FLAGS_NO_INPUT) {
 		/* flush data */
 		mbuf_freem(m);
 		return 0;
 	}
 	
-	bzero(&incs, sizeof(incs));
-	incs.packets_in = 1;
-	incs.bytes_in = mbuf_pkthdr_len(m);
-	result = ifnet_input(pcb->ifp, m, &incs);
+	if (!pcb->utun_ext_ifdata_stats) {
+		struct ifnet_stat_increment_param	incs;
+	
+		bzero(&incs, sizeof(incs));
+		incs.packets_in = 1;
+		incs.bytes_in = mbuf_pkthdr_len(m);
+		result = ifnet_input(pcb->utun_ifp, m, &incs);
+	} else {
+		result = ifnet_input(pcb->utun_ifp, m, NULL);
+	}
 	if (result != 0) {
-		ifnet_stat_increment_in(pcb->ifp, 0, 0, 1);
+		ifnet_stat_increment_in(pcb->utun_ifp, 0, 0, 1);
+		
 		printf("utun_ctl_send - ifnet_input failed: %d\n", result);
 		mbuf_freem(m);
 	}
@@ -482,6 +500,7 @@ utun_ctl_setopt(
 	/* check for privileges for privileged options */
 	switch (opt) {
 		case UTUN_OPT_FLAGS:
+		case UTUN_OPT_EXT_IFDATA_STATS:
 			if (kauth_cred_issuser(kauth_cred_get()) == 0) {
 				return EPERM;
 			}
@@ -493,8 +512,38 @@ utun_ctl_setopt(
 			if (len != sizeof(u_int32_t))
 				result = EMSGSIZE;
 			else
-				pcb->flags = *(u_int32_t *)data;
+				pcb->utun_flags = *(u_int32_t *)data;
 			break;
+
+		case UTUN_OPT_EXT_IFDATA_STATS:
+			if (len != sizeof(int)) {
+				result = EMSGSIZE;
+				break;
+			}
+			pcb->utun_ext_ifdata_stats = (*(int *)data) ? 1 : 0;
+			break;
+			
+		case UTUN_OPT_INC_IFDATA_STATS_IN:
+		case UTUN_OPT_INC_IFDATA_STATS_OUT: {
+			struct utun_stats_param *utsp = (struct utun_stats_param *)data;
+			
+			if (utsp == NULL || len < sizeof(struct utun_stats_param)) {
+				result = EINVAL;
+				break;
+			}
+			if (!pcb->utun_ext_ifdata_stats) {
+				result = EINVAL;
+				break;
+			}
+			if (opt == UTUN_OPT_INC_IFDATA_STATS_IN)
+				ifnet_stat_increment_in(pcb->utun_ifp, utsp->utsp_packets, 
+					utsp->utsp_bytes, utsp->utsp_errors);
+			else
+				ifnet_stat_increment_out(pcb->utun_ifp, utsp->utsp_packets, 
+					utsp->utsp_bytes, utsp->utsp_errors);
+			break;
+		}
+		
 		default:
 			result = ENOPROTOOPT;
 			break;
@@ -520,11 +569,20 @@ utun_ctl_getopt(
 			if (*len != sizeof(u_int32_t))
 				result = EMSGSIZE;
 			else
-				*(u_int32_t *)data = pcb->flags;
+				*(u_int32_t *)data = pcb->utun_flags;
 			break;
+
+		case UTUN_OPT_EXT_IFDATA_STATS:
+			if (*len != sizeof(int))
+				result = EMSGSIZE;
+			else
+				*(int *)data = (pcb->utun_ext_ifdata_stats) ? 1 : 0;
+			break;
+		
 		case UTUN_OPT_IFNAME:
-			*len = snprintf(data, *len, "%s%d", ifnet_name(pcb->ifp), ifnet_unit(pcb->ifp)) + 1;
+			*len = snprintf(data, *len, "%s%d", ifnet_name(pcb->utun_ifp), ifnet_unit(pcb->utun_ifp)) + 1;
 			break;
+
 		default:
 			result = ENOPROTOOPT;
 			break;
@@ -542,24 +600,26 @@ utun_output(
 	struct utun_pcb	*pcb = ifnet_softc(interface);
 	errno_t			result;
 	
-	bpf_tap_out(pcb->ifp, DLT_NULL, data, 0, 0);
+	bpf_tap_out(pcb->utun_ifp, DLT_NULL, data, 0, 0);
 	
-	if (pcb->flags & UTUN_FLAGS_NO_OUTPUT) {
+	if (pcb->utun_flags & UTUN_FLAGS_NO_OUTPUT) {
 		/* flush data */
 		mbuf_freem(data);
 		return 0;
 	}
 
-	if (pcb->ctlref) {
+	if (pcb->utun_ctlref) {
 		int	length = mbuf_pkthdr_len(data);
-		result = ctl_enqueuembuf(pcb->ctlref, pcb->unit, data, CTL_DATA_EOR);
+		result = ctl_enqueuembuf(pcb->utun_ctlref, pcb->utun_unit, data, CTL_DATA_EOR);
 		if (result != 0) {
 			mbuf_freem(data);
 			printf("utun_output - ctl_enqueuembuf failed: %d\n", result);
+
 			ifnet_stat_increment_out(interface, 0, 0, 1);
 		}
 		else {
-			ifnet_stat_increment_out(interface, 1, length, 0);
+			if (!pcb->utun_ext_ifdata_stats)
+				ifnet_stat_increment_out(interface, 1, length, 0);
 		}
 	}
 	else 
@@ -590,16 +650,17 @@ utun_demux(
 
 static errno_t
 utun_framer(
-		   __unused ifnet_t	interface,
+		   __unused ifnet_t				interface,
 		   mbuf_t				*packet,
 			__unused const struct sockaddr *dest, 
 			__unused const char *desk_linkaddr,
 			const char *frame_type)
 {
-	
     if (mbuf_prepend(packet, sizeof(protocol_family_t), MBUF_DONTWAIT) != 0) {
 		printf("utun_framer - ifnet_output prepend failed\n");
+
 		ifnet_stat_increment_out(interface, 0, 0, 1);
+
 		// just	return, because the buffer was freed in mbuf_prepend
         return EJUSTRETURN;	
     }
@@ -639,8 +700,8 @@ utun_del_proto(
 
 static errno_t
 utun_ioctl(
-	__unused ifnet_t	interface,
-	__unused u_long		command,
+	ifnet_t		interface,
+	u_long		command,
 	void		*data)
 {
 	errno_t	result = 0;
@@ -650,7 +711,11 @@ utun_ioctl(
 		case SIOCSIFMTU:
 			ifnet_set_mtu(interface, ((struct ifreq*)data)->ifr_mtu);
 			break;
-
+			
+		case SIOCSIFFLAGS:
+			/* ifioctl() takes care of it */
+			break;
+			
 		case SIOCSIFADDR:
 		case SIOCAIFADDR:
 			/* This will be called for called for IPv6 Address additions */

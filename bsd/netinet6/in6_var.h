@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -759,5 +759,6 @@ extern void in6_aliasreq_64_to_32(struct in6_aliasreq_64 *,
 extern void in6_aliasreq_32_to_64(struct in6_aliasreq_32 *,
     struct in6_aliasreq_64 *);
 extern void in6_ifaddr_init(void);
+extern void in6_rtqdrain(void);
 #endif /* KERNEL_PRIVATE */
 #endif /* _NETINET6_IN6_VAR_H_ */

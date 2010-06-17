@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -227,9 +227,6 @@ machine_startup(void)
 	}
 	if (PE_parse_boot_argn("yield", &boot_arg, sizeof (boot_arg))) {
 		sched_poll_yield_shift = boot_arg;
-	}
-	if (PE_parse_boot_argn("idlehalt", &boot_arg, sizeof (boot_arg))) {
-		idlehalt = boot_arg;
 	}
 /* The I/O port to issue a read from, in the event of a panic. Useful for
  * triggering logic analyzers.

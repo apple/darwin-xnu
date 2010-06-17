@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -62,7 +62,7 @@
 extern "C" {
 #endif
 
-#define	PFLOGIFS_MAX	1
+#define	PFLOGIFS_MAX	16
 
 #if KERNEL_PRIVATE
 struct pflog_softc {

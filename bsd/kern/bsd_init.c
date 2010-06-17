@@ -666,12 +666,6 @@ bsd_init(void)
 	bsd_init_kprintf("calling knote_init\n");
 	knote_init();
 
-#if CONFIG_EMBEDDED
-	/* Initialize kernel memory status notifications */
-	bsd_init_kprintf("calling kern_memorystatus_init\n");
-	kern_memorystatus_init();
-#endif
-
 	/* Initialize for async IO */
 	bsd_init_kprintf("calling aio_init\n");
 	aio_init();
@@ -734,6 +728,12 @@ bsd_init(void)
 
 	kernproc->p_fd->fd_cdir = NULL;
 	kernproc->p_fd->fd_rdir = NULL;
+
+#if CONFIG_EMBEDDED
+	/* Initialize kernel memory status notifications */
+	bsd_init_kprintf("calling kern_memorystatus_init\n");
+	kern_memorystatus_init();
+#endif
 
 #ifdef GPROF
 	/* Initialize kernel profiling. */

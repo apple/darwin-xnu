@@ -175,9 +175,7 @@ init_predicates(KXLDSym *sym, u_char n_type, u_short n_desc)
         case N_OLEVEL:
         case N_PSYM:
         case N_EINCL:
-        case N_LBRAC:
         case N_EXCL:
-        case N_RBRAC:
         case N_BCOMM:
         case N_LENG:
         case N_OPT:
@@ -196,6 +194,12 @@ init_predicates(KXLDSym *sym, u_char n_type, u_short n_desc)
         case N_ENTRY:
         case N_ECOMM:
         case N_ECOML:
+        /* These are labeled as NO_SECT in stab.h, but they are actually
+         * section-based on OS X.  We must mark them as such so they get
+         * relocated.
+         */
+        case N_LBRAC:
+        case N_RBRAC:
             sym->predicates.is_section = 1;
             break;
         default:
@@ -220,11 +224,11 @@ init_predicates(KXLDSym *sym, u_char n_type, u_short n_desc)
         }
 
         if (n_desc & N_WEAK_REF) {
-           sym->predicates.is_weak = 1;
+            sym->predicates.is_weak = 1;
         }
 
         if (n_desc & N_ARM_THUMB_DEF) {
-           sym->predicates.is_thumb = 1;
+            sym->predicates.is_thumb = 1;
         }
 
         /* The first set of type fields are mutually exclusive, so they can be

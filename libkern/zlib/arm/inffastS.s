@@ -48,6 +48,7 @@ LC2:
 	#define		windowm1_loc	[sp,#28]
 	#define		lmask_loc	[sp,#32]
 	#define		dmask_loc	[sp,#36]
+	#define		op_loc		[sp,#44]
 	#define		dist_loc	[sp,#48]
 
 	#define		local_size	52
@@ -331,53 +332,50 @@ distance_base:			// this is invoked from if ((op&16)!=0)
 	cmphi	r2, bits					// 		internel (bits < op)
 	ldrhib	r3, [in, #1]!				//		if (op > bits) (PUP(in))
 	addhi	hold, hold, r3, asl bits	//			hold += (unsigned long)(PUP(in)) << bits;
+	addhi	bits, bits, #8				//			bits += 8
 
 	rsb		ip, r2, #32					// (32-op)
 	ror		r3, hold, r2				// hold<<(32-op)
 	add		r3, r1, r3, lsr ip			// dist += (unsigned)hold & ((1U << op) - 1);
-
-	ldr		ip, beg_loc					// beg
-
-#ifdef INFLATE_STRICT
-	ldr     r1, state_dmax				// r1 = dmax
-#endif
-
 	str		r3, dist_loc				// save dist
 
+
 #ifdef INFLATE_STRICT
+	ldr     r1, state_dmax						// r1 = dmax
 	cmp		r3, r1								// dist vs dmax	
 	bgt		invalid_distance_too_far_back		// if dist > dmax, set up msg/mode = bad and break
 #endif
 
+	mov		hold, hold, lsr r2			// hold >>= op ;
+	rsb		bits, r2, bits				// bits -= op;
+
+	ldr		ip, beg_loc					// beg
 	ldr		r1, dist_loc				// dist
 	rsb		r3, ip, out					// (out - beg);
-	addhi	bits, bits, #8				// this is the internel bits += 8 from above
 
 	cmp		r1, r3						// dist vs (out - beg) 
 
-	mov		hold, hold, lsr r2			// hold >>= op ;
-	rsb		bits, r2, bits				// bits -= op;
 	rsbls	r2, r1, out					// if (dist<=op) r2 = from = out-dist
 	bls		copy_direct_from_output		// if (dist<=op) branch to copy_direct_from_output
 
 	ldr		r2, whave_loc					// whave
 	rsb		r1, r3, r1						// op = dist-op
 	cmp		r2, r1							// whave vs op
-	nop										// pad dummy for better performance
+	str		r1, op_loc						// save a copy of op
 	bcc		invalid_distance_too_far_back	// if whave < op,  message invalid distance too far back, and break
 
 	cmp		write, #0						// write
 	bne		non_very_common_case			// if (write ==0) non_very_common_case
 
 	// the following : if (write == 0) { /* very common case */ }
-	nop										// pad dummy for better performance
+	ldr		r1, op_loc						// restore op in r1
 	ldr		ip, wsize_loc					// wsize
 	cmp		r6, r1							// len vs op 
 	rsb		r3, r1, ip						// wsize - op
 	ldr		ip, windowm1_loc				// window - 1
 	add		r2, ip, r3						// from = window - 1 + wsize - op : setup for using PUP(from)
-	movhi	r3, r1							// if len > op, r3 = op
-	movhi	r1, out							// if len > op, r1 = out
+	//movhi	r3, r1							// if len > op, r3 = op
+	//movhi	r1, out							// if len > op, r1 = out
 	bhi		some_from_window				// if (len > op), branch to some_from_window
 
 finish_copy:
@@ -481,20 +479,19 @@ L72:
 
 
 some_from_window:
-	add		out, r3, out				// out += op
-	rsb		r6, r3, r6					// len -= op 
+	ldr		r3, dist_loc				// dist
+	rsb		r6, r1, r6					// len -= op 
 some_from_window_loop:					// do {
 	ldrb	ip, [r2, #1]!				// 		PUP(from);
-	subs	r3, r3, #1					//		--op	
-	strb	ip, [r1, #1]!				//		PUP(out) = PUP(from);
+	subs	r1, #1						//		--op	
+	strb	ip, [out, #1]!				//		PUP(out) = PUP(from);
 	bne		some_from_window_loop		// } while(op);
-	ldr		r3, dist_loc				// dist
 	rsb		r2, r3, out					// from = out - dist;
 	b		finish_copy
 
 non_very_common_case:
+	ldr		r1, op_loc					// restore op in r1
 	cmp		write, r1					// write vs op
-	nop									// pad dummy for better performance
 	bcs		contiguous_in_window 		// if (write >= op) branch to contiguous_in_window
 
 	/* wrap around window */
@@ -516,23 +513,20 @@ waw_loop:								// do {
 	bne		waw_loop					// } while (op); 
 
 	cmp		write, r6					// write vs len
-	ldrcs	r2, windowm1_loc			// if (write>=len) r2 = from = window-1;
+	ldr		r2, windowm1_loc			// if (write>=len) r2 = from = window-1;
 	bcs		finish_copy					// if (write>=len) branch to finish_copy
 
 	// some from start of window
 
 	mov		r1, write				// op = write
 	sub		r6, write				// len -= op
-	sub		ip, out
-	add		ip, #1					// out+ip -> from
 sow_loop:							// do { 
-	ldrb	r3,[out, ip]			// 	PUP(from)
+	ldrb	r3,[r2, #1]!			// 	PUP(from)
 	subs	r1, #1					//  --op;
 	strb	r3, [out,#1]!			//  PUP(out) = PUP(from);
 	bne		sow_loop				// } while (op);
 
 	ldr		r2, dist_loc			// dist
-	sub		r6, r6, write			// len -= write	
 	rsb		r2, r2, out				// r2 = from = out-dist
 	b		finish_copy				// continue to finish_copy
 

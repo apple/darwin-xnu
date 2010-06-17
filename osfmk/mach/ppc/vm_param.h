@@ -93,6 +93,16 @@
 #define VM32_MIN_ADDRESS	((vm32_offset_t) 0)
 #define VM32_MAX_ADDRESS	((vm32_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
 
+
+#define PMAP_ENTER_OPTIONS(pmap, virtual_address, page, protection,	\
+				flags, wired, options, result)		\
+	MACRO_BEGIN							\
+		result=KERN_SUCCESS;					\
+		PMAP_ENTER(pmap, virtual_address, page, protection,	\
+				flags, wired);				\
+	MACRO_END
+
+
 #endif	/* MACH_KERNEL_PRIVATE */
 
 #endif	/* KERNEL_PRIVATE */

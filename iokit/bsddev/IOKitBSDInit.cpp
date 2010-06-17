@@ -28,6 +28,7 @@
 #include <IOKit/IOBSD.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
+#include <IOKit/IOCatalogue.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOPlatformExpert.h>
@@ -55,6 +56,69 @@ IOKitBSDInit( void )
     IOService::publishResource("IOBSD");
 
     return( kIOReturnSuccess );
+}
+
+void
+IOServicePublishResource( const char * property, boolean_t value )
+{
+    if ( value)
+        IOService::publishResource( property, kOSBooleanTrue );
+    else
+        IOService::getResourceService()->removeProperty( property );
+}
+
+boolean_t
+IOServiceWaitForMatchingResource( const char * property, uint64_t timeout )
+{
+    OSDictionary *	dict = 0;
+    IOService *         match = 0;
+    boolean_t		found = false;
+    
+    do {
+        
+        dict = IOService::resourceMatching( property );
+        if( !dict)
+            continue;
+        match = IOService::waitForMatchingService( dict, timeout );
+        if ( match)
+            found = true;
+        
+    } while( false );
+    
+    if( dict)
+        dict->release();
+    if( match)
+        match->release();
+    
+    return( found );
+}
+
+boolean_t
+IOCatalogueMatchingDriversPresent( const char * property )
+{
+    OSDictionary *	dict = 0;
+    OSOrderedSet *	set = 0;
+    SInt32		generationCount = 0;
+    boolean_t		found = false;
+    
+    do {
+        
+        dict = OSDictionary::withCapacity(1);
+        if( !dict)
+            continue;
+        dict->setObject( property, kOSBooleanTrue );
+        set = gIOCatalogue->findDrivers( dict, &generationCount );
+        if ( set && (set->getCount() > 0))
+            found = true;
+        
+    } while( false );
+    
+    if( dict)
+        dict->release();
+    if( set)
+        set->release();
+    
+    return( found );
 }
 
 OSDictionary * IOBSDNameMatching( const char * name )

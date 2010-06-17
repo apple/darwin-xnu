@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -123,7 +123,6 @@ SYSCTL_INT(_net_link_generic_system, OID_AUTO, dlil_verbose, CTLFLAG_RW,
 
 static int make_ifmibdata(struct ifnet *, int *, struct sysctl_req *);
 
-
 int 
 make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 {
@@ -136,20 +135,28 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 		break;
 
 	case IFDATA_GENERAL:
-		
 		bzero(&ifmd, sizeof(ifmd));
-		snprintf(ifmd.ifmd_name, sizeof(ifmd.ifmd_name), "%s%d",
-			ifp->if_name, ifp->if_unit);
-
+		/*
+		 * Make sure the interface is in use
+		 */
+		if (ifp->if_refcnt > 0) {
+			snprintf(ifmd.ifmd_name, sizeof(ifmd.ifmd_name), "%s%d",
+				ifp->if_name, ifp->if_unit);
+	
 #define COPY(fld) ifmd.ifmd_##fld = ifp->if_##fld
-		COPY(pcount);
-		COPY(flags);
-		if_data_internal_to_if_data64(ifp, &ifp->if_data, &ifmd.ifmd_data);
+			COPY(pcount);
+			COPY(flags);
+			if_data_internal_to_if_data64(ifp, &ifp->if_data, &ifmd.ifmd_data);
 #undef COPY
-		ifmd.ifmd_snd_len = ifp->if_snd.ifq_len;
-		ifmd.ifmd_snd_maxlen = ifp->if_snd.ifq_maxlen;
-		ifmd.ifmd_snd_drops = ifp->if_snd.ifq_drops;
-
+			ifmd.ifmd_snd_len = ifp->if_snd.ifq_len;
+			ifmd.ifmd_snd_maxlen = ifp->if_snd.ifq_maxlen;
+			ifmd.ifmd_snd_drops = ifp->if_snd.ifq_drops;
+#if PKT_PRIORITY
+			/* stuff these into unused fields for now */
+			ifmd.ifmd_filler[0] = ifp->if_obgpackets;
+			ifmd.ifmd_filler[1] = ifp->if_obgbytes;
+#endif /* PKT_PRIORITY */
+		}
 		error = SYSCTL_OUT(req, &ifmd, sizeof ifmd);
 		if (error || !req->newptr)
 			break;
@@ -195,6 +202,7 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 int
 sysctl_ifdata SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
 {
+#pragma unused(oidp)
 	int *name = (int *)arg1;
 	int error = 0;
 	u_int namelen = arg2;
@@ -204,7 +212,8 @@ sysctl_ifdata SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
 		return EINVAL;
 	ifnet_head_lock_shared();
 	if (name[0] <= 0 || name[0] > if_index ||
-	    (ifp = ifindex2ifnet[name[0]]) == NULL) {
+	    (ifp = ifindex2ifnet[name[0]]) == NULL ||
+	    ifp->if_refcnt == 0) {
 		ifnet_head_done();
 		return ENOENT;
 	}
@@ -222,6 +231,7 @@ sysctl_ifdata SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
 int
 sysctl_ifalldata SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
 {
+#pragma unused(oidp)
 	int *name = (int *)arg1;
 	int error = 0;
 	u_int namelen = arg2;

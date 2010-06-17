@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -323,7 +323,8 @@ in_clsroute(struct radix_node *rn, __unused struct radix_node_head *head)
 
 		getmicrotime(&timenow);
 		rt->rt_flags |= RTPRF_OURS;
-		rt->rt_rmx.rmx_expire = timenow.tv_sec + rtq_reallyold;
+		rt->rt_rmx.rmx_expire =
+		    rt_expiry(rt, timenow.tv_sec, rtq_reallyold);
 	}
 }
 
@@ -378,11 +379,11 @@ in_rtqkill(struct radix_node *rn, void *rock)
 				ap->killed++;
 			}
 		} else {
-			if (ap->updating
-			   && (rt->rt_rmx.rmx_expire - timenow.tv_sec
-			       > rtq_reallyold)) {
-				rt->rt_rmx.rmx_expire = timenow.tv_sec
-					+ rtq_reallyold;
+			if (ap->updating &&
+			    (unsigned)(rt->rt_rmx.rmx_expire - timenow.tv_sec) >
+			    rt_expiry(rt, 0, rtq_reallyold)) {
+				rt->rt_rmx.rmx_expire = rt_expiry(rt,
+				    timenow.tv_sec, rtq_reallyold);
 			}
 			ap->nextstop = lmin(ap->nextstop,
 					    rt->rt_rmx.rmx_expire);

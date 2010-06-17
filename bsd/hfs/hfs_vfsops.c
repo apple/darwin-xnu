@@ -3471,10 +3471,11 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	u_int32_t  phys_sectorsize;
 	daddr64_t  prev_alt_sector;
 	daddr_t	   bitmapblks;
-	int  lockflags;
+	int  lockflags = 0;
 	int  error;
 	int64_t oldBitmapSize;
 	Boolean  usedExtendFileC = false;
+	int transaction_begun = 0;
 	
 	devvp = hfsmp->hfs_devvp;
 	vcb = HFSTOVCB(hfsmp);
@@ -3548,12 +3549,27 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	addblks = newblkcnt - vcb->totalBlocks;
 
 	printf("hfs_extendfs: growing %s by %d blocks\n", vcb->vcbVN, addblks);
+
+	HFS_MOUNT_LOCK(hfsmp, TRUE);
+	if (hfsmp->hfs_flags & HFS_RESIZE_IN_PROGRESS) {
+		HFS_MOUNT_UNLOCK(hfsmp, TRUE);
+		error = EALREADY;
+		goto out;
+	}
+	hfsmp->hfs_flags |= HFS_RESIZE_IN_PROGRESS;
+	HFS_MOUNT_UNLOCK(hfsmp, TRUE);
+
+	/* Invalidate the current free extent cache */
+	invalidate_free_extent_cache(hfsmp);
+	
 	/*
 	 * Enclose changes inside a transaction.
 	 */
 	if (hfs_start_transaction(hfsmp) != 0) {
-		return (EINVAL);
+		error = EINVAL;
+		goto out;
 	}
+	transaction_begun = 1;
 
 	/*
 	 * Note: we take the attributes lock in case we have an attribute data vnode
@@ -3782,9 +3798,16 @@ out:
 	   we should reset the allocLimit field. If it changed, it will
 	   get updated; if not, it will remain the same.
 	*/
+	HFS_MOUNT_LOCK(hfsmp, TRUE);	
+	hfsmp->hfs_flags &= ~HFS_RESIZE_IN_PROGRESS;
 	hfsmp->allocLimit = vcb->totalBlocks;
-	hfs_systemfile_unlock(hfsmp, lockflags);
-	hfs_end_transaction(hfsmp);
+	HFS_MOUNT_UNLOCK(hfsmp, TRUE);	
+	if (lockflags) {
+		hfs_systemfile_unlock(hfsmp, lockflags);
+	}
+	if (transaction_begun) {
+		hfs_end_transaction(hfsmp);
+	}
 
 	return (error);
 }
@@ -3850,6 +3873,9 @@ hfs_truncatefs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 		error = ENOSPC;
 		goto out;
 	}
+	
+	/* Invalidate the current free extent cache */
+	invalidate_free_extent_cache(hfsmp);
 	
 	/* Start with a clean journal. */
 	hfs_journal_flush(hfsmp);
