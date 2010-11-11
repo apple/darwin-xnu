@@ -99,17 +99,14 @@ uint64_t	max_mem;        /* Size of physical memory (bytes), adjusted by maxmem 
 uint64_t        mem_actual;
 uint64_t	sane_size = 0;  /* Memory size to use for defaults calculations */
 
-#define MAXBOUNCEPOOL	(128 * 1024 * 1024)
 #define MAXLORESERVE	( 32 * 1024 * 1024)
 
-extern unsigned int bsd_mbuf_cluster_reserve(void);
+ppnum_t		max_ppnum = 0;
+ppnum_t		lowest_lo = 0;
+ppnum_t		lowest_hi = 0;
+ppnum_t		highest_hi = 0;
 
-
-uint32_t	bounce_pool_base = 0;
-uint32_t	bounce_pool_size = 0;
-
-static void	reserve_bouncepool(uint32_t);
-
+extern unsigned int bsd_mbuf_cluster_reserve(boolean_t *);
 
 pmap_paddr_t     avail_start, avail_end;
 vm_offset_t	virtual_avail, virtual_end;
@@ -133,7 +130,6 @@ void *sectLINKB; unsigned long sectSizeLINK;
 void *sectPRELINKB; unsigned long sectSizePRELINK;
 void *sectHIBB; unsigned long sectSizeHIB;
 void *sectINITPTB; unsigned long sectSizeINITPT;
-extern int srv;
 
 extern uint64_t firmware_Conventional_bytes;
 extern uint64_t firmware_RuntimeServices_bytes;
@@ -163,8 +159,6 @@ i386_vm_init(uint64_t	maxmem,
 	unsigned int safeboot;
 	ppnum_t maxpg = 0;
         uint32_t pmap_type;
-	uint32_t maxbouncepoolsize;
-	uint32_t maxloreserve;
 	uint32_t maxdmaaddr;
 
 	/*
@@ -233,6 +227,7 @@ i386_vm_init(uint64_t	maxmem,
         mcount = args->MemoryMapSize / msize;
 
 #define FOURGIG 0x0000000100000000ULL
+#define ONEGIG  0x0000000040000000ULL
 
 	for (i = 0; i < mcount; i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize)) {
 	        ppnum_t base, top;
@@ -502,41 +497,47 @@ i386_vm_init(uint64_t	maxmem,
 
 	kprintf("Physical memory %llu MB\n", sane_size/MB);
 
-	if (!PE_parse_boot_argn("max_valid_dma_addr", &maxdmaaddr, sizeof (maxdmaaddr)))
-	        max_valid_dma_address = 4 * GB;
-	else
+	max_valid_low_ppnum = (2 * GB) / PAGE_SIZE;
+
+	if (!PE_parse_boot_argn("max_valid_dma_addr", &maxdmaaddr, sizeof (maxdmaaddr))) {
+	        max_valid_dma_address = (uint64_t)4 * (uint64_t)GB;
+	} else {
 	        max_valid_dma_address = ((uint64_t) maxdmaaddr) * MB;
 
-	if (!PE_parse_boot_argn("maxbouncepool", &maxbouncepoolsize, sizeof (maxbouncepoolsize)))
-	        maxbouncepoolsize = MAXBOUNCEPOOL;
-	else
-	        maxbouncepoolsize = maxbouncepoolsize * (1024 * 1024);
-
-	/* since bsd_mbuf_cluster_reserve() is going to be called, we need to check for server */
-        if (PE_parse_boot_argn("srv", &srv, sizeof (srv))) {
-                srv = 1;
-        }
-
-	
-	/*
-	 * bsd_mbuf_cluster_reserve depends on sane_size being set
-	 * in order to correctly determine the size of the mbuf pool
-	 * that will be reserved
-	 */
-	if (!PE_parse_boot_argn("maxloreserve", &maxloreserve, sizeof (maxloreserve)))
-	        maxloreserve = MAXLORESERVE + bsd_mbuf_cluster_reserve();
-	else
-	        maxloreserve = maxloreserve * (1024 * 1024);
-
-
-	if (avail_end >= max_valid_dma_address) {
-	        if (maxbouncepoolsize)
-		        reserve_bouncepool(maxbouncepoolsize);
-
-		if (maxloreserve)
-		        vm_lopage_poolsize = maxloreserve / PAGE_SIZE;
+		if ((max_valid_dma_address / PAGE_SIZE) < max_valid_low_ppnum)
+			max_valid_low_ppnum = (ppnum_t)(max_valid_dma_address / PAGE_SIZE);
 	}
-	
+	if (avail_end >= max_valid_dma_address) {
+		uint32_t  maxloreserve;
+		uint32_t  mbuf_reserve = 0;
+		boolean_t mbuf_override = FALSE;
+
+		if (!PE_parse_boot_argn("maxloreserve", &maxloreserve, sizeof (maxloreserve))) {
+
+			if (sane_size >= (ONEGIG * 15))
+				maxloreserve = (MAXLORESERVE / PAGE_SIZE) * 4;
+			else if (sane_size >= (ONEGIG * 7))
+				maxloreserve = (MAXLORESERVE / PAGE_SIZE) * 2;
+			else
+				maxloreserve = MAXLORESERVE / PAGE_SIZE;
+
+			mbuf_reserve = bsd_mbuf_cluster_reserve(&mbuf_override) / PAGE_SIZE;
+		} else
+			maxloreserve = (maxloreserve * (1024 * 1024)) / PAGE_SIZE;
+
+		if (maxloreserve) {
+		        vm_lopage_free_limit = maxloreserve;
+			
+			if (mbuf_override == TRUE) {
+				vm_lopage_free_limit += mbuf_reserve;
+				vm_lopage_lowater = 0;
+			} else
+				vm_lopage_lowater = vm_lopage_free_limit / 16;
+
+			vm_lopage_refill = TRUE;
+			vm_lopage_needed = TRUE;
+		}
+	}
 	/*
 	 *	Initialize kernel physical map.
 	 *	Kernel virtual address starts at VM_KERNEL_MIN_ADDRESS.
@@ -551,24 +552,40 @@ pmap_free_pages(void)
 	return (unsigned int)avail_remaining;
 }
 
-#if defined(__LP64__)
-/* On large memory systems, early allocations should prefer memory from the
- * last region, which is typically all physical memory >4GB. This is used
- * by pmap_steal_memory and pmap_pre_expand during init only. */
 boolean_t
-pmap_next_page_k64( ppnum_t *pn)
+pmap_next_page_hi(
+	          ppnum_t *pn)
 {
-	if(max_mem >= (32*GB)) {
-		pmap_memory_region_t *last_region = &pmap_memory_regions[pmap_memory_region_count-1];
-		if (last_region->alloc != last_region->end) {
-			*pn = last_region->alloc++;
-			avail_remaining--;
-			return TRUE;
+	pmap_memory_region_t *region;
+	int	n;
+
+	if (avail_remaining) {
+		for (n = pmap_memory_region_count - 1; n >= 0; n--) {
+			region = &pmap_memory_regions[n];
+
+			if (region->alloc != region->end) {
+				*pn = region->alloc++;
+				avail_remaining--;
+
+				if (*pn > max_ppnum)
+					max_ppnum = *pn;
+
+                                if (lowest_lo == 0 || *pn < lowest_lo)
+                                        lowest_lo = *pn;
+
+                                if (lowest_hi == 0 || *pn < lowest_hi)
+                                        lowest_hi = *pn;
+
+                                if (*pn > highest_hi)
+                                        highest_hi = *pn;
+
+				return TRUE;
+			}
 		}
 	}
-	return pmap_next_page(pn);
+	return FALSE;
 }
-#endif
+
 
 boolean_t
 pmap_next_page(
@@ -582,6 +599,12 @@ pmap_next_page(
 		}
 		*pn = pmap_memory_regions[pmap_memory_region_current].alloc++;
 		avail_remaining--;
+
+		if (*pn > max_ppnum)
+			max_ppnum = *pn;
+
+		if (lowest_lo == 0 || *pn < lowest_lo)
+			lowest_lo = *pn;
 
 		return TRUE;
 	}
@@ -601,32 +624,6 @@ pmap_valid_page(
 	                return TRUE;
 	}
 	return FALSE;
-}
-
-
-static void
-reserve_bouncepool(uint32_t bounce_pool_wanted)
-{
-	pmap_memory_region_t *pmptr  = pmap_memory_regions;
-	pmap_memory_region_t *lowest = NULL;
-        unsigned int i;
-	unsigned int pages_needed;
-
-	pages_needed = bounce_pool_wanted / PAGE_SIZE;
-
-	for (i = 0; i < pmap_memory_region_count; i++, pmptr++) {
-	        if ( (pmptr->end - pmptr->alloc) >= pages_needed ) {
-		        if ( (lowest == NULL) || (pmptr->alloc < lowest->alloc) )
-			        lowest = pmptr;
-		}
-	}
-	if ( (lowest != NULL) ) {
-	        bounce_pool_base = lowest->alloc * PAGE_SIZE;
-		bounce_pool_size = bounce_pool_wanted;
-
-		lowest->alloc += pages_needed;
-		avail_remaining -= pages_needed;
-	}
 }
 
 /*

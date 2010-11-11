@@ -485,6 +485,7 @@ vm_object_bootstrap(void)
 				round_page(512*1024),
 				round_page(12*1024),
 				"vm objects");
+	zone_change(vm_object_zone, Z_NOENCRYPT, TRUE);
 
 	vm_object_init_lck_grp();
 
@@ -514,6 +515,7 @@ vm_object_bootstrap(void)
 			      round_page(512*1024),
 			      round_page(12*1024),
 			      "vm object hash entries");
+	zone_change(vm_object_hash_zone, Z_NOENCRYPT, TRUE);
 
 	for (i = 0; i < VM_OBJECT_HASH_COUNT; i++)
 		queue_init(&vm_object_hashtable[i]);
@@ -1491,10 +1493,10 @@ restart_after_sleep:
 		}
 		if (reap_type == REAP_DATA_FLUSH || reap_type == REAP_TERMINATE) {
 
-			if (reap_type == REAP_DATA_FLUSH && (p->pageout == TRUE && p->list_req_pending == TRUE)) {
+			if (reap_type == REAP_DATA_FLUSH &&
+			    ((p->pageout == TRUE || p->cleaning == TRUE) && p->list_req_pending == TRUE)) {
 				p->list_req_pending = FALSE;
 				p->cleaning = FALSE;
-				p->pageout = FALSE;
 				/*
 				 * need to drop the laundry count...
 				 * we may also need to remove it
@@ -1509,13 +1511,15 @@ restart_after_sleep:
 #else
 				vm_pageout_throttle_up(p);
 #endif
-
-				/*
-				 * toss the wire count we picked up
-				 * when we intially set this page up
-				 * to be cleaned...
-				 */
-				vm_page_unwire(p);
+				if (p->pageout == TRUE) {
+					/*
+					 * toss the wire count we picked up
+					 * when we initially set this page up
+					 * to be cleaned and stolen...
+					 */
+					vm_page_unwire(p, TRUE);
+					p->pageout = FALSE;
+				}
 				PAGE_WAKEUP(p);
 
 			} else if (p->busy || p->cleaning) {
@@ -2854,6 +2858,7 @@ vm_object_copy_slowly(
 	fault_info.hi_offset = src_offset + size;
 	fault_info.no_cache  = FALSE;
 	fault_info.stealth = TRUE;
+	fault_info.mark_zf_absent = FALSE;
 
 	for ( ;
 	    size != 0 ;
@@ -5202,7 +5207,7 @@ vm_object_page_map(
 	    }
 
 	    assert((ppnum_t) addr == addr);
-	    vm_page_init(m, (ppnum_t) addr);
+	    vm_page_init(m, (ppnum_t) addr, FALSE);
 	    /*
 	     * private normally requires lock_queues but since we
 	     * are initializing the page, its not necessary here
@@ -7408,7 +7413,8 @@ _vm_object_lock_try(vm_object_t object)
 boolean_t
 vm_object_lock_try(vm_object_t object)
 {
-	if (vm_object_lock_avoid(object)) {
+    // called from hibernate path so check before blocking
+	if (vm_object_lock_avoid(object) && ml_get_interrupts_enabled()) {
 		mutex_pause(2);
 	}
 	return _vm_object_lock_try(object);

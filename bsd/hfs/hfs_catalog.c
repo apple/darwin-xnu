@@ -2111,7 +2111,7 @@ exit:
 		}
 		if (alias_allocated && rsrcforkp->extents[0].startBlock != 0) {
 			(void) BlockDeallocate(hfsmp, rsrcforkp->extents[0].startBlock,
-					       rsrcforkp->extents[0].blockCount);
+					       rsrcforkp->extents[0].blockCount, 0);
 			rsrcforkp->extents[0].startBlock = 0;
 			rsrcforkp->extents[0].blockCount = 0;
 		}
@@ -2210,7 +2210,8 @@ cat_makealias(struct hfsmount *hfsmp, u_int32_t inode_num, struct HFSPlusCatalog
 	bzero(rsrcforkp, sizeof(HFSPlusForkData));
 
 	/* Allocate some disk space for the alias content. */
-	result = BlockAllocate(hfsmp, 0, blkcount, blkcount, 1, 1,
+	result = BlockAllocate(hfsmp, 0, blkcount, blkcount, 
+			       HFS_ALLOC_FORCECONTIG | HFS_ALLOC_METAZONE, 
 	                       &rsrcforkp->extents[0].startBlock,
 	                       &rsrcforkp->extents[0].blockCount);
 	if (result) {
@@ -2265,7 +2266,7 @@ cat_makealias(struct hfsmount *hfsmp, u_int32_t inode_num, struct HFSPlusCatalog
 
 exit:
 	if (result && rsrcforkp->extents[0].startBlock != 0) {
-		(void) BlockDeallocate(hfsmp, rsrcforkp->extents[0].startBlock, rsrcforkp->extents[0].blockCount);
+		(void) BlockDeallocate(hfsmp, rsrcforkp->extents[0].startBlock, rsrcforkp->extents[0].blockCount, 0);
 		rsrcforkp->extents[0].startBlock = 0;
 		rsrcforkp->extents[0].blockCount = 0;
 		rsrcforkp->logicalSize = 0;
@@ -2329,7 +2330,7 @@ cat_deletelink(struct hfsmount *hfsmp, struct cat_desc *descp)
 
 			(void) BlockDeallocate(hfsmp, 
 				file.resourceFork.extents[i].startBlock, 
-				file.resourceFork.extents[i].blockCount);
+				file.resourceFork.extents[i].blockCount, 0);
 
 			totalBlocks -= file.resourceFork.extents[i].blockCount;
 			file.resourceFork.extents[i].startBlock = 0;

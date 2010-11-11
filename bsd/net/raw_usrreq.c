@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -300,6 +300,11 @@ raw_usend(struct socket *so, int flags, struct mbuf *m,
 	}
 
 	if (flags & PRUS_OOB) {
+		error = EOPNOTSUPP;
+		goto release;
+	}
+
+	if (so->so_proto->pr_output == NULL) {
 		error = EOPNOTSUPP;
 		goto release;
 	}

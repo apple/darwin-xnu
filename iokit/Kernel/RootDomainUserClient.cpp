@@ -194,6 +194,23 @@ IOReturn RootDomainUserClient::secureSetMaintenanceWakeCalendar(
 #endif
 }
 
+IOReturn RootDomainUserClient::secureSetUserAssertionLevels(
+    uint32_t assertBits )
+{
+    int                     admin_priv = 0;
+    IOReturn                ret = kIOReturnNotPrivileged;
+    
+    ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeAdministrator);
+    admin_priv = (kIOReturnSuccess == ret);
+
+    if (admin_priv && fOwner) {
+        ret = fOwner->setPMAssertionUserLevels(assertBits);
+    } else {
+        ret = kIOReturnNotPrivileged;
+    }
+    return kIOReturnSuccess;
+}
+
 IOReturn RootDomainUserClient::clientClose( void )
 {
     detach(fOwner);
@@ -238,6 +255,10 @@ RootDomainUserClient::getTargetAndMethodForIndex( IOService ** targetP, UInt32 i
         {   // kPMSetMaintenanceWakeCalendar, 8
             (IOService *)1, (IOMethod)&RootDomainUserClient::secureSetMaintenanceWakeCalendar,
             kIOUCStructIStructO, sizeof(IOPMCalendarStruct), sizeof(uint32_t)
+        },
+        {   // kPMSetUserAssertionLevels, 9
+            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSetUserAssertionLevels,
+            kIOUCScalarIScalarO, 1, 0
         }
     };
     

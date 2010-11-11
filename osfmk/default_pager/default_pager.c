@@ -396,7 +396,8 @@ default_pager_initialize(void)
 	vstruct_zone = zinit(sizeof(struct vstruct),
 			     10000 * sizeof(struct vstruct),
 			     8192, "vstruct zone");
-	
+	zone_change(vstruct_zone, Z_NOENCRYPT, TRUE);
+
 	VSL_LOCK_INIT();
 	queue_init(&vstruct_list.vsl_queue);
 	vstruct_list.vsl_count = 0;

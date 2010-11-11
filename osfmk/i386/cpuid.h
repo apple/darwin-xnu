@@ -134,7 +134,6 @@
 #define CPUID_MODEL_MEROM	15
 #define CPUID_MODEL_PENRYN	23
 #define CPUID_MODEL_NEHALEM	26
-#define CPUID_MODEL_ATOM	28
 #define CPUID_MODEL_FIELDS	30	/* Lynnfield, Clarksfield, Jasper */
 #define CPUID_MODEL_DALES	31	/* Havendale, Auburndale */
 #define CPUID_MODEL_NEHALEM_EX	46

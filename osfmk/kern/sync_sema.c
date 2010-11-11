@@ -143,6 +143,7 @@ semaphore_init(void)
 			semaphore_max * sizeof(struct semaphore),
 			sizeof(struct semaphore),
 			"semaphores");
+  zone_change(semaphore_zone, Z_NOENCRYPT, TRUE);
 }
 
 /*

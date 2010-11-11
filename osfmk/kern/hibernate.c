@@ -42,13 +42,13 @@
 #include <vm/vm_pageout.h>
 #include <vm/vm_purgeable_internal.h>
 
-
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 kern_return_t 
 hibernate_setup(IOHibernateImageHeader * header,
-                        uint32_t free_page_ratio,
-                        uint32_t free_page_time,
+                        uint32_t  free_page_ratio,
+                        uint32_t  free_page_time,
+                        boolean_t vmflush,
 			hibernate_page_list_t ** page_list_ret,
 			hibernate_page_list_t ** page_list_wired_ret,
                         boolean_t * encryptedswap)
@@ -59,7 +59,9 @@ hibernate_setup(IOHibernateImageHeader * header,
 
     *page_list_ret       = NULL;
     *page_list_wired_ret = NULL;
-
+    
+    if (vmflush)
+        hibernate_flush_memory();
 
     page_list = hibernate_page_list_allocate();
     if (!page_list)

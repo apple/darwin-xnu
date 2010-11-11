@@ -77,7 +77,7 @@
 #endif
 
 
-#ifndef MROUTING
+#if !MROUTING
 extern u_int32_t	_ip_mcast_src(int vifi);
 extern int	_ip_mforward(struct ip *ip, struct ifnet *ifp,
 				  struct mbuf *m, struct ip_moptions *imo);

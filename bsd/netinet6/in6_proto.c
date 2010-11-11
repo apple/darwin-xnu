@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -315,16 +315,6 @@ struct ip6protosw inet6sw[] = {
 #if MROUTING
 { SOCK_RAW,     &inet6domain,	IPPROTO_PIM,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   pim6_input,	rip6_pr_output,	0,              rip6_ctloutput,
-  0,
-  0,		0,		0,		0,
-  0,	
-  &rip6_usrreqs,
-  0,		rip_unlock,	0,
-  { 0, 0 }, NULL, { 0 }
-},
-#else
-{ SOCK_RAW,     &inet6domain,	IPPROTO_PIM,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  0,		0,		0,              rip6_ctloutput,
   0,
   0,		0,		0,		0,
   0,	

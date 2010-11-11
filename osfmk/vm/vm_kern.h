@@ -87,6 +87,7 @@ extern kern_return_t	kernel_memory_allocate(
 #define KMA_GUARD_FIRST	0x10
 #define KMA_GUARD_LAST	0x20
 #define KMA_PERMANENT	0x40
+#define KMA_NOENCRYPT	0x80
 
 extern kern_return_t kmem_alloc_contig(
 				vm_map_t	map,

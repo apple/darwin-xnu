@@ -1375,6 +1375,8 @@ uthread_zone_init(void)
 					THREAD_CHUNK * sizeof(struct uthread),
 					"uthreads");
 		uthread_zone_inited = 1;
+
+		zone_change(uthread_zone, Z_NOENCRYPT, TRUE);
 	}
 }
 

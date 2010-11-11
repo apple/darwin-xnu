@@ -125,7 +125,7 @@ static void	buf_reassign(buf_t bp, vnode_t newvp);
 static errno_t	buf_acquire_locked(buf_t bp, int flags, int slpflag, int slptimeo);
 static int	buf_iterprepare(vnode_t vp, struct buflists *, int flags);
 static void	buf_itercomplete(vnode_t vp, struct buflists *, int flags);
-boolean_t buffer_cache_gc(void);
+boolean_t buffer_cache_gc(int);
 
 __private_extern__ int  bdwrite_internal(buf_t, int);
 
@@ -3676,12 +3676,16 @@ dump_buffer:
 }
 
 boolean_t 
-buffer_cache_gc(void)
+buffer_cache_gc(int all)
 {
 	buf_t bp;
 	boolean_t did_large_zfree = FALSE;
 	int now = buf_timestamp();
 	uint32_t count = 0;
+	int thresh_hold = BUF_STALE_THRESHHOLD;
+
+	if (all)
+		thresh_hold = 0;
 
 	lck_mtx_lock_spin(buf_mtxp);
 
@@ -3689,7 +3693,7 @@ buffer_cache_gc(void)
 	bp = TAILQ_FIRST(&bufqueues[BQ_META]);
 
 	/* Only collect buffers unused in the last N seconds. Note: ordered by timestamp. */
-	while ((bp != NULL) && ((now - bp->b_timestamp) > BUF_STALE_THRESHHOLD) && (count < BUF_MAX_GC_COUNT)) {
+	while ((bp != NULL) && ((now - bp->b_timestamp) > thresh_hold) && (all || (count < BUF_MAX_GC_COUNT))) {
 		int result, size;
 		boolean_t is_zalloc;
 

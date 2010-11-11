@@ -137,6 +137,8 @@ mk_timer_init(void)
 	assert(!(mk_timer_zone != NULL));
 
 	mk_timer_zone = zinit(s, (4096 * s), (16 * s), "mk_timer");
+
+	zone_change(mk_timer_zone, Z_NOENCRYPT, TRUE);
 }
 
 static void

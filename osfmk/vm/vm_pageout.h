@@ -81,6 +81,11 @@
 
 #include <vm/vm_options.h>
 
+#ifdef	MACH_KERNEL_PRIVATE
+#include <vm/vm_page.h>
+#endif
+
+
 extern kern_return_t vm_map_create_upl(
 	vm_map_t		map,
 	vm_map_address_t	offset,
@@ -95,6 +100,26 @@ extern ppnum_t upl_get_highest_page(
 
 extern upl_size_t upl_get_size(
 	upl_t			upl);
+
+
+#ifndef	MACH_KERNEL_PRIVATE
+typedef struct vm_page	*vm_page_t;
+#endif
+
+
+extern void                vm_page_free_list(
+                            vm_page_t	mem,
+                            boolean_t	prepare_object);
+
+extern kern_return_t      vm_page_alloc_list(
+                            int         page_count,
+                            int			flags,
+                            vm_page_t * list);
+
+extern void               vm_page_set_offset(vm_page_t page, vm_object_offset_t offset);
+extern vm_object_offset_t vm_page_get_offset(vm_page_t page);
+extern ppnum_t            vm_page_get_phys_page(vm_page_t page);
+extern vm_page_t          vm_page_get_next(vm_page_t page);
 
 #ifdef	MACH_KERNEL_PRIVATE
 
@@ -133,6 +158,28 @@ extern uint64_t	vm_zf_count;
 	MACRO_END					\
 
 #endif /* !(defined(__ppc__)) */
+
+/*
+ * must hold the page queues lock to
+ * manipulate this structure
+ */
+struct vm_pageout_queue {
+        queue_head_t	pgo_pending;	/* laundry pages to be processed by pager's iothread */
+        unsigned int	pgo_laundry;	/* current count of laundry pages on queue or in flight */
+        unsigned int	pgo_maxlaundry;
+
+        unsigned int	pgo_idle:1,	/* iothread is blocked waiting for work to do */
+	                pgo_busy:1,     /* iothread is currently processing request from pgo_pending */
+			pgo_throttled:1,/* vm_pageout_scan thread needs a wakeup when pgo_laundry drops */
+		        pgo_draining:1,
+			:0;
+};
+
+#define VM_PAGE_Q_THROTTLED(q)		\
+        ((q)->pgo_laundry >= (q)->pgo_maxlaundry)
+
+extern struct	vm_pageout_queue	vm_pageout_queue_internal;
+extern struct	vm_pageout_queue	vm_pageout_queue_external;
 
 /*
  *	Routines exported to Mach.
@@ -295,10 +342,6 @@ extern kern_return_t vm_map_remove_upl(
 /* wired  page list structure */
 typedef uint32_t *wpl_array_t;
 
-extern void vm_page_free_list(
-	vm_page_t	mem,
-	boolean_t	prepare_object);
-	 
 extern void vm_page_free_reserve(int pages);
 
 extern void vm_pageout_throttle_down(vm_page_t page);
@@ -371,7 +414,7 @@ extern kern_return_t mach_vm_pressure_monitor(
 
 extern kern_return_t
 vm_set_buffer_cleanup_callout(
-	boolean_t	(*func)(void));
+	boolean_t	(*func)(int));
 
 struct vm_page_stats_reusable {
 	SInt32		reusable_count;
@@ -393,6 +436,8 @@ struct vm_page_stats_reusable {
 };
 extern struct vm_page_stats_reusable vm_page_stats_reusable;
 	
+extern int hibernate_flush_memory(void);
+
 #endif	/* KERNEL_PRIVATE */
 
 #endif	/* _VM_VM_PAGEOUT_H_ */

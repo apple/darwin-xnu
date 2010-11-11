@@ -61,7 +61,7 @@ extern uint32_t   tcp_recvspace;
 void            bsd_bufferinit(void) __attribute__((section("__TEXT, initcode")));
 extern void     md_prepare_for_shutdown(int, int, char *);
 
-unsigned int	bsd_mbuf_cluster_reserve(void);
+unsigned int	bsd_mbuf_cluster_reserve(boolean_t *);
 void bsd_srv_setup(int);
 void bsd_exec_setup(int);
 
@@ -159,7 +159,7 @@ bsd_startupearly(void)
 #endif
 		int             scale;
 
-		nmbclusters = bsd_mbuf_cluster_reserve() / MCLBYTES;
+		nmbclusters = bsd_mbuf_cluster_reserve(NULL) / MCLBYTES;
 
 #if INET || INET6
 		if ((scale = nmbclusters / NMBCLUSTERS) > 1) {
@@ -237,9 +237,10 @@ bsd_bufferinit(void)
  * memory that is present.
  */
 unsigned int
-bsd_mbuf_cluster_reserve(void)
+bsd_mbuf_cluster_reserve(boolean_t *overridden)
 {
 	int mbuf_pool = 0;
+	static boolean_t was_overridden = FALSE;
 
 	/* If called more than once, return the previously calculated size */
 	if (mbuf_poolsz != 0)
@@ -263,6 +264,10 @@ bsd_mbuf_cluster_reserve(void)
 		ncl = (mbuf_pool << MBSHIFT) >> MCLSHIFT;
 
         if (sane_size > (64 * 1024 * 1024) || ncl != 0) {
+
+		if (ncl || srv)
+			was_overridden = TRUE;
+
 	        if ((nmbclusters = ncl) == 0) {
 			/* Auto-configure the mbuf pool size */
 			nmbclusters = mbuf_default_ncl(srv, sane_size);
@@ -278,6 +283,9 @@ bsd_mbuf_cluster_reserve(void)
 	}
 	mbuf_poolsz = nmbclusters << MCLSHIFT;
 done:
+	if (overridden)
+		*overridden = was_overridden;
+
 	return (mbuf_poolsz);
 }
 #if defined(__LP64__)

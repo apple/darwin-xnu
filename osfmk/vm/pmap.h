@@ -169,9 +169,7 @@ extern void 		mapping_free_prime(void); /* Primes the mapping block release list
  */
 
 extern boolean_t	pmap_next_page(ppnum_t *pnum);
-#if defined(__LP64__)
-extern boolean_t	pmap_next_page_k64(ppnum_t *pnum);
-#endif
+extern boolean_t	pmap_next_page_hi(ppnum_t *pnum);
 						/* During VM initialization,
 						 * return the next unused
 						 * physical page.
@@ -465,6 +463,10 @@ extern kern_return_t pmap_unnest(pmap_t grand,
 				 uint64_t size);
 extern boolean_t pmap_adjust_unnest_parameters(pmap_t, vm_map_offset_t *, vm_map_offset_t *);
 #endif	/* MACH_KERNEL_PRIVATE */
+
+extern boolean_t	pmap_is_noencrypt(ppnum_t);
+extern void		pmap_set_noencrypt(ppnum_t pn);
+extern void		pmap_clear_noencrypt(ppnum_t pn);
 
 /*
  * JMM - This portion is exported to other kernel components right now,

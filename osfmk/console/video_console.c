@@ -1240,7 +1240,7 @@ gc_update_color(int color, boolean_t fore)
 void
 vcputc(__unused int l, __unused int u, int c)
 {
-	if ( gc_enabled || debug_mode )
+	if ( gc_initialized && ( gc_enabled || debug_mode ) )
 	{
 		spl_t s;
 

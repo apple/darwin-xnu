@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -321,6 +321,25 @@ rtc_clock_napped(uint64_t base, uint64_t tsc_base)
 	    rtc_nanotime_set_commpage(rntp);
 	}
 }
+
+
+/*
+ * Invoked from power management to correct the SFLM TSC entry drift problem:
+ * a small delta is added to the tsc_base. This is equivalent to nudging time
+ * backwards. We require this of the order of a TSC quantum which won't cause
+ * callers of mach_absolute_time() to see time going backwards!
+ */
+void
+rtc_clock_adjust(uint64_t tsc_base_delta)
+{
+	rtc_nanotime_t	*rntp = current_cpu_datap()->cpu_nanotime;
+
+	assert(!ml_get_interrupts_enabled());
+	assert(tsc_base_delta < 100ULL);	/* i.e. it's small */
+	_rtc_nanotime_adjust(tsc_base_delta, rntp);
+	rtc_nanotime_set_commpage(rntp);
+}
+
 
 void
 rtc_clock_stepping(__unused uint32_t new_frequency,

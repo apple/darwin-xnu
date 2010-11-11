@@ -169,14 +169,19 @@ wait_queue_bootstrap(void)
 				      WAIT_QUEUE_MAX * sizeof(struct wait_queue),
 				      sizeof(struct wait_queue),
 				      "wait queues");
+	zone_change(_wait_queue_zone, Z_NOENCRYPT, TRUE);
+
 	_wait_queue_set_zone = zinit(sizeof(struct wait_queue_set),
 				      WAIT_QUEUE_SET_MAX * sizeof(struct wait_queue_set),
 				      sizeof(struct wait_queue_set),
 				      "wait queue sets");
+	zone_change(_wait_queue_set_zone, Z_NOENCRYPT, TRUE);
+
 	_wait_queue_link_zone = zinit(sizeof(struct _wait_queue_link),
 				      WAIT_QUEUE_LINK_MAX * sizeof(struct _wait_queue_link),
 				      sizeof(struct _wait_queue_link),
 				      "wait queue links");
+	zone_change(_wait_queue_link_zone, Z_NOENCRYPT, TRUE);
 }
 
 /*

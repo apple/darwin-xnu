@@ -946,8 +946,8 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 		}
 	}
 
-	/* Obtain the vnode for "/tmp" directory. */
-	if (vnode_lookup("/tmp", 0, &dvp, context) != 0) {
+	/* Obtain the vnode for "/var/run" directory. */
+	if (vnode_lookup("/var/run", 0, &dvp, context) != 0) {
 		error = ENOTSUP;
 		goto out;
 	}
@@ -995,7 +995,7 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 			if (sdvp->v_type != VDIR) {
 				goto baddir;
 			}
-			/* Obtain the fsid for /tmp directory */
+			/* Obtain the fsid for /var/run directory */
 			VATTR_INIT(&va);
 			VATTR_WANTED(&va, va_fsid);
 			if (VNOP_GETATTR(dvp, &va, context) != 0  ||

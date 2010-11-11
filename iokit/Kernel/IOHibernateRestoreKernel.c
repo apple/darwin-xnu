@@ -213,39 +213,10 @@ static void fatal(void)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#define BASE 65521L /* largest prime smaller than 65536 */
-#define NMAX 5000  
-// NMAX (was 5521) the largest n such that 255n(n+1)/2 + (n+1)(BASE-1) <= 2^32-1
-
-#define DO1(buf,i)  {s1 += buf[i]; s2 += s1;}
-#define DO2(buf,i)  DO1(buf,i); DO1(buf,i+1);
-#define DO4(buf,i)  DO2(buf,i); DO2(buf,i+2);
-#define DO8(buf,i)  DO4(buf,i); DO4(buf,i+4);
-#define DO16(buf)   DO8(buf,0); DO8(buf,8);
-
 uint32_t
-hibernate_sum(uint8_t *buf, int32_t len)
+hibernate_sum_page(uint8_t *buf, uint32_t ppnum)
 {
-    unsigned long s1 = 1; // adler & 0xffff;
-    unsigned long s2 = 0; // (adler >> 16) & 0xffff;
-    int k;
-
-    while (len > 0) {
-        k = len < NMAX ? len : NMAX;
-        len -= k;
-        while (k >= 16) {
-            DO16(buf);
-	    buf += 16;
-            k -= 16;
-        }
-        if (k != 0) do {
-            s1 += *buf++;
-	    s2 += s1;
-        } while (--k);
-        s1 %= BASE;
-        s2 %= BASE;
-    }
-    return (s2 << 16) | s1;
+    return (((uint32_t *)buf)[((PAGE_SIZE >> 2) - 1) & ppnum]);
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -407,7 +378,7 @@ store_one_page(uint32_t procFlags, uint32_t * src, uint32_t compressedSize,
 	src = buffer;
     }
 
-    sum = hibernate_sum((uint8_t *) src, PAGE_SIZE);
+    sum = hibernate_sum_page((uint8_t *) src, ppnum);
 
     if (((uint64_t) (uintptr_t) src) == dst)
 	src = 0;
@@ -491,7 +462,7 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
     if (p3)
         bcopy_internal(p3, 
                 gIOHibernateCryptWakeVars, 
-                sizeof(hibernate_cryptvars_t));
+                sizeof(hibernate_cryptwakevars_t));
 
     src = (uint32_t *)
                 (((uintptr_t) &header->fileExtentMap[0]) 

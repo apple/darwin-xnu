@@ -354,6 +354,7 @@ apple_protect_pager_data_request(
 	upl_pl = NULL;
 	fault_info = *((struct vm_object_fault_info *) mo_fault_info);
 	fault_info.stealth = TRUE;
+	fault_info.mark_zf_absent = FALSE;
 	interruptible = fault_info.interruptible;
 
 	pager = apple_protect_pager_lookup(mem_obj);

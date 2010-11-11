@@ -2811,7 +2811,7 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 	u_int64_t temp;
 	u_int32_t features;
 	vfs_context_t ctx = vfs_context_current();
-
+	int isssd = 0;
 	int isvirtual = 0;
 	/*
 	 * determine if this mount point exists on the same device as the root
@@ -2859,6 +2859,10 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 	if (VNOP_IOCTL(devvp, DKIOCISVIRTUAL, (caddr_t)&isvirtual, 0, ctx) == 0) {
 	        if (isvirtual)
 		        mp->mnt_kern_flag |= MNTK_VIRTUALDEV;
+	}
+	if (VNOP_IOCTL(devvp, DKIOCISSOLIDSTATE, (caddr_t)&isssd, 0, ctx) == 0) {
+	        if (isssd)
+		        mp->mnt_kern_flag |= MNTK_SSD;
 	}
 
 	if ((error = VNOP_IOCTL(devvp, DKIOCGETFEATURES,
@@ -4927,8 +4931,24 @@ vauth_node_owner(struct vnode_attr *vap, kauth_cred_t cred)
 	return(result);
 }
 
+/*
+ * vauth_node_group
+ *
+ * Description:	Ask if a cred is a member of the group owning the vnode object
+ *
+ * Parameters:		vap		vnode attribute
+ *				vap->va_gid	group owner of vnode object
+ *			cred		credential to check
+ *			ismember	pointer to where to put the answer
+ *			idontknow	Return this if we can't get an answer
+ *
+ * Returns:		0		Success
+ *			idontknow	Can't get information
+ *	kauth_cred_ismember_gid:?	Error from kauth subsystem
+ *	kauth_cred_ismember_gid:?	Error from kauth subsystem
+ */
 static int
-vauth_node_group(struct vnode_attr *vap, kauth_cred_t cred, int *ismember)
+vauth_node_group(struct vnode_attr *vap, kauth_cred_t cred, int *ismember, int idontknow)
 {
 	int	error;
 	int	result;
@@ -4936,11 +4956,43 @@ vauth_node_group(struct vnode_attr *vap, kauth_cred_t cred, int *ismember)
 	error = 0;
 	result = 0;
 
-	/* the caller is expected to have asked the filesystem for a group at some point */
+	/*
+	 * The caller is expected to have asked the filesystem for a group
+	 * at some point prior to calling this function.  The answer may
+	 * have been that there is no group ownership supported for the
+	 * vnode object, in which case we return
+	 */
 	if (vap && VATTR_IS_SUPPORTED(vap, va_gid)) {
 		error = kauth_cred_ismember_gid(cred, vap->va_gid, &result);
+		/*
+		 * Credentials which are opted into external group membership
+		 * resolution which are not known to the external resolver
+		 * will result in an ENOENT error.  We translate this into
+		 * the appropriate 'idontknow' response for our caller.
+		 *
+		 * XXX We do not make a distinction here between an ENOENT
+		 * XXX arising from a response from the external resolver,
+		 * XXX and an ENOENT which is internally generated.  This is
+		 * XXX a deficiency of the published kauth_cred_ismember_gid()
+		 * XXX KPI which can not be overcome without new KPI.  For
+		 * XXX all currently known cases, however, this wil result
+		 * XXX in correct behaviour.
+		 */
+		if (error == ENOENT)
+			error = idontknow;
 	}
-	/* we could test the group UUID here if we had a policy for it */
+	/*
+	 * XXX We could test the group UUID here if we had a policy for it,
+	 * XXX but this is problematic from the perspective of synchronizing
+	 * XXX group UUID and POSIX GID ownership of a file and keeping the
+	 * XXX values coherent over time.  The problem is that the local
+	 * XXX system will vend transient group UUIDs for unknown POSIX GID
+	 * XXX values, and these are not persistent, whereas storage of values
+	 * XXX is persistent.  One potential solution to this is a local
+	 * XXX (persistent) replica of remote directory entries and vended
+	 * XXX local ids in a local directory server (think in terms of a
+	 * XXX caching DNS server).
+	 */
 
 	if (!error)
 		*ismember = result;
@@ -4968,16 +5020,39 @@ vauth_file_owner(vauth_ctx vcp)
 	return(result);
 }
 
+
+/*
+ * vauth_file_ingroup
+ *
+ * Description:	Ask if a user is a member of the group owning the directory
+ *
+ * Parameters:		vcp		The vnode authorization context that
+ *					contains the user and directory info
+ *				vcp->flags_valid	Valid flags
+ *				vcp->flags		Flags values
+ *				vcp->vap		File vnode attributes
+ *				vcp->ctx		VFS Context (for user)
+ *			ismember	pointer to where to put the answer
+ *			idontknow	Return this if we can't get an answer
+ *
+ * Returns:		0		Success
+ *		vauth_node_group:?	Error from vauth_node_group()
+ *
+ * Implicit returns:	*ismember	0	The user is not a group member
+ *					1	The user is a group member
+ */
 static int
-vauth_file_ingroup(vauth_ctx vcp, int *ismember)
+vauth_file_ingroup(vauth_ctx vcp, int *ismember, int idontknow)
 {
 	int	error;
 
+	/* Check for a cached answer first, to avoid the check if possible */
 	if (vcp->flags_valid & _VAC_IN_GROUP) {
 		*ismember = (vcp->flags & _VAC_IN_GROUP) ? 1 : 0;
 		error = 0;
 	} else {
-		error = vauth_node_group(vcp->vap, vcp->ctx->vc_ucred, ismember);
+		/* Otherwise, go look for it */
+		error = vauth_node_group(vcp->vap, vcp->ctx->vc_ucred, ismember, idontknow);
 
 		if (!error) {
 			/* cache our result */
@@ -5014,16 +5089,38 @@ vauth_dir_owner(vauth_ctx vcp)
 	return(result);
 }
 
+/*
+ * vauth_dir_ingroup
+ *
+ * Description:	Ask if a user is a member of the group owning the directory
+ *
+ * Parameters:		vcp		The vnode authorization context that
+ *					contains the user and directory info
+ *				vcp->flags_valid	Valid flags
+ *				vcp->flags		Flags values
+ *				vcp->dvap		Dir vnode attributes
+ *				vcp->ctx		VFS Context (for user)
+ *			ismember	pointer to where to put the answer
+ *			idontknow	Return this if we can't get an answer
+ *
+ * Returns:		0		Success
+ *		vauth_node_group:?	Error from vauth_node_group()
+ *
+ * Implicit returns:	*ismember	0	The user is not a group member
+ *					1	The user is a group member
+ */
 static int
-vauth_dir_ingroup(vauth_ctx vcp, int *ismember)
+vauth_dir_ingroup(vauth_ctx vcp, int *ismember, int idontknow)
 {
 	int	error;
 
+	/* Check for a cached answer first, to avoid the check if possible */
 	if (vcp->flags_valid & _VAC_IN_DIR_GROUP) {
 		*ismember = (vcp->flags & _VAC_IN_DIR_GROUP) ? 1 : 0;
 		error = 0;
 	} else {
-		error = vauth_node_group(vcp->dvap, vcp->ctx->vc_ucred, ismember);
+		/* Otherwise, go look for it */
+		error = vauth_node_group(vcp->dvap, vcp->ctx->vc_ucred, ismember, idontknow);
 
 		if (!error) {
 			/* cache our result */
@@ -5131,11 +5228,19 @@ vnode_authorize_posix(vauth_ctx vcp, int action, int on_dir)
 	}
 
 	/* Check group membership (most expensive) */
-	ismember = 0;
+	ismember = 0;	/* Default to allow, if the target has no group owner */
+
+	/*
+	 * In the case we can't get an answer about the user from the call to
+	 * vauth_dir_ingroup() or vauth_file_ingroup(), we want to fail on
+	 * the side of caution, rather than simply granting access, or we will
+	 * fail to correctly implement exclusion groups, so we set the third
+	 * parameter on the basis of the state of 'group_ok'.
+	 */
 	if (on_dir) {
-		error = vauth_dir_ingroup(vcp, &ismember);
+		error = vauth_dir_ingroup(vcp, &ismember, (!group_ok ? EACCES : 0));
 	} else {
-		error = vauth_file_ingroup(vcp, &ismember);
+		error = vauth_file_ingroup(vcp, &ismember, (!group_ok ? EACCES : 0));
 	}
 	if (error)
 		goto out;
@@ -5207,14 +5312,22 @@ vnode_authorize_delete(vauth_ctx vcp, boolean_t cached_delete_child)
 	/* check the ACL on the directory */
 	delete_child_denied = 0;
 	if (!cached_delete_child && VATTR_IS_NOT(dvap, va_acl, NULL)) {
+		errno_t	posix_error;
+
 		eval.ae_requested = KAUTH_VNODE_DELETE_CHILD;
 		eval.ae_acl = &dvap->va_acl->acl_ace[0];
 		eval.ae_count = dvap->va_acl->acl_entrycount;
 		eval.ae_options = 0;
 		if (vauth_dir_owner(vcp))
 			eval.ae_options |= KAUTH_AEVAL_IS_OWNER;
-		if ((error = vauth_dir_ingroup(vcp, &ismember)) != 0)
-			return(error);
+		/*
+		 * We use ENOENT as a marker to indicate we could not get
+		 * information in order to delay evaluation until after we
+		 * have the ACL evaluation answer.  Previously, we would
+		 * always deny the operation at this point.
+		 */
+		if ((posix_error = vauth_dir_ingroup(vcp, &ismember, ENOENT)) != 0 && posix_error != ENOENT)
+			return(posix_error);
 		if (ismember)
 			eval.ae_options |= KAUTH_AEVAL_IN_GROUP;
 		eval.ae_exp_gall = KAUTH_VNODE_GENERIC_ALL_BITS;
@@ -5222,31 +5335,58 @@ vnode_authorize_delete(vauth_ctx vcp, boolean_t cached_delete_child)
 		eval.ae_exp_gwrite = KAUTH_VNODE_GENERIC_WRITE_BITS;
 		eval.ae_exp_gexec = KAUTH_VNODE_GENERIC_EXECUTE_BITS;
 
+		/*
+		 * If there is no entry, we are going to defer to other
+		 * authorization mechanisms.
+		 */
 		error = kauth_acl_evaluate(cred, &eval);
 
 		if (error != 0) {
 			KAUTH_DEBUG("%p    ERROR during ACL processing - %d", vcp->vp, error);
 			return(error);
 		}
-		if (eval.ae_result == KAUTH_RESULT_DENY)
+		switch(eval.ae_result) {
+		case KAUTH_RESULT_DENY:
 			delete_child_denied = 1;
-		if (eval.ae_result == KAUTH_RESULT_ALLOW) {
+			break;
+		case KAUTH_RESULT_ALLOW:
 			KAUTH_DEBUG("%p    ALLOWED - granted by directory ACL", vcp->vp);
 			return(0);
+		case KAUTH_RESULT_DEFER:
+			/*
+			 * If we don't have a POSIX answer of "yes", and we
+			 * can't get an ACL answer, then we deny it now.
+			 */
+			if (posix_error == ENOENT) {
+				delete_child_denied = 1;
+				break;
+			}
+		default:
+			/* Effectively the same as !delete_child_denied */
+			KAUTH_DEBUG("%p    DEFERRED - directory ACL", vcp->vp);
+			break;
 		}
 	}
 
 	/* check the ACL on the node */
 	delete_denied = 0;
 	if (VATTR_IS_NOT(vap, va_acl, NULL)) {
+		errno_t	posix_error;
+
 		eval.ae_requested = KAUTH_VNODE_DELETE;
 		eval.ae_acl = &vap->va_acl->acl_ace[0];
 		eval.ae_count = vap->va_acl->acl_entrycount;
 		eval.ae_options = 0;
 		if (vauth_file_owner(vcp))
 			eval.ae_options |= KAUTH_AEVAL_IS_OWNER;
-		if ((error = vauth_file_ingroup(vcp, &ismember)) != 0)
-			return(error);
+		/*
+		 * We use ENOENT as a marker to indicate we could not get
+		 * information in order to delay evaluation until after we
+		 * have the ACL evaluation answer.  Previously, we would
+		 * always deny the operation at this point.
+		 */
+		if ((posix_error = vauth_file_ingroup(vcp, &ismember, ENOENT)) != 0 && posix_error != ENOENT)
+			return(posix_error);
 		if (ismember)
 			eval.ae_options |= KAUTH_AEVAL_IN_GROUP;
 		eval.ae_exp_gall = KAUTH_VNODE_GENERIC_ALL_BITS;
@@ -5258,17 +5398,32 @@ vnode_authorize_delete(vauth_ctx vcp, boolean_t cached_delete_child)
 			KAUTH_DEBUG("%p    ERROR during ACL processing - %d", vcp->vp, error);
 			return(error);
 		}
-		if (eval.ae_result == KAUTH_RESULT_DENY)
+
+		switch(eval.ae_result) {
+		case KAUTH_RESULT_DENY:
 			delete_denied = 1;
-		if (eval.ae_result == KAUTH_RESULT_ALLOW) {
+			break;
+		case KAUTH_RESULT_ALLOW:
 			KAUTH_DEBUG("%p    ALLOWED - granted by file ACL", vcp->vp);
 			return(0);
+		case KAUTH_RESULT_DEFER:
+			/*
+			 * If we don't have a POSIX answer of "yes", and we
+			 * can't get an ACL answer, then we deny it now.
+			 */
+			if (posix_error == ENOENT) {
+				delete_denied = 1;
+			}
+		default:
+			/* Effectively the same as !delete_child_denied */
+			KAUTH_DEBUG("%p    DEFERRED%s - by file ACL", vcp->vp, delete_denied ? "(DENY)" : "");
+			break;
 		}
 	}
 
 	/* if denied by ACL on directory or node, return denial */
 	if (delete_denied || delete_child_denied) {
-		KAUTH_DEBUG("%p    ALLOWED - denied by ACL", vcp->vp);
+		KAUTH_DEBUG("%p    DENIED - denied by ACL", vcp->vp);
 		return(EACCES);
 	}
 
@@ -5334,14 +5489,22 @@ vnode_authorize_simple(vauth_ctx vcp, kauth_ace_rights_t acl_rights, kauth_ace_r
 
 	/* if we have an ACL, evaluate it */
 	if (VATTR_IS_NOT(vap, va_acl, NULL)) {
+		errno_t	posix_error;
+
 		eval.ae_requested = acl_rights;
 		eval.ae_acl = &vap->va_acl->acl_ace[0];
 		eval.ae_count = vap->va_acl->acl_entrycount;
 		eval.ae_options = 0;
 		if (vauth_file_owner(vcp))
 			eval.ae_options |= KAUTH_AEVAL_IS_OWNER;
-		if ((error = vauth_file_ingroup(vcp, &ismember)) != 0)
-			return(error);
+		/*
+		 * We use ENOENT as a marker to indicate we could not get
+		 * information in order to delay evaluation until after we
+		 * have the ACL evaluation answer.  Previously, we would
+		 * always deny the operation at this point.
+		 */
+		if ((posix_error = vauth_file_ingroup(vcp, &ismember, ENOENT)) != 0 && posix_error != ENOENT)
+			return(posix_error);
 		if (ismember)
 			eval.ae_options |= KAUTH_AEVAL_IN_GROUP;
 		eval.ae_exp_gall = KAUTH_VNODE_GENERIC_ALL_BITS;
@@ -5354,14 +5517,28 @@ vnode_authorize_simple(vauth_ctx vcp, kauth_ace_rights_t acl_rights, kauth_ace_r
 			return(error);
 		}
 		
-		if (eval.ae_result == KAUTH_RESULT_DENY) {
+		switch(eval.ae_result) {
+		case KAUTH_RESULT_DENY:
 			KAUTH_DEBUG("%p    DENIED - by ACL", vcp->vp);
-			return(EACCES);			/* deny, deny, counter-allege */
-		}
-		if (eval.ae_result == KAUTH_RESULT_ALLOW) {
+			return(EACCES);		/* deny, deny, counter-allege */
+		case KAUTH_RESULT_ALLOW:
 			KAUTH_DEBUG("%p    ALLOWED - all rights granted by ACL", vcp->vp);
 			return(0);
+		case KAUTH_RESULT_DEFER:
+			/*
+			 * If we don't have a POSIX answer of "yes", and we
+			 * can't get an ACL answer, then we deny it now.
+			 */
+			if (posix_error == ENOENT) {
+				KAUTH_DEBUG("%p    DENIED(DEFERRED) - by ACL", vcp->vp);
+				return(EACCES);		/* deny, deny, counter-allege */
+			}
+		default:
+			/* Effectively the same as !delete_child_denied */
+			KAUTH_DEBUG("%p    DEFERRED - directory ACL", vcp->vp);
+			break;
 		}
+
 		*found_deny = eval.ae_found_deny;
 
 		/* fall through and evaluate residual rights */

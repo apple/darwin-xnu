@@ -374,6 +374,8 @@ ubc_init(void)
 	i = (vm_size_t) sizeof (struct ubc_info);
 
 	ubc_info_zone = zinit (i, 10000*i, 8192, "ubc_info zone");
+
+	zone_change(ubc_info_zone, Z_NOENCRYPT, TRUE);
 }
 
 

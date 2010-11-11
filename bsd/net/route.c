@@ -624,6 +624,7 @@ route_init(void)
 		panic("route_init: failed allocating rte_zone");
 
 	zone_change(rte_zone, Z_EXPAND, TRUE);
+	zone_change(rte_zone, Z_NOENCRYPT, TRUE);
 
 	TAILQ_INIT(&rttrash_head);
 }

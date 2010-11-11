@@ -1150,6 +1150,8 @@ vm_fault_page(
 					 */
 					my_fault = vm_fault_zero_page(m, no_zero_fill);
 
+					if (fault_info->mark_zf_absent && no_zero_fill == TRUE)
+						m->absent = TRUE;
 					break;
 				} else {
 					if (must_be_resident)
@@ -1623,6 +1625,8 @@ vm_fault_page(
 			}
 			my_fault = vm_fault_zero_page(m, no_zero_fill);
 
+			if (fault_info->mark_zf_absent && no_zero_fill == TRUE)
+				m->absent = TRUE;
 			break;
 
 		} else {
@@ -2444,7 +2448,7 @@ vm_fault_enter(vm_page_t m,
 				vm_page_wire(m);
 			}
 		} else {
-		        vm_page_unwire(m);
+		        vm_page_unwire(m, TRUE);
 		}
 		vm_page_unlock_queues();
 
@@ -2654,6 +2658,7 @@ RetryFault:
 	pmap = real_map->pmap;
 	fault_info.interruptible = interruptible;
 	fault_info.stealth = FALSE;
+	fault_info.mark_zf_absent = FALSE;
 
 	/*
 	 * If the page is wired, we must fault for the current protection
@@ -3883,6 +3888,7 @@ vm_fault_unwire(
 	fault_info.hi_offset = (entry->vme_end - entry->vme_start) + entry->offset;
 	fault_info.no_cache = entry->no_cache;
 	fault_info.stealth = TRUE;
+	fault_info.mark_zf_absent = FALSE;
 
 	/*
 	 *	Since the pages are wired down, we must be able to
@@ -3961,7 +3967,7 @@ vm_fault_unwire(
 			} else {
 				if (VM_PAGE_WIRED(result_page)) {
 					vm_page_lockspin_queues();
-					vm_page_unwire(result_page);
+					vm_page_unwire(result_page, TRUE);
 					vm_page_unlock_queues();
 				}
 				if(entry->zero_wired_pages) {
@@ -4035,7 +4041,7 @@ vm_fault_wire_fast(
 #define RELEASE_PAGE(m)	{				\
 	PAGE_WAKEUP_DONE(m);				\
 	vm_page_lockspin_queues();			\
-	vm_page_unwire(m);				\
+	vm_page_unwire(m, TRUE);			\
 	vm_page_unlock_queues();			\
 }
 
@@ -4205,7 +4211,7 @@ vm_fault_copy_dst_cleanup(
 		object = page->object;
 		vm_object_lock(object);
 		vm_page_lockspin_queues();
-		vm_page_unwire(page);
+		vm_page_unwire(page, TRUE);
 		vm_page_unlock_queues();
 		vm_object_paging_end(object);	
 		vm_object_unlock(object);
@@ -4289,6 +4295,7 @@ vm_fault_copy(
 	fault_info_src.hi_offset = fault_info_src.lo_offset + amount_left;
 	fault_info_src.no_cache   = FALSE;
 	fault_info_src.stealth = TRUE;
+	fault_info_src.mark_zf_absent = FALSE;
 
 	fault_info_dst.interruptible = interruptible;
 	fault_info_dst.behavior = VM_BEHAVIOR_SEQUENTIAL;
@@ -4297,6 +4304,7 @@ vm_fault_copy(
 	fault_info_dst.hi_offset = fault_info_dst.lo_offset + amount_left;
 	fault_info_dst.no_cache   = FALSE;
 	fault_info_dst.stealth = TRUE;
+	fault_info_dst.mark_zf_absent = FALSE;
 
 	do { /* while (amount_left > 0) */
 		/*

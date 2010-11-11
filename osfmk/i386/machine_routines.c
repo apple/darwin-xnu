@@ -96,8 +96,8 @@ vm_offset_t ml_static_malloc(
 
 void ml_get_bouncepool_info(vm_offset_t *phys_addr, vm_size_t *size)
 {
-        *phys_addr = bounce_pool_base;
-	*size      = bounce_pool_size;
+        *phys_addr = 0;
+	*size      = 0;
 }
 
 

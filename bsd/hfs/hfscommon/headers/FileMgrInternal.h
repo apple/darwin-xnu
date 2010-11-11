@@ -205,20 +205,31 @@ ReplaceBTreeRecord				(FileReference 				refNum,
 
 
 /*	Prototypes for exported routines in VolumeAllocation.c*/
+
+/* 
+ * Flags for BlockAllocate() and BlockDeallocate()
+ */ 
+/* Force contiguous block allocation and to force minBlocks to actually be allocated */
+#define HFS_ALLOC_FORCECONTIG	0x1	
+/* Can use metadata zone blocks */
+#define HFS_ALLOC_METAZONE	0x2	
+/* Skip checking and updating of free blocks during allocation and deallocation */
+#define HFS_ALLOC_SKIPFREEBLKS	0x4	
+
 EXTERN_API_C( OSErr )
 BlockAllocate					(ExtendedVCB *			vcb,
 								 u_int32_t 				startingBlock,
 								 u_int32_t 				minBlocks,
 								 u_int32_t 				maxBlocks,
-								 Boolean 				forceContiguous,
-								 Boolean				useMetaZone,
+								 u_int32_t				flags,
 								 u_int32_t *			startBlock,
 								 u_int32_t *			actualBlocks);
 
 EXTERN_API_C( OSErr )
 BlockDeallocate					(ExtendedVCB *			vcb,
 								 u_int32_t 				firstBlock,
-								 u_int32_t 				numBlocks);
+								 u_int32_t 				numBlocks,
+								 u_int32_t				flags);
 
 EXTERN_API_C ( void )
 invalidate_free_extent_cache	(ExtendedVCB *			vcb);

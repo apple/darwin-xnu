@@ -221,7 +221,99 @@ enum {
  * 
  * See IOPMrootDomain notification kIOPMMessageSleepWakeUUIDChange
  */
- #define kIOPMSleepWakeUUIDKey              "SleepWakeUUID"
+#define kIOPMSleepWakeUUIDKey               "SleepWakeUUID"
+
+/* kIOPMDeepSleepEnabledKey
+ * Indicates the Deep Sleep enable state.
+ * It has a boolean value.
+ *  true        == Deep Sleep is enabled
+ *  false       == Deep Sleep is disabled
+ *  not present == Deep Sleep is not supported on this hardware
+ */
+#define kIOPMDeepSleepEnabledKey            "DeepSleep Enabled"
+
+/* kIOPMDeepSleepDelayKey
+ * Key refers to a CFNumberRef that represents the delay in seconds before
+ * entering Deep Sleep state. The property is not present if Deep Sleep is
+ * unsupported.
+ */
+#define kIOPMDeepSleepDelayKey              "DeepSleep Delay"
+
+/* kIOPMLowBatteryWakeThresholdKey
+ * Key refers to a CFNumberRef that represents the percentage of battery
+ * remaining charge that will trigger a system wake followed by Deep Sleep.
+ */
+#define kIOPMLowBatteryWakeThresholdKey     "LowBatteryWakeThreshold"
+
+/*******************************************************************************
+ *
+ * Driver PM Assertions
+ *
+ ******************************************************************************/
+
+/* Driver Assertion bitfield description
+ * Driver PM assertions are defined by these bits.
+ */
+enum {
+    /*! kIOPMDriverAssertionCPUBit
+     * When set, PM kernel will prefer to leave the CPU and core hardware
+     * running in "Dark Wake" state, instead of sleeping.
+     */
+    kIOPMDriverAssertionCPUBit                      = 0x01,
+
+    /*! kIOPMDriverAssertionUSBExternalDeviceBit
+     * When set, driver is informing PM that an external USB device is attached.
+     */
+    kIOPMDriverAssertionUSBExternalDeviceBit        = 0x04,
+
+    /*! kIOPMDriverAssertionBluetoothHIDDevicePairedBit
+     * When set, driver is informing PM that a Bluetooth HID device is paired.
+     */
+    kIOPMDriverAssertionBluetoothHIDDevicePairedBit = 0x08,
+
+    /*! kIOPMDriverAssertionExternalMediaMountedBit
+     * When set, driver is informing PM that an external media is mounted.
+     */
+    kIOPMDriverAssertionExternalMediaMountedBit     = 0x10,
+
+    kIOPMDriverAssertionReservedBit5                = 0x20,
+    kIOPMDriverAssertionReservedBit6                = 0x40,
+    kIOPMDriverAssertionReservedBit7                = 0x80
+};
+
+ /* kIOPMAssertionsDriverKey
+  * This kIOPMrootDomain key refers to a CFNumberRef property, containing
+  * a bitfield describing the aggregate PM assertion levels.
+  * Example: A value of 0 indicates that no driver has asserted anything.
+  * Or, a value of <link>kIOPMDriverAssertionCPUBit</link>
+  *   indicates that a driver (or drivers) have asserted a need fro CPU and video.
+  */
+#define kIOPMAssertionsDriverKey            "DriverPMAssertions"
+
+ /* kIOPMAssertionsDriverKey
+  * This kIOPMrootDomain key refers to a CFNumberRef property, containing
+  * a bitfield describing the aggregate PM assertion levels.
+  * Example: A value of 0 indicates that no driver has asserted anything.
+  * Or, a value of <link>kIOPMDriverAssertionCPUBit</link>
+  *   indicates that a driver (or drivers) have asserted a need fro CPU and video.
+  */
+#define kIOPMAssertionsDriverDetailedKey    "DriverPMAssertionsDetailed"
+
+/*******************************************************************************
+ *
+ * Kernel Driver assertion detailed dictionary keys
+ *
+ * Keys decode the Array & dictionary data structure under IOPMrootDomain property 
+ *  kIOPMAssertionsDriverKey.
+ *
+ */
+#define kIOPMDriverAssertionIDKey               "ID"
+#define kIOPMDriverAssertionCreatedTimeKey      "CreatedTime"
+#define kIOPMDriverAssertionModifiedTimeKey     "ModifiedTime"
+#define kIOPMDriverAssertionOwnerStringKey      "Owner"
+#define kIOPMDriverAssertionOwnerServiceKey     "ServicePtr"
+#define kIOPMDriverAssertionLevelKey            "Level"
+#define kIOPMDriverAssertionAssertedKey         "Assertions"
 
 /*******************************************************************************
  *
@@ -299,6 +391,12 @@ enum {
  * the current UUID has been removed.
  */
 #define kIOPMMessageSleepWakeUUIDCleared                ((void *)0)
+
+/*! kIOPMMessageDriverAssertionsChanged
+ *  Sent when kernel PM driver assertions have changed.
+ */
+#define kIOPMMessageDriverAssertionsChanged  \
+                iokit_family_msg(sub_iokit_powermanagement, 0x150)
 
 /*******************************************************************************
  *

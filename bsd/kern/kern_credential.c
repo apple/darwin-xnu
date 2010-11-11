@@ -145,6 +145,7 @@ static lck_mtx_t *kauth_resolver_mtx;
 static volatile pid_t	kauth_resolver_identity;
 static int	kauth_resolver_registered;
 static uint32_t	kauth_resolver_sequence;
+static int	kauth_resolver_timeout = 30;	/* default: 30 seconds */
 
 struct kauth_resolver_work {
 	TAILQ_ENTRY(kauth_resolver_work) kr_link;
@@ -251,8 +252,8 @@ kauth_resolver_init(void)
  *		EINTR				Operation interrupted (e.g. by
  *						a signal)
  *		ENOMEM				Could not allocate work item
- *		???				An error from the user space
- *						daemon
+ *	workp->kr_result:???			An error from the user space
+ *						daemon (includes ENOENT!)
  *
  * Notes:	Allocate a work queue entry, submit the work and wait for
  *		the operation to either complete or time out.  Outstanding
@@ -269,7 +270,9 @@ kauth_resolver_submit(struct kauth_identity_extlookup *lkp)
 	/* no point actually blocking if the resolver isn't up yet */
 	if (kauth_resolver_identity == 0) {
 		/*
-		 * We've already waited an initial 30 seconds with no result.
+		 * We've already waited an initial <kauth_resolver_timeout>
+		 * seconds with no result.
+		 *
 		 * Sleep on a stack address so no one wakes us before timeout;
 		 * we sleep a half a second in case we are a high priority
 		 * process, so that memberd doesn't starve while we are in a
@@ -312,7 +315,7 @@ kauth_resolver_submit(struct kauth_identity_extlookup *lkp)
 	wakeup_one((caddr_t)&kauth_resolver_unsubmitted);
 	for (;;) {
 		/* we could compute a better timeout here */
-		ts.tv_sec = 30;
+		ts.tv_sec = kauth_resolver_timeout;
 		ts.tv_nsec = 0;
 		error = msleep(workp, kauth_resolver_mtx, PCATCH, "kr_submit", &ts);
 		/* request has been completed? */
@@ -359,12 +362,23 @@ kauth_resolver_submit(struct kauth_identity_extlookup *lkp)
 	 */
 	if ((error == EWOULDBLOCK) && (workp->kr_flags & KAUTH_REQUEST_UNSUBMITTED)) {
 		KAUTH_DEBUG("RESOLVER - request timed out without being collected for processing, resolver dead");
+
+		/*
+		 * Make the current resolver non-authoritative, and mark it as
+		 * no longer registered to prevent kauth_cred_ismember_gid()
+		 * enqueueing more work until a new one is registered.  This
+		 * mitigates the damage a crashing resolver may inflict.
+		 */
 		kauth_resolver_identity = 0;
+		kauth_resolver_registered = 0;
+
 		/* kill all the other requestes that are waiting as well */
 		TAILQ_FOREACH(killp, &kauth_resolver_submitted, kr_link)
 		    wakeup(killp);
 		TAILQ_FOREACH(killp, &kauth_resolver_unsubmitted, kr_link)
 		    wakeup(killp);
+		/* Cause all waiting-for-work threads to return EIO */
+		wakeup((caddr_t)&kauth_resolver_unsubmitted);
 	}
 	
 	/*
@@ -455,6 +469,14 @@ identitysvc(__unused struct proc *p, struct identitysvc_args *uap, __unused int3
 				workp->kr_flags |= KAUTH_REQUEST_UNSUBMITTED;
 				TAILQ_INSERT_HEAD(&kauth_resolver_unsubmitted, workp, kr_link);
 			}
+			/*
+			 * Allow user space resolver to override the
+			 * external resolution timeout
+			 */
+			if (message >= 30 && message <= 10000) {
+				kauth_resolver_timeout = message;
+				KAUTH_DEBUG("RESOLVER - new resolver changes timeout to %d seconds\n", (int)message);
+			}
 			kauth_resolver_identity = new_id;
 			kauth_resolver_registered = 1;
 			wakeup(&kauth_resolver_unsubmitted);
@@ -479,7 +501,15 @@ identitysvc(__unused struct proc *p, struct identitysvc_args *uap, __unused int3
 		struct kauth_resolver_work *killp;
 
 		KAUTH_RESOLVER_LOCK();
+
+		/*
+		 * Clear the identity, but also mark it as unregistered so
+		 * there is no explicit future expectation of us getting a
+		 * new resolver any time soon.
+		 */
 		kauth_resolver_identity = 0;
+		kauth_resolver_registered = 0;
+
 		TAILQ_FOREACH(killp, &kauth_resolver_submitted, kr_link)
 		    wakeup(killp);
 		TAILQ_FOREACH(killp, &kauth_resolver_unsubmitted, kr_link)
@@ -706,9 +736,14 @@ kauth_resolver_complete(user_addr_t message)
 		KAUTH_DEBUG("RESOLVER - resolver %d died, waiting for a new one", kauth_resolver_identity);
 		/*
 		 * Terminate outstanding requests; without an authoritative
-		 * resolver, we are now back on our own authority.
+		 * resolver, we are now back on our own authority.  Tag the
+		 * resolver unregistered to prevent kauth_cred_ismember_gid()
+		 * enqueueing more work until a new one is registered.  This
+		 * mitigates the damage a crashing resolver may inflict.
 		 */
 		kauth_resolver_identity = 0;
+		kauth_resolver_registered = 0;
+
 		TAILQ_FOREACH(killp, &kauth_resolver_submitted, kr_link)
 		    wakeup(killp);
 		TAILQ_FOREACH(killp, &kauth_resolver_unsubmitted, kr_link)
@@ -2138,6 +2173,8 @@ kauth_groups_updatecache(struct kauth_identity_extlookup *el)
  *	kauth_resolver_submit:EWOULDBLOCK
  *	kauth_resolver_submit:EINTR
  *	kauth_resolver_submit:ENOMEM
+ *	kauth_resolver_submit:ENOENT		User space daemon did not vend
+ *						this credential.
  *	kauth_resolver_submit:???		Unlikely error from user space
  *
  * Implicit returns:
@@ -2252,6 +2289,8 @@ kauth_cred_ismember_gid(kauth_cred_t cred, gid_t gid, int *resultp)
  * Returns:	0				Success
  *	kauth_cred_guid2gid:EINVAL
  *	kauth_cred_ismember_gid:ENOENT
+ *	kauth_resolver_submit:ENOENT		User space daemon did not vend
+ *						this credential.
  *	kauth_cred_ismember_gid:EWOULDBLOCK
  *	kauth_cred_ismember_gid:EINTR
  *	kauth_cred_ismember_gid:ENOMEM
@@ -2839,13 +2878,45 @@ kauth_cred_t
 kauth_cred_create(kauth_cred_t cred)
 {
 	kauth_cred_t 	found_cred, new_cred = NULL;
+	int is_member = 0;
 
 	KAUTH_CRED_HASH_LOCK_ASSERT();
 
-	if (cred->cr_flags & CRF_NOMEMBERD)
+	if (cred->cr_flags & CRF_NOMEMBERD) {
 		cred->cr_gmuid = KAUTH_UID_NONE;
-	else
-		cred->cr_gmuid = cred->cr_uid;
+	} else {
+		/*
+		 * If the template credential is not opting out of external
+		 * group membership resolution, then we need to check that
+		 * the UID we will be using is resolvable by the external
+		 * resolver.  If it's not, then we opt it out anyway, since
+		 * all future external resolution requests will be failing
+		 * anyway, and potentially taking a long time to do it.  We
+		 * use gid 0 because we always know it will exist and not
+		 * trigger additional lookups. This is OK, because we end up
+		 * precatching the information here as a result.
+		 */
+		if (!kauth_cred_ismember_gid(cred, 0, &is_member)) {
+			/*
+			 * It's a recognized value; we don't really care about
+			 * the answer, so long as it's something the external
+			 * resolver could have vended.
+			 */
+			cred->cr_gmuid = cred->cr_uid;
+		} else {
+			/*
+			 * It's not something the external resolver could
+			 * have vended, so we don't want to ask it more
+			 * questions about the credential in the future. This
+			 * speeds up future lookups, as long as the caller
+			 * caches results; otherwise, it the same recurring
+			 * cost.  Since most credentials are used multiple
+			 * times, we still get some performance win from this.
+			 */
+			cred->cr_gmuid = KAUTH_UID_NONE;
+			cred->cr_flags |= CRF_NOMEMBERD;
+		}
+	}
 
 	/* Caller *must* specify at least the egid in cr_groups[0] */
 	if (cred->cr_ngroups < 1)

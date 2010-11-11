@@ -464,7 +464,7 @@ in6_pcbconnect(inp, nam, p)
 			      inp->inp_lport, 0, NULL);
 	socket_lock(inp->inp_socket, 0);
 	if (pcb != NULL) {
-		in_pcb_checkstate(pcb, WNT_RELEASE, 0);
+		in_pcb_checkstate(pcb, WNT_RELEASE, pcb == inp ? 1 : 0);
 		return (EADDRINUSE);
 	}
 	if (IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -66,6 +66,10 @@ extern void	_rtc_nanotime_store(
 			uint64_t	nsec,
 			uint32_t	scale,
 			uint32_t	shift,
+			rtc_nanotime_t	*dst);
+
+extern void	_rtc_nanotime_adjust(
+			uint64_t	tsc_base_delta,
 			rtc_nanotime_t	*dst);
 
 extern uint64_t	_rtc_nanotime_read(

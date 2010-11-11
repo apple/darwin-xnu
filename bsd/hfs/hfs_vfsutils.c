@@ -66,7 +66,6 @@
 static void ReleaseMetaFileVNode(struct vnode *vp);
 static int  hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_args);
 
-static void hfs_metadatazone_init(struct hfsmount *);
 static u_int32_t hfs_hotfile_freeblocks(struct hfsmount *);
 
 
@@ -733,7 +732,8 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	 * Allow hot file clustering if conditions allow.
 	 */
 	if ((hfsmp->hfs_flags & HFS_METADATA_ZONE)  &&
-	    ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0)) {
+	    ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0) &&
+	    ((hfsmp->hfs_mp->mnt_kern_flag & MNTK_SSD) == 0)) {
 		(void) hfs_recording_init(hfsmp);
 	}
 
@@ -2401,7 +2401,7 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 #define HOTBAND_MINIMUM_SIZE  (10*1024*1024)
 #define HOTBAND_MAXIMUM_SIZE  (512*1024*1024)
 
-static void
+void
 hfs_metadatazone_init(struct hfsmount *hfsmp)
 {
 	ExtendedVCB  *vcb;
@@ -2413,7 +2413,7 @@ hfs_metadatazone_init(struct hfsmount *hfsmp)
 	int  items, really_do_it=1;
 
 	vcb = HFSTOVCB(hfsmp);
-	fs_size = (u_int64_t)vcb->blockSize * (u_int64_t)vcb->totalBlocks;
+	fs_size = (u_int64_t)vcb->blockSize * (u_int64_t)vcb->allocLimit;
 
 	/*
 	 * For volumes less than 10 GB, don't bother.
@@ -2535,16 +2535,34 @@ hfs_metadatazone_init(struct hfsmount *hfsmp)
 	hfsmp->hfs_min_alloc_start = zonesize / vcb->blockSize;
 	/*
 	 * If doing the round up for hfs_min_alloc_start would push us past
-	 * totalBlocks, then just reset it back to 0.  Though using a value 
-	 * bigger than totalBlocks would not cause damage in the block allocator
+	 * allocLimit, then just reset it back to 0.  Though using a value 
+	 * bigger than allocLimit would not cause damage in the block allocator
 	 * code, this value could get stored in the volume header and make it out 
 	 * to disk, making the volume header technically corrupt.
 	 */
-	if (hfsmp->hfs_min_alloc_start >= hfsmp->totalBlocks) {
+	if (hfsmp->hfs_min_alloc_start >= hfsmp->allocLimit) {
 		hfsmp->hfs_min_alloc_start = 0;
 	}
 
 	if (really_do_it == 0) {
+		/* If metadata zone needs to be disabled because the 
+		 * volume was truncated, clear the bit and zero out 
+		 * the values that are no longer needed.
+		 */
+		if (hfsmp->hfs_flags & HFS_METADATA_ZONE) {
+			/* Disable metadata zone */
+			hfsmp->hfs_flags &= ~HFS_METADATA_ZONE;
+			
+			/* Zero out mount point values that are not required */
+			hfsmp->hfs_catalog_maxblks = 0;
+			hfsmp->hfs_hotfile_maxblks = 0;
+			hfsmp->hfs_hotfile_start = 0;
+			hfsmp->hfs_hotfile_end = 0;
+			hfsmp->hfs_hotfile_freeblks = 0;
+			hfsmp->hfs_metazone_start = 0;
+			hfsmp->hfs_metazone_end = 0;
+		}
+		
 		return;
 	}
 	

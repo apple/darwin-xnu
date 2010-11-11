@@ -609,6 +609,13 @@ unsigned int pmap_free_pages(void)
  *	This function allocates physical pages.
  */
 
+boolean_t
+pmap_next_page_hi(ppnum_t * pnum)
+{
+	return pmap_next_page(pnum);
+}
+
+
 /* Non-optimal, but only used for virtual memory startup.
  * Allocate memory from a table of free physical addresses
  * If there are no more free entries, too bad. 
@@ -1045,6 +1052,24 @@ unsigned int pmap_disconnect(
 
 	return (mapping_tst_refmod(pa));			/* Return page ref and chg in generic format */
 }
+
+
+boolean_t
+pmap_is_noencrypt(__unused ppnum_t pn)
+{
+	return (FALSE);
+}
+
+void
+pmap_set_noencrypt(__unused ppnum_t pn)
+{
+}
+
+void
+pmap_clear_noencrypt(__unused ppnum_t pn)
+{
+}
+
 
 /*
  * pmap_protect(pmap, s, e, prot)

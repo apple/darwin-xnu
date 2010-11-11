@@ -294,7 +294,7 @@ void IOFreeAligned(void * address, vm_size_t size)
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 void
-IOKernelFreeContiguous(mach_vm_address_t address, mach_vm_size_t size)
+IOKernelFreePhysical(mach_vm_address_t address, mach_vm_size_t size)
 {
     mach_vm_address_t allocationAddress;
     mach_vm_size_t    adjustedSize;
@@ -324,8 +324,8 @@ IOKernelFreeContiguous(mach_vm_address_t address, mach_vm_size_t size)
 }
 
 mach_vm_address_t
-IOKernelAllocateContiguous(mach_vm_size_t size, mach_vm_address_t maxPhys, 
-			    mach_vm_size_t alignment)
+IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxPhys, 
+				     mach_vm_size_t alignment, bool contiguous)
 {
     kern_return_t	kr;
     mach_vm_address_t	address;
@@ -341,11 +341,25 @@ IOKernelAllocateContiguous(mach_vm_size_t size, mach_vm_address_t maxPhys,
     alignMask = alignment - 1;
     adjustedSize = (2 * size) + sizeof(mach_vm_size_t) + sizeof(mach_vm_address_t);
 
-    if (adjustedSize >= page_size)
+    contiguous = (contiguous && (adjustedSize > page_size))
+                   || (alignment > page_size);
+
+    if (contiguous || maxPhys)
     {
+        int options = 0;
 	vm_offset_t virt;
+
 	adjustedSize = size;
-	if ((adjustedSize > page_size) || (alignment > page_size) || maxPhys)
+        contiguous = (contiguous && (adjustedSize > page_size))
+                           || (alignment > page_size);
+
+        if ((!contiguous) && (maxPhys <= 0xFFFFFFFF))
+        {
+            maxPhys = 0;
+            options |= KMA_LOMEM;
+        }
+
+	if (contiguous || maxPhys)
 	{
 	    kr = kmem_alloc_contig(kernel_map, &virt, size,
 				   alignMask, atop(maxPhys), atop(alignMask), 0);
@@ -353,7 +367,7 @@ IOKernelAllocateContiguous(mach_vm_size_t size, mach_vm_address_t maxPhys,
 	else
 	{
 	    kr = kernel_memory_allocate(kernel_map, &virt,
-					size, alignMask, 0);
+					size, alignMask, options);
 	}
 	if (KERN_SUCCESS == kr)
 	    address = virt;
@@ -414,7 +428,7 @@ void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
     /* Do we want a physical address? */
     if (!physicalAddress)
     {
-	address = IOKernelAllocateContiguous(size, 0 /*maxPhys*/, alignment);
+	address = IOKernelAllocateWithPhysicalRestrict(size, 0 /*maxPhys*/, alignment, true);
     }
     else do
     {
@@ -484,7 +498,7 @@ void IOFreeContiguous(void * _address, vm_size_t size)
     }
     else
     {
-	IOKernelFreeContiguous((mach_vm_address_t) address, size);
+	IOKernelFreePhysical((mach_vm_address_t) address, size);
     }
 }
 

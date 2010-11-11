@@ -124,8 +124,6 @@ vm_offset_t ml_io_map(
 	vm_offset_t phys_addr, 
 	vm_size_t size);
 
-extern uint32_t	bounce_pool_base;
-extern uint32_t	bounce_pool_size;
 
 void	ml_get_bouncepool_info(
 			       vm_offset_t *phys_addr,

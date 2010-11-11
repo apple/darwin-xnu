@@ -504,13 +504,13 @@ i386_init(vm_offset_t boot_args_start)
 	if ( ! PE_parse_boot_argn("novmx", &noVMX, sizeof (noVMX)))
 		noVMX = 0;	/* OK to support Altivec in rosetta? */
 
+	/* create the console for verbose or pretty mode */
+	/* Note: doing this prior to tsc_init() allows for graceful panic! */
+	PE_init_platform(TRUE, kernelBootArgs);
+	PE_create_console();
+
 	tsc_init();
 	power_management_init();
-
-	PE_init_platform(TRUE, kernelBootArgs);
-
-	/* create the console for verbose or pretty mode */
-	PE_create_console();
 
 	processor_bootstrap();
 	thread_bootstrap();

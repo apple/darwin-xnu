@@ -340,7 +340,7 @@ host_statistics(
 #if CONFIG_EMBEDDED
 		stat32->wire_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_wire_count);
 #else
-		stat32->wire_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_wire_count + vm_page_throttled_count);
+		stat32->wire_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(vm_page_wire_count + vm_page_throttled_count + vm_lopage_free_count);
 #endif
 		stat32->zero_fill_count = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.zero_fill_count);
 		stat32->reactivations = VM_STATISTICS_TRUNCATE_TO_32_BIT(host_vm_stat.reactivations);
@@ -489,7 +489,7 @@ host_statistics64(
 #if CONFIG_EMBEDDED
 			stat->wire_count = vm_page_wire_count;
 #else
-			stat->wire_count = vm_page_wire_count + vm_page_throttled_count;
+			stat->wire_count = vm_page_wire_count + vm_page_throttled_count + vm_lopage_free_count;
 #endif
 			stat->zero_fill_count = host_vm_stat.zero_fill_count;
 			stat->reactivations = host_vm_stat.reactivations;

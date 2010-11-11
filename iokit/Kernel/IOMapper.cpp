@@ -30,8 +30,6 @@
 #include <IOKit/IODMACommand.h>
 #include <libkern/c++/OSData.h>
 
-#include "IOCopyMapper.h"
-
 __BEGIN_DECLS
 extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
 __END_DECLS
@@ -389,24 +387,5 @@ void IOMappedWrite64(IOPhysicalAddress address, UInt64 value)
     else
         ml_phys_write_double((vm_offset_t) address, value);
 }
-
-mach_vm_address_t IOMallocPhysical(mach_vm_size_t size, mach_vm_address_t mask)
-{
-    mach_vm_address_t address = 0;
-    if (gIOCopyMapper)
-    {
-	address = ptoa_64(gIOCopyMapper->iovmAlloc(atop_64(round_page(size))));
-    }
-    return (address);
-}
-
-void IOFreePhysical(mach_vm_address_t address, mach_vm_size_t size)
-{
-    if (gIOCopyMapper)
-    {
-	gIOCopyMapper->iovmFree(atop_64(address), atop_64(round_page(size)));
-    }
-}
-
 
 __END_DECLS

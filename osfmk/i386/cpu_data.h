@@ -354,7 +354,6 @@ current_cpu_datap(void)
 static inline cpu_data_t *
 cpu_datap(int cpu)
 {
-	assert(cpu_data_ptr[cpu]);
 	return cpu_data_ptr[cpu];
 }
 

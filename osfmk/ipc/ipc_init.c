@@ -155,6 +155,7 @@ ipc_bootstrap(void)
 	/* make it exhaustible */
 	zone_change(ipc_space_zone, Z_EXHAUST, TRUE);
 #endif
+	zone_change(ipc_space_zone, Z_NOENCRYPT, TRUE);
 
 	ipc_tree_entry_zone =
 		zinit(sizeof(struct ipc_tree_entry),
@@ -165,6 +166,7 @@ ipc_bootstrap(void)
 	/* make it exhaustible */
 	zone_change(ipc_tree_entry_zone, Z_EXHAUST, TRUE);
 #endif
+	zone_change(ipc_tree_entry_zone, Z_NOENCRYPT, TRUE);
 
 	/*
 	 * populate all port(set) zones
@@ -179,6 +181,7 @@ ipc_bootstrap(void)
 	 * XXX	panics when port allocation for an internal object fails.
 	 *zone_change(ipc_object_zones[IOT_PORT], Z_EXHAUST, TRUE);
 	 */
+	zone_change(ipc_object_zones[IOT_PORT], Z_NOENCRYPT, TRUE);
 
 	ipc_object_zones[IOT_PORT_SET] =
 		zinit(sizeof(struct ipc_pset),
@@ -187,6 +190,7 @@ ipc_bootstrap(void)
 		      "ipc port sets");
 	/* make it exhaustible */
 	zone_change(ipc_object_zones[IOT_PORT_SET], Z_EXHAUST, TRUE);
+	zone_change(ipc_object_zones[IOT_PORT_SET], Z_NOENCRYPT, TRUE);
 
 	/*
 	 * Create the basic ipc_kmsg_t zone (the one we also cache)
@@ -197,6 +201,7 @@ ipc_bootstrap(void)
 			      IKM_SAVED_KMSG_SIZE,
 			      IKM_SAVED_KMSG_SIZE,
 			      "ipc kmsgs");
+	zone_change(ipc_kmsg_zone, Z_NOENCRYPT, TRUE);
 
 #if CONFIG_MACF_MACH
 	ipc_labelh_zone = 

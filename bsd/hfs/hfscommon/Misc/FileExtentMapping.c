@@ -576,7 +576,7 @@ static OSErr ReleaseExtents(
 			break;
 		}
 
-		err = BlockDeallocate( vcb, extentRecord[extentIndex].startBlock, numAllocationBlocks );
+		err = BlockDeallocate( vcb, extentRecord[extentIndex].startBlock, numAllocationBlocks , 0);
 		if ( err != noErr )
 			break;
 					
@@ -1128,8 +1128,8 @@ OSErr ExtendFileC (
 						  startBlock,
 						  howmany(MIN(bytesToAdd, availbytes), volumeBlockSize),
 						  howmany(MIN(maximumBytes, availbytes), volumeBlockSize),
-						  wantContig,
-						  useMetaZone,
+						  (wantContig ? HFS_ALLOC_FORCECONTIG : 0) | 
+						  (useMetaZone ? HFS_ALLOC_METAZONE : 0),
 						  &actualStartBlock,
 						  &actualNumBlocks);
 			}
@@ -1175,7 +1175,7 @@ OSErr ExtendFileC (
 				if (foundIndex == numExtentsPerRecord) {
 					//	This record is full.  Need to create a new one.
 					if (FTOC(fcb)->c_fileid == kHFSExtentsFileID) {
-						(void) BlockDeallocate(vcb, actualStartBlock, actualNumBlocks);
+						(void) BlockDeallocate(vcb, actualStartBlock, actualNumBlocks, 0);
 						err = dskFulErr;		// Oops.  Can't extend extents file past first record.
 						break;
 					}
@@ -1206,7 +1206,7 @@ OSErr ExtendFileC (
 						//	We couldn't create an extent record because extents B-tree
 						//	couldn't grow.  Dellocate the extent just allocated and
 						//	return a disk full error.
-						(void) BlockDeallocate(vcb, actualStartBlock, actualNumBlocks);
+						(void) BlockDeallocate(vcb, actualStartBlock, actualNumBlocks, 0);
 						err = dskFulErr;
 					}
 					if (err != noErr) break;
@@ -1398,7 +1398,7 @@ OSErr TruncateFileC (
 			//	Compute first volume allocation block to free
 			startBlock = extentRecord[extentIndex].startBlock + extentRecord[extentIndex].blockCount - numBlocks;
 			//	Free the blocks in bitmap
-			err = BlockDeallocate(vcb, startBlock, numBlocks);
+			err = BlockDeallocate(vcb, startBlock, numBlocks, 0);
 			if (err != noErr) goto ErrorExit;
 			//	Adjust length of this extent
 			extentRecord[extentIndex].blockCount -= numBlocks;
@@ -1422,7 +1422,7 @@ OSErr TruncateFileC (
 	while (extentIndex < numExtentsPerRecord && extentRecord[extentIndex].blockCount != 0) {
 		numBlocks = extentRecord[extentIndex].blockCount;
 		//	Deallocate this extent
-		err = BlockDeallocate(vcb, extentRecord[extentIndex].startBlock, numBlocks);
+		err = BlockDeallocate(vcb, extentRecord[extentIndex].startBlock, numBlocks, 0);
 		if (err != noErr) goto ErrorExit;
 		//	Update next file allocation block number
 		nextBlock += numBlocks;
@@ -1502,7 +1502,7 @@ OSErr HeadTruncateFile (
 			break;  /* end of extents */
 
 		if (blksfreed < headblks) {
-			error = BlockDeallocate(vcb, fcb->fcbExtents[i].startBlock, blkcnt);
+			error = BlockDeallocate(vcb, fcb->fcbExtents[i].startBlock, blkcnt, 0);
 			/*
 			 * Any errors after the first BlockDeallocate
 			 * must be ignored so we can put the file in
@@ -1560,7 +1560,7 @@ OSErr HeadTruncateFile (
 				break;  /* end of extents */
 
 			if (blksfreed < headblks) {
-				error = BlockDeallocate(vcb, extents[i].startBlock, blkcnt);
+				error = BlockDeallocate(vcb, extents[i].startBlock, blkcnt, 0);
 				if (error) {
 					printf("hfs: HeadTruncateFile: problems deallocating %s (%d)\n",
 					       FTOC(fcb)->c_desc.cd_nameptr ? (const char *)FTOC(fcb)->c_desc.cd_nameptr : "", error);

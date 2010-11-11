@@ -3420,6 +3420,7 @@ nfs_noremotehang(thread_t thd)
 int
 nfs_sigintr(struct nfsmount *nmp, struct nfsreq *req, thread_t thd, int nmplocked)
 {
+	proc_t p;
 	int error = 0;
 
 	if (nmp == NULL)
@@ -3468,8 +3469,8 @@ nfs_sigintr(struct nfsmount *nmp, struct nfsreq *req, thread_t thd, int nmplocke
 		return (EINTR);
 
 	/* mask off thread and process blocked signals. */
-	if ((nmp->nm_flag & NFSMNT_INT) &&
-	    proc_pendingsignals(get_bsdthreadtask_info(thd), NFSINT_SIGMASK))
+	if ((nmp->nm_flag & NFSMNT_INT) && ((p = get_bsdthreadtask_info(thd))) &&
+	    proc_pendingsignals(p, NFSINT_SIGMASK))
 		return (EINTR);
 	return (0);
 }

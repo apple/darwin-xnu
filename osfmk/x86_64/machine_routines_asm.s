@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -106,6 +106,23 @@ ENTRY(_rtc_nanotime_store)
 	jnz	1f
 	incl	%eax				/* skip 0, which is a flag */
 1:	movl	%eax,RNT_GENERATION(%r8)	/* update generation */
+
+	ret
+
+/*
+ * void _rtc_nanotime_adjust(
+ *		uint64_t        tsc_base_delta,	// %rdi
+ *		rtc_nanotime_t  *dst);		// %rsi
+ */
+ENTRY(_rtc_nanotime_adjust)
+	movl	RNT_GENERATION(%rsi),%eax	/* get current generation */
+	movl	$0,RNT_GENERATION(%rsi)		/* flag data as being updated */
+	addq	%rdi,RNT_TSC_BASE(%rsi)
+
+	incl	%eax				/* next generation */
+	jnz	1f
+	incl	%eax				/* skip 0, which is a flag */
+1:	movl	%eax,RNT_GENERATION(%rsi)	/* update generation */
 
 	ret
 

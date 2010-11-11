@@ -39,7 +39,6 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 
 #include "IOKitKernelInternal.h"
-#include "IOCopyMapper.h"
 
 #define MAPTYPE(type)		((UInt) (type) & kTypeMask)
 #define IS_MAPPED(type)		(MAPTYPE(type) == kMapped)
@@ -77,11 +76,10 @@ enum
 #endif
 
 #if 0
-#define DEBG(fmt, args...)  	{ kprintf(fmt, ## args); }
+#define DEBG(fmt, args...)	{ IOLog(fmt, ## args); kprintf(fmt, ## args); }
 #else
 #define DEBG(fmt, args...)  	{}
 #endif
-
 
 /**************************** class IODMACommand ***************************/
 
@@ -312,7 +310,6 @@ IODMACommand::segmentOp(
 {
     IOOptionBits op = (uintptr_t) reference;
     addr64_t     maxPhys, address;
-    addr64_t     remapAddr = 0;
     uint64_t     length;
     uint32_t     numPages;
 
@@ -357,8 +354,7 @@ IODMACommand::segmentOp(
     if (!length)
 	return (kIOReturnSuccess);
 
-    numPages = atop_64(round_page_64(length));
-    remapAddr = state->fCopyNext;
+    numPages = atop_64(round_page_64((address & PAGE_MASK) + length));
 
     if (kWalkPreflight & op)
     {
@@ -366,35 +362,58 @@ IODMACommand::segmentOp(
     }
     else
     {
+	vm_page_t lastPage;
+	lastPage = NULL;
 	if (kWalkPrepare & op)
 	{
+	    lastPage = state->fCopyNext;
 	    for (IOItemCount idx = 0; idx < numPages; idx++)
-		gIOCopyMapper->iovmInsert(atop_64(remapAddr), idx, atop_64(address) + idx);
-	}
-	if (state->fDoubleBuffer)
-	    state->fCopyNext += length;
-	else
-	{
-	    state->fCopyNext += round_page(length);
-	    remapAddr += (address & PAGE_MASK);
+	    {
+		vm_page_set_offset(lastPage, atop_64(address) + idx);
+		lastPage = vm_page_get_next(lastPage);
+	    }
 	}
 
-	if (SHOULD_COPY_DIR(op, target->fMDSummary.fDirection))
+	if (!lastPage || SHOULD_COPY_DIR(op, target->fMDSummary.fDirection))
 	{
-	    DEBG("cpv: 0x%qx %s 0x%qx, 0x%qx, 0x%02lx\n", remapAddr, 
-			(kWalkSyncIn & op) ? "->" : "<-", 
-			address, length, op);
-	    if (kWalkSyncIn & op)
-	    { // cppvNoModSnk
-		copypv(remapAddr, address, length,
-				cppvPsnk | cppvFsnk | cppvPsrc | cppvNoRefSrc );
-	    }
-	    else
+	    lastPage = state->fCopyNext;
+	    for (IOItemCount idx = 0; idx < numPages; idx++)
 	    {
-		copypv(address, remapAddr, length,
-				cppvPsnk | cppvFsnk | cppvPsrc | cppvNoRefSrc );
+		if (SHOULD_COPY_DIR(op, target->fMDSummary.fDirection))
+		{
+		    addr64_t remapAddr;
+		    uint64_t chunk;
+
+		    remapAddr = ptoa_64(vm_page_get_phys_page(lastPage));
+		    if (!state->fDoubleBuffer)
+		    {
+			remapAddr += (address & PAGE_MASK);
+		    }
+		    chunk = PAGE_SIZE - (address & PAGE_MASK);
+		    if (chunk > length)
+			chunk = length;
+
+		    DEBG("cpv: 0x%qx %s 0x%qx, 0x%qx, 0x%02lx\n", remapAddr, 
+				(kWalkSyncIn & op) ? "->" : "<-", 
+				address, chunk, op);
+
+		    if (kWalkSyncIn & op)
+		    { // cppvNoModSnk
+			copypv(remapAddr, address, chunk,
+					cppvPsnk | cppvFsnk | cppvPsrc | cppvNoRefSrc );
+		    }
+		    else
+		    {
+			copypv(address, remapAddr, chunk,
+					cppvPsnk | cppvFsnk | cppvPsrc | cppvNoRefSrc );
+		    }
+		    address += chunk;
+		    length -= chunk;
+		}
+		lastPage = vm_page_get_next(lastPage);
 	    }
 	}
+	state->fCopyNext = lastPage;
     }
 
     return kIOReturnSuccess;
@@ -415,12 +434,12 @@ IODMACommand::walkAll(UInt8 op)
 	state->fMisaligned     = false;
 	state->fDoubleBuffer   = false;
 	state->fPrepared       = false;
-	state->fCopyNext       = 0;
-	state->fCopyMapperPageAlloc  = 0;
+	state->fCopyNext       = NULL;
+	state->fCopyPageAlloc  = 0;
 	state->fLocalMapperPageAlloc = 0;
 	state->fCopyPageCount  = 0;
-	state->fNextRemapIndex = 0;
-	state->fCopyMD         = 0;
+	state->fNextRemapPage  = NULL;
+	state->fCopyMD	       = 0;
 
 	if (!(kWalkDoubleBuffer & op))
 	{
@@ -437,24 +456,26 @@ IODMACommand::walkAll(UInt8 op)
 
 	if (state->fCopyPageCount)
 	{
-	    IOMapper * mapper;
-	    ppnum_t    mapBase = 0;
+	    vm_page_t mapBase = NULL;
 
 	    DEBG("preflight fCopyPageCount %d\n", state->fCopyPageCount);
 
-	    mapper = gIOCopyMapper;
-	    if (mapper)
-		mapBase = mapper->iovmAlloc(state->fCopyPageCount);
+	    if (!state->fDoubleBuffer)
+	    {
+		kern_return_t kr;
+		kr = vm_page_alloc_list(state->fCopyPageCount, 
+					KMA_LOMEM | KMA_NOPAGEWAIT, &mapBase);
+		if (KERN_SUCCESS != kr)
+		{
+		    DEBG("vm_page_alloc_list(%d) failed (%d)\n", state->fCopyPageCount, kr);
+		    mapBase = NULL;
+		}
+	    }
+
 	    if (mapBase)
 	    {
-		state->fCopyMapperPageAlloc = mapBase;
-		if (state->fCopyMapperPageAlloc && state->fDoubleBuffer)
-		{
-		    DEBG("contig copy map\n");
-		    state->fMapContig = true;
-		}
-
-		state->fCopyNext = ptoa_64(state->fCopyMapperPageAlloc);
+		state->fCopyPageAlloc = mapBase;
+		state->fCopyNext = state->fCopyPageAlloc;
 		offset = 0;
 		numSegments = 0-1;
 		ret = genIOVMSegments(op, segmentOp, (void *) op, &offset, state, &numSegments);
@@ -464,8 +485,9 @@ IODMACommand::walkAll(UInt8 op)
 	    else
 	    {
 		DEBG("alloc IOBMD\n");
-		state->fCopyMD = IOBufferMemoryDescriptor::withOptions(
-				    fMDSummary.fDirection, state->fPreparedLength, state->fSourceAlignMask);
+		mach_vm_address_t mask = 0xFFFFF000; //state->fSourceAlignMask
+		state->fCopyMD = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+				    fMDSummary.fDirection, state->fPreparedLength, mask);
 
 		if (state->fCopyMD)
 		{
@@ -495,9 +517,9 @@ IODMACommand::walkAll(UInt8 op)
 	{
 	    DEBG("sync fCopyPageCount %d\n", state->fCopyPageCount);
 
-	    if (state->fCopyMapperPageAlloc)
+	    if (state->fCopyPageAlloc)
 	    {
-		state->fCopyNext = ptoa_64(state->fCopyMapperPageAlloc);
+		state->fCopyNext = state->fCopyPageAlloc;
 		offset = 0;
 		numSegments = 0-1;
 		ret = genIOVMSegments(op, segmentOp, (void *) op, &offset, state, &numSegments);
@@ -536,11 +558,11 @@ IODMACommand::walkAll(UInt8 op)
 	    fMapper->iovmFreeDMACommand(this, state->fLocalMapperPageAlloc, state->fLocalMapperPageCount);
 	    state->fLocalMapperPageAlloc = 0;
 	    state->fLocalMapperPageCount = 0;
-    	}
-	if (state->fCopyMapperPageAlloc)
+	}
+	if (state->fCopyPageAlloc)
 	{
-	    gIOCopyMapper->iovmFree(state->fCopyMapperPageAlloc, state->fCopyPageCount);
-	    state->fCopyMapperPageAlloc = 0;
+	    vm_page_free_list(state->fCopyPageAlloc, FALSE);
+	    state->fCopyPageAlloc = 0;
 	    state->fCopyPageCount = 0;
 	}
 	if (state->fCopyMD)
@@ -677,10 +699,10 @@ IODMACommand::prepare(UInt64 offset, UInt64 length, bool flushCache, bool synchr
 	state->fMisaligned     = false;
 	state->fDoubleBuffer   = false;
 	state->fPrepared       = false;
-	state->fCopyNext       = 0;
-	state->fCopyMapperPageAlloc = 0;
+	state->fCopyNext       = NULL;
+	state->fCopyPageAlloc  = 0;
 	state->fCopyPageCount  = 0;
-	state->fNextRemapIndex = 0;
+	state->fNextRemapPage  = NULL;
 	state->fCopyMD         = 0;
 	state->fLocalMapperPageAlloc = 0;
 	state->fLocalMapperPageCount = 0;
@@ -925,7 +947,7 @@ IODMACommand::genIOVMSegments(uint32_t op,
     if ((offset == internalState->fPreparedOffset) || (offset != state->fOffset) || internalState->fNewMD) {
 	state->fOffset                 = 0;
 	state->fIOVMAddr               = 0;
-	internalState->fNextRemapIndex = 0;
+	internalState->fNextRemapPage  = NULL;
 	internalState->fNewMD	       = false;
 	state->fMapped                 = (IS_MAPPED(fMappingOptions) && fMapper);
 	mdOp                           = kIOMDFirstSegment;
@@ -943,9 +965,10 @@ IODMACommand::genIOVMSegments(uint32_t op,
 	maxPhys = 0;
     maxPhys--;
 
-    while ((state->fIOVMAddr) || state->fOffset < memLength)
+    while (state->fIOVMAddr || (state->fOffset < memLength))
     {
-        if (!state->fIOVMAddr) {
+	// state = next seg
+	if (!state->fIOVMAddr) {
 
 	    IOReturn rtn;
 
@@ -955,8 +978,6 @@ IODMACommand::genIOVMSegments(uint32_t op,
 	    if (internalState->fMapContig && (kWalkClient & op))
 	    {
 		ppnum_t pageNum = internalState->fLocalMapperPageAlloc;
-		if (!pageNum)
-		    pageNum = internalState->fCopyMapperPageAlloc;
 		state->fIOVMAddr = ptoa_64(pageNum) 
 					    + offset - internalState->fPreparedOffset;
 		rtn = kIOReturnSuccess;
@@ -969,80 +990,90 @@ IODMACommand::genIOVMSegments(uint32_t op,
 		mdOp = kIOMDWalkSegments;
 	    }
 
-	    if (rtn == kIOReturnSuccess) {
+	    if (rtn == kIOReturnSuccess)
+	    {
 		assert(state->fIOVMAddr);
 		assert(state->fLength);
+		if ((curSeg.fIOVMAddr + curSeg.fLength) == state->fIOVMAddr) {
+		    UInt64 length = state->fLength;
+		    offset	    += length;
+		    curSeg.fLength  += length;
+		    state->fIOVMAddr = 0;
+		}
 	    }
 	    else if (rtn == kIOReturnOverrun)
 		state->fIOVMAddr = state->fLength = 0;	// At end
 	    else
 		return rtn;
-        };
+	}
 
-        if (!curSeg.fIOVMAddr) {
+	// seg = state, offset = end of seg
+	if (!curSeg.fIOVMAddr)
+	{
 	    UInt64 length = state->fLength;
-
-            offset          += length;
-            curSeg.fIOVMAddr = state->fIOVMAddr | bypassMask;
-            curSeg.fLength   = length;
-            state->fIOVMAddr = 0;
-        }
-        else if ((curSeg.fIOVMAddr + curSeg.fLength == state->fIOVMAddr)) {
-	    UInt64 length = state->fLength;
-            offset          += length;
-            curSeg.fLength  += length;
-            state->fIOVMAddr = 0;
-        };
-
+	    offset	    += length;
+	    curSeg.fIOVMAddr = state->fIOVMAddr | bypassMask;
+	    curSeg.fLength   = length;
+	    state->fIOVMAddr = 0;
+	}
 
         if (!state->fIOVMAddr)
 	{
-	    if (kWalkClient & op)
+	    if ((kWalkClient & op) && (curSeg.fIOVMAddr + curSeg.fLength - 1) > maxPhys)
 	    {
-		if ((curSeg.fIOVMAddr + curSeg.fLength - 1) > maxPhys)
+		if (internalState->fCursor)
 		{
-		    if (internalState->fCursor)
-		    {
-			curSeg.fIOVMAddr = 0;
-			ret = kIOReturnMessageTooLarge;
-			break;
-		    }
-		    else if (curSeg.fIOVMAddr <= maxPhys)
-		    {
-			UInt64 remain, newLength;
+		    curSeg.fIOVMAddr = 0;
+		    ret = kIOReturnMessageTooLarge;
+		    break;
+		}
+		else if (curSeg.fIOVMAddr <= maxPhys)
+		{
+		    UInt64 remain, newLength;
 
-			newLength = (maxPhys + 1 - curSeg.fIOVMAddr);
-			DEBG("trunc %qx, %qx-> %qx\n", curSeg.fIOVMAddr, curSeg.fLength, newLength);
-			remain = curSeg.fLength - newLength;
-			state->fIOVMAddr = newLength + curSeg.fIOVMAddr;
-			curSeg.fLength   = newLength;
-			state->fLength   = remain;
-			offset          -= remain;
-		    }
-		    else if (gIOCopyMapper)
-		    {
-			DEBG("sparse switch %qx, %qx ", curSeg.fIOVMAddr, curSeg.fLength);
-			if (trunc_page_64(curSeg.fIOVMAddr) == gIOCopyMapper->mapAddr(
-							    ptoa_64(internalState->fCopyMapperPageAlloc + internalState->fNextRemapIndex)))
-			{
+		    newLength	     = (maxPhys + 1 - curSeg.fIOVMAddr);
+		    DEBG("trunc %qx, %qx-> %qx\n", curSeg.fIOVMAddr, curSeg.fLength, newLength);
+		    remain	     = curSeg.fLength - newLength;
+		    state->fIOVMAddr = newLength + curSeg.fIOVMAddr;
+		    curSeg.fLength   = newLength;
+		    state->fLength   = remain;
+		    offset	    -= remain;
+		}
+		else 
+		{
+		    UInt64    addr = curSeg.fIOVMAddr;
+		    ppnum_t   addrPage = atop_64(addr);
+		    vm_page_t remap = NULL;
+		    UInt64    remain, newLength;
 
-			    curSeg.fIOVMAddr = ptoa_64(internalState->fCopyMapperPageAlloc + internalState->fNextRemapIndex)
-						+ (curSeg.fIOVMAddr & PAGE_MASK);
-			    internalState->fNextRemapIndex += atop_64(round_page(curSeg.fLength));
-			}
-			else for (UInt checkRemapIndex = 0; checkRemapIndex < internalState->fCopyPageCount; checkRemapIndex++)
-			{
-			    if (trunc_page_64(curSeg.fIOVMAddr) == gIOCopyMapper->mapAddr(
-							    ptoa_64(internalState->fCopyMapperPageAlloc + checkRemapIndex)))
-			    {
-				curSeg.fIOVMAddr = ptoa_64(internalState->fCopyMapperPageAlloc + checkRemapIndex) 
-						    + (curSeg.fIOVMAddr & PAGE_MASK);
-				internalState->fNextRemapIndex = checkRemapIndex + atop_64(round_page(curSeg.fLength));
-				break;
-			    }
-			}
-			DEBG("-> %qx, %qx\n", curSeg.fIOVMAddr, curSeg.fLength);
+		    DEBG("sparse switch %qx, %qx ", addr, curSeg.fLength);
+
+		    remap = internalState->fNextRemapPage;
+		    if (remap && (addrPage == vm_page_get_offset(remap)))
+		    {
 		    }
+		    else for (remap = internalState->fCopyPageAlloc; 
+				remap && (addrPage != vm_page_get_offset(remap));
+				remap = vm_page_get_next(remap))
+		    {
+		    }
+
+		    if (!remap) panic("no remap page found");
+
+		    curSeg.fIOVMAddr = ptoa_64(vm_page_get_phys_page(remap))
+					+ (addr & PAGE_MASK);
+		    internalState->fNextRemapPage = vm_page_get_next(remap);
+
+		    newLength		 = PAGE_SIZE - (addr & PAGE_MASK);
+		    if (newLength < curSeg.fLength)
+		    {
+			remain		 = curSeg.fLength - newLength;
+			state->fIOVMAddr = addr + newLength;
+			curSeg.fLength	 = newLength;
+			state->fLength	 = remain;
+			offset		-= remain;
+		    }
+		    DEBG("-> %qx, %qx offset %qx\n", curSeg.fIOVMAddr, curSeg.fLength, offset);
 		}
 	    }
 

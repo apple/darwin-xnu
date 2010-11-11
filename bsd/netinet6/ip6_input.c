@@ -955,7 +955,8 @@ injectit:
 
 	while (nxt != IPPROTO_DONE) {
 		struct ipfilter *filter;
-		
+		int (*pr_input)(struct mbuf **, int *);
+
 		if (ip6_hdrnestlimit && (++nest > ip6_hdrnestlimit)) {
 			ip6stat.ip6s_toomanyhdr++;
 			goto badunlocked;
@@ -1028,13 +1029,18 @@ injectit:
 			}
 			ipf_unref();
 		}
-		if (!(ip6_protox[nxt]->pr_flags & PR_PROTOLOCK)) {
+
+		if ((pr_input = ip6_protox[nxt]->pr_input) == NULL) {
+			m_freem(m);
+			m = NULL;
+			nxt = IPPROTO_DONE;
+		} else if (!(ip6_protox[nxt]->pr_flags & PR_PROTOLOCK)) {
 			lck_mtx_lock(inet6_domain_mutex);
-			nxt = (*ip6_protox[nxt]->pr_input)(&m, &off);
+			nxt = pr_input(&m, &off);
 			lck_mtx_unlock(inet6_domain_mutex);
+		} else {
+			nxt = pr_input(&m, &off);
 		}
-		else
-			nxt = (*ip6_protox[nxt]->pr_input)(&m, &off);
 	}
 	return;
  bad:

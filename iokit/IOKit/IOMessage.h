@@ -60,6 +60,13 @@ typedef UInt32 IOMessage;
 #define kIOMessageDeviceWillPowerOff       iokit_common_msg(0x210)
 #define kIOMessageDeviceWillNotPowerOff    iokit_common_msg(0x220)
 #define kIOMessageDeviceHasPoweredOn       iokit_common_msg(0x230)
+
+// IOService power mgt does not send
+//   kIOMessageDeviceWillPowerOn
+//   kIOMessageDeviceHasPoweredOff
+#define kIOMessageDeviceWillPowerOn        iokit_common_msg(0x215)
+#define kIOMessageDeviceHasPoweredOff      iokit_common_msg(0x225)
+
 #define kIOMessageCanSystemPowerOff        iokit_common_msg(0x240)
 #define kIOMessageSystemWillPowerOff       iokit_common_msg(0x250)
 #define kIOMessageSystemWillNotPowerOff    iokit_common_msg(0x260)

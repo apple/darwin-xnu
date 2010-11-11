@@ -1193,10 +1193,11 @@ nd6_lookup(
 	 *      use rt->rt_ifa->ifa_ifp, which would specify the REAL
 	 *      interface.
 	 */
-	if (((ifp && (ifp->if_type != IFT_PPP)) && ((ifp->if_eflags & IFEF_NOAUTOIPV6LL) == 0)) &&
-	    ((rt->rt_flags & RTF_GATEWAY) || (rt->rt_flags & RTF_LLINFO) == 0 ||
+	if (ifp == NULL || (ifp->if_type == IFT_PPP) ||
+	    (ifp->if_eflags & IFEF_NOAUTOIPV6LL) ||
+	    (rt->rt_flags & RTF_GATEWAY) || (rt->rt_flags & RTF_LLINFO) == 0 ||
 	    rt->rt_gateway->sa_family != AF_LINK ||  rt->rt_llinfo == NULL ||
-	    (ifp && rt->rt_ifa->ifa_ifp != ifp))) {
+	    (ifp && rt->rt_ifa->ifa_ifp != ifp)) {
 		RT_REMREF_LOCKED(rt);
 		RT_UNLOCK(rt);
 		if (create) {

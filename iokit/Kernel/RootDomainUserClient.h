@@ -63,6 +63,9 @@ private:
                                 void * p1, void * p2, void * p3,
                                 void * p4, void * p5, void * p6 );
 
+    IOReturn            secureSetUserAssertionLevels(
+                                uint32_t assertBits );
+
 public:
 
     virtual IOReturn clientClose( void );

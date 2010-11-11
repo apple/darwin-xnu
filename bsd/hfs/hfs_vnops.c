@@ -4119,6 +4119,13 @@ hfs_makenode(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 
 	/* set the cnode pointer only after successfully acquiring lock */
 	dcp = VTOC(dvp);
+	
+	/* Don't allow creation of new entries in open-unlinked directories */
+	if ((error = hfs_checkdeleted (dcp))) {
+		hfs_unlock (dcp);
+		return error;
+	}
+
 	dcp->c_flag |= C_DIR_MODIFICATION;
 	
 	hfsmp = VTOHFS(dvp);

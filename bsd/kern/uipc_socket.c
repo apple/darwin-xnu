@@ -275,6 +275,7 @@ socketinit(void)
 	    get_inpcb_str_size() + 4 + get_tcp_str_size());
 
 	so_cache_zone = zinit(str_size, 120000*str_size, 8192, "socache zone");
+	zone_change(so_cache_zone, Z_NOENCRYPT, TRUE);
 #if TEMPDEBUG
 	printf("cached_sock_alloc -- so_cache_zone size is %x\n", str_size);
 #endif

@@ -304,169 +304,170 @@ const char *memname[] = {
 struct kmzones {
 	size_t		kz_elemsize;
 	void		*kz_zalloczone;
+	boolean_t	kz_noencrypt;
 } kmzones[M_LAST] = {
 #define	SOS(sname)	sizeof (struct sname)
 #define SOX(sname)	-1
-	{ -1,		0 },			/* 0 M_FREE */
-	{ MSIZE,	KMZ_CREATEZONE },	/* 1 M_MBUF */
-	{ 0,		KMZ_MALLOC },		/* 2 M_DEVBUF */
-	{ SOS(socket),	KMZ_CREATEZONE },	/* 3 M_SOCKET */
-	{ SOS(inpcb),	KMZ_LOOKUPZONE },	/* 4 M_PCB */
-	{ M_MBUF,	KMZ_SHAREZONE },	/* 5 M_RTABLE */
-	{ M_MBUF,	KMZ_SHAREZONE },	/* 6 M_HTABLE */
-	{ M_MBUF,	KMZ_SHAREZONE },	/* 7 M_FTABLE */
-	{ SOS(rusage),	KMZ_CREATEZONE },	/* 8 M_ZOMBIE */
-	{ 0,		KMZ_MALLOC },		/* 9 M_IFADDR */
-	{ M_MBUF,	KMZ_SHAREZONE },		/* 10 M_SOOPTS */
-	{ 0,		KMZ_MALLOC },		/* 11 M_SONAME */
-	{ MAXPATHLEN,	KMZ_CREATEZONE },		/* 12 M_NAMEI */
-	{ 0,		KMZ_MALLOC },		/* 13 M_GPROF */
-	{ 0,		KMZ_MALLOC },		/* 14 M_IOCTLOPS */
-	{ 0,		KMZ_MALLOC },		/* 15 M_MAPMEM */
-	{ SOS(ucred),	KMZ_CREATEZONE },	/* 16 M_CRED */
-	{ SOS(pgrp),	KMZ_CREATEZONE },	/* 17 M_PGRP */
-	{ SOS(session),	KMZ_CREATEZONE },	/* 18 M_SESSION */
-	{ SOS(user32_iovec),	KMZ_LOOKUPZONE },	/* 19 M_IOV32 */
-	{ SOS(mount),	KMZ_CREATEZONE },	/* 20 M_MOUNT */
-	{ 0,		KMZ_MALLOC },		/* 21 M_FHANDLE */
+	{ -1,		0, FALSE },			/* 0 M_FREE */
+	{ MSIZE,	KMZ_CREATEZONE, FALSE },	/* 1 M_MBUF */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 2 M_DEVBUF */
+	{ SOS(socket),	KMZ_CREATEZONE, TRUE },		/* 3 M_SOCKET */
+	{ SOS(inpcb),	KMZ_LOOKUPZONE, TRUE },		/* 4 M_PCB */
+	{ M_MBUF,	KMZ_SHAREZONE, FALSE },		/* 5 M_RTABLE */
+	{ M_MBUF,	KMZ_SHAREZONE, FALSE },		/* 6 M_HTABLE */
+	{ M_MBUF,	KMZ_SHAREZONE, FALSE },		/* 7 M_FTABLE */
+	{ SOS(rusage),	KMZ_CREATEZONE, TRUE },		/* 8 M_ZOMBIE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 9 M_IFADDR */
+	{ M_MBUF,	KMZ_SHAREZONE, FALSE },		/* 10 M_SOOPTS */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 11 M_SONAME */
+	{ MAXPATHLEN,	KMZ_CREATEZONE, FALSE },	/* 12 M_NAMEI */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 13 M_GPROF */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 14 M_IOCTLOPS */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 15 M_MAPMEM */
+	{ SOS(ucred),	KMZ_CREATEZONE, FALSE },	/* 16 M_CRED */
+	{ SOS(pgrp),	KMZ_CREATEZONE, FALSE },	/* 17 M_PGRP */
+	{ SOS(session),	KMZ_CREATEZONE, FALSE },	/* 18 M_SESSION */
+	{ SOS(user32_iovec),	KMZ_LOOKUPZONE, FALSE },/* 19 M_IOV32 */
+	{ SOS(mount),	KMZ_CREATEZONE, FALSE },	/* 20 M_MOUNT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 21 M_FHANDLE */
 #if (NFSCLIENT || NFSSERVER)
-	{ SOS(nfsreq),	KMZ_CREATEZONE },	/* 22 M_NFSREQ */
-	{ SOS(nfsmount),	KMZ_CREATEZONE },	/* 23 M_NFSMNT */
-	{ SOS(nfsnode),	KMZ_CREATEZONE },	/* 24 M_NFSNODE */
+	{ SOS(nfsreq),	KMZ_CREATEZONE, FALSE },	/* 22 M_NFSREQ */
+	{ SOS(nfsmount),	KMZ_CREATEZONE, FALSE },/* 23 M_NFSMNT */
+	{ SOS(nfsnode),	KMZ_CREATEZONE, FALSE },	/* 24 M_NFSNODE */
 #else
-	{ 0,		KMZ_MALLOC },		/* 22 M_NFSREQ */
-	{ 0,		KMZ_MALLOC },		/* 23 M_NFSMNT */
-	{ 0,		KMZ_MALLOC },		/* 24 M_NFSNODE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 22 M_NFSREQ */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 23 M_NFSMNT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 24 M_NFSNODE */
 #endif
-	{ SOS(vnode),	KMZ_CREATEZONE },	/* 25 M_VNODE */
-	{ SOS(namecache),	KMZ_CREATEZONE },	/* 26 M_CACHE */
+	{ SOS(vnode),	KMZ_CREATEZONE, TRUE },		/* 25 M_VNODE */
+	{ SOS(namecache),KMZ_CREATEZONE, FALSE },	/* 26 M_CACHE */
 #if QUOTA
-	{ SOX(dquot),	KMZ_LOOKUPZONE },	/* 27 M_DQUOT */
+	{ SOX(dquot),	KMZ_LOOKUPZONE, FALSE },	/* 27 M_DQUOT */
 #else
-	{ 0,		KMZ_MALLOC },		/* 27 M_DQUOT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 27 M_DQUOT */
 #endif
-	{ 0,		KMZ_MALLOC },		/* 28 M_UFSMNT */
-	{ 0,		KMZ_MALLOC },		/* 29 M_CGSUM */
-	{ SOS(plimit),	KMZ_CREATEZONE },	/* 30 M_PLIMIT */
-	{ SOS(sigacts),	KMZ_CREATEZONE },	/* 31 M_SIGACTS */
-	{ 0,		KMZ_MALLOC },		/* 32 M_VMOBJ */
-	{ 0,		KMZ_MALLOC },		/* 33 M_VMOBJHASH */
-	{ 0,		KMZ_MALLOC },		/* 34 M_VMPMAP */
-	{ 0,		KMZ_MALLOC },		/* 35 M_VMPVENT */
-	{ 0,		KMZ_MALLOC },		/* 36 M_VMPAGER */
-	{ 0,		KMZ_MALLOC },		/* 37 M_VMPGDATA */
-	{ SOS(fileproc),	KMZ_CREATEZONE },	/* 38 M_FILEPROC */
-	{ SOS(filedesc),	KMZ_CREATEZONE },	/* 39 M_FILEDESC */
-	{ SOX(lockf),	KMZ_CREATEZONE },	/* 40 M_LOCKF */
-	{ SOS(proc),	KMZ_CREATEZONE },	/* 41 M_PROC */
-	{ SOS(pstats),	KMZ_CREATEZONE },	/* 42 M_PSTATS */
-	{ 0,		KMZ_MALLOC },		/* 43 M_SEGMENT */
-	{ M_FFSNODE,	KMZ_SHAREZONE },	/* 44 M_LFSNODE */
-	{ 0,		KMZ_MALLOC },		/* 45 M_FFSNODE */
-	{ M_FFSNODE,	KMZ_SHAREZONE },	/* 46 M_MFSNODE */
-	{ 0,		KMZ_MALLOC },		/* 47 M_NQLEASE */
-	{ 0,		KMZ_MALLOC },		/* 48 M_NQMHOST */
-	{ 0,		KMZ_MALLOC },		/* 49 M_NETADDR */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 28 M_UFSMNT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 29 M_CGSUM */
+	{ SOS(plimit),	KMZ_CREATEZONE, TRUE },		/* 30 M_PLIMIT */
+	{ SOS(sigacts),	KMZ_CREATEZONE, TRUE },		/* 31 M_SIGACTS */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 32 M_VMOBJ */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 33 M_VMOBJHASH */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 34 M_VMPMAP */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 35 M_VMPVENT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 36 M_VMPAGER */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 37 M_VMPGDATA */
+	{ SOS(fileproc),KMZ_CREATEZONE, TRUE },		/* 38 M_FILEPROC */
+	{ SOS(filedesc),KMZ_CREATEZONE, TRUE },		/* 39 M_FILEDESC */
+	{ SOX(lockf),	KMZ_CREATEZONE, TRUE },		/* 40 M_LOCKF */
+	{ SOS(proc),	KMZ_CREATEZONE, FALSE },	/* 41 M_PROC */
+	{ SOS(pstats),	KMZ_CREATEZONE, TRUE },		/* 42 M_PSTATS */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 43 M_SEGMENT */
+	{ M_FFSNODE,	KMZ_SHAREZONE, FALSE },		/* 44 M_LFSNODE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 45 M_FFSNODE */
+	{ M_FFSNODE,	KMZ_SHAREZONE, FALSE },		/* 46 M_MFSNODE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 47 M_NQLEASE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 48 M_NQMHOST */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 49 M_NETADDR */
 #if (NFSCLIENT || NFSSERVER)
 	{ SOX(nfsrv_sock),
-			KMZ_CREATEZONE },	/* 50 M_NFSSVC */
-	{ 0,		KMZ_MALLOC },		/* 51 M_NFSUID */
+	                KMZ_CREATEZONE, FALSE },	/* 50 M_NFSSVC */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 51 M_NFSUID */
 	{ SOX(nfsrvcache),
-			KMZ_CREATEZONE },	/* 52 M_NFSD */
+	                KMZ_CREATEZONE, FALSE },	/* 52 M_NFSD */
 #else
-	{ 0,		KMZ_MALLOC },		/* 50 M_NFSSVC */
-	{ 0,		KMZ_MALLOC },		/* 51 M_NFSUID */
-	{ 0,		KMZ_MALLOC },		/* 52 M_NFSD */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 50 M_NFSSVC */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 51 M_NFSUID */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 52 M_NFSD */
 #endif
 	{ SOX(ip_moptions),
-			KMZ_LOOKUPZONE },	/* 53 M_IPMOPTS */
-	{ SOX(in_multi),	KMZ_LOOKUPZONE },	/* 54 M_IPMADDR */
+	                KMZ_LOOKUPZONE, FALSE },	/* 53 M_IPMOPTS */
+	{ SOX(in_multi),KMZ_LOOKUPZONE, FALSE },	/* 54 M_IPMADDR */
 	{ SOX(ether_multi),
-			KMZ_LOOKUPZONE },	/* 55 M_IFMADDR */
-	{ SOX(mrt),	KMZ_CREATEZONE },	/* 56 M_MRTABLE */
-	{ 0,		KMZ_MALLOC },		/* 57 unused entry */
-	{ 0,		KMZ_MALLOC },		/* 58 unused entry */
+	                KMZ_LOOKUPZONE, FALSE },	/* 55 M_IFMADDR */
+	{ SOX(mrt),	KMZ_CREATEZONE, TRUE },		/* 56 M_MRTABLE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 57 unused entry */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 58 unused entry */
 #if (NFSCLIENT || NFSSERVER)
 	{ SOS(nfsrv_descript),
-			KMZ_CREATEZONE },	/* 59 M_NFSRVDESC */
-	{ SOS(nfsdmap),	KMZ_CREATEZONE },	/* 60 M_NFSDIROFF */
-	{ SOS(fhandle),	KMZ_LOOKUPZONE },	/* 61 M_NFSBIGFH */
+	                KMZ_CREATEZONE, FALSE },	/* 59 M_NFSRVDESC */
+	{ SOS(nfsdmap),	KMZ_CREATEZONE, FALSE },	/* 60 M_NFSDIROFF */
+	{ SOS(fhandle),	KMZ_LOOKUPZONE, FALSE },	/* 61 M_NFSBIGFH */
 #else
-	{ 0,		KMZ_MALLOC },		/* 59 M_NFSRVDESC */
-	{ 0,		KMZ_MALLOC },		/* 60 M_NFSDIROFF */
-	{ 0,		KMZ_MALLOC },		/* 61 M_NFSBIGFH */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 59 M_NFSRVDESC */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 60 M_NFSDIROFF */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 61 M_NFSBIGFH */
 #endif
-	{ 0,		KMZ_MALLOC },		/* 62 M_MSDOSFSMNT */
-	{ 0,		KMZ_MALLOC },		/* 63 M_MSDOSFSFAT */
-	{ 0,		KMZ_MALLOC },		/* 64 M_MSDOSFSNODE */
-	{ SOS(tty),	KMZ_CREATEZONE },	/* 65 M_TTYS */
-	{ 0,		KMZ_MALLOC },		/* 66 M_EXEC */
-	{ 0,		KMZ_MALLOC },		/* 67 M_MISCFSMNT */
-	{ 0,		KMZ_MALLOC },		/* 68 M_MISCFSNODE */
-	{ 0,		KMZ_MALLOC },		/* 69 M_ADOSFSMNT */
-	{ 0,		KMZ_MALLOC },		/* 70 M_ADOSFSNODE */
-	{ 0,		KMZ_MALLOC },		/* 71 M_ANODE */
-	{ SOX(buf),	KMZ_CREATEZONE },	/* 72 M_BUFHDR */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 62 M_MSDOSFSMNT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 63 M_MSDOSFSFAT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 64 M_MSDOSFSNODE */
+	{ SOS(tty),	KMZ_CREATEZONE, FALSE },	/* 65 M_TTYS */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 66 M_EXEC */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 67 M_MISCFSMNT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 68 M_MISCFSNODE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 69 M_ADOSFSMNT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 70 M_ADOSFSNODE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 71 M_ANODE */
+	{ SOX(buf),	KMZ_CREATEZONE, TRUE },		/* 72 M_BUFHDR */
 	{ (NDFILE * OFILESIZE),
-			KMZ_CREATEZONE },	/* 73 M_OFILETABL */
-	{ MCLBYTES,	KMZ_CREATEZONE },	/* 74 M_MCLUST */
+	                KMZ_CREATEZONE, FALSE },	/* 73 M_OFILETABL */
+	{ MCLBYTES,	KMZ_CREATEZONE, FALSE },	/* 74 M_MCLUST */
 #if HFS
-	{ SOX(hfsmount),	KMZ_LOOKUPZONE },	/* 75 M_HFSMNT */
-	{ SOS(cnode),	KMZ_CREATEZONE },	/* 76 M_HFSNODE */
-	{ SOS(filefork),	KMZ_CREATEZONE },	/* 77 M_HFSFORK */
+	{ SOX(hfsmount),KMZ_LOOKUPZONE, FALSE },	/* 75 M_HFSMNT */
+	{ SOS(cnode),	KMZ_CREATEZONE, TRUE },		/* 76 M_HFSNODE */
+	{ SOS(filefork),KMZ_CREATEZONE, TRUE },		/* 77 M_HFSFORK */
 #else
-	{ 0,		KMZ_MALLOC },		/* 75 M_HFSMNT */
-	{ 0,		KMZ_MALLOC },		/* 76 M_HFSNODE */
-	{ 0,		KMZ_MALLOC },		/* 77 M_HFSFORK */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 75 M_HFSMNT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 76 M_HFSNODE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 77 M_HFSFORK */
 #endif
-	{ 0,		KMZ_MALLOC },		/* 78 M_ZFSMNT */
-	{ 0,		KMZ_MALLOC },		/* 79 M_ZFSNODE */
-	{ 0,		KMZ_MALLOC },		/* 80 M_TEMP */
-	{ 0,		KMZ_MALLOC },		/* 81 M_SECA */
-	{ 0,		KMZ_MALLOC },		/* 82 M_DEVFS */
-	{ 0,		KMZ_MALLOC },		/* 83 M_IPFW */
-	{ 0,		KMZ_MALLOC },		/* 84 M_UDFNODE */
-	{ 0,		KMZ_MALLOC },		/* 85 M_UDFMOUNT */
-	{ 0,		KMZ_MALLOC },		/* 86 M_IP6NDP */
-	{ 0,		KMZ_MALLOC },		/* 87 M_IP6OPT */
-	{ 0,		KMZ_MALLOC },		/* 88 M_IP6MISC */
-	{ 0,		KMZ_MALLOC },		/* 89 M_TSEGQ */
-	{ 0,		KMZ_MALLOC },		/* 90 M_IGMP */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 78 M_ZFSMNT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 79 M_ZFSNODE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 80 M_TEMP */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 81 M_SECA */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 82 M_DEVFS */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 83 M_IPFW */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 84 M_UDFNODE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 85 M_UDFMOUNT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 86 M_IP6NDP */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 87 M_IP6OPT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 88 M_IP6MISC */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 89 M_TSEGQ */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 90 M_IGMP */
 #if JOURNALING
-	{ SOS(journal), KMZ_CREATEZONE },	/* 91 M_JNL_JNL */
-	{ SOS(transaction), KMZ_CREATEZONE },	/* 92 M_JNL_TR */
+	{ SOS(journal), KMZ_CREATEZONE, FALSE },	/* 91 M_JNL_JNL */
+	{ SOS(transaction), KMZ_CREATEZONE, FALSE },	/* 92 M_JNL_TR */
 #else
-	{ 0,	 KMZ_MALLOC },		/* 91 M_JNL_JNL */
-	{ 0,	 KMZ_MALLOC },		/* 92 M_JNL_TR */
+	{ 0,	 KMZ_MALLOC, FALSE },			/* 91 M_JNL_JNL */
+	{ 0,	 KMZ_MALLOC, FALSE },			/* 92 M_JNL_TR */
 #endif
-	{ SOS(specinfo), KMZ_CREATEZONE },	/* 93 M_SPECINFO */
-	{ SOS(kqueue), KMZ_CREATEZONE },	/* 94 M_KQUEUE */
+	{ SOS(specinfo), KMZ_CREATEZONE, TRUE },	/* 93 M_SPECINFO */
+	{ SOS(kqueue), KMZ_CREATEZONE, FALSE },		/* 94 M_KQUEUE */
 #if HFS
-	{ SOS(directoryhint), KMZ_CREATEZONE },	/* 95 M_HFSDIRHINT */
+	{ SOS(directoryhint), KMZ_CREATEZONE, FALSE },	/* 95 M_HFSDIRHINT */
 #else
-	{ 0,	KMZ_MALLOC },		/* 95 M_HFSDIRHINT */
+	{ 0,	KMZ_MALLOC, FALSE },			/* 95 M_HFSDIRHINT */
 #endif
-	{ SOS(cl_readahead),  KMZ_CREATEZONE },	/* 96 M_CLRDAHEAD */
-	{ SOS(cl_writebehind),KMZ_CREATEZONE },	/* 97 M_CLWRBEHIND */
-	{ SOS(user64_iovec),	KMZ_LOOKUPZONE },	/* 98 M_IOV64 */
-	{ SOS(fileglob),	KMZ_CREATEZONE },	/* 99 M_FILEGLOB */
-	{ 0,		KMZ_MALLOC },		/* 100 M_KAUTH */
-	{ 0,		KMZ_MALLOC },		/* 101 M_DUMMYNET */
+	{ SOS(cl_readahead),  KMZ_CREATEZONE, TRUE },	/* 96 M_CLRDAHEAD */
+	{ SOS(cl_writebehind),KMZ_CREATEZONE, TRUE },	/* 97 M_CLWRBEHIND */
+	{ SOS(user64_iovec),	KMZ_LOOKUPZONE, FALSE },/* 98 M_IOV64 */
+	{ SOS(fileglob),	KMZ_CREATEZONE, TRUE },	/* 99 M_FILEGLOB */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 100 M_KAUTH */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 101 M_DUMMYNET */
 #ifndef __LP64__
-	{ SOS(unsafe_fsnode),KMZ_CREATEZONE },	/* 102 M_UNSAFEFS */
+	{ SOS(unsafe_fsnode),KMZ_CREATEZONE, FALSE },	/* 102 M_UNSAFEFS */
 #else 
-	{ 0,		KMZ_MALLOC },		/* 102 M_UNSAFEFS */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 102 M_UNSAFEFS */
 #endif /* __LP64__ */
-	{ 0,		KMZ_MALLOC },		/* 103 M_MACPIPELABEL */
-	{ 0,		KMZ_MALLOC },		/* 104 M_MACTEMP */
-	{ 0,		KMZ_MALLOC },		/* 105 M_SBUF */
-	{ 0,		KMZ_MALLOC },		/* 106 M_HFS_EXTATTR */
-	{ 0,		KMZ_MALLOC },		/* 107 M_LCTX */
-	{ 0,		KMZ_MALLOC },		/* 108 M_TRAFFIC_MGT */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 103 M_MACPIPELABEL */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 104 M_MACTEMP */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 105 M_SBUF */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 106 M_HFS_EXTATTR */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 107 M_LCTX */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 108 M_TRAFFIC_MGT */
 #if HFS_COMPRESSION
-	{ SOS(decmpfs_cnode),KMZ_CREATEZONE },	/* 109 M_DECMPFS_CNODE */
+	{ SOS(decmpfs_cnode),KMZ_CREATEZONE, FALSE },	/* 109 M_DECMPFS_CNODE */
 #else
-	{ 0,		KMZ_MALLOC },		/* 109 M_DECMPFS_CNODE */
+	{ 0,		KMZ_MALLOC, FALSE },		/* 109 M_DECMPFS_CNODE */
 #endif /* HFS_COMPRESSION */
 #undef	SOS
 #undef	SOX
@@ -498,6 +499,8 @@ kmeminit(void)
 			kmz->kz_zalloczone = zinit(kmz->kz_elemsize,
 						1024 * 1024, PAGE_SIZE,
 						memname[kmz - kmzones]);
+			if (kmz->kz_noencrypt == TRUE)
+				zone_change(kmz->kz_zalloczone, Z_NOENCRYPT, TRUE);
 		}
 		else if (kmz->kz_zalloczone == KMZ_LOOKUPZONE)
 			kmz->kz_zalloczone = kalloc_zone(kmz->kz_elemsize);

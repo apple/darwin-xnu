@@ -168,6 +168,7 @@ to restrict I/O ops.
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+extern unsigned int		save_kdebug_enable;
 extern uint32_t 		gIOHibernateState;
 uint32_t			gIOHibernateMode;
 static char			gIOHibernateBootSignature[256+1];
@@ -468,6 +469,12 @@ IOHibernatePollerIODone(IOPolledFileIOVars * vars, bool abortable)
         }
     }
 
+    if ((kIOReturnSuccess == err) && abortable && hibernate_should_abort())
+    {
+        err = kIOReturnAborted;
+	HIBLOG("IOPolledInterface::checkForWork sw abort\n");
+    }
+
     if (err)
     {
 	HIBLOG("IOPolledInterface::checkForWork[%d] 0x%x\n", idx, err);
@@ -564,15 +571,20 @@ IOPolledFileOpen( const char * filename, IOBufferMemoryDescriptor * ioBuffer,
 						    &file_extent_callback, &ctx, 
 						    &hibernate_image_dev,
                                                     &vars->block0,
-                                                    &maxiobytes);
+                                                    &maxiobytes,
+                                                    &vars->solid_state);
 	if (!vars->fileRef)
 	{
 	    err = kIOReturnNoSpace;
 	    break;
 	}
 	gIOHibernateFileRef = vars->fileRef;
-	HIBLOG("Opened file %s, size %qd, partition base 0x%qx, maxio %qx\n", filename, ctx.size, 
-                    vars->block0, maxiobytes);
+
+        if (kIOHibernateModeSSDInvert & gIOHibernateMode)
+            vars->solid_state = vars->solid_state ? false : true;
+
+	HIBLOG("Opened file %s, size %qd, partition base 0x%qx, maxio %qx ssd %d\n", filename, ctx.size, 
+                    vars->block0, maxiobytes, vars->solid_state);
 	if (ctx.size < 1*1024*1024)		// check against image size estimate!
 	{
 	    err = kIOReturnNoSpace;
@@ -805,14 +817,18 @@ IOPolledFileWrite(IOPolledFileIOVars * vars,
 	    uint32_t length = (vars->bufferOffset);
 
 #if CRYPTO
-            if (cryptvars && vars->encryptStart && (vars->position > vars->encryptStart))
+            if (cryptvars && vars->encryptStart
+                && (vars->position > vars->encryptStart)
+                && ((vars->position - length) < vars->encryptEnd))
             {
                 uint32_t encryptLen, encryptStart;
                 encryptLen = vars->position - vars->encryptStart;
                 if (encryptLen > length)
                     encryptLen = length;
                 encryptStart = length - encryptLen;
-                
+                if (vars->position > vars->encryptEnd)
+                    encryptLen -= (vars->position - vars->encryptEnd);
+
                 // encrypt the buffer
                 aes_encrypt_cbc(vars->buffer + vars->bufferHalf + encryptStart,
                                 &cryptvars->aes_iv[0],
@@ -975,8 +991,7 @@ IOHibernateSystemSleep(void)
     OSData *   data;
     OSObject * obj;
     OSString * str;
-    OSNumber * num;
-    OSDictionary *sleepOverrideOptions;
+    bool       dsSSD;
 
     IOHibernateVars * vars  = &gIOHibernateVars;
 
@@ -990,59 +1005,13 @@ IOHibernateSystemSleep(void)
     if (kIOLogHibernate & gIOKitDebug)
 	gIOHibernateDebugFlags |= kIOHibernateDebugRestoreLogs;
 
-    /* The invocation of IOPMSleepSystemWithOptions() may override
-     * existing hibernation settings.
-     */
-    sleepOverrideOptions = (OSDictionary *)OSDynamicCast( OSDictionary,
-        IOService::getPMRootDomain()->copyProperty(kRootDomainSleepOptionsKey));
-
-
-    /* Hibernate mode overriden by sleep otions ? */
-    obj = NULL;
-    
-    if (sleepOverrideOptions) {
-        obj = sleepOverrideOptions->getObject(kIOHibernateModeKey);
-        if (obj) obj->retain();
-    }
-
-    if(!obj) {
-        obj = IOService::getPMRootDomain()->copyProperty(kIOHibernateModeKey);
-    }
-
-    if (obj && (num = OSDynamicCast(OSNumber, obj)) )
-    {
-	    gIOHibernateMode = num->unsigned32BitValue();
+    if (IOService::getPMRootDomain()->getHibernateSettings(
+        &gIOHibernateMode, &gIOHibernateFreeRatio, &gIOHibernateFreeTime))
         if (kIOHibernateModeSleep & gIOHibernateMode)
             // default to discard clean for safe sleep
             gIOHibernateMode ^= (kIOHibernateModeDiscardCleanInactive 
                                 | kIOHibernateModeDiscardCleanActive);
-    }
 
-    if (obj) obj->release();
-    
-    /* Hibernate free rotio overriden by sleep options ? */
-    obj = NULL;
-    
-    if (sleepOverrideOptions) {
-        obj = sleepOverrideOptions->getObject(kIOHibernateFreeRatioKey);
-        if (obj) obj->retain();
-    }
-    
-    if(!obj) {
-        obj = IOService::getPMRootDomain()->copyProperty(kIOHibernateFreeRatioKey);
-    }
-    if (obj && (num = OSDynamicCast(OSNumber, obj)))
-    {
-	    gIOHibernateFreeRatio = num->unsigned32BitValue();
-    }
-    if (obj) obj->release();
-    
-    if ((obj = IOService::getPMRootDomain()->copyProperty(kIOHibernateFreeTimeKey)))
-    {
-	if ((num = OSDynamicCast(OSNumber, obj)))
-	    gIOHibernateFreeTime = num->unsigned32BitValue();
-	obj->release();
-    }
     if ((obj = IOService::getPMRootDomain()->copyProperty(kIOHibernateFileKey)))
     {
 	if ((str = OSDynamicCast(OSString, obj)))
@@ -1050,9 +1019,6 @@ IOHibernateSystemSleep(void)
 			    sizeof(gIOHibernateFilename));
 	obj->release();
     }
-
-    if (sleepOverrideOptions)
-        sleepOverrideOptions->release();
 
     if (!gIOHibernateMode || !gIOHibernateFilename[0])
 	return (kIOReturnUnsupported);
@@ -1093,22 +1059,46 @@ IOHibernateSystemSleep(void)
 	bzero(gIOHibernateCurrentHeader, sizeof(IOHibernateImageHeader));
 	gIOHibernateCurrentHeader->debugFlags = gIOHibernateDebugFlags;
 
+        dsSSD = (vars->fileVars->solid_state
+                && (kOSBooleanTrue == IOService::getPMRootDomain()->getProperty(kIOPMDeepSleepEnabledKey)));
+
+        if (dsSSD)
+        {
+            gIOHibernateCurrentHeader->options |= 
+                                                kIOHibernateOptionSSD
+                                              | kIOHibernateOptionColor;
+        }
+        else
+        {
+            gIOHibernateCurrentHeader->options |= kIOHibernateOptionProgress;
+        }
+
         boolean_t encryptedswap;
+        AbsoluteTime startTime, endTime;
+        uint64_t nsec;
+
+        clock_get_uptime(&startTime);
         err = hibernate_setup(gIOHibernateCurrentHeader, 
                                 gIOHibernateFreeRatio, gIOHibernateFreeTime,
+                                dsSSD,
                                 &vars->page_list, &vars->page_list_wired, &encryptedswap);
+        clock_get_uptime(&endTime);
+        SUB_ABSOLUTETIME(&endTime, &startTime);
+        absolutetime_to_nanoseconds(endTime, &nsec);
+        HIBLOG("hibernate_setup(%d) took %qd ms\n", err, nsec / 1000000ULL);
+
         if (KERN_SUCCESS != err)
-        {
-	    HIBLOG("hibernate_setup(%d)\n", err);
             break;
-        }
 
         if (encryptedswap)
             gIOHibernateMode ^= kIOHibernateModeEncrypt; 
 
-        vars->videoAllocSize = kVideoMapSize;
-        if (KERN_SUCCESS != kmem_alloc_pageable(kernel_map, &vars->videoMapping, vars->videoAllocSize))
-            vars->videoMapping = 0;
+        if (kIOHibernateOptionProgress & gIOHibernateCurrentHeader->options)
+        {
+            vars->videoAllocSize = kVideoMapSize;
+            if (KERN_SUCCESS != kmem_alloc_pageable(kernel_map, &vars->videoMapping, vars->videoAllocSize))
+                vars->videoMapping = 0;
+        }
 
 	// generate crypt keys
         for (uint32_t i = 0; i < sizeof(vars->wiredCryptKey); i++)
@@ -1449,7 +1439,9 @@ IOHibernateSystemHasSlept(void)
 	vars->previewBuffer = 0;
     }
 
-    if (vars->previewBuffer && (data = OSDynamicCast(OSData, 
+    if ((kIOHibernateOptionProgress & gIOHibernateCurrentHeader->options)
+        && vars->previewBuffer 
+        && (data = OSDynamicCast(OSData, 
 	IOService::getPMRootDomain()->getProperty(kIOHibernatePreviewActiveKey))))
     {
 	UInt32 flags = *((UInt32 *)data->getBytesNoCopy());
@@ -1471,8 +1463,8 @@ IOHibernateSystemHasSlept(void)
 	    vars->consoleMapping   = (uint8_t *) consoleInfo.v_baseAddr;
 
 	    HIBPRINT("video %p %d %d %d\n",
-			vars->consoleMapping, gIOHibernateGraphicsInfo->depth, 
-			gIOHibernateGraphicsInfo->width, gIOHibernateGraphicsInfo->height);
+			vars->consoleMapping, graphicsInfo->depth, 
+			graphicsInfo->width, graphicsInfo->height);
 	    if (vars->consoleMapping)
 			ProgressInit(graphicsInfo, vars->consoleMapping,
 					&graphicsInfo->progressSaveUnder[0][0], sizeof(graphicsInfo->progressSaveUnder));
@@ -1509,6 +1501,29 @@ IOHibernateSystemWake(void)
         vars->previewBuffer->release();
         vars->previewBuffer = 0;
     }
+
+    if (kIOHibernateStateWakingFromHibernate == gIOHibernateState)
+    {
+        IOService::getPMRootDomain()->setProperty(kIOHibernateOptionsKey, 
+                                            gIOHibernateCurrentHeader->options, 32);
+    }
+    else
+    {
+        IOService::getPMRootDomain()->removeProperty(kIOHibernateOptionsKey);
+    }
+
+    if ((kIOHibernateStateWakingFromHibernate == gIOHibernateState)
+      && (kIOHibernateGfxStatusUnknown != gIOHibernateGraphicsInfo->gfxStatus))
+    {
+        IOService::getPMRootDomain()->setProperty(kIOHibernateGfxStatusKey, 
+                                        &gIOHibernateGraphicsInfo->gfxStatus,
+                                        sizeof(gIOHibernateGraphicsInfo->gfxStatus));
+    }
+    else
+    {
+        IOService::getPMRootDomain()->removeProperty(kIOHibernateGfxStatusKey);
+    }
+
 
     if (vars->fileVars)
     {
@@ -1673,6 +1688,20 @@ hibernate_setup_for_wake(void)
 
 #define C_ASSERT(e) typedef char    __C_ASSERT__[(e) ? 1 : -1]
 
+static bool
+no_encrypt_page(vm_offset_t ppnum)
+{
+    if (pmap_is_noencrypt((ppnum_t)ppnum) == TRUE)
+    {
+        return true;
+    }
+    return false;
+}
+
+uint32_t	wired_pages_encrypted = 0;
+uint32_t	dirty_pages_encrypted = 0;
+uint32_t	wired_pages_clear = 0;
+
 extern "C" uint32_t
 hibernate_write_image(void)
 {
@@ -1684,15 +1713,15 @@ hibernate_write_image(void)
 
     uint32_t	 pageCount, pagesDone;
     IOReturn     err;
-    vm_offset_t  ppnum;
-    IOItemCount  page, count;
+    vm_offset_t  ppnum, page;
+    IOItemCount  count;
     uint8_t *	 src;
     uint8_t *	 data;
     IOByteCount  pageCompressedSize;
     uint64_t	 compressedSize, uncompressedSize;
     uint64_t	 image1Size = 0;
     uint32_t	 bitmap_size;
-    bool	 iterDone, pollerOpen, needEncryptStart;
+    bool	 iterDone, pollerOpen, needEncrypt;
     uint32_t	 restore1Sum, sum, sum1, sum2;
     uint32_t	 tag;
     uint32_t	 pageType;
@@ -1700,6 +1729,7 @@ hibernate_write_image(void)
 
     AbsoluteTime startTime, endTime;
     AbsoluteTime allTime, compTime, decoTime;
+    uint64_t     compBytes;
     uint64_t     nsec;
     uint32_t     lastProgressStamp = 0;
     uint32_t     progressStamp;
@@ -1708,8 +1738,17 @@ hibernate_write_image(void)
     hibernate_cryptvars_t _cryptvars;
     hibernate_cryptvars_t * cryptvars = 0;
 
+    wired_pages_encrypted = 0;
+    dirty_pages_encrypted = 0;
+    wired_pages_clear = 0;
+
     if (!vars->fileVars || !vars->fileVars->pollers || !vars->fileExtents)
         return (false /* sleep */ );
+
+    if (kIOHibernateModeSleep & gIOHibernateMode)
+	kdebug_enable = save_kdebug_enable;
+
+    KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 1) | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
     restore1Sum = sum1 = sum2 = 0;
 
@@ -1763,7 +1802,7 @@ hibernate_write_image(void)
     }
 #endif
 
-    needEncryptStart = (0 != (kIOHibernateModeEncrypt & gIOHibernateMode));
+    needEncrypt = (0 != (kIOHibernateModeEncrypt & gIOHibernateMode));
 
     AbsoluteTime_to_scalar(&compTime) = 0;
     AbsoluteTime_to_scalar(&decoTime) = 0;
@@ -1776,8 +1815,6 @@ hibernate_write_image(void)
     {
         compressedSize   = 0;
         uncompressedSize = 0;
-        iterDone         = false;
-        pageType         = 0;		// wired pages first
 
         IOPolledFileSeek(vars->fileVars, sizeof(IOHibernateImageHeader));
     
@@ -1825,9 +1862,9 @@ hibernate_write_image(void)
         for (page = 0; page < count; page++)
         {
             if ((src < &gIOHibernateRestoreStack[0]) || (src >= &gIOHibernateRestoreStackEnd[0]))
-                restore1Sum += hibernate_sum(src, page_size);
+                restore1Sum += hibernate_sum_page(src, header->restore1CodePage + page);
             else
-                restore1Sum += 0x10000001;
+                restore1Sum += 0x00000000;
             src += page_size;
         }
         sum1 = restore1Sum;
@@ -1890,8 +1927,10 @@ hibernate_write_image(void)
             header->previewSize = count + ppnum;
 
             for (page = 0; page < count; page += page_size)
-                sum1 += hibernate_sum(src + page, page_size);
-
+            {
+                phys64 = vars->previewBuffer->getPhysicalSegment(page, NULL, kIOMemoryMapperNone);
+                sum1 += hibernate_sum_page(src + page, atop_64(phys64));
+            }
             err = IOPolledFileWrite(vars->fileVars, src, count, cryptvars);
             if (kIOReturnSuccess != err)
                 break;
@@ -1951,138 +1990,187 @@ hibernate_write_image(void)
 
         src = (uint8_t *) vars->srcBuffer->getBytesNoCopy();
     
-        ppnum     = 0;
         pagesDone = 0;
         lastBlob = 0;
     
         HIBLOG("writing %d pages\n", pageCount);
 
-        do
+        enum
+        // pageType
+        { 
+            kWired          = 0x02,
+            kEncrypt        = 0x01,
+            kWiredEncrypt   = kWired | kEncrypt,
+            kWiredClear     = kWired,
+            kUnwiredEncrypt = kEncrypt
+        };
+
+        for (pageType = kWiredEncrypt; pageType >= kUnwiredEncrypt; pageType--)
         {
-            count = hibernate_page_list_iterate(pageType ? vars->page_list : vars->page_list_wired,
-                                                    &ppnum);
-//          kprintf("[%d](%x : %x)\n", pageType, ppnum, count);
-    
-            iterDone = !count;
-
-            pageAndCount[0] = ppnum;
-            pageAndCount[1] = count;
-            err = IOPolledFileWrite(vars->fileVars, 
-                                    (const uint8_t *) &pageAndCount, sizeof(pageAndCount), 
-                                    cryptvars);
-            if (kIOReturnSuccess != err)
-                break;
-
-            for (page = 0; page < count; page++)
+            if (needEncrypt && (kEncrypt & pageType))
             {
-                err = IOMemoryDescriptorWriteFromPhysical(vars->srcBuffer, 0, ptoa_64(ppnum), page_size);
-                if (err)
+                vars->fileVars->encryptStart = (vars->fileVars->position & ~(AES_BLOCK_SIZE - 1));
+                vars->fileVars->encryptEnd   = UINT64_MAX;
+                HIBLOG("encryptStart %qx\n", vars->fileVars->encryptStart);
+
+                if (kUnwiredEncrypt == pageType)
                 {
-                    HIBLOG("IOMemoryDescriptorWriteFromPhysical %d [%ld] %x\n", __LINE__, (long)ppnum, err);
-                    break;
-                }
-    
-                sum = hibernate_sum(src, page_size);
-   
-                clock_get_uptime(&startTime);
-
-                pageCompressedSize = WKdm_compress ((WK_word*) src, (WK_word*) (src + page_size), PAGE_SIZE_IN_WORDS);
-    
-                clock_get_uptime(&endTime);
-                ADD_ABSOLUTETIME(&compTime, &endTime);
-                SUB_ABSOLUTETIME(&compTime, &startTime);
-    
-                if (kIOHibernateModeEncrypt & gIOHibernateMode)
-                    pageCompressedSize = (pageCompressedSize + AES_BLOCK_SIZE - 1) & ~(AES_BLOCK_SIZE - 1);
-
-                if (pageCompressedSize > page_size)
-                {
-//                  HIBLOG("------------lose: %d\n", pageCompressedSize);
-                    pageCompressedSize = page_size;
-                }
-
-                if (pageCompressedSize != page_size)
-                    data = (src + page_size);
-                else
-                    data = src;
-
-                tag = pageCompressedSize | kIOHibernateTagSignature;
-
-                if (pageType)
-                    sum2 += sum;
-                else
-                    sum1 += sum;
-
-                if (needEncryptStart && (ppnum >= atop_32(sectDATAB)))
-                {
-                    // start encrypting partway into the data about to be written
-                    vars->fileVars->encryptStart = (vars->fileVars->position + AES_BLOCK_SIZE - 1) 
-                                                    & ~(AES_BLOCK_SIZE - 1);
-                    needEncryptStart = false;
-                }
-
-                err = IOPolledFileWrite(vars->fileVars, (const uint8_t *) &tag, sizeof(tag), cryptvars);
-                if (kIOReturnSuccess != err)
-                    break;
-
-                err = IOPolledFileWrite(vars->fileVars, data, (pageCompressedSize + 3) & ~3, cryptvars);
-                if (kIOReturnSuccess != err)
-                    break;
-
-                compressedSize += pageCompressedSize;
-                if (pageCompressedSize)
-                    uncompressedSize += page_size;
-                ppnum++;
-                pagesDone++;
-
-		if (vars->consoleMapping && (0 == (1023 & pagesDone)))
-		{
-		    blob = ((pagesDone * kIOHibernateProgressCount) / pageCount);
-		    if (blob != lastBlob)
-		    {
-			ProgressUpdate(gIOHibernateGraphicsInfo, vars->consoleMapping, lastBlob, blob);
-			lastBlob = blob;
-		    }
-		}
-                if (0 == (8191 & pagesDone))
-                {
-                    clock_get_uptime(&endTime);
-                    SUB_ABSOLUTETIME(&endTime, &allTime);
-                    absolutetime_to_nanoseconds(endTime, &nsec);
-                    progressStamp = nsec / 750000000ULL;
-                    if (progressStamp != lastProgressStamp)
-                    {
-                        lastProgressStamp = progressStamp;
-                        HIBPRINT("pages %d (%d%%)\n", pagesDone, (100 * pagesDone) / pageCount);
-                    }
-                }
-            }
-            if (kIOReturnSuccess != err)
-                break;
-            if (iterDone && !pageType)
-            {
-                err = IOPolledFileWrite(vars->fileVars, 0, 0, cryptvars);
-                if (kIOReturnSuccess != err)
-                    break;
-
-                iterDone = false;
-                pageType = 1;
-                ppnum = 0;
-                image1Size = vars->fileVars->position;
-                if (cryptvars)
-                {
+                    // start unwired image
                     bcopy(&cryptvars->aes_iv[0], 
                             &gIOHibernateCryptWakeContext.aes_iv[0], 
                             sizeof(cryptvars->aes_iv));
                     cryptvars = &gIOHibernateCryptWakeContext;
                 }
-                HIBLOG("image1Size %qd\n", image1Size);
+            }
+            for (iterDone = false, ppnum = 0; !iterDone; )
+            {
+                count = hibernate_page_list_iterate((kWired & pageType) 
+                                                            ? vars->page_list_wired : vars->page_list,
+                                                        &ppnum);
+//              kprintf("[%d](%x : %x)\n", pageType, ppnum, count);
+                iterDone = !count;
+    
+                if (count && (kWired & pageType) && needEncrypt)
+                {
+                    uint32_t checkIndex;
+                    for (checkIndex = 0;
+                            (checkIndex < count) 
+                                && (((kEncrypt & pageType) == 0) == no_encrypt_page(ppnum + checkIndex)); 
+                            checkIndex++)
+                    {}
+                    if (!checkIndex)
+                    {
+                        ppnum++;
+                        continue;
+                    }
+                    count = checkIndex;
+                }
+
+                switch (pageType)
+                {
+                    case kWiredEncrypt:   wired_pages_encrypted += count; break;
+                    case kWiredClear:     wired_pages_clear     += count; break;
+                    case kUnwiredEncrypt: dirty_pages_encrypted += count; break;
+                }
+    
+                if (iterDone && (kWiredEncrypt == pageType))   {/* not yet end of wired list */}
+                else
+                {
+                    pageAndCount[0] = ppnum;
+                    pageAndCount[1] = count;
+                    err = IOPolledFileWrite(vars->fileVars, 
+                                            (const uint8_t *) &pageAndCount, sizeof(pageAndCount), 
+                                            cryptvars);
+                    if (kIOReturnSuccess != err)
+                        break;
+                }
+    
+                for (page = ppnum; page < (ppnum + count); page++)
+                {
+                    err = IOMemoryDescriptorWriteFromPhysical(vars->srcBuffer, 0, ptoa_64(page), page_size);
+                    if (err)
+                    {
+                        HIBLOG("IOMemoryDescriptorWriteFromPhysical %d [%ld] %x\n", __LINE__, (long)page, err);
+                        break;
+                    }
+        
+                    sum = hibernate_sum_page(src, page);
+                    if (kWired & pageType)
+                        sum1 += sum;
+                    else
+                        sum2 += sum;
+       
+                    clock_get_uptime(&startTime);
+
+                    pageCompressedSize = WKdm_compress ((WK_word*) src, (WK_word*) (src + page_size), PAGE_SIZE_IN_WORDS);
+        
+                    clock_get_uptime(&endTime);
+                    ADD_ABSOLUTETIME(&compTime, &endTime);
+                    SUB_ABSOLUTETIME(&compTime, &startTime);
+                    compBytes += page_size;
+        
+                    if (kIOHibernateModeEncrypt & gIOHibernateMode)
+                        pageCompressedSize = (pageCompressedSize + AES_BLOCK_SIZE - 1) & ~(AES_BLOCK_SIZE - 1);
+    
+                    if (pageCompressedSize > page_size)
+                    {
+//                      HIBLOG("------------lose: %d\n", pageCompressedSize);
+                        pageCompressedSize = page_size;
+                    }
+    
+                    if (pageCompressedSize != page_size)
+                        data = (src + page_size);
+                    else
+                        data = src;
+    
+                    tag = pageCompressedSize | kIOHibernateTagSignature;
+                    err = IOPolledFileWrite(vars->fileVars, (const uint8_t *) &tag, sizeof(tag), cryptvars);
+                    if (kIOReturnSuccess != err)
+                        break;
+    
+                    err = IOPolledFileWrite(vars->fileVars, data, (pageCompressedSize + 3) & ~3, cryptvars);
+                    if (kIOReturnSuccess != err)
+                        break;
+    
+                    compressedSize += pageCompressedSize;
+                    if (pageCompressedSize)
+                        uncompressedSize += page_size;
+                    pagesDone++;
+    
+                    if (vars->consoleMapping && (0 == (1023 & pagesDone)))
+                    {
+                        blob = ((pagesDone * kIOHibernateProgressCount) / pageCount);
+                        if (blob != lastBlob)
+                        {
+                            ProgressUpdate(gIOHibernateGraphicsInfo, vars->consoleMapping, lastBlob, blob);
+                            lastBlob = blob;
+                        }
+                    }
+                    if (0 == (8191 & pagesDone))
+                    {
+                        clock_get_uptime(&endTime);
+                        SUB_ABSOLUTETIME(&endTime, &allTime);
+                        absolutetime_to_nanoseconds(endTime, &nsec);
+                        progressStamp = nsec / 750000000ULL;
+                        if (progressStamp != lastProgressStamp)
+                        {
+                            lastProgressStamp = progressStamp;
+                            HIBPRINT("pages %d (%d%%)\n", pagesDone, (100 * pagesDone) / pageCount);
+                        }
+                    }
+                }
+                if (kIOReturnSuccess != err)
+                    break;
+                ppnum = page;
+            }
+
+            if (kIOReturnSuccess != err)
+                break;
+
+            if ((kEncrypt & pageType))
+            {
+                vars->fileVars->encryptEnd = (vars->fileVars->position + AES_BLOCK_SIZE - 1) 
+                                              & ~(AES_BLOCK_SIZE - 1);
+                HIBLOG("encryptEnd %qx\n", vars->fileVars->encryptEnd);
+            }
+
+            if (kWiredEncrypt != pageType)
+            {
+                // end of image1/2 - fill to next block
+                err = IOPolledFileWrite(vars->fileVars, 0, 0, cryptvars);
+                if (kIOReturnSuccess != err)
+                    break;
+            }
+            if (kWiredClear == pageType)
+            {
+                // end wired image
+                header->encryptStart = vars->fileVars->encryptStart;
+                header->encryptEnd   = vars->fileVars->encryptEnd;
+                image1Size = vars->fileVars->position;
+                HIBLOG("image1Size %qd, encryptStart1 %qx, End1 %qx\n",
+                        image1Size, header->encryptStart, header->encryptEnd);
             }
         }
-        while (!iterDone);
-        if (kIOReturnSuccess != err)
-            break;
-        err = IOPolledFileWrite(vars->fileVars, 0, 0, cryptvars);
         if (kIOReturnSuccess != err)
             break;
 
@@ -2092,7 +2180,6 @@ hibernate_write_image(void)
         header->image1Size   = image1Size;
         header->bitmapSize   = bitmap_size;
         header->pageCount    = pageCount;
-        header->encryptStart = vars->fileVars->encryptStart;
     
         header->restore1Sum  = restore1Sum;
         header->image1Sum    = sum1;
@@ -2108,6 +2195,8 @@ hibernate_write_image(void)
             header->fileExtentMapSize = sizeof(header->fileExtentMap);
         bcopy(&fileExtents[0], &header->fileExtentMap[0], count);
     
+        header->deviceBase = vars->fileVars->block0;
+
         IOPolledFileSeek(vars->fileVars, 0);
         err = IOPolledFileWrite(vars->fileVars,
                                     (uint8_t *) header, sizeof(IOHibernateImageHeader), 
@@ -2147,6 +2236,9 @@ hibernate_write_image(void)
                uncompressedSize ? ((int) ((compressedSize * 100ULL) / uncompressedSize)) : 0,
                sum1, sum2);
 
+    HIBLOG("wired_pages_encrypted %d, wired_pages_clear %d, dirty_pages_encrypted %d\n", 
+             wired_pages_encrypted, wired_pages_clear, dirty_pages_encrypted);
+
     if (vars->fileVars->io)
         (void) IOHibernatePollerIODone(vars->fileVars, false);
 
@@ -2161,6 +2253,9 @@ hibernate_write_image(void)
 
     // should we come back via regular wake, set the state in memory.
     gIOHibernateState = kIOHibernateStateInactive;
+
+    KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 1) | DBG_FUNC_END,
+			  wired_pages_encrypted, wired_pages_clear, dirty_pages_encrypted, 0, 0);
 
     if (kIOReturnSuccess == err)
     {
@@ -2197,6 +2292,7 @@ hibernate_machine_init(void)
     IOReturn     err;
     uint32_t     sum;
     uint32_t     pagesDone;
+    uint32_t     pagesRead = 0;
     AbsoluteTime allTime, endTime;
     uint64_t     nsec;
     uint32_t     lastProgressStamp = 0;
@@ -2227,9 +2323,9 @@ hibernate_machine_init(void)
 	    gIOHibernateCurrentHeader->diag[0], gIOHibernateCurrentHeader->diag[1], 
 	    gIOHibernateCurrentHeader->diag[2], gIOHibernateCurrentHeader->diag[3]); 
 
-    HIBPRINT("video %x %d %d %d\n",
+    HIBPRINT("video %x %d %d %d status %x\n",
 	    gIOHibernateGraphicsInfo->physicalAddress, gIOHibernateGraphicsInfo->depth, 
-	    gIOHibernateGraphicsInfo->width, gIOHibernateGraphicsInfo->height); 
+	    gIOHibernateGraphicsInfo->width, gIOHibernateGraphicsInfo->height, gIOHibernateGraphicsInfo->gfxStatus); 
 
     if ((kIOHibernateModeDiscardCleanActive | kIOHibernateModeDiscardCleanInactive) & gIOHibernateMode)
         hibernate_page_list_discard(vars->page_list);
@@ -2359,7 +2455,7 @@ hibernate_machine_init(void)
 	    else
 		decoOffset = 0;
 
-	    sum += hibernate_sum((src + decoOffset), page_size);
+	    sum += hibernate_sum_page((src + decoOffset), ppnum);
 
 	    err = IOMemoryDescriptorReadToPhysical(vars->srcBuffer, decoOffset, ptoa_64(ppnum), page_size);
 	    if (err)
@@ -2370,6 +2466,7 @@ hibernate_machine_init(void)
 
 	    ppnum++;
 	    pagesDone++;
+	    pagesRead++;
 
             if (vars->videoMapSize && (0 == (1023 & pagesDone)))
             {
@@ -2425,6 +2522,8 @@ hibernate_machine_init(void)
 
     HIBLOG("hibernate_machine_init pagesDone %d sum2 %x, time: %qd ms\n", 
 		pagesDone, sum, nsec / 1000000ULL);
+ 
+   KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 2) | DBG_FUNC_NONE, pagesRead, pagesDone, 0, 0, 0);
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */

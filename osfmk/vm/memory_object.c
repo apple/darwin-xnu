@@ -182,12 +182,14 @@ memory_object_lock_page(
 	 */
 
 	if (m->busy || m->cleaning) {
-		if (m->list_req_pending && m->pageout &&
+		if (m->list_req_pending && (m->pageout || m->cleaning) &&
 		    should_return == MEMORY_OBJECT_RETURN_NONE &&
 		    should_flush == TRUE) {
 			/*
-			 * page was earmarked by vm_pageout_scan
-			 * to be cleaned and stolen... we're going
+			 * if pageout is set, page was earmarked by vm_pageout_scan
+			 * to be cleaned and stolen... if cleaning is set, we're
+			 * pre-cleaning pages for a hibernate...
+			 * in either case, we're going
 			 * to take it back since we are being asked to
 			 * flush the page w/o cleaning it (i.e. we don't
 			 * care that it's dirty, we want it gone from
@@ -839,6 +841,7 @@ vm_object_update(
 		fault_info.hi_offset = copy_size;
 		fault_info.no_cache   = FALSE;
 		fault_info.stealth = TRUE;
+		fault_info.mark_zf_absent = FALSE;
 
 		vm_object_paging_begin(copy_object);
 
@@ -1967,6 +1970,7 @@ memory_object_control_bootstrap(void)
 
 	i = (vm_size_t) sizeof (struct memory_object_control);
 	mem_obj_control_zone = zinit (i, 8192*i, 4096, "mem_obj_control");
+	zone_change(mem_obj_control_zone, Z_NOENCRYPT, TRUE);
 	return;
 }
 

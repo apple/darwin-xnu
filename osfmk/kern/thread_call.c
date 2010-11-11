@@ -138,6 +138,7 @@ thread_call_initialize(void)
 
 	i = sizeof (thread_call_data_t);
 	thread_call_zone = zinit(i, 4096 * i, 16 * i, "thread_call");
+	zone_change(thread_call_zone, Z_NOENCRYPT, TRUE);
 
     simple_lock_init(&thread_call_lock, 0);
 

@@ -38,7 +38,7 @@
  * This value should be changed each time that pmDsipatch_t or pmCallBacks_t
  * changes.
  */
-#define PM_DISPATCH_VERSION	20
+#define PM_DISPATCH_VERSION	21
 
 /*
  * Dispatch table for functions that get installed when the power
@@ -100,6 +100,7 @@ typedef struct {
     uint32_t		(*GetSavedRunCount)(void);
     void		(*pmSendIPI)(int cpu);
     rtc_nanotime_t	*(*GetNanotimeInfo)(void);
+    void		(*RTCClockAdjust)(uint64_t adjustment);
     x86_topology_parameters_t	*topoParms;
 } pmCallBacks_t;
 

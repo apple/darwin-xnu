@@ -278,6 +278,7 @@ typedef struct pv_hashed_entry {     /* first three entries must match pv_rooted
 #define	PHYS_MODIFIED	INTEL_PTE_MOD	/* page modified */
 #define	PHYS_REFERENCED	INTEL_PTE_REF	/* page referenced */
 #define PHYS_MANAGED	INTEL_PTE_VALID /* page is managed */
+#define PHYS_NOENCRYPT	INTEL_PTE_USER	/* no need to encrypt this page in the hibernation image */
 
 /*
  *	Amount of virtual memory mapped by one

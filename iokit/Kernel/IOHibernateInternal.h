@@ -68,10 +68,12 @@ struct IOPolledFileIOVars
     IOByteCount 			bufferHalf;
     IOByteCount				extentRemaining;
     IOByteCount				lastRead;
+    boolean_t                           solid_state;
     uint64_t				block0;
     uint64_t				position;
     uint64_t				extentPosition;
     uint64_t				encryptStart;
+    uint64_t				encryptEnd;
     IOPolledFileExtent * 		extentMap;
     IOPolledFileExtent * 		currentExtent;
     bool				io;
@@ -91,7 +93,7 @@ enum
 extern "C"
 #endif		/* __cplusplus */
 uint32_t
-hibernate_sum(uint8_t *buf, int32_t len);
+hibernate_sum_page(uint8_t *buf, uint32_t ppnum);
 
 extern vm_offset_t sectHIBB;
 extern unsigned long sectSizeHIB;

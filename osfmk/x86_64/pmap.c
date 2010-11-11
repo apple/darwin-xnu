@@ -1470,7 +1470,7 @@ pmap_pre_expand(pmap_t pmap, vm_map_offset_t vaddr) {
 	PMAP_LOCK(pmap);
 
 	if(pmap64_pdpt(pmap, vaddr) == PDPT_ENTRY_NULL) {
-		if (!pmap_next_page_k64(&pn))
+		if (!pmap_next_page_hi(&pn))
 			panic("pmap_pre_expand");
 
 		pmap_zero_page(pn);
@@ -1484,7 +1484,7 @@ pmap_pre_expand(pmap_t pmap, vm_map_offset_t vaddr) {
 	}
 
 	if(pmap64_pde(pmap, vaddr) == PD_ENTRY_NULL) {
-		if (!pmap_next_page_k64(&pn))
+		if (!pmap_next_page_hi(&pn))
 			panic("pmap_pre_expand");
 
 		pmap_zero_page(pn);
@@ -1498,7 +1498,7 @@ pmap_pre_expand(pmap_t pmap, vm_map_offset_t vaddr) {
 	}
 
 	if(pmap_pte(pmap, vaddr) == PT_ENTRY_NULL) {
-		if (!pmap_next_page_k64(&pn))
+		if (!pmap_next_page_hi(&pn))
 			panic("pmap_pre_expand");
 
 		pmap_zero_page(pn);

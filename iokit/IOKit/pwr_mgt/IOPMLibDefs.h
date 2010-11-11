@@ -36,5 +36,6 @@
 #define	kPMRestartSystem                6
 #define kPMSleepSystemOptions           7
 #define kPMSetMaintenanceWakeCalendar   8
+#define kPMSetUserAssertionLevels       9
 
-#define kNumPMMethods                   9
+#define kNumPMMethods                   10

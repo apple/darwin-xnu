@@ -101,15 +101,18 @@
 int physical_transfer_cluster_count = 0;
 
 #define VM_SUPER_CLUSTER	0x40000
-#define VM_SUPER_PAGES          64
+#define VM_SUPER_PAGES          (VM_SUPER_CLUSTER / PAGE_SIZE)
 
 /*
  * 0 means no shift to pages, so == 1 page/cluster. 1 would mean
  * 2 pages/cluster, 2 means 4 pages/cluster, and so on.
  */
+#define VSTRUCT_MIN_CLSHIFT	0
+
 #define VSTRUCT_DEF_CLSHIFT	2
-int vstruct_def_clshift = VSTRUCT_DEF_CLSHIFT;
 int default_pager_clsize = 0;
+
+int vstruct_def_clshift = VSTRUCT_DEF_CLSHIFT;
 
 /* statistics */
 unsigned int clustered_writes[VM_SUPER_PAGES+1];
@@ -170,6 +173,8 @@ boolean_t	backing_store_stop_compaction = FALSE;
 boolean_t	dp_encryption_inited = FALSE;
 /* Should we encrypt swap ? */
 boolean_t	dp_encryption = FALSE;
+
+boolean_t	dp_isssd = FALSE;
 
 
 /*
@@ -2694,8 +2699,8 @@ pvs_cluster_read(
 	int			cl_index;
 	unsigned int		xfer_size;
 	dp_offset_t		orig_vs_offset;
-	dp_offset_t       ps_offset[(VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_DEF_CLSHIFT];
-	paging_segment_t        psp[(VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_DEF_CLSHIFT];
+	dp_offset_t       ps_offset[(VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_MIN_CLSHIFT];
+	paging_segment_t        psp[(VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_MIN_CLSHIFT];
 	struct clmap		clmap;
 	upl_t			upl;
 	unsigned int		page_list_count;
@@ -3076,16 +3081,25 @@ vs_cluster_write(
 	upl_t		upl;
 	upl_page_info_t *pl;
 	int		page_index;
+	unsigned int	page_max_index;
 	int		list_size;
 	int		pages_in_cl;
 	unsigned int	cl_size;
 	int             base_index;
 	unsigned int	seg_size;
 	unsigned int	upl_offset_in_object;
+	boolean_t	minimal_clustering = FALSE;
+	boolean_t	found_dirty;
 
 	pages_in_cl = 1 << vs->vs_clshift;
 	cl_size = pages_in_cl * vm_page_size;
 	
+#if CONFIG_FREEZE
+	minimal_clustering = TRUE;
+#endif
+	if (dp_isssd == TRUE)
+		minimal_clustering = TRUE;
+
 	if (!dp_internal) {
 		unsigned int page_list_count;
 		int	     request_flags;
@@ -3095,24 +3109,20 @@ vs_cluster_write(
 		int          num_of_pages;
 		int          seg_index;
 		upl_offset_t  upl_offset;
+		upl_offset_t  upl_offset_aligned;
 		dp_offset_t  seg_offset;
-		dp_offset_t  ps_offset[((VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_DEF_CLSHIFT) + 1];
-		paging_segment_t   psp[((VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_DEF_CLSHIFT) + 1];
+		dp_offset_t  ps_offset[((VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_MIN_CLSHIFT) + 1];
+		paging_segment_t   psp[((VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_MIN_CLSHIFT) + 1];
 
 
-		if (bs_low) {
+		if (bs_low)
 			super_size = cl_size;
-
-			request_flags = UPL_NOBLOCK |
-				UPL_RET_ONLY_DIRTY | UPL_COPYOUT_FROM | 
-				UPL_NO_SYNC | UPL_SET_INTERNAL | UPL_SET_LITE;
-		} else {
+		else
 			super_size = VM_SUPER_CLUSTER;
 
-			request_flags = UPL_NOBLOCK | UPL_CLEAN_IN_PLACE |
-				UPL_RET_ONLY_DIRTY | UPL_COPYOUT_FROM | 
+		request_flags = UPL_NOBLOCK | UPL_CLEAN_IN_PLACE |
+			        UPL_RET_ONLY_DIRTY | UPL_COPYOUT_FROM | 
 				UPL_NO_SYNC | UPL_SET_INTERNAL | UPL_SET_LITE;
-		}
 
 		if (!dp_encryption_inited) {
 			/*
@@ -3133,7 +3143,6 @@ vs_cluster_write(
 			request_flags |= UPL_ENCRYPT;
 			flags |= UPL_PAGING_ENCRYPTED;
 		}
-
 		page_list_count = 0;
 		memory_object_super_upl_request(vs->vs_control,
 				(memory_object_offset_t)offset,
@@ -3153,28 +3162,52 @@ vs_cluster_write(
 		pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
 
 		seg_size = cl_size - (upl_offset_in_object % cl_size);
-		upl_offset = upl_offset_in_object & ~(cl_size - 1);
+		upl_offset_aligned = upl_offset_in_object & ~(cl_size - 1);
+		page_index = 0;
+		page_max_index = upl->size / PAGE_SIZE;
+		found_dirty = TRUE;
 
-		for (seg_index = 0, transfer_size = upl->size; 
-						transfer_size > 0; ) {
-		        ps_offset[seg_index] = 
-				ps_clmap(vs, 
-					upl_offset,
-					&clmap, CL_ALLOC, 
-					cl_size, 0); 
+		for (seg_index = 0, transfer_size = upl->size; transfer_size > 0; ) {
+			unsigned int	seg_pgcnt;
 
-			if (ps_offset[seg_index] == (dp_offset_t) -1) {
-				upl_abort(upl, 0);
-				upl_deallocate(upl);
-				
-				return KERN_FAILURE;
+			seg_pgcnt = seg_size / PAGE_SIZE;
 
+			if (minimal_clustering == TRUE) {
+				unsigned int	non_dirty;
+
+				non_dirty = 0;
+				found_dirty = FALSE;
+
+				for (; non_dirty < seg_pgcnt; non_dirty++) {
+					if ((page_index + non_dirty) >= page_max_index)
+						break;
+
+					if (UPL_DIRTY_PAGE(pl, page_index + non_dirty) ||
+					    UPL_PRECIOUS_PAGE(pl, page_index + non_dirty)) {
+						found_dirty = TRUE;
+						break;
+					}
+				}
 			}
-			psp[seg_index] = CLMAP_PS(clmap);
+			if (found_dirty == TRUE) {
+				ps_offset[seg_index] = 
+					ps_clmap(vs, 
+						 upl_offset_aligned,
+						 &clmap, CL_ALLOC, 
+						 cl_size, 0); 
 
+				if (ps_offset[seg_index] == (dp_offset_t) -1) {
+					upl_abort(upl, 0);
+					upl_deallocate(upl);
+				
+					return KERN_FAILURE;
+				}
+				psp[seg_index] = CLMAP_PS(clmap);
+			}
 			if (transfer_size > seg_size) {
+				page_index += seg_pgcnt;
 			        transfer_size -= seg_size;
-				upl_offset += cl_size;
+				upl_offset_aligned += cl_size;
 				seg_size    = cl_size;
 				seg_index++;
 			} else

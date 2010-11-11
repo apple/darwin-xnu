@@ -50,7 +50,6 @@
 #include <libkern/OSDebug.h>
 
 #include "IOKitKernelInternal.h"
-#include "IOCopyMapper.h"
 
 #include <libkern/c++/OSContainers.h>
 #include <libkern/c++/OSDictionary.h>
@@ -109,8 +108,6 @@ __END_DECLS
 #define kIOMaximumMappedIOByteCount	(512*1024*1024)
 
 static IOMapper * gIOSystemMapper = NULL;
-
-IOCopyMapper *	  gIOCopyMapper = NULL;
 
 static ppnum_t	  gIOMaximumMappedIOPageCount = atop_32(kIOMaximumMappedIOByteCount);
 
@@ -1834,6 +1831,30 @@ IOReturn IOMemoryDescriptor::setPurgeable( IOOptionBits newState,
 extern "C" void dcache_incoherent_io_flush64(addr64_t pa, unsigned int count);
 extern "C" void dcache_incoherent_io_store64(addr64_t pa, unsigned int count);
 
+static void SetEncryptOp(addr64_t pa, unsigned int count)
+{
+    ppnum_t page, end;
+
+    page = atop_64(round_page_64(pa));
+    end  = atop_64(trunc_page_64(pa + count));
+    for (; page < end; page++)
+    {
+        pmap_clear_noencrypt(page);    
+    }
+}
+
+static void ClearEncryptOp(addr64_t pa, unsigned int count)
+{
+    ppnum_t page, end;
+
+    page = atop_64(round_page_64(pa));
+    end  = atop_64(trunc_page_64(pa + count));
+    for (; page < end; page++)
+    {
+        pmap_set_noencrypt(page);    
+    }
+}
+
 IOReturn IOMemoryDescriptor::performOperation( IOOptionBits options,
                                                 IOByteCount offset, IOByteCount length )
 {
@@ -1847,6 +1868,13 @@ IOReturn IOMemoryDescriptor::performOperation( IOOptionBits options,
             break;
         case kIOMemoryIncoherentIOStore:
             func = &dcache_incoherent_io_store64;
+            break;
+
+        case kIOMemorySetEncrypted:
+            func = &SetEncryptOp;
+            break;
+        case kIOMemoryClearEncrypted:
+            func = &ClearEncryptOp;
             break;
     }
 
@@ -2181,6 +2209,14 @@ IOReturn IOGeneralMemoryDescriptor::prepare(IODirection forDirection)
     if (kIOReturnSuccess == error)
 	_wireCount++;
 
+    if (1 == _wireCount)
+    {
+        if (kIOMemoryClearEncrypt & _flags)
+        {
+            performOperation(kIOMemoryClearEncrypted, 0, _length);
+        }
+    }
+
     if (_prepareLock)
 	IOLockUnlock(_prepareLock);
 
@@ -2210,6 +2246,11 @@ IOReturn IOGeneralMemoryDescriptor::complete(IODirection /* forDirection */)
 
     if (_wireCount)
     {
+        if ((kIOMemoryClearEncrypt & _flags) && (1 == _wireCount))
+        {
+            performOperation(kIOMemorySetEncrypted, 0, _length);
+        }
+
 	_wireCount--;
 	if (!_wireCount)
 	{
@@ -3279,19 +3320,6 @@ void IOMemoryDescriptor::initialize( void )
 
     IORegistryEntry::getRegistryRoot()->setProperty(kIOMaximumMappedIOByteCountKey,
 						    ptoa_64(gIOMaximumMappedIOPageCount), 64);
-    if (!gIOCopyMapper)
-    {
-    	IOMapper *
-	mapper = new IOCopyMapper;
-	if (mapper)
-	{
-	    if (mapper->init() && mapper->start(NULL))
-		gIOCopyMapper = (IOCopyMapper *) mapper;
-	    else
-		mapper->release();
-	}
-    }
-
     gIOLastPage = IOGetLastPageNumber();
 }
 

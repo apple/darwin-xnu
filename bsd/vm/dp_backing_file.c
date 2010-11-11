@@ -42,6 +42,7 @@
 #include <sys/vnode_internal.h>
 #include <sys/namei.h>
 #include <sys/ubc_internal.h>
+#include <sys/mount_internal.h>
 #include <sys/malloc.h>
 
 #include <default_pager/default_pager_types.h>
@@ -205,6 +206,9 @@ macx_triggers(
 	return mach_macx_triggers(args);
 }
 
+
+extern boolean_t dp_isssd;
+
 /*
  *	Routine:	macx_swapon
  *	Function:
@@ -226,6 +230,8 @@ macx_swapon(
 	off_t			file_size;
 	vfs_context_t		ctx = vfs_context_current();
 	struct proc		*p =  current_proc();
+	int			dp_cluster_size;
+
 
 	AUDIT_MACH_SYSCALL_ENTER(AUE_SWAPON);
 	AUDIT_ARG(value32, args->priority);
@@ -235,11 +241,6 @@ macx_swapon(
 
 	if ((error = suser(kauth_cred_get(), 0)))
 		goto swapon_bailout;
-
-	if(default_pager_init_flag == 0) {
-		start_def_pager(NULL);
-		default_pager_init_flag = 1;
-	}
 
 	/*
 	 * Get a vnode for the paging area.
@@ -273,6 +274,11 @@ macx_swapon(
 	if ((file_size < (off_t)size) && ((error = vnode_setsize(vp, (off_t)size, 0, ctx)) != 0))
 		goto swapon_bailout;
 
+	if (default_pager_init_flag == 0) {
+		start_def_pager(NULL);
+		default_pager_init_flag = 1;
+	}
+
 	/* add new backing store to list */
 	i = 0;
 	while(bs_port_table[i].vp != 0) {
@@ -300,9 +306,24 @@ macx_swapon(
 	   goto swapon_bailout;
 	}
 
+	if (vp->v_mount->mnt_kern_flag & MNTK_SSD) {
+		/*
+		 * keep the cluster size small since the
+		 * seek cost is effectively 0 which means
+		 * we don't care much about fragmentation
+		 */
+		dp_isssd = TRUE;
+		dp_cluster_size = 2 * PAGE_SIZE;
+	} else {
+		/*
+		 * use the default cluster size
+		 */
+		dp_isssd = FALSE;
+		dp_cluster_size = 0;
+	}
 	kr = default_pager_backing_store_create(default_pager, 
 					-1, /* default priority */
-					0, /* default cluster size */
+					dp_cluster_size,
 					&backing_store);
 	memory_object_default_deallocate(default_pager);
 

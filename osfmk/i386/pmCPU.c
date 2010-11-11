@@ -681,6 +681,7 @@ pmKextRegister(uint32_t version, pmDispatch_t *cpuFuncs,
 	callbacks->GetSavedRunCount     = pmGetSavedRunCount;
 	callbacks->pmSendIPI		= pmSendIPI;
 	callbacks->GetNanotimeInfo	= pmGetNanotimeInfo;
+	callbacks->RTCClockAdjust       = rtc_clock_adjust;
 	callbacks->topoParms            = &topoParms;
     } else {
 	panic("Version mis-match between Kernel and CPU PM");

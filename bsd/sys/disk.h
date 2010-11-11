@@ -141,6 +141,7 @@ typedef struct
 #define DKIOCGETBLOCKCOUNT32                  _IOR('d', 25, uint32_t)
 #define DKIOCSETBLOCKSIZE                     _IOW('d', 24, uint32_t)
 #define DKIOCGETBSDUNIT                       _IOR('d', 27, uint32_t)
+#define DKIOCISSOLIDSTATE		      _IOR('d', 79, uint32_t)
 #define DKIOCISVIRTUAL                        _IOR('d', 72, uint32_t)
 #define DKIOCGETBASE                          _IOR('d', 73, uint64_t)
 #define DKIOCGETFEATURES                      _IOR('d', 76, uint32_t)

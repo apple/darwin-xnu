@@ -198,6 +198,7 @@ __BEGIN_DECLS
 #define DBG_IOINFINIBAND	48	/* Infiniband */
 #define DBG_IOCPUPM			49	/* CPU Power Management */
 #define DBG_IOGRAPHICS		50	/* Graphics */
+#define DBG_HIBERNATE		51	/* hibernation related events */
 
 /* Backwards compatibility */
 #define	DBG_IOPOINTING		DBG_IOHID			/* OBSOLETE: Use DBG_IOHID instead */

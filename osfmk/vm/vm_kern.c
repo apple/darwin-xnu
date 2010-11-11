@@ -253,13 +253,6 @@ kernel_memory_allocate(
 		*addrp = 0;
 		return KERN_INVALID_ARGUMENT;
 	}
-	if (flags & KMA_LOMEM) {
-	        if ( !(flags & KMA_NOPAGEWAIT) ) {
-		        *addrp = 0;
-		        return KERN_INVALID_ARGUMENT;
-		}
-	}
-
 	map_size = vm_map_round_page(size);
 	map_mask = (vm_map_offset_t) mask;
 	vm_alloc_flags = 0;
@@ -348,6 +341,10 @@ kernel_memory_allocate(
 				kr = KERN_RESOURCE_SHORTAGE;
 				goto out;
 			}
+			if ((flags & KMA_LOMEM) && (vm_lopage_needed == TRUE)) {
+				kr = KERN_RESOURCE_SHORTAGE;
+				goto out;
+			}
 			unavailable = (vm_page_wire_count + vm_page_free_target) * PAGE_SIZE;
 
 			if (unavailable > max_mem || map_size > (max_mem - unavailable)) {
@@ -426,6 +423,12 @@ kernel_memory_allocate(
 
 		PMAP_ENTER(kernel_pmap, map_addr + pg_offset, mem, 
 			   VM_PROT_READ | VM_PROT_WRITE, object->wimg_bits & VM_WIMG_MASK, TRUE);
+
+		if (flags & KMA_NOENCRYPT) {
+			bzero(CAST_DOWN(void *, (map_addr + pg_offset)), PAGE_SIZE);
+
+			pmap_set_noencrypt(mem->phys_page);
+		}
 	}
 	if ((fill_start + fill_size) < map_size) {
 		if (guard_page_list == NULL)
@@ -889,6 +892,7 @@ kmem_suballoc(
 	return (KERN_SUCCESS);
 }
 
+
 /*
  *	kmem_init:
  *
@@ -925,19 +929,6 @@ kmem_init(
 			    VM_PROT_NONE, VM_PROT_NONE,
 			    VM_INHERIT_DEFAULT);
 	}
-
-
-        /*
-         * Account for kernel memory (text, data, bss, vm shenanigans).
-         * This may include inaccessible "holes" as determined by what
-         * the machine-dependent init code includes in max_mem.
-         */
-	assert(atop_64(max_mem) == (unsigned int) atop_64(max_mem));
-        vm_page_wire_count = ((unsigned int) atop_64(max_mem) -
-			      (vm_page_free_count +
-			       vm_page_active_count +
-			       vm_page_inactive_count));
-
 	/*
 	 * Set the default global user wire limit which limits the amount of
 	 * memory that can be locked via mlock().  We set this to the total

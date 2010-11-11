@@ -716,6 +716,8 @@ extern u_int32_t hfs_freeblks(struct hfsmount * hfsmp, int wantreserve);
 
 short MacToVFSError(OSErr err);
 
+void hfs_metadatazone_init(struct hfsmount *hfsmp);
+
 /* HFS directory hint functions. */
 extern directoryhint_t * hfs_getdirhint(struct cnode *, int, int);
 extern void  hfs_reldirhint(struct cnode *, directoryhint_t *);

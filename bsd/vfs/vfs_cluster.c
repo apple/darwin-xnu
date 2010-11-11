@@ -3780,7 +3780,6 @@ cluster_read_direct(vnode_t vp, struct uio *uio, off_t filesize, int *read_type,
 	int              force_data_sync;
 	int              retval = 0;
 	int		 no_zero_fill = 0;
-	int		 abort_flag = 0;
 	int              io_flag = 0;
 	int		 misaligned = 0;
 	struct clios     iostate;
@@ -3991,13 +3990,11 @@ next_dread:
 		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 72)) | DBG_FUNC_START,
 			     (int)upl_offset, upl_needed_size, (int)iov_base, io_size, 0);
 
-		if (upl_offset == 0 && ((io_size & PAGE_MASK) == 0)) {
+		if (upl_offset == 0 && ((io_size & PAGE_MASK) == 0))
 		        no_zero_fill = 1;
-			abort_flag = UPL_ABORT_DUMP_PAGES | UPL_ABORT_FREE_ON_EMPTY;
-		} else {
+		else
 		        no_zero_fill = 0;
-		        abort_flag = UPL_ABORT_FREE_ON_EMPTY;
-		}
+
 		for (force_data_sync = 0; force_data_sync < 3; force_data_sync++) {
 		        pages_in_pl = 0;
 			upl_size = upl_needed_size;
@@ -4028,13 +4025,13 @@ next_dread:
 			pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
 
 			for (i = 0; i < pages_in_pl; i++) {
-			        if (!upl_valid_page(pl, i))
+			        if (!upl_page_present(pl, i))
 				        break;		  
 			}
 			if (i == pages_in_pl)
 			        break;
 
-			ubc_upl_abort(upl, abort_flag);
+			ubc_upl_abort(upl, 0);
 		}
 		if (force_data_sync >= 3) {
 		        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 72)) | DBG_FUNC_END,
@@ -4052,7 +4049,7 @@ next_dread:
 			        io_size = 0;
 		}
 		if (io_size == 0) {
-			ubc_upl_abort(upl, abort_flag);
+			ubc_upl_abort(upl, 0);
 			goto wait_for_dreads;
 		}
 		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 72)) | DBG_FUNC_END,
@@ -4100,7 +4097,7 @@ next_dread:
 			 * go wait for any other reads to complete before
 			 * returning the error to the caller
 			 */
-			ubc_upl_abort(upl, abort_flag);
+			ubc_upl_abort(upl, 0);
 
 		        goto wait_for_dreads;
 	        }

@@ -93,8 +93,12 @@ struct IOHibernateImageHeader
     uint32_t    systemTableOffset;
 
     uint32_t	debugFlags;
+    uint32_t	options;
 
-    uint32_t	reserved[76];		// make sizeof == 512
+    uint32_t	reserved[71];		// make sizeof == 512
+
+    uint64_t	encryptEnd __attribute__ ((packed));
+    uint64_t	deviceBase __attribute__ ((packed));
 
     uint32_t		fileExtentMapSize;
     IOPolledFileExtent	fileExtentMap[2];
@@ -104,6 +108,15 @@ typedef struct IOHibernateImageHeader IOHibernateImageHeader;
 enum
 {
     kIOHibernateDebugRestoreLogs = 0x00000001
+};
+
+// options & IOHibernateOptions property
+enum
+{
+    kIOHibernateOptionSSD           = 0x00000001,
+    kIOHibernateOptionColor         = 0x00000002,
+    kIOHibernateOptionProgress      = 0x00000004,
+    kIOHibernateOptionDarkWake      = 0x00000008,
 };
 
 struct hibernate_bitmap_t
@@ -168,8 +181,8 @@ enum
 
 struct hibernate_graphics_t
 {
-    uint32_t physicalAddress;		// Base address of video memory
-    uint32_t mode;			// 
+    uint32_t physicalAddress;	// Base address of video memory
+    int32_t  gfxStatus;         // EFI config restore status
     uint32_t rowBytes;   		// Number of bytes per pixel row
     uint32_t width;      		// Width
     uint32_t height;     		// Height
@@ -220,10 +233,13 @@ typedef void (*kern_get_file_extents_callback_t)(void * ref, uint64_t start, uin
 struct kern_direct_file_io_ref_t *
 kern_open_file_for_direct_io(const char * name, 
 			     kern_get_file_extents_callback_t callback, 
-			     void * callback_ref,
-			     dev_t * device,
-                             uint64_t * partitionbase_result,
-                             uint64_t * maxiocount_result);
+			     void *      callback_ref,
+			     dev_t *     device_result,
+                             uint64_t *  partitionbase_result,
+                             uint64_t *  maxiocount_result,
+                             boolean_t * solid_state);
+
+
 void
 kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref);
 int
@@ -236,8 +252,9 @@ hibernate_page_list_allocate(void);
 
 kern_return_t 
 hibernate_setup(IOHibernateImageHeader * header,
-                        uint32_t free_page_ratio,
-                        uint32_t free_page_time,
+                        uint32_t  free_page_ratio,
+                        uint32_t  free_page_time,
+                        boolean_t vmflush,
 			hibernate_page_list_t ** page_list_ret,
 			hibernate_page_list_t ** page_list_wired_ret,
                         boolean_t * encryptedswap);
@@ -279,6 +296,9 @@ hibernate_page_list_set_volatile( hibernate_page_list_t * page_list,
 
 void
 hibernate_page_list_discard(hibernate_page_list_t * page_list);
+
+int
+hibernate_should_abort(void);
 
 void
 hibernate_set_page_state(hibernate_page_list_t * page_list, hibernate_page_list_t * page_list_wired,
@@ -349,7 +369,8 @@ enum
     kIOHibernateModeDiscardCleanInactive = 0x00000008,
     kIOHibernateModeDiscardCleanActive   = 0x00000010,
     kIOHibernateModeSwitch	= 0x00000020,
-    kIOHibernateModeRestart	= 0x00000040
+    kIOHibernateModeRestart	= 0x00000040,
+    kIOHibernateModeSSDInvert	= 0x00000080,
 };
 
 // IOHibernateImageHeader.signature
@@ -381,6 +402,12 @@ enum
 enum {
     kIOHibernatePreviewActive  = 0x00000001,
     kIOHibernatePreviewUpdates = 0x00000002
+};
+
+#define kIOHibernateOptionsKey      "IOHibernateOptions"
+#define kIOHibernateGfxStatusKey    "IOHibernateGfxStatus"
+enum {
+    kIOHibernateGfxStatusUnknown = ((int32_t) 0xFFFFFFFF)
 };
 
 #define kIOHibernateBootImageKey	"boot-image"

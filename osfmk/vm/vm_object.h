@@ -109,6 +109,7 @@ struct vm_object_fault_info {
 	vm_map_offset_t	hi_offset;
 	boolean_t	no_cache;
 	boolean_t	stealth;
+	boolean_t	mark_zf_absent;
 };
 
 

@@ -83,7 +83,7 @@ errno_t mbuf_align_32(mbuf_t mbuf, size_t len)
 
 addr64_t mbuf_data_to_physical(void* ptr)
 {
-	return (addr64_t)(intptr_t)mcl_to_paddr(ptr);
+	return (addr64_t)(uintptr_t)mcl_to_paddr(ptr);
 }
 
 errno_t mbuf_get(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf)

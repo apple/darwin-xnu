@@ -2492,8 +2492,8 @@ bool IOService::activityTickle ( unsigned long type, unsigned long stateNumber )
         clock_get_uptime(&fDeviceActiveTimestamp);
 
 #if ROOT_DOMAIN_RUN_STATES
-        if (fCurrentPowerState == 0)
-            getPMRootDomain()->handleActivityTickleForService(this);
+        getPMRootDomain()->handleActivityTickleForService(this, type,
+                    fCurrentPowerState, fActivityTickleCount);
 #endif
 
 		// Record the last tickle power state.

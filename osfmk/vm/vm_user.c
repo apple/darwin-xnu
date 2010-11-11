@@ -2417,10 +2417,12 @@ redo_lookup:
 
 make_mem_done:
 	if (user_handle != IP_NULL) {
-		ipc_port_dealloc_kernel(user_handle);
-	}
-	if (user_entry != NULL) {
-		kfree(user_entry, sizeof *user_entry);
+		/*
+		 * Releasing "user_handle" causes the kernel object
+		 * associated with it ("user_entry" here) to also be
+		 * released and freed.
+		 */
+		mach_memory_entry_port_release(user_handle);
 	}
 	return kr;
 }

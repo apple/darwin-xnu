@@ -789,7 +789,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			goto out;
 		}
 		if (fp->f_type == DTYPE_PIPE) {
-			error =  fo_ioctl(fp, (int)TIOCSPGRP, (caddr_t)&tmp, &context);
+			error =  fo_ioctl(fp, TIOCSPGRP, (caddr_t)&tmp, &context);
 			goto out;
 		}
 

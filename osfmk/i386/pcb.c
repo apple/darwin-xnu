@@ -528,13 +528,18 @@ act_machine_switch_pcb( thread_t new )
 
 		/*
 		 * Switch user's GS base if necessary
-		 * by setting the Kernel's GS base MSR
+		 * by setting the Kernel GS base MSR
 		 * - this will become the user's on the swapgs when
-		 * returning to user-space.
+		 * returning to user-space. Avoid this for
+		 * kernel threads (no user TLS support required)
+		 * and verify the memory shadow of the segment base
+		 * in the event it was altered in user space.
 		 */
-		if (cdp->cpu_uber.cu_user_gs_base != pcb->cthread_self) {
-			cdp->cpu_uber.cu_user_gs_base = pcb->cthread_self;
-			wrmsr64(MSR_IA32_KERNEL_GS_BASE, pcb->cthread_self);
+		if ((pcb->cthread_self != 0) || (new->task != kernel_task)) {
+			if ((cdp->cpu_uber.cu_user_gs_base != pcb->cthread_self) || (pcb->cthread_self != rdmsr64(MSR_IA32_KERNEL_GS_BASE))) {
+				cdp->cpu_uber.cu_user_gs_base = pcb->cthread_self;
+				wrmsr64(MSR_IA32_KERNEL_GS_BASE, pcb->cthread_self);
+			}
 		}
 	} else {
 		x86_saved_state_compat32_t	*iss32compat;
@@ -2087,6 +2092,15 @@ machine_thread_create(
 	pcb->arg_store_valid = 0;
 	pcb->cthread_self = 0;
 	pcb->uldt_selector = 0;
+
+	/* Ensure that the "cthread" descriptor describes a valid
+	 * segment.
+	 */
+	if ((pcb->cthread_desc.access & ACC_P) == 0) {
+		struct real_descriptor	*ldtp;
+		ldtp = (struct real_descriptor *)current_ldt();
+		pcb->cthread_desc = ldtp[sel_idx(USER_DS)];
+	}
 
 
 	return(KERN_SUCCESS);

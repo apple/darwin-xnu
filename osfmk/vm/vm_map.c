@@ -563,17 +563,22 @@ vm_map_init(
 {
 	vm_map_zone = zinit((vm_map_size_t) sizeof(struct _vm_map), 40*1024,
 			    PAGE_SIZE, "maps");
+	zone_change(vm_map_zone, Z_NOENCRYPT, TRUE);
+
 
 	vm_map_entry_zone = zinit((vm_map_size_t) sizeof(struct vm_map_entry),
 				  1024*1024, PAGE_SIZE*5,
 				  "non-kernel map entries");
+	zone_change(vm_map_entry_zone, Z_NOENCRYPT, TRUE);
 
 	vm_map_kentry_zone = zinit((vm_map_size_t) sizeof(struct vm_map_entry),
 				   kentry_data_size, kentry_data_size,
 				   "kernel map entries");
+	zone_change(vm_map_kentry_zone, Z_NOENCRYPT, TRUE);
 
 	vm_map_copy_zone = zinit((vm_map_size_t) sizeof(struct vm_map_copy),
 				 16*1024, PAGE_SIZE, "map copies");
+	zone_change(vm_map_copy_zone, Z_NOENCRYPT, TRUE);
 
 	/*
 	 *	Cram the map and kentry zones with initial data.
@@ -8711,6 +8716,7 @@ submap_recurse:
 		fault_info->hi_offset = (entry->vme_end - entry->vme_start) + entry->offset;
 		fault_info->no_cache  = entry->no_cache;
 		fault_info->stealth = FALSE;
+		fault_info->mark_zf_absent = FALSE;
 	}
 
 	/*
@@ -10053,6 +10059,7 @@ vm_map_willneed(
 	fault_info.behavior      = VM_BEHAVIOR_SEQUENTIAL;
 	fault_info.no_cache      = FALSE;			/* ignored value */
 	fault_info.stealth	 = TRUE;
+	fault_info.mark_zf_absent = FALSE;
 
 	/*
 	 * The MADV_WILLNEED operation doesn't require any changes to the

@@ -259,6 +259,7 @@ thread_init(void)
 			thread_max * sizeof(struct thread),
 			THREAD_CHUNK * sizeof(struct thread),
 			"threads");
+	zone_change(thread_zone, Z_NOENCRYPT, TRUE);
 	
 	lck_grp_attr_setdefault(&thread_lck_grp_attr);
 	lck_grp_init(&thread_lck_grp, "thread", &thread_lck_grp_attr);

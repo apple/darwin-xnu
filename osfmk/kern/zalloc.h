@@ -108,7 +108,8 @@ struct zone {
 	/* boolean_t */	doing_alloc :1,	/* is zone expanding now? */
 	/* boolean_t */	waiting :1,	/* is thread waiting for expansion? */
 	/* boolean_t */	async_pending :1,	/* asynchronous allocation pending? */
-	/* boolean_t */	doing_gc :1;	/* garbage collect in progress? */
+	/* boolean_t */	doing_gc :1,	/* garbage collect in progress? */
+	/* boolean_t */ noencrypt :1;
 	struct zone *	next_zone;	/* Link for all-zones list */
 	call_entry_data_t	call_async_alloc;	/* callout for asynchronous alloc */
 	const char	*zone_name;	/* a name for the zone */
@@ -219,6 +220,7 @@ extern void		zone_change(
 #define Z_COLLECT	2	/* Make zone collectable	*/
 #define Z_EXPAND	3	/* Make zone expandable		*/
 #define	Z_FOREIGN	4	/* Allow collectable zone to contain foreign elements */
+#define Z_NOENCRYPT	6	/* Don't encrypt zone during hibernation */
 
 /* Preallocate space for zone from zone map */
 extern void		zprealloc(

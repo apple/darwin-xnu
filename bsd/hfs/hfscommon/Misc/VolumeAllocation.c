@@ -238,10 +238,7 @@ OSErr BlockAllocate (
 	u_int32_t		startingBlock,		/* preferred starting block, or 0 for no preference */
 	u_int32_t		minBlocks,		/* desired number of blocks to allocate */
 	u_int32_t		maxBlocks,		/* maximum number of blocks to allocate */
-	Boolean			forceContiguous,	/* non-zero to force contiguous allocation and to force */
-							/* minBlocks bytes to actually be allocated */
-							
-	Boolean	useMetaZone,
+	u_int32_t		flags,			/* option flags */
 	u_int32_t		*actualStartBlock,	/* actual first block of allocation */
 	u_int32_t		*actualNumBlocks)	/* number of blocks actually allocated; if forceContiguous */
 							/* was zero, then this may represent fewer than minBlocks */
@@ -249,6 +246,20 @@ OSErr BlockAllocate (
 	u_int32_t  freeBlocks;
 	OSErr			err;
 	Boolean			updateAllocPtr = false;		//	true if nextAllocation needs to be updated
+	Boolean useMetaZone;
+	Boolean forceContiguous;
+
+	if (flags & HFS_ALLOC_FORCECONTIG) {
+		forceContiguous = true;
+	} else {
+		forceContiguous = false;
+	}
+
+	if (flags & HFS_ALLOC_METAZONE) {
+		useMetaZone = true;
+	} else {
+		useMetaZone = false;
+	}
 
 	//
 	//	Initialize outputs in case we get an error
@@ -257,25 +268,38 @@ OSErr BlockAllocate (
 	*actualNumBlocks = 0;
 	freeBlocks = hfs_freeblks(VCBTOHFS(vcb), 0);
 	
-	//
-	//	If the disk is already full, don't bother.
-	//
-	if (freeBlocks == 0) {
-		err = dskFulErr;
-		goto Exit;
-	}
-	if (forceContiguous && freeBlocks < minBlocks) {
-		err = dskFulErr;
-		goto Exit;
-	}
-	/*
-	 * Clip if necessary so we don't over-subscribe the free blocks.
+	/* Skip free block check if blocks are being allocated for relocating 
+	 * data during truncating a volume.
+	 * 
+	 * During hfs_truncatefs(), the volume free block count is updated 
+	 * before relocating data to reflect the total number of free blocks 
+	 * that will exist on the volume after resize is successful.  This 
+	 * means that we have reserved allocation blocks required for relocating 
+	 * the data and hence there is no need to check the free blocks.
+	 * It will also prevent resize failure when the number of blocks in 
+	 * an extent being relocated is more than the free blocks that will 
+	 * exist after the volume is resized.
 	 */
-	if (minBlocks > freeBlocks) {
-		minBlocks = freeBlocks;
-	}
-	if (maxBlocks > freeBlocks) {
-		maxBlocks = freeBlocks;
+	if ((flags & HFS_ALLOC_SKIPFREEBLKS) == 0) {
+		//	If the disk is already full, don't bother.
+		if (freeBlocks == 0) {
+			err = dskFulErr;
+			goto Exit;
+		}
+		if (forceContiguous && freeBlocks < minBlocks) {
+			err = dskFulErr;
+			goto Exit;
+		}
+
+		/*
+		 * Clip if necessary so we don't over-subscribe the free blocks.
+		 */
+		if (minBlocks > freeBlocks) {
+			minBlocks = freeBlocks;
+		}
+		if (maxBlocks > freeBlocks) {
+			maxBlocks = freeBlocks;
+		}
 	}
 
 	//
@@ -387,11 +411,16 @@ Exit:
 				// than one entry in the array
 			}
 		}
-		
-		//
-		//	Update the number of free blocks on the volume
-		//
-		vcb->freeBlocks -= *actualNumBlocks;
+
+		/* 
+		 * Update the number of free blocks on the volume 
+		 *
+		 * Skip updating the free blocks count if the block are 
+		 * being allocated to relocate data as part of hfs_truncatefs()
+		 */
+		if ((flags & HFS_ALLOC_SKIPFREEBLKS) == 0) {
+			vcb->freeBlocks -= *actualNumBlocks;
+		}
 		MarkVCBDirty(vcb);
 		HFS_MOUNT_UNLOCK(vcb, TRUE);
 
@@ -428,7 +457,8 @@ __private_extern__
 OSErr BlockDeallocate (
 	ExtendedVCB		*vcb,			//	Which volume to deallocate space on
 	u_int32_t		firstBlock,		//	First block in range to deallocate
-	u_int32_t		numBlocks)		//	Number of contiguous blocks to deallocate
+	u_int32_t		numBlocks, 		//	Number of contiguous blocks to deallocate
+	u_int32_t 		flags)
 {
 	OSErr			err;
 	u_int32_t		tempWord;
@@ -452,7 +482,15 @@ OSErr BlockDeallocate (
 	//	Update the volume's free block count, and mark the VCB as dirty.
 	//
 	HFS_MOUNT_LOCK(vcb, TRUE);
-	vcb->freeBlocks += numBlocks;
+	
+	/* 
+	 * Do not update the free block count.  This flags is specified 
+	 * when a volume is being truncated.  
+	 */
+	if ((flags & HFS_ALLOC_SKIPFREEBLKS) == 0) {
+		vcb->freeBlocks += numBlocks;
+	}
+
 	vcb->hfs_freed_block_count += numBlocks;
 	if (firstBlock < vcb->sparseAllocation) {
 		vcb->sparseAllocation = firstBlock;

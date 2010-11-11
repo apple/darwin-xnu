@@ -96,7 +96,8 @@ kern_open_file_for_direct_io(const char * name,
 			     void * callback_ref,
 			     dev_t * device_result,
                              uint64_t * partitionbase_result,
-                             uint64_t * maxiocount_result)
+                             uint64_t * maxiocount_result,
+                             boolean_t * solid_state)
 {
     struct kern_direct_file_io_ref_t * ref;
 
@@ -224,6 +225,16 @@ kern_open_file_for_direct_io(const char * name,
     kprintf("max io 0x%qx bytes\n", maxiocount);
     if (maxiocount_result)
         *maxiocount_result = maxiocount;
+
+    if (solid_state)
+    {
+        int isssd = 0;
+        error = do_ioctl(p1, p2, DKIOCISSOLIDSTATE, (caddr_t)&isssd);
+        if (error)
+            *solid_state = FALSE;
+        else
+            *solid_state = isssd;
+    }
 
     // generate the block list
 
