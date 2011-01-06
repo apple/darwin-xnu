@@ -156,6 +156,8 @@ lck_attr_t * lctx_lck_attr;
 static	void	lctxinit(void);
 #endif
 
+int cs_debug;	/* declared further down in this file */
+
 #if DEBUG
 #define __PROC_INTERNAL_DEBUG 1
 #endif
@@ -1715,7 +1717,13 @@ csops(__unused proc_t p, struct csops_args *uap, __unused int32_t *retval)
 			if ((pt->p_csflags & CS_VALID) == CS_VALID) {	/* is currently valid */
 				pt->p_csflags &= ~CS_VALID;	/* set invalid */
 				if ((pt->p_csflags & CS_KILL) == CS_KILL) {
+					pt->p_csflags |= CS_KILLED;
 					proc_unlock(pt);
+					if (cs_debug) {
+						printf("CODE SIGNING: marked invalid by pid %d: "
+			       			"p=%d[%s] honoring CS_KILL, final status 0x%x\n",
+			       			proc_selfpid(), pt->p_pid, pt->p_comm, pt->p_csflags);
+					}
 					psignal(pt, SIGKILL);
 				} else
 					proc_unlock(pt);
@@ -2623,11 +2631,12 @@ cs_invalid_page(
 
 	/* CS_KILL triggers us to send a kill signal. Nothing else. */
 	if (p->p_csflags & CS_KILL) {
+		p->p_csflags |= CS_KILLED;
 		proc_unlock(p);
 		if (cs_debug) {
 			printf("CODE SIGNING: cs_invalid_page(0x%llx): "
-			       "p=%d[%s] honoring CS_KILL\n",
-			       vaddr, p->p_pid, p->p_comm);
+			       "p=%d[%s] honoring CS_KILL, final status 0x%x\n",
+			       vaddr, p->p_pid, p->p_comm, p->p_csflags);
 		}
 		cs_procs_killed++;
 		psignal(p, SIGKILL);

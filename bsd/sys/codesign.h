@@ -37,6 +37,7 @@
 #define	CS_KILL			0x0200	/* kill process if it becomes invalid */
 #define CS_EXEC_SET_HARD	0x1000	/* set CS_HARD on any exec'ed process */
 #define CS_EXEC_SET_KILL	0x2000	/* set CS_KILL on any exec'ed process */
+#define CS_KILLED		0x10000	/* was killed by kernel for invalidity */
 
 /* csops  operations */
 #define	CS_OPS_STATUS		0	/* return status */

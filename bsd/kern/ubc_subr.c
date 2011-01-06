@@ -2470,7 +2470,7 @@ ubc_cs_blob_add(
 		cs_blob_size_max = (UInt32) blob->csb_mem_size;
 	}
 
-	if (cs_debug) {
+	if (cs_debug > 1) {
 		proc_t p;
 
 		p = current_proc();

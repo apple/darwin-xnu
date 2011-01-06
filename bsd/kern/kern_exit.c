@@ -117,6 +117,8 @@
 #include <kern/thread_call.h>
 #include <kern/sched_prim.h>
 #include <kern/assert.h>
+#include <sys/codesign.h>
+
 #if CONFIG_DTRACE
 /* Do not include dtrace.h, it redefines kmem_[alloc/free] */
 extern void (*dtrace_fasttrap_exit_ptr)(proc_t);
@@ -300,7 +302,7 @@ proc_prepareexit(proc_t p, int rv)
 	ut = get_bsdthread_info(self);
 
  	/* If a core should be generated, notify crash reporter */
-	if (hassigprop(WTERMSIG(rv), SA_CORE)) {
+	if (hassigprop(WTERMSIG(rv), SA_CORE) || ((p->p_csflags & CS_KILLED) != 0)) {
 		/* 
 		 * Workaround for processes checking up on PT_DENY_ATTACH:
 		 * should be backed out post-Leopard (details in 5431025).
