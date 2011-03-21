@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1096,12 +1096,18 @@ udp_output(inp, m, addr, control, p)
 	struct ip_moptions *mopts;
 	struct route ro;
 	struct ip_out_args ipoa;
+#if PKT_PRIORITY
+	mbuf_traffic_class_t mtc = MBUF_TC_NONE;
+#endif /* PKT_PRIORITY */
 
 	KERNEL_DEBUG(DBG_FNC_UDP_OUTPUT | DBG_FUNC_START, 0,0,0,0,0);
 
-	if (control)
-		m_freem(control);		/* XXX */
-
+	if (control != NULL) {
+#if PKT_PRIORITY
+		mtc = mbuf_traffic_class_from_control(control);
+#endif /* PKT_PRIORITY */
+		m_freem(control);
+	}
 	KERNEL_DEBUG(DBG_LAYER_OUT_BEG, inp->inp_fport, inp->inp_lport,
 		     inp->inp_laddr.s_addr, inp->inp_faddr.s_addr,
 		     (htons((u_short)len + sizeof (struct udphdr))));
@@ -1255,8 +1261,7 @@ udp_output(inp, m, addr, control, p)
 	inp_route_copyout(inp, &ro);
 
 #if PKT_PRIORITY
-	if (soisbackground(so))
-		m_prio_background(m);
+	set_traffic_class(m, so, mtc);
 #endif /* PKT_PRIORITY */
 
 	socket_unlock(so, 0);

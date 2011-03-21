@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -249,7 +249,7 @@ int	rip_ctloutput(struct socket *, struct sockopt *);
 void	rip_ctlinput(int, struct sockaddr *, void *);
 void	rip_init(void) __attribute__((section("__TEXT, initcode")));
 void	rip_input(struct mbuf *, int);
-int	rip_output(struct mbuf *, struct socket *, u_int32_t);
+int	rip_output(struct mbuf *, struct socket *, u_int32_t, struct mbuf *);
 int	rip_unlock(struct socket *, int, void *);
 void	ipip_input(struct mbuf *, int);
 void	rsvp_input(struct mbuf *, int);

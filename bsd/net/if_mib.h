@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -71,6 +71,12 @@ struct ifmibdata {
 	struct if_data64	ifmd_data; /* generic information and statistics */
 };
 
+#ifdef PRIVATE
+struct ifmibdata_supplemental {
+	struct if_traffic_class	ifmd_traffic_class;
+};
+#endif /* PRIVATE */
+
 /*
  * sysctl MIB tags at the net.link.generic level
  */
@@ -85,6 +91,9 @@ struct ifmibdata {
 #define	IFDATA_LINKSPECIFIC	2	/* specific to the type of interface */
 #define	IFDATA_ADDRS		3	/* addresses assigned to interface */
 #define	IFDATA_MULTIADDRS	4	/* multicast addresses assigned to interface */
+#ifdef PRIVATE
+#define IFDATA_SUPPLEMENTAL	5	/* supplemental link specific stats */
+#endif /* PRIVATE */
 
 /*
  * MIB tags at the net.link.generic.system level

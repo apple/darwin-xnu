@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -239,7 +239,19 @@ hfs_to_utf8(ExtendedVCB *vcb, const Str31 hfs_str, ByteCount maxDstLen, ByteCoun
 	UniChar uniStr[MAX_HFS_UNICODE_CHARS];
 	ItemCount uniCount;
 	size_t utf8len;
+	u_int8_t pascal_length = 0;
 	hfs_to_unicode_func_t hfs_get_unicode = VCBTOHFS(vcb)->hfs_get_unicode;
+
+	/* 
+	 * Validate the length of the Pascal-style string before passing it
+	 * down to the decoding engine.
+	 */
+	pascal_length = *((const u_int8_t*)(hfs_str));
+	if (pascal_length > 31) {
+		/* invalid string; longer than 31 bytes */
+		error = EINVAL;
+		return error;
+	}	
 
 	error = hfs_get_unicode(hfs_str, uniStr, MAX_HFS_UNICODE_CHARS, &uniCount);
 	
@@ -269,6 +281,18 @@ mac_roman_to_utf8(const Str31 hfs_str, ByteCount maxDstLen, ByteCount *actualDst
 	UniChar uniStr[MAX_HFS_UNICODE_CHARS];
 	ItemCount uniCount;
 	size_t utf8len;
+	u_int8_t pascal_length = 0;
+
+	/* 
+	 * Validate the length of the Pascal-style string before passing it
+	 * down to the decoding engine.
+	 */
+	pascal_length = *((const u_int8_t*)(hfs_str));
+	if (pascal_length > 31) {
+		/* invalid string; longer than 31 bytes */
+		error = EINVAL;
+		return error;
+	}	
 
 	error = mac_roman_to_unicode(hfs_str, uniStr, MAX_HFS_UNICODE_CHARS, &uniCount);
 	

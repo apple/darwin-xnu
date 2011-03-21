@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -205,6 +205,11 @@ struct iovec {
 #endif
 #ifdef PRIVATE
 #define	SO_EXECPATH	0x1085 		/* Application Firewall Socket option */
+#define SO_TRAFFIC_CLASS	0x1086		/* Traffic class */
+#define  SO_TC_BE	0		/* Best effort, normal */
+#define  SO_TC_BK	1		/* Background, low priority or bulk traffic */
+#define  SO_TC_VI	2		/* Interactive video, constant bit rate, low latency */
+#define  SO_TC_VO	3		/* Interactive voice, constant bit rate, lowest latency */
 #endif
 #define	SO_LABEL	0x1010		/* socket's MAC label */
 #define	SO_PEERLABEL	0x1011		/* socket's peer MAC label */

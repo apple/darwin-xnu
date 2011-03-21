@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -325,6 +325,9 @@ rip6_output(
 	struct ifnet *oifp = NULL;
 	int type = 0, code = 0;		/* for ICMPv6 output statistics only */
 	int priv = 0;
+#if PKT_PRIORITY
+	mbuf_traffic_class_t mtc = MBUF_TC_NONE;
+#endif /* PKT_PRIORITY */
 
 	in6p = sotoin6pcb(so);
 
@@ -333,6 +336,10 @@ rip6_output(
 		priv = 1;
 	dst = &dstsock->sin6_addr;
 	if (control) {
+#if PKT_PRIORITY
+		mtc = mbuf_traffic_class_from_control(control);
+#endif /* PKT_PRIORITY */
+
 		if ((error = ip6_setpktoptions(control, &opt, priv, 0)) != 0)
 			goto bad;
 		optp = &opt;
@@ -488,8 +495,7 @@ rip6_output(
 	}
 
 #if PKT_PRIORITY
-	if (soisbackground(so))
-		m_prio_background(m);
+	set_traffic_class(m, so, mtc);
 #endif /* PKT_PRIORITY */
 
 	error = ip6_output(m, optp, &in6p->in6p_route, 0,

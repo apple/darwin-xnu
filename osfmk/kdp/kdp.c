@@ -1163,7 +1163,7 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 				}
 				/* Populate the thread snapshot header */
 				tsnap = (thread_snapshot_t) tracepos;
-				tsnap->thread_id = (uint64_t) (uintptr_t)thread;
+				tsnap->thread_id = thread_tid(thread);
 				tsnap->state = thread->state;
 				tsnap->wait_event = thread->wait_event;
 				tsnap->continuation = (uint64_t) (uintptr_t) thread->continuation;

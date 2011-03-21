@@ -1947,6 +1947,12 @@ fail_change_next_allocation:
 			user_bootstrap.fbt_length = bootstrapp->fbt_length;
 			user_bootstrap.fbt_buffer = CAST_USER_ADDR_T(bootstrapp->fbt_buffer);
 		}
+
+		if ((user_bootstrapp->fbt_offset < 0) || (user_bootstrapp->fbt_offset > 1024) ||
+				(user_bootstrapp->fbt_length > 1024)) {
+			return EINVAL;
+		}
+
 		if (user_bootstrapp->fbt_offset + user_bootstrapp->fbt_length > 1024) 
 			return EINVAL;
 	    

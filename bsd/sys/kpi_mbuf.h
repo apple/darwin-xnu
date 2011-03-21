@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1354,6 +1354,43 @@ typedef enum {
 	@result The priority value of the packet.
  */
 extern mbuf_priority_t mbuf_get_priority(mbuf_t mbuf);
+
+/*
+	@enum mbuf_traffic_class_t
+	@abstract Traffic class of a packet
+	@discussion Property that represent the category of traffic of a packet. 
+		This information may be used by the driver and at the link level.
+	@constant MBUF_TC_BE Best effort, normal class.
+	@constant MBUF_TC_BK Background, low priority or bulk traffic.
+	@constant MBUF_TC_VI Interactive video, constant bit rate, low latency.
+	@constant MBUF_TC_VO Interactive voice, constant bit rate, lowest latency.
+*/
+typedef enum {
+#ifdef XNU_KERNEL_PRIVATE
+	MBUF_TC_NONE	= -1,
+#endif
+	MBUF_TC_BE 		= 0,
+	MBUF_TC_BK		= 1,
+	MBUF_TC_VI		= 2,
+	MBUF_TC_VO		= 3
+} mbuf_traffic_class_t;
+
+/*
+	@function mbuf_get_traffic_class
+	@discussion Get the traffic class of an mbuf packet
+	@param mbuf The mbuf to get the traffic class of.
+	@result The traffic class
+*/
+extern mbuf_traffic_class_t mbuf_get_traffic_class(mbuf_t mbuf);
+
+/*
+	@function mbuf_set_traffic_class
+	@discussion Set the traffic class of an mbuf packet.
+	@param mbuf The mbuf to set the traffic class on.
+	@ac The traffic class
+	@result 0 on success, EINVAL if bad paramater is passed
+*/
+extern errno_t mbuf_set_traffic_class(mbuf_t mbuf, mbuf_traffic_class_t tc);
 #endif /* KERNEL_PRIVATE */
 
 /* IF_QUEUE interaction */

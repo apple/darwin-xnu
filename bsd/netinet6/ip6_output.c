@@ -234,6 +234,7 @@ ip6_output(
 
 	ip6 = mtod(m, struct ip6_hdr *);
 	inject_filter_ref = ipf_get_inject_filter(m);
+	finaldst = ip6->ip6_dst;
 
 #define MAKE_EXTHDR(hp, mp)						\
     do {								\

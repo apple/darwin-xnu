@@ -43,6 +43,7 @@
 #include <kern/thread.h>
 #include <kern/task.h>
 #include <kern/debug.h>
+#include <kern/assert.h>
 #include <vm/vm_kern.h>
 #include <sys/lock.h>
 
@@ -1659,7 +1660,7 @@ unsigned char *getProcName(struct proc *proc) {
 #define TRAP_DEBUGGER __asm__ volatile("tw 4,r3,r3");
 #endif
 
-#define SANE_TRACEBUF_SIZE 2*1024*1024
+#define SANE_TRACEBUF_SIZE (8 * 1024 * 1024)
 
 /* Initialize the mutex governing access to the stack snapshot subsystem */
 __private_extern__ void
@@ -1713,6 +1714,7 @@ stack_snapshot2(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_
 {
 	int error = 0;
 	unsigned bytesTraced = 0;
+	boolean_t istate;
 
 	*retval = -1;
 /* Serialize tracing */	
@@ -1723,24 +1725,28 @@ stack_snapshot2(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_
 		goto error_exit;
 	}
 
-	MALLOC(stackshot_snapbuf, void *, tracebuf_size, M_TEMP, M_WAITOK);
-
-	if (stackshot_snapbuf == NULL) {
+	assert(stackshot_snapbuf == NULL);
+	if (kmem_alloc_kobject(kernel_map, (vm_offset_t *)&stackshot_snapbuf, tracebuf_size) != KERN_SUCCESS) {
 		error = ENOMEM;
 		goto error_exit;
 	}
+
+	if (panic_active()) {
+		error = ENOMEM;
+		goto error_exit;
+	}
+
+	istate = ml_set_interrupts_enabled(FALSE);
 /* Preload trace parameters*/	
 	kdp_snapshot_preflight(pid, stackshot_snapbuf, tracebuf_size, flags, dispatch_offset);
 
 /* Trap to the debugger to obtain a coherent stack snapshot; this populates
  * the trace buffer
  */
-	if (panic_active()) {
-		error = ENOMEM;
-		goto error_exit;
-	}
 
 	TRAP_DEBUGGER;
+
+	ml_set_interrupts_enabled(istate);
 
 	bytesTraced = kdp_stack_snapshot_bytes_traced();
 			
@@ -1765,7 +1771,7 @@ stack_snapshot2(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_
 
 error_exit:
 	if (stackshot_snapbuf != NULL)
-		FREE(stackshot_snapbuf, M_TEMP);
+		kmem_free(kernel_map, (vm_offset_t) stackshot_snapbuf, tracebuf_size);
 	stackshot_snapbuf = NULL;
 	STACKSHOT_SUBSYS_UNLOCK();
 	return error;

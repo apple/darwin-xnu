@@ -2039,7 +2039,18 @@ vclean(vnode_t vp, int flags)
 		if (vnode_isshadow(vp)) {
 			vnode_relenamedstream(pvp, vp, ctx);
 		}
-		
+
+		/*
+		 * Because vclean calls VNOP_INACTIVE prior to calling vnode_relenamedstream, we may not have 
+		 * torn down and/or deleted the shadow file yet.  On HFS, if the shadow file is sufficiently large 
+		 * and occupies a large number of extents, the deletion will be deferred until VNOP_INACTIVE 
+		 * and the file treated like an open-unlinked.  To rectify this, call VNOP_INACTIVE again
+		 * explicitly to force its removal.
+		 */
+		if (vnode_isshadow(vp)) {
+			VNOP_INACTIVE(vp, ctx);
+		}
+
 		/* 
 		 * No more streams associated with the parent.  We
 		 * have a ref on it, so its identity is stable.

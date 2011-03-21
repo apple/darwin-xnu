@@ -822,7 +822,9 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 	thread->machine.specFlags |= CopyIOActive;
 #endif /* CONFIG_DTRACE */
 
-	if ((nbytes && (user_addr + nbytes <= user_addr)) || ((user_addr + nbytes) > vm_map_max(thread->map))) {
+	if ((nbytes && (user_addr + nbytes <= user_addr)) ||
+	    (user_addr          < vm_map_min(thread->map)) ||
+	    (user_addr + nbytes > vm_map_max(thread->map))) {
 		error = EFAULT;
 		goto done;
 	}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -314,10 +314,17 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 	struct ip *const ip = mtod(m, struct ip *);
 	struct sockaddr_in *sin = (struct sockaddr_in *)addr;
 	int error = 0;
+#if PKT_PRIORITY
+	mbuf_traffic_class_t mtc = MBUF_TC_NONE;
+#endif /* PKT_PRIORITY */
 
-	if (control)
+	if (control != NULL) {
+#if PKT_PRIORITY
+		mtc = mbuf_traffic_class_from_control(control);
+#endif /* PKT_PRIORITY */
+
 		m_freem(control);		/* XXX */
-
+	}
 	/* Loopback avoidance and state recovery */
 	if (sin) {
 		struct m_tag *mtag;
@@ -376,8 +383,7 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 		inp_route_copyout(inp, &ro);
 
 #if PKT_PRIORITY
-		if (soisbackground(so))
-			m_prio_background(m);
+		set_traffic_class(m, so, mtc);
 #endif /* PKT_PRIORITY */
 
 		socket_unlock(so, 0);

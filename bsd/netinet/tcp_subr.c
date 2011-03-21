@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -640,8 +640,8 @@ tcp_respond(
 	}
 #endif
 #if PKT_PRIORITY
-	if (tp != NULL && soisbackground(tp->t_inpcb->inp_socket))
-		m_prio_background(m);
+	if (tp != NULL) 
+		set_traffic_class(m, tp->t_inpcb->inp_socket, MBUF_TC_NONE);
 #endif /* PKT_PRIORITY */
 #if INET6
 	if (isipv6) {

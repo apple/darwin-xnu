@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -183,10 +183,17 @@ udp6_output(in6p, m, addr6, control, p)
 	int flags;
 	struct sockaddr_in6 tmp;
 	struct	in6_addr storage;
+#if PKT_PRIORITY
+	mbuf_traffic_class_t mtc = MBUF_TC_NONE;
+#endif /* PKT_PRIORITY */
 
 	priv = (proc_suser(p) == 0);
 
 	if (control) {
+#if PKT_PRIORITY
+		mtc = mbuf_traffic_class_from_control(control);
+#endif /* PKT_PRIORITY */
+
 		if ((error = ip6_setpktoptions(control, &opt, priv, 0)) != 0)
 			goto release;
 		in6p->in6p_outputopts = &opt;
@@ -341,9 +348,9 @@ udp6_output(in6p, m, addr6, control, p)
 		}
 #endif /*IPSEC*/
 		m->m_pkthdr.socket_id = get_socket_id(in6p->in6p_socket);
+		
 #if PKT_PRIORITY
-		if (soisbackground(in6p->in6p_socket))
-			m_prio_background(m);
+		set_traffic_class(m, in6p->in6p_socket, mtc);
 #endif /* PKT_PRIORITY */
 		error = ip6_output(m, in6p->in6p_outputopts, &in6p->in6p_route,
 		    flags, in6p->in6p_moptions, NULL, 0);

@@ -226,6 +226,21 @@ struct if_data64 {
 #pragma pack()
 
 #ifdef PRIVATE
+struct if_traffic_class {
+	u_int64_t		ifi_ibkpackets;	/* TC_BK packets received on interface */
+	u_int64_t		ifi_ibkbytes;	/* TC_BK bytes received on interface */
+	u_int64_t		ifi_obkpackets;	/* TC_BK packet sent on interface */
+	u_int64_t		ifi_obkbytes;	/* TC_BK bytes sent on interface */
+	u_int64_t		ifi_ivipackets;	/* TC_VI packets received on interface */
+	u_int64_t		ifi_ivibytes;	/* TC_VI bytes received on interface */
+	u_int64_t		ifi_ovipackets;	/* TC_VI packets sent on interface */
+	u_int64_t		ifi_ovibytes;	/* TC_VI bytes sent on interface */
+	u_int64_t		ifi_ivopackets;	/* TC_VO packets received on interface */
+	u_int64_t		ifi_ivobytes;	/* TC_VO bytes received on interface */
+	u_int64_t		ifi_ovopackets;	/* TC_VO packets sent on interface */
+	u_int64_t		ifi_ovobytes;	/* TC_VO bytes sent on interface */
+};
+
 /*
  * Internal storage of if_data. This is bound to change. Various places in the
  * stack will translate this data structure in to the externally visible
@@ -256,10 +271,6 @@ struct if_data_internal {
 	u_int64_t	ifi_omcasts;	/* packets sent via multicast */
 	u_int64_t	ifi_iqdrops;	/* dropped on input, this interface */
 	u_int64_t	ifi_noproto;	/* destined for unsupported protocol */
-#if PKT_PRIORITY
-	u_int32_t	ifi_obgpackets; /* bg packets sent on interface */
-	u_int32_t	ifi_obgbytes;	/* total number of bg octets sent */
-#endif /* PKT_PRIORITY */
 	u_int32_t	ifi_recvtiming;	/* usec spent receiving when timing */
 	u_int32_t	ifi_xmittiming;	/* usec spent xmitting when timing */
 #define IF_LASTCHANGEUPTIME	1	/* lastchange: 1-uptime 0-calendar time */
@@ -289,10 +300,6 @@ struct if_data_internal {
 #define	if_omcasts	if_data.ifi_omcasts
 #define	if_iqdrops	if_data.ifi_iqdrops
 #define	if_noproto	if_data.ifi_noproto
-#if PKT_PRIORITY
-#define	if_obgpackets	if_data.ifi_obgpackets
-#define	if_obgbytes	if_data.ifi_obgbytes
-#endif /* PKT_PRIORITY */
 #define	if_lastchange	if_data.ifi_lastchange
 #define if_recvquota	if_data.ifi_recvquota
 #define	if_xmitquota	if_data.ifi_xmitquota
@@ -501,6 +508,9 @@ struct ifnet {
 	u_int32_t	if_idle_flags;	/* idle flags */
 	u_int32_t	if_route_refcnt; /* idle: route ref count */
 #endif /* IFNET_ROUTE_REFCNT */
+#if PKT_PRIORITY
+	struct if_traffic_class if_tc __attribute__((aligned(8)));
+#endif /* PKT_PRIORITY */
 };
 
 #ifndef __APPLE__

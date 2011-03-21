@@ -1204,14 +1204,12 @@ user_trap(
 	kprintf("user_trap(0x%08x) type=%d vaddr=0x%016llx\n",
 		saved_state, type, vaddr);
 #endif
-	myast = ast_pending();
 	perfCallback fn = perfASTHook;
 	if (fn) {
+		myast = ast_pending();
 		if (*myast & AST_CHUD_ALL) {
 			fn(type, saved_state, 0, 0);
 		}
-	} else {
-		*myast &= ~AST_CHUD_ALL;
 	}
 
 	/* Is there a hook? */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -65,6 +65,7 @@
 
 #include <net/if.h>
 #include <net/if_mib.h>
+#include <net/if_var.h>
 
 #if NETMIBS
 
@@ -151,11 +152,6 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 			ifmd.ifmd_snd_len = ifp->if_snd.ifq_len;
 			ifmd.ifmd_snd_maxlen = ifp->if_snd.ifq_maxlen;
 			ifmd.ifmd_snd_drops = ifp->if_snd.ifq_drops;
-#if PKT_PRIORITY
-			/* stuff these into unused fields for now */
-			ifmd.ifmd_filler[0] = ifp->if_obgpackets;
-			ifmd.ifmd_filler[1] = ifp->if_obgbytes;
-#endif /* PKT_PRIORITY */
 		}
 		error = SYSCTL_OUT(req, &ifmd, sizeof ifmd);
 		if (error || !req->newptr)
@@ -194,6 +190,12 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 			break;
 #endif /* IF_MIB_WR */
 		break;
+
+#if PKT_PRIORITY
+	case IFDATA_SUPPLEMENTAL:
+		error = SYSCTL_OUT(req, &ifp->if_tc, sizeof(struct if_traffic_class));
+		break;
+#endif /* PKT_PRIORITY */
 	}
 	
 	return error;

@@ -56,6 +56,8 @@ _m_split
 _m_trailingspace:_mbuf_trailingspace
 _mac_proc_set_enforce
 _mbuf_get_priority
+_mbuf_get_traffic_class
+_mbuf_set_traffic_class
 _mcl_to_paddr
 _mountroot_post_hook
 _net_add_domain

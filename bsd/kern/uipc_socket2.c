@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -310,6 +310,9 @@ sonewconn_internal(struct socket *head, int connstatus)
 	so->so_traffic_mgt_flags = head->so_traffic_mgt_flags &
 	    (TRAFFIC_MGT_SO_BACKGROUND | TRAFFIC_MGT_SO_BG_REGULATE);
 	so->so_background_thread = head->so_background_thread;
+#if PKT_PRIORITY
+	so->so_traffic_class = head->so_traffic_class;
+#endif /* PKT_PRIORITY */
 
 	if (soreserve(so, head->so_snd.sb_hiwat, head->so_rcv.sb_hiwat)) {
 		sflt_termsock(so);
@@ -1853,6 +1856,67 @@ int
 soisbackground(struct socket *so)
 {
 	return (so->so_traffic_mgt_flags & TRAFFIC_MGT_SO_BACKGROUND);
+}
+
+#if PKT_PRIORITY
+#define _MIN_NXT_CMSGHDR_PTR(cmsg)                              \
+	((char *)(cmsg) +                                       \
+	    __DARWIN_ALIGN32((__uint32_t)(cmsg)->cmsg_len) +    \
+	    __DARWIN_ALIGN32(sizeof(struct cmsghdr)))
+
+#define M_FIRST_CMSGHDR(m)                                                                      \
+        ((char *)(m) != (char *)0L && (size_t)(m)->m_len >= sizeof(struct cmsghdr) &&           \
+	  (socklen_t)(m)->m_len >= __DARWIN_ALIGN32(((struct cmsghdr *)(m)->m_data)->cmsg_len) ?\
+         (struct cmsghdr *)(m)->m_data :                                                        \
+         (struct cmsghdr *)0L)
+
+#define M_NXT_CMSGHDR(m, cmsg)                                                  \
+        ((char *)(cmsg) == (char *)0L ? M_FIRST_CMSGHDR(m) :                    \
+            _MIN_NXT_CMSGHDR_PTR(cmsg) > ((char *)(m)->m_data) + (m)->m_len ||  \
+            _MIN_NXT_CMSGHDR_PTR(cmsg) < (char *)(m)->m_data ?                  \
+                (struct cmsghdr *)0L /* NULL */ :                               \
+                (struct cmsghdr *)((unsigned char *)(cmsg) +                    \
+                            __DARWIN_ALIGN32((__uint32_t)(cmsg)->cmsg_len)))
+#endif /* PKT_PRIORITY */
+
+__private_extern__ int
+mbuf_traffic_class_from_control(struct mbuf *control)
+{
+#if !PKT_PRIORITY
+#pragma unused(control)
+	return MBUF_TC_NONE;
+#else /* PKT_PRIORITY */
+	struct cmsghdr *cm;
+	
+	for (cm = M_FIRST_CMSGHDR(control); cm; cm = M_NXT_CMSGHDR(control, cm)) {
+		int tc;	
+
+		if (cm->cmsg_len < sizeof(struct cmsghdr))
+			break;
+	
+		if (cm->cmsg_level != SOL_SOCKET || cm->cmsg_type != SO_TRAFFIC_CLASS)
+			continue;
+		if (cm->cmsg_len != CMSG_LEN(sizeof(int)))
+			continue;
+
+		tc = *(int *)CMSG_DATA(cm);
+
+		switch (tc) {
+			case SO_TC_BE:
+				return MBUF_TC_BE;
+			case SO_TC_BK:
+				return MBUF_TC_BK;
+			case SO_TC_VI:
+				return MBUF_TC_VI;
+			case SO_TC_VO:
+				return MBUF_TC_VO;
+			default:
+				break;
+		}
+	}
+	
+	return MBUF_TC_NONE;
+#endif /* PKT_PRIORITY */
 }
 
 /*

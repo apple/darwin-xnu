@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1089,5 +1089,52 @@ mbuf_get_priority(struct mbuf *m)
 		prio = MBUF_PRIORITY_BACKGROUND;
 
 	return (prio);
+#endif /* PKT_PRIORITY */
+}
+
+mbuf_traffic_class_t 
+mbuf_get_traffic_class(mbuf_t m)
+{
+#if !PKT_PRIORITY
+#pragma unused(m)
+	return (MBUF_TC_BE);
+#else /* PKT_PRIORITY */
+	mbuf_priority_t prio = MBUF_TC_BE;
+
+	if (m == NULL || !(m->m_flags & M_PKTHDR))
+		return (prio);
+
+	if (m->m_pkthdr.prio <= MBUF_TC_VO)
+		prio = m->m_pkthdr.prio;
+
+	return (prio);
+#endif /* PKT_PRIORITY */
+}
+
+errno_t 
+mbuf_set_traffic_class(mbuf_t m, mbuf_traffic_class_t tc)
+{
+#if !PKT_PRIORITY
+#pragma unused(m)
+#pragma unused(tc)
+	return 0;
+#else /* PKT_PRIORITY */
+	errno_t error = 0;
+	
+	if (m == NULL || !(m->m_flags & M_PKTHDR))
+		return EINVAL;
+
+	switch (tc) {
+		case MBUF_TC_BE:
+		case MBUF_TC_BK:
+		case MBUF_TC_VI:
+		case MBUF_TC_VO:
+			m->m_pkthdr.prio = tc;
+			break;
+		default:
+			error = EINVAL;
+			break;
+	}
+	return error;
 #endif /* PKT_PRIORITY */
 }

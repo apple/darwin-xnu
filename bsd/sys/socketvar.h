@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -252,6 +252,9 @@ struct socket {
 	struct	label *so_label;	/* MAC label for socket */
 	struct	label *so_peerlabel;	/* cached MAC label for socket peer */
 	thread_t	so_background_thread;	/* thread that marked this socket background */
+#if PKT_PRIORITY
+	int		so_traffic_class;
+#endif /* PKT_PRIORITY */
 };
 #endif /* KERNEL_PRIVATE */
 
@@ -528,6 +531,8 @@ extern int socket_unlock(struct socket *so, int refcount);
 extern void sofreelastref(struct socket *, int);
 extern int sogetaddr_locked(struct socket *, struct sockaddr **, int);
 extern const char *solockhistory_nr(struct socket *);
+extern void set_traffic_class(struct mbuf *, struct socket *, int);
+extern int mbuf_traffic_class_from_control(struct mbuf *);
 
 /*
  * XXX; prepare mbuf for (__FreeBSD__ < 3) routines.

@@ -3651,6 +3651,9 @@ check_busy:
 			}
 			dst_page->precious = (cntrl_flags & UPL_PRECIOUS) ? TRUE : FALSE;
 		}
+		if (dst_page->busy)
+			upl->flags |= UPL_HAS_BUSY;
+
 		if (dst_page->phys_page > upl->highest_page)
 		        upl->highest_page = dst_page->phys_page;
 		if (user_page_list) {
@@ -4131,18 +4134,19 @@ process_upl_to_enter:
 			goto process_upl_to_enter;
 		vector_upl_get_iostate(vector_upl, upl, &subupl_offset, &subupl_size);
 		*dst_addr = (vm_map_offset_t)(vector_upl_dst_addr + (vm_map_offset_t)subupl_offset);
+	} else {
+		/*
+		 * check to see if already mapped
+		 */
+		if (UPL_PAGE_LIST_MAPPED & upl->flags) {
+			upl_unlock(upl);
+			return KERN_FAILURE;
+		}
 	}
+	if ((!(upl->flags & UPL_SHADOWED)) &&
+	    ((upl->flags & UPL_HAS_BUSY) ||
+	     !((upl->flags & (UPL_DEVICE_MEMORY | UPL_IO_WIRE)) || (upl->map_object->phys_contiguous)))) {
 
-	/*
-	 * check to see if already mapped
-	 */
-	if (UPL_PAGE_LIST_MAPPED & upl->flags) {
-		upl_unlock(upl);
-		return KERN_FAILURE;
-	}
-
-	if ((!(upl->flags & UPL_SHADOWED)) && !((upl->flags & (UPL_DEVICE_MEMORY | UPL_IO_WIRE)) ||
-					       (upl->map_object->phys_contiguous))) {
 		vm_object_t 		object;
 		vm_page_t		alias_page;
 		vm_object_offset_t	new_offset;
@@ -4238,10 +4242,10 @@ process_upl_to_enter:
 		}
 		vm_object_unlock(upl->map_object);
 	}
-	if ((upl->flags & (UPL_DEVICE_MEMORY | UPL_IO_WIRE)) || upl->map_object->phys_contiguous)
-	        offset = upl->offset - upl->map_object->paging_offset;
-	else
+	if (upl->flags & UPL_SHADOWED)
 	        offset = 0;
+	else
+	        offset = upl->offset - upl->map_object->paging_offset;
 	size = upl->size;
 	
 	vm_object_reference(upl->map_object);
@@ -4254,6 +4258,11 @@ process_upl_to_enter:
 		kr = vm_map_enter(map, dst_addr, (vm_map_size_t)size, (vm_map_offset_t) 0,
 				  VM_FLAGS_ANYWHERE, upl->map_object, offset, FALSE,
 				  VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
+
+		if (kr != KERN_SUCCESS) {
+			upl_unlock(upl);
+			return(kr);
+		}
 	}
 	else {
 		kr = vm_map_enter(map, dst_addr, (vm_map_size_t)size, (vm_map_offset_t) 0,
@@ -4261,11 +4270,6 @@ process_upl_to_enter:
 				  VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
 		if(kr)
 			panic("vm_map_enter failed for a Vector UPL\n");
-	}
-
-	if (kr != KERN_SUCCESS) {
-		upl_unlock(upl);
-		return(kr);
 	}
 	vm_object_lock(upl->map_object);
 
@@ -4298,10 +4302,10 @@ process_upl_to_enter:
 	upl->kaddr = (vm_offset_t) *dst_addr;
 	assert(upl->kaddr == *dst_addr);
 	
-	if(!isVectorUPL)
-		upl_unlock(upl);
-	else
+	if(isVectorUPL)
 		goto process_upl_to_enter;
+
+	upl_unlock(upl);
 
 	return KERN_SUCCESS;
 }
@@ -4668,8 +4672,6 @@ process_upl_to_commit:
 		}
 		if (upl->flags & UPL_IO_WIRE) {
 
-			dwp->dw_mask |= DW_vm_page_unwire;
-
 			if (page_list)
 				page_list[entry].phys_addr = 0;
 
@@ -4710,9 +4712,13 @@ process_upl_to_commit:
 			if (m->absent) {
 				if (flags & UPL_COMMIT_FREE_ABSENT)
 					dwp->dw_mask |= DW_vm_page_free;
-				else
+				else {
 					m->absent = FALSE;
-			}
+					dwp->dw_mask |= (DW_clear_busy | DW_PAGE_WAKEUP);
+				}
+			} else
+				dwp->dw_mask |= DW_vm_page_unwire;
+
 			goto commit_next_page;
 		}
 		/*
@@ -5708,7 +5714,22 @@ vm_object_iopl_request(
 
 			case VM_FAULT_SUCCESS:
 
-				PAGE_WAKEUP_DONE(dst_page);
+				if ( !dst_page->absent) {
+					PAGE_WAKEUP_DONE(dst_page);
+				} else {
+					/*
+					 * we only get back an absent page if we
+					 * requested that it not be zero-filled
+					 * because we are about to fill it via I/O
+					 * 
+					 * absent pages should be left BUSY
+					 * to prevent them from being faulted
+					 * into an address space before we've
+					 * had a chance to complete the I/O on
+					 * them since they may contain info that
+					 * shouldn't be seen by the faulting task
+					 */
+				}
 				/*
 				 *	Release paging references and
 				 *	top-level placeholder page, if any.
@@ -5823,10 +5844,13 @@ vm_object_iopl_request(
 			        refmod = pmap_disconnect(dst_page->phys_page);
 			else
 			        refmod = 0;
-			vm_page_copy(dst_page, low_page);
+
+			if ( !dst_page->absent)
+				vm_page_copy(dst_page, low_page);
 		  
 			low_page->reference = dst_page->reference;
 			low_page->dirty     = dst_page->dirty;
+			low_page->absent    = dst_page->absent;
 
 			if (refmod & VM_MEM_REFERENCED)
 			        low_page->reference = TRUE;
@@ -5841,9 +5865,11 @@ vm_object_iopl_request(
 			 * BUSY... we don't need a PAGE_WAKEUP_DONE
 			 * here, because we've never dropped the object lock
 			 */
-			dst_page->busy = FALSE;
+			if ( !dst_page->absent)
+				dst_page->busy = FALSE;
 		}
-		dwp->dw_mask |= DW_vm_page_wire;
+		if ( !dst_page->busy)
+			dwp->dw_mask |= DW_vm_page_wire;
 
 		if (cntrl_flags & UPL_BLOCK_ACCESS) {
 			/*
@@ -5863,6 +5889,9 @@ vm_object_iopl_request(
    		if (!(cntrl_flags & UPL_COPYOUT_FROM))
 			dst_page->dirty = TRUE;
 record_phys_addr:
+		if (dst_page->busy)
+			upl->flags |= UPL_HAS_BUSY;
+
 		pg_num = (unsigned int) ((dst_offset-offset)/PAGE_SIZE);
 		assert(pg_num == (dst_offset-offset)/PAGE_SIZE);
 		lite_list[pg_num>>5] |= 1 << (pg_num & 31);
@@ -5952,7 +5981,7 @@ return_err:
 	        dst_page = vm_page_lookup(object, offset);
 
 		if (dst_page == VM_PAGE_NULL)
-		        panic("vm_object_iopl_request: Wired pages missing. \n");
+		        panic("vm_object_iopl_request: Wired page missing. \n");
 
 		/*
 		 * if we've already processed this page in an earlier 
@@ -5974,24 +6003,23 @@ return_err:
 				 * vm_page_wire on this page
 				 */
 				need_unwire = FALSE;
+
+				dw_index++;
+				dw_count--;
 			}
-			dw_index++;
-			dw_count--;
 		}
 		vm_page_lock_queues();
 
-		if (need_unwire == TRUE) {
-			boolean_t queueit;
-
-			queueit = (dst_page->absent) ? FALSE : TRUE;
-
-			vm_page_unwire(dst_page, queueit);
-		}
-		if (dst_page->absent)
+		if (dst_page->absent) {
 			vm_page_free(dst_page);
-		else
+
+			need_unwire = FALSE;
+		} else {
+			if (need_unwire == TRUE)
+				vm_page_unwire(dst_page, TRUE);
+
 			PAGE_WAKEUP_DONE(dst_page);
-	
+		}	
 		vm_page_unlock_queues();
 
 		if (need_unwire == TRUE)

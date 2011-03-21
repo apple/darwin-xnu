@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -600,17 +600,6 @@ dlil_init(void)
 {
 	thread_t		thread = THREAD_NULL;
 
-#if PKT_PRIORITY
-	/*
-	 * The following fields must be 32-bit aligned for atomic operations.
-	 */
-	IF_DATA_REQUIRE_ALIGNED_32(ifi_obgpackets);
-	IF_DATA_REQUIRE_ALIGNED_32(ifi_obgbytes)
-
-	IFNET_IF_DATA_REQUIRE_ALIGNED_32(ifi_obgpackets);
-	IFNET_IF_DATA_REQUIRE_ALIGNED_32(ifi_obgbytes)
-#endif /* PKT_PRIORITY */
-
 	PE_parse_boot_argn("net_affinity", &net_affinity, sizeof (net_affinity));
 #if IFNET_ROUTE_REFCNT
 	PE_parse_boot_argn("net_rtref", &net_rtref, sizeof (net_rtref));
@@ -1115,6 +1104,26 @@ dlil_input_packet_list(struct ifnet * ifp_param, struct mbuf *m)
 			locked = 1;
 			dlil_read_begin();
 		}
+
+#if PKT_PRIORITY
+		switch (m->m_pkthdr.prio) {
+			case MBUF_TC_BK:
+				ifp->if_tc.ifi_ibkpackets++;
+				ifp->if_tc.ifi_ibkbytes += m->m_pkthdr.len;
+				break;
+			case MBUF_TC_VI:
+				ifp->if_tc.ifi_ivipackets++;
+				ifp->if_tc.ifi_ivibytes += m->m_pkthdr.len;
+				break;
+			case MBUF_TC_VO:
+				ifp->if_tc.ifi_ivopackets++;
+				ifp->if_tc.ifi_ivobytes += m->m_pkthdr.len;
+				break;
+			default:
+				break;
+		}
+#endif PKT_PRIORITY
+
 		/* find which protocol family this packet is for */
 		error = (*ifp->if_demux)(ifp, m, frame_header,
 					 &protocol_family);
@@ -1314,6 +1323,36 @@ static int dlil_get_socket_type(struct mbuf **mp, int family, int raw)
 	return (type);
 }
 #endif
+
+static void
+if_inc_traffic_class_out(ifnet_t ifp, mbuf_t m)
+{
+#if !PKT_PRIORITY
+#pragma unused(ifp)
+#pragma unused(m)
+	return;
+#else
+	if (!(m->m_flags & M_PKTHDR))
+		return;
+
+	switch (m->m_pkthdr.prio) {
+		case MBUF_TC_BK:
+			ifp->if_tc.ifi_obkpackets++;
+			ifp->if_tc.ifi_obkbytes += m->m_pkthdr.len;
+			break;
+		case MBUF_TC_VI:
+			ifp->if_tc.ifi_ovipackets++;
+			ifp->if_tc.ifi_ovibytes += m->m_pkthdr.len;
+			break;
+		case MBUF_TC_VO:
+			ifp->if_tc.ifi_ovopackets++;
+			ifp->if_tc.ifi_ovobytes += m->m_pkthdr.len;
+			break;
+		default:
+			break;
+	}
+#endif PKT_PRIORITY
+}
 
 #if 0
 int
@@ -1649,13 +1688,9 @@ preout_again:
 		}
 		else {
 			KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START, 0,0,0,0,0);
-#if PKT_PRIORITY
-			if (mbuf_get_priority(m) == MBUF_PRIORITY_BACKGROUND) {
-				atomic_add_32(&ifp->if_obgpackets, 1);
-				atomic_add_32(&ifp->if_obgbytes,
-				    m->m_pkthdr.len);
-			}
-#endif /* PKT_PRIORITY */
+			
+			if_inc_traffic_class_out(ifp, m);
+
 			retval = ifp->if_output(ifp, m);
 			if (retval && dlil_verbose) {
 				printf("dlil_output: output error on %s%d retval = %d\n", 
@@ -1675,13 +1710,9 @@ next:
 
 	if (send_head) {
 		KERNEL_DEBUG(DBG_FNC_DLIL_IFOUT | DBG_FUNC_START, 0,0,0,0,0);
-#if PKT_PRIORITY
-		if (mbuf_get_priority(send_head) == MBUF_PRIORITY_BACKGROUND) {
-			atomic_add_32(&ifp->if_obgpackets, 1);
-			atomic_add_32(&ifp->if_obgbytes,
-			    send_head->m_pkthdr.len);
-		}
-#endif /* PKT_PRIORITY */
+		
+		if_inc_traffic_class_out(ifp, send_head);
+
 		retval = ifp->if_output(ifp, send_head);
 		if (retval && dlil_verbose) {
 			printf("dlil_output: output error on %s%d retval = %d\n", 

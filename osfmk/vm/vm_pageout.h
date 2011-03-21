@@ -290,6 +290,7 @@ struct upl {
 #define UPL_SHADOWED		0x1000
 #define UPL_KERNEL_OBJECT	0x2000
 #define UPL_VECTOR		0x4000
+#define UPL_HAS_BUSY            0x10000
 
 /* flags for upl_create flags parameter */
 #define UPL_CREATE_EXTERNAL	0

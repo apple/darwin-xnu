@@ -3253,6 +3253,20 @@ sosetopt(struct socket *so, struct sockopt *sopt)
 			break;
 		}
 
+#if PKT_PRIORITY
+		case SO_TRAFFIC_CLASS: {
+			error = sooptcopyin(sopt, &optval, sizeof (optval),
+				sizeof (optval));
+			if (error)
+				goto bad;
+			if (optval < SO_TC_BE || optval > SO_TC_VO) {
+				error = EINVAL;
+				goto bad;
+			}
+			so->so_traffic_class = optval;
+		}
+#endif /* PKT_PRIORITY */
+
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -3542,6 +3556,12 @@ integer:
 			error = sooptcopyout(sopt, &sonpx, sizeof(struct so_np_extensions));
 			break;	
 		}
+#if PKT_PRIORITY
+		case SO_TRAFFIC_CLASS:
+			optval = so->so_traffic_class;
+			goto integer;
+#endif /* PKT_PRIORITY */
+
 		default:
 			error = ENOPROTOOPT;
 			break;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1005,4 +1005,43 @@ void
 socket_clear_traffic_mgt_flags(socket_t sock, u_int32_t flags)
 {
 	(void) OSBitAndAtomic(~flags, &sock->so_traffic_mgt_flags);
+}
+
+__private_extern__ void
+set_traffic_class(struct mbuf *m, struct socket *so, int mtc)
+{
+#if !PKT_PRIORITY
+#pragma unused(m)
+#pragma unused(so)
+#pragma unused(mtc)
+	return;
+#else /* PKT_PRIORITY */
+	if (!(m->m_flags & M_PKTHDR))
+		return;
+
+	if (soisbackground(so)) {
+		m->m_pkthdr.prio = MBUF_TC_BK;			
+	} else if (mtc != MBUF_TC_NONE) {
+		if (mtc >= MBUF_TC_BE && mtc <= MBUF_TC_VO)
+			m->m_pkthdr.prio = mtc;
+	} else {
+		switch (so->so_traffic_class) {
+			case SO_TC_BE:
+				m->m_pkthdr.prio = MBUF_TC_BE;
+				break;
+			case SO_TC_BK:
+				m->m_pkthdr.prio = MBUF_TC_BK;
+				break;
+			case SO_TC_VI:
+				m->m_pkthdr.prio = MBUF_TC_VI;
+				break;
+			case SO_TC_VO:
+				m->m_pkthdr.prio = MBUF_TC_VO;
+				break;
+			default:
+				break;
+		}
+	}
+	return;
+#endif /* PKT_PRIORITY */
 }

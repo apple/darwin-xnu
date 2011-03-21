@@ -143,6 +143,7 @@ volatile	uint64_t	debugger_entry_time;
 volatile	uint64_t	debugger_exit_time;
 #if MACH_KDP
 
+extern int kdp_snapshot;
 static struct _kdp_xcpu_call_func {
 	kdp_x86_xcpu_func_t func;
 	void     *arg0, *arg1;
@@ -477,7 +478,11 @@ cpu_signal_handler(x86_saved_state_t *regs)
  * access through the debugger.
  */
 			sync_iss_to_iks(regs);
+			if (pmsafe_debug && !kdp_snapshot)
+				pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_SAFE);
 			mp_kdp_wait(TRUE, FALSE);
+			if (pmsafe_debug && !kdp_snapshot)
+				pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_NORMAL);
 		} else
 #endif	/* MACH_KDP */
 		if (i_bit(MP_TLB_FLUSH, my_word)) {
@@ -546,7 +551,11 @@ NMIInterruptHandler(x86_saved_state_t *regs)
 	}
 
 #if MACH_KDP
+	if (pmsafe_debug && !kdp_snapshot)
+		pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_SAFE);
 	mp_kdp_wait(FALSE, pmap_tlb_flush_timeout);
+	if (pmsafe_debug && !kdp_snapshot)
+		pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_NORMAL);
 #endif
 NMExit:	
 	return 1;
@@ -1148,7 +1157,7 @@ mp_kdp_enter(void)
 	mp_kdp_state = ml_set_interrupts_enabled(FALSE);
 	simple_lock(&mp_kdp_lock);
 	debugger_entry_time = mach_absolute_time();
-	if (pmsafe_debug)
+	if (pmsafe_debug && !kdp_snapshot)
 	    pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_SAFE);
 
 	while (mp_kdp_trap) {
@@ -1279,9 +1288,6 @@ mp_kdp_wait(boolean_t flush, boolean_t isNMI)
 	mca_check_save();
 #endif
 
-	if (pmsafe_debug)
-	    pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_SAFE);
-
 	atomic_incl((volatile long *)&mp_kdp_ncpus, 1);
 	while (mp_kdp_trap || (isNMI == TRUE)) {
 	        /*
@@ -1296,9 +1302,6 @@ mp_kdp_wait(boolean_t flush, boolean_t isNMI)
 		kdp_x86_xcpu_poll();
 		cpu_pause();
 	}
-
-	if (pmsafe_debug)
-	    pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_NORMAL);
 
 	atomic_decl((volatile long *)&mp_kdp_ncpus, 1);
 	DBG("mp_kdp_wait() done\n");
@@ -1329,7 +1332,7 @@ mp_kdp_exit(void)
 		cpu_pause();
 	}
 
-	if (pmsafe_debug)
+	if (pmsafe_debug && !kdp_snapshot)
 	    pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_NORMAL);
 
 	DBG("mp_kdp_exit() done\n");

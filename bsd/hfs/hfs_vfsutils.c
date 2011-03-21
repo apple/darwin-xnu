@@ -144,9 +144,13 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	 * When an HFS name cannot be encoded with the current
 	 * volume encoding we use MacRoman as a fallback.
 	 */
-	if (error || (utf8chars == 0))
+	if (error || (utf8chars == 0)) {
 		(void) mac_roman_to_utf8(mdb->drVN, NAME_MAX, &utf8chars, vcb->vcbVN);
-
+		/* If we fail to encode to UTF8 from Mac Roman, the name is bad. Deny mount */
+		if (error) {
+			goto MtVolErr;
+		}
+	}
 	hfsmp->hfs_logBlockSize = BestBlockSizeFit(vcb->blockSize, MAXBSIZE, hfsmp->hfs_logical_block_size);
 	vcb->vcbVBMIOSize = kHFSBlockSize;
 
@@ -241,7 +245,7 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	}
 	hfsmp->hfs_allocation_cp = VTOC(hfsmp->hfs_allocation_vp);
 
-      	/* mark the volume dirty (clear clean unmount bit) */
+    /* mark the volume dirty (clear clean unmount bit) */
 	vcb->vcbAtrb &=	~kHFSVolumeUnmountedMask;
 
     if (error == noErr)
@@ -264,14 +268,17 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
 	hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 
-    goto	CmdDone;
+	if (error == noErr) {
+		/* If successful, then we can just return once we've unlocked the cnodes */
+		return error;
+	}
 
     //--	Release any resources allocated so far before exiting with an error:
 MtVolErr:
 	ReleaseMetaFileVNode(hfsmp->hfs_catalog_vp);
 	ReleaseMetaFileVNode(hfsmp->hfs_extents_vp);
+	ReleaseMetaFileVNode(hfsmp->hfs_allocation_vp);
 
-CmdDone:
     return (error);
 }
 

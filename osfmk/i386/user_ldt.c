@@ -176,7 +176,7 @@ i386_set_ldt(
 	    }
 
 	    ldt_count = end_sel - begin_sel;
-
+	    /* XXX allocation under task lock */
 	    new_ldt = (user_ldt_t)kalloc(sizeof(struct user_ldt) + (ldt_count * sizeof(struct real_descriptor)));
 	    if (new_ldt == NULL) {
 		task_unlock(task);
@@ -212,6 +212,7 @@ i386_set_ldt(
 	     * Install new descriptors.
 	     */
 	    if (descs != 0) {
+		    /* XXX copyin under task lock */
 		err = copyin(descs, (char *)&new_ldt->ldt[start_sel - begin_sel],
 			     num_sels * sizeof(struct real_descriptor));
 		if (err != 0)
@@ -226,7 +227,7 @@ i386_set_ldt(
 
 	    /*
 	     * Validate descriptors.
-	     * Only allow descriptors with user priviledges.
+	     * Only allow descriptors with user privileges.
 	     */
 	    for (i = 0, dp = (struct real_descriptor *) &new_ldt->ldt[start_sel - begin_sel];
 		 i < num_sels;
@@ -235,7 +236,8 @@ i386_set_ldt(
 		switch (dp->access & ~ACC_A) {
 		    case 0:
 		    case ACC_P:
-			/* valid empty descriptor */
+			/* valid empty descriptor, clear Present preemptively */
+			dp->access &= ~ACC_P;
 			break;
 		    case ACC_P | ACC_PL_U | ACC_DATA:
 		    case ACC_P | ACC_PL_U | ACC_DATA_W:
@@ -245,8 +247,6 @@ i386_set_ldt(
 		    case ACC_P | ACC_PL_U | ACC_CODE_R:
 		    case ACC_P | ACC_PL_U | ACC_CODE_C:
 		    case ACC_P | ACC_PL_U | ACC_CODE_CR:
-		    case ACC_P | ACC_PL_U | ACC_CALL_GATE_16:
-		    case ACC_P | ACC_PL_U | ACC_CALL_GATE:
 			break;
 		    default:
 			task_unlock(task);

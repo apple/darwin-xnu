@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -315,17 +315,28 @@ rip_input(m, iphlen)
  * Tack on options user may have setup with control call.
  */
 int
-rip_output(m, so, dst)
-	register struct mbuf *m;
-	struct socket *so;
-	u_int32_t dst;
+rip_output(
+	struct mbuf *m,
+	struct socket *so,
+	u_int32_t dst,
+	struct mbuf *control)
 {
 	register struct ip *ip;
 	register struct inpcb *inp = sotoinpcb(so);
 	int flags = (so->so_options & SO_DONTROUTE) | IP_ALLOWBROADCAST;
 	struct ip_out_args ipoa;
 	int error = 0;
+#if PKT_PRIORITY
+	mbuf_traffic_class_t mtc = MBUF_TC_NONE;
+#endif /* PKT_PRIORITY */
 
+	if (control != NULL) {
+#if PKT_PRIORITY
+		mtc = mbuf_traffic_class_from_control(control);
+#endif /* PKT_PRIORITY */
+
+		m_freem(control);
+	}
 	/* If socket was bound to an ifindex, tell ip_output about it */
 	ipoa.ipoa_ifscope = (inp->inp_flags & INP_BOUND_IF) ?
 	    inp->inp_boundif : IFSCOPE_NONE;
@@ -391,8 +402,7 @@ rip_output(m, so, dst)
 	}
 
 #if PKT_PRIORITY
-	if (soisbackground(so))
-		m_prio_background(m);
+	set_traffic_class(m, so, mtc);
 #endif /* PKT_PRIORITY */
 
 #if CONFIG_MACF_NET
@@ -823,7 +833,7 @@ rip_send(struct socket *so, __unused int flags, struct mbuf *m, struct sockaddr 
 		}
 		dst = ((struct sockaddr_in *)nam)->sin_addr.s_addr;
 	}
-	return rip_output(m, so, dst);
+	return rip_output(m, so, dst, control);
 }
 
 /* note: rip_unlock is called from different protos  instead of the generic socket_unlock,

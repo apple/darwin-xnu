@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1530,9 +1530,9 @@ timer:
 		}
 #endif /*IPSEC*/
 		m->m_pkthdr.socket_id = socket_id;
+
 #if PKT_PRIORITY
-		if (soisbackground(so))
-			m_prio_background(m);
+		set_traffic_class(m, so, MBUF_TC_NONE);
 #endif /* PKT_PRIORITY */
 		error = ip6_output(m,
 			    inp6_pktopts,
@@ -1596,6 +1596,9 @@ timer:
 	lost = 0;
 	m->m_pkthdr.socket_id = socket_id;
 	m->m_nextpkt = NULL;
+#if PKT_PRIORITY
+	set_traffic_class(m, so, MBUF_TC_NONE);
+#endif /* PKT_PRIORITY */
 	tp->t_pktlist_sentlen += len;
 	tp->t_lastchain++;
 	if (tp->t_pktlist_head != NULL) {
@@ -1755,9 +1758,9 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 	struct inpcb *inp = tp->t_inpcb;
 	struct ip_out_args ipoa;
 	struct route ro;
-#if PKT_PRIORITY
-	boolean_t bg = FALSE;
-#endif /* PKT_PRIORITY */
+#if CONFIG_OUT_IF
+	unsigned int outif;
+#endif /* CONFIG_OUT_IF */
 
 	/* If socket was bound to an ifindex, tell ip_output about it */
 	ipoa.ipoa_ifscope = (inp->inp_flags & INP_BOUND_IF) ?
@@ -1766,10 +1769,6 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 
 	/* Copy the cached route and take an extra reference */
 	inp_route_copyout(inp, &ro);
-
-#if PKT_PRIORITY
-	bg = soisbackground(so);
-#endif /* PKT_PRIORITY */
 
 	/*
 	 * Data sent (as far as we can tell).
@@ -1829,10 +1828,7 @@ tcp_ip_output(struct socket *so, struct tcpcb *tp, struct mbuf *pkt,
 			 */
 			cnt = 0;
 		}
-#if PKT_PRIORITY
-		if (bg)
-			m_prio_background(pkt);
-#endif /* PKT_PRIORITY */
+	
 		error = ip_output_list(pkt, cnt, opt, &ro, flags, 0, &ipoa);
 		if (chain || error) {
 			/*
