@@ -263,7 +263,7 @@ main(
 	DECLARE("DS64_DR6",	offsetof(struct x86_debug_state64 *, dr6));
 	DECLARE("DS64_DR7",	offsetof(struct x86_debug_state64 *, dr7));
 
-	DECLARE("FP_VALID",	offsetof(struct x86_fpsave_state *,fp_valid));
+	DECLARE("FP_VALID",	offsetof(struct x86_fx_thread_state *,fp_valid));
 
 	DECLARE("SS_FLAVOR",	offsetof(x86_saved_state_t *, flavor));
 	DECLARE("SS_32",	x86_SAVED_STATE32);
@@ -431,6 +431,8 @@ main(
 		offsetof(cpu_data_t *, cpu_hibernate));
         DECLARE("CPU_INTERRUPT_LEVEL",
 		offsetof(cpu_data_t *, cpu_interrupt_level));
+	DECLARE("CPU_NESTED_ISTACK",
+ 	    offsetof(cpu_data_t *, cpu_nested_istack));
         DECLARE("CPU_SIMPLE_LOCK_COUNT",
 		offsetof(cpu_data_t *,cpu_simple_lock_count));
         DECLARE("CPU_NUMBER_GS",

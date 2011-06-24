@@ -137,10 +137,11 @@ siginfo_user_to_user64(user_siginfo_t *in, user64_siginfo_t *out)
 void
 sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint32_t code)
 {
-        union {
-	    struct mcontext32	mctx32;
-	    struct mcontext64	mctx64;
-	} mctx;
+	union {
+		struct mcontext_avx32	mctx_avx32;
+		struct mcontext_avx64	mctx_avx64;
+	} mctx_store, *mctxp = &mctx_store;
+
 	user_addr_t	ua_sp;
 	user_addr_t	ua_fp;
 	user_addr_t	ua_cr2;
@@ -160,7 +161,8 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 	struct uthread * ut;
 	int stack_size = 0;
 	int infostyle = UC_TRAD;
-    
+	boolean_t	sig_avx;
+
 	thread = current_thread();
 	ut = get_bsdthread_info(thread);
 
@@ -178,7 +180,9 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 
 	bzero((caddr_t)&sinfo64, sizeof(sinfo64));
 	sinfo64.si_signo = sig;
-		
+
+	bzero(mctxp, sizeof(*mctxp));
+	sig_avx = ml_fpu_avx_enabled();
 
 	if (proc_is64bit(p)) {
 	        x86_thread_state64_t	*tstate64;
@@ -186,23 +190,29 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 
 	        flavor = x86_THREAD_STATE64;
 		state_count = x86_THREAD_STATE64_COUNT;
-		state = (void *)&mctx.mctx64.ss;
+		state = (void *)&mctxp->mctx_avx64.ss;
 		if (thread_getstatus(thread, flavor, (thread_state_t)state, &state_count) != KERN_SUCCESS)
 		        goto bad;
 
-		flavor = x86_FLOAT_STATE64;
-		state_count = x86_FLOAT_STATE64_COUNT;
-		state = (void *)&mctx.mctx64.fs;
+		if (sig_avx) {
+			flavor = x86_AVX_STATE64;
+			state_count = x86_AVX_STATE64_COUNT;
+		}
+		else {
+			flavor = x86_FLOAT_STATE64;
+			state_count = x86_FLOAT_STATE64_COUNT;
+		}
+		state = (void *)&mctxp->mctx_avx64.fs;
 		if (thread_getstatus(thread, flavor, (thread_state_t)state, &state_count) != KERN_SUCCESS)
 		        goto bad;
 
 		flavor = x86_EXCEPTION_STATE64;
 		state_count = x86_EXCEPTION_STATE64_COUNT;
-		state = (void *)&mctx.mctx64.es;
+		state = (void *)&mctxp->mctx_avx64.es;
 		if (thread_getstatus(thread, flavor, (thread_state_t)state, &state_count) != KERN_SUCCESS)
 		        goto bad;
 
-		tstate64 = &mctx.mctx64.ss;
+		tstate64 = &mctxp->mctx_avx64.ss;
 
 		/* figure out where our new stack lives */
 		if ((ut->uu_flag & UT_ALTSTACK) && !oonstack &&
@@ -214,7 +224,7 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 		} else {
 		        ua_sp = tstate64->rsp;
 		}
-		ua_cr2 = mctx.mctx64.es.faultvaddr;
+		ua_cr2 = mctxp->mctx_avx64.es.faultvaddr;
 
 		/* The x86_64 ABI defines a 128-byte red zone. */
 		ua_sp -= C_64_REDZONE_LEN;
@@ -225,7 +235,7 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 		ua_sp -= sizeof (user64_siginfo_t);
 		ua_sip = ua_sp;
 
-	        ua_sp -= sizeof (struct mcontext64);
+		ua_sp -= sizeof (struct mcontext_avx64);
 		ua_mctxp = ua_sp;
 
 		/*
@@ -254,13 +264,13 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 		        uctx64.uc_stack.ss_flags |= SS_ONSTACK;	
 		uctx64.uc_link = 0;
 
-		uctx64.uc_mcsize = sizeof(struct mcontext64);
+		uctx64.uc_mcsize = sig_avx ? sizeof(struct mcontext_avx64) : sizeof(struct mcontext64);
 		uctx64.uc_mcontext64 = ua_mctxp;
 		
 		if (copyout((caddr_t)&uctx64, ua_uctxp, sizeof (uctx64))) 
 		        goto bad;
 
-	        if (copyout((caddr_t)&mctx.mctx64, ua_mctxp, sizeof (struct mcontext64))) 
+		if (copyout((caddr_t)&mctxp->mctx_avx64, ua_mctxp, sizeof (struct mcontext_avx64))) 
 		        goto bad;
 
 		sinfo64.pad[0]  = tstate64->rsp;
@@ -293,23 +303,30 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 
 	        flavor = x86_THREAD_STATE32;
 		state_count = x86_THREAD_STATE32_COUNT;
-		state = (void *)&mctx.mctx32.ss;
+		state = (void *)&mctxp->mctx_avx32.ss;
 		if (thread_getstatus(thread, flavor, (thread_state_t)state, &state_count) != KERN_SUCCESS)
 		        goto bad;
 
-		flavor = x86_FLOAT_STATE32;
-		state_count = x86_FLOAT_STATE32_COUNT;
-		state = (void *)&mctx.mctx32.fs;
+		if (sig_avx) {
+			flavor = x86_AVX_STATE32;
+			state_count = x86_AVX_STATE32_COUNT;
+		}
+		else {
+			flavor = x86_FLOAT_STATE32;
+			state_count = x86_FLOAT_STATE32_COUNT;
+		}
+
+		state = (void *)&mctxp->mctx_avx32.fs;
 		if (thread_getstatus(thread, flavor, (thread_state_t)state, &state_count) != KERN_SUCCESS)
 		        goto bad;
 
 		flavor = x86_EXCEPTION_STATE32;
 		state_count = x86_EXCEPTION_STATE32_COUNT;
-		state = (void *)&mctx.mctx32.es;
+		state = (void *)&mctxp->mctx_avx32.es;
 		if (thread_getstatus(thread, flavor, (thread_state_t)state, &state_count) != KERN_SUCCESS)
 		        goto bad;
 
-		tstate32 = &mctx.mctx32.ss;
+		tstate32 = &mctxp->mctx_avx32.ss;
 
 		/* figure out where our new stack lives */
 		if ((ut->uu_flag & UT_ALTSTACK) && !oonstack &&
@@ -321,7 +338,7 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 		} else {
 		        ua_sp = tstate32->esp;
 		}
-		ua_cr2 = mctx.mctx32.es.faultvaddr;
+		ua_cr2 = mctxp->mctx_avx32.es.faultvaddr;
 
 		ua_sp -= sizeof (struct user_ucontext32);
 		ua_uctxp = ua_sp;			 // someone tramples the first word!
@@ -329,7 +346,7 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 		ua_sp -= sizeof (user32_siginfo_t);
 		ua_sip = ua_sp;
 
-	        ua_sp -= sizeof (struct mcontext32);
+		ua_sp -= sizeof (struct mcontext_avx32);
 		ua_mctxp = ua_sp;
 
 		ua_sp -= sizeof (struct sigframe32);
@@ -375,14 +392,14 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 		        uctx32.uc_stack.ss_flags |= SS_ONSTACK;	
 		uctx32.uc_link = 0;
 
-		uctx32.uc_mcsize = sizeof(struct mcontext32);
+		uctx32.uc_mcsize = sig_avx ? sizeof(struct mcontext_avx32) : sizeof(struct mcontext32);
 
 		uctx32.uc_mcontext = CAST_DOWN_EXPLICIT(user32_addr_t, ua_mctxp);
 		
 		if (copyout((caddr_t)&uctx32, ua_uctxp, sizeof (uctx32))) 
 		        goto bad;
 
-		if (copyout((caddr_t)&mctx.mctx32, ua_mctxp, sizeof (struct mcontext32))) 
+		if (copyout((caddr_t)&mctxp->mctx_avx32, ua_mctxp, sizeof (struct mcontext_avx32))) 
 		        goto bad;
 
 		sinfo64.pad[0]  = tstate32->esp;
@@ -536,7 +553,7 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 
 		flavor = x86_THREAD_STATE64;
 		state_count = x86_THREAD_STATE64_COUNT;
-		state = (void *)&mctx.mctx64.ss;
+		state = (void *)&mctxp->mctx_avx64.ss;
 	} else {
 		x86_thread_state32_t	*tstate32;
 		user32_siginfo_t sinfo32;
@@ -571,7 +588,7 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 		if (copyout((caddr_t)&sinfo32, ua_sip, sizeof (sinfo32))) 
 			goto bad;
 	
-		tstate32 = &mctx.mctx32.ss;
+		tstate32 = &mctxp->mctx_avx32.ss;
 
 		tstate32->eip = CAST_DOWN_EXPLICIT(user32_addr_t, trampact);
 		tstate32->esp = CAST_DOWN_EXPLICIT(user32_addr_t, ua_fp);
@@ -599,6 +616,7 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 	return;
 
 bad:
+
 	proc_lock(p);
 	SIGACTION(p, SIGILL) = SIG_DFL;
 	sig = sigmask(SIGILL);
@@ -626,10 +644,11 @@ bad:
 int
 sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 {
-        union {
-	    struct mcontext32	mctx32;
-	    struct mcontext64	mctx64;
-	} mctx;
+	union {
+		struct mcontext_avx32	mctx_avx32;
+		struct mcontext_avx64	mctx_avx64;
+	} mctx_store, *mctxp = &mctx_store;
+
 	thread_t thread = current_thread();
 	struct uthread * ut;
 	int	error;
@@ -641,6 +660,8 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 	mach_msg_type_number_t fs_count;
 	unsigned int           fs_flavor;
 	void		    *  fs;
+	int	rval = EJUSTRETURN;
+	boolean_t	sig_avx;
 
 	ut = (struct uthread *)get_bsdthread_info(thread);
 
@@ -656,25 +677,35 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 		return (0);
 	}
 
+	bzero(mctxp, sizeof(*mctxp));
+	sig_avx = ml_fpu_avx_enabled();
+
 	if (proc_is64bit(p)) {
 	        struct user_ucontext64	uctx64;
 
 	        if ((error = copyin(uap->uctx, (void *)&uctx64, sizeof (uctx64))))
 		        return(error);
 
-		if ((error = copyin(uctx64.uc_mcontext64, (void *)&mctx.mctx64, sizeof (struct mcontext64))))
+		if ((error = copyin(uctx64.uc_mcontext64, (void *)&mctxp->mctx_avx64, sizeof (struct mcontext_avx64))))
 		        return(error);
 
 		onstack = uctx64.uc_onstack & 01;
 		ut->uu_sigmask = uctx64.uc_sigmask & ~sigcantmask;
 
-	        ts_flavor = x86_THREAD_STATE64;
+		ts_flavor = x86_THREAD_STATE64;
 		ts_count  = x86_THREAD_STATE64_COUNT;
-		ts = (void *)&mctx.mctx64.ss;
+		ts = (void *)&mctxp->mctx_avx64.ss;
 
-		fs_flavor = x86_FLOAT_STATE64;
-		fs_count  = x86_FLOAT_STATE64_COUNT;
-		fs = (void *)&mctx.mctx64.fs;
+		if (sig_avx) {
+			fs_flavor = x86_AVX_STATE64;
+			fs_count = x86_AVX_STATE64_COUNT;
+		}
+		else {
+			fs_flavor = x86_FLOAT_STATE64;
+			fs_count = x86_FLOAT_STATE64_COUNT;
+		}
+
+		fs = (void *)&mctxp->mctx_avx64.fs;
 
       } else {
 	        struct user_ucontext32	uctx32;
@@ -682,7 +713,7 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 	        if ((error = copyin(uap->uctx, (void *)&uctx32, sizeof (uctx32)))) 
 		        return(error);
 
-		if ((error = copyin(CAST_USER_ADDR_T(uctx32.uc_mcontext), (void *)&mctx.mctx32, sizeof (struct mcontext32)))) 
+		if ((error = copyin(CAST_USER_ADDR_T(uctx32.uc_mcontext), (void *)&mctxp->mctx_avx32, sizeof (struct mcontext_avx32)))) 
 		        return(error);
 
 		onstack = uctx32.uc_onstack & 01;
@@ -690,11 +721,18 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 
 	        ts_flavor = x86_THREAD_STATE32;
 		ts_count  = x86_THREAD_STATE32_COUNT;
-		ts = (void *)&mctx.mctx32.ss;
+		ts = (void *)&mctxp->mctx_avx32.ss;
 
-		fs_flavor = x86_FLOAT_STATE32;
-		fs_count  = x86_FLOAT_STATE32_COUNT;
-		fs = (void *)&mctx.mctx32.fs;
+		if (sig_avx) {
+			fs_flavor = x86_AVX_STATE32;
+			fs_count = x86_AVX_STATE32_COUNT;
+		}
+		else {
+			fs_flavor = x86_FLOAT_STATE32;
+			fs_count = x86_FLOAT_STATE32_COUNT;
+		}
+
+		fs = (void *)&mctxp->mctx_avx32.fs;
 	}
 
 	if (onstack)
@@ -704,20 +742,24 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 
 	if (ut->uu_siglist & ~ut->uu_sigmask)
 		signal_setast(thread);
-
 	/*
 	 * thread_set_state() does all the needed checks for the passed in
 	 * content
 	 */
-	if (thread_setstatus(thread, ts_flavor, ts, ts_count) != KERN_SUCCESS)
-	        return(EINVAL);
-
+	if (thread_setstatus(thread, ts_flavor, ts, ts_count) != KERN_SUCCESS) {
+		rval = EINVAL;
+		goto error_ret;
+	}
+	
 	ml_fp_setvalid(TRUE);
 
-	if (thread_setstatus(thread, fs_flavor, fs, fs_count)  != KERN_SUCCESS)
-	        return(EINVAL);
+	if (thread_setstatus(thread, fs_flavor, fs, fs_count)  != KERN_SUCCESS) {
+		rval = EINVAL;
+		goto error_ret;
 
-	return (EJUSTRETURN);
+	}
+error_ret:
+	return rval;
 }
 
 

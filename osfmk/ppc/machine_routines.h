@@ -261,6 +261,7 @@ extern void				ml_init_lock_timeout(
 
 void ml_ppc_do_sleep(void);
 
+boolean_t machine_timeout_suspended(void);
 #endif /* MACH_KERNEL_PRIVATE */
 #endif /* XNU_KERNEL_PRIVATE */
 

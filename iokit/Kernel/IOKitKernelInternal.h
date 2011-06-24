@@ -46,12 +46,10 @@ kern_return_t IOIteratePageableMaps(vm_size_t size,
 vm_map_t IOPageableMapForAddress(uintptr_t address);
 
 kern_return_t 
-IOMemoryDescriptorMapMemEntry(vm_map_t map, ipc_port_t entry, IOOptionBits options, bool pageable,
+IOMemoryDescriptorMapMemEntry(vm_map_t * map, ipc_port_t entry, IOOptionBits options, bool pageable,
 				mach_vm_size_t offset, mach_vm_address_t * address, mach_vm_size_t length);
 kern_return_t 
-IOMemoryDescriptorMapCopy(vm_map_t map, 
-				vm_map_t src_map, 
-				mach_vm_offset_t src_address,
+IOMemoryDescriptorMapCopy(vm_map_t * map, 
 				IOOptionBits options,
 				mach_vm_size_t offset, 
 				mach_vm_address_t * address, mach_vm_size_t length);

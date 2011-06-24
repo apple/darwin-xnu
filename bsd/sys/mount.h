@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -480,7 +480,8 @@ struct vfsioattr {
 	void *		io_reserved[2];		/* extended attribute information */
 };
 
-#define VFS_IOATTR_FLAGS_FUA	0x01	/* Write-through cache supported */
+#define VFS_IOATTR_FLAGS_FUA		0x01	/* Write-through cache supported */
+#define VFS_IOATTR_FLAGS_UNMAP		0x02	/* Unmap (trim) supported */
 
 /*
  * Filesystem Registration information

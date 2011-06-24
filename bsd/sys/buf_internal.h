@@ -191,6 +191,7 @@ struct buf {
  */
 #define B_NEED_IODONE   0x20000000	/* need biodone on the real_bp associated with a cluster_io */
 #define B_COMMIT_UPL    0x40000000	/* commit/abort the UPL on I/O success/failure */
+#define B_TDONE		0x80000000	/* buf_t that is part of a cluster level transaction has completed */
 
 
 /* Flags to low-level allocation routines. */

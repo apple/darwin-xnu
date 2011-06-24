@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -48,10 +48,10 @@
 #include <i386/machine_cpu.h>
 #include <i386/misc_protos.h>
 #include <i386/mp.h>
-#include <i386/mtrr.h>
 #include <i386/postcode.h>
 #include <i386/cpu_threads.h>
 #include <i386/machine_routines.h>
+#include <i386/tsc.h>
 #if CONFIG_MCA
 #include <i386/machine_check.h>
 #endif
@@ -74,10 +74,17 @@
 #define PAUSE
 #endif	/* MP_DEBUG */
 
-/* Initialize lapic_id so cpu_number() works on non SMP systems */
-unsigned long	lapic_id_initdata = 0;
-unsigned long	lapic_id = (unsigned long)&lapic_id_initdata;
-vm_offset_t	lapic_start;
+/* Base vector for local APIC interrupt sources */
+int lapic_interrupt_base = LAPIC_DEFAULT_INTERRUPT_BASE;
+
+lapic_ops_table_t	*lapic_ops;	/* Lapic operations switch */
+
+#define		MAX_LAPICIDS	(LAPIC_ID_MAX+1)
+int		lapic_to_cpu[MAX_LAPICIDS];
+int		cpu_to_lapic[MAX_CPUS];
+
+static vm_offset_t	lapic_pbase;	/* Physical base memory-mapped regs */
+static vm_offset_t	lapic_vbase;	/* Virtual base memory-mapped regs */
 
 static i386_intr_func_t	lapic_intr_func[LAPIC_FUNC_TABLE_SIZE];
 
@@ -90,13 +97,6 @@ static uint64_t lapic_error_time_threshold = 0;
 static unsigned lapic_master_error_count = 0;
 static unsigned lapic_error_count_threshold = 5;
 static boolean_t lapic_dont_panic = FALSE;
-
-/* Base vector for local APIC interrupt sources */
-int lapic_interrupt_base = LAPIC_DEFAULT_INTERRUPT_BASE;
-
-#define		MAX_LAPICIDS	(LAPIC_ID_MAX+1)
-int		lapic_to_cpu[MAX_LAPICIDS];
-int		cpu_to_lapic[MAX_CPUS];
 
 static void
 lapic_cpu_map_init(void)
@@ -147,9 +147,8 @@ ml_get_cpuid(uint32_t lapic_index)
 
 }
 
-
 #ifdef MP_DEBUG
-static void
+void
 lapic_cpu_map_dump(void)
 {
 	int	i;
@@ -169,48 +168,105 @@ lapic_cpu_map_dump(void)
 }
 #endif /* MP_DEBUG */
 
-void
-lapic_init(void)
+static void
+legacy_init(void)
 {
 	int		result;
 	vm_map_entry_t	entry;
-	uint32_t	lo;
-	uint32_t	hi;
-	boolean_t	is_boot_processor;
-	boolean_t	is_lapic_enabled;
-	vm_offset_t	lapic_base;
-
-	/* Examine the local APIC state */
-	rdmsr(MSR_IA32_APIC_BASE, lo, hi);
-	is_boot_processor = (lo & MSR_IA32_APIC_BASE_BSP) != 0;
-	is_lapic_enabled  = (lo & MSR_IA32_APIC_BASE_ENABLE) != 0;
-	lapic_base = (lo &  MSR_IA32_APIC_BASE_BASE);
-	kprintf("MSR_IA32_APIC_BASE %p %s %s\n", (void *) lapic_base,
-		is_lapic_enabled ? "enabled" : "disabled",
-		is_boot_processor ? "BSP" : "AP");
-	if (!is_boot_processor || !is_lapic_enabled)
-		panic("Unexpected local APIC state\n");
 
 	/* Establish a map to the local apic */
-	lapic_start = (vm_offset_t)vm_map_min(kernel_map);
+	lapic_vbase = (vm_offset_t)vm_map_min(kernel_map);
 	result = vm_map_find_space(kernel_map,
-				   (vm_map_address_t *) &lapic_start,
+				   (vm_map_address_t *) &lapic_vbase,
 				   round_page(LAPIC_SIZE), 0,
 				   VM_MAKE_TAG(VM_MEMORY_IOKIT), &entry);
 	if (result != KERN_SUCCESS) {
-		panic("smp_init: vm_map_find_entry FAILED (err=%d)", result);
+		panic("legacy_init: vm_map_find_entry FAILED (err=%d)", result);
 	}
 	vm_map_unlock(kernel_map);
 /* Map in the local APIC non-cacheable, as recommended by Intel
  * in section 8.4.1 of the "System Programming Guide".
  */
 	pmap_enter(pmap_kernel(),
-			lapic_start,
-			(ppnum_t) i386_btop(lapic_base),
+			lapic_vbase,
+			(ppnum_t) i386_btop(lapic_pbase),
 			VM_PROT_READ|VM_PROT_WRITE,
 			VM_WIMG_IO,
 			TRUE);
-	lapic_id = (unsigned long)(lapic_start + LAPIC_ID);
+}
+
+
+static uint32_t
+legacy_read(lapic_register_t reg)
+{
+	return  *LAPIC_MMIO(reg);
+}
+
+static void
+legacy_write(lapic_register_t reg, uint32_t value)
+{
+	*LAPIC_MMIO(reg) = value;
+}
+
+static lapic_ops_table_t legacy_ops = {
+	legacy_init,
+	legacy_read,
+	legacy_write
+};
+
+static void
+x2apic_init(void)
+{
+}
+
+static uint32_t
+x2apic_read(lapic_register_t reg)
+{
+	uint32_t	lo;
+	uint32_t	hi;
+
+	rdmsr(LAPIC_MSR(reg), lo, hi);
+	return lo;
+}
+
+static void
+x2apic_write(lapic_register_t reg, uint32_t value)
+{
+	wrmsr(LAPIC_MSR(reg), value, 0);
+}
+
+static lapic_ops_table_t x2apic_ops = {
+	x2apic_init,
+	x2apic_read,
+	x2apic_write
+};
+
+
+void
+lapic_init(void)
+{
+	uint32_t	lo;
+	uint32_t	hi;
+	boolean_t	is_boot_processor;
+	boolean_t	is_lapic_enabled;
+	boolean_t	is_x2apic;
+
+	/* Examine the local APIC state */
+	rdmsr(MSR_IA32_APIC_BASE, lo, hi);
+	is_boot_processor = (lo & MSR_IA32_APIC_BASE_BSP) != 0;
+	is_lapic_enabled  = (lo & MSR_IA32_APIC_BASE_ENABLE) != 0;
+	is_x2apic         = (lo & MSR_IA32_APIC_BASE_EXTENDED) != 0;
+	lapic_pbase = (lo &  MSR_IA32_APIC_BASE_BASE);
+	kprintf("MSR_IA32_APIC_BASE %p %s %s mode %s\n", (void *) lapic_pbase,
+		is_lapic_enabled ? "enabled" : "disabled",
+		is_x2apic ? "extended" : "legacy",
+		is_boot_processor ? "BSP" : "AP");
+	if (!is_boot_processor || !is_lapic_enabled)
+		panic("Unexpected local APIC state\n");
+
+	lapic_ops = is_x2apic ? &x2apic_ops : &legacy_ops;
+
+	lapic_ops->init();
 
 	if ((LAPIC_READ(VERSION)&LAPIC_VERSION_MASK) < 0x14) {
 		panic("Local APIC version 0x%x, 0x14 or more expected\n",
@@ -249,6 +305,13 @@ static const char *DM_str[8] = {
 	"Invalid",
 	"ExtINT"};
 
+static const char *TMR_str[] = {
+	"OneShot",
+	"Periodic",
+	"TSC-Deadline",
+	"Illegal"
+};
+
 void
 lapic_dump(void)
 {
@@ -270,7 +333,7 @@ lapic_dump(void)
 
 	kprintf("LAPIC %d at %p version 0x%x\n", 
 		(LAPIC_READ(ID)>>LAPIC_ID_SHIFT)&LAPIC_ID_MASK,
-		(void *) lapic_start,
+		(void *) lapic_vbase,
 		LAPIC_READ(VERSION)&LAPIC_VERSION_MASK);
 	kprintf("Priorities: Task 0x%x  Arbitration 0x%x  Processor 0x%x\n",
 		LAPIC_READ(TPR)&LAPIC_TPR_MASK,
@@ -295,7 +358,8 @@ lapic_dump(void)
 		VEC(LVT_TIMER),
 		DS(LVT_TIMER),
 		MASK(LVT_TIMER),
-		(LAPIC_READ(LVT_TIMER)&LAPIC_LVT_PERIODIC)?"Periodic":"OneShot");
+		TMR_str[(LAPIC_READ(LVT_TIMER) >> LAPIC_LVT_TMR_SHIFT)
+                                               &  LAPIC_LVT_TMR_MASK]);
 	kprintf("  Initial Count: 0x%08x \n", LAPIC_READ(TIMER_INITIAL_COUNT));
 	kprintf("  Current Count: 0x%08x \n", LAPIC_READ(TIMER_CURRENT_COUNT));
 	kprintf("  Divide Config: 0x%08x \n", LAPIC_READ(TIMER_DIVIDE_CONFIG));
@@ -334,15 +398,15 @@ lapic_dump(void)
 	kprintf("\n");
 	kprintf("TMR: 0x");
 	for(i=7; i>=0; i--)
-		kprintf("%08x",LAPIC_READ_OFFSET(TMR_BASE, i*0x10));
+		kprintf("%08x",LAPIC_READ_OFFSET(TMR_BASE, i));
 	kprintf("\n");
 	kprintf("IRR: 0x");
 	for(i=7; i>=0; i--)
-		kprintf("%08x",LAPIC_READ_OFFSET(IRR_BASE, i*0x10));
+		kprintf("%08x",LAPIC_READ_OFFSET(IRR_BASE, i));
 	kprintf("\n");
 	kprintf("ISR: 0x");
 	for(i=7; i >= 0; i--)
-		kprintf("%08x",LAPIC_READ_OFFSET(ISR_BASE, i*0x10));
+		kprintf("%08x",LAPIC_READ_OFFSET(ISR_BASE, i));
 	kprintf("\n");
 }
 
@@ -501,10 +565,9 @@ lapic_set_timer(
 	lapic_timer_divide_t	divisor,
 	lapic_timer_count_t	initial_count)
 {
-	boolean_t	state;
 	uint32_t	timer_vector;
 
-	state = ml_set_interrupts_enabled(FALSE);
+	mp_disable_preemption();
 	timer_vector = LAPIC_READ(LVT_TIMER);
 	timer_vector &= ~(LAPIC_LVT_MASKED|LAPIC_LVT_PERIODIC);;
 	timer_vector |= interrupt_unmasked ? 0 : LAPIC_LVT_MASKED;
@@ -512,7 +575,73 @@ lapic_set_timer(
 	LAPIC_WRITE(LVT_TIMER, timer_vector);
 	LAPIC_WRITE(TIMER_DIVIDE_CONFIG, divisor);
 	LAPIC_WRITE(TIMER_INITIAL_COUNT, initial_count);
-	ml_set_interrupts_enabled(state);
+	mp_enable_preemption();
+}
+
+void
+lapic_config_timer(
+	boolean_t		interrupt_unmasked,
+	lapic_timer_mode_t	mode,
+	lapic_timer_divide_t	divisor)
+{
+	uint32_t	timer_vector;
+
+	mp_disable_preemption();
+	timer_vector = LAPIC_READ(LVT_TIMER);
+	timer_vector &= ~(LAPIC_LVT_MASKED |
+			  LAPIC_LVT_PERIODIC |
+			  LAPIC_LVT_TSC_DEADLINE);
+	timer_vector |= interrupt_unmasked ? 0 : LAPIC_LVT_MASKED;
+	timer_vector |= (mode == periodic) ? LAPIC_LVT_PERIODIC : 0;
+	LAPIC_WRITE(LVT_TIMER, timer_vector);
+	LAPIC_WRITE(TIMER_DIVIDE_CONFIG, divisor);
+	mp_enable_preemption();
+}
+
+/*
+ * Configure TSC-deadline timer mode. The lapic interrupt is always unmasked.
+ */
+void
+lapic_config_tsc_deadline_timer(void)
+{
+	uint32_t	timer_vector;
+
+	DBG("lapic_config_tsc_deadline_timer()\n");
+	mp_disable_preemption();
+	timer_vector = LAPIC_READ(LVT_TIMER);
+	timer_vector &= ~(LAPIC_LVT_MASKED |
+			  LAPIC_LVT_PERIODIC);
+	timer_vector |= LAPIC_LVT_TSC_DEADLINE;
+	LAPIC_WRITE(LVT_TIMER, timer_vector);
+
+	/* Serialize writes per Intel OSWG */
+	do {
+		lapic_set_tsc_deadline_timer(rdtsc64() + (1ULL<<32));
+	} while (lapic_get_tsc_deadline_timer() == 0);
+	lapic_set_tsc_deadline_timer(0);
+
+	mp_enable_preemption();
+	DBG("lapic_config_tsc_deadline_timer() done\n");
+}
+
+void
+lapic_set_timer_fast(
+	lapic_timer_count_t	initial_count)
+{
+	LAPIC_WRITE(LVT_TIMER, LAPIC_READ(LVT_TIMER) & ~LAPIC_LVT_MASKED);
+	LAPIC_WRITE(TIMER_INITIAL_COUNT, initial_count);
+}
+
+void
+lapic_set_tsc_deadline_timer(uint64_t deadline)
+{
+	wrmsr64(MSR_IA32_TSC_DEADLINE, deadline);
+}
+
+uint64_t
+lapic_get_tsc_deadline_timer(void)
+{
+	return rdmsr64(MSR_IA32_TSC_DEADLINE);
 }
 
 void
@@ -522,9 +651,7 @@ lapic_get_timer(
 	lapic_timer_count_t	*initial_count,
 	lapic_timer_count_t	*current_count)
 {
-	boolean_t	state;
-
-	state = ml_set_interrupts_enabled(FALSE);
+	mp_disable_preemption();
 	if (mode)
 		*mode = (LAPIC_READ(LVT_TIMER) & LAPIC_LVT_PERIODIC) ?
 				periodic : one_shot;
@@ -534,7 +661,7 @@ lapic_get_timer(
 		*initial_count = LAPIC_READ(TIMER_INITIAL_COUNT);
 	if (current_count)
 		*current_count = LAPIC_READ(TIMER_CURRENT_COUNT);
-	ml_set_interrupts_enabled(state);
+	mp_enable_preemption();
 } 
 
 static inline void
@@ -551,6 +678,11 @@ lapic_end_of_interrupt(void)
 
 void lapic_unmask_perfcnt_interrupt(void) {
 	LAPIC_WRITE(LVT_PERFCNT, LAPIC_VECTOR(PERFCNT));
+}
+
+void lapic_set_perfcnt_interrupt_mask(boolean_t mask) {
+	uint32_t m = (mask ? LAPIC_LVT_MASKED : 0);
+	LAPIC_WRITE(LVT_PERFCNT, LAPIC_VECTOR(PERFCNT) | m);
 }
 
 void
@@ -575,6 +707,10 @@ lapic_set_intr_func(int vector, i386_intr_func_t func)
 	}
 }
 
+void	lapic_set_pmi_func(i386_intr_func_t func) {
+	lapic_set_intr_func(LAPIC_VECTOR(PERFCNT), func);
+}
+
 int
 lapic_interrupt(int interrupt_num, x86_saved_state_t *state)
 {
@@ -586,7 +722,6 @@ lapic_interrupt(int interrupt_num, x86_saved_state_t *state)
 		if (interrupt_num == (LAPIC_NMI_INTERRUPT - lapic_interrupt_base) &&
 		    lapic_intr_func[LAPIC_NMI_INTERRUPT] != NULL) {
 			retval = (*lapic_intr_func[LAPIC_NMI_INTERRUPT])(state);
-			_lapic_end_of_interrupt();
 			return retval;
 		}
 		else
@@ -743,4 +878,89 @@ lapic_send_ipi(int cpu, int vector)
 	LAPIC_WRITE(ICR, vector | LAPIC_ICR_DM_FIXED);
 
 	(void) ml_set_interrupts_enabled(state);
+}
+
+/*
+ * The following interfaces are privately exported to AICPM.
+ */
+
+boolean_t
+lapic_is_interrupt_pending(void)
+{
+	int		i;
+
+	for (i = 0; i < 8; i += 1) {
+		if ((LAPIC_READ_OFFSET(IRR_BASE, i) != 0) ||
+		    (LAPIC_READ_OFFSET(ISR_BASE, i) != 0))
+			return (TRUE);
+	}
+
+	return (FALSE);
+}
+
+boolean_t
+lapic_is_interrupting(uint8_t vector)
+{
+	int		i;
+	int		bit;
+	uint32_t	irr;
+	uint32_t	isr;
+
+	i = vector / 32;
+	bit = 1 << (vector % 32);
+
+	irr = LAPIC_READ_OFFSET(IRR_BASE, i);
+	isr = LAPIC_READ_OFFSET(ISR_BASE, i);
+
+	if ((irr | isr) & bit)
+		return (TRUE);
+
+	return (FALSE);
+}
+
+void
+lapic_interrupt_counts(uint64_t intrs[256])
+{
+	int		i;
+	int		j;
+	int		bit;
+	uint32_t	irr;
+	uint32_t	isr;
+
+	if (intrs == NULL)
+		return;
+
+	for (i = 0; i < 8; i += 1) {
+		irr = LAPIC_READ_OFFSET(IRR_BASE, i);
+		isr = LAPIC_READ_OFFSET(ISR_BASE, i);
+
+		if ((isr | irr) == 0)
+			continue;
+
+		for (j = (i == 0) ? 16 : 0; j < 32; j += 1) {
+			bit = (32 * i) + j;
+			if ((isr | irr) & (1 << j))
+				intrs[bit] += 1;
+		}
+	}
+}
+
+void
+lapic_disable_timer(void)
+{
+	uint32_t	lvt_timer;
+
+	/*
+         * If we're in deadline timer mode,
+	 * simply clear the deadline timer, otherwise
+	 * mask the timer interrupt and clear the countdown.
+         */
+	lvt_timer = LAPIC_READ(LVT_TIMER);
+	if (lvt_timer & LAPIC_LVT_TSC_DEADLINE) {
+		wrmsr64(MSR_IA32_TSC_DEADLINE, 0);
+	} else {
+		LAPIC_WRITE(LVT_TIMER, lvt_timer | LAPIC_LVT_MASKED);
+		LAPIC_WRITE(TIMER_INITIAL_COUNT, 0);
+		lvt_timer = LAPIC_READ(LVT_TIMER);
+	}
 }

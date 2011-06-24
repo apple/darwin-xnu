@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -2994,7 +2994,8 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 
 	if (features & DK_FEATURE_FORCE_UNIT_ACCESS)
 	        mp->mnt_ioflags |= MNT_IOFLAGS_FUA_SUPPORTED;
-	
+	if (features & DK_FEATURE_UNMAP)
+	        mp->mnt_ioflags |= MNT_IOFLAGS_UNMAP_SUPPORTED;
 	return (error);
 }
 

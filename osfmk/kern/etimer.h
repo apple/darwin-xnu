@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -50,7 +50,11 @@ extern int setTimerReq(void);
 extern void etimer_intr(int inuser, uint64_t iaddr);
 
 extern void etimer_set_deadline(uint64_t deadline);
+#if defined(i386) || defined(x86_64)
+extern uint64_t setPop(uint64_t time);
+#else
 extern int setPop(uint64_t time);
+#endif
 
 extern void etimer_resync_deadlines(void);
 

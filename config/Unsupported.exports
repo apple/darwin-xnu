@@ -156,6 +156,7 @@ _task_get_special_port
 _task_resume
 _task_suspend
 _thread_notrigger
+_thread_tid
 _tsleep
 _vfs_context_current
 _vfs_setlocklocal

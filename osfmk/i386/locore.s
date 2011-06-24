@@ -800,13 +800,14 @@ Entry(lo_allintrs)
 int_from_intstack:
 	incl	%gs:CPU_PREEMPTION_LEVEL
 	incl	%gs:CPU_INTERRUPT_LEVEL
+	incl	%gs:CPU_NESTED_ISTACK
 
 	movl	%esp, %edx		/* x86_saved_state */
 	CCALL1(interrupt, %edx)
 
 	decl	%gs:CPU_INTERRUPT_LEVEL
 	decl	%gs:CPU_PREEMPTION_LEVEL
-
+ 	decl	%gs:CPU_NESTED_ISTACK
 	jmp	ret_to_kernel
 
 /*

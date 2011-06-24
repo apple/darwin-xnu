@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -329,6 +329,7 @@ struct ip6_fw_chain {
  * Function definitions.
  */
 void ip6_fw_init(void);
+void load_ip6fw(void);
 
 /* Firewall hooks */
 struct ip6_hdr;

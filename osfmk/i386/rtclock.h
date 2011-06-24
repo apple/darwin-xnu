@@ -42,15 +42,15 @@
 
 #ifndef ASSEMBLER
 typedef struct rtc_nanotime {
-	uint64_t	tsc_base;		/* timestamp */
-	uint64_t	ns_base;		/* nanoseconds */
-	uint32_t	scale;			/* tsc -> nanosec multiplier */
-	uint32_t	shift;			/* tsc -> nanosec shift/div */
+	volatile uint64_t	tsc_base;	/* timestamp */
+	volatile uint64_t	ns_base;	/* nanoseconds */
+	uint32_t		scale;		/* tsc -> nanosec multiplier */
+	uint32_t		shift;		/* tsc -> nanosec shift/div */
 						/* shift is overloaded with
 						 * lower 32bits of tsc_freq
 						 * on slower machines (SLOW_TSC_THRESHOLD) */
-	uint32_t	generation;		/* 0 == being updated */
-	uint32_t	spare1;
+	volatile uint32_t	generation;	/* 0 == being updated */
+	uint32_t		spare1;
 } rtc_nanotime_t;
 
 #if 0

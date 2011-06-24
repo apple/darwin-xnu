@@ -128,7 +128,7 @@ extern void rtc_nanotime_init_commpage(void);
 
 extern void	rtc_sleep_wakeup(uint64_t base);
 
-extern void rtc_lapic_start_ticking(void);
+extern void	rtc_timer_start(void);
 
 extern void	rtc_clock_stepping(
 			uint32_t new_frequency,

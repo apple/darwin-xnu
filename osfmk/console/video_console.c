@@ -149,11 +149,12 @@ static struct {
 static unsigned char *gc_buffer_attributes;
 static unsigned char *gc_buffer_characters;
 static unsigned char *gc_buffer_colorcodes;
+static unsigned char *gc_buffer_tab_stops;
 static uint32_t gc_buffer_columns;
 static uint32_t gc_buffer_rows;
 static uint32_t gc_buffer_size;
 
-#ifdef __i386__
+#if defined(__i386__) || defined(__x86_64__)
 decl_simple_lock_data(static, vcputc_lock);
 
 #define VCPUTC_LOCK_INIT()				\
@@ -225,8 +226,7 @@ static unsigned char gc_color_code;
 static unsigned int gc_x, gc_y, gc_savex, gc_savey;
 static unsigned int gc_par[MAXPARS], gc_numpars, gc_hanging_cursor, gc_attr, gc_saveattr;
 
-/* VT100 tab stops & scroll region */
-static char gc_tab_stops[255];
+/* VT100 scroll region */
 static unsigned int gc_scrreg_top, gc_scrreg_bottom;
 
 #ifdef CONFIG_VC_PROGRESS_WHITE
@@ -261,6 +261,7 @@ static void gc_clear_screen(unsigned int xx, unsigned int yy, int top,
 static void gc_enable(boolean_t enable);
 static void gc_hide_cursor(unsigned int xx, unsigned int yy);
 static void gc_initialize(struct vc_info * info);
+static boolean_t gc_is_tab_stop(unsigned int column);
 static void gc_paint_char(unsigned int xx, unsigned int yy, unsigned char ch,
 		int attrs);
 static void gc_putchar(char ch);
@@ -277,6 +278,7 @@ static void gc_reset_tabs(void);
 static void gc_reset_vt100(void);
 static void gc_scroll_down(int num, unsigned int top, unsigned int bottom);
 static void gc_scroll_up(int num, unsigned int top, unsigned int bottom);
+static void gc_set_tab_stop(unsigned int column, boolean_t enabled);
 static void gc_show_cursor(unsigned int xx, unsigned int yy);
 static void gc_update_color(int color, boolean_t fore);
 
@@ -318,7 +320,7 @@ static void
 gc_clear_screen(unsigned int xx, unsigned int yy, int top, unsigned int bottom,
 		int which)
 {
-        if (!gc_buffer_size) return;
+	if (!gc_buffer_size) return;
 
 	if ( xx < gc_buffer_columns && yy < gc_buffer_rows && bottom <= gc_buffer_rows )
 	{
@@ -357,6 +359,7 @@ gc_enable( boolean_t enable )
 	unsigned char *buffer_attributes = NULL;
 	unsigned char *buffer_characters = NULL;
 	unsigned char *buffer_colorcodes = NULL;
+	unsigned char *buffer_tab_stops  = NULL;
 	uint32_t buffer_columns = 0;
 	uint32_t buffer_rows = 0;
 	uint32_t buffer_size = 0;
@@ -379,11 +382,15 @@ gc_enable( boolean_t enable )
 		buffer_attributes = gc_buffer_attributes;
 		buffer_characters = gc_buffer_characters;
 		buffer_colorcodes = gc_buffer_colorcodes;
+		buffer_tab_stops  = gc_buffer_tab_stops;
+		buffer_columns    = gc_buffer_columns;
+		buffer_rows       = gc_buffer_rows;
 		buffer_size       = gc_buffer_size;
 
 		gc_buffer_attributes = NULL;
 		gc_buffer_characters = NULL;
 		gc_buffer_colorcodes = NULL;
+		gc_buffer_tab_stops  = NULL;
 		gc_buffer_columns    = 0;
 		gc_buffer_rows       = 0;
 		gc_buffer_size       = 0;
@@ -394,6 +401,7 @@ gc_enable( boolean_t enable )
 		kfree( buffer_attributes, buffer_size );
 		kfree( buffer_characters, buffer_size );
 		kfree( buffer_colorcodes, buffer_size );
+		kfree( buffer_tab_stops,  buffer_columns );
 	}
 	else
 	{
@@ -414,14 +422,17 @@ gc_enable( boolean_t enable )
 				buffer_attributes = (unsigned char *) kalloc( buffer_size );
 				buffer_characters = (unsigned char *) kalloc( buffer_size );
 				buffer_colorcodes = (unsigned char *) kalloc( buffer_size );
+				buffer_tab_stops  = (unsigned char *) kalloc( buffer_columns );
 
 				if ( buffer_attributes == NULL ||
 				     buffer_characters == NULL ||
-				     buffer_colorcodes == NULL )
+				     buffer_colorcodes == NULL ||
+				     buffer_tab_stops  == NULL )
 				{
 					if ( buffer_attributes ) kfree( buffer_attributes, buffer_size );
 					if ( buffer_characters ) kfree( buffer_characters, buffer_size );
 					if ( buffer_colorcodes ) kfree( buffer_colorcodes, buffer_size );
+					if ( buffer_tab_stops  ) kfree( buffer_tab_stops,  buffer_columns );
 
 					buffer_columns = 0;
 					buffer_rows    = 0;
@@ -432,6 +443,7 @@ gc_enable( boolean_t enable )
 					memset( buffer_attributes, ATTR_NONE, buffer_size );
 					memset( buffer_characters, ' ', buffer_size );
 					memset( buffer_colorcodes, COLOR_CODE_SET( 0, COLOR_FOREGROUND, TRUE ), buffer_size );
+					memset( buffer_tab_stops, 0, buffer_columns );
 				}
 			}
 		}
@@ -442,6 +454,7 @@ gc_enable( boolean_t enable )
 		gc_buffer_attributes = buffer_attributes;
 		gc_buffer_characters = buffer_characters;
 		gc_buffer_colorcodes = buffer_colorcodes;
+		gc_buffer_tab_stops  = buffer_tab_stops;
 		gc_buffer_columns    = buffer_columns;
 		gc_buffer_rows       = buffer_rows;
 		gc_buffer_size       = buffer_size;
@@ -657,7 +670,7 @@ gc_putc_esc(unsigned char ch)
 		if (ch == 'E') gc_x = 0;
 		break;
 	case 'H':		/* Set tab stop		 */
-		gc_tab_stops[gc_x] = 1;
+		gc_set_tab_stop(gc_x, TRUE);
 		break;
 	case 'M':		/* Cursor up		 */
 		if (gc_y <= gc_scrreg_top) {
@@ -797,11 +810,11 @@ gc_putc_gotpars(unsigned char ch)
 			case 3:	/* Clear every tabs */
 				{
 					for (i = 0; i <= vinfo.v_columns; i++)
-						gc_tab_stops[i] = 0;
+						gc_set_tab_stop(i, FALSE);
 				}
 				break;
 			case 0:
-				gc_tab_stops[gc_x] = 0;
+				gc_set_tab_stop(gc_x, FALSE);
 				break;
 		}
 		break;
@@ -881,7 +894,8 @@ gc_putc_normal(unsigned char ch)
 			}
 		break;
 	case '\t':		/* Tab			 */
-		while (gc_x < vinfo.v_columns && !gc_tab_stops[++gc_x]);
+		if (gc_buffer_tab_stops) while (gc_x < vinfo.v_columns && !gc_is_tab_stop(++gc_x));
+
 		if (gc_x >= vinfo.v_columns)
 			gc_x = vinfo.v_columns-1;
 		break;
@@ -965,11 +979,31 @@ static void
 gc_reset_tabs(void)
 {
 	unsigned int i;
+	
+	if (!gc_buffer_tab_stops) return;
 
-	for (i = 0; i<= vinfo.v_columns; i++) {
-		gc_tab_stops[i] = ((i % 8) == 0);
+	for (i = 0; i < vinfo.v_columns; i++) {
+		gc_buffer_tab_stops[i] = ((i % 8) == 0);
 	}
 
+}
+
+static void
+gc_set_tab_stop(unsigned int column, boolean_t enabled)
+{
+	if (gc_buffer_tab_stops && (column < vinfo.v_columns)) {
+		gc_buffer_tab_stops[column] = enabled;
+	}
+}
+
+static boolean_t gc_is_tab_stop(unsigned int column)
+{
+	if (gc_buffer_tab_stops == NULL)
+		return ((column % 8) == 0);
+	if (column < vinfo.v_columns)
+		return gc_buffer_tab_stops[column];
+	else
+		return FALSE;
 }
 
 static void
@@ -990,7 +1024,7 @@ gc_reset_vt100(void)
 static void 
 gc_scroll_down(int num, unsigned int top, unsigned int bottom)
 {
-        if (!gc_buffer_size) return;
+	if (!gc_buffer_size) return;
 
 	if ( bottom <= gc_buffer_rows )
 	{
@@ -1099,7 +1133,7 @@ gc_scroll_down(int num, unsigned int top, unsigned int bottom)
 static void 
 gc_scroll_up(int num, unsigned int top, unsigned int bottom)
 {
-        if (!gc_buffer_size) return;
+	if (!gc_buffer_size) return;
 
 	if ( bottom <= gc_buffer_rows )
 	{
@@ -1240,18 +1274,25 @@ gc_update_color(int color, boolean_t fore)
 void
 vcputc(__unused int l, __unused int u, int c)
 {
-	if ( gc_initialized && ( gc_enabled || debug_mode ) )
+	if ( gc_enabled || debug_mode )
 	{
 		spl_t s;
 
 		s = splhigh();
+#if	defined(__i386__) || defined(__x86_64__)
+		x86_filter_TLB_coherency_interrupts(TRUE);
+#endif
 		VCPUTC_LOCK_LOCK();
-
-		gc_hide_cursor(gc_x, gc_y);
-		gc_putchar(c);
-		gc_show_cursor(gc_x, gc_y);
-
+		if ( gc_enabled || debug_mode )
+		{
+			gc_hide_cursor(gc_x, gc_y);
+			gc_putchar(c);
+			gc_show_cursor(gc_x, gc_y);
+		}
 		VCPUTC_LOCK_UNLOCK();
+#if	defined(__i386__) || defined(__x86_64__)
+		x86_filter_TLB_coherency_interrupts(FALSE);
+#endif
 		splx(s);
 	}
 }
@@ -1795,6 +1836,7 @@ static const unsigned char *    vc_clut;
 static const unsigned char *    vc_clut8;
 static unsigned char            vc_revclut8[256];
 static uint32_t            	vc_progress_interval;
+static uint32_t            	vc_progress_count;
 static uint64_t			vc_progress_deadline;
 static thread_call_data_t	vc_progress_call;
 static boolean_t		vc_needsave;
@@ -2211,8 +2253,9 @@ vc_progress_set(boolean_t enable, uint32_t vc_delay)
             vc_needsave      = TRUE;
             vc_saveunder     = saveBuf;
             vc_saveunder_len = saveLen;
-            saveBuf	     = NULL;
-            saveLen 	     = 0;
+            saveBuf	          = NULL;
+            saveLen 	      = 0;
+            vc_progress_count = 0;
 
             clock_interval_to_deadline(vc_delay,
 				       1000 * 1000 * 1000 /*second scale*/,
@@ -2240,10 +2283,9 @@ vc_progress_set(boolean_t enable, uint32_t vc_delay)
 
 
 static void
-vc_progress_task(__unused void *arg0, void *arg)
+vc_progress_task(__unused void *arg0, __unused void *arg)
 {
     spl_t		s;
-    int			count = (int)(uintptr_t) arg;
     int			x, y, width, height;
     const unsigned char * data;
 
@@ -2252,18 +2294,18 @@ vc_progress_task(__unused void *arg0, void *arg)
 
     if( vc_progress_enable) {
 
-	KERNEL_DEBUG_CONSTANT(0x7020008, count, 0, 0, 0, 0);
+	KERNEL_DEBUG_CONSTANT(0x7020008, vc_progress_count, 0, 0, 0, 0);
 
-        count++;
-        if( count >= vc_progress->count)
-            count = 0;
+        vc_progress_count++;
+        if( vc_progress_count >= vc_progress->count)
+            vc_progress_count = 0;
 
 	width = vc_progress->width;
 	height = vc_progress->height;
 	x = vc_progress->dx;
 	y = vc_progress->dy;
 	data = vc_progress_data;
-	data += count * width * height;
+	data += vc_progress_count * width * height;
 	if( 1 & vc_progress->flags) {
 	    x += ((vinfo.v_width - width) / 2);
 	    y += ((vinfo.v_height - height) / 2);
@@ -2275,7 +2317,7 @@ vc_progress_task(__unused void *arg0, void *arg)
         vc_needsave = FALSE;
 
         clock_deadline_for_periodic_event(vc_progress_interval, mach_absolute_time(), &vc_progress_deadline);
-        thread_call_enter1_delayed(&vc_progress_call, (void *)(uintptr_t)count, vc_progress_deadline);
+        thread_call_enter_delayed(&vc_progress_call, vc_progress_deadline);
     }
     simple_unlock(&vc_progress_lock);
     splx(s);
@@ -2294,10 +2336,33 @@ static boolean_t gc_acquired      = FALSE;
 static boolean_t gc_graphics_boot = FALSE;
 static boolean_t gc_desire_text   = FALSE;
 
-static unsigned int lastVideoPhys   = 0;
+static uint64_t lastVideoPhys   = 0;
 static vm_offset_t  lastVideoVirt   = 0;
 static vm_size_t lastVideoSize   = 0;
 static boolean_t    lastVideoMapped = FALSE;
+
+static void
+gc_pause( boolean_t pause, boolean_t graphics_now )
+{
+	spl_t s;
+
+	s = splhigh( );
+	VCPUTC_LOCK_LOCK( );
+
+    disableConsoleOutput = (pause && !console_is_serial());
+    gc_enabled           = (!pause && !graphics_now);
+
+    VCPUTC_LOCK_UNLOCK( );
+
+    simple_lock(&vc_progress_lock);
+
+    vc_progress_enable = gc_graphics_boot && !gc_desire_text && !pause;
+	if (vc_progress_enable)
+		thread_call_enter_delayed(&vc_progress_call, vc_progress_deadline);
+
+    simple_unlock(&vc_progress_lock);
+    splx(s);
+}
 
 void
 initialize_screen(PE_Video * boot_vinfo, unsigned int op)
@@ -2310,26 +2375,29 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 	if ( boot_vinfo )
 	{
 		struct vc_info new_vinfo = vinfo;
-
-//        	bcopy((const void *)boot_vinfo, (void *)&boot_video_info, sizeof(boot_video_info));
-
 		/* 
 		 *	First, check if we are changing the size and/or location of the framebuffer
 		 */
 		new_vinfo.v_name[0]  = 0;
-		new_vinfo.v_width    = (unsigned int)boot_vinfo->v_width;
-		new_vinfo.v_height   = (unsigned int)boot_vinfo->v_height;
-		new_vinfo.v_depth    = (unsigned int)boot_vinfo->v_depth;
-		new_vinfo.v_rowbytes = (unsigned int)boot_vinfo->v_rowBytes;
-		new_vinfo.v_physaddr = boot_vinfo->v_baseAddr;		/* Get the physical address */
-#if defined(__i386__) || defined(__x86_64__)
-                new_vinfo.v_type     = (unsigned int)boot_vinfo->v_display;
-#else
-                new_vinfo.v_type = 0;
+		new_vinfo.v_physaddr = boot_vinfo->v_baseAddr & ~3;		/* Get the physical address */
+#ifndef __LP64__
+		new_vinfo.v_physaddr |= (((uint64_t) boot_vinfo->v_baseAddrHigh) << 32);
 #endif
+		if (kPEBaseAddressChange != op)
+		{
+            new_vinfo.v_width    = (unsigned int)boot_vinfo->v_width;
+            new_vinfo.v_height   = (unsigned int)boot_vinfo->v_height;
+            new_vinfo.v_depth    = (unsigned int)boot_vinfo->v_depth;
+            new_vinfo.v_rowbytes = (unsigned int)boot_vinfo->v_rowBytes;
+#if defined(__i386__) || defined(__x86_64__)
+            new_vinfo.v_type     = (unsigned int)boot_vinfo->v_display;
+#else
+            new_vinfo.v_type = 0;
+#endif
+		}
      
 		if (!lastVideoMapped)
-		    kprintf("initialize_screen: b=%08lX, w=%08X, h=%08X, r=%08X, d=%08X\n",                  /* (BRINGUP) */
+		    kprintf("initialize_screen: b=%08llX, w=%08X, h=%08X, r=%08X, d=%08X\n",                  /* (BRINGUP) */
 			    new_vinfo.v_physaddr, new_vinfo.v_width,  new_vinfo.v_height,  new_vinfo.v_rowbytes, new_vinfo.v_type);     /* (BRINGUP) */
 
 		if (!new_vinfo.v_physaddr)							/* Check to see if we have a framebuffer */
@@ -2344,17 +2412,16 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		else
 		{
 		    /*
-		    *	Note that for the first time only, boot_vinfo->v_baseAddr is physical.
-		    */
-    
-		    if (kernel_map != VM_MAP_NULL)					/* If VM is up, we are given a virtual address */
+		     * If VM is up, we are given a virtual address, unless b0 is set to indicate physical.
+		     */
+			if ((kernel_map != VM_MAP_NULL) && (0 == (1 & boot_vinfo->v_baseAddr)))
 		    {
 			    fbppage = pmap_find_phys(kernel_pmap, (addr64_t)boot_vinfo->v_baseAddr);	/* Get the physical address of frame buffer */
 			    if(!fbppage)						/* Did we find it? */
 			    {
 				    panic("initialize_screen: Strange framebuffer - addr = %08X\n", (uint32_t)boot_vinfo->v_baseAddr);
 			    }
-			    new_vinfo.v_physaddr = (fbppage << 12) | (boot_vinfo->v_baseAddr & PAGE_MASK);			/* Get the physical address */
+			    new_vinfo.v_physaddr = (((uint64_t)fbppage) << 12) | (boot_vinfo->v_baseAddr & PAGE_MASK);			/* Get the physical address */
 		    }
     
 		    if (boot_vinfo->v_length != 0)
@@ -2366,7 +2433,7 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 		    if ((lastVideoPhys != new_vinfo.v_physaddr) || (fbsize > lastVideoSize))		/* Did framebuffer change location or get bigger? */
 		    {
 			    unsigned int flags = VM_WIMG_IO;
-			    newVideoVirt = io_map_spec((vm_offset_t)new_vinfo.v_physaddr, fbsize, flags);	/* Allocate address space for framebuffer */
+			    newVideoVirt = io_map_spec((vm_map_offset_t)new_vinfo.v_physaddr, fbsize, flags);	/* Allocate address space for framebuffer */
     		    }
 		}
 
@@ -2409,13 +2476,14 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 					kmem_free(kernel_map, lastVideoVirt, lastVideoSize);	/* Toss kernel addresses */
 				}
 			}
-			lastVideoPhys = (unsigned int)new_vinfo.v_physaddr;					/* Remember the framebuffer address */
+			lastVideoPhys = new_vinfo.v_physaddr;					/* Remember the framebuffer address */
 			lastVideoSize = fbsize;							/* Remember the size */
 			lastVideoVirt = newVideoVirt;						/* Remember the virtual framebuffer address */
 			lastVideoMapped  = (NULL != kernel_map);
 		}
 
-		{
+        if (kPEBaseAddressChange != op)
+        {
 			// Graphics mode setup by the booter.
 
 			gc_ops.initialize   = vc_initialize;
@@ -2427,15 +2495,15 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 			gc_ops.hide_cursor  = vc_reverse_cursor;
 			gc_ops.show_cursor  = vc_reverse_cursor;
 			gc_ops.update_color = vc_update_color;
+            gc_initialize(&vinfo);
 		}
-
-		gc_initialize(&vinfo);
 
 #ifdef GRATEFULDEBUGGER
 		GratefulDebInit((bootBumbleC *)boot_vinfo);	/* Re-initialize GratefulDeb */
 #endif /* GRATEFULDEBUGGER */
 	}
 
+    graphics_now = gc_graphics_boot && !gc_desire_text;
 	switch ( op )
 	{
 		case kPEGraphicsMode:
@@ -2452,15 +2520,24 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 
 		case kPEAcquireScreen:
 			if ( gc_acquired ) break;
-			graphics_now = gc_graphics_boot && !gc_desire_text;
 			vc_progress_set( graphics_now, kProgressAcquireDelay );
 			gc_enable( !graphics_now );
 			gc_acquired = TRUE;
 			gc_desire_text = FALSE;
 			break;
 
+		case kPEDisableScreen:
+            if (gc_acquired) 
+            {
+                gc_pause( TRUE, graphics_now );
+            }
+			break;
+
 		case kPEEnableScreen:
-			/* deprecated */
+            if (gc_acquired) 
+            {
+                gc_pause( FALSE, graphics_now );
+            }
 			break;
 
 		case kPETextScreen:
@@ -2481,10 +2558,6 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 #endif
 			gc_enable( TRUE );
 			break;
-
-		case kPEDisableScreen:
-			/* deprecated */
-			/* skip break */
 
 		case kPEReleaseScreen:
 			gc_acquired = FALSE;

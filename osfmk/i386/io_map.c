@@ -69,7 +69,7 @@ extern vm_offset_t	virtual_avail;
  * Mach VM is running.
  */
 vm_offset_t
-io_map(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
+io_map(vm_map_offset_t phys_addr, vm_size_t size, unsigned int flags)
 {
 	vm_offset_t	start;
 
@@ -95,7 +95,7 @@ io_map(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
 
 /* just wrap this since io_map handles it */
 
-vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
+vm_offset_t io_map_spec(vm_map_offset_t phys_addr, vm_size_t size, unsigned int flags)
 {
   return (io_map(phys_addr, size, flags));
 }

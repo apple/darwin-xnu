@@ -333,7 +333,7 @@ routine vm_remap(
 	inout	target_address	: mach_vm_address_t;
 		size		: mach_vm_size_t;
 		mask		: mach_vm_offset_t;
-		anywhere	: boolean_t;
+		flags		: int;
 		src_task	: vm_map_t;
 		src_address	: mach_vm_address_t;
 		copy		: boolean_t;

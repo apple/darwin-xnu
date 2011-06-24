@@ -73,13 +73,15 @@ extern int		fp_kind;
 extern void		init_fpu(void);
 extern void		fpu_module_init(void);
 extern void		fpu_free(
-				struct x86_fpsave_state	* fps);
+				void	* fps);
 extern kern_return_t	fpu_set_fxstate(
 				thread_t	thr_act,
-				thread_state_t	state);
+				thread_state_t	state,
+				thread_flavor_t f);
 extern kern_return_t	fpu_get_fxstate(
 				thread_t	thr_act,
-				thread_state_t	state);
+				thread_state_t	state,
+				thread_flavor_t f);
 extern void		fpu_dup_fxstate(
 				thread_t	parent,
 				thread_t	child);
@@ -90,96 +92,11 @@ extern void		fpSSEexterrflt(void);
 extern void		fpflush(thread_t);
 extern void		fp_setvalid(boolean_t);
 #ifdef __i386__
-extern void		fxsave64(struct x86_fx_save *);
-extern void		fxrstor64(struct x86_fx_save *);
+extern void		fxsave64(struct x86_fx_thread_state *);
+extern void		fxrstor64(struct x86_fx_thread_state *);
 #endif
 
-/*
- * FPU instructions.
- */
-#define	fninit() \
-	__asm__ volatile("fninit")
-
-#define	fnstcw(control) \
-	__asm__("fnstcw %0" : "=m" (*(unsigned short *)(control)))
-
-#define	fldcw(control) \
-	__asm__ volatile("fldcw %0" : : "m" (*(unsigned short *) &(control)) )
-
-static inline unsigned short
-fnstsw(void)
-{
-	unsigned short status;
-	__asm__ volatile("fnstsw %0" : "=ma" (status));
-	return(status);
-}
-
-#define	fnclex() \
-	__asm__ volatile("fnclex")
-
-#define	fnsave(state)  \
-	__asm__ volatile("fnsave %0" : "=m" (*state))
-
-#define	frstor(state) \
-	__asm__ volatile("frstor %0" : : "m" (state))
-
-#define fwait() \
-    	__asm__("fwait");
-
-#define fxrstor(addr)           __asm("fxrstor %0" : : "m" (*(addr)))     
-#define fxsave(addr)            __asm __volatile("fxsave %0" : "=m" (*(addr)))
-
-#define FXSAFE() (fp_kind == FP_FXSR)
-
-
-static inline void clear_fpu(void)
-{
-	set_ts();
-}
-
-
-/*
- * Save thread`s FPU context.
- */
-
-static inline void fpu_save_context(thread_t thread)
-{
-	struct x86_fpsave_state *ifps;
-
-	assert(ml_get_interrupts_enabled() == FALSE);
-	ifps = (thread)->machine.pcb->ifps;
-	if (ifps != 0 && !ifps->fp_valid) {
-		/* Clear CR0.TS in preparation for the FP context save. In
-		 * theory, this shouldn't be necessary since a live FPU should
-		 * indicate that TS is clear. However, various routines
-		 * (such as sendsig & sigreturn) manipulate TS directly.
-		 */
-		clear_ts();
-		/* registers are in FPU - save to memory */
-		ifps->fp_valid = TRUE;
-
-#if defined(__i386__)
-		if (!thread_is_64bit(thread) || is_saved_state32(thread->machine.pcb->iss)) {
-			/* save the compatibility/legacy mode XMM+x87 state */
-			fxsave(&ifps->fx_save_state);
-			ifps->fp_save_layout = FXSAVE32;
-		}
-		else {
-			/* Execute a brief jump to 64-bit mode to save the 64
-			 * bit state
-			 */
-			fxsave64(&ifps->fx_save_state);
-			ifps->fp_save_layout = FXSAVE64;
-		}
-#elif defined(__x86_64__)
-		/* for a 64-bit long mode kernel, we can always use plain fxsave */
-		fxsave(&ifps->fx_save_state);
-		ifps->fp_save_layout = thread_is_64bit(thread) ? FXSAVE64
-			: FXSAVE32;
-
-#endif
-	}
-	set_ts();
-}
+extern void clear_fpu(void);
+extern void fpu_save_context(thread_t thread);
 
 #endif	/* _I386_FPU_H_ */

@@ -199,6 +199,11 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	 */
 	cpu_IA32e_disable(current_cpu_datap());
 #endif
+	/*
+	 * Enable FPU/SIMD unit for potential hibernate acceleration
+	 */
+	clear_ts(); 
+
 	KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
 	save_kdebug_enable = kdebug_enable;
@@ -220,6 +225,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 #else
 	acpi_sleep_cpu(func, refcon);
 #endif
+
 #ifdef __x86_64__
 	x86_64_post_sleep(old_cr3);
 #endif
@@ -278,6 +284,10 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 
 	ml_get_timebase(&now);
 
+	/* re-enable and re-init local apic (prior to starting timers) */
+	if (lapic_probe())
+		lapic_configure();
+
 	/* let the realtime clock reset */
 	rtc_sleep_wakeup(acpi_sleep_abstime);
 
@@ -299,21 +309,17 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	} else
 		KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_END, 0, 0, 0, 0, 0);
 
-	/* re-enable and re-init local apic */
-	if (lapic_probe())
-		lapic_configure();
-
 	/* Restore power management register state */
 	pmCPUMarkRunning(current_cpu_datap());
 
 	/* Restore power management timer state */
 	pmTimerRestore();
 
-	/* Restart tick interrupts from the LAPIC timer */
-	rtc_lapic_start_ticking();
+	/* Restart timer interrupts */
+	rtc_timer_start();
 
-	fpinit();
-	clear_fpu();
+	/* Reconfigure FP/SIMD unit */
+	init_fpu();
 
 #if HIBERNATION
 #ifdef __i386__

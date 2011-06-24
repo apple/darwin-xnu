@@ -99,14 +99,14 @@
  *	Allocated only when necessary.
  */
 
-struct x86_fpsave_state {
-	boolean_t		fp_valid;
-	enum {
+typedef	enum {
 		FXSAVE32 = 1,
-		FXSAVE64 = 2
-	} fp_save_layout;
-        struct x86_fx_save 	fx_save_state __attribute__ ((aligned (16)));
-};
+		FXSAVE64 = 2,
+		XSAVE32  = 3,
+		XSAVE64  = 4,
+		FP_UNUSED = 5
+	} fp_save_layout_t;
+
 
 
 /*
@@ -148,7 +148,7 @@ struct x86_kernel_state {
 typedef struct pcb {
 	void			*sf;
 	x86_saved_state_t	*iss;
-	struct x86_fpsave_state	*ifps;
+	void			*ifps;
 #ifdef	MACH_BSD
 	uint64_t	cthread_self;		/* for use of cthread package */
         struct real_descriptor cthread_desc;

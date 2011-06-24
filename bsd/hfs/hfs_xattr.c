@@ -1184,7 +1184,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 	bzero(iterator, sizeof(*iterator));
 
 	if ((result = hfs_lock(cp, HFS_EXCLUSIVE_LOCK))) {
-		return (result);
+		goto exit_nolock;
 	}
 
 	result = hfs_buildattrkey(cp->c_fileid, ap->a_name, (HFSPlusAttrKey *)&iterator->key);
@@ -1228,6 +1228,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 	hfs_end_transaction(hfsmp);
 exit:
 	hfs_unlock(cp);
+exit_nolock:
 	FREE(iterator, M_TEMP);
 	return MacToVFSError(result);
 }
@@ -1545,7 +1546,10 @@ exit:
 	if (user_start) {
 		vsunlock(user_start, user_len, TRUE);
 	}
-	FREE(iterator, M_TEMP);
+	
+	if (iterator) {
+		FREE(iterator, M_TEMP);
+	}
 
 	hfs_unlock(cp);
 	

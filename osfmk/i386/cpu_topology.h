@@ -141,8 +141,8 @@ typedef struct x86_lcpu
     boolean_t		primary;	/* logical cpu is primary CPU in package */
     volatile lcpu_state_t	state;	/* state of the logical CPU */
     volatile boolean_t	stopped;	/* used to indicate that the CPU has "stopped" */
-    uint64_t		rtcPop;		/* when etimer wants a timer pop */
-    uint64_t		rtcDeadline;
+    uint64_t		rtcPop;		/* next timer pop programmed */
+    uint64_t		rtcDeadline;	/* next etimer-requested deadline */
     x86_cpu_cache_t	*caches[MAX_CACHE_DEPTH];
     void		*pmStats;	/* Power management stats for lcpu */
     void		*pmState;	/* Power management state for lcpu */

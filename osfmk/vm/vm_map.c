@@ -253,7 +253,7 @@ static kern_return_t	vm_map_remap_range_allocate(
 	vm_map_address_t	*address,
 	vm_map_size_t		size,
 	vm_map_offset_t		mask,
-	boolean_t		anywhere,
+	int			flags,
 	vm_map_entry_t		*map_entry);
 
 static void		vm_map_region_look_for_page(
@@ -11155,7 +11155,7 @@ vm_map_remap(
 	vm_map_address_t	*address,
 	vm_map_size_t		size,
 	vm_map_offset_t		mask,
-	boolean_t		anywhere,
+	int			flags,
 	vm_map_t		src_map,
 	vm_map_offset_t		memory_address,
 	boolean_t		copy,
@@ -11204,7 +11204,7 @@ vm_map_remap(
 	*address = vm_map_trunc_page(*address);
 	vm_map_lock(target_map);
 	result = vm_map_remap_range_allocate(target_map, address, size,
-					     mask, anywhere, &insp_entry);
+					     mask, flags, &insp_entry);
 
 	for (entry = map_header.links.next;
 	     entry != (struct vm_map_entry *)&map_header.links;
@@ -11255,18 +11255,19 @@ vm_map_remap_range_allocate(
 	vm_map_address_t	*address,	/* IN/OUT */
 	vm_map_size_t		size,
 	vm_map_offset_t		mask,
-	boolean_t		anywhere,
+	int			flags,
 	vm_map_entry_t		*map_entry)	/* OUT */
 {
-	register vm_map_entry_t	entry;
-	register vm_map_offset_t	start;
-	register vm_map_offset_t	end;
+	vm_map_entry_t	entry;
+	vm_map_offset_t	start;
+	vm_map_offset_t	end;
+	kern_return_t	kr;
 
 StartAgain: ;
 
 	start = *address;
 
-	if (anywhere)
+	if (flags & VM_FLAGS_ANYWHERE)
 	{
 		/*
 		 *	Calculate the first possible address.
@@ -11377,6 +11378,37 @@ StartAgain: ;
 		    (end > map->max_offset) ||
 		    (start >= end)) {
 			return(KERN_INVALID_ADDRESS);
+		}
+
+		/*
+		 * If we're asked to overwrite whatever was mapped in that
+		 * range, first deallocate that range.
+		 */
+		if (flags & VM_FLAGS_OVERWRITE) {
+			vm_map_t zap_map;
+
+			/*
+			 * We use a "zap_map" to avoid having to unlock
+			 * the "map" in vm_map_delete(), which would compromise
+			 * the atomicity of the "deallocate" and then "remap"
+			 * combination.
+			 */
+			zap_map = vm_map_create(PMAP_NULL,
+						start,
+						end - start,
+						map->hdr.entries_pageable);
+			if (zap_map == VM_MAP_NULL) {
+				return KERN_RESOURCE_SHORTAGE;
+			}
+
+			kr = vm_map_delete(map, start, end,
+					   VM_MAP_REMOVE_SAVE_ENTRIES,
+					   zap_map);
+			if (kr == KERN_SUCCESS) {
+				vm_map_destroy(zap_map,
+					       VM_MAP_REMOVE_NO_PMAP_CLEANUP);
+				zap_map = VM_MAP_NULL;
+			}
 		}
 
 		/*

@@ -59,29 +59,65 @@
 #ifndef	_I386_FP_SAVE_H_
 #define	_I386_FP_SAVE_H_
 
+#ifdef  MACH_KERNEL_PRIVATE
 
-/* note when allocating this data structure, it must be 16 byte aligned. */
-struct x86_fx_save {
-        unsigned short  fx_control;     /* control */
-        unsigned short  fx_status;      /* status */
-        unsigned char  	fx_tag;         /* register tags */
-        unsigned char	fx_bbz1;	/* better be zero when calling fxrtstor */
-        unsigned short  fx_opcode;
-        unsigned int    fx_eip;         /* eip  instruction */
-        unsigned short  fx_cs;          /* cs instruction */
-        unsigned short  fx_bbz2;	/* better be zero when calling fxrtstor */ 
-        unsigned int    fx_dp;          /* data address */
-        unsigned short  fx_ds;          /* data segment */
-        unsigned short  fx_bbz3;	/* better be zero when calling fxrtstor */
-        unsigned int  	fx_MXCSR;
-        unsigned int  	fx_MXCSR_MASK;
-        unsigned short  fx_reg_word[8][8];      /* STx/MMx registers */
-        unsigned short  fx_XMM_reg[8][16];	/* XMM0-XMM15 on 64 bit processors */
+
+struct 	x86_fx_thread_state {
+	unsigned short  fx_control;     /* control */
+	unsigned short  fx_status;      /* status */
+	unsigned char  	fx_tag;         /* register tags */
+	unsigned char	fx_bbz1;	/* better be zero when calling fxrtstor */
+	unsigned short  fx_opcode;
+	unsigned int    fx_eip;         /* eip  instruction */
+	unsigned short  fx_cs;          /* cs instruction */
+	unsigned short  fx_bbz2;	/* better be zero when calling fxrtstor */ 
+	unsigned int    fx_dp;          /* data address */
+	unsigned short  fx_ds;          /* data segment */
+	unsigned short  fx_bbz3;	/* better be zero when calling fxrtstor */
+	unsigned int  	fx_MXCSR;
+	unsigned int  	fx_MXCSR_MASK;
+	unsigned short  fx_reg_word[8][8];      /* STx/MMx registers */
+	unsigned short  fx_XMM_reg[8][16];	/* XMM0-XMM15 on 64 bit processors */
                                                 /* XMM0-XMM7  on 32 bit processors... unused storage reserved */
-        unsigned char 	fx_reserved[16*6];	/* reserved by intel for future expansion */
-};
 
+	unsigned char 	fx_reserved[16*5];	/* reserved by intel for future
+						 * expansion */
+	unsigned int	fp_valid;
+	unsigned int	fp_save_layout;
+	unsigned char	fx_pad[8];
+}__attribute__ ((packed));
 
+struct x86_avx_thread_state {
+	unsigned short  fx_control;     /* control */
+	unsigned short  fx_status;      /* status */
+	unsigned char  	fx_tag;         /* register tags */
+	unsigned char	fx_bbz1;	/* reserved zero */
+	unsigned short  fx_opcode;
+	unsigned int    fx_eip;         /* eip  instruction */
+	unsigned short  fx_cs;          /* cs instruction */
+	unsigned short  fx_bbz2;	/* reserved zero */
+	unsigned int    fx_dp;          /* data address */
+	unsigned short  fx_ds;          /* data segment */
+	unsigned short  fx_bbz3;	/* reserved zero */
+	unsigned int  	fx_MXCSR;
+	unsigned int  	fx_MXCSR_MASK;
+	unsigned short  fx_reg_word[8][8];      /* STx/MMx registers */
+	unsigned short  fx_XMM_reg[8][16];	/* XMM0-XMM15 on 64 bit processors */
+                                                /* XMM0-XMM7  on 32 bit processors... unused storage reserved */
+	unsigned char 	fx_reserved[16*5];	/* reserved */
+	unsigned int	fp_valid;
+	unsigned int	fp_save_layout;
+	unsigned char	fx_pad[8];
+
+	struct	xsave_header {			/* Offset 512, xsave header */
+		uint64_t xsbv;
+		char	xhrsvd[56];
+	}_xh;
+
+	unsigned int	x_YMMH_reg[4][16];	/* Offset 576, high YMMs*/
+}__attribute__ ((packed));
+
+#endif /* MACH_KERNEL_PRIVATE */
 /*
  * Control register
  */

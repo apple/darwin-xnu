@@ -42,6 +42,7 @@
 #include <kern/pms.h>
 #include <kern/processor.h>
 #include <kern/etimer.h>
+#include <sys/kdebug.h>
 #include <i386/cpu_threads.h>
 #include <i386/pmCPU.h>
 #include <i386/cpuid.h>
@@ -56,9 +57,10 @@ decl_simple_lock_data(,pm_init_lock);
 /*
  * The following is set when the KEXT loads and initializes.
  */
-pmDispatch_t	*pmDispatch	= NULL;
+pmDispatch_t		*pmDispatch	= NULL;
 
 static uint32_t		pmInitDone	= 0;
+static boolean_t	earlyTopology	= FALSE;
 
 
 /*
@@ -192,6 +194,9 @@ pmMarkAllCPUsOff(void)
 static void
 pmInitComplete(void)
 {
+    if (earlyTopology && pmDispatch != NULL && pmDispatch->pmCPUStateInit != NULL)
+	(*pmDispatch->pmCPUStateInit)();
+
     pmInitDone = 1;
 }
 
@@ -268,9 +273,9 @@ pmLockCPUTopology(int lock)
 uint64_t
 pmCPUGetDeadline(cpu_data_t *cpu)
 {
-    uint64_t	deadline	= EndOfAllTime;
+    uint64_t	deadline	= 0;
 
-	if (pmInitDone
+    if (pmInitDone
 	&& pmDispatch != NULL
 	&& pmDispatch->GetDeadline != NULL)
 	deadline = (*pmDispatch->GetDeadline)(&cpu->lcpu);
@@ -357,6 +362,8 @@ pmCPUStateInit(void)
 {
     if (pmDispatch != NULL && pmDispatch->pmCPUStateInit != NULL)
 	(*pmDispatch->pmCPUStateInit)();
+    else
+	earlyTopology = TRUE;
 }
 
 /*
@@ -596,6 +603,40 @@ machine_choose_processor(processor_set_t pset,
     return(preferred);
 }
 
+static int
+pmThreadGetUrgency(__unused uint64_t *rt_period, __unused uint64_t *rt_deadline)
+{
+
+    return(0);
+}
+
+void
+thread_tell_urgency(int urgency,
+		    uint64_t rt_period,
+		    uint64_t rt_deadline)
+{
+    KERNEL_DEBUG_CONSTANT(0x1400054,
+			  urgency, rt_period, (rt_deadline >> 32), rt_deadline, 0);
+
+    if (!pmInitDone
+	|| pmDispatch == NULL
+	|| pmDispatch->pmThreadTellUrgency == NULL)
+	return;
+
+    pmDispatch->pmThreadTellUrgency(urgency, rt_period, rt_deadline);
+}
+
+void
+active_rt_threads(boolean_t active)
+{
+    if (!pmInitDone
+	|| pmDispatch == NULL
+	|| pmDispatch->pmActiveRTThreads == NULL)
+	return;
+
+    pmDispatch->pmActiveRTThreads(active);
+}
+
 static uint32_t
 pmGetSavedRunCount(void)
 {
@@ -645,10 +686,26 @@ pmSendIPI(int cpu)
     lapic_send_ipi(cpu, LAPIC_PM_INTERRUPT);
 }
 
-static rtc_nanotime_t *
-pmGetNanotimeInfo(void)
+static void
+pmGetNanotimeInfo(pm_rtc_nanotime_t *rtc_nanotime)
 {
-    return(&rtc_nanotime_info);
+	/*
+	 * Make sure that nanotime didn't change while we were reading it.
+	 */
+	do {
+		rtc_nanotime->generation = rtc_nanotime_info.generation; /* must be first */
+		rtc_nanotime->tsc_base = rtc_nanotime_info.tsc_base;
+		rtc_nanotime->ns_base = rtc_nanotime_info.ns_base;
+		rtc_nanotime->scale = rtc_nanotime_info.scale;
+		rtc_nanotime->shift = rtc_nanotime_info.shift;
+	} while(rtc_nanotime_info.generation != 0
+		&& rtc_nanotime->generation != rtc_nanotime_info.generation);
+}
+
+static uint32_t
+pmTimerQueueMigrate(__unused int target_cpu)
+{
+    return (0);
 }
 
 /*
@@ -681,10 +738,17 @@ pmKextRegister(uint32_t version, pmDispatch_t *cpuFuncs,
 	callbacks->GetSavedRunCount     = pmGetSavedRunCount;
 	callbacks->pmSendIPI		= pmSendIPI;
 	callbacks->GetNanotimeInfo	= pmGetNanotimeInfo;
-	callbacks->RTCClockAdjust       = rtc_clock_adjust;
+	callbacks->ThreadGetUrgency	= pmThreadGetUrgency;
+	callbacks->RTCClockAdjust	= rtc_clock_adjust;
+	callbacks->timerQueueMigrate    = pmTimerQueueMigrate;
 	callbacks->topoParms            = &topoParms;
+	callbacks->InterruptPending	= lapic_is_interrupt_pending;
+	callbacks->IsInterrupting	= lapic_is_interrupting;
+	callbacks->InterruptStats	= lapic_interrupt_counts;
+	callbacks->DisableApicTimer	= lapic_disable_timer;
     } else {
-	panic("Version mis-match between Kernel and CPU PM");
+	panic("Version mis-match between Kernel (%d) and CPU PM (%d)",
+	      PM_DISPATCH_VERSION, version);
     }
 
     if (cpuFuncs != NULL) {

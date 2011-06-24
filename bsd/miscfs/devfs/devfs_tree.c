@@ -1050,12 +1050,12 @@ dev_free_name(devdirent_t * dirent_p)
 			if(dnp->dn_linklist == dirent_p) {
 				dnp->dn_linklist = dirent_p->de_nextlink;
 			}
-			dirent_p->de_nextlink->de_prevlinkp 
-			    = dirent_p->de_prevlinkp;
-			*dirent_p->de_prevlinkp = dirent_p->de_nextlink;
 		}
 		devfs_dn_free(dnp);
 	}
+	
+	dirent_p->de_nextlink->de_prevlinkp = dirent_p->de_prevlinkp;
+	*(dirent_p->de_prevlinkp) = dirent_p->de_nextlink;
 
 	/*
 	 * unlink ourselves from the directory on this plane

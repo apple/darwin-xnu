@@ -658,7 +658,7 @@ extern int		pmap_list_resident_pages(
 				struct pmap	*pmap,
 				vm_offset_t	*listp,
 				int		space);
-
+extern void		x86_filter_TLB_coherency_interrupts(boolean_t);
 #ifdef __i386__
 extern void             pmap_commpage32_init(
 					   vm_offset_t kernel,

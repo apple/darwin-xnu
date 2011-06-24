@@ -180,6 +180,12 @@ static IODTNVRAM *		gIOOptionsEntry;
 static IORegistryEntry *	gIOChosenEntry;
 #if defined(__i386__) || defined(__x86_64__)
 static const OSSymbol *         gIOCreateEFIDevicePathSymbol;
+static const OSSymbol * 	gIOHibernateRTCVariablesKey;
+static const OSSymbol *         gIOHibernateBoot0082Key;
+static const OSSymbol *         gIOHibernateBootNextKey;
+static OSData *	                gIOHibernateBoot0082Data;
+static OSData *	                gIOHibernateBootNextData;
+static OSObject *		gIOHibernateBootNextSave;
 #endif
 
 static IOPolledFileIOVars	          gFileVars;
@@ -1210,29 +1216,73 @@ IOHibernateSystemSleep(void)
 	    data = OSData::withBytes(&rtcVars, sizeof(rtcVars));
 	    if (data)
 	    { 
-			IOService::getPMRootDomain()->setProperty(kIOHibernateRTCVariablesKey, data);
-		
-			if( gIOOptionsEntry )
+		if (!gIOHibernateRTCVariablesKey)
+		    gIOHibernateRTCVariablesKey = OSSymbol::withCStringNoCopy(kIOHibernateRTCVariablesKey);
+		if (gIOHibernateRTCVariablesKey)
+		    IOService::getPMRootDomain()->setProperty(gIOHibernateRTCVariablesKey, data);
+	
+		if( gIOOptionsEntry )
+		{
+		    if( gIOHibernateMode & kIOHibernateModeSwitch )
+		    {
+			const OSSymbol *sym;
+			sym = OSSymbol::withCStringNoCopy(kIOHibernateBootSwitchVarsKey);
+			if( sym )
 			{
-				if( gIOHibernateMode & kIOHibernateModeSwitch )
-				{
-					const OSSymbol *sym;
-					sym = OSSymbol::withCStringNoCopy(kIOHibernateBootSwitchVarsKey);
-					if( sym )
-					{
-						gIOOptionsEntry->setProperty(sym, data); /* intentional insecure backup of rtc boot vars */
-						sym->release();
-					}
-				}	
+			    gIOOptionsEntry->setProperty(sym, data); /* intentional insecure backup of rtc boot vars */
+			    sym->release();
 			}
+		    }	
+		}
 
-			data->release();
+		data->release();
 	    }
             if (gIOChosenEntry)
             {
                 data = OSDynamicCast(OSData, gIOChosenEntry->getProperty(kIOHibernateMachineSignatureKey));
                 if (data)
                     gIOHibernateCurrentHeader->machineSignature = *((UInt32 *)data->getBytesNoCopy());
+		{
+		    // set BootNext
+
+		    if (!gIOHibernateBoot0082Data)
+		    {
+			data = OSDynamicCast(OSData, gIOChosenEntry->getProperty("boot-device-path"));
+			if (data)
+			{
+			    // AppleNVRAM_EFI_LOAD_OPTION
+			    struct {
+				uint32_t Attributes;
+				uint16_t FilePathLength;
+				uint16_t Desc;
+			    } loadOptionHeader;
+			    loadOptionHeader.Attributes     = 1;
+			    loadOptionHeader.FilePathLength = data->getLength();
+			    loadOptionHeader.Desc           = 0;
+			    gIOHibernateBoot0082Data = OSData::withCapacity(sizeof(loadOptionHeader) + loadOptionHeader.FilePathLength);
+			    if (gIOHibernateBoot0082Data)
+			    {
+				gIOHibernateBoot0082Data->appendBytes(&loadOptionHeader, sizeof(loadOptionHeader));
+				gIOHibernateBoot0082Data->appendBytes(data);
+			    }
+			}
+		    }
+		    if (!gIOHibernateBoot0082Key)
+			gIOHibernateBoot0082Key = OSSymbol::withCString("8BE4DF61-93CA-11D2-AA0D-00E098032B8C:Boot0082");
+		    if (!gIOHibernateBootNextKey)
+			gIOHibernateBootNextKey = OSSymbol::withCString("8BE4DF61-93CA-11D2-AA0D-00E098032B8C:BootNext");
+		    if (!gIOHibernateBootNextData)
+		    {
+			uint16_t bits = 0x0082;
+			gIOHibernateBootNextData = OSData::withBytes(&bits, sizeof(bits));
+		    }
+		    if (gIOHibernateBoot0082Key && gIOHibernateBoot0082Data && gIOHibernateBootNextKey && gIOHibernateBootNextData)
+		    {
+			gIOHibernateBootNextSave = gIOOptionsEntry->copyProperty(gIOHibernateBootNextKey);
+			gIOOptionsEntry->setProperty(gIOHibernateBoot0082Key, gIOHibernateBoot0082Data);
+			gIOOptionsEntry->setProperty(gIOHibernateBootNextKey, gIOHibernateBootNextData);
+		    }
+	   	}
             }
 #else /* !i386 && !x86_64 */
             if (kIOHibernateModeEncrypt & gIOHibernateMode)
@@ -1589,22 +1639,32 @@ IOHibernateSystemWake(void)
 #endif
 
 #if defined(__i386__) || defined(__x86_64__)
-	IOService::getPMRootDomain()->removeProperty(kIOHibernateRTCVariablesKey);
+	IOService::getPMRootDomain()->removeProperty(gIOHibernateRTCVariablesKey);
 
 	/*
 	 * Hibernate variable is written to NVRAM on platforms in which RtcRam
 	 * is not backed by coin cell.  Remove Hibernate data from NVRAM.
 	 */
 	if (gIOOptionsEntry) {
-		const OSSymbol * sym = OSSymbol::withCStringNoCopy(kIOHibernateRTCVariablesKey);
 
-		if (sym) {
-			if (gIOOptionsEntry->getProperty(sym)) {
-				gIOOptionsEntry->removeProperty(sym);
-				gIOOptionsEntry->sync();
-			}
-			sym->release();
+	    if (gIOHibernateRTCVariablesKey) {
+		if (gIOOptionsEntry->getProperty(gIOHibernateRTCVariablesKey)) {
+		    gIOOptionsEntry->removeProperty(gIOHibernateRTCVariablesKey);
 		}
+	    }
+
+	    if (gIOHibernateBootNextKey)
+	    {
+		if (gIOHibernateBootNextSave)
+		{
+		    gIOOptionsEntry->setProperty(gIOHibernateBootNextKey, gIOHibernateBootNextSave);
+		    gIOHibernateBootNextSave->release();
+		    gIOHibernateBootNextSave = NULL;
+		}
+		else
+		    gIOOptionsEntry->removeProperty(gIOHibernateBootNextKey);
+	    }
+	    gIOOptionsEntry->sync();
 	}
 #endif
 

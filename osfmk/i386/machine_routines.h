@@ -128,10 +128,15 @@ vm_offset_t ml_io_map(
 void	ml_get_bouncepool_info(
 			       vm_offset_t *phys_addr,
 			       vm_size_t   *size);
-
-
+/* Indicates if spinlock, IPI and other timeouts should be suspended */
+boolean_t machine_timeout_suspended(void);
 #endif /* PEXPERT_KERNEL_PRIVATE || MACH_KERNEL_PRIVATE  */
 
+
+void interrupt_latency_tracker_setup(void);
+void interrupt_reset_latency_stats(void);
+void interrupt_populate_latency_stats(char *, unsigned);
+boolean_t ml_fpu_avx_enabled(void);
 #endif /* XNU_KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE
@@ -298,5 +303,7 @@ void ml_get_csw_threads(thread_t * /*old*/, thread_t * /*new*/);
 #endif /* CONFIG_COUNTERS */
 
 __END_DECLS
+
+
 
 #endif /* _I386_MACHINE_ROUTINES_H_ */

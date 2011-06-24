@@ -307,7 +307,9 @@ cnputc(char c)
 		 */
 		while (cbp->buf_ptr-cbp->buf_base + 1 > console_ring_space()) {
 			simple_unlock(&console_ring.write_lock);
+			ml_set_interrupts_enabled(state);
 			console_ring_try_empty();
+			state = ml_set_interrupts_enabled(FALSE);
 			SIMPLE_LOCK_NO_INTRS(&console_ring.write_lock);
 		}
 		for (cp = cbp->buf_base; cp < cbp->buf_ptr; cp++)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -25,12 +25,6 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
- *
- * HISTORY
- *
- */
 
 #include <sys/sysctl.h>
 
@@ -50,7 +44,12 @@
 #endif
 
 SInt64		gIOKitDebug = DEBUG_INIT_VALUE;
-SYSCTL_QUAD(_debug, OID_AUTO, iokit, CTLFLAG_RW, &gIOKitDebug, "boot_arg io");
+SInt64		gIOKitTrace = 0x3B;
+UInt64		gIOInterruptThresholdNS = 0;
+
+SYSCTL_QUAD(_debug, OID_AUTO, iokit, CTLFLAG_RW | CTLFLAG_LOCKED, &gIOKitDebug, "boot_arg io");
+SYSCTL_QUAD(_debug, OID_AUTO, iotrace, CTLFLAG_RW | CTLFLAG_LOCKED, &gIOKitTrace, "trace io");
+SYSCTL_QUAD(_debug, OID_AUTO, iointthreshold, CTLFLAG_RW | CTLFLAG_LOCKED, &gIOInterruptThresholdNS, "io interrupt threshold");
 
 
 int 		debug_malloc_size;

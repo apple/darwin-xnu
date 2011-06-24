@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -42,6 +42,7 @@
 
 #include <sys/types.h>
 #include <kern/locks.h>
+#include <sys/disk.h>
 
 typedef struct _blk_info {
     int32_t    bsize;
@@ -74,6 +75,12 @@ typedef struct block_list_header {
 
 struct journal;
 
+struct jnl_trim_list {
+	uint32_t	allocated_count;
+	uint32_t	extent_count;
+	dk_extent_t *extents;
+};
+
 typedef struct transaction {
     int                 tbuffer_size;  // in bytes
     char               *tbuffer;       // memory copy of the transaction
@@ -87,6 +94,7 @@ typedef struct transaction {
     struct journal     *jnl;           // ptr back to the journal structure
     struct transaction *next;          // list of tr's (either completed or to be free'd)
     uint32_t            sequence_num;
+    struct jnl_trim_list	trim;
 } transaction;
 
 
@@ -166,6 +174,7 @@ typedef struct journal {
 #define JOURNAL_FLUSHCACHE_ERR    0x00040000   // means we already printed this err
 #define JOURNAL_NEED_SWAP         0x00080000   // swap any data read from disk
 #define JOURNAL_DO_FUA_WRITES     0x00100000   // do force-unit-access writes
+#define JOURNAL_TRIM_ERR          0x00200000   // a previous trim failed
 
 /* journal_open/create options are always in the low-16 bits */
 #define JOURNAL_OPTION_FLAGS_MASK 0x0000ffff
@@ -283,12 +292,21 @@ void      journal_close(journal *journalp);
  * then call journal_kill_block().  This will mark it so
  * that the journal does not play it back (effectively
  * dropping it).
+ *
+ * journal_trim_add_extent() marks a range of bytes on the device which should
+ * be trimmed (invalidated, unmapped).  journal_trim_remove_extent() marks a
+ * range of bytes which should no longer be trimmed.  Accumulated extents
+ * will be trimmed when the transaction is flushed to the on-disk journal.
  */
 int   journal_start_transaction(journal *jnl);
 int   journal_modify_block_start(journal *jnl, struct buf *bp);
 int   journal_modify_block_abort(journal *jnl, struct buf *bp);
 int   journal_modify_block_end(journal *jnl, struct buf *bp, void (*func)(struct buf *bp, void *arg), void *arg);
 int   journal_kill_block(journal *jnl, struct buf *bp);
+#ifdef BSD_KERNEL_PRIVATE
+int   journal_trim_add_extent(journal *jnl, uint64_t offset, uint64_t length);
+int   journal_trim_remove_extent(journal *jnl, uint64_t offset, uint64_t length);
+#endif
 int   journal_end_transaction(journal *jnl);
 
 int   journal_active(journal *jnl);

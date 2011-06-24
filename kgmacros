@@ -589,12 +589,15 @@ define showactint
 			set $stkmask = 0x3
 		end
 		set $kgm_return = 0
+		set $kgm_actint_framecount = 0
 	    	while ($mysp != 0) && (($mysp & $stkmask) == 0) \
 		      && ($mysp != $prevsp) \
 		      && ((((unsigned long) $mysp ^ (unsigned long) $prevsp) < 0x2000) \
 		      || (((unsigned long)$mysp < ((unsigned long) ($kgm_thread->kernel_stack+kernel_stack_size))) \
-		      && ((unsigned long)$mysp > (unsigned long) ($kgm_thread->kernel_stack))))
+		      && ((unsigned long)$mysp > (unsigned long) ($kgm_thread->kernel_stack)))) \
+		      && ($kgm_actint_framecount < 128)
 			printf "\n          "
+			set $kgm_actint_framecount = $kgm_actint_framecount + 1
 			showptrhdrpad
 			printf "      "
  			showptr $mysp
@@ -7129,7 +7132,7 @@ define showbootermemorymap
 	     set $kgm_mptr = (EfiMemoryRange *)((unsigned long)kernelBootArgs->MemoryMap + $kgm_voffset + $kgm_i * $kgm_msize)
 #	     p/x *$kgm_mptr
 	     if $kgm_mptr->Type == 0
-	       printf "reserved  "
+	       printf "Reserved  "
 	     end
 	     if $kgm_mptr->Type == 1
 	       printf "LoaderCode"
@@ -7150,7 +7153,7 @@ define showbootermemorymap
 	       printf "RT_data   "
 	     end
 	     if $kgm_mptr->Type == 7
-	       printf "available "
+	       printf "Convention"
 	     end
 	     if $kgm_mptr->Type == 8
     	       printf "Unusable  "
@@ -9254,6 +9257,8 @@ set $_ioapic_index_ver         = 0x01
 set $_ioapic_index_redir_base  = 0x10
 
 set $_apic_vector_mask         = 0xFF
+set $_apic_timer_tsc_deadline  = 0x40000
+set $_apic_timer_periodic      = 0x20000
 set $_apic_masked              = 0x10000
 set $_apic_trigger_level       = 0x08000
 set $_apic_polarity_high       = 0x02000
@@ -9301,30 +9306,39 @@ end
 define _apic_print
        set $value = $arg0
 
-       printf "[VEC=%3d ", $value & $_apic_vector_mask
+       printf "[VEC=%3d", $value & $_apic_vector_mask
        if $value & $_apic_masked
-	  printf "MASK=yes "
+	  printf " MASK=yes"
        else
-	  printf "MASK=no  "
+	  printf " MASK=no "
        end       
 
        if $value & $_apic_trigger_level
-       	  printf "TRIG=level "
+       	  printf " TRIG=level"
        else
-	  printf "TRIG=edge  "
+	  printf " TRIG=edge "
        end
 
        if $value & $_apic_polarity_high
-       	  printf "POL=high"
+       	  printf " POL=high"
        else
-	  printf "POL=low "
+	  printf " POL=low "
        end
 
        if $value & $_apic_pending
-       	  printf " PEND=yes]\n"
+       	  printf " PEND=yes"
        else
-	  printf " PEND=no ]\n"
+	  printf " PEND=no "
        end
+
+       if $value & $_apic_timer_periodic
+	  printf " PERIODIC"
+       end
+       if $value & $_apic_timer_tsc_deadline
+	  printf " TSC_DEADLINE"
+       end
+
+       printf "]\n"
 end
 
 define ioapic_read32

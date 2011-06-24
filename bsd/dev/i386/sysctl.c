@@ -32,6 +32,7 @@
 #include <sys/sysctl.h>
 #include <i386/cpuid.h>
 #include <i386/tsc.h>
+#include <i386/machine_routines.h>
 
 static int
 _i386_cpu_info SYSCTL_HANDLER_ARGS
@@ -106,12 +107,22 @@ cpu_arch_perf SYSCTL_HANDLER_ARGS
 }
 
 static int
+cpu_xsave SYSCTL_HANDLER_ARGS
+{
+    i386_cpu_info_t *cpu_info = cpuid_info();
+    void *ptr = (uint8_t *)cpu_info->cpuid_xsave_leafp + (uintptr_t)arg1;
+    if (cpu_info->cpuid_xsave_leafp == NULL)
+        return ENOENT;
+    return _i386_cpu_info(oidp, ptr, arg2, req);
+}
+
+static int
 cpu_features SYSCTL_HANDLER_ARGS
 {
     __unused struct sysctl_oid *unused_oidp = oidp;
     __unused void *unused_arg1 = arg1;
     __unused int unused_arg2 = arg2; 
-    char buf[256];
+    char buf[512];
 
     buf[0] = '\0';
     cpuid_get_feature_names(cpuid_features(), buf, sizeof(buf));
@@ -125,7 +136,7 @@ cpu_extfeatures SYSCTL_HANDLER_ARGS
     __unused struct sysctl_oid *unused_oidp = oidp;
     __unused void *unused_arg1 = arg1;
     __unused int unused_arg2 = arg2; 
-    char buf[256];
+    char buf[512];
 
     buf[0] = '\0';
     cpuid_get_extfeature_names(cpuid_extfeatures(), buf, sizeof(buf));
@@ -188,6 +199,28 @@ cpu_flex_ratio_max SYSCTL_HANDLER_ARGS
 		return ENOENT;
 
 	return SYSCTL_OUT(req, &flex_ratio_max, sizeof(flex_ratio_max));
+}
+
+/*
+ * Populates the {CPU, vector, latency} triple for the maximum observed primary
+ * interrupt latency
+ */
+static int
+misc_interrupt_latency_max(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	int changed = 0, error;
+	char buf[128];
+	buf[0] = '\0';
+
+	interrupt_populate_latency_stats(buf, sizeof(buf));
+
+	error = sysctl_io_string(req, buf, sizeof(buf), 0, &changed);
+
+	if (error == 0 && changed) {
+		interrupt_reset_latency_stats();
+	}
+
+	return error;
 }
 
 SYSCTL_NODE(_machdep, OID_AUTO, cpu, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
@@ -331,6 +364,46 @@ SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, ACNT_MCNT,
 	    (void *)offsetof(cpuid_thermal_leaf_t, ACNT_MCNT),
 	    sizeof(boolean_t),
 	    cpu_thermal, "I", "ACNT_MCNT capability");
+
+SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, core_power_limits,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
+	    (void *)offsetof(cpuid_thermal_leaf_t, core_power_limits),
+	    sizeof(boolean_t),
+	    cpu_thermal, "I", "Power Limit Notifications at a Core Level");
+
+SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, fine_grain_clock_mod,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
+	    (void *)offsetof(cpuid_thermal_leaf_t, fine_grain_clock_mod),
+	    sizeof(boolean_t),
+	    cpu_thermal, "I", "Fine Grain Clock Modulation");
+
+SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, package_thermal_intr,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
+	    (void *)offsetof(cpuid_thermal_leaf_t, package_thermal_intr),
+	    sizeof(boolean_t),
+	    cpu_thermal, "I", "Packge Thermal interrupt and Status");
+
+SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, hardware_feedback,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
+	    (void *)offsetof(cpuid_thermal_leaf_t, hardware_feedback),
+	    sizeof(boolean_t),
+	    cpu_thermal, "I", "Hardware Coordination Feedback");
+
+SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, energy_policy,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
+	    (void *)offsetof(cpuid_thermal_leaf_t, energy_policy),
+	    sizeof(boolean_t),
+	    cpu_thermal, "I", "Energy Efficient Policy Support");
+
+
+SYSCTL_NODE(_machdep_cpu, OID_AUTO, xsave, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
+	"xsave");
+
+SYSCTL_PROC(_machdep_cpu_xsave, OID_AUTO, extended_state,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
+	    (void *)offsetof(cpuid_xsave_leaf_t, extended_state),
+	    sizeof(cpuid_xsave_leaf_t),
+	    cpu_xsave, "IU", "XSAVE Extended State");
 
 
 SYSCTL_NODE(_machdep_cpu, OID_AUTO, arch_perf, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
@@ -544,3 +617,13 @@ SYSCTL_QUAD(_machdep_memmap, OID_AUTO, PalCode, CTLFLAG_RD|CTLFLAG_LOCKED, &firm
 SYSCTL_QUAD(_machdep_memmap, OID_AUTO, Reserved, CTLFLAG_RD|CTLFLAG_LOCKED, &firmware_Reserved_bytes, "");
 SYSCTL_QUAD(_machdep_memmap, OID_AUTO, Unusable, CTLFLAG_RD|CTLFLAG_LOCKED, &firmware_Unusable_bytes, "");
 SYSCTL_QUAD(_machdep_memmap, OID_AUTO, Other, CTLFLAG_RD|CTLFLAG_LOCKED, &firmware_other_bytes, "");
+
+SYSCTL_NODE(_machdep, OID_AUTO, tsc, CTLFLAG_RD|CTLFLAG_LOCKED, NULL, "Timestamp counter parameters");
+
+SYSCTL_QUAD(_machdep_tsc, OID_AUTO, frequency, CTLFLAG_RD|CTLFLAG_LOCKED, &tscFreq, "");
+SYSCTL_NODE(_machdep, OID_AUTO, misc, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
+	"Miscellaneous x86 kernel parameters");
+
+SYSCTL_PROC(_machdep_misc, OID_AUTO, interrupt_latency_max, CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_LOCKED, 
+	    0, 0,
+	    misc_interrupt_latency_max, "A", "Maximum Interrupt latency");

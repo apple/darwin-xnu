@@ -77,15 +77,15 @@
 #include <kern/debug.h>
 #include <string.h>
 
-#include <i386/mp.h> /* mp_recent_debugger_activity() */
 #if	MACH_KDB
 #include <ddb/db_command.h>
 #include <ddb/db_output.h>
 #include <ddb/db_sym.h>
 #include <ddb/db_print.h>
 #endif	/* MACH_KDB */
-
+#include <i386/machine_routines.h> /* machine_timeout_suspended() */
 #include <machine/machine_cpu.h>
+#include <i386/mp.h>
 
 #include <sys/kdebug.h>
 
@@ -319,6 +319,29 @@ usimple_lock_init(
 #endif
 }
 
+volatile uint32_t spinlock_owner_cpu = ~0;
+volatile usimple_lock_t spinlock_timed_out;
+
+static uint32_t spinlock_timeout_NMI(uintptr_t thread_addr) {
+	uint64_t deadline;
+	uint32_t i;
+
+	for (i = 0; i < real_ncpus; i++) {
+		if ((uintptr_t)cpu_data_ptr[i]->cpu_active_thread == thread_addr) {
+			spinlock_owner_cpu = i;
+			if ((uint32_t)cpu_number() == i)
+				break;
+			cpu_datap(i)->cpu_NMI_acknowledged = FALSE;
+			cpu_NMI_interrupt(i);
+			deadline = mach_absolute_time() + (LockTimeOut * 2);
+			while (mach_absolute_time() < deadline && cpu_datap(i)->cpu_NMI_acknowledged == FALSE)
+				cpu_pause();
+			break;
+		}
+	}
+
+	return spinlock_owner_cpu;
+}
 
 /*
  *	Acquire a usimple_lock.
@@ -336,14 +359,20 @@ usimple_lock(
 
 	OBTAIN_PC(pc);
 	USLDBG(usld_lock_pre(l, pc));
-
-	if(!hw_lock_to(&l->interlock, LockTimeOutTSC))	{/* Try to get the lock
-							  * with a timeout */
+/* Try to get the lock with a timeout */
+	if(!hw_lock_to(&l->interlock, LockTimeOutTSC))	{
 		boolean_t uslock_acquired = FALSE;
-		while (mp_recent_debugger_activity() &&
-		    !(uslock_acquired = hw_lock_to(&l->interlock, LockTimeOutTSC)));
-		if (uslock_acquired == FALSE)
-			panic("Spinlock acquisition timed out: lock=%p, lock owner thread=0x%lx, current_thread: %p", l, (uintptr_t)l->interlock.lock_data, current_thread());
+		while (machine_timeout_suspended()) {
+			enable_preemption();
+			if ((uslock_acquired = hw_lock_to(&l->interlock, LockTimeOutTSC)))
+				break;
+	}
+		if (uslock_acquired == FALSE) {
+			uint32_t lock_cpu;
+			spinlock_timed_out = l;
+			lock_cpu = spinlock_timeout_NMI((uintptr_t)l->interlock.lock_data);
+			panic("Spinlock acquisition timed out: lock=%p, lock owner thread=0x%lx, current_thread: %p, lock owner active on CPU 0x%x", l, (uintptr_t)l->interlock.lock_data, current_thread(), lock_cpu);
+		}
 	}
 	USLDBG(usld_lock_post(l, pc));
 #else

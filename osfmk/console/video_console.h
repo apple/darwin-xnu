@@ -61,7 +61,7 @@ struct vc_info
 	unsigned long	v_baseaddr;
 	unsigned int	v_type;
 	char		v_name[32];
-	unsigned long	v_physaddr;
+	uint64_t	v_physaddr;
 	unsigned int	v_rows;		/* characters */
 	unsigned int	v_columns;	/* characters */
 	unsigned int	v_rowscanbytes;	/* Actualy number of bytes used for display per row*/

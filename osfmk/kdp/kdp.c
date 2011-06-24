@@ -1047,7 +1047,7 @@ kdp_copyin(pmap_t p, uint64_t uaddr, void *dest, size_t size) {
 
 	while (rem) {
 		ppnum_t upn = pmap_find_phys(p, uaddr);
-		uint64_t phys_src = (upn << PAGE_SHIFT) | (uaddr & PAGE_MASK);
+		uint64_t phys_src = ptoa_64(upn) | (uaddr & PAGE_MASK);
 		uint64_t phys_dest = kvtophys((vm_offset_t)kvaddr);
 		uint64_t src_rem = PAGE_SIZE - (phys_src & PAGE_MASK);
 		uint64_t dst_rem = PAGE_SIZE - (phys_dest & PAGE_MASK);
@@ -1085,11 +1085,11 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 	boolean_t save_loadinfo_p = ((trace_flags & STACKSHOT_SAVE_LOADINFO) != 0);
 
 	queue_iterate(&tasks, task, task_t, tasks) {
-		int task_pid = pid_from_task(task);
-		boolean_t task64 = task_has_64BitAddr(task);
-
 		if ((task == NULL) || (ml_nofault_copy((vm_offset_t) task, (vm_offset_t) &ctask, sizeof(struct task)) != sizeof(struct task)))
 			goto error_exit;
+
+		int task_pid = pid_from_task(task);
+		boolean_t task64 = task_has_64BitAddr(task);
 
 		/* Trace everything, unless a process was specified */
 		if ((pid == -1) || (pid == task_pid)) {

@@ -1954,9 +1954,9 @@ IOReturn IOService::requestPowerDomainState(
     // at its current or impending power state. 
 
     outputPowerFlags = fPowerStates[fCurrentPowerState].outputPowerCharacter;
-	if ((fMachineState != kIOPM_Finished) && (getPMRootDomain() != this))
+	if (fMachineState != kIOPM_Finished)
 	{
-		if (IS_POWER_DROP)
+		if (IS_POWER_DROP && (getPMRootDomain() != this))
 		{
 			// Use the lower power state when dropping power. 
 			// Must be careful since a power drop can be canceled
@@ -1987,7 +1987,7 @@ IOReturn IOService::requestPowerDomainState(
 					fPowerStates[fHeadNotePowerState].outputPowerCharacter;
 			}
 		}
-		else
+		else if (IS_POWER_RISE)
 		{
 			// When raising power, must report the output power flags from
 			// child's perspective. A child power request may arrive while
@@ -5575,6 +5575,26 @@ bool IOService::servicePMFreeQueue(
 
     if (root && (root != request))
         more = true;
+
+    if (fLockedFlags.PMStop && fPMWorkQueue && fPMWorkQueue->isEmpty())
+    {
+        // Driver PMstop'ed and the work queue is empty.
+        // Detach and destroy the work queue to avoid the similar cleanup by
+        // PMfree(), which is deadlock prone. After PMstop() if driver calls PM,
+        // or a request from power parent or child arrives, it is possible to
+        // create/cleanup work queue more than once. Should be rare.
+
+        gIOPMWorkLoop->removeEventSource(fPMWorkQueue);
+        fPMWorkQueue->release();
+        fPMWorkQueue = 0;
+
+        if ( fIdleTimerEventSource != NULL ) {
+            fIdleTimerEventSource->disable();
+            gIOPMWorkLoop->removeEventSource(fIdleTimerEventSource);
+            fIdleTimerEventSource->release();
+            fIdleTimerEventSource = NULL;
+        }		
+    }
 
 	releasePMRequest( request );
 	return more;

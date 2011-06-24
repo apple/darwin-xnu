@@ -273,10 +273,6 @@ static vm_object_t kptobj;
 char	*pmap_phys_attributes;
 unsigned int	last_managed_page = 0;
 
-extern ppnum_t	lowest_lo;
-extern ppnum_t	lowest_hi;
-extern ppnum_t	highest_hi;
-
 /*
  *	Amount of virtual memory mapped by one
  *	page-directory entry.
@@ -391,6 +387,8 @@ decl_simple_lock_data(,pmap_cache_lock)
 extern char end;
 
 static int nkpt;
+
+extern 	long	NMIPI_acks;
 
 pt_entry_t     *DMAP1, *DMAP2;
 caddr_t         DADDR1;
@@ -2988,7 +2986,7 @@ pmap_cpuset_NMIPI(cpu_set cpu_mask) {
 		if (cpu_mask & cpu_bit)
 			cpu_NMI_interrupt(cpu);
 	}
-	deadline = mach_absolute_time() + (LockTimeOut);
+	deadline = mach_absolute_time() + (LockTimeOut * 2);
 	while (mach_absolute_time() < deadline)
 		cpu_pause();
 }
@@ -3057,18 +3055,7 @@ pmap_flush_tlbs(pmap_t	pmap)
 		 * Wait for those other cpus to acknowledge
 		 */
 		while (cpus_to_respond != 0) {
-			if (mach_absolute_time() > deadline) {
-				if (mp_recent_debugger_activity())
-					continue;
-				if (!panic_active()) {
-					pmap_tlb_flush_timeout = TRUE;
-					pmap_cpuset_NMIPI(cpus_to_respond);
-				}
-				panic("pmap_flush_tlbs() timeout: "
-				    "cpu(s) failing to respond to interrupts, pmap=%p cpus_to_respond=0x%lx",
-				    pmap, cpus_to_respond);
-			}
-
+			long orig_acks = 0;
 			for (cpu = 0, cpu_bit = 1; cpu < real_ncpus; cpu++, cpu_bit <<= 1) {
 				if ((cpus_to_respond & cpu_bit) != 0) {
 					if (!cpu_datap(cpu)->cpu_running ||
@@ -3080,6 +3067,17 @@ pmap_flush_tlbs(pmap_t	pmap)
 				}
 				if (cpus_to_respond == 0)
 					break;
+			}
+			if (mach_absolute_time() > deadline) {
+				if (machine_timeout_suspended())
+					continue;
+				pmap_tlb_flush_timeout = TRUE;
+				orig_acks = NMIPI_acks;
+				pmap_cpuset_NMIPI(cpus_to_respond);
+
+				panic("TLB invalidation IPI timeout: "
+				    "CPU(s) failed to respond to interrupts, unresponsive CPU bitmap: 0x%lx, NMIPI acks: orig: 0x%lx, now: 0x%lx",
+				    cpus_to_respond, orig_acks, NMIPI_acks);
 			}
 		}
 	}

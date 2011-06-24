@@ -216,7 +216,7 @@ bool IOService::isInactive( void ) const
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define IOServiceTrace(csc, a, b, c, d) {				\
-    if(kIOTraceIOService & gIOKitDebug) {				\
+    if(kIOTraceIOService & gIOKitTrace) {				\
 	KERNEL_DEBUG_CONSTANT(IODBG_IOSERVICE(csc), a, b, c, d, 0);	\
     }									\
 }
@@ -2124,8 +2124,8 @@ void IOService::terminateWorker( IOOptionBits options )
 			(uintptr_t) (regID2 >> 32));
 
                 } else {
-                    // not ready for stop if it has clients, skip it
-                    if( (client->__state[1] & kIOServiceTermPhase3State) && client->getClient()) {
+                    // a terminated client is not ready for stop if it has clients, skip it
+                    if( (kIOServiceInactiveState & client->__state[0]) && client->getClient()) {
                         TLOG("%s::defer stop(%s)\n", client->getName(), provider->getName());
 
 			uint64_t regID1 = provider->getRegistryEntryID();
@@ -3065,8 +3065,8 @@ void IOService::doServiceMatch( IOOptionBits options )
             __state[1] |= kIOServiceConfigState;
             __state[0] |= kIOServiceRegisteredState;
 
-            if( reRegistered && (0 == (__state[0] & kIOServiceInactiveState))) {
-
+	    keepGuessing &= (0 == (__state[0] & kIOServiceInactiveState));
+            if (reRegistered && keepGuessing) {
                 iter = OSCollectionIterator::withCollection( (OSOrderedSet *)
                         gNotifications->getObject( gIOPublishNotification ) );
                 if( iter) {
@@ -3084,7 +3084,7 @@ void IOService::doServiceMatch( IOOptionBits options )
 	    UNLOCKNOTIFY();
             unlockForArbitration();
 
-            if( matches->getCount() && (kIOReturnSuccess == getResources()))
+            if (keepGuessing && matches->getCount() && (kIOReturnSuccess == getResources()))
                 probeCandidates( matches );
             else
                 matches->release();

@@ -2033,6 +2033,7 @@ wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlist *tl,
 	   int reuse_thread, int wake_thread, int return_directly)
 {
 	int ret = 0;
+	boolean_t need_resume = FALSE;
 
 	KERNEL_DEBUG1(0xefffd004 | DBG_FUNC_START, tl->th_workq, tl->th_priority, tl->th_affinity_tag, thread_tid(current_thread()), thread_tid(th));
 
@@ -2063,11 +2064,19 @@ wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlist *tl,
 		if (tl->th_flags & TH_LIST_NEED_WAKEUP)
 			wakeup(tl);
 		else
-			thread_resume(th);
+			need_resume = TRUE;
 
 		tl->th_flags &= ~(TH_LIST_BUSY | TH_LIST_NEED_WAKEUP);
 		
 		workqueue_unlock(p);
+
+		if (need_resume) {
+			/*
+			 * need to do this outside of the workqueue spin lock
+			 * since thread_resume locks the thread via a full mutex
+			 */
+			thread_resume(th);
+		}
 	}
 }
 

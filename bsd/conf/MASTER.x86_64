@@ -45,7 +45,7 @@
 #  Standard Apple Research Configurations:
 #  -------- ----- -------- ---------------
 #  BASE =        [ intel mach medium config_dtrace vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue psynch ]
-#  FILESYS =	 [ devfs revfs hfs journaling fdesc config_fse quota namedstreams fifo union config_volfs hfs_compression config_imgsrc_access ]
+#  FILESYS =	 [ devfs revfs hfs journaling fdesc config_fse quota namedstreams fifo union config_volfs config_hfs_trim hfs_compression config_imgsrc_access ]
 #  NETWORKING =  [ inet inet6 compat_oldsock tcpdrop_synfin bpfilter ipdivert ipfirewall ipv6firewall ipfw2 dummynet traffic_mgt sendfile netmibs bond vlan gif stf zlib randomipid ifnet_input_chk config_mbuf_jumbo ipflow pkt_priority if_bridge ]
 #  NFS =         [ nfsclient nfsserver ]
 #  VPN =         [ ipsec ]

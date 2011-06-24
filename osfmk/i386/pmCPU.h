@@ -38,7 +38,7 @@
  * This value should be changed each time that pmDsipatch_t or pmCallBacks_t
  * changes.
  */
-#define PM_DISPATCH_VERSION	21
+#define PM_DISPATCH_VERSION	23
 
 /*
  * Dispatch table for functions that get installed when the power
@@ -77,11 +77,25 @@ typedef struct
     boolean_t		(*pmIsCPUUnAvailable)(x86_lcpu_t *lcpu);
     int			(*pmChooseCPU)(int startCPU, int endCPU, int preferredCPU);
     int			(*pmIPIHandler)(void *state);
+    void		(*pmThreadTellUrgency)(int urgency, uint64_t rt_period, uint64_t rt_deadline);
+    void		(*pmActiveRTThreads)(boolean_t active);
 } pmDispatch_t;
 
 
+/*
+ * common time fields exported to PM code. This structure may be
+ * allocated on the stack, so avoid making it unnecessarily large.
+ */
+typedef struct pm_rtc_nanotime {
+	uint64_t	tsc_base;		/* timestamp */
+	uint64_t	ns_base;		/* nanoseconds */
+	uint32_t	scale;			/* tsc -> nanosec multiplier */
+	uint32_t	shift;			/* tsc -> nanosec shift/div */
+	uint32_t	generation;		/* 0 == being updated */
+} pm_rtc_nanotime_t;
+
 typedef struct {
-    int			(*setRTCPop)(uint64_t time);
+    uint64_t		(*setRTCPop)(uint64_t time);
     void		(*resyncDeadlines)(int cpu);
     void		(*initComplete)(void);
     x86_lcpu_t		*(*GetLCPU)(int cpu);
@@ -99,9 +113,16 @@ typedef struct {
     processor_t		(*ThreadBind)(processor_t proc);
     uint32_t		(*GetSavedRunCount)(void);
     void		(*pmSendIPI)(int cpu);
-    rtc_nanotime_t	*(*GetNanotimeInfo)(void);
+    void		(*GetNanotimeInfo)(pm_rtc_nanotime_t *);
+    int			(*ThreadGetUrgency)(uint64_t *rt_period, uint64_t *rt_deadline);
+    uint32_t		(*timeQueueMigrate)(int cpu);
     void		(*RTCClockAdjust)(uint64_t adjustment);
+    uint32_t		(*timerQueueMigrate)(int cpu);
     x86_topology_parameters_t	*topoParms;
+    boolean_t		(*InterruptPending)(void);
+    boolean_t		(*IsInterrupting)(uint8_t vector);
+    void		(*InterruptStats)(uint64_t intrs[256]);
+    void		(*DisableApicTimer)(void);
 } pmCallBacks_t;
 
 extern pmDispatch_t	*pmDispatch;
@@ -123,6 +144,8 @@ void pmTimerSave(void);
 void pmTimerRestore(void);
 kern_return_t pmCPUExitHalt(int cpu);
 kern_return_t pmCPUExitHaltToOff(int cpu);
+void thread_tell_urgency(int urgency, uint64_t rt_period, uint64_t rt_deadline);
+void active_rt_threads(boolean_t active);
 
 #define PM_HALT_NORMAL		0		/* normal halt path */
 #define PM_HALT_DEBUG		1		/* debug code wants to halt */

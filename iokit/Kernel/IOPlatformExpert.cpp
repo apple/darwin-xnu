@@ -25,9 +25,6 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/*
- * HISTORY
- */
  
 #include <IOKit/IOCPU.h>
 #include <IOKit/IODeviceTreeSupport.h>
@@ -373,6 +370,7 @@ PMLog(const char *who, unsigned long event,
       unsigned long param1, unsigned long param2)
 {
     UInt32 debugFlags = gIOKitDebug;
+    UInt32 traceFlags = gIOKitTrace;
 
     if (debugFlags & kIOLogPower) {
 
@@ -385,7 +383,7 @@ PMLog(const char *who, unsigned long event,
 		nowus, current_thread(), who,	// Identity
 		(int) event, (long) param1, (long) param2);			// Args
 
-	if (debugFlags & kIOLogTracePower) {
+	if (traceFlags & kIOTracePowerMgmt) {
 	    static const UInt32 sStartStopBitField[] = 
 		{ 0x00000000, 0x00000040 }; // Only Program Hardware so far
 

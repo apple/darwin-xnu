@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -24,12 +24,6 @@
  * limitations under the License.
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
- */
-/*
- * Copyright (c) 1998,1999 Apple Inc.  All rights reserved. 
- *
- * HISTORY
- *
  */
 
 #include <libkern/c++/OSUnserialize.h>
@@ -128,14 +122,24 @@ void StartIOKit( void * p1, void * p2, void * p3, void * p4 )
 {
     IOPlatformExpertDevice *	rootNub;
     int				debugFlags;
+	uint32_t		intThreshold;
 
     if( PE_parse_boot_argn( "io", &debugFlags, sizeof (debugFlags) ))
 	gIOKitDebug = debugFlags;
 
+    if( PE_parse_boot_argn( "iotrace", &debugFlags, sizeof (debugFlags) ))
+		gIOKitTrace = debugFlags;
+	
+	// Compat for boot-args
+	gIOKitTrace |= (gIOKitDebug & kIOTraceCompatBootArgs);
+
+    if( PE_parse_boot_argn( "iointthreshold", &intThreshold, sizeof (intThreshold) ))
+		gIOInterruptThresholdNS = intThreshold * 1000;
+	
     // Check for the log synchronous bit set in io
     if (gIOKitDebug & kIOLogSynchronous)
         debug_mode = true;
-
+	
     //
     // Have to start IOKit environment before we attempt to start
     // the C++ runtime environment.  At some stage we have to clean up

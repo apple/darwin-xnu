@@ -132,6 +132,7 @@ static lck_grp_t	*cl_mtx_grp;
 static lck_attr_t	*cl_mtx_attr;
 static lck_grp_attr_t   *cl_mtx_grp_attr;
 static lck_mtx_t	*cl_mtxp;
+static lck_mtx_t	*cl_transaction_mtxp;
 
 
 #define	IO_UNKNOWN	0
@@ -242,6 +243,11 @@ cluster_init(void) {
 
 	if (cl_mtxp == NULL)
 	        panic("cluster_init: failed to allocate cl_mtxp");
+
+	cl_transaction_mtxp = lck_mtx_alloc_init(cl_mtx_grp, cl_mtx_attr);
+
+	if (cl_transaction_mtxp == NULL)
+	        panic("cluster_init: failed to allocate cl_transaction_mtxp");
 }
 
 
@@ -510,26 +516,36 @@ cluster_iodone(buf_t bp, void *callback_arg)
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 20)) | DBG_FUNC_START,
 		     cbp_head, bp->b_lblkno, bp->b_bcount, bp->b_flags, 0);
 
-	for (cbp = cbp_head; cbp; cbp = cbp->b_trans_next) {
-	        /*
-		 * all I/O requests that are part of this transaction
-		 * have to complete before we can process it
-		 */
-	        if ( !(cbp->b_flags & B_DONE)) {
+	if (cbp_head->b_trans_next || !(cbp_head->b_flags & B_EOT)) {
 
+		lck_mtx_lock_spin(cl_transaction_mtxp);
+
+		bp->b_flags |= B_TDONE;
+		
+		for (cbp = cbp_head; cbp; cbp = cbp->b_trans_next) {
+		        /*
+			 * all I/O requests that are part of this transaction
+			 * have to complete before we can process it
+			 */
+		        if ( !(cbp->b_flags & B_TDONE)) {
+
+			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 20)) | DBG_FUNC_END,
+					     cbp_head, cbp, cbp->b_bcount, cbp->b_flags, 0);
+
+				lck_mtx_unlock(cl_transaction_mtxp);
+				return 0;
+			}
+			if (cbp->b_flags & B_EOT)
+			        transaction_complete = TRUE;
+		}
+		lck_mtx_unlock(cl_transaction_mtxp);
+
+		if (transaction_complete == FALSE) {
 		        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 20)) | DBG_FUNC_END,
-				     cbp_head, cbp, cbp->b_bcount, cbp->b_flags, 0);
+				     cbp_head, 0, 0, 0, 0);
 
 			return 0;
 		}
-		if (cbp->b_flags & B_EOT)
-		        transaction_complete = TRUE;
-	}
-	if (transaction_complete == FALSE) {
-	        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 20)) | DBG_FUNC_END,
-			     cbp_head, 0, 0, 0, 0);
-
-		return 0;
 	}
 	error       = 0;
 	total_size  = 0;
@@ -759,6 +775,14 @@ cluster_complete_transaction(buf_t *cbp_head, void *callback_arg, int *retval, i
 	        for (cbp = *cbp_head; cbp; cbp = cbp->b_trans_next)
 		        buf_biowait(cbp);
 	}
+	/*
+	 * we've already waited on all of the I/Os in this transaction,
+	 * so mark all of the buf_t's in this transaction as B_TDONE
+	 * so that cluster_iodone sees the transaction as completed
+	 */
+	for (cbp = *cbp_head; cbp; cbp = cbp->b_trans_next)
+	        cbp->b_flags |= B_TDONE;
+
 	error = cluster_iodone(*cbp_head, callback_arg);
 
 	if ( !(flags & CL_ASYNC) && error && *retval == 0) {

@@ -13,7 +13,6 @@ _in6addr_local
 _in_broadcast
 _inaddr_local
 _inet_domain_mutex
-_io_map_spec
 _ip_mutex
 _ip_output
 _ip_protox
@@ -21,7 +20,8 @@ _kdp_register_callout
 _kdp_set_ip_and_mac_addresses
 _kernel_flock
 _kernel_thread
-_lapic_start
+_lapic_set_perfcnt_interrupt_mask
+_lapic_set_pmi_func
 _lo_ifp
 _m_adj
 _m_cat
@@ -73,6 +73,7 @@ _pru_sense_null
 _pru_shutdown_notsupp
 _pru_sockaddr_notsupp
 _pru_sopoll_notsupp
+_rdmsr_carefully
 _real_ncpus
 _rtc_clock_napped
 _sbappendaddr

@@ -143,6 +143,7 @@ tsc_init(void)
 	busFreq = EFI_FSB_frequency();
 
 	switch (cpuid_cpufamily()) {
+	case CPUFAMILY_INTEL_SANDYBRIDGE:
 	case CPUFAMILY_INTEL_WESTMERE:
 	case CPUFAMILY_INTEL_NEHALEM: {
 		uint64_t cpu_mhz;

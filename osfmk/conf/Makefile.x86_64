@@ -24,7 +24,6 @@ OBJS_NO_WERROR=				\
 	security_server.o \
 	device_server.o \
 	gssd_mach.o \
-	mp.o # This is blocked on 6640051
 
 OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
 

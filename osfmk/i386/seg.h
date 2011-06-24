@@ -300,7 +300,6 @@ __END_DECLS
 #define	SYSCALL_CS	0x2f		/* 64-bit syscall pseudo-segment */
 #define	USER_CTHREAD	0x37		/* user cthread area */
 #define	USER_SETTABLE	0x3f		/* start of user settable ldt entries */
-#define	USLDTSZ		10		/* number of user settable entries */
 
 /*
  * Kernel descriptors for MACH - 32-bit flat address space.
@@ -327,13 +326,13 @@ __END_DECLS
 /*
  * Kernel descriptors for MACH - 64-bit flat address space.
  */
-#define KERNEL64_CS 	0x08		/* 1:  First entry */
-#define SYSENTER_CS 	0x0b 		/*     alias to KERNEL64_CS */
-#define	KERNEL64_SS	0x10		/* 2:  must be SYSENTER_CS + 8  */
-#define USER_CS		0x1b		/* 3:  must be SYSENTER_CS + 16 */
-#define USER_DS		0x23		/* 4:  must be SYSENTER_CS + 24 */
-#define USER64_CS	0x2b		/* 5:  must be SYSENTER_CS + 32 */
-#define USER64_DS	USER_DS		/*     nothing special about 64bit DS */
+#define KERNEL64_CS 	0x08		/* 1:  K64 code */
+#define SYSENTER_CS 	0x0b 		/*     U32 sysenter pseudo-segment */
+#define	KERNEL64_SS	0x10		/* 2:  KERNEL64_CS+8 for syscall */
+#define USER_CS		0x1b		/* 3:  U32 code */
+#define USER_DS		0x23		/* 4:  USER_CS+8 for sysret */
+#define USER64_CS	0x2b		/* 5:  USER_CS+16 for sysret */
+#define USER64_DS	USER_DS		/*     U64 data pseudo-segment */
 #define KERNEL_LDT	0x30		/* 6:  */
 					/* 7:  other 8 bytes of KERNEL_LDT */
 #define KERNEL_TSS	0x40		/* 8:  */
@@ -341,8 +340,7 @@ __END_DECLS
 #define KERNEL32_CS	0x50		/* 10: */
 #define USER_LDT	0x58		/* 11: */
 					/* 12: other 8 bytes of USER_LDT */
-#define KERNEL_DS	0x80		/* 16: */
-#define	SYSCALL_CS	0x8f		/* 17: 64-bit syscall pseudo-segment */
+#define KERNEL_DS	0x68		/* 13: 32-bit kernel data */
 
 #endif
 
@@ -365,9 +363,9 @@ __END_DECLS
 /*
  * 64-bit kernel LDT descriptors
  */
+#define	SYSCALL_CS	0x07		/* syscall pseudo-segment */
 #define	USER_CTHREAD	0x0f		/* user cthread area */
 #define	USER_SETTABLE	0x1f		/* start of user settable ldt entries */
-#define	USLDTSZ		10		/* number of user settable entries */
 #endif
 
 #endif	/* _I386_SEG_H_ */

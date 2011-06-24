@@ -690,7 +690,7 @@ extern kern_return_t vm_map_remap(
 				vm_map_offset_t		*address,
 				vm_map_size_t		size,
 				vm_map_offset_t		mask,
-				boolean_t		anywhere,
+				int			flags,
 				vm_map_t		src_map,
 				vm_map_offset_t		memory_address,
 				boolean_t		copy,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -65,39 +65,51 @@
  * XXX a better implementation would use a set of generic callouts and iterate over them
  */
 void
-etimer_intr(
-__unused int inuser,
-__unused uint64_t iaddr)
+etimer_intr(int		user_mode,
+	    uint64_t	rip)
 {
 	uint64_t		abstime;
 	rtclock_timer_t		*mytimer;
 	cpu_data_t		*pp;
-	x86_lcpu_t		*lcpu;
+	int32_t			latency;
+	uint64_t		pmdeadline;
 
 	pp = current_cpu_datap();
-	lcpu = x86_lcpu();
 
-	mytimer = &pp->rtclock_timer;				/* Point to the event timer */
-	abstime = mach_absolute_time();				/* Get the time now */
-
-	/* is it time for power management state change? */	
-	if (pmCPUGetDeadline(pp) <= abstime) {
-	        KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 3) | DBG_FUNC_START, 0, 0, 0, 0, 0);
-		pmCPUDeadline(pp);
-	        KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 3) | DBG_FUNC_END, 0, 0, 0, 0, 0);
-
-		abstime = mach_absolute_time();			/* Get the time again since we ran a bit */
-	}
+	abstime = mach_absolute_time();			/* Get the time now */
 
 	/* has a pending clock timer expired? */
-	if (mytimer->deadline <= abstime) {			/* Have we expired the deadline? */
-		mytimer->has_expired = TRUE;			/* Remember that we popped */
+	mytimer = &pp->rtclock_timer;
+	if (mytimer->deadline <= abstime) {
+	    	/*
+		 * Log interrupt service latency (-ve value expected by tool)
+		 * a non-PM event is expected next.
+		 */
+	    	latency = (int32_t) (abstime - mytimer->deadline);
+		KERNEL_DEBUG_CONSTANT(
+		    MACHDBG_CODE(DBG_MACH_EXCP_DECI, 0) | DBG_FUNC_NONE,
+		    -latency,
+		    (uint32_t)rip, user_mode, 0, 0);
+
+		mytimer->has_expired = TRUE;		/* Remember that we popped */
 		mytimer->deadline = timer_queue_expire(&mytimer->queue, abstime);
 		mytimer->has_expired = FALSE;
+
+		/* Get the time again since we ran for a bit */
+		abstime = mach_absolute_time();
 	}
 
-	/* schedule our next deadline */
-	lcpu->rtcPop = EndOfAllTime;				/* any real deadline will be earlier */
+	/* is it time for power management state change? */
+	if ((pmdeadline = pmCPUGetDeadline(pp)) && (pmdeadline <= abstime)) {
+	        KERNEL_DEBUG_CONSTANT(
+		    MACHDBG_CODE(DBG_MACH_EXCP_DECI, 3) | DBG_FUNC_START,
+		    0, 0, 0, 0, 0);
+		pmCPUDeadline(pp);
+	        KERNEL_DEBUG_CONSTANT(
+		    MACHDBG_CODE(DBG_MACH_EXCP_DECI, 3) | DBG_FUNC_END,
+		    0, 0, 0, 0, 0);
+	}
+
 	etimer_resync_deadlines();
 }
 
@@ -110,11 +122,11 @@ void etimer_set_deadline(uint64_t deadline)
 	spl_t			s;
 	cpu_data_t		*pp;
 
-	s = splclock();					/* no interruptions */
+	s = splclock();				/* no interruptions */
 	pp = current_cpu_datap();
 
-	mytimer = &pp->rtclock_timer;			/* Point to the timer itself */
-	mytimer->deadline = deadline;			/* Set the new expiration time */
+	mytimer = &pp->rtclock_timer;		/* Point to the timer itself */
+	mytimer->deadline = deadline;		/* Set the new expiration time */
 
 	etimer_resync_deadlines();
 
@@ -134,44 +146,37 @@ etimer_resync_deadlines(void)
 	rtclock_timer_t		*mytimer;
 	spl_t			s = splclock();
 	cpu_data_t		*pp;
-	x86_lcpu_t		*lcpu;
+	uint32_t		decr;
 
 	pp = current_cpu_datap();
-	lcpu = x86_lcpu();
-	deadline = ~0ULL;
+	deadline = EndOfAllTime;
 
 	/*
-	 * If we have a clock timer set sooner, pop on that.
+	 * If we have a clock timer set, pick that.
 	 */
 	mytimer = &pp->rtclock_timer;
-	if (!mytimer->has_expired && mytimer->deadline > 0)
+	if (!mytimer->has_expired &&
+	    0 < mytimer->deadline && mytimer->deadline < EndOfAllTime)
 		deadline = mytimer->deadline;
 
 	/*
 	 * If we have a power management deadline, see if that's earlier.
 	 */
 	pmdeadline = pmCPUGetDeadline(pp);
-	if (pmdeadline > 0 && pmdeadline < deadline)
+	if (0 < pmdeadline && pmdeadline < deadline)
 	    deadline = pmdeadline;
 
 	/*
 	 * Go and set the "pop" event.
 	 */
-	if (deadline > 0) {
-		int     decr;
-		uint64_t now;
+	decr = (uint32_t) setPop(deadline);
 
-		now = mach_absolute_time();
-		decr = setPop(deadline);
-
-		if (deadline < now)
-		        lcpu->rtcPop = now + decr;
-		else
-		        lcpu->rtcPop = deadline;
-
-		lcpu->rtcDeadline = lcpu->rtcPop;
-
-		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1) | DBG_FUNC_NONE, decr, 2, 0, 0, 0);
+	/* Record non-PM deadline for latency tool */
+	if (deadline != pmdeadline) {
+	    	KERNEL_DEBUG_CONSTANT(
+		    MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1) | DBG_FUNC_NONE,
+		    decr, 2,
+		    deadline, (uint32_t)(deadline >> 32), 0);
 	}
 	splx(s);
 }
@@ -185,10 +190,8 @@ __unused void			*arg)
 	rtclock_timer_t		*mytimer;
 	uint64_t			abstime;
 	cpu_data_t			*pp;
-	x86_lcpu_t			*lcpu;
 
 	pp = current_cpu_datap();
-	lcpu = x86_lcpu();
 
 	mytimer = &pp->rtclock_timer;
 	abstime = mach_absolute_time();
@@ -197,7 +200,6 @@ __unused void			*arg)
 	mytimer->deadline = timer_queue_expire(&mytimer->queue, abstime);
 	mytimer->has_expired = FALSE;
 
-	lcpu->rtcPop = EndOfAllTime;
 	etimer_resync_deadlines();
 }
 

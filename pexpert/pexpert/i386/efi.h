@@ -230,7 +230,7 @@ typedef struct {
 // range requires a runtime mapping
 //
 #define EFI_MEMORY_RUNTIME  0x8000000000000000ULL
-
+#define EFI_MEMORY_KERN_RESERVED (1ULL << 59)
 typedef EFI_UINT64  EFI_PHYSICAL_ADDRESS;
 typedef EFI_UINT64  EFI_VIRTUAL_ADDRESS;
 

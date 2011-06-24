@@ -355,6 +355,10 @@ extern uint64_t pde_mapped_size;
 extern char		*pmap_phys_attributes;
 extern unsigned int	last_managed_page;
 
+extern ppnum_t	lowest_lo;
+extern ppnum_t	lowest_hi;
+extern ppnum_t	highest_hi;
+
 /*
  * when spinning through pmap_remove
  * ensure that we don't spend too much

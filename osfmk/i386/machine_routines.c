@@ -46,6 +46,8 @@
 #include <mach/vm_param.h>
 #include <i386/pmap.h>
 #include <i386/misc_protos.h>
+#include <i386/mp.h>
+
 #if MACH_KDB
 #include <machine/db_machdep.h>
 #include <ddb/db_aout.h>
@@ -432,7 +434,7 @@ ml_cpu_get_info(ml_cpu_info_t *cpu_infop)
 	 * Are we supporting MMX/SSE/SSE2/SSE3?
 	 * As distinct from whether the cpu has these capabilities.
 	 */
-	os_supports_sse = !!(get_cr4() & CR4_XMM);
+	os_supports_sse = !!(get_cr4() & CR4_OSXMM);
 	if ((cpuid_features() & CPUID_FEATURE_SSE4_2) && os_supports_sse)
 		cpu_infop->vector_unit = 8;
 	else if ((cpuid_features() & CPUID_FEATURE_SSE4_1) && os_supports_sse)
@@ -541,7 +543,8 @@ ml_init_lock_timeout(void)
 	}
 	MutexSpin = (unsigned int)abstime;
 
-	nanoseconds_to_absolutetime(2 * NSEC_PER_SEC, &LastDebuggerEntryAllowance);
+	nanoseconds_to_absolutetime(4ULL * NSEC_PER_SEC, &LastDebuggerEntryAllowance);
+	interrupt_latency_tracker_setup();
 }
 
 /*
@@ -644,6 +647,10 @@ vm_offset_t ml_stack_remaining(void)
 	} else {
 	    return (local - current_thread()->kernel_stack);
 	}
+}
+
+boolean_t machine_timeout_suspended(void) {
+	return (mp_recent_debugger_activity() || panic_active() || pmap_tlb_flush_timeout || spinlock_timed_out);
 }
 
 #if MACH_KDB

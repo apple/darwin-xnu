@@ -71,7 +71,7 @@ enum {
     kIOLogPower         =         0x00000080ULL,
     kIOLogMapping       =         0x00000100ULL,
     kIOLogCatalogue     =         0x00000200ULL,
-    kIOLogTracePower    =         0x00000400ULL,
+	kIOLogTracePower    =         0x00000400ULL,  // Obsolete: Use iotrace=0x00000400ULL to enable now
     kIOLogDebugPower    =         0x00000800ULL,
     kIOLogServiceTree   =         0x00001000ULL,
     kIOLogDTree         =         0x00002000ULL,
@@ -80,7 +80,7 @@ enum {
     kOSLogRegistryMods  =         0x00010000ULL,  // Log attempts to modify registry collections
     kIOLogPMRootDomain  =         0x00020000ULL,
     kOSRegistryModsMode =         0x00040000ULL,  // Change default registry modification handling - panic vs. log
-    kIOTraceIOService   =         0x00080000ULL,
+//    kIOTraceIOService   =         0x00080000ULL,  // Obsolete: Use iotrace=0x00080000ULL to enable now
     kIOLogHibernate     =         0x00100000ULL,
 
     // debug aids - change behaviour
@@ -91,7 +91,25 @@ enum {
     _kIODebugTopFlag    = 0x8000000000000000ULL   // force enum to be 64 bits
 };
 
+enum {
+	kIOTraceInterrupts		= 		0x00000001ULL,	// Trace primary interrupts
+	kIOTraceWorkLoops		=		0x00000002ULL,	// Trace workloop activity
+	kIOTraceEventSources	=		0x00000004ULL,	// Trace non-passive event sources
+	kIOTraceIntEventSource	=		0x00000008ULL,	// Trace IOIES and IOFIES sources
+	kIOTraceCommandGates	=		0x00000010ULL,	// Trace command gate activity
+	kIOTraceTimers			= 		0x00000020ULL,	// Trace timer event source activity
+	
+	kIOTracePowerMgmt		=		0x00000400ULL,	// Trace power management changes
+	
+	kIOTraceIOService   	=		0x00080000ULL,	// registerService/termination
+	
+	kIOTraceCompatBootArgs	=		kIOTraceIOService | kIOTracePowerMgmt
+};
+
 extern SInt64    gIOKitDebug;
+extern SInt64    gIOKitTrace;
+extern UInt64	 gIOInterruptThresholdNS;
+
 
 #ifdef __cplusplus
 extern "C" {

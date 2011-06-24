@@ -52,7 +52,7 @@ extern vm_offset_t	virtual_avail;
  * Note, this will onl
  */
 vm_offset_t
-io_map(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
+io_map(vm_map_offset_t phys_addr, vm_size_t size, unsigned int flags)
 {
 	vm_offset_t	start;
 	vm_size_t	i;
@@ -75,7 +75,7 @@ io_map(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
 			mflags,					/* Map with requested cache mode */
 			(size >> 12), VM_PROT_READ|VM_PROT_WRITE);
 
-		return (start + (phys_addr & PAGE_MASK));	/* Pass back the physical address */
+		return (start + (phys_addr & PAGE_MASK));	/* Pass back the virtual address */
 	
 	} else {
 	
@@ -107,7 +107,7 @@ io_map(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
  * Allocate and map memory for devices before the VM system comes alive.
  */
 
-vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size, unsigned int flags)
+vm_offset_t io_map_spec(vm_map_offset_t phys_addr, vm_size_t size, unsigned int flags)
 {
 	vm_offset_t	start;
 	unsigned int    mflags;

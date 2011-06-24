@@ -1541,8 +1541,10 @@ kdp_get_xnu_version(char *versionbuf)
 	char *vptr;
 
 	strlcpy(vstr, "custom", 10);
-	if (strlcpy(versionbuf, version, 95) < 95) {
-		versionpos = strnstr(versionbuf, "xnu-", 90);
+
+	if (kdp_machine_vm_read((mach_vm_address_t)(uintptr_t)version, versionbuf, 128)) {
+               versionbuf[127] = '\0';
+               versionpos = strnstr(versionbuf, "xnu-", 115);
 		if (versionpos) {
 			strncpy(vstr, versionpos, sizeof(vstr));
 			vstr[sizeof(vstr)-1] = '\0';
@@ -1692,7 +1694,12 @@ kdp_panic_dump(void)
 	}
 		
 	printf("Entering system dump routine\n");
-  
+
+	if (!kdp_en_recv_pkt || !kdp_en_send_pkt) {
+		printf("Error: No transport device registered for kernel crashdump\n");
+		return;
+	}
+
 	if (!panicd_specified) {
 		printf("A dump server was not specified in the boot-args, terminating kernel core dump.\n");
 		goto panic_dump_exit;

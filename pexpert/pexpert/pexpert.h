@@ -185,7 +185,11 @@ struct PE_Video {
 	unsigned char	v_rotate;	/* Rotation: 0:normal, 1:right 90, 2:left 180, 3:left 90 */
 	unsigned char	v_scale;	/* Scale Factor for both X & Y */
 	char		reserved1[2];
+#ifdef __LP64__
 	long		reserved2;
+#else
+	long		v_baseAddrHigh;
+#endif
 };
 
 typedef struct PE_Video       PE_Video;
@@ -211,6 +215,7 @@ extern int PE_initialize_console(
 #define kPEReleaseScreen	5
 #define kPEEnableScreen	 	6
 #define kPEDisableScreen	7
+#define kPEBaseAddressChange	8
 
 extern void PE_display_icon( unsigned int flags,
 			     const char * name );

@@ -7,10 +7,10 @@ _cpu_number
 _dsmos_page_transform_hook
 _gPEEFIRuntimeServices
 _gPEEFISystemTable
-_io_map_spec
 _kdp_register_callout
 _kdp_set_ip_and_mac_addresses
-_lapic_start
+_lapic_set_perfcnt_interrupt_mask
+_lapic_set_pmi_func
 _ml_get_apicid
 _ml_get_maxbusdelay
 _ml_get_maxsnoop
@@ -20,6 +20,7 @@ _mp_rendezvous_no_intrs
 _pmCPUControl
 _pmKextRegister
 _pm_init_lock
+_rdmsr_carefully
 _real_ncpus
 _rtc_clock_napped
 _serial_getc

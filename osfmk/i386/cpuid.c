@@ -203,7 +203,8 @@ static cpuid_cache_descriptor_t intel_cpuid_leaf2_descriptor_table[] = {
 	{ 0xE5,	CACHE,	L3,		16,	16*M,	64  },	
 	{ 0xE6,	CACHE,	L3,		16,	24*M,	64  },	
 	{ 0xF0,	PREFETCH, NA,		NA,	64,	NA  },	
-	{ 0xF1,	PREFETCH, NA,		NA,	128,	NA  }	
+	{ 0xF1,	PREFETCH, NA,		NA,	128,	NA  },	
+	{ 0xFF,	CACHE,  NA,		NA,	0,	NA  }	
 };
 #define	INTEL_LEAF2_DESC_NUM (sizeof(intel_cpuid_leaf2_descriptor_table) / \
 				sizeof(cpuid_cache_descriptor_t))
@@ -240,7 +241,10 @@ static void cpuid_fn(uint32_t selector, uint32_t *result)
 			  "=b" (result[1]),
 			  "=c" (result[2]),
 			  "=d" (result[3])
-			: "a"(selector));
+			: "a"(selector),
+			  "b" (0),
+			  "c" (0),
+			  "d" (0));
 	} else {
 		do_cpuid(selector, result);
 	}
@@ -574,8 +578,13 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		ctp->sensor 		  = bitfield32(reg[eax], 0, 0);
 		ctp->dynamic_acceleration = bitfield32(reg[eax], 1, 1);
 		ctp->invariant_APIC_timer = bitfield32(reg[eax], 2, 2);
+		ctp->core_power_limits    = bitfield32(reg[eax], 3, 3);
+		ctp->fine_grain_clock_mod = bitfield32(reg[eax], 4, 4);
+		ctp->package_thermal_intr = bitfield32(reg[eax], 5, 5);
 		ctp->thresholds		  = bitfield32(reg[ebx], 3, 0);
 		ctp->ACNT_MCNT		  = bitfield32(reg[ecx], 0, 0);
+		ctp->hardware_feedback	  = bitfield32(reg[ecx], 1, 1);
+		ctp->energy_policy	  = bitfield32(reg[ecx], 2, 2);
 		info_p->cpuid_thermal_leafp = ctp;
 	}
 
@@ -594,6 +603,15 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		capp->fixed_number  = bitfield32(reg[edx],  4,  0);
 		capp->fixed_width   = bitfield32(reg[edx], 12,  5);
 		info_p->cpuid_arch_perf_leafp = capp;
+	}
+
+	if (info_p->cpuid_max_basic >= 0xd) {
+		cpuid_xsave_leaf_t	*xsp = &info_p->cpuid_xsave_leaf;
+		/*
+		 * XSAVE Features:
+		 */
+		cpuid_fn(0xd, info_p->cpuid_xsave_leaf.extended_state);
+		info_p->cpuid_xsave_leafp = xsp;
 	}
 
 	return;
@@ -630,6 +648,10 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 		case CPUID_MODEL_WESTMERE_EX:
 			cpufamily = CPUFAMILY_INTEL_WESTMERE;
 			break;
+		case CPUID_MODEL_SANDYBRIDGE:
+		case CPUID_MODEL_JAKETOWN:
+			cpufamily = CPUFAMILY_INTEL_SANDYBRIDGE;
+			break;
 		}
 		break;
 	}
@@ -637,7 +659,10 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 	info_p->cpuid_cpufamily = cpufamily;
 	return cpufamily;
 }
-
+/*
+ * Must be invoked either when executing single threaded, or with
+ * independent synchronization.
+ */
 void
 cpuid_set_info(void)
 {
@@ -664,17 +689,13 @@ cpuid_set_info(void)
 	 * (which determines whether SMT/Hyperthreading is active).
 	 */
 	switch (info_p->cpuid_cpufamily) {
-	/*
-	 * This should be the same as Nehalem but an A0 silicon bug returns
-	 * invalid data in the top 12 bits. Hence, we use only bits [19..16]
-	 * rather than [31..16] for core count - which actually can't exceed 8. 
-	 */
 	case CPUFAMILY_INTEL_WESTMERE: {
 		uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
 		info_p->core_count   = bitfield32((uint32_t)msr, 19, 16);
 		info_p->thread_count = bitfield32((uint32_t)msr, 15,  0);
 		break;
 		}
+	case CPUFAMILY_INTEL_SANDYBRIDGE:
 	case CPUFAMILY_INTEL_NEHALEM: {
 		uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
 		info_p->core_count   = bitfield32((uint32_t)msr, 31, 16);
@@ -694,62 +715,71 @@ static struct {
 	uint64_t	mask;
 	const char	*name;
 } feature_map[] = {
-	{CPUID_FEATURE_FPU,   "FPU",},
-	{CPUID_FEATURE_VME,   "VME",},
-	{CPUID_FEATURE_DE,    "DE",},
-	{CPUID_FEATURE_PSE,   "PSE",},
-	{CPUID_FEATURE_TSC,   "TSC",},
-	{CPUID_FEATURE_MSR,   "MSR",},
-	{CPUID_FEATURE_PAE,   "PAE",},
-	{CPUID_FEATURE_MCE,   "MCE",},
-	{CPUID_FEATURE_CX8,   "CX8",},
-	{CPUID_FEATURE_APIC,  "APIC",},
-	{CPUID_FEATURE_SEP,   "SEP",},
-	{CPUID_FEATURE_MTRR,  "MTRR",},
-	{CPUID_FEATURE_PGE,   "PGE",},
-	{CPUID_FEATURE_MCA,   "MCA",},
-	{CPUID_FEATURE_CMOV,  "CMOV",},
-	{CPUID_FEATURE_PAT,   "PAT",},
-	{CPUID_FEATURE_PSE36, "PSE36",},
-	{CPUID_FEATURE_PSN,   "PSN",},
-	{CPUID_FEATURE_CLFSH, "CLFSH",},
-	{CPUID_FEATURE_DS,    "DS",},
-	{CPUID_FEATURE_ACPI,  "ACPI",},
-	{CPUID_FEATURE_MMX,   "MMX",},
-	{CPUID_FEATURE_FXSR,  "FXSR",},
-	{CPUID_FEATURE_SSE,   "SSE",},
-	{CPUID_FEATURE_SSE2,  "SSE2",},
-	{CPUID_FEATURE_SS,    "SS",},
-	{CPUID_FEATURE_HTT,   "HTT",},
-	{CPUID_FEATURE_TM,    "TM",},
-	{CPUID_FEATURE_SSE3,    "SSE3"},
+	{CPUID_FEATURE_FPU,       "FPU"},
+	{CPUID_FEATURE_VME,       "VME"},
+	{CPUID_FEATURE_DE,        "DE"},
+	{CPUID_FEATURE_PSE,       "PSE"},
+	{CPUID_FEATURE_TSC,       "TSC"},
+	{CPUID_FEATURE_MSR,       "MSR"},
+	{CPUID_FEATURE_PAE,       "PAE"},
+	{CPUID_FEATURE_MCE,       "MCE"},
+	{CPUID_FEATURE_CX8,       "CX8"},
+	{CPUID_FEATURE_APIC,      "APIC"},
+	{CPUID_FEATURE_SEP,       "SEP"},
+	{CPUID_FEATURE_MTRR,      "MTRR"},
+	{CPUID_FEATURE_PGE,       "PGE"},
+	{CPUID_FEATURE_MCA,       "MCA"},
+	{CPUID_FEATURE_CMOV,      "CMOV"},
+	{CPUID_FEATURE_PAT,       "PAT"},
+	{CPUID_FEATURE_PSE36,     "PSE36"},
+	{CPUID_FEATURE_PSN,       "PSN"},
+	{CPUID_FEATURE_CLFSH,     "CLFSH"},
+	{CPUID_FEATURE_DS,        "DS"},
+	{CPUID_FEATURE_ACPI,      "ACPI"},
+	{CPUID_FEATURE_MMX,       "MMX"},
+	{CPUID_FEATURE_FXSR,      "FXSR"},
+	{CPUID_FEATURE_SSE,       "SSE"},
+	{CPUID_FEATURE_SSE2,      "SSE2"},
+	{CPUID_FEATURE_SS,        "SS"},
+	{CPUID_FEATURE_HTT,       "HTT"},
+	{CPUID_FEATURE_TM,        "TM"},
+	{CPUID_FEATURE_PBE,       "PBE"},
+	{CPUID_FEATURE_SSE3,      "SSE3"},
 	{CPUID_FEATURE_PCLMULQDQ, "PCLMULQDQ"},
-	{CPUID_FEATURE_MONITOR, "MON"},
-	{CPUID_FEATURE_DSCPL,   "DSCPL"},
-	{CPUID_FEATURE_VMX,     "VMX"},
-	{CPUID_FEATURE_SMX,     "SMX"},
-	{CPUID_FEATURE_EST,     "EST"},
-	{CPUID_FEATURE_TM2,     "TM2"},
-	{CPUID_FEATURE_SSSE3,   "SSSE3"},
-	{CPUID_FEATURE_CID,     "CID"},
-	{CPUID_FEATURE_CX16,    "CX16"},
-	{CPUID_FEATURE_xTPR,    "TPR"},
-	{CPUID_FEATURE_PDCM,    "PDCM"},
-	{CPUID_FEATURE_SSE4_1,  "SSE4.1"},
-	{CPUID_FEATURE_SSE4_2,  "SSE4.2"},
-	{CPUID_FEATURE_xAPIC,   "xAPIC"},
-	{CPUID_FEATURE_POPCNT,  "POPCNT"},
-	{CPUID_FEATURE_AES,     "AES"},
-	{CPUID_FEATURE_VMM,     "VMM"},
+	{CPUID_FEATURE_DTES64,    "DTES64"},
+	{CPUID_FEATURE_MONITOR,   "MON"},
+	{CPUID_FEATURE_DSCPL,     "DSCPL"},
+	{CPUID_FEATURE_VMX,       "VMX"},
+	{CPUID_FEATURE_SMX,       "SMX"},
+	{CPUID_FEATURE_EST,       "EST"},
+	{CPUID_FEATURE_TM2,       "TM2"},
+	{CPUID_FEATURE_SSSE3,     "SSSE3"},
+	{CPUID_FEATURE_CID,       "CID"},
+	{CPUID_FEATURE_CX16,      "CX16"},
+	{CPUID_FEATURE_xTPR,      "TPR"},
+	{CPUID_FEATURE_PDCM,      "PDCM"},
+	{CPUID_FEATURE_SSE4_1,    "SSE4.1"},
+	{CPUID_FEATURE_SSE4_2,    "SSE4.2"},
+	{CPUID_FEATURE_xAPIC,     "xAPIC"},
+	{CPUID_FEATURE_MOVBE,     "MOVBE"},
+	{CPUID_FEATURE_POPCNT,    "POPCNT"},
+	{CPUID_FEATURE_AES,       "AES"},
+	{CPUID_FEATURE_XSAVE,     "XSAVE"},
+	{CPUID_FEATURE_OSXSAVE,   "OSXSAVE"},
+	{CPUID_FEATURE_VMM,       "VMM"},
+	{CPUID_FEATURE_SEGLIM64,  "SEGLIM64"},
+	{CPUID_FEATURE_PCID,      "PCID"},
+	{CPUID_FEATURE_TSCTMR,    "TSCTMR"},
+	{CPUID_FEATURE_AVX1_0,    "AVX1.0"},
 	{0, 0}
 },
 extfeature_map[] = {
 	{CPUID_EXTFEATURE_SYSCALL, "SYSCALL"},
 	{CPUID_EXTFEATURE_XD,      "XD"},
 	{CPUID_EXTFEATURE_1GBPAGE, "1GBPAGE"},
-	{CPUID_EXTFEATURE_RDTSCP,  "RDTSCP"},
 	{CPUID_EXTFEATURE_EM64T,   "EM64T"},
 	{CPUID_EXTFEATURE_LAHF,    "LAHF"},
+	{CPUID_EXTFEATURE_RDTSCP,  "RDTSCP"},
 	{CPUID_EXTFEATURE_TSCI,    "TSCI"},
 	{0, 0}
 };
@@ -768,15 +798,16 @@ cpuid_info(void)
 char *
 cpuid_get_feature_names(uint64_t features, char *buf, unsigned buf_len)
 {
-	size_t	len = -1;
+	size_t	len = 0;
 	char	*p = buf;
 	int	i;
 
 	for (i = 0; feature_map[i].mask != 0; i++) {
 		if ((features & feature_map[i].mask) == 0)
 			continue;
-		if (len > 0)
+		if (len && ((size_t)(p - buf) < (buf_len - 1)))
 			*p++ = ' ';
+
 		len = min(strlen(feature_map[i].name), (size_t) ((buf_len-1) - (p-buf)));
 		if (len == 0)
 			break;
@@ -790,14 +821,14 @@ cpuid_get_feature_names(uint64_t features, char *buf, unsigned buf_len)
 char *
 cpuid_get_extfeature_names(uint64_t extfeatures, char *buf, unsigned buf_len)
 {
-	size_t	len = -1;
+	size_t	len = 0;
 	char	*p = buf;
 	int	i;
 
 	for (i = 0; extfeature_map[i].mask != 0; i++) {
 		if ((extfeatures & extfeature_map[i].mask) == 0)
 			continue;
-		if (len > 0)
+		if (len && ((size_t) (p - buf) < (buf_len - 1)))
 			*p++ = ' ';
 		len = min(strlen(extfeature_map[i].name), (size_t) ((buf_len-1)-(p-buf)));
 		if (len == 0)

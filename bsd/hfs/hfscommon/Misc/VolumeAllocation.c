@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -87,7 +87,9 @@ Internal routines:
 #include <sys/types.h>
 #include <sys/buf.h>
 #include <sys/systm.h>
+#include <sys/sysctl.h>
 #include <sys/disk.h>
+#include <kern/kalloc.h>
 
 #include "../../hfs.h"
 #include "../../hfs_dbg.h"
@@ -95,6 +97,10 @@ Internal routines:
 #include "../../hfs_endian.h"
 
 #include "../headers/FileMgrInternal.h"
+
+#ifndef CONFIG_HFS_TRIM
+#define CONFIG_HFS_TRIM 0
+#endif
 
 
 enum {
@@ -157,6 +163,86 @@ static OSErr BlockAllocateKnown(
 
 static int free_extent_cache_active(
 	ExtendedVCB 		*vcb);
+
+
+/*
+;________________________________________________________________________________
+;
+; Routine:		hfs_unmap_free_extent
+;
+; Function:		Make note of a range of allocation blocks that should be
+;				unmapped (trimmed).  That is, the given range of blocks no
+;				longer have useful content, and the device can unmap the
+;				previous contents.  For example, a solid state disk may reuse
+;				the underlying storage for other blocks.
+;
+;				This routine is only supported for journaled volumes.  The extent
+;				being freed is passed to the journal code, and the extent will
+;				be unmapped after the current transaction is written to disk.
+;
+; Input Arguments:
+;	hfsmp			- The volume containing the allocation blocks.
+;	startingBlock	- The first allocation block of the extent being freed.
+;	numBlocks		- The number of allocation blocks of the extent being freed.
+;________________________________________________________________________________
+*/
+static void hfs_unmap_free_extent(struct hfsmount *hfsmp, u_int32_t startingBlock, u_int32_t numBlocks)
+{
+	if (CONFIG_HFS_TRIM) {
+		u_int64_t offset;
+		u_int64_t length;
+		int err;
+		
+		if ((hfsmp->hfs_flags & HFS_UNMAP) && (hfsmp->jnl != NULL)) {
+			offset = (u_int64_t) startingBlock * hfsmp->blockSize + (u_int64_t) hfsmp->hfsPlusIOPosOffset;
+			length = (u_int64_t) numBlocks * hfsmp->blockSize;
+	
+			err = journal_trim_add_extent(hfsmp->jnl, offset, length);
+			if (err) {
+				printf("hfs_unmap_free_extent: error %d from journal_trim_add_extent", err);
+				hfsmp->hfs_flags &= ~HFS_UNMAP;
+			}
+		}
+	}
+}
+
+
+/*
+;________________________________________________________________________________
+;
+; Routine:		hfs_unmap_alloc_extent
+;
+; Function:		Make note of a range of allocation blocks, some of
+;				which may have previously been passed to hfs_unmap_free_extent,
+;				is now in use on the volume.  The given blocks will be removed
+;				from any pending DKIOCUNMAP.
+;
+; Input Arguments:
+;	hfsmp			- The volume containing the allocation blocks.
+;	startingBlock	- The first allocation block of the extent being allocated.
+;	numBlocks		- The number of allocation blocks being allocated.
+;________________________________________________________________________________
+*/
+static void hfs_unmap_alloc_extent(struct hfsmount *hfsmp, u_int32_t startingBlock, u_int32_t numBlocks)
+{
+	if (CONFIG_HFS_TRIM) {
+		u_int64_t offset;
+		u_int64_t length;
+		int err;
+		
+		if ((hfsmp->hfs_flags & HFS_UNMAP) && (hfsmp->jnl != NULL)) {
+			offset = (u_int64_t) startingBlock * hfsmp->blockSize + (u_int64_t) hfsmp->hfsPlusIOPosOffset;
+			length = (u_int64_t) numBlocks * hfsmp->blockSize;
+			
+			err = journal_trim_remove_extent(hfsmp->jnl, offset, length);
+			if (err) {
+				printf("hfs_unmap_alloc_extent: error %d from journal_trim_remove_extent", err);
+				hfsmp->hfs_flags &= ~HFS_UNMAP;
+			}
+		}
+	}
+}
+
 
 /*
 ;________________________________________________________________________________
@@ -1038,9 +1124,15 @@ Exit:
 	if (err == noErr) {
 		*actualNumBlocks = block - *actualStartBlock;
 
-	// sanity check
-	if ((*actualStartBlock + *actualNumBlocks) > vcb->allocLimit)
-		panic("hfs: BlockAllocateAny: allocation overflow on \"%s\"", vcb->vcbVN);
+		// sanity check
+		if ((*actualStartBlock + *actualNumBlocks) > vcb->allocLimit) {
+			panic("hfs: BlockAllocateAny: allocation overflow on \"%s\"", vcb->vcbVN);
+		}
+
+		/* Remove these blocks from the TRIM list if applicable */
+		if (CONFIG_HFS_TRIM) {
+			hfs_unmap_alloc_extent(vcb, *actualStartBlock, *actualNumBlocks);
+		}	
 	}
 	else {
 		*actualStartBlock = 0;
@@ -1212,7 +1304,10 @@ OSErr BlockMarkAllocated(
 	// XXXdbg
 	struct hfsmount *hfsmp = VCBTOHFS(vcb);
 
-
+	if (CONFIG_HFS_TRIM) {
+		hfs_unmap_alloc_extent(vcb, startingBlock, numBlocks);
+	}
+	
 	//
 	//	Pre-read the bitmap block containing the first word of allocation
 	//
@@ -1365,10 +1460,12 @@ _______________________________________________________________________
 __private_extern__
 OSErr BlockMarkFree(
 	ExtendedVCB		*vcb,
-	u_int32_t		startingBlock,
-	register u_int32_t	numBlocks)
+	u_int32_t		startingBlock_in,
+	register u_int32_t	numBlocks_in)
 {
 	OSErr			err;
+	u_int32_t	startingBlock = startingBlock_in;
+	u_int32_t	numBlocks = numBlocks_in;
 	register u_int32_t	*currentWord;	//	Pointer to current word within bitmap block
 	register u_int32_t	wordsLeft;		//	Number of words left in this bitmap block
 	register u_int32_t	bitMask;		//	Word with given bits already set (ready to OR in)
@@ -1380,7 +1477,6 @@ OSErr BlockMarkFree(
 	u_int32_t  wordsPerBlock;
     // XXXdbg
 	struct hfsmount *hfsmp = VCBTOHFS(vcb);
-	dk_discard_t discard;
 
 	/*
 	 * NOTE: We use vcb->totalBlocks instead of vcb->allocLimit because we
@@ -1392,11 +1488,6 @@ OSErr BlockMarkFree(
 		err = EIO;
 		goto Exit;
 	}
-
-	memset(&discard, 0, sizeof(dk_discard_t));
-	discard.offset = (uint64_t)startingBlock * (uint64_t)vcb->blockSize;
-	discard.length = (uint64_t)numBlocks * (uint64_t)vcb->blockSize;
-
 
 	//
 	//	Pre-read the bitmap block containing the first word of allocation
@@ -1521,9 +1612,8 @@ Exit:
 	if (buffer)
 		(void)ReleaseBitmapBlock(vcb, blockRef, true);
 
-	if (err == noErr) {
-		// it doesn't matter if this fails, it's just informational anyway
-		VNOP_IOCTL(vcb->hfs_devvp, DKIOCDISCARD, (caddr_t)&discard, 0, vfs_context_kernel());
+	if (CONFIG_HFS_TRIM && err == noErr) {
+		hfs_unmap_free_extent(vcb, startingBlock_in, numBlocks_in);
 	}
 
 

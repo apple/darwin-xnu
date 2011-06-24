@@ -230,14 +230,14 @@ enum {
  *  false       == Deep Sleep is disabled
  *  not present == Deep Sleep is not supported on this hardware
  */
-#define kIOPMDeepSleepEnabledKey            "DeepSleep Enabled"
+#define kIOPMDeepSleepEnabledKey            "Standby Enabled"
 
 /* kIOPMDeepSleepDelayKey
  * Key refers to a CFNumberRef that represents the delay in seconds before
  * entering Deep Sleep state. The property is not present if Deep Sleep is
  * unsupported.
  */
-#define kIOPMDeepSleepDelayKey              "DeepSleep Delay"
+#define kIOPMDeepSleepDelayKey              "Standby Delay"
 
 /* kIOPMLowBatteryWakeThresholdKey
  * Key refers to a CFNumberRef that represents the percentage of battery

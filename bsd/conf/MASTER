@@ -189,6 +189,7 @@ options		FDESC		# fdesc_fs support		# <fdesc>
 options		DEVFS		# devfs support			# <devfs>
 options		JOURNALING	# journaling support	# <journaling>
 options		HFS_COMPRESSION	# hfs compression	# <hfs_compression>
+options		CONFIG_HFS_TRIM	# HFS trims unused blocks	# <config_hfs_trim>
 
 #
 #	file system features

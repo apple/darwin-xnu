@@ -43,8 +43,9 @@
 
 #include <kern/lock.h>
 #include <kern/queue.h>
-#include <machine/cpu_number.h>
 
+#include <machine/cpu_number.h>
+#include <machine/machine_routines.h> /* machine_timeout_suspended() */
 /*
  *	wait_queue_t
  *	This is the definition of the common event wait queue
@@ -165,11 +166,25 @@ typedef struct _wait_queue_link {
  */
 
 static inline void wait_queue_lock(wait_queue_t wq) {
-	if (!hw_lock_to(&(wq)->wq_interlock, hwLockTimeOut * 2))
-		panic("wait queue deadlock - wq=%p, cpu=%d\n", wq, cpu_number(
-));
+	if (hw_lock_to(&(wq)->wq_interlock, hwLockTimeOut * 2) == 0) {
+		boolean_t wql_acquired = FALSE;
+		while (machine_timeout_suspended()) {
+#if	defined(__i386__) || defined(__x86_64__)
+/*
+ * i386/x86_64 return with preemption disabled on a timeout for
+ * diagnostic purposes.
+ */
+			mp_enable_preemption();
+#endif
+			if ((wql_acquired = hw_lock_to(&(wq)->wq_interlock, hwLockTimeOut * 2)))
+				break;
+		}
+
+		if (wql_acquired == FALSE)
+			panic("wait queue deadlock - wq=%p, cpu=%d\n", wq, cpu_number());
+	}
 }
- 
+
 static inline void wait_queue_unlock(wait_queue_t wq) {
 	assert(wait_queue_held(wq));
 	hw_lock_unlock(&(wq)->wq_interlock);

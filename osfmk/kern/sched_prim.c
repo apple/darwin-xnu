@@ -962,7 +962,7 @@ clear_wait_internal(
 	wait_result_t	wresult)
 {
 	wait_queue_t	wq = thread->wait_queue;
-	int				i = LockTimeOut;
+	uint32_t	i = LockTimeOut;
 
 	do {
 		if (wresult == THREAD_INTERRUPTED && (thread->state & TH_UNINT))
@@ -986,7 +986,7 @@ clear_wait_internal(
 		}
 
 		return (thread_go(thread, wresult));
-	} while (--i > 0);
+	} while ((--i > 0) || machine_timeout_suspended());
 
 	panic("clear_wait_internal: deadlock: thread=%p, wq=%p, cpu=%d\n",
 		  thread, wq, cpu_number());

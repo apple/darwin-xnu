@@ -252,7 +252,9 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_FLAGS_SUBMAP		0x0800	/* mapping a VM submap */
 #define VM_FLAGS_ALREADY	0x1000	/* OK if same mapping already exists */
 #define VM_FLAGS_BEYOND_MAX	0x2000	/* map beyond the map's max offset */
+#endif /* KERNEL_PRIVATE */
 #define VM_FLAGS_OVERWRITE	0x4000	/* delete any existing mappings first */
+#ifdef KERNEL_PRIVATE
 #define VM_FLAGS_NO_PMAP_CHECK	0x8000	/* do not check that pmap is empty */
 #endif /* KERNEL_PRIVATE */
 
@@ -283,9 +285,13 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 				 VM_FLAGS_ANYWHERE |		\
 				 VM_FLAGS_PURGABLE |		\
 				 VM_FLAGS_NO_CACHE |		\
+				 VM_FLAGS_OVERWRITE |		\
 				 VM_FLAGS_SUPERPAGE_MASK |	\
 				 VM_FLAGS_ALIAS_MASK)
 #define VM_FLAGS_USER_MAP	VM_FLAGS_USER_ALLOCATE
+#define VM_FLAGS_USER_REMAP	(VM_FLAGS_FIXED |    \
+				 VM_FLAGS_ANYWHERE | \
+				 VM_FLAGS_OVERWRITE)
 
 #define VM_MEMORY_MALLOC 1
 #define VM_MEMORY_MALLOC_SMALL 2

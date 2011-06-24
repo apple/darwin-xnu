@@ -106,6 +106,10 @@ ppnum_t		lowest_lo = 0;
 ppnum_t		lowest_hi = 0;
 ppnum_t		highest_hi = 0;
 
+uint32_t pmap_reserved_pages_allocated = 0;
+uint32_t pmap_last_reserved_range = 0xFFFFFFFF;
+uint32_t pmap_reserved_ranges = 0;
+
 extern unsigned int bsd_mbuf_cluster_reserve(boolean_t *);
 
 pmap_paddr_t     avail_start, avail_end;
@@ -288,7 +292,6 @@ i386_vm_init(uint64_t	maxmem,
 		        sane_size += region_bytes;
 			break;
 
-
 		case kEfiReservedMemoryType:
 			firmware_Reserved_bytes += region_bytes;
 			break;
@@ -339,10 +342,31 @@ i386_vm_init(uint64_t	maxmem,
 				        pmptr->base = base;
 				else
 				        pmptr->base = I386_LOWMEM_RESERVED;
+
+				pmptr->end = top;
+
 				/*
-				 * mark as already mapped
+				 * A range may be marked with with the
+				 * EFI_MEMORY_KERN_RESERVED attribute
+				 * on some systems, to indicate that the range
+				 * must not be made available to devices.
+				 * Simplifying assumptions are made regarding
+				 * the placement of the range.
 				 */
-				pmptr->alloc = pmptr->end = top;
+				if (mptr->Attribute & EFI_MEMORY_KERN_RESERVED)
+					pmap_reserved_ranges++;
+
+				if ((mptr->Attribute & EFI_MEMORY_KERN_RESERVED) &&
+				    (top < I386_KERNEL_IMAGE_BASE_PAGE)) {
+					pmptr->alloc = pmptr->base;
+					pmap_last_reserved_range = pmap_memory_region_count;
+				}
+				else {
+					/*
+					 * mark as already mapped
+					 */
+					pmptr->alloc = top;
+				}
 				pmptr->type = pmap_type;
 			}
 			else if ( (base < fap) && (top > fap) ) {
@@ -552,12 +576,47 @@ pmap_free_pages(void)
 	return (unsigned int)avail_remaining;
 }
 
+boolean_t pmap_next_page_reserved(ppnum_t *);
+
+/*
+ * Pick a page from a "kernel private" reserved range; works around
+ * errata on some hardware.
+ */
+boolean_t
+pmap_next_page_reserved(ppnum_t *pn) {
+	if (pmap_reserved_ranges && pmap_last_reserved_range != 0xFFFFFFFF) {
+		uint32_t n;
+		pmap_memory_region_t *region;
+		for (n = 0; n <= pmap_last_reserved_range; n++) {
+			region = &pmap_memory_regions[n];
+			if (region->alloc < region->end) {
+				*pn = region->alloc++;
+				avail_remaining--;
+
+				if (*pn > max_ppnum)
+					max_ppnum = *pn;
+
+				if (lowest_lo == 0 || *pn < lowest_lo)
+					lowest_lo = *pn;
+
+				pmap_reserved_pages_allocated++;
+				return TRUE;
+			}
+		}
+	}
+	return FALSE;
+}
+
+
 boolean_t
 pmap_next_page_hi(
 	          ppnum_t *pn)
 {
 	pmap_memory_region_t *region;
 	int	n;
+
+	if (pmap_next_page_reserved(pn))
+		return TRUE;
 
 	if (avail_remaining) {
 		for (n = pmap_memory_region_count - 1; n >= 0; n--) {
@@ -694,10 +753,15 @@ pmap_lowmem_finalize(void)
 	 *	entry in the memory region table. However, the loop is retained
 	 * 	(with the intended termination criteria commented out) in the
 	 *	hope that some day we can free all low-memory ranges.
+	 *	This loop assumes the first range does not span the kernel
+	 *	image base & avail_start. We skip this process on systems
+	 *	with "kernel reserved" ranges, as the low memory reclamation
+	 *	is handled in the initial memory map processing loop on
+	 *	such systems.
 	 */
 	for (i = 0;
 //	     pmap_memory_regions[i].end <= I386_KERNEL_IMAGE_BASE_PAGE;
-	     i < 1;
+	     i < 1 && (pmap_reserved_ranges == 0);
 	     i++) {
 		vm_offset_t	pbase = (vm_offset_t)i386_ptob(pmap_memory_regions[i].base);
 		vm_offset_t	pend  = (vm_offset_t)i386_ptob(pmap_memory_regions[i].end);

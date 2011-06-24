@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -202,6 +202,7 @@ struct mount {
  * ioflags
  */
 #define MNT_IOFLAGS_FUA_SUPPORTED	0x00000001
+#define MNT_IOFLAGS_UNMAP_SUPPORTED	0x00000002
 
 /*
  * ioqueue depth for devices that don't report one

@@ -985,7 +985,8 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	daddr64_t mdb_offset;
 	int isvirtual = 0;
 	int isroot = 0;
-
+	u_int32_t device_features = 0;
+	
 	if (args == NULL) {
 		/* only hfs_mountroot passes us NULL as the 'args' argument */
 		isroot = 1;
@@ -1121,7 +1122,19 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct hfs_mount_args *args,
 	bzero(hfsmp, sizeof(struct hfsmount));
 	
 	hfs_chashinit_finish(hfsmp);
-
+	
+	/*
+	 * See if the disk supports unmap (trim).
+	 *
+	 * NOTE: vfs_init_io_attributes has not been called yet, so we can't use the io_flags field
+	 * returned by vfs_ioattr.  We need to call VNOP_IOCTL ourselves.
+	 */
+	if (VNOP_IOCTL(devvp, DKIOCGETFEATURES, (caddr_t)&device_features, 0, context) == 0) {
+		if (device_features & DK_FEATURE_UNMAP) {
+			hfsmp->hfs_flags |= HFS_UNMAP;
+		}
+	}
+	
 	/*
 	 *  Init the volume information structure
 	 */
@@ -1615,7 +1628,7 @@ error_exit:
 			vnode_rele(hfsmp->hfs_devvp);
 		}
 		hfs_delete_chash(hfsmp);
-
+		
 		FREE(hfsmp, M_HFSMNT);
 		vfs_setfsprivate(mp, NULL);
 	}

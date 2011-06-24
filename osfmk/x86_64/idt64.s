@@ -292,8 +292,8 @@ L_dispatch:
 
 	swapgs
 
-	cmpl	$(USER_CS), ISF64_CS(%rsp)
-	je	L_32bit_dispatch /* 32-bit user task */
+	cmpl	$(TASK_MAP_32BIT), %gs:CPU_TASK_MAP
+	je	L_32bit_dispatch	/* 32-bit user task */
 	/* fall through to 64bit user dispatch */
 
 /*
@@ -1104,7 +1104,7 @@ Entry(hndl_allintrs)
 	leaq	-INTSTACK_SIZE(%rcx),%rdx
 	cmpq	%rsp,%rdx
 	jb	int_from_intstack
-1:	
+1:
 	xchgq	%rcx,%rsp		/* switch to interrupt stack */
 
 	mov	%cr0,%rax		/* get cr0 */
@@ -1208,13 +1208,13 @@ LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 int_from_intstack:
 	incl	%gs:CPU_PREEMPTION_LEVEL
 	incl	%gs:CPU_INTERRUPT_LEVEL
-
+	incl	%gs:CPU_NESTED_ISTACK
 	mov	%rsp, %rdi		/* x86_saved_state */
 	CCALL(interrupt)
 
 	decl	%gs:CPU_INTERRUPT_LEVEL
 	decl	%gs:CPU_PREEMPTION_LEVEL
-
+	decl	%gs:CPU_NESTED_ISTACK
 #if DEBUG_IDT64
 	CCALL1(panic_idt64, %rsp)
 	POSTCODE2(0x6411)
@@ -1352,15 +1352,16 @@ Entry(hndl_diag_scall)
 	movq	ACT_TASK(%rcx),%rbx		/* point to current task  */
 	TASK_VTIMER_CHECK(%rbx,%rcx)
 
-	pushq	%rdi			/* push pcb stack so we can pop it later */
+	pushq	%rdi			/* push pcb stack */
 
-	CCALL(diagCall)		// Call diagnostics
-	cli				// Disable interruptions just in case they were enabled
-	popq	%rsp			// Get back the original stack
-	
+	CCALL(diagCall)			// Call diagnostics
+
+	cli				// Disable interruptions just in case
 	cmpl	$0,%eax			// What kind of return is this?
-	jne	EXT(return_to_user)	// Normal return, do not check asts...
-				
+	je	1f			// - branch if bad (zero)
+	popq	%rsp			// Get back the original stack
+	jmp	EXT(return_to_user)	// Normal return, do not check asts...
+1:
 	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)
 		// pass what would be the diag syscall
 		// error return - cause an exception
@@ -1441,14 +1442,16 @@ Entry(hndl_mdep_scall64)
 
 
 Entry(hndl_diag_scall64)
-	pushq	%rdi				// Push the previous stack
-	CCALL(diagCall64)			// Call diagnostics
-	cli					// Disable interruptions just in case
-	popq	%rsp				// Get back the original stack
+	pushq	%rdi			// Push the previous stack
 
-	cmpl	$0,%eax				// What kind of return is this?
-	jne	EXT(return_to_user)		// Normal return, do not check asts...
-				
+	CCALL(diagCall64)		// Call diagnostics
+
+	cli				// Disable interruptions just in case
+	cmpl	$0,%eax			// What kind of return is this?
+	je	1f			// - branch if bad (zero)
+	popq	%rsp			// Get back the original stack
+	jmp	EXT(return_to_user)	// Normal return, do not check asts...
+1:
 	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)
 	/* no return */
 

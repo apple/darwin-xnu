@@ -163,6 +163,7 @@ static volatile long   mp_bc_count;
 decl_lck_mtx_data(static, mp_bc_lock);
 lck_mtx_ext_t	mp_bc_lock_ext;
 static	volatile int 	debugger_cpu = -1;
+volatile long NMIPI_acks = 0;
 
 static void	mp_cpus_call_action(void); 
 static void	mp_call_PM(void);
@@ -461,7 +462,12 @@ cpu_signal_handler(x86_saved_state_t *regs)
 	mp_disable_preemption();
 
 	my_cpu = cpu_number();
-	my_word = &current_cpu_datap()->cpu_signals;
+	my_word = &cpu_data_ptr[my_cpu]->cpu_signals;
+	/* Store the initial set of signals for diagnostics. New
+	 * signals could arrive while these are being processed
+	 * so it's no more than a hint.
+	 */
+	cpu_data_ptr[my_cpu]->cpu_prior_signals = *my_word;
 
 	do {
 #if	MACH_KDB && MACH_ASSERT
@@ -533,7 +539,8 @@ static int
 NMIInterruptHandler(x86_saved_state_t *regs)
 {
 	void 	*stackptr;
-	
+
+	atomic_incl(&NMIPI_acks, 1);
 	sync_iss_to_iks_unconditionally(regs);
 #if defined (__i386__)
 	__asm__ volatile("movl %%ebp, %0" : "=m" (stackptr));
@@ -544,16 +551,22 @@ NMIInterruptHandler(x86_saved_state_t *regs)
 	if (cpu_number() == debugger_cpu)
 			goto NMExit;
 
-	if (pmap_tlb_flush_timeout == TRUE && current_cpu_datap()->cpu_tlb_invalid) {
+	if (spinlock_timed_out) {
+		char pstr[160];
+		snprintf(&pstr[0], sizeof(pstr), "Panic(CPU %d): NMIPI for spinlock acquisition timeout, spinlock: %p, spinlock owner: %p, current_thread: %p, spinlock_owner_cpu: 0x%x\n", cpu_number(), spinlock_timed_out, (void *) spinlock_timed_out->interlock.lock_data, current_thread(), spinlock_owner_cpu);
+		panic_i386_backtrace(stackptr, 64, &pstr[0], TRUE, regs);
+		
+	} else if (pmap_tlb_flush_timeout == TRUE) {
 		char pstr[128];
-		snprintf(&pstr[0], sizeof(pstr), "Panic(CPU %d): Unresponsive processor\n", cpu_number());
-		panic_i386_backtrace(stackptr, 16, &pstr[0], TRUE, regs);
+		snprintf(&pstr[0], sizeof(pstr), "Panic(CPU %d): Unresponsive processor, TLB state:%d\n", cpu_number(), current_cpu_datap()->cpu_tlb_invalid);
+		panic_i386_backtrace(stackptr, 64, &pstr[0], TRUE, regs);
 	}
 
 #if MACH_KDP
 	if (pmsafe_debug && !kdp_snapshot)
 		pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_SAFE);
-	mp_kdp_wait(FALSE, pmap_tlb_flush_timeout);
+	current_cpu_datap()->cpu_NMI_acknowledged = TRUE;
+	mp_kdp_wait(FALSE, pmap_tlb_flush_timeout || spinlock_timed_out || panic_active());
 	if (pmsafe_debug && !kdp_snapshot)
 		pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_NORMAL);
 #endif
@@ -899,7 +912,7 @@ handle_pending_TLB_flushes(void)
 {
 	volatile int	*my_word = &current_cpu_datap()->cpu_signals;
 
-	if (i_bit(MP_TLB_FLUSH, my_word)) {
+	if (i_bit(MP_TLB_FLUSH, my_word) && (pmap_tlb_flush_timeout == FALSE)) {
 		DBGLOG(cpu_handle, cpu_number(), MP_TLB_FLUSH);
 		i_bit_clear(MP_TLB_FLUSH, my_word);
 		pmap_update_interrupt();
@@ -1155,8 +1168,11 @@ mp_kdp_enter(void)
 	 * stopping others.
 	 */
 	mp_kdp_state = ml_set_interrupts_enabled(FALSE);
+	my_cpu = cpu_number();
+	cpu_datap(my_cpu)->debugger_entry_time = mach_absolute_time();
+
 	simple_lock(&mp_kdp_lock);
-	debugger_entry_time = mach_absolute_time();
+
 	if (pmsafe_debug && !kdp_snapshot)
 	    pmSafeMode(&current_cpu_datap()->lcpu, PM_SAFE_FL_SAFE);
 
@@ -1170,8 +1186,10 @@ mp_kdp_enter(void)
 	}
 	my_cpu = cpu_number();
 	debugger_cpu = my_cpu;
+	ncpus = 1;
 	mp_kdp_ncpus = 1;	/* self */
 	mp_kdp_trap = TRUE;
+	debugger_entry_time = cpu_datap(my_cpu)->debugger_entry_time;
 	simple_unlock(&mp_kdp_lock);
 
 	/*
@@ -1179,7 +1197,7 @@ mp_kdp_enter(void)
 	 */
 	DBG("mp_kdp_enter() signaling other processors\n");
 	if (force_immediate_debugger_NMI == FALSE) {
-		for (ncpus = 1, cpu = 0; cpu < real_ncpus; cpu++) {
+		for (cpu = 0; cpu < real_ncpus; cpu++) {
 			if (cpu == my_cpu || !cpu_datap(cpu)->cpu_running)
 				continue;
 			ncpus++;
@@ -1227,7 +1245,7 @@ mp_kdp_enter(void)
 			cpu_NMI_interrupt(cpu);
 		}
 
-	DBG("mp_kdp_enter() %u processors done %s\n",
+	DBG("mp_kdp_enter() %lu processors done %s\n",
 	    mp_kdp_ncpus, (mp_kdp_ncpus == ncpus) ? "OK" : "timed out");
 	
 	postcode(MP_KDP_ENTER);
@@ -1343,8 +1361,9 @@ mp_kdp_exit(void)
 
 boolean_t
 mp_recent_debugger_activity() {
-	return (((mach_absolute_time() - debugger_entry_time) < LastDebuggerEntryAllowance) ||
-	    ((mach_absolute_time() - debugger_exit_time) < LastDebuggerEntryAllowance));
+	uint64_t abstime = mach_absolute_time();
+	return (((abstime - debugger_entry_time) < LastDebuggerEntryAllowance) ||
+	    ((abstime - debugger_exit_time) < LastDebuggerEntryAllowance));
 }
 
 /*ARGSUSED*/

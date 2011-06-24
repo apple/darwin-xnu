@@ -168,6 +168,7 @@ __BEGIN_DECLS
 #define	DBG_NETIPSEC	128	/* IPsec Protocol  */
 
 /* **** The Kernel Debug Sub Classes for IOKIT (DBG_IOKIT) **** */
+#define DBG_IOINTC			0	/* Interrupt controller */
 #define DBG_IOWORKLOOP		1	/* Work from work loop */
 #define DBG_IOINTES			2	/* Interrupt event source */
 #define DBG_IOCLKES			3	/* Clock event source */

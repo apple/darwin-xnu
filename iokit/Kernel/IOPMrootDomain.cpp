@@ -3167,6 +3167,11 @@ void IOPMrootDomain::handlePowerNotification( UInt32 msg )
         clamshellIsClosed = false;
         clamshellExists = true;
 
+        if (msg & kIOPMSetValue)
+        {
+            reportUserInput();
+        }
+
         // Tell PMCPU
         informCPUStateChange(kInformLid, 0);
 
@@ -3585,8 +3590,8 @@ void IOPMrootDomain::handlePlatformHaltRestart( UInt32 pe_type )
 	// Notify legacy clients
 	applyToInterested(gIOPriorityPowerStateInterest, platformHaltRestartApplier, &ctx);
 
-    // For UPS shutdown leave File Server Mode intact, otherwise turn it off.
-    if (kPEUPSDelayHaltCPU != pe_type)
+    // For normal shutdown, turn off File Server Mode.
+    if (kPEHaltCPU == pe_type)
     {
         const OSSymbol * setting = OSSymbol::withCString(kIOPMSettingRestartOnPowerLossKey);
         OSNumber * num = OSNumber::withNumber((unsigned long long) 0, 32);

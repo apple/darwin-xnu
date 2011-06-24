@@ -112,6 +112,10 @@ protected:
     @result Return true if this function needs to be called again before all its outstanding events have been processed. */
     virtual bool checkForWork();
 
+/*! @function setWorkLoop
+    @abstract Sub-class implementation of setWorkLoop method. */
+    virtual void setWorkLoop(IOWorkLoop *inWorkLoop);
+
 public:
 
 /*! @function interruptEventSource
@@ -185,6 +189,9 @@ state when checkForWork is called. */
     @param nub Where did the interrupt originate from
     @param ind What is this interrupts index within 'nub'. */
     virtual void disableInterruptOccurred(void *, IOService *nub, int ind);
+
+private:
+    IOReturn registerInterruptHandler(IOService *inProvider, int inIntIndex);
 
 private:
     OSMetaClassDeclareReservedUnused(IOInterruptEventSource, 0);

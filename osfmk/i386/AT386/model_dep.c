@@ -758,7 +758,7 @@ Debugger(
 #endif
 
 		/* Print backtrace - callee is internally synchronized */
-		panic_i386_backtrace(stackptr, 32, NULL, FALSE, NULL);
+		panic_i386_backtrace(stackptr, 64, NULL, FALSE, NULL);
 
 		/* everything should be printed now so copy to NVRAM
 		 */

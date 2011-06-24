@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1741,10 +1741,12 @@ do { \
 			case IPV6_FW_FLUSH:
 			case IPV6_FW_ZERO:
 				{
-				if (ip6_fw_ctl_ptr == NULL && load_ipfw() != 0)
-					return EINVAL;
-
-				error = (*ip6_fw_ctl_ptr)(sopt);
+				if (ip6_fw_ctl_ptr == NULL)
+					load_ip6fw();
+				if (ip6_fw_ctl_ptr != NULL)
+					error = (*ip6_fw_ctl_ptr)(sopt);
+				else
+					return ENOPROTOOPT;
 				}
 				break;
 #endif /* IPFIREWALL */
@@ -1909,10 +1911,12 @@ do { \
 #if IPFIREWALL
 			case IPV6_FW_GET:
 				{
-				if (ip6_fw_ctl_ptr == NULL && load_ipfw() != 0)
-					return EINVAL;
-
-				error = (*ip6_fw_ctl_ptr)(sopt);
+				if (ip6_fw_ctl_ptr == NULL)
+					load_ip6fw();
+				if (ip6_fw_ctl_ptr != NULL)
+					error = (*ip6_fw_ctl_ptr)(sopt);
+				else
+					return ENOPROTOOPT;
 				}
 				break;
 #endif /* IPFIREWALL */

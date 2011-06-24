@@ -128,7 +128,6 @@ typedef struct {
         addr64_t	cu_user_gs_base;
 } cpu_uber_t;
 
-
 /*
  * Per-cpu data.
  *
@@ -157,6 +156,9 @@ typedef struct cpu_data
 	int			cpu_phys_number;	/* Physical CPU */
 	cpu_id_t		cpu_id;			/* Platform Expert */
 	int			cpu_signals;		/* IPI events */
+	int			cpu_prior_signals;	/* Last set of events,
+							 * debugging
+							 */
 	int			cpu_mcount_off;		/* mcount recursion */
 	ast_t			cpu_pending_ast;
 	int			cpu_type;
@@ -227,6 +229,17 @@ typedef struct cpu_data
 	rtc_nanotime_t		*cpu_nanotime;		/* Nanotime info */
 	thread_t		csw_old_thread;
 	thread_t		csw_new_thread;
+	uint64_t		cpu_max_observed_int_latency;
+	int			cpu_max_observed_int_latency_vector;
+	uint64_t		debugger_entry_time;
+	volatile boolean_t	cpu_NMI_acknowledged;
+	/* A separate nested interrupt stack flag, to account
+	 * for non-nested interrupts arriving while on the interrupt stack
+	 * Currently only occurs when AICPM enables interrupts on the
+	 * interrupt stack during processor offlining.
+	 */
+	uint32_t		cpu_nested_istack;
+	uint32_t		cpu_nested_istack_events;
 } cpu_data_t;
 
 extern cpu_data_t	*cpu_data_ptr[];  

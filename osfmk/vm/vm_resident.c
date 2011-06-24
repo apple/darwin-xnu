@@ -1708,7 +1708,6 @@ vm_page_grablo(void)
 		vm_lopages_allocated_cpm_success++;
 		vm_page_unlock_queues();
 	}
-	assert(mem->gobbled);
 	assert(mem->busy);
 	assert(!mem->free);
 	assert(!mem->pmapped);

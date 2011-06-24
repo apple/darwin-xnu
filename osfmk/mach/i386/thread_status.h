@@ -110,6 +110,10 @@
 #define x86_DEBUG_STATE64		11
 #define x86_DEBUG_STATE			12
 #define THREAD_STATE_NONE		13
+/* 15 and 16 are used for the internal x86_SAVED_STATE flavours */
+#define x86_AVX_STATE32			16
+#define x86_AVX_STATE64			17
+
 
 /*
  * Largest state on this machine:
@@ -136,6 +140,8 @@
 	  (x == x86_FLOAT_STATE)	|| \
 	  (x == x86_EXCEPTION_STATE)	|| \
 	  (x == x86_DEBUG_STATE)	|| \
+	  (x == x86_AVX_STATE32)	|| \
+	  (x == x86_AVX_STATE64)	|| \
 	  (x == THREAD_STATE_NONE))
 
 struct x86_state_hdr {
@@ -175,6 +181,10 @@ typedef _STRUCT_X86_FLOAT_STATE32 x86_float_state32_t;
 #define x86_FLOAT_STATE32_COUNT ((mach_msg_type_number_t) \
 		(sizeof(x86_float_state32_t)/sizeof(unsigned int)))
 
+typedef _STRUCT_X86_AVX_STATE32 x86_avx_state32_t;
+#define x86_AVX_STATE32_COUNT ((mach_msg_type_number_t) \
+		(sizeof(x86_avx_state32_t)/sizeof(unsigned int)))
+
 /*
  * to be deprecated in the future
  */
@@ -201,7 +211,11 @@ typedef _STRUCT_X86_THREAD_STATE64 x86_thread_state64_t;
 typedef _STRUCT_X86_FLOAT_STATE64 x86_float_state64_t;
 #define x86_FLOAT_STATE64_COUNT ((mach_msg_type_number_t) \
 		(sizeof(x86_float_state64_t)/sizeof(unsigned int)))
-		
+
+typedef _STRUCT_X86_AVX_STATE64 x86_avx_state64_t;
+#define x86_AVX_STATE64_COUNT ((mach_msg_type_number_t) \
+		(sizeof(x86_avx_state64_t)/sizeof(unsigned int)))
+
 typedef _STRUCT_X86_EXCEPTION_STATE64 x86_exception_state64_t;
 #define x86_EXCEPTION_STATE64_COUNT	((mach_msg_type_number_t) \
     ( sizeof (x86_exception_state64_t) / sizeof (int) ))

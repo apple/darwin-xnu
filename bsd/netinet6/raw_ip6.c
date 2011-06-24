@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -542,7 +542,7 @@ rip6_output(
 }
 
 #if IPFW2
-static void
+__private_extern__ void
 load_ip6fw(void)
 {
 	ip6_fw_init();
