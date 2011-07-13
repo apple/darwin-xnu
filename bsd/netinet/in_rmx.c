@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -75,13 +75,16 @@
 #include <sys/sysctl.h>
 #include <sys/socket.h>
 #include <sys/mbuf.h>
+#include <sys/protosw.h>
 #include <sys/syslog.h>
+#include <sys/mcache.h>
 #include <kern/lock.h>
 
 #include <net/if.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
+#include <netinet/in_arp.h>
 
 extern int tvtohz(struct timeval *);
 extern int	in_inithead(void **head, int off);
@@ -139,11 +142,15 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		if (in_broadcast(sin->sin_addr, rt->rt_ifp)) {
 			rt->rt_flags |= RTF_BROADCAST;
 		} else {
+			/* Become a regular mutex */
+			RT_CONVERT_LOCK(rt);
+			IFA_LOCK_SPIN(rt->rt_ifa);
 #define satosin(sa) ((struct sockaddr_in *)sa)
 			if (satosin(rt->rt_ifa->ifa_addr)->sin_addr.s_addr
 			    == sin->sin_addr.s_addr)
 				rt->rt_flags |= RTF_LOCAL;
 #undef satosin
+			IFA_UNLOCK(rt->rt_ifa);
 		}
 	}
 
@@ -160,7 +167,7 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		 * ARP entry and delete it if so.
 		 */
 		rt2 = rtalloc1_scoped_locked(rt_key(rt), 0,
-		    RTF_CLONING | RTF_PRCLONING, sa_get_ifscope(rt_key(rt)));
+		    RTF_CLONING | RTF_PRCLONING, sin_get_ifscope(rt_key(rt)));
 		if (rt2) {
 			RT_LOCK(rt2);
 			if ((rt2->rt_flags & RTF_LLINFO) &&
@@ -199,9 +206,17 @@ in_validate(struct radix_node *rn)
 	RT_LOCK_ASSERT_HELD(rt);
 
 	/* This is first reference? */
-	if (rt->rt_refcnt == 0 && (rt->rt_flags & RTPRF_OURS)) {
-		rt->rt_flags &= ~RTPRF_OURS;
-		rt->rt_rmx.rmx_expire = 0;
+	if (rt->rt_refcnt == 0) {
+		if (rt->rt_flags & RTPRF_OURS) {
+			/* It's one of ours; unexpire it */
+			rt->rt_flags &= ~RTPRF_OURS;
+			rt_setexpire(rt, 0);
+		} else if ((rt->rt_flags & RTF_LLINFO) &&
+		    (rt->rt_flags & RTF_HOST) && rt->rt_gateway != NULL &&
+		    rt->rt_gateway->sa_family == AF_LINK) {
+			/* It's ARP; let it be handled there */
+			arp_validate(rt);
+		}
 	}
 	return (rn);
 }
@@ -236,19 +251,19 @@ in_matroute_args(void *v_arg, struct radix_node_head *head,
 
 static int rtq_reallyold = 60*60;
 	/* one hour is ``really old'' */
-SYSCTL_INT(_net_inet_ip, IPCTL_RTEXPIRE, rtexpire, CTLFLAG_RW, 
+SYSCTL_INT(_net_inet_ip, IPCTL_RTEXPIRE, rtexpire, CTLFLAG_RW | CTLFLAG_LOCKED, 
     &rtq_reallyold , 0, 
     "Default expiration time on dynamically learned routes");
 				   
 static int rtq_minreallyold = 10;
 	/* never automatically crank down to less */
-SYSCTL_INT(_net_inet_ip, IPCTL_RTMINEXPIRE, rtminexpire, CTLFLAG_RW, 
+SYSCTL_INT(_net_inet_ip, IPCTL_RTMINEXPIRE, rtminexpire, CTLFLAG_RW | CTLFLAG_LOCKED, 
     &rtq_minreallyold , 0, 
     "Minimum time to attempt to hold onto dynamically learned routes");
 				   
 static int rtq_toomany = 128;
 	/* 128 cached routes is ``too many'' */
-SYSCTL_INT(_net_inet_ip, IPCTL_RTMAXCACHE, rtmaxcache, CTLFLAG_RW, 
+SYSCTL_INT(_net_inet_ip, IPCTL_RTMAXCACHE, rtmaxcache, CTLFLAG_RW | CTLFLAG_LOCKED, 
     &rtq_toomany , 0, "Upper limit on dynamically learned routes");
 
 #ifdef __APPLE__
@@ -265,12 +280,12 @@ SYSCTL_INT(_net_inet_ip, IPCTL_RTMAXCACHE, rtmaxcache, CTLFLAG_RW,
  * If for some reason a circular route is needed, turn this sysctl (net.inet.ip.check_route_selfref) to zero.
  */
 int check_routeselfref = 1;
-SYSCTL_INT(_net_inet_ip, OID_AUTO, check_route_selfref, CTLFLAG_RW, 
+SYSCTL_INT(_net_inet_ip, OID_AUTO, check_route_selfref, CTLFLAG_RW | CTLFLAG_LOCKED,
     &check_routeselfref , 0, "");
 #endif
 
 int use_routegenid = 1;
-SYSCTL_INT(_net_inet_ip, OID_AUTO, use_route_genid, CTLFLAG_RW, 
+SYSCTL_INT(_net_inet_ip, OID_AUTO, use_route_genid, CTLFLAG_RW | CTLFLAG_LOCKED,
     &use_routegenid , 0, "");
 
 /*
@@ -319,12 +334,12 @@ in_clsroute(struct radix_node *rn, __unused struct radix_node_head *head)
 			RT_LOCK(rt);
 		}
 	} else {
-		struct timeval timenow;
+		uint64_t timenow;
 
-		getmicrotime(&timenow);
+		timenow = net_uptime();
 		rt->rt_flags |= RTPRF_OURS;
-		rt->rt_rmx.rmx_expire =
-		    rt_expiry(rt, timenow.tv_sec, rtq_reallyold);
+		rt_setexpire(rt,
+		    rt_expiry(rt, timenow, rtq_reallyold));
 	}
 }
 
@@ -334,7 +349,7 @@ struct rtqk_arg {
 	int killed;
 	int found;
 	int updating;
-	time_t nextstop;
+	uint64_t nextstop;
 };
 
 /*
@@ -348,16 +363,18 @@ in_rtqkill(struct radix_node *rn, void *rock)
 	struct rtqk_arg *ap = rock;
 	struct rtentry *rt = (struct rtentry *)rn;
 	int err;
-	struct timeval timenow;
+	uint64_t timenow;
 
-	getmicrotime(&timenow);
+	timenow = net_uptime();
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	RT_LOCK(rt);
 	if (rt->rt_flags & RTPRF_OURS) {
 		ap->found++;
 
-		if (ap->draining || rt->rt_rmx.rmx_expire <= timenow.tv_sec) {
+		VERIFY(rt->rt_expire == 0 || rt->rt_rmx.rmx_expire != 0);
+		VERIFY(rt->rt_expire != 0 || rt->rt_rmx.rmx_expire == 0);
+		if (ap->draining || rt->rt_expire <= timenow) {
 			if (rt->rt_refcnt > 0)
 				panic("rtqkill route really not free");
 
@@ -380,13 +397,13 @@ in_rtqkill(struct radix_node *rn, void *rock)
 			}
 		} else {
 			if (ap->updating &&
-			    (unsigned)(rt->rt_rmx.rmx_expire - timenow.tv_sec) >
+			    (rt->rt_expire - timenow) >
 			    rt_expiry(rt, 0, rtq_reallyold)) {
-				rt->rt_rmx.rmx_expire = rt_expiry(rt,
-				    timenow.tv_sec, rtq_reallyold);
+				rt_setexpire(rt, rt_expiry(rt,
+				    timenow, rtq_reallyold));
 			}
 			ap->nextstop = lmin(ap->nextstop,
-					    rt->rt_rmx.rmx_expire);
+					    rt->rt_expire);
 			RT_UNLOCK(rt);
 		}
 	} else {
@@ -411,16 +428,16 @@ in_rtqtimo(void *rock)
 	struct radix_node_head *rnh = rock;
 	struct rtqk_arg arg;
 	struct timeval atv;
-	static time_t last_adjusted_timeout = 0;
-	struct timeval timenow;
+	static uint64_t last_adjusted_timeout = 0;
+	uint64_t timenow;
 
 	lck_mtx_lock(rnh_lock);
 	/* Get the timestamp after we acquire the lock for better accuracy */
-	getmicrotime(&timenow);
+        timenow = net_uptime();
 
 	arg.found = arg.killed = 0;
 	arg.rnh = rnh;
-	arg.nextstop = timenow.tv_sec + rtq_timeout;
+	arg.nextstop = timenow + rtq_timeout;
 	arg.draining = arg.updating = 0;
 	rnh->rnh_walktree(rnh, in_rtqkill, &arg);
 
@@ -433,14 +450,14 @@ in_rtqtimo(void *rock)
 	 * hard.
 	 */
 	if((arg.found - arg.killed > rtq_toomany)
-	   && (timenow.tv_sec - last_adjusted_timeout >= rtq_timeout)
+	   && ((timenow - last_adjusted_timeout) >= (uint64_t)rtq_timeout)
 	   && rtq_reallyold > rtq_minreallyold) {
 		rtq_reallyold = 2*rtq_reallyold / 3;
 		if(rtq_reallyold < rtq_minreallyold) {
 			rtq_reallyold = rtq_minreallyold;
 		}
 
-		last_adjusted_timeout = timenow.tv_sec;
+		last_adjusted_timeout = timenow;
 #if DIAGNOSTIC
 		log(LOG_DEBUG, "in_rtqtimo: adjusted rtq_reallyold to %d\n",
 		    rtq_reallyold);
@@ -451,7 +468,7 @@ in_rtqtimo(void *rock)
 	}
 
 	atv.tv_usec = 0;
-	atv.tv_sec = arg.nextstop - timenow.tv_sec;
+	atv.tv_sec = arg.nextstop - timenow;
 	lck_mtx_unlock(rnh_lock);
 	timeout(in_rtqtimo_funnel, rock, tvtohz(&atv));
 }
@@ -557,8 +574,13 @@ in_ifadown(struct ifaddr *ifa, int delete)
 
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
+	/*
+	 * Holding rnh_lock here prevents the possibility of
+	 * ifa from changing (e.g. in_ifinit), so it is safe
+	 * to access its ifa_addr without locking.
+	 */
 	if (ifa->ifa_addr->sa_family != AF_INET)
-		return 1;
+		return (1);
 
 	/* trigger route cache reevaluation */
 	if (use_routegenid)
@@ -568,6 +590,8 @@ in_ifadown(struct ifaddr *ifa, int delete)
 	arg.ifa = ifa;
 	arg.del = delete;
 	rnh->rnh_walktree(rnh, in_ifadownkill, &arg);
+	IFA_LOCK_SPIN(ifa);
 	ifa->ifa_flags &= ~IFA_ROUTE;
-	return 0;
+	IFA_UNLOCK(ifa);
+	return (0);
 }

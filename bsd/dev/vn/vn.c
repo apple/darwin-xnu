@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1141,10 +1141,10 @@ vniocattach_file(struct vn_softc *vn,
 
 	flags = FREAD|FWRITE;
 	if (in_kernel) {
-		NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, vniop->vn_file, ctx);
+		NDINIT(&nd, LOOKUP, OP_OPEN, FOLLOW, UIO_SYSSPACE, vniop->vn_file, ctx);
 	}
 	else {
-		NDINIT(&nd, LOOKUP, FOLLOW, 
+		NDINIT(&nd, LOOKUP, OP_OPEN, FOLLOW, 
 			   (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32), 
 			   vniop->vn_file, ctx);
 	}
@@ -1156,11 +1156,11 @@ vniocattach_file(struct vn_softc *vn,
 		}
 		flags &= ~FWRITE;
 		if (in_kernel) {
-			NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, 
+			NDINIT(&nd, LOOKUP, OP_OPEN, FOLLOW, UIO_SYSSPACE, 
 			       vniop->vn_file, ctx);
 		}
 		else {
-			NDINIT(&nd, LOOKUP, FOLLOW, 
+			NDINIT(&nd, LOOKUP, OP_OPEN, FOLLOW, 
 				   (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32), 
 			       vniop->vn_file, ctx);
 		}
@@ -1221,10 +1221,10 @@ vniocattach_shadow(struct vn_softc *vn, struct vn_ioctl_64 *vniop,
 
 	flags = FREAD|FWRITE;
 	if (in_kernel) {
-		NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, vniop->vn_file, ctx);
+		NDINIT(&nd, LOOKUP, OP_OPEN, FOLLOW, UIO_SYSSPACE, vniop->vn_file, ctx);
 	}
 	else {
-		NDINIT(&nd, LOOKUP, FOLLOW, 
+		NDINIT(&nd, LOOKUP, OP_OPEN, FOLLOW, 
 			   (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32), 
 			   vniop->vn_file, ctx);
 	}

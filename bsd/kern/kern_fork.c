@@ -129,7 +129,6 @@ extern void dtrace_lazy_dofs_duplicate(proc_t, proc_t);
 
 #include <sys/sdt.h>
 
-
 /* XXX routines which should have Mach prototypes, but don't */
 void thread_set_parent(thread_t parent, int pid);
 extern void act_thread_catt(void *ctx);
@@ -365,7 +364,7 @@ fork1(proc_t parent_proc, thread_t *child_threadp, int kind)
 	 * exceed the limit. The variable nprocs is the current number of
 	 * processes, maxproc is the limit.
 	 */
-	uid = kauth_cred_get()->cr_ruid;
+	uid = kauth_getruid();
 	proc_list_lock();
 	if ((nprocs >= maxproc - 1 && uid != 0) || nprocs >= maxproc) {
 		proc_list_unlock();
@@ -466,7 +465,6 @@ fork1(proc_t parent_proc, thread_t *child_threadp, int kind)
 
 		AUDIT_ARG(pid, child_proc->p_pid);
 
-		AUDIT_SESSION_PROCNEW(child_proc->p_ucred);
 // XXX END: wants to move to be common code (and safe)
 
 		/*
@@ -570,7 +568,6 @@ fork1(proc_t parent_proc, thread_t *child_threadp, int kind)
 
 		AUDIT_ARG(pid, child_proc->p_pid);
 
-		AUDIT_SESSION_PROCNEW(child_proc->p_ucred);
 // XXX END: wants to move to be common code (and safe)
 
 		/*
@@ -690,7 +687,6 @@ vfork_return(proc_t child_proc, int32_t *retval, int rval)
 	thread_t parent_thread = (thread_t)current_thread();
 	uthread_t parent_uthread = (uthread_t)get_bsdthread_info(parent_thread);
 	
-
 	act_thread_catt(parent_uthread->uu_userstate);
 
 	/* end vfork in parent */
@@ -948,14 +944,6 @@ cloneproc(task_t parent_task, proc_t parent_proc, int inherit_memory)
 	if (parent_proc->p_flag & P_LP64) {
 		task_set_64bit(child_task, TRUE);
 		OSBitOrAtomic(P_LP64, (UInt32 *)&child_proc->p_flag);
-#ifdef __ppc__
-		/*
-		 * PPC51: ppc64 is limited to 51-bit addresses.
-		 * Memory above that limit is handled specially at
-		 * the pmap level.
-		 */
-		pmap_map_sharedpage(child_task, get_map_pmap(get_task_map(child_task)));
-#endif /* __ppc__ */
 	} else {
 		task_set_64bit(child_task, FALSE);
 		OSBitAndAtomic(~((uint32_t)P_LP64), (UInt32 *)&child_proc->p_flag);
@@ -1031,6 +1019,9 @@ forkproc_free(proc_t p)
 	/* Stop the profiling clock */
 	stopprofclock(p);
 
+	/* Update the audit session proc count */
+	AUDIT_SESSION_PROCEXIT(p);
+
 	/* Release the credential reference */
 	kauth_cred_unref(&p->p_ucred);
 
@@ -1069,6 +1060,7 @@ forkproc(proc_t parent_proc)
 {
 	proc_t child_proc;	/* Our new process */
 	static int nextpid = 0, pidwrap = 0, nextpidversion = 0;
+	static uint64_t nextuniqueid = 0;
 	int error = 0;
 	struct session *sessp;
 	uthread_t parent_uthread = (uthread_t)get_bsdthread_info(current_thread());
@@ -1147,6 +1139,8 @@ retry:
 	nprocs++;
 	child_proc->p_pid = nextpid;
 	child_proc->p_idversion = nextpidversion++;
+	/* kernel process is handcrafted and not from fork, so start from 1 */
+	child_proc->p_uniqueid = ++nextuniqueid;
 #if 1
 	if (child_proc->p_pid != 0) {
 		if (pfind_locked(child_proc->p_pid) != PROC_NULL)
@@ -1180,7 +1174,7 @@ retry:
 	 * Increase reference counts on shared objects.
 	 * The p_stats and p_sigacts substructs are set in vm_fork.
 	 */
-	child_proc->p_flag = (parent_proc->p_flag & (P_LP64 | P_TRANSLATED | P_AFFINITY));
+	child_proc->p_flag = (parent_proc->p_flag & (P_LP64 | P_TRANSLATED | P_AFFINITY | P_DISABLE_ASLR));
 	if (parent_proc->p_flag & P_PROFIL)
 		startprofclock(child_proc);
 	/*
@@ -1188,22 +1182,26 @@ retry:
 	 * credential will be granted to the new process.
 	 */
 	child_proc->p_ucred = kauth_cred_get_with_ref();
+	/* update cred on proc */
+	PROC_UPDATE_CREDS_ONPROC(child_proc);
+	/* update audit session proc count */
+	AUDIT_SESSION_PROCNEW(child_proc);
 
-#ifdef CONFIG_EMBEDDED
-	lck_mtx_init(&child_proc->p_mlock, proc_lck_grp, proc_lck_attr);
-	lck_mtx_init(&child_proc->p_fdmlock, proc_lck_grp, proc_lck_attr);
-#if CONFIG_DTRACE
-	lck_mtx_init(&child_proc->p_dtrace_sprlock, proc_lck_grp, proc_lck_attr);
-#endif
-	lck_spin_init(&child_proc->p_slock, proc_lck_grp, proc_lck_attr);
-#else /* !CONFIG_EMBEDDED */
+#if CONFIG_FINE_LOCK_GROUPS
 	lck_mtx_init(&child_proc->p_mlock, proc_mlock_grp, proc_lck_attr);
 	lck_mtx_init(&child_proc->p_fdmlock, proc_fdmlock_grp, proc_lck_attr);
 #if CONFIG_DTRACE
 	lck_mtx_init(&child_proc->p_dtrace_sprlock, proc_lck_grp, proc_lck_attr);
 #endif
 	lck_spin_init(&child_proc->p_slock, proc_slock_grp, proc_lck_attr);
-#endif /* !CONFIG_EMBEDDED */
+#else /* !CONFIG_FINE_LOCK_GROUPS */
+	lck_mtx_init(&child_proc->p_mlock, proc_lck_grp, proc_lck_attr);
+	lck_mtx_init(&child_proc->p_fdmlock, proc_lck_grp, proc_lck_attr);
+#if CONFIG_DTRACE
+	lck_mtx_init(&child_proc->p_dtrace_sprlock, proc_lck_grp, proc_lck_attr);
+#endif
+	lck_spin_init(&child_proc->p_slock, proc_lck_grp, proc_lck_attr);
+#endif /* !CONFIG_FINE_LOCK_GROUPS */
 	klist_init(&child_proc->p_klist);
 
 	if (child_proc->p_textvp != NULLVP) {
@@ -1396,6 +1394,7 @@ uthread_alloc(task_t task, thread_t thread, int noinherit)
 
 	p = (proc_t) get_bsdtask_info(task);
 	uth = (uthread_t)ut;
+	uth->uu_kwe.kwe_uth = uth;
 
 	/*
 	 * Thread inherits credential from the creating thread, if both

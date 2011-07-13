@@ -158,7 +158,6 @@ int	*get_bsduthreadrval(thread_t);
 kern_return_t sys_perf_notify(thread_t thread, int pid);
 kern_return_t abnormal_exit_notify(mach_exception_data_type_t code, 
 		mach_exception_data_type_t subcode);
-void workqueue_exit(struct proc *);
 void	delay(int);
 			
 /*
@@ -256,8 +255,10 @@ exit1(proc_t p, int rv, int *retval)
 	DTRACE_PROC1(exit, int, CLD_EXITED);
 
         proc_lock(p);
+	proc_transstart(p, 1);
 	while (p->exit_thread != self) {
 		if (sig_try_locked(p) <= 0) {
+			proc_transend(p, 1);
 			if (get_threadtask(self) != task) {
 				proc_unlock(p);
 				return(0);
@@ -283,11 +284,12 @@ exit1(proc_t p, int rv, int *retval)
 	p->p_lflag |= P_LEXIT;
 	p->p_xstat = rv;
 
+	proc_transend(p, 1);
 	proc_unlock(p);
 
 	proc_prepareexit(p, rv);
 
-	/* task terminate will call proc_terminate and that cleans it up */
+	/* Last thread to terminate will call proc_exit() */
 	task_terminate_internal(task);
 
 	return(0);
@@ -372,21 +374,39 @@ proc_exit(proc_t p)
 	pid_t pid;
 	int exitval;
 
-	/* This can happen if thread_terminate of the single thread
-	 * process 
-	 */
-
 	uth = (struct uthread *)get_bsdthread_info(current_thread());
 
 	proc_lock(p);
+	proc_transstart(p, 1);
 	if( !(p->p_lflag & P_LEXIT)) {
+		/*
+		 * This can happen if a thread_terminate() occurs
+		 * in a single-threaded process.
+		 */
 		p->p_lflag |= P_LEXIT;
+		proc_transend(p, 1);
 		proc_unlock(p);
 		proc_prepareexit(p, 0);	
+		(void) task_terminate_internal(task);
 		proc_lock(p);
+	} else {
+		proc_transend(p, 1);
 	}
 
 	p->p_lflag |= P_LPEXIT;
+
+	/*
+	 * Other kernel threads may be in the middle of signalling this process.
+	 * Wait for those threads to wrap it up before making the process
+	 * disappear on them.
+	 */
+	if ((p->p_lflag & P_LINSIGNAL) || (p->p_sigwaitcnt > 0)) {
+		p->p_sigwaitcnt++;
+		while ((p->p_lflag & P_LINSIGNAL) || (p->p_sigwaitcnt > 1)) 
+			msleep(&p->p_sigmask, &p->p_mlock, PWAIT, "proc_sigdrain", NULL);
+		p->p_sigwaitcnt--;
+	}
+
 	proc_unlock(p);
 	pid = p->p_pid;
 	exitval = p->p_xstat;
@@ -428,6 +448,8 @@ proc_exit(proc_t p)
 	/* XXX Zombie allocation may fail, in which case stats get lost */
 	MALLOC_ZONE(p->p_ru, struct rusage *,
 			sizeof (*p->p_ru), M_ZOMBIE, M_WAITOK);
+
+	nspace_proc_exit(p);
 
 	/*
 	 * need to cancel async IO requests that can be cancelled and wait for those
@@ -575,7 +597,7 @@ proc_exit(proc_t p)
 			 * if the reap is already in progress. So we get
 			 * the reference here exclusively and their can be
 			 * no waiters. So there is no need for a wakeup
-			 * after we are done. AlsO  the reap frees the structure
+			 * after we are done.  Also the reap frees the structure
 			 * and the proc struct cannot be used for wakeups as well. 
 			 * It is safe to use q here as this is system reap
 			 */
@@ -587,10 +609,21 @@ proc_exit(proc_t p)
 		 	* since their existence means someone is messing up.
 		 	*/
 			if (q->p_lflag & P_LTRACED) {
+				/*
+				 * Take a reference on the child process to
+				 * ensure it doesn't exit and disappear between
+				 * the time we drop the list_lock and attempt
+				 * to acquire its proc_lock.
+				 */
+				if (proc_ref_locked(q) != q)
+					continue;
+
 				proc_list_unlock();
 				proc_lock(q);
 				q->p_lflag &= ~P_LTRACED;
 				if (q->sigwait_thread) {
+					thread_t thread = q->sigwait_thread;
+
 					proc_unlock(q);
 					/*
 				 	* The sigwait_thread could be stopped at a
@@ -599,13 +632,16 @@ proc_exit(proc_t p)
 				 	* the first thread in the task. So any attempts to kill
 				 	* the process would result into a deadlock on q->sigwait.
 				 	*/
-					thread_resume((thread_t)q->sigwait_thread);
-					clear_wait(q->sigwait_thread, THREAD_INTERRUPTED);
-					threadsignal((thread_t)q->sigwait_thread, SIGKILL, 0);
-				} else
+					thread_resume(thread);
+					clear_wait(thread, THREAD_INTERRUPTED);
+					threadsignal(thread, SIGKILL, 0);
+				} else {
 					proc_unlock(q);
+				}
+
 				psignal(q, SIGKILL);
 				proc_list_lock();
+				proc_rele_locked(q);
 			}
 		}
 	}
@@ -629,9 +665,8 @@ proc_exit(proc_t p)
 	 */
 	/* No need for locking here as no one than this thread can access this */
 	if (p->p_ru != NULL) {
+	    calcru(p, &p->p_stats->p_ru.ru_utime, &p->p_stats->p_ru.ru_stime, NULL);
 	    *p->p_ru = p->p_stats->p_ru;
-
-	    calcru(p, &p->p_ru->ru_utime, &p->p_ru->ru_stime, NULL);
 
 	    ruadd(p->p_ru, &p->p_stats->p_cru);
 	}
@@ -689,7 +724,8 @@ proc_exit(proc_t p)
 	p->task = TASK_NULL;
 	set_bsdtask_info(task, NULL);
 
-	proc_knote(p, NOTE_EXIT);
+	/* exit status will be seen  by parent process */
+	proc_knote(p, NOTE_EXIT | (p->p_xstat & 0xffff));
 
 	/* mark the thread as the one that is doing proc_exit
 	 * no need to hold proc lock in uthread_free
@@ -737,7 +773,7 @@ proc_exit(proc_t p)
 			 * p_ucred usage is safe as it is an exiting process
 			 * and reference is dropped in reap
 			 */
-			pp->si_uid = p->p_ucred->cr_ruid;
+			pp->si_uid = kauth_cred_getruid(p->p_ucred);
 			proc_unlock(pp);
 		}
 		/* mark as a zombie */
@@ -855,7 +891,7 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int locked, int d
 			trace_parent->si_pid = child->p_pid;
 			trace_parent->si_status = child->p_xstat;
 			trace_parent->si_code = CLD_CONTINUED;
-			trace_parent->si_uid = child->p_ucred->cr_ruid;
+			trace_parent->si_uid = kauth_cred_getruid(child->p_ucred);
 			proc_unlock(trace_parent);
 		}
 		proc_reparentlocked(child, trace_parent, 1, 0);
@@ -899,7 +935,7 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int locked, int d
 		printf("Warning : lost p_ru for %s\n", child->p_comm);
 	}
 
-	AUDIT_SESSION_PROCEXIT(child->p_ucred);
+	AUDIT_SESSION_PROCEXIT(child);
 
 	/*
 	 * Decrement the count of procs running with this uid.
@@ -907,7 +943,7 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int locked, int d
 	 * and refernce is dropped after these calls down below
 	 * (locking protection is provided by list lock held in chgproccnt)
 	 */
-	(void)chgproccnt(child->p_ucred->cr_ruid, -1);
+	(void)chgproccnt(kauth_cred_getruid(child->p_ucred), -1);
 
 #if CONFIG_LCTX
 	ALLLCTX_LOCK;
@@ -948,22 +984,21 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int locked, int d
 
 	proc_list_unlock();
 
-#ifdef CONFIG_EMBEDDED
-	lck_mtx_destroy(&child->p_mlock, proc_lck_grp);
-	lck_mtx_destroy(&child->p_fdmlock, proc_lck_grp);
-#if CONFIG_DTRACE
-	lck_mtx_destroy(&child->p_dtrace_sprlock, proc_lck_grp);
-#endif
-	lck_spin_destroy(&child->p_slock, proc_lck_grp);
-
-#else	
+#if CONFIG_FINE_LOCK_GROUPS
 	lck_mtx_destroy(&child->p_mlock, proc_mlock_grp);
 	lck_mtx_destroy(&child->p_fdmlock, proc_fdmlock_grp);
 #if CONFIG_DTRACE
 	lck_mtx_destroy(&child->p_dtrace_sprlock, proc_lck_grp);
 #endif
 	lck_spin_destroy(&child->p_slock, proc_slock_grp);
+#else /* CONFIG_FINE_LOCK_GROUPS */
+	lck_mtx_destroy(&child->p_mlock, proc_lck_grp);
+	lck_mtx_destroy(&child->p_fdmlock, proc_lck_grp);
+#if CONFIG_DTRACE
+	lck_mtx_destroy(&child->p_dtrace_sprlock, proc_lck_grp);
 #endif
+	lck_spin_destroy(&child->p_slock, proc_lck_grp);
+#endif /* CONFIG_FINE_LOCK_GROUPS */
 	workqueue_destroy_lock(child);
 
 	FREE_ZONE(child, sizeof *child, M_PROC);
@@ -1754,6 +1789,8 @@ vproc_exit(proc_t p)
 				proc_lock(q);
 				q->p_lflag &= ~P_LTRACED;
 				if (q->sigwait_thread) {
+					thread_t thread = q->sigwait_thread;
+
 					proc_unlock(q);
 					/*
 				 	* The sigwait_thread could be stopped at a
@@ -1762,12 +1799,13 @@ vproc_exit(proc_t p)
 				 	* the first thread in the task. So any attempts to kill
 				 	* the process would result into a deadlock on q->sigwait.
 				 	*/
-					thread_resume((thread_t)q->sigwait_thread);
-					clear_wait(q->sigwait_thread, THREAD_INTERRUPTED);
-					threadsignal((thread_t)q->sigwait_thread, SIGKILL, 0);
-				} else
+					thread_resume(thread);
+					clear_wait(thread, THREAD_INTERRUPTED);
+					threadsignal(thread, SIGKILL, 0);
+				} else {
 					proc_unlock(q);
-					
+				}
+
 				psignal(q, SIGKILL);
 				proc_list_lock();
 			}
@@ -1844,6 +1882,10 @@ vproc_exit(proc_t p)
 		}
 	}
 
+#if PSYNCH
+	pth_proc_hashdelete(p);
+#endif /* PSYNCH */
+
 	/*
 	 * Other substructures are freed from wait().
 	 */
@@ -1877,7 +1919,7 @@ vproc_exit(proc_t p)
 			 * p_ucred usage is safe as it is an exiting process
 			 * and reference is dropped in reap
 			 */
-			pp->si_uid = p->p_ucred->cr_ruid;
+			pp->si_uid = kauth_cred_getruid(p->p_ucred);
 			proc_unlock(pp);
 		}
 		/* mark as a zombie */

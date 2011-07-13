@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -95,6 +95,15 @@ struct route {
 
 #define	ROF_SRCIF_SELECTED	0x1 /* source interface was selected */
 
+/*
+ * Route reachability info (private)
+ */
+struct rt_reach_info {
+	u_int32_t		ri_refcnt;	/* reference count */
+	u_int32_t		ri_probes;	/* total # of probes */
+	u_int64_t		ri_snd_expire;	/* transmit expiration (calendar) time */
+	u_int64_t		ri_rcv_expire;	/* receive expiration (calendar) time */
+};
 #else
 struct route;
 #endif /* PRIVATE */
@@ -159,6 +168,9 @@ struct rtentry {
 	struct	ifaddr *rt_ifa;		/* the answer: interface addr to use */
 	struct	sockaddr *rt_genmask;	/* for generation of cloned routes */
 	void	*rt_llinfo;		/* pointer to link level info cache */
+	void	(*rt_llinfo_get_ri)	/* llinfo get reachability info fn */
+	    (struct rtentry *, struct rt_reach_info *);
+	void	(*rt_llinfo_purge)(struct rtentry *); /* llinfo purge fn */
 	void	(*rt_llinfo_free)(void *); /* link level info free function */
 	struct	rt_metrics rt_rmx;	/* metrics used by rx'ing protocols */
 	struct	rtentry *rt_gwroute;	/* implied entry for gatewayed routes */
@@ -168,10 +180,15 @@ struct rtentry {
 	 * See bsd/net/route.c for synchronization notes.
 	 */
 	decl_lck_mtx_data(, rt_lock);	/* lock for routing entry */
-#if IFNET_ROUTE_REFCNT
+	struct nstat_counts	*rt_stats;
 	void	(*rt_if_ref_fn)(struct ifnet *, int); /* interface ref func */
-#endif /* IFNET_ROUTE_REFCNT */
+
+	uint64_t rt_expire;		/* expiration time in uptime seconds */
+	uint64_t base_calendartime;	/* calendar time upon entry creation */
+	uint64_t base_uptime;/* 	uptime upon entry creation */
 };
+
+extern void rt_setexpire(struct rtentry *, uint64_t);
 #endif /* KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE
@@ -251,6 +268,27 @@ struct rt_msghdr2 {
 	struct rt_metrics rtm_rmx;	/* metrics themselves */
 };
 
+#ifdef PRIVATE
+/*
+ * Extended routing message header (private).
+ */
+struct rt_msghdr_ext {
+	u_short	rtm_msglen;	/* to skip over non-understood messages */
+	u_char	rtm_version;	/* future binary compatibility */
+	u_char	rtm_type;	/* message type */
+	u_int32_t rtm_index;	/* index for associated ifp */
+	u_int32_t rtm_flags;	/* flags, incl. kern & message, e.g. DONE */
+	u_int32_t rtm_reserved;	/* for future use */
+	u_int32_t rtm_addrs;	/* bitmask identifying sockaddrs in msg */
+	pid_t	rtm_pid;	/* identify sender */
+	int	rtm_seq;	/* for sender to identify action */
+	int	rtm_errno;	/* why failed */
+	u_int32_t rtm_use;	/* from rtentry */
+	u_int32_t rtm_inits;	/* which metrics we are initializing */
+	struct rt_metrics rtm_rmx;	/* metrics themselves */
+	struct rt_reach_info rtm_ri;	/* route reachability info */
+};
+#endif /* PRIVATE */
 
 #define RTM_VERSION	5	/* Up the ante and ignore older versions */
 
@@ -279,6 +317,9 @@ struct rt_msghdr2 {
 #define RTM_IFINFO2	0x12	/* */
 #define RTM_NEWMADDR2	0x13	/* */
 #define RTM_GET2	0x14	/* */
+#ifdef PRIVATE
+#define	RTM_GET_EXT	0x15
+#endif /* PRIVATE */
 
 /*
  * Bitmask values for rtm_inits and rmx_locks.
@@ -445,18 +486,16 @@ extern void rt_missmsg(int, struct rt_addrinfo *, int, int);
 extern void rt_newaddrmsg(int, struct ifaddr *, int, struct rtentry *);
 extern void rt_newmaddrmsg(int, struct ifmultiaddr *);
 extern int rt_setgate(struct rtentry *, struct sockaddr *, struct sockaddr *);
-extern void set_primary_ifscope(unsigned int);
-extern unsigned int get_primary_ifscope(void);
-extern boolean_t rt_inet_default(struct rtentry *, struct sockaddr *);
+extern void set_primary_ifscope(int, unsigned int);
+extern unsigned int get_primary_ifscope(int);
+extern boolean_t rt_primary_default(struct rtentry *, struct sockaddr *);
 extern struct rtentry *rt_lookup(boolean_t, struct sockaddr *,
     struct sockaddr *, struct radix_node_head *, unsigned int);
 extern void rtalloc(struct route *);
+extern void rtalloc_scoped(struct route *, unsigned int);
 extern void rtalloc_ign(struct route *, uint32_t);
-extern void rtalloc_ign_locked(struct route *, uint32_t);
 extern void rtalloc_scoped_ign(struct route *, uint32_t, unsigned int);
-extern void rtalloc_scoped_ign_locked(struct route *, uint32_t, unsigned int);
 extern struct rtentry *rtalloc1(struct sockaddr *, int, uint32_t);
-extern struct rtentry *rtalloc1_locked(struct sockaddr *, int, uint32_t);
 extern struct rtentry *rtalloc1_scoped(struct sockaddr *, int, uint32_t,
     unsigned int);
 extern struct rtentry *rtalloc1_scoped_locked(struct sockaddr *, int,
@@ -478,19 +517,30 @@ extern void rtredirect(struct ifnet *, struct sockaddr *, struct sockaddr *,
     struct sockaddr *, int, struct sockaddr *, struct rtentry **);
 extern int rtrequest(int, struct sockaddr *,
     struct sockaddr *, struct sockaddr *, int, struct rtentry **);
+extern int rtrequest_scoped(int, struct sockaddr *, struct sockaddr *,
+    struct sockaddr *, int, struct rtentry **, unsigned int);
 extern int rtrequest_locked(int, struct sockaddr *,
     struct sockaddr *, struct sockaddr *, int, struct rtentry **);
 extern int rtrequest_scoped_locked(int, struct sockaddr *, struct sockaddr *,
     struct sockaddr *, int, struct rtentry **, unsigned int);
-extern unsigned int sa_get_ifscope(struct sockaddr *);
+extern void sin_set_ifscope(struct sockaddr *, unsigned int);
+extern unsigned int sin_get_ifscope(struct sockaddr *);
+extern unsigned int sin6_get_ifscope(struct sockaddr *);
 extern void rt_lock(struct rtentry *, boolean_t);
 extern void rt_unlock(struct rtentry *);
-extern struct sockaddr *rtm_scrub_ifscope(int, struct sockaddr *,
+extern struct sockaddr *rtm_scrub_ifscope(int, int, struct sockaddr *,
     struct sockaddr *, struct sockaddr_storage *);
 extern u_int64_t rt_expiry(struct rtentry *, u_int64_t, u_int32_t);
-#if IFNET_ROUTE_REFCNT
+extern void rt_set_idleref(struct rtentry *);
+extern void rt_clear_idleref(struct rtentry *);
 extern void rt_aggdrain(int);
-#endif /* IFNET_ROUTE_REFCNT */
+extern boolean_t rt_validate(struct rtentry *);
+
+#ifdef XNU_KERNEL_PRIVATE
+extern void route_copyin(struct route *src, struct route *dst, size_t length);
+extern void route_copyout(struct route *dst, const struct route *src, size_t length);
+#endif /* XNU_KERNEL_PRIVATE */
+
 #endif /* KERNEL_PRIVATE */
 
 #endif

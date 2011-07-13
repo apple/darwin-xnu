@@ -428,7 +428,6 @@ out:
 /*
  * Suspend recording the hotest files on a file system.
  */
-__private_extern__
 int
 hfs_recording_suspend(struct hfsmount *hfsmp)
 {
@@ -511,7 +510,6 @@ out:
 /*
  *
  */
-__private_extern__
 int
 hfs_recording_init(struct hfsmount *hfsmp)
 {
@@ -559,12 +557,17 @@ hfs_recording_init(struct hfsmount *hfsmp)
 			hfsmp->hfc_stage = HFC_IDLE;
 		return (0);
 	}
+
+	if (hfs_start_transaction(hfsmp) != 0) {
+		return EINVAL;
+	}
+
 	error = hfc_btree_create(hfsmp, HFSTOVCB(hfsmp)->blockSize, HFC_DEFAULT_FILE_COUNT);
 	if (error) {
 #if HFC_VERBOSE
 		printf("hfs: Error %d creating hot file b-tree on %s \n", error, hfsmp->vcbVN);
 #endif
-		return (error);
+		goto out2;
 	}
 	/*
 	 * Open the Hot File B-tree file for writing.
@@ -576,7 +579,7 @@ hfs_recording_init(struct hfsmount *hfsmp)
 #if HFC_VERBOSE
 		printf("hfs: Error %d opening hot file b-tree on %s \n", error, hfsmp->vcbVN);
 #endif
-		return (error);
+		goto out2;
 	}
 	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
 	if (iterator == NULL) {
@@ -697,6 +700,7 @@ out0:
 out1:
 	(void) BTScanTerminate(&scanstate, &data, &data, &data);
 out2:	
+	hfs_end_transaction(hfsmp);
 	if (iterator)
 		FREE(iterator, M_TEMP);
 	if (hfsmp->hfc_filevp) {
@@ -712,7 +716,6 @@ out2:
 /*
  * Use sync to perform ocassional background work.
  */
-__private_extern__
 int
 hfs_hotfilesync(struct hfsmount *hfsmp, vfs_context_t ctx)
 {
@@ -759,7 +762,6 @@ hfs_hotfilesync(struct hfsmount *hfsmp, vfs_context_t ctx)
  *
  * Note: the cnode is locked on entry.
  */
-__private_extern__
 int
 hfs_addhotfile(struct vnode *vp)
 {
@@ -847,7 +849,6 @@ hfs_addhotfile_internal(struct vnode *vp)
  *
  * Note: the cnode is locked on entry.
  */
-__private_extern__
 int
 hfs_removehotfile(struct vnode *vp)
 {
@@ -1128,7 +1129,7 @@ hotfiles_adopt(struct hfsmount *hfsmp)
 		/*
 		 * Acquire a vnode for this file.
 		 */
-		error = hfs_vget(hfsmp, listp->hfl_hotfile[i].hf_fileid, &vp, 0);
+		error = hfs_vget(hfsmp, listp->hfl_hotfile[i].hf_fileid, &vp, 0, 0);
 		if (error) {
 			if (error == ENOENT) {
 				error = 0;
@@ -1350,7 +1351,7 @@ hotfiles_evict(struct hfsmount *hfsmp, vfs_context_t ctx)
 		/*
 		 * Aquire the vnode for this file.
 		 */
-		error = hfs_vget(hfsmp, key->fileID, &vp, 0);
+		error = hfs_vget(hfsmp, key->fileID, &vp, 0, 0);
 		if (error) {
 			if (error == ENOENT) {
 				goto delete;  /* stale entry, go to next */
@@ -1684,6 +1685,7 @@ hfc_btree_open(struct hfsmount *hfsmp, struct vnode **vpp)
 	int  error;
 	int  retry = 0;
 	int lockflags;
+	int newvnode_flags = 0;
 
 	*vpp = NULL;
 	p = current_proc();
@@ -1705,7 +1707,8 @@ hfc_btree_open(struct hfsmount *hfsmp, struct vnode **vpp)
 	}
 again:
 	cdesc.cd_flags |= CD_ISMETA;
-	error = hfs_getnewvnode(hfsmp, NULL, NULL, &cdesc, 0, &cattr, &cfork, &vp);
+	error = hfs_getnewvnode(hfsmp, NULL, NULL, &cdesc, 0, &cattr, 
+							&cfork, &vp, &newvnode_flags);
 	if (error) {
 		printf("hfs: hfc_btree_open: hfs_getnewvnode error %d\n", error);
 		cat_releasedesc(&cdesc);
@@ -1757,7 +1760,7 @@ hfc_btree_close(struct hfsmount *hfsmp, struct vnode *vp)
 
 
 	if (hfsmp->jnl) {
-	    hfs_journal_flush(hfsmp);
+	    hfs_journal_flush(hfsmp, FALSE);
 	}
 
 	if (vnode_get(vp) == 0) {
@@ -1813,6 +1816,11 @@ hfc_btree_create(struct hfsmount *hfsmp, unsigned int nodesize, unsigned int ent
 	VATTR_SET(&va, va_mode, S_IFREG | S_IRUSR | S_IWUSR);
 	VATTR_SET(&va, va_uid, 0);
 	VATTR_SET(&va, va_gid, 0);
+
+	if (hfs_start_transaction(hfsmp) != 0) {
+	    error = EINVAL;
+	    goto out;
+	} 
 
 	/* call ourselves directly, ignore the higher-level VFS file creation code */
 	error = VNOP_CREATE(dvp, &vp, &cname, &va, ctx);
@@ -1941,6 +1949,7 @@ hfc_btree_create(struct hfsmount *hfsmp, unsigned int nodesize, unsigned int ent
 		kmem_free(kernel_map, (vm_offset_t)buffer, nodesize);
 	}
 out:
+	hfs_end_transaction(hfsmp);
 	if (dvp) {
 		vnode_put(dvp);
 	}

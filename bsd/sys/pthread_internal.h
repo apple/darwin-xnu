@@ -29,12 +29,34 @@
 #ifndef _SYS_PTHREAD_INTERNAL_H_
 #define _SYS_PTHREAD_INTERNAL_H_
 
-#undef pthread_mutexattr_t;
-
+#include <sys/user.h>
 #include <kern/thread_call.h>
 
+struct ksyn_waitq_element {
+	TAILQ_ENTRY(ksyn_waitq_element) kwe_list;	/* link to other list members */
+	void *          kwe_kwqqueue;            	/* queue blocked on */
+	uint32_t	kwe_flags;			/* flags */
+	uint32_t        kwe_lockseq;			/* the sequence of the entry */
+	uint32_t	kwe_count;			/* upper bound on number of matches still pending */
+	uint32_t 	kwe_psynchretval;		/* thread retval */
+	void		*kwe_uth;			/* uthread */
+};
+typedef struct ksyn_waitq_element * ksyn_waitq_element_t;
+
+/* kew_flags defns */
+#define KWE_THREAD_INWAIT       1
+#define KWE_THREAD_PREPOST      2
+#define KWE_THREAD_BROADCAST    4
+
+
 #define WORKITEM_SIZE 64
-#define WORKQUEUE_NUMPRIOS 3
+
+#define WORKQUEUE_HIGH_PRIOQUEUE    0       /* high priority queue */
+#define WORKQUEUE_DEFAULT_PRIOQUEUE 1       /* default priority queue */
+#define WORKQUEUE_LOW_PRIOQUEUE     2       /* low priority queue */
+#define WORKQUEUE_BG_PRIOQUEUE      3       /* background priority queue */
+
+#define WORKQUEUE_NUMPRIOS 4
 
 #define WORKQUEUE_OVERCOMMIT	0x10000
 
@@ -57,6 +79,8 @@ struct threadlist {
 #define TH_LIST_SUSPENDED 	0x08
 #define TH_LIST_BUSY		0x10
 #define TH_LIST_NEED_WAKEUP	0x20
+#define TH_LIST_CONSTRAINED	0x40
+
 
 struct workitem {
 	TAILQ_ENTRY(workitem) wi_entry;
@@ -83,6 +107,7 @@ struct workqueue {
 	uint32_t	wq_timer_interval;
         uint32_t	wq_affinity_max;
         uint32_t	wq_threads_scheduled;
+	uint32_t	wq_constrained_threads_scheduled;
 	uint32_t	wq_nthreads;
         uint32_t      	wq_thidlecount;
 	uint32_t	wq_reqconc[WORKQUEUE_NUMPRIOS];	  /* requested concurrency for each priority level */
@@ -100,6 +125,8 @@ struct workqueue {
 
 #define WQL_ATIMER_BUSY		0x01
 #define WQL_ATIMER_WAITING	0x02
+#define WQL_EXCEEDED_CONSTRAINED_THREAD_LIMIT    0x04
+#define WQL_EXCEEDED_TOTAL_THREAD_LIMIT          0x08
 
 
 #define WQ_VECT_SET_BIT(vector, bit)	\
@@ -121,7 +148,7 @@ struct workqueue {
 
 /* workq_kernreturn commands */
 #define WQOPS_QUEUE_ADD 1
-#define WQOPS_QUEUE_REMOVE 2
+#define WQOPS_QUEUE_REMOVE_OBSOLETE 2 
 #define WQOPS_THREAD_RETURN 4
 #define WQOPS_THREAD_SETCONC  8
 
@@ -129,12 +156,12 @@ struct workqueue {
 #define PTH_DEFAULT_GUARDSIZE 4*1024
 #define MAX_PTHREAD_SIZE 64*1024
 
-void workqueue_exit(struct proc *);
-
-void pthread_init(void);
 extern lck_grp_attr_t   *pthread_lck_grp_attr;
 extern lck_grp_t    *pthread_lck_grp;
 extern lck_attr_t   *pthread_lck_attr;
 
+void workqueue_exit(struct proc *);
+void pthread_init(void);
+void psynch_zoneinit(void);
 #endif /* _SYS_PTHREAD_INTERNAL_H_ */
 

@@ -4,7 +4,7 @@ Embedded=$(shell tconf --test TARGET_OS_EMBEDDED)
 
 ifeq "$(Embedded)" "YES"
 XILogFLAG =
-SDKPATH = $(shell xcodebuild -sdk $(SDKROOT) -version | grep Path | cut -f 2 -d " ")
+SDKPATH = $(shell xcodebuild -sdk $(SDKROOT) -version Path)
 CFLAGS += -isysroot $(SDKPATH)
 LIBFLAGS += -isysroot $(SDKPATH)
 else
@@ -38,7 +38,7 @@ else
 	endif
 	
 	ifndef ARCH
-		ARCH=i386 x86_64 ppc
+		ARCH=i386 x86_64
 		# this hack should be removed once tconf gets
 		# <rdar://problem/6618734>
 		ifeq "$(Product)" "iPhone"
@@ -56,6 +56,7 @@ else
 	CFLAGS += $(MY_ARCH)
 endif
 
+
 CFLAGS += -g -I $(SDKPATH)/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/ -F/AppleInternal/Library/Frameworks/ $(MORECFLAGS)
 LIBFLAGS += -I $(SDKPATH)/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders  -F/AppleInternal/Library/Frameworks/ $(XILogFLAG)
 
@@ -63,7 +64,8 @@ MY_OBJECTS = $(OBJROOT)/main.o $(OBJROOT)/memory_tests.o $(OBJROOT)/misc.o \
 			 $(OBJROOT)/sema_tests.o $(OBJROOT)/shared_memory_tests.o \
 			 $(OBJROOT)/socket_tests.o $(OBJROOT)/tests.o \
 			 $(OBJROOT)/xattr_tests.o $(OBJROOT)/kqueue_tests.o \
-			 $(OBJROOT)/machvm_tests.o
+			 $(OBJROOT)/machvm_tests.o $(OBJROOT)/commpage_tests.o \
+			 $(OBJROOT)/atomic_fifo_queue_test.o $(OBJROOT)/sched_tests.o
 
 ifneq "$(Product)" "iPhone"
 MY_OBJECTS += $(OBJROOT)/32bit_inode_tests.o
@@ -79,6 +81,14 @@ xnu_quick_test : $(OBJROOT) $(DSTROOT) $(MY_OBJECTS) helpers
 	@$(CHOWN_COMMAND) || echo $(PERM_ADVICE)
 	sudo chmod 4755 $(DSTROOT)/xnu_quick_test
 
+# This target is defined for testbots. 
+# Before compiling this target, MORECFLAGS must be set to "-D RUN_UNDER_TESTBOTS=1", check README file for more details
+# NOTE: -f[ailures] MAX_FAILS_ALLOWED option is set to 100 to make sure we completely run the test suite and 
+# report all the failures.
+
+testbots: xnu_quick_test 
+	@(cd $(DSTROOT) ; ./xnu_quick_test -f 100)	
+
 # The helper binaries are used to test exec()'ing between 64bit and 32bit. 
 # Creates test binaries with page zero sizes = 4KB and 4GB. Also creates 32-bit
 # helper processes for the 64-bit version of xnu_quick_test to test the conversion
@@ -90,21 +100,21 @@ endif
 ifeq "$(Product)" "MacOSX"
 	$(CC) -arch x86_64 -pagezero_size 0x100000000 helpers/sleep.c -o $(DSTROOT)/helpers/sleep-x86_64-4G
 	$(CC) -arch x86_64 -pagezero_size 0x1000      helpers/sleep.c -o $(DSTROOT)/helpers/sleep-x86_64-4K
-	$(CC) -arch ppc                               helpers/sleep.c -o $(DSTROOT)/helpers/sleep-ppc32
 endif
 ifneq "$(Product)" "iPhone"
 	$(CC) $(LIBFLAGS) -arch i386	$(OBJROOT)/misc.o helpers/launch.c -o $(DSTROOT)/helpers/launch-i386
 endif
 ifeq "$(Product)" "MacOSX"
 	$(CC) $(LIBFLAGS) -arch x86_64	$(OBJROOT)/misc.o helpers/launch.c -o $(DSTROOT)/helpers/launch-x86_64
-	$(CC) $(LIBFLAGS) -arch ppc	$(OBJROOT)/misc.o helpers/launch.c -o $(DSTROOT)/helpers/launch-ppc
 	$(CC) $(MY_ARCH) 	helpers/arch.c -o $(DSTROOT)/helpers/arch
 	$(CC) $(MY_ARCH) 	helpers/data_exec.c -o $(DSTROOT)/helpers/data_exec
+	$(CC) -arch i386 	-DNXDATA32TESTNONX helpers/data_exec.c -o $(DSTROOT)/helpers/data_exec32nonxspawn
 
 endif
 ifeq "$(Product)" "iPhone"
 	$(CC) -arch armv6 -isysroot $(SDKROOT) $(CFLAGS) helpers/sleep.c -o $(DSTROOT)/helpers/sleep-arm
 	$(CC) $(LIBFLAGS) -arch armv6 -isysroot $(SDKROOT) $(OBJROOT)/misc.o helpers/launch.c -o $(DSTROOT)/helpers/launch-arm
+	$(CC) $(MY_ARCH) -isysroot $(SDKROOT)	helpers/arch.c -o $(DSTROOT)/helpers/arch
 endif
 	
 	
@@ -128,7 +138,7 @@ $(OBJROOT)/misc.o : misc.c tests.h
 ifeq "$(Product)" "iPhone"
 	$(CC) -arch armv6 $(CFLAGS) -c misc.c   -o $@
 else
-	$(CC) -arch i386 -arch x86_64 -arch ppc $(CFLAGS) -c misc.c   -o $@
+	$(CC) -arch i386 -arch x86_64 $(CFLAGS) -c misc.c   -o $@
 endif
 	
 $(OBJROOT)/sema_tests.o : sema_tests.c tests.h
@@ -149,11 +159,21 @@ $(OBJROOT)/xattr_tests.o : xattr_tests.c tests.h
 $(OBJROOT)/machvm_tests.o : machvm_tests.c tests.h
 	$(CC) $(CFLAGS) -c machvm_tests.c    -o $@
 
+$(OBJROOT)/sched_tests.o : sched_tests.c tests.h
+	$(CC) $(CFLAGS) -c sched_tests.c    -o $@
+
 $(OBJROOT)/kqueue_tests.o : kqueue_tests.c tests.h
 	$(CC) $(CFLAGS) -c kqueue_tests.c   -o $@
 
 $(OBJROOT)/32bit_inode_tests.o : 32bit_inode_tests.c tests.h
 	$(CC) $(CFLAGS) -c 32bit_inode_tests.c    -o $@
+
+$(OBJROOT)/commpage_tests.o : commpage_tests.c tests.h
+	$(CC) $(CFLAGS) -c commpage_tests.c    -o $@
+	
+$(OBJROOT)/atomic_fifo_queue_test.o : atomic_fifo_queue_test.c tests.h
+	$(CC) $(CFLAGS) -c atomic_fifo_queue_test.c    -o $@
+
 
 ifndef DOING_BUILDIT
 .PHONY : clean

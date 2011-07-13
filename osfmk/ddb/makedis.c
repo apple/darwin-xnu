@@ -2371,9 +2371,10 @@ void *xmalloc(size_t size) {
 
 void *xstrdup(char *s) {
     char *p;
+    size_t i = strlen(s) + 1;
 
-    p = xmalloc(strlen(s) + 1);
-    strcpy(p, s);
+    p = xmalloc(i);
+    strlcpy(p, s, i);
     return p;
 }
 

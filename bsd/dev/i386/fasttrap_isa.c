@@ -45,6 +45,8 @@ extern dtrace_id_t dtrace_probeid_error;
 #include <sys/dtrace_ptss.h>
 #include <kern/debug.h>
 
+#include <machine/pal_routines.h>
+
 /* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
 #define proc_t struct proc /* Steer clear of the Darwin typedef for proc_t */
 
@@ -2207,11 +2209,11 @@ fasttrap_return_probe(x86_saved_state_t *regs)
 	return (0);
 }
 
-
 uint64_t
 fasttrap_pid_getarg(void *arg, dtrace_id_t id, void *parg, int argno,
     int aframes)
 {
+	pal_register_cache_state(current_thread(), VALID);
 #pragma unused(arg, id, parg, aframes)
 	return (fasttrap_anarg((x86_saved_state_t *)find_user_regs(current_thread()), 1, argno));
 }
@@ -2220,6 +2222,7 @@ uint64_t
 fasttrap_usdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno,
     int aframes)
 {
+	pal_register_cache_state(current_thread(), VALID);
 #pragma unused(arg, id, parg, aframes)
 	return (fasttrap_anarg((x86_saved_state_t *)find_user_regs(current_thread()), 0, argno));
 }

@@ -43,7 +43,7 @@
 #include "kxld_array.h"
 #include "kxld_dict.h"
 #include "kxld_kext.h"
-#include "kxld_state.h"
+#include "kxld_object.h"
 #include "kxld_sym.h"
 #include "kxld_symtab.h"
 #include "kxld_util.h"
@@ -54,11 +54,12 @@ struct kxld_vtable;
 struct kxld_context {
     KXLDKext *kext;
     KXLDArray *section_order;
-    KXLDArray deps;
-    KXLDArray tmps;
-    KXLDDict defined_symbols;
-    KXLDDict obsolete_symbols;
-    KXLDDict vtables;
+    KXLDArray objects;
+    KXLDArray dependencies;
+    KXLDDict defined_symbols_by_name;
+    KXLDDict defined_cxx_symbols_by_value;
+    KXLDDict obsolete_symbols_by_name;
+    KXLDDict vtables_by_name;
     KXLDFlags flags;
     KXLDAllocateCallback allocate_callback;
     cpu_type_t cputype;
@@ -88,6 +89,14 @@ static KXLDDict *s_order_dict;
 * Prototypes
 *******************************************************************************/
 
+static kern_return_t init_context(KXLDContext *context, u_int ndependencies);
+static kern_return_t init_kext_objects(KXLDContext *context, u_char *file, 
+    u_long size, const char *name, KXLDDependency *dependencies, 
+    u_int ndependencies);
+static KXLDObject * get_object_for_file(KXLDContext *context, 
+    u_char *file, u_long size, const char *name);
+static u_char * allocate_kext(KXLDContext *context, void *callback_data,
+    kxld_addr_t *vmaddr, u_long *vmsize, u_char **linked_object_alloc_out);
 static void clear_context(KXLDContext *context);
 
 /*******************************************************************************
@@ -98,10 +107,10 @@ kxld_create_context(KXLDContext **_context,
     KXLDFlags flags, cpu_type_t cputype, cpu_subtype_t cpusubtype)
 {
     kern_return_t rval = KERN_FAILURE;
-    KXLDContext *context = NULL;
-    KXLDArray *section_order = NULL;
+    KXLDContext       * context         = NULL;
+    KXLDArray         * section_order   = NULL;
 #if !KERNEL
-    cpu_type_t *cputype_p = NULL;
+    cpu_type_t        * cputype_p       = NULL;
 #endif
 
     check(_context);
@@ -177,7 +186,7 @@ kxld_create_context(KXLDContext **_context,
     context = NULL;
 
 finish:
-    if (context) kxld_free(context, sizeof(*context));
+    if (context) kxld_destroy_context(context);
     if (section_order) kxld_free(section_order, sizeof(*section_order));
 #if !KERNEL
     if (cputype_p) kxld_free(cputype_p, sizeof(*cputype_p));
@@ -191,24 +200,30 @@ finish:
 void
 kxld_destroy_context(KXLDContext *context)
 {
-    KXLDState *dep = NULL;
+    KXLDObject *object = NULL;
+    KXLDKext *dep = NULL;
     u_int i = 0;
 
     check(context);
 
     kxld_kext_deinit(context->kext);
 
-    for (i = 0; i < context->deps.maxitems; ++i) {
-        dep = kxld_array_get_slot(&context->deps, i);
-        kxld_state_deinit(dep);
+    for (i = 0; i < context->objects.maxitems; ++i) {
+        object = kxld_array_get_slot(&context->objects, i);
+        kxld_object_deinit(object);
     }
+    kxld_array_deinit(&context->objects);
 
-    kxld_array_deinit(&context->deps);
-    kxld_array_deinit(&context->tmps);
+    for (i = 0; i < context->dependencies.maxitems; ++i) {
+        dep = kxld_array_get_slot(&context->dependencies, i);
+        kxld_kext_deinit(dep);
+    }
+    kxld_array_deinit(&context->dependencies);
 
-    kxld_dict_deinit(&context->defined_symbols);
-    kxld_dict_deinit(&context->obsolete_symbols);
-    kxld_dict_deinit(&context->vtables);
+    kxld_dict_deinit(&context->defined_symbols_by_name);
+    kxld_dict_deinit(&context->defined_cxx_symbols_by_value);
+    kxld_dict_deinit(&context->obsolete_symbols_by_name);
+    kxld_dict_deinit(&context->vtables_by_name);
 
     kxld_free(context->kext, kxld_kext_sizeof());
     kxld_free(context, sizeof(*context));
@@ -220,226 +235,66 @@ kxld_destroy_context(KXLDContext *context)
 *******************************************************************************/
 kern_return_t
 kxld_link_file(
-    KXLDContext *context,
-    u_char *file,
-    u_long size,
-    const char *name,
-    void *callback_data,
-    u_char **deps,
-    u_int ndeps,
-    u_char **_linked_object,
-    kxld_addr_t *kmod_info_kern,
-    u_char **_link_state,
-    u_long *_link_state_size,
-    u_char **_symbol_file __unused,
-    u_long *_symbol_file_size __unused)
+    KXLDContext       * context,
+    u_char            * file,
+    u_long              size,
+    const char        * name,
+    void              * callback_data,
+    KXLDDependency    * dependencies,
+    u_int               ndependencies,
+    u_char           ** linked_object_out,
+    kxld_addr_t       * kmod_info_kern)
 {
-    kern_return_t rval = KERN_FAILURE;
-    KXLDState *state = NULL;
-    KXLDAllocateFlags flags = 0;
-    kxld_addr_t vmaddr = 0;
-    u_long header_size = 0;
-    u_long vmsize = 0;
-    u_int nsyms = 0;
-    u_int nvtables = 0;
-    u_int i = 0;
-    u_char *linked_object = NULL;
-    u_char *linked_object_alloc = NULL;
-    u_char *link_state = NULL;
-    u_char *symbol_file = NULL;
-    u_long link_state_size = 0;
-    u_long symbol_file_size = 0;
+    kern_return_t       rval                    = KERN_FAILURE;
+    kxld_addr_t         vmaddr                  = 0;
+    u_long              vmsize                  = 0;
+    u_char            * linked_object           = NULL;
+    u_char            * linked_object_alloc     = NULL;
 
     kxld_set_logging_callback_data(name, callback_data);
+
+    kxld_log(kKxldLogLinking, kKxldLogBasic, "Linking kext %s", name);
 
     require_action(context, finish, rval=KERN_INVALID_ARGUMENT);
     require_action(file, finish, rval=KERN_INVALID_ARGUMENT);
     require_action(size, finish, rval=KERN_INVALID_ARGUMENT);
+    require_action(dependencies, finish, rval=KERN_INVALID_ARGUMENT);
+    require_action(ndependencies, finish, rval=KERN_INVALID_ARGUMENT);
+    require_action(linked_object_out, finish, rval=KERN_INVALID_ARGUMENT);
+    require_action(kmod_info_kern, finish, rval=KERN_INVALID_ARGUMENT);
 
-    rval = kxld_array_init(&context->deps, sizeof(struct kxld_state), ndeps);
+    rval = init_context(context, ndependencies);
     require_noerr(rval, finish);
 
-    if (deps) {
-        /* Initialize the dependencies */
-        for (i = 0; i < ndeps; ++i) {
-            state = kxld_array_get_item(&context->deps, i);
-
-            rval = kxld_state_init_from_file(state, deps[i], 
-                context->section_order);
-            require_noerr(rval, finish);
-        }
-    }
-
-    rval = kxld_kext_init(context->kext, file, size, name, 
-        context->flags, (deps == 0) /* is_kernel */, context->section_order, 
-        context->cputype, context->cpusubtype);
+    rval = init_kext_objects(context, file, size, name, 
+        dependencies, ndependencies);
     require_noerr(rval, finish);
 
-    if (deps) {
+    linked_object = allocate_kext(context, callback_data, 
+        &vmaddr, &vmsize, &linked_object_alloc);
+    require_action(linked_object, finish, rval=KERN_RESOURCE_SHORTAGE);
 
-        /* Calculate the base number of symbols and vtables in the kext */
+    rval = kxld_kext_relocate(context->kext, vmaddr, 
+        &context->vtables_by_name, 
+        &context->defined_symbols_by_name, 
+        &context->obsolete_symbols_by_name,
+        &context->defined_cxx_symbols_by_value);
+    require_noerr(rval, finish);
 
-        nsyms += kxld_kext_get_num_symbols(context->kext);
-        nvtables += kxld_kext_get_num_vtables(context->kext);
+    rval = kxld_kext_export_linked_object(context->kext, 
+        linked_object, kmod_info_kern);
+    require_noerr(rval, finish);
 
-        /* Extract the symbol and vtable counts from the dependencies.
-         */
-
-        for (i = 0; i < ndeps; ++i) {
-            cpu_type_t cputype; 
-            cpu_subtype_t cpusubtype; 
-
-            state = kxld_array_get_item(&context->deps, i);
-
-            kxld_state_get_cputype(state, &cputype, &cpusubtype);
-
-            rval = kxld_kext_validate_cputype(context->kext, 
-                cputype, cpusubtype);
-            require_noerr(rval, finish);
-
-            nsyms += kxld_state_get_num_symbols(state);
-            nvtables += kxld_state_get_num_vtables(state);
-        }
-
-        /* Create the global symbol and vtable tables */
-
-        rval = kxld_dict_init(&context->defined_symbols, kxld_dict_string_hash,
-            kxld_dict_string_cmp, nsyms);
-        require_noerr(rval, finish);
-
-        rval = kxld_dict_init(&context->obsolete_symbols, kxld_dict_string_hash,
-            kxld_dict_string_cmp, 0);
-        require_noerr(rval, finish);
-
-        rval = kxld_dict_init(&context->vtables, kxld_dict_string_hash,
-            kxld_dict_string_cmp, nvtables);
-        require_noerr(rval, finish);
-
-        /* Populate the global tables */
-
-        for (i = 0; i < ndeps; ++i) {
-            state = kxld_array_get_item(&context->deps, i);
-
-            rval = kxld_state_get_symbols(state, &context->defined_symbols,
-                &context->obsolete_symbols);
-            require_noerr(rval, finish);
-
-            rval = kxld_state_get_vtables(state, &context->vtables);
-            require_noerr(rval, finish);
-        }
-
-        if (kxld_kext_is_true_kext(context->kext)) {
-
-            /* Allocate the kext object */
-
-            kxld_kext_get_vmsize(context->kext, &header_size, &vmsize);
-            vmaddr = context->allocate_callback(vmsize, &flags, callback_data);
-            require_action(!(vmaddr & (PAGE_SIZE-1)), finish, rval=KERN_FAILURE;
-                kxld_log(kKxldLogLinking, kKxldLogErr,
-                    "Load address %p is not page-aligned.",
-                    (void *) (uintptr_t) vmaddr));
-
-            if (flags & kKxldAllocateWritable) {
-                linked_object = (u_char *) (u_long) vmaddr;
-            } else {
-                linked_object_alloc = kxld_page_alloc_untracked(vmsize);
-                require_action(linked_object_alloc, finish, rval=KERN_RESOURCE_SHORTAGE);
-                linked_object = linked_object_alloc;
-            }
-
-            /* Zero out the memory before we fill it.  We fill this buffer in a
-             * sparse fashion, and it's simpler to clear it now rather than
-             * track and zero any pieces we didn't touch after we've written
-             * all of the sections to memory.
-             */
-            bzero(linked_object, vmsize);
-
-            /* Relocate to the new link address */
-
-            rval = kxld_kext_relocate(context->kext, vmaddr, &context->vtables, 
-                &context->defined_symbols, &context->obsolete_symbols);
-            require_noerr(rval, finish);
-
-            /* Generate linked object if requested */
-
-            if (_linked_object) {
-                check(kmod_info_kern);
-                *_linked_object = NULL;
-                *kmod_info_kern = 0;
-
-                rval = kxld_kext_export_linked_object(context->kext, linked_object, 
-                    kmod_info_kern);
-                require_noerr(rval, finish);
-            }
-
-        } else  {
-            /* Resolve the pseudokext's symbols */
-
-            rval = kxld_kext_resolve(context->kext, &context->vtables, 
-                &context->defined_symbols);
-            require_noerr(rval, finish);
-        }
-    }
-
-    /* Generate link state if requested */
-
-    if (_link_state) {
-        check(_link_state_size);
-        *_link_state = NULL;
-        *_link_state_size = 0;
-
-        kxld_dict_clear(&context->defined_symbols);
-        rval = kxld_state_export_kext_to_file(context->kext, &link_state,
-            &link_state_size, &context->defined_symbols, &context->tmps);
-        require_noerr(rval, finish);
-    }
-
-#if !KERNEL
-    /* Generate symbol file if requested */
-
-    if (_symbol_file) {
-        check(_symbol_file_size);
-        *_symbol_file = NULL;
-        *_symbol_file_size = 0;
-
-        rval = kxld_kext_export_symbol_file(context->kext, &symbol_file,
-            &symbol_file_size);
-        require_noerr(rval, finish);
-    }
-#endif /* !KERNEL */
-
-    /* Commit output to return variables */
-
-    if (_linked_object) {
-        *_linked_object = linked_object;
-        linked_object = NULL;
-        linked_object_alloc = NULL;
-    }
-
-    if (_link_state) {
-        *_link_state = link_state;
-        *_link_state_size = link_state_size;
-        link_state = NULL;
-    }
-
-#if !KERNEL
-    if (_symbol_file) {
-        *_symbol_file = symbol_file;
-        *_symbol_file_size = symbol_file_size;
-        symbol_file = NULL;
-    }
-#endif
+    *linked_object_out = linked_object;
+    linked_object_alloc = NULL;
 
     rval = KERN_SUCCESS;
-
 finish:
-
-    if (linked_object_alloc) kxld_page_free_untracked(linked_object_alloc, vmsize);
-    if (link_state) kxld_page_free_untracked(link_state, link_state_size);
-    if (symbol_file) kxld_page_free_untracked(symbol_file, symbol_file_size);
+    if (linked_object_alloc) {
+        kxld_page_free_untracked(linked_object_alloc, vmsize);
+    }
 
     clear_context(context);
-
     kxld_set_logging_callback_data(NULL, NULL);
 
     return rval;
@@ -447,24 +302,225 @@ finish:
 
 /*******************************************************************************
 *******************************************************************************/
+static kern_return_t
+init_context(KXLDContext *context, u_int ndependencies)
+{
+    kern_return_t rval = KERN_FAILURE;
+
+    /* Create an array of objects large enough to hold an object
+     * for every dependency, an interface for each dependency, and a kext. */
+    rval = kxld_array_init(&context->objects,
+        kxld_object_sizeof(), 2 * ndependencies + 1);
+    require_noerr(rval, finish);
+
+    rval = kxld_array_init(&context->dependencies, 
+        kxld_kext_sizeof(), ndependencies);
+    require_noerr(rval, finish);
+
+    rval = kxld_dict_init(&context->defined_symbols_by_name, 
+        kxld_dict_string_hash, kxld_dict_string_cmp, 0);
+    require_noerr(rval, finish);
+
+    rval = kxld_dict_init(&context->defined_cxx_symbols_by_value, 
+        kxld_dict_kxldaddr_hash, kxld_dict_kxldaddr_cmp, 0);
+    require_noerr(rval, finish);
+
+    rval = kxld_dict_init(&context->obsolete_symbols_by_name, 
+        kxld_dict_string_hash, kxld_dict_string_cmp, 0);
+    require_noerr(rval, finish);
+
+    rval = kxld_dict_init(&context->vtables_by_name, kxld_dict_string_hash,
+        kxld_dict_string_cmp, 0);
+    require_noerr(rval, finish);
+
+    rval = KERN_SUCCESS;
+finish:
+    return rval;
+}
+
+/*******************************************************************************
+*******************************************************************************/
+static kern_return_t 
+init_kext_objects(KXLDContext *context, u_char *file, u_long size, 
+    const char *name, KXLDDependency *dependencies, u_int ndependencies)
+{
+    kern_return_t rval = KERN_FAILURE;
+    KXLDKext *kext = NULL;
+    KXLDObject *kext_object = NULL;
+    KXLDObject *interface_object = NULL;
+    u_int i = 0;
+
+    /* Create a kext object for each dependency.  If it's a direct dependency,
+     * export its symbols by name by value.  If it's indirect, just export the
+     * C++ symbols by value.
+     */
+    for (i = 0; i < ndependencies; ++i) { kext =
+        kxld_array_get_item(&context->dependencies, i); kext_object = NULL;
+        interface_object = NULL;
+
+        kext_object = get_object_for_file(context, dependencies[i].kext,
+            dependencies[i].kext_size, dependencies[i].kext_name);
+        require_action(kext_object, finish, rval=KERN_FAILURE);
+
+        if (dependencies[i].interface) {
+            interface_object = get_object_for_file(context, 
+                dependencies[i].interface, dependencies[i].interface_size,
+                dependencies[i].interface_name);
+            require_action(interface_object, finish, rval=KERN_FAILURE);
+        }
+
+        rval = kxld_kext_init(kext, kext_object, interface_object);
+        require_noerr(rval, finish);
+
+        if (dependencies[i].is_direct_dependency) {
+            rval = kxld_kext_export_symbols(kext,
+                &context->defined_symbols_by_name, 
+                &context->obsolete_symbols_by_name,
+                &context->defined_cxx_symbols_by_value);
+            require_noerr(rval, finish);
+        } else {
+            rval = kxld_kext_export_symbols(kext, 
+                /* defined_symbols */ NULL, /* obsolete_symbols */ NULL, 
+                &context->defined_cxx_symbols_by_value);
+            require_noerr(rval, finish);
+        }
+    }
+
+    /* Export the vtables for all of the dependencies. */
+    for (i = 0; i < context->dependencies.nitems; ++i) {
+        kext = kxld_array_get_item(&context->dependencies, i);
+
+        rval = kxld_kext_export_vtables(kext,
+            &context->defined_cxx_symbols_by_value,
+            &context->defined_symbols_by_name,
+            &context->vtables_by_name);
+        require_noerr(rval, finish);
+    }
+
+    /* Create a kext object for the kext we're linking and export its locally
+     * defined C++ symbols. 
+     */
+    kext_object = get_object_for_file(context, file, size, name);
+    require_action(kext_object, finish, rval=KERN_FAILURE);
+
+    rval = kxld_kext_init(context->kext, kext_object, /* interface */ NULL);
+    require_noerr(rval, finish);
+
+    rval = kxld_kext_export_symbols(context->kext,
+        /* defined_symbols */ NULL, /* obsolete_symbols */ NULL, 
+        &context->defined_cxx_symbols_by_value);
+    require_noerr(rval, finish);
+
+    rval = KERN_SUCCESS;
+finish:
+    return rval;
+}
+
+/*******************************************************************************
+*******************************************************************************/
+static KXLDObject *
+get_object_for_file(KXLDContext *context, u_char *file, u_long size,
+    const char *name)
+{
+    KXLDObject *rval = NULL;
+    KXLDObject *object = NULL;
+    kern_return_t result = 0;
+    u_int i = 0;
+
+    for (i = 0; i < context->objects.nitems; ++i) {
+        object = kxld_array_get_item(&context->objects, i);
+
+        if (!kxld_object_get_file(object)) {
+            result = kxld_object_init_from_macho(object, file, size, name,
+                context->section_order, context->cputype, context->cpusubtype);
+            require_noerr(result, finish);
+
+            rval = object;
+            break;
+        }
+
+        if (kxld_object_get_file(object) == file) {
+            rval = object;
+            break;
+        }
+    }
+
+finish:
+    return rval;
+}
+ 
+/*******************************************************************************
+*******************************************************************************/
+static u_char *
+allocate_kext(KXLDContext *context, void *callback_data,
+    kxld_addr_t *vmaddr_out, u_long *vmsize_out, 
+    u_char **linked_object_alloc_out)
+{
+    KXLDAllocateFlags   flags                   = 0;
+    kxld_addr_t         vmaddr                  = 0;
+    u_long              vmsize                  = 0;
+    u_long              header_size             = 0;
+    u_char            * linked_object           = NULL;
+
+    *linked_object_alloc_out = NULL;
+
+    kxld_kext_get_vmsize(context->kext, &header_size, &vmsize);
+    vmaddr = context->allocate_callback(vmsize, &flags, callback_data);
+    require_action(!(vmaddr & (PAGE_SIZE-1)), finish,
+        kxld_log(kKxldLogLinking, kKxldLogErr,
+            "Load address %p is not page-aligned.",
+            (void *) (uintptr_t) vmaddr));
+
+    if (flags & kKxldAllocateWritable) {
+        linked_object = (u_char *) (u_long) vmaddr;
+    } else {
+        linked_object = kxld_page_alloc_untracked(vmsize);
+        require(linked_object, finish);
+
+        *linked_object_alloc_out = linked_object;
+    }
+
+    /* Zero out the memory before we fill it.  We fill this buffer in a
+     * sparse fashion, and it's simpler to clear it now rather than
+     * track and zero any pieces we didn't touch after we've written
+     * all of the sections to memory.
+     */
+    bzero(linked_object, vmsize);
+    *vmaddr_out = vmaddr;
+    *vmsize_out = vmsize;
+
+finish:
+    return linked_object;
+}
+
+/*******************************************************************************
+*******************************************************************************/
 static void
 clear_context(KXLDContext *context)
 {
-    KXLDState *state = NULL;
+    KXLDObject * object = NULL;
+    KXLDKext   * dep     = NULL;
     u_int i = 0;
 
     check(context);
 
     kxld_kext_clear(context->kext);
-    for (i = 0; i < context->deps.nitems; ++i) {
-        state = kxld_array_get_item(&context->deps, i);
-        kxld_state_clear(state);
+    
+    for (i = 0; i < context->objects.nitems; ++i) {
+        object = kxld_array_get_item(&context->objects, i);
+        kxld_object_clear(object);
     }
-    kxld_array_reset(&context->deps);
+    kxld_array_reset(&context->objects);
 
-    kxld_array_clear(&context->tmps);
-    kxld_dict_clear(&context->defined_symbols);
-    kxld_dict_clear(&context->obsolete_symbols);
-    kxld_dict_clear(&context->vtables);
+    for (i = 0; i < context->dependencies.nitems; ++i) {
+        dep = kxld_array_get_item(&context->dependencies, i);
+        kxld_kext_clear(dep);
+    }
+    kxld_array_reset(&context->dependencies);
+
+    kxld_dict_clear(&context->defined_symbols_by_name);
+    kxld_dict_clear(&context->defined_cxx_symbols_by_value);
+    kxld_dict_clear(&context->obsolete_symbols_by_name);
+    kxld_dict_clear(&context->vtables_by_name);
 }
 

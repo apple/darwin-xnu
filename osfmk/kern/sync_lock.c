@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -72,12 +72,10 @@
 	th = (ul)->holder;					\
         if ((th)->active) {					\
 		thread_mtx_lock(th);				\
-		remqueue(&th->held_ulocks,			\
-			 (queue_entry_t) (ul));			\
+		remqueue((queue_entry_t) (ul));		\
 		thread_mtx_unlock(th);				\
 	} else {						\
-		remqueue(&th->held_ulocks,			\
-			 (queue_entry_t) (ul));			\
+		remqueue((queue_entry_t) (ul));		\
 	}							\
 	(ul)->holder = THREAD_NULL;				\
 	MACRO_END
@@ -98,7 +96,7 @@
 #define lock_set_ownership_clear(ls, t)				\
 	MACRO_BEGIN						\
 	task_lock((t));						\
-	remqueue(&(t)->lock_set_list, (queue_entry_t) (ls));	\
+	remqueue((queue_entry_t) (ls));	\
 	(t)->lock_sets_owned--;					\
 	task_unlock((t));					\
 	MACRO_END

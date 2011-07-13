@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -96,6 +96,15 @@ void *get_bsdthread_info(thread_t th)
 }
 
 /*
+ * XXX
+ */
+int get_thread_lock_count(thread_t th);		/* forced forward */
+int get_thread_lock_count(thread_t th)
+{
+ 	return(th->mutex_count);
+}
+
+/*
  * XXX: wait for BSD to  fix signal code
  * Until then, we cannot block here.  We know the task
  * can't go away, so we make sure it is still active after
@@ -135,7 +144,7 @@ get_signalact(
 			!queue_end(&task->threads, (queue_entry_t)inc); ) {
 		thread_mtx_lock(inc);
 		if (inc->active &&
-				(inc->sched_mode & TH_MODE_ISABORTED) != TH_MODE_ABORT) {
+				(inc->sched_flags & TH_SFLAG_ABORTED_MASK) != TH_SFLAG_ABORT) {
 			thread = inc;
 			break;
 		}
@@ -185,7 +194,7 @@ check_actforsig(
 			thread_mtx_lock(inc);
 
 			if (inc->active  && 
-					(inc->sched_mode & TH_MODE_ISABORTED) != TH_MODE_ABORT) {
+					(inc->sched_flags & TH_SFLAG_ABORTED_MASK) != TH_SFLAG_ABORT) {
 				result = KERN_SUCCESS;
 				break;
 			}
@@ -282,7 +291,7 @@ int is_64signalregset(void)
  * returned.
  */
 vm_map_t
-swap_task_map(task_t task, thread_t thread, vm_map_t map)
+swap_task_map(task_t task, thread_t thread, vm_map_t map, boolean_t doswitch)
 {
 	vm_map_t old_map;
 
@@ -290,8 +299,12 @@ swap_task_map(task_t task, thread_t thread, vm_map_t map)
 		panic("swap_task_map");
 
 	task_lock(task);
+	mp_disable_preemption();
 	old_map = task->map;
 	thread->map = task->map = map;
+	if (doswitch)
+		pmap_switch(map->pmap);
+	mp_enable_preemption();
 	task_unlock(task);
 
 #if (defined(__i386__) || defined(__x86_64__)) && NCOPY_WINDOWS > 0
@@ -452,7 +465,7 @@ boolean_t
 thread_should_abort(
 	thread_t th)
 {
-	return ((th->sched_mode & TH_MODE_ISABORTED) == TH_MODE_ABORT);
+	return ((th->sched_flags & TH_SFLAG_ABORTED_MASK) == TH_SFLAG_ABORT);
 }
 
 /*
@@ -470,14 +483,14 @@ current_thread_aborted (
 	thread_t th = current_thread();
 	spl_t s;
 
-	if ((th->sched_mode & TH_MODE_ISABORTED) == TH_MODE_ABORT &&
+	if ((th->sched_flags & TH_SFLAG_ABORTED_MASK) == TH_SFLAG_ABORT &&
 			(th->options & TH_OPT_INTMASK) != THREAD_UNINT)
 		return (TRUE);
-	if (th->sched_mode & TH_MODE_ABORTSAFELY) {
+	if (th->sched_flags & TH_SFLAG_ABORTSAFELY) {
 		s = splsched();
 		thread_lock(th);
-		if (th->sched_mode & TH_MODE_ABORTSAFELY)
-			th->sched_mode &= ~TH_MODE_ISABORTED;
+		if (th->sched_flags & TH_SFLAG_ABORTSAFELY)
+			th->sched_flags &= ~TH_SFLAG_ABORTED_MASK;
 		thread_unlock(th);
 		splx(s);
 	}
@@ -532,7 +545,9 @@ fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
 	vm_map_t map;
 	task_absolutetime_info_data_t   tinfo;
 	thread_t thread;
-	int cswitch = 0, numrunning = 0;
+	uint32_t cswitch = 0, numrunning = 0;
+	uint32_t syscalls_unix = 0;
+	uint32_t syscalls_mach = 0;
 	
 	map = (task == kernel_task)? kernel_map: task->map;
 
@@ -563,6 +578,9 @@ fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
 		tval = timer_grab(&thread->system_timer);
 		tinfo.threads_system += tval;
 		tinfo.total_system += tval;
+
+		syscalls_unix += thread->syscalls_unix;
+		syscalls_mach += thread->syscalls_mach;
 	}
 
 	ptinfo->pti_total_system = tinfo.total_system;
@@ -575,8 +593,8 @@ fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
 	ptinfo->pti_cow_faults = task->cow_faults;
 	ptinfo->pti_messages_sent = task->messages_sent;
 	ptinfo->pti_messages_received = task->messages_received;
-	ptinfo->pti_syscalls_mach = task->syscalls_mach;
-	ptinfo->pti_syscalls_unix = task->syscalls_unix;
+	ptinfo->pti_syscalls_mach = task->syscalls_mach + syscalls_mach;
+	ptinfo->pti_syscalls_unix = task->syscalls_unix + syscalls_unix;
 	ptinfo->pti_csw = task->c_switch + cswitch;
 	ptinfo->pti_threadnum = task->thread_count;
 	ptinfo->pti_numrunning = numrunning;
@@ -598,13 +616,7 @@ fill_taskthreadinfo(task_t task, uint64_t thaddr, struct proc_threadinfo_interna
 
 	for (thact  = (thread_t)queue_first(&task->threads);
 			!queue_end(&task->threads, (queue_entry_t)thact); ) {
-#if defined(__ppc__) || defined(__arm__)
 		if (thact->machine.cthread_self == thaddr)
-#elif defined (__i386__) || defined (__x86_64__)
-		if (thact->machine.pcb->cthread_self == thaddr)
-#else
-#error architecture not supported
-#endif
 		{
 		
 			count = THREAD_BASIC_INFO_COUNT;
@@ -658,13 +670,7 @@ fill_taskthreadlist(task_t task, void * buffer, int thcount)
 
 	for (thact  = (thread_t)queue_first(&task->threads);
 			!queue_end(&task->threads, (queue_entry_t)thact); ) {
-#if defined(__ppc__) || defined(__arm__)
 		thaddr = thact->machine.cthread_self;
-#elif defined (__i386__) || defined (__x86_64__)
-		thaddr = thact->machine.pcb->cthread_self;
-#else
-#error architecture not supported
-#endif
 		*uptr++ = thaddr;
 		numthr++;
 		if (numthr >= thcount)

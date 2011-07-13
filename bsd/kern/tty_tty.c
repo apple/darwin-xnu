@@ -82,9 +82,8 @@ int cttyioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, proc_t p);
 int cttyselect(dev_t dev, int flag, void* wql, proc_t p);
 static vnode_t cttyvp(proc_t p);
 
-
 int
-cttyopen(__unused dev_t dev, int flag, __unused int mode, proc_t p)
+cttyopen(dev_t dev, int flag, __unused int mode, proc_t p)
 {
 	vnode_t ttyvp = cttyvp(p);
 	struct vfs_context context;
@@ -96,7 +95,18 @@ cttyopen(__unused dev_t dev, int flag, __unused int mode, proc_t p)
 	context.vc_thread = current_thread();
 	context.vc_ucred = kauth_cred_proc_ref(p);
 
+	/*
+	 * A little hack--this device, used by many processes,
+	 * happens to do an open on another device, which can 
+	 * cause unhappiness if the second-level open blocks indefinitely 
+	 * (as could be the case if the master side has hung up).  Since
+	 * we know that this driver doesn't care about the serializing
+	 * opens and closes, we can drop the lock.
+	 */
+	devsw_unlock(dev, S_IFCHR);
 	error = VNOP_OPEN(ttyvp, flag, &context);
+	devsw_lock(dev, S_IFCHR);
+
 	vnode_put(ttyvp);
 	kauth_cred_unref(&context.vc_ucred);
 

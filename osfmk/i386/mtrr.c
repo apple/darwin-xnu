@@ -333,7 +333,7 @@ mtrr_update_action(void * cache_control_type)
 		set_cr4(cr4 & ~CR4_PGE);
 
 	/* flush TLBs */
-	flush_tlb();   
+	flush_tlb_raw();
 
 	if (CACHE_CONTROL_PAT == cache_control_type) {
 		/* Change PA6 attribute field to WC */
@@ -365,7 +365,7 @@ mtrr_update_action(void * cache_control_type)
 
 	/* flush all caches and TLBs a second time */
 	wbinvd();
-	flush_tlb();
+	flush_tlb_raw();
 
 	/* restore normal cache mode */
 	set_cr0(cr0);
@@ -485,7 +485,6 @@ mtrr_range_add(addr64_t address, uint64_t length, uint32_t type)
 	if (mtrr_initialized == FALSE) {
 		return KERN_NOT_SUPPORTED;
 	}
-
 
 	/* check memory type (GPF exception for undefined types) */
 	if ((type != MTRR_TYPE_UNCACHEABLE)  &&

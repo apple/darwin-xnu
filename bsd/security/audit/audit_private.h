@@ -113,6 +113,8 @@ extern au_class_t		audit_kevent_mask;
 #define	AR_PRESELECT_USER_TRAIL	0x00004000U
 #define	AR_PRESELECT_USER_PIPE	0x00008000U
 
+#define	AR_PRESELECT_FILTER	0x00010000U
+
 #define	AR_DRAIN_QUEUE		0x80000000U
 
 /*
@@ -171,6 +173,7 @@ union auditon_udata {
 	int			au_trigger;
 	au_evclass_map_t	au_evclass;
 	au_mask_t		au_mask;
+	au_asflgs_t		au_flags;
 	auditinfo_t		au_auinfo;
 	auditpinfo_t		au_aupinfo;
 	auditpinfo_addr_t	au_aupinfo_addr;
@@ -440,7 +443,7 @@ int	audit_mac_syscall_exit(unsigned short code, struct uthread *uthread,
  * Audit Session.
  */
 void	audit_session_init(void);
-int 	audit_session_setaia(proc_t p, auditinfo_addr_t *aia_p, int newprocess);
+int 	audit_session_setaia(proc_t p, auditinfo_addr_t *aia_p);
 auditinfo_addr_t *audit_session_update(auditinfo_addr_t *new_aia);
 int	audit_session_lookup(au_asid_t asid, auditinfo_addr_t *ret_aia);
 

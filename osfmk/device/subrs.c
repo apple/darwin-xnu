@@ -261,7 +261,7 @@ strncasecmp(const char *s1, const char *s2, size_t n)
  * Deprecation Warning: 
  *	strcpy() is being deprecated. Please use strlcpy() instead.
  */
-
+#if !CONFIG_EMBEDDED
 char *
 strcpy(
         char *to,
@@ -274,7 +274,7 @@ strcpy(
 
         return ret;
 }
-
+#endif
 
 /*
  * Abstract:
@@ -428,6 +428,7 @@ itoa(
  * Deprecation Warning:
  *	strcat() is being deprecated. Please use strlcat() instead.
  */
+#if !CONFIG_EMBEDDED
 char *
 strcat(
 	char *dest,
@@ -441,6 +442,7 @@ strcat(
 		;
 	return (old);
 }
+#endif
 
 /*
  * Appends src to string dst of size siz (unlike strncat, siz is the
@@ -535,7 +537,7 @@ strlcpy(char *dst, const char *src, size_t siz)
  *              one should use FREE() with the allocated buffer.
  *
  */
-inline char *
+char *
 STRDUP(const char *string, int type)
 {
 	size_t len;

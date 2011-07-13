@@ -60,9 +60,12 @@ typedef struct _load_result {
 		/* boolean_t */	unixproc	:1,
 				dynlinker	:1,
 				customstack	:1,
+				validentry	:1,
 						:0;
 	unsigned int		csflags;
 	unsigned char	uuid[16];	
+	mach_vm_address_t	min_vm_addr;
+	mach_vm_address_t	max_vm_addr;
 } load_result_t;
 
 struct image_params;

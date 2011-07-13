@@ -90,6 +90,7 @@
 #define B_PASSIVE	0x00000800	/* PASSIVE I/Os are ignored by THROTTLE I/O */
 #define	B_IOSTREAMING	0x00001000	/* sequential access pattern detected */
 #define B_THROTTLED_IO	0x00002000	/* low priority I/O */
+#define B_ENCRYPTED_IO	0x00004000	/* Encrypted I/O */
 /*
  * make sure to check when adding flags that
  * that the new flags don't overlap the definitions
@@ -120,6 +121,8 @@ void	buf_markinvalid(buf_t);
  @param bp Buffer to mark.
  */
 void	buf_markdelayed(buf_t);
+
+void	buf_markclean(buf_t);
 
 /*!
  @function buf_markeintr
@@ -634,6 +637,32 @@ errno_t	buf_setupl(buf_t, upl_t, uint32_t);
  */
 buf_t	buf_clone(buf_t, int, int, void (*)(buf_t, void *), void *);
 
+
+/*!
+ @function buf_create_shadow
+ @abstract Create a shadow buffer with optional private storage and an optional callback.
+ @param bp Buffer to shadow.
+ @param force_copy If TRUE, do not link the shadaow to 'bp' and if 'external_storage' == NULL,
+ force a copy of the data associated with 'bp'.
+ @param external_storage If non-NULL, associate it with the new buffer as its storage instead of the 
+ storage currently associated with 'bp'.
+ @param iodone Callback to be called from buf_biodone() when I/O completes, in the sense of buf_setcallback().
+ @param arg Argument to pass to iodone() callback.
+ @return NULL if the buffer to be shadowed is not B_META or a primary buffer (i.e. not a shadow buffer); otherwise, the new buffer.
+*/
+
+buf_t	buf_create_shadow(buf_t bp, boolean_t force_copy, uintptr_t external_storage, void (*iodone)(buf_t, void *), void *arg);
+
+
+/*!
+ @function buf_shadow
+ @abstract returns true if 'bp' is a shadow of another buffer.
+ @param bp Buffer to query.
+ @return 1 if 'bp' is a shadow, 0 otherwise.
+*/
+int	buf_shadow(buf_t bp);
+
+
 /*!
  @function buf_alloc
  @abstract Allocate an uninitialized buffer.
@@ -659,6 +688,7 @@ void	buf_free(buf_t);
  */
 #define	BUF_WRITE_DATA	0x0001		/* write data blocks first */
 #define	BUF_SKIP_META	0x0002		/* skip over metadata blocks */
+#define BUF_INVALIDATE_LOCKED	0x0004	/* force B_LOCKED blocks to be invalidated */
 
 /*!
  @function buf_invalidateblks
@@ -966,8 +996,38 @@ buf_t	buf_getblk(vnode_t, daddr64_t, int, int, int, int);
  @return Always returns a new buffer.
  */
 buf_t	buf_geteblk(int);
+
+/*!
+ @function buf_clear_redundancy_flags
+ @abstract Clear flags on a buffer.
+ @discussion: buffer_redundancy_flags &= ~flags
+ @param bp Buffer whose flags to clear.
+ @param flags Flags to remove from buffer's mask
+ @return void.
+ */
+void	buf_clear_redundancy_flags(buf_t, uint32_t);
+
+/*!
+ @function buf_redundancyflags
+ @abstract Get redundancy flags set on a buffer.
+ @param bp Buffer whose redundancy flags to grab.
+ @return flags.
+ */
+uint32_t	buf_redundancy_flags(buf_t);
+
+/*!
+ @function buf_setredundancyflags
+ @abstract Set redundancy flags on a buffer.
+ @discussion: buffer_redundancy_flags |= flags
+ @param bp Buffer whose flags to set.
+ @param flags Flags to add to buffer's redundancy flags
+ @return void.
+ */
+void	buf_set_redundancy_flags(buf_t, uint32_t);
+
 #ifdef KERNEL_PRIVATE
-void	buf_setfilter(buf_t, void (*)(buf_t, void *), void *, void **, void **);
+void	buf_setfilter(buf_t, void (*)(buf_t, void *), void *, void (**)(buf_t, void *), void **);
+
 
 /*!
  @function buf_getcpaddr

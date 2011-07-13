@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -192,11 +192,9 @@ in6_gif_output(
 		m_freem(m);
 		return ENETUNREACH;
 	}
-	if (ifp->if_flags & IFF_LINK1)
-		ip_ecn_ingress(ECN_ALLOWED, &otos, &itos);
-	else
-		ip_ecn_ingress(ECN_NOCARE, &otos, &itos);
-	ip6->ip6_flow &= ~ntohl(0xff00000);
+	ip_ecn_ingress((ifp->if_flags & IFF_LINK1) ? ECN_ALLOWED : ECN_NOCARE,
+		       &otos, &itos);
+	ip6->ip6_flow &= ~htonl(0xff << 20);
 	ip6->ip6_flow |= htonl((u_int32_t)otos << 20);
 
 	if (dst->sin6_family != sin6_dst->sin6_family ||
@@ -244,22 +242,19 @@ in6_gif_output(
 	 * it is too painful to ask for resend of inner packet, to achieve
 	 * path MTU discovery for encapsulated packets.
 	 */
-	return(ip6_output(m, 0, &sc->gif_ro6, IPV6_MINMTU, 0, NULL, 0));
+	return(ip6_output(m, 0, &sc->gif_ro6, IPV6_MINMTU, 0, NULL, NULL));
 #else
-	return(ip6_output(m, 0, &sc->gif_ro6, 0, 0, NULL, 0));
+	return(ip6_output(m, 0, &sc->gif_ro6, 0, 0, NULL, NULL));
 #endif
 }
 
-int in6_gif_input(mp, offp)
-	struct mbuf **mp;
-	int *offp;
+int in6_gif_input(struct mbuf **mp, int *offp, int proto)
 {
 	struct mbuf *m = *mp;
 	struct ifnet *gifp = NULL;
 	struct ip6_hdr *ip6;
 	int af = 0;
 	u_int32_t otos;
-	u_int8_t proto;
 
 	ip6 = mtod(m, struct ip6_hdr *);
 
@@ -271,7 +266,6 @@ int in6_gif_input(mp, offp)
 		return IPPROTO_DONE;
 	}
 
-	proto = ip6->ip6_nxt;
 	otos = ip6->ip6_flow;
 	m_adj(m, *offp);
 
@@ -360,9 +354,6 @@ gif_validate6(
 		sin6.sin6_family = AF_INET6;
 		sin6.sin6_len = sizeof(struct sockaddr_in6);
 		sin6.sin6_addr = ip6->ip6_src;
-#ifndef SCOPEDROUTING
-		sin6.sin6_scope_id = 0; /* XXX */
-#endif
 
 		rt = rtalloc1((struct sockaddr *)&sin6, 0, 0);
 		if (rt != NULL)

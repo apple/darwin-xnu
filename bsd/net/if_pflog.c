@@ -68,6 +68,7 @@
 #include <sys/proc_internal.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <sys/mcache.h>
 
 #include <net/if.h>
 #include <net/if_var.h>
@@ -344,8 +345,8 @@ pflog_packet(struct pfi_kif *kif, struct mbuf *m, sa_family_t af, u_int8_t dir,
 	}
 #endif /* INET */
 
-	ifn->if_opackets++;
-	ifn->if_obytes += m->m_pkthdr.len;
+	atomic_add_64(&ifn->if_opackets, 1);
+	atomic_add_64(&ifn->if_obytes, m->m_pkthdr.len);
 
 	switch (dir) {
 	case PF_IN:

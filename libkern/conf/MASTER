@@ -51,6 +51,7 @@
 #
 ident		LIBKERN
 
+options         HIBERNATION     # system hibernation    # <hibernation>
 options		KDEBUG			# kernel tracing		# <kdebug>
 options		GPROF			# kernel profiling		# <profile>
 options		LIBKERNCPP		# C++ implementation	# <libkerncpp>
@@ -58,6 +59,7 @@ options		NETWORKING		# kernel networking		# <networking>
 options     CONFIG_DTRACE 	# dtrace support		# <config_dtrace>
 options		CRYPTO			# cryptographic routines	# <ipsec,crypto>
 options		ZLIB		# zlib support			# <zlib>
+options		IOKITSTATS		# IOKit statistics		# <iokitstats>
 
 options		CONFIG_NO_PANIC_STRINGS			# <no_panic_str>
 options		CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
@@ -66,6 +68,11 @@ options		CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
 options		IPSEC			# IP security	# <ipsec>
 
 options		CONFIG_KXLD		# kxld/runtime linking of kexts # <config_kxld>
+
+# Note that when adding this config option to an architecture, one MUST
+# add the architecture to the preprocessor test at the beginning of
+# libkern/kmod/cplus_{start.c,stop.c}.
+options         CONFIG_STATIC_CPPINIT   # Static library initializes kext cpp runtime # <config_static_cppinit>
 
 # secure_kernel - secure kernel from user programs
 options     SECURE_KERNEL       # <secure_kernel> 

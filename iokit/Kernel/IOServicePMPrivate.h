@@ -29,309 +29,12 @@
 #ifndef _IOKIT_IOSERVICEPMPRIVATE_H
 #define _IOKIT_IOSERVICEPMPRIVATE_H
 
-/*! @class IOServicePM
-    @abstract Power management class.
-*/
-class IOServicePM : public OSObject
-{
-    friend class IOService;
+#include <IOKit/IOCommand.h>
+#include <IOKit/IOEventSource.h>
 
-    OSDeclareDefaultStructors( IOServicePM )
-
-private:
-    // List of interested drivers.
-    IOPMinformeeList *      InterestedDrivers;
-
-    // How long to wait for controlling driver to acknowledge.
-    IOReturn                DriverTimer;
-
-    // Current power management machine state.
-    uint32_t                MachineState;
-
-    thread_call_t           AckTimer;
-    thread_call_t           SettleTimer;
-
-    // Settle time after changing power state.
-    unsigned long           SettleTimeUS;
-
-    // The flags describing current change note.
-    unsigned long           HeadNoteFlags;
-
-    // The new power state number being changed to.
-    unsigned long           HeadNotePowerState;
-
-    // Points to the entry in the power state array.
-    IOPMPowerState *        HeadNotePowerArrayEntry;
-
-    // Power flags supplied by all parents (domain).
-    unsigned long           HeadNoteDomainFlags;
-
-    // Power flags supplied by domain accounting for parent changes.
-    IOPMPowerFlags          HeadNoteDomainTargetFlags;
-
-    // Connection attached to the changing parent.
-    IOPowerConnection *     HeadNoteParentConnection;
-    
-    // Power flags supplied by the changing parent.
-    unsigned long           HeadNoteParentFlags;
-
-    // Number of acks still outstanding.
-    unsigned long           HeadNotePendingAcks;
-
-    // PM state lock.
-    IOLock	*               PMLock;
-
-    // Initialized to true, then set to false after the initial power change.
-    bool                    InitialChange;
-
-    // Ignore children and driver desires if true.
-    bool                    DeviceOverrides;
-
-    // True if device was active since last idle timer expiration.
-    bool                    DeviceActive;
-
-    // Keeps track of any negative responses from notified apps and clients.
-    bool					DoNotPowerDown;
-
-    // True if all our parents know the state of their power domain.
-    bool					ParentsKnowState;
-
-    bool					StrictTreeOrder;
-    bool					IdleTimerStopped;
-	bool					AdjustPowerScheduled;
-
-    // Time of last device activity.
-    AbsoluteTime            DeviceActiveTimestamp;
-
-    // Used to protect activity flag.
-    IOLock *                ActivityLock;
-
-    // Idle timer event source.
-    IOTimerEventSource *    IdleTimerEventSource;
-
-    // Idle timer's period in seconds.
-    unsigned long           IdleTimerPeriod;
-    unsigned long           IdleTimerMinPowerState;
-    AbsoluteTime            IdleTimerStartTime;
-
-    // Power state desired by a subclassed device object.
-    unsigned long           DeviceDesire;
-
-    // This is the power state we desire currently.
-    unsigned long           DesiredPowerState;
-
-    // This is what our parent thinks our need is.
-    unsigned long           PreviousRequest;
-
-    // Cache result from getName(), used in logging.
-    const char *            Name;
-
-    // Number of power states in the power array.
-    unsigned long           NumberOfPowerStates;
-
-    // Power state array.
-    IOPMPowerState *		PowerStates;
-
-    // The controlling driver.
-    IOService *				ControllingDriver;
-
-    // Our current power state.
-    unsigned long			CurrentPowerState;
-
-    // Logical OR of power flags for each power domain parent.
-    IOPMPowerFlags			ParentsCurrentPowerFlags;
-
-    // The highest power state we can achieve in current power domain.
-    unsigned long			MaxCapability;
-
-    // Logical OR of all output power character flags in the array.
-    IOPMPowerFlags			OutputPowerCharacterFlags;
-
-    // OSArray which manages responses from notified apps and clients.
-    OSArray *				ResponseArray;
-    OSArray *               NotifyClientArray;
-
-    // Used to uniquely identify power management notification to apps and clients.
-    UInt16					SerialNumber;
-
-    // Used to communicate desired function to tellClientsWithResponse().
-    // This is used because it avoids changing the signatures of the affected virtual methods.
-    int						OutOfBandParameter;
-
-    AbsoluteTime            DriverCallStartTime;
-    IOPMPowerFlags          CurrentCapabilityFlags;
-    long                    ActivityTicklePowerState;
-    unsigned long           CurrentPowerConsumption;
-    unsigned long           TempClampPowerState;
-    IOPMWorkQueue *			PMWorkQueue;
-    OSSet *					InsertInterestSet;
-    OSSet *					RemoveInterestSet;
-    OSArray *				NotifyChildArray;
-    OSDictionary *          PowerClients;
-    thread_call_t			DriverCallEntry;
-    void *					DriverCallParamPtr;
-    IOItemCount				DriverCallParamCount;
-    IOItemCount				DriverCallParamSlots;
-    uint32_t                DriverCallReason;
-    uint32_t                TempClampCount;
-    uint32_t                OverrideMaxPowerState;
-    uint32_t                ActivityTickleCount;
-    uint32_t                WaitReason;
-    uint32_t                NextMachineState;
-    uint32_t                RootDomainState;
-    uint32_t                ThreadAssertionCount;
-
-    // Protected by PMLock
-    struct {
-        uint32_t            DriverCallBusy : 1;
-        uint32_t            PMStop         : 1;
-    } LockedFlags;
-
-    thread_t                ThreadAssertionThread;
-
-#if PM_VARS_SUPPORT
-    IOPMprot *				PMVars;
-#endif
-
-    // Serialize IOServicePM state for debug output.
-    IOReturn gatedSerialize( OSSerialize * s );
-    virtual bool serialize( OSSerialize * s ) const;
-};
-
-#define fInterestedDrivers          pwrMgt->InterestedDrivers
-#define fDriverTimer                pwrMgt->DriverTimer
-#define fAckTimer                   pwrMgt->AckTimer
-#define fSettleTimer                pwrMgt->SettleTimer
-#define fMachineState               pwrMgt->MachineState
-#define fSettleTimeUS               pwrMgt->SettleTimeUS
-#define fHeadNoteFlags              pwrMgt->HeadNoteFlags
-#define fHeadNotePowerState         pwrMgt->HeadNotePowerState
-#define fHeadNotePowerArrayEntry    pwrMgt->HeadNotePowerArrayEntry
-#define fHeadNoteDomainFlags        pwrMgt->HeadNoteDomainFlags
-#define fHeadNoteDomainTargetFlags  pwrMgt->HeadNoteDomainTargetFlags
-#define fHeadNoteParentConnection   pwrMgt->HeadNoteParentConnection
-#define fHeadNoteParentFlags        pwrMgt->HeadNoteParentFlags
-#define fHeadNotePendingAcks        pwrMgt->HeadNotePendingAcks
-#define fPMLock                     pwrMgt->PMLock
-#define fInitialChange              pwrMgt->InitialChange
-#define fDeviceOverrides            pwrMgt->DeviceOverrides
-#define fActivityLock               pwrMgt->ActivityLock
-#define fIdleTimerEventSource       pwrMgt->IdleTimerEventSource
-#define fIdleTimerPeriod            pwrMgt->IdleTimerPeriod
-#define fIdleTimerMinPowerState     pwrMgt->IdleTimerMinPowerState
-#define fDeviceActive               pwrMgt->DeviceActive
-#define fIdleTimerStartTime         pwrMgt->IdleTimerStartTime
-#define fDeviceActiveTimestamp      pwrMgt->DeviceActiveTimestamp
-#define fActivityTickleCount        pwrMgt->ActivityTickleCount
-#define fDeviceDesire               pwrMgt->DeviceDesire
-#define fDesiredPowerState          pwrMgt->DesiredPowerState
-#define fPreviousRequest            pwrMgt->PreviousRequest
-#define fName                       pwrMgt->Name
-#define fNumberOfPowerStates        pwrMgt->NumberOfPowerStates
-#define fPowerStates                pwrMgt->PowerStates
-#define fControllingDriver          pwrMgt->ControllingDriver
-#define fAggressivenessValue        pwrMgt->AggressivenessValue
-#define fAggressivenessValid        pwrMgt->AggressivenessValid
-#define fCurrentPowerState          pwrMgt->CurrentPowerState
-#define fParentsKnowState           pwrMgt->ParentsKnowState
-#define fParentsCurrentPowerFlags   pwrMgt->ParentsCurrentPowerFlags
-#define fMaxCapability              pwrMgt->MaxCapability
-#define fOutputPowerCharacterFlags  pwrMgt->OutputPowerCharacterFlags
-#define fSerialNumber               pwrMgt->SerialNumber
-#define fResponseArray              pwrMgt->ResponseArray
-#define fNotifyClientArray          pwrMgt->NotifyClientArray
-#define fDoNotPowerDown             pwrMgt->DoNotPowerDown
-#define fOutOfBandParameter         pwrMgt->OutOfBandParameter
-#define fDriverCallStartTime        pwrMgt->DriverCallStartTime
-#define fCurrentCapabilityFlags     pwrMgt->CurrentCapabilityFlags
-#define fCurrentPowerConsumption    pwrMgt->CurrentPowerConsumption
-#define fTempClampPowerState        pwrMgt->TempClampPowerState
-#define fTempClampCount             pwrMgt->TempClampCount
-#define fOverrideMaxPowerState      pwrMgt->OverrideMaxPowerState
-#define fPMWorkQueue                pwrMgt->PMWorkQueue
-#define fWaitReason                 pwrMgt->WaitReason
-#define fNextMachineState           pwrMgt->NextMachineState
-#define fDriverCallReason           pwrMgt->DriverCallReason
-#define fDriverCallEntry            pwrMgt->DriverCallEntry
-#define fDriverCallParamPtr         pwrMgt->DriverCallParamPtr
-#define fDriverCallParamCount       pwrMgt->DriverCallParamCount
-#define fDriverCallParamSlots       pwrMgt->DriverCallParamSlots
-#define fActivityTickled            pwrMgt->ActivityTickled
-#define fInsertInterestSet          pwrMgt->InsertInterestSet
-#define fRemoveInterestSet          pwrMgt->RemoveInterestSet
-#define fStrictTreeOrder            pwrMgt->StrictTreeOrder
-#define fNotifyChildArray           pwrMgt->NotifyChildArray
-#define fIdleTimerStopped           pwrMgt->IdleTimerStopped
-#define fAdjustPowerScheduled       pwrMgt->AdjustPowerScheduled
-#define fActivityTicklePowerState   pwrMgt->ActivityTicklePowerState
-#define fPMVars                     pwrMgt->PMVars
-#define fPowerClients               pwrMgt->PowerClients
-#define fRootDomainState            pwrMgt->RootDomainState
-#define fThreadAssertionCount       pwrMgt->ThreadAssertionCount
-#define fThreadAssertionThread      pwrMgt->ThreadAssertionThread
-#define fLockedFlags                pwrMgt->LockedFlags
-
-/*
-When an IOService is waiting for acknowledgement to a power change
-notification from an interested driver or the controlling driver,
-the ack timer is ticking every tenth of a second.
-(100000000 nanoseconds are one tenth of a second).
-*/
-#define ACK_TIMER_PERIOD            100000000
-
-#define kIOPMParentInitiated        0x01    // this power change initiated by our  parent
-#define kIOPMWeInitiated            0x02    // this power change initiated by this device
-#define kIOPMNotDone                0x04    // we couldn't make this change
-#define kIOPMDomainWillChange       0x08    // change started by PowerDomainWillChangeTo
-#define kIOPMDomainDidChange        0x10    // change started by PowerDomainDidChangeTo
-#define kIOPMDomainPowerDrop        0x20    // Domain is lowering power
-#define kIOPMSynchronize            0x40    // change triggered by power tree re-sync
-
-enum {
-    kDriverCallInformPreChange,
-    kDriverCallInformPostChange,
-    kDriverCallSetPowerState
-};
-
-struct DriverCallParam {
-    OSObject *  Target;
-    IOReturn    Result;
-};
-
-// values of outofbandparameter
-enum {
-    kNotifyApps,
-    kNotifyPriority
-};
-
-typedef bool (*IOPMMessageFilter)(OSObject * object, void * context);
-
-// used for applyToInterested
-struct IOPMInterestContext {
-    OSArray *           responseFlags;
-    OSArray *           notifyClients;
-    UInt16              serialNumber;
-    UInt16              counter;
-    UInt32              maxTimeRequested;
-    int                 msgType;
-    IOService *         us;
-    unsigned long       stateNumber;
-    IOPMPowerFlags      stateFlags;
-    const char *        errorLog;
-    IOPMMessageFilter   filterFunc;
-};
-
-//*********************************************************************************
-// PM Statistics & Diagnostics
-//*********************************************************************************
-
-extern const OSSymbol *gIOPMStatsApplicationResponseTimedOut;
-extern const OSSymbol *gIOPMStatsApplicationResponseCancel;
-extern const OSSymbol *gIOPMStatsApplicationResponseSlow;
-
-//*********************************************************************************
+//******************************************************************************
 // PM command types
-//*********************************************************************************
+//******************************************************************************
 
 enum {
     /* Command Types */
@@ -351,7 +54,7 @@ enum {
     kIOPMRequestTypeSynchronizePowerTree        = 0x0D,
     kIOPMRequestTypeRequestPowerStateOverride   = 0x0E,
     kIOPMRequestTypeSetIdleTimerPeriod          = 0x0F,
-
+    
     /* Reply Types */
     kIOPMRequestTypeReplyStart                  = 0x80,
     kIOPMRequestTypeAckPowerChange              = 0x81,
@@ -359,12 +62,443 @@ enum {
     kIOPMRequestTypeAllowPowerChange            = 0x83,
     kIOPMRequestTypeCancelPowerChange           = 0x84,
     kIOPMRequestTypeInterestChanged             = 0x85,
-    kIOPMRequestTypeIdleCancel                  = 0x86
+    kIOPMRequestTypeIdleCancel                  = 0x86,
+    kIOPMRequestTypeChildNotifyDelayCancel      = 0x87
 };
 
-//*********************************************************************************
-// IOServicePM internal helper classes
-//*********************************************************************************
+//******************************************************************************
+// PM actions - For root domain only
+//******************************************************************************
+
+struct IOPMActions;
+
+typedef void
+(*IOPMActionPowerChangeStart)(
+    void *          target,
+    IOService *     service,
+    IOPMActions *   actions, 
+    uint32_t        powerState,
+    uint32_t *      changeFlags );
+
+typedef void
+(*IOPMActionPowerChangeDone)(
+    void *          target,
+    IOService *     service,
+    IOPMActions *   actions, 
+    uint32_t        powerState,
+    uint32_t        changeFlags );
+
+typedef void
+(*IOPMActionPowerChangeOverride)(
+    void *          target,
+    IOService *     service,
+    IOPMActions *   actions, 
+    unsigned long * powerState,
+    uint32_t *      changeFlags );
+
+typedef void
+(*IOPMActionActivityTickle)(
+    void *          target,
+    IOService *     service,
+    IOPMActions *   actions );
+
+struct IOPMActions {
+    void *                          target;
+    uint32_t                        parameter;
+    IOPMActionPowerChangeStart      actionPowerChangeStart;
+    IOPMActionPowerChangeDone       actionPowerChangeDone;
+    IOPMActionPowerChangeOverride   actionPowerChangeOverride;
+    IOPMActionActivityTickle        actionActivityTickle;
+};
+
+//******************************************************************************
+
+enum {
+	kIOPMEventClassSystemEvent			= 0x00,
+	kIOPMEventClassDriverEvent			= 0x1
+};
+
+class PMEventDetails : public OSObject 
+{
+    OSDeclareDefaultStructors( PMEventDetails );
+    friend class IOServicePM;
+    friend class IOPMrootDomain;
+    friend class IOPMTimeline;
+public:  
+  static PMEventDetails *eventDetails(uint32_t   type,
+                                      const char *ownerName,
+                                      uintptr_t  ownerUnique,
+                                      const char *interestName,
+                                      uint8_t    oldState,
+                                      uint8_t    newState,
+                                      uint32_t   result,
+                                      uint32_t   elapsedTimeUS);
+
+  static PMEventDetails *eventDetails(uint32_t   type,
+                                      const char *uuid,
+                                      uint32_t   reason,
+                                      uint32_t   result);
+private:
+  uint8_t		  eventClassifier;
+  uint32_t        eventType;
+  const char      *ownerName;
+  uintptr_t       ownerUnique;
+  const char      *interestName;
+  uint8_t         oldState;
+  uint8_t         newState;
+  uint32_t        result;
+  uint32_t        elapsedTimeUS;
+  
+  const char      *uuid;
+  uint32_t        reason;
+};
+
+// Internal concise representation of IOPMPowerState
+struct IOPMPSEntry
+{
+    IOPMPowerFlags	capabilityFlags;
+    IOPMPowerFlags	outputPowerFlags;
+    IOPMPowerFlags	inputPowerFlags;
+    uint32_t        staticPower;
+    uint32_t        settleUpTime;
+    uint32_t        settleDownTime;
+};
+
+//******************************************************************************
+// IOServicePM
+//******************************************************************************
+
+class IOServicePM : public OSObject
+{
+    friend class IOService;
+    friend class IOPMWorkQueue;
+
+    OSDeclareDefaultStructors( IOServicePM )
+
+private:
+    // Link IOServicePM objects on IOPMWorkQueue.
+    queue_chain_t           WorkChain;
+    
+    // Queue of IOPMRequest objects.
+    queue_head_t            RequestHead;
+
+    // IOService creator and owner.
+    IOService *             Owner;
+
+    // List of interested drivers (protected by PMLock).
+    IOPMinformeeList *      InterestedDrivers;
+
+    // How long to wait for controlling driver to acknowledge.
+    IOReturn                DriverTimer;
+
+    // Current power management machine state.
+    uint32_t                MachineState;
+
+    thread_call_t           AckTimer;
+    thread_call_t           SettleTimer;
+    thread_call_t           IdleTimer;
+
+    // Settle time after changing power state.
+    uint32_t                SettleTimeUS;
+
+    // The flags describing current change note.
+    IOPMPowerChangeFlags    HeadNoteChangeFlags;
+
+    // The new power state number being changed to.
+    IOPMPowerStateIndex     HeadNotePowerState;
+
+    // Points to the entry in the power state array.
+    IOPMPSEntry *           HeadNotePowerArrayEntry;
+
+    // Power flags supplied by all parents (domain).
+    IOPMPowerFlags          HeadNoteDomainFlags;
+
+    // Power flags supplied by domain accounting for parent changes.
+    IOPMPowerFlags          HeadNoteDomainTargetFlags;
+
+    // Connection attached to the changing parent.
+    IOPowerConnection *     HeadNoteParentConnection;
+    
+    // Power flags supplied by the changing parent.
+    IOPMPowerFlags          HeadNoteParentFlags;
+
+    // Number of acks still outstanding.
+    uint32_t                HeadNotePendingAcks;
+
+    // PM state lock.
+    IOLock *                PMLock;
+
+    unsigned int            InitialPowerChange:1;
+    unsigned int            InitialSetPowerState:1;
+    unsigned int            DeviceOverrideEnabled:1;
+    unsigned int            DeviceWasActive:1;
+    unsigned int            DoNotPowerDown:1;
+    unsigned int            ParentsKnowState:1;
+    unsigned int            StrictTreeOrder:1;
+    unsigned int            IdleTimerStopped:1;
+    unsigned int            AdjustPowerScheduled:1;
+    unsigned int            IsPreChange:1;
+    unsigned int            DriverCallBusy:1;
+    unsigned int            PCDFunctionOverride:1;
+
+    // Time of last device activity.
+    AbsoluteTime            DeviceActiveTimestamp;
+
+    // Used to protect activity flag.
+    IOLock *                ActivityLock;
+
+    // Idle timer's period in seconds.
+    unsigned long           IdleTimerPeriod;
+    unsigned long           IdleTimerMinPowerState;
+    AbsoluteTime            IdleTimerStartTime;
+
+    // Power state desired by a subclassed device object.
+    IOPMPowerStateIndex     DeviceDesire;
+
+    // This is the power state we desire currently.
+    IOPMPowerStateIndex     DesiredPowerState;
+
+    // This is what our parent thinks our need is.
+    IOPMPowerFlags          PreviousRequestPowerFlags;
+
+    // Cache result from getName(), used in logging.
+    const char *            Name;
+
+    // Number of power states in the power array.
+    IOPMPowerStateIndex     NumberOfPowerStates;
+
+    // Power state array.
+    IOPMPSEntry *           PowerStates;
+
+    // The controlling driver.
+    IOService *             ControllingDriver;
+
+    // Our current power state.
+    IOPMPowerStateIndex     CurrentPowerState;
+
+    // Logical OR of power flags for each power domain parent.
+    IOPMPowerFlags          ParentsCurrentPowerFlags;
+
+    // The highest power state we can achieve in current power domain.
+    IOPMPowerStateIndex     MaxPowerState;
+
+    // Logical OR of all output power character flags in the array.
+    IOPMPowerFlags          OutputPowerCharacterFlags;
+
+    // OSArray which manages responses from notified apps and clients.
+    OSArray *               ResponseArray;
+    OSArray *               NotifyClientArray;
+
+    // Used to uniquely identify power management notification to apps and clients.
+    UInt16                  SerialNumber;
+
+    // Used to communicate desired function to tellClientsWithResponse().
+    // This is used because it avoids changing the signatures of the affected virtual methods.
+    int                     OutOfBandParameter;
+
+    AbsoluteTime            DriverCallStartTime;
+    IOPMPowerFlags          CurrentCapabilityFlags;
+    long                    ActivityTicklePowerState;
+    unsigned long           CurrentPowerConsumption;
+    IOPMPowerStateIndex     TempClampPowerState;
+    OSArray *               NotifyChildArray;
+    OSDictionary *          PowerClients;
+    thread_call_t           DriverCallEntry;
+    void *                  DriverCallParamPtr;
+    IOItemCount             DriverCallParamCount;
+    IOItemCount             DriverCallParamSlots;
+    uint32_t                DriverCallReason;
+    uint32_t                OutOfBandMessage;
+    uint32_t                TempClampCount;
+    uint32_t                OverrideMaxPowerState;
+    uint32_t                ActivityTickleCount;
+    uint32_t                WaitReason;
+    uint32_t                SavedMachineState;
+    uint32_t                RootDomainState;
+
+    // Protected by PMLock - BEGIN
+    struct {
+        uint32_t            PMStop              : 1;
+        uint32_t            PMDriverCallWait    : 1;
+    } LockedFlags;
+
+    queue_head_t            PMDriverCallQueue;
+    OSSet *                 InsertInterestSet;
+    OSSet *                 RemoveInterestSet;
+    // Protected by PMLock - END
+
+#if PM_VARS_SUPPORT
+    IOPMprot *              PMVars;
+#endif
+
+    IOPMActions             PMActions;
+
+    // Serialize IOServicePM state for debug output.
+    IOReturn gatedSerialize( OSSerialize * s );
+    virtual bool serialize( OSSerialize * s ) const;
+};
+
+#define fOwner                      pwrMgt->Owner
+#define fInterestedDrivers          pwrMgt->InterestedDrivers
+#define fDriverTimer                pwrMgt->DriverTimer
+#define fMachineState               pwrMgt->MachineState
+#define fAckTimer                   pwrMgt->AckTimer
+#define fSettleTimer                pwrMgt->SettleTimer
+#define fIdleTimer                  pwrMgt->IdleTimer
+#define fSettleTimeUS               pwrMgt->SettleTimeUS
+#define fHeadNoteChangeFlags        pwrMgt->HeadNoteChangeFlags
+#define fHeadNotePowerState         pwrMgt->HeadNotePowerState
+#define fHeadNotePowerArrayEntry    pwrMgt->HeadNotePowerArrayEntry
+#define fHeadNoteDomainFlags        pwrMgt->HeadNoteDomainFlags
+#define fHeadNoteDomainTargetFlags  pwrMgt->HeadNoteDomainTargetFlags
+#define fHeadNoteParentConnection   pwrMgt->HeadNoteParentConnection
+#define fHeadNoteParentFlags        pwrMgt->HeadNoteParentFlags
+#define fHeadNotePendingAcks        pwrMgt->HeadNotePendingAcks
+#define fPMLock                     pwrMgt->PMLock
+#define fInitialPowerChange         pwrMgt->InitialPowerChange
+#define fInitialSetPowerState       pwrMgt->InitialSetPowerState
+#define fDeviceOverrideEnabled      pwrMgt->DeviceOverrideEnabled
+#define fDeviceWasActive            pwrMgt->DeviceWasActive
+#define fDoNotPowerDown             pwrMgt->DoNotPowerDown
+#define fParentsKnowState           pwrMgt->ParentsKnowState
+#define fStrictTreeOrder            pwrMgt->StrictTreeOrder
+#define fIdleTimerStopped           pwrMgt->IdleTimerStopped
+#define fAdjustPowerScheduled       pwrMgt->AdjustPowerScheduled
+#define fIsPreChange                pwrMgt->IsPreChange
+#define fDriverCallBusy             pwrMgt->DriverCallBusy
+#define fPCDFunctionOverride        pwrMgt->PCDFunctionOverride
+#define fDeviceActiveTimestamp      pwrMgt->DeviceActiveTimestamp
+#define fActivityLock               pwrMgt->ActivityLock
+#define fIdleTimerPeriod            pwrMgt->IdleTimerPeriod
+#define fIdleTimerMinPowerState     pwrMgt->IdleTimerMinPowerState
+#define fIdleTimerStartTime         pwrMgt->IdleTimerStartTime
+#define fDeviceDesire               pwrMgt->DeviceDesire
+#define fDesiredPowerState          pwrMgt->DesiredPowerState
+#define fPreviousRequestPowerFlags  pwrMgt->PreviousRequestPowerFlags
+#define fName                       pwrMgt->Name
+#define fNumberOfPowerStates        pwrMgt->NumberOfPowerStates
+#define fPowerStates                pwrMgt->PowerStates
+#define fControllingDriver          pwrMgt->ControllingDriver
+#define fCurrentPowerState          pwrMgt->CurrentPowerState
+#define fParentsCurrentPowerFlags   pwrMgt->ParentsCurrentPowerFlags
+#define fMaxPowerState              pwrMgt->MaxPowerState
+#define fOutputPowerCharacterFlags  pwrMgt->OutputPowerCharacterFlags
+#define fResponseArray              pwrMgt->ResponseArray
+#define fNotifyClientArray          pwrMgt->NotifyClientArray
+#define fSerialNumber               pwrMgt->SerialNumber
+#define fOutOfBandParameter         pwrMgt->OutOfBandParameter
+#define fDriverCallStartTime        pwrMgt->DriverCallStartTime
+#define fCurrentCapabilityFlags     pwrMgt->CurrentCapabilityFlags
+#define fActivityTicklePowerState   pwrMgt->ActivityTicklePowerState
+#define fCurrentPowerConsumption    pwrMgt->CurrentPowerConsumption
+#define fTempClampPowerState        pwrMgt->TempClampPowerState
+#define fNotifyChildArray           pwrMgt->NotifyChildArray
+#define fPowerClients               pwrMgt->PowerClients
+#define fDriverCallEntry            pwrMgt->DriverCallEntry
+#define fDriverCallParamPtr         pwrMgt->DriverCallParamPtr
+#define fDriverCallParamCount       pwrMgt->DriverCallParamCount
+#define fDriverCallParamSlots       pwrMgt->DriverCallParamSlots
+#define fDriverCallReason           pwrMgt->DriverCallReason
+#define fOutOfBandMessage           pwrMgt->OutOfBandMessage
+#define fTempClampCount             pwrMgt->TempClampCount
+#define fOverrideMaxPowerState      pwrMgt->OverrideMaxPowerState
+#define fActivityTickleCount        pwrMgt->ActivityTickleCount
+#define fWaitReason                 pwrMgt->WaitReason
+#define fSavedMachineState          pwrMgt->SavedMachineState
+#define fRootDomainState            pwrMgt->RootDomainState
+#define fLockedFlags                pwrMgt->LockedFlags
+#define fPMDriverCallQueue          pwrMgt->PMDriverCallQueue
+#define fInsertInterestSet          pwrMgt->InsertInterestSet
+#define fRemoveInterestSet          pwrMgt->RemoveInterestSet
+#define fPMVars                     pwrMgt->PMVars
+#define fPMActions                  pwrMgt->PMActions
+
+/*
+When an IOService is waiting for acknowledgement to a power change
+notification from an interested driver or the controlling driver,
+the ack timer is ticking every tenth of a second.
+(100000000 nanoseconds are one tenth of a second).
+*/
+#define ACK_TIMER_PERIOD            100000000
+
+// Max wait time in microseconds for kernel priority and capability clients
+// with async message handlers to acknowledge.
+// 
+#define kPriorityClientMaxWait      (90 * 1000 * 1000)
+#define kCapabilityClientMaxWait    (240 * 1000 * 1000)
+
+// Attributes describing a power state change.
+// See IOPMPowerChangeFlags data type.
+//
+#define kIOPMParentInitiated        0x0001  // this power change initiated by our  parent
+#define kIOPMSelfInitiated          0x0002  // this power change initiated by this device
+#define kIOPMNotDone                0x0004  // we couldn't make this change
+#define kIOPMDomainWillChange       0x0008  // change started by PowerDomainWillChangeTo
+#define kIOPMDomainDidChange        0x0010  // change started by PowerDomainDidChangeTo
+#define kIOPMDomainPowerDrop        0x0020  // Domain is lowering power
+#define kIOPMIgnoreChildren         0x0040  // Ignore children and driver power desires
+#define kIOPMSkipAskPowerDown       0x0080  // skip the ask app phase
+#define kIOPMSynchronize            0x0100  // change triggered by power tree re-sync
+#define kIOPMSyncNoChildNotify      0x0200  // sync root domain only, not entire tree
+#define kIOPMSyncTellPowerDown      0x0400  // send the ask/will power off messages
+#define kIOPMSyncCancelPowerDown    0x0800  // sleep cancel for maintenance wake
+
+enum {
+    kDriverCallInformPreChange,
+    kDriverCallInformPostChange,
+    kDriverCallSetPowerState
+};
+
+struct DriverCallParam {
+    OSObject *  Target;
+    IOReturn    Result;
+};
+
+// values of OutOfBandParameter
+enum {
+    kNotifyApps,
+    kNotifyPriority,
+    kNotifyCapabilityChangeApps,
+    kNotifyCapabilityChangePriority
+};
+
+typedef bool (*IOPMMessageFilter)(
+        void * target, void * object, void * arg1, void * arg2, void * arg3 );
+
+// used for applyToInterested
+struct IOPMInterestContext {
+    OSArray *               responseArray;
+    OSArray *               notifyClients;
+    uint16_t                serialNumber;
+    uint8_t                 isPreChange;
+    uint8_t                 enableTracing;
+    uint32_t                maxTimeRequested;
+    uint32_t                messageType;
+    uint32_t                notifyType;
+    IOService *             us;
+    IOPMPowerStateIndex     stateNumber;
+    IOPMPowerFlags          stateFlags;
+    IOPMPowerChangeFlags    changeFlags;
+    const char *            errorLog;
+    IOPMMessageFilter       messageFilter;
+};
+
+// assertPMDriverCall() options
+enum {
+    kIOPMADC_NoInactiveCheck = 1
+};
+
+//******************************************************************************
+// PM Statistics & Diagnostics
+//******************************************************************************
+
+extern const OSSymbol *gIOPMStatsApplicationResponseTimedOut;
+extern const OSSymbol *gIOPMStatsApplicationResponseCancel;
+extern const OSSymbol *gIOPMStatsApplicationResponseSlow;
+
+//******************************************************************************
+// IOPMRequest
+//******************************************************************************
 
 typedef void (*IOPMCompletionAction)(void * target, void * param, IOReturn status);
 
@@ -445,11 +579,15 @@ public:
     static IOPMRequest * create( void );
     bool   init( IOService * owner, IOOptionBits type );
     void   reset( void );
-    void   attachNextRequest( IOPMRequest * next );
-    void   detachNextRequest( void );
-    void   attachRootRequest( IOPMRequest * root );
-    void   detachRootRequest( void );
+    bool   attachNextRequest( IOPMRequest * next );
+    bool   detachNextRequest( void );
+    bool   attachRootRequest( IOPMRequest * root );
+    bool   detachRootRequest( void );
 };
+
+//******************************************************************************
+// IOPMRequestQueue
+//******************************************************************************
 
 class IOPMRequestQueue : public IOEventSource
 {
@@ -470,8 +608,13 @@ public:
     static  IOPMRequestQueue * create( IOService * inOwner, Action inAction );
     void    queuePMRequest( IOPMRequest * request );
     void    queuePMRequestChain( IOPMRequest ** requests, IOItemCount count );
-    void    signalWorkAvailable( void );
 };
+
+//******************************************************************************
+// IOPMWorkQueue
+//******************************************************************************
+
+#define WORK_QUEUE_STATS    1
 
 class IOPMWorkQueue : public IOEventSource
 {
@@ -480,23 +623,35 @@ class IOPMWorkQueue : public IOEventSource
 public:
     typedef bool (*Action)( IOService *, IOPMRequest *, IOPMWorkQueue * );
 
+#if WORK_QUEUE_STATS
+    uint64_t            fStatCheckForWork;
+    uint64_t            fStatScanEntries;
+    uint64_t            fStatQueueEmpty;
+    uint64_t            fStatNoWorkDone;
+#endif
+
 protected:
-    queue_head_t    fWorkQueue;
-    Action          fWorkAction;
-    Action          fRetireAction;
+    queue_head_t        fWorkQueue;
+    Action              fWorkAction;
+    Action              fRetireAction;
+    uint32_t            fQueueLength;
+    uint32_t            fConsumerCount;
+    volatile uint32_t   fProducerCount;
 
     virtual bool checkForWork( void );
     virtual bool init( IOService * inOwner, Action work, Action retire );
+    bool    checkRequestQueue( queue_head_t * queue, bool * empty );
 
 public:
     static  IOPMWorkQueue * create( IOService * inOwner, Action work, Action retire );
-    void    queuePMRequest( IOPMRequest * request );
-
-    inline boolean_t isEmpty( void )
-    {
-        return queue_empty(&fWorkQueue);
-    }
+    bool    queuePMRequest( IOPMRequest * request, IOServicePM * pwrMgt );
+    void    signalWorkAvailable( void );
+    void    incrementProducerCount( void );
 };
+
+//******************************************************************************
+// IOPMCompletionQueue
+//******************************************************************************
 
 class IOPMCompletionQueue : public IOEventSource
 {
@@ -513,7 +668,7 @@ protected:
 
 public:
     static  IOPMCompletionQueue * create( IOService * inOwner, Action inAction );
-    void    queuePMRequest( IOPMRequest * request );
+    bool    queuePMRequest( IOPMRequest * request );
 };
 
 #endif /* !_IOKIT_IOSERVICEPMPRIVATE_H */

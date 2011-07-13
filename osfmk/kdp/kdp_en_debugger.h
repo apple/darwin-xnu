@@ -33,6 +33,7 @@
 typedef void (*kdp_send_t)(void * pkt, unsigned int pkt_len);
 typedef void (*kdp_receive_t)(void * pkt, unsigned int * pkt_len, 
 	      unsigned int timeout);
+
 void 
 kdp_register_send_receive(kdp_send_t send, kdp_receive_t receive);
 

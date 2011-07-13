@@ -75,6 +75,7 @@ const struct memory_object_pager_ops device_pager_ops = {
 	device_pager_synchronize,
 	device_pager_map,
 	device_pager_last_unmap,
+	NULL, /* data_reclaim */
 	"device pager"
 };
 
@@ -126,7 +127,7 @@ device_pager_bootstrap(void)
 	size = (vm_size_t) sizeof(struct device_pager);
 	device_pager_zone = zinit(size, (vm_size_t) MAX_DNODE*size,
 				PAGE_SIZE, "device node pager structures");
-
+	zone_change(device_pager_zone, Z_CALLERACCT, FALSE);
 	return;
 }
 

@@ -1,5 +1,5 @@
-CFLAGS	=-g -arch ppc -arch i386
-CFLAGS64=-g -arch ppc64 -arch x86_64
+CFLAGS	=-g -arch i386
+CFLAGS64=-g -arch x86_64
 
 TESTS =		\
 	sets	\

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -76,6 +76,7 @@
 
 #include <net/if.h>
 #include <net/route.h>
+#include <net/ntstat.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -105,6 +106,11 @@
 #include <netinet6/ipsec.h>
 #endif /*IPSEC*/
 
+void	tcp_fill_info(struct tcpcb *, struct tcp_info *);
+errno_t tcp_fill_info_for_info_tuple(struct info_tuple *, struct tcp_info *);
+
+int tcp_sysctl_info(struct sysctl_oid *, void *, int , struct sysctl_req *);
+
 /*
  * TCP protocol interface to socket abstraction.
  */
@@ -121,26 +127,26 @@ static struct tcpcb *
 		tcp_usrclosed(struct tcpcb *);
 
 __private_extern__ int	tcp_win_scale = 3;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, win_scale_factor, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, win_scale_factor, CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcp_win_scale, 0, "Window scaling factor");
 
 static u_int32_t tcps_in_sw_cksum;
-SYSCTL_UINT(_net_inet_tcp, OID_AUTO, in_sw_cksum, CTLFLAG_RD,
+SYSCTL_UINT(_net_inet_tcp, OID_AUTO, in_sw_cksum, CTLFLAG_RD | CTLFLAG_LOCKED,
     &tcps_in_sw_cksum, 0,
     "Number of received packets checksummed in software");
 
 static u_int64_t tcps_in_sw_cksum_bytes;
-SYSCTL_QUAD(_net_inet_tcp, OID_AUTO, in_sw_cksum_bytes, CTLFLAG_RD,
+SYSCTL_QUAD(_net_inet_tcp, OID_AUTO, in_sw_cksum_bytes, CTLFLAG_RD | CTLFLAG_LOCKED,
     &tcps_in_sw_cksum_bytes,
     "Amount of received data checksummed in software");
 
 static u_int32_t tcps_out_sw_cksum;
-SYSCTL_UINT(_net_inet_tcp, OID_AUTO, out_sw_cksum, CTLFLAG_RD,
+SYSCTL_UINT(_net_inet_tcp, OID_AUTO, out_sw_cksum, CTLFLAG_RD | CTLFLAG_LOCKED,
     &tcps_out_sw_cksum, 0,
     "Number of transmitted packets checksummed in software");
 
 static u_int64_t tcps_out_sw_cksum_bytes;
-SYSCTL_QUAD(_net_inet_tcp, OID_AUTO, out_sw_cksum_bytes, CTLFLAG_RD,
+SYSCTL_QUAD(_net_inet_tcp, OID_AUTO, out_sw_cksum_bytes, CTLFLAG_RD | CTLFLAG_LOCKED,
     &tcps_out_sw_cksum_bytes,
     "Amount of transmitted data checksummed in software");
 
@@ -160,8 +166,12 @@ __private_extern__ unsigned int	tcp_sockthreshold = 64;
 #else
 __private_extern__ unsigned int	tcp_sockthreshold = 0;
 #endif
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, sockthreshold, CTLFLAG_RW, 
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, sockthreshold, CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcp_sockthreshold , 0, "TCP Socket size increased if less than threshold");
+
+
+SYSCTL_PROC(_net_inet_tcp, OID_AUTO, info, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY,
+    0 , 0, tcp_sysctl_info, "S", "TCP info per tuple");
 
 /*
  * TCP attaches to socket via pru_attach(), reserving space,
@@ -186,7 +196,7 @@ tcp_usr_attach(struct socket *so, __unused int proto, struct proc *p)
 		error = EISCONN;
 		goto out;
 	}
-
+	
 	error = tcp_attach(so, p);
 	if (error)
 		goto out;
@@ -217,14 +227,15 @@ tcp_usr_detach(struct socket *so)
 	if (inp == 0 || (inp->inp_state == INPCB_STATE_DEAD)) {
 		return EINVAL;	/* XXX */
 	}
-#if 1
-	lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
-#endif
+	lck_mtx_assert(&((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
 	tp = intotcpcb(inp);
 	/* In case we got disconnected from the peer */
         if (tp == 0) 
 	    goto out;
 	TCPDEBUG1();
+
+	calculate_tcp_clock();
+
 	tp = tcp_disconnect(tp);
 out:
 	TCPDEBUG2(PRU_DETACH);
@@ -238,6 +249,7 @@ out:
 				     } \
 				     tp = intotcpcb(inp); \
 				     TCPDEBUG1(); \
+				     calculate_tcp_clock(); \
 		     } while(0)
 			     
 #define COMMON_END(req)	out: TCPDEBUG2(req); return error; goto out
@@ -415,6 +427,8 @@ tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	tp = intotcpcb(inp);
 	TCPDEBUG1();
 
+	calculate_tcp_clock();
+
 	if (nam->sa_family != 0 && nam->sa_family != AF_INET) {
 		error = EAFNOSUPPORT;
 		goto out;
@@ -505,9 +519,7 @@ tcp_usr_disconnect(struct socket *so)
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
 	
-#if 1
-	lck_mtx_assert(((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
-#endif
+	lck_mtx_assert(&((struct inpcb *)so->so_pcb)->inpcb_mtx, LCK_MTX_ASSERT_OWNED);
 	COMMON_START();
         /* In case we got disconnected from the peer */
         if (tp == 0)
@@ -529,6 +541,8 @@ tcp_usr_accept(struct socket *so, struct sockaddr **nam)
 	struct tcpcb *tp = NULL;
 	TCPDEBUG0;
 
+	in_setpeeraddr(so, nam);
+		
 	if (so->so_state & SS_ISDISCONNECTED) {
 		error = ECONNABORTED;
 		goto out;
@@ -538,7 +552,9 @@ tcp_usr_accept(struct socket *so, struct sockaddr **nam)
 	}
 	tp = intotcpcb(inp);
 	TCPDEBUG1();
-	in_setpeeraddr(so, nam);
+
+	calculate_tcp_clock();
+
 	COMMON_END(PRU_ACCEPT);
 }
 
@@ -560,6 +576,9 @@ tcp6_usr_accept(struct socket *so, struct sockaddr **nam)
 	}
 	tp = intotcpcb(inp);
 	TCPDEBUG1();
+
+	calculate_tcp_clock();
+
 	in6_mapped_peeraddr(so, nam);
 	COMMON_END(PRU_ACCEPT);
 }
@@ -681,6 +700,9 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 #endif /* INET6 */
 	tp = intotcpcb(inp);
 	TCPDEBUG1();
+
+	calculate_tcp_clock();
+
 	if (control) {
 		/* TCP doesn't do control messages (rights, creds, etc) */
 		if (control->m_len) {
@@ -878,10 +900,11 @@ tcp_connect(tp, nam, p)
 	struct socket *so = inp->inp_socket;
 	struct tcpcb *otp;
 	struct sockaddr_in *sin = (struct sockaddr_in *)nam;
-	struct sockaddr_in *ifaddr;
+	struct sockaddr_in ifaddr;
 	struct rmxp_tao *taop;
 	struct rmxp_tao tao_noncached;
 	int error;
+	unsigned int outif = 0;
 
 	if (inp->inp_lport == 0) {
 		error = in_pcbbind(inp, (struct sockaddr *)0, p);
@@ -894,7 +917,7 @@ tcp_connect(tp, nam, p)
 	 * earlier incarnation of this same connection still in
 	 * TIME_WAIT state, creating an ADDRINUSE error.
 	 */
-	error = in_pcbladdr(inp, nam, &ifaddr);
+	error = in_pcbladdr(inp, nam, &ifaddr, &outif);
 	if (error)
 		return error;
 
@@ -902,7 +925,7 @@ tcp_connect(tp, nam, p)
 	oinp = in_pcblookup_hash(inp->inp_pcbinfo,
 	    sin->sin_addr, sin->sin_port,
 	    inp->inp_laddr.s_addr != INADDR_ANY ? inp->inp_laddr
-						: ifaddr->sin_addr,
+						: ifaddr.sin_addr,
 	    inp->inp_lport,  0, NULL);
 
 	tcp_lock(inp->inp_socket, 0, 0);
@@ -917,7 +940,7 @@ tcp_connect(tp, nam, p)
 
 		if (oinp != inp && (otp = intotcpcb(oinp)) != NULL &&
 		otp->t_state == TCPS_TIME_WAIT &&
-		    otp->t_starttime < (u_int32_t)tcp_msl &&
+		    ((int)(tcp_now - otp->t_starttime)) < tcp_msl &&
 		    (otp->t_flags & TF_RCVD_CC))
 			otp = tcp_close(otp);
 		else {
@@ -930,7 +953,7 @@ tcp_connect(tp, nam, p)
 			tcp_unlock(oinp->inp_socket, 1, 0);
 	}
 skip_oinp:
-	if ((inp->inp_laddr.s_addr == INADDR_ANY ? ifaddr->sin_addr.s_addr :
+	if ((inp->inp_laddr.s_addr == INADDR_ANY ? ifaddr.sin_addr.s_addr :
 		 inp->inp_laddr.s_addr) == sin->sin_addr.s_addr &&
 	    inp->inp_lport == sin->sin_port)
 			return EINVAL;
@@ -940,8 +963,10 @@ skip_oinp:
 		lck_rw_lock_exclusive(inp->inp_pcbinfo->mtx);
 		socket_lock(inp->inp_socket, 0);
 	}
-	if (inp->inp_laddr.s_addr == INADDR_ANY)
-		inp->inp_laddr = ifaddr->sin_addr;
+	if (inp->inp_laddr.s_addr == INADDR_ANY) {
+		inp->inp_laddr = ifaddr.sin_addr;
+		inp->inp_last_outif = outif;
+	}
 	inp->inp_faddr = sin->sin_addr;
 	inp->inp_fport = sin->sin_port;
 	in_pcbrehash(inp);
@@ -968,9 +993,12 @@ skip_oinp:
 	soisconnecting(so);
 	tcpstat.tcps_connattempt++;
 	tp->t_state = TCPS_SYN_SENT;
-	tp->t_timer[TCPT_KEEP] = tp->t_keepinit ? tp->t_keepinit : tcp_keepinit;
+	tp->t_timer[TCPT_KEEP] = OFFSET_FROM_START(tp, 
+		tp->t_keepinit ? tp->t_keepinit : tcp_keepinit);
 	tp->iss = tcp_new_isn(tp);
 	tcp_sendseqinit(tp);
+	if (nstat_collect)
+		nstat_route_connect_attempt(inp->inp_route.ro_rt);
 
 	/*
 	 * Generate a CC value for this connection and
@@ -1008,6 +1036,7 @@ tcp6_connect(tp, nam, p)
 	struct rmxp_tao *taop;
 	struct rmxp_tao tao_noncached;
 	int error;
+	unsigned int outif = 0;
 
 	if (inp->inp_lport == 0) {
 		error = in6_pcbbind(inp, (struct sockaddr *)0, p);
@@ -1020,7 +1049,7 @@ tcp6_connect(tp, nam, p)
 	 * earlier incarnation of this same connection still in
 	 * TIME_WAIT state, creating an ADDRINUSE error.
 	 */
-	error = in6_pcbladdr(inp, nam, &addr6);
+	error = in6_pcbladdr(inp, nam, &addr6, &outif);
 	if (error)
 		return error;
 	tcp_unlock(inp->inp_socket, 0, 0);
@@ -1034,7 +1063,7 @@ tcp6_connect(tp, nam, p)
 	if (oinp) {
 		if (oinp != inp && (otp = intotcpcb(oinp)) != NULL &&
 		    otp->t_state == TCPS_TIME_WAIT &&
-		    otp->t_starttime < (u_int32_t)tcp_msl &&
+		    ((int)(tcp_now - otp->t_starttime)) < tcp_msl &&
 		    (otp->t_flags & TF_RCVD_CC))
 			otp = tcp_close(otp);
 		else
@@ -1046,8 +1075,10 @@ tcp6_connect(tp, nam, p)
 		lck_rw_lock_exclusive(inp->inp_pcbinfo->mtx);
 		socket_lock(inp->inp_socket, 0);
 	}
-	if (IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr))
+	if (IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)) {
 		inp->in6p_laddr = addr6;
+		inp->in6p_last_outif = outif;
+	}
 	inp->in6p_faddr = sin6->sin6_addr;
 	inp->inp_fport = sin6->sin6_port;
 	if ((sin6->sin6_flowinfo & IPV6_FLOWINFO_MASK) != 0)
@@ -1063,9 +1094,12 @@ tcp6_connect(tp, nam, p)
 	soisconnecting(so);
 	tcpstat.tcps_connattempt++;
 	tp->t_state = TCPS_SYN_SENT;
-	tp->t_timer[TCPT_KEEP] = tp->t_keepinit ? tp->t_keepinit : tcp_keepinit;
+	tp->t_timer[TCPT_KEEP] = OFFSET_FROM_START(tp, 
+		tp->t_keepinit ? tp->t_keepinit : tcp_keepinit);
 	tp->iss = tcp_new_isn(tp);
 	tcp_sendseqinit(tp);
+	if (nstat_collect)
+		nstat_route_connect_attempt(inp->inp_route.ro_rt);
 
 	/*
 	 * Generate a CC value for this connection and
@@ -1088,6 +1122,132 @@ tcp6_connect(tp, nam, p)
 	return 0;
 }
 #endif /* INET6 */
+
+/*
+ * Export TCP internal state information via a struct tcp_info
+ */
+__private_extern__ void
+tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
+{
+	bzero(ti, sizeof(*ti));
+
+	ti->tcpi_state = tp->t_state;
+	
+    if (tp->t_state > TCPS_LISTEN) {
+		if ((tp->t_flags & TF_REQ_TSTMP) && (tp->t_flags & TF_RCVD_TSTMP))
+			ti->tcpi_options |= TCPI_OPT_TIMESTAMPS;
+		if (tp->t_flags & TF_SACK_PERMIT)
+			ti->tcpi_options |= TCPI_OPT_SACK;
+		if ((tp->t_flags & TF_REQ_SCALE) && (tp->t_flags & TF_RCVD_SCALE)) {
+			ti->tcpi_options |= TCPI_OPT_WSCALE;
+			ti->tcpi_snd_wscale = tp->snd_scale;
+			ti->tcpi_rcv_wscale = tp->rcv_scale;
+		}
+		
+		ti->tcpi_snd_mss = tp->t_maxseg;
+		ti->tcpi_rcv_mss = tp->t_maxseg;
+
+		ti->tcpi_snd_ssthresh = tp->snd_ssthresh;
+		ti->tcpi_snd_cwnd = tp->snd_cwnd;
+	
+		ti->tcpi_rcv_space = tp->rcv_wnd;
+
+		ti->tcpi_snd_wnd = tp->snd_wnd;
+		ti->tcpi_snd_bwnd = tp->snd_bwnd;
+		ti->tcpi_snd_nxt = tp->snd_nxt;
+		ti->tcpi_rcv_nxt = tp->rcv_nxt;
+		
+		ti->tcpi_last_outif = tp->t_inpcb->inp_last_outif;
+	}
+}
+
+__private_extern__ errno_t
+tcp_fill_info_for_info_tuple(struct info_tuple *itpl, struct tcp_info *ti)
+{
+	struct inpcbinfo *pcbinfo = NULL;
+	struct inpcb *inp = NULL;
+	struct socket *so;
+	struct tcpcb *tp;
+	
+	if (itpl->itpl_proto == IPPROTO_TCP)
+		pcbinfo = &tcbinfo;
+	else
+		return EINVAL;
+	
+	if (itpl->itpl_local_sa.sa_family == AF_INET &&
+		itpl->itpl_remote_sa.sa_family == AF_INET) {
+		inp = in_pcblookup_hash(pcbinfo, 
+								itpl->itpl_remote_sin.sin_addr,
+								itpl->itpl_remote_sin.sin_port,
+								itpl->itpl_local_sin.sin_addr,
+								itpl->itpl_local_sin.sin_port,
+								0, NULL);
+	} else if (itpl->itpl_local_sa.sa_family == AF_INET6 &&
+		itpl->itpl_remote_sa.sa_family == AF_INET6) {
+		struct in6_addr ina6_local;
+		struct in6_addr ina6_remote;
+		
+		ina6_local = itpl->itpl_local_sin6.sin6_addr;
+		if (IN6_IS_SCOPE_LINKLOCAL(&ina6_local) && itpl->itpl_local_sin6.sin6_scope_id)
+			ina6_local.s6_addr16[1] = htons(itpl->itpl_local_sin6.sin6_scope_id);
+
+		ina6_remote = itpl->itpl_remote_sin6.sin6_addr;
+		if (IN6_IS_SCOPE_LINKLOCAL(&ina6_remote) && itpl->itpl_remote_sin6.sin6_scope_id)
+			ina6_remote.s6_addr16[1] = htons(itpl->itpl_remote_sin6.sin6_scope_id);
+		
+		inp = in6_pcblookup_hash(pcbinfo, 
+								&ina6_remote,
+								itpl->itpl_remote_sin6.sin6_port,
+								&ina6_local,
+								itpl->itpl_local_sin6.sin6_port,
+								0, NULL);
+	} else
+		return EINVAL;
+	if (inp == NULL || (so = inp->inp_socket) == NULL)
+		return ENOENT;
+
+	socket_lock(so, 0);
+	if (in_pcb_checkstate(inp, WNT_RELEASE, 1) == WNT_STOPUSING) {
+		socket_unlock(so, 0);
+		return ENOENT;
+	}
+	tp = intotcpcb(inp);
+
+	tcp_fill_info(tp, ti);
+	socket_unlock(so, 0);
+
+	return 0;
+}
+
+
+__private_extern__ int 
+tcp_sysctl_info(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	int error;
+	struct tcp_info ti;
+	struct info_tuple itpl;
+	
+	if (req->newptr == USER_ADDR_NULL) {
+		return EINVAL;
+	}
+	if (req->newlen < sizeof(struct info_tuple)) {
+		return EINVAL;
+	}
+	error = SYSCTL_IN(req, &itpl, sizeof(struct info_tuple));
+	if (error != 0) {
+		return error;
+	}
+	error = tcp_fill_info_for_info_tuple(&itpl, &ti);
+	if (error != 0) {
+		return error;
+	}
+	error = SYSCTL_OUT(req, &ti, sizeof(struct tcp_info));
+	if (error != 0) {
+		return error;
+	}
+	
+	return 0;
+}
 
 /*
  * The new sockopt interface makes it possible for us to block in the
@@ -1124,6 +1284,8 @@ tcp_ctloutput(so, sopt)
                 return (ECONNRESET);
         }
 
+	calculate_tcp_clock();
+
 	switch (sopt->sopt_dir) {
 	case SOPT_SET:
 		switch (sopt->sopt_name) {
@@ -1155,7 +1317,17 @@ tcp_ctloutput(so, sopt)
 			else
 				tp->t_flags &= ~opt;
 			break;
-
+		case TCP_RXT_FINDROP:
+			error = sooptcopyin(sopt, &optval, sizeof optval,
+				sizeof optval);
+			if (error)
+				break;
+			opt = TF_RXTFINDROP;
+			if (optval)
+				tp->t_flagsext |= opt;
+			else
+				tp->t_flagsext &= ~opt;
+			break;
 		case TCP_MAXSEG:
 			error = sooptcopyin(sopt, &optval, sizeof optval,
 					    sizeof optval);
@@ -1178,7 +1350,9 @@ tcp_ctloutput(so, sopt)
 				error = EINVAL;
 			else {
 				tp->t_keepidle = optval * TCP_RETRANSHZ;
-				tp->t_timer[TCPT_KEEP] = TCP_KEEPIDLE(tp); /* reset the timer to new value */
+				tp->t_timer[TCPT_KEEP] = OFFSET_FROM_START(tp, 
+					TCP_KEEPIDLE(tp)); /* reset the timer to new value */
+				tcp_check_timer_state(tp);
 			}
                         break;
 
@@ -1193,6 +1367,26 @@ tcp_ctloutput(so, sopt)
 				tp->t_keepinit = optval * TCP_RETRANSHZ;
 			break;
 		
+		case PERSIST_TIMEOUT:
+			error = sooptcopyin(sopt, &optval, sizeof optval,
+						sizeof optval);
+			if (error)
+				break;
+			if (optval < 0)
+				error = EINVAL;
+			else 
+				tp->t_persist_timeout = optval * TCP_RETRANSHZ;
+			break;
+		case TCP_RXT_CONNDROPTIME:
+			error = sooptcopyin(sopt, &optval, sizeof(optval),
+					sizeof(optval));
+			if (error)
+				break;
+			if (optval < 0)
+				error = EINVAL;
+			else
+				tp->rxt_conndroptime = optval * TCP_RETRANSHZ;
+			break;
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -1219,6 +1413,22 @@ tcp_ctloutput(so, sopt)
 		case TCP_CONNECTIONTIMEOUT:
 			optval = tp->t_keepinit / TCP_RETRANSHZ;
 			break;
+		case PERSIST_TIMEOUT:
+			optval = tp->t_persist_timeout / TCP_RETRANSHZ;
+			break;
+		case TCP_RXT_CONNDROPTIME:
+			optval = tp->rxt_conndroptime / TCP_RETRANSHZ;
+			break;
+		case TCP_RXT_FINDROP:
+			optval = tp->t_flagsext & TF_RXTFINDROP;
+			break; 
+		case TCP_INFO: {
+			struct tcp_info ti;
+
+			tcp_fill_info(tp, &ti);
+			error = sooptcopyout(sopt, &ti, sizeof(struct tcp_info));
+			goto done;
+		}
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -1227,6 +1437,7 @@ tcp_ctloutput(so, sopt)
 			error = sooptcopyout(sopt, &optval, sizeof optval);
 		break;
 	}
+done:
 	return (error);
 }
 
@@ -1272,9 +1483,9 @@ sysctl_tcp_sospace(struct sysctl_oid *oidp, __unused void *arg1,
 	return error;
 }
 
-SYSCTL_PROC(_net_inet_tcp, TCPCTL_SENDSPACE, sendspace, CTLTYPE_INT | CTLFLAG_RW, 
+SYSCTL_PROC(_net_inet_tcp, TCPCTL_SENDSPACE, sendspace, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcp_sendspace , 0, &sysctl_tcp_sospace, "IU", "Maximum outgoing TCP datagram size");
-SYSCTL_PROC(_net_inet_tcp, TCPCTL_RECVSPACE, recvspace, CTLTYPE_INT | CTLFLAG_RW, 
+SYSCTL_PROC(_net_inet_tcp, TCPCTL_RECVSPACE, recvspace, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcp_recvspace , 0, &sysctl_tcp_sospace, "IU", "Maximum incoming TCP datagram size");
 
 
@@ -1353,6 +1564,9 @@ tcp_attach(so, p)
 		so->so_state |= nofd;
 		return (ENOBUFS);
 	}
+	if (nstat_collect) {
+		nstat_tcp_new_pcb(inp);
+	}
 	tp->t_state = TCPS_CLOSED;
 	return (0);
 }
@@ -1425,7 +1639,7 @@ tcp_usrclosed(tp)
 		soisdisconnected(tp->t_inpcb->inp_socket);
 		/* To prevent the connection hanging in FIN_WAIT_2 forever. */
 		if (tp->t_state == TCPS_FIN_WAIT_2)
-			tp->t_timer[TCPT_2MSL] = tcp_maxidle;
+			tp->t_timer[TCPT_2MSL] = OFFSET_FROM_START(tp, tcp_maxidle);
 	}
 	return (tp);
 }

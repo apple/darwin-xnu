@@ -163,7 +163,7 @@ However, since the variable is too small to hold an
 .Vt off_t ,
 you should use
 .Xr lseek 2
-to get the directoy's current position instead of using this parameter.
+to get the directory's current position instead of using this parameter.
 The initial value of the variable is ignored.
 .Pp
 .
@@ -245,6 +245,16 @@ If you're implementing a volume format that supports
 .Fn getdirentriesattr ,
 you should be careful to support the behaviour specified by this document.
 .
+.Pp
+If the directory contains a mount point, then
+.Dv DIR_MNTSTATUS_MNTPOINT
+will be set in the
+.Dv ATTR_DIR_MOUNTSTATUS
+for that entry; all other attributes for that entry, however,
+will be for the underlying file system (as opposed to the mounted
+file system).
+.Xr getattrlist 2
+should be used to get the attributes for the mount point.
 .Sh ERRORS
 .Fn getdirentriesattr
 will fail if:
@@ -315,7 +325,8 @@ struct FInfoAttrBuf {
     attrreference_t name;
     fsobj_type_t    objType;
     char            finderInfo[32];
-};
+    u_int32_t       dirStatus;
+} __attribute__((aligned(4), packed));
 typedef struct FInfoAttrBuf FInfoAttrBuf;
 .Pp
 .
@@ -358,6 +369,7 @@ static int FInfoDemo(const char *dirPath)
     attrList.commonattr  =    ATTR_CMN_NAME 
                             | ATTR_CMN_OBJTYPE 
                             | ATTR_CMN_FNDRINFO;
+    attrList.dirattr     = ATTR_DIR_MOUNTSTATUS;
 .Pp
     
     err = 0;
@@ -411,7 +423,10 @@ static int FInfoDemo(const char *dirPath)
                             );
                             break;
                         case VDIR:
-                            printf("directory     ");
+                            if (thisEntry->dirStatus & DIR_MNTSTATUS_MNTPOINT)
+                                printf("mount-point   ");
+                            else
+                                printf("directory     ");
                             break;
                         default:
                             printf(
@@ -428,7 +443,7 @@ static int FInfoDemo(const char *dirPath)
 .Pp
                     // Advance to the next entry.
 .Pp
-                    ((char *) thisEntry) += thisEntry->length;
+                    thisEntry = (FInfoAttrBuf*)((char*)thisEntry + thisEntry->length);
                 }
             }
         } while ( err == 0 && ! done );

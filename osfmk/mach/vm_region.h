@@ -126,6 +126,7 @@ typedef struct vm_region_basic_info		 vm_region_basic_info_data_t;
 #define SM_TRUESHARED      5
 #define SM_PRIVATE_ALIASED 6
 #define SM_SHARED_ALIASED  7
+#define SM_LARGE_PAGE      8
 
 /* 
  * For submap info,  the SM flags above are overlayed when a submap
@@ -309,6 +310,7 @@ struct vm_page_info_basic {
 	vm_object_id_t		object_id;
 	memory_object_offset_t	offset;
 	int			depth;
+	int			__pad; /* pad to 64-bit boundary */
 };
 typedef struct vm_page_info_basic		*vm_page_info_basic_t;
 typedef struct vm_page_info_basic		vm_page_info_basic_data_t;

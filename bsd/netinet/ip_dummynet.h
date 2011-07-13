@@ -157,7 +157,7 @@ struct dn_pkt_tag {
 
     dn_key output_time;		/* when the pkt is due for delivery	*/
     struct ifnet *ifp;		/* interface, for ip_output		*/
-    struct sockaddr_in *dn_dst ;
+    struct sockaddr_in dn_dst ;
     struct route ro;		/* route, for ip_output. MUST COPY	*/
     int flags ;			/* flags, for ip_output (IPv6 ?)	*/
     struct ip_out_args ipoa;	/* output args, for ip_output. MUST COPY */

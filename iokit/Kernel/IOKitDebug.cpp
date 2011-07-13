@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -28,14 +28,14 @@
 
 #include <sys/sysctl.h>
 
+#include <libkern/c++/OSContainers.h>
+#include <libkern/c++/OSCPPDebug.h>
+
 #include <IOKit/IOKitDebug.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/assert.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOService.h>
-
-#include <libkern/c++/OSContainers.h>
-#include <libkern/c++/OSCPPDebug.h>
 
 #ifdef IOKITDEBUG
 #define DEBUG_INIT_VALUE IOKITDEBUG
@@ -44,12 +44,10 @@
 #endif
 
 SInt64		gIOKitDebug = DEBUG_INIT_VALUE;
-SInt64		gIOKitTrace = 0x3B;
-UInt64		gIOInterruptThresholdNS = 0;
+SInt64		gIOKitTrace = 0;
 
 SYSCTL_QUAD(_debug, OID_AUTO, iokit, CTLFLAG_RW | CTLFLAG_LOCKED, &gIOKitDebug, "boot_arg io");
 SYSCTL_QUAD(_debug, OID_AUTO, iotrace, CTLFLAG_RW | CTLFLAG_LOCKED, &gIOKitTrace, "trace io");
-SYSCTL_QUAD(_debug, OID_AUTO, iointthreshold, CTLFLAG_RW | CTLFLAG_LOCKED, &gIOInterruptThresholdNS, "io interrupt threshold");
 
 
 int 		debug_malloc_size;
@@ -100,7 +98,7 @@ void IOPrintPlane( const IORegistryPlane * plane )
     iter->release();
 }
 
-void dbugprintf(char *fmt, ...);
+void dbugprintf(const char *fmt, ...);
 void db_dumpiojunk( const IORegistryPlane * plane );
 
 void db_piokjunk(void) {

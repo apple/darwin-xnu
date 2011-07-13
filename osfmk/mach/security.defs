@@ -4,7 +4,7 @@
 subsystem
 #if	KERNEL_SERVER
 	  KernelServer
-#endif	KERNEL_SERVER
+#endif	/* KERNEL_SERVER */
 	  security 5200;
 
 #include <mach/std_types.defs>

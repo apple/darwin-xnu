@@ -1,6 +1,6 @@
 /*	$FreeBSD: src/sys/netinet6/ip6protosw.h,v 1.2.2.3 2001/07/03 11:01:54 ume Exp $	*/
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -122,7 +122,7 @@ struct pr_usrreqs;
  * argument type for the last arg of pr_ctlinput().
  * should be consulted only with AF_INET6 family.
  *
- * IPv6 ICMP IPv6 [exthdrs] finalhdr paylaod
+ * IPv6 ICMP IPv6 [exthdrs] finalhdr payload
  * ^    ^    ^              ^
  * |    |    ip6c_ip6       ip6c_off
  * |    ip6c_icmp6
@@ -157,7 +157,7 @@ struct ip6protosw {
 	short	pr_protocol;		/* protocol number */
         unsigned int pr_flags;          /* see below */
 /* protocol-protocol hooks */
-	int	(*pr_input)(struct mbuf **, int *);
+	int	(*pr_input)(struct mbuf **, int *, int);
 					/* input to protocol (from below) */
 	int	(*pr_output)(struct mbuf *m, struct socket *so,
 				     struct sockaddr_in6 *, struct mbuf *);
@@ -173,8 +173,12 @@ struct ip6protosw {
 
 /* utility hooks */
 	void	(*pr_init)(void);	/* initialization hook */
+#if __APPLE__
+	void	(*pr_unused)(void);	/* placeholder - fasttimo is removed */
+#else
 	void	(*pr_fasttimo)(void);
 					/* fast timeout (200ms) */
+#endif
 	void	(*pr_slowtimo)(void);
 					/* slow timeout (500ms) */
 	void	(*pr_drain)(void);

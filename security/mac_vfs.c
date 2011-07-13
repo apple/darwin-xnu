@@ -377,6 +377,21 @@ mac_vnode_notify_create(vfs_context_t ctx, struct mount *mp,
 	return (error);
 }
 
+void
+mac_vnode_notify_rename(vfs_context_t ctx, struct vnode *vp,
+    struct vnode *dvp, struct componentname *cnp)
+{
+	kauth_cred_t cred;
+
+	if (!mac_vnode_enforce ||
+		!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
+		return;
+
+	cred = vfs_context_ucred(ctx);
+	MAC_PERFORM(vnode_notify_rename, cred, vp, vp->v_label,
+	    dvp, dvp->v_label, cnp);
+}
+
 /*
  * Extended attribute 'name' was updated via
  * vn_setxattr() or vn_removexattr().  Allow the
@@ -425,12 +440,13 @@ mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t new, struct vnode *
 {
 	kauth_cred_t cred;
 	int disjoint = 0;
+	posix_cred_t pcred = posix_cred_get(new);
 
 	if (!mac_proc_enforce && !mac_vnode_enforce)
 		return disjoint;
 
 	/* mark the new cred to indicate "matching" includes the label */
-	new->cr_flags |= CRF_MAC_ENFORCE;
+	pcred->cr_flags |= CRF_MAC_ENFORCE;
 
 	cred = vfs_context_ucred(ctx);
 	MAC_PERFORM(cred_label_update_execve, cred, new, vp, vp->v_label,
@@ -639,6 +655,21 @@ mac_vnode_check_exec(vfs_context_t ctx, struct vnode *vp,
 		  (imgp != NULL) ? imgp->ip_execlabelp : NULL, 
 		  (imgp != NULL) ? &imgp->ip_ndp->ni_cnd : NULL,
 		  (imgp != NULL) ? &imgp->ip_csflags : NULL);
+	return (error);
+}
+
+int
+mac_vnode_check_fsgetpath(vfs_context_t ctx, struct vnode *vp)
+{
+	kauth_cred_t cred;
+	int error;
+
+	if (!mac_vnode_enforce ||
+		!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
+		return (0);
+
+	cred = vfs_context_ucred(ctx);
+	MAC_CHECK(vnode_check_fsgetpath, cred, vp, vp->v_label);
 	return (error);
 }
 
@@ -896,6 +927,21 @@ mac_vnode_check_revoke(vfs_context_t ctx, struct vnode *vp)
 
 	cred = vfs_context_ucred(ctx);
 	MAC_CHECK(vnode_check_revoke, cred, vp, vp->v_label);
+	return (error);
+}
+
+int
+mac_vnode_check_searchfs(vfs_context_t ctx, struct vnode *vp, struct attrlist *alist)
+{
+	kauth_cred_t cred;
+	int error;
+
+	if (!mac_vnode_enforce || 
+		!mac_context_check_enforce(ctx, MAC_VNODE_ENFORCE))
+		return (0);
+
+	cred = vfs_context_ucred(ctx);
+	MAC_CHECK(vnode_check_searchfs, cred, vp, vp->v_label, alist);
 	return (error);
 }
 

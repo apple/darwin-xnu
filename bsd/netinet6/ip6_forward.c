@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -84,6 +84,7 @@
 #include <netinet6/ip6_var.h>
 #include <netinet/icmp6.h>
 #include <netinet6/nd6.h>
+#include <netinet6/scope6_var.h>
 
 #include <netinet/in_pcb.h>
 
@@ -95,7 +96,6 @@
 #include <netkey/key.h>
 extern int ipsec_bypass;
 #endif /* IPSEC */
-extern lck_mtx_t *ip6_mutex;
 
 #include <netinet6/ip6_fw.h>
 
@@ -120,7 +120,7 @@ extern lck_mtx_t *ip6_mutex;
 
 void
 ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
-    int srcrt, int locked)
+    int srcrt)
 {
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
 	struct sockaddr_in6 *dst;
@@ -128,14 +128,24 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	int error, type = 0, code = 0;
 	struct mbuf *mcopy = NULL;
 	struct ifnet *ifp, *origifp;	/* maybe unnecessary */
+	u_int32_t inzone, outzone;
+	struct in6_addr src_in6, dst_in6;
 #if IPSEC
 	struct secpolicy *sp = NULL;
 #endif
 	struct timeval timenow;
 	int	tunneledv4 = 0;
+	unsigned int ifscope = IFSCOPE_NONE;
+#if PF
+	struct pf_mtag *pf_mtag;
+#endif /* PF */
 
 	getmicrotime(&timenow);
-
+#if PF
+	pf_mtag = pf_find_mtag(m);
+	if (pf_mtag != NULL && pf_mtag->rtableid != IFSCOPE_NONE)
+		ifscope = pf_mtag->rtableid;
+#endif /* PF */
 
 #if IPSEC
 	/*
@@ -181,12 +191,8 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 
 	if (ip6->ip6_hlim <= IPV6_HLIMDEC) {
 		/* XXX in6_ifstat_inc(rt->rt_ifp, ifs6_in_discard) */
-		if (locked)
-			lck_mtx_unlock(ip6_mutex);
 		icmp6_error(m, ICMP6_TIME_EXCEEDED,
 				ICMP6_TIME_EXCEED_TRANSIT, 0);
-		if (locked)
-			lck_mtx_lock(ip6_mutex);
 		return;
 	}
 	ip6->ip6_hlim -= IPV6_HLIMDEC;
@@ -293,11 +299,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	state.ro = NULL;	/* update at ipsec6_output_tunnel() */
 	state.dst = NULL;	/* update at ipsec6_output_tunnel() */
 
-	if (locked)
-		lck_mtx_unlock(ip6_mutex);
 	error = ipsec6_output_tunnel(&state, sp, 0, &tunneledv4);
-	if (locked)
-		lck_mtx_lock(ip6_mutex);
 	key_freesp(sp, KEY_SADB_UNLOCKED);
 	if (tunneledv4)
 		return;  /* packet is gone - sent over IPv4 */
@@ -334,15 +336,6 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
     skip_ipsec:
 #endif /* IPSEC */
 
-	/*
-	 * If "locked", ip6forward_rt points to the globally defined
-	 * struct route cache which requires ip6_mutex, e.g. when this
-	 * is called from ip6_input().  Else the caller is responsible
-	 * for the struct route and its serialization (if needed), e.g.
-	 * when this is called from ip6_rthdr0().
-	 */
-	if (locked)
-		lck_mtx_assert(ip6_mutex, LCK_MTX_ASSERT_OWNED);
 	dst = (struct sockaddr_in6 *)&ip6forward_rt->ro_dst;
 	if ((rt = ip6forward_rt->ro_rt) != NULL) {
 		RT_LOCK(rt);
@@ -364,8 +357,8 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 				ip6forward_rt->ro_rt = NULL;
 			}
 			/* this probably fails but give it a try again */
-			rtalloc_ign((struct route *)ip6forward_rt,
-			    RTF_PRCLONING);
+			rtalloc_scoped_ign((struct route *)ip6forward_rt,
+			    RTF_PRCLONING, ifscope);
 			if ((rt = ip6forward_rt->ro_rt) != NULL) {
 				RT_LOCK(rt);
 				/* Take an extra ref for ourselves */
@@ -376,14 +369,9 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		if (rt == NULL) {
 			ip6stat.ip6s_noroute++;
 			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_noroute);
-			if (mcopy) {
-				if (locked)
-					lck_mtx_unlock(ip6_mutex);
+			if (mcopy)
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
 					    ICMP6_DST_UNREACH_NOROUTE, 0);
-				if (locked)
-					lck_mtx_lock(ip6_mutex);
-			}
 			m_freem(m);
 			return;
 		}
@@ -403,18 +391,14 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		dst->sin6_family = AF_INET6;
 		dst->sin6_addr = ip6->ip6_dst;
 
-		rtalloc_ign((struct route *)ip6forward_rt, RTF_PRCLONING);
+		rtalloc_scoped_ign((struct route *)ip6forward_rt,
+		    RTF_PRCLONING, ifscope);
 		if ((rt = ip6forward_rt->ro_rt) == NULL) {
 			ip6stat.ip6s_noroute++;
 			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_noroute);
-			if (mcopy) {
-				if (locked)
-					lck_mtx_unlock(ip6_mutex);
+			if (mcopy)
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_NOROUTE, 0);
-				if (locked)
-					lck_mtx_lock(ip6_mutex);
-			}
 			m_freem(m);
 			return;
 		}
@@ -424,14 +408,29 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	}
 
 	/*
-	 * Scope check: if a packet can't be delivered to its destination
-	 * for the reason that the destination is beyond the scope of the
-	 * source address, discard the packet and return an icmp6 destination
-	 * unreachable error with Code 2 (beyond scope of source address).
-	 * [draft-ietf-ipngwg-icmp-v3-02.txt, Section 3.1]
+	 * Source scope check: if a packet can't be delivered to its
+	 * destination for the reason that the destination is beyond the scope
+	 * of the source address, discard the packet and return an icmp6
+	 * destination unreachable error with Code 2 (beyond scope of source
+	 * address).  We use a local copy of ip6_src, since in6_setscope()
+	 * will possibly modify its first argument.
+	 * [draft-ietf-ipngwg-icmp-v3-04.txt, Section 3.1]
 	 */
-	if (in6_addr2scopeid(m->m_pkthdr.rcvif, &ip6->ip6_src) !=
-	    in6_addr2scopeid(rt->rt_ifp, &ip6->ip6_src)) {
+	src_in6 = ip6->ip6_src;
+	if (in6_setscope(&src_in6, rt->rt_ifp, &outzone)) {
+		/* XXX: this should not happen */
+		ip6stat.ip6s_cantforward++;
+		ip6stat.ip6s_badscope++;
+		m_freem(m);
+		return;
+	}
+	if (in6_setscope(&src_in6, m->m_pkthdr.rcvif, &inzone)) {
+		ip6stat.ip6s_cantforward++;
+		ip6stat.ip6s_badscope++;
+		m_freem(m);
+		return;
+	}
+	if (inzone != outzone) {
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
 		in6_ifstat_inc(rt->rt_ifp, ifs6_in_discard);
@@ -450,13 +449,26 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 		RT_REMREF_LOCKED(rt);
 		RT_UNLOCK(rt);
 		if (mcopy) {
-			if (locked)
-				lck_mtx_unlock(ip6_mutex);
 			icmp6_error(mcopy, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_BEYONDSCOPE, 0);
-			if (locked)
-				lck_mtx_lock(ip6_mutex);
 		}
+		m_freem(m);
+		return;
+	}
+
+	/*
+	 * Destination scope check: if a packet is going to break the scope
+	 * zone of packet's destination address, discard it.  This case should
+	 * usually be prevented by appropriately-configured routing table, but
+	 * we need an explicit check because we may mistakenly forward the
+	 * packet to a different zone by (e.g.) a default route.
+	 */
+	dst_in6 = ip6->ip6_dst;
+	if (in6_setscope(&dst_in6, m->m_pkthdr.rcvif, &inzone) != 0 ||
+	    in6_setscope(&dst_in6, rt->rt_ifp, &outzone) != 0 ||
+	    inzone != outzone) {
+		ip6stat.ip6s_cantforward++;
+		ip6stat.ip6s_badscope++;
 		m_freem(m);
 		return;
 	}
@@ -475,7 +487,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 #if IPSEC
 			/*
 			 * When we do IPsec tunnel ingress, we need to play
-			 * with if_mtu value (decrement IPsec header size
+			 * with the link value (decrement IPsec header size
 			 * from mtu value).  The code is much simpler than v4
 			 * case, as we have the outgoing interface for
 			 * encapsulated packet as "rt->rt_ifp".
@@ -499,11 +511,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			/* Release extra ref */
 			RT_REMREF_LOCKED(rt);
 			RT_UNLOCK(rt);
-			if (locked)
-				lck_mtx_unlock(ip6_mutex);
 			icmp6_error(mcopy, ICMP6_PACKET_TOO_BIG, 0, mtu);
-			if (locked)
-				lck_mtx_lock(ip6_mutex);
 		} else {
 			/* Release extra ref */
 			RT_REMREF_LOCKED(rt);
@@ -525,7 +533,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	 * Also, don't send redirect if forwarding using a route
 	 * modified by a redirect.
 	 */
-	if (rt->rt_ifp == m->m_pkthdr.rcvif && !srcrt &&
+	if (ip6_sendredirects && rt->rt_ifp == m->m_pkthdr.rcvif && !srcrt &&
 	    (rt->rt_flags & (RTF_DYNAMIC|RTF_MODIFIED)) == 0) {
 		if ((rt->rt_ifp->if_flags & IFF_POINTOPOINT) != 0) {
 			/*
@@ -540,12 +548,8 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			 */
 			RT_REMREF_LOCKED(rt);	/* Release extra ref */
 			RT_UNLOCK(rt);
-			if (locked)
-				lck_mtx_unlock(ip6_mutex);
 			icmp6_error(mcopy, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_ADDR, 0);
-			if (locked)
-				lck_mtx_lock(ip6_mutex);
 			m_freem(m);
 			return;
 		}
@@ -611,28 +615,20 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	}
 	else
 		origifp = rt->rt_ifp;
-#ifndef SCOPEDROUTING
 	/*
 	 * clear embedded scope identifiers if necessary.
 	 * in6_clearscope will touch the addresses only when necessary.
 	 */
 	in6_clearscope(&ip6->ip6_src);
 	in6_clearscope(&ip6->ip6_dst);
-#endif
 
 	ifp = rt->rt_ifp;
 	/* Drop the lock but retain the extra ref */
 	RT_UNLOCK(rt);
 
 #if PF
-	if (locked)
-		lck_mtx_unlock(ip6_mutex);
-
 	/* Invoke outbound packet filter */
 	error = pf_af_hook(ifp, NULL, &m, AF_INET6, FALSE);
-
-	if (locked)
-		lck_mtx_lock(ip6_mutex);
 
 	if (error) {
 		if (m != NULL) {
@@ -645,7 +641,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	ip6 = mtod(m, struct ip6_hdr *);
 #endif /* PF */
 
-	error = nd6_output(ifp, origifp, m, dst, rt, locked);
+	error = nd6_output(ifp, origifp, m, dst, rt);
 	if (error) {
 		in6_ifstat_inc(ifp, ifs6_out_discard);
 		ip6stat.ip6s_cantforward++;
@@ -697,11 +693,7 @@ senderr:
 		code = ICMP6_DST_UNREACH_ADDR;
 		break;
 	}
-	if (locked)
-		lck_mtx_unlock(ip6_mutex);
 	icmp6_error(mcopy, type, code, 0);
-	if (locked)
-		lck_mtx_lock(ip6_mutex);
 	/* Release extra ref */
 	RT_REMREF(rt);
 	return;

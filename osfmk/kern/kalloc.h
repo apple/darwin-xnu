@@ -88,14 +88,18 @@ extern void		krealloc(void		**addrp,
 				 vm_size_t	new_size,
 				 simple_lock_t	lock);
 
+extern void		kalloc_fake_zone_init( int );
+
 extern void		kalloc_fake_zone_info(
 				int		*count,
 				vm_size_t	*cur_size,
 				vm_size_t	*max_size,
 				vm_size_t	*elem_size,
 				vm_size_t	*alloc_size,
+				uint64_t	*sum_size,
 				int		*collectable,
-				int		*exhaustable);
+				int		*exhaustable,
+				int		*caller_acct);
 
 extern vm_size_t kalloc_max_prerounded;
 extern vm_size_t kalloc_large_total;

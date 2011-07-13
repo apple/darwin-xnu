@@ -110,6 +110,15 @@ typedef struct pset_node		*pset_node_t;
 typedef struct affinity_set		*affinity_set_t;
 #define AFFINITY_SET_NULL		((affinity_set_t) 0)
 
+typedef struct run_queue               *run_queue_t;
+#define RUN_QUEUE_NULL                 ((run_queue_t) 0)
+
+typedef struct grrr_run_queue               *grrr_run_queue_t;
+#define GRRR_RUN_QUEUE_NULL                 ((grrr_run_queue_t) 0)
+
+typedef struct grrr_group					*grrr_group_t;
+#define GRRR_GROUP_NULL						((grrr_group_t) 0)
+
 #else	/* MACH_KERNEL_PRIVATE */
 
 struct wait_queue_set ;

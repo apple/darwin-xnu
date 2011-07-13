@@ -36,7 +36,7 @@
  *	Definitions of error strings for original IPC
  */
 
-static const char * err_codes_send[] = {
+static const char * const err_codes_send[] = {
 	"(ipc/send) unknown error",		/* -100 */
 	"(ipc/send) invalid memory",		/* -101 */
 	"(ipc/send) invalid port",		/* -102 */
@@ -51,7 +51,7 @@ static const char * err_codes_send[] = {
 	"(ipc/send) message size changed while being copied",	/* -111 */
 };
 
-static const char * err_codes_rcv[] = {
+static const char * const err_codes_rcv[] = {
 	"(ipc/rcv) unknown error",			/* -200 */
 	"(ipc/rcv) invalid memory",			/* -201 */
 	"(ipc/rcv) invalid port",			/* -202 */
@@ -63,7 +63,7 @@ static const char * err_codes_rcv[] = {
 	"(ipc/rcv) port receiver changed or port became enabled", /* -208 */
 };
 
-static const char 	* err_codes_mig[] = {
+static const char * const err_codes_mig[] = {
 	"(ipc/mig) type check failure in message interface",	/* 0 (-300) */
 	"(ipc/mig) wrong return message ID",			/* 1 */
 	"(ipc/mig) server detected error",			/* 2 */

@@ -187,7 +187,7 @@ MACRO_END
 
 #define VCPUTC_LOCK_LOCK()				\
 MACRO_BEGIN						\
-	if (!hw_lock_to(&vcputc_lock, LockTimeOut*10))	\
+	if (!hw_lock_to(&vcputc_lock, hwLockTimeOut*10))\
 	{						\
 		panic("VCPUTC_LOCK_LOCK");		\
 	}						\
@@ -1274,7 +1274,7 @@ gc_update_color(int color, boolean_t fore)
 void
 vcputc(__unused int l, __unused int u, int c)
 {
-	if ( gc_enabled || debug_mode )
+	if ( gc_initialized && ( gc_enabled || debug_mode ) )
 	{
 		spl_t s;
 
@@ -2444,7 +2444,7 @@ initialize_screen(PE_Video * boot_vinfo, unsigned int op)
 
 #if defined(__x86_64__)
 		// Adjust the video buffer pointer to point to where it is in high virtual (above the hole)
-		new_vinfo.v_baseaddr |= VM_MIN_KERNEL_ADDRESS;
+		new_vinfo.v_baseaddr |= (VM_MIN_KERNEL_ADDRESS & ~LOW_4GB_MASK);
 #endif
 
 		/* Update the vinfo structure atomically with respect to the vc_progress task if running */
@@ -2632,6 +2632,10 @@ vcattach(void)
 
 		for ( index = 0 ; index < msgbufp->msg_bufx ; index++ )
 		{
+			if (msgbufp->msg_bufc[index] == '\0') {
+				continue;
+			}
+
 			vcputc( 0, 0, msgbufp->msg_bufc[index] );
 
 			if ( msgbufp->msg_bufc[index] == '\n' )

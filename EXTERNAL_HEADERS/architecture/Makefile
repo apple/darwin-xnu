@@ -9,9 +9,6 @@ include $(MakeInc_def)
 
 INSTINC_SUBDIRS =
 
-INSTINC_SUBDIRS_PPC = 	\
-	ppc
-
 INSTINC_SUBDIRS_I386 =	\
 	i386
 
@@ -20,6 +17,7 @@ INSTINC_SUBDIRS_X86_64 =	\
 
 INSTINC_SUBDIRS_ARM =	\
 	arm
+
 
 EXPORT_FILES = 
 

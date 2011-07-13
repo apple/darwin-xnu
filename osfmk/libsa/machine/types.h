@@ -28,9 +28,7 @@
 #ifndef _MACH_MACHINE_TYPES_H
 #define _MACH_MACHINE_TYPES_H
 
-#if defined (__ppc__)
-#include "libsa/ppc/types.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "libsa/i386/types.h"
 #else
 #error architecture not supported

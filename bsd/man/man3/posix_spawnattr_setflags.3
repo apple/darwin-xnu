@@ -1,5 +1,5 @@
 .\"
-.\" Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+.\" Copyright (c) 2000-2010 Apple Inc. All rights reserved.
 .\"
 .\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
 .\" 
@@ -27,7 +27,7 @@
 .\"
 .\"     @(#)posix_spawnattr_setflags.3
 .
-.Dd August 22, 2007
+.Dd October 28, 2010
 .Dt POSIX_SPAWNATTR_SETFLAGS 3
 .Os "Mac OS X"
 .Sh NAME
@@ -119,6 +119,13 @@ manipulate the process before it begins execution in user space.  This
 permits, for example, obtaining exact instruction counts, or debugging
 very early in
 .Xr dyld 1 .
+.It Dv POSIX_SPAWN_CLOEXEC_DEFAULT
+.Em Apple Extension :
+If this bit is set, then only file descriptors explicitly described by the
+.Fa file_actions
+argument are available in the spawned process; all
+of the other file descriptors are
+automatically closed in the spawned process.
 .El
 .Sh RETURN VALUES
 On success, these functions return 0; on failure they return an error
@@ -154,6 +161,7 @@ is invalid.
 .Xr posix_spawnattr_setpgroup 3 ,
 .Xr posix_spawnattr_setsigdefault 3 ,
 .Xr posix_spawnattr_setsigmask 3 ,
+.Xr posix_spawn_file_actions_init 3 ,
 .Xr setpgid 2 ,
 .Xr execve 2 ,
 .Xr dyld 1

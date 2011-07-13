@@ -80,7 +80,7 @@ extern int thread_max, task_threadmax, task_max;
 				+ 40000)		/* slop for objects */
 					/* Number of ports, system-wide */
 
-#define SET_MAX		(task_max + thread_max + 200)
+#define SET_MAX		(task_max + (thread_max * 2) + 200)
 					/* Max number of port sets */
 
 #define	ITE_MAX		(1 << 16)	/* Max number of splay tree entries */

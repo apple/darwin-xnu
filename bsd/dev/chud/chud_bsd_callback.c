@@ -36,15 +36,10 @@
 #include <sys/systm.h> /* struct sysent */
 #include <sys/sysproto.h>
 #include <sys/kdebug.h>	/* KDEBUG_ENABLE_CHUD */
+#include <sys/kauth.h> /* kauth_cred_get */
 #include <libkern/OSAtomic.h>
-
-#ifdef __ppc__
-#include <ppc/savearea.h>
-
-#define FM_ARG0				0x38ULL	// offset from r1 to first argument
-#define SPILLED_WORD_COUNT	7		// number of 32-bit words spilled to the stack
-
-extern struct savearea * find_user_regs( thread_t act);
+#if CONFIG_MACF
+#include <security/mac_framework.h> /* mac_system_check_chud */
 #endif
 
 #pragma mark **** kern debug ****
@@ -87,8 +82,6 @@ chudxnu_kdebug_callback_enter(chudxnu_kdebug_callback_func_t func)
 		(void * volatile *)&kdebug_callback_fn)) {
 		
 		kdbg_control_chud(TRUE, (void *)chudxnu_private_kdebug_callback);
-		OSBitOrAtomic((UInt32)KDEBUG_ENABLE_CHUD, (volatile UInt32 *)&kdebug_enable);
-		
 		return KERN_SUCCESS;
 	}
 	return KERN_FAILURE;
@@ -97,7 +90,6 @@ chudxnu_kdebug_callback_enter(chudxnu_kdebug_callback_func_t func)
 __private_extern__ kern_return_t
 chudxnu_kdebug_callback_cancel(void)
 {
-	OSBitAndAtomic((UInt32)~(KDEBUG_ENABLE_CHUD), (volatile UInt32 *)&kdebug_enable);
 	kdbg_control_chud(FALSE, NULL);
 
 	chudxnu_kdebug_callback_func_t old = kdebug_callback_fn;
@@ -175,40 +167,18 @@ static kern_return_t chud_null_syscall(uint64_t code __unused,
 int
 chud(__unused proc_t p, struct chud_args *uap, int32_t *retval)
 {
+#if CONFIG_MACF
+	int error = mac_system_check_chud(kauth_cred_get());
+	if (error)
+		return error;
+#endif
+
     chudxnu_syscall_callback_func_t fn = syscall_callback_fn;
     
 	if(!fn) {
 		return EINVAL;
 	}
 
-#ifdef __ppc__
-	// ppc32 user land spills 2.5 64-bit args (5 x 32-bit) to the stack
-	// here we have to copy them out.  r1 is the stack pointer in this world.
-	// the offset is calculated according to the PPC32 ABI
-	// Important: this only happens for 32-bit user threads
-
-	if(!IS_64BIT_PROCESS(p)) {
-		struct savearea *regs = find_user_regs(current_thread());
-		if(!regs) {
-			return EINVAL;
-		}
-
-		// %r1 is the stack pointer on ppc32
-		uint32_t stackPointer = regs->save_r1;
-
-		// calculate number of bytes spilled to the stack
-		uint32_t spilledSize = sizeof(struct chud_args) - (sizeof(uint32_t) * SPILLED_WORD_COUNT);
-
-		// obtain offset to arguments spilled onto user-thread stack
-		user_addr_t incomingAddr = (user_addr_t)stackPointer + FM_ARG0;
-
-		// destination is halfway through arg3
-		uint8_t *dstAddr = (uint8_t*)(&(uap->arg3)) + sizeof(uint32_t);
-		
-		copyin(incomingAddr, dstAddr, spilledSize);
-	}
-#endif
-	
 	*retval = fn(uap->code, uap->arg1, uap->arg2, uap->arg3, uap->arg4, uap->arg5);
 		
 	return 0;

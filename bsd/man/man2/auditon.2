@@ -243,6 +243,15 @@ structure with the
 field set to the maximum audit log file size.
 A value of 0
 indicates no limit to the size.
+.It Dv A_SETSFLAGS
+Set the audit sessions flags for the current session.
+The
+.Fa data
+argument must point to an
+.Vt au_asflgs_t
+value containing the new audit session flags.
+Audit session flags may be updated only according to local
+access control policy.
 .It Dv A_GETCLASS
 Return the event to class mapping for the designated audit event.
 The
@@ -376,6 +385,13 @@ The
 .Va af_currsz
 field
 will be set to the current audit log file size.
+.It Dv A_GETSFLAGS
+Returns the audit session flags for the current session.
+The
+.Fa data
+argument must point to an
+.Vt au_asflgs_t
+value which will be set with the current session flags.
 .It Dv A_GETCWD
 .\" [COMMENTED OUT]: Valid description, not yet implemented.
 .\" Return the current working directory as stored in the audit subsystem.

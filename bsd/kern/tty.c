@@ -1498,6 +1498,8 @@ out:
 int
 ttyselect(struct tty *tp, int rw, void *wql, proc_t p)
 {
+	int retval = 0;
+
 	if (tp == NULL)
 		return (ENXIO);
 
@@ -1505,20 +1507,32 @@ ttyselect(struct tty *tp, int rw, void *wql, proc_t p)
 
 	switch (rw) {
 	case FREAD:
-		if (ttnread(tp) > 0 || ISSET(tp->t_state, TS_ZOMBIE))
+		if (ISSET(tp->t_state, TS_ZOMBIE)) {
 			return(1);
+		}
+
+		retval = ttnread(tp);
+		if (retval > 0) {
+			break;
+		}
+
 		selrecord(p, &tp->t_rsel, wql);
 		break;
 	case FWRITE:
-		if ((tp->t_outq.c_cc <= tp->t_lowat &&
-		     ISSET(tp->t_state, TS_CONNECTED))
-		    || ISSET(tp->t_state, TS_ZOMBIE)) {
-			return (1);
+		if (ISSET(tp->t_state, TS_ZOMBIE)) {
+			return(1);
 		}
+
+		if ((tp->t_outq.c_cc <= tp->t_lowat) &&
+				ISSET(tp->t_state, TS_CONNECTED)) {
+			retval = tp->t_hiwat - tp->t_outq.c_cc;
+			break;
+		}
+
 		selrecord(p, &tp->t_wsel, wql);
 		break;
 	}
-	return (0);
+	return retval;
 }
 
 
@@ -3039,6 +3053,12 @@ void
 ttyfree(struct tty *tp)
 {
 	TTY_LOCK_NOTOWNED(tp);	/* debug assert */
+
+#if DEBUG
+	if (!(SLIST_EMPTY(&tp->t_rsel.si_note) && SLIST_EMPTY(&tp->t_wsel.si_note))) {
+		panic("knotes hooked into a tty when the tty is freed.\n");
+	}
+#endif /* DEBUG */
 
 	clfree(&tp->t_rawq);
 	clfree(&tp->t_canq);

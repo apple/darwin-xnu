@@ -95,6 +95,40 @@
 #define	kDIRootImageResultKey		"di-root-image-result"
 #define	kDIRootImageDevNameKey		"di-root-image-devname"
 #define	kDIRootImageDevTKey			"di-root-image-devt"
+#define kDIRootRamFileKey           "di-root-ram-file"
+
+static IOService *
+di_load_controller( void )
+{
+	OSIterator *	controllerIterator 	= 0;
+	OSDictionary *	matchDictionary 	= 0;
+	IOService *     controller			= 0;
+
+    do {
+        IOService::getResourceService()->publishResource("com.apple.AppleDiskImageController.load", kOSBooleanTrue);
+        IOService::getResourceService()->waitQuiet();
+
+        // first find IOHDIXController
+        matchDictionary = IOService::serviceMatching(kIOHDIXControllerClassName);
+        if (!matchDictionary)
+            break;
+
+        controllerIterator = IOService::getMatchingServices(matchDictionary);
+        if (!controllerIterator)
+            break;
+
+        controller = OSDynamicCast(IOService, controllerIterator->getNextObject());
+        if (!controller)
+            break;
+
+        controller->retain();
+    } while (false);
+
+	if (matchDictionary)	matchDictionary->release();
+	if (controllerIterator)	controllerIterator->release();
+
+    return controller;
+}
 
 extern "C" {
 /*
@@ -108,8 +142,6 @@ extern "C" {
 int di_root_image(const char *path, char devname[], dev_t *dev_p)
 {
 	IOReturn			res 				= 0;
-	OSIterator		*	controllerIterator 	= 0;
-	OSDictionary 	*	matchDictionary 	= 0;
 	IOService		*	controller			= 0;
 	OSString		*	pathString			= 0;
 	OSNumber		*	myResult			= 0;
@@ -124,24 +156,7 @@ int di_root_image(const char *path, char devname[], dev_t *dev_p)
 	if (!devname) 		return kIOReturnBadArgument;
 	if (!dev_p) 		return kIOReturnBadArgument;
 
-	(void)IOService::getResourceService()->publishResource("com.apple.AppleDiskImageController.load", kOSBooleanTrue);
-	IOService::getResourceService()->waitQuiet();
-
-	// first find IOHDIXController
-	matchDictionary = IOService::serviceMatching(kIOHDIXControllerClassName);
-	if (!matchDictionary) {
-		res = kIOReturnNoMemory;
-		goto serviceMatching_FAILED;
-	}
-	
-	controllerIterator = IOService::getMatchingServices(matchDictionary);
-	if (!controllerIterator) {
-		res = kIOReturnNoMemory;
-		goto getMatchingServices_FAILED;
-	}
-
-	// use the "setProperty" method of IOHDIXController to trigger the desired behaviour
-	controller = OSDynamicCast(IOService, controllerIterator->getNextObject());
+    controller = di_load_controller();
 	if (!controller) {
 		res = kIOReturnNotFound;
 		goto NoIOHDIXController;
@@ -191,16 +206,85 @@ int di_root_image(const char *path, char devname[], dev_t *dev_p)
 
 di_root_image_FAILED:
 CannotCreatePathOSString:
-serviceMatching_FAILED:
 NoIOHDIXController:
-getMatchingServices_FAILED:
 
 	// clean up memory allocations
 	if (pathString)			pathString->release();
-	if (matchDictionary)	matchDictionary->release();
-	if (controllerIterator)	controllerIterator->release();
+    if (controller)         controller->release();
 
 	return res;
+}
+
+void di_root_ramfile( IORegistryEntry * entry )
+{
+    OSData *                data;
+    IOMemoryDescriptor *    mem;
+    uint64_t                dmgSize;
+    uint64_t                remain, length;
+    OSData *                extentData = 0;
+    IOAddressRange *        extentList;
+    uint64_t                extentSize;
+    uint32_t                extentCount;
+
+    do {
+        data = OSDynamicCast(OSData, entry->getProperty("boot-ramdmg-size"));
+        if (!data || (data->getLength() != sizeof(uint64_t)))
+            break;  // bad disk image size
+
+        dmgSize = *(uint64_t *) data->getBytesNoCopy();
+        if (!dmgSize)
+            break;
+
+        data = OSDynamicCast(OSData, entry->getProperty("boot-ramdmg-extents"));
+        if (!data || (data->getLength() == 0) ||
+            ((data->getLength() & (sizeof(IOAddressRange)-1)) != 0))
+            break;  // bad extents
+
+        // make modifications to local copy
+        extentData  = OSData::withData(data);
+        assert(extentData);
+
+        extentList  = (IOAddressRange *) extentData->getBytesNoCopy();
+        extentCount = extentData->getLength() / sizeof(IOAddressRange);
+        extentSize  = 0;
+        remain = dmgSize;
+
+        // truncate extent length to enclosing disk image
+        for (uint32_t i = 0; i < extentCount; i++)
+        {
+            length = extentList[i].length;
+            if (!length) break;
+            
+            extentSize += length;
+            if (length >= remain)
+            {
+                extentList[i].length = remain;
+                extentCount = i + 1;
+                break;
+            }
+            remain -= length;
+        }
+        if (extentSize < dmgSize)
+            break;  // not enough extent bytes for enclosing disk image
+
+        mem = IOMemoryDescriptor::withAddressRanges(
+                extentList, extentCount,
+                kIODirectionOut | kIOMemoryMapperNone, NULL);
+        
+        if (mem)
+        {
+            IOService * controller = di_load_controller();
+            if (controller)
+            {
+                controller->setProperty(kDIRootRamFileKey, mem);
+                controller->release();
+            }
+            mem->release();
+        }
+    } while (false);
+    
+    if (extentData)
+        extentData->release();
 }
 
 };

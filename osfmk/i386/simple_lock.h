@@ -72,9 +72,6 @@
 #if defined(MACH_KERNEL_PRIVATE) && defined(__APPLE_API_PRIVATE)
 #include <i386/hw_lock_types.h>
 #include <mach_ldebug.h>
-#endif
-
-#if defined(MACH_KERNEL_PRIVATE) && defined(__APPLE_API_PRIVATE)
 
 #if	MACH_LDEBUG
 #define	USLOCK_DEBUG 1
@@ -85,19 +82,21 @@
 typedef struct uslock_debug {
 	void			*lock_pc;	/* pc where lock operation began    */
 	void			*lock_thread;	/* thread that acquired lock */
+	void			*unlock_thread;	/* last thread to release lock */
+	void			*unlock_pc;	/* pc where lock operation ended    */
 	unsigned long	duration[2];
 	unsigned short	state;
 	unsigned char	lock_cpu;
-	void			*unlock_thread;	/* last thread to release lock */
 	unsigned char	unlock_cpu;
-	void			*unlock_pc;	/* pc where lock operation ended    */
 } uslock_debug;
 
 typedef struct slock {
 	hw_lock_data_t	interlock;	/* must be first... see lock.c */
+#if	USLOCK_DEBUG
 	unsigned short	lock_type;	/* must be second... see lock.c */
 #define USLOCK_TAG	0x5353
 	uslock_debug	debug;
+#endif
 } usimple_lock_data_t, *usimple_lock_t;
 
 extern void			i386_lock_unlock_with_flush(

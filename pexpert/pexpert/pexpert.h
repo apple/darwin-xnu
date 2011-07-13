@@ -254,6 +254,17 @@ extern boolean_t PE_parse_boot_argn(
 	void    	*arg_ptr,
 	int			max_arg);
 
+extern boolean_t PE_get_default(
+	const char	*property_name,
+	void		*property_ptr,
+	unsigned int max_property);
+
+#define PE_default_value(_key, _variable, _default)	\
+	do {															  \
+		if (!PE_get_default((_key), &(_variable), sizeof(_variable))) \
+			_variable = _default;									  \
+	} while(0)
+
 enum {
     kPEOptionKey	= 0x3a,
     kPECommandKey	= 0x37,

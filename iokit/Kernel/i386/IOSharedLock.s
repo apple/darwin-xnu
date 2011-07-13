@@ -1,19 +1,14 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2010 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * @APPLE_LICENSE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. The rights granted to you under the License
- * may not be used to create, or enable the creation or redistribution of,
- * unlawful or unlicensed copies of an Apple operating system, or to
- * circumvent, violate, or enable the circumvention or violation of, any
- * terms of an Apple operating system software license agreement.
- * 
- * Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
@@ -23,7 +18,47 @@
  * Please see the License for the specific language governing rights and
  * limitations under the License.
  * 
- * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ * @APPLE_LICENSE_HEADER_END@
  */
-#include <IOKit/machine/IOSharedLockImp.h>
 
+#include <architecture/i386/asm_help.h>
+
+	TEXT
+
+/*
+ * void
+ * OSSpinLockUnlock(p)
+ *	int *p;
+ *
+ * Unlock the lock pointed to by p.
+ */
+
+LEAF(_OSSpinLockUnlock, 0)
+LEAF(_IOSpinUnlock, 0)
+LEAF(_ev_unlock, 0)
+	movl		4(%esp), %ecx
+	movl		$0, (%ecx)
+END(_OSSpinLockUnlock)
+
+
+/*
+ * int
+ * OSSpinLockTry(p)
+ *	int *p;
+ *
+ * Try to lock p.  Return zero if not successful.
+ */
+
+LEAF(_OSSpinLockTry, 0)
+LEAF(_IOTrySpinLock, 0)
+LEAF(_ev_try_lock, 0)
+        movl            4(%esp), %ecx 
+	xorl		%eax, %eax
+        lock
+        cmpxchgl        %ecx, (%ecx)
+	jne	1f
+	movl	$1, %eax		/* yes */
+	ret
+1:
+	xorl	%eax, %eax		/* no */
+END(_OSSpinLockTry)

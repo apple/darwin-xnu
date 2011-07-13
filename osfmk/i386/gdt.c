@@ -63,44 +63,44 @@
 #include <i386/seg.h>
 
 struct real_descriptor master_gdt[GDTSZ] __attribute__ ((section("__INITGDT,__data")))= {
-	[SEL_TO_INDEX(KERNEL32_CS)] MAKE_REAL_DESCRIPTOR(	/* kernel 32-bit code */ 
+	[SEL_TO_INDEX(KERNEL32_CS)] = MAKE_REAL_DESCRIPTOR(	/* kernel 32-bit code */ 
 		0,
 		0xfffff,
 		SZ_32|SZ_G,
 		ACC_P|ACC_PL_K|ACC_CODE_R
 	),
-	[SEL_TO_INDEX(KERNEL_DS)] MAKE_REAL_DESCRIPTOR(	/* kernel data */
+	[SEL_TO_INDEX(KERNEL_DS)] = MAKE_REAL_DESCRIPTOR(	/* kernel data */
 		0,
 		0xfffff,
 		SZ_32|SZ_G,
 		ACC_P|ACC_PL_K|ACC_DATA_W
 	),
-	[SEL_TO_INDEX(KERNEL64_CS)] MAKE_REAL_DESCRIPTOR(	/* kernel 64-bit code */ 
+	[SEL_TO_INDEX(KERNEL64_CS)] = MAKE_REAL_DESCRIPTOR(	/* kernel 64-bit code */ 
 		0,
 		0xfffff,
 		SZ_64|SZ_G,
 		ACC_P|ACC_PL_K|ACC_CODE_R
 	),
-	[SEL_TO_INDEX(KERNEL64_SS)] MAKE_REAL_DESCRIPTOR(	/* kernel 64-bit syscall stack */ 
+	[SEL_TO_INDEX(KERNEL64_SS)] = MAKE_REAL_DESCRIPTOR(	/* kernel 64-bit syscall stack */ 
 		0,
 		0xfffff,
 		SZ_32|SZ_G,
 		ACC_P|ACC_PL_K|ACC_DATA_W
 	),
 #ifdef __x86_64__
-	[SEL_TO_INDEX(USER_CS)] MAKE_REAL_DESCRIPTOR(	/* 32-bit user code segment */
+	[SEL_TO_INDEX(USER_CS)] = MAKE_REAL_DESCRIPTOR(	/* 32-bit user code segment */
 		0,
 		0xfffff,
  		SZ_32|SZ_G,
 		ACC_P|ACC_PL_U|ACC_CODE_R
 	),
-	[SEL_TO_INDEX(USER_DS)] MAKE_REAL_DESCRIPTOR(	/* 32-bit user data segment */
+	[SEL_TO_INDEX(USER_DS)] = MAKE_REAL_DESCRIPTOR(	/* 32-bit user data segment */
 		0,
 		0xfffff,
 		SZ_32|SZ_G,
 		ACC_P|ACC_PL_U|ACC_DATA_W
 	),
-	[SEL_TO_INDEX(USER64_CS)] MAKE_REAL_DESCRIPTOR(	/* user 64-bit code segment */
+	[SEL_TO_INDEX(USER64_CS)] = MAKE_REAL_DESCRIPTOR(	/* user 64-bit code segment */
 		0,
 		0xfffff,
 		SZ_64|SZ_G,

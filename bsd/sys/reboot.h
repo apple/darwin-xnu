@@ -135,7 +135,7 @@
 #include <machine/reboot.h>
 
 __BEGIN_DECLS
-void	boot(int, int, char *);
+int	boot(int, int, char *);
 __END_DECLS
 
 #define PROC_SHUTDOWN_LOG "/var/log/kernel-shutdown.log"

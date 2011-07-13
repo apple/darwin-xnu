@@ -88,7 +88,7 @@ ENTRY(memset)
  * void bzero(char * addr, size_t length)
  */
 Entry(blkclr)
-ENTRY(bzero)
+ENTRY2(bzero,__bzero)
 	movq	%rsi,%rcx
 	xorq	%rax,%rax
 	shrq	$3,%rcx

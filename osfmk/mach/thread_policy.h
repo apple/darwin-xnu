@@ -215,4 +215,20 @@ typedef struct thread_affinity_policy		*thread_affinity_policy_t;
 #define THREAD_AFFINITY_POLICY_COUNT	((mach_msg_type_number_t) \
 	(sizeof (thread_affinity_policy_data_t) / sizeof (integer_t)))
 
+/*
+ * THREAD_BACKGROUND_POLICY:
+ */
+
+#define THREAD_BACKGROUND_POLICY	5
+
+struct thread_background_policy {
+	integer_t	priority;
+};
+
+typedef struct thread_background_policy		thread_background_policy_data_t;
+typedef struct thread_background_policy 	*thread_background_policy_t;
+
+#define THREAD_BACKGROUND_POLICY_COUNT	((mach_msg_type_number_t) \
+	(sizeof (thread_background_policy_data_t) / sizeof (integer_t)))
+
 #endif	/* _MACH_THREAD_POLICY_H_ */

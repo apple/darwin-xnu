@@ -132,15 +132,90 @@ Lw2:
 Entry(munge_wl)			/* Costs an extra w move to do this */
 ENTRY(munge_wlw)
 	xorl	%edx,%edx
+Lwlw:
 	movl	12(%rsi),%eax
 	movl	%eax,16(%rsi)
 	movl	%edx,20(%rsi)
+Lwl:
 	movl	8(%rsi),%eax
 	movl	%eax,12(%rsi)
 	movl	4(%rsi),%eax
 	movl	%eax,8(%rsi)
+
 	movl	%edx,4(%rsi)
 	ret
+
+ENTRY(munge_wlwwwll)
+	xorl	%edx,%edx
+Lwlwwwll:
+	movl	36(%rsi),%eax
+	movl	%eax,52(%rsi)
+	movl	32(%rsi),%eax
+	movl	%eax,48(%rsi)
+
+	movl	28(%rsi),%eax
+	movl	%eax,44(%rsi)
+	movl	24(%rsi),%eax
+	movl	%eax,40(%rsi)
+
+	movl	20(%rsi),%eax
+	movl	%eax,32(%rsi)
+	movl	%edx,36(%rsi)
+Lwlww:
+	movl	16(%rsi),%eax
+	movl	%eax,24(%rsi)
+	movl	%edx,28(%rsi)
+	jmp	Lwlw
+
+ENTRY(munge_wlwwwllw)
+	xorl	%edx,%edx
+	movl	40(%rsi),%eax
+	movl	%eax,56(%rsi)
+	movl	%edx,60(%rsi)
+	jmp     Lwlwwwll
+
+ENTRY(munge_wlwwlwlw)
+	xorl	%edx,%edx
+	movl	40(%rsi),%eax
+	movl	%eax,56(%rsi)
+	movl	%edx,60(%rsi)
+	movl	36(%rsi),%eax
+	movl	%eax,52(%rsi)
+	movl	32(%rsi),%eax
+	movl	%eax,48(%rsi)
+	movl	28(%rsi),%eax
+	movl	%eax,40(%rsi)
+	movl	%edx,44(%rsi)
+	movl	24(%rsi),%eax
+	movl	%eax,36(%rsi)
+	movl	20(%rsi),%eax
+	movl	%eax,32(%rsi)
+	jmp     Lwlww
+
+
+ENTRY(munge_wllwwll)
+	xorl	%edx,%edx
+
+	movl	40(%rsi),%eax	//l
+	movl	%eax,52(%rsi)
+	movl	36(%rsi),%eax
+	movl	%eax,48(%rsi)
+	movl	32(%rsi),%eax	//l
+	movl	%eax,44(%rsi)
+	movl	28(%rsi),%eax
+	movl	%eax,40(%rsi)
+	movl	24(%rsi),%eax	//w
+	movl	%eax,32(%rsi)
+	movl	%edx,36(%rsi)
+	movl	20(%rsi),%eax	//w
+	movl	%eax,24(%rsi)
+	movl	%edx,28(%rsi)
+	movl	16(%rsi),%eax	//l
+	movl	%eax,20(%rsi)
+	movl	12(%rsi),%eax
+	movl	%eax,16(%rsi)
+
+	jmp	Lwl
 
 Entry(munge_wwwlw)
 	xorl	%edx,%edx
@@ -182,6 +257,61 @@ ENTRY(munge_wwwwwl)
 	movl	24(%rsi),%eax
 	movl	%eax,44(%rsi)
 	jmp	Lw5
+
+
+ENTRY(munge_wwwwwlww)
+	xorl	%edx,%edx
+	movl	32(%rsi),%eax
+	movl	%eax,56(%rsi)
+	movl	%edx,60(%rsi)
+	movl	28(%rsi),%eax
+	movl	%eax,48(%rsi)
+	movl	%edx,52(%rsi)
+	movl	20(%rsi),%eax
+	movl	%eax,40(%rsi)
+	movl	24(%rsi),%eax
+	movl	%eax,44(%rsi)
+
+	jmp	Lw5
+
+ENTRY(munge_wwwwwllw)
+	xorl	%edx,%edx
+	movl	36(%rsi),%eax
+	movl	%eax,56(%rsi)
+	movl	%edx,60(%rsi)
+	movl	28(%rsi),%eax
+	movl	%eax,48(%rsi)
+	movl	32(%rsi),%eax
+	movl	%eax,52(%rsi)
+	movl	20(%rsi),%eax
+	movl	%eax,40(%rsi)
+	movl	24(%rsi),%eax
+	movl	%eax,44(%rsi)
+	jmp	Lw5
+
+ENTRY(munge_wwwwwlll)
+	xorl	%edx,%edx
+	movl	36(%rsi),%eax
+	movl	%eax,56(%rsi)
+	movl	40(%rsi),%eax
+	movl	%eax,60(%rsi)
+	movl	28(%rsi),%eax
+	movl	%eax,48(%rsi)
+	movl	32(%rsi),%eax
+	movl	%eax,52(%rsi)
+	movl	20(%rsi),%eax
+	movl	%eax,40(%rsi)
+	movl	24(%rsi),%eax
+	movl	%eax,44(%rsi)
+	jmp	Lw5
+
+ENTRY(munge_wwwwwwl)
+	xorl	%edx,%edx
+	movl	24(%rsi),%eax
+	movl	%eax,48(%rsi)
+	movl	28(%rsi),%eax
+	movl	%eax,52(%rsi)
+	jmp	Lw6
 
 ENTRY(munge_wwwwwwlw)
 	xorl	%edx,%edx

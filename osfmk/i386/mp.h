@@ -106,7 +106,7 @@ extern	volatile boolean_t mp_kdp_trap;
 extern 	volatile boolean_t force_immediate_debugger_NMI;
 extern  volatile boolean_t pmap_tlb_flush_timeout;
 extern  volatile usimple_lock_t spinlock_timed_out;
-extern	volatile uint32_t spinlock_owner_cpu;
+extern  volatile uint32_t spinlock_owner_cpu;
 
 extern	uint64_t	LastDebuggerEntryAllowance;
 
@@ -163,10 +163,12 @@ cpu_to_cpumask(cpu_t cpu)
  * Invoke a function (possibly NULL) on a set of cpus specified by a mask.
  * The mask may include the local cpu.
  * If the mode is:
- *	- ASYNC: other cpus make their calls in parallel.
- * 	- SYNC: the calls are performed serially in logical cpu order.
- * This call returns when the function has been run on all specified cpus.
- * The return value is the number of cpus on which the call was made.
+ *	- ASYNC:  other cpus make their calls in parallel
+ * 	- SYNC:   the calls are performed serially in logical cpu order
+ * 	- NOSYNC: the calls are queued
+ * Unless the mode is NOSYNC, mp_cpus_call() returns when the function has been
+ * called on all specified cpus.
+ * The return value is the number of cpus where the call was made or queued.
  * The action function is called with interrupts disabled.
  */
 extern cpu_t mp_cpus_call(
@@ -174,6 +176,14 @@ extern cpu_t mp_cpus_call(
 		mp_sync_t	mode,
 		void		(*action_func)(void *),
 		void		*arg);
+extern cpu_t mp_cpus_call1(
+		cpumask_t	cpus,
+		mp_sync_t	mode,
+		void		(*action_func)(void *, void*),
+		void		*arg0,
+		void		*arg1,
+		cpumask_t	*cpus_calledp,
+		cpumask_t	*cpus_notcalledp);
 
 /*
  * Power-management-specific SPI to:
@@ -182,7 +192,6 @@ extern cpu_t mp_cpus_call(
  */
 extern void PM_interrupt_register(void (*fn)(void));
 extern void cpu_PM_interrupt(int cpu);
-
 
 __END_DECLS
 
@@ -249,37 +258,13 @@ extern cpu_signal_event_log_t	*cpu_handle[];
 #ifdef ASSEMBLER
 #define i_bit(bit, word)	((long)(*(word)) & (1L << (bit)))
 #else
-// Workaround for 6640051
-static inline long 
+__attribute__((always_inline)) static inline long 
 i_bit_impl(long word, long bit) {
-	return word & 1L << bit;
+	long bitmask = 1L << bit;
+	return word & bitmask;
 }
 #define i_bit(bit, word)	i_bit_impl((long)(*(word)), bit)
 #endif
-
-
-/* 
- *	Device driver synchronization. 
- *
- *	at386_io_lock(op) and at386_io_unlock() are called
- *	by device drivers when accessing H/W. The underlying 
- *	Processing is machine dependant. But the op argument
- *	to the at386_io_lock is generic
- */
-
-#define MP_DEV_OP_MAX	  4
-#define MP_DEV_WAIT	  MP_DEV_OP_MAX	/* Wait for the lock */
-
-/*
- * If the caller specifies an op value different than MP_DEV_WAIT, the
- * at386_io_lock function must return true if lock was successful else
- * false
- */
-
-#define MP_DEV_OP_START 0	/* If lock busy, register a pending start op */
-#define MP_DEV_OP_INTR	1	/* If lock busy, register a pending intr */
-#define MP_DEV_OP_TIMEO	2	/* If lock busy, register a pending timeout */
-#define MP_DEV_OP_CALLB	3	/* If lock busy, register a pending callback */
 
 #if	MACH_RT
 

@@ -949,7 +949,7 @@ ipc_mqueue_select_on_thread(
  *		Locks may be held by callers, so this routine cannot block.
  *		Caller holds reference on the message queue.
  */
-int
+unsigned
 ipc_mqueue_peek(ipc_mqueue_t mq)
 {
 	wait_queue_link_t	wql;
@@ -963,10 +963,7 @@ ipc_mqueue_peek(ipc_mqueue_t mq)
 	 * Don't block trying to get the lock.
 	 */
 	s = splsched();
-	if (!imq_lock_try(mq)) {
-		splx(s);
-		return -1;
-	}
+	imq_lock(mq);
 
 	/* 
 	 * peek at the contained port message queues, return as soon as
@@ -992,7 +989,8 @@ ipc_mqueue_peek(ipc_mqueue_t mq)
 /*
  *	Routine:	ipc_mqueue_destroy
  *	Purpose:
- *		Destroy a message queue.  Set any blocked senders running.
+ *		Destroy a (non-set) message queue.
+ *		Set any blocked senders running.
  *	   	Destroy the kmsgs in the queue.
  *	Conditions:
  *		Nothing locked.
@@ -1000,10 +998,11 @@ ipc_mqueue_peek(ipc_mqueue_t mq)
  */
 void
 ipc_mqueue_destroy(
-	ipc_mqueue_t	mqueue) 
+	ipc_mqueue_t	mqueue)
 {
 	ipc_kmsg_queue_t kmqueue;
 	ipc_kmsg_t kmsg;
+	boolean_t reap = FALSE;
 	spl_t s;
 
 
@@ -1019,19 +1018,27 @@ ipc_mqueue_destroy(
 				THREAD_RESTART,
 				FALSE);
 
+	/*
+	 * Move messages from the specified queue to the per-thread
+	 * clean/drain queue while we have the mqueue lock.
+	 */
 	kmqueue = &mqueue->imq_messages;
-
 	while ((kmsg = ipc_kmsg_dequeue(kmqueue)) != IKM_NULL) {
-		imq_unlock(mqueue);
-		splx(s);
-
-		ipc_kmsg_destroy_dest(kmsg);
-
-		s = splsched();
-		imq_lock(mqueue);
+		boolean_t first;
+		first = ipc_kmsg_delayed_destroy(kmsg);
+		if (first)
+			reap = first;
 	}
+
 	imq_unlock(mqueue);
 	splx(s);
+
+	/*
+	 * Destroy the messages we enqueued if we aren't nested
+	 * inside some other attempt to drain the same queue.
+	 */
+	if (reap)
+		ipc_kmsg_reap_delayed();
 }
 
 /*

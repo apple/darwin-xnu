@@ -74,7 +74,7 @@ subsystem
 /*
  * References to processor objects are returned by:
  *	host_processors(host_priv_t,...);
- *
+ */
 /*
  *	Start processor.
  */

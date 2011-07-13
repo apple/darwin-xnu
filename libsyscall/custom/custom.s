@@ -30,35 +30,7 @@
 
 #include "SYS.h"
 
-#if defined(__ppc__) || defined(__ppc64__)
-
-/* We use mode-independent "g" opcodes such as "srgi", and/or
- * mode-independent macros such as MI_GET_ADDRESS.  These expand
- * into word operations when targeting __ppc__, and into doubleword
- * operations when targeting __ppc64__.
- */
-#include <architecture/ppc/mode_independent_asm.h>
-
-    .globl  _errno
-
-MI_ENTRY_POINT(cerror)
-    MI_PUSH_STACK_FRAME
-    MI_GET_ADDRESS(r12,_errno)
-    stw     r3,0(r12)               /* save syscall return code in global */
-    MI_CALL_EXTERNAL(_cthread_set_errno_self)
-    li      r3,-1                   /* then bug return value */
-    li      r4,-1                   /* in case we're returning a long-long in 32-bit mode, etc */
-    MI_POP_STACK_FRAME_AND_RETURN
-
-
-    .globl _processor_facilities_used
-    .align 2
-_processor_facilities_used:
-    li	r0,0x7FF3
-    sc
-    blr
-
-#elif defined(__i386__)
+#if defined(__i386__)
 
 	.globl	_errno
 
@@ -75,9 +47,7 @@ LABEL(cerror)
 	movl	$-1,%edx /* in case a 64-bit value is returned */
 	ret
 
-	.private_extern __sysenter_trap
-	ALIGN
-__sysenter_trap:
+LABEL(__sysenter_trap)
 	popl %edx
 	movl %esp, %ecx
 	sysenter
@@ -87,8 +57,9 @@ __sysenter_trap:
 	.globl	_errno
 
 LABEL(cerror)
-	REG_TO_EXTERN(%rax, _errno)
-	mov		%rsp,%rdx
+	PICIFY(_errno) /* address -> %r11 */
+	movl	%eax,(%r11)
+	mov 	%rsp,%rdx
 	andq	$-16,%rsp
 	subq	$16,%rsp
 	// Preserve the original stack

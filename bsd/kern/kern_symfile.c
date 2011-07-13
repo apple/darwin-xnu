@@ -72,12 +72,13 @@ get_kernel_symfile(__unused proc_t p, __unused char const **symfile)
 
 struct kern_direct_file_io_ref_t
 {
-    vfs_context_t		ctx;
-    struct vnode		*vp;
+    vfs_context_t  ctx;
+    struct vnode * vp;
+    dev_t          device;
 };
 
 
-static int file_ioctl(void * p1, void * p2, int theIoctl, caddr_t result)
+static int file_ioctl(void * p1, void * p2, u_long theIoctl, caddr_t result)
 {
     dev_t device = *(dev_t*) p1;
 
@@ -85,7 +86,7 @@ static int file_ioctl(void * p1, void * p2, int theIoctl, caddr_t result)
 		    (device, theIoctl, result, S_IFBLK, p2));
 }
 
-static int device_ioctl(void * p1, __unused void * p2, int theIoctl, caddr_t result)
+static int device_ioctl(void * p1, __unused void * p2, u_long theIoctl, caddr_t result)
 {
     return (VNOP_IOCTL(p1, theIoctl, result, 0, p2));
 }
@@ -94,10 +95,14 @@ struct kern_direct_file_io_ref_t *
 kern_open_file_for_direct_io(const char * name, 
 			     kern_get_file_extents_callback_t callback, 
 			     void * callback_ref,
-			     dev_t * device_result,
+			     dev_t * partition_device_result,
+			     dev_t * image_device_result,
                              uint64_t * partitionbase_result,
                              uint64_t * maxiocount_result,
-                             boolean_t * solid_state)
+                             uint32_t * oflags,
+                             off_t offset,
+                             caddr_t addr,
+                             vm_size_t len)
 {
     struct kern_direct_file_io_ref_t * ref;
 
@@ -105,14 +110,21 @@ kern_open_file_for_direct_io(const char * name,
     struct vnode_attr		va;
     int				error;
     off_t			f_offset;
-    uint32_t			blksize;
-    uint64_t			size;
+    off_t			filelength;
+    uint64_t                    fileblk;
+    size_t                      filechunk;
+    uint64_t                    physoffset;
     dev_t			device;
+    dev_t			target = 0;
+    int			        isssd = 0;
+    uint32_t                    flags = 0;
+    uint32_t			blksize;
     off_t 			maxiocount, count;
+    boolean_t                   locked = FALSE;
 
-    int (*do_ioctl)(void * p1, void * p2, int theIoctl, caddr_t result);
-    void * p1;
-    void * p2;
+    int (*do_ioctl)(void * p1, void * p2, u_long theIoctl, caddr_t result);
+    void * p1 = NULL;
+    void * p2 = NULL;
 
     error = EFAULT;
 
@@ -124,11 +136,17 @@ kern_open_file_for_direct_io(const char * name,
     }
 
     ref->vp = NULL;
-    p = current_proc();		// kernproc;
+    p = kernproc;
     ref->ctx = vfs_context_create(vfs_context_current());
 
     if ((error = vnode_open(name, (O_CREAT | FWRITE), (0), 0, &ref->vp, ref->ctx)))
         goto out;
+
+    if (addr && len)
+    {
+	if ((error = kern_write_file(ref, offset, addr, len)))
+	    goto out;
+    }
 
     VATTR_INIT(&va);
     VATTR_WANTED(&va, va_rdev);
@@ -169,6 +187,80 @@ kern_open_file_for_direct_io(const char * name,
 	error = EFAULT;
         goto out;
     }
+    ref->device = device;
+
+    // generate the block list
+
+    error = do_ioctl(p1, p2, DKIOCLOCKPHYSICALEXTENTS, NULL);
+    if (error)
+        goto out;
+    locked = TRUE;
+
+    // get block size
+
+    error = do_ioctl(p1, p2, DKIOCGETBLOCKSIZE, (caddr_t) &blksize);
+    if (error)
+        goto out;
+
+    if (ref->vp->v_type == VREG)
+        filelength = va.va_data_size;
+    else
+    {
+        error = do_ioctl(p1, p2, DKIOCGETBLOCKCOUNT, (caddr_t) &fileblk);
+        if (error)
+            goto out;
+	filelength = fileblk * blksize;    
+    }
+
+    f_offset = 0;
+    while (f_offset < filelength) 
+    {
+        if (ref->vp->v_type == VREG)
+        {
+            filechunk = 1*1024*1024*1024;
+            daddr64_t blkno;
+
+            error = VNOP_BLOCKMAP(ref->vp, f_offset, filechunk, &blkno, &filechunk, NULL, 0, NULL);
+            if (error)
+                goto out;
+
+            fileblk = blkno * blksize;
+        }
+        else if ((ref->vp->v_type == VBLK) || (ref->vp->v_type == VCHR))
+        {
+            fileblk = f_offset;
+            filechunk = f_offset ? 0 : filelength;
+        }
+
+        physoffset = 0;
+        while (physoffset < filechunk)
+        {
+            dk_physical_extent_t getphysreq;
+            bzero(&getphysreq, sizeof(getphysreq));
+
+            getphysreq.offset = fileblk + physoffset;
+            getphysreq.length = (filechunk - physoffset);
+            error = do_ioctl(p1, p2, DKIOCGETPHYSICALEXTENT, (caddr_t) &getphysreq);
+            if (error)
+                goto out;
+            if (!target)
+            {
+                target = getphysreq.dev;
+            }
+            else if (target != getphysreq.dev)
+            {
+                error = ENOTSUP;
+                goto out;
+            }
+            callback(callback_ref, getphysreq.offset, getphysreq.length);
+            physoffset += getphysreq.length;
+        }
+        f_offset += filechunk;
+    }
+    callback(callback_ref, 0ULL, 0ULL);
+
+    if (ref->vp->v_type == VREG)
+        p1 = &target;
 
     // get partition base
 
@@ -226,62 +318,37 @@ kern_open_file_for_direct_io(const char * name,
     if (maxiocount_result)
         *maxiocount_result = maxiocount;
 
-    if (solid_state)
-    {
-        int isssd = 0;
-        error = do_ioctl(p1, p2, DKIOCISSOLIDSTATE, (caddr_t)&isssd);
-        if (error)
-            *solid_state = FALSE;
-        else
-            *solid_state = isssd;
-    }
+    error = do_ioctl(p1, p2, DKIOCISSOLIDSTATE, (caddr_t)&isssd);
+    if (!error && isssd)
+        flags |= kIOHibernateOptionSSD;
 
-    // generate the block list
-
-    error = 0;
-    if (ref->vp->v_type == VREG)
-    {
-	f_offset = 0;
-	while(f_offset < (off_t) va.va_data_size) 
-	{
-	    size_t io_size = 1*1024*1024*1024;
-	    daddr64_t blkno;
-
-	    error = VNOP_BLOCKMAP(ref->vp, f_offset, io_size, &blkno, (size_t *)&io_size, NULL, 0, NULL);
-	    if (error)
-		goto out;
-	    callback(callback_ref, ((uint64_t) blkno) * blksize, (uint64_t) io_size);
-	    f_offset += io_size;
-	}
-	callback(callback_ref, 0ULL, 0ULL);
-    }
-    else if ((ref->vp->v_type == VBLK) || (ref->vp->v_type == VCHR))
-    {
-        error = do_ioctl(p1, p2, DKIOCGETBLOCKCOUNT, (caddr_t) &size);
-        if (error)
-            goto out;
-	size *= blksize;
-	callback(callback_ref, 0ULL, size);
-	callback(callback_ref, size, 0ULL);
-    }
-
-    if (device_result)
-        *device_result = device;
+    if (partition_device_result)
+        *partition_device_result = device;
+    if (image_device_result)
+        *image_device_result = target;
+    if (flags)
+        *oflags = flags;
 
 out:
     kprintf("kern_open_file_for_direct_io(%d)\n", error);
 
-    if (error && ref) {
-	if (ref->vp) {
+    if (error && locked)
+    {
+        p1 = &device;
+        (void) do_ioctl(p1, p2, DKIOCUNLOCKPHYSICALEXTENTS, NULL);
+    }
+
+    if (error && ref)
+    {
+	if (ref->vp)
+	{
 	    vnode_close(ref->vp, FWRITE, ref->ctx);
 	    ref->vp = NULLVP;
 	}
-
 	vfs_context_rele(ref->ctx);
 	kfree(ref, sizeof(struct kern_direct_file_io_ref_t));
 	ref = NULL;
     }
-
     return(ref);
 }
 
@@ -296,21 +363,47 @@ kern_write_file(struct kern_direct_file_io_ref_t * ref, off_t offset, caddr_t ad
 }
 
 void
-kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref)
+kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref,
+			      off_t offset, caddr_t addr, vm_size_t len)
 {
+    int error;
     kprintf("kern_close_file_for_direct_io\n");
 
-    if (ref) {
-	int                error;
+    if (!ref) return;
 
-	if (ref->vp) {
-	    error = vnode_close(ref->vp, FWRITE, ref->ctx);
-	    ref->vp = NULLVP;
-	    kprintf("vnode_close(%d)\n", error);
-	}
-	vfs_context_rele(ref->ctx);
-	ref->ctx = NULL;
-	kfree(ref, sizeof(struct kern_direct_file_io_ref_t));
+    if (ref->vp)
+    {
+        int (*do_ioctl)(void * p1, void * p2, u_long theIoctl, caddr_t result);
+        void * p1;
+        void * p2;
+
+        if (ref->vp->v_type == VREG)
+        {
+            p1 = &ref->device;
+            p2 = kernproc;
+            do_ioctl = &file_ioctl;
+        }
+        else
+        {
+            /* Partition. */
+            p1 = ref->vp;
+            p2 = ref->ctx;
+            do_ioctl = &device_ioctl;
+        }
+        (void) do_ioctl(p1, p2, DKIOCUNLOCKPHYSICALEXTENTS, NULL);
+        
+        if (addr && len)
+        {
+            (void) kern_write_file(ref, offset, addr, len);
+        }
+
+        error = vnode_close(ref->vp, FWRITE, ref->ctx);
+
+        ref->vp = NULLVP;
+        kprintf("vnode_close(%d)\n", error);
     }
+    vfs_context_rele(ref->ctx);
+    ref->ctx = NULL;
+    kfree(ref, sizeof(struct kern_direct_file_io_ref_t));
 }
 

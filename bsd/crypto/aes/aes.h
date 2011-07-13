@@ -80,13 +80,21 @@ typedef	unsigned int    aes_32t;
 #endif
 
 
+#if 0 // defined (__i386__) || defined (__x86_64__)
+
+/* 
+	looks like no other code for (i386/x86_64) is using the following definitions any more.
+	I comment this out, so the C code in the directory gen/ can be used to compile for test/development purpose.
+	Note : this is not going to change anything in the i386/x86_64 kernel. 
+			(source code in i386/, mostly in assembly, does not reference to this header file.) 
+
+	cclee	10-20-2010
+*/
 
 /* the character array 'inf' in the following structures is used    */
 /* to hold AES context information. This AES code uses cx->inf.b[0] */
 /* to hold the number of rounds multiplied by 16. The other three   */
 /* elements can be used by code that implements additional modes    */
-
-#if defined (__i386__)
 
 #if defined( AES_ERR_CHK )
 #define aes_rval     int_ret
@@ -166,7 +174,7 @@ aes_rval aes_encrypt_key256(const unsigned char *key, aes_encrypt_ctx cx[1]);
 aes_rval aes_encrypt_key(const unsigned char *key, int key_len, aes_encrypt_ctx cx[1]);
 #endif
 
-#if defined (__i386__)
+#if defined (__i386__) || defined (__x86_64__)
 aes_rval aes_encrypt(const unsigned char *in, unsigned char *out, const aes_encrypt_ctx cx[1]);
 #endif
 
@@ -193,7 +201,7 @@ aes_rval aes_decrypt_key256(const unsigned char *key, aes_decrypt_ctx cx[1]);
 aes_rval aes_decrypt_key(const unsigned char *key, int key_len, aes_decrypt_ctx cx[1]);
 #endif
 
-#if defined (__i386__)
+#if defined (__i386__) || defined (__x86_64__)
 aes_rval aes_decrypt(const unsigned char *in, unsigned char *out, const aes_decrypt_ctx cx[1]);
 #endif
 

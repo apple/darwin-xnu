@@ -130,6 +130,7 @@ const struct memory_object_pager_ops apple_protect_pager_ops = {
 	apple_protect_pager_synchronize,
 	apple_protect_pager_map,
 	apple_protect_pager_last_unmap,
+	NULL, /* data_reclaim */
 	"apple protect pager"
 };
 
@@ -354,6 +355,7 @@ apple_protect_pager_data_request(
 	upl_pl = NULL;
 	fault_info = *((struct vm_object_fault_info *) mo_fault_info);
 	fault_info.stealth = TRUE;
+	fault_info.io_sync = FALSE;
 	fault_info.mark_zf_absent = FALSE;
 	interruptible = fault_info.interruptible;
 
@@ -510,7 +512,7 @@ apple_protect_pager_data_request(
 			   kernel_mapping,
 			   src_page->phys_page,
 			   VM_PROT_READ,
-			   src_object->wimg_bits & VM_WIMG_MASK,
+			   0,
 			   TRUE);
 		/*
 		 * Establish an explicit pmap mapping of the destination
@@ -525,7 +527,7 @@ apple_protect_pager_data_request(
 			   kernel_mapping + PAGE_SIZE_64,
 			   dst_pnum,
 			   VM_PROT_READ | VM_PROT_WRITE,
-			   dst_object->wimg_bits & VM_WIMG_MASK,
+			   0,
 			   TRUE);
 
 		/*
@@ -725,13 +727,13 @@ apple_protect_pager_terminate_internal(
 		vm_object_deallocate(pager->backing_object);
 		pager->backing_object = VM_OBJECT_NULL;
 	}
-
-	/* trigger the destruction of the memory object */
-	memory_object_destroy(pager->pager_control, 0);
 	
 	/* deallocate any crypt module data */
 	if(pager->crypt.crypt_end)
 		pager->crypt.crypt_end(pager->crypt.crypt_ops);
+
+	/* trigger the destruction of the memory object */
+	memory_object_destroy(pager->pager_control, 0);
 }
 
 /*

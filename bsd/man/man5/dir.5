@@ -87,9 +87,9 @@ and further in the file
 .Aq dirent.h .
 When the macro
 .Dv _DARWIN_FEATURE_64_BIT_INODE
-is not defined (the
-.Ft ino_t
-type is 32-bits), the
+is not defined (see
+.Xr stat 2
+for more information on this macro), the
 .Fa dirent
 structure is defined as:
 .Bd -literal
@@ -116,16 +116,8 @@ struct dirent { /* when _DARWIN_FEATURE_64_BIT_INODE is NOT defined */
 However, when the macro
 .Dv _DARWIN_FEATURE_64_BIT_INODE
 is defined, the
-.Ft ino_t
-type will be 64-bits (force 64-bit inode mode by defining the
-.Dv _DARWIN_USE_64_BIT_INODE
-macro before including header files).
-This will cause symbol variants of the directory routines, with the
-.Fa $INODE64
-suffixes, to be automatically linked in.
-In addition, the
 .Fa dirent
-structure will now be defined as:
+structure is defined as:
 .Bd -literal
 /*
  * The dirent structure defines the format of directory entries.

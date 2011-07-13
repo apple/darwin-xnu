@@ -28,9 +28,7 @@
 #ifndef _MACHINE_MACHINE_ROUTINES_H
 #define _MACHINE_MACHINE_ROUTINES_H
 
-#if defined (__ppc__)
-#include "ppc/machine_routines.h"
-#elif defined (__i386__) || defined(__x86_64__)
+#if defined (__i386__) || defined(__x86_64__)
 #include "i386/machine_routines.h"
 #else
 #error architecture not supported

@@ -333,34 +333,34 @@ sysctl_tbfrequency
 /*
  * hw.* MIB variables.
  */
-SYSCTL_PROC    (_hw, HW_NCPU, ncpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_NCPU, sysctl_hw_generic, "I", "");
-SYSCTL_PROC    (_hw, HW_AVAILCPU, activecpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_AVAILCPU, sysctl_hw_generic, "I", "");
-SYSCTL_PROC    (_hw, OID_AUTO, physicalcpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_LOCAL_PHYSICALCPU, sysctl_hw_generic, "I", "");
-SYSCTL_PROC    (_hw, OID_AUTO, physicalcpu_max, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_LOCAL_PHYSICALCPUMAX, sysctl_hw_generic, "I", "");
-SYSCTL_PROC    (_hw, OID_AUTO, logicalcpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_LOCAL_LOGICALCPU, sysctl_hw_generic, "I", "");
-SYSCTL_PROC    (_hw, OID_AUTO, logicalcpu_max, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_LOCAL_LOGICALCPUMAX, sysctl_hw_generic, "I", "");
-SYSCTL_INT     (_hw, HW_BYTEORDER, byteorder, CTLFLAG_RD | CTLFLAG_KERN, (int *)NULL, BYTE_ORDER, "");
-SYSCTL_INT     (_hw, OID_AUTO, cputype, CTLFLAG_RD | CTLFLAG_KERN, &cputype, 0, "");
-SYSCTL_INT     (_hw, OID_AUTO, cpusubtype, CTLFLAG_RD | CTLFLAG_KERN, &cpusubtype, 0, "");
-SYSCTL_INT     (_hw, OID_AUTO, cpu64bit_capable, CTLFLAG_RD | CTLFLAG_KERN, &cpu64bit, 0, "");
-SYSCTL_INT     (_hw, OID_AUTO, cpufamily, CTLFLAG_RD | CTLFLAG_KERN, &cpufamily, 0, "");
-SYSCTL_OPAQUE  (_hw, OID_AUTO, cacheconfig, CTLFLAG_RD, &cacheconfig, sizeof(cacheconfig), "Q", "");
-SYSCTL_OPAQUE  (_hw, OID_AUTO, cachesize, CTLFLAG_RD, &cachesize, sizeof(cachesize), "Q", "");
-SYSCTL_PROC	   (_hw, OID_AUTO, pagesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN, 0, 0, sysctl_pagesize, "Q", "");
-SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency, CTLFLAG_RD | CTLFLAG_KERN, &gPEClockFrequencyInfo.bus_frequency_hz, "");
-SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency_min, CTLFLAG_RD | CTLFLAG_KERN, &gPEClockFrequencyInfo.bus_frequency_min_hz, "");
-SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency_max, CTLFLAG_RD | CTLFLAG_KERN, &gPEClockFrequencyInfo.bus_frequency_max_hz, "");
-SYSCTL_QUAD    (_hw, OID_AUTO, cpufrequency, CTLFLAG_RD | CTLFLAG_KERN, &gPEClockFrequencyInfo.cpu_frequency_hz, "");
-SYSCTL_QUAD    (_hw, OID_AUTO, cpufrequency_min, CTLFLAG_RD | CTLFLAG_KERN, &gPEClockFrequencyInfo.cpu_frequency_min_hz, "");
-SYSCTL_QUAD    (_hw, OID_AUTO, cpufrequency_max, CTLFLAG_RD | CTLFLAG_KERN, &gPEClockFrequencyInfo.cpu_frequency_max_hz, "");
-SYSCTL_PROC    (_hw, OID_AUTO, cachelinesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_CACHELINE | CTLHW_RETQUAD, sysctl_hw_generic, "Q", "");
-SYSCTL_PROC    (_hw, OID_AUTO, l1icachesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_L1ICACHESIZE | CTLHW_RETQUAD, sysctl_hw_generic, "Q", "");
-SYSCTL_PROC    (_hw, OID_AUTO, l1dcachesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_L1DCACHESIZE | CTLHW_RETQUAD, sysctl_hw_generic, "Q", "");
-SYSCTL_PROC    (_hw, OID_AUTO, l2cachesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_L2CACHESIZE | CTLHW_RETQUAD, sysctl_hw_generic, "Q", "");
-SYSCTL_PROC    (_hw, OID_AUTO, l3cachesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN, 0, HW_L3CACHESIZE | CTLHW_RETQUAD, sysctl_hw_generic, "Q", "");
-SYSCTL_PROC(_hw, OID_AUTO, tbfrequency, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN, 0, 0, sysctl_tbfrequency, "Q", "");
-SYSCTL_QUAD    (_hw, HW_MEMSIZE, memsize, CTLFLAG_RD | CTLFLAG_KERN, &max_mem, "");
-SYSCTL_INT     (_hw, OID_AUTO, packages, CTLFLAG_RD | CTLFLAG_KERN, &packages, 0, "");
+SYSCTL_PROC    (_hw, HW_NCPU, ncpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, HW_NCPU, sysctl_hw_generic, "I", "");
+SYSCTL_PROC    (_hw, HW_AVAILCPU, activecpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, HW_AVAILCPU, sysctl_hw_generic, "I", "");
+SYSCTL_PROC    (_hw, OID_AUTO, physicalcpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, HW_LOCAL_PHYSICALCPU, sysctl_hw_generic, "I", "");
+SYSCTL_PROC    (_hw, OID_AUTO, physicalcpu_max, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, HW_LOCAL_PHYSICALCPUMAX, sysctl_hw_generic, "I", "");
+SYSCTL_PROC    (_hw, OID_AUTO, logicalcpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, HW_LOCAL_LOGICALCPU, sysctl_hw_generic, "I", "");
+SYSCTL_PROC    (_hw, OID_AUTO, logicalcpu_max, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, HW_LOCAL_LOGICALCPUMAX, sysctl_hw_generic, "I", "");
+SYSCTL_INT     (_hw, HW_BYTEORDER, byteorder, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (int *)NULL, BYTE_ORDER, "");
+SYSCTL_INT     (_hw, OID_AUTO, cputype, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &cputype, 0, "");
+SYSCTL_INT     (_hw, OID_AUTO, cpusubtype, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &cpusubtype, 0, "");
+SYSCTL_INT     (_hw, OID_AUTO, cpu64bit_capable, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &cpu64bit, 0, "");
+SYSCTL_INT     (_hw, OID_AUTO, cpufamily, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &cpufamily, 0, "");
+SYSCTL_OPAQUE  (_hw, OID_AUTO, cacheconfig, CTLFLAG_RD | CTLFLAG_LOCKED, &cacheconfig, sizeof(cacheconfig), "Q", "");
+SYSCTL_OPAQUE  (_hw, OID_AUTO, cachesize, CTLFLAG_RD | CTLFLAG_LOCKED, &cachesize, sizeof(cachesize), "Q", "");
+SYSCTL_PROC	   (_hw, OID_AUTO, pagesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, sysctl_pagesize, "Q", "");
+SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.bus_frequency_hz, "");
+SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency_min, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.bus_frequency_min_hz, "");
+SYSCTL_QUAD    (_hw, OID_AUTO, busfrequency_max, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.bus_frequency_max_hz, "");
+SYSCTL_QUAD    (_hw, OID_AUTO, cpufrequency, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.cpu_frequency_hz, "");
+SYSCTL_QUAD    (_hw, OID_AUTO, cpufrequency_min, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.cpu_frequency_min_hz, "");
+SYSCTL_QUAD    (_hw, OID_AUTO, cpufrequency_max, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.cpu_frequency_max_hz, "");
+SYSCTL_PROC    (_hw, OID_AUTO, cachelinesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, HW_CACHELINE | CTLHW_RETQUAD, sysctl_hw_generic, "Q", "");
+SYSCTL_PROC    (_hw, OID_AUTO, l1icachesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, HW_L1ICACHESIZE | CTLHW_RETQUAD, sysctl_hw_generic, "Q", "");
+SYSCTL_PROC    (_hw, OID_AUTO, l1dcachesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, HW_L1DCACHESIZE | CTLHW_RETQUAD, sysctl_hw_generic, "Q", "");
+SYSCTL_PROC    (_hw, OID_AUTO, l2cachesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, HW_L2CACHESIZE | CTLHW_RETQUAD, sysctl_hw_generic, "Q", "");
+SYSCTL_PROC    (_hw, OID_AUTO, l3cachesize, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, HW_L3CACHESIZE | CTLHW_RETQUAD, sysctl_hw_generic, "Q", "");
+SYSCTL_PROC(_hw, OID_AUTO, tbfrequency, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, sysctl_tbfrequency, "Q", "");
+SYSCTL_QUAD    (_hw, HW_MEMSIZE, memsize, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &max_mem, "");
+SYSCTL_INT     (_hw, OID_AUTO, packages, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &packages, 0, "");
 
 /*
  * Optional features can register nodes below hw.optional.
@@ -372,7 +372,7 @@ SYSCTL_INT     (_hw, OID_AUTO, packages, CTLFLAG_RD | CTLFLAG_KERN, &packages, 0
  */
 SYSCTL_NODE(_hw, OID_AUTO, optional, CTLFLAG_RW|CTLFLAG_LOCKED, NULL, "optional features");
 
-SYSCTL_INT(_hw_optional, OID_AUTO, floatingpoint, CTLFLAG_RD | CTLFLAG_KERN, (int *)NULL, 1, "");	/* always set */
+SYSCTL_INT(_hw_optional, OID_AUTO, floatingpoint, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (int *)NULL, 1, "");	/* always set */
 
 /*
  * Deprecated variables.  These are supported for backwards compatibility
@@ -386,44 +386,26 @@ SYSCTL_INT(_hw_optional, OID_AUTO, floatingpoint, CTLFLAG_RD | CTLFLAG_KERN, (in
  *
  * The *_compat nodes are *NOT* visible within the kernel.
  */
-SYSCTL_COMPAT_INT (_hw, HW_PAGESIZE,     pagesize_compat, CTLFLAG_RD | CTLFLAG_MASKED, &page_size, 0, "");
-SYSCTL_COMPAT_INT (_hw, HW_BUS_FREQ,     busfrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED, &gPEClockFrequencyInfo.bus_clock_rate_hz, 0, "");
-SYSCTL_COMPAT_INT (_hw, HW_CPU_FREQ,     cpufrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED, &gPEClockFrequencyInfo.cpu_clock_rate_hz, 0, "");
-SYSCTL_PROC(_hw, HW_CACHELINE,    cachelinesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_CACHELINE, sysctl_hw_generic, "I", "");
-SYSCTL_PROC(_hw, HW_L1ICACHESIZE, l1icachesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_L1ICACHESIZE, sysctl_hw_generic, "I", "");
-SYSCTL_PROC(_hw, HW_L1DCACHESIZE, l1dcachesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_L1DCACHESIZE, sysctl_hw_generic, "I", "");
-SYSCTL_PROC(_hw, HW_L2CACHESIZE,  l2cachesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_L2CACHESIZE, sysctl_hw_generic, "I", "");
-SYSCTL_PROC(_hw, HW_L3CACHESIZE,  l3cachesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_L3CACHESIZE, sysctl_hw_generic, "I", "");
-SYSCTL_COMPAT_INT (_hw, HW_TB_FREQ,      tbfrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED, &gPEClockFrequencyInfo.timebase_frequency_hz, 0, "");
-SYSCTL_PROC(_hw, HW_MACHINE,      machine, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_MACHINE, sysctl_hw_generic, "A", "");
-SYSCTL_PROC(_hw, HW_MODEL,        model, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_MODEL, sysctl_hw_generic, "A", "");
-SYSCTL_COMPAT_UINT(_hw, HW_PHYSMEM,      physmem, CTLFLAG_RD | CTLFLAG_MASKED, &mem_size, 0, "");
-SYSCTL_PROC(_hw, HW_USERMEM,      usermem, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_USERMEM,	sysctl_hw_generic, "I", "");
-SYSCTL_PROC(_hw, HW_EPOCH,        epoch, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_EPOCH, sysctl_hw_generic, "I", "");
-SYSCTL_PROC(_hw, HW_VECTORUNIT,   vectorunit, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_VECTORUNIT, sysctl_hw_generic, "I", "");
-SYSCTL_PROC(_hw, HW_L2SETTINGS,   l2settings, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_L2SETTINGS, sysctl_hw_generic, "I", "");
-SYSCTL_PROC(_hw, HW_L3SETTINGS,   l3settings, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED, 0, HW_L3SETTINGS, sysctl_hw_generic, "I", "");
-SYSCTL_INT (_hw, OID_AUTO, cputhreadtype, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &cputhreadtype, 0, "");
+SYSCTL_COMPAT_INT (_hw, HW_PAGESIZE,     pagesize_compat, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, &page_size, 0, "");
+SYSCTL_COMPAT_INT (_hw, HW_BUS_FREQ,     busfrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.bus_clock_rate_hz, 0, "");
+SYSCTL_COMPAT_INT (_hw, HW_CPU_FREQ,     cpufrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.cpu_clock_rate_hz, 0, "");
+SYSCTL_PROC(_hw, HW_CACHELINE,    cachelinesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_CACHELINE, sysctl_hw_generic, "I", "");
+SYSCTL_PROC(_hw, HW_L1ICACHESIZE, l1icachesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_L1ICACHESIZE, sysctl_hw_generic, "I", "");
+SYSCTL_PROC(_hw, HW_L1DCACHESIZE, l1dcachesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_L1DCACHESIZE, sysctl_hw_generic, "I", "");
+SYSCTL_PROC(_hw, HW_L2CACHESIZE,  l2cachesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_L2CACHESIZE, sysctl_hw_generic, "I", "");
+SYSCTL_PROC(_hw, HW_L3CACHESIZE,  l3cachesize_compat, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_L3CACHESIZE, sysctl_hw_generic, "I", "");
+SYSCTL_COMPAT_INT (_hw, HW_TB_FREQ,      tbfrequency_compat, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, &gPEClockFrequencyInfo.timebase_frequency_hz, 0, "");
+SYSCTL_PROC(_hw, HW_MACHINE,      machine, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_MACHINE, sysctl_hw_generic, "A", "");
+SYSCTL_PROC(_hw, HW_MODEL,        model, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_MODEL, sysctl_hw_generic, "A", "");
+SYSCTL_COMPAT_UINT(_hw, HW_PHYSMEM,      physmem, CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, &mem_size, 0, "");
+SYSCTL_PROC(_hw, HW_USERMEM,      usermem, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_USERMEM,	sysctl_hw_generic, "I", "");
+SYSCTL_PROC(_hw, HW_EPOCH,        epoch, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_EPOCH, sysctl_hw_generic, "I", "");
+SYSCTL_PROC(_hw, HW_VECTORUNIT,   vectorunit, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_VECTORUNIT, sysctl_hw_generic, "I", "");
+SYSCTL_PROC(_hw, HW_L2SETTINGS,   l2settings, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_L2SETTINGS, sysctl_hw_generic, "I", "");
+SYSCTL_PROC(_hw, HW_L3SETTINGS,   l3settings, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_MASKED | CTLFLAG_LOCKED, 0, HW_L3SETTINGS, sysctl_hw_generic, "I", "");
+SYSCTL_INT (_hw, OID_AUTO, cputhreadtype, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED, &cputhreadtype, 0, "");
 
-#ifdef __ppc__
-int altivec_flag = -1;
-int graphicsops_flag = -1;
-int x64bitops_flag = -1;
-int fsqrt_flag = -1;
-int stfiwx_flag = -1;
-int dcba_flag = -1;
-int datastreams_flag = -1;
-int dcbtstreams_flag = -1;
-
-SYSCTL_INT(_hw_optional, OID_AUTO, altivec, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &altivec_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, graphicsops, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &graphicsops_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, 64bitops, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &x64bitops_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, fsqrt, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &fsqrt_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, stfiwx, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &stfiwx_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, dcba, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &dcba_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, datastreams, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &datastreams_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, dcbtstreams, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN, &dcbtstreams_flag, 0, "");
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 int mmx_flag = -1;
 int sse_flag = -1;
 int sse2_flag = -1;
@@ -433,22 +415,27 @@ int sse4_2_flag = -1;
 int x86_64_flag = -1;
 int supplementalsse3_flag = -1;
 int aes_flag = -1;
+int avx1_0_flag = -1;
 
-SYSCTL_INT(_hw_optional, OID_AUTO, mmx, CTLFLAG_RD | CTLFLAG_KERN, &mmx_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, sse, CTLFLAG_RD | CTLFLAG_KERN, &sse_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, sse2, CTLFLAG_RD | CTLFLAG_KERN, &sse2_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, sse3, CTLFLAG_RD | CTLFLAG_KERN, &sse3_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, supplementalsse3, CTLFLAG_RD | CTLFLAG_KERN, &supplementalsse3_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, sse4_1, CTLFLAG_RD | CTLFLAG_KERN, &sse4_1_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, sse4_2, CTLFLAG_RD | CTLFLAG_KERN, &sse4_2_flag, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, mmx, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &mmx_flag, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, sse, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &sse_flag, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, sse2, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &sse2_flag, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, sse3, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &sse3_flag, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, supplementalsse3, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &supplementalsse3_flag, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, sse4_1, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &sse4_1_flag, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, sse4_2, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &sse4_2_flag, 0, "");
 /* "x86_64" is actually a preprocessor symbol on the x86_64 kernel, so we have to hack this */
 #undef x86_64
-SYSCTL_INT(_hw_optional, OID_AUTO, x86_64, CTLFLAG_RD | CTLFLAG_KERN, &x86_64_flag, 0, "");
-SYSCTL_INT(_hw_optional, OID_AUTO, aes, CTLFLAG_RD | CTLFLAG_KERN, &aes_flag, 0, "");
-#endif /* __ppc__ */
+SYSCTL_INT(_hw_optional, OID_AUTO, x86_64, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &x86_64_flag, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, aes, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &aes_flag, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, avx1_0, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &avx1_0_flag, 0, "");
+#endif /* !__i386__ && !__x86_64 && !__arm__ */
 
 /*
  * Debugging interface to the CPU power management code.
+ *
+ * Note:	Does not need locks because it disables interrupts over
+ *		the call.
  */
 static int
 pmsSysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
@@ -468,7 +455,7 @@ pmsSysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	return(error);
 }
 
-SYSCTL_PROC(_hw, OID_AUTO, pms, CTLTYPE_STRUCT | CTLFLAG_WR, 0, 0, pmsSysctl, "S", "Processor Power Management");
+SYSCTL_PROC(_hw, OID_AUTO, pms, CTLTYPE_STRUCT | CTLFLAG_WR | CTLFLAG_LOCKED, 0, 0, pmsSysctl, "S", "Processor Power Management");
 
 
 
@@ -484,9 +471,7 @@ sysctl_mib_init(void)
 	cputype = cpu_type();
 	cpusubtype = cpu_subtype();
 	cputhreadtype = cpu_threadtype();
-#if defined(__ppc__)
-    cpu64bit = (_cpu_capabilities & k64Bit) == k64Bit;
-#elif defined(__i386__) || defined (__x86_64__)
+#if defined(__i386__) || defined (__x86_64__)
     cpu64bit = (_get_cpu_capabilities() & k64Bit) == k64Bit;
 #endif
 
@@ -502,114 +487,18 @@ sysctl_mib_init(void)
 		sysctl_register_oid(&sysctl__hw_cputhreadtype);
 	}
 
-#ifdef __ppc__
-/*
- * The convention for these is as follows:
- * If the sysctl does not exist, the functionality is not present in the CPU.
- * If the sysctl exists, it will not crash, and should otherwise function
- *   corectly.
- * If the sysctl exists and returns 0, we advise against using this feature.
- * If the sysctl exists and returns 1, we advise it's use.
- */
-
-	if (_cpu_capabilities & kHasAltivec) {
-		altivec_flag = 1;
-		sysctl_register_oid(&sysctl__hw_optional_altivec);
-	}
-	if (_cpu_capabilities & kHasGraphicsOps) {
-		graphicsops_flag = 1;
-		sysctl_register_oid(&sysctl__hw_optional_graphicsops);
-	}		
-	if (_cpu_capabilities & k64Bit) {
-		x64bitops_flag = 1;
-		sysctl_register_oid(&sysctl__hw_optional_64bitops);
-	}		
-	if (_cpu_capabilities & kHasFsqrt) {
-		fsqrt_flag = 1;
-		sysctl_register_oid(&sysctl__hw_optional_fsqrt);
-	}		
-	if (_cpu_capabilities & kHasStfiwx) {
-		stfiwx_flag = 1;
-		sysctl_register_oid(&sysctl__hw_optional_stfiwx);
-	}		
-	if (_cpu_capabilities & kDcbaAvailable)
-		dcba_flag = 0;
-	if (_cpu_capabilities & kDcbaRecommended)
-		dcba_flag = 1;
-	if (dcba_flag >= 0)
-		sysctl_register_oid(&sysctl__hw_optional_dcba);
-	if (_cpu_capabilities & kDataStreamsAvailable)
-		datastreams_flag = 0;
-	if (_cpu_capabilities & kDataStreamsRecommended)
-		datastreams_flag = 1;
-	if (datastreams_flag >= 0)
-		sysctl_register_oid(&sysctl__hw_optional_datastreams);
-	if (_cpu_capabilities & kDcbtStreamsAvailable)
-		dcbtstreams_flag = 0;
-	if (_cpu_capabilities & kDcbtStreamsRecommended)
-		dcbtstreams_flag = 1;
-	if (dcbtstreams_flag >= 0)
-		sysctl_register_oid(&sysctl__hw_optional_dcbtstreams);
-
-	/* hw.cpufamily */
-	switch (cpusubtype) {
-	case CPU_SUBTYPE_POWERPC_750:
-		cpufamily = CPUFAMILY_POWERPC_G3;
-		break;
-	case CPU_SUBTYPE_POWERPC_7400:
-	case CPU_SUBTYPE_POWERPC_7450:
-		cpufamily = CPUFAMILY_POWERPC_G4;
-		break;
-	case CPU_SUBTYPE_POWERPC_970:
-		cpufamily = CPUFAMILY_POWERPC_G5;
-		break;
-	default:
-		cpufamily = CPUFAMILY_UNKNOWN;
-	}
-
-	ml_cpu_info_t cpu_info;
-	ml_cpu_get_info(&cpu_info);
-
-	host_basic_info_data_t hinfo;
-	mach_msg_type_number_t count = HOST_BASIC_INFO_COUNT;
-	kern_return_t kret = host_info((host_t)BSD_HOST, HOST_BASIC_INFO, (host_info_t)&hinfo, &count);
-	if(kret != KERN_SUCCESS)
-	{
-		hinfo.max_cpus = 1;
-	}
-
-	/* hw.cachesize */
-	cachesize[0] = max_mem;
-	cachesize[1] = cpu_info.l1_dcache_size;
-	cachesize[2] = cpu_info.l2_settings ? cpu_info.l2_cache_size : 0;
-	cachesize[3] = cpu_info.l3_settings ? cpu_info.l3_cache_size : 0;
-	cachesize[4] = 0;
-	
-	/* hw.cacheconfig */
-	cacheconfig[0] = hinfo.max_cpus;
-	cacheconfig[1] = 1;
-	cacheconfig[2] = cachesize[2] ? 1 : 0;
-	cacheconfig[3] = cachesize[3] ? 1 : 0;
-	cacheconfig[4] = 0;
-
-	/* hw.packages */
-	if (cpusubtype == CPU_SUBTYPE_POWERPC_970 && 
-	    cpu_info.l2_cache_size == 1 * 1024 * 1024)
-		/* The signature of the dual-core G5 */
-		packages = roundup(hinfo.max_cpus, 2) / 2;
-	else
-		packages = hinfo.max_cpus;
-
-#elif defined (__i386__) || defined (__x86_64__)
-	mmx_flag = ((_get_cpu_capabilities() & kHasMMX) == kHasMMX)? 1 : 0;
-	sse_flag = ((_get_cpu_capabilities() & kHasSSE) == kHasSSE)? 1 : 0;
-	sse2_flag = ((_get_cpu_capabilities() & kHasSSE2) == kHasSSE2)? 1 : 0;
-	sse3_flag = ((_get_cpu_capabilities() & kHasSSE3) == kHasSSE3)? 1 : 0;
-	supplementalsse3_flag = ((_get_cpu_capabilities() & kHasSupplementalSSE3) == kHasSupplementalSSE3)? 1 : 0;
-	sse4_1_flag = ((_get_cpu_capabilities() & kHasSSE4_1) == kHasSSE4_1)? 1 : 0;
-	sse4_2_flag = ((_get_cpu_capabilities() & kHasSSE4_2) == kHasSSE4_2)? 1 : 0;
-	x86_64_flag = ((_get_cpu_capabilities() & k64Bit) == k64Bit)? 1 : 0;
-	aes_flag = ((_get_cpu_capabilities() & kHasAES) == kHasAES)? 1 : 0;
+#if defined (__i386__) || defined (__x86_64__)
+#define is_capability_set(k) (((_get_cpu_capabilities() & (k)) == (k)) ? 1 : 0)
+	mmx_flag		= is_capability_set(kHasMMX);
+	sse_flag		= is_capability_set(kHasSSE);
+	sse2_flag		= is_capability_set(kHasSSE2);
+	sse3_flag		= is_capability_set(kHasSSE3);
+	supplementalsse3_flag	= is_capability_set(kHasSupplementalSSE3);
+	sse4_1_flag		= is_capability_set(kHasSSE4_1);
+	sse4_2_flag		= is_capability_set(kHasSSE4_2);
+	x86_64_flag		= is_capability_set(k64Bit);
+	aes_flag		= is_capability_set(kHasAES);
+	avx1_0_flag		= is_capability_set(kHasAVX1_0);
 
 	/* hw.cpufamily */
 	cpufamily = cpuid_cpufamily();
@@ -633,7 +522,7 @@ sysctl_mib_init(void)
 			/ cpuid_info()->thread_count;
 
 #else /* end __arm__ */
-# warning we do not support this platform yet
-#endif /* __ppc__ */
+# error unknown architecture
+#endif /* !__i386__ && !__x86_64 && !__arm__ */
 
 }

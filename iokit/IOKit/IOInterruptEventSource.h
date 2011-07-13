@@ -189,6 +189,17 @@ state when checkForWork is called. */
     @param nub Where did the interrupt originate from
     @param ind What is this interrupts index within 'nub'. */
     virtual void disableInterruptOccurred(void *, IOService *nub, int ind);
+    
+/*! @function warmCPU
+    @abstract Tries to reduce latency for an interrupt which will be received near a specified time.
+    @discussion Warms up a CPU in advance of an interrupt so that the interrupt may be serviced with predictable latency.  
+    The warm-up is not periodic; callers should call warmCPU once in advance of each interrupt.  It is recommended that
+    requests be issues in serial (i.e. each after the target for the previous call has elapsed), as there is a systemwide
+    cap on the number of outstanding requests.  This routine may be disruptive to the system if used with very small intervals
+    between requests; it should be used only in cases where interrupt latency is absolutely critical, and tens or hundreds of 
+    milliseconds between targets is the expected time scale.  NOTE: it is not safe to call this method with interrupts disabled.
+    @param abstime Time at which interrupt is expected. */
+    IOReturn warmCPU(uint64_t abstime);
 
 private:
     IOReturn registerInterruptHandler(IOService *inProvider, int inIntIndex);

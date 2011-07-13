@@ -109,7 +109,8 @@ extern int copyoutmsg(
 	mach_msg_size_t nbytes);
 
 /* Invalidate copy window(s) cache */
-extern void    inval_copy_windows(thread_t);
+extern void inval_copy_windows(thread_t);
+extern void copy_window_fault(thread_t, vm_map_t, int);
 
 extern int sscanf(const char *input, const char *fmt, ...) __scanflike(2,3);
 
@@ -165,6 +166,8 @@ extern void safe_gets(
 extern void cnputcusr(char);
 
 extern void conslog_putc(char);
+
+extern void cons_putc_locked(char);
 
 extern void consdebug_putc(char);
 

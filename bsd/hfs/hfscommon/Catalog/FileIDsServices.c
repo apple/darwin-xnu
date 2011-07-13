@@ -42,12 +42,63 @@ typedef struct ExtentsRecBuffer ExtentsRecBuffer;
 
 
 static u_int32_t CheckExtents( void *extents, u_int32_t blocks, Boolean isHFSPlus );
-static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileNumber, Boolean isHFSPlus );
-static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t destFileID, Boolean isHFSPlus );
+static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileNumber, int quitEarly, u_int8_t forkType, Boolean isHFSPlus );
+static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t destFileID, int quitEarly, u_int8_t forkType, Boolean isHFSPlus );
 static void  CopyCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest );
 static void  CopyBigCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest );
 static void  CopyExtentInfo( ExtentKey *key, ExtentRecord *data, ExtentsRecBuffer *buffer, u_int16_t bufferCount );
 
+/* 
+ * This function moves the overflow extents associated with srcID into the file associated with dstID.
+ * We should have already verified that 'srcID' has overflow extents. So now we move all of the overflow
+ * extent records.
+ */
+OSErr MoveData( ExtendedVCB *vcb, HFSCatalogNodeID srcID, HFSCatalogNodeID destID, int rsrc) { 
+	
+	OSErr		err;
+	
+	/* 
+	 * Only the source file should have extents, so we just track those.
+	 * We operate on the fork represented by the open FD that was used to call into this
+	 * function
+	 */
+	if (rsrc) {		
+		/* Copy the extent overflow blocks. */
+		err = MoveExtents( vcb, srcID, destID, 1, (u_int8_t)0xff, 1);
+		if ( err != noErr ) {
+			if ( err != dskFulErr ) {
+				return( err );
+			}
+			/* 
+			 * In case of error, we would have probably run into problems
+			 * growing the extents b-tree.  Since the move is actually a copy + delete
+			 * just delete the new entries. Same for below.
+			 */
+			err = DeleteExtents( vcb, destID, 1, (u_int8_t)0xff, 1); 
+			ReturnIfError( err ); //	we are doomed. Just QUIT!
+			goto FlushAndReturn;
+		}
+	}
+	else {		
+		/* Copy the extent overflow blocks. */
+		err = MoveExtents( vcb, srcID, destID, 1, 0, 1);
+		if ( err != noErr ) {
+			if ( err != dskFulErr ) {
+				return( err );
+			}
+			err = DeleteExtents( vcb, destID, 1, 0, 1); 
+			ReturnIfError( err ); //	we are doomed. Just QUIT!
+			goto FlushAndReturn;
+		}
+	}
+	
+FlushAndReturn:
+	/* Write out the catalog and extent overflow B-Tree changes */
+	err = FlushCatalog( vcb );
+	err = FlushExtentFile( vcb );
+	
+	return( err );
+}
 
 
 OSErr ExchangeFileIDs( ExtendedVCB *vcb, ConstUTF8Param srcName, ConstUTF8Param destName, HFSCatalogNodeID srcID, HFSCatalogNodeID destID, u_int32_t srcHint, u_int32_t destHint )
@@ -61,13 +112,13 @@ OSErr ExchangeFileIDs( ExtendedVCB *vcb, ConstUTF8Param srcName, ConstUTF8Param 
 	int16_t		numDestExtentBlocks;
 	OSErr		err;
 	Boolean		isHFSPlus = ( vcb->vcbSigWord == kHFSPlusSigWord );
-
+	
 	err = BuildCatalogKeyUTF8(vcb, srcID, srcName, kUndefinedStrLen, &srcKey, NULL);
 	ReturnIfError(err);
-
+	
 	err = BuildCatalogKeyUTF8(vcb, destID, destName, kUndefinedStrLen, &destKey, NULL);
 	ReturnIfError(err);
-
+	
 	if ( isHFSPlus )
 	{
 		//--	Step 1: Check the catalog nodes for extents
@@ -75,37 +126,37 @@ OSErr ExchangeFileIDs( ExtendedVCB *vcb, ConstUTF8Param srcName, ConstUTF8Param 
 		//--	locate the source file, test for extents in extent file, and copy the cat record for later
 		err = LocateCatalogNodeByKey( vcb, srcHint, &srcKey, &srcData, &srcHint );
 		ReturnIfError( err );
-	
+		
 		if ( srcData.recordType != kHFSPlusFileRecord )
 			return( cmFThdDirErr );					//	Error "cmFThdDirErr = it is a directory"
-			
+		
 		//--	Check if there are any extents in the source file
 		//€€	I am only checling the extents in the low 32 bits, routine will fail if files extents after 2 gig are in overflow
 		numSrcExtentBlocks = CheckExtents( srcData.hfsPlusFile.dataFork.extents, srcData.hfsPlusFile.dataFork.totalBlocks, isHFSPlus );
 		if ( numSrcExtentBlocks == 0 )					//	then check the resource fork extents
 			numSrcExtentBlocks = CheckExtents( srcData.hfsPlusFile.resourceFork.extents, srcData.hfsPlusFile.resourceFork.totalBlocks, isHFSPlus );
-
+		
 		//--	Check if there are any extents in the destination file
 		err = LocateCatalogNodeByKey( vcb, destHint, &destKey, &destData, &destHint );
 		ReturnIfError( err );
-	
+		
 		if ( destData.recordType != kHFSPlusFileRecord )
 			return( cmFThdDirErr );					//	Error "cmFThdDirErr = it is a directory"
-
+		
 		numDestExtentBlocks = CheckExtents( destData.hfsPlusFile.dataFork.extents, destData.hfsPlusFile.dataFork.totalBlocks, isHFSPlus );
 		if ( numDestExtentBlocks == 0 )					//	then check the resource fork extents
 			numDestExtentBlocks = CheckExtents( destData.hfsPlusFile.resourceFork.extents, destData.hfsPlusFile.resourceFork.totalBlocks, isHFSPlus );
-
+		
 		//--	Step 2: Exchange the Extent key in the extent file
 		
 		//--	Exchange the extents key in the extent file
-		err = DeleteExtents( vcb, kHFSBogusExtentFileID, isHFSPlus );
+		err = DeleteExtents( vcb, kHFSBogusExtentFileID, 0, 0, isHFSPlus );
 		ReturnIfError( err );
 		
 		if ( numSrcExtentBlocks && numDestExtentBlocks )	//	if both files have extents
 		{
 			//--	Change the source extents file ids to our known bogus value
-			err = MoveExtents( vcb, srcData.hfsPlusFile.fileID, kHFSBogusExtentFileID, isHFSPlus );
+			err = MoveExtents( vcb, srcData.hfsPlusFile.fileID, kHFSBogusExtentFileID, 0, 0, isHFSPlus );
 			if ( err != noErr )
 			{
 				if ( err != dskFulErr )
@@ -115,67 +166,67 @@ OSErr ExchangeFileIDs( ExtendedVCB *vcb, ConstUTF8Param srcName, ConstUTF8Param 
 			}
 			
 			//--	Change the destination extents file id's to the source id's
-			err = MoveExtents( vcb, destData.hfsPlusFile.fileID, srcData.hfsPlusFile.fileID, isHFSPlus );
+			err = MoveExtents( vcb, destData.hfsPlusFile.fileID, srcData.hfsPlusFile.fileID, 0, 0, isHFSPlus );
 			if ( err != noErr )
 			{
 				if ( err != dskFulErr )
 					return( err );
-
-ExUndo2aPlus:	err = DeleteExtents( vcb, srcData.hfsPlusFile.fileID, isHFSPlus );
+				
+			ExUndo2aPlus:	err = DeleteExtents( vcb, srcData.hfsPlusFile.fileID, 0, 0, isHFSPlus );
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-
-                err = MoveExtents( vcb, kHFSBogusExtentFileID, srcData.hfsPlusFile.fileID, isHFSPlus );	//	Move the extents back
+				
+                err = MoveExtents( vcb, kHFSBogusExtentFileID, srcData.hfsPlusFile.fileID, 0, 0, isHFSPlus );	//	Move the extents back
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-					
+				
 				goto ExUndo1a;
 			}
 			
 			//--	Change the bogus extents file id's to the dest id's
-            err = MoveExtents( vcb, kHFSBogusExtentFileID, destData.hfsPlusFile.fileID, isHFSPlus );
+            err = MoveExtents( vcb, kHFSBogusExtentFileID, destData.hfsPlusFile.fileID, 0, 0, isHFSPlus );
 			if ( err != noErr )
 			{
 				if ( err != dskFulErr )
 					return( err );
-
-				err = DeleteExtents( vcb, destData.hfsPlusFile.fileID, isHFSPlus );
+				
+				err = DeleteExtents( vcb, destData.hfsPlusFile.fileID, 0, 0, isHFSPlus );
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-
-				err = MoveExtents( vcb, srcData.hfsPlusFile.fileID, destData.hfsPlusFile.fileID, isHFSPlus );	//	Move the extents back
+				
+				err = MoveExtents( vcb, srcData.hfsPlusFile.fileID, destData.hfsPlusFile.fileID, 0, 0, isHFSPlus );	//	Move the extents back
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-					
+				
 				goto ExUndo2aPlus;
 			}
 			
 		}
 		else if ( numSrcExtentBlocks )	//	just the source file has extents
 		{
-			err = MoveExtents( vcb, srcData.hfsPlusFile.fileID, destData.hfsPlusFile.fileID, isHFSPlus );
+			err = MoveExtents( vcb, srcData.hfsPlusFile.fileID, destData.hfsPlusFile.fileID, 0, 0, isHFSPlus );
 			if ( err != noErr )
 			{
 				if ( err != dskFulErr )
 					return( err );
-
-				err = DeleteExtents( vcb, srcData.hfsPlusFile.fileID, isHFSPlus );
+				
+				err = DeleteExtents( vcb, srcData.hfsPlusFile.fileID, 0, 0, isHFSPlus );
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-
+				
 				goto FlushAndReturn;
 			}
 		}
 		else if ( numDestExtentBlocks )	//	just the destination file has extents
 		{
-			err = MoveExtents( vcb, destData.hfsPlusFile.fileID, srcData.hfsPlusFile.fileID, isHFSPlus );
+			err = MoveExtents( vcb, destData.hfsPlusFile.fileID, srcData.hfsPlusFile.fileID, 0, 0, isHFSPlus );
 			if ( err != noErr )
 			{
 				if ( err != dskFulErr )
 					return( err );
-
-				err = DeleteExtents( vcb, destData.hfsPlusFile.fileID, isHFSPlus );
+				
+				err = DeleteExtents( vcb, destData.hfsPlusFile.fileID, 0, 0, isHFSPlus );
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-
+				
 				goto FlushAndReturn;
 			}
 		}
-
+		
 		//--	Step 3: Change the data in the catalog nodes
 		
 		//--	find the source cnode and put dest info in it
@@ -188,12 +239,12 @@ ExUndo2aPlus:	err = DeleteExtents( vcb, srcData.hfsPlusFile.fileID, isHFSPlus );
 		
 		err = ReplaceBTreeRecord( vcb->catalogRefNum, &srcKey, srcHint, &srcData, sizeof(HFSPlusCatalogFile), &srcHint );
 		ReturnIfError( err );
-
+		
 		//	find the destination cnode and put source info in it		
 		err = LocateCatalogNodeByKey( vcb, destHint, &destKey, &destData, &destHint );
 		if ( err != noErr )
 			return( cmBadNews );
-			
+		
 		CopyBigCatalogNodeInfo( &swapData, &destData );
 		err = ReplaceBTreeRecord( vcb->catalogRefNum, &destKey, destHint, &destData, sizeof(HFSPlusCatalogFile), &destHint );
 		ReturnIfError( err );
@@ -205,10 +256,10 @@ ExUndo2aPlus:	err = DeleteExtents( vcb, srcData.hfsPlusFile.fileID, isHFSPlus );
 		//--	locate the source file, test for extents in extent file, and copy the cat record for later
 		err = LocateCatalogNodeByKey( vcb, srcHint, &srcKey, &srcData, &srcHint );
 		ReturnIfError( err );
-	
+		
 		if ( srcData.recordType != kHFSFileRecord )
 			return( cmFThdDirErr );					//	Error "cmFThdDirErr = it is a directory"
-			
+		
 		//--	Check if there are any extents in the source file
 		numSrcExtentBlocks = CheckExtents( srcData.hfsFile.dataExtents, srcData.hfsFile.dataPhysicalSize / vcb->blockSize, isHFSPlus );
 		if ( numSrcExtentBlocks == 0 )					//	then check the resource fork extents
@@ -217,106 +268,106 @@ ExUndo2aPlus:	err = DeleteExtents( vcb, srcData.hfsPlusFile.fileID, isHFSPlus );
 		
 		//€€	Do we save the found source node for later use?
 		
-				
+		
 		//--	Check if there are any extents in the destination file
 		err = LocateCatalogNodeByKey( vcb, destHint, &destKey, &destData, &destHint );
 		ReturnIfError( err );
-	
+		
 		if ( destData.recordType != kHFSFileRecord )
 			return( cmFThdDirErr );					//	Error "cmFThdDirErr = it is a directory"
-
+		
 		numDestExtentBlocks = CheckExtents( destData.hfsFile.dataExtents, destData.hfsFile.dataPhysicalSize / vcb->blockSize, isHFSPlus );
 		if ( numDestExtentBlocks == 0 )					//	then check the resource fork extents
 			numDestExtentBlocks = CheckExtents( destData.hfsFile.rsrcExtents, destData.hfsFile.rsrcPhysicalSize / vcb->blockSize, isHFSPlus );
-			
+		
 		//€€	Do we save the found destination node for later use?
-
-
+		
+		
 		//--	Step 2: Exchange the Extent key in the extent file
 		
 		//--	Exchange the extents key in the extent file
-        err = DeleteExtents( vcb, kHFSBogusExtentFileID, isHFSPlus );
+        err = DeleteExtents( vcb, kHFSBogusExtentFileID, 0, 0, isHFSPlus );
 		ReturnIfError( err );
 		
 		if ( numSrcExtentBlocks && numDestExtentBlocks )	//	if both files have extents
 		{
 			//--	Change the source extents file ids to our known bogus value
-        err = MoveExtents( vcb, srcData.hfsFile.fileID, kHFSBogusExtentFileID, isHFSPlus );
+			err = MoveExtents( vcb, srcData.hfsFile.fileID, kHFSBogusExtentFileID, 0, 0, isHFSPlus );
 			if ( err != noErr )
 			{
 				if ( err != dskFulErr )
 					return( err );
-
-ExUndo1a:		err = DeleteExtents( vcb, kHFSBogusExtentFileID, isHFSPlus );
+				
+			ExUndo1a:		err = DeleteExtents( vcb, kHFSBogusExtentFileID, 0, 0, isHFSPlus );
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-
+				
 				err = FlushCatalog( vcb );   			//	flush the catalog
 				err = FlushExtentFile( vcb );			//	flush the extent file (unneeded for common case, but it's cheap)			
 				return( dskFulErr );
 			}
 			
 			//--	Change the destination extents file id's to the source id's
-			err = MoveExtents( vcb, destData.hfsFile.fileID, srcData.hfsFile.fileID, isHFSPlus );
+			err = MoveExtents( vcb, destData.hfsFile.fileID, srcData.hfsFile.fileID, 0, 0, isHFSPlus );
 			if ( err != noErr )
 			{
 				if ( err != dskFulErr )
 					return( err );
-
-ExUndo2a:		err = DeleteExtents( vcb, srcData.hfsFile.fileID, isHFSPlus );
+				
+			ExUndo2a:		err = DeleteExtents( vcb, srcData.hfsFile.fileID, 0, 0, isHFSPlus );
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-
-                err = MoveExtents( vcb, kHFSBogusExtentFileID, srcData.hfsFile.fileID, isHFSPlus );	//	Move the extents back
+				
+                err = MoveExtents( vcb, kHFSBogusExtentFileID, srcData.hfsFile.fileID, 0, 0, isHFSPlus );	//	Move the extents back
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-					
+				
 				goto ExUndo1a;
 			}
 			
 			//--	Change the bogus extents file id's to the dest id's
-            err = MoveExtents( vcb, kHFSBogusExtentFileID, destData.hfsFile.fileID, isHFSPlus );
+            err = MoveExtents( vcb, kHFSBogusExtentFileID, destData.hfsFile.fileID, 0, 0, isHFSPlus );
 			if ( err != noErr )
 			{
 				if ( err != dskFulErr )
 					return( err );
-
-				err = DeleteExtents( vcb, destData.hfsFile.fileID, isHFSPlus );
+				
+				err = DeleteExtents( vcb, destData.hfsFile.fileID, 0, 0, isHFSPlus );
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-
-				err = MoveExtents( vcb, srcData.hfsFile.fileID, destData.hfsFile.fileID, isHFSPlus );	//	Move the extents back
+				
+				err = MoveExtents( vcb, srcData.hfsFile.fileID, destData.hfsFile.fileID, 0, 0, isHFSPlus );	//	Move the extents back
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-					
+				
 				goto ExUndo2a;
 			}
 			
 		}
 		else if ( numSrcExtentBlocks )	//	just the source file has extents
 		{
-			err = MoveExtents( vcb, srcData.hfsFile.fileID, destData.hfsFile.fileID, isHFSPlus );
+			err = MoveExtents( vcb, srcData.hfsFile.fileID, destData.hfsFile.fileID, 0, 0, isHFSPlus );
 			if ( err != noErr )
 			{
 				if ( err != dskFulErr )
 					return( err );
-
-				err = DeleteExtents( vcb, srcData.hfsFile.fileID, isHFSPlus );
+				
+				err = DeleteExtents( vcb, srcData.hfsFile.fileID, 0, 0, isHFSPlus );
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-
+				
 				goto FlushAndReturn;
 			}
 		}
 		else if ( numDestExtentBlocks )	//	just the destination file has extents
 		{
-			err = MoveExtents( vcb, destData.hfsFile.fileID, srcData.hfsFile.fileID, isHFSPlus );
+			err = MoveExtents( vcb, destData.hfsFile.fileID, srcData.hfsFile.fileID, 0, 0, isHFSPlus );
 			if ( err != noErr )
 			{
 				if ( err != dskFulErr )
 					return( err );
-
-				err = DeleteExtents( vcb, destData.hfsFile.fileID, isHFSPlus );
+				
+				err = DeleteExtents( vcb, destData.hfsFile.fileID, 0, 0, isHFSPlus );
 				ReturnIfError( err );					//	we are doomed. Just QUIT!
-
+				
 				goto FlushAndReturn;
 			}
 		}
-
+		
 		//--	Step 3: Change the data in the catalog nodes
 		
 		//--	find the source cnode and put dest info in it
@@ -330,23 +381,23 @@ ExUndo2a:		err = DeleteExtents( vcb, srcData.hfsFile.fileID, isHFSPlus );
 		
 		err = ReplaceBTreeRecord( vcb->catalogRefNum, &srcKey, srcHint, &srcData, sizeof(HFSCatalogFile), &srcHint );
 		ReturnIfError( err );
-
+		
 		
 		//	find the destination cnode and put source info in it		
 		err = LocateCatalogNodeByKey( vcb, destHint, &destKey, &destData, &destHint );
 		if ( err != noErr )
 			return( cmBadNews );
-			
+		
 		CopyCatalogNodeInfo( &swapData, &destData );
 		err = ReplaceBTreeRecord( vcb->catalogRefNum, &destKey, destHint, &destData, sizeof(HFSCatalogFile), &destHint );
 		ReturnIfError( err );
 	}
 	
 	err = noErr;
-
+	
 	//--	Step 4: Error Handling section
-
-
+	
+	
 FlushAndReturn:
 	err = FlushCatalog( vcb );   			//	flush the catalog
 	err = FlushExtentFile( vcb );			//	flush the extent file (unneeded for common case, but it's cheap)			
@@ -373,7 +424,7 @@ static void  CopyBigCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest )
 }
 
 
-static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t destFileID, Boolean isHFSPlus )
+static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t destFileID, int quitEarly, u_int8_t forkType, Boolean isHFSPlus )
 {
 	FCB *				fcb;
 	ExtentsRecBuffer	extentsBuffer[kNumExtentsToCache];
@@ -386,16 +437,16 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 	int16_t				i, j;
 	OSErr				err;
 	
-
+	
 	fcb = GetFileControlBlock(vcb->extentsRefNum);
 	
 	(void) BTInvalidateHint(&btIterator);
 	extentKeyPtr = (ExtentKey*) &btIterator.key;
 	btRecord.bufferAddress = &extentData;
 	btRecord.itemCount = 1;
-
+	
 	//--	Collect the extent records
-
+	
 	//
 	//	A search on the following key will cause the BTree to be positioned immediately
 	//	before the first extent record for file #srcFileID, but not actually positioned
@@ -408,9 +459,9 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 	if (isHFSPlus) {
 		btRecord.itemSize = sizeof(HFSPlusExtentRecord);
 		btKeySize = sizeof(HFSPlusExtentKey);
-
+		
 		extentKeyPtr->hfsPlus.keyLength	 = kHFSPlusExtentKeyMaximumLength;
-		extentKeyPtr->hfsPlus.forkType	 = 0;
+		extentKeyPtr->hfsPlus.forkType	 = forkType;
 		extentKeyPtr->hfsPlus.pad		 = 0;
 		extentKeyPtr->hfsPlus.fileID	 = srcFileID;
 		extentKeyPtr->hfsPlus.startBlock = 0;
@@ -418,7 +469,7 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 	else {
 		btRecord.itemSize = sizeof(HFSExtentRecord);
 		btKeySize = sizeof(HFSExtentKey);
-
+		
 		extentKeyPtr->hfs.keyLength	 = kHFSExtentKeyMaximumLength;
 		extentKeyPtr->hfs.forkType	 = 0;
 		extentKeyPtr->hfs.fileID	 = srcFileID;
@@ -440,7 +491,7 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 	//	of BTIterateRecord.  We'd need to set up the key for BTSearchRecord to find the last record
 	//	we found, so that BTIterateRecord would get the next one (the first we haven't processed).
 	//
-
+	
 	err = BTSearchRecord(fcb, &btIterator, &btRecord, &btRecordSize, &btIterator);
 	
 	//	We expect a btNotFound here, since there shouldn't be an extent record with FABN = 0.
@@ -454,16 +505,16 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 		
 		return err;
 	}
-
+	
 	do
 	{
 		btRecord.bufferAddress = &extentData;
 		btRecord.itemCount = 1;
-
+		
 		for ( i=0 ; i<kNumExtentsToCache ; i++ )
 		{
 			HFSCatalogNodeID	foundFileID;
-
+			
 			err = BTIterateRecord(fcb, kBTreeNextRecord, &btIterator, &btRecord, &btRecordSize);
 			if ( err == btNotFound )		//	Did we run out of extent records in the extents tree?
 				break;						//	if xkrFNum(A0) is cleared on this error, then this test is bogus!
@@ -471,12 +522,17 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 				return( err );				//	must be ioError
 			
 			foundFileID = isHFSPlus ? extentKeyPtr->hfsPlus.fileID : extentKeyPtr->hfs.fileID;
-			if ( foundFileID == srcFileID )
-			{
+			if ( foundFileID == srcFileID ) {
+				/* Check if we need to quit early. */
+				if (quitEarly && isHFSPlus) {
+					if (extentKeyPtr->hfsPlus.forkType != forkType) {
+						break;
+					}
+				}
 				CopyExtentInfo(extentKeyPtr, &extentData, extentsBuffer, i);
 			}
-			else
-			{
+			else{
+				/* The fileID's are of a different file.  We're done here. */
 				break;
 			}
 		}
@@ -486,21 +542,20 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 			btRecordSize = sizeof(HFSPlusExtentRecord);
 		else
 			btRecordSize = sizeof(HFSExtentRecord);
-
-		for ( j=0 ; j<i ; j++ )
-		{
+		
+		for ( j=0 ; j<i ; j++ ) {
 			BTreeIterator tmpIterator;
-
+			
 			if (isHFSPlus)
 				extentsBuffer[j].extentKey.hfsPlus.fileID = destFileID;	//	change only the id in the key to dest ID
 			else
 				extentsBuffer[j].extentKey.hfs.fileID = destFileID;	//	change only the id in the key to dest ID
-
+			
 			// get iterator and buffer descriptor ready...
 			(void) BTInvalidateHint(&tmpIterator);
 			BlockMoveData(&(extentsBuffer[j].extentKey), &tmpIterator.key, btKeySize);
 			btRecord.bufferAddress = &(extentsBuffer[j].extentData);
-
+			
 			err = BTInsertRecord(fcb, &tmpIterator, &btRecord, btRecordSize);
 			if ( err != noErr )
 			{									//	parse the error
@@ -520,7 +575,7 @@ static OSErr  MoveExtents( ExtendedVCB *vcb, u_int32_t srcFileID, u_int32_t dest
 		
 		if ( i != kNumExtentsToCache )			//	if the buffer is not full, we must be done
 		{
-			err = DeleteExtents( vcb, srcFileID, isHFSPlus );	//	Now delete all the extent entries with the sourceID
+			err = DeleteExtents( vcb, srcFileID, forkType, quitEarly, isHFSPlus );	//	Now delete all the extent entries with the sourceID
 			if ( DEBUG_BUILD && err != noErr )
 				DebugStr("Error from DeleteExtents");
 			break;									//	we're done!
@@ -538,8 +593,10 @@ static void  CopyExtentInfo( ExtentKey *key, ExtentRecord *data, ExtentsRecBuffe
 }
 
 
+
+
 //--	Delete all extents in extent file that have the ID given.
-static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, Boolean isHFSPlus )
+static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, int quitEarly,  u_int8_t forkType, Boolean isHFSPlus )
 {
 	FCB *				fcb;
 	ExtentKey *			extentKeyPtr;
@@ -548,36 +605,36 @@ static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, Boolean isHFSPl
 	FSBufferDescriptor	btRecord;
 	u_int16_t			btRecordSize;
 	OSErr				err;
-
+	
 	fcb = GetFileControlBlock(vcb->extentsRefNum);
-
+	
 	(void) BTInvalidateHint(&btIterator);
 	extentKeyPtr = (ExtentKey*) &btIterator.key;
 	btRecord.bufferAddress = &extentData;
 	btRecord.itemCount = 1;
-
+	
 	//	The algorithm is to position the BTree just before any extent records for fileID.
 	//	Then just keep getting successive records.  If the record is still for fileID,
 	//	then delete it.
 	
 	if (isHFSPlus) {
 		btRecord.itemSize = sizeof(HFSPlusExtentRecord);
-
+		
 		extentKeyPtr->hfsPlus.keyLength	 = kHFSPlusExtentKeyMaximumLength;
-		extentKeyPtr->hfsPlus.forkType	 = 0;
+		extentKeyPtr->hfsPlus.forkType	 = forkType;
 		extentKeyPtr->hfsPlus.pad		 = 0;
 		extentKeyPtr->hfsPlus.fileID	 = fileID;
 		extentKeyPtr->hfsPlus.startBlock = 0;
 	}
 	else {
 		btRecord.itemSize = sizeof(HFSExtentRecord);
-
+		
 		extentKeyPtr->hfs.keyLength	 = kHFSExtentKeyMaximumLength;
-		extentKeyPtr->hfs.forkType	 = 0;
+		extentKeyPtr->hfs.forkType	 = forkType;
 		extentKeyPtr->hfs.fileID	 = fileID;
 		extentKeyPtr->hfs.startBlock = 0;
 	}
-
+	
 	err = BTSearchRecord(fcb, &btIterator, &btRecord, &btRecordSize, &btIterator);
 	if ( err != btNotFound )
 	{
@@ -587,25 +644,32 @@ static OSErr  DeleteExtents( ExtendedVCB *vcb, u_int32_t fileID, Boolean isHFSPl
 		
 		return err;				//	Got some unexpected error, so return it
 	}
-
+	
 	do
 	{
 		BTreeIterator 		tmpIterator;
 		HFSCatalogNodeID	foundFileID;
-
+		
 		err = BTIterateRecord(fcb, kBTreeNextRecord, &btIterator, &btRecord, &btRecordSize);
 		if ( err != noErr )
 		{
 			if (err == btNotFound)	//	If we hit the end of the BTree
 				err = noErr;		//		then it's OK
-				
+			
 			break;					//	We're done now.
 		}
 		
 		foundFileID = isHFSPlus ? extentKeyPtr->hfsPlus.fileID : extentKeyPtr->hfs.fileID;
-		if ( foundFileID != fileID )
+		if ( foundFileID != fileID ) {
 			break;					//	numbers don't match, we must be done
-
+		}
+		if (quitEarly && isHFSPlus) {
+			/* If we're only deleting one type of fork, then quit early if it doesn't match */
+			if (extentKeyPtr->hfsPlus.forkType != forkType) {
+				break;
+			}
+		}
+		
 		tmpIterator = btIterator;
 		err = BTDeleteRecord( fcb, &tmpIterator );
 		if (err != noErr)

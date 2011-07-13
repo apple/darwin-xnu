@@ -300,6 +300,11 @@ extern void ipc_object_destroy(
 	ipc_object_t		object,
 	mach_msg_type_name_t	msgt_name);
 
+/* Destroy a naked destination capability */
+extern void ipc_object_destroy_dest(
+	ipc_object_t		object,
+	mach_msg_type_name_t	msgt_name);
+
 /* Copyout a capability, placing it into a space */
 extern kern_return_t ipc_object_copyout(
 	ipc_space_t		space,

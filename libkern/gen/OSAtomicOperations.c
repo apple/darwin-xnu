@@ -54,8 +54,8 @@ enum {
  * Like standards, there are a lot of atomic ops to choose from!
  */
 
-#if !defined(__ppc__) && !defined(__i386__) && !defined(__x86_64__)
-/* Implemented in assembly for ppc and i386 and x86_64 */
+#if !defined(__i386__) && !defined(__x86_64__)
+/* Implemented in assembly for i386 and x86_64 */
 #undef OSAddAtomic
 SInt32
 OSAddAtomic(SInt32 amount, volatile SInt32 * value)
@@ -72,6 +72,7 @@ OSAddAtomic(SInt32 amount, volatile SInt32 * value)
 	return oldValue;
 }
 
+#undef OSAddAtomicLong
 long
 OSAddAtomicLong(long theAmount, volatile long *address)
 {
@@ -82,7 +83,7 @@ OSAddAtomicLong(long theAmount, volatile long *address)
 #endif
 }
 
-/* Implemented as an assembly alias for i386 and linker alias for ppc */
+/* Implemented as an assembly alias for i386 */
 #undef OSCompareAndSwapPtr
 Boolean OSCompareAndSwapPtr(void *oldValue, void *newValue,
 			    void * volatile *address)
@@ -97,9 +98,6 @@ Boolean OSCompareAndSwapPtr(void *oldValue, void *newValue,
 }
 #endif
 
-#ifndef __ppc__
-/* Implemented as assembly for ppc */
-
 #undef OSIncrementAtomic
 SInt32	OSIncrementAtomic(volatile SInt32 * value)
 {
@@ -111,7 +109,6 @@ SInt32	OSDecrementAtomic(volatile SInt32 * value)
 {
 	return OSAddAtomic(-1, value);
 }
-#endif	/* !__ppc__ */
 
 static UInt32	OSBitwiseAtomic(UInt32 and_mask, UInt32 or_mask, UInt32 xor_mask, volatile UInt32 * value)
 {

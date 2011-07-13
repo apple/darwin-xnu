@@ -110,9 +110,79 @@
 #include "fdesc.h"
 #endif /* FDESC */
 
-static int devfs_update(struct vnode *vp, struct timeval *access,
-                        struct timeval *modify);
-void	devfs_rele_node(devnode_t *);
+static int 		devfs_update(struct vnode *vp, struct timeval *access,
+                        	struct timeval *modify);
+void			devfs_rele_node(devnode_t *);
+static void		devfs_consider_time_update(devnode_t *dnp, uint32_t just_changed_flags);
+static boolean_t 	devfs_update_needed(long now_s, long last_s);
+void 			dn_times_locked(devnode_t * dnp, struct timeval *t1, struct timeval *t2, struct timeval *t3, uint32_t just_changed_flags);
+void			dn_times_now(devnode_t *dnp, uint32_t just_changed_flags);
+void			dn_mark_for_delayed_times_update(devnode_t *dnp, uint32_t just_changed_flags);
+
+void 
+dn_times_locked(devnode_t * dnp, struct timeval *t1, struct timeval *t2, struct timeval *t3, uint32_t just_changed_flags)
+{
+
+	lck_mtx_assert(&devfs_attr_mutex, LCK_MTX_ASSERT_OWNED);
+
+	if (just_changed_flags & DEVFS_UPDATE_ACCESS) {
+		dnp->dn_atime.tv_sec = t1->tv_sec;
+		dnp->dn_atime.tv_nsec = t1->tv_usec * 1000;
+		dnp->dn_access = 0;
+	} else if (dnp->dn_access) {
+		dnp->dn_atime.tv_sec = MIN(t1->tv_sec, dnp->dn_atime.tv_sec + DEVFS_LAZY_UPDATE_SECONDS);
+		dnp->dn_atime.tv_nsec = t1->tv_usec * 1000;
+		dnp->dn_access = 0;
+	}
+
+	if (just_changed_flags & DEVFS_UPDATE_MOD) {
+		dnp->dn_mtime.tv_sec = t2->tv_sec;
+		dnp->dn_mtime.tv_nsec = t2->tv_usec * 1000;
+		dnp->dn_update = 0;
+	} else if (dnp->dn_update) {
+		dnp->dn_mtime.tv_sec = MIN(t2->tv_sec, dnp->dn_mtime.tv_sec + DEVFS_LAZY_UPDATE_SECONDS);
+		dnp->dn_mtime.tv_nsec = t2->tv_usec * 1000;
+		dnp->dn_update = 0;
+	}
+
+	if (just_changed_flags & DEVFS_UPDATE_CHANGE) {
+		dnp->dn_ctime.tv_sec = t3->tv_sec;
+		dnp->dn_ctime.tv_nsec = t3->tv_usec * 1000;
+		dnp->dn_change = 0;
+	} else if (dnp->dn_change) {
+		dnp->dn_ctime.tv_sec = MIN(t3->tv_sec, dnp->dn_ctime.tv_sec + DEVFS_LAZY_UPDATE_SECONDS);
+		dnp->dn_ctime.tv_nsec = t3->tv_usec * 1000;
+		dnp->dn_change = 0;
+	}
+}
+
+void
+dn_mark_for_delayed_times_update(devnode_t *dnp, uint32_t just_changed_flags)
+{
+	if (just_changed_flags & DEVFS_UPDATE_CHANGE) {
+		dnp->dn_change = 1;
+	}
+	if (just_changed_flags & DEVFS_UPDATE_ACCESS) {
+		dnp->dn_access = 1;
+	}
+	if (just_changed_flags & DEVFS_UPDATE_MOD) {
+		dnp->dn_update = 1;
+	}
+}
+
+/*
+ * Update times based on pending updates and optionally a set of new changes.
+ */
+void
+dn_times_now(devnode_t * dnp, uint32_t just_changed_flags)
+{
+	struct timeval now;
+
+	DEVFS_ATTR_LOCK_SPIN();
+	microtime(&now);
+	dn_times_locked(dnp, &now, &now, &now, just_changed_flags);
+	DEVFS_ATTR_UNLOCK();
+}
 
 
 /*
@@ -353,9 +423,6 @@ devfs_getattr(struct vnop_getattr_args *ap)
 	DEVFS_LOCK();
 	file_node = VTODN(vp);
 
-	microtime(&now);
-	dn_times(file_node, &now, &now, &now);
-
 	VATTR_RETURN(vap, va_mode, file_node->dn_mode);
 
 	/*
@@ -402,6 +469,13 @@ devfs_getattr(struct vnop_getattr_args *ap)
 		VATTR_RETURN(vap, va_iosize, MAXPHYSIO);
 	else
 		VATTR_RETURN(vap, va_iosize, vp->v_mount->mnt_vfsstat.f_iosize);
+
+
+	DEVFS_ATTR_LOCK_SPIN();
+
+	microtime(&now);
+	dn_times_locked(file_node, &now, &now, &now, 0);
+
 	/* if the time is bogus, set it to the boot time */
 	if (file_node->dn_ctime.tv_sec == 0) {
 		file_node->dn_ctime.tv_sec = boottime_sec();
@@ -414,6 +488,9 @@ devfs_getattr(struct vnop_getattr_args *ap)
 	VATTR_RETURN(vap, va_change_time, file_node->dn_ctime);
 	VATTR_RETURN(vap, va_modify_time, file_node->dn_mtime);
 	VATTR_RETURN(vap, va_access_time, file_node->dn_atime);
+
+	DEVFS_ATTR_UNLOCK();
+
 	VATTR_RETURN(vap, va_gen, 0);
 	VATTR_RETURN(vap, va_filerev, 0);
 	VATTR_RETURN(vap, va_acl, NULL);
@@ -557,13 +634,11 @@ devfs_close(struct vnop_close_args *ap)
 {
     	struct vnode *	    	vp = ap->a_vp;
 	register devnode_t * 	dnp;
-	struct timeval now;
 
 	if (vnode_isinuse(vp, 1)) {
 	    DEVFS_LOCK();
 	    dnp = VTODN(vp);
-	    microtime(&now);
-	    dn_times(dnp, &now, &now, &now);
+	    dn_times_now(dnp, 0);
 	    DEVFS_UNLOCK();
 	}
 	return (0);
@@ -579,17 +654,66 @@ devfsspec_close(struct vnop_close_args *ap)
 {
     	struct vnode *	    	vp = ap->a_vp;
 	register devnode_t * 	dnp;
-	struct timeval now;
 
 	if (vnode_isinuse(vp, 0)) {
 	    DEVFS_LOCK();
-	    microtime(&now);
 	    dnp = VTODN(vp);
-	    dn_times(dnp, &now, &now, &now);
+	    dn_times_now(dnp, 0);
 	    DEVFS_UNLOCK();
 	}
 
 	return (VOCALL (spec_vnodeop_p, VOFFSET(vnop_close), ap));
+}
+
+static boolean_t
+devfs_update_needed(long now_s, long last_s)
+{
+	if (now_s > last_s) {
+		if (now_s - last_s >= DEVFS_LAZY_UPDATE_SECONDS) {
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
+/*
+ * Given a set of time updates required [to happen at some point], check
+ * either make those changes (and resolve other pending updates) or mark
+ * the devnode for a subsequent update.
+ */
+static void
+devfs_consider_time_update(devnode_t *dnp, uint32_t just_changed_flags)
+{
+	struct timeval 		now;
+	long now_s;
+
+	microtime(&now);
+	now_s = now.tv_sec;
+
+	if (dnp->dn_change || (just_changed_flags & DEVFS_UPDATE_CHANGE)) {
+		if (devfs_update_needed(now_s, dnp->dn_ctime.tv_sec)) {
+			dn_times_now(dnp, just_changed_flags);
+			return;
+		}
+	}
+	if (dnp->dn_access || (just_changed_flags & DEVFS_UPDATE_ACCESS)) {
+		if (devfs_update_needed(now_s, dnp->dn_atime.tv_sec)) {
+			dn_times_now(dnp, just_changed_flags);
+			return;
+		}
+	}
+	if (dnp->dn_update || (just_changed_flags & DEVFS_UPDATE_MOD)) {
+		if (devfs_update_needed(now_s, dnp->dn_mtime.tv_sec)) {
+			dn_times_now(dnp, just_changed_flags);
+			return;
+		}
+	}
+
+	/* Not going to do anything now--mark for later update */
+	dn_mark_for_delayed_times_update(dnp, just_changed_flags);
+
+	return;
 }
 
 static int
@@ -603,7 +727,7 @@ devfsspec_read(struct vnop_read_args *ap)
 {
 	register devnode_t * 	dnp = VTODN(ap->a_vp);
 
-	dnp->dn_access = 1;
+	devfs_consider_time_update(dnp, DEVFS_UPDATE_ACCESS);
 
 	return (VOCALL (spec_vnodeop_p, VOFFSET(vnop_read), ap));
 }
@@ -619,8 +743,7 @@ devfsspec_write(struct vnop_write_args *ap)
 {
 	register devnode_t * 	dnp = VTODN(ap->a_vp);
 
-	dnp->dn_change = 1;
-	dnp->dn_update = 1;
+	devfs_consider_time_update(dnp, DEVFS_UPDATE_CHANGE | DEVFS_UPDATE_MOD);
 
 	return (VOCALL (spec_vnodeop_p, VOFFSET(vnop_write), ap));
 }
@@ -704,8 +827,7 @@ devfs_vnop_remove(struct vnop_remove_args *ap)
 	/***********************************
 	 * Start actually doing things.... *
 	 ***********************************/
-	tdp->dn_change = 1;
-	tdp->dn_update = 1;
+	devfs_consider_time_update(tdp, DEVFS_UPDATE_CHANGE | DEVFS_UPDATE_MOD);
 
 	/*
 	 * Target must be empty if a directory and have no links
@@ -741,7 +863,6 @@ devfs_link(struct vnop_link_args *ap)
 	devnode_t * tdp;
 	devdirent_t * tnp;
 	int error = 0;
-	struct timeval now;
 
 	/*
 	 * First catch an arbitrary restriction for this FS
@@ -770,10 +891,7 @@ devfs_link(struct vnop_link_args *ap)
 	/***********************************
 	 * Start actually doing things.... *
 	 ***********************************/
-	fp->dn_change = 1;
-
-	microtime(&now);
-	error = devfs_update(vp, &now, &now);
+	dn_times_now(fp, DEVFS_UPDATE_CHANGE);
 
 	if (!error) {
 	    error = dev_add_name(cnp->cn_nameptr, tdp, NULL, fp, &tnp);
@@ -833,7 +951,6 @@ devfs_rename(struct vnop_rename_args *ap)
 	devdirent_t *fnp,*tnp;
 	int doingdirectory = 0;
 	int error = 0;
-	struct timeval now;
 
 	DEVFS_LOCK();
 	/*
@@ -914,12 +1031,8 @@ devfs_rename(struct vnop_rename_args *ap)
 	/***********************************
 	 * Start actually doing things.... *
 	 ***********************************/
-	fp->dn_change = 1;
-	microtime(&now);
+	dn_times_now(fp, DEVFS_UPDATE_CHANGE);
 
-	if ( (error = devfs_update(fvp, &now, &now)) ) {
-	    goto out;
-	}
 	/*
 	 * Check if just deleting a link name.
 	 */
@@ -1192,8 +1305,6 @@ devfs_readdir(struct vnop_readdir_args *ap)
 	name_node = dir_node->dn_typeinfo.Dir.dirlist;
 	nodenumber = 0;
 
-	dir_node->dn_access = 1;
-
 	while ((name_node || (nodenumber < 2)) && (uio_resid(uio) > 0))
 	{
 		switch(nodenumber)
@@ -1255,6 +1366,8 @@ devfs_readdir(struct vnop_readdir_args *ap)
 	}
 	DEVFS_UNLOCK();
 	uio->uio_offset = pos;
+
+	devfs_consider_time_update(dir_node, DEVFS_UPDATE_ACCESS);
 
 	return (error);
 }
@@ -1405,8 +1518,11 @@ devfs_update(struct vnode *vp, struct timeval *access, struct timeval *modify)
 
 		return (0);
 	}
+
+	DEVFS_ATTR_LOCK_SPIN();
 	microtime(&now);
-	dn_times(ip, access, modify, &now);
+	dn_times_locked(ip, access, modify, &now, DEVFS_UPDATE_ACCESS | DEVFS_UPDATE_MOD);
+	DEVFS_ATTR_UNLOCK();
 
 	return (0);
 }

@@ -210,28 +210,28 @@ mach_msg_destroy_port(mach_port_t port, mach_msg_type_name_t type)
       case MACH_MSG_TYPE_MOVE_SEND:
       case MACH_MSG_TYPE_MOVE_SEND_ONCE:
 	/* destroy the send/send-once right */
-	(void) mach_port_deallocate(mach_task_self(), port);
+	(void) mach_port_deallocate(mach_task_self_, port);
 	break;
 
       case MACH_MSG_TYPE_MOVE_RECEIVE:
 	/* destroy the receive right */
-	(void) mach_port_mod_refs(mach_task_self(), port,
+	(void) mach_port_mod_refs(mach_task_self_, port,
 				  MACH_PORT_RIGHT_RECEIVE, -1);
 	break;
 
       case MACH_MSG_TYPE_MAKE_SEND:
 	/* create a send right and then destroy it */
-	(void) mach_port_insert_right(mach_task_self(), port,
+	(void) mach_port_insert_right(mach_task_self_, port,
 				      port, MACH_MSG_TYPE_MAKE_SEND);
-	(void) mach_port_deallocate(mach_task_self(), port);
+	(void) mach_port_deallocate(mach_task_self_, port);
 	break;
 
       case MACH_MSG_TYPE_MAKE_SEND_ONCE:
 	/* create a send-once right and then destroy it */
-	(void) mach_port_extract_right(mach_task_self(), port,
+	(void) mach_port_extract_right(mach_task_self_, port,
 				       MACH_MSG_TYPE_MAKE_SEND_ONCE,
 				       &port, &type);
-	(void) mach_port_deallocate(mach_task_self(), port);
+	(void) mach_port_deallocate(mach_task_self_, port);
 	break;
     }
 }
@@ -240,7 +240,7 @@ static void
 mach_msg_destroy_memory(vm_offset_t addr, vm_size_t size)
 {
     if (size != 0)
-	(void) vm_deallocate(mach_task_self(), addr, size);
+	(void) vm_deallocate(mach_task_self_, addr, size);
 }
 
 
@@ -273,43 +273,56 @@ mach_msg_destroy(mach_msg_header_t *msg)
     mach_msg_destroy_port(msg->msgh_remote_port, MACH_MSGH_BITS_REMOTE(mbits));
 
     if (mbits & MACH_MSGH_BITS_COMPLEX) {
-	mach_msg_body_t		*body;
-	mach_msg_descriptor_t	*saddr, *eaddr;
+	mach_msg_base_t		*base;
+	mach_msg_type_number_t	count, i;
+	mach_msg_descriptor_t	*daddr;
 	
-    	body = (mach_msg_body_t *) (msg + 1);
-    	saddr = (mach_msg_descriptor_t *) 
-			((mach_msg_base_t *) msg + 1);
-    	eaddr =  saddr + body->msgh_descriptor_count;
+    	base = (mach_msg_base_t *) msg;
+	count = base->body.msgh_descriptor_count;
 
-	for  ( ; saddr < eaddr; saddr++) {
-	    switch (saddr->type.type) {
+    	daddr = (mach_msg_descriptor_t *) (base + 1);
+	for (i = 0; i < count; i++) {
+
+	    switch (daddr->type.type) {
 	    
-	        case MACH_MSG_PORT_DESCRIPTOR: {
+	    case MACH_MSG_PORT_DESCRIPTOR: {
 		    mach_msg_port_descriptor_t *dsc;
 
 		    /* 
 		     * Destroy port rights carried in the message 
 		     */
-		    dsc = &saddr->port;
-		    mach_msg_destroy_port(dsc->name, dsc->disposition);		
+		    dsc = &daddr->port;
+		    mach_msg_destroy_port(dsc->name, dsc->disposition);
+		    daddr = (mach_msg_descriptor_t *)(dsc + 1);
 		    break;
-	        }
+	    }
 
-	        case MACH_MSG_OOL_DESCRIPTOR : {
+	    case MACH_MSG_OOL_DESCRIPTOR: {
 		    mach_msg_ool_descriptor_t *dsc;
 
 		    /* 
 		     * Destroy memory carried in the message 
 		     */
-		    dsc = &saddr->out_of_line;
+		    dsc = &daddr->out_of_line;
 		    if (dsc->deallocate) {
 		        mach_msg_destroy_memory((vm_offset_t)dsc->address,
 						dsc->size);
 		    }
+		    daddr = (mach_msg_descriptor_t *)(dsc + 1);
 		    break;
-	        }
+	    }
 
-	        case MACH_MSG_OOL_PORTS_DESCRIPTOR : {
+	    case MACH_MSG_OOL_VOLATILE_DESCRIPTOR: {
+		    mach_msg_ool_descriptor_t *dsc;
+
+		    /*
+		     * Just skip it.
+		     */
+		    daddr = (mach_msg_descriptor_t *)(dsc + 1);
+		    break;
+	    }
+
+	    case MACH_MSG_OOL_PORTS_DESCRIPTOR: {
 		    mach_port_t             		*ports;
 		    mach_msg_ool_ports_descriptor_t	*dsc;
 		    mach_msg_type_number_t   		j;
@@ -317,7 +330,7 @@ mach_msg_destroy(mach_msg_header_t *msg)
 		    /*
 		     * Destroy port rights carried in the message 
 		     */
-		    dsc = &saddr->ool_ports;
+		    dsc = &daddr->ool_ports;
 		    ports = (mach_port_t *) dsc->address;
 		    for (j = 0; j < dsc->count; j++, ports++)  {
 		        mach_msg_destroy_port(*ports, dsc->disposition);
@@ -330,8 +343,9 @@ mach_msg_destroy(mach_msg_header_t *msg)
 		        mach_msg_destroy_memory((vm_offset_t)dsc->address, 
 					dsc->count * sizeof(mach_port_t));
 		    }
+		    daddr = (mach_msg_descriptor_t *)(dsc + 1);
 		    break;
-	        }
+	    }
 	    }
 	}
     }
@@ -362,7 +376,7 @@ mach_msg_server_once(
 	mach_msg_size_t reply_alloc;
 	mach_msg_return_t mr;
 	kern_return_t kr;
-	mach_port_t self = mach_task_self();
+	mach_port_t self = mach_task_self_;
 
 	options &= ~(MACH_SEND_MSG|MACH_RCV_MSG);
 
@@ -487,7 +501,7 @@ mach_msg_server(
 	mach_msg_size_t reply_alloc;
 	mach_msg_return_t mr;
 	kern_return_t kr;
-	mach_port_t self = mach_task_self();
+	mach_port_t self = mach_task_self_;
 
 	options &= ~(MACH_SEND_MSG|MACH_RCV_MSG|MACH_RCV_OVERWRITE);
 

@@ -224,6 +224,54 @@
     type3, arg3, type4, arg4)						\
 	DTRACE_PROBE4(__vminfo_, name, arg1, arg2, arg3, arg4)
 
+#define DTRACE_IP(name)							\
+	DTRACE_PROBE(__ip_, name)
+
+#define DTRACE_IP1(name, type1, arg1)					\
+	DTRACE_PROBE1(__ip_, name, arg1)
+
+#define DTRACE_IP2(name, type1, arg1, type2, arg2)			\
+	DTRACE_PROBE2(__ip_, name, arg1, arg2)
+
+#define DTRACE_IP3(name, type1, arg1, type2, arg2, type3, arg3)		\
+	DTRACE_PROBE3(__ip_, name, arg1, arg2, arg3)
+
+#define DTRACE_IP4(name, type1, arg1, type2, arg2,			\
+    type3, arg3, type4, arg4)						\
+	DTRACE_PROBE4(__ip_, name, arg1, arg2, arg3, arg4)
+
+#define DTRACE_IP5(name, typ1, arg1, type2, arg2, type3, arg3,		\
+    type4, arg4, type5, arg5)						\
+	DTRACE_PROBE5(__ip_, name, arg1, arg2, arg3, arg4, arg5)
+
+#define DTRACE_IP6(name, type1, arg1, type2, arg2, type3, arg3,		\
+    type4,arg4, type5, arg5, type6, arg6)				\
+	DTRACE_PROBE6(__ip_, name, arg1, arg2, arg3, arg4, arg5, arg6)
+
+#define DTRACE_IP7(name, type1, arg1, type2, arg2, type3, arg3,		\
+    type4, arg4, type5, arg5, type6, arg6, type7, arg7)			\
+	DTRACE_PROBE7(__ip_, name, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
+
+#define DTRACE_TCP(name)                                                 \
+        DTRACE_PROBE(__tcp_, name)
+
+#define DTRACE_TCP1(name, type1, arg1)                                   \
+        DTRACE_PROBE1(__tcp_, name, arg1)
+
+#define DTRACE_TCP2(name, type1, arg1, type2, arg2)                      \
+        DTRACE_PROBE2(__tcp_, name, arg1, arg2)
+
+#define DTRACE_TCP3(name, type1, arg1, type2, arg2, type3, arg3)         \
+        DTRACE_PROBE3(__tcp_, name, arg1, arg2, arg3)
+
+#define DTRACE_TCP4(name, type1, arg1, type2, arg2,                      \
+    type3, arg3, type4, arg4)                                           \
+        DTRACE_PROBE4(__tcp_, name, arg1, arg2, arg3, arg4)
+
+#define DTRACE_TCP5(name, typ1, arg1, type2, arg2, type3, arg3,          \
+    type4, arg4, type5, arg5)                                           \
+        DTRACE_PROBE5(__tcp_, name, arg1, arg2, arg3, arg4, arg5)
+
 #else /* CONFIG_DTRACE */
 
 #define	DTRACE_SCHED(name) do {} while (0)
@@ -250,6 +298,22 @@
 #define DTRACE_VM2(name, type1, arg1, type2, arg2) do {} while(0)
 #define DTRACE_VM3(name, type1, arg1, type2, arg2, type3, arg3) do {} while(0)
 #define DTRACE_VM4(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4) do {} while(0)
+#define DTRACE_IP(name) do {} while(0)
+#define DTRACE_IP1(name, type1, arg1) do {} while(0)
+#define DTRACE_IP2(name, type1, arg1, type2, arg2) do {} while(0)
+#define DTRACE_IP3(name, type1, arg1, type2, arg2, type3, arg3) do {} while(0)
+#define DTRACE_IP4(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4) do {} while(0)
+#define DTRACE_IP5(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4, type5, arg5) do {} while(0)
+#define DTRACE_IP6(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4, type5, arg5, type6, arg6) do {} while(0)
+#define DTRACE_IP7(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4, type5, arg5, \
+	type6, arg6, type7, arg7) do {} while(0)
+
+#define DTRACE_TCP(name) do {} while(0)
+#define DTRACE_TCP1(name, type1, arg1) do {} while(0)
+#define DTRACE_TCP2(name, type1, arg1, type2, arg2) do {} while(0)
+#define DTRACE_TCP3(name, type1, arg1, type2, arg2, type3, arg3) do {} while(0)
+#define DTRACE_TCP4(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4) do {} while(0)
+#define DTRACE_TCP5(name, type1, arg1, type2, arg2, type3, arg3, type4, arg4, type5, arg5) do {} while(0)
 
 #endif /* CONFIG_DTRACE */
 

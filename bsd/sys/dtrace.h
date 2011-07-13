@@ -119,6 +119,8 @@ typedef int64_t		hrtime_t;
 
 typedef enum { B_FALSE = 0, B_TRUE = 1 } _dtrace_boolean;
 
+typedef uint8_t UUID[16]; /* For modctl use in dtrace.h */
+
 struct modctl; /* In lieu of Solaris <sys/modctl.h> */
 /* NOTHING */  /* In lieu of Solaris <sys/processor.h> */
 #include <sys/ioctl.h> /* In lieu of Solaris <sys/systm.h> */
@@ -508,6 +510,15 @@ typedef struct dtrace_difv {
 #define DTRACEACT_RAISE                 (DTRACEACT_PROC_DESTRUCTIVE + 2)
 #define DTRACEACT_SYSTEM                (DTRACEACT_PROC_DESTRUCTIVE + 3)
 #define DTRACEACT_FREOPEN               (DTRACEACT_PROC_DESTRUCTIVE + 4)
+	
+#if defined(__APPLE__)
+/*
+ * Dtrace stop() will task_suspend the currently running process.
+ * Dtrace pidresume(pid) will task_resume it.
+ */
+	
+#define DTRACEACT_PIDRESUME		(DTRACEACT_PROC_DESTRUCTIVE + 50)
+#endif /* __APPLE__ */	
 
 #define DTRACEACT_PROC_CONTROL          0x0300
 
@@ -1340,6 +1351,34 @@ typedef struct dtrace_providerdesc {
 #define DTRACEIOC_FORMAT        (DTRACEIOC | 16)        /* get format str */
 #define DTRACEIOC_DOFGET        (DTRACEIOC | 17)        /* get DOF */
 #define DTRACEIOC_REPLICATE     (DTRACEIOC | 18)        /* replicate enab */
+#define DTRACEIOC_MODUUIDSLIST	(DTRACEIOC | 30)	/* APPLE ONLY, query for modules with missing symbols */
+#define DTRACEIOC_PROVMODSYMS	(DTRACEIOC | 31)	/* APPLE ONLY, provide missing symbols for a given module */
+	
+/*
+ * The following structs are used to provide symbol information to the kernel from userspace.
+ */
+	
+typedef struct dtrace_symbol {
+	uint64_t	dtsym_addr;			/* address of the symbol */
+	uint64_t	dtsym_size;			/* size of the symbol, must be uint64_t to maintain alignment when called by 64b uproc in i386 kernel */
+	char 		dtsym_name[DTRACE_FUNCNAMELEN];	/* symbol name */
+} dtrace_symbol_t;
+
+typedef struct dtrace_module_symbols {
+	UUID		dtmodsyms_uuid;
+	uint64_t	dtmodsyms_count;
+	dtrace_symbol_t	dtmodsyms_symbols[1];
+} dtrace_module_symbols_t;
+	
+#define DTRACE_MODULE_SYMBOLS_SIZE(count) (sizeof(dtrace_module_symbols_t) + ((count - 1) * sizeof(dtrace_symbol_t)))
+		
+typedef struct dtrace_module_uuids_list {
+	uint64_t	dtmul_count;
+	UUID		dtmul_uuid[1];
+} dtrace_module_uuids_list_t;
+		
+#define DTRACE_MODULE_UUIDS_LIST_SIZE(count) (sizeof(dtrace_module_uuids_list_t) + ((count - 1) * sizeof(UUID)))
+
 #endif /* __APPLE__ */
 
 /*
@@ -1566,7 +1605,7 @@ typedef struct dof_ioctl_data {
  *   dtps_provide_module(); see "Arguments and Notes" for dtrace_register(),
  *   below.
  *
- * 1.4  void dtps_enable(void *arg, dtrace_id_t id, void *parg)
+ * 1.4  int dtps_enable(void *arg, dtrace_id_t id, void *parg)
  *
  * 1.4.1  Overview
  *
@@ -1587,7 +1626,8 @@ typedef struct dof_ioctl_data {
  *
  * 1.4.3  Return value
  *
- *   None.
+ *   On success, dtps_enable() should return 0. On failure, -1 should be
+ *   returned.
  *
  * 1.4.4  Caller's context
  *
@@ -2141,7 +2181,7 @@ typedef struct dof_ioctl_data {
 typedef struct dtrace_pops {
         void (*dtps_provide)(void *arg, const dtrace_probedesc_t *spec);
         void (*dtps_provide_module)(void *arg, struct modctl *mp);
-        void (*dtps_enable)(void *arg, dtrace_id_t id, void *parg);
+        int (*dtps_enable)(void *arg, dtrace_id_t id, void *parg);
         void (*dtps_disable)(void *arg, dtrace_id_t id, void *parg);
         void (*dtps_suspend)(void *arg, dtrace_id_t id, void *parg);
         void (*dtps_resume)(void *arg, dtrace_id_t id, void *parg);
@@ -2357,10 +2397,7 @@ struct regs;
 extern int (*dtrace_pid_probe_ptr)(struct regs *);
 extern int (*dtrace_return_probe_ptr)(struct regs *);
 #else
-#if defined (__ppc__) || defined (__ppc64__)
-extern int (*dtrace_pid_probe_ptr)(ppc_saved_state_t *regs);
-extern int (*dtrace_return_probe_ptr)(ppc_saved_state_t* regs);
-#elif defined (__i386__) || defined(__x86_64__)
+#if defined (__i386__) || defined(__x86_64__)
 extern int (*dtrace_pid_probe_ptr)(x86_saved_state_t *regs);
 extern int (*dtrace_return_probe_ptr)(x86_saved_state_t* regs);
 #else
@@ -2382,8 +2419,13 @@ extern void dtrace_membar_producer(void);
 extern void dtrace_membar_consumer(void);
 
 extern void (*dtrace_cpu_init)(processorid_t);
+#if !defined(__APPLE__)
 extern void (*dtrace_modload)(struct modctl *);
 extern void (*dtrace_modunload)(struct modctl *);
+#else
+extern int (*dtrace_modload)(struct kmod_info *);
+extern int (*dtrace_modunload)(struct kmod_info *);
+#endif /* __APPLE__ */
 extern void (*dtrace_helpers_cleanup)(proc_t*);
 extern void (*dtrace_helpers_fork)(proc_t *parent, proc_t *child);
 extern void (*dtrace_cpustart_init)(void);
@@ -2427,14 +2469,11 @@ extern int dtrace_instr_size(uchar_t *instr);
 extern int dtrace_instr_size_isa(uchar_t *, model_t, int *);
 extern void dtrace_invop_add(int (*)(uintptr_t, uintptr_t *, uintptr_t));
 extern void dtrace_invop_remove(int (*)(uintptr_t, uintptr_t *, uintptr_t));
-extern void dtrace_invop_callsite(void);
+extern void *dtrace_invop_callsite_pre;
+extern void *dtrace_invop_callsite_post;
 #endif
 
     
-#if defined (__ppc__) || defined (__ppc64__)
-extern void dtrace_invop_add(int (*)(uintptr_t, uintptr_t *, uintptr_t));
-extern void dtrace_invop_remove(int (*)(uintptr_t, uintptr_t *, uintptr_t));
-#endif
 #undef proc_t
 #endif /* __APPLE__ */
 
@@ -2470,13 +2509,6 @@ extern void dtrace_invop_remove(int (*)(uintptr_t, uintptr_t *, uintptr_t));
 #define DTRACE_INVOP_NOP                4
 #define DTRACE_INVOP_RET                5
 
-#endif
-
-#if defined (__ppc__) || defined (__ppc64__)
-#define DTRACE_INVOP_NOP                4
-#define DTRACE_INVOP_RET                5
-#define DTRACE_INVOP_BCTR               6
-#define DTRACE_INVOP_TAILJUMP           7
 #endif
 
 

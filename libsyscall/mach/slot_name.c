@@ -46,26 +46,6 @@
 #include <mach-o/arch.h>
 #include <stddef.h>
 
-/*
- *	Convert the specified cpu_type/cpu_subtype pair to their
- *	human readable form.
- */
-void slot_name(cpu_type, cpu_subtype, cpu_name, cpu_subname)
-        cpu_type_t	cpu_type;
-        cpu_subtype_t	cpu_subtype;
-        char		**cpu_name, **cpu_subname;
-{
-        register char	*name = "Unknown CPU";
-        register char	*subname = "";
-        const NXArchInfo *ai = NXGetArchInfoFromCpuType(cpu_type, cpu_subtype);
-        if (ai != NULL) {
-            name = (char *)ai->name;
-            subname = (char *)ai->description;
-        }
-        *cpu_name = name;
-        *cpu_subname = subname;
-}
-
 kern_return_t msg_rpc(void) {
 	return KERN_FAILURE;
 }

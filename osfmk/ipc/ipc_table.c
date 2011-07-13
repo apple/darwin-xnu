@@ -90,8 +90,8 @@ extern vm_map_t kalloc_map;
 ipc_table_size_t ipc_table_entries;
 unsigned int ipc_table_entries_size = 512;
 
-ipc_table_size_t ipc_table_dnrequests;
-unsigned int ipc_table_dnrequests_size = 64;
+ipc_table_size_t ipc_table_requests;
+unsigned int ipc_table_requests_size = 64;
 
 void
 ipc_table_fill(
@@ -151,17 +151,17 @@ ipc_table_init(void)
 		ipc_table_entries[ipc_table_entries_size - 2].its_size;
 
 
-	ipc_table_dnrequests = (ipc_table_size_t)
+	ipc_table_requests = (ipc_table_size_t)
 		kalloc(sizeof(struct ipc_table_size) *
-		       ipc_table_dnrequests_size);
-	assert(ipc_table_dnrequests != ITS_NULL);
+		       ipc_table_requests_size);
+	assert(ipc_table_requests != ITS_NULL);
 
-	ipc_table_fill(ipc_table_dnrequests, ipc_table_dnrequests_size - 1,
+	ipc_table_fill(ipc_table_requests, ipc_table_requests_size - 1,
 		       2, sizeof(struct ipc_port_request));
 
 	/* the last element should have zero size */
 
-	ipc_table_dnrequests[ipc_table_dnrequests_size - 1].its_size = 0;
+	ipc_table_requests[ipc_table_requests_size - 1].its_size = 0;
 }
 
 /*

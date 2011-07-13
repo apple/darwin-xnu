@@ -69,6 +69,33 @@ getlastaddr(void)
 }
 
 /*
+ * Find the UUID load command in the Mach-O headers, and return
+ * the address of the UUID blob and size in "*size". If the
+ * Mach-O image is missing a UUID, NULL is returned.
+ */
+void *
+getuuidfromheader(kernel_mach_header_t *mhp, unsigned long *size)
+{
+	struct uuid_command *uuidp;
+	unsigned long i;
+
+	uuidp = (struct uuid_command *)
+		((uintptr_t)mhp + sizeof(kernel_mach_header_t));
+	for(i = 0; i < mhp->ncmds; i++){
+		if(uuidp->cmd == LC_UUID) {
+			if (size)
+				*size = sizeof(uuidp->uuid);
+
+			return (void *)uuidp->uuid;
+		}
+
+		uuidp = (struct uuid_command *)((uintptr_t)uuidp + uuidp->cmdsize);
+	}
+
+	return NULL;
+}
+
+/*
  * This routine returns the a pointer to the data for the named section in the
  * named segment if it exist in the mach header passed to it.  Also it returns
  * the size of the section data indirectly through the pointer size.  Otherwise

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -316,7 +316,7 @@ z_compress(arg, mret, mp, orig_len, maxolen)
     }
     ++state->seqno;
 
-    rptr += (proto > 0xff)? 2: 3;	/* skip 1st proto byte if 0 */
+    rptr += (proto > 0xff)? 2: 3;	/* skip 1st proto byte if  0 */
     state->strm.next_in = rptr;
     state->strm.avail_in = mtod(mp, u_char *) + mp->m_len - rptr;
     mp = mp->m_next;

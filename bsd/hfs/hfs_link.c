@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -35,6 +35,7 @@
 #include <sys/vnode.h>
 #include <vfs/vfs_support.h>
 #include <libkern/libkern.h>
+#include <sys/fsctl.h>
 
 #include "hfs.h"
 #include "hfs_catalog.h"
@@ -61,6 +62,8 @@ const char *hfs_private_names[] = {
 static int  setfirstlink(struct hfsmount * hfsmp, cnid_t fileid, cnid_t firstlink);
 static int  getfirstlink(struct hfsmount * hfsmp, cnid_t fileid, cnid_t *firstlink);
 
+int hfs_makelink(struct hfsmount *hfsmp, struct vnode *src_vp, struct cnode *cp, 
+		struct cnode *dcp, struct componentname *cnp);
 /*
  * Create a new catalog link record
  *
@@ -92,7 +95,7 @@ createindirectlink(struct hfsmount *hfsmp, u_int32_t linknum, struct cat_desc *d
 	
 	/* Links are matched to inodes by link ID and to volumes by create date */
 	attr.ca_linkref = linknum;
-	attr.ca_itime = hfsmp->hfs_itime;
+	attr.ca_itime = hfsmp->hfs_metadata_createdate;
 	attr.ca_mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH;
 	attr.ca_recflags = kHFSHasLinkChainMask | kHFSThreadExistsMask;
 	attr.ca_flags = UF_IMMUTABLE;
@@ -121,13 +124,15 @@ createindirectlink(struct hfsmount *hfsmp, u_int32_t linknum, struct cat_desc *d
 
 /*
  * Make a link to the cnode cp in the directory dp
- * using the name in cnp.
+ * using the name in cnp.  src_vp is the vnode that 
+ * corresponds to 'cp' which was part of the arguments to
+ * hfs_vnop_link.
  *
  * The cnodes cp and dcp must be locked.
  */
-static int
-hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
-		struct componentname *cnp)
+int
+hfs_makelink(struct hfsmount *hfsmp, struct vnode *src_vp, struct cnode *cp, 
+		struct cnode *dcp, struct componentname *cnp)
 {
 	vfs_context_t ctx = cnp->cn_context;
 	struct proc *p = vfs_context_proc(ctx);
@@ -291,7 +296,7 @@ hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
 
 	    /* Update the original first link to point back to the new first link. */
 	    if (cp->c_attr.ca_recflags & kHFSHasLinkChainMask) {
-		(void) cat_updatelink(hfsmp, orig_firstlink, linkcnid, HFS_IGNORABLE_LINK);
+		(void) cat_update_siblinglinks(hfsmp, orig_firstlink, linkcnid, HFS_IGNORABLE_LINK);
 
 		/* Update the inode's first link value. */
 		if (type == DIR_HARDLINKS) {
@@ -327,17 +332,46 @@ hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
 		    panic("hfs_makelink: cat_update of privdir failed! (%d)\n", retval);
 		}
 		cp->c_flag |= C_HARDLINK;
+
+		/*
+		 * Now we need to mark the vnodes as being hardlinks via the vnode_setmultipath call.
+		 * Note that we're calling vnode_get here, which should simply add an iocount if possible, without
+		 * doing much checking.  It's safe to call this because we are protected by the cnode lock, which
+		 * ensures that anyone trying to reclaim it will block until we release it.  vnode_get will usually 
+		 * give us an extra iocount, unless the vnode is about to be reclaimed (and has no iocounts).  
+		 * In that case, we'd error out, but we'd also not care if we added the VISHARDLINK bit to the vnode.  
+		 * 
+		 * As for the iocount we're about to add, we can't necessarily always call vnode_put here.  
+		 * If the one we add is the only iocount on the vnode, and there was
+		 * sufficient vnode pressure, it could go through VNOP_INACTIVE immediately, which would
+		 * require the cnode lock and cause us to double-lock panic.  We can only call vnode_put if we know
+		 * that the vnode we're operating on is the one with which we came into hfs_vnop_link, because
+		 * that means VFS took an iocount on it for us.  If it's *not* the one that we came into the call 
+		 * with, then mark it as NEED_VNODE_PUT to have hfs_unlock drop it for us.  hfs_vnop_link will 
+		 * unlock the cnode when it is finished.
+		 */
 		if ((vp = cp->c_vp) != NULLVP) {
-		    if (vnode_get(vp) == 0) {
-			vnode_setmultipath(vp);
-			vnode_put(vp);
-		    }
+			if (vnode_get(vp) == 0) {
+				vnode_setmultipath(vp);
+				if (vp == src_vp) {
+					/* we have an iocount on data fork vnode already. */
+					vnode_put(vp);
+				}
+				else {
+					cp->c_flag |= C_NEED_DVNODE_PUT;
+				}
+			}
 		}
 		if ((vp = cp->c_rsrc_vp) != NULLVP) {
-		    if (vnode_get(vp) == 0) {
-			vnode_setmultipath(vp);
-			vnode_put(vp);
-		    }
+			if (vnode_get(vp) == 0) {
+				vnode_setmultipath(vp);
+				if (vp == src_vp) {
+					vnode_put(vp);
+				}
+				else {
+					cp->c_flag |= C_NEED_RVNODE_PUT;
+				}
+			}
 		}
 		cp->c_touch_chgtime = TRUE;
 		cp->c_flag |= C_FORCEUPDATE;
@@ -364,7 +398,6 @@ out:
  *  IN struct componentname  *a_cnp;
  *  IN vfs_context_t  a_context;
  */
-__private_extern__
 int
 hfs_vnop_link(struct vnop_link_args *ap)
 {
@@ -408,7 +441,7 @@ hfs_vnop_link(struct vnop_link_args *ap)
 			return (EPERM);
 		}
 		/* Directory hardlinks also need the parent of the original directory. */
-		if ((error = hfs_vget(hfsmp, hfs_currentparent(VTOC(vp)), &fdvp, 1))) {
+		if ((error = hfs_vget(hfsmp, hfs_currentparent(VTOC(vp)), &fdvp, 1, 0))) {
 			return (error);
 		}
 	} else {
@@ -423,6 +456,10 @@ hfs_vnop_link(struct vnop_link_args *ap)
 		}
 		return (ENOSPC);
 	}
+
+	check_for_tracked_file(vp, VTOC(vp)->c_ctime, NAMESPACE_HANDLER_LINK_CREATE, NULL);
+
+
 	/* Lock the cnodes. */
 	if (fdvp) {
 		if ((error = hfs_lockfour(VTOC(tdvp), VTOC(vp), VTOC(fdvp), NULL, HFS_EXCLUSIVE_LOCK, NULL))) {
@@ -543,7 +580,7 @@ hfs_vnop_link(struct vnop_link_args *ap)
 
 	cp->c_linkcount++;
 	cp->c_touch_chgtime = TRUE;
-	error = hfs_makelink(hfsmp, cp, tdcp, cnp);
+	error = hfs_makelink(hfsmp, vp, cp, tdcp, cnp);
 	if (error) {
 		cp->c_linkcount--;
 		hfs_volupdate(hfsmp, VOL_UPDATE, 0);
@@ -634,7 +671,6 @@ out:
  *
  * Note: dvp and vp cnodes are already locked.
  */
-__private_extern__
 int
 hfs_unlink(struct hfsmount *hfsmp, struct vnode *dvp, struct vnode *vp, struct componentname *cnp, int skip_reserve)
 {
@@ -806,11 +842,11 @@ hfs_unlink(struct hfsmount *hfsmp, struct vnode *dvp, struct vnode *vp, struct c
 		}
 		/* Update previous link. */
 		if (prevlinkid) {
-			(void) cat_updatelink(hfsmp, prevlinkid, HFS_IGNORABLE_LINK, nextlinkid);
+			(void) cat_update_siblinglinks(hfsmp, prevlinkid, HFS_IGNORABLE_LINK, nextlinkid);
 		}
 		/* Update next link. */
 		if (nextlinkid) {
-			(void) cat_updatelink(hfsmp, nextlinkid, prevlinkid, HFS_IGNORABLE_LINK);
+			(void) cat_update_siblinglinks(hfsmp, nextlinkid, prevlinkid, HFS_IGNORABLE_LINK);
 		}
 	}
 
@@ -860,7 +896,6 @@ out:
  *
  * This call is assumed to be made during mount.
  */
-__private_extern__
 void
 hfs_privatedir_init(struct hfsmount * hfsmp, enum privdirtype type)
 {
@@ -909,7 +944,7 @@ hfs_privatedir_init(struct hfsmount * hfsmp, enum privdirtype type)
 	}
 
 	/* Grab the root directory so we can update it later. */
-	if (hfs_vget(hfsmp, kRootDirID, &dvp, 0) != 0) {
+	if (hfs_vget(hfsmp, kRootDirID, &dvp, 0, 0) != 0) {
 		goto exit;
 	}
 	dcp = VTOC(dvp);
@@ -965,7 +1000,7 @@ hfs_privatedir_init(struct hfsmount * hfsmp, enum privdirtype type)
 		goto exit;
 	}
 	if (type == FILE_HARDLINKS) {
-		hfsmp->hfs_metadata_createdate = hfsmp->hfs_itime;
+		hfsmp->hfs_metadata_createdate = priv_attrp->ca_itime;
 	}
 	hfs_volupdate(hfsmp, VOL_MKDIR, 1);
 exit:
@@ -985,9 +1020,8 @@ exit:
 /*
  * Lookup a hardlink link (from chain)
  */
-__private_extern__
 int
-hfs_lookuplink(struct hfsmount *hfsmp, cnid_t linkfileid, cnid_t *prevlinkid,  cnid_t *nextlinkid)
+hfs_lookup_siblinglinks(struct hfsmount *hfsmp, cnid_t linkfileid, cnid_t *prevlinkid,  cnid_t *nextlinkid)
 {
 	int lockflags;
 	int error;
@@ -997,7 +1031,7 @@ hfs_lookuplink(struct hfsmount *hfsmp, cnid_t linkfileid, cnid_t *prevlinkid,  c
 
 	lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 
-	error = cat_lookuplinkbyid(hfsmp, linkfileid, prevlinkid, nextlinkid);
+	error = cat_lookup_siblinglinks(hfsmp, linkfileid, prevlinkid, nextlinkid);
 	if (error == ENOLINK) {
 		hfs_systemfile_unlock(hfsmp, lockflags);
 		lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_SHARED_LOCK);

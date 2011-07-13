@@ -43,14 +43,17 @@
  */
 
 /* Request an expiration deadline, returns queue association */
-extern queue_t		timer_queue_assign(
+extern mpqueue_head_t *timer_queue_assign(
+				uint64_t		deadline);
+
+extern uint64_t		timer_call_slop(
 						uint64_t		deadline);
 
 /* Cancel an associated expiration deadline and specify new deadline */
-extern void			timer_queue_cancel(
-						queue_t			queue,
-						uint64_t		deadline,
-						uint64_t		new_deadline);
+extern void		timer_queue_cancel(
+				mpqueue_head_t		*queue,
+				uint64_t		deadline,
+				uint64_t		new_deadline);
 
 /*
  *	Invoked by platform, implemented by kernel.
@@ -58,12 +61,17 @@ extern void			timer_queue_cancel(
 
 /* Process deadline expiration for queue, returns new deadline */
 extern uint64_t		timer_queue_expire(
-						queue_t			queue,
-						uint64_t		deadline);
+				mpqueue_head_t		*queue,
+				uint64_t		deadline);
 
 /* Shutdown a timer queue and reassign existing activities */
-extern void			timer_queue_shutdown(
-						queue_t			queue);
+extern void		timer_queue_shutdown(
+				mpqueue_head_t		*queue);
+
+/* Move timer requests from one queue to another */
+extern int		timer_queue_migrate(
+				mpqueue_head_t		*from,
+				mpqueue_head_t		*to);
 
 #endif	/* MACH_KERNEL_PRIVATE */
 

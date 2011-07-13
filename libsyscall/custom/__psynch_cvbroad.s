@@ -31,9 +31,9 @@
 
 #define __SYSCALL_32BIT_ARG_BYTES 36
 
-#if defined(__i386__) || defined(__x86_64__) || defined(__ppc__)
+#if defined(__i386__) || defined(__x86_64__)
 
-__SYSCALL(__psynch_cvbroad, psynch_cvbroad, 8)
+__SYSCALL(___psynch_cvbroad, psynch_cvbroad, 8)
 
 #else
 #error Unsupported architecture

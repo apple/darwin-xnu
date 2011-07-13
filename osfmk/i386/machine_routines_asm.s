@@ -27,12 +27,11 @@
  */
  
 #include <i386/asm.h>
-#include <i386/rtclock.h>
-#include <i386/proc_reg.h>
-#include <i386/eflags.h>
-       
-#include <i386/postcode.h>
 #include <i386/apic.h>
+#include <i386/eflags.h>
+#include <i386/rtclock_asm.h>
+#include <i386/postcode.h>
+#include <i386/proc_reg.h>
 #include <assym.s>
 
 /*
@@ -136,51 +135,6 @@ LEXT(tmrCvt)
 			ret						// Leave...
 
 
-/* void             _rtc_nanotime_store(uint64_t                tsc,
-	                                uint64_t                nsec,
-	                                uint32_t                scale,
-	                                uint32_t                shift,
-	                                rtc_nanotime_t  *dst) ;
-*/
-			.globl	EXT(_rtc_nanotime_store)
-			.align	FALIGN
-
-LEXT(_rtc_nanotime_store)
-		push		%ebp
-		movl		%esp,%ebp
-		push		%esi
-
-		mov		32(%ebp),%edx				/* get ptr to rtc_nanotime_info */
-		
-		movl		RNT_GENERATION(%edx),%esi		/* get current generation */
-		movl		$0,RNT_GENERATION(%edx)			/* flag data as being updated */
-
-		mov		8(%ebp),%eax
-		mov		%eax,RNT_TSC_BASE(%edx)
-		mov		12(%ebp),%eax
-		mov		%eax,RNT_TSC_BASE+4(%edx)
-
-		mov		24(%ebp),%eax
-		mov		%eax,RNT_SCALE(%edx)
-
-		mov		28(%ebp),%eax
-		mov		%eax,RNT_SHIFT(%edx)
-
-		mov		16(%ebp),%eax
-		mov		%eax,RNT_NS_BASE(%edx)
-		mov		20(%ebp),%eax
-		mov		%eax,RNT_NS_BASE+4(%edx)
-		
-		incl		%esi					/* next generation */
-		jnz		1f
-		incl		%esi					/* skip 0, which is a flag */
-1:		movl		%esi,RNT_GENERATION(%edx)		/* update generation and make usable */
-
-		pop		%esi
-		pop		%ebp
-		ret
-
-
 /* void  _rtc_nanotime_adjust(	
 		uint64_t         tsc_base_delta,
 	        rtc_nanotime_t  *dst);
@@ -252,7 +206,7 @@ LEXT(_rtc_nanotime_read)
 		jnz		Lslow
 		
 		/* Processor whose TSC frequency is faster than SLOW_TSC_THRESHOLD */
-		RTC_NANOTIME_READ_FAST()
+		PAL_RTC_NANOTIME_READ_FAST()
 
 		popl		%ebx
 		popl		%edi
@@ -315,4 +269,43 @@ Lslow:
 		pop		%esi
 		pop		%ebp
 		ret							/* result in edx:eax */
+
+
+
+/*
+ * Timing routines.
+ */
+Entry(timer_update)
+	movl	4(%esp),%ecx
+	movl	8(%esp),%eax
+	movl	12(%esp),%edx
+	movl	%eax,TIMER_HIGHCHK(%ecx)
+	movl	%edx,TIMER_LOW(%ecx)
+	movl	%eax,TIMER_HIGH(%ecx)
+	ret
+
+Entry(timer_grab)
+	movl	4(%esp),%ecx
+0:	movl	TIMER_HIGH(%ecx),%edx
+	movl	TIMER_LOW(%ecx),%eax
+	cmpl	TIMER_HIGHCHK(%ecx),%edx
+	jne	0b
+	ret
+
+
+Entry(call_continuation)
+	movl	S_ARG0,%eax			/* get continuation */
+	movl	S_ARG1,%edx			/* continuation param */
+	movl	S_ARG2,%ecx			/* wait result */
+	movl	%gs:CPU_KERNEL_STACK,%esp	/* pop the stack */
+	xorl	%ebp,%ebp			/* zero frame pointer */
+	subl	$8,%esp				/* align the stack */
+	pushl	%ecx
+	pushl	%edx
+	call	*%eax				/* call continuation */
+	addl	$16,%esp
+	movl	%gs:CPU_ACTIVE_THREAD,%eax
+	pushl	%eax
+	call	EXT(thread_terminate)
+
 

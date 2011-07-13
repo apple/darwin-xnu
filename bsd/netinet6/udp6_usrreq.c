@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/udp6_usrreq.c,v 1.6.2.6 2001/07/29 19:32:40 ume Exp $	*/
 /*	$KAME: udp6_usrreq.c,v 1.27 2001/05/21 05:45:10 jinmei Exp $	*/
 
@@ -83,6 +111,7 @@
 #include <net/if.h>
 #include <net/route.h>
 #include <net/if_types.h>
+#include <net/ntstat.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -104,7 +133,6 @@
 #include <netinet6/ipsec6.h>
 extern int ipsec_bypass;
 #endif /*IPSEC*/
-extern lck_mtx_t *nd6_mutex;
 
 /*
  * UDP protocol inplementation.
@@ -112,7 +140,6 @@ extern lck_mtx_t *nd6_mutex;
  */
 
 extern	struct protosw inetsw[];
-static	int in6_mcmatch(struct inpcb *, struct in6_addr *, struct ifnet *);
 static	int udp6_detach(struct socket *so);
 static void udp6_append(struct inpcb *, struct ip6_hdr *,
     struct sockaddr_in6 *, struct mbuf *, int);
@@ -131,53 +158,37 @@ extern int fw_verbose;
 #define log_in_vain_log( a ) { log a; }
 #endif
 
-static int
-in6_mcmatch(
-	struct inpcb *in6p,
-	register struct in6_addr *ia6,
-	struct ifnet *ifp)
-{
-	struct ip6_moptions *im6o = in6p->in6p_moptions;
-	struct in6_multi_mship *imm;
-
-	if (im6o == NULL)
-		return 0;
-
-	lck_mtx_lock(nd6_mutex);
-	for (imm = im6o->im6o_memberships.lh_first; imm != NULL;
-	     imm = imm->i6mm_chain.le_next) {
-		if ((ifp == NULL ||
-		     imm->i6mm_maddr->in6m_ifp == ifp) &&
-		    IN6_ARE_ADDR_EQUAL(&imm->i6mm_maddr->in6m_addr,
-				       ia6)) {
-			lck_mtx_unlock(nd6_mutex);
-			return 1;
-		}
-	}
-	lck_mtx_unlock(nd6_mutex);
-	return 0;
-}
-
 /*
  * subroutine of udp6_input(), mainly for source code readability.
  */
 static void
-udp6_append(struct inpcb *last, struct ip6_hdr *ip6,
+udp6_append(struct inpcb *last, __unused struct ip6_hdr *ip6,
     struct sockaddr_in6 *udp_in6, struct mbuf *n, int off)
 {
 	struct  mbuf *opts = NULL;
-
+	int ret = 0;
 #if CONFIG_MACF_NET
 	if (mac_inpcb_check_deliver(last, n, AF_INET6, SOCK_DGRAM) != 0) {
 		m_freem(n);
 		return;
 	}
 #endif
-	if (last->in6p_flags & IN6P_CONTROLOPTS ||
-	    last->in6p_socket->so_options & SO_TIMESTAMP)
-		ip6_savecontrol(last, &opts, ip6, n);
-
+	if ((last->in6p_flags & IN6P_CONTROLOPTS) != 0 ||
+	    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
+	    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+		ret = ip6_savecontrol(last, n, &opts);
+		if (ret != 0) {
+			m_freem(n);
+			m_freem(opts);
+			return;
+		}
+	}
 	m_adj(n, off);
+	if (nstat_collect) {
+		locked_add_64(&last->inp_stat->rxpackets, 1);
+		locked_add_64(&last->inp_stat->rxbytes, n->m_pkthdr.len);
+	}
+	so_recv_data_stat(last->in6p_socket, n, 0);
 	if (sbappendaddr(&last->in6p_socket->so_rcv,
 	    (struct sockaddr *)udp_in6, n, opts, NULL) == 0)
 		udpstat.udps_fullsock++;
@@ -188,20 +199,25 @@ udp6_append(struct inpcb *last, struct ip6_hdr *ip6,
 int
 udp6_input(
 	struct mbuf **mp,
-	int *offp)
+	int *offp,
+	int proto)
 {
+#pragma unused(proto)
 	struct mbuf *m = *mp;
+	struct ifnet *ifp;
 	register struct ip6_hdr *ip6;
 	register struct udphdr *uh;
 	register struct inpcb *in6p;
 	struct  mbuf *opts = NULL;
 	int off = *offp;
-	int plen, ulen;
+	int plen, ulen, ret = 0;
 	struct sockaddr_in6 udp_in6;
 	struct inpcbinfo *pcbinfo = &udbinfo;
+	struct sockaddr_in6 fromsa;
 
 	IP6_EXTHDR_CHECK(m, off, sizeof(struct udphdr), return IPPROTO_DONE);
 
+	ifp = m->m_pkthdr.rcvif;
 	ip6 = mtod(m, struct ip6_hdr *);
 
 #if defined(NFAITH) && 0 < NFAITH
@@ -223,20 +239,40 @@ udp6_input(
 		goto bad;
 	}
 
+	/* destination port of 0 is illegal, based on RFC768. */
+	if (uh->uh_dport == 0)
+		goto bad;
+
 	/*
 	 * Checksum extended UDP header and data.
 	 */
+	if (uh->uh_sum) {
+		if ((apple_hwcksum_rx != 0) && (m->m_pkthdr.csum_flags & CSUM_DATA_VALID)) {
+			uh->uh_sum = m->m_pkthdr.csum_data;
+			uh->uh_sum ^= 0xffff;
+		}
+		else {
+			if (in6_cksum(m, IPPROTO_UDP, off, ulen) != 0) {
+				udpstat.udps_badsum++;
+				goto bad;
+			}
+		}
+	}
 #ifndef __APPLE__
-	if (uh->uh_sum == 0)
+	else
 		udpstat.udps_nosum++;
 #endif
-	else if (in6_cksum(m, IPPROTO_UDP, off, ulen) != 0) {
-		udpstat.udps_badsum++;
-		goto bad;
-	}
+
+	/*
+	 * Construct sockaddr format source address.
+	 */
+	init_sin6(&fromsa, m);
+	fromsa.sin6_port = uh->uh_sport;
+
 
 	if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst)) {
 		int reuse_sock = 0, mcast_delivered = 0;
+		struct ip6_moptions *imo;
 		struct mbuf *n = NULL;
 
 		/*
@@ -299,11 +335,27 @@ udp6_input(
 				udp_unlock(in6p->in6p_socket, 1, 0);
 				continue;
 			}
-			if (!IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_laddr)) {
-				if (!IN6_ARE_ADDR_EQUAL(&in6p->in6p_laddr,
-							&ip6->ip6_dst) &&
-				    !in6_mcmatch(in6p, &ip6->ip6_dst,
-						 m->m_pkthdr.rcvif)) {
+
+			/*
+			 * Handle socket delivery policy for any-source
+			 * and source-specific multicast. [RFC3678]
+			 */
+			imo = in6p->in6p_moptions;
+			if (imo && IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst)) {
+				struct sockaddr_in6	 mcaddr;
+				int			 blocked;
+
+				IM6O_LOCK(imo);	
+				bzero(&mcaddr, sizeof(struct sockaddr_in6));
+				mcaddr.sin6_len = sizeof(struct sockaddr_in6);
+				mcaddr.sin6_family = AF_INET6;
+				mcaddr.sin6_addr = ip6->ip6_dst;
+
+				blocked = im6o_mc_filter(imo, ifp,
+					(struct sockaddr *)&mcaddr,
+					(struct sockaddr *)&fromsa);
+				IM6O_UNLOCK(imo);	
+				if (blocked != MCAST_PASS) {
 					udp_unlock(in6p->in6p_socket, 1, 0);
 					continue;
 				}
@@ -444,10 +496,21 @@ udp6_input(
 		
 	init_sin6(&udp_in6, m); /* general init */
 	udp_in6.sin6_port = uh->uh_sport;
-	if (in6p->in6p_flags & IN6P_CONTROLOPTS
-	    || in6p->in6p_socket->so_options & SO_TIMESTAMP)
-		ip6_savecontrol(in6p, &opts, ip6, m);
+	if ((in6p->in6p_flags & IN6P_CONTROLOPTS) != 0 || 
+		(in6p->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
+		(in6p->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+		ret = ip6_savecontrol(in6p, m, &opts);
+		if (ret != 0) {
+			udp_unlock(in6p->in6p_socket, 1, 0);
+			goto bad;
+		}
+	}
 	m_adj(m, off + sizeof(struct udphdr));
+	if (nstat_collect) {
+		locked_add_64(&in6p->inp_stat->rxpackets, 1);
+		locked_add_64(&in6p->inp_stat->rxbytes, m->m_pkthdr.len);
+	}
+	so_recv_data_stat(in6p->in6p_socket, m, 0);
 	if (sbappendaddr(&in6p->in6p_socket->so_rcv,
 			(struct sockaddr *)&udp_in6,
 			m, opts, NULL) == 0) {
@@ -527,10 +590,10 @@ udp6_ctlinput(
 
 		(void) in6_pcbnotify(&udbinfo, sa, uh.uh_dport,
 					(struct sockaddr*)ip6cp->ip6c_src,
-					uh.uh_sport, cmd, notify);
+					uh.uh_sport, cmd, NULL, notify);
 	} else
 		(void) in6_pcbnotify(&udbinfo, sa, 0, (struct sockaddr *)&sa6_src,
-				     0, cmd, notify);
+				     0, cmd, NULL, notify);
 }
 
 #ifndef __APPLE__
@@ -561,6 +624,12 @@ udp6_getcred SYSCTL_HANDLER_ARGS
 		error = ENOENT;
 		goto out;
 	}
+	/*
+	 * XXX This should not be copying out a credential!!!!  This
+	 * XXX is an opaque type, and is not intended to be introspected,
+	 * XXX and the size of this structure *WILL* change as planned MACF
+	 * XXX and kauth changes go forward.
+	 */
 	error = SYSCTL_OUT(req, inp->inp_socket->so_cred->pc_ucred,
 			   sizeof(*(kauth_cred_t)0));
 
@@ -619,6 +688,7 @@ udp6_attach(struct socket *so, __unused int proto, struct proc *p)
 	 * which may match an IPv4-mapped IPv6 address.
 	 */
 	inp->inp_ip_ttl = ip_defttl;
+	nstat_udp_new_pcb(inp);
 	return 0;
 }
 
@@ -676,7 +746,7 @@ udp6_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 			if (inp->inp_faddr.s_addr != INADDR_ANY)
 				return EISCONN;
 			in6_sin6_2_sin(&sin, sin6_p);
-			error = in_pcbconnect(inp, (struct sockaddr *)&sin, p);
+			error = in_pcbconnect(inp, (struct sockaddr *)&sin, p, NULL);
 			if (error == 0) {
 				inp->inp_vflag |= INP_IPV4;
 				inp->inp_vflag &= ~INP_IPV6;
@@ -732,6 +802,7 @@ udp6_disconnect(struct socket *so)
 
 	in6_pcbdisconnect(inp);
 	inp->in6p_laddr = in6addr_any;
+	inp->in6p_last_outif = 0;
 	so->so_state &= ~SS_ISCONNECTED;		/* XXX */
 	return 0;
 }

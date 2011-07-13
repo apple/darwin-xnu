@@ -537,23 +537,21 @@ public:
     * @param array  The OSArray object containing the objects to be added.
     *
     * @result
-    * <code>true</code> if any object from <code>array</code>
-    * was successfully added the receiver,
+    * <code>true</code> if all objects from <code>array</code>
+    * are successfully added the receiver (or were already present),
     * <code>false</code> otherwise.
     *
     * @discussion
     * This functions adds to the receiving set
     * all objects from <code>array</code>
-    * that are not already in the set.
-    * Objects successfully added to the receiver are retained.
+    * that are not already in the receiving set.
+    * Objects added to the receiver are retained.
     *
-    * A <code>false</code> return value can mean either
-    * that all the objects in <code>array</code> are already present in the set,
-    * or that a memory allocation failure occurred.
-    * If you need to know whether the objects
-    * are already present, use
-    * <code>@link containsObject containsObject@/link</code>
-    * for each object.
+    * In  releases prior to 10.7, this function would return <code>false</code>
+    * if an object from <code>array</code> was already present in the set,
+    * or if <code>array</code> was empty.
+    * This is no longer the case, so this function correctly returns <code>true</code>
+    * when the semantic of merging is met.
     */
     virtual bool merge(const OSArray * array);
 
@@ -568,22 +566,20 @@ public:
     *
     * @result
     * <code>true</code> if any object from <code>set</code>
-    * was successfully added the receiver,
+    * are successfully added the receiver (or were already present),
     * <code>false</code> otherwise.
     *
     * @discussion
     * This functions adds to the receiving set
     * all objects from <code>set</code>
     * that are not already in the receiving set.
-    * Objects successfully added to the receiver are retained.
+    * Objects  added to the receiver are retained.
     *
-    * A <code>false</code> return value can mean either
-    * that all the objects in <code>array</code> are already present in the set,
-    * or that a memory allocation failure occurred.
-    * If you need to know whether the objects
-    * are already present, use
-    * <code>@link containsObject containsObject@/link</code>
-    * for each object.
+    * In  releases prior to 10.7, this function would return <code>false</code>
+    * if an object from <code>set</code> was already present in the set,
+    * or if <code>set</code> was empty.
+    * This is no longer the case, so this function correctly returns <code>true</code>
+    * when the semantic of merging is met.
     */
     virtual bool merge(const OSSet * set);
 

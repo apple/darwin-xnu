@@ -86,6 +86,7 @@ private:
 			       task_t	    inTask) APPLE_KEXT_DEPRECATED; /* use withOptions() instead */
 #endif /* !__LP64__ */
 
+public:
     virtual bool initWithPhysicalMask(
 				task_t		  inTask,
 				IOOptionBits      options,
@@ -146,7 +147,11 @@ public:
     kIOMemoryPhysicallyContiguous - pass to request memory be physically contiguous. This option is heavily discouraged. The request may fail if memory is fragmented, may cause large amounts of paging activity, and may take a very long time to execute.<br>
     kIOMemoryPageable - pass to request memory be non-wired - the default for kernel allocated memory is wired.<br>
     kIOMemoryPurgeable - pass to request memory that may later have its purgeable state set with IOMemoryDescriptor::setPurgeable. Only supported for kIOMemoryPageable allocations.<br>
-    kIOMemoryKernelUserShared - pass to request memory that will be mapped into both the kernel and client applications.
+    kIOMemoryKernelUserShared - pass to request memory that will be mapped into both the kernel and client applications.<br>
+    kIOMapInhibitCache - allocate memory with inhibited cache setting. <br>		
+    kIOMapWriteThruCache - allocate memory with writethru cache setting. <br>		
+    kIOMapCopybackCache - allocate memory with copyback cache setting. <br>		
+    kIOMapWriteCombineCache - allocate memory with writecombined cache setting.
     @param capacity The number of bytes to allocate.
     @param alignment The minimum required alignment of the buffer in bytes - 1 is the default for no required alignment. For example, pass 256 to get memory allocated at an address with bits 0-7 zero.
     @result Returns an instance of class IOBufferMemoryDescriptor to be released by the caller, which will free the memory desriptor and associated buffer. */
@@ -164,7 +169,11 @@ public:
     @param options Options for the allocation:<br>
     kIODirectionOut, kIODirectionIn - set the direction of the I/O transfer.<br>
     kIOMemoryPhysicallyContiguous - pass to request memory be physically contiguous. This option is heavily discouraged. The request may fail if memory is fragmented, may cause large amounts of paging activity, and may take a very long time to execute.<br>
-    kIOMemoryKernelUserShared - pass to request memory that will be mapped into both the kernel and client applications.
+    kIOMemoryKernelUserShared - pass to request memory that will be mapped into both the kernel and client applications.<br>
+    kIOMapInhibitCache - allocate memory with inhibited cache setting. <br>		
+    kIOMapWriteThruCache - allocate memory with writethru cache setting. <br>		
+    kIOMapCopybackCache - allocate memory with copyback cache setting. <br>		
+    kIOMapWriteCombineCache - allocate memory with writecombined cache setting.
     @param capacity The number of bytes to allocate.
     @param mask The buffer will be allocated with pages such that physical addresses will only have bits set present in physicalMask. For example, pass 0x00000000FFFFFFFFULL for a buffer to be accessed by hardware that has 32 address bits.
     @result Returns an instance of class IOBufferMemoryDescriptor to be released by the caller, which will free the memory desriptor and associated buffer. */

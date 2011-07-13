@@ -89,6 +89,7 @@ struct pset_node		pset_node0;
 decl_simple_lock_data(static,pset_node_lock)
 
 queue_head_t			tasks;
+queue_head_t			terminated_tasks;	/* To be used ONLY for stackshot. */
 int						tasks_count;
 queue_head_t			threads;
 int						threads_count;
@@ -103,6 +104,7 @@ uint32_t				processor_avail_count;
 
 processor_t		master_processor;
 int 			master_cpu = 0;
+boolean_t		sched_stats_active = FALSE;
 
 /* Forwards */
 kern_return_t	processor_set_things(
@@ -120,6 +122,7 @@ processor_bootstrap(void)
 	simple_lock_init(&pset_node_lock, 0);
 
 	queue_init(&tasks);
+	queue_init(&terminated_tasks);
 	queue_init(&threads);
 
 	simple_lock_init(&processor_list_lock, 0);
@@ -140,12 +143,16 @@ processor_init(
 	int					cpu_id,
 	processor_set_t		pset)
 {
-	run_queue_init(&processor->runq);
+	if (processor != master_processor) {
+		/* Scheduler state deferred until sched_init() */
+		SCHED(processor_init)(processor);
+	}
 
 	processor->state = PROCESSOR_OFF_LINE;
 	processor->active_thread = processor->next_thread = processor->idle_thread = THREAD_NULL;
 	processor->processor_set = pset;
 	processor->current_pri = MINPRI;
+	processor->current_thmode = TH_MODE_NONE;
 	processor->cpu_id = cpu_id;
 	timer_call_setup(&processor->quantum_timer, thread_quantum_expire, processor);
 	processor->deadline = UINT64_MAX;
@@ -236,10 +243,16 @@ pset_init(
 	processor_set_t		pset,
 	pset_node_t			node)
 {
+	if (pset != &pset0) {
+		/* Scheduler state deferred until sched_init() */
+		SCHED(pset_init)(pset);
+	}
+
 	queue_init(&pset->active_queue);
 	queue_init(&pset->idle_queue);
-	pset->processor_count = 0;
-	pset->low_pri = pset->low_count = PROCESSOR_NULL;
+	pset->online_processor_count = 0;
+	pset_pri_init_hint(pset, PROCESSOR_NULL);
+	pset_count_init_hint(pset, PROCESSOR_NULL);
 	pset->cpu_set_low = pset->cpu_set_hi = 0;
 	pset->cpu_set_count = 0;
 	pset_lock_init(pset);
@@ -321,16 +334,32 @@ processor_info(
 	{
 		register processor_cpu_load_info_t	cpu_load_info;
 
-	    if (*count < PROCESSOR_CPU_LOAD_INFO_COUNT)
+		if (*count < PROCESSOR_CPU_LOAD_INFO_COUNT)
 			return (KERN_FAILURE);
 
-	    cpu_load_info = (processor_cpu_load_info_t) info;
+		cpu_load_info = (processor_cpu_load_info_t) info;
 		cpu_load_info->cpu_ticks[CPU_STATE_USER] =
 							(uint32_t)(timer_grab(&PROCESSOR_DATA(processor, user_state)) / hz_tick_interval);
 		cpu_load_info->cpu_ticks[CPU_STATE_SYSTEM] =
 							(uint32_t)(timer_grab(&PROCESSOR_DATA(processor, system_state)) / hz_tick_interval);
-		cpu_load_info->cpu_ticks[CPU_STATE_IDLE] =
+		{
+		timer_data_t	idle_temp;
+		timer_t		idle_state;
+
+		idle_state = &PROCESSOR_DATA(processor, idle_state);
+		idle_temp = *idle_state;
+
+		if (PROCESSOR_DATA(processor, current_state) != idle_state ||
+		    timer_grab(&idle_temp) != timer_grab(idle_state))
+			cpu_load_info->cpu_ticks[CPU_STATE_IDLE] =
 							(uint32_t)(timer_grab(&PROCESSOR_DATA(processor, idle_state)) / hz_tick_interval);
+		else {
+			timer_advance(&idle_temp, mach_absolute_time() - idle_temp.tstamp);
+				
+			cpu_load_info->cpu_ticks[CPU_STATE_IDLE] =
+				(uint32_t)(timer_grab(&idle_temp) / hz_tick_interval);
+		}
+		}
 		cpu_load_info->cpu_ticks[CPU_STATE_NICE] = 0;
 
 	    *count = PROCESSOR_CPU_LOAD_INFO_COUNT;

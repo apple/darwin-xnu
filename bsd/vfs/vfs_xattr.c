@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -65,8 +65,6 @@
 #define MAKE_SHADOW_NAME(VP, NAME)  \
 	snprintf((NAME), sizeof((NAME)), ".vfs_rsrc_stream_%p%08x%p", (void*)(VP), (VP)->v_id, (VP)->v_data);
 
-static vnode_t shadow_dvp;  /* tmp directory to hold stream shadow files */
-static int shadow_vid;
 static int shadow_sequence;
 
 
@@ -556,7 +554,7 @@ vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 		return (0);
 	}
 	datasize = va.va_data_size;
-	if ((datasize == 0)) {
+	if (datasize == 0) {
 		(void) default_removexattr(vp, XATTR_RESOURCEFORK_NAME, 0, context);
 		return (0);
 	}
@@ -623,9 +621,10 @@ getshadowfile(vnode_t vp, vnode_t *svpp, int makestream, size_t *rsrcsize,
 	char tmpname[80];
 	size_t datasize = 0;
 	int  error = 0;
+	int retries = 0;
 
+retry_create:
 	*creator = 0;
-
 	/* Establish a unique file name. */
 	MAKE_SHADOW_NAME(vp, tmpname);
 	bzero(&cn, sizeof(cn));
@@ -705,9 +704,32 @@ getshadowfile(vnode_t vp, vnode_t *svpp, int makestream, size_t *rsrcsize,
 	if (error == 0) {
 		vnode_recycle(svp);
 		*creator = 1;
-	} else if ((error == EEXIST) && !makestream) {
+	} 
+	else if ((error == EEXIST) && !makestream) {
 		error = VNOP_LOOKUP(dvp, &svp, &cn, context);
 	}
+	else if ((error == ENOENT) && !makestream) {
+		/*
+		 * We could have raced with a rmdir on the shadow directory
+		 * post-lookup.  Retry from the beginning, 1x only, to
+		 * try and see if we need to re-create the shadow directory	
+		 * in get_shadow_dir.
+		 */
+		if (retries == 0) {
+			retries++;
+			if (dvp) {
+				vnode_put (dvp);
+				dvp = NULLVP;
+			}
+			if (svp) {
+				vnode_put (svp);
+				svp = NULLVP;
+			}
+			goto retry_create;
+		}
+		/* Otherwise, just error out normally below */
+	}
+	
 out:
 	if (dvp) {
 		vnode_put(dvp);
@@ -936,15 +958,27 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 	uint32_t  tmp_fsid;
 	int  error;
 
-	/* Check if we've already created it. */
-	if (shadow_dvp != NULLVP) {
-		if ((error = vnode_getwithvid(shadow_dvp, shadow_vid))) {
-			shadow_dvp = NULLVP;
-		} else {
-			*sdvpp = shadow_dvp;
-			return (0);
-		}
+
+	bzero(tmpname, sizeof(tmpname));
+	snprintf(tmpname, sizeof(tmpname), "/var/run/.vfs_rsrc_streams_%p%x",
+			(void*)rootvnode, shadow_sequence);
+	/* 
+	 * Look up the shadow directory to ensure that it still exists. 
+	 * By looking it up, we get an iocounted dvp to use, and avoid some coherency issues
+	 * in caching it when multiple threads may be trying to manipulate the pointers.
+	 */
+	error = vnode_lookup(tmpname, 0, &sdvp, context);
+	if (error == 0) {
+		/*
+		 * If we get here, then we have successfully looked up the shadow dir, 
+		 * and it has an iocount from the lookup. Return the vp in the output argument.
+		 */
+		*sdvpp = sdvp;
+		return (0);
 	}
+	/* In the failure case, no iocount is acquired */
+	sdvp = NULLVP;
+	bzero (tmpname, sizeof(tmpname));
 
 	/* Obtain the vnode for "/var/run" directory. */
 	if (vnode_lookup("/var/run", 0, &dvp, context) != 0) {
@@ -980,14 +1014,7 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 	/*
 	 * There can be only one winner for an exclusive create.
 	 */
-	if (error == 0) {
-		/* Take a long term ref to keep this dir around. */
-		error = vnode_ref(sdvp);
-		if (error == 0) {
-			shadow_dvp = sdvp;
-			shadow_vid = sdvp->v_id;
-		}
-	} else if (error == EEXIST) {
+	if (error == EEXIST) {
 		/* loser has to look up directory */
 		error = VNOP_LOOKUP(dvp, &sdvp, &cn, context);
 		if (error == 0) {
@@ -995,7 +1022,7 @@ get_shadow_dir(vnode_t *sdvpp, vfs_context_t context)
 			if (sdvp->v_type != VDIR) {
 				goto baddir;
 			}
-			/* Obtain the fsid for /var/run directory */
+			/* Obtain the fsid for /tmp directory */
 			VATTR_INIT(&va);
 			VATTR_WANTED(&va, va_fsid);
 			if (VNOP_GETATTR(dvp, &va, context) != 0  ||
@@ -1156,7 +1183,7 @@ baddir:
 #define ATTR_BUF_SIZE      4096        /* default size of the attr file and how much we'll grow by */
 
 /* Implementation Limits */
-#define ATTR_MAX_SIZE      (128*1024)  /* 128K maximum attribute data size */
+#define ATTR_MAX_SIZE      AD_XATTR_MAXSIZE
 #define ATTR_MAX_HDR_SIZE  65536
 /*
  * Note: ATTR_MAX_HDR_SIZE is the largest attribute header
@@ -2347,12 +2374,15 @@ open_xattrfile(vnode_t vp, int fileflags, vnode_t *xvpp, vfs_context_t context)
 	 * file security from the EA must always get access
 	 */
 lookup:
-	NDINIT(&nd, LOOKUP, LOCKLEAF | NOFOLLOW | USEDVP | DONOTAUTH, UIO_SYSSPACE,
-	       CAST_USER_ADDR_T(filename), context);
+	NDINIT(&nd, LOOKUP, OP_OPEN, LOCKLEAF | NOFOLLOW | USEDVP | DONOTAUTH,
+	       UIO_SYSSPACE, CAST_USER_ADDR_T(filename), context);
    	nd.ni_dvp = dvp;
 
 	if (fileflags & O_CREAT) {
 		nd.ni_cnd.cn_nameiop = CREATE;
+#if CONFIG_TRIGGERS
+		nd.ni_op = OP_LINK;
+#endif
 		if (dvp != vp) {
 			nd.ni_cnd.cn_flags |= LOCKPARENT;
 		}
@@ -2394,8 +2424,9 @@ lookup:
 			if (gid != KAUTH_GID_NONE)
 				VATTR_SET(&va, va_gid, gid);
 
-			error = vn_create(dvp, &nd.ni_vp, &nd.ni_cnd, &va,
+			error = vn_create(dvp, &nd.ni_vp, &nd, &va,
 			                  VN_CREATE_NOAUTH | VN_CREATE_NOINHERIT | VN_CREATE_NOLABEL,
+					  0, NULL,
 			                  context);
 			if (error)
 				error = ENOATTR;
@@ -2544,7 +2575,7 @@ remove_xattrfile(vnode_t xvp, vfs_context_t context)
 		return (error);
 	}
 
-	NDINIT(&nd, DELETE, LOCKPARENT | NOFOLLOW | DONOTAUTH,
+	NDINIT(&nd, DELETE, OP_UNLINK, LOCKPARENT | NOFOLLOW | DONOTAUTH,
 	       UIO_SYSSPACE, CAST_USER_ADDR_T(path), context);
 	error = namei(&nd);
 	FREE_ZONE(path, MAXPATHLEN, M_NAMEI);

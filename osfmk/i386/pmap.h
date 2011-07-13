@@ -80,9 +80,12 @@
 #include <kern/kern_types.h>
 #include <kern/thread.h>
 #include <kern/lock.h>
+#include <mach/branch_predicates.h>
 
 #include <i386/mp.h>
 #include <i386/proc_reg.h>
+
+#include <i386/pal_routines.h>
 
 /*
  *	Define the generic in terms of the specific
@@ -171,6 +174,24 @@ typedef uint64_t        pt_entry_t;
 #define PT_ENTRY_NULL	((pt_entry_t *) 0)
 
 typedef uint64_t  pmap_paddr_t;
+
+#if	DEBUG
+#define PMAP_ASSERT 1
+#endif
+#if PMAP_ASSERT
+#define	pmap_assert(ex) ((ex) ? (void)0 : Assert(__FILE__, __LINE__, # ex))
+
+#define pmap_assert2(ex, fmt, args...)					\
+	do {								\
+		if (!(ex)) {						\
+			kprintf("Assertion %s failed (%s:%d, caller %p) " fmt , #ex, __FILE__, __LINE__, __builtin_return_address(0),  ##args); \
+			panic("Assertion %s failed (%s:%d, caller %p) " fmt , #ex, __FILE__, __LINE__, __builtin_return_address(0),  ##args); 		\
+		}							\
+	} while(0)
+#else
+#define pmap_assert(ex)
+#define pmap_assert2(ex, fmt, args...)
+#endif
 
 /* superpages */
 #ifdef __x86_64__
@@ -385,19 +406,10 @@ enum  high_fixed_addresses {
 #define pdenum(pmap, a)	(((vm_offset_t)(a) >> PDESHIFT) & PDEMASK)
 #define PMAP_INVALID_PDPTNUM (~0ULL)
 
-#ifdef __i386__
 #define pdeidx(pmap, a)    (((a) >> PDSHIFT)   & ((1ULL<<(48 - PDSHIFT)) -1))
 #define pdptidx(pmap, a)   (((a) >> PDPTSHIFT) & ((1ULL<<(48 - PDPTSHIFT)) -1))
 #define pml4idx(pmap, a)   (((a) >> PML4SHIFT) & ((1ULL<<(48 - PML4SHIFT)) -1))
-#else
-#define VAMASK		   ((1ULL<<48)-1)
-#define pml4idx(pmap, a)   ((((a) & VAMASK) >> PML4SHIFT) &	\
-				((1ULL<<(48 - PML4SHIFT))-1))
-#define pdptidx(pmap, a)   ((((a) & PML4MASK) >> PDPTSHIFT) &	\
-				((1ULL<<(48 - PDPTSHIFT))-1))
-#define pdeidx(pmap, a)    ((((a) & PML4MASK) >> PDSHIFT) &	\
-				((1ULL<<(48 - PDSHIFT)) - 1))
-#endif
+
 
 /*
  *	Convert page descriptor index to user virtual address
@@ -433,7 +445,8 @@ enum  high_fixed_addresses {
 
 #define INTEL_PTE_INVALID       0
 /* This is conservative, but suffices */
-#define INTEL_PTE_RSVD		((1ULL << 8) | (1ULL << 9) | (1ULL << 10) | (1ULL << 11) | (0x1FFULL << 54))
+#define INTEL_PTE_RSVD		((1ULL << 10) | (1ULL << 11) | (0x1FFULL << 54))
+
 #define	pa_to_pte(a)		((a) & INTEL_PTE_PFN) /* XXX */
 #define	pte_to_pa(p)		((p) & INTEL_PTE_PFN) /* XXX */
 #define	pte_increment_pa(p)	((p) += INTEL_OFFMASK+1)
@@ -513,26 +526,26 @@ struct md_page {
  */
 
 struct pmap {
+	decl_simple_lock_data(,lock)	/* lock on map */
+	pmap_paddr_t    pm_cr3;         /* physical addr */
+	boolean_t       pm_shared;
         pd_entry_t      *dirbase;        /* page directory pointer */
 #ifdef __i386__
 	pmap_paddr_t    pdirbase;        /* phys. address of dirbase */
-#endif
-        vm_object_t     pm_obj;         /* object to hold pde's */
-	int		ref_count;	/* reference count */
-        int		nx_enabled;
-        task_map_t      pm_task_map;
-	decl_simple_lock_data(,lock)	/* lock on map */
-	struct pmap_statistics	stats;	/* map statistics */
-#ifdef __i386__
 	vm_offset_t     pm_hold;        /* true pdpt zalloc addr */
 #endif
-	pmap_paddr_t    pm_cr3;         /* physical addr */
+        vm_object_t     pm_obj;         /* object to hold pde's */
+        task_map_t      pm_task_map;
         pdpt_entry_t    *pm_pdpt;       /* KVA of 3rd level page */
 	pml4_entry_t    *pm_pml4;       /* VKA of top level */
 	vm_object_t     pm_obj_pdpt;    /* holds pdpt pages */
 	vm_object_t     pm_obj_pml4;    /* holds pml4 pages */
-	vm_object_t     pm_obj_top;     /* holds single top level page */
-        boolean_t       pm_shared;
+#define	PMAP_PCID_MAX_CPUS	(48)	/* Must be a multiple of 8 */
+	pcid_t		pmap_pcid_cpus[PMAP_PCID_MAX_CPUS];
+	volatile uint8_t pmap_pcid_coherency_vector[PMAP_PCID_MAX_CPUS];
+	struct pmap_statistics	stats;	/* map statistics */
+	int		ref_count;	/* reference count */
+        int		nx_enabled;
 };
 
 
@@ -578,23 +591,30 @@ extern unsigned pmap_memory_region_current;
 #define PMAP_MEMORY_REGIONS_SIZE 128
 
 extern pmap_memory_region_t pmap_memory_regions[];
+#include <i386/pmap_pcid.h>
 
 static inline void
 set_dirbase(pmap_t tpmap, __unused thread_t thread) {
-	current_cpu_datap()->cpu_task_cr3 = tpmap->pm_cr3;
-	current_cpu_datap()->cpu_task_map = tpmap->pm_task_map;
+	int ccpu = cpu_number();
+	cpu_datap(ccpu)->cpu_task_cr3 = tpmap->pm_cr3;
+	cpu_datap(ccpu)->cpu_task_map = tpmap->pm_task_map;
 #ifndef __i386__
 	/*
 	 * Switch cr3 if necessary
 	 * - unless running with no_shared_cr3 debugging mode
 	 *   and we're not on the kernel's cr3 (after pre-empted copyio)
 	 */
-	if (!no_shared_cr3) {
-		if (get_cr3() != tpmap->pm_cr3)
-			set_cr3(tpmap->pm_cr3);
+	if (__probable(!no_shared_cr3)) {
+		if (get_cr3_base() != tpmap->pm_cr3) {
+			if (pmap_pcid_ncpus) {
+				pmap_pcid_activate(tpmap, ccpu);
+			}
+			else
+				set_cr3_raw(tpmap->pm_cr3);
+		}
 	} else {
-		if (get_cr3() != current_cpu_datap()->cpu_kernel_cr3)
-			set_cr3(current_cpu_datap()->cpu_kernel_cr3);
+		if (get_cr3_base() != cpu_datap(ccpu)->cpu_kernel_cr3)
+			set_cr3_raw(cpu_datap(ccpu)->cpu_kernel_cr3);
 	}
 #endif
 }
@@ -616,7 +636,7 @@ extern addr64_t		(kvtophys)(
 extern void		pmap_expand(
 				pmap_t		pmap,
 				vm_map_offset_t	addr);
-
+#if	!defined(__x86_64__)
 extern pt_entry_t	*pmap_pte(
 				struct pmap	*pmap,
 				vm_map_offset_t	addr);
@@ -632,7 +652,7 @@ extern pd_entry_t	*pmap64_pde(
 extern pdpt_entry_t	*pmap64_pdpt(
 				struct pmap	*pmap,
 				vm_map_offset_t	addr);
-
+#endif
 extern vm_offset_t	pmap_map(
 				vm_offset_t	virt,
 				vm_map_offset_t	start,
@@ -670,7 +690,10 @@ extern void             pmap_commpage64_init(
 					   int count);
 
 #endif
-
+/*
+ * Get cache attributes (as pagetable bits) for the specified phys page
+ */
+extern	unsigned	pmap_get_cache_attributes(ppnum_t);
 #if NCOPY_WINDOWS > 0
 extern struct cpu_pmap	*pmap_cpu_alloc(
 				boolean_t	is_boot_cpu);
@@ -704,9 +727,10 @@ extern vm_offset_t pmap_cpu_high_shared_remap(int, enum high_cpu_types, vm_offse
 extern vm_offset_t pmap_high_shared_remap(enum high_fixed_addresses, vm_offset_t, int);
 #endif
 
-extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_size_t *, int *, int *);
+extern void pt_fake_zone_init(int);
+extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_size_t *, 
+			      uint64_t *, int *, int *, int *);
 extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__printflike(1,2));
-
 
 /*
  *	Macros for speed.
@@ -727,8 +751,11 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 #define PMAP_DEACTIVATE_MAP(map, thread)				\
 	if (vm_map_pmap(map)->pm_task_map == TASK_MAP_64BIT_SHARED)	\
 		pmap_load_kernel_cr3();
+#elif defined(__x86_64__)
+#define PMAP_DEACTIVATE_MAP(map, thread)				\
+	pmap_assert(pmap_pcid_ncpus ? (pcid_for_pmap_cpu_tuple(map->pmap, cpu_number()) == (get_cr3_raw() & 0xFFF)) : TRUE);
 #else
-#define PMAP_DEACTIVATE_MAP(map, my_cpu)
+#define PMAP_DEACTIVATE_MAP(map, thread)
 #endif
 
 #if   defined(__i386__)
@@ -772,18 +799,16 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 
 #else /* __x86_64__ */
 #define	PMAP_SWITCH_CONTEXT(old_th, new_th, my_cpu) {			\
-	spl_t		spl;						\
                                                                         \
-        spl = splhigh();						\
+	pmap_assert(ml_get_interrupts_enabled() == FALSE);		\
 	if (old_th->map != new_th->map) {				\
 		PMAP_DEACTIVATE_MAP(old_th->map, old_th);		\
 		PMAP_ACTIVATE_MAP(new_th->map, new_th);			\
 	}								\
-	splx(spl);							\
 }
 #endif /* __i386__ */
 
-#ifdef __i386__
+#if NCOPY_WINDOWS > 0
 #define	PMAP_SWITCH_USER(th, new_map, my_cpu) {				\
 	spl_t		spl;						\
 									\
@@ -792,7 +817,7 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 	th->map = new_map;						\
 	PMAP_ACTIVATE_MAP(th->map, th);					\
 	splx(spl);							\
-        inval_copy_windows(th);						\
+	inval_copy_windows(th);						\
 }
 #else
 #define	PMAP_SWITCH_USER(th, new_map, my_cpu) {				\
@@ -810,7 +835,7 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
  * Marking the current cpu's cr3 inactive is achieved by setting its lsb.
  * Marking the current cpu's cr3 active once more involves clearng this bit.
  * Note that valid page tables are page-aligned and so the bottom 12 bits
- * are noramlly zero.
+ * are normally zero, modulo PCID.
  * We can only mark the current cpu active/inactive but we can test any cpu.
  */
 #define CPU_CR3_MARK_INACTIVE()						\
@@ -837,13 +862,13 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
  */
 #if   defined(__x86_64__)
 #define MARK_CPU_IDLE(my_cpu)	{					\
-	int	s = splhigh();						\
+	assert(ml_get_interrupts_enabled() == FALSE);			\
 	CPU_CR3_MARK_INACTIVE();					\
 	__asm__ volatile("mfence");					\
-	splx(s);							\
 }
 #else /* __i386__ native */
 #define MARK_CPU_IDLE(my_cpu)	{					\
+	assert(ml_get_interrupts_enabled() == FALSE);			\
 	/*								\
 	 *	Mark this cpu idle, and remove it from the active set,	\
 	 *	since it is not actively using any pmap.  Signal_cpus	\
@@ -851,20 +876,17 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 	 *	but will queue the update request for when the cpu	\
 	 *	becomes active.						\
 	 */								\
-	int	s = splhigh();						\
 	if (!cpu_mode_is64bit() || no_shared_cr3)			\
 		process_pmap_updates();					\
 	else								\
 		pmap_load_kernel_cr3();					\
 	CPU_CR3_MARK_INACTIVE();					\
 	__asm__ volatile("mfence");					\
-	splx(s);							\
 }
 #endif /* __i386__ */
 
 #define MARK_CPU_ACTIVE(my_cpu) {					\
-									\
-	int	s = splhigh();						\
+	assert(ml_get_interrupts_enabled() == FALSE);			\
 	/*								\
 	 *	If a kernel_pmap update was requested while this cpu	\
 	 *	was idle, process it as if we got the interrupt.	\
@@ -880,7 +902,6 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 									\
 	if (current_cpu_datap()->cpu_tlb_invalid)			\
 	    process_pmap_updates();					\
-	splx(s);							\
 }
 
 #define PMAP_CONTEXT(pmap, thread)
@@ -898,10 +919,12 @@ extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__pr
 #define	pmap_attribute_cache_sync(addr,size,attr,value) \
 					(KERN_INVALID_ADDRESS)
 
-#define MACHINE_PMAP_IS_EMPTY 1
+#define MACHINE_PMAP_IS_EMPTY	1
 extern boolean_t pmap_is_empty(pmap_t		pmap,
 			       vm_map_offset_t	start,
 			       vm_map_offset_t	end);
+
+#define MACHINE_BOOTSTRAPPTD	1	/* Static bootstrap page-tables */
 
 
 #endif	/* ASSEMBLER */

@@ -28,9 +28,7 @@
 #ifndef _BSD_MACHINE__TYPES_H_
 #define _BSD_MACHINE__TYPES_H_
 
-#if defined (__ppc__) || defined (__ppc64__)
-#include "ppc/_types.h"
-#elif defined (__i386__) || defined(__x86_64__)
+#if defined (__i386__) || defined(__x86_64__)
 #include "i386/_types.h"
 #else
 #error architecture not supported

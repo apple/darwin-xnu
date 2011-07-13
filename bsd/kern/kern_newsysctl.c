@@ -86,20 +86,51 @@ struct sysctl_oid_list sysctl__sysctl_children;
 
 lck_rw_t * sysctl_geometry_lock = NULL;
 
-static void
-sysctl_sysctl_debug_dump_node(struct sysctl_oid_list *l, int i);
+/*
+ * Conditionally allow dtrace to see these functions for debugging purposes.
+ */
+#ifdef STATIC
+#undef STATIC
+#endif
+#if 0
+#define	STATIC
+#else
+#define STATIC static
+#endif
+
+/* forward declarations  of static functions */
+STATIC funnel_t *spl_kernel_funnel(void);
+STATIC void sysctl_sysctl_debug_dump_node(struct sysctl_oid_list *l, int i);
+STATIC int sysctl_sysctl_debug(struct sysctl_oid *oidp, void *arg1,
+	int arg2, struct sysctl_req *req);
+STATIC int sysctl_sysctl_name(struct sysctl_oid *oidp, void *arg1,
+	int arg2, struct sysctl_req *req);
+STATIC int sysctl_sysctl_next_ls (struct sysctl_oid_list *lsp,
+	int *name, u_int namelen, int *next, int *len, int level,
+	struct sysctl_oid **oidpp);
+STATIC int sysctl_old_kernel(struct sysctl_req *req, const void *p, size_t l);
+STATIC int sysctl_new_kernel(struct sysctl_req *req, void *p, size_t l);
+STATIC int name2oid (char *name, int *oid, int *len);
+STATIC int sysctl_sysctl_name2oid(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
+STATIC int sysctl_sysctl_next(struct sysctl_oid *oidp, void *arg1, int arg2,
+        struct sysctl_req *req);
+STATIC int sysctl_sysctl_oidfmt(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
+STATIC void splx_kernel_funnel(funnel_t *saved);
+STATIC int sysctl_old_user(struct sysctl_req *req, const void *p, size_t l);
+STATIC int sysctl_new_user(struct sysctl_req *req, void *p, size_t l);
+STATIC int sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
+STATIC int sysctlnametomib(const char *name, int *mibp, size_t *sizep);
 
 
 
 /*
  * Locking and stats
  */
-static struct sysctl_lock memlock;
 
 /*
  * XXX this does not belong here
  */
-static funnel_t *
+STATIC funnel_t *
 spl_kernel_funnel(void)
 {
 	funnel_t *cfunnel;
@@ -113,7 +144,7 @@ spl_kernel_funnel(void)
 	return(cfunnel);
 }
 
-static void
+STATIC void
 splx_kernel_funnel(funnel_t *saved)
 {
 	if (saved != kernel_flock) {
@@ -123,7 +154,7 @@ splx_kernel_funnel(funnel_t *saved)
 	}
 }
 
-static int sysctl_root SYSCTL_HANDLER_ARGS;
+STATIC int sysctl_root SYSCTL_HANDLER_ARGS;
 
 struct sysctl_oid_list sysctl__children; /* root list */
 
@@ -133,21 +164,65 @@ struct sysctl_oid_list sysctl__children; /* root list */
  * Order by number in each list.
  */
 
-void sysctl_register_oid(struct sysctl_oid *oidp)
+void
+sysctl_register_oid(struct sysctl_oid *new_oidp)
 {
-	struct sysctl_oid_list *parent = oidp->oid_parent;
+	struct sysctl_oid *oidp = NULL;
+	struct sysctl_oid_list *parent = new_oidp->oid_parent;
 	struct sysctl_oid *p;
 	struct sysctl_oid *q;
 	int n;
-	funnel_t *fnl;
+	funnel_t *fnl = NULL;	/* compiler doesn't notice CTLFLAG_LOCKED */
 
-	fnl = spl_kernel_funnel();
+	/*
+	 * The OID can be old-style (needs copy), new style without an earlier
+	 * version (also needs copy), or new style with a matching version (no
+	 * copy needed).  Later versions are rejected (presumably, the OID
+	 * structure was changed for a necessary reason).
+	 */
+	if (!(new_oidp->oid_kind & CTLFLAG_OID2)) {
+		/*
+		 * XXX:	M_TEMP is perhaps not the most apropriate zone, as it
+		 * XXX:	will subject us to use-after-free by other consumers.
+		 */
+		MALLOC(oidp, struct sysctl_oid *, sizeof(*oidp), M_TEMP, M_WAITOK | M_ZERO);
+		if (oidp == NULL)
+			return;		/* reject: no memory */
+
+		/*
+		 * Copy the structure only through the oid_fmt field, which
+		 * is the last field in a non-OID2 OID structure.
+		 *
+		 * Note:	We may want to set the oid_descr to the
+		 *		oid_name (or "") at some future date.
+		 */
+		memcpy(oidp, new_oidp, offsetof(struct sysctl_oid, oid_descr));
+	} else {
+		/* It's a later version; handle the versions we know about */
+		switch (new_oidp->oid_version) {
+		case SYSCTL_OID_VERSION:
+			/* current version */
+			oidp = new_oidp;
+			break;
+		default:
+			return;			/* rejects unknown version */
+		}
+	}
+
+	/*
+	 * If it's a locked OID being registered, we can assume that the
+	 * caller is doing their own reentrancy locking before calling us.
+	 */
+	if (!(oidp->oid_kind & CTLFLAG_LOCKED))
+		fnl = spl_kernel_funnel();
 
 	if(sysctl_geometry_lock == NULL)
 	{
-		/* Initialise the geometry lock for reading/modifying the sysctl tree
-		 * This is done here because IOKit registers some sysctls before bsd_init()
-		 * calls sysctl_register_fixed().
+		/*
+		 * Initialise the geometry lock for reading/modifying the
+		 * sysctl tree. This is done here because IOKit registers
+		 * some sysctl's before bsd_init() calls
+		 * sysctl_register_fixed().
 		 */
 
 		lck_grp_t* lck_grp  = lck_grp_alloc_init("sysctl", NULL);
@@ -169,6 +244,12 @@ void sysctl_register_oid(struct sysctl_oid *oidp)
 				n = p->oid_number;
 		}
 		oidp->oid_number = n + 1;
+		/*
+		 * Reflect the number in an llocated OID into the template
+		 * of the caller for sysctl_unregister_oid() compares.
+		 */
+		if (oidp != new_oidp)
+			new_oidp->oid_number = oidp->oid_number;
 	}
 
 	/*
@@ -188,30 +269,83 @@ void sysctl_register_oid(struct sysctl_oid *oidp)
 	/* Release the write lock */
 	lck_rw_unlock_exclusive(sysctl_geometry_lock);
 
-	splx_kernel_funnel(fnl);
+	if (!(oidp->oid_kind & CTLFLAG_LOCKED))
+		splx_kernel_funnel(fnl);
 }
 
-void sysctl_unregister_oid(struct sysctl_oid *oidp)
+void
+sysctl_unregister_oid(struct sysctl_oid *oidp)
 {
-	funnel_t *fnl;
+	struct sysctl_oid *removed_oidp = NULL;	/* OID removed from tree */
+	struct sysctl_oid *old_oidp = NULL;	/* OID compatibility copy */
+	funnel_t *fnl = NULL;	/* compiler doesn't notice CTLFLAG_LOCKED */
 
-	fnl = spl_kernel_funnel();
+	if (!(oidp->oid_kind & CTLFLAG_LOCKED))
+		fnl = spl_kernel_funnel();
 
 	/* Get the write lock to modify the geometry */
 	lck_rw_lock_exclusive(sysctl_geometry_lock);
 
-	SLIST_REMOVE(oidp->oid_parent, oidp, sysctl_oid, oid_link);
+	if (!(oidp->oid_kind & CTLFLAG_OID2)) {
+		/*
+		 * We're using a copy so we can get the new fields in an
+		 * old structure, so we have to iterate to compare the
+		 * partial structure; when we find a match, we remove it
+		 * normally and free the memory.
+		 */
+		SLIST_FOREACH(old_oidp, oidp->oid_parent, oid_link) {
+			if (!memcmp(&oidp->oid_number, &old_oidp->oid_number, (offsetof(struct sysctl_oid, oid_descr)-offsetof(struct sysctl_oid, oid_number)))) {
+                break;
+            }
+		}
+		if (old_oidp != NULL) {
+			SLIST_REMOVE(old_oidp->oid_parent, old_oidp, sysctl_oid, oid_link);
+			removed_oidp = old_oidp;
+		}
+	} else {
+		/* It's a later version; handle the versions we know about */
+		switch (oidp->oid_version) {
+		case SYSCTL_OID_VERSION:
+			/* We can just remove the OID directly... */
+			SLIST_REMOVE(oidp->oid_parent, oidp, sysctl_oid, oid_link);
+			removed_oidp = oidp;
+			break;
+		default:
+			 /* XXX: Can't happen; probably tree coruption.*/
+			break;			/* rejects unknown version */
+		}
+	}
+
+	/*
+	 * We've removed it from the list at this point, but we don't want
+	 * to return to the caller until all handler references have drained
+	 * out.  Doing things in this order prevent other people coming in
+	 * and starting new operations against the OID node we want removed.
+	 *
+	 * Note:	oidp could be NULL if it wasn't found.
+	 */
+	while(removed_oidp && removed_oidp->oid_refcnt) {
+		lck_rw_sleep(sysctl_geometry_lock, LCK_SLEEP_EXCLUSIVE, &removed_oidp->oid_refcnt, THREAD_UNINT);
+	}
 
 	/* Release the write lock */
 	lck_rw_unlock_exclusive(sysctl_geometry_lock);
 
-	splx_kernel_funnel(fnl);
+	/* If it was allocated, free it after dropping the lock */
+	if (old_oidp != NULL) {
+		FREE(old_oidp, M_TEMP);
+	}
+
+	/* And drop the funnel interlock, if needed */
+	if (!(oidp->oid_kind & CTLFLAG_LOCKED))
+		splx_kernel_funnel(fnl);
 }
 
 /*
  * Bulk-register all the oids in a linker_set.
  */
-void sysctl_register_set(const char *set)
+void
+sysctl_register_set(const char *set)
 {
 	struct sysctl_oid **oidpp, *oidp;
 
@@ -223,7 +357,8 @@ void sysctl_register_set(const char *set)
 	}
 }
 
-void sysctl_unregister_set(const char *set)
+void
+sysctl_unregister_set(const char *set)
 {
 	struct sysctl_oid **oidpp, *oidp;
 
@@ -401,7 +536,32 @@ int sysctl_io_opaque(struct sysctl_req *req,void *pValue, size_t valueSize, int 
  * {0,4,...}	return the kind & format info for the "..." OID.
  */
 
-static void
+/*
+ * sysctl_sysctl_debug_dump_node
+ *
+ * Description:	Dump debug information for a given sysctl_oid_list at the
+ *		given oid depth out to the kernel log, via printf
+ *
+ * Parameters:	l				sysctl_oid_list pointer
+ *		i				current node depth
+ *
+ * Returns:	(void)
+ *
+ * Implicit:	kernel log, modified
+ *
+ * Locks:	Assumes sysctl_geometry_lock is held prior to calling
+ *
+ * Notes:	This function may call itself recursively to resolve Node
+ *		values, which potentially have an inferioer sysctl_oid_list
+ *
+ *		This function is only callable indirectly via the function
+ *		sysctl_sysctl_debug()
+ *
+ * Bugs:	The node depth indentation does not work; this may be an
+ *		artifact of leading space removal by the log daemon itself
+ *		or some intermediate routine.
+ */
+STATIC void
 sysctl_sysctl_debug_dump_node(struct sysctl_oid_list *l, int i)
 {
 	int k;
@@ -414,7 +574,8 @@ sysctl_sysctl_debug_dump_node(struct sysctl_oid_list *l, int i)
 
 		printf("%d %s ", oidp->oid_number, oidp->oid_name);
 
-		printf("%c%c",
+		printf("%c%c%c",
+			oidp->oid_kind & CTLFLAG_LOCKED ? 'L':' ',
 			oidp->oid_kind & CTLFLAG_RD ? 'R':' ',
 			oidp->oid_kind & CTLFLAG_WR ? 'W':' ');
 
@@ -439,18 +600,83 @@ sysctl_sysctl_debug_dump_node(struct sysctl_oid_list *l, int i)
 	}
 }
 
-static int
+/*
+ * sysctl_sysctl_debug
+ *
+ * Description:	This function implements the "sysctl.debug" portion of the
+ *		OID space for sysctl.
+ *
+ * OID:		0, 0
+ *
+ * Parameters:	__unused
+ *
+ * Returns:	ENOENT
+ *
+ * Implicit:	kernel log, modified
+ *
+ * Locks:	Acquires and then releases a read lock on the
+ *		sysctl_geometry_lock
+ */
+STATIC int
 sysctl_sysctl_debug(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	__unused int arg2, __unused struct sysctl_req *req)
 {
+	lck_rw_lock_shared(sysctl_geometry_lock);
 	sysctl_sysctl_debug_dump_node(&sysctl__children, 0);
+	lck_rw_done(sysctl_geometry_lock);
 	return ENOENT;
 }
 
-SYSCTL_PROC(_sysctl, 0, debug, CTLTYPE_STRING|CTLFLAG_RD,
+SYSCTL_PROC(_sysctl, 0, debug, CTLTYPE_STRING|CTLFLAG_RD | CTLFLAG_LOCKED,
 	0, 0, sysctl_sysctl_debug, "-", "");
 
-static int
+/*
+ * sysctl_sysctl_name
+ *
+ * Description:	Convert an OID into a string name; this is used by the user
+ *		space sysctl() command line utility; this is done in a purely
+ *		advisory capacity (e.g. to provide node names for "sysctl -A"
+ *		output).
+ *
+ * OID:		0, 1
+ *
+ * Parameters:	oidp				__unused
+ *		arg1				A pointer to the OID name list
+ *						integer array, beginning at
+ *						adjusted option base 2
+ *		arg2				The number of elements which
+ *						remain in the name array
+ *
+ * Returns:	0				Success
+ *	SYSCTL_OUT:EPERM			Permission denied
+ *	SYSCTL_OUT:EFAULT			Bad user supplied buffer
+ *	SYSCTL_OUT:???				Return value from user function
+ *						for SYSCTL_PROC leaf node
+ *
+ * Implict:	Contents of user request buffer, modified
+ *
+ * Locks:	Acquires and then releases a read lock on the
+ *		sysctl_geometry_lock
+ *
+ * Notes:	SPI (System Programming Interface); this is subject to change
+ *		and may not be relied upon by third party applications; use
+ *		a subprocess to communicate with the "sysctl" command line
+ *		command instead, if you believe you need this functionality.
+ *		Preferrably, use sysctlbyname() instead.
+ *
+ *		Setting of the NULL termination of the output string is
+ *		delayed until after the geometry lock is dropped.  If there
+ *		are no Entries remaining in the OID name list when this
+ *		function is called, it will still write out the termination
+ *		byte.
+ *
+ *		This function differs from other sysctl functions in that
+ *		it can not take an output buffer length of 0 to determine the
+ *		space which will be required.  It is suggested that the buffer
+ *		length be PATH_MAX, and that authors of new sysctl's refrain
+ *		from exceeding this string length.
+ */
+STATIC int
 sysctl_sysctl_name(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
         struct sysctl_req *req)
 {
@@ -461,6 +687,7 @@ sysctl_sysctl_name(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 	struct sysctl_oid_list *lsp = &sysctl__children, *lsp2;
 	char tempbuf[10];
 
+	lck_rw_lock_shared(sysctl_geometry_lock);
 	while (namelen) {
 		if (!lsp) {
 			snprintf(tempbuf,sizeof(tempbuf),"%d",*name);
@@ -468,8 +695,10 @@ sysctl_sysctl_name(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 				error = SYSCTL_OUT(req, ".", 1);
 			if (!error)
 				error = SYSCTL_OUT(req, tempbuf, strlen(tempbuf));
-			if (error)
+			if (error) {
+				lck_rw_done(sysctl_geometry_lock);
 				return (error);
+			}
 			namelen--;
 			name++;
 			continue;
@@ -484,8 +713,10 @@ sysctl_sysctl_name(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 			if (!error)
 				error = SYSCTL_OUT(req, oid->oid_name,
 					strlen(oid->oid_name));
-			if (error)
+			if (error) {
+				lck_rw_done(sysctl_geometry_lock);
 				return (error);
+			}
 
 			namelen--;
 			name++;
@@ -501,12 +732,45 @@ sysctl_sysctl_name(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 		}
 		lsp = lsp2;
 	}
+	lck_rw_done(sysctl_geometry_lock);
 	return (SYSCTL_OUT(req, "", 1));
 }
 
-SYSCTL_NODE(_sysctl, 1, name, CTLFLAG_RD, sysctl_sysctl_name, "");
+SYSCTL_NODE(_sysctl, 1, name, CTLFLAG_RD | CTLFLAG_LOCKED, sysctl_sysctl_name, "");
 
-static int
+/*
+ * sysctl_sysctl_next_ls
+ *
+ * Description:	For a given OID name value, return the next consecutive OID
+ *		name value within the geometry tree
+ *
+ * Parameters:	lsp				The OID list to look in
+ *		name				The OID name to start from
+ *		namelen				The length of the OID name
+ *		next				Pointer to new oid storage to
+ *						fill in
+ *		len				Pointer to receive new OID
+ *						length value of storage written
+ *		level				OID tree depth (used to compute
+ *						len value)
+ *		oidpp				Pointer to OID list entry
+ *						pointer; used to walk the list
+ *						forward across recursion
+ *
+ * Returns:	0				Returning a new entry
+ *		1				End of geometry list reached
+ *
+ * Implicit:	*next				Modified to contain the new OID
+ *		*len				Modified to contain new length
+ *
+ * Locks:	Assumes sysctl_geometry_lock is held prior to calling
+ *
+ * Notes:	This function will not return OID values that have special
+ *		handlers, since we can not tell wheter these handlers consume
+ *		elements from the OID space as parameters.  For this reason,
+ *		we STRONGLY discourage these types of handlers
+ */
+STATIC int
 sysctl_sysctl_next_ls (struct sysctl_oid_list *lsp, int *name, u_int namelen, 
 	int *next, int *len, int level, struct sysctl_oid **oidpp)
 {
@@ -566,7 +830,45 @@ sysctl_sysctl_next_ls (struct sysctl_oid_list *lsp, int *name, u_int namelen,
 	return 1;
 }
 
-static int
+/*
+ * sysctl_sysctl_next
+ *
+ * Description:	This is an iterator function designed to iterate the oid tree
+ *		and provide a list of OIDs for use by the user space "sysctl"
+ *		command line tool
+ *
+ * OID:		0, 2
+ *
+ * Parameters:	oidp				__unused
+ *		arg1				Pointer to start OID name
+ *		arg2				Start OID name length
+ *		req				Pointer to user request buffer
+ *
+ * Returns:	0				Success
+ *		ENOENT				Reached end of OID space
+ *	SYSCTL_OUT:EPERM			Permission denied
+ *	SYSCTL_OUT:EFAULT			Bad user supplied buffer
+ *	SYSCTL_OUT:???				Return value from user function
+ *						for SYSCTL_PROC leaf node
+ *
+ * Implict:	Contents of user request buffer, modified
+ *
+ * Locks:	Acquires and then releases a read lock on the
+ *		sysctl_geometry_lock
+ *
+ * Notes:	SPI (System Programming Interface); this is subject to change
+ *		and may not be relied upon by third party applications; use
+ *		a subprocess to communicate with the "sysctl" command line
+ *		command instead, if you believe you need this functionality.
+ *		Preferrably, use sysctlbyname() instead.
+ *
+ *		This function differs from other sysctl functions in that
+ *		it can not take an output buffer length of 0 to determine the
+ *		space which will be required.  It is suggested that the buffer
+ *		length be PATH_MAX, and that authors of new sysctl's refrain
+ *		from exceeding this string length.
+ */
+STATIC int
 sysctl_sysctl_next(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
         struct sysctl_req *req)
 {
@@ -577,17 +879,38 @@ sysctl_sysctl_next(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 	struct sysctl_oid_list *lsp = &sysctl__children;
 	int newoid[CTL_MAXNAME];
 
+	lck_rw_lock_shared(sysctl_geometry_lock);
 	i = sysctl_sysctl_next_ls (lsp, name, namelen, newoid, &j, 1, &oid);
+	lck_rw_done(sysctl_geometry_lock);
 	if (i)
 		return ENOENT;
 	error = SYSCTL_OUT(req, newoid, j * sizeof (int));
 	return (error);
 }
 
-SYSCTL_NODE(_sysctl, 2, next, CTLFLAG_RD, sysctl_sysctl_next, "");
+SYSCTL_NODE(_sysctl, 2, next, CTLFLAG_RD | CTLFLAG_LOCKED, sysctl_sysctl_next, "");
 
-static int
-name2oid (char *name, int *oid, int *len, struct sysctl_oid **oidpp)
+/*
+ * name2oid
+ *
+ * Description:	Support function for use by sysctl_sysctl_name2oid(); looks
+ *		up an OID name given a string name.
+ *
+ * Parameters:	name				NULL terminated string name
+ *		oid				Pointer to receive OID name
+ *		len				Pointer to receive OID length
+ *						pointer value (see "Notes")
+ *
+ * Returns:	0				Success
+ *		ENOENT				Entry not found
+ *
+ * Implicit:	*oid				Modified to contain OID value
+ *		*len				Modified to contain OID length
+ *
+ * Locks:	Assumes sysctl_geometry_lock is held prior to calling
+ */
+STATIC int
+name2oid (char *name, int *oid, int *len)
 {
 	int i;
 	struct sysctl_oid *oidp;
@@ -620,8 +943,6 @@ name2oid (char *name, int *oid, int *len, struct sysctl_oid **oidpp)
 		(*len)++;
 
 		if (!i) {
-			if (oidpp)
-				*oidpp = oidp;
 			return (0);
 		}
 
@@ -643,16 +964,54 @@ name2oid (char *name, int *oid, int *len, struct sysctl_oid **oidpp)
 	return ENOENT;
 }
 
-static int
+/*
+ * sysctl_sysctl_name2oid
+ *
+ * Description:	Translate a string name to an OID name value; this is used by
+ *		the sysctlbyname() function as well as by the "sysctl" command
+ *		line command.
+ *
+ * OID:		0, 3
+ *
+ * Parameters:	oidp				__unused
+ *		arg1				__unused
+ *		arg2				__unused
+ *		req				Request structure
+ *
+ * Returns:	ENOENT				Input length too short
+ *		ENAMETOOLONG			Input length too long
+ *		ENOMEM				Could not allocate work area
+ *	SYSCTL_IN/OUT:EPERM			Permission denied
+ *	SYSCTL_IN/OUT:EFAULT			Bad user supplied buffer
+ *	SYSCTL_IN/OUT:???			Return value from user function
+ *	name2oid:ENOENT				Not found
+ *
+ * Implicit:	*req				Contents of request, modified
+ *
+ * Locks:	Acquires and then releases a read lock on the
+ *		sysctl_geometry_lock
+ *
+ * Notes:	SPI (System Programming Interface); this is subject to change
+ *		and may not be relied upon by third party applications; use
+ *		a subprocess to communicate with the "sysctl" command line
+ *		command instead, if you believe you need this functionality.
+ *		Preferrably, use sysctlbyname() instead.
+ *
+ *		This function differs from other sysctl functions in that
+ *		it can not take an output buffer length of 0 to determine the
+ *		space which will be required.  It is suggested that the buffer
+ *		length be PATH_MAX, and that authors of new sysctl's refrain
+ *		from exceeding this string length.
+ */
+STATIC int
 sysctl_sysctl_name2oid(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	__unused int arg2, struct sysctl_req *req)
 {
 	char *p;
 	int error, oid[CTL_MAXNAME];
 	int len = 0;		/* set by name2oid() */
-	struct sysctl_oid *op = 0;
 
-	if (!req->newlen) 
+	if (req->newlen < 1) 
 		return ENOENT;
 	if (req->newlen >= MAXPATHLEN)	/* XXX arbitrary, undocumented */
 		return (ENAMETOOLONG);
@@ -669,7 +1028,13 @@ sysctl_sysctl_name2oid(__unused struct sysctl_oid *oidp, __unused void *arg1,
 
 	p [req->newlen] = '\0';
 
-	error = name2oid(p, oid, &len, &op);
+	/*
+	 * Note:	We acquire and release the geometry lock here to
+	 *		avoid making name2oid needlessly complex.
+	 */
+	lck_rw_lock_shared(sysctl_geometry_lock);
+	error = name2oid(p, oid, &len);
+	lck_rw_done(sysctl_geometry_lock);
 
 	FREE(p, M_TEMP);
 
@@ -680,19 +1045,58 @@ sysctl_sysctl_name2oid(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	return (error);
 }
 
-SYSCTL_PROC(_sysctl, 3, name2oid, CTLFLAG_RW|CTLFLAG_ANYBODY|CTLFLAG_KERN, 0, 0, 
+SYSCTL_PROC(_sysctl, 3, name2oid, CTLFLAG_RW|CTLFLAG_ANYBODY|CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, 
 	sysctl_sysctl_name2oid, "I", "");
 
-static int
+/*
+ * sysctl_sysctl_oidfmt
+ *
+ * Description:	For a given OID name, determine the format of the data which
+ *		is associated with it.  This is used by the "sysctl" command
+ *		line command.
+ *
+ * OID:		0, 4
+ *
+ * Parameters:	oidp				__unused
+ *		arg1				The OID name to look up
+ *		arg2				The length of the OID name
+ *		req				Pointer to user request buffer
+ *
+ * Returns:	0				Success
+ *		EISDIR				Malformed request
+ *		ENOENT				No such OID name
+ *	SYSCTL_OUT:EPERM			Permission denied
+ *	SYSCTL_OUT:EFAULT			Bad user supplied buffer
+ *	SYSCTL_OUT:???				Return value from user function
+ *
+ * Implict:	Contents of user request buffer, modified
+ *
+ * Locks:	Acquires and then releases a read lock on the
+ *		sysctl_geometry_lock
+ *
+ * Notes:	SPI (System Programming Interface); this is subject to change
+ *		and may not be relied upon by third party applications; use
+ *		a subprocess to communicate with the "sysctl" command line
+ *		command instead, if you believe you need this functionality.
+ *
+ *		This function differs from other sysctl functions in that
+ *		it can not take an output buffer length of 0 to determine the
+ *		space which will be required.  It is suggested that the buffer
+ *		length be PATH_MAX, and that authors of new sysctl's refrain
+ *		from exceeding this string length.
+ */
+STATIC int
 sysctl_sysctl_oidfmt(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
         struct sysctl_req *req)
 {
-	int *name = (int *) arg1, error;
+	int *name = (int *) arg1;
+	int error = ENOENT;		/* default error: not found */
 	u_int namelen = arg2;
 	u_int indx;
 	struct sysctl_oid *oid;
 	struct sysctl_oid_list *lsp = &sysctl__children;
 
+	lck_rw_lock_shared(sysctl_geometry_lock);
 	oid = SLIST_FIRST(lsp);
 
 	indx = 0;
@@ -707,28 +1111,34 @@ sysctl_sysctl_oidfmt(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 				lsp = (struct sysctl_oid_list *)oid->oid_arg1;
 				oid = SLIST_FIRST(lsp);
 			} else {
-				if (indx != namelen)
-					return EISDIR;
+				if (indx != namelen) {
+					error =  EISDIR;
+					goto err;
+				}
 				goto found;
 			}
 		} else {
 			oid = SLIST_NEXT(oid, oid_link);
 		}
 	}
-	return ENOENT;
+	/* Not found */
+	goto err;
+
 found:
 	if (!oid->oid_fmt)
-		return ENOENT;
+		goto err;
 	error = SYSCTL_OUT(req, 
 		&oid->oid_kind, sizeof(oid->oid_kind));
 	if (!error)
 		error = SYSCTL_OUT(req, oid->oid_fmt, 
 			strlen(oid->oid_fmt)+1);
+err:
+	lck_rw_done(sysctl_geometry_lock);
 	return (error);
 }
 
+SYSCTL_NODE(_sysctl, 4, oidfmt, CTLFLAG_RD | CTLFLAG_LOCKED, sysctl_sysctl_oidfmt, "");
 
-SYSCTL_NODE(_sysctl, 4, oidfmt, CTLFLAG_RD, sysctl_sysctl_oidfmt, "");
 
 /*
  * Default "handler" functions.
@@ -842,7 +1252,7 @@ sysctl_handle_opaque(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 /*
  * Transfer functions to/from kernel space.
  */
-static int
+STATIC int
 sysctl_old_kernel(struct sysctl_req *req, const void *p, size_t l)
 {
 	size_t i = 0;
@@ -860,7 +1270,7 @@ sysctl_old_kernel(struct sysctl_req *req, const void *p, size_t l)
 	return (0);
 }
 
-static int
+STATIC int
 sysctl_new_kernel(struct sysctl_req *req, void *p, size_t l)
 {
 	if (!req->newptr)
@@ -914,7 +1324,7 @@ kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *oldle
 /*
  * Transfer function to/from user space.
  */
-static int
+STATIC int
 sysctl_old_user(struct sysctl_req *req, const void *p, size_t l)
 {
 	int error = 0;
@@ -937,7 +1347,7 @@ sysctl_old_user(struct sysctl_req *req, const void *p, size_t l)
 	return (0);
 }
 
-static int
+STATIC int
 sysctl_new_user(struct sysctl_req *req, void *p, size_t l)
 {
 	int error;
@@ -981,10 +1391,28 @@ sysctl_root(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 			indx++;
 			if (!(oid->oid_kind & CTLFLAG_LOCKED))
 			{
+/*
+printf("sysctl_root: missing CTLFLAG_LOCKED: ");
+for(i = 0; i < (int)(indx - 1); i++)
+printf("oid[%d] = %d ", i, name[i]);
+printf("\n");
+*/
 				funnel_held = TRUE;
 			}
 			if (oid->oid_kind & CTLFLAG_NOLOCK)
 				req->lock = 0;
+			/*
+			 * For SYSCTL_PROC() functions which are for sysctl's
+			 * which have parameters at the end of their OID
+			 * space, you need to OR CTLTYPE_NODE into their
+			 * access value.
+			 *
+			 * NOTE: For binary backward compatibility ONLY! Do
+			 * NOT add new sysctl's that do this!  Existing
+			 * sysctl's which do this will eventually have
+			 * compatibility code in user space, and this method
+			 * will become unsupported.
+			 */
 			if ((oid->oid_kind & CTLTYPE) == CTLTYPE_NODE) {
 				if (oid->oid_handler)
 					goto found;
@@ -1028,7 +1456,14 @@ found:
 		goto err;
 	}
 
-	/* Most likely only root can write */
+	/*
+	 * This is where legacy enforcement of permissions occurs.  If the
+	 * flag does not say CTLFLAG_ANYBODY, then we prohibit anyone but
+	 * root from writing new values down.  If local enforcement happens
+	 * at the leaf node, then it needs to be set as CTLFLAG_ANYBODY.  In
+	 * addition, if the leaf node is set this way, then in order to do
+	 * specific enforcement, it has to be of type SYSCTL_PROC.
+	 */
 	if (!(oid->oid_kind & CTLFLAG_ANYBODY) &&
 	    req->newptr && req->p &&
 	    (error = proc_suser(req->p)))
@@ -1039,10 +1474,24 @@ found:
 		goto err;
 	}
 
+	/*
+	 * Reference the OID and drop the geometry lock; this prevents the
+	 * OID from being deleted out from under the handler call, but does
+	 * not prevent other calls into handlers or calls to manage the
+	 * geometry elsewhere from blocking...
+	 */
+	OSAddAtomic(1, &oid->oid_refcnt);
+
+	lck_rw_done(sysctl_geometry_lock);
+
+	/*
+	 * ...however, we still have to grab the funnel for those calls which
+	 * may be into code whose reentrancy is protected by the funnel; a
+	 * blocking operation should not prevent reentrancy, at this point.
+	 */
 	if (funnel_held)
 	{
 		fnl = spl_kernel_funnel();
-		MEMLOCK_LOCK();
 	}
 
 	if ((oid->oid_kind & CTLTYPE) == CTLTYPE_NODE) {
@@ -1058,9 +1507,26 @@ found:
 
 	if (funnel_held)
 	{
-		MEMLOCK_UNLOCK();
 		splx_kernel_funnel(fnl);
 	}
+
+	/*
+	 * This is tricky... we re-grab the geometry lock in order to drop
+	 * the reference and wake on the address; since the geometry
+	 * lock is a reader/writer lock rather than a mutex, we have to
+	 * wake on all apparent 1->0 transitions.  This abuses the drop
+	 * after the reference decrement in order to wake any lck_rw_sleep()
+	 * in progress in sysctl_unregister_oid() that slept because of a
+	 * non-zero reference count.
+	 *
+	 * Note:	OSAddAtomic() is defined to return the previous value;
+	 *		we use this and the fact that the lock itself is a
+	 *		barrier to avoid waking every time through on "hot"
+	 *		OIDs.
+	 */
+	lck_rw_lock_shared(sysctl_geometry_lock);
+	if (OSAddAtomic(-1, &oid->oid_refcnt) == 1)
+		wakeup(&oid->oid_refcnt);
 
 err:
 	lck_rw_done(sysctl_geometry_lock);
@@ -1170,14 +1636,14 @@ userland_sysctl(struct proc *p, int *name, u_int namelen, user_addr_t oldp,
  * may not work correctly.
  */
 
-static int
+STATIC int
 sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen)
 {
 
 	return(kernel_sysctl(current_proc(), name, namelen, oldp, oldlenp, newp, newlen));
 }
 
-static int
+STATIC int
 sysctlnametomib(const char *name, int *mibp, size_t *sizep)
 {
 	int oid[2];

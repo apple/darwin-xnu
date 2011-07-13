@@ -46,6 +46,7 @@
 #include <sys/utfconv.h>
 #include <sys/kauth.h>
 #include <sys/fcntl.h>
+#include <sys/fsctl.h>
 #include <sys/vnode_internal.h>
 #include <kern/clock.h>
 
@@ -68,6 +69,8 @@ static int  hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *v
 
 static u_int32_t hfs_hotfile_freeblocks(struct hfsmount *);
 
+#define HFS_MOUNT_DEBUG 1
+
 
 //*******************************************************************************
 // Note: Finder information in the HFS/HFS+ metadata are considered opaque and
@@ -87,7 +90,6 @@ unsigned char hfs_attrname[] = "Attribute B-tree";
 unsigned char hfs_startupname[] = "Startup File";
 
 
-__private_extern__
 OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 		__unused struct proc *p)
 {
@@ -97,6 +99,7 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	struct cat_desc cndesc;
 	struct cat_attr cnattr;
 	struct cat_fork fork;
+	int newvnode_flags = 0;
 
 	/* Block size must be a multiple of 512 */
 	if (SWAP_BE32(mdb->drAlBlkSiz) == 0 ||
@@ -115,7 +118,7 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	 *
 	 */
 	vcb->vcbSigWord		= SWAP_BE16 (mdb->drSigWord);
-	vcb->vcbCrDate		= to_bsd_time(LocalToUTC(SWAP_BE32(mdb->drCrDate)));
+	vcb->hfs_itime		= to_bsd_time(LocalToUTC(SWAP_BE32(mdb->drCrDate)));
 	vcb->localCreateDate	= SWAP_BE32 (mdb->drCrDate);
 	vcb->vcbLsMod		= to_bsd_time(LocalToUTC(SWAP_BE32(mdb->drLsMod)));
 	vcb->vcbAtrb		= SWAP_BE16 (mdb->drAtrb);
@@ -145,12 +148,13 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	 * volume encoding we use MacRoman as a fallback.
 	 */
 	if (error || (utf8chars == 0)) {
-		(void) mac_roman_to_utf8(mdb->drVN, NAME_MAX, &utf8chars, vcb->vcbVN);
-		/* If we fail to encode to UTF8 from Mac Roman, the name is bad. Deny mount */
+		error = mac_roman_to_utf8(mdb->drVN, NAME_MAX, &utf8chars, vcb->vcbVN);
+		/* If we fail to encode to UTF8 from Mac Roman, the name is bad.  Deny the mount */
 		if (error) {
 			goto MtVolErr;
 		}
 	}
+
 	hfsmp->hfs_logBlockSize = BestBlockSizeFit(vcb->blockSize, MAXBSIZE, hfsmp->hfs_logical_block_size);
 	vcb->vcbVBMIOSize = kHFSBlockSize;
 
@@ -184,11 +188,19 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	cnattr.ca_blocks = fork.cf_blocks;
 
 	error = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &fork,
-	                        &hfsmp->hfs_extents_vp);
-	if (error) goto MtVolErr;
+	                        &hfsmp->hfs_extents_vp, &newvnode_flags);
+	if (error) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfs (std): error creating Ext Vnode (%d) \n", error);
+		}
+		goto MtVolErr;
+	}
 	error = MacToVFSError(BTOpenPath(VTOF(hfsmp->hfs_extents_vp),
 	                                 (KeyCompareProcPtr)CompareExtentKeys));
 	if (error) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfs (std): error opening Ext Vnode (%d) \n", error);
+		}
 		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 		goto MtVolErr;
 	}
@@ -213,14 +225,20 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	cnattr.ca_blocks = fork.cf_blocks;
 
 	error = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &fork,
-	                        &hfsmp->hfs_catalog_vp);
+	                        &hfsmp->hfs_catalog_vp, &newvnode_flags);
 	if (error) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfs (std): error creating catalog Vnode (%d) \n", error);
+		}
 		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 		goto MtVolErr;
 	}
 	error = MacToVFSError(BTOpenPath(VTOF(hfsmp->hfs_catalog_vp),
 	                                 (KeyCompareProcPtr)CompareCatalogKeys));
 	if (error) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfs (std): error opening catalog Vnode (%d) \n", error);
+		}
 		hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
 		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 		goto MtVolErr;
@@ -237,37 +255,41 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	cnattr.ca_blocks = 0;
 
 	error = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &fork,
-	                         &hfsmp->hfs_allocation_vp);
+	                         &hfsmp->hfs_allocation_vp, &newvnode_flags);
 	if (error) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfs (std): error creating bitmap Vnode (%d) \n", error);
+		}
 		hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
 		hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
 		goto MtVolErr;
 	}
 	hfsmp->hfs_allocation_cp = VTOC(hfsmp->hfs_allocation_vp);
 
-    /* mark the volume dirty (clear clean unmount bit) */
+      	/* mark the volume dirty (clear clean unmount bit) */
 	vcb->vcbAtrb &=	~kHFSVolumeUnmountedMask;
 
-    if (error == noErr)
-      {
+    if (error == noErr) {
 		error = cat_idlookup(hfsmp, kHFSRootFolderID, 0, NULL, NULL, NULL);
-      }
-
-    if ( error == noErr )
-      {
-        if ( !(vcb->vcbAtrb & kHFSVolumeHardwareLockMask) )		//	if the disk is not write protected
-          {
-            MarkVCBDirty( vcb );								//	mark VCB dirty so it will be written
-          }
-      }
-
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfs (std): error looking up root folder (%d) \n", error);
+		}
+	}
+	
+    if (error == noErr) {
+		/* If the disk isn't write protected.. */
+        if ( !(vcb->vcbAtrb & kHFSVolumeHardwareLockMask)) {
+            MarkVCBDirty (vcb); //	mark VCB dirty so it will be written
+		}
+	}
+	
 	/*
 	 * all done with system files so we can unlock now...
 	 */
 	hfs_unlock(VTOC(hfsmp->hfs_allocation_vp));
 	hfs_unlock(VTOC(hfsmp->hfs_catalog_vp));
 	hfs_unlock(VTOC(hfsmp->hfs_extents_vp));
-
+	
 	if (error == noErr) {
 		/* If successful, then we can just return once we've unlocked the cnodes */
 		return error;
@@ -275,9 +297,7 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 
     //--	Release any resources allocated so far before exiting with an error:
 MtVolErr:
-	ReleaseMetaFileVNode(hfsmp->hfs_catalog_vp);
-	ReleaseMetaFileVNode(hfsmp->hfs_extents_vp);
-	ReleaseMetaFileVNode(hfsmp->hfs_allocation_vp);
+	hfsUnmount(hfsmp, NULL);
 
     return (error);
 }
@@ -288,7 +308,6 @@ MtVolErr:
 //
 //*******************************************************************************
 
-__private_extern__
 OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	off_t embeddedOffset, u_int64_t disksize, __unused struct proc *p, void *args, kauth_cred_t cred)
 {
@@ -301,8 +320,12 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	struct BTreeInfoRec btinfo;
 	u_int16_t  signature;
 	u_int16_t  hfs_version;
+	int newvnode_flags = 0;
 	int  i;
 	OSErr retval;
+	char converted_volname[256];
+	size_t volname_length = 0;
+	size_t conv_volname_length = 0;
 
 	signature = SWAP_BE16(vhp->signature);
 	hfs_version = SWAP_BE16(vhp->version);
@@ -324,23 +347,38 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		/* Removed printf for invalid HFS+ signature because it gives
 		 * false error for UFS root volume 
 		 */
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfsplus: unknown Volume Signature\n");
+		}
 		return (EINVAL);
 	}
 
 	/* Block size must be at least 512 and a power of 2 */
 	blockSize = SWAP_BE32(vhp->blockSize);
-	if (blockSize < 512 || !powerof2(blockSize))
+	if (blockSize < 512 || !powerof2(blockSize)) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfsplus: invalid blocksize (%d) \n", blockSize);
+		}
 		return (EINVAL);
+	}
    
 	/* don't mount a writable volume if its dirty, it must be cleaned by fsck_hfs */
 	if ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0 && hfsmp->jnl == NULL &&
-	    (SWAP_BE32(vhp->attributes) & kHFSVolumeUnmountedMask) == 0)
+	    (SWAP_BE32(vhp->attributes) & kHFSVolumeUnmountedMask) == 0) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfsplus: cannot mount dirty non-journaled volumes\n");
+		}
 		return (EINVAL);
+	}
 
 	/* Make sure we can live with the physical block size. */
 	if ((disksize & (hfsmp->hfs_logical_block_size - 1)) ||
 	    (embeddedOffset & (hfsmp->hfs_logical_block_size - 1)) ||
 	    (blockSize < hfsmp->hfs_logical_block_size)) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfsplus: invalid physical blocksize (%d), hfs_logical_blocksize (%d) \n", 
+					blockSize, hfsmp->hfs_logical_block_size);
+		}
 		return (ENXIO);
 	}
 
@@ -445,9 +483,12 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 				SWAP_BE32 (vhp->extentsFile.extents[i].blockCount);
 	}
 	retval = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &cfork,
-	                         &hfsmp->hfs_extents_vp);
+	                         &hfsmp->hfs_extents_vp, &newvnode_flags);
 	if (retval)
 	{
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfsplus: hfs_getnewvnode returned (%d) getting extentoverflow BT\n", retval);
+		}
 		goto ErrorExit;
 	}
 	hfsmp->hfs_extents_cp = VTOC(hfsmp->hfs_extents_vp);
@@ -457,6 +498,9 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	                                  (KeyCompareProcPtr) CompareExtentKeysPlus));
 	if (retval)
 	{
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfsplus: BTOpenPath returned (%d) getting extentoverflow BT\n", retval);
+		}
 		goto ErrorExit;
 	}
 	/*
@@ -478,8 +522,11 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 				SWAP_BE32 (vhp->catalogFile.extents[i].blockCount);
 	}
 	retval = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &cfork,
-	                         &hfsmp->hfs_catalog_vp);
+	                         &hfsmp->hfs_catalog_vp, &newvnode_flags);
 	if (retval) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfsplus: hfs_getnewvnode returned (%d) getting catalog BT\n", retval);
+		}
 		goto ErrorExit;
 	}
 	hfsmp->hfs_catalog_cp = VTOC(hfsmp->hfs_catalog_vp);
@@ -488,6 +535,9 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	retval = MacToVFSError(BTOpenPath(VTOF(hfsmp->hfs_catalog_vp),
 	                                  (KeyCompareProcPtr) CompareExtendedCatalogKeys));
 	if (retval) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfsplus: BTOpenPath returned (%d) getting catalog BT\n", retval);
+		}
 		goto ErrorExit;
 	}
 	if ((hfsmp->hfs_flags & HFS_X) &&
@@ -519,8 +569,11 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 				SWAP_BE32 (vhp->allocationFile.extents[i].blockCount);
 	}
 	retval = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &cfork,
-	                         &hfsmp->hfs_allocation_vp);
+	                         &hfsmp->hfs_allocation_vp, &newvnode_flags);
 	if (retval) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfsplus: hfs_getnewvnode returned (%d) getting bitmap\n", retval);
+		}
 		goto ErrorExit;
 	}
 	hfsmp->hfs_allocation_cp = VTOC(hfsmp->hfs_allocation_vp);
@@ -546,8 +599,11 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 					SWAP_BE32 (vhp->attributesFile.extents[i].blockCount);
 		}
 		retval = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &cfork,
-					 &hfsmp->hfs_attribute_vp);
+					 &hfsmp->hfs_attribute_vp, &newvnode_flags);
 		if (retval) {
+			if (HFS_MOUNT_DEBUG) {
+				printf("hfs_mounthfsplus: hfs_getnewvnode returned (%d) getting EA BT\n", retval);
+			}
 			goto ErrorExit;
 		}
 		hfsmp->hfs_attribute_cp = VTOC(hfsmp->hfs_attribute_vp);
@@ -555,6 +611,22 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		retval = MacToVFSError(BTOpenPath(VTOF(hfsmp->hfs_attribute_vp),
 						  (KeyCompareProcPtr) hfs_attrkeycompare));
 		if (retval) {
+			if (HFS_MOUNT_DEBUG) {
+				printf("hfs_mounthfsplus: BTOpenPath returned (%d) getting EA BT\n", retval);
+			}
+			goto ErrorExit;
+		}
+
+		/* Initialize vnode for virtual attribute data file that spans the 
+		 * entire file system space for performing I/O to attribute btree
+		 * We hold iocount on the attrdata vnode for the entire duration 
+		 * of mount (similar to btree vnodes)
+		 */
+		retval = init_attrdata_vnode(hfsmp);
+		if (retval) {
+			if (HFS_MOUNT_DEBUG) {
+				printf("hfs_mounthfsplus: init_attrdata_vnode returned (%d) for virtual EA file\n", retval);
+			}
 			goto ErrorExit;
 		}
 	}
@@ -579,8 +651,11 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 					SWAP_BE32 (vhp->startupFile.extents[i].blockCount);
 		}
 		retval = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &cfork,
-					 &hfsmp->hfs_startup_vp);
+					 &hfsmp->hfs_startup_vp, &newvnode_flags);
 		if (retval) {
+			if (HFS_MOUNT_DEBUG) {
+				printf("hfs_mounthfsplus: hfs_getnewvnode returned (%d) getting startup file\n", retval);
+			}
 			goto ErrorExit;
 		}
 		hfsmp->hfs_startup_cp = VTOC(hfsmp->hfs_startup_vp);
@@ -590,13 +665,29 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	/* Pick up volume name and create date */
 	retval = cat_idlookup(hfsmp, kHFSRootFolderID, 0, &cndesc, &cnattr, NULL);
 	if (retval) {
+		if (HFS_MOUNT_DEBUG) {
+			printf("hfs_mounthfsplus: cat_idlookup returned (%d) getting rootfolder \n", retval);
+		}
 		goto ErrorExit;
 	}
-	vcb->vcbCrDate = cnattr.ca_itime;
+	vcb->hfs_itime = cnattr.ca_itime;
 	vcb->volumeNameEncodingHint = cndesc.cd_encoding;
 	bcopy(cndesc.cd_nameptr, vcb->vcbVN, min(255, cndesc.cd_namelen));
+	volname_length = strlen ((const char*)vcb->vcbVN);
 	cat_releasedesc(&cndesc);
+	
+#define DKIOCCSSETLVNAME _IOW('d', 198, char[1024])
 
+
+	/* Send the volume name down to CoreStorage if necessary */	
+	retval = utf8_normalizestr(vcb->vcbVN, volname_length, (u_int8_t*)converted_volname, &conv_volname_length, 256, UTF_PRECOMPOSED);
+	if (retval == 0) {
+		(void) VNOP_IOCTL (hfsmp->hfs_devvp, DKIOCCSSETLVNAME, converted_volname, 0, vfs_context_current());
+	}	
+	
+	/* reset retval == 0. we don't care about errors in volname conversion */
+	retval = 0;
+	
 	/* mark the volume dirty (clear clean unmount bit) */
 	vcb->vcbAtrb &=	~kHFSVolumeUnmountedMask;
 	if (hfsmp->jnl && (hfsmp->hfs_flags & HFS_READ_ONLY) == 0) {
@@ -624,6 +715,9 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 				// EROFS is a special error code that means the volume has an external
 				// journal which we couldn't find.  in that case we do not want to
 				// rewrite the volume header - we'll just refuse to mount the volume.
+				if (HFS_MOUNT_DEBUG) {
+					printf("hfs_mounthfsplus: hfs_late_journal_init returned (%d), maybe an external jnl?\n", retval);
+				}
 				retval = EINVAL;
 				goto ErrorExit;
 			}
@@ -663,7 +757,10 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 					bp = NULL;
 			    }
 			}
-
+			
+			if (HFS_MOUNT_DEBUG) {
+				printf("hfs_mounthfsplus: hfs_late_journal_init returned (%d)\n", retval);
+			}
 			retval = EINVAL;
 			goto ErrorExit;
 		} else if (hfsmp->jnl) {
@@ -697,7 +794,7 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	/*
 	 * Establish a metadata allocation zone.
 	 */
-	hfs_metadatazone_init(hfsmp);
+	hfs_metadatazone_init(hfsmp, false);
 
 	/*
 	 * Make any metadata zone adjustments.
@@ -726,8 +823,13 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	if ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0)
 	{
 		retval = hfs_erase_unused_nodes(hfsmp);
-		if (retval)
+		if (retval) {
+			if (HFS_MOUNT_DEBUG) {
+				printf("hfs_mounthfsplus: hfs_erase_unused_nodes returned (%d) for %s \n", retval, hfsmp->vcbVN);
+			}
+
 			goto ErrorExit;
+		}
 	}
 	
 	if ( !(vcb->vcbAtrb & kHFSVolumeHardwareLockMask) )	// if the disk is not write protected
@@ -739,30 +841,33 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	 * Allow hot file clustering if conditions allow.
 	 */
 	if ((hfsmp->hfs_flags & HFS_METADATA_ZONE)  &&
-	    ((hfsmp->hfs_flags & HFS_READ_ONLY) == 0) &&
-	    ((hfsmp->hfs_mp->mnt_kern_flag & MNTK_SSD) == 0)) {
+	    ((hfsmp->hfs_flags & (HFS_READ_ONLY | HFS_SSD)) == 0)) {
 		(void) hfs_recording_init(hfsmp);
 	}
 
 	/* Force ACLs on HFS+ file systems. */
 	vfs_setextendedsecurity(HFSTOVFS(hfsmp));
 
-	/* Check if volume supports writing of extent-based extended attributes */
-	hfs_check_volxattr(hfsmp, HFS_SET_XATTREXTENTS_STATE);
+	/* Enable extent-based extended attributes by default */
+	hfsmp->hfs_flags |= HFS_XATTR_EXTENTS;
+
+	/* See if this volume should have per-file content protection enabled */
+	if (vcb->vcbAtrb & kHFSContentProtectionMask) {
+		vfs_setflags (hfsmp->hfs_mp, MNT_CPROTECT);
+	}
 
 	return (0);
 
 ErrorExit:
 	/*
-	 * A fatal error occurred and the volume cannot be mounted
-	 * release any resources that we aquired...
+	 * A fatal error occurred and the volume cannot be mounted, so 
+	 * release any resources that we acquired...
 	 */
-	if (hfsmp->hfs_attribute_vp)
-		ReleaseMetaFileVNode(hfsmp->hfs_attribute_vp);
-	ReleaseMetaFileVNode(hfsmp->hfs_allocation_vp);
-	ReleaseMetaFileVNode(hfsmp->hfs_catalog_vp);
-	ReleaseMetaFileVNode(hfsmp->hfs_extents_vp);
-
+	hfsUnmount(hfsmp, NULL);
+		
+	if (HFS_MOUNT_DEBUG) {
+		printf("hfs_mounthfsplus: encountered errorr (%d)\n", retval);
+	}
 	return (retval);
 }
 
@@ -797,44 +902,47 @@ static void ReleaseMetaFileVNode(struct vnode *vp)
 *
 *************************************************************/
 
-__private_extern__
 int
 hfsUnmount( register struct hfsmount *hfsmp, __unused struct proc *p)
 {
-	/* Get rid of our attribute data vnode (if any). */
+	/* Get rid of our attribute data vnode (if any).  This is done 
+	 * after the vflush() during mount, so we don't need to worry 
+	 * about any locks.
+	 */
 	if (hfsmp->hfs_attrdata_vp) {
-		vnode_t advp = hfsmp->hfs_attrdata_vp;
-	
-		if (vnode_get(advp) == 0) {
-			vnode_rele_ext(advp, O_EVTONLY, 0);
-			vnode_put(advp);
-		}
+		ReleaseMetaFileVNode(hfsmp->hfs_attrdata_vp);
 		hfsmp->hfs_attrdata_vp = NULLVP;
 	}
 
-	if (hfsmp->hfs_startup_vp)
+	if (hfsmp->hfs_startup_vp) {
 		ReleaseMetaFileVNode(hfsmp->hfs_startup_vp);
-
-	if (hfsmp->hfs_allocation_vp)
-		ReleaseMetaFileVNode(hfsmp->hfs_allocation_vp);
-
-	if (hfsmp->hfs_attribute_vp)
+		hfsmp->hfs_startup_cp = NULL;
+		hfsmp->hfs_startup_vp = NULL;
+	}
+	
+	if (hfsmp->hfs_attribute_vp) {
 		ReleaseMetaFileVNode(hfsmp->hfs_attribute_vp);
+		hfsmp->hfs_attribute_cp = NULL;
+		hfsmp->hfs_attribute_vp = NULL;
+	}
 
-	ReleaseMetaFileVNode(hfsmp->hfs_catalog_vp);
-	ReleaseMetaFileVNode(hfsmp->hfs_extents_vp);
+	if (hfsmp->hfs_catalog_vp) {
+		ReleaseMetaFileVNode(hfsmp->hfs_catalog_vp);
+		hfsmp->hfs_catalog_cp = NULL;
+		hfsmp->hfs_catalog_vp = NULL;
+	}
 
-	/*
-	 * Setting these pointers to NULL so that any references
-	 * past this point will fail, and tell us the point of failure.
-	 * Also, facilitates a check in hfs_update for a null catalog
-	 * vp
-	 */
-	hfsmp->hfs_allocation_vp = NULL;
-	hfsmp->hfs_attribute_vp = NULL;
-	hfsmp->hfs_catalog_vp = NULL;
-	hfsmp->hfs_extents_vp = NULL;
-	hfsmp->hfs_startup_vp = NULL;
+	if (hfsmp->hfs_extents_vp) {
+		ReleaseMetaFileVNode(hfsmp->hfs_extents_vp);
+		hfsmp->hfs_extents_cp = NULL;
+		hfsmp->hfs_extents_vp = NULL;
+	}
+
+	if (hfsmp->hfs_allocation_vp) {
+		ReleaseMetaFileVNode(hfsmp->hfs_allocation_vp);
+		hfsmp->hfs_allocation_cp = NULL;
+		hfsmp->hfs_allocation_vp = NULL;
+	}
 
 	return (0);
 }
@@ -880,11 +988,56 @@ overflow_extents(struct filefork *fp)
 	return (fp->ff_blocks > blocks);
 }
 
+/*
+ * Lock the HFS global journal lock 
+ */
+int 
+hfs_lock_global (struct hfsmount *hfsmp, enum hfslocktype locktype) {
+
+	void *thread = current_thread();
+
+	if (hfsmp->hfs_global_lockowner == thread) {
+		panic ("hfs_lock_global: locking against myself!");
+	}
+
+    /* HFS_SHARED_LOCK */
+	if (locktype == HFS_SHARED_LOCK) {
+		lck_rw_lock_shared (&hfsmp->hfs_global_lock);
+		hfsmp->hfs_global_lockowner = HFS_SHARED_OWNER;
+	}
+    /* HFS_EXCLUSIVE_LOCK */
+	else {
+		lck_rw_lock_exclusive (&hfsmp->hfs_global_lock);
+		hfsmp->hfs_global_lockowner = thread;
+	}
+
+	return 0;
+}
+
+
+/*
+ * Unlock the HFS global journal lock
+ */
+void 
+hfs_unlock_global (struct hfsmount *hfsmp) {
+	
+	void *thread = current_thread();
+
+    /* HFS_LOCK_EXCLUSIVE */
+	if (hfsmp->hfs_global_lockowner == thread) {
+		hfsmp->hfs_global_lockowner = NULL;
+		lck_rw_unlock_exclusive (&hfsmp->hfs_global_lock);
+	}
+    /* HFS_LOCK_SHARED */
+	else {
+		lck_rw_unlock_shared (&hfsmp->hfs_global_lock);
+	}
+}
+
 
 /*
  * Lock HFS system file(s).
  */
-__private_extern__
 int
 hfs_systemfile_lock(struct hfsmount *hfsmp, int flags, enum hfslocktype locktype)
 {
@@ -905,7 +1058,12 @@ hfs_systemfile_lock(struct hfsmount *hfsmp, int flags, enum hfslocktype locktype
 		}
 #endif /* HFS_CHECK_LOCK_ORDER */
 
-		(void) hfs_lock(hfsmp->hfs_catalog_cp, locktype);
+		if (hfsmp->hfs_catalog_cp) {
+			(void) hfs_lock(hfsmp->hfs_catalog_cp, locktype);
+		} else {
+			flags &= ~SFL_CATALOG;
+		}
+
 		/*
 		 * When the catalog file has overflow extents then
 		 * also acquire the extents b-tree lock if its not
@@ -949,7 +1107,12 @@ hfs_systemfile_lock(struct hfsmount *hfsmp, int flags, enum hfslocktype locktype
 		}
 #endif /* HFS_CHECK_LOCK_ORDER */
 
-		(void) hfs_lock(hfsmp->hfs_startup_cp, locktype);
+		if (hfsmp->hfs_startup_cp) {
+			(void) hfs_lock(hfsmp->hfs_startup_cp, locktype);
+		} else {
+			flags &= ~SFL_STARTUP;
+		}
+
 		/*
 		 * When the startup file has overflow extents then
 		 * also acquire the extents b-tree lock if its not
@@ -966,17 +1129,14 @@ hfs_systemfile_lock(struct hfsmount *hfsmp, int flags, enum hfslocktype locktype
 	 */
 	if (flags & (SFL_BITMAP | SFL_EXTENTS)) {
 		/*
-		 * Since the only bitmap operations are clearing and
-		 * setting bits we always need exclusive access. And
-		 * when we have a journal, we can "hide" behind that
-		 * lock since we can only change the bitmap from
-		 * within a transaction.
+		 * If there's no bitmap cnode, ignore the bitmap lock.
 		 */
-		if (hfsmp->jnl || (hfsmp->hfs_allocation_cp == NULL)) {
+		if (hfsmp->hfs_allocation_cp == NULL) {
 			flags &= ~SFL_BITMAP;
 		} else {
 			(void) hfs_lock(hfsmp->hfs_allocation_cp, HFS_EXCLUSIVE_LOCK);
-			/* The bitmap lock is also grabbed when only extent lock 
+			/* 
+			 * The bitmap lock is also grabbed when only extent lock 
 			 * was requested. Set the bitmap lock bit in the lock
 			 * flags which callers will use during unlock.
 			 */
@@ -988,7 +1148,11 @@ hfs_systemfile_lock(struct hfsmount *hfsmp, int flags, enum hfslocktype locktype
 		 * Since the extents btree lock is recursive we always
 		 * need exclusive access.
 		 */
-		(void) hfs_lock(hfsmp->hfs_extents_cp, HFS_EXCLUSIVE_LOCK);
+		if (hfsmp->hfs_extents_cp) {
+			(void) hfs_lock(hfsmp->hfs_extents_cp, HFS_EXCLUSIVE_LOCK);
+		} else {
+			flags &= ~SFL_EXTENTS;
+		}
 	}
 	return (flags);
 }
@@ -996,7 +1160,6 @@ hfs_systemfile_lock(struct hfsmount *hfsmp, int flags, enum hfslocktype locktype
 /*
  * unlock HFS system file(s).
  */
-__private_extern__
 void
 hfs_systemfile_unlock(struct hfsmount *hfsmp, int flags)
 {
@@ -1023,7 +1186,7 @@ hfs_systemfile_unlock(struct hfsmount *hfsmp, int flags)
 		}
 		hfs_unlock(hfsmp->hfs_attribute_cp);
 	}
-	if (flags & SFL_CATALOG) {
+	if (flags & SFL_CATALOG && hfsmp->hfs_catalog_cp) {
 		if (hfsmp->jnl == NULL) {
 			BTGetLastSync((FCB*)VTOF(hfsmp->hfs_catalog_vp), &lastfsync);
 			numOfLockedBuffs = count_lock_queue();
@@ -1035,10 +1198,10 @@ hfs_systemfile_unlock(struct hfsmount *hfsmp, int flags)
 		}
 		hfs_unlock(hfsmp->hfs_catalog_cp);
 	}
-	if (flags & SFL_BITMAP) {
+	if (flags & SFL_BITMAP && hfsmp->hfs_allocation_cp) {
 		hfs_unlock(hfsmp->hfs_allocation_cp);
 	}
-	if (flags & SFL_EXTENTS) {
+	if (flags & SFL_EXTENTS && hfsmp->hfs_extents_cp) {
 		if (hfsmp->jnl == NULL) {
 			BTGetLastSync((FCB*)VTOF(hfsmp->hfs_extents_vp), &lastfsync);
 			numOfLockedBuffs = count_lock_queue();
@@ -1168,7 +1331,6 @@ u_int32_t BestBlockSizeFit(u_int32_t allocationBlockSize,
 }
 
 
-__private_extern__
 u_int32_t
 GetFileInfo(ExtendedVCB *vcb, __unused u_int32_t dirid, const char *name,
 			struct cat_attr *fattr, struct cat_fork *forkinfo)
@@ -1208,7 +1370,6 @@ GetFileInfo(ExtendedVCB *vcb, __unused u_int32_t dirid, const char *name,
  * If the volume was not cleanly unmounted then some of these may
  * have persisted and need to be removed.
  */
-__private_extern__
 void
 hfs_remove_orphans(struct hfsmount * hfsmp)
 {
@@ -1286,8 +1447,9 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 		 */
 		if (bcmp(tempname, filename, namelen) == 0) {
    			struct filefork dfork;
-    			struct filefork rfork;
+    		struct filefork rfork;
   			struct cnode cnode;
+			int mode = 0;
 
 			bzero(&dfork, sizeof(dfork));
 			bzero(&rfork, sizeof(rfork));
@@ -1344,8 +1506,10 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 						fsize = 0;
 					}
 
-					if (TruncateFileC(vcb, (FCB*)&dfork, fsize, false) != 0) {
-						printf("hfs: error truncting data fork!\n");
+					if (TruncateFileC(vcb, (FCB*)&dfork, fsize, 1, 0, 
+									  cnode.c_attr.ca_fileid, false) != 0) {
+						printf("hfs: error truncating data fork!\n");
+
 						break;
 					}
 
@@ -1376,8 +1540,8 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 				rfork.ff_cp = &cnode;
 				cnode.c_datafork = NULL;
 				cnode.c_rsrcfork = &rfork;
-				if (TruncateFileC(vcb, (FCB*)&rfork, 0, false) != 0) {
-					printf("hfs: error truncting rsrc fork!\n");
+				if (TruncateFileC(vcb, (FCB*)&rfork, 0, 1, 1, cnode.c_attr.ca_fileid, false) != 0) {
+					printf("hfs: error truncating rsrc fork!\n");
 					break;
 				}
 			}
@@ -1391,7 +1555,9 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 				break;
 			}
 			
-			if (cnode.c_attr.ca_mode & S_IFDIR) {
+			mode = cnode.c_attr.ca_mode & S_IFMT;
+
+			if (mode == S_IFDIR) {
 				orphaned_dirs++;
 			}
 			else {
@@ -1400,7 +1566,7 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 
 			/* Update parent and volume counts */	
 			hfsmp->hfs_private_attr[FILE_HARDLINKS].ca_entries--;
-			if (cnode.c_attr.ca_mode & S_IFDIR) {
+			if (mode == S_IFDIR) {
 				DEC_FOLDERCOUNT(hfsmp, hfsmp->hfs_private_attr[FILE_HARDLINKS]);
 			}
 
@@ -1416,7 +1582,7 @@ hfs_remove_orphans(struct hfsmount * hfsmp)
 			   Now that Catalog is unlocked, update the volume info, making
 			   sure to differentiate between files and directories
 			*/
-			if (cnode.c_attr.ca_mode & S_IFDIR) {
+			if (mode == S_IFDIR) {
 				hfs_volupdate(hfsmp, VOL_RMDIR, 0);
 			}
 			else{
@@ -1489,7 +1655,6 @@ u_int32_t logBlockSize;
 	return logBlockSize;	
 }
 
-__private_extern__
 u_int32_t
 hfs_freeblks(struct hfsmount * hfsmp, int wantreserve)
 {
@@ -1517,7 +1682,7 @@ hfs_freeblks(struct hfsmount * hfsmp, int wantreserve)
 	else
 		freeblks = 0;
 
-#ifdef HFS_SPARSE_DEV
+#if HFS_SPARSE_DEV
 	/* 
 	 * When the underlying device is sparse, check the
 	 * available space on the backing store volume.
@@ -1841,7 +2006,7 @@ journal_open_cb(const char *bsd_dev_name, const char *uuid_str, void *arg)
 	// desired uuid so let's try to open the device for writing and
 	// see if it works.  if it does, we'll use it.
 	
-	NDINIT(&nd, LOOKUP, LOCKLEAF, UIO_SYSSPACE32, CAST_USER_ADDR_T(bsd_name), vfs_context_kernel());
+	NDINIT(&nd, LOOKUP, OP_LOOKUP, LOCKLEAF, UIO_SYSSPACE32, CAST_USER_ADDR_T(bsd_name), vfs_context_kernel());
 	if ((error = namei(&nd))) {
 		printf("hfs: journal open cb: error %d looking up device %s (dev uuid %s)\n", error, bsd_name, uuid_str);
 		return 1;   // keep iterating
@@ -1888,7 +2053,6 @@ journal_open_cb(const char *bsd_dev_name, const char *uuid_str, void *arg)
 
 extern dev_t IOBSDGetMediaWithUUID(const char *uuid_cstring, char *bsd_name, int bsd_name_len, int timeout);
 extern void IOBSDIterateMediaWithContent(const char *uuid_cstring, int (*func)(const char *bsd_dev_name, const char *uuid_str, void *arg), void *arg);
-extern kern_return_t IOBSDGetPlatformUUID(__darwin_uuid_t uuid, mach_timespec_t timeoutp);
 kern_return_t IOBSDGetPlatformSerialNumber(char *serial_number_str, u_int32_t len);
 
 
@@ -1940,7 +2104,6 @@ open_journal_dev(const char *vol_device,
 }
 
 
-__private_extern__
 int
 hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 					   void *_args, off_t embeddedOffset, daddr64_t mdb_offset,
@@ -2063,6 +2226,8 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 									arg_flags,
 									arg_tbufsz,
 									hfs_sync_metadata, hfsmp->hfs_mp);
+		if (hfsmp->jnl)
+			journal_trim_set_callback(hfsmp->jnl, hfs_trim_callback, hfsmp);
 
 		// no need to start a transaction here... if this were to fail
 		// we'd just re-init it on the next mount.
@@ -2084,6 +2249,8 @@ hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 								  arg_flags,
 								  arg_tbufsz,
 								  hfs_sync_metadata, hfsmp->hfs_mp);
+		if (hfsmp->jnl)
+			journal_trim_set_callback(hfsmp->jnl, hfs_trim_callback, hfsmp);
 
 		if (write_jibp) {
 			buf_bwrite(jinfo_bp);
@@ -2323,6 +2490,8 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 									arg_flags,
 									arg_tbufsz,
 									hfs_sync_metadata, hfsmp->hfs_mp);
+		if (hfsmp->jnl)
+			journal_trim_set_callback(hfsmp->jnl, hfs_trim_callback, hfsmp);
 
 		// no need to start a transaction here... if this were to fail
 		// we'd just re-init it on the next mount.
@@ -2352,6 +2521,8 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 								  arg_flags,
 								  arg_tbufsz,
 								  hfs_sync_metadata, hfsmp->hfs_mp);
+		if (hfsmp->jnl)
+			journal_trim_set_callback(hfsmp->jnl, hfs_trim_callback, hfsmp);
 	}
 			
 
@@ -2408,8 +2579,15 @@ hfs_late_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp, void *_a
 #define HOTBAND_MINIMUM_SIZE  (10*1024*1024)
 #define HOTBAND_MAXIMUM_SIZE  (512*1024*1024)
 
+/* Initialize the metadata zone.
+ *
+ * If the size of  the volume is less than the minimum size for
+ * metadata zone, metadata zone is disabled.
+ *
+ * If disable is true, disable metadata zone unconditionally.
+ */
 void
-hfs_metadatazone_init(struct hfsmount *hfsmp)
+hfs_metadatazone_init(struct hfsmount *hfsmp, int disable)
 {
 	ExtendedVCB  *vcb;
 	u_int64_t  fs_size;
@@ -2433,6 +2611,11 @@ hfs_metadatazone_init(struct hfsmount *hfsmp)
 	 * Skip non-journaled volumes as well.
 	 */
 	if (hfsmp->jnl == NULL) {
+		really_do_it = 0;
+	}
+
+	/* If caller wants to disable metadata zone, do it */
+	if (disable == true) {
 		really_do_it = 0;
 	}
 
@@ -2626,7 +2809,6 @@ hfs_hotfile_freeblocks(struct hfsmount *hfsmp)
  * Determine if a file is a "virtual" metadata file.
  * This includes journal and quota files.
  */
-__private_extern__
 int
 hfs_virtualmetafile(struct cnode *cp)
 {
@@ -2698,7 +2880,6 @@ hfs_sync_ejectable(struct hfsmount *hfsmp)
 }
 
 
-__private_extern__
 int
 hfs_start_transaction(struct hfsmount *hfsmp)
 {
@@ -2723,11 +2904,11 @@ hfs_start_transaction(struct hfsmount *hfsmp)
 	}
 #endif /* HFS_CHECK_LOCK_ORDER */
 
-    if (hfsmp->jnl == NULL || journal_owner(hfsmp->jnl) != thread) {
-	lck_rw_lock_shared(&hfsmp->hfs_global_lock);
-	OSAddAtomic(1, (SInt32 *)&hfsmp->hfs_active_threads);
-	unlock_on_err = 1;
-    }
+	if (hfsmp->jnl == NULL || journal_owner(hfsmp->jnl) != thread) {
+		hfs_lock_global (hfsmp, HFS_SHARED_LOCK);
+		OSAddAtomic(1, (SInt32 *)&hfsmp->hfs_active_threads);
+		unlock_on_err = 1;
+	}
 
 	/* If a downgrade to read-only mount is in progress, no other
 	 * process than the downgrade process is allowed to modify 
@@ -2739,67 +2920,89 @@ hfs_start_transaction(struct hfsmount *hfsmp)
 		goto out;
 	}
 
-    if (hfsmp->jnl) {
-	ret = journal_start_transaction(hfsmp->jnl);
-	if (ret == 0) {
-	    OSAddAtomic(1, &hfsmp->hfs_global_lock_nesting);
+	if (hfsmp->jnl) {
+		ret = journal_start_transaction(hfsmp->jnl);
+		if (ret == 0) {
+			OSAddAtomic(1, &hfsmp->hfs_global_lock_nesting);
+		}
+	} else {
+		ret = 0;
 	}
-    } else {
-	ret = 0;
-    }
 
 out:
-    if (ret != 0 && unlock_on_err) {
-	lck_rw_unlock_shared(&hfsmp->hfs_global_lock);
-	OSAddAtomic(-1, (SInt32 *)&hfsmp->hfs_active_threads);
-    }
+	if (ret != 0 && unlock_on_err) {
+		hfs_unlock_global (hfsmp);
+		OSAddAtomic(-1, (SInt32 *)&hfsmp->hfs_active_threads);
+	}
 
     return ret;
 }
 
-__private_extern__
 int
 hfs_end_transaction(struct hfsmount *hfsmp)
 {
     int need_unlock=0, ret;
 
-    if (    hfsmp->jnl == NULL
-	|| (   journal_owner(hfsmp->jnl) == current_thread()
+    if ((hfsmp->jnl == NULL) || ( journal_owner(hfsmp->jnl) == current_thread()
 	    && (OSAddAtomic(-1, &hfsmp->hfs_global_lock_nesting) == 1)) ) {
-
 	    need_unlock = 1;
     } 
 
-    if (hfsmp->jnl) {
-	ret = journal_end_transaction(hfsmp->jnl);
-    } else {
-	ret = 0;
-    }
+	if (hfsmp->jnl) {
+		ret = journal_end_transaction(hfsmp->jnl);
+	} else {
+		ret = 0;
+	}
 
-    if (need_unlock) {
-	OSAddAtomic(-1, (SInt32 *)&hfsmp->hfs_active_threads);
-	lck_rw_unlock_shared(&hfsmp->hfs_global_lock);
-	hfs_sync_ejectable(hfsmp);
-    }
+	if (need_unlock) {
+		OSAddAtomic(-1, (SInt32 *)&hfsmp->hfs_active_threads);
+		hfs_unlock_global (hfsmp);
+		hfs_sync_ejectable(hfsmp);
+	}
 
     return ret;
 }
 
 
-__private_extern__
+/* 
+ * Flush the contents of the journal to the disk. 
+ *
+ *  Input: 
+ *  	wait_for_IO - 
+ *  	If TRUE, wait to write in-memory journal to the disk 
+ *  	consistently, and also wait to write all asynchronous 
+ *  	metadata blocks to its corresponding locations
+ *  	consistently on the disk.  This means that the journal 
+ *  	is empty at this point and does not contain any 
+ *  	transactions.  This is overkill in normal scenarios  
+ *  	but is useful whenever the metadata blocks are required 
+ *  	to be consistent on-disk instead of just the journal 
+ *  	being consistent; like before live verification 
+ *  	and live volume resizing.  
+ *
+ *  	If FALSE, only wait to write in-memory journal to the 
+ *  	disk consistently.  This means that the journal still 
+ *  	contains uncommitted transactions and the file system 
+ *  	metadata blocks in the journal transactions might be 
+ *  	written asynchronously to the disk.  But there is no 
+ *  	guarantee that they are written to the disk before 
+ *  	returning to the caller.  Note that this option is 
+ *  	sufficient for file system data integrity as it 
+ *  	guarantees consistent journal content on the disk.
+ */
 int
-hfs_journal_flush(struct hfsmount *hfsmp)
+hfs_journal_flush(struct hfsmount *hfsmp, boolean_t wait_for_IO)
 {
 	int ret;
-	
+
 	/* Only peek at hfsmp->jnl while holding the global lock */
-	lck_rw_lock_shared(&hfsmp->hfs_global_lock);
+	hfs_lock_global (hfsmp, HFS_SHARED_LOCK);
 	if (hfsmp->jnl) {
-		ret = journal_flush(hfsmp->jnl);
+		ret = journal_flush(hfsmp->jnl, wait_for_IO);
 	} else {
 		ret = 0;
 	}
-	lck_rw_unlock_shared(&hfsmp->hfs_global_lock);
+	hfs_unlock_global (hfsmp);
 	
 	return ret;
 }
@@ -2824,7 +3027,6 @@ hfs_journal_flush(struct hfsmount *hfsmp)
  * unused nodes have been repaired.  A newer newfs_hfs will set this bit.
  * As will fsck_hfs when it repairs the unused nodes.
  */
-__private_extern__
 int hfs_erase_unused_nodes(struct hfsmount *hfsmp)
 {
 	int result; 
@@ -2876,4 +3078,93 @@ int hfs_erase_unused_nodes(struct hfsmount *hfsmp)
 
 done:
 	return result;
+}
+
+
+extern time_t snapshot_timestamp;
+
+int
+check_for_tracked_file(struct vnode *vp, time_t ctime, uint64_t op_type, void *arg)
+{
+	int tracked_error = 0, snapshot_error = 0;
+	
+	if (vp == NULL) {
+		return 0;
+	}
+	
+	if (VTOC(vp)->c_flags & UF_TRACKED) {
+		// the file has the tracked bit set, so send an event to the tracked-file handler
+		int error;
+		
+		// printf("hfs: tracked-file: encountered a file with the tracked bit set! (vp %p)\n", vp);
+		error = resolve_nspace_item(vp, op_type | NAMESPACE_HANDLER_TRACK_EVENT);
+		if (error) {
+			if (error == EAGAIN) {
+				printf("hfs: tracked-file: timed out waiting for namespace handler...\n");
+				
+			} else if (error == EINTR) {
+				// printf("hfs: tracked-file: got a signal while waiting for namespace handler...\n");
+				tracked_error = EINTR;
+			}
+		}
+	}
+
+	if (ctime != 0 && snapshot_timestamp != 0 && (ctime <= snapshot_timestamp || vnode_needssnapshots(vp))) {
+		// the change time is within this epoch
+		int error;
+		
+		error = resolve_nspace_item_ext(vp, op_type | NAMESPACE_HANDLER_SNAPSHOT_EVENT, arg);
+		if (error == EDEADLK) {
+			snapshot_error = 0;
+		} else if (error) {
+			if (error == EAGAIN) {
+				printf("hfs: cow-snapshot: timed out waiting for namespace handler...\n");
+			} else if (error == EINTR) {
+				// printf("hfs: cow-snapshot: got a signal while waiting for namespace handler...\n");
+				snapshot_error = EINTR;
+			}
+		}
+	}
+	
+	if (tracked_error) return tracked_error;
+	if (snapshot_error) return snapshot_error;
+	
+	return 0;
+}
+
+int
+check_for_dataless_file(struct vnode *vp, uint64_t op_type)
+{
+	int error;
+
+	if (vp == NULL || (VTOC(vp)->c_flags & UF_COMPRESSED) == 0 || VTOCMP(vp) == NULL || VTOCMP(vp)->cmp_type != DATALESS_CMPFS_TYPE) {
+		// there's nothing to do, it's not dataless
+		return 0;
+	}
+			
+	// printf("hfs: dataless: encountered a file with the dataless bit set! (vp %p)\n", vp);
+	error = resolve_nspace_item(vp, op_type | NAMESPACE_HANDLER_NSPACE_EVENT);
+	if (error == EDEADLK && op_type == NAMESPACE_HANDLER_WRITE_OP) {
+		error = 0;
+	} else if (error) {
+		if (error == EAGAIN) {
+			printf("hfs: dataless: timed out waiting for namespace handler...\n");
+			// XXXdbg - return the fabled ENOTPRESENT (i.e. EJUKEBOX)?
+			return 0;				
+		} else if (error == EINTR) {
+			// printf("hfs: dataless: got a signal while waiting for namespace handler...\n");
+			return EINTR;
+		}
+	} else if (VTOC(vp)->c_flags & UF_COMPRESSED) {
+		//
+		// if we're here, the dataless bit is still set on the file 
+		// which means it didn't get handled.  we return an error
+		// but it's presently ignored by all callers of this function.
+		//
+		// XXXdbg - EDATANOTPRESENT is what we really need...
+		//
+		return EBADF;
+	}				
+
+	return error;
 }

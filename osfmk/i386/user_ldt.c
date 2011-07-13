@@ -237,7 +237,7 @@ i386_set_ldt(
 		    case 0:
 		    case ACC_P:
 			/* valid empty descriptor, clear Present preemptively */
-			dp->access &= ~ACC_P;
+			dp->access &= (~ACC_P & 0xff);
 			break;
 		    case ACC_P | ACC_PL_U | ACC_DATA:
 		    case ACC_P | ACC_PL_U | ACC_DATA_W:
@@ -389,7 +389,7 @@ user_ldt_set(
 	    bcopy(user_ldt->ldt, &ldtp[user_ldt->start],
 		  sizeof(struct real_descriptor) * (user_ldt->count));
 
-	    gdt_desc_p(USER_LDT)->limit_low = (sizeof(struct real_descriptor) * (user_ldt->start + user_ldt->count)) - 1;
+	    gdt_desc_p(USER_LDT)->limit_low = (uint16_t)((sizeof(struct real_descriptor) * (user_ldt->start + user_ldt->count)) - 1);
 
 	    ml_cpu_set_ldt(USER_LDT);
 	} else {

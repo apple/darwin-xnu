@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,25 +73,6 @@
 extern void	mach_kauth_cred_uthread_update(void);
 #endif
 
-kern_return_t
-thread_userstack(
-    thread_t,
-    int,
-    thread_state_t,
-    unsigned int,
-    mach_vm_offset_t *,
-	int *
-);
-
-kern_return_t
-thread_entrypoint(
-    thread_t,
-    int,
-    thread_state_t,
-    unsigned int,
-    mach_vm_offset_t *
-); 
-
 void * find_user_regs(thread_t);
 
 unsigned int get_msr_exportmask(void);
@@ -100,8 +81,7 @@ unsigned int get_msr_nbits(void);
 
 unsigned int get_msr_rbits(void);
 
-extern void throttle_lowpri_io(boolean_t);
-
+extern void throttle_lowpri_io(int);
 
 /*
  * thread_userstack:
@@ -115,7 +95,7 @@ thread_userstack(
     int                 flavor,
     thread_state_t      tstate,
     __unused unsigned int        count,
-    user_addr_t    *user_stack,
+    mach_vm_offset_t    *user_stack,
 	int					*customstack
 )
 {
@@ -129,14 +109,15 @@ thread_userstack(
 
 			state25 = (x86_thread_state32_t *) tstate;
 
-			if (state25->esp)
+			if (state25->esp) {
 				*user_stack = state25->esp;
-			else 
+				if (customstack)
+					*customstack = 1;
+			} else {
 				*user_stack = VM_USRSTACK32;
-			if (customstack && state25->esp)
-				*customstack = 1;
-			else
-				*customstack = 0;
+				if (customstack)
+					*customstack = 0;
+			}
 			break;
 		}
 
@@ -146,14 +127,15 @@ thread_userstack(
 
 			state25 = (x86_thread_state64_t *) tstate;
 
-			if (state25->rsp)
+			if (state25->rsp) {
 				*user_stack = state25->rsp;
-			else 
+				if (customstack)
+					*customstack = 1;
+			} else {
 				*user_stack = VM_USRSTACK64;
-			if (customstack && state25->rsp)
-				*customstack = 1;
-			else
-				*customstack = 0;
+				if (customstack)
+					*customstack = 0;
+			}
 			break;
 		}
 
@@ -202,62 +184,6 @@ thread_entrypoint(
 	return (KERN_SUCCESS);
 }
 
-/*
- * Duplicate parent state in child
- * for U**X fork.
- */
-kern_return_t
-machine_thread_dup(
-    thread_t		parent,
-    thread_t		child
-)
-{
-	
-	pcb_t		parent_pcb;
-	pcb_t		child_pcb;
-
-	if ((child_pcb = child->machine.pcb) == NULL ||
-	    (parent_pcb = parent->machine.pcb) == NULL)
-		return (KERN_FAILURE);
-	/*
-	 * Copy over the x86_saved_state registers
-	 */
-	if (cpu_mode_is64bit()) {
-		if (thread_is_64bit(parent))
-			bcopy(USER_REGS64(parent), USER_REGS64(child), sizeof(x86_saved_state64_t));
-		else
-			bcopy(USER_REGS32(parent), USER_REGS32(child), sizeof(x86_saved_state_compat32_t));
-	} else
-		bcopy(USER_REGS32(parent), USER_REGS32(child), sizeof(x86_saved_state32_t));
-
-	/*
-	 * Check to see if parent is using floating point
-	 * and if so, copy the registers to the child
-	 */
-	fpu_dup_fxstate(parent, child);
-
-#ifdef	MACH_BSD
-	/*
-	 * Copy the parent's cthread id and USER_CTHREAD descriptor, if 32-bit.
-	 */
-	child_pcb->cthread_self = parent_pcb->cthread_self;
-	if (!thread_is_64bit(parent))
-		child_pcb->cthread_desc = parent_pcb->cthread_desc;
-
-	/*
-	 * FIXME - should a user specified LDT, TSS and V86 info
-	 * be duplicated as well?? - probably not.
-	 */
-	// duplicate any use LDT entry that was set I think this is appropriate.
-        if (parent_pcb->uldt_selector!= 0) {
-	        child_pcb->uldt_selector = parent_pcb->uldt_selector;
-		child_pcb->uldt_desc = parent_pcb->uldt_desc;
-	}
-#endif
-
-	return (KERN_SUCCESS);
-}
-
 /* 
  * FIXME - thread_set_child
  */
@@ -266,6 +192,7 @@ void thread_set_child(thread_t child, int pid);
 void
 thread_set_child(thread_t child, int pid)
 {
+	pal_register_cache_state(child, DIRTY);
 
 	if (thread_is_64bit(child)) {
 		x86_saved_state64_t	*iss64;
@@ -286,31 +213,6 @@ thread_set_child(thread_t child, int pid)
 	}
 }
 
-
-void thread_set_parent(thread_t parent, int pid);
-
-void
-thread_set_parent(thread_t parent, int pid)
-{
-
-	if (thread_is_64bit(parent)) {
-		x86_saved_state64_t	*iss64;
-
-		iss64 = USER_REGS64(parent);
-
-		iss64->rax = pid;
-		iss64->rdx = 0;
-		iss64->isf.rflags &= ~EFL_CF;
-	} else {
-		x86_saved_state32_t	*iss32;
-
-		iss32 = USER_REGS32(parent);
-
-		iss32->eax = pid;
-		iss32->edx = 0;
-		iss32->efl &= ~EFL_CF;
-	}
-}
 
 
 /*
@@ -447,142 +349,6 @@ machdep_syscall64(x86_saved_state_t *state)
 
 	thread_exception_return();
 	/* NOTREACHED */
-}
-
-/*
- * thread_fast_set_cthread_self: Sets the machine kernel thread ID of the
- * current thread to the given thread ID; fast version for 32-bit processes
- *
- * Parameters:    self                    Thread ID to set
- *                
- * Returns:        0                      Success
- *                !0                      Not success
- */
-kern_return_t
-thread_fast_set_cthread_self(uint32_t self)
-{
-	thread_t thread = current_thread();
-	pcb_t pcb = thread->machine.pcb;
-	struct real_descriptor desc = {
-		.limit_low = 1,
-		.limit_high = 0,
-		.base_low = self & 0xffff,
-		.base_med = (self >> 16) & 0xff,
-		.base_high = (self >> 24) & 0xff,
-		.access = ACC_P|ACC_PL_U|ACC_DATA_W,
-		.granularity = SZ_32|SZ_G,
-	};
-
-	current_thread()->machine.pcb->cthread_self = (uint64_t) self;	/* preserve old func too */
-
-	/* assign descriptor */
-	mp_disable_preemption();
-	pcb->cthread_desc = desc;
-	*ldt_desc_p(USER_CTHREAD) = desc;
-	saved_state32(pcb->iss)->gs = USER_CTHREAD;
-	mp_enable_preemption();
-
-	return (USER_CTHREAD);
-}
-
-/*
- * thread_fast_set_cthread_self64: Sets the machine kernel thread ID of the
- * current thread to the given thread ID; fast version for 64-bit processes 
- *
- * Parameters:    self                    Thread ID
- *                
- * Returns:        0                      Success
- *                !0                      Not success
- */
-kern_return_t
-thread_fast_set_cthread_self64(uint64_t self)
-{
-	pcb_t pcb = current_thread()->machine.pcb;
-	cpu_data_t              *cdp;
-
-	/* check for canonical address, set 0 otherwise  */
-	if (!IS_USERADDR64_CANONICAL(self))
-		self = 0ULL;
-
-	pcb->cthread_self = self;
-	mp_disable_preemption();
-	cdp = current_cpu_datap();
-#if defined(__x86_64__)
-	if ((cdp->cpu_uber.cu_user_gs_base != pcb->cthread_self) ||
-	    (pcb->cthread_self != rdmsr64(MSR_IA32_KERNEL_GS_BASE)))
-		wrmsr64(MSR_IA32_KERNEL_GS_BASE, self);
-#endif
-	cdp->cpu_uber.cu_user_gs_base = self;
-	mp_enable_preemption();
-	return (USER_CTHREAD);
-}
-
-/*
- * thread_set_user_ldt routine is the interface for the user level
- * settable ldt entry feature.  allowing a user to create arbitrary
- * ldt entries seems to be too large of a security hole, so instead
- * this mechanism is in place to allow user level processes to have
- * an ldt entry that can be used in conjunction with the FS register.
- *
- * Swapping occurs inside the pcb.c file along with initialization
- * when a thread is created. The basic functioning theory is that the
- * pcb->uldt_selector variable will contain either 0 meaning the
- * process has not set up any entry, or the selector to be used in
- * the FS register. pcb->uldt_desc contains the actual descriptor the
- * user has set up stored in machine usable ldt format.
- *
- * Currently one entry is shared by all threads (USER_SETTABLE), but
- * this could be changed in the future by changing how this routine
- * allocates the selector. There seems to be no real reason at this
- * time to have this added feature, but in the future it might be
- * needed.
- *
- * address is the linear address of the start of the data area size
- * is the size in bytes of the area flags should always be set to 0
- * for now. in the future it could be used to set R/W permisions or
- * other functions. Currently the segment is created as a data segment
- * up to 1 megabyte in size with full read/write permisions only.
- *
- * this call returns the segment selector or -1 if any error occurs
- */
-kern_return_t
-thread_set_user_ldt(uint32_t address, uint32_t size, uint32_t flags)
-{
-	pcb_t pcb;
-	struct fake_descriptor temp;
-	int mycpu;
-
-	if (flags != 0)
-		return -1;		// flags not supported
-	if (size > 0xFFFFF)
-		return -1;		// size too big, 1 meg is the limit
-
-	mp_disable_preemption();
-	mycpu = cpu_number();
-
-	// create a "fake" descriptor so we can use fix_desc()
-	// to build a real one...
-	//   32 bit default operation size
-	//   standard read/write perms for a data segment
-	pcb = (pcb_t)current_thread()->machine.pcb;
-	temp.offset = address;
-	temp.lim_or_seg = size;
-	temp.size_or_wdct = SZ_32;
-	temp.access = ACC_P|ACC_PL_U|ACC_DATA_W;
-
-	// turn this into a real descriptor
-	fix_desc(&temp,1);
-
-	// set up our data in the pcb
-	pcb->uldt_desc = *(struct real_descriptor*)&temp;
-	pcb->uldt_selector = USER_SETTABLE;		// set the selector value
-
-	// now set it up in the current table...
-	*ldt_desc_p(USER_SETTABLE) = *(struct real_descriptor*)&temp;
-
-	mp_enable_preemption();
-
-	return USER_SETTABLE;
 }
 
 #endif	/* MACH_BSD */
@@ -791,6 +557,7 @@ thread_setuserstack(
 	thread_t	thread,
 	mach_vm_address_t	user_stack)
 {
+	pal_register_cache_state(thread, DIRTY);
 	if (thread_is_64bit(thread)) {
 		x86_saved_state64_t	*iss64;
 
@@ -817,6 +584,7 @@ thread_adjuserstack(
 	thread_t	thread,
 	int		adjust)
 {
+	pal_register_cache_state(thread, DIRTY);
 	if (thread_is_64bit(thread)) {
 		x86_saved_state64_t	*iss64;
 
@@ -845,6 +613,7 @@ thread_adjuserstack(
 void
 thread_setentrypoint(thread_t thread, mach_vm_address_t entry)
 {
+	pal_register_cache_state(thread, DIRTY);
 	if (thread_is_64bit(thread)) {
 		x86_saved_state64_t	*iss64;
 
@@ -864,6 +633,7 @@ thread_setentrypoint(thread_t thread, mach_vm_address_t entry)
 kern_return_t
 thread_setsinglestep(thread_t thread, int on)
 {
+	pal_register_cache_state(thread, DIRTY);
 	if (thread_is_64bit(thread)) {
 		x86_saved_state64_t	*iss64;
 
@@ -897,18 +667,15 @@ thread_setsinglestep(thread_t thread, int on)
 void *
 find_user_regs(thread_t thread)
 {
+	pal_register_cache_state(thread, DIRTY);
 	return USER_STATE(thread);
 }
 
 void *
 get_user_regs(thread_t th)
 {
-	if (th->machine.pcb)
-		return(USER_STATE(th));
-	else {
-		printf("[get_user_regs: thread does not have pcb]");
-		return NULL;
-	}
+	pal_register_cache_state(th, DIRTY);
+	return(USER_STATE(th));
 }
 
 #if CONFIG_DTRACE

@@ -29,16 +29,7 @@
 
 #include "SYS.h"
 
-#if defined(__ppc__) || defined(__ppc64__)
-
-MI_ENTRY_POINT(___ptrace)
-	li      r7,0
-    MI_GET_ADDRESS(r8,_errno)
-    stw     r7,0(r8)
-    SYSCALL_NONAME(ptrace, 4)
-	blr
-
-#elif defined(__i386__)
+#if defined(__i386__)
 
 	.globl	_errno
 
@@ -54,7 +45,8 @@ UNIX_SYSCALL_NONAME(ptrace, 4)
 
 LEAF(___ptrace, 0)
 	xorq	%rax,%rax
-	REG_TO_EXTERN(%rax,_errno)
+	PICIFY(_errno)
+	movl	%eax,(%r11)
 UNIX_SYSCALL_NONAME(ptrace, 4)
 	ret
 

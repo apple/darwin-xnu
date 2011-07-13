@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * %Begin-Header%
  * Redistribution and use in source and binary forms, with or without
@@ -51,19 +51,22 @@ read_node(uint8_t *node)
 {
 #if NETWORKING
 	struct ifnet *ifp;
-	struct ifaddr *ifa;
 	struct sockaddr_dl *sdl;
 
 	ifnet_head_lock_shared();
 	TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
-		TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
-			sdl = (struct sockaddr_dl *)ifa->ifa_addr;
-			if (sdl && sdl->sdl_family == AF_LINK && sdl->sdl_type == IFT_ETHER) {
-				memcpy(node, LLADDR(sdl), 6);
-				ifnet_head_done();
-				return;
-			}
+		ifnet_lock_shared(ifp);
+		IFA_LOCK_SPIN(ifp->if_lladdr);
+		sdl = (struct sockaddr_dl *)ifp->if_lladdr->ifa_addr;
+		if (sdl->sdl_type == IFT_ETHER) {
+			memcpy(node, LLADDR(sdl), 6);
+			IFA_UNLOCK(ifp->if_lladdr);
+			ifnet_lock_done(ifp);
+			ifnet_head_done();
+			return;
 		}
+		IFA_UNLOCK(ifp->if_lladdr);
+		ifnet_lock_done(ifp);
 	}
 	ifnet_head_done();
 #endif /* NETWORKING */

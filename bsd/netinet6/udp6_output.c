@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -107,9 +107,12 @@
 #include <sys/proc.h>
 #include <sys/syslog.h>
 
+#include <machine/endian.h>
+
 #include <net/if.h>
 #include <net/route.h>
 #include <net/if_types.h>
+#include <net/ntstat.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -177,27 +180,28 @@ udp6_output(in6p, m, addr6, control, p)
 	struct in6_addr *laddr, *faddr;
 	u_short fport;
 	int error = 0;
-	struct ip6_pktopts opt, *stickyopt = in6p->in6p_outputopts;
-	int priv;
+	struct ip6_pktopts opt, *optp = NULL;
+	struct ip6_moptions *im6o;
 	int af = AF_INET6, hlen = sizeof(struct ip6_hdr);
 	int flags;
 	struct sockaddr_in6 tmp;
 	struct	in6_addr storage;
-#if PKT_PRIORITY
-	mbuf_traffic_class_t mtc = MBUF_TC_NONE;
-#endif /* PKT_PRIORITY */
+	mbuf_traffic_class_t mtc = MBUF_TC_UNSPEC;
+	struct ip6_out_args ip6oa = { IFSCOPE_NONE, 0 };
 
-	priv = (proc_suser(p) == 0);
+	if (in6p->inp_flags & INP_BOUND_IF)
+		ip6oa.ip6oa_boundif = in6p->inp_boundif;
+
+	ip6oa.ip6oa_nocell = (in6p->inp_flags & INP_NO_IFT_CELLULAR) ? 1 : 0;
 
 	if (control) {
-#if PKT_PRIORITY
 		mtc = mbuf_traffic_class_from_control(control);
-#endif /* PKT_PRIORITY */
 
-		if ((error = ip6_setpktoptions(control, &opt, priv, 0)) != 0)
+		if ((error = ip6_setpktopts(control, &opt, NULL, IPPROTO_UDP)) != 0)
 			goto release;
-		in6p->in6p_outputopts = &opt;
-	}
+		optp = &opt;
+	} else
+		optp = in6p->in6p_outputopts;
 
 	if (addr6) {
 		/*
@@ -246,16 +250,16 @@ udp6_output(in6p, m, addr6, control, p)
 		}
 
 		/* KAME hack: embed scopeid */
-		if (in6_embedscope(&sin6->sin6_addr, sin6, in6p, NULL) != 0) {
+		if (in6_embedscope(&sin6->sin6_addr, sin6, in6p, NULL,
+		    optp) != 0) {
 			error = EINVAL;
 			goto release;
 		}
 
 		if (!IN6_IS_ADDR_V4MAPPED(faddr)) {
-			laddr = in6_selectsrc(sin6, in6p->in6p_outputopts,
-					      in6p->in6p_moptions,
-					      &in6p->in6p_route,
-					      &in6p->in6p_laddr, &storage, &error);
+			laddr = in6_selectsrc(sin6, optp,
+			    in6p, &in6p->in6p_route, NULL, &storage,
+			    ip6oa.ip6oa_boundif, &error);
 		} else
 			laddr = &in6p->in6p_laddr;	/* XXX */
 		if (laddr == NULL) {
@@ -333,12 +337,12 @@ udp6_output(in6p, m, addr6, control, p)
 		ip6->ip6_src	= *laddr;
 		ip6->ip6_dst	= *faddr;
 
-		if ((udp6->uh_sum = in6_cksum(m, IPPROTO_UDP,
-				sizeof(struct ip6_hdr), plen)) == 0) {
-			udp6->uh_sum = 0xffff;
-		}
+		udp6->uh_sum = in6_cksum_phdr(laddr, faddr,
+		    htonl(plen), htonl(IPPROTO_UDP));
+		m->m_pkthdr.csum_flags = CSUM_UDPIPV6;
+		m->m_pkthdr.csum_data = offsetof(struct udphdr, uh_sum);
 
-		flags = 0;
+		flags = IPV6_OUTARGS;
 
 		udp6stat.udp6s_opackets++;
 #ifdef IPSEC
@@ -348,26 +352,50 @@ udp6_output(in6p, m, addr6, control, p)
 		}
 #endif /*IPSEC*/
 		m->m_pkthdr.socket_id = get_socket_id(in6p->in6p_socket);
-		
-#if PKT_PRIORITY
-		set_traffic_class(m, in6p->in6p_socket, mtc);
-#endif /* PKT_PRIORITY */
-		error = ip6_output(m, in6p->in6p_outputopts, &in6p->in6p_route,
-		    flags, in6p->in6p_moptions, NULL, 0);
 
-#if IFNET_ROUTE_REFCNT
-		/*
-		 * Always discard the cached route for unconnected socket
-		 * or if it is a multicast route.
-		 */
-		if (in6p->in6p_route.ro_rt != NULL &&
-		    ((in6p->in6p_route.ro_rt->rt_flags & RTF_MULTICAST) ||
-		    in6p->in6p_socket == NULL ||
-		    in6p->in6p_socket->so_state != SS_ISCONNECTED)) {
-			rtfree(in6p->in6p_route.ro_rt);
-			in6p->in6p_route.ro_rt = NULL;
+		set_packet_tclass(m, in6p->in6p_socket, mtc, 1);
+
+		im6o = in6p->in6p_moptions;
+		if (im6o != NULL)
+			IM6O_ADDREF(im6o);
+
+		error = ip6_output(m, optp, &in6p->in6p_route,
+		    flags, im6o, NULL, &ip6oa);
+
+		if (im6o != NULL)
+			IM6O_REMREF(im6o);
+		
+		if (error == 0 && nstat_collect) {
+			locked_add_64(&in6p->inp_stat->txpackets, 1);
+			locked_add_64(&in6p->inp_stat->txbytes, ulen);
 		}
-#endif /* IFNET_ROUTE_REFCNT */
+
+		if (in6p->in6p_route.ro_rt != NULL) {
+			struct rtentry *rt = in6p->in6p_route.ro_rt;
+			unsigned int outif;
+
+			if ((rt->rt_flags & RTF_MULTICAST) ||
+			    in6p->in6p_socket == NULL ||
+			    !(in6p->in6p_socket->so_state & SS_ISCONNECTED)) {
+				rt = NULL;	/* unusable */
+			}
+			/*
+			 * Always discard the cached route for unconnected
+			 * socket or if it is a multicast route.
+			 */
+			if (rt == NULL) {
+				rtfree(in6p->in6p_route.ro_rt);
+				in6p->in6p_route.ro_rt = NULL;
+			}
+			/*
+			 * If this is a connected socket and the destination
+			 * route is not multicast, update outif with that of
+			 * the route interface index used by IP.
+			 */
+			if (rt != NULL && (outif = rt->rt_ifp->if_index) !=
+			    in6p->in6p_last_outif)
+				in6p->in6p_last_outif = outif;
+		}
 		break;
 	case AF_INET:
 		error = EAFNOSUPPORT;
@@ -380,8 +408,8 @@ release:
 
 releaseopt:
 	if (control) {
-		ip6_clearpktopts(in6p->in6p_outputopts, 0, -1);
-		in6p->in6p_outputopts = stickyopt;
+		if (optp == &opt)
+			ip6_clearpktopts(optp, -1);
 		m_freem(control);
 	}
 	return(error);

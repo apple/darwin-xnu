@@ -36,29 +36,46 @@
 
 #ifdef MACH_KERNEL_PRIVATE
 
-typedef struct call_entry	*timer_call_t;
+#include <kern/call_entry.h>
+
+/*
+ * NOTE: for now, bsd/dev/dtrace/dtrace_glue.c has its own definition
+ * of this data structure, and the two had better match.
+ */
+typedef struct timer_call {
+	struct call_entry 	call_entry;
+	decl_simple_lock_data( ,lock);		/* protects call_entry queue */
+	uint64_t		soft_deadline;
+	uint32_t		flags;
+	boolean_t		async_dequeue;	/* this field is protected by
+						   call_entry queue's lock */
+} *timer_call_t;
+
 typedef void				*timer_call_param_t;
 typedef void				(*timer_call_func_t)(
 									timer_call_param_t		param0,
 									timer_call_param_t		param1);
-
+#define TIMER_CALL_CRITICAL	0x01
+#define TIMER_CALL_LOCAL	0x02
 extern boolean_t	timer_call_enter(
 						timer_call_t	call,
-						uint64_t		deadline);
+						uint64_t	deadline,
+						uint32_t	flags);
 
 extern boolean_t	timer_call_enter1(
 						timer_call_t		call,
 						timer_call_param_t	param1,
-						uint64_t			deadline);
+						uint64_t		deadline,
+						uint32_t 		flags);
 
 extern boolean_t	timer_call_cancel(
 						timer_call_t	call);
 
-#include <kern/call_entry.h>
-
-typedef struct call_entry	timer_call_data_t;
+typedef struct timer_call 	timer_call_data_t;
 
 extern void		timer_call_initialize(void);
+
+extern void		timer_call_initialize_queue(mpqueue_head_t *);
 
 extern void		timer_call_setup(
 					timer_call_t		call,

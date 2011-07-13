@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -187,7 +187,7 @@ extern void		db_task_name(
 
 /* macro for checking if a thread has used floating-point */
 
-#define db_act_fp_used(act)	(act && act->machine.pcb->ifps)
+#define db_act_fp_used(act)	(act && act->machine.ifps)
 
 extern void		db_tss_to_frame(
 				int			tss_sel,

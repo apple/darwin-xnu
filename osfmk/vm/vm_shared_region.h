@@ -43,6 +43,7 @@
 
 extern int shared_region_version;
 extern int shared_region_persistence;
+extern boolean_t shared_region_completed_slide;
 
 #if DEBUG
 extern int shared_region_debug;
@@ -110,9 +111,41 @@ struct vm_shared_region {
 	thread_call_t		sr_timer_call;
 };
 
+typedef struct vm_shared_region_slide_info_entry	*vm_shared_region_slide_info_entry_t;
+struct vm_shared_region_slide_info_entry {
+	uint32_t	version;
+	uint32_t	toc_offset;	// offset from start of header to table-of-contents
+	uint32_t	toc_count;	// number of entries in toc (same as number of pages in r/w mapping)
+	uint32_t	entry_offset;
+	uint32_t	entry_count;
+};
+
+#define NBBY	8
+#define	NUM_SLIDING_BITMAPS_PER_PAGE	(PAGE_SIZE/sizeof(int)/NBBY) /*128*/
+typedef struct slide_info_entry_toc	*slide_info_entry_toc_t;
+struct slide_info_entry_toc { 
+	uint8_t entry[NUM_SLIDING_BITMAPS_PER_PAGE];
+};
+
+typedef struct vm_shared_region_slide_info vm_shared_region_slide_info_t;
+struct vm_shared_region_slide_info {
+	mach_vm_offset_t	start;
+	mach_vm_offset_t	end;
+	uint32_t		slide;
+	vm_object_t		slide_object;
+	mach_vm_size_t		slide_info_size;
+	vm_shared_region_slide_info_entry_t	slide_info_entry;
+	vm_shared_region_t	sr;
+};
+
+extern struct vm_shared_region_slide_info	slide_info;
+
 #else  /* !MACH_KERNEL_PRIVATE */
 
 struct vm_shared_region;
+struct vm_shared_region_slide_info;
+struct vm_shared_region_slide_info_entry;
+struct slide_info_entry_toc;
 
 #endif /* MACH_KERNEL_PRIVATE */
 
@@ -145,14 +178,31 @@ extern vm_shared_region_t vm_shared_region_lookup(
 extern kern_return_t vm_shared_region_start_address(
 	struct vm_shared_region	*shared_region,
 	mach_vm_offset_t	*start_address);
+extern void vm_shared_region_undo_mappings(
+			vm_map_t sr_map,
+			mach_vm_offset_t sr_base_address,
+			struct shared_file_mapping_np *mappings,
+			unsigned int mappings_count);
 extern kern_return_t vm_shared_region_map_file(
 	struct vm_shared_region	*shared_region,
 	unsigned int		mappings_count,
 	struct shared_file_mapping_np *mappings,
 	memory_object_control_t	file_control,
 	memory_object_size_t	file_size,
-	void			*root_dir);
-
+	void			*root_dir,
+	struct shared_file_mapping_np *mapping_to_slide);
+extern kern_return_t vm_shared_region_sliding_valid(uint32_t slide);
+extern kern_return_t vm_shared_region_slide_sanity_check(void);
+extern kern_return_t vm_shared_region_slide_init(mach_vm_size_t slide_info_size,
+		mach_vm_offset_t start,
+		mach_vm_size_t size,
+		uint32_t slide,
+		memory_object_control_t);
+extern void* vm_shared_region_get_slide_info(void);
+extern void* vm_shared_region_get_slide_info_entry(void);
+extern kern_return_t vm_shared_region_slide(
+	vm_offset_t	vaddr, 
+	uint32_t pageIndex);
 extern void vm_commpage_init(void);
 extern kern_return_t vm_commpage_enter(
 	struct _vm_map		*map,

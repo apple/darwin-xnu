@@ -203,4 +203,8 @@ routine memory_object_map(
 routine memory_object_last_unmap(
 		memory_object           : memory_object_t);
 
+routine	memory_object_data_reclaim(
+		memory_object		: memory_object_t;
+		reclaim_backing_store	: boolean_t);
+
 /* vim: set ft=c : */

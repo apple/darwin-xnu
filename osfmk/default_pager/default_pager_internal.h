@@ -87,11 +87,13 @@
 
 #define MACH_PORT_FACE mach_port_t
 
-#if 0
-#ifndef	USE_PRECIOUS
-#define	USE_PRECIOUS	TRUE
+#if CONFIG_FREEZE
+#define	RECLAIM_SWAP	1
+#else
+#define	RECLAIM_SWAP	0
 #endif
-#endif
+
+#define	USE_PRECIOUS	0
 
 #ifdef	USER_PAGER
 #define UP(stuff)	stuff
@@ -737,6 +739,9 @@ extern boolean_t	bs_add_device(char *,
 				      MACH_PORT_FACE);
 extern vstruct_t	ps_vstruct_create(dp_size_t);
 extern void		ps_vstruct_dealloc(vstruct_t);
+extern void		ps_vstruct_reclaim(vstruct_t,
+					   boolean_t,
+					   boolean_t);
 extern kern_return_t	pvs_cluster_read(vstruct_t,
 					 dp_offset_t,
 					 dp_size_t,

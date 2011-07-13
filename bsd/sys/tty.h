@@ -220,6 +220,8 @@ struct clist;
 #define	TS_DSR_OFLOW	0x800000	/* For CDSR_OFLOW. */
 #endif
 
+#define	TS_IOCTL_NOT_OK	0x1000000	/* Workaround <rdar://....> */
+
 
 /* Character type information. */
 #define	ORDINARY	0

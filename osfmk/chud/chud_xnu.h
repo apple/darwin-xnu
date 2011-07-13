@@ -71,7 +71,6 @@ extern kern_return_t chudxnu_unbind_thread(thread_t thread, int options);
 
 extern kern_return_t chudxnu_thread_get_state(thread_t thread, thread_flavor_t flavor, thread_state_t tstate, mach_msg_type_number_t *count, boolean_t user_only);
 extern kern_return_t chudxnu_thread_set_state(thread_t thread, thread_flavor_t flavor, thread_state_t tstate, mach_msg_type_number_t count, boolean_t user_only);
-extern kern_return_t chudxnu_thread_user_state_available(thread_t thread);
 
 extern kern_return_t chudxnu_thread_get_callstack64(thread_t thread, uint64_t *callStack, mach_msg_type_number_t *count, boolean_t user_only);
 
@@ -84,11 +83,21 @@ extern kern_return_t chudxnu_free_thread_list(thread_array_t *thread_list, mach_
 
 extern kern_return_t chudxnu_thread_info(  thread_t thread, thread_flavor_t flavor, thread_info_t thread_info_out, mach_msg_type_number_t *thread_info_count);
 
-extern kern_return_t chudxnu_thread_last_context_switch(thread_t thread, uint64_t *timestamp);
-
 extern boolean_t chudxnu_thread_set_marked(thread_t thread, boolean_t marked);
 extern boolean_t chudxnu_thread_get_marked(thread_t thread);
 extern boolean_t chudxnu_thread_get_idle(thread_t thread);
+
+enum {
+	CHUDXNU_TS_RUNNING = 0x1,
+	CHUDXNU_TS_RUNNABLE = 0x2,
+	CHUDXNU_TS_WAIT = 0x4,
+	CHUDXNU_TS_UNINT = 0x8,
+	CHUDXNU_TS_SUSP = 0x10,
+	CHUDXNU_TS_TERMINATE = 0x20,
+	CHUDXNU_TS_IDLE = 0x40
+};
+
+extern int chudxnu_thread_get_scheduler_state(thread_t thread);
 
 #if 0
 #pragma mark **** memory ****
@@ -114,9 +123,7 @@ extern int chudxnu_cpu_number(void);
 
 extern kern_return_t chudxnu_enable_cpu(int cpu, boolean_t enable);
 
-extern boolean_t chudxnu_get_interrupts_enabled(void);
 extern boolean_t chudxnu_set_interrupts_enabled(boolean_t enable);
-extern boolean_t chudxnu_at_interrupt_context(void);
 extern void chudxnu_cause_interrupt(void);
 
 extern void chudxnu_enable_preemption(void);
@@ -246,15 +253,9 @@ extern kern_return_t chudxnu_set_shadowed_spr64(int cpu, int spr, uint64_t val);
 extern kern_return_t chudxnu_enable_cpu_nap(int cpu, boolean_t enable);
 extern boolean_t chudxnu_cpu_nap_enabled(int cpu);
 
-extern uint32_t chudxnu_get_orig_cpu_l2cr(int cpu);
-extern uint32_t chudxnu_get_orig_cpu_l3cr(int cpu);
-
 extern kern_return_t chudxnu_read_spr(int cpu, int spr, uint32_t *val_p);
 extern kern_return_t chudxnu_read_spr64(int cpu, int spr, uint64_t *val_p);
 extern kern_return_t chudxnu_write_spr(int cpu, int spr, uint32_t val);
 extern kern_return_t chudxnu_write_spr64(int cpu, int spr, uint64_t val);
-
-extern void chudxnu_flush_caches(void);
-extern void chudxnu_enable_caches(boolean_t enable);
 
 #endif /* _CHUD_XNU_H_ */

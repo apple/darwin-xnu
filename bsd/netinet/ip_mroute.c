@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -131,12 +131,12 @@ int (*ip_mforward)(struct ip *, struct ifnet *, struct mbuf *,
 		   struct ip_moptions *) = _ip_mforward;
 
 int
-_mrt_ioctl(__unused int req, __unused caddr_t data, __unused struct proc *p)
+_mrt_ioctl(__unused u_long req, __unused caddr_t data, __unused struct proc *p)
 {
 	return EOPNOTSUPP;
 }
 
-int (*mrt_ioctl)(int, caddr_t, struct proc *) = _mrt_ioctl;
+int (*mrt_ioctl)(u_long, caddr_t, struct proc *) = _mrt_ioctl;
 
 void
 rsvp_input(struct mbuf *m, int iphlen)		/* XXX must fixup manually */
@@ -293,7 +293,7 @@ static int	X_ip_mrouter_done(void);
 static int	X_ip_mrouter_get(struct socket *so, struct sockopt *m);
 static int	X_ip_mrouter_set(struct socket *so, struct sockopt *m);
 static int	X_legal_vif_num(int vif);
-static int	X_mrt_ioctl(int cmd, caddr_t data);
+static int	X_mrt_ioctl(u_long cmd, caddr_t data);
 
 static int get_sg_cnt(struct sioc_sg_req *);
 static int get_vif_cnt(struct sioc_vif_req *);
@@ -493,7 +493,7 @@ int (*ip_mrouter_get)(struct socket *, struct sockopt *) = X_ip_mrouter_get;
  * Handle ioctl commands to obtain information from the cache
  */
 static int
-X_mrt_ioctl(int cmd, caddr_t data)
+X_mrt_ioctl(u_long cmd, caddr_t data)
 {
     int error = 0;
 
@@ -512,7 +512,7 @@ X_mrt_ioctl(int cmd, caddr_t data)
 }
 
 #if !defined(MROUTE_LKM) || !MROUTE_LKM
-int (*mrt_ioctl)(int, caddr_t) = X_mrt_ioctl;
+int (*mrt_ioctl)(u_long, caddr_t) = X_mrt_ioctl;
 #endif
 
 /*
@@ -695,7 +695,7 @@ add_vif(struct vifctl *vifcp)
     ifa = ifa_ifwithaddr((struct sockaddr *)&sin);
     if (ifa == 0) return EADDRNOTAVAIL;
     ifp = ifa->ifa_ifp;
-    ifafree(ifa);
+    IFA_REMREF(ifa);
     ifa = NULL;
 
     if (vifcp->vifc_flags & VIFF_TUNNEL) {
@@ -1099,7 +1099,10 @@ X_ip_mforward(struct ip *ip, struct ifnet *ifp, struct mbuf *m,
 	return 1;
     }
 
+    if (imo != NULL)
+	IMO_LOCK(imo);
     if ((imo) && ((vifi = imo->imo_multicast_vif) < numvifs)) {
+	IMO_UNLOCK(imo);
 	if (ip->ip_ttl < 255)
 		ip->ip_ttl++;	/* compensate for -1 in *_send routines */
 	if (rsvpdebug && ip->ip_p == IPPROTO_RSVP) {
@@ -1110,6 +1113,8 @@ X_ip_mforward(struct ip *ip, struct ifnet *ifp, struct mbuf *m,
 		vifp->v_ifp->if_name, vifp->v_ifp->if_unit);
 	}
 	return (ip_mdq(m, ifp, NULL, vifi));
+    } else if (imo != NULL) {
+	IMO_UNLOCK(imo);
     }
     if (rsvpdebug && ip->ip_p == IPPROTO_RSVP) {
 	printf("Warning: IPPROTO_RSVP from %x to %x without vif option\n",
@@ -1807,7 +1812,6 @@ tbf_dq_sel(struct vif *vifp, struct ip *ip)
 static void
 tbf_send_packet(struct vif *vifp, struct mbuf *m)
 {
-    struct ip_moptions imo;
     int error;
     static struct route ro;
 
@@ -1816,10 +1820,18 @@ tbf_send_packet(struct vif *vifp, struct mbuf *m)
 	ip_output(m, (struct mbuf *)0, &vifp->v_route,
 		  IP_FORWARDING, (struct ip_moptions *)0, NULL);
     } else {
-	imo.imo_multicast_ifp  = vifp->v_ifp;
-	imo.imo_multicast_ttl  = mtod(m, struct ip *)->ip_ttl - 1;
-	imo.imo_multicast_loop = 1;
-	imo.imo_multicast_vif  = -1;
+	struct ip_moptions *imo;
+
+	imo = ip_allocmoptions(M_DONTWAIT);
+	if (imo == NULL) {
+		error = ENOMEM;
+		goto done;
+	}
+
+	imo->imo_multicast_ifp  = vifp->v_ifp;
+	imo->imo_multicast_ttl  = mtod(m, struct ip *)->ip_ttl - 1;
+	imo->imo_multicast_loop = 1;
+	imo->imo_multicast_vif  = -1;
 
 	/*
 	 * Re-entrancy should not be a problem here, because
@@ -1828,8 +1840,10 @@ tbf_send_packet(struct vif *vifp, struct mbuf *m)
 	 * the loopback interface, thus preventing looping.
 	 */
 	error = ip_output(m, (struct mbuf *)0, &ro,
-			  IP_FORWARDING, &imo, NULL);
+			  IP_FORWARDING, imo, NULL);
 
+	IMO_REMREF(imo);
+done:
 	if (mrtdebug & DEBUG_XMIT)
 	    log(LOG_DEBUG, "phyint_send on vif %d err %d\n", 
 		vifp - viftable, error);

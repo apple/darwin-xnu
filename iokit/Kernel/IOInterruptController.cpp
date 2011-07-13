@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -25,11 +25,6 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-
-
-#if __ppc__
-#include <ppc/proc_reg.h> 
-#endif
 
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
@@ -295,17 +290,10 @@ IOReturn IOInterruptController::enableInterrupt(IOService *nub, int source)
   
   if (vector->interruptDisabledSoft) {
     vector->interruptDisabledSoft = 0;
-#if __ppc__
-    sync();
-    isync();
-#endif
     
     if (!getPlatform()->atInterruptLevel()) {
       while (vector->interruptActive)
 	{}
-#if __ppc__
-      isync();
-#endif
     }
     if (vector->interruptDisabledHard) {
       vector->interruptDisabledHard = 0;
@@ -330,17 +318,10 @@ IOReturn IOInterruptController::disableInterrupt(IOService *nub, int source)
   vector = &vectors[vectorNumber];
   
   vector->interruptDisabledSoft = 1;
-#if __ppc__
-  sync();
-  isync();
-#endif
   
   if (!getPlatform()->atInterruptLevel()) {
     while (vector->interruptActive)
 	{}
-#if __ppc__
-    isync();
-#endif
   }
   
   return kIOReturnSuccess;
@@ -663,10 +644,6 @@ IOReturn IOSharedInterruptController::disableInterrupt(IOService *nub,
   interruptState = IOSimpleLockLockDisableInterrupt(controllerLock); 
   if (!vector->interruptDisabledSoft) {
     vector->interruptDisabledSoft = 1;
-#if __ppc__
-    sync();
-    isync();
-#endif
     vectorsEnabled--;
   }
   IOSimpleLockUnlockEnableInterrupt(controllerLock, interruptState);
@@ -674,9 +651,6 @@ IOReturn IOSharedInterruptController::disableInterrupt(IOService *nub,
   if (!getPlatform()->atInterruptLevel()) {
     while (vector->interruptActive)
 	{}
-#if __ppc__
-    isync();
-#endif
   }
   
   return kIOReturnSuccess;
@@ -699,48 +673,26 @@ IOReturn IOSharedInterruptController::handleInterrupt(void * /*refCon*/,
     vector = &vectors[vectorNumber];
     
     vector->interruptActive = 1;
-#if __ppc__
-    sync();
-    isync();
-#endif
-    if (!vector->interruptDisabledSoft) {
-#if __ppc__
-      isync();
-#endif
-      
-      // Call the handler if it exists.
-      if (vector->interruptRegistered) {
-      
-		  bool		trace		= (gIOKitTrace & kIOTraceInterrupts) ? true : false;
-		  bool		timeHandler	= gIOInterruptThresholdNS ? true : false;
-		  uint64_t	startTime	= 0;
-		  uint64_t	endTime		= 0;
+	if (!vector->interruptDisabledSoft) {
+	  
+	  // Call the handler if it exists.
+	  if (vector->interruptRegistered) {
+		  
+		  bool	trace = (gIOKitTrace & kIOTraceInterrupts) ? true : false;
 		  
 		  if (trace)
 			  IOTimeStampStartConstant(IODBG_INTC(IOINTC_HANDLER),
 									   (uintptr_t) vectorNumber, (uintptr_t) vector->handler, (uintptr_t)vector->target);
 		  
-		  if (timeHandler)
-			  startTime = mach_absolute_time();
-		  
 		  // Call handler.
 		  vector->handler(vector->target, vector->refCon, vector->nub, vector->source);
-
-		  if (timeHandler)
-		  {
-			  endTime = mach_absolute_time();
-			  if ((endTime - startTime) > gIOInterruptThresholdNS)
-				  panic("IOSIC::handleInterrupt: interrupt exceeded threshold, handlerTime = %qd, vectorNumber = %d, handler = %p, target = %p\n",
-						endTime - startTime, (int)vectorNumber, vector->handler, vector->target);
-		  }
 		  
 		  if (trace)
 			  IOTimeStampEndConstant(IODBG_INTC(IOINTC_HANDLER),
 									 (uintptr_t) vectorNumber, (uintptr_t) vector->handler, (uintptr_t)vector->target);
 		  
-      }
-      
-    }
+		}
+	}
     
     vector->interruptActive = 0;
   }

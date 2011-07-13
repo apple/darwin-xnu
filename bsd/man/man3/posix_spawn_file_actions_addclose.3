@@ -1,5 +1,5 @@
 .\"
-.\" Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+.\" Copyright (c) 2000-2010 Apple Inc. All rights reserved.
 .\"
 .\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
 .\" 
@@ -27,7 +27,7 @@
 .\"
 .\"     @(#)posix_spawn_file_actions_addclose.3
 .
-.Dd August 22, 2007
+.Dd November 2, 2010
 .Dt POSIX_SPAWN_FILE_ACTIONS_ADDCLOSE 3
 .Os "Mac OS X"
 .Sh NAME
@@ -55,6 +55,11 @@
 .Fa "posix_spawn_file_actions_t *file_actions"
 .Fa "int filedes"
 .Fa "int newfiledes"
+.Fc
+.Ft int
+.Fo posix_spawn_file_actions_addinherit_np
+.Fa "posix_spawn_file_actions_t *file_actions"
+.Fa "int filedes"
 .Fc
 .Sh DESCRIPTION
 The
@@ -115,6 +120,42 @@ is created as if
 had been called on
 .Em filedes
 prior to the new child process starting execution.
+.Pp
+The
+.Fn posix_spawn_file_actions_addinherit_np
+function adds an abstract inheritance operation to the
+list of operations associated with the object referenced by
+.Em file_actions ,
+for subsequent use in a call to
+.Xr posix_spawn 2
+or
+.Xr posix_spawnp 2 .
+The pre-existing descriptor referred to by
+.Em filedes
+is marked for inheritance into the new process image, and the
+.Em FD_CLOEXEC
+flag is cleared from the file descriptor in the new process image.
+.Pp
+Normally, for
+.Xr posix_spawn 2
+and
+.Xr posix_spawnp 2 ,
+all file descriptors are inherited from the parent process
+into the spawned process, except for those explicitly
+marked as close-on-exec.  However if the flag
+.Em POSIX_SPAWN_CLOEXEC_DEFAULT
+is set, then during the spawn operation, all pre-existing
+file descriptors in the parent process are treated as if they
+had been marked close-on-exec i.e. none of them are automatically
+inherited.  See
+.Xr posix_spawnattr_setflags 3 .
+Only file descriptors explicitly manipulated via 
+.Em file_actions
+are made available in the spawned process. In that case,
+.Fn posix_spawn_file_actions_addinherit_np
+can be used to make specific pre-existing file
+descriptors from the parent process be
+available in the spawned process.
 .Sh RETURN VALUES
 On success, these functions return 0; on failure they return an error
 number from
@@ -127,7 +168,7 @@ These functions may fail if:
 The value specified by
 .Fa filedes
 is negative or would cause the process to exceed the maximum number of
-open files it is allowed..
+open files it is allowed.
 .\" ==========
 .It Bq Er EINVAL
 The value of
@@ -135,7 +176,7 @@ The value of
 is invalid.
 .\" ==========
 .It Bq Er ENOMEM
-Insufficient memory was available eo add to the
+Insufficient memory was available to add the new action to
 .Fa file_actions .
 .El
 .Sh SEE ALSO
@@ -143,6 +184,7 @@ Insufficient memory was available eo add to the
 .Xr posix_spawnp 2 ,
 .Xr posix_spawn_file_actions_init 3 ,
 .Xr posix_spawn_file_actions_destroy 3 ,
+.Xr posix_spawnattr_setflags 3 .
 .Sh STANDARDS
 .St -susv3 [SPN]
 .Sh HISTORY

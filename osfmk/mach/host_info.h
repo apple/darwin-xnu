@@ -184,6 +184,7 @@ typedef struct host_priority_info	*host_priority_info_t;
 
 /* host_statistics64() */
 #define HOST_VM_INFO64		4	/* 64-bit virtual memory stats */
+#define HOST_EXTMOD_INFO64	5	/* External modification stats */
 
 
 struct host_load_info {
@@ -204,6 +205,13 @@ typedef struct host_load_info	*host_load_info_t;
 /* size of the latest version of the structure */
 #define HOST_VM_INFO64_LATEST_COUNT HOST_VM_INFO64_COUNT
 
+/* in <mach/vm_statistics.h> */
+/* vm_extmod_statistics */
+#define HOST_EXTMOD_INFO64_COUNT ((mach_msg_type_number_t) \
+	    (sizeof(vm_extmod_statistics_data_t)/sizeof(integer_t)))
+
+/* size of the latest version of the structure */
+#define HOST_EXTMOD_INFO64_LATEST_COUNT HOST_EXTMOD_INFO64_COUNT
 
 /* vm_statistics */
 #define	HOST_VM_INFO_COUNT ((mach_msg_type_number_t) \
@@ -228,5 +236,42 @@ typedef struct host_cpu_load_info	host_cpu_load_info_data_t;
 typedef struct host_cpu_load_info	*host_cpu_load_info_t;
 #define HOST_CPU_LOAD_INFO_COUNT ((mach_msg_type_number_t) \
 		(sizeof (host_cpu_load_info_data_t) / sizeof (integer_t)))
+
+#ifdef PRIVATE
+/*
+ * CPU Statistics information
+ */
+struct _processor_statistics_np  {
+	int32_t			ps_cpuid;
+
+	uint32_t		ps_csw_count;
+	uint32_t		ps_preempt_count;
+	uint32_t		ps_preempted_rt_count;
+	uint32_t		ps_preempted_by_rt_count;
+
+	uint32_t		ps_rt_sched_count;
+
+	uint32_t		ps_interrupt_count;
+	uint32_t		ps_ipi_count;
+	uint32_t		ps_timer_pop_count;
+	
+	uint64_t		ps_runq_count_sum __attribute((aligned(8)));
+
+	uint32_t		ps_idle_transitions;
+
+};
+
+#endif /* PRIVATE */
+
+#ifdef KERNEL_PRIVATE
+
+extern kern_return_t	set_sched_stats_active(
+					boolean_t active);
+
+extern kern_return_t	get_sched_statistics( 
+					struct _processor_statistics_np *out, 
+					uint32_t *count);
+#endif  /* KERNEL_PRIVATE */
+
 
 #endif	/* _MACH_HOST_INFO_H_ */

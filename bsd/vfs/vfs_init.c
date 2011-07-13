@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -261,6 +261,12 @@ lck_grp_t * vnode_lck_grp;
 lck_grp_attr_t * vnode_lck_grp_attr;
 lck_attr_t * vnode_lck_attr;
 
+#if CONFIG_TRIGGERS
+/* vars for vnode trigger resolver */
+lck_grp_t * trigger_vnode_lck_grp;
+lck_grp_attr_t * trigger_vnode_lck_grp_attr;
+lck_attr_t * trigger_vnode_lck_attr;
+#endif
 
 /* vars for vnode list lock */
 lck_grp_t * vnode_list_lck_grp;
@@ -289,6 +295,9 @@ lck_mtx_t * mnt_list_mtx_lock;
 lck_mtx_t *pkg_extensions_lck;
 
 struct mount * dead_mountp;
+
+extern void nspace_handler_init(void);
+
 /*
  * Initialize the vnode structures and initialize each file system type.
  */
@@ -323,6 +332,12 @@ vfsinit(void)
 
 	/* Allocate vnode lock attribute */
 	vnode_lck_attr = lck_attr_alloc_init();
+
+#if CONFIG_TRIGGERS
+	trigger_vnode_lck_grp_attr = lck_grp_attr_alloc_init();
+	trigger_vnode_lck_grp = lck_grp_alloc_init("trigger_vnode", trigger_vnode_lck_grp_attr);
+	trigger_vnode_lck_attr = lck_attr_alloc_init();
+#endif
 
 	/* Allocate fs config lock group attribute and group */
 	fsconf_lck_grp_attr= lck_grp_attr_alloc_init();
@@ -373,6 +388,7 @@ vfsinit(void)
 	 */
 	journal_init();
 #endif 
+	nspace_handler_init();
 
 	/*
 	 * Build vnode operation vectors.

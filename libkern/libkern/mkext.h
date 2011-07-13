@@ -149,6 +149,7 @@ typedef struct mkext_basic_header {
 #define kMKEXTInfoDictionariesKey             "_MKEXTInfoDictionaries"
 
 #define kMKEXTBundlePathKey                   "_MKEXTBundlePath"
+#define kMKEXTExecutableRelativePathKey       "_MKEXTExecutableRelativePath"
 #define kMKEXTExecutableKey                   "_MKEXTExecutable"
 
 #define kMKEXTLoadRequestKey                  "_MKEXTLoadRequest"

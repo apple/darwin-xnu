@@ -32,10 +32,6 @@
 #include <IOKit/IOMessage.h>
 #include <IOKit/IOReturn.h>
 
-#ifdef __ppc__
-#include <IOKit/pwr_mgt/IOPMDeprecated.h>
-#endif
-
 /*! @header IOPM.h
     @abstract Defines power management constants and keys used by both in-kernel and user space power management.
     @discussion IOPM.h defines a range of power management constants used in several in-kernel and user space APIs. Most significantly, the IOPMPowerFlags used to specify the fields of an IOPMPowerState struct are defined here.
@@ -80,7 +76,7 @@ enum {
 
     Useful only as a Capability.
     
-    @constant kIOPMSleepCapability 
+    @constant kIOPMSleepCapability
     Used only by certain IOKit Families (USB). Not defined or used by generic Power Management. Read your family documentation to see if you should define a powerstate using these capabilities.
     
     @constant kIOPMRestartCapability
@@ -91,6 +87,9 @@ enum {
 
     @constant kIOPMRestart
     Used only by certain IOKit Families (USB). Not defined or used by generic Power Management. Read your family documentation to see if you should define a powerstate using these capabilities.
+
+    @constant kIOPMInitialDeviceState
+    Indicates the initial power state for the device. If <code>initialPowerStateForDomainState()</code> returns a power state with this flag set in the capability field, then the initial power change is performed without calling the driver's <code>setPowerState()</code>.
 */
 typedef unsigned long IOPMPowerFlags;
 enum {
@@ -101,7 +100,8 @@ enum {
     kIOPMSleepCapability            = 0x00000004,
     kIOPMRestartCapability          = 0x00000080,
     kIOPMSleep                      = 0x00000001,
-    kIOPMRestart                    = 0x00000080
+    kIOPMRestart                    = 0x00000080,
+    kIOPMInitialDeviceState         = 0x00000100
 };
 
 /*
@@ -120,7 +120,6 @@ enum {
     kIOPMChildClamp2                = 0x0200,
     kIOPMNotPowerManaged            = 0x0800
 };
-
 
 /*
  * Deprecated IOPMPowerFlags
@@ -221,7 +220,7 @@ enum {
  * 
  * See IOPMrootDomain notification kIOPMMessageSleepWakeUUIDChange
  */
-#define kIOPMSleepWakeUUIDKey               "SleepWakeUUID"
+ #define kIOPMSleepWakeUUIDKey              "SleepWakeUUID"
 
 /* kIOPMDeepSleepEnabledKey
  * Indicates the Deep Sleep enable state.
@@ -239,11 +238,14 @@ enum {
  */
 #define kIOPMDeepSleepDelayKey              "Standby Delay"
 
-/* kIOPMLowBatteryWakeThresholdKey
- * Key refers to a CFNumberRef that represents the percentage of battery
- * remaining charge that will trigger a system wake followed by Deep Sleep.
+/* kIOPMDestroyFVKeyOnStandbyKey
+ * Specifies if FileVault key can be stored when going to standby mode
+ * It has a boolean value,
+ *  true        == Destroy FV key when going to standby mode
+ *  false       == Retain FV key when going to standby mode
+ *  not present == Retain FV key when going to standby mode
  */
-#define kIOPMLowBatteryWakeThresholdKey     "LowBatteryWakeThreshold"
+#define kIOPMDestroyFVKeyOnStandbyKey            "DestroyFVKeyOnStandby"
 
 /*******************************************************************************
  *
@@ -276,8 +278,16 @@ enum {
      */
     kIOPMDriverAssertionExternalMediaMountedBit     = 0x10,
 
+    /*! kIOPMDriverAssertionReservedBit5
+     * Reserved for Thunderbolt.
+     */
     kIOPMDriverAssertionReservedBit5                = 0x20,
-    kIOPMDriverAssertionReservedBit6                = 0x40,
+
+    /*! kIOPMDriverAssertionPreventDisplaySleepBit
+     * When set, the display should remain powered on while the system's awake.
+     */
+    kIOPMDriverAssertionPreventDisplaySleepBit      = 0x40,
+
     kIOPMDriverAssertionReservedBit7                = 0x80
 };
 
@@ -406,6 +416,7 @@ enum {
  * These commands are issued from system drivers only:
  *      ApplePMU, AppleSMU, IOGraphics, AppleACPIFamily
  *
+ * TODO: deprecate kIOPMAllowSleep and kIOPMPreventSleep
  ******************************************************************************/
 enum {
   kIOPMSleepNow                 = (1<<0),  // put machine to sleep now
@@ -500,6 +511,8 @@ enum {
 #define kIOPMPSCapacityEstimatedKey	                "CapacityEstimated"
 #define kIOPMPSBatteryChargeStatusKey               "ChargeStatus"
 #define kIOPMPSBatteryTemperatureKey                "Temperature"
+#define kIOPMPSAdapterDetailsKey		    "AdapterDetails"
+#define kIOPMPSChargerConfigurationKey		    "ChargerConfiguration"
 
 // kIOPMPSBatteryChargeStatusKey may have one of the following values, or may have
 // no value. If kIOPMBatteryChargeStatusKey has a NULL value (or no value) associated with it
@@ -507,6 +520,7 @@ enum {
 // then the charge may have been interrupted.
 #define kIOPMBatteryChargeStatusTooHot              "HighTemperature"
 #define kIOPMBatteryChargeStatusTooCold             "LowTemperature"
+#define kIOPMBatteryChargeStatusTooHotOrCold	    "HighOrLowTemperature"
 #define kIOPMBatteryChargeStatusGradient            "BatteryTemperatureGradient"
 
 // Definitions for battery location, in case of multiple batteries.
@@ -525,6 +539,16 @@ enum {
     kIOPMFairValue      = 2,
     kIOPMGoodValue      = 3
 };
+
+// Keys for kIOPMPSAdapterDetailsKey dictionary
+#define kIOPMPSAdapterDetailsIDKey		    "AdapterID"
+#define kIOPMPSAdapterDetailsWattsKey		    "Watts"
+#define kIOPMPSAdapterDetailsRevisionKey	    "AdapterRevision"
+#define kIOPMPSAdapterDetailsSerialNumberKey	    "SerialNumber"
+#define kIOPMPSAdapterDetailsFamilyKey		    "FamilyCode"
+#define kIOPMPSAdapterDetailsAmperageKey	    "Amperage"
+#define kIOPMPSAdapterDetailsDescriptionKey	    "Description"
+#define kIOPMPSAdapterDetailsPMUConfigurationKey    "PMUConfiguration"
 
 // Battery's time remaining estimate is invalid this long (seconds) after a wake
 #define kIOPMPSInvalidWakeSecondsKey           "BatteryInvalidWakeSeconds"
@@ -688,7 +712,6 @@ enum {
     kIOBatteryChargerConnect    = (1 << 0)
 };
 
-
 // Private power management message indicating battery data has changed
 // Indicates new data resides in the IORegistry
 #define kIOPMMessageBatteryStatusHasChanged         iokit_family_msg(sub_iokit_pmu, 0x100)
@@ -714,7 +737,6 @@ enum {
   kIOPMClamshellStateOnWake = (1<<10)     // used only by Platform Expert
 };
 
-
 // **********************************************
 // Internal power management data structures
 // **********************************************
@@ -731,7 +753,7 @@ enum {
     kIOPMSuperclassPolicy1
 };
 
-struct stateChangeNote{
+struct stateChangeNote {
     IOPMPowerFlags    stateFlags;
     unsigned long    stateNum;
     void *         powerRef;
@@ -748,5 +770,54 @@ typedef struct IOPowerStateChangeNotification IOPowerStateChangeNotification;
 typedef IOPowerStateChangeNotification sleepWakeNote;
 #endif /* KERNEL && __cplusplus */
 
-#endif /* ! _IOKIT_IOPM_H */
+/*! @struct IOPMSystemCapabilityChangeParameters
+    @abstract A structure describing a system capability change.
+    @discussion A system capability change is a system level transition from a set
+        of system capabilities to a new set of system capabilities. Power management
+        sends a <code>kIOMessageSystemCapabilityChange</code> message and provides
+        this structure as the message data (by reference) to
+        <code>gIOPriorityPowerStateInterest</code> clients when system capability
+        changes.
+    @field notifyRef An identifier for this message notification. Clients with pending
+        I/O can signal completion by calling <code>allowPowerChange()</code> with this
+        value as the argument. Clients that are able to process the notification
+        synchronously should ignore this field.
+    @field maxWaitForReply A return value to the caller indicating the maximum time in
+        microseconds to wait for the <code>allowPowerChange()</code> call. The default
+        value is zero, which indicates the client processing has finished, and power
+        management should not wait for an <code>allowPowerChange()</code> call.
+    @field changeFlags Flags will be set to indicate whether the notification precedes
+        the capability change (<code>kIOPMSystemCapabilityWillChange</code>), or after
+        the capability change has occurred (<code>kIOPMSystemCapabilityDidChange</code>).
+    @field __reserved1 Set to zero.
+    @field fromCapabilities The system capabilities at the start of the transition.
+    @field toCapabilities The system capabilities at the end of the transition.
+    @field __reserved2 Set to zero.
+ */
+struct IOPMSystemCapabilityChangeParameters {
+    uint32_t    notifyRef;
+    uint32_t    maxWaitForReply;
+    uint32_t    changeFlags;
+    uint32_t    __reserved1;
+    uint32_t    fromCapabilities;
+    uint32_t    toCapabilities;
+    uint32_t    __reserved2[4];
+};
 
+/*! @enum IOPMSystemCapabilityChangeFlags
+    @constant kIOPMSystemCapabilityWillChange Indicates the system capability will change.
+    @constant kIOPMSystemCapabilityDidChange Indicates the system capability has changed.
+*/
+enum {
+    kIOPMSystemCapabilityWillChange = 0x01,
+    kIOPMSystemCapabilityDidChange  = 0x02
+};
+
+enum {
+    kIOPMSystemCapabilityCPU        = 0x01,
+    kIOPMSystemCapabilityGraphics   = 0x02,
+    kIOPMSystemCapabilityAudio      = 0x04,
+    kIOPMSystemCapabilityNetwork    = 0x08
+};
+
+#endif /* ! _IOKIT_IOPM_H */

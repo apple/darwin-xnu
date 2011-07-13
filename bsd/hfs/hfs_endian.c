@@ -49,13 +49,14 @@
  * The direction parameter must be kSwapBTNodeBigToHost or kSwapBTNodeHostToBig.
  * The kSwapBTNodeHeaderRecordOnly "direction" is not valid for these routines.
  */
-static int hfs_swap_HFSPlusBTInternalNode (BlockDescriptor *src, HFSCatalogNodeID fileID, enum HFSBTSwapDirection direction);
-static int hfs_swap_HFSBTInternalNode (BlockDescriptor *src, HFSCatalogNodeID fileID, enum HFSBTSwapDirection direction);
+int hfs_swap_HFSPlusBTInternalNode (BlockDescriptor *src, HFSCatalogNodeID fileID, enum HFSBTSwapDirection direction);
+int hfs_swap_HFSBTInternalNode (BlockDescriptor *src, HFSCatalogNodeID fileID, enum HFSBTSwapDirection direction);
+void hfs_swap_HFSPlusForkData (HFSPlusForkData *src);
 
 /*
  * hfs_swap_HFSPlusForkData
  */
-static void
+void
 hfs_swap_HFSPlusForkData (
     HFSPlusForkData *src
 )
@@ -160,7 +161,7 @@ hfs_swap_BTNode (
 		/*
 		 * Check srcDesc->height.  Don't swap it because it's only one byte.
 		 */
-		if (srcDesc->height > btcb->treeDepth) {
+		if (srcDesc->height > kMaxTreeDepth) {
 			printf("hfs_swap_BTNode: invalid node height (%d)\n", srcDesc->height);
 			error = fsBTInvalidHeaderErr;
 			goto fail;
@@ -314,7 +315,7 @@ hfs_swap_BTNode (
 		/* 
 		 * Check srcDesc->height.  Don't swap it because it's only one byte.
 		 */
-		if (srcDesc->height > btcb->treeDepth) {
+		if (srcDesc->height > kMaxTreeDepth) {
 			panic("hfs_UNswap_BTNode: invalid node height (%d)\n", srcDesc->height);
 			error = fsBTInvalidHeaderErr;
 			goto fail;
@@ -389,7 +390,7 @@ fail:
     return (error);
 }
 
-static int
+int
 hfs_swap_HFSPlusBTInternalNode (
     BlockDescriptor *src,
     HFSCatalogNodeID fileID,
@@ -925,7 +926,7 @@ hfs_swap_HFSPlusBTInternalNode (
     return (0);
 }
 
-static int
+int
 hfs_swap_HFSBTInternalNode (
     BlockDescriptor *src,
     HFSCatalogNodeID fileID,

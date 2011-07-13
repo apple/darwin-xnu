@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -47,6 +47,11 @@ __BEGIN_DECLS
 #include <kdebug.h>
 #endif /* KERNEL_BUILD */
 
+#ifdef	XNU_KERNEL_PRIVATE
+#include <stdint.h>
+#include <mach/branch_predicates.h>
+#endif
+
 /*
  * types of faults that vm_fault handles
  * and creates trace entries for
@@ -77,21 +82,22 @@ __BEGIN_DECLS
 
 
 /* The Kernel Debug Classes  */
-#define DBG_MACH			1
-#define DBG_NETWORK			2	
-#define DBG_FSYSTEM			3
-#define DBG_BSD				4
-#define DBG_IOKIT			5
-#define DBG_DRIVERS			6
-#define DBG_TRACE           7
+#define DBG_MACH		1
+#define DBG_NETWORK		2	
+#define DBG_FSYSTEM		3
+#define DBG_BSD			4
+#define DBG_IOKIT		5
+#define DBG_DRIVERS		6
+#define DBG_TRACE           	7
 #define DBG_DLIL	        8
 #define DBG_SECURITY		9
-#define DBG_MISC			20
-#define DBG_DYLD            31
-#define DBG_QT              32
-#define DBG_APPS            33
-#define DBG_LAUNCHD         34
-#define DBG_MIG				255
+#define DBG_CORESTORAGE		10
+#define DBG_MISC		20
+#define DBG_DYLD           	31
+#define DBG_QT              	32
+#define DBG_APPS            	33
+#define DBG_LAUNCHD         	34
+#define DBG_MIG			255
 
 /* **** The Kernel Debug Sub Classes for Mach (DBG_MACH) **** */
 #define	DBG_MACH_EXCP_KTRAP_x86	0x02	/* Kernel Traps on x86 */
@@ -114,6 +120,7 @@ __BEGIN_DECLS
 #define	DBG_MACH_MSGID_INVALID	0x50	/* Messages - invalid */
 #define DBG_MACH_LOCKS		0x60	/* new lock APIs */
 #define DBG_MACH_PMAP		0x70	/* pmap */
+#define DBG_MACH_MP		0x90	/* MP related */
 
 /* Codes for Scheduler (DBG_MACH_SCHED) */     
 #define MACH_SCHED              0x0     /* Scheduler */
@@ -127,6 +134,16 @@ __BEGIN_DECLS
 #define	MACH_DEMOTE             0x8	/* promotion undone */
 #define MACH_IDLE               0x9	/* processor idling */
 #define MACH_STACK_DEPTH        0xa	/* stack depth at switch */
+#define MACH_MOVED              0xb	/* did not use original scheduling decision */
+#define MACH_FAIRSHARE_ENTER    0xc	/* move to fairshare band */
+#define MACH_FAIRSHARE_EXIT     0xd	/* exit fairshare band */
+#define MACH_FAILSAFE		0xe	/* tripped fixed-pri/RT failsafe */
+#define	MACH_GET_URGENCY	0x14	/* Urgency queried by platform */
+#define	MACH_URGENCY		0x15	/* Urgency (RT/BG/NORMAL) communicated
+					 * to platform */
+#define	MACH_REDISPATCH		0x16	/* "next thread" thread redispatched */
+#define	MACH_REMOTE_AST		0x17	/* AST signal issued to remote processor */
+#define	MACH_SCHED_LPA_BROKEN	0x18	/* last_processor affinity broken in choose_processor */
 
 /* Codes for pmap (DBG_MACH_PMAP) */     
 #define PMAP__CREATE		0x0
@@ -176,30 +193,31 @@ __BEGIN_DECLS
 #define DBG_IOMCURS			5	/* Memory Cursor */
 #define DBG_IOMDESC			6	/* Memory Descriptors */
 #define DBG_IOPOWER			7	/* Power Managerment */
-#define DBG_IOSERVICE			8	/* Matching etc. */
+#define DBG_IOSERVICE		8	/* Matching etc. */
 
 /* **** 9-32 reserved for internal IOKit usage **** */
 
 #define DBG_IOSTORAGE		32	/* Storage layers */
 #define	DBG_IONETWORK		33	/* Network layers */
 #define	DBG_IOKEYBOARD		34	/* Keyboard */
-#define	DBG_IOHID			35	/* HID Devices */
-#define	DBG_IOAUDIO			36	/* Audio */
+#define	DBG_IOHID		35	/* HID Devices */
+#define	DBG_IOAUDIO		36	/* Audio */
 #define	DBG_IOSERIAL		37	/* Serial */
-#define	DBG_IOTTY			38	/* TTY layers */
-#define DBG_IOSAM			39	/* SCSI Architecture Model layers */
-#define DBG_IOPARALLELATA   40	/* Parallel ATA */
+#define	DBG_IOTTY		38	/* TTY layers */
+#define DBG_IOSAM		39	/* SCSI Architecture Model layers */
+#define DBG_IOPARALLELATA   	40	/* Parallel ATA */
 #define DBG_IOPARALLELSCSI	41	/* Parallel SCSI */
-#define DBG_IOSATA			42	/* Serial-ATA */
-#define DBG_IOSAS			43	/* SAS */
+#define DBG_IOSATA		42	/* Serial-ATA */
+#define DBG_IOSAS		43	/* SAS */
 #define DBG_IOFIBRECHANNEL	44	/* FiberChannel */
-#define DBG_IOUSB			45	/* USB */
+#define DBG_IOUSB		45	/* USB */
 #define DBG_IOBLUETOOTH		46	/* Bluetooth */
 #define DBG_IOFIREWIRE		47	/* FireWire */
 #define DBG_IOINFINIBAND	48	/* Infiniband */
-#define DBG_IOCPUPM			49	/* CPU Power Management */
+#define DBG_IOCPUPM		49	/* CPU Power Management */
 #define DBG_IOGRAPHICS		50	/* Graphics */
 #define DBG_HIBERNATE		51	/* hibernation related events */
+
 
 /* Backwards compatibility */
 #define	DBG_IOPOINTING		DBG_IOHID			/* OBSOLETE: Use DBG_IOHID instead */
@@ -223,7 +241,7 @@ __BEGIN_DECLS
 #define DBG_DRVFIREWIRE		16	/* FireWire */
 #define DBG_DRVINFINIBAND	17	/* Infiniband */
 #define DBG_DRVGRAPHICS		18  /* Graphics */
-#define DBG_DRVSD			19  /* Secure Digital */
+#define DBG_DRVSD		19 	/* Secure Digital */
 
 /* Backwards compatibility */
 #define	DBG_DRVPOINTING		DBG_DRVHID		/* OBSOLETE: Use DBG_DRVHID instead */
@@ -236,7 +254,7 @@ __BEGIN_DECLS
 #define DBG_DLIL_PR_FLT 4       /* DLIL Protocol Filter */
 #define DBG_DLIL_IF_FLT 5       /* DLIL Interface FIlter */
 
-/* The Kernel Debug Sub Classes for File System */
+/* The Kernel Debug Sub Classes for File System (DBG_FSYSTEM) */
 #define DBG_FSRW      1       /* reads and writes to the filesystem */
 #define DBG_DKRW      2       /* reads and writes to the disk */
 #define DBG_FSVN      3       /* vnode operations (inc. locking/unlocking) */
@@ -244,6 +262,7 @@ __BEGIN_DECLS
 #define DBG_JOURNAL   5       /* journaling operations */
 #define DBG_IOCTL     6       /* ioctl to the disk */
 #define DBG_BOOTCACHE 7       /* bootcache operations */
+#define DBG_HFS       8       /* HFS-specific events; see bsd/hfs/hfs_kdebug.h */
 
 /* The Kernel Debug Sub Classes for BSD */
 #define DBG_BSD_PROC		0x01	/* process/signals related */
@@ -256,10 +275,14 @@ __BEGIN_DECLS
 /* The Codes for BSD subcode class DBG_BSD_PROC */
 #define BSD_PROC_EXIT		1	/* process exit */
 #define BSD_PROC_FRCEXIT 	2	/* Kernel force termination */
+
 /* The Kernel Debug Sub Classes for DBG_TRACE */
 #define DBG_TRACE_DATA      0
 #define DBG_TRACE_STRING    1
 #define	DBG_TRACE_INFO	    2
+
+/* The Kernel Debug Sub Classes for DBG_CORESTORAGE */
+#define DBG_CS_IO	0
 
 /* The Kernel Debug Sub Classes for DBG_MISC */
 #define DBG_EVENT	0x10
@@ -274,6 +297,8 @@ __BEGIN_DECLS
 #define DKIO_ASYNC	0x04
 #define DKIO_META	0x08
 #define DKIO_PAGING	0x10
+#define DKIO_THROTTLE	0x20
+#define DKIO_PASSIVE	0x40
 
 /* Codes for Application Sub Classes */
 #define DBG_APP_SAMBA	128
@@ -343,25 +368,38 @@ extern unsigned int kdebug_enable;
 #define KDEBUG_ENABLE_CHUD    0x4
 
 #if	(!defined(NO_KDEBUG))
-
+#ifdef	XNU_KERNEL_PRIVATE
 #define KERNEL_DEBUG_CONSTANT(x,a,b,c,d,e)				\
 do {									\
-    if (kdebug_enable)							\
+	if (__improbable(kdebug_enable))					\
         kernel_debug(x,(uintptr_t)a,(uintptr_t)b,(uintptr_t)c,		\
 		       (uintptr_t)d,(uintptr_t)e);			\
 } while(0)
 
 #define KERNEL_DEBUG_CONSTANT1(x,a,b,c,d,e)				\
 do {									\
-    if (kdebug_enable)							\
+	if (__improbable(kdebug_enable))					\
         kernel_debug1(x,(uintptr_t)a,(uintptr_t)b,(uintptr_t)c,		\
 			(uintptr_t)d,(uintptr_t)e);			\
 } while(0)
+#else	/* XNU_KERNEL_PRIVATE */
+#define KERNEL_DEBUG_CONSTANT(x,a,b,c,d,e)				\
+do {									\
+	if (kdebug_enable)						\
+        kernel_debug(x,(uintptr_t)a,(uintptr_t)b,(uintptr_t)c,		\
+		       (uintptr_t)d,(uintptr_t)e);			\
+} while(0)
 
-#else
-
-#define KERNEL_DEBUG_CONSTANT(x,a,b,c,d,e)
-#define KERNEL_DEBUG_CONSTANT1(x,a,b,c,d,e)
+#define KERNEL_DEBUG_CONSTANT1(x,a,b,c,d,e)				\
+do {									\
+	if (kdebug_enable)						\
+        kernel_debug1(x,(uintptr_t)a,(uintptr_t)b,(uintptr_t)c,		\
+			(uintptr_t)d,(uintptr_t)e);			\
+} while(0)
+#endif /* XNU_KERNEL_PRIVATE */
+#else /*!NO_KDEBUG */
+#define KERNEL_DEBUG_CONSTANT(x,a,b,c,d,e) do { } while(0)
+#define KERNEL_DEBUG_CONSTANT1(x,a,b,c,d,e) do { } while(0)
 
 #define __kdebug_constant_only __unused
 #endif
@@ -384,23 +422,37 @@ extern void kernel_debug1(
 
 
 #if	(KDEBUG && (!defined(NO_KDEBUG)))
-
+#ifdef	XNU_KERNEL_PRIVATE
 #define KERNEL_DEBUG(x,a,b,c,d,e)					\
 do {									\
-    if (kdebug_enable)							\
+	if (__improbable(kdebug_enable))				\
         kernel_debug((uint32_t)x,  (uintptr_t)a, (uintptr_t)b,		\
 		     (uintptr_t)c, (uintptr_t)d, (uintptr_t)e);		\
 } while(0)
 
 #define KERNEL_DEBUG1(x,a,b,c,d,e)					\
 do {									\
-    if (kdebug_enable)							\
+	if (__improbable(kdebug_enable))				\
         kernel_debug1((uint32_t)x,  (uintptr_t)a, (uintptr_t)b,		\
 		      (uintptr_t)c, (uintptr_t)d, (uintptr_t)e);	\
 } while(0)
 
 #define __kdebug_only
+#else /* !XNU_KERNEL_PRIVATE */
+#define KERNEL_DEBUG(x,a,b,c,d,e)					\
+do {									\
+	if (kdebug_enable)						\
+        kernel_debug((uint32_t)x,  (uintptr_t)a, (uintptr_t)b,		\
+		     (uintptr_t)c, (uintptr_t)d, (uintptr_t)e);		\
+} while(0)
 
+#define KERNEL_DEBUG1(x,a,b,c,d,e)					\
+do {									\
+	if (kdebug_enable)						\
+        kernel_debug1((uint32_t)x,  (uintptr_t)a, (uintptr_t)b,		\
+		      (uintptr_t)c, (uintptr_t)d, (uintptr_t)e);	\
+} while(0)
+#endif /* XNU_KERNEL_PRIVATE */
 #else
 
 #define KERNEL_DEBUG(x,a,b,c,d,e) do {} while (0)
@@ -410,6 +462,7 @@ do {									\
 #endif
 
 #ifdef KERNEL_PRIVATE
+#include <mach/boolean.h>
 struct proc;
 extern void kdbg_trace_data(struct proc *proc, long *arg_pid);
 
@@ -417,6 +470,19 @@ extern void kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *a
 
 extern void kdbg_dump_trace_to_file(const char *);
 void start_kern_tracing(unsigned int);
+struct task;
+extern void kdbg_get_task_name(char*, int, struct task *task);
+void disable_wrap(uint32_t *old_slowcheck, uint32_t *old_flags);
+void enable_wrap(uint32_t old_slowcheck, boolean_t lostevents);
+void release_storage_unit(int cpu,  uint32_t storage_unit);
+int allocate_storage_unit(int cpu);
+
+void trace_handler_map_ctrl_page(uintptr_t addr, unsigned long ctrl_page_size, unsigned long storage_size, unsigned long kds_ptr_size);
+void trace_handler_map_bufinfo(uintptr_t addr, unsigned long size);
+void trace_handler_unmap_bufinfo(void);
+void trace_handler_map_buffer(int index, uintptr_t addr, unsigned long size);
+void trace_handler_unmap_buffer(int index);
+void trace_set_timebases(uint64_t tsc, uint64_t ns);
 #endif  /* KERNEL_PRIVATE */
 
 
@@ -446,7 +512,7 @@ typedef struct {
 
 #if !defined(__LP64__)
 #define KDBG_TIMESTAMP_MASK		0x00ffffffffffffffULL
-#define KDBG_CPU_MASK			0x0f00000000000000ULL
+#define KDBG_CPU_MASK			0xff00000000000000ULL
 #define KDBG_CPU_SHIFT			56
 static inline void
 kdbg_set_cpu(kd_buf *kp, int cpu)
@@ -460,9 +526,9 @@ kdbg_get_cpu(kd_buf *kp)
 	return (int) (((kp)->timestamp & KDBG_CPU_MASK) >> KDBG_CPU_SHIFT);
 }
 static inline void
-kdbg_set_timestamp(kd_buf *kp, uint64_t time)
+kdbg_set_timestamp(kd_buf *kp, uint64_t thetime)
 {
-	kp->timestamp = time & KDBG_TIMESTAMP_MASK;
+	kp->timestamp = thetime & KDBG_TIMESTAMP_MASK;
 }
 static inline uint64_t
 kdbg_get_timestamp(kd_buf *kp)
@@ -470,9 +536,9 @@ kdbg_get_timestamp(kd_buf *kp)
 	return kp->timestamp & KDBG_TIMESTAMP_MASK;
 }
 static inline void
-kdbg_set_timestamp_and_cpu(kd_buf *kp, uint64_t time, int cpu)
+kdbg_set_timestamp_and_cpu(kd_buf *kp, uint64_t thetime, int cpu)
 {
-	kp->timestamp = (time & KDBG_TIMESTAMP_MASK) | 
+	kp->timestamp = (thetime & KDBG_TIMESTAMP_MASK) | 
 				(((uint64_t) cpu) << KDBG_CPU_SHIFT);
 }
 #else
@@ -488,9 +554,9 @@ kdbg_get_cpu(kd_buf *kp)
 	return kp->cpuid;
 }
 static inline void
-kdbg_set_timestamp(kd_buf *kp, uint64_t time)
+kdbg_set_timestamp(kd_buf *kp, uint64_t thetime)
 {
-	kp->timestamp = time;
+	kp->timestamp = thetime;
 }
 static inline uint64_t
 kdbg_get_timestamp(kd_buf *kp)
@@ -498,9 +564,9 @@ kdbg_get_timestamp(kd_buf *kp)
 	return kp->timestamp;
 }
 static inline void
-kdbg_set_timestamp_and_cpu(kd_buf *kp, uint64_t time, int cpu)
+kdbg_set_timestamp_and_cpu(kd_buf *kp, uint64_t thetime, int cpu)
 {
-	kdbg_set_timestamp(kp, time);
+	kdbg_set_timestamp(kp, thetime);
 	kdbg_set_cpu(kp, cpu);
 }
 #endif
@@ -540,6 +606,18 @@ typedef struct {
 	int		valid;
 	char		command[20];
 } kd_threadmap;
+
+
+typedef struct {
+	int             version_no;
+	int             thread_count;
+	uint64_t        TOD_secs;
+	uint32_t        TOD_usecs;
+} RAW_header;
+
+#define RAW_VERSION0	0x55aa0000
+#define RAW_VERSION1	0x55aa0101
+
 
 #define	KDBG_CLASSTYPE		0x10000
 #define	KDBG_SUBCLSTYPE		0x20000

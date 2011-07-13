@@ -29,9 +29,7 @@
 #ifndef _MACH_MACHINE_PROCESSOR_INFO_H_
 #define _MACH_MACHINE_PROCESSOR_INFO_H_
 
-#if defined (__ppc__) || defined (__ppc64__)
-#include "mach/ppc/processor_info.h"
-#elif defined (__i386__) || defined(__x86_64__)
+#if defined (__i386__) || defined(__x86_64__)
 #include "mach/i386/processor_info.h"
 #else
 #error architecture not supported

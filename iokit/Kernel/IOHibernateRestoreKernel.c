@@ -35,8 +35,12 @@
 #include <crypto/aes.h>
 #include <libkern/libkern.h>
 
-#include "WKdm.h"
+#include <libkern/WKdm.h>
 #include "IOHibernateInternal.h"
+
+#if defined(__i386__) || defined(__x86_64__)
+#include <i386/pal_hibernate.h>
+#endif
 
 /*
 This code is linked into the kernel but part of the "__HIB" section, which means
@@ -52,14 +56,15 @@ uint32_t gIOHibernateDebugFlags;
 static IOHibernateImageHeader _hibernateHeader;
 IOHibernateImageHeader * gIOHibernateCurrentHeader = &_hibernateHeader;
 
-static hibernate_graphics_t _hibernateGraphics;
-hibernate_graphics_t * gIOHibernateGraphicsInfo = &_hibernateGraphics;
+ppnum_t gIOHibernateHandoffPages[64];
+uint32_t gIOHibernateHandoffPageCount = sizeof(gIOHibernateHandoffPages) 
+					/ sizeof(gIOHibernateHandoffPages[0]);
 
-static hibernate_cryptwakevars_t _cryptWakeVars;
-hibernate_cryptwakevars_t * gIOHibernateCryptWakeVars = &_cryptWakeVars;
-
-vm_offset_t gIOHibernateWakeMap;    	    // ppnum
-vm_size_t   gIOHibernateWakeMapSize;
+#if CONFIG_DEBUG
+void hibprintf(const char *fmt, ...);
+#else
+#define hibprintf(x...)
+#endif
 
 
 #if CONFIG_SLEEP
@@ -148,7 +153,7 @@ static void uart_puthex(uint64_t num)
 	c = 0xf & (num >> bit);
 	if (c)
 	    leading = false;
-	else if (leading)
+	else if (leading && bit)
 	    continue;
 	if (c <= 9)
 	    c += '0';
@@ -333,7 +338,7 @@ hibernate_page_bitmap_count(hibernate_bitmap_t * bitmap, uint32_t set, uint32_t 
     return (count);
 }
 
-static vm_offset_t
+static ppnum_t
 hibernate_page_list_grab(hibernate_page_list_t * list, uint32_t * pNextFree)
 {
     uint32_t		 nextFree = *pNextFree;
@@ -365,27 +370,19 @@ static uint32_t
 store_one_page(uint32_t procFlags, uint32_t * src, uint32_t compressedSize, 
 		uint32_t * buffer, uint32_t ppnum)
 {
-    uint64_t dst;
-    uint32_t sum;
+	uint64_t dst = ptoa_64(ppnum);
 
-    dst = ptoa_64(ppnum);
-    if (ppnum < 0x00100000)
-	buffer = (uint32_t *) (uintptr_t) dst;
+	if (compressedSize != PAGE_SIZE)
+	{
+		dst = pal_hib_map(DEST_COPY_AREA, dst);
+		WKdm_decompress((WK_word*) src, (WK_word*)(uintptr_t)dst, PAGE_SIZE >> 2);
+	}
+	else
+	{
+		dst = hibernate_restore_phys_page((uint64_t) (uintptr_t) src, dst, PAGE_SIZE, procFlags);
+	}
 
-    if (compressedSize != PAGE_SIZE)
-    {
-	WKdm_decompress((WK_word*) src, (WK_word*) buffer, PAGE_SIZE >> 2);
-	src = buffer;
-    }
-
-    sum = hibernate_sum_page((uint8_t *) src, ppnum);
-
-    if (((uint64_t) (uintptr_t) src) == dst)
-	src = 0;
-
-    hibernate_restore_phys_page((uint64_t) (uintptr_t) src, dst, PAGE_SIZE, procFlags);
-
-    return (sum);
+	return hibernate_sum_page((uint8_t *)(uintptr_t)dst, ppnum);
 }
 
 // used only for small struct copies
@@ -411,9 +408,10 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
 {
     uint32_t idx;
     uint32_t * src;
-    uint32_t * buffer;
+    uint32_t * imageReadPos;
     uint32_t * pageIndexSource;
     hibernate_page_list_t * map;
+    uint32_t stage;
     uint32_t count;
     uint32_t ppnum;
     uint32_t page;
@@ -424,10 +422,13 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
     uint32_t * copyPageList;
     uint32_t copyPageIndex;
     uint32_t sum;
+    uint32_t pageSum;
     uint32_t nextFree;
     uint32_t lastImagePage;
     uint32_t lastMapPage;
     uint32_t lastPageIndexPage;
+    uint32_t handoffPages;
+    uint32_t handoffPageCount;
 
     C_ASSERT(sizeof(IOHibernateImageHeader) == 512);
 
@@ -440,84 +441,43 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
                 gIOHibernateCurrentHeader, 
                 sizeof(IOHibernateImageHeader));
 
-    if (!p2)
-    {
-	count = header->graphicsInfoOffset;
-	if (count)
-	    p2 = (void *)(((uintptr_t) header) - count);
-    }
-    if (p2) 
-        bcopy_internal(p2, 
-                gIOHibernateGraphicsInfo, 
-                sizeof(hibernate_graphics_t));
-    else
-        gIOHibernateGraphicsInfo->physicalAddress = gIOHibernateGraphicsInfo->depth = 0;
-
-    if (!p3)
-    {
-	count = header->cryptVarsOffset;
-	if (count)
-	    p3 = (void *)(((uintptr_t) header) - count);
-    }
-    if (p3)
-        bcopy_internal(p3, 
-                gIOHibernateCryptWakeVars, 
-                sizeof(hibernate_cryptwakevars_t));
-
-    src = (uint32_t *)
+    map = (hibernate_page_list_t *)
                 (((uintptr_t) &header->fileExtentMap[0]) 
                             + header->fileExtentMapSize 
-                            + ptoa_32(header->restore1PageCount));
-
-    if (header->previewSize)
-    {
-        pageIndexSource = src;
-        map = (hibernate_page_list_t *)(((uintptr_t) pageIndexSource) + header->previewSize);
-        src = (uint32_t *) (((uintptr_t) pageIndexSource) + header->previewPageListSize);
-    }
-    else
-    {
-        pageIndexSource = 0;
-        map = (hibernate_page_list_t *) src;
-        src = (uint32_t *) (((uintptr_t) map) + header->bitmapSize);
-    }
-
-    lastPageIndexPage = atop_32((uintptr_t) src);
+                            + ptoa_32(header->restore1PageCount)
+                            + header->previewSize);
 
     lastImagePage = atop_32(((uintptr_t) header) + header->image1Size);
 
     lastMapPage = atop_32(((uintptr_t) map) + header->bitmapSize);
 
+    handoffPages     = header->handoffPages;
+    handoffPageCount = header->handoffPageCount;
+
     debug_code(kIOHibernateRestoreCodeImageEnd,       ptoa_64(lastImagePage));
-    debug_code(kIOHibernateRestoreCodePageIndexStart, (uintptr_t) pageIndexSource);
-    debug_code(kIOHibernateRestoreCodePageIndexEnd,   ptoa_64(lastPageIndexPage));
     debug_code(kIOHibernateRestoreCodeMapStart,       (uintptr_t) map);
     debug_code(kIOHibernateRestoreCodeMapEnd,         ptoa_64(lastMapPage));
+
+    debug_code('hand', ptoa_64(handoffPages));
+    debug_code('hnde', ptoa_64(handoffPageCount));
 
     // knock all the image pages to be used out of free map
     for (ppnum = atop_32((uintptr_t) header); ppnum <= lastImagePage; ppnum++)
     {
 	hibernate_page_bitset(map, FALSE, ppnum);
     }
+    // knock all the handoff pages to be used out of free map
+    for (ppnum = handoffPages; ppnum < (handoffPages + handoffPageCount); ppnum++)
+    {
+	hibernate_page_bitset(map, FALSE, ppnum);
+    }
 
     nextFree = 0;
     hibernate_page_list_grab(map, &nextFree);
-    buffer = (uint32_t *) (uintptr_t) ptoa_32(hibernate_page_list_grab(map, &nextFree));
 
-    if (header->memoryMapSize && (count = header->memoryMapOffset))
-    {
-	p4 = (void *)(((uintptr_t) header) - count);
-	gIOHibernateWakeMap     = hibernate_page_list_grab(map, &nextFree);
-	gIOHibernateWakeMapSize = header->memoryMapSize;
-	debug_code(kIOHibernateRestoreCodeWakeMapSize, gIOHibernateWakeMapSize);
-	if (gIOHibernateWakeMapSize > PAGE_SIZE)
-	    fatal();
-	bcopy_internal(p4, (void  *) (uintptr_t) ptoa_32(gIOHibernateWakeMap), gIOHibernateWakeMapSize);
-    }
-    else
-	gIOHibernateWakeMapSize = 0;
+    pal_hib_window_setup(hibernate_page_list_grab(map, &nextFree));
 
-    sum = gIOHibernateCurrentHeader->actualRestore1Sum;
+    sum = header->actualRestore1Sum;
     gIOHibernateCurrentHeader->diag[0] = (uint32_t)(uintptr_t) header;
     gIOHibernateCurrentHeader->diag[1] = sum;
 
@@ -528,54 +488,110 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
     copyPageIndex     = PAGE_SIZE >> 2;
 
     compressedSize    = PAGE_SIZE;
+    stage             = 2;
+    count             = 0;
+    src               = NULL;
+
+    if (gIOHibernateCurrentHeader->previewSize)
+    {
+	pageIndexSource = (uint32_t *)
+		     (((uintptr_t) &header->fileExtentMap[0]) 
+				 + gIOHibernateCurrentHeader->fileExtentMapSize 
+				 + ptoa_32(gIOHibernateCurrentHeader->restore1PageCount));
+	imageReadPos = (uint32_t *) (((uintptr_t) pageIndexSource) + gIOHibernateCurrentHeader->previewPageListSize);
+	lastPageIndexPage = atop_32((uintptr_t) imageReadPos);
+    }
+    else
+    {
+	pageIndexSource   = NULL;
+	lastPageIndexPage = 0;
+	imageReadPos =  (uint32_t *) (((uintptr_t) map) + gIOHibernateCurrentHeader->bitmapSize);
+    }
+
+    debug_code(kIOHibernateRestoreCodePageIndexStart, (uintptr_t) pageIndexSource);
+    debug_code(kIOHibernateRestoreCodePageIndexEnd,   ptoa_64(lastPageIndexPage));
 
     while (1)
     {
-        if (pageIndexSource)
-        {
-            ppnum = pageIndexSource[0];
-            count = pageIndexSource[1];
-            pageIndexSource += 2;
-            if (!count)
-            {
-                pageIndexSource = 0;
-                src =  (uint32_t *) (((uintptr_t) map) + gIOHibernateCurrentHeader->bitmapSize);
-                ppnum = src[0];
-                count = src[1];
-                src += 2;
-            } 
-        }
-        else
-        {
-            ppnum = src[0];
-            count = src[1];
-            if (!count)
-                break;
-            src += 2;
+	switch (stage)
+	{
+	    case 2:
+		// copy handoff data
+		count = src ? 0 : handoffPageCount;
+		if (!count)
+		    break;
+		if (count > gIOHibernateHandoffPageCount)
+		    count = gIOHibernateHandoffPageCount;
+		src = (uint32_t *) (uintptr_t) ptoa_64(handoffPages);
+		break;
+	
+	    case 1:
+		// copy pageIndexSource pages == preview image data
+		if (!src)
+		{
+		    if (!pageIndexSource)
+		    	break;
+		    src = imageReadPos;
+		}
+		ppnum = pageIndexSource[0];
+		count = pageIndexSource[1];
+		pageIndexSource += 2;
+		imageReadPos = src;
+		break;
+
+	    case 0:
+		// copy pages
+		if (!src)
+		{
+		    src =  (uint32_t *) (((uintptr_t) map) + gIOHibernateCurrentHeader->bitmapSize);
+		}
+		ppnum = src[0];
+		count = src[1];
+		src += 2;
+		imageReadPos = src;
+		break;
+	}
+
+
+	if (!count)
+	{
+	    if (!stage)
+	        break;
+	    stage--;
+	    src = NULL;
+	    continue;
 	}
 
 	for (page = 0; page < count; page++, ppnum++)
 	{
-            uint32_t tag;
+	    uint32_t tag;
 	    int conflicts;
 
-            if (!pageIndexSource)
-            {
-                tag = *src++;
-                compressedSize = kIOHibernateTagLength & tag;
-            }
+	    if (2 == stage)
+		ppnum = gIOHibernateHandoffPages[page];
+	    else if (!stage)
+	    {
+		tag = *src++;
+		compressedSize = kIOHibernateTagLength & tag;
+	    }
 
-	    conflicts = (((ppnum >= atop_32((uintptr_t) map)) && (ppnum <= lastMapPage))
-		      || ((ppnum >= atop_32((uintptr_t) src)) && (ppnum <= lastImagePage)));
+	    conflicts = (ppnum >= atop_32((uintptr_t) map)) && (ppnum <= lastMapPage);
 
-            if (pageIndexSource)
-                conflicts |= ((ppnum >= atop_32((uintptr_t) pageIndexSource)) && (ppnum <= lastPageIndexPage));
+	    conflicts |= ((ppnum >= atop_32((uintptr_t) imageReadPos)) && (ppnum <= lastImagePage));
+
+	    if (stage >= 2)
+ 		conflicts |= ((ppnum >= atop_32((uintptr_t) src)) && (ppnum <= (handoffPages + handoffPageCount - 1)));
+
+	    if (stage >= 1)
+ 		conflicts |= ((ppnum >= atop_32((uintptr_t) pageIndexSource)) && (ppnum <= lastPageIndexPage));
 
 	    if (!conflicts)
 	    {
-		if (compressedSize)
-		    sum += store_one_page(gIOHibernateCurrentHeader->processorFlags,
-					    src, compressedSize, buffer, ppnum);
+//              if (compressedSize)
+		pageSum = store_one_page(gIOHibernateCurrentHeader->processorFlags,
+					 src, compressedSize, 0, ppnum);
+		if (stage != 2)
+		    sum += pageSum;
 		uncompressedPages++;
 	    }
 	    else
@@ -596,45 +612,58 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
 		    // alloc new copy list page
 		    uint32_t pageListPage = hibernate_page_list_grab(map, &nextFree);
 		    // link to current
-		    if (copyPageList)
-			copyPageList[1] = pageListPage;
-		    else
-			copyPageListHead = pageListPage;
-		    copyPageList = (uint32_t *) (uintptr_t) ptoa_32(pageListPage);
+		    if (copyPageList) {
+			    copyPageList[1] = pageListPage;
+		    } else {
+			    copyPageListHead = pageListPage;
+		    }
+		    copyPageList = (uint32_t *)pal_hib_map(SRC_COPY_AREA, 
+				    ptoa_32(pageListPage));
 		    copyPageList[1] = 0;
 		    copyPageIndex = 2;
 		}
 
 		copyPageList[copyPageIndex++] = ppnum;
 		copyPageList[copyPageIndex++] = bufferPage;
-		copyPageList[copyPageIndex++] = compressedSize;
+		copyPageList[copyPageIndex++] = (compressedSize | (stage << 24));
 		copyPageList[0] = copyPageIndex;
 
-		dst = (uint32_t *) (uintptr_t) ptoa_32(bufferPage);
+		dst = (uint32_t *)pal_hib_map(DEST_COPY_AREA, ptoa_32(bufferPage));
 		for (idx = 0; idx < ((compressedSize + 3) >> 2); idx++)
-		    dst[idx] = src[idx];
+			dst[idx] = src[idx];
 	    }
 	    src += ((compressedSize + 3) >> 2);
 	}
     }
 
+    /* src points to the last page restored, so we need to skip over that */
+    hibernateRestorePALState(src);
+
     // -- copy back conflicts
 
     copyPageList = (uint32_t *)(uintptr_t) ptoa_32(copyPageListHead);
+
     while (copyPageList)
     {
+	copyPageList = (uint32_t *)pal_hib_map(COPY_PAGE_AREA, (uintptr_t)copyPageList);
 	for (copyPageIndex = 2; copyPageIndex < copyPageList[0]; copyPageIndex += 3)
 	{
-	    ppnum	   =              copyPageList[copyPageIndex + 0];
-	    src		   = (uint32_t *) (uintptr_t) ptoa_32(copyPageList[copyPageIndex + 1]);
-	    compressedSize =              copyPageList[copyPageIndex + 2];
-
-	    sum += store_one_page(gIOHibernateCurrentHeader->processorFlags,
-				    src, compressedSize, buffer, ppnum);
+	    ppnum          = copyPageList[copyPageIndex + 0];
+	    src            = (uint32_t *) (uintptr_t) ptoa_32(copyPageList[copyPageIndex + 1]);
+	    src            = (uint32_t *)pal_hib_map(SRC_COPY_AREA, (uintptr_t)src);
+	    compressedSize = copyPageList[copyPageIndex + 2];
+	    stage 	   = compressedSize >> 24;
+	    compressedSize &= 0x1FFF;
+	    pageSum        = store_one_page(gIOHibernateCurrentHeader->processorFlags,
+			    			src, compressedSize, 0, ppnum);
+	    if (stage != 2)
+	    	sum += pageSum;
 	    uncompressedPages++;
 	}
 	copyPageList = (uint32_t *) (uintptr_t) ptoa_32(copyPageList[1]);
     }
+
+    pal_hib_patchup();
 
     // -- image has been destroyed...
 
@@ -646,16 +675,10 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
     gIOHibernateState = kIOHibernateStateWakingFromHibernate;
 
 #if CONFIG_SLEEP
-#if defined(__ppc__)
+#if defined(__i386__) || defined(__x86_64__)
     typedef void (*ResetProc)(void);
     ResetProc proc;
-    proc = (ResetProc) 0x100;
-    __asm__ volatile("ori 0, 0, 0" : : );
-    proc();
-#elif defined(__i386__) || defined(__x86_64__)
-    typedef void (*ResetProc)(void);
-    ResetProc proc;
-    proc = (ResetProc) acpi_wake_prot_entry;
+    proc = HIB_ENTRYPOINT;
     // flush caches
     __asm__("wbinvd");
     proc();
@@ -666,3 +689,445 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
 
     return -1;
 }
+
+#if CONFIG_DEBUG
+/* standalone printf implementation */
+/*-
+ * Copyright (c) 1986, 1988, 1991, 1993
+ *	The Regents of the University of California.  All rights reserved.
+ * (c) UNIX System Laboratories, Inc.
+ * All or some portions of this file are derived from material licensed
+ * to the University of California by American Telephone and Telegraph
+ * Co. or Unix System Laboratories, Inc. and are reproduced herein with
+ * the permission of UNIX System Laboratories, Inc.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 4. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ *	@(#)subr_prf.c	8.3 (Berkeley) 1/21/94
+ */
+
+typedef long ptrdiff_t;
+char const hibhex2ascii_data[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+#define hibhex2ascii(hex)  (hibhex2ascii_data[hex])
+#define toupper(c)      ((c) - 0x20 * (((c) >= 'a') && ((c) <= 'z')))
+static size_t
+hibstrlen(const char *s)
+{
+	size_t l = 0;
+	while (*s++)
+		l++;
+	return l;
+}
+
+/* Max number conversion buffer length: a u_quad_t in base 2, plus NUL byte. */
+#define MAXNBUF	(sizeof(intmax_t) * NBBY + 1)
+
+/*
+ * Put a NUL-terminated ASCII number (base <= 36) in a buffer in reverse
+ * order; return an optional length and a pointer to the last character
+ * written in the buffer (i.e., the first character of the string).
+ * The buffer pointed to by `nbuf' must have length >= MAXNBUF.
+ */
+static char *
+ksprintn(char *nbuf, uintmax_t num, int base, int *lenp, int upper)
+{
+	char *p, c;
+
+	/* Truncate so we don't call umoddi3, which isn't in __HIB */
+#if !defined(__LP64__)
+	uint32_t num2 = (uint32_t) num;
+#else
+	uintmax_t num2 = num;
+#endif
+
+	p = nbuf;
+	*p = '\0';
+	do {
+		c = hibhex2ascii(num2 % base);
+		*++p = upper ? toupper(c) : c;
+	} while (num2 /= base);
+	if (lenp)
+		*lenp = (int)(p - nbuf);
+	return (p);
+}
+
+/*
+ * Scaled down version of printf(3).
+ *
+ * Two additional formats:
+ *
+ * The format %b is supported to decode error registers.
+ * Its usage is:
+ *
+ *	printf("reg=%b\n", regval, "*");
+ *
+ * where  is the output base expressed as a control character, e.g.
+ * \10 gives octal; \20 gives hex.  Each arg is a sequence of characters,
+ * the first of which gives the bit number to be inspected (origin 1), and
+ * the next characters (up to a control character, i.e. a character <= 32),
+ * give the name of the register.  Thus:
+ *
+ *	kvprintf("reg=%b\n", 3, "\10\2BITTWO\1BITONE\n");
+ *
+ * would produce output:
+ *
+ *	reg=3
+ *
+ * XXX:  %D  -- Hexdump, takes pointer and separator string:
+ *		("%6D", ptr, ":")   -> XX:XX:XX:XX:XX:XX
+ *		("%*D", len, ptr, " " -> XX XX XX XX ...
+ */
+static int
+hibkvprintf(char const *fmt, void (*func)(int, void*), void *arg, int radix, va_list ap)
+{
+#define PCHAR(c) {int cc=(c); if (func) (*func)(cc,arg); else *d++ = cc; retval++; }
+	char nbuf[MAXNBUF];
+	char *d;
+	const char *p, *percent, *q;
+	u_char *up;
+	int ch, n;
+	uintmax_t num;
+	int base, lflag, qflag, tmp, width, ladjust, sharpflag, neg, sign, dot;
+	int cflag, hflag, jflag, tflag, zflag;
+	int dwidth, upper;
+	char padc;
+	int stop = 0, retval = 0;
+
+	num = 0;
+	if (!func)
+		d = (char *) arg;
+	else
+		d = NULL;
+
+	if (fmt == NULL)
+		fmt = "(fmt null)\n";
+
+	if (radix < 2 || radix > 36)
+		radix = 10;
+
+	for (;;) {
+		padc = ' ';
+		width = 0;
+		while ((ch = (u_char)*fmt++) != '%' || stop) {
+			if (ch == '\0')
+				return (retval);
+			PCHAR(ch);
+		}
+		percent = fmt - 1;
+		qflag = 0; lflag = 0; ladjust = 0; sharpflag = 0; neg = 0;
+		sign = 0; dot = 0; dwidth = 0; upper = 0;
+		cflag = 0; hflag = 0; jflag = 0; tflag = 0; zflag = 0;
+reswitch:	switch (ch = (u_char)*fmt++) {
+		case '.':
+			dot = 1;
+			goto reswitch;
+		case '#':
+			sharpflag = 1;
+			goto reswitch;
+		case '+':
+			sign = 1;
+			goto reswitch;
+		case '-':
+			ladjust = 1;
+			goto reswitch;
+		case '%':
+			PCHAR(ch);
+			break;
+		case '*':
+			if (!dot) {
+				width = va_arg(ap, int);
+				if (width < 0) {
+					ladjust = !ladjust;
+					width = -width;
+				}
+			} else {
+				dwidth = va_arg(ap, int);
+			}
+			goto reswitch;
+		case '0':
+			if (!dot) {
+				padc = '0';
+				goto reswitch;
+			}
+		case '1': case '2': case '3': case '4':
+		case '5': case '6': case '7': case '8': case '9':
+				for (n = 0;; ++fmt) {
+					n = n * 10 + ch - '0';
+					ch = *fmt;
+					if (ch < '0' || ch > '9')
+						break;
+				}
+			if (dot)
+				dwidth = n;
+			else
+				width = n;
+			goto reswitch;
+		case 'b':
+			num = (u_int)va_arg(ap, int);
+			p = va_arg(ap, char *);
+			for (q = ksprintn(nbuf, num, *p++, NULL, 0); *q;)
+				PCHAR(*q--);
+
+			if (num == 0)
+				break;
+
+			for (tmp = 0; *p;) {
+				n = *p++;
+				if (num & (1 << (n - 1))) {
+					PCHAR(tmp ? ',' : '<');
+					for (; (n = *p) > ' '; ++p)
+						PCHAR(n);
+					tmp = 1;
+				} else
+					for (; *p > ' '; ++p)
+						continue;
+			}
+			if (tmp)
+				PCHAR('>');
+			break;
+		case 'c':
+			PCHAR(va_arg(ap, int));
+			break;
+		case 'D':
+			up = va_arg(ap, u_char *);
+			p = va_arg(ap, char *);
+			if (!width)
+				width = 16;
+			while(width--) {
+				PCHAR(hibhex2ascii(*up >> 4));
+				PCHAR(hibhex2ascii(*up & 0x0f));
+				up++;
+				if (width)
+					for (q=p;*q;q++)
+						PCHAR(*q);
+			}
+			break;
+		case 'd':
+		case 'i':
+			base = 10;
+			sign = 1;
+			goto handle_sign;
+		case 'h':
+			if (hflag) {
+				hflag = 0;
+				cflag = 1;
+			} else
+				hflag = 1;
+			goto reswitch;
+		case 'j':
+			jflag = 1;
+			goto reswitch;
+		case 'l':
+			if (lflag) {
+				lflag = 0;
+				qflag = 1;
+			} else
+				lflag = 1;
+			goto reswitch;
+		case 'n':
+			if (jflag)
+				*(va_arg(ap, intmax_t *)) = retval;
+			else if (qflag)
+				*(va_arg(ap, quad_t *)) = retval;
+			else if (lflag)
+				*(va_arg(ap, long *)) = retval;
+			else if (zflag)
+				*(va_arg(ap, size_t *)) = retval;
+			else if (hflag)
+				*(va_arg(ap, short *)) = retval;
+			else if (cflag)
+				*(va_arg(ap, char *)) = retval;
+			else
+				*(va_arg(ap, int *)) = retval;
+			break;
+		case 'o':
+			base = 8;
+			goto handle_nosign;
+		case 'p':
+			base = 16;
+			sharpflag = (width == 0);
+			sign = 0;
+			num = (uintptr_t)va_arg(ap, void *);
+			goto number;
+		case 'q':
+			qflag = 1;
+			goto reswitch;
+		case 'r':
+			base = radix;
+			if (sign)
+				goto handle_sign;
+			goto handle_nosign;
+		case 's':
+			p = va_arg(ap, char *);
+			if (p == NULL)
+				p = "(null)";
+			if (!dot)
+				n = (typeof(n))hibstrlen (p);
+			else
+				for (n = 0; n < dwidth && p[n]; n++)
+					continue;
+
+			width -= n;
+
+			if (!ladjust && width > 0)
+				while (width--)
+					PCHAR(padc);
+			while (n--)
+				PCHAR(*p++);
+			if (ladjust && width > 0)
+				while (width--)
+					PCHAR(padc);
+			break;
+		case 't':
+			tflag = 1;
+			goto reswitch;
+		case 'u':
+			base = 10;
+			goto handle_nosign;
+		case 'X':
+			upper = 1;
+		case 'x':
+			base = 16;
+			goto handle_nosign;
+		case 'y':
+			base = 16;
+			sign = 1;
+			goto handle_sign;
+		case 'z':
+			zflag = 1;
+			goto reswitch;
+handle_nosign:
+			sign = 0;
+			if (jflag)
+				num = va_arg(ap, uintmax_t);
+			else if (qflag)
+				num = va_arg(ap, u_quad_t);
+			else if (tflag)
+				num = va_arg(ap, ptrdiff_t);
+			else if (lflag)
+				num = va_arg(ap, u_long);
+			else if (zflag)
+				num = va_arg(ap, size_t);
+			else if (hflag)
+				num = (u_short)va_arg(ap, int);
+			else if (cflag)
+				num = (u_char)va_arg(ap, int);
+			else
+				num = va_arg(ap, u_int);
+			goto number;
+handle_sign:
+			if (jflag)
+				num = va_arg(ap, intmax_t);
+			else if (qflag)
+				num = va_arg(ap, quad_t);
+			else if (tflag)
+				num = va_arg(ap, ptrdiff_t);
+			else if (lflag)
+				num = va_arg(ap, long);
+			else if (zflag)
+				num = va_arg(ap, ssize_t);
+			else if (hflag)
+				num = (short)va_arg(ap, int);
+			else if (cflag)
+				num = (char)va_arg(ap, int);
+			else
+				num = va_arg(ap, int);
+number:
+			if (sign && (intmax_t)num < 0) {
+				neg = 1;
+				num = -(intmax_t)num;
+			}
+			p = ksprintn(nbuf, num, base, &tmp, upper);
+			if (sharpflag && num != 0) {
+				if (base == 8)
+					tmp++;
+				else if (base == 16)
+					tmp += 2;
+			}
+			if (neg)
+				tmp++;
+
+			if (!ladjust && padc != '0' && width
+			    && (width -= tmp) > 0)
+				while (width--)
+					PCHAR(padc);
+			if (neg)
+				PCHAR('-');
+			if (sharpflag && num != 0) {
+				if (base == 8) {
+					PCHAR('0');
+				} else if (base == 16) {
+					PCHAR('0');
+					PCHAR('x');
+				}
+			}
+			if (!ladjust && width && (width -= tmp) > 0)
+				while (width--)
+					PCHAR(padc);
+
+			while (*p)
+				PCHAR(*p--);
+
+			if (ladjust && width && (width -= tmp) > 0)
+				while (width--)
+					PCHAR(padc);
+
+			break;
+		default:
+			while (percent < fmt)
+				PCHAR(*percent++);
+			/*
+			 * Since we ignore an formatting argument it is no
+			 * longer safe to obey the remaining formatting
+			 * arguments as the arguments will no longer match
+			 * the format specs.
+			 */
+			stop = 1;
+			break;
+		}
+	}
+#undef PCHAR
+}
+
+
+static void
+putchar(int c, void *arg)
+{
+	(void)arg;
+	uart_putc(c);
+}
+
+void
+hibprintf(const char *fmt, ...)
+{
+	/* http://www.pagetable.com/?p=298 */
+	va_list ap;
+
+	va_start(ap, fmt);
+	hibkvprintf(fmt, putchar, NULL, 10, ap);
+	va_end(ap);
+}
+#endif /* CONFIG_DEBUG */
+

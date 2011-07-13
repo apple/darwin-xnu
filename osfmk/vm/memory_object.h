@@ -141,4 +141,15 @@ extern kern_return_t	memory_object_signed(
 	memory_object_control_t		control,
 	boolean_t			is_signed);
 
+extern boolean_t	memory_object_is_slid(
+	memory_object_control_t		control);
+
+extern void		memory_object_mark_used(
+	memory_object_control_t		control);
+
+extern void		memory_object_mark_unused(
+	memory_object_control_t		control,
+	boolean_t			rage);
+
+
 #endif	/* _VM_MEMORY_OBJECT_H_ */

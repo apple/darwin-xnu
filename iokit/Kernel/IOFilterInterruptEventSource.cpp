@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -31,6 +31,25 @@
 #include <IOKit/IOKitDebug.h>
 #include <IOKit/IOTimeStamp.h>
 #include <IOKit/IOWorkLoop.h>
+
+#if IOKITSTATS
+
+#define IOStatisticsInitializeCounter() \
+do { \
+	IOStatistics::setCounterType(IOEventSource::reserved->counter, kIOStatisticsFilterInterruptEventSourceCounter); \
+} while (0)
+
+#define IOStatisticsInterrupt() \
+do { \
+	IOStatistics::countInterrupt(IOEventSource::reserved->counter); \
+} while (0)
+
+#else
+
+#define IOStatisticsInitializeCounter()
+#define IOStatisticsInterrupt()
+
+#endif /* IOKITSTATS */
 
 #define super IOInterruptEventSource
 
@@ -79,6 +98,9 @@ IOFilterInterruptEventSource::init(OSObject *inOwner,
         return false;
 
     filterAction = inFilterAction;
+
+    IOStatisticsInitializeCounter();
+	
     return true;
 }
 
@@ -103,9 +125,10 @@ IOFilterInterruptEventSource *IOFilterInterruptEventSource
 void IOFilterInterruptEventSource::signalInterrupt()
 {
 	bool trace = (gIOKitTrace & kIOTraceIntEventSource) ? true : false;
-
+    
+    IOStatisticsInterrupt();
     producerCount++;
-
+	
 	if (trace)
 	    IOTimeStampStartConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
     
@@ -129,20 +152,20 @@ IOFilterInterruptEventSource::getFilterAction() const
 void IOFilterInterruptEventSource::normalInterruptOccurred
     (void */*refcon*/, IOService */*prov*/, int /*source*/)
 {
-    bool filterRes;
+    bool 	filterRes;
 	bool	trace = (gIOKitTrace & kIOTraceIntEventSource) ? true : false;
-
+	
 	if (trace)
 		IOTimeStampStartConstant(IODBG_INTES(IOINTES_FILTER),
 								 (uintptr_t) filterAction, (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
-
+    
     // Call the filter.
     filterRes = (*filterAction)(owner, this);
 	
 	if (trace)
 		IOTimeStampEndConstant(IODBG_INTES(IOINTES_FILTER),
 							   (uintptr_t) filterAction, (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
-
+	
     if (filterRes)
         signalInterrupt();
 }
@@ -150,20 +173,20 @@ void IOFilterInterruptEventSource::normalInterruptOccurred
 void IOFilterInterruptEventSource::disableInterruptOccurred
     (void */*refcon*/, IOService *prov, int source)
 {
-    bool filterRes;
+    bool 	filterRes;
 	bool	trace = (gIOKitTrace & kIOTraceIntEventSource) ? true : false;
-
+	
 	if (trace)
 		IOTimeStampStartConstant(IODBG_INTES(IOINTES_FILTER),
 								 (uintptr_t) filterAction, (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
-
+    
     // Call the filter.
     filterRes = (*filterAction)(owner, this);
 	
 	if (trace)
 		IOTimeStampEndConstant(IODBG_INTES(IOINTES_FILTER),
 							   (uintptr_t) filterAction, (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
-
+	
     if (filterRes) {
         prov->disableInterrupt(source);	/* disable the interrupt */
         signalInterrupt();

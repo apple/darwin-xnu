@@ -23,10 +23,6 @@
 #ifndef	LIBKERN_VERSION_H
 #define LIBKERN_VERSION_H
 
-#if defined(__cplusplus)
-extern "C" {
-#endif
-
 /* Kernel versions conform to kext version strings, as described in:
  * http://developer.apple.com/technotes/tn/tn1132.html
  */
@@ -35,25 +31,21 @@ extern "C" {
  * of the kernel
  */
 #define VERSION_MAJOR		###KERNEL_VERSION_MAJOR###
-extern const int version_major;
 
 /* VERSION_MINOR, version_minor is an integer that represents the minor version
  * of the kernel
  */
 #define VERSION_MINOR		###KERNEL_VERSION_MINOR###
-extern const int version_minor;
 
 /* VERSION_VARIANT, version_variant is a string that contains the revision,
  * stage, and prerelease level of the kernel
  */
 #define VERSION_VARIANT		"###KERNEL_VERSION_VARIANT###"
-extern const char version_variant[];
 
 /* VERSION_REVISION, version_revision is an integer that represents the revision
  * of the kernel
  */
 #define VERSION_REVISION	###KERNEL_VERSION_REVISION###
-extern const int version_revision;
 
 /* VERSION_STAGE, version_stage, is an integer set to one of the following: */
 #define VERSION_STAGE_DEV	0x20
@@ -61,20 +53,46 @@ extern const int version_revision;
 #define VERSION_STAGE_BETA	0x60
 #define VERSION_STAGE_RELEASE	0x80
 #define VERSION_STAGE		###KERNEL_VERSION_STAGE###
-extern const int version_stage;
 
 /* VERSION_PRERELEASE_LEVEL, version_prerelease_level, is an integer sequence
  * number to distinguish between pre-release builds
  */
 #define VERSION_PRERELEASE_LEVEL	###KERNEL_VERSION_PRERELEASE_LEVEL###
-extern const int version_prerelease_level;
 
 /* OSTYPE, ostype, is a string as returned by uname -s */
 #define	OSTYPE		"Darwin"
-extern const char ostype[];
 
 /* OSRELEASE, osrelease, is a string as returned by uname -r */
 #define OSRELEASE	"###KERNEL_VERSION_LONG###"
+
+#ifndef ASSEMBLER
+
+#if defined(__cplusplus)
+extern "C" {
+#endif
+
+/* Build-time value of VERSION_MAJOR */
+extern const int version_major;
+
+/* Build-time value of VERSION_MINOR */
+extern const int version_minor;
+
+/* Build-time value of VERSION_VARIANT */
+extern const char version_variant[];
+
+/* Build-time value of VERSION_REVISION */
+extern const int version_revision;
+
+/* Build-time value of VERSION_STAGE */
+extern const int version_stage;
+
+/* Build-time value of VERSION_PRERELEASE_LEVEL */
+extern const int version_prerelease_level;
+
+/* Build-time value of OSTYPE */
+extern const char ostype[];
+
+/* Build-time value of OSRELEASE */
 extern const char osrelease[];
 
 /* osbuilder is a string as returned by uname -r */
@@ -93,5 +111,7 @@ extern char osversion[];
 #if defined(__cplusplus)
 }
 #endif
+
+#endif /* !ASSEMBLER */
 
 #endif	/* LIBKERN_VERSION_H */

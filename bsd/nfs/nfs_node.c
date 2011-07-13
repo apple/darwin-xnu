@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -75,6 +75,7 @@
 #include <sys/vnode.h>
 #include <sys/ubc.h>
 #include <sys/malloc.h>
+#include <sys/fcntl.h>
 
 #include <nfs/rpcv2.h>
 #include <nfs/nfsproto.h>
@@ -145,6 +146,7 @@ nfs_nget(
 	int fhsize,
 	struct nfs_vattr *nvap,
 	u_int64_t *xidp,
+	uint32_t auth,
 	int flags,
 	nfsnode_t *npp)
 {
@@ -175,6 +177,21 @@ loop:
 		if (mp != mp2 || np->n_fhsize != fhsize ||
 		    bcmp(fhp, np->n_fhp, fhsize))
 			continue;
+		if (nvap && (nvap->nva_flags & NFS_FFLAG_TRIGGER_REFERRAL) &&
+		    cnp && (cnp->cn_namelen > (fhsize - (int)sizeof(dnp)))) {
+			/* The name was too long to fit in the file handle.  Check it against the node's name. */
+			int namecmp = 0;
+			const char *vname = vnode_getname(NFSTOV(np));
+			if (vname) {
+				if (cnp->cn_namelen != (int)strlen(vname))
+					namecmp = 1;
+				else
+					namecmp = strncmp(vname, cnp->cn_nameptr, cnp->cn_namelen);
+				vnode_putname(vname);
+			}
+			if (namecmp)  /* full name didn't match */
+				continue;
+		}
 		FSDBG(263, dnp, np, np->n_flag, 0xcace0000);
 		/* if the node is locked, sleep on it */
 		if ((np->n_hflag & NHLOCKED) && !(flags & NG_NOCREATE)) {
@@ -246,10 +263,21 @@ loop:
 	bzero(np, sizeof *np);
 	np->n_hflag |= (NHINIT | NHLOCKED);
 	np->n_mount = mp;
+	np->n_auth = auth;
 	TAILQ_INIT(&np->n_opens);
 	TAILQ_INIT(&np->n_lock_owners);
 	TAILQ_INIT(&np->n_locks);
 	np->n_dlink.tqe_next = NFSNOLIST;
+	np->n_dreturn.tqe_next = NFSNOLIST;
+	np->n_monlink.le_next = NFSNOLIST;
+
+	/* ugh... need to keep track of ".zfs" directories to workaround server bugs */
+	if ((nvap->nva_type == VDIR) && cnp && (cnp->cn_namelen == 4) &&
+	    (cnp->cn_nameptr[0] == '.') && (cnp->cn_nameptr[1] == 'z') &&
+	    (cnp->cn_nameptr[2] == 'f') && (cnp->cn_nameptr[3] == 's'))
+		np->n_flag |= NISDOTZFS;
+	if (dnp && (dnp->n_flag & NISDOTZFS))
+		np->n_flag |= NISDOTZFSCHILD;
 
 	if (dnp && cnp && ((cnp->cn_namelen != 2) ||
 	    (cnp->cn_nameptr[0] != '.') || (cnp->cn_nameptr[1] != '.'))) {
@@ -293,6 +321,8 @@ loop:
 	lck_mtx_unlock(nfs_node_hash_mutex);
 
 	/* do initial loading of attributes */
+	NACLINVALIDATE(np);
+	NACCESSINVALIDATE(np);
 	error = nfs_loadattrcache(np, nvap, xidp, 1);
 	if (error) {
 		FSDBG(266, 0, np, np->n_flag, 0xb1eb1e);
@@ -325,7 +355,6 @@ loop:
 	NFS_CHANGED_UPDATE(nfsvers, np, nvap);
 	if (nvap->nva_type == VDIR)
 		NFS_CHANGED_UPDATE_NC(nfsvers, np, nvap);
-	NMODEINVALIDATE(np);
 
 	/* now, attempt to get a new vnode */
 	vfsp.vnfs_mp = mp;
@@ -363,7 +392,21 @@ loop:
 	if (!dnp || !cnp || !(flags & NG_MAKEENTRY))
 		vfsp.vnfs_flags |= VNFS_NOCACHE;
 
-	error = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, &np->n_vnode);
+#if CONFIG_TRIGGERS
+	if ((nfsvers >= NFS_VER4) && (nvap->nva_type == VDIR) && (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER)) {
+		struct vnode_trigger_param vtp;
+		bzero(&vtp, sizeof(vtp));
+		bcopy(&vfsp, &vtp.vnt_params, sizeof(vfsp));
+		vtp.vnt_resolve_func = nfs_mirror_mount_trigger_resolve;
+		vtp.vnt_unresolve_func = nfs_mirror_mount_trigger_unresolve;
+		vtp.vnt_rearm_func = nfs_mirror_mount_trigger_rearm;
+		vtp.vnt_flags = VNT_AUTO_REARM;
+		error = vnode_create(VNCREATE_TRIGGER, VNCREATE_TRIGGER_SIZE, &vtp, &np->n_vnode);
+	} else
+#endif
+	{
+		error = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, &np->n_vnode);
+	}
 	if (error) {
 		FSDBG(266, 0, np, np->n_flag, 0xb1eb1e);
 		nfs_node_unlock(np);
@@ -425,57 +468,58 @@ nfs_vnop_inactive(ap)
 	nfsnode_t np = VTONFS(ap->a_vp);
 	struct nfs_sillyrename *nsp;
 	struct nfs_vattr nvattr;
-	int unhash, attrerr, busyerror, error, inuse, busied;
+	int unhash, attrerr, busyerror, error, inuse, busied, force;
 	struct nfs_open_file *nofp;
-	const char *vname = NULL;
 	struct componentname cn;
 	struct nfsmount *nmp = NFSTONMP(np);
+	mount_t mp = vnode_mount(vp);
 
 restart:
+	force = (!mp || (mp->mnt_kern_flag & MNTK_FRCUNMOUNT));
 	error = 0;
-	inuse = ((nmp->nm_vers >= NFS_VER4) && (nfs_mount_state_in_use_start(nmp) == 0));
+	inuse = (nfs_mount_state_in_use_start(nmp, NULL) == 0);
 
 	/* There shouldn't be any open or lock state at this point */
 	lck_mtx_lock(&np->n_openlock);
-	if (np->n_openrefcnt) {
-		vname = vnode_getname(vp);
-		printf("nfs_vnop_inactive: still open: %d %s\n", np->n_openrefcnt, vname ? vname : "//");
-	}
+	if (np->n_openrefcnt && !force)
+		NP(np, "nfs_vnop_inactive: still open: %d", np->n_openrefcnt);
 	TAILQ_FOREACH(nofp, &np->n_opens, nof_link) {
 		lck_mtx_lock(&nofp->nof_lock);
 		if (nofp->nof_flags & NFS_OPEN_FILE_BUSY) {
-			if (!vname)
-				vname = vnode_getname(vp);
-			printf("nfs_vnop_inactive: open file busy: %s\n", vname ? vname : "//");
+			if (!force)
+				NP(np, "nfs_vnop_inactive: open file busy");
 			busied = 0;
 		} else {
 			nofp->nof_flags |= NFS_OPEN_FILE_BUSY;
 			busied = 1;
 		}
 		lck_mtx_unlock(&nofp->nof_lock);
+		if ((np->n_flag & NREVOKE) || (nofp->nof_flags & NFS_OPEN_FILE_LOST)) {
+			if (busied)
+				nfs_open_file_clear_busy(nofp);
+			continue;
+		}
 		/*
 		 * If we just created the file, we already had it open in
 		 * anticipation of getting a subsequent open call.  If the
 		 * node has gone inactive without being open, we need to
 		 * clean up (close) the open done in the create.
 		 */
-		if ((nofp->nof_flags & NFS_OPEN_FILE_CREATE) && nofp->nof_creator) {
+		if ((nofp->nof_flags & NFS_OPEN_FILE_CREATE) && nofp->nof_creator && !force) {
 			if (nofp->nof_flags & NFS_OPEN_FILE_REOPEN) {
 				lck_mtx_unlock(&np->n_openlock);
 				if (busied)
 					nfs_open_file_clear_busy(nofp);
 				if (inuse)
 					nfs_mount_state_in_use_end(nmp, 0);
-				nfs4_reopen(nofp, vfs_context_thread(ctx));
-				goto restart;
+				if (!nfs4_reopen(nofp, NULL))
+					goto restart;
 			}
 			nofp->nof_flags &= ~NFS_OPEN_FILE_CREATE;
 			lck_mtx_unlock(&np->n_openlock);
-			error = nfs4_close(np, nofp, NFS_OPEN_SHARE_ACCESS_BOTH, NFS_OPEN_SHARE_DENY_NONE, ctx);
+			error = nfs_close(np, nofp, NFS_OPEN_SHARE_ACCESS_BOTH, NFS_OPEN_SHARE_DENY_NONE, ctx);
 			if (error) {
-				if (!vname)
-					vname = vnode_getname(vp);
-				printf("nfs_vnop_inactive: create close error: %d, %s\n", error, vname);
+				NP(np, "nfs_vnop_inactive: create close error: %d", error);
 				nofp->nof_flags |= NFS_OPEN_FILE_CREATE;
 			}
 			if (busied)
@@ -495,21 +539,19 @@ restart:
 				nofp->nof_r--;
 				nofp->nof_opencnt--;
 				nofp->nof_access = 0;
-			} else {
+			} else if (!force) {
 				lck_mtx_unlock(&np->n_openlock);
 				if (nofp->nof_flags & NFS_OPEN_FILE_REOPEN) {
 					if (busied)
 						nfs_open_file_clear_busy(nofp);
 					if (inuse)
 						nfs_mount_state_in_use_end(nmp, 0);
-					nfs4_reopen(nofp, vfs_context_thread(ctx));
-					goto restart;
+					if (!nfs4_reopen(nofp, NULL))
+						goto restart;
 				}
-				error = nfs4_close(np, nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_NONE, ctx);
+				error = nfs_close(np, nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_NONE, ctx);
 				if (error) {
-					if (!vname)
-						vname = vnode_getname(vp);
-					printf("nfs_vnop_inactive: need close error: %d, %s\n", error, vname);
+					NP(np, "nfs_vnop_inactive: need close error: %d", error);
 					nofp->nof_flags |= NFS_OPEN_FILE_NEEDCLOSE;
 				}
 				if (busied)
@@ -519,32 +561,33 @@ restart:
 				goto restart;
 			}
 		}
-		if (nofp->nof_opencnt) {
-			if (!vname)
-				vname = vnode_getname(vp);
-			printf("nfs_vnop_inactive: file still open: %d %s\n", nofp->nof_opencnt, vname ? vname : "//");
-		}
-		if (nofp->nof_access || nofp->nof_deny ||
+		if (nofp->nof_opencnt && !force)
+			NP(np, "nfs_vnop_inactive: file still open: %d", nofp->nof_opencnt);
+		if (!force && (nofp->nof_access || nofp->nof_deny ||
 		    nofp->nof_mmap_access || nofp->nof_mmap_deny ||
 		    nofp->nof_r || nofp->nof_w || nofp->nof_rw ||
 		    nofp->nof_r_dw || nofp->nof_w_dw || nofp->nof_rw_dw ||
-		    nofp->nof_r_drw || nofp->nof_w_drw || nofp->nof_rw_drw) {
-			if (!vname)
-				vname = vnode_getname(vp);
-			printf("nfs_vnop_inactive: non-zero access: %d %d %d %d # %u %u %u dw %u %u %u drw %u %u %u %s\n",
+		    nofp->nof_r_drw || nofp->nof_w_drw || nofp->nof_rw_drw ||
+		    nofp->nof_d_r || nofp->nof_d_w || nofp->nof_d_rw ||
+		    nofp->nof_d_r_dw || nofp->nof_d_w_dw || nofp->nof_d_rw_dw ||
+		    nofp->nof_d_r_drw || nofp->nof_d_w_drw || nofp->nof_d_rw_drw)) {
+			NP(np, "nfs_vnop_inactive: non-zero access: %d %d %d %d # %u.%u %u.%u %u.%u dw %u.%u %u.%u %u.%u drw %u.%u %u.%u %u.%u",
 				nofp->nof_access, nofp->nof_deny,
 				nofp->nof_mmap_access, nofp->nof_mmap_deny,
-				nofp->nof_r, nofp->nof_w, nofp->nof_rw,
-				nofp->nof_r_dw, nofp->nof_w_dw, nofp->nof_rw_dw,
-				nofp->nof_r_drw, nofp->nof_w_drw, nofp->nof_rw_drw,
-				vname ? vname : "//");
+				nofp->nof_r, nofp->nof_d_r,
+				nofp->nof_w, nofp->nof_d_w,
+				nofp->nof_rw, nofp->nof_d_rw,
+				nofp->nof_r_dw, nofp->nof_d_r_dw,
+				nofp->nof_w_dw, nofp->nof_d_w_dw,
+				nofp->nof_rw_dw, nofp->nof_d_rw_dw,
+				nofp->nof_r_drw, nofp->nof_d_r_drw,
+				nofp->nof_w_drw, nofp->nof_d_w_drw,
+				nofp->nof_rw_drw, nofp->nof_d_rw_drw);
 		}
 		if (busied)
 			nfs_open_file_clear_busy(nofp);
 	}
 	lck_mtx_unlock(&np->n_openlock);
-	if (vname)
-		vnode_putname(vname);
 
 	if (inuse && nfs_mount_state_in_use_end(nmp, error))
 		goto restart;
@@ -673,42 +716,59 @@ nfs_vnop_reclaim(ap)
 	struct nfs_open_file *nofp, *nextnofp;
 	struct nfs_file_lock *nflp, *nextnflp;
 	struct nfs_lock_owner *nlop, *nextnlop;
-	const char *vname = NULL;
 	struct nfsmount *nmp = np->n_mount ? VFSTONFS(np->n_mount) : NFSTONMP(np);
+	mount_t mp = vnode_mount(vp);
+	int force;
 
 	FSDBG_TOP(265, vp, np, np->n_flag, 0);
+	force = (!mp || (mp->mnt_kern_flag & MNTK_FRCUNMOUNT));
 
 	/* There shouldn't be any open or lock state at this point */
 	lck_mtx_lock(&np->n_openlock);
 
 	if (nmp && (nmp->nm_vers >= NFS_VER4)) {
 		/* need to drop a delegation */
+		if (np->n_dreturn.tqe_next != NFSNOLIST) {
+			/* remove this node from the delegation return list */
+			lck_mtx_lock(&nmp->nm_lock);
+			if (np->n_dreturn.tqe_next != NFSNOLIST) {
+				TAILQ_REMOVE(&nmp->nm_dreturnq, np, n_dreturn);
+				np->n_dreturn.tqe_next = NFSNOLIST;
+			}
+			lck_mtx_unlock(&nmp->nm_lock);
+		}
 		if (np->n_dlink.tqe_next != NFSNOLIST) {
-			/* remove this node from the recall list */
+			/* remove this node from the delegation list */
 			lck_mtx_lock(&nmp->nm_lock);
 			if (np->n_dlink.tqe_next != NFSNOLIST) {
-				TAILQ_REMOVE(&nmp->nm_recallq, np, n_dlink);
+				TAILQ_REMOVE(&nmp->nm_delegations, np, n_dlink);
 				np->n_dlink.tqe_next = NFSNOLIST;
 			}
 			lck_mtx_unlock(&nmp->nm_lock);
 		}
-		if (np->n_openflags & N_DELEG_MASK) {
+		if ((np->n_openflags & N_DELEG_MASK) && !force) {
+			/* try to return the delegation */
 			np->n_openflags &= ~N_DELEG_MASK;
 			nfs4_delegreturn_rpc(nmp, np->n_fhp, np->n_fhsize, &np->n_dstateid,
-				vfs_context_thread(ctx), vfs_context_ucred(ctx));
+				R_RECOVER, vfs_context_thread(ctx), vfs_context_ucred(ctx));
+		}
+		if (np->n_attrdirfh) {
+			FREE(np->n_attrdirfh, M_TEMP);
+			np->n_attrdirfh = NULL;
 		}
 	}
 
 	/* clean up file locks */
 	TAILQ_FOREACH_SAFE(nflp, &np->n_locks, nfl_link, nextnflp) {
-		if (!(nflp->nfl_flags & NFS_FILE_LOCK_DEAD)) {
-			if (!vname)
-				vname = vnode_getname(vp);
-			printf("nfs_vnop_reclaim: lock 0x%llx 0x%llx 0x%x (bc %d) %s\n",
-				nflp->nfl_start, nflp->nfl_end, nflp->nfl_flags,
-				nflp->nfl_blockcnt, vname ? vname : "//");
+		if (!(nflp->nfl_flags & NFS_FILE_LOCK_DEAD) && !force) {
+			NP(np, "nfs_vnop_reclaim: lock 0x%llx 0x%llx 0x%x (bc %d)",
+				nflp->nfl_start, nflp->nfl_end, nflp->nfl_flags, nflp->nfl_blockcnt);
 		}
-		if (!(nflp->nfl_flags & NFS_FILE_LOCK_BLOCKED)) {
+		if (!(nflp->nfl_flags & (NFS_FILE_LOCK_BLOCKED|NFS_FILE_LOCK_DEAD))) {
+			/* try sending an unlock RPC if it wasn't delegated */
+			if (!(nflp->nfl_flags & NFS_FILE_LOCK_DELEGATED) && !force)
+				nmp->nm_funcs->nf_unlock_rpc(np, nflp->nfl_owner, F_WRLCK, nflp->nfl_start, nflp->nfl_end, R_RECOVER,
+					NULL, nflp->nfl_owner->nlo_open_owner->noo_cred);
 			lck_mtx_lock(&nflp->nfl_owner->nlo_lock);
 			TAILQ_REMOVE(&nflp->nfl_owner->nlo_locks, nflp, nfl_lolink);
 			lck_mtx_unlock(&nflp->nfl_owner->nlo_lock);
@@ -718,72 +778,79 @@ nfs_vnop_reclaim(ap)
 	}
 	/* clean up lock owners */
 	TAILQ_FOREACH_SAFE(nlop, &np->n_lock_owners, nlo_link, nextnlop) {
-		if (!TAILQ_EMPTY(&nlop->nlo_locks)) {
-			if (!vname)
-				vname = vnode_getname(vp);
-			printf("nfs_vnop_reclaim: lock owner with locks %s\n",
-				vname ? vname : "//");
-		}
+		if (!TAILQ_EMPTY(&nlop->nlo_locks) && !force)
+			NP(np, "nfs_vnop_reclaim: lock owner with locks");
 		TAILQ_REMOVE(&np->n_lock_owners, nlop, nlo_link);
 		nfs_lock_owner_destroy(nlop);
 	}
 	/* clean up open state */
-	if (np->n_openrefcnt) {
-		if (!vname)
-			vname = vnode_getname(vp);
-		printf("nfs_vnop_reclaim: still open: %d %s\n",
-			np->n_openrefcnt, vname ? vname : "//");
-	}
+	if (np->n_openrefcnt && !force)
+		NP(np, "nfs_vnop_reclaim: still open: %d", np->n_openrefcnt);
 	TAILQ_FOREACH_SAFE(nofp, &np->n_opens, nof_link, nextnofp) {
-		if (nofp->nof_flags & NFS_OPEN_FILE_BUSY) {
-			if (!vname)
-				vname = vnode_getname(vp);
-			printf("nfs_vnop_reclaim: open file busy: %s\n",
-				vname ? vname : "//");
-		}
-		if (nofp->nof_opencnt) {
-			if (!vname)
-				vname = vnode_getname(vp);
-			printf("nfs_vnop_reclaim: file still open: %d %s\n",
-				nofp->nof_opencnt, vname ? vname : "//");
-		}
-		if (nofp->nof_access || nofp->nof_deny ||
-		    nofp->nof_mmap_access || nofp->nof_mmap_deny ||
-		    nofp->nof_r || nofp->nof_w || nofp->nof_rw ||
-		    nofp->nof_r_dw || nofp->nof_w_dw || nofp->nof_rw_dw ||
-		    nofp->nof_r_drw || nofp->nof_w_drw || nofp->nof_rw_drw) {
-			if (!vname)
-				vname = vnode_getname(vp);
-			printf("nfs_vnop_reclaim: non-zero access: %d %d %d %d # %u %u %u dw %u %u %u drw %u %u %u %s\n",
-				nofp->nof_access, nofp->nof_deny,
-				nofp->nof_mmap_access, nofp->nof_mmap_deny,
-				nofp->nof_r, nofp->nof_w, nofp->nof_rw,
-				nofp->nof_r_dw, nofp->nof_w_dw, nofp->nof_rw_dw,
-				nofp->nof_r_drw, nofp->nof_w_drw, nofp->nof_rw_drw,
-				vname ? vname : "//");
+		if (nofp->nof_flags & NFS_OPEN_FILE_BUSY)
+			NP(np, "nfs_vnop_reclaim: open file busy");
+		if (!(np->n_flag & NREVOKE) && !(nofp->nof_flags & NFS_OPEN_FILE_LOST)) {
+			if (nofp->nof_opencnt && !force)
+				NP(np, "nfs_vnop_reclaim: file still open: %d", nofp->nof_opencnt);
+			if (!force && (nofp->nof_access || nofp->nof_deny ||
+			    nofp->nof_mmap_access || nofp->nof_mmap_deny ||
+			    nofp->nof_r || nofp->nof_w || nofp->nof_rw ||
+			    nofp->nof_r_dw || nofp->nof_w_dw || nofp->nof_rw_dw ||
+			    nofp->nof_r_drw || nofp->nof_w_drw || nofp->nof_rw_drw ||
+			    nofp->nof_d_r || nofp->nof_d_w || nofp->nof_d_rw ||
+			    nofp->nof_d_r_dw || nofp->nof_d_w_dw || nofp->nof_d_rw_dw ||
+			    nofp->nof_d_r_drw || nofp->nof_d_w_drw || nofp->nof_d_rw_drw)) {
+				NP(np, "nfs_vnop_reclaim: non-zero access: %d %d %d %d # %u.%u %u.%u %u.%u dw %u.%u %u.%u %u.%u drw %u.%u %u.%u %u.%u",
+					nofp->nof_access, nofp->nof_deny,
+					nofp->nof_mmap_access, nofp->nof_mmap_deny,
+					nofp->nof_r, nofp->nof_d_r,
+					nofp->nof_w, nofp->nof_d_w,
+					nofp->nof_rw, nofp->nof_d_rw,
+					nofp->nof_r_dw, nofp->nof_d_r_dw,
+					nofp->nof_w_dw, nofp->nof_d_w_dw,
+					nofp->nof_rw_dw, nofp->nof_d_rw_dw,
+					nofp->nof_r_drw, nofp->nof_d_r_drw,
+					nofp->nof_w_drw, nofp->nof_d_w_drw,
+					nofp->nof_rw_drw, nofp->nof_d_rw_drw);
+				/* try sending a close RPC if it wasn't delegated */
+				if (nofp->nof_r || nofp->nof_w || nofp->nof_rw ||
+				    nofp->nof_r_dw || nofp->nof_w_dw || nofp->nof_rw_dw ||
+				    nofp->nof_r_drw || nofp->nof_w_drw || nofp->nof_rw_drw)
+					nfs4_close_rpc(np, nofp, NULL, nofp->nof_owner->noo_cred, R_RECOVER);
+			}
 		}
 		TAILQ_REMOVE(&np->n_opens, nofp, nof_link);
 		nfs_open_file_destroy(nofp);
 	}
 	lck_mtx_unlock(&np->n_openlock);
 
-	lck_mtx_lock(nfs_buf_mutex);
-	if (!LIST_EMPTY(&np->n_dirtyblkhd) || !LIST_EMPTY(&np->n_cleanblkhd)) {
-		if (!vname)
-			vname = vnode_getname(vp);
-		printf("nfs_reclaim: dropping %s buffers for file %s\n",
-			(!LIST_EMPTY(&np->n_dirtyblkhd) ? "dirty" : "clean"),
-			(vname ? vname : "//"));
+	if (np->n_monlink.le_next != NFSNOLIST) {
+		/* Wait for any in-progress getattr to complete, */
+		/* then remove this node from the monitored node list. */
+		lck_mtx_lock(&nmp->nm_lock);
+		while (np->n_mflag & NMMONSCANINPROG) {
+			struct timespec ts = { 1, 0 };
+			np->n_mflag |= NMMONSCANWANT;
+			msleep(&np->n_mflag, &nmp->nm_lock, PZERO-1, "nfswaitmonscan", &ts);
+		}
+		if (np->n_monlink.le_next != NFSNOLIST) {
+			LIST_REMOVE(np, n_monlink);
+			np->n_monlink.le_next = NFSNOLIST;
+		}
+		lck_mtx_unlock(&nmp->nm_lock);
 	}
+
+	lck_mtx_lock(nfs_buf_mutex);
+	if (!force && (!LIST_EMPTY(&np->n_dirtyblkhd) || !LIST_EMPTY(&np->n_cleanblkhd)))
+		NP(np, "nfs_reclaim: dropping %s buffers", (!LIST_EMPTY(&np->n_dirtyblkhd) ? "dirty" : "clean"));
 	lck_mtx_unlock(nfs_buf_mutex);
-	if (vname)
-		vnode_putname(vname);
 	nfs_vinvalbuf(vp, V_IGNORE_WRITEERR, ap->a_context, 0);
 
 	lck_mtx_lock(nfs_node_hash_mutex);
 
 	if ((vnode_vtype(vp) != VDIR) && np->n_sillyrename) {
-		printf("nfs_reclaim: leaving unlinked file %s\n", np->n_sillyrename->nsr_name);
+		if (!force)
+			NP(np, "nfs_reclaim: leaving unlinked file %s", np->n_sillyrename->nsr_name);
 		if (np->n_sillyrename->nsr_cred != NOCRED)
 			kauth_cred_unref(&np->n_sillyrename->nsr_cred);
 		vnode_rele(NFSTOV(np->n_sillyrename->nsr_dnp));
@@ -808,6 +875,8 @@ nfs_vnop_reclaim(ap)
 		FREE_ZONE(np->n_cookiecache, sizeof(struct nfsdmap), M_NFSDIROFF);
 	if (np->n_fhsize > NFS_SMALLFH)
 		FREE_ZONE(np->n_fhp, np->n_fhsize, M_NFSBIGFH);
+	if (np->n_vattr.nva_acl)
+		kauth_acl_free(np->n_vattr.nva_acl);
 	nfs_node_unlock(np);
 	vnode_clearfsnode(vp);
 

@@ -118,8 +118,10 @@
 
 #include <libkern/OSDebug.h>
 
-extern void throttle_lowpri_io(boolean_t);
+#include <machine/pal_routines.h>
 
+extern void throttle_lowpri_io(int);
+extern void kprint_state(x86_saved_state64_t *saved_state);
 
 /*
  * Forward declarations
@@ -128,14 +130,13 @@ static void user_page_fault_continue(kern_return_t kret);
 #ifdef __i386__
 static void panic_trap(x86_saved_state32_t *saved_state);
 static void set_recovery_ip(x86_saved_state32_t *saved_state, vm_offset_t ip);
-static void panic_64(x86_saved_state_t *, int, const char *, boolean_t);
+extern void panic_64(x86_saved_state_t *, int, const char *, boolean_t);
 #else
 static void panic_trap(x86_saved_state64_t *saved_state);
 static void set_recovery_ip(x86_saved_state64_t *saved_state, vm_offset_t ip);
 #endif
 
 volatile perfCallback perfTrapHook = NULL; /* Pointer to CHUD trap hook routine */
-volatile perfCallback perfASTHook  = NULL; /* Pointer to CHUD AST hook routine */
 
 #if CONFIG_DTRACE
 /* See <rdar://problem/4613924> */
@@ -152,6 +153,7 @@ thread_syscall_return(
 	boolean_t	is_mach;
 	int		code;
 
+	pal_register_cache_state(thr_act, DIRTY);
 
         if (thread_is_64bit(thr_act)) {
 	        x86_saved_state64_t	*regs;
@@ -222,6 +224,7 @@ thread_kdb_return(void)
 	thread_t		thr_act = current_thread();
 	x86_saved_state_t	*iss = USER_STATE(thr_act);
 
+	pal_register_cache_state(thr_act, DIRTY);
 
         if (is_saved_state64(iss)) {
 	        x86_saved_state64_t	*regs;
@@ -247,15 +250,12 @@ thread_kdb_return(void)
 
 #endif	/* MACH_KDB */
 
-void
+static inline void
 user_page_fault_continue(
 			 kern_return_t	kr)
 {
 	thread_t	thread = current_thread();
-	ast_t		*myast;
-	boolean_t	intr;
 	user_addr_t	vaddr;
-
 
 #if	MACH_KDB
 	x86_saved_state_t *regs = USER_STATE(thread);
@@ -288,7 +288,7 @@ user_page_fault_continue(
 		vaddr = uregs->cr2;
 	}
 
-	if ((kr == KERN_SUCCESS) || (kr == KERN_ABORTED)) {
+	if (__probable((kr == KERN_SUCCESS) || (kr == KERN_ABORTED))) {
 #if	MACH_KDB
 		if (!db_breakpoints_inserted) {
 			db_set_breakpoints();
@@ -301,15 +301,6 @@ user_page_fault_continue(
 				       saved_state32(regs)))
 			kdb_trap(T_WATCHPOINT, 0, saved_state32(regs));
 #endif	/* MACH_KDB */
-		intr = ml_set_interrupts_enabled(FALSE);
-		myast = ast_pending();
-		while (*myast & AST_ALL) {
-			ast_taken(AST_ALL, intr);
-			ml_set_interrupts_enabled(FALSE);
-			myast = ast_pending();
-		}
-		ml_set_interrupts_enabled(intr);
-
 		thread_exception_return();
 		/*NOTREACHED*/
 	}
@@ -322,6 +313,8 @@ user_page_fault_continue(
 	}
 #endif	/* MACH_KDB */
 
+	/* PAL debug hook */
+	pal_dbg_page_fault( thread, vaddr, kr );
 
 	i386_exception(EXC_BAD_ACCESS, kr, vaddr);
 	/*NOTREACHED*/
@@ -341,9 +334,11 @@ extern struct recovery	recover_table_end[];
 const char *	trap_type[] = {TRAP_NAMES};
 unsigned 	TRAP_TYPES = sizeof(trap_type)/sizeof(trap_type[0]);
 
+extern void	PE_incoming_interrupt(int interrupt);
+
 #if defined(__x86_64__) && DEBUG
-static void
-print_state(x86_saved_state64_t	*saved_state)
+void
+kprint_state(x86_saved_state64_t	*saved_state)
 {
 	kprintf("current_cpu_datap() 0x%lx\n", (uintptr_t)current_cpu_datap());
 	kprintf("Current GS base MSR 0x%llx\n", rdmsr64(MSR_IA32_GS_BASE));
@@ -385,19 +380,7 @@ print_state(x86_saved_state64_t	*saved_state)
 	kprintf("  isf.rsp    0x%llx\n", saved_state->isf.rsp);
 	kprintf("  isf.ss     0x%llx\n", saved_state->isf.ss);
 }
-/*
- * K64 debug - fatal handler for debug code in the trap vectors.
- */
-extern void
-panic_idt64(x86_saved_state_t *rsp);
-void
-panic_idt64(x86_saved_state_t *rsp)
-{
-	print_state(saved_state64(rsp));
-	panic("panic_idt64");
-}
 #endif
-
 
 
 /*
@@ -442,9 +425,6 @@ void interrupt_populate_latency_stats(char *buf, unsigned bufsize) {
 	if (tcpu < real_ncpus)
 		snprintf(buf, bufsize, "0x%x 0x%x 0x%llx", tcpu, cpu_data_ptr[tcpu]->cpu_max_observed_int_latency_vector, cpu_data_ptr[tcpu]->cpu_max_observed_int_latency);
 }
-   
-
-extern void	PE_incoming_interrupt(int interrupt);
 
 /*
  * Handle interrupts:
@@ -458,6 +438,7 @@ interrupt(x86_saved_state_t *state)
 	uint64_t	rsp;
 	int		interrupt_num;
 	boolean_t	user_mode = FALSE;
+	int		ipl;
 	int		cnum = cpu_number();
 
 	if (is_saved_state64(state) == TRUE) {
@@ -484,34 +465,40 @@ interrupt(x86_saved_state_t *state)
 
 	KERNEL_DEBUG_CONSTANT(
 		MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_START,
-		interrupt_num, (long) rip, user_mode, 0, 0);
+		interrupt_num, rip, user_mode, 0, 0);
+
+	SCHED_STATS_INTERRUPT(current_processor());
+
+	ipl = get_preemption_level();
 
 	/*
 	 * Handle local APIC interrupts
 	 * else call platform expert for devices.
-	 */ 
-	if (!lapic_interrupt(interrupt_num, state)) {
+	 */
+	if (!lapic_interrupt(interrupt_num, state))
 		PE_incoming_interrupt(interrupt_num);
+
+	if (__improbable(get_preemption_level() != ipl)) {
+		panic("Preemption level altered by interrupt vector 0x%x: initial 0x%x, final: 0x%x\n", interrupt_num, ipl, get_preemption_level());
 	}
 
 	KERNEL_DEBUG_CONSTANT(
 		MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END,
-		0, 0, 0, 0, 0);
+		interrupt_num, 0, 0, 0, 0);
 
  	if (cpu_data_ptr[cnum]->cpu_nested_istack) {
  		cpu_data_ptr[cnum]->cpu_nested_istack_events++;
  	}
- 	else {
+ 	else  {
 		uint64_t int_latency = mach_absolute_time() - cpu_data_ptr[cnum]->cpu_int_event_time;
 		if (ilat_assert && (int_latency > interrupt_latency_cap) && !machine_timeout_suspended()) {
-			panic("Interrupt vector 0x%x exceeded interrupt latency threshold, 0x%llx absolute time delta, prior signals: 0x%x", interrupt_num, int_latency, cpu_data_ptr[cnum]->cpu_prior_signals);
+			panic("Interrupt vector 0x%x exceeded interrupt latency threshold, 0x%llx absolute time delta, prior signals: 0x%x, current signals: 0x%x", interrupt_num, int_latency, cpu_data_ptr[cnum]->cpu_prior_signals, cpu_data_ptr[cnum]->cpu_signals);
 		}
 		if (int_latency > cpu_data_ptr[cnum]->cpu_max_observed_int_latency) {
 			cpu_data_ptr[cnum]->cpu_max_observed_int_latency = int_latency;
 			cpu_data_ptr[cnum]->cpu_max_observed_int_latency_vector = interrupt_num;
 		}
 	}
-
 
 	/*
 	 * Having serviced the interrupt first, look at the interrupted stack depth.
@@ -550,7 +537,8 @@ unsigned kdp_has_active_watchpoints = 0;
 
 void
 kernel_trap(
-	x86_saved_state_t	*state)
+	x86_saved_state_t	*state,
+	uintptr_t *lo_spp)
 {
 #ifdef __i386__
 	x86_saved_state32_t	*saved_state;
@@ -579,19 +567,28 @@ kernel_trap(
 	thread = current_thread();
 
 #ifdef __i386__
-	if (is_saved_state64(state)) {
+	if (__improbable(is_saved_state64(state))) {
 		panic_64(state, 0, "Kernel trap with 64-bit state", FALSE);
 	}
+
 	saved_state = saved_state32(state);
+
+	/* Record cpu where state was captured (trampolines don't set this) */
+	saved_state->cpu = cpu_number();
+
 	vaddr = (user_addr_t)saved_state->cr2;
 	type  = saved_state->trapno;
 	code  = saved_state->err & 0xffff;
 	intr  = (saved_state->efl & EFL_IF) != 0;	/* state of ints at trap */
 	kern_ip = (vm_offset_t)saved_state->eip;
 #else
-	if (is_saved_state32(state))
+	if (__improbable(is_saved_state32(state)))
 		panic("kernel_trap(%p) with 32-bit state", state);
 	saved_state = saved_state64(state);
+
+	/* Record cpu where state was captured */
+	saved_state->isf.cpu = cpu_number();
+
 	vaddr = (user_addr_t)saved_state->cr2;
 	type  = saved_state->isf.trapno;
 	code  = (int)(saved_state->isf.err & 0xffff);
@@ -601,18 +598,18 @@ kernel_trap(
 
 	myast = ast_pending();
 
-	perfCallback fn = perfASTHook;
-	if (fn) {
+	perfASTCallback astfn = perfASTHook;
+	if (__improbable(astfn != NULL)) {
 		if (*myast & AST_CHUD_ALL)
-			fn(type, NULL, 0, 0);
+			astfn(AST_CHUD_ALL, myast);
 	} else
 		*myast &= ~AST_CHUD_ALL;
 
 	/*
 	 * Is there a hook?
 	 */
-	fn = perfTrapHook;
-	if (fn) {
+	perfCallback fn = perfTrapHook;
+	if (__improbable(fn != NULL)) {
 	        if (fn(type, NULL, 0, 0) == KERN_SUCCESS) {
 		        /*
 			 * If it succeeds, we are done...
@@ -622,8 +619,8 @@ kernel_trap(
 	}
 
 #if CONFIG_DTRACE
-	if (tempDTraceTrapHook) {
-		if (tempDTraceTrapHook(type, state, 0, 0) == KERN_SUCCESS) {
+	if (__improbable(tempDTraceTrapHook != NULL)) {
+		if (tempDTraceTrapHook(type, state, lo_spp, 0) == KERN_SUCCESS) {
 			/*
 			 * If it succeeds, we are done...
 			 */
@@ -637,7 +634,7 @@ kernel_trap(
 	 * on preemption below.  but we do want to re-enable interrupts
 	 * as soon we possibly can to hold latency down
 	 */
-	if (T_PREEMPT == type) {
+	if (__improbable(T_PREEMPT == type)) {
 	        ast_taken(AST_PREEMPTION, FALSE);
 
 		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_EXCP_KTRAP_x86, type)) | DBG_FUNC_NONE,
@@ -651,7 +648,7 @@ kernel_trap(
 		 */
 		map = kernel_map;
 
-		if (thread != THREAD_NULL && thread->map != kernel_map) {
+		if (__probable(thread != THREAD_NULL && thread->map != kernel_map)) {
 #if NCOPY_WINDOWS > 0
 			vm_offset_t	copy_window_base;
 			vm_offset_t	kvaddr;
@@ -665,11 +662,11 @@ kernel_trap(
 			 * we only need to look at the window
 			 * associated with this processor
 			 */
-		        copy_window_base = current_cpu_datap()->cpu_copywindow_base;
+			copy_window_base = current_cpu_datap()->cpu_copywindow_base;
 
 			if (kvaddr >= copy_window_base && kvaddr < (copy_window_base + (NBPDE * NCOPY_WINDOWS)) ) {
 
-				window_index = (kvaddr - copy_window_base) / NBPDE;
+				window_index = (int)((kvaddr - copy_window_base) / NBPDE);
 
 				if (thread->machine.copy_window[window_index].user_base != (user_addr_t)-1) {
 
@@ -693,8 +690,9 @@ kernel_trap(
 				 */
 				if (no_shared_cr3 &&
 				    (thread->machine.specFlags&CopyIOActive) &&
-				    map->pmap->pm_cr3 != get_cr3()) {
-					set_cr3(map->pmap->pm_cr3);
+				    map->pmap->pm_cr3 != get_cr3_base()) {
+					pmap_assert(current_cpu_datap()->cpu_pmap_pcid_enabled == FALSE);
+					set_cr3_raw(map->pmap->pm_cr3);
 					return;
 				}
 			}
@@ -782,7 +780,7 @@ kernel_trap(
 #endif	/* MACH_KDB */
 
 #if CONFIG_DTRACE
-		if (thread->options & TH_OPT_DTRACE) {	/* Executing under dtrace_probe? */
+		if (thread != THREAD_NULL && thread->options & TH_OPT_DTRACE) {	/* Executing under dtrace_probe? */
 			if (dtrace_tally_fault(vaddr)) { /* Should a fault under dtrace be ignored? */
 				/*
 				 * DTrace has "anticipated" the possibility of this fault, and has
@@ -815,33 +813,9 @@ look_for_watchpoints:
 		if (result == KERN_SUCCESS) {
 #if NCOPY_WINDOWS > 0
 			if (fault_in_copy_window != -1) {
-			        pt_entry_t	*updp;
-				pt_entry_t	*kpdp;
-
-				/*
-				 * in case there was no page table assigned
-				 * for the user base address and the pmap
-				 * got 'expanded' due to this fault, we'll
-				 * copy in the descriptor 
-				 *
-				 * we're either setting the page table descriptor
-				 * to the same value or it was 0... no need
-				 * for a TLB flush in either case
-				 */
-
-		        ml_set_interrupts_enabled(FALSE);
-		        updp = pmap_pde(map->pmap, thread->machine.copy_window[fault_in_copy_window].user_base);
-				assert(updp);
-				if (0 == updp) panic("trap: updp 0"); /* XXX DEBUG */
-				kpdp = current_cpu_datap()->cpu_copywindow_pdp;
-				kpdp += fault_in_copy_window;
-
-#if JOE_DEBUG
-				if (*kpdp && (*kpdp & PG_FRAME) != (*updp & PG_FRAME))
-				        panic("kernel_fault: user pdp doesn't match - updp = 0x%qx, kpdp = 0x%qx\n", *updp, *kpdp);
-#endif
-				pmap_store_pte(kpdp, *updp);
-
+				ml_set_interrupts_enabled(FALSE);
+				copy_window_fault(thread, map,
+						  fault_in_copy_window);
 				(void) ml_set_interrupts_enabled(intr);
 			}
 #endif /* NCOPY_WINDOWS > 0 */
@@ -855,9 +829,6 @@ FALL_THROUGH:
 #endif /* CONFIG_DTRACE */
 
 	    case T_GENERAL_PROTECTION:
-#if defined(__x86_64__) && DEBUG
-		print_state(saved_state);
-#endif
 		/*
 		 * If there is a failure recovery address
 		 * for this fault, go there.
@@ -872,7 +843,7 @@ FALL_THROUGH:
 		/*
 		 * Check thread recovery address also.
 		 */
-		if (thread->recover) {
+		if (thread != THREAD_NULL && thread->recover) {
 			set_recovery_ip(saved_state, thread->recover);
 			thread->recover = 0;
 			return;
@@ -883,7 +854,6 @@ FALL_THROUGH:
 		 *
 		 * fall through...
 		 */
-
 	    default:
 		/*
 		 * Exception 15 is reserved but some chips may generate it
@@ -893,6 +863,9 @@ FALL_THROUGH:
 			kprintf("kernel_trap() ignoring spurious trap 15\n"); 
 			return;
 		}
+#if defined(__x86_64__) && DEBUG
+		kprint_state(saved_state);
+#endif
 debugger_entry:
 		/* Ensure that the i386_kernel_state at the base of the
 		 * current thread's stack (if any) is synchronized with the
@@ -923,7 +896,7 @@ restart_debugger:
 		}
 #endif
 	}
-
+	__asm__ volatile("cli":::"cc");
 	panic_trap(saved_state);
 	/*
 	 * NO RETURN
@@ -951,10 +924,10 @@ static void
 panic_trap(x86_saved_state32_t *regs)
 {
 	const char *trapname = "Unknown";
-	uint32_t	cr0 = get_cr0();
-	uint32_t	cr2 = get_cr2();
-	uint32_t	cr3 = get_cr3();
-	uint32_t	cr4 = get_cr4();
+	pal_cr_t	cr0, cr2, cr3, cr4;
+
+	pal_get_control_registers( &cr0, &cr2, &cr3, &cr4 );
+
 	/*
 	 * Issue an I/O port read if one has been requested - this is an
 	 * event logic analyzers can use as a trigger point.
@@ -977,7 +950,7 @@ panic_trap(x86_saved_state32_t *regs)
 	      regs->eip, regs->trapno, trapname, cr0, cr2, cr3, cr4,
 	      regs->eax,regs->ebx,regs->ecx,regs->edx,
 	      regs->cr2,regs->ebp,regs->esi,regs->edi,
-	      regs->efl,regs->eip,regs->cs, regs->ds, regs->err);
+	      regs->efl,regs->eip,regs->cs & 0xFFFF, regs->ds & 0xFFFF, regs->err);
 	/*
 	 * This next statement is not executed,
 	 * but it's needed to stop the compiler using tail call optimization
@@ -990,11 +963,11 @@ static void
 panic_trap(x86_saved_state64_t *regs)
 {
 	const char	*trapname = "Unknown";
-	uint64_t	cr0 = get_cr0();
-	uint64_t	cr2 = get_cr2();
-	uint64_t	cr3 = get_cr3();
-	uint64_t	cr4 = get_cr4();
+	pal_cr_t	cr0, cr2, cr3, cr4;
 
+	pal_get_control_registers( &cr0, &cr2, &cr3, &cr4 );
+	assert(ml_get_interrupts_enabled() == FALSE);
+	current_cpu_datap()->cpu_fatal_trap_state = regs;
 	/*
 	 * Issue an I/O port read if one has been requested - this is an
 	 * event logic analyzers can use as a trigger point.
@@ -1016,15 +989,15 @@ panic_trap(x86_saved_state64_t *regs)
 	      "R8:  0x%016llx, R9:  0x%016llx, R10: 0x%016llx, R11: 0x%016llx\n"
 	      "R12: 0x%016llx, R13: 0x%016llx, R14: 0x%016llx, R15: 0x%016llx\n"
 	      "RFL: 0x%016llx, RIP: 0x%016llx, CS:  0x%016llx, SS:  0x%016llx\n"
-	      "Error code: 0x%016llx\n",
+	      "CR2: 0x%016llx, Error code: 0x%016llx, Faulting CPU: 0x%x\n",
 	      regs->isf.rip, regs->isf.trapno, trapname,
 	      cr0, cr2, cr3, cr4,
 	      regs->rax, regs->rbx, regs->rcx, regs->rdx,
 	      regs->isf.rsp, regs->rbp, regs->rsi, regs->rdi,
 	      regs->r8,  regs->r9,  regs->r10, regs->r11,
 	      regs->r12, regs->r13, regs->r14, regs->r15,
-	      regs->isf.rflags, regs->isf.rip, regs->isf.cs,  regs->isf.ss,
-	      regs->isf.err);
+	      regs->isf.rflags, regs->isf.rip, regs->isf.cs & 0xFFFF,
+	      regs->isf.ss & 0xFFFF,regs->cr2, regs->isf.err, regs->isf.cpu);
 	/*
 	 * This next statement is not executed,
 	 * but it's needed to stop the compiler using tail call optimization
@@ -1033,181 +1006,6 @@ panic_trap(x86_saved_state64_t *regs)
 	cr0 = 0;
 }
 #endif
-
-extern void     kprintf_break_lock(void);
-
-#ifdef __i386__
-static void
-panic_32(__unused int code, __unused int pc, __unused const char *msg, boolean_t do_mca_dump, boolean_t do_bt)
-{
-	struct i386_tss *my_ktss = current_ktss();
-
-	/* Set postcode (DEBUG only) */
-	postcode(pc);
-
-	/*
-	 * Issue an I/O port read if one has been requested - this is an
-	 * event logic analyzers can use as a trigger point.
-	 */
-	panic_io_port_read();
-
-	/*
-	 * Break kprintf lock in case of recursion,
-	 * and record originally faulted instruction address.
-	 */
-	kprintf_break_lock();
-
-	if (do_mca_dump) {
-#if CONFIG_MCA
-		/*
-		 * Dump the contents of the machine check MSRs (if any).
-		 */
-		mca_dump();
-#endif
-	}
-
-#if MACH_KDP
-	/*
-	 * Print backtrace leading to first fault:
-	 */
-	if (do_bt)
-		panic_i386_backtrace((void *) my_ktss->ebp, 10, NULL, FALSE, NULL);
-#endif
-
-	panic("%s at 0x%08x, thread:%p, code:0x%x, "
-	      "registers:\n"
-	      "CR0: 0x%08x, CR2: 0x%08x, CR3: 0x%08x, CR4: 0x%08x\n"
-	      "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
-	      "ESP: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
-	      "EFL: 0x%08x, EIP: 0x%08x\n",
-		  msg,
-	      my_ktss->eip, current_thread(), code,
-	      (uint32_t)get_cr0(), (uint32_t)get_cr2(), (uint32_t)get_cr3(), (uint32_t)get_cr4(),
-	      my_ktss->eax, my_ktss->ebx, my_ktss->ecx, my_ktss->edx,
-	      my_ktss->esp, my_ktss->ebp, my_ktss->esi, my_ktss->edi,
-	      my_ktss->eflags, my_ktss->eip);
-}
-
-/*
- * Called from locore on a special reserved stack after a double-fault
- * is taken in kernel space.
- * Kernel stack overflow is one route here.
- */
-void
-panic_double_fault32(int code)
-{
-	panic_32(code, PANIC_DOUBLE_FAULT, "Double fault", FALSE, TRUE);
-}
-
-/*
- * Called from locore on a special reserved stack after a machine-check
- */
-void 
-panic_machine_check32(int code)
-{
-	panic_32(code, PANIC_MACHINE_CHECK, "Machine-check", TRUE, FALSE);
-}
-#endif /* __i386__ */
-
-static void
-panic_64(x86_saved_state_t *sp, __unused int pc, __unused const char *msg, boolean_t do_mca_dump)
-{
-	/* Set postcode (DEBUG only) */
-	postcode(pc);
-
-	/*
-	 * Issue an I/O port read if one has been requested - this is an
-	 * event logic analyzers can use as a trigger point.
-	 */
-	panic_io_port_read();
-
-	/*
-	 * Break kprintf lock in case of recursion,
-	 * and record originally faulted instruction address.
-	 */
-	kprintf_break_lock();
-
-	if (do_mca_dump) {
-#if CONFIG_MCA
-		/*
-		 * Dump the contents of the machine check MSRs (if any).
-		 */
-		mca_dump();
-#endif
-	}
-
-#ifdef __i386__
-	/*
-	 * Dump the interrupt stack frame at last kernel entry.
-	 */
-	if (is_saved_state64(sp)) {
-		x86_saved_state64_t	*ss64p = saved_state64(sp);
-		panic("%s thread:%p, trapno:0x%x, err:0x%qx, "
-		      "registers:\n"
-		      "CR0: 0x%08x, CR2: 0x%08x, CR3: 0x%08x, CR4: 0x%08x\n"
-		      "RAX: 0x%016qx, RBX: 0x%016qx, RCX: 0x%016qx, RDX: 0x%016qx\n"
-		      "RSP: 0x%016qx, RBP: 0x%016qx, RSI: 0x%016qx, RDI: 0x%016qx\n"
-		      "R8:  0x%016qx, R9:  0x%016qx, R10: 0x%016qx, R11: 0x%016qx\n"
-		      "R12: 0x%016qx, R13: 0x%016qx, R14: 0x%016qx, R15: 0x%016qx\n"
-		      "RFL: 0x%016qx, RIP: 0x%016qx, CR2: 0x%016qx\n",
-			  msg,
-		      current_thread(), ss64p->isf.trapno, ss64p->isf.err,
-		      (uint32_t)get_cr0(), (uint32_t)get_cr2(), (uint32_t)get_cr3(), (uint32_t)get_cr4(),
-		      ss64p->rax, ss64p->rbx, ss64p->rcx, ss64p->rdx,
-		      ss64p->isf.rsp, ss64p->rbp, ss64p->rsi, ss64p->rdi,
-		      ss64p->r8, ss64p->r9, ss64p->r10, ss64p->r11,
-		      ss64p->r12, ss64p->r13, ss64p->r14, ss64p->r15,
-		      ss64p->isf.rflags, ss64p->isf.rip, ss64p->cr2);
-	} else {
-		x86_saved_state32_t	*ss32p = saved_state32(sp);
-		panic("%s at 0x%08x, thread:%p, trapno:0x%x, err:0x%x,"
-		      "registers:\n"
-		      "CR0: 0x%08x, CR2: 0x%08x, CR3: 0x%08x, CR4: 0x%08x\n"
-		      "EAX: 0x%08x, EBX: 0x%08x, ECX: 0x%08x, EDX: 0x%08x\n"
-		      "ESP: 0x%08x, EBP: 0x%08x, ESI: 0x%08x, EDI: 0x%08x\n"
-		      "EFL: 0x%08x, EIP: 0x%08x\n",
-		      msg,
-			  ss32p->eip, current_thread(), ss32p->trapno, ss32p->err,
-		      (uint32_t)get_cr0(), (uint32_t)get_cr2(), (uint32_t)get_cr3(), (uint32_t)get_cr4(),
-		      ss32p->eax, ss32p->ebx, ss32p->ecx, ss32p->edx,
-		      ss32p->uesp, ss32p->ebp, ss32p->esi, ss32p->edi,
-		      ss32p->efl, ss32p->eip);
-	}
-#else
-	x86_saved_state64_t *regs = saved_state64(sp);
-	panic("%s thread:%p at 0x%016llx, registers:\n"
-	      "CR0: 0x%016lx, CR2: 0x%016lx, CR3: 0x%016lx, CR4: 0x%016lx\n"
-	      "RAX: 0x%016llx, RBX: 0x%016llx, RCX: 0x%016llx, RDX: 0x%016llx\n"
-	      "RSP: 0x%016llx, RBP: 0x%016llx, RSI: 0x%016llx, RDI: 0x%016llx\n"
-	      "R8:  0x%016llx, R9:  0x%016llx, R10: 0x%016llx, R11: 0x%016llx\n"
-	      "R12: 0x%016llx, R13: 0x%016llx, R14: 0x%016llx, R15: 0x%016llx\n"
-	      "RFL: 0x%016llx, RIP: 0x%016llx, CS:  0x%016llx, SS:  0x%016llx\n"
-	      "Error code: 0x%016llx\n",
-	      msg,
-		  current_thread(), regs->isf.rip,
-	      get_cr0(), get_cr2(), get_cr3(), get_cr4(),
-	      regs->rax, regs->rbx, regs->rcx, regs->rdx,
-	      regs->isf.rsp, regs->rbp, regs->rsi, regs->rdi,
-	      regs->r8,  regs->r9,  regs->r10, regs->r11,
-	      regs->r12, regs->r13, regs->r14, regs->r15,
-	      regs->isf.rflags, regs->isf.rip, regs->isf.cs,  regs->isf.ss,
-	      regs->isf.err);
-#endif
-}
-
-void
-panic_double_fault64(x86_saved_state_t *sp)
-{
-	panic_64(sp, PANIC_DOUBLE_FAULT, "Double fault", FALSE);
-
-}
-void
-
-panic_machine_check64(x86_saved_state_t *sp)
-{
-	panic_64(sp, PANIC_MACHINE_CHECK, "Machine Check", TRUE);
-
-}
 
 #if CONFIG_DTRACE
 extern kern_return_t dtrace_user_probe(x86_saved_state_t *);
@@ -1231,6 +1029,7 @@ user_trap(
 	ast_t			*myast;
 	kern_return_t		kret;
 	user_addr_t		rip;
+	unsigned long 		dr6 = 0; /* 32 bit for i386, 64 bit for x86_64 */
 
 	assert((is_saved_state32(saved_state) && !thread_is_64bit(thread)) ||
 	       (is_saved_state64(saved_state) &&  thread_is_64bit(thread)));
@@ -1239,6 +1038,9 @@ user_trap(
 	        x86_saved_state64_t	*regs;
 
 		regs = saved_state64(saved_state);
+
+		/* Record cpu where state was captured */
+		regs->isf.cpu = cpu_number();
 
 		type = regs->isf.trapno;
 		err  = (int)regs->isf.err & 0xffff;
@@ -1249,11 +1051,25 @@ user_trap(
 
 		regs = saved_state32(saved_state);
 
+		/* Record cpu where state was captured */
+		regs->cpu = cpu_number();
+
 		type  = regs->trapno;
 		err   = regs->err & 0xffff;
 		vaddr = (user_addr_t)regs->cr2;
 		rip   = (user_addr_t)regs->eip;
 	}
+
+	if ((type == T_DEBUG) && thread->machine.ids) {
+		unsigned long clear = 0;
+		/* Stash and clear this processor's DR6 value, in the event
+		 * this was a debug register match
+		 */
+		__asm__ volatile ("mov %%db6, %0" : "=r" (dr6)); 
+		__asm__ volatile ("mov %0, %%db6" : : "r" (clear));
+	}
+
+	pal_sti();
 
 	KERNEL_DEBUG_CONSTANT(
 		(MACHDBG_CODE(DBG_MACH_EXCP_UTRAP_x86, type)) | DBG_FUNC_NONE,
@@ -1268,17 +1084,18 @@ user_trap(
 	kprintf("user_trap(0x%08x) type=%d vaddr=0x%016llx\n",
 		saved_state, type, vaddr);
 #endif
-	perfCallback fn = perfASTHook;
-	if (fn) {
+
+	perfASTCallback astfn = perfASTHook;
+	if (__improbable(astfn != NULL)) {
 		myast = ast_pending();
 		if (*myast & AST_CHUD_ALL) {
-			fn(type, saved_state, 0, 0);
+			astfn(AST_CHUD_ALL, myast);
 		}
 	}
 
 	/* Is there a hook? */
-	fn = perfTrapHook;
-	if (fn) {
+	perfCallback fn = perfTrapHook;
+	if (__improbable(fn != NULL)) {
 		if (fn(type, saved_state, 0, 0) == KERN_SUCCESS)
 			return;	/* If it succeeds, we are done... */
 	}
@@ -1291,7 +1108,7 @@ user_trap(
 	DEBUG_KPRINT_SYSCALL_MASK(1,
 		"user_trap: type=0x%x(%s) err=0x%x cr2=%p rip=%p\n",
 		type, trap_type[type], err, (void *)(long) vaddr, (void *)(long) rip);
-
+	
 	switch (type) {
 
 	    case T_DIVIDE_ERROR:
@@ -1302,12 +1119,11 @@ user_trap(
 	    case T_DEBUG:
 		{
 			pcb_t	pcb;
-			long clear = 0; /* 32 bit for i386, 64 bit for x86_64 */
 			/*
-			 * get dr6 and set it in the thread's pcb before
-			 * returning to userland
+			 * Update the PCB with this processor's DR6 value
+			 * in the event this was a debug register match.
 			 */
-			pcb = thread->machine.pcb;
+			pcb = THREAD_TO_PCB(thread);
 			if (pcb->ids) {
 				/*
 				 * We can get and set the status register
@@ -1315,16 +1131,13 @@ user_trap(
 				 * because the high order bits are not
 				 * used on x86_64
 				 */
-				unsigned long dr6_temp; /* 32 bit for i386, 64 bit for x86_64 */
-				__asm__ volatile ("mov %%db6, %0" : "=r" (dr6_temp)); /* Register constraint by necessity */
 				if (thread_is_64bit(thread)) {
 					x86_debug_state64_t *ids = pcb->ids;
-					ids->dr6 = dr6_temp;
+					ids->dr6 = dr6;
 				} else { /* 32 bit thread */
 					x86_debug_state32_t *ids = pcb->ids;
-					ids->dr6 = (uint32_t) dr6_temp;
+					ids->dr6 = (uint32_t) dr6;
 				}
-				__asm__ volatile ("mov %0, %%db6" : : "r" (clear));
 			}
 			exc = EXC_BREAKPOINT;
 			code = EXC_I386_SGL;
@@ -1406,7 +1219,7 @@ user_trap(
 		if (err & T_PF_WRITE)
 		        prot |= VM_PROT_WRITE;
 #if     PAE
-		if (err & T_PF_EXECUTE)
+		if (__improbable(err & T_PF_EXECUTE))
 		        prot |= VM_PROT_EXECUTE;
 #endif
 		kret = vm_fault(thread->map, vm_map_trunc_page(vaddr),
@@ -1462,8 +1275,6 @@ user_trap(
 
 /*
  * Handle AST traps for i386.
- * Check for delayed floating-point exception from
- * AT-bus machines.
  */
 
 extern void     log_thread_action (thread_t, char *);
@@ -1511,44 +1322,6 @@ i386_exception(
 }
 
 
-
-void
-kernel_preempt_check(void)
-{
-	ast_t		*myast;
-	boolean_t	intr;
-
-	/*
-	 * disable interrupts to both prevent pre-emption
-	 * and to keep the ast state from changing via
-	 * an interrupt handler making something runnable
-	 */
-	intr = ml_set_interrupts_enabled(FALSE);
-
-	myast = ast_pending();
-
-	if ((*myast & AST_URGENT) && intr == TRUE && get_interrupt_level() == 0) {
-		/*
-		 * can handle interrupts and preemptions 
-		 * at this point
-		 */
-		ml_set_interrupts_enabled(intr);
-
-		/*
-		 * now cause the PRE-EMPTION trap
-		 */
-		__asm__ volatile ("     int     $0xff");
-	} else {
-		/*
-		 * if interrupts were already disabled or
-		 * we're in an interrupt context, we can't
-		 * preempt...  of course if AST_URGENT
-		 * isn't set we also don't want to
-		 */
-		ml_set_interrupts_enabled(intr);
-	}
-}
-
 #if	MACH_KDB
 
 extern void 	db_i386_state(x86_saved_state32_t *regs);
@@ -1595,6 +1368,10 @@ sync_iss_to_iks(x86_saved_state_t *saved_state)
 	vm_offset_t kstack;
 	boolean_t record_active_regs = FALSE;
 
+	/* The PAL may have a special way to sync registers */
+	if( saved_state->flavor == THREAD_STATE_NONE )
+		pal_get_kern_regs( saved_state );
+
 	if ((kstack = current_thread()->kernel_stack) != 0) {
 #ifdef __i386__
 		x86_saved_state32_t	*regs = saved_state32(saved_state);
@@ -1604,8 +1381,7 @@ sync_iss_to_iks(x86_saved_state_t *saved_state)
 
 		iks = STACK_IKS(kstack);
 
-
-		 /* Did we take the trap/interrupt in kernel mode? */
+		/* Did we take the trap/interrupt in kernel mode? */
 #ifdef __i386__
 		if (regs == USER_REGS32(current_thread()))
 		        record_active_regs = TRUE;

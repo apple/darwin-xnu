@@ -1,0 +1,31 @@
+#include "<DEVELOPER_DIR>/Makefiles/CoreOS/Xcode/BSD.xcconfig"
+BUILD_VARIANTS = normal
+ONLY_ACTIVE_ARCH = NO
+DEBUG_INFORMATION_FORMAT = dwarf-with-dsym
+INSTALL_PATH = /usr/lib/system
+INSTALL_PATH[sdk=iphoneos*] = /usr/lib/system
+INSTALL_PATH[sdk=iphonesimulator*] = $(SDKROOT)/usr/lib/system
+INSTALL_PATH[sdk=macosx*] = /usr/lib/system
+PUBLIC_HEADERS_FOLDER_PATH = /usr/include/mach
+PUBLIC_HEADERS_FOLDER_PATH[sdk=iphoneos*] = /usr/include/mach
+PUBLIC_HEADERS_FOLDER_PATH[sdk=iphonesimulator*] = $(SDKROOT)/usr/include/mach
+PUBLIC_HEADERS_FOLDER_PATH[sdk=macosx*] = /usr/include/mach
+EXECUTABLE_PREFIX = libsystem_
+PRODUCT_NAME = kernel
+ALWAYS_SEARCH_USER_PATHS = NO
+OTHER_CFLAGS = -fdollars-in-identifiers -no-cpp-precomp -fno-common -fno-stack-protector -pipe -DLIBSYSCALL_INTERFACE -D__DARWIN_VERS_1050=1
+OTHER_CFLAGS[sdk=macosx*] = $(inherited) -DSYSCALL_PRE1050
+OTHER_CFLAGS[sdk=macosx*][arch=x86_64] = $(inherited) -DNO_SYSCALL_LEGACY
+OTHER_CFLAGS[sdk=iphoneos*] = $(inherited) -DNO_SYSCALL_LEGACY
+GCC_PREPROCESSOR_DEFINITIONS = CF_OPEN_SOURCE CF_EXCLUDE_CSTD_HEADERS DEBUG _FORTIFY_SOURCE=0
+HEADER_SEARCH_PATHS = /System/Library/Frameworks/System.framework/PrivateHeaders $(PROJECT_DIR)/mach $(PROJECT_DIR)/wrappers
+WARNING_CFLAGS = -Wmost
+GCC_TREAT_WARNINGS_AS_ERRORS = YES
+GCC_WARN_ABOUT_MISSING_NEWLINE = YES
+CODE_SIGN_IDENTITY = -
+DYLIB_CURRENT_VERSION = $(RC_ProjectSourceVersion)
+OTHER_LDFLAGS = 
+INSTALLHDRS_SCRIPT_PHASE = YES
+USE_HEADERMAP = NO
+LINK_WITH_STANDARD_LIBRARIES = NO
+ALWAYS_SEARCH_USER_PATHS = YES

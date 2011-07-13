@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -93,7 +93,6 @@
 #include <../bsd/sys/lockstat.h>
 #endif
 
-
 /*
  * genassym.c is used to produce an
  * assembly file which, intermingled with unuseful assembly code,
@@ -131,6 +130,8 @@ main(
 	DECLARE("AST_URGENT",		AST_URGENT);
 	DECLARE("AST_BSD",			AST_BSD);
 
+	DECLARE("MAX_CPUS",			MAX_CPUS);
+
 	/* Simple Lock structure */
 	DECLARE("SLOCK_ILK",	offsetof(usimple_lock_t, interlock));
 #if	MACH_LDEBUG
@@ -149,7 +150,6 @@ main(
 #ifdef __i386__
 	DECLARE("MUTEX_TYPE",	offsetof(lck_mtx_ext_t *, lck_mtx_deb.type));
 	DECLARE("MUTEX_PC",		offsetof(lck_mtx_ext_t *, lck_mtx_deb.pc));
-	DECLARE("MUTEX_THREAD",	offsetof(lck_mtx_ext_t *, lck_mtx_deb.thread));
 	DECLARE("MUTEX_ATTR",	offsetof(lck_mtx_ext_t *, lck_mtx_attr));
 	DECLARE("MUTEX_ATTR_DEBUG", LCK_MTX_ATTR_DEBUG);
 	DECLARE("MUTEX_ATTR_DEBUGb", LCK_MTX_ATTR_DEBUGb);
@@ -158,8 +158,6 @@ main(
 	DECLARE("MUTEX_TAG",	MUTEX_TAG);
 #endif
 	DECLARE("MUTEX_IND",	LCK_MTX_TAG_INDIRECT);
-	DECLARE("MUTEX_EXT",	LCK_MTX_PTR_EXTENDED);
-	DECLARE("MUTEX_ITAG",	offsetof(lck_mtx_t *, lck_mtx_tag));
 	DECLARE("MUTEX_PTR",	offsetof(lck_mtx_t *, lck_mtx_ptr));
 	DECLARE("MUTEX_ASSERT_OWNED",	LCK_MTX_ASSERT_OWNED);
 	DECLARE("MUTEX_ASSERT_NOTOWNED",LCK_MTX_ASSERT_NOTOWNED);
@@ -189,62 +187,55 @@ main(
 	DECLARE("TH_RECOVER",		offsetof(thread_t, recover));
 	DECLARE("TH_CONTINUATION",	offsetof(thread_t, continuation));
 	DECLARE("TH_KERNEL_STACK",	offsetof(thread_t, kernel_stack));
+	DECLARE("TH_MUTEX_COUNT",	offsetof(thread_t, mutex_count));
+	DECLARE("TH_WAS_PROMOTED_ON_WAKEUP", offsetof(thread_t, was_promoted_on_wakeup));
 
-	DECLARE("TASK_MACH_EXC_PORT",
-		offsetof(task_t, exc_actions[EXC_MACH_SYSCALL].port));
-	DECLARE("TASK_SYSCALLS_MACH",	offsetof(struct task *, syscalls_mach));
-	DECLARE("TASK_SYSCALLS_UNIX",	offsetof(struct task *, syscalls_unix));
+	DECLARE("TH_SYSCALLS_MACH",	offsetof(thread_t, syscalls_mach));
+	DECLARE("TH_SYSCALLS_UNIX",	offsetof(thread_t, syscalls_unix));
 
 	DECLARE("TASK_VTIMERS",			offsetof(struct task *, vtimers));
 
 	/* These fields are being added on demand */
-	DECLARE("ACT_MACH_EXC_PORT",
-		offsetof(thread_t, exc_actions[EXC_MACH_SYSCALL].port));
-
-	DECLARE("ACT_TASK",	offsetof(thread_t, task));
-	DECLARE("ACT_AST",	offsetof(thread_t, ast));
-	DECLARE("ACT_PCB",	offsetof(thread_t, machine.pcb));
-	DECLARE("ACT_SPF",	offsetof(thread_t, machine.specFlags));
-	DECLARE("ACT_MAP",	offsetof(thread_t, map));
-	DECLARE("ACT_PCB_ISS", 	offsetof(thread_t, machine.xxx_pcb.iss));
-	DECLARE("ACT_PCB_IDS", 	offsetof(thread_t, machine.xxx_pcb.ids));
+	DECLARE("TH_TASK",	offsetof(thread_t, task));
+	DECLARE("TH_AST",	offsetof(thread_t, ast));
+	DECLARE("TH_MAP",	offsetof(thread_t, map));
+	DECLARE("TH_SPF",	offsetof(thread_t, machine.specFlags));
+	DECLARE("TH_PCB_ISS", 	offsetof(thread_t, machine.iss));
+	DECLARE("TH_PCB_IDS", 	offsetof(thread_t, machine.ids));
+	DECLARE("TH_PCB_FPS",	offsetof(thread_t, machine.ifps));
 #if NCOPY_WINDOWS > 0
-	DECLARE("ACT_COPYIO_STATE", offsetof(thread_t, machine.copyio_state));
+	DECLARE("TH_COPYIO_STATE", offsetof(thread_t, machine.copyio_state));
 	DECLARE("WINDOWS_CLEAN", WINDOWS_CLEAN);
 #endif
 
 	DECLARE("MAP_PMAP",	offsetof(vm_map_t, pmap));
 
 #define IEL_SIZE		(sizeof(struct i386_exception_link *))
-	DECLARE("IEL_SIZE",	IEL_SIZE);
 	DECLARE("IKS_SIZE",	sizeof(struct x86_kernel_state));
 
 	/*
 	 * KSS_* are offsets from the top of the kernel stack (cpu_kernel_stack)
 	 */
 #if defined(__i386__)
-	DECLARE("KSS_EBX", IEL_SIZE + offsetof(struct x86_kernel_state *, k_ebx));
-	DECLARE("KSS_ESP", IEL_SIZE + offsetof(struct x86_kernel_state *, k_esp));
-	DECLARE("KSS_EBP", IEL_SIZE + offsetof(struct x86_kernel_state *, k_ebp));
-	DECLARE("KSS_EDI", IEL_SIZE + offsetof(struct x86_kernel_state *, k_edi));
-	DECLARE("KSS_ESI", IEL_SIZE + offsetof(struct x86_kernel_state *, k_esi));
-	DECLARE("KSS_EIP", IEL_SIZE + offsetof(struct x86_kernel_state *, k_eip));
+	DECLARE("KSS_EBX",	offsetof(struct x86_kernel_state *, k_ebx));
+	DECLARE("KSS_ESP",	offsetof(struct x86_kernel_state *, k_esp));
+	DECLARE("KSS_EBP",	offsetof(struct x86_kernel_state *, k_ebp));
+	DECLARE("KSS_EDI",	offsetof(struct x86_kernel_state *, k_edi));
+	DECLARE("KSS_ESI",	offsetof(struct x86_kernel_state *, k_esi));
+	DECLARE("KSS_EIP",	offsetof(struct x86_kernel_state *, k_eip));
 #elif defined(__x86_64__)
-	DECLARE("KSS_RBX", IEL_SIZE + offsetof(struct x86_kernel_state *, k_rbx));
-	DECLARE("KSS_RSP", IEL_SIZE + offsetof(struct x86_kernel_state *, k_rsp));
-	DECLARE("KSS_RBP", IEL_SIZE + offsetof(struct x86_kernel_state *, k_rbp));
-	DECLARE("KSS_R12", IEL_SIZE + offsetof(struct x86_kernel_state *, k_r12));
-	DECLARE("KSS_R13", IEL_SIZE + offsetof(struct x86_kernel_state *, k_r13));
-	DECLARE("KSS_R14", IEL_SIZE + offsetof(struct x86_kernel_state *, k_r14));
-	DECLARE("KSS_R15", IEL_SIZE + offsetof(struct x86_kernel_state *, k_r15));
-	DECLARE("KSS_RIP", IEL_SIZE + offsetof(struct x86_kernel_state *, k_rip));	
+	DECLARE("KSS_RBX",	offsetof(struct x86_kernel_state *, k_rbx));
+	DECLARE("KSS_RSP",	offsetof(struct x86_kernel_state *, k_rsp));
+	DECLARE("KSS_RBP",	offsetof(struct x86_kernel_state *, k_rbp));
+	DECLARE("KSS_R12",	offsetof(struct x86_kernel_state *, k_r12));
+	DECLARE("KSS_R13",	offsetof(struct x86_kernel_state *, k_r13));
+	DECLARE("KSS_R14",	offsetof(struct x86_kernel_state *, k_r14));
+	DECLARE("KSS_R15",	offsetof(struct x86_kernel_state *, k_r15));
+	DECLARE("KSS_RIP",	offsetof(struct x86_kernel_state *, k_rip));	
 #else
 #error Unsupported architecture
 #endif
 	
-	DECLARE("PCB_FPS",	offsetof(pcb_t, ifps));
-	DECLARE("PCB_ISS",	offsetof(pcb_t, iss));
-
 	DECLARE("DS_DR0",	offsetof(struct x86_debug_state32 *, dr0));
 	DECLARE("DS_DR1",	offsetof(struct x86_debug_state32 *, dr1));
 	DECLARE("DS_DR2",	offsetof(struct x86_debug_state32 *, dr2));
@@ -432,9 +423,7 @@ main(
         DECLARE("CPU_INTERRUPT_LEVEL",
 		offsetof(cpu_data_t *, cpu_interrupt_level));
 	DECLARE("CPU_NESTED_ISTACK",
- 	    offsetof(cpu_data_t *, cpu_nested_istack));
-        DECLARE("CPU_SIMPLE_LOCK_COUNT",
-		offsetof(cpu_data_t *,cpu_simple_lock_count));
+	    offsetof(cpu_data_t *, cpu_nested_istack));
         DECLARE("CPU_NUMBER_GS",
 		offsetof(cpu_data_t *,cpu_number));
         DECLARE("CPU_RUNNING",
@@ -500,7 +489,31 @@ main(
 		offsetof(cpu_data_t *, cpu_dr7));
 
 	DECLARE("hwIntCnt", 	offsetof(cpu_data_t *,cpu_hwIntCnt));
+#if	defined(__x86_64__)
+	DECLARE("CPU_ACTIVE_PCID",
+		offsetof(cpu_data_t *, cpu_active_pcid));
+	DECLARE("CPU_PCID_COHERENTP",
+		offsetof(cpu_data_t *, cpu_pmap_pcid_coherentp));
+	DECLARE("CPU_PCID_COHERENTP_KERNEL",
+		offsetof(cpu_data_t *, cpu_pmap_pcid_coherentp_kernel));
+	DECLARE("CPU_PMAP_PCID_ENABLED",
+	    offsetof(cpu_data_t *, cpu_pmap_pcid_enabled));
 
+#ifdef	PCID_STATS	
+	DECLARE("CPU_PMAP_USER_RETS",
+	    offsetof(cpu_data_t *, cpu_pmap_user_rets));
+	DECLARE("CPU_PMAP_PCID_PRESERVES",
+	    offsetof(cpu_data_t *, cpu_pmap_pcid_preserves));
+	DECLARE("CPU_PMAP_PCID_FLUSHES",
+	    offsetof(cpu_data_t *, cpu_pmap_pcid_flushes));
+#endif
+	DECLARE("CPU_TLB_INVALID",
+		offsetof(cpu_data_t *, cpu_tlb_invalid));
+	DECLARE("CPU_TLB_INVALID_LOCAL",
+	    offsetof(cpu_data_t *, cpu_tlb_invalid_local));
+	DECLARE("CPU_TLB_INVALID_GLOBAL",
+		offsetof(cpu_data_t *, cpu_tlb_invalid_global));
+#endif /* x86_64 */
 	DECLARE("enaExpTrace",	enaExpTrace);
 	DECLARE("enaExpTraceb",	enaExpTraceb);
 	DECLARE("enaUsrFCall",	enaUsrFCall);
@@ -561,15 +574,15 @@ main(
 	DECLARE("DEVICETREEP", offsetof(struct boot_args *, deviceTreeP));
 
 	DECLARE("RNT_TSC_BASE",
-		offsetof(rtc_nanotime_t *, tsc_base));
+		offsetof(pal_rtc_nanotime_t *, tsc_base));
 	DECLARE("RNT_NS_BASE",
-		offsetof(rtc_nanotime_t *, ns_base));
+		offsetof(pal_rtc_nanotime_t *, ns_base));
 	DECLARE("RNT_SCALE",
-		offsetof(rtc_nanotime_t *, scale));
+		offsetof(pal_rtc_nanotime_t *, scale));
 	DECLARE("RNT_SHIFT",
-		offsetof(rtc_nanotime_t *, shift));
+		offsetof(pal_rtc_nanotime_t *, shift));
 	DECLARE("RNT_GENERATION",
-		offsetof(rtc_nanotime_t *, generation));
+		offsetof(pal_rtc_nanotime_t *, generation));
 
 	/* values from kern/timer.h */
 #ifdef __LP64__

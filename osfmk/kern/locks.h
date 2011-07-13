@@ -292,6 +292,7 @@ extern void	lck_mtx_unlock(lck_mtx_t		*lck) __DARWIN10_ALIAS(lck_mtx_unlock);
 extern void				lck_mtx_unlock(
 									lck_mtx_t		*lck);
 #endif	/* __i386__ */
+
 extern void				lck_mtx_destroy(
 									lck_mtx_t		*lck,
 									lck_grp_t		*grp);
@@ -323,8 +324,11 @@ extern void				mutex_pause(uint32_t);
 extern void 			lck_mtx_yield (
 									lck_mtx_t		*lck);
 
-#if defined(i386) || defined(x86_64)
+#if defined(__i386__) || defined(__x86_64__)
 extern boolean_t		lck_mtx_try_lock_spin(
+									lck_mtx_t		*lck);
+
+extern void			lck_mtx_lock_spin_always(
 									lck_mtx_t		*lck);
 
 extern void			lck_mtx_lock_spin(
@@ -332,9 +336,14 @@ extern void			lck_mtx_lock_spin(
 
 extern void			lck_mtx_convert_spin(
 									lck_mtx_t		*lck);
+
+#define lck_mtx_unlock_always(l)	lck_mtx_unlock(l)
+
 #else
 #define lck_mtx_try_lock_spin(l)	lck_mtx_try_lock(l)
 #define	lck_mtx_lock_spin(l)		lck_mtx_lock(l)
+#define lck_mtx_lock_spin_always(l)	lck_spin_lock(l)
+#define lck_mtx_unlock_always(l)	lck_spin_unlock(l)
 #define	lck_mtx_convert_spin(l)		do {} while (0)
 #endif
 

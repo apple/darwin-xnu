@@ -70,6 +70,8 @@ subsystem
 
 #include <mach/std_types.defs>
 #include <mach/mach_types.defs>
+#include <mach_debug/mach_debug_types.defs>
+
 /*
  *	Create a new task with an empty set of IPC rights,
  *	and having an address space constructed from the
@@ -170,7 +172,12 @@ routine task_set_special_port(
  *	the port representing the first thr_act in that new thread.  The
  *	initial execution state of the thread is undefined.
  */
-routine thread_create(
+routine
+#ifdef KERNEL_SERVER
+thread_create_from_user(
+#else
+thread_create(
+#endif
 		parent_task	: task_t;
 	out	child_act	: thread_act_t);
 
@@ -181,7 +188,12 @@ routine thread_create(
  *	by flavor and new_state. Returns the port representing 
  *	the new thread.
  */
-routine thread_create_running(
+routine
+#ifdef KERNEL_SERVER
+thread_create_running_from_user(
+#else
+thread_create_running(
+#endif
                 parent_task     : task_t;
                 flavor          : thread_state_flavor_t;
                 new_state       : thread_state_t;
@@ -332,7 +344,16 @@ routine task_set_ras_pc(
 		boundspc        : vm_address_t);
 
 
-skip; /* was kernel_task_create() */
+/*
+ * Return zone info as seen/used by this task.
+ */
+routine task_zone_info(
+		target_task	: task_t;
+	out	names		: mach_zone_name_array_t,
+					Dealloc;
+	out	info		: task_zone_info_array_t,
+					Dealloc);
+
 
 /* 
  * JMM - Want to eliminate processor_set so keep them at the end.
@@ -388,6 +409,5 @@ routine	task_set_state(
 		task		: task_t;
 		flavor		: thread_state_flavor_t;
 		new_state	: thread_state_t);
-
 
 /* vim: set ft=c : */

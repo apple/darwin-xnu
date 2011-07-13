@@ -20,7 +20,7 @@
  */
 
 /*
- * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
@@ -961,7 +961,7 @@ fasttrap_disable_callbacks(void)
 	ASSERT(fasttrap_pid_count > 0);
 	fasttrap_pid_count--;
 	if (fasttrap_pid_count == 0) {
-		cpu_t *cur, *cpu = CPU;
+		dtrace_cpu_t *cur, *cpu = CPU;
 
 		/*
 		 * APPLE NOTE: This loop seems broken, it touches every CPU
@@ -987,7 +987,7 @@ fasttrap_disable_callbacks(void)
 }
 
 /*ARGSUSED*/
-static void
+static int
 fasttrap_pid_enable(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg, id)
@@ -1016,7 +1016,7 @@ fasttrap_pid_enable(void *arg, dtrace_id_t id, void *parg)
 	 * provider can't go away while we're in this code path.
 	 */
 	if (probe->ftp_prov->ftp_retired)
-		return;
+	    return(0);
 
 	/*
 	 * If we can't find the process, it may be that we're in the context of
@@ -1030,11 +1030,11 @@ fasttrap_pid_enable(void *arg, dtrace_id_t id, void *parg)
 		 * does not return process's with SIDL set, but we always return
 		 * the child process.
 		 */
-		return;
+	    return(0);
 #else
 
 		if ((curproc->p_flag & SFORKING) == 0)
-			return;
+		    return(0);
 
 		lck_mtx_lock(&pidlock);
 		p = prfind(probe->ftp_pid);
@@ -1109,7 +1109,7 @@ fasttrap_pid_enable(void *arg, dtrace_id_t id, void *parg)
 			 * drop our reference on the trap table entry.
 			 */
 			fasttrap_disable_callbacks();
-			return;
+			return(0);
 		}
 	}
 
@@ -1117,6 +1117,7 @@ fasttrap_pid_enable(void *arg, dtrace_id_t id, void *parg)
 	sprunlock(p);
 
 	probe->ftp_enabled = 1;
+	return (0);
 }
 
 /*ARGSUSED*/
@@ -2155,9 +2156,6 @@ fasttrap_meta_create_probe(void *arg, void *parg,
 		 * Both 32 & 64 bit want to go back one byte, to point at the first NOP
 		 */
 		tp->ftt_pc = dhpb->dthpb_base + (int64_t)dhpb->dthpb_offs[i] - 1;
-#elif defined(__ppc__)
-		/* All PPC probes are zero offset. */
-		tp->ftt_pc = dhpb->dthpb_base + (int64_t)dhpb->dthpb_offs[i];
 #else
 #error "Architecture not supported"
 #endif
@@ -2199,9 +2197,6 @@ fasttrap_meta_create_probe(void *arg, void *parg,
 		 * Both 32 & 64 bit want to go forward two bytes, to point at a single byte nop.
 		 */
 		tp->ftt_pc = dhpb->dthpb_base + (int64_t)dhpb->dthpb_enoffs[j] + 2;
-#elif defined(__ppc__)
-		/* All PPC is-enabled probes are zero offset. */
-		tp->ftt_pc = dhpb->dthpb_base + (int64_t)dhpb->dthpb_enoffs[j];
 #else
 #error "Architecture not supported"
 #endif
@@ -2294,7 +2289,8 @@ fasttrap_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *
 
 		probe = kmem_alloc(size, KM_SLEEP);
 
-		if (copyin(arg, probe, size) != 0) {
+		if (copyin(arg, probe, size) != 0 ||
+		    probe->ftps_noffs != noffs) {
 			kmem_free(probe, size);
 			return (EFAULT);
 		}

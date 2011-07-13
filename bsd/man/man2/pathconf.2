@@ -103,6 +103,16 @@ system call, otherwise 0.
 Return 1 if file names longer than KERN_NAME_MAX are truncated.
 .It Li _PC_VDISABLE
 Returns the terminal character disabling value.
+.It Li _PC_XATTR_SIZE_BITS
+Returns the number of bits used to store maximum extended 
+attribute size in bytes.  For example, if the maximum 
+attribute size supported by a file system is 128K, the 
+value returned will be 18.  However a value 18 can mean 
+that the maximum attribute size can be anywhere from 
+(256KB - 1) to 128KB.  As a special case, the resource 
+fork can have much larger size, and some file system 
+specific extended attributes can have smaller and preset 
+size; for example, Finder Info is always 32 bytes.
 .El
 .Sh RETURN VALUES
 If the call to

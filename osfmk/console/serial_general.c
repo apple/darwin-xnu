@@ -80,7 +80,6 @@ serial_keyboard_poll(void)
 	int chr;
 	uint64_t next;
 
-
 	while(1) {
 		chr = _serial_getc(0, 1, 0, 1);	/* Get a character if there is one */
 		if(chr < 0) /* The serial buffer is empty */

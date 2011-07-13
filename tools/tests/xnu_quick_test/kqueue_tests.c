@@ -18,7 +18,6 @@
 
 extern char		g_target_path[ PATH_MAX ];
 extern int		g_skip_setuid_tests;
-extern int		g_is_under_rosetta;
 
 int msg_count = 14;
 int last_msg_seen = 0;
@@ -144,6 +143,7 @@ kmsg_consumer_thread(void * arg)
 int kqueue_tests( void * the_argp )
 {
 	int				my_err, my_status;
+	void				*my_pthread_join_status;
 	int				my_kqueue = -1;
 	int				my_kqueue64 = -1;
 	int				my_fd = -1;
@@ -271,22 +271,20 @@ int kqueue_tests( void * the_argp )
 	}
 
 #if !TARGET_OS_EMBEDDED	
-	if (!g_is_under_rosetta) {
-		/* use kevent64 to test EVFILT_PROC */
-		EV_SET64( &my_kevent64, my_pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, 0, 0, 0 ); 
-		my_err = kevent64( my_kqueue, &my_kevent64, 1, NULL, 0, 0, 0); 
-		if ( my_err != -1 && errno != EINVAL ) {
-			printf( "kevent64 call should fail with kqueue used for kevent() - %d\n", my_err);
-			goto test_failed_exit;
-		}
+	/* use kevent64 to test EVFILT_PROC */
+	EV_SET64( &my_kevent64, my_pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, 0, 0, 0 ); 
+	my_err = kevent64( my_kqueue, &my_kevent64, 1, NULL, 0, 0, 0); 
+	if ( my_err != -1 && errno != EINVAL ) {
+		printf( "kevent64 call should fail with kqueue used for kevent() - %d\n", my_err);
+		goto test_failed_exit;
+	}
 		
-		my_kqueue64 = kqueue();
-		EV_SET64( &my_kevent64, my_pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, 0, 0, 0 ); 
-		my_err = kevent64( my_kqueue64, &my_kevent64, 1, NULL, 0, 0, 0); 
-		if ( my_err == -1 ) {
-			printf( "kevent64 call to get proc exit failed with error %d - \"%s\" \n", errno, strerror( errno) );
-			goto test_failed_exit;
-		}
+	my_kqueue64 = kqueue();
+	EV_SET64( &my_kevent64, my_pid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, 0, 0, 0 ); 
+	my_err = kevent64( my_kqueue64, &my_kevent64, 1, NULL, 0, 0, 0); 
+	if ( my_err == -1 ) {
+		printf( "kevent64 call to get proc exit failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
 	}
 #endif
 
@@ -344,28 +342,26 @@ int kqueue_tests( void * the_argp )
 	}
 
 #if !TARGET_OS_EMBEDDED	
-	if (!g_is_under_rosetta) {
-		/* look for child exit notification on the kevent64 kqueue */
-		EV_SET64( &my_kevent64, my_pid, EVFILT_PROC, EV_CLEAR, NOTE_EXIT, 0, 0, 0, 0 ); 
-		my_err = kevent64( my_kqueue64, NULL, 0, &my_kevent64, 1, 0, 0); 
-		if ( my_err == -1 ) {
-			printf( "kevent64 call to get child exit failed with error %d - \"%s\" \n", errno, strerror( errno) );
-			goto test_failed_exit;
-		}
-		if ( my_err == 0 ) {
-			printf( "kevent64 call to get proc exit event did not return any when it should have \n" );
-			goto test_failed_exit;
-		}
-		if ( my_kevent64.filter != EVFILT_PROC ) {
-			printf( "kevent64 call to get proc exit event did not return EVFILT_PROC \n" );
-			printf( "filter %i \n", my_kevent64.filter );
-			goto test_failed_exit;
-		}
-		if ( (my_kevent64.fflags & NOTE_EXIT) == 0 ) {
-			printf( "kevent64 call to get proc exit event did not return NOTE_EXIT \n" );
-			printf( "fflags 0x%02X \n", my_kevent64.fflags );
-			goto test_failed_exit;
-		}
+	/* look for child exit notification on the kevent64 kqueue */
+	EV_SET64( &my_kevent64, my_pid, EVFILT_PROC, EV_CLEAR, NOTE_EXIT, 0, 0, 0, 0 ); 
+	my_err = kevent64( my_kqueue64, NULL, 0, &my_kevent64, 1, 0, 0); 
+	if ( my_err == -1 ) {
+		printf( "kevent64 call to get child exit failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	if ( my_err == 0 ) {
+		printf( "kevent64 call to get proc exit event did not return any when it should have \n" );
+		goto test_failed_exit;
+	}
+	if ( my_kevent64.filter != EVFILT_PROC ) {
+		printf( "kevent64 call to get proc exit event did not return EVFILT_PROC \n" );
+		printf( "filter %i \n", my_kevent64.filter );
+		goto test_failed_exit;
+	}
+	if ( (my_kevent64.fflags & NOTE_EXIT) == 0 ) {
+		printf( "kevent64 call to get proc exit event did not return NOTE_EXIT \n" );
+		printf( "fflags 0x%02X \n", my_kevent64.fflags );
+		goto test_failed_exit;
 	}
 
 	my_wait_pid = wait4( my_pid, &my_status, 0, NULL );
@@ -472,12 +468,12 @@ int kqueue_tests( void * the_argp )
 	for (my_index = 0;
 	     my_index < 3;
 	     my_index++) {
-	  my_err = pthread_join( my_threadv[my_index], (void **)&my_status );
+	  my_err = pthread_join( my_threadv[my_index], &my_pthread_join_status );
                 if ( my_err != 0 ) {
                         printf( "pthread_join failed with error %d - %s \n", my_err, strerror(my_err) );
                         goto test_failed_exit;
                 }
-                if ( my_status != 0 ) {
+                if ( my_pthread_join_status != 0 ) {
                         goto test_failed_exit;
                 }
         }

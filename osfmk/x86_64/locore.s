@@ -113,16 +113,6 @@ LEXT(recover_table_end)			;\
 	RECOVERY_SECTION
 	RECOVER_TABLE_START
 
-Entry(call_continuation)
-	movq	%rdi,%rcx			/* get continuation */
-	movq	%rsi,%rdi			/* continuation param */
-	movq	%rdx,%rsi			/* wait result */
-	movq	%gs:CPU_KERNEL_STACK,%rsp	/* set the stack */
-	xorq	%rbp,%rbp			/* zero frame pointer */
-	call	*%rcx				/* call continuation */
-	movq	%gs:CPU_ACTIVE_THREAD,%rdi
-	call	EXT(thread_terminate)
-
 /*
  * int rdmsr_carefully(uint32_t msr, uint32_t *lo, uint32_t *hi)
  */
@@ -150,9 +140,7 @@ LEXT(thread_bootstrap_return)
 
 LEXT(thread_exception_return)
 	cli
-	movq	%gs:CPU_ACTIVE_THREAD,%rsp
-	movq	ACT_PCB_ISS(%rsp), %rsp
-	xorl	%ecx, %ecx			/* don't check if we're in the PFZ */
+	xorl	%ecx, %ecx		/* don't check if we're in the PFZ */
 	jmp	EXT(return_from_trap)
 
 /*
@@ -185,6 +173,17 @@ Entry(_bcopy)
 
 _bcopy_fail:
 	movl	$(EFAULT),%eax		/* return error for failure */
+	ret
+
+Entry(pmap_safe_read)
+	RECOVERY_SECTION
+	RECOVER(_pmap_safe_read_fail)
+	movq	(%rdi), %rcx
+	mov	%rcx, (%rsi)
+	mov	$1, %eax
+	ret
+_pmap_safe_read_fail:
+	xor	%eax, %eax
 	ret
 
 
@@ -230,7 +229,6 @@ _bcopystr_fail:
 	popq	%rdi			/* restore registers */
 	movl	$(EFAULT),%eax		/* return error for failure */
 	ret
-
 
 /*
  * Done with recovery table.

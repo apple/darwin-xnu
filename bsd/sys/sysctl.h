@@ -110,12 +110,34 @@
  * type given below. Each sysctl level defines a set of name/type
  * pairs to be used by sysctl(1) in manipulating the subsystem.
  *
- * When declaring new sysctl names, please use the CTLFLAG_LOCKED
- * flag in the type to indicate that all necessary locking will
- * be handled within the sysctl. Any sysctl defined without
- * CTLFLAG_LOCKED is considered legacy and will be protected by
- * both the kernel funnel and the sysctl memlock. This is not
- * optimal, so it is best to handle locking yourself.
+ * When declaring new sysctl names, unless your sysctl is callable
+ * from the paging path, please use the CTLFLAG_LOCKED flag in the
+ * type to indicate that all necessary locking will be handled
+ * within the sysctl.
+ *
+ * Any sysctl defined without CTLFLAG_LOCKED is considered legacy
+ * and will be protected by both wiring the user process pages and,
+ * if it is a 32 bit legacy KEXT, by the obsolete kernel funnel.
+ *
+ * Note:	This is not optimal, so it is best to handle locking
+ *		yourself, if you are able to do so.  A simple design
+ *		pattern for use to avoid in a single function known
+ *		to potentially be in the paging path ot doing a DMA
+ *		to physical memory in a user space process is:
+ *
+ *			lock
+ *			perform operation vs. local buffer
+ *			unlock
+ *			SYSCTL_OUT(rey, local buffer, length)
+ *
+ *		...this assumes you are not using a deep call graph
+ *		or are unable to pass a local buffer address as a
+ *		parameter into your deep call graph.
+ *
+ *		Note that very large user buffers can fail the wire
+ *		if to do so would require more physical pages than
+ *		are available (the caller will get an ENOMEM error,
+ *		see sysctl_mem_hold() for details).
  */
 struct ctlname {
 	char	*ctl_name;	/* subsystem name */
@@ -139,7 +161,8 @@ struct ctlname {
 #define CTLFLAG_MASKED	0x04000000	/* deprecated variable, do not display */
 #define CTLFLAG_NOAUTO	0x02000000	/* do not auto-register */
 #define CTLFLAG_KERN	0x01000000	/* valid inside the kernel */
-#define CTLFLAG_LOCKED	0x00800000	/* node will handle locking itself (highly encouraged) */
+#define CTLFLAG_LOCKED	0x00800000	/* node will handle locking itself */
+#define CTLFLAG_OID2	0x00400000	/* struct sysctl_oid has version info */
 
 /*
  * USE THIS instead of a hardwired number from the categories below
@@ -161,33 +184,6 @@ struct ctlname {
 #define SYSCTL_HANDLER_ARGS (struct sysctl_oid *oidp, void *arg1, int arg2, \
 	struct sysctl_req *req)
 
-/*
- * Locking and stats
- */
-struct sysctl_lock {
-	int	sl_lock;
-	int	sl_want;
-	int	sl_locked;
-};
-
-#define MEMLOCK_LOCK() \
-	do { \
-		while (memlock.sl_lock) { \
-			memlock.sl_want = 1; \
-			(void) tsleep((caddr_t)&memlock, PRIBIO+1, "sysctl", 0); \
-			memlock.sl_locked++; \
-		} \
-		memlock.sl_lock = 1; \
-	} while(0)
-
-#define MEMLOCK_UNLOCK() \
-	do { \
-		memlock.sl_lock = 0; \
-		if (memlock.sl_want) { \
-			memlock.sl_want = 0; \
-			wakeup((caddr_t)&memlock); \
-		} \
-	}while(0)
 
 /*
  * This describes the access space for a sysctl request.  This is needed
@@ -195,22 +191,55 @@ struct sysctl_lock {
  */
 struct sysctl_req {
 	struct proc	*p;
-	int         lock;
-	user_addr_t oldptr;
-	size_t		oldlen;
-	size_t		oldidx;
-	int		    (*oldfunc)(struct sysctl_req *, const void *, size_t);
-	user_addr_t newptr;
-	size_t		newlen;
-	size_t		newidx;
-	int		    (*newfunc)(struct sysctl_req *, void *, size_t);
+	int		lock;
+	user_addr_t	oldptr;		/* pointer to user supplied buffer */
+	size_t		oldlen;		/* user buffer length (also returned) */
+	size_t		oldidx;		/* total data iteratively copied out */
+	int		(*oldfunc)(struct sysctl_req *, const void *, size_t);
+	user_addr_t	newptr;		/* buffer containing new value */
+	size_t		newlen;		/* length of new value */
+	size_t		newidx;		/* total data iteratively copied in */
+	int		(*newfunc)(struct sysctl_req *, void *, size_t);
 };
 
 SLIST_HEAD(sysctl_oid_list, sysctl_oid);
 
+#define SYSCTL_OID_VERSION	1	/* current OID structure version */
+
 /*
  * This describes one "oid" in the MIB tree.  Potentially more nodes can
  * be hidden behind it, expanded by the handler.
+ *
+ * NOTES:	We implement binary comparibility between CTLFLAG_OID2 and
+ *		pre-CTLFLAG_OID2 structure in sysctl_register_oid() and in
+ *		sysctl_unregister_oid() using the fact that the fields up
+ *		to oid_fmt are unchanged, and that the field immediately
+ *		following is on an alignment boundary following a pointer
+ *		type and is also a pointer.  This lets us get the previous
+ *		size of the structure, and the copy-cut-off point, using
+ *		the offsetof() language primitive, and these values  are
+ *		used in conjunction with the fact that earlier and future
+ *		statically compiled sysctl_oid structures are declared via
+ *		macros.  This lets us overload the macros so that the addition
+ *		of the CTLFLAG_OID2 in newly compiled code containing sysctl
+ *		node declarations, subsequently allowing us to to avoid
+ *		changing the KPI used for non-static (un)registration in
+ *		KEXTs.
+ *
+ *		This depends on the fact that people declare SYSCTLs,
+ *		rather than declaring sysctl_oid structures.  All new code
+ *		should avoid declaring struct sysctl_oid's directly without
+ *		the macros; the current risk for this is limited to losing
+ *		your description field and ending up with a malloc'ed copy,
+ *		as if it were a legacy binary static declaration via SYSCTL;
+ *		in the future, we may deprecate access to a named structure
+ *		type in third party code.  Use the macros, or our code will
+ *		end up with compile errors when that happens.
+ *
+ *		Please try to include a long description of the field in any
+ *		new sysctl declarations (all the macros support this).  This
+ *		field may be the only human readable documentation your users
+ *		get for your sysctl.
  */
 struct sysctl_oid {
 	struct sysctl_oid_list *oid_parent;
@@ -222,6 +251,9 @@ struct sysctl_oid {
 	const char	*oid_name;
 	int 		(*oid_handler) SYSCTL_HANDLER_ARGS;
 	const char	*oid_fmt;
+	const char	*oid_descr; /* offsetof() field / long description */
+	int		oid_version;
+	int		oid_refcnt;
 };
 
 #define SYSCTL_IN(r, p, l) (r->newfunc)(r, p, l)
@@ -267,7 +299,7 @@ __END_DECLS
 #define SYSCTL_OID(parent, nbr, name, kind, a1, a2, handler, fmt, descr) \
 	struct sysctl_oid sysctl_##parent##_##name = {			 \
 		&sysctl_##parent##_children, { 0 },			 \
-		nbr, kind, a1, a2, #name, handler, fmt };		 \
+		nbr, kind|CTLFLAG_OID2, a1, a2, #name, handler, fmt, descr, SYSCTL_OID_VERSION, 0 }; \
 	SYSCTL_LINKER_SET_ENTRY(__sysctl_set, sysctl_##parent##_##name)
 
 /* This constructs a node from which other oids can hang. */
@@ -510,6 +542,9 @@ SYSCTL_DECL(_user);
 #define KERN_KDPIDEX            14
 #define KERN_KDSETRTCDEC        15
 #define KERN_KDGETENTROPY       16
+#define KERN_KDWRITETR		17
+#define KERN_KDWRITEMAP		18
+
 
 /* KERN_PANICINFO types */
 #define	KERN_PANICINFO_MAXSIZE	1	/* quad: panic UI image size limit */

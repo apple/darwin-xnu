@@ -47,7 +47,7 @@ extern int  panic_dialog_set_image( const unsigned char * ptr, unsigned int size
 extern void panic_dialog_get_image( unsigned char ** ptr, unsigned int * size );
 
 /* make the compiler happy */
-extern int sysctl_dopanicinfo(int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, struct proc *);
+static int sysctl_dopanicinfo SYSCTL_HANDLER_ARGS;
 
 
 #define PANIC_IMAGE_SIZE_LIMIT	(32 * 4096)				/* 128K - Maximum amount of memory consumed for the panic UI */
@@ -56,11 +56,20 @@ extern int sysctl_dopanicinfo(int *, u_int, user_addr_t, size_t *, user_addr_t, 
 /* Local data */
 static int image_size_limit = PANIC_IMAGE_SIZE_LIMIT;
 
-__private_extern__ int
-sysctl_dopanicinfo(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
-		   user_addr_t newp, size_t newlen, struct proc *p)
+/* XXX Should be STATIC for dtrace debugging.. */
+static int
+sysctl_dopanicinfo SYSCTL_HANDLER_ARGS
 {
+	__unused int cmd = oidp->oid_arg2;	/* subcommand*/
+	int *name = arg1;		/* oid element argument vector */
+	int namelen = arg2;		/* number of oid element arguments */
+	user_addr_t oldp = req->oldptr;	/* user buffer copy out address */
+	size_t *oldlenp = &req->oldlen;	/* user buffer copy out size */
+	user_addr_t newp = req->newptr;	/* user buffer copy in address */
+	size_t newlen = req->newlen;	/* user buffer copy in size */
 	int error = 0;
+	proc_t p = current_proc();
+
 	vm_offset_t newimage = (vm_offset_t )NULL;
 	kern_return_t	kret;
 	unsigned char * prev_image_ptr;
@@ -70,7 +79,8 @@ sysctl_dopanicinfo(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	if (namelen != 1)
 		return (ENOTDIR);		/* overloaded */
 
-	if ( (error = proc_suser(p)) )	/* must be super user to muck with image */
+	/* must be super user to muck with image */
+	if ( (error = proc_suser(p)) )
 		return (error);
 
 	switch (name[0]) {
@@ -80,7 +90,7 @@ sysctl_dopanicinfo(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	case KERN_PANICINFO_TEST:
 		
 		panic_dialog_test();
-		return (0);
+		break;
 
 	case KERN_PANICINFO_MAXSIZE:
 
@@ -91,7 +101,7 @@ sysctl_dopanicinfo(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 
 		error = sysctl_int(oldp, oldlenp, newp, newlen, &image_size_limit);
 
-		return (error);
+		break;
 
 	case KERN_PANICINFO_IMAGE:
 
@@ -99,8 +109,10 @@ sysctl_dopanicinfo(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 		if ( newp != USER_ADDR_NULL ) {
 
 			/* check the length of the incoming image before allocating space for it. */
-			if ( newlen > (size_t)image_size_limit )
-				return (ENOMEM);
+			if ( newlen > (size_t)image_size_limit ) {
+				error = ENOMEM;
+				break;
+			}
 
 			/* allocate some kernel wired memory for the new image */
 			kret = kmem_alloc(kernel_map, &newimage, (vm_size_t)round_page(newlen));
@@ -118,8 +130,7 @@ sysctl_dopanicinfo(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 					error = EPERM;
 					break;
 				}
-	
-				return (error);
+				break;
 			}
 
 			/* copy the image in from user space */
@@ -169,12 +180,24 @@ sysctl_dopanicinfo(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 			}
 		}
 
-		return (0);
+		break;
 
 errout:
 		if ( newimage != (vm_offset_t )NULL )
 			(void)kmem_free(kernel_map, newimage, (vm_size_t)round_page(newlen));
 
-		return (error);
+		break;
 	}
+
+	/* adjust index so we return the right required/consumed amount */
+	if (!error)
+		req->oldidx += req->oldlen;
+
+	return (error);
 }
+SYSCTL_PROC(_kern, KERN_PANICINFO, panicinfo, CTLTYPE_NODE|CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY,
+	0,			/* Pointer argument (arg1) */
+	0,			/* Integer argument (arg2) */
+	sysctl_dopanicinfo,	/* Handler function */
+	NULL,			/* Data pointer */
+	"");

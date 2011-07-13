@@ -96,6 +96,7 @@
 #include <sys/kauth.h>
 #include <sys/codesign.h>
 #include <sys/kernel_types.h>
+#include <sys/ubc.h>
 #include <kern/kalloc.h>
 #include <kern/task.h>
 #include <kern/assert.h>
@@ -168,13 +169,10 @@ static void orphanpg(struct pgrp *pg);
 void 	proc_name_kdp(task_t t, char * buf, int size);
 char	*proc_name_address(void *p);
 
-static proc_t proc_refinternal_locked(proc_t p);
 static void  pgrp_add(struct pgrp * pgrp, proc_t parent, proc_t child);
 static void pgrp_remove(proc_t p);
 static void pgrp_replace(proc_t p, struct pgrp *pgrp);
 static void pgdelete_dropref(struct pgrp *pgrp);
-static proc_t proc_find_zombref(int pid);
-static void proc_drop_zombref(proc_t p);
 extern void pg_rele_dropref(struct pgrp * pgrp);
 
 struct fixjob_iterargs {
@@ -345,7 +343,7 @@ proc_findinternal(int pid, int locked)
 	}
 
 	p = pfind_locked(pid);
-	if ((p == PROC_NULL) || (p != proc_refinternal_locked(p)))
+	if ((p == PROC_NULL) || (p != proc_ref_locked(p)))
 		p = PROC_NULL;
 
 	if (locked == 0) {
@@ -373,15 +371,15 @@ proc_self(void)
 	p = current_proc();
 
 	proc_list_lock();
-	if (p != proc_refinternal_locked(p))
+	if (p != proc_ref_locked(p))
 		p = PROC_NULL;
 	proc_list_unlock();
 	return(p);
 }
 
 
-static proc_t
-proc_refinternal_locked(proc_t p)
+proc_t
+proc_ref_locked(proc_t p)
 {
 	proc_t p1 = p;
 	
@@ -412,7 +410,7 @@ proc_rele_locked(proc_t p)
 
 }
 
-static proc_t
+proc_t
 proc_find_zombref(int pid)
 {
 	proc_t p1 = PROC_NULL;
@@ -440,7 +438,7 @@ proc_find_zombref(int pid)
 	return(p1);
 }
 
-static void
+void
 proc_drop_zombref(proc_t p)
 {
 	proc_list_lock();
@@ -608,7 +606,7 @@ proc_parent(proc_t p)
 	proc_list_lock();
 loop:
 	pp = p->p_pptr;
-	parent =  proc_refinternal_locked(pp);
+	parent =  proc_ref_locked(pp);
 	if ((parent == PROC_NULL) && (pp != PROC_NULL) && (pp->p_stat != SZOMB) && ((pp->p_listflag & P_LIST_EXITED) != 0) && ((pp->p_listflag & P_LIST_CHILDDRAINED)== 0)){
 		pp->p_listflag |= P_LIST_CHILDLKWAIT;
 		msleep(&pp->p_childrencnt, proc_list_mlock, 0, "proc_parent", 0);
@@ -781,11 +779,33 @@ proc_pidversion(proc_t p)
 	return(p->p_idversion);
 }
 
+uint64_t
+proc_uniqueid(proc_t p)
+{
+	return(p->p_uniqueid);
+}
+
+uint64_t
+proc_selfuniqueid(void)
+{
+	proc_t p = current_proc();
+	return(p->p_uniqueid);
+}
+
 int
 proc_getcdhash(proc_t p, unsigned char *cdhash)
 {
 	return vn_getcdhash(p->p_textvp, p->p_textoff, cdhash);
 }
+
+void
+proc_getexecutableuuid(proc_t p, unsigned char *uuidbuf, unsigned long size)
+{
+	if (size >= sizeof(p->p_uuid)) {
+		memcpy(uuidbuf, p->p_uuid, sizeof(p->p_uuid));
+	}
+}
+
 
 void
 bsd_set_dependency_capable(task_t task)
@@ -1029,10 +1049,10 @@ enterpgrp(proc_t p, pid_t pgid, int mksess)
 			sess->s_flags = 0;
 			sess->s_listflags = 0;
 			sess->s_ttypgrpid = NO_PID;
-#ifdef CONFIG_EMBEDDED
-			lck_mtx_init(&sess->s_mlock, proc_lck_grp, proc_lck_attr);
-#else
+#if CONFIG_FINE_LOCK_GROUPS
 			lck_mtx_init(&sess->s_mlock, proc_mlock_grp, proc_lck_attr);
+#else
+			lck_mtx_init(&sess->s_mlock, proc_lck_grp, proc_lck_attr);
 #endif
 			bcopy(procsp->s_login, sess->s_login,
 			    sizeof(sess->s_login));
@@ -1055,10 +1075,10 @@ enterpgrp(proc_t p, pid_t pgid, int mksess)
 			proc_list_unlock();
 		}
 		pgrp->pg_id = pgid;
-#ifdef CONFIG_EMBEDDED
-		lck_mtx_init(&pgrp->pg_mlock, proc_lck_grp, proc_lck_attr);
-#else
+#if CONFIG_FINE_LOCK_GROUPS
 		lck_mtx_init(&pgrp->pg_mlock, proc_mlock_grp, proc_lck_attr);
+#else
+		lck_mtx_init(&pgrp->pg_mlock, proc_lck_grp, proc_lck_attr);
 #endif
 		LIST_INIT(&pgrp->pg_members);
 		pgrp->pg_membercnt = 0;
@@ -1178,18 +1198,18 @@ pgdelete_dropref(struct pgrp *pgrp)
 		if (sessp->s_count != 0)
 			panic("pg_deleteref: freeing session in use");	
 		proc_list_unlock();
-#ifdef CONFIG_EMBEDDED
-		lck_mtx_destroy(&sessp->s_mlock, proc_lck_grp);
-#else
+#if CONFIG_FINE_LOCK_GROUPS
 		lck_mtx_destroy(&sessp->s_mlock, proc_mlock_grp);
+#else
+		lck_mtx_destroy(&sessp->s_mlock, proc_lck_grp);
 #endif
 		FREE_ZONE(sessp, sizeof(struct session), M_SESSION);
 	} else
 		proc_list_unlock();
-#ifdef CONFIG_EMBEDDED
-	lck_mtx_destroy(&pgrp->pg_mlock, proc_lck_grp);
-#else
+#if CONFIG_FINE_LOCK_GROUPS
 	lck_mtx_destroy(&pgrp->pg_mlock, proc_mlock_grp);
+#else
+	lck_mtx_destroy(&pgrp->pg_mlock, proc_lck_grp);
 #endif
 	FREE_ZONE(pgrp, sizeof(*pgrp), M_PGRP);
 }
@@ -1650,14 +1670,14 @@ out:
 
 SYSCTL_NODE(_kern, KERN_LCTX, lctx, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Login Context");
 
-SYSCTL_PROC(_kern_lctx, KERN_LCTX_ALL, all, CTLFLAG_RD|CTLTYPE_STRUCT,
+SYSCTL_PROC(_kern_lctx, KERN_LCTX_ALL, all, CTLFLAG_RD|CTLTYPE_STRUCT | CTLFLAG_LOCKED,
 	    0, 0, sysctl_kern_lctx, "S,lctx",
 	    "Return entire login context table");
-SYSCTL_NODE(_kern_lctx, KERN_LCTX_LCID, lcid, CTLFLAG_RD,
+SYSCTL_NODE(_kern_lctx, KERN_LCTX_LCID, lcid, CTLFLAG_RD | CTLFLAG_LOCKED,
 	    sysctl_kern_lctx, "Login Context Table");
-SYSCTL_INT(_kern_lctx, OID_AUTO, last,  CTLFLAG_RD, &lastlcid, 0, ""); 
-SYSCTL_INT(_kern_lctx, OID_AUTO, count, CTLFLAG_RD, &alllctx_cnt, 0, "");
-SYSCTL_INT(_kern_lctx, OID_AUTO, max, CTLFLAG_RW, &maxlcid, 0, "");
+SYSCTL_INT(_kern_lctx, OID_AUTO, last,  CTLFLAG_RD | CTLFLAG_LOCKED, &lastlcid, 0, ""); 
+SYSCTL_INT(_kern_lctx, OID_AUTO, count, CTLFLAG_RD | CTLFLAG_LOCKED, &alllctx_cnt, 0, "");
+SYSCTL_INT(_kern_lctx, OID_AUTO, max, CTLFLAG_RW | CTLFLAG_LOCKED, &maxlcid, 0, "");
 
 #endif	/* LCTX */
 
@@ -1811,7 +1831,33 @@ csops(__unused proc_t p, struct csops_args *uap, __unused int32_t *retval)
 			}
 
 			return error;
-		
+
+		case CS_OPS_ENTITLEMENTS_BLOB: {
+			char zeros[8] = { 0 };
+			void *start;
+			size_t length;
+
+			if (0 != (error = cs_entitlements_blob_get(pt,
+			    &start, &length)))
+				break;
+			if (usize < sizeof(zeros) || usize < length) {
+				error = ERANGE;
+				break;
+			}
+			if (NULL == start) {
+				start = zeros;
+				length = sizeof(zeros);
+			}
+			error = copyout(start, uaddr, length);
+			break;
+		}
+
+		case CS_OPS_MARKRESTRICT:
+			proc_lock(pt);
+			pt->p_csflags |= CS_RESTRICT;
+			proc_unlock(pt);
+			break;
+
 		default:
 			error = EINVAL;
 			break;
@@ -1984,7 +2030,7 @@ ps_allprocscan:
 
 	for (p = allproc.lh_first; (p != 0); p = p->p_list.le_next) {
 		if ( (filterfn == 0 ) || (filterfn(p, filterarg) != 0)) {
-			p = proc_refinternal_locked(p);
+			p = proc_ref_locked(p);
 
 			proc_list_unlock();
 			lockheld = 0;
@@ -2449,10 +2495,10 @@ session_rele(struct session *sess)
 		if (sess->s_count != 0)
 			panic("session_rele: freeing session in use");	
 		proc_list_unlock();
-#ifdef CONFIG_EMBEDDED
-		lck_mtx_destroy(&sess->s_mlock, proc_lck_grp);
-#else
+#if CONFIG_FINE_LOCK_GROUPS
 		lck_mtx_destroy(&sess->s_mlock, proc_mlock_grp);
+#else
+		lck_mtx_destroy(&sess->s_mlock, proc_lck_grp);
 #endif
 		FREE_ZONE(sess, sizeof(struct session), M_SESSION);
 	} else
@@ -2575,9 +2621,9 @@ unsigned long cs_procs_invalidated = 0;
 int cs_force_kill = 0;
 int cs_force_hard = 0;
 int cs_debug = 0;
-SYSCTL_INT(_vm, OID_AUTO, cs_force_kill, CTLFLAG_RW, &cs_force_kill, 0, "");
-SYSCTL_INT(_vm, OID_AUTO, cs_force_hard, CTLFLAG_RW, &cs_force_hard, 0, "");
-SYSCTL_INT(_vm, OID_AUTO, cs_debug, CTLFLAG_RW, &cs_debug, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, cs_force_kill, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_force_kill, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, cs_force_hard, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_force_hard, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, cs_debug, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_debug, 0, "");
 
 int
 cs_allow_invalid(struct proc *p)
@@ -2633,11 +2679,9 @@ cs_invalid_page(
 	if (p->p_csflags & CS_KILL) {
 		p->p_csflags |= CS_KILLED;
 		proc_unlock(p);
-		if (cs_debug) {
-			printf("CODE SIGNING: cs_invalid_page(0x%llx): "
-			       "p=%d[%s] honoring CS_KILL, final status 0x%x\n",
-			       vaddr, p->p_pid, p->p_comm, p->p_csflags);
-		}
+		printf("CODE SIGNING: cs_invalid_page(0x%llx): "
+		       "p=%d[%s] honoring CS_KILL, final status 0x%x\n",
+		       vaddr, p->p_pid, p->p_comm, p->p_csflags);
 		cs_procs_killed++;
 		psignal(p, SIGKILL);
 		proc_lock(p);
@@ -2646,11 +2690,9 @@ cs_invalid_page(
 	/* CS_HARD means fail the mapping operation so the process stays valid. */
 	if (p->p_csflags & CS_HARD) {
 		proc_unlock(p);
-		if (cs_debug) {
-			printf("CODE SIGNING: cs_invalid_page(0x%llx): "
-			       "p=%d[%s] honoring CS_HARD\n",
-			       vaddr, p->p_pid, p->p_comm);
-		}
+		printf("CODE SIGNING: cs_invalid_page(0x%llx): "
+		       "p=%d[%s] honoring CS_HARD\n",
+		       vaddr, p->p_pid, p->p_comm);
 		retval = 1;
 	} else {
 		if (p->p_csflags & CS_VALID) {
@@ -2773,9 +2815,12 @@ proc_resetpcontrol(int pid)
 	proc_t p;
 	int pcontrol;
 	int error;
+	proc_t self = current_proc();
 
-	if ((error = suser(kauth_cred_get(), 0)))
+	/* if the process has been validated to handle resource control or root is valid one */
+	if (((self->p_lflag & P_LVMRSRCOWNER) == 0) && (error = suser(kauth_cred_get(), 0)))
 		return error;
+
 	p = proc_find(pid);
 	if (p == PROC_NULL)
 		return(ESRCH);

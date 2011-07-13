@@ -1394,7 +1394,7 @@ aio_enqueue_work( proc_t procp, aio_workq_entry *entryp, int proc_locked)
 	/* And work queue */
 	aio_workq_lock_spin(queue);
 	aio_workq_add_entry_locked(queue, entryp);
-	wait_queue_wakeup_one(queue->aioq_waitq, queue, THREAD_AWAKENED);
+	wait_queue_wakeup_one(queue->aioq_waitq, queue, THREAD_AWAKENED, -1);
 	aio_workq_unlock(queue);
 	
 	if (proc_locked == 0) {

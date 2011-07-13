@@ -369,6 +369,7 @@ const struct memory_object_pager_ops default_pager_ops = {
 	dp_memory_object_synchronize,
 	dp_memory_object_map,
 	dp_memory_object_last_unmap,
+	dp_memory_object_data_reclaim,
 	"default pager"
 };
 
@@ -429,6 +430,33 @@ dp_memory_object_last_unmap(
 {
 	panic("dp_memory_object_last_unmap");
 	return KERN_FAILURE;
+}
+
+kern_return_t
+dp_memory_object_data_reclaim(
+	memory_object_t		mem_obj,
+	boolean_t		reclaim_backing_store)
+{
+	vstruct_t		vs;
+
+	vs_lookup(mem_obj, vs);
+	for (;;) {
+		vs_lock(vs);
+		vs_async_wait(vs);
+		if (!vs->vs_xfer_pending) {
+			break;
+		}
+	}
+	vs->vs_xfer_pending = TRUE;
+	vs_unlock(vs);
+
+	ps_vstruct_reclaim(vs, TRUE, reclaim_backing_store);
+
+	vs_lock(vs);
+	vs->vs_xfer_pending = FALSE;
+	vs_unlock(vs);
+
+	return KERN_SUCCESS;
 }
 
 kern_return_t

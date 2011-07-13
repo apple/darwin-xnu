@@ -55,6 +55,7 @@
 	@constant MBUF_EXT Indicates this mbuf has external data.
 	@constant MBUF_PKTHDR Indicates this mbuf has a packet header.
 	@constant MBUF_EOR Indicates this mbuf is the end of a record.
+	@constant MBUF_LOOP Indicates this packet is looped back.
 	@constant MBUF_BCAST Indicates this packet will be sent or was
 		received as a brodcast.
 	@constant MBUF_MCAST Indicates this packet will be sent or was
@@ -72,13 +73,15 @@ enum {
 	MBUF_EXT	= 0x0001,	/* has associated external storage */
 	MBUF_PKTHDR	= 0x0002,	/* start of record */
 	MBUF_EOR	= 0x0004,	/* end of record */
+	MBUF_LOOP	= 0x0040,	/* packet is looped back */
 
 	MBUF_BCAST	= 0x0100,	/* send/received as link-level broadcast */
 	MBUF_MCAST	= 0x0200,	/* send/received as link-level multicast */
 	MBUF_FRAG	= 0x0400,	/* packet is a fragment of a larger packet */
 	MBUF_FIRSTFRAG	= 0x0800,	/* packet is first fragment */
 	MBUF_LASTFRAG	= 0x1000,	/* packet is last fragment */
-	MBUF_PROMISC	= 0x2000	/* packet is promiscuous */
+	MBUF_PROMISC	= 0x2000,	/* packet is promiscuous */
+	MBUF_HASFCS	= 0x4000	/* packet has FCS */
 };
 typedef u_int32_t mbuf_flags_t;
 
@@ -145,6 +148,10 @@ typedef u_int32_t mbuf_type_t;
 		calculated yet.
 	@constant MBUF_CSUM_REQ_UDP Indicates the UDP checksum has not been
 		calculated yet.
+	@constant MBUF_CSUM_REQ_TCPIPV6 Indicates the TCP checksum for IPv6
+       		has not been calculated yet.
+	@constant MBUF_CSUM_REQ_UDPIPV6 Indicates the UDP checksum for IPv6
+		has not been calculated yet.
 */
 enum {
 	MBUF_TSO_IPV4		= 0x100000,
@@ -158,7 +165,9 @@ enum {
 #endif /* KERNEL_PRIVATE */
 	MBUF_CSUM_REQ_IP	= 0x0001,
 	MBUF_CSUM_REQ_TCP	= 0x0002,
-	MBUF_CSUM_REQ_UDP	= 0x0004
+	MBUF_CSUM_REQ_UDP	= 0x0004,
+	MBUF_CSUM_REQ_TCPIPV6	= 0x0020,
+	MBUF_CSUM_REQ_UDPIPV6	= 0x0040
 };
 typedef u_int32_t mbuf_csum_request_flags_t;
 
@@ -178,7 +187,7 @@ typedef u_int32_t mbuf_csum_request_flags_t;
 		hardware should be passed as the second parameter of
 		mbuf_set_csum_performed. The hardware calculated checksum value
 		can be retrieved using the second parameter passed to
-		mbuf_get_csum_performed.
+		mbuf_get_csum_performed. This should be done for IPv4 or IPv6.
 	@constant MBUF_CSUM_PSEUDO_HDR If set, this indicates that the
 		checksum value for MBUF_CSUM_DID_DATA includes the pseudo header
 		value. If this is not set, the stack will calculate the pseudo
@@ -1184,6 +1193,15 @@ extern u_int32_t mbuf_get_mlen(void);
 extern u_int32_t mbuf_get_mhlen(void);
 
 /*!
+	@function mbuf_get_minclsize
+	@discussion This routine returns the minimum number of data bytes
+		before an external cluster is used.  This is equivalent to the
+		legacy MINCLSIZE macro.
+	@result	The minimum number of bytes before a cluster will be used.
+ */
+extern u_int32_t mbuf_get_minclsize(void);
+
+/*!
 	@function mbuf_clear_csum_performed
 	@discussion Clears the hardware checksum flags and values.
 	@param mbuf The mbuf containing the packet.
@@ -1330,32 +1348,8 @@ extern void mbuf_tag_free(mbuf_t mbuf, mbuf_tag_id_t module_id,
  */
 extern void mbuf_stats(struct mbuf_stat *stats);
 
-#ifdef KERNEL_PRIVATE
-/*
-	@enum mbuf_priority_t
-	@abstract Priority of a packet.
-	@discussion Some mbufs represent packets containing application data.
-		The priority of the application data is represented by the
-		mbuf priority, as determined by the system.
-	@constant MBUF_PRIORITY_NORMAL Indicates the packet contains
-		normal priority data.
-	@constant MBUF_PRIORITY_BACKGROUND Indicates the packet contains
-		background priority data.
- */
-typedef enum {
-	MBUF_PRIORITY_NORMAL		= 0,
-	MBUF_PRIORITY_BACKGROUND	= 1
-} mbuf_priority_t;
 
-/*
-	@function mbuf_get_priority
-	@discussion Get the priority value of the packet.
-	@param mbuf The mbuf to obtain the priority value from.
-	@result The priority value of the packet.
- */
-extern mbuf_priority_t mbuf_get_priority(mbuf_t mbuf);
-
-/*
+/*!
 	@enum mbuf_traffic_class_t
 	@abstract Traffic class of a packet
 	@discussion Property that represent the category of traffic of a packet. 
@@ -1367,15 +1361,19 @@ extern mbuf_priority_t mbuf_get_priority(mbuf_t mbuf);
 */
 typedef enum {
 #ifdef XNU_KERNEL_PRIVATE
-	MBUF_TC_NONE	= -1,
+	MBUF_TC_UNSPEC	= -1,		/* Internal: not specified */
 #endif
 	MBUF_TC_BE 		= 0,
 	MBUF_TC_BK		= 1,
 	MBUF_TC_VI		= 2,
 	MBUF_TC_VO		= 3
+#ifdef XNU_KERNEL_PRIVATE
+        ,
+	MBUF_TC_MAX		= 4	/* Internal: traffic class count */
+#endif
 } mbuf_traffic_class_t;
 
-/*
+/*!
 	@function mbuf_get_traffic_class
 	@discussion Get the traffic class of an mbuf packet
 	@param mbuf The mbuf to get the traffic class of.
@@ -1383,7 +1381,7 @@ typedef enum {
 */
 extern mbuf_traffic_class_t mbuf_get_traffic_class(mbuf_t mbuf);
 
-/*
+/*!
 	@function mbuf_set_traffic_class
 	@discussion Set the traffic class of an mbuf packet.
 	@param mbuf The mbuf to set the traffic class on.
@@ -1391,7 +1389,6 @@ extern mbuf_traffic_class_t mbuf_get_traffic_class(mbuf_t mbuf);
 	@result 0 on success, EINVAL if bad paramater is passed
 */
 extern errno_t mbuf_set_traffic_class(mbuf_t mbuf, mbuf_traffic_class_t tc);
-#endif /* KERNEL_PRIVATE */
 
 /* IF_QUEUE interaction */
 

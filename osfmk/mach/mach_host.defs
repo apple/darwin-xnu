@@ -168,6 +168,8 @@ routine	kmod_get_info(
 /*
  *	Returns information about the memory allocation zones.
  *      Supported in all kernels..
+ *
+ *	DEPRECATED!  Use mach_zone_info() instead.
  */
 routine host_zone_info(
 		host		: host_t;
@@ -256,6 +258,18 @@ routine host_statistics64(
 		host_priv	: host_t;
 		flavor		: host_flavor_t;
 	out	host_info64_out	: host_info64_t, CountInOut);
+
+/*
+ *	Returns information about the memory allocation zones.
+ *      Data returned is compatible with various caller and kernel
+ *	address space sizes (unlike host_zone_info()).
+ */
+routine mach_zone_info(
+		host		: host_t;
+	out	names		: mach_zone_name_array_t,
+					Dealloc;
+	out	info		: mach_zone_info_array_t,
+					Dealloc);
 
 
 /* vim: set ft=c : */

@@ -37,56 +37,7 @@
 
 #include "SYS.h"
 
-#if defined(__ppc__) || defined(__ppc64__)
-
-/* We use mode-independent "g" opcodes such as "srgi", and/or
- * mode-independent macros such as MI_GET_ADDRESS.  These expand
- * into word operations when targeting __ppc__, and into doubleword
- * operations when targeting __ppc64__.
- */
-#include <architecture/ppc/mode_independent_asm.h>
-
-/* In vfork(), the child runs in parent's address space.  */
-
-
-MI_ENTRY_POINT(___vfork)
-    MI_GET_ADDRESS(r5,__current_pid)  // get address of __current_pid in r5
-2:
-	lwarx	r6,0,r5			// don't cache pid across vfork
-	cmpwi	r6,0
-	ble--	3f              // is another vfork in progress
-	li      r6,0			// if not, erase the stored pid
-3:	
-	addi	r6,r6,-1		// count the parallel vforks in
-	stwcx.	r6,0,r5			// negative cached pid values
-	bne--	2b
-	
-	li      r0,SYS_vfork
-	sc
-	b       Lbotch			// error return
-
-	cmpwi	r4,0
-	beq     Lparent			// parent, since a1 == 0 in parent,
-
-	li      r3,0			// child
-	blr
-
-Lparent:                    // r3 == child's pid
-	lwarx	r6,0,r5			// we're back, decrement vfork count
-	addi	r6,r6,1
-	stwcx.	r6,0,r5
-	bne--	Lparent
-	blr                     // return pid
-
-Lbotch:
-	lwarx	r6,0,r5			// never went, decrement vfork count
-	addi	r6,r6,1
-	stwcx.	r6,0,r5
-	bne--	Lbotch
-
-	MI_BRANCH_EXTERNAL(cerror)
-
-#elif defined(__i386__)
+#if defined(__i386__)
 
 #if defined(__DYNAMIC__)
 #define GET_CURRENT_PID	PICIFY(__current_pid)

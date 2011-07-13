@@ -388,6 +388,7 @@ finish:
 }
 
 /*********************************************************************
+* This function must be safe to call in panic context.
 *********************************************************************/
 Boolean OSKextVersionGetString(
     OSKextVersion   aVersion,

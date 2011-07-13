@@ -231,23 +231,25 @@ audit_record_ctor(proc_t p, struct kaudit_record *ar)
 	ar->k_ar.ar_magic = AUDIT_RECORD_MAGIC;
 	nanotime(&ar->k_ar.ar_starttime);
 
-	cred = kauth_cred_proc_ref(p);
+	if (PROC_NULL != p) {
+		cred = kauth_cred_proc_ref(p);
 
-	/*
-	 * Export the subject credential.
-	 */
-	cru2x(cred, &ar->k_ar.ar_subj_cred);
-	ar->k_ar.ar_subj_ruid = cred->cr_ruid;
-	ar->k_ar.ar_subj_rgid = cred->cr_rgid;
-	ar->k_ar.ar_subj_egid = cred->cr_groups[0];
-	ar->k_ar.ar_subj_pid = p->p_pid;
-	ar->k_ar.ar_subj_auid = cred->cr_audit.as_aia_p->ai_auid;
-	ar->k_ar.ar_subj_asid = cred->cr_audit.as_aia_p->ai_asid;
-	bcopy(&cred->cr_audit.as_mask, &ar->k_ar.ar_subj_amask,
-    	    sizeof(struct au_mask));
-	bcopy(&cred->cr_audit.as_aia_p->ai_termid, &ar->k_ar.ar_subj_term_addr,
-	    sizeof(struct au_tid_addr));
-	kauth_cred_unref(&cred);
+		/*
+	 	 * Export the subject credential.
+	 	 */
+		cru2x(cred, &ar->k_ar.ar_subj_cred);
+		ar->k_ar.ar_subj_ruid = kauth_cred_getruid(cred);
+		ar->k_ar.ar_subj_rgid = kauth_cred_getrgid(cred);
+		ar->k_ar.ar_subj_egid = kauth_cred_getgid(cred);
+		ar->k_ar.ar_subj_pid = p->p_pid;
+		ar->k_ar.ar_subj_auid = cred->cr_audit.as_aia_p->ai_auid;
+		ar->k_ar.ar_subj_asid = cred->cr_audit.as_aia_p->ai_asid;
+		bcopy(&cred->cr_audit.as_mask, &ar->k_ar.ar_subj_amask,
+    		    sizeof(struct au_mask));
+		bcopy(&cred->cr_audit.as_aia_p->ai_termid,
+		    &ar->k_ar.ar_subj_term_addr, sizeof(struct au_tid_addr));
+		kauth_cred_unref(&cred);
+	}
 }
 
 static void
@@ -311,6 +313,7 @@ audit_init(void)
 	audit_kinfo.ai_termid.at_type = AU_IPv4;
 	audit_kinfo.ai_termid.at_addr[0] = INADDR_ANY;
 
+	_audit_lck_grp_init();
 	mtx_init(&audit_mtx, "audit_mtx", NULL, MTX_DEF);
 	KINFO_LOCK_INIT();
 	cv_init(&audit_worker_cv, "audit_worker_cv");
@@ -353,7 +356,7 @@ audit_shutdown(void)
 /*
  * Return the current thread's audit record, if any.
  */
-__inline__ struct kaudit_record *
+struct kaudit_record *
 currecord(void)
 {
 
@@ -373,11 +376,24 @@ audit_new(int event, proc_t p, __unused struct uthread *uthread)
 {
 	struct kaudit_record *ar;
 	int no_record;
+	int audit_override;
 
+	/*
+	 * Override the audit_suspended and audit_enabled if it always
+	 * audits session events.
+	 *
+	 * XXXss - This really needs to be a generalized call to a filter
+	 * interface so if other things that use the audit subsystem in the
+	 * future can simply plugged in.
+	 */
+	audit_override = (AUE_SESSION_START == event ||
+	    AUE_SESSION_UPDATE == event || AUE_SESSION_END == event ||
+	    AUE_SESSION_CLOSE == event);
+	
 	mtx_lock(&audit_mtx);
 	no_record = (audit_suspended || !audit_enabled);
 	mtx_unlock(&audit_mtx);
-	if (no_record)
+	if (!audit_override && no_record)
 		return (NULL);
 
 	/*
@@ -395,10 +411,13 @@ audit_new(int event, proc_t p, __unused struct uthread *uthread)
 	ar->k_ar.ar_event = event;
 
 #if CONFIG_MACF
-	if (audit_mac_new(p, ar) != 0) {
-		zfree(audit_record_zone, ar);
-		return (NULL);
-	}
+	if (PROC_NULL != p) {
+		if (audit_mac_new(p, ar) != 0) {
+			zfree(audit_record_zone, ar);
+			return (NULL);
+		}
+	} else
+		ar->k_ar.ar_mac_records = NULL;
 #endif
 
 	mtx_lock(&audit_mtx);
@@ -414,7 +433,8 @@ audit_free(struct kaudit_record *ar)
 
 	audit_record_dtor(ar);
 #if CONFIG_MACF
-	audit_mac_free(ar);
+	if (NULL != ar->k_ar.ar_mac_records)
+		audit_mac_free(ar);
 #endif
 	zfree(audit_record_zone, ar);
 }
@@ -427,6 +447,7 @@ audit_commit(struct kaudit_record *ar, int error, int retval)
 	au_id_t auid;
 	int sorf;
 	struct au_mask *aumask;
+	int audit_override;
 
 	if (ar == NULL)
 		return;
@@ -487,6 +508,17 @@ audit_commit(struct kaudit_record *ar, int error, int retval)
 	event = ar->k_ar.ar_event;
 	class = au_event_class(event);
 
+	/*
+	 * See if we need to override the audit_suspend and audit_enabled
+	 * flags.
+	 *
+	 * XXXss - This check needs to be generalized so new filters can
+	 * easily be added.
+	 */
+	audit_override = (AUE_SESSION_START == event ||
+	    AUE_SESSION_UPDATE == event || AUE_SESSION_END == event ||
+	    AUE_SESSION_CLOSE == event);
+
 	ar->k_ar_commit |= AR_COMMIT_KERNEL;
 	if (au_preselect(event, class, aumask, sorf) != 0)
 		ar->k_ar_commit |= AR_PRESELECT_TRAIL;
@@ -494,7 +526,8 @@ audit_commit(struct kaudit_record *ar, int error, int retval)
 	    ar->k_ar_commit & AR_PRESELECT_TRAIL) != 0)
 		ar->k_ar_commit |= AR_PRESELECT_PIPE;
 	if ((ar->k_ar_commit & (AR_PRESELECT_TRAIL | AR_PRESELECT_PIPE |
-	    AR_PRESELECT_USER_TRAIL | AR_PRESELECT_USER_PIPE)) == 0) {
+	    AR_PRESELECT_USER_TRAIL | AR_PRESELECT_USER_PIPE |
+	    AR_PRESELECT_FILTER)) == 0) {
 		mtx_lock(&audit_mtx);
 		audit_pre_q_len--;
 		mtx_unlock(&audit_mtx);
@@ -511,7 +544,7 @@ audit_commit(struct kaudit_record *ar, int error, int retval)
 	 * enabled should still be committed?
 	 */
 	mtx_lock(&audit_mtx);
-	if (audit_suspended || !audit_enabled) {
+	if (!audit_override && (audit_suspended || !audit_enabled)) {
 		audit_pre_q_len--;
 		mtx_unlock(&audit_mtx);
 		audit_free(ar);

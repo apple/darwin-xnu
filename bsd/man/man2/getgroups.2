@@ -1,5 +1,5 @@
 .\"
-.\" Copyright (c) 2008 Apple Inc.  All rights reserved.
+.\" Copyright (c) 2008, 2010 Apple Inc.  All rights reserved.
 .\"
 .\" @APPLE_LICENSE_HEADER_START@
 .\" 
@@ -56,7 +56,7 @@
 .\"
 .\"     @(#)getgroups.2	8.2 (Berkeley) 4/16/94
 .\"
-.Dd October 2, 2008
+.Dd September 17, 2010
 .Dt GETGROUPS 2
 .Os BSD 4.2
 .Sh NAME
@@ -90,6 +90,28 @@ is 0,
 returns the number of groups without modifying the
 .Fa grouplist[]
 array.
+.Pp
+To provide compatibility with applications that use
+.Fn getgroups
+in environments where users may be in more than
+.Dv {NGROUPS_MAX}
+groups, a variant of
+.Fn getgroups ,
+obtained when compiling with either the macros
+.Dv _DARWIN_UNLIMITED_GETGROUPS
+or
+.Dv _DARWIN_C_SOURCE
+defined, can be used that is not limited to
+.Dv {NGROUPS_MAX}
+groups.
+However, this variant only returns the user's default group access list and
+not the group list modified by a call to
+.Xr setgroups 2
+(either in the current process or an ancestor process).
+Use of
+.Xr setgroups 2
+is highly discouraged, and there is no foolproof way to determine if it has
+been previously called.
 .Sh RETURN VALUES
 A successful call returns the number of groups in the group set.
 Otherwise, a value of -1 is returned and the global integer variable
@@ -112,12 +134,6 @@ The argument
 although non-zero,
 is smaller than the number of groups in the group set.
 .El
-.Sh LEGACY DESCRIPTION
-If _DARWIN_C_SOURCE is defined, 
-.Fn getgroups
-can return more than
-.Dv {NGROUPS_MAX}
-groups.
 .Sh LEGACY SYNOPSIS
 .Fd #include <sys/param.h>
 .Fd #include <sys/types.h>

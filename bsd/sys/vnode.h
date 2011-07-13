@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -145,6 +145,7 @@ enum vtagtype	{
 #define IO_BACKGROUND IO_PASSIVE /* used for backward compatibility.  to be removed after IO_BACKGROUND is no longer
 								  * used by DiskImages in-kernel mode */
 #define	IO_NOAUTH	0x8000		/* No authorization checks. */
+#define IO_NODIRECT    0x10000		/* don't use direct synchronous writes if IO_NOCACHE is specified */
 
 
 /*
@@ -159,15 +160,15 @@ struct componentname {
 	uint32_t	cn_flags;	/* flags (see below) */
 #ifdef BSD_KERNEL_PRIVATE
 	vfs_context_t	cn_context;
-	void * pad_obsolete2;
+	struct nameidata *cn_ndp;	/* pointer back to nameidata */
 
 /* XXX use of these defines are deprecated */
 #define	cn_proc		(cn_context->vc_proc + 0)	/* non-lvalue */
 #define	cn_cred		(cn_context->vc_ucred + 0)	/* non-lvalue */
 
 #else
-	void * obsolete1;	/* use vfs_context_t */
-	void * obsolete2;	/* use vfs_context_t */
+	void * cn_reserved1;	/* use vfs_context_t */
+	void * cn_reserved2;	/* use vfs_context_t */
 #endif
 	/*
 	 * Shared between lookup and commit routines.
@@ -201,8 +202,8 @@ struct componentname {
 #define	ISDOTDOT	0x00002000 /* current component name is .. */
 #define	MAKEENTRY	0x00004000 /* entry is to be added to name cache */
 #define	ISLASTCN	0x00008000 /* this is last component of pathname */
-#define	ISWHITEOUT	0x00020000 /* found whiteout */
-#define	DOWHITEOUT	0x00040000 /* do whiteouts */
+#define	ISWHITEOUT	0x00020000 /* OBSOLETE: found whiteout */
+#define	DOWHITEOUT	0x00040000 /* OBSOLETE: do whiteouts */
 
 
 /* The following structure specifies a vnode for creation */
@@ -227,6 +228,234 @@ struct vnode_fsparam {
 
 #define VNCREATE_FLAVOR	0
 #define VCREATESIZE sizeof(struct vnode_fsparam)
+
+
+#ifdef KERNEL_PRIVATE
+/*
+ * Resolver callback SPI for trigger vnodes
+ *
+ * Only available from kernels built with CONFIG_TRIGGERS option
+ */
+
+/*!
+ @enum Pathname Lookup Operations
+ @abstract Constants defining pathname operations (passed to resolver callbacks)
+ */
+enum path_operation	{
+	OP_LOOKUP,
+	OP_MOUNT,
+	OP_UNMOUNT,
+	OP_STATFS,
+	OP_OPEN,
+	OP_LINK,
+	OP_UNLINK,
+	OP_RENAME,
+	OP_CHDIR,
+	OP_CHROOT,
+	OP_MKNOD,
+	OP_MKFIFO,
+	OP_SYMLINK,
+	OP_ACCESS,
+	OP_PATHCONF,
+	OP_READLINK,
+	OP_GETATTR,
+	OP_SETATTR,
+	OP_TRUNCATE,
+	OP_COPYFILE,
+	OP_MKDIR,
+	OP_RMDIR,
+	OP_REVOKE,
+	OP_EXCHANGEDATA,
+	OP_SEARCHFS,
+	OP_FSCTL,
+	OP_GETXATTR,
+	OP_SETXATTR,
+	OP_REMOVEXATTR,
+	OP_LISTXATTR,
+	OP_MAXOP	/* anything beyond previous entry is invalid */
+};
+
+/*
+ * is operation a traditional trigger (autofs)?
+ * 1 if trigger, 0 if no trigger
+ */
+extern int vfs_istraditionaltrigger(enum path_operation op, const struct componentname *cnp);
+
+/*!
+ @enum resolver status
+ @abstract Constants defining resolver status
+ @constant RESOLVER_RESOLVED  the resolver has finished (typically means a successful mount)
+ @constant RESOLVER_NOCHANGE  the resolver status didn't change
+ @constant RESOLVER_UNRESOLVED  the resolver has finished (typically means a successful unmount)
+ @constant RESOLVER_ERROR  the resolver encountered an error (errno passed in aux value)
+ @constant RESOLVER_STOP  a request to destroy trigger XXX do we need this???
+ */
+enum resolver_status {
+	RESOLVER_RESOLVED,
+	RESOLVER_NOCHANGE,
+	RESOLVER_UNRESOLVED,
+	RESOLVER_ERROR,
+	RESOLVER_STOP
+};
+
+typedef uint64_t resolver_result_t;
+
+/*
+ * Compound resolver result
+ *
+ * The trigger vnode callbacks use a compound result value. In addition
+ * to the resolver status, it contains a sequence number and an auxiliary
+ * value.
+ *
+ * The sequence value is used by VFS to sequence-stamp trigger vnode
+ * state transitions. It is expected to be incremented each time a
+ * resolver changes state (ie resolved or unresolved). A result
+ * containing a stale sequence (older than a trigger vnode's current
+ * value) will be ignored by VFS.
+ *
+ * The auxiliary value is currently only used to deliver the errno
+ * value for RESOLVER_ERROR status conditions. When a RESOLVER_ERROR
+ * occurs, VFS will propagate this error back to the syscall that
+ * encountered the trigger vnode.
+ */
+extern resolver_result_t vfs_resolver_result(uint32_t seq, enum resolver_status stat, int aux);
+
+/*
+ * Extract values from a compound resolver result
+ */
+extern enum resolver_status vfs_resolver_status(resolver_result_t);
+extern uint32_t vfs_resolver_sequence(resolver_result_t);
+extern int vfs_resolver_auxiliary(resolver_result_t);
+
+
+/*!
+ @typedef trigger_vnode_resolve_callback_t
+ @abstract function prototype for a trigger vnode resolve callback
+ @discussion This function is associated with a trigger vnode during a vnode create.  It is
+ typically called when a lookup operation occurs for a trigger vnode
+ @param vp The trigger vnode which needs resolving
+ @param cnp Various data about lookup, e.g. filename and state flags
+ @param pop The pathname operation that initiated the lookup (see enum path_operation).
+ @param flags
+ @param data Arbitrary data supplied by vnode trigger creator
+ @param ctx Context for authentication.
+ @return RESOLVER_RESOLVED, RESOLVER_NOCHANGE, RESOLVER_UNRESOLVED or RESOLVER_ERROR
+*/
+typedef resolver_result_t (* trigger_vnode_resolve_callback_t)(
+	vnode_t				vp,
+	const struct componentname *	cnp,
+	enum path_operation		pop,
+	int				flags,
+	void *				data,
+	vfs_context_t			ctx);
+
+/*!
+ @typedef trigger_vnode_unresolve_callback_t
+ @abstract function prototype for a trigger vnode unresolve callback
+ @discussion This function is associated with a trigger vnode during a vnode create.  It is
+ called to unresolve a trigger vnode (typically this means unmount).
+ @param vp The trigger vnode which needs unresolving
+ @param flags Unmount flags
+ @param data Arbitrary data supplied by vnode trigger creator
+ @param ctx Context for authentication.
+ @return RESOLVER_NOCHANGE, RESOLVER_UNRESOLVED or RESOLVER_ERROR
+*/
+typedef resolver_result_t (* trigger_vnode_unresolve_callback_t)(
+	vnode_t		vp,
+	int		flags,
+	void *		data,
+	vfs_context_t	ctx);
+
+/*!
+ @typedef trigger_vnode_rearm_callback_t
+ @abstract function prototype for a trigger vnode rearm callback
+ @discussion This function is associated with a trigger vnode during a vnode create.  It is
+ called to verify a rearm from VFS (i.e. should VFS rearm the trigger?).
+ @param vp The trigger vnode which needs rearming
+ @param flags
+ @param data Arbitrary data supplied by vnode trigger creator
+ @param ctx Context for authentication.
+ @return RESOLVER_NOCHANGE or RESOLVER_ERROR
+*/
+typedef resolver_result_t (* trigger_vnode_rearm_callback_t)(
+	vnode_t		vp,
+	int		flags,
+	void *		data,
+	vfs_context_t	ctx);
+
+/*!
+ @typedef trigger_vnode_reclaim_callback_t
+ @abstract function prototype for a trigger vnode reclaim callback
+ @discussion This function is associated with a trigger vnode during a vnode create.  It is
+ called to deallocate private callback argument data
+ @param vp The trigger vnode associated with the data
+ @param data The arbitrary data supplied by vnode trigger creator
+*/
+typedef void (* trigger_vnode_reclaim_callback_t)(
+	vnode_t		vp,
+	void *		data);
+
+/*!
+ @function vnode_trigger_update
+ @abstract Update a trigger vnode's state.
+ @discussion This allows a resolver to notify VFS of a state change in a trigger vnode.
+ @param vp The trigger vnode whose information to update.
+ @param result A compound resolver result value
+ @return EINVAL if result value is invalid or vp isn't a trigger vnode
+ */
+extern int vnode_trigger_update(vnode_t vp, resolver_result_t result);
+
+struct vnode_trigger_info {
+	trigger_vnode_resolve_callback_t	vti_resolve_func;
+	trigger_vnode_unresolve_callback_t	vti_unresolve_func;
+	trigger_vnode_rearm_callback_t		vti_rearm_func;
+	trigger_vnode_reclaim_callback_t	vti_reclaim_func;
+	void *					vti_data;   /* auxiliary data (optional) */
+	uint32_t				vti_flags;  /* optional flags (see below) */
+};
+
+/*
+ * SPI for creating a trigger vnode
+ *
+ * Uses the VNCREATE_TRIGGER flavor with existing vnode_create() KPI
+ *
+ * Only one resolver per vnode.
+ *
+ * ERRORS (in addition to vnode_create errors):
+ *	EINVAL (invalid resolver info, like invalid flags)
+ *	ENOTDIR (only directories can have a resolver)
+ *	EPERM (vnode cannot be a trigger - eg root dir of a file system)
+ *	ENOMEM
+ */
+struct vnode_trigger_param {
+	struct vnode_fsparam			vnt_params; /* same as for VNCREATE_FLAVOR */
+	trigger_vnode_resolve_callback_t	vnt_resolve_func;
+	trigger_vnode_unresolve_callback_t	vnt_unresolve_func;
+	trigger_vnode_rearm_callback_t		vnt_rearm_func;
+	trigger_vnode_reclaim_callback_t	vnt_reclaim_func;
+	void *					vnt_data;   /* auxiliary data (optional) */
+	uint32_t				vnt_flags;  /* optional flags (see below) */
+};
+
+#define VNCREATE_TRIGGER	(('T' << 8) + ('V'))
+#define VNCREATE_TRIGGER_SIZE	sizeof(struct vnode_trigger_param)
+
+/*
+ * vnode trigger flags (vnt_flags)
+ *
+ * VNT_AUTO_REARM:
+ * On unmounts of a trigger mount, automatically re-arm the trigger.
+ *
+ * VNT_NO_DIRECT_MOUNT:
+ * A trigger vnode instance that doesn't directly trigger a mount,
+ * instead it triggers the mounting of sub-trigger nodes.
+ */
+#define VNT_AUTO_REARM    	(1 << 0)	
+#define VNT_NO_DIRECT_MOUNT	(1 << 1)	
+#define VNT_VALID_MASK    	(VNT_AUTO_REARM | VNT_NO_DIRECT_MOUNT)
+
+#endif /* KERNEL_PRIVATE */
+
 
 /*
  * Vnode attributes, new-style.
@@ -287,6 +516,7 @@ struct vnode_fsparam {
 #define VNODE_ATTR_va_guuid		(1LL<<27)	/* 08000000 */
 #define VNODE_ATTR_va_nchildren		(1LL<<28)       /* 10000000 */
 #define VNODE_ATTR_va_dirlinkcount	(1LL<<29)       /* 20000000 */
+#define VNODE_ATTR_va_addedtime		(1LL<<30)		/* 40000000 */
 
 #define VNODE_ATTR_BIT(n)	(VNODE_ATTR_ ## n)
 /*
@@ -307,7 +537,8 @@ struct vnode_fsparam {
 				VNODE_ATTR_BIT(va_name) |		\
 				VNODE_ATTR_BIT(va_type) |		\
 				VNODE_ATTR_BIT(va_nchildren) |		\
-				VNODE_ATTR_BIT(va_dirlinkcount)) 
+				VNODE_ATTR_BIT(va_dirlinkcount)|		\
+                VNODE_ATTR_BIT(va_addedtime)) 
 /*
  * Attributes that can be applied to a new file object.
  */
@@ -381,14 +612,23 @@ struct vnode_attr {
 	uint64_t	va_dirlinkcount;  /* Real references to dir (i.e. excluding "." and ".." refs) */
 
 	/* add new fields here only */
+#ifdef BSD_KERNEL_PRIVATE
+	struct kauth_acl *va_base_acl;
+#else
+	void * 		va_reserved1;
+#endif /* BSD_KERNEL_PRIVATE */
+    struct timespec va_addedtime;	/* timestamp when item was added to parent directory */
+
 		
 };
 
 /*
  * Flags for va_vaflags.
  */
-#define	VA_UTIMES_NULL	0x010000	/* utimes argument was NULL */
-#define VA_EXCLUSIVE	0x020000	/* exclusive create request */
+#define	VA_UTIMES_NULL		0x010000	/* utimes argument was NULL */
+#define VA_EXCLUSIVE		0x020000	/* exclusive create request */
+#define VA_NOINHERIT		0x040000	/* Don't inherit ACLs from parent */
+#define VA_NOAUTH		0x080000	
 
 /*
  *  Modes.  Some values same as Ixxx entries from inode.h for now.
@@ -762,6 +1002,14 @@ int	vnode_isnocache(vnode_t);
 int	vnode_israge(vnode_t);
 
 /*!
+ @function vnode_needssnapshots
+ @abstract Check if a vnode needs snapshots events (regardless of its ctime status)
+ @param vp The vnode to test.
+ @return Nonzero if vnode needs snapshot events, 0 otherwise
+ */
+int	vnode_needssnapshots(vnode_t);
+
+/*!
  @function vnode_setnocache
  @abstract Set a vnode to not have its data cached in memory (i.e. we write-through to disk and always read from disk).
  @param vp The vnode whose flags to set.
@@ -992,6 +1240,20 @@ int vfs_context_rele(vfs_context_t);
 vfs_context_t vfs_context_current(void);
 #ifdef KERNEL_PRIVATE
 int	vfs_context_bind(vfs_context_t);
+
+/*!
+ @function vfs_ctx_skipatime
+ @abstract Check to see if this context should skip updating a vnode's access times.
+ @discussion  This is currently tied to the vnode rapid aging process.  If the process is marked for rapid aging, 
+ then the kernel should not update vnodes it touches for access time purposes.  This will check to see if the
+ specified process and/or thread is marked for rapid aging when it manipulates vnodes. 
+ @param ctx The context being investigated. 
+ @return 1 if we should skip access time updates.  
+ @return 0 if we should NOT skip access time updates.
+ */
+
+int	vfs_ctx_skipatime(vfs_context_t ctx);
+
 #endif
 
 /*!
@@ -1047,6 +1309,10 @@ int 	vnode_get(vnode_t);
  @return 0 for success, ENOENT if the vnode is dead, in the process of being reclaimed, or has been recycled and reused.
  */
 int 	vnode_getwithvid(vnode_t, uint32_t);
+
+#ifdef BSD_KERNEL_PRIVATE
+int vnode_getwithvid_drainok(vnode_t, uint32_t);
+#endif /* BSD_KERNEL_PRIVATE */
 
 /*!
  @function vnode_getwithref
@@ -1171,6 +1437,17 @@ int 	vnode_notify(vnode_t, uint32_t, struct vnode_attr*);
  @return Zero if not monitored, nonzero if monitored.
  */ 
 int	vnode_ismonitored(vnode_t);
+
+
+/*!
+ @function vnode_isdyldsharedcache
+ @abstract Check whether a file is a dyld shared cache file.
+ @param vp Vnode to examine.
+ @discussion Will not reenter the filesystem.
+ @return nonzero if a dyld shared cache file, zero otherwise.
+ */ 
+int	vnode_isdyldsharedcache(vnode_t);
+
 
 /*!
  @function vfs_get_notify_attributes
@@ -1298,7 +1575,7 @@ int vn_getpath(struct vnode *vp, char *pathbuf, int *len);
  */
 #define VNODE_LOOKUP_NOFOLLOW		0x01
 #define	VNODE_LOOKUP_NOCROSSMOUNT	0x02
-#define VNODE_LOOKUP_DOWHITEOUT		0x04
+#define VNODE_LOOKUP_DOWHITEOUT		0x04	/* OBSOLETE */
 /*!
  @function vnode_lookup
  @abstract Convert a path into a vnode.
@@ -1368,6 +1645,7 @@ int	vnode_iterate(struct mount *, int, int (*)(struct vnode *, void *), void *);
 #define VNODE_ITERATE_INACTIVE	0x200
 #ifdef BSD_KERNEL_PRIVATE
 #define VNODE_ALWAYS		0x400
+#define VNODE_DRAINO		0x800
 #endif /* BSD_KERNEL_PRIVATE */
 
 /*
@@ -1544,6 +1822,20 @@ void	vnode_putname(const char *name);
  @return Parent if available, else NULL.
  */
 vnode_t	vnode_getparent(vnode_t vp);
+
+#ifdef KERNEL_PRIVATE
+/*! 
+ @function vnode_lookup_continue_needed
+ @abstract Determine whether vnode needs additional processing in VFS before being opened.
+ @discussion If result is zero, filesystem can open this vnode.  If result is nonzero,
+ additional processing is needed in VFS (e.g. symlink, mountpoint).  Nonzero results should
+ be passed up to VFS.
+ @param vp Vnode to consider opening (found by filesystem).
+ @param cnp Componentname as passed to filesystem from VFS.
+ @result 0 to indicate that a vnode can be opened, or an error that should be passed up to VFS.
+ */
+int vnode_lookup_continue_needed(vnode_t vp, struct componentname *cnp);
+#endif /* KERNEL_PRIVATE */
 
 #ifdef BSD_KERNEL_PRIVATE
 /* Not in export list so can be private */

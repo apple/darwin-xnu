@@ -39,6 +39,7 @@
 #include "kxld_array.h"
 
 struct kxld_sect;
+struct kxld_symtab;
 struct segment_command;
 struct segment_command_64;
 typedef struct kxld_seg KXLDSeg;
@@ -76,6 +77,9 @@ kern_return_t kxld_seg_create_seg_from_sections(KXLDArray *segarray,
 
 kern_return_t kxld_seg_finalize_object_segment(KXLDArray *segarray,
     KXLDArray *section_order, u_long hdrsize)
+    __attribute__((nonnull, visibility("hidden")));
+
+kern_return_t kxld_seg_init_linkedit(KXLDArray *segs)
     __attribute__((nonnull, visibility("hidden")));
 #endif /* KXLD_USER_OR_OBJECT */
 
@@ -127,7 +131,11 @@ kern_return_t kxld_seg_finish_init(KXLDSeg *seg)
 void kxld_seg_set_vm_protections(KXLDSeg *seg, boolean_t strict_protections)
     __attribute__((nonnull, visibility("hidden")));
 
-void kxld_seg_relocate(KXLDSeg *Seg, kxld_addr_t link_addr)
+void kxld_seg_relocate(KXLDSeg *seg, kxld_addr_t link_addr)
+    __attribute__((nonnull, visibility("hidden")));
+
+void kxld_seg_populate_linkedit(KXLDSeg *seg,
+    const struct kxld_symtab *symtab, boolean_t is_32_bit)
     __attribute__((nonnull, visibility("hidden")));
 
 #endif /* _KXLD_SEG_H_ */

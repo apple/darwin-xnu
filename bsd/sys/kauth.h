@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -106,11 +106,14 @@ struct kauth_identity_extlookup {
 #define KAUTH_EXTLOOKUP_WANT_MEMBERSHIP	(1<<12)
 #define KAUTH_EXTLOOKUP_VALID_MEMBERSHIP (1<<13)
 #define KAUTH_EXTLOOKUP_ISMEMBER	(1<<14)
+#define KAUTH_EXTLOOKUP_VALID_PWNAM	(1<<15)
+#define	KAUTH_EXTLOOKUP_WANT_PWNAM	(1<<16)
+#define KAUTH_EXTLOOKUP_VALID_GRNAM	(1<<17)
+#define	KAUTH_EXTLOOKUP_WANT_GRNAM	(1<<18)
 
 	__darwin_pid_t	el_info_pid;		/* request on behalf of PID */
+	u_int64_t	el_extend;		/* extension field */
 	u_int32_t	el_info_reserved_1;	/* reserved (APPLE) */
-	u_int32_t	el_info_reserved_2;	/* reserved (APPLE) */
-	u_int32_t	el_info_reserved_3;	/* reserved (APPLE) */
 
 	uid_t		el_uid;		/* user ID */
 	guid_t		el_uguid;	/* user GUID */
@@ -177,7 +180,6 @@ struct kauth_cred {
 	int	kc_nwhtgroups;		/* whiteout group list */
 	gid_t	*kc_whtgroups;
 	
-	struct auditinfo  cr_au;
 	struct au_session cr_audit;	/* user auditing data */
 
 	int	kc_nsupplement;		/* entry count in supplemental data pointer array */
@@ -192,6 +194,16 @@ struct kauth_cred {
 
 /* Kernel SPI for now */
 __BEGIN_DECLS
+/*
+ * Routines specific to credentials with POSIX credential labels attached
+ *
+ * XXX	Should be in policy_posix.h, with struct posix_cred
+ */
+extern kauth_cred_t posix_cred_create(posix_cred_t pcred);
+extern posix_cred_t posix_cred_get(kauth_cred_t cred);
+extern void posix_cred_label(kauth_cred_t cred, posix_cred_t pcred);
+extern int posix_cred_access(kauth_cred_t cred, id_t object_uid, id_t object_gid, mode_t object_mode, mode_t mode_req);
+
 extern uid_t	kauth_getuid(void);
 extern uid_t	kauth_getruid(void);
 extern gid_t	kauth_getgid(void);
@@ -221,7 +233,15 @@ extern int kauth_proc_label_update(struct proc *p, void *label);
 
 extern kauth_cred_t kauth_cred_find(kauth_cred_t cred);
 extern uid_t	kauth_cred_getuid(kauth_cred_t _cred);
+extern uid_t	kauth_cred_getruid(kauth_cred_t _cred);
+extern uid_t	kauth_cred_getsvuid(kauth_cred_t _cred);
 extern gid_t	kauth_cred_getgid(kauth_cred_t _cred);
+extern gid_t	kauth_cred_getrgid(kauth_cred_t _cred);
+extern gid_t	kauth_cred_getsvgid(kauth_cred_t _cred);
+extern int	kauth_cred_pwnam2guid(char *pwnam, guid_t *guidp);
+extern int	kauth_cred_grnam2guid(char *grnam, guid_t *guidp);
+extern int	kauth_cred_guid2pwnam(guid_t *guidp, char *pwnam);
+extern int	kauth_cred_guid2grnam(guid_t *guidp, char *grnam);
 extern int      kauth_cred_guid2uid(guid_t *_guid, uid_t *_uidp);
 extern int      kauth_cred_guid2gid(guid_t *_guid, gid_t *_gidp);
 extern int      kauth_cred_ntsid2uid(ntsid_t *_sid, uid_t *_uidp);
@@ -273,7 +293,7 @@ extern void	kauth_cred_uthread_update(struct uthread *, proc_t);
 #ifdef CONFIG_MACF
 extern int kauth_proc_label_update_execve(struct proc *p, struct vfs_context *ctx, struct vnode *vp, struct label *scriptlabel, struct label *execlabel);
 #endif
-extern int	kauth_cred_getgroups(gid_t *_groups, int *_groupcount);
+extern int	kauth_cred_getgroups(kauth_cred_t _cred, gid_t *_groups, int *_groupcount);
 extern int	kauth_cred_assume(uid_t _uid);
 extern int	kauth_cred_gid_subset(kauth_cred_t _cred1, kauth_cred_t _cred2, int *_resultp);
 struct auditinfo_addr;
@@ -468,6 +488,7 @@ struct kauth_acl_eval {
 	int			ae_options;
 #define KAUTH_AEVAL_IS_OWNER	(1<<0)		/* authorizing operation for owner */
 #define KAUTH_AEVAL_IN_GROUP	(1<<1)		/* authorizing operation for groupmember */
+#define KAUTH_AEVAL_IN_GROUP_UNKNOWN	(1<<2)		/* authorizing operation for unknown group membership */
 	/* expansions for 'generic' rights bits */
 	kauth_ace_rights_t	ae_exp_gall;
 	kauth_ace_rights_t	ae_exp_gread;

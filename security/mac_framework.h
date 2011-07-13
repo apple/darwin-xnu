@@ -122,6 +122,17 @@ struct vnode;
 struct vnode_attr;
 struct vop_setlabel_args;
 
+#ifndef __IOKIT_PORTS_DEFINED__
+#define __IOKIT_PORTS_DEFINED__
+#ifdef __cplusplus
+class OSObject;
+typedef OSObject *io_object_t;
+#else
+struct OSObject;
+typedef struct OSObject *io_object_t;
+#endif
+#endif /* __IOKIT_PORTS_DEFINED__ */
+
 /*@ macros */
 #define	VNODE_LABEL_CREATE	1
 
@@ -212,6 +223,9 @@ int	mac_inpcb_label_init(struct inpcb *inp, int flag);
 void	mac_inpcb_label_recycle(struct inpcb *inp);
 void	mac_inpcb_label_update(struct socket *so);
 int	mac_iokit_check_device(char *devtype, struct mac_module_data *mdata);
+int	mac_iokit_check_open(kauth_cred_t cred, io_object_t user_client, unsigned int user_client_type);
+int	mac_iokit_check_set_properties(kauth_cred_t cred, io_object_t registry_entry, io_object_t properties);
+int	mac_iokit_check_hid_control(kauth_cred_t cred);
 void	mac_ipq_label_associate(struct mbuf *fragment, struct ipq *ipq);
 int	mac_ipq_label_compare(struct mbuf *fragment, struct ipq *ipq);
 void	mac_ipq_label_destroy(struct ipq *ipq);
@@ -299,7 +313,7 @@ int	mac_posixshm_check_mmap(kauth_cred_t cred, struct pshminfo *pshm,
 int	mac_posixshm_check_open(kauth_cred_t cred, struct pshminfo *pshm);
 int	mac_posixshm_check_stat(kauth_cred_t cred, struct pshminfo *pshm);
 int	mac_posixshm_check_truncate(kauth_cred_t cred, struct pshminfo *pshm,
-	    size_t s);
+	    off_t s);
 int	mac_posixshm_check_unlink(kauth_cred_t cred, struct pshminfo *pshm,
 	    const char *name);
 void	mac_posixshm_vnode_label_associate(kauth_cred_t cred,
@@ -309,6 +323,8 @@ void	mac_posixshm_label_associate(kauth_cred_t cred,
 	    struct pshminfo *pshm, const char *name);
 void	mac_posixshm_label_destroy(struct pshminfo *pshm);
 void	mac_posixshm_label_init(struct pshminfo *pshm);
+int	mac_priv_check(kauth_cred_t cred, int priv);
+int	mac_priv_grant(kauth_cred_t cred, int priv);
 int	mac_proc_check_debug(proc_t proc1, proc_t proc2);
 int	mac_proc_check_fork(proc_t proc);
 int	mac_proc_check_suspend_resume(proc_t proc, int sr);
@@ -318,6 +334,8 @@ int	mac_proc_check_getaudit(proc_t proc);
 int	mac_proc_check_getauid(proc_t proc);
 int     mac_proc_check_getlcid(proc_t proc1, proc_t proc2,
 	    pid_t pid);
+int	mac_proc_check_map_anon(proc_t proc, user_addr_t u_addr,
+	    user_size_t u_size, int prot, int flags, int *maxprot);
 int	mac_proc_check_mprotect(proc_t proc,
 	    user_addr_t addr, user_size_t size, int prot);
 int	mac_proc_check_run_cs_invalid(proc_t proc);
@@ -373,6 +391,7 @@ int	mac_system_check_acct(kauth_cred_t cred, struct vnode *vp);
 int	mac_system_check_audit(kauth_cred_t cred, void *record, int length);
 int	mac_system_check_auditctl(kauth_cred_t cred, struct vnode *vp);
 int	mac_system_check_auditon(kauth_cred_t cred, int cmd);
+int	mac_system_check_chud(kauth_cred_t cred);
 int	mac_system_check_host_priv(kauth_cred_t cred);
 int	mac_system_check_nfsd(kauth_cred_t cred);
 int	mac_system_check_reboot(kauth_cred_t cred, int howto);
@@ -426,7 +445,6 @@ void	mac_sysvshm_label_associate(kauth_cred_t cred,
 void	mac_sysvshm_label_destroy(struct shmid_kernel *shmsegptr);
 void	mac_sysvshm_label_init(struct shmid_kernel* shmsegptr);
 void	mac_sysvshm_label_recycle(struct shmid_kernel *shmsegptr);
-void	mac_thread_userret(int code, int error, struct thread *thread);
 int	mac_vnode_check_access(vfs_context_t ctx, struct vnode *vp,
 	    int acc_mode);
 int	mac_vnode_check_chdir(vfs_context_t ctx, struct vnode *dvp);
@@ -440,6 +458,7 @@ int	mac_vnode_check_exchangedata(vfs_context_t ctx, struct vnode *v1,
 	    struct vnode *v2);
 int	mac_vnode_check_exec(vfs_context_t ctx, struct vnode *vp,
 	    struct image_params *imgp);
+int	mac_vnode_check_fsgetpath(vfs_context_t ctx, struct vnode *vp);
 int	mac_vnode_check_signature(struct vnode *vp, unsigned char *sha1,
 	    void * signature, size_t size);
 int     mac_vnode_check_getattrlist(vfs_context_t ctx, struct vnode *vp,
@@ -468,6 +487,8 @@ int	mac_vnode_check_rename_from(vfs_context_t ctx, struct vnode *dvp,
 int	mac_vnode_check_rename_to(vfs_context_t ctx, struct vnode *dvp,
 	    struct vnode *vp, int samedir, struct componentname *cnp);
 int	mac_vnode_check_revoke(vfs_context_t ctx, struct vnode *vp);
+int	mac_vnode_check_searchfs(vfs_context_t ctx, struct vnode *vp,
+	    struct attrlist *alist);
 int     mac_vnode_check_select(vfs_context_t ctx, struct vnode *vp,
 	    int which);
 int     mac_vnode_check_setattrlist(vfs_context_t ctxd, struct vnode *vp,
@@ -516,6 +537,8 @@ void	mac_vnode_label_update_extattr(struct mount *mp, struct vnode *vp,
 	    const char *name);
 int	mac_vnode_notify_create(vfs_context_t ctx, struct mount *mp,
 	    struct vnode *dvp, struct vnode *vp, struct componentname *cnp);
+void	mac_vnode_notify_rename(vfs_context_t ctx, struct vnode *vp,
+	    struct vnode *dvp, struct componentname *cnp);
 int	vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 	    struct componentname *cnp, int flags, vfs_context_t ctx);
 void	vnode_relabel(struct vnode *vp);

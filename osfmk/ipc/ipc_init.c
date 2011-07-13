@@ -151,10 +151,6 @@ ipc_bootstrap(void)
 			       ipc_space_max * sizeof(struct ipc_space),
 			       sizeof(struct ipc_space),
 			       "ipc spaces");
-#if 0
-	/* make it exhaustible */
-	zone_change(ipc_space_zone, Z_EXHAUST, TRUE);
-#endif
 	zone_change(ipc_space_zone, Z_NOENCRYPT, TRUE);
 
 	ipc_tree_entry_zone =
@@ -162,10 +158,6 @@ ipc_bootstrap(void)
 			ipc_tree_entry_max * sizeof(struct ipc_tree_entry),
 			sizeof(struct ipc_tree_entry),
 			"ipc tree entries");
-#if 0
-	/* make it exhaustible */
-	zone_change(ipc_tree_entry_zone, Z_EXHAUST, TRUE);
-#endif
 	zone_change(ipc_tree_entry_zone, Z_NOENCRYPT, TRUE);
 
 	/*
@@ -176,11 +168,8 @@ ipc_bootstrap(void)
 		      ipc_port_max * sizeof(struct ipc_port),
 		      sizeof(struct ipc_port),
 		      "ipc ports");
-	/*
-	 * XXX  Can't make the port zone exhaustible because the kernel
-	 * XXX	panics when port allocation for an internal object fails.
-	 *zone_change(ipc_object_zones[IOT_PORT], Z_EXHAUST, TRUE);
-	 */
+	/* cant charge callers for port allocations (references passed) */
+	zone_change(ipc_object_zones[IOT_PORT], Z_CALLERACCT, FALSE);
 	zone_change(ipc_object_zones[IOT_PORT], Z_NOENCRYPT, TRUE);
 
 	ipc_object_zones[IOT_PORT_SET] =
@@ -188,8 +177,6 @@ ipc_bootstrap(void)
 		      ipc_pset_max * sizeof(struct ipc_pset),
 		      sizeof(struct ipc_pset),
 		      "ipc port sets");
-	/* make it exhaustible */
-	zone_change(ipc_object_zones[IOT_PORT_SET], Z_EXHAUST, TRUE);
 	zone_change(ipc_object_zones[IOT_PORT_SET], Z_NOENCRYPT, TRUE);
 
 	/*
@@ -201,6 +188,7 @@ ipc_bootstrap(void)
 			      IKM_SAVED_KMSG_SIZE,
 			      IKM_SAVED_KMSG_SIZE,
 			      "ipc kmsgs");
+	zone_change(ipc_kmsg_zone, Z_CALLERACCT, FALSE);
 	zone_change(ipc_kmsg_zone, Z_NOENCRYPT, TRUE);
 
 #if CONFIG_MACF_MACH
@@ -209,6 +197,9 @@ ipc_bootstrap(void)
 		      ipc_port_max * sizeof(struct ipc_labelh),
 		      sizeof(struct ipc_labelh),
 		      "label handles");
+	/* cant charge callers for label allocations (port refs passed) */
+	zone_change(ipc_labelh_zone, Z_CALLERACCT, FALSE);
+
 #endif
 
 	/* create special spaces */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -56,7 +56,12 @@ struct timeval;
 		Calls to your upcall function are not serialized and may be
 		called concurrently from multiple threads in the kernel.
 
-		Your upcall function will be called when:
+		Your upcall function will be called: 
+		    when there is data more than the low water mark for reading, 
+		    or when there is space for a write,
+		    or when there is a connection to accept,
+		    or when a socket is connected,
+		    or when a socket is closed or disconnected
 
 	@param so A reference to the socket that's ready.
 	@param cookie The cookie passed in when the socket was created.
@@ -227,11 +232,16 @@ extern errno_t sock_settclassopt(socket_t so, const void* optval, size_t optlen)
 */
 extern errno_t sock_gettclassopt(socket_t so, void* optval, size_t* optlen);
 
+#ifdef XNU_KERNEL_PRIVATE
+extern void socket_set_traffic_mgt_flags_locked(socket_t so, u_int32_t flags);
+extern void socket_clear_traffic_mgt_flags_locked(socket_t so, u_int32_t flags);
+#endif /* XNU_KERNEL_PRIVATE */
 #ifdef BSD_KERNEL_PRIVATE
 extern void socket_set_traffic_mgt_flags(socket_t so, u_int32_t flags);
 extern void socket_clear_traffic_mgt_flags(socket_t so, u_int32_t flags);
+extern errno_t socket_defunct(struct proc *, socket_t so, int);
 #endif /* BSD_KERNEL_PRIVATE */
-#endif
+#endif /* KERNEL_PRIVATE */
 
 /*!
 	@function sock_listen
@@ -473,6 +483,22 @@ extern errno_t sock_getaddr(socket_t so, struct sockaddr **psockname,
 	@param sockname The socket name to be freed.
  */
 extern void sock_freeaddr(struct sockaddr *sockname);
+
+/*
+	@function sock_setupcall
+	@discussion Set the notifier function to be called when an event
+		occurs on the socket. This may be set to NULL to disable 
+		further notifications. Setting the function does not 
+		affect currently notifications about to be sent or being sent.
+		Note: When this function is used on a socket passed from userspace 
+		it is crucial to call sock_retain() on the socket otherwise a callback 
+		could be dispatched on a closed socket and cause a crash.
+	@param sock The socket.
+	@param callback The notifier function
+	@param context A cookie passed directly to the callback
+*/
+extern errno_t sock_setupcall(socket_t sock, sock_upcall callback, void* context);
+
 #endif /* KERNEL_PRIVATE */
 
 __END_DECLS

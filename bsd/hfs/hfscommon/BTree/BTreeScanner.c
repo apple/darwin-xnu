@@ -272,7 +272,7 @@ static int ReadMultipleNodes( BTScanState *theScanStatePtr )
 	}
 	
 	// now read blocks from the device 
-	myErr = (int)buf_bread(myDevPtr, 
+	myErr = (int)buf_meta_bread(myDevPtr, 
 	                       myPhyBlockNum, 
 	                       myBufferSize,  
 	                       NOCRED, 

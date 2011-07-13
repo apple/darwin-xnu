@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1190,6 +1190,7 @@ pfr_add_tables(user_addr_t tbl, int size, int *nadd, int flags)
 	for (i = 0; i < size; i++, tbl += sizeof (key.pfrkt_t)) {
 		if (COPYIN(tbl, &key.pfrkt_t, sizeof (key.pfrkt_t), flags))
 			senderr(EFAULT);
+		pfr_table_copyin_cleanup(&key.pfrkt_t);
 		if (pfr_validate_table(&key.pfrkt_t, PFR_TFLAG_USRMASK,
 		    flags & PFR_FLAG_USERIOCTL))
 			senderr(EINVAL);
@@ -1266,6 +1267,7 @@ pfr_del_tables(user_addr_t tbl, int size, int *ndel, int flags)
 	for (i = 0; i < size; i++, tbl += sizeof (key.pfrkt_t)) {
 		if (COPYIN(tbl, &key.pfrkt_t, sizeof (key.pfrkt_t), flags))
 			return (EFAULT);
+		pfr_table_copyin_cleanup(&key.pfrkt_t);
 		if (pfr_validate_table(&key.pfrkt_t, 0,
 		    flags & PFR_FLAG_USERIOCTL))
 			return (EINVAL);
@@ -1385,6 +1387,7 @@ pfr_clr_tstats(user_addr_t tbl, int size, int *nzero, int flags)
 	for (i = 0; i < size; i++, tbl += sizeof (key.pfrkt_t)) {
 		if (COPYIN(tbl, &key.pfrkt_t, sizeof (key.pfrkt_t), flags))
 			return (EFAULT);
+		pfr_table_copyin_cleanup(&key.pfrkt_t);
 		if (pfr_validate_table(&key.pfrkt_t, 0, 0))
 			return (EINVAL);
 		p = RB_FIND(pfr_ktablehead, &pfr_ktables, &key);
@@ -1420,6 +1423,7 @@ pfr_set_tflags(user_addr_t tbl, int size, int setflag, int clrflag,
 	for (i = 0; i < size; i++, tbl += sizeof (key.pfrkt_t)) {
 		if (COPYIN(tbl, &key.pfrkt_t, sizeof (key.pfrkt_t), flags))
 			return (EFAULT);
+		pfr_table_copyin_cleanup(&key.pfrkt_t);
 		if (pfr_validate_table(&key.pfrkt_t, 0,
 		    flags & PFR_FLAG_USERIOCTL))
 			return (EINVAL);
@@ -1728,6 +1732,13 @@ pfr_commit_ktable(struct pfr_ktable *kt, u_int64_t tzero)
 	pfr_destroy_ktable(shadow, 0);
 	kt->pfrkt_shadow = NULL;
 	pfr_setflags_ktable(kt, nflags);
+}
+
+void
+pfr_table_copyin_cleanup(struct pfr_table *tbl)
+{
+	tbl->pfrt_anchor[sizeof (tbl->pfrt_anchor) - 1] = '\0';
+	tbl->pfrt_name[sizeof (tbl->pfrt_name) - 1] = '\0';
 }
 
 static int

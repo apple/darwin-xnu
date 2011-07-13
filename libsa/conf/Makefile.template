@@ -27,8 +27,8 @@ include $(MakeInc_def)
 #
 # CFLAGS
 #
-CFLAGS+= -imacros meta_features.h -DLIBSA_KERNEL_PRIVATE \
-         -Werror $(CFLAGS_INLINE_CONFIG)
+CFLAGS+= -include meta_features.h -DLIBSA_KERNEL_PRIVATE \
+         $(CFLAGS_INLINE_CONFIG)
 
 #
 # Directories for mig generated files
@@ -74,22 +74,25 @@ ${OBJS}: ${OBJSDEPS}
 
 LDOBJS = $(OBJS)
 
-$(COMPONENT).o: $(LDOBJS)
-	$(_v)for kld_file in ${LDOBJS}; do      \
+$(COMPONENT).filelist: $(LDOBJS)
+	$(_v)if [ $(BUILD_MACHO_OBJ) -eq 1 ]; then \
+	for kld_file in ${LDOBJS}; do      \
 		$(SEG_HACK) __KLD $${kld_file} -o $${kld_file}__; \
 		mv $${kld_file}__ $${kld_file} ; \
-	done;
+	done; \
+	fi
 	@echo LDFILELIST $(COMPONENT)
 	$(_v)( for obj in ${LDOBJS}; do	\
 		 echo $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$${obj}; \
-	done; ) > $(COMPONENT).o
+	done; ) > $(COMPONENT).filelist
 
-do_all: $(COMPONENT).o
+do_all: $(COMPONENT).filelist
 
 do_depend: do_all
 	$(_v)${MD} -u Makedep -f -d `ls *.d`
 	
 do_build_all: do_depend 
+
 
 %RULES
 

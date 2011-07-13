@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -72,7 +72,7 @@
 #include "err_server.sub"
 #include "err_us.sub"
 
-__private_extern__ struct error_system _mach_errors[err_max_system+1] = {
+const struct error_system _mach_errors[err_max_system+1] = {
 	/* 0; err_kern */
 	{
 		errlib_count(err_os_sub),

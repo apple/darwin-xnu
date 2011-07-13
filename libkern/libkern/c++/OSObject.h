@@ -164,6 +164,9 @@ class OSString;
 class OSObject : public OSMetaClassBase
 {
     OSDeclareAbstractStructors(OSObject)
+#if IOKITSTATS
+	friend class IOStatistics;
+#endif
 
 private:
    /* Not to be included in headerdoc.
@@ -435,24 +438,6 @@ public:
     OSMetaClassDeclareReservedUnused(OSObject, 14);
     OSMetaClassDeclareReservedUnused(OSObject, 15);
 
-#ifdef __ppc__
-    OSMetaClassDeclareReservedUnused(OSObject, 16);
-    OSMetaClassDeclareReservedUnused(OSObject, 17);
-    OSMetaClassDeclareReservedUnused(OSObject, 18);
-    OSMetaClassDeclareReservedUnused(OSObject, 19);
-    OSMetaClassDeclareReservedUnused(OSObject, 20);
-    OSMetaClassDeclareReservedUnused(OSObject, 21);
-    OSMetaClassDeclareReservedUnused(OSObject, 22);
-    OSMetaClassDeclareReservedUnused(OSObject, 23);
-    OSMetaClassDeclareReservedUnused(OSObject, 24);
-    OSMetaClassDeclareReservedUnused(OSObject, 25);
-    OSMetaClassDeclareReservedUnused(OSObject, 26);
-    OSMetaClassDeclareReservedUnused(OSObject, 27);
-    OSMetaClassDeclareReservedUnused(OSObject, 28);
-    OSMetaClassDeclareReservedUnused(OSObject, 29);
-    OSMetaClassDeclareReservedUnused(OSObject, 30);
-    OSMetaClassDeclareReservedUnused(OSObject, 31);
-#endif
 };
 
 #endif /* !_LIBKERN_OSOBJECT_H */

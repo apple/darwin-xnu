@@ -95,24 +95,25 @@ extern boolean_t ipc_right_reverse(
 	mach_port_name_t	*namep,
 	ipc_entry_t		*entryp);
 
-/* Make a dead-name request, returning the registered send-once right */
-extern kern_return_t ipc_right_dnrequest(
+/* Make a notification request, returning the previous send-once right */
+extern kern_return_t ipc_right_request_alloc(
 	ipc_space_t		space,
 	mach_port_name_t	name,
 	boolean_t		immediate,
+	boolean_t		send_possible,
 	ipc_port_t		notify,
 	ipc_port_t		*previousp);
 
-/* Cancel a dead-name request and return the send-once right */
-extern ipc_port_t ipc_right_dncancel(
+/* Cancel a notification request and return the send-once right */
+extern ipc_port_t ipc_right_request_cancel(
 	ipc_space_t		space,
 	ipc_port_t		port,
 	mach_port_name_t	name,
 	ipc_entry_t		entry);
 
-#define	ipc_right_dncancel_macro(space, port, name, entry)		\
-		 ((entry->ie_request == 0) ? IP_NULL :			\
-		 ipc_right_dncancel((space), (port), (name), (entry)))
+#define	ipc_right_request_cancel_macro(space, port, name, entry)		\
+		 ((entry->ie_request == IE_REQ_NONE) ? IP_NULL :		\
+		 ipc_right_request_cancel((space), (port), (name), (entry)))
 
 /* Check if an entry is being used */
 extern boolean_t ipc_right_inuse(

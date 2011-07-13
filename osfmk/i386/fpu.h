@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -67,6 +67,14 @@
 #include <mach/i386/thread_status.h>
 #include <i386/proc_reg.h>
 #include <i386/thread.h>
+
+typedef	enum {
+		FXSAVE32 = 1,
+		FXSAVE64 = 2,
+		XSAVE32  = 3,
+		XSAVE64  = 4,
+		FP_UNUSED = 5
+	} fp_save_layout_t;
 
 extern int		fp_kind;
 

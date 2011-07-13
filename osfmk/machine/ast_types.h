@@ -28,9 +28,7 @@
 #ifndef _MACHINE_AST_TYPES_H
 #define _MACHINE_AST_TYPES_H
 
-#if defined (__ppc__)
-#include "ppc/ast_types.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/ast_types.h"
 #else
 #error architecture not supported

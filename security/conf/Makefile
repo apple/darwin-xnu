@@ -7,8 +7,7 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-SETUP_SUBDIRS = \
-	tools
+SETUP_SUBDIRS =
 
 COMP_SUBDIRS = 
 
@@ -24,30 +23,24 @@ else
 export COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)
 endif
 
-$(COMPOBJROOT)/doconf:
-	@make build_setup 
+MASTER_CPU_PER_SOC = $(SOURCE)/MASTER.$(ARCH_CONFIG_LC).$(MACHINE_CONFIG_LC)
 
 $(COMPOBJROOT)/$(SECURITY_KERNEL_CONFIG)/Makefile :  $(SOURCE)/MASTER  \
 	$(SOURCE)/MASTER.$(ARCH_CONFIG_LC) \
 	$(SOURCE)/Makefile.template  \
 	$(SOURCE)/Makefile.$(ARCH_CONFIG_LC)  \
 	$(SOURCE)/files \
-	$(SOURCE)/files.$(ARCH_CONFIG_LC) \
-	$(COMPOBJROOT)/doconf
+	$(SOURCE)/files.$(ARCH_CONFIG_LC)
 	$(_v)(doconf_target=$(addsuffix /conf, $(TARGET)); \
 	$(MKDIR) $${doconf_target}; \
 	cd $${doconf_target}; \
 	rm -f $(notdir $?); \
 	cp  $? $${doconf_target}; \
-	$(COMPOBJROOT)/doconf -c -cpu $(ARCH_CONFIG_LC) -d  $(TARGET)/$(SECURITY_KERNEL_CONFIG) $(SECURITY_KERNEL_CONFIG); \
+	if [ -f $(MASTER_CPU_PER_SOC) ]; then cp $(MASTER_CPU_PER_SOC) $${doconf_target}; fi; \
+	$(SRCROOT)/SETUP/config/doconf -c -cpu $(ARCH_CONFIG_LC) -soc $(MACHINE_CONFIG_LC) -d  $(TARGET)/$(SECURITY_KERNEL_CONFIG) $(SECURITY_KERNEL_CONFIG); \
 	);
 
-.ORDER: $(COMPOBJROOT)/$(SECURITY_KERNEL_CONFIG)/Makefile
-
-do_setup_conf: $(COMPOBJROOT)/doconf \
-		$(COMPOBJROOT)/$(SECURITY_KERNEL_CONFIG)/Makefile
-
-do_all: do_setup_conf
+do_all: $(COMPOBJROOT)/$(SECURITY_KERNEL_CONFIG)/Makefile
 	$(_v)next_source=$(subst conf/,,$(SOURCE));			\
 	${MAKE} -C $(COMPOBJROOT)/$(SECURITY_KERNEL_CONFIG)	\
 		MAKEFILES=$(TARGET)/$(SECURITY_KERNEL_CONFIG)/Makefile	\

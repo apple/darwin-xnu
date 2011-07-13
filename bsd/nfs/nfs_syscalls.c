@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -150,36 +150,40 @@ SYSCTL_NODE(_vfs_generic, OID_AUTO, nfs, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "nfs hing
 
 #if NFSCLIENT
 SYSCTL_NODE(_vfs_generic_nfs, OID_AUTO, client, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "nfs client hinge");
-SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, initialdowndelay, CTLFLAG_RW, &nfs_tprintf_initial_delay, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, nextdowndelay, CTLFLAG_RW, &nfs_tprintf_delay, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, iosize, CTLFLAG_RW, &nfs_iosize, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, access_cache_timeout, CTLFLAG_RW, &nfs_access_cache_timeout, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, allow_async, CTLFLAG_RW, &nfs_allow_async, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, statfs_rate_limit, CTLFLAG_RW, &nfs_statfs_rate_limit, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, nfsiod_thread_max, CTLFLAG_RW, &nfsiod_thread_max, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, nfsiod_thread_count, CTLFLAG_RD, &nfsiod_thread_count, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, lockd_mounts, CTLFLAG_RD, &nfs_lockd_mounts, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, max_async_writes, CTLFLAG_RW, &nfs_max_async_writes, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, single_des, CTLFLAG_RW, &nfs_single_des, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, access_delete, CTLFLAG_RW, &nfs_access_delete, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, initialdowndelay, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_tprintf_initial_delay, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, nextdowndelay, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_tprintf_delay, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, iosize, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_iosize, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, access_cache_timeout, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_access_cache_timeout, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, allow_async, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_allow_async, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, statfs_rate_limit, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_statfs_rate_limit, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, nfsiod_thread_max, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsiod_thread_max, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, nfsiod_thread_count, CTLFLAG_RD | CTLFLAG_LOCKED, &nfsiod_thread_count, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, lockd_mounts, CTLFLAG_RD | CTLFLAG_LOCKED, &nfs_lockd_mounts, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, max_async_writes, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_max_async_writes, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, single_des, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_single_des, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, access_delete, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_access_delete, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, access_dotzfs, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_access_dotzfs, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, access_for_getattr, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_access_for_getattr, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, idmap_ctrl, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_idmap_ctrl, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, callback_port, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_callback_port, 0, "");
 #endif /* NFSCLIENT */
 
 #if NFSSERVER
 SYSCTL_NODE(_vfs_generic_nfs, OID_AUTO, server, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "nfs server hinge");
-SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, wg_delay, CTLFLAG_RW, &nfsrv_wg_delay, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, wg_delay_v3, CTLFLAG_RW, &nfsrv_wg_delay_v3, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, require_resv_port, CTLFLAG_RW, &nfsrv_require_resv_port, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, async, CTLFLAG_RW, &nfsrv_async, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, export_hash_size, CTLFLAG_RW, &nfsrv_export_hash_size, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, reqcache_size, CTLFLAG_RW, &nfsrv_reqcache_size, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, request_queue_length, CTLFLAG_RW, &nfsrv_sock_max_rec_queue_length, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, user_stats, CTLFLAG_RW, &nfsrv_user_stat_enabled, 0, "");
-SYSCTL_UINT(_vfs_generic_nfs_server, OID_AUTO, gss_context_ttl, CTLFLAG_RW, &nfsrv_gss_context_ttl, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, wg_delay, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_wg_delay, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, wg_delay_v3, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_wg_delay_v3, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, require_resv_port, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_require_resv_port, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, async, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_async, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, export_hash_size, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_export_hash_size, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, reqcache_size, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_reqcache_size, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, request_queue_length, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_sock_max_rec_queue_length, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, user_stats, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_user_stat_enabled, 0, "");
+SYSCTL_UINT(_vfs_generic_nfs_server, OID_AUTO, gss_context_ttl, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_gss_context_ttl, 0, "");
 #if CONFIG_FSE
-SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, fsevents, CTLFLAG_RW, &nfsrv_fsevents_enabled, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, fsevents, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_fsevents_enabled, 0, "");
 #endif
-SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, nfsd_thread_max, CTLFLAG_RW, &nfsd_thread_max, 0, "");
-SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, nfsd_thread_count, CTLFLAG_RD, &nfsd_thread_count, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, nfsd_thread_max, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsd_thread_max, 0, "");
+SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, nfsd_thread_count, CTLFLAG_RD | CTLFLAG_LOCKED, &nfsd_thread_count, 0, "");
 #endif /* NFSSERVER */
 
 
@@ -191,11 +195,19 @@ nfsclnt(proc_t p, struct nfsclnt_args *uap, __unused int *retval)
 	struct lockd_ans la;
 	int error;
 
-	if (uap->flag == NFSCLNT_LOCKDANS) {
+	switch (uap->flag) {
+	case NFSCLNT_LOCKDANS:
 		error = copyin(uap->argp, &la, sizeof(la));
-		return (error != 0 ? error : nfslockdans(p, &la));
+		if (!error)
+			error = nfslockdans(p, &la);
+		break;
+	case NFSCLNT_LOCKDNOTIFY:
+		error = nfslockdnotify(p, uap->argp);
+		break;
+	default:
+		error = EINVAL;
 	}
-	return EINVAL;
+	return (error);
 }
 
 /*
@@ -389,10 +401,10 @@ getfh(proc_t p, struct getfh_args *uap, __unused int *retval)
 {
 	vnode_t vp;
 	struct nfs_filehandle nfh;
-	int error;
+	int error, fhlen, fidlen;
 	struct nameidata nd;
 	char path[MAXPATHLEN], *ptr;
-	u_int pathlen;
+	size_t pathlen;
 	struct nfs_exportfs *nxfs;
 	struct nfs_export *nx;
 
@@ -403,14 +415,20 @@ getfh(proc_t p, struct getfh_args *uap, __unused int *retval)
 	if (error)
 		return (error);
 
-	error = copyinstr(uap->fname, path, MAXPATHLEN, (size_t *)&pathlen);
+	error = copyinstr(uap->fname, path, MAXPATHLEN, &pathlen);
+	if (!error)
+		error = copyin(uap->fhp, &fhlen, sizeof(fhlen));
 	if (error)
 		return (error);
+	/* limit fh size to length specified (or v3 size by default) */
+	if ((fhlen != NFSV2_MAX_FH_SIZE) && (fhlen != NFSV3_MAX_FH_SIZE))
+		fhlen = NFSV3_MAX_FH_SIZE;
+	fidlen = fhlen - sizeof(struct nfs_exphandle);
 
 	if (!nfsrv_is_initialized())
 		return (EINVAL);
 
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1, 
+	NDINIT(&nd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1, 
 			UIO_SYSSPACE, CAST_USER_ADDR_T(path), vfs_context_current());
 	error = namei(&nd);
 	if (error)
@@ -452,9 +470,9 @@ getfh(proc_t p, struct getfh_args *uap, __unused int *retval)
 	nfh.nfh_xh.nxh_expid = htonl(nx->nx_id);
 	nfh.nfh_xh.nxh_flags = 0;
 	nfh.nfh_xh.nxh_reserved = 0;
-	nfh.nfh_len = NFSV3_MAX_FID_SIZE;
+	nfh.nfh_len = fidlen;
 	error = VFS_VPTOFH(vp, (int*)&nfh.nfh_len, &nfh.nfh_fid[0], NULL);
-	if (nfh.nfh_len > (int)NFSV3_MAX_FID_SIZE)
+	if (nfh.nfh_len > (uint32_t)fidlen)
 		error = EOVERFLOW;
 	nfh.nfh_xh.nxh_fidlen = nfh.nfh_len;
 	nfh.nfh_len += sizeof(nfh.nfh_xh);
@@ -465,7 +483,7 @@ out:
 	vnode_put(vp);
 	if (error)
 		return (error);
-	error = copyout((caddr_t)&nfh, uap->fhp, sizeof(nfh));
+	error = copyout((caddr_t)&nfh, uap->fhp, sizeof(fhandle_t));
 	return (error);
 }
 
@@ -564,7 +582,7 @@ fhopen( proc_t p,
 
 	if ((error = VNOP_OPEN(vp, fmode, ctx)))
 		goto bad;
-	if ((error = vnode_ref_ext(vp, fmode)))
+	if ((error = vnode_ref_ext(vp, fmode, 0)))
 		goto bad;
 
 	/*
@@ -714,8 +732,12 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 
 	sock_gettype(so, &sodomain, &sotype, &soprotocol);
 
-	/* There should be only one UDP socket */
-	if ((soprotocol == IPPROTO_UDP) && nfsrv_udpsock) {
+	/* There should be only one UDP socket for each of IPv4 and IPv6 */
+	if ((sodomain == AF_INET) && (soprotocol == IPPROTO_UDP) && nfsrv_udpsock) {
+		mbuf_freem(mynam);
+		return (EEXIST);
+	}
+	if ((sodomain == AF_INET6) && (soprotocol == IPPROTO_UDP) && nfsrv_udp6sock) {
 		mbuf_freem(mynam);
 		return (EEXIST);
 	}
@@ -763,14 +785,26 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	lck_mtx_lock(nfsd_mutex);
 
 	if (soprotocol == IPPROTO_UDP) {
-		/* There should be only one UDP socket */
-		if (nfsrv_udpsock) {
-			lck_mtx_unlock(nfsd_mutex);
-			nfsrv_slpfree(slp);
-			mbuf_freem(mynam);
-			return (EEXIST);
+		if (sodomain == AF_INET) {
+			/* There should be only one UDP/IPv4 socket */
+			if (nfsrv_udpsock) {
+				lck_mtx_unlock(nfsd_mutex);
+				nfsrv_slpfree(slp);
+				mbuf_freem(mynam);
+				return (EEXIST);
+			}
+			nfsrv_udpsock = slp;
 		}
-		nfsrv_udpsock = slp;
+		if (sodomain == AF_INET6) {
+			/* There should be only one UDP/IPv6 socket */
+			if (nfsrv_udp6sock) {
+				lck_mtx_unlock(nfsd_mutex);
+				nfsrv_slpfree(slp);
+				mbuf_freem(mynam);
+				return (EEXIST);
+			}
+			nfsrv_udp6sock = slp;
+		}
 	}
 
 	/* add the socket to the list */
@@ -782,11 +816,7 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	slp->ns_nam = mynam;
 
 	/* set up the socket upcall */
-	socket_lock(so, 1);
-	so->so_upcallarg = (caddr_t)slp;
-	so->so_upcall = nfsrv_rcv;
-	so->so_rcv.sb_flags |= SB_UPCALL;
-	socket_unlock(so, 1);
+	sock_setupcall(so, nfsrv_rcv, slp);
 	/* just playin' it safe */
 	sock_setsockopt(so, SOL_SOCKET, SO_UPCALLCLOSEWAIT, &on, sizeof(on));
 
@@ -978,6 +1008,8 @@ nfssvc_nfsd(void)
 					mbuf_freem(nd->nd_nam2);
 				if (IS_VALID_CRED(nd->nd_cr))
 					kauth_cred_unref(&nd->nd_cr);
+				if (nd->nd_gss_context)
+					nfs_gss_svc_ctx_deref(nd->nd_gss_context);
 				FREE_ZONE(nd, sizeof(*nd), M_NFSRVDESC);
 				nd = NULL;
 			}
@@ -1000,21 +1032,17 @@ nfssvc_nfsd(void)
 
 		    if (nfsrv_require_resv_port) {
 			/* Check if source port is a reserved port */
-			u_short port;
-			struct sockaddr *nam = mbuf_data(nd->nd_nam);
-			struct sockaddr_in *sin;
+			in_port_t port = 0;
+			struct sockaddr *saddr = mbuf_data(nd->nd_nam);
 
-			sin = (struct sockaddr_in *)nam;
-			port = ntohs(sin->sin_port);
-			if (port >= IPPORT_RESERVED && 
-			    nd->nd_procnum != NFSPROC_NULL) {
-			    char strbuf[MAX_IPv4_STR_LEN];
+			if (saddr->sa_family == AF_INET)
+				port = ntohs(((struct sockaddr_in*)saddr)->sin_port);
+			else if (saddr->sa_family == AF_INET6)
+				port = ntohs(((struct sockaddr_in6*)saddr)->sin6_port);
+			if ((port >= IPPORT_RESERVED) && (nd->nd_procnum != NFSPROC_NULL)) {
 			    nd->nd_procnum = NFSPROC_NOOP;
 			    nd->nd_repstat = (NFSERR_AUTHERR | AUTH_TOOWEAK);
 			    cacherep = RC_DOIT;
-			    printf("NFS request from unprivileged port (%s:%d)\n",
-			    	inet_ntop(AF_INET, &sin->sin_addr, strbuf, sizeof(strbuf)),
-			    	port);
 			}
 		    }
 
@@ -1130,6 +1158,8 @@ nfssvc_nfsd(void)
 				nfsm_chain_cleanup(&nd->nd_nmreq);
 				if (IS_VALID_CRED(nd->nd_cr))
 					kauth_cred_unref(&nd->nd_cr);
+				if (nd->nd_gss_context)
+					nfs_gss_svc_ctx_deref(nd->nd_gss_context);
 				FREE_ZONE(nd, sizeof(*nd), M_NFSRVDESC);
 				nfsrv_slpderef(slp);
 				lck_mtx_lock(nfsd_mutex);
@@ -1148,6 +1178,8 @@ nfssvc_nfsd(void)
 				mbuf_freem(nd->nd_nam2);
 			if (IS_VALID_CRED(nd->nd_cr))
 				kauth_cred_unref(&nd->nd_cr);
+			if (nd->nd_gss_context)
+				nfs_gss_svc_ctx_deref(nd->nd_gss_context);
 			FREE_ZONE(nd, sizeof(*nd), M_NFSRVDESC);
 			nd = NULL;
 		    }
@@ -1294,6 +1326,8 @@ nfsrv_slpfree(struct nfsrv_sock *slp)
 			mbuf_freem(nwp->nd_nam2);
 		if (IS_VALID_CRED(nwp->nd_cr))
 			kauth_cred_unref(&nwp->nd_cr);
+		if (nwp->nd_gss_context)
+			nfs_gss_svc_ctx_deref(nwp->nd_gss_context);
 		FREE_ZONE(nwp, sizeof(*nwp), M_NFSRVDESC);
 	}
 	LIST_INIT(&slp->ns_tq);
@@ -1455,10 +1489,12 @@ nfsrv_cleanup(void)
 			 * Fire off the content modified fsevent for each
 			 * entry, remove it from the list, and free it.
 			 */
-			if (nfsrv_fsevents_enabled)
+			if (nfsrv_fsevents_enabled) {
+				fp->fm_context.vc_thread = current_thread();
 				add_fsevent(FSE_CONTENT_MODIFIED, &fp->fm_context,
 						FSE_ARG_VNODE, fp->fm_vp,
 						FSE_ARG_DONE);
+			}
 			vnode_put(fp->fm_vp);
 			kauth_cred_unref(&fp->fm_context.vc_ucred);
 			nfp = LIST_NEXT(fp, fm_link);
@@ -1475,6 +1511,7 @@ nfsrv_cleanup(void)
 	nfsrv_cleancache();	/* And clear out server cache */
 
 	nfsrv_udpsock = NULL;
+	nfsrv_udp6sock = NULL;
 }
 
 #endif /* NFS_NOSERVER */

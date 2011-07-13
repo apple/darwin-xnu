@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -59,6 +59,7 @@
 
 #include <machine/vmparam.h>
 #include <machine/exec.h>
+#include <machine/pal_routines.h>
 
 #include <kern/kern_types.h>
 #include <kern/cpu_number.h>
@@ -78,7 +79,6 @@
 #include <vm/vm_pager.h>
 #include <vm/vnode_pager.h>
 #include <vm/vm_protos.h> 
-
 
 /*
  * XXX vm/pmap.h should not treat these prototypes as MACH_KERNEL_PRIVATE
@@ -100,10 +100,6 @@ extern kern_return_t    thread_state_initialize(thread_t thread);
 
 /* XXX should have prototypes in a shared header file */
 extern int	get_map_nentries(vm_map_t);
-extern kern_return_t	thread_userstack(thread_t, int, thread_state_t,
-				unsigned int, mach_vm_offset_t *, int *);
-extern kern_return_t	thread_entrypoint(thread_t, int, thread_state_t,
-				unsigned int, mach_vm_offset_t *);
 
 extern kern_return_t	memory_object_signed(memory_object_control_t control,
 					     boolean_t is_signed);
@@ -119,8 +115,11 @@ static load_result_t load_result_null = {
 	.unixproc = 0,
 	.dynlinker = 0,
 	.customstack = 0,
+	.validentry = 0,
 	.csflags = 0,
-	.uuid = { 0 }
+	.uuid = { 0 },
+	.min_vm_addr = MACH_VM_MAX_ADDRESS,
+	.max_vm_addr = MACH_VM_MIN_ADDRESS
 };
 
 /*
@@ -135,6 +134,7 @@ parse_machfile(
 	off_t			file_offset,
 	off_t			macho_size,
 	int			depth,
+	int64_t			slide,
 	load_result_t		*result
 );
 
@@ -147,10 +147,12 @@ load_segment(
 	off_t				macho_size,
 	struct vnode			*vp,
 	vm_map_t			map,
+	int64_t				slide,
 	load_result_t			*result
 );
 
-int load_code_signature(
+static load_return_t
+load_code_signature(
 	struct linkedit_data_command	*lcp,
 	struct vnode			*vp,
 	off_t				macho_offset,
@@ -171,13 +173,7 @@ static load_return_t
 load_unixthread(
 	struct thread_command	*tcp,
 	thread_t			thread,
-	load_result_t			*result
-);
-
-static load_return_t
-load_thread(
-	struct thread_command	*tcp,
-	thread_t			thread,
+	int64_t				slide,
 	load_result_t			*result
 );
 
@@ -193,7 +189,7 @@ load_threadstack(
 	thread_t		thread,
 	uint32_t	*ts,
 	uint32_t	total_size,
-	user_addr_t	*user_stack,
+	mach_vm_offset_t	*user_stack,
 	int				*customstack
 );
 
@@ -212,9 +208,11 @@ load_dylinker(
 	vm_map_t				map,
 	thread_t			thread,
 	int						depth,
-	load_result_t			*result,
-	boolean_t			is_64bit
+	int64_t			slide,
+	load_result_t			*result
 );
+
+struct macho_data;
 
 static load_return_t
 get_macho_vnode(
@@ -223,6 +221,7 @@ get_macho_vnode(
 	struct mach_header	*mach_header,
 	off_t			*file_offset,
 	off_t			*macho_size,
+	struct macho_data	*macho_data,
 	struct vnode		**vpp
 );
 
@@ -246,7 +245,7 @@ widen_segment_command(const struct segment_command *scp32,
 static void
 note_all_image_info_section(const struct segment_command_64 *scp,
     boolean_t is64, size_t section_size, const void *sections,
-    load_result_t *result)
+    int64_t slide, load_result_t *result)
 {
 	const union {
 		struct section s32;
@@ -263,13 +262,13 @@ note_all_image_info_section(const struct segment_command_64 *scp,
 		    sizeof(sectionp->s64.sectname))) {
 			result->all_image_info_addr =
 			    is64 ? sectionp->s64.addr : sectionp->s32.addr;
+			result->all_image_info_addr += slide;
 			result->all_image_info_size =
 			    is64 ? sectionp->s64.size : sectionp->s32.size;
 			return;
 		}
 	}
 }
-
 
 load_return_t
 load_machfile(
@@ -293,6 +292,8 @@ load_machfile(
 	boolean_t create_map = FALSE;
 	int spawn = (imgp->ip_flags & IMGPF_SPAWN);
 	task_t task = current_task();
+	mach_vm_offset_t	aslr_offset = 0;
+	kern_return_t 		kret;
 
 	if (new_map == VM_MAP_NULL) {
 		create_map = TRUE;
@@ -312,10 +313,12 @@ load_machfile(
 
 	if (create_map) {
 		pmap = pmap_create((vm_map_size_t) 0, (imgp->ip_flags & IMGPF_IS_64BIT));
+		pal_switch_pmap(thread, pmap, imgp->ip_flags & IMGPF_IS_64BIT);
 		map = vm_map_create(pmap,
 				0,
 				vm_compute_max_offset((imgp->ip_flags & IMGPF_IS_64BIT)),
 				TRUE);
+
 	} else
 		map = new_map;
 
@@ -325,6 +328,20 @@ load_machfile(
 	if ( (header->flags & MH_ALLOW_STACK_EXECUTION) )
 	        vm_map_disable_NX(map);
 #endif
+
+	/* Forcibly disallow execution from data pages on even if the arch
+	 * normally permits it. */
+	if ((header->flags & MH_NO_HEAP_EXECUTION) && !(imgp->ip_flags & IMGPF_ALLOW_DATA_EXEC))
+		vm_map_disallow_data_exec(map);
+	
+	/*
+	 * Compute a random offset for ASLR.
+	 */
+	if (!(imgp->ip_flags & IMGPF_DISABLE_ASLR)) {
+		aslr_offset = random();
+		aslr_offset %= 1 << ((imgp->ip_flags & IMGPF_IS_64BIT) ? 16 : 8);
+		aslr_offset <<= PAGE_SHIFT;
+	}
 	
 	if (!result)
 		result = &myresult;
@@ -332,7 +349,7 @@ load_machfile(
 	*result = load_result_null;
 
 	lret = parse_machfile(vp, map, thread, header, file_offset, macho_size,
-			      0, result);
+			      0, (int64_t)aslr_offset, result);
 
 	if (lret != LOAD_SUCCESS) {
 		if (create_map) {
@@ -362,7 +379,7 @@ load_machfile(
 
 	 if (create_map) {
 		/*
-		 * If this is an exec, then we are going to destory the old
+		 * If this is an exec, then we are going to destroy the old
 		 * task, and it's correct to halt it; if it's spawn, the
 		 * task is not yet running, and it makes no sense.
 		 */
@@ -376,15 +393,16 @@ load_machfile(
 			 * task halting (wait for threads and then cleanup
 			 * task resources).
 			 */
-			task_start_halt(task);
+			kret = task_start_halt(task);
+			if (kret != KERN_SUCCESS) {
+				return(kret);		
+			}
 			proc_transcommit(current_proc(), 0);
 			task_complete_halt(task);
+			workqueue_exit(current_proc());
 		}
-		old_map = swap_task_map(old_task, thread, map);
+		old_map = swap_task_map(old_task, thread, map, !spawn);
 		vm_map_clear_4GB_pagezero(old_map);
-		/* XXX L4 : For spawn the current task isn't running... */
-		if (!spawn)
-			pmap_switch(pmap);	/* Make sure we are using the new pmap */
 		vm_map_deallocate(old_map);
 	}
 	return(LOAD_SUCCESS);
@@ -397,7 +415,9 @@ load_machfile(
  * bits in the file format itself.  We read into the kernel buffer the
  * commands section, and then parse it in order to parse the mach-o file
  * format load_command segment(s).  We are only interested in a subset of
- * the total set of possible commands.
+ * the total set of possible commands. If "map"==VM_MAP_NULL or
+ * "thread"==THREAD_NULL, do not make permament VM modifications,
+ * just preflight the parse.
  */
 static
 load_return_t
@@ -409,6 +429,7 @@ parse_machfile(
 	off_t			file_offset,
 	off_t			macho_size,
 	int			depth,
+	int64_t			aslr_offset,
 	load_result_t		*result
 )
 {
@@ -428,10 +449,10 @@ parse_machfile(
 	proc_t			p = current_proc();		/* XXXX */
 	int			error;
 	int resid=0;
-	task_t task;
 	size_t			mach_header_sz = sizeof(struct mach_header);
 	boolean_t		abi64;
 	boolean_t		got_code_signatures = FALSE;
+	int64_t			slide = 0;
 
 	if (header->magic == MH_MAGIC_64 ||
 	    header->magic == MH_CIGAM_64) {
@@ -444,8 +465,6 @@ parse_machfile(
 	if (depth > 6) {
 		return(LOAD_FAILURE);
 	}
-
-	task = (task_t)get_threadtask(thread);
 
 	depth++;
 
@@ -522,11 +541,30 @@ parse_machfile(
 			kfree(kl_addr, kl_size);
 		return(LOAD_IOERROR);
 	}
-	
+
+	/*
+	 *	For PIE and dyld, slide everything by the ASLR offset.
+	 */
+	if ((header->flags & MH_PIE) || (header->filetype == MH_DYLINKER)) {
+		slide = aslr_offset;
+	}
+
 	/*
 	 *	Scan through the commands, processing each one as necessary.
 	 */
-	for (pass = 1; pass <= 2; pass++) {
+	for (pass = 1; pass <= 3; pass++) {
+
+#if CONFIG_EMBEDDED
+		/*
+		 * Check that the entry point is contained in an executable segments
+		 */ 
+		if ((pass == 3) && (result->validentry == 0)) {
+			thread_state_initialize(thread);
+			ret = LOAD_FAILURE;
+			break;
+		}
+#endif
+
 		/*
 		 * Loop through each of the load_commands indicated by the
 		 * Mach-O header; if an absurd value is provided, we just
@@ -535,6 +573,7 @@ parse_machfile(
 		 */
 		offset = mach_header_sz;
 		ncmds = header->ncmds;
+
 		while (ncmds--) {
 			/*
 			 *	Get a pointer to the command.
@@ -565,7 +604,7 @@ parse_machfile(
 			switch(lcp->cmd) {
 			case LC_SEGMENT:
 			case LC_SEGMENT_64:
-				if (pass != 1)
+				if (pass != 2)
 					break;
 				ret = load_segment(lcp,
 				    		   header->filetype,
@@ -574,25 +613,20 @@ parse_machfile(
 						   macho_size,
 						   vp,
 						   map,
+						   slide,
 						   result);
 				break;
-			case LC_THREAD:
-				if (pass != 2)
-					break;
-				ret = load_thread((struct thread_command *)lcp,
-						   thread,
-						  result);
-				break;
 			case LC_UNIXTHREAD:
-				if (pass != 2)
+				if (pass != 1)
 					break;
 				ret = load_unixthread(
 						 (struct thread_command *) lcp,
-						   thread,
+						 thread,
+						 slide,
 						 result);
 				break;
 			case LC_LOAD_DYLINKER:
-				if (pass != 2)
+				if (pass != 3)
 					break;
 				if ((depth == 1) && (dlp == 0)) {
 					dlp = (struct dylinker_command *)lcp;
@@ -602,14 +636,14 @@ parse_machfile(
 				}
 				break;
 			case LC_UUID:
-				if (pass == 2 && depth == 1) {
+				if (pass == 1 && depth == 1) {
 					uulp = (struct uuid_command *)lcp;
 					memcpy(&result->uuid[0], &uulp->uuid[0], sizeof(result->uuid));
 				}
 				break;
 			case LC_CODE_SIGNATURE:
 				/* CODE SIGNING */
-				if (pass != 2)
+				if (pass != 1)
 					break;
 				/* pager -> uip ->
 				   load signatures & store in uip
@@ -633,7 +667,7 @@ parse_machfile(
 				break;
 #if CONFIG_CODE_DECRYPTION
 			case LC_ENCRYPTION_INFO:
-				if (pass != 2)
+				if (pass != 3)
 					break;
 				ret = set_code_unprotect(
 					(struct encryption_info_command *) lcp,
@@ -671,24 +705,15 @@ parse_machfile(
 		    }
 	    }
 
-	    if (dlp != 0)
-			ret = load_dylinker(dlp, dlarchbits, map, thread, depth, result, abi64);
+	    if (dlp != 0) {
+		    /* load the dylinker, and always slide it by the ASLR
+		     * offset regardless of PIE */
+		    ret = load_dylinker(dlp, dlarchbits, map, thread, depth, aslr_offset, result);
+	    }
 
 	    if(depth == 1) {
 		if (result->thread_count == 0) {
 			ret = LOAD_FAILURE;
-		} else if ( abi64 ) {
-#ifdef __ppc__
-			/* Map in 64-bit commpage */
-			/*
-			 * PPC51: ppc64 is limited to 51-bit addresses.
-			 * Memory above that limit is handled specially
-			 * at the pmap level.
-			 *
-			 * <rdar://6640492> -- wrong task for vfork()/spawn()
-			 */
-			pmap_map_sharedpage(current_task(), get_map_pmap(map));
-#endif /* __ppc__ */
 		}
 	    }
 	}
@@ -780,6 +805,7 @@ load_segment(
 	off_t				macho_size,
 	struct vnode			*vp,
 	vm_map_t			map,
+	int64_t				slide,
 	load_result_t		*result
 )
 {
@@ -795,16 +821,20 @@ load_segment(
 	if (LC_SEGMENT_64 == lcp->cmd) {
 		segment_command_size = sizeof(struct segment_command_64);
 		single_section_size  = sizeof(struct section_64);
-		scp = (struct segment_command_64 *)lcp;
 	} else {
 		segment_command_size = sizeof(struct segment_command);
 		single_section_size  = sizeof(struct section);
-		scp = &segment_command;
-		widen_segment_command((struct segment_command *)lcp, scp);
 	}
 	if (lcp->cmdsize < segment_command_size)
 		return (LOAD_BADMACHO);
 	total_section_size = lcp->cmdsize - segment_command_size;
+
+	if (LC_SEGMENT_64 == lcp->cmd)
+		scp = (struct segment_command_64 *)lcp;
+	else {
+		scp = &segment_command;
+		widen_segment_command((struct segment_command *)lcp, scp);
+	}
 
 	/*
 	 * Make sure what we get from the file is really ours (as specified
@@ -833,26 +863,47 @@ load_segment(
 	map_addr = trunc_page_64(scp->vmaddr); /* JVXXX note that in XNU TOT this is round instead of trunc for 64 bits */
 	if (seg_size == 0)
 		return (KERN_SUCCESS);
-	/* XXX (4596982) this interferes with Rosetta, so limit to 64-bit tasks */
 	if (map_addr == 0 &&
 	    map_size == 0 &&
 	    seg_size != 0 &&
-	    scp->cmd == LC_SEGMENT_64 &&
 	    (scp->initprot & VM_PROT_ALL) == VM_PROT_NONE &&
 	    (scp->maxprot & VM_PROT_ALL) == VM_PROT_NONE) {
 		/*
-		 * This is a "page zero" segment:  it starts at address 0,
-		 * is not mapped from the binary file and is not accessible.
-		 * User-space should never be able to access that memory, so
-		 * make it completely off limits by raising the VM map's
-		 * minimum offset.
+		 * For PIE, extend page zero rather than moving it.  Extending
+		 * page zero keeps early allocations from falling predictably
+		 * between the end of page zero and the beginning of the first
+		 * slid segment.
 		 */
-		ret = vm_map_raise_min_offset(map, seg_size);
-		if (ret != KERN_SUCCESS) {
-			return (LOAD_FAILURE);
+		seg_size += slide;
+		slide = 0;
+
+		/* XXX (4596982) this interferes with Rosetta, so limit to 64-bit tasks */
+		if (scp->cmd == LC_SEGMENT_64) {
+			/*
+			 * This is a "page zero" segment:  it starts at address 0,
+			 * is not mapped from the binary file and is not accessible.
+			 * User-space should never be able to access that memory, so
+			 * make it completely off limits by raising the VM map's
+			 * minimum offset.
+			 */
+			ret = vm_map_raise_min_offset(map, seg_size);
+			if (ret != KERN_SUCCESS) {
+				return (LOAD_FAILURE);
+			}
+			return (LOAD_SUCCESS);
 		}
-		return (LOAD_SUCCESS);
 	}
+
+	/* If a non-zero slide was specified by the caller, apply now */
+	map_addr += slide;
+
+	if (map_addr < result->min_vm_addr)
+		result->min_vm_addr = map_addr;
+	if (map_addr+seg_size > result->max_vm_addr)
+		result->max_vm_addr = map_addr+seg_size;
+
+	if (map == VM_MAP_NULL)
+		return (LOAD_SUCCESS);
 
 	map_offset = pager_offset + scp->fileoff;	/* limited to 32 bits */
 
@@ -930,77 +981,12 @@ load_segment(
 	    result->all_image_info_addr == MACH_VM_MIN_ADDRESS)
 		note_all_image_info_section(scp,
 		    LC_SEGMENT_64 == lcp->cmd, single_section_size,
-		    (const char *)lcp + segment_command_size, result);
+		    (const char *)lcp + segment_command_size, slide, result);
+
+	if ((result->entry_point >= map_addr) && (result->entry_point < (map_addr + map_size)))
+		result->validentry = 1;
 
 	return ret;
-}
-
-static
-load_return_t
-load_thread(
-	struct thread_command	*tcp,
-	thread_t			thread,
-	load_result_t		*result
-)
-{
-	kern_return_t	kret;
-	load_return_t	lret;
-	task_t			task;
-	int customstack=0;
-
-	if (tcp->cmdsize < sizeof(*tcp))
-		return (LOAD_BADMACHO);
-	task = get_threadtask(thread);
-
-	/* if count is 0; same as thread */
-	if (result->thread_count != 0) {
-		kret = thread_create(task, &thread);
-		if (kret != KERN_SUCCESS)
-			return(LOAD_RESOURCE);
-		thread_deallocate(thread);
-	}
-
-	lret = load_threadstate(thread,
-		       (uint32_t *)(((vm_offset_t)tcp) + 
-		       		sizeof(struct thread_command)),
-		       tcp->cmdsize - sizeof(struct thread_command));
-	if (lret != LOAD_SUCCESS)
-		return (lret);
-
-	if (result->thread_count == 0) {
-		lret = load_threadstack(thread,
-				(uint32_t *)(((vm_offset_t)tcp) + 
-					sizeof(struct thread_command)),
-				tcp->cmdsize - sizeof(struct thread_command),
-				&result->user_stack,
-				&customstack);
-		if (customstack)
-				result->customstack = 1;
-		else
-				result->customstack = 0;
-			
-		if (lret != LOAD_SUCCESS)
-			return(lret);
-
-		lret = load_threadentry(thread,
-				(uint32_t *)(((vm_offset_t)tcp) + 
-					sizeof(struct thread_command)),
-				tcp->cmdsize - sizeof(struct thread_command),
-				&result->entry_point);
-		if (lret != LOAD_SUCCESS)
-			return(lret);
-	}
-	/*
-	 *	Resume thread now, note that this means that the thread
-	 *	commands should appear after all the load commands to
-	 *	be sure they don't reference anything not yet mapped.
-	 */
-	else
-		thread_resume(thread);
-		
-	result->thread_count++;
-
-	return(LOAD_SUCCESS);
 }
 
 static
@@ -1008,6 +994,7 @@ load_return_t
 load_unixthread(
 	struct thread_command	*tcp,
 	thread_t		thread,
+	int64_t				slide,
 	load_result_t		*result
 )
 {
@@ -1017,9 +1004,12 @@ load_unixthread(
 	if (tcp->cmdsize < sizeof(*tcp))
 		return (LOAD_BADMACHO);
 	if (result->thread_count != 0) {
-printf("load_unixthread: already have a thread!");
+		printf("load_unixthread: already have a thread!");
 		return (LOAD_FAILURE);
 	}
+
+	if (thread == THREAD_NULL)
+		return (LOAD_SUCCESS);
 	
 	ret = load_threadstack(thread,
 		       (uint32_t *)(((vm_offset_t)tcp) + 
@@ -1031,9 +1021,12 @@ printf("load_unixthread: already have a thread!");
 		return(ret);
 
 	if (customstack)
-			result->customstack = 1;
+		result->customstack = 1;
 	else
-			result->customstack = 0;
+		result->customstack = 0;
+
+	result->user_stack += slide;
+
 	ret = load_threadentry(thread,
 		       (uint32_t *)(((vm_offset_t)tcp) + 
 		       		sizeof(struct thread_command)),
@@ -1041,6 +1034,8 @@ printf("load_unixthread: already have a thread!");
 		       &result->entry_point);
 	if (ret != LOAD_SUCCESS)
 		return(ret);
+
+	result->entry_point += slide;
 
 	ret = load_threadstate(thread,
 		       (uint32_t *)(((vm_offset_t)tcp) + 
@@ -1107,7 +1102,7 @@ load_threadstack(
 	thread_t	thread,
 	uint32_t	*ts,
 	uint32_t	total_size,
-	user_addr_t	*user_stack,
+	mach_vm_offset_t	*user_stack,
 	int *customstack
 )
 {
@@ -1183,31 +1178,40 @@ load_threadentry(
 	return(LOAD_SUCCESS);
 }
 
+struct macho_data {
+	struct nameidata	__nid;
+	union macho_vnode_header {
+		struct mach_header	mach_header;
+		struct fat_header	fat_header;
+		char	__pad[512];
+	} __header;
+};
 
-static
-load_return_t
+static load_return_t
 load_dylinker(
 	struct dylinker_command	*lcp,
 	integer_t		archbits,
 	vm_map_t		map,
 	thread_t	thread,
 	int			depth,
-	load_result_t		*result,
-	boolean_t		is_64bit
+	int64_t			slide,
+	load_result_t		*result
 )
 {
 	char			*name;
 	char			*p;
 	struct vnode		*vp = NULLVP;	/* set by get_macho_vnode() */
-	struct mach_header	header;
+	struct mach_header	*header;
 	off_t			file_offset = 0; /* set by get_macho_vnode() */
 	off_t			macho_size = 0;	/* set by get_macho_vnode() */
-	vm_map_t		copy_map;
-	load_result_t		myresult;
+	load_result_t		*myresult;
 	kern_return_t		ret;
-	vm_map_copy_t	tmp;
-	mach_vm_offset_t	dyl_start, map_addr;
-	mach_vm_size_t		dyl_length;
+	struct macho_data	*macho_data;
+	struct {
+		struct mach_header	__header;
+		load_result_t		__myresult;
+		struct macho_data	__macho_data;
+	} *dyld_data;
 
 	if (lcp->cmdsize < sizeof(*lcp))
 		return (LOAD_BADMACHO);
@@ -1222,11 +1226,19 @@ load_dylinker(
 			return(LOAD_BADMACHO);
 	} while (*p++);
 
-	ret = get_macho_vnode(name, archbits, &header, &file_offset, &macho_size, &vp);
+	/* Allocate wad-of-data from heap to reduce excessively deep stacks */
+
+	MALLOC(dyld_data, void *, sizeof (*dyld_data), M_TEMP, M_WAITOK);
+	header = &dyld_data->__header;
+	myresult = &dyld_data->__myresult;
+	macho_data = &dyld_data->__macho_data;
+
+	ret = get_macho_vnode(name, archbits, header,
+	    &file_offset, &macho_size, macho_data, &vp);
 	if (ret)
-		return (ret);
-			
-	myresult = load_result_null;
+		goto novp_out;
+
+	*myresult = load_result_null;
 
 	/*
 	 *	First try to map dyld in directly.  This should work most of
@@ -1234,106 +1246,85 @@ load_dylinker(
 	 *	mapped to its address.
 	 */
 
-	ret = parse_machfile(vp, map, thread, &header, file_offset, macho_size,
-				depth, &myresult);
+	ret = parse_machfile(vp, map, thread, header, file_offset,
+	    macho_size, depth, slide, myresult);
 
 	/*
 	 *	If it turned out something was in the way, then we'll take
-	 *	take this longer path to map dyld into a temporary map and
-	 *	copy it into destination map at a different address.
+	 *	take this longer path to preflight dyld's vm ranges, then
+	 *	map it at a free location in the address space.
 	 */
 
 	if (ret == LOAD_NOSPACE) {
+		mach_vm_offset_t	dyl_start, map_addr;
+		mach_vm_size_t	dyl_length;
+		int64_t			slide_amount;
+
+		*myresult = load_result_null;
 
 		/*
-		 *	Load the Mach-O.
-		 *	Use a temporary map to do the work.
+		 * Preflight parsing the Mach-O file with a NULL
+		 * map, which will return the ranges needed for a
+		 * subsequent map attempt (with a slide) in "myresult"
 		 */
-		copy_map = vm_map_create(pmap_create(vm_map_round_page(macho_size),
-						     is_64bit),
-					 get_map_min(map), get_map_max(map), TRUE);
-		if (VM_MAP_NULL == copy_map) {
-			ret = LOAD_RESOURCE;
+		ret = parse_machfile(vp, VM_MAP_NULL, THREAD_NULL, header,
+		    file_offset, macho_size, depth, 0 /* slide */, myresult);
+
+		if (ret != LOAD_SUCCESS) {
 			goto out;
 		}
-	
-		myresult = load_result_null;
 
-		ret = parse_machfile(vp, copy_map, thread, &header,
-					file_offset, macho_size,
-					depth, &myresult);
-	
+		dyl_start = myresult->min_vm_addr;
+		dyl_length = myresult->max_vm_addr - myresult->min_vm_addr;
+
+		dyl_length += slide;
+
+		/* To find an appropriate load address, do a quick allocation */
+		map_addr = dyl_start;
+		ret = mach_vm_allocate(map, &map_addr, dyl_length, VM_FLAGS_ANYWHERE);
+		if (ret != KERN_SUCCESS) {
+			ret = LOAD_NOSPACE;
+			goto out;
+		}
+
+		ret = mach_vm_deallocate(map, map_addr, dyl_length);
+		if (ret != KERN_SUCCESS) {
+			ret = LOAD_NOSPACE;
+			goto out;
+		}
+		
+		if (map_addr < dyl_start)
+			slide_amount = -(int64_t)(dyl_start - map_addr);
+		else
+			slide_amount = (int64_t)(map_addr - dyl_start);
+
+		slide_amount += slide;
+
+		*myresult = load_result_null;
+
+		ret = parse_machfile(vp, map, thread, header,
+		    file_offset, macho_size, depth, slide_amount, myresult);
+
 		if (ret) {
-			vm_map_deallocate(copy_map);
 			goto out;
 		}
-	
-		if (get_map_nentries(copy_map) > 0) {
-	
-			dyl_start = mach_get_vm_start(copy_map);
-			dyl_length = mach_get_vm_end(copy_map) - dyl_start;
-	
-			map_addr = dyl_start;
-			ret = mach_vm_allocate(map, &map_addr, dyl_length, VM_FLAGS_ANYWHERE);
-	
-			if (ret != KERN_SUCCESS) {
-				vm_map_deallocate(copy_map);
-				ret = LOAD_NOSPACE;
-				goto out;
-			
-			}
-
-			ret = vm_map_copyin(copy_map,
-					    (vm_map_address_t)dyl_start,
-					    (vm_map_size_t)dyl_length,
-					    TRUE, &tmp);
-			if (ret != KERN_SUCCESS) {
-				(void) vm_map_remove(map,
-					     vm_map_trunc_page(map_addr),
-					     vm_map_round_page(map_addr + dyl_length),
-					     VM_MAP_NO_FLAGS);
-				vm_map_deallocate(copy_map);
-				goto out;
-			}
-	
-			ret = vm_map_copy_overwrite(map,
-					     (vm_map_address_t)map_addr,
-					     tmp, FALSE);
-			if (ret != KERN_SUCCESS) {
-				vm_map_copy_discard(tmp);
-				(void) vm_map_remove(map,
-					     vm_map_trunc_page(map_addr),
-					     vm_map_round_page(map_addr + dyl_length),
-					     VM_MAP_NO_FLAGS);
-				vm_map_deallocate(copy_map);
-				goto out;
-			}
-	
-			if (map_addr != dyl_start) {
-				myresult.entry_point += (map_addr - dyl_start);
-				myresult.all_image_info_addr +=
-				    (map_addr - dyl_start);
-			}
-		} else {
-			ret = LOAD_FAILURE;
-		}
-
-		vm_map_deallocate(copy_map);
 	}
-	
+
 	if (ret == LOAD_SUCCESS) {		
 		result->dynlinker = TRUE;
-		result->entry_point = myresult.entry_point;
-		result->all_image_info_addr = myresult.all_image_info_addr;
-		result->all_image_info_size = myresult.all_image_info_size;
+		result->entry_point = myresult->entry_point;
+		result->all_image_info_addr = myresult->all_image_info_addr;
+		result->all_image_info_size = myresult->all_image_info_size;
 	}
 out:
 	vnode_put(vp);
+novp_out:
+	FREE(dyld_data, M_TEMP);
 	return (ret);
 
 }
 
-int
+static load_return_t
 load_code_signature(
 	struct linkedit_data_command	*lcp,
 	struct vnode			*vp,
@@ -1408,6 +1399,10 @@ load_code_signature(
 		/* ubc_cs_blob_add() has consumed "addr" */
 		addr = 0;
 	}
+
+#if CHECK_CS_VALIDATION_BITMAP
+	ubc_cs_validation_bitmap_allocate( vp );
+#endif
 		
 	blob = ubc_cs_blob_get(vp, cputype, -1);
 
@@ -1435,9 +1430,9 @@ set_code_unprotect(
 		   struct vnode	*vp)
 {
 	int result, len;
-	char vpath[MAXPATHLEN];
 	pager_crypt_info_t crypt_info;
 	const char * cryptname = 0;
+	char *vpath;
 	
 	size_t offset;
 	struct segment_command_64 *seg64;
@@ -1445,8 +1440,7 @@ set_code_unprotect(
 	vm_map_offset_t map_offset, map_size;
 	kern_return_t kr;
 
-	if (eip->cmdsize < sizeof(*eip))
-		return LOAD_BADMACHO;
+	if (eip->cmdsize < sizeof(*eip)) return LOAD_BADMACHO;
 	
 	switch(eip->cryptid) {
 		case 0:
@@ -1464,13 +1458,22 @@ set_code_unprotect(
 			return LOAD_BADMACHO;
 	}
 	
+	if (map == VM_MAP_NULL) return (LOAD_SUCCESS);
+	if (NULL == text_crypter_create) return LOAD_FAILURE;
+
+	MALLOC_ZONE(vpath, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+	if(vpath == NULL) return LOAD_FAILURE;
+	
 	len = MAXPATHLEN;
 	result = vn_getpath(vp, vpath, &len);
-	if(result) return result;
+	if(result) {
+		FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
+		return LOAD_FAILURE;
+	}
 	
 	/* set up decrypter first */
-	if(NULL==text_crypter_create) return LOAD_FAILURE;
 	kr=text_crypter_create(&crypt_info, cryptname, (void*)vpath);
+	FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
 	
 	if(kr) {
 		printf("set_code_unprotect: unable to create decrypter %s, kr=%d\n",
@@ -1549,6 +1552,7 @@ get_macho_vnode(
 	struct mach_header	*mach_header,
 	off_t			*file_offset,
 	off_t			*macho_size,
+	struct macho_data	*data,
 	struct vnode		**vpp
 )
 {
@@ -1556,19 +1560,14 @@ get_macho_vnode(
 	vfs_context_t		ctx = vfs_context_current();
 	proc_t			p = vfs_context_proc(ctx);
 	kauth_cred_t		kerncred;
-	struct nameidata nid, *ndp;
+	struct nameidata	*ndp = &data->__nid;
 	boolean_t		is_fat;
 	struct fat_arch		fat_arch;
-	int			error = LOAD_SUCCESS;
+	int			error;
 	int resid;
-	union {
-		struct mach_header	mach_header;
-		struct fat_header	fat_header;
-		char	pad[512];
-	} header;
+	union macho_vnode_header *header = &data->__header;
 	off_t fsize = (off_t)0;
-	int err2;
-	
+
 	/*
 	 * Capture the kernel credential for use in the actual read of the
 	 * file, since the user doing the execution may have execute rights
@@ -1579,10 +1578,8 @@ get_macho_vnode(
 	 */
 	kerncred = vfs_context_ucred(vfs_context_kernel());
 
-	ndp = &nid;
-	
 	/* init the namei data to point the file user's program name */
-	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, CAST_USER_ADDR_T(path), ctx);
+	NDINIT(ndp, LOOKUP, OP_OPEN, FOLLOW | LOCKLEAF, UIO_SYSSPACE, CAST_USER_ADDR_T(path), ctx);
 
 	if ((error = namei(ndp)) != 0) {
 		if (error == ENOENT) {
@@ -1594,7 +1591,7 @@ get_macho_vnode(
 	}
 	nameidone(ndp);
 	vp = ndp->ni_vp;
-	
+
 	/* check for regular file */
 	if (vp->v_type != VREG) {
 		error = LOAD_PROTECT;
@@ -1625,41 +1622,42 @@ get_macho_vnode(
 		goto bad1;
 	}
 
-	if ((error = vn_rdwr(UIO_READ, vp, (caddr_t)&header, sizeof(header), 0,
+	if ((error = vn_rdwr(UIO_READ, vp, (caddr_t)header, sizeof (*header), 0,
 	    UIO_SYSSPACE, IO_NODELOCKED, kerncred, &resid, p)) != 0) {
 		error = LOAD_IOERROR;
 		goto bad2;
 	}
-	
-	if (header.mach_header.magic == MH_MAGIC ||
-	    header.mach_header.magic == MH_MAGIC_64)
-	    is_fat = FALSE;
-	else if (header.fat_header.magic == FAT_MAGIC ||
-		 header.fat_header.magic == FAT_CIGAM)
-	    is_fat = TRUE;
-	else {
-	    error = LOAD_BADMACHO;
-	    goto bad2;
+
+	if (header->mach_header.magic == MH_MAGIC ||
+	    header->mach_header.magic == MH_MAGIC_64) {
+		is_fat = FALSE;
+	} else if (header->fat_header.magic == FAT_MAGIC ||
+	    header->fat_header.magic == FAT_CIGAM) {
+		is_fat = TRUE;
+	} else {
+		error = LOAD_BADMACHO;
+		goto bad2;
 	}
 
 	if (is_fat) {
 		/* Look up our architecture in the fat file. */
-		error = fatfile_getarch_with_bits(vp, archbits, (vm_offset_t)(&header.fat_header), &fat_arch);
+		error = fatfile_getarch_with_bits(vp, archbits,
+		    (vm_offset_t)(&header->fat_header), &fat_arch);
 		if (error != LOAD_SUCCESS)
 			goto bad2;
 
 		/* Read the Mach-O header out of it */
-		error = vn_rdwr(UIO_READ, vp, (caddr_t)&header.mach_header,
-				sizeof(header.mach_header), fat_arch.offset,
-				UIO_SYSSPACE, IO_NODELOCKED, kerncred, &resid, p);
+		error = vn_rdwr(UIO_READ, vp, (caddr_t)&header->mach_header,
+		    sizeof (header->mach_header), fat_arch.offset,
+		    UIO_SYSSPACE, IO_NODELOCKED, kerncred, &resid, p);
 		if (error) {
 			error = LOAD_IOERROR;
 			goto bad2;
 		}
 
 		/* Is this really a Mach-O? */
-		if (header.mach_header.magic != MH_MAGIC &&
-		    header.mach_header.magic != MH_MAGIC_64) {
+		if (header->mach_header.magic != MH_MAGIC &&
+		    header->mach_header.magic != MH_MAGIC_64) {
 			error = LOAD_BADMACHO;
 			goto bad2;
 		}
@@ -1677,25 +1675,23 @@ get_macho_vnode(
 		 * required, since the dynamic linker might work, but we will
 		 * refuse to load it because of this check.
 		 */
-		if ((cpu_type_t)(header.mach_header.cputype & CPU_ARCH_MASK) != archbits)
-			return(LOAD_BADARCH);
+		if ((cpu_type_t)(header->mach_header.cputype & CPU_ARCH_MASK) != archbits) {
+			error = LOAD_BADARCH;
+			goto bad2;
+		}
 
 		*file_offset = 0;
 		*macho_size = fsize;
 	}
 
-	*mach_header = header.mach_header;
+	*mach_header = header->mach_header;
 	*vpp = vp;
 
 	ubc_setsize(vp, fsize);
-	
 	return (error);
 
 bad2:
-	err2 = VNOP_CLOSE(vp, FREAD, ctx);
-	vnode_put(vp);
-	return (error);
-
+	(void) VNOP_CLOSE(vp, FREAD, ctx);
 bad1:
 	vnode_put(vp);
 	return(error);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -53,8 +53,8 @@ extern int bdwrite_internal(struct buf *, int);
 static int ClearBTNodes(struct vnode *vp, long blksize, off_t offset, off_t amount);
 static int btree_journal_modify_block_end(struct hfsmount *hfsmp, struct buf *bp);
 
+void btree_swap_node(struct buf *bp, __unused void *arg);
 
-__private_extern__
 OSStatus SetBTreeBlockSize(FileReference vp, ByteCount blockSize, __unused ItemCount minBlockCount)
 {
 	BTreeControlBlockPtr	bTreePtr;
@@ -71,7 +71,6 @@ OSStatus SetBTreeBlockSize(FileReference vp, ByteCount blockSize, __unused ItemC
 }
 
 
-__private_extern__
 OSStatus GetBTreeBlock(FileReference vp, u_int32_t blockNum, GetBlockOptions options, BlockDescriptor *block)
 {
     OSStatus	 retval = E_NONE;
@@ -165,7 +164,6 @@ OSStatus GetBTreeBlock(FileReference vp, u_int32_t blockNum, GetBlockOptions opt
 }
 
 
-__private_extern__
 void ModifyBlockStart(FileReference vp, BlockDescPtr blockPtr)
 {
 	struct hfsmount	*hfsmp = VTOHFS(vp);
@@ -185,7 +183,7 @@ void ModifyBlockStart(FileReference vp, BlockDescPtr blockPtr)
 	blockPtr->isModified = 1;
 }
 
-static void
+void
 btree_swap_node(struct buf *bp, __unused void *arg)
 {
     //	struct hfsmount *hfsmp = (struct hfsmount *)arg;
@@ -218,7 +216,6 @@ btree_journal_modify_block_end(struct hfsmount *hfsmp, struct buf *bp)
 }
 
 
-__private_extern__
 OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlockOptions options)
 {
     struct hfsmount	*hfsmp = VTOHFS(vp);
@@ -331,7 +328,6 @@ exit:
 }
 
 
-__private_extern__
 OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 {
 #pragma unused (maxEOF)
@@ -467,7 +463,7 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 			trim = ((filePtr->fcbEOF - origSize) % btInfo.nodeSize);
 		}
 
-		ret = TruncateFileC(vcb, filePtr, filePtr->fcbEOF - trim, 0);
+		ret = TruncateFileC(vcb, filePtr, filePtr->fcbEOF - trim, 0, 0, FTOC(filePtr)->c_fileid, 0);
 		filePtr->fcbEOF = (u_int64_t)filePtr->ff_blocks * (u_int64_t)vcb->blockSize;
 
 		// XXXdbg - panic if the file didn't get trimmed back properly
@@ -611,6 +607,8 @@ hfs_create_attr_btree(struct hfsmount *hfsmp, u_int32_t nodesize, u_int32_t node
 	u_int16_t  offset;
 	int intrans = 0;
 	int result;
+	int newvnode_flags = 0;
+	
 again:
 	/*
 	 * Serialize creation using HFS_CREATING_BTREE flag.
@@ -654,7 +652,8 @@ again:
 	bzero(&cfork, sizeof(cfork));
 	cfork.cf_clump = nodesize * nodecnt;
 
-	result = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, &cfork, &vp);
+	result = hfs_getnewvnode(hfsmp, NULL, NULL, &cndesc, 0, &cnattr, 
+							 &cfork, &vp, &newvnode_flags);
 	if (result) {
 		goto exit;
 	}

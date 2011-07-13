@@ -114,6 +114,8 @@ struct ipc_entry {
 #define	ie_next		index.next
 #define	ie_index	hash.table
 
+#define IE_REQ_NONE		0		/* no request */
+
 #define	IE_BITS_UREFS_MASK	0x0000ffff	/* 16 bits of user-reference */
 #define	IE_BITS_UREFS(bits)	((bits) & IE_BITS_UREFS_MASK)
 

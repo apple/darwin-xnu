@@ -130,6 +130,7 @@ const struct memory_object_pager_ops swapfile_pager_ops = {
 	swapfile_pager_synchronize,
 	swapfile_pager_map,
 	swapfile_pager_last_unmap,
+	NULL, /* data_reclaim */
 	"swapfile pager"
 };
 
@@ -411,7 +412,7 @@ swapfile_pager_data_request(
 			   kernel_mapping,
 			   dst_pnum,
 			   VM_PROT_READ | VM_PROT_WRITE,
-			   dst_object->wimg_bits & VM_WIMG_MASK,
+			   0,
 			   TRUE);
 
 		memset(dst_ptr, '\0', PAGE_SIZE);

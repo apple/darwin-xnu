@@ -30,10 +30,10 @@
 
 #if defined(__x86_64__)
 
-__SYSCALL(__thread_selfid, thread_selfid, 1)
+__SYSCALL(___thread_selfid, thread_selfid, 1)
 
 #elif defined(__i386__)
 
-__SYSCALL_INT(__thread_selfid, thread_selfid, 1)
+__SYSCALL_INT(___thread_selfid, thread_selfid, 1)
 
 #endif

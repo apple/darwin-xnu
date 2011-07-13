@@ -79,9 +79,9 @@
 /*
  * Multicast Routing set/getsockopt commands.
  */
-#ifdef KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
 #define MRT6_OINIT		100	/* initialize forwarder (omrt6msg) */
-#endif
+#endif /* XNU_KERNEL_PRIVATE */
 #define MRT6_DONE		101	/* shut down forwarder */
 #define MRT6_ADD_MIF		102	/* add multicast interface */
 #define MRT6_DEL_MIF		103	/* delete multicast interface */
@@ -164,7 +164,7 @@ struct mrt6stat {
 	u_quad_t mrt6s_upq_sockfull;	/* upcalls dropped - socket full   */
 };
 
-#ifdef KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
 #if MRT6_OINIT
 /*
  * Struct used to communicate from kernel to multicast router
@@ -185,7 +185,7 @@ struct omrt6msg {
 	struct in6_addr  im6_src, im6_dst;
 };
 #endif
-#endif /* KERNEL_PRIVATE */
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*
  * Structure used to communicate from kernel to multicast router.
@@ -229,7 +229,7 @@ struct sioc_mif_req6 {
 	u_quad_t obytes;	/* Output byte count on mif		*/
 };
 
-#if defined(KERNEL_PRIVATE)
+#if defined(XNU_KERNEL_PRIVATE)
 struct sioc_mif_req6_32 {
 	mifi_t mifi;
 	u_quad_t icount;
@@ -245,7 +245,7 @@ struct sioc_mif_req6_64 {
 	u_quad_t ibytes;
 	u_quad_t obytes;
 } __attribute__((aligned(8)));
-#endif /* KERNEL_PRIVATE */
+#endif /* XNU_KERNEL_PRIVATE */
 
 #ifdef PRIVATE
 /*
@@ -314,14 +314,14 @@ struct rtdetq {		/* XXX: rtdetq is also defined in ip_mroute.h */
 #endif /* _NETINET_IP_MROUTE_H_ */
 
 #if MROUTING
-#ifdef KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
 extern struct mrt6stat mrt6stat;
 
 extern int ip6_mrouter_set(struct socket *, struct sockopt *);
 extern int ip6_mrouter_get(struct socket *, struct sockopt *);
 extern int ip6_mrouter_done(void);
 extern int mrt6_ioctl(u_long, caddr_t);
-#endif /* KERNEL_PRIVATE */
+#endif /* XNU_KERNEL_PRIVATE */
 #endif /* PRIVATE */
 #endif
 

@@ -91,6 +91,13 @@ is identical to
 except that it sets an extended attribute on an open file referenced by
 file descriptor
 .Fa fd .
+.Sh NOTE
+On some filesystems, such as
+.Dv HFS+ ,
+setting the extended attribute
+.Dv com.apple.ResourceFork
+will update the modification time (``mtime'') of
+the file.
 .Sh RETURN VALUES
 On success, 0 is returned.  On failure, -1 is returned and the global
 variable

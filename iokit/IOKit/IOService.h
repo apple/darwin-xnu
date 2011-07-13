@@ -134,6 +134,7 @@ extern const OSSymbol *		gIOBusyInterest;
 extern const OSSymbol *		gIOOpenInterest;
 extern const OSSymbol *		gIOAppPowerStateInterest;
 extern const OSSymbol *		gIOPriorityPowerStateInterest;
+extern const OSSymbol *		gIOConsoleSecurityInterest;
 
 extern const OSSymbol *		gIODeviceMemoryKey;
 extern const OSSymbol *		gIOInterruptControllersKey;
@@ -433,25 +434,6 @@ private:
     OSMetaClassDeclareReservedUnused(IOService, 45);
     OSMetaClassDeclareReservedUnused(IOService, 46);
     OSMetaClassDeclareReservedUnused(IOService, 47);
-
-#ifdef __ppc__
-    OSMetaClassDeclareReservedUnused(IOService, 48);
-    OSMetaClassDeclareReservedUnused(IOService, 49);
-    OSMetaClassDeclareReservedUnused(IOService, 50);
-    OSMetaClassDeclareReservedUnused(IOService, 51);
-    OSMetaClassDeclareReservedUnused(IOService, 52);
-    OSMetaClassDeclareReservedUnused(IOService, 53);
-    OSMetaClassDeclareReservedUnused(IOService, 54);
-    OSMetaClassDeclareReservedUnused(IOService, 55);
-    OSMetaClassDeclareReservedUnused(IOService, 56);
-    OSMetaClassDeclareReservedUnused(IOService, 57);
-    OSMetaClassDeclareReservedUnused(IOService, 58);
-    OSMetaClassDeclareReservedUnused(IOService, 59);
-    OSMetaClassDeclareReservedUnused(IOService, 60);
-    OSMetaClassDeclareReservedUnused(IOService, 61);
-    OSMetaClassDeclareReservedUnused(IOService, 62);
-    OSMetaClassDeclareReservedUnused(IOService, 63);
-#endif
 
 public:
 /*! @function getState
@@ -1220,6 +1202,8 @@ public:
     static void setPMRootDomain( class IOPMrootDomain * rootDomain );
     static IOReturn catalogNewDrivers( OSOrderedSet * newTables );
     uint64_t getAccumulatedBusyTime( void );
+    static void updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessage);
+    static void consoleLockTimer(thread_call_param_t p0, thread_call_param_t p1);
 
 private:
     static IOReturn waitMatchIdle( UInt32 ms );
@@ -1312,10 +1296,13 @@ private:
     static void terminateThread( void * arg, wait_result_t unused );
     static void terminateWorker( IOOptionBits options );
     static void actionWillTerminate( IOService * victim, IOOptionBits options, 
-                                        OSArray * doPhase2List );
-    static void actionDidTerminate( IOService * victim, IOOptionBits options );
-    static void actionFinalize( IOService * victim, IOOptionBits options );
-    static void actionStop( IOService * client, IOService * provider );
+                                     OSArray * doPhase2List, void*, void * );
+    static void actionDidTerminate( IOService * victim, IOOptionBits options,
+                                    void *, void *, void *);
+    static void actionFinalize( IOService * victim, IOOptionBits options,
+                                void *, void *, void *);
+    static void actionStop( IOService * client, IOService * provider,
+                            void *, void *, void *);
 
 	APPLE_KEXT_COMPATIBILITY_VIRTUAL
     IOReturn resolveInterrupt(IOService *nub, int source);
@@ -1337,8 +1324,8 @@ public:
     virtual void PMinit( void );
 
 /*! @function PMstop
-    @abstract Frees and removes the driver from power management.
-    @discussion The power managment variables don't exist after this call and the power managment methods in the caller shouldn't be called.    
+    @abstract Stop power managing the driver.
+    @discussion Removes the driver from the power plane and stop its power management. This method is synchronous against any power management method invocations (e.g. <code>setPowerState</code> or <code>setAggressiveness</code>), so when this method returns it is guaranteed those power management methods will not be entered. Driver should not call any power management methods after this call.
     Calling <code>PMstop</code> cleans up for the three power management initialization calls: @link PMinit PMinit@/link, @link joinPMtree joinPMtree@/link, and @link registerPowerDriver registerPowerDriver@/link. */
 
     virtual void PMstop( void );
@@ -1368,6 +1355,7 @@ public:
 /*! @function registerInterestedDriver
     @abstract Allows an IOService object to register interest in the changing power state of a power-managed IOService object.
     @discussion Call <code>registerInterestedDriver</code> on the IOService object you are interested in receiving power state messages from, and pass a pointer to the interested driver (<code>this</code>) as an argument.
+    The interested driver is retained until the power interest is removed by calling <code>deRegisterInterestedDriver</code>.
     The interested driver should override @link powerStateWillChangeTo powerStateWillChangeTo@/link and @link powerStateDidChangeTo powerStateDidChangeTo@/link to receive these power change messages.
     Interested drivers must acknowledge power changes in <code>powerStateWillChangeTo</code> or <code>powerStateDidChangeTo</code>, either via return value or later calls to @link acknowledgePowerChange acknowledgePowerChange@/link.
     @param theDriver The driver of interest adds this pointer to the list of interested drivers. It informs drivers on this list before and after the power change.
@@ -1378,7 +1366,8 @@ public:
 
 /*! @function deRegisterInterestedDriver
     @abstract De-registers power state interest from a previous call to <code>registerInterestedDriver</code>.
-    @discussion Most drivers do not need to override <code>deRegisterInterestedDriver</code>.
+    @discussion The retain from <code>registerInterestedDriver</code> is released. This method is synchronous against any <code>powerStateWillChangeTo</code> or <code>powerStateDidChangeTo</code> call targeting the interested driver, so when this method returns it is guaranteed those interest handlers will not be entered.
+    Most drivers do not need to override <code>deRegisterInterestedDriver</code>.
     @param theDriver The interested driver previously passed into @link registerInterestedDriver registerInterestedDriver@/link.
     @result A return code that can be ignored by the caller. */
 
@@ -1725,10 +1714,13 @@ protected:
 #ifdef XNU_KERNEL_PRIVATE
     /* Power management internals */
 public:
+    void idleTimerExpired( void );
     void settleTimerExpired( void );
-    IOReturn synchronizePowerTree( void );
-    bool assertPMThreadCall( void );
-    void deassertPMThreadCall( void );
+    IOReturn synchronizePowerTree( IOOptionBits options = 0, IOService * notifyRoot = 0 );
+    bool assertPMDriverCall( IOPMDriverCallEntry * callEntry, IOOptionBits options = 0, IOPMinformee * inform = 0 );
+    void deassertPMDriverCall( IOPMDriverCallEntry * callEntry );
+    IOReturn changePowerStateWithOverrideTo( unsigned long ordinal );
+    static const char * getIOMessageString( uint32_t msg );
 
 #ifdef __LP64__
     static IOWorkLoop * getPMworkloop( void );
@@ -1736,10 +1728,7 @@ public:
 
 protected:
     bool tellClientsWithResponse( int messageType );
-    bool tellClientsWithResponse( int messageType, bool (*)(OSObject *, void *) );
     void tellClients( int messageType );
-    void tellClients( int messageType, bool (*)(OSObject *, void *) );
-    IOReturn changePowerStateWithOverrideTo( unsigned long ordinal );
 
 private:
 #ifndef __LP64__
@@ -1752,44 +1741,44 @@ private:
     void PMfree( void );
     bool tellChangeDown1 ( unsigned long );
     bool tellChangeDown2 ( unsigned long );
-    IOReturn startPowerChange ( unsigned long, unsigned long, unsigned long, IOPowerConnection *, unsigned long );
+    IOReturn startPowerChange( IOPMPowerChangeFlags, IOPMPowerStateIndex, IOPMPowerFlags, IOPowerConnection *, IOPMPowerFlags );
 	void setParentInfo ( IOPMPowerFlags, IOPowerConnection *, bool );
-    IOReturn notifyAll ( int nextMachineState, bool is_prechange );
-    bool notifyChild ( IOPowerConnection * nextObject, bool is_prechange );
+    IOReturn notifyAll ( uint32_t nextMS );
+    bool notifyChild ( IOPowerConnection * child );
 
     // power change initiated by driver
 	void OurChangeStart( void );
+    void OurSyncStart ( void );
     void OurChangeTellClientsPowerDown ( void );
     void OurChangeTellPriorityClientsPowerDown ( void );
+    void OurChangeTellCapabilityWillChange ( void );
     void OurChangeNotifyInterestedDriversWillChange ( void );
     void OurChangeSetPowerState ( void );
     void OurChangeWaitForPowerSettle ( void );
     void OurChangeNotifyInterestedDriversDidChange ( void );
+    void OurChangeTellCapabilityDidChange ( void );
     void OurChangeFinish ( void );
-    void OurSyncStart ( void );
 
     // downward power change initiated by a power parent
 	IOReturn ParentChangeStart( void );
-    void ParentDownTellPriorityClientsPowerDown ( void );
-    void ParentDownNotifyInterestedDriversWillChange ( void );
-    void ParentDownNotifyDidChangeAndAcknowledgeChange ( void );
-    void ParentDownSetPowerState ( void );
-    void ParentDownWaitForPowerSettle ( void );
-    void ParentAcknowledgePowerChange ( void );
-    
-    // upward power change initiated by a power parent
-    void ParentUpSetPowerState ( void );
-    void ParentUpWaitForSettleTime ( void );
-    void ParentUpNotifyInterestedDriversDidChange ( void );
+    void ParentChangeTellPriorityClientsPowerDown ( void );
+    void ParentChangeTellCapabilityWillChange ( void );
+    void ParentChangeNotifyInterestedDriversWillChange ( void );
+    void ParentChangeSetPowerState ( void );
+    void ParentChangeWaitForPowerSettle ( void );
+    void ParentChangeNotifyInterestedDriversDidChange ( void );
+    void ParentChangeTellCapabilityDidChange ( void );
+    void ParentChangeAcknowledgePowerChange ( void );
     
     void all_done ( void );
     void start_ack_timer ( void );
     void stop_ack_timer ( void );
     void startSettleTimer( void );
     bool checkForDone ( void );
-    bool responseValid ( unsigned long x, int pid );
+    bool responseValid ( uint32_t x, int pid );
     void computeDesiredState ( unsigned long tempDesire = 0 );
     void rebuildChildClampBits ( void );
+    void tellSystemCapabilityChange( uint32_t nextMS );
 
 	static void ack_timer_expired( thread_call_param_t, thread_call_param_t );
 	static IOReturn actionAckTimerExpired(OSObject *, void *, void *, void *, void * );
@@ -1797,8 +1786,10 @@ private:
 	static IOPMRequest * acquirePMRequest( IOService * target, IOOptionBits type, IOPMRequest * active = 0 );
 	static void releasePMRequest( IOPMRequest * request );
 	static void pmDriverCallout( IOService * from );
-	static void pmTellClientWithResponse( OSObject * object, void * context );
 	static void pmTellAppWithResponse( OSObject * object, void * context );
+	static void pmTellClientWithResponse( OSObject * object, void * context );
+    static void pmTellCapabilityAppWithResponse ( OSObject * object, void * arg );
+    static void pmTellCapabilityClientWithResponse( OSObject * object, void * arg );
 	bool ackTimerTick( void );
 	void addPowerChild1( IOPMRequest * request );
 	void addPowerChild2( IOPMRequest * request );
@@ -1831,14 +1822,15 @@ private:
 	void driverInformPowerChange( void );
 	bool isPMBlocked( IOPMRequest * request, int count );
 	void notifyChildren( void );
-	void notifyChildrenDone( void );
+	void notifyChildrenOrdered( void );
+	void notifyChildrenDelayed( void );
     void cleanClientResponses ( bool logErrors );
-    void idleTimerExpired( IOTimerEventSource * );
 	void updatePowerClient( const OSSymbol * client, uint32_t powerState );
 	void removePowerClient( const OSSymbol * client );
 	uint32_t getPowerStateForClient( const OSSymbol * client );
     IOReturn requestPowerState( const OSSymbol * client, uint32_t state );
-    IOReturn requestDomainPower( unsigned long ourPowerState, IOOptionBits options = 0 );
+    IOReturn requestDomainPower( IOPMPowerStateIndex ourPowerState, IOOptionBits options = 0 );
+    void waitForPMDriverCall( IOService * target = 0 );
 #endif /* XNU_KERNEL_PRIVATE */
 };
 

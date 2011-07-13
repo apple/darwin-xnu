@@ -137,6 +137,7 @@ ip_initid(void)
 	struct timeval timenow;
 	
 	getmicrotime(&timenow);
+	read_random((void *) &tmp, sizeof(tmp));
 	ru_x = (tmp & 0xFFFF) % RU_M;
 
 	/* 15 bits of random seed */

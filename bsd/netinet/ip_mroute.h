@@ -298,9 +298,9 @@ extern int	(*ip_mrouter_set)(struct socket *, struct sockopt *);
 extern int	(*ip_mrouter_get)(struct socket *, struct sockopt *);
 extern int	(*ip_mrouter_done)(void);
 #if MROUTING
-extern int	(*mrt_ioctl)(int, caddr_t);
+extern int	(*mrt_ioctl)(u_long, caddr_t);
 #else
-extern int	(*mrt_ioctl)(int, caddr_t, struct proc *);
+extern int	(*mrt_ioctl)(u_long, caddr_t, struct proc *);
 #endif
 
 #endif /* KERNEL_PRIVATE */

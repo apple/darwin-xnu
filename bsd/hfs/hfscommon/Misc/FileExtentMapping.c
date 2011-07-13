@@ -180,7 +180,8 @@ static OSErr TruncateExtents(
 
 static OSErr UpdateExtentRecord (
 	ExtendedVCB		*vcb,
-	FCB						*fcb,
+	FCB				*fcb,
+	int				deleted,
 	const HFSPlusExtentKey	*extentFileKey,
 	const HFSPlusExtentRecord	extentData,
 	u_int32_t					extentBTreeHint);
@@ -456,7 +457,6 @@ static OSErr DeleteExtentRecord(
 //
 //_________________________________________________________________________________
 
-__private_extern__
 OSErr MapFileBlockC (
 	ExtendedVCB		*vcb,				// volume that file resides on
 	FCB				*fcb,				// FCB of file
@@ -682,7 +682,6 @@ static OSErr DeallocateFork(
 //	Function: 	Flushes the extent file for a specified volume
 //‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
 
-__private_extern__
 OSErr FlushExtentFile( ExtendedVCB *vcb )
 {
 	FCB *	fcb;
@@ -842,7 +841,6 @@ int32_t CompareExtentKeysPlus( const HFSPlusExtentKey *searchKey, const HFSPlusE
  * Used by hfs_extendfs to extend the volume allocation bitmap file.
  *
  */
-__private_extern__
 int
 AddFileExtent(ExtendedVCB *vcb, FCB *fcb, u_int32_t startBlock, u_int32_t blockCount)
 {
@@ -896,7 +894,7 @@ AddFileExtent(ExtendedVCB *vcb, FCB *fcb, u_int32_t startBlock, u_int32_t blockC
 		 */
 		foundData[foundIndex].startBlock = startBlock;
 		foundData[foundIndex].blockCount = blockCount;
-		error = UpdateExtentRecord(vcb, fcb, &foundKey, foundData, hint);
+		error = UpdateExtentRecord(vcb, fcb, 0, &foundKey, foundData, hint);
 	}
 	(void) FlushExtentFile(vcb);
 
@@ -912,7 +910,6 @@ AddFileExtent(ExtendedVCB *vcb, FCB *fcb, u_int32_t startBlock, u_int32_t blockC
 //
 //_________________________________________________________________________________
 
-__private_extern__
 OSErr ExtendFileC (
 	ExtendedVCB		*vcb,				// volume that file resides on
 	FCB				*fcb,				// FCB of file to truncate
@@ -1087,21 +1084,44 @@ OSErr ExtendFileC (
 	 * should only be aggressive with re-using once-allocated pieces
 	 * if we're not dealing with system files.  If we're trying to operate
 	 * on behalf of a system file, we need the maximum contiguous amount
-	 * possible.
+	 * possible.  For non-system files we favor locality and fragmentation over
+	 * contiguity as it can result in fewer blocks being needed from the underlying
+	 * filesystem that the sparse image resides upon. 
 	 */
 	err = noErr;
 	if (   (vcb->hfs_flags & HFS_HAS_SPARSE_DEVICE)
-	    && (fcb->ff_cp->c_fileid >= kHFSFirstUserCatalogNodeID)
-	    && (flags & kEFMetadataMask) == 0) {
-		if (vcb->hfs_flags & HFS_DID_CONTIG_SCAN) {
-			wantContig = false;
-		} else {
-			// we only want to do this once to scan the bitmap to
-			// fill in the vcbFreeExt table of free blocks
-			vcb->hfs_flags |= HFS_DID_CONTIG_SCAN;
-			wantContig = true;
+			&& (fcb->ff_cp->c_fileid >= kHFSFirstUserCatalogNodeID)
+			&& (flags & kEFMetadataMask) == 0) {
+		/*
+		 * We want locality over contiguity so by default we set wantContig to 
+		 * false unless we hit one of the circumstances below.
+		 */ 
+		wantContig = false;
+		if (hfs_isrbtree_active(VCBTOHFS(vcb))) {
+			/* 
+			 * If the red-black tree is acive, we can always find a suitable contiguous
+			 * chunk.  So if the user specifically requests contiguous files,  we should 
+			 * honor that no matter what kind of device it is.
+			 */
+			if (forceContig) {
+				wantContig = true;
+			}
 		}
-	} else {
+		else {
+			/* 
+			 * If the red-black tree is not active, then only set wantContig to true
+			 * if we have never done a contig scan on the device, which would populate
+			 * the free extent cache.  Note that the caller may explicitly unset the 
+			 * DID_CONTIG_SCAN bit in order to force us to vend a contiguous extent here
+			 * if the caller wants to get a contiguous chunk.
+			 */
+			if ((vcb->hfs_flags & HFS_DID_CONTIG_SCAN) == 0) { 
+				vcb->hfs_flags |= HFS_DID_CONTIG_SCAN;	
+				wantContig = true;
+			}
+		}
+	} 
+	else {
 		wantContig = true;
 	}
 	useMetaZone = flags & kEFMetadataMask;
@@ -1163,7 +1183,7 @@ OSErr ExtendFileC (
 			if ((actualStartBlock == startBlock) && (blockHint == 0)) {
 				//	We grew the file's last extent, so just adjust the number of blocks.
 				foundData[foundIndex].blockCount += actualNumBlocks;
-				err = UpdateExtentRecord(vcb, fcb, &foundKey, foundData, hint);
+				err = UpdateExtentRecord(vcb, fcb, 0, &foundKey, foundData, hint);
 				if (err != noErr) break;
 			}
 			else {
@@ -1217,7 +1237,7 @@ OSErr ExtendFileC (
 					//	Add a new extent into this record and update.
 					foundData[foundIndex].startBlock = actualStartBlock;
 					foundData[foundIndex].blockCount = actualNumBlocks;
-					err = UpdateExtentRecord(vcb, fcb, &foundKey, foundData, hint);
+					err = UpdateExtentRecord(vcb, fcb, 0, &foundKey, foundData, hint);
 					if (err != noErr) break;
 				}
 			}
@@ -1289,12 +1309,15 @@ Overflow:
 //
 //_________________________________________________________________________________
 
-__private_extern__
 OSErr TruncateFileC (
 	ExtendedVCB		*vcb,				// volume that file resides on
 	FCB				*fcb,				// FCB of file to truncate
 	int64_t			peof,				// new physical size for file
+	int				deleted,			// if nonzero, the file's catalog record has already been deleted.
+	int				rsrc,				// does this represent a resource fork or not?
+	uint32_t		fileid,				// the fileid of the file we're manipulating.
 	Boolean			truncateToExtent)	// if true, truncate to end of extent containing newPEOF
+
 {
 	OSErr				err;
 	u_int32_t			nextBlock;		//	next file allocation block to consider
@@ -1314,16 +1337,20 @@ OSErr TruncateFileC (
 
 	recordDeleted = false;
 	
-	if (vcb->vcbSigWord == kHFSPlusSigWord)
+	if (vcb->vcbSigWord == kHFSPlusSigWord) {
 		numExtentsPerRecord = kHFSPlusExtentDensity;
-	else
+	}
+	else {
 		numExtentsPerRecord = kHFSExtentDensity;
-
-	if (FORK_IS_RSRC(fcb))
+	}
+	
+	if (rsrc) {
 		forkType = kResourceForkType;
-	else
+	}
+	else {
 		forkType = kDataForkType;
-
+	}
+	
 	temp64 = fcb->ff_blocks;
 	physNumBlocks = (u_int32_t)temp64;
 
@@ -1349,13 +1376,21 @@ OSErr TruncateFileC (
 	 * XXX Any errors could cause ff_blocks and c_blocks to get out of sync...
 	 */
 	numBlocks = peof / vcb->blockSize;
-	FTOC(fcb)->c_blocks -= (fcb->ff_blocks - numBlocks);
+	if (!deleted) {
+		FTOC(fcb)->c_blocks -= (fcb->ff_blocks - numBlocks);
+	}
 	fcb->ff_blocks = numBlocks;
-
+	
 	// this catalog entry is modified and *must* get forced 
 	// to disk when hfs_update() is called
-	FTOC(fcb)->c_flag |= C_MODIFIED | C_FORCEUPDATE;
-	
+	if (!deleted) {
+		/* 
+		 * If the file is already C_NOEXISTS, then the catalog record
+		 * has been removed from disk already.  We wouldn't need to force 
+		 * another update
+		 */
+		FTOC(fcb)->c_flag |= (C_MODIFIED | C_FORCEUPDATE);
+	}
 	//
 	//	If the new PEOF is 0, then truncateToExtent has no meaning (we should always deallocate
 	//	all storage).
@@ -1364,7 +1399,7 @@ OSErr TruncateFileC (
 		int i;
 		
 		//	Deallocate all the extents for this fork
-		err = DeallocateFork(vcb, FTOC(fcb)->c_fileid, forkType, fcb->fcbExtents, &recordDeleted);
+		err = DeallocateFork(vcb, fileid, forkType, fcb->fcbExtents, &recordDeleted);
 		if (err != noErr) goto ErrorExit;	//	got some error, so return it
 		
 		//	Update the catalog extent record (making sure it's zeroed out)
@@ -1440,7 +1475,7 @@ OSErr TruncateFileC (
 	//	record (in the FCB, or extents file).
 	//
 	if (extentChanged) {
-		err = UpdateExtentRecord(vcb, fcb, &key, extentRecord, hint);
+		err = UpdateExtentRecord(vcb, fcb, deleted, &key, extentRecord, hint);
 		if (err != noErr) goto ErrorExit;
 	}
 	
@@ -1450,7 +1485,7 @@ OSErr TruncateFileC (
 	//	blocks.
 	//
 	if (nextBlock < physNumBlocks)
-		err = TruncateExtents(vcb, forkType, FTOC(fcb)->c_fileid, nextBlock, &recordDeleted);
+		err = TruncateExtents(vcb, forkType, fileid, nextBlock, &recordDeleted);
 
 Done:
 ErrorExit:
@@ -1465,7 +1500,6 @@ ErrorExit:
  * HFS Plus only
  *
  */
-__private_extern__
 OSErr HeadTruncateFile (
 	ExtendedVCB  *vcb,
 	FCB  *fcb,
@@ -1824,6 +1858,7 @@ Exit:
 //
 //	Input:		vcb			  			-	the volume containing the extents
 //				fcb						-	the file that owns the extents
+//				deleted					-	whether or not the file is already deleted
 //				extentFileKey  			-	pointer to extent key record (xkr)
 //						If the key length is 0, then the extents are actually part
 //						of the catalog record, stored in the FCB.
@@ -1834,18 +1869,18 @@ Exit:
 //				(other) = error from BTree
 //============================================================================
 
-static OSErr UpdateExtentRecord (
-	ExtendedVCB  *vcb,
-	FCB  *fcb,
-	const HFSPlusExtentKey  *extentFileKey,
-	const HFSPlusExtentRecord  extentData,
-	u_int32_t  extentBTreeHint)
+static OSErr UpdateExtentRecord (ExtendedVCB *vcb, FCB  *fcb, int deleted,
+								 const HFSPlusExtentKey  *extentFileKey,
+								 const HFSPlusExtentRecord  extentData,
+								 u_int32_t  extentBTreeHint) 
 {
     OSErr err = noErr;
 	
 	if (extentFileKey->keyLength == 0) {	// keyLength == 0 means the FCB's extent record
 		BlockMoveData(extentData, fcb->fcbExtents, sizeof(HFSPlusExtentRecord));
-		FTOC(fcb)->c_flag |= C_MODIFIED;
+		if (!deleted) {
+			FTOC(fcb)->c_flag |= C_MODIFIED;
+		}
 	}
 	else {
 		BTreeIterator btIterator;
@@ -2013,7 +2048,6 @@ static Boolean ExtentsAreIntegral(
 //				Called by BTOpenPath during volume mount
 //_________________________________________________________________________________
 
-__private_extern__
 Boolean NodesAreContiguous(
 	ExtendedVCB	*vcb,
 	FCB			*fcb,

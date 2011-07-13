@@ -56,3 +56,6 @@ posix_spawn:    posix_spawn_bin
 
 posix_spawn_bin:        posix_spawn_bin.o
 	$(CC) -o posix_spawn_bin $(CFLAGS) posix_spawn_bin.o
+
+od_query_create_with_node:  od_query_create_with_node.o
+	$(CC) -o $(@) $(@).o $($(@)_EXTRA_DEPS) $(CFLAGS) ../../bin-$(ARCH)/libmicro.a $($(@)_EXTRA_LIBS) $(EXTRA_LIBS) -lpthread -lm -framework CoreFoundation -framework OpenDirectory; cp $@ ../../bin-$(ARCH)/ 

@@ -241,7 +241,7 @@ sysctl_clockrate
 }
 
 SYSCTL_PROC(_kern, KERN_CLOCKRATE, clockrate,
-		CTLTYPE_STRUCT | CTLFLAG_RD,
+		CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
 		0, 0, sysctl_clockrate, "S,clockinfo", "");
 
 

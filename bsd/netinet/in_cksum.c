@@ -93,7 +93,7 @@ union q_util {
         u_int64_t q;
 };
 
-#define ADDCARRY(x)  (x > 65535 ? x -= 65535 : x)
+#define ADDCARRY(x)  do { if (x > 65535) { x -= 65535; } } while (0)
 
 #define REDUCE32                                                          \
     {                                                                     \
@@ -118,7 +118,7 @@ inet_cksum_simple(struct mbuf *m, int len)
 	return (inet_cksum(m, 0, 0, len));
 }
 
-inline u_short
+u_short
 in_addword(u_short a, u_short b)
 {
         union l_util l_util;
@@ -128,7 +128,7 @@ in_addword(u_short a, u_short b)
 	return (sum);
 }
 
-inline u_short
+u_short
 in_pseudo(u_int a, u_int b, u_int c)
 {
         u_int64_t sum;
@@ -141,77 +141,7 @@ in_pseudo(u_int a, u_int b, u_int c)
 
 }
 
-#if defined(__ppc__)
-
-extern u_short xsum_assym(u_short *p, int len, u_short xsum, int odd);
-
-u_int16_t
-inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
-    unsigned int len)
-{
-	u_short *w;
-	u_int32_t sum = 0;
-	int mlen = 0;
-	int starting_on_odd  = 0;
-
-	KERNEL_DEBUG(DBG_FNC_IN_CKSUM | DBG_FUNC_START, len,0,0,0,0);
-
-	/* sanity check */
-	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.len < skip + len) {
-		panic("inet_cksum: mbuf len (%d) < off+len (%d+%d)\n",
-		    m->m_pkthdr.len, skip, len);
-	}
-
-	/* include pseudo header checksum? */
-	if (nxt != 0) {
-		struct ip *iph;
-
-		if (m->m_len < sizeof (struct ip))
-			panic("inet_cksum: bad mbuf chain");
-
-		iph = mtod(m, struct ip *);
-		sum = in_pseudo(iph->ip_src.s_addr, iph->ip_dst.s_addr,
-		    htonl(len + nxt));
-	}
-
-	if (skip != 0) {
-		for (; skip && m; m = m->m_next) {
-			if (m->m_len > skip) {
-				mlen = m->m_len - skip;
-				w = (u_short *)(m->m_data+skip);
-				goto skip_start;
-			} else {
-				skip -= m->m_len;
-			}
-		}
-	}
-
-	for (;m && len; m = m->m_next) {
-		if (m->m_len == 0)
-			continue;
-		mlen = m->m_len;
-		w = mtod(m, u_short *);
-
-skip_start:
-		if (len < mlen)
-			mlen = len;
-		sum = xsum_assym(w, mlen, sum, starting_on_odd);
-		len -= mlen;
-		if (mlen & 0x1)
-		{
-		    if (starting_on_odd)
-			starting_on_odd = 0;
-		    else
-			starting_on_odd = 1;
-		}
-	}
-
-	KERNEL_DEBUG(DBG_FNC_IN_CKSUM | DBG_FUNC_END, 0,0,0,0,0);
-
-	return (~sum & 0xffff);
-}
-
-#elif defined(__arm__) && __ARM_ARCH__ >= 6
+#if defined(__arm__) && __ARM_ARCH__ >= 6
 
 extern int cpu_in_cksum(struct mbuf *m, int len, int off, uint32_t initial_sum);
 

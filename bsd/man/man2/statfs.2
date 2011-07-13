@@ -71,9 +71,11 @@ argument is a pointer to a
 structure.
 When the macro
 .Dv _DARWIN_FEATURE_64_BIT_INODE
-is not defined (the
-.Ft ino_t
-type is 32-bits), that structure is defined as:
+is not defined (see
+.Xr stat 2
+for more information on this macro), the
+.Fa statfs
+structure is defined as:
 .Bd -literal
 typedef struct { int32_t val[2]; } fsid_t;
 
@@ -107,18 +109,8 @@ struct statfs { /* when _DARWIN_FEATURE_64_BIT_INODE is NOT defined */
 However, when the macro
 .Dv _DARWIN_FEATURE_64_BIT_INODE
 is defined, the
-.Ft ino_t
-type will be 64-bits (force 64-bit inode mode by defining the
-.Dv _DARWIN_USE_64_BIT_INODE
-macro before including header files).
-This will cause symbol variants of the 
 .Fa statfs
-family, with the
-.Fa $INODE64
-suffixes, to be automatically linked in.
-In addition, the
-.Fa statfs
-structure will now be defined as:
+structure is defined as:
 .Bd -literal
 #define MFSTYPENAMELEN  16 /* length of fs type name including null */
 #define MAXPATHLEN      1024	
@@ -143,6 +135,13 @@ struct statfs { /* when _DARWIN_FEATURE_64_BIT_INODE is defined */
     uint32_t    f_reserved[8];  /* For future use */ 
 };
 .Ed
+.Pp
+Note that the
+.Fa f_fstypename ,
+.Fa f_mntonname ,
+and
+.Fa f_mntfromname
+fields are also wider in this variant.
 .Pp
 Fields that are undefined for a particular file system are set to -1.
 The

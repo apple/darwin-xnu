@@ -100,6 +100,8 @@ extern struct domain ndrvdomain;
 extern struct protosw ndrvsw;
 extern lck_mtx_t *domain_proto_mtx;
 
+#define NDRV_PROTODEMUX_COUNT	10
+
 /*
  * Verify these values match.
  * To keep clients from including dlil.h, we define
@@ -703,6 +705,8 @@ ndrv_setspec(struct ndrv_cb *np, struct sockopt *sopt)
 		return ENOTSUP; // version is too new!
 	else if (ndrvSpec.version < 1)
 		return EINVAL; // version is not valid
+	else if (ndrvSpec.demux_count > NDRV_PROTODEMUX_COUNT || ndrvSpec.demux_count == 0)
+		return EINVAL; // demux_count is not valid
 	
 	bzero(&proto_param, sizeof(proto_param));
 	proto_param.demux_count = ndrvSpec.demux_count;

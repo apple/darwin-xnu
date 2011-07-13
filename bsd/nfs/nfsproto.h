@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -348,21 +348,21 @@ typedef enum { NFNON=0, NFREG=1, NFDIR=2, NFBLK=3, NFCHR=4, NFLNK=5,
  * NFS attribute management stuff
  */
 #define NFS_ATTR_BITMAP_LEN	2
-#define NFS_BITMAP_SET(A, I)	(((uint32_t *)(A))[(I)/32] |= 1<<((I)%32))
-#define NFS_BITMAP_CLR(A, I)	(((uint32_t *)(A))[(I)/32] &= ~(1<<((I)%32)))
-#define NFS_BITMAP_ISSET(A, I)	(((uint32_t *)(A))[(I)/32] & (1<<((I)%32)))
+#define NFS_BITMAP_SET(B, I)	(((uint32_t *)(B))[(I)/32] |= 1<<((I)%32))
+#define NFS_BITMAP_CLR(B, I)	(((uint32_t *)(B))[(I)/32] &= ~(1<<((I)%32)))
+#define NFS_BITMAP_ISSET(B, I)	(((uint32_t *)(B))[(I)/32] & (1<<((I)%32)))
+#define NFS_BITMAP_ZERO(B, L) \
+	do { \
+		int __i; \
+		for (__i=0; __i < (L); __i++) \
+			((uint32_t*)(B))[__i] = 0; \
+	} while (0)
 
 __private_extern__ uint32_t nfs_fs_attr_bitmap[NFS_ATTR_BITMAP_LEN];
 __private_extern__ uint32_t nfs_object_attr_bitmap[NFS_ATTR_BITMAP_LEN];
 __private_extern__ uint32_t nfs_getattr_bitmap[NFS_ATTR_BITMAP_LEN];
 
-#define NFS_CLEAR_ATTRIBUTES(A) \
-	do { \
-	int __i; \
-	for (__i=0; __i < NFS_ATTR_BITMAP_LEN; __i++) \
-		((uint32_t*)(A))[__i] = 0; \
-	} while (0)
-
+#define NFS_CLEAR_ATTRIBUTES(A)	NFS_BITMAP_ZERO((A), NFS_ATTR_BITMAP_LEN)
 #define NFS_COPY_ATTRIBUTES(SRC, DST) \
 	do { \
 	int __i; \
@@ -571,7 +571,7 @@ __private_extern__ uint32_t nfs_getattr_bitmap[NFS_ATTR_BITMAP_LEN];
 	/* NFS_BITMAP_SET((A), NFS_FATTR_FILEHANDLE); */ \
 	/* optional: */ \
 	/* NFS_BITMAP_SET((A), NFS_FATTR_ACL); */ \
-	/* NFS_BITMAP_SET((A), NFS_FATTR_ACLSUPPORT); */ \
+	NFS_BITMAP_SET((A), NFS_FATTR_ACLSUPPORT); \
 	NFS_BITMAP_SET((A), NFS_FATTR_ARCHIVE); \
 	/* NFS_BITMAP_SET((A), NFS_FATTR_CANSETTIME); */ \
 	NFS_BITMAP_SET((A), NFS_FATTR_CASE_INSENSITIVE); \
@@ -612,7 +612,7 @@ __private_extern__ uint32_t nfs_getattr_bitmap[NFS_ATTR_BITMAP_LEN];
 	NFS_BITMAP_SET((A), NFS_FATTR_TIME_METADATA); \
 	NFS_BITMAP_SET((A), NFS_FATTR_TIME_MODIFY); \
 	/* NFS_BITMAP_SET((A), NFS_FATTR_TIME_MODIFY_SET); */ \
-	/* NFS_BITMAP_SET((A), NFS_FATTR_MOUNTED_ON_FILEID); */ \
+	NFS_BITMAP_SET((A), NFS_FATTR_MOUNTED_ON_FILEID); \
 	} while (0)
 
 /* attributes requested when we want to do a "statfs" */
@@ -637,6 +637,7 @@ __private_extern__ uint32_t nfs_getattr_bitmap[NFS_ATTR_BITMAP_LEN];
 #define NFS_LIMIT_SIZE				1
 #define NFS_LIMIT_BLOCKS			2
 /* access/deny modes */
+#define NFS_OPEN_SHARE_ACCESS_NONE		0x00000000
 #define NFS_OPEN_SHARE_ACCESS_READ		0x00000001
 #define NFS_OPEN_SHARE_ACCESS_WRITE		0x00000002
 #define NFS_OPEN_SHARE_ACCESS_BOTH		0x00000003
@@ -740,6 +741,7 @@ __private_extern__ uint32_t nfs_getattr_bitmap[NFS_ATTR_BITMAP_LEN];
 #define NFS_ACE_SUCCESSFUL_ACCESS_ACE_FLAG	0x00000010
 #define NFS_ACE_FAILED_ACCESS_ACE_FLAG		0x00000020
 #define NFS_ACE_IDENTIFIER_GROUP		0x00000040
+#define NFS_ACE_INHERITED_ACE			0x00000080
 /* ACE mask flags */
 #define NFS_ACE_READ_DATA			0x00000001
 #define NFS_ACE_LIST_DIRECTORY			0x00000001

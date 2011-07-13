@@ -71,6 +71,8 @@
 
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
+#include <sys/queue.h>
+#include <stdint.h>
 
 /*
  * Definitions of device driver entry switches
@@ -194,10 +196,24 @@ struct cdevsw {
 	int			d_type;
 };
 
+#ifdef BSD_KERNEL_PRIVATE
+void devsw_init(void);
 
-#ifdef KERNEL_PRIVATE
-extern struct cdevsw cdevsw[];
-#endif /* KERNEL_PRIVATE */
+extern uint64_t cdevsw_flags[];
+#define CDEVSW_SELECT_KQUEUE	0x01
+#define CDEVSW_USE_OFFSET	0x02
+
+struct thread;
+
+typedef struct devsw_lock {
+	TAILQ_ENTRY(devsw_lock) 	dl_list;
+	struct thread			*dl_thread;
+	dev_t				dl_dev;
+	int 				dl_mode;
+} *devsw_lock_t;
+
+#endif /* BSD_KERNEL_PRIVATE */
+
 
 /*
  * Contents of empty cdevsw slot.
@@ -276,6 +292,16 @@ extern struct swdevt swdevt[];
  *  else -1
  */
 __BEGIN_DECLS
+#ifdef KERNEL_PRIVATE
+extern struct cdevsw cdevsw[];
+extern int cdevsw_setkqueueok(int, struct cdevsw*, int);
+#endif /* KERNEL_PRIVATE */
+
+#ifdef BSD_KERNEL_PRIVATE
+extern void devsw_lock(dev_t, int);
+extern void devsw_unlock(dev_t, int);
+#endif /* BSD_KERNEL_PRIVATE */
+
 int  bdevsw_isfree(int);
 int  bdevsw_add(int, struct bdevsw *);
 int  bdevsw_remove(int, struct bdevsw *);

@@ -2,7 +2,7 @@
  * Copyright (c) 2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- *
+ * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- *
+ * 
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- *
+ * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- *
+ * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <string.h>
@@ -146,7 +146,7 @@ kxld_sym_init_absolute(KXLDSym *sym, char *name, kxld_addr_t link_addr)
     sym->sectnum = NO_SECT;
 
     init_predicates(sym, N_ABS | N_EXT, 0);
-    sym->predicates.is_resolved = TRUE;
+    sym->is_resolved = TRUE;
 }
 
 /*******************************************************************************
@@ -160,7 +160,7 @@ init_predicates(KXLDSym *sym, u_char n_type, u_short n_desc)
 
     /* The type field is interpreted differently for normal symbols and stabs */
     if (n_type & N_STAB) {
-        sym->predicates.is_stab = 1;
+        sym->is_stab = 1;
 
         switch (n_type) {
         /* Labeled as NO_SECT in stab.h */
@@ -180,7 +180,7 @@ init_predicates(KXLDSym *sym, u_char n_type, u_short n_desc)
         case N_LENG:
         case N_OPT:
         case N_OSO:
-            sym->predicates.is_absolute = 1;
+            sym->is_absolute = 1;
             break;
         /* Labeled as n_sect in stab.h */
         case N_FUN:
@@ -198,9 +198,9 @@ init_predicates(KXLDSym *sym, u_char n_type, u_short n_desc)
          * section-based on OS X.  We must mark them as such so they get
          * relocated.
          */
-        case N_LBRAC:
         case N_RBRAC:
-            sym->predicates.is_section = 1;
+        case N_LBRAC:
+            sym->is_section = 1;
             break;
         default:
             rval = KERN_FAILURE;
@@ -214,42 +214,25 @@ init_predicates(KXLDSym *sym, u_char n_type, u_short n_desc)
     } else {
         u_char type = n_type & N_TYPE;
 
-        /* Set the type-independent fields */
-        if ((n_type & N_EXT) && !(n_type & N_PEXT)) {
-            sym->predicates.is_external = 1;
-        }
-
-        if (n_desc & N_DESC_DISCARDED) {
-            sym->predicates.is_obsolete = 1;
-        }
-
-        if (n_desc & N_WEAK_REF) {
-            sym->predicates.is_weak = 1;
-        }
-
-        if (n_desc & N_ARM_THUMB_DEF) {
-            sym->predicates.is_thumb = 1;
-        }
-
         /* The first set of type fields are mutually exclusive, so they can be
          * set with a switch statement.
          */
         switch (type) {
         case N_ABS:
-            sym->predicates.is_absolute = 1;
+            sym->is_absolute = 1;
             break;
         case N_SECT:
-            sym->predicates.is_section = 1;
+            sym->is_section = 1;
             break;
         case N_UNDF:
             if (sym->base_addr) {
-                sym->predicates.is_common = 1;
+                sym->is_common = 1;
             } else {
-                sym->predicates.is_undefined = 1;
+                sym->is_undefined = 1;
             }
             break;
         case N_INDR:
-            sym->predicates.is_indirect = 1;
+            sym->is_indirect = 1;
             break;
         default:
             rval = KERN_FAILURE;
@@ -258,28 +241,47 @@ init_predicates(KXLDSym *sym, u_char n_type, u_short n_desc)
             goto finish;
         }
 
-        /* Set the C++-specific fields */
-        if ((0 == strncmp(CXX_PREFIX, sym->name, const_strlen(CXX_PREFIX)))) {
-            sym->predicates.is_cxx = 1;
+        /* Set the type-independent fields */
+        if ((n_type & N_EXT) && !(n_type & N_PEXT)) {
+            sym->is_external = 1;
+        }
 
-            if (0 == strncmp(sym->name, METACLASS_VTABLE_PREFIX, 
+        if (n_desc & N_DESC_DISCARDED) {
+            sym->is_obsolete = 1;
+        }
+
+        if (n_desc & N_WEAK_REF) {
+           sym->is_weak = 1;
+        }
+
+        if (n_desc & N_ARM_THUMB_DEF) {
+           sym->is_thumb = 1;
+           sym->base_addr |= 1;
+           sym->link_addr |= 1;
+        }
+
+        /* Set the C++-specific fields */
+        if ((streq_safe(CXX_PREFIX, sym->name, const_strlen(CXX_PREFIX)))) {
+            sym->is_cxx = 1;
+
+            if (streq_safe(sym->name, METACLASS_VTABLE_PREFIX, 
                 const_strlen(METACLASS_VTABLE_PREFIX)))
             {
-                sym->predicates.is_meta_vtable = 1;
-            } else if (0 == strncmp(sym->name, VTABLE_PREFIX, 
+                sym->is_meta_vtable = 1;
+            } else if (streq_safe(sym->name, VTABLE_PREFIX, 
                 const_strlen(VTABLE_PREFIX))) 
             {
-                sym->predicates.is_class_vtable = 1;
+                sym->is_class_vtable = 1;
             } else if (kxld_strstr(sym->name, RESERVED_TOKEN)) {
-                sym->predicates.is_padslot = 1;
+                sym->is_padslot = 1;
             } else if (kxld_strstr(sym->name, METACLASS_TOKEN)) {
-                sym->predicates.is_metaclass = 1;
+                sym->is_metaclass = 1;
             } else if (kxld_strstr(sym->name, SUPER_METACLASS_POINTER_TOKEN)) {
-                sym->predicates.is_super_metaclass_pointer = 1;
+                sym->is_super_metaclass_pointer = 1;
             }
-        } else if (streq_safe(CXX_PURE_VIRTUAL, sym->name, sizeof(CXX_PURE_VIRTUAL))) {
-            sym->predicates.is_cxx = 1;
-            sym->predicates.is_pure_virtual = 1;
+        } else if (kxld_sym_name_is_pure_virtual(sym->name)) {
+            sym->is_cxx = 1;
+            sym->is_pure_virtual = 1;
         }
     }
 
@@ -305,8 +307,8 @@ init_sym_sectnum(KXLDSym *sym, u_int n_sect)
             /* Convert the section number to an index into the section index */
             sym->sectnum = n_sect - 1;
         } else {
-            sym->predicates.is_absolute = 1;
-            sym->predicates.is_section = 0;
+            sym->is_absolute = 1;
+            sym->is_section = 0;
         }
     }
 
@@ -338,7 +340,7 @@ kxld_sym_is_absolute(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_absolute);
+    return (0 != sym->is_absolute);
 }
 
 /*******************************************************************************
@@ -348,7 +350,7 @@ kxld_sym_is_section(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_section);
+    return (0 != sym->is_section);
 }
 
 /*******************************************************************************
@@ -359,7 +361,7 @@ kxld_sym_is_defined(const KXLDSym *sym)
     check(sym);
 
     return ((kxld_sym_is_absolute(sym) || kxld_sym_is_section(sym)) && 
-        !sym->predicates.is_replaced);
+        !kxld_sym_is_replaced(sym));
 }
 
 
@@ -370,7 +372,7 @@ kxld_sym_is_defined_locally(const KXLDSym *sym)
 {
     check(sym);
 
-    return (kxld_sym_is_defined(sym) && !sym->predicates.is_resolved);
+    return (kxld_sym_is_defined(sym) && !sym->is_resolved);
 }
 
 /*******************************************************************************
@@ -380,7 +382,7 @@ kxld_sym_is_external(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_external);
+    return (0 != sym->is_external);
 }
 
 /*******************************************************************************
@@ -400,7 +402,7 @@ kxld_sym_is_undefined(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_undefined);
+    return (0 != sym->is_undefined);
 }
 
 /*******************************************************************************
@@ -410,7 +412,17 @@ kxld_sym_is_indirect(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_indirect);
+    return (0 != sym->is_indirect);
+}
+
+/*******************************************************************************
+*******************************************************************************/
+boolean_t
+kxld_sym_is_replaced(const KXLDSym *sym)
+{
+    check(sym);
+
+    return (0 != sym->is_replaced);
 }
 
 /*******************************************************************************
@@ -420,7 +432,7 @@ kxld_sym_is_common(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_common);
+    return (0 != sym->is_common);
 }
 
 /*******************************************************************************
@@ -428,7 +440,7 @@ kxld_sym_is_common(const KXLDSym *sym)
 boolean_t
 kxld_sym_is_unresolved(const KXLDSym *sym)
 {
-    return ((kxld_sym_is_undefined(sym) && !sym->predicates.is_replaced) ||
+    return ((kxld_sym_is_undefined(sym) && !kxld_sym_is_replaced(sym)) ||
             kxld_sym_is_indirect(sym) || kxld_sym_is_common(sym));
 }
 
@@ -437,7 +449,7 @@ kxld_sym_is_unresolved(const KXLDSym *sym)
 boolean_t
 kxld_sym_is_obsolete(const KXLDSym *sym)
 {
-    return (0 != sym->predicates.is_obsolete);
+    return (0 != sym->is_obsolete);
 }
 
 #if KXLD_USER_OR_GOT
@@ -448,7 +460,7 @@ kxld_sym_is_got(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_got);
+    return (0 != sym->is_got);
 }
 #endif /* KXLD_USER_OR_GOT */
 
@@ -459,7 +471,7 @@ kxld_sym_is_stab(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_stab);
+    return (0 != sym->is_stab);
 }
 
 /*******************************************************************************
@@ -469,7 +481,7 @@ kxld_sym_is_weak(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_weak);
+    return (0 != sym->is_weak);
 }
 
 /*******************************************************************************
@@ -479,7 +491,7 @@ kxld_sym_is_cxx(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_cxx);
+    return (0 != sym->is_cxx);
 }
 
 /*******************************************************************************
@@ -487,7 +499,7 @@ kxld_sym_is_cxx(const KXLDSym *sym)
 boolean_t
 kxld_sym_is_pure_virtual(const KXLDSym *sym)
 {
-    return (0 != sym->predicates.is_pure_virtual);
+    return (0 != sym->is_pure_virtual);
 }
 
 /*******************************************************************************
@@ -507,7 +519,7 @@ kxld_sym_is_class_vtable(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_class_vtable);
+    return (0 != sym->is_class_vtable);
 }
 
 /*******************************************************************************
@@ -517,7 +529,7 @@ kxld_sym_is_metaclass_vtable(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_meta_vtable);
+    return (0 != sym->is_meta_vtable);
 }
 
 /*******************************************************************************
@@ -527,7 +539,7 @@ kxld_sym_is_padslot(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_padslot);
+    return (0 != sym->is_padslot);
 }
 
 /*******************************************************************************
@@ -537,7 +549,7 @@ kxld_sym_is_metaclass(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_metaclass);
+    return (0 != sym->is_metaclass);
 }
 
 /*******************************************************************************
@@ -547,7 +559,15 @@ kxld_sym_is_super_metaclass_pointer(const KXLDSym *sym)
 {
     check(sym);
 
-    return (0 != sym->predicates.is_super_metaclass_pointer);
+    return (0 != sym->is_super_metaclass_pointer);
+}
+
+/*******************************************************************************
+*******************************************************************************/
+boolean_t
+kxld_sym_name_is_pure_virtual(const char *name)
+{
+    return streq_safe(CXX_PURE_VIRTUAL, name, sizeof(CXX_PURE_VIRTUAL));
 }
 
 /*******************************************************************************
@@ -813,7 +833,7 @@ finish:
 void
 kxld_sym_set_got(KXLDSym *sym)
 {
-    sym->predicates.is_got = 1;
+    sym->is_got = 1;
 }
 #endif /* KXLD_USER_OR_GOT */
 
@@ -833,7 +853,7 @@ kxld_sym_relocate(KXLDSym *sym, const KXLDSect *sect)
 *******************************************************************************/
 kern_return_t
 kxld_sym_export_macho_32(const KXLDSym *sym, u_char *_nl, char *strtab, 
-    u_long *stroff, u_long strsize, boolean_t is_link_state)
+    u_long *stroff, u_long strsize)
 {
     kern_return_t rval = KERN_FAILURE;
     struct nlist *nl = (struct nlist *) _nl;
@@ -849,17 +869,14 @@ kxld_sym_export_macho_32(const KXLDSym *sym, u_char *_nl, char *strtab,
     require_action((u_long)bytes <= strsize - *stroff, finish,
         rval = KERN_FAILURE);
 
-    if (is_link_state) {
-        nl->n_type = N_ABS | N_EXT;
-        nl->n_sect = NO_SECT;
-        nl->n_desc = 0;
-    } else {
-        nl->n_type = sym->type;
-        nl->n_sect = (kxld_sym_is_section(sym)) ? sym->relocated_sectnum + 1 : 0;
-        nl->n_desc = sym->desc;
-    }
+    nl->n_type = sym->type;
+    nl->n_sect = (kxld_sym_is_section(sym)) ? sym->relocated_sectnum + 1 : 0;
+    nl->n_desc = sym->desc;
     nl->n_un.n_strx = (uint32_t) *stroff;
     nl->n_value = (uint32_t) sym->link_addr;
+    if (sym->is_thumb) {
+        nl->n_value &= ~0x1U;
+    }
 
     str = (char *) (strtab + *stroff);
     strlcpy(str, sym->name, strsize - *stroff);
@@ -877,7 +894,7 @@ finish:
 *******************************************************************************/
 kern_return_t
 kxld_sym_export_macho_64(const KXLDSym *sym, u_char *_nl, char *strtab,
-    u_long *stroff, u_long strsize, boolean_t is_link_state)
+    u_long *stroff, u_long strsize)
 {
     kern_return_t rval = KERN_FAILURE;
     struct nlist_64 *nl = (struct nlist_64 *) _nl;
@@ -893,17 +910,14 @@ kxld_sym_export_macho_64(const KXLDSym *sym, u_char *_nl, char *strtab,
     require_action((u_long)bytes <= strsize - *stroff, finish,
         rval = KERN_FAILURE);
 
-    if (is_link_state) {
-        nl->n_type = N_ABS | N_EXT;
-        nl->n_sect = NO_SECT;
-        nl->n_desc = 0;
-    } else {
-        nl->n_type = sym->type;
-        nl->n_sect = (kxld_sym_is_section(sym)) ? sym->relocated_sectnum + 1 : 0;
-        nl->n_desc = sym->desc;
-    }
+    nl->n_type = sym->type;
+    nl->n_sect = (kxld_sym_is_section(sym)) ? sym->relocated_sectnum + 1 : 0;
+    nl->n_desc = sym->desc;
     nl->n_un.n_strx = (uint32_t) *stroff;
     nl->n_value = (uint64_t) sym->link_addr;
+    if (sym->is_thumb) {
+        nl->n_value &= ~0x1ULL;
+    }
 
     str = (char *) (strtab + *stroff);
     strlcpy(str, sym->name, strsize - *stroff);
@@ -919,7 +933,7 @@ finish:
 /*******************************************************************************
 *******************************************************************************/
 kern_return_t
-kxld_sym_resolve(KXLDSym *sym, kxld_addr_t addr, boolean_t export_sym) 
+kxld_sym_resolve(KXLDSym *sym, kxld_addr_t addr) 
 {
     kern_return_t rval = KERN_FAILURE;
 
@@ -934,18 +948,16 @@ kxld_sym_resolve(KXLDSym *sym, kxld_addr_t addr, boolean_t export_sym)
     sym->type = N_ABS | N_EXT;
     sym->sectnum = NO_SECT;
  
-    /* Set the predicate bits for an externally resolved symbol.  We re-export
-     * indirect symbols and any symbols that the caller wants re-exported (for
-     * example, symbols from a pseudo-kext). */
+    /* Set the predicate bits for an externally resolved symbol. */
     
-    sym->predicates.is_external = TRUE;
-    sym->predicates.is_absolute = TRUE;
-    sym->predicates.is_resolved = !(kxld_sym_is_indirect(sym) || export_sym);
-  
+    sym->is_external = TRUE;
+    sym->is_absolute = TRUE;
+    sym->is_resolved = TRUE;
+
     /* Clear the predicate bits for types that can be resolved */
 
-    sym->predicates.is_undefined = FALSE;
-    sym->predicates.is_indirect = FALSE;
+    sym->is_undefined = FALSE;
+    sym->is_indirect = FALSE;
 
     rval = KERN_SUCCESS;
 
@@ -973,12 +985,12 @@ kxld_sym_resolve_common(KXLDSym *sym, u_int sectnum, kxld_addr_t base_addr)
     sym->sectnum = sectnum;
     sym->desc = 0;
 
-    sym->predicates.is_absolute = FALSE;
-    sym->predicates.is_section = TRUE;
-    sym->predicates.is_undefined = FALSE;
-    sym->predicates.is_indirect = FALSE;
-    sym->predicates.is_common = FALSE;
-    sym->predicates.is_external = TRUE;
+    sym->is_absolute = FALSE;
+    sym->is_section = TRUE;
+    sym->is_undefined = FALSE;
+    sym->is_indirect = FALSE;
+    sym->is_common = FALSE;
+    sym->is_external = TRUE;
 
     rval = KERN_SUCCESS;
 
@@ -996,7 +1008,7 @@ kxld_sym_delete(KXLDSym *sym)
     check(sym);
 
     bzero(sym, sizeof(*sym));
-    sym->predicates.is_replaced = TRUE;
+    sym->is_replaced = TRUE;
 }
 
 
@@ -1007,7 +1019,7 @@ kxld_sym_patch(KXLDSym *sym)
 {
     check(sym);
 
-    sym->predicates.is_replaced = TRUE;
+    sym->is_replaced = TRUE;
 }
 
 /*******************************************************************************
@@ -1018,6 +1030,6 @@ kxld_sym_mark_private(KXLDSym *sym)
     check(sym);
 
     sym->type |= N_PEXT;
-    sym->predicates.is_external = FALSE;
+    sym->is_external = FALSE;
 }
 

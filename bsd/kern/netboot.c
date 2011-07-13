@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -57,7 +57,8 @@
 
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
-
+#include <sys/netboot.h>
+#include <sys/imageboot.h>
 #include <pexpert/pexpert.h>
 
 //#include <libkern/libkern.h>
@@ -81,26 +82,12 @@ const void *
 IOBSDRegistryEntryGetData(void * entry, const char * property_name, 
 			  int * packet_length);
 
-extern int vndevice_root_image(const char * path, char devname[], 
-			       dev_t * dev_p);
-extern int di_root_image(const char *path, char devname[], dev_t *dev_p);
-
 #define BOOTP_RESPONSE	"bootp-response"
 #define BSDP_RESPONSE	"bsdp-response"
 #define DHCP_RESPONSE	"dhcp-response"
 
 /* forward declarations */
 int	inet_aton(char * cp, struct in_addr * pin);
-
-boolean_t	netboot_iaddr(struct in_addr * iaddr_p);
-boolean_t	netboot_rootpath(struct in_addr * server_ip,
-				 char * name, int name_len, 
-				 char * path, int path_len);
-int	netboot_setup(void);
-int	netboot_mountroot(void);
-int	netboot_root(void);
-
-
 
 #define IP_FORMAT	"%d.%d.%d.%d"
 #define IP_CH(ip)	((u_char *)ip)
@@ -125,28 +112,9 @@ struct netboot_info {
     char *		image_path;
     int			image_path_length;
     NetBootImageType	image_type;
-    boolean_t		use_hdix;
+    char *		second_image_path;
+    int			second_image_path_length;
 };
-
-int
-inet_aton(char * cp, struct in_addr * pin)
-{
-    u_char * b = (u_char *)pin;
-    int	   i;
-    char * p;
-
-    for (p = cp, i = 0; i < 4; i++) {
-	u_long l = strtoul(p, 0, 0);
-	if (l > 255)
-	    return (FALSE);
-	b[i] = l;
-	p = strchr(p, '.');
-	if (i < 3 && p == NULL)
-	    return (FALSE);
-	p++;
-    }
-    return (TRUE);
-}
 
 /*
  * Function: parse_booter_path
@@ -251,7 +219,7 @@ static __inline__ boolean_t
 parse_netboot_path(char * path, struct in_addr * iaddr_p, char const * * host,
 		   char * * mount_dir, char * * image_path)
 {
-	static char	tmp[MAX_IPv4_STR_LEN];	/* Danger - not thread safe */
+    static char	tmp[MAX_IPv4_STR_LEN];	/* Danger - not thread safe */
     char *	start;
     char *	colon;
 
@@ -346,35 +314,46 @@ get_root_path(char * root_path)
 
 }
 
+static void
+save_path(char * * str_p, int * length_p, char * path)
+{
+    *length_p = strlen(path) + 1;
+    *str_p = (char *)kalloc(*length_p);
+    strlcpy(*str_p, path, *length_p);
+    return;
+}
+
 static struct netboot_info *
 netboot_info_init(struct in_addr iaddr)
 {
-    struct netboot_info *	info;
+    boolean_t			have_root_path = FALSE;
+    struct netboot_info *	info = NULL;
     char * 			root_path = NULL;
-    boolean_t			use_hdix = TRUE;
-    char *			vndevice = NULL;
-
-    MALLOC_ZONE(vndevice, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
-    if (vndevice == NULL)
-    	panic("netboot_info_init: M_NAMEI zone exhausted");
-    if (PE_parse_boot_argn("vndevice", vndevice, MAXPATHLEN) == TRUE) {
-	use_hdix = FALSE;
-    }
-    FREE_ZONE(vndevice, MAXPATHLEN, M_NAMEI);
 
     info = (struct netboot_info *)kalloc(sizeof(*info));
     bzero(info, sizeof(*info));
     info->client_ip = iaddr;
     info->image_type = kNetBootImageTypeUnknown;
-    info->use_hdix = use_hdix;
 
     /* check for a booter-specified path then a NetBoot path */
     MALLOC_ZONE(root_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
     if (root_path  == NULL)
     	panic("netboot_info_init: M_NAMEI zone exhausted");
-    if (PE_parse_boot_argn("rp", root_path, MAXPATHLEN) == TRUE
-	|| PE_parse_boot_argn("rootpath", root_path, MAXPATHLEN) == TRUE
-	|| get_root_path(root_path) == TRUE) {
+    if (PE_parse_boot_argn("rp0", root_path, MAXPATHLEN) == TRUE
+	|| PE_parse_boot_argn("rp", root_path, MAXPATHLEN) == TRUE
+	|| PE_parse_boot_argn("rootpath", root_path, MAXPATHLEN) == TRUE) {
+	if (imageboot_format_is_valid(root_path)) {
+	    printf("netboot_info_init: rp0='%s' isn't a network path,"
+		   " ignoring\n", root_path);
+	}
+	else {
+	    have_root_path = TRUE;
+	}
+    }
+    if (have_root_path == FALSE) {
+	have_root_path = get_root_path(root_path);
+    }
+    if (have_root_path) {
 	const char * server_name = NULL;
 	char * mount_point = NULL;
 	char * image_path = NULL;
@@ -391,11 +370,11 @@ netboot_info_init(struct in_addr iaddr)
 	    strlcpy(info->server_name, server_name, info->server_name_length);
 	    strlcpy(info->mount_point, mount_point, info->mount_point_length);
 	    
-	    printf("Server %s Mount %s", 
+	    printf("netboot: NFS Server %s Mount %s", 
 		   server_name, info->mount_point);
 	    if (image_path != NULL) {
 		boolean_t 	needs_slash = FALSE;
-
+		
 		info->image_path_length = strlen(image_path) + 1;
 		if (image_path[0] != '/') {
 		    needs_slash = TRUE;
@@ -416,15 +395,26 @@ netboot_info_init(struct in_addr iaddr)
 	}
 	else if (strncmp(root_path, kNetBootRootPathPrefixHTTP, 
 			 strlen(kNetBootRootPathPrefixHTTP)) == 0) {
-	    /* only HDIX supports HTTP */
 	    info->image_type = kNetBootImageTypeHTTP;
-	    info->use_hdix = TRUE;
-	    info->image_path_length = strlen(root_path) + 1;
-	    info->image_path = (char *)kalloc(info->image_path_length);
-	    strlcpy(info->image_path, root_path, info->image_path_length);
+	    save_path(&info->image_path, &info->image_path_length,
+		      root_path);
+	    printf("netboot: HTTP URL %s\n",  info->image_path);
 	}	    
 	else {
 	    printf("netboot: root path uses unrecognized format\n");
+	}
+
+	/* check for image-within-image */
+	if (info->image_path != NULL) {
+		if (PE_parse_boot_argn(IMAGEBOOT_ROOT_ARG, root_path, MAXPATHLEN)
+			|| PE_parse_boot_argn("rp1", root_path, MAXPATHLEN)) {
+			/* rp1/root-dmg is the second-level image */
+			save_path(&info->second_image_path, &info->second_image_path_length, 
+					root_path);
+		}
+	}
+	if (info->second_image_path != NULL) {
+		printf("netboot: nested image %s\n", info->second_image_path);
 	}
     }
     FREE_ZONE(root_path, MAXPATHLEN, M_NAMEI);
@@ -445,6 +435,9 @@ netboot_info_free(struct netboot_info * * info_p)
 	}
 	if (info->image_path) {
 	    kfree(info->image_path, info->image_path_length);
+	}
+	if (info->second_image_path) {
+	    kfree(info->second_image_path, info->second_image_path_length);
 	}
 	kfree(info, sizeof(*info));
     }
@@ -565,13 +558,10 @@ route_cmd(int cmd, struct in_addr d, struct in_addr g,
     mask.sin_len = sizeof(mask);
     mask.sin_family = AF_INET;
     mask.sin_addr = m;
-    lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
-    lck_mtx_lock(rnh_lock);
-    error = rtrequest_scoped_locked(cmd, (struct sockaddr *)&dst,
-				    (struct sockaddr *)&gw,
-				    (struct sockaddr *)&mask,
-				    flags, NULL, ifscope);
-    lck_mtx_unlock(rnh_lock);
+
+    error = rtrequest_scoped(cmd, (struct sockaddr *)&dst,
+        (struct sockaddr *)&gw, (struct sockaddr *)&mask, flags, NULL, ifscope);
+
     return (error);
 
 }
@@ -751,53 +741,24 @@ failed:
 int
 netboot_setup()
 {
-    dev_t 	dev;
     int 	error = 0;
 
     if (S_netboot_info_p == NULL
 	|| S_netboot_info_p->image_path == NULL) {
 	goto done;
     }
-    if (S_netboot_info_p->use_hdix) {
-	printf("netboot_setup: calling di_root_image\n");
-	error = di_root_image(S_netboot_info_p->image_path, 
-			      (char *)rootdevice, &dev);
-	if (error) {
-	    printf("netboot_setup: di_root_image: failed %d\n", error);
-	    goto done;
+    printf("netboot_setup: calling imageboot_mount_image\n");
+    error = imageboot_mount_image(S_netboot_info_p->image_path, -1);
+    if (error != 0) {
+	printf("netboot: failed to mount root image, %d\n", error);
+    }
+    else if (S_netboot_info_p->second_image_path != NULL) {
+	error = imageboot_mount_image(S_netboot_info_p->second_image_path, 0);
+	if (error != 0) {
+	    printf("netboot: failed to mount second root image, %d\n", error);
 	}
     }
-    else {
-	printf("netboot_setup: calling vndevice_root_image\n");
-	error = vndevice_root_image(S_netboot_info_p->image_path, 
-				    (char *)rootdevice, &dev);
-	if (error) {
-	    printf("netboot_setup: vndevice_root_image: failed %d\n", error);
-	    goto done;
-	}
-    }
-    rootdev = dev;
-    mountroot = NULL;
-    printf("netboot: root device 0x%x\n", (int32_t)rootdev);
-    error = vfs_mountroot();
-    if (error == 0 && rootvnode != NULL) {
-        struct vnode *tvp;
-        struct vnode *newdp;
 
-	/* Get the vnode for '/'.  Set fdp->fd_fd.fd_cdir to reference it. */
-	if (VFS_ROOT(TAILQ_LAST(&mountlist,mntlist), &newdp, vfs_context_kernel()))
-		panic("netboot_setup: cannot find root vnode");
-	vnode_ref(newdp);
-	vnode_put(newdp);
-	tvp = rootvnode;
-	vnode_rele(tvp);
-	filedesc0.fd_cdir = newdp;
-	rootvnode = newdp;
-	mount_list_lock();
-	TAILQ_REMOVE(&mountlist, TAILQ_FIRST(&mountlist), mnt_list);
-	mount_list_unlock();
-	mountlist.tqh_first->mnt_flag |= MNT_ROOTFS;
-    }
  done:
     netboot_info_free(&S_netboot_info_p);
     return (error);

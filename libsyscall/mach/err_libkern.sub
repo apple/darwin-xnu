@@ -34,14 +34,14 @@
 
 /* These codes are specified in decimal in OSReturn.h.
  */
-static const char * err_codes_libkern_common[] = {
+static const char * const err_codes_libkern_common[] = {
 	NO_SUCH_ERROR,
 	"(libkern/common) general/unspecified error",    /* 1 */
 };
 
 /* These codes are specified in decimal in OSReturn.h.
  */
-static const char * err_codes_libkern_metaclass[] = {
+static const char * const err_codes_libkern_metaclass[] = {
 	NO_SUCH_ERROR,
 	"(libkern/metaclass) runtime internal error",                                       /* 1 */
 	"(libkern/metaclass) class has instances",                                          /* 2 */
@@ -58,7 +58,7 @@ static const char * err_codes_libkern_metaclass[] = {
 
 /* These codes are specified in hexadecimal in OSKextLib.h.
  */
-static const char * err_codes_libkern_kext[] = {
+static const char * const err_codes_libkern_kext[] = {
 	NO_SUCH_ERROR,
 	"(libkern/kext) internal error",                                      /* 0x1 */
 	"(libkern/kext) allocation failure",                                  /* 0x2 */

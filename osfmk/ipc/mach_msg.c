@@ -172,10 +172,6 @@ mach_msg_format_0_trailer_t trailer_template = {
  *		MACH_SEND_INVALID_REPLY	Can't copyin reply port.
  *		MACH_SEND_TIMED_OUT	Timeout expired without delivery.
  *		MACH_SEND_INTERRUPTED	Delivery interrupted.
- *		MACH_SEND_NO_NOTIFY	Can't allocate a msg-accepted request.
- *		MACH_SEND_WILL_NOTIFY	Msg-accepted notif. requested.
- *		MACH_SEND_NOTIFY_IN_PROGRESS
- *			This space has already forced a message to this port.
  */
 
 mach_msg_return_t
@@ -184,7 +180,7 @@ mach_msg_send(
 	mach_msg_option_t	option,
 	mach_msg_size_t		send_size,
 	mach_msg_timeout_t	send_timeout,
-	mach_port_name_t	notify)
+	__unused mach_port_name_t	notify)
 {
 	ipc_space_t space = current_space();
 	vm_map_t map = current_map();
@@ -222,20 +218,13 @@ mach_msg_send(
 	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
 	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
 	
-	if (option & MACH_SEND_CANCEL) {
-		if (notify == MACH_PORT_NULL)
-			mr = MACH_SEND_INVALID_NOTIFY;
-		else
-			mr = ipc_kmsg_copyin(kmsg, space, map, notify);
-	} else
-		mr = ipc_kmsg_copyin(kmsg, space, map, MACH_PORT_NULL);
+	mr = ipc_kmsg_copyin(kmsg, space, map, option & MACH_SEND_NOTIFY);
 	if (mr != MACH_MSG_SUCCESS) {
 		ipc_kmsg_free(kmsg);
 		return mr;
 	}
 
 	mr = ipc_kmsg_send(kmsg, option & MACH_SEND_TIMEOUT, send_timeout);
-
 	if (mr != MACH_MSG_SUCCESS) {
 	    mr |= ipc_kmsg_copyout_pseudo(kmsg, space, map, MACH_MSG_BODY_NULL);
 	    (void) memcpy((void *) msg, (const void *) kmsg->ikm_header, 
@@ -247,7 +236,7 @@ mach_msg_send(
 }
 
 /*
- *	Routine:	mach_msg_receive
+ *	Routine:	mach_msg_receive_results
  *	Purpose:
  *		Receive a message.
  *	Conditions:
@@ -381,11 +370,10 @@ mach_msg_receive_results(void)
 		mach_msg_body_t *slist;
 
 		slist = ipc_kmsg_get_scatter(msg_addr, slist_size, kmsg);
-		mr = ipc_kmsg_copyout(kmsg, space, map, MACH_PORT_NULL, slist);
+		mr = ipc_kmsg_copyout(kmsg, space, map, slist);
 		ipc_kmsg_free_scatter(slist, slist_size);
 	} else {
-		mr = ipc_kmsg_copyout(kmsg, space, map,
-				      MACH_PORT_NULL, MACH_MSG_BODY_NULL);
+		mr = ipc_kmsg_copyout(kmsg, space, map, MACH_MSG_BODY_NULL);
 	}
 
 	if (mr != MACH_MSG_SUCCESS) {
@@ -473,7 +461,7 @@ mach_msg_overwrite_trap(
 	mach_msg_size_t		rcv_size = args->rcv_size;
 	mach_port_name_t	rcv_name = args->rcv_name;
 	mach_msg_timeout_t	msg_timeout = args->timeout;
-	mach_port_name_t	notify = args->notify;
+	__unused mach_port_name_t notify = args->notify;
 	mach_vm_address_t	rcv_msg_addr = args->rcv_msg;
         mach_msg_size_t		scatter_list_size = 0; /* NOT INITIALIZED - but not used in pactice */
 	__unused mach_port_seqno_t temp_seqno = 0;
@@ -490,13 +478,7 @@ mach_msg_overwrite_trap(
 		if (mr != MACH_MSG_SUCCESS)
 			return mr;
 
-		if (option & MACH_SEND_CANCEL) {
-			if (notify == MACH_PORT_NULL)
-				mr = MACH_SEND_INVALID_NOTIFY;
-			else
-				mr = ipc_kmsg_copyin(kmsg, space, map, notify);
-		} else
-			mr = ipc_kmsg_copyin(kmsg, space, map, MACH_PORT_NULL);
+		mr = ipc_kmsg_copyin(kmsg, space, map, option & MACH_SEND_NOTIFY);
 		if (mr != MACH_MSG_SUCCESS) {
 			ipc_kmsg_free(kmsg);
 			return mr;

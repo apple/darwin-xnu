@@ -41,6 +41,7 @@ void	cpu_machine_init(
 void	handle_pending_TLB_flushes(
 	void);
 
+int cpu_signal_handler(x86_saved_state_t *regs);
 
 kern_return_t cpu_register(
         int *slot_nump);

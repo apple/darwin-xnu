@@ -48,6 +48,8 @@ typedef x86_saved_state_t savearea_t;
 #include <kern/sched_prim.h>
 #include <miscfs/devfs/devfs.h>
 #include <mach/vm_param.h>
+#include <machine/pal_routines.h>
+#include <i386/mp.h>
 
 /*
  * APPLE NOTE:  The regmap is used to decode which 64bit uregs[] register
@@ -126,11 +128,6 @@ dtrace_getipl(void)
 /*
  * MP coordination
  */
-
-extern void mp_broadcast(
-       void (*action_func)(void *),
-       void *arg);
-
 typedef struct xcArg {
 	processorid_t cpu;
 	dtrace_xcall_t f;
@@ -147,6 +144,7 @@ xcRemote( void *foo )
 	}
 }
 
+
 /*
  * dtrace_xcall() is not called from probe context.
  */
@@ -159,13 +157,17 @@ dtrace_xcall(processorid_t cpu, dtrace_xcall_t f, void *arg)
 	xcArg.f = f;
 	xcArg.arg = arg;
 
-	mp_broadcast( xcRemote, (void *)&xcArg);
+	if (cpu == DTRACE_CPUALL) {
+		mp_cpus_call (CPUMASK_ALL, SYNC, xcRemote, (void*)&xcArg);
+	}
+	else {
+		mp_cpus_call (cpu_to_cpumask((cpu_t)cpu), SYNC, xcRemote, (void*)&xcArg);
+	}
 }
 
 /*
  * Runtime and ABI
  */
-
 uint64_t
 dtrace_getreg(struct regs *savearea, uint_t reg)
 {
@@ -420,6 +422,7 @@ dtrace_getupcstack(uint64_t *pcstack, int pcstack_limit)
 	if (thread == NULL)
 		goto zero;
 
+	pal_register_cache_state(thread, VALID);
 	regs = (x86_saved_state_t *)find_user_regs(thread);
 	if (regs == NULL)
 		goto zero;
@@ -483,6 +486,7 @@ dtrace_getustackdepth(void)
 	if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_FAULT))
 		return (-1);
 
+	pal_register_cache_state(thread, VALID);
 	regs = (x86_saved_state_t *)find_user_regs(thread);
 	if (regs == NULL)
 		return 0;
@@ -746,7 +750,9 @@ dtrace_getarg(int arg, int aframes)
 		fp = fp->backchain;
 		pc = fp->retaddr;
 
-		if (pc  == (uintptr_t)dtrace_invop_callsite) {
+		if (dtrace_invop_callsite_pre != NULL
+			&& pc  >  (uintptr_t)dtrace_invop_callsite_pre
+			&& pc  <= (uintptr_t)dtrace_invop_callsite_post) {
 #if defined(__i386__)
 			/*
 			 * If we pass through the invalid op handler, we will
@@ -783,8 +789,10 @@ dtrace_getarg(int arg, int aframes)
 			if (arg <= inreg) {
 				stack = (uintptr_t *)&saved_state->rdi;
 			} else {
-				stack = (uintptr_t *)(saved_state->isf.rsp);
-				arg -= inreg;
+				fp = (struct frame *)(saved_state->isf.rsp);
+				stack = (uintptr_t *)&fp[1]; /* Find marshalled
+								arguments */
+				arg -= inreg + 1;
 			}
 #else
 #error Unknown arch
@@ -794,7 +802,11 @@ dtrace_getarg(int arg, int aframes)
 	}
 
 	/*
-	 * Arrive here when provider has called dtrace_probe directly.
+	 * We know that we did not come through a trap to get into
+	 * dtrace_probe() --  We arrive here when the provider has
+	 * called dtrace_probe() directly.
+	 * The probe ID is the first argument to dtrace_probe().
+	 * We must advance beyond that to get the argX.
 	 */
 	arg++; /* Advance past probeID */
 
@@ -815,7 +827,8 @@ dtrace_getarg(int arg, int aframes)
 
 load:
 	DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
-	val = *(((uint64_t *)stack) + arg); /* dtrace_probe arguments arg0 .. arg4 are 64bits wide */
+	/* dtrace_probe arguments arg0 ... arg4 are 64bits wide */
+	val = (uint64_t)(*(((uintptr_t *)stack) + arg));
 	DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
 
 	return (val);

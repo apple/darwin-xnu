@@ -200,7 +200,7 @@ rip_input(m, iphlen)
 	register struct inpcb *inp;
 	struct inpcb *last = 0;
 	struct mbuf *opts = 0;
-	int skipit;
+	int skipit = 0, ret = 0;
 
 	ripsrc.sin_addr = ip->ip_src;
 	lck_rw_lock_shared(ripcbinfo.mtx);
@@ -220,9 +220,9 @@ rip_input(m, iphlen)
 		if (last) {
 			struct mbuf *n = m_copy(m, 0, (int)M_COPYALL);
 		
+			skipit = 0;
 #if IPSEC
 			/* check AH/ESP integrity. */
-			skipit = 0;
 			if (ipsec_bypass == 0 && n) {
 				if (ipsec4_in_reject_so(n, last->inp_socket)) {
 					m_freem(n);
@@ -235,27 +235,36 @@ rip_input(m, iphlen)
 #if CONFIG_MACF_NET
 			if (n && skipit == 0) {
 				if (mac_inpcb_check_deliver(last, n, AF_INET,
-				    SOCK_RAW) != 0)
+				    SOCK_RAW) != 0) {
+					m_freem(n);
 					skipit = 1;
+				}
 			}
 #endif
 			if (n && skipit == 0) {
 				int error = 0;
-				if (last->inp_flags & INP_CONTROLOPTS ||
-				    last->inp_socket->so_options & SO_TIMESTAMP)
-				    ip_savecontrol(last, &opts, ip, n);
+				if ((last->inp_flags & INP_CONTROLOPTS) != 0 ||
+				    (last->inp_socket->so_options & SO_TIMESTAMP) != 0 ||
+				    (last->inp_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+					ret = ip_savecontrol(last, &opts, ip, n);
+					if (ret != 0) {
+						m_freem(n);
+						m_freem(opts);
+						last = inp;
+						continue;
+					}
+				}
 				if (last->inp_flags & INP_STRIPHDR) {
 					n->m_len -= iphlen;
 					n->m_pkthdr.len -= iphlen;
 					n->m_data += iphlen;
 				}
-// ###LOCK need to lock that socket?
+				so_recv_data_stat(last->inp_socket, m, 0);
 				if (sbappendaddr(&last->inp_socket->so_rcv,
 				    (struct sockaddr *)&ripsrc, n,
 				    opts, &error) != 0) {
 					sorwakeup(last->inp_socket);
-				}
-				else {
+				} else {
 					if (error) {
 						/* should notify about lost packet */
 						kprintf("rip_input can't append to socket\n");
@@ -266,10 +275,10 @@ rip_input(m, iphlen)
 		}
 		last = inp;
 	}
-	lck_rw_done(ripcbinfo.mtx);
+
+	skipit = 0;
 #if IPSEC
 	/* check AH/ESP integrity. */
-	skipit = 0;
 	if (ipsec_bypass == 0 && last) {
 		if (ipsec4_in_reject_so(m, last->inp_socket)) {
 			m_freem(m);
@@ -282,20 +291,30 @@ rip_input(m, iphlen)
 #endif /*IPSEC*/
 #if CONFIG_MACF_NET
 	if (last && skipit == 0) {
-		if (mac_inpcb_check_deliver(last, m, AF_INET, SOCK_RAW) != 0)
+		if (mac_inpcb_check_deliver(last, m, AF_INET, SOCK_RAW) != 0) {
 			skipit = 1;
+			m_freem(m);
+		}
 	}
 #endif
 	if (skipit == 0) {
 		if (last) {
-			if (last->inp_flags & INP_CONTROLOPTS ||
-				last->inp_socket->so_options & SO_TIMESTAMP)
-				ip_savecontrol(last, &opts, ip, m);
+			if ((last->inp_flags & INP_CONTROLOPTS) != 0 ||
+				(last->inp_socket->so_options & SO_TIMESTAMP) != 0 ||
+				(last->inp_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0) {
+				ret = ip_savecontrol(last, &opts, ip, m);
+				if (ret != 0) {
+					m_freem(m);
+					m_freem(opts);
+					goto unlock;		
+				}
+			}
 			if (last->inp_flags & INP_STRIPHDR) {
 				m->m_len -= iphlen;
 				m->m_pkthdr.len -= iphlen;
 				m->m_data += iphlen;
 			}
+			so_recv_data_stat(last->inp_socket, m, 0);
 			if (sbappendaddr(&last->inp_socket->so_rcv,
 				(struct sockaddr *)&ripsrc, m, opts, NULL) != 0) {
 				sorwakeup(last->inp_socket);
@@ -308,6 +327,12 @@ rip_input(m, iphlen)
 			OSAddAtomic(-1, &ipstat.ips_delivered);
 		}
 	}
+unlock:
+	/*
+	 * Keep the list locked because socket filter may force the socket lock 
+	 * to be released when calling sbappendaddr() -- see rdar://7627704
+	 */
+	lck_rw_done(ripcbinfo.mtx);
 }
 
 /*
@@ -325,21 +350,19 @@ rip_output(
 	register struct inpcb *inp = sotoinpcb(so);
 	int flags = (so->so_options & SO_DONTROUTE) | IP_ALLOWBROADCAST;
 	struct ip_out_args ipoa;
+	struct ip_moptions *imo;
 	int error = 0;
-#if PKT_PRIORITY
-	mbuf_traffic_class_t mtc = MBUF_TC_NONE;
-#endif /* PKT_PRIORITY */
+	mbuf_traffic_class_t mtc = MBUF_TC_UNSPEC;
 
 	if (control != NULL) {
-#if PKT_PRIORITY
 		mtc = mbuf_traffic_class_from_control(control);
-#endif /* PKT_PRIORITY */
 
 		m_freem(control);
 	}
 	/* If socket was bound to an ifindex, tell ip_output about it */
-	ipoa.ipoa_ifscope = (inp->inp_flags & INP_BOUND_IF) ?
+	ipoa.ipoa_boundif = (inp->inp_flags & INP_BOUND_IF) ?
 	    inp->inp_boundif : IFSCOPE_NONE;
+	ipoa.ipoa_nocell = (inp->inp_flags & INP_NO_IFT_CELLULAR) ? 1 : 0;
 	flags |= IP_OUTARGS;
 
 	/*
@@ -401,35 +424,52 @@ rip_output(
 		inp->inp_route.ro_rt = NULL;
 	}
 
-#if PKT_PRIORITY
-	set_traffic_class(m, so, mtc);
-#endif /* PKT_PRIORITY */
+	set_packet_tclass(m, so, mtc, 0);
 
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_inpcb(inp, m);
 #endif
 
+	imo = inp->inp_moptions;
+	if (imo != NULL)
+		IMO_ADDREF(imo);
 	/*
 	 * The domain lock is held across ip_output, so it is okay
 	 * to pass the PCB cached route pointer directly to IP and
 	 * the modules beneath it.
 	 */
 	error = ip_output(m, inp->inp_options, &inp->inp_route, flags,
-	    inp->inp_moptions, &ipoa);
+	    imo, &ipoa);
 
-#if IFNET_ROUTE_REFCNT
-	/*
-	 * Always discard the cached route for unconnected socket
-	 * or if it is a non-unicast route.
-	 */
-	if (inp->inp_route.ro_rt != NULL &&
-	    ((inp->inp_route.ro_rt->rt_flags & (RTF_MULTICAST|RTF_BROADCAST)) ||
-	    inp->inp_socket == NULL ||
-	    inp->inp_socket->so_state != SS_ISCONNECTED)) {
-		rtfree(inp->inp_route.ro_rt);
-		inp->inp_route.ro_rt = NULL;
+	if (imo != NULL)
+		IMO_REMREF(imo);
+
+	if (inp->inp_route.ro_rt != NULL) {
+		struct rtentry *rt = inp->inp_route.ro_rt;
+		unsigned int outif;
+
+		if ((rt->rt_flags & (RTF_MULTICAST|RTF_BROADCAST)) ||
+		    inp->inp_socket == NULL ||
+		    !(inp->inp_socket->so_state & SS_ISCONNECTED)) {
+			rt = NULL;	/* unusable */
+		}
+		/*
+		 * Always discard the cached route for unconnected
+		 * socket or if it is a multicast route.
+		 */
+		if (rt == NULL) {
+			rtfree(inp->inp_route.ro_rt);
+			inp->inp_route.ro_rt = NULL;
+		}
+		/*
+		 * If this is a connected socket and the destination
+		 * route is unicast, update outif with that of the route
+		 * interface index used by IP.
+		 */
+		if (rt != NULL &&
+		    (outif = rt->rt_ifp->if_index) != inp->inp_last_outif)
+			inp->inp_last_outif = outif;
 	}
-#endif /* IFNET_ROUTE_REFCNT */
 
 	return (error);
 }
@@ -642,10 +682,12 @@ rip_ctlinput(
 		lck_rw_lock_shared(in_ifaddr_rwlock);
 		for (ia = in_ifaddrhead.tqh_first; ia;
 		     ia = ia->ia_link.tqe_next) {
-			if (ia->ia_ifa.ifa_addr == sa
-			    && (ia->ia_flags & IFA_ROUTE)) {
+			IFA_LOCK(&ia->ia_ifa);
+			if (ia->ia_ifa.ifa_addr == sa &&
+			    (ia->ia_flags & IFA_ROUTE)) {
 				done = 1;
-				ifaref(&ia->ia_ifa);
+				IFA_ADDREF_LOCKED(&ia->ia_ifa);
+				IFA_UNLOCK(&ia->ia_ifa);
 				lck_rw_done(in_ifaddr_rwlock);
 				lck_mtx_lock(rnh_lock);
 				/*
@@ -660,9 +702,10 @@ rip_ctlinput(
 				 */
 				in_ifadown(&ia->ia_ifa, 1);
 				lck_mtx_unlock(rnh_lock);
-				ifafree(&ia->ia_ifa);
+				IFA_REMREF(&ia->ia_ifa);
 				break;
 			}
+			IFA_UNLOCK(&ia->ia_ifa);
 		}
 		if (!done)
 			lck_rw_done(in_ifaddr_rwlock);
@@ -672,14 +715,22 @@ rip_ctlinput(
 		lck_rw_lock_shared(in_ifaddr_rwlock);
 		for (ia = in_ifaddrhead.tqh_first; ia;
 		     ia = ia->ia_link.tqe_next) {
-			if (ia->ia_ifa.ifa_addr == sa)
+			IFA_LOCK(&ia->ia_ifa);
+			if (ia->ia_ifa.ifa_addr == sa) {
+				/* keep it locked */
 				break;
+			}
+			IFA_UNLOCK(&ia->ia_ifa);
 		}
-		if (ia == 0 || (ia->ia_flags & IFA_ROUTE)) {
+		if (ia == NULL || (ia->ia_flags & IFA_ROUTE) ||
+		    (ia->ia_ifa.ifa_debug & IFD_NOTREADY)) {
+			if (ia != NULL)
+				IFA_UNLOCK(&ia->ia_ifa);
 			lck_rw_done(in_ifaddr_rwlock);
 			return;
 		}
-		ifaref(&ia->ia_ifa);
+		IFA_ADDREF_LOCKED(&ia->ia_ifa);
+		IFA_UNLOCK(&ia->ia_ifa);
 		lck_rw_done(in_ifaddr_rwlock);
 
 		flags = RTF_UP;
@@ -690,9 +741,12 @@ rip_ctlinput(
 			flags |= RTF_HOST;
 
 		err = rtinit(&ia->ia_ifa, RTM_ADD, flags);
-		if (err == 0)
+		if (err == 0) {
+			IFA_LOCK_SPIN(&ia->ia_ifa);
 			ia->ia_flags |= IFA_ROUTE;
-		ifafree(&ia->ia_ifa);
+			IFA_UNLOCK(&ia->ia_ifa);
+		}
+		IFA_REMREF(&ia->ia_ifa);
 		break;
 	}
 }
@@ -700,9 +754,9 @@ rip_ctlinput(
 u_int32_t	rip_sendspace = RIPSNDQ;
 u_int32_t	rip_recvspace = RIPRCVQ;
 
-SYSCTL_INT(_net_inet_raw, OID_AUTO, maxdgram, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_raw, OID_AUTO, maxdgram, CTLFLAG_RW | CTLFLAG_LOCKED,
     &rip_sendspace, 0, "Maximum outgoing raw IP datagram size");
-SYSCTL_INT(_net_inet_raw, OID_AUTO, recvspace, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_raw, OID_AUTO, recvspace, CTLFLAG_RW | CTLFLAG_LOCKED,
     &rip_recvspace, 0, "Maximum incoming raw IP datagram size");
 
 static int
@@ -770,6 +824,7 @@ rip_bind(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 	struct inpcb *inp = sotoinpcb(so);
 	struct sockaddr_in *addr = (struct sockaddr_in *)nam;
 	struct ifaddr *ifa = NULL;
+	unsigned int outif = 0;
 
 	if (nam->sa_len != sizeof(*addr))
 		return EINVAL;
@@ -781,10 +836,13 @@ rip_bind(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 		return EADDRNOTAVAIL;
 	}
 	else if (ifa) {
-		ifafree(ifa);
-		ifa = NULL;
+		IFA_LOCK(ifa);
+		outif = ifa->ifa_ifp->if_index;
+		IFA_UNLOCK(ifa);
+		IFA_REMREF(ifa);
 	}
 	inp->inp_laddr = addr->sin_addr;
+	inp->inp_last_outif = outif;
 	return 0;
 }
 
@@ -815,7 +873,7 @@ rip_shutdown(struct socket *so)
 
 __private_extern__ int
 rip_send(struct socket *so, __unused int flags, struct mbuf *m, struct sockaddr *nam,
-	 __unused struct mbuf *control, __unused struct proc *p)
+	struct mbuf *control, __unused struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
 	register u_int32_t dst;
@@ -979,7 +1037,7 @@ rip_pcblist SYSCTL_HANDLER_ARGS
 	return error;
 }
 
-SYSCTL_PROC(_net_inet_raw, OID_AUTO/*XXX*/, pcblist, CTLFLAG_RD, 0, 0,
+SYSCTL_PROC(_net_inet_raw, OID_AUTO/*XXX*/, pcblist, CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
 	    rip_pcblist, "S,xinpcb", "List of active raw IP sockets");
 
 #if !CONFIG_EMBEDDED
@@ -1082,10 +1140,25 @@ rip_pcblist64 SYSCTL_HANDLER_ARGS
         return error;
 }
 
-SYSCTL_PROC(_net_inet_raw, OID_AUTO, pcblist64, CTLFLAG_RD, 0, 0,
+SYSCTL_PROC(_net_inet_raw, OID_AUTO, pcblist64, CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
             rip_pcblist64, "S,xinpcb64", "List of active raw IP sockets");
 
 #endif /* !CONFIG_EMBEDDED */
+
+
+static int
+rip_pcblist_n SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error = 0;
+	
+	error = get_pcblist_n(IPPROTO_IP, req, &ripcbinfo);
+	
+	return error;
+}
+
+SYSCTL_PROC(_net_inet_raw, OID_AUTO, pcblist_n, CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0,
+            rip_pcblist_n, "S,xinpcb_n", "List of active raw IP sockets");
 
 struct pr_usrreqs rip_usrreqs = {
 	rip_abort, pru_accept_notsupp, rip_attach, rip_bind, rip_connect,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -79,11 +79,14 @@
 #endif
 #include <sys/vm.h>		/* XXX */
 #include <sys/sysctl.h>
- 
+
+
 #ifdef KERNEL
+#ifdef BSD_KERNEL_PRIVATE
+#include <sys/pthread_internal.h> /* for uu_kwe entry */
+#endif  /* BSD_KERNEL_PRIVATE */
 #ifdef __APPLE_API_PRIVATE
 #include <sys/eventvar.h>
-
 
 #if !defined(__LP64__) || defined(XNU_KERNEL_PRIVATE)
 /*
@@ -124,7 +127,7 @@ struct uthread {
 			int poll;
 			int error;
 			int count;
-			int kfcount;
+			int _reserved1;	// UNUSED: avoid changing size for now
 			char * wql;
 	} uu_select;			/* saved state for select() */
 	/* to support kevent continuations */
@@ -156,7 +159,9 @@ struct uthread {
 	caddr_t uu_wchan;			/* sleeping thread wait channel */
 	const char *uu_wmesg;			/* ... wait message */
 	int uu_flag;
+#if CONFIG_EMBEDDED
 	int uu_iopol_disk;			/* disk I/O policy */
+#endif /* CONFIG_EMBEDDED */
 	struct proc * uu_proc;
 	void * uu_userstate;
 	wait_queue_set_t uu_wqset;			/* cached across select calls */
@@ -172,12 +177,12 @@ struct uthread {
 
 	struct kaudit_record 	*uu_ar;			/* audit record */
 	struct task*	uu_aio_task;			/* target task for async io */
-     
-  /* network support for dlil layer locking */
-	u_int32_t	dlil_incremented_read;
+
 	lck_mtx_t	*uu_mtx;
 
 	int		uu_lowpri_window;
+	boolean_t	uu_throttle_isssd;
+	boolean_t	uu_throttle_bc;
 	void	*	uu_throttle_info; 	/* pointer to throttled I/Os info */
 
 	struct kern_sigaltstack uu_sigstk;
@@ -191,12 +196,14 @@ struct uthread {
         int		uu_iocount;
         int		uu_vpindex;
         void 	*	uu_vps[32];
+        void    *       uu_pcs[32][10];
 #endif
 #if CONFIG_DTRACE
 	siginfo_t	t_dtrace_siginfo;
 	uint32_t	t_dtrace_errno; /* Most recent errno */
-        uint8_t         t_dtrace_stop;  /* indicates a DTrace-desired stop */
+        uint8_t         t_dtrace_stop;  /* indicates a DTrace desired stop */
         uint8_t         t_dtrace_sig;   /* signal sent via DTrace's raise() */
+        uint64_t	t_dtrace_resumepid; /* DTrace's pidresume() pid */
 
         union __tdu {
                 struct __tds {
@@ -232,10 +239,7 @@ struct uthread {
 #endif /* CONFIG_DTRACE */
 	void *		uu_threadlist;
 	char *		pth_name;
-	TAILQ_ENTRY(uthread) uu_mtxlist;	/* psynch waiters list*/
-	uint32_t	uu_lockseq;		/* seq on arrival */
-	uint32_t	uu_psynchretval;	/* pmtx retval */
-	void *		uu_kwqqueue;		/* queue blocked on */
+	struct ksyn_waitq_element  uu_kwe;		/* user for pthread synch */
 };
 
 typedef struct uthread * uthread_t;
@@ -252,7 +256,9 @@ typedef struct uthread * uthread_t;
 #define UT_PASSIVE_IO	0x00000100	/* this thread issues passive I/O */
 #define UT_PROCEXIT	0x00000200	/* this thread completed the  proc exit */
 #define UT_RAGE_VNODES	0x00000400	/* rapid age any vnodes created by this thread */	
+#if CONFIG_EMBEDDED
 #define UT_BACKGROUND	0x00000800	/* this thread is in background state */	
+#endif /* !CONFIG_EMBEDDED */
 #define UT_BACKGROUND_TRAFFIC_MGT	0x00001000 /* background traffic is regulated */
 
 #define	UT_VFORK	0x02000000	/* thread has vfork children */

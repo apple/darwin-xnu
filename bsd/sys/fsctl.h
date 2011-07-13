@@ -70,45 +70,92 @@
 #define	_SYS_FSCTL_H_
 
 #include <sys/ioccom.h>
+#include <sys/mount.h>
 
-#define FSIOC_SYNC_VOLUME	_IOW('A', 1, uint32_t)
-#define	FSCTL_SYNC_VOLUME	IOCBASECMD(FSIOC_SYNC_VOLUME)
+#ifdef XNU_KERNEL_PRIVATE
 
-#define	FSCTL_SYNC_FULLSYNC	(1<<0)	/* Flush the data fully to disk, if supported by the filesystem */
-#define	FSCTL_SYNC_WAIT		(1<<1)	/* Wait for the sync to complete */
+typedef struct user64_namespace_handler_info {
+	user64_addr_t  token;
+	user64_addr_t  flags;
+	user64_addr_t  fdptr;
+} user64_namespace_handler_info;
+
+typedef struct user32_namespace_handler_info {
+	user32_addr_t  token;
+	user32_addr_t  flags;
+	user32_addr_t  fdptr;
+} user32_namespace_handler_info;
+
+typedef struct namespace_handler_info {
+	user_addr_t  token;
+	user_addr_t  flags;
+	user_addr_t  fdptr;
+} namespace_handler_info;
+
+typedef struct user64_namespace_handler_info_ext {
+	user64_addr_t  token;
+	user64_addr_t  flags;
+	user64_addr_t  fdptr;
+	user64_addr_t  infoptr;
+} user64_namespace_handler_info_ext;
+
+typedef struct user32_namespace_handler_info_ext {
+	user32_addr_t  token;
+	user32_addr_t  flags;
+	user32_addr_t  fdptr;
+	user32_addr_t  infoptr;
+} user32_namespace_handler_info_ext;
+
+typedef struct namespace_handler_info_ext {
+	user_addr_t  token;
+	user_addr_t  flags;
+	user_addr_t  fdptr;
+	user_addr_t  infoptr;
+} namespace_handler_info_ext;
+
+extern int resolve_nspace_item(struct vnode *vp, uint64_t op);
+extern int resolve_nspace_item_ext(struct vnode *vp, uint64_t op, void *arg);
+extern int get_nspace_item_status(struct vnode *vp, int32_t *status);
+
+#else
+
+typedef struct namespace_handler_info {
+	int32_t    *token;
+	int64_t    *flags;
+	int32_t    *fdptr;
+} namespace_handler_info;
+
+typedef struct namespace_handler_info_ext {
+	int32_t    *token;
+	int64_t    *flags;
+	int32_t    *fdptr;
+	int64_t    *infoptr;     // for snapshot write events, the kernel puts an offset/length pair here
+} namespace_handler_info_ext;
 
 
-typedef struct package_ext_info {
-    const char *strings;
-    uint32_t    num_entries;
-    uint32_t    max_width;
-} package_ext_info;
+#endif /* XNU_KERNEL_PRIVATE */
 
-#define FSIOC_SET_PACKAGE_EXTS	_IOW('A', 2, struct package_ext_info)
-#define	FSCTL_SET_PACKAGE_EXTS	IOCBASECMD(FSIOC_SET_PACKAGE_EXTS)
+#define NAMESPACE_HANDLER_READ_OP             0x0001
+#define NAMESPACE_HANDLER_WRITE_OP            0x0002
+#define NAMESPACE_HANDLER_DELETE_OP           0x0004
+#define NAMESPACE_HANDLER_TRUNCATE_OP         0x0008
+#define NAMESPACE_HANDLER_RENAME_OP           0x0010
+#define NAMESPACE_HANDLER_METADATA_WRITE_OP   0x0020
+#define NAMESPACE_HANDLER_METADATA_DELETE_OP  0x0040
+#define NAMESPACE_HANDLER_METADATA_MOD        0x0080
+#define NAMESPACE_HANDLER_LINK_CREATE         0x0200
 
-#define FSIOC_WAIT_FOR_SYNC	_IOR('A', 3, int32_t)
-#define	FSCTL_WAIT_FOR_SYNC	IOCBASECMD(FSIOC_WAIT_FOR_SYNC)
+#define NAMESPACE_HANDLER_NSPACE_EVENT        0x1000
+#define NAMESPACE_HANDLER_SNAPSHOT_EVENT      0x0100
+#define NAMESPACE_HANDLER_TRACK_EVENT         0x2000
+
+#define NAMESPACE_HANDLER_EVENT_TYPE_MASK (NAMESPACE_HANDLER_NSPACE_EVENT | NAMESPACE_HANDLER_SNAPSHOT_EVENT | NAMESPACE_HANDLER_TRACK_EVENT)
+
+#define DATALESS_CMPFS_TYPE     0x80000001
 
 
-//
-// Spotlight and fseventsd use these fsctl()'s to find out 
-// the mount time of a volume and the last time it was 
-// unmounted.  Both HFS and ZFS support these calls.
-//
-// User space code should pass the "_IOC_" macros while the 
-// kernel should test for the "_FSCTL_" variant of the macro 
-// in its vnop_ioctl function.
-//
-// NOTE: the values for these defines should _not_ be changed
-//       or else it will break binary compatibility with mds
-//       and fseventsd.
-//
-#define SPOTLIGHT_IOC_GET_MOUNT_TIME _IOR('h', 18, u_int32_t)
-#define SPOTLIGHT_FSCTL_GET_MOUNT_TIME IOCBASECMD(SPOTLIGHT_IOC_GET_MOUNT_TIME)
-#define SPOTLIGHT_IOC_GET_LAST_MTIME _IOR('h', 19, u_int32_t)
-#define SPOTLIGHT_FSCTL_GET_LAST_MTIME IOCBASECMD(SPOTLIGHT_IOC_GET_LAST_MTIME)
-
+typedef int32_t nspace_handler_info[2];
+typedef char fstypename_t[MFSTYPENAMELEN];
 
 #ifdef KERNEL
 
@@ -125,6 +172,77 @@ typedef struct user32_package_ext_info {
 } user32_package_ext_info;
 
 #endif  // KERNEL
+
+typedef struct package_ext_info {
+    const char *strings;
+    uint32_t    num_entries;
+    uint32_t    max_width;
+} package_ext_info;
+
+#define	FSCTL_SYNC_FULLSYNC	(1<<0)	/* Flush the data fully to disk, if supported by the filesystem */
+#define	FSCTL_SYNC_WAIT		(1<<1)	/* Wait for the sync to complete */
+
+
+#define FSIOC_SYNC_VOLUME			  _IOW('A', 1, uint32_t)
+#define	FSCTL_SYNC_VOLUME			  IOCBASECMD(FSIOC_SYNC_VOLUME)
+
+#define FSIOC_SET_PACKAGE_EXTS			  _IOW('A', 2, struct package_ext_info)
+#define	FSCTL_SET_PACKAGE_EXTS			  IOCBASECMD(FSIOC_SET_PACKAGE_EXTS)
+
+#define FSIOC_WAIT_FOR_SYNC			  _IOR('A', 3, int32_t)
+#define	FSCTL_WAIT_FOR_SYNC			  IOCBASECMD(FSIOC_WAIT_FOR_SYNC)
+
+#define FSIOC_NAMESPACE_HANDLER_GET		  _IOW('A', 4, struct namespace_handler_info)
+#define	FSCTL_NAMESPACE_HANDLER_GET		  IOCBASECMD(FSIOC_NAMESPACE_HANDLER_GET)
+
+#define FSIOC_NAMESPACE_HANDLER_UPDATE		  _IOW('A', 5, nspace_handler_info)
+#define	FSCTL_NAMESPACE_HANDLER_UPDATE		  IOCBASECMD(FSIOC_NAMESPACE_HANDLER_UPDATE)
+
+#define FSIOC_NAMESPACE_HANDLER_UNBLOCK		  _IOW('A', 6, nspace_handler_info)
+#define	FSCTL_NAMESPACE_HANDLER_UNBLOCK		  IOCBASECMD(FSIOC_NAMESPACE_HANDLER_UNBLOCK)
+
+#define FSIOC_NAMESPACE_HANDLER_CANCEL		  _IOW('A', 7, nspace_handler_info)
+#define	FSCTL_NAMESPACE_HANDLER_CANCEL		  IOCBASECMD(FSIOC_NAMESPACE_HANDLER_CANCEL)
+
+#define FSIOC_NAMESPACE_HANDLER_SET_SNAPSHOT_TIME _IOW('A', 8, int32_t)
+#define	FSCTL_NAMESPACE_HANDLER_SET_SNAPSHOT_TIME IOCBASECMD(FSIOC_NAMESPACE_HANDLER_SET_SNAPSHOT_TIME)
+
+#define FSIOC_OLD_SNAPSHOT_HANDLER_GET		  _IOW('A', 9, struct namespace_handler_info)
+#define FSCTL_OLD_SNAPSHOT_HANDLER_GET		  IOCBASECMD(FSIOC_OLD_SNAPSHOT_HANDLER_GET)
+
+#define FSIOC_SET_FSTYPENAME_OVERRIDE		  _IOW('A', 10, fstypename_t)
+#define	FSCTL_SET_FSTYPENAME_OVERRIDE	          IOCBASECMD(FSIOC_SET_FSTYPENAME_OVERRIDE)
+
+#define FSIOC_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS _IOW('A', 11, int32_t)
+#define	FSCTL_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS IOCBASECMD(FSIOC_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS)
+
+#define FSIOC_TRACKED_HANDLER_GET		  _IOW('A', 12, struct namespace_handler_info)
+#define FSCTL_TRACKED_HANDLER_GET		  IOCBASECMD(FSIOC_TRACKED_HANDLER_GET)
+
+#define FSIOC_SNAPSHOT_HANDLER_GET_EXT		  _IOW('A', 13, struct namespace_handler_info_ext)
+#define FSCTL_SNAPSHOT_HANDLER_GET_EXT		  IOCBASECMD(FSIOC_SNAPSHOT_HANDLER_GET_EXT)
+
+//
+// IO commands 14, 15, 16, and 17 are currently unused
+//
+
+//
+// Spotlight and fseventsd use these fsctl()'s to find out 
+// the mount time of a volume and the last time it was 
+// unmounted.  Both HFS and ZFS support these calls.
+//
+// User space code should pass the "_IOC_" macros while the 
+// kernel should test for the "_FSCTL_" variant of the macro 
+// in its vnop_ioctl function.
+//
+// NOTE: the values for these defines should _not_ be changed
+//       or else it will break binary compatibility with mds
+//       and fseventsd.
+//
+#define SPOTLIGHT_IOC_GET_MOUNT_TIME		  _IOR('h', 18, u_int32_t)
+#define SPOTLIGHT_FSCTL_GET_MOUNT_TIME		  IOCBASECMD(SPOTLIGHT_IOC_GET_MOUNT_TIME)
+#define SPOTLIGHT_IOC_GET_LAST_MTIME		  _IOR('h', 19, u_int32_t)
+#define SPOTLIGHT_FSCTL_GET_LAST_MTIME		  IOCBASECMD(SPOTLIGHT_IOC_GET_LAST_MTIME)
 
 
 #ifndef KERNEL

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -101,9 +101,15 @@
  * clusters (MAPPED_MBUFS), MCLBYTES must also be an integral multiple
  * of the hardware page size.
  */
-#define	MSIZE		256		/* size of an mbuf */
-#define	MCLBYTES	2048		/* large enough for ether MTU */
-#define	MCLSHIFT	11
+#define	MSIZESHIFT	8			/* 256 */
+#define	MSIZE		(1 << MSIZESHIFT)	/* size of an mbuf */
+#define	MCLSHIFT	11			/* 2048 */
+#define	MCLBYTES	(1 << MCLSHIFT)		/* size of an mbuf cluster */
+#define	MBIGCLSHIFT	12			/* 4096 */
+#define	MBIGCLBYTES	(1 << MBIGCLSHIFT)	/* size of a big cluster */
+#define	M16KCLSHIFT	14			/* 16384 */
+#define	M16KCLBYTES	(1 << M16KCLSHIFT)	/* size of a jumbo cluster */
+
 #define	MCLOFSET	(MCLBYTES - 1)
 #ifndef NMBCLUSTERS
 #ifdef GATEWAY

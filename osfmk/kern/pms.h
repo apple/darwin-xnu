@@ -145,9 +145,6 @@ typedef struct {
 } pmsctl_t;
 
 extern pmsCtl pmsCtls;				/* Power Management Stepper control */
-#ifdef __ppc__
-extern uint32_t pmsCtlp;
-#endif
 extern uint32_t pmsBroadcastWait;	/* Number of outstanding broadcasts */
 extern int pmsInstalled;
 extern int pmsExperimental;
@@ -157,12 +154,6 @@ extern pmsSetFunc_t pmsFuncTab[pmsSetFuncMax];
 extern pmsQueryFunc_t pmsQueryFunc;
 extern uint32_t pmsPlatformData;
 
-#ifdef __ppc__
-# ifdef XNU_KERNEL_PRIVATE
-# include <ppc/savearea.h>
-# endif /* XNU_KERNEL_PRIVATE */
-extern int pmsCntrl(struct savearea *save);
-#endif /* __ppc__ */
 extern kern_return_t pmsControl(uint32_t request, user_addr_t reqaddr, uint32_t reqsize);
 extern void pmsInit(void);
 extern void pmsStep(int timer);
@@ -188,10 +179,8 @@ extern kern_return_t pmsBuild(pmsDef *pd, uint32_t pdsize, pmsSetFunc_t *functab
 extern void pmsRun(uint32_t nstep);
 extern void pmsPark(void);
 extern void pmsStart(void);
-# ifndef __ppc__
 extern kern_return_t pmsCPULoadVIDTable(uint16_t *tablep, int nstates);	/* i386 only */
 extern kern_return_t pmsCPUSetPStateLimit(uint32_t limit);
-# endif
 #ifdef __cplusplus
 }
 #endif

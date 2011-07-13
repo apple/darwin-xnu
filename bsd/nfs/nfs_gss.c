@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -147,8 +147,8 @@ int nfs_single_des;
  * These octet strings are used to encode/decode ASN.1 tokens
  * in the RPCSEC_GSS verifiers.
  */
-static u_char krb5_tokhead[] = { 0x60, 0x23 };
-static u_char krb5_mech[] = { 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02 };
+static u_char krb5_tokhead[] __attribute__((unused)) = { 0x60, 0x23 };
+       u_char krb5_mech[11] = { 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02 };
 static u_char krb5_mic[]  = { 0x01, 0x01, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff };
 static u_char krb5_mic3[]  = { 0x01, 0x01, 0x04, 0x00, 0xff, 0xff, 0xff, 0xff };
 static u_char krb5_wrap[] = { 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff };
@@ -184,11 +184,11 @@ static u_char iv0[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // DES
 static int	nfs_gss_clnt_ctx_find(struct nfsreq *);
 static int	nfs_gss_clnt_ctx_failover(struct nfsreq *);
 static int	nfs_gss_clnt_ctx_init(struct nfsreq *, struct nfs_gss_clnt_ctx *);
+static int	nfs_gss_clnt_ctx_init_retry(struct nfsreq *, struct nfs_gss_clnt_ctx *);
 static int	nfs_gss_clnt_ctx_callserver(struct nfsreq *, struct nfs_gss_clnt_ctx *);
 static char	*nfs_gss_clnt_svcname(struct nfsmount *);
 static int	nfs_gss_clnt_gssd_upcall(struct nfsreq *, struct nfs_gss_clnt_ctx *);
 static void	nfs_gss_clnt_ctx_remove(struct nfsmount *, struct nfs_gss_clnt_ctx *);
-static int	nfs_gss_clnt_ctx_delay(struct nfsreq *, int *);
 #endif /* NFSCLIENT */
 
 #if NFSSERVER
@@ -254,6 +254,25 @@ nfs_gss_init(void)
 #if NFSCLIENT
 
 /*
+ * Is it OK to fall back to using AUTH_SYS?
+ */
+static int
+nfs_gss_sysok(struct nfsreq *req)
+{
+	struct nfsmount *nmp = req->r_nmp;
+	int i;
+
+	if (req->r_wrongsec) /* Not OK if we're trying to handle a wrongsec error */
+		return (0);
+	if (!nmp->nm_sec.count) /* assume it's OK if we don't have a set of flavors */
+		return (1);
+	for (i=0; i < nmp->nm_sec.count; i++)
+		if (nmp->nm_sec.flavors[i] == RPCAUTH_SYS)
+			return (1);
+	return (0);
+}
+
+/*
  * Find the context for a particular user.
  *
  * If the context doesn't already exist
@@ -269,15 +288,14 @@ nfs_gss_clnt_ctx_find(struct nfsreq *req)
 	struct nfs_gss_clnt_ctx *cp;
 	uid_t uid = kauth_cred_getuid(req->r_cred);
 	int error = 0;
-	int retrycnt = 0;
 
 	lck_mtx_lock(&nmp->nm_lock);
 	TAILQ_FOREACH(cp, &nmp->nm_gsscl, gss_clnt_entries) {
 		if (cp->gss_clnt_uid == uid) {
 			if (cp->gss_clnt_flags & GSS_CTX_INVAL)
 				continue;
-			lck_mtx_unlock(&nmp->nm_lock);
 			nfs_gss_clnt_ctx_ref(req, cp);
+			lck_mtx_unlock(&nmp->nm_lock);
 			return (0);
 		}
 	}
@@ -292,8 +310,8 @@ nfs_gss_clnt_ctx_find(struct nfsreq *req)
 		 */
 		TAILQ_FOREACH(cp, &nmp->nm_gsscl, gss_clnt_entries) {
 			if (!(cp->gss_clnt_flags & GSS_CTX_INVAL)) {
-				lck_mtx_unlock(&nmp->nm_lock);
 				nfs_gss_clnt_ctx_ref(req, cp);
+				lck_mtx_unlock(&nmp->nm_lock);
 				return (0);
 			}
 		}
@@ -310,7 +328,7 @@ nfs_gss_clnt_ctx_find(struct nfsreq *req)
 	 * to failover to sec=sys.
 	 */
 	if (req->r_thread == NULL) {
-		if (nmp->nm_flag & NFSMNT_SECSYSOK) {
+		if (nfs_gss_sysok(req)) {
 			error = nfs_gss_clnt_ctx_failover(req);
 		} else {
 			printf("nfs_gss_clnt_ctx_find: no context for async\n");
@@ -334,29 +352,7 @@ nfs_gss_clnt_ctx_find(struct nfsreq *req)
 	TAILQ_INSERT_TAIL(&nmp->nm_gsscl, cp, gss_clnt_entries);
 	lck_mtx_unlock(&nmp->nm_lock);
 
-retry:
-	error = nfs_gss_clnt_ctx_init(req, cp);
-	if (error == ENEEDAUTH) {
-		error = nfs_gss_clnt_ctx_delay(req, &retrycnt);
-		if (!error)
-			goto retry;
-
-		/* Giving up on this context */
-		cp->gss_clnt_flags |= GSS_CTX_INVAL;
-
-		/*
-		 * Wake any threads waiting to use the context
-		 */
-		lck_mtx_lock(cp->gss_clnt_mtx);
-		cp->gss_clnt_thread = NULL;
-		if (cp->gss_clnt_flags & GSS_NEEDCTX) {
-			cp->gss_clnt_flags &= ~GSS_NEEDCTX;
-			wakeup(cp);
-		}
-		lck_mtx_unlock(cp->gss_clnt_mtx);				
-
-	}
-
+	error = nfs_gss_clnt_ctx_init_retry(req, cp); // Initialize new context
 	if (error)
 		nfs_gss_clnt_ctx_unref(req);
 
@@ -367,7 +363,7 @@ retry:
 	 * up a dummy context that allows this user to attempt
 	 * sec=sys calls.
 	 */
-	if (error && (nmp->nm_flag & NFSMNT_SECSYSOK) &&
+	if (error && nfs_gss_sysok(req) &&
 	    (error != ENXIO) && (error != ETIMEDOUT)) {
 		lck_mtx_lock(&nmp->nm_lock);
 		error = nfs_gss_clnt_ctx_failover(req);
@@ -433,7 +429,7 @@ nfs_gss_clnt_cred_put(struct nfsreq *req, struct nfsm_chain *nmc, mbuf_t args)
 	
 	slpflag = (PZERO-1);
 	if (req->r_nmp) {
-		slpflag |= ((req->r_nmp->nm_flag & NFSMNT_INT) && req->r_thread) ? PCATCH : 0;
+		slpflag |= (NMFLAG(req->r_nmp, INTR) && req->r_thread && !(req->r_flags & R_NOINTR)) ? PCATCH : 0;
 		recordmark = (req->r_nmp->nm_sotype == SOCK_STREAM);
 	}
 retry:
@@ -483,6 +479,7 @@ retry:
 	if (cp->gss_clnt_thread && cp->gss_clnt_thread != current_thread()) {
 		cp->gss_clnt_flags |= GSS_NEEDCTX;
 		msleep(cp, cp->gss_clnt_mtx, slpflag | PDROP, "ctxwait", NULL);
+		slpflag &= ~PCATCH;
 		if ((error = nfs_sigintr(req->r_nmp, req, req->r_thread, 0)))
 			return (error);
 		nfs_gss_clnt_ctx_unref(req);
@@ -504,6 +501,7 @@ retry:
 			((cp->gss_clnt_seqnum - cp->gss_clnt_seqwin) + 1) % cp->gss_clnt_seqwin)) {
 			cp->gss_clnt_flags |= GSS_NEEDSEQ;
 			msleep(cp, cp->gss_clnt_mtx, slpflag, "seqwin", NULL);
+			slpflag &= ~PCATCH;
 			if ((error = nfs_sigintr(req->r_nmp, req, req->r_thread, 0))) {
 				lck_mtx_unlock(cp->gss_clnt_mtx);
 				return (error);
@@ -995,9 +993,9 @@ nfs_gss_clnt_ctx_init(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	cp->gss_clnt_proc = RPCSEC_GSS_INIT;
 
 	cp->gss_clnt_service =
-		nmp->nm_auth == RPCAUTH_KRB5  ? RPCSEC_GSS_SVC_NONE :
-		nmp->nm_auth == RPCAUTH_KRB5I ? RPCSEC_GSS_SVC_INTEGRITY :
-		nmp->nm_auth == RPCAUTH_KRB5P ? RPCSEC_GSS_SVC_PRIVACY : 0;
+		req->r_auth == RPCAUTH_KRB5  ? RPCSEC_GSS_SVC_NONE :
+		req->r_auth == RPCAUTH_KRB5I ? RPCSEC_GSS_SVC_INTEGRITY :
+		req->r_auth == RPCAUTH_KRB5P ? RPCSEC_GSS_SVC_PRIVACY : 0;
 
 	cp->gss_clnt_gssd_flags = (nfs_single_des ? GSSD_NFS_1DES : 0);
 	/*
@@ -1055,7 +1053,9 @@ retry:
 	/*
 	 * The context is apparently established successfully
 	 */
+	lck_mtx_lock(cp->gss_clnt_mtx);
 	cp->gss_clnt_flags |= GSS_CTX_COMPLETE;
+	lck_mtx_unlock(cp->gss_clnt_mtx);
 	cp->gss_clnt_proc = RPCSEC_GSS_DATA;
 	microuptime(&now);
 	cp->gss_clnt_ctime = now.tv_sec;	// time stamp
@@ -1110,13 +1110,13 @@ nfsmout:
 	 * It will be removed when the reference count
 	 * drops to zero.
 	 */
+	lck_mtx_lock(cp->gss_clnt_mtx);
 	if (error)
 		cp->gss_clnt_flags |= GSS_CTX_INVAL;
 
 	/*
 	 * Wake any threads waiting to use the context
 	 */
-	lck_mtx_lock(cp->gss_clnt_mtx);
 	cp->gss_clnt_thread = NULL;
 	if (cp->gss_clnt_flags & GSS_NEEDCTX) {
 		cp->gss_clnt_flags &= ~GSS_NEEDCTX;
@@ -1125,6 +1125,77 @@ nfsmout:
 	lck_mtx_unlock(cp->gss_clnt_mtx);
 
 	return (error);
+}
+
+/*
+ * This function calls nfs_gss_clnt_ctx_init() to set up a new context.
+ * But if there's a failure in trying to establish the context it keeps
+ * retrying at progressively longer intervals in case the failure is
+ * due to some transient condition.  For instance, the server might be
+ * failing the context setup because directory services is not coming
+ * up in a timely fashion.
+ */
+static int
+nfs_gss_clnt_ctx_init_retry(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
+{
+	struct nfsmount *nmp = req->r_nmp;
+	struct timeval now;
+	time_t waituntil;
+	int error, slpflag;
+	int retries = 0;
+	int timeo = NFS_TRYLATERDEL;
+
+	if (nmp == NULL) {
+		error = ENXIO;
+		goto bad;
+	}
+
+	/* For an "intr" mount allow a signal to interrupt the retries */
+	slpflag = (NMFLAG(nmp, INTR) && !(req->r_flags & R_NOINTR)) ? PCATCH : 0;
+
+	while ((error = nfs_gss_clnt_ctx_init(req, cp)) == ENEEDAUTH) {
+		microuptime(&now);
+		waituntil = now.tv_sec + timeo;
+		while (now.tv_sec < waituntil) {
+			tsleep(&lbolt, PSOCK | slpflag, "nfs_gss_clnt_ctx_init_retry", 0);
+			slpflag = 0;
+			error = nfs_sigintr(req->r_nmp, req, current_thread(), 0);
+			if (error)
+				goto bad;
+			microuptime(&now);
+		}
+
+		retries++;
+		/* If it's a soft mount just give up after a while */
+		if (NMFLAG(nmp, SOFT) && (retries > nmp->nm_retry)) {
+			error = ETIMEDOUT;
+			goto bad;
+		}
+		timeo *= 2;
+		if (timeo > 60)
+			timeo = 60;
+	}
+
+	if (error == 0)
+		return 0;	// success
+bad:
+	/*
+	 * Give up on this context
+	 */
+	lck_mtx_lock(cp->gss_clnt_mtx);
+	cp->gss_clnt_flags |= GSS_CTX_INVAL;
+
+	/*
+	 * Wake any threads waiting to use the context
+	 */
+	cp->gss_clnt_thread = NULL;
+	if (cp->gss_clnt_flags & GSS_NEEDCTX) {
+		cp->gss_clnt_flags &= ~GSS_NEEDCTX;
+		wakeup(cp);
+	}
+	lck_mtx_unlock(cp->gss_clnt_mtx);				
+
+	return error;
 }
 
 /*
@@ -1260,11 +1331,11 @@ static int
 nfs_gss_clnt_gssd_upcall(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 {
 	kern_return_t kr;
-	byte_buffer okey = NULL;
+	gssd_byte_buffer okey = NULL;
 	uint32_t skeylen = 0;
 	int retry_cnt = 0;
 	vm_map_copy_t itoken = NULL;
-	byte_buffer otoken = NULL;
+	gssd_byte_buffer otoken = NULL;
 	mach_msg_type_number_t otokenlen;
 	int error = 0;
 	char uprinc[1];
@@ -1279,7 +1350,7 @@ nfs_gss_clnt_gssd_upcall(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 	 * the kernel is being compiled with -Wwrite-strings.
 	 */
 	uprinc[0] = '\0';
-	if (cp->gss_clnt_mport == NULL) {
+	if (!IPC_PORT_VALID(cp->gss_clnt_mport)) {
 		kr = task_get_gssd_port(get_threadtask(req->r_thread), &cp->gss_clnt_mport);
 		if (kr != KERN_SUCCESS) {
 			printf("nfs_gss_clnt_gssd_upcall: can't get gssd port, status %x (%d)\n", kr, kr);
@@ -1298,8 +1369,8 @@ nfs_gss_clnt_gssd_upcall(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp)
 retry:
 	kr = mach_gss_init_sec_context(
 		cp->gss_clnt_mport,
-		KRB5_MECH,
-		(byte_buffer) itoken, (mach_msg_type_number_t) cp->gss_clnt_tokenlen,
+		GSSD_KRB5_MECH,
+		(gssd_byte_buffer) itoken, (mach_msg_type_number_t) cp->gss_clnt_tokenlen,
 		cp->gss_clnt_uid,
 		uprinc,
 		cp->gss_clnt_svcname,
@@ -1512,8 +1583,8 @@ nfs_gss_clnt_ctx_remove(struct nfsmount *nmp, struct nfs_gss_clnt_ctx *cp)
 	if (nmp != NULL)
 		TAILQ_REMOVE(&nmp->nm_gsscl, cp, gss_clnt_entries);
 
-	if (cp->gss_clnt_mport)
-		task_release_special_port(cp->gss_clnt_mport);
+	task_release_special_port(cp->gss_clnt_mport);
+
 	if (cp->gss_clnt_mtx)
 		lck_mtx_destroy(cp->gss_clnt_mtx, nfs_gss_clnt_grp);
 	if (cp->gss_clnt_handle)
@@ -1541,7 +1612,6 @@ nfs_gss_clnt_ctx_renew(struct nfsreq *req)
 	int error = 0;
 	uid_t saved_uid;
 	mach_port_t saved_mport;
-	int retrycnt = 0;
 
 	if (cp == NULL)
 		return (0);
@@ -1590,13 +1660,7 @@ nfs_gss_clnt_ctx_renew(struct nfsreq *req)
 	nfs_gss_clnt_ctx_unref(req);
 	nfs_gss_clnt_ctx_ref(req, ncp);
 
-retry:
-	error = nfs_gss_clnt_ctx_init(req, ncp); // Initialize new context
-	if (error == ENEEDAUTH) {
-		error = nfs_gss_clnt_ctx_delay(req, &retrycnt);
-		if (!error)
-			goto retry;
-	}
+	error = nfs_gss_clnt_ctx_init_retry(req, ncp); // Initialize new context
 out:
 	task_release_special_port(saved_mport);
 	if (error)
@@ -1610,17 +1674,13 @@ out:
  * The contexts are also destroyed by the server.
  */
 void
-nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp, int mntflags)
+nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp)
 {
 	struct nfs_gss_clnt_ctx *cp;
-	struct ucred temp_cred;
-	kauth_cred_t cred;
 	struct nfsm_chain nmreq, nmrep;
 	int error, status;
 	struct nfsreq req;
 
-	bzero((caddr_t) &temp_cred, sizeof(temp_cred));
-	temp_cred.cr_ngroups = 1;
 	req.r_nmp = nmp;
 
 	for (;;) {
@@ -1637,9 +1697,14 @@ nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp, int mntflags)
 		 * But don't bother if it's a forced unmount
 		 * or if it's a dummy sec=sys context.
 		 */
-		if (!(mntflags & MNT_FORCE) && cp->gss_clnt_service != RPCSEC_GSS_SVC_SYS) {
-			temp_cred.cr_uid = cp->gss_clnt_uid;
-			cred = kauth_cred_create(&temp_cred);
+		if (!(nmp->nm_state & NFSSTA_FORCE) && (cp->gss_clnt_service != RPCSEC_GSS_SVC_SYS)) {
+			kauth_cred_t cred;
+			struct posix_cred temp_pcred;
+
+			bzero((caddr_t) &temp_pcred, sizeof(temp_pcred));
+			temp_pcred.cr_ngroups = 1;
+			temp_pcred.cr_uid = cp->gss_clnt_uid;
+			cred = posix_cred_create(&temp_pcred);
 			cp->gss_clnt_proc = RPCSEC_GSS_DESTROY;
 
 			error = 0;
@@ -1660,47 +1725,12 @@ nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp, int mntflags)
 		 * the reference to remove it if its
 		 * refcount is zero.
 		 */
+		lck_mtx_lock(cp->gss_clnt_mtx);
 		cp->gss_clnt_flags |= GSS_CTX_INVAL;
+		lck_mtx_unlock(cp->gss_clnt_mtx);
 		nfs_gss_clnt_ctx_unref(&req);
 	}
 }
-
-/*
- * If we get a failure in trying to establish a context we need to wait a 
- * little while to see if the server is feeling better. In our case this is
- * probably a failure in directory services not coming up in a timely fashion.
- * This routine sort of mimics receiving a jukebox error.
- */
-static int
-nfs_gss_clnt_ctx_delay(struct nfsreq *req, int *retry)
-{
-	int timeo = (1 << *retry) * NFS_TRYLATERDEL;
-	int error = 0;
-	struct nfsmount *nmp = req->r_nmp;
-	struct timeval now;
-	time_t waituntil;
-
-	if (!nmp)
-		return (ENXIO);
-	if ((nmp->nm_flag & NFSMNT_SOFT) && *retry > nmp->nm_retry)
-		return (ETIMEDOUT);
-	if (timeo > 60)
-		timeo = 60;
-
-	microuptime(&now);
-	waituntil = now.tv_sec + timeo;
-	while (now.tv_sec < waituntil) {
-		tsleep(&lbolt, PSOCK, "nfs_gss_clnt_ctx_delay", 0);
-		error = nfs_sigintr(req->r_nmp, req, current_thread(), 0);
-		if (error)
-			break;
-		microuptime(&now);
-	}
-	*retry += 1;
-
-	return (error);
-}
-
 
 #endif /* NFSCLIENT */
 
@@ -1733,7 +1763,7 @@ nfs_gss_svc_ctx_find(uint32_t handle)
 
 	lck_mtx_lock(nfs_gss_svc_ctx_mutex);
 
-	LIST_FOREACH(cp, head, gss_svc_entries)
+	LIST_FOREACH(cp, head, gss_svc_entries) {
 		if (cp->gss_svc_handle == handle) {
 			if (timenow > cp->gss_svc_incarnation + GSS_SVC_CTX_TTL) {
 				/* 
@@ -1743,14 +1773,20 @@ nfs_gss_svc_ctx_find(uint32_t handle)
 				 */
 				cp->gss_svc_handle = 0;
 				/*
-				 * Make sure though that we stay around for GSS_CTC_PEND seconds 
+				 * Make sure though that we stay around for GSS_CTX_PEND seconds 
 				 * for other threads that might be using the context.
 				 */
 				cp->gss_svc_incarnation = timenow;
+
 				cp = NULL;
+				break;
 			}
+			lck_mtx_lock(cp->gss_svc_mtx);				
+			cp->gss_svc_refcnt++;
+			lck_mtx_unlock(cp->gss_svc_mtx);				
 			break;
 		}
+	}
 
 	lck_mtx_unlock(nfs_gss_svc_ctx_mutex);
 
@@ -1765,10 +1801,26 @@ static void
 nfs_gss_svc_ctx_insert(struct nfs_gss_svc_ctx *cp)
 {
 	struct nfs_gss_svc_ctx_hashhead *head;
+	struct nfs_gss_svc_ctx *p;
 	
-	head = &nfs_gss_svc_ctx_hashtbl[SVC_CTX_HASH(cp->gss_svc_handle)];
-
 	lck_mtx_lock(nfs_gss_svc_ctx_mutex);
+
+	/*
+	 * Give the client a random handle so that if we reboot
+	 * it's unlikely the client will get a bad context match.
+	 * Make sure it's not zero or already assigned.
+	 */
+retry:
+	cp->gss_svc_handle = random();
+	if (cp->gss_svc_handle == 0)
+		goto retry;
+	head = &nfs_gss_svc_ctx_hashtbl[SVC_CTX_HASH(cp->gss_svc_handle)];
+	LIST_FOREACH(p, head, gss_svc_entries)
+		if (p->gss_svc_handle == cp->gss_svc_handle)
+			goto retry;
+
+	clock_interval_to_deadline(GSS_CTX_PEND, NSEC_PER_SEC,
+		&cp->gss_svc_incarnation);
 	LIST_INSERT_HEAD(head, cp, gss_svc_entries);
 	nfs_gss_ctx_count++;
 
@@ -1776,7 +1828,7 @@ nfs_gss_svc_ctx_insert(struct nfs_gss_svc_ctx *cp)
 		nfs_gss_timer_on = 1;
 
 		nfs_interval_timer_start(nfs_gss_svc_ctx_timer_call,
-			min(GSS_TIMER_PERIOD, max(GSS_CTX_TTL_MIN, GSS_SVC_CTX_TTL)) * MSECS_PER_SEC);
+			min(GSS_TIMER_PERIOD, max(GSS_CTX_TTL_MIN, nfsrv_gss_context_ttl)) * MSECS_PER_SEC);
 	}
 
 	lck_mtx_unlock(nfs_gss_svc_ctx_mutex);
@@ -1790,7 +1842,6 @@ nfs_gss_svc_ctx_insert(struct nfs_gss_svc_ctx *cp)
 void
 nfs_gss_svc_ctx_timer(__unused void *param1, __unused void *param2)
 {
-	struct nfs_gss_svc_ctx_hashhead *head;
 	struct nfs_gss_svc_ctx *cp, *next;
 	uint64_t timenow;
 	int contexts = 0;
@@ -1801,19 +1852,17 @@ nfs_gss_svc_ctx_timer(__unused void *param1, __unused void *param2)
 
 	/*
 	 * Scan all the hash chains
-	 * Assume nfs_gss_svc_ctx_mutex is held
 	 */
 	for (i = 0; i < SVC_CTX_HASHSZ; i++) {
 		/*
 		 * For each hash chain, look for entries
 		 * that haven't been used in a while.
 		 */
-		head = &nfs_gss_svc_ctx_hashtbl[i];
-		for (cp = LIST_FIRST(head); cp; cp = next) {
+		LIST_FOREACH_SAFE(cp, &nfs_gss_svc_ctx_hashtbl[i], gss_svc_entries, next) {
 			contexts++;
-			next = LIST_NEXT(cp, gss_svc_entries);
-			if (timenow  > cp->gss_svc_incarnation + 
-				(cp->gss_svc_handle ? GSS_SVC_CTX_TTL : 0)) {
+			if (timenow > cp->gss_svc_incarnation + 
+				(cp->gss_svc_handle ? GSS_SVC_CTX_TTL : 0)
+				&& cp->gss_svc_refcnt == 0) {
 				/*
 				 * A stale context - remove it
 				 */
@@ -1836,7 +1885,7 @@ nfs_gss_svc_ctx_timer(__unused void *param1, __unused void *param2)
 	nfs_gss_timer_on = nfs_gss_ctx_count > 0;
 	if (nfs_gss_timer_on)
 		nfs_interval_timer_start(nfs_gss_svc_ctx_timer_call,
-			min(GSS_TIMER_PERIOD, max(GSS_CTX_TTL_MIN, GSS_SVC_CTX_TTL)) * MSECS_PER_SEC);
+			min(GSS_TIMER_PERIOD, max(GSS_CTX_TTL_MIN, nfsrv_gss_context_ttl)) * MSECS_PER_SEC);
 
 	lck_mtx_unlock(nfs_gss_svc_ctx_mutex);
 }
@@ -1921,6 +1970,8 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 			error = ENOMEM;
 			goto nfsmout;
 		}
+		cp->gss_svc_mtx = lck_mtx_alloc_init(nfs_gss_svc_grp, LCK_ATTR_NULL);
+		cp->gss_svc_refcnt = 1;
 	} else {
 
 		/*
@@ -1944,7 +1995,7 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 	ki = &cp->gss_svc_kinfo;
 
 	if (proc == RPCSEC_GSS_DATA || proc == RPCSEC_GSS_DESTROY) {
-		struct ucred temp_cred;
+		struct posix_cred temp_pcred;
 
 		if (cp->gss_svc_seqwin == 0) {
 			/*
@@ -1975,6 +2026,8 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 		 */
 		nfsm_chain_get_32(error, nmc, flavor);
 		nfsm_chain_get_32(error, nmc, verflen);
+		if (error)
+			goto nfsmout;
 		if (flavor != RPCSEC_GSS || verflen != KRB5_SZ_TOKEN(ki->hash_len))
 			error = NFSERR_AUTHERR | AUTH_BADVERF;
 		nfsm_chain_get_opaque(error, nmc, verflen, tokbuf);
@@ -1997,13 +2050,13 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 		/*
 		 * Set up the user's cred
 		 */
-		bzero(&temp_cred, sizeof(temp_cred));
-		temp_cred.cr_uid = cp->gss_svc_uid;
-		bcopy(cp->gss_svc_gids, temp_cred.cr_groups,
+		bzero(&temp_pcred, sizeof(temp_pcred));
+		temp_pcred.cr_uid = cp->gss_svc_uid;
+		bcopy(cp->gss_svc_gids, temp_pcred.cr_groups,
 				sizeof(gid_t) * cp->gss_svc_ngroups);
-		temp_cred.cr_ngroups = cp->gss_svc_ngroups;
+		temp_pcred.cr_ngroups = cp->gss_svc_ngroups;
 
-		nd->nd_cr = kauth_cred_create(&temp_cred);
+		nd->nd_cr = posix_cred_create(&temp_pcred);
 		if (nd->nd_cr == NULL) {
 			error = ENOMEM;
 			goto nfsmout;
@@ -2135,12 +2188,21 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 		nfsm_chain_get_32(error, nmc, verflen);
 		if (error || flavor != RPCAUTH_NULL || verflen > 0)
 			error = NFSERR_AUTHERR | RPCSEC_GSS_CREDPROBLEM;
-		if (error)
+		if (error) {
+			if (proc == RPCSEC_GSS_INIT) {
+				lck_mtx_destroy(cp->gss_svc_mtx, nfs_gss_svc_grp);
+				FREE(cp, M_TEMP);
+				cp = NULL;
+			}
 			goto nfsmout;
+		}
 	}
 
 	nd->nd_gss_context = cp;
+	return 0;
 nfsmout:
+	if (cp)
+		nfs_gss_svc_ctx_deref(cp);
 	return (error);
 }
 
@@ -2341,7 +2403,6 @@ int
 nfs_gss_svc_ctx_init(struct nfsrv_descript *nd, struct nfsrv_sock *slp, mbuf_t *mrepp)
 {
 	struct nfs_gss_svc_ctx *cp = NULL;
-	uint32_t handle = 0;
 	int error = 0;
 	int autherr = 0;
 	struct nfsm_chain *nmreq, nmrep;
@@ -2355,22 +2416,7 @@ nfs_gss_svc_ctx_init(struct nfsrv_descript *nd, struct nfsrv_sock *slp, mbuf_t *
 
 	switch (cp->gss_svc_proc) {
 	case RPCSEC_GSS_INIT:
-		/*
-		 * Give the client a random handle so that
-		 * if we reboot it's unlikely the client
-		 * will get a bad context match.
-		 * Make sure it's not zero, or already assigned.
-		 */
-		do {
-			handle = random();
-		} while (nfs_gss_svc_ctx_find(handle) != NULL || handle == 0);
-		cp->gss_svc_handle = handle;
-		cp->gss_svc_mtx = lck_mtx_alloc_init(nfs_gss_svc_grp, LCK_ATTR_NULL);
-		clock_interval_to_deadline(GSS_CTX_PEND, NSEC_PER_SEC,
-			&cp->gss_svc_incarnation);
-
 		nfs_gss_svc_ctx_insert(cp);
-
 		/* FALLTHRU */
 
 	case RPCSEC_GSS_CONTINUE_INIT:
@@ -2502,11 +2548,11 @@ nfs_gss_svc_gssd_upcall(struct nfs_gss_svc_ctx *cp)
 	kern_return_t kr;
 	mach_port_t mp;
 	int retry_cnt = 0;
-	byte_buffer okey = NULL;
+	gssd_byte_buffer okey = NULL;
 	uint32_t skeylen = 0;
 	uint32_t ret_flags;
 	vm_map_copy_t itoken = NULL;
-	byte_buffer otoken = NULL;
+	gssd_byte_buffer otoken = NULL;
 	mach_msg_type_number_t otokenlen;
 	int error = 0;
 	char svcname[] = "nfs";
@@ -2527,7 +2573,7 @@ nfs_gss_svc_gssd_upcall(struct nfs_gss_svc_ctx *cp)
 retry:
 	kr = mach_gss_accept_sec_context(
 		mp,
-		(byte_buffer) itoken, (mach_msg_type_number_t) cp->gss_svc_tokenlen,
+		(gssd_byte_buffer) itoken, (mach_msg_type_number_t) cp->gss_svc_tokenlen,
 		svcname,
 		0,
 		&cp->gss_svc_context,
@@ -2662,6 +2708,24 @@ nfs_gss_svc_seqnum_valid(struct nfs_gss_svc_ctx *cp, uint32_t seq)
 }
 
 /*
+ * Drop a reference to a context
+ *
+ * Note that it's OK for the context to exist
+ * with a refcount of zero.  The refcount isn't
+ * checked until we're about to reap an expired one.
+ */
+void
+nfs_gss_svc_ctx_deref(struct nfs_gss_svc_ctx *cp)
+{
+	lck_mtx_lock(cp->gss_svc_mtx);				
+	if (cp->gss_svc_refcnt > 0)
+		cp->gss_svc_refcnt--;
+	else
+		printf("nfs_gss_ctx_deref: zero refcount\n");
+	lck_mtx_unlock(cp->gss_svc_mtx);				
+}
+
+/*
  * Called at NFS server shutdown - destroy all contexts
  */
 void
@@ -2713,8 +2777,8 @@ extern ipc_port_t ipc_port_copy_send(ipc_port_t);
 static void
 task_release_special_port(mach_port_t mp)
 {
-
-	ipc_port_release_send(mp);
+	if (IPC_PORT_VALID(mp))
+		ipc_port_release_send(mp);
 }
 
 static mach_port_t

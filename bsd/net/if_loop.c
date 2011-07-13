@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -79,6 +79,7 @@
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
+#include <sys/mcache.h>
 
 #include <net/if.h>
 #include <net/if_types.h>
@@ -104,11 +105,6 @@
 
 #if NETAT
 extern struct ifqueue atalkintrq;
-#endif
-
-#include "bpfilter.h"
-#if NBPFILTER > 0
-#include <net/bpfdesc.h>
 #endif
 
 #if CONFIG_MACF_NET
@@ -214,11 +210,11 @@ lo_output(
 		if (m->m_pkthdr.rcvif == NULL)
 			m->m_pkthdr.rcvif = ifp;
 
-		ifp->if_ibytes += m->m_pkthdr.len;
-		ifp->if_obytes += m->m_pkthdr.len;
+		atomic_add_64(&ifp->if_ibytes, m->m_pkthdr.len);
+		atomic_add_64(&ifp->if_obytes, m->m_pkthdr.len);
 
-		ifp->if_opackets++;
-		ifp->if_ipackets++;
+		atomic_add_64(&ifp->if_opackets, 1);
+		atomic_add_64(&ifp->if_ipackets, 1);
 
 		m->m_pkthdr.header = mtod(m, char *);
 		if (apple_hwcksum_tx != 0) {
@@ -339,7 +335,9 @@ loioctl(
 	case SIOCSIFADDR:
 		ifnet_set_flags(ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
 		ifa = (struct ifaddr *)data;
+		IFA_LOCK_SPIN(ifa);
 		ifa->ifa_rtrequest = lortrequest;
+		IFA_UNLOCK(ifa);
 		/*
 		 * Everything else is done at a higher level.
 		 */
@@ -475,7 +473,9 @@ More than one loopback interface is not supported.
 	
 	ifnet_set_mtu(lo_ifp, LOMTU);
 	ifnet_set_flags(lo_ifp, IFF_LOOPBACK | IFF_MULTICAST, IFF_LOOPBACK | IFF_MULTICAST);
-	ifnet_set_offload(lo_ifp, IFNET_CSUM_IP | IFNET_CSUM_TCP | IFNET_CSUM_UDP | IFNET_CSUM_FRAGMENT | IFNET_IP_FRAGMENT | IFNET_MULTIPAGES);
+	ifnet_set_offload(lo_ifp, IFNET_CSUM_IP | IFNET_CSUM_TCP | IFNET_CSUM_UDP |
+		IFNET_CSUM_TCPIPV6 | IFNET_CSUM_UDPIPV6 | IFNET_IPV6_FRAGMENT |
+		IFNET_CSUM_FRAGMENT | IFNET_IP_FRAGMENT | IFNET_MULTIPAGES);
 	ifnet_set_hdrlen(lo_ifp, sizeof(struct loopback_header));
 	ifnet_set_eflags(lo_ifp, IFEF_SENDLIST, IFEF_SENDLIST);
 

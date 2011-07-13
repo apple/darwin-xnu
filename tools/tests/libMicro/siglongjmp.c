@@ -56,7 +56,11 @@ benchmark(void *tsd, result_t *res)
 {
 	tsd_t			*ts = (tsd_t *)tsd;
 
+#if 1 /* Apple fix to longjmp/siglongjmp tests, see radar 7440118 */
+	volatile int i = 0;
+#else 
 	int i = 0;
+#endif /* end of Apple fix */
 
 	(void) sigsetjmp(ts->ts_env, 1);
 

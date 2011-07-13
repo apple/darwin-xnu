@@ -672,6 +672,11 @@ OSReturn OSKextReleaseKextWithLoadTag(OSKextLoadTag loadTag);
 /********************************************************************/
 #endif
 /*!
+ * @group Kext Requests to User Space
+ * Functions for making requests to kextd in user space.
+ */
+
+/*!
  * @typedef OSKextRequestTag
  *
  * @abstract
@@ -679,8 +684,14 @@ OSReturn OSKextReleaseKextWithLoadTag(OSKextLoadTag loadTag);
  */
 typedef uint32_t OSKextRequestTag;
 
+/*!
+ * @define kOSKextRequestTagInvalid
+ *
+ * @abstract
+ * A request tag value that will never be used for a kext request;
+ * indicates failure to create/queue the request.
+ */
 #define kOSKextRequestTagInvalid  ((OSKextRequestTag)-1)
-
 
 /*!
  * @typedef OSKextRequestResourceCallback
@@ -732,7 +743,10 @@ typedef void (* OSKextRequestResourceCallback)(
  *                         when it is invoked. May be <code>NULL</code>.
  * @param  requestTagOut   If non-<code>NULL</code>,
  *                         filled on success with a tag identifying the
- *                         pending request; can be used with
+ *                         pending request
+ *                         (or on failure with <code>@link kOSKextRequestTagInvalid
+ *                         kOSKextRequestTagInvalid@/link</code>;
+ *                         can be used with
  *                         <code>@link OSKextCancelRequest
  *                         OSKextCancelRequest@/link</code>.
  *
@@ -748,12 +762,23 @@ typedef void (* OSKextRequestResourceCallback)(
  * Other <code>OSKextReturn...</code> errors are possible.
  *
  * @discussion
- * This function queues a request to the user-space kext daemon
+ * This function queues an asynchronous request to the user-space kext daemon
  * <code>@link //apple_ref/doc/man/8/kextd kextd(8)@/link</code>;
  * requests for resources early in system startup
  * will not be fulfilled until that daemon starts.
- * Note also that the localization context of the kext daemon
- * (namely tha tof the superuser)
+ * Requests made by a kext while that kext is loading
+ * (specifically in the kext's module start routine)
+ * will not be fulfilled until after the start routine returns and
+ * the kext is completely loaded.
+ * Kexts requesting resources should be sure to perform appropriate locking
+ * in the callback function.
+ *
+ * Kext resources are stored in the kext's on-disk bundle under the
+ * Resources subdirectory.
+ * See {@linkdoc //apple_ref/doc/uid/10000123i Bundle Programming Guide}
+ * for an overview of bundle structure.
+ * The localization context of the kext daemon
+ * (namely that of the superuser)
  * will be used in retrieving resources;
  * kext resources intended for use in the kernel
  * should generally not be localized.
@@ -828,15 +853,12 @@ OSReturn OSKextCancelRequest(
     void             ** contextOut);
 
 
-#if (__x86_64__)
-
 #if PRAGMA_MARK
 #pragma mark -
 /********************************************************************/
 #pragma mark Weak linking
 /********************************************************************/
 #endif
-
 /*!
  * @group Weak Linking
  * Support for weak references to symbols in kexts.
@@ -893,8 +915,6 @@ extern const void * gOSKextUnresolved;
  */
 #define OSKextSymbolIsResolved(weak_sym)        \
     (&(weak_sym) != gOSKextUnresolved)
-
-#endif /* (__x86_64__) */
 
 #endif /* KERNEL */
 

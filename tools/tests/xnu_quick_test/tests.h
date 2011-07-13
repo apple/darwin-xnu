@@ -16,6 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
+#include <assert.h>
 #include <stdarg.h>		/* Used to support printf() in misc.c */
 #include <mach/machine.h>	/* Used to determine host properties */
 #include <mach/vm_inherit.h>
@@ -49,11 +51,12 @@
 
 #define MY_BUFFER_SIZE (1024 * 10)
 #define ARM 	100  /* I am not sure if the value really matters? */
-#define POWERPC	238947
 #define INTEL	38947			/* 
 					 * Random values used by execve tests to 
 					 * determine architecture of machine.
 					 */
+#define	FILE_NOTME	"/tmp/notme"	/* file in /tm not owned by me */
+#define	FILE_ME		"/tmp/me"	/* file in /tmp owned by me */
 
 typedef int (*test_rtn_t)(void *);
 
@@ -112,6 +115,9 @@ int data_exec_tests( void * the_argp );
 int machvm_tests( void * the_argp );
 int getdirentries_test( void * the_argp );
 int statfs_32bit_inode_tests( void * the_argp );
+int commpage_data_tests( void * the_argp );
+int atomic_fifo_queue_test( void * the_argp );
+int sched_tests( void * the_argp );
 
 struct test_entry 
 {
@@ -125,5 +131,15 @@ typedef struct test_entry * test_entryp;
 /* Special replacement printf with date/time stamp */
 int my_printf(const char * __restrict fmt, ...);
 #define printf my_printf
+
+/* 
+   If running xnu_quick_test under testbots, disable special 
+   printf defined in the previous step. This is done in order
+   to generate log messages in a format which testbots understands
+*/ 
+
+#if RUN_UNDER_TESTBOTS
+#undef printf
+#endif
 
 #endif /* !_TESTS_H_ */

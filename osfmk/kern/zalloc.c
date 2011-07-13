@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -71,6 +71,7 @@
 #include <mach/vm_param.h>
 #include <mach/kern_return.h>
 #include <mach/mach_host_server.h>
+#include <mach/task_server.h>
 #include <mach/machine/vm_types.h>
 #include <mach_debug/zone_info.h>
 
@@ -96,13 +97,6 @@
 #include <libkern/OSDebug.h>
 #include <sys/kdebug.h>
 
-#if defined(__ppc__)
-/* for fake zone stat routines */
-#include <ppc/savearea.h>
-#include <ppc/mappings.h>
-#endif
-
-
 /* 
  * Zone Corruption Debugging
  *
@@ -114,7 +108,7 @@
  *     each other when re-using the zone element, to detect modifications.
  * (3) poison the freed memory by overwriting it with 0xdeadbeef.
  *
- * The first two checks are farily light weight and are enabled by specifying "-zc" 
+ * The first two checks are fairly light weight and are enabled by specifying "-zc" 
  * in the boot-args.  If you want more aggressive checking for use-after-free bugs
  * and you don't mind the additional overhead, then turn on poisoning by adding
  * "-zp" to the boot-args in addition to "-zc".  If you specify -zp without -zc,
@@ -125,6 +119,48 @@
 boolean_t check_freed_element = FALSE;		/* enabled by -zc in boot-args */
 boolean_t zfree_clear = FALSE;			/* enabled by -zp in boot-args */
 
+/*
+ * Fake zones for things that want to report via zprint but are not actually zones.
+ */
+struct fake_zone_info {
+	const char* name;
+	void (*init)(int);
+	void (*query)(int *,
+		     vm_size_t *, vm_size_t *, vm_size_t *, vm_size_t *,
+		      uint64_t *, int *, int *, int *);
+};
+
+static struct fake_zone_info fake_zones[] = {
+	{
+		.name = "kernel_stacks",
+		.init = stack_fake_zone_init,
+		.query = stack_fake_zone_info,
+	},
+#if defined(__i386__) || defined (__x86_64__)
+	{
+		.name = "page_tables",
+		.init = pt_fake_zone_init,
+		.query = pt_fake_zone_info,
+	},
+#endif /* i386 */
+	{
+		.name = "kalloc.large",
+		.init = kalloc_fake_zone_init,
+		.query = kalloc_fake_zone_info,
+	},
+};
+unsigned int num_fake_zones = sizeof(fake_zones)/sizeof(fake_zones[0]);
+
+/*
+ * Zone info options
+ */
+boolean_t zinfo_per_task = FALSE;		/* enabled by -zinfop in boot-args */
+#define ZINFO_SLOTS 200				/* for now */
+#define ZONES_MAX (ZINFO_SLOTS - num_fake_zones - 1)
+
+/* 
+ * Allocation helper macros
+ */
 #define is_kernel_data_addr(a)	(!(a) || ((a) >= vm_min_kernel_address && !((a) & 0x3)))
 
 #define ADD_TO_ZONE(zone, element)					\
@@ -159,13 +195,14 @@ MACRO_BEGIN									\
 			if (zfree_clear) {					\
 				unsigned int ii;				\
 				for (ii = sizeof(vm_offset_t) / sizeof(uint32_t); \
-					 ii < zone->elem_size/sizeof(uint32_t) - sizeof(vm_offset_t) / sizeof(uint32_t); \
+				     ii < (zone)->elem_size/sizeof(uint32_t) - sizeof(vm_offset_t) / sizeof(uint32_t); \
 					 ii++)					\
 					if (((uint32_t *)(ret))[ii] != (uint32_t)0xdeadbeef) \
 						panic("a freed zone element has been modified");\
 			}							\
 		}								\
 		(zone)->count++;						\
+		(zone)->sum_count++;						\
 		(zone)->free_elements = *((vm_offset_t *)(ret));		\
 	}									\
 MACRO_END
@@ -228,6 +265,8 @@ int		zone_count(
 vm_map_t	zone_map = VM_MAP_NULL;
 
 zone_t		zone_zone = ZONE_NULL;	/* the zone containing other zones */
+
+zone_t		zinfo_zone = ZONE_NULL; /* zone of per-task zone info */
 
 /*
  *	The VM system gives us an initial chunk of memory.
@@ -320,8 +359,7 @@ unsigned int		num_zones;
 boolean_t zone_gc_allowed = TRUE;
 boolean_t zone_gc_forced = FALSE;
 boolean_t panic_include_zprint = FALSE;
-unsigned zone_gc_last_tick = 0;
-unsigned zone_gc_max_rate = 0;		/* in ticks */
+boolean_t zone_gc_allowed_by_time_throttle = TRUE;
 
 /*
  * Zone leak debugging code
@@ -366,15 +404,13 @@ static char zone_name_to_log[MAX_ZONE_NAME] = "";	/* the zone name we're logging
  * but one doesn't generally care about performance when tracking down a leak.  The log is capped at 8000
  * records since going much larger than this tends to make the system unresponsive and unbootable on small
  * memory configurations.  The default value is 4000 records.
- *
- * MAX_DEPTH configures how deep of a stack trace is taken on each zalloc in the zone of interrest.  15
- * levels is usually enough to get past all the layers of code in kalloc and IOKit and see who the actual
- * caller is up above these lower levels.
  */
-
+#if	defined(__LP64__)
+#define ZRECORDS_MAX 		16000		/* Max records allowed in the log */
+#else
 #define ZRECORDS_MAX 		8000		/* Max records allowed in the log */
+#endif
 #define ZRECORDS_DEFAULT	4000		/* default records in log if zrecs is not specificed in boot-args */
-#define MAX_DEPTH 		15		/* number of levels of the stack trace to record */
 
 /*
  * Each record in the log contains a pointer to the zone element it refers to, a "time" number that allows
@@ -388,7 +424,7 @@ struct zrecord {
         void		*z_element;		/* the element that was zalloc'ed of zfree'ed */
         uint32_t	z_opcode:1,		/* whether it was a zalloc or zfree */
 			z_time:31;		/* time index when operation was done */
-        void		*z_pc[MAX_DEPTH];	/* stack trace of caller */
+        void		*z_pc[MAX_ZTRACE_DEPTH];	/* stack trace of caller */
 };
 
 /*
@@ -458,7 +494,526 @@ log_this_zone(const char *zonename, const char *logname)
 
 extern boolean_t zlog_ready;
 
+#if CONFIG_ZLEAKS
+#pragma mark -
+#pragma mark Zone Leak Detection
+
+/* 
+ * The zone leak detector, abbreviated 'zleak', keeps track of a subset of the currently outstanding
+ * allocations made by the zone allocator.  Every z_sample_factor allocations in each zone, we capture a
+ * backtrace.  Every free, we examine the table and determine if the allocation was being tracked, 
+ * and stop tracking it if it was being tracked.
+ *
+ * We track the allocations in the zallocations hash table, which stores the address that was returned from 
+ * the zone allocator.  Each stored entry in the zallocations table points to an entry in the ztraces table, which
+ * stores the backtrace associated with that allocation.  This provides uniquing for the relatively large
+ * backtraces - we don't store them more than once.
+ *
+ * Data collection begins when the zone map is 50% full, and only occurs for zones that are taking up
+ * a large amount of virtual space.
+ */
+#define ZLEAK_STATE_ENABLED		0x01	/* Zone leak monitoring should be turned on if zone_map fills up. */
+#define ZLEAK_STATE_ACTIVE 		0x02	/* We are actively collecting traces. */
+#define ZLEAK_STATE_ACTIVATING 		0x04	/* Some thread is doing setup; others should move along. */
+#define ZLEAK_STATE_FAILED		0x08	/* Attempt to allocate tables failed.  We will not try again. */
+uint32_t	zleak_state = 0;		/* State of collection, as above */
+
+boolean_t	panic_include_ztrace	= FALSE;  	/* Enable zleak logging on panic */
+vm_size_t 	zleak_global_tracking_threshold;	/* Size of zone map at which to start collecting data */
+vm_size_t 	zleak_per_zone_tracking_threshold;	/* Size a zone will have before we will collect data on it */
+unsigned int 	z_sample_factor	= 1000;			/* Allocations per sample attempt */
+
+/*
+ * Counters for allocation statistics.
+ */ 
+
+/* Times two active records want to occupy the same spot */
+unsigned int z_alloc_collisions = 0;
+unsigned int z_trace_collisions = 0;
+
+/* Times a new record lands on a spot previously occupied by a freed allocation */
+unsigned int z_alloc_overwrites = 0;
+unsigned int z_trace_overwrites = 0;
+
+/* Times a new alloc or trace is put into the hash table */
+unsigned int z_alloc_recorded	= 0;
+unsigned int z_trace_recorded	= 0;
+
+/* Times zleak_log returned false due to not being able to acquire the lock */
+unsigned int z_total_conflicts	= 0;
+
+
+#pragma mark struct zallocation
+/*
+ * Structure for keeping track of an allocation
+ * An allocation bucket is in use if its element is not NULL
+ */
+struct zallocation {
+	uintptr_t		za_element;		/* the element that was zalloc'ed or zfree'ed, NULL if bucket unused */
+	vm_size_t		za_size;			/* how much memory did this allocation take up? */
+	uint32_t		za_trace_index;	/* index into ztraces for backtrace associated with allocation */
+	/* TODO: #if this out */
+	uint32_t		za_hit_count;		/* for determining effectiveness of hash function */
+};
+
+/* Size must be a power of two for the zhash to be able to just mask off bits instead of mod */
+#define ZLEAK_ALLOCATION_MAP_NUM	16384
+#define ZLEAK_TRACE_MAP_NUM		8192
+
+uint32_t zleak_alloc_buckets = ZLEAK_ALLOCATION_MAP_NUM;
+uint32_t zleak_trace_buckets = ZLEAK_TRACE_MAP_NUM;
+
+vm_size_t zleak_max_zonemap_size;
+
+/* Hashmaps of allocations and their corresponding traces */
+static struct zallocation*	zallocations;
+static struct ztrace*		ztraces;
+
+/* not static so that panic can see this, see kern/debug.c */
+struct ztrace*				top_ztrace;
+
+/* Lock to protect zallocations, ztraces, and top_ztrace from concurrent modification. */
+static lck_mtx_t			zleak_lock;
+static lck_attr_t			zleak_lock_attr;
+static lck_grp_t			zleak_lock_grp;
+static lck_grp_attr_t			zleak_lock_grp_attr;
+
+/*
+ * Initializes the zone leak monitor.  Called from zone_init()
+ */
+static void 
+zleak_init(vm_size_t max_zonemap_size) 
+{
+	char			scratch_buf[16];
+	boolean_t		zleak_enable_flag = FALSE;
+
+	zleak_max_zonemap_size = max_zonemap_size;
+	zleak_global_tracking_threshold = max_zonemap_size / 2;	
+	zleak_per_zone_tracking_threshold = zleak_global_tracking_threshold / 8;
+
+	/* -zleakoff (flag to disable zone leak monitor) */
+	if (PE_parse_boot_argn("-zleakoff", scratch_buf, sizeof(scratch_buf))) {
+		zleak_enable_flag = FALSE;
+		printf("zone leak detection disabled\n");
+	} else {
+		zleak_enable_flag = TRUE;
+		printf("zone leak detection enabled\n");
+	}
 	
+	/* zfactor=XXXX (override how often to sample the zone allocator) */
+	if (PE_parse_boot_argn("zfactor", &z_sample_factor, sizeof(z_sample_factor))) {
+		printf("Zone leak factor override:%u\n", z_sample_factor);
+	}
+	
+	/* zleak-allocs=XXXX (override number of buckets in zallocations) */
+	if (PE_parse_boot_argn("zleak-allocs", &zleak_alloc_buckets, sizeof(zleak_alloc_buckets))) {
+		printf("Zone leak alloc buckets override:%u\n", zleak_alloc_buckets);
+		/* uses 'is power of 2' trick: (0x01000 & 0x00FFF == 0) */
+		if (zleak_alloc_buckets == 0 || (zleak_alloc_buckets & (zleak_alloc_buckets-1))) {
+			printf("Override isn't a power of two, bad things might happen!");
+		}
+	}
+	
+	/* zleak-traces=XXXX (override number of buckets in ztraces) */
+	if (PE_parse_boot_argn("zleak-traces", &zleak_trace_buckets, sizeof(zleak_trace_buckets))) {
+		printf("Zone leak trace buckets override:%u\n", zleak_trace_buckets);
+		/* uses 'is power of 2' trick: (0x01000 & 0x00FFF == 0) */
+		if (zleak_trace_buckets == 0 || (zleak_trace_buckets & (zleak_trace_buckets-1))) {
+			printf("Override isn't a power of two, bad things might happen!");
+		}
+	}
+	
+	/* allocate the zleak_lock */
+	lck_grp_attr_setdefault(&zleak_lock_grp_attr);
+	lck_grp_init(&zleak_lock_grp, "zleak_lock", &zleak_lock_grp_attr);
+	lck_attr_setdefault(&zleak_lock_attr);
+	lck_mtx_init(&zleak_lock, &zleak_lock_grp, &zleak_lock_attr);
+	
+	if (zleak_enable_flag) {
+		zleak_state = ZLEAK_STATE_ENABLED;
+	}
+}
+
+#if CONFIG_ZLEAKS
+
+/*
+ * Support for kern.zleak.active sysctl - a simplified
+ * simplified version of the zleak_state variable.
+ */
+int
+get_zleak_state(void)
+{
+	if (zleak_state & ZLEAK_STATE_FAILED)
+		return (-1);
+	if (zleak_state & ZLEAK_STATE_ACTIVE)
+		return (1);
+	return (0);
+}
+
+#endif
+
+
+kern_return_t
+zleak_activate(void)
+{
+	kern_return_t retval;
+	vm_size_t z_alloc_size = zleak_alloc_buckets * sizeof(struct zallocation);
+	vm_size_t z_trace_size = zleak_trace_buckets * sizeof(struct ztrace);
+	void *allocations_ptr = NULL;
+	void *traces_ptr = NULL;
+
+	/* Only one thread attempts to activate at a time */
+	if (zleak_state & (ZLEAK_STATE_ACTIVE | ZLEAK_STATE_ACTIVATING | ZLEAK_STATE_FAILED)) {
+		return KERN_SUCCESS;
+	}
+
+	/* Indicate that we're doing the setup */
+	lck_mtx_lock_spin(&zleak_lock);
+	if (zleak_state & (ZLEAK_STATE_ACTIVE | ZLEAK_STATE_ACTIVATING | ZLEAK_STATE_FAILED)) {
+		lck_mtx_unlock(&zleak_lock);
+		return KERN_SUCCESS;
+	}
+
+	zleak_state |= ZLEAK_STATE_ACTIVATING;
+	lck_mtx_unlock(&zleak_lock);
+
+	/* Allocate and zero tables */
+	retval = kmem_alloc_kobject(kernel_map, (vm_offset_t*)&allocations_ptr, z_alloc_size);
+	if (retval != KERN_SUCCESS) {
+		goto fail;
+	}
+
+	retval = kmem_alloc_kobject(kernel_map, (vm_offset_t*)&traces_ptr, z_trace_size);
+	if (retval != KERN_SUCCESS) {
+		goto fail;
+	}
+
+	bzero(allocations_ptr, z_alloc_size);
+	bzero(traces_ptr, z_trace_size);
+
+	/* Everything's set.  Install tables, mark active. */
+	zallocations = allocations_ptr;
+	ztraces = traces_ptr;
+
+	/*
+	 * Initialize the top_ztrace to the first entry in ztraces, 
+	 * so we don't have to check for null in zleak_log
+	 */
+	top_ztrace = &ztraces[0];
+
+	/*
+	 * Note that we do need a barrier between installing
+	 * the tables and setting the active flag, because the zfree()
+	 * path accesses the table without a lock if we're active.
+	 */
+	lck_mtx_lock_spin(&zleak_lock);
+	zleak_state |= ZLEAK_STATE_ACTIVE;
+	zleak_state &= ~ZLEAK_STATE_ACTIVATING;
+	lck_mtx_unlock(&zleak_lock);
+	
+	return 0;
+
+fail:	
+	/*
+	 * If we fail to allocate memory, don't further tax
+	 * the system by trying again.
+	 */
+	lck_mtx_lock_spin(&zleak_lock);
+	zleak_state |= ZLEAK_STATE_FAILED;
+	zleak_state &= ~ZLEAK_STATE_ACTIVATING;
+	lck_mtx_unlock(&zleak_lock);
+
+	if (allocations_ptr != NULL) {
+		kmem_free(kernel_map, (vm_offset_t)allocations_ptr, z_alloc_size);
+	}
+
+	if (traces_ptr != NULL) {
+		kmem_free(kernel_map, (vm_offset_t)traces_ptr, z_trace_size);
+	}
+
+	return retval;
+}
+
+/*
+ * TODO: What about allocations that never get deallocated, 
+ * especially ones with unique backtraces? Should we wait to record
+ * until after boot has completed?  
+ * (How many persistent zallocs are there?)
+ */
+
+/*
+ * This function records the allocation in the allocations table, 
+ * and stores the associated backtrace in the traces table 
+ * (or just increments the refcount if the trace is already recorded)
+ * If the allocation slot is in use, the old allocation is replaced with the new allocation, and
+ * the associated trace's refcount is decremented.
+ * If the trace slot is in use, it returns.
+ * The refcount is incremented by the amount of memory the allocation consumes.
+ * The return value indicates whether to try again next time.
+ */
+static boolean_t
+zleak_log(uintptr_t* bt,
+		  uintptr_t addr,
+		  uint32_t depth,
+		  vm_size_t allocation_size) 
+{
+	/* Quit if there's someone else modifying the hash tables */
+	if (!lck_mtx_try_lock_spin(&zleak_lock)) {
+		z_total_conflicts++;
+		return FALSE;
+	}
+	
+	struct zallocation* allocation	= &zallocations[hashaddr(addr, zleak_alloc_buckets)];
+	
+	uint32_t trace_index = hashbacktrace(bt, depth, zleak_trace_buckets);
+	struct ztrace* trace = &ztraces[trace_index];
+	
+	allocation->za_hit_count++;
+	trace->zt_hit_count++;
+	
+	/* 
+	 * If the allocation bucket we want to be in is occupied, and if the occupier
+	 * has the same trace as us, just bail.  
+	 */
+	if (allocation->za_element != (uintptr_t) 0 && trace_index == allocation->za_trace_index) {
+		z_alloc_collisions++;
+		
+		lck_mtx_unlock(&zleak_lock);
+		return TRUE;
+	}
+	
+	/* STEP 1: Store the backtrace in the traces array. */
+	/* A size of zero indicates that the trace bucket is free. */
+	
+	if (trace->zt_size > 0 && bcmp(trace->zt_stack, bt, (depth * sizeof(uintptr_t))) != 0 ) {
+		/* 
+		 * Different unique trace with same hash!
+		 * Just bail - if we're trying to record the leaker, hopefully the other trace will be deallocated
+		 * and get out of the way for later chances
+		 */
+		trace->zt_collisions++;
+		z_trace_collisions++;
+		
+		lck_mtx_unlock(&zleak_lock);
+		return TRUE;
+	} else if (trace->zt_size > 0) {
+		/* Same trace, already added, so increment refcount */
+		trace->zt_size += allocation_size;
+	} else {
+		/* Found an unused trace bucket, record the trace here! */
+		if (trace->zt_depth != 0) /* if this slot was previously used but not currently in use */
+			z_trace_overwrites++;
+		
+		z_trace_recorded++;
+		trace->zt_size			= allocation_size;
+		memcpy(trace->zt_stack, bt, (depth * sizeof(uintptr_t)) );
+		
+		trace->zt_depth		= depth;
+		trace->zt_collisions	= 0;
+	}
+	
+	/* STEP 2: Store the allocation record in the allocations array. */
+	
+	if (allocation->za_element != (uintptr_t) 0) {
+		/* 
+		 * Straight up replace any allocation record that was there.  We don't want to do the work
+		 * to preserve the allocation entries that were there, because we only record a subset of the 
+		 * allocations anyways.
+		 */
+		
+		z_alloc_collisions++;
+		
+		struct ztrace* associated_trace = &ztraces[allocation->za_trace_index];
+		/* Knock off old allocation's size, not the new allocation */
+		associated_trace->zt_size -= allocation->za_size;
+	} else if (allocation->za_trace_index != 0) {
+		/* Slot previously used but not currently in use */
+		z_alloc_overwrites++;
+	}
+
+	allocation->za_element		= addr;
+	allocation->za_trace_index	= trace_index;
+	allocation->za_size		= allocation_size;
+	
+	z_alloc_recorded++;
+	
+	if (top_ztrace->zt_size < trace->zt_size)
+		top_ztrace = trace;
+	
+	lck_mtx_unlock(&zleak_lock);
+	return TRUE;
+}
+
+/*
+ * Free the allocation record and release the stacktrace.
+ * This should be as fast as possible because it will be called for every free.
+ */
+static void
+zleak_free(uintptr_t addr,
+		   vm_size_t allocation_size) 
+{
+	if (addr == (uintptr_t) 0)
+		return;
+	
+	struct zallocation* allocation = &zallocations[hashaddr(addr, zleak_alloc_buckets)];
+	
+	/* Double-checked locking: check to find out if we're interested, lock, check to make
+	 * sure it hasn't changed, then modify it, and release the lock.
+	 */
+	
+	if (allocation->za_element == addr && allocation->za_trace_index < zleak_trace_buckets) {
+		/* if the allocation was the one, grab the lock, check again, then delete it */
+		lck_mtx_lock_spin(&zleak_lock);
+		
+		if (allocation->za_element == addr && allocation->za_trace_index < zleak_trace_buckets) {
+			struct ztrace *trace;
+
+			/* allocation_size had better match what was passed into zleak_log - otherwise someone is freeing into the wrong zone! */
+			if (allocation->za_size != allocation_size) {
+				panic("Freeing as size %lu memory that was allocated with size %lu\n", 
+						(uintptr_t)allocation_size, (uintptr_t)allocation->za_size);
+			}
+			
+			trace = &ztraces[allocation->za_trace_index];
+			
+			/* size of 0 indicates trace bucket is unused */
+			if (trace->zt_size > 0) {
+				trace->zt_size -= allocation_size;
+			}
+			
+			/* A NULL element means the allocation bucket is unused */
+			allocation->za_element = 0;
+		}
+		lck_mtx_unlock(&zleak_lock);
+	}
+}
+
+#endif /* CONFIG_ZLEAKS */
+
+/*  These functions outside of CONFIG_ZLEAKS because they are also used in
+ *  mbuf.c for mbuf leak-detection.  This is why they lack the z_ prefix.
+ */
+
+/*
+ * This function captures a backtrace from the current stack and
+ * returns the number of frames captured, limited by max_frames.
+ * It's fast because it does no checking to make sure there isn't bad data.
+ * Since it's only called from threads that we're going to keep executing,
+ * if there's bad data we were going to die eventually.
+ * This seems to work for x86 and X86_64.
+ * ARMTODO: Test it on ARM, I think it will work but I can't test it.  If it works, remove the ifdef.
+ * If this function is inlined, it doesn't record the frame of the function it's inside.
+ * (because there's no stack frame!)
+ */
+uint32_t
+fastbacktrace(uintptr_t* bt, uint32_t max_frames)
+{
+#if defined(__x86_64__) || defined(__i386__)
+	uintptr_t* frameptr = NULL, *frameptr_next = NULL;
+	uintptr_t retaddr = 0;
+	uint32_t frame_index = 0, frames = 0;
+	uintptr_t kstackb, kstackt;
+
+	kstackb = current_thread()->kernel_stack;
+	kstackt = kstackb + kernel_stack_size;
+	/* Load stack frame pointer (EBP on x86) into frameptr */
+	frameptr = __builtin_frame_address(0);
+
+	while (frameptr != NULL && frame_index < max_frames ) {
+		/* Next frame pointer is pointed to by the previous one */
+		frameptr_next = (uintptr_t*) *frameptr;
+
+		/* Bail if we see a zero in the stack frame, that means we've reached the top of the stack */
+                /* That also means the return address is worthless, so don't record it */
+		if (frameptr_next == NULL)
+			break;
+		/* Verify thread stack bounds */
+		if (((uintptr_t)frameptr_next > kstackt) || ((uintptr_t)frameptr_next < kstackb))
+			break;
+		/* Pull return address from one spot above the frame pointer */
+		retaddr = *(frameptr + 1);
+
+		/* Store it in the backtrace array */
+		bt[frame_index++] = retaddr;
+
+		frameptr = frameptr_next;
+	}
+
+	/* Save the number of frames captured for return value */
+	frames = frame_index;
+
+	/* Fill in the rest of the backtrace with zeros */
+	while (frame_index < max_frames)
+		bt[frame_index++] = 0;
+
+	return frames;
+#else
+	return OSBacktrace((void*)bt, max_frames);
+#endif
+}
+
+/* "Thomas Wang's 32/64 bit mix functions."  http://www.concentric.net/~Ttwang/tech/inthash.htm */
+uintptr_t
+hash_mix(uintptr_t x)
+{
+#ifndef __LP64__
+	x += ~(x << 15);
+	x ^=  (x >> 10);
+	x +=  (x << 3 );
+	x ^=  (x >> 6 );
+	x += ~(x << 11);
+	x ^=  (x >> 16);
+#else
+	x += ~(x << 32);
+	x ^=  (x >> 22);
+	x += ~(x << 13);
+	x ^=  (x >> 8 );
+	x +=  (x << 3 );
+	x ^=  (x >> 15);
+	x += ~(x << 27);
+	x ^=  (x >> 31);
+#endif
+	return x;
+}
+
+uint32_t
+hashbacktrace(uintptr_t* bt, uint32_t depth, uint32_t max_size)
+{
+
+	uintptr_t hash = 0;
+	uintptr_t mask = max_size - 1;
+
+	while (--depth) {
+		hash += bt[depth];
+	}
+
+	hash = hash_mix(hash) & mask;
+
+	assert(hash < max_size);
+
+	return (uint32_t) hash;
+}
+
+/*
+ *  TODO: Determine how well distributed this is
+ *      max_size must be a power of 2. i.e 0x10000 because 0x10000-1 is 0x0FFFF which is a great bitmask
+ */
+uint32_t
+hashaddr(uintptr_t pt, uint32_t max_size)
+{
+	uintptr_t hash = 0;
+	uintptr_t mask = max_size - 1;
+
+	hash = hash_mix(pt) & mask;
+
+	assert(hash < max_size);
+
+	return (uint32_t) hash;
+}
+
+/* End of all leak-detection code */
+#pragma mark -
+
 /*
  *	zinit initializes a new zone.  The zone data structures themselves
  *	are stored in a zone, which is initially a static structure that
@@ -537,6 +1092,7 @@ use_this_allocation:
 	z->alloc_size = alloc;
 	z->zone_name = name;
 	z->count = 0;
+	z->sum_count = 0LL;
 	z->doing_alloc = FALSE;
 	z->doing_gc = FALSE;
 	z->exhaustible = FALSE;
@@ -545,7 +1101,15 @@ use_this_allocation:
 	z->expandable  = TRUE;
 	z->waiting = FALSE;
 	z->async_pending = FALSE;
+	z->caller_acct = TRUE;
 	z->noencrypt = FALSE;
+
+#if CONFIG_ZLEAKS
+	z->num_allocs = 0;
+	z->num_frees = 0;
+	z->zleak_capture = 0;
+	z->zleak_on = FALSE;
+#endif /* CONFIG_ZLEAKS */
 
 #if	ZONE_DEBUG
 	z->active_zones.next = z->active_zones.prev = NULL;	
@@ -555,13 +1119,20 @@ use_this_allocation:
 
 	/*
 	 *	Add the zone to the all-zones list.
+	 *	If we are tracking zone info per task, and we have
+	 *	already used all the available stat slots, then keep
+	 *	using the overflow zone slot.
 	 */
-
 	z->next_zone = ZONE_NULL;
 	thread_call_setup(&z->call_async_alloc, zalloc_async, z);
 	simple_lock(&all_zones_lock);
 	*last_zone = z;
 	last_zone = &z->next_zone;
+	z->index = num_zones;
+	if (zinfo_per_task) {
+		if (num_zones > ZONES_MAX)
+			z->index = ZONES_MAX;
+	}
 	num_zones++;
 	simple_unlock(&all_zones_lock);
 
@@ -782,6 +1353,24 @@ zone_bootstrap(void)
 	vm_offset_t zone_zone_space;
 	char temp_buf[16];
 
+#if 6094439
+	/* enable zone checks by default, to try and catch offenders... */
+#if 0
+	/* 7968354: turn "-zc" back off */
+	check_freed_element = TRUE;
+	/* 7995202: turn "-zp" back off */
+	zfree_clear = TRUE;
+#endif
+	
+	/* ... but allow them to be turned off explicitely */
+	if (PE_parse_boot_argn("-no_zc", temp_buf, sizeof (temp_buf))) {
+		check_freed_element = FALSE;
+	}
+	if (PE_parse_boot_argn("-no_zp", temp_buf, sizeof (temp_buf))) {
+		zfree_clear = FALSE;
+	}
+#endif
+
 	/* see if we want freed zone element checking and/or poisoning */
 	if (PE_parse_boot_argn("-zc", temp_buf, sizeof (temp_buf))) {
 		check_freed_element = TRUE;
@@ -789,6 +1378,10 @@ zone_bootstrap(void)
 
 	if (PE_parse_boot_argn("-zp", temp_buf, sizeof (temp_buf))) {
 		zfree_clear = TRUE;
+	}
+
+	if (PE_parse_boot_argn("-zinfop", temp_buf, sizeof (temp_buf))) {
+		zinfo_per_task = TRUE;
 	}
 
 	/*
@@ -834,13 +1427,47 @@ zone_bootstrap(void)
 	zone_zone = zinit(sizeof(struct zone), 128 * sizeof(struct zone),
 			  sizeof(struct zone), "zones");
 	zone_change(zone_zone, Z_COLLECT, FALSE);
+	zone_change(zone_zone, Z_CALLERACCT, FALSE);
 	zone_change(zone_zone, Z_NOENCRYPT, TRUE);
 
 	zone_zone_size = zalloc_end_of_space - zalloc_next_space;
 	zget_space(NULL, zone_zone_size, &zone_zone_space);
 	zcram(zone_zone, (void *)zone_zone_space, zone_zone_size);
+
+	/* initialize fake zones and zone info if tracking by task */
+	if (zinfo_per_task) {
+		vm_size_t zisize = sizeof(zinfo_usage_store_t) * ZINFO_SLOTS;
+		unsigned int i;
+
+		for (i = 0; i < num_fake_zones; i++)
+			fake_zones[i].init(ZINFO_SLOTS - num_fake_zones + i);
+		zinfo_zone = zinit(zisize, zisize * CONFIG_TASK_MAX,
+				   zisize, "per task zinfo");
+		zone_change(zinfo_zone, Z_CALLERACCT, FALSE);
+	}
 }
 
+void
+zinfo_task_init(task_t task)
+{
+	if (zinfo_per_task) {
+		task->tkm_zinfo = zalloc(zinfo_zone);
+		memset(task->tkm_zinfo, 0, sizeof(zinfo_usage_store_t) * ZINFO_SLOTS);
+	} else {
+		task->tkm_zinfo = NULL;
+	}
+}
+
+void
+zinfo_task_free(task_t task)
+{
+	assert(task != kernel_task);
+	if (task->tkm_zinfo != NULL) {
+		zfree(zinfo_zone, task->tkm_zinfo);
+		task->tkm_zinfo = NULL;
+	}
+}
+		
 void
 zone_init(
 	vm_size_t max_zonemap_size)
@@ -876,9 +1503,19 @@ zone_init(
 	lck_mtx_init_ext(&zone_gc_lock, &zone_lck_ext, &zone_lck_grp, &zone_lck_attr);
 	
 	zone_page_init(zone_min, zone_max - zone_min, ZONE_PAGE_UNUSED);
+	
+#if CONFIG_ZLEAKS
+	/*
+	 * Initialize the zone leak monitor
+	 */
+	zleak_init(max_zonemap_size);
+#endif /* CONFIG_ZLEAKS */
 }
 
 extern volatile SInt32 kfree_nop_count;
+
+#pragma mark -
+#pragma mark zalloc_canblock
 
 /*
  *	zalloc returns an element from the specified zone.
@@ -890,20 +1527,40 @@ zalloc_canblock(
 {
 	vm_offset_t	addr;
 	kern_return_t retval;
-	void	  	*bt[MAX_DEPTH];		/* only used if zone logging is enabled */
+	uintptr_t	zbt[MAX_ZTRACE_DEPTH];	/* used in zone leak logging and zone leak detection */
 	int 		numsaved = 0;
-	int		i;
+	int			i;
+
+#if CONFIG_ZLEAKS
+	uint32_t	zleak_tracedepth = 0;  /* log this allocation if nonzero */
+#endif /* CONFIG_ZLEAKS */
 
 	assert(zone != ZONE_NULL);
+	
+	lock_zone(zone);
 
 	/*
 	 * If zone logging is turned on and this is the zone we're tracking, grab a backtrace.
 	 */
-
+	
 	if (DO_LOGGING(zone))
-	        numsaved = OSBacktrace(&bt[0], MAX_DEPTH);
-
-	lock_zone(zone);
+	        numsaved = OSBacktrace((void*) zbt, MAX_ZTRACE_DEPTH);
+	
+#if CONFIG_ZLEAKS
+	/* 
+	 * Zone leak detection: capture a backtrace every z_sample_factor
+	 * allocations in this zone. 
+	 */
+	if (zone->zleak_on && (zone->zleak_capture++ % z_sample_factor == 0)) {
+		zone->zleak_capture = 1;
+		
+		/* Avoid backtracing twice if zone logging is on */
+		if (numsaved == 0 )
+			zleak_tracedepth = fastbacktrace(zbt, MAX_ZTRACE_DEPTH);
+		else
+			zleak_tracedepth = numsaved;
+	}
+#endif /* CONFIG_ZLEAKS */
 
 	REMOVE_FROM_ZONE(zone, addr, vm_offset_t);
 
@@ -974,6 +1631,26 @@ zalloc_canblock(
 						if (alloc_size == PAGE_SIZE)
 							space = zone_alias_addr(space);
 #endif
+
+#if CONFIG_ZLEAKS
+						if ((zleak_state & (ZLEAK_STATE_ENABLED | ZLEAK_STATE_ACTIVE)) == ZLEAK_STATE_ENABLED) {
+							if (zone_map->size >= zleak_global_tracking_threshold) {
+								kern_return_t kr;
+								
+								kr = zleak_activate();
+								if (kr != KERN_SUCCESS) {
+									printf("Failed to activate live zone leak debugging (%d).\n", kr);
+								}
+							}
+						}
+
+						if ((zleak_state & ZLEAK_STATE_ACTIVE) && !(zone->zleak_on)) {
+							if (zone->cur_size > zleak_per_zone_tracking_threshold) {
+								zone->zleak_on = TRUE;
+							}	
+						}
+#endif /* CONFIG_ZLEAKS */
+
 					        zone_page_init(space, alloc_size,
 							       ZONE_PAGE_USED);
 						zcram(zone, (void *)space, alloc_size);
@@ -987,12 +1664,20 @@ zalloc_canblock(
 							printf("zalloc did gc\n");
 							zone_display_zprint();
 						}
-					        if (retry == 3) {
+						if (retry == 3) {
 						  panic_include_zprint = TRUE;
+#if CONFIG_ZLEAKS
+						  if ((zleak_state & ZLEAK_STATE_ACTIVE)) {
+							  panic_include_ztrace = TRUE;
+						  }
+#endif /* CONFIG_ZLEAKS */		
+							/* TODO: Change this to something more descriptive, perhaps 
+							 * 'zone_map exhausted' only if we get retval 3 (KERN_NO_SPACE).
+							 */
 						  panic("zalloc: \"%s\" (%d elements) retry fail %d, kfree_nop_count: %d", zone->zone_name, zone->count, retval, (int)kfree_nop_count);
 						}
 					} else {
-					        break;
+						break;
 					}
 				}
 				lock_zone(zone);
@@ -1021,6 +1706,7 @@ zalloc_canblock(
 				}
 				if (retval == KERN_SUCCESS) {
 					zone->count++;
+					zone->sum_count++;
 					zone->cur_size += zone->elem_size;
 #if	ZONE_DEBUG
 					if (zone_debug_enabled(zone)) {
@@ -1042,6 +1728,18 @@ zalloc_canblock(
 					VM_PAGE_WAIT();
 					lock_zone(zone);
 				} else {
+					/*
+					 * Equivalent to a 'retry fail 3', we're out of address space in the zone_map
+					 * (if it returned KERN_NO_SPACE)
+					 */
+					if (retval == KERN_NO_SPACE) {
+						panic_include_zprint = TRUE;
+#if CONFIG_ZLEAKS
+						  if ((zleak_state & ZLEAK_STATE_ACTIVE)) {
+							panic_include_ztrace = TRUE;
+						}
+#endif /* CONFIG_ZLEAKS */
+					}
 					panic("zalloc: \"%s\" (%d elements) zget_space returned %d", zone->zone_name, zone->count, retval);
 				}
 			}
@@ -1050,6 +1748,20 @@ zalloc_canblock(
 			REMOVE_FROM_ZONE(zone, addr, vm_offset_t);
 	}
 
+#if CONFIG_ZLEAKS
+	/* Zone leak detection:
+	 * If we're sampling this allocation, add it to the zleaks hash table. 
+	 */
+	if (addr && zleak_tracedepth > 0)  {
+		/* Sampling can fail if another sample is happening at the same time in a different zone. */
+		if (!zleak_log(zbt, addr, zleak_tracedepth, zone->elem_size)) {
+			/* If it failed, roll back the counter so we sample the next allocation instead. */
+			zone->zleak_capture = z_sample_factor;
+		}
+	}
+#endif /* CONFIG_ZLEAKS */			
+			
+			
 	/*
 	 * See if we should be logging allocations in this zone.  Logging is rarely done except when a leak is
 	 * suspected, so this code rarely executes.  We need to do this code while still holding the zone lock
@@ -1109,9 +1821,9 @@ empty_slot:
 		  zrecords[zcurrent].z_opcode = ZOP_ALLOC;
 			
 		  for (i = 0; i < numsaved; i++)
-		        zrecords[zcurrent].z_pc[i] = bt[i];
+		        zrecords[zcurrent].z_pc[i] = (void*) zbt[i];
 
-		  for (; i < MAX_DEPTH; i++)
+		  for (; i < MAX_ZTRACE_DEPTH; i++)
 			zrecords[zcurrent].z_pc[i] = 0;
 	
 		  zcurrent++;
@@ -1134,12 +1846,31 @@ empty_slot:
 		addr += ZONE_DEBUG_OFFSET;
 	}
 #endif
+	
+#if CONFIG_ZLEAKS
+	if (addr != 0) {
+		zone->num_allocs++;
+	}
+#endif /* CONFIG_ZLEAKS */
 
 	unlock_zone(zone);
 
 success:
 	TRACE_MACHLEAKS(ZALLOC_CODE, ZALLOC_CODE_2, zone->elem_size, addr);
 
+	if (addr) {
+		thread_t thr = current_thread();
+		task_t task;
+		zinfo_usage_t zinfo;
+
+		if (zone->caller_acct)
+			thr->tkm_private.alloc += zone->elem_size;
+		else
+			thr->tkm_shared.alloc += zone->elem_size;
+
+		if ((task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
+			OSAddAtomic64(zone->elem_size, (int64_t *)&zinfo[zone->index].alloc);
+	}
 	return((void *)addr);
 }
 
@@ -1179,17 +1910,36 @@ zalloc_async(
  *
  *	This form should be used when you can not block (like when
  *	processing an interrupt).
+ *
+ *	XXX: It seems like only vm_page_grab_fictitious_common uses this, and its
+ *  friend vm_page_more_fictitious can block, so it doesn't seem like 
+ *  this is used for interrupts any more....
  */
 void *
 zget(
 	register zone_t	zone)
 {
 	register vm_offset_t	addr;
+	
+#if CONFIG_ZLEAKS
+	uintptr_t	zbt[MAX_ZTRACE_DEPTH];		/* used for zone leak detection */
+	uint32_t	zleak_tracedepth = 0;  /* log this allocation if nonzero */
+#endif /* CONFIG_ZLEAKS */
 
 	assert( zone != ZONE_NULL );
 
 	if (!lock_try_zone(zone))
 		return NULL;
+	
+#if CONFIG_ZLEAKS
+	/*
+	 * Zone leak detection: capture a backtrace
+	 */
+	if (zone->zleak_on && (zone->zleak_capture++ % z_sample_factor == 0)) {
+		zone->zleak_capture = 1;
+		zleak_tracedepth = fastbacktrace(zbt, MAX_ZTRACE_DEPTH);
+	}
+#endif /* CONFIG_ZLEAKS */
 
 	REMOVE_FROM_ZONE(zone, addr, vm_offset_t);
 #if	ZONE_DEBUG
@@ -1198,6 +1948,24 @@ zget(
 		addr += ZONE_DEBUG_OFFSET;
 	}
 #endif	/* ZONE_DEBUG */
+	
+#if CONFIG_ZLEAKS
+	/*
+	 * Zone leak detection: record the allocation 
+	 */
+	if (zone->zleak_on && zleak_tracedepth > 0 && addr) {
+		/* Sampling can fail if another sample is happening at the same time in a different zone. */
+		if (!zleak_log(zbt, addr, zleak_tracedepth, zone->elem_size)) {
+			/* If it failed, roll back the counter so we sample the next allocation instead. */
+			zone->zleak_capture = z_sample_factor;
+		}
+	}
+	
+	if (addr != 0) {
+		zone->num_allocs++;
+	}
+#endif /* CONFIG_ZLEAKS */
+	
 	unlock_zone(zone);
 
 	return((void *) addr);
@@ -1216,7 +1984,7 @@ zfree(
 	void 		*addr)
 {
 	vm_offset_t	elem = (vm_offset_t) addr;
-	void		*bt[MAX_DEPTH];			/* only used if zone logging is enable via boot-args */
+	void		*zbt[MAX_ZTRACE_DEPTH];			/* only used if zone logging is enabled via boot-args */
 	int		numsaved = 0;
 
 	assert(zone != ZONE_NULL);
@@ -1226,7 +1994,7 @@ zfree(
 	 */
 
 	if (DO_LOGGING(zone))
-		numsaved = OSBacktrace(&bt[0], MAX_DEPTH);
+		numsaved = OSBacktrace(&zbt[0], MAX_ZTRACE_DEPTH);
 
 #if MACH_ASSERT
 	/* Basic sanity checks */
@@ -1274,9 +2042,9 @@ zfree(
 			zrecords[zcurrent].z_opcode = ZOP_FREE;
 
 			for (i = 0; i < numsaved; i++)
-				zrecords[zcurrent].z_pc[i] = bt[i];
+				zrecords[zcurrent].z_pc[i] = zbt[i];
 
-			for (; i < MAX_DEPTH; i++)
+			for (; i < MAX_ZTRACE_DEPTH; i++)
 				zrecords[zcurrent].z_pc[i] = 0;
 
 			zcurrent++;
@@ -1321,7 +2089,7 @@ zfree(
 			if (elem != (vm_offset_t)tmp_elem)
 				panic("zfree()ing element from wrong zone");
 		}
-		remqueue(&zone->active_zones, (queue_t) elem);
+		remqueue((queue_t) elem);
 	}
 #endif	/* ZONE_DEBUG */
 	if (zone_check) {
@@ -1340,7 +2108,19 @@ zfree(
 	if (zone->count < 0)
 		panic("zfree: count < 0!");
 #endif
+	
 
+#if CONFIG_ZLEAKS
+	zone->num_frees++;
+
+	/*
+	 * Zone leak detection: un-track the allocation 
+	 */
+	if (zone->zleak_on) {
+		zleak_free(elem, zone->elem_size);
+	}
+#endif /* CONFIG_ZLEAKS */
+	
 	/*
 	 * If elements have one or more pages, and memory is low,
 	 * request to run the garbage collection in the zone  the next 
@@ -1351,6 +2131,20 @@ zfree(
 		zone_gc_forced = TRUE;
 	}
 	unlock_zone(zone);
+
+	{
+		thread_t thr = current_thread();
+		task_t task;
+		zinfo_usage_t zinfo;
+
+		if (zone->caller_acct)
+			thr->tkm_private.free += zone->elem_size;
+		else
+			thr->tkm_shared.free += zone->elem_size;
+		if ((task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
+			OSAddAtomic64(zone->elem_size,
+				      (int64_t *)&zinfo[zone->index].free);
+	}
 }
 
 
@@ -1381,6 +2175,9 @@ zone_change(
 			break;
 		case Z_FOREIGN:
 			zone->allows_foreign = value;
+			break;
+		case Z_CALLERACCT:
+			zone->caller_acct = value;
 			break;
 #if MACH_ASSERT
 		default:
@@ -1886,7 +2683,7 @@ zone_gc(void)
 	while ((zp = zone_free_pages) != NULL) {
 		zone_free_pages = zp->link;
 #if	ZONE_ALIAS_ADDR
-		z = zone_virtual_addr((vm_map_address_t)z);
+		z = (zone_t)zone_virtual_addr((vm_map_address_t)z);
 #endif
 		kmem_free(zone_map, zone_map_min_address + PAGE_SIZE *
 										(zp - zone_page_table), PAGE_SIZE);
@@ -1905,57 +2702,334 @@ zone_gc(void)
 void
 consider_zone_gc(boolean_t force)
 {
-	/*
-	 *	By default, don't attempt zone GC more frequently
-	 *	than once / 1 minutes.
-	 */
-
-	if (zone_gc_max_rate == 0)
-		zone_gc_max_rate = (60 << SCHED_TICK_SHIFT) + 1;
 
 	if (zone_gc_allowed &&
-	    ((sched_tick > (zone_gc_last_tick + zone_gc_max_rate)) ||
+	    (zone_gc_allowed_by_time_throttle ||
 	     zone_gc_forced ||
 	     force)) {
 		zone_gc_forced = FALSE;
-		zone_gc_last_tick = sched_tick;
+		zone_gc_allowed_by_time_throttle = FALSE; /* reset periodically */
 		zone_gc();
 	}
 }
 
-struct fake_zone_info {
-	const char* name;
-	void (*func)(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_size_t *,
-		    int *, int *);
-};
+/*
+ *	By default, don't attempt zone GC more frequently
+ *	than once / 1 minutes.
+ */
+void
+compute_zone_gc_throttle(void *arg __unused)
+{
+	zone_gc_allowed_by_time_throttle = TRUE;
+}
 
-static struct fake_zone_info fake_zones[] = {
-	{
-		.name = "kernel_stacks",
-		.func = stack_fake_zone_info,
-	},
-#ifdef ppc
-	{
-		.name = "save_areas",
-		.func = save_fake_zone_info,
-	},
-	{
-		.name = "pmap_mappings",
-		.func = mapping_fake_zone_info,
-	},
-#endif /* ppc */
-#if defined(__i386__) || defined (__x86_64__)
-	{
-		.name = "page_tables",
-		.func = pt_fake_zone_info,
-	},
-#endif /* i386 */
-	{
-		.name = "kalloc.large",
-		.func = kalloc_fake_zone_info,
-	},
-};
 
+kern_return_t
+task_zone_info(
+	task_t			task,
+	mach_zone_name_array_t	*namesp,
+	mach_msg_type_number_t  *namesCntp,
+	task_zone_info_array_t	*infop,
+	mach_msg_type_number_t  *infoCntp)
+{
+	mach_zone_name_t	*names;
+	vm_offset_t		names_addr;
+	vm_size_t		names_size;
+	task_zone_info_t	*info;
+	vm_offset_t		info_addr;
+	vm_size_t		info_size;
+	unsigned int		max_zones, i;
+	zone_t			z;
+	mach_zone_name_t	*zn;
+	task_zone_info_t    	*zi;
+	kern_return_t		kr;
+
+	vm_size_t		used;
+	vm_map_copy_t		copy;
+
+
+	if (task == TASK_NULL)
+		return KERN_INVALID_TASK;
+
+	/*
+	 *	We assume that zones aren't freed once allocated.
+	 *	We won't pick up any zones that are allocated later.
+	 */
+
+	simple_lock(&all_zones_lock);
+	max_zones = (unsigned int)(num_zones + num_fake_zones);
+	z = first_zone;
+	simple_unlock(&all_zones_lock);
+
+	names_size = round_page(max_zones * sizeof *names);
+	kr = kmem_alloc_pageable(ipc_kernel_map,
+				 &names_addr, names_size);
+	if (kr != KERN_SUCCESS)
+		return kr;
+	names = (mach_zone_name_t *) names_addr;
+
+	info_size = round_page(max_zones * sizeof *info);
+	kr = kmem_alloc_pageable(ipc_kernel_map,
+				 &info_addr, info_size);
+	if (kr != KERN_SUCCESS) {
+		kmem_free(ipc_kernel_map,
+			  names_addr, names_size);
+		return kr;
+	}
+
+	info = (task_zone_info_t *) info_addr;
+
+	zn = &names[0];
+	zi = &info[0];
+
+	for (i = 0; i < max_zones - num_fake_zones; i++) {
+		struct zone zcopy;
+
+		assert(z != ZONE_NULL);
+
+		lock_zone(z);
+		zcopy = *z;
+		unlock_zone(z);
+
+		simple_lock(&all_zones_lock);
+		z = z->next_zone;
+		simple_unlock(&all_zones_lock);
+
+		/* assuming here the name data is static */
+		(void) strncpy(zn->mzn_name, zcopy.zone_name,
+			       sizeof zn->mzn_name);
+		zn->mzn_name[sizeof zn->mzn_name - 1] = '\0';
+
+		zi->tzi_count = (uint64_t)zcopy.count;
+		zi->tzi_cur_size = (uint64_t)zcopy.cur_size;
+		zi->tzi_max_size = (uint64_t)zcopy.max_size;
+		zi->tzi_elem_size = (uint64_t)zcopy.elem_size;
+		zi->tzi_alloc_size = (uint64_t)zcopy.alloc_size;
+		zi->tzi_sum_size = zcopy.sum_count * zcopy.elem_size;
+		zi->tzi_exhaustible = (uint64_t)zcopy.exhaustible;
+		zi->tzi_collectable = (uint64_t)zcopy.collectable;
+		zi->tzi_caller_acct = (uint64_t)zcopy.caller_acct;
+		if (task->tkm_zinfo != NULL) {
+			zi->tzi_task_alloc = task->tkm_zinfo[zcopy.index].alloc;
+			zi->tzi_task_free = task->tkm_zinfo[zcopy.index].free;
+		} else {
+			zi->tzi_task_alloc = 0;
+			zi->tzi_task_free = 0;
+		}
+		zn++;
+		zi++;
+	}
+
+	/*
+	 * loop through the fake zones and fill them using the specialized
+	 * functions
+	 */
+	for (i = 0; i < num_fake_zones; i++) {
+		int count, collectable, exhaustible, caller_acct, index;
+		vm_size_t cur_size, max_size, elem_size, alloc_size;
+		uint64_t sum_size;
+
+		strncpy(zn->mzn_name, fake_zones[i].name, sizeof zn->mzn_name);
+		zn->mzn_name[sizeof zn->mzn_name - 1] = '\0';
+		fake_zones[i].query(&count, &cur_size,
+				    &max_size, &elem_size,
+				    &alloc_size, &sum_size,
+				    &collectable, &exhaustible, &caller_acct);
+		zi->tzi_count = (uint64_t)count;
+		zi->tzi_cur_size = (uint64_t)cur_size;
+		zi->tzi_max_size = (uint64_t)max_size;
+		zi->tzi_elem_size = (uint64_t)elem_size;
+		zi->tzi_alloc_size = (uint64_t)alloc_size;
+		zi->tzi_sum_size = sum_size;
+		zi->tzi_collectable = (uint64_t)collectable;
+		zi->tzi_exhaustible = (uint64_t)exhaustible;
+		zi->tzi_caller_acct = (uint64_t)caller_acct;
+		if (task->tkm_zinfo != NULL) {
+			index = ZINFO_SLOTS - num_fake_zones + i;
+			zi->tzi_task_alloc = task->tkm_zinfo[index].alloc;
+			zi->tzi_task_free = task->tkm_zinfo[index].free;
+		} else {
+			zi->tzi_task_alloc = 0;
+			zi->tzi_task_free = 0;
+		}
+		zn++;
+		zi++;
+	}
+
+	used = max_zones * sizeof *names;
+	if (used != names_size)
+		bzero((char *) (names_addr + used), names_size - used);
+
+	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)names_addr,
+			   (vm_map_size_t)names_size, TRUE, &copy);
+	assert(kr == KERN_SUCCESS);
+
+	*namesp = (mach_zone_name_t *) copy;
+	*namesCntp = max_zones;
+
+	used = max_zones * sizeof *info;
+
+	if (used != info_size)
+		bzero((char *) (info_addr + used), info_size - used);
+
+	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)info_addr,
+			   (vm_map_size_t)info_size, TRUE, &copy);
+	assert(kr == KERN_SUCCESS);
+
+	*infop = (task_zone_info_t *) copy;
+	*infoCntp = max_zones;
+
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+mach_zone_info(
+	host_t			host,
+	mach_zone_name_array_t	*namesp,
+	mach_msg_type_number_t  *namesCntp,
+	mach_zone_info_array_t	*infop,
+	mach_msg_type_number_t  *infoCntp)
+{
+	mach_zone_name_t	*names;
+	vm_offset_t		names_addr;
+	vm_size_t		names_size;
+	mach_zone_info_t	*info;
+	vm_offset_t		info_addr;
+	vm_size_t		info_size;
+	unsigned int		max_zones, i;
+	zone_t			z;
+	mach_zone_name_t	*zn;
+	mach_zone_info_t    	*zi;
+	kern_return_t		kr;
+	
+	vm_size_t		used;
+	vm_map_copy_t		copy;
+
+
+	if (host == HOST_NULL)
+		return KERN_INVALID_HOST;
+
+	num_fake_zones = sizeof fake_zones / sizeof fake_zones[0];
+
+	/*
+	 *	We assume that zones aren't freed once allocated.
+	 *	We won't pick up any zones that are allocated later.
+	 */
+
+	simple_lock(&all_zones_lock);
+	max_zones = (unsigned int)(num_zones + num_fake_zones);
+	z = first_zone;
+	simple_unlock(&all_zones_lock);
+
+	names_size = round_page(max_zones * sizeof *names);
+	kr = kmem_alloc_pageable(ipc_kernel_map,
+				 &names_addr, names_size);
+	if (kr != KERN_SUCCESS)
+		return kr;
+	names = (mach_zone_name_t *) names_addr;
+
+	info_size = round_page(max_zones * sizeof *info);
+	kr = kmem_alloc_pageable(ipc_kernel_map,
+				 &info_addr, info_size);
+	if (kr != KERN_SUCCESS) {
+		kmem_free(ipc_kernel_map,
+			  names_addr, names_size);
+		return kr;
+	}
+
+	info = (mach_zone_info_t *) info_addr;
+
+	zn = &names[0];
+	zi = &info[0];
+
+	for (i = 0; i < max_zones - num_fake_zones; i++) {
+		struct zone zcopy;
+
+		assert(z != ZONE_NULL);
+
+		lock_zone(z);
+		zcopy = *z;
+		unlock_zone(z);
+
+		simple_lock(&all_zones_lock);
+		z = z->next_zone;
+		simple_unlock(&all_zones_lock);
+
+		/* assuming here the name data is static */
+		(void) strncpy(zn->mzn_name, zcopy.zone_name,
+			       sizeof zn->mzn_name);
+		zn->mzn_name[sizeof zn->mzn_name - 1] = '\0';
+
+		zi->mzi_count = (uint64_t)zcopy.count;
+		zi->mzi_cur_size = (uint64_t)zcopy.cur_size;
+		zi->mzi_max_size = (uint64_t)zcopy.max_size;
+		zi->mzi_elem_size = (uint64_t)zcopy.elem_size;
+		zi->mzi_alloc_size = (uint64_t)zcopy.alloc_size;
+		zi->mzi_sum_size = zcopy.sum_count * zcopy.elem_size;
+		zi->mzi_exhaustible = (uint64_t)zcopy.exhaustible;
+		zi->mzi_collectable = (uint64_t)zcopy.collectable;
+		zn++;
+		zi++;
+	}
+
+	/*
+	 * loop through the fake zones and fill them using the specialized
+	 * functions
+	 */
+	for (i = 0; i < num_fake_zones; i++) {
+		int count, collectable, exhaustible, caller_acct;
+		vm_size_t cur_size, max_size, elem_size, alloc_size;
+		uint64_t sum_size;
+
+		strncpy(zn->mzn_name, fake_zones[i].name, sizeof zn->mzn_name);
+		zn->mzn_name[sizeof zn->mzn_name - 1] = '\0';
+		fake_zones[i].query(&count, &cur_size,
+				    &max_size, &elem_size,
+				    &alloc_size, &sum_size,
+				    &collectable, &exhaustible, &caller_acct);
+		zi->mzi_count = (uint64_t)count;
+		zi->mzi_cur_size = (uint64_t)cur_size;
+		zi->mzi_max_size = (uint64_t)max_size;
+		zi->mzi_elem_size = (uint64_t)elem_size;
+		zi->mzi_alloc_size = (uint64_t)alloc_size;
+		zi->mzi_sum_size = sum_size;
+		zi->mzi_collectable = (uint64_t)collectable;
+		zi->mzi_exhaustible = (uint64_t)exhaustible;
+
+		zn++;
+		zi++;
+	}
+
+	used = max_zones * sizeof *names;
+	if (used != names_size)
+		bzero((char *) (names_addr + used), names_size - used);
+
+	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)names_addr,
+			   (vm_map_size_t)names_size, TRUE, &copy);
+	assert(kr == KERN_SUCCESS);
+
+	*namesp = (mach_zone_name_t *) copy;
+	*namesCntp = max_zones;
+
+	used = max_zones * sizeof *info;
+
+	if (used != info_size)
+		bzero((char *) (info_addr + used), info_size - used);
+
+	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)info_addr,
+			   (vm_map_size_t)info_size, TRUE, &copy);
+	assert(kr == KERN_SUCCESS);
+
+	*infop = (mach_zone_info_t *) copy;
+	*infoCntp = max_zones;
+
+	return KERN_SUCCESS;
+}
+
+/*
+ * host_zone_info - LEGACY user interface for Mach zone information
+ * 		    Should use mach_zone_info() instead!
+ */
 kern_return_t
 host_zone_info(
 	host_t			host,
@@ -1975,7 +3049,9 @@ host_zone_info(
 	zone_name_t    *zn;
 	zone_info_t    *zi;
 	kern_return_t	kr;
-	size_t		num_fake_zones;
+
+	vm_size_t	used;
+	vm_map_copy_t	copy;
 
 
 	if (host == HOST_NULL)
@@ -2001,40 +3077,28 @@ host_zone_info(
 	z = first_zone;
 	simple_unlock(&all_zones_lock);
 
-	if (max_zones <= *namesCntp) {
-		/* use in-line memory */
-		names_size = *namesCntp * sizeof *names;
-		names = *namesp;
-	} else {
-		names_size = round_page(max_zones * sizeof *names);
-		kr = kmem_alloc_pageable(ipc_kernel_map,
-					 &names_addr, names_size);
-		if (kr != KERN_SUCCESS)
-			return kr;
-		names = (zone_name_t *) names_addr;
+	names_size = round_page(max_zones * sizeof *names);
+	kr = kmem_alloc_pageable(ipc_kernel_map,
+				 &names_addr, names_size);
+	if (kr != KERN_SUCCESS)
+		return kr;
+	names = (zone_name_t *) names_addr;
+
+	info_size = round_page(max_zones * sizeof *info);
+	kr = kmem_alloc_pageable(ipc_kernel_map,
+				 &info_addr, info_size);
+	if (kr != KERN_SUCCESS) {
+		kmem_free(ipc_kernel_map,
+			  names_addr, names_size);
+		return kr;
 	}
 
-	if (max_zones <= *infoCntp) {
-		/* use in-line memory */
-	  	info_size = *infoCntp * sizeof *info;
-		info = *infop;
-	} else {
-		info_size = round_page(max_zones * sizeof *info);
-		kr = kmem_alloc_pageable(ipc_kernel_map,
-					 &info_addr, info_size);
-		if (kr != KERN_SUCCESS) {
-			if (names != *namesp)
-				kmem_free(ipc_kernel_map,
-					  names_addr, names_size);
-			return kr;
-		}
+	info = (zone_info_t *) info_addr;
 
-		info = (zone_info_t *) info_addr;
-	}
 	zn = &names[0];
 	zi = &info[0];
 
-	for (i = 0; i < num_zones; i++) {
+	for (i = 0; i < max_zones - num_fake_zones; i++) {
 		struct zone zcopy;
 
 		assert(z != ZONE_NULL);
@@ -2069,57 +3133,49 @@ host_zone_info(
 	 * functions
 	 */
 	for (i = 0; i < num_fake_zones; i++) {
+		int caller_acct;
+		uint64_t sum_space;
 		strncpy(zn->zn_name, fake_zones[i].name, sizeof zn->zn_name);
 		zn->zn_name[sizeof zn->zn_name - 1] = '\0';
-		fake_zones[i].func(&zi->zi_count, &zi->zi_cur_size,
-				   &zi->zi_max_size, &zi->zi_elem_size,
-				   &zi->zi_alloc_size, &zi->zi_collectable,
-				   &zi->zi_exhaustible);
+		fake_zones[i].query(&zi->zi_count, &zi->zi_cur_size,
+				    &zi->zi_max_size, &zi->zi_elem_size,
+				    &zi->zi_alloc_size, &sum_space,
+				    &zi->zi_collectable, &zi->zi_exhaustible, &caller_acct);
 		zn++;
 		zi++;
 	}
 
-	if (names != *namesp) {
-		vm_size_t used;
-		vm_map_copy_t copy;
+	used = max_zones * sizeof *names;
+	if (used != names_size)
+		bzero((char *) (names_addr + used), names_size - used);
 
-		used = max_zones * sizeof *names;
+	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)names_addr,
+			   (vm_map_size_t)names_size, TRUE, &copy);
+	assert(kr == KERN_SUCCESS);
 
-		if (used != names_size)
-			bzero((char *) (names_addr + used), names_size - used);
-
-		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)names_addr,
-				   (vm_map_size_t)names_size, TRUE, &copy);
-		assert(kr == KERN_SUCCESS);
-
-		*namesp = (zone_name_t *) copy;
-	}
+	*namesp = (zone_name_t *) copy;
 	*namesCntp = max_zones;
 
-	if (info != *infop) {
-		vm_size_t used;
-		vm_map_copy_t copy;
+	used = max_zones * sizeof *info;
+	if (used != info_size)
+		bzero((char *) (info_addr + used), info_size - used);
 
-		used = max_zones * sizeof *info;
+	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)info_addr,
+			   (vm_map_size_t)info_size, TRUE, &copy);
+	assert(kr == KERN_SUCCESS);
 
-		if (used != info_size)
-			bzero((char *) (info_addr + used), info_size - used);
-
-		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)info_addr,
-				   (vm_map_size_t)info_size, TRUE, &copy);
-		assert(kr == KERN_SUCCESS);
-
-		*infop = (zone_info_t *) copy;
-	}
+	*infop = (zone_info_t *) copy;
 	*infoCntp = max_zones;
 
 	return KERN_SUCCESS;
 }
 
 extern unsigned int stack_total;
+extern unsigned long long stack_allocs;
 
 #if defined(__i386__) || defined (__x86_64__)
 extern unsigned int inuse_ptepages_count;
+extern long long alloc_ptepages_count;
 #endif
 
 void zone_display_zprint()
@@ -2191,6 +3247,8 @@ db_print_zone(
 	  	db_printf("C");
 	if (zcopy.expandable)
 	  	db_printf("X");
+	if (zcopy.caller_acct)
+		db_printf("A");
 	db_printf("\n");
 }
 

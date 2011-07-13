@@ -174,7 +174,7 @@ void	audit_syscall_exit(int error, struct proc *proc,
 void	audit_mach_syscall_enter(unsigned short audit_event);
 void	audit_mach_syscall_exit(int retval, struct uthread *uthread);
 
-extern struct auditinfo_addr audit_default_aia;
+extern struct auditinfo_addr *audit_default_aia_p;
 
 /*
  * The remaining kernel functions are conditionally compiled in as they are
@@ -262,20 +262,23 @@ typedef struct ucred *kauth_cred_t;
 
 void	 audit_session_ref(kauth_cred_t cred);
 void	 audit_session_unref(kauth_cred_t cred);
-void	 audit_session_procnew(kauth_cred_t cred);
-void	 audit_session_procexit(kauth_cred_t cred);
+void	 audit_session_procnew(proc_t p);
+void	 audit_session_procexit(proc_t p);
 int	 audit_session_spawnjoin(proc_t p, ipc_port_t port);
+
+void	 audit_sdev_submit(au_id_t auid, au_asid_t asid, void *record,
+	    u_int record_len);
 
 /*
  * Audit session macros. 
  */
-#define	IS_VALID_SESSION(a)	((a) != NULL && (a) != &audit_default_aia)
+#define	IS_VALID_SESSION(a)	((a) != NULL && (a) != audit_default_aia_p)
 
 #define	AUDIT_SESSION_REF(cred)		audit_session_ref(cred)
 #define	AUDIT_SESSION_UNREF(cred)	audit_session_unref(cred)
 
-#define	AUDIT_SESSION_PROCNEW(cred) 	audit_session_procnew(cred)
-#define	AUDIT_SESSION_PROCEXIT(cred)	audit_session_procexit(cred)
+#define	AUDIT_SESSION_PROCNEW(p)	audit_session_procnew(p)
+#define	AUDIT_SESSION_PROCEXIT(p)	audit_session_procexit(p)
 
 #if CONFIG_MACF
 /* 
@@ -292,8 +295,8 @@ extern au_event_t sys_au_event[];
 #define	AUDIT_RECORD() \
 	((struct uthread*)get_bsdthread_info(current_thread()))->uu_ar
 
-#ifndef	AUDIT_USE_BUILDIN_EXPECT
-#define	AUDIT_USE_BUILDIN_EXPECT
+#ifndef	AUDIT_USE_BUILTIN_EXPECT
+#define	AUDIT_USE_BUILTIN_EXPECT
 #endif
 
 #ifdef	AUDIT_USE_BUILTIN_EXPECT

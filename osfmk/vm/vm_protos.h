@@ -135,15 +135,6 @@ extern kern_return_t vm_region_object_create
 extern mach_vm_offset_t mach_get_vm_start(vm_map_t);
 extern mach_vm_offset_t mach_get_vm_end(vm_map_t);
 
-/*
- * Legacy routines to get the start and end for a vm_map_t.  They
- * return them in the vm_offset_t format.  So, they should only be
- * called on maps that are the same size as the kernel map for
- * accurate results.
- */
-extern vm_offset_t get_vm_start(vm_map_t);
-extern vm_offset_t get_vm_end(vm_map_t);
-
 #if CONFIG_CODE_DECRYPTION
 struct pager_crypt_info;
 extern kern_return_t vm_map_apple_protected(
@@ -179,12 +170,17 @@ extern pager_return_t	vnode_pageout(
 	struct vnode *, upl_t,
 	upl_offset_t, vm_object_offset_t,
 	upl_size_t, int, int *);
+extern uint32_t vnode_trim (struct vnode *, int64_t offset, unsigned long len);
 extern memory_object_t vnode_pager_setup(
 	struct vnode *, memory_object_t);
 extern vm_object_offset_t vnode_pager_get_filesize(
 	struct vnode *);
 extern uint32_t vnode_pager_isinuse(
 	struct vnode *);
+extern boolean_t vnode_pager_isSSD(
+	struct vnode *);
+extern void vnode_pager_throttle(
+	void);
 extern uint32_t vnode_pager_return_hard_throttle_limit(
 	struct vnode *,
 	uint32_t     *,
@@ -199,7 +195,14 @@ extern kern_return_t vnode_pager_get_filename(
 extern kern_return_t vnode_pager_get_cs_blobs(
 	struct vnode	*vp,
 	void		**blobs);
-	
+
+#if CHECK_CS_VALIDATION_BITMAP	
+/* used by the vnode_pager_cs_validation_bitmap routine*/
+#define CS_BITMAP_SET	1
+#define CS_BITMAP_CLEAR	2
+#define CS_BITMAP_CHECK	3
+
+#endif /* CHECK_CS_VALIDATION_BITMAP */
 
 extern void vnode_pager_bootstrap(void) __attribute__((section("__TEXT, initcode")));
 extern kern_return_t
@@ -218,6 +221,9 @@ extern kern_return_t vnode_pager_get_object_size(
 extern kern_return_t vnode_pager_get_isinuse(
 	memory_object_t,
 	uint32_t *);
+extern kern_return_t vnode_pager_get_isSSD(
+	memory_object_t,
+	boolean_t *);
 extern kern_return_t vnode_pager_check_hard_throttle(
 	memory_object_t,
 	uint32_t *,
@@ -232,6 +238,19 @@ extern kern_return_t vnode_pager_get_object_filename(
 extern kern_return_t vnode_pager_get_object_cs_blobs(
 	memory_object_t	mem_obj,
 	void		**blobs);
+
+#if CHECK_CS_VALIDATION_BITMAP	
+extern kern_return_t vnode_pager_cs_check_validation_bitmap( 
+	memory_object_t	mem_obj, 
+	memory_object_offset_t	offset,
+	int		optype);
+#endif /*CHECK_CS_VALIDATION_BITMAP*/
+
+extern	kern_return_t ubc_cs_check_validation_bitmap (
+	struct vnode *vp, 
+	memory_object_offset_t offset,
+	int optype);
+
 extern kern_return_t vnode_pager_data_request( 
 	memory_object_t, 
 	memory_object_offset_t,
@@ -321,6 +340,10 @@ extern kern_return_t default_pager_memory_object_create(
 	vm_size_t,
 	memory_object_t *);
 #endif /* _memory_object_default_server_ */
+
+#if CONFIG_FREEZE
+extern unsigned int default_pager_swap_pages_free(void);
+#endif
 
 extern void   device_pager_reference(memory_object_t);
 extern void   device_pager_deallocate(memory_object_t);
@@ -422,6 +445,11 @@ extern int macx_backing_store_compaction(int flags);
 extern unsigned int mach_vm_ctl_page_free_wanted(void);
 
 extern void no_paging_space_action(void);
+
+#define VM_TOGGLE_CLEAR		0
+#define VM_TOGGLE_SET		1
+#define VM_TOGGLE_GETVALUE	999
+int vm_toggle_entry_reuse(int, int*);
 #endif	/* _VM_VM_PROTOS_H_ */
 
 #endif	/* XNU_KERNEL_PRIVATE */

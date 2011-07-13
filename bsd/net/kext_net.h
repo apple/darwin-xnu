@@ -46,48 +46,29 @@
  * Internal implementation bits
  */
 
-struct socket_filter;
-
-#define	SFEF_DETACHUSEZERO	0x1	/* Detach when use reaches zero */
-#define	SFEF_UNREGISTERING	0x2	/* Remove due to unregister */
-#define	SFEF_DETACHXREF		0x4	/* Extra reference held for detach */
-
-struct socket_filter_entry {
-	struct socket_filter_entry	*sfe_next_onsocket;
-	struct socket_filter_entry	*sfe_next_onfilter;
-	
-	struct socket_filter		*sfe_filter;
-	struct socket				*sfe_socket;
-	void						*sfe_cookie;
-	
-	u_int32_t					sfe_flags;
-};
-
-#define	SFF_DETACHING		0x1
-
-struct socket_filter {
-	TAILQ_ENTRY(socket_filter)	sf_protosw_next;	
-	TAILQ_ENTRY(socket_filter)	sf_global_next;
-	struct socket_filter_entry	*sf_entry_head;
-	
-	struct protosw				*sf_proto;
-	struct sflt_filter			sf_filter;
-	u_int32_t					sf_flags;
-	u_int32_t					sf_usecount;
-};
-
-TAILQ_HEAD(socket_filter_list, socket_filter);
-
 /* Private, internal implementation functions */
-void	sflt_init(void) __attribute__((section("__TEXT, initcode")));
-void	sflt_initsock(struct socket *so);
-void	sflt_termsock(struct socket *so);
-void	sflt_use(struct socket *so);
-void	sflt_unuse(struct socket *so);
-void	sflt_notify(struct socket *so, sflt_event_t event, void *param);
-int		sflt_data_in(struct socket *so, const struct sockaddr *from, mbuf_t *data,
-					 mbuf_t *control, sflt_data_flag_t flags, int *filtered);
-int		sflt_attach_private(struct socket *so, struct socket_filter *filter, sflt_handle handle, int locked);
+extern void	sflt_init(void) __attribute__((section("__TEXT, initcode")));
+extern void	sflt_initsock(struct socket *so);
+extern void	sflt_termsock(struct socket *so);
+extern errno_t	sflt_attach_internal(struct socket *so, sflt_handle	handle);
+extern void	sflt_notify(struct socket *so, sflt_event_t event, void *param);
+extern int	sflt_ioctl(struct socket *so, u_long cmd, caddr_t data);
+extern int	sflt_bind(struct socket *so, const struct sockaddr *nam);
+extern int	sflt_listen(struct socket *so);
+extern int	sflt_accept(struct socket *head, struct socket *so,
+						const struct sockaddr *local,
+						const struct sockaddr	*remote);
+extern int	sflt_getsockname(struct socket *so, struct sockaddr **local);
+extern int	sflt_getpeername(struct socket *so, struct sockaddr **remote);
+extern int	sflt_connectin(struct socket *head, const struct sockaddr *remote);
+extern int	sflt_connectout(struct socket *so, const struct sockaddr *nam);
+extern int	sflt_setsockopt(struct socket *so, struct sockopt *sopt);
+extern int	sflt_getsockopt(struct socket *so, struct sockopt *sopt);
+extern int	sflt_data_out(struct socket *so, const struct sockaddr	*to,
+						  mbuf_t *data, mbuf_t *control,
+						  sflt_data_flag_t flags);
+extern int	sflt_data_in(struct socket *so, const struct sockaddr *from,
+						 mbuf_t *data, mbuf_t *control, sflt_data_flag_t flags);
 
 #endif /* BSD_KERNEL_PRIVATE */
 

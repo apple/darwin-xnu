@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -88,6 +88,7 @@
 #include <sys/socketvar.h>
 #include <sys/fcntl.h>
 #include <sys/quota.h>
+#include <sys/priv.h>
 #include <libkern/OSAtomic.h>
 
 #include <sys/vm.h>
@@ -159,21 +160,29 @@ int nfs_max_async_writes = NFS_DEFMAXASYNCWRITES;
 
 int nfs_iosize = NFS_IOSIZE;
 int nfs_access_cache_timeout = NFS_MAXATTRTIMO;
-int nfs_access_delete = 0;
+int nfs_access_delete = 1; /* too many servers get this wrong - workaround on by default */
+int nfs_access_dotzfs = 1;
+int nfs_access_for_getattr = 0;
 int nfs_allow_async = 0;
 int nfs_statfs_rate_limit = NFS_DEFSTATFSRATELIMIT;
 int nfs_lockd_mounts = 0;
 int nfs_lockd_request_sent = 0;
+int nfs_idmap_ctrl = NFS_IDMAP_CTRL_USE_IDMAP_SERVICE;
+int nfs_callback_port = 0;
 
 int nfs_tprintf_initial_delay = NFS_TPRINTF_INITIAL_DELAY;
 int nfs_tprintf_delay = NFS_TPRINTF_DELAY;
 
 
-int		mountnfs(struct user_nfs_args *,mount_t,mbuf_t,vfs_context_t,vnode_t *);
+int		mountnfs(char *, mount_t, vfs_context_t, vnode_t *);
 static int	nfs_mount_diskless(struct nfs_dlmount *, const char *, int, vnode_t *, mount_t *, vfs_context_t);
 #if !defined(NO_MOUNT_PRIVATE)
 static int	nfs_mount_diskless_private(struct nfs_dlmount *, const char *, int, vnode_t *, mount_t *, vfs_context_t);
 #endif /* NO_MOUNT_PRIVATE */
+int		nfs_mount_connect(struct nfsmount *);
+void		nfs_mount_cleanup(struct nfsmount *);
+int		nfs_mountinfo_assemble(struct nfsmount *, struct xdrbuf *);
+int		nfs4_mount_update_path_with_symlink(struct nfsmount *, struct nfs_fs_path *, uint32_t, fhandle_t *, int *, fhandle_t *, vfs_context_t);
 
 /*
  * NFS VFS operations.
@@ -218,8 +227,8 @@ struct vfsops nfs_vfsops = {
 /*
  * version-specific NFS functions
  */
-int nfs3_mount(struct nfsmount *, vfs_context_t, struct user_nfs_args *, nfsnode_t *);
-int nfs4_mount(struct nfsmount *, vfs_context_t, struct user_nfs_args *, nfsnode_t *);
+int nfs3_mount(struct nfsmount *, vfs_context_t, nfsnode_t *);
+int nfs4_mount(struct nfsmount *, vfs_context_t, nfsnode_t *);
 int nfs3_fsinfo(struct nfsmount *, nfsnode_t, vfs_context_t);
 int nfs3_update_statfs(struct nfsmount *, vfs_context_t);
 int nfs4_update_statfs(struct nfsmount *, vfs_context_t);
@@ -247,7 +256,10 @@ struct nfs_funcs nfs3_funcs = {
 	nfs3_lookup_rpc_async,
 	nfs3_lookup_rpc_async_finish,
 	nfs3_remove_rpc,
-	nfs3_rename_rpc
+	nfs3_rename_rpc,
+	nfs3_setlock_rpc,
+	nfs3_unlock_rpc,
+	nfs3_getlock_rpc
 	};
 struct nfs_funcs nfs4_funcs = {
 	nfs4_mount,
@@ -265,7 +277,10 @@ struct nfs_funcs nfs4_funcs = {
 	nfs4_lookup_rpc_async,
 	nfs4_lookup_rpc_async_finish,
 	nfs4_remove_rpc,
-	nfs4_rename_rpc
+	nfs4_rename_rpc,
+	nfs4_setlock_rpc,
+	nfs4_unlock_rpc,
+	nfs4_getlock_rpc
 	};
 
 /*
@@ -358,8 +373,7 @@ nfs3_update_statfs(struct nfsmount *nmp, vfs_context_t ctx)
 	nfsm_chain_add_fh(error, &nmreq, nfsvers, np->n_fhp, np->n_fhsize);
 	nfsm_chain_build_done(error, &nmreq);
 	nfsmout_if(error);
-	error = nfs_request(np, NULL, &nmreq, NFSPROC_FSSTAT, ctx,
-		   &nmrep, &xid, &status);
+	error = nfs_request(np, NULL, &nmreq, NFSPROC_FSSTAT, ctx, NULL, &nmrep, &xid, &status);
 	if ((lockerror = nfs_node_lock(np)))
 		error = lockerror;
 	if (nfsvers == NFS_VER3)
@@ -418,6 +432,7 @@ nfs4_update_statfs(struct nfsmount *nmp, vfs_context_t ctx)
 	struct nfsm_chain nmreq, nmrep;
 	uint32_t bitmap[NFS_ATTR_BITMAP_LEN];
 	struct nfs_vattr nvattr;
+	struct nfsreq_secinfo_args si;
 
 	nfsvers = nmp->nm_vers;
 	np = nmp->nm_dnp;
@@ -426,6 +441,8 @@ nfs4_update_statfs(struct nfsmount *nmp, vfs_context_t ctx)
 	if ((error = vnode_get(NFSTOV(np))))
 		return (error);
 
+	NFSREQ_SECINFO_SET(&si, np, NULL, 0, NULL, 0);
+	NVATTR_INIT(&nvattr);
 	nfsm_chain_null(&nmreq);
 	nfsm_chain_null(&nmrep);
 
@@ -440,12 +457,11 @@ nfs4_update_statfs(struct nfsmount *nmp, vfs_context_t ctx)
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_GETATTR);
 	NFS_COPY_ATTRIBUTES(nfs_getattr_bitmap, bitmap);
 	NFS4_STATFS_ATTRIBUTES(bitmap);
-	nfsm_chain_add_bitmap_masked(error, &nmreq, bitmap,
-		NFS_ATTR_BITMAP_LEN, nmp->nm_fsattr.nfsa_supp_attr);
+	nfsm_chain_add_bitmap_supported(error, &nmreq, bitmap, nmp, np);
 	nfsm_chain_build_done(error, &nmreq);
 	nfsm_assert(error, (numops == 0), EPROTO);
 	nfsmout_if(error);
-	error = nfs_request(np, NULL, &nmreq, NFSPROC4_COMPOUND, ctx, &nmrep, &xid, &status);
+	error = nfs_request(np, NULL, &nmreq, NFSPROC4_COMPOUND, ctx, &si, &nmrep, &xid, &status);
 	nfsm_chain_skip_tag(error, &nmrep);
 	nfsm_chain_get_32(error, &nmrep, numops);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_PUTFH);
@@ -453,8 +469,7 @@ nfs4_update_statfs(struct nfsmount *nmp, vfs_context_t ctx)
 	nfsm_assert(error, NFSTONMP(np), ENXIO);
 	nfsmout_if(error);
 	lck_mtx_lock(&nmp->nm_lock);
-	NFS_CLEAR_ATTRIBUTES(nvattr.nva_bitmap);
-	error = nfs4_parsefattr(&nmrep, &nmp->nm_fsattr, &nvattr, NULL, NULL);
+	error = nfs4_parsefattr(&nmrep, &nmp->nm_fsattr, &nvattr, NULL, NULL, NULL);
 	lck_mtx_unlock(&nmp->nm_lock);
 	nfsmout_if(error);
 	if ((lockerror = nfs_node_lock(np)))
@@ -467,6 +482,7 @@ nfs4_update_statfs(struct nfsmount *nmp, vfs_context_t ctx)
 	nfsmout_if(error);
 	nmp->nm_fsattr.nfsa_bsize = NFS_FABLKSIZE;
 nfsmout:
+	NVATTR_CLEANUP(&nvattr);
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
 	vnode_put(NFSTOV(np));
@@ -605,6 +621,8 @@ nfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t ctx)
 			caps |= VOL_CAP_FMT_HIDDEN_FILES;
 			valid |= VOL_CAP_FMT_HIDDEN_FILES;
 			// VOL_CAP_FMT_OPENDENYMODES
+//			caps |= VOL_CAP_FMT_OPENDENYMODES;
+//			valid |= VOL_CAP_FMT_OPENDENYMODES;
 		}
 		fsap->f_capabilities.capabilities[VOL_CAPABILITIES_FORMAT] =
 			// VOL_CAP_FMT_PERSISTENTOBJECTIDS |
@@ -655,10 +673,18 @@ nfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t ctx)
 		if (nfsvers >= NFS_VER4) {
 			caps = VOL_CAP_INT_ADVLOCK | VOL_CAP_INT_FLOCK;
 			valid = VOL_CAP_INT_ADVLOCK | VOL_CAP_INT_FLOCK;
-			// VOL_CAP_INT_EXTENDED_SECURITY
-			// VOL_CAP_INT_NAMEDSTREAMS
-			// VOL_CAP_INT_EXTENDED_ATTR
-		} else if ((nmp->nm_flag & NFSMNT_NOLOCKS)) {
+			if (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_ACL)
+				caps |= VOL_CAP_INT_EXTENDED_SECURITY;
+			valid |= VOL_CAP_INT_EXTENDED_SECURITY;
+			if (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR)
+				caps |= VOL_CAP_INT_EXTENDED_ATTR;
+			valid |= VOL_CAP_INT_EXTENDED_ATTR;
+#if NAMEDSTREAMS
+			if (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR)
+				caps |= VOL_CAP_INT_NAMEDSTREAMS;
+			valid |= VOL_CAP_INT_NAMEDSTREAMS;
+#endif
+		} else if (nmp->nm_lockmode == NFS_LOCK_MODE_DISABLED) {
 			/* locks disabled on this mount, so they definitely won't work */
 			valid = VOL_CAP_INT_ADVLOCK | VOL_CAP_INT_FLOCK;
 		} else if (nmp->nm_state & NFSSTA_LOCKSWORK) {
@@ -681,6 +707,7 @@ nfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t ctx)
 			// VOL_CAP_INT_MANLOCK |
 			// VOL_CAP_INT_NAMEDSTREAMS |
 			// VOL_CAP_INT_EXTENDED_ATTR |
+			VOL_CAP_INT_REMOTE_EVENT |
 			caps;
 		fsap->f_capabilities.valid[VOL_CAPABILITIES_INTERFACES] =
 			VOL_CAP_INT_SEARCHFS |
@@ -698,6 +725,7 @@ nfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t ctx)
 			// VOL_CAP_INT_MANLOCK |
 			// VOL_CAP_INT_NAMEDSTREAMS |
 			// VOL_CAP_INT_EXTENDED_ATTR |
+			VOL_CAP_INT_REMOTE_EVENT |
 			valid;
 
 		fsap->f_capabilities.capabilities[VOL_CAPABILITIES_RESERVED1] = 0;
@@ -749,8 +777,7 @@ nfs3_fsinfo(struct nfsmount *nmp, nfsnode_t np, vfs_context_t ctx)
 	nfsm_chain_add_fh(error, &nmreq, nmp->nm_vers, np->n_fhp, np->n_fhsize);
 	nfsm_chain_build_done(error, &nmreq);
 	nfsmout_if(error);
-	error = nfs_request(np, NULL, &nmreq, NFSPROC_FSINFO, ctx,
-			&nmrep, &xid, &status);
+	error = nfs_request(np, NULL, &nmreq, NFSPROC_FSINFO, ctx, NULL, &nmrep, &xid, &status);
 	if ((lockerror = nfs_node_lock(np)))
 		error = lockerror;
 	nfsm_chain_postop_attr_update(error, &nmrep, np, &xid);
@@ -770,7 +797,7 @@ nfs3_fsinfo(struct nfsmount *nmp, nfsnode_t np, vfs_context_t ctx)
 	if (prefsize < nmp->nm_rsize)
 		nmp->nm_rsize = (prefsize + NFS_FABLKSIZE - 1) &
 			~(NFS_FABLKSIZE - 1);
-	if (maxsize < nmp->nm_rsize) {
+	if ((maxsize > 0) && (maxsize < nmp->nm_rsize)) {
 		nmp->nm_rsize = maxsize & ~(NFS_FABLKSIZE - 1);
 		if (nmp->nm_rsize == 0)
 			nmp->nm_rsize = maxsize;
@@ -784,7 +811,7 @@ nfs3_fsinfo(struct nfsmount *nmp, nfsnode_t np, vfs_context_t ctx)
 	if (prefsize < nmp->nm_wsize)
 		nmp->nm_wsize = (prefsize + NFS_FABLKSIZE - 1) &
 			~(NFS_FABLKSIZE - 1);
-	if (maxsize < nmp->nm_wsize) {
+	if ((maxsize > 0) && (maxsize < nmp->nm_wsize)) {
 		nmp->nm_wsize = maxsize & ~(NFS_FABLKSIZE - 1);
 		if (nmp->nm_wsize == 0)
 			nmp->nm_wsize = maxsize;
@@ -793,10 +820,11 @@ nfs3_fsinfo(struct nfsmount *nmp, nfsnode_t np, vfs_context_t ctx)
 
 	nfsm_chain_get_32(error, &nmrep, prefsize);
 	nfsmout_if(error);
-	if (prefsize < nmp->nm_readdirsize)
+	if ((prefsize > 0) && (prefsize < nmp->nm_readdirsize))
 		nmp->nm_readdirsize = prefsize;
-	if (maxsize < nmp->nm_readdirsize)
-		nmp->nm_readdirsize = maxsize;
+	if ((nmp->nm_fsattr.nfsa_maxread > 0) &&
+	    (nmp->nm_fsattr.nfsa_maxread < nmp->nm_readdirsize))
+		nmp->nm_readdirsize = nmp->nm_fsattr.nfsa_maxread;
 
 	nfsm_chain_get_64(error, &nmrep, nmp->nm_fsattr.nfsa_maxfilesize);
 
@@ -846,7 +874,6 @@ int
 nfs_mountroot(void)
 {
 	struct nfs_diskless nd;
-	struct nfs_vattr nvattr;
 	mount_t mp = NULL;
 	vnode_t vp = NULL;
 	vfs_context_t ctx;
@@ -864,9 +891,9 @@ nfs_mountroot(void)
 	 */
 	bzero((caddr_t) &nd, sizeof(nd));
 	error = nfs_boot_init(&nd);
-	if (error) {
-		panic("nfs_boot_init failed with %d\n", error);
-	}
+	if (error)
+		panic("nfs_boot_init: unable to initialize NFS root system information, "
+		      "error %d, check configuration: %s\n", error, PE_boot_args());
 
 	/*
 	 * Try NFSv3 first, then fallback to NFSv2.
@@ -895,27 +922,29 @@ tryagain:
 		}
 		if (v3) {
 			if (sotype == SOCK_STREAM) {
-				printf("nfs_boot_getfh(v3,TCP) failed with %d, trying UDP...\n", error);
+				printf("NFS mount (v3,TCP) failed with error %d, trying UDP...\n", error);
 				sotype = SOCK_DGRAM;
 				goto tryagain;
 			}
-			printf("nfs_boot_getfh(v3,UDP) failed with %d, trying v2...\n", error);
+			printf("NFS mount (v3,UDP) failed with error %d, trying v2...\n", error);
 			v3 = 0;
 			sotype = SOCK_STREAM;
 			goto tryagain;
 		} else if (sotype == SOCK_STREAM) {
-			printf("nfs_boot_getfh(v2,TCP) failed with %d, trying UDP...\n", error);
+			printf("NFS mount (v2,TCP) failed with error %d, trying UDP...\n", error);
 			sotype = SOCK_DGRAM;
 			goto tryagain;
+		} else {
+			printf("NFS mount (v2,UDP) failed with error %d, giving up...\n", error);
 		}
 		switch(error) {
 		case EPROGUNAVAIL:
-			panic("nfs_boot_getfh(v2,UDP) failed: NFS server mountd not responding - check server configuration: %s", PE_boot_args());
+			panic("NFS mount failed: NFS server mountd not responding, check server configuration: %s", PE_boot_args());
 		case EACCES:
 		case EPERM:
-			panic("nfs_boot_getfh(v2,UDP) failed: NFS server refused mount - check server configuration: %s", PE_boot_args());
+			panic("NFS mount failed: NFS server refused mount, check server configuration: %s", PE_boot_args());
 		default:
-			panic("nfs_boot_getfh(v2,UDP) failed with %d: %s", error, PE_boot_args());
+			panic("NFS mount failed with error %d, check configuration: %s", error, PE_boot_args());
 		}
 	}
 
@@ -943,20 +972,22 @@ tryagain:
 	{
 		if (v3) {
 			if (sotype == SOCK_STREAM) {
-				printf("nfs_mount_diskless(v3,TCP) failed with %d, trying UDP...\n", error);
+				printf("NFS root mount (v3,TCP) failed with %d, trying UDP...\n", error);
 				sotype = SOCK_DGRAM;
 				goto tryagain;
 			}
-			printf("nfs_mount_diskless(v3,UDP) failed with %d, trying v2...\n", error);
+			printf("NFS root mount (v3,UDP) failed with %d, trying v2...\n", error);
 			v3 = 0;
 			sotype = SOCK_STREAM;
 			goto tryagain;
 		} else if (sotype == SOCK_STREAM) {
-			printf("nfs_mount_diskless(v2,TCP) failed with %d, trying UDP...\n", error);
+			printf("NFS root mount (v2,TCP) failed with %d, trying UDP...\n", error);
 			sotype = SOCK_DGRAM;
 			goto tryagain;
+		} else {
+			printf("NFS root mount (v2,UDP) failed with error %d, giving up...\n", error);
 		}
-		panic("nfs_mount_diskless(v2,UDP) root failed with %d: %s\n", error, PE_boot_args());
+		panic("NFS root mount failed with error %d, check configuration: %s\n", error, PE_boot_args());
 	}
 	}
 	printf("root on %s\n", nd.nd_root.ndm_mntfrom);
@@ -969,9 +1000,8 @@ tryagain:
 	if (nd.nd_private.ndm_saddr.sin_addr.s_addr) {
 	    error = nfs_mount_diskless_private(&nd.nd_private, "/private",
 					       0, &vppriv, &mppriv, ctx);
-	    if (error) {
-		panic("nfs_mount_diskless private failed with %d\n", error);
-	    }
+	    if (error)
+		panic("NFS /private mount failed with error %d, check configuration: %s\n", error, PE_boot_args());
 	    printf("private on %s\n", nd.nd_private.ndm_mntfrom);
 
 	    vfs_unbusy(mppriv);
@@ -990,8 +1020,9 @@ tryagain:
 		FREE_ZONE(nd.nd_private.ndm_path, MAXPATHLEN, M_NAMEI);
 
 	/* Get root attributes (for the time). */
-	error = nfs_getattr(VTONFS(vp), &nvattr, ctx, NGA_UNCACHED);
-	if (error) panic("nfs_mountroot: getattr for root");
+	error = nfs_getattr(VTONFS(vp), NULL, ctx, NGA_UNCACHED);
+	if (error)
+		panic("NFS mount: failed to get attributes for root directory, error %d, check server", error);
 	return (0);
 }
 
@@ -1007,13 +1038,18 @@ nfs_mount_diskless(
 	mount_t *mpp,
 	vfs_context_t ctx)
 {
-	struct user_nfs_args args;
 	mount_t mp;
-	mbuf_t m;
-	int error;
+	int error, numcomps;
+	char *xdrbuf, *p, *cp, *frompath, *endserverp;
+	char uaddr[MAX_IPv4_STR_LEN];
+	struct xdrbuf xb;
+	uint32_t mattrs[NFS_MATTR_BITMAP_LEN];
+	uint32_t mflags_mask[NFS_MFLAG_BITMAP_LEN];
+	uint32_t mflags[NFS_MFLAG_BITMAP_LEN];
+	uint32_t argslength_offset, attrslength_offset, end_offset;
 
 	if ((error = vfs_rootmountalloc("nfs", ndmntp->ndm_mntfrom, &mp))) {
-		printf("nfs_mount_diskless: NFS not configured");
+		printf("nfs_mount_diskless: NFS not configured\n");
 		return (error);
 	}
 
@@ -1021,26 +1057,112 @@ nfs_mount_diskless(
 	if (!(mntflag & MNT_RDONLY))
 		mp->mnt_flag &= ~MNT_RDONLY;
 
-	/* Initialize mount args. */
-	bzero((caddr_t) &args, sizeof(args));
-	args.addr     = CAST_USER_ADDR_T(&ndmntp->ndm_saddr);
-	args.addrlen  = ndmntp->ndm_saddr.sin_len;
-	args.sotype   = ndmntp->ndm_sotype;
-	args.fh       = CAST_USER_ADDR_T(&ndmntp->ndm_fh[0]);
-	args.fhsize   = ndmntp->ndm_fhlen;
-	args.hostname = CAST_USER_ADDR_T(ndmntp->ndm_mntfrom);
-	args.flags    = NFSMNT_RESVPORT;
-	if (ndmntp->ndm_nfsv3)
-		args.flags |= NFSMNT_NFSV3;
+	/* find the server-side path being mounted */
+	frompath = ndmntp->ndm_mntfrom;
+	if (*frompath == '[') {  /* skip IPv6 literal address */
+		while (*frompath && (*frompath != ']'))
+			frompath++;
+		if (*frompath == ']')
+			frompath++;
+	}
+	while (*frompath && (*frompath != ':'))
+		frompath++;
+	endserverp = frompath;
+	while (*frompath && (*frompath == ':'))
+		frompath++;
+	/* count fs location path components */
+	p = frompath;
+	while (*p && (*p == '/'))
+		p++;
+	numcomps = 0;
+	while (*p) {
+		numcomps++;
+		while (*p && (*p != '/'))
+			p++;
+		while (*p && (*p == '/'))
+			p++;
+	}
 
-	error = mbuf_get(MBUF_WAITOK, MBUF_TYPE_SONAME, &m);
+	/* convert address to universal address string */
+	if (inet_ntop(AF_INET, &ndmntp->ndm_saddr.sin_addr, uaddr, sizeof(uaddr)) != uaddr) {
+		printf("nfs_mount_diskless: bad address\n");
+		return (EINVAL);
+	}
+
+	/* prepare mount attributes */
+	NFS_BITMAP_ZERO(mattrs, NFS_MATTR_BITMAP_LEN);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_NFS_VERSION);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_SOCKET_TYPE);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_NFS_PORT);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_FH);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_FS_LOCATIONS);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_MNTFLAGS);
+
+	/* prepare mount flags */
+	NFS_BITMAP_ZERO(mflags_mask, NFS_MFLAG_BITMAP_LEN);
+	NFS_BITMAP_ZERO(mflags, NFS_MFLAG_BITMAP_LEN);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_RESVPORT);
+	NFS_BITMAP_SET(mflags, NFS_MFLAG_RESVPORT);
+
+	/* build xdr buffer */
+	xb_init_buffer(&xb, NULL, 0);
+	xb_add_32(error, &xb, NFS_ARGSVERSION_XDR);
+	argslength_offset = xb_offset(&xb);
+	xb_add_32(error, &xb, 0); // args length
+	xb_add_32(error, &xb, NFS_XDRARGS_VERSION_0);
+	xb_add_bitmap(error, &xb, mattrs, NFS_MATTR_BITMAP_LEN);
+	attrslength_offset = xb_offset(&xb);
+	xb_add_32(error, &xb, 0); // attrs length
+	xb_add_32(error, &xb, ndmntp->ndm_nfsv3 ? 3 : 2); // NFS version
+	xb_add_string(error, &xb, ((ndmntp->ndm_sotype == SOCK_DGRAM) ? "udp" : "tcp"), 3);
+	xb_add_32(error, &xb, ntohs(ndmntp->ndm_saddr.sin_port)); // NFS port
+	xb_add_fh(error, &xb, &ndmntp->ndm_fh[0], ndmntp->ndm_fhlen);
+	/* fs location */
+	xb_add_32(error, &xb, 1); /* fs location count */
+	xb_add_32(error, &xb, 1); /* server count */
+	xb_add_string(error, &xb, ndmntp->ndm_mntfrom, (endserverp - ndmntp->ndm_mntfrom)); /* server name */
+	xb_add_32(error, &xb, 1); /* address count */
+	xb_add_string(error, &xb, uaddr, strlen(uaddr)); /* address */
+	xb_add_32(error, &xb, 0); /* empty server info */
+	xb_add_32(error, &xb, numcomps); /* pathname component count */
+	p = frompath;
+	while (*p && (*p == '/'))
+		p++;
+	while (*p) {
+		cp = p;
+		while (*p && (*p != '/'))
+			p++;
+		xb_add_string(error, &xb, cp, (p - cp)); /* component */
+		if (error)
+			break;
+		while (*p && (*p == '/'))
+			p++;
+	}
+	xb_add_32(error, &xb, 0); /* empty fsl info */
+	xb_add_32(error, &xb, mntflag); /* MNT flags */
+	xb_build_done(error, &xb);
+
+	/* update opaque counts */
+	end_offset = xb_offset(&xb);
+	if (!error) {
+		error = xb_seek(&xb, argslength_offset);
+		xb_add_32(error, &xb, end_offset - argslength_offset + XDRWORD/*version*/);
+	}
+	if (!error) {
+		error = xb_seek(&xb, attrslength_offset);
+		xb_add_32(error, &xb, end_offset - attrslength_offset - XDRWORD/*don't include length field*/);
+	}
 	if (error) {
-		printf("nfs_mount_diskless: mbuf_get(soname) failed");
+		printf("nfs_mount_diskless: error %d assembling mount args\n", error);
+		xb_cleanup(&xb);
 		return (error);
 	}
-	mbuf_setlen(m, ndmntp->ndm_saddr.sin_len);
-	bcopy(&ndmntp->ndm_saddr, mbuf_data(m), ndmntp->ndm_saddr.sin_len);
-	if ((error = mountnfs(&args, mp, m, ctx, vpp))) {
+	/* grab the assembled buffer */
+	xdrbuf = xb_buffer_base(&xb);
+	xb.xb_flags &= ~XB_CLEANUP;
+
+	/* do the mount */
+	if ((error = mountnfs(xdrbuf, mp, ctx, vpp))) {
 		printf("nfs_mountroot: mount %s failed: %d\n", mntname, error);
 		// XXX vfs_rootmountfailed(mp);
 		mount_list_lock();
@@ -1052,10 +1174,11 @@ nfs_mount_diskless(
 		mac_mount_label_destroy(mp);
 #endif
 		FREE_ZONE(mp, sizeof(struct mount), M_MOUNT);
-		return (error);
+	} else {
+		*mpp = mp;
 	}
-	*mpp = mp;
-	return (0);
+	xb_cleanup(&xb);
+	return (error);
 }
 
 #if !defined(NO_MOUNT_PRIVATE)
@@ -1072,16 +1195,21 @@ nfs_mount_diskless_private(
 	mount_t *mpp,
 	vfs_context_t ctx)
 {
-	struct user_nfs_args args;
 	mount_t mp;
-	mbuf_t m;
-	int error;
+	int error, numcomps;
 	proc_t procp;
 	struct vfstable *vfsp;
 	struct nameidata nd;
 	vnode_t vp;
+	char *xdrbuf = NULL, *p, *cp, *frompath, *endserverp;
+	char uaddr[MAX_IPv4_STR_LEN];
+	struct xdrbuf xb;
+	uint32_t mattrs[NFS_MATTR_BITMAP_LEN];
+	uint32_t mflags_mask[NFS_MFLAG_BITMAP_LEN], mflags[NFS_MFLAG_BITMAP_LEN];
+	uint32_t argslength_offset, attrslength_offset, end_offset;
 
 	procp = current_proc(); /* XXX */
+	xb_init(&xb, 0);
 
 	{
 	/*
@@ -1107,7 +1235,7 @@ nfs_mount_diskless_private(
 	/*
 	 * Get vnode to be covered
 	 */
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
+	NDINIT(&nd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
 	    CAST_USER_ADDR_T(mntname), ctx);
 	if ((error = namei(&nd))) {
 		printf("nfs_mountroot: private namei failed!\n");
@@ -1189,26 +1317,112 @@ nfs_mount_diskless_private(
 	mac_mount_label_associate(ctx, mp);
 #endif
 
-	/* Initialize mount args. */
-	bzero((caddr_t) &args, sizeof(args));
-	args.addr     = CAST_USER_ADDR_T(&ndmntp->ndm_saddr);
-	args.addrlen  = ndmntp->ndm_saddr.sin_len;
-	args.sotype   = ndmntp->ndm_sotype;
-	args.fh       = CAST_USER_ADDR_T(ndmntp->ndm_fh);
-	args.fhsize   = ndmntp->ndm_fhlen;
-	args.hostname = CAST_USER_ADDR_T(ndmntp->ndm_mntfrom);
-	args.flags    = NFSMNT_RESVPORT;
-	if (ndmntp->ndm_nfsv3)
-		args.flags |= NFSMNT_NFSV3;
+	/* find the server-side path being mounted */
+	frompath = ndmntp->ndm_mntfrom;
+	if (*frompath == '[') {  /* skip IPv6 literal address */
+		while (*frompath && (*frompath != ']'))
+			frompath++;
+		if (*frompath == ']')
+			frompath++;
+	}
+	while (*frompath && (*frompath != ':'))
+		frompath++;
+	endserverp = frompath;
+	while (*frompath && (*frompath == ':'))
+		frompath++;
+	/* count fs location path components */
+	p = frompath;
+	while (*p && (*p == '/'))
+		p++;
+	numcomps = 0;
+	while (*p) {
+		numcomps++;
+		while (*p && (*p != '/'))
+			p++;
+		while (*p && (*p == '/'))
+			p++;
+	}
 
-	error = mbuf_get(MBUF_WAITOK, MBUF_TYPE_SONAME, &m);
-	if (error) {
-		printf("nfs_mount_diskless_private: mbuf_get(soname) failed");
+	/* convert address to universal address string */
+	if (inet_ntop(AF_INET, &ndmntp->ndm_saddr.sin_addr, uaddr, sizeof(uaddr)) != uaddr) {
+		printf("nfs_mountroot: bad address\n");
+		error = EINVAL;
 		goto out;
 	}
-	mbuf_setlen(m, ndmntp->ndm_saddr.sin_len);
-	bcopy(&ndmntp->ndm_saddr, mbuf_data(m), ndmntp->ndm_saddr.sin_len);
-	if ((error = mountnfs(&args, mp, m, ctx, &vp))) {
+
+	/* prepare mount attributes */
+	NFS_BITMAP_ZERO(mattrs, NFS_MATTR_BITMAP_LEN);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_NFS_VERSION);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_SOCKET_TYPE);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_NFS_PORT);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_FH);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_FS_LOCATIONS);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_MNTFLAGS);
+
+	/* prepare mount flags */
+	NFS_BITMAP_ZERO(mflags_mask, NFS_MFLAG_BITMAP_LEN);
+	NFS_BITMAP_ZERO(mflags, NFS_MFLAG_BITMAP_LEN);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_RESVPORT);
+	NFS_BITMAP_SET(mflags, NFS_MFLAG_RESVPORT);
+
+	/* build xdr buffer */
+	xb_init_buffer(&xb, NULL, 0);
+	xb_add_32(error, &xb, NFS_ARGSVERSION_XDR);
+	argslength_offset = xb_offset(&xb);
+	xb_add_32(error, &xb, 0); // args length
+	xb_add_32(error, &xb, NFS_XDRARGS_VERSION_0);
+	xb_add_bitmap(error, &xb, mattrs, NFS_MATTR_BITMAP_LEN);
+	attrslength_offset = xb_offset(&xb);
+	xb_add_32(error, &xb, 0); // attrs length
+	xb_add_32(error, &xb, ndmntp->ndm_nfsv3 ? 3 : 2); // NFS version
+	xb_add_string(error, &xb, ((ndmntp->ndm_sotype == SOCK_DGRAM) ? "udp" : "tcp"), 3);
+	xb_add_32(error, &xb, ntohs(ndmntp->ndm_saddr.sin_port)); // NFS port
+	xb_add_fh(error, &xb, &ndmntp->ndm_fh[0], ndmntp->ndm_fhlen);
+	/* fs location */
+	xb_add_32(error, &xb, 1); /* fs location count */
+	xb_add_32(error, &xb, 1); /* server count */
+	xb_add_string(error, &xb, ndmntp->ndm_mntfrom, (endserverp - ndmntp->ndm_mntfrom)); /* server name */
+	xb_add_32(error, &xb, 1); /* address count */
+	xb_add_string(error, &xb, uaddr, strlen(uaddr)); /* address */
+	xb_add_32(error, &xb, 0); /* empty server info */
+	xb_add_32(error, &xb, numcomps); /* pathname component count */
+	p = frompath;
+	while (*p && (*p == '/'))
+		p++;
+	while (*p) {
+		cp = p;
+		while (*p && (*p != '/'))
+			p++;
+		xb_add_string(error, &xb, cp, (p - cp)); /* component */
+		if (error)
+			break;
+		while (*p && (*p == '/'))
+			p++;
+	}
+	xb_add_32(error, &xb, 0); /* empty fsl info */
+	xb_add_32(error, &xb, mntflag); /* MNT flags */
+	xb_build_done(error, &xb);
+
+	/* update opaque counts */
+	end_offset = xb_offset(&xb);
+	if (!error) {
+		error = xb_seek(&xb, argslength_offset);
+		xb_add_32(error, &xb, end_offset - argslength_offset + XDRWORD/*version*/);
+	}
+	if (!error) {
+		error = xb_seek(&xb, attrslength_offset);
+		xb_add_32(error, &xb, end_offset - attrslength_offset - XDRWORD/*don't include length field*/);
+	}
+	if (error) {
+		printf("nfs_mountroot: error %d assembling mount args\n", error);
+		goto out;
+	}
+	/* grab the assembled buffer */
+	xdrbuf = xb_buffer_base(&xb);
+	xb.xb_flags &= ~XB_CLEANUP;
+
+	/* do the mount */
+	if ((error = mountnfs(xdrbuf, mp, ctx, &vp))) {
 		printf("nfs_mountroot: mount %s failed: %d\n", mntname, error);
 		mount_list_lock();
 		vfsp->vfc_refcount--;
@@ -1225,63 +1439,65 @@ nfs_mount_diskless_private(
 	*mpp = mp;
 	*vpp = vp;
 out:
+	xb_cleanup(&xb);
 	return (error);
 }
 #endif /* NO_MOUNT_PRIVATE */
 
 /*
- * VFS Operations.
- *
- * mount system call
+ * Convert old style NFS mount args to XDR.
  */
-int
-nfs_vfs_mount(mount_t mp, vnode_t vp, user_addr_t data, vfs_context_t ctx)
+static int
+nfs_convert_old_nfs_args(mount_t mp, user_addr_t data, vfs_context_t ctx, int argsversion, int inkernel, char **xdrbufp)
 {
-	int error, argsvers;
+	int error = 0, args64bit, argsize, numcomps;
 	struct user_nfs_args args;
 	struct nfs_args tempargs;
-	mbuf_t nam;
+	caddr_t argsp;
 	size_t len;
-	u_char nfh[NFSX_V3FHMAX];
-	char *mntfrom;
+	u_char nfh[NFS4_FHSIZE];
+	char *mntfrom, *endserverp, *frompath, *p, *cp;
+	struct sockaddr_storage ss;
+	void *sinaddr;
+	char uaddr[MAX_IPv6_STR_LEN];
+	uint32_t mattrs[NFS_MATTR_BITMAP_LEN];
+	uint32_t mflags_mask[NFS_MFLAG_BITMAP_LEN], mflags[NFS_MFLAG_BITMAP_LEN];
+	uint32_t nfsvers, nfslockmode = 0, argslength_offset, attrslength_offset, end_offset;
+	struct xdrbuf xb;
 
-	error = copyin(data, (caddr_t)&argsvers, sizeof (argsvers));
-	if (error)
-		return (error);
+	*xdrbufp = NULL;
 
-	switch (argsvers) {
+	/* allocate a temporary buffer for mntfrom */
+	MALLOC_ZONE(mntfrom, char*, MAXPATHLEN, M_NAMEI, M_WAITOK);
+	if (!mntfrom)
+		return (ENOMEM);
+
+	args64bit = (inkernel || vfs_context_is64bit(ctx));
+	argsp = args64bit ? (void*)&args : (void*)&tempargs;
+
+	argsize = args64bit ? sizeof(args) : sizeof(tempargs);
+	switch (argsversion) {
 	case 3:
-		if (vfs_context_is64bit(ctx))
-			error = copyin(data, (caddr_t)&args, sizeof (struct user_nfs_args3));
-		else
-			error = copyin(data, (caddr_t)&tempargs, sizeof (struct nfs_args3));
-		break;
+		argsize -= NFS_ARGSVERSION4_INCSIZE;
 	case 4:
-		if (vfs_context_is64bit(ctx))
-			error = copyin(data, (caddr_t)&args, sizeof (struct user_nfs_args4));
-		else
-			error = copyin(data, (caddr_t)&tempargs, sizeof (struct nfs_args4));
-		break;
+		argsize -= NFS_ARGSVERSION5_INCSIZE;
 	case 5:
-		if (vfs_context_is64bit(ctx))
-			error = copyin(data, (caddr_t)&args, sizeof (struct user_nfs_args5));
-		else
-			error = copyin(data, (caddr_t)&tempargs, sizeof (struct nfs_args5));
-		break;
+		argsize -= NFS_ARGSVERSION6_INCSIZE;
 	case 6:
-		if (vfs_context_is64bit(ctx))
-			error = copyin(data, (caddr_t)&args, sizeof (args));
-		else
-			error = copyin(data, (caddr_t)&tempargs, sizeof (tempargs));
 		break;
 	default:
-		return (EPROGMISMATCH);
+		error = EPROGMISMATCH;
+		goto nfsmout;
 	}
-	if (error)
-		return (error);
 
-	if (!vfs_context_is64bit(ctx)) {
-		args.version = tempargs.version;
+	/* read in the structure */
+	if (inkernel)
+		bcopy(CAST_DOWN(void *, data), argsp, argsize);
+	else
+		error = copyin(data, argsp, argsize);
+	nfsmout_if(error);
+
+	if (!args64bit) {
 		args.addrlen = tempargs.addrlen;
 		args.sotype = tempargs.sotype;
 		args.proto = tempargs.proto;
@@ -1299,39 +1515,357 @@ nfs_vfs_mount(mount_t mp, vnode_t vp, user_addr_t data, vfs_context_t ctx)
 		args.addr = CAST_USER_ADDR_T(tempargs.addr);
 		args.fh = CAST_USER_ADDR_T(tempargs.fh);
 		args.hostname = CAST_USER_ADDR_T(tempargs.hostname);
-		if (argsvers >= 4) {
+		if (args.version >= 4) {
 			args.acregmin = tempargs.acregmin;
 			args.acregmax = tempargs.acregmax;
 			args.acdirmin = tempargs.acdirmin;
 			args.acdirmax = tempargs.acdirmax;
 		}
-		if (argsvers >= 5)
+		if (args.version >= 5)
 			args.auth = tempargs.auth;
-		if (argsvers >= 6)
+		if (args.version >= 6)
 			args.deadtimeout = tempargs.deadtimeout;
 	}
 
-	if (args.fhsize < 0 || args.fhsize > NFSX_V3FHMAX)
-		return (EINVAL);
+	if ((args.fhsize < 0) || (args.fhsize > NFS4_FHSIZE)) {
+		error = EINVAL;
+		goto nfsmout;
+	}
 	if (args.fhsize > 0) {
-		error = copyin(args.fh, (caddr_t)nfh, args.fhsize);
-		if (error)
-			return (error);
+		if (inkernel)
+			bcopy(CAST_DOWN(void *, args.fh), (caddr_t)nfh, args.fhsize);
+		else
+			error = copyin(args.fh, (caddr_t)nfh, args.fhsize);
+		nfsmout_if(error);
 	}
 
-	mntfrom = &vfs_statfs(mp)->f_mntfromname[0];
-	error = copyinstr(args.hostname, mntfrom, MAXPATHLEN-1, &len);
-	if (error)
-		return (error);
+	if (inkernel)
+		error = copystr(CAST_DOWN(void *, args.hostname), mntfrom, MAXPATHLEN-1, &len);
+	else
+		error = copyinstr(args.hostname, mntfrom, MAXPATHLEN-1, &len);
+	nfsmout_if(error);
 	bzero(&mntfrom[len], MAXPATHLEN - len);
 
-	/* sockargs() call must be after above copyin() calls */
-	error = sockargs(&nam, args.addr, args.addrlen, MBUF_TYPE_SONAME);
-	if (error)
+	/* find the server-side path being mounted */
+	frompath = mntfrom;
+	if (*frompath == '[') {  /* skip IPv6 literal address */
+		while (*frompath && (*frompath != ']'))
+			frompath++;
+		if (*frompath == ']')
+			frompath++;
+	}
+	while (*frompath && (*frompath != ':'))
+		frompath++;
+	endserverp = frompath;
+	while (*frompath && (*frompath == ':'))
+		frompath++;
+	/* count fs location path components */
+	p = frompath;
+	while (*p && (*p == '/'))
+		p++;
+	numcomps = 0;
+	while (*p) {
+		numcomps++;
+		while (*p && (*p != '/'))
+			p++;
+		while (*p && (*p == '/'))
+			p++;
+	}
+
+	/* copy socket address */
+	if (inkernel)
+		bcopy(CAST_DOWN(void *, args.addr), &ss, args.addrlen);
+	else
+		error = copyin(args.addr, &ss, args.addrlen);
+	nfsmout_if(error);
+	ss.ss_len = args.addrlen;
+
+	/* convert address to universal address string */
+	if (ss.ss_family == AF_INET)
+		sinaddr = &((struct sockaddr_in*)&ss)->sin_addr;
+	else if (ss.ss_family == AF_INET6)
+		sinaddr = &((struct sockaddr_in6*)&ss)->sin6_addr;
+	else
+		sinaddr = NULL;
+	if (!sinaddr || (inet_ntop(ss.ss_family, sinaddr, uaddr, sizeof(uaddr)) != uaddr)) {
+		error = EINVAL;
+		goto nfsmout;
+	}
+
+	/* prepare mount flags */
+	NFS_BITMAP_ZERO(mflags_mask, NFS_MFLAG_BITMAP_LEN);
+	NFS_BITMAP_ZERO(mflags, NFS_MFLAG_BITMAP_LEN);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_SOFT);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_INTR);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_RESVPORT);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_NOCONNECT);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_DUMBTIMER);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_CALLUMNT);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_RDIRPLUS);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_NONEGNAMECACHE);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_MUTEJUKEBOX);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_NOQUOTA);
+	if (args.flags & NFSMNT_SOFT)
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_SOFT);
+	if (args.flags & NFSMNT_INT)
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_INTR);
+	if (args.flags & NFSMNT_RESVPORT)
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_RESVPORT);
+	if (args.flags & NFSMNT_NOCONN)
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_NOCONNECT);
+	if (args.flags & NFSMNT_DUMBTIMR)
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_DUMBTIMER);
+	if (args.flags & NFSMNT_CALLUMNT)
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_CALLUMNT);
+	if (args.flags & NFSMNT_RDIRPLUS)
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_RDIRPLUS);
+	if (args.flags & NFSMNT_NONEGNAMECACHE)
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_NONEGNAMECACHE);
+	if (args.flags & NFSMNT_MUTEJUKEBOX)
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_MUTEJUKEBOX);
+	if (args.flags & NFSMNT_NOQUOTA)
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_NOQUOTA);
+
+	/* prepare mount attributes */
+	NFS_BITMAP_ZERO(mattrs, NFS_MATTR_BITMAP_LEN);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_FLAGS);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_NFS_VERSION);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_SOCKET_TYPE);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_NFS_PORT);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_FH);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_FS_LOCATIONS);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_MNTFLAGS);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_MNTFROM);
+	if (args.flags & NFSMNT_NFSV4)
+		nfsvers = 4;
+	else if (args.flags & NFSMNT_NFSV3)
+		nfsvers = 3;
+	else
+		nfsvers = 2;
+	if ((args.flags & NFSMNT_RSIZE) && (args.rsize > 0))
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_READ_SIZE);
+	if ((args.flags & NFSMNT_WSIZE) && (args.wsize > 0))
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_WRITE_SIZE);
+	if ((args.flags & NFSMNT_TIMEO) && (args.timeo > 0))
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_REQUEST_TIMEOUT);
+	if ((args.flags & NFSMNT_RETRANS) && (args.retrans > 0))
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_SOFT_RETRY_COUNT);
+	if ((args.flags & NFSMNT_MAXGRPS) && (args.maxgrouplist > 0))
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_MAX_GROUP_LIST);
+	if ((args.flags & NFSMNT_READAHEAD) && (args.readahead > 0))
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_READAHEAD);
+	if ((args.flags & NFSMNT_READDIRSIZE) && (args.readdirsize > 0))
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_READDIR_SIZE);
+	if ((args.flags & NFSMNT_NOLOCKS) ||
+	    (args.flags & NFSMNT_LOCALLOCKS)) {
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_LOCK_MODE);
+		if (args.flags & NFSMNT_NOLOCKS)
+			nfslockmode = NFS_LOCK_MODE_DISABLED;
+		else if (args.flags & NFSMNT_LOCALLOCKS)
+			nfslockmode = NFS_LOCK_MODE_LOCAL;
+		else
+			nfslockmode = NFS_LOCK_MODE_ENABLED;
+	}
+	if (args.version >= 4) {
+		if ((args.flags & NFSMNT_ACREGMIN) && (args.acregmin > 0))
+			NFS_BITMAP_SET(mattrs, NFS_MATTR_ATTRCACHE_REG_MIN);
+		if ((args.flags & NFSMNT_ACREGMAX) && (args.acregmax > 0))
+			NFS_BITMAP_SET(mattrs, NFS_MATTR_ATTRCACHE_REG_MAX);
+		if ((args.flags & NFSMNT_ACDIRMIN) && (args.acdirmin > 0))
+			NFS_BITMAP_SET(mattrs, NFS_MATTR_ATTRCACHE_DIR_MIN);
+		if ((args.flags & NFSMNT_ACDIRMAX) && (args.acdirmax > 0))
+			NFS_BITMAP_SET(mattrs, NFS_MATTR_ATTRCACHE_DIR_MAX);
+	}
+	if (args.version >= 5) {
+		if ((args.flags & NFSMNT_SECFLAVOR) || (args.flags & NFSMNT_SECSYSOK))
+			NFS_BITMAP_SET(mattrs, NFS_MATTR_SECURITY);
+	}
+	if (args.version >= 6) {
+		if ((args.flags & NFSMNT_DEADTIMEOUT) && (args.deadtimeout > 0))
+			NFS_BITMAP_SET(mattrs, NFS_MATTR_DEAD_TIMEOUT);
+	}
+
+	/* build xdr buffer */
+	xb_init_buffer(&xb, NULL, 0);
+	xb_add_32(error, &xb, args.version);
+	argslength_offset = xb_offset(&xb);
+	xb_add_32(error, &xb, 0); // args length
+	xb_add_32(error, &xb, NFS_XDRARGS_VERSION_0);
+	xb_add_bitmap(error, &xb, mattrs, NFS_MATTR_BITMAP_LEN);
+	attrslength_offset = xb_offset(&xb);
+	xb_add_32(error, &xb, 0); // attrs length
+	xb_add_bitmap(error, &xb, mflags_mask, NFS_MFLAG_BITMAP_LEN); /* mask */
+	xb_add_bitmap(error, &xb, mflags, NFS_MFLAG_BITMAP_LEN); /* value */
+	xb_add_32(error, &xb, nfsvers);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_READ_SIZE))
+		xb_add_32(error, &xb, args.rsize);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_WRITE_SIZE))
+		xb_add_32(error, &xb, args.wsize);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_READDIR_SIZE))
+		xb_add_32(error, &xb, args.readdirsize);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_READAHEAD))
+		xb_add_32(error, &xb, args.readahead);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_ATTRCACHE_REG_MIN)) {
+		xb_add_32(error, &xb, args.acregmin);
+		xb_add_32(error, &xb, 0);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_ATTRCACHE_REG_MAX)) {
+		xb_add_32(error, &xb, args.acregmax);
+		xb_add_32(error, &xb, 0);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_ATTRCACHE_DIR_MIN)) {
+		xb_add_32(error, &xb, args.acdirmin);
+		xb_add_32(error, &xb, 0);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_ATTRCACHE_DIR_MAX)) {
+		xb_add_32(error, &xb, args.acdirmax);
+		xb_add_32(error, &xb, 0);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_LOCK_MODE))
+		xb_add_32(error, &xb, nfslockmode);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_SECURITY)) {
+		uint32_t flavors[2], i=0;
+		if (args.flags & NFSMNT_SECFLAVOR)
+			flavors[i++] = args.auth;
+		if ((args.flags & NFSMNT_SECSYSOK) && ((i == 0) || (flavors[0] != RPCAUTH_SYS)))
+			flavors[i++] = RPCAUTH_SYS;
+		xb_add_word_array(error, &xb, flavors, i);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_MAX_GROUP_LIST))
+		xb_add_32(error, &xb, args.maxgrouplist);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_SOCKET_TYPE))
+		xb_add_string(error, &xb, ((args.sotype == SOCK_DGRAM) ? "udp" : "tcp"), 3);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_PORT))
+		xb_add_32(error, &xb, ((ss.ss_family == AF_INET) ? 
+			ntohs(((struct sockaddr_in*)&ss)->sin_port) :
+			ntohs(((struct sockaddr_in6*)&ss)->sin6_port)));
+	/* NFS_MATTR_MOUNT_PORT (not available in old args) */
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_REQUEST_TIMEOUT)) {
+		/* convert from .1s increments to time */
+		xb_add_32(error, &xb, args.timeo/10);
+		xb_add_32(error, &xb, (args.timeo%10)*100000000);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_SOFT_RETRY_COUNT))
+		xb_add_32(error, &xb, args.retrans);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_DEAD_TIMEOUT)) {
+		xb_add_32(error, &xb, args.deadtimeout);
+		xb_add_32(error, &xb, 0);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_FH))
+		xb_add_fh(error, &xb, &nfh[0], args.fhsize);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_FS_LOCATIONS)) {
+		xb_add_32(error, &xb, 1); /* fs location count */
+		xb_add_32(error, &xb, 1); /* server count */
+		xb_add_string(error, &xb, mntfrom, (endserverp - mntfrom)); /* server name */
+		xb_add_32(error, &xb, 1); /* address count */
+		xb_add_string(error, &xb, uaddr, strlen(uaddr)); /* address */
+		xb_add_32(error, &xb, 0); /* empty server info */
+		xb_add_32(error, &xb, numcomps); /* pathname component count */
+		nfsmout_if(error);
+		p = frompath;
+		while (*p && (*p == '/'))
+			p++;
+		while (*p) {
+			cp = p;
+			while (*p && (*p != '/'))
+				p++;
+			xb_add_string(error, &xb, cp, (p - cp)); /* component */
+			nfsmout_if(error);
+			while (*p && (*p == '/'))
+				p++;
+		}
+		xb_add_32(error, &xb, 0); /* empty fsl info */
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_MNTFLAGS))
+		xb_add_32(error, &xb, (vfs_flags(mp) & MNT_VISFLAGMASK)); /* VFS MNT_* flags */
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_MNTFROM))
+		xb_add_string(error, &xb, mntfrom, strlen(mntfrom)); /* fixed f_mntfromname */
+	xb_build_done(error, &xb);
+
+	/* update opaque counts */
+	end_offset = xb_offset(&xb);
+	error = xb_seek(&xb, argslength_offset);
+	xb_add_32(error, &xb, end_offset - argslength_offset + XDRWORD/*version*/);
+	nfsmout_if(error);
+	error = xb_seek(&xb, attrslength_offset);
+	xb_add_32(error, &xb, end_offset - attrslength_offset - XDRWORD/*don't include length field*/);
+
+	if (!error) {
+		/* grab the assembled buffer */
+		*xdrbufp = xb_buffer_base(&xb);
+		xb.xb_flags &= ~XB_CLEANUP;
+	}
+nfsmout:
+	xb_cleanup(&xb);
+	FREE_ZONE(mntfrom, MAXPATHLEN, M_NAMEI);
+	return (error);
+}
+
+/*
+ * VFS Operations.
+ *
+ * mount system call
+ */
+int
+nfs_vfs_mount(mount_t mp, vnode_t vp, user_addr_t data, vfs_context_t ctx)
+{
+	int error = 0, inkernel = vfs_iskernelmount(mp);
+	uint32_t argsversion, argslength;
+	char *xdrbuf = NULL;
+
+	/* read in version */
+	if (inkernel)
+		bcopy(CAST_DOWN(void *, data), &argsversion, sizeof(argsversion));
+	else if ((error = copyin(data, &argsversion, sizeof(argsversion))))
 		return (error);
 
-	args.fh = CAST_USER_ADDR_T(&nfh[0]);
-	error = mountnfs(&args, mp, nam, ctx, &vp);
+	/* If we have XDR args, then all values in the buffer are in network order */
+	if (argsversion == htonl(NFS_ARGSVERSION_XDR))
+		argsversion = NFS_ARGSVERSION_XDR;
+
+	switch (argsversion) {
+	case 3:
+	case 4:
+	case 5:
+	case 6:
+		/* convert old-style args to xdr */
+		error = nfs_convert_old_nfs_args(mp, data, ctx, argsversion, inkernel, &xdrbuf);
+		break;
+	case NFS_ARGSVERSION_XDR:
+		/* copy in xdr buffer */
+		if (inkernel)
+			bcopy(CAST_DOWN(void *, (data + XDRWORD)), &argslength, XDRWORD);
+		else
+			error = copyin((data + XDRWORD), &argslength, XDRWORD);
+		if (error)
+			break;
+		argslength = ntohl(argslength);
+		/* put a reasonable limit on the size of the XDR args */
+		if (argslength > 16*1024) {
+			error = E2BIG;
+			break;
+		}
+		/* allocate xdr buffer */
+		xdrbuf = xb_malloc(xdr_rndup(argslength));
+		if (!xdrbuf) {
+			error = ENOMEM;
+			break;
+		}
+		if (inkernel)
+			bcopy(CAST_DOWN(void *, data), xdrbuf, argslength);
+		else
+			error = copyin(data, xdrbuf, argslength);
+		break;
+	default:
+		error = EPROGMISMATCH;
+	}
+
+	if (error) {
+		if (xdrbuf)
+			xb_free(xdrbuf);
+		return (error);
+	}
+	error = mountnfs(xdrbuf, mp, ctx, &vp);
 	return (error);
 }
 
@@ -1339,32 +1873,33 @@ nfs_vfs_mount(mount_t mp, vnode_t vp, user_addr_t data, vfs_context_t ctx)
  * Common code for mount and mountroot
  */
 
+/* Set up an NFSv2/v3 mount */
 int
 nfs3_mount(
 	struct nfsmount *nmp,
 	vfs_context_t ctx,
-	struct user_nfs_args *argp,
 	nfsnode_t *npp)
 {
 	int error = 0;
 	struct nfs_vattr nvattr;
 	u_int64_t xid;
-	u_char *fhp;
 
 	*npp = NULL;
+
+	if (!nmp->nm_fh)
+		return (EINVAL);
 
 	/*
 	 * Get file attributes for the mountpoint.  These are needed
 	 * in order to properly create the root vnode.
 	 */
-	fhp = CAST_DOWN(u_char *, argp->fh);
-	error = nfs3_getattr_rpc(NULL, nmp->nm_mountp, fhp, argp->fhsize,
+	error = nfs3_getattr_rpc(NULL, nmp->nm_mountp, nmp->nm_fh->fh_data, nmp->nm_fh->fh_len, 0,
 			ctx, &nvattr, &xid);
 	if (error)
 		goto out;
 
-	error = nfs_nget(nmp->nm_mountp, NULL, NULL, fhp, argp->fhsize,
-			&nvattr, &xid, NG_MARKROOT, npp);
+	error = nfs_nget(nmp->nm_mountp, NULL, NULL, nmp->nm_fh->fh_data, nmp->nm_fh->fh_len,
+			&nvattr, &xid, RPCAUTH_UNKNOWN, NG_MARKROOT, npp);
 	if (*npp)
 		nfs_node_unlock(*npp);
 	if (error)
@@ -1403,109 +1938,536 @@ out:
 	return (error);
 }
 
+/*
+ * Update an NFSv4 mount path with the contents of the symlink.
+ *
+ * Read the link for the given file handle.
+ * Insert the link's components into the path.
+ */
+int
+nfs4_mount_update_path_with_symlink(struct nfsmount *nmp, struct nfs_fs_path *nfsp, uint32_t curcomp, fhandle_t *dirfhp, int *depthp, fhandle_t *fhp, vfs_context_t ctx)
+{
+	int error = 0, status, numops;
+	uint32_t len = 0, comp, newcomp, linkcompcount;
+	u_int64_t xid;
+	struct nfsm_chain nmreq, nmrep;
+	struct nfsreq rq, *req = &rq;
+	struct nfsreq_secinfo_args si;
+	char *link = NULL, *p, *q, ch;
+	struct nfs_fs_path nfsp2;
+
+	bzero(&nfsp2, sizeof(nfsp2));
+	if (dirfhp->fh_len)
+		NFSREQ_SECINFO_SET(&si, NULL, dirfhp->fh_data, dirfhp->fh_len, nfsp->np_components[curcomp], 0);
+	else
+		NFSREQ_SECINFO_SET(&si, NULL, NULL, 0, nfsp->np_components[curcomp], 0);
+	nfsm_chain_null(&nmreq);
+	nfsm_chain_null(&nmrep);
+
+	MALLOC_ZONE(link, char *, MAXPATHLEN, M_NAMEI, M_WAITOK); 
+	if (!link)
+		error = ENOMEM;
+
+	// PUTFH, READLINK
+	numops = 2;
+	nfsm_chain_build_alloc_init(error, &nmreq, 12 * NFSX_UNSIGNED);
+	nfsm_chain_add_compound_header(error, &nmreq, "readlink", numops);
+	numops--;
+	nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTFH);
+	nfsm_chain_add_fh(error, &nmreq, NFS_VER4, fhp->fh_data, fhp->fh_len);
+	numops--;
+	nfsm_chain_add_32(error, &nmreq, NFS_OP_READLINK);
+	nfsm_chain_build_done(error, &nmreq);
+	nfsm_assert(error, (numops == 0), EPROTO);
+	nfsmout_if(error);
+
+	error = nfs_request_async(NULL, nmp->nm_mountp, &nmreq, NFSPROC4_COMPOUND,
+			vfs_context_thread(ctx), vfs_context_ucred(ctx), &si, 0, NULL, &req);
+	if (!error)
+		error = nfs_request_async_finish(req, &nmrep, &xid, &status);
+
+	nfsm_chain_skip_tag(error, &nmrep);
+	nfsm_chain_get_32(error, &nmrep, numops);
+	nfsm_chain_op_check(error, &nmrep, NFS_OP_PUTFH);
+	nfsm_chain_op_check(error, &nmrep, NFS_OP_READLINK);
+	nfsm_chain_get_32(error, &nmrep, len);
+	nfsmout_if(error);
+	if (len == 0)
+		error = ENOENT;
+	else if (len >= MAXPATHLEN)
+		len = MAXPATHLEN - 1;
+	nfsm_chain_get_opaque(error, &nmrep, len, link);
+	nfsmout_if(error);
+	/* make sure link string is terminated properly */
+	link[len] = '\0';
+
+	/* count the number of components in link */
+	p = link;
+	while (*p && (*p == '/'))
+		p++;
+	linkcompcount = 0;
+	while (*p) {
+		linkcompcount++;
+		while (*p && (*p != '/'))
+			p++;
+		while (*p && (*p == '/'))
+			p++;
+	}
+
+	/* free up used components */
+	for (comp=0; comp <= curcomp; comp++) {
+		if (nfsp->np_components[comp]) {
+			FREE(nfsp->np_components[comp], M_TEMP);
+			nfsp->np_components[comp] = NULL;
+		}
+	}
+
+	/* set up new path */
+	nfsp2.np_compcount = nfsp->np_compcount - curcomp - 1 + linkcompcount;
+	MALLOC(nfsp2.np_components, char **, nfsp2.np_compcount*sizeof(char*), M_TEMP, M_WAITOK|M_ZERO);
+	if (!nfsp2.np_components) {
+		error = ENOMEM;
+		goto nfsmout;
+	}
+
+	/* add link components */
+	p = link;
+	while (*p && (*p == '/'))
+		p++;
+	for (newcomp=0; newcomp < linkcompcount; newcomp++) {
+		/* find end of component */
+		q = p;
+		while (*q && (*q != '/'))
+			q++;
+		MALLOC(nfsp2.np_components[newcomp], char *, q-p+1, M_TEMP, M_WAITOK|M_ZERO);
+		if (!nfsp2.np_components[newcomp]) {
+			error = ENOMEM;
+			break;
+		}
+		ch = *q;
+		*q = '\0';
+		strlcpy(nfsp2.np_components[newcomp], p, q-p+1);
+		*q = ch;
+		p = q;
+		while (*p && (*p == '/'))
+			p++;
+	}
+	nfsmout_if(error);
+
+	/* add remaining components */
+	for(comp = curcomp + 1; comp < nfsp->np_compcount; comp++,newcomp++) {
+		nfsp2.np_components[newcomp] = nfsp->np_components[comp];
+		nfsp->np_components[comp] = NULL;
+	}
+
+	/* move new path into place */
+	FREE(nfsp->np_components, M_TEMP);
+	nfsp->np_components = nfsp2.np_components;
+	nfsp->np_compcount = nfsp2.np_compcount;
+	nfsp2.np_components = NULL;
+
+	/* for absolute link, let the caller now that the next dirfh is root */
+	if (link[0] == '/') {
+		dirfhp->fh_len = 0;
+		*depthp = 0;
+	}
+nfsmout:
+	if (link)
+		FREE_ZONE(link, MAXPATHLEN, M_NAMEI);
+	if (nfsp2.np_components) {
+		for (comp=0; comp < nfsp2.np_compcount; comp++)
+			if (nfsp2.np_components[comp])
+				FREE(nfsp2.np_components[comp], M_TEMP);
+		FREE(nfsp2.np_components, M_TEMP);
+	}
+	nfsm_chain_cleanup(&nmreq);
+	nfsm_chain_cleanup(&nmrep);
+	return (error);
+}
+
+/* Set up an NFSv4 mount */
 int
 nfs4_mount(
 	struct nfsmount *nmp,
 	vfs_context_t ctx,
-	__unused struct user_nfs_args *argp,
 	nfsnode_t *npp)
 {
 	struct nfsm_chain nmreq, nmrep;
-	int error = 0, numops, status, interval;
-	char *path = &vfs_statfs(nmp->nm_mountp)->f_mntfromname[0];
-	char *name, *nextname;
-	fhandle_t fh;
+	int error = 0, numops, status, interval, isdotdot, loopcnt = 0, depth = 0;
+	struct nfs_fs_path fspath, *nfsp, fspath2;
+	uint32_t bitmap[NFS_ATTR_BITMAP_LEN], comp, comp2;
+	fhandle_t fh, dirfh;
 	struct nfs_vattr nvattr;
 	u_int64_t xid;
+	struct nfsreq rq, *req = &rq;
+	struct nfsreq_secinfo_args si;
+	struct nfs_sec sec;
+	struct nfs_fs_locations nfsls;
 
 	*npp = NULL;
-	fh.fh_len = 0;
+	fh.fh_len = dirfh.fh_len = 0;
 	TAILQ_INIT(&nmp->nm_open_owners);
-	TAILQ_INIT(&nmp->nm_recallq);
+	TAILQ_INIT(&nmp->nm_delegations);
+	TAILQ_INIT(&nmp->nm_dreturnq);
 	nmp->nm_stategenid = 1;
+	NVATTR_INIT(&nvattr);
+	bzero(&nfsls, sizeof(nfsls));
+	nfsm_chain_null(&nmreq);
+	nfsm_chain_null(&nmrep);
 
-	/* look up path to get fh and attrs for mount point root */
-	numops = 2; // PUTROOTFH + LOOKUP* + GETATTR
-	while (*path && (*path != '/'))
-		path++;
-	name = path;
-	while (*name) {
-		while (*name && (*name == '/'))
-			name++;
-		if (!*name)
-			break;
-		nextname = name;
-		while (*nextname && (*nextname != '/'))
-			nextname++;
-		numops++;
-		name = nextname;
+	/*
+	 * If no security flavors were specified we'll want to default to the server's
+	 * preferred flavor.  For NFSv4.0 we need a file handle and name to get that via
+	 * SECINFO, so we'll do that on the last component of the server path we are
+	 * mounting.  If we are mounting the server's root, we'll need to defer the
+	 * SECINFO call to the first successful LOOKUP request.
+	 */
+	if (!nmp->nm_sec.count)
+		nmp->nm_state |= NFSSTA_NEEDSECINFO;
+
+	/* make a copy of the current location's path */
+	nfsp = &nmp->nm_locations.nl_locations[nmp->nm_locations.nl_current.nli_loc]->nl_path;
+	bzero(&fspath, sizeof(fspath));
+	fspath.np_compcount = nfsp->np_compcount;
+	if (fspath.np_compcount > 0) {
+		MALLOC(fspath.np_components, char **, fspath.np_compcount*sizeof(char*), M_TEMP, M_WAITOK|M_ZERO);
+		if (!fspath.np_components) {
+			error = ENOMEM;
+			goto nfsmout;
+		}
+		for (comp=0; comp < nfsp->np_compcount; comp++) {
+			int slen = strlen(nfsp->np_components[comp]);
+			MALLOC(fspath.np_components[comp], char *, slen+1, M_TEMP, M_WAITOK|M_ZERO);
+			if (!fspath.np_components[comp]) {
+				error = ENOMEM;
+				break;
+			}
+			strlcpy(fspath.np_components[comp], nfsp->np_components[comp], slen+1);
+		}
+		if (error)
+			goto nfsmout;
 	}
+
+	/* for mirror mounts, we can just use the file handle passed in */
+	if (nmp->nm_fh) {
+		dirfh.fh_len = nmp->nm_fh->fh_len;
+		bcopy(nmp->nm_fh->fh_data, dirfh.fh_data, dirfh.fh_len);
+		NFSREQ_SECINFO_SET(&si, NULL, dirfh.fh_data, dirfh.fh_len, NULL, 0);
+		goto gotfh;
+	}
+
+	/* otherwise, we need to get the fh for the directory we are mounting */
+
+	/* if no components, just get root */
+	if (fspath.np_compcount == 0) {
+nocomponents:
+		// PUTROOTFH + GETATTR(FH)
+		NFSREQ_SECINFO_SET(&si, NULL, NULL, 0, NULL, 0);
+		numops = 2;
+		nfsm_chain_build_alloc_init(error, &nmreq, 9 * NFSX_UNSIGNED);
+		nfsm_chain_add_compound_header(error, &nmreq, "mount", numops);
+		numops--;
+		nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTROOTFH);
+		numops--;
+		nfsm_chain_add_32(error, &nmreq, NFS_OP_GETATTR);
+		NFS_CLEAR_ATTRIBUTES(bitmap);
+		NFS4_DEFAULT_ATTRIBUTES(bitmap);
+		NFS_BITMAP_SET(bitmap, NFS_FATTR_FILEHANDLE);
+		nfsm_chain_add_bitmap(error, &nmreq, bitmap, NFS_ATTR_BITMAP_LEN);
+		nfsm_chain_build_done(error, &nmreq);
+		nfsm_assert(error, (numops == 0), EPROTO);
+		nfsmout_if(error);
+		error = nfs_request_async(NULL, nmp->nm_mountp, &nmreq, NFSPROC4_COMPOUND,
+				vfs_context_thread(ctx), vfs_context_ucred(ctx), &si, 0, NULL, &req);
+		if (!error)
+			error = nfs_request_async_finish(req, &nmrep, &xid, &status);
+		nfsm_chain_skip_tag(error, &nmrep);
+		nfsm_chain_get_32(error, &nmrep, numops);
+		nfsm_chain_op_check(error, &nmrep, NFS_OP_PUTROOTFH);
+		nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
+		nfsmout_if(error);
+		NFS_CLEAR_ATTRIBUTES(nmp->nm_fsattr.nfsa_bitmap);
+		error = nfs4_parsefattr(&nmrep, &nmp->nm_fsattr, &nvattr, &dirfh, NULL, NULL);
+		if (!error && !NFS_BITMAP_ISSET(&nvattr.nva_bitmap, NFS_FATTR_FILEHANDLE)) {
+			printf("nfs: mount didn't return filehandle?\n");
+			error = EBADRPC;
+		}
+		nfsmout_if(error);
+		nfsm_chain_cleanup(&nmrep);
+		nfsm_chain_null(&nmreq);
+		NVATTR_CLEANUP(&nvattr);
+		goto gotfh;
+	}
+
+	/* look up each path component */
+	for (comp=0; comp < fspath.np_compcount; ) {
+		isdotdot = 0;
+		if (fspath.np_components[comp][0] == '.') {
+			if (fspath.np_components[comp][1] == '\0') {
+				/* skip "." */
+				comp++;
+				continue;
+			}
+			/* treat ".." specially */
+			if ((fspath.np_components[comp][1] == '.') &&
+			    (fspath.np_components[comp][2] == '\0'))
+			    	isdotdot = 1;
+			if (isdotdot && (dirfh.fh_len == 0)) {
+				/* ".." in root directory is same as "." */
+				comp++;
+				continue;
+			}
+		}
+		// PUT(ROOT)FH + LOOKUP(P) + GETFH + GETATTR
+		if (dirfh.fh_len == 0)
+			NFSREQ_SECINFO_SET(&si, NULL, NULL, 0, isdotdot ? NULL : fspath.np_components[comp], 0);
+		else
+			NFSREQ_SECINFO_SET(&si, NULL, dirfh.fh_data, dirfh.fh_len, isdotdot ? NULL : fspath.np_components[comp], 0);
+		numops = 4;
+		nfsm_chain_build_alloc_init(error, &nmreq, 18 * NFSX_UNSIGNED);
+		nfsm_chain_add_compound_header(error, &nmreq, "mount", numops);
+		numops--;
+		if (dirfh.fh_len) {
+			nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTFH);
+			nfsm_chain_add_fh(error, &nmreq, NFS_VER4, dirfh.fh_data, dirfh.fh_len);
+		} else {
+			nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTROOTFH);
+		}
+		numops--;
+		if (isdotdot) {
+			nfsm_chain_add_32(error, &nmreq, NFS_OP_LOOKUPP);
+		} else {
+			nfsm_chain_add_32(error, &nmreq, NFS_OP_LOOKUP);
+			nfsm_chain_add_name(error, &nmreq,
+				fspath.np_components[comp], strlen(fspath.np_components[comp]), nmp);
+		}
+		numops--;
+		nfsm_chain_add_32(error, &nmreq, NFS_OP_GETFH);
+		numops--;
+		nfsm_chain_add_32(error, &nmreq, NFS_OP_GETATTR);
+		NFS_CLEAR_ATTRIBUTES(bitmap);
+		NFS4_DEFAULT_ATTRIBUTES(bitmap);
+		/* if no namedattr support or component is ".zfs", clear NFS_FATTR_NAMED_ATTR */
+		if (NMFLAG(nmp, NONAMEDATTR) || !strcmp(fspath.np_components[comp], ".zfs"))
+			NFS_BITMAP_CLR(bitmap, NFS_FATTR_NAMED_ATTR);
+		nfsm_chain_add_bitmap(error, &nmreq, bitmap, NFS_ATTR_BITMAP_LEN);
+		nfsm_chain_build_done(error, &nmreq);
+		nfsm_assert(error, (numops == 0), EPROTO);
+		nfsmout_if(error);
+		error = nfs_request_async(NULL, nmp->nm_mountp, &nmreq, NFSPROC4_COMPOUND,
+				vfs_context_thread(ctx), vfs_context_ucred(ctx), &si, 0, NULL, &req);
+		if (!error)
+			error = nfs_request_async_finish(req, &nmrep, &xid, &status);
+		nfsm_chain_skip_tag(error, &nmrep);
+		nfsm_chain_get_32(error, &nmrep, numops);
+		nfsm_chain_op_check(error, &nmrep, dirfh.fh_len ? NFS_OP_PUTFH : NFS_OP_PUTROOTFH);
+		nfsm_chain_op_check(error, &nmrep, isdotdot ? NFS_OP_LOOKUPP : NFS_OP_LOOKUP);
+		nfsmout_if(error);
+		nfsm_chain_op_check(error, &nmrep, NFS_OP_GETFH);
+		nfsm_chain_get_32(error, &nmrep, fh.fh_len);
+		nfsm_chain_get_opaque(error, &nmrep, fh.fh_len, fh.fh_data);
+		nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
+		if (!error) {
+			NFS_CLEAR_ATTRIBUTES(nmp->nm_fsattr.nfsa_bitmap);
+			error = nfs4_parsefattr(&nmrep, &nmp->nm_fsattr, &nvattr, NULL, NULL, &nfsls);
+		}
+		nfsm_chain_cleanup(&nmrep);
+		nfsm_chain_null(&nmreq);
+		if (error) {
+			/* LOOKUP succeeded but GETATTR failed?  This could be a referral. */
+			/* Try the lookup again with a getattr for fs_locations. */
+			nfs_fs_locations_cleanup(&nfsls);
+			error = nfs4_get_fs_locations(nmp, NULL, dirfh.fh_data, dirfh.fh_len, fspath.np_components[comp], ctx, &nfsls);
+			if (!error && (nfsls.nl_numlocs < 1))
+				error = ENOENT;
+			nfsmout_if(error);
+			if (++loopcnt > MAXSYMLINKS) {
+				/* too many symlink/referral redirections */
+				error = ELOOP;
+				goto nfsmout;
+			}
+			/* tear down the current connection */
+			nfs_disconnect(nmp);
+			/* replace fs locations */
+			nfs_fs_locations_cleanup(&nmp->nm_locations);
+			nmp->nm_locations = nfsls;
+			bzero(&nfsls, sizeof(nfsls));
+			/* initiate a connection using the new fs locations */
+			error = nfs_mount_connect(nmp);
+			if (!error && !(nmp->nm_locations.nl_current.nli_flags & NLI_VALID))
+				error = EIO;
+			nfsmout_if(error);
+			/* add new server's remote path to beginning of our path and continue */
+			nfsp = &nmp->nm_locations.nl_locations[nmp->nm_locations.nl_current.nli_loc]->nl_path;
+			bzero(&fspath2, sizeof(fspath2));
+			fspath2.np_compcount = (fspath.np_compcount - comp - 1) + nfsp->np_compcount;
+			if (fspath2.np_compcount > 0) {
+				MALLOC(fspath2.np_components, char **, fspath2.np_compcount*sizeof(char*), M_TEMP, M_WAITOK|M_ZERO);
+				if (!fspath2.np_components) {
+					error = ENOMEM;
+					goto nfsmout;
+				}
+				for (comp2=0; comp2 < nfsp->np_compcount; comp2++) {
+					int slen = strlen(nfsp->np_components[comp2]);
+					MALLOC(fspath2.np_components[comp2], char *, slen+1, M_TEMP, M_WAITOK|M_ZERO);
+					if (!fspath2.np_components[comp2]) {
+						/* clean up fspath2, then error out */
+						while (comp2 > 0) {
+							comp2--;
+							FREE(fspath2.np_components[comp2], M_TEMP);
+						}
+						FREE(fspath2.np_components, M_TEMP);
+						error = ENOMEM;
+						goto nfsmout;
+					}
+					strlcpy(fspath2.np_components[comp2], nfsp->np_components[comp2], slen+1);
+				}
+				if ((fspath.np_compcount - comp - 1) > 0)
+					bcopy(&fspath.np_components[comp+1], &fspath2.np_components[nfsp->np_compcount], (fspath.np_compcount - comp - 1)*sizeof(char*));
+				/* free up unused parts of old path (prior components and component array) */
+				do {
+					FREE(fspath.np_components[comp], M_TEMP);
+				} while (comp-- > 0);
+				FREE(fspath.np_components, M_TEMP);
+				/* put new path in place */
+				fspath = fspath2;
+			}
+			/* reset dirfh and component index */
+			dirfh.fh_len = 0;
+			comp = 0;
+			NVATTR_CLEANUP(&nvattr);
+			if (fspath.np_compcount == 0)
+				goto nocomponents;
+			continue;
+		}
+		nfsmout_if(error);
+		/* if file handle is for a symlink, then update the path with the symlink contents */
+		if (NFS_BITMAP_ISSET(&nvattr.nva_bitmap, NFS_FATTR_TYPE) && (nvattr.nva_type == VLNK)) {
+			if (++loopcnt > MAXSYMLINKS)
+				error = ELOOP;
+			else
+				error = nfs4_mount_update_path_with_symlink(nmp, &fspath, comp, &dirfh, &depth, &fh, ctx);
+			nfsmout_if(error);
+			/* directory file handle is either left the same or reset to root (if link was absolute) */
+			/* path traversal starts at beginning of the path again */
+			comp = 0;
+			NVATTR_CLEANUP(&nvattr);
+			nfs_fs_locations_cleanup(&nfsls);
+			continue;
+		}
+		NVATTR_CLEANUP(&nvattr);
+		nfs_fs_locations_cleanup(&nfsls);
+		/* not a symlink... */
+		if ((nmp->nm_state & NFSSTA_NEEDSECINFO) && (comp == (fspath.np_compcount-1)) && !isdotdot) {
+			/* need to get SECINFO for the directory being mounted */
+			if (dirfh.fh_len == 0)
+				NFSREQ_SECINFO_SET(&si, NULL, NULL, 0, isdotdot ? NULL : fspath.np_components[comp], 0);
+			else
+				NFSREQ_SECINFO_SET(&si, NULL, dirfh.fh_data, dirfh.fh_len, isdotdot ? NULL : fspath.np_components[comp], 0);
+			sec.count = NX_MAX_SEC_FLAVORS;
+			error = nfs4_secinfo_rpc(nmp, &si, vfs_context_ucred(ctx), sec.flavors, &sec.count);
+			/* [sigh] some implementations return "illegal" error for unsupported ops */
+			if (error == NFSERR_OP_ILLEGAL)
+				error = 0;
+			nfsmout_if(error);
+			/* set our default security flavor to the first in the list */
+			if (sec.count)
+				nmp->nm_auth = sec.flavors[0];
+			nmp->nm_state &= ~NFSSTA_NEEDSECINFO;
+		}
+		/* advance directory file handle, component index, & update depth */
+		dirfh = fh;
+		comp++;
+		if (!isdotdot) /* going down the hierarchy */
+			depth++;
+		else if (--depth <= 0)  /* going up the hierarchy */
+			dirfh.fh_len = 0; /* clear dirfh when we hit root */
+	}
+
+gotfh:
+	/* get attrs for mount point root */
+	numops = NMFLAG(nmp, NONAMEDATTR) ? 2 : 3; // PUTFH + GETATTR + OPENATTR
 	nfsm_chain_build_alloc_init(error, &nmreq, 25 * NFSX_UNSIGNED);
 	nfsm_chain_add_compound_header(error, &nmreq, "mount", numops);
 	numops--;
-	nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTROOTFH);
-	// (LOOKUP)*
-	name = path;
-	while (*name) {
-		while (*name && (*name == '/'))
-			name++;
-		if (!*name)
-			break;
-		nextname = name;
-		while (*nextname && (*nextname != '/'))
-			nextname++;
-		numops--;
-		nfsm_chain_add_32(error, &nmreq, NFS_OP_LOOKUP);
-		nfsm_chain_add_string(error, &nmreq, name, nextname - name);
-		name = nextname;
-	}
+	nfsm_chain_add_32(error, &nmreq, NFS_OP_PUTFH);
+	nfsm_chain_add_fh(error, &nmreq, NFS_VER4, dirfh.fh_data, dirfh.fh_len);
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_GETATTR);
-	NFS4_DEFAULT_ATTRIBUTES(nmp->nm_fsattr.nfsa_supp_attr);
-	NFS_BITMAP_SET(nmp->nm_fsattr.nfsa_supp_attr, NFS_FATTR_FILEHANDLE);
-	nfsm_chain_add_bitmap(error, &nmreq, nmp->nm_fsattr.nfsa_supp_attr, NFS_ATTR_BITMAP_LEN);
+	NFS_CLEAR_ATTRIBUTES(bitmap);
+	NFS4_DEFAULT_ATTRIBUTES(bitmap);
+	/* if no namedattr support or last component is ".zfs", clear NFS_FATTR_NAMED_ATTR */
+	if (NMFLAG(nmp, NONAMEDATTR) || ((fspath.np_compcount > 0) && !strcmp(fspath.np_components[fspath.np_compcount-1], ".zfs")))
+		NFS_BITMAP_CLR(bitmap, NFS_FATTR_NAMED_ATTR);
+	nfsm_chain_add_bitmap(error, &nmreq, bitmap, NFS_ATTR_BITMAP_LEN);
+	if (!NMFLAG(nmp, NONAMEDATTR)) {
+		numops--;
+		nfsm_chain_add_32(error, &nmreq, NFS_OP_OPENATTR);
+		nfsm_chain_add_32(error, &nmreq, 0);
+	}
 	nfsm_chain_build_done(error, &nmreq);
 	nfsm_assert(error, (numops == 0), EPROTO);
 	nfsmout_if(error);
-	error = nfs_request(NULL, nmp->nm_mountp, &nmreq, NFSPROC4_COMPOUND, ctx, &nmrep, &xid, &status);
+	error = nfs_request_async(NULL, nmp->nm_mountp, &nmreq, NFSPROC4_COMPOUND,
+			vfs_context_thread(ctx), vfs_context_ucred(ctx), &si, 0, NULL, &req);
+	if (!error)
+		error = nfs_request_async_finish(req, &nmrep, &xid, &status);
 	nfsm_chain_skip_tag(error, &nmrep);
 	nfsm_chain_get_32(error, &nmrep, numops);
-	nfsm_chain_op_check(error, &nmrep, NFS_OP_PUTROOTFH);
-	name = path;
-	while (*name) {
-		while (*name && (*name == '/'))
-			name++;
-		if (!*name)
-			break;
-		nextname = name;
-		while (*nextname && (*nextname != '/'))
-			nextname++;
-		nfsm_chain_op_check(error, &nmrep, NFS_OP_LOOKUP);
-		name = nextname;
-	}
+	nfsm_chain_op_check(error, &nmrep, NFS_OP_PUTFH);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
 	nfsmout_if(error);
 	NFS_CLEAR_ATTRIBUTES(nmp->nm_fsattr.nfsa_bitmap);
-	NFS_CLEAR_ATTRIBUTES(&nvattr.nva_bitmap);
-	error = nfs4_parsefattr(&nmrep, &nmp->nm_fsattr, &nvattr, &fh, NULL);
-	if (!error && !NFS_BITMAP_ISSET(&nvattr.nva_bitmap, NFS_FATTR_FILEHANDLE)) {
-		printf("nfs: mount didn't return filehandle?\n");
-		error = EBADRPC;
+	error = nfs4_parsefattr(&nmrep, &nmp->nm_fsattr, &nvattr, NULL, NULL, NULL);
+	nfsmout_if(error);
+	if (!NMFLAG(nmp, NONAMEDATTR)) {
+		nfsm_chain_op_check(error, &nmrep, NFS_OP_OPENATTR);
+		if (error == ENOENT)
+			error = 0;
+		/* [sigh] some implementations return "illegal" error for unsupported ops */
+		if (error || !NFS_BITMAP_ISSET(nmp->nm_fsattr.nfsa_supp_attr, NFS_FATTR_NAMED_ATTR)) {
+			nmp->nm_fsattr.nfsa_flags &= ~NFS_FSFLAG_NAMED_ATTR;
+		} else {
+			nmp->nm_fsattr.nfsa_flags |= NFS_FSFLAG_NAMED_ATTR;
+		}
+	} else {
+		nmp->nm_fsattr.nfsa_flags &= ~NFS_FSFLAG_NAMED_ATTR;
 	}
+	if (NMFLAG(nmp, NOACL)) /* make sure ACL support is turned off */
+		nmp->nm_fsattr.nfsa_flags &= ~NFS_FSFLAG_ACL;
+	if (NMFLAG(nmp, ACLONLY) && !(nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_ACL))
+		NFS_BITMAP_CLR(nmp->nm_flags, NFS_MFLAG_ACLONLY);
+	if (NFS_BITMAP_ISSET(nmp->nm_fsattr.nfsa_supp_attr, NFS_FATTR_FH_EXPIRE_TYPE)) {
+		uint32_t fhtype = ((nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_FHTYPE_MASK) >> NFS_FSFLAG_FHTYPE_SHIFT);
+		if (fhtype != NFS_FH_PERSISTENT)
+			printf("nfs: warning: non-persistent file handles! for %s\n", vfs_statfs(nmp->nm_mountp)->f_mntfromname);
+	}
+
+	/* make sure it's a directory */
+	if (!NFS_BITMAP_ISSET(&nvattr.nva_bitmap, NFS_FATTR_TYPE) || (nvattr.nva_type != VDIR)) {
+		error = ENOTDIR;
+		goto nfsmout;
+	}
+
+	/* save the NFS fsid */
+	nmp->nm_fsid = nvattr.nva_fsid;
+
+	/* create the root node */
+	error = nfs_nget(nmp->nm_mountp, NULL, NULL, dirfh.fh_data, dirfh.fh_len, &nvattr, &xid, rq.r_auth, NG_MARKROOT, npp);
 	nfsmout_if(error);
 
-	error = nfs_nget(nmp->nm_mountp, NULL, NULL, fh.fh_data, fh.fh_len, &nvattr, &xid, NG_MARKROOT, npp);
-	nfsmout_if(error);
+	if (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_ACL)
+		vfs_setextendedsecurity(nmp->nm_mountp);
 
 	/* adjust I/O sizes to server limits */
-	if (NFS_BITMAP_ISSET(nmp->nm_fsattr.nfsa_bitmap, NFS_FATTR_MAXREAD)) {
+	if (NFS_BITMAP_ISSET(nmp->nm_fsattr.nfsa_bitmap, NFS_FATTR_MAXREAD) && (nmp->nm_fsattr.nfsa_maxread > 0)) {
 		if (nmp->nm_fsattr.nfsa_maxread < (uint64_t)nmp->nm_rsize) {
 			nmp->nm_rsize = nmp->nm_fsattr.nfsa_maxread & ~(NFS_FABLKSIZE - 1);
 			if (nmp->nm_rsize == 0)
 				nmp->nm_rsize = nmp->nm_fsattr.nfsa_maxread;
 		}
 	}
-	if (NFS_BITMAP_ISSET(nmp->nm_fsattr.nfsa_bitmap, NFS_FATTR_MAXWRITE)) {
+	if (NFS_BITMAP_ISSET(nmp->nm_fsattr.nfsa_bitmap, NFS_FATTR_MAXWRITE) && (nmp->nm_fsattr.nfsa_maxwrite > 0)) {
 		if (nmp->nm_fsattr.nfsa_maxwrite < (uint64_t)nmp->nm_wsize) {
 			nmp->nm_wsize = nmp->nm_fsattr.nfsa_maxwrite & ~(NFS_FABLKSIZE - 1);
 			if (nmp->nm_wsize == 0)
@@ -1521,43 +2483,176 @@ nfs4_mount(
 	nfs_interval_timer_start(nmp->nm_renew_timer, interval * 1000);
 
 nfsmout:
+	if (fspath.np_components) {
+		for (comp=0; comp < fspath.np_compcount; comp++)
+			if (fspath.np_components[comp])
+				FREE(fspath.np_components[comp], M_TEMP);
+		FREE(fspath.np_components, M_TEMP);
+	}
+	NVATTR_CLEANUP(&nvattr);
+	nfs_fs_locations_cleanup(&nfsls);
 	if (*npp)
 		nfs_node_unlock(*npp);
+	nfsm_chain_cleanup(&nmreq);
+	nfsm_chain_cleanup(&nmrep);
 	return (error);
 }
 
+/*
+ * Thread to handle initial NFS mount connection.
+ */
+void
+nfs_mount_connect_thread(void *arg, __unused wait_result_t wr)
+{
+	struct nfsmount *nmp = arg;
+	int error = 0, savederror = 0, slpflag = (NMFLAG(nmp, INTR) ? PCATCH : 0);
+	int done = 0, timeo, tries, maxtries;
+
+	if (NM_OMFLAG(nmp, MNTQUICK)) {
+		timeo = 8;
+		maxtries = 1;
+	} else {
+		timeo = 30;
+		maxtries = 2;
+	}
+
+	for (tries = 0; tries < maxtries; tries++) {
+		error = nfs_connect(nmp, 1, timeo);
+		switch (error) {
+		case ETIMEDOUT:
+		case EAGAIN:
+		case EPIPE:
+		case EADDRNOTAVAIL:
+		case ENETDOWN:
+		case ENETUNREACH:
+		case ENETRESET:
+		case ECONNABORTED:
+		case ECONNRESET:
+		case EISCONN:
+		case ENOTCONN:
+		case ESHUTDOWN:
+		case ECONNREFUSED:
+		case EHOSTDOWN:
+		case EHOSTUNREACH:
+			/* just keep retrying on any of these errors */
+			break;
+		case 0:
+		default:
+			/* looks like we got an answer... */
+			done = 1;
+			break;
+		}
+
+		/* save the best error */
+		if (nfs_connect_error_class(error) >= nfs_connect_error_class(savederror))
+			savederror = error;
+		if (done) {
+			error = savederror;
+			break;
+		}
+
+		/* pause before next attempt */
+		if ((error = nfs_sigintr(nmp, NULL, current_thread(), 0)))
+			break;
+		error = tsleep(nmp, PSOCK|slpflag, "nfs_mount_connect_retry", 2*hz);
+		if (error && (error != EWOULDBLOCK))
+			break;
+		error = savederror;
+	}
+
+	/* update status of mount connect */
+	lck_mtx_lock(&nmp->nm_lock);
+	if (!nmp->nm_mounterror)
+		nmp->nm_mounterror = error;
+	nmp->nm_state &= ~NFSSTA_MOUNT_THREAD;
+	lck_mtx_unlock(&nmp->nm_lock);
+	wakeup(&nmp->nm_nss);
+}
+
+int
+nfs_mount_connect(struct nfsmount *nmp)
+{
+	int error = 0, slpflag;
+	thread_t thd;
+	struct timespec ts = { 2, 0 };
+
+	/*
+	 * Set up the socket.  Perform initial search for a location/server/address to
+	 * connect to and negotiate any unspecified mount parameters.  This work is
+	 * done on a kernel thread to satisfy reserved port usage needs.
+	 */
+	slpflag = NMFLAG(nmp, INTR) ? PCATCH : 0;
+	lck_mtx_lock(&nmp->nm_lock);
+	/* set flag that the thread is running */
+	nmp->nm_state |= NFSSTA_MOUNT_THREAD;
+	if (kernel_thread_start(nfs_mount_connect_thread, nmp, &thd) != KERN_SUCCESS) {
+		nmp->nm_state &= ~NFSSTA_MOUNT_THREAD;
+		nmp->nm_mounterror = EIO;
+		printf("nfs mount %s start socket connect thread failed\n", vfs_statfs(nmp->nm_mountp)->f_mntfromname);
+	} else {
+		thread_deallocate(thd);
+	}
+
+	/* wait until mount connect thread is finished/gone */
+	while (nmp->nm_state & NFSSTA_MOUNT_THREAD) {
+		error = msleep(&nmp->nm_nss, &nmp->nm_lock, slpflag|PSOCK, "nfsconnectthread", &ts);
+		if ((error && (error != EWOULDBLOCK)) || ((error = nfs_sigintr(nmp, NULL, current_thread(), 1)))) {
+			/* record error */
+			if (!nmp->nm_mounterror)
+				nmp->nm_mounterror = error;
+			/* signal the thread that we are aborting */
+			nmp->nm_sockflags |= NMSOCK_UNMOUNT;
+			if (nmp->nm_nss)
+				wakeup(nmp->nm_nss);
+			/* and continue waiting on it to finish */
+			slpflag = 0;
+		}
+	}
+	lck_mtx_unlock(&nmp->nm_lock);
+
+	/* grab mount connect status */
+	error = nmp->nm_mounterror;
+
+	return (error);
+}
+
+/*
+ * Common code to mount an NFS file system.
+ */
 int
 mountnfs(
-	struct user_nfs_args *argp,
+	char *xdrbuf,
 	mount_t mp,
-	mbuf_t nam,
 	vfs_context_t ctx,
 	vnode_t *vpp)
 {
 	struct nfsmount *nmp;
 	nfsnode_t np;
-	int error;
-	uint32_t maxio, iosize;
+	int error = 0;
 	struct vfsstatfs *sbp;
-	struct timespec ts = { 1, 0 };
+	struct xdrbuf xb;
+	uint32_t i, val, vers = 0, minorvers, maxio, iosize, len;
+	uint32_t *mattrs;
+	uint32_t *mflags_mask;
+	uint32_t *mflags;
+	uint32_t argslength, attrslength;
+	struct nfs_location_index firstloc = { NLI_VALID, 0, 0, 0 };
 
-	/*
-	 * Silently clear NFSMNT_NOCONN if it's a TCP mount, it makes
-	 * no sense in that context.
-	 */
-	if (argp->sotype == SOCK_STREAM)
-		argp->flags &= ~NFSMNT_NOCONN;
+	/* make sure mbuf constants are set up */
+	if (!nfs_mbuf_mhlen)
+		nfs_mbuf_init();
 
 	if (vfs_flags(mp) & MNT_UPDATE) {
 		nmp = VFSTONFS(mp);
 		/* update paths, file handles, etc, here	XXX */
-		mbuf_freem(nam);
+		xb_free(xdrbuf);
 		return (0);
 	} else {
+		/* allocate an NFS mount structure for this mount */
 		MALLOC_ZONE(nmp, struct nfsmount *,
 				sizeof (struct nfsmount), M_NFSMNT, M_WAITOK);
 		if (!nmp) {
-			mbuf_freem(nam);
+			xb_free(xdrbuf);
 			return (ENOMEM);
 		}
 		bzero((caddr_t)nmp, sizeof (struct nfsmount));
@@ -1565,163 +2660,428 @@ mountnfs(
 		TAILQ_INIT(&nmp->nm_resendq);
 		TAILQ_INIT(&nmp->nm_iodq);
 		TAILQ_INIT(&nmp->nm_gsscl);
+		LIST_INIT(&nmp->nm_monlist);
 		vfs_setfsprivate(mp, nmp);
+		vfs_getnewfsid(mp);
+		nmp->nm_mountp = mp;
+		vfs_setauthopaque(mp);
 
 		nfs_nhinit_finish();
-	}
-	lck_mtx_lock(&nmp->nm_lock);
 
-	/* setup defaults */
-	nmp->nm_vers = NFS_VER2;
-	nmp->nm_timeo = NFS_TIMEO;
-	nmp->nm_retry = NFS_RETRANS;
-	if (argp->sotype == SOCK_DGRAM) {
-		nmp->nm_wsize = NFS_DGRAM_WSIZE;
-		nmp->nm_rsize = NFS_DGRAM_RSIZE;
-	} else {
+		nmp->nm_args = xdrbuf;
+
+		/* set up defaults */
+		nmp->nm_vers = 0;
+		nmp->nm_timeo = NFS_TIMEO;
+		nmp->nm_retry = NFS_RETRANS;
+		nmp->nm_sotype = 0;
+		nmp->nm_sofamily = 0;
+		nmp->nm_nfsport = 0;
 		nmp->nm_wsize = NFS_WSIZE;
 		nmp->nm_rsize = NFS_RSIZE;
+		nmp->nm_readdirsize = NFS_READDIRSIZE;
+		nmp->nm_numgrps = NFS_MAXGRPS;
+		nmp->nm_readahead = NFS_DEFRAHEAD;
+		nmp->nm_tprintf_delay = nfs_tprintf_delay;
+		if (nmp->nm_tprintf_delay < 0)
+			nmp->nm_tprintf_delay = 0;
+		nmp->nm_tprintf_initial_delay = nfs_tprintf_initial_delay;
+		if (nmp->nm_tprintf_initial_delay < 0)
+			nmp->nm_tprintf_initial_delay = 0;
+		nmp->nm_acregmin = NFS_MINATTRTIMO;
+		nmp->nm_acregmax = NFS_MAXATTRTIMO;
+		nmp->nm_acdirmin = NFS_MINDIRATTRTIMO;
+		nmp->nm_acdirmax = NFS_MAXDIRATTRTIMO;
+		nmp->nm_auth = RPCAUTH_SYS;
+		nmp->nm_deadtimeout = 0;
+		NFS_BITMAP_SET(nmp->nm_flags, NFS_MFLAG_NOACL);
 	}
-	nmp->nm_readdirsize = NFS_READDIRSIZE;
-	nmp->nm_numgrps = NFS_MAXGRPS;
-	nmp->nm_readahead = NFS_DEFRAHEAD;
-	nmp->nm_tprintf_delay = nfs_tprintf_delay;
-	if (nmp->nm_tprintf_delay < 0)
-		nmp->nm_tprintf_delay = 0;
-	nmp->nm_tprintf_initial_delay = nfs_tprintf_initial_delay;
-	if (nmp->nm_tprintf_initial_delay < 0)
-		nmp->nm_tprintf_initial_delay = 0;
-	nmp->nm_acregmin = NFS_MINATTRTIMO;
-	nmp->nm_acregmax = NFS_MAXATTRTIMO;
-	nmp->nm_acdirmin = NFS_MINDIRATTRTIMO;
-	nmp->nm_acdirmax = NFS_MAXDIRATTRTIMO;
-	nmp->nm_auth = RPCAUTH_SYS;
-	nmp->nm_deadtimeout = 0;
 
-	vfs_getnewfsid(mp);
-	nmp->nm_mountp = mp;
-	vfs_setauthopaque(mp);
-	nmp->nm_flag = argp->flags;
-	nmp->nm_nam = nam;
+	mattrs = nmp->nm_mattrs;
+	mflags = nmp->nm_mflags;
+	mflags_mask = nmp->nm_mflags_mask;
 
-	if (argp->flags & NFSMNT_NFSV4) {
-		nmp->nm_vers = NFS_VER4;
-		/* NFSv4 is only allowed over TCP. */
-		if (argp->sotype != SOCK_STREAM) {
-			error = EINVAL;
-			goto bad;
+	/* set up NFS mount with args */
+	xb_init_buffer(&xb, xdrbuf, 2*XDRWORD);
+	xb_get_32(error, &xb, val); /* version */
+	xb_get_32(error, &xb, argslength); /* args length */
+	nfsmerr_if(error);
+	xb_init_buffer(&xb, xdrbuf, argslength);	/* restart parsing with actual buffer length */
+	xb_get_32(error, &xb, val); /* version */
+	xb_get_32(error, &xb, argslength); /* args length */
+	xb_get_32(error, &xb, val); /* XDR args version */
+	if (val != NFS_XDRARGS_VERSION_0)
+		error = EINVAL;
+	len = NFS_MATTR_BITMAP_LEN;
+	xb_get_bitmap(error, &xb, mattrs, len); /* mount attribute bitmap */
+	attrslength = 0;
+	xb_get_32(error, &xb, attrslength); /* attrs length */
+	if (!error && (attrslength > (argslength - ((4+NFS_MATTR_BITMAP_LEN+1)*XDRWORD))))
+		error = EINVAL;
+	nfsmerr_if(error);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_FLAGS)) {
+		len = NFS_MFLAG_BITMAP_LEN;
+		xb_get_bitmap(error, &xb, mflags_mask, len); /* mount flag mask */
+		len = NFS_MFLAG_BITMAP_LEN;
+		xb_get_bitmap(error, &xb, mflags, len); /* mount flag values */
+		if (!error) {
+			/* clear all mask bits and OR in all the ones that are set */
+			nmp->nm_flags[0] &= ~mflags_mask[0];
+			nmp->nm_flags[0] |= (mflags_mask[0] & mflags[0]);
 		}
-	} else if (argp->flags & NFSMNT_NFSV3)
-		nmp->nm_vers = NFS_VER3;
-
-	if (nmp->nm_vers == NFS_VER2)
-		nmp->nm_flag &= ~NFSMNT_RDIRPLUS;
-
-	if ((argp->flags & NFSMNT_TIMEO) && argp->timeo > 0) {
-		nmp->nm_timeo = (argp->timeo * NFS_HZ + 5) / 10;
-		if (nmp->nm_timeo < NFS_MINTIMEO)
-			nmp->nm_timeo = NFS_MINTIMEO;
-		else if (nmp->nm_timeo > NFS_MAXTIMEO)
-			nmp->nm_timeo = NFS_MAXTIMEO;
 	}
-
-	if ((argp->flags & NFSMNT_RETRANS) && argp->retrans > 1) {
-		nmp->nm_retry = argp->retrans;
-		if (nmp->nm_retry > NFS_MAXREXMIT)
-			nmp->nm_retry = NFS_MAXREXMIT;
-	}
-
-	if (nmp->nm_vers != NFS_VER2) {
-		if (argp->sotype == SOCK_DGRAM)
-			maxio = NFS_MAXDGRAMDATA;
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_VERSION)) {
+		xb_get_32(error, &xb, vers);
+		if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_MINOR_VERSION))
+			xb_get_32(error, &xb, minorvers);
 		else
-			maxio = NFS_MAXDATA;
-	} else
-		maxio = NFS_V2MAXDATA;
-
-	if ((argp->flags & NFSMNT_WSIZE) && argp->wsize > 0) {
-		nmp->nm_wsize = argp->wsize;
-		/* Round down to multiple of blocksize */
-		nmp->nm_wsize &= ~(NFS_FABLKSIZE - 1);
-		if (nmp->nm_wsize <= 0)
-			nmp->nm_wsize = NFS_FABLKSIZE;
+			minorvers = 0;
+		nfsmerr_if(error);
+		switch (vers) {
+		case 2:
+			nmp->nm_vers = NFS_VER2;
+			break;
+		case 3:
+			nmp->nm_vers = NFS_VER3;
+			break;
+		case 4:
+			switch (minorvers) {
+			case 0:
+				nmp->nm_vers = NFS_VER4;
+				break;
+			default:
+				error = EINVAL;
+			}
+			break;
+		default:
+			error = EINVAL;
+		}
 	}
-	if (nmp->nm_wsize > maxio)
-		nmp->nm_wsize = maxio;
-	if (nmp->nm_wsize > NFS_MAXBSIZE)
-		nmp->nm_wsize = NFS_MAXBSIZE;
-
-	if ((argp->flags & NFSMNT_RSIZE) && argp->rsize > 0) {
-		nmp->nm_rsize = argp->rsize;
-		/* Round down to multiple of blocksize */
-		nmp->nm_rsize &= ~(NFS_FABLKSIZE - 1);
-		if (nmp->nm_rsize <= 0)
-			nmp->nm_rsize = NFS_FABLKSIZE;
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_MINOR_VERSION)) {
+		/* should have also gotten NFS version (and already gotten minorvers) */
+		if (!NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_VERSION))
+			error = EINVAL;
 	}
-	if (nmp->nm_rsize > maxio)
-		nmp->nm_rsize = maxio;
-	if (nmp->nm_rsize > NFS_MAXBSIZE)
-		nmp->nm_rsize = NFS_MAXBSIZE;
-
-	if ((argp->flags & NFSMNT_READDIRSIZE) && argp->readdirsize > 0) {
-		nmp->nm_readdirsize = argp->readdirsize;
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_READ_SIZE))
+		xb_get_32(error, &xb, nmp->nm_rsize);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_WRITE_SIZE))
+		xb_get_32(error, &xb, nmp->nm_wsize);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_READDIR_SIZE))
+		xb_get_32(error, &xb, nmp->nm_readdirsize);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_READAHEAD))
+		xb_get_32(error, &xb, nmp->nm_readahead);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_ATTRCACHE_REG_MIN)) {
+		xb_get_32(error, &xb, nmp->nm_acregmin);
+		xb_skip(error, &xb, XDRWORD);
 	}
-	if (nmp->nm_readdirsize > maxio)
-		nmp->nm_readdirsize = maxio;
-	if (nmp->nm_readdirsize > nmp->nm_rsize)
-		nmp->nm_readdirsize = nmp->nm_rsize;
-
-	if ((argp->flags & NFSMNT_MAXGRPS) && argp->maxgrouplist >= 0 &&
-		argp->maxgrouplist <= NFS_MAXGRPS)
-		nmp->nm_numgrps = argp->maxgrouplist;
-	if ((argp->flags & NFSMNT_READAHEAD) && argp->readahead >= 0 &&
-		argp->readahead <= NFS_MAXRAHEAD)
-		nmp->nm_readahead = argp->readahead;
-	if (argp->flags & NFSMNT_READAHEAD)
-		nmp->nm_readahead = argp->readahead;
-	if (nmp->nm_readahead < 0)
-		nmp->nm_readahead = 0;
-	else if (nmp->nm_readahead > NFS_MAXRAHEAD)
-		nmp->nm_readahead = NFS_MAXRAHEAD;
-
-	if (argp->version >= 4) {
-		if ((argp->flags & NFSMNT_ACREGMIN) && argp->acregmin >= 0)
-			nmp->nm_acregmin = argp->acregmin;
-		if ((argp->flags & NFSMNT_ACREGMAX) && argp->acregmax >= 0)
-			nmp->nm_acregmax = argp->acregmax;
-		if ((argp->flags & NFSMNT_ACDIRMIN) && argp->acdirmin >= 0)
-			nmp->nm_acdirmin = argp->acdirmin;
-		if ((argp->flags & NFSMNT_ACDIRMAX) && argp->acdirmax >= 0)
-			nmp->nm_acdirmax = argp->acdirmax;
-		if (nmp->nm_acregmin > nmp->nm_acregmax)
-			nmp->nm_acregmin = nmp->nm_acregmax;
-		if (nmp->nm_acdirmin > nmp->nm_acdirmax)
-			nmp->nm_acdirmin = nmp->nm_acdirmax;
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_ATTRCACHE_REG_MAX)) {
+		xb_get_32(error, &xb, nmp->nm_acregmax);
+		xb_skip(error, &xb, XDRWORD);
 	}
-	if (argp->version >= 5) {
-		if (argp->flags & NFSMNT_SECFLAVOR) {
-			/*
-			 * Check for valid security flavor
-			 */
-			switch (argp->auth) {
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_ATTRCACHE_DIR_MIN)) {
+		xb_get_32(error, &xb, nmp->nm_acdirmin);
+		xb_skip(error, &xb, XDRWORD);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_ATTRCACHE_DIR_MAX)) {
+		xb_get_32(error, &xb, nmp->nm_acdirmax);
+		xb_skip(error, &xb, XDRWORD);
+	}
+	nfsmerr_if(error);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_LOCK_MODE)) {
+		xb_get_32(error, &xb, val);
+		switch (val) {
+		case NFS_LOCK_MODE_DISABLED:
+		case NFS_LOCK_MODE_LOCAL:
+			if (nmp->nm_vers >= NFS_VER4) {
+				/* disabled/local lock mode only allowed on v2/v3 */
+				error = EINVAL;
+				break;
+			}
+			/* FALLTHROUGH */
+		case NFS_LOCK_MODE_ENABLED:
+			nmp->nm_lockmode = val;
+			break;
+		default:
+			error = EINVAL;
+		}
+	}
+	nfsmerr_if(error);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_SECURITY)) {
+		uint32_t seccnt;
+		xb_get_32(error, &xb, seccnt);
+		if (!error && ((seccnt < 1) || (seccnt > NX_MAX_SEC_FLAVORS)))
+			error = EINVAL;
+		nfsmerr_if(error);
+		nmp->nm_sec.count = seccnt;
+		for (i=0; i < seccnt; i++) {
+			xb_get_32(error, &xb, nmp->nm_sec.flavors[i]);
+			/* Check for valid security flavor */
+			switch (nmp->nm_sec.flavors[i]) {
+			case RPCAUTH_NONE:
 			case RPCAUTH_SYS:
 			case RPCAUTH_KRB5:
 			case RPCAUTH_KRB5I:
 			case RPCAUTH_KRB5P:
-				nmp->nm_auth = argp->auth;
 				break;
 			default:
 				error = EINVAL;
-				goto bad;
 			}
 		}
+		/* start with the first flavor */
+		nmp->nm_auth = nmp->nm_sec.flavors[0];
 	}
-	if (argp->version >= 6) {
-		if (argp->flags & NFSMNT_DEADTIMEOUT)
-			nmp->nm_deadtimeout = argp->deadtimeout;
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_MAX_GROUP_LIST))
+		xb_get_32(error, &xb, nmp->nm_numgrps);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_SOCKET_TYPE)) {
+		char sotype[6];
+
+		xb_get_32(error, &xb, val);
+		if (!error && ((val < 3) || (val > 5)))
+			error = EINVAL;
+		nfsmerr_if(error);
+		error = xb_get_bytes(&xb, sotype, val, 0);
+		nfsmerr_if(error);
+		sotype[val] = '\0';
+		if (!strcmp(sotype, "tcp")) {
+			nmp->nm_sotype = SOCK_STREAM;
+		} else if (!strcmp(sotype, "udp")) {
+			nmp->nm_sotype = SOCK_DGRAM;
+		} else if (!strcmp(sotype, "tcp4")) {
+			nmp->nm_sotype = SOCK_STREAM;
+			nmp->nm_sofamily = AF_INET;
+		} else if (!strcmp(sotype, "udp4")) {
+			nmp->nm_sotype = SOCK_DGRAM;
+			nmp->nm_sofamily = AF_INET;
+		} else if (!strcmp(sotype, "tcp6")) {
+			nmp->nm_sotype = SOCK_STREAM;
+			nmp->nm_sofamily = AF_INET6;
+		} else if (!strcmp(sotype, "udp6")) {
+			nmp->nm_sotype = SOCK_DGRAM;
+			nmp->nm_sofamily = AF_INET6;
+		} else if (!strcmp(sotype, "inet4")) {
+			nmp->nm_sofamily = AF_INET;
+		} else if (!strcmp(sotype, "inet6")) {
+			nmp->nm_sofamily = AF_INET6;
+		} else if (!strcmp(sotype, "inet")) {
+			nmp->nm_sofamily = 0; /* ok */
+		} else {
+			error = EINVAL;
+		}
+		if (!error && (nmp->nm_vers >= NFS_VER4) && nmp->nm_sotype &&
+		    (nmp->nm_sotype != SOCK_STREAM))
+			error = EINVAL;		/* NFSv4 is only allowed over TCP. */
+		nfsmerr_if(error);
 	}
-	if ((nmp->nm_flag & NFSMNT_DEADTIMEOUT) && (nmp->nm_deadtimeout <= 0))
-		nmp->nm_flag &= ~NFSMNT_DEADTIMEOUT;
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_PORT))
+		xb_get_32(error, &xb, nmp->nm_nfsport);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_MOUNT_PORT))
+		xb_get_32(error, &xb, nmp->nm_mountport);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_REQUEST_TIMEOUT)) {
+		/* convert from time to 0.1s units */
+		xb_get_32(error, &xb, nmp->nm_timeo);
+		xb_get_32(error, &xb, val);
+		nfsmerr_if(error);
+		if (val >= 1000000000)
+			error = EINVAL;
+		nfsmerr_if(error);
+		nmp->nm_timeo *= 10;
+		nmp->nm_timeo += (val+100000000-1)/100000000;
+		/* now convert to ticks */
+		nmp->nm_timeo = (nmp->nm_timeo * NFS_HZ + 5) / 10;
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_SOFT_RETRY_COUNT)) {
+		xb_get_32(error, &xb, val);
+		if (!error && (val > 1))
+			nmp->nm_retry = val;
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_DEAD_TIMEOUT)) {
+		xb_get_32(error, &xb, nmp->nm_deadtimeout);
+		xb_skip(error, &xb, XDRWORD);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_FH)) {
+		nfsmerr_if(error);
+		MALLOC(nmp->nm_fh, fhandle_t *, sizeof(fhandle_t), M_TEMP, M_WAITOK|M_ZERO);
+		if (!nmp->nm_fh)
+			error = ENOMEM;
+		xb_get_32(error, &xb, nmp->nm_fh->fh_len);
+		nfsmerr_if(error);
+		error = xb_get_bytes(&xb, (char*)&nmp->nm_fh->fh_data[0], nmp->nm_fh->fh_len, 0);
+	}
+	nfsmerr_if(error);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_FS_LOCATIONS)) {
+		uint32_t loc, serv, addr, comp;
+		struct nfs_fs_location *fsl;
+		struct nfs_fs_server *fss;
+		struct nfs_fs_path *fsp;
+
+		xb_get_32(error, &xb, nmp->nm_locations.nl_numlocs); /* fs location count */
+		/* sanity check location count */
+		if (!error && ((nmp->nm_locations.nl_numlocs < 1) || (nmp->nm_locations.nl_numlocs > 256)))
+			error = EINVAL;
+		nfsmerr_if(error);
+		MALLOC(nmp->nm_locations.nl_locations, struct nfs_fs_location **, nmp->nm_locations.nl_numlocs * sizeof(struct nfs_fs_location*), M_TEMP, M_WAITOK|M_ZERO);
+		if (!nmp->nm_locations.nl_locations)
+			error = ENOMEM;
+		for (loc = 0; loc < nmp->nm_locations.nl_numlocs; loc++) {
+			nfsmerr_if(error);
+			MALLOC(fsl, struct nfs_fs_location *, sizeof(struct nfs_fs_location), M_TEMP, M_WAITOK|M_ZERO);
+			if (!fsl)
+				error = ENOMEM;
+			nmp->nm_locations.nl_locations[loc] = fsl;
+			xb_get_32(error, &xb, fsl->nl_servcount); /* server count */
+			/* sanity check server count */
+			if (!error && ((fsl->nl_servcount < 1) || (fsl->nl_servcount > 256)))
+				error = EINVAL;
+			nfsmerr_if(error);
+			MALLOC(fsl->nl_servers, struct nfs_fs_server **, fsl->nl_servcount * sizeof(struct nfs_fs_server*), M_TEMP, M_WAITOK|M_ZERO);
+			if (!fsl->nl_servers)
+				error = ENOMEM;
+			for (serv = 0; serv < fsl->nl_servcount; serv++) {
+				nfsmerr_if(error);
+				MALLOC(fss, struct nfs_fs_server *, sizeof(struct nfs_fs_server), M_TEMP, M_WAITOK|M_ZERO);
+				if (!fss)
+					error = ENOMEM;
+				fsl->nl_servers[serv] = fss;
+				xb_get_32(error, &xb, val); /* server name length */
+				/* sanity check server name length */
+				if (!error && ((val < 1) || (val > MAXPATHLEN)))
+					error = EINVAL;
+				nfsmerr_if(error);
+				MALLOC(fss->ns_name, char *, val+1, M_TEMP, M_WAITOK|M_ZERO);
+				if (!fss->ns_name)
+					error = ENOMEM;
+				nfsmerr_if(error);
+				error = xb_get_bytes(&xb, fss->ns_name, val, 0); /* server name */
+				xb_get_32(error, &xb, fss->ns_addrcount); /* address count */
+				/* sanity check address count (OK to be zero) */
+				if (!error && (fss->ns_addrcount > 256))
+					error = EINVAL;
+				nfsmerr_if(error);
+				if (fss->ns_addrcount > 0) {
+					MALLOC(fss->ns_addresses, char **, fss->ns_addrcount * sizeof(char *), M_TEMP, M_WAITOK|M_ZERO);
+					if (!fss->ns_addresses)
+						error = ENOMEM;
+					for (addr = 0; addr < fss->ns_addrcount; addr++) {
+						xb_get_32(error, &xb, val); /* address length */
+						/* sanity check address length */
+						if (!error && ((val < 1) || (val > 128)))
+							error = EINVAL;
+						nfsmerr_if(error);
+						MALLOC(fss->ns_addresses[addr], char *, val+1, M_TEMP, M_WAITOK|M_ZERO);
+						if (!fss->ns_addresses[addr])
+							error = ENOMEM;
+						nfsmerr_if(error);
+						error = xb_get_bytes(&xb, fss->ns_addresses[addr], val, 0); /* address */
+					}
+				}
+				xb_get_32(error, &xb, val); /* server info length */
+				xb_skip(error, &xb, val); /* skip server info */
+			}
+			/* get pathname */
+			fsp = &fsl->nl_path;
+			xb_get_32(error, &xb, fsp->np_compcount); /* component count */
+			/* sanity check component count */
+			if (!error && (fsp->np_compcount > MAXPATHLEN))
+				error = EINVAL;
+			nfsmerr_if(error);
+			if (fsp->np_compcount) {
+				MALLOC(fsp->np_components, char **, fsp->np_compcount * sizeof(char*), M_TEMP, M_WAITOK|M_ZERO);
+				if (!fsp->np_components)
+					error = ENOMEM;
+			}
+			for (comp = 0; comp < fsp->np_compcount; comp++) {
+				xb_get_32(error, &xb, val); /* component length */
+				/* sanity check component length */
+				if (!error && (val == 0)) {
+					/*
+					 * Apparently some people think a path with zero components should
+					 * be encoded with one zero-length component.  So, just ignore any
+					 * zero length components.
+					 */
+					comp--;
+					fsp->np_compcount--;
+					if (fsp->np_compcount == 0) {
+						FREE(fsp->np_components, M_TEMP);
+						fsp->np_components = NULL;
+					}
+					continue;
+				}
+				if (!error && ((val < 1) || (val > MAXPATHLEN)))
+					error = EINVAL;
+				nfsmerr_if(error);
+				MALLOC(fsp->np_components[comp], char *, val+1, M_TEMP, M_WAITOK|M_ZERO);
+				if (!fsp->np_components[comp])
+					error = ENOMEM;
+				nfsmerr_if(error);
+				error = xb_get_bytes(&xb, fsp->np_components[comp], val, 0); /* component */
+			}
+			xb_get_32(error, &xb, val); /* fs location info length */
+			xb_skip(error, &xb, val); /* skip fs location info */
+		}
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_MNTFLAGS))
+		xb_skip(error, &xb, XDRWORD);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_MNTFROM)) {
+		xb_get_32(error, &xb, len);
+		nfsmerr_if(error);
+		val = len;
+		if (val >= sizeof(vfs_statfs(mp)->f_mntfromname))
+			val = sizeof(vfs_statfs(mp)->f_mntfromname) - 1;
+		error = xb_get_bytes(&xb, vfs_statfs(mp)->f_mntfromname, val, 0);
+		if ((len - val) > 0)
+			xb_skip(error, &xb, len - val);
+		nfsmerr_if(error);
+		vfs_statfs(mp)->f_mntfromname[val] = '\0';
+	}
+	nfsmerr_if(error);
+
+	/*
+	 * Sanity check/finalize settings.
+	 */
+
+	if (nmp->nm_timeo < NFS_MINTIMEO)
+		nmp->nm_timeo = NFS_MINTIMEO;
+	else if (nmp->nm_timeo > NFS_MAXTIMEO)
+		nmp->nm_timeo = NFS_MAXTIMEO;
+	if (nmp->nm_retry > NFS_MAXREXMIT)
+		nmp->nm_retry = NFS_MAXREXMIT;
+
+	if (nmp->nm_numgrps > NFS_MAXGRPS)
+		nmp->nm_numgrps = NFS_MAXGRPS;
+	if (nmp->nm_readahead > NFS_MAXRAHEAD)
+		nmp->nm_readahead = NFS_MAXRAHEAD;
+	if (nmp->nm_acregmin > nmp->nm_acregmax)
+		nmp->nm_acregmin = nmp->nm_acregmax;
+	if (nmp->nm_acdirmin > nmp->nm_acdirmax)
+		nmp->nm_acdirmin = nmp->nm_acdirmax;
+
+	/* need at least one fs location */
+	if (nmp->nm_locations.nl_numlocs < 1)
+		error = EINVAL;
+	nfsmerr_if(error);
+
+	/* init mount's mntfromname to first location */
+	if (!NM_OMATTR_GIVEN(nmp, MNTFROM))
+		nfs_location_mntfromname(&nmp->nm_locations, firstloc,
+			vfs_statfs(mp)->f_mntfromname, sizeof(vfs_statfs(mp)->f_mntfromname), 0);
+
+	/* Need to save the mounting credential for v4. */
+	nmp->nm_mcred = vfs_context_ucred(ctx);
+	if (IS_VALID_CRED(nmp->nm_mcred))
+		kauth_cred_ref(nmp->nm_mcred);
+
+	/*
+	 * If a reserved port is required, check for that privilege.
+	 * (Note that mirror mounts are exempt because the privilege was
+	 * already checked for the original mount.)
+	 */
+	if (NMFLAG(nmp, RESVPORT) && !vfs_iskernelmount(mp))
+		error = priv_check_cred(nmp->nm_mcred, PRIV_NETINET_RESERVEDPORT, 0);
+	nfsmerr_if(error);
+
+	/* do mount's initial socket connection */
+	error = nfs_mount_connect(nmp);
+	nfsmerr_if(error);
 
 	/* set up the version-specific function tables */
 	if (nmp->nm_vers < NFS_VER4)
@@ -1729,39 +3089,67 @@ mountnfs(
 	else
 		nmp->nm_funcs = &nfs4_funcs;
 
-	/* Set up the sockets and related info */
-	nmp->nm_sotype = argp->sotype;
-	nmp->nm_soproto = argp->proto;
-	if (nmp->nm_sotype == SOCK_DGRAM)
-		TAILQ_INIT(&nmp->nm_cwndq);
-
-	lck_mtx_unlock(&nmp->nm_lock);
-
-	/* make sure mbuf constants are set up */
-	if (!nfs_mbuf_mhlen)
-		nfs_mbuf_init();
-
+	/* sanity check settings now that version/connection is set */
+	if (nmp->nm_vers == NFS_VER2)		/* ignore RDIRPLUS on NFSv2 */
+		NFS_BITMAP_CLR(nmp->nm_flags, NFS_MFLAG_RDIRPLUS);
 	if (nmp->nm_vers >= NFS_VER4) {
-		struct timeval now;
-		microtime(&now);
-		nmp->nm_mounttime = ((uint64_t)now.tv_sec << 32) | now.tv_usec;
-		nmp->nm_mcred = vfs_context_ucred(ctx);
+		if (NFS_BITMAP_ISSET(nmp->nm_flags, NFS_MFLAG_ACLONLY)) /* aclonly trumps noacl */
+			NFS_BITMAP_CLR(nmp->nm_flags, NFS_MFLAG_NOACL);
+		NFS_BITMAP_CLR(nmp->nm_flags, NFS_MFLAG_CALLUMNT);
+		if (nmp->nm_lockmode != NFS_LOCK_MODE_ENABLED)
+			error = EINVAL; /* disabled/local lock mode only allowed on v2/v3 */
+	} else {
+		/* ignore these if not v4 */
+		NFS_BITMAP_CLR(nmp->nm_flags, NFS_MFLAG_NOCALLBACK);
+		NFS_BITMAP_CLR(nmp->nm_flags, NFS_MFLAG_NONAMEDATTR);
+		NFS_BITMAP_CLR(nmp->nm_flags, NFS_MFLAG_NOACL);
+		NFS_BITMAP_CLR(nmp->nm_flags, NFS_MFLAG_ACLONLY);
 		if (IS_VALID_CRED(nmp->nm_mcred))
-			kauth_cred_ref(nmp->nm_mcred);
-		nfs4_mount_callback_setup(nmp);
+			kauth_cred_unref(&nmp->nm_mcred);
+	}
+	nfsmerr_if(error);
+
+	if (nmp->nm_sotype == SOCK_DGRAM) {
+		/* I/O size defaults for UDP are different */
+		if (!NFS_BITMAP_ISSET(mattrs, NFS_MATTR_READ_SIZE))
+			nmp->nm_rsize = NFS_DGRAM_RSIZE;
+		if (!NFS_BITMAP_ISSET(mattrs, NFS_MATTR_WRITE_SIZE))
+			nmp->nm_wsize = NFS_DGRAM_WSIZE;
 	}
 
-	/* set up the socket */
-	if ((error = nfs_connect(nmp, 1)))
-		goto bad;
+	/* round down I/O sizes to multiple of NFS_FABLKSIZE */
+	nmp->nm_rsize &= ~(NFS_FABLKSIZE - 1);
+	if (nmp->nm_rsize <= 0)
+		nmp->nm_rsize = NFS_FABLKSIZE;
+	nmp->nm_wsize &= ~(NFS_FABLKSIZE - 1);
+	if (nmp->nm_wsize <= 0)
+		nmp->nm_wsize = NFS_FABLKSIZE;
+
+	/* and limit I/O sizes to maximum allowed */
+	maxio = (nmp->nm_vers == NFS_VER2) ? NFS_V2MAXDATA :
+		(nmp->nm_sotype == SOCK_DGRAM) ? NFS_MAXDGRAMDATA : NFS_MAXDATA;
+	if (maxio > NFS_MAXBSIZE)
+		maxio = NFS_MAXBSIZE;
+	if (nmp->nm_rsize > maxio)
+		nmp->nm_rsize = maxio;
+	if (nmp->nm_wsize > maxio)
+		nmp->nm_wsize = maxio;
+
+	if (nmp->nm_readdirsize > maxio)
+		nmp->nm_readdirsize = maxio;
+	if (nmp->nm_readdirsize > nmp->nm_rsize)
+		nmp->nm_readdirsize = nmp->nm_rsize;
+
+	/* Set up the sockets and related info */
+	if (nmp->nm_sotype == SOCK_DGRAM)
+		TAILQ_INIT(&nmp->nm_cwndq);
 
 	/*
 	 * Get the root node/attributes from the NFS server and
 	 * do any basic, version-specific setup.
 	 */
-	error = nmp->nm_funcs->nf_mount(nmp, ctx, argp, &np);
-	if (error)
-		goto bad;
+	error = nmp->nm_funcs->nf_mount(nmp, ctx, &np);
+	nfsmerr_if(error);
 
 	/*
 	 * A reference count is needed on the node representing the
@@ -1776,7 +3164,7 @@ mountnfs(
 	vnode_put(*vpp);
 	if (error) {
 		vnode_recycle(*vpp);
-		goto bad;
+		goto nfsmerr;
 	}
 
 	/*
@@ -1788,7 +3176,7 @@ mountnfs(
 		if (!error2)
 			vnode_put(*vpp);
 		vnode_recycle(*vpp);
-		goto bad;
+		goto nfsmerr;
 	}
 	sbp = vfs_statfs(mp);
 	sbp->f_bsize = nmp->nm_fsattr.nfsa_bsize;
@@ -1815,124 +3203,850 @@ mountnfs(
 		iosize = PAGE_SIZE;
 	nmp->nm_biosize = trunc_page_32(iosize);
 
-	/*
-	 * V3 mounts give us a (relatively) reliable remote access(2)
-	 * call, so advertise the fact.
-	 *
-	 * XXX this may not be the best way to go, as the granularity
-	 *     offered isn't a good match to our needs.
-	 */
-	if (nmp->nm_vers != NFS_VER2)
+	/* For NFSv3 and greater, there is a (relatively) reliable ACCESS call. */
+	if (nmp->nm_vers > NFS_VER2)
 		vfs_setauthopaqueaccess(mp);
 
-	if (nmp->nm_flag & NFSMNT_LOCALLOCKS)
+	switch (nmp->nm_lockmode) {
+	case NFS_LOCK_MODE_DISABLED:
+		break;
+	case NFS_LOCK_MODE_LOCAL:
 		vfs_setlocklocal(nmp->nm_mountp);
-	if (!(nmp->nm_flag & (NFSMNT_NOLOCKS|NFSMNT_LOCALLOCKS)))
-		nfs_lockd_mount_change(1);
+		break;
+	case NFS_LOCK_MODE_ENABLED:
+	default:
+		if (nmp->nm_vers <= NFS_VER3)
+			nfs_lockd_mount_register(nmp);
+		break;
+	}
 
+	/* success! */
 	lck_mtx_lock(&nmp->nm_lock);
 	nmp->nm_state |= NFSSTA_MOUNTED;
 	lck_mtx_unlock(&nmp->nm_lock);
 	return (0);
-bad:
-	/* mark the socket for termination */
-	lck_mtx_lock(&nmp->nm_lock);
-	nmp->nm_sockflags |= NMSOCK_UNMOUNT;
-	/* wait for any socket poking to complete */
-	while (nmp->nm_sockflags & NMSOCK_POKE)
-		msleep(&nmp->nm_sockflags, &nmp->nm_lock, PZERO-1, "nfswaitpoke", &ts);
-	/* wait for the socket thread to terminate */
-	while (nmp->nm_sockthd) {
-		wakeup(&nmp->nm_sockthd);
-		msleep(&nmp->nm_sockthd, &nmp->nm_lock, PZERO-1, "nfswaitsockthd", &ts);
-	}
-	/* tear down the socket */
-	lck_mtx_unlock(&nmp->nm_lock);
-	nfs_disconnect(nmp);
-	if (nmp->nm_vers >= NFS_VER4) {
-		if (nmp->nm_cbid)
-			nfs4_mount_callback_shutdown(nmp);
-		if (nmp->nm_renew_timer) {
-			thread_call_cancel(nmp->nm_renew_timer);
-			thread_call_free(nmp->nm_renew_timer);
-		}
-		if (nmp->nm_longid) {
-			/* remove/deallocate the client ID data */
-			lck_mtx_lock(nfs_global_mutex);
-			TAILQ_REMOVE(&nfsclientids, nmp->nm_longid, nci_link);
-			if (nmp->nm_longid->nci_id)
-				FREE(nmp->nm_longid->nci_id, M_TEMP);
-			FREE(nmp->nm_longid, M_TEMP);
-			lck_mtx_unlock(nfs_global_mutex);
-		}
-		if (IS_VALID_CRED(nmp->nm_mcred))
-			kauth_cred_unref(&nmp->nm_mcred);
-	}
-	lck_mtx_destroy(&nmp->nm_lock, nfs_mount_grp);
-	FREE_ZONE((caddr_t)nmp, sizeof (struct nfsmount), M_NFSMNT);
-	mbuf_freem(nam);
+nfsmerr:
+	nfs_mount_cleanup(nmp);
 	return (error);
 }
 
+#if CONFIG_TRIGGERS
+
+/*
+ * We've detected a file system boundary on the server and
+ * need to mount a new file system so that our file systems
+ * MIRROR the file systems on the server.
+ *
+ * Build the mount arguments for the new mount and call kernel_mount().
+ */
+int
+nfs_mirror_mount_domount(vnode_t dvp, vnode_t vp, vfs_context_t ctx)
+{
+	nfsnode_t np = VTONFS(vp);
+	nfsnode_t dnp = VTONFS(dvp);
+	struct nfsmount *nmp = NFSTONMP(np);
+	char fstype[MFSTYPENAMELEN], *mntfromname = NULL, *path = NULL, *relpath, *p, *cp;
+	int error = 0, pathbuflen = MAXPATHLEN, i, mntflags = 0, referral, skipcopy = 0;
+	size_t nlen;
+	struct xdrbuf xb, xbnew;
+	uint32_t mattrs[NFS_MATTR_BITMAP_LEN];
+	uint32_t newmattrs[NFS_MATTR_BITMAP_LEN];
+	uint32_t newmflags[NFS_MFLAG_BITMAP_LEN];
+	uint32_t newmflags_mask[NFS_MFLAG_BITMAP_LEN];
+	uint32_t argslength = 0, val, count, mlen, mlen2, rlen, relpathcomps;
+	uint32_t argslength_offset, attrslength_offset, end_offset;
+	uint32_t numlocs, loc, numserv, serv, numaddr, addr, numcomp, comp;
+	char buf[XDRWORD];
+	struct nfs_fs_locations nfsls;
+
+	referral = (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL);
+	if (referral)
+		bzero(&nfsls, sizeof(nfsls));
+
+	xb_init(&xbnew, 0);
+
+	if (!nmp || (nmp->nm_state & NFSSTA_FORCE))
+		return (ENXIO);
+
+	/* allocate a couple path buffers we need */
+	MALLOC_ZONE(mntfromname, char *, pathbuflen, M_NAMEI, M_WAITOK); 
+	if (!mntfromname) {
+		error = ENOMEM;
+		goto nfsmerr;
+	}
+	MALLOC_ZONE(path, char *, pathbuflen, M_NAMEI, M_WAITOK); 
+	if (!path) {
+		error = ENOMEM;
+		goto nfsmerr;
+	}
+
+	/* get the path for the directory being mounted on */
+	error = vn_getpath(vp, path, &pathbuflen);
+	if (error) {
+		error = ENOMEM;
+		goto nfsmerr;
+	}
+
+	/*
+	 * Set up the mntfromname for the new mount based on the
+	 * current mount's mntfromname and the directory's path
+	 * relative to the current mount's mntonname.
+	 * Set up relpath to point at the relative path on the current mount.
+	 * Also, count the number of components in relpath.
+	 * We'll be adding those to each fs location path in the new args.
+	 */
+	nlen = strlcpy(mntfromname, vfs_statfs(nmp->nm_mountp)->f_mntfromname, MAXPATHLEN);
+	if ((nlen > 0) && (mntfromname[nlen-1] == '/')) { /* avoid double '/' in new name */
+		mntfromname[nlen-1] = '\0';
+		nlen--;
+	}
+	relpath = mntfromname + nlen;
+	nlen = strlcat(mntfromname, path + strlen(vfs_statfs(nmp->nm_mountp)->f_mntonname), MAXPATHLEN);
+	if (nlen >= MAXPATHLEN) {
+		error = ENAMETOOLONG;
+		goto nfsmerr;
+	}
+	/* count the number of components in relpath */
+	p = relpath;
+	while (*p && (*p == '/'))
+		p++;
+	relpathcomps = 0;
+	while (*p) {
+		relpathcomps++;
+		while (*p && (*p != '/'))
+			p++;
+		while (*p && (*p == '/'))
+			p++;
+	}
+
+	/* grab a copy of the file system type */
+	vfs_name(vnode_mount(vp), fstype);
+
+	/* for referrals, fetch the fs locations */
+	if (referral) {
+		const char *vname = vnode_getname(NFSTOV(np));
+		if (!vname) {
+			error = ENOENT;
+		} else {
+			error = nfs4_get_fs_locations(nmp, dnp, NULL, 0, vname, ctx, &nfsls);
+			vnode_putname(vname);
+			if (!error && (nfsls.nl_numlocs < 1))
+				error = ENOENT;
+		}
+		nfsmerr_if(error);
+	}
+
+	/* set up NFS mount args based on current mount args */
+
+#define xb_copy_32(E, XBSRC, XBDST, V) \
+	do { \
+		if (E) break; \
+		xb_get_32((E), (XBSRC), (V)); \
+		if (skipcopy) break; \
+		xb_add_32((E), (XBDST), (V)); \
+	} while (0)
+#define xb_copy_opaque(E, XBSRC, XBDST) \
+	do { \
+		uint32_t __count, __val; \
+		xb_copy_32((E), (XBSRC), (XBDST), __count); \
+		if (E) break; \
+		__count = nfsm_rndup(__count); \
+		__count /= XDRWORD; \
+		while (__count-- > 0) \
+			xb_copy_32((E), (XBSRC), (XBDST), __val); \
+	} while (0)
+
+	xb_init_buffer(&xb, nmp->nm_args, 2*XDRWORD);
+	xb_get_32(error, &xb, val); /* version */
+	xb_get_32(error, &xb, argslength); /* args length */
+	xb_init_buffer(&xb, nmp->nm_args, argslength);
+
+	xb_init_buffer(&xbnew, NULL, 0);
+	xb_copy_32(error, &xb, &xbnew, val); /* version */
+	argslength_offset = xb_offset(&xbnew);
+	xb_copy_32(error, &xb, &xbnew, val); /* args length */
+	xb_copy_32(error, &xb, &xbnew, val); /* XDR args version */
+	count = NFS_MATTR_BITMAP_LEN;
+	xb_get_bitmap(error, &xb, mattrs, count); /* mount attribute bitmap */
+	nfsmerr_if(error);
+	for (i = 0; i < NFS_MATTR_BITMAP_LEN; i++)
+		newmattrs[i] = mattrs[i];
+	if (referral)
+		NFS_BITMAP_SET(newmattrs, NFS_MATTR_FS_LOCATIONS);
+	else
+		NFS_BITMAP_SET(newmattrs, NFS_MATTR_FH);
+	NFS_BITMAP_SET(newmattrs, NFS_MATTR_FLAGS);
+	NFS_BITMAP_SET(newmattrs, NFS_MATTR_MNTFLAGS);
+	NFS_BITMAP_CLR(newmattrs, NFS_MATTR_MNTFROM);
+	xb_add_bitmap(error, &xbnew, newmattrs, NFS_MATTR_BITMAP_LEN);
+	attrslength_offset = xb_offset(&xbnew);
+	xb_copy_32(error, &xb, &xbnew, val); /* attrs length */
+	NFS_BITMAP_ZERO(newmflags_mask, NFS_MFLAG_BITMAP_LEN);
+	NFS_BITMAP_ZERO(newmflags, NFS_MFLAG_BITMAP_LEN);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_FLAGS)) {
+		count = NFS_MFLAG_BITMAP_LEN;
+		xb_get_bitmap(error, &xb, newmflags_mask, count); /* mount flag mask bitmap */
+		count = NFS_MFLAG_BITMAP_LEN;
+		xb_get_bitmap(error, &xb, newmflags, count); /* mount flag bitmap */
+	}
+	NFS_BITMAP_SET(newmflags_mask, NFS_MFLAG_EPHEMERAL);
+	NFS_BITMAP_SET(newmflags, NFS_MFLAG_EPHEMERAL);
+	xb_add_bitmap(error, &xbnew, newmflags_mask, NFS_MFLAG_BITMAP_LEN);
+	xb_add_bitmap(error, &xbnew, newmflags, NFS_MFLAG_BITMAP_LEN);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_VERSION))
+		xb_copy_32(error, &xb, &xbnew, val);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_MINOR_VERSION))
+		xb_copy_32(error, &xb, &xbnew, val);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_READ_SIZE))
+		xb_copy_32(error, &xb, &xbnew, val);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_WRITE_SIZE))
+		xb_copy_32(error, &xb, &xbnew, val);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_READDIR_SIZE))
+		xb_copy_32(error, &xb, &xbnew, val);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_READAHEAD))
+		xb_copy_32(error, &xb, &xbnew, val);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_ATTRCACHE_REG_MIN)) {
+		xb_copy_32(error, &xb, &xbnew, val);
+		xb_copy_32(error, &xb, &xbnew, val);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_ATTRCACHE_REG_MAX)) {
+		xb_copy_32(error, &xb, &xbnew, val);
+		xb_copy_32(error, &xb, &xbnew, val);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_ATTRCACHE_DIR_MIN)) {
+		xb_copy_32(error, &xb, &xbnew, val);
+		xb_copy_32(error, &xb, &xbnew, val);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_ATTRCACHE_DIR_MAX)) {
+		xb_copy_32(error, &xb, &xbnew, val);
+		xb_copy_32(error, &xb, &xbnew, val);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_LOCK_MODE))
+		xb_copy_32(error, &xb, &xbnew, val);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_SECURITY)) {
+		xb_copy_32(error, &xb, &xbnew, count);
+		while (!error && (count-- > 0))
+			xb_copy_32(error, &xb, &xbnew, val);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_MAX_GROUP_LIST))
+		xb_copy_32(error, &xb, &xbnew, val);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_SOCKET_TYPE))
+		xb_copy_opaque(error, &xb, &xbnew);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_NFS_PORT))
+		xb_copy_32(error, &xb, &xbnew, val);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_MOUNT_PORT))
+		xb_copy_32(error, &xb, &xbnew, val);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_REQUEST_TIMEOUT)) {
+		xb_copy_32(error, &xb, &xbnew, val);
+		xb_copy_32(error, &xb, &xbnew, val);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_SOFT_RETRY_COUNT))
+		xb_copy_32(error, &xb, &xbnew, val);
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_DEAD_TIMEOUT)) {
+		xb_copy_32(error, &xb, &xbnew, val);
+		xb_copy_32(error, &xb, &xbnew, val);
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_FH)) {
+		xb_get_32(error, &xb, count);
+		xb_skip(error, &xb, count);
+	}
+	if (!referral) {
+		/* set the initial file handle to the directory's file handle */
+		xb_add_fh(error, &xbnew, np->n_fhp, np->n_fhsize);
+	}
+	/* copy/extend/skip fs locations */
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_FS_LOCATIONS)) {
+		numlocs = numserv = numaddr = numcomp = 0;
+		if (referral) /* don't copy the fs locations for a referral */
+			skipcopy = 1;
+		xb_copy_32(error, &xb, &xbnew, numlocs); /* location count */
+		for (loc = 0; !error && (loc < numlocs); loc++) {
+			xb_copy_32(error, &xb, &xbnew, numserv); /* server count */
+			for (serv = 0; !error && (serv < numserv); serv++) {
+				xb_copy_opaque(error, &xb, &xbnew); /* server name */
+				xb_copy_32(error, &xb, &xbnew, numaddr); /* address count */
+				for (addr = 0; !error && (addr < numaddr); addr++)
+					xb_copy_opaque(error, &xb, &xbnew); /* address */
+				xb_copy_opaque(error, &xb, &xbnew); /* server info */
+			}
+			/* pathname */
+			xb_get_32(error, &xb, numcomp); /* component count */
+			if (!skipcopy)
+				xb_add_32(error, &xbnew, numcomp+relpathcomps); /* new component count */
+			for (comp = 0; !error && (comp < numcomp); comp++)
+				xb_copy_opaque(error, &xb, &xbnew); /* component */
+			/* add additional components */
+			for (comp = 0; !skipcopy && !error && (comp < relpathcomps); comp++) {
+				p = relpath;
+				while (*p && (*p == '/'))
+					p++;
+				while (*p && !error) {
+					cp = p;
+					while (*p && (*p != '/'))
+						p++;
+					xb_add_string(error, &xbnew, cp, (p - cp)); /* component */
+					while (*p && (*p == '/'))
+						p++;
+				}
+			}
+			xb_copy_opaque(error, &xb, &xbnew); /* fs location info */
+		}
+		if (referral)
+			skipcopy = 0;
+	}
+	if (referral) {
+		/* add referral's fs locations */
+		xb_add_32(error, &xbnew, nfsls.nl_numlocs);			/* FS_LOCATIONS */
+		for (loc = 0; !error && (loc < nfsls.nl_numlocs); loc++) {
+			xb_add_32(error, &xbnew, nfsls.nl_locations[loc]->nl_servcount);
+			for (serv = 0; !error && (serv < nfsls.nl_locations[loc]->nl_servcount); serv++) {
+				xb_add_string(error, &xbnew, nfsls.nl_locations[loc]->nl_servers[serv]->ns_name,
+					strlen(nfsls.nl_locations[loc]->nl_servers[serv]->ns_name));
+				xb_add_32(error, &xbnew, nfsls.nl_locations[loc]->nl_servers[serv]->ns_addrcount);
+				for (addr = 0; !error && (addr < nfsls.nl_locations[loc]->nl_servers[serv]->ns_addrcount); addr++)
+					xb_add_string(error, &xbnew, nfsls.nl_locations[loc]->nl_servers[serv]->ns_addresses[addr],
+						strlen(nfsls.nl_locations[loc]->nl_servers[serv]->ns_addresses[addr]));
+				xb_add_32(error, &xbnew, 0); /* empty server info */
+			}
+			xb_add_32(error, &xbnew, nfsls.nl_locations[loc]->nl_path.np_compcount);
+			for (comp = 0; !error && (comp < nfsls.nl_locations[loc]->nl_path.np_compcount); comp++)
+				xb_add_string(error, &xbnew, nfsls.nl_locations[loc]->nl_path.np_components[comp],
+					strlen(nfsls.nl_locations[loc]->nl_path.np_components[comp]));
+			xb_add_32(error, &xbnew, 0); /* empty fs location info */
+		}
+	}
+	if (NFS_BITMAP_ISSET(mattrs, NFS_MATTR_MNTFLAGS))
+		xb_get_32(error, &xb, mntflags);
+	/*
+	 * We add the following mount flags to the ones for the mounted-on mount:
+	 * MNT_DONTBROWSE - to keep the mount from showing up as a separate volume
+	 * MNT_AUTOMOUNTED - to keep DiskArb from retriggering the mount after
+	 *                   an unmount (looking for /.autodiskmounted)
+	 */
+	mntflags |= (MNT_AUTOMOUNTED | MNT_DONTBROWSE);
+	xb_add_32(error, &xbnew, mntflags);
+	if (!referral && NFS_BITMAP_ISSET(mattrs, NFS_MATTR_MNTFROM)) {
+		/* copy mntfrom string and add relpath */
+		rlen = strlen(relpath);
+		xb_get_32(error, &xb, mlen);
+		nfsmerr_if(error);
+		mlen2 = mlen + ((relpath[0] != '/') ? 1 : 0) + rlen;
+		xb_add_32(error, &xbnew, mlen2);
+		count = mlen/XDRWORD;
+		/* copy the original string */
+		while (count-- > 0)
+			xb_copy_32(error, &xb, &xbnew, val);
+		if (!error && (mlen % XDRWORD)) {
+			error = xb_get_bytes(&xb, buf, mlen%XDRWORD, 0);
+			if (!error)
+				error = xb_add_bytes(&xbnew, buf, mlen%XDRWORD, 1);
+		}
+		/* insert a '/' if the relative path doesn't start with one */
+		if (!error && (relpath[0] != '/')) {
+			buf[0] = '/';
+			error = xb_add_bytes(&xbnew, buf, 1, 1);
+		}
+		/* add the additional relative path */
+		if (!error)
+			error = xb_add_bytes(&xbnew, relpath, rlen, 1);
+		/* make sure the resulting string has the right number of pad bytes */
+		if (!error && (mlen2 != nfsm_rndup(mlen2))) {
+			bzero(buf, sizeof(buf));
+			count = nfsm_rndup(mlen2) - mlen2;
+			error = xb_add_bytes(&xbnew, buf, count, 1);
+		}
+	}
+	xb_build_done(error, &xbnew);
+
+	/* update opaque counts */
+	end_offset = xb_offset(&xbnew);
+	if (!error) {
+		error = xb_seek(&xbnew, argslength_offset);
+		argslength = end_offset - argslength_offset + XDRWORD/*version*/;
+		xb_add_32(error, &xbnew, argslength);
+	}
+	if (!error) {
+		error = xb_seek(&xbnew, attrslength_offset);
+		xb_add_32(error, &xbnew, end_offset - attrslength_offset - XDRWORD/*don't include length field*/);
+	}
+	nfsmerr_if(error);
+
+	/*
+	 * For kernel_mount() call, use the existing mount flags (instead of the
+	 * original flags) because flags like MNT_NOSUID and MNT_NODEV may have
+	 * been silently enforced.
+	 */
+	mntflags = vnode_vfsvisflags(vp);
+	mntflags |= (MNT_AUTOMOUNTED | MNT_DONTBROWSE);
+
+	/* do the mount */
+	error = kernel_mount(fstype, dvp, vp, path, xb_buffer_base(&xbnew), argslength,
+			mntflags, KERNEL_MOUNT_PERMIT_UNMOUNT | KERNEL_MOUNT_NOAUTH, ctx);
+
+nfsmerr:
+	if (error)
+		printf("nfs: mirror mount of %s on %s failed (%d)\n",
+			mntfromname, path, error);
+	/* clean up */
+	xb_cleanup(&xbnew);
+	if (referral)
+		nfs_fs_locations_cleanup(&nfsls);
+	if (path)
+		FREE_ZONE(path, MAXPATHLEN, M_NAMEI);
+	if (mntfromname)
+		FREE_ZONE(mntfromname, MAXPATHLEN, M_NAMEI);
+	if (!error)
+		nfs_ephemeral_mount_harvester_start();
+	return (error);
+}
+
+/*
+ * trigger vnode functions
+ */
+
+resolver_result_t
+nfs_mirror_mount_trigger_resolve(
+	vnode_t vp,
+	const struct componentname *cnp,
+	enum path_operation pop,
+	__unused int flags,
+	__unused void *data,
+	vfs_context_t ctx)
+{
+	nfsnode_t np = VTONFS(vp);
+	vnode_t pvp = NULLVP;
+	int error = 0;
+	resolver_result_t result;
+
+	/*
+	 * We have a trigger node that doesn't have anything mounted on it yet.
+	 * We'll do the mount if either:
+	 * (a) this isn't the last component of the path OR
+	 * (b) this is an op that looks like it should trigger the mount.
+	 */
+	if (cnp->cn_flags & ISLASTCN) {
+		switch (pop) {
+		case OP_MOUNT:
+		case OP_UNMOUNT:
+		case OP_STATFS:
+		case OP_LINK:
+		case OP_UNLINK:
+		case OP_RENAME:
+		case OP_MKNOD:
+		case OP_MKFIFO:
+		case OP_SYMLINK:
+		case OP_ACCESS:
+		case OP_GETATTR:
+		case OP_MKDIR:
+		case OP_RMDIR:
+		case OP_REVOKE:
+		case OP_GETXATTR:
+		case OP_LISTXATTR:
+			/* don't perform the mount for these operations */
+			result = vfs_resolver_result(np->n_trigseq, RESOLVER_NOCHANGE, 0);
+#ifdef NFS_TRIGGER_DEBUG
+			NP(np, "nfs trigger RESOLVE: no change, last %d nameiop %d, seq %d",
+				(cnp->cn_flags & ISLASTCN) ? 1 : 0, cnp->cn_nameiop, np->n_trigseq);
+#endif
+			return (result);
+		case OP_OPEN:
+		case OP_CHDIR:
+		case OP_CHROOT:
+		case OP_TRUNCATE:
+		case OP_COPYFILE:
+		case OP_PATHCONF:
+		case OP_READLINK:
+		case OP_SETATTR:
+		case OP_EXCHANGEDATA:
+		case OP_SEARCHFS:
+		case OP_FSCTL:
+		case OP_SETXATTR:
+		case OP_REMOVEXATTR:
+		default:
+			/* go ahead and do the mount */
+			break;
+		}
+	}
+
+	if (vnode_mountedhere(vp) != NULL) {
+		/*
+		 * Um... there's already something mounted.
+		 * Been there.  Done that.  Let's just say it succeeded.
+		 */
+		error = 0;
+		goto skipmount;
+	}
+
+	if ((error = nfs_node_set_busy(np, vfs_context_thread(ctx)))) {
+		result = vfs_resolver_result(np->n_trigseq, RESOLVER_ERROR, error);
+#ifdef NFS_TRIGGER_DEBUG
+		NP(np, "nfs trigger RESOLVE: busy error %d, last %d nameiop %d, seq %d",
+			error, (cnp->cn_flags & ISLASTCN) ? 1 : 0, cnp->cn_nameiop, np->n_trigseq);
+#endif
+		return (result);
+	}
+
+	pvp = vnode_getparent(vp);
+	if (pvp == NULLVP)
+		error = EINVAL;
+	if (!error)
+		error = nfs_mirror_mount_domount(pvp, vp, ctx);
+skipmount:
+	if (!error)
+		np->n_trigseq++;
+	result = vfs_resolver_result(np->n_trigseq, error ? RESOLVER_ERROR : RESOLVER_RESOLVED, error);
+#ifdef NFS_TRIGGER_DEBUG
+	NP(np, "nfs trigger RESOLVE: %s %d, last %d nameiop %d, seq %d",
+		error ? "error" : "resolved", error,
+		(cnp->cn_flags & ISLASTCN) ? 1 : 0, cnp->cn_nameiop, np->n_trigseq);
+#endif
+
+	if (pvp != NULLVP)
+		vnode_put(pvp);
+	nfs_node_clear_busy(np);
+	return (result);
+}
+
+resolver_result_t
+nfs_mirror_mount_trigger_unresolve(
+	vnode_t vp,
+	int flags,
+	__unused void *data,
+	vfs_context_t ctx)
+{
+	nfsnode_t np = VTONFS(vp);
+	mount_t mp;
+	int error;
+	resolver_result_t result;
+
+	if ((error = nfs_node_set_busy(np, vfs_context_thread(ctx)))) {
+		result = vfs_resolver_result(np->n_trigseq, RESOLVER_ERROR, error);
+#ifdef NFS_TRIGGER_DEBUG
+		NP(np, "nfs trigger UNRESOLVE: busy error %d, seq %d", error, np->n_trigseq);
+#endif
+		return (result);
+	}
+
+	mp = vnode_mountedhere(vp);
+	if (!mp)
+		error = EINVAL;
+	if (!error)
+		error = vfs_unmountbyfsid(&(vfs_statfs(mp)->f_fsid), flags, ctx);
+	if (!error)
+		np->n_trigseq++;
+	result = vfs_resolver_result(np->n_trigseq, error ? RESOLVER_ERROR : RESOLVER_UNRESOLVED, error);
+#ifdef NFS_TRIGGER_DEBUG
+	NP(np, "nfs trigger UNRESOLVE: %s %d, seq %d",
+		error ? "error" : "unresolved", error, np->n_trigseq);
+#endif
+	nfs_node_clear_busy(np);
+	return (result);
+}
+
+resolver_result_t
+nfs_mirror_mount_trigger_rearm(
+	vnode_t vp,
+	__unused int flags,
+	__unused void *data,
+	vfs_context_t ctx)
+{
+	nfsnode_t np = VTONFS(vp);
+	int error;
+	resolver_result_t result;
+
+	if ((error = nfs_node_set_busy(np, vfs_context_thread(ctx)))) {
+		result = vfs_resolver_result(np->n_trigseq, RESOLVER_ERROR, error);
+#ifdef NFS_TRIGGER_DEBUG
+		NP(np, "nfs trigger REARM: busy error %d, seq %d", error, np->n_trigseq);
+#endif
+		return (result);
+	}
+
+	np->n_trigseq++;
+	result = vfs_resolver_result(np->n_trigseq,
+			vnode_mountedhere(vp) ? RESOLVER_RESOLVED : RESOLVER_UNRESOLVED, 0);
+#ifdef NFS_TRIGGER_DEBUG
+	NP(np, "nfs trigger REARM: %s, seq %d",
+		vnode_mountedhere(vp) ? "resolved" : "unresolved", np->n_trigseq);
+#endif
+	nfs_node_clear_busy(np);
+	return (result);
+}
+
+/*
+ * Periodically attempt to unmount ephemeral (mirror) mounts in an attempt to limit
+ * the number of unused mounts.
+ */
+
+#define NFS_EPHEMERAL_MOUNT_HARVEST_INTERVAL	120	/* how often the harvester runs */
+struct nfs_ephemeral_mount_harvester_info {
+	fsid_t		fsid;		/* FSID that we need to try to unmount */
+	uint32_t	mountcount;	/* count of ephemeral mounts seen in scan */
+ };
+/* various globals for the harvester */
+static thread_call_t nfs_ephemeral_mount_harvester_timer = NULL;
+static int nfs_ephemeral_mount_harvester_on = 0;
+
+kern_return_t thread_terminate(thread_t);
+
+static int
+nfs_ephemeral_mount_harvester_callback(mount_t mp, void *arg)
+{
+	struct nfs_ephemeral_mount_harvester_info *hinfo = arg;
+	struct nfsmount *nmp;
+	struct timeval now;
+
+	if (strcmp(mp->mnt_vfsstat.f_fstypename, "nfs"))
+		return (VFS_RETURNED);
+	nmp = VFSTONFS(mp);
+	if (!nmp || !NMFLAG(nmp, EPHEMERAL))
+		return (VFS_RETURNED);
+	hinfo->mountcount++;
+
+	/* avoid unmounting mounts that have been triggered within the last harvest interval */
+	microtime(&now);
+	if ((nmp->nm_mounttime >> 32) > ((uint32_t)now.tv_sec - NFS_EPHEMERAL_MOUNT_HARVEST_INTERVAL))
+		return (VFS_RETURNED);
+
+	if (hinfo->fsid.val[0] || hinfo->fsid.val[1]) {
+		/* attempt to unmount previously-found ephemeral mount */
+		vfs_unmountbyfsid(&hinfo->fsid, 0, vfs_context_kernel());
+		hinfo->fsid.val[0] = hinfo->fsid.val[1] = 0;
+	}
+
+	/*
+	 * We can't call unmount here since we hold a mount iter ref
+	 * on mp so save its fsid for the next call iteration to unmount.
+	 */
+	hinfo->fsid.val[0] = mp->mnt_vfsstat.f_fsid.val[0];
+	hinfo->fsid.val[1] = mp->mnt_vfsstat.f_fsid.val[1];
+
+	return (VFS_RETURNED);
+}
+
+/*
+ * Spawn a thread to do the ephemeral mount harvesting.
+ */
+static void
+nfs_ephemeral_mount_harvester_timer_func(void)
+{
+	thread_t thd;
+
+	if (kernel_thread_start(nfs_ephemeral_mount_harvester, NULL, &thd) == KERN_SUCCESS)
+		thread_deallocate(thd);
+}
+
+/*
+ * Iterate all mounts looking for NFS ephemeral mounts to try to unmount.
+ */
+void
+nfs_ephemeral_mount_harvester(__unused void *arg, __unused wait_result_t wr)
+{
+	struct nfs_ephemeral_mount_harvester_info hinfo;
+	uint64_t deadline;
+
+	hinfo.mountcount = 0;
+	hinfo.fsid.val[0] = hinfo.fsid.val[1] = 0;
+	vfs_iterate(VFS_ITERATE_TAIL_FIRST, nfs_ephemeral_mount_harvester_callback, &hinfo);
+	if (hinfo.fsid.val[0] || hinfo.fsid.val[1]) {
+		/* attempt to unmount last found ephemeral mount */
+		vfs_unmountbyfsid(&hinfo.fsid, 0, vfs_context_kernel());
+	}
+
+	lck_mtx_lock(nfs_global_mutex);
+	if (!hinfo.mountcount) {
+		/* no more ephemeral mounts - don't need timer */
+		nfs_ephemeral_mount_harvester_on = 0;
+	} else {
+		/* re-arm the timer */
+		clock_interval_to_deadline(NFS_EPHEMERAL_MOUNT_HARVEST_INTERVAL, NSEC_PER_SEC, &deadline);
+		thread_call_enter_delayed(nfs_ephemeral_mount_harvester_timer, deadline);
+		nfs_ephemeral_mount_harvester_on = 1;
+	}
+	lck_mtx_unlock(nfs_global_mutex);
+
+	/* thread done */
+	thread_terminate(current_thread());
+}
+
+/*
+ * Make sure the NFS ephemeral mount harvester timer is running.
+ */
+void
+nfs_ephemeral_mount_harvester_start(void)
+{
+	uint64_t deadline;
+
+	lck_mtx_lock(nfs_global_mutex);
+	if (nfs_ephemeral_mount_harvester_on) {
+		lck_mtx_unlock(nfs_global_mutex);
+		return;
+	}
+	if (nfs_ephemeral_mount_harvester_timer == NULL)
+		nfs_ephemeral_mount_harvester_timer = thread_call_allocate((thread_call_func_t)nfs_ephemeral_mount_harvester_timer_func, NULL);
+	clock_interval_to_deadline(NFS_EPHEMERAL_MOUNT_HARVEST_INTERVAL, NSEC_PER_SEC, &deadline);
+	thread_call_enter_delayed(nfs_ephemeral_mount_harvester_timer, deadline);
+	nfs_ephemeral_mount_harvester_on = 1;
+	lck_mtx_unlock(nfs_global_mutex);
+}
+
+#endif
+
+/*
+ * Send a MOUNT protocol MOUNT request to the server to get the initial file handle (and security).
+ */
+int
+nfs3_mount_rpc(struct nfsmount *nmp, struct sockaddr *sa, int sotype, int nfsvers, char *path, vfs_context_t ctx, int timeo, fhandle_t *fh, struct nfs_sec *sec)
+{
+	int error = 0, slen, mntproto;
+	thread_t thd = vfs_context_thread(ctx);
+	kauth_cred_t cred = vfs_context_ucred(ctx);
+	uint64_t xid = 0;
+	struct nfsm_chain nmreq, nmrep;
+	mbuf_t mreq;
+	uint32_t mntvers, mntport, val;
+	struct sockaddr_storage ss;
+	struct sockaddr *saddr = (struct sockaddr*)&ss;
+
+	nfsm_chain_null(&nmreq);
+	nfsm_chain_null(&nmrep);
+
+	mntvers = (nfsvers == NFS_VER2) ? RPCMNT_VER1 : RPCMNT_VER3;
+	mntproto = (NM_OMFLAG(nmp, MNTUDP) || (sotype == SOCK_DGRAM)) ? IPPROTO_UDP : IPPROTO_TCP;
+	sec->count = 0;
+
+	bcopy(sa, saddr, min(sizeof(ss), sa->sa_len));
+	if (saddr->sa_family == AF_INET) {
+		if (nmp->nm_mountport)
+			((struct sockaddr_in*)saddr)->sin_port = htons(nmp->nm_mountport);
+		mntport = ntohs(((struct sockaddr_in*)saddr)->sin_port);
+	} else {
+		if (nmp->nm_mountport)
+			((struct sockaddr_in6*)saddr)->sin6_port = htons(nmp->nm_mountport);
+		mntport = ntohs(((struct sockaddr_in6*)saddr)->sin6_port);
+	}
+
+	while (!mntport) {
+		error = nfs_portmap_lookup(nmp, ctx, saddr, NULL, RPCPROG_MNT, mntvers, mntproto, timeo);
+		nfsmout_if(error);
+		if (saddr->sa_family == AF_INET)
+			mntport = ntohs(((struct sockaddr_in*)saddr)->sin_port);
+		else
+			mntport = ntohs(((struct sockaddr_in6*)saddr)->sin6_port);
+		if (!mntport) {
+			/* if not found and TCP, then retry with UDP */
+			if (mntproto == IPPROTO_UDP) {
+				error = EPROGUNAVAIL;
+				break;
+			}
+			mntproto = IPPROTO_UDP;
+			bcopy(sa, saddr, min(sizeof(ss), sa->sa_len));
+		}
+	}
+	nfsmout_if(error || !mntport);
+
+	/* MOUNT protocol MOUNT request */
+	slen = strlen(path);
+	nfsm_chain_build_alloc_init(error, &nmreq, NFSX_UNSIGNED + nfsm_rndup(slen));
+	nfsm_chain_add_name(error, &nmreq, path, slen, nmp);
+	nfsm_chain_build_done(error, &nmreq);
+	nfsmout_if(error);
+	error = nfsm_rpchead2(nmp, (mntproto == IPPROTO_UDP) ? SOCK_DGRAM : SOCK_STREAM,
+			RPCPROG_MNT, mntvers, RPCMNT_MOUNT,
+			RPCAUTH_SYS, cred, NULL, nmreq.nmc_mhead, &xid, &mreq);
+	nfsmout_if(error);
+	nmreq.nmc_mhead = NULL;
+	error = nfs_aux_request(nmp, thd, saddr, NULL,
+			((mntproto == IPPROTO_UDP) ? SOCK_DGRAM : SOCK_STREAM),
+			mreq, R_XID32(xid), 1, timeo, &nmrep);
+	nfsmout_if(error);
+	nfsm_chain_get_32(error, &nmrep, val);
+	if (!error && val)
+		error = val;
+	nfsm_chain_get_fh(error, &nmrep, nfsvers, fh);
+	if (!error && (nfsvers > NFS_VER2)) {
+		sec->count = NX_MAX_SEC_FLAVORS;
+		error = nfsm_chain_get_secinfo(&nmrep, &sec->flavors[0], &sec->count);
+	}
+nfsmout:
+	nfsm_chain_cleanup(&nmreq);
+	nfsm_chain_cleanup(&nmrep);
+	return (error);
+}
+
+
+/*
+ * Send a MOUNT protocol UNMOUNT request to tell the server we've unmounted it.
+ */
 void
 nfs3_umount_rpc(struct nfsmount *nmp, vfs_context_t ctx, int timeo)
 {
-	int error = 0, auth_len, slen;
+	int error = 0, slen, mntproto;
 	thread_t thd = vfs_context_thread(ctx);
 	kauth_cred_t cred = vfs_context_ucred(ctx);
 	char *path;
 	uint64_t xid = 0;
 	struct nfsm_chain nmreq, nmrep;
 	mbuf_t mreq;
-	uint32_t mntport = 0;
-	struct sockaddr *nam = mbuf_data(nmp->nm_nam);
-	struct sockaddr_in saddr;
+	uint32_t mntvers, mntport;
+	struct sockaddr_storage ss;
+	struct sockaddr *saddr = (struct sockaddr*)&ss;
 
-	bcopy(nam, &saddr, min(sizeof(saddr), nam->sa_len));
-	auth_len = ((((cred->cr_ngroups - 1) > nmp->nm_numgrps) ?
-			nmp->nm_numgrps : (cred->cr_ngroups - 1)) << 2) +
-			5 * NFSX_UNSIGNED;
+	if (!nmp->nm_saddr)
+		return;
+
 	nfsm_chain_null(&nmreq);
 	nfsm_chain_null(&nmrep);
 
-	/* send portmap request to get mountd port */
-	saddr.sin_port = htons(PMAPPORT);
-	nfsm_chain_build_alloc_init(error, &nmreq, 4*NFSX_UNSIGNED);
-	nfsm_chain_add_32(error, &nmreq, RPCPROG_MNT);
-	nfsm_chain_add_32(error, &nmreq, RPCMNT_VER1);
-	nfsm_chain_add_32(error, &nmreq, IPPROTO_UDP);
-	nfsm_chain_add_32(error, &nmreq, 0);
-	nfsm_chain_build_done(error, &nmreq);
-	nfsmout_if(error);
-	error = nfsm_rpchead2(SOCK_DGRAM, PMAPPROG, PMAPVERS, PMAPPROC_GETPORT,
-			RPCAUTH_SYS, auth_len, cred, NULL, nmreq.nmc_mhead, &xid, &mreq);
-	nfsmout_if(error);
-	nmreq.nmc_mhead = NULL;
-	error = nfs_aux_request(nmp, thd, &saddr, mreq, R_XID32(xid), 0, timeo, &nmrep);
-	nfsmout_if(error);
+	mntvers = (nmp->nm_vers == NFS_VER2) ? RPCMNT_VER1 : RPCMNT_VER3;
+	mntproto = (NM_OMFLAG(nmp, MNTUDP) || (nmp->nm_sotype == SOCK_DGRAM)) ? IPPROTO_UDP : IPPROTO_TCP;
+	mntport = nmp->nm_mountport;
 
-	/* grab mountd port from portmap response */
-	nfsm_chain_get_32(error, &nmrep, mntport);
-	nfsmout_if(error);
-	nfsm_chain_cleanup(&nmreq);
-	nfsm_chain_cleanup(&nmrep);
-	xid = 0;
+	bcopy(nmp->nm_saddr, saddr, min(sizeof(ss), nmp->nm_saddr->sa_len));
+	if (saddr->sa_family == AF_INET)
+		((struct sockaddr_in*)saddr)->sin_port = htons(mntport);
+	else
+		((struct sockaddr_in6*)saddr)->sin6_port = htons(mntport);
+
+	while (!mntport) {
+		error = nfs_portmap_lookup(nmp, ctx, saddr, NULL, RPCPROG_MNT, mntvers, mntproto, timeo);
+  		nfsmout_if(error);
+		if (saddr->sa_family == AF_INET)
+			mntport = ntohs(((struct sockaddr_in*)saddr)->sin_port);
+		else
+			mntport = ntohs(((struct sockaddr_in6*)saddr)->sin6_port);
+		/* if not found and mntvers > VER1, then retry with VER1 */
+		if (!mntport) {
+			if (mntvers > RPCMNT_VER1) {
+				mntvers = RPCMNT_VER1;
+			} else if (mntproto == IPPROTO_TCP) {
+				mntproto = IPPROTO_UDP;
+				mntvers = (nmp->nm_vers == NFS_VER2) ? RPCMNT_VER1 : RPCMNT_VER3;
+			} else {
+				break;
+			}
+			bcopy(nmp->nm_saddr, saddr, min(sizeof(ss), nmp->nm_saddr->sa_len));
+		}
+	}
+	nfsmout_if(!mntport);
 
 	/* MOUNT protocol UNMOUNT request */
-	saddr.sin_port = htons(mntport);
 	path = &vfs_statfs(nmp->nm_mountp)->f_mntfromname[0];
 	while (*path && (*path != '/'))
 		path++;
 	slen = strlen(path);
 	nfsm_chain_build_alloc_init(error, &nmreq, NFSX_UNSIGNED + nfsm_rndup(slen));
-	nfsm_chain_add_string(error, &nmreq, path, slen);
+	nfsm_chain_add_name(error, &nmreq, path, slen, nmp);
 	nfsm_chain_build_done(error, &nmreq);
 	nfsmout_if(error);
-	error = nfsm_rpchead2(SOCK_DGRAM, RPCPROG_MNT, RPCMNT_VER1, RPCMNT_UMOUNT,
-			RPCAUTH_SYS, auth_len, cred, NULL, nmreq.nmc_mhead, &xid, &mreq);
+	error = nfsm_rpchead2(nmp, (mntproto == IPPROTO_UDP) ? SOCK_DGRAM : SOCK_STREAM,
+			RPCPROG_MNT, RPCMNT_VER1, RPCMNT_UMOUNT,
+			RPCAUTH_SYS, cred, NULL, nmreq.nmc_mhead, &xid, &mreq);
 	nfsmout_if(error);
 	nmreq.nmc_mhead = NULL;
-	error = nfs_aux_request(nmp, thd, &saddr, mreq, R_XID32(xid), 1, timeo, &nmrep);
+	error = nfs_aux_request(nmp, thd, saddr, NULL,
+		((mntproto == IPPROTO_UDP) ? SOCK_DGRAM : SOCK_STREAM),
+		mreq, R_XID32(xid), 1, timeo, &nmrep);
 nfsmout:
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
@@ -1949,15 +4063,15 @@ nfs_vfs_unmount(
 {
 	struct nfsmount *nmp;
 	vnode_t vp;
-	int error, flags = 0, docallback;
-	struct nfsreq *req, *treq;
-	struct nfs_reqqhead iodq;
+	int error, flags = 0;
 	struct timespec ts = { 1, 0 };
-	struct nfs_open_owner *noop, *nextnoop;
-	nfsnode_t np;
 
 	nmp = VFSTONFS(mp);
 	lck_mtx_lock(&nmp->nm_lock);
+	/*
+	 * Set the flag indicating that an unmount attempt is in progress.
+	 */
+	nmp->nm_state |= NFSSTA_UNMOUNTING;
 	/*
 	 * During a force unmount we want to...
 	 *   Mark that we are doing a force unmount.
@@ -1966,15 +4080,19 @@ nfs_vfs_unmount(
 	if (mntflags & MNT_FORCE) {
 		flags |= FORCECLOSE;
 		nmp->nm_state |= NFSSTA_FORCE;
-		nmp->nm_flag |= NFSMNT_SOFT;
+		NFS_BITMAP_SET(nmp->nm_flags, NFS_MFLAG_SOFT);
 	}
+	/*
+	 * Wait for any in-progress monitored node scan to complete.
+	 */
+	while (nmp->nm_state & NFSSTA_MONITOR_SCAN)
+		msleep(&nmp->nm_state, &nmp->nm_lock, PZERO-1, "nfswaitmonscan", &ts);
 	/*
 	 * Goes something like this..
 	 * - Call vflush() to clear out vnodes for this file system,
 	 *   except for the swap files. Deal with them in 2nd pass.
 	 * - Decrement reference on the vnode representing remote root.
-	 * - Close the socket
-	 * - Free up the data structures
+	 * - Clean up the NFS mount structure.
 	 */
 	vp = NFSTOV(nmp->nm_dnp);
 	lck_mtx_unlock(&nmp->nm_lock);
@@ -1989,14 +4107,18 @@ nfs_vfs_unmount(
 		error = vflush(mp, NULLVP, flags); /* locks vp in the process */
 	} else {
 		if (vnode_isinuse(vp, 1))
-			return (EBUSY);
-		error = vflush(mp, vp, flags);
+			error = EBUSY;
+		else
+			error = vflush(mp, vp, flags);
 	}
-	if (error)
+	if (error) {
+		lck_mtx_lock(&nmp->nm_lock);
+		nmp->nm_state &= ~NFSSTA_UNMOUNTING;
+		lck_mtx_unlock(&nmp->nm_lock);
 		return (error);
+	}
 
 	lck_mtx_lock(&nmp->nm_lock);
-	nmp->nm_state &= ~NFSSTA_MOUNTED;
 	nmp->nm_dnp = NULL;
 	lck_mtx_unlock(&nmp->nm_lock);
 
@@ -2010,26 +4132,86 @@ nfs_vfs_unmount(
 
 	vflush(mp, NULLVP, FORCECLOSE);
 
-	/*
-	 * Destroy any RPCSEC_GSS contexts
-	 */
+	nfs_mount_cleanup(nmp);
+	return (0);
+}
+
+/*
+ * cleanup/destroy NFS fs locations structure
+ */
+void
+nfs_fs_locations_cleanup(struct nfs_fs_locations *nfslsp)
+{
+	struct nfs_fs_location *fsl;
+	struct nfs_fs_server *fss;
+	struct nfs_fs_path *fsp;
+	uint32_t loc, serv, addr, comp;
+
+	/* free up fs locations */
+	if (!nfslsp->nl_numlocs || !nfslsp->nl_locations)
+		return;
+
+	for (loc = 0; loc < nfslsp->nl_numlocs; loc++) {
+		fsl = nfslsp->nl_locations[loc];
+		if (!fsl)
+			continue;
+		if ((fsl->nl_servcount > 0) && fsl->nl_servers) {
+			for (serv = 0; serv < fsl->nl_servcount; serv++) {
+				fss = fsl->nl_servers[serv];
+				if (!fss)
+					continue;
+				if ((fss->ns_addrcount > 0) && fss->ns_addresses) {
+					for (addr = 0; addr < fss->ns_addrcount; addr++)
+						FREE(fss->ns_addresses[addr], M_TEMP);
+					FREE(fss->ns_addresses, M_TEMP);
+				}
+				FREE(fss->ns_name, M_TEMP);
+				FREE(fss, M_TEMP);
+			}
+			FREE(fsl->nl_servers, M_TEMP);
+		}
+		fsp = &fsl->nl_path;
+		if (fsp->np_compcount && fsp->np_components) {
+			for (comp = 0; comp < fsp->np_compcount; comp++)
+				if (fsp->np_components[comp])
+					FREE(fsp->np_components[comp], M_TEMP);
+			FREE(fsp->np_components, M_TEMP);
+		}
+		FREE(fsl, M_TEMP);
+	}
+	FREE(nfslsp->nl_locations, M_TEMP);
+	nfslsp->nl_numlocs = 0;
+	nfslsp->nl_locations = NULL;
+}
+
+/*
+ * cleanup/destroy an nfsmount
+ */
+void
+nfs_mount_cleanup(struct nfsmount *nmp)
+{
+	struct nfsreq *req, *treq;
+	struct nfs_reqqhead iodq;
+	struct timespec ts = { 1, 0 };
+	struct nfs_open_owner *noop, *nextnoop;
+	nfsnode_t np;
+	int docallback;
+
+	/* stop callbacks */
+	if ((nmp->nm_vers >= NFS_VER4) && !NMFLAG(nmp, NOCALLBACK) && nmp->nm_cbid)
+		nfs4_mount_callback_shutdown(nmp);
+
+	/* Destroy any RPCSEC_GSS contexts */
 	if (!TAILQ_EMPTY(&nmp->nm_gsscl))
-		nfs_gss_clnt_ctx_unmount(nmp, mntflags);
+		nfs_gss_clnt_ctx_unmount(nmp);
 
 	/* mark the socket for termination */
 	lck_mtx_lock(&nmp->nm_lock);
 	nmp->nm_sockflags |= NMSOCK_UNMOUNT;
 
-	/* stop callbacks */
-	if ((nmp->nm_vers >= NFS_VER4) && nmp->nm_cbid)
-		nfs4_mount_callback_shutdown(nmp);
-
-	/* wait for any socket poking to complete */
-	while (nmp->nm_sockflags & NMSOCK_POKE)
-		msleep(&nmp->nm_sockflags, &nmp->nm_lock, PZERO-1, "nfswaitpoke", &ts);
-
 	/* Have the socket thread send the unmount RPC, if requested/appropriate. */
-	if ((nmp->nm_vers < NFS_VER4) && !(mntflags & MNT_FORCE) && (nmp->nm_flag & NFSMNT_CALLUMNT))
+	if ((nmp->nm_vers < NFS_VER4) && (nmp->nm_state & NFSSTA_MOUNTED) &&
+	    !(nmp->nm_state & NFSSTA_FORCE) && NMFLAG(nmp, CALLUMNT))
 		nfs_mount_sock_thread_wake(nmp);
 
 	/* wait for the socket thread to terminate */
@@ -2043,15 +4225,16 @@ nfs_vfs_unmount(
 	/* tear down the socket */
 	nfs_disconnect(nmp);
 
-	vfs_setfsprivate(mp, NULL);
+	if (nmp->nm_mountp)
+		vfs_setfsprivate(nmp->nm_mountp, NULL);
 
 	lck_mtx_lock(&nmp->nm_lock);
 
-	if ((nmp->nm_vers >= NFS_VER4) && nmp->nm_cbid) {
-		/* clear out any pending recall requests */
-		while ((np = TAILQ_FIRST(&nmp->nm_recallq))) {
-			TAILQ_REMOVE(&nmp->nm_recallq, np, n_dlink);
-			np->n_dlink.tqe_next = NFSNOLIST;
+	if ((nmp->nm_vers >= NFS_VER4) && !NMFLAG(nmp, NOCALLBACK) && nmp->nm_cbid) {
+		/* clear out any pending delegation return requests */
+		while ((np = TAILQ_FIRST(&nmp->nm_dreturnq))) {
+			TAILQ_REMOVE(&nmp->nm_dreturnq, np, n_dreturn);
+			np->n_dreturn.tqe_next = NFSNOLIST;
 		}
 	}
 
@@ -2061,11 +4244,23 @@ nfs_vfs_unmount(
 		thread_call_free(nmp->nm_renew_timer);
 	}
 
-	mbuf_freem(nmp->nm_nam);
+	if (nmp->nm_saddr)
+		FREE(nmp->nm_saddr, M_SONAME);
+	if ((nmp->nm_vers < NFS_VER4) && nmp->nm_rqsaddr)
+		FREE(nmp->nm_rqsaddr, M_SONAME);
 	lck_mtx_unlock(&nmp->nm_lock);
 
-	if ((nmp->nm_vers < NFS_VER4) && !(nmp->nm_flag & (NFSMNT_NOLOCKS|NFSMNT_LOCALLOCKS)))
-		nfs_lockd_mount_change(-1);
+	if (nmp->nm_state & NFSSTA_MOUNTED)
+		switch (nmp->nm_lockmode) {
+		case NFS_LOCK_MODE_DISABLED:
+		case NFS_LOCK_MODE_LOCAL:
+			break;
+		case NFS_LOCK_MODE_ENABLED:
+		default:
+			if (nmp->nm_vers <= NFS_VER3)
+				nfs_lockd_mount_unregister(nmp);
+			break;
+		}
 
 	if ((nmp->nm_vers >= NFS_VER4) && nmp->nm_longid) {
 		/* remove/deallocate the client ID data */
@@ -2126,24 +4321,41 @@ nfs_vfs_unmount(
 			req->r_callback.rcb_func(req);
 	}
 
-	/* clean up open owner list */
+	/* clean up common state */
+	lck_mtx_lock(&nmp->nm_lock);
+ 	while ((np = LIST_FIRST(&nmp->nm_monlist))) {
+ 		LIST_REMOVE(np, n_monlink);
+ 		np->n_monlink.le_next = NFSNOLIST;
+ 	}
+	TAILQ_FOREACH_SAFE(noop, &nmp->nm_open_owners, noo_link, nextnoop) {
+		TAILQ_REMOVE(&nmp->nm_open_owners, noop, noo_link);
+		noop->noo_flags &= ~NFS_OPEN_OWNER_LINK;
+		if (noop->noo_refcnt)
+			continue;
+		nfs_open_owner_destroy(noop);
+	}
+	lck_mtx_unlock(&nmp->nm_lock);
+
+	/* clean up NFSv4 state */
 	if (nmp->nm_vers >= NFS_VER4) {
 		lck_mtx_lock(&nmp->nm_lock);
-		TAILQ_FOREACH_SAFE(noop, &nmp->nm_open_owners, noo_link, nextnoop) {
-			TAILQ_REMOVE(&nmp->nm_open_owners, noop, noo_link);
-			noop->noo_flags &= ~NFS_OPEN_OWNER_LINK;
-			if (noop->noo_refcnt)
-				continue;
-			nfs_open_owner_destroy(noop);
+		while ((np = TAILQ_FIRST(&nmp->nm_delegations))) {
+			TAILQ_REMOVE(&nmp->nm_delegations, np, n_dlink);
+			np->n_dlink.tqe_next = NFSNOLIST;
 		}
 		lck_mtx_unlock(&nmp->nm_lock);
-		if (IS_VALID_CRED(nmp->nm_mcred))
-			kauth_cred_unref(&nmp->nm_mcred);
 	}
+	if (IS_VALID_CRED(nmp->nm_mcred))
+		kauth_cred_unref(&nmp->nm_mcred);
 
+	nfs_fs_locations_cleanup(&nmp->nm_locations);
+
+	if (nmp->nm_args)
+		xb_free(nmp->nm_args);
 	lck_mtx_destroy(&nmp->nm_lock, nfs_mount_grp);
+	if (nmp->nm_fh)
+		FREE(nmp->nm_fh, M_TEMP);
 	FREE_ZONE((caddr_t)nmp, sizeof (struct nfsmount), M_NFSMNT);
-	return (0);
 }
 
 /*
@@ -2192,8 +4404,8 @@ nfs_vfs_quotactl(
 int
 nfs3_getquota(struct nfsmount *nmp, vfs_context_t ctx, uid_t id, int type, struct dqblk *dqb)
 {
-	int error = 0, auth_len, slen, timeo;
-	int rqvers = (type == GRPQUOTA) ? RPCRQUOTA_EXT_VER : RPCRQUOTA_VER;
+	int error = 0, slen, timeo;
+	int rqport = 0, rqproto, rqvers = (type == GRPQUOTA) ? RPCRQUOTA_EXT_VER : RPCRQUOTA_VER;
 	thread_t thd = vfs_context_thread(ctx);
 	kauth_cred_t cred = vfs_context_ucred(ctx);
 	char *path;
@@ -2201,70 +4413,70 @@ nfs3_getquota(struct nfsmount *nmp, vfs_context_t ctx, uid_t id, int type, struc
 	struct nfsm_chain nmreq, nmrep;
 	mbuf_t mreq;
 	uint32_t val = 0, bsize = 0;
-	struct sockaddr *nam = mbuf_data(nmp->nm_nam);
-	struct sockaddr_in saddr;
+	struct sockaddr *rqsaddr;
 	struct timeval now;
 
-	bcopy(nam, &saddr, min(sizeof(saddr), nam->sa_len));
-	auth_len = ((((cred->cr_ngroups - 1) > nmp->nm_numgrps) ?
-			nmp->nm_numgrps : (cred->cr_ngroups - 1)) << 2) +
-			5 * NFSX_UNSIGNED;
-	timeo = (nmp->nm_flag & NFSMNT_SOFT) ? 10 : 60;
-	nfsm_chain_null(&nmreq);
-	nfsm_chain_null(&nmrep);
+	if (!nmp->nm_saddr)
+		return (ENXIO);
+
+	if (NMFLAG(nmp, NOQUOTA))
+		return (ENOTSUP);
+
+	if (!nmp->nm_rqsaddr)
+		MALLOC(nmp->nm_rqsaddr, struct sockaddr *, sizeof(struct sockaddr_storage), M_SONAME, M_WAITOK|M_ZERO);
+	if (!nmp->nm_rqsaddr)
+		return (ENOMEM);
+	rqsaddr = nmp->nm_rqsaddr;
+	if (rqsaddr->sa_family == AF_INET6)
+		rqport = ntohs(((struct sockaddr_in6*)rqsaddr)->sin6_port);
+	else if (rqsaddr->sa_family == AF_INET)
+		rqport = ntohs(((struct sockaddr_in*)rqsaddr)->sin_port);
+
+	timeo = NMFLAG(nmp, SOFT) ? 10 : 60;
+	rqproto = IPPROTO_UDP; /* XXX should prefer TCP if mount is TCP */
 
 	/* check if we have a recently cached rquota port */
-	if (nmp->nm_rqport) {
+	microuptime(&now);
+	if (!rqport || ((nmp->nm_rqsaddrstamp + 60) >= (uint32_t)now.tv_sec)) {
+		/* send portmap request to get rquota port */
+		bcopy(nmp->nm_saddr, rqsaddr, min(sizeof(struct sockaddr_storage), nmp->nm_saddr->sa_len));
+		error = nfs_portmap_lookup(nmp, ctx, rqsaddr, NULL, RPCPROG_RQUOTA, rqvers, rqproto, timeo);
+		if (error)
+			return (error);
+		if (rqsaddr->sa_family == AF_INET6)
+			rqport = ntohs(((struct sockaddr_in6*)rqsaddr)->sin6_port);
+		else if (rqsaddr->sa_family == AF_INET)
+			rqport = ntohs(((struct sockaddr_in*)rqsaddr)->sin_port);
+		else
+			return (EIO);
+		if (!rqport)
+			return (ENOTSUP);
 		microuptime(&now);
-		if ((nmp->nm_rqportstamp + 60) >= (uint32_t)now.tv_sec)
-			goto got_rqport;
+		nmp->nm_rqsaddrstamp = now.tv_sec;
 	}
 
-	/* send portmap request to get rquota port */
-	saddr.sin_port = htons(PMAPPORT);
-	nfsm_chain_build_alloc_init(error, &nmreq, 4*NFSX_UNSIGNED);
-	nfsm_chain_add_32(error, &nmreq, RPCPROG_RQUOTA);
-	nfsm_chain_add_32(error, &nmreq, rqvers);
-	nfsm_chain_add_32(error, &nmreq, IPPROTO_UDP);
-	nfsm_chain_add_32(error, &nmreq, 0);
-	nfsm_chain_build_done(error, &nmreq);
-	nfsmout_if(error);
-	error = nfsm_rpchead2(SOCK_DGRAM, PMAPPROG, PMAPVERS, PMAPPROC_GETPORT,
-			RPCAUTH_SYS, auth_len, cred, NULL, nmreq.nmc_mhead, &xid, &mreq);
-	nfsmout_if(error);
-	nmreq.nmc_mhead = NULL;
-	error = nfs_aux_request(nmp, thd, &saddr, mreq, R_XID32(xid), 0, timeo, &nmrep);
-	nfsmout_if(error);
-
-	/* grab rquota port from portmap response */
-	nfsm_chain_get_32(error, &nmrep, val);
-	nfsmout_if(error);
-	nmp->nm_rqport = val;
-	microuptime(&now);
-	nmp->nm_rqportstamp = now.tv_sec;
-	nfsm_chain_cleanup(&nmreq);
-	nfsm_chain_cleanup(&nmrep);
-	xid = 0;
-
-got_rqport:
 	/* rquota request */
-	saddr.sin_port = htons(nmp->nm_rqport);
+	nfsm_chain_null(&nmreq);
+	nfsm_chain_null(&nmrep);
 	path = &vfs_statfs(nmp->nm_mountp)->f_mntfromname[0];
 	while (*path && (*path != '/'))
 		path++;
 	slen = strlen(path);
 	nfsm_chain_build_alloc_init(error, &nmreq, 3 * NFSX_UNSIGNED + nfsm_rndup(slen));
-	nfsm_chain_add_string(error, &nmreq, path, slen);
+	nfsm_chain_add_name(error, &nmreq, path, slen, nmp);
 	if (type == GRPQUOTA)
 		nfsm_chain_add_32(error, &nmreq, type);
 	nfsm_chain_add_32(error, &nmreq, id);
 	nfsm_chain_build_done(error, &nmreq);
 	nfsmout_if(error);
-	error = nfsm_rpchead2(SOCK_DGRAM, RPCPROG_RQUOTA, rqvers, RPCRQUOTA_GET,
-			RPCAUTH_SYS, auth_len, cred, NULL, nmreq.nmc_mhead, &xid, &mreq);
+	error = nfsm_rpchead2(nmp, (rqproto == IPPROTO_UDP) ? SOCK_DGRAM : SOCK_STREAM,
+			RPCPROG_RQUOTA, rqvers, RPCRQUOTA_GET,
+			RPCAUTH_SYS, cred, NULL, nmreq.nmc_mhead, &xid, &mreq);
 	nfsmout_if(error);
 	nmreq.nmc_mhead = NULL;
-	error = nfs_aux_request(nmp, thd, &saddr, mreq, R_XID32(xid), 0, timeo, &nmrep);
+	error = nfs_aux_request(nmp, thd, rqsaddr, NULL,
+			(rqproto == IPPROTO_UDP) ? SOCK_DGRAM : SOCK_STREAM,
+			mreq, R_XID32(xid), 0, timeo, &nmrep);
 	nfsmout_if(error);
 
 	/* parse rquota response */
@@ -2311,6 +4523,7 @@ nfs4_getquota(struct nfsmount *nmp, vfs_context_t ctx, uid_t id, int type, struc
 	uint32_t bitmap[NFS_ATTR_BITMAP_LEN];
 	thread_t thd = vfs_context_thread(ctx);
 	kauth_cred_t cred = vfs_context_ucred(ctx);
+	struct nfsreq_secinfo_args si;
 
 	if (type != USRQUOTA)  /* NFSv4 only supports user quotas */
 		return (ENOTSUP);
@@ -2326,12 +4539,13 @@ nfs4_getquota(struct nfsmount *nmp, vfs_context_t ctx, uid_t id, int type, struc
 	 * an effective uid that matches the given uid.
 	 */
 	if (id != kauth_cred_getuid(cred)) {
-		struct ucred temp_cred;
-		bzero(&temp_cred, sizeof(temp_cred));
-		temp_cred.cr_uid = id;
-		temp_cred.cr_ngroups = cred->cr_ngroups;
-		bcopy(cred->cr_groups, temp_cred.cr_groups, sizeof(temp_cred.cr_groups));
-		cred = kauth_cred_create(&temp_cred);
+		struct posix_cred temp_pcred;
+		posix_cred_t pcred = posix_cred_get(cred);
+		bzero(&temp_pcred, sizeof(temp_pcred));
+		temp_pcred.cr_uid = id;
+		temp_pcred.cr_ngroups = pcred->cr_ngroups;
+		bcopy(pcred->cr_groups, temp_pcred.cr_groups, sizeof(temp_pcred.cr_groups));
+		cred = posix_cred_create(&temp_pcred);
 		if (!IS_VALID_CRED(cred))
 			return (ENOMEM);
 	} else {
@@ -2347,6 +4561,7 @@ nfs4_getquota(struct nfsmount *nmp, vfs_context_t ctx, uid_t id, int type, struc
 		return(error);
 	}
 
+	NFSREQ_SECINFO_SET(&si, np, NULL, 0, NULL, 0);
 	nfsm_chain_null(&nmreq);
 	nfsm_chain_null(&nmrep);
 
@@ -2363,19 +4578,18 @@ nfs4_getquota(struct nfsmount *nmp, vfs_context_t ctx, uid_t id, int type, struc
 	NFS_BITMAP_SET(bitmap, NFS_FATTR_QUOTA_AVAIL_HARD);
 	NFS_BITMAP_SET(bitmap, NFS_FATTR_QUOTA_AVAIL_SOFT);
 	NFS_BITMAP_SET(bitmap, NFS_FATTR_QUOTA_USED);
-	nfsm_chain_add_bitmap_masked(error, &nmreq, bitmap,
-		NFS_ATTR_BITMAP_LEN, nmp->nm_fsattr.nfsa_supp_attr);
+	nfsm_chain_add_bitmap_supported(error, &nmreq, bitmap, nmp, NULL);
 	nfsm_chain_build_done(error, &nmreq);
 	nfsm_assert(error, (numops == 0), EPROTO);
 	nfsmout_if(error);
-	error = nfs_request2(np, NULL, &nmreq, NFSPROC4_COMPOUND, thd, cred, 0, &nmrep, &xid, &status);
+	error = nfs_request2(np, NULL, &nmreq, NFSPROC4_COMPOUND, thd, cred, &si, 0, &nmrep, &xid, &status);
 	nfsm_chain_skip_tag(error, &nmrep);
 	nfsm_chain_get_32(error, &nmrep, numops);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_PUTFH);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
 	nfsm_assert(error, NFSTONMP(np), ENXIO);
 	nfsmout_if(error);
-	error = nfs4_parsefattr(&nmrep, NULL, NULL, NULL, dqb);
+	error = nfs4_parsefattr(&nmrep, NULL, NULL, NULL, dqb, NULL);
 	nfsmout_if(error);
 	nfsm_assert(error, NFSTONMP(np), ENXIO);
 nfsmout:
@@ -2391,7 +4605,7 @@ nfs_vfs_quotactl(mount_t mp, int cmds, uid_t uid, caddr_t datap, vfs_context_t c
 {
 	struct nfsmount *nmp;
 	int cmd, type, error, nfsvers;
-	uid_t ruid = vfs_context_ucred(ctx)->cr_ruid;
+	uid_t euid = kauth_cred_getuid(vfs_context_ucred(ctx));
 	struct dqblk *dqb = (struct dqblk*)datap;
 
 	if (!(nmp = VFSTONFS(mp)))
@@ -2399,7 +4613,7 @@ nfs_vfs_quotactl(mount_t mp, int cmds, uid_t uid, caddr_t datap, vfs_context_t c
 	nfsvers = nmp->nm_vers;
 
 	if (uid == ~0U)
-		uid = ruid;
+		uid = euid;
 
 	/* we can only support Q_GETQUOTA */
 	cmd = cmds >> SUBCMDSHIFT;
@@ -2420,7 +4634,7 @@ nfs_vfs_quotactl(mount_t mp, int cmds, uid_t uid, caddr_t datap, vfs_context_t c
 	type = cmds & SUBCMDMASK;
 	if ((u_int)type >= MAXQUOTAS)
 		return (EINVAL);
-	if ((uid != ruid) && ((error = vfs_context_suser(ctx))))
+	if ((uid != euid) && ((error = vfs_context_suser(ctx))))
 		return (error);
 
 	if (vfs_busy(mp, LK_NOWAIT))
@@ -2438,7 +4652,7 @@ nfs_vfs_quotactl(mount_t mp, int cmds, uid_t uid, caddr_t datap, vfs_context_t c
 int nfs_sync_callout(vnode_t, void *);
 
 struct nfs_sync_cargs {
-	thread_t	thd;
+	vfs_context_t	ctx;
 	int		waitfor;
 	int		error;
 };
@@ -2447,16 +4661,22 @@ int
 nfs_sync_callout(vnode_t vp, void *arg)
 {
 	struct nfs_sync_cargs *cargs = (struct nfs_sync_cargs*)arg;
+	nfsnode_t np = VTONFS(vp);
 	int error;
 
-	if (LIST_EMPTY(&VTONFS(vp)->n_dirtyblkhd))
+	if (np->n_flag & NREVOKE) {
+		vn_revoke(vp, REVOKEALL, cargs->ctx);
 		return (VNODE_RETURNED);
-	if (VTONFS(vp)->n_wrbusy > 0)
+	}
+
+	if (LIST_EMPTY(&np->n_dirtyblkhd))
 		return (VNODE_RETURNED);
-	if (VTONFS(vp)->n_bflag & (NBFLUSHINPROG|NBINVALINPROG))
+	if (np->n_wrbusy > 0)
+		return (VNODE_RETURNED);
+	if (np->n_bflag & (NBFLUSHINPROG|NBINVALINPROG))
 		return (VNODE_RETURNED);
 
-	error = nfs_flush(VTONFS(vp), cargs->waitfor, cargs->thd, 0);
+	error = nfs_flush(np, cargs->waitfor, vfs_context_thread(cargs->ctx), 0);
 	if (error)
 		cargs->error = error;
 
@@ -2469,7 +4689,7 @@ nfs_vfs_sync(mount_t mp, int waitfor, vfs_context_t ctx)
 	struct nfs_sync_cargs cargs;
 
 	cargs.waitfor = waitfor;
-	cargs.thd = vfs_context_thread(ctx);
+	cargs.ctx = ctx;
 	cargs.error = 0;
 
 	vnode_iterate(mp, 0, nfs_sync_callout, &cargs);
@@ -2539,6 +4759,290 @@ nfs_vfs_start(
 }
 
 /*
+ * Build the mount info buffer for NFS_MOUNTINFO.
+ */
+int
+nfs_mountinfo_assemble(struct nfsmount *nmp, struct xdrbuf *xb)
+{
+	struct xdrbuf xbinfo, xborig;
+	char sotype[6];
+	uint32_t origargsvers, origargslength;
+	uint32_t infolength_offset, curargsopaquelength_offset, curargslength_offset, attrslength_offset, curargs_end_offset, end_offset;
+	uint32_t miattrs[NFS_MIATTR_BITMAP_LEN];
+	uint32_t miflags_mask[NFS_MIFLAG_BITMAP_LEN];
+	uint32_t miflags[NFS_MIFLAG_BITMAP_LEN];
+	uint32_t mattrs[NFS_MATTR_BITMAP_LEN];
+	uint32_t mflags_mask[NFS_MFLAG_BITMAP_LEN];
+	uint32_t mflags[NFS_MFLAG_BITMAP_LEN];
+	uint32_t loc, serv, addr, comp;
+	int i, timeo, error = 0;
+
+	/* set up mount info attr and flag bitmaps */
+	NFS_BITMAP_ZERO(miattrs, NFS_MIATTR_BITMAP_LEN);
+	NFS_BITMAP_SET(miattrs, NFS_MIATTR_FLAGS);
+	NFS_BITMAP_SET(miattrs, NFS_MIATTR_ORIG_ARGS);
+	NFS_BITMAP_SET(miattrs, NFS_MIATTR_CUR_ARGS);
+	NFS_BITMAP_SET(miattrs, NFS_MIATTR_CUR_LOC_INDEX);
+	NFS_BITMAP_ZERO(miflags_mask, NFS_MIFLAG_BITMAP_LEN);
+	NFS_BITMAP_ZERO(miflags, NFS_MIFLAG_BITMAP_LEN);
+	NFS_BITMAP_SET(miflags_mask, NFS_MIFLAG_DEAD);
+	NFS_BITMAP_SET(miflags_mask, NFS_MIFLAG_NOTRESP);
+	NFS_BITMAP_SET(miflags_mask, NFS_MIFLAG_RECOVERY);
+	if (nmp->nm_state & NFSSTA_DEAD)
+		NFS_BITMAP_SET(miflags, NFS_MIFLAG_DEAD);
+	if ((nmp->nm_state & (NFSSTA_TIMEO|NFSSTA_JUKEBOXTIMEO)) ||
+	    ((nmp->nm_state & NFSSTA_LOCKTIMEO) && (nmp->nm_lockmode == NFS_LOCK_MODE_ENABLED)))
+		NFS_BITMAP_SET(miflags, NFS_MIFLAG_NOTRESP);
+	if (nmp->nm_state & NFSSTA_RECOVER)
+		NFS_BITMAP_SET(miflags, NFS_MIFLAG_RECOVERY);
+
+	/* get original mount args length */
+	xb_init_buffer(&xborig, nmp->nm_args, 2*XDRWORD);
+	xb_get_32(error, &xborig, origargsvers); /* version */
+	xb_get_32(error, &xborig, origargslength); /* args length */
+	nfsmerr_if(error);
+
+	/* set up current mount attributes bitmap */
+	NFS_BITMAP_ZERO(mattrs, NFS_MATTR_BITMAP_LEN);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_FLAGS);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_NFS_VERSION);
+	if (nmp->nm_vers >= NFS_VER4)
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_NFS_MINOR_VERSION);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_READ_SIZE);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_WRITE_SIZE);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_READDIR_SIZE);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_READAHEAD);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_ATTRCACHE_REG_MIN);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_ATTRCACHE_REG_MAX);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_ATTRCACHE_DIR_MIN);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_ATTRCACHE_DIR_MAX);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_LOCK_MODE);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_SECURITY);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_MAX_GROUP_LIST);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_SOCKET_TYPE);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_NFS_PORT);
+	if ((nmp->nm_vers < NFS_VER4) && nmp->nm_mountport)
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_MOUNT_PORT);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_REQUEST_TIMEOUT);
+	if (NMFLAG(nmp, SOFT))
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_SOFT_RETRY_COUNT);
+	if (nmp->nm_deadtimeout)
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_DEAD_TIMEOUT);
+	if (nmp->nm_fh)
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_FH);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_FS_LOCATIONS);
+	NFS_BITMAP_SET(mattrs, NFS_MATTR_MNTFLAGS);
+	if (origargsvers < NFS_ARGSVERSION_XDR)
+		NFS_BITMAP_SET(mattrs, NFS_MATTR_MNTFROM);
+
+	/* set up current mount flags bitmap */
+	/* first set the flags that we will be setting - either on OR off */
+	NFS_BITMAP_ZERO(mflags_mask, NFS_MFLAG_BITMAP_LEN);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_SOFT);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_INTR);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_RESVPORT);
+	if (nmp->nm_sotype == SOCK_DGRAM)
+		NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_NOCONNECT);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_DUMBTIMER);
+	if (nmp->nm_vers < NFS_VER4)
+		NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_CALLUMNT);
+	if (nmp->nm_vers >= NFS_VER3)
+		NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_RDIRPLUS);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_NONEGNAMECACHE);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_MUTEJUKEBOX);
+	if (nmp->nm_vers >= NFS_VER4) {
+		NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_EPHEMERAL);
+		NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_NOCALLBACK);
+		NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_NONAMEDATTR);
+		NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_NOACL);
+		NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_ACLONLY);
+	}
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_NFC);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_NOQUOTA);
+	if (nmp->nm_vers < NFS_VER4)
+		NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_MNTUDP);
+	NFS_BITMAP_SET(mflags_mask, NFS_MFLAG_MNTQUICK);
+	/* now set the flags that should be set */
+	NFS_BITMAP_ZERO(mflags, NFS_MFLAG_BITMAP_LEN);
+	if (NMFLAG(nmp, SOFT))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_SOFT);
+	if (NMFLAG(nmp, INTR))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_INTR);
+	if (NMFLAG(nmp, RESVPORT))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_RESVPORT);
+	if ((nmp->nm_sotype == SOCK_DGRAM) && NMFLAG(nmp, NOCONNECT))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_NOCONNECT);
+	if (NMFLAG(nmp, DUMBTIMER))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_DUMBTIMER);
+	if ((nmp->nm_vers < NFS_VER4) && NMFLAG(nmp, CALLUMNT))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_CALLUMNT);
+	if ((nmp->nm_vers >= NFS_VER3) && NMFLAG(nmp, RDIRPLUS))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_RDIRPLUS);
+	if (NMFLAG(nmp, NONEGNAMECACHE))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_NONEGNAMECACHE);
+	if (NMFLAG(nmp, MUTEJUKEBOX))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_MUTEJUKEBOX);
+	if (nmp->nm_vers >= NFS_VER4) {
+		if (NMFLAG(nmp, EPHEMERAL))
+			NFS_BITMAP_SET(mflags, NFS_MFLAG_EPHEMERAL);
+		if (NMFLAG(nmp, NOCALLBACK))
+			NFS_BITMAP_SET(mflags, NFS_MFLAG_NOCALLBACK);
+		if (NMFLAG(nmp, NONAMEDATTR))
+			NFS_BITMAP_SET(mflags, NFS_MFLAG_NONAMEDATTR);
+		if (NMFLAG(nmp, NOACL))
+			NFS_BITMAP_SET(mflags, NFS_MFLAG_NOACL);
+		if (NMFLAG(nmp, ACLONLY))
+			NFS_BITMAP_SET(mflags, NFS_MFLAG_ACLONLY);
+	}
+	if (NMFLAG(nmp, NFC))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_NFC);
+	if (NMFLAG(nmp, NOQUOTA) || ((nmp->nm_vers >= NFS_VER4) &&
+	    !NFS_BITMAP_ISSET(nmp->nm_fsattr.nfsa_supp_attr, NFS_FATTR_QUOTA_AVAIL_HARD) &&
+	    !NFS_BITMAP_ISSET(nmp->nm_fsattr.nfsa_supp_attr, NFS_FATTR_QUOTA_AVAIL_SOFT) &&
+	    !NFS_BITMAP_ISSET(nmp->nm_fsattr.nfsa_supp_attr, NFS_FATTR_QUOTA_USED)))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_NOQUOTA);
+	if ((nmp->nm_vers < NFS_VER4) && NMFLAG(nmp, MNTUDP))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_MNTUDP);
+	if (NMFLAG(nmp, MNTQUICK))
+		NFS_BITMAP_SET(mflags, NFS_MFLAG_MNTQUICK);
+
+	/* assemble info buffer: */
+	xb_init_buffer(&xbinfo, NULL, 0);
+	xb_add_32(error, &xbinfo, NFS_MOUNT_INFO_VERSION);
+	infolength_offset = xb_offset(&xbinfo);
+	xb_add_32(error, &xbinfo, 0);
+	xb_add_bitmap(error, &xbinfo, miattrs, NFS_MIATTR_BITMAP_LEN);
+	xb_add_bitmap(error, &xbinfo, miflags, NFS_MIFLAG_BITMAP_LEN);
+	xb_add_32(error, &xbinfo, origargslength);
+	if (!error)
+		error = xb_add_bytes(&xbinfo, nmp->nm_args, origargslength, 0);
+
+	/* the opaque byte count for the current mount args values: */
+	curargsopaquelength_offset = xb_offset(&xbinfo);
+	xb_add_32(error, &xbinfo, 0);
+
+	/* Encode current mount args values */
+	xb_add_32(error, &xbinfo, NFS_ARGSVERSION_XDR);
+	curargslength_offset = xb_offset(&xbinfo);
+	xb_add_32(error, &xbinfo, 0);
+	xb_add_32(error, &xbinfo, NFS_XDRARGS_VERSION_0);
+	xb_add_bitmap(error, &xbinfo, mattrs, NFS_MATTR_BITMAP_LEN);
+	attrslength_offset = xb_offset(&xbinfo);
+	xb_add_32(error, &xbinfo, 0);
+	xb_add_bitmap(error, &xbinfo, mflags_mask, NFS_MFLAG_BITMAP_LEN);
+	xb_add_bitmap(error, &xbinfo, mflags, NFS_MFLAG_BITMAP_LEN);
+	xb_add_32(error, &xbinfo, nmp->nm_vers);		/* NFS_VERSION */
+	if (nmp->nm_vers >= NFS_VER4)
+		xb_add_32(error, &xbinfo, 0);			/* NFS_MINOR_VERSION */
+	xb_add_32(error, &xbinfo, nmp->nm_rsize);		/* READ_SIZE */
+	xb_add_32(error, &xbinfo, nmp->nm_wsize);		/* WRITE_SIZE */
+	xb_add_32(error, &xbinfo, nmp->nm_readdirsize);		/* READDIR_SIZE */
+	xb_add_32(error, &xbinfo, nmp->nm_readahead);		/* READAHEAD */
+	xb_add_32(error, &xbinfo, nmp->nm_acregmin);		/* ATTRCACHE_REG_MIN */
+	xb_add_32(error, &xbinfo, 0);				/* ATTRCACHE_REG_MIN */
+	xb_add_32(error, &xbinfo, nmp->nm_acregmax);		/* ATTRCACHE_REG_MAX */
+	xb_add_32(error, &xbinfo, 0);				/* ATTRCACHE_REG_MAX */
+	xb_add_32(error, &xbinfo, nmp->nm_acdirmin);		/* ATTRCACHE_DIR_MIN */
+	xb_add_32(error, &xbinfo, 0);				/* ATTRCACHE_DIR_MIN */
+	xb_add_32(error, &xbinfo, nmp->nm_acdirmax);		/* ATTRCACHE_DIR_MAX */
+	xb_add_32(error, &xbinfo, 0);				/* ATTRCACHE_DIR_MAX */
+	xb_add_32(error, &xbinfo, nmp->nm_lockmode);		/* LOCK_MODE */
+	if (nmp->nm_sec.count) {
+		xb_add_32(error, &xbinfo, nmp->nm_sec.count);		/* SECURITY */
+		nfsmerr_if(error);
+		for (i=0; i < nmp->nm_sec.count; i++)
+			xb_add_32(error, &xbinfo, nmp->nm_sec.flavors[i]);
+	} else if (nmp->nm_servsec.count) {
+		xb_add_32(error, &xbinfo, nmp->nm_servsec.count);	/* SECURITY */
+		nfsmerr_if(error);
+		for (i=0; i < nmp->nm_servsec.count; i++)
+			xb_add_32(error, &xbinfo, nmp->nm_servsec.flavors[i]);
+	} else {
+		xb_add_32(error, &xbinfo, 1);				/* SECURITY */
+		xb_add_32(error, &xbinfo, nmp->nm_auth);
+	}
+	xb_add_32(error, &xbinfo, nmp->nm_numgrps);		/* MAX_GROUP_LIST */
+	nfsmerr_if(error);
+	snprintf(sotype, sizeof(sotype), "%s%s", (nmp->nm_sotype == SOCK_DGRAM) ? "udp" : "tcp",
+		nmp->nm_sofamily ? (nmp->nm_sofamily == AF_INET) ? "4" : "6" : "");
+	xb_add_string(error, &xbinfo, sotype, strlen(sotype));	/* SOCKET_TYPE */
+	xb_add_32(error, &xbinfo, ntohs(((struct sockaddr_in*)nmp->nm_saddr)->sin_port)); /* NFS_PORT */
+	if ((nmp->nm_vers < NFS_VER4) && nmp->nm_mountport)
+		xb_add_32(error, &xbinfo, nmp->nm_mountport);	/* MOUNT_PORT */
+	timeo = (nmp->nm_timeo * 10) / NFS_HZ;
+	xb_add_32(error, &xbinfo, timeo/10);			/* REQUEST_TIMEOUT */
+	xb_add_32(error, &xbinfo, (timeo%10)*100000000);	/* REQUEST_TIMEOUT */
+	if (NMFLAG(nmp, SOFT))
+		xb_add_32(error, &xbinfo, nmp->nm_retry);	/* SOFT_RETRY_COUNT */
+	if (nmp->nm_deadtimeout) {
+		xb_add_32(error, &xbinfo, nmp->nm_deadtimeout);	/* DEAD_TIMEOUT */
+		xb_add_32(error, &xbinfo, 0);			/* DEAD_TIMEOUT */
+	}
+	if (nmp->nm_fh)
+		xb_add_fh(error, &xbinfo, &nmp->nm_fh->fh_data[0], nmp->nm_fh->fh_len); /* FH */
+	xb_add_32(error, &xbinfo, nmp->nm_locations.nl_numlocs);			/* FS_LOCATIONS */
+	for (loc = 0; !error && (loc < nmp->nm_locations.nl_numlocs); loc++) {
+		xb_add_32(error, &xbinfo, nmp->nm_locations.nl_locations[loc]->nl_servcount);
+		for (serv = 0; !error && (serv < nmp->nm_locations.nl_locations[loc]->nl_servcount); serv++) {
+			xb_add_string(error, &xbinfo, nmp->nm_locations.nl_locations[loc]->nl_servers[serv]->ns_name,
+				strlen(nmp->nm_locations.nl_locations[loc]->nl_servers[serv]->ns_name));
+			xb_add_32(error, &xbinfo, nmp->nm_locations.nl_locations[loc]->nl_servers[serv]->ns_addrcount);
+			for (addr = 0; !error && (addr < nmp->nm_locations.nl_locations[loc]->nl_servers[serv]->ns_addrcount); addr++)
+				xb_add_string(error, &xbinfo, nmp->nm_locations.nl_locations[loc]->nl_servers[serv]->ns_addresses[addr],
+					strlen(nmp->nm_locations.nl_locations[loc]->nl_servers[serv]->ns_addresses[addr]));
+			xb_add_32(error, &xbinfo, 0); /* empty server info */
+		}
+		xb_add_32(error, &xbinfo, nmp->nm_locations.nl_locations[loc]->nl_path.np_compcount);
+		for (comp = 0; !error && (comp < nmp->nm_locations.nl_locations[loc]->nl_path.np_compcount); comp++)
+			xb_add_string(error, &xbinfo, nmp->nm_locations.nl_locations[loc]->nl_path.np_components[comp],
+				strlen(nmp->nm_locations.nl_locations[loc]->nl_path.np_components[comp]));
+		xb_add_32(error, &xbinfo, 0); /* empty fs location info */
+	}
+	xb_add_32(error, &xbinfo, vfs_flags(nmp->nm_mountp));		/* MNTFLAGS */
+	if (origargsvers < NFS_ARGSVERSION_XDR)
+		xb_add_string(error, &xbinfo, vfs_statfs(nmp->nm_mountp)->f_mntfromname,
+			strlen(vfs_statfs(nmp->nm_mountp)->f_mntfromname));	/* MNTFROM */
+	curargs_end_offset = xb_offset(&xbinfo);
+
+	/* NFS_MIATTR_CUR_LOC_INDEX */
+	xb_add_32(error, &xbinfo, nmp->nm_locations.nl_current.nli_flags);
+	xb_add_32(error, &xbinfo, nmp->nm_locations.nl_current.nli_loc);
+	xb_add_32(error, &xbinfo, nmp->nm_locations.nl_current.nli_serv);
+	xb_add_32(error, &xbinfo, nmp->nm_locations.nl_current.nli_addr);
+
+	xb_build_done(error, &xbinfo);
+
+	/* update opaque counts */
+	end_offset = xb_offset(&xbinfo);
+	if (!error) {
+		error = xb_seek(&xbinfo, attrslength_offset);
+		xb_add_32(error, &xbinfo, curargs_end_offset - attrslength_offset - XDRWORD/*don't include length field*/);
+	}
+	if (!error) {
+		error = xb_seek(&xbinfo, curargslength_offset);
+		xb_add_32(error, &xbinfo, curargs_end_offset - curargslength_offset + XDRWORD/*version*/);
+	}
+	if (!error) {
+		error = xb_seek(&xbinfo, curargsopaquelength_offset);
+		xb_add_32(error, &xbinfo, curargs_end_offset - curargslength_offset + XDRWORD/*version*/);
+	}
+	if (!error) {
+		error = xb_seek(&xbinfo, infolength_offset);
+		xb_add_32(error, &xbinfo, end_offset - infolength_offset + XDRWORD/*version*/);
+	}
+	nfsmerr_if(error);
+
+	/* copy result xdrbuf to caller */
+	*xb = xbinfo;
+
+	/* and mark the local copy as not needing cleanup */
+	xbinfo.xb_flags &= ~XB_CLEANUP;
+nfsmerr:
+	xb_cleanup(&xbinfo);
+	return (error);
+}
+
+/*
  * Do that sysctl thang...
  */
 int
@@ -2552,6 +5056,8 @@ nfs_vfs_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	struct nfsmount *nmp = NULL;
 	struct vfsquery vq;
 	boolean_t is_64_bit;
+	fsid_t fsid;
+	struct xdrbuf xb;
 #if NFSSERVER
 	struct nfs_exportfs *nxfs;
 	struct nfs_export *nx;
@@ -2622,6 +5128,32 @@ nfs_vfs_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 		if (newp)
 			return copyin(newp, &nfsstats, sizeof nfsstats);
 		return (0);
+	case NFS_MOUNTINFO:
+		/* read in the fsid */
+		if (*oldlenp < sizeof(fsid))
+			return (EINVAL);
+		if ((error = copyin(oldp, &fsid, sizeof(fsid))))
+			return (error);
+		/* swizzle it back to host order */
+		fsid.val[0] = ntohl(fsid.val[0]);
+		fsid.val[1] = ntohl(fsid.val[1]);
+		/* find mount and make sure it's NFS */
+		if (((mp = vfs_getvfs(&fsid))) == NULL)
+			return (ENOENT);
+		if (strcmp(mp->mnt_vfsstat.f_fstypename, "nfs"))
+			return (EINVAL);
+		if (((nmp = VFSTONFS(mp))) == NULL)
+			return (ENOENT);
+		xb_init(&xb, 0);
+		if ((error = nfs_mountinfo_assemble(nmp, &xb)))
+			return (error);
+		if (*oldlenp < xb.xb_u.xb_buffer.xbb_len)
+			error = ENOMEM;
+		else
+			error = copyout(xb_buffer_base(&xb), oldp, xb.xb_u.xb_buffer.xbb_len);
+		*oldlenp = xb.xb_u.xb_buffer.xbb_len;
+		xb_cleanup(&xb);
+		break;
 #if NFSSERVER
 	case NFS_EXPORTSTATS:
 		/* setup export stat descriptor */
@@ -2866,7 +5398,7 @@ ustat_skip:
 	case VFS_CTL_NOLOCKS:
  		if (req->oldptr != USER_ADDR_NULL) {
 			lck_mtx_lock(&nmp->nm_lock);
-			val = (nmp->nm_flag & NFSMNT_NOLOCKS) ? 1 : 0;
+			val = (nmp->nm_lockmode == NFS_LOCK_MODE_DISABLED) ? 1 : 0;
 			lck_mtx_unlock(&nmp->nm_lock);
  			error = SYSCTL_OUT(req, &val, sizeof(val));
  			if (error)
@@ -2877,18 +5409,21 @@ ustat_skip:
  			if (error)
  				return (error);
 			lck_mtx_lock(&nmp->nm_lock);
-			if (nmp->nm_flag & NFSMNT_LOCALLOCKS) {
+			if (nmp->nm_lockmode == NFS_LOCK_MODE_LOCAL) {
 				/* can't toggle locks when using local locks */
 				error = EINVAL;
+			} else if ((nmp->nm_vers >= NFS_VER4) && val) {
+				/* can't disable locks for NFSv4 */
+				error = EINVAL;
 			} else if (val) {
-				if (!(nmp->nm_flag & NFSMNT_NOLOCKS))
-					nfs_lockd_mount_change(-1);
-				nmp->nm_flag |= NFSMNT_NOLOCKS;
+				if ((nmp->nm_vers <= NFS_VER3) && (nmp->nm_lockmode == NFS_LOCK_MODE_ENABLED))
+					nfs_lockd_mount_unregister(nmp);
+				nmp->nm_lockmode = NFS_LOCK_MODE_DISABLED;
 				nmp->nm_state &= ~NFSSTA_LOCKTIMEO;
 			} else {
-				if (nmp->nm_flag & NFSMNT_NOLOCKS)
-					nfs_lockd_mount_change(1);
-				nmp->nm_flag &= ~NFSMNT_NOLOCKS;
+				if ((nmp->nm_vers <= NFS_VER3) && (nmp->nm_lockmode == NFS_LOCK_MODE_DISABLED))
+					nfs_lockd_mount_register(nmp);
+				nmp->nm_lockmode = NFS_LOCK_MODE_ENABLED;
 			}
 			lck_mtx_unlock(&nmp->nm_lock);
  		}
@@ -2896,14 +5431,13 @@ ustat_skip:
 	case VFS_CTL_QUERY:
 		lck_mtx_lock(&nmp->nm_lock);
 		/* XXX don't allow users to know about/disconnect unresponsive, soft, nobrowse mounts */
-		softnobrowse = ((nmp->nm_flag & NFSMNT_SOFT) && (vfs_flags(nmp->nm_mountp) & MNT_DONTBROWSE));
+		softnobrowse = (NMFLAG(nmp, SOFT) && (vfs_flags(nmp->nm_mountp) & MNT_DONTBROWSE));
 		if (!softnobrowse && (nmp->nm_state & NFSSTA_TIMEO))
 			vq.vq_flags |= VQ_NOTRESP;
-		if (!softnobrowse && (nmp->nm_state & NFSSTA_JUKEBOXTIMEO) &&
-		    !(nmp->nm_flag & NFSMNT_MUTEJUKEBOX))
+		if (!softnobrowse && (nmp->nm_state & NFSSTA_JUKEBOXTIMEO) && !NMFLAG(nmp, MUTEJUKEBOX))
 			vq.vq_flags |= VQ_NOTRESP;
 		if (!softnobrowse && (nmp->nm_state & NFSSTA_LOCKTIMEO) &&
-		    !(nmp->nm_flag & (NFSMNT_NOLOCKS|NFSMNT_LOCALLOCKS)))
+		    (nmp->nm_lockmode == NFS_LOCK_MODE_ENABLED))
 			vq.vq_flags |= VQ_NOTRESP;
 		if (nmp->nm_state & NFSSTA_DEAD)
 			vq.vq_flags |= VQ_DEAD;

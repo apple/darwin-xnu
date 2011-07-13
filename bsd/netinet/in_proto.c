@@ -164,7 +164,7 @@ struct protosw inetsw[] = {
 { SOCK_RAW,	&inetdomain,	IPPROTO_IGMP,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   igmp_input,	0,		0,		rip_ctloutput,
   0,
-  igmp_init,	igmp_fasttimo,	igmp_slowtimo,	0,
+  igmp_init,	0,		igmp_slowtimo,	0,
   0,
   &rip_usrreqs,
   0,		rip_unlock,	0,	{ 0, 0 },	0,	{ 0 }

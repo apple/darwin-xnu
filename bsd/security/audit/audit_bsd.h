@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2008, Apple Inc.
+ * Copyright (c) 2008-2009, Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -54,6 +54,8 @@
 } while (0)
 #endif
 #endif	/* DIAGNOSTIC */
+
+#define	AU_MAX_LCK_NAME	32	
 
 #if __DARWIN_BYTE_ORDER == __DARWIN_BIG_ENDIAN
 #define be16enc(p, d)   *(p) = (d)
@@ -176,7 +178,9 @@ struct cv {
  */
 struct mtx {
 	lck_mtx_t	*mtx_lock;
-	lck_grp_t	*mtx_grp;
+#if DIAGNOSTIC
+	char		 mtx_name[AU_MAX_LCK_NAME];
+#endif
 };
 
 /*
@@ -184,7 +188,9 @@ struct mtx {
  */
 struct rwlock {
 	lck_rw_t	*rw_lock;
-	lck_grp_t	*rw_grp;
+#if DIAGNOSTIC
+	char		 rw_name[AU_MAX_LCK_NAME];
+#endif
 };
 
 /*
@@ -192,9 +198,11 @@ struct rwlock {
  */
 struct slck {
 	lck_mtx_t	*sl_mtx;
-	lck_grp_t	*sl_grp;
 	int		 sl_locked;
 	int		 sl_waiting;
+#if DIAGNOSTIC
+	char		 sl_name[AU_MAX_LCK_NAME];
+#endif
 };
 
 /*
@@ -202,9 +210,11 @@ struct slck {
  */
 struct rlck {
 	lck_mtx_t	*rl_mtx;
-	lck_grp_t	*rl_grp;
 	uint32_t	 rl_recurse;
 	thread_t	 rl_thread;
+#if DIAGNOSTIC
+	char		 rl_name[AU_MAX_LCK_NAME];
+#endif
 };
 	
 /*
@@ -216,6 +226,8 @@ void    _audit_cv_signal(struct cv *cvp);
 void    _audit_cv_broadcast(struct cv *cvp);
 void    _audit_cv_wait(struct cv *cvp, lck_mtx_t *mp, const char *desc);
 int     _audit_cv_wait_sig(struct cv *cvp, lck_mtx_t *mp, const char *desc);
+int	_audit_cv_wait_continuation(struct cv *cvp, lck_mtx_t *mp,
+	    thread_continue_t function);
 #define cv_init(cvp, desc)	  _audit_cv_init(cvp, desc)
 #define cv_destroy(cvp)		  _audit_cv_destroy(cvp)
 #define cv_signal(cvp)		  _audit_cv_signal(cvp)
@@ -223,28 +235,20 @@ int     _audit_cv_wait_sig(struct cv *cvp, lck_mtx_t *mp, const char *desc);
 #define cv_broadcastpri(cvp, pri) _audit_cv_broadcast(cvp)
 #define cv_wait(cvp, mp)	  _audit_cv_wait(cvp, (mp)->mtx_lock, #cvp)
 #define cv_wait_sig(cvp, mp)	  _audit_cv_wait_sig(cvp, (mp)->mtx_lock, #cvp)
+#define cv_wait_continuation(cvp,mp,f) \
+    _audit_cv_wait_continuation(cvp, (mp)->mtx_lock, f)
 
 /*
  * BSD Mutexes.
  */
-#define	LOCK_MAX_NAME	64
-#define mtx_init(mp, name, type, opts)  do {				\
-	(mp)->mtx_grp = lck_grp_alloc_init(name, LCK_GRP_ATTR_NULL);	\
-        (mp)->mtx_lock = lck_mtx_alloc_init((mp)->mtx_grp,		\
-	     LCK_ATTR_NULL);						\
-} while(0)
-#define mtx_lock(mp)		lck_mtx_lock((mp)->mtx_lock)
-#define mtx_unlock(mp)		lck_mtx_unlock((mp)->mtx_lock)
-#define	mtx_destroy(mp) do {						\
-	if ((mp)->mtx_lock) {						\
-		lck_mtx_free((mp)->mtx_lock, (mp)->mtx_grp);		\
-		(mp)->mtx_lock = 0;					\
-	}								\
-	if ((mp)->mtx_grp) {						\
-		lck_grp_free((mp)->mtx_grp);				\
-		(mp)->mtx_grp = 0;					\
-	}								\
-} while (0)
+void	_audit_mtx_init(struct mtx *mp, const char *name);
+void	_audit_mtx_destroy(struct mtx *mp);
+#define	mtx_init(mp, name, type, opts) \
+				_audit_mtx_init(mp, name)
+#define	mtx_lock(mp)		lck_mtx_lock((mp)->mtx_lock)
+#define	mtx_unlock(mp)		lck_mtx_unlock((mp)->mtx_lock)
+#define	mtx_destroy(mp)		_audit_mtx_destroy(mp)
+#define mtx_yield(mp)		lck_mtx_yield((mp)->mtx_lock)
 
 /*
  * Sleep lock functions.
@@ -277,25 +281,14 @@ void		_audit_rlck_destroy(struct rlck *lp);
 /*
  * BSD rw locks.
  */
-#define	rw_init(lp, name)  do {						\
-        (lp)->rw_grp = lck_grp_alloc_init(name, LCK_GRP_ATTR_NULL);	\
-        (lp)->rw_lock = lck_rw_alloc_init((lp)->rw_grp,			\
-            LCK_ATTR_NULL);						\
-} while(0)
+void	_audit_rw_init(struct rwlock *lp, const char *name);
+void	_audit_rw_destroy(struct rwlock *lp);
+#define	rw_init(lp, name)	_audit_rw_init(lp, name)
 #define	rw_rlock(lp)		lck_rw_lock_shared((lp)->rw_lock)
 #define	rw_runlock(lp)		lck_rw_unlock_shared((lp)->rw_lock)
 #define	rw_wlock(lp)		lck_rw_lock_exclusive((lp)->rw_lock)
 #define	rw_wunlock(lp)		lck_rw_unlock_exclusive((lp)->rw_lock)
-#define	rw_destroy(lp) do {						\
-	if ((lp)->rw_lock) {						\
-		lck_rw_free((lp)->rw_lock, (lp)->rw_grp);		\
-		(lp)->rw_lock = 0;					\
-	}								\
-	if ((lp)->rw_grp) {						\
-		lck_grp_free((lp)->rw_grp);				\
-		(lp)->rw_grp = 0;					\
-	}								\
-} while (0)
+#define	rw_destroy(lp)		_audit_rw_destroy(lp)
 	
 #define	MA_OWNED		LCK_MTX_ASSERT_OWNED
 #define	RA_LOCKED		LCK_RW_ASSERT_HELD
@@ -318,6 +311,11 @@ void		_audit_rlck_destroy(struct rlck *lp);
 #define	rlck_assert(lp, wht)
 #define	slck_assert(lp, wht)	
 #endif /* DIAGNOSTIC */
+
+/*
+ * Synchronization initialization.
+ */
+void	_audit_lck_grp_init(void);
 
 /*
  * BSD (IPv6) event rate limiter.

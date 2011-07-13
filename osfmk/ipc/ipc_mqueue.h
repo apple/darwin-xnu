@@ -213,7 +213,7 @@ extern void ipc_mqueue_select_on_thread(
 	thread_t                thread);
 
 /* Peek into a messaqe queue to see if there are messages */
-extern int ipc_mqueue_peek(
+extern unsigned ipc_mqueue_peek(
 	ipc_mqueue_t		mqueue);
 
 /* Clear a message count reservation */

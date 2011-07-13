@@ -135,7 +135,11 @@ mach_trap_t	mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 40 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
 /* 41 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
 /* 42 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
+#if	!defined(CONFIG_EMBEDDED)
 /* 43 */	MACH_TRAP(map_fd, 5, munge_wwwww, munge_ddddd),
+#else
+/* 43 */	MACH_TRAP(kern_invalid, 0, NULL, NULL),
+#endif	/* !defined(CONFIG_EMBEDDED) */
 /* 44 */	MACH_TRAP(task_name_for_pid, 3, munge_www, munge_ddd),
 /* 45 */ 	MACH_TRAP(task_for_pid, 3, munge_www, munge_ddd),
 /* 46 */	MACH_TRAP(pid_for_task, 2, munge_ww,munge_dd),

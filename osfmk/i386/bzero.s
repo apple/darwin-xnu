@@ -90,7 +90,7 @@ ENTRY(memset)
  * void bzero(char * addr, size_t length)
  */
 Entry(blkclr)
-ENTRY(bzero)
+ENTRY2(bzero,__bzero)
 	pushl	%edi
 	movl	4+ 4(%esp),%edi		/* addr */
 	movl	4+ 8(%esp),%edx		/* length */

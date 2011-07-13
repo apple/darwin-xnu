@@ -197,7 +197,7 @@ db_cmp_variable_name(struct db_variable *vp, const char *name,
 	    || (level > 0 && (ap->suffix[0] < vp->low 
 		  	      || (vp->high >= 0 && ap->suffix[0] > vp->high))))
 	    return(FALSE);
-	strcpy(ap->modif, (*np)? np+1: "");
+	strlcpy(ap->modif, (*np)? np+1: "", TOK_STRING_SIZE);
 	ap->thr_act = (db_option(ap->modif, 't')?db_default_act: THREAD_NULL);
 	ap->level = level;
 	ap->hidden_level = -1;
@@ -451,7 +451,7 @@ db_show_one_variable(void)
 		return;
 	    }
 
-	    strcpy(aux_param.modif, *p ? p + 1 : "");
+	    strlcpy(aux_param.modif, *p ? p + 1 : "", TOK_STRING_SIZE);
 	    aux_param.thr_act = (db_option(aux_param.modif, 't') ?
 			db_default_act : THREAD_NULL);
 	}

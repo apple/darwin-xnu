@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -89,6 +89,7 @@
 #include <sys/socketvar.h>
 #include <sys/time.h>
 #include <sys/sysctl.h>
+//#include <sys/mcache.h>
 #include <net/if.h>
 #include <net/route.h>
 #include <net/kpi_protocol.h>
@@ -121,6 +122,8 @@ static int red_lookup_depth = 256;	/* RED - default lookup table depth */
 static int red_avg_pkt_size = 512;      /* RED - default medium packet size */
 static int red_max_pkt_size = 1500;     /* RED - default max packet size */
 
+static int serialize = 0;
+
 /*
  * Three heaps contain queues and pipes that the scheduler handles:
  *
@@ -152,9 +155,6 @@ static void	ready_event_wfq(struct dn_pipe *p, struct mbuf **head,
  */
 static void dummynet_send(struct mbuf *m);
 
-/* Flag to signify the existance of a dequeued packet chain */
-static int serialize = 0;
-
 #define	HASHSIZE	16
 #define	HASH(num)	((((num) >> 8) ^ ((num) >> 4) ^ (num)) & 0x0f)
 static struct dn_pipe_head	pipehash[HASHSIZE];	/* all pipes */
@@ -163,36 +163,36 @@ static struct dn_flow_set_head	flowsethash[HASHSIZE];	/* all flowsets */
 
 #ifdef SYSCTL_NODE
 SYSCTL_NODE(_net_inet_ip, OID_AUTO, dummynet,
-		CTLFLAG_RW, 0, "Dummynet");
+		CTLFLAG_RW | CTLFLAG_LOCKED, 0, "Dummynet");
 SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, hash_size,
-	    CTLFLAG_RW, &dn_hash_size, 0, "Default hash table size");
+	    CTLFLAG_RW | CTLFLAG_LOCKED, &dn_hash_size, 0, "Default hash table size");
 SYSCTL_QUAD(_net_inet_ip_dummynet, OID_AUTO, curr_time,
-	    CTLFLAG_RD, &curr_time, "Current tick");
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &curr_time, "Current tick");
 SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, ready_heap,
-	    CTLFLAG_RD, &ready_heap.size, 0, "Size of ready heap");
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &ready_heap.size, 0, "Size of ready heap");
 SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, extract_heap,
-	    CTLFLAG_RD, &extract_heap.size, 0, "Size of extract heap");
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &extract_heap.size, 0, "Size of extract heap");
 SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, searches,
-	    CTLFLAG_RD, &searches, 0, "Number of queue searches");
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &searches, 0, "Number of queue searches");
 SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, search_steps,
-	    CTLFLAG_RD, &search_steps, 0, "Number of queue search steps");
+	    CTLFLAG_RD | CTLFLAG_LOCKED, &search_steps, 0, "Number of queue search steps");
 SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, expire,
-	    CTLFLAG_RW, &pipe_expire, 0, "Expire queue if empty");
+	    CTLFLAG_RW | CTLFLAG_LOCKED, &pipe_expire, 0, "Expire queue if empty");
 SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, max_chain_len,
-	    CTLFLAG_RW, &dn_max_ratio, 0, 
+	    CTLFLAG_RW | CTLFLAG_LOCKED, &dn_max_ratio, 0, 
 	"Max ratio between dynamic queues and buckets");
 SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, red_lookup_depth,
-	CTLFLAG_RD, &red_lookup_depth, 0, "Depth of RED lookup table");
+	CTLFLAG_RD | CTLFLAG_LOCKED, &red_lookup_depth, 0, "Depth of RED lookup table");
 SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, red_avg_pkt_size,
-	CTLFLAG_RD, &red_avg_pkt_size, 0, "RED Medium packet size");
+	CTLFLAG_RD | CTLFLAG_LOCKED, &red_avg_pkt_size, 0, "RED Medium packet size");
 SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, red_max_pkt_size,
-	CTLFLAG_RD, &red_max_pkt_size, 0, "RED Max packet size");
+	CTLFLAG_RD | CTLFLAG_LOCKED, &red_max_pkt_size, 0, "RED Max packet size");
 #endif
 
 #ifdef DUMMYNET_DEBUG
 int	dummynet_debug = 0;
 #ifdef SYSCTL_NODE
-SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, debug, CTLFLAG_RW, &dummynet_debug,
+SYSCTL_INT(_net_inet_ip_dummynet, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_LOCKED, &dummynet_debug,
 	    0, "control debugging printfs");
 #endif
 #define	DPRINTF(X)	if (dummynet_debug) printf X
@@ -457,6 +457,7 @@ char *cp_pipe_to_32_user(struct dn_pipe *p, struct dn_pipe_32 *pipe_bp)
 	
 	pipe_bp->pipe_nr = p->pipe_nr;
 	pipe_bp->bandwidth = p->bandwidth;
+	pipe_bp->delay = p->delay;
 	bcopy( &(p->scheduler_heap), &(pipe_bp->scheduler_heap), sizeof(struct dn_heap_32));
 	pipe_bp->scheduler_heap.p = CAST_DOWN_EXPLICIT(user32_addr_t, pipe_bp->scheduler_heap.p);
 	bcopy( &(p->not_eligible_heap), &(pipe_bp->not_eligible_heap), sizeof(struct dn_heap_32));
@@ -497,6 +498,7 @@ char *cp_pipe_to_64_user(struct dn_pipe *p, struct dn_pipe_64 *pipe_bp)
 	
 	pipe_bp->pipe_nr = p->pipe_nr;
 	pipe_bp->bandwidth = p->bandwidth;
+	pipe_bp->delay = p->delay;
 	bcopy( &(p->scheduler_heap), &(pipe_bp->scheduler_heap), sizeof(struct dn_heap_64));
 	pipe_bp->scheduler_heap.p = CAST_DOWN(user64_addr_t, pipe_bp->scheduler_heap.p);
 	bcopy( &(p->not_eligible_heap), &(pipe_bp->not_eligible_heap), sizeof(struct dn_heap_64));
@@ -648,47 +650,6 @@ heap_extract(struct dn_heap *h, void *obj)
     }
 }
 
-#if 0
-/*
- * change object position and update references
- * XXX this one is never used!
- */
-static void
-heap_move(struct dn_heap *h, dn_key new_key, void *object)
-{
-    int temp;
-    int i ;
-    int maxelt = h->elements-1 ;
-    struct dn_heap_entry buf ;
-
-    if (h->offset <= 0)
-	panic("cannot move items on this heap");
-
-    i = *((int *)((char *)object + h->offset));
-    if (DN_KEY_LT(new_key, h->p[i].key) ) { /* must move up */
-	h->p[i].key = new_key ;
-	for (; i>0 && DN_KEY_LT(new_key, h->p[(temp = HEAP_FATHER(i))].key) ;
-		 i = temp ) { /* bubble up */
-	    HEAP_SWAP(h->p[i], h->p[temp], buf) ;
-	    SET_OFFSET(h, i);
-	}
-    } else {		/* must move down */
-	h->p[i].key = new_key ;
-	while ( (temp = HEAP_LEFT(i)) <= maxelt ) { /* found left child */
-	    if ((temp != maxelt) && DN_KEY_GT(h->p[temp].key, h->p[temp+1].key))
-		temp++ ; /* select child with min key */
-	    if (DN_KEY_GT(new_key, h->p[temp].key)) { /* go down */
-		HEAP_SWAP(h->p[i], h->p[temp], buf) ;
-		SET_OFFSET(h, i);
-	    } else
-		break ;
-	    i = temp ;
-	}
-    }
-    SET_OFFSET(h, i);
-}
-#endif /* heap_move, unused */
-
 /*
  * heapify() will reorganize data inside an array to maintain the
  * heap property. It is needed when we delete a bunch of entries.
@@ -757,10 +718,10 @@ transmit_event(struct dn_pipe *pipe, struct mbuf **head, struct mbuf **tail)
 {
     struct mbuf *m ;
     struct dn_pkt_tag *pkt ;
+    u_int64_t schedule_time;
 
 	lck_mtx_assert(dn_mutex, LCK_MTX_ASSERT_OWNED);
-
-	/* Extract packets only if no pending chain is being currently processed */
+	ASSERT(serialize >= 0);
 	if (serialize == 0) {
 		while ((m = pipe->head) != NULL) {
 			pkt = dn_tag_get(m);
@@ -774,9 +735,13 @@ transmit_event(struct dn_pipe *pipe, struct mbuf **head, struct mbuf **tail)
 				*head = m;
 			*tail = m;
 		}
+		
 		if (*tail != NULL)
 			(*tail)->m_nextpkt = NULL;
-	}
+		}
+
+		schedule_time = DN_KEY_LEQ(pkt->output_time, curr_time) ?
+		    curr_time+1 : pkt->output_time;
 
     /* if there are leftover packets, put the pipe into the heap for next ready event */
     if ((m = pipe->head) != NULL) {
@@ -784,7 +749,7 @@ transmit_event(struct dn_pipe *pipe, struct mbuf **head, struct mbuf **tail)
 		/* XXX should check errors on heap_insert, by draining the
 		 * whole pipe p and hoping in the future we are more successful
 		 */
-		heap_insert(&extract_heap, pkt->output_time, pipe);
+		heap_insert(&extract_heap, schedule_time, pipe);
     }
 }
 
@@ -1105,21 +1070,17 @@ dummynet(__unused void * unused)
 			break;
 		}
 	}
-
-	/* 
-	 * If a packet chain has been dequeued, set serialize=1 so that new 
-	 * packets don't get dispatched out of turn 
-	 */
+ 
 	if (head != NULL)
-		serialize = 1;
-
-    lck_mtx_unlock(dn_mutex);
+		serialize++;
+	
+	lck_mtx_unlock(dn_mutex);
 
 	/* Send out the de-queued list of ready-to-send packets */
 	if (head != NULL) {
 		dummynet_send(head);
 		lck_mtx_lock(dn_mutex);
-		serialize = 0;
+		serialize--;
 		lck_mtx_unlock(dn_mutex);
 	}
 }
@@ -1193,13 +1154,19 @@ if_tx_rdy(struct ifnet *ifp)
 	p->numbytes = 0 ; /* mark ready for I/O */
 	ready_event_wfq(p, &head, &tail);
     }
+	
+	if (head != NULL) {
+		serialize++;
+	}
+	
 	lck_mtx_unlock(dn_mutex);
 
 	
 	/* Send out the de-queued list of ready-to-send packets */
-	if (head != NULL)
+	if (head != NULL) {
 		dummynet_send(head);
-
+		serialize--;
+	}
     return 0;
 }
 
@@ -1214,6 +1181,7 @@ expire_queues(struct dn_flow_set *fs)
     int i, initial_elements = fs->rq_elements ;
 	struct timeval timenow;
 
+	/* reviewed for getmicrotime usage */
 	getmicrotime(&timenow);
 
     if (fs->last_expired == timenow.tv_sec)
@@ -1564,8 +1532,8 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
 	goto dropit ;
 
     /* XXX expensive to zero, see if we can remove it*/
-    mtag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_DUMMYNET,
-    		sizeof(struct dn_pkt_tag), M_NOWAIT);
+    mtag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_DUMMYNET,
+    		sizeof(struct dn_pkt_tag), M_NOWAIT, m);
     if ( mtag == NULL )
 		goto dropit ;		/* cannot allocate packet header	*/
     m_tag_prepend(m, mtag);	/* attach to mbuf chain */
@@ -1591,7 +1559,7 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
 	if (fwa->dst == (struct sockaddr_in *)&fwa->ro->ro_dst) /* dst points into ro */
 	    fwa->dst = (struct sockaddr_in *)&(pkt->ro.ro_dst) ;
 
-	pkt->dn_dst = fwa->dst;
+	bcopy (fwa->dst, &pkt->dn_dst, sizeof(pkt->dn_dst));
 	pkt->flags = fwa->flags;
 	if (fwa->ipoa != NULL)
 		pkt->ipoa = *(fwa->ipoa);
@@ -1619,7 +1587,7 @@ dummynet_io(struct mbuf *m, int pipe_nr, int dir, struct ip_fw_args *fwa)
 	if (pipe->bandwidth)
 	    t = SET_TICKS(m, q, pipe);
 	q->sched_time = curr_time ;
-	if (t == 0)	/* must process it now */
+	if (t == 0)     /* must process it now */
 	    ready_event( q , &head, &tail );
 	else
 	    heap_insert(&ready_heap, curr_time + t , q );
@@ -1682,9 +1650,10 @@ done:
 		ts.tv_nsec = 1 * 1000000;	// 1ms
 		timer_enabled = 1;
 		bsd_timeout(dummynet, NULL, &ts);
-    }
+	}
 
 	lck_mtx_unlock(dn_mutex);
+
 	if (head != NULL)
 		dummynet_send(head);
 
@@ -1964,9 +1933,9 @@ set_fs_parms(struct dn_flow_set *x, struct dn_flow_set *src)
 	    x->qsize = 1024*1024 ;
     } else {
 	if (x->qsize == 0)
-	    x->qsize = 50 ;
+	    x->qsize = 50;
 	if (x->qsize > 100)
-	    x->qsize = 50 ;
+	    x->qsize = 50;
     }
     /* configuring RED */
     if ( x->flags_fs & DN_IS_RED )

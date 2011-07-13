@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -100,6 +100,29 @@ struct unsafe_fsnode {
 	void *	  fsnodeowner;
 };
 
+#if CONFIG_TRIGGERS
+/*
+ * VFS Internal (private) trigger vnode resolver info.
+ */
+struct vnode_resolve {
+	lck_mtx_t				vr_lock;   /* protects vnode_resolve_t fields */
+	trigger_vnode_resolve_callback_t	vr_resolve_func;
+	trigger_vnode_unresolve_callback_t	vr_unresolve_func;
+	trigger_vnode_rearm_callback_t		vr_rearm_func;
+	trigger_vnode_reclaim_callback_t	vr_reclaim_func;
+	void *					vr_data;   /* private data for resolver */
+	uint32_t				vr_flags;
+	uint32_t				vr_lastseq;
+};
+typedef struct vnode_resolve *vnode_resolve_t;
+
+/* private vr_flags */
+#define VNT_RESOLVED        (1UL << 31)
+#define VNT_VFS_UNMOUNTED   (1UL << 30)
+#define VNT_EXTERNAL	    (1UL << 29)
+
+#endif /* CONFIG_TRIGGERS */
+
 /*
  * Reading or writing any of these items requires holding the appropriate lock.
  * v_freelist is locked by the global vnode_list_lock
@@ -166,6 +189,9 @@ struct vnode {
 #if CONFIG_MACF
 	struct label *v_label;			/* MAC security label */
 #endif
+#if CONFIG_TRIGGERS
+	vnode_resolve_t v_resolve;		/* trigger vnode resolve info (VDIR only) */
+#endif /* CONFIG_TRIGGERS */
 };
 
 #define	v_mountedhere	v_un.vu_mountedhere
@@ -199,7 +225,6 @@ struct vnode {
 #define	VL_TERMWANT	0x0008		/* there's a waiter  for recycle finish (vnode_getiocount)*/
 #define	VL_DEAD		0x0010		/* vnode is dead, cleaned of filesystem-specific info */
 #define	VL_MARKTERM	0x0020		/* vnode should be recycled when no longer referenced */
-#define	VL_MOUNTDEAD	0x0040		/* v_moutnedhere is dead   */
 #define VL_NEEDINACTIVE	0x0080		/* delay VNOP_INACTIVE until iocount goes to 0 */
 
 #define	VL_LABEL	0x0100		/* vnode is marked for labeling */
@@ -224,7 +249,7 @@ struct vnode {
 #define VDEVFLUSH	0x000040        /* device vnode after vflush */
 #define	VMOUNT		0x000080	/* mount operation in progress */
 #define	VBWAIT		0x000100	/* waiting for output to complete */
-					/* Free slot here after removing VALIASED for radar #5971707 */
+#define VSHARED_DYLD	0x000200	/* vnode is a dyld shared cache file */
 #define	VNOCACHE_DATA	0x000400	/* don't keep data cached once it's been consumed */
 #define	VSTANDARD	0x000800	/* vnode obtained from common pool */
 #define	VAGE		0x001000	/* Insert vnode at head of free list */
@@ -244,6 +269,7 @@ struct vnode {
 #define	VISNAMEDSTREAM	0x400000	/* vnode is a named stream (eg HFS resource fork) */
 #endif
 #define VOPENEVT        0x800000        /* if process is P_CHECKOPENEVT, then or in the O_EVTONLY flag on open */
+#define VNEEDSSNAPSHOT 0x1000000
 
 /*
  * Global vnode data.
@@ -251,7 +277,8 @@ struct vnode {
 extern	struct vnode *rootvnode;	/* root (i.e. "/") vnode */
 
 #ifdef CONFIG_IMGSRC_ACCESS
-extern	struct vnode *imgsrc_rootvnode;
+#define MAX_IMAGEBOOT_NESTING	2
+extern	struct vnode *imgsrc_rootvnodes[];
 #endif /* CONFIG_IMGSRC_ACCESS */
 
 
@@ -367,6 +394,10 @@ int 	vn_open(struct nameidata *ndp, int fmode, int cmode);
 int	vn_open_modflags(struct nameidata *ndp, int *fmode, int cmode);
 int	vn_open_auth(struct nameidata *ndp, int *fmode, struct vnode_attr *);
 int 	vn_close(vnode_t, int flags, vfs_context_t ctx);
+errno_t vn_remove(vnode_t dvp, vnode_t *vpp, struct nameidata *ndp, int32_t flags, struct vnode_attr *vap, vfs_context_t ctx);
+errno_t vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, struct vnode_attr *fvap,
+       	     struct vnode *tdvp, struct vnode **tvpp, struct componentname *tcnp, struct vnode_attr *tvap,
+       	     uint32_t flags, vfs_context_t ctx);
 
 void	lock_vnode_and_post(vnode_t, int);
 
@@ -377,14 +408,30 @@ void	lock_vnode_and_post(vnode_t, int);
 		} \
 	} while (0) 
 		
+/* Authorization subroutines */
+int	vn_authorize_open_existing(vnode_t vp, struct componentname *cnp, int fmode, vfs_context_t ctx, void *reserved);
+int	vn_authorize_create(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*); 
+int	vn_attribute_prepare(vnode_t dvp, struct vnode_attr *vap, uint32_t *defaulted_fieldsp, vfs_context_t ctx);
+void	vn_attribute_cleanup(struct vnode_attr *vap, uint32_t defaulted_fields);
+int	vn_authorize_unlink(vnode_t dvp, vnode_t vp, struct componentname *cnp, vfs_context_t ctx, void *reserved);
+int 	vn_authorize_rename(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
+       		struct vnode *tdvp, struct vnode *tvp, struct componentname *tcnp,
+            	vfs_context_t ctx, void *reserved);
+int	vn_authorize_rmdir(vnode_t dvp, vnode_t vp, struct componentname *cnp, vfs_context_t ctx, void *reserved);
 
+typedef int (*vn_create_authorizer_t)(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*);
+int vn_authorize_mkdir(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*);
+int vn_authorize_null(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*);
+/* End of authorization subroutines */
 
 #define VN_CREATE_NOAUTH		(1<<0)
 #define VN_CREATE_NOINHERIT		(1<<1)
 #define VN_CREATE_UNION			(1<<2)
 #define	VN_CREATE_NOLABEL		(1<<3)
-errno_t vn_create(vnode_t, vnode_t *, struct componentname *, struct vnode_attr *, int flags, vfs_context_t);
-
+#define	VN_CREATE_DOOPEN		(1<<4)	/* Open file if a batched operation is available */
+errno_t vn_create(vnode_t, vnode_t *, struct nameidata *, struct vnode_attr *, uint32_t, int, uint32_t*, vfs_context_t);
+int	vn_mkdir(vnode_t dvp, vnode_t *vpp, struct nameidata *ndp, struct vnode_attr *vap, vfs_context_t ctx);
+int 	vn_rmdir(vnode_t dvp, vnode_t *vpp, struct nameidata *ndp, struct vnode_attr *vap, vfs_context_t ctx);
 
 int	vn_getxattr(vnode_t, const char *, uio_t, size_t *, int, vfs_context_t);
 int	vn_setxattr(vnode_t, const char *, uio_t, int, vfs_context_t);
@@ -415,6 +462,7 @@ void	cache_enter_with_gen(vnode_t dvp, vnode_t vp, struct componentname *cnp, in
 const char *cache_enter_create(vnode_t dvp, vnode_t vp, struct componentname *cnp);
 
 int vn_pathconf(vnode_t, int, int32_t *, vfs_context_t);
+extern int nc_disabled; 	
 
 #define	vnode_lock_convert(v)	lck_mtx_convert_spin(&(v)->v_lock)
 
@@ -423,12 +471,16 @@ void	vnode_lock_spin(vnode_t);
 
 void	vnode_list_lock(void);
 void	vnode_list_unlock(void);
-int	vnode_ref_ext(vnode_t, int);
+
+#define VNODE_REF_FORCE	0x1
+int	vnode_ref_ext(vnode_t, int, int);
+
 void	vnode_rele_ext(vnode_t, int, int);
 void	vnode_rele_internal(vnode_t, int, int, int);
 #ifdef BSD_KERNEL_PRIVATE
 int	vnode_getalways(vnode_t);
 int 	vget_internal(vnode_t, int, int);
+errno_t vnode_getiocount(vnode_t, unsigned int, int);
 #endif /* BSD_KERNEL_PRIVATE */
 int	vnode_get_locked(vnode_t);
 int	vnode_put_locked(vnode_t);
@@ -447,6 +499,24 @@ errno_t	vnode_size(vnode_t, off_t *, vfs_context_t);
 errno_t	vnode_setsize(vnode_t, off_t, int ioflag, vfs_context_t);
 int	vnode_setattr_fallback(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx);
 int	vnode_isspec(vnode_t vp);
+
+
+#ifdef BSD_KERNEL_PRIVATE
+
+typedef uint32_t compound_vnop_id_t;
+#define	COMPOUND_VNOP_OPEN		0x01
+#define	COMPOUND_VNOP_MKDIR		0x02
+#define	COMPOUND_VNOP_RENAME		0x04
+#define	COMPOUND_VNOP_REMOVE		0x08
+#define	COMPOUND_VNOP_RMDIR		0x10
+
+int 	vnode_compound_rename_available(vnode_t vp);
+int 	vnode_compound_rmdir_available(vnode_t vp);
+int 	vnode_compound_mkdir_available(vnode_t vp);
+int 	vnode_compound_remove_available(vnode_t vp);
+int 	vnode_compound_open_available(vnode_t vp);
+int    	vnode_compound_op_available(vnode_t, compound_vnop_id_t);
+#endif /* BSD_KERNEL_PRIVATE */
 
 void vn_setunionwait(vnode_t);
 void vn_checkunionwait(vnode_t);
@@ -471,9 +541,18 @@ int	vfs_sysctl(int *name, uint32_t namelen, user_addr_t oldp, size_t *oldlenp,
 int	sysctl_vnode(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
 
 #ifdef BSD_KERNEL_PRIVATE
-void vnode_knoteupdate(struct knote *kn);
 void vnode_setneedinactive(vnode_t);
 int 	vnode_hasnamedstreams(vnode_t); /* Does this vnode have associated named streams? */
-#endif
+
+void nspace_proc_exit(struct proc *p);
+
+#if CONFIG_TRIGGERS
+/* VFS Internal Vnode Trigger Interfaces (Private) */
+int vnode_trigger_resolve(vnode_t, struct nameidata *, vfs_context_t);
+void vnode_trigger_rearm(vnode_t, vfs_context_t);
+void vfs_nested_trigger_unmounts(mount_t, int, vfs_context_t);
+#endif /* CONFIG_TRIGGERS */
+
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* !_SYS_VNODE_INTERNAL_H_ */

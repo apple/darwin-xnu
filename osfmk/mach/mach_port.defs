@@ -239,9 +239,10 @@ routine mach_port_move_member(
  *	Requests a notification from the kernel.  The request
  *	must supply the send-once right which is used for
  *	the notification.  If a send-once right was previously
- *	registered, it is returned.  The msg_id must be one of
+ *	registered, it is returned.  The msgid must be one of:
  *		MACH_NOTIFY_PORT_DESTROYED (receive rights)
  *		MACH_NOTIFY_DEAD_NAME (send/receive/send-once rights)
+ *		MACH_NOTIFY_SEND_POSSIBLE (send/receive/send-once rights)
  *		MACH_NOTIFY_NO_SENDERS (receive rights)
  *
  *	The sync value specifies whether a notification should
@@ -251,10 +252,20 @@ routine mach_port_move_member(
  *		MACH_NOTIFY_DEAD_NAME: if non-zero, then name can be dead,
  *			and the notification gets sent immediately.
  *			If zero, then name can't be dead.
+ *		MACH_NOTIFY_SEND_POSSIBLE: if non-zero, will generate a	send-
+ *			possible notification as soon as it is possible to send
+ *			to the port. If zero, will generate a send-possible
+ *			notification only after a subsequent failed send
+ *			(with MACH_SEND_NOTIFY option to mach_msg call).  Can
+ *			generate a dead-name notification if name is already dead
+ *			or becomes dead before a send-possible notification fires.
  *		MACH_NOTIFY_NO_SENDERS: the notification gets sent
  *			immediately if the current mscount is greater
  *			than or equal to the sync value and there are no
  *			extant send rights.
+ *
+ * If the name is deleted before a successfully registered notification
+ * is delivered, it is replaced with a port-deleted notification.
  */
 
 routine mach_port_request_notification(

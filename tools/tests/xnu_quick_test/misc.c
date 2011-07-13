@@ -277,9 +277,12 @@ int do_spawn_test(int arch, int shouldfail)
 		}
 		my_err = 0;
 	} else {
-		/* child should exit with return code == arch */
+		/*
+		 * child should exit with return code == arch; note that the
+		 * posix_spawn error numers are *returned*, NOT set in errno!!!
+		 */
 		if (my_err != 0) {
-			printf("posix_spawn failed with errno %d - %s\n", errno, strerror(errno));
+			printf("posix_spawn failed with errno %d - %s\n", my_err, strerror(my_err));
 			goto done;
 		}
 
@@ -323,10 +326,6 @@ int get_architecture()
 	case CPU_TYPE_X86:
 	case CPU_TYPE_X86_64:
 		rval = INTEL;
-		break;
-	case CPU_TYPE_POWERPC:
-	case CPU_TYPE_POWERPC64:
-		rval = POWERPC;
 		break;
 	case CPU_TYPE_ARM:
 		rval = ARM;

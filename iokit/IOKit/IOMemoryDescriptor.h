@@ -320,7 +320,7 @@ public:
     @param withLength The length of memory.
     @param options
         kIOMemoryDirectionMask (options:direction)	This nibble indicates the I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures. 
-    @param task The task the virtual ranges are mapped into. Note that unlike IOMemoryDescriptor::withAddress(), kernel_task memory must be explicitly prepared when passed to this api.
+    @param task The task the virtual ranges are mapped into. Note that unlike IOMemoryDescriptor::withAddress(), kernel_task memory must be explicitly prepared when passed to this api. The task argument may be NULL to specify memory by physical address.
     @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
     static IOMemoryDescriptor * withAddressRange(
@@ -337,7 +337,7 @@ public:
     @param options
         kIOMemoryDirectionMask (options:direction)	This nibble indicates the I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures. 
         kIOMemoryAsReference	For options:type = Virtual or Physical this indicate that the memory descriptor need not copy the ranges array into local memory.  This is an optimisation to try to minimise unnecessary allocations.
-    @param task The task each of the virtual ranges are mapped into. Note that unlike IOMemoryDescriptor::withAddress(), kernel_task memory must be explicitly prepared when passed to this api.
+    @param task The task each of the virtual ranges are mapped into. Note that unlike IOMemoryDescriptor::withAddress(), kernel_task memory must be explicitly prepared when passed to this api. The task argument may be NULL to specify memory by physical address.
     @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
     static IOMemoryDescriptor * withAddressRanges(
@@ -640,7 +640,7 @@ protected:
 public:
 /*! @function getVirtualAddress
     @abstract Accessor to the virtual address of the first byte in the mapping.
-    @discussion This method returns the virtual address of the first byte in the mapping.
+    @discussion This method returns the virtual address of the first byte in the mapping. Since the IOVirtualAddress is only 32bit in 32bit kernels, the getAddress() method should be used for compatibility with 64bit task mappings.
     @result A virtual address. */
 
     virtual IOVirtualAddress 	getVirtualAddress();
@@ -725,9 +725,25 @@ public:
 					 mach_vm_size_t       offset = 0);
 
 #ifdef __LP64__
+/*! @function getAddress
+    @abstract Accessor to the virtual address of the first byte in the mapping.
+    @discussion This method returns the virtual address of the first byte in the mapping.
+    @result A virtual address. */
+/*! @function getSize
+    @abstract Accessor to the length of the mapping.
+    @discussion This method returns the length of the mapping.
+    @result A byte count. */
     inline mach_vm_address_t 	getAddress() __attribute__((always_inline));
     inline mach_vm_size_t 	getSize() __attribute__((always_inline));
 #else /* !__LP64__ */
+/*! @function getAddress
+    @abstract Accessor to the virtual address of the first byte in the mapping.
+    @discussion This method returns the virtual address of the first byte in the mapping.
+    @result A virtual address. */
+/*! @function getSize
+    @abstract Accessor to the length of the mapping.
+    @discussion This method returns the length of the mapping.
+    @result A byte count. */
     virtual mach_vm_address_t 	getAddress();
     virtual mach_vm_size_t 	getSize();
 #endif /* !__LP64__ */
@@ -769,8 +785,6 @@ enum {
     _kIOMemorySourceSegment	= 0x00002000
 };
 #endif /* XNU_KERNEL_PRIVATE */
-
-#if !defined(__LP64) || defined(_IOMEMORYDESCRIPTOR_INTERNAL_)
 
 // The following classes are private implementation of IOMemoryDescriptor - they
 // should not be referenced directly, just through the public API's in the 
@@ -928,8 +942,6 @@ public:
 	withPersistentMemoryDescriptor(IOGeneralMemoryDescriptor *originalMD);
 
 };
-
-#endif /* !defined(__LP64) || defined(_IOMEMORYDESCRIPTOR_INTERNAL_) */
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 

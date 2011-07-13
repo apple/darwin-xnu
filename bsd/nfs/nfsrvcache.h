@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -76,6 +76,13 @@
  * Definitions for the server recent request cache
  */
 
+/* Network address hash list element */
+union nethostaddr {
+	in_addr_t had_inetaddr;
+	struct in6_addr had_inet6addr;
+	mbuf_t had_nam;
+};
+
 #define	NFSRVCACHESIZ	64
 
 struct nfsrvcache {
@@ -86,6 +93,7 @@ struct nfsrvcache {
 		mbuf_t ru_repmb;		/* Reply mbuf list OR */
 		int ru_repstat;			/* Reply status */
 	} rc_un;
+	sa_family_t rc_family;			/* address family */
 	union nethostaddr rc_haddr;		/* Host address */
 	u_int32_t rc_proc;			/* rpc proc number */
 	u_char	rc_state;		/* Current state of request */
@@ -95,6 +103,7 @@ struct nfsrvcache {
 #define	rc_reply	rc_un.ru_repmb
 #define	rc_status	rc_un.ru_repstat
 #define	rc_inetaddr	rc_haddr.had_inetaddr
+#define	rc_inet6addr	rc_haddr.had_inet6addr
 #define	rc_nam		rc_haddr.had_nam
 
 /* Cache entry states */

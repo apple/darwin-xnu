@@ -66,6 +66,8 @@
 #ifndef	_VM_VM_OBJECT_H_
 #define _VM_VM_OBJECT_H_
 
+#include <debug.h>
+#include <mach_assert.h>
 #include <mach_pagemap.h>
 #include <task_swapper.h>
 
@@ -107,20 +109,32 @@ struct vm_object_fault_info {
         vm_behavior_t	behavior;
         vm_map_offset_t	lo_offset;
 	vm_map_offset_t	hi_offset;
-	boolean_t	no_cache;
-	boolean_t	stealth;
-	boolean_t	mark_zf_absent;
+	unsigned int
+	/* boolean_t */	no_cache:1,
+	/* boolean_t */	stealth:1,
+	/* boolean_t */	io_sync:1,
+	/* boolean_t */ cs_bypass:1,
+	/* boolean_t */	mark_zf_absent:1,
+		__vm_object_fault_info_unused_bits:27;
 };
 
 
+#define	vo_size			vo_un1.vou_size
+#define vo_cache_pages_to_scan	vo_un1.vou_cache_pages_to_scan
+#define vo_shadow_offset	vo_un2.vou_shadow_offset
+#define vo_cache_ts		vo_un2.vou_cache_ts
 
 struct vm_object {
 	queue_head_t		memq;		/* Resident memory */
         lck_rw_t		Lock;		/* Synchronization */
 
-	vm_object_size_t	size;		/* Object size (only valid
-						 * if internal)
-						 */
+	union {
+		vm_object_size_t  vou_size;	/* Object size (only valid if internal) */
+		int		  vou_cache_pages_to_scan;	/* pages yet to be visited in an
+								 * external object in cache
+								 */
+	} vo_un1;
+
 	struct vm_page		*memq_hint;
 	int			ref_count;	/* Number of references */
 #if	TASK_SWAPPER
@@ -139,7 +153,13 @@ struct vm_object {
 						 * copy_call.
 						 */
 	struct vm_object	*shadow;	/* My shadow */
-	vm_object_offset_t	shadow_offset;	/* Offset into shadow */
+
+	union {
+		vm_object_offset_t vou_shadow_offset;	/* Offset into shadow */
+		clock_sec_t	   vou_cache_ts;	/* age of an external object
+							 * present in cache
+							 */
+	} vo_un2;
 
 	memory_object_t		pager;		/* Where to get data */
 	vm_object_offset_t	paging_offset;	/* Offset into memory object */
@@ -303,7 +323,10 @@ struct vm_object {
 		volatile_fault:1,
 		all_reusable:1,
 		blocked_access:1,
-		__object2_unused_bits:16;	/* for expansion */
+		set_cache_attr:1,
+		__object2_unused_bits:15;	/* for expansion */
+
+	uint32_t		scan_collisions;
 
 #if	UPL_DEBUG
 	queue_head_t		uplq;		/* List of outstanding upls */
@@ -321,7 +344,7 @@ struct vm_object {
 	} pip_holders[VM_PIP_DEBUG_MAX_REFS];
 #endif	/* VM_PIP_DEBUG  */
 
-        queue_chain_t       objq;      /* object queue - currently used for purgable queues */
+        queue_chain_t		objq;      /* object queue - currently used for purgable queues */
 };
 
 #define VM_OBJECT_PURGEABLE_FAULT_ERROR(object)				\
@@ -644,6 +667,10 @@ __private_extern__ kern_return_t vm_object_populate_with_private(
 	ppnum_t			phys_page,
 	vm_size_t		size);
 
+__private_extern__ void vm_object_change_wimg_mode(
+	vm_object_t		object,
+	unsigned int		wimg_mode);
+
 extern kern_return_t adjust_vm_object_cache(
 	vm_size_t oval,
 	vm_size_t nval);
@@ -671,6 +698,41 @@ __private_extern__ void		vm_object_reap_pages(
 #define REAP_PURGEABLE	2
 #define REAP_DATA_FLUSH	3
 
+#if CONFIG_FREEZE
+
+__private_extern__ kern_return_t 
+vm_object_pack(
+	unsigned int       *purgeable_count,
+	unsigned int       *wired_count,
+	unsigned int       *clean_count,
+	unsigned int       *dirty_count,
+	boolean_t          *shared,
+	vm_object_t         src_object,
+	vm_object_t         dst_object,
+	void		      **table,
+	vm_object_offset_t *offset);
+
+__private_extern__ void
+vm_object_pack_pages(
+	unsigned int       *wired_count,
+	unsigned int       *clean_count,
+	unsigned int       *dirty_count,
+	vm_object_t         src_object,
+	vm_object_t         dst_object,
+	void		      **table,
+	vm_object_offset_t *offset);
+
+__private_extern__ void vm_object_pageout(
+    vm_object_t     object);
+
+__private_extern__  kern_return_t vm_object_pagein(
+	vm_object_t     object);
+
+__private_extern__ void vm_object_unpack(
+	vm_object_t     object,
+	void          **table);
+
+#endif /* CONFIG_FREEZE */
 
 /*
  *	Event waiting handling
@@ -881,20 +943,24 @@ extern boolean_t	vm_object_lock_try_shared(vm_object_t);
  * check if anyone is holding the lock, but the holder may not necessarily
  * be the caller...
  */
-#if DEBUG
+#if MACH_ASSERT || DEBUG
 #define vm_object_lock_assert_held(object) \
 	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_HELD)
 #define vm_object_lock_assert_shared(object)	\
 	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_SHARED)
 #define vm_object_lock_assert_exclusive(object) \
 	lck_rw_assert(&(object)->Lock, LCK_RW_ASSERT_EXCLUSIVE)
-#else /* DEBUG */
+#else  /* MACH_ASSERT || DEBUG */ 
 #define vm_object_lock_assert_held(object)
 #define vm_object_lock_assert_shared(object)
 #define vm_object_lock_assert_exclusive(object)
-#endif /* DEBUG */
+#endif /* MACH_ASSERT || DEBUG */
 
 #define vm_object_round_page(x) (((vm_object_offset_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
 #define vm_object_trunc_page(x) ((vm_object_offset_t)(x) & ~((signed)PAGE_MASK))
+
+extern void	vm_object_cache_add(vm_object_t);
+extern void	vm_object_cache_remove(vm_object_t);
+extern int	vm_object_cache_evict(int, int);
 
 #endif	/* _VM_VM_OBJECT_H_ */

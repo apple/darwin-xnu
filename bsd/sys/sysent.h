@@ -31,9 +31,6 @@
 
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
-#ifdef __ppc__
-#include <sys/types.h>
-#endif
 
 #ifdef KERNEL_PRIVATE
 #ifdef __APPLE_API_PRIVATE
@@ -59,7 +56,7 @@ extern struct sysent sysent[];
 #endif	/* __INIT_SYSENT_C__ */
 
 extern int nsysent;
-#define NUM_SYSENT	434	/* Current number of defined syscalls */
+#define NUM_SYSENT	439	/* Current number of defined syscalls */
 
 /* sy_funnel flags bits */
 #define FUNNEL_MASK	0x07f

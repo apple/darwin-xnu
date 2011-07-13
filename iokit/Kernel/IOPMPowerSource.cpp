@@ -165,7 +165,6 @@ void IOPMPowerSource::updateStatus (void)
 void IOPMPowerSource::setPSProperty(const OSSymbol *key, OSObject *val)
 {
     OSObject    *lastVal;
-    OSNumber    *newNumVal;
 
     if(!key || !val) return;
 
@@ -175,19 +174,12 @@ void IOPMPowerSource::setPSProperty(const OSSymbol *key, OSObject *val)
     // Otherwise, just compare pointers.
     
     if( (lastVal = properties->getObject(key)) ) {
-        newNumVal = OSDynamicCast(OSNumber, val);
-        if(newNumVal) {
-            if(newNumVal->isEqualTo(lastVal)) {
-                // settings didn't change
-            } else {
-                // num val is not equal to last val
-                settingsChangedSinceUpdate = true;
-            }
-        } else {
-            // pointer compare as last resort
-            if(lastVal != val)
-                settingsChangedSinceUpdate = true;        
-        }
+	if(val->isEqualTo(lastVal)) {
+	    // settings didn't change
+	} else {
+	    // num val is not equal to last val
+	    settingsChangedSinceUpdate = true;
+	}
     } else {
         // new setting; no last value
         settingsChangedSinceUpdate = true;

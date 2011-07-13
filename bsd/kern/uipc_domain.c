@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -77,15 +77,14 @@
 #include <pexpert/pexpert.h>
 
 void init_domain(struct domain *dp) __attribute__((section("__TEXT, initcode")));
-void concat_domain(struct domain *dp) __attribute__((section("__TEXT, initcode")));
+void prepend_domain(struct domain *dp) __attribute__((section("__TEXT, initcode")));
 
-
-void	pffasttimo(void *);
 void	pfslowtimo(void *);
 
 struct protosw *pffindprotonotype(int, int);
 struct protosw *pffindprotonotype_locked(int , int , int);
 struct domain *pffinddomain(int);
+static void net_update_uptime(void);
 
 /*
  * Add/delete 'domain': Link structure into system list,
@@ -100,6 +99,12 @@ lck_mtx_t		*domain_proto_mtx;
 extern int		do_reclaim;
 
 extern sysctlfn net_sysctl;
+
+static u_int64_t uptime;
+
+#ifdef INET6
+extern  void ip6_fin(void);
+#endif
 
 static void
 init_proto(struct protosw *pr)
@@ -133,6 +138,16 @@ init_domain(struct domain *dp)
 			      dp->dom_name, 
 			      (int)(pr - dp->dom_protosw));
 
+#if __APPLE__
+	/*
+	 * Warn that pr_fasttimo (now pr_unused) is deprecated since rdar://7617868
+	 */
+		if (pr->pr_unused != NULL) {
+			printf("init_domain: warning %s, proto %d: pr_fasttimo is deprecated and won't be called\n", 
+				dp->dom_name, pr->pr_protocol);
+		}
+#endif
+
 		init_proto(pr);
 
 	}
@@ -147,8 +162,8 @@ init_domain(struct domain *dp)
 }
 
 void
-concat_domain(struct domain *dp) 
-{
+prepend_domain(struct domain *dp) 
+{	
 	lck_mtx_assert(domain_proto_mtx, LCK_MTX_ASSERT_OWNED);
 	dp->dom_next = domains; 
 	domains = dp; 
@@ -162,7 +177,7 @@ net_add_domain(struct domain *dp)
 	/* First, link in the domain */
 
 	lck_mtx_lock(domain_proto_mtx);
-	concat_domain(dp);
+	prepend_domain(dp);
 
 	init_domain(dp);
 	lck_mtx_unlock(domain_proto_mtx);
@@ -302,31 +317,32 @@ domaininit(void)
 
 	lck_mtx_lock(domain_proto_mtx);
 
-	concat_domain(&localdomain);
-	concat_domain(&routedomain);
-	concat_domain(&inetdomain);
+	prepend_domain(&localdomain);
+	prepend_domain(&inetdomain);
 #if NETAT
-	concat_domain(&atalkdomain);
+	prepend_domain(&atalkdomain);
 #endif
 #if INET6
-	concat_domain(&inet6domain);
+	prepend_domain(&inet6domain);
 #endif
+        prepend_domain(&routedomain);
+
 #if IPSEC
-	concat_domain(&keydomain);
+	prepend_domain(&keydomain);
 #endif
 
 #if NS
-	concat_domain(&nsdomain);
+	prepend_domain(&nsdomain);
 #endif
 #if ISO
-	concat_domain(&isodomain);
+	prepend_domain(&isodomain);
 #endif
 #if CCITT
-	concat_domain(&ccittdomain);
+	prepend_domain(&ccittdomain);
 #endif
-	concat_domain(&ndrvdomain);
+	prepend_domain(&ndrvdomain);
 
-	concat_domain(&systemdomain);
+	prepend_domain(&systemdomain);
 
 	/*
 	 * Now ask them all to init (XXX including the routing domain,
@@ -336,8 +352,15 @@ domaininit(void)
 		init_domain(dp);
 
 	lck_mtx_unlock(domain_proto_mtx);
-	timeout(pffasttimo, NULL, 1);
 	timeout(pfslowtimo, NULL, 1);
+}
+
+void
+domainfin(void)
+{
+#ifdef INET6
+	ip6_fin();
+#endif
 }
 
 static __inline__ struct domain *
@@ -525,6 +548,13 @@ pfslowtimo(__unused void *arg)
 	register struct domain *dp;
 	register struct protosw *pr;
 
+	/*
+	 * Update coarse-grained networking timestamp (in sec.); the idea
+	 * is to piggy-back on the periodic slow timeout callout to update
+	 * the counter returnable via net_uptime().
+	 */
+	net_update_uptime();
+
 	lck_mtx_lock(domain_proto_mtx);
 	for (dp = domains; dp; dp = dp->dom_next) 
 		for (pr = dp->dom_protosw; pr; pr = pr->pr_next) {
@@ -539,17 +569,26 @@ pfslowtimo(__unused void *arg)
 	timeout(pfslowtimo, NULL, hz/PR_SLOWHZ);
 }
 
-void
-pffasttimo(__unused void *arg)
+static void
+net_update_uptime(void)
 {
-	register struct domain *dp;
-	register struct protosw *pr;
+	struct timeval tv;
 
-	lck_mtx_lock(domain_proto_mtx);
-	for (dp = domains; dp; dp = dp->dom_next)
-		for (pr = dp->dom_protosw; pr; pr = pr->pr_next)
-			if (pr->pr_fasttimo)
-				(*pr->pr_fasttimo)();
-	lck_mtx_unlock(domain_proto_mtx);
-	timeout(pffasttimo, NULL, hz/PR_FASTHZ);
+	microuptime(&tv);
+	uptime = tv.tv_sec;
+}
+
+/*
+ * An alternative way to obtain the coarse-grained uptime (in seconds)
+ * for networking code which do not require high-precision timestamp,
+ * as this is significantly cheaper than microuptime().
+ */
+u_int64_t
+net_uptime(void)
+{
+	/* If we get here before pfslowtimo() fires for the first time */
+	if (uptime == 0)
+		net_update_uptime();
+
+	return (uptime);
 }

@@ -110,6 +110,8 @@
 	} \
 }
 
+extern unsigned int bpf_maxbufsize;
+
 static u_int16_t	m_xhalf(struct mbuf *m, bpf_u_int32 k, int *err);
 static u_int32_t	m_xword(struct mbuf *m, bpf_u_int32 k, int *err);
 
@@ -528,9 +530,10 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 /*
  * Return true if the 'fcode' is a valid filter program.
  * The constraints are that each jump be forward and to a valid
- * code.  The code must terminate with either an accept or reject.
- * 'valid' is an array for use by the routine (it must be at least
- * 'len' bytes long).
+ * code, that memory accesses are within valid ranges (to the 
+ * extent that this can be checked statically; loads of packet data
+ * have to be, and are, also checked at run time), and that
+ * the code terminates with either an accept or reject.
  *
  * The kernel needs to be able to verify an application's filter code.
  * Otherwise, a bogus program could easily crash the system.
@@ -538,40 +541,112 @@ bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 int
 bpf_validate(const struct bpf_insn *f, int len)
 {
-	register int i;
+	u_int i, from;
 	const struct bpf_insn *p;
 
-	for (i = 0; i < len; ++i) {
-		/*
-		 * Check that that jumps are forward, and within
-		 * the code block.
-		 */
+	if (len < 1 || len > BPF_MAXINSNS)
+		return 0;
+	
+	for (i = 0; i < ((u_int)len); ++i) {
 		p = &f[i];
-		if (BPF_CLASS(p->code) == BPF_JMP) {
-			register int from = i + 1;
-
-			if (BPF_OP(p->code) == BPF_JA) {
-				if (from >= len || p->k >= (bpf_u_int32)(len - from))
+		switch (BPF_CLASS(p->code)) {
+			/*
+			 * Check that memory operations use valid addresses
+			 */
+			case BPF_LD:
+			case BPF_LDX:
+				switch (BPF_MODE(p->code)) {
+					case BPF_IMM:
+						break;
+					case BPF_ABS:
+					case BPF_IND:
+					case BPF_MSH:
+						/*
+						 * More strict check with actual packet length
+						 * is done runtime.
+						 */
+						if (p->k >= bpf_maxbufsize)
+							return 0;
+						break;
+					case BPF_MEM:
+						if (p->k >= BPF_MEMWORDS)
+							return 0;
+						break;
+					case BPF_LEN:
+						break;
+					default:
+						return 0;
+				}
+				break;
+			case BPF_ST:
+			case BPF_STX:
+				if (p->k >= BPF_MEMWORDS)
 					return 0;
-			}
-			else if (from >= len || p->jt >= len - from ||
-				 p->jf >= len - from)
+				break;
+			case BPF_ALU:
+				switch (BPF_OP(p->code)) {
+					case BPF_ADD:
+					case BPF_SUB:
+					case BPF_MUL:
+					case BPF_OR:
+					case BPF_AND:
+					case BPF_LSH:
+					case BPF_RSH:
+					case BPF_NEG:
+						break;
+					case BPF_DIV:
+						/* 
+						 * Check for constant division by 0
+						 */
+						if(BPF_SRC(p->code) == BPF_K && p->k == 0)
+							return 0;
+						break;
+					default:
+						return 0;
+				}
+				break;
+			case BPF_JMP:
+				/*
+				 * Check that jumps are within the code block,
+				 * and that unconditional branches don't go 
+				 * backwards as a result of an overflow.
+				 * Unconditional branches have a 32-bit offset,
+				 * so they could overflow; we check to make 
+				 * sure they don't. Conditional branches have 
+				 * an 8-bit offset, and the from address is 
+				 * less than equal to BPF_MAXINSNS, and we assume that
+				 * BPF_MAXINSNS is sufficiently small that adding 255 
+				 * to it won't overlflow
+				 *
+				 * We know that len is <= BPF_MAXINSNS, and we 
+				 * assume that BPF_MAXINSNS is less than the maximum 
+				 * size of a u_int, so that i+1 doesn't overflow
+				 */
+				from = i+1;
+				switch (BPF_OP(p->code)) {
+					case BPF_JA:
+						if (from + p->k < from || from + p->k >= ((u_int)len))
+							return 0;
+						break;
+					case BPF_JEQ:
+					case BPF_JGT:
+					case BPF_JGE:
+					case BPF_JSET:
+						if (from + p->jt >= ((u_int)len) || from + p->jf >= ((u_int)len))
+							return 0;
+						break;
+					default:
+						return 0;
+				}
+				break;
+			case BPF_RET:
+				break;
+			case BPF_MISC:
+				break;
+			default:
 				return 0;
 		}
-		/*
-		 * Check that memory operations use valid addresses.
-		 */
-		if ((BPF_CLASS(p->code) == BPF_ST ||
-		     (BPF_CLASS(p->code) == BPF_LD &&
-		      (p->code & 0xe0) == BPF_MEM)) &&
-		    p->k >= BPF_MEMWORDS)
-			return 0;
-		/*
-		 * Check for constant division by 0.
-		 */
-		if (p->code == (BPF_ALU|BPF_DIV|BPF_K) && p->k == 0)
-			return 0;
 	}
-	return BPF_CLASS(f[len - 1].code) == BPF_RET;
+		return BPF_CLASS(f[len - 1].code) == BPF_RET;
 }
 #endif

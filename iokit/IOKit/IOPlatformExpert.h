@@ -57,7 +57,8 @@ enum {
   kPEHangCPU,
   kPEUPSDelayHaltCPU,
   kPEPanicRestartCPU,
-  kPEPanicSync
+  kPEPanicSync,
+  kPEPagingOff
 };
 extern int (*PE_halt_restart)(unsigned int type);
 extern int PEHaltRestart(unsigned int type);
@@ -68,6 +69,12 @@ extern UInt32 PESavePanicInfo(UInt8 *buffer, UInt32 length);
 extern long PEGetGMTTimeOfDay( void );
 extern void PESetGMTTimeOfDay( long secs );
   
+/* unless it's a "well-known" property, these will read/write out the value as raw data */
+
+extern boolean_t PEWriteNVRAMProperty(const char *symbol, const void *value, const unsigned int len);
+
+extern boolean_t PEReadNVRAMProperty(const char *symbol, void *value, unsigned int *len);
+
 #ifdef __cplusplus
 } /* extern "C" */
 

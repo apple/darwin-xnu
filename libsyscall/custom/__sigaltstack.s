@@ -28,13 +28,13 @@
 
 #include "SYS.h"
 
-#if defined(__ppc__) || defined(__ppc64__) || defined(__x86_64__)
+#if defined(__x86_64__)
 
-__SYSCALL(__sigaltstack, sigaltstack, 3)
+__SYSCALL(___sigaltstack, sigaltstack, 3)
 
 #elif defined(__i386__)
 
-__SYSCALL_INT(__sigaltstack, sigaltstack, 3)
+__SYSCALL_INT(___sigaltstack, sigaltstack, 3)
 
 #else
 #error Unsupported architecture

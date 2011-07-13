@@ -41,6 +41,18 @@
 #include <ipc/ipc_kmsg.h>
 #include <kern/timer.h>
 
+struct processor_sched_statistics {
+	uint32_t		csw_count;
+	uint32_t		preempt_count;
+	uint32_t		preempted_rt_count;
+	uint32_t		preempted_by_rt_count;
+	uint32_t		rt_sched_count;
+	uint32_t		interrupt_count;
+	uint32_t		ipi_count;
+	uint32_t		timer_pop_count;
+	uint32_t		idle_transitions;
+};
+
 struct processor_data {
 	/* Processor state statistics */
 	timer_data_t			idle_state;
@@ -72,6 +84,8 @@ struct processor_data {
 	unsigned long			page_grab_count;
 	int						start_color;
 	void					*free_pages;
+
+	struct processor_sched_statistics sched_stats;
 };
 
 typedef struct processor_data	processor_data_t;
@@ -81,6 +95,34 @@ typedef struct processor_data	processor_data_t;
 
 extern	void	processor_data_init(
 					processor_t		processor);
+
+#define SCHED_STATS_INTERRUPT(p) 					\
+MACRO_BEGIN								\
+	if (__builtin_expect(sched_stats_active, 0)) { 		\
+		(p)->processor_data.sched_stats.interrupt_count++;	\
+	}								\
+MACRO_END	
+
+#define SCHED_STATS_TIMER_POP(p)					\
+MACRO_BEGIN								\
+	if (__builtin_expect(sched_stats_active, 0)) { 		\
+		(p)->processor_data.sched_stats.timer_pop_count++; 	\
+	}								\
+MACRO_END
+
+#define SCHED_STATS_IPI(p) 						\
+MACRO_BEGIN								\
+	if (__builtin_expect(sched_stats_active, 0)) { 		\
+		(p)->processor_data.sched_stats.ipi_count++; 		\
+	}								\
+MACRO_END
+
+#define SCHED_STATS_CPU_IDLE_START(p)								\
+MACRO_BEGIN											\
+	if (__builtin_expect(sched_stats_active, 0)) { 					\
+		(p)->processor_data.sched_stats.idle_transitions++;				\
+	}											\
+MACRO_END
 
 #endif /* MACH_KERNEL_PRIVATE */
 

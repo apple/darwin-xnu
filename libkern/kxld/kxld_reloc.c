@@ -41,12 +41,15 @@
 #include <AssertMacros.h>
 
 #include "kxld_array.h"
+#include "kxld_demangle.h"
+#include "kxld_dict.h"
 #include "kxld_reloc.h"
 #include "kxld_sect.h"
 #include "kxld_seg.h"
 #include "kxld_sym.h"
 #include "kxld_symtab.h"
 #include "kxld_util.h"
+#include "kxld_vtable.h"
 
 /* include target-specific relocation prototypes */
 #include <mach-o/reloc.h>
@@ -102,9 +105,10 @@ static boolean_t generic_reloc_is_pair(u_int _type, u_int _prev_type)
     __attribute__((const));
 static boolean_t generic_reloc_has_got(u_int _type)
     __attribute__((const));
-static kern_return_t generic_process_reloc(u_char *instruction, u_int length, 
-    u_int pcrel, kxld_addr_t base_pc, kxld_addr_t link_pc, kxld_addr_t link_disp,
-    u_int type, kxld_addr_t target, kxld_addr_t pair_target, boolean_t swap);
+static kern_return_t generic_process_reloc(const KXLDRelocator *relocator,
+    u_char *instruction, u_int length, u_int pcrel, kxld_addr_t base_pc, 
+    kxld_addr_t link_pc, kxld_addr_t link_disp, u_int type, kxld_addr_t target, 
+    kxld_addr_t pair_target, boolean_t swap);
 #endif /* KXLD_USER_OR_I386 */
 
 #if KXLD_USER_OR_PPC 
@@ -114,9 +118,10 @@ static boolean_t ppc_reloc_is_pair(u_int _type, u_int _prev_type)
     __attribute__((const));
 static boolean_t ppc_reloc_has_got(u_int _type)
     __attribute__((const));
-static kern_return_t ppc_process_reloc(u_char *instruction, u_int length, 
-    u_int pcrel, kxld_addr_t base_pc, kxld_addr_t link_pc, kxld_addr_t link_disp,
-    u_int type, kxld_addr_t target, kxld_addr_t pair_target, boolean_t swap);
+static kern_return_t ppc_process_reloc(const KXLDRelocator *relocator, 
+    u_char *instruction, u_int length, u_int pcrel, kxld_addr_t base_pc, 
+    kxld_addr_t link_pc, kxld_addr_t link_disp, u_int type, kxld_addr_t target, 
+    kxld_addr_t pair_target, boolean_t swap);
 #endif /* KXLD_USER_OR_PPC */
 
 #if KXLD_USER_OR_X86_64 
@@ -126,9 +131,10 @@ static boolean_t x86_64_reloc_is_pair(u_int _type, u_int _prev_type)
     __attribute__((const));
 static boolean_t x86_64_reloc_has_got(u_int _type)
     __attribute__((const));
-static kern_return_t x86_64_process_reloc(u_char *instruction, u_int length, 
-    u_int pcrel, kxld_addr_t base_pc, kxld_addr_t link_pc, kxld_addr_t link_disp,
-    u_int type, kxld_addr_t target, kxld_addr_t pair_target, boolean_t swap);
+static kern_return_t x86_64_process_reloc(const KXLDRelocator *relocator, 
+    u_char *instruction, u_int length, u_int pcrel, kxld_addr_t base_pc, 
+    kxld_addr_t link_pc, kxld_addr_t link_disp, u_int type, kxld_addr_t target, 
+    kxld_addr_t pair_target, boolean_t swap);
 static kern_return_t calculate_displacement_x86_64(uint64_t target, 
     uint64_t adjustment, int32_t *instr32);
 #endif /* KXLD_USER_OR_X86_64 */
@@ -140,19 +146,20 @@ static boolean_t arm_reloc_is_pair(u_int _type, u_int _prev_type)
     __attribute__((const));
 static boolean_t arm_reloc_has_got(u_int _type)
     __attribute__((const));
-static kern_return_t arm_process_reloc(u_char *instruction, u_int length, 
-    u_int pcrel, kxld_addr_t base_pc, kxld_addr_t link_pc, kxld_addr_t link_disp,
-    u_int type, kxld_addr_t target, kxld_addr_t pair_target, boolean_t swap);
+static kern_return_t arm_process_reloc(const KXLDRelocator *relocator, 
+    u_char *instruction, u_int length, u_int pcrel, kxld_addr_t base_pc, 
+    kxld_addr_t link_pc, kxld_addr_t link_disp, u_int type, kxld_addr_t target, 
+    kxld_addr_t pair_target, boolean_t swap);
 #endif /* KXLD_USER_OR_ARM */
 
 #if KXLD_USER_OR_ILP32
-static kxld_addr_t get_pointer_at_addr_32(u_char *data, u_long offset,
-    const KXLDRelocator *relocator __unused)
+static kxld_addr_t get_pointer_at_addr_32(const KXLDRelocator *relocator, 
+    const u_char *data, u_long offset)
     __attribute__((pure, nonnull));
 #endif /* KXLD_USER_OR_ILP32 */
 #if KXLD_USER_OR_LP64
-static kxld_addr_t get_pointer_at_addr_64(u_char *data, u_long offset,
-    const KXLDRelocator *relocator __unused)
+static kxld_addr_t get_pointer_at_addr_64(const KXLDRelocator *relocator, 
+    const u_char *data, u_long offset)
     __attribute__((pure, nonnull));
 #endif /* KXLD_USER_OR_LP64 */
 
@@ -160,16 +167,23 @@ static u_int count_relocatable_relocs(const KXLDRelocator *relocator,
     const struct relocation_info *relocs, u_int nrelocs)
     __attribute__((pure));
 
-static kern_return_t calculate_targets(kxld_addr_t *_target, 
-    kxld_addr_t *_pair_target, const KXLDReloc *reloc, 
-    const KXLDArray *sectarray, const KXLDSymtab *symtab);
+static kern_return_t calculate_targets(KXLDRelocator *relocator, 
+    kxld_addr_t *_target, kxld_addr_t *_pair_target, const KXLDReloc *reloc);
+
+static kxld_addr_t align_raw_function_address(const KXLDRelocator *relocator, 
+    kxld_addr_t value);
+
 static kern_return_t get_target_by_address_lookup(kxld_addr_t *target, 
     kxld_addr_t addr, const KXLDArray *sectarray);
+
+static kern_return_t check_for_direct_pure_virtual_call(
+    const KXLDRelocator *relocator, u_long offset);
 
 /*******************************************************************************
 *******************************************************************************/
 kern_return_t 
-kxld_relocator_init(KXLDRelocator *relocator, cpu_type_t cputype, 
+kxld_relocator_init(KXLDRelocator *relocator, u_char *file,
+    const KXLDSymtab *symtab, const KXLDArray *sectarray, cpu_type_t cputype, 
     cpu_subtype_t cpusubtype __unused, boolean_t swap)
 {
     kern_return_t rval = KERN_FAILURE;
@@ -183,6 +197,7 @@ kxld_relocator_init(KXLDRelocator *relocator, cpu_type_t cputype,
         relocator->reloc_is_pair = generic_reloc_is_pair;
         relocator->reloc_has_got = generic_reloc_has_got;
         relocator->process_reloc = generic_process_reloc;
+        relocator->function_align = 0;
         relocator->is_32_bit = TRUE;
         break;
 #endif /* KXLD_USER_OR_I386 */
@@ -192,6 +207,7 @@ kxld_relocator_init(KXLDRelocator *relocator, cpu_type_t cputype,
         relocator->reloc_is_pair = ppc_reloc_is_pair;
         relocator->reloc_has_got = ppc_reloc_has_got;
         relocator->process_reloc = ppc_process_reloc;
+        relocator->function_align = 0;
         relocator->is_32_bit = TRUE;
         break;
 #endif /* KXLD_USER_OR_PPC */
@@ -201,6 +217,7 @@ kxld_relocator_init(KXLDRelocator *relocator, cpu_type_t cputype,
         relocator->reloc_is_pair = x86_64_reloc_is_pair;
         relocator->reloc_has_got = x86_64_reloc_has_got;
         relocator->process_reloc = x86_64_process_reloc;
+        relocator->function_align = 0;
         relocator->is_32_bit = FALSE;
         break;
 #endif /* KXLD_USER_OR_X86_64 */
@@ -210,6 +227,7 @@ kxld_relocator_init(KXLDRelocator *relocator, cpu_type_t cputype,
         relocator->reloc_is_pair = arm_reloc_is_pair;
         relocator->reloc_has_got = arm_reloc_has_got;
         relocator->process_reloc = arm_process_reloc;
+        relocator->function_align = 1;
         relocator->is_32_bit = TRUE;
         break;
 #endif /* KXLD_USER_OR_ARM */
@@ -220,6 +238,9 @@ kxld_relocator_init(KXLDRelocator *relocator, cpu_type_t cputype,
         goto finish;
     }
 
+    relocator->file = file;
+    relocator->symtab = symtab;
+    relocator->sectarray = sectarray;
     relocator->is_32_bit = kxld_is_32_bit(cputype);
     relocator->swap = swap;
 
@@ -238,8 +259,8 @@ kxld_reloc_create_macho(KXLDArray *relocarray, const KXLDRelocator *relocator,
     kern_return_t rval = KERN_FAILURE;
     KXLDReloc *reloc = NULL;
     u_int nrelocs = 0;
-    const struct relocation_info *src = NULL, *prev_src = NULL;
-    const struct scattered_relocation_info *scatsrc = NULL, *prev_scatsrc = NULL;
+    const struct relocation_info *src = NULL;
+    const struct scattered_relocation_info *scatsrc = NULL;
     u_int i = 0;
     u_int reloc_index = 0;
 
@@ -313,9 +334,7 @@ kxld_reloc_create_macho(KXLDArray *relocarray, const KXLDRelocator *relocator,
                 ++i;
                 require_action(i < nsrcs, finish, rval=KERN_FAILURE);
 
-                prev_src = src;
                 src = srcs + i;
-                prev_scatsrc = (const struct scattered_relocation_info *) prev_src;
                 scatsrc = (const struct scattered_relocation_info *) src;
                  
                 if (src->r_address & R_SCATTERED) {
@@ -447,25 +466,23 @@ kxld_relocator_has_got(const KXLDRelocator *relocator, u_int r_type)
 /*******************************************************************************
 *******************************************************************************/
 KXLDSym *
-kxld_reloc_get_symbol(const KXLDRelocator *relocator, const KXLDReloc *reloc, 
-    u_char *data, const KXLDSymtab *symtab)
+kxld_reloc_get_symbol(const KXLDRelocator *relocator, const KXLDReloc *reloc,
+    const u_char *data)
 {
     KXLDSym *sym = NULL;
     kxld_addr_t value = 0;
 
     check(reloc);
-    check(symtab);
 
     switch (reloc->target_type) {
     case KXLD_TARGET_SYMBOLNUM:
-        sym = kxld_symtab_get_symbol_by_index(symtab, reloc->target);
+        sym = kxld_symtab_get_symbol_by_index(relocator->symtab, reloc->target);
         break;
     case KXLD_TARGET_SECTNUM:
-        if (data) {
-            KXLD_3264_FUNC(relocator->is_32_bit, value,
-                get_pointer_at_addr_32, get_pointer_at_addr_64,
-                data, reloc->address, relocator);
-            sym = kxld_symtab_get_cxx_symbol_by_value(symtab, value);           
+        if (data) { 
+            value = kxld_relocator_get_pointer_at_addr(relocator, data, 
+                reloc->address);
+            sym = kxld_symtab_get_cxx_symbol_by_value(relocator->symtab, value);           
         }
         break;
     default:
@@ -521,26 +538,40 @@ finish:
     return reloc;
 }
 
+/*******************************************************************************
+*******************************************************************************/
+kxld_addr_t
+kxld_relocator_get_pointer_at_addr(const KXLDRelocator *relocator,
+    const u_char *data, u_long offset)
+{
+    kxld_addr_t value;
+
+    KXLD_3264_FUNC(relocator->is_32_bit, value,
+        get_pointer_at_addr_32, get_pointer_at_addr_64,
+        relocator, data, offset);
+
+    return value;
+}
+
 #if KXLD_USER_OR_ILP32
 /*******************************************************************************
 *******************************************************************************/
 static kxld_addr_t
-get_pointer_at_addr_32(u_char *data, u_long offset,
-    const KXLDRelocator *relocator __unused)
+get_pointer_at_addr_32(const KXLDRelocator *relocator, 
+    const u_char *data, u_long offset)
 {
     uint32_t addr = 0;
     
     check(relocator);
-    check(data);
 
-    addr = *(uint32_t *) (data + offset);
+    addr = *(const uint32_t *) (data + offset);
 #if !KERNEL
     if (relocator->swap) {
         addr = OSSwapInt32(addr);
     }
 #endif
 
-    return (kxld_addr_t) addr;
+    return align_raw_function_address(relocator, addr);
 }
 #endif /* KXLD_USER_OR_ILP32 */
 
@@ -548,31 +579,55 @@ get_pointer_at_addr_32(u_char *data, u_long offset,
 /*******************************************************************************
 *******************************************************************************/
 static kxld_addr_t
-get_pointer_at_addr_64(u_char *data, u_long offset,
-    const KXLDRelocator *relocator __unused)
+get_pointer_at_addr_64(const KXLDRelocator *relocator, 
+    const u_char *data, u_long offset)
 {
     uint64_t addr = 0;
     
     check(relocator);
-    check(data);
 
-    addr = *(uint64_t *) (data + offset);
+    addr = *(const uint64_t *) (data + offset);
 #if !KERNEL
     if (relocator->swap) {
         addr = OSSwapInt64(addr);
     }
 #endif
 
-    return (kxld_addr_t) addr;
+    return align_raw_function_address(relocator, addr);
 }
 #endif /* KXLD_USER_OR_LP64 */
 
 /*******************************************************************************
 *******************************************************************************/
+void 
+kxld_relocator_set_vtables(KXLDRelocator *relocator, 
+    const struct kxld_dict *vtables)
+{
+    relocator->vtables = vtables;
+}
+
+/*******************************************************************************
+* When we're inspecting the raw binary and not the symbol table, value may
+* hold a THUMB address (with bit 0 set to 1) but the index will have the real
+* address (bit 0 set to 0). So if bit 0 is set here, we clear it. This only
+* impacts ARM for now, but it's implemented as a generic function alignment
+* mask.
+*******************************************************************************/
+static kxld_addr_t
+align_raw_function_address(const KXLDRelocator *relocator, kxld_addr_t value)
+{
+    if (relocator->function_align) { 
+        value &= ~((1ULL << relocator->function_align) - 1); 
+    }
+
+    return value; 
+}
+
+/*******************************************************************************
+*******************************************************************************/
 kern_return_t 
-kxld_relocator_process_sect_reloc(const KXLDRelocator *relocator,
-    const KXLDReloc *reloc, const struct kxld_sect *sect,
-    const KXLDArray *sectarray, const struct kxld_symtab *symtab)
+kxld_relocator_process_sect_reloc(KXLDRelocator *relocator,
+    const KXLDReloc *reloc, const struct kxld_sect *sect)
 {
     kern_return_t rval = KERN_FAILURE;
     u_char *instruction = NULL;
@@ -585,8 +640,6 @@ kxld_relocator_process_sect_reloc(const KXLDRelocator *relocator,
     check(relocator);
     check(reloc);
     check(sect);
-    check(sectarray);
-    check(symtab);
 
     /* Find the instruction */
 
@@ -594,7 +647,7 @@ kxld_relocator_process_sect_reloc(const KXLDRelocator *relocator,
 
     /* Calculate the target */
 
-    rval = calculate_targets(&target, &pair_target, reloc, sectarray, symtab);
+    rval = calculate_targets(relocator, &target, &pair_target, reloc);
     require_noerr(rval, finish);
 
     base_pc = reloc->address;
@@ -603,13 +656,14 @@ kxld_relocator_process_sect_reloc(const KXLDRelocator *relocator,
 
     /* Relocate */
 
-    rval = relocator->process_reloc(instruction, reloc->length, reloc->pcrel,
-        base_pc, link_pc, link_disp, reloc->reloc_type, target, pair_target, 
-        relocator->swap);
+    rval = relocator->process_reloc(relocator, instruction, reloc->length, 
+        reloc->pcrel, base_pc, link_pc, link_disp, reloc->reloc_type, target, 
+        pair_target, relocator->swap);
     require_noerr(rval, finish);
     
     /* Return */
 
+    relocator->current_vtable = NULL;
     rval = KERN_SUCCESS;
 
 finish:
@@ -637,9 +691,8 @@ finish:
 /*******************************************************************************
 *******************************************************************************/
 kern_return_t 
-kxld_relocator_process_table_reloc(const KXLDRelocator *relocator,
-    const KXLDReloc *reloc, const KXLDSeg *seg, u_char *file, 
-    const struct kxld_array *sectarray, const struct kxld_symtab *symtab)
+kxld_relocator_process_table_reloc(KXLDRelocator *relocator,
+    const KXLDReloc *reloc, const KXLDSeg *seg, kxld_addr_t link_addr)
 {
     kern_return_t rval = KERN_FAILURE;
     u_char *instruction = NULL;
@@ -647,36 +700,34 @@ kxld_relocator_process_table_reloc(const KXLDRelocator *relocator,
     kxld_addr_t pair_target = 0;
     kxld_addr_t base_pc = 0;
     kxld_addr_t link_pc = 0;
-    kxld_addr_t link_disp = 0;
+    u_long offset = 0;
 
     check(relocator);
     check(reloc);
-    check(file);
-    check(sectarray);
-    check(symtab);
 
     /* Find the instruction */
 
-    instruction = file + seg->fileoff + reloc->address;
+    offset = (u_long)(seg->fileoff + (reloc->address - seg->base_addr));
+    instruction = relocator->file + offset;
 
     /* Calculate the target */
 
-    rval = calculate_targets(&target, &pair_target, reloc, sectarray, symtab);
+    rval = calculate_targets(relocator, &target, &pair_target, reloc);
     require_noerr(rval, finish);
 
     base_pc = reloc->address;
-    link_pc = base_pc + seg->link_addr;
-    link_disp = seg->link_addr - seg->base_addr;
+    link_pc = base_pc + link_addr;
 
     /* Relocate */
 
-    rval = relocator->process_reloc(instruction, reloc->length, reloc->pcrel,
-        base_pc, link_pc, link_disp, reloc->reloc_type, target, pair_target, 
-        relocator->swap);
+    rval = relocator->process_reloc(relocator, instruction, reloc->length, 
+        reloc->pcrel, base_pc, link_pc, link_addr, reloc->reloc_type, target,
+        pair_target, relocator->swap);
     require_noerr(rval, finish);
     
     /* Return */
 
+    relocator->current_vtable = NULL;
     rval = KERN_SUCCESS;
 
 finish:
@@ -686,19 +737,19 @@ finish:
 /*******************************************************************************
 *******************************************************************************/
 static kern_return_t
-calculate_targets(kxld_addr_t *_target, kxld_addr_t *_pair_target,
-    const KXLDReloc *reloc, const KXLDArray *sectarray, const KXLDSymtab *symtab)
+calculate_targets(KXLDRelocator *relocator, kxld_addr_t *_target, 
+    kxld_addr_t *_pair_target, const KXLDReloc *reloc)
 {
     kern_return_t rval = KERN_FAILURE;
     const KXLDSect *sect = NULL;
     const KXLDSym *sym = NULL;
     kxld_addr_t target = 0;
     kxld_addr_t pair_target = 0;
+    char *demangled_name = NULL;
+    size_t demangled_length = 0;
 
     check(_target);
     check(_pair_target);
-    check(sectarray);
-    check(symtab);
     *_target = 0;
     *_pair_target = 0;
 
@@ -711,12 +762,13 @@ calculate_targets(kxld_addr_t *_target, kxld_addr_t *_pair_target,
             reloc->pair_target_type == KXLD_TARGET_VALUE,
             finish, rval=KERN_FAILURE);
 
-        rval = get_target_by_address_lookup(&target, reloc->target, sectarray);
+        rval = get_target_by_address_lookup(&target, reloc->target, 
+            relocator->sectarray);
         require_noerr(rval, finish);
 
         if (reloc->pair_target_type == KXLD_TARGET_LOOKUP) {
             rval = get_target_by_address_lookup(&pair_target,
-                reloc->pair_target, sectarray);
+                reloc->pair_target, relocator->sectarray);
             require_noerr(rval, finish);
         } else if (reloc->pair_target_type == KXLD_TARGET_VALUE) {
             pair_target = reloc->pair_target;
@@ -728,7 +780,7 @@ calculate_targets(kxld_addr_t *_target, kxld_addr_t *_pair_target,
             finish, rval=KERN_FAILURE);
 
         /* Get the target's section by section number */
-        sect = kxld_array_get_item(sectarray, reloc->target);
+        sect = kxld_array_get_item(relocator->sectarray, reloc->target);
         require_action(sect, finish, rval=KERN_FAILURE);
 
         /* target is the change in the section's address */
@@ -751,9 +803,26 @@ calculate_targets(kxld_addr_t *_target, kxld_addr_t *_pair_target,
             rval=KERN_FAILURE);
 
         /* Get the target's symbol by symbol number */
-        sym = kxld_symtab_get_symbol_by_index(symtab, reloc->target);
+        sym = kxld_symtab_get_symbol_by_index(relocator->symtab, reloc->target);
         require_action(sym, finish, rval=KERN_FAILURE);
+
+        /* If this symbol is a padslot that has already been replaced, then the
+         * only way a relocation entry can still reference it is if there is a
+         * vtable that has not been patched.  The vtable patcher uses the
+         * MetaClass structure to find classes for patching, so an unpatched
+         * vtable means that there is an OSObject-dervied class that is missing
+         * its OSDeclare/OSDefine macros.
+         */
+        require_action(!kxld_sym_is_padslot(sym) || !kxld_sym_is_replaced(sym), 
+            finish, rval=KERN_FAILURE;
+            kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogRelocatingPatchedSym,
+                kxld_demangle(sym->name, &demangled_name, &demangled_length)));
+
         target = sym->link_addr;
+
+        if (kxld_sym_is_vtable(sym)) {
+            relocator->current_vtable = kxld_dict_find(relocator->vtables, sym->name);
+        }
 
         /* Some relocation types need the GOT entry address instead of the
          * symbol's actual address.  These types don't have pair relocation
@@ -762,7 +831,8 @@ calculate_targets(kxld_addr_t *_target, kxld_addr_t *_pair_target,
         if (reloc->pair_target_type == KXLD_TARGET_VALUE) {
             pair_target = reloc->pair_target;
         } else if (reloc->pair_target_type == KXLD_TARGET_SYMBOLNUM ) {
-            sym = kxld_symtab_get_symbol_by_index(symtab, reloc->pair_target);
+            sym = kxld_symtab_get_symbol_by_index(relocator->symtab, 
+                reloc->pair_target);
             require_action(sym, finish, rval=KERN_FAILURE);
             pair_target = sym->link_addr;
         } else if (reloc->pair_target_type == KXLD_TARGET_GOT) {
@@ -779,6 +849,7 @@ calculate_targets(kxld_addr_t *_target, kxld_addr_t *_pair_target,
     rval = KERN_SUCCESS;
 
 finish:
+    if (demangled_name) kxld_free(demangled_name, demangled_length);
     return rval;
 }
 
@@ -804,13 +875,37 @@ get_target_by_address_lookup(kxld_addr_t *target, kxld_addr_t addr,
         end = start + sect->size;
 
         if (start <= addr && addr < end) break;
+        
+        sect = NULL;
     }
-    require_action(i < sectarray->nitems, finish, 
-        rval=KERN_FAILURE);
+    require_action(sect, finish, rval=KERN_FAILURE);
 
     *target = sect->link_addr - sect->base_addr;
     rval = KERN_SUCCESS;
 
+finish:
+    return rval;
+}
+
+/*******************************************************************************
+*******************************************************************************/
+static kern_return_t
+check_for_direct_pure_virtual_call(const KXLDRelocator *relocator, u_long offset)
+{
+    kern_return_t rval = KERN_FAILURE;
+    const KXLDVTableEntry *entry = NULL;
+
+    if (relocator->current_vtable) {
+        entry = kxld_vtable_get_entry_for_offset(relocator->current_vtable, 
+            offset, relocator->is_32_bit);
+        require_action(!entry || !entry->patched.name ||
+            !kxld_sym_name_is_pure_virtual(entry->patched.name),
+            finish, rval=KERN_FAILURE;
+            kxld_log(kKxldLogLinking, kKxldLogErr, 
+                kKxldLogDirectPureVirtualCall));
+    }
+
+    rval = KERN_SUCCESS;
 finish:
     return rval;
 }
@@ -847,10 +942,10 @@ static boolean_t generic_reloc_has_got(u_int _type __unused)
 /*******************************************************************************
 *******************************************************************************/
 static kern_return_t 
-generic_process_reloc(u_char *instruction, u_int length, u_int pcrel,
-    kxld_addr_t _base_pc, kxld_addr_t _link_pc, kxld_addr_t _link_disp __unused, 
-    u_int _type, kxld_addr_t _target, kxld_addr_t _pair_target, 
-    boolean_t swap __unused)
+generic_process_reloc(const KXLDRelocator *relocator, u_char *instruction, 
+    u_int length, u_int pcrel, kxld_addr_t _base_pc, kxld_addr_t _link_pc, 
+    kxld_addr_t _link_disp __unused, u_int _type, kxld_addr_t _target, 
+    kxld_addr_t _pair_target, boolean_t swap __unused)
 {
     kern_return_t rval = KERN_FAILURE;
     uint32_t base_pc = (uint32_t) _base_pc;
@@ -872,6 +967,9 @@ generic_process_reloc(u_char *instruction, u_int length, u_int pcrel,
 #if !KERNEL
     if (swap) instr_data = OSSwapInt32(instr_data);
 #endif
+
+    rval = check_for_direct_pure_virtual_call(relocator, instr_data);
+    require_noerr(rval, finish);
 
     switch (type) {
     case GENERIC_RELOC_VANILLA:
@@ -944,10 +1042,10 @@ static boolean_t ppc_reloc_has_got(u_int _type __unused)
 /*******************************************************************************
 *******************************************************************************/
 static kern_return_t
-ppc_process_reloc(u_char *instruction, u_int length, u_int pcrel,
-    kxld_addr_t _base_pc, kxld_addr_t _link_pc, kxld_addr_t _link_disp __unused,
-    u_int _type, kxld_addr_t _target, kxld_addr_t _pair_target __unused,
-    boolean_t swap __unused)
+ppc_process_reloc(const KXLDRelocator *relocator __unused, u_char *instruction, 
+    u_int length, u_int pcrel, kxld_addr_t _base_pc, kxld_addr_t _link_pc, 
+    kxld_addr_t _link_disp __unused, u_int _type, kxld_addr_t _target, 
+    kxld_addr_t _pair_target __unused, boolean_t swap __unused)
 {
     kern_return_t rval = KERN_FAILURE;
     uint32_t *instr_addr = NULL;
@@ -974,6 +1072,9 @@ ppc_process_reloc(u_char *instruction, u_int length, u_int pcrel,
 #if !KERNEL
     if (swap) instr_data = OSSwapInt32(instr_data);
 #endif
+
+    rval = check_for_direct_pure_virtual_call(relocator, instr_data);
+    require_noerr(rval, finish);
 
     switch (type) {
     case PPC_RELOC_VANILLA:
@@ -1123,10 +1224,10 @@ x86_64_reloc_has_got(u_int _type)
 /*******************************************************************************
 *******************************************************************************/
 static kern_return_t 
-x86_64_process_reloc(u_char *instruction, u_int length, u_int pcrel,
-    kxld_addr_t _base_pc __unused, kxld_addr_t _link_pc, kxld_addr_t _link_disp,
-    u_int _type, kxld_addr_t _target, kxld_addr_t _pair_target, 
-    boolean_t swap __unused)
+x86_64_process_reloc(const KXLDRelocator *relocator __unused, u_char *instruction, 
+    u_int length, u_int pcrel, kxld_addr_t _base_pc __unused, 
+    kxld_addr_t _link_pc, kxld_addr_t _link_disp, u_int _type, 
+    kxld_addr_t _target, kxld_addr_t _pair_target, boolean_t swap __unused)
 {
     kern_return_t rval = KERN_FAILURE;
     enum reloc_type_x86_64 type = _type;
@@ -1151,6 +1252,9 @@ x86_64_process_reloc(u_char *instruction, u_int length, u_int pcrel,
 #if !KERNEL
         if (swap) instr32 = OSSwapInt32(instr32);
 #endif
+
+        rval = check_for_direct_pure_virtual_call(relocator, instr32);
+        require_noerr(rval, finish);
 
         /* There are a number of different small adjustments for pc-relative
          * relocation entries.  The general case is to subtract the size of the
@@ -1251,6 +1355,9 @@ x86_64_process_reloc(u_char *instruction, u_int length, u_int pcrel,
         if (swap) instr64 = OSSwapInt64(instr64);
 #endif
 
+        rval = check_for_direct_pure_virtual_call(relocator, (u_long) instr64);
+        require_noerr(rval, finish);
+
         switch (type) {
         case X86_64_RELOC_UNSIGNED:
             require_action(!pcrel, finish, rval=KERN_FAILURE);
@@ -1349,10 +1456,11 @@ arm_reloc_has_got(u_int _type __unused)
 /*******************************************************************************
 *******************************************************************************/
 static kern_return_t 
-arm_process_reloc(u_char *instruction, u_int length, u_int pcrel,
-    kxld_addr_t _base_pc __unused, kxld_addr_t _link_pc __unused, kxld_addr_t _link_disp __unused,
-    u_int _type __unused, kxld_addr_t _target __unused, kxld_addr_t _pair_target __unused, 
-    boolean_t swap __unused)
+arm_process_reloc(const KXLDRelocator *relocator __unused, u_char *instruction, 
+    u_int length, u_int pcrel, kxld_addr_t _base_pc __unused, 
+    kxld_addr_t _link_pc __unused, kxld_addr_t _link_disp __unused,
+    u_int _type __unused, kxld_addr_t _target __unused, 
+    kxld_addr_t _pair_target __unused,  boolean_t swap __unused)
 {
     kern_return_t rval = KERN_FAILURE;
     uint32_t *instr_addr = NULL;
@@ -1375,9 +1483,11 @@ arm_process_reloc(u_char *instruction, u_int length, u_int pcrel,
     if (swap) instr_data = OSSwapInt32(instr_data);
 #endif
 
+    rval = check_for_direct_pure_virtual_call(relocator, instr_data);
+    require_noerr(rval, finish);
+
     switch (type) {
     case ARM_RELOC_VANILLA:
-        require_action(!pcrel, finish, rval=KERN_FAILURE);
         instr_data += target;
         break;
 

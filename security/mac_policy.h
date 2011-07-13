@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -115,6 +115,16 @@ struct vnode;
 typedef struct ucred *kauth_cred_t;
 #endif	/* !_KAUTH_CRED_T */
 
+#ifndef __IOKIT_PORTS_DEFINED__
+#define __IOKIT_PORTS_DEFINED__
+#ifdef __cplusplus
+class OSObject;
+typedef OSObject *io_object_t;
+#else
+struct OSObject;
+typedef struct OSObject *io_object_t;
+#endif
+#endif /* __IOKIT_PORTS_DEFINED__ */
 
 /*-
  * MAC entry points are generally named using the following template:
@@ -1198,6 +1208,56 @@ typedef void mpo_inpcb_label_update_t(
 typedef int mpo_iokit_check_device_t(
 	char *devtype,
 	struct mac_module_data *mdata
+);
+/**
+  @brief Access control check for opening an I/O Kit device
+  @param cred Subject credential
+  @param device_path Device path
+  @param user_client User client instance
+  @param user_client_type User client type
+
+  Determine whether the subject identified by the credential can open an
+  I/O Kit device at the passed path of the passed user client class and
+  type.
+
+  @return Return 0 if access is granted, or an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_iokit_check_open_t(
+	kauth_cred_t cred,
+	io_object_t user_client,
+	unsigned int user_client_type
+);
+/**
+  @brief Access control check for setting I/O Kit device properties
+  @param cred Subject credential
+  @param registry_entry Target device
+  @param properties Property list
+
+  Determine whether the subject identified by the credential can set
+  properties on an I/O Kit device.
+
+  @return Return 0 if access is granted, or an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_iokit_check_set_properties_t(
+	kauth_cred_t cred,
+	io_object_t entry,
+	io_object_t properties
+);
+/**
+  @brief Access control check for software HID control
+  @param cred Subject credential
+
+  Determine whether the subject identified by the credential can
+  control the HID (Human Interface Device) subsystem, such as to
+  post synthetic keypresses, pointer movement and clicks.
+
+  @return Return 0 if access is granted, or an appropriate value for
+  errno.
+*/
+typedef int mpo_iokit_check_hid_control_t(
+	kauth_cred_t cred
 );
 /**
   @brief Create an IP reassembly queue label
@@ -2867,7 +2927,7 @@ typedef int mpo_posixshm_check_truncate_t(
 	kauth_cred_t cred,
 	struct pshminfo *ps,
 	struct label *shmlabel,
-	size_t len
+	off_t len
 );
 /**
   @brief Access control check for POSIX shared memory unlink
@@ -2927,6 +2987,45 @@ typedef void mpo_posixshm_label_destroy_t(
 */
 typedef void mpo_posixshm_label_init_t(
 	struct label *label
+);
+/**
+ @brief Access control check for privileged operations
+ @param cred Subject credential
+ @param priv Requested privilege (see sys/priv.h)
+
+ Determine whether the subject identified by the credential can perform
+ a privileged operation.  Privileged operations are allowed if the cred
+ is the superuser or any policy returns zero for mpo_priv_grant, unless
+ any policy returns nonzero for mpo_priv_check.
+
+ @return Return 0 if access is granted, otherwise EPERM should be returned.
+*/
+typedef int mpo_priv_check_t(
+	kauth_cred_t cred,
+	int priv
+);
+/**
+ @brief Grant regular users the ability to perform privileged operations
+ @param cred Subject credential
+ @param priv Requested privilege (see sys/priv.h)
+
+ Determine whether the subject identified by the credential should be
+ allowed to perform a privileged operation that in the absense of any
+ MAC policy it would not be able to perform.  Privileged operations are
+ allowed if the cred is the superuser or any policy returns zero for
+ mpo_priv_grant, unless any policy returns nonzero for mpo_priv_check.
+
+ Unlike other MAC hooks which can only reduce the privilege of a
+ credential, this hook raises the privilege of a credential when it
+ returns 0.  Extreme care must be taken when implementing this hook to
+ avoid undermining the security of the system.
+
+ @return Return 0 if additional privilege is granted, otherwise EPERM
+ should be returned.
+*/
+typedef int mpo_priv_grant_t(
+	kauth_cred_t cred,
+	int priv
 );
 /**
   @brief Access control check for debugging process
@@ -3023,6 +3122,37 @@ typedef int mpo_proc_check_getlcid_t(
 	struct proc *p0,
 	struct proc *p,
 	pid_t pid
+);
+/**
+  @brief Access control check for mmap MAP_ANON
+  @param proc User process requesting the memory
+  @param cred Subject credential
+  @param u_addr Start address of the memory range
+  @param u_size Length address of the memory range
+  @param prot mmap protections; see mmap(2)
+  @param flags Type of mapped object; see mmap(2)
+  @param maxprot Maximum rights
+
+  Determine whether the subject identified by the credential should be
+  allowed to obtain anonymous memory using the specified flags and 
+  protections on the new mapping. MAP_ANON will always be present in the
+  flags. Certain combinations of flags with a non-NULL addr may
+  cause a mapping to be rejected before this hook is called. The maxprot field
+  holds the maximum permissions on the new mapping, a combination of
+  VM_PROT_READ, VM_PROT_WRITE and VM_PROT_EXECUTE. To avoid overriding prior
+  access control checks, a policy should only remove flags from maxprot.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned. Suggested failure: EPERM for lack of privilege.
+*/
+typedef int mpo_proc_check_map_anon_t(
+	struct proc *proc,
+	kauth_cred_t cred,
+	user_addr_t u_addr,
+	user_size_t u_size,
+	int prot,
+	int flags,
+	int *maxprot
 );
 /**
   @brief Access control check for setting memory protections
@@ -3822,6 +3952,19 @@ typedef int mpo_system_check_auditon_t(
 	int cmd
 );
 /**
+  @brief Access control check for using CHUD facilities
+  @param cred Subject credential
+
+  Determine whether the subject identified by the credential can perform
+  performance-related tasks using the CHUD system call.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_system_check_chud_t(
+	kauth_cred_t cred
+);
+/**
   @brief Access control check for obtaining the host control port
   @param cred Subject credential
 
@@ -4581,21 +4724,6 @@ typedef void mpo_task_label_update_t(
 	struct label *task
 );
 /**
-  @brief Perform MAC-related events when a thread returns to user space
-  @param code The number of the syscall/trap that has finished
-  @param error The error code that will be returned to user space
-  @param thread Mach (not BSD) thread that is returning
-
-  This entry point permits policy modules to perform MAC-related
-  events when a thread returns to user space, via a system call
-  return, trap return, or otherwise.
-*/
-typedef void mpo_thread_userret_t(
-	int code,
-	int error,
-	struct thread *thread
-);
-/**
   @brief Check vnode access
   @param cred Subject credential
   @param vp Object vnode
@@ -4750,6 +4878,23 @@ typedef int mpo_vnode_check_exec_t(
 	struct label *execlabel,	/* NULLOK */
 	struct componentname *cnp,
 	u_int *csflags
+);
+/**
+  @brief Access control check for fsgetpath
+  @param cred Subject credential
+  @param vp Vnode for which a path will be returned
+  @param label Label associated with the vnode
+
+  Determine whether the subject identified by the credential can get the path
+  of the given vnode with fsgetpath.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_vnode_check_fsgetpath_t(
+	kauth_cred_t cred,
+	struct vnode *vp,
+	struct label *label
 );
 /**
   @brief Access control check after determining the code directory hash
@@ -5090,6 +5235,25 @@ typedef int mpo_vnode_check_revoke_t(
 	kauth_cred_t cred,
 	struct vnode *vp,
 	struct label *label
+);
+/**
+  @brief Access control check for searchfs
+  @param cred Subject credential
+  @param vp Object vnode
+  @param vlabel Policy label for vp
+  @param alist List of attributes used as search criteria
+
+  Determine whether the subject identified by the credential can search the
+  vnode using the searchfs system call.
+
+  @return Return 0 if access is granted, otherwise an appropriate value for
+  errno should be returned.
+*/
+typedef int mpo_vnode_check_searchfs_t(
+	kauth_cred_t cred,
+	struct vnode *vp,
+	struct label *vlabel,
+	struct attrlist *alist
 );
 /**
   @brief Access control check for select
@@ -5775,6 +5939,26 @@ typedef int mpo_vnode_notify_create_t(
 	struct componentname *cnp
 );
 
+/**
+  @brief Inform MAC policies that a vnode has been renamed
+  @param cred User credential for the renaming process
+  @param vp Vnode that's being renamed
+  @param label Policy label for vp
+  @param dvp Parent directory for the destination
+  @param dlabel Policy label for dvp
+  @param cnp Component name for the destination
+
+  Inform MAC policies that a vnode has been renamed.
+ */
+typedef void mpo_vnode_notify_rename_t(
+	kauth_cred_t cred,
+	struct vnode *vp,
+	struct label *label,
+	struct vnode *dvp,
+	struct label *dlabel,
+	struct componentname *cnp
+);
+
 /*
  * Placeholder for future events that may need mac hooks.
  */
@@ -5783,7 +5967,7 @@ typedef void mpo_reserved_hook_t(void);
 /*!
   \struct mac_policy_ops
 */
-#define MAC_POLICY_OPS_VERSION 2 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 11 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t		*mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t		*mpo_audit_check_preselect;
@@ -6036,7 +6220,7 @@ struct mac_policy_ops {
 	mpo_task_label_init_t			*mpo_task_label_init;
 	mpo_task_label_internalize_t		*mpo_task_label_internalize;
 	mpo_task_label_update_t			*mpo_task_label_update;
-	mpo_thread_userret_t			*mpo_thread_userret;
+	mpo_iokit_check_hid_control_t	*mpo_iokit_check_hid_control;
 	mpo_vnode_check_access_t		*mpo_vnode_check_access;
 	mpo_vnode_check_chdir_t			*mpo_vnode_check_chdir;
 	mpo_vnode_check_chroot_t		*mpo_vnode_check_chroot;
@@ -6094,11 +6278,32 @@ struct mac_policy_ops {
 	mpo_vnode_check_uipc_connect_t		*mpo_vnode_check_uipc_connect;
 	mac_proc_check_run_cs_invalid_t		*mpo_proc_check_run_cs_invalid;
 	mpo_proc_check_suspend_resume_t		*mpo_proc_check_suspend_resume;
-	mpo_reserved_hook_t			*mpo_reserved5;
-	mpo_reserved_hook_t			*mpo_reserved6;
-	mpo_reserved_hook_t			*mpo_reserved7;
-	mpo_reserved_hook_t			*mpo_reserved8;
-	mpo_reserved_hook_t			*mpo_reserved9;
+	mpo_reserved_hook_t			*mpo_reserved12;
+	mpo_iokit_check_set_properties_t	*mpo_iokit_check_set_properties;
+	mpo_system_check_chud_t			*mpo_system_check_chud;
+	mpo_vnode_check_searchfs_t		*mpo_vnode_check_searchfs;
+	mpo_priv_check_t			*mpo_priv_check;
+	mpo_priv_grant_t			*mpo_priv_grant;
+	mpo_proc_check_map_anon_t		*mpo_proc_check_map_anon;
+	mpo_vnode_check_fsgetpath_t		*mpo_vnode_check_fsgetpath;
+	mpo_iokit_check_open_t			*mpo_iokit_check_open;
+	mpo_vnode_notify_rename_t		*mpo_vnode_notify_rename;
+	mpo_reserved_hook_t			*mpo_reserved14;
+	mpo_reserved_hook_t			*mpo_reserved15;
+	mpo_reserved_hook_t			*mpo_reserved16;
+	mpo_reserved_hook_t			*mpo_reserved17;
+	mpo_reserved_hook_t			*mpo_reserved18;
+	mpo_reserved_hook_t			*mpo_reserved19;
+	mpo_reserved_hook_t			*mpo_reserved20;
+	mpo_reserved_hook_t			*mpo_reserved21;
+	mpo_reserved_hook_t			*mpo_reserved22;
+	mpo_reserved_hook_t			*mpo_reserved23;
+	mpo_reserved_hook_t			*mpo_reserved24;
+	mpo_reserved_hook_t			*mpo_reserved25;
+	mpo_reserved_hook_t			*mpo_reserved26;
+	mpo_reserved_hook_t			*mpo_reserved27;
+	mpo_reserved_hook_t			*mpo_reserved28;
+	mpo_reserved_hook_t			*mpo_reserved29;
 };
 
 /**

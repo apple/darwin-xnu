@@ -31,6 +31,7 @@
 #define	_SECURITY_AUDIT_AUDIT_IOCTL_H_
 
 #define	AUDITPIPE_IOBASE	'A'
+#define	AUDITSDEV_IOBASE	'S'
 
 /*
  * Data structures used for complex ioctl arguments.  Do not change existing
@@ -78,5 +79,29 @@ struct auditpipe_ioctl_preselect {
 #define	AUDITPIPE_GET_READS		_IOR(AUDITPIPE_IOBASE, 101, u_int64_t)
 #define	AUDITPIPE_GET_DROPS		_IOR(AUDITPIPE_IOBASE, 102, u_int64_t)
 #define	AUDITPIPE_GET_TRUNCATES		_IOR(AUDITPIPE_IOBASE, 103, u_int64_t)
+
+/*
+ * Ioctls for the audit session device.
+ */
+#define	AUDITSDEV_GET_QLEN		_IOR(AUDITSDEV_IOBASE, 1, u_int)
+#define	AUDITSDEV_GET_QLIMIT		_IOR(AUDITSDEV_IOBASE, 2, u_int)
+#define	AUDITSDEV_SET_QLIMIT		_IOW(AUDITSDEV_IOBASE, 3, u_int)
+#define	AUDITSDEV_GET_QLIMIT_MIN	_IOR(AUDITSDEV_IOBASE, 4, u_int)
+#define	AUDITSDEV_GET_QLIMIT_MAX	_IOR(AUDITSDEV_IOBASE, 5, u_int)
+#define	AUDITSDEV_FLUSH			_IO(AUDITSDEV_IOBASE, 6)
+#define	AUDITSDEV_GET_MAXDATA		_IOR(AUDITSDEV_IOBASE, 7, u_int)
+
+/*
+ * Ioctls to retrieve and set the ALLSESSIONS flag in the audit session device.
+ */
+#define	AUDITSDEV_GET_ALLSESSIONS	_IOR(AUDITSDEV_IOBASE, 100, u_int)
+#define	AUDITSDEV_SET_ALLSESSIONS	_IOW(AUDITSDEV_IOBASE, 101, u_int)
+
+/*
+ * Ioctls to retrieve audit sessions device statistics.
+ */
+#define	AUDITSDEV_GET_INSERTS		_IOR(AUDITSDEV_IOBASE, 200, u_int64_t)
+#define	AUDITSDEV_GET_READS		_IOR(AUDITSDEV_IOBASE, 201, u_int64_t)
+#define	AUDITSDEV_GET_DROPS		_IOR(AUDITSDEV_IOBASE, 202, u_int64_t)
 
 #endif /* _SECURITY_AUDIT_AUDIT_IOCTL_H_ */

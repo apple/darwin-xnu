@@ -246,6 +246,7 @@ extern void		lapic_shutdown(void);
 extern void		lapic_smm_restore(void);
 extern boolean_t	lapic_probe(void);
 extern void		lapic_dump(void);
+extern void		lapic_cpu_map_dump(void);
 extern int		lapic_interrupt(
 				int interrupt, x86_saved_state_t *state);
 extern void		lapic_end_of_interrupt(void);
@@ -256,6 +257,7 @@ extern void		lapic_send_ipi(int cpu, int interupt);
 extern int		lapic_to_cpu[];
 extern int		cpu_to_lapic[];
 extern int		lapic_interrupt_base;
+extern void		lapic_cpu_map_init(void);
 extern void		lapic_cpu_map(int lapic, int cpu_num);
 extern uint32_t		ml_get_apicid(uint32_t cpu);
 extern uint32_t		ml_get_cpuid(uint32_t lapic_index);

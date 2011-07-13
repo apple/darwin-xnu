@@ -47,32 +47,32 @@ struct kxld_symtab {
     KXLDDict name_index;
     char *strings;
     u_int strsize;
+    boolean_t cxx_index_initialized;
+    boolean_t name_index_initialized;
 };
 
 /*******************************************************************************
 * Prototypes
 *******************************************************************************/
 
-static kern_return_t init_macho(KXLDSymtab *symtab, u_char *macho, 
-    struct symtab_command *src, kxld_addr_t linkedit_offset, boolean_t is_32_bit)
-    __attribute__((nonnull));
+static kern_return_t init_macho(KXLDSymtab *symtab, struct symtab_command *src,
+    u_char *macho, KXLDSeg * kernel_linkedit_seg,
+    boolean_t is_32_bit)
+    __attribute__((nonnull(1,2)));
 
 #if KXLD_USER_OR_ILP32
-static kern_return_t init_syms_32(KXLDSymtab *symtab, u_char *macho, u_long offset, 
+static kern_return_t init_syms_32(KXLDSymtab *symtab, u_char *macho, u_long offset,
     u_int nsyms);
 #endif
 #if KXLD_USER_OR_LP64
-static kern_return_t init_syms_64(KXLDSymtab *symtab, u_char *macho, u_long offset, 
+static kern_return_t init_syms_64(KXLDSymtab *symtab, u_char *macho, u_long offset,
     u_int nsyms);
 #endif
 
-static kern_return_t make_cxx_index(KXLDSymtab *symtab)
+static void restrict_private_symbols(KXLDSymtab *symtab)
     __attribute__((nonnull));
 static boolean_t sym_is_defined_cxx(const KXLDSym *sym);
-static kern_return_t make_name_index(KXLDSymtab *symtab)
-    __attribute__((nonnull));
 static boolean_t sym_is_name_indexed(const KXLDSym *sym);
-
 
 /*******************************************************************************
 *******************************************************************************/
@@ -86,10 +86,11 @@ kxld_symtab_sizeof()
 /*******************************************************************************
 *******************************************************************************/
 kern_return_t
-kxld_symtab_init_from_macho_32(KXLDSymtab *symtab, u_char *macho, 
-    struct symtab_command *src, kxld_addr_t linkedit_offset)
+kxld_symtab_init_from_macho_32(KXLDSymtab *symtab, struct symtab_command *src,
+    u_char *macho, KXLDSeg * kernel_linkedit_seg)
 {
-    return init_macho(symtab, macho, src, linkedit_offset, TRUE);
+    return init_macho(symtab, src, macho, kernel_linkedit_seg,
+        /* is_32_bit */ TRUE);
 }
 #endif /* KXLD_USER_ILP32 */
 
@@ -97,24 +98,28 @@ kxld_symtab_init_from_macho_32(KXLDSymtab *symtab, u_char *macho,
 /*******************************************************************************
 *******************************************************************************/
 kern_return_t
-kxld_symtab_init_from_macho_64(KXLDSymtab *symtab, u_char *macho, 
-    struct symtab_command *src, kxld_addr_t linkedit_offset)
+kxld_symtab_init_from_macho_64(KXLDSymtab *symtab, struct symtab_command *src,
+    u_char *macho, KXLDSeg * kernel_linkedit_seg)
 {
-    return init_macho(symtab, macho, src, linkedit_offset, FALSE);
+    return init_macho(symtab, src, macho, kernel_linkedit_seg,
+        /* is_32_bit */ FALSE);
 }
 #endif /* KXLD_USER_OR_LP64 */
 
 /*******************************************************************************
 *******************************************************************************/
 static kern_return_t
-init_macho(KXLDSymtab *symtab, u_char *macho, struct symtab_command *src,
-    kxld_addr_t linkedit_offset, boolean_t is_32_bit __unused)
+init_macho(KXLDSymtab *symtab, struct symtab_command *src,
+    u_char *macho, KXLDSeg * kernel_linkedit_seg,
+    boolean_t is_32_bit __unused)
 {
     kern_return_t rval = KERN_FAILURE;
+	u_long symoff;
+    u_char * macho_or_linkedit = macho;
 
     check(symtab);
-    check(macho);
     check(src);
+    check(macho);
 
     /* Initialize the symbol array */
 
@@ -123,26 +128,45 @@ init_macho(KXLDSymtab *symtab, u_char *macho, struct symtab_command *src,
 
     /* Initialize the string table */
 
-    symtab->strings = (char *) (macho + src->stroff + linkedit_offset);
+	if (kernel_linkedit_seg) {
+
+       /* If initing the kernel file in memory, we can't trust
+        * the symtab offsets directly, because the kernel file has been mapped
+        * into memory and the mach-o offsets are disk-based.
+        *
+        * The symoff is an offset relative to the linkedit segment
+        * so we just subtract the fileoffset of the linkedit segment
+        * to get its relative start.
+        *
+        * The strings table is an actual pointer, so we calculate that from
+        * the linkedit's vmaddr.
+        *
+        * Further, the init_syms_... functions need an adjusted base
+        * pointer instead of the beginning of the macho, so we substitute
+        * the base of the linkedit segment.
+        */
+
+		symoff = (u_long)(src->symoff - kernel_linkedit_seg->fileoff);
+		symtab->strings = (char *)(uintptr_t)kernel_linkedit_seg->base_addr +
+            src->stroff - kernel_linkedit_seg->fileoff;
+        macho_or_linkedit = (u_char *)(uintptr_t)kernel_linkedit_seg->base_addr;
+	} else {
+		symoff = (u_long)src->symoff;
+		symtab->strings = (char *) (macho + src->stroff);
+    }
+
     symtab->strsize = src->strsize;
 
     /* Initialize the symbols */
 
     KXLD_3264_FUNC(is_32_bit, rval,
         init_syms_32, init_syms_64,
-        symtab, macho, (u_long) (src->symoff + linkedit_offset), src->nsyms);
+        symtab, macho_or_linkedit, symoff, src->nsyms);
     require_noerr(rval, finish);
+
+    /* Some symbols must be forced private for compatibility */
+    (void) restrict_private_symbols(symtab);
        
-    /* Create the C++ index */
-
-    rval = make_cxx_index(symtab);
-    require_noerr(rval, finish);
-
-    /* Create the name index */
-
-    rval = make_name_index(symtab);
-    require_noerr(rval, finish);
-
     /* Save the output */
 
     rval = KERN_SUCCESS;
@@ -153,6 +177,7 @@ finish:
 
 #if KXLD_USER_OR_ILP32
 /*******************************************************************************
+* In the running kernel, 'macho' is actually the start of the linkedit segment.
 *******************************************************************************/
 static kern_return_t
 init_syms_32(KXLDSymtab *symtab, u_char *macho, u_long offset, u_int nsyms)
@@ -179,6 +204,7 @@ finish:
 
 #if KXLD_USER_OR_LP64
 /*******************************************************************************
+* In the running kernel, 'macho' is actually the start of the linkedit segment.
 *******************************************************************************/
 static kern_return_t
 init_syms_64(KXLDSymtab *symtab, u_char *macho, u_long offset, u_int nsyms)
@@ -202,6 +228,41 @@ finish:
     return rval;
 }
 #endif /* KXLD_USER_OR_LP64 */
+
+/*******************************************************************************
+* Temporary workaround for PR-6668105 
+* new, new[], delete, and delete[] may be overridden globally in a kext.
+* We should do this with some sort of weak symbols, but we'll use a whitelist 
+* for now to minimize risk.  
+*******************************************************************************/
+static void
+restrict_private_symbols(KXLDSymtab *symtab)
+{
+    const char *private_symbols[] = {
+        KXLD_KMOD_INFO_SYMBOL,
+        KXLD_OPERATOR_NEW_SYMBOL,
+        KXLD_OPERATOR_NEW_ARRAY_SYMBOL,
+        KXLD_OPERATOR_DELETE_SYMBOL,
+        KXLD_OPERATOR_DELETE_ARRAY_SYMBOL
+    };
+    KXLDSymtabIterator iter;
+    KXLDSym *sym = NULL;
+    const char *name = NULL;
+    u_int i = 0;
+
+    kxld_symtab_iterator_init(&iter, symtab, kxld_sym_is_exported, FALSE);
+    while ((sym = kxld_symtab_iterator_get_next(&iter))) {
+        for (i = 0; i < const_array_len(private_symbols); ++i) {
+            name = private_symbols[i];
+            if (!streq(sym->name, name)) {
+                continue;
+            }
+
+            kxld_sym_mark_private(sym);
+        }
+    }
+}
+
 
 /*******************************************************************************
 *******************************************************************************/
@@ -229,6 +290,10 @@ kxld_symtab_clear(KXLDSymtab *symtab)
     kxld_array_clear(&symtab->syms);
     kxld_dict_clear(&symtab->cxx_index);
     kxld_dict_clear(&symtab->name_index);
+    symtab->strings = NULL;
+    symtab->strsize = 0;
+    symtab->cxx_index_initialized = 0;
+    symtab->name_index_initialized = 0;
 }
 
 /*******************************************************************************
@@ -241,6 +306,7 @@ kxld_symtab_deinit(KXLDSymtab *symtab)
     kxld_array_deinit(&symtab->syms);
     kxld_dict_deinit(&symtab->cxx_index);
     kxld_dict_deinit(&symtab->name_index);
+    bzero(symtab, sizeof(*symtab));
 }
 
 /*******************************************************************************
@@ -265,8 +331,28 @@ kxld_symtab_get_symbol_by_index(const KXLDSymtab *symtab, u_int idx)
 
 /*******************************************************************************
 *******************************************************************************/
-KXLDSym *
+KXLDSym * 
 kxld_symtab_get_symbol_by_name(const KXLDSymtab *symtab, const char *name)
+{
+    KXLDSym *sym = NULL;
+    u_int i = 0;
+
+    for (i = 0; i < symtab->syms.nitems; ++i) {
+        sym = kxld_array_get_item(&symtab->syms, i);
+
+        if (streq(sym->name, name)) {
+            return sym;
+        }
+    }
+    
+    return NULL;
+}
+
+/*******************************************************************************
+*******************************************************************************/
+KXLDSym *
+kxld_symtab_get_locally_defined_symbol_by_name(const KXLDSymtab *symtab, 
+    const char *name)
 {
     check(symtab);
     check(name);
@@ -281,14 +367,7 @@ kxld_symtab_get_cxx_symbol_by_value(const KXLDSymtab *symtab, kxld_addr_t value)
 {
     check(symtab);
 
-    /*
-     * value may hold a THUMB address (with bit 0 set to 1) but the index will
-     * have the real address (bit 0 set to 0).  So if bit 0 is set here,
-     * we clear it (should impact no architectures but ARM).
-     */
-    kxld_addr_t v = value & ~1;
-
-    return kxld_dict_find(&symtab->cxx_index, &v);
+    return kxld_dict_find(&symtab->cxx_index, &value);
 }
 
 /*******************************************************************************
@@ -319,8 +398,7 @@ kxld_symtab_get_macho_header_size(void)
 /*******************************************************************************
 *******************************************************************************/
 u_long 
-kxld_symtab_get_macho_data_size(const KXLDSymtab *symtab, 
-    boolean_t is_link_state, boolean_t is_32_bit)
+kxld_symtab_get_macho_data_size(const KXLDSymtab *symtab, boolean_t is_32_bit)
 {
     KXLDSymtabIterator iter;
     KXLDSym *sym = NULL;
@@ -329,12 +407,8 @@ kxld_symtab_get_macho_data_size(const KXLDSymtab *symtab,
     
     check(symtab); 
 
-    if (is_link_state) {
-        kxld_symtab_iterator_init(&iter, symtab, kxld_sym_is_exported, FALSE);
-    } else {
-        kxld_symtab_iterator_init(&iter, symtab, 
-            kxld_sym_is_defined_locally, FALSE);
-    }
+    kxld_symtab_iterator_init(&iter, symtab, 
+        kxld_sym_is_defined_locally, FALSE);
 
     while ((sym = kxld_symtab_iterator_get_next(&iter))) {
         size += strlen(sym->name) + 1;
@@ -356,7 +430,7 @@ kern_return_t
 kxld_symtab_export_macho(const KXLDSymtab *symtab, u_char *buf, 
     u_long *header_offset, u_long header_size,
     u_long *data_offset, u_long data_size,
-    boolean_t is_link_state, boolean_t is_32_bit)
+    boolean_t is_32_bit)
 {
     kern_return_t rval = KERN_FAILURE;
     KXLDSymtabIterator iter;
@@ -386,12 +460,8 @@ kxld_symtab_export_macho(const KXLDSymtab *symtab, u_char *buf,
     
     /* Find the size of the symbol and string tables */
 
-    if (is_link_state) {
-        kxld_symtab_iterator_init(&iter, symtab, kxld_sym_is_exported, FALSE);
-    } else {
-        kxld_symtab_iterator_init(&iter, symtab, 
-            kxld_sym_is_defined_locally, FALSE);
-    }
+    kxld_symtab_iterator_init(&iter, symtab, 
+        kxld_sym_is_defined_locally, FALSE);
 
     while ((sym = kxld_symtab_iterator_get_next(&iter))) {
         symtabhdr->nsyms++;
@@ -421,7 +491,7 @@ kxld_symtab_export_macho(const KXLDSymtab *symtab, u_char *buf,
 
         KXLD_3264_FUNC(is_32_bit, rval,
             kxld_sym_export_macho_32, kxld_sym_export_macho_64,
-            sym, nl, strtab, &stroff, symtabhdr->strsize, is_link_state);
+            sym, nl, strtab, &stroff, symtabhdr->strsize);
         require_noerr(rval, finish);
 
         nl += nlistsize;
@@ -447,8 +517,6 @@ kxld_symtab_iterator_get_num_remaining(const KXLDSymtabIterator *iter)
 
     check(iter);
 
-    idx = iter->idx;
-
     for (idx = iter->idx; idx < iter->symtab->syms.nitems; ++idx) {
         count += iter->test(kxld_array_get_item(&iter->symtab->syms, idx));
     }
@@ -458,8 +526,8 @@ kxld_symtab_iterator_get_num_remaining(const KXLDSymtabIterator *iter)
 
 /*******************************************************************************
 *******************************************************************************/
-static kern_return_t
-make_cxx_index(KXLDSymtab *symtab)
+kern_return_t
+kxld_symtab_index_cxx_symbols_by_value(KXLDSymtab *symtab)
 {
     kern_return_t rval = KERN_FAILURE;
     KXLDSymtabIterator iter;
@@ -467,6 +535,11 @@ make_cxx_index(KXLDSymtab *symtab)
     u_int nsyms = 0;
 
     check(symtab);
+
+    if (symtab->cxx_index_initialized) {
+        rval = KERN_SUCCESS;
+        goto finish;
+    }
 
     /* Count the number of C++ symbols */
     kxld_symtab_iterator_init(&iter, symtab, sym_is_defined_cxx, FALSE);
@@ -483,10 +556,9 @@ make_cxx_index(KXLDSymtab *symtab)
         require_noerr(rval, finish);
     }
 
+    symtab->cxx_index_initialized = TRUE;
     rval = KERN_SUCCESS;
-
 finish:
-
     return rval;
 }
 
@@ -500,8 +572,8 @@ sym_is_defined_cxx(const KXLDSym *sym)
 
 /*******************************************************************************
 *******************************************************************************/
-static kern_return_t
-make_name_index(KXLDSymtab *symtab)
+kern_return_t
+kxld_symtab_index_symbols_by_name(KXLDSymtab *symtab)
 {
     kern_return_t rval = KERN_FAILURE;
     KXLDSymtabIterator iter;
@@ -509,6 +581,11 @@ make_name_index(KXLDSymtab *symtab)
     u_int nsyms = 0;
 
     check(symtab);
+
+    if (symtab->name_index_initialized) {
+        rval = KERN_SUCCESS;
+        goto finish;
+    }
 
     /* Count the number of symbols we need to index by name */
     kxld_symtab_iterator_init(&iter, symtab, sym_is_name_indexed, FALSE);
@@ -525,23 +602,18 @@ make_name_index(KXLDSymtab *symtab)
         require_noerr(rval, finish);
     }
 
+    symtab->name_index_initialized = TRUE;
     rval = KERN_SUCCESS;
-
 finish:
 
     return rval;
 }
-
 /*******************************************************************************
 *******************************************************************************/
 static boolean_t
 sym_is_name_indexed(const KXLDSym *sym)
 {
-    return (kxld_sym_is_vtable(sym)                     ||
-        streq_safe(sym->name, KXLD_KMOD_INFO_SYMBOL, 
-            const_strlen(KXLD_KMOD_INFO_SYMBOL))        ||
-        streq_safe(sym->name, KXLD_WEAK_TEST_SYMBOL,
-            const_strlen(KXLD_WEAK_TEST_SYMBOL)));
+    return (kxld_sym_is_defined_locally(sym) && !kxld_sym_is_stab(sym));
 }
 
 /*******************************************************************************

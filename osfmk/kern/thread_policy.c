@@ -38,6 +38,14 @@ static void
 thread_recompute_priority(
 	thread_t		thread);
 
+#if CONFIG_EMBEDDED
+static void
+thread_throttle(
+	thread_t		thread,
+	integer_t		task_priority);
+
+extern int mach_do_background_thread(thread_t thread, int prio);
+#endif
 
 
 kern_return_t
@@ -86,37 +94,40 @@ thread_policy_set_internal(
 			timeshare = info->timeshare;
 		}
 
+		if (!SCHED(supports_timeshare_mode)())
+			timeshare = FALSE;
+		
 		s = splsched();
 		thread_lock(thread);
 
-		if (!(thread->sched_mode & TH_MODE_FAILSAFE)) {
-			integer_t	oldmode = (thread->sched_mode & TH_MODE_TIMESHARE);
+		if (!(thread->sched_flags & TH_SFLAG_DEMOTED_MASK)) {
+			integer_t	oldmode = (thread->sched_mode == TH_MODE_TIMESHARE);
 
-			thread->sched_mode &= ~TH_MODE_REALTIME;
+			if (timeshare) {
+				thread->sched_mode = TH_MODE_TIMESHARE;
 
-			if (timeshare && !oldmode) {
-				thread->sched_mode |= TH_MODE_TIMESHARE;
-
-				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
-					sched_share_incr();
+				if (!oldmode) {
+					if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+						sched_share_incr();
+				}
 			}
-			else
-			if (!timeshare && oldmode) {
-				thread->sched_mode &= ~TH_MODE_TIMESHARE;
+			else {
+				thread->sched_mode = TH_MODE_FIXED;
 
-				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
-					sched_share_decr();
+				if (oldmode) {
+					if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+						sched_share_decr();
+				}
 			}
 
 			thread_recompute_priority(thread);
 		}
 		else {
-			thread->safe_mode &= ~TH_MODE_REALTIME;
 
 			if (timeshare)
-				thread->safe_mode |= TH_MODE_TIMESHARE;
+				thread->saved_mode = TH_MODE_TIMESHARE;
 			else
-				thread->safe_mode &= ~TH_MODE_TIMESHARE;
+				thread->saved_mode = TH_MODE_FIXED;
 		}
 
 		thread_unlock(thread);
@@ -150,19 +161,22 @@ thread_policy_set_internal(
 		thread->realtime.constraint = info->constraint;
 		thread->realtime.preemptible = info->preemptible;
 
-		if (!(thread->sched_mode & TH_MODE_FAILSAFE)) {
-			if (thread->sched_mode & TH_MODE_TIMESHARE) {
-				thread->sched_mode &= ~TH_MODE_TIMESHARE;
-
+		if (thread->sched_flags & TH_SFLAG_DEMOTED_MASK) {
+			thread->saved_mode = TH_MODE_REALTIME;
+		}
+#if CONFIG_EMBEDDED
+		else if (thread->task_priority <= MAXPRI_THROTTLE) {
+			thread->saved_mode = TH_MODE_REALTIME;
+			thread->sched_flags |= TH_SFLAG_THROTTLED;		
+		}
+#endif
+		else {
+			if (thread->sched_mode == TH_MODE_TIMESHARE) {
 				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
 					sched_share_decr();
 			}
-			thread->sched_mode |= TH_MODE_REALTIME;
+			thread->sched_mode = TH_MODE_REALTIME;
 			thread_recompute_priority(thread);
-		}
-		else {
-			thread->safe_mode &= ~TH_MODE_TIMESHARE;
-			thread->safe_mode |= TH_MODE_REALTIME;
 		}
 
 		thread_unlock(thread);
@@ -217,6 +231,19 @@ thread_policy_set_internal(
 		thread_mtx_unlock(thread);
 		return thread_affinity_set(thread, info->affinity_tag);
 	}
+
+#if CONFIG_EMBEDDED
+	case THREAD_BACKGROUND_POLICY:
+	{
+		thread_background_policy_t	info;
+
+		info = (thread_background_policy_t) policy_info;
+
+		thread_mtx_unlock(thread);
+		return mach_do_background_thread(thread, info->priority);
+	}
+#endif /* CONFIG_EMBEDDED */
+
 	default:
 		result = KERN_INVALID_ARGUMENT;
 		break;
@@ -232,7 +259,7 @@ thread_recompute_priority(
 {
 	integer_t		priority;
 
-	if (thread->sched_mode & TH_MODE_REALTIME)
+	if (thread->sched_mode == TH_MODE_REALTIME)
 		priority = BASEPRI_RTQUEUES;
 	else {
 		if (thread->importance > MAXPRI)
@@ -250,10 +277,74 @@ thread_recompute_priority(
 		else
 		if (priority < MINPRI)
 			priority = MINPRI;
+#if CONFIG_EMBEDDED
+		/* No one can have a base priority less than MAXPRI_THROTTLE */
+		if (priority < MAXPRI_THROTTLE) 
+			priority = MAXPRI_THROTTLE;
+#endif /* CONFIG_EMBEDDED */
 	}
 
 	set_priority(thread, priority);
 }
+
+#if CONFIG_EMBEDDED
+static void
+thread_throttle(
+	thread_t		thread,
+	integer_t		task_priority)
+{
+	if (!(thread->sched_flags & TH_SFLAG_THROTTLED) && 
+		(task_priority <= MAXPRI_THROTTLE)) {
+
+		if (!((thread->sched_mode == TH_MODE_REALTIME) ||
+			  (thread->saved_mode == TH_MODE_REALTIME))) {
+			return;
+		}
+
+		/* Demote to timeshare if throttling */
+		if (thread->sched_mode == TH_MODE_REALTIME)		
+		{
+			thread->saved_mode = TH_MODE_REALTIME;
+
+			if (thread->sched_mode == TH_MODE_TIMESHARE) {
+				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+					sched_share_incr();
+			}
+		}
+
+		/* TH_SFLAG_FAILSAFE and TH_SFLAG_THROTTLED are mutually exclusive,
+		 * since a throttled thread is not realtime during the throttle
+		 * and doesn't need the failsafe repromotion. We therefore clear
+		 * the former and set the latter flags here.
+		 */
+		thread->sched_flags &= ~TH_SFLAG_FAILSAFE;
+		thread->sched_flags |= TH_SFLAG_THROTTLED;
+		
+		if (SCHED(supports_timeshare_mode)())
+			thread->sched_mode = TH_MODE_TIMESHARE;
+		else
+			thread->sched_mode = TH_MODE_FIXED;
+	}
+	else if ((thread->sched_flags & TH_SFLAG_THROTTLED) &&
+			 (task_priority > MAXPRI_THROTTLE)) {
+
+		/* Promote back to real time if unthrottling */
+		if (!(thread->saved_mode == TH_MODE_TIMESHARE)) {
+
+			thread->sched_mode = thread->saved_mode;
+
+			if (thread->sched_mode == TH_MODE_TIMESHARE) {
+				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
+					sched_share_decr();
+			}
+			
+			thread->saved_mode = TH_MODE_NONE;
+		}
+
+		thread->sched_flags &= ~TH_SFLAG_THROTTLED;
+	}	
+}
+#endif
 
 void
 thread_task_priority(
@@ -267,6 +358,10 @@ thread_task_priority(
 
 	s = splsched();
 	thread_lock(thread);
+
+#if CONFIG_EMBEDDED
+	thread_throttle(thread, priority);
+#endif
 
 	thread->task_priority = priority;
 	thread->max_priority = max_priority;
@@ -286,19 +381,20 @@ thread_policy_reset(
 	s = splsched();
 	thread_lock(thread);
 
-	if (!(thread->sched_mode & TH_MODE_FAILSAFE)) {
-		thread->sched_mode &= ~TH_MODE_REALTIME;
+	if (!(thread->sched_flags & TH_SFLAG_DEMOTED_MASK)) {
+		sched_mode_t oldmode = thread->sched_mode;
+		
+		thread->sched_mode = SCHED(initial_thread_sched_mode)(thread->task);
 
-		if (!(thread->sched_mode & TH_MODE_TIMESHARE)) {
-			thread->sched_mode |= TH_MODE_TIMESHARE;
+		if ((oldmode != TH_MODE_TIMESHARE) && (thread->sched_mode == TH_MODE_TIMESHARE)) {
 
 			if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
 				sched_share_incr();
 		}
 	}
 	else {
-		thread->safe_mode = 0;
-		thread->sched_mode &= ~TH_MODE_FAILSAFE;
+		thread->saved_mode = TH_MODE_NONE;
+		thread->sched_flags &= ~TH_SFLAG_DEMOTED_MASK;
 	}
 
 	thread->importance = 0;
@@ -340,12 +436,12 @@ thread_policy_get(
 			s = splsched();
 			thread_lock(thread);
 
-			if (	!(thread->sched_mode & TH_MODE_REALTIME)	&&
-					!(thread->safe_mode & TH_MODE_REALTIME)			) {
-				if (!(thread->sched_mode & TH_MODE_FAILSAFE))
-					timeshare = (thread->sched_mode & TH_MODE_TIMESHARE) != 0;
+			if (	 (thread->sched_mode != TH_MODE_REALTIME)	&&
+					 (thread->saved_mode != TH_MODE_REALTIME)			) {
+				if (!(thread->sched_flags & TH_SFLAG_DEMOTED_MASK))
+					timeshare = (thread->sched_mode == TH_MODE_TIMESHARE) != 0;
 				else
-					timeshare = (thread->safe_mode & TH_MODE_TIMESHARE) != 0;
+					timeshare = (thread->saved_mode == TH_MODE_TIMESHARE) != 0;
 			}
 			else
 				*get_default = TRUE;
@@ -379,8 +475,8 @@ thread_policy_get(
 			s = splsched();
 			thread_lock(thread);
 
-			if (	(thread->sched_mode & TH_MODE_REALTIME)	||
-					(thread->safe_mode & TH_MODE_REALTIME)		) {
+			if (	(thread->sched_mode == TH_MODE_REALTIME)	||
+					(thread->saved_mode == TH_MODE_REALTIME)		) {
 				info->period = thread->realtime.period;
 				info->computation = thread->realtime.computation;
 				info->constraint = thread->realtime.constraint;
@@ -395,8 +491,8 @@ thread_policy_get(
 
 		if (*get_default) {
 			info->period = 0;
-			info->computation = std_quantum / 2;
-			info->constraint = std_quantum;
+			info->computation = default_timeshare_computation;
+			info->constraint = default_timeshare_constraint;
 			info->preemptible = TRUE;
 		}
 

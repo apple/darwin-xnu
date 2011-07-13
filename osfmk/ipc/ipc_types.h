@@ -70,6 +70,7 @@ typedef struct ipc_kmsg *ipc_kmsg_t;
 #define	IKM_NULL	((ipc_kmsg_t) 0)
 
 typedef	void (*mach_msg_continue_t)(mach_msg_return_t);	/* after wakeup */
+#define	MACH_MSG_CONTINUE_NULL	((mach_msg_continue_t) 0)
 
 #else	/* MACH_KERNEL_PRIVATE */
 

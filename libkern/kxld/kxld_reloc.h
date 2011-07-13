@@ -37,16 +37,23 @@
 #endif
 
 struct kxld_array;
+struct kxld_dict;
+struct kxld_sect;
+struct kxld_seg;
 struct kxld_sym;
 struct kxld_symtab;
+struct kxld_vtable;
+struct relocation_info;
+
 typedef struct kxld_relocator KXLDRelocator;
 typedef struct kxld_reloc KXLDReloc;
 
 typedef boolean_t (*RelocHasPair)(u_int r_type);
 typedef boolean_t (*RelocIsPair)(u_int r_type, u_int prev_r_type);
 typedef boolean_t (*RelocHasGot)(u_int r_type);
-typedef kern_return_t(*ProcessReloc)(u_char *instruction, u_int length, u_int pcrel, 
-    kxld_addr_t base_pc, kxld_addr_t link_pc, kxld_addr_t link_disp, u_int type, 
+typedef kern_return_t(*ProcessReloc)(const KXLDRelocator *relocator, 
+    u_char *instruction, u_int length, u_int pcrel, kxld_addr_t base_pc, 
+    kxld_addr_t link_pc, kxld_addr_t link_disp, u_int type, 
     kxld_addr_t target, kxld_addr_t pair_target, boolean_t swap);
 
 struct kxld_relocator {
@@ -54,6 +61,12 @@ struct kxld_relocator {
     RelocIsPair reloc_is_pair;
     RelocHasGot reloc_has_got;
     ProcessReloc process_reloc;
+    const struct kxld_symtab *symtab;
+    const struct kxld_array *sectarray;
+    const struct kxld_dict *vtables;
+    const struct kxld_vtable *current_vtable;
+    u_char *file;
+    u_int function_align; /* Power of two alignment of functions */
     boolean_t is_32_bit;
     boolean_t swap;
 };
@@ -69,18 +82,12 @@ struct kxld_reloc {
     u_int pcrel:1;
 };
 
-struct kxld_array;
-struct kxld_sect;
-struct kxld_seg;
-struct kxld_symtab;
-struct relocation_info;
-
 /*******************************************************************************
 * Constructors and Destructors
 *******************************************************************************/
-
-kern_return_t kxld_relocator_init(KXLDRelocator *relocator, cpu_type_t cputype,
-    cpu_subtype_t cpusubtype, boolean_t swap)
+kern_return_t kxld_relocator_init(KXLDRelocator *relocator, u_char *file,
+    const struct kxld_symtab *symtab, const struct kxld_array *sectarray, 
+    cpu_type_t cputype, cpu_subtype_t cpusubtype, boolean_t swap)
     __attribute__((nonnull,visibility("hidden")));
 
 kern_return_t kxld_reloc_create_macho(struct kxld_array *relocarray,
@@ -104,10 +111,13 @@ boolean_t kxld_relocator_is_pair(const KXLDRelocator *relocator, u_int r_type,
 boolean_t kxld_relocator_has_got(const KXLDRelocator *relocator, u_int r_type)
     __attribute__((pure, nonnull,visibility("hidden")));
 
+kxld_addr_t kxld_relocator_get_pointer_at_addr(const KXLDRelocator *relocator,
+    const u_char *data, u_long offset)
+    __attribute__((pure, nonnull,visibility("hidden")));
+
 struct kxld_sym * kxld_reloc_get_symbol(const KXLDRelocator *relocator,
-    const KXLDReloc *reloc, u_char *data, 
-    const struct kxld_symtab *symtab)
-    __attribute__((pure, nonnull(1,2,4), visibility("hidden")));
+    const KXLDReloc *reloc, const u_char *data)
+    __attribute__((pure, nonnull(1,2), visibility("hidden")));
 
 kern_return_t kxld_reloc_get_reloc_index_by_offset(const struct kxld_array *relocs, 
     kxld_size_t offset, u_int *idx)
@@ -124,16 +134,18 @@ KXLDReloc * kxld_reloc_get_reloc_by_offset(const struct kxld_array *relocs,
 kern_return_t kxld_reloc_update_symindex(KXLDReloc *reloc, u_int symindex)
     __attribute__((nonnull,visibility("hidden")));
 
-kern_return_t kxld_relocator_process_sect_reloc(const KXLDRelocator *relocator,
-    const KXLDReloc *reloc, const struct kxld_sect *sect,
-    const struct kxld_array *sectarray, const struct kxld_symtab *symtab)
+void kxld_relocator_set_vtables(KXLDRelocator *relocator, 
+    const struct kxld_dict *vtables)
     __attribute__((nonnull,visibility("hidden")));
 
-kern_return_t kxld_relocator_process_table_reloc(const KXLDRelocator *relocator,
-    const KXLDReloc *reloc, const struct kxld_seg *seg, u_char *file, 
-    const struct kxld_array *sectarray, 
-    const struct kxld_symtab *symtab)
+kern_return_t kxld_relocator_process_sect_reloc(KXLDRelocator *relocator,
+    const KXLDReloc *reloc, const struct kxld_sect *sect)
+    __attribute__((nonnull,visibility("hidden")));
+
+kern_return_t kxld_relocator_process_table_reloc(KXLDRelocator *relocator,
+    const KXLDReloc *reloc, const struct kxld_seg *seg, kxld_addr_t link_addr)
     __attribute__((nonnull,visibility("hidden")));
 
 #endif /* _KXLD_RELOC_H */
+
 

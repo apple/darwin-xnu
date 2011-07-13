@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -241,7 +241,7 @@ semaphore_destroy(
 		task_unlock(task);
 		return KERN_INVALID_ARGUMENT;
 	}
-	remqueue(&task->semaphore_list, (queue_entry_t) semaphore);
+	remqueue((queue_entry_t) semaphore);
 	semaphore->owner = TASK_NULL;
 	task->semaphores_owned--;
 	task_unlock(task);

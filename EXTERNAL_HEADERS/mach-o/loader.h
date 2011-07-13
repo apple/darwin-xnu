@@ -197,6 +197,12 @@ struct mach_header_64 {
 					   load the main executable at a
 					   random address.  Only used in
 					   MH_EXECUTE filetypes. */
+#define MH_NO_HEAP_EXECUTION 0x1000000	/* When this bit is set, the OS will
+					   run the main executable with
+					   a non-executable heap even on
+					   platforms (e.g. i386) that don't
+					   require it. Only used in MH_EXECUTE
+					   filetypes. */
 
 /*
  * The load commands directly follow the mach_header.  The total size of all

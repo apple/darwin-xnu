@@ -97,10 +97,10 @@ int RouterMix = RT_MIX_DEFAULT; /* default for nbr of ppsec */
 SYSCTL_INT(_net_appletalk, OID_AUTO, routermix, CTLFLAG_WR, 
 			&RouterMix, 0, "Appletalk RouterMix");
 at_ddp_stats_t at_ddp_stats;		/* DDP statistics */
-SYSCTL_STRUCT(_net_appletalk, OID_AUTO, ddpstats, CTLFLAG_RD,
+SYSCTL_STRUCT(_net_appletalk, OID_AUTO, ddpstats, CTLFLAG_RD | CTLFLAG_LOCKED,
 	      &at_ddp_stats, at_ddp_stats, "AppleTalk DDP Stats");
 extern int atp_resp_seqno2big;
-SYSCTL_INT(_net_appletalk, OID_AUTO, atp_resp_seqno2big, CTLFLAG_RD,
+SYSCTL_INT(_net_appletalk, OID_AUTO, atp_resp_seqno2big, CTLFLAG_RD | CTLFLAG_LOCKED,
                         &atp_resp_seqno2big, 0, "Appletalk ATP seqno too big count");
 
 static void ioccmd_t_32_to_64( ioccmd_t *from_p, user_ioccmd_t *to_p );

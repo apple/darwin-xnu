@@ -33,3 +33,4 @@ security/mac_pipe.c					optional config_macf
 security/mac_iokit.c					optional config_macf
 security/mac_file.c					optional config_macf
 security/mac_inet.c					optional config_macf_net
+security/mac_priv.c					optional config_macf

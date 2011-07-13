@@ -236,12 +236,14 @@ divert_packet(struct mbuf *m, int incoming, int port, int rule)
 		/* Find IP address for receive interface */
 		ifnet_lock_shared(m->m_pkthdr.rcvif);
 		TAILQ_FOREACH(ifa, &m->m_pkthdr.rcvif->if_addrhead, ifa_link) {
-			if (ifa->ifa_addr == NULL)
+			IFA_LOCK(ifa);
+			if (ifa->ifa_addr->sa_family != AF_INET) {
+				IFA_UNLOCK(ifa);
 				continue;
-			if (ifa->ifa_addr->sa_family != AF_INET)
-				continue;
+			}
 			divsrc.sin_addr =
 			    ((struct sockaddr_in *) ifa->ifa_addr)->sin_addr;
+			IFA_UNLOCK(ifa);
 			break;
 		}
 		ifnet_lock_done(m->m_pkthdr.rcvif);
@@ -314,14 +316,10 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 	struct ip *const ip = mtod(m, struct ip *);
 	struct sockaddr_in *sin = (struct sockaddr_in *)addr;
 	int error = 0;
-#if PKT_PRIORITY
-	mbuf_traffic_class_t mtc = MBUF_TC_NONE;
-#endif /* PKT_PRIORITY */
+	mbuf_traffic_class_t mtc = MBUF_TC_UNSPEC;
 
 	if (control != NULL) {
-#if PKT_PRIORITY
 		mtc = mbuf_traffic_class_from_control(control);
-#endif /* PKT_PRIORITY */
 
 		m_freem(control);		/* XXX */
 	}
@@ -332,8 +330,8 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 		int	len = 0;
 		char	*c = sin->sin_zero;
 
-		mtag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_DIVERT,
-				sizeof(struct divert_tag), M_NOWAIT);
+		mtag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_DIVERT,
+				sizeof(struct divert_tag), M_NOWAIT, m);
 		if (mtag == NULL) {
 			error = ENOBUFS;
 			goto cantsend;
@@ -359,8 +357,9 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 
 	/* Reinject packet into the system as incoming or outgoing */
 	if (!sin || sin->sin_addr.s_addr == 0) {
-		struct ip_out_args ipoa = { IFSCOPE_NONE };
+		struct ip_out_args ipoa = { IFSCOPE_NONE, 0 };
 		struct route ro;
+		struct ip_moptions *imo;
 
 		/*
 		 * Don't allow both user specified and setsockopt options,
@@ -382,10 +381,11 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 		/* Copy the cached route and take an extra reference */
 		inp_route_copyout(inp, &ro);
 
-#if PKT_PRIORITY
-		set_traffic_class(m, so, mtc);
-#endif /* PKT_PRIORITY */
+		set_packet_tclass(m, so, mtc, 0);
 
+		imo = inp->inp_moptions;
+		if (imo != NULL)
+			IMO_ADDREF(imo);
 		socket_unlock(so, 0);
 #if CONFIG_MACF_NET
 		mac_mbuf_label_associate_inpcb(inp, m);
@@ -394,9 +394,11 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 		error = ip_output(m, inp->inp_options, &ro,
 			(so->so_options & SO_DONTROUTE) |
 			IP_ALLOWBROADCAST | IP_RAWOUTPUT | IP_OUTARGS,
-			inp->inp_moptions, &ipoa);
+			imo, &ipoa);
 
 		socket_lock(so, 0);
+		if (imo != NULL)
+			IMO_REMREF(imo);
 		/* Synchronize cached PCB route */
 		inp_route_copyin(inp, &ro);
 	} else {
@@ -417,7 +419,7 @@ div_output(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 				goto cantsend;
 			}
 			m->m_pkthdr.rcvif = ifa->ifa_ifp;
-			ifafree(ifa);
+			IFA_REMREF(ifa);
 		}
 #if CONFIG_MACF_NET
 		mac_mbuf_label_associate_socket(so, m);
@@ -462,7 +464,7 @@ div_attach(struct socket *so, int proto, struct proc *p)
 
 #ifdef MORE_DICVLOCK_DEBUG
 	printf("div_attach: so=%p sopcb=%p lock=%x ref=%x\n",
-			so, so->so_pcb, ((struct inpcb *)so->so_pcb)->inpcb_mtx, so->so_usecount);
+			so, so->so_pcb, &(((struct inpcb *)so->so_pcb)->inpcb_mtx), so->so_usecount);
 #endif
 	return 0;
 }
@@ -474,7 +476,7 @@ div_detach(struct socket *so)
 
 #ifdef MORE_DICVLOCK_DEBUG
 	printf("div_detach: so=%p sopcb=%p lock=%x ref=%x\n",
-			so, so->so_pcb, ((struct inpcb *)so->so_pcb)->inpcb_mtx, so->so_usecount);
+			so, so->so_pcb, &(((struct inpcb *)so->so_pcb)->inpcb_mtx), so->so_usecount);
 #endif
 	inp = sotoinpcb(so);
 	if (inp == 0)
@@ -656,11 +658,11 @@ div_lock(struct socket *so, int refcount, void *lr)
 #ifdef MORE_DICVLOCK_DEBUG
 	printf("div_lock: so=%p sopcb=%p lock=%p ref=%x lr=%p\n",
 	    so, so->so_pcb, so->so_pcb ?
-	    ((struct inpcb *)so->so_pcb)->inpcb_mtx : NULL,
+	    &(((struct inpcb *)so->so_pcb)->inpcb_mtx) : NULL,
 	    so->so_usecount, lr_saved);
 #endif
 	if (so->so_pcb) {
-		lck_mtx_lock(((struct inpcb *)so->so_pcb)->inpcb_mtx);
+		lck_mtx_lock(&((struct inpcb *)so->so_pcb)->inpcb_mtx);
 	} else  {
 		panic("div_lock: so=%p NO PCB! lr=%p lrh= lrh= %s\n", 
 		    so, lr_saved, solockhistory_nr(so));
@@ -697,7 +699,7 @@ div_unlock(struct socket *so, int refcount, void *lr)
 #ifdef MORE_DICVLOCK_DEBUG
 	printf("div_unlock: so=%p sopcb=%p lock=%p ref=%x lr=%p\n",
 	    so, so->so_pcb, so->so_pcb ?
-	    ((struct inpcb *)so->so_pcb)->inpcb_mtx : NULL,
+	    &(((struct inpcb *)so->so_pcb)->inpcb_mtx) : NULL,
 	    so->so_usecount, lr_saved);
 #endif
 	if (refcount)
@@ -713,7 +715,7 @@ div_unlock(struct socket *so, int refcount, void *lr)
 		    so, so->so_usecount, lr_saved, solockhistory_nr(so));
 		/* NOTREACHED */
 	}
-	mutex_held = ((struct inpcb *)so->so_pcb)->inpcb_mtx;
+	mutex_held = &((struct inpcb *)so->so_pcb)->inpcb_mtx;
 
 	if (so->so_usecount == 0 && (inp->inp_wantcnt == WNT_STOPUSING)) {
 		lck_rw_lock_exclusive(divcbinfo.mtx);
@@ -739,7 +741,7 @@ div_getlock(struct socket *so, __unused int locktype)
 		if (so->so_usecount < 0)
 			panic("div_getlock: so=%p usecount=%x lrh= %s\n", 
 			    so, so->so_usecount, solockhistory_nr(so));
-		return(inpcb->inpcb_mtx);
+		return(&inpcb->inpcb_mtx);
 	} else {
 		panic("div_getlock: so=%p NULL NO PCB lrh= %s\n", 
 		    so, solockhistory_nr(so));

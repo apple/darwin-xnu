@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -134,7 +134,7 @@ struct	unpcb {
 	unp_gen_t	unp_gencnt;	/* generation count of this instance */
 	int		unp_flags;	/* flags */
 	struct xucred	unp_peercred;	/* peer credentials, if applicable */
-	lck_mtx_t 	*unp_mtx;	/* per unpcb lock */
+	decl_lck_mtx_data( ,unp_mtx);	/* per unpcb lock */
 	int		rw_thrcount;    /* disconnect should wait for this count to become zero */
 };
 #endif /* KERNEL */
@@ -155,6 +155,7 @@ struct	unpcb {
 #define UNP_HAVEPC			0x0001
 #define UNP_HAVEPCCACHED		0x0002
 #define UNP_DONTDISCONNECT		0x0004
+#define	UNP_TRACE_MDNS			0x1000
 
 #ifdef KERNEL
 struct  unpcb_compat {

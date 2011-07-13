@@ -30,6 +30,41 @@
 # Use is subject to license terms.
 #
 
+
+# usage function - defines all the options that can be given to this script.
+function usage {
+	echo "Usage"
+	echo "$0 [-l] [-h] [name of test]"
+	echo "-l               : This option runs the lmbench tests along with the default libmicro tests."
+	echo "-h               : Help. This option displays information on how to run the script. "
+	echo "[name of test]   : This option runs only the test that is specified"
+	echo ""
+	echo "Examples"
+	echo "$0               : This is the defualt execution. This will run only the default libmicro tests."
+	echo "$0 -l            : This will run the lmbench tests too "
+	echo "$0 getppid       : This will run only the getppid tests"
+	exit
+	
+}
+
+if [ $# -eq 1 ]
+then 
+	lmbench=2    # to check if only a single test is to be run. e.g, ./bench.sh getppid
+else
+	lmbench=0    # to run the default libMicro tests, without the lmbench tests.
+fi
+
+while getopts "lh" OPT_LIST
+do
+	case $OPT_LIST in 
+		l) lmbench=1;;    # to run the libmicro tests including the lmbench tests.
+		h) usage;;
+		*) usage;;
+	esac
+done
+
+
+
 tattle="./tattle"
 
 bench_version=0.4.0
@@ -121,6 +156,7 @@ printf "!Machine_name: %30s\n" "$hostname"
 printf "!OS_name:      %30s\n" `uname -s`
 printf "!OS_release:   %30s\n" `sw_vers -productVersion`
 printf "!OS_build:     %30.18s\n" "`sw_vers -buildVersion`"
+printf "!Kernel:       %30.50s\n" "`uname -v|cut -d ' ' -f 11`"
 printf "!Processor:    %30s\n" `arch`
 printf "!#CPUs:        %30s\n" $p_count
 printf "!CPU_MHz:      %30s\n" "$p_mhz"
@@ -174,10 +210,24 @@ do
 		;;
 
 	*$1*)
+		# Default execution without the lmbench tests. 
+		# checks if there is no argument passed by the user.
+		if [  $lmbench -eq 0 ]
+		then
+			string=lmbench
+			if [ "${A:0:7}" == "$string" ]
+			then
+				continue
+			fi
+		fi
+			
 		;;
-
-	*)
-		continue
+	
+	*)		
+		if [ $lmbench -ne 1 ]
+		then
+			continue
+		fi
 		;;
 	esac
 

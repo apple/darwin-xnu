@@ -1008,6 +1008,45 @@ typedef enum dtrace_activity {
 #define DTRACE_DOF_MODE_LAZY_ON		1
 #define DTRACE_DOF_MODE_LAZY_OFF	2
 #define DTRACE_DOF_MODE_NON_LAZY	3
+
+/*
+ * dtrace kernel symbol modes are used to control when the kernel may dispose of
+ * symbol information used by the fbt/sdt provider. The kernel itself, as well as
+ * every kext, has symbol table/nlist info that has historically been preserved
+ * for dtrace's use. This allowed dtrace to be lazy about allocating fbt/sdt probes,
+ * at the expense of keeping the symbol info in the kernel permanently.
+ *
+ * Starting in 10.7+, fbt probes may be created from userspace, in the same
+ * fashion as pid probes. The kernel allows dtrace "first right of refusal"
+ * whenever symbol data becomes available (such as a kext load). If dtrace is
+ * active, it will immediately read/copy the needed data, and then the kernel
+ * may free it. If dtrace is not active, it returns immediately, having done
+ * no work or allocations, and the symbol data is freed. Should dtrace need
+ * this data later, it is expected that the userspace client will push the
+ * data into the kernel via ioctl calls.
+ *
+ * The kernel symbol modes are used to control what dtrace does with symbol data:
+ *
+ * DTRACE_KERNEL_SYMBOLS_NEVER			Effectively disables fbt/sdt
+ * DTRACE_KERNEL_SYMBOLS_FROM_KERNEL		Immediately read/copy symbol data
+ * DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE		Wait for symbols from userspace
+ * DTRACE_KERNEL_SYMBOLS_ALWAYS_FROM_KERNEL	Immediately read/copy symbol data
+ *
+ * It is legal to transition between DTRACE_KERNEL_SYMBOLS_FROM_KERNEL and 
+ * DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE. The DTRACE_KERNEL_SYMBOLS_NEVER and
+ * DTRACE_KERNEL_SYMBOLS_ALWAYS_FROM_KERNEL are permanent modes, intended to
+ * disable fbt probes entirely, or prevent any symbols being loaded from
+ * userspace.
+*
+ * The kernel symbol mode is kept in dtrace_kernel_symbol_mode, which is protected
+ * by the dtrace_lock.
+ */
+
+#define DTRACE_KERNEL_SYMBOLS_NEVER 			0
+#define DTRACE_KERNEL_SYMBOLS_FROM_KERNEL		1
+#define DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE		2
+#define DTRACE_KERNEL_SYMBOLS_ALWAYS_FROM_KERNEL	3
+	
 #endif /* __APPLE__ */
 
 /*

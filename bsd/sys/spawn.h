@@ -58,6 +58,15 @@
  */
 #define	POSIX_SPAWN_SETEXEC		0x0040
 #define	POSIX_SPAWN_START_SUSPENDED	0x0080
+#ifdef	PRIVATE
+#define	_POSIX_SPAWN_DISABLE_ASLR	0x0100
+#define	_POSIX_SPAWN_ALLOW_DATA_EXEC	0x2000
+#define	POSIX_SPAWN_OSX_TALAPP_START	0x0400
+#define	POSIX_SPAWN_OSX_WIDGET_START	0x0800
+#define	POSIX_SPAWN_OSX_DBCLIENT_START	0x0800		/* not a bug, same as widget just rename */
+#define	POSIX_SPAWN_IOS_APP_START	0x1000
+#endif	/* PRIVATE */
+#define	POSIX_SPAWN_CLOEXEC_DEFAULT	0x4000
 
 /*
  * Possible values to be set for the process control actions on resource starvation.

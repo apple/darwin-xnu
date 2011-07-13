@@ -164,6 +164,12 @@
 #define	__unused
 #endif
 
+#if defined(__GNUC__) && __GNUC__ >= 4
+#define __used __attribute__((__used__))
+#else
+#define __used
+#endif
+
 /*
  * GCC 2.95 provides `__restrict' as an extension to C90 to support the
  * C99-specific `restrict' type qualifier.  We happen to use `__restrict' as
@@ -196,7 +202,7 @@
 #define __scanflike(fmtarg, firstvararg)
 #endif
 
-#define __IDSTRING(name,string) static const char name[] __unused = string
+#define __IDSTRING(name,string) static const char name[] __used = string
 
 #ifndef __COPYRIGHT
 #define __COPYRIGHT(s) __IDSTRING(copyright,s)
@@ -215,7 +221,7 @@
 #endif
 
 /*
- * COMPILATION ENVIRONMENTS
+ * COMPILATION ENVIRONMENTS -- see compat(5) for additional detail
  *
  * DEFAULT	By default newly complied code will get POSIX APIs plus
  *		Apple API extensions in scope.
@@ -259,24 +265,24 @@
 #define	__DARWIN_SUF_DARWIN10	"_darwin10"
 #define	__DARWIN10_ALIAS(sym)	__asm("_" __STRING(sym) __DARWIN_SUF_DARWIN10)
 #else /* !KERNEL */
-#ifdef PRODUCT_AppleTV
-/* Product: AppleTV */
+#ifdef PLATFORM_iPhoneOS
+/* Platform: iPhoneOS */
 #define __DARWIN_ONLY_64_BIT_INO_T	1
 #define __DARWIN_ONLY_UNIX_CONFORMANCE	1
 #define __DARWIN_ONLY_VERS_1050		1
-#endif /* PRODUCT_AppleTV */
-#ifdef PRODUCT_iPhone
-/* Product: iPhone */
+#endif /* PLATFORM_iPhoneOS */
+#ifdef PLATFORM_iPhoneSimulator
+/* Platform: iPhoneSimulator */
 #define __DARWIN_ONLY_64_BIT_INO_T	1
 #define __DARWIN_ONLY_UNIX_CONFORMANCE	1
 #define __DARWIN_ONLY_VERS_1050		1
-#endif /* PRODUCT_iPhone */
-#ifdef PRODUCT_MacOSX
-/* Product: MacOSX */
+#endif /* PLATFORM_iPhoneSimulator */
+#ifdef PLATFORM_MacOSX
+/* Platform: MacOSX */
 #define __DARWIN_ONLY_64_BIT_INO_T	0
 /* #undef __DARWIN_ONLY_UNIX_CONFORMANCE (automatically set for 64-bit) */
 #define __DARWIN_ONLY_VERS_1050		0
-#endif /* PRODUCT_MacOSX */
+#endif /* PLATFORM_MacOSX */
 #endif /* KERNEL */
 
 /*
@@ -313,6 +319,8 @@
 #      error "Can't define _NONSTD_SOURCE when only UNIX conformance is available."
 #    endif /* _NONSTD_SOURCE */
 #    define __DARWIN_UNIX03	1
+#  elif defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0) < 1040)
+#    define __DARWIN_UNIX03	0
 #  elif defined(_DARWIN_C_SOURCE) || defined(_XOPEN_SOURCE) || defined(_POSIX_C_SOURCE)
 #    if defined(_NONSTD_SOURCE)
 #      error "Can't define both _NONSTD_SOURCE and any of _DARWIN_C_SOURCE, _XOPEN_SOURCE or _POSIX_C_SOURCE."
@@ -438,13 +446,19 @@
 /*
  * symbol release macros
  */
-#if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && ((__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0) < 1060)
-#undef __DARWIN_10_6_AND_LATER
-#define __DARWIN_10_6_AND_LATER_ALIAS(x)	/* nothing */
-#else /* 10.6 and beyond */
-#define __DARWIN_10_6_AND_LATER
-#define __DARWIN_10_6_AND_LATER_ALIAS(x)	x
+#ifdef KERNEL
+#define __DARWIN_ALIAS_STARTING(_mac, _iphone, x)
+#else
+#include <sys/_symbol_aliasing.h>
+
+#if defined(__IPHONE_OS_VERSION_MIN_REQUIRED)
+#define __DARWIN_ALIAS_STARTING(_mac, _iphone, x)   __DARWIN_ALIAS_STARTING_IPHONE_##_iphone(x)
+#elif defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__)
+#define __DARWIN_ALIAS_STARTING(_mac, _iphone, x)   __DARWIN_ALIAS_STARTING_MAC_##_mac(x)
+#else
+#define __DARWIN_ALIAS_STARTING(_mac, _iphone, x)
 #endif
+#endif /* KERNEL */
 
 
 /*
@@ -460,6 +474,7 @@
  *  _POSIX_C_SOURCE == 199506L		1003.1c-1995, 1003.1i-1995,
  *					and the omnibus ISO/IEC 9945-1: 1996
  *  _POSIX_C_SOURCE == 200112L		1003.1-2001
+ *  _POSIX_C_SOURCE == 200809L		1003.1-2008
  *
  * In addition, the X/Open Portability Guide, which is now the Single UNIX
  * Specification, defines a feature-test macro which indicates the version of
@@ -480,10 +495,13 @@
 
 /* Deal with various X/Open Portability Guides and Single UNIX Spec. */
 #ifdef _XOPEN_SOURCE
-#if _XOPEN_SOURCE - 0L >= 600L
+#if _XOPEN_SOURCE - 0L >= 700L && (!defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE - 0L < 200809L)
+#undef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE         200809L
+#elif _XOPEN_SOURCE - 0L >= 600L && (!defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE - 0L < 200112L)
 #undef _POSIX_C_SOURCE
 #define	_POSIX_C_SOURCE		200112L
-#elif _XOPEN_SOURCE - 0L >= 500L
+#elif _XOPEN_SOURCE - 0L >= 500L && (!defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE - 0L < 199506L)
 #undef _POSIX_C_SOURCE
 #define	_POSIX_C_SOURCE		199506L
 #endif
@@ -496,6 +514,44 @@
 #if defined(_POSIX_SOURCE) && !defined(_POSIX_C_SOURCE)
 #define _POSIX_C_SOURCE         198808L
 #endif
+
+/*
+ * Deprecation macro
+ */
+#if defined(__GNUC__) && ((__GNUC__ >= 4) || ((__GNUC__ == 3) && (__GNUC_MINOR__ >= 1)))
+#define __deprecated __attribute__((deprecated))
+#define __unavailable __attribute__((unavailable))
+#else
+#define __deprecated /* nothing */
+#define __unavailable /* nothing */
+#endif
+
+/* POSIX C deprecation macros */
+#ifdef KERNEL
+#define __POSIX_C_DEPRECATED(ver)
+#else
+#include <sys/_posix_availability.h>
+
+#define __POSIX_C_DEPRECATED(ver) ___POSIX_C_DEPRECATED_STARTING_##ver
+#endif
+
+/*
+ * Set a single macro which will always be defined and can be used to determine
+ * the appropriate namespace.  For POSIX, these values will correspond to
+ * _POSIX_C_SOURCE value.  Currently there are two additional levels corresponding
+ * to ANSI (_ANSI_SOURCE) and Darwin extensions (_DARWIN_C_SOURCE)
+ */
+#define __DARWIN_C_ANSI         010000L
+#define __DARWIN_C_FULL         900000L
+
+#if   defined(_ANSI_SOURCE)
+#define __DARWIN_C_LEVEL        __DARWIN_C_ANSI
+#elif defined(_POSIX_C_SOURCE) && !defined(_DARWIN_C_SOURCE) && !defined(_NONSTD_SOURCE)
+#define __DARWIN_C_LEVEL        _POSIX_C_SOURCE
+#else
+#define __DARWIN_C_LEVEL        __DARWIN_C_FULL
+#endif
+
 
 /*
  * long long is not supported in c89 (__STRICT_ANSI__), but g++ -ansi and
@@ -512,36 +568,12 @@
  * long doubles.  This applies only to ppc; i386 already has long double
  * support, while ppc64 doesn't have any backwards history.
  */
-#if   defined(__ppc__)
-#  if defined(__LDBL_MANT_DIG__) && defined(__DBL_MANT_DIG__) && \
-	__LDBL_MANT_DIG__ > __DBL_MANT_DIG__
-#    if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__-0 < 1040
-#      define	__DARWIN_LDBL_COMPAT(x)	__asm("_" __STRING(x) "$LDBLStub")
-#    else
-#      define	__DARWIN_LDBL_COMPAT(x)	__asm("_" __STRING(x) "$LDBL128")
-#    endif
-#    define	__DARWIN_LDBL_COMPAT2(x) __asm("_" __STRING(x) "$LDBL128")
-#    define	__DARWIN_LONG_DOUBLE_IS_DOUBLE	0
-#  else
-#   define	__DARWIN_LDBL_COMPAT(x) /* nothing */
-#   define	__DARWIN_LDBL_COMPAT2(x) /* nothing */
-#   define	__DARWIN_LONG_DOUBLE_IS_DOUBLE	1
-#  endif
-#elif defined(__i386__) || defined(__ppc64__) || defined(__x86_64__)
+#if   defined(__i386__) || defined(__x86_64__)
 #  define	__DARWIN_LDBL_COMPAT(x)	/* nothing */
 #  define	__DARWIN_LDBL_COMPAT2(x) /* nothing */
 #  define	__DARWIN_LONG_DOUBLE_IS_DOUBLE	0
 #else
 #  error Unknown architecture
-#endif
-
-/*
- * Deprecation macro
- */
-#if __GNUC__ >= 3
-#define __deprecated __attribute__((deprecated))
-#else
-#define __deprecated /* nothing */
 #endif
 
 /*****************************************
@@ -605,7 +637,7 @@
  * catastrophic run-time failures.
  */
 #ifndef __CAST_AWAY_QUALIFIER
-#define __CAST_AWAY_QUALIFIER(variable, qualifier, type)  (type) ((char *)0 + ((qualifier char *)(variable) - (qualifier char *)0) ) 
+#define __CAST_AWAY_QUALIFIER(variable, qualifier, type)  (type) (long)(variable)
 #endif
 
 #endif /* !_CDEFS_H_ */

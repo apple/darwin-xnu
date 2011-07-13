@@ -79,6 +79,8 @@
 
 /* for modulo comparisons of timestamps */
 #define TSTMP_LT(a,b)	((int)((a)-(b)) < 0)
+#define TSTMP_GT(a,b)	((int)((a)-(b)) > 0)
+#define TSTMP_LEQ(a,b)	((int)((a)-(b)) <= 0)
 #define TSTMP_GEQ(a,b)	((int)((a)-(b)) >= 0)
 
 /*

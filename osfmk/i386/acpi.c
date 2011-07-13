@@ -32,10 +32,13 @@
 #include <i386/misc_protos.h>
 #include <i386/mp.h>
 #include <i386/cpu_data.h>
+#if CONFIG_MTRR
 #include <i386/mtrr.h>
+#endif
 #if CONFIG_VMX
 #include <i386/vmx/vmx_cpu.h>
 #endif
+#include <i386/ucode.h>
 #include <i386/acpi.h>
 #include <i386/fpu.h>
 #include <i386/lapic.h>
@@ -51,6 +54,7 @@
 
 #include <kern/cpu_data.h>
 #include <console/serial_protos.h>
+#include <machine/pal_routines.h>
 #include <vm/vm_page.h>
 
 #if HIBERNATION
@@ -103,7 +107,6 @@ acpi_hibernate(void *refcon)
 #if defined(__i386__)
 		cpu_IA32e_enable(current_cpu_datap());
 #endif
-
 		mode = hibernate_write_image();
 
 		if( mode == kIOHibernatePostWriteHalt )
@@ -145,7 +148,8 @@ acpi_hibernate(void *refcon)
 #endif /* CONFIG_SLEEP */
 #endif /* HIBERNATION */
 
-extern void		slave_pstart(void);
+extern void			slave_pstart(void);
+
 
 void
 acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
@@ -161,8 +165,8 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	uint64_t	my_tsc;
 	uint64_t	my_abs;
 
-	kprintf("acpi_sleep_kernel hib=%d\n",
-			current_cpu_datap()->cpu_hibernate);
+	kprintf("acpi_sleep_kernel hib=%d, cpu=%d\n",
+			current_cpu_datap()->cpu_hibernate, cpu_number());
 
     	/* Get all CPUs to be in the "off" state */
     	my_cpu = cpu_number();
@@ -175,7 +179,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 			      rc, cpu);
 	}
 
-	/* shutdown local APIC before passing control to BIOS */
+	/* shutdown local APIC before passing control to firmware */
 	lapic_shutdown();
 
 #if HIBERNATION
@@ -238,7 +242,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	 */
 
 	if (FALSE == disable_serial_output)
-		serial_init();
+		pal_serial_init();
 
 #if HIBERNATION
 	if (current_cpu_datap()->cpu_hibernate) {
@@ -263,8 +267,13 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	mca_cpu_init();
 #endif
 
+#if CONFIG_MTRR
 	/* restore MTRR settings */
 	mtrr_update_cpu();
+#endif
+
+	/* update CPU microcode */
+	ucode_update_wake();
 
 #if CONFIG_VMX
 	/* 
@@ -273,8 +282,10 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	vmx_resume();
 #endif
 
+#if CONFIG_MTRR
 	/* set up PAT following boot processor power up */
 	pat_init();
+#endif
 
 	/*
 	 * Go through all of the CPUs and mark them as requiring

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -174,6 +174,7 @@ nfsrv_initcache(void)
  * If there is any doubt, return FALSE.
  * The AF_INET family is handled as a special case so that address mbufs
  * don't need to be saved to store "struct in_addr", which is only 4 bytes.
+ * Ditto for AF_INET6 which is only 16 bytes.
  */
 static int
 netaddr_match(
@@ -182,17 +183,22 @@ netaddr_match(
 	mbuf_t nam)
 {
 	struct sockaddr_in *inetaddr;
+	struct sockaddr_in6 *inet6addr;
 
 	switch (family) {
 	case AF_INET:
 		inetaddr = mbuf_data(nam);
-		if (inetaddr->sin_family == AF_INET &&
-		    inetaddr->sin_addr.s_addr == haddr->had_inetaddr)
+		if ((inetaddr->sin_family == AF_INET) &&
+		    (inetaddr->sin_addr.s_addr == haddr->had_inetaddr))
 			return (1);
 		break;
-	default:
+	case AF_INET6:
+		inet6addr = mbuf_data(nam);
+		if ((inet6addr->sin6_family == AF_INET6) &&
+		    !bcmp(&inet6addr->sin6_addr, &haddr->had_inet6addr, sizeof(inet6addr->sin6_addr)))
+			return (1);
 		break;
-	};
+	}
 	return (0);
 }
 
@@ -218,7 +224,7 @@ nfsrv_getcache(
 {
 	struct nfsrvcache *rp;
 	struct nfsm_chain nmrep;
-	struct sockaddr_in *saddr;
+	struct sockaddr *saddr;
 	int ret, error;
 
 	/*
@@ -232,7 +238,7 @@ loop:
 	for (rp = NFSRCHASH(nd->nd_retxid)->lh_first; rp != 0;
 	    rp = rp->rc_hash.le_next) {
 	    if (nd->nd_retxid == rp->rc_xid && nd->nd_procnum == rp->rc_proc &&
-		netaddr_match(AF_INET, &rp->rc_haddr, nd->nd_nam)) {
+		netaddr_match(rp->rc_family, &rp->rc_haddr, nd->nd_nam)) {
 			if ((rp->rc_flag & RC_LOCKED) != 0) {
 				rp->rc_flag |= RC_WANTED;
 				msleep(rp, nfsrv_reqcache_mutex, PZERO-1, "nfsrc", NULL);
@@ -323,10 +329,15 @@ loop:
 	rp->rc_state = RC_INPROG;
 	rp->rc_xid = nd->nd_retxid;
 	saddr = mbuf_data(nd->nd_nam);
-	switch (saddr->sin_family) {
+	rp->rc_family = saddr->sa_family;
+	switch (saddr->sa_family) {
 	case AF_INET:
 		rp->rc_flag |= RC_INETADDR;
-		rp->rc_inetaddr = saddr->sin_addr.s_addr;
+		rp->rc_inetaddr = ((struct sockaddr_in*)saddr)->sin_addr.s_addr;
+		break;
+	case AF_INET6:
+		rp->rc_flag |= RC_INETADDR;
+		rp->rc_inet6addr = ((struct sockaddr_in6*)saddr)->sin6_addr;
 		break;
 	default:
 		error = mbuf_copym(nd->nd_nam, 0, MBUF_COPYALL, MBUF_WAITOK, &rp->rc_nam);
@@ -366,7 +377,7 @@ loop:
 	for (rp = NFSRCHASH(nd->nd_retxid)->lh_first; rp != 0;
 	    rp = rp->rc_hash.le_next) {
 	    if (nd->nd_retxid == rp->rc_xid && nd->nd_procnum == rp->rc_proc &&
-		netaddr_match(AF_INET, &rp->rc_haddr, nd->nd_nam)) {
+		netaddr_match(rp->rc_family, &rp->rc_haddr, nd->nd_nam)) {
 			if ((rp->rc_flag & RC_LOCKED) != 0) {
 				rp->rc_flag |= RC_WANTED;
 				msleep(rp, nfsrv_reqcache_mutex, PZERO-1, "nfsrc", NULL);

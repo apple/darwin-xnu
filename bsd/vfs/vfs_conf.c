@@ -86,8 +86,8 @@ struct mount *rootfs;
 struct vnode *rootvnode;
 
 #ifdef CONFIG_IMGSRC_ACCESS
-struct vnode *imgsrc_rootvnode;
-#endif /* IMGSRC_ACESS */
+struct vnode *imgsrc_rootvnodes[MAX_IMAGEBOOT_NESTING];	/* [0] -> source volume, [1] -> first disk image */
+#endif /* CONFIG_IMGSRC_ACCESS */
 
 int (*mountroot)(void) = NULL;
 
@@ -102,7 +102,6 @@ extern	struct vfsops nfs_vfsops;
 extern	int nfs_mountroot(void);
 extern	struct vfsops afs_vfsops;
 extern	struct vfsops null_vfsops;
-extern	struct vfsops union_vfsops;
 extern	struct vfsops devfs_vfsops;
 
 /*
@@ -117,7 +116,7 @@ typedef int (*mountroot_t)(mount_t, vnode_t, vfs_context_t);
 static struct vfstable vfstbllist[] = {
 	/* HFS/HFS+ Filesystem */
 #if HFS
-	{ &hfs_vfsops, "hfs", 17, 0, (MNT_LOCAL | MNT_DOVOLFS), hfs_mountroot, NULL, 0, 0, VFC_VFSLOCALARGS | VFC_VFSREADDIR_EXTENDED | VFS_THREAD_SAFE_FLAG | VFC_VFS64BITREADY | VFC_VFSVNOP_PAGEOUTV2, NULL, 0},
+	{ &hfs_vfsops, "hfs", 17, 0, (MNT_LOCAL | MNT_DOVOLFS), hfs_mountroot, NULL, 0, 0, VFC_VFSLOCALARGS | VFC_VFSREADDIR_EXTENDED | VFS_THREAD_SAFE_FLAG | VFC_VFS64BITREADY | VFC_VFSVNOP_PAGEOUTV2 | VFC_VFSVNOP_PAGEINV2, NULL, 0},
 #endif
 
 	/* Memory-based Filesystem */
@@ -139,18 +138,6 @@ static struct vfstable vfstbllist[] = {
 	{ &afs_vfsops, "andrewfs", 13, 0, 0, afs_mountroot, NULL, 0, 0, VFC_VFSGENERICARGS , NULL, 0},
 #endif
 #endif /* __LP64__ */
-
-	/* Loopback (Minimal) Filesystem Layer */
-#ifndef __LP64__
-#if NULLFS
-	{ &null_vfsops, "loopback", 9, 0, 0, NULL, NULL, 0, 0, VFC_VFSGENERICARGS , NULL, 0},
-#endif
-#endif /* __LP64__ */
-
-	/* Union (translucent) Filesystem */
-#if UNION
-	{ &union_vfsops, "unionfs", 15, 0, 0, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFS_THREAD_SAFE_FLAG | VFC_VFS64BITREADY, NULL, 0},
-#endif
 
 	/* Device Filesystem */
 #if DEVFS
@@ -214,7 +201,6 @@ extern struct vnodeopv_desc hfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc hfs_std_vnodeop_opv_desc;
 extern struct vnodeopv_desc hfs_specop_opv_desc;
 extern struct vnodeopv_desc hfs_fifoop_opv_desc;
-extern struct vnodeopv_desc union_vnodeop_opv_desc;
 extern struct vnodeopv_desc devfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc devfs_spec_vnodeop_opv_desc;
 #if FDESC
@@ -241,9 +227,6 @@ struct vnodeopv_desc *vfs_opv_descs[] = {
 	&fifo_nfsv4nodeop_opv_desc,
 #endif
 #endif
-#if NULLFS
-	&null_vnodeop_opv_desc,
-#endif
 #if HFS
 	&hfs_vnodeop_opv_desc,
 	&hfs_std_vnodeop_opv_desc,
@@ -251,9 +234,6 @@ struct vnodeopv_desc *vfs_opv_descs[] = {
 #if FIFO
 	&hfs_fifoop_opv_desc,
 #endif
-#endif
-#if UNION
-	&union_vnodeop_opv_desc,
 #endif
 #if DEVFS
 	&devfs_vnodeop_opv_desc,

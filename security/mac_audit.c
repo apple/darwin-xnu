@@ -74,10 +74,6 @@
 #include <kern/kalloc.h>
 #include <kern/zalloc.h>
 
-
-int mac_audit(__unused int len, __unused u_char *data);
-
-
 #if CONFIG_AUDIT
 
 /* The zone allocator is initialized in mac_base.c. */
@@ -392,13 +388,6 @@ mac_audit_check_postselect(__unused struct ucred *cred, __unused unsigned short 
 {
 
 	return (MAC_AUDIT_DEFAULT);
-}
-
-int
-mac_audit(__unused int len, __unused u_char *data)
-{
-
-	return (0);
 }
 
 int

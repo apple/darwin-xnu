@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2009, 2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -33,6 +33,10 @@ struct fileglob;
 ipc_port_t fileport_alloc(struct fileglob *);
 struct fileglob *fileport_port_to_fileglob(ipc_port_t);
 void fileport_notify(mach_msg_header_t *);
+kern_return_t fileport_invoke(task_t, mach_port_name_t,
+    int (*)(mach_port_name_t, struct fileglob *, void *), void *, int *);
+kern_return_t fileport_walk(task_t,
+    int (*)(mach_port_name_t, struct fileglob *, void *), void *);
 
 #endif /* _KERN_IPC_MISC_H_ */
 #endif /* KERNEL_PRIVATE */

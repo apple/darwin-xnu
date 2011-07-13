@@ -412,6 +412,7 @@ struct sadb_sastat {
 #define SADB_X_EXT_NATT_KEEPALIVE	0x0004	/* Local node is behind NAT, send keepalives */
 											/* Should only be set for outbound SAs */
 #define SADB_X_EXT_NATT_MULTIPLEUSERS 0x0008	/* For use on VPN server - support multiple users 	*/
+#define SADB_X_EXT_NATT_DETECTED_PEER 0x0010
 
 #endif /* PRIVATE */	
 

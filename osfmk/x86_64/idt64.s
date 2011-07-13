@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -29,7 +29,7 @@
 #include <assym.s>
 #include <mach_kdb.h>
 #include <i386/eflags.h>
-#include <i386/rtclock.h>
+#include <i386/rtclock_asm.h>
 #include <i386/trap.h>
 #define _ARCH_I386_ASM_HELP_H_	/* Prevent inclusion of user header */
 #include <mach/i386/syscall_sw.h>
@@ -81,149 +81,6 @@
 #define	HNDL_DOUBLE_FAULT	EXT(hndl_double_fault)
 #define	HNDL_MACHINE_CHECK	EXT(hndl_machine_check)
 
-/*
- * Nanosecond timing.
- */
-
-/*
- * Nanotime returned in %rax.
- * Computed from tsc based on the scale factor and an implicit 32 bit shift.
- * This code must match what _rtc_nanotime_read does in
- * machine_routines_asm.s.  Failure to do so can
- * result in "weird" timing results.
- *
- * Uses: %rsi, %rdi, %rdx, %rcx
- */
-#define NANOTIME							  \
-	movq	%gs:CPU_NANOTIME,%rdi					; \
-	RTC_NANOTIME_READ_FAST()
-
-/*
- * Add 64-bit delta in register reg to timer pointed to by register treg.
- */
-#define TIMER_UPDATE(treg,reg,offset)						  \
-	addq	reg,(offset)+TIMER_ALL(treg)		/* add timer */
-
-/*
- * Add time delta to old timer and start new.
- * Uses: %rsi, %rdi, %rdx, %rcx, %rax
- */
-#define TIMER_EVENT(old,new)						  \
-	NANOTIME				/* %rax := nanosecs */	; \
-	movq	%rax,%rsi			/* save timestamp */	; \
-	movq	%gs:CPU_ACTIVE_THREAD,%rcx		/* get thread */	; \
-	subq	(old##_TIMER)+TIMER_TSTAMP(%rcx),%rax	/* compute elapsed */	; \
-	TIMER_UPDATE(%rcx,%rax,old##_TIMER)	/* update timer */	; \
-	leaq	(new##_TIMER)(%rcx),%rcx	/* point to new timer */; \
-	movq	%rsi,TIMER_TSTAMP(%rcx)		/* set timestamp */	; \
-	movq	%gs:CPU_PROCESSOR,%rdx		/* get processor */	; \
-	movq	%rcx,THREAD_TIMER(%rdx)		/* set current timer */	; \
-	movq	%rsi,%rax			/* restore timestamp */	; \
-	subq	(old##_STATE)+TIMER_TSTAMP(%rdx),%rax	/* compute elapsed */	; \
-	TIMER_UPDATE(%rdx,%rax,old##_STATE)	/* update timer */	; \
-	leaq	(new##_STATE)(%rdx),%rcx 	/* point to new state */; \
-	movq	%rcx,CURRENT_STATE(%rdx)	/* set current state */	; \
-	movq	%rsi,TIMER_TSTAMP(%rcx)		/* set timestamp */
-
-/*
- * Update time on user trap entry.
- * Uses: %rsi, %rdi, %rdx, %rcx, %rax
- */
-#define	TIME_TRAP_UENTRY	TIMER_EVENT(USER,SYSTEM)
-
-/*
- * update time on user trap exit.
- * Uses: %rsi, %rdi, %rdx, %rcx, %rax
- */
-#define	TIME_TRAP_UEXIT		TIMER_EVENT(SYSTEM,USER)
-
-/*
- * update time on interrupt entry.
- * Uses: %rsi, %rdi, %rdx, %rcx, %rax
- * Saves processor state info on stack.
- */
-#define	TIME_INT_ENTRY							  \
-	NANOTIME				/* %rax := nanosecs */	; \
-	movq	%rax,%gs:CPU_INT_EVENT_TIME	/* save in cpu data */	; \
-	movq	%rax,%rsi			/* save timestamp */	; \
-	movq	%gs:CPU_PROCESSOR,%rdx		/* get processor */	; \
-	movq 	THREAD_TIMER(%rdx),%rcx		/* get current timer */	; \
-	subq	TIMER_TSTAMP(%rcx),%rax		/* compute elapsed */	; \
-	TIMER_UPDATE(%rcx,%rax,0)			/* update timer */	; \
-	movq	KERNEL_TIMER(%rdx),%rcx		/* get kernel timer */	; \
-	movq	%rsi,TIMER_TSTAMP(%rcx)		/* set timestamp */	; \
-	movq	%rsi,%rax			/* restore timestamp */	; \
-	movq	CURRENT_STATE(%rdx),%rcx	/* get current state */	; \
-	pushq	%rcx				/* save state */	; \
-	subq	TIMER_TSTAMP(%rcx),%rax		/* compute elapsed */	; \
-	TIMER_UPDATE(%rcx,%rax,0)			/* update timer */	; \
-	leaq	IDLE_STATE(%rdx),%rax		/* get idle state */	; \
-	cmpq	%rax,%rcx			/* compare current */	; \
-	je	0f				/* skip if equal */	; \
-	leaq	SYSTEM_STATE(%rdx),%rcx		/* get system state */	; \
-	movq	%rcx,CURRENT_STATE(%rdx)	/* set current state */	; \
-0:	movq	%rsi,TIMER_TSTAMP(%rcx)		/* set timestamp */
-
-/*
- * update time on interrupt exit.
- * Uses: %rsi, %rdi, %rdx, %rcx, %rax
- * Restores processor state info from stack.
- */
-#define	TIME_INT_EXIT							  \
-	NANOTIME				/* %rax := nanosecs */	; \
-	movq	%rax,%gs:CPU_INT_EVENT_TIME	/* save in cpu data */	; \
-	movq	%rax,%rsi			/* save timestamp */	; \
-	movq	%gs:CPU_PROCESSOR,%rdx		/* get processor */	; \
-	movq	KERNEL_TIMER(%rdx),%rcx		/* get kernel timer */	; \
-	subq	TIMER_TSTAMP(%rcx),%rax		/* compute elapsed */	; \
-	TIMER_UPDATE(%rcx,%rax,0)			/* update timer */	; \
-	movq	THREAD_TIMER(%rdx),%rcx		/* interrupted timer */	; \
-	movq	%rsi,TIMER_TSTAMP(%rcx)		/* set timestamp */	; \
-	movq	%rsi,%rax			/* restore timestamp */	; \
-	movq	CURRENT_STATE(%rdx),%rcx	/* get current state */	; \
-	subq	TIMER_TSTAMP(%rcx),%rax		/* compute elapsed */	; \
-	TIMER_UPDATE(%rcx,%rax,0)			/* update timer */	; \
-	popq	%rcx				/* restore state */	; \
-	movq	%rcx,CURRENT_STATE(%rdx)	/* set current state */	; \
-	movq	%rsi,TIMER_TSTAMP(%rcx)		/* set timestamp */
-
-/*
- * Check for vtimers for task.
- *   task_reg   is register pointing to current task
- *   thread_reg is register pointing to current thread
- */
-#define TASK_VTIMER_CHECK(task_reg,thread_reg)				  \
-	cmpl	$0,TASK_VTIMERS(task_reg)				; \
-	jz	1f							; \
-	orl	$(AST_BSD),%gs:CPU_PENDING_AST	/* Set pending AST */	; \
-	lock								; \
-	orl	$(AST_BSD),ACT_AST(thread_reg)	/* Set thread AST  */	; \
-1:									; \
-
-
-/*
- * Macros for calling into C functions.
- * The stack is 16-byte aligned by masking.
- */
-#define CCALL(fn)				 \
-	mov	%rsp, %r12			;\
-	and	$0xFFFFFFFFFFFFFFF0, %rsp	;\
-	call	EXT(fn)				;\
-	mov	%r12, %rsp
-
-#define CCALL1(fn, arg1) 			 \
-	mov	arg1, %rdi 			;\
-	CCALL(fn)
-
-#define CCALL2(fn, arg1, arg2)		 	 \
-	mov	arg1, %rdi 			;\
-	CCALL(fn)
-
-#define CCALL3(fn, arg1, arg2, arg3) 		 \
-	mov	arg1, %rdi 			;\
-	mov	arg2, %rsi 			;\
-	mov	arg3, %rdx 			;\
-	CCALL(fn)
 
 #if 1
 #define PUSH_FUNCTION(func) 			 \
@@ -287,11 +144,27 @@
  * Determine what mode has been interrupted and save state accordingly.
  */
 L_dispatch:
-	cmpq	$(KERNEL64_CS), ISF64_CS(%rsp)
+	cmpl	$(KERNEL64_CS), ISF64_CS(%rsp)
 	je	L_64bit_dispatch
 
 	swapgs
 
+	/*
+	 * Check for trap from EFI32, and restore cr3 and rsp if so.
+	 * A trap from EFI32 is fatal.
+	 */
+	cmpl	$(KERNEL32_CS), ISF64_CS(%rsp)
+	jne	L_dispatch_continue
+	push	%rcx
+	mov	EXT(pal_efi_saved_cr3)(%rip), %rcx
+	mov	%rcx, %cr3
+	leaq	0(%rip), %rcx
+	shr	$32, %rcx		/* splice the upper 32-bits of rip */
+	shl	$32, %rsp		/* .. and the lower 32-bits of rsp */
+	shrd	$32, %rcx, %rsp		/* to recover the full 64-bits of rsp */
+	pop	%rcx
+
+L_dispatch_continue:
 	cmpl	$(TASK_MAP_32BIT), %gs:CPU_TASK_MAP
 	je	L_32bit_dispatch	/* 32-bit user task */
 	/* fall through to 64bit user dispatch */
@@ -303,6 +176,8 @@ L_64bit_dispatch:
 	subq	$(ISS64_OFFSET), %rsp
 	movl	$(SS_64), SS_FLAVOR(%rsp)
 
+	cld
+	
 	/*
 	 * Save segment regs - for completeness since theyre not used.
 	 */
@@ -361,6 +236,7 @@ L_32bit_dispatch: /* 32-bit user task */
 	subq	$(ISC32_OFFSET), %rsp
 	movl	$(SS_32), SS_FLAVOR(%rsp)
 
+	cld
 	/*
 	 * Save segment regs
 	 */
@@ -426,22 +302,32 @@ L_common_dispatch:
 	je	1f
 	mov	%rcx, %cr3			/* load kernel cr3 */
 	jmp	2f				/* and skip tlb flush test */
-1:	
-	cmpl	$0, %gs:CPU_TLB_INVALID		/* flush needed? */
-	je	2f				/* - no */
-	movl	$0, %gs:CPU_TLB_INVALID 
-	mov	%cr3, %rcx
+1:
+	mov	%gs:CPU_ACTIVE_CR3+4, %rcx
+	shr	$32, %rcx
+	testl	%ecx, %ecx
+	jz	2f
+	movl	$0, %gs:CPU_TLB_INVALID
+	testl	$(1<<16), %ecx			/* Global? */
+	jz	11f
+	mov	%cr4, %rcx	/* RMWW CR4, for lack of an alternative*/
+	and	$(~CR4_PGE), %rcx
+	mov	%rcx, %cr4
+	or	$(CR4_PGE), %rcx
+	mov	%rcx, %cr4
+	jmp	2f
+
+11:	mov	%cr3, %rcx
 	mov	%rcx, %cr3
 2:
 	mov	%gs:CPU_ACTIVE_THREAD, %rcx	/* Get the active thread */
-	cmpq	$0, ACT_PCB_IDS(%rcx)	/* Is there a debug register state? */
+	cmpq	$0, TH_PCB_IDS(%rcx)	/* Is there a debug register state? */
 	je	3f
 	mov	$0, %rcx		/* If so, reset DR7 (the control) */
 	mov	%rcx, %dr7
 3:
-	addl	$1,%gs:hwIntCnt(,%ebx,4)	// Bump the trap/intr count
+	incl	%gs:hwIntCnt(,%ebx,4)		// Bump the trap/intr count
 	/* Dispatch the designated handler */
-	mov	%rsp, %rdi		/* rsp points to saved state */
 	jmp	*%rdx
 
 /*
@@ -453,7 +339,7 @@ Entry(return_to_user)
 Entry(ret_to_user)
 // XXX 'Be nice to tidy up this debug register restore sequence...
 	mov	%gs:CPU_ACTIVE_THREAD, %rdx
-	movq	ACT_PCB_IDS(%rdx),%rax	/* Obtain this thread's debug state */
+	movq	TH_PCB_IDS(%rdx),%rax	/* Obtain this thread's debug state */
 	
 	cmpq	$0,%rax			/* Is there a debug register context? */
 	je	2f 			/* branch if not */
@@ -486,21 +372,15 @@ Entry(ret_to_user)
 	 * On exiting the kernel there's no need to switch cr3 since we're
 	 * already running in the user's address space which includes the
 	 * kernel. Nevertheless, we now mark the task's cr3 as active.
-	 * However, there may be a defered tlb flush to deal with.
-	 * This is a case where another cpu modified this task's address 
-	 * space while this thread was in the kernel.
 	 * But, if no_shared_cr3 is set, we do need to switch cr3 at this point.
 	 */
 	mov	%gs:CPU_TASK_CR3, %rcx
 	mov	%rcx, %gs:CPU_ACTIVE_CR3
-	movl	%gs:CPU_TLB_INVALID, %eax
-	orl	EXT(no_shared_cr3)(%rip), %eax
-	test	%eax, %eax		/* -no_shered_cr3 or flush required? */
+	movl	EXT(no_shared_cr3)(%rip), %eax
+	test	%eax, %eax		/* -no_shared_cr3 */
 	jz	3f
-	movl	$0, %gs:CPU_TLB_INVALID
 	mov	%rcx, %cr3
 3:
-
 	mov	%gs:CPU_DR7, %rax	/* Is there a debug control register?*/
 	cmp	$0, %rax
 	je	4f
@@ -586,7 +466,7 @@ ret_to_kernel:
 	CCALL1(panic_idt64, %rsp)
 	hlt
 1:
-	cmpq	$(KERNEL64_CS), R64_CS(%rsp)
+	cmpl	$(KERNEL64_CS), R64_CS(%rsp)
 	je	2f
 	CCALL1(panic_idt64, %rsp)
 	hlt
@@ -653,7 +533,6 @@ L_sysret:
 #endif
 Entry(idt64_unix_scall)
 	swapgs				/* switch to kernel gs (cpu_data) */
-L_unix_scall_continue:
 	pushq	%rax			/* save system call number */
 	PUSH_FUNCTION(HNDL_UNIX_SCALL)
 	pushq	$(UNIX_INT)
@@ -662,7 +541,6 @@ L_unix_scall_continue:
 	
 Entry(idt64_mach_scall)
 	swapgs				/* switch to kernel gs (cpu_data) */
-L_mach_scall_continue:
 	pushq	%rax			/* save system call number */
 	PUSH_FUNCTION(HNDL_MACH_SCALL)
 	pushq	$(MACH_INT)
@@ -671,7 +549,6 @@ L_mach_scall_continue:
 	
 Entry(idt64_mdep_scall)
 	swapgs				/* switch to kernel gs (cpu_data) */
-L_mdep_scall_continue:
 	pushq	%rax			/* save system call number */
 	PUSH_FUNCTION(HNDL_MDEP_SCALL)
 	pushq	$(MACHDEP_INT)
@@ -680,7 +557,6 @@ L_mdep_scall_continue:
 	
 Entry(idt64_diag_scall)
 	swapgs				/* switch to kernel gs (cpu_data) */
-L_diag_scall_continue:
 	push	%rax			/* save system call number */
 	PUSH_FUNCTION(HNDL_DIAG_SCALL)
 	pushq	$(DIAG_INT)
@@ -688,8 +564,8 @@ L_diag_scall_continue:
 
 Entry(hi64_syscall)
 Entry(idt64_syscall)
-	swapgs				/* Kapow! get per-cpu data area */
 L_syscall_continue:
+	swapgs				/* Kapow! get per-cpu data area */
 	mov	%rsp, %gs:CPU_UBER_TMP	/* save user stack */
 	mov	%gs:CPU_UBER_ISF, %rsp	/* switch stack to pcb */
 
@@ -729,9 +605,15 @@ Entry(idt64_sysenter)
 	push	$(USER_DS)		/* ss */
 	push	%rcx			/* uesp */
 	pushf				/* flags */
+	/*
+	 * Clear, among others, the Nested Task (NT) flags bit;
+	 * this is zeroed by INT, but not by SYSENTER.
+	 */
+	push	$0
+	popf
 	push	$(SYSENTER_CS)		/* cs */ 
-	swapgs				/* switch to kernel gs (cpu_data) */
 L_sysenter_continue:
+	swapgs				/* switch to kernel gs (cpu_data) */
 	push	%rdx			/* eip */
 	push	%rax			/* err/eax - syscall code */
 	PUSH_FUNCTION(HNDL_SYSENTER)
@@ -742,16 +624,19 @@ L_sysenter_continue:
 
 Entry(idt64_page_fault)
 	PUSH_FUNCTION(HNDL_ALLTRAPS)
-	push	%rax			/* save %rax temporarily in trap slot */
+	push	$(T_PAGE_FAULT)
+	push	%rax			/* save %rax temporarily */
 	leaq	EXT(idt64_unix_scall_copy_args)(%rip), %rax
-	cmp	%rax, ISF64_RIP(%rsp)
-	jne	1f
-	add	$(ISF64_SIZE), %rsp	/* remove entire intr stack frame */
-	jmp	L_copy_args_continue	/* continue system call entry */
+	cmp	%rax, 8+ISF64_RIP(%rsp) /* fault during copy args? */
+	je	1f			/* - yes, handle copy arg fault */
+	testb	$3, 8+ISF64_CS(%rsp)	/* was trap from kernel? */
+	jz	L_kernel_trap		/* - yes, handle with care */
+	pop	%rax			/* restore %rax, swapgs, and continue */
+	swapgs
+	jmp	L_dispatch_continue
 1:
-	mov	(%rsp), %rax		/* restore %rax from trap slot */
-	movq	$(T_PAGE_FAULT), (%rsp)	/* set trap code */
-	jne	L_dispatch
+	add	$(8+ISF64_SIZE), %rsp	/* remove entire intr stack frame */
+	jmp	L_copy_args_continue	/* continue system call entry */
 
 
 /*
@@ -773,50 +658,23 @@ Entry(idt64_debug)
 	 */
 
 	push	%rax			/* save %rax temporarily */
-
-	leaq	EXT(idt64_mach_scall)(%rip), %rax
-	cmp	%rax, ISF64_RIP(%rsp)
-	jne	1f
-	pop	%rax
-	add	$(ISF64_SIZE),%rsp	/* remove entire intr stack frame */
-	jmp	L_mach_scall_continue	/* continue system call entry */
-1:
-	leaq	EXT(idt64_mdep_scall)(%rip), %rax
-	cmp	%rax, ISF64_RIP(%rsp)
-	jne	2f
-	pop	%rax
-	add	$(ISF64_SIZE),%rsp	/* remove entire intr stack frame */
-	jmp	L_mdep_scall_continue	/* continue system call entry */
-2:
-	leaq	EXT(idt64_unix_scall)(%rip), %rax
-	cmp	%rax, ISF64_RIP(%rsp)
-	jne	3f
-	pop	%rax
-	add	$(ISF64_SIZE),%rsp	/* remove entire intr stack frame */
-	jmp	L_unix_scall_continue	/* continue system call entry */
-3:
 	lea	EXT(idt64_sysenter)(%rip), %rax
-	cmp	%rax, ISF64_RIP(%rsp)
-	je	4f
+	cmp	%rax, ISF64_RIP+8(%rsp)
 	pop	%rax
-	jmp	L_dispatch
-4:
-	pop	%rax
+	jne	L_dispatch
 	/*
 	 * Interrupt stack frame has been pushed on the temporary stack.
-	 * We have to switch to pcb stack and copy eflags.
+	 * We have to switch to pcb stack and patch up the saved state.
 	 */ 
-	add	$40,%rsp		/* remove trapno/trapfn/err/rip/cs */
-	push	%rcx			/* save %rcx - user stack pointer */
-	mov	40(%rsp),%rcx		/* top of intr stack -> pcb stack */
+	mov	%rcx, ISF64_ERR(%rsp)	/* save %rcx in error slot */
+	mov	ISF64_SS+8(%rsp), %rcx	/* top of temp stack -> pcb stack */
 	xchg	%rcx,%rsp		/* switch to pcb stack */
 	push	$(USER_DS)		/* ss */
-	push	(%rcx)			/* saved %rcx into rsp slot */
-	push	8(%rcx)			/* rflags */
-	mov	(%rcx),%rcx		/* restore %rcx */
+	push	ISF64_ERR(%rcx)		/* saved %rcx into rsp slot */
+	push	ISF64_RFLAGS(%rcx)	/* rflags */
 	push	$(SYSENTER_TF_CS)	/* cs - not SYSENTER_CS for iret path */
+	mov	ISF64_ERR(%rcx),%rcx	/* restore %rcx */
 	jmp	L_sysenter_continue	/* continue sysenter entry */
-
 	
 
 Entry(idt64_double_fault)
@@ -825,9 +683,9 @@ Entry(idt64_double_fault)
 
 	push	%rax
 	leaq	EXT(idt64_syscall)(%rip), %rax
-	cmp	%rax, ISF64_RIP(%rsp)
+	cmp	%rax, ISF64_RIP+8(%rsp)
 	pop	%rax
-	jne	L_dispatch
+	jne	L_64bit_dispatch
 
 	mov	ISF64_RSP(%rsp), %rsp
 	jmp	L_syscall_continue
@@ -838,15 +696,15 @@ Entry(idt64_double_fault)
  * Check for a GP/NP fault in the kernel_return
  * sequence; if there, report it as a GP/NP fault on the user's instruction.
  *
- * rsp->     0:	trap function
- *	     8: trap code (NP or GP)
- *	    16:	segment number in error (error code)
- *	    24:	rip
- *	    32:	cs
- *	    40:	rflags 
- *	    48:	rsp
- *	    56:	ss
- *	    64:	old registers (trap is from kernel)
+ * rsp->     0 ISF64_TRAPNO:	trap code (NP or GP)
+ *	     8 ISF64_TRAPFN:	trap function
+ *	    16 ISF64_ERR:	segment number in error (error code)
+ *	    24 ISF64_RIP:	rip
+ *	    32 ISF64_CS:	cs
+ *	    40 ISF64_RFLAGS:	rflags 
+ *	    48 ISF64_RIP:	rsp
+ *	    56 ISF64_SS:	ss
+ *	    64:			old registers (trap is from kernel)
  */
 Entry(idt64_gen_prot)
 	PUSH_FUNCTION(HNDL_ALLTRAPS)
@@ -863,7 +721,7 @@ Entry(idt64_segnp)
 	pushq	$(T_SEGMENT_NOT_PRESENT)
 					/* indicate fault type */
 trap_check_kernel_exit:
-	testb	$3,32(%rsp)
+	testb	$3,ISF64_CS(%rsp)
 	jnz	L_dispatch
 	/*
 	 * trap was from kernel mode,
@@ -872,33 +730,69 @@ trap_check_kernel_exit:
 	push	%rax
 
 	leaq	EXT(ret32_iret)(%rip), %rax
-	cmp	%rax, 24+8(%rsp)
+	cmp	%rax, 8+ISF64_RIP(%rsp)
 	je	L_fault_iret
 	leaq	EXT(ret64_iret)(%rip), %rax
-	cmp	%rax, 24+8(%rsp)
+	cmp	%rax, 8+ISF64_RIP(%rsp)
 	je	L_fault_iret
 	leaq	EXT(ret32_set_ds)(%rip), %rax
-	cmp	%rax, 24+8(%rsp)
+	cmp	%rax, 8+ISF64_RIP(%rsp)
 	je	L_32bit_fault_set_seg
 	leaq	EXT(ret32_set_es)(%rip), %rax
-	cmp	%rax, 24+8(%rsp)
+	cmp	%rax, 8+ISF64_RIP(%rsp)
 	je	L_32bit_fault_set_seg
 	leaq	EXT(ret32_set_fs)(%rip), %rax
-	cmp	%rax, 24+8(%rsp)
+	cmp	%rax, 8+ISF64_RIP(%rsp)
 	je	L_32bit_fault_set_seg
 	leaq	EXT(ret32_set_gs)(%rip), %rax
-	cmp	%rax, 24+8(%rsp)
+	cmp	%rax, 8+ISF64_RIP(%rsp)
 	je	L_32bit_fault_set_seg
 
 	leaq	EXT(idt64_unix_scall_copy_args)(%rip), %rax
-	cmp	%rax, 24+8(%rsp)
-	add	$(ISF64_SIZE)+8, (%rsp)
+	cmp	%rax, 8+ISF64_RIP(%rsp)
+	cmove	8+ISF64_RSP(%rsp), %rsp
 	je	L_copy_args_continue
 
-	pop %rax
-	jmp	L_dispatch
+	/* fall through */
 
-		
+L_kernel_trap:
+	/*
+	 * Here after taking an unexpected trap from kernel mode - perhaps
+	 * while running in the trampolines hereabouts.
+	 * Note: %rax has been pushed on stack.
+	 * Make sure we're not on the PCB stack, if so move to the kernel stack.
+	 * This is likely a fatal condition.
+	 * But first, try to ensure we have the kernel gs base active...
+	 */
+	movq	%gs:CPU_THIS, %rax		/* get gs_base into %rax */
+	test	%rax, %rax			/* test sign bit (MSB) */
+	js	1f				/* -ve kernel addr, no swap */
+	swapgs					/* +ve user addr, swap */
+1:
+	movq	%gs:CPU_UBER_ISF, %rax		/* PCB stack addr */
+	subq	%rsp, %rax
+	cmpq	$(PAGE_SIZE), %rax		/* current stack in PCB? */
+	jb	2f				/*  - yes, deal with it */
+	pop	%rax				/*  - no, restore %rax */
+	jmp	L_64bit_dispatch
+2:
+	/*
+	 *  Here if %rsp is in the PCB
+	 *  Copy the interrupt stack frame from PCB stack to kernel stack
+	 */
+	movq	%gs:CPU_KERNEL_STACK, %rax
+	xchgq	%rax, %rsp
+	pushq	8+ISF64_SS(%rax)
+	pushq	8+ISF64_RSP(%rax)
+	pushq	8+ISF64_RFLAGS(%rax)
+	pushq	8+ISF64_CS(%rax)
+	pushq	8+ISF64_RIP(%rax)
+	pushq	8+ISF64_ERR(%rax)
+	pushq	8+ISF64_TRAPFN(%rax)
+	pushq	8+ISF64_TRAPNO(%rax)
+	movq	(%rax), %rax
+	jmp	L_64bit_dispatch
+
 /*
  * GP/NP fault on IRET: CS or SS is in error.
  * Note that the user ss is originally 16-byte aligned, we'd popped the
@@ -908,32 +802,32 @@ trap_check_kernel_exit:
  *
  * on SP is
  *  (-  rax saved above, which is immediately popped)
- *   0	function
- *   8	trap number
- *  16	errcode
- *  24	rip
- *  32	cs
- *  40	rflags
- *  48	rsp		--> new trapfn
- *  56	ss		--> new trapno
- *  64	pad		--> new errcode
- *  72	user rip
- *  80	user cs
- *  88	user rflags
- *  96	user rsp
- * 104  user ss	(16-byte aligned)
+ *  0  ISF64_TRAPNO:	trap code (NP or GP)
+ *  8  ISF64_TRAPFN:	trap function
+ *  16 ISF64_ERR:	segment number in error (error code)
+ *  24 ISF64_RIP:	rip
+ *  32 ISF64_CS:	cs
+ *  40 ISF64_RFLAGS:	rflags 
+ *  48 ISF64_RSP:	rsp --> new trapno
+ *  56 ISF64_SS:	ss  --> new trapfn
+ *  64			pad --> new errcode
+ *  72			user rip
+ *  80			user cs
+ *  88			user rflags
+ *  96			user rsp
+ * 104 			user ss	(16-byte aligned)
  */
 L_fault_iret:
 	pop	%rax			/* recover saved %rax */
-	mov	%rax, 24(%rsp)		/* save rax (we don`t need saved rip) */
-	mov	0(%rsp), %rax		/* get trap func */
-	mov	%rax, 48(%rsp)		/* put in user trap func */
-	mov	8(%rsp), %rax		/* get trap number */
-	mov	%rax, 56(%rsp)		/* put in user trap number */
-	mov	16(%rsp), %rax		/* get error code */
-	mov	%rax, 64(%rsp)		/* put in user errcode */
-	mov	24(%rsp), %rax		/* restore rax */
-	add	$48,%rsp		/* reset to new trapfn */
+	mov	%rax, ISF64_RIP(%rsp)	/* save rax (we don`t need saved rip) */
+	mov	ISF64_TRAPNO(%rsp), %rax
+	mov	%rax, ISF64_TRAPNO(%rsp)/* put in user trap number */
+	mov	ISF64_TRAPFN(%rsp), %rax
+	mov	%rax, ISF64_SS(%rsp)	/* put in user trap function */
+	mov	ISF64_ERR(%rsp), %rax	/* get error code */
+	mov	%rax, 8+ISF64_SS(%rsp)	/* put in user errcode */
+	mov	ISF64_RIP(%rsp), %rax	/* restore rax */
+	add	$(ISF64_RSP),%rsp	/* reset to new trapfn */
 					/* now treat as fault from user */
 	jmp	L_dispatch
 
@@ -942,13 +836,14 @@ L_fault_iret:
  * on the stack untouched since we haven't yet moved the stack pointer.
  */
 L_32bit_fault_set_seg:
-	pop	%rax			/* recover %rax from stack */
-	mov	0(%rsp), %rax		/* get trap function */
-	mov	8(%rsp), %rcx		/* get trap number */
-	mov	16(%rsp), %rdx		/* get error code */
-	mov	48(%rsp), %rsp		/* reset stack to saved state */
-	mov	%rax,ISC32_TRAPFN(%rsp)
-	mov	%rcx,ISC32_TRAPNO(%rsp)
+	swapgs
+	pop	%rax			/* toss saved %rax from stack */
+	mov	ISF64_TRAPNO(%rsp), %rax
+	mov	ISF64_TRAPFN(%rsp), %rcx
+	mov	ISF64_ERR(%rsp), %rdx
+	mov	ISF64_RSP(%rsp), %rsp	/* reset stack to saved state */
+	mov	%rax,ISC32_TRAPNO(%rsp)
+	mov	%rcx,ISC32_TRAPFN(%rsp)
 	mov	%rdx,ISC32_ERR(%rsp)
 					/* now treat as fault from user */
 					/* except that all the state is */
@@ -993,22 +888,25 @@ Entry(hndl_alltraps)
 
 	TIME_TRAP_UENTRY
 
-	movq	%gs:CPU_ACTIVE_THREAD,%rdi
-	movq	%rsp, ACT_PCB_ISS(%rdi)		/* stash the PCB stack */
+	/* Check for active vtimers in the current task */
+	mov	%gs:CPU_ACTIVE_THREAD, %rcx
+	mov	TH_TASK(%rcx), %rbx
+	TASK_VTIMER_CHECK(%rbx, %rcx)
+
 	movq	%rsp, %rdi			/* also pass it as arg0 */
 	movq	%gs:CPU_KERNEL_STACK,%rsp	/* switch to kernel stack */
-	sti
 
 	CCALL(user_trap)			/* call user trap routine */
+	/* user_trap() unmasks interrupts */
 	cli					/* hold off intrs - critical section */
-	movq	%gs:CPU_ACTIVE_THREAD,%rsp
-	movq	ACT_PCB_ISS(%rsp), %rsp 	/* switch back to PCB stack */
 	xorl	%ecx, %ecx			/* don't check if we're in the PFZ */
 
 #define CLI cli
 #define STI sti
 
 Entry(return_from_trap)
+	movq	%gs:CPU_ACTIVE_THREAD,%rsp
+	movq	TH_PCB_ISS(%rsp), %rsp 	/* switch back to PCB stack */
 	movl	%gs:CPU_PENDING_AST,%eax
 	testl	%eax,%eax
 	je	EXT(return_to_user)	/* branch if no AST */
@@ -1023,6 +921,7 @@ L_return_from_trap_with_ast:
 	je	1f
 					/* no... 32-bit user mode */
 	movl	R32_EIP(%r13), %edi
+	xorq	%rbp, %rbp		/* clear framepointer */
 	CCALL(commpage_is_in_pfz32)
 	testl	%eax, %eax
 	je	2f			/* not in the PFZ... go service AST */
@@ -1031,6 +930,7 @@ L_return_from_trap_with_ast:
 	jmp	EXT(return_to_user)
 1:
 	movq	R64_RIP(%r13), %rdi
+	xorq	%rbp, %rbp		/* clear framepointer */
 	CCALL(commpage_is_in_pfz64)
 	testl	%eax, %eax
 	je	2f			/* not in the PFZ... go service AST */
@@ -1040,12 +940,11 @@ L_return_from_trap_with_ast:
 2:	
 	STI				/* interrupts always enabled on return to user mode */
 
-	xor	%edi, %edi			/* zero %rdi */
-	CCALL(i386_astintr)	/* take the AST */
+	xor	%edi, %edi		/* zero %rdi */
+	xorq	%rbp, %rbp		/* clear framepointer */
+	CCALL(i386_astintr)		/* take the AST */
 
 	CLI
-	movq	%r13, %rsp			/* switch back to PCB stack */
-
 	xorl	%ecx, %ecx		/* don't check if we're in the PFZ */
 	jmp	EXT(return_from_trap)	/* and check again (rare) */
 
@@ -1061,7 +960,7 @@ trap_from_kernel:
 	pushq   R64_RIP(%rsp)           /* Simulate a CALL from fault point */
 	pushq   %rbp                    /* Extend framepointer chain */
 	movq    %rsp, %rbp
-	CCALL(kernel_trap)		/* to kernel trap routine */
+	CCALLWITHSP(kernel_trap)	/* to kernel trap routine */
 	popq    %rbp
 	addq    $8, %rsp
 	cli
@@ -1117,6 +1016,11 @@ Entry(hndl_allintrs)
 	
 	TIME_INT_ENTRY			/* do timing */
 
+	/* Check for active vtimers in the current task */
+	mov	%gs:CPU_ACTIVE_THREAD, %rcx
+	mov	TH_TASK(%rcx), %rbx
+	TASK_VTIMER_CHECK(%rbx, %rcx)
+
 	incl	%gs:CPU_PREEMPTION_LEVEL
 	incl	%gs:CPU_INTERRUPT_LEVEL
 
@@ -1137,8 +1041,7 @@ LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 	TIME_INT_EXIT			/* do timing */
 
 	movq	%gs:CPU_ACTIVE_THREAD,%rax
-	movq	ACT_PCB(%rax),%rax	/* get act`s PCB */
-	movq	PCB_FPS(%rax),%rax	/* get pcb's ims.ifps */
+	movq	TH_PCB_FPS(%rax),%rax	/* get pcb's ifps */
 	cmpq	$0,%rax			/* Is there a context */
 	je	1f			/* Branch if not */
 	movl	FP_VALID(%rax),%eax	/* Load fp_valid */
@@ -1286,9 +1189,8 @@ L_copy_args_continue:
 	movq	%gs:CPU_KERNEL_STACK,%rdi
 	xchgq	%rdi,%rsp			/* switch to kernel stack */
 	movq	%gs:CPU_ACTIVE_THREAD,%rcx	/* get current thread     */
-	movq	%rdi,ACT_PCB_ISS(%rcx)
-	movq	ACT_TASK(%rcx),%rbx		/* point to current task  */
-	addl	$1,TASK_SYSCALLS_UNIX(%rbx)	/* increment call count   */
+	movq	TH_TASK(%rcx),%rbx		/* point to current task  */
+	incl	TH_SYSCALLS_UNIX(%rcx)		/* increment call count   */
 
 	/* Check for active vtimers in the current task */
 	TASK_VTIMER_CHECK(%rbx,%rcx)
@@ -1307,9 +1209,8 @@ Entry(hndl_mach_scall)
 	movq	%gs:CPU_KERNEL_STACK,%rdi
 	xchgq	%rdi,%rsp			/* switch to kernel stack */
 	movq	%gs:CPU_ACTIVE_THREAD,%rcx	/* get current thread     */
-	movq	%rdi,ACT_PCB_ISS(%rcx)
-	movq	ACT_TASK(%rcx),%rbx		/* point to current task  */
-	addl	$1,TASK_SYSCALLS_MACH(%rbx)	/* increment call count   */
+	movq	TH_TASK(%rcx),%rbx		/* point to current task  */
+	incl	TH_SYSCALLS_MACH(%rcx)		/* increment call count   */
 
 	/* Check for active vtimers in the current task */
 	TASK_VTIMER_CHECK(%rbx,%rcx)
@@ -1330,7 +1231,7 @@ Entry(hndl_mdep_scall)
 
 	/* Check for active vtimers in the current task */
 	movq	%gs:CPU_ACTIVE_THREAD,%rcx	/* get current thread     */
-	movq	ACT_TASK(%rcx),%rbx		/* point to current task  */
+	movq	TH_TASK(%rcx),%rbx		/* point to current task  */
 	TASK_VTIMER_CHECK(%rbx,%rcx)
 
 	sti
@@ -1349,7 +1250,7 @@ Entry(hndl_diag_scall)
 	
 	/* Check for active vtimers in the current task */
 	movq	%gs:CPU_ACTIVE_THREAD,%rcx	/* get current thread     */
-	movq	ACT_TASK(%rcx),%rbx		/* point to current task  */
+	movq	TH_TASK(%rcx),%rbx		/* point to current task  */
 	TASK_VTIMER_CHECK(%rbx,%rcx)
 
 	pushq	%rdi			/* push pcb stack */
@@ -1359,14 +1260,13 @@ Entry(hndl_diag_scall)
 	cli				// Disable interruptions just in case
 	cmpl	$0,%eax			// What kind of return is this?
 	je	1f			// - branch if bad (zero)
-	popq	%rsp			// Get back the original stack
+	popq	%rsp			// Get back the pcb stack
 	jmp	EXT(return_to_user)	// Normal return, do not check asts...
 1:
 	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)
 		// pass what would be the diag syscall
 		// error return - cause an exception
 	/* no return */
-	
 
 
 /*
@@ -1384,8 +1284,7 @@ Entry(hndl_syscall)
 	movq	%gs:CPU_KERNEL_STACK,%rdi
 	xchgq	%rdi,%rsp			/* switch to kernel stack */
 	movq	%gs:CPU_ACTIVE_THREAD,%rcx	/* get current thread     */
-	movq	%rdi, ACT_PCB_ISS(%rcx)
-	movq	ACT_TASK(%rcx),%rbx		/* point to current task  */
+	movq	TH_TASK(%rcx),%rbx		/* point to current task  */
 
 	/* Check for active vtimers in the current task */
 	TASK_VTIMER_CHECK(%rbx,%rcx)
@@ -1412,7 +1311,7 @@ Entry(hndl_syscall)
 
 
 Entry(hndl_unix_scall64)
-	addl	$1,TASK_SYSCALLS_UNIX(%rbx)	/* increment call count   */
+	incl	TH_SYSCALLS_UNIX(%rcx)		/* increment call count   */
 	sti
 
 	CCALL(unix_syscall64)
@@ -1422,7 +1321,7 @@ Entry(hndl_unix_scall64)
 
 
 Entry(hndl_mach_scall64)
-	addl	$1,TASK_SYSCALLS_MACH(%rbx)	/* increment call count   */
+	incl	TH_SYSCALLS_MACH(%rcx)		/* increment call count   */
 	sti
 
 	CCALL(mach_call_munger64)
@@ -1443,13 +1342,11 @@ Entry(hndl_mdep_scall64)
 
 Entry(hndl_diag_scall64)
 	pushq	%rdi			// Push the previous stack
-
 	CCALL(diagCall64)		// Call diagnostics
-
 	cli				// Disable interruptions just in case
 	cmpl	$0,%eax			// What kind of return is this?
 	je	1f			// - branch if bad (zero)
-	popq	%rsp			// Get back the original stack
+	popq	%rsp			// Get back the pcb stack
 	jmp	EXT(return_to_user)	// Normal return, do not check asts...
 1:
 	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)

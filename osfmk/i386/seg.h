@@ -220,7 +220,6 @@ extern struct i386_tss		master_mctss;
 extern void			mc_task_start(void);
 
 #if	MACH_KDB
-extern char			db_stack_store[];
 extern char			db_task_stack_store[];
 extern struct i386_tss		master_dbtss;
 extern void			db_task_start(void);
@@ -345,9 +344,10 @@ __END_DECLS
 #endif
 
 #ifdef __i386__
+#if !defined(USER_WINDOW_SEL)
 #define USER_WINDOW_SEL	0x70		/* 14:  window for copyin/copyout */
 #define PHYS_WINDOW_SEL	0x78		/* 15:  window for copyin/copyout */
-
+#endif
 #define	KERNEL64_CS	0x80		/* 16:  kernel 64-bit code */
 #define	KERNEL64_SS	0x88		/* 17:  kernel 64-bit (syscall) stack */
 #else // __x86_64__

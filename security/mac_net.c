@@ -307,8 +307,8 @@ mac_mbuf_label_init(struct mbuf *m, int flag)
 	if (mac_label_mbufs == 0)
 		return (0);
 
-	tag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_MACLABEL,
-			  sizeof(struct label), flag);
+	tag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_MACLABEL,
+			  sizeof(struct label), flag, m);
 	if (tag == NULL) {
 		printf("%s(): m_tag_alloc() failed!\n", __func__);
 		return (ENOBUFS);

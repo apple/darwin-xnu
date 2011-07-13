@@ -41,6 +41,7 @@
 
 #include "kxld_sect.h"
 #include "kxld_seg.h"
+#include "kxld_symtab.h"
 #include "kxld_util.h"
 
 #define MAX_SEGS 20
@@ -402,6 +403,32 @@ reorder_section(KXLDArray *sects, u_int *sect_reorder_index,
 
     ++(*sect_reorder_index);
 }
+
+/*******************************************************************************
+*******************************************************************************/
+kern_return_t
+kxld_seg_init_linkedit(KXLDArray *segs)
+{
+    kern_return_t rval = KERN_FAILURE;
+    KXLDSeg *seg = NULL;
+    KXLDSeg *le = NULL;
+    
+    rval = kxld_array_resize(segs, 2);
+    require_noerr(rval, finish);
+
+    seg = kxld_array_get_item(segs, 0);
+    le = kxld_array_get_item(segs, 1);
+
+    strlcpy(le->segname, SEG_LINKEDIT, sizeof(le->segname));
+    le->link_addr = round_page(seg->link_addr + seg->vmsize);
+    le->maxprot = VM_PROT_ALL;
+    le->initprot = VM_PROT_DEFAULT;
+
+    rval = KERN_SUCCESS;
+
+finish:
+    return rval;
+}
 #endif /* KXLD_USER_OR_OBJECT */
 
 /*******************************************************************************
@@ -742,8 +769,14 @@ finish:
 void
 kxld_seg_set_vm_protections(KXLDSeg *seg, boolean_t strict_protections)
 {
+    /* This is unnecessary except to make the clang analyzer happy.  When
+     * the analyzer no longer ignores nonnull attributes for if statements,
+     * we can remove this line.
+     */
+    if (!seg) return;
+
     if (strict_protections) {
-        if (streq_safe(seg->segname, SEG_TEXT, sizeof(SEG_TEXT))) {
+        if (streq_safe(seg->segname, SEG_TEXT, const_strlen(SEG_TEXT))) {
             seg->initprot = TEXT_SEG_PROT;
             seg->maxprot = VM_PROT_ALL;
         } else {
@@ -769,5 +802,14 @@ kxld_seg_relocate(KXLDSeg *seg, kxld_addr_t link_addr)
         sect = get_sect_by_index(seg, i);
         kxld_sect_relocate(sect, link_addr);
     }
+}
+
+/*******************************************************************************
+*******************************************************************************/
+void 
+kxld_seg_populate_linkedit(KXLDSeg *seg,
+    const KXLDSymtab *symtab, boolean_t is_32_bit)
+{
+    seg->vmsize = round_page(kxld_symtab_get_macho_data_size(symtab, is_32_bit));
 }
 

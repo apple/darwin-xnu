@@ -491,6 +491,7 @@ int  OSMetaClass::getRetainCount() const { return 0; }
 const char *
 OSMetaClass::getClassName() const
 {
+    if (!className) return NULL;
     return className->getCStringNoCopy();
 }
 

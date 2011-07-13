@@ -198,7 +198,6 @@ int serial_init( void )
     return 1;
 }
 
-
 void serial_putc( char c )
 {
     uart_putc(c);

@@ -161,12 +161,27 @@ typedef struct
 
 #ifdef KERNEL
 #define DK_FEATURE_FORCE_UNIT_ACCESS          0x00000001
+
+typedef struct
+{
+    uint64_t               offset;
+    uint64_t               length;
+
+    uint8_t                reserved0128[12];       /* reserved, clear to zero */
+
+    dev_t                  dev;
+} dk_physical_extent_t;
+
 #define DKIOCGETBLOCKCOUNT32                  _IOR('d', 25, uint32_t)
 #define DKIOCSETBLOCKSIZE                     _IOW('d', 24, uint32_t)
 #define DKIOCGETBSDUNIT                       _IOR('d', 27, uint32_t)
-#define DKIOCISSOLIDSTATE		      _IOR('d', 79, uint32_t)
+#define DKIOCISSOLIDSTATE                     _IOR('d', 79, uint32_t)
 #define DKIOCISVIRTUAL                        _IOR('d', 72, uint32_t)
 #define DKIOCGETBASE                          _IOR('d', 73, uint64_t)
+#define DKIOCGETTHROTTLEMASK                  _IOR('d', 80, uint64_t)
+#define DKIOCLOCKPHYSICALEXTENTS              _IO('d', 81)
+#define DKIOCGETPHYSICALEXTENT                _IOWR('d', 82, dk_physical_extent_t)
+#define DKIOCUNLOCKPHYSICALEXTENTS            _IO('d', 83)
 #endif /* KERNEL */
 
 #endif	/* _SYS_DISK_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -628,6 +628,25 @@ wait_queue_link(
 	return ret;
 }	
 
+wait_queue_link_t
+wait_queue_link_allocate(void)
+{
+	wait_queue_link_t wql;
+
+	wql = zalloc(_wait_queue_link_zone); /* Can't fail */
+	bzero(wql, sizeof(*wql));
+	wql->wql_type = WAIT_QUEUE_UNLINKED;
+
+	return wql;
+}
+
+kern_return_t
+wait_queue_link_free(wait_queue_link_t wql) 
+{
+	zfree(_wait_queue_link_zone, wql);
+	return KERN_SUCCESS;
+}
+
 
 /*
  *	Routine:	wait_queue_unlink_locked
@@ -848,6 +867,48 @@ retry:
 	return(KERN_SUCCESS);
 }	
 
+kern_return_t
+wait_queue_set_unlink_one(
+	wait_queue_set_t wq_set,
+	wait_queue_link_t wql)
+{
+	wait_queue_t wq;
+	spl_t s;
+
+	assert(wait_queue_is_set(wq_set));
+
+retry:
+	s = splsched();
+	wqs_lock(wq_set);
+
+	WAIT_QUEUE_SET_CHECK(wq_set);
+
+	/* Already unlinked, e.g. by selclearthread() */
+	if (wql->wql_type == WAIT_QUEUE_UNLINKED) {
+		goto out;
+	}
+
+	WAIT_QUEUE_SET_LINK_CHECK(wq_set, wql);
+
+	/* On a wait queue, and we hold set queue lock ... */
+	wq = wql->wql_queue;
+	if (wait_queue_lock_try(wq)) {
+		wait_queue_unlink_locked(wq, wq_set, wql);
+		wait_queue_unlock(wq);
+	} else {
+		wqs_unlock(wq_set);
+		splx(s);
+		delay(1);
+		goto retry;
+	}
+
+out:
+	wqs_unlock(wq_set);
+	splx(s);
+
+	return KERN_SUCCESS;
+}
+
 /*
  *	Routine:	wait_queue_assert_wait64_locked
  *	Purpose:
@@ -868,6 +929,7 @@ wait_queue_assert_wait64_locked(
 	thread_t thread)
 {
 	wait_result_t wait_result;
+	boolean_t realtime;
 
 	if (!wait_queue_assert_possible(thread))
 		panic("wait_queue_assert_wait64_locked");
@@ -878,7 +940,17 @@ wait_queue_assert_wait64_locked(
 		if (event == NO_EVENT64 && wqs_is_preposted(wqs))
 			return(THREAD_AWAKENED);
 	}
-	  
+
+	/*
+	 * Realtime threads get priority for wait queue placements.
+	 * This allows wait_queue_wakeup_one to prefer a waiting
+	 * realtime thread, similar in principle to performing
+	 * a wait_queue_wakeup_all and allowing scheduler prioritization
+	 * to run the realtime thread, but without causing the
+	 * lock contention of that scenario.
+	 */
+	realtime = (thread->sched_pri >= BASEPRI_REALTIME);
+
 	/*
 	 * This is the extent to which we currently take scheduling attributes
 	 * into account.  If the thread is vm priviledged, we stick it at
@@ -887,7 +959,9 @@ wait_queue_assert_wait64_locked(
 	 */
 	wait_result = thread_mark_wait_locked(thread, interruptible);
 	if (wait_result == THREAD_WAITING) {
-		if (!wq->wq_fifo || thread->options & TH_OPT_VMPRIV)
+		if (!wq->wq_fifo
+			|| (thread->options & TH_OPT_VMPRIV)
+			|| realtime)
 			enqueue_head(&wq->wq_queue, (queue_entry_t) thread);
 		else
 			enqueue_tail(&wq->wq_queue, (queue_entry_t) thread);
@@ -896,7 +970,11 @@ wait_queue_assert_wait64_locked(
 		thread->wait_queue = wq;
 
 		if (deadline != 0) {
-			if (!timer_call_enter(&thread->wait_timer, deadline))
+			uint32_t flags;
+
+			flags = realtime ? TIMER_CALL_CRITICAL : 0;
+
+			if (!timer_call_enter(&thread->wait_timer, deadline, flags))
 				thread->wait_timer_active++;
 			thread->wait_timer_is_set = TRUE;
 		}
@@ -1035,7 +1113,7 @@ _wait_queue_select64_all(
 
 			if (t->wait_event == event) {
 				thread_lock(t);
-				remqueue(q, (queue_entry_t) t);
+				remqueue((queue_entry_t) t);
 				enqueue (wake_queue, (queue_entry_t) t);
 				t->wait_queue = WAIT_QUEUE_NULL;
 				t->wait_event = NO_EVENT64;
@@ -1242,7 +1320,7 @@ _wait_queue_select64_one(
 			t = (thread_t)wq_element;
 			if (t->wait_event == event) {
 				thread_lock(t);
-				remqueue(q, (queue_entry_t) t);
+				remqueue((queue_entry_t) t);
 				t->wait_queue = WAIT_QUEUE_NULL;
 				t->wait_event = NO_EVENT64;
 				t->at_safe_point = FALSE;
@@ -1278,7 +1356,7 @@ wait_queue_pull_thread_locked(
 
 	assert(thread->wait_queue == waitq);
 
-	remqueue(&waitq->wq_queue, (queue_entry_t)thread );
+	remqueue((queue_entry_t)thread );
 	thread->wait_queue = WAIT_QUEUE_NULL;
 	thread->wait_event = NO_EVENT64;
 	thread->at_safe_point = FALSE;
@@ -1314,7 +1392,7 @@ _wait_queue_select64_thread(
 
 	thread_lock(thread);
 	if ((thread->wait_queue == wq) && (thread->wait_event == event)) {
-		remqueue(q, (queue_entry_t) thread);
+		remqueue((queue_entry_t) thread);
 		thread->at_safe_point = FALSE;
 		thread->wait_event = NO_EVENT64;
 		thread->wait_queue = WAIT_QUEUE_NULL;
@@ -1448,7 +1526,8 @@ kern_return_t
 wait_queue_wakeup_one(
 	wait_queue_t wq,
 	event_t event,
-	wait_result_t result)
+	wait_result_t result,
+	int priority)
 {
 	thread_t thread;
 	spl_t s;
@@ -1465,6 +1544,14 @@ wait_queue_wakeup_one(
 	if (thread) {
 		kern_return_t res;
 
+		if (thread->sched_pri < priority) {
+			if (priority <= MAXPRI) {
+				set_sched_pri(thread, priority);
+
+				thread->was_promoted_on_wakeup = 1;
+				thread->sched_flags |= TH_SFLAG_PROMOTED;
+			}
+		}
 		res = thread_go(thread, result);
 		assert(res == KERN_SUCCESS);
 		thread_unlock(thread);

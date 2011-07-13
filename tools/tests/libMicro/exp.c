@@ -53,9 +53,27 @@ int
 benchmark(void *tsd, result_t *res)
 {
 	int			i;
+	/* Added as part of the fix for radar 7508837 */
+        double                  t = 0.0;
 
 	for (i = 0; i < lm_optB; i += 10) {
 		double value = 1.0 / (i + .01);
+#if 1 /* Apple added code, see radar 7508837 */
+                t += exp(value);
+                t += exp(value + 1.0);
+                t += exp(value + 2.0);
+                t += exp(value + 3.0);
+                t += exp(value + 4.0);
+                t += exp(value + 5.0);
+                t += exp(value + 6.0);
+                t += exp(value + 7.0);
+                t += exp(value + 8.0);
+                t += exp(value + 9.0);
+        }
+        res->re_count = i;
+
+        return ((int)(t - t));
+#else
 		(void) exp(value);
 		(void) exp(value);
 		(void) exp(value);
@@ -70,4 +88,5 @@ benchmark(void *tsd, result_t *res)
 	res->re_count = i;
 
 	return (0);
+#endif /* end of Apple fix  */
 }

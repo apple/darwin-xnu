@@ -42,8 +42,8 @@
 #ifndef _DIAGNOSTICS_H_
 #define _DIAGNOSTICS_H_
 
-#ifdef __ppc__
-#error This file is not useful on PowerPC.
+#if !(defined(__i386__) || defined(__x86_64__))
+#error This file is not useful on non-Intel
 #endif
 
 int diagCall(x86_saved_state_t *regs);

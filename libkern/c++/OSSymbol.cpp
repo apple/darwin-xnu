@@ -361,8 +361,11 @@ void OSSymbolPool::removeSymbol(OSSymbol *sym)
     j = thisBucket->count;
     list = thisBucket->symbolP;
 
-    if (!j)
+    if (!j) {
+	// couldn't find the symbol; probably means string hash changed
+        panic("removeSymbol");
         return;
+    }
 
     if (j == 1) {
         probeSymbol = (OSSymbol *) list;
@@ -374,6 +377,8 @@ void OSSymbolPool::removeSymbol(OSSymbol *sym)
             SHRINK_POOL();
             return;
         }
+	// couldn't find the symbol; probably means string hash changed
+    	panic("removeSymbol");
         return;
     }
 
@@ -399,6 +404,8 @@ void OSSymbolPool::removeSymbol(OSSymbol *sym)
             SHRINK_POOL();
             return;
         }
+	// couldn't find the symbol; probably means string hash changed
+    	panic("removeSymbol");
         return;
     }
 
@@ -424,6 +431,8 @@ void OSSymbolPool::removeSymbol(OSSymbol *sym)
             return;
         }
     }
+    // couldn't find the symbol; probably means string hash changed
+    panic("removeSymbol");
 }
 
 /*

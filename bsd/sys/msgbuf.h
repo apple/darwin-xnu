@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -65,22 +65,24 @@
 
 #include <sys/cdefs.h>
 
-#define	MSG_BSIZE	4096
+#define	MAX_MSG_BSIZE	(1*1024*1024)
 struct	msgbuf {
 #define	MSG_MAGIC	0x063061
-	long	msg_magic;
-	long	msg_size;
-	long	msg_bufx;		/* write pointer */
-	long	msg_bufr;		/* read pointer */
-	char	*msg_bufc;	/* buffer */
+	int		msg_magic;
+	int		msg_size;
+	int		msg_bufx;		/* write pointer */
+	int		msg_bufr;		/* read pointer */
+	char	*msg_bufc;		/* buffer */
 };
-#ifdef KERNEL
+
+#ifdef XNU_KERNEL_PRIVATE
 __BEGIN_DECLS
 extern struct	msgbuf *msgbufp;
 extern void log_putc(char);
 extern void log_putc_locked(char);
-extern void log_setsize(long size);
+extern int log_setsize(int size);
 extern int log_dmesg(user_addr_t, uint32_t, int32_t *);
 __END_DECLS
-#endif
+#endif /* XNU_KERNEL_PRIVATE */
+
 #endif	/* !_SYS_MSGBUF_H_ */

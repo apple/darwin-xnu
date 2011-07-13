@@ -162,7 +162,7 @@ _sleep(
 	struct proc *p;
 	thread_t self = current_thread();
 	struct uthread * ut;
-	int sig, catch = pri & PCATCH;
+	int sig, catch;
 	int dropmutex  = pri & PDROP;
 	int spinmutex  = pri & PSPIN;
 	int wait_result;
@@ -175,26 +175,39 @@ _sleep(
 	/* It can still block in proc_exit() after the teardown. */
 	if (p->p_stats != NULL)
 		OSIncrementAtomicLong(&p->p_stats->p_ru.ru_nvcsw);
+	
+	if (pri & PCATCH)
+		catch = THREAD_ABORTSAFE;
+	else
+		catch = THREAD_UNINT;
 
 	/* set wait message & channel */
 	ut->uu_wchan = chan;
 	ut->uu_wmesg = wmsg ? wmsg : "unknown";
 
 	if (mtx != NULL && chan != NULL && (thread_continue_t)continuation == THREAD_CONTINUE_NULL) {
+		int	flags;
+
+		if (dropmutex)
+			flags = LCK_SLEEP_UNLOCK;
+		else
+			flags = LCK_SLEEP_DEFAULT;
+
+		if (spinmutex)
+			flags |= LCK_SLEEP_SPIN;
 
 		if (abstime)
-			wait_result = lck_mtx_sleep_deadline(mtx, (dropmutex) ? LCK_SLEEP_UNLOCK : 0,
-							     chan, (catch) ? THREAD_ABORTSAFE : THREAD_UNINT, abstime);
+			wait_result = lck_mtx_sleep_deadline(mtx, flags, chan, catch, abstime);
 		else
-			wait_result = lck_mtx_sleep(mtx, (dropmutex) ? LCK_SLEEP_UNLOCK : 0,
-							     chan, (catch) ? THREAD_ABORTSAFE : THREAD_UNINT);
+			wait_result = lck_mtx_sleep(mtx, flags, chan, catch);
 	}
 	else {
 		if (chan != NULL)
-			assert_wait_deadline(chan, (catch) ? THREAD_ABORTSAFE : THREAD_UNINT, abstime);
+			assert_wait_deadline(chan, catch, abstime);
 		if (mtx)
 			lck_mtx_unlock(mtx);
-		if (catch) {
+
+		if (catch == THREAD_ABORTSAFE) {
 			if (SHOULDissignal(p,ut)) {
 				if ((sig = CURSIG(p)) != 0) {
 					if (clear_wait(self, THREAD_INTERRUPTED) == KERN_FAILURE)
@@ -258,11 +271,11 @@ block:
 			 * first, regardless of whether awakened due
 			 * to receiving event.
 			 */
-			if (!catch)
+			if (catch != THREAD_ABORTSAFE)
 				break;
 			/* else fall through */
 		case THREAD_INTERRUPTED:
-			if (catch) {
+			if (catch == THREAD_ABORTSAFE) {
 				if (thread_should_abort(self)) {
 					error = EINTR;
 				} else if (SHOULDissignal(p, ut)) {
@@ -392,7 +405,7 @@ tsleep1(
 void
 wakeup(void *chan)
 {
-	thread_wakeup_prim((caddr_t)chan, FALSE, THREAD_AWAKENED);
+	thread_wakeup((caddr_t)chan);
 }
 
 /*
@@ -404,7 +417,7 @@ wakeup(void *chan)
 void
 wakeup_one(caddr_t chan)
 {
-	thread_wakeup_prim((caddr_t)chan, TRUE, THREAD_AWAKENED);
+	thread_wakeup_one((caddr_t)chan);
 }
 
 /*

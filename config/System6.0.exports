@@ -620,7 +620,6 @@ __ZN13IOCommandGate10runCommandEPvS0_S0_S0_
 __ZN13IOCommandGate10superClassE
 __ZN13IOCommandGate11commandGateEP8OSObjectPFiS1_PvS2_S2_S2_E
 __ZN13IOCommandGate11setWorkLoopEP10IOWorkLoop
-__ZN13IOCommandGate12checkForWorkEv
 __ZN13IOCommandGate12commandSleepEPv12UnsignedWidem
 __ZN13IOCommandGate12commandSleepEPvm
 __ZN13IOCommandGate13attemptActionEPFiP8OSObjectPvS2_S2_S2_ES2_S2_S2_S2_
@@ -689,6 +688,7 @@ __ZN13IOEventSource23_RESERVEDIOEventSource4Ev
 __ZN13IOEventSource23_RESERVEDIOEventSource5Ev
 __ZN13IOEventSource23_RESERVEDIOEventSource6Ev
 __ZN13IOEventSource23_RESERVEDIOEventSource7Ev
+__ZN13IOEventSource4freeEv
 __ZN13IOEventSource4initEP8OSObjectPFvS1_zE
 __ZN13IOEventSource6enableEv
 __ZN13IOEventSource7disableEv
@@ -699,6 +699,7 @@ __ZN13IOEventSource9MetaClassC2Ev
 __ZN13IOEventSource9closeGateEv
 __ZN13IOEventSource9metaClassE
 __ZN13IOEventSource9setActionEPFvP8OSObjectzE
+__ZN13IOEventSource12checkForWorkEv
 __ZN13IOEventSource9sleepGateEPv12UnsignedWidem
 __ZN13IOEventSource9sleepGateEPvm
 __ZN13IOEventSourceC1EPK11OSMetaClass
@@ -1241,7 +1242,6 @@ __ZN18IOTimerEventSource10wakeAtTimeE12UnsignedWide
 __ZN18IOTimerEventSource10wakeAtTimeE13mach_timespec
 __ZN18IOTimerEventSource10wakeAtTimeEmm
 __ZN18IOTimerEventSource11setWorkLoopEP10IOWorkLoop
-__ZN18IOTimerEventSource12checkForWorkEv
 __ZN18IOTimerEventSource12setTimeoutMSEm
 __ZN18IOTimerEventSource12setTimeoutUSEm
 __ZN18IOTimerEventSource12wakeAtTimeMSEm
@@ -2816,7 +2816,6 @@ __start
 _absolutetime_to_nanoseconds
 _acknowledgeSleepWakeNotification
 _appleClut8
-_argstrcpy
 _assert_wait
 _assert_wait_timeout
 _atoi
@@ -2952,7 +2951,6 @@ _get_inpcb_str_size
 _get_kernel_symfile
 _get_procrustime
 _get_task_map
-_getval
 _invalidate_icache
 _invalidate_icache64
 _iokit_add_reference
@@ -2970,7 +2968,6 @@ _iokit_version_variant:_version_variant
 _ipc_port_release_send
 _is_suser
 _is_suser1
-_isargsep
 _kOSBooleanFalse
 _kOSBooleanTrue
 _kalloc
@@ -3150,7 +3147,6 @@ _thread_call_is_delayed
 _thread_cancel_timer
 _thread_deallocate
 _thread_flavor_array
-_thread_funnel_set
 _thread_policy_set
 _thread_reference
 _thread_set_timer

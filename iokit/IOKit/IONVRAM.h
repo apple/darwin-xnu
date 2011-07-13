@@ -29,16 +29,19 @@
 #ifndef _IOKIT_IONVRAM_H
 #define _IOKIT_IONVRAM_H
 
+#ifdef __cplusplus
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/nvram/IONVRAMController.h>
-
+#endif /* __cplusplus */
 
 #define kIODTNVRAMOFPartitionName       "common"
 #define kIODTNVRAMXPRAMPartitionName    "APL,MacOS75"
 #define kIODTNVRAMPanicInfoPartitonName "APL,OSXPanic"
 #define kIODTNVRAMFreePartitionName     "wwwwwwwwwwww"
+
+#define MIN_SYNC_NOW_INTERVAL 15*60 /* Minimum 15 Minutes interval mandated */
 
 enum {
   kIODTNVRAMImageSize        = 0x2000,
@@ -59,6 +62,8 @@ enum {
   kOFVariablePermUserWrite,
   kOFVariablePermKernelOnly
 };
+
+#ifdef __cplusplus
 
 class IODTNVRAM : public IOService
 {
@@ -86,6 +91,8 @@ private:
   UInt32            _piPartitionSize;
   UInt8             *_piImage;
   bool              _systemPaniced;
+  SInt32            _lastDeviceSync;
+  bool              _freshInterval;
   
   virtual UInt8 calculatePartitionChecksum(UInt8 *partitionHeader);
   virtual IOReturn initOFVariables(void);
@@ -162,6 +169,9 @@ public:
 				       IOByteCount length);  
   
   virtual IOByteCount savePanicInfo(UInt8 *buffer, IOByteCount length);
+  virtual bool safeToSync(void);
 };
+
+#endif /* __cplusplus */
 
 #endif /* !_IOKIT_IONVRAM_H */

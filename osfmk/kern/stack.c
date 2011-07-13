@@ -63,6 +63,9 @@ static vm_offset_t		stack_free_list;
 static unsigned int		stack_free_count, stack_free_hiwat;		/* free list count */
 static unsigned int		stack_hiwat;
 unsigned int			stack_total;				/* current total count */
+unsigned long long		stack_allocs;				/* total count of allocations */
+
+static int			stack_fake_zone_index = -1;	/* index in zone_info array */
 
 static unsigned int		stack_free_target;
 static int				stack_free_delta;
@@ -75,6 +78,51 @@ unsigned int			kernel_stack_pages = KERNEL_STACK_SIZE / PAGE_SIZE;
 vm_offset_t			kernel_stack_size = KERNEL_STACK_SIZE;
 vm_offset_t			kernel_stack_mask = -KERNEL_STACK_SIZE;
 vm_offset_t			kernel_stack_depth_max = 0;
+
+static inline void
+STACK_ZINFO_PALLOC(thread_t thread)
+{
+	task_t task;
+	zinfo_usage_t zinfo;
+
+	thread->tkm_private.alloc += kernel_stack_size;
+	if (stack_fake_zone_index != -1 &&
+	    (task = thread->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
+		OSAddAtomic64(kernel_stack_size,
+			      (int64_t *)&zinfo[stack_fake_zone_index].alloc);
+}
+
+static inline void
+STACK_ZINFO_PFREE(thread_t thread)
+{
+	task_t task;
+	zinfo_usage_t zinfo;
+
+	thread->tkm_private.free += kernel_stack_size;
+	if (stack_fake_zone_index != -1 &&
+	    (task = thread->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
+		OSAddAtomic64(kernel_stack_size, 
+			      (int64_t *)&zinfo[stack_fake_zone_index].free);
+}
+
+static inline void
+STACK_ZINFO_HANDOFF(thread_t from, thread_t to)
+{
+	from->tkm_private.free += kernel_stack_size;
+	to->tkm_private.alloc += kernel_stack_size;
+	if (stack_fake_zone_index != -1) {
+		task_t task;
+		zinfo_usage_t zinfo;
+	
+		if ((task = from->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
+			OSAddAtomic64(kernel_stack_size, 
+				      (int64_t *)&zinfo[stack_fake_zone_index].free);
+
+		if ((task = to->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
+			OSAddAtomic64(kernel_stack_size, 
+				      (int64_t *)&zinfo[stack_fake_zone_index].alloc);
+	}
+}
 
 /*
  *	The next field is at the base of the stack,
@@ -97,6 +145,9 @@ roundup_pow2(vm_offset_t size)
 {
 	return 1UL << (log2(size - 1) + 1); 
 }
+
+static vm_offset_t stack_alloc_internal(void);
+static void stack_free_stack(vm_offset_t);
 
 void
 stack_init(void)
@@ -125,18 +176,17 @@ stack_init(void)
  *	Allocate a stack for a thread, may
  *	block.
  */
-void
-stack_alloc(
-	thread_t	thread)
+
+static vm_offset_t 
+stack_alloc_internal(void)
 {
 	vm_offset_t		stack;
 	spl_t			s;
 	int			guard_flags;
 
-	assert(thread->kernel_stack == 0);
-
 	s = splsched();
 	stack_lock();
+	stack_allocs++;
 	stack = stack_free_list;
 	if (stack != 0) {
 		stack_free_list = stack_next(stack);
@@ -174,8 +224,25 @@ stack_alloc(
 
 		stack += PAGE_SIZE;
 	}
+	return stack;
+}
 
-	machine_stack_attach(thread, stack);
+void
+stack_alloc(
+	thread_t	thread)
+{
+
+	assert(thread->kernel_stack == 0);
+	machine_stack_attach(thread, stack_alloc_internal());
+	STACK_ZINFO_PALLOC(thread);
+}
+
+void
+stack_handoff(thread_t from, thread_t to)
+{
+	assert(from == current_thread());
+	machine_stack_handoff(from, to);
+	STACK_ZINFO_HANDOFF(from, to);
 }
 
 /*
@@ -190,11 +257,23 @@ stack_free(
     vm_offset_t		stack = machine_stack_detach(thread);
 
 	assert(stack);
-	if (stack != thread->reserved_stack)
+	if (stack != thread->reserved_stack) {
+		STACK_ZINFO_PFREE(thread);
 		stack_free_stack(stack);
+	}
 }
 
 void
+stack_free_reserved(
+	thread_t	thread)
+{
+	if (thread->reserved_stack != thread->kernel_stack) {
+		stack_free_stack(thread->reserved_stack);
+		STACK_ZINFO_PFREE(thread);
+	}
+}
+
+static void
 stack_free_stack(
 	vm_offset_t		stack)
 {
@@ -240,6 +319,7 @@ stack_alloc_try(
 	cache = &PROCESSOR_DATA(current_processor(), stack_cache);
 	stack = cache->free;
 	if (stack != 0) {
+		STACK_ZINFO_PALLOC(thread);
 		cache->free = stack_next(stack);
 		cache->count--;
 	}
@@ -248,6 +328,7 @@ stack_alloc_try(
 			stack_lock();
 			stack = stack_free_list;
 			if (stack != 0) {
+				STACK_ZINFO_PALLOC(thread);
 				stack_free_list = stack_next(stack);
 				stack_free_count--;
 				stack_free_delta--;
@@ -360,14 +441,23 @@ __unused void		*arg)
 }
 
 void
-stack_fake_zone_info(int *count, vm_size_t *cur_size, vm_size_t *max_size, vm_size_t *elem_size,
-		     vm_size_t *alloc_size, int *collectable, int *exhaustable)
+stack_fake_zone_init(int zone_index)
+{
+	stack_fake_zone_index = zone_index;
+}
+
+void
+stack_fake_zone_info(int *count, 
+		     vm_size_t *cur_size, vm_size_t *max_size, vm_size_t *elem_size, vm_size_t *alloc_size,
+		     uint64_t *sum_size, int *collectable, int *exhaustable, int *caller_acct)
 {
 	unsigned int	total, hiwat, free;
+	unsigned long long all;
 	spl_t			s;
 
 	s = splsched();
 	stack_lock();
+	all = stack_allocs;
 	total = stack_total;
 	hiwat = stack_hiwat;
 	free = stack_free_count;
@@ -379,8 +469,11 @@ stack_fake_zone_info(int *count, vm_size_t *cur_size, vm_size_t *max_size, vm_si
 	*max_size   = kernel_stack_size * hiwat;
 	*elem_size  = kernel_stack_size;
 	*alloc_size = kernel_stack_size;
+	*sum_size = all * kernel_stack_size;
+
 	*collectable = 1;
 	*exhaustable = 0;
+	*caller_acct = 1;
 }
 
 /* OBSOLETE */

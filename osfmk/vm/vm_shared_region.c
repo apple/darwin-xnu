@@ -124,6 +124,9 @@ int shared_region_persistence = 0;	/* no by default */
 /* delay before reclaiming an unused shared region */
 int shared_region_destroy_delay = 120; /* in seconds */
 
+/* indicate if the shared region has been slid. Only one region can be slid */
+boolean_t shared_region_completed_slide = FALSE;
+
 /* this lock protects all the shared region data structures */
 lck_grp_t *vm_shared_region_lck_grp;
 lck_mtx_t vm_shared_region_lock;
@@ -760,8 +763,24 @@ vm_shared_region_destroy(
 		thread_call_free(shared_region->sr_timer_call);
 	}
 
+	if ((slide_info.slide_info_entry != NULL) && (slide_info.sr == shared_region)) {
+		kmem_free(kernel_map,
+			  (vm_offset_t) slide_info.slide_info_entry,
+			  (vm_size_t) slide_info.slide_info_size);
+		vm_object_deallocate(slide_info.slide_object);
+	        slide_info.slide_object	= NULL;
+		slide_info.start = 0;
+		slide_info.end = 0;	
+		slide_info.slide = 0;
+		slide_info.sr = NULL;
+		slide_info.slide_info_entry = NULL;
+		slide_info.slide_info_size = 0;
+		shared_region_completed_slide = FALSE;
+	}
+
 	/* release the shared region structure... */
 	kfree(shared_region, sizeof (*shared_region));
+
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: destroy(%p) <-\n",
 		 shared_region));
@@ -821,6 +840,106 @@ vm_shared_region_start_address(
 
 	return kr;
 }
+
+void
+vm_shared_region_undo_mappings(
+			vm_map_t sr_map,
+			mach_vm_offset_t sr_base_address,
+			struct shared_file_mapping_np *mappings,
+			unsigned int mappings_count)
+{
+	unsigned int		j = 0;
+	vm_shared_region_t	shared_region = NULL;
+	boolean_t		reset_shared_region_state = FALSE;
+	
+	shared_region = vm_shared_region_get(current_task());
+	if (shared_region == NULL) {
+		SHARED_REGION_TRACE_DEBUG(("Failed to undo mappings because of NULL shared region.\n"));
+		return;
+	}
+
+
+	if (sr_map == NULL) {
+		ipc_port_t		sr_handle;
+		vm_named_entry_t	sr_mem_entry;
+
+		vm_shared_region_lock();
+		assert(shared_region->sr_ref_count > 1);
+
+		while (shared_region->sr_mapping_in_progress) {
+			/* wait for our turn... */
+			vm_shared_region_sleep(&shared_region->sr_mapping_in_progress,
+					       THREAD_UNINT);
+		}
+		assert(! shared_region->sr_mapping_in_progress);
+		assert(shared_region->sr_ref_count > 1);
+		/* let others know we're working in this shared region */
+		shared_region->sr_mapping_in_progress = TRUE;
+
+		vm_shared_region_unlock();
+
+		reset_shared_region_state = TRUE;
+
+		/* no need to lock because this data is never modified... */
+		sr_handle = shared_region->sr_mem_entry;
+		sr_mem_entry = (vm_named_entry_t) sr_handle->ip_kobject;
+		sr_map = sr_mem_entry->backing.map;
+		sr_base_address = shared_region->sr_base_address;
+	}
+	/*
+	 * Undo the mappings we've established so far.
+	 */
+	for (j = 0; j < mappings_count; j++) {
+		kern_return_t kr2;
+
+		if (mappings[j].sfm_size == 0) {
+			/*
+			 * We didn't establish this
+			 * mapping, so nothing to undo.
+			 */
+			continue;
+		}
+		SHARED_REGION_TRACE_INFO(
+			("shared_region: mapping[%d]: "
+			 "address:0x%016llx "
+			 "size:0x%016llx "
+			 "offset:0x%016llx "
+			 "maxprot:0x%x prot:0x%x: "
+			 "undoing...\n",
+			 j,
+			 (long long)mappings[j].sfm_address,
+			 (long long)mappings[j].sfm_size,
+			 (long long)mappings[j].sfm_file_offset,
+			 mappings[j].sfm_max_prot,
+			 mappings[j].sfm_init_prot));
+		kr2 = mach_vm_deallocate(
+			sr_map,
+			(mappings[j].sfm_address -
+			 sr_base_address),
+			mappings[j].sfm_size);
+		assert(kr2 == KERN_SUCCESS);
+	}
+
+	/*
+	 * This is how check_np() knows if the shared region
+	 * is mapped. So clear it here.
+	 */
+	shared_region->sr_first_mapping = (mach_vm_offset_t) -1;
+
+	if (reset_shared_region_state) {
+		vm_shared_region_lock();
+		assert(shared_region->sr_ref_count > 1);
+		assert(shared_region->sr_mapping_in_progress);
+		/* we're done working on that shared region */
+		shared_region->sr_mapping_in_progress = FALSE;
+		thread_wakeup((event_t) &shared_region->sr_mapping_in_progress);
+		vm_shared_region_unlock();
+		reset_shared_region_state = FALSE;
+	}
+
+	vm_shared_region_deallocate(shared_region);
+}
+
 /*
  * Establish some mappings of a file in the shared region.
  * This is used by "dyld" via the shared_region_map_np() system call
@@ -838,7 +957,8 @@ vm_shared_region_map_file(
 	struct shared_file_mapping_np	*mappings,
 	memory_object_control_t		file_control,
 	memory_object_size_t		file_size,
-	void				*root_dir)
+	void				*root_dir,
+	struct shared_file_mapping_np	*mapping_to_slide)
 {
 	kern_return_t		kr;
 	vm_object_t		file_object;
@@ -851,6 +971,7 @@ vm_shared_region_map_file(
 	mach_vm_offset_t	target_address;
 	vm_object_t		object;
 	vm_object_size_t	obj_size;
+	boolean_t		found_mapping_to_slide = FALSE;
 
 
 	kr = KERN_SUCCESS;
@@ -920,6 +1041,32 @@ vm_shared_region_map_file(
 		} else {
 			/* file-backed memory */
 			map_port = (ipc_port_t) file_object->pager;
+		}
+		
+		if (mappings[i].sfm_init_prot & VM_PROT_SLIDE) {
+			/*
+			 * This is the mapping that needs to be slid.
+			 */
+			if (found_mapping_to_slide == TRUE) {
+				SHARED_REGION_TRACE_INFO(
+					("shared_region: mapping[%d]: "
+					 "address:0x%016llx size:0x%016llx "
+					 "offset:0x%016llx "
+					 "maxprot:0x%x prot:0x%x "
+					 "will not be slid as only one such mapping is allowed...\n",
+					 i,
+					 (long long)mappings[i].sfm_address,
+					 (long long)mappings[i].sfm_size,
+					 (long long)mappings[i].sfm_file_offset,
+					 mappings[i].sfm_max_prot,
+					 mappings[i].sfm_init_prot));
+			} else {
+				if (mapping_to_slide != NULL) {
+					mapping_to_slide->sfm_file_offset = mappings[i].sfm_file_offset;
+					mapping_to_slide->sfm_size = mappings[i].sfm_size;
+					found_mapping_to_slide = TRUE;
+				}
+			}
 		}
 
 		/* mapping's address is relative to the shared region base */
@@ -1002,8 +1149,6 @@ vm_shared_region_map_file(
 				mappings[i].sfm_size = 0;
 				kr = KERN_SUCCESS;
 			} else {
-				unsigned int j;
-
 				/* this mapping failed ! */
 				SHARED_REGION_TRACE_ERROR(
 					("shared_region: mapping[%d]: "
@@ -1018,40 +1163,7 @@ vm_shared_region_map_file(
 					 mappings[i].sfm_init_prot,
 					 kr));
 
-				/*
-				 * Undo the mappings we've established so far.
-				 */
-				for (j = 0; j < i; j++) {
-					kern_return_t kr2;
-
-					if (mappings[j].sfm_size == 0) {
-						/*
-						 * We didn't establish this
-						 * mapping, so nothing to undo.
-						 */
-						continue;
-					}
-					SHARED_REGION_TRACE_INFO(
-						("shared_region: mapping[%d]: "
-						 "address:0x%016llx "
-						 "size:0x%016llx "
-						 "offset:0x%016llx "
-						 "maxprot:0x%x prot:0x%x: "
-						 "undoing...\n",
-						 j,
-						 (long long)mappings[j].sfm_address,
-						 (long long)mappings[j].sfm_size,
-						 (long long)mappings[j].sfm_file_offset,
-						 mappings[j].sfm_max_prot,
-						 mappings[j].sfm_init_prot));
-					kr2 = mach_vm_deallocate(
-						sr_map,
-						(mappings[j].sfm_address -
-						 sr_base_address),
-						mappings[j].sfm_size);
-					assert(kr2 == KERN_SUCCESS);
-				}
-
+				vm_shared_region_undo_mappings(sr_map, sr_base_address, mappings, i);
 				break;
 			}
 
@@ -1262,6 +1374,264 @@ done:
 	return kr;
 }
 
+#define SANE_SLIDE_INFO_SIZE		(1024*1024) /*Can be changed if needed*/
+struct vm_shared_region_slide_info	slide_info;
+
+kern_return_t
+vm_shared_region_sliding_valid(uint32_t slide) {
+
+	kern_return_t kr = KERN_SUCCESS;
+
+	if ((shared_region_completed_slide == TRUE) && slide) {
+	        if (slide != slide_info.slide) {
+			SHARED_REGION_TRACE_DEBUG(("Only one shared region can be slid\n"));
+			kr = KERN_FAILURE;	
+		} else if (slide == slide_info.slide) {
+			/*
+			 * Request for sliding when we've
+			 * already done it with exactly the
+			 * same slide value before.
+			 * This isn't wrong technically but
+			 * we don't want to slide again and
+			 * so we return this value.
+			 */
+			kr = KERN_INVALID_ARGUMENT; 
+		}
+	}
+	return kr;
+}
+
+kern_return_t
+vm_shared_region_slide_init(
+		mach_vm_size_t	slide_info_size,
+		mach_vm_offset_t start,
+		mach_vm_size_t size,
+		uint32_t slide,
+		memory_object_control_t	sr_file_control)
+{
+	kern_return_t kr = KERN_SUCCESS;
+	vm_object_t object = VM_OBJECT_NULL;
+	vm_object_offset_t offset = 0;
+	
+	vm_map_t map =NULL, cur_map = NULL;
+	boolean_t	is_map_locked = FALSE;
+
+	if ((kr = vm_shared_region_sliding_valid(slide)) != KERN_SUCCESS) {
+		if (kr == KERN_INVALID_ARGUMENT) {
+			/*
+			 * This will happen if we request sliding again 
+			 * with the same slide value that was used earlier
+			 * for the very first sliding.
+			 */
+			kr = KERN_SUCCESS;
+		}
+		return kr;
+	}
+
+	if (slide_info_size > SANE_SLIDE_INFO_SIZE) {
+		SHARED_REGION_TRACE_DEBUG(("Slide_info_size too large: %lx\n", (uintptr_t)slide_info_size));
+		kr = KERN_FAILURE;
+		return kr;
+	}
+
+	if (sr_file_control != MEMORY_OBJECT_CONTROL_NULL) {
+
+		object = memory_object_control_to_vm_object(sr_file_control);
+		vm_object_reference(object);
+		offset = start;
+
+		vm_object_lock_shared(object);
+
+	} else {
+		/*
+		 * Remove this entire "else" block and all "map" references
+		 * once we get rid of the shared_region_slide_np()
+		 * system call. 
+		 */ 
+		vm_map_entry_t entry = VM_MAP_ENTRY_NULL;
+		map = current_map();
+		vm_map_lock_read(map);
+		is_map_locked = TRUE;
+	Retry:
+		cur_map = map;
+		if(!vm_map_lookup_entry(map, start, &entry)) {
+			kr = KERN_INVALID_ARGUMENT;
+		} else {
+			vm_object_t shadow_obj = VM_OBJECT_NULL;
+	 
+			if (entry->is_sub_map == TRUE) { 
+				map = entry->object.sub_map;
+				start -= entry->vme_start;
+				start += entry->offset;
+				vm_map_lock_read(map);
+				vm_map_unlock_read(cur_map);
+				goto Retry;
+			} else {
+				object = entry->object.vm_object;
+				offset = (start - entry->vme_start) + entry->offset;
+			}
+	 
+			vm_object_lock_shared(object);
+			while (object->shadow != VM_OBJECT_NULL) {
+				shadow_obj = object->shadow;
+				vm_object_lock_shared(shadow_obj);
+				vm_object_unlock(object);
+				object = shadow_obj;		
+			}
+		}
+	}
+		
+	if (object->internal == TRUE) {
+		kr = KERN_INVALID_ADDRESS;
+	} else {
+		kr = kmem_alloc(kernel_map,
+				(vm_offset_t *) &slide_info.slide_info_entry,
+				(vm_size_t) slide_info_size);
+		if (kr == KERN_SUCCESS) {
+			slide_info.slide_info_size = slide_info_size;
+			slide_info.slide_object = object;
+			slide_info.start = offset;
+			slide_info.end = slide_info.start + size;	
+			slide_info.slide = slide;
+			slide_info.sr = vm_shared_region_get(current_task());
+			/*
+			 * We want to keep the above reference on the shared region
+			 * because we have a pointer to it in the slide_info.
+			 *
+			 * If we want to have this region get deallocated/freed
+			 * then we will have to make sure that we msync(..MS_INVALIDATE..)
+			 * the pages associated with this shared region. Those pages would
+			 * have been slid with an older slide value.
+			 *
+			 * vm_shared_region_deallocate(slide_info.sr);
+			 */
+			shared_region_completed_slide = TRUE;
+		} else {
+			kr = KERN_FAILURE;
+		}
+	}
+	vm_object_unlock(object);
+
+	if (is_map_locked == TRUE) {
+		vm_map_unlock_read(map);
+	}
+	return kr;
+}
+
+void*
+vm_shared_region_get_slide_info(void) {
+	return (void*)&slide_info;
+}
+
+void* 
+vm_shared_region_get_slide_info_entry(void) {
+	return (void*)slide_info.slide_info_entry;
+}
+
+
+kern_return_t
+vm_shared_region_slide_sanity_check(void)
+{
+	uint32_t pageIndex=0;
+	uint16_t entryIndex=0;
+	uint16_t *toc = NULL;
+	vm_shared_region_slide_info_entry_t s_info;
+	kern_return_t kr;
+
+	s_info = vm_shared_region_get_slide_info_entry();
+	toc = (uint16_t*)((uintptr_t)s_info + s_info->toc_offset);
+
+	kr = mach_vm_protect(kernel_map,
+			     (mach_vm_offset_t)(vm_offset_t) slide_info.slide_info_entry,
+			     (mach_vm_size_t) slide_info.slide_info_size,
+			     VM_PROT_READ, TRUE);
+	if (kr != KERN_SUCCESS) {
+		panic("vm_shared_region_slide_sanity_check: vm_protect() error 0x%x\n", kr);
+	}
+
+	for (;pageIndex < s_info->toc_count; pageIndex++) {
+
+		entryIndex =  (uint16_t)(toc[pageIndex]);
+		
+		if (entryIndex >= s_info->entry_count) {
+			printf("No sliding bitmap entry for pageIndex: %d at entryIndex: %d amongst %d entries\n", pageIndex, entryIndex, s_info->entry_count);
+			goto fail;
+		}
+
+	}
+	return KERN_SUCCESS;
+fail:
+	if (slide_info.slide_info_entry != NULL) {
+		kmem_free(kernel_map,
+			  (vm_offset_t) slide_info.slide_info_entry,
+			  (vm_size_t) slide_info.slide_info_size);
+		vm_object_deallocate(slide_info.slide_object);
+	        slide_info.slide_object	= NULL;
+		slide_info.start = 0;
+		slide_info.end = 0;	
+		slide_info.slide = 0;
+		slide_info.slide_info_entry = NULL;
+		slide_info.slide_info_size = 0;
+		shared_region_completed_slide = FALSE;
+	}
+	return KERN_FAILURE;
+}
+
+kern_return_t
+vm_shared_region_slide(vm_offset_t vaddr, uint32_t pageIndex)
+{
+	uint16_t *toc = NULL;
+	slide_info_entry_toc_t bitmap = NULL;
+	uint32_t i=0, j=0;
+	uint8_t b = 0;
+	uint32_t slide = slide_info.slide;
+	int is_64 = task_has_64BitAddr(current_task());
+
+	vm_shared_region_slide_info_entry_t s_info = vm_shared_region_get_slide_info_entry();
+	toc = (uint16_t*)((uintptr_t)s_info + s_info->toc_offset);
+	
+	if (pageIndex >= s_info->toc_count) {
+		printf("No slide entry for this page in toc. PageIndex: %d Toc Count: %d\n", pageIndex, s_info->toc_count);
+	} else {
+		uint16_t entryIndex =  (uint16_t)(toc[pageIndex]);
+		slide_info_entry_toc_t slide_info_entries = (slide_info_entry_toc_t)((uintptr_t)s_info + s_info->entry_offset);
+		
+		if (entryIndex >= s_info->entry_count) {
+			printf("No sliding bitmap entry for entryIndex: %d amongst %d entries\n", entryIndex, s_info->entry_count);
+		} else {
+			bitmap = &slide_info_entries[entryIndex];
+
+			for(i=0; i < NUM_SLIDING_BITMAPS_PER_PAGE; ++i) {
+				b = bitmap->entry[i];
+				if (b!=0) {
+					for (j=0; j <8; ++j) {
+						if (b & (1 <<j)){
+							uint32_t *ptr_to_slide;
+							uint32_t old_value;
+
+							ptr_to_slide = (uint32_t*)((uintptr_t)(vaddr)+(sizeof(uint32_t)*(i*8 +j)));
+							old_value = *ptr_to_slide;
+							*ptr_to_slide += slide;
+							if (is_64 && *ptr_to_slide < old_value) {
+								/*
+								 * We just slid the low 32 bits of a 64-bit pointer
+								 * and it looks like there should have been a carry-over
+								 * to the upper 32 bits.
+								 * The sliding failed...
+								 */
+								printf("vm_shared_region_slide() carry over\n");
+								return KERN_FAILURE;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return KERN_SUCCESS;
+}
+
 /******************************************************************************/
 /* Comm page support                                                          */
 /******************************************************************************/
@@ -1368,14 +1738,6 @@ vm_commpage_enter(
 	/* select the appropriate comm page for this task */
 	assert(! (task_has_64BitAddr(task) ^ vm_map_is_64bit(map)));
 	if (task_has_64BitAddr(task)) {
-#ifdef __ppc__
-		/*
-		 * PPC51: ppc64 is limited to 51-bit addresses.
-		 * Memory above that limit is handled specially at the
-		 * pmap level, so do not interfere.
-		 */
-		vm_flags |= VM_FLAGS_NO_PMAP_CHECK;
-#endif /* __ppc__ */
 		commpage_handle = commpage64_handle;
 		commpage_address = (vm_map_offset_t) _COMM_PAGE64_BASE_ADDRESS;
 		commpage_size = _COMM_PAGE64_AREA_LENGTH;

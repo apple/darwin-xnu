@@ -27,10 +27,15 @@
  */
 #include <i386/pmap.h>
 
-pml4_entry_t		IdlePML4[PTE_PER_PAGE] __attribute__((section("__INITPT, __data"))) = {
+#define PML4_PROT (INTEL_PTE_VALID | INTEL_PTE_WRITE)
+pml4_entry_t	IdlePML4[PTE_PER_PAGE] __attribute__((section("__INITPT, __data"))) = {
 #ifdef __x86_64__
-		[  0] = ((uint64_t)(INITPT_SEG_BASE + PAGE_SIZE) | INTEL_PTE_VALID | INTEL_PTE_WRITE),
-		[KERNEL_PML4_INDEX] = ((uint64_t)(INITPT_SEG_BASE + PAGE_SIZE) | INTEL_PTE_VALID | INTEL_PTE_WRITE),
+		[  0]
+			= ((uint64_t)(INITPT_SEG_BASE + PAGE_SIZE) | PML4_PROT),
+#if KERNEL_PML4_INDEX != 0
+		[KERNEL_PML4_INDEX]
+			= ((uint64_t)(INITPT_SEG_BASE + PAGE_SIZE) | PML4_PROT),
+#endif
 #endif
 	};
 
@@ -39,7 +44,7 @@ pml4_entry_t		IdlePML4[PTE_PER_PAGE] __attribute__((section("__INITPT, __data"))
 #elif defined(__i386__)
 #define PDPT_PROT (INTEL_PTE_VALID)
 #endif
-pdpt_entry_t		IdlePDPT[PTE_PER_PAGE] __attribute__((section("__INITPT, __data"))) = {
+pdpt_entry_t	IdlePDPT[PTE_PER_PAGE] __attribute__((section("__INITPT, __data"))) = {
 		[0] = ((uint64_t)(INITPT_SEG_BASE + 2*PAGE_SIZE) | PDPT_PROT), 
 		[1] = ((uint64_t)(INITPT_SEG_BASE + 3*PAGE_SIZE) | PDPT_PROT), 
 		[2] = ((uint64_t)(INITPT_SEG_BASE + 4*PAGE_SIZE) | PDPT_PROT), 
@@ -49,6 +54,8 @@ pdpt_entry_t		IdlePDPT[PTE_PER_PAGE] __attribute__((section("__INITPT, __data"))
 #if NPGPTD != 4
 #error Please update idle_pt.c to reflect the new value of NPGPTD
 #endif
+
+#if MACHINE_BOOTSTRAPPTD
 
 #define ID_MAP_2MEG(x) [(x)] = ((((uint64_t)(x)) << 21) | (INTEL_PTE_PS | INTEL_PTE_VALID | INTEL_PTE_WRITE)),
 
@@ -70,3 +77,4 @@ pdpt_entry_t		IdlePDPT[PTE_PER_PAGE] __attribute__((section("__INITPT, __data"))
 pd_entry_t		BootstrapPTD[2048] __attribute__((section("__INITPT, __data"))) = {
 	FOR_0_TO_2047(ID_MAP_2MEG)
 };
+#endif /* MACHINE_BOOTSTRAPPTD */

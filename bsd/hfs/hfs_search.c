@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1997-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -48,6 +48,7 @@
 #include <sys/utfconv.h>
 #include <sys/kauth.h>
 #include <sys/vnode_internal.h>
+#include <sys/mount_internal.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -154,7 +155,6 @@ vnop_searchfs {
 };
 */
 
-__private_extern__
 int
 hfs_vnop_search(ap)
 	struct vnop_searchfs_args *ap; /*
@@ -186,7 +186,6 @@ hfs_vnop_search(ap)
 	struct proc *p = current_proc();
 	int err = E_NONE;
 	int isHFSPlus;
-	int timerExpired = false;
 	CatalogKey * myCurrentKeyPtr;
 	CatalogRecord * myCurrentDataPtr;
 	CatPosition * myCatPositionPtr;
@@ -195,6 +194,9 @@ hfs_vnop_search(ap)
 	user_size_t user_len = 0;
 	int32_t searchTime;
 	int lockflags;
+	struct uthread	*ut;
+	boolean_t timerExpired = FALSE;
+	boolean_t needThrottle = FALSE;
 
 	/* XXX Parameter check a_searchattrs? */
 
@@ -307,7 +309,7 @@ hfs_vnop_search(ap)
 		(void) hfs_fsync(vcb->catalogRefNum, MNT_WAIT, 0, p);
 		if (hfsmp->jnl) {
 		    hfs_systemfile_unlock(hfsmp, lockflags);
-		    hfs_journal_flush(hfsmp);
+		    hfs_journal_flush(hfsmp, FALSE);
 		    lockflags = hfs_systemfile_lock(hfsmp, SFL_CATALOG, HFS_SHARED_LOCK);
 		}
 
@@ -336,6 +338,8 @@ hfs_vnop_search(ap)
 	if (err)
 		goto ExitThisRoutine;
 
+	if (throttle_get_io_policy(&ut) == IOPOL_THROTTLE)
+		needThrottle = TRUE;
 	/*
 	 * Check all the catalog btree records...
 	 *   return the attributes for matching items
@@ -373,18 +377,24 @@ hfs_vnop_search(ap)
 			if (*(ap->a_nummatches) >= ap->a_maxmatches)
 				break;
 		}
-
-		/*
-		 * Check our elapsed time and bail if we've hit the max.
-		 * The idea here is to throttle the amount of time we
-		 * spend in the kernel.
-		 */
-		microuptime(&myCurrentTime);
-		timersub(&myCurrentTime, &myBTScanState.startTime, &myElapsedTime);
-		/* Note: assumes kMaxMicroSecsInKernel is less than 1,000,000 */
-		if (myElapsedTime.tv_sec > 0
-		||  myElapsedTime.tv_usec >= searchTime) {
-			timerExpired = true;
+		if (timerExpired == FALSE) {
+			/*
+			 * Check our elapsed time and bail if we've hit the max.
+			 * The idea here is to throttle the amount of time we
+			 * spend in the kernel.
+			 */
+			microuptime(&myCurrentTime);
+			timersub(&myCurrentTime, &myBTScanState.startTime, &myElapsedTime);
+			/*
+			 * Note: assumes kMaxMicroSecsInKernel is less than 1,000,000
+			 */
+			if (myElapsedTime.tv_sec > 0
+			    ||  myElapsedTime.tv_usec >= searchTime) {
+				timerExpired = TRUE;
+			} else if (needThrottle == TRUE) {
+				if (throttle_io_will_be_throttled(ut->uu_lowpri_window, HFSTOVFS(hfsmp)))
+					timerExpired = TRUE;
+			}
 		}
 	}
 
@@ -436,12 +446,12 @@ ResolveHardlink(struct hfsmount *hfsmp, HFSPlusCatalogFile *recp)
 	filecreatedate = to_bsd_time(recp->createDate);
 
 	if ((type == kHardLinkFileType && creator == kHFSPlusCreator) &&
-	    (filecreatedate == (time_t)hfsmp->vcbCrDate ||
+	    (filecreatedate == (time_t)hfsmp->hfs_itime ||
 	     filecreatedate == (time_t)hfsmp->hfs_metadata_createdate)) {
 		isfilelink = 1;
 	} else if ((type == kHFSAliasType && creator == kHFSAliasCreator) &&
 	           (recp->flags & kHFSHasLinkChainMask) &&
-	           (filecreatedate == (time_t)hfsmp->vcbCrDate ||
+	           (filecreatedate == (time_t)hfsmp->hfs_itime ||
 	            filecreatedate == (time_t)hfsmp->hfs_metadata_createdate)) {
 		isdirlink = 1;
 	}
@@ -556,7 +566,7 @@ CheckAccess(ExtendedVCB *theVCBPtr, u_long searchBits, CatalogKey *theKeyPtr, st
 		cnode_t *	cp;
 		
 		/* now go get catalog data for this directory */
-		myErr = hfs_vget(hfsmp, myNodeID, &vp, 0);
+		myErr = hfs_vget(hfsmp, myNodeID, &vp, 0, 0);
 		if ( myErr ) {
 			goto ExitThisRoutine;	/* no access */
 		}

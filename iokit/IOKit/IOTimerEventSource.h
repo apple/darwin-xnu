@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2000, 2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -94,10 +94,6 @@ protected:
 /*! @function free
     @abstract Sub-class implementation of free method, frees calloutEntry */
     virtual void free();
-
-/*! @function checkForWork
-    @abstract Have to implement it is mandatory in $link IOEventSource, but IOTimerEventSources don't actually use this work-loop mechanism. */
-    virtual bool checkForWork();
 
     virtual void setWorkLoop(IOWorkLoop *workLoop);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1995-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -395,6 +395,7 @@ static struct getattrlist_attrtab getattrlist_common_tab[] = {
 	{ATTR_CMN_FILEID,	VATTR_BIT(va_fileid), 		sizeof(uint64_t),		KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_PARENTID,	VATTR_BIT(va_parentid),		sizeof(uint64_t),		KAUTH_VNODE_READ_ATTRIBUTES},
 	{ATTR_CMN_FULLPATH, 0, 	sizeof(struct attrreference),	KAUTH_VNODE_READ_ATTRIBUTES	},
+    {ATTR_CMN_ADDEDTIME, VATTR_BIT(va_addedtime), ATTR_TIME_SIZE,	KAUTH_VNODE_READ_ATTRIBUTES}, 
 	{ATTR_CMN_RETURNED_ATTRS, 0,				sizeof(attribute_set_t),	0},
 	{0, 0, 0, 0}
 };
@@ -523,6 +524,27 @@ getattrlist_fixupattrs(attribute_set_t *asp, struct vnode_attr *vap)
 	if (asp->commonattr) {
 		tab = getattrlist_common_tab;
 		do {
+            /* 
+			 * This if() statement is slightly confusing. We're trying to
+			 * iterate through all of the bits listed in the array 
+			 * getattr_common_tab, and see if the filesystem was expected
+			 * to support it, and whether or not we need to do anything about this.
+			 * 
+			 * This array is full of structs that have 4 fields (attr, bits, size, action).
+			 * The first is used to store the ATTR_CMN_* bit that was being requested 
+			 * from userland.  The second stores the VATTR_BIT corresponding to the field
+			 * filled in vnode_attr struct.  If it is 0, then we don't typically expect
+			 * the filesystem to fill in this field.  The third is the size of the field,
+			 * and the fourth is the type of kauth actions needed.
+			 *
+			 * So, for all of the ATTR_CMN bits listed in this array, we iterate through 
+			 * them, and check to see if it was both passed down to the filesystem via the
+			 * va_active bitfield, and whether or not we expect it to be emitted from
+			 * the filesystem.  If it wasn't supported, then we un-twiddle the bit and move
+			 * on.  This is done so that we can uncheck those bits and re-request
+			 * a vnode_getattr from the filesystem again.
+			 */
+
 			if ((tab->attr & asp->commonattr) &&
 			    (tab->bits & vap->va_active) &&
 			    (tab->bits & vap->va_supported) == 0) {
@@ -1108,6 +1130,7 @@ getvolattrlist(vnode_t vp, struct getattrlist_args *uap, struct attrlist *alp,
 	}
 	if (alp->volattr & ATTR_VOL_UUID) {
 		ATTR_PACK(&ab, vs.f_uuid);
+		ab.actual.volattr |= ATTR_VOL_UUID;
 	}
 	if (alp->volattr & ATTR_VOL_ATTRIBUTES) {
 		/* fix up volume attribute information */
@@ -1188,6 +1211,7 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 	int		return_valid;
 	int		pack_invalid;
 	int		vtype = 0;
+	uint32_t	perms = 0;
 
 	proc_is64 = proc_is64bit(p);
 	VATTR_INIT(&va);
@@ -1604,6 +1628,30 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 		ATTR_PACK_TIME(ab, va.va_backup_time, proc_is64);
 		ab.actual.commonattr |= ATTR_CMN_BKUPTIME;
 	}
+	/*
+	 * They are requesting user access, we should obtain this before getting 
+	 * the finder info. For some network file systems this is a performance
+	 * improvement.
+	 */
+	if (al.commonattr & ATTR_CMN_USERACCESS) {	/* this is expensive */
+		if (vtype == VDIR) {
+			if (vnode_authorize(vp, NULL,
+								KAUTH_VNODE_ACCESS | KAUTH_VNODE_ADD_FILE | KAUTH_VNODE_ADD_SUBDIRECTORY | KAUTH_VNODE_DELETE_CHILD, ctx) == 0)
+				perms |= W_OK;
+			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_LIST_DIRECTORY, ctx) == 0)
+				perms |= R_OK;
+			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_SEARCH, ctx) == 0)
+				perms |= X_OK;
+		} else {
+			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_WRITE_DATA, ctx) == 0)
+				perms |= W_OK;
+			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_READ_DATA, ctx) == 0)
+				perms |= R_OK;
+			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_EXECUTE, ctx) == 0)
+				perms |= X_OK;
+		}
+	}
+	
 	if (al.commonattr & ATTR_CMN_FNDRINFO) {
 		uio_t	auio;
 		size_t	fisize = 32;
@@ -1654,25 +1702,8 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 		ATTR_PACK4(ab, va.va_flags);
 		ab.actual.commonattr |= ATTR_CMN_FLAGS;
 	}
-	if (al.commonattr & ATTR_CMN_USERACCESS) {	/* this is expensive */
-		uint32_t	perms = 0;
-		if (vtype == VDIR) {
-			if (vnode_authorize(vp, NULL,
-				KAUTH_VNODE_ACCESS | KAUTH_VNODE_ADD_FILE | KAUTH_VNODE_ADD_SUBDIRECTORY | KAUTH_VNODE_DELETE_CHILD, ctx) == 0)
-				perms |= W_OK;
-			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_LIST_DIRECTORY, ctx) == 0)
-				perms |= R_OK;
-			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_SEARCH, ctx) == 0)
-				perms |= X_OK;
-		} else {
-			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_WRITE_DATA, ctx) == 0)
-				perms |= W_OK;
-			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_READ_DATA, ctx) == 0)
-				perms |= R_OK;
-			if (vnode_authorize(vp, NULL, KAUTH_VNODE_ACCESS | KAUTH_VNODE_EXECUTE, ctx) == 0)
-				perms |= X_OK;
-		}
-
+	/* We already obtain the user access, so just fill in the buffer here */
+	if (al.commonattr & ATTR_CMN_USERACCESS) {
 #if CONFIG_MACF
 		/* 
 		 * Rather than MAC preceding DAC, in this case we want
@@ -1737,6 +1768,12 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 		attrlist_pack_string (&ab, fullpathptr, fullpathlen);
 		ab.actual.commonattr |= ATTR_CMN_FULLPATH;
 	}
+    
+    if (al.commonattr & ATTR_CMN_ADDEDTIME) {
+		ATTR_PACK_TIME(ab, va.va_addedtime, proc_is64);
+		ab.actual.commonattr |= ATTR_CMN_ADDEDTIME;
+	}
+
 
 	/* directory attributes *********************************************/
 	if (al.dirattr && (vtype == VDIR)) {
@@ -1749,24 +1786,100 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 			ab.actual.dirattr |= ATTR_DIR_ENTRYCOUNT;
 		}
 		if (al.dirattr & ATTR_DIR_MOUNTSTATUS) {
-			ATTR_PACK_CAST(&ab, uint32_t, (vp->v_flag & VROOT) ?
-			               DIR_MNTSTATUS_MNTPOINT : 0);
+			uint32_t mntstat;
+
+			mntstat = (vp->v_flag & VROOT) ? DIR_MNTSTATUS_MNTPOINT : 0;
+#if CONFIG_TRIGGERS
+			/*
+			 * Report back on active vnode triggers
+			 * that can directly trigger a mount
+			 */
+			if (vp->v_resolve &&
+			    !(vp->v_resolve->vr_flags & VNT_NO_DIRECT_MOUNT)) {
+				mntstat |= DIR_MNTSTATUS_TRIGGER;
+			}
+#endif
+			ATTR_PACK4(ab, mntstat);
 			ab.actual.dirattr |= ATTR_DIR_MOUNTSTATUS;
 		}
 	}
 
 	/* file attributes **************************************************/
 	if (al.fileattr && (vtype != VDIR)) {
+
+		size_t	rsize = 0;
+		uint64_t rlength = 0;
+		uint64_t ralloc = 0;
+		/* 
+		 * Pre-fetch the rsrc attributes now so we only get them once.
+		 * Fetch the resource fork size/allocation via xattr interface 
+		 */
+		if (al.fileattr & (ATTR_FILE_TOTALSIZE | ATTR_FILE_ALLOCSIZE | ATTR_FILE_RSRCLENGTH | ATTR_FILE_RSRCALLOCSIZE)) {
+			if ((error = vn_getxattr(vp, XATTR_RESOURCEFORK_NAME, NULL, &rsize, XATTR_NOSECURITY, ctx)) != 0) {
+				if ((error == ENOENT) || (error == ENOATTR) || (error == ENOTSUP) || (error == EPERM)|| (error == EACCES)) {
+					rsize = 0;
+					error = 0;
+				} else {
+					goto out;
+				}
+			}
+			rlength = rsize;
+
+			if (al.fileattr & (ATTR_FILE_RSRCALLOCSIZE | ATTR_FILE_ALLOCSIZE)) {
+				uint32_t  blksize = vp->v_mount->mnt_vfsstat.f_bsize;
+				if (blksize == 0) {
+					blksize = 512;
+				}
+				ralloc = roundup(rsize, blksize);
+			}
+		}
+
 		if (al.fileattr & ATTR_FILE_LINKCOUNT) {
 			ATTR_PACK4(ab, (uint32_t)va.va_nlink);
 			ab.actual.fileattr |= ATTR_FILE_LINKCOUNT;
 		}
+		/*
+		 * Note the following caveats for the TOTALSIZE and ALLOCSIZE attributes: 
+		 * We infer that if the filesystem does not support va_data_size or va_data_alloc
+		 * it must not know about alternate forks.  So when we need to gather
+		 * the total size or total alloc, it's OK to substitute the total size for 
+		 * the data size below.  This is because it is likely a flat filesystem and we must
+		 * be using AD files to store the rsrc fork and EAs.  
+		 * 
+		 * Additionally, note that getattrlist is barred from being called on 
+		 * resource fork paths. (Search for CN_ALLOWRSRCFORK).  So if the filesystem does 
+		 * support va_data_size, it is guaranteed to represent the data fork's size.  This 
+		 * is an important distinction to make because when we call vnode_getattr on 
+		 * an HFS resource fork vnode, to get the size, it will vend out the resource 
+		 * fork's size (it only gets the size of the passed-in vnode).  
+		 */
 		if (al.fileattr & ATTR_FILE_TOTALSIZE) {
-			ATTR_PACK8(ab, va.va_total_size);
+			uint64_t totalsize = rlength;			
+
+			if (VATTR_IS_SUPPORTED(&va, va_data_size)) {
+				totalsize += va.va_data_size;
+			} else {
+				totalsize += va.va_total_size;
+			}
+
+			ATTR_PACK8(ab, totalsize);
 			ab.actual.fileattr |= ATTR_FILE_TOTALSIZE;
 		}
 		if (al.fileattr & ATTR_FILE_ALLOCSIZE) {
-			ATTR_PACK8(ab, va.va_total_alloc);
+			uint64_t totalalloc = ralloc;
+		
+			/* 
+			 * If data_alloc is supported, then it must represent the 
+			 * data fork size.
+			 */
+			if (VATTR_IS_SUPPORTED(&va, va_data_alloc)) {
+				totalalloc += va.va_data_alloc;
+			}
+			else {
+				totalalloc += va.va_total_alloc;
+			}
+	
+			ATTR_PACK8(ab, totalalloc);
 			ab.actual.fileattr |= ATTR_FILE_ALLOCSIZE;
 		}
 		if (al.fileattr & ATTR_FILE_IOBLOCKSIZE) {
@@ -1793,6 +1906,12 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 			ATTR_PACK4(ab, dev);
 			ab.actual.fileattr |= ATTR_FILE_DEVTYPE;
 		}
+		
+		/* 
+		 * If the filesystem does not support datalength
+		 * or dataallocsize, then we infer that totalsize and 
+		 * totalalloc are substitutes.
+		 */
 		if (al.fileattr & ATTR_FILE_DATALENGTH) {
 			if (VATTR_IS_SUPPORTED(&va, va_data_size)) {
 				ATTR_PACK8(ab, va.va_data_size);
@@ -1809,37 +1928,17 @@ getattrlist_internal(vnode_t vp, struct getattrlist_args *uap, proc_t p, vfs_con
 			}
 			ab.actual.fileattr |= ATTR_FILE_DATAALLOCSIZE;
 		}
-		/* fetch resource fork size/allocation via xattr interface */
-		if (al.fileattr & (ATTR_FILE_RSRCLENGTH | ATTR_FILE_RSRCALLOCSIZE)) {
-			size_t	rsize;
-			uint64_t rlength;
-
-			if ((error = vn_getxattr(vp, XATTR_RESOURCEFORK_NAME, NULL, &rsize, XATTR_NOSECURITY, ctx)) != 0) {
-				if ((error == ENOENT) || (error == ENOATTR) || (error == ENOTSUP) || (error == EPERM)) {
-					rsize = 0;
-					error = 0;
-				} else {
-					goto out;
-				}
-			}
-			if (al.fileattr & ATTR_FILE_RSRCLENGTH) {
-				rlength = rsize;
-				ATTR_PACK8(ab, rlength);
-				ab.actual.fileattr |= ATTR_FILE_RSRCLENGTH;
-			}
-			if (al.fileattr & ATTR_FILE_RSRCALLOCSIZE) {
-				uint32_t  blksize = vp->v_mount->mnt_vfsstat.f_bsize;
-				if (blksize == 0)
-					blksize = 512;
-				rlength = roundup(rsize, blksize);
-				ATTR_PACK8(ab, rlength);
-				ab.actual.fileattr |= ATTR_FILE_RSRCALLOCSIZE;
-			}
+		/* already got the resource fork size/allocation above */
+		if (al.fileattr & ATTR_FILE_RSRCLENGTH) {
+			ATTR_PACK8(ab, rlength);
+			ab.actual.fileattr |= ATTR_FILE_RSRCLENGTH;
 		}
-		if (al.fileattr & ATTR_FILE_PROTECTION_CLASS) {
+		if (al.fileattr & ATTR_FILE_RSRCALLOCSIZE) {
+			ATTR_PACK8(ab, ralloc);
+			ab.actual.fileattr |= ATTR_FILE_RSRCALLOCSIZE;
 		}
 	}
-	
+
 	/* diagnostic */
 	if (!return_valid && (ab.fixedcursor - ab.base) != fixedsize)
 		panic("packed field size mismatch; allocated %ld but packed %ld for common %08x vol %08x",
@@ -1938,7 +2037,7 @@ getattrlist(proc_t p, struct getattrlist_args *uap, __unused int32_t *retval)
 	nameiflags = NOTRIGGER | AUDITVNPATH1;
 	if (!(uap->options & FSOPT_NOFOLLOW))
 		nameiflags |= FOLLOW;
-	NDINIT(&nd, LOOKUP, nameiflags, UIO_USERSPACE, uap->path, ctx);
+	NDINIT(&nd, LOOKUP, OP_GETATTR, nameiflags, UIO_USERSPACE, uap->path, ctx);
 
 	if ((error = namei(&nd)) != 0)
 		goto out;
@@ -2198,8 +2297,6 @@ setattrlist_internal(vnode_t vp, struct setattrlist_args *uap, proc_t p, vfs_con
 		VFS_DEBUG(ctx, vp, "ATTRLIST - XXX device type change not implemented");
 		goto out;
 	}
-	if (al.fileattr & ATTR_FILE_PROTECTION_CLASS) {
-	}
 
 	/*
 	 * Validate and authorize.
@@ -2325,10 +2422,10 @@ setattrlist(proc_t p, struct setattrlist_args *uap, __unused int32_t *retval)
 	/*
 	 * Look up the file.
 	 */
-	nameiflags = 0;
+	nameiflags = AUDITVNPATH1;
 	if ((uap->options & FSOPT_NOFOLLOW) == 0)
 		nameiflags |= FOLLOW;
-	NDINIT(&nd, LOOKUP, nameiflags | AUDITVNPATH1, UIO_USERSPACE, uap->path, ctx);
+	NDINIT(&nd, LOOKUP, OP_SETATTR, nameiflags, UIO_USERSPACE, uap->path, ctx);
 	if ((error = namei(&nd)) != 0)
 		goto out;
 	vp = nd.ni_vp;

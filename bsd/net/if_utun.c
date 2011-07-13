@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -366,6 +366,9 @@ utun_cleanup_family(
 		goto cleanup;
 	}
 	
+        /* always set SS_PRIV, we want to close and detach regardless */
+        sock_setpriv(pf_socket, 1);
+
 	result = utun_detach_ip(interface, protocol, pf_socket);
 	if (result == 0 || result == ENXIO) {
 		/* We are done! We either detached or weren't attached. */
@@ -705,7 +708,6 @@ utun_ioctl(
 	void		*data)
 {
 	errno_t	result = 0;
-	struct ifaddr 	*ifa = (struct ifaddr *)data;
 	
 	switch(command) {
 		case SIOCSIFMTU:
@@ -715,13 +717,6 @@ utun_ioctl(
 		case SIOCSIFFLAGS:
 			/* ifioctl() takes care of it */
 			break;
-			
-		case SIOCSIFADDR:
-		case SIOCAIFADDR:
-			/* This will be called for called for IPv6 Address additions */
-			if (ifa->ifa_addr->sa_family == AF_INET6) 
-				break;
-			/* Fall though for other families like IPv4 */
 			
 		default:
 			result = EOPNOTSUPP;
@@ -754,7 +749,8 @@ utun_proto_input(
 	// remove protocol family first
 	mbuf_adj(m, sizeof(u_int32_t));
 	
-	proto_input(protocol, m);
+	if (proto_input(protocol, m) != 0)
+		m_freem(m);
 	
 	return 0;
 }
@@ -770,8 +766,8 @@ utun_proto_pre_output(
 	__unused char *link_layer_dest)
 {
 	
-    *(protocol_family_t *)(void *)frame_type = protocol;
-	return 0;
+	*(protocol_family_t *)(void *)frame_type = protocol;
+		return 0;
 }
 
 static errno_t

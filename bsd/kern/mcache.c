@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -98,9 +98,6 @@
 #define	MCACHE_UNLOCK(l)	lck_mtx_unlock(l)
 #define	MCACHE_LOCK_TRY(l)	lck_mtx_try_lock(l)
 
-/* This should be in a header file */
-#define	atomic_add_32(a, n)	((void) OSAddAtomic(n, a))
-
 static int ncpu;
 static lck_mtx_t *mcache_llock;
 static struct thread *mcache_llock_owner;
@@ -137,8 +134,8 @@ static mcache_bkttype_t mcache_bkttype[] = {
 };
 
 static mcache_t *mcache_create_common(const char *, size_t, size_t,
-    mcache_allocfn_t, mcache_freefn_t, mcache_auditfn_t, mcache_notifyfn_t,
-    void *, u_int32_t, int, int);
+    mcache_allocfn_t, mcache_freefn_t, mcache_auditfn_t, mcache_logfn_t,
+    mcache_notifyfn_t, void *, u_int32_t, int, int);
 static unsigned int mcache_slab_alloc(void *, mcache_obj_t ***,
     unsigned int, int);
 static void mcache_slab_free(void *, mcache_obj_t *, boolean_t);
@@ -192,6 +189,7 @@ mcache_init(void)
 	    PAGE_SIZE, "mcache");
 	if (mcache_zone == NULL)
 		panic("mcache_init: failed to allocate mcache zone\n");
+	zone_change(mcache_zone, Z_CALLERACCT, FALSE);
 
 	LIST_INIT(&mcache_head);
 
@@ -233,7 +231,8 @@ mcache_create(const char *name, size_t bufsize, size_t align,
     u_int32_t flags, int wait)
 {
 	return (mcache_create_common(name, bufsize, align, mcache_slab_alloc,
-	    mcache_slab_free, mcache_slab_audit, NULL, NULL, flags, 1, wait));
+	    mcache_slab_free, mcache_slab_audit, NULL, NULL, NULL, flags, 1,
+	    wait));
 }
 
 /*
@@ -244,10 +243,11 @@ mcache_create(const char *name, size_t bufsize, size_t align,
 __private_extern__ mcache_t *
 mcache_create_ext(const char *name, size_t bufsize,
     mcache_allocfn_t allocfn, mcache_freefn_t freefn, mcache_auditfn_t auditfn,
-    mcache_notifyfn_t notifyfn, void *arg, u_int32_t flags, int wait)
+    mcache_logfn_t logfn, mcache_notifyfn_t notifyfn, void *arg,
+    u_int32_t flags, int wait)
 {
 	return (mcache_create_common(name, bufsize, 0, allocfn,
-	    freefn, auditfn, notifyfn, arg, flags, 0, wait));
+	    freefn, auditfn, logfn, notifyfn, arg, flags, 0, wait));
 }
 
 /*
@@ -256,8 +256,8 @@ mcache_create_ext(const char *name, size_t bufsize,
 static mcache_t *
 mcache_create_common(const char *name, size_t bufsize, size_t align,
     mcache_allocfn_t allocfn, mcache_freefn_t freefn, mcache_auditfn_t auditfn,
-    mcache_notifyfn_t notifyfn, void *arg, u_int32_t flags, int need_zone,
-    int wait)
+    mcache_logfn_t logfn, mcache_notifyfn_t notifyfn, void *arg,
+    u_int32_t flags, int need_zone, int wait)
 {
 	mcache_bkttype_t *btp;
 	mcache_t *cp = NULL;
@@ -267,7 +267,7 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	char lck_name[64];
 
 	/* If auditing is on and print buffer is NULL, allocate it now */
-	if ((flags & MCF_AUDIT) && mca_dump_buf == NULL) {
+	if ((flags & MCF_DEBUG) && mca_dump_buf == NULL) {
 		int malloc_wait = (wait & MCR_NOSLEEP) ? M_NOWAIT : M_WAITOK;
 		MALLOC(mca_dump_buf, char *, DUMP_MCA_BUF_SIZE, M_TEMP,
 		    malloc_wait | M_ZERO);
@@ -313,6 +313,7 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	cp->mc_slab_alloc = allocfn;
 	cp->mc_slab_free = freefn;
 	cp->mc_slab_audit = auditfn;
+	cp->mc_slab_log = logfn;
 	cp->mc_slab_notify = notifyfn;
 	cp->mc_private = need_zone ? cp : arg;
 	cp->mc_bufsize = bufsize;
@@ -467,6 +468,11 @@ retry_alloc:
 			/* If we got them all, return to caller */
 			if ((need -= objs) == 0) {
 				MCACHE_UNLOCK(&ccp->cc_lock);
+
+				if (!(cp->mc_flags & MCF_NOLEAKLOG) &&
+				    cp->mc_slab_log != NULL)
+					(*cp->mc_slab_log)(num, *top, TRUE);
+
 				if (cp->mc_flags & MCF_DEBUG)
 					goto debug_alloc;
 
@@ -534,11 +540,14 @@ retry_alloc:
 		}
 	}
 
+	if (!(cp->mc_flags & MCF_NOLEAKLOG) && cp->mc_slab_log != NULL)
+		(*cp->mc_slab_log)((num - need), *top, TRUE);
+
 	if (!(cp->mc_flags & MCF_DEBUG))
 		return (num - need);
 
 debug_alloc:
-	if (cp->mc_flags & MCF_VERIFY) {
+	if (cp->mc_flags & MCF_DEBUG) {
 		mcache_obj_t **o = top;
 		unsigned int n;
 
@@ -561,7 +570,7 @@ debug_alloc:
 	}
 
 	/* Invoke the slab layer audit callback if auditing is enabled */
-	if ((cp->mc_flags & MCF_AUDIT) && cp->mc_slab_audit != NULL)
+	if ((cp->mc_flags & MCF_DEBUG) && cp->mc_slab_audit != NULL)
 		(*cp->mc_slab_audit)(cp->mc_private, *top, TRUE);
 
 	return (num - need);
@@ -678,8 +687,11 @@ mcache_free_ext(mcache_t *cp, mcache_obj_t *list)
 	mcache_obj_t *nlist;
 	mcache_bkt_t *bkt;
 
+	if (!(cp->mc_flags & MCF_NOLEAKLOG) && cp->mc_slab_log != NULL)
+		(*cp->mc_slab_log)(0, list, FALSE);
+
 	/* Invoke the slab layer audit callback if auditing is enabled */
-	if ((cp->mc_flags & MCF_AUDIT) && cp->mc_slab_audit != NULL)
+	if ((cp->mc_flags & MCF_DEBUG) && cp->mc_slab_audit != NULL)
 		(*cp->mc_slab_audit)(cp->mc_private, list, FALSE);
 
 	MCACHE_LOCK(&ccp->cc_lock);
@@ -899,7 +911,7 @@ mcache_slab_alloc(void *arg, mcache_obj_t ***plist, unsigned int num, int wait)
 		 * the nearest 64-bit multiply; this is because we use
 		 * 64-bit memory access to set/check the pattern.
 		 */
-		if (flags & MCF_AUDIT) {
+		if (flags & MCF_DEBUG) {
 			VERIFY(((intptr_t)base + rsize) <=
 			    ((intptr_t)buf + cp->mc_chunksize));
 			mcache_set_pattern(MCACHE_FREE_PATTERN, base, rsize);
@@ -958,7 +970,7 @@ mcache_slab_free(void *arg, mcache_obj_t *list, __unused boolean_t purged)
 		/* Get the original address since we're about to free it */
 		pbuf = (void **)((intptr_t)base - sizeof (void *));
 
-		if (flags & MCF_AUDIT) {
+		if (flags & MCF_DEBUG) {
 			VERIFY(((intptr_t)base + rsize) <=
 			    ((intptr_t)*pbuf + cp->mc_chunksize));
 			mcache_audit_free_verify(NULL, base, offset, rsize);
@@ -1156,7 +1168,7 @@ mcache_bkt_destroy(mcache_t *cp, mcache_bkttype_t *btp, mcache_bkt_t *bkt,
 	if (nobjs > 0) {
 		mcache_obj_t *top = bkt->bkt_obj[nobjs - 1];
 
-		if (cp->mc_flags & MCF_VERIFY) {
+		if (cp->mc_flags & MCF_DEBUG) {
 			mcache_obj_t *o = top;
 			int cnt = 0;
 

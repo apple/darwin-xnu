@@ -4,7 +4,6 @@
 #  PROFILE	= [ RELEASE profile ]
 #  DEBUG	= [ RELEASE debug ]
 #
-#
 #  EMBEDDED	= [ intel mach libkerncpp ]
 #  DEVELOPMENT	= [ EMBEDDED config_dtrace ]
 #

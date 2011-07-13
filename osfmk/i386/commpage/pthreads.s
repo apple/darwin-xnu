@@ -31,37 +31,6 @@
 #include <machine/commpage.h>
 #include <mach/i386/syscall_sw.h>
 
-#define _PTHREAD_TSD_OFFSET32 0x48
-#define _PTHREAD_TSD_OFFSET64 0x60
-
-
-/* These routines do not need to be on the copmmpage on Intel.  They are for now
- * to avoid revlock, but the code should move to Libc, and we should eventually remove
- * these.
- */
-COMMPAGE_FUNCTION_START(pthread_getspecific, 32, 4)
-	movl	4(%esp), %eax
-	movl	%gs:_PTHREAD_TSD_OFFSET32(,%eax,4), %eax
-	ret
-COMMPAGE_DESCRIPTOR(pthread_getspecific,_COMM_PAGE_PTHREAD_GETSPECIFIC,0,0)
-
-COMMPAGE_FUNCTION_START(pthread_self, 32, 4)
-	movl	%gs:_PTHREAD_TSD_OFFSET32, %eax
-	ret
-COMMPAGE_DESCRIPTOR(pthread_self,_COMM_PAGE_PTHREAD_SELF,0,0)
-
-/* the 64-bit versions: */
-COMMPAGE_FUNCTION_START(pthread_getspecific_64, 64, 4)
-	movq	%gs:_PTHREAD_TSD_OFFSET64(,%rdi,8), %rax
-	ret
-COMMPAGE_DESCRIPTOR(pthread_getspecific_64,_COMM_PAGE_PTHREAD_GETSPECIFIC,0,0)
-
-COMMPAGE_FUNCTION_START(pthread_self_64, 64, 4)
-	movq	%gs:_PTHREAD_TSD_OFFSET64, %rax
-	ret
-COMMPAGE_DESCRIPTOR(pthread_self_64,_COMM_PAGE_PTHREAD_SELF,0,0)
-
-
 /* Temporary definitions.  Replace by #including the correct file when available.  */
 
 #define PTHRW_EBIT      0x01
@@ -112,47 +81,6 @@ COMMPAGE_DESCRIPTOR(pthread_self_64,_COMM_PAGE_PTHREAD_SELF,0,0)
  * and entering the kernel to relinquish, some low-level pthread mutex manipulations
  * are located in the PFZ.
  */
-
-
-/* int							    // we return 0 on acquire, 1 on syscall
- * pthread_mutex_lock(	uint32_t    *lvalp,		    // ptr to mutex LVAL/UVAL pair
- *			int	    flags,		    // flags to pass kernel if we do syscall
- *			uint64_t    mtid,		    // my Thread ID
- *			uint32_t    mask,		    // bits to test in LVAL (ie, EBIT etc)
- *			uint64_t    *tidp,		    // ptr to TID field of mutex
- *			int	    *syscall_return );	    // if syscall, return value stored here
- */
-COMMPAGE_FUNCTION_START(pthread_mutex_lock, 32, 4)
-	pushl	%ebp			    // set up frame for backtrace
-	movl	%esp,%ebp
-	pushl	%esi
-	pushl	%edi
-	pushl	%ebx
-	xorl	%ebx,%ebx		    // clear "preemption pending" flag
-	movl	20(%esp),%edi		    // %edi == ptr to LVAL/UVAL structure
-	lea	20(%esp),%esi		    // %esi == ptr to argument list
-	movl	_COMM_PAGE_SPIN_COUNT, %edx
-	movl	16(%esi),%ecx		    // get mask (ie, PTHRW_EBIT etc)
-1:
-	testl	PTHRW_LVAL(%edi),%ecx	    // is mutex available?
-	jz	2f			    // yes, it is available
-	pause
-	decl	%edx			    // decrement max spin count
-	jnz	1b			    // keep spinning
-2:
-	COMMPAGE_CALL(_COMM_PAGE_PFZ_MUTEX_LOCK,_COMM_PAGE_MUTEX_LOCK,pthread_mutex_lock)
-	testl	%ebx,%ebx		    // pending preemption?
-	jz	3f
-	pushl	%eax			    // save return value across sysenter
-	COMMPAGE_CALL(_COMM_PAGE_PREEMPT,_COMM_PAGE_MUTEX_LOCK,pthread_mutex_lock)
-	popl	%eax
-3:
-	popl	%ebx
-	popl	%edi
-	popl	%esi
-	popl	%ebp
-	ret
-COMMPAGE_DESCRIPTOR(pthread_mutex_lock,_COMM_PAGE_MUTEX_LOCK,0,0)
 
 
 /* Internal routine to handle pthread mutex lock operation.  This is in the PFZ.
@@ -231,45 +159,6 @@ COMMPAGE_DESCRIPTOR(pfz_mutex_lock,_COMM_PAGE_PFZ_MUTEX_LOCK,0,0)
 
 /************************* x86_64 versions follow **************************/
 
-
-
-/* int							    // we return 0 on acquire, 1 on syscall
- * pthread_mutex_lock(	uint32_t    *lvalp,		    // ptr to mutex LVAL/UVAL pair
- *			int	    flags,		    // flags to pass kernel if we do syscall
- *			uint64_t    mtid,		    // my Thread ID
- *			uint32_t    mask,		    // bits to test in LVAL (ie, EBIT etc)
- *			uint64_t    *tidp,		    // ptr to TID field of mutex
- *			int	    *syscall_return );	    // if syscall, return value stored here
- *
- *	%rdi = lvalp
- *	%esi = flags
- *	%rdx = mtid
- *	%ecx = mask
- *	%r8  = tidp
- *	%r9  = &syscall_return
- */
-COMMPAGE_FUNCTION_START(pthread_mutex_lock_64, 64, 4)
-	pushq	%rbp		    // set up frame for backtrace
-	movq	%rsp,%rbp
-	pushq	%rbx
-	xorl	%ebx,%ebx	    // clear "preemption pending" flag
-	movl	_COMM_PAGE_32_TO_64(_COMM_PAGE_SPIN_COUNT), %eax
-1:
-	testl	PTHRW_LVAL(%rdi),%ecx // is mutex available?
-	jz	2f		    // yes, it is available
-	pause
-	decl	%eax		    // decrement max spin count
-	jnz	1b		    // keep spinning
-2:
-	COMMPAGE_CALL(_COMM_PAGE_PFZ_MUTEX_LOCK,_COMM_PAGE_MUTEX_LOCK,pthread_mutex_lock_64)
-	testl	%ebx,%ebx	    // pending preemption?
-	jz	1f		    // no
-	COMMPAGE_CALL(_COMM_PAGE_PREEMPT,_COMM_PAGE_MUTEX_LOCK,pthread_mutex_lock_64)
-1:
-	popq	%rbx
-	popq	%rbp
-	ret
-COMMPAGE_DESCRIPTOR(pthread_mutex_lock_64,_COMM_PAGE_MUTEX_LOCK,0,0)
 
 
 /* Internal routine to handle pthread mutex lock operation.  This is in the PFZ.

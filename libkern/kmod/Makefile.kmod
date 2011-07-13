@@ -18,7 +18,8 @@ LIB_INSTALL_FLAGS = 	-p -m 444
 
 # -mkernel implies -mlong-branch/-mlong-calls/-mno-red-zone as needed for
 # code linked into kexts
-CFLAGS_KMOD = $(filter-out -O0 -O1 -O2 -O3 -O4 -Os -Oz,$(CFLAGS)) \
+# -fno-stack-protector is necessary for the kernel, but not for kexts
+CFLAGS_KMOD = $(filter-out -O0 -O1 -O2 -O3 -O4 -Os -Oz -freorder-blocks -flto -fno-stack-protector,$(CFLAGS)) \
 	    -Os -mkernel -Wall
 
 ifneq ($(MACHINE_CONFIG), DEFAULT)
@@ -39,8 +40,8 @@ KMODCPP_OFILES = $(KMODCPP_CFILES:.c=.o)
 ALL_OFILES = $(KMOD_OFILES) $(KMODCPP_OFILES)
 
 $(ALL_OFILES): %.o : %.c
-	@echo CC $@
-	$(_v)${KCC} -c ${CFLAGS_KMOD} ${${join $@,_CFLAGS}} ${INCFLAGS} ${${join $@,_INCFLAGS}} -o $(COMPOBJROOT)/$(*F).o $<
+	@echo LIBKMOD_CC $@
+	$(_v)${LIBKMOD_CC} -c ${CFLAGS_KMOD} ${${join $@,_CFLAGS}} ${INCFLAGS} ${${join $@,_INCFLAGS}} -o $(COMPOBJROOT)/$(*F).o $<
 
 $(COMPOBJROOT)/$(KMOD_NAME).a: $(KMOD_OFILES)
 	@echo LIBTOOL $(notdir $@)
@@ -59,7 +60,11 @@ $(INSTALL_DIR)/%.a: $(INSTOBJROOT)/%.a
 	if [ $(MACHINE_CONFIG) = DEFAULT ]; then			\
 		allarchs="";						\
 		for onearch in $(INSTALL_ARCHS); do			\
-			archdir=$(OBJROOT)/$(KERNEL_CONFIG)_$${onearch}/$(COMPONENT); \
+			if [ $${onearch} = ARM ] ; then			\
+				archdir=$(OBJROOT)/$(KERNEL_CONFIG)_$${onearch}_$(DEFAULT_ARM_MACHINE_CONFIG)/$(COMPONENT); \
+			else						\
+				archdir=$(OBJROOT)/$(KERNEL_CONFIG)_$${onearch}/$(COMPONENT); \
+			fi;						\
 			if [ -e $${archdir}/kmod/$(*F).a ]; then	\
 				allarchs="$${allarchs} $${archdir}/kmod/$(*F).a"; \
 			fi;						\
@@ -79,6 +84,11 @@ $(INSTALL_DIR)/%.a: $(INSTOBJROOT)/%.a
 				my_aconfig=$${my_config};		\
 			else						\
 				my_counter=1;				\
+				if [ $${my_aconfig} = ARM ] ; then	\
+					if [ $${my_config} = DEFAULT ] ; then	\
+						my_config=$(DEFAULT_ARM_MACHINE_CONFIG);	\
+					fi;		    		\
+				fi;					\
 				inputfile=$(OBJROOT)/$${my_kconfig}_$${my_aconfig}_$${my_config}/$(COMPONENT)/kmod/$(*F).a; \
 				if [ -e $${inputfile} ]; then		\
 					if [ $${my_innercounter} -eq 1 ]; then \

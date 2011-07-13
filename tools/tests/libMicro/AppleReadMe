@@ -5,7 +5,7 @@ Mac OS X specific notes
 # Disable Open directory and LDAP using Directory Utility app
 # Turn off airport
 # Turn off spotlight. In terminal, execute the following:
-  sudo service com.apple.metadata.mds stop
+  launchctl unload /System/Library/LaunchDaemons/com.apple.metadata.mds.plist
 # Turn off Time Machine in System Preferences
 # Wait at least 2 minutes after boot to desktop for boot cache to settle down
    
@@ -13,9 +13,31 @@ Mac OS X specific notes
 
 	make
 	./bench >output.txt
-gives you a text file named output.txt with the results of one run.
+runs the libMicro test suite excluding the lmbench tests and gives you a text file named output.txt with the results of one run.
+	
+
 	./multiview output1.txt output2.txt >compare.html
 gives you a html file comparing two runs.
+
+*** To run libMicro testsuite with stepper disabled ***
+
+To get a more consistent result of libMicro benchmark run, we need to disable the 
+stepper to prevent it from causing wide variations in results. See rdar://6243819 
+for details.
+
+So to run libMicro test suite with stepper disabled, use 'coreos_bench' script 
+instead of 'bench' script.  
+
+For example:
+./coreos_bench > output.txt
+runs the libMicro test suite excluding the lmbench tests and gives you a text file named output.txt with the results of one run, with stepper disabled.
+ 
+Note: 
+1) We need '/usr/local/bin/pstates' to disable the stepper. Install AppleInternal package 
+which provides '/usr/local/bin/pstates'.
+
+2) 'coreos_bench' script is used exactly like the 'bench' script. All the usage examples for 
+'bench' script in this readme file also holds true for 'coreos_bench' script. 
 
 *** Makefile ***
 
@@ -25,32 +47,41 @@ build correctly. The binaries are placed in a directory called
 bin-ARCH where ARCH is the default or specified when building via
 the ARCH flag.
 
+Note:
+1) The binaries of apple added tests are placed in a directory called
+   apple/bin-ARCH
+
+2) All the binaries under bin-ARCH and apple/bin-ARCH are code signed
+   during build.
+ 
 options for invoking Makefile are:
 ARCH 		defaults to  i386
-	if you just want to build for ppc, you can specify
-		make ARCH=ppc
-	this will put the results in bin-ppc
 
         to build fat/multi architecture, specify 
 		make ARCH=fat
-	the makefile will automatically build with ARCH_FLAG="-arch ppc -arch i386 -arch x86_64" and put the results in bin-fat
+	the makefile will automatically build with ARCH_FLAG="-arch i386 -arch x86_64" and put the results in bin-fat
+
+        to build for ARM architecture,
+        first set an environment variable 'SDKROOT' to point to iPhone sdk
+                make ARCH=ARM_ARCH where ARM_ARCH can be armv6 or armv7
+        this will put the results in bin-ARM_ARCH
 
 	to build with only two of the architectures see below
 
 ARCH_FLAG 	defaults to -arch $(ARCH)
 	to build fat/multi architecture, specify 
-		make ARCH_FLAG="-arch ppc -arch i386" ARCH=fat
+		make ARCH_FLAG="-arch i386" ARCH=fat
 	this will put the results in bin-fat
 
 OPT_FLAG 	defaults to  -g
-	to build optimized, specify make OPT_FLAG=-s
+	to build optimized, specify make OPT_FLAG=-Os
 
 SEMOP_FLAG 	defaults to  -DUSE_SEMOP
 	to eliminate SEMOP usage, specify make SEMOP_FLAG=
 	this is needed on some lower-end systems (e.g. M63)
 
 These can be combined, e.g.
-	make ARCH=ppc SEMOP_FLAG=
+	make ARCH=i386 SEMOP_FLAG=
 
 *** Before running benchmarks ***
 
@@ -69,6 +100,17 @@ The shell script "bench" will run all the benchmarks, or you can
 pass it a parameter to run a single benchmark, e.g.
 
 	bench lmbench_bw_unix
+
+By default the script will run only the libMicro testsuite excluding the lmbench tests. 
+To run the libmicro testsuite with the lmbench tests included, just pass the -l parameter. e.g,
+	
+	bench -l 
+To run only the lmbench testsuite 
+
+	bench lmbench
+
+To display the usage, just do
+	bench -h
 
 Watch for:
 	# WARNINGS
@@ -110,6 +152,13 @@ argument passing, the flow of control of a benchmark, etc. for the
 trivial case.  The tests starting with "lmbench_" were ported from
 the lmbench suite, so they might be good examples as well.
 
+*** A note regarding future changes in bench.sh script ***
+coreos_bench.sh script is almost identical to bench.sh script, except that it
+has additional code to disable the stepper during libmicro benchmark run. 
+
+In future, if bench.sh script is modified, make sure the changes reflect
+in coreos_bench.sh script also.
+
 *** Things to do ***
 
 * port the rest of the lmbench benchmarks into this framework
@@ -129,3 +178,43 @@ across many machines with historical repository of runs
 Due to rdar://4654956 and its original, rdar://2588252 you cannot
 run these tests on Leopard without removing the cascade_lockf test.
 There may be other tests which panic a Leopard system.
+
+*** benchDS notes ***
+
+From rdar://problem/7468995 add the ability to benchmark the key APIs
+for server daemons.  In particular, a test binary is added for each of:
+
+	ODQueryCreateWithNode()  (standard User, Groups, and Hosts records)
+	getaddrinfo()  (hosts and ports)
+	mbr_check_service_membership()
+	mbr_check_membership()
+	getpwnam()
+	getpwuid()
+	getgrgid()
+	getpwent()
+	getgrent()
+	getgrnam()
+
+The script benchDS is provided to run a standard set of tests presuming
+that the tests are run by root on a system configured with an OD binding.
+The OD server (local or remote) must have a set of accounts created with
+od_acount_create shell script.  This script must also be run as root, 
+and passed a single argument of the number of users to create.  It creates
+od_test_{1..N}, and all belong to a ds_test_group1(gid 1211).  In addition,
+ds_test_group2(gid 1212) is created which has no users as members.  User ids are
+set sequentially from 5000.  In order to administer the OD server, it assumes
+user 'diradmin' and password 'admin' are the OD admin.
+
+Also, these tests consult the APIs listed, which can be run against the local
+account info, or even Active Directory.
+
+Thus, the quick recipe is:
+	Install X Server
+	Enable OD, and create directory admin user 'diradmin' with password 'admin'
+	As root run:  od_account_create 1000
+	Now run the test, as root:  ./benchDS 1000 > output-file
+
+
+In addition, od_account_delete 1000 will delete the 1000 users created with od_account_create.
+
+

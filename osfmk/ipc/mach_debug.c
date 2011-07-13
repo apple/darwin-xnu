@@ -326,8 +326,16 @@ mach_port_space_info(
 		iin->iin_name = MACH_PORT_MAKE(index, IE_BITS_GEN(bits));
 		iin->iin_collision = (bits & IE_BITS_COLLISION) ? TRUE : FALSE;
 		iin->iin_type = IE_BITS_TYPE(bits);
-		if (entry->ie_request)
-			iin->iin_type |= MACH_PORT_TYPE_DNREQUEST;
+		if ((entry->ie_bits & MACH_PORT_TYPE_PORT_RIGHTS) != MACH_PORT_TYPE_NONE &&
+		    entry->ie_request != IE_REQ_NONE) {
+			ipc_port_t port = (ipc_port_t) entry->ie_object;
+
+			assert(IP_VALID(port));
+			ip_lock(port);
+			iin->iin_type |= ipc_port_request_type(port, iin->iin_name, entry->ie_request);
+			ip_unlock(port);
+		}
+
 		iin->iin_urefs = IE_BITS_UREFS(bits);
 		iin->iin_object = (natural_t)(uintptr_t)entry->ie_object;
 		iin->iin_next = entry->ie_next;
@@ -349,8 +357,16 @@ mach_port_space_info(
 		iin->iin_name = tentry->ite_name;
 		iin->iin_collision = (bits & IE_BITS_COLLISION) ? TRUE : FALSE;
 		iin->iin_type = IE_BITS_TYPE(bits);
-		if (entry->ie_request)
-			iin->iin_type |= MACH_PORT_TYPE_DNREQUEST;
+		if ((entry->ie_bits & MACH_PORT_TYPE_PORT_RIGHTS) != MACH_PORT_TYPE_NONE &&
+		    entry->ie_request != IE_REQ_NONE) {
+			ipc_port_t port = (ipc_port_t) entry->ie_object;
+
+			assert(IP_VALID(port));
+			ip_lock(port);
+			iin->iin_type |= ipc_port_request_type(port, iin->iin_name, entry->ie_request);
+			ip_unlock(port);
+		}
+
 		iin->iin_urefs = IE_BITS_UREFS(bits);
 		iin->iin_object = (natural_t)(uintptr_t)entry->ie_object;
 		iin->iin_next = entry->ie_next;
@@ -456,18 +472,18 @@ mach_port_dnrequest_info(
 		return kr;
 	/* port is locked and active */
 
-	if (port->ip_dnrequests == IPR_NULL) {
+	if (port->ip_requests == IPR_NULL) {
 		total = 0;
 		used = 0;
 	} else {
-		ipc_port_request_t dnrequests = port->ip_dnrequests;
+		ipc_port_request_t requests = port->ip_requests;
 		ipc_port_request_index_t index;
 
-		total = dnrequests->ipr_size->its_size;
+		total = requests->ipr_size->its_size;
 
 		for (index = 1, used = 0;
 		     index < total; index++) {
-			ipc_port_request_t ipr = &dnrequests[index];
+			ipc_port_request_t ipr = &requests[index];
 
 			if (ipr->ipr_name != MACH_PORT_NULL)
 				used++;

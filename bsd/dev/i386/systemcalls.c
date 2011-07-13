@@ -34,6 +34,7 @@
 #include <kern/debug.h>
 #include <mach/machine/thread_status.h>
 #include <mach/thread_act.h>
+#include <mach/branch_predicates.h>
 
 #include <sys/kernel.h>
 #include <sys/vm.h>
@@ -54,6 +55,8 @@
 #include <i386/machine_routines.h>
 #include <mach/i386/syscall_sw.h>
 
+#include <machine/pal_routines.h>
+
 #if CONFIG_DTRACE
 extern int32_t dtrace_systrace_syscall(struct proc *, void *, int *);
 extern void dtrace_systrace_syscall_return(unsigned short, int, int *);
@@ -68,6 +71,15 @@ extern boolean_t x86_sysenter_arg_store_isvalid(thread_t thread);
 
 /* dynamically generated at build time based on syscalls.master */
 extern const char *syscallnames[];
+
+/*
+ * This needs to be a single switch so that it's "all on" or "all off",
+ * rather than being turned on for some code paths and not others, as this
+ * has a tendency to introduce "blame the next guy" bugs.
+ */
+#if DEBUG
+#define	FUNNEL_DEBUG	1	/* Check for funnel held on exit */
+#endif
 
 /*
  * Function:	unix_syscall
@@ -90,6 +102,7 @@ unix_syscall(x86_saved_state_t *state)
 	struct uthread		*uthread;
 	x86_saved_state32_t	*regs;
 	boolean_t		args_in_uthread;
+	boolean_t		is_vfork;
 
 	assert(is_saved_state32(state));
 	regs = saved_state32(state);
@@ -100,15 +113,15 @@ unix_syscall(x86_saved_state_t *state)
 	thread = current_thread();
 	uthread = get_bsdthread_info(thread);
 
-
 	/* Get the approriate proc; may be different from task's for vfork() */
-	if (!(uthread->uu_flag & UT_VFORK))
-		p = (struct proc *)get_bsdtask_info(current_task());
-	else 
+	is_vfork = uthread->uu_flag & UT_VFORK;
+	if (__improbable(is_vfork != 0))
 		p = current_proc();
+	else 
+		p = (struct proc *)get_bsdtask_info(current_task());
 
 	/* Verify that we are not being called from a task without a proc */
-	if (p == NULL) {
+	if (__improbable(p == NULL)) {
 		regs->eax = EPERM;
 		regs->efl |= EFL_CF;
 		task_terminate_internal(current_task());
@@ -126,7 +139,7 @@ unix_syscall(x86_saved_state_t *state)
 
 	callp = (code >= NUM_SYSENT) ? &sysent[63] : &sysent[code];
 
-	if (callp == sysent) {
+	if (__improbable(callp == sysent)) {
 		code = fuword(params);
 		params += sizeof(int);
 		callp = (code >= NUM_SYSENT) ? &sysent[63] : &sysent[code];
@@ -151,7 +164,7 @@ unix_syscall(x86_saved_state_t *state)
 			}
 		}
 
-		if (code != 180) {
+		if (__probable(code != 180)) {
 	        	int *ip = (int *)vt;
 
 			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
@@ -191,9 +204,6 @@ unix_syscall(x86_saved_state_t *state)
 	AUDIT_SYSCALL_ENTER(code, p, uthread);
 	error = (*(callp->sy_call))((void *) p, (void *) vt, &(uthread->uu_rval[0]));
         AUDIT_SYSCALL_EXIT(code, p, uthread, error);
-#if CONFIG_MACF
-	mac_thread_userret(code, error, thread);
-#endif
 
 #ifdef JOE_DEBUG
         if (uthread->uu_iocount)
@@ -203,7 +213,7 @@ unix_syscall(x86_saved_state_t *state)
 	uthread->t_dtrace_errno = error;
 #endif /* CONFIG_DTRACE */
 
-	if (error == ERESTART) {
+	if (__improbable(error == ERESTART)) {
 		/*
 		 * Move the user's pc back to repeat the syscall:
 		 * 5 bytes for a sysenter, or 2 for an int 8x.
@@ -211,14 +221,10 @@ unix_syscall(x86_saved_state_t *state)
 		 * - see debug trap handler in idt.s/idt64.s
 		 */
 
-		if (regs->cs == SYSENTER_CS || regs->cs == SYSENTER_TF_CS) {
-			regs->eip -= 5;
-		}
-		else
-			regs->eip -= 2;
+		pal_syscall_restart(thread, state);
 	}
 	else if (error != EJUSTRETURN) {
-		if (error) {
+		if (__improbable(error)) {
 		    regs->eax = error;
 		    regs->efl |= EFL_CF;	/* carry bit */
 		} else { /* (not error) */
@@ -232,13 +238,14 @@ unix_syscall(x86_saved_state_t *state)
 		error, regs->eax, regs->edx);
 
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
-#if DEBUG
+#if FUNNEL_DEBUG
 	/*
 	 * if we're holding the funnel panic
 	 */
 	syscall_exit_funnelcheck();
-#endif /* DEBUG */
-	if (uthread->uu_lowpri_window) {
+#endif /* FUNNEL_DEBUG */
+
+	if (__improbable(uthread->uu_lowpri_window)) {
 	        /*
 		 * task is marked as a low priority I/O type
 		 * and the I/O we issued while in this system call
@@ -248,10 +255,13 @@ unix_syscall(x86_saved_state_t *state)
 		 */
 		throttle_lowpri_io(TRUE);
 	}
-	if (code != 180)
+	if (__probable(code != 180))
 	        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
 				      error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
 
+	if (__improbable(!is_vfork && callp->sy_call == (sy_call_t *)execve && !error)) {
+		pal_execve_return(thread);
+	}
 
 	thread_exception_return();
 	/* NOTREACHED */
@@ -273,21 +283,21 @@ unix_syscall64(x86_saved_state_t *state)
 
 	assert(is_saved_state64(state));
 	regs = saved_state64(state);
-
+#if	DEBUG
 	if (regs->rax == 0x2000800)
 		thread_exception_return();
-
+#endif
 	thread = current_thread();
 	uthread = get_bsdthread_info(thread);
 
 	/* Get the approriate proc; may be different from task's for vfork() */
-	if (!(uthread->uu_flag & UT_VFORK))
+	if (__probable(!(uthread->uu_flag & UT_VFORK)))
 		p = (struct proc *)get_bsdtask_info(current_task());
 	else 
 		p = current_proc();
 
 	/* Verify that we are not being called from a task without a proc */
-	if (p == NULL) {
+	if (__improbable(p == NULL)) {
 		regs->rax = EPERM;
 		regs->isf.rflags |= EFL_CF;
 		task_terminate_internal(current_task());
@@ -303,7 +313,7 @@ unix_syscall64(x86_saved_state_t *state)
 	callp = (code >= NUM_SYSENT) ? &sysent[63] : &sysent[code];
 	uargp = (void *)(&regs->rdi);
 
-	if (callp == sysent) {
+	if (__improbable(callp == sysent)) {
 	        /*
 		 * indirect system call... system call number
 		 * passed as 'arg0'
@@ -323,7 +333,7 @@ unix_syscall64(x86_saved_state_t *state)
 		}
 		assert(callp->sy_narg <= 8);
 
-		if (callp->sy_narg > args_in_regs) {
+		if (__improbable(callp->sy_narg > args_in_regs)) {
 			int copyin_count;
 
 			copyin_count = (callp->sy_narg - args_in_regs) * sizeof(uint64_t);
@@ -339,7 +349,7 @@ unix_syscall64(x86_saved_state_t *state)
 		/*
 		 * XXX Turn 64 bit unsafe calls into nosys()
 		 */
-		if (callp->sy_flags & UNSAFE_64BIT) {
+		if (__improbable(callp->sy_flags & UNSAFE_64BIT)) {
 			callp = &sysent[63];
 			goto unsafe;
 		}
@@ -360,25 +370,34 @@ unsafe:
 	
 	uthread->uu_flag |= UT_NOTCANCELPT;
 
+#ifdef JOE_DEBUG
+        uthread->uu_iocount = 0;
+        uthread->uu_vpindex = 0;
+#endif
 
 	AUDIT_SYSCALL_ENTER(code, p, uthread);
 	error = (*(callp->sy_call))((void *) p, uargp, &(uthread->uu_rval[0]));
         AUDIT_SYSCALL_EXIT(code, p, uthread, error);
 
+#ifdef JOE_DEBUG
+        if (uthread->uu_iocount)
+               printf("system call returned with uu_iocount != 0\n");
+#endif
+
 #if CONFIG_DTRACE
 	uthread->t_dtrace_errno = error;
 #endif /* CONFIG_DTRACE */
 	
-	if (error == ERESTART) {
+	if (__improbable(error == ERESTART)) {
 		/*
 		 * all system calls come through via the syscall instruction
 		 * in 64 bit mode... its 2 bytes in length
 		 * move the user's pc back to repeat the syscall:
 		 */
-	        regs->isf.rip -= 2;
+		pal_syscall_restart( thread, state );
 	}
 	else if (error != EJUSTRETURN) {
-		if (error) {
+		if (__improbable(error)) {
 			regs->rax = error;
 			regs->isf.rflags |= EFL_CF;	/* carry bit */
 		} else { /* (not error) */
@@ -416,12 +435,14 @@ unsafe:
 	
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
 
+#if FUNNEL_DEBUG	
 	/*
 	 * if we're holding the funnel panic
 	 */
 	syscall_exit_funnelcheck();
+#endif /* FUNNEL_DEBUG */
 
-	if (uthread->uu_lowpri_window) {
+	if (__improbable(uthread->uu_lowpri_window)) {
 	        /*
 		 * task is marked as a low priority I/O type
 		 * and the I/O we issued while in this system call
@@ -431,7 +452,7 @@ unsafe:
 		 */
 		throttle_lowpri_io(TRUE);
 	}
-	if (code != 180)
+	if (__probable(code != 180))
 	        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
 				      error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
 
@@ -453,6 +474,7 @@ unix_syscall_return(int error)
 	thread = current_thread();
 	uthread = get_bsdthread_info(thread);
 
+	pal_register_cache_state(thread, DIRTY);
 
 	p = current_proc();
 
@@ -480,11 +502,9 @@ unix_syscall_return(int error)
 
 		if (error == ERESTART) {
 			/*
-			 * all system calls come through via the syscall instruction
-			 * in 64 bit mode... its 2 bytes in length
-			 * move the user's pc back to repeat the syscall:
+			 * repeat the syscall
 			 */
-			regs->isf.rip -= 2;
+			pal_syscall_restart( thread, find_user_regs(thread) );
 		}
 		else if (error != EJUSTRETURN) {
 			if (error) {
@@ -542,7 +562,7 @@ unix_syscall_return(int error)
 			code = fuword(params);
 		}
 		if (error == ERESTART) {
-			regs->eip -= ((regs->cs & 0xffff) == SYSENTER_CS) ? 5 : 2;
+			pal_syscall_restart( thread, find_user_regs(thread) );
 		}
 		else if (error != EJUSTRETURN) {
 			if (error) {
@@ -561,10 +581,12 @@ unix_syscall_return(int error)
 
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
 
+#if FUNNEL_DEBUG	
 	/*
 	 * if we're holding the funnel panic
 	 */
 	syscall_exit_funnelcheck();
+#endif /* FUNNEL_DEBUG */
 
 	if (uthread->uu_lowpri_window) {
 	        /*

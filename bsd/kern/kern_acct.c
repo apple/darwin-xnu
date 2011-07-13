@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -161,7 +161,7 @@ acct(proc_t p, struct acct_args *uap, __unused int *retval)
 	 * writing and make sure it's a 'normal'.
 	 */
 	if (uap->path != USER_ADDR_NULL) {
-		NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_USERSPACE, uap->path, ctx);
+		NDINIT(&nd, LOOKUP, OP_OPEN, NOFOLLOW, UIO_USERSPACE, uap->path, ctx);
 		if ((error = vn_open(&nd, FWRITE, 0)))
 			return (error);
 #if CONFIG_MACF
@@ -271,8 +271,8 @@ acct_process(proc_t p)
 	/* (6) The UID and GID of the process */
 	safecred = kauth_cred_proc_ref(p);
 
-	an_acct.ac_uid = safecred->cr_ruid;
-	an_acct.ac_gid = safecred->cr_rgid;
+	an_acct.ac_uid = kauth_cred_getruid(safecred);
+	an_acct.ac_gid = kauth_cred_getrgid(safecred);
 
 	/* (7) The terminal from which the process was started */
 	

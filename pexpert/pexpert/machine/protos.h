@@ -28,9 +28,7 @@
 #ifndef _PEXPERT_MACHINE_PROTOS_H
 #define _PEXPERT_MACHINE_PROTOS_H
 
-#if defined (__ppc__)
-#include "pexpert/ppc/protos.h"
-#elif defined (__i386__) || defined(__x86_64__)
+#if defined (__i386__) || defined(__x86_64__)
 #include "pexpert/i386/protos.h"
 #else
 #error architecture not supported

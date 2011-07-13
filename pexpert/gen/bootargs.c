@@ -26,12 +26,22 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <pexpert/pexpert.h>
+#include <pexpert/device_tree.h>
 
-extern boolean_t isargsep( char c);
-extern int argstrcpy(char *from, char *to);
-extern int getval(char *s, int *val);
-
+static boolean_t isargsep( char c);
+#if !CONFIG_EMBEDDED
+static int argstrcpy(char *from, char *to);
+#endif 
 static int argstrcpy2(char *from,char *to, unsigned maxlen);
+static int argnumcpy(int val, void *to, unsigned maxlen);
+static int getval(char *s, int *val);
+
+extern int IODTGetDefault(const char *key, void *infoAddr, unsigned int infoSize);
+
+struct i24 {
+	int32_t	i24 : 24;
+	int32_t _pad : 8;
+};
 
 #define	NUM	0
 #define	STR	1
@@ -69,6 +79,10 @@ PE_parse_boot_argn(
 	args = PE_boot_args();
 	if (*args == '\0') return FALSE;
 
+#if CONFIG_EMBEDDED
+	if (max_len == -1) return FALSE;
+#endif
+
 	arg_found = FALSE;
 
 	while(*args && isargsep(*args)) args++;
@@ -93,7 +107,7 @@ PE_parse_boot_argn(
 		    (i!=strlen(arg_string)))
 			goto gotit;
 		if (arg_boolean) {
-			*(unsigned int *)arg_ptr = TRUE;
+			argnumcpy(1, arg_ptr, max_len);
 			arg_found = TRUE;
 			break;
 		} else {
@@ -113,14 +127,16 @@ PE_parse_boot_argn(
 			switch (getval(cp, &val)) 
 			{
 				case NUM:
-					*(unsigned int *)arg_ptr = val;
+					argnumcpy(val, arg_ptr, max_len);
 					arg_found = TRUE;
 					break;
 				case STR:
 					if(max_len > 0) //max_len of 0 performs no copy at all
 						argstrcpy2(++cp, (char *)arg_ptr, max_len - 1);
-					else if(max_len == -1)
+#if !CONFIG_EMBEDDED
+					else if(max_len == -1) // unreachable on embedded
 						argstrcpy(++cp, (char *)arg_ptr);
+#endif
 					arg_found = TRUE;
 					break;
 			}
@@ -137,7 +153,8 @@ gotit:
 	return(arg_found);
 }
 
-boolean_t isargsep(
+static boolean_t
+isargsep(
 	char c)
 {
 	if (c == ' ' || c == '\0' || c == '\t')
@@ -146,7 +163,8 @@ boolean_t isargsep(
 		return(FALSE);
 }
 
-int
+#if !CONFIG_EMBEDDED
+static int
 argstrcpy(
 	char *from, 
 	char *to)
@@ -160,6 +178,7 @@ argstrcpy(
 	*to = 0;
 	return(i);
 }
+#endif
 
 static int
 argstrcpy2(
@@ -177,7 +196,33 @@ argstrcpy2(
 	return(i);
 }
 
-int
+static int argnumcpy(int val, void *to, unsigned maxlen)
+{
+	switch (maxlen) {
+		case 0:
+			/* No write-back, caller just wants to know if arg was found */
+			break;
+		case 1:
+			*(int8_t *)to = val;
+			break;
+		case 2:
+			*(int16_t *)to = val;
+			break;
+		case 3:
+			/* Unlikely in practice */
+			((struct i24 *)to)->i24 = val;
+			break;
+		case 4:
+		default:
+			*(int32_t *)to = val;
+			maxlen = 4;
+			break;
+	}
+
+	return (int)maxlen;
+}
+
+static int
 getval(
 	char *s, 
 	int *val)
@@ -265,4 +310,46 @@ boolean_t
 PE_imgsrc_mount_supported()
 {
 	return TRUE;
+}
+
+boolean_t
+PE_get_default(
+	const char	*property_name,
+	void		*property_ptr,
+	unsigned int max_property)
+{
+	DTEntry		dte;
+	void		**property_data;
+	unsigned int property_size;
+
+	/*
+	 * Look for the property using the PE DT support.
+	 */
+	if (kSuccess == DTLookupEntry(NULL, "/defaults", &dte)) {
+
+		/*
+		 * We have a /defaults node, look for the named property.
+		 */
+		if (kSuccess != DTGetProperty(dte, property_name, (void **)&property_data, &property_size))
+			return FALSE;
+
+		/*
+		 * This would be a fine place to do smart argument size management for 32/64
+		 * translation, but for now we'll insist that callers know how big their
+		 * default values are.
+		 */
+		if (property_size > max_property)
+			return FALSE;
+
+		/*
+		 * Copy back the precisely-sized result.
+		 */
+		memcpy(property_ptr, property_data, property_size);
+		return TRUE;
+	}
+
+	/*
+	 * Look for the property using I/O Kit's DT support.
+	 */
+	return IODTGetDefault(property_name, property_ptr, max_property) ? FALSE : TRUE;
 }

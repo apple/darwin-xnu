@@ -354,8 +354,11 @@ An
 structure containing the name of the file system object as
 UTF-8 encoded, null terminated C string.
 The attribute data length will not be greater than
-.Dv NAME_MAX +
-1.
+.Dv NAME_MAX
++ 1 characters, which is
+.Dv NAME_MAX
+* 3 + 1 bytes (as one UTF-8-encoded character may
+take up to three bytes).
 .Pp
 .
 .It ATTR_CMN_DEVID
@@ -570,6 +573,11 @@ field of the
 .Vt stat
 structure returned by
 .Xr stat 2 .
+Only the permission bits of
+.Fa st_mode
+are valid; other bits should be ignored,
+e.g., by masking with
+.Dv ~S_IFMT .
 .
 .It ATTR_CMN_NAMEDATTRCOUNT
 A
@@ -665,6 +673,13 @@ The attribute data length will not be greater than
 Inconsistent behavior may be observed when this attribute is requested on
 hard-linked items, particularly when the file system does not support ATTR_CMN_PARENTID
 natively. Callers should be aware of this when requesting the full path of a hard-linked item.
+.
+.It ATTR_CMN_ADDEDTIME
+A
+.Vt timespec
+that contains the time that the file system object was created or renamed into
+its containing directory.  Note that inconsistent behavior may obe observed
+when this attribute is requested on hard-linked items. 
 .Pp
 .
 .El
@@ -1288,6 +1303,13 @@ that did not support them.
 .Pp
 Introduced with Darwin 10.0 (Mac OS X version 10.6).
 .
+.It VOL_CAP_FMT_64BIT_OBJECT_IDS
+If this bit is set, the volume format uses object IDs that are 64-bit. 
+This means that ATTR_CMN_FILEID and ATTR_CMN_PARENTID are the only
+legitimate attributes for obtaining object IDs from this volume and the
+32-bit fid_objno fields of the fsobj_id_t returned by ATTR_CMN_OBJID,
+ATTR_CMN_OBJPERMANENTID, and ATTR_CMN_PAROBJID are undefined.
+.
 .El
 .Pp
 .
@@ -1602,6 +1624,10 @@ structure is 64-bits (two 32-bit elements) in 32-bit code, and
 128-bits (two 64-bit elements) in 64-bit code; however, it is aligned
 on a 4-byte (32-bit) boundary, even in 64-bit code.
 .Pp
+If you use a structure
+for the attribute data, it must be correctly packed and aligned (see
+examples).
+.Pp
 .
 Inconsistent behavior may be observed when the ATTR_CMN_FULLPATH attribute is requested on
 hard-linked items, particularly when the file system does not support ATTR_CMN_PARENTID
@@ -1633,7 +1659,7 @@ struct FInfoAttrBuf {
     u_int32_t       length;
     fsobj_type_t    objType;
     char            finderInfo[32];
-};
+}  __attribute__((aligned(4), packed));
 typedef struct FInfoAttrBuf FInfoAttrBuf;
 .Pp
 .
@@ -1700,14 +1726,14 @@ typedef struct attrlist attrlist_t;
 struct FInfo2CommonAttrBuf {
     fsobj_type_t    objType;
     char            finderInfo[32];
-};
+} __attribute__((aligned(4), packed));
 typedef struct FInfo2CommonAttrBuf FInfo2CommonAttrBuf;
 .Pp
 .
 struct FInfo2AttrBuf {
     u_int32_t           length;
     FInfo2CommonAttrBuf common;
-};
+} __attribute__((aligned(4), packed));;
 typedef struct FInfo2AttrBuf FInfo2AttrBuf;
 .Pp
 .
@@ -1790,7 +1816,7 @@ struct VolAttrBuf {
     attrreference_t volNameRef;
     char            mountPointSpace[MAXPATHLEN];
     char            volNameSpace[MAXPATHLEN];
-};
+} __attribute__((aligned(4), packed));
 typedef struct VolAttrBuf VolAttrBuf;
 .Pp
 .
@@ -1840,6 +1866,53 @@ static int VolDemo(const char *path)
 .Pp
 .
     return err;
+}
+.Ed
+.Pp
+The following sample demonstrates the need to use packing and alignment
+controls; without the attribute, in 64-bit code, the fields of the structure are not
+placed at the locations that the kernel expects.
+.
+.Bd -literal
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <err.h>
+#include <time.h>
+#include <sys/attr.h>
+.Pp
+/* The alignment and packing attribute is necessary in 64-bit code */
+struct AttrListTimes {
+	u_int32_t       length;
+	struct timespec st_crtime;
+	struct timespec st_modtime;
+} __attribute__((aligned(4), packed));
+.Pp
+main(int argc, char **argv)
+{
+	int             rv;
+	int             i;
+.Pp
+	for (i = 1; i < argc; i++) {
+		struct attrlist attrList;
+		struct AttrListTimes myStat = {0};
+		char           *path = argv[i];
+.Pp
+		memset(&attrList, 0, sizeof(attrList));
+		attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
+		attrList.commonattr = ATTR_CMN_CRTIME |
+			ATTR_CMN_MODTIME;
+.Pp
+		rv = getattrlist(path, &attrList, &myStat, sizeof(myStat), 0);
+.Pp
+		if (rv == -1) {
+			warn("getattrlist(%s)", path);
+			continue;
+		}
+		printf("%s:  Modification time = %s", argv[i], ctime(&myStat.st_modtime.tv_sec));
+	}
+	return 0;
 }
 .Ed
 .Pp

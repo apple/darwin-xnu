@@ -178,7 +178,7 @@ mac_posixshm_check_stat(kauth_cred_t cred, struct pshminfo *shm)
 
 int
 mac_posixshm_check_truncate(kauth_cred_t cred, struct pshminfo *shm,
-    size_t size)
+    off_t size)
 {
 	int error = 0;
 

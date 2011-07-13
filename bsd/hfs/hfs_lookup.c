@@ -164,8 +164,10 @@ hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, int
 	struct cat_attr attr;
 	struct cat_fork fork;
 	int lockflags;
+	int newvnode_flags;
 
   retry:
+	newvnode_flags = 0;
 	dcp = NULL;
 	hfsmp = VTOHFS(dvp);
 	*vpp = NULL;
@@ -227,8 +229,16 @@ hfs_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp, int
 			 * Note: We must drop the parent lock here before calling
 			 * hfs_getnewvnode (which takes the child lock).
 			 */
-		    	hfs_unlock(dcp);
-		    	dcp = NULL;
+			hfs_unlock(dcp);
+			dcp = NULL;
+			
+			/* Verify that the item just looked up isn't one of the hidden directories. */
+			if (desc.cd_cnid == hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid ||
+				desc.cd_cnid == hfsmp->hfs_private_desc[DIR_HARDLINKS].cd_cnid) {
+				retval = ENOENT;
+				goto exit;
+			}
+			
 			goto found;
 		}
 notfound:
@@ -301,37 +311,14 @@ found:
 		 * Directory hard links can have multiple parents so
 		 * find the appropriate parent for the current thread.
 		 */
-		if ((retval = hfs_vget(hfsmp, hfs_currentparent(VTOC(dvp)), &tvp, 0))) {
+		if ((retval = hfs_vget(hfsmp, hfs_currentparent(VTOC(dvp)), &tvp, 0, 0))) {
 			goto exit;
 		}
 		*cnode_locked = 1;
 		*vpp = tvp;
 	} else {
 		int type = (attr.ca_mode & S_IFMT);
-#if NAMEDRSRCFORK
-		int rsrc_warn = 0;
 
-		/*
-		 * Check if caller wants the resource fork but utilized
-		 * the legacy "file/rsrc" access path.
-		 *
-		 * This is deprecated behavior and support for it will not
-		 * be allowed beyond case insensitive HFS+ and even that
-		 * support will be removed in the next major OS release.
-		 */
-		if ((type == S_IFREG) &&
-		    ((flags & ISLASTCN) == 0) &&
-		    (cnp->cn_nameptr[cnp->cn_namelen] == '/') &&
-		    (bcmp(&cnp->cn_nameptr[cnp->cn_namelen+1], "rsrc", 5) == 0) &&
-		    ((hfsmp->hfs_flags & (HFS_STANDARD | HFS_CASE_SENSITIVE)) == 0)) {
-		
-			cnp->cn_consume = 5;
-			cnp->cn_flags |= CN_WANTSRSRCFORK | ISLASTCN | NOCACHE;
-			cnp->cn_flags &= ~MAKEENTRY;
-			flags |= ISLASTCN;
-			rsrc_warn = 1;
-		}
-#endif
 		if (!(flags & ISLASTCN) && (type != S_IFDIR) && (type != S_IFLNK)) {
 			retval = ENOTDIR;
 			goto exit;
@@ -344,22 +331,65 @@ found:
 		if (cnp->cn_namelen != desc.cd_namelen)
 			cnp->cn_flags &= ~MAKEENTRY;
 
-		retval = hfs_getnewvnode(hfsmp, dvp, cnp, &desc, 0, &attr, &fork, &tvp);
+		retval = hfs_getnewvnode(hfsmp, dvp, cnp, &desc, 0, &attr, &fork, &tvp, &newvnode_flags);
 
 		if (retval) {
 			/*
-			 * If this was a create operation lookup and another
-			 * process removed the object before we had a chance
-			 * to create the vnode, then just treat it as the not
-			 * found case above and return EJUSTRETURN.
-			 * We should do the same for the RENAME operation since we are
-			 * going to write it in regardless.
-			 */
+			 * If this was a create/rename operation lookup, then by this point
+			 * we expected to see the item returned from hfs_getnewvnode above.  
+			 * In the create case, it would probably eventually bubble out an EEXIST 
+			 * because the item existed when we were trying to create it.  In the 
+			 * rename case, it would let us know that we need to go ahead and 
+			 * delete it as part of the rename.  However, if we hit the condition below
+			 * then it means that we found the element during cat_lookup above, but 
+			 * it is now no longer there.  We simply behave as though we never found
+			 * the element at all and return EJUSTRETURN.
+			 */  
 			if ((retval == ENOENT) &&
-			    ((cnp->cn_nameiop == CREATE) || (cnp->cn_nameiop == RENAME)) &&
-			    (flags & ISLASTCN)) {
+					((cnp->cn_nameiop == CREATE) || (cnp->cn_nameiop == RENAME)) &&
+					(flags & ISLASTCN)) {
 				retval = EJUSTRETURN;
 			}
+			
+			/*
+			 * If this was a straight lookup operation, we may need to redrive the entire 
+			 * lookup starting from cat_lookup if the element was deleted as the result of 
+			 * a rename operation.  Since rename is supposed to guarantee atomicity, then
+			 * lookups cannot fail because the underlying element is deleted as a result of
+			 * the rename call -- either they returned the looked up element prior to rename
+			 * or return the newer element.  If we are in this region, then all we can do is add
+			 * workarounds to guarantee the latter case. The element has already been deleted, so
+			 * we just re-try the lookup to ensure the caller gets the most recent element.
+			 */
+			if ((retval == ENOENT) && (cnp->cn_nameiop == LOOKUP) &&
+				(newvnode_flags & (GNV_CHASH_RENAMED | GNV_CAT_DELETED))) {
+				if (dcp) {
+					hfs_unlock (dcp);
+				}
+				/* get rid of any name buffers that may have lingered from the cat_lookup call */
+				cat_releasedesc (&desc);
+				goto retry;
+			}
+
+			/* Also, re-drive the lookup if the item we looked up was a hardlink, and the number 
+			 * or name of hardlinks has changed in the interim between the cat_lookup above, and
+			 * our call to hfs_getnewvnode.  hfs_getnewvnode will validate the cattr we passed it
+			 * against what is actually in the catalog after the cnode is created.  If there were
+			 * any issues, it will bubble out ERECYCLE, which we need to swallow and use as the
+			 * key to redrive as well.  We need to special case this below because in this case, 
+			 * it needs to occur regardless of the type of lookup we're doing here.  
+			 */
+			if ((retval == ERECYCLE) && (newvnode_flags & GNV_CAT_ATTRCHANGED)) {
+				if (dcp) {
+					hfs_unlock (dcp);
+				}
+				/* get rid of any name buffers that may have lingered from the cat_lookup call */
+				cat_releasedesc (&desc);
+				retval = 0;
+				goto retry;
+			}
+
+			/* skip to the error-handling code if we can't retry */
 			goto exit;
 		}
 
@@ -375,15 +405,6 @@ found:
 		}
 		*cnode_locked = 1;
 		*vpp = tvp;
-#if NAMEDRSRCFORK
-		if (rsrc_warn) {
-			if ((VTOC(tvp)->c_flag & C_WARNED_RSRC) == 0) {
-				VTOC(tvp)->c_flag |= C_WARNED_RSRC;
-				printf("hfs: %.200s: file access by '/rsrc' was deprecated in 10.4\n",
-				       cnp->cn_nameptr);
-			}
-		}
-#endif
 	}
 exit:
 	if (dcp) {
@@ -415,7 +436,6 @@ exit:
 
 #define	S_IXALL	0000111
 
-__private_extern__
 int
 hfs_vnop_lookup(struct vnop_lookup_args *ap)
 {
@@ -423,6 +443,7 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 	struct vnode *vp;
 	struct cnode *cp;
 	struct cnode *dcp;
+	struct hfsmount *hfsmp;
 	int error;
 	struct vnode **vpp = ap->a_vpp;
 	struct componentname *cnp = ap->a_cnp;
@@ -431,6 +452,8 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 
 	*vpp = NULL;
 	dcp = VTOC(dvp);
+	
+	hfsmp = VTOHFS(dvp);
 
 	/*
 	 * Lookup an entry in the cache
@@ -455,14 +478,24 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 	 */
 	error = 0;
 	vp = *vpp;
-
+	cp = VTOC(vp);
+	
+	/* We aren't allowed to vend out vp's via lookup to the hidden directory */
+	if (cp->c_cnid == hfsmp->hfs_private_desc[FILE_HARDLINKS].cd_cnid ||
+		cp->c_cnid == hfsmp->hfs_private_desc[DIR_HARDLINKS].cd_cnid) {
+		/* Drop the iocount from cache_lookup */
+		vnode_put (vp);
+		error = ENOENT;
+		goto exit;
+	}
+	
+	
 	/*
 	 * If this is a hard-link vnode then we need to update
 	 * the name (of the link), the parent ID, the cnid, the
 	 * text encoding and the catalog hint.  This enables
 	 * getattrlist calls to return the correct link info.
 	 */
-	cp = VTOC(vp);
 
 	if ((flags & ISLASTCN) && (cp->c_flag & C_HARDLINK)) {
 		hfs_lock(cp, HFS_FORCE_LOCK);
@@ -501,33 +534,7 @@ hfs_vnop_lookup(struct vnop_lookup_args *ap)
 		}
 		hfs_unlock(cp);
 	}
-#if NAMEDRSRCFORK
-	/*
-	 * Check if caller wants the resource fork but utilized
-	 * the legacy "file/rsrc" access path.
-	 *
-	 * This is deprecated behavior and support for it will not
-	 * be allowed beyond case insensitive HFS+ and even that
-	 * support will be removed in the next major OS release.
-	 */
-	if ((dvp != vp) &&
-	    ((flags & ISLASTCN) == 0) &&
-	    vnode_isreg(vp) &&
-	    (cnp->cn_nameptr[cnp->cn_namelen] == '/') &&
-	    (bcmp(&cnp->cn_nameptr[cnp->cn_namelen+1], "rsrc", 5) == 0) &&
-	    ((VTOHFS(vp)->hfs_flags & (HFS_STANDARD | HFS_CASE_SENSITIVE)) == 0)) {		
-		cnp->cn_consume = 5;
-		cnp->cn_flags |= CN_WANTSRSRCFORK | ISLASTCN | NOCACHE;
-		cnp->cn_flags &= ~MAKEENTRY;
 
-		hfs_lock(cp, HFS_FORCE_LOCK);
-		if ((cp->c_flag & C_WARNED_RSRC) == 0) {
-			cp->c_flag |= C_WARNED_RSRC;
-			printf("hfs: %.200s: file access by '/rsrc' was deprecated in 10.4\n", cnp->cn_nameptr);
-		}
-		hfs_unlock(cp);
-	}
-#endif
 	return (error);
 	
 lookup:

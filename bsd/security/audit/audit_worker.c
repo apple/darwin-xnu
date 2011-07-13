@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 1999-2008 Apple Inc.
+ * Copyright (c) 1999-2010 Apple Inc.
  * Copyright (c) 2006-2008 Robert N. M. Watson
  * All rights reserved.
  *
@@ -203,16 +203,11 @@ audit_record_write(struct vnode *vp, struct vfs_context *ctx, void *data,
 	 */
 	if (audit_qctrl.aq_minfree != 0) {
 		temp = mnt_stat->f_blocks / (100 / audit_qctrl.aq_minfree);
-		if (mnt_stat->f_bfree < temp) {
-			if (ppsratecheck(&last_lowspace_trigger,
-			    &cur_lowspace_trigger, 1)) {
+		if (mnt_stat->f_bfree < temp &&
+		    ppsratecheck(&last_lowspace_trigger,
+		    &cur_lowspace_trigger, 1))
 				(void)audit_send_trigger(
 				    AUDIT_TRIGGER_LOW_SPACE);
-				printf("Warning: audit space low (< %d%% free)"
-				    "on audit log file-system\n",
-				    audit_qctrl.aq_minfree);
-			}
-		}
 	}
 
 	/*
@@ -358,7 +353,8 @@ audit_worker_process_record(struct kaudit_record *ar)
 
 	if (!(ar->k_ar_commit & AR_COMMIT_KERNEL) ||
 	    ((ar->k_ar_commit & AR_PRESELECT_PIPE) == 0 &&
-	    (ar->k_ar_commit & AR_PRESELECT_TRAIL) == 0))
+	    (ar->k_ar_commit & AR_PRESELECT_TRAIL) == 0 &&
+	    (ar->k_ar_commit & AR_PRESELECT_FILTER) == 0))
 		goto out;
 
 	auid = ar->k_ar.ar_subj_auid;
@@ -395,6 +391,16 @@ audit_worker_process_record(struct kaudit_record *ar)
 		    ar->k_ar_commit & AR_PRESELECT_TRAIL, bsm->data,
 		    bsm->len);
 
+	if (ar->k_ar_commit & AR_PRESELECT_FILTER) {
+
+		/*
+		 *  XXXss - This needs to be generalized so new filters can
+		 *  be easily plugged in.
+		 */
+		audit_sdev_submit(auid, ar->k_ar.ar_subj_asid, bsm->data,
+		    bsm->len);
+	}
+
 	kau_free(bsm);
 out:
 	if (trail_locked)
@@ -417,7 +423,9 @@ audit_worker(void)
 	struct kaudit_record *ar;
 	int lowater_signal;
 
-	audit_ctx.vc_thread = current_thread();
+	if (audit_ctx.vc_thread == NULL)
+		audit_ctx.vc_thread = current_thread();
+
 	TAILQ_INIT(&ar_worklist);
 	mtx_lock(&audit_mtx);
 	while (1) {
@@ -427,7 +435,8 @@ audit_worker(void)
 		 * Wait for a record.
 		 */
 		while (TAILQ_EMPTY(&audit_q))
-			cv_wait(&audit_worker_cv, &audit_mtx);
+			cv_wait_continuation(&audit_worker_cv, &audit_mtx,
+			    (thread_continue_t)audit_worker);
 
 		/*
 		 * If there are records in the global audit record queue,

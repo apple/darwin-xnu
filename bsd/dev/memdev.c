@@ -175,7 +175,7 @@ int mdevBMajor = -1;
 int mdevCMajor = -1;
 
 static int mdevioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p, int is_char);
-dev_t mdevadd(int devid, ppnum_t base, unsigned int size, int phys);
+dev_t mdevadd(int devid, uint64_t base, unsigned int size, int phys);
 dev_t mdevlookup(int devid);
 void mdevremoveall(void);
 
@@ -543,7 +543,7 @@ char *cvtnum(char *pos, char *end, unsigned int *num) {		/* Convert to a number 
 
 #endif /* CONFIG_MEMDEV_INSECURE */
 
-dev_t mdevadd(int devid, ppnum_t base, unsigned int size, int phys) {
+dev_t mdevadd(int devid, uint64_t base, unsigned int size, int phys) {
 	
 	int i;
 	
@@ -556,7 +556,7 @@ dev_t mdevadd(int devid, ppnum_t base, unsigned int size, int phys) {
 				continue;								/* Skip check */
 			}
 			if(!(((base + size -1 ) < mdev[i].mdBase) || ((mdev[i].mdBase + mdev[i].mdSize - 1) < base))) {	/* Is there any overlap? */
-				panic("mdevadd: attempt to add overlapping memory device at %08lX-%08lX\n", (long) mdev[i].mdBase, (long) mdev[i].mdBase + mdev[i].mdSize - 1);
+				panic("mdevadd: attempt to add overlapping memory device at %016llX-%016llX\n", mdev[i].mdBase, mdev[i].mdBase + mdev[i].mdSize - 1);
 			}
 		}
 		if(devid < 0) {									/* Do we have free slots? */
@@ -567,7 +567,7 @@ dev_t mdevadd(int devid, ppnum_t base, unsigned int size, int phys) {
 		if(devid >= 16) {								/* Giving us something bogus? */
 			panic("mdevadd: attempt to explicitly add a bogus memory device: %08X\n", devid);
 		}
-		if(mdev[devid].mdFlags &mdInited) {				/* Already there? */
+		if(mdev[devid].mdFlags & mdInited) {			/* Already there? */
 			panic("mdevadd: attempt to explicitly add a previously defined memory device: %08X\n", devid);
 		}
 	}
@@ -611,8 +611,8 @@ dev_t mdevadd(int devid, ppnum_t base, unsigned int size, int phys) {
 	mdev[devid].mdSecsize = DEV_BSIZE;					/* Set starting block size */
 	if(phys) mdev[devid].mdFlags |= mdPhys;				/* Show that we are in physical memory */
 	mdev[devid].mdFlags |= mdInited;					/* Show we are all set up */
-	printf("Added memory device md%x/rmd%x (%08X/%08X) at %08X for %08X\n", 
-		devid, devid, mdev[devid].mdBDev, mdev[devid].mdCDev, base << 12, size << 12);
+	printf("Added memory device md%x/rmd%x (%08X/%08X) at %016llX for %016llX\n", 
+		   devid, devid, mdev[devid].mdBDev, mdev[devid].mdCDev, base << 12, (uint64_t)size << 12);
 	return mdev[devid].mdBDev;
 }
 

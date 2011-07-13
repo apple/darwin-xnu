@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -32,7 +32,7 @@
 
 	Version:	HFS Plus 1.0
 
-	Copyright:	© 1996-2001 by Apple Computer, Inc., all rights reserved.
+	Copyright:	ï¿½ 1996-2001 by Apple Computer, Inc., all rights reserved.
 
 */
 #ifndef __FILEMGRINTERNAL__
@@ -189,6 +189,8 @@ ExchangeFileIDs					(ExtendedVCB *			volume,
 								 u_int32_t				srcHint,
 								 u_int32_t				destHint );
 
+EXTERN_API_C( OSErr )
+MoveData( ExtendedVCB *vcb, HFSCatalogNodeID srcID, HFSCatalogNodeID destID, int rsrc);
 
 /* BTree Manager Routines*/
 
@@ -232,7 +234,7 @@ BlockDeallocate					(ExtendedVCB *			vcb,
 								 u_int32_t				flags);
 
 EXTERN_API_C ( void )
-invalidate_free_extent_cache	(ExtendedVCB *			vcb);
+ResetVCBFreeExtCache(struct hfsmount *hfsmp);
 
 EXTERN_API_C( OSErr )
 BlockMarkAllocated(ExtendedVCB *vcb, u_int32_t startingBlock, u_int32_t numBlocks);
@@ -240,8 +242,28 @@ BlockMarkAllocated(ExtendedVCB *vcb, u_int32_t startingBlock, u_int32_t numBlock
 EXTERN_API_C( OSErr )
 BlockMarkFree( ExtendedVCB *vcb, u_int32_t startingBlock, u_int32_t numBlocks);
 
+EXTERN_API_C( OSErr )
+BlockMarkFreeUnused( ExtendedVCB *vcb, u_int32_t startingBlock, u_int32_t numBlocks);
+
 EXTERN_API_C( u_int32_t )
 MetaZoneFreeBlocks(ExtendedVCB *vcb);
+	
+EXTERN_API_C( u_int32_t )
+UpdateAllocLimit (struct hfsmount *hfsmp, u_int32_t new_end_block);
+	
+#if CONFIG_HFS_ALLOC_RBTREE
+EXTERN_API_C( u_int32_t )
+GenerateTree( struct hfsmount *hfsmp, u_int32_t end_block, int *flags, int initialscan);
+	
+EXTERN_API_C( void )
+DestroyTrees( struct hfsmount *hfsmp);
+	
+EXTERN_API_C( u_int32_t )
+InitTree(struct hfsmount *hfsmp);	
+#endif
+	
+	
+	
 
 /*	File Extent Mapping routines*/
 EXTERN_API_C( OSErr )
@@ -256,11 +278,9 @@ CompareExtentKeysPlus			(const HFSPlusExtentKey *searchKey,
 								 const HFSPlusExtentKey *trialKey);
 
 EXTERN_API_C( OSErr )
-TruncateFileC					(ExtendedVCB *			vcb,
-								 FCB *					fcb,
-								 int64_t 				peof,
-								 Boolean 				truncateToExtent);
-
+TruncateFileC (ExtendedVCB *vcb, FCB *fcb, int64_t peof, int deleted, 
+			   int rsrc, uint32_t fileid, Boolean truncateToExtent);
+	
 EXTERN_API_C( OSErr )
 ExtendFileC						(ExtendedVCB *			vcb,
 								 FCB *					fcb,

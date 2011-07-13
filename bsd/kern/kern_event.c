@@ -92,6 +92,9 @@
 #include <libkern/libkern.h>
 #include "net/net_str_id.h"
 
+#include <mach/task.h>
+#include <kern/vm_pressure.h>
+
 MALLOC_DEFINE(M_KQUEUE, "kqueue", "memory for kqueue system");
 
 #define KQ_EVENT NULL
@@ -140,6 +143,8 @@ static void	kevent_continue(struct kqueue *kq, void *data, int error);
 static void	kqueue_scan_continue(void *contp, wait_result_t wait_result);
 static int	kqueue_process(struct kqueue *kq, kevent_callback_t callback,
 			       void *data, int *countp, struct proc *p);
+static int	kqueue_begin_processing(struct kqueue *kq);
+static void	kqueue_end_processing(struct kqueue *kq);
 static int	knote_process(struct knote *kn, kevent_callback_t callback,
 			      void *data, struct kqtailq *inprocessp, struct proc *p);
 static void	knote_put(struct knote *kn);
@@ -181,6 +186,15 @@ static struct filterops proc_filtops = {
         .f_attach = filt_procattach,
         .f_detach = filt_procdetach,
         .f_event = filt_proc,
+};
+
+static int filt_vmattach(struct knote *kn);
+static void filt_vmdetach(struct knote *kn);
+static int filt_vm(struct knote *kn, long hint);
+static struct filterops vm_filtops = {
+	.f_attach = filt_vmattach,
+	.f_detach = filt_vmdetach,
+	.f_event = filt_vm,
 };
 
 extern struct filterops fs_filtops;
@@ -238,11 +252,6 @@ static struct filterops user_filtops = {
         .f_touch = filt_usertouch,
 };
 
-#if CONFIG_AUDIT
-/* Audit session filter */
-extern struct filterops audit_session_filtops;
-#endif
-
 /*
  * Table for for all system-defined filters.
  */
@@ -261,11 +270,8 @@ static struct filterops *sysfilt_ops[] = {
 	&machport_filtops,		/* EVFILT_MACHPORT */
 	&fs_filtops,			/* EVFILT_FS */
 	&user_filtops,			/* EVFILT_USER */
-#if CONFIG_AUDIT
-	&audit_session_filtops,		/* EVFILT_SESSION */
-#else
-	&bad_filtops,
-#endif
+	&bad_filtops,			/* unused */
+	&vm_filtops,			/* EVFILT_VM */
 };
 
 /*
@@ -455,6 +461,7 @@ static int
 filt_procattach(struct knote *kn)
 {
 	struct proc *p;
+	pid_t selfpid = (pid_t)0;
 
 	assert(PID_MAX < NOTE_PDATAMASK);
 	
@@ -464,6 +471,16 @@ filt_procattach(struct knote *kn)
 	p = proc_find(kn->kn_id);
 	if (p == NULL) {
 		return (ESRCH);
+	}
+
+	if ((kn->kn_sfflags & NOTE_EXIT) != 0) {
+		selfpid = proc_selfpid();
+		/* check for validity of NOTE_EXISTATUS */
+		if (((kn->kn_sfflags & NOTE_EXITSTATUS) != 0) && 
+			((p->p_ppid != selfpid) && (((p->p_lflag & P_LTRACED) == 0) || (p->p_oppid != selfpid)))) {
+			proc_rele(p);
+			return(EACCES);
+		}
 	}
 
 	proc_klist_lock();
@@ -524,12 +541,57 @@ filt_proc(struct knote *kn, long hint)
 		if (event == NOTE_REAP || (event == NOTE_EXIT && !(kn->kn_sfflags & NOTE_REAP))) {
 			kn->kn_flags |= (EV_EOF | EV_ONESHOT);
 		}
+		if ((event == NOTE_EXIT) && ((kn->kn_sfflags & NOTE_EXITSTATUS) != 0)) {
+			kn->kn_fflags |= NOTE_EXITSTATUS;
+			kn->kn_data = (hint & NOTE_PDATAMASK);
+		}
+		if ((event == NOTE_RESOURCEEND) && ((kn->kn_sfflags & NOTE_RESOURCEEND) != 0)) {
+			kn->kn_fflags |= NOTE_RESOURCEEND;
+			kn->kn_data = (hint & NOTE_PDATAMASK);
+		}
 	}
 
 	/* atomic check, no locking need when called from above */
 	return (kn->kn_fflags != 0); 
 }
 
+/*
+ * Virtual memory kevents
+ *
+ * author: Matt Jacobson [matthew_jacobson@apple.com]
+ */
+
+static int
+filt_vmattach(struct knote *kn)
+{	
+	/* 
+	 * The note will be cleared once the information has been flushed to the client. 
+	 * If there is still pressure, we will be re-alerted.
+	 */
+	kn->kn_flags |= EV_CLEAR; 
+	
+	return vm_knote_register(kn);
+}
+
+static void
+filt_vmdetach(struct knote *kn)
+{
+	vm_knote_unregister(kn);
+}
+
+static int
+filt_vm(struct knote *kn, long hint)
+{
+	/* hint == 0 means this is just an alive? check (always true) */
+	if (hint != 0) { 
+		/* If this knote is interested in the event specified in hint... */
+		if ((kn->kn_sfflags & hint) != 0) { 
+			kn->kn_fflags |= hint;
+		}
+	}
+	
+	return (kn->kn_fflags != 0);
+}
 
 /*
  * filt_timervalidate - process data from user
@@ -872,7 +934,7 @@ filt_userattach(struct knote *kn)
 {
         /* EVFILT_USER knotes are not attached to anything in the kernel */
         kn->kn_hook = NULL;
-	if (kn->kn_fflags & NOTE_TRIGGER || kn->kn_flags & EV_TRIGGER) {
+	if (kn->kn_fflags & NOTE_TRIGGER) {
 		kn->kn_hookid = 1;
 	} else {
 		kn->kn_hookid = 0;
@@ -895,10 +957,10 @@ filt_user(struct knote *kn, __unused long hint)
 static void
 filt_usertouch(struct knote *kn, struct kevent64_s *kev, long type)
 {
-        int ffctrl;
+        uint32_t ffctrl;
         switch (type) {
         case EVENT_REGISTER:
-                if (kev->fflags & NOTE_TRIGGER || kev->flags & EV_TRIGGER) {
+                if (kev->fflags & NOTE_TRIGGER) {
                         kn->kn_hookid = 1;
                 }
 
@@ -1511,6 +1573,7 @@ kevent_register(struct kqueue *kq, struct kevent64_s *kev, __unused struct proc 
 			error = fops->f_attach(kn);
 
 			kqlock(kq);
+
 			if (error != 0) {
 				/*
 				 * Failed to attach correctly, so drop.
@@ -1594,11 +1657,6 @@ kevent_register(struct kqueue *kq, struct kevent64_s *kev, __unused struct proc 
 		 */
 		if (!fops->f_isfd && fops->f_touch != NULL)
 		        fops->f_touch(kn, kev, EVENT_REGISTER);
-
-		/* We may need to push some info down to a networked filesystem */
-		if (kn->kn_filter == EVFILT_VNODE) {
-			vnode_knoteupdate(kn);
-		}
 	}
 	/* still have use ref on knote */
 
@@ -1770,6 +1828,47 @@ knote_process(struct knote 	*kn,
 	return error;
 }
 
+/*
+ * Return 0 to indicate that processing should proceed,
+ * -1 if there is nothing to process.
+ *
+ * Called with kqueue locked and returns the same way,
+ * but may drop lock temporarily.
+ */
+static int
+kqueue_begin_processing(struct kqueue *kq)
+{
+	for (;;) {
+		if (kq->kq_count == 0) {
+			return -1;
+		}
+
+		/* if someone else is processing the queue, wait */
+		if (kq->kq_nprocess != 0) {
+			wait_queue_assert_wait((wait_queue_t)kq->kq_wqs, &kq->kq_nprocess, THREAD_UNINT, 0);
+			kq->kq_state |= KQ_PROCWAIT;
+			kqunlock(kq);
+			thread_block(THREAD_CONTINUE_NULL);
+			kqlock(kq);
+		} else {
+			kq->kq_nprocess = 1;
+			return 0;
+		}
+	}
+}
+
+/*
+ * Called with kqueue lock held.
+ */
+static void
+kqueue_end_processing(struct kqueue *kq)
+{
+	kq->kq_nprocess = 0;
+	if (kq->kq_state & KQ_PROCWAIT) {
+		kq->kq_state &= ~KQ_PROCWAIT;
+		wait_queue_wakeup_all((wait_queue_t)kq->kq_wqs, &kq->kq_nprocess, THREAD_AWAKENED);
+	}
+}
 
 /*
  * kqueue_process - process the triggered events in a kqueue
@@ -1799,21 +1898,11 @@ kqueue_process(struct kqueue *kq,
 	int error;
 
         TAILQ_INIT(&inprocess);
- restart:
-	if (kq->kq_count == 0) {
-		*countp = 0;
-		return 0;
-	}
 
-	/* if someone else is processing the queue, wait */
-	if (hw_atomic_add(&kq->kq_nprocess, 1) != 1) {
-	        hw_atomic_sub(&kq->kq_nprocess, 1);
-		wait_queue_assert_wait((wait_queue_t)kq->kq_wqs, &kq->kq_nprocess, THREAD_UNINT, 0);
-		kq->kq_state |= KQ_PROCWAIT;
-		kqunlock(kq);
-		thread_block(THREAD_CONTINUE_NULL);
-		kqlock(kq);
-		goto restart;
+	if (kqueue_begin_processing(kq) == -1) {
+		*countp = 0;
+		/* Nothing to process */
+		return 0;
 	}
 
 	/*
@@ -1850,11 +1939,8 @@ kqueue_process(struct kqueue *kq,
 		kn->kn_tq = &kq->kq_head;
 		TAILQ_INSERT_TAIL(&kq->kq_head, kn, kn_tqe);
 	}
-	hw_atomic_sub(&kq->kq_nprocess, 1);
-	if (kq->kq_state & KQ_PROCWAIT) {
-		kq->kq_state &= ~KQ_PROCWAIT;
-		wait_queue_wakeup_all((wait_queue_t)kq->kq_wqs, &kq->kq_nprocess, THREAD_AWAKENED);
-	}
+
+	kqueue_end_processing(kq);
 
 	*countp = nevents;
 	return error;
@@ -2044,10 +2130,14 @@ static int
 kqueue_select(struct fileproc *fp, int which, void *wql, __unused vfs_context_t ctx)
 {
 	struct kqueue *kq = (struct kqueue *)fp->f_data;
-	int again;
-
+	struct knote *kn;
+	struct kqtailq inprocessq;
+	int retnum = 0;
+	
 	if (which != FREAD)
 		return 0;
+
+	TAILQ_INIT(&inprocessq);
 
 	kqlock(kq);
 	/* 
@@ -2067,11 +2157,12 @@ kqueue_select(struct fileproc *fp, int which, void *wql, __unused vfs_context_t 
 					(wait_queue_link_t)wql);
 	}
 
- retry:
-	again = 0;
-	if (kq->kq_count != 0) {
-		struct knote *kn;
+	if (kqueue_begin_processing(kq) == -1) {
+		kqunlock(kq);
+		return 0;
+	}
 
+	if (kq->kq_count != 0) {
 		/*
 		 * there is something queued - but it might be a
 		 * KN_STAYQUEUED knote, which may or may not have
@@ -2079,31 +2170,42 @@ kqueue_select(struct fileproc *fp, int which, void *wql, __unused vfs_context_t 
 		 * list of knotes to see, and peek at the stay-
 		 * queued ones to be really sure.
 		 */
-		TAILQ_FOREACH(kn, &kq->kq_head, kn_tqe) {
-			int retnum = 0;
-			if ((kn->kn_status & KN_STAYQUEUED) == 0 ||
-			    (retnum = kn->kn_fop->f_peek(kn)) > 0) {
-				kqunlock(kq);
-				return 1;
+		while ((kn = (struct knote*)TAILQ_FIRST(&kq->kq_head)) != NULL) {
+			if ((kn->kn_status & KN_STAYQUEUED) == 0) {
+				retnum = 1;
+				goto out;
 			}
-			if (retnum < 0)
-				again++;
+
+			TAILQ_REMOVE(&kq->kq_head, kn, kn_tqe);
+			TAILQ_INSERT_TAIL(&inprocessq, kn, kn_tqe);
+
+			if (kqlock2knoteuse(kq, kn)) {
+				unsigned peek;
+
+				peek = kn->kn_fop->f_peek(kn);
+				if (knoteuse2kqlock(kq, kn)) {
+					if (peek > 0) {
+						retnum = 1;
+						goto out;
+					}
+				} else {
+					retnum = 0;
+				}
+			} 
 		}
 	}
 
-	/*
-	 * If we stumbled across a knote that couldn't be peeked at,
-	 * we have to drop the kq lock and try again.
-	 */
-	if (again > 0) {
-		kqunlock(kq);
-		mutex_pause(0);
-		kqlock(kq);
-		goto retry;
+out:
+	/* Return knotes to active queue */
+	while ((kn = TAILQ_FIRST(&inprocessq)) != NULL) {
+		TAILQ_REMOVE(&inprocessq, kn, kn_tqe);
+		kn->kn_tq = &kq->kq_head;
+		TAILQ_INSERT_TAIL(&kq->kq_head, kn, kn_tqe);
 	}
 
+	kqueue_end_processing(kq);
 	kqunlock(kq);
-	return 0;
+	return retnum;
 }
 
 /*
@@ -2312,10 +2414,7 @@ knote_link_wait_queue(struct knote *kn, struct wait_queue *wq)
 
 	kr = wait_queue_link(wq, kq->kq_wqs);
 	if (kr == KERN_SUCCESS) {
-		kqlock(kq);
-		kn->kn_status |= KN_STAYQUEUED;
-		knote_enqueue(kn);
-		kqunlock(kq);
+		knote_markstayqueued(kn);
 		return 0;
 	} else {
 		return ENOMEM;
@@ -2531,6 +2630,7 @@ knote_init(void)
 
 	/* Initialize the timer filter lock */
 	lck_mtx_init(&_filt_timerlock, kq_lck_grp, kq_lck_attr);
+	lck_mtx_init(&vm_pressure_klist_mutex, kq_lck_grp, kq_lck_attr);
 }
 SYSINIT(knote, SI_SUB_PSEUDO, SI_ORDER_ANY, knote_init, NULL)
 
@@ -2843,3 +2943,12 @@ fill_kqueueinfo(struct kqueue *kq, struct kqueue_info * kinfo)
 	return(0);
 }
 
+
+void
+knote_markstayqueued(struct knote *kn)
+{
+	kqlock(kn->kn_kq);
+	kn->kn_status |= KN_STAYQUEUED;
+	knote_enqueue(kn);
+	kqunlock(kn->kn_kq);
+}

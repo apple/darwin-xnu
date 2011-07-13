@@ -24,8 +24,9 @@
 .Nd atomically exchange data between two files
 .Sh SYNOPSIS
 .Fd #include <unistd.h>
+.Fd #include <sys/attr.h>
 .Ft int
-.Fn exchangedata "const char * path1" "const char * path2" "unsigned long options"
+.Fn exchangedata "const char * path1" "const char * path2" "unsigned int options"
 .
 .Sh DESCRIPTION
 The

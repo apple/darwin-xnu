@@ -307,7 +307,7 @@ static int      filt_machportattach(struct knote *kn);
 static void	filt_machportdetach(struct knote *kn);
 static int	filt_machport(struct knote *kn, long hint);
 static void     filt_machporttouch(struct knote *kn, struct kevent64_s *kev, long type);
-static int	filt_machportpeek(struct knote *kn);
+static unsigned filt_machportpeek(struct knote *kn);
 struct filterops machport_filtops = {
         .f_attach = filt_machportattach,
         .f_detach = filt_machportdetach,
@@ -515,7 +515,7 @@ filt_machporttouch(struct knote *kn, struct kevent64_s *kev, long type)
  * will catch changes in this status when the event gets posted
  * up to the knote's kqueue).
  */
-static int
+static unsigned
 filt_machportpeek(struct knote *kn)
 {
         ipc_pset_t              pset = kn->kn_ptr.p_pset;

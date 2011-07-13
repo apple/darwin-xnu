@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -99,6 +99,9 @@
 #include <nfs/nfsproto.h>
 #include <nfs/nfs.h>
 #include <nfs/nfsnode.h>
+#if NFSCLIENT
+#define _NFS_XDR_SUBS_FUNCS_ /* define this to get xdrbuf function definitions */
+#endif
 #include <nfs/xdr_subs.h>
 #include <nfs/nfsm_subs.h>
 #include <nfs/nfs_gss.h>
@@ -109,6 +112,8 @@
 
 #include <netinet/in.h>
 #include <net/kpi_interface.h>
+
+#include <sys/utfconv.h>
 
 /*
  * NFS globals
@@ -793,6 +798,33 @@ nfsm_chain_get_uio(struct nfsm_chain *nmc, uint32_t len, uio_t uio)
 
 #if NFSCLIENT
 
+int
+nfsm_chain_add_string_nfc(struct nfsm_chain *nmc, const uint8_t *s, uint32_t slen)
+{
+	uint8_t smallbuf[64];
+	uint8_t *nfcname = smallbuf;
+	size_t buflen = sizeof(smallbuf), nfclen;
+	int error;
+
+	error = utf8_normalizestr(s, slen, nfcname, &nfclen, buflen, UTF_PRECOMPOSED|UTF_NO_NULL_TERM);
+	if (error == ENAMETOOLONG) {
+		buflen = MAXPATHLEN;
+		MALLOC_ZONE(nfcname, uint8_t *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+		if (nfcname)
+			error = utf8_normalizestr(s, slen, nfcname, &nfclen, buflen, UTF_PRECOMPOSED|UTF_NO_NULL_TERM);
+	}
+
+	/* if we got an error, just use the original string */
+	if (error)
+		nfsm_chain_add_string(error, nmc, s, slen);
+	else
+		nfsm_chain_add_string(error, nmc, nfcname, nfclen);
+
+	if (nfcname && (nfcname != smallbuf))
+		FREE_ZONE(nfcname, MAXPATHLEN, M_NAMEI);
+	return (error);
+}
+
 /*
  * Add an NFSv2 "sattr" structure to an mbuf chain
  */
@@ -909,7 +941,7 @@ nfsm_chain_get_fh_attr(
 			error = nfs_parsefattr(nmc, nfsvers, nvap);
 	} else if (gotfh) {
 		/* we need valid attributes in order to call nfs_nget() */
-		if (nfs3_getattr_rpc(NULL, NFSTOMP(dnp), fhp->fh_data, fhp->fh_len, ctx, nvap, xidp)) {
+		if (nfs3_getattr_rpc(NULL, NFSTOMP(dnp), fhp->fh_data, fhp->fh_len, 0, ctx, nvap, xidp)) {
 			gotattr = 0;
 			fhp->fh_len = 0;
 		}
@@ -985,7 +1017,6 @@ nfs_get_xid(uint64_t *xidp)
 int
 nfsm_rpchead(
 	struct nfsreq *req,
-	int auth_len,
 	mbuf_t mrest,
 	u_int64_t *xidp,
 	mbuf_t *mreqp)
@@ -993,23 +1024,55 @@ nfsm_rpchead(
 	struct nfsmount *nmp = req->r_nmp;
 	int nfsvers = nmp->nm_vers;
 	int proc = ((nfsvers == NFS_VER2) ? nfsv2_procid[req->r_procnum] : (int)req->r_procnum);
-	int auth_type = (!auth_len && !req->r_cred) ? RPCAUTH_NULL : nmp->nm_auth;
 
-	return nfsm_rpchead2(nmp->nm_sotype, NFS_PROG, nfsvers, proc,
-		auth_type, auth_len, req->r_cred, req, mrest, xidp, mreqp);
+	return nfsm_rpchead2(nmp, nmp->nm_sotype, NFS_PROG, nfsvers, proc,
+			req->r_auth, req->r_cred, req, mrest, xidp, mreqp);
 }
 
 int
-nfsm_rpchead2(int sotype, int prog, int vers, int proc, int auth_type, int auth_len,
+nfsm_rpchead2(struct nfsmount *nmp, int sotype, int prog, int vers, int proc, int auth_type,
 	kauth_cred_t cred, struct nfsreq *req, mbuf_t mrest, u_int64_t *xidp, mbuf_t *mreqp)
 {
 	mbuf_t mreq, mb;
-	int error, i, grpsiz, authsiz, reqlen;
+	int error, i, grpsiz, auth_len = 0, authsiz, reqlen;
 	size_t headlen;
 	struct nfsm_chain nmreq;
 
-	/* allocate the packet */
+	/* calculate expected auth length */
+	switch (auth_type) {
+		case RPCAUTH_NONE:
+			auth_len = 0;
+			break;
+		case RPCAUTH_SYS:
+		    {
+			gid_t grouplist[NGROUPS];
+			int groupcount = NGROUPS;
+
+			if (!cred)
+				return (EINVAL);
+
+			(void)kauth_cred_getgroups(cred, grouplist, &groupcount);
+			if (groupcount < 1)
+				return (EINVAL);
+
+			auth_len = ((((groupcount - 1) > nmp->nm_numgrps) ?
+				nmp->nm_numgrps : (groupcount - 1)) << 2) +
+				5 * NFSX_UNSIGNED;
+			break;
+		    }
+		case RPCAUTH_KRB5:
+		case RPCAUTH_KRB5I:
+		case RPCAUTH_KRB5P:
+			if (!req || !cred)
+				return (EINVAL);
+			auth_len = 5 * NFSX_UNSIGNED + 0; // zero context handle for now
+			break;
+		default:
+			return (EINVAL);
+		}
 	authsiz = nfsm_rndup(auth_len);
+
+	/* allocate the packet */
 	headlen = authsiz + 10 * NFSX_UNSIGNED;
 	if (sotype == SOCK_STREAM) /* also include room for any RPC Record Mark */
 		headlen += NFSX_UNSIGNED;
@@ -1055,27 +1118,36 @@ nfsm_rpchead2(int sotype, int prog, int vers, int proc, int auth_type, int auth_
 
 add_cred:
 	switch (auth_type) {
-	case RPCAUTH_NULL:
-		nfsm_chain_add_32(error, &nmreq, RPCAUTH_NULL); /* auth */
+	case RPCAUTH_NONE:
+		nfsm_chain_add_32(error, &nmreq, RPCAUTH_NONE); /* auth */
 		nfsm_chain_add_32(error, &nmreq, 0);		/* length */
-		nfsm_chain_add_32(error, &nmreq, RPCAUTH_NULL);	/* verf */
+		nfsm_chain_add_32(error, &nmreq, RPCAUTH_NONE);	/* verf */
 		nfsm_chain_add_32(error, &nmreq, 0);		/* length */
 		nfsm_chain_build_done(error, &nmreq);
+		/* Append the args mbufs */
+		if (!error)
+			error = mbuf_setnext(nmreq.nmc_mcur, mrest);
 		break;
-	case RPCAUTH_UNIX:
-		nfsm_chain_add_32(error, &nmreq, RPCAUTH_UNIX);
+	case RPCAUTH_SYS: {
+		gid_t grouplist[NGROUPS];
+		int groupcount;
+
+		nfsm_chain_add_32(error, &nmreq, RPCAUTH_SYS);
 		nfsm_chain_add_32(error, &nmreq, authsiz);
 		nfsm_chain_add_32(error, &nmreq, 0);	/* stamp */
 		nfsm_chain_add_32(error, &nmreq, 0);	/* zero-length hostname */
 		nfsm_chain_add_32(error, &nmreq, kauth_cred_getuid(cred));	/* UID */
-		nfsm_chain_add_32(error, &nmreq, cred->cr_groups[0]);	/* GID */
+		nfsm_chain_add_32(error, &nmreq, kauth_cred_getgid(cred));	/* GID */
 		grpsiz = (auth_len >> 2) - 5;
 		nfsm_chain_add_32(error, &nmreq, grpsiz);/* additional GIDs */
+		memset(grouplist, 0, sizeof(grouplist));
+		groupcount = grpsiz;
+		(void)kauth_cred_getgroups(cred, grouplist, &groupcount);
 		for (i = 1; i <= grpsiz; i++)
-			nfsm_chain_add_32(error, &nmreq, cred->cr_groups[i]);
+			nfsm_chain_add_32(error, &nmreq, grouplist[i]);
 
 		/* And the verifier... */
-		nfsm_chain_add_32(error, &nmreq, RPCAUTH_NULL);	/* flavor */
+		nfsm_chain_add_32(error, &nmreq, RPCAUTH_NONE);	/* flavor */
 		nfsm_chain_add_32(error, &nmreq, 0);		/* length */
 		nfsm_chain_build_done(error, &nmreq);
 
@@ -1083,16 +1155,24 @@ add_cred:
 		if (!error)
 			error = mbuf_setnext(nmreq.nmc_mcur, mrest);
 		break;
+	}
 	case RPCAUTH_KRB5:
 	case RPCAUTH_KRB5I:
 	case RPCAUTH_KRB5P:
 		error = nfs_gss_clnt_cred_put(req, &nmreq, mrest);
 		if (error == ENEEDAUTH) {
+			gid_t grouplist[NGROUPS];
+			int groupcount = NGROUPS;
 			/*
 			 * Use sec=sys for this user
 			 */
 			error = 0;
-			auth_type = RPCAUTH_UNIX;
+			req->r_auth = auth_type = RPCAUTH_SYS;
+			(void)kauth_cred_getgroups(cred, grouplist, &groupcount);
+			auth_len = ((((groupcount - 1) > nmp->nm_numgrps) ?
+				nmp->nm_numgrps : (groupcount - 1)) << 2) +
+				5 * NFSX_UNSIGNED;
+			authsiz = nfsm_rndup(auth_len);
 			goto add_cred;
 		}
 		break;
@@ -1141,6 +1221,21 @@ nfs_parsefattr(struct nfsm_chain *nmc, int nfsvers, struct nfs_vattr *nvap)
 	dev_t rdev;
 
 	val = val2 = 0;
+	NVATTR_INIT(nvap);
+
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_TYPE);
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_MODE);
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_NUMLINKS);
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_OWNER);
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_OWNER_GROUP);
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_SIZE);
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_SPACE_USED);
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_RAWDEV);
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_FSID);
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_FILEID);
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_TIME_ACCESS);
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_TIME_MODIFY);
+	NFS_BITMAP_SET(nvap->nva_bitmap, NFS_FATTR_TIME_METADATA);
 
 	nfsm_chain_get_32(error, nmc, vtype);
 	nfsm_chain_get_32(error, nmc, vmode);
@@ -1241,6 +1336,12 @@ nfs_loadattrcache(
 	vnode_t vp;
 	struct timeval now;
 	struct nfs_vattr *npnvap;
+	int xattr = np->n_vattr.nva_flags & NFS_FFLAG_IS_ATTR;
+	int referral = np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL;
+	int aclbit, monitored, error = 0;
+	kauth_acl_t acl;
+	struct nfsmount *nmp;
+	uint32_t events = np->n_events;
 
 	if (np->n_hflag & NHINIT) {
 		vp = NULL;
@@ -1249,10 +1350,11 @@ nfs_loadattrcache(
 		vp = NFSTOV(np);
 		mp = vnode_mount(vp);
 	}
+	monitored = vp ? vnode_ismonitored(vp) : 0;
 
 	FSDBG_TOP(527, np, vp, *xidp >> 32, *xidp);
 
-	if (!VFSTONFS(mp)) {
+	if (!((nmp = VFSTONFS(mp)))) {
 		FSDBG_BOT(527, ENXIO, 1, 0, *xidp);
 		return (ENXIO);
 	}
@@ -1298,16 +1400,133 @@ nfs_loadattrcache(
 		 */
 		printf("nfs loadattrcache vnode changed type, was %d now %d\n",
 			vnode_vtype(vp), nvap->nva_type);
-		FSDBG_BOT(527, ESTALE, 3, 0, *xidp);
-		return (ESTALE);
+		error = ESTALE;
+		if (monitored)
+			events |= VNODE_EVENT_DELETE;
+		goto out;
 	}
+
+	npnvap = &np->n_vattr;
+
+	/*
+	 * The ACL cache needs special handling because it is not
+	 * always updated.  Save current ACL cache state so it can
+	 * be restored after copying the new attributes into place.
+	 */
+	aclbit = NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_ACL);
+	acl = npnvap->nva_acl;
+
+	if (monitored) {
+		/*
+		 * For monitored nodes, check for attribute changes that should generate events.
+		 */
+		if (NFS_BITMAP_ISSET(nvap->nva_bitmap, NFS_FATTR_NUMLINKS) &&
+		    (nvap->nva_nlink != npnvap->nva_nlink))
+			events |= VNODE_EVENT_ATTRIB | VNODE_EVENT_LINK;
+		if (events & VNODE_EVENT_PERMS)
+			/* no need to do all the checking if it's already set */;
+		else if (NFS_BITMAP_ISSET(nvap->nva_bitmap, NFS_FATTR_MODE) &&
+			 (nvap->nva_mode != npnvap->nva_mode))
+			events |= VNODE_EVENT_ATTRIB | VNODE_EVENT_PERMS;
+		else if (NFS_BITMAP_ISSET(nvap->nva_bitmap, NFS_FATTR_OWNER) &&
+			 (nvap->nva_uid != npnvap->nva_uid))
+			events |= VNODE_EVENT_ATTRIB | VNODE_EVENT_PERMS;
+		else if (NFS_BITMAP_ISSET(nvap->nva_bitmap, NFS_FATTR_OWNER_GROUP) &&
+			 (nvap->nva_gid != npnvap->nva_gid))
+			events |= VNODE_EVENT_ATTRIB | VNODE_EVENT_PERMS;
+		else if (nmp->nm_vers >= NFS_VER4) {
+			if (NFS_BITMAP_ISSET(nvap->nva_bitmap, NFS_FATTR_OWNER) &&
+			    !kauth_guid_equal(&nvap->nva_uuuid, &npnvap->nva_uuuid))
+				events |= VNODE_EVENT_ATTRIB | VNODE_EVENT_PERMS;
+			else if (NFS_BITMAP_ISSET(nvap->nva_bitmap, NFS_FATTR_OWNER_GROUP) &&
+				 !kauth_guid_equal(&nvap->nva_guuid, &npnvap->nva_guuid))
+				events |= VNODE_EVENT_ATTRIB | VNODE_EVENT_PERMS;
+			else if ((NFS_BITMAP_ISSET(nvap->nva_bitmap, NFS_FATTR_ACL) &&
+				 nvap->nva_acl && npnvap->nva_acl &&
+			         ((nvap->nva_acl->acl_entrycount != npnvap->nva_acl->acl_entrycount) ||
+			          bcmp(nvap->nva_acl, npnvap->nva_acl, KAUTH_ACL_COPYSIZE(nvap->nva_acl)))))
+				events |= VNODE_EVENT_ATTRIB | VNODE_EVENT_PERMS;
+		}
+		if (((nmp->nm_vers >= NFS_VER4) && (nvap->nva_change != npnvap->nva_change)) ||
+		   (NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_TIME_MODIFY) &&
+		    ((nvap->nva_timesec[NFSTIME_MODIFY] != npnvap->nva_timesec[NFSTIME_MODIFY]) ||
+		     (nvap->nva_timensec[NFSTIME_MODIFY] != npnvap->nva_timensec[NFSTIME_MODIFY]))))
+			events |= VNODE_EVENT_ATTRIB | VNODE_EVENT_WRITE;
+		if (!events && NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_RAWDEV) &&
+		    ((nvap->nva_rawdev.specdata1 != npnvap->nva_rawdev.specdata1) ||
+		     (nvap->nva_rawdev.specdata2 != npnvap->nva_rawdev.specdata2)))
+			events |= VNODE_EVENT_ATTRIB;
+		if (!events && NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_FILEID) &&
+		    (nvap->nva_fileid != npnvap->nva_fileid))
+			events |= VNODE_EVENT_ATTRIB;
+		if (!events && NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_ARCHIVE) &&
+		    ((nvap->nva_flags & NFS_FFLAG_ARCHIVED) != (npnvap->nva_flags & NFS_FFLAG_ARCHIVED)))
+			events |= VNODE_EVENT_ATTRIB;
+		if (!events && NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_HIDDEN) &&
+		    ((nvap->nva_flags & NFS_FFLAG_HIDDEN) != (npnvap->nva_flags & NFS_FFLAG_HIDDEN)))
+			events |= VNODE_EVENT_ATTRIB;
+		if (!events && NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_TIME_CREATE) &&
+		    ((nvap->nva_timesec[NFSTIME_CREATE] != npnvap->nva_timesec[NFSTIME_CREATE]) ||
+		     (nvap->nva_timensec[NFSTIME_CREATE] != npnvap->nva_timensec[NFSTIME_CREATE])))
+			events |= VNODE_EVENT_ATTRIB;
+		if (!events && NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_TIME_BACKUP) &&
+		    ((nvap->nva_timesec[NFSTIME_BACKUP] != npnvap->nva_timesec[NFSTIME_BACKUP]) ||
+		     (nvap->nva_timensec[NFSTIME_BACKUP] != npnvap->nva_timensec[NFSTIME_BACKUP])))
+			events |= VNODE_EVENT_ATTRIB;
+	}
+
+	/* Copy the attributes to the attribute cache */
+	bcopy((caddr_t)nvap, (caddr_t)npnvap, sizeof(*nvap));
 
 	microuptime(&now);
 	np->n_attrstamp = now.tv_sec;
 	np->n_xid = *xidp;
+	/* NFS_FFLAG_IS_ATTR and NFS_FFLAG_TRIGGER_REFERRAL need to be sticky... */
+	if (vp && xattr)
+		nvap->nva_flags |= xattr;
+	if (vp && referral)
+		nvap->nva_flags |= referral;
 
-	npnvap = &np->n_vattr;
-	bcopy((caddr_t)nvap, (caddr_t)npnvap, sizeof(*nvap));
+	if (NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_ACL)) {
+		/* we're updating the ACL */
+		if (nvap->nva_acl) {
+			/* make a copy of the acl for the cache */
+			npnvap->nva_acl = kauth_acl_alloc(nvap->nva_acl->acl_entrycount);
+			if (npnvap->nva_acl) {
+				bcopy(nvap->nva_acl, npnvap->nva_acl, KAUTH_ACL_COPYSIZE(nvap->nva_acl));
+			} else {
+				/* can't make a copy to cache, invalidate ACL cache */
+				NFS_BITMAP_CLR(npnvap->nva_bitmap, NFS_FATTR_ACL);
+				NACLINVALIDATE(np);
+				aclbit = 0;
+			}
+		}
+		if (acl) {
+			kauth_acl_free(acl);
+			acl = NULL;
+		}
+	}
+	if (NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_ACL)) {
+		/* update the ACL timestamp */
+		np->n_aclstamp = now.tv_sec;
+	} else {
+		/* we aren't updating the ACL, so restore original values */
+		if (aclbit)
+			NFS_BITMAP_SET(npnvap->nva_bitmap, NFS_FATTR_ACL);
+		npnvap->nva_acl = acl;
+	}
+
+#if CONFIG_TRIGGERS
+	/*
+	 * For NFSv4, if the fsid doesn't match the fsid for the mount, then
+	 * this node is for a different file system on the server.  So we mark
+	 * this node as a trigger node that will trigger the mirror mount.
+	 */
+	if ((nmp->nm_vers >= NFS_VER4) && (nvap->nva_type == VDIR) &&
+	    ((np->n_vattr.nva_fsid.major != nmp->nm_fsid.major) ||
+	     (np->n_vattr.nva_fsid.minor != nmp->nm_fsid.minor)))
+		np->n_vattr.nva_flags |= NFS_FFLAG_TRIGGER;
+#endif
 
 	if (!vp || (nvap->nva_type != VREG)) {
 		np->n_size = nvap->nva_size;
@@ -1332,6 +1551,8 @@ nfs_loadattrcache(
 			 */
 			np->n_newsize = nvap->nva_size;
 			SET(np->n_flag, NUPDATESIZE);
+			if (monitored)
+				events |= VNODE_EVENT_ATTRIB | VNODE_EVENT_EXTEND;
 		}
 	}
 
@@ -1346,8 +1567,11 @@ nfs_loadattrcache(
 		}
 	}
 
-	FSDBG_BOT(527, 0, np, np->n_size, *xidp);
-	return (0);
+out:
+	if (monitored && events)
+		nfs_vnode_notify(np, events);
+	FSDBG_BOT(527, error, np, np->n_size, *xidp);
+	return (error);
 }
 
 /*
@@ -1359,16 +1583,22 @@ nfs_attrcachetimeout(nfsnode_t np)
 {
 	struct nfsmount *nmp;
 	struct timeval now;
-	int isdir, timeo;
+	int isdir;
+	uint32_t timeo;
 
 	if (!(nmp = NFSTONMP(np)))
 		return (0);
 
 	isdir = vnode_isdir(NFSTOV(np));
 
-	if ((np)->n_flag & NMODIFIED)
+	if ((nmp->nm_vers >= NFS_VER4) && (np->n_openflags & N_DELEG_MASK)) {
+		/* If we have a delegation, we always use the max timeout. */
+		timeo = isdir ? nmp->nm_acdirmax : nmp->nm_acregmax;
+	} else if ((np)->n_flag & NMODIFIED) {
+		/* If we have modifications, we always use the min timeout. */
 		timeo = isdir ? nmp->nm_acdirmin : nmp->nm_acregmin;
-	else {
+	} else {
+		/* Otherwise, we base the timeout on how old the file seems. */
 		/* Note that if the client and server clocks are way out of sync, */
 		/* timeout will probably get clamped to a min or max value */
 		microtime(&now);
@@ -1396,22 +1626,28 @@ nfs_attrcachetimeout(nfsnode_t np)
  * Must be called with the node locked.
  */
 int
-nfs_getattrcache(nfsnode_t np, struct nfs_vattr *nvaper)
+nfs_getattrcache(nfsnode_t np, struct nfs_vattr *nvaper, int flags)
 {
 	struct nfs_vattr *nvap;
 	struct timeval nowup;
 	int32_t timeo;
 
-	if (!NATTRVALID(np)) {
+	/* Check if the attributes are valid. */
+	if (!NATTRVALID(np) || ((flags & NGA_ACL) && !NACLVALID(np))) {
 		FSDBG(528, np, 0, 0xffffff01, ENOENT);
 		OSAddAtomic(1, &nfsstats.attrcache_misses);
 		return (ENOENT);
 	}
 
+	/* Verify the cached attributes haven't timed out. */
 	timeo = nfs_attrcachetimeout(np);
-
 	microuptime(&nowup);
 	if ((nowup.tv_sec - np->n_attrstamp) >= timeo) {
+		FSDBG(528, np, 0, 0xffffff02, ENOENT);
+		OSAddAtomic(1, &nfsstats.attrcache_misses);
+		return (ENOENT);
+	}
+	if ((flags & NGA_ACL) && ((nowup.tv_sec - np->n_aclstamp) >= timeo)) {
 		FSDBG(528, np, 0, 0xffffff02, ENOENT);
 		OSAddAtomic(1, &nfsstats.attrcache_misses);
 		return (ENOENT);
@@ -1451,8 +1687,256 @@ nfs_getattrcache(nfsnode_t np, struct nfs_vattr *nvaper)
 			nvaper->nva_timensec[NFSTIME_MODIFY] = np->n_mtim.tv_nsec;
 		}
 	}
+	if (nvap->nva_acl) {
+		if (flags & NGA_ACL) {
+			nvaper->nva_acl = kauth_acl_alloc(nvap->nva_acl->acl_entrycount);
+			if (!nvaper->nva_acl)
+				return (ENOMEM);
+			bcopy(nvap->nva_acl, nvaper->nva_acl, KAUTH_ACL_COPYSIZE(nvap->nva_acl));
+		} else {
+			nvaper->nva_acl = NULL;
+		}
+	}
 	return (0);
 }
+
+/*
+ * When creating file system objects:
+ * Don't bother setting UID if it's the same as the credential performing the create.
+ * Don't bother setting GID if it's the same as the directory or credential.
+ */
+void
+nfs_avoid_needless_id_setting_on_create(nfsnode_t dnp, struct vnode_attr *vap, vfs_context_t ctx)
+{
+	if (VATTR_IS_ACTIVE(vap, va_uid)) {
+		if (kauth_cred_getuid(vfs_context_ucred(ctx)) == vap->va_uid) {
+			VATTR_CLEAR_ACTIVE(vap, va_uid);
+			VATTR_CLEAR_ACTIVE(vap, va_uuuid);
+		}
+	}
+	if (VATTR_IS_ACTIVE(vap, va_gid)) {
+		if ((vap->va_gid == dnp->n_vattr.nva_gid) ||
+		    (kauth_cred_getgid(vfs_context_ucred(ctx)) == vap->va_gid)) {
+			VATTR_CLEAR_ACTIVE(vap, va_gid);
+			VATTR_CLEAR_ACTIVE(vap, va_guuid);
+		}
+	}
+}
+
+/*
+ * Convert a universal address string to a sockaddr structure.
+ *
+ * Universal addresses can be in the following formats:
+ *
+ * d = decimal (IPv4)
+ * x = hexadecimal (IPv6)
+ * p = port (decimal)
+ *
+ * d.d.d.d
+ * d.d.d.d.p.p
+ * x:x:x:x:x:x:x:x
+ * x:x:x:x:x:x:x:x.p.p
+ * x:x:x:x:x:x:d.d.d.d
+ * x:x:x:x:x:x:d.d.d.d.p.p
+ *
+ * IPv6 strings can also have a series of zeroes elided
+ * IPv6 strings can also have a %scope suffix at the end (after any port)
+ *
+ * rules & exceptions:
+ * - value before : is hex
+ * - value before . is dec
+ * - once . hit, all values are dec
+ * - hex+port case means value before first dot is actually hex
+ * - . is always preceded by digits except if last hex was double-colon
+ *
+ * scan, converting #s to bytes
+ * first time a . is encountered, scan the rest to count them.
+ * 2 dots = just port
+ * 3 dots = just IPv4 no port
+ * 5 dots = IPv4 and port
+ */
+
+#define IS_DIGIT(C) \
+	(((C) >= '0') && ((C) <= '9'))
+
+#define IS_XDIGIT(C) \
+	(IS_DIGIT(C) || \
+	 (((C) >= 'A') && ((C) <= 'F')) || \
+	 (((C) >= 'a') && ((C) <= 'f')))
+
+int
+nfs_uaddr2sockaddr(const char *uaddr, struct sockaddr *addr)
+{
+	const char *p, *pd;	/* pointers to current character in scan */
+	const char *pnum;	/* pointer to current number to decode */
+	const char *pscope;	/* pointer to IPv6 scope ID */
+	uint8_t a[18];		/* octet array to store address bytes */
+	int i;			/* index of next octet to decode */
+	int dci;		/* index of octet to insert double-colon zeroes */
+	int dcount, xdcount;	/* count of digits in current number */
+	int needmore;		/* set when we know we need more input (e.g. after colon, period) */
+	int dots;		/* # of dots */
+	int hex;		/* contains hex values */
+	unsigned long val;	/* decoded value */
+	int s;			/* index used for sliding array to insert elided zeroes */
+
+#define HEXVALUE	0
+#define DECIMALVALUE	1
+#define GET(TYPE) \
+	do { \
+		if ((dcount <= 0) || (dcount > (((TYPE) == DECIMALVALUE) ? 3 : 4))) \
+			return (0); \
+		if (((TYPE) == DECIMALVALUE) && xdcount) \
+			return (0); \
+		val = strtoul(pnum, NULL, ((TYPE) == DECIMALVALUE) ? 10 : 16); \
+		if (((TYPE) == DECIMALVALUE) && (val >= 256)) \
+			return (0); \
+		/* check if there is room left in the array */ \
+		if (i > (int)(sizeof(a) - (((TYPE) == HEXVALUE) ? 2 : 1) - ((dci != -1) ? 2 : 0))) \
+			return (0); \
+		if ((TYPE) == HEXVALUE) \
+			a[i++] = ((val >> 8) & 0xff); \
+		a[i++] = (val & 0xff); \
+	} while (0)
+
+	hex = 0;
+	dots = 0;
+	dci = -1;
+	i = dcount = xdcount = 0;
+	pnum = p = uaddr;
+	pscope = NULL;
+	needmore = 1;
+	if ((*p == ':') && (*++p != ':')) /* if it starts with colon, gotta be a double */
+		return (0);
+
+	while (*p) {
+		if (IS_XDIGIT(*p)) {
+			dcount++;
+			if (!IS_DIGIT(*p))
+				xdcount++;
+			needmore = 0;
+			p++;
+		} else if (*p == '.') {
+			/* rest is decimal IPv4 dotted quad and/or port */
+			if (!dots) {
+				/* this is the first, so count them */
+				for (pd = p; *pd; pd++) {
+					if (*pd == '.') {
+						if (++dots > 5)
+							return (0);
+					} else if (hex && (*pd == '%')) {
+						break;
+					} else if ((*pd < '0') || (*pd > '9')) {
+						return (0);
+					}
+				}
+				if ((dots != 2) && (dots != 3) && (dots != 5))
+					return (0);
+				if (hex && (dots == 2)) { /* hex+port */
+					if (!dcount && needmore)
+						return (0);
+					if (dcount) /* last hex may be elided zero */
+						GET(HEXVALUE);
+				} else {
+					GET(DECIMALVALUE);
+				}
+			} else {
+				GET(DECIMALVALUE);
+			}
+			dcount = xdcount = 0;
+			needmore = 1;
+			pnum = ++p;
+		} else if (*p == ':') {
+			hex = 1;
+			if (dots)
+				return (0);
+			if (!dcount) { /* missing number, probably double colon */
+				if (dci >= 0) /* can only have one double colon */
+					return (0);
+				dci = i;
+				needmore = 0;
+			} else {
+				GET(HEXVALUE);
+				dcount = xdcount = 0;
+				needmore = 1;
+			}
+			pnum = ++p;
+		} else if (*p == '%') { /* scope ID delimiter */
+			if (!hex)
+				return (0);
+			p++;
+			pscope = p;
+			break;
+		} else { /* unexpected character */
+			return (0);
+		}
+	}
+	if (needmore && !dcount)
+		return (0);
+	if (dcount) /* decode trailing number */
+		GET(dots ? DECIMALVALUE : HEXVALUE);
+	if (dci >= 0) {  /* got a double-colon at i, need to insert a range of zeroes */
+		/* if we got a port, slide to end of array */
+		/* otherwise, slide to end of address (non-port) values */
+		int end = ((dots == 2) || (dots == 5)) ? sizeof(a) : (sizeof(a) - 2);
+		if (i % 2) /* length of zero range must be multiple of 2 */
+			return (0);
+		if (i >= end) /* no room? */
+			return (0);
+		/* slide (i-dci) numbers up from index dci */
+		for (s=0; s < (i - dci); s++)
+			a[end-1-s] = a[i-1-s];
+		/* zero (end-i) numbers at index dci */
+		for (s=0; s < (end - i); s++)
+			a[dci+s] = 0;
+		i = end;
+	}
+
+	/* copy out resulting socket address */
+	if (hex) {
+		struct sockaddr_in6 *sin6 = (struct sockaddr_in6*)addr;
+		if ((((dots == 0) || (dots == 3)) && (i != (sizeof(a)-2))))
+			return (0);
+		if ((((dots == 2) || (dots == 5)) && (i != sizeof(a))))
+			return (0);
+		bzero(sin6, sizeof(struct sockaddr_in6));
+		sin6->sin6_len = sizeof(struct sockaddr_in6);
+		sin6->sin6_family = AF_INET6;
+		bcopy(a, &sin6->sin6_addr.s6_addr, sizeof(struct in6_addr));
+		if ((dots == 5) || (dots == 2))
+			sin6->sin6_port = htons((a[16] << 8) | a[17]);
+		if (pscope) {
+			for (p=pscope; IS_DIGIT(*p); p++)
+				;
+			if (*p && !IS_DIGIT(*p)) { /* name */
+				ifnet_t interface = NULL;
+				if (ifnet_find_by_name(pscope, &interface) == 0)
+					sin6->sin6_scope_id = ifnet_index(interface);
+				if (interface)
+					ifnet_release(interface);
+			} else { /* decimal number */
+				sin6->sin6_scope_id = strtoul(pscope, NULL, 10);
+			}
+			/* XXX should we also embed scope id for linklocal? */
+		}
+	} else {
+		struct sockaddr_in *sin = (struct sockaddr_in*)addr;
+		if ((dots != 3) && (dots != 5))
+			return (0);
+		if ((dots == 3) && (i != 4))
+			return (0);
+		if ((dots == 5) && (i != 6))
+			return (0);
+		bzero(sin, sizeof(struct sockaddr_in));
+		sin->sin_len = sizeof(struct sockaddr_in);
+		sin->sin_family = AF_INET;
+		bcopy(a, &sin->sin_addr.s_addr, sizeof(struct in_addr));
+		if (dots == 5)
+			sin->sin_port = htons((a[4] << 8) | a[5]);
+	}
+	return (1);
+}
+
 
 #endif /* NFSCLIENT */
 
@@ -1478,8 +1962,7 @@ int nfsrv_free_netopt(struct radix_node *, void *);
 int nfsrv_free_addrlist(struct nfs_export *, struct user_nfs_export_args *);
 struct nfs_export_options *nfsrv_export_lookup(struct nfs_export *, mbuf_t);
 struct nfs_export *nfsrv_fhtoexport(struct nfs_filehandle *);
-int nfsrv_cmp_sockaddr(struct sockaddr_storage *, struct sockaddr_storage *);
-struct nfs_user_stat_node *nfsrv_get_user_stat_node(struct nfs_active_user_list *, struct sockaddr_storage *, uid_t);
+struct nfs_user_stat_node *nfsrv_get_user_stat_node(struct nfs_active_user_list *, struct sockaddr *, uid_t);
 void nfsrv_init_user_list(struct nfs_active_user_list *);
 void nfsrv_free_user_list(struct nfs_active_user_list *);
 
@@ -1939,7 +2422,6 @@ nfsrv_hang_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 	unsigned int net;
 	user_addr_t uaddr;
 	kauth_cred_t cred;
-	struct ucred temp_cred;
 
 	uaddr = unxa->nxa_nets;
 	for (net = 0; net < unxa->nxa_netcount; net++, uaddr += sizeof(nxna)) {
@@ -1948,12 +2430,13 @@ nfsrv_hang_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 			return (error);
 
 		if (nxna.nxna_flags & (NX_MAPROOT|NX_MAPALL)) {
-		        bzero(&temp_cred, sizeof(temp_cred));
-			temp_cred.cr_uid = nxna.nxna_cred.cr_uid;
-			temp_cred.cr_ngroups = nxna.nxna_cred.cr_ngroups;
+			struct posix_cred temp_pcred;
+		        bzero(&temp_pcred, sizeof(temp_pcred));
+			temp_pcred.cr_uid = nxna.nxna_cred.cr_uid;
+			temp_pcred.cr_ngroups = nxna.nxna_cred.cr_ngroups;
 			for (i=0; i < nxna.nxna_cred.cr_ngroups && i < NGROUPS; i++)
-				temp_cred.cr_groups[i] = nxna.nxna_cred.cr_groups[i];
-			cred = kauth_cred_create(&temp_cred);
+				temp_pcred.cr_groups[i] = nxna.nxna_cred.cr_groups[i];
+			cred = posix_cred_create(&temp_pcred);
 			if (!IS_VALID_CRED(cred))
 				return (ENOMEM);
 		} else {
@@ -2035,13 +2518,34 @@ nfsrv_hang_addrlist(struct nfs_export *nx, struct user_nfs_export_args *unxa)
 				if (cred == cred2) {
 					/* creds are same (or both NULL) */
 					matched = 1;
-				} else if (cred && cred2 && (cred->cr_uid == cred2->cr_uid) &&
-				    (cred->cr_ngroups == cred2->cr_ngroups)) {
-					for (i=0; i < cred2->cr_ngroups && i < NGROUPS; i++)
-						if (cred->cr_groups[i] != cred2->cr_groups[i])
-							break;
-					if (i >= cred2->cr_ngroups || i >= NGROUPS)
-						matched = 1;
+				} else if (cred && cred2 && (kauth_cred_getuid(cred) == kauth_cred_getuid(cred2))) {
+				    /*
+				     * Now compare the effective and
+				     * supplementary groups...
+				     *
+				     * Note: This comparison, as written,
+				     * does not correctly indicate that
+				     * the groups are equivalent, since
+				     * other than the first supplementary
+				     * group, which is also the effective
+				     * group, order on the remaining groups
+				     * doesn't matter, and this is an
+				     * ordered compare.
+				     */
+				    gid_t groups[NGROUPS];
+				    gid_t groups2[NGROUPS];
+				    int groupcount = NGROUPS;
+				    int group2count = NGROUPS;
+
+				    if (!kauth_cred_getgroups(cred, groups, &groupcount) &&
+					!kauth_cred_getgroups(cred2, groups2, &group2count) &&
+					groupcount == group2count) {
+					    for (i=0; i < group2count; i++)
+						    if (groups[i] != groups2[i])
+							    break;
+					    if (i >= group2count || i >= NGROUPS)
+					    matched = 1;
+				    }
 				}
 			}
 			if (IS_VALID_CRED(cred))
@@ -2167,7 +2671,8 @@ void enablequotas(struct mount *mp, vfs_context_t ctx); // XXX
 int
 nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 {
-	int error = 0, pathlen;
+	int error = 0;
+	size_t pathlen;
 	struct nfs_exportfs *nxfs, *nxfs2, *nxfs3;
 	struct nfs_export *nx, *nx2, *nx3;
 	struct nfs_filehandle nfh;
@@ -2179,10 +2684,10 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 
 	if (unxa->nxa_flags == NXA_CHECK) {
 		/* just check if the path is an NFS-exportable file system */
-		error = copyinstr(unxa->nxa_fspath, path, MAXPATHLEN, (size_t *)&pathlen);
+		error = copyinstr(unxa->nxa_fspath, path, MAXPATHLEN, &pathlen);
 		if (error)
 			return (error);
-		NDINIT(&mnd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
+		NDINIT(&mnd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
 			UIO_SYSSPACE, CAST_USER_ADDR_T(path), ctx);
 		error = namei(&mnd);
 		if (error)
@@ -2215,8 +2720,11 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 		lck_rw_lock_exclusive(&nfsrv_export_rwlock);
 		while ((nxfs = LIST_FIRST(&nfsrv_exports))) {
 			mp = vfs_getvfs_by_mntonname(nxfs->nxfs_path);
-			if (mp)
+			if (mp) {
 				vfs_clearflags(mp, MNT_EXPORTED);
+				mount_iterdrop(mp);
+				mp = NULL;
+			}
 			/* delete all exports on this file system */
 			while ((nx = LIST_FIRST(&nxfs->nxfs_exports))) {
 				LIST_REMOVE(nx, nx_next);
@@ -2245,7 +2753,7 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 		return (0);
 	}
 
-	error = copyinstr(unxa->nxa_fspath, path, MAXPATHLEN, (size_t *)&pathlen);
+	error = copyinstr(unxa->nxa_fspath, path, MAXPATHLEN, &pathlen);
 	if (error)
 		return (error);
 
@@ -2272,8 +2780,12 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 		if ((unxa->nxa_flags & (NXA_ADD|NXA_OFFLINE)) == NXA_ADD) {
 			/* if adding, verify that the mount is still what we expect */
 			mp = vfs_getvfs_by_mntonname(nxfs->nxfs_path);
+			if (mp) {
+				mount_ref(mp, 0);
+				mount_iterdrop(mp);
+			}
 			/* find exported FS root vnode */
-			NDINIT(&mnd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
+			NDINIT(&mnd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
 				UIO_SYSSPACE, CAST_USER_ADDR_T(nxfs->nxfs_path), ctx);
 			error = namei(&mnd);
 			if (error)
@@ -2298,7 +2810,7 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 		}
 
 		/* find exported FS root vnode */
-		NDINIT(&mnd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
+		NDINIT(&mnd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
 			UIO_SYSSPACE, CAST_USER_ADDR_T(path), ctx);
 		error = namei(&mnd);
 		if (error) {
@@ -2318,6 +2830,7 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 				mvp = NULL;
 			} else {
 				mp = vnode_mount(mvp);
+				mount_ref(mp, 0);
 
 				/* make sure the file system is NFS-exportable */
 				nfh.nfh_len = NFSV3_MAX_FID_SIZE;
@@ -2366,7 +2879,7 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 	}
 
 	if (unxa->nxa_exppath) {
-		error = copyinstr(unxa->nxa_exppath, path, MAXPATHLEN, (size_t *)&pathlen);
+		error = copyinstr(unxa->nxa_exppath, path, MAXPATHLEN, &pathlen);
 		if (error)
 			goto out;
 		LIST_FOREACH(nx, &nxfs->nxfs_exports, nx_next) {
@@ -2483,6 +2996,9 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 					vnode_get(xvp);
 				} else {
 					xnd.ni_cnd.cn_nameiop = LOOKUP;
+#if CONFIG_TRIGGERS
+					xnd.ni_op = OP_LOOKUP;
+#endif
 					xnd.ni_cnd.cn_flags = LOCKLEAF;
 					xnd.ni_pathlen = pathlen - 1;
 					xnd.ni_cnd.cn_nameptr = xnd.ni_cnd.cn_pnbuf = path;
@@ -2600,6 +3116,8 @@ out:
 		nameidone(&mnd);
 	}
 unlock_out:
+	if (mp)
+		mount_drop(mp, 0);
 	lck_rw_done(&nfsrv_export_rwlock);
 	return (error);
 }
@@ -2736,6 +3254,12 @@ nfsrv_fhtovp(
 
 	/* find mount structure */
 	mp = vfs_getvfs_by_mntonname((*nxp)->nx_fs->nxfs_path);
+	if (mp) {
+		error = vfs_busy(mp, LK_NOWAIT);
+		mount_iterdrop(mp);
+		if (error)
+			mp = NULL;
+	}
 	if (!mp) {
 		/*
 		 * We have an export, but no mount?
@@ -2746,6 +3270,7 @@ nfsrv_fhtovp(
 
 	fidp = nfhp->nfh_fhp + sizeof(*nxh);
 	error = VFS_FHTOVP(mp, nxh->nxh_fidlen, fidp, vpp, NULL);
+	vfs_unbusy(mp);
 	if (error)
 		return (error);
 	/* vnode pointer should be good at this point or ... */
@@ -2864,46 +3389,6 @@ nfsrv_fhmatch(struct nfs_filehandle *fh1, struct nfs_filehandle *fh2)
  */
 
 /*
- * Compare address fields of two sockaddr_storage structures.
- * Returns zero if they match.
- */
-int
-nfsrv_cmp_sockaddr(struct sockaddr_storage *sock1, struct sockaddr_storage *sock2)
-{
-	struct sockaddr_in	*ipv4_sock1, *ipv4_sock2;
-	struct sockaddr_in6	*ipv6_sock1, *ipv6_sock2;
-
-	/* check for valid parameters */
-	if (sock1 == NULL || sock2 == NULL)
-		return 1;
-
-	/* check address length */
-	if (sock1->ss_len != sock2->ss_len)
-		return 1;
-
-	/* Check address family */
-	if (sock1->ss_family != sock2->ss_family)
-		return 1;
-
-	if (sock1->ss_family == AF_INET) {
-		/* IPv4 */
-		ipv4_sock1 = (struct sockaddr_in *)sock1;
-		ipv4_sock2 = (struct sockaddr_in *)sock2;
-
-		if (!bcmp(&ipv4_sock1->sin_addr, &ipv4_sock2->sin_addr, sizeof(struct in_addr)))
-			return 0;
-	} else {
-		/* IPv6 */
-		ipv6_sock1 = (struct sockaddr_in6 *)sock1;
-		ipv6_sock2 = (struct sockaddr_in6 *)sock2;
-
-		if (!bcmp(&ipv6_sock1->sin6_addr, &ipv6_sock2->sin6_addr, sizeof(struct in6_addr)))
-			return 0;
-	}
-	return 1;
-}
-
-/*
  * Search the hash table for a user node with a matching IP address and uid field.
  * If found, the node's tm_last timestamp is updated and the node is returned.
  *
@@ -2913,7 +3398,7 @@ nfsrv_cmp_sockaddr(struct sockaddr_storage *sock1, struct sockaddr_storage *sock
  * The list's user_mutex lock MUST be held.
  */
 struct nfs_user_stat_node *
-nfsrv_get_user_stat_node(struct nfs_active_user_list *list, struct sockaddr_storage *sock, uid_t uid)
+nfsrv_get_user_stat_node(struct nfs_active_user_list *list, struct sockaddr *saddr, uid_t uid)
 {
 	struct nfs_user_stat_node		*unode;
 	struct timeval				now;
@@ -2922,7 +3407,7 @@ nfsrv_get_user_stat_node(struct nfs_active_user_list *list, struct sockaddr_stor
 	/* seach the hash table */
 	head = NFS_USER_STAT_HASH(list->user_hashtbl, uid);
 	LIST_FOREACH(unode, head, hash_link) {
-		if (uid == unode->uid && nfsrv_cmp_sockaddr(sock, &unode->sock) == 0) {
+		if ((uid == unode->uid) && (nfs_sockaddr_cmp(saddr, (struct sockaddr*)&unode->sock) == 0)) {
 			/* found matching node */
 			break;
 		}
@@ -2964,7 +3449,7 @@ nfsrv_get_user_stat_node(struct nfs_active_user_list *list, struct sockaddr_stor
 
 	/* Initialize the node */
 	unode->uid = uid;
-	bcopy(sock, &unode->sock, sock->ss_len);
+	bcopy(saddr, &unode->sock, saddr->sa_len);
 	microtime(&now);
 	unode->ops = 0;
 	unode->bytes_read = 0;
@@ -2984,15 +3469,15 @@ nfsrv_update_user_stat(struct nfs_export *nx, struct nfsrv_descript *nd, uid_t u
 {
 	struct nfs_user_stat_node	*unode;
 	struct nfs_active_user_list	*ulist;
-	struct sockaddr_storage		*sock_stor;
+	struct sockaddr			*saddr;
 
 	if ((!nfsrv_user_stat_enabled) || (!nx) || (!nd) || (!nd->nd_nam))
 		return;
 
-	sock_stor = (struct sockaddr_storage *)mbuf_data(nd->nd_nam);
+	saddr = (struct sockaddr *)mbuf_data(nd->nd_nam);
 
 	/* check address family before going any further */
-	if ((sock_stor->ss_family != AF_INET) && (sock_stor->ss_family != AF_INET6))
+	if ((saddr->sa_family != AF_INET) && (saddr->sa_family != AF_INET6))
 		return;
 
 	ulist = &nx->nx_user_list;
@@ -3001,7 +3486,7 @@ nfsrv_update_user_stat(struct nfs_export *nx, struct nfsrv_descript *nd, uid_t u
 	lck_mtx_lock(&ulist->user_mutex);
 
 	/* get the user node */
-	unode = nfsrv_get_user_stat_node(ulist, sock_stor, uid);
+	unode = nfsrv_get_user_stat_node(ulist, saddr, uid);
 
 	if (!unode) {
 		lck_mtx_unlock(&ulist->user_mutex);

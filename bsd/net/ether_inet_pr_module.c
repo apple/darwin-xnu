@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -103,64 +103,62 @@
 #include <security/mac_framework.h>
 #endif
 
-/* Local function declerations */
+/* Local function declarations */
 extern void *kdp_get_interface(void);
 extern void kdp_set_ip_and_mac_addresses(struct in_addr *ipaddr,
-										 struct ether_addr *macaddr);
+    struct ether_addr *macaddr);
 
-static __inline__ void
-_ip_copy(struct in_addr * dst, const struct in_addr * src)
-{
-	*dst = *src;
-	return;
-}
+#define	_ip_copy(dst, src)	\
+	(*(dst) = *(src))
 
 static void
-ether_inet_arp_input(
-	struct mbuf *m)
+ether_inet_arp_input(struct ifnet *ifp, struct mbuf *m)
 {
 	struct ether_arp *ea;
 	struct sockaddr_dl	sender_hw;
 	struct sockaddr_in	sender_ip;
 	struct sockaddr_in	target_ip;
-	
-	if (mbuf_len(m) < sizeof(*ea) &&
-		mbuf_pullup(&m, sizeof(*ea)) != 0)
+
+	if (mbuf_len(m) < sizeof (*ea) && mbuf_pullup(&m, sizeof (*ea)) != 0)
 		return;
-	
+
 	ea = mbuf_data(m);
-	
+
 	/* Verify this is an ethernet/ip arp and address lengths are correct */
 	if (ntohs(ea->arp_hrd) != ARPHRD_ETHER ||
-		ntohs(ea->arp_pro) != ETHERTYPE_IP ||
-		ea->arp_pln != sizeof(struct in_addr) ||
-		ea->arp_hln != ETHER_ADDR_LEN) {
-		mbuf_free(m);
+	    ntohs(ea->arp_pro) != ETHERTYPE_IP ||
+	    ea->arp_pln != sizeof (struct in_addr) ||
+	    ea->arp_hln != ETHER_ADDR_LEN) {
+		mbuf_freem(m);
 		return;
 	}
-	
+
 	/* Verify the sender is not broadcast */
 	if (bcmp(ea->arp_sha, etherbroadcastaddr, ETHER_ADDR_LEN) == 0) {
-		mbuf_free(m);
+		mbuf_freem(m);
 		return;
 	}
-	
-	bzero(&sender_ip, sizeof(sender_ip));
-	sender_ip.sin_len = sizeof(sender_ip);
+
+	bzero(&sender_ip, sizeof (sender_ip));
+	sender_ip.sin_len = sizeof (sender_ip);
 	sender_ip.sin_family = AF_INET;
 	_ip_copy(&sender_ip.sin_addr, (const struct in_addr *)ea->arp_spa);
 	target_ip = sender_ip;
 	_ip_copy(&target_ip.sin_addr, (const struct in_addr *)ea->arp_tpa);
-	
-	bzero(&sender_hw, sizeof(sender_hw));
-	sender_hw.sdl_len = sizeof(sender_hw);
+
+	bzero(&sender_hw, sizeof (sender_hw));
+	sender_hw.sdl_len = sizeof (sender_hw);
 	sender_hw.sdl_family = AF_LINK;
 	sender_hw.sdl_type = IFT_ETHER;
 	sender_hw.sdl_alen = ETHER_ADDR_LEN;
 	bcopy(ea->arp_sha, LLADDR(&sender_hw), ETHER_ADDR_LEN);
-	
-	arp_ip_handle_input(mbuf_pkthdr_rcvif(m), ntohs(ea->arp_op), &sender_hw, &sender_ip, &target_ip);
-	mbuf_free(m);
+
+	/* update L2 reachability record, if present */
+	arp_llreach_set_reachable(ifp, LLADDR(&sender_hw), ETHER_ADDR_LEN);
+
+	arp_ip_handle_input(ifp, ntohs(ea->arp_op), &sender_hw, &sender_ip,
+	    &target_ip);
+	mbuf_freem(m);
 }
 
 /*
@@ -169,120 +167,131 @@ ether_inet_arp_input(
  * the ether header, which is provided separately.
  */
 static errno_t
-ether_inet_input(
-	__unused ifnet_t			ifp,
-	__unused protocol_family_t	protocol_family,
-	mbuf_t						m_list)
+ether_inet_input(ifnet_t ifp, protocol_family_t	protocol_family,
+    mbuf_t m_list)
 {
+#pragma unused(ifp, protocol_family)
 	mbuf_t	m;
 	mbuf_t	*tailptr = &m_list;
 	mbuf_t	nextpkt;
-	
+
 	/* Strip ARP and non-IP packets out of the list */
 	for (m = m_list; m; m = nextpkt) {
-    	struct ether_header *eh = mbuf_pkthdr_header(m);
-    	
-    	nextpkt = m->m_nextpkt;
-		
-    	if (eh->ether_type == htons(ETHERTYPE_IP)) {
-    		/* put this packet in the list */
-    		*tailptr = m;
-    		tailptr = &m->m_nextpkt;
-    	}
-    	else {
-    		/* Pass ARP packets to arp input */
+		struct ether_header *eh = mbuf_pkthdr_header(m);
+		struct ifnet *mifp;
+
+		/*
+		 * Trust the ifp in the mbuf, rather than ifproto's
+		 * since the packet could have been injected via
+		 * a dlil_input_packet_list() using an ifp that is
+		 * different than the one where the packet really
+		 * came from.
+		 */
+		mifp = mbuf_pkthdr_rcvif(m);
+
+		nextpkt = m->m_nextpkt;
+
+		if (eh->ether_type == htons(ETHERTYPE_IP)) {
+			/*
+			 * Update L2 reachability record, if present
+			 * (and if not a broadcast sender).
+			 */
+			if (bcmp(eh->ether_shost, etherbroadcastaddr,
+			    ETHER_ADDR_LEN) != 0) {
+				arp_llreach_set_reachable(mifp, eh->ether_shost,
+				    ETHER_ADDR_LEN);
+			}
+			/* put this packet in the list */
+			*tailptr = m;
+			tailptr = &m->m_nextpkt;
+		} else {
+			/* Pass ARP packets to arp input */
 			m->m_nextpkt = NULL;
-    		if (eh->ether_type == htons(ETHERTYPE_ARP))
-    			ether_inet_arp_input(m);
-    		else
-    			mbuf_freem(m);
-    	}
+			if (eh->ether_type == htons(ETHERTYPE_ARP))
+				ether_inet_arp_input(mifp, m);
+			else
+				mbuf_freem(m);
+		}
 	}
-	
+
 	*tailptr = NULL;
-	
+
 	/* Pass IP list to ip input */
-	if (m_list != NULL && proto_input(PF_INET, m_list) != 0)
-	{
+	if (m_list != NULL && proto_input(PF_INET, m_list) != 0) {
 		mbuf_freem_list(m_list);
 	}
-	
-    return 0;
+
+	return (EJUSTRETURN);
 }
 
 static errno_t
-ether_inet_pre_output(
-	ifnet_t						ifp,
-	__unused protocol_family_t	protocol_family,
-	mbuf_t						*m0,
-	const struct sockaddr		*dst_netaddr,
-	void*						route,
-	char						*type,
-	char						*edst)
+ether_inet_pre_output(ifnet_t ifp, protocol_family_t protocol_family,
+    mbuf_t *m0, const struct sockaddr *dst_netaddr,
+    void *route, char *type, char *edst)
 {
-    register struct mbuf *m = *m0;
-    const struct ether_header *eh;
-    errno_t	result = 0;
+#pragma unused(protocol_family)
+	struct mbuf *m = *m0;
+	const struct ether_header *eh;
+	errno_t result = 0;
 
+	if ((ifp->if_flags & (IFF_UP|IFF_RUNNING)) != (IFF_UP|IFF_RUNNING))
+		return (ENETDOWN);
 
-    if ((ifp->if_flags & (IFF_UP|IFF_RUNNING)) != (IFF_UP|IFF_RUNNING)) 
-		return ENETDOWN;
-	
-    /*
-     * Tell ether_frameout it's ok to loop packet unless negated below.
-     */
-    m->m_flags |= M_LOOP;
+	/*
+	 * Tell ether_frameout it's ok to loop packet unless negated below.
+	 */
+	m->m_flags |= M_LOOP;
 
-    switch (dst_netaddr->sa_family) {
-    
-		case AF_INET: {
-				struct sockaddr_dl	ll_dest;
-				result = arp_lookup_ip(ifp, (const struct sockaddr_in*)dst_netaddr,
-									   &ll_dest, sizeof(ll_dest), (route_t)route, *m0);
-				if (result == 0) {
-					bcopy(LLADDR(&ll_dest), edst, ETHER_ADDR_LEN);
-					*(u_int16_t*)type = htons(ETHERTYPE_IP);
-				}
-			}
-			break;
+	switch (dst_netaddr->sa_family) {
+	case AF_INET: {
+		struct sockaddr_dl ll_dest;
 
-		case pseudo_AF_HDRCMPLT:	
-		case AF_UNSPEC:
-			m->m_flags &= ~M_LOOP;
-			eh = (const struct ether_header *)dst_netaddr->sa_data;
-			(void)memcpy(edst, eh->ether_dhost, 6);
-			*(u_short *)type = eh->ether_type;
-			break;
-	
-		default:
-			printf("%s%d: can't handle af%d\n", ifp->if_name, ifp->if_unit,
-				   dst_netaddr->sa_family);
-	
-			result = EAFNOSUPPORT;
-    }
+		result = arp_lookup_ip(ifp,
+		    (const struct sockaddr_in *)dst_netaddr, &ll_dest,
+		    sizeof (ll_dest), (route_t)route, *m0);
+		if (result == 0) {
+			bcopy(LLADDR(&ll_dest), edst, ETHER_ADDR_LEN);
+			*(u_int16_t *)type = htons(ETHERTYPE_IP);
+		}
+	break;
+	}
 
-    return result;
+	case pseudo_AF_HDRCMPLT:
+	case AF_UNSPEC:
+		m->m_flags &= ~M_LOOP;
+		eh = (const struct ether_header *)dst_netaddr->sa_data;
+		(void) memcpy(edst, eh->ether_dhost, 6);
+		*(u_short *)type = eh->ether_type;
+		break;
+
+	default:
+		printf("%s%d: can't handle af%d\n", ifp->if_name, ifp->if_unit,
+		    dst_netaddr->sa_family);
+
+		result = EAFNOSUPPORT;
+		break;
+	}
+
+	return (result);
 }
 
 static errno_t
-ether_inet_resolve_multi(
-	ifnet_t					ifp,
-	const struct sockaddr	*proto_addr,
-	struct sockaddr_dl		*out_ll,
-	size_t					ll_len)
+ether_inet_resolve_multi(ifnet_t ifp, const struct sockaddr *proto_addr,
+    struct sockaddr_dl *out_ll, size_t ll_len)
 {
-	static const size_t minsize = offsetof(struct sockaddr_dl, sdl_data[0]) + ETHER_ADDR_LEN;
-	const struct sockaddr_in	*sin = (const struct sockaddr_in*)proto_addr;
-	
+	static const size_t minsize =
+	    offsetof(struct sockaddr_dl, sdl_data[0]) + ETHER_ADDR_LEN;
+	const struct sockaddr_in *sin = (const struct sockaddr_in *)proto_addr;
+
 	if (proto_addr->sa_family != AF_INET)
-		return EAFNOSUPPORT;
-	
-	if (proto_addr->sa_len < sizeof(struct sockaddr_in))
-		return EINVAL;
+		return (EAFNOSUPPORT);
+
+	if (proto_addr->sa_len < sizeof (struct sockaddr_in))
+		return (EINVAL);
 
 	if (ll_len < minsize)
-		return EMSGSIZE;
-	
+		return (EMSGSIZE);
+
 	bzero(out_ll, minsize);
 	out_ll->sdl_len = minsize;
 	out_ll->sdl_family = AF_LINK;
@@ -292,141 +301,128 @@ ether_inet_resolve_multi(
 	out_ll->sdl_alen = ETHER_ADDR_LEN;
 	out_ll->sdl_slen = 0;
 	ETHER_MAP_IP_MULTICAST(&sin->sin_addr, LLADDR(out_ll));
-	
-	return 0;
+
+	return (0);
 }
 
 static errno_t
-ether_inet_prmod_ioctl(
-    ifnet_t			ifp,
-    __unused protocol_family_t	protocol_family,
-    u_long			command,
-    void			*data)
+ether_inet_prmod_ioctl(ifnet_t ifp, protocol_family_t protocol_family,
+    u_long command, void *data)
 {
-    ifaddr_t ifa = data;
-    struct ifreq *ifr = data;
-    int error = 0;
+#pragma unused(protocol_family)
+	ifaddr_t ifa = data;
+	struct ifreq *ifr = data;
+	int error = 0;
 
+	switch (command) {
+	case SIOCSIFADDR:
+	case SIOCAIFADDR:
+		if (!(ifnet_flags(ifp) & IFF_RUNNING)) {
+			ifnet_set_flags(ifp, IFF_UP, IFF_UP);
+			ifnet_ioctl(ifp, 0, SIOCSIFFLAGS, NULL);
+		}
 
-    switch (command) {
-    case SIOCSIFADDR:
-    case SIOCAIFADDR:
-	if ((ifnet_flags(ifp) & IFF_RUNNING) == 0) {
-		ifnet_set_flags(ifp, IFF_UP, IFF_UP);
-		ifnet_ioctl(ifp, 0, SIOCSIFFLAGS, NULL);
-	}
+		if (ifaddr_address_family(ifa) != AF_INET)
+			break;
 
-	 switch (ifaddr_address_family(ifa)) {
-
-	 case AF_INET:
-
-	    inet_arp_init_ifaddr(ifp, ifa);
-	    /*
-	     * Register new IP and MAC addresses with the kernel
-	     * debugger if the interface is the same as was registered
-	     * by IOKernelDebugger. If no interface was registered,
-	     * fall back and just match against en0 interface.
-	     * Do this only for the first address of the interface
-	     * and not for aliases.
-	     */
-	    if (command == SIOCSIFADDR &&
-	        ((kdp_get_interface() != 0 &&
-	        kdp_get_interface() == ifp->if_softc) ||
-		(kdp_get_interface() == 0 && ifp->if_unit == 0)))
+		inet_arp_init_ifaddr(ifp, ifa);
+		/*
+		 * Register new IP and MAC addresses with the kernel
+		 * debugger if the interface is the same as was registered
+		 * by IOKernelDebugger. If no interface was registered,
+		 * fall back and just match against en0 interface.
+		 * Do this only for the first address of the interface
+		 * and not for aliases.
+		 */
+		if (command == SIOCSIFADDR &&
+		    ((kdp_get_interface() != 0 &&
+		    kdp_get_interface() == ifp->if_softc) ||
+		    (kdp_get_interface() == 0 && ifp->if_unit == 0)))
 			kdp_set_ip_and_mac_addresses(&(IA_SIN(ifa)->sin_addr),
 			    ifnet_lladdr(ifp));
+		break;
 
-	    break;
+	case SIOCGIFADDR:
+		ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data,
+		    ETHER_ADDR_LEN);
+		break;
 
 	default:
-	    break;
-	}
-
-	break;
-
-    case SIOCGIFADDR:
-		ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data, ETHER_ADDR_LEN);
-		break;
-
-    default:
 		error = EOPNOTSUPP;
 		break;
-    }
+	}
 
-    return (error);
+	return (error);
 }
 
 static void
-ether_inet_event(
-	ifnet_t						ifp,
-	__unused protocol_family_t	protocol,
-	const struct kev_msg		*event)
+ether_inet_event(ifnet_t ifp, protocol_family_t protocol,
+    const struct kev_msg *event)
 {
-	ifaddr_t	*addresses;
-	
+#pragma unused(protocol)
+	ifaddr_t *addresses;
+
 	if (event->vendor_code !=  KEV_VENDOR_APPLE ||
-		event->kev_class != KEV_NETWORK_CLASS ||
-		event->kev_subclass != KEV_DL_SUBCLASS ||
-		event->event_code != KEV_DL_LINK_ADDRESS_CHANGED) {
+	    event->kev_class != KEV_NETWORK_CLASS ||
+	    event->kev_subclass != KEV_DL_SUBCLASS ||
+	    event->event_code != KEV_DL_LINK_ADDRESS_CHANGED) {
 		return;
 	}
-	
+
 	if (ifnet_get_address_list_family(ifp, &addresses, AF_INET) == 0) {
 		int i;
-		
+
 		for (i = 0; addresses[i] != NULL; i++) {
 			inet_arp_init_ifaddr(ifp, addresses[i]);
 		}
-		
+
 		ifnet_free_address_list(addresses);
 	}
 }
 
 static errno_t
-ether_inet_arp(
-	ifnet_t								ifp,
-	u_short								arpop,
-	const struct sockaddr_dl*			sender_hw,
-	const struct sockaddr*				sender_proto,
-	const struct sockaddr_dl*			target_hw,
-	const struct sockaddr*				target_proto)
+ether_inet_arp(ifnet_t ifp, u_short arpop, const struct sockaddr_dl *sender_hw,
+    const struct sockaddr *sender_proto, const struct sockaddr_dl *target_hw,
+    const struct sockaddr *target_proto)
 {
 	mbuf_t	m;
 	errno_t	result;
 	struct ether_header *eh;
 	struct ether_arp *ea;
-	const struct sockaddr_in* sender_ip = (const struct sockaddr_in*)sender_proto;
-	const struct sockaddr_in* target_ip = (const struct sockaddr_in*)target_proto;
+	const struct sockaddr_in *sender_ip =
+	    (const struct sockaddr_in *)sender_proto;
+	const struct sockaddr_in *target_ip =
+	    (const struct sockaddr_in *)target_proto;
 	char *datap;
-	
+
 	if (target_ip == NULL)
-		return EINVAL;
-	
+		return (EINVAL);
+
 	if ((sender_ip && sender_ip->sin_family != AF_INET) ||
 	    target_ip->sin_family != AF_INET)
-		return EAFNOSUPPORT;
-	
+		return (EAFNOSUPPORT);
+
 	result = mbuf_gethdr(MBUF_DONTWAIT, MBUF_TYPE_DATA, &m);
 	if (result != 0)
-		return result;
-	
-	mbuf_setlen(m, sizeof(*ea));
-	mbuf_pkthdr_setlen(m, sizeof(*ea));
-	
+		return (result);
+
+	mbuf_setlen(m, sizeof (*ea));
+	mbuf_pkthdr_setlen(m, sizeof (*ea));
+
 	/* Move the data pointer in the mbuf to the end, aligned to 4 bytes */
 	datap = mbuf_datastart(m);
 	datap += mbuf_trailingspace(m);
 	datap -= (((uintptr_t)datap) & 0x3);
-	mbuf_setdata(m, datap, sizeof(*ea));
+	mbuf_setdata(m, datap, sizeof (*ea));
 	ea = mbuf_data(m);
-	
+
 	/*
 	 * Prepend the ethernet header, we will send the raw frame;
 	 * callee frees the original mbuf when allocation fails.
 	 */
-	result = mbuf_prepend(&m, sizeof(*eh), MBUF_DONTWAIT);
+	result = mbuf_prepend(&m, sizeof (*eh), MBUF_DONTWAIT);
 	if (result != 0)
-		return result;
+		return (result);
 
 	eh = mbuf_data(m);
 	eh->ether_type = htons(ETHERTYPE_ARP);
@@ -434,108 +430,108 @@ ether_inet_arp(
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_linklayer(ifp, m);
 #endif
-	
+
 	/* Fill out the arp header */
 	ea->arp_pro = htons(ETHERTYPE_IP);
-	ea->arp_hln = sizeof(ea->arp_sha);
-	ea->arp_pln = sizeof(ea->arp_spa);
+	ea->arp_hln = sizeof (ea->arp_sha);
+	ea->arp_pln = sizeof (ea->arp_spa);
 	ea->arp_hrd = htons(ARPHRD_ETHER);
 	ea->arp_op = htons(arpop);
-	
+
 	/* Sender Hardware */
 	if (sender_hw != NULL) {
-		bcopy(CONST_LLADDR(sender_hw), ea->arp_sha, sizeof(ea->arp_sha));
-	}
-	else {
+		bcopy(CONST_LLADDR(sender_hw), ea->arp_sha,
+		    sizeof (ea->arp_sha));
+	} else {
 		ifnet_lladdr_copy_bytes(ifp, ea->arp_sha, ETHER_ADDR_LEN);
 	}
-	ifnet_lladdr_copy_bytes(ifp, eh->ether_shost, sizeof(eh->ether_shost));
-	
+	ifnet_lladdr_copy_bytes(ifp, eh->ether_shost, sizeof (eh->ether_shost));
+
 	/* Sender IP */
 	if (sender_ip != NULL) {
-		bcopy(&sender_ip->sin_addr, ea->arp_spa, sizeof(ea->arp_spa));
-	}
-	else {
+		bcopy(&sender_ip->sin_addr, ea->arp_spa, sizeof (ea->arp_spa));
+	} else {
 		struct ifaddr *ifa;
-		
+
 		/* Look for an IP address to use as our source */
 		ifnet_lock_shared(ifp);
 		TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
-			if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET)
+			IFA_LOCK(ifa);
+			if (ifa->ifa_addr != NULL &&
+			    ifa->ifa_addr->sa_family == AF_INET) {
+				bcopy(&((struct sockaddr_in *)ifa->ifa_addr)->
+				    sin_addr, ea->arp_spa, sizeof(ea->arp_spa));
+				IFA_UNLOCK(ifa);
 				break;
-		}
-		if (ifa) {
-			bcopy(&((struct sockaddr_in*)ifa->ifa_addr)->sin_addr, ea->arp_spa,
-				  sizeof(ea->arp_spa));
+			}
+			IFA_UNLOCK(ifa);
 		}
 		ifnet_lock_done(ifp);
-		
+
 		if (ifa == NULL) {
-			mbuf_free(m);
-			return ENXIO;
+			mbuf_freem(m);
+			return (ENXIO);
 		}
 	}
-	
+
 	/* Target Hardware */
-	if (target_hw == 0) {
-		bzero(ea->arp_tha, sizeof(ea->arp_tha));
-		bcopy(etherbroadcastaddr, eh->ether_dhost, sizeof(eh->ether_dhost));
+	if (target_hw == NULL) {
+		bzero(ea->arp_tha, sizeof (ea->arp_tha));
+		bcopy(etherbroadcastaddr, eh->ether_dhost,
+		    sizeof (eh->ether_dhost));
+	} else {
+		bcopy(CONST_LLADDR(target_hw), ea->arp_tha,
+		    sizeof (ea->arp_tha));
+		bcopy(CONST_LLADDR(target_hw), eh->ether_dhost,
+		    sizeof (eh->ether_dhost));
 	}
-	else {
-		bcopy(CONST_LLADDR(target_hw), ea->arp_tha, sizeof(ea->arp_tha));
-		bcopy(CONST_LLADDR(target_hw), eh->ether_dhost, sizeof(eh->ether_dhost));
-	}
-	
+
 	/* Target IP */
-	bcopy(&target_ip->sin_addr, ea->arp_tpa, sizeof(ea->arp_tpa));
-	
+	bcopy(&target_ip->sin_addr, ea->arp_tpa, sizeof (ea->arp_tpa));
+
 	ifnet_output_raw(ifp, PF_INET, m);
-	
-	return 0;
+
+	return (0);
 }
 
 errno_t
-ether_attach_inet(
-	struct ifnet	*ifp,
-	__unused protocol_family_t proto_family)
+ether_attach_inet(struct ifnet *ifp, protocol_family_t proto_family)
 {
+#pragma unused(proto_family)
 	struct ifnet_attach_proto_param_v2 proto;
 	struct ifnet_demux_desc demux[2];
-	u_short en_native=htons(ETHERTYPE_IP);
-	u_short arp_native=htons(ETHERTYPE_ARP);
+	u_short en_native = htons(ETHERTYPE_IP);
+	u_short arp_native = htons(ETHERTYPE_ARP);
 	errno_t	error;
-	
-	bzero(&demux[0], sizeof(demux));
+
+	bzero(&demux[0], sizeof (demux));
 	demux[0].type = DLIL_DESC_ETYPE2;
 	demux[0].data = &en_native;
-	demux[0].datalen = sizeof(en_native);
+	demux[0].datalen = sizeof (en_native);
 	demux[1].type = DLIL_DESC_ETYPE2;
 	demux[1].data = &arp_native;
-	demux[1].datalen = sizeof(arp_native);
+	demux[1].datalen = sizeof (arp_native);
 
-	bzero(&proto, sizeof(proto));
+	bzero(&proto, sizeof (proto));
 	proto.demux_list = demux;
-	proto.demux_count = sizeof(demux) / sizeof(demux[0]);
+	proto.demux_count = sizeof (demux) / sizeof (demux[0]);
 	proto.input = ether_inet_input;
 	proto.pre_output = ether_inet_pre_output;
 	proto.ioctl = ether_inet_prmod_ioctl;
 	proto.event = ether_inet_event;
 	proto.resolve = ether_inet_resolve_multi;
 	proto.send_arp = ether_inet_arp;
-	
+
 	error = ifnet_attach_protocol_v2(ifp, proto_family, &proto);
 	if (error && error != EEXIST) {
-		printf("WARNING: ether_attach_inet can't attach ip to %s%d\n",
-			   ifp->if_name, ifp->if_unit);
+		printf("WARNING: %s can't attach ip to %s%d\n", __func__,
+		    ifp->if_name, ifp->if_unit);
 	}
-	return error;
+	return (error);
 }
 
 void
-ether_detach_inet(
-	struct ifnet *ifp,
-	protocol_family_t proto_family)
+ether_detach_inet(struct ifnet *ifp, protocol_family_t proto_family)
 {
-	(void)ifnet_detach_protocol(ifp, proto_family);
+	(void) ifnet_detach_protocol(ifp, proto_family);
 }
-

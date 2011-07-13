@@ -185,10 +185,9 @@ kauth_alloc_scope(const char *identifier, kauth_scope_callback_t callback, void 
 	/*
 	 * Allocate and populate the scope structure.
 	 */
-	MALLOC(sp, kauth_scope_t, sizeof(*sp), M_KAUTH, M_WAITOK);
+	MALLOC(sp, kauth_scope_t, sizeof(*sp), M_KAUTH, M_WAITOK | M_ZERO);
 	if (sp == NULL)
 		return(NULL);
-	bzero(&sp->ks_listeners, sizeof(sp->ks_listeners));
 	sp->ks_flags = 0;
 	sp->ks_identifier = identifier;
 	sp->ks_idata = idata;
@@ -613,7 +612,7 @@ kauth_authorize_generic_callback(kauth_cred_t credential, __unused void *idata, 
 int
 kauth_acl_evaluate(kauth_cred_t cred, kauth_acl_eval_t eval)
 {
-	int applies, error, i;
+	int applies, error, i, gotguid;
 	kauth_ace_t ace;
 	guid_t guid;
 	uint32_t rights;
@@ -632,9 +631,11 @@ kauth_acl_evaluate(kauth_cred_t cred, kauth_acl_eval_t eval)
 	 * Get our guid for comparison purposes.
 	 */
 	if ((error = kauth_cred_getguid(cred, &guid)) != 0) {
-		eval->ae_result = KAUTH_RESULT_DENY;
-		KAUTH_DEBUG("    ACL - can't get credential GUID (%d), ACL denied", error);
-		return(error);
+		KAUTH_DEBUG("    ACL - can't get credential GUID (%d)", error);
+		error = 0;
+		gotguid = 0;
+	} else {
+		gotguid = 1;
 	}
 
 	KAUTH_DEBUG("    ACL - %d entries, initial residual %x", eval->ae_count, eval->ae_residual);
@@ -678,7 +679,7 @@ kauth_acl_evaluate(kauth_cred_t cred, kauth_acl_eval_t eval)
 			/* we don't recognise this ACE, skip it */
 			continue;
 		}
-		
+	
 		/*
 		 * Verify whether this entry applies to the credential.
 		 */
@@ -688,7 +689,10 @@ kauth_acl_evaluate(kauth_cred_t cred, kauth_acl_eval_t eval)
 			applies = eval->ae_options & KAUTH_AEVAL_IS_OWNER;
 			break;
 		case KAUTH_WKG_GROUP:
-			applies = eval->ae_options & KAUTH_AEVAL_IN_GROUP;
+			if (!gotguid || (eval->ae_options & KAUTH_AEVAL_IN_GROUP_UNKNOWN))
+				applies = ((ace->ace_flags & KAUTH_ACE_KINDMASK) == KAUTH_ACE_DENY);
+			else
+				applies = eval->ae_options & KAUTH_AEVAL_IN_GROUP;
 			break;
 		/* we short-circuit these here rather than wasting time calling the group membership code */
 		case KAUTH_WKG_EVERYBODY:
@@ -700,12 +704,12 @@ kauth_acl_evaluate(kauth_cred_t cred, kauth_acl_eval_t eval)
 
 		default:
 			/* check to see whether it's exactly us, or a group we are a member of */
-			applies = kauth_guid_equal(&guid, &ace->ace_applicable);
+			applies = !gotguid ? 0 : kauth_guid_equal(&guid, &ace->ace_applicable);
 			KAUTH_DEBUG("    ACL - ACE applicable " K_UUID_FMT " caller " K_UUID_FMT " %smatched",
 			    K_UUID_ARG(ace->ace_applicable), K_UUID_ARG(guid), applies ? "" : "not ");
 		
 			if (!applies) {
-				error = kauth_cred_ismember_guid(cred, &ace->ace_applicable, &applies);
+				error = !gotguid ? ENOENT : kauth_cred_ismember_guid(cred, &ace->ace_applicable, &applies);
 				/*
 				 * If we can't resolve group membership, we have to limit misbehaviour.
 				 * If the ACE is an 'allow' ACE, assume the cred is not a member (avoid
@@ -791,15 +795,37 @@ kauth_acl_inherit(vnode_t dvp, kauth_acl_t initial, kauth_acl_t *product, int is
 	 * XXX TODO: <rdar://3634665> wants a "umask ACL" from the process.
 	 */
 	inherit = NULL;
-	if ((dvp != NULL) && !vfs_authopaque(vnode_mount(dvp))) {
+	/*
+	 * If there is no initial ACL, or there is, and the initial ACLs
+	 * flags do not request "no inheritance", then we inherit.  This allows
+	 * initial object creation via open_extended() and mkdir_extended()
+	 * to reject inheritance for themselves and for inferior nodes by
+	 * specifying a non-NULL inital ACL which has the KAUTH_ACL_NO_INHERIT
+	 * flag set in the flags field.
+	 */
+	if ((initial == NULL || !(initial->acl_flags & KAUTH_ACL_NO_INHERIT)) &&
+	    (dvp != NULL) && !vfs_authopaque(vnode_mount(dvp))) {
 		VATTR_INIT(&dva);
 		VATTR_WANTED(&dva, va_acl);
 		if ((error = vnode_getattr(dvp, &dva, ctx)) != 0) {
 			KAUTH_DEBUG("    ERROR - could not get parent directory ACL for inheritance");
 			return(error);
 		}
-		if (VATTR_IS_SUPPORTED(&dva, va_acl))
+		if (VATTR_IS_SUPPORTED(&dva, va_acl)) {
 			inherit = dva.va_acl;
+			/*
+			 * If there is an ACL on the parent directory, then
+			 * there are potentially inheritable ACE entries, but
+			 * if the flags on the directory ACL say not to
+			 * inherit, then we don't inherit.  This allows for
+			 * per directory rerooting of the inheritable ACL
+			 * hierarchy.
+			 */
+			if (inherit != NULL && inherit->acl_flags & KAUTH_ACL_NO_INHERIT) {
+				kauth_acl_free(inherit);
+				inherit = NULL;
+			}
+		}
 	}
 
 	/*
@@ -852,14 +878,17 @@ kauth_acl_inherit(vnode_t dvp, kauth_acl_t initial, kauth_acl_t *product, int is
 
 	/*
 	 * Composition is simply:
-	 *  - initial
-	 *  - inherited
+	 *  - initial direct ACEs
+	 *  - inherited ACEs from new parent
 	 */
 	index = 0;
 	if (initial != NULL) {
-		for (i = 0; i < initial->acl_entrycount; i++)
-			result->acl_ace[index++] = initial->acl_ace[i];
-		KAUTH_DEBUG("    INHERIT - applied %d initial entries", index);
+		for (i = 0; i < initial->acl_entrycount; i++) {
+			if (!(initial->acl_ace[i].ace_flags & KAUTH_ACE_INHERITED)) {
+				result->acl_ace[index++] = initial->acl_ace[i];
+			}
+		}
+		KAUTH_DEBUG("    INHERIT - applied %d of %d initial entries", index, initial->acl_entrycount);
 	}
 	if (inherit != NULL) {
 		for (i = 0; i < inherit->acl_entrycount; i++) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008,2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -52,17 +52,12 @@ static lck_mtx_t						*net_str_id_lock = NULL;
 static u_int32_t nsi_kind_next[NSI_MAX_KIND] = { FIRST_NET_STR_ID, FIRST_NET_STR_ID, FIRST_NET_STR_ID };
 static u_int32_t nsi_next_id = FIRST_NET_STR_ID;
 
-#if NETMIBS
-
 extern int sysctl_if_family_ids SYSCTL_HANDLER_ARGS;
 
 SYSCTL_DECL(_net_link_generic_system);
 
 SYSCTL_PROC(_net_link_generic_system, OID_AUTO, if_family_ids, CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
 	0, 0, sysctl_if_family_ids, "S, if_family_id", "Interface Family ID table");
-
-#endif /* NETMIBS */
-
 
 __private_extern__ void
 net_str_id_init(void)
@@ -153,8 +148,6 @@ net_str_id_find_internal(const char	*string, u_int32_t *out_id,
 }
 
 
-#if NETMIBS
-
 #define ROUNDUP32(a) \
         ((a) > 0 ? (1 + (((a) - 1) | (sizeof(uint32_t) - 1))) : sizeof(uint32_t))
 
@@ -210,6 +203,3 @@ done:
 		_FREE(iffmid, M_TEMP);
 	return error;
 }
-
-#endif /* NETMIBS */
-

@@ -89,6 +89,24 @@ ipc_notify_port_deleted(
 }
 
 /*
+ *	Routine:	ipc_notify_send_possible
+ *	Purpose:
+ *		Send a send-possible notification.
+ *	Conditions:
+ *		Nothing locked.
+ *		Consumes a ref/soright for port.
+ */
+
+void
+ipc_notify_send_possible(
+	ipc_port_t		port,
+	mach_port_name_t	name)
+{
+	(void)mach_notify_send_possible(port, name);
+	/* send-once right consumed */
+}
+
+/*
  *	Routine:	ipc_notify_port_destroyed
  *	Purpose:
  *		Send a port-destroyed notification.

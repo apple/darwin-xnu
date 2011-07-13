@@ -26,9 +26,9 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-static void last_kernel_constructor(void) __attribute__ ((constructor,section("__TEXT, initcode")));
-
 extern void iokit_post_constructor_init(void);
+
+static void last_kernel_constructor(void) __attribute__ ((constructor,section("__TEXT, initcode")));
 
 static void last_kernel_constructor(void)
 {

@@ -115,7 +115,16 @@ struct buf {
 	int	b_dirtyend;		/* Offset of end of dirty region. */
 	int	b_validoff;		/* Offset in buffer of valid region. */
 	int	b_validend;		/* Offset of end of valid region. */
+
+	/* store extra information related to redundancy of data, such as
+	 * which redundancy copy to use, etc
+	 */
+	uint32_t b_redundancy_flags;
+
 	proc_t 	b_proc;			/* Associated proc; NULL if kernel. */
+#ifdef BUF_MAKE_PRIVATE
+	buf_t   b_data_store;
+#endif
 #if CONFIG_PROTECT
 	struct cprotect *b_cpentry; 	/* address of cp_entry, to be passed further down  */
 #endif /* CONFIG_PROTECT */
@@ -131,6 +140,12 @@ struct buf {
 
 /* cluster_io definitions for use with io bufs */
 #define b_uploffset  b_bufsize
+#define b_orig	     b_freelist.tqe_prev
+#define b_shadow     b_freelist.tqe_next
+#define	b_shadow_ref b_validoff
+#ifdef BUF_MAKE_PRIVATE
+#define b_data_ref   b_validend
+#endif
 #define b_trans_head b_freelist.tqe_prev
 #define b_trans_next b_freelist.tqe_next
 #define b_iostate    b_rcred
@@ -143,20 +158,25 @@ struct buf {
 #define	BL_BUSY		0x00000001	/* I/O in progress. */
 #define	BL_WANTED	0x00000002	/* Process wants this buffer. */
 #define BL_IOBUF	0x00000004	/* buffer allocated via 'buf_alloc' */
-#define BL_CALLDONE	0x00000008	/* callback routine on B_CALL bp has completed */
 #define BL_WANTDEALLOC	0x00000010	/* buffer should be put on empty list when clean */
+#define BL_SHADOW	0x00000020
+#define BL_EXTERNAL	0x00000040
+#define BL_WAITSHADOW	0x00000080
+#define BL_IOBUF_ALLOC	0x00000100
 
 /*
  * Parameters for buffer cache garbage collection 
  */
 #define BUF_STALE_THRESHHOLD 	30	/* Collect if untouched in the last 30 seconds */
-#define BUF_MAX_GC_COUNT	1000	/* Generally 6-8 MB */
+#define BUF_MAX_GC_COUNT	1024	/* Generally 6-8 MB */
+#define BUF_MAX_GC_BATCH_SIZE	128	/* Under a single grab of the lock */
 
 /*
  * mask used by buf_flags... these are the readable external flags
  */
 #define BUF_X_RDFLAGS (B_PHYS | B_RAW | B_LOCKED | B_ASYNC | B_READ | B_WRITE | B_PAGEIO |\
-		       B_META | B_CLUSTER | B_DELWRI | B_FUA | B_PASSIVE | B_IOSTREAMING | B_THROTTLED_IO)
+		       B_META | B_CLUSTER | B_DELWRI | B_FUA | B_PASSIVE | B_IOSTREAMING | B_THROTTLED_IO |\
+		       B_ENCRYPTED_IO)
 /*
  * mask used by buf_clearflags/buf_setflags... these are the writable external flags
  */
@@ -189,10 +209,9 @@ struct buf {
 /*
  * private flags used by by the cluster layer
  */
-#define B_NEED_IODONE   0x20000000	/* need biodone on the real_bp associated with a cluster_io */
+#define B_TWANTED	0x20000000	/* but_t that is part of a cluster level transaction is wanted */
 #define B_COMMIT_UPL    0x40000000	/* commit/abort the UPL on I/O success/failure */
 #define B_TDONE		0x80000000	/* buf_t that is part of a cluster level transaction has completed */
-
 
 /* Flags to low-level allocation routines. */
 #define B_CLRBUF	0x01	/* Request allocated buffer be cleared. */
@@ -222,6 +241,8 @@ extern struct buf *buf_headers;		/* The buffer headers. */
 
 __BEGIN_DECLS
 
+buf_t	buf_create_shadow_priv(buf_t bp, boolean_t force_copy, uintptr_t external_storage, void (*iodone)(buf_t, void *), void *arg);
+
 buf_t	alloc_io_buf(vnode_t, int);
 void	free_io_buf(buf_t);
 
@@ -239,8 +260,6 @@ void	bufinit(void) __attribute__((section("__TEXT, initcode")));
 void	buf_list_lock(void);
 void	buf_list_unlock(void);
 
-void	buf_biowait_callback(buf_t);
-
 void	cluster_init(void) __attribute__((section("__TEXT, initcode")));
 void	buf_drop(buf_t);
 errno_t	buf_acquire(buf_t, int, int, int);
@@ -248,6 +267,9 @@ errno_t	buf_acquire(buf_t, int, int, int);
 int	count_busy_buffers(void);
 int	count_lock_queue(void);
 
+#ifdef BUF_MAKE_PRIVATE
+errno_t	buf_make_private(buf_t bp);
+#endif
 
 __END_DECLS
 

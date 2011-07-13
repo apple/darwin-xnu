@@ -105,6 +105,9 @@ extern unsigned int	mul_scale(
 /* Move arbitrarily-aligned data from one physical address to another */
 extern void bcopy_phys(addr64_t from, addr64_t to, vm_size_t nbytes);
 
+/* allow a function to get a quick virtual mapping of a physical page */
+extern int apply_func_phys(addr64_t src64, vm_size_t bytes, int (*func)(void * buffer, vm_size_t bytes, void * arg), void * arg);
+
 extern void ml_copy_phys(addr64_t, addr64_t, vm_size_t);
 
 /* Flush all cachelines for a page. */
@@ -160,6 +163,8 @@ copy_debug_state32(x86_debug_state32_t *src, x86_debug_state32_t *target, boolea
 
 void 
 copy_debug_state64(x86_debug_state64_t *src, x86_debug_state64_t *target, boolean_t all);
+
+extern void act_machine_switch_pcb(thread_t old, thread_t new);
 
 /* Fast-restart parameters */
 #define FULL_SLAVE_INIT	(NULL)

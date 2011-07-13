@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -124,23 +124,23 @@
  */
 
 struct	icmpstat icmpstat;
-SYSCTL_STRUCT(_net_inet_icmp, ICMPCTL_STATS, stats, CTLFLAG_RD,
+SYSCTL_STRUCT(_net_inet_icmp, ICMPCTL_STATS, stats, CTLFLAG_RD | CTLFLAG_LOCKED,
 	&icmpstat, icmpstat, "");
 
 static int	icmpmaskrepl = 0;
-SYSCTL_INT(_net_inet_icmp, ICMPCTL_MASKREPL, maskrepl, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_icmp, ICMPCTL_MASKREPL, maskrepl, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&icmpmaskrepl, 0, "");
 
 static int	icmptimestamp = 0;
-SYSCTL_INT(_net_inet_icmp, ICMPCTL_TIMESTAMP, timestamp, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_icmp, ICMPCTL_TIMESTAMP, timestamp, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&icmptimestamp, 0, "");
 
 static int	drop_redirect = 0;
-SYSCTL_INT(_net_inet_icmp, OID_AUTO, drop_redirect, CTLFLAG_RW, 
+SYSCTL_INT(_net_inet_icmp, OID_AUTO, drop_redirect, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&drop_redirect, 0, "");
 
 static int	log_redirect = 0;
-SYSCTL_INT(_net_inet_icmp, OID_AUTO, log_redirect, CTLFLAG_RW, 
+SYSCTL_INT(_net_inet_icmp, OID_AUTO, log_redirect, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&log_redirect, 0, "");
 
 #if ICMP_BANDLIM 
@@ -151,12 +151,12 @@ SYSCTL_INT(_net_inet_icmp, OID_AUTO, log_redirect, CTLFLAG_RW,
  */     
     
 static int      icmplim = 250;
-SYSCTL_INT(_net_inet_icmp, ICMPCTL_ICMPLIM, icmplim, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_icmp, ICMPCTL_ICMPLIM, icmplim, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&icmplim, 0, "");
 #else
 
 static int      icmplim = -1;
-SYSCTL_INT(_net_inet_icmp, ICMPCTL_ICMPLIM, icmplim, CTLFLAG_RD,
+SYSCTL_INT(_net_inet_icmp, ICMPCTL_ICMPLIM, icmplim, CTLFLAG_RD | CTLFLAG_LOCKED,
 	&icmplim, 0, "");
 	
 #endif 
@@ -166,7 +166,7 @@ SYSCTL_INT(_net_inet_icmp, ICMPCTL_ICMPLIM, icmplim, CTLFLAG_RD,
  */
 
 static int	icmpbmcastecho = 1;
-SYSCTL_INT(_net_inet_icmp, OID_AUTO, bmcastecho, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_icmp, OID_AUTO, bmcastecho, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&icmpbmcastecho, 0, "");
 
 
@@ -537,8 +537,10 @@ icmp_input(struct mbuf *m, int hlen)
 			    (struct sockaddr *)&icmpdst, m->m_pkthdr.rcvif);
 		if (ia == 0)
 			break;
+		IFA_LOCK(&ia->ia_ifa);
 		if (ia->ia_ifp == 0) {
-			ifafree(&ia->ia_ifa);
+			IFA_UNLOCK(&ia->ia_ifa);
+			IFA_REMREF(&ia->ia_ifa);
 			ia = NULL;
 			break;
 		}
@@ -550,7 +552,8 @@ icmp_input(struct mbuf *m, int hlen)
 			else if (ia->ia_ifp->if_flags & IFF_POINTOPOINT)
 			    ip->ip_src = satosin(&ia->ia_dstaddr)->sin_addr;
 		}
-		ifafree(&ia->ia_ifa);
+		IFA_UNLOCK(&ia->ia_ifa);
+		IFA_REMREF(&ia->ia_ifa);
 reflect:
 		ip->ip_len += hlen;	/* since ip_input deducts this */
 		icmpstat.icps_reflect++;
@@ -662,8 +665,13 @@ icmp_reflect(struct mbuf *m)
 	 */
 	lck_rw_lock_shared(in_ifaddr_rwlock);
 	TAILQ_FOREACH(ia, INADDR_HASH(t.s_addr), ia_hash) {
-		if (t.s_addr == IA_SIN(ia)->sin_addr.s_addr)
+		IFA_LOCK(&ia->ia_ifa);
+		if (t.s_addr == IA_SIN(ia)->sin_addr.s_addr) {
+			IFA_ADDREF_LOCKED(&ia->ia_ifa);
+			IFA_UNLOCK(&ia->ia_ifa);
 			goto match;
+		}
+		IFA_UNLOCK(&ia->ia_ifa);
 	}
 	/*
 	 * Slow path; check for broadcast addresses.  Find a source
@@ -671,13 +679,16 @@ icmp_reflect(struct mbuf *m)
 	 * let IP handle the source interface selection work.
 	 */
 	for (ia = in_ifaddrhead.tqh_first; ia; ia = ia->ia_link.tqe_next) {
+		IFA_LOCK(&ia->ia_ifa);
 		if (ia->ia_ifp && (ia->ia_ifp->if_flags & IFF_BROADCAST) &&
-		    t.s_addr == satosin(&ia->ia_broadaddr)->sin_addr.s_addr)
+		    t.s_addr == satosin(&ia->ia_broadaddr)->sin_addr.s_addr) {
+			IFA_ADDREF_LOCKED(&ia->ia_ifa);
+			IFA_UNLOCK(&ia->ia_ifa);
 			break;
+		}
+		IFA_UNLOCK(&ia->ia_ifa);
 	}
 match:
-	if (ia)
-		ifaref(&ia->ia_ifa);
 	lck_rw_done(in_ifaddr_rwlock);
 	icmpdst.sin_addr = t;
 	if ((ia == (struct in_ifaddr *)0) && m->m_pkthdr.rcvif)
@@ -695,16 +706,18 @@ match:
 			m_freem(m);
 			goto done;
 		}
-		ifaref(&ia->ia_ifa);
+		IFA_ADDREF(&ia->ia_ifa);
 		lck_rw_done(in_ifaddr_rwlock);
 	}
 #if CONFIG_MACF_NET
 	mac_netinet_icmp_reply(m);
 #endif
+	IFA_LOCK_SPIN(&ia->ia_ifa);
 	t = IA_SIN(ia)->sin_addr;
+	IFA_UNLOCK(&ia->ia_ifa);
 	ip->ip_src = t;
 	ip->ip_ttl = ip_defttl;
-	ifafree(&ia->ia_ifa);
+	IFA_REMREF(&ia->ia_ifa);
 	ia = NULL;
 
 	if (optlen > 0) {
@@ -797,10 +810,10 @@ icmp_send(struct mbuf *m, struct mbuf *opts)
 	int hlen;
 	struct icmp *icp;
 	struct route ro;
-	struct ip_out_args ipoa = { IFSCOPE_NONE };
+	struct ip_out_args ipoa = { IFSCOPE_NONE, 0 };
 
 	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.rcvif != NULL)
-		ipoa.ipoa_ifscope = m->m_pkthdr.rcvif->if_index;
+		ipoa.ipoa_boundif = m->m_pkthdr.rcvif->if_index;
 
 	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
 	m->m_data += hlen;
@@ -1037,6 +1050,7 @@ icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt)
 		case IP_RECVDSTADDR:
 		case IP_RETOPTS:
 		case IP_MULTICAST_IF:
+		case IP_MULTICAST_IFINDEX:
 		case IP_MULTICAST_TTL:
 		case IP_MULTICAST_LOOP:
 		case IP_ADD_MEMBERSHIP:
@@ -1054,6 +1068,7 @@ icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt)
 #if CONFIG_FORCE_OUT_IFP
                 case IP_FORCE_OUT_IFP:
 #endif
+		case IP_NO_IFT_CELLULAR:
 			error = rip_ctloutput(so, sopt);
 			break;
 
@@ -1109,12 +1124,15 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *n
 			}
 			TAILQ_FOREACH(ia, INADDR_HASH(ip->ip_src.s_addr),
 			    ia_hash) {
+				IFA_LOCK(&ia->ia_ifa);
 				if (IA_SIN(ia)->sin_addr.s_addr ==
 				    ip->ip_src.s_addr) {
+					IFA_UNLOCK(&ia->ia_ifa);
 					lck_rw_done(in_ifaddr_rwlock);
 					socket_lock(so, 0);
 					goto ours;
 				}
+				IFA_UNLOCK(&ia->ia_ifa);
 			}
 			lck_rw_done(in_ifaddr_rwlock);
 			socket_lock(so, 0);

@@ -40,6 +40,7 @@
 #define kPrelinkInfoSection                "__info"
 
 #define kPrelinkBundlePathKey              "_PrelinkBundlePath"
+#define kPrelinkExecutableRelativePathKey  "_PrelinkExecutableRelativePath"
 #define kPrelinkExecutableLoadKey          "_PrelinkExecutableLoadAddr"
 #define kPrelinkExecutableSourceKey        "_PrelinkExecutableSourceAddr"
 #define kPrelinkExecutableSizeKey          "_PrelinkExecutableSize"
@@ -48,7 +49,6 @@
 #define kPrelinkKmodInfoKey                "_PrelinkKmodInfo"
 #define kPrelinkLinkStateKey               "_PrelinkLinkState"
 #define kPrelinkLinkStateSizeKey           "_PrelinkLinkStateSize"
-#define kPrelinkPersonalitiesKey           "_PrelinkPersonalities"
 
 #endif /* _PRELINK_H_ */
 

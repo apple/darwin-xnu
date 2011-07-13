@@ -31,18 +31,14 @@
 #define _MACHINE_CPU_CAPABILITIES_H
 
 #ifdef KERNEL_PRIVATE
-#if defined (__ppc__)
-#include "ppc/cpu_capabilities.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/cpu_capabilities.h"
 #else
 #error architecture not supported
 #endif
 
 #else /* !KERNEL_PRIVATE -- System Framework header */
-#if defined (__ppc__) || defined(__ppc64__)
-#include <System/ppc/cpu_capabilities.h>
-#elif defined (__i386__) || defined(__x86_64__)
+#if defined (__i386__) || defined(__x86_64__)
 #include <System/i386/cpu_capabilities.h>
 #else
 #error architecture not supported

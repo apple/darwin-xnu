@@ -45,6 +45,10 @@
 #if HFS_COMPRESSION
 #include <sys/decmpfs.h>
 #endif
+#if CONFIG_PROTECT
+#include <sys/cprotect.h>
+#endif
+
 
 /*
  * The filefork is used to represent an HFS file fork (data or resource).
@@ -106,6 +110,7 @@ struct cnode {
 	lck_rw_t                c_rwlock;       /* cnode's lock */
 	void *                  c_lockowner;    /* cnode's lock owner (exclusive case only) */
 	lck_rw_t                c_truncatelock; /* protects file from truncation during read/write */
+	void *                  c_truncatelockowner;    /* truncate lock owner (exclusive case only) */
 	LIST_ENTRY(cnode)	c_hash;		/* cnode's hash chain */
 	u_int32_t		c_flag;		/* cnode's runtime flags */
 	u_int32_t		c_hflag;	/* cnode's flags for maintaining hash - protected by global hash lock */
@@ -132,6 +137,10 @@ struct cnode {
 #if HFS_COMPRESSION
 	decmpfs_cnode  *c_decmp;
 #endif /* HFS_COMPRESSION */
+#if CONFIG_PROTECT
+	cprotect_t		c_cpentry;	/* content protection data */
+#endif
+	
 };
 typedef struct cnode cnode_t;
 
@@ -183,13 +192,16 @@ typedef struct cnode cnode_t;
 #define C_FORCEUPDATE      0x00100  /* force the catalog entry update */
 #define C_HASXATTRS        0x00200  /* cnode has extended attributes */
 #define C_NEG_ENTRIES      0x00400  /* directory has negative name entries */
-#define C_WARNED_RSRC      0x00800  /* cnode lookup warning has been issued */ 
+#define C_SWAPINPROGRESS   0x00800	/* cnode's data is about to be swapped.  Issue synchronous cluster io */
 
 #define C_NEED_DATA_SETSIZE  0x01000  /* Do a ubc_setsize(0) on c_rsrc_vp after the unlock */
 #define C_NEED_RSRC_SETSIZE  0x02000  /* Do a ubc_setsize(0) on c_vp after the unlock */
 #define C_DIR_MODIFICATION   0x04000  /* Directory is being modified, wait for lookups */
 #define C_ALWAYS_ZEROFILL    0x08000  /* Always zero-fill the file on an fsync */
 
+#define C_RENAMED			0x10000	/* cnode was deleted as part of rename; C_DELETED should also be set */
+#define C_NEEDS_DATEADDED	0x20000 /* cnode needs date-added written to the finderinfo bit */
+#define C_BACKINGSTORE		0x40000 /* cnode is a backing store for an existing or currently-mounting filesystem */
 #define ZFTIMELIMIT	(5 * 60)
 
 /*
@@ -236,7 +248,7 @@ enum { kFinderInvisibleMask = 1 << 14 };
  * upon the VNOP in question.  Sometimes it is OK to use an open-unlinked file, for example, in,
  * reading.  But other times, such as on the source of a VNOP_RENAME, it should be disallowed.
  */
-int hfs_checkdeleted (struct cnode *cp);
+int hfs_checkdeleted(struct cnode *cp);
 
 /*
  * Test for a resource fork
@@ -271,16 +283,28 @@ struct hfsfid {
 /* Get new default vnode */
 extern int hfs_getnewvnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname *cnp,
                            struct cat_desc *descp, int flags, struct cat_attr *attrp,
-                           struct cat_fork *forkp, struct vnode **vpp);
+                           struct cat_fork *forkp, struct vnode **vpp, int *out_flags);
 
+/* Input flags for hfs_getnewvnode */
 
 #define GNV_WANTRSRC   0x01  /* Request the resource fork vnode. */
 #define GNV_SKIPLOCK   0x02  /* Skip taking the cnode lock (when getting resource fork). */
 #define GNV_CREATE     0x04  /* The vnode is for a newly created item. */
+#define GNV_NOCACHE	   0x08  /* Delay entering this item in the name cache */
 
+/* Output flags for hfs_getnewvnode */
+#define GNV_CHASH_RENAMED	0x01	/* The cnode was renamed in-flight */
+#define GNV_CAT_DELETED		0x02	/* The cnode was deleted from the catalog */
+#define GNV_NEW_CNODE		0x04	/* We are vending out a newly initialized cnode */
+#define GNV_CAT_ATTRCHANGED	0x08	/* Something in struct cat_attr changed in between cat_lookups */
 
 /* Touch cnode times based on c_touch_xxx flags */
 extern void hfs_touchtimes(struct hfsmount *, struct cnode *);
+extern void hfs_write_dateadded (struct cat_attr *cattrp, u_int32_t dateadded);
+extern u_int32_t hfs_get_dateadded (struct cnode *cp); 
+
+/* Zero-fill file and push regions out to disk */
+extern int  hfs_filedone(struct vnode *vp, vfs_context_t context);
 
 /*
  * HFS cnode hash functions.
@@ -294,11 +318,14 @@ extern void  hfs_chash_rehash(struct hfsmount *hfsmp, struct cnode *cp1, struct 
 extern void  hfs_chashwakeup(struct hfsmount *hfsmp, struct cnode *cp, int flags);
 extern void  hfs_chash_mark_in_transit(struct hfsmount *hfsmp, struct cnode *cp);
 
-extern struct vnode * hfs_chash_getvnode(struct hfsmount *hfsmp, ino_t inum, int wantrsrc, int skiplock);
-extern struct cnode * hfs_chash_getcnode(struct hfsmount *hfsmp, ino_t inum, struct vnode **vpp, int wantrsrc, int skiplock);
+extern struct vnode * hfs_chash_getvnode(struct hfsmount *hfsmp, ino_t inum, int wantrsrc,
+										 int skiplock, int allow_deleted);
+extern struct cnode * hfs_chash_getcnode(struct hfsmount *hfsmp, ino_t inum, struct vnode **vpp, 
+										 int wantrsrc, int skiplock, int *out_flags, int *hflags);
 extern int hfs_chash_snoop(struct hfsmount *, ino_t, int (*)(const struct cat_desc *,
                             const struct cat_attr *, void *), void *);
-extern int hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname *cnp, cnid_t cnid);
+extern int hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname *cnp, 
+							cnid_t cnid, struct cat_attr *cattr, int *error);
 				
 extern int hfs_chash_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid);
 
@@ -319,20 +346,22 @@ extern int hfs_chash_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid);
  *  5. hfs mount point (always last)
  *
  */
-enum hfslocktype  {HFS_SHARED_LOCK = 1, HFS_EXCLUSIVE_LOCK = 2, HFS_FORCE_LOCK = 3};
+enum hfslocktype  {HFS_SHARED_LOCK = 1, HFS_EXCLUSIVE_LOCK = 2, HFS_FORCE_LOCK = 3, HFS_RECURSE_TRUNCLOCK = 4};
 #define HFS_SHARED_OWNER  (void *)0xffffffff
 
-extern int hfs_lock(struct cnode *, enum hfslocktype);
-extern int hfs_lockpair(struct cnode *, struct cnode *, enum hfslocktype);
-extern int hfs_lockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *,
+int hfs_lock(struct cnode *, enum hfslocktype);
+int hfs_lockpair(struct cnode *, struct cnode *, enum hfslocktype);
+int hfs_lockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *,
                         enum hfslocktype, struct cnode **);
 
-extern void hfs_unlock(struct cnode *);
-extern void hfs_unlockpair(struct cnode *, struct cnode *);
-extern void hfs_unlockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *);
+void hfs_unlock(struct cnode *);
+void hfs_unlockpair(struct cnode *, struct cnode *);
+void hfs_unlockfour(struct cnode *, struct cnode *, struct cnode *, struct cnode *);
 
-extern void hfs_lock_truncate(struct cnode *, int);
-extern void hfs_unlock_truncate(struct cnode *, int);
+void hfs_lock_truncate(struct cnode *, enum hfslocktype);
+void hfs_unlock_truncate(struct cnode *, int been_recursed);
+
+int hfs_try_trunclock(struct cnode *, enum hfslocktype);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

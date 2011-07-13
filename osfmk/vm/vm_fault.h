@@ -79,7 +79,6 @@ typedef	kern_return_t	vm_fault_return_t;
 #define VM_FAULT_RETRY			1
 #define VM_FAULT_INTERRUPTED		2
 #define VM_FAULT_MEMORY_SHORTAGE 	3
-#define VM_FAULT_FICTITIOUS_SHORTAGE 	4
 #define VM_FAULT_MEMORY_ERROR		5
 #define VM_FAULT_SUCCESS_NO_VM_PAGE	6	/* success but no VM page */
 
@@ -160,9 +159,11 @@ extern kern_return_t vm_fault_enter(
 	pmap_t pmap,
 	vm_map_offset_t vaddr,
 	vm_prot_t prot,
+	vm_prot_t fault_type,
 	boolean_t wired,
 	boolean_t change_wiring,
 	boolean_t no_cache,
+	boolean_t cs_bypass,
 	int *type_of_fault);
 
 #endif	/* MACH_KERNEL_PRIVATE */

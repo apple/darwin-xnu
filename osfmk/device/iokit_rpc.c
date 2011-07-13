@@ -63,9 +63,6 @@
 
 #include <machine/machparam.h>
 
-#ifdef __ppc__
-#include <ppc/mappings.h>
-#endif
 #if defined(__i386__) || defined(__x86_64__)
 #include <i386/pmap.h>
 #endif
@@ -449,12 +446,15 @@ unsigned int IODefaultCacheBits(addr64_t pa)
 kern_return_t IOMapPages(vm_map_t map, mach_vm_address_t va, mach_vm_address_t pa,
 			mach_vm_size_t length, unsigned int options)
 {
-    vm_prot_t	prot;
+    vm_prot_t	 prot;
     unsigned int flags;
+    ppnum_t	 pagenum;
     pmap_t 	 pmap = map->pmap;
 
     prot = (options & kIOMapReadOnly)
 		? VM_PROT_READ : (VM_PROT_READ|VM_PROT_WRITE);
+
+    pagenum = (ppnum_t)atop_64(pa);
 
     switch(options & kIOMapCacheMask ) {			/* What cache mode do we need? */
 
@@ -480,8 +480,13 @@ kern_return_t IOMapPages(vm_map_t map, mach_vm_address_t va, mach_vm_address_t p
 	    break;
     }
 
+    pmap_set_cache_attributes(pagenum, flags);
+
+    vm_map_set_cache_attr(map, (vm_map_offset_t)va);
+
+
     // Set up a block mapped area
-    pmap_map_block(pmap, va, (ppnum_t)atop_64(pa), (uint32_t) atop_64(round_page_64(length)), prot, flags, 0);
+    pmap_map_block(pmap, va, pagenum, (uint32_t) atop_64(round_page_64(length)), prot, 0, 0);
 
     return( KERN_SUCCESS );
 }
@@ -498,10 +503,6 @@ kern_return_t IOUnmapPages(vm_map_t map, mach_vm_address_t va, mach_vm_size_t le
 kern_return_t IOProtectCacheMode(vm_map_t __unused map, mach_vm_address_t __unused va,
 					mach_vm_size_t __unused length, unsigned int __unused options)
 {
-#if __ppc__
-    // can't remap block mappings, but ppc doesn't speculatively read from WC
-#else
-
     mach_vm_size_t off;
     vm_prot_t	   prot;
     unsigned int   flags;
@@ -542,31 +543,25 @@ kern_return_t IOProtectCacheMode(vm_map_t __unused map, mach_vm_address_t __unus
 	    pmap_enter(pmap, va + off, ppnum, prot, flags, TRUE);
     }
 
-#endif
-
     return (KERN_SUCCESS);
 }
 
 ppnum_t IOGetLastPageNumber(void)
 {
-    ppnum_t	 lastPage, highest = 0;
-    unsigned int idx;
+#if __i386__ || __x86_64__
+	ppnum_t	 lastPage, highest = 0;
+	unsigned int idx;
 
-#if __ppc__
-    for (idx = 0; idx < pmap_mem_regions_count; idx++)
-    {
-	lastPage = pmap_mem_regions[idx].mrEnd;
-#elif __i386__ || __x86_64__
-    for (idx = 0; idx < pmap_memory_region_count; idx++)
-    {
-	lastPage = pmap_memory_regions[idx].end - 1;
+	for (idx = 0; idx < pmap_memory_region_count; idx++)
+	{
+		lastPage = pmap_memory_regions[idx].end - 1;
+		if (lastPage > highest)
+			highest = lastPage;
+	}
+	return (highest);
 #else
-#error arch
+#error unknown arch
 #endif
-	if (lastPage > highest)
-	    highest = lastPage;
-    }
-    return (highest);
 }
 
 

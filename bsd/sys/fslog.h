@@ -87,6 +87,14 @@ void fslog_fs_corrupt(struct mount *mnt);
 void fslog_io_error(const buf_t bp);
 
 #endif /* BSD_KERNEL_PRIVATE */
+
+#ifdef XNU_KERNEL_PRIVATE
+
+/* Log information about external modification of a target process */
+void fslog_extmod_msgtracer(proc_t caller, proc_t target);
+
+#endif /* XNU_KERNEL_PRIVATE */
+
 #endif /* KERNEL */
 
 /* Keys used by FSLog */

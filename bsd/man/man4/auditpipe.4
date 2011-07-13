@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD: src/share/man/man4/auditpipe.4,v 1.6 2008/05/02 17:36:22 rwatson Exp $
 .\"
-.Dd May 5, 2006
+.Dd Oct 18, 2010
 .Os
 .Dt AUDITPIPE 4
 .Sh NAME
@@ -156,7 +156,7 @@ These flags correspond to the
 field in
 .Xr audit_control 5 .
 The ioctl argument should be of type
-.Vt u_int .
+.Vt au_mask_t .
 .It Dv AUDITPIPE_SET_PRESELECT_FLAGS
 Set the current default preselection flags for attributable events on the
 pipe.
@@ -165,7 +165,7 @@ These flags correspond to the
 field in
 .Xr audit_control 5 .
 The ioctl argument should be of type
-.Vt u_int .
+.Vt au_mask_t .
 .It Dv AUDITPIPE_GET_PRESELECT_NAFLAGS
 Retrieve the current default preselection flags for non-attributable events
 on the pipe.
@@ -174,7 +174,7 @@ These flags correspond to the
 field in
 .Xr audit_control 5 .
 The ioctl argument should be of type
-.Vt u_int .
+.Vt au_mask_t .
 .It Dv AUDITPIPE_SET_PRESELECT_NAFLAGS
 Set the current default preselection flags for non-attributable events on the
 pipe.
@@ -183,7 +183,7 @@ These flags correspond to the
 field in
 .Xr audit_control 5 .
 The ioctl argument should be of type
-.Vt u_int .
+.Vt au_mask_t .
 .It Dv AUDITPIPE_GET_PRESELECT_AUID
 Query the current preselection masks for a specific auid on the pipe.
 The ioctl argument should be of type
@@ -252,7 +252,5 @@ It might be desirable to provided a more flexible selection model.
 The per-pipe audit event queue is fifo, with drops occurring if either the
 user thread provides in sufficient for the record on the queue head, or on
 enqueue if there is insufficient room.
-It might be desirable to support partial reads of records, which would be
-more compatible with buffered I/O as implemented in system libraries, and to
-allow applications to select which records are dropped, possibly in the style
-of preselection.
+It might be desirable to allow applications to select which records are
+dropped, possibly in the style of preselection.

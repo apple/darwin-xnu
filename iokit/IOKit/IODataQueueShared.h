@@ -66,7 +66,7 @@ typedef struct _IODataQueueMemory {
  * @abstract A struct mapping to the appendix region of a data queue.
  * @discussion This struct is variable sized dependent on the version.  The struct represents the data queue appendix information.
  * @field version The version of the queue appendix.
- * @field port The notification port associated with this queue.
+ * @field msgh Mach message header containing the notification mach port associated with this queue.
  */
 typedef struct _IODataQueueAppendix {
     UInt32            version;

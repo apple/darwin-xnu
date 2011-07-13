@@ -232,6 +232,21 @@ struct FndrOpaqueInfo {
 } __attribute__((aligned(2), packed));
 typedef struct FndrOpaqueInfo FndrOpaqueInfo;
 
+struct FndrExtendedDirInfo {
+	u_int32_t point;
+	u_int32_t date_added;
+	u_int16_t extended_flags;
+	u_int16_t reserved3;
+	u_int32_t reserved4;
+} __attribute__((aligned(2), packed));
+
+struct FndrExtendedFileInfo {
+	u_int32_t reserved1;
+	u_int32_t date_added;
+	u_int16_t extended_flags;
+	u_int16_t reserved2;
+	u_int32_t reserved3;	
+} __attribute__((aligned(2), packed));
 
 /* HFS Plus Fork data info - 80 bytes */
 struct HFSPlusForkData {
@@ -354,7 +369,11 @@ enum {
 	kHFSHasLinkChainMask	= 0x0020,
 
 	kHFSHasChildLinkBit	= 0x0006,	/* folder has a child that's a dir link */
-	kHFSHasChildLinkMask	= 0x0040
+	kHFSHasChildLinkMask	= 0x0040,
+
+	kHFSHasDateAddedBit = 0x0007,	/* File/Folder has the date-added stored in the finder info. */
+	kHFSHasDateAddedMask = 0x0080 
+
 };
 
 
@@ -577,7 +596,8 @@ enum {
 	 * Therefore, bits 16-31 can only be used on HFS Plus.
 	 */
 	kHFSUnusedNodeFixBit = 31,				/* Unused nodes in the Catalog B-tree have been zero-filled.  See Radar #6947811. */
-	
+	kHFSContentProtectionBit = 30,			/* Volume has per-file content protection */
+
 	kHFSVolumeHardwareLockMask	= 1 << kHFSVolumeHardwareLockBit,
 	kHFSVolumeUnmountedMask		= 1 << kHFSVolumeUnmountedBit,
 	kHFSVolumeSparedBlocksMask	= 1 << kHFSVolumeSparedBlocksBit,
@@ -588,6 +608,7 @@ enum {
 	kHFSVolumeInconsistentMask = 1 << kHFSVolumeInconsistentBit,
 	kHFSVolumeSoftwareLockMask	= 1 << kHFSVolumeSoftwareLockBit,
 	kHFSUnusedNodeFixMask = 1 << kHFSUnusedNodeFixBit,
+	kHFSContentProtectionMask = 1 << kHFSContentProtectionBit,
 	kHFSMDBAttributesMask		= 0x8380
 };
 

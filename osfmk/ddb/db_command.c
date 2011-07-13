@@ -64,9 +64,6 @@
  * Command dispatcher.
  */
 #include <norma_vm.h>
-#ifdef	AT386
-#include <norma_scsi.h>
-#endif	/* AT386 */
 
 #include <mach/boolean.h>
 #include <string.h>
@@ -86,9 +83,6 @@
 #include <ddb/db_cond.h>
 #include <ddb/db_examine.h>
 #include <ddb/db_expr.h>
-#if defined(__ppc__)
-#include <ppc/db_low_trace.h>
-#endif
 #include <ddb/db_macro.h>
 #include <ddb/db_print.h>
 #include <ddb/db_run.h>
@@ -741,7 +735,6 @@ struct db_command db_command_table[] = {
 		.name = "reboot",
 		(db_func)db_reboot,
 	},
-#if !defined(__ppc__)	
 	{
 		.name = "ms",
 		.fcn = db_msr,
@@ -757,69 +750,6 @@ struct db_command db_command_table[] = {
 		.fcn = db_apic,
 		.flag = CS_MORE,
 	},
-#endif /* !__ppc__ */
-#if defined(__ppc__)	
-	{
-		.name = "lt",
-		.fcn = db_low_trace,
-		.flag = CS_MORE|CS_SET_DOT,
-	},
-	{
-		.name = "dl",
-		.fcn = db_display_long,
-		.flag = CS_MORE|CS_SET_DOT,
-	},
-	{
-		.name = "dc",
-		.fcn = db_display_char,
-		.flag = CS_MORE|CS_SET_DOT,
-	},
-	{
-		.name = "dv",
-		.fcn = db_display_virtual,
-		.flag = CS_MORE|CS_SET_DOT,
-	},
-	{
-		.name = "dm",
-		.fcn = db_display_mappings,
-		.flag = CS_MORE|CS_SET_DOT,
-	},
-	{
-		.name = "dh",
-		.fcn = db_display_hash,
-		.flag = CS_MORE|CS_SET_DOT,
-	},
-	{
-		.name = "dp",
-		.fcn = db_display_pmap,
-		.flag = CS_MORE,
-	},
-	{
-		.name = "ds",
-		.fcn = db_display_save,
-		.flag = CS_MORE|CS_SET_DOT,
-	},
-	{
-		.name = "dx",
-		.fcn = db_display_xregs,
-		.flag = CS_MORE|CS_SET_DOT,
-	},
-	{
-		.name = "gs",
-		.fcn = db_gsnoop,
-		.flag = CS_MORE,
-	},
-	{
-		.name = "cm",
-		.fcn = db_check_mappings,
-		.flag = CS_MORE,
-	},
-	{
-		.name = "cp",
-		.fcn = db_check_pmaps,
-		.flag = CS_MORE,
-	},
-#endif /* __ppc__ */
 	{
 		.name = (const char *)NULL,
 	},

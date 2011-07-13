@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -105,11 +105,12 @@
 #include <sys/proc_internal.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
-#if defined(PULLDOWN_STAT) && defined(INET6)
+#include <sys/mcache.h>
+#if INET6
 #include <netinet/in.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
-#endif
+#endif /* INET6 */
 
 #if CONFIG_MACF_NET
 #include <security/mac_framework.h>
@@ -131,7 +132,7 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	struct mbuf *n, *o;
 	int hlen, tlen, olen;
 	int sharedcluster;
-#if defined(PULLDOWN_STAT) && defined(INET6)
+#if defined(PULLDOWN_STAT) && INET6
 	static struct mbuf *prev = NULL;
 	int prevlen = 0, prevmlen = 0;
 #endif
@@ -144,11 +145,11 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 		return NULL;	/* impossible */
 	}
 
-#if defined(PULLDOWN_STAT) && defined(INET6)
+#if defined(PULLDOWN_STAT) && INET6
 	ip6stat.ip6s_pulldown++;
 #endif
 
-#if defined(PULLDOWN_STAT) && defined(INET6)
+#if defined(PULLDOWN_STAT) && INET6
 	/* statistics for m_pullup */
 	ip6stat.ip6s_pullup++;
 	if (off + len > MHLEN)
@@ -241,7 +242,7 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	if ((off == 0 || offp) && len <= n->m_len - off)
 		goto ok;
 
-#if defined(PULLDOWN_STAT) && defined(INET6)
+#if defined(PULLDOWN_STAT) && INET6
 	ip6stat.ip6s_pulldown_copy++;
 #endif
 
@@ -321,7 +322,7 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	 * now, we need to do the hard way.  don't m_copy as there's no room
 	 * on both end.
 	 */
-#if defined(PULLDOWN_STAT) && defined(INET6)
+#if defined(PULLDOWN_STAT) && INET6
 	ip6stat.ip6s_pulldown_alloc++;
 #endif
 	MGET(o, M_DONTWAIT, m->m_type);
@@ -365,6 +366,67 @@ ok:
 	return n;
 }
 
+/*
+ * Create and return an m_tag, either by re-using space in a previous tag
+ * or by allocating a new mbuf/cluster
+ */
+struct m_tag *
+m_tag_create(u_int32_t id, u_int16_t type, int len, int wait, struct mbuf *buf)
+{
+	struct m_tag *t = NULL;
+	struct m_tag *p;
+
+	if (len < 0)
+		return (NULL);
+
+	if (len + sizeof (struct m_tag) + sizeof (struct m_taghdr) > MLEN)
+		return (m_tag_alloc(id, type, len, wait));
+
+	/*
+	 * We've exhausted all external cases. Now, go through the m_tag
+	 * chain and see if we can fit it in any of them.
+	 * If not (t == NULL), call m_tag_alloc to store it in a new mbuf.
+	 */
+	p = SLIST_FIRST(&buf->m_pkthdr.tags);
+	while(p != NULL) {
+		/* 2KCL m_tag */
+		if (M_TAG_ALIGN(p->m_tag_len) +
+		    sizeof (struct m_taghdr) > MLEN) {
+			p = SLIST_NEXT(p, m_tag_link);
+			continue;
+		}
+
+		VERIFY(p->m_tag_cookie == M_TAG_VALID_PATTERN);
+
+		struct mbuf *m = m_dtom(p);
+		struct m_taghdr *hdr = (struct m_taghdr *)m->m_data;
+
+		VERIFY(m->m_flags & M_TAGHDR && !(m->m_flags & M_EXT));
+
+		/* The mbuf can store this m_tag */
+		if (M_TAG_ALIGN(len) <= MLEN - m->m_len) {
+			t = (struct m_tag *)(m->m_data + m->m_len);
+			hdr->refcnt++;
+			m->m_len += M_TAG_ALIGN(len);
+			VERIFY(m->m_len <= MLEN);
+			break;
+		}
+
+		p = SLIST_NEXT(p, m_tag_link);
+	}
+
+	if (t == NULL)
+		return (m_tag_alloc(id, type, len, wait));
+
+	t->m_tag_cookie = M_TAG_VALID_PATTERN;
+	t->m_tag_type = type;
+	t->m_tag_len = len;
+	t->m_tag_id = id;
+	if (len > 0)
+		bzero(t + 1, len);
+	return (t);
+}
+
 /* Get a packet tag structure along with specified data following. */
 struct m_tag *
 m_tag_alloc(u_int32_t id, u_int16_t type, int len, int wait)
@@ -372,26 +434,39 @@ m_tag_alloc(u_int32_t id, u_int16_t type, int len, int wait)
 	struct m_tag *t;
 
 	if (len < 0)
-		return NULL;
-#if CONFIG_MBUF_TAGS_MALLOC
-	t = _MALLOC(len + sizeof (struct m_tag), M_TEMP, wait);
-#else
-        if (len + sizeof(struct m_tag) <= MLEN) {
+		return (NULL);
+
+        if (M_TAG_ALIGN(len) + sizeof (struct m_taghdr) <= MLEN) {
 		struct mbuf *m = m_get(wait, MT_TAG);
+		struct m_taghdr *hdr;
+
 		if (m == NULL)
-			return NULL;
-		t = mtod(m, struct m_tag *);
-        } else if (len + sizeof(struct m_tag) <= MCLBYTES) {
-        	t = (struct m_tag *) m_mclalloc(wait);
-        } else
+			return (NULL);
+
+		m->m_flags |= M_TAGHDR;
+
+		hdr = (struct m_taghdr *)m->m_data;
+		hdr->refcnt = 1;
+		m->m_len += sizeof (struct m_taghdr);
+		t = (struct m_tag *)(m->m_data + m->m_len);
+		m->m_len += M_TAG_ALIGN(len);
+		VERIFY(m->m_len <= MLEN);
+        } else if (len + sizeof (struct m_tag) <= MCLBYTES) {
+		t = (struct m_tag *)m_mclalloc(wait);
+        } else {
                 t = NULL;
-#endif
+	}
+
 	if (t == NULL)
-		return NULL;
+		return (NULL);
+
+	t->m_tag_cookie = M_TAG_VALID_PATTERN;
 	t->m_tag_type = type;
 	t->m_tag_len = len;
 	t->m_tag_id = id;
-	return t;
+	if (len > 0)
+		bzero(t + 1, len);
+	return (t);
 }
 
 
@@ -405,25 +480,44 @@ m_tag_free(struct m_tag *t)
 	    t->m_tag_type == KERNEL_TAG_TYPE_MACLABEL)
 		mac_mbuf_tag_destroy(t);
 #endif
-#if CONFIG_MBUF_TAGS_MALLOC
-	_FREE(t, M_TEMP);
-#else
+#if INET6
+	if (t != NULL &&
+	    t->m_tag_id   == KERNEL_MODULE_TAG_ID &&
+	    t->m_tag_type == KERNEL_TAG_TYPE_INET6 &&
+	    t->m_tag_len  == sizeof (struct ip6aux))
+		ip6_destroyaux((struct ip6aux *)(t + 1));
+#endif /* INET6 */
 	if (t == NULL)
 		return;
-	if (t->m_tag_len + sizeof(struct m_tag) <= MLEN) {
+	if (M_TAG_ALIGN(t->m_tag_len) + sizeof (struct m_taghdr) <= MLEN) {
 		struct mbuf * m = m_dtom(t);
-		m_free(m);
+		VERIFY(m->m_flags & M_TAGHDR);
+		struct m_taghdr *hdr = (struct m_taghdr *)m->m_data;
+
+		/* No other tags in this mbuf */
+		if(--hdr->refcnt == 0) {
+			m_free(m);
+			return;
+		}
+
+		/* Pattern-fill the header */
+		u_int64_t *fill_ptr = (u_int64_t *)t;
+		u_int64_t *end_ptr = (u_int64_t *)(t + 1);
+		while (fill_ptr < end_ptr) {
+			*fill_ptr = M_TAG_FREE_PATTERN;
+			fill_ptr++;
+		}
 	} else {
-		MCLFREE((caddr_t)t);
+		m_mclfree((caddr_t)t);
 	}
-#endif
 }
 
 /* Prepend a packet tag. */
 void
 m_tag_prepend(struct mbuf *m, struct m_tag *t)
 {
-	KASSERT(m && t, ("m_tag_prepend: null argument, m %p t %p", m, t));
+	VERIFY(m != NULL && t != NULL);
+
 	SLIST_INSERT_HEAD(&m->m_pkthdr.tags, t, m_tag_link);
 }
 
@@ -431,7 +525,9 @@ m_tag_prepend(struct mbuf *m, struct m_tag *t)
 void
 m_tag_unlink(struct mbuf *m, struct m_tag *t)
 {
-	KASSERT(m && t, ("m_tag_unlink: null argument, m %p t %p", m, t));
+	VERIFY(m != NULL && t != NULL);
+	VERIFY(t->m_tag_cookie == M_TAG_VALID_PATTERN);
+
 	SLIST_REMOVE(&m->m_pkthdr.tags, t, m_tag, m_tag_link);
 }
 
@@ -439,7 +535,8 @@ m_tag_unlink(struct mbuf *m, struct m_tag *t)
 void
 m_tag_delete(struct mbuf *m, struct m_tag *t)
 {
-	KASSERT(m && t, ("m_tag_delete: null argument, m %p t %p", m, t));
+	VERIFY(m != NULL && t != NULL);
+
 	m_tag_unlink(m, t);
 	m_tag_free(t);
 }
@@ -450,15 +547,21 @@ m_tag_delete_chain(struct mbuf *m, struct m_tag *t)
 {
 	struct m_tag *p, *q;
 
-	KASSERT(m, ("m_tag_delete_chain: null mbuf"));
-	if (t != NULL)
+	VERIFY(m != NULL);
+
+	if (t != NULL) {
 		p = t;
-	else
+	} else {
 		p = SLIST_FIRST(&m->m_pkthdr.tags);
+	}
 	if (p == NULL)
 		return;
-	while ((q = SLIST_NEXT(p, m_tag_link)) != NULL)
+
+	VERIFY(p->m_tag_cookie == M_TAG_VALID_PATTERN);
+	while ((q = SLIST_NEXT(p, m_tag_link)) != NULL) {
+		VERIFY(q->m_tag_cookie == M_TAG_VALID_PATTERN);
 		m_tag_delete(m, q);
+	}
 	m_tag_delete(m, p);
 }
 
@@ -468,17 +571,21 @@ m_tag_locate(struct mbuf *m, u_int32_t id, u_int16_t type, struct m_tag *t)
 {
 	struct m_tag *p;
 
-	KASSERT(m, ("m_tag_find: null mbuf"));
-	if (t == NULL)
+	VERIFY(m != NULL);
+
+	if (t == NULL) {
 		p = SLIST_FIRST(&m->m_pkthdr.tags);
-	else
+	} else {
+		VERIFY(t->m_tag_cookie == M_TAG_VALID_PATTERN);
 		p = SLIST_NEXT(t, m_tag_link);
+	}
 	while (p != NULL) {
+		VERIFY(p->m_tag_cookie == M_TAG_VALID_PATTERN);
 		if (p->m_tag_id == id && p->m_tag_type == type)
-			return p;
+			return (p);
 		p = SLIST_NEXT(p, m_tag_link);
 	}
-	return NULL;
+	return (NULL);
 }
 
 /* Copy a single tag. */
@@ -487,7 +594,8 @@ m_tag_copy(struct m_tag *t, int how)
 {
 	struct m_tag *p;
 
-	KASSERT(t, ("m_tag_copy: null tag"));
+	VERIFY(t != NULL);
+
 	p = m_tag_alloc(t->m_tag_id, t->m_tag_type, t->m_tag_len, how);
 	if (p == NULL)
 		return (NULL);
@@ -507,8 +615,16 @@ m_tag_copy(struct m_tag *t, int how)
 		mac_mbuf_tag_copy(t, p);
 	} else
 #endif
+#if INET6
+	if (t != NULL &&
+	    t->m_tag_id   == KERNEL_MODULE_TAG_ID &&
+	    t->m_tag_type == KERNEL_TAG_TYPE_INET6 &&
+	    t->m_tag_len  == sizeof (struct ip6aux)) {
+		ip6_copyaux((struct ip6aux *)(t + 1), (struct ip6aux *)(p + 1));
+	} else
+#endif /* INET6 */
 	bcopy(t + 1, p + 1, t->m_tag_len); /* Copy the data */
-	return p;
+	return (p);
 }
 
 /*
@@ -522,29 +638,32 @@ m_tag_copy_chain(struct mbuf *to, struct mbuf *from, int how)
 {
 	struct m_tag *p, *t, *tprev = NULL;
 
-	KASSERT(to && from,
-		("m_tag_copy: null argument, to %p from %p", to, from));
+	VERIFY(to != NULL && from != NULL);
+
 	m_tag_delete_chain(to, NULL);
 	SLIST_FOREACH(p, &from->m_pkthdr.tags, m_tag_link) {
+		VERIFY(p->m_tag_cookie == M_TAG_VALID_PATTERN);
 		t = m_tag_copy(p, how);
 		if (t == NULL) {
 			m_tag_delete_chain(to, NULL);
-			return 0;
+			return (0);
 		}
-		if (tprev == NULL)
+		if (tprev == NULL) {
 			SLIST_INSERT_HEAD(&to->m_pkthdr.tags, t, m_tag_link);
-		else {
+		} else {
 			SLIST_INSERT_AFTER(tprev, t, m_tag_link);
 			tprev = t;
 		}
 	}
-	return 1;
+	return (1);
 }
 
 /* Initialize tags on an mbuf. */
 void
 m_tag_init(struct mbuf *m)
 {
+	VERIFY(m != NULL);
+
 	SLIST_INIT(&m->m_pkthdr.tags);
 #if PF_PKTHDR
 	bzero(&m->m_pkthdr.pf_mtag, sizeof (m->m_pkthdr.pf_mtag));
@@ -555,34 +674,25 @@ m_tag_init(struct mbuf *m)
 struct m_tag *
 m_tag_first(struct mbuf *m)
 {
-	return SLIST_FIRST(&m->m_pkthdr.tags);
+	VERIFY(m != NULL);
+
+	return (SLIST_FIRST(&m->m_pkthdr.tags));
 }
 
 /* Get next tag in chain. */
 struct m_tag *
-m_tag_next(__unused struct mbuf *m, struct m_tag *t)
+m_tag_next(struct mbuf *m, struct m_tag *t)
 {
-	return SLIST_NEXT(t, m_tag_link);
+#pragma unused(m)
+	VERIFY(t != NULL);
+	VERIFY(t->m_tag_cookie == M_TAG_VALID_PATTERN);
+
+	return (SLIST_NEXT(t, m_tag_link));
 }
 
 void
 m_prio_init(struct mbuf *m)
 {
-#if !PKT_PRIORITY
-#pragma unused(m)
-#else /* PKT_PRIORITY */
 	if (m->m_flags & M_PKTHDR)
-		m->m_pkthdr.prio = MBUF_PRIORITY_NORMAL;
-#endif /* PKT_PRIORITY */
-}
-
-void
-m_prio_background(struct mbuf *m)
-{
-#if !PKT_PRIORITY
-#pragma unused(m)
-#else /* PKT_PRIORITY */
-	if (m->m_flags & M_PKTHDR)
-		m->m_pkthdr.prio = MBUF_PRIORITY_BACKGROUND;
-#endif /* PKT_PRIORITY */
+		m->m_pkthdr.prio = MBUF_TC_BE;
 }

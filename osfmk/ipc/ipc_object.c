@@ -90,6 +90,7 @@
 #include <ipc/ipc_hash.h>
 #include <ipc/ipc_right.h>
 #include <ipc/ipc_notify.h>
+#include <ipc/ipc_port.h>
 #include <ipc/ipc_pset.h>
 #include <ipc/ipc_labelh.h>
 
@@ -681,6 +682,42 @@ ipc_object_destroy(
 }
 
 /*
+ *	Routine:	ipc_object_destroy_dest
+ *	Purpose:
+ *		Destroys a naked capability for the destination of
+ *		of a message. Consumes a ref for the object.
+ *
+ *	Conditions:
+ *		Nothing locked.
+ */
+
+void
+ipc_object_destroy_dest(
+	ipc_object_t		object,
+	mach_msg_type_name_t	msgt_name)
+{
+	assert(IO_VALID(object));
+	assert(io_otype(object) == IOT_PORT);
+
+	switch (msgt_name) {
+	    case MACH_MSG_TYPE_PORT_SEND:
+		ipc_port_release_send((ipc_port_t) object);
+		break;
+
+	    case MACH_MSG_TYPE_PORT_SEND_ONCE:
+		if (io_active(object) && 
+		    !ip_full_kernel((ipc_port_t) object))
+			ipc_notify_send_once((ipc_port_t) object);
+		else
+			ipc_port_release_sonce((ipc_port_t) object);
+		break;
+
+	    default:
+		panic("ipc_object_destroy_dest: strange rights");
+	}
+}
+
+/*
  *	Routine:	ipc_object_copyout
  *	Purpose:
  *		Copyout a capability, placing it into a space.
@@ -1033,14 +1070,7 @@ io_free(
 
 	if (otype == IOT_PORT) {
 		port = (ipc_port_t) object;
-#if	MACH_ASSERT
-		ipc_port_track_dealloc(port);
-#endif	/* MACH_ASSERT */
-
-#if CONFIG_MACF_MACH
-		/* Port label should have been initialized after creation. */
-		mac_port_label_destroy(&port->ip_label);
-#endif	  
+		ipc_port_finalize(port);
 	}
 	io_lock_destroy(object);
 	zfree(ipc_object_zones[otype], object);

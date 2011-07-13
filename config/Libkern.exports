@@ -1,4 +1,4 @@
-___bzero:_bzero
+___bzero
 _Assert
 _MD5Final
 _MD5Init
@@ -744,6 +744,7 @@ _deflateSetDictionary
 _ffs
 _flush_dcache
 _flush_dcache64
+_gOSKextUnresolved
 _inet_ntop
 _inflate
 _inflateEnd

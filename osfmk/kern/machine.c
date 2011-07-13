@@ -88,6 +88,8 @@
 #include <kern/task.h>
 #include <kern/thread.h>
 
+#include <machine/commpage.h>
+
 #if HIBERNATION
 #include <IOKit/IOHibernatePrivate.h>
 #endif
@@ -120,11 +122,14 @@ processor_up(
 	init_ast_check(processor);
 	pset = processor->processor_set;
 	pset_lock(pset);
-	if (++pset->processor_count == 1)
-		pset->low_pri = pset->low_count = processor;
+	if (++pset->online_processor_count == 1) {
+		pset_pri_init_hint(pset, processor);
+		pset_count_init_hint(pset, processor);
+	}
 	enqueue_tail(&pset->active_queue, (queue_entry_t)processor);
 	processor->state = PROCESSOR_RUNNING;
 	(void)hw_atomic_add(&processor_avail_count, 1);
+	commpage_update_active_cpus();
 	pset_unlock(pset);
 	ml_cpu_up();
 	splx(s);
@@ -214,10 +219,10 @@ processor_shutdown(
 	}
 
 	if (processor->state == PROCESSOR_IDLE)
-		remqueue(&pset->idle_queue, (queue_entry_t)processor);
+		remqueue((queue_entry_t)processor);
 	else
 	if (processor->state == PROCESSOR_RUNNING)
-		remqueue(&pset->active_queue, (queue_entry_t)processor);
+		remqueue((queue_entry_t)processor);
 
 	processor->state = PROCESSOR_SHUTDOWN;
 
@@ -283,6 +288,7 @@ processor_offline(
 	new_thread = processor->idle_thread;
 	processor->active_thread = new_thread;
 	processor->current_pri = IDLEPRI;
+	processor->current_thmode = TH_MODE_NONE;
 	processor->deadline = UINT64_MAX;
 	new_thread->last_processor = processor;
 
@@ -298,10 +304,13 @@ processor_offline(
 	pset = processor->processor_set;
 	pset_lock(pset);
 	processor->state = PROCESSOR_OFF_LINE;
-	if (--pset->processor_count == 0)
-		pset->low_pri = pset->low_count = PROCESSOR_NULL;
+	if (--pset->online_processor_count == 0) {
+		pset_pri_init_hint(pset, PROCESSOR_NULL);
+		pset_count_init_hint(pset, PROCESSOR_NULL);
+	}
 	(void)hw_atomic_sub(&processor_avail_count, 1);
-	processor_queue_shutdown(processor);
+	commpage_update_active_cpus();
+	SCHED(processor_queue_shutdown)(processor);
 	/* pset lock dropped */
 
 	ml_cpu_down();

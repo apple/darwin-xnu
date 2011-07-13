@@ -39,21 +39,21 @@
 #include <sys/sysproto.h>
 
 0	AUE_NULL	ALL	{ int nosys(void); }   { indirect syscall }
-1	AUE_EXIT	ALL	{ void exit(int rval); } 
-2	AUE_FORK	ALL	{ int fork(void); } 
+1	AUE_EXIT	ALL	{ void exit(int rval) NO_SYSCALL_STUB; } 
+2	AUE_FORK	ALL	{ int fork(void) NO_SYSCALL_STUB; } 
 3	AUE_NULL	ALL	{ user_ssize_t read(int fd, user_addr_t cbuf, user_size_t nbyte); } 
 4	AUE_NULL	ALL	{ user_ssize_t write(int fd, user_addr_t cbuf, user_size_t nbyte); } 
-5	AUE_OPEN_RWTC	ALL	{ int open(user_addr_t path, int flags, int mode); } 
+5	AUE_OPEN_RWTC	ALL	{ int open(user_addr_t path, int flags, int mode) NO_SYSCALL_STUB; } 
 6	AUE_CLOSE	ALL	{ int close(int fd); } 
-7	AUE_WAIT4	ALL	{ int wait4(int pid, user_addr_t status, int options, user_addr_t rusage); } 
+7	AUE_WAIT4	ALL	{ int wait4(int pid, user_addr_t status, int options, user_addr_t rusage) NO_SYSCALL_STUB; } 
 8	AUE_NULL	ALL	{ int nosys(void); }   { old creat }
 9	AUE_LINK	ALL	{ int link(user_addr_t path, user_addr_t link); } 
-10	AUE_UNLINK	ALL	{ int unlink(user_addr_t path); } 
+10	AUE_UNLINK	ALL	{ int unlink(user_addr_t path) NO_SYSCALL_STUB; } 
 11	AUE_NULL	ALL	{ int nosys(void); }   { old execv }
 12	AUE_CHDIR	ALL	{ int chdir(user_addr_t path); } 
 13	AUE_FCHDIR	ALL	{ int fchdir(int fd); } 
 14	AUE_MKNOD	ALL	{ int mknod(user_addr_t path, int mode, int dev); } 
-15	AUE_CHMOD	ALL	{ int chmod(user_addr_t path, int mode); } 
+15	AUE_CHMOD	ALL	{ int chmod(user_addr_t path, int mode) NO_SYSCALL_STUB; } 
 16	AUE_CHOWN	ALL	{ int chown(user_addr_t path, int uid, int gid); } 
 17	AUE_NULL	ALL	{ int nosys(void); }   { old break }
 18	AUE_GETFSSTAT	ALL	{ int getfsstat(user_addr_t buf, int bufsize, int flags); } 
@@ -66,12 +66,12 @@
 25	AUE_GETEUID	ALL	{ int geteuid(void); } 
 26	AUE_PTRACE	ALL	{ int ptrace(int req, pid_t pid, caddr_t addr, int data); } 
 #if SOCKETS
-27	AUE_RECVMSG	ALL	{ int recvmsg(int s, struct msghdr *msg, int flags); } 
-28	AUE_SENDMSG	ALL	{ int sendmsg(int s, caddr_t msg, int flags); } 
-29	AUE_RECVFROM	ALL	{ int recvfrom(int s, void *buf, size_t len, int flags, struct sockaddr *from, int *fromlenaddr); } 
-30	AUE_ACCEPT	ALL	{ int accept(int s, caddr_t name, socklen_t	*anamelen); } 
-31	AUE_GETPEERNAME	ALL	{ int getpeername(int fdes, caddr_t asa, socklen_t *alen); } 
-32	AUE_GETSOCKNAME	ALL	{ int getsockname(int fdes, caddr_t asa, socklen_t *alen); } 
+27	AUE_RECVMSG	ALL	{ int recvmsg(int s, struct msghdr *msg, int flags) NO_SYSCALL_STUB; } 
+28	AUE_SENDMSG	ALL	{ int sendmsg(int s, caddr_t msg, int flags) NO_SYSCALL_STUB; } 
+29	AUE_RECVFROM	ALL	{ int recvfrom(int s, void *buf, size_t len, int flags, struct sockaddr *from, int *fromlenaddr) NO_SYSCALL_STUB; } 
+30	AUE_ACCEPT	ALL	{ int accept(int s, caddr_t name, socklen_t	*anamelen) NO_SYSCALL_STUB; } 
+31	AUE_GETPEERNAME	ALL	{ int getpeername(int fdes, caddr_t asa, socklen_t *alen) NO_SYSCALL_STUB; } 
+32	AUE_GETSOCKNAME	ALL	{ int getsockname(int fdes, caddr_t asa, socklen_t *alen) NO_SYSCALL_STUB; } 
 #else
 27	AUE_NULL	ALL	{ int nosys(void); }
 28	AUE_NULL	ALL	{ int nosys(void); }
@@ -84,7 +84,7 @@
 34	AUE_CHFLAGS	ALL	{ int chflags(char *path, int flags); } 
 35	AUE_FCHFLAGS	ALL	{ int fchflags(int fd, int flags); } 
 36	AUE_SYNC	ALL	{ int sync(void); } 
-37	AUE_KILL	ALL	{ int kill(int pid, int signum, int posix); } 
+37	AUE_KILL	ALL	{ int kill(int pid, int signum, int posix) NO_SYSCALL_STUB; } 
 38	AUE_NULL	ALL	{ int nosys(void); }   { old stat  }
 39	AUE_GETPPID	ALL	{ int getppid(void); } 
 40	AUE_NULL	ALL	{ int nosys(void); }   { old lstat }
@@ -93,15 +93,15 @@
 43	AUE_GETEGID	ALL	{ int getegid(void); } 
 44	AUE_PROFILE	ALL	{ int profil(short *bufbase, size_t bufsize, u_long pcoffset, u_int pcscale); } 
 45	AUE_NULL	ALL	{ int nosys(void); } { old ktrace }
-46	AUE_SIGACTION	ALL	{ int sigaction(int signum, struct __sigaction *nsa, struct sigaction *osa); } 
+46	AUE_SIGACTION	ALL	{ int sigaction(int signum, struct __sigaction *nsa, struct sigaction *osa) NO_SYSCALL_STUB; } 
 47	AUE_GETGID	ALL	{ int getgid(void); } 
 48	AUE_SIGPROCMASK	ALL	{ int sigprocmask(int how, user_addr_t mask, user_addr_t omask); } 
-49	AUE_GETLOGIN	ALL	{ int getlogin(char *namebuf, u_int namelen); } 
-50	AUE_SETLOGIN	ALL	{ int setlogin(char *namebuf); } 
+49	AUE_GETLOGIN	ALL	{ int getlogin(char *namebuf, u_int namelen) NO_SYSCALL_STUB; } 
+50	AUE_SETLOGIN	ALL	{ int setlogin(char *namebuf) NO_SYSCALL_STUB; } 
 51	AUE_ACCT	ALL	{ int acct(char *path); } 
 52	AUE_SIGPENDING	ALL	{ int sigpending(struct sigvec *osv); } 
-53	AUE_SIGALTSTACK	ALL	{ int sigaltstack(struct sigaltstack *nss, struct sigaltstack *oss); } 
-54	AUE_IOCTL	ALL	{ int ioctl(int fd, u_long com, caddr_t data); } 
+53	AUE_SIGALTSTACK	ALL	{ int sigaltstack(struct sigaltstack *nss, struct sigaltstack *oss) NO_SYSCALL_STUB ; } 
+54	AUE_IOCTL	ALL	{ int ioctl(int fd, u_long com, caddr_t data) NO_SYSCALL_STUB; } 
 55	AUE_REBOOT	ALL	{ int reboot(int opt, char *command); } 
 56	AUE_REVOKE	ALL	{ int revoke(char *path); } 
 57	AUE_SYMLINK	ALL	{ int symlink(char *path, char *link); } 
@@ -112,7 +112,7 @@
 62	AUE_NULL	ALL	{ int nosys(void); }   { old fstat }
 63	AUE_NULL	ALL	{ int nosys(void); }   { used internally, reserved }
 64	AUE_NULL	ALL	{ int nosys(void); }   { old getpagesize }
-65	AUE_MSYNC	ALL	{ int msync(caddr_t addr, size_t len, int flags); } 
+65	AUE_MSYNC	ALL	{ int msync(caddr_t addr, size_t len, int flags) NO_SYSCALL_STUB; } 
 66	AUE_VFORK	ALL	{ int vfork(void); } 
 67	AUE_NULL	ALL	{ int nosys(void); }   { old vread }
 68	AUE_NULL	ALL	{ int nosys(void); }   { old vwrite }
@@ -120,8 +120,8 @@
 70	AUE_NULL	ALL	{ int nosys(void); }   { old sstk } 
 71	AUE_NULL	ALL	{ int nosys(void); }   { old mmap }
 72	AUE_NULL	ALL	{ int nosys(void); }   { old vadvise }
-73	AUE_MUNMAP	ALL	{ int munmap(caddr_t addr, size_t len); } 
-74	AUE_MPROTECT	ALL	{ int mprotect(caddr_t addr, size_t len, int prot); } 
+73	AUE_MUNMAP	ALL	{ int munmap(caddr_t addr, size_t len) NO_SYSCALL_STUB; } 
+74	AUE_MPROTECT	ALL	{ int mprotect(caddr_t addr, size_t len, int prot) NO_SYSCALL_STUB; } 
 75	AUE_MADVISE	ALL	{ int madvise(caddr_t addr, size_t len, int behav); } 
 76	AUE_NULL	ALL	{ int nosys(void); }   { old vhangup }
 77	AUE_NULL	ALL	{ int nosys(void); }   { old vlimit }
@@ -139,14 +139,14 @@
 89	AUE_GETDTABLESIZE	ALL	{ int getdtablesize(void); } 
 90	AUE_DUP2	ALL	{ int dup2(u_int from, u_int to); } 
 91	AUE_NULL	ALL	{ int nosys(void); }   { old getdopt }
-92	AUE_FCNTL	ALL	{ int fcntl(int fd, int cmd, long arg); } 
-93	AUE_SELECT	ALL	{ int select(int nd, u_int32_t *in, u_int32_t *ou, u_int32_t *ex, struct timeval *tv); } 
+92	AUE_FCNTL	ALL	{ int fcntl(int fd, int cmd, long arg) NO_SYSCALL_STUB; } 
+93	AUE_SELECT	ALL	{ int select(int nd, u_int32_t *in, u_int32_t *ou, u_int32_t *ex, struct timeval *tv) NO_SYSCALL_STUB; } 
 94	AUE_NULL	ALL	{ int nosys(void); }   { old setdopt }
 95	AUE_FSYNC	ALL	{ int fsync(int fd); } 
 96	AUE_SETPRIORITY	ALL	{ int setpriority(int which, id_t who, int prio); } 
 #if SOCKETS
 97	AUE_SOCKET	ALL	{ int socket(int domain, int type, int protocol); } 
-98	AUE_CONNECT	ALL	{ int connect(int s, caddr_t name, socklen_t namelen); } 
+98	AUE_CONNECT	ALL	{ int connect(int s, caddr_t name, socklen_t namelen) NO_SYSCALL_STUB; } 
 #else
 97	AUE_NULL	ALL	{ int nosys(void); }
 98	AUE_NULL	ALL	{ int nosys(void); }
@@ -157,9 +157,9 @@
 102	AUE_NULL	ALL	{ int nosys(void); }   { old recv }
 103	AUE_NULL	ALL	{ int nosys(void); }   { old sigreturn }
 #if SOCKETS
-104	AUE_BIND	ALL	{ int bind(int s, caddr_t name, socklen_t namelen); } 
+104	AUE_BIND	ALL	{ int bind(int s, caddr_t name, socklen_t namelen) NO_SYSCALL_STUB; } 
 105	AUE_SETSOCKOPT	ALL	{ int setsockopt(int s, int level, int name, caddr_t val, socklen_t valsize); } 
-106	AUE_LISTEN	ALL	{ int listen(int s, int backlog); } 
+106	AUE_LISTEN	ALL	{ int listen(int s, int backlog) NO_SYSCALL_STUB; } 
 #else
 104	AUE_NULL	ALL	{ int nosys(void); }
 105	AUE_NULL	ALL	{ int nosys(void); }
@@ -169,7 +169,7 @@
 108	AUE_NULL	ALL	{ int nosys(void); }   { old sigvec }
 109	AUE_NULL	ALL	{ int nosys(void); }   { old sigblock }
 110	AUE_NULL	ALL	{ int nosys(void); }   { old sigsetmask }
-111	AUE_NULL	ALL	{ int sigsuspend(sigset_t mask); } 
+111	AUE_NULL	ALL	{ int sigsuspend(sigset_t mask) NO_SYSCALL_STUB; } 
 112	AUE_NULL	ALL	{ int nosys(void); }   { old sigstack }
 #if SOCKETS
 113	AUE_NULL	ALL	{ int nosys(void); }   { old recvmsg }
@@ -179,7 +179,7 @@
 114	AUE_NULL	ALL	{ int nosys(void); }
 #endif /* SOCKETS */
 115	AUE_NULL	ALL	{ int nosys(void); }   { old vtrace }
-116	AUE_GETTIMEOFDAY	ALL	{ int gettimeofday(struct timeval *tp, struct timezone *tzp); } 
+116	AUE_GETTIMEOFDAY	ALL	{ int gettimeofday(struct timeval *tp, struct timezone *tzp) NO_SYSCALL_STUB; } 
 117	AUE_GETRUSAGE	ALL	{ int getrusage(int who, struct rusage *rusage); } 
 #if SOCKETS
 118	AUE_GETSOCKOPT	ALL	{ int getsockopt(int s, int level, int name, caddr_t val, socklen_t *avalsize); } 
@@ -189,28 +189,28 @@
 119	AUE_NULL	ALL	{ int nosys(void); }   { old resuba }
 120	AUE_READV	ALL	{ user_ssize_t readv(int fd, struct iovec *iovp, u_int iovcnt); } 
 121	AUE_WRITEV	ALL	{ user_ssize_t writev(int fd, struct iovec *iovp, u_int iovcnt); } 
-122	AUE_SETTIMEOFDAY	ALL	{ int settimeofday(struct timeval *tv, struct timezone *tzp); } 
+122	AUE_SETTIMEOFDAY	ALL	{ int settimeofday(struct timeval *tv, struct timezone *tzp) NO_SYSCALL_STUB; } 
 123	AUE_FCHOWN	ALL	{ int fchown(int fd, int uid, int gid); } 
-124	AUE_FCHMOD	ALL	{ int fchmod(int fd, int mode); } 
+124	AUE_FCHMOD	ALL	{ int fchmod(int fd, int mode) NO_SYSCALL_STUB; } 
 125	AUE_NULL	ALL	{ int nosys(void); }   { old recvfrom }
-126	AUE_SETREUID	ALL	{ int setreuid(uid_t ruid, uid_t euid); }
-127	AUE_SETREGID	ALL	{ int setregid(gid_t rgid, gid_t egid); }
-128	AUE_RENAME	ALL	{ int rename(char *from, char *to); } 
+126	AUE_SETREUID	ALL	{ int setreuid(uid_t ruid, uid_t euid) NO_SYSCALL_STUB; }
+127	AUE_SETREGID	ALL	{ int setregid(gid_t rgid, gid_t egid) NO_SYSCALL_STUB; }
+128	AUE_RENAME	ALL	{ int rename(char *from, char *to) NO_SYSCALL_STUB; } 
 129	AUE_NULL	ALL	{ int nosys(void); }   { old truncate }
 130	AUE_NULL	ALL	{ int nosys(void); }   { old ftruncate }
 131	AUE_FLOCK	ALL	{ int flock(int fd, int how); } 
 132	AUE_MKFIFO	ALL	{ int mkfifo(user_addr_t path, int mode); } 
 #if SOCKETS
-133	AUE_SENDTO	ALL	{ int sendto(int s, caddr_t buf, size_t len, int flags, caddr_t to, socklen_t tolen); } 
+133	AUE_SENDTO	ALL	{ int sendto(int s, caddr_t buf, size_t len, int flags, caddr_t to, socklen_t tolen) NO_SYSCALL_STUB; } 
 134	AUE_SHUTDOWN	ALL	{ int shutdown(int s, int how); } 
-135	AUE_SOCKETPAIR	ALL	{ int socketpair(int domain, int type, int protocol, int *rsv); } 
+135	AUE_SOCKETPAIR	ALL	{ int socketpair(int domain, int type, int protocol, int *rsv) NO_SYSCALL_STUB; } 
 #else
 133	AUE_NULL	ALL	{ int nosys(void); }
 134	AUE_NULL	ALL	{ int nosys(void); }
 135	AUE_NULL	ALL	{ int nosys(void); }
 #endif /* SOCKETS */
 136	AUE_MKDIR	ALL	{ int mkdir(user_addr_t path, int mode); } 
-137	AUE_RMDIR	ALL	{ int rmdir(char *path); } 
+137	AUE_RMDIR	ALL	{ int rmdir(char *path) NO_SYSCALL_STUB; } 
 138	AUE_UTIMES	ALL	{ int utimes(char *path, struct timeval *tptr); } 
 139	AUE_FUTIMES	ALL	{ int futimes(int fd, struct timeval *tptr); } 
 140	AUE_ADJTIME	ALL	{ int adjtime(struct timeval *delta, struct timeval *olddelta); } 
@@ -279,10 +279,10 @@
 191	AUE_PATHCONF	ALL	{ int pathconf(char *path, int name); } 
 192	AUE_FPATHCONF	ALL	{ int fpathconf(int fd, int name); } 
 193	AUE_NULL	ALL	{ int nosys(void); } 
-194	AUE_GETRLIMIT	ALL	{ int getrlimit(u_int which, struct rlimit *rlp); } 
-195	AUE_SETRLIMIT	ALL	{ int setrlimit(u_int which, struct rlimit *rlp); } 
+194	AUE_GETRLIMIT	ALL	{ int getrlimit(u_int which, struct rlimit *rlp) NO_SYSCALL_STUB; } 
+195	AUE_SETRLIMIT	ALL	{ int setrlimit(u_int which, struct rlimit *rlp) NO_SYSCALL_STUB; } 
 196	AUE_GETDIRENTRIES	ALL	{ int getdirentries(int fd, char *buf, u_int count, long *basep); } 
-197	AUE_MMAP	ALL	{ user_addr_t mmap(caddr_t addr, size_t len, int prot, int flags, int fd, off_t pos); } 
+197	AUE_MMAP	ALL	{ user_addr_t mmap(caddr_t addr, size_t len, int prot, int flags, int fd, off_t pos) NO_SYSCALL_STUB; } 
 198	AUE_NULL	ALL	{ int nosys(void); } 	{ __syscall }
 199	AUE_LSEEK	ALL	{ off_t lseek(int fd, off_t offset, int whence); } 
 200	AUE_TRUNCATE	ALL	{ int truncate(char *path, off_t length); } 
@@ -326,8 +326,8 @@
 217	AUE_STATV	UHN	{ int statv(const char *path, struct vstat *vsb); } 	{ soon to be obsolete }
 218	AUE_LSTATV	UHN	{ int lstatv(const char *path, struct vstat *vsb); } 	{ soon to be obsolete }
 219	AUE_FSTATV	UHN	{ int fstatv(int fd, struct vstat *vsb); } 	{ soon to be obsolete }
-220	AUE_GETATTRLIST	ALL	{ int getattrlist(const char *path, struct attrlist *alist, void *attributeBuffer, size_t bufferSize, u_long options); } 
-221	AUE_SETATTRLIST	ALL	{ int setattrlist(const char *path, struct attrlist *alist, void *attributeBuffer, size_t bufferSize, u_long options); } 
+220	AUE_GETATTRLIST	ALL	{ int getattrlist(const char *path, struct attrlist *alist, void *attributeBuffer, size_t bufferSize, u_long options) NO_SYSCALL_STUB; } 
+221	AUE_SETATTRLIST	ALL	{ int setattrlist(const char *path, struct attrlist *alist, void *attributeBuffer, size_t bufferSize, u_long options) NO_SYSCALL_STUB; } 
 222	AUE_GETDIRENTRIESATTR	ALL	{ int getdirentriesattr(int fd, struct attrlist *alist, void *buffer, size_t buffersize, u_long *count, u_long *basep, u_long *newstate, u_long options); } 
 223	AUE_EXCHANGEDATA	ALL	{ int exchangedata(const char *path1, const char *path2, u_long options); } 
 224	AUE_NULL		ALL { int nosys(void); } { old checkuseraccess / fsgetpath (which moved to 427) }
@@ -349,8 +349,8 @@
 240	AUE_LISTXATTR	ALL	{ user_ssize_t listxattr(user_addr_t path, user_addr_t namebuf, size_t bufsize, int options); } 
 241	AUE_FLISTXATTR	ALL	{ user_ssize_t flistxattr(int fd, user_addr_t namebuf, size_t bufsize, int options); } 
 242	AUE_FSCTL	ALL	{ int fsctl(const char *path, u_long cmd, caddr_t data, u_int options); } 
-243	AUE_INITGROUPS	ALL	{ int initgroups(u_int gidsetsize, gid_t *gidset, int gmuid); } 
-244	AUE_POSIX_SPAWN	ALL	{ int posix_spawn(pid_t *pid, const char *path, const struct _posix_spawn_args_desc *adesc, char **argv, char **envp); } 
+243	AUE_INITGROUPS	ALL	{ int initgroups(u_int gidsetsize, gid_t *gidset, int gmuid) NO_SYSCALL_STUB; } 
+244	AUE_POSIX_SPAWN	ALL	{ int posix_spawn(pid_t *pid, const char *path, const struct _posix_spawn_args_desc *adesc, char **argv, char **envp) NO_SYSCALL_STUB; } 
 245	AUE_FFSCTL	ALL	{ int ffsctl(int fd, u_long cmd, caddr_t data, u_int options); } 
 246	AUE_NULL	ALL	{ int nosys(void); } 
 
@@ -383,7 +383,7 @@
 253	AUE_NULL	ALL	{ int nosys(void); } 
 #endif
 #if SYSV_SEM
-254	AUE_SEMCTL	ALL	{ int semctl(int semid, int semnum, int cmd, semun_t arg); } 
+254	AUE_SEMCTL	ALL	{ int semctl(int semid, int semnum, int cmd, semun_t arg) NO_SYSCALL_STUB; } 
 255	AUE_SEMGET	ALL	{ int semget(key_t key, int	nsems, int semflg); } 
 256	AUE_SEMOP	ALL	{ int semop(int semid, struct sembuf *sops, int nsops); } 
 257	AUE_NULL	ALL	{ int nosys(void); } 
@@ -394,7 +394,7 @@
 257	AUE_NULL	ALL	{ int nosys(void); } 
 #endif
 #if SYSV_MSG
-258	AUE_MSGCTL	ALL	{ int msgctl(int msqid, int cmd, struct	msqid_ds *buf); } 
+258	AUE_MSGCTL	ALL	{ int msgctl(int msqid, int cmd, struct	msqid_ds *buf) NO_SYSCALL_STUB; } 
 259	AUE_MSGGET	ALL	{ int msgget(key_t key, int msgflg); } 
 260	AUE_MSGSND	ALL	{ int msgsnd(int msqid, void *msgp, size_t msgsz, int msgflg); } 
 261	AUE_MSGRCV	ALL	{ user_ssize_t msgrcv(int msqid, void *msgp, size_t msgsz, long msgtyp, int msgflg); } 
@@ -406,7 +406,7 @@
 #endif
 #if SYSV_SHM
 262	AUE_SHMAT	ALL	{ user_addr_t shmat(int shmid, void *shmaddr, int shmflg); } 
-263	AUE_SHMCTL	ALL	{ int shmctl(int shmid, int cmd, struct shmid_ds *buf); } 
+263	AUE_SHMCTL	ALL	{ int shmctl(int shmid, int cmd, struct shmid_ds *buf) NO_SYSCALL_STUB; } 
 264	AUE_SHMDT	ALL	{ int shmdt(void *shmaddr); } 
 265	AUE_SHMGET	ALL	{ int shmget(key_t key, size_t size, int shmflg); } 
 #else
@@ -444,7 +444,7 @@
 292	AUE_MKDIR_EXTENDED	ALL	{ int mkdir_extended(user_addr_t path, uid_t uid, gid_t gid, int mode, user_addr_t xsecurity) NO_SYSCALL_STUB; } 
 293	AUE_IDENTITYSVC	ALL	{ int identitysvc(int opcode, user_addr_t message) NO_SYSCALL_STUB; } 
 294	AUE_NULL	ALL	{ int shared_region_check_np(uint64_t *start_address) NO_SYSCALL_STUB; }
-295	AUE_NULL	ALL	{ int shared_region_map_np(int fd, uint32_t count, const struct shared_file_mapping_np *mappings) NO_SYSCALL_STUB; }
+295	AUE_NULL	ALL	{ int nosys(void); } { old shared_region_map_np }
 296	AUE_NULL	ALL	{ int vm_pressure_monitor(int wait_for_pressure, int nsecs_monitored, uint32_t *pages_reclaimed); }
 #if PSYNCH
 297	AUE_NULL	ALL	{ uint32_t psynch_rw_longrdlock(user_addr_t rwlock, uint32_t lgenval, uint32_t ugenval, uint32_t rw_wc, int flags)  NO_SYSCALL_STUB; }
@@ -453,9 +453,9 @@
 300	AUE_NULL	ALL	{ uint32_t psynch_rw_upgrade(user_addr_t rwlock, uint32_t lgenval, uint32_t ugenval, uint32_t rw_wc, int flags)  NO_SYSCALL_STUB; }
 301	AUE_NULL	ALL	{ uint32_t psynch_mutexwait(user_addr_t mutex,  uint32_t mgen, uint32_t  ugen, uint64_t tid, uint32_t flags) NO_SYSCALL_STUB; }
 302	AUE_NULL	ALL	{ uint32_t psynch_mutexdrop(user_addr_t mutex,  uint32_t mgen, uint32_t  ugen, uint64_t tid, uint32_t flags) NO_SYSCALL_STUB; }
-303	AUE_NULL	ALL	{ int psynch_cvbroad(user_addr_t cv, uint32_t cvgen, uint32_t diffgen, user_addr_t mutex,  uint32_t mgen, uint32_t ugen, uint64_t tid, uint32_t flags) NO_SYSCALL_STUB; }
-304	AUE_NULL	ALL	{ int psynch_cvsignal(user_addr_t cv, uint32_t cvgen, uint32_t cvugen, user_addr_t mutex,  uint32_t mgen, uint32_t ugen, int thread_port, uint32_t flags) NO_SYSCALL_STUB; }
-305	AUE_NULL	ALL	{ uint32_t psynch_cvwait(user_addr_t cv, uint32_t cvgen, uint32_t cvugen, user_addr_t mutex,  uint32_t mgen, uint32_t ugen, uint64_t sec, uint64_t usec) NO_SYSCALL_STUB; }
+303	AUE_NULL	ALL	{ uint32_t psynch_cvbroad(user_addr_t cv, uint64_t cvlsgen, uint64_t cvudgen, uint32_t flags, user_addr_t mutex,  uint64_t mugen, uint64_t tid) NO_SYSCALL_STUB; }
+304	AUE_NULL	ALL	{ uint32_t psynch_cvsignal(user_addr_t cv, uint64_t cvlsgen, uint32_t cvugen, int thread_port, user_addr_t mutex,  uint64_t mugen, uint64_t tid, uint32_t flags) NO_SYSCALL_STUB; }
+305	AUE_NULL	ALL	{ uint32_t psynch_cvwait(user_addr_t cv, uint64_t cvlsgen, uint32_t cvugen, user_addr_t mutex,  uint64_t mugen, uint32_t flags, int64_t sec, uint32_t nsec) NO_SYSCALL_STUB; }
 306	AUE_NULL	ALL	{ uint32_t psynch_rw_rdlock(user_addr_t rwlock, uint32_t lgenval, uint32_t ugenval, uint32_t rw_wc, int flags)  NO_SYSCALL_STUB; }
 307	AUE_NULL	ALL	{ uint32_t psynch_rw_wrlock(user_addr_t rwlock, uint32_t lgenval, uint32_t ugenval, uint32_t rw_wc, int flags)  NO_SYSCALL_STUB; }
 308	AUE_NULL	ALL	{ uint32_t psynch_rw_unlock(user_addr_t rwlock, uint32_t lgenval, uint32_t ugenval, uint32_t rw_wc, int flags)  NO_SYSCALL_STUB; }
@@ -477,7 +477,11 @@
 #endif
 310	AUE_GETSID	ALL	{ int getsid(pid_t pid); } 
 311	AUE_SETTIDWITHPID	ALL	{ int settid_with_pid(pid_t pid, int assume) NO_SYSCALL_STUB; } 
+#if PSYNCH
+312	AUE_NULL	ALL	{ int psynch_cvclrprepost(user_addr_t cv, uint32_t cvgen, uint32_t cvugen, uint32_t cvsgen, uint32_t prepocnt, uint32_t preposeq, uint32_t flags) NO_SYSCALL_STUB; }
+#else
 312	AUE_NULL	ALL	{ int nosys(void); } { old __pthread_cond_timedwait }
+#endif
 313	AUE_NULL	ALL	{ int aio_fsync(int op, user_addr_t aiocbp); } 
 314 	AUE_NULL	ALL	{ user_ssize_t aio_return(user_addr_t aiocbp); } 
 315	AUE_NULL	ALL	{ int aio_suspend(user_addr_t aiocblist, int nent, user_addr_t timeoutp); } 
@@ -488,7 +492,7 @@
 320	AUE_LIOLISTIO	ALL	{ int lio_listio(int mode, user_addr_t aiocblist, int nent, user_addr_t sigp); } 
 321	AUE_NULL	ALL	{ int nosys(void); } { old __pthread_cond_wait }
 322	AUE_IOPOLICYSYS	ALL	{ int iopolicysys(int cmd, void *arg) NO_SYSCALL_STUB; } 
-323	AUE_NULL	ALL	{ int nosys(void); } 
+323	AUE_NULL	ALL	{ int process_policy(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, pid_t target_pid, uint64_t target_threadid) NO_SYSCALL_STUB; } 
 324	AUE_MLOCKALL	ALL	{ int mlockall(int how); } 
 325	AUE_MUNLOCKALL	ALL	{ int munlockall(int how); } 
 326	AUE_NULL	ALL	{ int nosys(void); } 
@@ -544,7 +548,7 @@
 #endif /* CONFIG_WORKQUEUE */
 362	AUE_KQUEUE	ALL	{ int kqueue(void); } 
 363	AUE_NULL	ALL	{ int kevent(int fd, const struct kevent *changelist, int nchanges, struct kevent *eventlist, int nevents, const struct timespec *timeout); } 
-364	AUE_LCHOWN	ALL	{ int lchown(user_addr_t path, uid_t owner, gid_t group); }
+364	AUE_LCHOWN	ALL	{ int lchown(user_addr_t path, uid_t owner, gid_t group) NO_SYSCALL_STUB; }
 365	AUE_STACKSNAPSHOT	ALL	{ int stack_snapshot(pid_t pid, user_addr_t tracebuf, uint32_t tracebuf_size, uint32_t flags, uint32_t dispatch_offset) NO_SYSCALL_STUB; }
 #if CONFIG_WORKQUEUE
 366	AUE_NULL	ALL	{ int bsdthread_register(user_addr_t threadstart, user_addr_t wqthread, int pthsize,user_addr_t dummy_value, user_addr_t targetconc_ptr, uint64_t dispatchqueue_offset) NO_SYSCALL_STUB; } 
@@ -637,7 +641,7 @@
 ;#if OLD_SEMWAIT_SIGNAL 
 ;423	AUE_NULL	ALL	{ int nosys(void); }   { old __semwait_signal_nocancel }
 ;#else
-423     AUE_SEMWAITSIGNAL       ALL     { int __semwait_signal_nocancel(int cond_sem, int mutex_sem, int timeout, int relative, int64_t tv_sec, int32_t tv_nsec) NO_SYSCALL_STUB;}
+423     AUE_SEMWAITSIGNAL       ALL     { int __semwait_signal_nocancel(int cond_sem, int mutex_sem, int timeout, int relative, int64_t tv_sec, int32_t tv_nsec); }
 ;#endif
 424	AUE_MAC_MOUNT	ALL	{ int __mac_mount(char *type, char *path, int flags, caddr_t data, struct mac *mac_p); } 
 425	AUE_MAC_GET_MOUNT	ALL	{ int __mac_get_mount(char *path, struct mac *mac_p); } 
@@ -645,12 +649,18 @@
 427	AUE_FSGETPATH	ALL	{ user_ssize_t fsgetpath(user_addr_t buf, size_t bufsize, user_addr_t fsid, uint64_t objid) NO_SYSCALL_STUB; } { private fsgetpath (File Manager SPI) }
 428	AUE_NULL	ALL	{ mach_port_name_t audit_session_self(void); }
 429	AUE_NULL	ALL	{ int audit_session_join(mach_port_name_t port); }
-430 AUE_NULL	ALL { int pid_suspend(int pid); }
-431 AUE_NULL	ALL { int pid_resume(int pid); }
+430	AUE_NULL	ALL	{ int fileport_makeport(int fd, user_addr_t portnamep); }
+431	AUE_NULL	ALL	{ int fileport_makefd(mach_port_name_t port); }
+432	AUE_NULL	ALL	{ int audit_session_port(au_asid_t asid, user_addr_t portnamep); }
+433	AUE_NULL	ALL	{ int pid_suspend(int pid); }
+434	AUE_NULL	ALL	{ int pid_resume(int pid); }
 #if CONFIG_EMBEDDED
-432	AUE_NULL	ALL	{ int fileport_makeport(int fd, user_addr_t portnamep); }
-433	AUE_NULL	ALL	{ int fileport_makefd(mach_port_name_t port); }
+435	AUE_NULL	ALL	{ int pid_hibernate(int pid); }
+436	AUE_NULL	ALL	{ int pid_shutdown_sockets(int pid, int level); }
 #else
-432	AUE_NULL	ALL	{ int nosys(void); } 
-433	AUE_NULL	ALL	{ int nosys(void); } 
+435	AUE_NULL	ALL	{ int nosys(void); } 
+436	AUE_NULL	ALL	{ int nosys(void); }
 #endif
+437	AUE_NULL	ALL	{ int nosys(void); } { old shared_region_slide_np }
+438	AUE_NULL	ALL	{ int shared_region_map_and_slide_np(int fd, uint32_t count, const struct shared_file_mapping_np *mappings, uint32_t slide, uint64_t* slide_start, uint32_t slide_size) NO_SYSCALL_STUB; }
+

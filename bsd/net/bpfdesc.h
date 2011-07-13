@@ -76,6 +76,7 @@
  */
 
 #include <sys/select.h>
+#include <kern/thread_call.h>
 
 /*
  * Descriptor associated with each open bpf file.
@@ -99,7 +100,7 @@ struct bpf_d {
 
 	int		bd_bufsize;	/* absolute length of buffers */
 
-	struct bpf_if *	bd_bif;		/* interface descriptor */
+	struct bpf_if  *bd_bif;		/* interface descriptor */
 	u_int32_t		bd_rtout;	/* Read timeout in 'ticks' */
 	struct bpf_insn *bd_filter; 	/* filter code */
 	u_int32_t		bd_rcount;	/* number of packets received */
@@ -127,10 +128,23 @@ struct bpf_d {
 	int		bd_hdrcmplt;	/* false to fill in src lladdr automatically */
 	int		bd_seesent;	/* true if bpf should see sent packets */
 	int		bd_oflags;	/* device open flags */
+	thread_call_t bd_thread_call; /* for BPF timeouts with select */
 #if CONFIG_MACF_NET
 	struct label *	bd_label;	/* MAC label for descriptor */
 #endif
 };
+
+/* Values for bd_state */
+#define BPF_IDLE		0    /* no select in progress or kqueue pending */
+#define BPF_WAITING		1    /* waiting for read timeout in select/kqueue */
+#define BPF_TIMED_OUT 	2	 /* read timeout has expired in select/kqueue */
+#define BPF_DRAINING	3	 /* waiting for timeout routine to finish during close */
+
+/* Test whether a BPF is ready for read(). */
+#define bpf_ready(bd)	((bd)->bd_hlen != 0 ||		\
+			 (((bd)->bd_immediate || (bd)->bd_state == BPF_TIMED_OUT) && \
+			  (bd)->bd_slen != 0))
+
 
 /*
  * Descriptor associated with each attached hardware interface.

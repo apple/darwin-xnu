@@ -91,9 +91,9 @@ struct error_sparse_map {
 #define err_code_map_entry(start, end) { err_get_code(start), err_get_code(end) }
 
 struct error_subsystem {
-	const char			* subsys_name;
+	const char			*subsys_name;
 	int				max_code;
-	const char			* * codes;
+	const char * const		*codes;
 	const struct error_sparse_map	*map_table;
 	int				map_count;
 };
@@ -101,15 +101,14 @@ struct error_subsystem {
 
 struct error_system {
 	int				max_sub;
-	const char			* bad_sub;
-	const struct error_subsystem	* subsystem;
-	const struct error_sparse_map	* map_table;
+	const char			*bad_sub;
+	const struct error_subsystem	*subsystem;
+	const struct error_sparse_map	*map_table;
 	int				map_count;
 };
 #define errorlib_sub_null	{ NULL, 0, NULL, NULL, 0 }
 
-__private_extern__ struct error_system 	_mach_errors[err_max_system+1];
-
-__private_extern__ char *mach_error_string_int(mach_error_t, boolean_t *);
+extern const struct error_system 	_mach_errors[err_max_system+1];
+char *mach_error_string_int(mach_error_t, boolean_t *);
 
 #define	errlib_count(s)		(sizeof(s)/sizeof(s[0]))

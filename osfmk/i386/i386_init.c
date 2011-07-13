@@ -78,20 +78,23 @@
 #include <vm/vm_page.h>
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
+#include <machine/pal_routines.h>
 #include <i386/fpu.h>
 #include <i386/pmap.h>
-#include <i386/ipl.h>
 #include <i386/misc_protos.h>
 #include <i386/cpu_threads.h>
 #include <i386/cpuid.h>
 #include <i386/lapic.h>
 #include <i386/mp.h>
 #include <i386/mp_desc.h>
+#if CONFIG_MTRR
 #include <i386/mtrr.h>
+#endif
 #include <i386/machine_routines.h>
 #if CONFIG_MCA
 #include <i386/machine_check.h>
 #endif
+#include <i386/ucode.h>
 #include <i386/postcode.h>
 #include <i386/Diagnostics.h>
 #include <i386/pmCPU.h>
@@ -102,6 +105,9 @@
 #if	MACH_KDB
 #include <machine/db_machdep.h>
 #endif
+#endif
+#if DEBUG
+#include <machine/pal_routines.h>
 #endif
 
 #if DEBUG
@@ -122,20 +128,15 @@ extern const char	version[];
 extern const char	version_variant[];
 extern int		nx_enabled;
 
-extern int		noVMX;	/* if set, rosetta should not emulate altivec */
-
 #ifdef __x86_64__
 extern void		*low_eintstack;
 #endif
-
-extern void serial_init(void);
 
 void			*KPTphys;
 pd_entry_t		*IdlePTD;
 #ifdef __i386__
 pd_entry_t		*IdlePDPT64;
 #endif
-
 
 char *physfree;
 
@@ -166,7 +167,7 @@ fillkpt(pt_entry_t *base, int prot, uintptr_t src, int index, int count)
 	}
 }
 
-extern vm_offset_t first_avail;
+extern pmap_paddr_t first_avail;
 
 #ifdef __x86_64__
 int break_kprintf = 0;
@@ -175,8 +176,8 @@ uint64_t
 x86_64_pre_sleep(void)
 {
 	IdlePML4[0] = IdlePML4[KERNEL_PML4_INDEX];
-	uint64_t oldcr3 = get_cr3();
-	set_cr3((uint32_t) (uintptr_t)ID_MAP_VTOP(IdlePML4));
+	uint64_t oldcr3 = get_cr3_raw();
+	set_cr3_raw((uint32_t) (uintptr_t)ID_MAP_VTOP(IdlePML4));
 	return oldcr3;
 }
 
@@ -184,7 +185,7 @@ void
 x86_64_post_sleep(uint64_t new_cr3)
 {
 	IdlePML4[0] = 0;
-	set_cr3((uint32_t) new_cr3);
+	set_cr3_raw((uint32_t) new_cr3);
 }
 
 #endif
@@ -192,7 +193,6 @@ x86_64_post_sleep(uint64_t new_cr3)
 #ifdef __i386__
 #define ID_MAP_VTOP(x) x
 #endif
-
 
 
 #ifdef __x86_64__
@@ -227,6 +227,10 @@ physmap_init(void)
 	IdlePML4[KERNEL_PHYSMAP_INDEX] = ((uintptr_t)ID_MAP_VTOP(physmapL3))
 						| INTEL_PTE_VALID
 						| INTEL_PTE_WRITE;
+	if (cpuid_extfeatures() & CPUID_EXTFEATURE_XD) {
+		IdlePML4[KERNEL_PHYSMAP_INDEX] |= INTEL_PTE_NX;
+	}
+
 	DBG("physical map idlepml4[%d]: 0x%llx\n",
 		KERNEL_PHYSMAP_INDEX, IdlePML4[KERNEL_PHYSMAP_INDEX]);
 }
@@ -267,7 +271,7 @@ Idle_PTs_init(void)
 #endif
 
 	// Flush the TLB now we're done rewriting the page tables..
-	set_cr3(get_cr3());
+	set_cr3_raw(get_cr3_raw());
 }
 
 /*
@@ -302,7 +306,7 @@ vstart(vm_offset_t boot_args_start)
 		lphysfree = kernelBootArgs->kaddr + kernelBootArgs->ksize;
 		physfree = (void *)(uintptr_t)((lphysfree + PAGE_SIZE - 1) &~ (PAGE_SIZE - 1));
 #if DEBUG
-		serial_init();
+		pal_serial_init();
 #endif
 		DBG("revision      0x%x\n", kernelBootArgs->Revision);
 		DBG("version       0x%x\n", kernelBootArgs->Version);
@@ -316,7 +320,13 @@ vstart(vm_offset_t boot_args_start)
 			kernelBootArgs, 
 			&kernelBootArgs->ksize,
 			&kernelBootArgs->kaddr);
-
+#ifdef	__x86_64__
+		/* enable NX/XD, boot processor */
+		if (cpuid_extfeatures() & CPUID_EXTFEATURE_XD) {
+			wrmsr64(MSR_IA32_EFER, rdmsr64(MSR_IA32_EFER) | MSR_IA32_EFER_NXE);
+			DBG("vstart() NX/XD enabled\n");
+		}
+#endif
 		postcode(PSTART_PAGE_TABLES);
 
 		Idle_PTs_init();
@@ -324,12 +334,18 @@ vstart(vm_offset_t boot_args_start)
 		first_avail = (vm_offset_t)ID_MAP_VTOP(physfree);
 
 		cpu = 0;
+		cpu_data_alloc(TRUE);
 	} else {
 		/* Find our logical cpu number */
 		cpu = lapic_to_cpu[(LAPIC_READ(ID)>>LAPIC_ID_SHIFT) & LAPIC_ID_MASK];
+#ifdef	__x86_64__
+		if (cpuid_extfeatures() & CPUID_EXTFEATURE_XD) {
+			wrmsr64(MSR_IA32_EFER, rdmsr64(MSR_IA32_EFER) | MSR_IA32_EFER_NXE);
+			DBG("vstart() NX/XD enabled, non-boot\n");
+		}
+#endif
 	}
 
-	if(is_boot_cpu) cpu_data_alloc(TRUE);
 #ifdef __x86_64__
 	if(is_boot_cpu)
 		cpu_desc_init64(cpu_datap(cpu));
@@ -339,14 +355,11 @@ vstart(vm_offset_t boot_args_start)
 		cpu_desc_init(cpu_datap(cpu));
 	cpu_desc_load(cpu_datap(cpu));
 #endif
-	cpu_mode_init(current_cpu_datap());
-
-	/* enable NX/XD */
-	if (cpuid_extfeatures() & CPUID_EXTFEATURE_XD)
-        wrmsr64(MSR_IA32_EFER, rdmsr64(MSR_IA32_EFER) | MSR_IA32_EFER_NXE);
-	DBG("vstart() NX/XD enabled\n");
-
-
+	if (is_boot_cpu)
+		cpu_mode_init(current_cpu_datap()); /* cpu_mode_init() will be
+						     * invoked on the APs
+						     * via i386_init_slave()
+						     */
 #ifdef __x86_64__
 	/* Done with identity mapping */
 	IdlePML4[0] = 0;
@@ -354,6 +367,11 @@ vstart(vm_offset_t boot_args_start)
 
 	postcode(VSTART_EXIT);
 #ifdef __i386__
+	if (cpuid_extfeatures() & CPUID_EXTFEATURE_XD) {
+		wrmsr64(MSR_IA32_EFER, rdmsr64(MSR_IA32_EFER) | MSR_IA32_EFER_NXE);
+		DBG("vstart() NX/XD enabled, i386\n");
+	}
+
 	if (is_boot_cpu)
 		i386_init(boot_args_start);
 	else
@@ -394,12 +412,11 @@ i386_init(vm_offset_t boot_args_start)
 	uint64_t	maxmemtouse;
 	unsigned int	cpus = 0;
 	boolean_t	fidn;
-#ifdef __i386__
-	boolean_t	legacy_mode;
-#endif
 	boolean_t	IA32e = TRUE;
 
 	postcode(I386_INIT_ENTRY);
+
+	pal_i386_init();
 
 #if CONFIG_MCA
 	/* Initialize machine-check handling */
@@ -414,19 +431,18 @@ i386_init(vm_offset_t boot_args_start)
 	DBG("i386_init(0x%lx) kernelBootArgs=%p\n",
 		(unsigned long)boot_args_start, kernelBootArgs);
 
+	PE_init_platform(FALSE, kernelBootArgs);
+	postcode(PE_INIT_PLATFORM_D);
+
+	kernel_early_bootstrap();
+
 	master_cpu = 0;
 	cpu_init();
 
 	postcode(CPU_INIT_D);
 
-
-	PE_init_platform(FALSE, kernelBootArgs);
-	postcode(PE_INIT_PLATFORM_D);
-
-
 	printf_init();			/* Init this in case we need debugger */
 	panic_init();			/* Init this in case we need debugger */
-
 
 	/* setup debugging output if one has been chosen */
 	PE_init_kprintf(FALSE);
@@ -460,7 +476,6 @@ i386_init(vm_offset_t boot_args_start)
                         max_ncpus = cpus;
 	}
 
-
 	/*
 	 * debug support for > 4G systems
 	 */
@@ -471,12 +486,21 @@ i386_init(vm_offset_t boot_args_start)
 		force_immediate_debugger_NMI = FALSE;
 	else
 		force_immediate_debugger_NMI = fidn;
-#ifdef __i386__
+
+#if DEBUG
+	nanoseconds_to_absolutetime(URGENCY_NOTIFICATION_ASSERT_NS, &urgency_notification_assert_abstime_threshold);
+#endif
+	PE_parse_boot_argn("urgency_notification_abstime",
+	    &urgency_notification_assert_abstime_threshold,
+	    sizeof(urgency_notification_assert_abstime_threshold));
+
+#if CONFIG_YONAH
 	/*
 	 * At this point we check whether we are a 64-bit processor
 	 * and that we're not restricted to legacy mode, 32-bit operation.
 	 */
 	if (cpuid_extfeatures() & CPUID_EXTFEATURE_EM64T) {
+		boolean_t	legacy_mode;
 		kprintf("EM64T supported");
 		if (PE_parse_boot_argn("-legacy", &legacy_mode, sizeof (legacy_mode))) {
 			kprintf(" but legacy mode forced\n");
@@ -491,26 +515,19 @@ i386_init(vm_offset_t boot_args_start)
 	if (!(cpuid_extfeatures() & CPUID_EXTFEATURE_XD))
 		nx_enabled = 0;
 
-	/* Obtain "lcks" options:this currently controls lock statistics */
-	if (!PE_parse_boot_argn("lcks", &LcksOpts, sizeof (LcksOpts)))
-		LcksOpts = 0;
-
 	/*   
 	 * VM initialization, after this we're using page tables...
 	 * The maximum number of cpus must be set beforehand.
 	 */
 	i386_vm_init(maxmemtouse, IA32e, kernelBootArgs);
 
-	if ( ! PE_parse_boot_argn("novmx", &noVMX, sizeof (noVMX)))
-		noVMX = 0;	/* OK to support Altivec in rosetta? */
+	/* create the console for verbose or pretty mode */
+	/* Note: doing this prior to tsc_init() allows for graceful panic! */
+	PE_init_platform(TRUE, kernelBootArgs);
+	PE_create_console();
 
 	tsc_init();
 	power_management_init();
-
-	PE_init_platform(TRUE, kernelBootArgs);
-
-	/* create the console for verbose or pretty mode */
-	PE_create_console();
 
 	processor_bootstrap();
 	thread_bootstrap();
@@ -546,17 +563,24 @@ do_init_slave(boolean_t fast_restart)
   
 		init_fpu();
   
+#if CONFIG_MTRR
 		mtrr_update_cpu();
+#endif
 	} else
 	    init_param = FAST_SLAVE_INIT;
+
+	/* update CPU microcode */
+	ucode_update_wake();
 
 #if CONFIG_VMX
 	/* resume VT operation */
 	vmx_resume();
 #endif
 
+#if CONFIG_MTRR
 	if (!fast_restart)
 	    pat_init();
+#endif
 
 	cpu_thread_init();	/* not strictly necessary */
 

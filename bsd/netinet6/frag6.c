@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -77,6 +77,7 @@
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
+#include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet/icmp6.h>
@@ -102,9 +103,6 @@ u_int frag6_nfragpackets;
 static u_int frag6_nfrags;
 struct	ip6q ip6q;	/* ip6 reassemble queue */
 
-#ifndef __APPLE__
-MALLOC_DEFINE(M_FTABLE, "fragment", "fragment reassembly header");
-#endif
 
 extern lck_mtx_t *inet6_domain_mutex;
 /*
@@ -162,10 +160,9 @@ frag6_init()
  * 	 inet6_domain_mutex is protecting he frag6 queue manipulation.
  */
 int
-frag6_input(mp, offp)
-	struct mbuf **mp;
-	int *offp;
+frag6_input(struct mbuf **mp, int *offp, int proto)
 {
+#pragma unused(proto)
 	struct mbuf *m = *mp, *t;
 	struct ip6_hdr *ip6;
 	struct ip6_frag *ip6f;
@@ -176,6 +173,8 @@ frag6_input(mp, offp)
 	int fragoff, frgpartlen;	/* must be larger than u_int16_t */
 	struct ifnet *dstifp;
 	struct ifaddr *ifa = NULL;
+	u_int8_t ecn, ecn0;
+
 #ifdef IN6_IFSTAT_STRICT
 	struct route_in6 ro;
 	struct sockaddr_in6 *dst;
@@ -204,7 +203,7 @@ frag6_input(mp, offp)
 	if (ro.ro_rt != NULL) {
 		RT_LOCK(ro.ro_rt);
 		if ((ifa = ro.ro_rt->rt_ifa) != NULL) {
-			ifaref(ifa);
+			IFA_ADDREF(ifa);
 			dstifp = ((struct in6_ifaddr *)ro.ro_rt->rt_ifa)->ia_ifp;
 		}
 		RT_UNLOCK(ro.ro_rt);
@@ -222,7 +221,7 @@ frag6_input(mp, offp)
 		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER, offset);
 		in6_ifstat_inc(dstifp, ifs6_reass_fail);
 		if (ifa != NULL)
-			ifafree(ifa);
+			IFA_REMREF(ifa);
 		return IPPROTO_DONE;
 	}
 
@@ -239,7 +238,7 @@ frag6_input(mp, offp)
 			    offsetof(struct ip6_hdr, ip6_plen));
 		in6_ifstat_inc(dstifp, ifs6_reass_fail);
 		if (ifa != NULL)
-			ifafree(ifa);
+			IFA_REMREF(ifa);
 		return IPPROTO_DONE;
 	}
 
@@ -298,10 +297,11 @@ frag6_input(mp, offp)
 		q6->ip6q_nxtp	= (u_char *)nxtp;
 #endif
 		q6->ip6q_ident	= ip6f->ip6f_ident;
-		q6->ip6q_arrive = 0; /* Is it used anywhere? */
 		q6->ip6q_ttl 	= IPV6_FRAGTTL;
 		q6->ip6q_src	= ip6->ip6_src;
 		q6->ip6q_dst	= ip6->ip6_dst;
+		q6->ip6q_ecn	=
+		    (ntohl(ip6->ip6_flow) >> 20) & IPTOS_ECN_MASK;
 		q6->ip6q_unfrglen = -1;	/* The 1st fragment has not arrived. */
 
 		q6->ip6q_nfrag	= 0;
@@ -332,7 +332,7 @@ frag6_input(mp, offp)
 					offsetof(struct ip6_frag, ip6f_offlg));
 			frag6_doing_reass = 0;
 			if (ifa != NULL)
-				ifafree(ifa);
+				IFA_REMREF(ifa);
 			return(IPPROTO_DONE);
 		}
 	}
@@ -342,7 +342,7 @@ frag6_input(mp, offp)
 				offsetof(struct ip6_frag, ip6f_offlg));
 		frag6_doing_reass = 0;
 		if (ifa != NULL)
-			ifafree(ifa);
+			IFA_REMREF(ifa);
 		return(IPPROTO_DONE);
 	}
 	/*
@@ -387,10 +387,6 @@ frag6_input(mp, offp)
 	if (ip6af == NULL)
 		goto dropfrag;
 	bzero(ip6af, sizeof(*ip6af));
-	ip6af->ip6af_head = ip6->ip6_flow;
-	ip6af->ip6af_len = ip6->ip6_plen;
-	ip6af->ip6af_nxt = ip6->ip6_nxt;
-	ip6af->ip6af_hlim = ip6->ip6_hlim;
 	ip6af->ip6af_mff = ip6f->ip6f_offlg & IP6F_MORE_FRAG;
 	ip6af->ip6af_off = fragoff;
 	ip6af->ip6af_frglen = frgpartlen;
@@ -400,6 +396,26 @@ frag6_input(mp, offp)
 	if (first_frag) {
 		af6 = (struct ip6asfrag *)q6;
 		goto insert;
+	}
+
+	/*
+	 * Handle ECN by comparing this segment with the first one;
+	 * if CE is set, do not lose CE.
+	 * drop if CE and not-ECT are mixed for the same packet.
+	 */
+	ecn = (ntohl(ip6->ip6_flow) >> 20) & IPTOS_ECN_MASK;
+	ecn0 = q6->ip6q_ecn;
+	if (ecn == IPTOS_ECN_CE) {
+		if (ecn0 == IPTOS_ECN_NOTECT) {
+			FREE(ip6af, M_FTABLE);
+			goto dropfrag;
+		}
+		if (ecn0 != IPTOS_ECN_CE)
+			q6->ip6q_ecn = IPTOS_ECN_CE;
+	}
+	if (ecn == IPTOS_ECN_NOTECT && ecn0 != IPTOS_ECN_NOTECT) {
+		FREE(ip6af, M_FTABLE);
+		goto dropfrag;
 	}
 
 	/*
@@ -450,6 +466,11 @@ frag6_input(mp, offp)
 	 * If the incoming framgent overlaps some existing fragments in
 	 * the reassembly queue, drop it, since it is dangerous to override
 	 * existing fragments from a security point of view.
+	 * We don't know which fragment is the bad guy - here we trust
+	 * fragment that came in earlier, with no real reason.
+	 *
+	 * Note: due to changes after disabling this part, mbuf passed to
+	 * m_adj() below now does not meet the requirement.
 	 */
 	if (af6->ip6af_up != (struct ip6asfrag *)q6) {
 		i = af6->ip6af_up->ip6af_off + af6->ip6af_up->ip6af_frglen
@@ -501,7 +522,7 @@ insert:
 		if (af6->ip6af_off != next) {
 			frag6_doing_reass = 0;
 			if (ifa != NULL)
-				ifafree(ifa);
+				IFA_REMREF(ifa);
 			return IPPROTO_DONE;
 		}
 		next += af6->ip6af_frglen;
@@ -509,7 +530,7 @@ insert:
 	if (af6->ip6af_up->ip6af_mff) {
 		frag6_doing_reass = 0;
 		if (ifa != NULL)
-			ifafree(ifa);
+			IFA_REMREF(ifa);
 		return IPPROTO_DONE;
 	}
 
@@ -538,15 +559,17 @@ insert:
 	ip6->ip6_plen = htons((u_short)next + offset - sizeof(struct ip6_hdr));
 	ip6->ip6_src = q6->ip6q_src;
 	ip6->ip6_dst = q6->ip6q_dst;
+	if (q6->ip6q_ecn == IPTOS_ECN_CE)
+		ip6->ip6_flow |= htonl(IPTOS_ECN_CE << 20);
+
 	nxt = q6->ip6q_nxt;
 #if notyet
 	*q6->ip6q_nxtp = (u_char)(nxt & 0xff);
 #endif
 
-	/*
-	 * Delete frag6 header with as a few cost as possible.
-	 */
-	if (offset < m->m_len) {
+	/* Delete frag6 header */
+	if (m->m_len >= offset + sizeof(struct ip6_frag)) {
+		/* This is the only possible case with !PULLDOWN_TEST */
 		ovbcopy((caddr_t)ip6, (caddr_t)ip6 + sizeof(struct ip6_frag),
 			offset);
 		m->m_data += sizeof(struct ip6_frag);
@@ -596,7 +619,7 @@ insert:
 
 	frag6_doing_reass = 0;
 	if (ifa != NULL)
-		ifafree(ifa);
+		IFA_REMREF(ifa);
 	return nxt;
 
  dropfrag:
@@ -605,7 +628,7 @@ insert:
 	m_freem(m);
 	frag6_doing_reass = 0;
 	if (ifa != NULL)
-		ifafree(ifa);
+		IFA_REMREF(ifa);
 	return IPPROTO_DONE;
 }
 
@@ -636,7 +659,7 @@ frag6_freef(q6)
 			/* adjust pointer */
 			ip6 = mtod(m, struct ip6_hdr *);
 
-			/* restoure source and destination addresses */
+			/* restore source and destination addresses */
 			ip6->ip6_src = q6->ip6q_src;
 			ip6->ip6_dst = q6->ip6q_dst;
 			icmp6_error(m, ICMP6_TIME_EXCEEDED,

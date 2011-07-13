@@ -79,6 +79,7 @@ struct specinfo {
 	struct	vnode *si_specnext;
 	long	si_flags;
 	dev_t	si_rdev;
+	int32_t si_opencount;
 	daddr_t	si_size;		/* device block size in bytes */
 	daddr64_t	si_lastr;	/* last read blkno (read-ahead) */
 	u_int64_t	si_devsize;	/* actual device size in bytes */

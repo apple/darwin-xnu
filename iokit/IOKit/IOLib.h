@@ -222,19 +222,10 @@ void IOMappedWrite32(IOPhysicalAddress address, UInt32 value);
 
 void IOMappedWrite64(IOPhysicalAddress address, UInt64 value);
 
-/*! @function IOSetProcessorCacheMode
-    @abstract Sets the processor cache mode for mapped memory.
-    @discussion This function sets the cache mode of an already mapped & wired memory range. Note this may not be supported on I/O mappings or shared memory - it is far preferable to set the cache mode as mappings are created with the IOMemoryDescriptor::map method.
-    @param task Task the memory is mapped into.
-    @param address Virtual address of the memory.
-    @param length Length of the range to set.
-    @param cacheMode A constant from IOTypes.h, <br>
-	kIOMapDefaultCache to inhibit the cache in I/O areas, kIOMapCopybackCache in general purpose RAM.<br>
-	kIOMapInhibitCache, kIOMapWriteThruCache, kIOMapCopybackCache to set the appropriate caching.<br> 
-    @result An IOReturn code.*/
+/* This function is deprecated. Cache settings may be set for allocated memory with the IOBufferMemoryDescriptor api. */
 
 IOReturn IOSetProcessorCacheMode( task_t task, IOVirtualAddress address,
-				  IOByteCount length, IOOptionBits cacheMode );
+				  IOByteCount length, IOOptionBits cacheMode ) __attribute__((deprecated));
 
 /*! @function IOFlushProcessorCache
     @abstract Flushes the processor cache for mapped memory.
@@ -341,8 +332,23 @@ void Debugger(const char * reason);
 void IOPanic(const char *reason) __attribute__((deprecated));
 #endif
 
-struct OSDictionary * IOBSDNameMatching( const char * name );
-struct OSDictionary * IOOFPathMatching( const char * path, char * buf, int maxLen );
+#ifdef __cplusplus
+class OSDictionary;
+#endif
+
+#ifdef __cplusplus
+OSDictionary *
+#else
+struct OSDictionary *
+#endif
+IOBSDNameMatching( const char * name );
+
+#ifdef __cplusplus
+OSDictionary *
+#else
+struct OSDictionary *
+#endif
+IOOFPathMatching( const char * path, char * buf, int maxLen );
 
 /*
  * Convert between size and a power-of-two alignment.

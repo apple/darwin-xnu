@@ -83,7 +83,17 @@ simpleroutine mach_notify_port_deleted(
 #endif	/* SEQNOS */
 		name	: mach_port_name_t);
 
-skip;	/* was MACH_NOTIFY_MSG_ACCEPTED: 0102 */
+#if (KERNEL_USER | MACH_NOTIFY_SEND_POSSIBLE_EXPECTED)
+/* MACH_NOTIFY_SEND_POSSIBLE: 0102 */
+simpleroutine mach_notify_send_possible(
+		notify	: mach_port_move_send_once_t;
+#if	SEQNOS
+	msgseqno seqno	: mach_port_seqno_t;
+#endif	/* SEQNOS */
+		name	: mach_port_name_t);
+#else
+skip;
+#endif
 
 skip;	/* was NOTIFY_OWNERSHIP_RIGHTS: 0103 */
 

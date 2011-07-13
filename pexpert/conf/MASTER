@@ -97,4 +97,3 @@ options		CONFIG_NO_KPRINTF_STRINGS	# <no_kprintf_str>
 # embedded device
 #
 options   CONFIG_EMBEDDED                       # <config_embedded>
-

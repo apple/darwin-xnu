@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -66,6 +66,10 @@
 #include <sys/appleapiopts.h>
 #include <sys/_types.h>
 #include <stdint.h>		/* uint(8|16|32)_t */
+
+#ifndef KERNEL
+#include <Availability.h>
+#endif
 
 #ifndef _IN_ADDR_T
 #define _IN_ADDR_T
@@ -207,10 +211,11 @@ typedef	__uint16_t	in_port_t;
 #define	IPPROTO_ENCAP		98		/* encapsulation header */
 #define	IPPROTO_APES		99		/* any private encr. scheme */
 #define	IPPROTO_GMTP		100		/* GMTP*/
-#define	IPPROTO_IPCOMP	108		/* payload compression (IPComp) */
 /* 101-254: Partly Unassigned */
 #define	IPPROTO_PIM		103		/* Protocol Independent Mcast */
+#define IPPROTO_IPCOMP		108		/* payload compression (IPComp) */
 #define	IPPROTO_PGM		113		/* PGM */
+#define IPPROTO_SCTP		132		/* SCTP */
 /* 255: Reserved */
 /* BSD Private, local use, namespace incursion */
 #define	IPPROTO_DIVERT		254		/* divert pseudo-protocol */
@@ -341,6 +346,7 @@ struct in_addr {
 #define	IN_BADCLASS(i)		(((u_int32_t)(i) & 0xf0000000) == 0xf0000000)
 
 #define	INADDR_LOOPBACK		(u_int32_t)0x7f000001
+
 #ifndef KERNEL
 #define	INADDR_NONE		0xffffffff		/* -1 return */
 #endif
@@ -348,11 +354,25 @@ struct in_addr {
 #define	INADDR_UNSPEC_GROUP	(u_int32_t)0xe0000000	/* 224.0.0.0 */
 #define	INADDR_ALLHOSTS_GROUP	(u_int32_t)0xe0000001	/* 224.0.0.1 */
 #define	INADDR_ALLRTRS_GROUP	(u_int32_t)0xe0000002	/* 224.0.0.2 */
+#define	INADDR_ALLRPTS_GROUP	(u_int32_t)0xe0000016	/* 224.0.0.22, IGMPv3 */
+#define	INADDR_CARP_GROUP	(u_int32_t)0xe0000012	/* 224.0.0.18 */
+#define	INADDR_PFSYNC_GROUP	(u_int32_t)0xe00000f0	/* 224.0.0.240 */
+#define	INADDR_ALLMDNS_GROUP	(u_int32_t)0xe00000fb	/* 224.0.0.251 */
 #define	INADDR_MAX_LOCAL_GROUP	(u_int32_t)0xe00000ff	/* 224.0.0.255 */
 
 #ifdef __APPLE__
 #define IN_LINKLOCALNETNUM	(u_int32_t)0xA9FE0000 /* 169.254.0.0 */
 #define IN_LINKLOCAL(i)		(((u_int32_t)(i) & IN_CLASSB_NET) == IN_LINKLOCALNETNUM)
+#define IN_LOOPBACK(i)		(((u_int32_t)(i) & 0xff000000) == 0x7f000000)
+#define IN_ZERONET(i)		(((u_int32_t)(i) & 0xff000000) == 0)
+
+#define	IN_PRIVATE(i)	((((u_int32_t)(i) & 0xff000000) == 0x0a000000) || \
+			 (((u_int32_t)(i) & 0xfff00000) == 0xac100000) || \
+			 (((u_int32_t)(i) & 0xffff0000) == 0xc0a80000))
+
+#define	IN_LOCAL_GROUP(i)	(((u_int32_t)(i) & 0xffffff00) == 0xe0000000)
+ 
+#define	IN_ANY_LOCAL(i)		(IN_LINKLOCAL(i) || IN_LOCAL_GROUP(i))
 #endif
 
 #define	IN_LOOPBACKNET		127			/* official! */
@@ -415,7 +435,9 @@ struct ip_opts {
 #define IP_STRIPHDR      	23   /* bool: drop receive of raw IP header */
 #endif
 #define IP_RECVTTL		24   /* bool; receive reception TTL w/dgram */
-#define	IP_BOUND_IF		25   /* set/get bound interface */
+#define	IP_BOUND_IF		25   /* int; set/get bound interface */
+#define	IP_PKTINFO		26   /* get pktinfo on recv socket, set src on sent dgram  */
+#define	IP_RECVPKTINFO		IP_PKTINFO	/* receive pktinfo w/dgram */
 
 
 #define	IP_FW_ADD     		40   /* add a firewall rule to chain */
@@ -440,24 +462,53 @@ struct ip_opts {
 #define	IP_DUMMYNET_GET		64   /* get entire dummynet pipes */
 
 #define	IP_TRAFFIC_MGT_BACKGROUND	65   /* int*; get background IO flags; set background IO */
+#define	IP_MULTICAST_IFINDEX	66   /* int*; set/get IP multicast i/f index */
+
+/* IPv4 Source Filter Multicast API [RFC3678] */
+#define	IP_ADD_SOURCE_MEMBERSHIP	70   /* join a source-specific group */
+#define	IP_DROP_SOURCE_MEMBERSHIP	71   /* drop a single source */
+#define	IP_BLOCK_SOURCE			72   /* block a source */
+#define	IP_UNBLOCK_SOURCE		73   /* unblock a source */
+
+/* The following option is private; do not use it from user applications. */
+#define	IP_MSFILTER			74   /* set/get filter list */
+
+/* Protocol Independent Multicast API [RFC3678] */
+#define	MCAST_JOIN_GROUP		80   /* join an any-source group */
+#define	MCAST_LEAVE_GROUP		81   /* leave all sources for group */
+#define	MCAST_JOIN_SOURCE_GROUP		82   /* join a source-specific group */
+#define	MCAST_LEAVE_SOURCE_GROUP	83   /* leave a single source */
+#define	MCAST_BLOCK_SOURCE		84   /* block a source */
+#define	MCAST_UNBLOCK_SOURCE		85   /* unblock a source */
 
 #ifdef PRIVATE
 #define	IP_FORCE_OUT_IFP	69   /* deprecated; use IP_BOUND_IF instead */
-#endif
-
-/* Background socket configuration flags */
-#ifdef __APPLE_API_UNSTABLE
-#define TRAFFIC_MGT_SO_BACKGROUND	0x0001	/* background socket */
-#define TRAFFIC_MGT_SO_BG_SUPPRESSED	0x0002	/* currently throttled */
-#define TRAFFIC_MGT_SO_BG_REGULATE	0x0004	/* traffic is regulated */
-#endif /* __APPLE_API_UNSTABLE */
+#define	IP_NO_IFT_CELLULAR	6969 /* for internal use only */
+#define	IP_NO_IFT_PDP		IP_NO_IFT_CELLULAR /* deprecated */
+#define	IP_OUT_IF		9696 /* for internal use only */
+#endif /* PRIVATE */
 
 /*
  * Defaults and limits for options
  */
 #define	IP_DEFAULT_MULTICAST_TTL  1	/* normally limit m'casts to 1 hop  */
 #define	IP_DEFAULT_MULTICAST_LOOP 1	/* normally hear sends if a member  */
-#define	IP_MAX_MEMBERSHIPS	20	/* per socket */
+
+/*
+ * The imo_membership vector for each socket is now dynamically allocated at
+ * run-time, bounded by USHRT_MAX, and is reallocated when needed, sized
+ * according to a power-of-two increment.
+ */
+#define	IP_MIN_MEMBERSHIPS	31
+#define	IP_MAX_MEMBERSHIPS	4095
+
+/*
+ * Default resource limits for IPv4 multicast source filtering.
+ * These may be modified by sysctl.
+ */
+#define	IP_MAX_GROUP_SRC_FILTER		512	/* sources per group */
+#define	IP_MAX_SOCK_SRC_FILTER		128	/* sources per socket/group */
+#define	IP_MAX_SOCK_MUTE_FILTER		128	/* XXX no longer used */
 
 /*
  * Argument structure for IP_ADD_MEMBERSHIP and IP_DROP_MEMBERSHIP.
@@ -468,6 +519,105 @@ struct ip_mreq {
 };
 
 /*
+ * Modified argument structure for IP_MULTICAST_IF, obtained from Linux.
+ * This is used to specify an interface index for multicast sends, as
+ * the IPv4 legacy APIs do not support this (unless IP_SENDIF is available).
+ */
+struct ip_mreqn {
+	struct	in_addr imr_multiaddr;	/* IP multicast address of group */
+	struct	in_addr imr_address;	/* local IP address of interface */
+	int		imr_ifindex;	/* Interface index; cast to uint32_t */
+};
+
+#pragma pack(4)
+/*
+ * Argument structure for IPv4 Multicast Source Filter APIs. [RFC3678]
+ */
+struct ip_mreq_source {
+	struct	in_addr imr_multiaddr;	/* IP multicast address of group */
+	struct	in_addr imr_sourceaddr;	/* IP address of source */
+	struct	in_addr imr_interface;	/* local IP address of interface */
+};
+
+/*
+ * Argument structures for Protocol-Independent Multicast Source
+ * Filter APIs. [RFC3678]
+ */
+struct group_req {
+	uint32_t		gr_interface;	/* interface index */
+	struct sockaddr_storage	gr_group;	/* group address */
+};
+
+struct group_source_req {
+	uint32_t		gsr_interface;	/* interface index */
+	struct sockaddr_storage	gsr_group;	/* group address */
+	struct sockaddr_storage	gsr_source;	/* source address */
+};
+
+#ifndef __MSFILTERREQ_DEFINED
+#define __MSFILTERREQ_DEFINED
+/*
+ * The following structure is private; do not use it from user applications.
+ * It is used to communicate IP_MSFILTER/IPV6_MSFILTER information between
+ * the RFC 3678 libc functions and the kernel.
+ */
+struct __msfilterreq {
+	uint32_t		 msfr_ifindex;	/* interface index */
+	uint32_t		 msfr_fmode;	/* filter mode for group */
+	uint32_t		 msfr_nsrcs;	/* # of sources in msfr_srcs */
+	uint32_t		__msfr_align;	
+	struct sockaddr_storage	 msfr_group;	/* group address */
+	struct sockaddr_storage	*msfr_srcs;
+};
+
+#ifdef XNU_KERNEL_PRIVATE
+struct __msfilterreq32 {
+	uint32_t		 msfr_ifindex;	/* interface index */
+	uint32_t		 msfr_fmode;	/* filter mode for group */
+	uint32_t		 msfr_nsrcs;	/* # of sources in msfr_srcs */
+	uint32_t		__msfr_align;	
+	struct sockaddr_storage	 msfr_group;	/* group address */
+	user32_addr_t		 msfr_srcs;
+};
+
+struct __msfilterreq64 {
+	uint32_t		 msfr_ifindex;	/* interface index */
+	uint32_t		 msfr_fmode;	/* filter mode for group */
+	uint32_t		 msfr_nsrcs;	/* # of sources in msfr_srcs */
+	uint32_t		__msfr_align;	
+	struct sockaddr_storage	 msfr_group;	/* group address */
+	user64_addr_t		 msfr_srcs;
+};
+#endif /* XNU_KERNEL_PRIVATE */
+#endif /* __MSFILTERREQ_DEFINED */
+
+#pragma pack()
+struct sockaddr;
+
+#ifndef KERNEL
+/*
+ * Advanced (Full-state) APIs [RFC3678]
+ * The RFC specifies uint_t for the 6th argument to [sg]etsourcefilter().
+ * We use uint32_t here to be consistent.
+ */
+int	setipv4sourcefilter(int, struct in_addr, struct in_addr, uint32_t,
+	    uint32_t, struct in_addr *) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_NA);
+int	getipv4sourcefilter(int, struct in_addr, struct in_addr, uint32_t *,
+	    uint32_t *, struct in_addr *) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_NA);
+int	setsourcefilter(int, uint32_t, struct sockaddr *, socklen_t,
+	    uint32_t, uint32_t, struct sockaddr_storage *) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_NA);
+int	getsourcefilter(int, uint32_t, struct sockaddr *, socklen_t,
+	    uint32_t *, uint32_t *, struct sockaddr_storage *) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_NA);
+#endif
+
+/*
+ * Filter modes; also used to represent per-socket filter mode internally.
+ */
+#define	MCAST_UNDEFINED	0	/* fmode: not yet defined */
+#define	MCAST_INCLUDE	1	/* fmode: include these source(s) */
+#define	MCAST_EXCLUDE	2	/* fmode: exclude these source(s) */
+
+/*
  * Argument for IP_PORTRANGE:
  * - which range to search when port is unspecified at bind() or connect()
  */
@@ -475,6 +625,31 @@ struct ip_mreq {
 #define	IP_PORTRANGE_HIGH	1	/* "high" - request firewall bypass */
 #define	IP_PORTRANGE_LOW	2	/* "low" - vouchsafe security */
 
+
+/*
+ * IP_PKTINFO: Packet information (equivalent to  RFC2292 sec 5 for IPv4)
+ * This structure is used for 
+ *
+ * 1) Receiving ancilliary data about the datagram if IP_PKTINFO sockopt is 
+ *    set on the socket. In this case ipi_ifindex will contain the interface
+ *    index the datagram was received on, ipi_addr is the IP address the 
+ *    datagram was received to.
+ *
+ * 2) Sending a datagram using a specific interface or IP source address.
+ *    if ipi_ifindex is set to non-zero when in_pktinfo is passed as 
+ *    ancilliary data of type IP_PKTINFO, this will be used as the source
+ *    interface to send the datagram from. If ipi_ifindex is null, ip_spec_dst
+ *    will be used for the source address.
+ *
+ *    Note: if IP_BOUND_IF is set on the socket, ipi_ifindex in the ancillary
+ *    IP_PKTINFO option silently overrides the bound interface when it is
+ *    specified during send time.
+ */
+struct in_pktinfo {
+	unsigned int	ipi_ifindex;	/* send/recv interface index */
+	struct in_addr	ipi_spec_dst;	/* Local address */
+	struct in_addr	ipi_addr;	/* IP Header dst address */
+};
 
 /*
  * Definitions for inet sysctl operations.
@@ -616,6 +791,11 @@ extern int in_localaddr(struct in_addr);
 extern u_int32_t in_netof(struct in_addr);
 
 extern int inaddr_local(struct in_addr);
+
+#define	in_hosteq(s, t)	((s).s_addr == (t).s_addr)
+#define	in_nullhost(x)	((x).s_addr == INADDR_ANY)
+#define	in_allhosts(x)	((x).s_addr == htonl(INADDR_ALLHOSTS_GROUP))
+
 #endif /* KERNEL_PRIVATE */
 #define MAX_IPv4_STR_LEN	16
 #define MAX_IPv6_STR_LEN	64

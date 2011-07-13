@@ -90,6 +90,8 @@
 
 host_data_t	realhost;
 
+vm_extmod_statistics_data_t host_extmod_statistics;
+
 kern_return_t
 host_processors(
 	host_priv_t				host_priv,
@@ -189,6 +191,8 @@ host_info(
 	case HOST_SCHED_INFO:
 	{
 		register host_sched_info_t	sched_info;
+		uint32_t quantum_time;
+		uint64_t quantum_ns;
 
 		/*
 		 *	Return scheduler information.
@@ -198,8 +202,11 @@ host_info(
 
 		sched_info = (host_sched_info_t) info;
 
+		quantum_time = SCHED(initial_quantum_size)(THREAD_NULL);
+		absolutetime_to_nanoseconds(quantum_time, &quantum_ns);
+
 		sched_info->min_timeout = 
-			sched_info->min_quantum = std_quantum_us / 1000;
+			sched_info->min_quantum = (uint32_t)(quantum_ns / 1000 / 1000);
 
 		*count = HOST_SCHED_INFO_COUNT;
 
@@ -397,23 +404,29 @@ MACRO_END
 		cpu_load_info->cpu_ticks[CPU_STATE_IDLE] = 0;
 		cpu_load_info->cpu_ticks[CPU_STATE_NICE] = 0;
 
-		processor = processor_list;
-		GET_TICKS_VALUE(processor, CPU_STATE_USER, user_state);
-		GET_TICKS_VALUE(processor, CPU_STATE_SYSTEM, system_state);
-		GET_TICKS_VALUE(processor, CPU_STATE_IDLE, idle_state);
+		simple_lock(&processor_list_lock);
 
-		if (processor_count > 1) {
-			simple_lock(&processor_list_lock);
+		for (processor = processor_list; processor != NULL; processor = processor->processor_list) {
+			timer_data_t	idle_temp;
+			timer_t		idle_state;
 
-			while ((processor = processor->processor_list) != NULL) {
-				GET_TICKS_VALUE(processor, CPU_STATE_USER, user_state);
-				GET_TICKS_VALUE(processor, CPU_STATE_SYSTEM, system_state);
+			GET_TICKS_VALUE(processor, CPU_STATE_USER, user_state);
+			GET_TICKS_VALUE(processor, CPU_STATE_SYSTEM, system_state);
+
+			idle_state = &PROCESSOR_DATA(processor, idle_state);
+			idle_temp = *idle_state;
+
+			if (PROCESSOR_DATA(processor, current_state) != idle_state ||
+			    timer_grab(&idle_temp) != timer_grab(idle_state))
 				GET_TICKS_VALUE(processor, CPU_STATE_IDLE, idle_state);
+			else {
+				timer_advance(&idle_temp, mach_absolute_time() - idle_temp.tstamp);
+
+				cpu_load_info->cpu_ticks[CPU_STATE_IDLE] +=
+					(uint32_t)(timer_grab(&idle_temp) / hz_tick_interval);
 			}
-
-			simple_unlock(&processor_list_lock);
 		}
-
+		simple_unlock(&processor_list_lock);
 		*count = HOST_CPU_LOAD_INFO_COUNT;
 
 		return (KERN_SUCCESS);
@@ -512,6 +525,21 @@ host_statistics64(
 			return(KERN_SUCCESS);
 		}
 
+		case HOST_EXTMOD_INFO64: /* We were asked to get vm_statistics64 */
+		{
+			vm_extmod_statistics_t		out_extmod_statistics;
+
+			if (*count < HOST_EXTMOD_INFO64_COUNT)
+				return (KERN_FAILURE);
+
+			out_extmod_statistics = (vm_extmod_statistics_t) info;
+			*out_extmod_statistics = host_extmod_statistics;
+
+			*count = HOST_EXTMOD_INFO64_COUNT;	
+
+			return(KERN_SUCCESS);
+		}
+
 		default: /* If we didn't recognize the flavor, send to host_statistics */
 			return(host_statistics(host, flavor, (host_info_t) info, count)); 
 	}
@@ -530,6 +558,73 @@ host_priv_statistics(
 	mach_msg_type_number_t	*count)
 {
 	return(host_statistics((host_t)host_priv, flavor, info, count));
+}
+
+kern_return_t
+set_sched_stats_active(
+		boolean_t active) 
+{
+	sched_stats_active = active;
+	return KERN_SUCCESS;
+}
+
+
+kern_return_t
+get_sched_statistics( 
+		struct _processor_statistics_np *out, 
+		uint32_t *count)
+{
+	processor_t processor;
+
+	if (!sched_stats_active) {
+		return KERN_FAILURE;
+	}
+
+	simple_lock(&processor_list_lock);
+	
+	if (*count < (processor_count + 2) * sizeof(struct _processor_statistics_np)) { /* One for RT, one for FS */
+		simple_unlock(&processor_list_lock);
+		return KERN_FAILURE;
+	}
+
+	processor = processor_list;
+	while (processor) {
+		struct processor_sched_statistics *stats = &processor->processor_data.sched_stats;
+
+		out->ps_cpuid 			= processor->cpu_id;
+		out->ps_csw_count 		= stats->csw_count;
+		out->ps_preempt_count 		= stats->preempt_count;
+		out->ps_preempted_rt_count 	= stats->preempted_rt_count;
+		out->ps_preempted_by_rt_count 	= stats->preempted_by_rt_count;
+		out->ps_rt_sched_count		= stats->rt_sched_count;
+		out->ps_interrupt_count 	= stats->interrupt_count;
+		out->ps_ipi_count 		= stats->ipi_count;
+		out->ps_timer_pop_count 	= stats->timer_pop_count;
+		out->ps_runq_count_sum 		= SCHED(processor_runq_stats_count_sum)(processor);
+		out->ps_idle_transitions	= stats->idle_transitions;
+
+		out++;
+		processor = processor->processor_list;
+	}
+
+	*count = (uint32_t) (processor_count * sizeof(struct _processor_statistics_np));
+
+	simple_unlock(&processor_list_lock);
+
+	/* And include RT Queue information */
+	bzero(out, sizeof(*out));
+	out->ps_cpuid = (-1);
+	out->ps_runq_count_sum = rt_runq.runq_stats.count_sum;
+	out++;
+	*count += (uint32_t)sizeof(struct _processor_statistics_np);
+
+	/* And include Fair Share Queue information at the end */
+	bzero(out, sizeof(*out));
+	out->ps_cpuid = (-2);
+	out->ps_runq_count_sum = SCHED(fairshare_runq_stats_count_sum)();
+	*count += (uint32_t)sizeof(struct _processor_statistics_np);
+	
+	return KERN_SUCCESS;
 }
 
 kern_return_t

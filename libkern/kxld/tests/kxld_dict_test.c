@@ -27,11 +27,10 @@
  */
 #include <assert.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <strings.h>
 
 #include "kxld_dict.h"
-#include "kxld_util.h"
+#include "kxld_test.h"
 
 #define KEYLEN 40
 #define STRESSNUM 10000
@@ -40,22 +39,6 @@ typedef struct {
     char * key;
     int * value;
 } Stress;
-
-
-void kxld_test_log(KXLDLogSubsystem sys, KXLDLogLevel level,
-    const char *format, va_list ap, void *user_data);
-
-void 
-kxld_test_log(KXLDLogSubsystem sys __unused, KXLDLogLevel level __unused,
-    const char *format, va_list ap, void *user_data __unused)
-{
-    va_list args;
-
-    va_copy(args, ap);
-    vfprintf(stderr, format, args);
-    fprintf(stderr, "\n");
-    va_end(args);
-}
 
 int 
 main(int argc __unused, char *argv[] __unused)
@@ -69,20 +52,21 @@ main(int argc __unused, char *argv[] __unused)
     Stress stress_test[STRESSNUM];
 
     kxld_set_logging_callback(kxld_test_log);
+    kxld_set_logging_callback_data("kxld_dict_test", NULL);
 
     bzero(&dict, sizeof(dict));
     
-    fprintf(stderr, "%d: Initialize\n", ++test_num);
+    kxld_log(0, 0, "%d: Initialize", ++test_num);
     result = kxld_dict_init(&dict, kxld_dict_string_hash, kxld_dict_string_cmp, 10);
     assert(result == KERN_SUCCESS);
     size = kxld_dict_get_num_entries(&dict);
     assert(size == 0);
     
-    fprintf(stderr, "%d: Find nonexistant key\n", ++test_num);
+    kxld_log(0, 0, "%d: Find nonexistant key", ++test_num);
     b = kxld_dict_find(&dict, "hi");
     assert(b == NULL);
     
-    fprintf(stderr, "%d: Insert and find\n", ++test_num);
+    kxld_log(0, 0, "%d: Insert and find", ++test_num);
     result = kxld_dict_insert(&dict, "hi", &a1);
     assert(result == KERN_SUCCESS);
     b = kxld_dict_find(&dict, "hi");
@@ -90,7 +74,7 @@ main(int argc __unused, char *argv[] __unused)
     size = kxld_dict_get_num_entries(&dict);
     assert(size == 1);
     
-    fprintf(stderr, "%d: Insert same key with different values\n", ++test_num);
+    kxld_log(0, 0, "%d: Insert same key with different values", ++test_num);
     result = kxld_dict_insert(&dict, "hi", &a2);
     assert(result == KERN_SUCCESS);
     b = kxld_dict_find(&dict, "hi");
@@ -98,15 +82,16 @@ main(int argc __unused, char *argv[] __unused)
     size = kxld_dict_get_num_entries(&dict);
     assert(size == 1);
     
-    fprintf(stderr, "%d: Clear and find of nonexistant key\n", ++test_num);
+    kxld_log(0, 0, "%d: Clear and find of nonexistant key", ++test_num);
     kxld_dict_clear(&dict);
     result = kxld_dict_init(&dict, kxld_dict_string_hash, kxld_dict_string_cmp, 10);
+    assert(result == KERN_SUCCESS);
     b = kxld_dict_find(&dict, "hi");
     assert(b == NULL);
     size = kxld_dict_get_num_entries(&dict);
     assert(size == 0);
     
-    fprintf(stderr, "%d: Insert multiple keys\n", ++test_num);
+    kxld_log(0, 0, "%d: Insert multiple keys", ++test_num);
     result = kxld_dict_insert(&dict, "hi", &a1);
     assert(result == KERN_SUCCESS);
     result = kxld_dict_insert(&dict, "hello", &a2);
@@ -119,7 +104,7 @@ main(int argc __unused, char *argv[] __unused)
     size = kxld_dict_get_num_entries(&dict);
     assert(size == 2);
     
-    fprintf(stderr, "%d: Remove keys\n", ++test_num);
+    kxld_log(0, 0, "%d: Remove keys", ++test_num);
     kxld_dict_remove(&dict, "hi", &b);
     assert(b && *(int*)b == a1);
     b = kxld_dict_find(&dict, "hi");
@@ -129,17 +114,18 @@ main(int argc __unused, char *argv[] __unused)
     size = kxld_dict_get_num_entries(&dict);
     assert(size == 1);
     
-    fprintf(stderr, "%d: Stress test - %d insertions and finds\n", ++test_num, STRESSNUM);
+    kxld_log(0, 0, "%d: Stress test - %d insertions and finds", ++test_num, STRESSNUM);
 
     kxld_dict_clear(&dict);
     result = kxld_dict_init(&dict, kxld_dict_string_hash, kxld_dict_string_cmp, 10);
+    assert(result == KERN_SUCCESS);
     for (i = 0; i < STRESSNUM; ++i) {
         int * tmp_value = kxld_alloc(sizeof(int));
         char * tmp_key = kxld_alloc(sizeof(char) * (KEYLEN + 1));
         
         *tmp_value = i;
         for (j = 0; j < KEYLEN; ++j) {
-            tmp_key[j] = (rand() % 26) + 'a';
+            tmp_key[j] = (random() % 26) + 'a';
         }
         tmp_key[KEYLEN] = '\0';
         
@@ -161,10 +147,10 @@ main(int argc __unused, char *argv[] __unused)
         kxld_free(stress_test[i].value, sizeof(int));
     }
 
-    fprintf(stderr, "%d: Destroy\n", ++test_num);
+    kxld_log(0, 0, "%d: Destroy", ++test_num);
     kxld_dict_deinit(&dict);
     
-    fprintf(stderr, "\nAll tests passed!  Now check for memory leaks...\n");
+    kxld_log(0, 0, "\nAll tests passed!  Now check for memory leaks...");
     
     kxld_print_memory_report();
     

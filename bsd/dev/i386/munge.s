@@ -140,15 +140,91 @@ Entry(munge_wl)			/* Costs an extra w move to do this */
 ENTRY(munge_wlw)
 	movl	8(%esp),%ecx	// get &uu_args
 	xorl	%edx,%edx
-	movl	12(%ecx),%eax
+Lwlw:
+	movl	12(%ecx),%eax	//l
 	movl	%eax,16(%ecx)
 	movl	%edx,20(%ecx)
-	movl	8(%ecx),%eax
+Lwl:
+	movl	8(%ecx),%eax	//l
 	movl	%eax,12(%ecx)
 	movl	4(%ecx),%eax
 	movl	%eax,8(%ecx)
-	movl	%edx,4(%ecx)
+	movl	%edx,4(%ecx)	//w
 	ret
+
+ENTRY(munge_wlwwwll)
+	movl	8(%esp),%ecx	// get &uu_args
+	xorl	%edx,%edx
+Lwlwwwll:
+	movl	36(%ecx),%eax
+	movl	%eax,52(%ecx)
+	movl	32(%ecx),%eax
+	movl	%eax,48(%ecx)
+	movl	28(%ecx),%eax
+	movl	%eax,44(%ecx)
+	movl	24(%ecx),%eax
+	movl	%eax,40(%ecx)
+	movl	20(%ecx),%eax
+	movl	%eax,32(%ecx)
+	movl	%edx,36(%ecx)
+Lwlww:
+	movl	16(%ecx),%eax
+	movl	%eax,24(%ecx)
+	movl	%edx,28(%ecx)
+	jmp 	Lwlw
+
+ENTRY(munge_wlwwwllw)
+	movl	8(%esp),%ecx	// get &uu_args
+	xorl	%edx,%edx
+	movl	40(%ecx),%eax
+	movl	%eax,56(%ecx)
+	movl	%edx,60(%ecx)
+	jmp	Lwlwwwll
+
+ENTRY(munge_wlwwlwlw)
+	movl	8(%esp),%ecx	// get &uu_args
+	xorl	%edx,%edx
+	movl	40(%ecx),%eax
+	movl	%eax,56(%ecx)
+	movl	%edx,60(%ecx)
+	movl	36(%ecx),%eax
+	movl	%eax,52(%ecx)
+	movl	32(%ecx),%eax
+	movl	%eax,48(%ecx)
+	movl	28(%ecx),%eax
+	movl	%eax,40(%ecx)
+	movl	%edx,44(%ecx)
+	movl	24(%ecx),%eax
+	movl	%eax,36(%ecx)
+	movl	20(%ecx),%eax
+	movl	%eax,32(%ecx)
+	jmp 	Lwlww
+
+ENTRY(munge_wllwwll)
+	movl	8(%esp),%ecx	// get &uu_args
+	xorl	%edx,%edx
+
+	movl	40(%ecx),%eax	// l
+	movl	%eax,52(%ecx)
+	movl	36(%ecx),%eax
+	movl	%eax,48(%ecx)
+	movl	32(%ecx),%eax	// l
+	movl	%eax,44(%ecx)
+	movl	28(%ecx),%eax
+	movl	%eax,40(%ecx)
+
+	movl	24(%ecx),%eax	//w
+	movl	%eax,32(%ecx)
+	movl	%edx,36(%ecx)
+	movl	20(%ecx),%eax	//w
+	movl	%eax,24(%ecx)
+	movl	%edx,28(%ecx)
+
+	movl	16(%ecx),%eax	//l
+	movl	%eax,20(%ecx)
+	movl	12(%ecx),%eax
+	movl	%eax,16(%ecx)
+	jmp	Lwl
 
 Entry(munge_wwwlw)
 	movl	8(%esp),%ecx	// get &uu_args
@@ -195,6 +271,63 @@ ENTRY(munge_wwwwwl)
 	movl	%eax,44(%ecx)
 	jmp	Lw5
 
+ENTRY(munge_wwwwwlww)
+	movl	8(%esp),%ecx	// get &uu_args
+	xorl	%edx,%edx
+	movl	32(%ecx),%eax
+	movl	%eax,56(%ecx)
+	movl	%edx,60(%ecx)
+	movl	28(%ecx),%eax
+	movl	%eax,48(%ecx)
+	movl	%edx,52(%ecx)
+	movl	20(%ecx),%eax
+	movl	%eax,40(%ecx)
+	movl	24(%ecx),%eax
+	movl	%eax,44(%ecx)
+	jmp	Lw5
+
+ENTRY(munge_wwwwwllw)
+	movl	8(%esp),%ecx	// get &uu_args
+	xorl	%edx,%edx
+	movl	36(%ecx),%eax
+	movl	%eax,56(%ecx)
+	movl	%edx,60(%ecx)
+	movl	28(%ecx),%eax
+	movl	%eax,48(%ecx)
+	movl	32(%ecx),%eax
+	movl	%eax,52(%ecx)
+	movl	20(%ecx),%eax
+	movl	%eax,40(%ecx)
+	movl	24(%ecx),%eax
+	movl	%eax,44(%ecx)
+	jmp	Lw5
+
+ENTRY(munge_wwwwwlll)
+	movl	8(%esp),%ecx	// get &uu_args
+	xorl	%edx,%edx
+	movl	36(%ecx),%eax
+	movl	%eax,56(%ecx)
+	movl	40(%ecx),%eax
+	movl	%eax,60(%ecx)
+	movl	28(%ecx),%eax
+	movl	%eax,48(%ecx)
+	movl	32(%ecx),%eax
+	movl	%eax,52(%ecx)
+	movl	20(%ecx),%eax
+	movl	%eax,40(%ecx)
+	movl	24(%ecx),%eax
+	movl	%eax,44(%ecx)
+	jmp	Lw5
+
+ENTRY(munge_wwwwwwl)
+	movl	8(%esp),%ecx	// get &uu_args
+	xorl	%edx,%edx
+	movl	24(%ecx),%eax
+	movl	%eax,48(%ecx)
+	movl	28(%ecx),%eax
+	movl	%eax,52(%ecx)
+	jmp 	Lw6
+	
 ENTRY(munge_wwwwwwlw)
 	movl	8(%esp),%ecx	// get &uu_args
 	xorl	%edx,%edx

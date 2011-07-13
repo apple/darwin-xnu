@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -119,6 +119,7 @@
 #include <net/dlil.h>
 
 #include <kern/locks.h>
+#include <kern/thread_call.h>
 
 #if CONFIG_MACF_NET
 #include <security/mac_framework.h>
@@ -147,13 +148,13 @@ static caddr_t bpf_alloc();
  * The default read buffer size is patchable.
  */
 static unsigned int bpf_bufsize = BPF_BUFSIZE;
-SYSCTL_INT(_debug, OID_AUTO, bpf_bufsize, CTLFLAG_RW, 
+SYSCTL_INT(_debug, OID_AUTO, bpf_bufsize, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&bpf_bufsize, 0, "");
-static unsigned int bpf_maxbufsize = BPF_MAXBUFSIZE;
-SYSCTL_INT(_debug, OID_AUTO, bpf_maxbufsize, CTLFLAG_RW, 
+__private_extern__ unsigned int bpf_maxbufsize = BPF_MAXBUFSIZE;
+SYSCTL_INT(_debug, OID_AUTO, bpf_maxbufsize, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&bpf_maxbufsize, 0, "");
 static unsigned int bpf_maxdevices = 256;
-SYSCTL_UINT(_debug, OID_AUTO, bpf_maxdevices, CTLFLAG_RW, 
+SYSCTL_UINT(_debug, OID_AUTO, bpf_maxdevices, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&bpf_maxdevices, 0, "");
 
 /*
@@ -196,6 +197,7 @@ static void	bpf_mcopy(const void *, void *, size_t);
 static int	bpf_movein(struct uio *, int,
 		    struct mbuf **, struct sockaddr *, int *);
 static int	bpf_setif(struct bpf_d *, ifnet_t ifp, u_int32_t dlt);
+static void bpf_timed_out(void *, void *);
 static void bpf_wakeup(struct bpf_d *);
 static void	catchpacket(struct bpf_d *, u_char *, u_int,
 		    u_int, void (*)(const void *, void *, size_t));
@@ -216,26 +218,26 @@ static int bpf_tap_callback(struct ifnet *ifp, struct mbuf *m);
  * Darwin differs from BSD here, the following are static
  * on BSD and not static on Darwin.
  */
-	d_open_t	bpfopen;
-	d_close_t	bpfclose;
-	d_read_t	bpfread;
-	d_write_t	bpfwrite;
-	 ioctl_fcn_t	bpfioctl;
-	select_fcn_t	bpfpoll;
+	d_open_t	    bpfopen;
+	d_close_t	    bpfclose;
+	d_read_t	    bpfread;
+	d_write_t	    bpfwrite;
+    ioctl_fcn_t	    bpfioctl;
+    select_fcn_t	bpfselect;
 
 
 /* Darwin's cdevsw struct differs slightly from BSDs */
 #define CDEV_MAJOR 23
 static struct cdevsw bpf_cdevsw = {
-	/* open */	bpfopen,
-	/* close */	bpfclose,
-	/* read */	bpfread,
-	/* write */	bpfwrite,
-	/* ioctl */	bpfioctl,
+	/* open */	    bpfopen,
+	/* close */	    bpfclose,
+	/* read */	    bpfread,
+	/* write */	    bpfwrite,
+	/* ioctl */	    bpfioctl,
 	/* stop */		eno_stop,
 	/* reset */		eno_reset,
 	/* tty */		NULL,
-	/* select */	bpfpoll,
+	/* select */	bpfselect,
 	/* mmap */		eno_mmap,
 	/* strategy*/	eno_strat,
 	/* getc */		eno_getc,
@@ -314,6 +316,11 @@ bpf_movein(struct uio *uio, int linktype, struct mbuf **mp, struct sockaddr *soc
 		sa_family = AF_IEEE80211;
 		hlen = 0;
 		break;
+	
+	case DLT_IEEE802_11_RADIO:
+		sa_family = AF_IEEE80211;
+		hlen = 0;
+		break;
 
 	default:
 		return (EIO);
@@ -367,6 +374,7 @@ bpf_movein(struct uio *uio, int linktype, struct mbuf **mp, struct sockaddr *soc
 	m->m_pkthdr.len = m->m_len = len;
 	m->m_pkthdr.rcvif = NULL;
 	*mp = m;
+	
 	/*
 	 * Make room for link header.
 	 */
@@ -383,8 +391,25 @@ bpf_movein(struct uio *uio, int linktype, struct mbuf **mp, struct sockaddr *soc
 			goto bad;
 	}
 	error = UIOMOVE(mtod(m, caddr_t), len - hlen, UIO_WRITE, uio);
-	if (!error)
-		return (0);
+	if (error)
+		goto bad;
+	
+	/* Check for multicast destination */
+	switch (linktype) {
+		case DLT_EN10MB: {
+			struct ether_header *eh = mtod(m, struct ether_header *);
+			
+			if (ETHER_IS_MULTICAST(eh->ether_dhost)) {
+				if (_ether_cmp(etherbroadcastaddr, eh->ether_dhost) == 0)
+					m->m_flags |= M_BCAST;
+				else
+					m->m_flags |= M_MCAST;
+			}
+			break;
+		}
+	}
+	
+	return 0;
  bad:
 	m_freem(m);
 	return (error);
@@ -551,6 +576,59 @@ bpf_detachd(struct bpf_d *d)
 
 
 /*
+ * Start asynchronous timer, if necessary.
+ * Must be called with bpf_mlock held.
+ */
+static void
+bpf_start_timer(struct bpf_d *d)
+{
+	uint64_t deadline;
+	struct timeval tv;
+
+	if (d->bd_rtout > 0 && d->bd_state == BPF_IDLE) {
+		tv.tv_sec = d->bd_rtout / hz;
+		tv.tv_usec = (d->bd_rtout % hz) * tick;
+
+		clock_interval_to_deadline((uint64_t)tv.tv_sec * USEC_PER_SEC + tv.tv_usec,
+				NSEC_PER_USEC,
+				&deadline);
+		/*
+		 * The state is BPF_IDLE, so the timer hasn't 
+		 * been started yet, and hasn't gone off yet;
+		 * there is no thread call scheduled, so this
+		 * won't change the schedule.
+		 *
+		 * XXX - what if, by the time it gets entered,
+		 * the deadline has already passed?
+		 */
+		thread_call_enter_delayed(d->bd_thread_call, deadline);
+		d->bd_state = BPF_WAITING;
+	}
+}
+
+/*
+ * Cancel asynchronous timer.
+ * Must be called with bpf_mlock held.
+ */
+static boolean_t
+bpf_stop_timer(struct bpf_d *d)
+{
+	/*
+	 * If the timer has already gone off, this does nothing.
+	 * Our caller is expected to set d->bd_state to BPF_IDLE,
+	 * with the bpf_mlock, after we are called. bpf_timed_out()
+	 * also grabs bpf_mlock, so, if the timer has gone off and 
+	 * bpf_timed_out() hasn't finished, it's waiting for the
+	 * lock; when this thread releases the lock, it will 
+	 * find the state is BPF_IDLE, and just release the 
+	 * lock and return.
+	 */
+	return (thread_call_cancel(d->bd_thread_call));
+}
+
+
+
+/*
  * Open ethernet device.  Returns ENXIO for illegal minor device number,
  * EBUSY if file is open by another process.
  */
@@ -612,6 +690,16 @@ bpfopen(dev_t dev, int flags, __unused int fmt,
 	d->bd_sig = SIGIO;
 	d->bd_seesent = 1;
 	d->bd_oflags = flags;
+	d->bd_state = BPF_IDLE;
+    d->bd_thread_call = thread_call_allocate(bpf_timed_out, d);
+
+	if (d->bd_thread_call == NULL) {
+		printf("bpfopen: malloc thread call failed\n");
+		bpf_dtab[minor(dev)] = NULL;
+		lck_mtx_unlock(bpf_mlock);
+		_FREE(d, M_DEVBUF);
+		return ENOMEM;
+	}
 #if CONFIG_MACF_NET
 	mac_bpfdesc_label_init(d);
 	mac_bpfdesc_label_associate(kauth_cred_get(), d);
@@ -643,12 +731,67 @@ bpfclose(dev_t dev, __unused int flags, __unused int fmt,
 	}	
 	bpf_dtab[minor(dev)] = (void *)1;		/* Mark closing */
 
+	/*
+	 * Deal with any in-progress timeouts.
+	 */
+	switch (d->bd_state) {
+		case BPF_IDLE:
+			/*
+			 * Not waiting for a timeout, and no timeout happened.
+			 */
+			break;
+
+		case BPF_WAITING:
+			/*
+			 * Waiting for a timeout.
+			 * Cancel any timer that has yet to go off,
+			 * and mark the state as "closing".
+			 * Then drop the lock to allow any timers that
+			 * *have* gone off to run to completion, and wait
+			 * for them to finish.
+			 */
+			if (!bpf_stop_timer(d)) {
+				/*
+				 * There was no pending call, so the call must 
+				 * have been in progress. Wait for the call to
+				 * complete; we have to drop the lock while 
+				 * waiting. to let the in-progrss call complete
+				 */
+				d->bd_state = BPF_DRAINING;
+				while (d->bd_state == BPF_DRAINING)
+					msleep((caddr_t)d, bpf_mlock, PRINET,
+							"bpfdraining", NULL);
+			}
+			d->bd_state = BPF_IDLE;
+			break;
+
+		case BPF_TIMED_OUT:
+			/*
+			 * Timer went off, and the timeout routine finished.
+			 */
+			d->bd_state = BPF_IDLE;
+			break;
+
+		case BPF_DRAINING:
+			/*
+			 * Another thread is blocked on a close waiting for
+			 * a timeout to finish.
+			 * This "shouldn't happen", as the first thread to enter
+			 * bpfclose() will set bpf_dtab[minor(dev)] to 1, and 
+			 * all subsequent threads should see that and fail with 
+			 * ENXIO.
+			 */
+			panic("Two threads blocked in a BPF close");
+			break;
+	}
+
 	if (d->bd_bif)
 		bpf_detachd(d);
 	selthreadclear(&d->bd_sel);
 #if CONFIG_MACF_NET
 	mac_bpfdesc_label_destroy(d);
 #endif
+	thread_call_free(d->bd_thread_call);
 	bpf_freed(d);
 
 	/* Mark free in same context as bpfopen comes to check */
@@ -666,15 +809,12 @@ bpfclose(dev_t dev, __unused int flags, __unused int fmt,
 static int
 bpf_sleep(struct bpf_d *d, int pri, const char *wmesg, int timo)
 {
-	int st;
+	u_int64_t abstime = 0;
 
-	lck_mtx_unlock(bpf_mlock);
+	if(timo)
+		clock_interval_to_deadline(timo, NSEC_PER_SEC / hz, &abstime);
 	
-	st = tsleep((caddr_t)d, pri, wmesg, timo);
-	
-	lck_mtx_lock(bpf_mlock);
-	
-	return st;
+	return msleep1((caddr_t)d, bpf_mlock, pri, wmesg, abstime);
 }
 
 /*
@@ -695,6 +835,7 @@ int
 bpfread(dev_t dev, struct uio *uio, int ioflag)
 {
 	struct bpf_d *d;
+	int timed_out;
 	int error;
 
 	lck_mtx_lock(bpf_mlock);
@@ -705,7 +846,6 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 		return (ENXIO);
 	}
 
-
 	/*
 	 * Restrict application to use a buffer the same size as
 	 * as kernel buffers.
@@ -714,6 +854,12 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 		lck_mtx_unlock(bpf_mlock);
 		return (EINVAL);
 	}
+	
+ 	if (d->bd_state == BPF_WAITING)
+		bpf_stop_timer(d);
+	
+	timed_out = (d->bd_state == BPF_TIMED_OUT);
+	d->bd_state = BPF_IDLE;
 
 	/*
 	 * If the hold buffer is empty, then do a timed sleep, which
@@ -721,9 +867,14 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 	 * have arrived to fill the store buffer.
 	 */
 	while (d->bd_hbuf == 0) {
-		if (d->bd_immediate && d->bd_slen != 0) {
+		if ((d->bd_immediate || timed_out || (ioflag & IO_NDELAY)) 
+			&& d->bd_slen != 0) {
 			/*
-			 * A packet(s) either arrived since the previous
+			 * We're in immediate mode, or are reading
+			 * in non-blocking mode, or a timer was
+			 * started before the read (e.g., by select()
+			 * or poll()) and has expired and a packet(s)
+			 * either arrived since the previous
 			 * read or arrived while we were asleep.
 			 * Rotate the buffers and return what's here.
 			 */
@@ -806,6 +957,10 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 static void
 bpf_wakeup(struct bpf_d *d)
 {
+	if (d->bd_state == BPF_WAITING) {
+		bpf_stop_timer(d);
+		d->bd_state = BPF_IDLE;
+	}
 	wakeup((caddr_t)d);
 	if (d->bd_async && d->bd_sig && d->bd_sigio)
 		pgsigio(d->bd_sigio, d->bd_sig);
@@ -826,6 +981,36 @@ bpf_wakeup(struct bpf_d *d)
 #endif
 }
 
+
+static void
+bpf_timed_out(void *arg, __unused void *dummy)
+{
+	struct bpf_d *d = (struct bpf_d *)arg;
+
+	lck_mtx_lock(bpf_mlock);
+	if (d->bd_state == BPF_WAITING) {
+		/*
+		 * There's a select or kqueue waiting for this; if there's 
+		 * now stuff to read, wake it up.
+		 */
+		d->bd_state = BPF_TIMED_OUT;
+		if (d->bd_slen != 0)
+			bpf_wakeup(d);
+	} else if (d->bd_state == BPF_DRAINING) {
+		/*
+		 * A close is waiting for this to finish.
+		 * Mark it as finished, and wake the close up.
+		 */
+		d->bd_state = BPF_IDLE;
+		bpf_wakeup(d);
+	}
+	lck_mtx_unlock(bpf_mlock);
+}
+	
+
+
+
+
 /* keep in sync with bpf_movein above: */
 #define MAX_DATALINK_HDR_LEN	(sizeof(struct firewire_header))
 
@@ -838,6 +1023,8 @@ bpfwrite(dev_t dev, struct uio *uio, __unused int ioflag)
 	int error;
 	char 		  dst_buf[SOCKADDR_HDR_LEN + MAX_DATALINK_HDR_LEN];
 	int datlen = 0;
+    int bif_dlt;
+    int bd_hdrcmplt;
 
 	lck_mtx_lock(bpf_mlock);
 
@@ -853,17 +1040,47 @@ bpfwrite(dev_t dev, struct uio *uio, __unused int ioflag)
 
 	ifp = d->bd_bif->bif_ifp;
 
+	if ((ifp->if_flags & IFF_UP) == 0) {
+		lck_mtx_unlock(bpf_mlock);
+		return (ENETDOWN);
+	}
 	if (uio_resid(uio) == 0) {
 		lck_mtx_unlock(bpf_mlock);
 		return (0);
 	}
 	((struct sockaddr *)dst_buf)->sa_len = sizeof(dst_buf);
-	error = bpf_movein(uio, (int)d->bd_bif->bif_dlt, &m, 
-			   d->bd_hdrcmplt ? NULL : (struct sockaddr *)dst_buf,
-			   &datlen);
-	if (error) {
-		lck_mtx_unlock(bpf_mlock);
+
+   /*
+    * fix for PR-6849527
+    * geting variables onto stack before dropping lock for bpf_movein()
+    */
+    bif_dlt = (int)d->bd_bif->bif_dlt;
+    bd_hdrcmplt  = d->bd_hdrcmplt;
+ 
+	/* bpf_movein allocating mbufs; drop lock */
+    lck_mtx_unlock(bpf_mlock);
+
+	error = bpf_movein(uio, bif_dlt, &m, 
+    bd_hdrcmplt ? NULL : (struct sockaddr *)dst_buf,
+    &datlen);
+	
+    if (error) {
 		return (error);
+	}
+
+	/* taking the lock again and verifying whether device is open */
+    lck_mtx_lock(bpf_mlock);
+	d = bpf_dtab[minor(dev)];
+	if (d == 0 || d == (void *)1) {
+		lck_mtx_unlock(bpf_mlock);
+		m_freem(m);
+		return (ENXIO);
+	}
+
+	if (d->bd_bif == NULL) {
+		lck_mtx_unlock(bpf_mlock);
+		m_free(m);
+		return (ENXIO);
 	}
 
 	if ((unsigned)datlen > ifp->if_mtu) {
@@ -871,12 +1088,7 @@ bpfwrite(dev_t dev, struct uio *uio, __unused int ioflag)
 		m_freem(m);
 		return (EMSGSIZE);
 	}
-	
-	if ((error = ifp_use(ifp, kIfNetUseCount_MustNotBeZero)) != 0) {
-		lck_mtx_unlock(bpf_mlock);
-		m_freem(m);
-		return (error);
-	}
+
 
 #if CONFIG_MACF_NET
 	mac_mbuf_label_associate_bpfdesc(d, m);
@@ -892,10 +1104,7 @@ bpfwrite(dev_t dev, struct uio *uio, __unused int ioflag)
 	else {
 		error = dlil_output(ifp, PF_INET, m, NULL, (struct sockaddr *)dst_buf, 0);
 	}
-	
-	if (ifp_unuse(ifp) != 0)
-		ifp_use_reached_zero(ifp);
-	
+
 	/*
 	 * The driver frees the mbuf.
 	 */
@@ -955,6 +1164,10 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 		lck_mtx_unlock(bpf_mlock);
 		return (ENXIO);
 	}
+
+	if (d->bd_state == BPF_WAITING)
+		bpf_stop_timer(d);
+	d->bd_state = BPF_IDLE;
 
 	switch (cmd) {
 
@@ -1124,14 +1337,31 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 	/*
 	 * Set read timeout.
 	 */
-	case BIOCSRTIMEOUT:
-		{
-			struct BPF_TIMEVAL *_tv = (struct BPF_TIMEVAL *)addr;
+        case BIOCSRTIMEOUT32:
+                {
+			struct user32_timeval *_tv = (struct user32_timeval *)addr;
 			struct timeval tv;
 
 			tv.tv_sec  = _tv->tv_sec;
 			tv.tv_usec = _tv->tv_usec;
 
+                        /*
+			 * Subtract 1 tick from tvtohz() since this isn't
+			 * a one-shot timer.
+			 */
+			if ((error = itimerfix(&tv)) == 0)
+				d->bd_rtout = tvtohz(&tv) - 1;
+			break;
+                }
+
+        case BIOCSRTIMEOUT64:
+                {
+			struct user64_timeval *_tv = (struct user64_timeval *)addr;
+			struct timeval tv;
+                        
+			tv.tv_sec  = _tv->tv_sec;
+			tv.tv_usec = _tv->tv_usec;
+                        
 			/*
 			 * Subtract 1 tick from tvtohz() since this isn't
 			 * a one-shot timer.
@@ -1139,19 +1369,28 @@ bpfioctl(dev_t dev, u_long cmd, caddr_t addr, __unused int flags,
 			if ((error = itimerfix(&tv)) == 0)
 				d->bd_rtout = tvtohz(&tv) - 1;
 			break;
-		}
-
-	/*
+                }
+	
+        /*
 	 * Get read timeout.
 	 */
-	case BIOCGRTIMEOUT:
+	case BIOCGRTIMEOUT32:
 		{
-			struct BPF_TIMEVAL *tv = (struct BPF_TIMEVAL *)addr;
+			struct user32_timeval *tv = (struct user32_timeval *)addr;
 
 			tv->tv_sec = d->bd_rtout / hz;
 			tv->tv_usec = (d->bd_rtout % hz) * tick;
 			break;
-		}
+                }
+
+	case BIOCGRTIMEOUT64:
+		{
+			struct user64_timeval *tv = (struct user64_timeval *)addr;
+
+			tv->tv_sec = d->bd_rtout / hz;
+			tv->tv_usec = (d->bd_rtout % hz) * tick;
+			break;
+                }
 
 	/*
 	 * Get packet stats.
@@ -1320,14 +1559,10 @@ bpf_setif(struct bpf_d *d, ifnet_t theywant, u_int32_t dlt)
 			continue;
 		/*
 		 * We found the requested interface.
-		 * If it's not up, return an error.
 		 * Allocate the packet buffers if we need to.
 		 * If we're already attached to requested interface,
 		 * just flush the buffer.
 		 */
-		if ((ifp->if_flags & IFF_UP) == 0)
-			return (ENETDOWN);
-
 		if (d->bd_sbuf == 0) {
 			error = bpf_allocbufs(d);
 			if (error != 0)
@@ -1441,10 +1676,10 @@ bpf_setdlt(struct bpf_d *d, uint32_t dlt)
  * Otherwise, return false but make a note that a selwakeup() must be done.
  */
 int
-bpfpoll(dev_t dev, int events, void * wql, struct proc *p)
+bpfselect(dev_t dev, int which, void * wql, struct proc *p)
 {
 	struct bpf_d *d;
-	int revents = 0;
+	int ret = 0;
 
 	lck_mtx_lock(bpf_mlock);
 
@@ -1454,24 +1689,37 @@ bpfpoll(dev_t dev, int events, void * wql, struct proc *p)
 		return (ENXIO);
 	}
 
-	/*
-	 * An imitation of the FIONREAD ioctl code.
-	 */
 	if (d->bd_bif == NULL) {
 		lck_mtx_unlock(bpf_mlock);
 		return (ENXIO);
 	}
 
-	if (events & (POLLIN | POLLRDNORM)) {
-		if (d->bd_hlen != 0 || (d->bd_immediate && d->bd_slen != 0))
-			revents |= events & (POLLIN | POLLRDNORM);
-		else
-			selrecord(p, &d->bd_sel, wql);
+	switch (which) {
+		case FREAD:
+			if (d->bd_hlen != 0 ||
+					((d->bd_immediate || d->bd_state == BPF_TIMED_OUT) &&
+					 d->bd_slen != 0))
+				ret = 1; /* read has data to return */
+			else {
+				/*
+				 * Read has no data to return.
+				 * Make the select wait, and start a timer if
+				 * necessary.
+				 */
+				selrecord(p, &d->bd_sel, wql);
+				bpf_start_timer(d);
+			}
+			break;
+
+		case FWRITE:
+			ret = 1; /* can't determine whether a write would block */
+			break;
 	}
 
 	lck_mtx_unlock(bpf_mlock);
-	return (revents);
+	return (ret);
 }
+
 
 /*
  * Support for kevent() system call.  Register EVFILT_READ filters and
@@ -1511,9 +1759,6 @@ bpfkqfilter(dev_t dev, struct knote *kn)
 		return (ENXIO);
 	}
 
-	/*
-	 * An imitation of the FIONREAD ioctl code.
-	 */
 	if (d->bd_bif == NULL) {
 		lck_mtx_unlock(bpf_mlock);
 		return (ENXIO);
@@ -1546,13 +1791,52 @@ filt_bpfread(struct knote *kn, long hint)
 		lck_mtx_lock(bpf_mlock);
 
 	if (d->bd_immediate) {
+		/*
+		 * If there's data in the hold buffer, it's the 
+		 * amount of data a read will return.
+		 *
+		 * If there's no data in the hold buffer, but
+		 * there's data in the store buffer, a read will
+		 * immediately rotate the store buffer to the 
+		 * hold buffer, the amount of data in the store
+		 * buffer is the amount of data a read will 
+		 * return.
+		 *
+		 * If there's no data in either buffer, we're not 
+		 * ready to read.
+		 */
 		kn->kn_data = (d->bd_hlen == 0 ? d->bd_slen : d->bd_hlen);
-		ready = (kn->kn_data >= ((kn->kn_sfflags & NOTE_LOWAT) ? 
-					kn->kn_sdata : 1));
+		int64_t lowwat = 1;
+		if (kn->kn_sfflags & NOTE_LOWAT)
+		{
+			if (kn->kn_sdata > d->bd_bufsize)
+				lowwat = d->bd_bufsize;
+			else if (kn->kn_sdata > lowwat)
+				lowwat = kn->kn_sdata;
+		}
+		ready = (kn->kn_data >= lowwat);
 	} else {
-		kn->kn_data = d->bd_hlen;
+		/*
+		 * If there's data in the hold buffer, it's the 
+		 * amount of data a read will return.
+		 *
+		 * If there's no data in the hold buffer, but 
+		 * there's data in the store buffer, if the 
+		 * timer has expired a read will immediately
+		 * rotate the store buffer to the hold buffer,
+		 * so the amount of data in the store buffer is 
+		 * the amount of data a read will return.
+		 *
+		 * If there's no data in either buffer, or there's 
+		 * no data in the hold buffer and the timer hasn't 
+		 * expired, we're not ready to read.
+		 */
+		kn->kn_data = (d->bd_hlen == 0 && d->bd_state == BPF_TIMED_OUT ? 
+				d->bd_slen : d->bd_hlen);
 		ready = (kn->kn_data > 0);
 	}
+	if (!ready)
+		bpf_start_timer(d);
 
 	if (hint == 0)
 		lck_mtx_unlock(bpf_mlock);
@@ -1721,6 +2005,7 @@ catchpacket(struct bpf_d *d, u_char *pkt, u_int pktlen, u_int snaplen,
 	struct bpf_hdr *hp;
 	int totlen, curlen;
 	int hdrlen = d->bd_bif->bif_hdrlen;
+	int do_wakeup = 0;
 	/*
 	 * Figure out how many bytes to move.  If the packet is
 	 * greater or equal to the snapshot length, transfer that
@@ -1741,7 +2026,7 @@ catchpacket(struct bpf_d *d, u_char *pkt, u_int pktlen, u_int snaplen,
 		 * Rotate the buffers if we can, then wakeup any
 		 * pending reads.
 		 */
-		if (d->bd_fbuf == 0) {
+		if (d->bd_fbuf == NULL) {
 			/*
 			 * We haven't completed the previous read yet,
 			 * so drop the packet.
@@ -1750,15 +2035,16 @@ catchpacket(struct bpf_d *d, u_char *pkt, u_int pktlen, u_int snaplen,
 			return;
 		}
 		ROTATE_BUFFERS(d);
-		bpf_wakeup(d);
+		do_wakeup = 1;
 		curlen = 0;
 	}
-	else if (d->bd_immediate)
+	else if (d->bd_immediate || d->bd_state == BPF_TIMED_OUT)
 		/*
-		 * Immediate mode is set.  A packet arrived so any
-		 * reads should be woken up.
+		 * Immediate mode is set, or the read timeout has 
+		 * already expired during a select call. A packet 
+		 * arrived, so the reader should be woken up.
 		 */
-		bpf_wakeup(d);
+		do_wakeup = 1;
 
 	/*
 	 * Append the bpf header.
@@ -1775,6 +2061,9 @@ catchpacket(struct bpf_d *d, u_char *pkt, u_int pktlen, u_int snaplen,
 	 */
 	(*cpfn)(pkt, (u_char *)hp + hdrlen, (hp->bh_caplen = totlen - hdrlen));
 	d->bd_slen = curlen + totlen;
+
+	if (do_wakeup)
+		bpf_wakeup(d);
 }
 
 /*

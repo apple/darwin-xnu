@@ -103,16 +103,6 @@ bool IOBufferMemoryDescriptor::initWithPhysicalMask(
     // Grab IOMD bits from the Buffer MD options
     iomdOptions  |= (options & kIOBufferDescriptorMemoryFlags);
 
-#if 0
-    // workarounds-
-    if ((options & kIOMemoryPhysicallyContiguous) || ((capacity == 0x1000) && (inTask == kernel_task))
-      && !physicalMask)
-    {
-	highestMask = physicalMask = 0xFFFFF000;
-    }
-    //-
-#endif
-
     if (physicalMask && (alignment <= 1))
     {
 	alignment   = ((physicalMask ^ (-1ULL)) & (physicalMask - 1));

@@ -145,12 +145,6 @@
 #define __need_mcontext_t
 #define __need_stack_t
 #define __need_ucontext_t
-#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#if defined(__ppc__) || defined(__ppc64__)
-#define __need_mcontext64_t
-#define __need_ucontext64_t
-#endif /* __ppc__  || __ppc64__ */
-#endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 #include <sys/_structs.h>
 
 #ifndef _PID_T

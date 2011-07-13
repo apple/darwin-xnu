@@ -59,7 +59,6 @@ The
 data structure is defined as follows:
 .nf
 .in +4n
-
 struct auditinfo {
 	au_id_t        ai_auid;         /* Audit user ID */
 	au_mask_t      ai_mask;         /* Audit masks */
@@ -74,15 +73,13 @@ The
 .Fa ai_auid
 variable contains the audit identifier which is recorded in the audit log for
 each event the process caused.
-.PP
-
+.Pp
 The
 .Fa au_mask_t
 data structure defines the bit mask for auditing successful and failed events
 out of the predefined list of event classes. It is defined as follows:
 .nf
 .in +4n
-
 struct au_mask {
 	unsigned int    am_success;     /* success bits */
 	unsigned int    am_failure;     /* failure bits */
@@ -90,15 +87,13 @@ struct au_mask {
 typedef struct au_mask  au_mask_t;
 .in
 .fi
-.PP
-
+.Pp
 The
 .Fa au_termid_t
 data structure defines the Terminal ID recorded with every event caused by the
 process. It is defined as follows:
 .nf
 .in +4n
-
 struct au_tid {
 	dev_t           port;
 	u_int32_t       machine;
@@ -106,8 +101,7 @@ struct au_tid {
 typedef struct au_tid   au_tid_t;
 .in
 .fi
-.PP
-
+.Pp
 The
 .Fa ai_asid
 variable contains the audit session ID which is recorded with every event
@@ -122,7 +116,6 @@ data structure supports Terminal IDs with larger addresses such as those used
 in IP version 6.  It is defined as follows:
 .nf
 .in +4n
-
 struct auditinfo_addr {
 	au_id_t         ai_auid;        /* Audit user ID. */
 	au_mask_t       ai_mask;        /* Audit masks. */
@@ -134,14 +127,12 @@ typedef struct auditinfo_addr   auditinfo_addr_t;
 .in
 .fi
 .Pp
-
 The
 .Fa au_tid_addr_t
 data structure which includes a larger address storage field and an additional
 field with the type of address stored:
 .nf
 .in +4n
-
 struct au_tid_addr {
 	dev_t           at_port;
 	u_int32_t       at_type;

@@ -119,13 +119,15 @@ void kxld_log(KXLDLogSubsystem subsystem, KXLDLogLevel level,
 #define kKxldLogMalformedMachO          "The Mach-O file is malformed: "
 #define kKxldLogMalformedVTable         "The vtable '%s' is malformed. Make sure your kext has been built against the correct headers."
 #define kKxldLogMissingVtable           "Cannot find the vtable '%s' for class '%s'. This vtable symbol is required for binary compatibility, and it may have been stripped."
+#define kKxldLogDirectPureVirtualCall   "This kext calls a pure virtual function. Make sure your kext's OSObject-derived classes implement all pure virtual functions."
 #define kKxldLogParentOutOfDate         "The super class vtable '%s' for vtable '%s' is out of date. Make sure your kext has been built against the correct headers."
 #define kKxldLogNoKmodInfo              "The kext is missing its kmod_info structure."
-#define kKxldLogInvalidSectReloc        "Relocation entry %u from section %s,%s cannot be processed."
-#define kKxldLogInvalidExtReloc         "External relocation entry %u cannot be processed."
-#define kKxldLogInvalidIntReloc         "Internal relocation entry %u cannot be processed."
 #define kKxldLogRelocationOverflow      "A relocation entry has overflowed. The kext may be too far from one " \
                                         "of its dependencies. Check your kext's load address."
+#define kKxldLogRelocatingPatchedSym    "Relocation failed because some class in this kext "    \
+    "didn't use the OSDeclareDefaultStructors and OSDefineMetaClassAndStructors, so it still "  \
+    "references %s, which has been patched with another symbol for binary compatibility. "      \
+    "Please make sure all classes that inherit from OSObject use these macros."
 
 /*******************************************************************************
 * Allocators 
@@ -183,10 +185,10 @@ void unswap_macho(u_char *file, enum NXByteOrder host_order,
 *******************************************************************************/
 
 kxld_addr_t kxld_align_address(kxld_addr_t address, u_int align)
-    __attribute__((const, nonnull, visibility("hidden")));
+    __attribute__((const, visibility("hidden")));
 
 boolean_t kxld_is_32_bit(cpu_type_t)
-    __attribute__((const, nonnull, visibility("hidden")));
+    __attribute__((const, visibility("hidden")));
 
 const char * kxld_strstr(const char *s, const char *find)
     __attribute__((pure, nonnull, visibility("hidden")));

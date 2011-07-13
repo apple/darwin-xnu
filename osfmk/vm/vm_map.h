@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -114,6 +114,9 @@ __END_DECLS
 #define current_map_fast()	(current_thread()->map)
 #define	current_map()		(current_map_fast())
 
+#include <vm/vm_map_store.h>
+
+
 /*
  *	Types defined:
  *
@@ -191,6 +194,7 @@ struct vm_named_entry {
  *		Control information for virtual copy operations is also
  *		stored in the address map entry.
  */
+
 struct vm_map_links {
 	struct vm_map_entry	*prev;		/* previous entry */
 	struct vm_map_entry	*next;		/* next entry */
@@ -204,6 +208,8 @@ struct vm_map_entry {
 #define vme_next		links.next
 #define vme_start		links.start
 #define vme_end			links.end
+
+	struct vm_map_store	store;
 	union vm_map_object	object;		/* object I point to */
 	vm_object_offset_t	offset;		/* offset into object */
 	unsigned int
@@ -230,7 +236,8 @@ struct vm_map_entry {
 	/* boolean_t */		permanent:1,	/* mapping can not be removed */
 	/* boolean_t */		superpage_size:3,/* use superpages of a certain size */
 	/* boolean_t */		zero_wired_pages:1, /* zero out the wired pages of this entry it is being deleted without unwiring them */
-	/* unsigned char */	pad:2;		/* available bits */
+	/* boolean_t */		used_for_jit:1,
+	/* unsigned char */	pad:1;		/* available bits */
 	unsigned short		wired_count;	/* can be paged if = 0 */
 	unsigned short		user_wired_count; /* for vm_wire */
 };
@@ -258,11 +265,17 @@ struct vm_map_entry {
  *	Description:
  *		Header for a vm_map and a vm_map_copy.
  */
+
+
 struct vm_map_header {
 	struct vm_map_links	links;		/* first, last, min, max */
 	int			nentries;	/* Number of entries */
 	boolean_t		entries_pageable;
 						/* are map entries pageable? */
+	vm_map_offset_t		highest_entry_end_addr;	/* The ending address of the highest allocated vm_entry_t */
+#ifdef VM_MAP_STORE_USE_RB
+	struct rb_head	rb_head_store;
+#endif
 };
 
 /*
@@ -285,6 +298,7 @@ struct _vm_map {
 	struct vm_map_header	hdr;		/* Map entry header */
 #define min_offset		hdr.links.start	/* start of range */
 #define max_offset		hdr.links.end	/* end of range */
+#define highest_entry_end	hdr.highest_entry_end_addr
 	pmap_t			pmap;		/* Physical map */
 	vm_map_size_t		size;		/* virtual size */
 	vm_map_size_t		user_wire_limit;/* rlimit on user locked memory */
@@ -298,14 +312,21 @@ struct _vm_map {
 	lck_mtx_ext_t		s_lock_ext;
 	vm_map_entry_t		hint;		/* hint for quick lookups */
 	vm_map_entry_t		first_free;	/* First free space hint */
-	boolean_t		wait_for_space;	/* Should callers wait
-						   for space? */
-	boolean_t		wiring_required;/* All memory wired? */
-	boolean_t		no_zero_fill;	/* No zero fill absent pages */
-	boolean_t		mapped;		/* has this map been mapped */
-	boolean_t		switch_protect;	/* Protect map from write faults while switched */
+	unsigned int		
+	/* boolean_t */		wait_for_space:1, /* Should callers wait for space? */
+	/* boolean_t */		wiring_required:1, /* All memory wired? */
+	/* boolean_t */		no_zero_fill:1, /*No zero fill absent pages */
+	/* boolean_t */		mapped:1, /*has this map been mapped */
+	/* boolean_t */		switch_protect:1, /*  Protect map from write faults while switched */
+	/* boolean_t */		disable_vmentry_reuse:1, /*  All vm entries should keep using newer and higher addresses in the map */ 
+	/* boolean_t */		map_disallow_data_exec:1, /* Disallow execution from data pages on exec-permissive architectures */
+	/* reserved */		pad:25;
 	unsigned int		timestamp;	/* Version number */
 	unsigned int		color_rr;	/* next color (not protected by a lock) */
+#if CONFIG_FREEZE
+	void			*default_freezer_toc;
+#endif
+ 	boolean_t		jit_entry_exists;
 } ;
 
 #define vm_map_to_entry(map)	((struct vm_map_entry *) &(map)->hdr.links)
@@ -800,6 +821,11 @@ extern vm_object_t convert_port_entry_to_object(
 	ipc_port_t	port);
 
 
+extern kern_return_t vm_map_set_cache_attr(
+        vm_map_t        map,
+        vm_map_offset_t va);
+
+
 /* definitions related to overriding the NX behavior */
 
 #define VM_ABI_32	0x1
@@ -931,6 +957,9 @@ extern kern_return_t	vm_map_copyin_common(
 extern void		vm_map_disable_NX(
 			        vm_map_t		map);
 
+extern void		vm_map_disallow_data_exec(
+			        vm_map_t		map);
+
 extern void		vm_map_set_64bit(
 			        vm_map_t		map);
 
@@ -963,6 +992,8 @@ extern void		vm_map_set_user_wire_limit(
 extern void vm_map_switch_protect(
 				vm_map_t		map, 
 				boolean_t		val);
+
+extern boolean_t first_free_is_valid(vm_map_t);
 
 #ifdef XNU_KERNEL_PRIVATE
 extern kern_return_t vm_map_page_info(
@@ -1028,6 +1059,27 @@ extern kern_return_t vm_map_get_upl(
 extern kern_return_t vm_map_sign(vm_map_t map, 
 				 vm_map_offset_t start, 
 				 vm_map_offset_t end);
+#endif
+
+#if CONFIG_FREEZE
+extern kern_return_t vm_map_freeze_walk(
+              	vm_map_t map,
+              	unsigned int *purgeable_count,
+              	unsigned int *wired_count,
+              	unsigned int *clean_count,
+              	unsigned int *dirty_count,
+              	boolean_t *has_shared);
+
+extern kern_return_t vm_map_freeze(
+             	vm_map_t map,
+             	unsigned int *purgeable_count,
+             	unsigned int *wired_count,
+             	unsigned int *clean_count,
+             	unsigned int *dirty_count,
+             	boolean_t *has_shared);
+                
+extern void vm_map_thaw(
+                vm_map_t map);
 #endif
 
 __END_DECLS

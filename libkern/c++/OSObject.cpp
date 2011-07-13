@@ -87,25 +87,6 @@ OSMetaClassDefineReservedUnused(OSObject, 13);
 OSMetaClassDefineReservedUnused(OSObject, 14);
 OSMetaClassDefineReservedUnused(OSObject, 15);
 
-#ifdef __ppc__
-OSMetaClassDefineReservedUnused(OSObject, 16);
-OSMetaClassDefineReservedUnused(OSObject, 17);
-OSMetaClassDefineReservedUnused(OSObject, 18);
-OSMetaClassDefineReservedUnused(OSObject, 19);
-OSMetaClassDefineReservedUnused(OSObject, 20);
-OSMetaClassDefineReservedUnused(OSObject, 21);
-OSMetaClassDefineReservedUnused(OSObject, 22);
-OSMetaClassDefineReservedUnused(OSObject, 23);
-OSMetaClassDefineReservedUnused(OSObject, 24);
-OSMetaClassDefineReservedUnused(OSObject, 25);
-OSMetaClassDefineReservedUnused(OSObject, 26);
-OSMetaClassDefineReservedUnused(OSObject, 27);
-OSMetaClassDefineReservedUnused(OSObject, 28);
-OSMetaClassDefineReservedUnused(OSObject, 29);
-OSMetaClassDefineReservedUnused(OSObject, 30);
-OSMetaClassDefineReservedUnused(OSObject, 31);
-#endif
-
 static const char *getClassName(const OSObject *obj)
 {
     const OSMetaClass *meta = obj->getMetaClass();
@@ -115,12 +96,6 @@ static const char *getClassName(const OSObject *obj)
 bool OSObject::init()
     { return true; }
 
-#if (!__ppc__) || (__GNUC__ < 3)
-
-// Implemented in assembler in post gcc 3.x systems as we have a problem
-// where the destructor in gcc2.95 gets 2 arguments.  The second argument
-// appears to be a flag argument.  I have copied the assembler from Puma xnu
-// to OSRuntimeSupport.c  So for 2.95 builds use the C 
 void OSObject::free()
 {
     const OSMetaClass *meta = getMetaClass();
@@ -129,7 +104,6 @@ void OSObject::free()
 	meta->instanceDestructed();
     delete this;
 }
-#endif /* (!__ppc__) || (__GNUC__ < 3) */
 
 int OSObject::getRetainCount() const
 {

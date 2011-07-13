@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -90,12 +90,15 @@
 /*
  * Encapsulation of namei parameters.
  */
-struct nameidata {
+struct nameidata {                         
 	/*
 	 * Arguments to namei/lookup.
 	 */
 	user_addr_t ni_dirp;		/* pathname pointer */
 	enum	uio_seg ni_segflg;	/* location of pathname */
+#if CONFIG_TRIGGERS
+	enum	path_operation ni_op;	/* intended operation, see enum path_operation in vnode.h */
+#endif /* CONFIG_TRIGGERS */
 	/*
 	 * Arguments to lookup.
 	 */
@@ -116,7 +119,24 @@ struct nameidata {
 	u_long	ni_loopcnt;		/* count of symlinks encountered */
 
 	struct componentname ni_cnd;
+	int32_t ni_flag;
+	int ni_ncgeneration;		/* For a batched vnop, grab generation beforehand */
 };
+
+#define NAMEI_CONTLOOKUP	0x002    /* Continue processing a lookup which was partially processed in a compound VNOP */
+#define NAMEI_TRAILINGSLASH	0x004    /* There was at least one trailing slash after last component */
+#define NAMEI_UNFINISHED	0x008    /* We broke off a lookup to do a compound op */
+/* 
+ * XXX Hack: we need to encode the intended VNOP in order to 
+ * be able to include information about which operations a filesystem
+ * supports in the decision to break off a lookup early.
+ */
+#define NAMEI_COMPOUNDOPEN	0x010	
+#define NAMEI_COMPOUNDREMOVE	0x020	
+#define NAMEI_COMPOUNDMKDIR	0x040	
+#define NAMEI_COMPOUNDRMDIR	0x080	
+#define NAMEI_COMPOUNDRENAME	0x100	
+#define NAMEI_COMPOUND_OP_MASK (NAMEI_COMPOUNDOPEN | NAMEI_COMPOUNDREMOVE | NAMEI_COMPOUNDMKDIR | NAMEI_COMPOUNDRMDIR | NAMEI_COMPOUNDRENAME)
 
 #ifdef KERNEL
 /*
@@ -169,7 +189,27 @@ struct nameidata {
 /*
  * Initialization of an nameidata structure.
  */
-#define NDINIT(ndp, op, flags, segflg, namep, ctx) { \
+
+#if CONFIG_TRIGGERS
+/* Note: vnode triggers require more precise path operation (ni_op) */ 
+
+#define NDINIT(ndp, op, pop, flags, segflg, namep, ctx) { \
+	(ndp)->ni_cnd.cn_nameiop = op; \
+	(ndp)->ni_op = pop; \
+	(ndp)->ni_cnd.cn_flags = flags; \
+	if ((segflg) == UIO_USERSPACE) { \
+		(ndp)->ni_segflg = ((IS_64BIT_PROCESS(vfs_context_proc(ctx))) ? UIO_USERSPACE64 : UIO_USERSPACE32); \
+	} \
+	else { \
+		(ndp)->ni_segflg = segflg; \
+	} \
+	(ndp)->ni_dirp = namep; \
+	(ndp)->ni_cnd.cn_context = ctx; \
+	(ndp)->ni_flag = 0; \
+	(ndp)->ni_cnd.cn_ndp = (ndp); \
+}
+#else
+#define NDINIT(ndp, op, _unused_, flags, segflg, namep, ctx) { \
 	(ndp)->ni_cnd.cn_nameiop = op; \
 	(ndp)->ni_cnd.cn_flags = flags; \
 	if ((segflg) == UIO_USERSPACE) { \
@@ -180,7 +220,11 @@ struct nameidata {
 	} \
 	(ndp)->ni_dirp = namep; \
 	(ndp)->ni_cnd.cn_context = ctx; \
+	(ndp)->ni_flag = 0; \
+	(ndp)->ni_cnd.cn_ndp = (ndp); \
 }
+#endif /* CONFIG_TRIGGERS */
+
 #endif /* KERNEL */
 
 /*
@@ -210,21 +254,25 @@ struct	namecache {
 
 int	namei(struct nameidata *ndp);
 void	nameidone(struct nameidata *);
+void	namei_unlock_fsnode(struct nameidata *ndp);
 int	lookup(struct nameidata *ndp);
 int	relookup(struct vnode *dvp, struct vnode **vpp,
 		struct componentname *cnp);
+void	lookup_compound_vnop_post_hook(int error, vnode_t dvp, vnode_t vp, struct nameidata *ndp, int did_create);
 
 /*
  * namecache function prototypes
  */
 void    cache_purgevfs(mount_t mp);
 int		cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
-			  vfs_context_t context, int *trailing_slash, int *dp_authorized, vnode_t last_dp);
+			  vfs_context_t context, int *dp_authorized, vnode_t last_dp);
 
 void		vnode_cache_authorized_action(vnode_t vp, vfs_context_t context, kauth_action_t action);
 void		vnode_uncache_authorized_action(vnode_t vp, kauth_action_t action);
 boolean_t	vnode_cache_is_stale(vnode_t vp);
 boolean_t	vnode_cache_is_authorized(vnode_t vp, vfs_context_t context, kauth_action_t action);
+int 		lookup_validate_creation_path(struct nameidata *ndp);
+int		namei_compound_available(vnode_t dp, struct nameidata *ndp);
 
 #endif /* KERNEL */
 

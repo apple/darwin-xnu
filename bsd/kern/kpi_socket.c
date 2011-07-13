@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -172,18 +172,13 @@ sock_accept(
 	if (sa) FREE(sa, M_SONAME);
 
 	/*
-	 * If the socket has been marked as inactive by soacceptfilter(),
-	 * disallow further operations on it.  We explicitly call shutdown
-	 * on both data directions to ensure that SS_CANT{RCV,SEND}MORE
-	 * states are set for the socket.  This would also flush out data
-	 * hanging off the receive list of this socket.
+	 * If the socket has been marked as inactive by sosetdefunct(),
+	 * disallow further operations on it.
 	 */
 	if (new_so->so_flags & SOF_DEFUNCT) {
-		(void) soshutdownlock(new_so, SHUT_RD);
-		(void) soshutdownlock(new_so, SHUT_WR);
-		(void) sodisconnectlocked(new_so);
+		(void) sodefunct(current_proc(), new_so,
+		    SHUTDOWN_SOCKET_LEVEL_DISCONNECT_INTERNAL);
 	}
-
 	*new_sock = new_so;
 	if (dosocklock)	
 		socket_unlock(new_so, 1);
@@ -195,9 +190,30 @@ sock_bind(
 	socket_t				sock,
 	const struct sockaddr	*to)
 {
-	if (sock == NULL || to == NULL) return EINVAL;
+	int	error = 0;
+	struct sockaddr *sa = NULL;
+	struct sockaddr_storage ss;
+	boolean_t want_free = TRUE;
+
+	if (sock == NULL || to == NULL) 
+		return EINVAL;
 	
-	return sobind(sock, (struct sockaddr*)(uintptr_t)to);
+	if (to->sa_len > sizeof(ss)) {
+		MALLOC(sa, struct sockaddr *, to->sa_len, M_SONAME, M_WAITOK);
+		if (sa == NULL)
+			return ENOBUFS;
+	} else {
+		sa = (struct sockaddr *)&ss;
+		want_free = FALSE;
+	}
+	memcpy(sa, to, to->sa_len);
+
+	error = sobind(sock, sa);
+	
+	if (sa != NULL && want_free == TRUE)
+		FREE(sa, M_SONAME);	
+
+	return error;
 }
 
 errno_t
@@ -208,23 +224,37 @@ sock_connect(
 {
 	int	error = 0;
 	lck_mtx_t *mutex_held;
+	struct sockaddr *sa = NULL;
+	struct sockaddr_storage ss;
+	boolean_t want_free = TRUE;
 	
 	if (sock == NULL || to == NULL) return EINVAL;
+	
+	if (to->sa_len > sizeof(ss)) {
+		MALLOC(sa, struct sockaddr *, to->sa_len, M_SONAME,
+			(flags & MSG_DONTWAIT) ? M_NOWAIT : M_WAITOK);
+		if (sa == NULL)
+			return ENOBUFS;
+	} else {
+		sa = (struct sockaddr *)&ss;
+		want_free = FALSE;
+	}
+	memcpy(sa, to, to->sa_len);
 
 	socket_lock(sock, 1);
 
 	if ((sock->so_state & SS_ISCONNECTING) &&
 		((sock->so_state & SS_NBIO) != 0 ||
 		 (flags & MSG_DONTWAIT) != 0)) {
-		socket_unlock(sock, 1);
-		return EALREADY;
+		error = EALREADY;
+		goto out;
 	}
-	error = soconnectlock(sock, (struct sockaddr*)(uintptr_t)to, 0);
+	error = soconnectlock(sock, sa, 0);
 	if (!error) {
 		if ((sock->so_state & SS_ISCONNECTING) &&
 			((sock->so_state & SS_NBIO) != 0 || (flags & MSG_DONTWAIT) != 0)) {
-			socket_unlock(sock, 1);
-			return EINPROGRESS;
+			error = EINPROGRESS;
+			goto out;
 		}
 		
 		if (sock->so_proto->pr_getlock != NULL)  
@@ -247,7 +277,12 @@ sock_connect(
 	else {
 		sock->so_state &= ~SS_ISCONNECTING;
 	}
+out:
 	socket_unlock(sock, 1);
+
+	if (sa != NULL && want_free == TRUE)
+		FREE(sa, M_SONAME);
+		
 	return error;
 }
 
@@ -476,6 +511,27 @@ sock_setsockopt(
 	return sosetopt(sock, &sopt); /* will lock socket */
 }
 
+/*
+ * This follows the recommended mappings between DSCP code points and WMM access classes
+ */
+static u_int8_t so_tc_from_dscp(u_int8_t dscp);
+static u_int8_t
+so_tc_from_dscp(u_int8_t dscp)
+{
+	u_int8_t tc;
+
+	if (dscp >= 0x30 && dscp <= 0x3f)
+		tc = SO_TC_VO;
+	else if (dscp >= 0x20 && dscp <= 0x2f)
+		tc = SO_TC_VI;
+	else if (dscp >= 0x08 && dscp <= 0x17)
+		tc = SO_TC_BK;
+	else
+		tc = SO_TC_BE;
+
+	return tc;
+}
+
 errno_t
 sock_settclassopt(
 	socket_t	sock,
@@ -484,13 +540,9 @@ sock_settclassopt(
 
 	errno_t error = 0;
 	struct sockopt sopt;
+	int sotc;
 
-	if (sock == NULL || optval == NULL || optlen == 0) return EINVAL;
-
-	sopt.sopt_dir = SOPT_SET;
-	sopt.sopt_val = CAST_USER_ADDR_T(optval);
-	sopt.sopt_valsize = optlen;
-	sopt.sopt_p = kernproc;
+	if (sock == NULL || optval == NULL || optlen != sizeof(int)) return EINVAL;
 
 	socket_lock(sock, 1);
 	if (!(sock->so_state & SS_ISCONNECTED)) {
@@ -507,6 +559,28 @@ sock_settclassopt(
 		goto out;
 	}
 
+	/*
+	 * Set the socket traffic class based on the passed DSCP code point
+	 * regardless of the scope of the destination
+	 */
+	sotc = so_tc_from_dscp((*(const int *)optval) >> 2);
+
+	sopt.sopt_dir = SOPT_SET;
+	sopt.sopt_val = CAST_USER_ADDR_T(&sotc);
+	sopt.sopt_valsize = sizeof(sotc);
+	sopt.sopt_p = kernproc;
+	sopt.sopt_level = SOL_SOCKET;
+	sopt.sopt_name = SO_TRAFFIC_CLASS;
+
+	socket_unlock(sock, 0);
+	error = sosetopt(sock, &sopt);
+	socket_lock(sock, 0);
+
+	if (error != 0) {
+		printf("sock_settclassopt: sosetopt SO_TRAFFIC_CLASS failed %d\n", error);
+		goto out;
+	}
+
 	/* Check if the destination address is LAN or link local address.
 	 * We do not want to set traffic class bits if the destination
 	 * is not local 
@@ -514,6 +588,11 @@ sock_settclassopt(
 	if (!so_isdstlocal(sock)) {
 		goto out;
 	}
+
+	sopt.sopt_dir = SOPT_SET;
+	sopt.sopt_val = CAST_USER_ADDR_T(optval);
+	sopt.sopt_valsize = optlen;
+	sopt.sopt_p = kernproc;
 
 	switch (sock->so_proto->pr_domain->dom_family) {
 	case AF_INET:
@@ -989,59 +1068,114 @@ sock_getlistener(socket_t sock)
 	return (sock->so_head);
 }
 
+static inline void
+sock_set_tcp_stream_priority(socket_t sock)
+{
+	if ((sock->so_proto->pr_domain->dom_family == AF_INET || 
+		sock->so_proto->pr_domain->dom_family == AF_INET6) &&
+		sock->so_proto->pr_type == SOCK_STREAM) {
+
+		set_tcp_stream_priority(sock);
+
+	}
+}
+
 /*
  * Caller must have ensured socket is valid and won't be going away.
  */
+void
+socket_set_traffic_mgt_flags_locked(socket_t sock, u_int32_t flags)
+{
+	(void) OSBitOrAtomic(flags, &sock->so_traffic_mgt_flags);
+	sock_set_tcp_stream_priority(sock);
+}
+
 void
 socket_set_traffic_mgt_flags(socket_t sock, u_int32_t flags)
 {
-	(void) OSBitOrAtomic(flags, &sock->so_traffic_mgt_flags);
+	socket_lock(sock, 1);
+	socket_set_traffic_mgt_flags_locked(sock, flags);
+	socket_unlock(sock, 1);
 }
 
 /*
  * Caller must have ensured socket is valid and won't be going away.
  */
 void
-socket_clear_traffic_mgt_flags(socket_t sock, u_int32_t flags)
+socket_clear_traffic_mgt_flags_locked(socket_t sock, u_int32_t flags)
 {
 	(void) OSBitAndAtomic(~flags, &sock->so_traffic_mgt_flags);
+	sock_set_tcp_stream_priority(sock);
 }
 
-__private_extern__ void
-set_traffic_class(struct mbuf *m, struct socket *so, int mtc)
+void
+socket_clear_traffic_mgt_flags(socket_t sock, u_int32_t flags)
 {
-#if !PKT_PRIORITY
-#pragma unused(m)
-#pragma unused(so)
-#pragma unused(mtc)
-	return;
-#else /* PKT_PRIORITY */
-	if (!(m->m_flags & M_PKTHDR))
-		return;
-
-	if (soisbackground(so)) {
-		m->m_pkthdr.prio = MBUF_TC_BK;			
-	} else if (mtc != MBUF_TC_NONE) {
-		if (mtc >= MBUF_TC_BE && mtc <= MBUF_TC_VO)
-			m->m_pkthdr.prio = mtc;
-	} else {
-		switch (so->so_traffic_class) {
-			case SO_TC_BE:
-				m->m_pkthdr.prio = MBUF_TC_BE;
-				break;
-			case SO_TC_BK:
-				m->m_pkthdr.prio = MBUF_TC_BK;
-				break;
-			case SO_TC_VI:
-				m->m_pkthdr.prio = MBUF_TC_VI;
-				break;
-			case SO_TC_VO:
-				m->m_pkthdr.prio = MBUF_TC_VO;
-				break;
-			default:
-				break;
-		}
-	}
-	return;
-#endif /* PKT_PRIORITY */
+	socket_lock(sock, 1);
+	socket_clear_traffic_mgt_flags_locked(sock, flags);
+	socket_unlock(sock, 1);
 }
+
+
+/*
+ * Caller must have ensured socket is valid and won't be going away.
+ */
+errno_t
+socket_defunct(struct proc *p, socket_t so, int level)
+{
+	errno_t retval;
+
+	if (level != SHUTDOWN_SOCKET_LEVEL_DISCONNECT_SVC &&
+	    level != SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL)
+		return (EINVAL);
+
+	socket_lock(so, 1);
+	/*
+	 * SHUTDOWN_SOCKET_LEVEL_DISCONNECT_SVC level is meant to tear down
+	 * all of mDNSResponder IPC sockets, currently those of AF_UNIX; note
+	 * that this is an implementation artifact of mDNSResponder.  We do
+	 * a quick test against the socket buffers for SB_UNIX, since that
+	 * would have been set by unp_attach() at socket creation time.
+	 */
+	if (level == SHUTDOWN_SOCKET_LEVEL_DISCONNECT_SVC &&
+	    (so->so_rcv.sb_flags & so->so_snd.sb_flags & SB_UNIX) != SB_UNIX) {
+		socket_unlock(so, 1);
+		return (EOPNOTSUPP);
+	}
+	retval = sosetdefunct(p, so, level, TRUE);
+	if (retval == 0)
+		retval = sodefunct(p, so, level);
+	socket_unlock(so, 1);
+	return (retval);
+}
+
+errno_t
+sock_setupcall(socket_t sock, sock_upcall callback, void* context)
+{
+	if (sock == NULL)
+		return EINVAL;
+
+	/*
+	 * Note that we don't wait for any in progress upcall to complete.
+	 */
+	socket_lock(sock, 1);
+
+	sock->so_upcall = (so_upcall) callback;
+	sock->so_upcallarg = context;
+	if (callback) {
+		sock->so_rcv.sb_flags |= SB_UPCALL;
+#if CONFIG_SOWUPCALL
+		sock->so_snd.sb_flags |= SB_UPCALL;
+#endif /* CONFIG_SOWUPCALL */
+	} else {
+		sock->so_rcv.sb_flags &= ~SB_UPCALL;
+#if CONFIG_SOWUPCALL
+		sock->so_snd.sb_flags &= ~SB_UPCALL;
+#endif /* CONFIG_SOWUPCALL */
+	}
+	
+	socket_unlock(sock, 1);
+
+	return 0;
+}
+

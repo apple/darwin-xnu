@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<dict>
+		<key>OpenSourceLicense</key>
+		<string>Other</string>
+		<key>OpenSourceLicenseFile</key>
+		<string>KernelCrypto.txt</string>
+		<key>OpenSourceModifications</key>
+		<string>Extensive customization for OS X</string>
+		<key>OpenSourceProject</key>
+		<string>openssl</string>
+		<key>OpenSourceURL</key>
+		<string>http://www.openssl.org/source/openssl-0.9.6.tar.gz</string>
+		<key>OpenSourceVersion</key>
+		<string>openssl-0.9.6</string>
+		<key>OpenSourceWebsiteURL</key>
+		<string>http://www.openssl.org/</string>
+	</dict>
+	<dict>
+		<key>OpenSourceImportDate</key>
+		<string>2004-04-07</string>
+		<key>OpenSourceLicense</key>
+		<string>Other</string>
+		<key>OpenSourceLicenseFile</key>
+		<string>KernelCrypto.txt</string>
+		<key>OpenSourceModifications</key>
+		<string>Customization for OS X</string>
+		<key>OpenSourceProject</key>
+		<string>Gladman AES</string>
+		<key>OpenSourceURL</key>
+		<string>http://fp.gladman.plus.com/AES/aesfull.zip</string>
+		<key>OpenSourceVersion</key>
+		<string>aes-src-26-08-05</string>
+		<key>OpenSourceWebsiteURL</key>
+		<string>http://fp.gladman.plus.com/AES/index.htm</string>
+	</dict>
+	<dict>
+		<key>OpenSourceImportDate</key>
+		<string>2005-09-02</string>
+		<key>OpenSourceLicense</key>
+		<string>Other</string>
+		<key>OpenSourceLicenseFile</key>
+		<string>KernelCrypto.txt</string>
+		<key>OpenSourceModifications</key>
+		<string>Customization for OS X</string>
+		<key>OpenSourceProject</key>
+		<string>Gladman SHA2</string>
+		<key>OpenSourceURL</key>
+		<string>http://fp.gladman.plus.com/cryptography_technology/sha/sha-26-08-05.zip</string>
+		<key>OpenSourceVersion</key>
+		<string>sha-26-08-05</string>
+		<key>OpenSourceWebsiteURL</key>
+		<string>http://fp.gladman.plus.com/cryptography_technology/sha/index.htm</string>
+	</dict>
+	<dict>
+		<key>OpenSourceImportDate</key>
+		<string>2010-04-14</string>
+		<key>OpenSourceLicense</key>
+		<string>Other</string>
+		<key>OpenSourceLicenseFile</key>
+		<string>KernelCrypto.txt</string>
+		<key>OpenSourceModifications</key>
+		<string>Customization for OS X</string>
+		<key>OpenSourceProject</key>
+		<string>Gladman XTS-AES</string>
+		<key>OpenSourceURL</key>
+		<string>http://gladman.plushost.co.uk/oldsite/AES/xts-vs2008-17-07-09.zip</string>
+		<key>OpenSourceVersion</key>
+		<string>xts-vs2008-17-07-09</string>
+		<key>OpenSourceWebsiteURL</key>
+		<string>http://gladman.plushost.co.uk/oldsite/AES/index.php</string>
+	</dict>
+</array>
+</plist>

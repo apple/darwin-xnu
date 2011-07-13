@@ -25,7 +25,7 @@
 .Os
 .Sh NAME
 .Nm getauid
-.Nd "retrieve audit session ID"
+.Nd "retrieve audit user ID"
 .Sh SYNOPSIS
 .In bsm/audit.h
 .Ft int
@@ -34,7 +34,7 @@
 The
 .Fn getauid
 system call
-retrieves the active audit session ID for the current process via the
+retrieves the active audit user ID for the current process via the
 .Vt au_id_t
 pointed to by
 .Fa auid .

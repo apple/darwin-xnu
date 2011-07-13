@@ -10,9 +10,6 @@ include $(MakeInc_def)
 INSTINC_SUBDIRS = \
 	machine
 
-INSTINC_SUBDIRS_PPC = \
-	ppc
-
 INSTINC_SUBDIRS_I386 = \
 	i386
 
@@ -24,9 +21,6 @@ INSTINC_SUBDIRS_ARM = \
 
 EXPINC_SUBDIRS = \
 	machine
-
-EXPINC_SUBDIRS_PPC = \
-	ppc
 
 EXPINC_SUBDIRS_I386 = \
 	i386

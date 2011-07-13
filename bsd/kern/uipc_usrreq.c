@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -116,6 +116,32 @@ static  u_int                   disconnect_in_progress;
 
 extern lck_mtx_t *uipc_lock;
 static	struct unp_head unp_shead, unp_dhead;
+
+/*
+ * mDNSResponder tracing.  When enabled, endpoints connected to
+ * /var/run/mDNSResponder will be traced; during each send on
+ * the traced socket, we log the PID and process name of the
+ * sending process.  We also print out a bit of info related
+ * to the data itself; this assumes ipc_msg_hdr in dnssd_ipc.h
+ * of mDNSResponder stays the same.
+ */
+#define	MDNSRESPONDER_PATH	"/var/run/mDNSResponder"
+
+static int unpst_tracemdns;	/* enable tracing */
+
+#define	MDNS_IPC_MSG_HDR_VERSION_1	1
+
+struct mdns_ipc_msg_hdr {
+	uint32_t version;
+	uint32_t datalen;
+	uint32_t ipc_flags;
+	uint32_t op;
+	union {
+		void *context;
+		uint32_t u32[2];
+	} __attribute__((packed));
+	uint32_t reg_index;
+} __attribute__((packed));
 
 /*
  * Unix communications domain.
@@ -271,7 +297,7 @@ uipc_detach(struct socket *so)
 	if (unp == 0)
 		return (EINVAL);
 
-	lck_mtx_assert(unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
 	unp_detach(unp);
 	return (0);
 }
@@ -428,7 +454,8 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 		}
 
 		so2 = unp->unp_conn->unp_socket;
-		unp_get_locks_in_order(so, so2);
+		if (so != so2)
+			unp_get_locks_in_order(so, so2);
 
 		if (unp->unp_addr)
 			from = (struct sockaddr *)unp->unp_addr;
@@ -450,7 +477,8 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 			control = NULL;
 		}
 
-		socket_unlock(so2, 1);
+		if (so != so2) 
+			socket_unlock(so2, 1);
 
 		m = NULL;
 		if (nam)
@@ -497,6 +525,16 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 			socket_unlock(so2, 1);
 			break;
 		}	
+
+		if (unp->unp_flags & UNP_TRACE_MDNS) {
+			struct mdns_ipc_msg_hdr hdr;
+
+			if (mbuf_copydata(m, 0, sizeof (hdr), &hdr) == 0 &&
+			    hdr.version  == ntohl(MDNS_IPC_MSG_HDR_VERSION_1)) {
+				printf("%s[mDNSResponder] pid=%d (%s): op=0x%x\n",
+				    __func__, p->p_pid, p->p_comm, ntohl(hdr.op));
+			}
+		}
 
 		/*
 		 * Send to paired receive port, and then reduce send buffer
@@ -694,17 +732,19 @@ static int	unp_rights;			/* file descriptors in flight */
 static int	unp_disposed;			/* discarded file descriptors */
 
 SYSCTL_DECL(_net_local_stream);
-SYSCTL_INT(_net_local_stream, OID_AUTO, sendspace, CTLFLAG_RW,
+SYSCTL_INT(_net_local_stream, OID_AUTO, sendspace, CTLFLAG_RW | CTLFLAG_LOCKED,
    &unpst_sendspace, 0, "");
-SYSCTL_INT(_net_local_stream, OID_AUTO, recvspace, CTLFLAG_RW,
+SYSCTL_INT(_net_local_stream, OID_AUTO, recvspace, CTLFLAG_RW | CTLFLAG_LOCKED,
    &unpst_recvspace, 0, "");
+SYSCTL_INT(_net_local_stream, OID_AUTO, tracemdns, CTLFLAG_RW | CTLFLAG_LOCKED,
+   &unpst_tracemdns, 0, "");
 SYSCTL_DECL(_net_local_dgram);
-SYSCTL_INT(_net_local_dgram, OID_AUTO, maxdgram, CTLFLAG_RW,
+SYSCTL_INT(_net_local_dgram, OID_AUTO, maxdgram, CTLFLAG_RW | CTLFLAG_LOCKED,
    &unpdg_sendspace, 0, "");
-SYSCTL_INT(_net_local_dgram, OID_AUTO, recvspace, CTLFLAG_RW,
+SYSCTL_INT(_net_local_dgram, OID_AUTO, recvspace, CTLFLAG_RW | CTLFLAG_LOCKED,
    &unpdg_recvspace, 0, "");
 SYSCTL_DECL(_net_local);
-SYSCTL_INT(_net_local, OID_AUTO, inflight, CTLFLAG_RD, &unp_rights, 0, "");
+SYSCTL_INT(_net_local, OID_AUTO, inflight, CTLFLAG_RD | CTLFLAG_LOCKED, &unp_rights, 0, "");
 
 /*
  * Returns:	0			Success
@@ -739,11 +779,8 @@ unp_attach(struct socket *so)
 		return (ENOBUFS);
 	bzero(unp, sizeof (*unp));
 
-	unp->unp_mtx = lck_mtx_alloc_init(unp_mtx_grp, unp_mtx_attr);
-	if (unp->unp_mtx == NULL) {
-		zfree(unp_zone, unp);
-		return(ENOBUFS);
-	}
+	lck_mtx_init(&unp->unp_mtx, 
+		unp_mtx_grp, unp_mtx_attr);
 
 	lck_rw_lock_exclusive(unp_list_mtx);
 	LIST_INIT(&unp->unp_refs);
@@ -892,7 +929,7 @@ unp_bind(
 	socket_unlock(so, 0);
 
 	strlcpy(buf, soun->sun_path, namelen+1);
-	NDINIT(&nd, CREATE, FOLLOW | LOCKPARENT, UIO_SYSSPACE,
+	NDINIT(&nd, CREATE, OP_MKFIFO, FOLLOW | LOCKPARENT, UIO_SYSSPACE,
 	    CAST_USER_ADDR_T(buf), ctx);
 	/* SHOULD BE ABLE TO ADOPT EXISTING AND wakeup() ALA FIFO's */
 	error = namei(&nd);
@@ -938,7 +975,7 @@ unp_bind(
 
 	if (!error) {
 		/* create the socket */
-		error = vn_create(dvp, &vp, &nd.ni_cnd, &va, 0, ctx);
+		error = vn_create(dvp, &vp, &nd, &va, 0, 0, NULL, ctx);
 	}
 
 	nameidone(&nd);
@@ -1001,7 +1038,7 @@ unp_connect(struct socket *so, struct sockaddr *nam, __unused proc_t p)
 	strlcpy(buf, soun->sun_path, len+1);
 	socket_unlock(so, 0);
 
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
+	NDINIT(&nd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
 	    CAST_USER_ADDR_T(buf), ctx);
 	error = namei(&nd);
 	if (error) {
@@ -1046,8 +1083,13 @@ unp_connect(struct socket *so, struct sockaddr *nam, __unused proc_t p)
 
 	if (so2->so_pcb == NULL) {
 		error = ECONNREFUSED;
-		socket_unlock(so2, 1);
-		socket_lock(so, 0);
+		if (so != so2) {
+			socket_unlock(so2, 1);
+			socket_lock(so, 0);
+		} else {
+			/* Release the reference held for the listen socket */
+			so2->so_usecount--;
+		}
 		goto out;
 	}
 
@@ -1055,7 +1097,7 @@ unp_connect(struct socket *so, struct sockaddr *nam, __unused proc_t p)
 		socket_unlock(so2, 0);
 		socket_lock(so, 0);
 		socket_lock(so2, 0);
-	} else {
+	} else if (so > so2) {
 		socket_lock(so, 0);
 	}
 	/*
@@ -1064,15 +1106,13 @@ unp_connect(struct socket *so, struct sockaddr *nam, __unused proc_t p)
 	 * XXX - probably shouldn't return an error for SOCK_DGRAM
 	 */
 	if ((so->so_state & SS_ISCONNECTED) != 0) {
-		socket_unlock(so2, 1);
 		error = EISCONN;
-		goto out;
+		goto decref_out;
 	}
 
 	if (so->so_type != so2->so_type) {
-		socket_unlock(so2, 1);
 		error = EPROTOTYPE;
-		goto out;
+		goto decref_out;
 	}
 
 	if (so->so_proto->pr_flags & PR_CONNREQUIRED) {
@@ -1149,19 +1189,41 @@ unp_connect(struct socket *so, struct sockaddr *nam, __unused proc_t p)
 		socket_lock(so3, 1);
 		so2 = so3;
 
+		/*
+		 * Enable tracing for mDNSResponder endpoints.  (The use
+		 * of sizeof instead of strlen below takes the null
+		 * terminating character into account.)
+		 */
+		if (unpst_tracemdns &&
+		    !strncmp(soun->sun_path, MDNSRESPONDER_PATH,
+		    sizeof (MDNSRESPONDER_PATH))) {
+			unp->unp_flags |= UNP_TRACE_MDNS;
+			unp2->unp_flags |= UNP_TRACE_MDNS;
+		}
 	}
 	
 	error = unp_connect2(so, so2);
+
+decref_out:
 	if (so2 != NULL) {
-		socket_unlock(so2, 1);
+		if (so != so2) {
+			socket_unlock(so2, 1);
+		} else {
+			/* Release the extra reference held for the listen socket.
+			 * This is possible only for SOCK_DGRAM sockets. We refuse
+			 * connecting to the same socket for SOCK_STREAM sockets.
+			 */
+			so2->so_usecount--;
+		}
 	}
 
 	if (list_so != NULL) {
 		socket_lock(list_so, 0);
 		socket_unlock(list_so, 1);
 	}
+
 out:
-	lck_mtx_assert(unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
 	vnode_put(vp);
 	return (error);
 }
@@ -1182,8 +1244,8 @@ unp_connect2(struct socket *so, struct socket *so2)
 
 	unp2 = sotounpcb(so2);
 
-	lck_mtx_assert(unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(unp2->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&unp2->unp_mtx, LCK_MTX_ASSERT_OWNED);
 
 	/* Verify both sockets are still opened */
 	if (unp == 0 || unp2 == 0)
@@ -1197,15 +1259,18 @@ unp_connect2(struct socket *so, struct socket *so2)
 	case SOCK_DGRAM:
 		LIST_INSERT_HEAD(&unp2->unp_refs, unp, unp_reflink);
 
-		
-		/* Avoid lock order reversals due to drop/acquire in soisconnected. */
- 		/* Keep an extra reference on so2 that will be dropped
-		 * soon after getting the locks in order 
-		 */ 
-		socket_unlock(so2, 0);
-		soisconnected(so);
-		unp_get_locks_in_order(so, so2);
-		so2->so_usecount--;
+		if (so != so2) {	
+			/* Avoid lock order reversals due to drop/acquire in soisconnected. */
+ 			/* Keep an extra reference on so2 that will be dropped
+			 * soon after getting the locks in order 
+			 */ 
+			socket_unlock(so2, 0);
+			soisconnected(so);
+			unp_get_locks_in_order(so, so2);
+			so2->so_usecount--;
+		} else {
+			soisconnected(so);
+		}
 
 		break;
 
@@ -1242,8 +1307,8 @@ unp_connect2(struct socket *so, struct socket *so2)
 	default:
 		panic("unknown socket type %d in unp_connect2", so->so_type);
 	}
-	lck_mtx_assert(unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(unp2->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&unp2->unp_mtx, LCK_MTX_ASSERT_OWNED);
 	return (0);
 }
 
@@ -1284,7 +1349,12 @@ unp_disconnect(struct unpcb *unp)
 	so2 = unp2->unp_socket;
 
 try_again:
-	if (so < so2) {
+	if (so == so2) {
+		if (so_locked == 0) {
+			socket_lock(so, 0);
+		}
+		waitso = so;
+	} else if (so < so2) {
 		if (so_locked == 0) {
 			socket_lock(so, 0);
 		}
@@ -1298,19 +1368,22 @@ try_again:
 		socket_lock(so, 0);
 		waitso = so;
 	}
+	so_locked = 1;
 
-	lck_mtx_assert(unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
-	lck_mtx_assert(unp2->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&unp2->unp_mtx, LCK_MTX_ASSERT_OWNED);
 
 	/* Check for the UNP_DONTDISCONNECT flag, if it
 	 * is set, release both sockets and go to sleep
 	 */
 	
 	if ((((struct unpcb *)waitso->so_pcb)->unp_flags & UNP_DONTDISCONNECT) != 0) {
-		socket_unlock(so2, 1);
+		if (so != so2) {
+			socket_unlock(so2, 1);
+		}
 		so_locked = 0;
 
-		(void)msleep(waitso->so_pcb, unp->unp_mtx, 
+		(void)msleep(waitso->so_pcb, &unp->unp_mtx, 
 			PSOCK | PDROP, "unpdisconnect", NULL);
 		goto try_again;
 	}
@@ -1322,12 +1395,16 @@ try_again:
 	unp->unp_conn = NULL;
 	so2->so_usecount--;
 
+	if (unp->unp_flags & UNP_TRACE_MDNS)
+		unp->unp_flags &= ~UNP_TRACE_MDNS;
+
 	switch (unp->unp_socket->so_type) {
 
 	case SOCK_DGRAM:
 		LIST_REMOVE(unp, unp_reflink);
 		unp->unp_socket->so_state &= ~SS_ISCONNECTED;
-		socket_unlock(so2, 1);
+		if (so != so2)
+			socket_unlock(so2, 1);
 		break;
 
 	case SOCK_STREAM:
@@ -1343,6 +1420,10 @@ try_again:
 
 		unp2->unp_socket->so_state &= ~(SS_ISCONNECTING|SS_ISCONNECTED|SS_ISDISCONNECTING);
 		unp->unp_socket->so_state |= (SS_CANTRCVMORE|SS_CANTSENDMORE|SS_ISDISCONNECTED);
+
+		if (unp2->unp_flags & UNP_TRACE_MDNS)
+			unp2->unp_flags &= ~UNP_TRACE_MDNS;
+
 		strdisconn = 1;
 		break;
 	default:
@@ -1362,7 +1443,7 @@ out:
 		socket_lock(so,0);
 		soisdisconnected(so);
 	}
-	lck_mtx_assert(unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&unp->unp_mtx, LCK_MTX_ASSERT_OWNED);
 	return;
 }
 
@@ -1519,10 +1600,10 @@ unp_pcblist SYSCTL_HANDLER_ARGS
 	return (error);
 }
 
-SYSCTL_PROC(_net_local_dgram, OID_AUTO, pcblist, CTLFLAG_RD,
+SYSCTL_PROC(_net_local_dgram, OID_AUTO, pcblist, CTLFLAG_RD | CTLFLAG_LOCKED,
             (caddr_t)(long)SOCK_DGRAM, 0, unp_pcblist, "S,xunpcb",
             "List of active local datagram sockets");
-SYSCTL_PROC(_net_local_stream, OID_AUTO, pcblist, CTLFLAG_RD,
+SYSCTL_PROC(_net_local_stream, OID_AUTO, pcblist, CTLFLAG_RD | CTLFLAG_LOCKED,
             (caddr_t)(long)SOCK_STREAM, 0, unp_pcblist, "S,xunpcb",
             "List of active local stream sockets");
 
@@ -1662,10 +1743,10 @@ unp_pcblist64 SYSCTL_HANDLER_ARGS
 	return (error);
 }
 
-SYSCTL_PROC(_net_local_dgram, OID_AUTO, pcblist64, CTLFLAG_RD,
+SYSCTL_PROC(_net_local_dgram, OID_AUTO, pcblist64, CTLFLAG_RD | CTLFLAG_LOCKED,
 	    (caddr_t)(long)SOCK_DGRAM, 0, unp_pcblist64, "S,xunpcb64",
 	    "List of active local datagram sockets 64 bit");
-SYSCTL_PROC(_net_local_stream, OID_AUTO, pcblist64, CTLFLAG_RD,
+SYSCTL_PROC(_net_local_stream, OID_AUTO, pcblist64, CTLFLAG_RD | CTLFLAG_LOCKED,
 	    (caddr_t)(long)SOCK_STREAM, 0, unp_pcblist64, "S,xunpcb64",
 	    "List of active local stream sockets 64 bit");
 
@@ -2195,7 +2276,7 @@ unp_lock(struct socket *so, int refcount, void * lr)
         else lr_saved = lr;
 
         if (so->so_pcb) {
-                lck_mtx_lock(((struct unpcb *)so->so_pcb)->unp_mtx);
+                lck_mtx_lock(&((struct unpcb *)so->so_pcb)->unp_mtx);
         } else  {
                 panic("unp_lock: so=%p NO PCB! lr=%p ref=0x%x\n", 
 			so, lr_saved, so->so_usecount);
@@ -2232,7 +2313,7 @@ unp_unlock(struct socket *so, int refcount, void * lr)
         if (so->so_pcb == NULL) {
                 panic("unp_unlock: so=%p NO PCB usecount=%x\n", so, so->so_usecount);
         } else {
-                mutex_held = ((struct unpcb *)so->so_pcb)->unp_mtx;
+                mutex_held = &((struct unpcb *)so->so_pcb)->unp_mtx;
         }
         lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
         so->unlock_lr[so->next_unlock_lr] = lr_saved;
@@ -2245,8 +2326,6 @@ unp_unlock(struct socket *so, int refcount, void * lr)
 			FREE(unp->unp_addr, M_SONAME);
 		
 		lck_mtx_unlock(mutex_held);
-		if (unp->unp_mtx)
-			lck_mtx_free(unp->unp_mtx, unp_mtx_grp);
 
 		unp->unp_gencnt = ++unp_gencnt;
 		zfree(unp_zone, unp);
@@ -2269,7 +2348,7 @@ unp_getlock(struct socket *so, __unused int locktype)
         if (so->so_pcb)  {
                 if (so->so_usecount < 0)
                         panic("unp_getlock: so=%p usecount=%x\n", so, so->so_usecount);
-                return(unp->unp_mtx);
+                return(&unp->unp_mtx);
         } else {
                 panic("unp_getlock: so=%p NULL so_pcb\n", so);
                 return (so->so_proto->pr_domain->dom_mtx);

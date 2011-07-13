@@ -47,6 +47,15 @@ class IOPMRequest;
 class IOPMRequestQueue;
 class IOPMCompletionQueue;
 
+typedef unsigned long       IOPMPowerStateIndex;
+typedef uint32_t            IOPMPowerChangeFlags;
+
+struct IOPMDriverCallEntry {
+    queue_chain_t   link;
+    thread_t        thread;
+    IOService *     target;
+};
+
 /* Binary compatibility with drivers that access pm_vars */
 #ifdef __LP64__
 #define PM_VARS_SUPPORT     0

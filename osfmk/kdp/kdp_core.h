@@ -44,12 +44,11 @@
 #define	KDP_ERROR 5			/* error code */
 #define KDP_SEEK  6                     /* Seek to specified offset */
 #define KDP_EOF   7                     /* signal end of file */
-
-#if	defined(__LP64__)
 #define KDP_FEATURE_MASK_STRING		"features"
-enum	{KDP_FEATURE_LARGE_CRASHDUMPS = 1};
-extern	uint32_t	kdp_crashdump_feature_mask;
-#endif
+
+enum	{KDP_FEATURE_LARGE_CRASHDUMPS = 1, KDP_FEATURE_LARGE_PKT_SIZE = 2};
+extern	uint32_t	kdp_feature_large_crashdumps, kdp_feature_large_pkt_size;
+
 struct	corehdr {
 	short	th_opcode;		/* packet type */
 	union {
@@ -57,7 +56,7 @@ struct	corehdr {
 		unsigned int	tu_code;	/* error code */
 		char	tu_rpl[1];	/* request packet payload */
 	} th_u;
-	char	th_data[1];		/* data or error string */
+	char	th_data[0];		/* data or error string */
 }__attribute__((packed));
 
 #define	th_block	th_u.tu_block
@@ -93,4 +92,6 @@ int 	kdp_send_crashdump_pkt(unsigned int request, char *corename,
 				uint64_t length, void *panic_data);
 
 int	kdp_send_crashdump_data(unsigned int request, char *corename,
-				uint64_t length, caddr_t txstart);
+				int64_t length, caddr_t txstart);
+
+#define KDP_CRASHDUMP_POLL_COUNT (2500)

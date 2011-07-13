@@ -215,12 +215,14 @@ routine io_registry_entry_get_parent_iterator(
 	out iterator		: io_object_t
 	);
 
-routine io_service_open(
+skip;
+/* was routine io_service_open
 	    service		: io_object_t;
 	in  owningTask		: task_t;
 	in  connect_type	: uint32_t;
 	out connection		: io_connect_t
 	);
+*/
 
 routine io_service_close(
 	    connection		: io_connect_t
@@ -599,8 +601,8 @@ routine io_connect_method(
 	in  ool_input		: mach_vm_address_t;
 	in  ool_input_size	: mach_vm_size_t;
 
-	out scalar_output	: io_scalar_inband64_t, CountInOut;
 	out inband_output	: io_struct_inband_t, CountInOut;
+	out scalar_output	: io_scalar_inband64_t, CountInOut;
 	in  ool_output		: mach_vm_address_t;
 	inout ool_output_size	: mach_vm_size_t
 	);
@@ -616,8 +618,8 @@ routine io_connect_async_method(
 	in  ool_input		: mach_vm_address_t;
 	in  ool_input_size	: mach_vm_size_t;
 
-	out scalar_output	: io_scalar_inband64_t, CountInOut;
 	out inband_output	: io_struct_inband_t, CountInOut;
+	out scalar_output	: io_scalar_inband64_t, CountInOut;
 	in  ool_output		: mach_vm_address_t;
 	inout  ool_output_size	: mach_vm_size_t
 	);

@@ -1,0 +1,74 @@
+.\"	$Darwin$
+.\"
+.\" Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" The contents of this file constitute Original Code as defined in and
+.\" are subject to the Apple Public Source License Version 1.1 (the
+.\" "License").  You may not use this file except in compliance with the
+.\" License.  Please obtain a copy of the License at
+.\" http://www.apple.com/publicsource and read it before using this file.
+.\" 
+.\" This Original Code and all software distributed under the License are
+.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+.\" License for the specific language governing rights and limitations
+.\" under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.Dd June 8, 2000
+.Dt SEM_UNLINK 2
+.Os Darwin
+.Sh NAME
+.Nm sem_unlink
+.Nd remove a named semaphore
+.Sh SYNOPSIS
+.Fd #include <semaphore.h>
+.Ft int
+.Fn sem_unlink "const char *name"
+.Sh DESCRIPTION
+The named semaphore named
+.Fa name
+is removed.  If the semaphore is in use by other processes, then
+.Fa name
+is immediately disassociated with the semaphore, but the semaphore
+itself will not be removed until all references to it have been
+closed.  Subsequent calls to
+.Fn sem_open
+using
+.Fa name
+will refer to or create a new semaphore named
+.Fa name .
+.Pp
+If successful,
+.Fn sem_unlink
+will return 0.  Otherwise, -1 is returned and
+.Va errno
+is set, and the state of the semaphore is unchanged.
+.Sh ERRORS
+.Fn sem_unlink
+succeeds unless:
+.Bl -tag -width Er
+.It Bq Er EACCES
+Permission is denied to be remove the semaphore.
+.It Bq Er ENAMETOOLONG
+.Fa name
+exceeded
+.Dv SEM_NAME_LEN
+characters.
+.It Bq Er ENOENT
+The named semaphore does not exist.
+.El
+.Sh SEE ALSO
+.Xr sem_close 2 ,
+.Xr sem_open 2 ,
+.Xr semctl 2 ,
+.Xr semget 2 ,
+.Xr semop 2
+.Sh HISTORY
+.Fn sem_unlink
+is specified in the POSIX Realtime Extension (1003.1b-1993/1003.1i-1995).

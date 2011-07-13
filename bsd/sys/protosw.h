@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -70,7 +70,12 @@
 #include <sys/cdefs.h>
 
 #define	PR_SLOWHZ	2		/* 2 slow timeouts per second */
+#ifndef __APPLE__
+/*
+ * See rdar://7617868: pr_fasttimo was removed use your own timer or pr_slowtimo instead
+ */
 #define	PR_FASTHZ	5		/* 5 fast timeouts per second */
+#endif
 
 #ifdef PRIVATE
 
@@ -105,7 +110,8 @@ struct socket_filter;
  * The userreq routine interfaces protocols to the system and is
  * described below.
  */
- 
+
+#include <sys/socket.h> 
 #include <sys/socketvar.h>
 #include <sys/queue.h>
 #ifdef KERNEL
@@ -132,8 +138,12 @@ struct protosw {
 	void	*pr_ousrreq;
 /* utility hooks */
 	void	(*pr_init)(void);	/* initialization hook */
+#if __APPLE__
+	void	(*pr_unused)(void);	/* placeholder - fasttimo is removed */
+#else
 	void	(*pr_fasttimo)(void);
 					/* fast timeout (200ms) */
+#endif
 	void	(*pr_slowtimo)(void);
 					/* slow timeout (500ms) */
 	void	(*pr_drain)(void);
@@ -408,6 +418,7 @@ char	*prcorequests[] = {
 
 __BEGIN_DECLS
 void domaininit(void) __attribute__((section("__TEXT, initcode")));
+void domainfin(void) __attribute__((section("__TEXT, fincode")));
 
 void	pfctlinput(int, struct sockaddr *);
 void	pfctlinput2(int, struct sockaddr *, void *);
@@ -418,6 +429,7 @@ struct protosw *pffindtype(int family, int type);
 extern int net_add_proto(struct protosw *, struct domain *);
 extern int net_del_proto(int, int, struct domain *);
 
+extern u_int64_t net_uptime(void);
 __END_DECLS
 
 /* Temp hack to link static domains together */

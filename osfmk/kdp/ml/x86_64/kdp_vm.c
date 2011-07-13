@@ -45,9 +45,6 @@
 #include <vm/vm_protos.h>
 #include <vm/vm_kern.h>
 
-extern vm_offset_t sectTEXTB, sectDATAB, sectLINKB, sectPRELINKB;
-extern unsigned long sectSizeTEXT, sectSizeDATA, sectSizeLINK, sectSizePRELINK;
-
 int	kern_dump(void);
 int	kdp_dump_trap(int type, x86_saved_state64_t *regs);
 
@@ -108,8 +105,31 @@ kern_collectth_state(thread_t thread, tir_t *t)
 		if (flavors[i].flavor == x86_THREAD_STATE64) {
 			x86_thread_state64_t *tstate = (x86_thread_state64_t *) (header + hoffset);
 			vm_offset_t kstack;
+			x86_saved_state64_t *cpstate = current_cpu_datap()->cpu_fatal_trap_state;
 			bzero(tstate, x86_THREAD_STATE64_COUNT * sizeof(int));
-			if ((kstack = thread->kernel_stack) != 0){
+			if ((current_thread() == thread) && (cpstate != NULL)) {
+				tstate->rax = cpstate->rax;
+				tstate->rbx = cpstate->rbx;
+				tstate->rcx = cpstate->rcx;
+				tstate->rdx = cpstate->rdx;
+				tstate->rdi = cpstate->rdi;
+				tstate->rsi = cpstate->rsi;
+				tstate->rbp = cpstate->rbp;
+				tstate->r8 = cpstate->r8;
+				tstate->r9 = cpstate->r9;
+				tstate->r10 = cpstate->r10;
+				tstate->r11 = cpstate->r11;
+				tstate->r12 = cpstate->r12;
+				tstate->r13 = cpstate->r13;
+				tstate->r14 = cpstate->r14;
+				tstate->r15 = cpstate->r15;
+				tstate->rip = cpstate->isf.rip;
+				tstate->rsp = cpstate->isf.rsp;
+				tstate->rflags = cpstate->isf.rflags;
+				tstate->cs = cpstate->isf.cs;
+				tstate->fs = cpstate->fs;
+				tstate->gs = cpstate->gs;
+			} else if ((kstack = thread->kernel_stack) != 0){
 				struct x86_kernel_state *iks = STACK_IKS(kstack);
 				tstate->rbx = iks->k_rbx;
 				tstate->rsp = iks->k_rsp;
@@ -119,7 +139,7 @@ kern_collectth_state(thread_t thread, tir_t *t)
 				tstate->r14 = iks->k_r14;
 				tstate->r15 = iks->k_r15;
 				tstate->rip = iks->k_rip;
-		}
+			}
 		}
 		else if (machine_thread_get_kern_state(thread,
 			flavors[i].flavor, (thread_state_t) (header+hoffset),
@@ -168,7 +188,6 @@ kern_dump(void)
 	mach_vm_size_t	size = 0;
 	vm_prot_t	prot = 0;
 	vm_prot_t	maxprot = 0;
-	vm_inherit_t	inherit = 0;
 	mythread_state_flavor_t flavors[MAX_TSTATE_FLAVORS];
 	vm_size_t	nflavors;
 	vm_size_t	i;
@@ -180,7 +199,6 @@ kern_dump(void)
 
 	int error = 0;
 	int panic_error = 0;
-	unsigned int mach_section_count = 0;
 
 	map = kernel_map;
 
@@ -196,7 +214,7 @@ kern_dump(void)
 		tstate_size += (uint32_t)(sizeof(mythread_state_flavor_t) +
 		    (flavors[i].count * sizeof(int)));
 
-	command_size = (uint32_t)((segment_count + mach_section_count) *
+	command_size = (uint32_t)((segment_count) *
 	    sizeof(struct segment_command_64) +
 	    thread_count * sizeof(struct thread_command) +
 	    tstate_size * thread_count);
@@ -214,7 +232,7 @@ kern_dump(void)
 	mh64->cputype = cpu_type();
 	mh64->cpusubtype = cpu_subtype();
 	mh64->filetype = MH_CORE;
-	mh64->ncmds = segment_count + thread_count + mach_section_count;
+	mh64->ncmds = segment_count + thread_count;
 	mh64->sizeofcmds = command_size;
 	mh64->flags = 0;
 	mh64->reserved = 0;
@@ -281,7 +299,6 @@ kern_dump(void)
 
 		prot = vbr.protection;
 		maxprot = vbr.max_protection;
-		inherit = vbr.inheritance;
 
 		/*
 		 *	Fill in segment command structure.

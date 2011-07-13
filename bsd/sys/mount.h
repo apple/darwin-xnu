@@ -293,9 +293,6 @@ struct vfs_attr {
  * NFS export related mount flags.
  */
 #define	MNT_EXPORTED	0x00000100	/* file system is exported */
-#ifdef PRIVATE
-#define MNT_IMGSRC	0x00000200
-#endif /* CONFIG_IMGSRC_ACCESS */
 
 /*
  * MAC labeled / "quarantined" flag
@@ -319,6 +316,9 @@ struct vfs_attr {
 #define MNT_DEFWRITE	0x02000000	/* filesystem should defer writes */
 #define MNT_MULTILABEL	0x04000000	/* MAC support for individual labels */
 #define MNT_NOATIME	0x10000000	/* disable update of file access time */
+#ifdef BSD_KERNEL_PRIVATE
+/* #define MNT_IMGSRC_BY_INDEX 0x20000000 see sys/imgsrc.h */
+#endif /* BSD_KERNEL_PRIVATE */
 
 /* backwards compatibility only */
 #define MNT_UNKNOWNPERMISSIONS MNT_IGNORE_OWNERSHIP
@@ -334,7 +334,8 @@ struct vfs_attr {
 			MNT_LOCAL	| MNT_QUOTA | \
 			MNT_ROOTFS	| MNT_DOVOLFS	| MNT_DONTBROWSE | \
 			MNT_IGNORE_OWNERSHIP | MNT_AUTOMOUNTED | MNT_JOURNALED | \
-			MNT_NOUSERXATTR | MNT_DEFWRITE	| MNT_MULTILABEL | MNT_NOATIME | MNT_CPROTECT )
+			MNT_NOUSERXATTR | MNT_DEFWRITE	| MNT_MULTILABEL | \
+			MNT_NOATIME | MNT_CPROTECT)
 /*
  * External filesystem command modifier flags.
  * Unmount can use the MNT_FORCE flag.
@@ -440,6 +441,7 @@ union union_vfsidctl { /* the fields vc_vers and vc_fsid are compatible */
 #define VFS_CTL_NEWADDR	0x00010004	/* reconnect to new address */
 #define VFS_CTL_TIMEO	0x00010005	/* set timeout for vfs notification */
 #define VFS_CTL_NOLOCKS	0x00010006	/* disable file locking */
+#define VFS_CTL_SADDR	0x00010007	/* get server address */
 
 struct vfsquery {
 	u_int32_t	vq_flags;
@@ -684,6 +686,9 @@ struct vfsops {
 /*
  * flags passed into vfs_iterate
  */
+#ifdef PRIVATE
+#define VFS_ITERATE_TAIL_FIRST	(1 << 0)	
+#endif /* PRIVATE */
 
 /*
  * return values from callback
@@ -1164,14 +1169,88 @@ void	vfs_event_signal(fsid_t *, u_int32_t, intptr_t);
   */
 void	vfs_event_init(void); /* XXX We should not export this */
 #ifdef KERNEL_PRIVATE
+int	vfs_getbyid(fsid_t *fsid, ino64_t ino, vnode_t *vpp, vfs_context_t ctx);
 int	vfs_getattr(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx);
 int	vfs_setattr(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx);
 int	vfs_extendedsecurity(mount_t);
 mount_t	vfs_getvfs_by_mntonname(char *);
 void    vfs_markdependency(mount_t);
 vnode_t vfs_vnodecovered(mount_t mp); /* Returns vnode with an iocount that must be released with vnode_put() */
-void * vfs_mntlabel(mount_t mp); /* Safe to cast to "struct label*"; returns "void*" to limit dependence of mount.h on security headers.  */
+vnode_t vfs_devvp(mount_t mp); /* Please see block comment with implementation */
+void *  vfs_mntlabel(mount_t mp); /* Safe to cast to "struct label*"; returns "void*" to limit dependence of mount.h on security headers.  */
 void	vfs_setunmountpreflight(mount_t mp);
+void	vfs_setcompoundopen(mount_t mp);
+uint64_t vfs_throttle_mask(mount_t mp);
+
+struct vnode_trigger_info;
+
+/*!
+ @function vfs_addtrigger
+ @abstract Create an "external" trigger vnode: look up a vnode and mark it as
+ a trigger.  Can only safely be called in the context of a callback set by
+ vfs_settriggercallback().  May only be used on a file which is not already
+ marked as a trigger. 
+ @param relpath Path relative to root of mountpoint at which to mark trigger.
+ @param vtip Information about trigger; analogous to "vnode_trigger_param"
+ 	argument to vnode_create.
+ @param ctx Authorization context.
+ */
+int 	vfs_addtrigger(mount_t mp, const char *relpath, struct vnode_trigger_info *vtip, vfs_context_t ctx);
+
+
+/*!
+ @enum vfs_trigger_callback_op_t
+ @abstract Operation to perform after an attempted unmount (successful or otherwise).
+ @constant VTC_REPLACE Unmount failed: attempt to replace triggers.  Only valid 
+ 	VFS operation to perform in this context is vfs_addtrigger().
+ @constant VTC_RELEASE Unmount succeeded: release external triggering context.
+ */
+typedef enum { 
+	VTC_REPLACE,
+	VTC_RELEASE
+} vfs_trigger_callback_op_t;
+
+/*!
+ @typedef vfs_trigger_callback_t
+ @abstract Callback to be passed to vfs_settriggercallback() and invoked from 
+ 	unmount context.  
+ @param mp Mountpoint on which unmount is occurring.
+ @param op Operation (see vfs_trigger_callback_op_t)
+ @param data Context passed to vfs_settriggercallback()
+ @param ctx Authorization context in which unmount is occurring.
+ */
+typedef void vfs_trigger_callback_t(mount_t mp, vfs_trigger_callback_op_t op, void *data, vfs_context_t ctx);
+
+/*!
+  @function vfs_settriggercallback
+  @abstract Install a callback to be called after unmount attempts on a volume, 
+  to restore triggers for failed unmounts and release state for successful ones.
+  @discussion Installs a callback which will be called in two situations: a 
+  failed unmount where vnodes may have been reclaimed and a successful unmount.
+  Gives an external trigger-marking entity an opportunity to replace triggers
+  which may have been reclaimed.  The callback can only be installed (not 
+  cleared), and only one callback can be installed.  The callback will be called
+  with a read-write lock held on the mount point; in the VTC_REPLACE case, the 
+  <em>only</em> valid VFS operation to perform in the context of the callback is
+  vfs_addtrigger() on the mountpoint in question.  This rwlock is held in order
+  to attempt to provide some modicum of coverage from lookups which might find
+  missing trigger vnodes and receive spurious ENOENTs.  Note that this 
+  protection is incomplete--current working directories, or traversals up into a
+  volume via ".." may still find missing triggers.  As of this writing, no
+  serialization mechanism exists to do better than this.
+  When the "op" is VTC_RELEASE, the mountpoint is going away, and the only valid
+  VFS operation is to free the  private data pointer if needed.  The callback 
+  will be called immediately, with VTC_REPLACE, from vfs_settriggercallback(), 
+  if installation is successful.
+  @param fsid FSID for filesystem in question.
+  @param vtc Callback pointer.
+  @param data Context pointer to be passed to callback.
+  @param flags Currently unused.
+  @param ctx Authorization context.
+  @return 0 for success.  EBUSY if a trigger has already been installed.
+  */
+int 	vfs_settriggercallback(fsid_t *fsid, vfs_trigger_callback_t vtc, void *data, uint32_t flags, vfs_context_t ctx);
+
 #endif	/* KERNEL_PRIVATE */
 __END_DECLS
 

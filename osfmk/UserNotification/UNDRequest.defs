@@ -74,10 +74,7 @@ simpleroutine UNDDisplayCustomFromBundle_rpc(
 			in	messageKey: UNDKey;
 			in	tokenKey: UNDPath);
 
-simpleroutine UNDDisplayCustomFromDictionary_rpc(
-				server: UNDServerRef;
-			in	reply: UNDReplyRef;
-			in	data: xmlData);
+skip; /* was UNDDisplayCustomFromDictionary_rpc */
 
 simpleroutine UNDCancelNotification_rpc(
 				server: UNDServerRef;

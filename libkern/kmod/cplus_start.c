@@ -42,7 +42,12 @@
     The linkline must look like this.
         *.o -lkmodc++ kmod_info.o -lkmod
  */
-#if __i386__ || __ppc__
+
+/* The following preprocessor test must match exactly with the architectures
+ * that define the CONFIG_STATIC_CPPINIT config option.
+ */
+#if __i386__
+
 #include <mach/mach_types.h>
 #include <libkern/OSKextLib.h>
 

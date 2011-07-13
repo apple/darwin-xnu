@@ -115,7 +115,7 @@ swtch_continue(void)
 
     disable_preemption();
 	myprocessor = current_processor();
-	result = myprocessor->runq.count > 0 || rt_runq.count > 0;
+	result = !SCHED(processor_queue_empty)(myprocessor) || rt_runq.count > 0;
 	enable_preemption();
 
 	thread_syscall_return(result);
@@ -131,7 +131,7 @@ swtch(
 
 	disable_preemption();
 	myprocessor = current_processor();
-	if (myprocessor->runq.count == 0 &&	rt_runq.count == 0) {
+	if (SCHED(processor_queue_empty)(myprocessor) &&	rt_runq.count == 0) {
 		mp_enable_preemption();
 
 		return (FALSE);
@@ -144,7 +144,7 @@ swtch(
 
 	disable_preemption();
 	myprocessor = current_processor();
-	result = myprocessor->runq.count > 0 || rt_runq.count > 0;
+	result = !SCHED(processor_queue_empty)(myprocessor) || rt_runq.count > 0;
 	enable_preemption();
 
 	return (result);
@@ -160,7 +160,7 @@ swtch_pri_continue(void)
 
     disable_preemption();
 	myprocessor = current_processor();
-	result = myprocessor->runq.count > 0 || rt_runq.count > 0;
+	result = !SCHED(processor_queue_empty)(myprocessor) || rt_runq.count > 0;
 	mp_enable_preemption();
 
 	thread_syscall_return(result);
@@ -176,7 +176,7 @@ __unused	struct swtch_pri_args *args)
 
 	disable_preemption();
 	myprocessor = current_processor();
-	if (myprocessor->runq.count == 0 && rt_runq.count == 0) {
+	if (SCHED(processor_queue_empty)(myprocessor) && rt_runq.count == 0) {
 		mp_enable_preemption();
 
 		return (FALSE);
@@ -185,7 +185,7 @@ __unused	struct swtch_pri_args *args)
 
 	counter(c_swtch_pri_block++);
 
-	thread_depress_abstime(std_quantum);
+	thread_depress_abstime(thread_depress_time);
 
 	thread_block_reason((thread_continue_t)swtch_pri_continue, NULL, AST_YIELD);
 
@@ -193,7 +193,7 @@ __unused	struct swtch_pri_args *args)
 
 	disable_preemption();
 	myprocessor = current_processor();
-	result = myprocessor->runq.count > 0 || rt_runq.count > 0;
+	result = !SCHED(processor_queue_empty)(myprocessor) || rt_runq.count > 0;
 	enable_preemption();
 
 	return (result);
@@ -290,7 +290,7 @@ thread_switch(
 			thread->sched_pri < BASEPRI_RTQUEUES				&&
 			(thread->bound_processor == PROCESSOR_NULL	||
 			 thread->bound_processor == processor)				&&
-				run_queue_remove(thread)							) {
+				thread_run_queue_remove(thread)							) {
 			/*
 			 *	Hah, got it!!
 			 */
@@ -347,16 +347,16 @@ thread_depress_abstime(
 
     s = splsched();
     thread_lock(self);
-	if (!(self->sched_mode & TH_MODE_ISDEPRESSED)) {
+	if (!(self->sched_flags & TH_SFLAG_DEPRESSED_MASK)) {
 		processor_t		myprocessor = self->last_processor;
 
 		self->sched_pri = DEPRESSPRI;
 		myprocessor->current_pri = self->sched_pri;
-		self->sched_mode |= TH_MODE_DEPRESS;
+		self->sched_flags |= TH_SFLAG_DEPRESS;
 
 		if (interval != 0) {
 			clock_absolutetime_interval_to_deadline(interval, &deadline);
-			if (!timer_call_enter(&self->depress_timer, deadline))
+			if (!timer_call_enter(&self->depress_timer, deadline, 0))
 				self->depress_timer_active++;
 		}
 	}
@@ -389,8 +389,8 @@ thread_depress_expire(
     s = splsched();
     thread_lock(thread);
 	if (--thread->depress_timer_active == 0) {
-		thread->sched_mode &= ~TH_MODE_ISDEPRESSED;
-		compute_priority(thread, FALSE);
+		thread->sched_flags &= ~TH_SFLAG_DEPRESSED_MASK;
+		SCHED(compute_priority)(thread, FALSE);
 	}
     thread_unlock(thread);
     splx(s);
@@ -408,10 +408,10 @@ thread_depress_abort_internal(
 
     s = splsched();
     thread_lock(thread);
-	if (!(thread->sched_mode & TH_MODE_POLLDEPRESS)) {
-		if (thread->sched_mode & TH_MODE_ISDEPRESSED) {
-			thread->sched_mode &= ~TH_MODE_ISDEPRESSED;
-			compute_priority(thread, FALSE);
+	if (!(thread->sched_flags & TH_SFLAG_POLLDEPRESS)) {
+		if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
+			thread->sched_flags &= ~TH_SFLAG_DEPRESSED_MASK;
+			SCHED(compute_priority)(thread, FALSE);
 			result = KERN_SUCCESS;
 		}
 
@@ -433,7 +433,7 @@ thread_poll_yield(
 	assert(self == current_thread());
 
 	s = splsched();
-	if (!(self->sched_mode & (TH_MODE_REALTIME|TH_MODE_TIMESHARE))) {
+	if (self->sched_mode == TH_MODE_FIXED) {
 		uint64_t			total_computation, abstime;
 
 		abstime = mach_absolute_time();
@@ -444,16 +444,16 @@ thread_poll_yield(
 			ast_t			preempt;
 
 			thread_lock(self);
-			if (!(self->sched_mode & TH_MODE_ISDEPRESSED)) {
+			if (!(self->sched_flags & TH_SFLAG_DEPRESSED_MASK)) {
 				self->sched_pri = DEPRESSPRI;
 				myprocessor->current_pri = self->sched_pri;
 			}
 			self->computation_epoch = abstime;
 			self->computation_metered = 0;
-			self->sched_mode |= TH_MODE_POLLDEPRESS;
+			self->sched_flags |= TH_SFLAG_POLLDEPRESS;
 
 			abstime += (total_computation >> sched_poll_yield_shift);
-			if (!timer_call_enter(&self->depress_timer, abstime))
+			if (!timer_call_enter(&self->depress_timer, abstime, 0))
 				self->depress_timer_active++;
 			thread_unlock(self);
 
@@ -473,7 +473,7 @@ thread_yield_internal(
 
 	disable_preemption();
 	myprocessor = current_processor();
-	if (myprocessor->runq.count == 0 && rt_runq.count == 0) {
+	if (SCHED(processor_queue_empty)(myprocessor) && rt_runq.count == 0) {
 		mp_enable_preemption();
 
 		return;

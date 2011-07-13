@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -89,6 +89,8 @@
 #include <sys/vm.h>
 #include <sys/vmparam.h>
 
+#include <netinet/in.h>
+
 #include <nfs/nfsproto.h>
 #include <nfs/rpcv2.h>
 #include <nfs/nfs.h>
@@ -114,6 +116,7 @@ lck_grp_t *nfsrv_slp_mutex_group;
 struct nfsrv_sockhead nfsrv_socklist, nfsrv_deadsocklist, nfsrv_sockwg,
 			nfsrv_sockwait, nfsrv_sockwork;
 struct nfsrv_sock *nfsrv_udpsock = NULL;
+struct nfsrv_sock *nfsrv_udp6sock = NULL;
 
 /* NFS exports */
 struct nfsrv_expfs_list nfsrv_exports;
@@ -232,6 +235,7 @@ nfsrv_init(void)
 	TAILQ_INIT(&nfsd_head);
 	TAILQ_INIT(&nfsd_queue);
 	nfsrv_udpsock = NULL;
+	nfsrv_udp6sock = NULL;
 
 	/* initialization complete */
 	nfsrv_initted = NFSRV_INITIALIZED;
@@ -312,15 +316,7 @@ nfsrv_access(
 	 *     obtain good performance in the optimistic mode.
 	 */
 	if (nfsmode & NFS_ACCESS_READ) {
-		if (vnode_isdir(vp)) {
-			testaction =
-			    KAUTH_VNODE_LIST_DIRECTORY |
-			    KAUTH_VNODE_READ_EXTATTRIBUTES;
-		} else {
-			testaction =
-			    KAUTH_VNODE_READ_DATA |
-			    KAUTH_VNODE_READ_EXTATTRIBUTES;
-		}
+		testaction = vnode_isdir(vp) ? KAUTH_VNODE_LIST_DIRECTORY : KAUTH_VNODE_READ_DATA;
 		if (nfsrv_authorize(vp, NULL, testaction, ctx, nxo, 0))
 			nfsmode &= ~NFS_ACCESS_READ;
 	}
@@ -617,6 +613,9 @@ nfsrv_lookup(
 	nfsmerr_if(error);
 
 	ni.ni_cnd.cn_nameiop = LOOKUP;
+#if CONFIG_TRIGGERS
+	ni.ni_op = OP_LOOKUP;
+#endif
 	ni.ni_cnd.cn_flags = LOCKLEAF;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	isdotdot = ((len == 2) && (ni.ni_cnd.cn_pnbuf[0] == '.') && (ni.ni_cnd.cn_pnbuf[1] == '.'));
@@ -1052,10 +1051,12 @@ again:
 		 * entry and free it.
 		 */
 		LIST_FOREACH_SAFE(fp, &firehead, fm_link, nfp) {
-			if (nfsrv_fsevents_enabled)
+			if (nfsrv_fsevents_enabled) {
+				fp->fm_context.vc_thread = current_thread();
 				add_fsevent(FSE_CONTENT_MODIFIED, &fp->fm_context,
 					FSE_ARG_VNODE, fp->fm_vp,
 					FSE_ARG_DONE);
+			}
 			vnode_put(fp->fm_vp);
 			kauth_cred_unref(&fp->fm_context.vc_ucred);
 			LIST_REMOVE(fp, fm_link);
@@ -1829,10 +1830,6 @@ nfsrv_create(
 	ni.ni_cnd.cn_nameiop = 0;
 	rdev = 0;
 
-	/*
-	 * Save the original credential UID in case they are
-	 * mapped and we need to map the IDs in the attributes.
-	 */
 	saved_uid = kauth_cred_getuid(nd->nd_cr);
 
 	nfsm_chain_get_fh_ptr(error, nmreq, nd->nd_vers, nfh.nfh_fhp, nfh.nfh_len);
@@ -1841,6 +1838,9 @@ nfsrv_create(
 	nfsmerr_if(error);
 
 	ni.ni_cnd.cn_nameiop = CREATE;
+#if CONFIG_TRIGGERS
+	ni.ni_op = OP_LINK;
+#endif
 	ni.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
@@ -1923,17 +1923,6 @@ nfsrv_create(
 	if (vp == NULL) {
 	        kauth_acl_t xacl = NULL;
 
-		/*
-		 * If the credentials were mapped, we should
-		 * map the same values in the attributes.
-		 */
-		if ((vap->va_uid == saved_uid) && (kauth_cred_getuid(nd->nd_cr) != saved_uid)) {
-			int ismember;
-			VATTR_SET(vap, va_uid, kauth_cred_getuid(nd->nd_cr));
-			if (kauth_cred_ismember_gid(nd->nd_cr, vap->va_gid, &ismember) || !ismember)
-				VATTR_SET(vap, va_gid, kauth_cred_getgid(nd->nd_cr));
-		}
-
 		/* authorize before creating */
 		error = nfsrv_authorize(dvp, NULL, KAUTH_VNODE_ADD_FILE, ctx, nxo, 0);
 
@@ -1950,20 +1939,17 @@ nfsrv_create(
 		}
 		VATTR_CLEAR_ACTIVE(vap, va_data_size);
 		VATTR_CLEAR_ACTIVE(vap, va_access_time);
+		/*
+		 * Server policy is to alway use the mapped rpc credential for 
+		 * file system object creation. This has the nice side effect of
+		 * enforcing BSD creation semantics
+		 */
+		VATTR_CLEAR_ACTIVE(vap, va_uid);
+		VATTR_CLEAR_ACTIVE(vap, va_gid);
 
 		/* validate new-file security information */
-		if (!error) {
+		if (!error) 
 			error = vnode_authattr_new(dvp, vap, 0, ctx);
-			if (error && (VATTR_IS_ACTIVE(vap, va_uid) || VATTR_IS_ACTIVE(vap, va_gid))) {
-				/*
-				 * Most NFS servers just ignore the UID/GID attributes, so we
-				 * try ignoring them if that'll help the request succeed.
-				 */
-				VATTR_CLEAR_ACTIVE(vap, va_uid);
-				VATTR_CLEAR_ACTIVE(vap, va_gid);
-				error = vnode_authattr_new(dvp, vap, 0, ctx);
-			}
-		}
 
 		if (vap->va_type == VREG || vap->va_type == VSOCK) {
 
@@ -2024,6 +2010,9 @@ nfsrv_create(
 				vp = NULL;
 			}
 			ni.ni_cnd.cn_nameiop = LOOKUP;
+#if CONFIG_TRIGGERS
+			ni.ni_op = OP_LOOKUP;
+#endif
 			ni.ni_cnd.cn_flags &= ~LOCKPARENT;
 			ni.ni_cnd.cn_context = ctx;
 			ni.ni_startdir = dvp;
@@ -2168,10 +2157,6 @@ nfsrv_mknod(
 	vp = dvp = dirp = NULL;
 	ni.ni_cnd.cn_nameiop = 0;
 
-	/*
-	 * Save the original credential UID in case they are
-	 * mapped and we need to map the IDs in the attributes.
-	 */
 	saved_uid = kauth_cred_getuid(nd->nd_cr);
 
 	nfsm_chain_get_fh_ptr(error, nmreq, NFS_VER3, nfh.nfh_fhp, nfh.nfh_len);
@@ -2180,6 +2165,9 @@ nfsrv_mknod(
 	nfsmerr_if(error);
 
 	ni.ni_cnd.cn_nameiop = CREATE;
+#if CONFIG_TRIGGERS
+	ni.ni_op = OP_LINK;
+#endif
 	ni.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
@@ -2231,17 +2219,6 @@ nfsrv_mknod(
 	}
 	VATTR_SET(vap, va_type, vtyp);
 
-	/*
-	 * If the credentials were mapped, we should
-	 * map the same values in the attributes.
-	 */
-	if ((vap->va_uid == saved_uid) && (kauth_cred_getuid(nd->nd_cr) != saved_uid)) {
-		int ismember;
-		VATTR_SET(vap, va_uid, kauth_cred_getuid(nd->nd_cr));
-		if (kauth_cred_ismember_gid(nd->nd_cr, vap->va_gid, &ismember) || !ismember)
-			VATTR_SET(vap, va_gid, kauth_cred_getgid(nd->nd_cr));
-	}
-
 	/* authorize before creating */
 	error = nfsrv_authorize(dvp, NULL, KAUTH_VNODE_ADD_FILE, ctx, nxo, 0);
 
@@ -2258,20 +2235,18 @@ nfsrv_mknod(
 	}
 	VATTR_CLEAR_ACTIVE(vap, va_data_size);
 	VATTR_CLEAR_ACTIVE(vap, va_access_time);
+	/*
+	 * Server policy is to alway use the mapped rpc credential for 
+	 * file system object creation. This has the nice side effect of
+	 * enforcing BSD creation semantics
+	 */
+	VATTR_CLEAR_ACTIVE(vap, va_uid);
+	VATTR_CLEAR_ACTIVE(vap, va_gid);
 
 	/* validate new-file security information */
-	if (!error) {
+	if (!error) 
 		error = vnode_authattr_new(dvp, vap, 0, ctx);
-		if (error && (VATTR_IS_ACTIVE(vap, va_uid) || VATTR_IS_ACTIVE(vap, va_gid))) {
-			/*
-			 * Most NFS servers just ignore the UID/GID attributes, so we
-			 * try ignoring them if that'll help the request succeed.
-			 */
-			VATTR_CLEAR_ACTIVE(vap, va_uid);
-			VATTR_CLEAR_ACTIVE(vap, va_gid);
-			error = vnode_authattr_new(dvp, vap, 0, ctx);
-		}
-	}
+
 	if (error)
 		goto out1;
 
@@ -2295,6 +2270,9 @@ nfsrv_mknod(
 			vp = NULL;
 		}
 		ni.ni_cnd.cn_nameiop = LOOKUP;
+#if CONFIG_TRIGGERS
+		ni.ni_op = OP_LOOKUP;
+#endif
 		ni.ni_cnd.cn_flags &= ~LOCKPARENT;
 		ni.ni_cnd.cn_context = vfs_context_current();
 		ni.ni_startdir = dvp;
@@ -2416,6 +2394,9 @@ nfsrv_remove(
 	nfsmerr_if(error);
 
 	ni.ni_cnd.cn_nameiop = DELETE;
+#if CONFIG_TRIGGERS
+	ni.ni_op = OP_UNLINK;
+#endif
 	ni.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
@@ -2596,6 +2577,9 @@ nfsrv_rename(
 	kauth_cred_ref(saved_cred);
 retry:
 	fromni.ni_cnd.cn_nameiop = DELETE;
+#if CONFIG_TRIGGERS
+	fromni.ni_op = OP_UNLINK;
+#endif
 	fromni.ni_cnd.cn_flags = WANTPARENT;
 
 	fromni.ni_cnd.cn_pnbuf = frompath;
@@ -2628,6 +2612,9 @@ retry:
 	}
 
 	toni.ni_cnd.cn_nameiop = RENAME;
+#if CONFIG_TRIGGERS
+	toni.ni_op = OP_RENAME;
+#endif
 	toni.ni_cnd.cn_flags = WANTPARENT;
 
 	toni.ni_cnd.cn_pnbuf = topath;
@@ -3175,6 +3162,9 @@ nfsrv_link(
 		goto out;
 
 	ni.ni_cnd.cn_nameiop = CREATE;
+#if CONFIG_TRIGGERS
+	ni.ni_op = OP_LINK;
+#endif
 	ni.ni_cnd.cn_flags = LOCKPARENT;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error)
@@ -3307,10 +3297,6 @@ nfsrv_symlink(
 	linkdata = NULL;
 	dirp = NULL;
 
-	/*
-	 * Save the original credential UID in case they are
-	 * mapped and we need to map the IDs in the attributes.
-	 */
 	saved_uid = kauth_cred_getuid(nd->nd_cr);
 
 	ni.ni_cnd.cn_nameiop = 0;
@@ -3322,6 +3308,9 @@ nfsrv_symlink(
 	nfsmerr_if(error);
 
 	ni.ni_cnd.cn_nameiop = CREATE;
+#if CONFIG_TRIGGERS
+	ni.ni_op = OP_LINK;
+#endif
 	ni.ni_cnd.cn_flags = LOCKPARENT;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
@@ -3377,42 +3366,33 @@ nfsrv_symlink(
 		goto out;
 	}
 
-	/*
-	 * If the credentials were mapped, we should
-	 * map the same values in the attributes.
-	 */
-	if ((vap->va_uid == saved_uid) && (kauth_cred_getuid(nd->nd_cr) != saved_uid)) {
-		int ismember;
-		VATTR_SET(vap, va_uid, kauth_cred_getuid(nd->nd_cr));
-		if (kauth_cred_ismember_gid(nd->nd_cr, vap->va_gid, &ismember) || !ismember)
-			VATTR_SET(vap, va_gid, kauth_cred_getgid(nd->nd_cr));
-	}
 	VATTR_SET(vap, va_type, VLNK);
 	VATTR_CLEAR_ACTIVE(vap, va_data_size);
 	VATTR_CLEAR_ACTIVE(vap, va_access_time);
+	/*
+	 * Server policy is to alway use the mapped rpc credential for 
+	 * file system object creation. This has the nice side effect of
+	 * enforcing BSD creation semantics
+	 */
+	VATTR_CLEAR_ACTIVE(vap, va_uid);
+	VATTR_CLEAR_ACTIVE(vap, va_gid);
 
 	/* authorize before creating */
 	error = nfsrv_authorize(dvp, NULL, KAUTH_VNODE_ADD_FILE, ctx, nxo, 0);
 
 	/* validate given attributes */
-	if (!error) {
+	if (!error)
 		error = vnode_authattr_new(dvp, vap, 0, ctx);
-		if (error && (VATTR_IS_ACTIVE(vap, va_uid) || VATTR_IS_ACTIVE(vap, va_gid))) {
-			/*
-			 * Most NFS servers just ignore the UID/GID attributes, so we
-			 * try ignoring them if that'll help the request succeed.
-			 */
-			VATTR_CLEAR_ACTIVE(vap, va_uid);
-			VATTR_CLEAR_ACTIVE(vap, va_gid);
-			error = vnode_authattr_new(dvp, vap, 0, ctx);
-		}
-	}
+
 	if (!error)
 		error = VNOP_SYMLINK(dvp, &vp, &ni.ni_cnd, vap, linkdata, ctx);
 
 	if (!error && (nd->nd_vers == NFS_VER3)) {
 		if (vp == NULL) {
 			ni.ni_cnd.cn_nameiop = LOOKUP;
+#if CONFIG_TRIGGERS
+			ni.ni_op = OP_LOOKUP;
+#endif
 			ni.ni_cnd.cn_flags &= ~(LOCKPARENT | FOLLOW);
 			ni.ni_cnd.cn_flags |= (NOFOLLOW | LOCKLEAF);
 			ni.ni_cnd.cn_context = ctx;
@@ -3508,6 +3488,7 @@ nfsmout:
 /*
  * nfs mkdir service
  */
+ 
 int
 nfsrv_mkdir(
 	struct nfsrv_descript *nd,
@@ -3533,10 +3514,6 @@ nfsrv_mkdir(
 	nmreq = &nd->nd_nmreq;
 	nfsm_chain_null(&nmrep);
 
-	/*
-	 * Save the original credential UID in case they are
-	 * mapped and we need to map the IDs in the attributes.
-	 */
 	saved_uid = kauth_cred_getuid(nd->nd_cr);
 
 	ni.ni_cnd.cn_nameiop = 0;
@@ -3548,6 +3525,9 @@ nfsrv_mkdir(
 	nfsmerr_if(error);
 
 	ni.ni_cnd.cn_nameiop = CREATE;
+#if CONFIG_TRIGGERS
+	ni.ni_op = OP_LINK;
+#endif
 	ni.ni_cnd.cn_flags = LOCKPARENT;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
@@ -3593,17 +3573,6 @@ nfsrv_mkdir(
 		goto out;
 	}
 
-	/*
-	 * If the credentials were mapped, we should
-	 * map the same values in the attributes.
-	 */
-	if ((vap->va_uid == saved_uid) && (kauth_cred_getuid(nd->nd_cr) != saved_uid)) {
-		int ismember;
-		VATTR_SET(vap, va_uid, kauth_cred_getuid(nd->nd_cr));
-		if (kauth_cred_ismember_gid(nd->nd_cr, vap->va_gid, &ismember) || !ismember)
-			VATTR_SET(vap, va_gid, kauth_cred_getgid(nd->nd_cr));
-	}
-
 	error = nfsrv_authorize(dvp, NULL, KAUTH_VNODE_ADD_SUBDIRECTORY, ctx, nxo, 0);
 
 	/* construct ACL and handle inheritance */
@@ -3617,22 +3586,33 @@ nfsrv_mkdir(
 		if (!error && xacl != NULL)
 		        VATTR_SET(vap, va_acl, xacl);
 	}
+
 	VATTR_CLEAR_ACTIVE(vap, va_data_size);
 	VATTR_CLEAR_ACTIVE(vap, va_access_time);
+	/*
+	 * We don't support the S_ISGID bit for directories. Solaris and other
+	 * SRV4 derived systems might set this to get BSD semantics, which we enforce
+	 * any ways. 
+	 */
+	if (VATTR_IS_ACTIVE(vap, va_mode))
+		vap->va_mode &= ~S_ISGID;
+	/*
+	 * Server policy is to alway use the mapped rpc credential for 
+	 * file system object creation. This has the nice side effect of
+	 * enforcing BSD creation semantics
+	 */
+	VATTR_CLEAR_ACTIVE(vap, va_uid);
+	VATTR_CLEAR_ACTIVE(vap, va_gid);
 
 	/* validate new-file security information */
-	if (!error) {
+	if (!error)
 		error = vnode_authattr_new(dvp, vap, 0, ctx);
-		if (error && (VATTR_IS_ACTIVE(vap, va_uid) || VATTR_IS_ACTIVE(vap, va_gid))) {
-			/*
-			 * Most NFS servers just ignore the UID/GID attributes, so we
-			 * try ignoring them if that'll help the request succeed.
-			 */
-			VATTR_CLEAR_ACTIVE(vap, va_uid);
-			VATTR_CLEAR_ACTIVE(vap, va_gid);
-			error = vnode_authattr_new(dvp, vap, 0, ctx);
-		}
-	}
+	/*
+	 * vnode_authattr_new can return errors other than EPERM, but that's not going to 
+	 * sit well with our clients so we map all errors to EPERM.
+         */
+	if (error)
+		error = EPERM;
 
 	if (!error)
 		error = VNOP_MKDIR(dvp, &vp, &ni.ni_cnd, vap, ctx);
@@ -3755,6 +3735,9 @@ nfsrv_rmdir(
 	nfsmerr_if(error);
 
 	ni.ni_cnd.cn_nameiop = DELETE;
+#if CONFIG_TRIGGERS
+	ni.ni_op = OP_UNLINK;
+#endif
 	ni.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {

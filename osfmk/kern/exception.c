@@ -438,7 +438,6 @@ kern_return_t abnormal_exit_notify(mach_exception_data_type_t exccode,
  */
 kern_return_t sys_perf_notify(thread_t thread, int pid) 
 {
-
 	host_priv_t		hostp;
 	struct exception_action *excp;
 	ipc_port_t		xport;

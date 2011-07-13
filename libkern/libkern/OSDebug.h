@@ -48,6 +48,9 @@ extern void trace_backtrace(unsigned int debugid, unsigned int debugid2, unsigne
 extern void OSReportWithBacktrace(const char *str, ...);
 extern unsigned OSBacktrace(void **bt, unsigned maxAddrs);
 
+/* Simple dump of 20 backtrace entries */
+extern void OSPrintBacktrace(void);
+
 /*! @function OSKernelStackRemaining
     @abstract Returns bytes available below the current stack frame.
     @discussion Returns bytes available below the current stack frame. Safe for interrupt or thread context.

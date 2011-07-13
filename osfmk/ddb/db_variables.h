@@ -171,7 +171,7 @@
  * auxiliary parameters passed to a variable handler
  */
 struct db_var_aux_param {
-	char		*modif;			/* option strings */
+	char		*modif;			/* option strings, must be TOK_STRING_SIZE */
 	short		level;			/* number of levels */
 	short		hidden_level;		/* hidden level */
 	short		suffix[DB_VAR_LEVEL];	/* suffix */

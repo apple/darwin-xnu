@@ -100,7 +100,12 @@ routine act_get_state(
  *	If the thread is currently executing, the state change
  *	may be ill-defined.
  */
-routine	act_set_state(
+routine
+#ifdef KERNEL_SERVER
+act_set_state_from_user(
+#else
+act_set_state(
+#endif
 		target_act	: thread_act_t;
 		flavor		: int;
 		new_state	: thread_state_t);
@@ -124,7 +129,12 @@ routine thread_get_state(
  *	If the thread is currently executing, the state change
  *	may be ill-defined.
  */
-routine	thread_set_state(
+routine
+#ifdef KERNEL_SERVER
+thread_set_state_from_user(
+#else
+thread_set_state(
+#endif
 		target_act	: thread_act_t;
 		flavor		: thread_state_flavor_t;
 		new_state	: thread_state_t);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -151,5 +151,6 @@ multicast_list_program(struct multicast_list * mc_list,
 	(void)multicast_list_remove(mc_list);
 	*mc_list = new_mc_list;
     }
+    ifnet_free_multicast_list(source_multicast_list);
     return (error);
 }

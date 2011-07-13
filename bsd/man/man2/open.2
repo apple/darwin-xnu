@@ -1,5 +1,5 @@
 .\"
-.\" Copyright (c) 2008 Apple Inc.  All rights reserved.
+.\" Copyright (c) 2010 Apple Inc.  All rights reserved.
 .\"
 .\" @APPLE_LICENSE_HEADER_START@
 .\" 
@@ -56,7 +56,7 @@
 .\"
 .\"     @(#)open.2	8.2 (Berkeley) 11/16/93
 .\"
-.Dd October 7, 2008
+.Dd November 10, 2010
 .Dt OPEN 2
 .Os BSD 4
 .Sh NAME
@@ -114,6 +114,7 @@ O_EXLOCK	atomically obtain an exclusive lock
 O_NOFOLLOW	do not follow symlinks
 O_SYMLINK	allow open of symlinks
 O_EVTONLY	descriptor requested for event notifications only
+O_CLOEXEC	mark as close-on-exec
 .Ed
 .Pp
 Opening a file with
@@ -133,7 +134,9 @@ returns an error.
 This may be used to implement a simple exclusive-access locking mechanism.
 If
 .Dv O_EXCL
-is set and the last component of the pathname is a symbolic link,
+is set with
+.Dv O_CREAT
+and the last component of the pathname is a symbolic link,
 .Fn open
 will fail even if the symbolic link points to a non-existent name.
 .Pp
@@ -183,6 +186,15 @@ The
 flag is only intended for monitoring a file for changes (e.g. kqueue). Note: when 
 this flag is used, the opened file will not prevent an unmount 
 of the volume that contains the file.
+.Pp
+The
+.Dv O_CLOEXEC
+flag causes the file descriptor to be marked as close-on-exec,
+setting the
+.Dv FD_CLOEXEC
+flag.  The state of the file descriptor flags can be inspected
+using the F_GETFD fcntl.  See
+.Xr fcntl 2 .
 .Pp
 If successful,
 .Fn open

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -384,12 +384,17 @@ void  ddp_rem_if(ifID)
 	struct ifaddr *ifa = &ifID->aa_ifa;
 
 	/* un-do processing done in SIOCSIFADDR */
-	if (ifa->ifa_addr) {
-		ifnet_lock_exclusive(ifID->aa_ifp);
+	ifnet_lock_exclusive(ifID->aa_ifp);
+	IFA_LOCK(ifa);
+	if (ifa->ifa_debug & IFD_ATTACHED) {
 		if_detach_ifa(ifID->aa_ifp, ifa);
 		ifa->ifa_addr = NULL;
-		ifnet_lock_done(ifID->aa_ifp);
 	}
+	IFA_UNLOCK(ifa);
+	/* release reference held for at_interfaces[] */
+	IFA_REMREF(ifa);
+	ifnet_lock_done(ifID->aa_ifp);
+
 	if (ifID->at_was_attached == 0 && ifID->aa_ifp != NULL) {
 		(void)proto_unplumb(PF_APPLETALK, ifID->aa_ifp);
 	}

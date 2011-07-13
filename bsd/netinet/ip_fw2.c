@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -165,21 +165,21 @@ static int ipfw_sysctl SYSCTL_HANDLER_ARGS;
 
 SYSCTL_NODE(_net_inet_ip, OID_AUTO, fw, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Firewall");
 SYSCTL_PROC(_net_inet_ip_fw, OID_AUTO, enable,
-    CTLTYPE_INT | CTLFLAG_RW,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &fw_enable, 0, ipfw_sysctl, "I", "Enable ipfw");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, autoinc_step, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, autoinc_step, CTLFLAG_RW | CTLFLAG_LOCKED,
     &autoinc_step, 0, "Rule number autincrement step");
 SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, one_pass,
-    CTLFLAG_RW,
+    CTLFLAG_RW | CTLFLAG_LOCKED,
     &fw_one_pass, 0,
     "Only do a single pass through ipfw when using dummynet(4)");
 SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, debug,
-    CTLFLAG_RW,
+    CTLFLAG_RW | CTLFLAG_LOCKED,
     &fw_debug, 0, "Enable printing of debug ip_fw statements");
 SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, verbose,
-    CTLFLAG_RW,
+    CTLFLAG_RW | CTLFLAG_LOCKED,
     &fw_verbose, 0, "Log matches to ipfw rules");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, verbose_limit, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, verbose_limit, CTLFLAG_RW | CTLFLAG_LOCKED,
     &verbose_limit, 0, "Set upper limit of matches of ipfw rules logged");
 
 /*
@@ -251,29 +251,29 @@ static u_int32_t static_len_64;	/* size in bytes of static rules for 64 bit clie
 static u_int32_t dyn_count;		/* # of dynamic rules */
 static u_int32_t dyn_max = 4096;	/* max # of dynamic rules */
 
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_buckets, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_buckets, CTLFLAG_RW | CTLFLAG_LOCKED,
     &dyn_buckets, 0, "Number of dyn. buckets");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, curr_dyn_buckets, CTLFLAG_RD,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, curr_dyn_buckets, CTLFLAG_RD | CTLFLAG_LOCKED,
     &curr_dyn_buckets, 0, "Current Number of dyn. buckets");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_count, CTLFLAG_RD,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_count, CTLFLAG_RD | CTLFLAG_LOCKED,
     &dyn_count, 0, "Number of dyn. rules");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_max, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_max, CTLFLAG_RW | CTLFLAG_LOCKED,
     &dyn_max, 0, "Max number of dyn. rules");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, static_count, CTLFLAG_RD,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, static_count, CTLFLAG_RD | CTLFLAG_LOCKED,
     &static_count, 0, "Number of static rules");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_ack_lifetime, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_ack_lifetime, CTLFLAG_RW | CTLFLAG_LOCKED,
     &dyn_ack_lifetime, 0, "Lifetime of dyn. rules for acks");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_syn_lifetime, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_syn_lifetime, CTLFLAG_RW | CTLFLAG_LOCKED,
     &dyn_syn_lifetime, 0, "Lifetime of dyn. rules for syn");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_fin_lifetime, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_fin_lifetime, CTLFLAG_RW | CTLFLAG_LOCKED,
     &dyn_fin_lifetime, 0, "Lifetime of dyn. rules for fin");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_rst_lifetime, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_rst_lifetime, CTLFLAG_RW | CTLFLAG_LOCKED,
     &dyn_rst_lifetime, 0, "Lifetime of dyn. rules for rst");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_udp_lifetime, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_udp_lifetime, CTLFLAG_RW | CTLFLAG_LOCKED,
     &dyn_udp_lifetime, 0, "Lifetime of dyn. rules for UDP");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_short_lifetime, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_short_lifetime, CTLFLAG_RW | CTLFLAG_LOCKED,
     &dyn_short_lifetime, 0, "Lifetime of dyn. rules for other situations");
-SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_keepalive, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip_fw, OID_AUTO, dyn_keepalive, CTLFLAG_RW | CTLFLAG_LOCKED,
     &dyn_keepalive, 0, "Enable keepalives for dyn. rules");
 
 
@@ -338,6 +338,8 @@ void    ipfwsyslog( int level, const char *format,...)
     unsigned char       pri;
     int			loglen;
 
+	bzero(msgBuf, msgsize);
+	bzero(&ev_msg, sizeof(struct kev_msg));
 	va_start( ap, format );
         loglen = vsnprintf(msgBuf, msgsize, format, ap);
         va_end( ap );
@@ -965,15 +967,18 @@ iface_match(struct ifnet *ifp, ipfw_insn_if *cmd)
 
 		ifnet_lock_shared(ifp);
 		TAILQ_FOREACH(ia, &ifp->if_addrhead, ifa_link) {
-			if (ia->ifa_addr == NULL)
+			IFA_LOCK(ia);
+			if (ia->ifa_addr->sa_family != AF_INET) {
+				IFA_UNLOCK(ia);
 				continue;
-			if (ia->ifa_addr->sa_family != AF_INET)
-				continue;
+			}
 			if (cmd->p.ip.s_addr == ((struct sockaddr_in *)
 			    (ia->ifa_addr))->sin_addr.s_addr) {
+				IFA_UNLOCK(ia);
 				ifnet_lock_done(ifp);
 				return(1);	/* match */
 			}
+			IFA_UNLOCK(ia);
 		}
 		ifnet_lock_done(ifp);
 	}

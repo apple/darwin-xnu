@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -66,6 +66,7 @@ struct ifnet_demux_desc;
 	@constant IFNET_FAMILY_STF A 6to4 interface.
 	@constant IFNET_FAMILY_FIREWIRE An IEEE 1394 (firewire) interface.
 	@constant IFNET_FAMILY_BOND A virtual bonded interface.
+	@constant IFNET_FAMILY_CELLULAR A cellular interface.
 */
 
 enum {
@@ -83,7 +84,8 @@ enum {
 	IFNET_FAMILY_FAITH		= 11,
 	IFNET_FAMILY_STF		= 12,
 	IFNET_FAMILY_FIREWIRE		= 13,
-	IFNET_FAMILY_BOND		= 14
+	IFNET_FAMILY_BOND		= 14,
+	IFNET_FAMILY_CELLULAR		= 15
 };
 /*!
 	@typedef ifnet_family_t
@@ -129,6 +131,9 @@ typedef u_int32_t protocol_family_t;
 	@constant IFNET_CSUM_UDP Hardware will calculate UDP checksums.
 	@constant IFNET_CSUM_FRAGMENT Hardware will checksum IP fragments.
 	@constant IFNET_IP_FRAGMENT Hardware will fragment IP packets.
+	@constant IFNET_CSUM_TCPIPV6 Hardware will calculate TCP IPv6 checksums.
+	@constant IFNET_CSUM_UDPIPV6 Hardware will calculate UDP IPv6 checksums.
+	@constant IFNET_IPV6_FRAGMENT Hardware will fragment IPv6 packets.
 	@constant IFNET_VLAN_TAGGING Hardware will generate VLAN headers.
 	@constant IFNET_VLAN_MTU Hardware supports VLAN MTU.
 	@constant IFNET_MULTIPAGES Driver is capable of handling packets
@@ -147,8 +152,15 @@ typedef u_int32_t protocol_family_t;
                 If the Interface driver sets this flag, TCP will send larger frames (up to 64KB) as one
                 frame to the adapter which will perform the final packetization. The maximum TSO segment
                 supported by the interface can be set with "ifnet_set_tso_mtu". To retreive the real MTU
-                for the TCP connection the function "mbuf_get_tso_requested" is used by the driver.
+                for the TCP connection the function "mbuf_get_tso_requested" is used by the driver. Note
+		that if TSO is active, all the packets will be flagged for TSO, not just large packets.
         @constant IFNET_TSO_IPV6 Hardware supports IPv6 TCP Segment Offloading.
+                If the Interface driver sets this flag, TCP IPv6 will send larger frames (up to 64KB) as one
+                frame to the adapter which will perform the final packetization. The maximum TSO segment
+                supported by the interface can be set with "ifnet_set_tso_mtu". To retreive the real MTU
+                for the TCP IPv6 connection the function "mbuf_get_tso_requested" is used by the driver.
+		Note that if TSO is active, all the packets will be flagged for TSO, not just large packets.
+
 */
 
 enum {
@@ -157,6 +169,9 @@ enum {
 	IFNET_CSUM_UDP		= 0x00000004,
 	IFNET_CSUM_FRAGMENT	= 0x00000008,
 	IFNET_IP_FRAGMENT	= 0x00000010,
+	IFNET_CSUM_TCPIPV6	= 0x00000020,
+	IFNET_CSUM_UDPIPV6	= 0x00000040,
+	IFNET_IPV6_FRAGMENT	= 0x00000080,
 #ifdef KERNEL_PRIVATE
 	IFNET_CSUM_SUM16	= 0x00001000,
 #endif /* KERNEL_PRIVATE */
@@ -839,7 +854,7 @@ extern const char *ifnet_name(ifnet_t interface);
 	@function ifnet_family
 	@discussion Returns the family of the interface.
 	@param interface Interface to retrieve the unit number from.
-	@result Unit number.
+	@result Interface family type.
  */
 extern ifnet_family_t ifnet_family(ifnet_t interface);
 
@@ -943,15 +958,91 @@ extern u_int32_t ifnet_idle_flags(ifnet_t interface);
 #endif /* KERNEL_PRIVATE */
 
 /*!
+	@function ifnet_set_capabilities_supported
+	@discussion Specify the capabilities supported by the interface.
+	@discussion  This function lets you specify which capabilities are supported 
+		by the interface. Typically this function is called by the driver when 
+		the interface gets attached to the system.
+		The mask allows to control which capability to set or unset.
+		The kernel will effectively take the lock, then set the
+		interface's flags to (if_capabilities & ~mask) | (new_caps & mask).
+
+		This function is intended to be called by the driver. A kext
+		must not call this function on an interface the kext does not
+		own.
+	@param interface Interface to set the capabilities on.
+	@param new_caps The value of the capabilities that should be set or unset. These
+		flags are defined in net/if.h
+	@param mask Which capabilities that should be affected. These
+		flags are defined in net/if.h
+	@result 0 on success otherwise the errno error.
+ */
+extern errno_t ifnet_set_capabilities_supported(ifnet_t interface, u_int32_t new_caps,
+    u_int32_t mask);
+
+/*!
+	@function ifnet_capabilities_supported
+	@discussion Retrieve the interface capabilities supported by the interface.
+	@param interface Interface to retrieve the capabilities from.
+	@result Flags. Capabilities flags are defined in net/if.h
+ */
+extern u_int32_t ifnet_capabilities_supported(ifnet_t interface);
+
+/*!
+	@function ifnet_set_capabilities_enabled
+	@discussion Enable and/or disable the interface capabilities to match new_caps.
+	@discussion Sets the interface capabilities to new_caps. This function
+		lets you specify which capabilities you want to change using the mask.
+		The kernel will effectively take the lock, then set the
+		interface's flags to (if_capenable & ~mask) | (new_caps & mask).
+
+		This function is intended to be called by the driver. A kext
+		must not call this function on an interface the kext does not
+		own.
+		
+		Typically this function is called by the driver when the interface is 
+		created to specify which of the supported capabilities are enabled by 
+		default. This function is also meant to be called when the driver handles  
+		the interface ioctl SIOCSIFCAP.
+		
+		The driver should call ifnet_set_offlad() to indicate the corresponding  
+		hardware offload bits that will be used by the networking stack.
+		
+		It is an error to enable a capability that is not marked as 
+		supported by the interface.
+	@param interface Interface to set the capabilities on.
+	@param new_caps The value of the capabilities that should be set or unset. These
+		flags are defined in net/if.h
+	@param mask Which capabilities that should be affected. These
+		flags are defined in net/if.h
+	@result 0 on success otherwise the errno error.
+ */
+extern errno_t ifnet_set_capabilities_enabled(ifnet_t interface, u_int32_t new_caps,
+    u_int32_t mask);
+
+/*!
+	@function ifnet_capabilities_enabled
+	@discussion Retrieve the interface capabilities enabled on the interface.
+	@param interface Interface to retrieve the capabilities from.
+	@result Flags. Capabilities flags are defined in net/if.h
+ */
+extern u_int32_t ifnet_capabilities_enabled(ifnet_t interface);
+
+
+/*!
 	@function ifnet_set_offload
 	@discussion Sets a bitfield to indicate special hardware offload
 		support provided by the interface such as hardware checksums and
 		VLAN. This replaces the if_hwassist flags field. Any flags
 		unrecognized by the stack will not be set.
+
+		Note the system will automatically set the interface capabilities 
+		that correspond to the offload flags modified -- i.e. the driver 
+		does not have to call ifnet_set_capabilities_enabled() and 
+		ifnet_set_capabilities_supported().
 	@param interface The interface.
 	@param offload The new set of flags indicating which offload options
 		the device supports.
-	@param mask The mask of flags to be modified.
 	@result 0 on success otherwise the errno error.
  */
 extern errno_t ifnet_set_offload(ifnet_t interface, ifnet_offload_t offload);
@@ -1446,6 +1537,11 @@ extern errno_t ifnet_get_address_list(ifnet_t interface, ifaddr_t **addresses);
 extern errno_t ifnet_get_address_list_family(ifnet_t interface,
     ifaddr_t **addresses, sa_family_t family);
 
+#ifdef KERNEL_PRIVATE
+__private_extern__ errno_t ifnet_get_address_list_family_internal(ifnet_t,
+    ifaddr_t **, sa_family_t, int, int);
+#endif /* KERNEL_PRIVATE */
+
 /*!
 	@function ifnet_free_address_list
 	@discussion Free a list of addresses returned from
@@ -1543,9 +1639,9 @@ extern errno_t ifnet_resolve_multicast(ifnet_t ifp,
 		ifnet_remove_multicast and making sure you no longer have any
 		references to the multicast.
 	@param interface The interface.
-	@param maddr The multicast address to join. Either a physical
-		address or logical address to be translated to a physical
-		address.
+	@param maddr The multicast address (AF_UNSPEC/AF_LINK) to join. Either
+		a physical address or logical address to be translated to a
+		physical address.
 	@param multicast The resulting ifmultiaddr_t multicast address.
 	@result 0 on success otherwise the errno error.
  */

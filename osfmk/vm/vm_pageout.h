@@ -85,6 +85,40 @@
 #include <vm/vm_page.h>
 #endif
 
+#include <sys/kdebug.h>
+
+#if CONFIG_FREEZE
+extern boolean_t vm_freeze_enabled;
+#define VM_DYNAMIC_PAGING_ENABLED(port) ((vm_freeze_enabled == FALSE) && IP_VALID(port))
+#else
+#define VM_DYNAMIC_PAGING_ENABLED(port) IP_VALID(port)
+#endif
+
+
+extern int	vm_debug_events;
+
+#define VMF_CHECK_ZFDELAY	0x100
+#define VMF_COWDELAY		0x101
+#define VMF_ZFDELAY		0x102
+
+#define VM_PAGEOUT_SCAN		0x104
+#define VM_PAGEOUT_BALANCE	0x105
+#define VM_PAGEOUT_FREELIST	0x106
+#define VM_PAGEOUT_PURGEONE	0x107
+#define VM_PAGEOUT_CACHE_EVICT	0x108
+#define VM_PAGEOUT_THREAD_BLOCK	0x109
+
+#define VM_UPL_PAGE_WAIT	0x120
+#define VM_IOPL_PAGE_WAIT	0x121
+
+#define VM_DEBUG_EVENT(name, event, control, arg1, arg2, arg3, arg4)	\
+	MACRO_BEGIN						\
+	if (vm_debug_events) {					\
+		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, event)) | control, arg1, arg2, arg3, arg4, 0); \
+	}							\
+	MACRO_END
+
+
 
 extern kern_return_t vm_map_create_upl(
 	vm_map_t		map,
@@ -105,7 +139,6 @@ extern upl_size_t upl_get_size(
 #ifndef	MACH_KERNEL_PRIVATE
 typedef struct vm_page	*vm_page_t;
 #endif
-
 
 extern void                vm_page_free_list(
                             vm_page_t	mem,
@@ -129,22 +162,6 @@ extern unsigned int	vm_pageout_scan_event_counter;
 extern unsigned int	vm_zf_queue_count;
 
 
-#if defined(__ppc__) /* On ppc, vm statistics are still 32-bit */
-
-extern unsigned int	vm_zf_count;
-
-#define VM_ZF_COUNT_INCR()				\
-	MACRO_BEGIN					\
-	OSAddAtomic(1, (SInt32 *) &vm_zf_count);	\
-	MACRO_END					\
-
-#define VM_ZF_COUNT_DECR()				\
-	MACRO_BEGIN					\
-	OSAddAtomic(-1, (SInt32 *) &vm_zf_count);	\
-	MACRO_END					\
-
-#else /* !(defined(__ppc__)) */
-
 extern uint64_t	vm_zf_count;
 
 #define VM_ZF_COUNT_INCR()				\
@@ -156,8 +173,6 @@ extern uint64_t	vm_zf_count;
 	MACRO_BEGIN					\
 	OSAddAtomic64(-1, (SInt64 *) &vm_zf_count);	\
 	MACRO_END					\
-
-#endif /* !(defined(__ppc__)) */
 
 /*
  * must hold the page queues lock to
@@ -180,6 +195,7 @@ struct vm_pageout_queue {
 
 extern struct	vm_pageout_queue	vm_pageout_queue_internal;
 extern struct	vm_pageout_queue	vm_pageout_queue_external;
+
 
 /*
  *	Routines exported to Mach.
@@ -252,6 +268,7 @@ struct ucd {
 struct upl {
 	decl_lck_mtx_data(,	Lock)	/* Synchronization */
 	int		ref_count;
+	int		ext_ref_count;
 	int		flags;
 	vm_object_t	src_object; /* object derived from */
 	vm_object_offset_t offset;
@@ -290,7 +307,8 @@ struct upl {
 #define UPL_SHADOWED		0x1000
 #define UPL_KERNEL_OBJECT	0x2000
 #define UPL_VECTOR		0x4000
-#define UPL_HAS_BUSY            0x10000
+#define UPL_SET_DIRTY		0x8000
+#define UPL_HAS_BUSY		0x10000
 
 /* flags for upl_create flags parameter */
 #define UPL_CREATE_EXTERNAL	0
@@ -385,6 +403,9 @@ extern void vm_pageout_queue_steal(
 	vm_page_t page, 
 	boolean_t queues_locked);
 	
+extern boolean_t vm_page_is_slideable(vm_page_t m);
+
+extern kern_return_t vm_page_slide(vm_page_t page, vm_map_offset_t kernel_mapping_offset);
 #endif  /* MACH_KERNEL_PRIVATE */
 
 #if UPL_DEBUG

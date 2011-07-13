@@ -34,6 +34,8 @@
 
 #define	STRSIZE			1024
 
+#define STREQ(a,b) (strcmp(a,b) == 0)
+
 typedef struct {
 	long long		re_count;
 	long long		re_errors;

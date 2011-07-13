@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -28,66 +28,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:33  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:55  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.10.3  1995/03/15  17:21:19  bruel
- * 	compile only if !__GNUC__.
- * 	[95/03/09            bruel]
- *
- * Revision 1.1.10.2  1995/01/06  19:48:05  devrcs
- * 	mk6 CR668 - 1.3b26 merge
- * 	* Revision 1.1.3.5  1994/05/06  18:51:43  tmt
- * 	Merge in DEC Alpha changes to osc1.3b19.
- * 	Merge Alpha changes into osc1.312b source code.
- * 	Remove ifdef sun around insque and remque.
- * 	* End1.3merge
- * 	[1994/11/04  09:29:15  dwm]
- * 
- * Revision 1.1.10.1  1994/09/23  02:25:00  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:35:34  ezf]
- * 
- * Revision 1.1.3.3  1993/07/28  17:16:26  bernard
- * 	CR9523 -- Prototypes.
- * 	[1993/07/21  17:00:38  bernard]
- * 
- * Revision 1.1.3.2  1993/06/02  23:39:41  jeffc
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:13:58  jeffc]
- * 
- * Revision 1.1  1992/09/30  02:09:52  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.4  91/05/14  16:45:45  mrt
- * 	Correcting copyright
- * 
- * Revision 2.3  91/05/08  12:48:22  dbg
- * 	Compile queue routines on vax.
- * 	[91/03/26            dbg]
- * 
- * Revision 2.2  91/02/05  17:28:38  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  16:16:22  mrt]
- * 
- * Revision 2.1  89/08/03  15:51:47  rwd
- * Created.
- * 
- * 17-Mar-87  David Golub (dbg) at Carnegie-Mellon University
- *	Created from routines written by David L. Black.
- *
- */ 
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
@@ -190,14 +130,13 @@ dequeue_tail(
 
 /*
  *	Remove arbitrary element from queue.
- *	Does not check whether element is on queue - the world
+ *	Does not check whether element is on a queue - the world
  *	will go haywire if it isn't.
  */
 
 /*ARGSUSED*/
 void
 remqueue(
-	queue_t			que,
 	register queue_entry_t	elt)
 {
 	elt->next->prev = elt->prev;

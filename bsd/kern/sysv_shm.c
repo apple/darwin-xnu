@@ -774,7 +774,7 @@ shmget_allocate_segment(struct proc *p, struct shmget_args *uap, int mode,
 	shmid = IXSEQ_TO_IPCID(segnum, shmseg->u.shm_perm);
 
 	shmseg->u.shm_perm.cuid = shmseg->u.shm_perm.uid = kauth_cred_getuid(cred);
-	shmseg->u.shm_perm.cgid = shmseg->u.shm_perm.gid = cred->cr_gid;
+	shmseg->u.shm_perm.cgid = shmseg->u.shm_perm.gid = kauth_cred_getgid(cred);
 	shmseg->u.shm_perm.mode = (shmseg->u.shm_perm.mode & SHMSEG_WANTED) |
 	    (mode & ACCESSPERMS) | SHMSEG_ALLOCATED;
 	shmseg->u.shm_segsz = uap->size;
@@ -1165,26 +1165,26 @@ ipcs_shm_sysctl_out:
 	return(error);
 }
 
-SYSCTL_NODE(_kern, KERN_SYSV, sysv, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "SYSV");
+SYSCTL_NODE(_kern, KERN_SYSV, sysv, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY, 0, "SYSV");
 
-SYSCTL_PROC(_kern_sysv, OID_AUTO, shmmax, CTLTYPE_QUAD | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, shmmax, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
     &shminfo.shmmax, 0, &sysctl_shminfo ,"Q","shmmax");
 
-SYSCTL_PROC(_kern_sysv, OID_AUTO, shmmin, CTLTYPE_QUAD | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, shmmin, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
     &shminfo.shmmin, 0, &sysctl_shminfo ,"Q","shmmin");
 
-SYSCTL_PROC(_kern_sysv, OID_AUTO, shmmni, CTLTYPE_QUAD | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, shmmni, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
     &shminfo.shmmni, 0, &sysctl_shminfo ,"Q","shmmni");
 
-SYSCTL_PROC(_kern_sysv, OID_AUTO, shmseg, CTLTYPE_QUAD | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, shmseg, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
     &shminfo.shmseg, 0, &sysctl_shminfo ,"Q","shmseg");
 
-SYSCTL_PROC(_kern_sysv, OID_AUTO, shmall, CTLTYPE_QUAD | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, shmall, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
     &shminfo.shmall, 0, &sysctl_shminfo ,"Q","shmall");
 
-SYSCTL_NODE(_kern_sysv, OID_AUTO, ipcs, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "SYSVIPCS");
+SYSCTL_NODE(_kern_sysv, OID_AUTO, ipcs, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY, 0, "SYSVIPCS");
 
-SYSCTL_PROC(_kern_sysv_ipcs, OID_AUTO, shm, CTLFLAG_RW|CTLFLAG_ANYBODY,
+SYSCTL_PROC(_kern_sysv_ipcs, OID_AUTO, shm, CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED,
 	0, 0, IPCS_shm_sysctl,
 	"S,IPCS_shm_command",
 	"ipcs shm command interface");

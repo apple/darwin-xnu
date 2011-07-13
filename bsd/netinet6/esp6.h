@@ -69,7 +69,7 @@
 #ifdef KERNEL_PRIVATE
 extern int esp6_output(struct mbuf *, u_char *, struct mbuf *,
 	struct secasvar *);
-extern int esp6_input(struct mbuf **, int *);
+extern int esp6_input(struct mbuf **, int *, int);
 
 extern void esp6_ctlinput(int, struct sockaddr *, void *);
 #endif /* KERNEL_PRIVATE */

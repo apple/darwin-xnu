@@ -75,6 +75,7 @@
 #include <sys/kauth.h>
 #include <sys/vnode.h>
 #include <sys/time.h>
+#include <sys/priv.h>
 
 #include <sys/mount_internal.h>
 #include <sys/sysproto.h>
@@ -215,7 +216,7 @@ adjtime(struct proc *p, struct adjtime_args *uap, __unused int32_t *retval)
 	if (error)
 		return (error);
 #endif
-	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
+	if ((error = priv_check_cred(kauth_cred_get(), PRIV_ADJTIME, 0)))
 		return (error);
 	if (IS_64BIT_PROCESS(p)) {
 		struct user64_timeval user_atv;

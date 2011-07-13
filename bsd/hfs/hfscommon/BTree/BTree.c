@@ -1583,6 +1583,7 @@ BTUpdateRecord(FCB *filePtr, BTreeIterator *iterator,
 	u_int16_t				index;
 	Boolean					validHint;
 
+
 	////////////////////////// Priliminary Checks ///////////////////////////////
 
 	nodeRec.buffer = nil;					// so we can call ReleaseNode
@@ -1666,9 +1667,9 @@ Success:
 	////////////////////////////// Error Exit ///////////////////////////////////
 
 ErrorExit:
-	
+
 	(void) ReleaseNode (btreePtr, &nodeRec);
-	
+
 	iterator->hint.writeCount 	= 0;
 	iterator->hint.nodeNum		= 0;
 	iterator->hint.index		= 0;
@@ -1996,7 +1997,6 @@ OSStatus	BTSetLastSync		(FCB					*filePtr,
 	return noErr;
 }
 
-
 __private_extern__
 OSStatus	BTHasContiguousNodes	(FCB	 				*filePtr)
 {
@@ -2021,7 +2021,6 @@ Routine:	BTGetUserData
 Function:	Read the user data area of the b-tree header node.
 
 -------------------------------------------------------------------------------*/
-__private_extern__
 OSStatus
 BTGetUserData(FCB *filePtr, void * dataPtr, int dataSize)
 {
@@ -2059,7 +2058,6 @@ Routine:	BTSetUserData
 
 Function:	Write the user data area of the b-tree header node.
 -------------------------------------------------------------------------------*/
-__private_extern__
 OSStatus
 BTSetUserData(FCB *filePtr, void * dataPtr, int dataSize)
 {

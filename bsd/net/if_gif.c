@@ -122,7 +122,6 @@ TAILQ_HEAD(gifhead, gif_softc) gifs = TAILQ_HEAD_INITIALIZER(gifs);
 
 #ifdef __APPLE__
 void gifattach(void);
-static void gif_create_dev(void);
 static int gif_encapcheck(const struct mbuf*, int, int, void*);
 static errno_t gif_output(ifnet_t ifp, mbuf_t m);
 static errno_t gif_input(ifnet_t ifp, protocol_family_t protocol_family,
@@ -155,6 +154,11 @@ struct ip6protosw in6_gif_protosw =
 
 };
 #endif
+
+static if_clone_t gif_cloner = NULL;
+static int gif_clone_create(struct if_clone *, uint32_t, void *);
+static int gif_clone_destroy(struct ifnet *);
+static void gif_delete_tunnel(struct gif_softc *);
 
 #ifdef __APPLE__
 /*
@@ -237,6 +241,8 @@ __private_extern__ void
 gifattach(void)
 {
 	errno_t result;
+	struct ifnet_clone_params ifnet_clone_params;
+	struct if_clone *ifc = NULL; 
 
 	/* Init the list of interfaces */
 	TAILQ_INIT(&gifs);
@@ -252,8 +258,17 @@ gifattach(void)
 	if (result != 0)
 		printf("proto_register_plumber failed for AF_INET6 error=%d\n", result);
 
+	ifnet_clone_params.ifc_name = "gif";
+	ifnet_clone_params.ifc_create = gif_clone_create;
+	ifnet_clone_params.ifc_destroy = gif_clone_destroy;
+
+	result = ifnet_clone_attach(&ifnet_clone_params, &gif_cloner);
+	if (result != 0)
+		printf("gifattach: ifnet_clone_attach failed %d\n", result);
+
 	/* Create first device */
-	gif_create_dev();
+	ifc = if_clone_lookup("gif", NULL);
+	gif_clone_create(ifc, 0, NULL);
 }
 
 static errno_t
@@ -270,35 +285,34 @@ gif_set_bpf_tap(
 	return 0;
 }
 
-/* Creates another gif device if there are none free */
-static void
-gif_create_dev(void)
+
+static int
+gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 {
-	struct gif_softc			*sc;
-	struct ifnet_init_params	gif_init;
-	errno_t						result = 0;
-	
-	
+	struct gif_softc	*sc = NULL;
+	struct ifnet_init_params gif_init;
+	errno_t result = 0;
+
 	/* Can't create more than GIF_MAXUNIT */
 	if (ngif >= GIF_MAXUNIT)
-		return;
-	
-	/* Check for unused gif interface */
-	TAILQ_FOREACH(sc, &gifs, gif_link) {
-		/* If unused, return, no need to create a new interface */
-		if ((ifnet_flags(sc->gif_if) & IFF_RUNNING) == 0)
-			return;
-	}
+		return (ENXIO);
 
 	sc = _MALLOC(sizeof(struct gif_softc), M_DEVBUF, M_WAITOK);
 	if (sc == NULL) {
-		log(LOG_ERR, "gifattach: failed to allocate gif%d\n", ngif);
-		return;
+		log(LOG_ERR, "gif_clone_create: failed to allocate gif%d\n", unit);
+		return ENOBUFS;
 	}
-	
+	bzero(sc, sizeof(struct gif_softc));
+
+	/* use the interface name as the unique id for ifp recycle */
+	snprintf(sc->gif_ifname, sizeof(sc->gif_ifname), "%s%d",
+			ifc->ifc_name, unit);
+
 	bzero(&gif_init, sizeof(gif_init));
+	gif_init.uniqueid = sc->gif_ifname;
+	gif_init.uniqueid_len = strlen(sc->gif_ifname);
 	gif_init.name = GIFNAME;
-	gif_init.unit = ngif;
+	gif_init.unit = unit;
 	gif_init.type = IFT_GIF;
 	gif_init.family = IFNET_FAMILY_GIF;
 	gif_init.output = gif_output;
@@ -309,22 +323,22 @@ gif_create_dev(void)
 	gif_init.ioctl = gif_ioctl;
 	gif_init.set_bpf_tap = gif_set_bpf_tap;
 
-	bzero(sc, sizeof(struct gif_softc));
 	result = ifnet_allocate(&gif_init, &sc->gif_if);
 	if (result != 0) {
-		printf("gif_create_dev, ifnet_allocate failed - %d\n", result);
+		printf("gif_clone_create, ifnet_allocate failed - %d\n", result);
 		_FREE(sc, M_DEVBUF);
-		return;
+		return ENOBUFS;
 	}
+
 	sc->encap_cookie4 = sc->encap_cookie6 = NULL;
 #if INET
 	sc->encap_cookie4 = encap_attach_func(AF_INET, -1,
-	    gif_encapcheck, &in_gif_protosw, sc);
+			gif_encapcheck, &in_gif_protosw, sc);
 	if (sc->encap_cookie4 == NULL) {
 		printf("%s: unable to attach encap4\n", if_name(sc->gif_if));
 		ifnet_release(sc->gif_if);
 		FREE(sc, M_DEVBUF);
-		return;
+		return ENOBUFS;
 	}
 #endif
 #if INET6
@@ -338,7 +352,7 @@ gif_create_dev(void)
 		printf("%s: unable to attach encap6\n", if_name(sc->gif_if));
 		ifnet_release(sc->gif_if);
 		FREE(sc, M_DEVBUF);
-		return;
+		return ENOBUFS;
 	}
 #endif
 	sc->gif_called = 0;
@@ -350,10 +364,18 @@ gif_create_dev(void)
 #endif
 	result = ifnet_attach(sc->gif_if, NULL);
 	if (result != 0) {
-		printf("gif_create_dev - ifnet_attach failed - %d\n", result);
+		printf("gif_clone_create - ifnet_attach failed - %d\n", result);
 		ifnet_release(sc->gif_if);
+		if (sc->encap_cookie4) {
+			encap_detach(sc->encap_cookie4);
+			sc->encap_cookie4 = NULL;
+		}
+		if (sc->encap_cookie6) {
+			encap_detach(sc->encap_cookie6);
+			sc->encap_cookie6 = NULL;
+		}
 		FREE(sc, M_DEVBUF);
-		return;
+		return result;
 	}
 #if CONFIG_MACF_NET
 	mac_ifnet_label_init(&sc->gif_if);
@@ -361,6 +383,43 @@ gif_create_dev(void)
 	bpfattach(sc->gif_if, DLT_NULL, sizeof(u_int));
 	TAILQ_INSERT_TAIL(&gifs, sc, gif_link);
 	ngif++;
+	return 0;
+}
+
+static int
+gif_clone_destroy(struct ifnet *ifp)
+{
+#if defined(INET) || defined(INET6)
+	int err = 0;
+#endif
+	struct gif_softc *sc = ifp->if_softc;
+
+	TAILQ_REMOVE(&gifs, sc, gif_link);
+
+	gif_delete_tunnel(sc);
+#ifdef INET6
+	if (sc->encap_cookie6 != NULL) {
+		err = encap_detach(sc->encap_cookie6);
+		KASSERT(err == 0, ("gif_clone_destroy: Unexpected error detaching encap_cookie6"));
+	}
+#endif
+#ifdef INET
+	if (sc->encap_cookie4 != NULL) {
+		err = encap_detach(sc->encap_cookie4);
+		KASSERT(err == 0, ("gif_clone_destroy: Unexpected error detaching encap_cookie4"));
+	}
+#endif
+	err = ifnet_set_flags(ifp, 0, IFF_UP);
+	if (err != 0) {
+		printf("gif_clone_destroy: ifnet_set_flags failed %d\n", err);
+	}
+
+	err = ifnet_detach(ifp);
+	if (err != 0)
+		panic("gif_clone_destroy: ifnet_detach(%p) failed %d\n", ifp, err);
+	FREE(sc, M_DEVBUF);
+	ngif--;
+	return 0;
 }
 
 static int
@@ -488,7 +547,6 @@ gif_input(
 	mbuf_t				m,
 	__unused char		*frame_header)
 {
-	errno_t error;
 	struct gif_softc *sc = ifnet_softc(ifp);
 	
 	bpf_tap_in(ifp, 0, m, &sc->gif_proto, sizeof(sc->gif_proto));
@@ -505,8 +563,11 @@ gif_input(
 	 * it occurs more times than we thought, we may change the policy
 	 * again.
 	 */
-	error = proto_input(protocol_family, m);
-	ifnet_stat_increment_in(ifp, 1, m->m_pkthdr.len, 0);
+	if (proto_input(protocol_family, m) != 0) {
+		ifnet_stat_increment_in(ifp, 0, 0, 1);
+		m_freem(m);
+	} else
+		ifnet_stat_increment_in(ifp, 1, m->m_pkthdr.len, 0);
 
 	return (0);
 }
@@ -716,11 +777,6 @@ gif_ioctl(
 
 		ifnet_set_flags(ifp, IFF_RUNNING | IFF_UP, IFF_RUNNING | IFF_UP);
 		
-#ifdef __APPLE__
-		/* Make sure at least one unused device is still available */
-		gif_create_dev();
-#endif
-
 		error = 0;
 		break;
 
@@ -839,7 +895,6 @@ gif_ioctl(
 	return error;
 }
 
-#ifndef __APPLE__
 /* This function is not used in our stack */
 void
 gif_delete_tunnel(sc)
@@ -857,4 +912,3 @@ gif_delete_tunnel(sc)
 	}
 	/* change the IFF_UP flag as well? */
 }
-#endif

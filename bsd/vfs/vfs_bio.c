@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -110,12 +110,13 @@
 
 #include <sys/sdt.h>
 
+
 #if BALANCE_QUEUES
 static __inline__ void bufqinc(int q);
 static __inline__ void bufqdec(int q);
 #endif
 
-static int	bcleanbuf(buf_t bp, boolean_t discard);
+int	bcleanbuf(buf_t bp, boolean_t discard);
 static int	brecover_data(buf_t bp);
 static boolean_t incore(vnode_t vp, daddr64_t blkno);
 /* timeout is in msecs */
@@ -125,7 +126,13 @@ static void	buf_reassign(buf_t bp, vnode_t newvp);
 static errno_t	buf_acquire_locked(buf_t bp, int flags, int slpflag, int slptimeo);
 static int	buf_iterprepare(vnode_t vp, struct buflists *, int flags);
 static void	buf_itercomplete(vnode_t vp, struct buflists *, int flags);
-boolean_t buffer_cache_gc(int);
+static boolean_t buffer_cache_gc(int);
+static buf_t	buf_brelse_shadow(buf_t bp);
+static void	buf_free_meta_store(buf_t bp);
+
+static buf_t	buf_create_shadow_internal(buf_t bp, boolean_t force_copy,
+					   uintptr_t external_storage, void (*iodone)(buf_t, void *), void *arg, int priv);
+
 
 __private_extern__ int  bdwrite_internal(buf_t, int);
 
@@ -156,6 +163,7 @@ long nbdwrite = 0;
 int blaundrycnt = 0;
 static int boot_nbuf_headers = 0;
 
+static TAILQ_HEAD(delayqueue, buf) delaybufqueue;
 
 static TAILQ_HEAD(ioqueue, buf) iobufqueue;
 static TAILQ_HEAD(bqueues, buf) bufqueues[BQUEUES];
@@ -231,7 +239,7 @@ int lru_is_stale = LRU_IS_STALE;
 int age_is_stale = AGE_IS_STALE;
 int meta_is_stale = META_IS_STALE;
 
-
+#define MAXLAUNDRY	10
 
 /* LIST_INSERT_HEAD() with assertions */
 static __inline__ void
@@ -278,7 +286,28 @@ bremhash(buf_t	bp)
 	*bp->b_hash.le_prev = (bp)->b_hash.le_next;
 }
 
+/*
+ * buf_mtxp held.
+ */
+static __inline__ void
+bmovelaundry(buf_t bp)
+{
+	bp->b_whichq = BQ_LAUNDRY;
+	bp->b_timestamp = buf_timestamp();
+	binstailfree(bp, &bufqueues[BQ_LAUNDRY], BQ_LAUNDRY);
+	blaundrycnt++;
+}
 
+static __inline__ void
+buf_release_credentials(buf_t bp)
+{
+	if (IS_VALID_CRED(bp->b_rcred)) {
+		kauth_cred_unref(&bp->b_rcred);
+	}
+	if (IS_VALID_CRED(bp->b_wcred)) {
+		kauth_cred_unref(&bp->b_wcred);
+	}
+}
 
 
 int
@@ -313,6 +342,17 @@ buf_markdelayed(buf_t bp) {
 		buf_reassign(bp, bp->b_vp);
 	}
         SET(bp->b_flags, B_DONE);
+}
+
+void
+buf_markclean(buf_t bp) {
+
+	if (ISSET(bp->b_flags, B_DELWRI)) {
+		CLR(bp->b_flags, B_DELWRI);
+
+		OSAddAtomicLong(-1, &nbdwrite);
+		buf_reassign(bp, bp->b_vp);
+	}
 }
 
 void
@@ -571,15 +611,179 @@ buf_clone(buf_t bp, int io_offset, int io_size, void (*iodone)(buf_t, void *), v
 }
 
 
+int
+buf_shadow(buf_t bp)
+{
+	if (bp->b_lflags & BL_SHADOW)
+		return 1;
+	return 0;
+}
+
+
+buf_t
+buf_create_shadow_priv(buf_t bp, boolean_t force_copy, uintptr_t external_storage, void (*iodone)(buf_t, void *), void *arg)
+{
+	return (buf_create_shadow_internal(bp, force_copy, external_storage, iodone, arg, 1));
+}
+
+buf_t
+buf_create_shadow(buf_t bp, boolean_t force_copy, uintptr_t external_storage, void (*iodone)(buf_t, void *), void *arg)
+{
+	return (buf_create_shadow_internal(bp, force_copy, external_storage, iodone, arg, 0));
+}
+
+
+static buf_t
+buf_create_shadow_internal(buf_t bp, boolean_t force_copy, uintptr_t external_storage, void (*iodone)(buf_t, void *), void *arg, int priv)
+{
+        buf_t	io_bp;
+
+	KERNEL_DEBUG(0xbbbbc000 | DBG_FUNC_START, bp, 0, 0, 0, 0);
+
+	if ( !(bp->b_flags & B_META) || (bp->b_lflags & BL_IOBUF)) {
+
+		KERNEL_DEBUG(0xbbbbc000 | DBG_FUNC_END, bp, 0, 0, 0, 0);
+		return (NULL);
+	}
+#ifdef BUF_MAKE_PRIVATE
+	if (bp->b_shadow_ref && bp->b_data_ref == 0 && external_storage == 0)
+		panic("buf_create_shadow: %p is in the private state (%d, %d)", bp, bp->b_shadow_ref, bp->b_data_ref);
+#endif
+	io_bp = alloc_io_buf(bp->b_vp, priv);
+
+	io_bp->b_flags = bp->b_flags & (B_META | B_ZALLOC | B_ASYNC | B_READ | B_FUA);
+	io_bp->b_blkno = bp->b_blkno;
+	io_bp->b_lblkno = bp->b_lblkno;
+
+	if (iodone) {
+	        io_bp->b_transaction = arg;
+		io_bp->b_iodone = iodone;
+		io_bp->b_flags |= B_CALL;
+	}
+	if (force_copy == FALSE) {
+		io_bp->b_bcount = bp->b_bcount;
+		io_bp->b_bufsize = bp->b_bufsize;
+
+		if (external_storage) {
+			io_bp->b_datap = external_storage;
+#ifdef BUF_MAKE_PRIVATE
+			io_bp->b_data_store = NULL;
+#endif
+		} else {
+			io_bp->b_datap = bp->b_datap;
+#ifdef BUF_MAKE_PRIVATE
+			io_bp->b_data_store = bp;
+#endif
+		}
+		*(buf_t *)(&io_bp->b_orig) = bp;
+
+		lck_mtx_lock_spin(buf_mtxp);
+
+		io_bp->b_lflags |= BL_SHADOW;
+		io_bp->b_shadow = bp->b_shadow;
+		bp->b_shadow = io_bp;
+		bp->b_shadow_ref++;
+
+#ifdef BUF_MAKE_PRIVATE
+		if (external_storage)
+			io_bp->b_lflags |= BL_EXTERNAL;
+		else
+			bp->b_data_ref++;
+#endif
+		lck_mtx_unlock(buf_mtxp);
+	} else {
+		if (external_storage) {
+#ifdef BUF_MAKE_PRIVATE
+			io_bp->b_lflags |= BL_EXTERNAL;
+#endif
+			io_bp->b_bcount = bp->b_bcount;
+			io_bp->b_bufsize = bp->b_bufsize;
+			io_bp->b_datap = external_storage;
+		} else {
+			allocbuf(io_bp, bp->b_bcount);
+
+			io_bp->b_lflags |= BL_IOBUF_ALLOC;
+		}
+		bcopy((caddr_t)bp->b_datap, (caddr_t)io_bp->b_datap, bp->b_bcount);
+
+#ifdef BUF_MAKE_PRIVATE
+		io_bp->b_data_store = NULL;
+#endif
+	}
+	KERNEL_DEBUG(0xbbbbc000 | DBG_FUNC_END, bp, bp->b_shadow_ref, 0, io_bp, 0);
+
+	return (io_bp);
+}
+
+
+#ifdef BUF_MAKE_PRIVATE
+errno_t
+buf_make_private(buf_t bp)
+{
+	buf_t	ds_bp;
+	buf_t	t_bp;
+	struct buf my_buf;
+
+	KERNEL_DEBUG(0xbbbbc004 | DBG_FUNC_START, bp, bp->b_shadow_ref, 0, 0, 0);
+
+	if (bp->b_shadow_ref == 0 || bp->b_data_ref == 0 || ISSET(bp->b_lflags, BL_SHADOW)) {
+
+		KERNEL_DEBUG(0xbbbbc004 | DBG_FUNC_END, bp, bp->b_shadow_ref, 0, EINVAL, 0);
+		return (EINVAL);
+	}
+	my_buf.b_flags = B_META;
+	my_buf.b_datap = (uintptr_t)NULL;
+	allocbuf(&my_buf, bp->b_bcount);
+
+	bcopy((caddr_t)bp->b_datap, (caddr_t)my_buf.b_datap, bp->b_bcount);
+
+	lck_mtx_lock_spin(buf_mtxp);
+
+	for (t_bp = bp->b_shadow; t_bp; t_bp = t_bp->b_shadow) {
+		if ( !ISSET(bp->b_lflags, BL_EXTERNAL))
+			break;
+	}
+	ds_bp = t_bp;
+
+	if (ds_bp == NULL && bp->b_data_ref)
+		panic("buf_make_private: b_data_ref != 0 && ds_bp == NULL");
+
+	if (ds_bp && (bp->b_data_ref == 0 || bp->b_shadow_ref == 0))
+		panic("buf_make_private: ref_count == 0 && ds_bp != NULL");
+
+	if (ds_bp == NULL) {
+		lck_mtx_unlock(buf_mtxp);
+
+		buf_free_meta_store(&my_buf);
+
+		KERNEL_DEBUG(0xbbbbc004 | DBG_FUNC_END, bp, bp->b_shadow_ref, 0, EINVAL, 0);
+		return (EINVAL);
+	}
+	for (t_bp = bp->b_shadow; t_bp; t_bp = t_bp->b_shadow) {
+		if ( !ISSET(t_bp->b_lflags, BL_EXTERNAL))
+			t_bp->b_data_store = ds_bp;
+	}
+	ds_bp->b_data_ref = bp->b_data_ref;
+
+	bp->b_data_ref = 0;
+	bp->b_datap = my_buf.b_datap;
+
+	lck_mtx_unlock(buf_mtxp);
+
+	KERNEL_DEBUG(0xbbbbc004 | DBG_FUNC_END, bp, bp->b_shadow_ref, 0, 0, 0);
+	return (0);
+}
+#endif
+
 
 void
 buf_setfilter(buf_t bp, void (*filter)(buf_t, void *), void *transaction,
-	      void **old_iodone, void **old_transaction)
+			  void (**old_iodone)(buf_t, void *), void **old_transaction)
 {
-        if (old_iodone)
-	        *old_iodone = (void *)(bp->b_iodone);
+	if (old_iodone)
+		*old_iodone = bp->b_iodone;
 	if (old_transaction)
-	        *old_transaction = (void *)(bp->b_transaction);
+		*old_transaction = bp->b_transaction;
 
 	bp->b_transaction = transaction;
 	bp->b_iodone = filter;
@@ -884,6 +1088,13 @@ buf_strategy(vnode_t devvp, void *ap)
 	vnode_t	vp = bp->b_vp;
 	int	bmap_flags;
         errno_t error;
+#if CONFIG_DTRACE
+	int dtrace_io_start_flag = 0;	 /* We only want to trip the io:::start
+					  * probe once, with the true phisical
+					  * block in place (b_blkno)
+					  */
+
+#endif	
 
 	if (vp == NULL || vp->v_type == VCHR || vp->v_type == VBLK)
 	        panic("buf_strategy: b_vp == NULL || vtype == VCHR | VBLK\n");
@@ -893,7 +1104,6 @@ buf_strategy(vnode_t devvp, void *ap)
 	 * end up issuing the I/O...
 	 */
 	bp->b_dev = devvp->v_rdev;
-	DTRACE_IO1(start, buf_t, bp);
 
 	if (bp->b_flags & B_READ)
 	        bmap_flags = VNODE_READ;
@@ -909,6 +1119,7 @@ buf_strategy(vnode_t devvp, void *ap)
 			 * to deal with filesystem block sizes
 			 * that aren't equal to the page size
 			 */
+			DTRACE_IO1(start, buf_t, bp);
 		        return (cluster_bp(bp));
 		}
 		if (bp->b_blkno == bp->b_lblkno) {
@@ -916,30 +1127,53 @@ buf_strategy(vnode_t devvp, void *ap)
 			size_t 	contig_bytes;
 		  
 			if ((error = VNOP_BLKTOOFF(vp, bp->b_lblkno, &f_offset))) {
+				DTRACE_IO1(start, buf_t, bp);
 			        buf_seterror(bp, error);
 				buf_biodone(bp);
 
 			        return (error);
 			}
 			if ((error = VNOP_BLOCKMAP(vp, f_offset, bp->b_bcount, &bp->b_blkno, &contig_bytes, NULL, bmap_flags, NULL))) {
+				DTRACE_IO1(start, buf_t, bp);
 			        buf_seterror(bp, error);
 				buf_biodone(bp);
 
 			        return (error);
 			}
+			
+			DTRACE_IO1(start, buf_t, bp);
+#if CONFIG_DTRACE
+			dtrace_io_start_flag = 1;
+#endif /* CONFIG_DTRACE */			
+			
 			if ((bp->b_blkno == -1) || (contig_bytes == 0)) {
 				/* Set block number to force biodone later */
 				bp->b_blkno = -1;
 			        buf_clear(bp);
 			}
-			else if ((long)contig_bytes < bp->b_bcount)
+			else if ((long)contig_bytes < bp->b_bcount) {
 			        return (buf_strategy_fragmented(devvp, bp, f_offset, contig_bytes));
+			}
 		}
+		
+#if CONFIG_DTRACE
+		if (dtrace_io_start_flag == 0) {
+			DTRACE_IO1(start, buf_t, bp);
+			dtrace_io_start_flag = 1;
+		}
+#endif /* CONFIG_DTRACE */
+		
 		if (bp->b_blkno == -1) {
 		        buf_biodone(bp);
 			return (0);
 		}
 	}
+
+#if CONFIG_DTRACE
+	if (dtrace_io_start_flag == 0)
+		DTRACE_IO1(start, buf_t, bp);
+#endif /* CONFIG_DTRACE */
+	
 	/*
 	 * we can issue the I/O because...
 	 * either B_CLUSTER is set which
@@ -1067,6 +1301,7 @@ int
 buf_invalidateblks(vnode_t vp, int flags, int slpflag, int slptimeo)
 {
 	buf_t	bp;
+	int	aflags;
 	int	error = 0;
 	int	must_rescan = 1;
 	struct	buflists local_iterblkhd;
@@ -1097,6 +1332,7 @@ buf_invalidateblks(vnode_t vp, int flags, int slpflag, int slptimeo)
 		        goto try_dirty_list;
 		}
 		while (!LIST_EMPTY(&local_iterblkhd)) {
+
 			bp = LIST_FIRST(&local_iterblkhd);
 
 			LIST_REMOVE(bp, b_vnbufs);
@@ -1108,7 +1344,12 @@ buf_invalidateblks(vnode_t vp, int flags, int slpflag, int slptimeo)
 			if ((flags & BUF_SKIP_META) && (bp->b_lblkno < 0 || ISSET(bp->b_flags, B_META)))
 				continue;
 
-			if ( (error = (int)buf_acquire_locked(bp, BAC_REMOVE | BAC_SKIP_LOCKED, slpflag, slptimeo)) ) {
+			aflags = BAC_REMOVE;
+
+			if ( !(flags & BUF_INVALIDATE_LOCKED) )
+				aflags |= BAC_SKIP_LOCKED;
+
+			if ( (error = (int)buf_acquire_locked(bp, aflags, slpflag, slptimeo)) ) {
 			        if (error == EDEADLK)
 				        /*	
 					 * this buffer was marked B_LOCKED... 
@@ -1136,6 +1377,10 @@ buf_invalidateblks(vnode_t vp, int flags, int slpflag, int slptimeo)
 			}
 			lck_mtx_unlock(buf_mtxp);
 
+			if (bp->b_flags & B_LOCKED)
+				KERNEL_DEBUG(0xbbbbc038, bp, 0, 0, 0, 0);
+
+			CLR(bp->b_flags, B_LOCKED);
 			SET(bp->b_flags, B_INVAL);
 			buf_brelse(bp);
 
@@ -1170,7 +1415,12 @@ try_dirty_list:
 			if ((flags & BUF_SKIP_META) && (bp->b_lblkno < 0 || ISSET(bp->b_flags, B_META)))
 				continue;
 
-			if ( (error = (int)buf_acquire_locked(bp, BAC_REMOVE | BAC_SKIP_LOCKED, slpflag, slptimeo)) ) {
+			aflags = BAC_REMOVE;
+
+			if ( !(flags & BUF_INVALIDATE_LOCKED) )
+				aflags |= BAC_SKIP_LOCKED;
+
+			if ( (error = (int)buf_acquire_locked(bp, aflags, slpflag, slptimeo)) ) {
 			        if (error == EDEADLK)
 				        /*	
 					 * this buffer was marked B_LOCKED... 
@@ -1198,6 +1448,10 @@ try_dirty_list:
 			}
 			lck_mtx_unlock(buf_mtxp);
 
+			if (bp->b_flags & B_LOCKED)
+				KERNEL_DEBUG(0xbbbbc038, bp, 0, 0, 1, 0);
+
+			CLR(bp->b_flags, B_LOCKED);
 			SET(bp->b_flags, B_INVAL);
 
 			if (ISSET(bp->b_flags, B_DELWRI) && (flags & BUF_WRITE_DATA))
@@ -1360,6 +1614,19 @@ bremfree_locked(buf_t bp)
 {
 	struct bqueues *dp = NULL;
 	int whichq;
+
+	whichq = bp->b_whichq;
+
+	if (whichq == -1) {
+		if (bp->b_shadow_ref == 0)
+			panic("bremfree_locked: %p not on freelist", bp);
+		/*
+		 * there are clones pointing to 'bp'...
+		 * therefore, it was not put on a freelist
+		 * when buf_brelse was last called on 'bp'
+		 */
+		return;
+	}
 	/*
 	 * We only calculate the head of the freelist when removing
 	 * the last element of the list as that is the only time that
@@ -1367,8 +1634,6 @@ bremfree_locked(buf_t bp)
 	 *
 	 * NB: This makes an assumption about how tailq's are implemented.
 	 */
-	whichq = bp->b_whichq;
-
 	if (bp->b_freelist.tqe_next == NULL) {
 	        dp = &bufqueues[whichq];
 
@@ -1385,6 +1650,7 @@ bremfree_locked(buf_t bp)
 
 	bp->b_whichq = -1;
 	bp->b_timestamp = 0; 
+	bp->b_shadow = 0;
 }
 
 /*
@@ -1432,7 +1698,7 @@ brelvp_locked(buf_t bp)
 static void
 buf_reassign(buf_t bp, vnode_t newvp)
 {
-	register struct buflists *listheadp;
+	struct buflists *listheadp;
 
 	if (newvp == NULL) {
 		printf("buf_reassign: NULL");
@@ -1502,8 +1768,11 @@ bufinit(void)
 		binsheadfree(bp, dp, BQ_EMPTY);
 		binshash(bp, &invalhash);
 	}
-
 	boot_nbuf_headers = nbuf_headers;
+
+	TAILQ_INIT(&iobufqueue);
+	TAILQ_INIT(&delaybufqueue);
+
 	for (; i < nbuf_headers + niobuf_headers; i++) {
 		bp = &buf_headers[i];
 		bufhdrinit(bp);
@@ -1601,8 +1870,10 @@ bufzoneinit(void)
 					meta_zones[i].mz_max,
 					PAGE_SIZE,
 					meta_zones[i].mz_name);
+		zone_change(meta_zones[i].mz_zone, Z_CALLERACCT, FALSE);
 	}
 	buf_hdr_zone = zinit(sizeof(struct buf), 32, PAGE_SIZE, "buf headers");
+	zone_change(buf_hdr_zone, Z_CALLERACCT, FALSE);
 }
 
 static __inline__ zone_t
@@ -1853,7 +2124,7 @@ vn_bwrite(struct vnop_bwrite_args *ap)
  * headers, we can get in to the situation where "too" many 
  * buf_bdwrite()s can create situation where the kernel can create
  * buffers faster than the disks can service. Doing a buf_bawrite() in
- * cases were we have "too many" outstanding buf_bdwrite()s avoids that.
+ * cases where we have "too many" outstanding buf_bdwrite()s avoids that.
  */
 __private_extern__ int
 bdwrite_internal(buf_t bp, int return_error)
@@ -1955,6 +2226,116 @@ buf_bawrite(buf_t bp)
 }
 
 
+
+static void
+buf_free_meta_store(buf_t bp)
+{
+	if (bp->b_bufsize) {
+		if (ISSET(bp->b_flags, B_ZALLOC)) {
+			zone_t z;
+
+			z = getbufzone(bp->b_bufsize);
+			zfree(z, (void *)bp->b_datap);
+		} else
+			kmem_free(kernel_map, bp->b_datap, bp->b_bufsize); 
+
+		bp->b_datap = (uintptr_t)NULL;
+		bp->b_bufsize = 0;
+	}
+}
+
+
+static buf_t
+buf_brelse_shadow(buf_t bp)
+{
+	buf_t	bp_head;
+	buf_t	bp_temp;
+	buf_t	bp_return = NULL;
+#ifdef BUF_MAKE_PRIVATE
+	buf_t	bp_data;
+	int	data_ref = 0;
+#endif
+	lck_mtx_lock_spin(buf_mtxp);
+
+	bp_head = (buf_t)bp->b_orig;
+
+	if (bp_head->b_whichq != -1)
+		panic("buf_brelse_shadow: bp_head on freelist %d\n", bp_head->b_whichq);
+
+#ifdef BUF_MAKE_PRIVATE
+	if (bp_data = bp->b_data_store) {
+		bp_data->b_data_ref--;
+		/*
+		 * snapshot the ref count so that we can check it 
+		 * outside of the lock... we only want the guy going
+		 * from 1 -> 0 to try and release the storage
+		 */
+		data_ref = bp_data->b_data_ref;
+	}
+#endif
+	KERNEL_DEBUG(0xbbbbc008 | DBG_FUNC_START, bp, bp_head, bp_head->b_shadow_ref, 0, 0);
+
+	bp_head->b_shadow_ref--;
+
+	for (bp_temp = bp_head; bp_temp && bp != bp_temp->b_shadow; bp_temp = bp_temp->b_shadow);
+
+	if (bp_temp == NULL)
+		panic("buf_brelse_shadow: bp not on list %p", bp_head);
+
+	bp_temp->b_shadow = bp_temp->b_shadow->b_shadow;
+
+#ifdef BUF_MAKE_PRIVATE
+	/*
+	 * we're about to free the current 'owner' of the data buffer and
+	 * there is at least one other shadow buf_t still pointing at it
+	 * so transfer it to the first shadow buf left in the chain
+	 */
+	if (bp == bp_data && data_ref) {
+		if ((bp_data = bp_head->b_shadow) == NULL)
+			panic("buf_brelse_shadow: data_ref mismatch bp(%p)", bp);
+
+		for (bp_temp = bp_data; bp_temp; bp_temp = bp_temp->b_shadow)
+			bp_temp->b_data_store = bp_data;
+		bp_data->b_data_ref = data_ref;
+	}
+#endif
+	if (bp_head->b_shadow_ref == 0 && bp_head->b_shadow)
+		panic("buf_relse_shadow: b_shadow != NULL && b_shadow_ref == 0  bp(%p)", bp); 
+	if (bp_head->b_shadow_ref && bp_head->b_shadow == 0)
+		panic("buf_relse_shadow: b_shadow == NULL && b_shadow_ref != 0  bp(%p)", bp); 
+
+	if (bp_head->b_shadow_ref == 0) {
+		if (!ISSET(bp_head->b_lflags, BL_BUSY)) {
+
+			CLR(bp_head->b_flags, B_AGE);
+			bp_head->b_timestamp = buf_timestamp();
+
+			if (ISSET(bp_head->b_flags, B_LOCKED)) {
+				bp_head->b_whichq = BQ_LOCKED;
+				binstailfree(bp_head, &bufqueues[BQ_LOCKED], BQ_LOCKED);
+			} else {
+				bp_head->b_whichq = BQ_META;
+				binstailfree(bp_head, &bufqueues[BQ_META], BQ_META);
+			}
+		} else if (ISSET(bp_head->b_lflags, BL_WAITSHADOW)) {
+			CLR(bp_head->b_lflags, BL_WAITSHADOW);
+
+			bp_return = bp_head;
+		}
+	}
+	lck_mtx_unlock(buf_mtxp);
+#ifdef BUF_MAKE_PRIVATE	
+	if (bp == bp_data && data_ref == 0)
+		buf_free_meta_store(bp);
+
+	bp->b_data_store = NULL;
+#endif
+	KERNEL_DEBUG(0xbbbbc008 | DBG_FUNC_END, bp, 0, 0, 0, 0);
+
+	return (bp_return);
+}
+
+
 /*
  * Release a buffer on to the free lists.
  * Described in Bach (p. 46).
@@ -1979,7 +2360,18 @@ buf_brelse(buf_t bp)
 	bp->b_tag = 0;
 #endif
 	if (bp->b_lflags & BL_IOBUF) {
+		buf_t	shadow_master_bp = NULL;
+
+		if (ISSET(bp->b_lflags, BL_SHADOW))
+			shadow_master_bp = buf_brelse_shadow(bp);
+		else if (ISSET(bp->b_lflags, BL_IOBUF_ALLOC))
+			 buf_free_meta_store(bp);
 	        free_io_buf(bp);
+
+		if (shadow_master_bp) {
+			bp = shadow_master_bp;
+			goto finish_shadow_master;
+		}
 		return;
 	}
 
@@ -1999,7 +2391,7 @@ buf_brelse(buf_t bp)
 	if (ISSET(bp->b_flags, B_META) && ISSET(bp->b_flags, B_INVAL)) {
 		if (ISSET(bp->b_flags, B_FILTER)) {	/* if necessary, call out */
 			void	(*iodone_func)(struct buf *, void *) = bp->b_iodone;
-			void 	*arg = (void *)bp->b_transaction;
+			void 	*arg = bp->b_transaction;
 
 			CLR(bp->b_flags, B_FILTER);	/* but note callout done */
 			bp->b_iodone = NULL;
@@ -2020,7 +2412,7 @@ buf_brelse(buf_t bp)
 		kern_return_t kret;
 		int           upl_flags;
 
-		if ( (upl == NULL) ) {
+		if (upl == NULL) {
 		        if ( !ISSET(bp->b_flags, B_INVAL)) {
 				kret = ubc_create_upl(bp->b_vp, 
 						      ubc_blktooff(bp->b_vp, bp->b_lblkno),
@@ -2082,6 +2474,9 @@ buf_brelse(buf_t bp)
 	if ((bp->b_bufsize <= 0) || 
 			ISSET(bp->b_flags, B_INVAL) || 
 			(ISSET(bp->b_lflags, BL_WANTDEALLOC) && !ISSET(bp->b_flags, B_DELWRI))) {
+
+		boolean_t	delayed_buf_free_meta_store = FALSE;
+
 		/*
 		 * If it's invalid or empty, dissociate it from its vnode,
 		 * release its storage if B_META, and
@@ -2091,34 +2486,34 @@ buf_brelse(buf_t bp)
 			OSAddAtomicLong(-1, &nbdwrite);
 
 		if (ISSET(bp->b_flags, B_META)) {
-		        if (bp->b_bufsize) {
-			        if (ISSET(bp->b_flags, B_ZALLOC)) {
-				        zone_t z;
-
-					z = getbufzone(bp->b_bufsize);
-					zfree(z, (void *)bp->b_datap);
-				} else
-				        kmem_free(kernel_map, bp->b_datap, bp->b_bufsize); 
-
-				 bp->b_datap = (uintptr_t)NULL;
-				 bp->b_bufsize = 0;
-			}
+			if (bp->b_shadow_ref)
+				delayed_buf_free_meta_store = TRUE;
+			else
+				buf_free_meta_store(bp);
 		}
 		/*
 		 * nuke any credentials we were holding
 		 */
-		if (IS_VALID_CRED(bp->b_rcred)) {
-		        kauth_cred_unref(&bp->b_rcred);
-		}
-		if (IS_VALID_CRED(bp->b_wcred)) {
-		        kauth_cred_unref(&bp->b_wcred);
-		}
-		CLR(bp->b_flags, (B_META | B_ZALLOC | B_DELWRI | B_LOCKED | B_AGE | B_ASYNC | B_NOCACHE | B_FUA));
-
-		bufq = &bufqueues[BQ_EMPTY];
-		bp->b_whichq = BQ_EMPTY;
+		buf_release_credentials(bp);
 
 		lck_mtx_lock_spin(buf_mtxp);
+
+		if (bp->b_shadow_ref) {
+			SET(bp->b_lflags, BL_WAITSHADOW);
+			
+			lck_mtx_unlock(buf_mtxp);
+			
+			return;
+		}
+		if (delayed_buf_free_meta_store == TRUE) {
+
+			lck_mtx_unlock(buf_mtxp);
+finish_shadow_master:
+			buf_free_meta_store(bp);
+
+			lck_mtx_lock_spin(buf_mtxp);
+		}
+		CLR(bp->b_flags, (B_META | B_ZALLOC | B_DELWRI | B_LOCKED | B_AGE | B_ASYNC | B_NOCACHE | B_FUA));
 
 		if (bp->b_vp)
 			brelvp_locked(bp);
@@ -2127,8 +2522,10 @@ buf_brelse(buf_t bp)
 		BLISTNONE(bp);
 		binshash(bp, &invalhash);
 
-		binsheadfree(bp, bufq, BQ_EMPTY);
+		bp->b_whichq = BQ_EMPTY;
+		binsheadfree(bp, &bufqueues[BQ_EMPTY], BQ_EMPTY);
 	} else {
+
 		/*
 		 * It has valid data.  Put it on the end of the appropriate
 		 * queue, so that it'll stick around for as long as possible.
@@ -2143,13 +2540,32 @@ buf_brelse(buf_t bp)
 			whichq = BQ_LRU;		/* valid data */
 		bufq = &bufqueues[whichq];
 
-		CLR(bp->b_flags, (B_AGE | B_ASYNC | B_NOCACHE));
-		bp->b_whichq = whichq;
 		bp->b_timestamp = buf_timestamp();
 
-	        lck_mtx_lock_spin(buf_mtxp);
-
-		binstailfree(bp, bufq, whichq);
+		lck_mtx_lock_spin(buf_mtxp);
+		
+		/*
+		 * the buf_brelse_shadow routine doesn't take 'ownership'
+		 * of the parent buf_t... it updates state that is protected by
+		 * the buf_mtxp, and checks for BL_BUSY to determine whether to
+		 * put the buf_t back on a free list.  b_shadow_ref is protected
+		 * by the lock, and since we have not yet cleared B_BUSY, we need
+		 * to check it while holding the lock to insure that one of us
+		 * puts this buf_t back on a free list when it is safe to do so
+		 */
+		if (bp->b_shadow_ref == 0) {
+			CLR(bp->b_flags, (B_AGE | B_ASYNC | B_NOCACHE));
+			bp->b_whichq = whichq;
+			binstailfree(bp, bufq, whichq);
+		} else {
+			/*
+			 * there are still cloned buf_t's pointing
+			 * at this guy... need to keep it off the
+			 * freelists until a buf_brelse is done on 
+			 * the last clone
+			 */
+			CLR(bp->b_flags, (B_ASYNC | B_NOCACHE));
+		}
 	}
 	if (needbuffer) {
 	        /*
@@ -2581,6 +2997,23 @@ buf_geteblk(int size)
 	return (bp);
 }
 
+uint32_t
+buf_redundancy_flags(buf_t bp)
+{
+	return bp->b_redundancy_flags;
+}
+
+void
+buf_set_redundancy_flags(buf_t bp, uint32_t flags)
+{
+	SET(bp->b_redundancy_flags, flags);
+}
+
+void
+buf_clear_redundancy_flags(buf_t bp, uint32_t flags)
+{
+	CLR(bp->b_redundancy_flags, flags);
+}
 
 /*
  * With UBC, there is no need to expand / shrink the file data 
@@ -2861,14 +3294,14 @@ found:
 
 /* 
  * Clean a buffer.
- * Returns 0 is buffer is ready to use,
+ * Returns 0 if buffer is ready to use,
  * Returns 1 if issued a buf_bawrite() to indicate 
  * that the buffer is not ready.
  * 
  * buf_mtxp is held upon entry
  * returns with buf_mtxp locked
  */
-static int
+int
 bcleanbuf(buf_t bp, boolean_t discard)
 {
 	/* Remove from the queue */
@@ -2887,10 +3320,7 @@ bcleanbuf(buf_t bp, boolean_t discard)
 			SET(bp->b_lflags, BL_WANTDEALLOC);
 		}
 
-		bp->b_whichq = BQ_LAUNDRY;
-		bp->b_timestamp = buf_timestamp();
-		binstailfree(bp, &bufqueues[BQ_LAUNDRY], BQ_LAUNDRY);
-		blaundrycnt++;
+		bmovelaundry(bp);
 
 		lck_mtx_unlock(buf_mtxp);
 
@@ -2926,30 +3356,12 @@ bcleanbuf(buf_t bp, boolean_t discard)
 
 	BLISTNONE(bp);
 
-	if (ISSET(bp->b_flags, B_META)) {
-	        vm_offset_t elem;
-
-		elem = (vm_offset_t)bp->b_datap;
-		bp->b_datap = (uintptr_t)0xdeadbeef;
-
-		if (ISSET(bp->b_flags, B_ZALLOC)) {
-		        zone_t z;
-
-			z = getbufzone(bp->b_bufsize);
-			zfree(z, (void *)elem);
-		} else
-			kmem_free(kernel_map, elem, bp->b_bufsize); 
-	}
+	if (ISSET(bp->b_flags, B_META))
+		buf_free_meta_store(bp);
 
 	trace(TR_BRELSE, pack(bp->b_vp, bp->b_bufsize), bp->b_lblkno);
 
-	/* nuke any credentials we were holding */
-	if (IS_VALID_CRED(bp->b_rcred)) {
-		kauth_cred_unref(&bp->b_rcred);
-	}
-	if (IS_VALID_CRED(bp->b_wcred)) {
-		kauth_cred_unref(&bp->b_wcred);
-	}
+	buf_release_credentials(bp);
 
 	/* If discarding, just move to the empty queue */
 	if (discard) {
@@ -3163,24 +3575,6 @@ buf_biowait(buf_t bp)
 		return (0);
 }
 
-/*
- * Wait for the callback operation on a B_CALL buffer to complete.
- */
-void
-buf_biowait_callback(buf_t bp)
-{
-	while (!ISSET(bp->b_lflags, BL_CALLDONE)) {
-
-		lck_mtx_lock_spin(buf_mtxp);
-
-		if (!ISSET(bp->b_lflags, BL_CALLDONE)) {
-			DTRACE_IO1(wait__start, buf_t, bp);
-			(void) msleep(bp, buf_mtxp, PDROP | (PRIBIO+1), "buf_biowait", NULL);
-			DTRACE_IO1(wait__done, buf_t, bp);
-		} else
-			lck_mtx_unlock(buf_mtxp);
-	}
-}
 
 /*
  * Mark I/O complete on a buffer.
@@ -3242,6 +3636,11 @@ buf_biodone(buf_t bp)
 		else if (bp->b_flags & B_PAGEIO)
 		        code |= DKIO_PAGING;
 
+		if (bp->b_flags & B_THROTTLED_IO)
+			code |= DKIO_THROTTLE;
+		else if (bp->b_flags & B_PASSIVE)
+			code |= DKIO_PASSIVE;
+
 		KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_DKRW, code) | DBG_FUNC_NONE,
                               bp, (uintptr_t)bp->b_vp,
 				      bp->b_resid, bp->b_error, 0);
@@ -3252,11 +3651,14 @@ buf_biodone(buf_t bp)
 	        microuptime(&priority_IO_timestamp_for_root);
 	        hard_throttle_on_root = 0;
 	}
+
 	/*
 	 * I/O was done, so don't believe
-	 * the DIRTY state from VM anymore
+	 * the DIRTY state from VM anymore...
+	 * and we need to reset the THROTTLED/PASSIVE
+	 * indicators
 	 */
-	CLR(bp->b_flags, B_WASDIRTY);
+	CLR(bp->b_flags, (B_WASDIRTY | B_THROTTLED_IO | B_PASSIVE));
 	DTRACE_IO1(done, buf_t, bp);
 
 	if (!ISSET(bp->b_flags, B_READ) && !ISSET(bp->b_flags, B_RAW))
@@ -3269,46 +3671,26 @@ buf_biodone(buf_t bp)
 
 	if (ISSET(bp->b_flags, (B_CALL | B_FILTER))) {	/* if necessary, call out */
 		void	(*iodone_func)(struct buf *, void *) = bp->b_iodone;
-		void 	*arg = (void *)bp->b_transaction;
+		void 	*arg = bp->b_transaction;
 		int     callout = ISSET(bp->b_flags, B_CALL);
+
+		if (iodone_func == NULL)
+			panic("biodone: bp @ %p has NULL b_iodone!\n", bp);			
 
 		CLR(bp->b_flags, (B_CALL | B_FILTER));	/* filters and callouts are one-shot */
 		bp->b_iodone = NULL;
 		bp->b_transaction = NULL;
 
-		if (iodone_func == NULL) {
-			panic("biodone: bp @ %p has NULL b_iodone!\n", bp);			
-		} else { 
-		        if (callout)
-			        SET(bp->b_flags, B_DONE);	/* note that it's done */
-			(*iodone_func)(bp, arg);
-		}
-		if (callout) {
-		        int need_wakeup = 0;
+		if (callout)
+		        SET(bp->b_flags, B_DONE);	/* note that it's done */
 
-		        /*
+		(*iodone_func)(bp, arg);
+
+		if (callout) {
+			/*
 			 * assumes that the callback function takes
 			 * ownership of the bp and deals with releasing it if necessary
-			 * BL_WANTED indicates that we've decided to wait on the
-			 * completion of this I/O in a synchronous manner... we
-			 * still call the callback function, but in addition we
-			 * will do a wakeup... BL_CALLDONE indicates that the callback
-			 * routine has completed and its ok for the waiter to take
-			 * 'ownership' of this bp back
 			 */
-		        lck_mtx_lock_spin(buf_mtxp);
-
-			if (bp->b_lflags & BL_WANTED) {
-			        CLR(bp->b_lflags, BL_WANTED);
-				need_wakeup = 1;
-			}
-			SET(bp->b_lflags, BL_CALLDONE);
-
-			lck_mtx_unlock(buf_mtxp);
-			
-			if (need_wakeup)
-			        wakeup(bp);
-
 			goto biodone_done;
 		}
 		/*
@@ -3390,8 +3772,8 @@ void
 vfs_bufstats()
 {
 	int i, j, count;
-	register struct buf *bp;
-	register struct bqueues *dp;
+	struct buf *bp;
+	struct bqueues *dp;
 	int counts[MAXBSIZE/CLBYTES+1];
 	static char *bname[BQUEUES] =
 		{ "LOCKED", "LRU", "AGE", "EMPTY", "META", "LAUNDRY" };
@@ -3418,7 +3800,7 @@ vfs_bufstats()
 }
 #endif /* DIAGNOSTIC */
 
-#define	NRESERVEDIOBUFS	64
+#define	NRESERVEDIOBUFS	128
 
 
 buf_t
@@ -3433,9 +3815,7 @@ alloc_io_buf(vnode_t vp, int priv)
 		bufstats.bufs_iobufsleeps++;
 
 		need_iobuffer = 1;
-		(void) msleep(&need_iobuffer, iobuffer_mtxp, PDROP | (PRIBIO+1), (const char *)"alloc_io_buf", NULL);
-
-		lck_mtx_lock_spin(iobuffer_mtxp);
+		(void) msleep(&need_iobuffer, iobuffer_mtxp, PSPIN | (PRIBIO+1), (const char *)"alloc_io_buf", NULL);
 	}
 	TAILQ_REMOVE(&iobufqueue, bp, b_freelist);
 
@@ -3457,6 +3837,7 @@ alloc_io_buf(vnode_t vp, int priv)
 	bp->b_datap = 0;
 	bp->b_flags = 0;
 	bp->b_lflags = BL_BUSY | BL_IOBUF;
+	bp->b_redundancy_flags = 0;
 	bp->b_blkno = bp->b_lblkno = 0;
 #ifdef JOE_DEBUG
 	bp->b_owner = current_thread();
@@ -3551,6 +3932,8 @@ bcleanbuf_thread_init(void)
 	thread_deallocate(thread);
 }
 
+typedef int (*bcleanbufcontinuation)(int);
+
 static void
 bcleanbuf_thread(void)
 {
@@ -3562,10 +3945,9 @@ bcleanbuf_thread(void)
 	        lck_mtx_lock_spin(buf_mtxp);
 
 		while ( (bp = TAILQ_FIRST(&bufqueues[BQ_LAUNDRY])) == NULL) {
- 		        (void)msleep((void *)&bufqueues[BQ_LAUNDRY], buf_mtxp, PDROP | PRIBIO, "blaundry", NULL);
-
-			lck_mtx_lock_spin(buf_mtxp);
+			(void)msleep0(&bufqueues[BQ_LAUNDRY], buf_mtxp, PRIBIO|PDROP, "blaundry", 0, (bcleanbufcontinuation)bcleanbuf_thread);
 		}
+		
 		/*
 		 * Remove from the queue
 		 */
@@ -3597,7 +3979,7 @@ bcleanbuf_thread(void)
 			binstailfree(bp, &bufqueues[BQ_LAUNDRY], BQ_LAUNDRY);
 			blaundrycnt++;
 
-			/* we never leave a busy page on the laundary queue */
+			/* we never leave a busy page on the laundry queue */
 			CLR(bp->b_lflags, BL_BUSY);
 			buf_busycount--;
 #ifdef JOE_DEBUG
@@ -3606,12 +3988,18 @@ bcleanbuf_thread(void)
 #endif
 
 			lck_mtx_unlock(buf_mtxp);
-
-			if (loopcnt > 10) {
-			        (void)tsleep((void *)&bufqueues[BQ_LAUNDRY], PRIBIO, "blaundry", 1);
+			
+			if (loopcnt > MAXLAUNDRY) {
+				/*
+				 * bawrite_internal() can return errors if we're throttled. If we've
+				 * done several I/Os and failed, give the system some time to unthrottle
+				 * the vnode
+				 */
+				(void)tsleep((void *)&bufqueues[BQ_LAUNDRY], PRIBIO, "blaundry", 1);
 				loopcnt = 0;
 			} else {
-			        (void)thread_block(THREAD_CONTINUE_NULL);
+				/* give other threads a chance to run */
+				(void)thread_block(THREAD_CONTINUE_NULL);
 				loopcnt++;
 			}
 		}
@@ -3680,34 +4068,125 @@ buffer_cache_gc(int all)
 {
 	buf_t bp;
 	boolean_t did_large_zfree = FALSE;
+	boolean_t need_wakeup = FALSE;
 	int now = buf_timestamp();
-	uint32_t count = 0;
+	uint32_t found = 0, total_found = 0;
+	struct bqueues privq;
 	int thresh_hold = BUF_STALE_THRESHHOLD;
 
 	if (all)
 		thresh_hold = 0;
+	/* 
+	 * We only care about metadata (incore storage comes from zalloc()).
+	 * No more than 1024 buffers total, and only those not accessed within the
+	 * last 30s.  We will also only examine 128 buffers during a single grab
+	 * of the lock in order to limit lock hold time.
+	 */
+	lck_mtx_lock(buf_mtxp);
+	do {
+		found = 0;
+		TAILQ_INIT(&privq);
+		need_wakeup = FALSE;
 
-	lck_mtx_lock_spin(buf_mtxp);
+		while (((bp = TAILQ_FIRST(&bufqueues[BQ_META]))) && 
+				(now > bp->b_timestamp) &&
+				(now - bp->b_timestamp > thresh_hold) && 
+				(found < BUF_MAX_GC_BATCH_SIZE)) {
 
-	/* We only care about metadata (incore storage comes from zalloc()) */
-	bp = TAILQ_FIRST(&bufqueues[BQ_META]);
+			/* Remove from free list */
+			bremfree_locked(bp);
+			found++;
 
-	/* Only collect buffers unused in the last N seconds. Note: ordered by timestamp. */
-	while ((bp != NULL) && ((now - bp->b_timestamp) > thresh_hold) && (all || (count < BUF_MAX_GC_COUNT))) {
-		int result, size;
-		boolean_t is_zalloc;
+#ifdef JOE_DEBUG
+			bp->b_owner = current_thread();
+			bp->b_tag   = 12;
+#endif
 
-		size = buf_size(bp);
-		is_zalloc = ISSET(bp->b_flags, B_ZALLOC);
+			/* If dirty, move to laundry queue and remember to do wakeup */
+			if (ISSET(bp->b_flags, B_DELWRI)) {
+				SET(bp->b_lflags, BL_WANTDEALLOC);
 
-		result = bcleanbuf(bp, TRUE);
-		if ((result == 0) && is_zalloc && (size >= PAGE_SIZE)) {
-			/* We've definitely freed at least a page to a zone */
-			did_large_zfree = TRUE;
+				bmovelaundry(bp);
+				need_wakeup = TRUE;
+
+				continue;
+			}
+
+			/* 
+			 * Mark busy and put on private list.  We could technically get 
+			 * away without setting BL_BUSY here.
+			 */
+			SET(bp->b_lflags, BL_BUSY);
+			buf_busycount++;
+
+			/* 
+			 * Remove from hash and dissociate from vp.
+			 */
+			bremhash(bp);
+			if (bp->b_vp) {
+				brelvp_locked(bp);
+			}
+
+			TAILQ_INSERT_TAIL(&privq, bp, b_freelist);
 		}
-		bp = TAILQ_FIRST(&bufqueues[BQ_META]);
-		count++;
-	} 
+
+		if (found == 0) {
+			break;
+		}
+
+		/* Drop lock for batch processing */
+		lck_mtx_unlock(buf_mtxp);
+
+		/* Wakeup and yield for laundry if need be */
+		if (need_wakeup) {
+			wakeup(&bufqueues[BQ_LAUNDRY]);
+			(void)thread_block(THREAD_CONTINUE_NULL);
+		}
+
+		/* Clean up every buffer on private list */
+		TAILQ_FOREACH(bp, &privq, b_freelist) {
+			/* Take note if we've definitely freed at least a page to a zone */
+			if ((ISSET(bp->b_flags, B_ZALLOC)) && (buf_size(bp) >= PAGE_SIZE)) {
+				did_large_zfree = TRUE;
+			}    
+
+			trace(TR_BRELSE, pack(bp->b_vp, bp->b_bufsize), bp->b_lblkno);
+
+			/* Free Storage */
+			buf_free_meta_store(bp);
+
+			/* Release credentials */
+			buf_release_credentials(bp);
+
+			/* Prepare for moving to empty queue */
+			CLR(bp->b_flags, (B_META | B_ZALLOC | B_DELWRI | B_LOCKED 
+						| B_AGE | B_ASYNC | B_NOCACHE | B_FUA));
+			bp->b_whichq = BQ_EMPTY;
+			BLISTNONE(bp);
+		}
+
+		lck_mtx_lock(buf_mtxp);
+
+		/* Back under lock, move them all to invalid hash and clear busy */
+		TAILQ_FOREACH(bp, &privq, b_freelist) {
+			binshash(bp, &invalhash);
+			CLR(bp->b_lflags, BL_BUSY);
+			buf_busycount--;
+
+#ifdef JOE_DEBUG
+			if (bp->b_owner != current_thread()) {
+				panic("Buffer stolen from buffer_cache_gc()");
+			}
+			bp->b_owner = current_thread();
+			bp->b_tag   = 13;
+#endif
+		}
+
+		/* And do a big bulk move to the empty queue */
+		TAILQ_CONCAT(&bufqueues[BQ_EMPTY], &privq, b_freelist);
+		total_found += found;
+
+	} while ((all || (total_found < BUF_MAX_GC_COUNT)) && (found == BUF_MAX_GC_BATCH_SIZE));
 
 	lck_mtx_unlock(buf_mtxp);
 

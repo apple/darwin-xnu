@@ -89,7 +89,7 @@ static int maxlockdepth = MAXDEPTH;
 void lf_print(const char *tag, struct lockf *lock);
 void lf_printlist(const char *tag, struct lockf *lock);
 static int	lockf_debug = 2;
-SYSCTL_INT(_debug, OID_AUTO, lockf_debug, CTLFLAG_RW, &lockf_debug, 0, "");
+SYSCTL_INT(_debug, OID_AUTO, lockf_debug, CTLFLAG_RW | CTLFLAG_LOCKED, &lockf_debug, 0, "");
 
 /*
  * If there is no mask bit selector, or there is on, and the selector is
@@ -129,10 +129,12 @@ static overlap_t lf_findoverlap(struct lockf *,
 	    struct lockf *, int, struct lockf ***, struct lockf **);
 static struct lockf *lf_getblock(struct lockf *);
 static int	 lf_getlock(struct lockf *, struct flock *);
+#if CONFIG_EMBEDDED
+static int	 lf_getlockpid(struct vnode *, struct flock *);
+#endif
 static int	 lf_setlock(struct lockf *);
 static int	 lf_split(struct lockf *, struct lockf *);
 static void	 lf_wakelock(struct lockf *, boolean_t);
-
 
 /*
  * lf_advlock
@@ -171,6 +173,11 @@ lf_advlock(struct vnop_advlock_args *ap)
 	struct lockf **head = &vp->v_lockf;
 
 	/* XXX HFS may need a !vnode_isreg(vp) EISDIR error here */
+
+#if CONFIG_EMBEDDED
+	if (ap->a_op == F_GETLKPID)
+		return lf_getlockpid(vp, fl);
+#endif
 
 	/*
 	 * Avoid the common case of unlocking when inode has no locks.
@@ -289,7 +296,7 @@ lf_advlock(struct vnop_advlock_args *ap)
 		error = EINVAL;
 		break;
 	}
-	lck_mtx_unlock(&vp->v_lock);	/* done maniplulating the list */
+	lck_mtx_unlock(&vp->v_lock);	/* done manipulating the list */
 
 	LOCKF_DEBUG(0, "lf_advlock: normal exit: %d\n\n", error);
 	return (error);
@@ -297,25 +304,42 @@ lf_advlock(struct vnop_advlock_args *ap)
 
 
 /*
- * lf_coelesce_adjacent
+ * Take any lock attempts which are currently blocked by a given lock ("from")
+ * and mark them as blocked by a different lock ("to").  Used in the case
+ * where a byte range currently occupied by "from" is to be occupied by "to."
+ */
+static void
+lf_move_blocked(struct lockf *to, struct lockf *from)
+{
+	struct lockf *tlock;
+
+	TAILQ_FOREACH(tlock, &from->lf_blkhd, lf_block) {
+		tlock->lf_next = to;
+	}
+
+	TAILQ_CONCAT(&to->lf_blkhd, &from->lf_blkhd, lf_block);
+}
+
+/*
+ * lf_coalesce_adjacent
  *
- * Description:	Helper function: when setting a lock, coelesce adjacent
+ * Description:	Helper function: when setting a lock, coalesce adjacent
  *		locks.  Needed because adjacent locks are not overlapping,
- *		but POSIX requires that they be coelesced.
+ *		but POSIX requires that they be coalesced.
  *
  * Parameters:	lock			The new lock which may be adjacent
- *					to already locked reagions, and which
- *					should therefore be coelesced with them
+ *					to already locked regions, and which
+ *					should therefore be coalesced with them
  *
  * Returns:	<void>
  */
 static void
-lf_coelesce_adjacent(struct lockf *lock)
+lf_coalesce_adjacent(struct lockf *lock)
 {
 	struct lockf **lf = lock->lf_head;
 
 	while (*lf != NOLOCKF) {
-		/* reject locks that obviously could not be coelesced */
+		/* reject locks that obviously could not be coalesced */
 		if ((*lf == lock) ||
 		    ((*lf)->lf_id != lock->lf_id) ||
 		    ((*lf)->lf_type != lock->lf_type)) {
@@ -323,27 +347,38 @@ lf_coelesce_adjacent(struct lockf *lock)
 			continue;
 		}
 
+		/*
+		 * NOTE: Assumes that if two locks are adjacent on the number line 
+		 * and belong to the same owner, then they are adjacent on the list.
+		 */
+
 		/* If the lock ends adjacent to us, we can coelesce it */
 		if ((*lf)->lf_end != -1 &&
 		    ((*lf)->lf_end + 1) == lock->lf_start) {
 			struct lockf *adjacent = *lf;
 
-			LOCKF_DEBUG(0, "lf_coelesce_adjacent: coelesce adjacent previous\n");
+			LOCKF_DEBUG(0, "lf_coalesce_adjacent: coalesce adjacent previous\n");
 			lock->lf_start = (*lf)->lf_start;
 			*lf = lock;
 			lf = &(*lf)->lf_next;
+
+			lf_move_blocked(lock, adjacent);
+
 			FREE(adjacent, M_LOCKF);
 			continue;
 		}
-		/* If the lock starts adjacent to us, we can coelesce it */
+		/* If the lock starts adjacent to us, we can coalesce it */
 		if (lock->lf_end != -1 &&
 		    (lock->lf_end + 1) == (*lf)->lf_start) {
 			struct lockf *adjacent = *lf;
 
-			LOCKF_DEBUG(0, "lf_coelesce_adjacent: coelesce adjacent following\n");
+			LOCKF_DEBUG(0, "lf_coalesce_adjacent: coalesce adjacent following\n");
 			lock->lf_end = (*lf)->lf_end;
 			lock->lf_next = (*lf)->lf_next;
 			lf = &lock->lf_next;
+
+			lf_move_blocked(lock, adjacent);
+
 			FREE(adjacent, M_LOCKF);
 			continue;
 		}
@@ -373,7 +408,7 @@ lf_coelesce_adjacent(struct lockf *lock)
  *	msleep:EINTR
  *
  * Notes:	We add the lock to the provisional lock list.  We do not
- *		coelesce at this time; this has implications for other lock
+ *		coalesce at this time; this has implications for other lock
  *		requestors in the blocker search mechanism.
  */
 static int
@@ -518,13 +553,8 @@ lf_setlock(struct lockf *lock)
 		error = msleep(lock, &vp->v_lock, priority, lockstr, 0);
 
 		if (!TAILQ_EMPTY(&lock->lf_blkhd)) {
-			struct lockf *tlock;
-
 		        if ((block = lf_getblock(lock))) {
-			        TAILQ_FOREACH(tlock, &lock->lf_blkhd, lf_block) {
-				        tlock->lf_next = block;
-				}
-			        TAILQ_CONCAT(&block->lf_blkhd, &lock->lf_blkhd, lf_block);
+				lf_move_blocked(block, lock);
 			}
 		}
 		if (error) {	/* XXX */
@@ -589,7 +619,7 @@ lf_setlock(struct lockf *lock)
 			        lf_wakelock(overlap, TRUE);
 			overlap->lf_type = lock->lf_type;
 			FREE(lock, M_LOCKF);
-			lock = overlap; /* for lf_coelesce_adjacent() */
+			lock = overlap; /* for lf_coalesce_adjacent() */
 			break;
 
 		case OVERLAP_CONTAINS_LOCK:
@@ -598,7 +628,7 @@ lf_setlock(struct lockf *lock)
 			 */
 			if (overlap->lf_type == lock->lf_type) {
 				FREE(lock, M_LOCKF);
-				lock = overlap; /* for lf_coelesce_adjacent() */
+				lock = overlap; /* for lf_coalesce_adjacent() */
 				break;
 			}
 			if (overlap->lf_start == lock->lf_start) {
@@ -676,8 +706,8 @@ lf_setlock(struct lockf *lock)
 		}
 		break;
 	}
-	/* Coelesce adjacent locks with identical attributes */
-	lf_coelesce_adjacent(lock);
+	/* Coalesce adjacent locks with identical attributes */
+	lf_coalesce_adjacent(lock);
 #ifdef LOCKF_DEBUGGING
 	if (lockf_debug & 1) {
 		lf_print("lf_setlock: got the lock", lock);
@@ -825,6 +855,55 @@ lf_getlock(struct lockf *lock, struct flock *fl)
 	return (0);
 }
 
+#if CONFIG_EMBEDDED
+int lf_getlockpid(struct vnode *vp, struct flock *fl)
+{
+	struct lockf *lf, *blk;
+
+	if (vp == 0)
+		return EINVAL;
+
+	fl->l_type = F_UNLCK;
+	
+	lck_mtx_lock(&vp->v_lock);
+
+	for (lf = vp->v_lockf; lf; lf = lf->lf_next) {
+
+		if (lf->lf_flags & F_POSIX) {
+			if ((((struct proc *)lf->lf_id)->p_pid) == fl->l_pid) {
+				fl->l_type = lf->lf_type;
+				fl->l_whence = SEEK_SET;
+				fl->l_start = lf->lf_start;
+				if (lf->lf_end == -1)
+					fl->l_len = 0;
+				else
+					fl->l_len = lf->lf_end - lf->lf_start + 1;
+
+				break;
+			}
+		}
+
+		TAILQ_FOREACH(blk, &lf->lf_blkhd, lf_block) {
+			if (blk->lf_flags & F_POSIX) {
+				if ((((struct proc *)blk->lf_id)->p_pid) == fl->l_pid) {
+					fl->l_type = blk->lf_type;
+					fl->l_whence = SEEK_SET;
+					fl->l_start = blk->lf_start;
+					if (blk->lf_end == -1)
+						fl->l_len = 0;
+					else
+						fl->l_len = blk->lf_end - blk->lf_start + 1;
+
+					break;
+				}
+			}
+		}
+	}
+
+	lck_mtx_unlock(&vp->v_lock);
+	return (0);
+}
+#endif
 
 /*
  * lf_getblock
@@ -901,7 +980,7 @@ lf_getblock(struct lockf *lock)
  *		while lf_setlock will iterate over all overlapping locks to
  *
  *		The check parameter can be SELF, meaning we are looking for
- *		overelapping locks owned by us, or it can be OTHERS, meaning
+ *		overlapping locks owned by us, or it can be OTHERS, meaning
  *		we are looking for overlapping locks owned by someone else so
  *		we can report a blocking lock on an F_GETLK request.
  *
@@ -913,6 +992,7 @@ lf_findoverlap(struct lockf *lf, struct lockf *lock, int type,
 	       struct lockf ***prev, struct lockf **overlap)
 {
 	off_t start, end;
+	int found_self = 0;
 
 	*overlap = lf;
 	if (lf == NOLOCKF)
@@ -926,10 +1006,28 @@ lf_findoverlap(struct lockf *lf, struct lockf *lock, int type,
 	while (lf != NOLOCKF) {
 		if (((type & SELF) && lf->lf_id != lock->lf_id) ||
 		    ((type & OTHERS) && lf->lf_id == lock->lf_id)) {
+			/* 
+			 * Locks belonging to one process are adjacent on the
+			 * list, so if we've found any locks belonging to us,
+			 * and we're now seeing something else, then we've
+			 * examined all "self" locks.  Note that bailing out
+			 * here is quite important; for coalescing, we assume 
+			 * numerically adjacent locks from the same owner to 
+			 * be adjacent on the list.
+			 */
+			if ((type & SELF) && found_self) {
+				return OVERLAP_NONE;
+			}
+
 			*prev = &lf->lf_next;
 			*overlap = lf = lf->lf_next;
 			continue;
 		}
+
+		if ((type & SELF)) {
+			found_self = 1;
+		}
+
 #ifdef LOCKF_DEBUGGING
 		if (lockf_debug & 2)
 			lf_print("\tchecking", lf);
@@ -941,6 +1039,11 @@ lf_findoverlap(struct lockf *lf, struct lockf *lock, int type,
 		    (end != -1 && lf->lf_start > end)) {
 			/* Case 0 */
 			LOCKF_DEBUG(2, "no overlap\n");
+
+			/*
+			 * NOTE: assumes that locks for the same process are 
+			 * nonintersecting and ordered.
+			 */
 			if ((type & SELF) && end != -1 && lf->lf_start > end)
 				return (OVERLAP_NONE);
 			*prev = &lf->lf_next;

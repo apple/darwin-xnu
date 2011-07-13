@@ -46,11 +46,7 @@ extern void printf(const char *fmt, ...);
 
 extern void interrupt_enable(void);
 extern void interrupt_disable(void);
-#if __ppc__
-extern void bcopy_nc(const char *from, char *to, int size); /* uncached-safe */
-#else
 #define bcopy_nc bcopy
-#endif 
 
 //------------------------------------------------------------------------
 //from kern/misc_protos.h

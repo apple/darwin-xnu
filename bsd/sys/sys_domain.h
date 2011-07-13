@@ -96,8 +96,9 @@ struct ctl_cb {
 	lck_mtx_t				*mtx;
 	struct socket			*so;					/* controlling socket */
 	struct kctl				*kctl;					/* back pointer to controller */
-	u_int32_t				unit;
 	void					*userdata;
+	u_int32_t				unit;
+	u_int32_t				usecount;
 };
 
 

@@ -41,7 +41,7 @@
 #ifdef KERNEL_PRIVATE
 struct secasvar;
 
-extern int ah6_input(struct mbuf **, int *);
+extern int ah6_input(struct mbuf **, int *, int);
 extern int ah6_output(struct mbuf *, u_char *, struct mbuf *,
 	struct secasvar *);
 extern int ah6_calccksum(struct mbuf *, caddr_t, size_t,

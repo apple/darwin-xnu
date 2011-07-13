@@ -121,7 +121,7 @@ struct ipq {
  */
 #endif /* KERNEL_PRIVATE */
 #define MAX_IPOPTLEN	40
-#ifdef KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
 
 struct ipoption {
 	struct	in_addr ipopt_dst;	/* first-hop dst if source routed */
@@ -133,21 +133,57 @@ struct ipoption {
  * passed to ip_output when IP multicast options are in use.
  */
 struct ip_moptions {
+	decl_lck_mtx_data(, imo_lock);
+	uint32_t imo_refcnt;		/* ref count */
+	uint32_t imo_debug;		/* see ifa_debug flags */
 	struct	ifnet *imo_multicast_ifp; /* ifp for outgoing multicasts */
 	u_char	imo_multicast_ttl;	/* TTL for outgoing multicasts */
 	u_char	imo_multicast_loop;	/* 1 => hear sends if a member */
 	u_short	imo_num_memberships;	/* no. memberships this socket */
-	struct	in_multi *imo_membership[IP_MAX_MEMBERSHIPS];
-	u_int32_t	imo_multicast_vif;	/* vif num outgoing multicasts */
+	u_short	imo_max_memberships;	/* max memberships this socket */
+	struct	in_multi **imo_membership;	/* group memberships */
+	struct	in_mfilter *imo_mfilters;	/* source filters */
+	u_int32_t imo_multicast_vif;	/* vif num outgoing multicasts */
 	struct	in_addr imo_multicast_addr; /* ifindex/addr on MULTICAST_IF */
+	void (*imo_trace)		/* callback fn for tracing refs */
+	    (struct ip_moptions *, int);
 };
+
+#define	IMO_LOCK_ASSERT_HELD(_imo)					\
+	lck_mtx_assert(&(_imo)->imo_lock, LCK_MTX_ASSERT_OWNED)
+
+#define	IMO_LOCK_ASSERT_NOTHELD(_imo)					\
+	lck_mtx_assert(&(_imo)->imo_lock, LCK_MTX_ASSERT_NOTOWNED)
+
+#define	IMO_LOCK(_imo)							\
+	lck_mtx_lock(&(_imo)->imo_lock)
+
+#define	IMO_LOCK_SPIN(_imo)						\
+	lck_mtx_lock_spin(&(_imo)->imo_lock)
+
+#define	IMO_CONVERT_LOCK(_imo) do {					\
+	IMO_LOCK_ASSERT_HELD(_imo);					\
+	lck_mtx_convert_spin(&(_imo)->imo_lock);			\
+} while (0)
+
+#define	IMO_UNLOCK(_imo)						\
+	lck_mtx_unlock(&(_imo)->imo_lock)
+
+#define	IMO_ADDREF(_imo)						\
+	imo_addref(_imo, 0)
+
+#define	IMO_ADDREF_LOCKED(_imo)						\
+	imo_addref(_imo, 1)
+
+#define	IMO_REMREF(_imo)						\
+	imo_remref(_imo)
 
 /* mbuf tag for ip_forwarding info */
 struct ip_fwd_tag {
 	struct sockaddr_in *next_hop;	/* next_hop */
 };
 
-#endif /* KERNEL_PRIVATE */
+#endif /* XNU_KERNEL_PRIVATE */
 
 struct	ipstat {
 	u_int32_t	ips_total;		/* total packets received */
@@ -179,6 +215,9 @@ struct	ipstat {
 	u_int32_t	ips_notmember;		/* multicasts for unregistered grps */
 	u_int32_t	ips_nogif;		/* no match gif found */
 	u_int32_t	ips_badaddr;		/* invalid address on header */
+#ifdef PRIVATE
+	u_int32_t	ips_pktdropcntrl;		/* pkt dropped, no mbufs for control data */
+#endif /* PRIVATE */
 };
 
 struct ip_linklocal_stat {
@@ -206,7 +245,8 @@ struct sockopt;
  * Extra information passed to ip_output when IP_OUTARGS is set.
  */
 struct ip_out_args {
-	unsigned int	ipoa_ifscope;	/* interface scope */
+	unsigned int	ipoa_boundif;	/* bound outgoing interface */
+	unsigned int	ipoa_nocell;	/* don't use IFT_CELLULAR */
 };
 
 extern struct	ipstat	ipstat;
@@ -224,9 +264,15 @@ extern int rsvp_on;
 extern struct	pr_usrreqs rip_usrreqs;
 extern int	ip_doscopedroute;
 
+extern void ip_moptions_init(void);
+extern struct ip_moptions *ip_allocmoptions(int);
+extern int inp_getmoptions(struct inpcb *, struct sockopt *);
+extern int inp_setmoptions(struct inpcb *, struct sockopt *);
+extern void imo_addref(struct ip_moptions *, int);
+extern void imo_remref(struct ip_moptions *);
+
 int	 ip_ctloutput(struct socket *, struct sockopt *sopt);
 void	 ip_drain(void);
-void	 ip_freemoptions(struct ip_moptions *);
 void	 ip_init(void) __attribute__((section("__TEXT, initcode")));
 extern int	 (*ip_mforward)(struct ip *, struct ifnet *, struct mbuf *,
 			  struct ip_moptions *);
@@ -235,7 +281,7 @@ extern int ip_output(struct mbuf *, struct mbuf *, struct route *, int,
 extern int ip_output_list(struct mbuf *, int, struct mbuf *, struct route *,
     int, struct ip_moptions *, struct ip_out_args *);
 struct in_ifaddr *ip_rtaddr(struct in_addr);
-void	 ip_savecontrol(struct inpcb *, struct mbuf **, struct ip *,
+int	 ip_savecontrol(struct inpcb *, struct mbuf **, struct ip *,
 		struct mbuf *);
 void	 ip_slowtimo(void);
 struct mbuf *

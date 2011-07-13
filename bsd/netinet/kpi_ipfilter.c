@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -235,7 +235,7 @@ ipf_inject_input(
 	}
 	
 	if (filter_ref == 0 && m->m_pkthdr.rcvif == 0) {
-		m->m_pkthdr.rcvif = ifunit("lo0");
+		m->m_pkthdr.rcvif = lo_ifp;
 		m->m_pkthdr.csum_data = 0;
 		m->m_pkthdr.csum_flags = 0;
 		if (vers == 4) {
@@ -245,8 +245,8 @@ ipf_inject_input(
 		}
 	}
 	if (filter_ref != 0) {
-		mtag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPFILT,
-					 	   sizeof (ipfilter_t), M_NOWAIT);
+		mtag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPFILT,
+					 	   sizeof (ipfilter_t), M_NOWAIT, m);
 		if (mtag == NULL) {
 			error = ENOMEM;
 			goto done;
@@ -262,58 +262,54 @@ done:
 }
 
 static errno_t
-ipf_injectv4_out(
-	mbuf_t data,
-	ipfilter_t filter_ref,
-	ipf_pktopts_t options)
+ipf_injectv4_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 {
 	struct route ro;
-	struct sockaddr_in	*sin = (struct sockaddr_in*)&ro.ro_dst;
 	struct ip	*ip;
 	struct mbuf	*m = (struct mbuf*)data;
 	errno_t error = 0;
-	struct m_tag *mtag = 0;
-	struct ip_moptions *imo = 0, ip_moptions;
-	
+	struct m_tag *mtag = NULL;
+	struct ip_moptions *imo = NULL;
+	struct ip_out_args ipoa = { IFSCOPE_NONE, 0 };
+
 	/* Make the IP header contiguous in the mbuf */
-	if ((size_t)m->m_len < sizeof(struct ip)) {
-		m = m_pullup(m, sizeof(struct ip));
-		if (m == NULL) return ENOMEM;
+	if ((size_t)m->m_len < sizeof (struct ip)) {
+		m = m_pullup(m, sizeof (struct ip));
+		if (m == NULL)
+			return (ENOMEM);
 	}
-	ip = (struct ip*)m_mtod(m);
-	
+	ip = (struct ip *)m_mtod(m);
+
 	if (filter_ref != 0) {
-		mtag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPFILT,
-					 	   sizeof (ipfilter_t), M_NOWAIT);
+		mtag = m_tag_create(KERNEL_MODULE_TAG_ID,
+		    KERNEL_TAG_TYPE_IPFILT, sizeof (ipfilter_t), M_NOWAIT, m);
 		if (mtag == NULL) {
 			m_freem(m);
-			return ENOMEM;
+			return (ENOMEM);
 		}
-		*(ipfilter_t*)(mtag+1) = filter_ref;
+		*(ipfilter_t *)(mtag + 1) = filter_ref;
 		m_tag_prepend(m, mtag);
 	}
-	
-	if (options && (options->ippo_flags & IPPOF_MCAST_OPTS)) {
-		imo = &ip_moptions;
-		
-		bzero(imo, sizeof(struct ip6_moptions));
+
+	if (options != NULL && (options->ippo_flags & IPPOF_MCAST_OPTS) &&
+	    (imo = ip_allocmoptions(M_DONTWAIT)) != NULL) {
 		imo->imo_multicast_ifp = options->ippo_mcast_ifnet;
 		imo->imo_multicast_ttl = options->ippo_mcast_ttl;
 		imo->imo_multicast_loop = options->ippo_mcast_loop;
 	}
-	
-	/* Fill out a route structure and get a route */
-	bzero(&ro, sizeof(struct route));
-	sin->sin_len = sizeof(struct sockaddr_in);
-	sin->sin_family = AF_INET;
-	sin->sin_port = 0;
-	sin->sin_addr = ip->ip_dst;
-	rtalloc(&ro);
-	if (ro.ro_rt == NULL) {
-		m_freem(m);
-		return ENETUNREACH;
+
+	if (options != NULL &&
+	    (options->ippo_flags & (IPPOF_BOUND_IF | IPPOF_NO_IFT_CELLULAR))) {
+		if (options->ippo_flags & IPPOF_BOUND_IF) {
+			ipoa.ipoa_boundif = options->ippo_flags >>
+			    IPPOF_SHIFT_IFSCOPE;
+		}
+		if (options->ippo_flags & IPPOF_NO_IFT_CELLULAR)
+			ipoa.ipoa_nocell = 1;
 	}
-	
+
+	bzero(&ro, sizeof(struct route));
+
 	/* Put ip_len and ip_off in host byte order, ip_output expects that */
 
 #if BYTE_ORDER != BIG_ENDIAN
@@ -321,88 +317,85 @@ ipf_injectv4_out(
 	NTOHS(ip->ip_off);
 #endif
 
-	/* Send  */
-	error = ip_output(m, NULL, &ro, IP_ALLOWBROADCAST | IP_RAWOUTPUT, imo, NULL);
-	
+	/* Send; enforce source interface selection via IP_OUTARGS flag */
+	error = ip_output(m, NULL, &ro,
+	    IP_ALLOWBROADCAST | IP_RAWOUTPUT | IP_OUTARGS, imo, &ipoa);
+
 	/* Release the route */
 	if (ro.ro_rt)
 		rtfree(ro.ro_rt);
-	
-	return error;
+
+	if (imo != NULL)
+		IMO_REMREF(imo);
+
+	return (error);
 }
 
 #if INET6
 static errno_t
-ipf_injectv6_out(
-	mbuf_t data,
-	ipfilter_t filter_ref,
-	ipf_pktopts_t options)
+ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 {
 	struct route_in6 ro;
-	struct sockaddr_in6	*sin6 = &ro.ro_dst;
 	struct ip6_hdr	*ip6;
 	struct mbuf	*m = (struct mbuf*)data;
 	errno_t error = 0;
-	struct m_tag *mtag = 0;
-	struct ip6_moptions *im6o = 0, ip6_moptions;
-	
+	struct m_tag *mtag = NULL;
+	struct ip6_moptions *im6o = NULL;
+	struct ip6_out_args ip6oa = { IFSCOPE_NONE, 0 };
+
 	/* Make the IP header contiguous in the mbuf */
 	if ((size_t)m->m_len < sizeof(struct ip6_hdr)) {
 		m = m_pullup(m, sizeof(struct ip6_hdr));
-		if (m == NULL) return ENOMEM;
+		if (m == NULL)
+			return (ENOMEM);
 	}
 	ip6 = (struct ip6_hdr*)m_mtod(m);
 
 	if (filter_ref != 0) {
-		mtag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPFILT,
-					 	   sizeof (ipfilter_t), M_NOWAIT);
+		mtag = m_tag_create(KERNEL_MODULE_TAG_ID,
+		    KERNEL_TAG_TYPE_IPFILT, sizeof (ipfilter_t), M_NOWAIT, m);
 		if (mtag == NULL) {
 			m_freem(m);
-			return ENOMEM;
+			return (ENOMEM);
 		}
-		*(ipfilter_t*)(mtag+1) = filter_ref;
+		*(ipfilter_t *)(mtag + 1) = filter_ref;
 		m_tag_prepend(m, mtag);
 	}
-	
-	if (options && (options->ippo_flags & IPPOF_MCAST_OPTS)) {
-		im6o = &ip6_moptions;
-		
-		bzero(im6o, sizeof(struct ip6_moptions));
+
+	if (options != NULL && (options->ippo_flags & IPPOF_MCAST_OPTS) &&
+	    (im6o = ip6_allocmoptions(M_DONTWAIT)) != NULL) {
 		im6o->im6o_multicast_ifp = options->ippo_mcast_ifnet;
 		im6o->im6o_multicast_hlim = options->ippo_mcast_ttl;
 		im6o->im6o_multicast_loop = options->ippo_mcast_loop;
 	}
-	
-	
-	/* Fill out a route structure and get a route */
-	bzero(&ro, sizeof(struct route_in6));
-	sin6->sin6_len = sizeof(struct sockaddr_in6);
-	sin6->sin6_family = AF_INET6;
-	sin6->sin6_addr = ip6->ip6_dst;
-#if 0
-	/* This is breaks loopback multicast! */
-	/* The scope ID should already at s6_addr16[1] */
-	if (IN6_IS_SCOPE_LINKLOCAL(&ip6->ip6_dst)) {
-		/* Hack, pull the scope_id out of the dest addr */
-		sin6->sin6_scope_id = ntohs(ip6->ip6_dst.s6_addr16[1]);
-		ip6->ip6_dst.s6_addr16[1] = 0;
-	} else
-		sin6->sin6_scope_id = 0;
-#endif
-	rtalloc((struct route*)&ro);
-	if (ro.ro_rt == NULL) {
-		m_freem(m);
-		return ENETUNREACH;
+
+	if (options != NULL &&
+	    (options->ippo_flags & (IPPOF_BOUND_IF | IPPOF_NO_IFT_CELLULAR))) {
+		if (options->ippo_flags & IPPOF_BOUND_IF) {
+			ip6oa.ip6oa_boundif = options->ippo_flags >>
+			    IPPOF_SHIFT_IFSCOPE;
+		}
+		if (options->ippo_flags & IPPOF_NO_IFT_CELLULAR)
+			ip6oa.ip6oa_nocell = 1;
 	}
-	
-	/* Send  */
-	error = ip6_output(m, NULL, &ro, 0, im6o, NULL, 0);
-	
+
+	bzero(&ro, sizeof(struct route_in6));
+
+	/*
+	 * Send  mbuf and ifscope information. Check for correctness
+	 * of ifscope information is done while searching for a route in 
+	 * ip6_output.
+	 */
+	error = ip6_output(m, NULL, &ro, IPV6_OUTARGS, im6o, NULL, &ip6oa);
+
 	/* Release the route */
 	if (ro.ro_rt)
 		rtfree(ro.ro_rt);
-	
-	return error;
+
+	if (im6o != NULL)
+		IM6O_REMREF(im6o);
+
+	return (error);
 }
 #endif /* INET6 */
 

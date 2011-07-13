@@ -19,7 +19,6 @@
 
 extern char		g_target_path[ PATH_MAX ];
 extern int		g_skip_setuid_tests;
-extern int		g_is_under_rosetta;
 extern int		g_is_single_user;
 
 /*  **************************************************************************************************************

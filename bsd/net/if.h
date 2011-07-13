@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -96,6 +96,7 @@
 #define KEV_DL_LINK_ADDRESS_CHANGED	16
 #define KEV_DL_WAKEFLAGS_CHANGED	17
 #define KEV_DL_IF_IDLE_ROUTE_REFCNT	18
+#define KEV_DL_IFCAP_CHANGED		19
 
 #include <net/if_var.h>
 #include <sys/types.h>
@@ -146,16 +147,17 @@ struct if_clonereq32 {
 #define IFEF_AUTOCONFIGURING	0x1
 #define IFEF_DVR_REENTRY_OK	0x20	/* When set, driver may be reentered from its own thread */
 #define IFEF_ACCEPT_RTADVD	0x40	/* set to accept IPv6 router advertisement on the interface */
-#define IFEF_DETACHING		0x80	/* Set when interface is detaching */
-#define IFEF_USEKPI			0x100	/* Set when interface is created through the KPIs */
+#define _IFEF_DETACHING		0x80	/* deprecated */
+#define IFEF_USEKPI		0x100	/* Set when interface is created through the KPIs */
 #define IFEF_VLAN		0x200	/* interface has one or more vlans */
 #define IFEF_BOND		0x400	/* interface is part of bond */
 #define	IFEF_ARPLL		0x800	/* ARP for IPv4LL addresses on this port */
 #define	IFEF_NOWINDOWSCALE	0x1000	/* Don't scale TCP window on iface */
 #define	IFEF_NOAUTOIPV6LL	0x2000	/* Interface IPv6 LinkLocal address not provided by kernel */
-#define	IFEF_SENDLIST	0x10000000 /* Interface supports sending a list of packets */
-#define IFEF_REUSE	0x20000000 /* DLIL ifnet recycler, ifnet is not new */
-#define IFEF_INUSE	0x40000000 /* DLIL ifnet recycler, ifnet in use */
+#define IFEF_SERVICE_TRIGGERED	0x20000	/* interface is on-demand dynamically created/destroyed */
+#define	IFEF_SENDLIST		0x10000000 /* Interface supports sending a list of packets */
+#define _IFEF_REUSE		0x20000000 /* deprecated */
+#define _IFEF_INUSE		0x40000000 /* deprecated */
 #define IFEF_UPDOWNCHANGE	0x80000000 /* Interface's up/down state is changing */
 
 /*
@@ -176,6 +178,40 @@ struct if_clonereq32 {
 	    IFF_SIMPLEX|IFF_MULTICAST|IFF_ALLMULTI)
 
 #endif /* KERNEL_PRIVATE */
+
+/*
+ * Capabilities that interfaces can advertise.
+ *
+ * struct ifnet.if_capabilities
+ *   contains the optional features & capabilities a particular interface
+ *   supports (not only the driver but also the detected hw revision).
+ *   Capabilities are defined by IFCAP_* below.
+ * struct ifnet.if_capenable
+ *   contains the enabled (either by default or through ifconfig) optional
+ *   features & capabilities on this interface.
+ *   Capabilities are defined by IFCAP_* below.
+ * struct if_data.ifi_hwassist in IFNET_* form, defined in net/kpi_interface.h,
+ *   contains the enabled optional features & capabilites that can be used
+ *   individually per packet and are specified in the mbuf pkthdr.csum_flags
+ *   field.  IFCAP_* and IFNET_* do not match one to one and IFNET_* may be
+ *   more detailed or differenciated than IFCAP_*.
+ *   IFNET_* hwassist flags have corresponding CSUM_* in sys/mbuf.h
+ */         
+#define IFCAP_RXCSUM            0x00001 /* can offload checksum on RX */
+#define IFCAP_TXCSUM            0x00002 /* can offload checksum on TX */
+#define IFCAP_VLAN_MTU          0x00004 /* VLAN-compatible MTU */
+#define IFCAP_VLAN_HWTAGGING    0x00008 /* hardware VLAN tag support */
+#define IFCAP_JUMBO_MTU         0x00010 /* 9000 byte MTU supported */
+#define IFCAP_TSO4              0x00020 /* can do TCP Segmentation Offload */
+#define IFCAP_TSO6              0x00040 /* can do TCP6 Segmentation Offload */
+#define IFCAP_LRO               0x00080 /* can do Large Receive Offload */
+#define IFCAP_AV		0x00100 /* can do 802.1 AV Bridging */
+
+#define IFCAP_HWCSUM    (IFCAP_RXCSUM | IFCAP_TXCSUM)
+#define IFCAP_TSO       (IFCAP_TSO4 | IFCAP_TSO6)
+
+#define IFCAP_VALID (IFCAP_HWCSUM | IFCAP_TSO | IFCAP_LRO | IFCAP_VLAN_MTU | \
+	IFCAP_VLAN_HWTAGGING | IFCAP_JUMBO_MTU | IFCAP_AV)
 
 #define	IFQ_MAXLEN	50
 #define	IFNET_SLOWHZ	1		/* granularity is 1 second */
@@ -341,6 +377,7 @@ struct	ifreq {
 		struct	ifkpi	ifru_kpi;
 		u_int32_t ifru_wake_flags;
 		u_int32_t ifru_route_refcnt;
+		int     ifru_cap[2];
 	} ifr_ifru;
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
 #define	ifr_dstaddr	ifr_ifru.ifru_dstaddr	/* other end of p-to-p link */
@@ -364,6 +401,8 @@ struct	ifreq {
 #define ifr_kpi		ifr_ifru.ifru_kpi
 #define ifr_wake_flags	ifr_ifru.ifru_wake_flags /* wake capabilities of devive */
 #define ifr_route_refcnt ifr_ifru.ifru_route_refcnt /* route references on interface */
+#define ifr_reqcap      ifr_ifru.ifru_cap[0]    /* requested capabilities */
+#define ifr_curcap      ifr_ifru.ifru_cap[1]    /* current capabilities */
 };
 
 #define	_SIZEOF_ADDR_IFREQ(ifr) \

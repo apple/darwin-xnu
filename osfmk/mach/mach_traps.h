@@ -199,7 +199,7 @@ extern kern_return_t pid_for_task(
 				mach_port_name_t t,
 				int *x);
 
-#if		!defined(__LP64__)
+#if		!defined(__LP64__) && !defined(__arm__)
 /* these should go away altogether - so no 64 legacy please */
 
 extern kern_return_t map_fd(
@@ -209,13 +209,17 @@ extern kern_return_t map_fd(
 				boolean_t findspace,
 				vm_size_t size);
 
-#endif	/* !defined(__LP64__) */
+#endif	/* !defined(__LP64__) && !defined(__arm__) */
 
 #else	/* KERNEL */
 
 #ifdef	XNU_KERNEL_PRIVATE
 
-/* Syscall data translations routines */
+/* Syscall data translations routines
+ *
+ * The kernel may support multiple userspace ABIs, and must use
+ * argument structures with elements large enough for any of them.
+ */
 #define	PAD_(t)	(sizeof(uint64_t) <= sizeof(t) \
  		? 0 : sizeof(uint64_t) - sizeof(t))
 #define PAD_ARG_8
@@ -231,9 +235,14 @@ extern kern_return_t map_fd(
 #define PAD_ARG_(arg_type, arg_name) \
   char arg_name##_l_[PADL_(arg_type)]; arg_type arg_name; char arg_name##_r_[PADR_(arg_type)];
 
-#ifndef __MUNGE_ONCE
-#define __MUNGE_ONCE
-#ifdef __ppc__
+/*
+ * To support 32-bit clients as well as 64-bit clients, argument
+ * structures may need to be munged to repack the arguments. All
+ * active architectures do this inline in the code to dispatch Mach
+ * traps, without calling out to the BSD system call mungers.
+ */
+
+#if 0 /* no active architectures use this */
 void munge_w(const void *, void *);  
 void munge_ww(const void *, void *);  
 void munge_www(const void *, void *);  
@@ -258,33 +267,7 @@ void munge_wlw(const void *, void *);
 void munge_wwwl(const void *, void *);  
 void munge_wwwwl(const void *, void *);  
 void munge_wwwwwl(const void *, void *);  
-#else 
-#define munge_w  NULL 
-#define munge_ww  NULL 
-#define munge_www  NULL 
-#define munge_wwww  NULL 
-#define munge_wwwww  NULL 
-#define munge_wwwwww  NULL 
-#define munge_wwwwwww  NULL 
-#define munge_wwwwwwww  NULL 
-#define munge_d  NULL 
-#define munge_dd  NULL 
-#define munge_ddd  NULL 
-#define munge_dddd  NULL 
-#define munge_ddddd  NULL 
-#define munge_dddddd  NULL 
-#define munge_ddddddd  NULL 
-#define munge_dddddddd  NULL 
-#define munge_l NULL
-#define munge_lw NULL
-#define munge_lwww NULL
-#define munge_wl  NULL 
-#define munge_wlw  NULL 
-#define munge_wwwl  NULL 
-#define munge_wwwwl  NULL 
-#define munge_wwwwwl  NULL 
-#endif /* __ppc__ */
-#endif /* !__MUNGE_ONCE */
+#endif /* 0 */
 
 struct kern_invalid_args {
 	int32_t dummy;
@@ -381,6 +364,7 @@ struct semaphore_timedwait_signal_trap_args {
 extern kern_return_t semaphore_timedwait_signal_trap(
 				struct semaphore_timedwait_signal_trap_args *args);
 
+#if		!defined(CONFIG_EMBEDDED)
 struct map_fd_args {
 	PAD_ARG_(int, fd);
 	PAD_ARG_(vm_offset_t, offset);
@@ -390,6 +374,7 @@ struct map_fd_args {
 };
 extern kern_return_t map_fd(
 				struct map_fd_args *args);
+#endif	/* !defined(CONFIG_EMBEDDED) */
 
 struct task_for_pid_args {
 	PAD_ARG_(mach_port_name_t, target_tport);

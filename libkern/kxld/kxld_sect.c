@@ -40,7 +40,7 @@
 #include "kxld_util.h"
 
 static kern_return_t export_macho(const KXLDSect *sect, u_char *buf, u_long offset, 
-    u_long bufsize, boolean_t is_32_bit);
+    u_long bufsize);
 #if KXLD_USER_OR_ILP32
 static kern_return_t sect_export_macho_header_32(const KXLDSect *sect, u_char *buf, 
     u_long *header_offset, u_long header_size, u_long data_offset);
@@ -326,7 +326,7 @@ kxld_sect_align_address(const KXLDSect *sect, kxld_addr_t address)
 kern_return_t
 kxld_sect_export_macho_to_file_buffer(const KXLDSect *sect, u_char *buf,
     u_long *header_offset, u_long header_size, u_long *data_offset, 
-    u_long data_size, boolean_t is_32_bit)
+    u_long data_size, boolean_t is_32_bit __unused)
 {
     kern_return_t rval = KERN_FAILURE;
 
@@ -351,7 +351,7 @@ kxld_sect_export_macho_to_file_buffer(const KXLDSect *sect, u_char *buf,
             sect, buf, header_offset, header_size, *data_offset);
         require_noerr(rval, finish);
 
-        rval = export_macho(sect, buf, *data_offset, data_size, is_32_bit);
+        rval = export_macho(sect, buf, *data_offset, data_size);
         require_noerr(rval, finish);
 
         *data_offset += (u_long) sect->size;
@@ -369,7 +369,7 @@ kern_return_t
 kxld_sect_export_macho_to_vm(const KXLDSect *sect, u_char *buf, 
     u_long *header_offset, u_long header_size, 
     kxld_addr_t link_addr, u_long data_size, 
-    boolean_t is_32_bit)
+    boolean_t is_32_bit __unused)
 {
     kern_return_t rval = KERN_FAILURE;
     u_long data_offset = (u_long) (sect->link_addr - link_addr);
@@ -383,7 +383,7 @@ kxld_sect_export_macho_to_vm(const KXLDSect *sect, u_char *buf,
         sect, buf, header_offset, header_size, data_offset);
     require_noerr(rval, finish);
 
-    rval = export_macho(sect, buf, data_offset, data_size, is_32_bit);
+    rval = export_macho(sect, buf, data_offset, data_size);
     require_noerr(rval, finish);
 
     rval = KERN_SUCCESS;
@@ -395,8 +395,7 @@ finish:
 /*******************************************************************************
 *******************************************************************************/
 static kern_return_t
-export_macho(const KXLDSect *sect, u_char *buf, u_long offset, u_long bufsize,
-    boolean_t is_32_bit)
+export_macho(const KXLDSect *sect, u_char *buf, u_long offset, u_long bufsize)
 {
     kern_return_t rval = KERN_FAILURE;
 
@@ -424,11 +423,6 @@ export_macho(const KXLDSect *sect, u_char *buf, u_long offset, u_long bufsize,
     case S_NON_LAZY_SYMBOL_POINTERS:
     case S_MOD_INIT_FUNC_POINTERS:
     case S_MOD_TERM_FUNC_POINTERS:
-        require_action(!is_32_bit, finish, rval=KERN_FAILURE;
-            kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO
-                "Invalid section type in 32-bit kext: %u.", 
-                sect->flags & SECTION_TYPE));
-        /* Fall through */
     case S_REGULAR:
     case S_CSTRING_LITERALS:
     case S_4BYTE_LITERALS:
@@ -607,8 +601,7 @@ finish:
 /*******************************************************************************
 *******************************************************************************/
 kern_return_t
-kxld_sect_process_relocs(KXLDSect *sect, const KXLDRelocator *relocator,
-    const KXLDArray *sectarray, const KXLDSymtab *symtab)
+kxld_sect_process_relocs(KXLDSect *sect, KXLDRelocator *relocator)
 {
     kern_return_t rval = KERN_FAILURE;
     KXLDReloc *reloc = NULL;
@@ -616,13 +609,11 @@ kxld_sect_process_relocs(KXLDSect *sect, const KXLDRelocator *relocator,
 
     for (i = 0; i < sect->relocs.nitems; ++i) {
         reloc = kxld_array_get_item(&sect->relocs, i);
-        rval = kxld_relocator_process_sect_reloc(relocator, reloc, sect, 
-            sectarray, symtab);
+        rval = kxld_relocator_process_sect_reloc(relocator, reloc, sect);
         require_noerr(rval, finish);
     }
 
     rval = KERN_SUCCESS;
-
 finish:
     return rval;
 }

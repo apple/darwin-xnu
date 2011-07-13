@@ -111,8 +111,8 @@ public:
     * @result
     * A comparison result of the object:
     * <ul>
-    *   <li>a positive value if obj2 should precede obj1,</li>
-    *   <li>a negative value if obj1 should precede obj2,</li>
+    *   <li>a negative value if obj2 should precede obj1,</li>
+    *   <li>a positive value if obj1 should precede obj2,</li>
     *   <li>and 0 if obj1 and obj2 have an equivalent ordering.</li>
     * </ul>
     */

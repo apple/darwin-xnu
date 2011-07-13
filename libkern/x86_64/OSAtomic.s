@@ -31,13 +31,11 @@
 #;***************************************************************************
 
 	.globl _OSCompareAndSwap
-
-// TODO FIXME!!
 _OSCompareAndSwap: #;oldValue, newValue, ptr
 	movl		 %edi, %eax
 	lock
-	cmpxchgl	%esi, 0(%rdx)	#; CAS (eax is an implicit operand)
-	sete		%al				#; did CAS succeed? (TZ=1)
+	cmpxchgl	%esi, (%rdx)	#; CAS (eax is an implicit operand)
+	sete		%al			#; did CAS succeed? (TZ=1)
 	movzbq		%al, %rax		#; clear out the high bytes
 	ret
 
@@ -50,10 +48,10 @@ _OSCompareAndSwap: #;oldValue, newValue, ptr
 
 _OSCompareAndSwap64:
 _OSCompareAndSwapPtr: #;oldValue, newValue, ptr
-	movq		 %rdi, %rax
+	movq		%rdi, %rax
 	lock
-	cmpxchgq	%rsi, 0(%rdx)	#; CAS (eax is an implicit operand)
-	sete		%al				#; did CAS succeed? (TZ=1)
+	cmpxchgq	%rsi, (%rdx)	#; CAS (rax is an implicit operand)
+	sete		%al			#; did CAS succeed? (TZ=1)
 	movzbq		%al, %rax		#; clear out the high bytes
 	ret
 
@@ -66,7 +64,7 @@ _OSCompareAndSwapPtr: #;oldValue, newValue, ptr
 _OSAddAtomic64:
 _OSAddAtomicLong:
 	lock
-	xaddq	%rdi, 0(%rsi)		#; Atomic exchange and add
+	xaddq	%rdi, (%rsi)		#; Atomic exchange and add
 	movq	%rdi, %rax;
 	ret
 
@@ -78,6 +76,6 @@ _OSAddAtomicLong:
 	.globl	_OSAddAtomic
 _OSAddAtomic:
 	lock
-	xaddl	%edi, 0(%rsi)		#; Atomic exchange and add
+	xaddl	%edi, (%rsi)		#; Atomic exchange and add
 	movl	%edi, %eax;
 	ret

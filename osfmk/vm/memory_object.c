@@ -101,6 +101,7 @@
 #include <vm/vm_kern.h>		/* For kernel_map, vm_move */
 #include <vm/vm_map.h>		/* For vm_map_pageable */
 #include <vm/vm_purgeable_internal.h>	/* Needed by some vm_page.h macros */
+#include <vm/vm_shared_region.h>
 
 #if	MACH_PAGEMAP
 #include <vm/vm_external.h>
@@ -139,10 +140,10 @@ decl_lck_mtx_data(,	memory_manager_default_lock)
 
 typedef	int	memory_object_lock_result_t;
 
-#define MEMORY_OBJECT_LOCK_RESULT_DONE          0
-#define MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK    1
-#define MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN    2
-#define MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN   3
+#define MEMORY_OBJECT_LOCK_RESULT_DONE          	0
+#define MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK    	1
+#define MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN   	2
+#define MEMORY_OBJECT_LOCK_RESULT_MUST_FREE		3
 
 memory_object_lock_result_t memory_object_lock_page(
 				vm_page_t		m,
@@ -174,185 +175,149 @@ memory_object_lock_page(
             "m_o_lock_page, page 0x%X rtn %d flush %d prot %d\n",
             m, should_return, should_flush, prot, 0);
 
-	/*
-	 *	If we cannot change access to the page,
-	 *	either because a mapping is in progress
-	 *	(busy page) or because a mapping has been
-	 *	wired, then give up.
-	 */
 
 	if (m->busy || m->cleaning) {
-		if (m->list_req_pending && (m->pageout || m->cleaning) &&
+		if (m->list_req_pending &&
 		    should_return == MEMORY_OBJECT_RETURN_NONE &&
 		    should_flush == TRUE) {
-			/*
-			 * if pageout is set, page was earmarked by vm_pageout_scan
-			 * to be cleaned and stolen... if cleaning is set, we're
-			 * pre-cleaning pages for a hibernate...
-			 * in either case, we're going
-			 * to take it back since we are being asked to
-			 * flush the page w/o cleaning it (i.e. we don't
-			 * care that it's dirty, we want it gone from
-			 * the cache) and we don't want to stall
-			 * waiting for it to be cleaned for 2 reasons...
-			 * 1 - no use paging it out since we're probably
-			 *     shrinking the file at this point or we no
-			 *     longer care about the data in the page
-			 * 2 - if we stall, we may casue a deadlock in
-			 *     the FS trying to acquire its locks
-			 *     on the VNOP_PAGEOUT path presuming that
-			 *     those locks are already held on the truncate
-			 *     path before calling through to this function
-			 *
-			 * so undo all of the state that vm_pageout_scan
-			 * hung on this page
-			 */
-			m->busy = FALSE;
 
-			vm_pageout_queue_steal(m, FALSE);
+			if (m->absent) {
+				/*
+				 * this is the list_req_pending | absent | busy case
+				 * which originates from vm_fault_page. 
+				 * Combine that with should_flush == TRUE and we
+				 * have a case where we need to toss the page from
+				 * the object.
+				 */
+				if (!VM_PAGE_WIRED(m)) {
+					return (MEMORY_OBJECT_LOCK_RESULT_MUST_FREE);
+				} else {
+					return (MEMORY_OBJECT_LOCK_RESULT_DONE);
+				}
+			}
+			if  (m->pageout || m->cleaning) {
+				/*
+				 * if pageout is set, page was earmarked by vm_pageout_scan
+				 * to be cleaned and stolen... if cleaning is set, we're
+				 * pre-cleaning pages for a hibernate...
+				 * in either case, we're going
+				 * to take it back since we are being asked to
+				 * flush the page w/o cleaning it (i.e. we don't
+				 * care that it's dirty, we want it gone from
+				 * the cache) and we don't want to stall
+				 * waiting for it to be cleaned for 2 reasons...
+				 * 1 - no use paging it out since we're probably
+				 *     shrinking the file at this point or we no
+				 *     longer care about the data in the page
+				 * 2 - if we stall, we may casue a deadlock in
+				 *     the FS trying to acquire its locks
+				 *     on the VNOP_PAGEOUT path presuming that
+				 *     those locks are already held on the truncate
+				 *     path before calling through to this function
+				 *
+				 * so undo all of the state that vm_pageout_scan
+				 * hung on this page
+				 */
+
+				vm_pageout_queue_steal(m, FALSE);
+				PAGE_WAKEUP_DONE(m);
+			} else {
+				panic("list_req_pending on page %p without absent/pageout/cleaning set\n", m);
+			}
 		} else
-			return(MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK);
+			return (MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK);
 	}
-
 	/*
 	 *	Don't worry about pages for which the kernel
 	 *	does not have any data.
 	 */
-
 	if (m->absent || m->error || m->restart) {
-		if(m->error && should_flush) {
-			/* dump the page, pager wants us to */
-			/* clean it up and there is no      */
-			/* relevant data to return */
-			if ( !VM_PAGE_WIRED(m)) {
-				VM_PAGE_FREE(m);
-				return(MEMORY_OBJECT_LOCK_RESULT_DONE);
-			}
-		} else {
-			return(MEMORY_OBJECT_LOCK_RESULT_DONE);
+		if (m->error && should_flush && !VM_PAGE_WIRED(m)) {
+			/*
+			 * dump the page, pager wants us to
+			 * clean it up and there is no
+			 * relevant data to return
+			 */
+			return (MEMORY_OBJECT_LOCK_RESULT_MUST_FREE);
 		}
+		return (MEMORY_OBJECT_LOCK_RESULT_DONE);
 	}
-
 	assert(!m->fictitious);
 
-	/*
-	 *	If the page is wired, just clean or return the page if needed.
-	 *	Wired pages don't get flushed or disconnected from the pmap.
-	 */
-
 	if (VM_PAGE_WIRED(m)) {
-		if (memory_object_should_return_page(m, should_return)) {
-			if (m->dirty)
-				return(MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN);
-			else
-				return(MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN);
-		}
-
-		return(MEMORY_OBJECT_LOCK_RESULT_DONE);
-	}
-
-	/*
-	 *	If the page is to be flushed, allow
-	 *	that to be done as part of the protection.
-	 */
-
-	if (should_flush)
-		prot = VM_PROT_ALL;
-
-	/*
-	 *	Set the page lock.
-	 *
-	 *	If we are decreasing permission, do it now;
-	 *	let the fault handler take care of increases
-	 *	(pmap_page_protect may not increase protection).
-	 */
-
-	if (prot != VM_PROT_NO_CHANGE) {
-	        pmap_page_protect(m->phys_page, VM_PROT_ALL & ~prot);
-
-		PAGE_WAKEUP(m);
-	}
-
-	/*
-	 *	Handle page returning.
-	 */
-	if (memory_object_should_return_page(m, should_return)) {
-
 		/*
-		 *	If we weren't planning
-		 *	to flush the page anyway,
-		 *	we may need to remove the
-		 *	page from the pageout
-		 *	system and from physical
-		 *	maps now.
+		 * The page is wired... just clean or return the page if needed.
+		 * Wired pages don't get flushed or disconnected from the pmap.
 		 */
-		
-		vm_page_lockspin_queues();
-		VM_PAGE_QUEUES_REMOVE(m);
-		vm_page_unlock_queues();
+		if (memory_object_should_return_page(m, should_return))
+			return (MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN);
 
-		if (!should_flush)
-			pmap_disconnect(m->phys_page);
+		return (MEMORY_OBJECT_LOCK_RESULT_DONE);
+	}		
 
-		if (m->dirty)
-			return(MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN);
-		else
-			return(MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN);
-	}
-
-	/*
-	 *	Handle flushing
-	 */
 	if (should_flush) {
-		VM_PAGE_FREE(m);
+		/*
+		 * must do the pmap_disconnect before determining the 
+		 * need to return the page... otherwise it's possible
+		 * for the page to go from the clean to the dirty state
+		 * after we've made our decision
+		 */
+		if (pmap_disconnect(m->phys_page) & VM_MEM_MODIFIED)
+			m->dirty = TRUE;
 	} else {
 		/*
-		 *	XXX Make clean but not flush a paging hint,
-		 *	and deactivate the pages.  This is a hack
-		 *	because it overloads flush/clean with
-		 *	implementation-dependent meaning.  This only
-		 *	happens to pages that are already clean.
+		 * If we are decreasing permission, do it now;
+		 * let the fault handler take care of increases
+		 * (pmap_page_protect may not increase protection).
 		 */
-
-		if (vm_page_deactivate_hint &&
-		    (should_return != MEMORY_OBJECT_RETURN_NONE)) {
-			vm_page_lockspin_queues();
-			vm_page_deactivate(m);
-			vm_page_unlock_queues();
-		}
+		if (prot != VM_PROT_NO_CHANGE)
+			pmap_page_protect(m->phys_page, VM_PROT_ALL & ~prot);
+	}
+	/*
+	 *	Handle returning dirty or precious pages
+	 */
+	if (memory_object_should_return_page(m, should_return)) {
+		/*
+		 * we use to do a pmap_disconnect here in support
+		 * of memory_object_lock_request, but that routine
+		 * no longer requires this...  in any event, in
+		 * our world, it would turn into a big noop since
+		 * we don't lock the page in any way and as soon
+		 * as we drop the object lock, the page can be
+		 * faulted back into an address space
+		 *
+		 *	if (!should_flush)
+		 *		pmap_disconnect(m->phys_page);
+		 */
+		return (MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN);
 	}
 
-	return(MEMORY_OBJECT_LOCK_RESULT_DONE);
+	/*
+	 *	Handle flushing clean pages
+	 */
+	if (should_flush)
+		return (MEMORY_OBJECT_LOCK_RESULT_MUST_FREE);
+
+	/*
+	 * we use to deactivate clean pages at this point,
+	 * but we do not believe that an msync should change
+	 * the 'age' of a page in the cache... here is the
+	 * original comment and code concerning this...
+	 *
+	 *	XXX Make clean but not flush a paging hint,
+	 *	and deactivate the pages.  This is a hack
+	 *	because it overloads flush/clean with
+	 *	implementation-dependent meaning.  This only
+	 *	happens to pages that are already clean.
+	 *
+	 *   if (vm_page_deactivate_hint && (should_return != MEMORY_OBJECT_RETURN_NONE))
+	 *	return (MEMORY_OBJECT_LOCK_RESULT_MUST_DEACTIVATE);
+	 */
+
+	return (MEMORY_OBJECT_LOCK_RESULT_DONE);
 }
 
-#define LIST_REQ_PAGEOUT_PAGES(object, data_cnt, action, po, ro, ioerr, iosync)    \
-MACRO_BEGIN								\
-									\
-        register int            upl_flags;                              \
-	memory_object_t		pager;					\
-				                   			\
-	if ((pager = (object)->pager) != MEMORY_OBJECT_NULL) {		\
-		vm_object_paging_begin(object);				\
-		vm_object_unlock(object);				\
-									\
-                if (iosync)                                     	\
-                        upl_flags = UPL_MSYNC | UPL_IOSYNC;     	\
-                else                                            	\
-                        upl_flags = UPL_MSYNC;                  	\
-				                   			\
-	   	(void) memory_object_data_return(pager,			\
-			po,						\
-			(memory_object_cluster_size_t)data_cnt,					\
-	                ro,                                             \
-	                ioerr,                                          \
-			(action) == MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN,\
-			!should_flush,                                  \
-			upl_flags);                                 	\
-									\
-		vm_object_lock(object);					\
-		vm_object_paging_end(object);				\
-	}								\
-MACRO_END
+
 
 /*
  *	Routine:	memory_object_lock_request [user interface]
@@ -556,6 +521,40 @@ vm_object_sync(
 
 
 
+#define LIST_REQ_PAGEOUT_PAGES(object, data_cnt, po, ro, ioerr, iosync)    \
+MACRO_BEGIN								\
+									\
+        int			upl_flags;                              \
+	memory_object_t		pager;					\
+									\
+	if (object == slide_info.slide_object) {					\
+		panic("Objects with slid pages not allowed\n");		\
+	}								\
+				                   			\
+	if ((pager = (object)->pager) != MEMORY_OBJECT_NULL) {		\
+		vm_object_paging_begin(object);				\
+		vm_object_unlock(object);				\
+									\
+                if (iosync)                                     	\
+                        upl_flags = UPL_MSYNC | UPL_IOSYNC;     	\
+                else                                            	\
+                        upl_flags = UPL_MSYNC;                  	\
+				                   			\
+	   	(void) memory_object_data_return(pager,			\
+			po,						\
+			(memory_object_cluster_size_t)data_cnt,		\
+	                ro,                                             \
+	                ioerr,                                          \
+			FALSE,						\
+			FALSE,		                                \
+			upl_flags);                                 	\
+									\
+		vm_object_lock(object);					\
+		vm_object_paging_end(object);				\
+	}								\
+MACRO_END
+
+
 
 static int
 vm_object_update_extent(
@@ -571,13 +570,18 @@ vm_object_update_extent(
 {
         vm_page_t	m;
         int		retval = 0;
-	memory_object_cluster_size_t	data_cnt = 0;
 	vm_object_offset_t	paging_offset = 0;
 	vm_object_offset_t	next_offset = offset;
         memory_object_lock_result_t	page_lock_result;
-	memory_object_lock_result_t	pageout_action;
-	
-	pageout_action = MEMORY_OBJECT_LOCK_RESULT_DONE;
+	memory_object_cluster_size_t	data_cnt = 0;
+	struct vm_page_delayed_work	dw_array[DEFAULT_DELAYED_WORK_LIMIT];
+	struct vm_page_delayed_work	*dwp;
+	int		dw_count;
+	int		dw_limit;
+
+        dwp = &dw_array[0];
+        dw_count = 0;
+	dw_limit = DELAYED_WORK_LIMIT(DEFAULT_DELAYED_WORK_LIMIT);
 
 	for (;
 	     offset < offset_end && object->resident_page_count;
@@ -589,98 +593,105 @@ vm_object_update_extent(
 		 */
 		if (data_cnt) {
 			if ((data_cnt >= PAGE_SIZE * MAX_UPL_TRANSFER) || (next_offset != offset)) {
-				LIST_REQ_PAGEOUT_PAGES(object, data_cnt, 
-						       pageout_action, paging_offset, offset_resid, io_errno, should_iosync);
+
+				if (dw_count) {
+					vm_page_do_delayed_work(object, &dw_array[0], dw_count);
+					dwp = &dw_array[0];
+					dw_count = 0;
+				}
+				LIST_REQ_PAGEOUT_PAGES(object, data_cnt,
+						       paging_offset, offset_resid, io_errno, should_iosync);
 				data_cnt = 0;
 			}
 		}
-
 		while ((m = vm_page_lookup(object, offset)) != VM_PAGE_NULL) {
-		        page_lock_result = memory_object_lock_page(m, should_return, should_flush, prot);
 
-			XPR(XPR_MEMORY_OBJECT,
-			    "m_o_update: lock_page, obj 0x%X offset 0x%X result %d\n",
-			    object, offset, page_lock_result, 0, 0);
+			dwp->dw_mask = 0;
+		        
+			page_lock_result = memory_object_lock_page(m, should_return, should_flush, prot);
 
-			switch (page_lock_result)
-			{
-			  case MEMORY_OBJECT_LOCK_RESULT_DONE:
-			    /*
-			     *	End of a cluster of dirty pages.
-			     */
-			    if (data_cnt) {
-			            LIST_REQ_PAGEOUT_PAGES(object, 
-							   data_cnt, pageout_action, 
-							   paging_offset, offset_resid, io_errno, should_iosync);
-				    data_cnt = 0;
-				    continue;
-			    }
-			    break;
+			if (data_cnt && page_lock_result != MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN) {
+				/*
+				 *	End of a run of dirty/precious pages.
+				 */
+				if (dw_count) {
+					vm_page_do_delayed_work(object, &dw_array[0], dw_count);
+					dwp = &dw_array[0];
+					dw_count = 0;
+				}
+				LIST_REQ_PAGEOUT_PAGES(object, data_cnt,
+						       paging_offset, offset_resid, io_errno, should_iosync);
+				/*
+				 * LIST_REQ_PAGEOUT_PAGES will drop the object lock which will
+				 * allow the state of page 'm' to change... we need to re-lookup
+				 * the current offset
+				 */
+				data_cnt = 0;
+				continue;
+			}
 
-			  case MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK:
-			    /*
-			     *	Since it is necessary to block,
-			     *	clean any dirty pages now.
-			     */
-			    if (data_cnt) {
-			            LIST_REQ_PAGEOUT_PAGES(object,
-							   data_cnt, pageout_action, 
-							   paging_offset, offset_resid, io_errno, should_iosync);
-				    data_cnt = 0;
-				    continue;
-			    }
-			    PAGE_SLEEP(object, m, THREAD_UNINT);
-			    continue;
+			switch (page_lock_result) {
 
-			  case MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN:
-			  case MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN:
-			    /*
-			     * The clean and return cases are similar.
-			     *
-			     * if this would form a discontiguous block,
-			     * clean the old pages and start anew.
-			     */
-			    if (data_cnt && pageout_action != page_lock_result) {
-			            LIST_REQ_PAGEOUT_PAGES(object, 
-							   data_cnt, pageout_action, 
-							   paging_offset, offset_resid, io_errno, should_iosync);
-				    data_cnt = 0;
-				    continue;
-			    }
-			    if (m->cleaning) {
-			            PAGE_SLEEP(object, m, THREAD_UNINT);
-				    continue;
-			    }
-			    if (data_cnt == 0) {
-			            pageout_action = page_lock_result;
-				    paging_offset = offset;
-			    }
-			    data_cnt += PAGE_SIZE;
-			    next_offset = offset + PAGE_SIZE_64;
+			case MEMORY_OBJECT_LOCK_RESULT_DONE:
+				break;
 
-			    /*
-			     * Clean
-			     */
-			    m->list_req_pending = TRUE;
-			    m->cleaning = TRUE;
+			case MEMORY_OBJECT_LOCK_RESULT_MUST_FREE:
+				dwp->dw_mask |= DW_vm_page_free;
+				break;
 
-			    if (should_flush &&
-				/* let's not flush a wired page... */
-				!VM_PAGE_WIRED(m)) {
-			            /*
-				     * and add additional state
-				     * for the flush
-				     */
-				    m->busy = TRUE;
-				    m->pageout = TRUE;
+			case MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK:
+				PAGE_SLEEP(object, m, THREAD_UNINT);
+				continue;
 
-				    vm_page_lockspin_queues();
-				    vm_page_wire(m);
-				    vm_page_unlock_queues();
-			    }
+			case MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN:
+				if (data_cnt == 0)
+					paging_offset = offset;
 
-			    retval = 1;
-			    break;
+				data_cnt += PAGE_SIZE;
+				next_offset = offset + PAGE_SIZE_64;
+
+				/*
+				 * Clean
+				 */
+				m->list_req_pending = TRUE;
+				m->cleaning = TRUE;
+
+				/*
+				 * wired pages shouldn't be flushed and
+				 * since they aren't on any queue,
+				 * no need to remove them
+				 */
+				if (!VM_PAGE_WIRED(m)) {
+
+					if (should_flush) {
+						/*
+						 * add additional state for the flush
+						 */
+						m->busy = TRUE;
+						m->pageout = TRUE;
+
+						dwp->dw_mask |= DW_vm_page_wire;
+					}
+					/*
+					 * we use to remove the page from the queues at this
+					 * point, but we do not believe that an msync
+					 * should cause the 'age' of a page to be changed
+					 *
+					 *    else
+					 *	dwp->dw_mask |= DW_VM_PAGE_QUEUES_REMOVE;
+					 */
+				}
+				retval = 1;
+				break;
+			}
+			if (dwp->dw_mask) {
+				VM_PAGE_ADD_DELAYED_WORK(dwp, m, dw_count);
+
+				if (dw_count >= dw_limit) {
+					vm_page_do_delayed_work(object, &dw_array[0], dw_count);
+					dwp = &dw_array[0];
+					dw_count = 0;
+				}
 			}
 			break;
 		}
@@ -689,9 +700,12 @@ vm_object_update_extent(
 	 *	We have completed the scan for applicable pages.
 	 *	Clean any pages that have been saved.
 	 */
+	if (dw_count)
+		vm_page_do_delayed_work(object, &dw_array[0], dw_count);
+
 	if (data_cnt) {
-	        LIST_REQ_PAGEOUT_PAGES(object,
-				       data_cnt, pageout_action, paging_offset, offset_resid, io_errno, should_iosync);
+	        LIST_REQ_PAGEOUT_PAGES(object, data_cnt,
+				       paging_offset, offset_resid, io_errno, should_iosync);
 	}
 	return (retval);
 }
@@ -707,14 +721,14 @@ vm_object_update_extent(
  */
 kern_return_t
 vm_object_update(
-	register vm_object_t		object,
-	register vm_object_offset_t	offset,
-	register vm_object_size_t	size,
-	register vm_object_offset_t	*resid_offset,
-	int				*io_errno,
-	memory_object_return_t		should_return,
-	int				flags,
-	vm_prot_t			protection)
+	vm_object_t		object,
+	vm_object_offset_t	offset,
+	vm_object_size_t	size,
+	vm_object_offset_t	*resid_offset,
+	int			*io_errno,
+	memory_object_return_t	should_return,
+	int			flags,
+	vm_prot_t		protection)
 {
         vm_object_t		copy_object = VM_OBJECT_NULL;
 	boolean_t		data_returned = FALSE;
@@ -801,27 +815,27 @@ vm_object_update(
 		        /*
 			 * translate offset with respect to shadow's offset
 			 */
-		        copy_offset = (offset >= copy_object->shadow_offset) ?
-			  (vm_map_offset_t)(offset - copy_object->shadow_offset) :
+		        copy_offset = (offset >= copy_object->vo_shadow_offset) ?
+			  (vm_map_offset_t)(offset - copy_object->vo_shadow_offset) :
 			  (vm_map_offset_t) 0;
 
-			if (copy_offset > copy_object->size)
-			        copy_offset = copy_object->size;
+			if (copy_offset > copy_object->vo_size)
+			        copy_offset = copy_object->vo_size;
 
 			/*
 			 * clip size with respect to shadow offset
 			 */
-			if (offset >= copy_object->shadow_offset) {
+			if (offset >= copy_object->vo_shadow_offset) {
 			        copy_size = size;
-			} else if (size >= copy_object->shadow_offset - offset) {
-			        copy_size = size - (copy_object->shadow_offset - offset);
+			} else if (size >= copy_object->vo_shadow_offset - offset) {
+			        copy_size = size - (copy_object->vo_shadow_offset - offset);
 			} else {
 			        copy_size = 0;
 			}
 			
-			if (copy_offset + copy_size > copy_object->size) {
-			        if (copy_object->size >= copy_offset) {
-				        copy_size = copy_object->size - copy_offset;
+			if (copy_offset + copy_size > copy_object->vo_size) {
+			        if (copy_object->vo_size >= copy_offset) {
+				        copy_size = copy_object->vo_size - copy_offset;
 				} else {
 				        copy_size = 0;
 				}
@@ -841,6 +855,8 @@ vm_object_update(
 		fault_info.hi_offset = copy_size;
 		fault_info.no_cache   = FALSE;
 		fault_info.stealth = TRUE;
+		fault_info.io_sync = FALSE;
+		fault_info.cs_bypass = FALSE;
 		fault_info.mark_zf_absent = FALSE;
 
 		vm_object_paging_begin(copy_object);
@@ -894,12 +910,6 @@ vm_object_update(
 				goto RETRY_COW_OF_LOCK_REQUEST;
 			case VM_FAULT_MEMORY_SHORTAGE:
 				VM_PAGE_WAIT();
-				prot = 	VM_PROT_WRITE|VM_PROT_READ;
-				vm_object_lock(copy_object);
-				vm_object_paging_begin(copy_object);
-				goto RETRY_COW_OF_LOCK_REQUEST;
-			case VM_FAULT_FICTITIOUS_SHORTAGE:
-				vm_page_more_fictitious();
 				prot = 	VM_PROT_WRITE|VM_PROT_READ;
 				vm_object_lock(copy_object);
 				vm_object_paging_begin(copy_object);
@@ -1783,14 +1793,17 @@ host_default_memory_manager(
 
 		thread_wakeup((event_t) &memory_manager_default);
 
+#ifndef CONFIG_FREEZE
 		/*
 		 * Now that we have a default pager for anonymous memory,
 		 * reactivate all the throttled pages (i.e. dirty pages with
 		 * no pager).
 		 */
-		if (current_manager == MEMORY_OBJECT_DEFAULT_NULL) {
+		if (current_manager == MEMORY_OBJECT_DEFAULT_NULL)
+		{
 			vm_page_reactivate_all_throttled();
 		}
+#endif
 	}
  out:
 	lck_mtx_unlock(&memory_manager_default_lock);
@@ -1924,6 +1937,39 @@ memory_object_range_op(
 }
 
 
+void
+memory_object_mark_used(
+        memory_object_control_t	control)
+{
+	vm_object_t		object;
+
+	if (control == NULL)
+		return;
+
+	object = memory_object_control_to_vm_object(control);
+
+	if (object != VM_OBJECT_NULL)
+		vm_object_cache_remove(object);
+}
+
+
+void
+memory_object_mark_unused(
+	memory_object_control_t	control,
+	__unused boolean_t	rage)
+{
+	vm_object_t		object;
+
+	if (control == NULL)
+		return;
+
+	object = memory_object_control_to_vm_object(control);
+
+	if (object != VM_OBJECT_NULL)
+		vm_object_cache_add(object);
+}
+
+
 kern_return_t
 memory_object_pages_resident(
 	memory_object_control_t	control,
@@ -1961,6 +2007,20 @@ memory_object_signed(
 	return KERN_SUCCESS;
 }
 
+boolean_t
+memory_object_is_slid(
+	memory_object_control_t	control)
+{
+	vm_object_t	object = VM_OBJECT_NULL;
+	vm_object_t	slide_object = slide_info.slide_object;
+
+	object = memory_object_control_to_vm_object(control);
+	if (object == VM_OBJECT_NULL)
+		return FALSE;
+
+	return (object == slide_object);
+}
+
 static zone_t mem_obj_control_zone;
 
 __private_extern__ void
@@ -1970,6 +2030,7 @@ memory_object_control_bootstrap(void)
 
 	i = (vm_size_t) sizeof (struct memory_object_control);
 	mem_obj_control_zone = zinit (i, 8192*i, 4096, "mem_obj_control");
+	zone_change(mem_obj_control_zone, Z_CALLERACCT, FALSE);
 	zone_change(mem_obj_control_zone, Z_NOENCRYPT, TRUE);
 	return;
 }
@@ -2249,6 +2310,20 @@ kern_return_t memory_object_last_unmap
 {
 	return (memory_object->mo_pager_ops->memory_object_last_unmap)(
 		memory_object);
+}
+
+/* Routine memory_object_data_reclaim */
+kern_return_t memory_object_data_reclaim
+(
+	memory_object_t memory_object,
+	boolean_t	reclaim_backing_store
+)
+{
+	if (memory_object->mo_pager_ops->memory_object_data_reclaim == NULL)
+		return KERN_NOT_SUPPORTED;
+	return (memory_object->mo_pager_ops->memory_object_data_reclaim)(
+		memory_object,
+		reclaim_backing_store);
 }
 
 /* Routine memory_object_create */

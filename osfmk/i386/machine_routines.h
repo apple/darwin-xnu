@@ -67,7 +67,6 @@ void	ml_cpu_set_ldt(int);
 /* Initialize Interrupts */
 void    ml_init_interrupt(void);
 
-
 /* Generate a fake interrupt */
 void ml_cause_interrupt(void);
 
@@ -132,11 +131,9 @@ void	ml_get_bouncepool_info(
 boolean_t machine_timeout_suspended(void);
 #endif /* PEXPERT_KERNEL_PRIVATE || MACH_KERNEL_PRIVATE  */
 
+/* Warm up a CPU to receive an interrupt */
+kern_return_t ml_interrupt_prewarm(uint64_t deadline);
 
-void interrupt_latency_tracker_setup(void);
-void interrupt_reset_latency_stats(void);
-void interrupt_populate_latency_stats(char *, unsigned);
-boolean_t ml_fpu_avx_enabled(void);
 #endif /* XNU_KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE
@@ -235,14 +232,14 @@ void ml_phys_write_double_64(
 
 /* Struct for ml_cpu_get_info */
 struct ml_cpu_info {
-	unsigned long		vector_unit;
-	unsigned long		cache_line_size;
-	unsigned long		l1_icache_size;
-	unsigned long		l1_dcache_size;
-	unsigned long		l2_settings;
-	unsigned long		l2_cache_size;
-	unsigned long		l3_settings;
-	unsigned long		l3_cache_size;
+	uint32_t	vector_unit;
+	uint32_t	cache_line_size;
+	uint32_t	l1_icache_size;
+	uint32_t	l1_dcache_size;
+	uint32_t	l2_settings;
+	uint32_t	l2_cache_size;
+	uint32_t	l3_settings;
+	uint32_t	l3_cache_size;
 };
 
 typedef struct ml_cpu_info ml_cpu_info_t;
@@ -273,6 +270,7 @@ extern void ml_set_maxbusdelay(uint32_t mdelay);
 extern uint32_t ml_get_maxbusdelay(void);
 extern void ml_set_maxintdelay(uint64_t mdelay);
 extern uint64_t ml_get_maxintdelay(void);
+extern boolean_t ml_get_interrupt_prewake_applicable(void);
 
 
 extern uint64_t tmrCvt(uint64_t time, uint64_t conversion);
@@ -304,6 +302,11 @@ void ml_get_csw_threads(thread_t * /*old*/, thread_t * /*new*/);
 
 __END_DECLS
 
+#ifdef	XNU_KERNEL_PRIVATE
+boolean_t ml_fpu_avx_enabled(void);
+void interrupt_latency_tracker_setup(void);
+void interrupt_reset_latency_stats(void);
+void interrupt_populate_latency_stats(char *, unsigned);
 
-
+#endif /* XNU_KERNEL_PRIVATE */
 #endif /* _I386_MACHINE_ROUTINES_H_ */

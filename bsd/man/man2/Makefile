@@ -67,6 +67,7 @@ DATAFILES = \
 	getauid.2		\
 	getdirentries.2		\
 	getdirentriesattr.2	\
+	getdtablesize.2		\
 	getegid.2		\
 	geteuid.2		\
 	getfh.2			\
@@ -145,6 +146,11 @@ DATAFILES = \
 	rmdir.2			\
 	searchfs.2		\
 	select.2		\
+	sem_close.2		\
+	sem_open.2		\
+	sem_post.2		\
+	sem_unlink.2		\
+	sem_wait.2		\
 	semctl.2		\
 	semget.2		\
 	semop.2			\
@@ -166,12 +172,16 @@ DATAFILES = \
 	setpgid.2		\
 	setpgrp.2		\
 	setpriority.2		\
+	setregid.2		\
+	setreuid.2		\
 	setrlimit.2		\
 	setsid.2		\
 	setsockopt.2		\
 	settimeofday.2		\
 	setuid.2		\
 	setxattr.2		\
+	shm_open.2		\
+	shm_unlink.2		\
 	shmat.2			\
 	shmctl.2		\
 	shmdt.2			\
@@ -194,6 +204,7 @@ DATAFILES = \
 	syscall.2		\
 	truncate.2		\
 	umask.2			\
+	undelete.2		\
 	unlink.2		\
 	unmount.2		\
 	utimes.2		\
@@ -207,7 +218,8 @@ DATAFILES = \
 	posix_spawn.2
 
 INSTALL_MAN_LINKS = \
-	posix_spawn.2 posix_spawnp.2
+	posix_spawn.2 posix_spawnp.2	\
+	sem_wait.2 sem_trywait.2
 
 INSTALL_MAN_LIST = ${DATAFILES}
 

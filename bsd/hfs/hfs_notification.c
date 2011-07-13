@@ -32,7 +32,9 @@
 #include <sys/dirent.h>
 #include <sys/stat.h>
 #include <sys/mount.h>
+#include <sys/mount_internal.h>
 #include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/malloc.h>
 #include <sys/ubc.h>
 #include <sys/quota.h>
@@ -71,10 +73,24 @@ void hfs_generate_volume_notifications(struct hfsmount *hfsmp)
 	}
 
 	if (state == 2 && !(hfsmp->hfs_notification_conditions & VQ_VERYLOWDISK)) {
+		/* Dump some logging to track down intermittent issues */
+		printf("HFS: Very Low Disk: freeblks: %d, dangerlimit: %d\n", freeblks, hfsmp->hfs_freespace_notify_dangerlimit);
+#if HFS_SPARSE_DEV
+		if (hfsmp->hfs_flags & HFS_HAS_SPARSE_DEVICE) {
+			if (hfsmp->hfs_backingfs_rootvp) {
+				struct mount *mp = vnode_mount (hfsmp->hfs_backingfs_rootvp);
+				/* If we're a sparse device, dump some info about the backing store... */
+				if (mp) {
+					printf("HFS: Very Low Disk: backingstore b_avail %lld, tag %d\n", mp->mnt_vfsstat.f_bavail, hfsmp->hfs_backingfs_rootvp->v_tag);
+				}
+			}
+		}
+#endif
 		hfsmp->hfs_notification_conditions |= (VQ_VERYLOWDISK|VQ_LOWDISK);
 		vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, (intptr_t)NULL);
 	} else if (state == 1) {
 		if (!(hfsmp->hfs_notification_conditions & VQ_LOWDISK)) {
+			printf("HFS: Low Disk: freeblks: %d, warninglimit: %d\n", freeblks, hfsmp->hfs_freespace_notify_warninglimit);
 			hfsmp->hfs_notification_conditions |= VQ_LOWDISK;
 			vfs_event_signal(&fsid, hfsmp->hfs_notification_conditions, (intptr_t)NULL);
 		} else if (hfsmp->hfs_notification_conditions & VQ_VERYLOWDISK) {

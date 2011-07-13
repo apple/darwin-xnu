@@ -36,7 +36,7 @@
  * The reserved event numbers for kernel events are 1...2047 and 43001..44900.
  */
 #define	AUE_IS_A_KEVENT(e)	(((e) > 0 && (e) < 2048) || 	\
-    				 ((e) > 43000 && (e) < 45000))
+    				 ((e) > 43000 && (e) < 44901))
 
 /*
  * Values marked as AUE_NULL are not required to be audited as per CAPP.
@@ -596,6 +596,16 @@
 #define	AUE_PWRITE		43193	/* Darwin/FreeBSD. */
 #define	AUE_FSCTL		43194	/* Darwin. */
 #define	AUE_FFSCTL		43195	/* Darwin. */
+#define	AUE_LPATHCONF		43196	/* FreeBSD. */
+#define	AUE_PDFORK		43197	/* FreeBSD. */
+#define	AUE_PDKILL		43198	/* FreeBSD. */
+#define	AUE_PDGETPID		43199	/* FreeBSD. */
+#define	AUE_PDWAIT		43200	/* FreeBSD. */
+
+#define	AUE_SESSION_START	44901	/* Darwin. */
+#define	AUE_SESSION_UPDATE	44902	/* Darwin. */
+#define	AUE_SESSION_END		44903	/* Darwin. */
+#define	AUE_SESSION_CLOSE	44904	/* Darwin. */
 
 /*
  * Darwin BSM uses a number of AUE_O_* definitions, which are aliased to the

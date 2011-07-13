@@ -158,6 +158,18 @@
 #define SIOCGIFALTMTU	_IOWR('i', 72, struct ifreq) 	/* get if alternate mtu */
 #define SIOCSIFBOND	 _IOW('i', 70, struct ifreq)	/* set bond if config */
 #define SIOCGIFBOND	_IOWR('i', 71, struct ifreq)	/* get bond if config */
+
+#ifdef PRIVATE
+/* 
+ * temporary control calls to attach/detach IP to/from an ethernet interface
+ */
+#define	SIOCPROTOATTACH	_IOWR('i', 80, struct ifreq)	/* attach proto to interface */
+#define	SIOCPROTODETACH	_IOWR('i', 81, struct ifreq)	/* detach proto from interface */
+#endif /* PRIVATE */
+
+#define SIOCSIFCAP       _IOW('i', 90, struct ifreq)    /* set IF features */ 
+#define SIOCGIFCAP      _IOWR('i', 91, struct ifreq)    /* get IF features */
+
 #define	SIOCIFCREATE	_IOWR('i', 120, struct ifreq)	/* create clone if */
 #define	SIOCIFDESTROY	 _IOW('i', 121, struct ifreq)	/* destroy clone if */
 #define SIOCIFCREATE2   _IOWR('i', 122, struct ifreq)   /* create clone if with data */
@@ -192,11 +204,6 @@
 #define	SIOCIFGCLONERS64 _IOWR('i', 129, struct if_clonereq64) /* get cloners */
 #endif /* KERNEL */
 
-/* 
- * temporary control calls to attach/detach IP to/from an ethernet interface
- */
-#define	SIOCPROTOATTACH	_IOWR('i', 80, struct ifreq)	/* attach proto to interface */
-#define	SIOCPROTODETACH	_IOWR('i', 81, struct ifreq)	/* detach proto from interface */
 #endif /* PRIVATE */
 
 #define	SIOCGIFASYNCMAP _IOWR('i', 124, struct ifreq)	/* get ppp asyncmap */

@@ -581,12 +581,12 @@ typedef integer_t mach_msg_option_t;
 
 #define MACH_SEND_TIMEOUT	0x00000010
 #define MACH_SEND_INTERRUPT	0x00000040	/* libmach implements */
-#define MACH_SEND_CANCEL	0x00000080
+#define MACH_SEND_NOTIFY	0x00000080	/* arm send-possible notify */
 #define MACH_SEND_ALWAYS	0x00010000	/* internal use only */
 #define MACH_SEND_TRAILER	0x00020000	
 
 #define MACH_RCV_TIMEOUT	0x00000100
-#define MACH_RCV_NOTIFY		0x00000200
+#define MACH_RCV_NOTIFY		0x00000200	/* reserved - legacy */
 #define MACH_RCV_INTERRUPT	0x00000400	/* libmach implements */
 #define MACH_RCV_OVERWRITE	0x00001000
 

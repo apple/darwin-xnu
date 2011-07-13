@@ -7,25 +7,9 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-ALLPRODUCTS = AppleTV iPhone MacOSX
-PRODUCT = $(shell tconf --product)
-EXTRAUNIFDEF = $(foreach x,$(ALLPRODUCTS),$(if $(findstring $(PRODUCT),$(x)),-DPRODUCT_$(x),-UPRODUCT_$(x)))
-SINCFRAME_UNIFDEF += $(EXTRAUNIFDEF)
-SPINCFRAME_UNIFDEF += $(EXTRAUNIFDEF)
-KINCFRAME_UNIFDEF += $(EXTRAUNIFDEF)
-KPINCFRAME_UNIFDEF += $(EXTRAUNIFDEF)
+INSTINC_SUBDIRS =
 
-INSTINC_SUBDIRS = \
-
-INSTINC_SUBDIRS_PPC = \
-
-INSTINC_SUBDIRS_I386 = \
-
-EXPINC_SUBDIRS = \
-
-EXPINC_SUBDIRS_PPC = \
-
-EXPINC_SUBDIRS_I386 = \
+EXPINC_SUBDIRS =
 
 # Installs header file for user level -  
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/Headers
@@ -55,17 +39,22 @@ DATAFILES = \
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 PRIVATE_DATAFILES = \
 	codesign.h \
+	content_protection.h \
 	disklabel.h \
+	fileport.h \
 	fsctl.h \
 	fsgetpath.h \
 	fslog.h \
+	imgsrc.h \
 	ipcs.h \
 	shm_internal.h \
 	spawn_internal.h \
 	tree.h \
 	ux_exception.h \
 	proc_info.h \
-	vnioctl.h
+	process_policy.h \
+	vnioctl.h \
+	priv.h
 
 # Installs header file for kernel extensions - 
 #	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
@@ -97,10 +86,13 @@ KERNELFILES = \
 # Installs header file for Apple internal use for kernel extensions - 
 #	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
 PRIVATE_KERNELFILES = \
+	codesign.h \
 	cprotect.h \
+	content_protection.h \
 	decmpfs.h \
 	disktab.h \
 	fbt.h \
+	fileport.h \
 	fsctl.h \
 	fslog.h \
 	mach_swapon.h \
@@ -115,19 +107,20 @@ PRIVATE_KERNELFILES = \
 	user.h \
 	vfs_context.h \
 	vmmeter.h \
-	spawn_internal.h
+	spawn_internal.h \
+	priv.h
 
 
 # /System/Library/Frameworks/System.framework/Headers and /usr/include
 INSTALL_MI_LIST	= ${DATAFILES}
 
-INSTALL_MI_GEN_LIST = syscall.h
+INSTALL_MI_GEN_LIST = syscall.h _posix_availability.h _symbol_aliasing.h
 
 INSTALL_MI_DIR = sys
 
-EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} linker_set.h bsdtask_info.h filedesc.h pipe.h resourcevar.h semaphore.h \
+EXPORT_MI_LIST	= ${KERNELFILES} ${PRIVATE_KERNELFILES} linker_set.h bsdtask_info.h pthread_internal.h filedesc.h pipe.h resourcevar.h semaphore.h \
 								vnode_internal.h proc_internal.h file_internal.h mount_internal.h \
-								uio_internal.h
+								uio_internal.h tree.h
 
 EXPORT_MI_GEN_LIST = syscall.h sysproto.h
 
@@ -155,6 +148,16 @@ syscall.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
 sysproto.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
 	@echo "Generating bsd/sys/$@ from $<";
 	$(_v)$(MAKESYSCALLS) $< proto > /dev/null
+
+MAKE_POSIX_AVAILABILITY = $(SRCROOT)/bsd/sys/make_posix_availability.sh
+_posix_availability.h: $(MAKE_POSIX_AVAILABILITY)
+	@echo "Generating bsd/sys/$@"
+	$(_v)$(MAKE_POSIX_AVAILABILITY) $@
+
+MAKE_SYMBOL_ALIASING = $(SRCROOT)/bsd/sys/make_symbol_aliasing.sh
+_symbol_aliasing.h: $(MAKE_SYMBOL_ALIASING)
+	@echo "Generating bsd/sys/$@"
+	$(_v)$(MAKE_SYMBOL_ALIASING) $@
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

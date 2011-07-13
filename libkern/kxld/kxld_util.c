@@ -105,8 +105,8 @@ kxld_log(KXLDLogSubsystem subsystem, KXLDLogLevel level,
             alloc_buffer = kxld_alloc(length);
             if (!alloc_buffer) return;
 
-            snprintf(alloc_buffer, sizeof(alloc_buffer), "kxld[%s]: %s",
-                name, format);
+            snprintf(alloc_buffer, length, "kxld[%s]: %s",
+                name, in_format);
             format = alloc_buffer;
         }
 
@@ -310,6 +310,17 @@ validate_and_swap_macho_32(u_char *file, u_long size
         kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO
             "Invalid magic number: 0x%x.", mach_hdr->magic));
 
+   /* If in the running kernel, and asked to validate the kernel
+    * (which is the only file of type MH_EXECUTE we should ever see),
+    * then just assume it's ok or we wouldn't be running to begin with.
+    */
+#if KERNEL
+    if (mach_hdr->filetype == MH_EXECUTE) {
+        rval = KERN_SUCCESS;
+        goto finish;
+    }
+#endif /* KERNEL */
+
     /* Validate and potentially swap the load commands */
     for(i = 0; i < mach_hdr->ncmds; ++i, offset += cmdsize) {
 
@@ -469,6 +480,17 @@ validate_and_swap_macho_64(u_char *file, u_long size
         rval=KERN_FAILURE;
         kxld_log(kKxldLogLinking, kKxldLogErr, kKxldLogMalformedMachO
             "Invalid magic number: 0x%x.", mach_hdr->magic));
+
+   /* If in the running kernel, and asked to validate the kernel
+    * (which is the only file of type MH_EXECUTE we should ever see),
+    * then just assume it's ok or we wouldn't be running to begin with.
+    */
+#if KERNEL
+    if (mach_hdr->filetype == MH_EXECUTE) {
+        rval = KERN_SUCCESS;
+        goto finish;
+    }
+#endif /* KERNEL */
 
     /* Validate and potentially swap the load commands */
     for(i = 0; i < mach_hdr->ncmds; ++i, offset += cmdsize) {
@@ -716,6 +738,8 @@ kxld_align_address(kxld_addr_t address, u_int align)
 {
     kxld_addr_t alignment = (1 << align);
     kxld_addr_t low_bits = 0;
+
+    if (!align) return address;
 
     low_bits = (address) & (alignment - 1);
     if (low_bits) {

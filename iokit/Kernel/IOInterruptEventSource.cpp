@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -25,13 +25,7 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/*
-Copyright (c) 1998 Apple Computer, Inc.  All rights reserved.
 
-HISTORY
-    1998-7-13	Godfrey van der Linden(gvdl)
-        Created.
-*/
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOKitDebug.h>
 #include <IOKit/IOLib.h>
@@ -39,6 +33,31 @@ HISTORY
 #include <IOKit/IOInterrupts.h>
 #include <IOKit/IOTimeStamp.h>
 #include <IOKit/IOWorkLoop.h>
+
+#if IOKITSTATS
+
+#define IOStatisticsInitializeCounter() \
+do { \
+	IOStatistics::setCounterType(IOEventSource::reserved->counter, kIOStatisticsInterruptEventSourceCounter); \
+} while (0)
+
+#define IOStatisticsCheckForWork() \
+do { \
+	IOStatistics::countInterruptCheckForWork(IOEventSource::reserved->counter); \
+} while (0)
+
+#define IOStatisticsInterrupt() \
+do { \
+	IOStatistics::countInterrupt(IOEventSource::reserved->counter); \
+} while (0)
+
+#else
+
+#define IOStatisticsInitializeCounter()
+#define IOStatisticsCheckForWork()
+#define IOStatisticsInterrupt()
+
+#endif // IOKITSTATS
 
 #define super IOEventSource
 
@@ -73,6 +92,8 @@ bool IOInterruptEventSource::init(OSObject *inOwner,
 	if (res)
 	    intIndex = inIntIndex;
     }
+
+    IOStatisticsInitializeCounter();
 
     return res;
 }
@@ -182,24 +203,26 @@ bool IOInterruptEventSource::checkForWork()
     int numInts = cacheProdCount - consumerCount;
     IOInterruptEventAction intAction = (IOInterruptEventAction) action;
 	bool trace = (gIOKitTrace & kIOTraceIntEventSource) ? true : false;
-
+	
+    IOStatisticsCheckForWork();
+	
 	if ( numInts > 0 )
 	{
 		if (trace)
 			IOTimeStampStartConstant(IODBG_INTES(IOINTES_ACTION),
 									 (uintptr_t) intAction, (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
-
+		
 		// Call the handler
-        (*intAction)(owner, this,  numInts);
+		(*intAction)(owner, this, numInts);
 		
 		if (trace)
 			IOTimeStampEndConstant(IODBG_INTES(IOINTES_ACTION),
 								   (uintptr_t) intAction, (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
-
-        consumerCount = cacheProdCount;
-        if (autoDisable && !explicitDisable)
-            enable();
-    }
+		
+		consumerCount = cacheProdCount;
+		if (autoDisable && !explicitDisable)
+			enable();
+	}
 	
 	else if ( numInts < 0 )
 	{
@@ -208,17 +231,17 @@ bool IOInterruptEventSource::checkForWork()
 									 (uintptr_t) intAction, (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
 		
 		// Call the handler
-    	(*intAction)(owner, this, -numInts);
+		(*intAction)(owner, this, -numInts);
 		
 		if (trace)
 			IOTimeStampEndConstant(IODBG_INTES(IOINTES_ACTION),
 								   (uintptr_t) intAction, (uintptr_t) owner, (uintptr_t) this, (uintptr_t) workLoop);
-    
-        consumerCount = cacheProdCount;
-        if (autoDisable && !explicitDisable)
-            enable();
-    }
-
+		
+		consumerCount = cacheProdCount;
+		if (autoDisable && !explicitDisable)
+			enable();
+	}
+	
     return false;
 }
 
@@ -226,14 +249,15 @@ void IOInterruptEventSource::normalInterruptOccurred
     (void */*refcon*/, IOService */*prov*/, int /*source*/)
 {
 	bool trace = (gIOKitTrace & kIOTraceIntEventSource) ? true : false;
-
+	
+    IOStatisticsInterrupt();
     producerCount++;
-
+	
 	if (trace)
 	    IOTimeStampStartConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
 	
     signalWorkAvailable();
-
+	
 	if (trace)
 	    IOTimeStampEndConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
 }
@@ -242,16 +266,17 @@ void IOInterruptEventSource::disableInterruptOccurred
     (void */*refcon*/, IOService *prov, int source)
 {
 	bool trace = (gIOKitTrace & kIOTraceIntEventSource) ? true : false;
-
+	
     prov->disableInterrupt(source);	/* disable the interrupt */
-
+	
+    IOStatisticsInterrupt();
     producerCount++;
-
+	
 	if (trace)
 	    IOTimeStampStartConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
     
     signalWorkAvailable();
-
+	
 	if (trace)
 	    IOTimeStampEndConstant(IODBG_INTES(IOINTES_SEMA), (uintptr_t) this, (uintptr_t) owner);
 }
@@ -263,4 +288,11 @@ void IOInterruptEventSource::interruptOccurred
         disableInterruptOccurred(refcon, prov, source);
     else
         normalInterruptOccurred(refcon, prov, source);
+}
+
+IOReturn IOInterruptEventSource::warmCPU
+    (uint64_t abstime)
+{
+
+	return ml_interrupt_prewarm(abstime);
 }

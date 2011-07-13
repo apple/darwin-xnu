@@ -42,6 +42,7 @@
 
 #ifndef _IP6_FW_H
 #define _IP6_FW_H
+#ifdef __APPLE_API_OBSOLETE
 
 #include <sys/appleapiopts.h>
 
@@ -343,4 +344,5 @@ extern	int ip6_fw_enable;
 
 #endif /* KERNEL_PRIVATE */
 
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _IP6_FW_H */

@@ -274,6 +274,12 @@ extern kern_return_t	(pmap_attribute_cache_sync)(  /* Flush appropriate
 extern unsigned int	(pmap_cache_attributes)(
 				ppnum_t		pn);
 
+/*
+ * Set (override) cache attributes for the specified physical page
+ */
+extern	void		pmap_set_cache_attributes(
+				ppnum_t,
+				unsigned int);
 extern void pmap_sync_page_data_phys(ppnum_t pa);
 extern void pmap_sync_page_attributes_phys(ppnum_t pa);
 
@@ -453,14 +459,14 @@ extern void		(pmap_pageable)(
 extern uint64_t pmap_nesting_size_min;
 extern uint64_t pmap_nesting_size_max;
 
-extern kern_return_t pmap_nest(pmap_t grand,
-			       pmap_t subord,
-			       addr64_t vstart,
-			       addr64_t nstart,
-			       uint64_t size);
-extern kern_return_t pmap_unnest(pmap_t grand,
-				 addr64_t vaddr,
-				 uint64_t size);
+extern kern_return_t pmap_nest(pmap_t,
+			       pmap_t,
+			       addr64_t,
+			       addr64_t,
+			       uint64_t);
+extern kern_return_t pmap_unnest(pmap_t,
+				 addr64_t,
+				 uint64_t);
 extern boolean_t pmap_adjust_unnest_parameters(pmap_t, vm_map_offset_t *, vm_map_offset_t *);
 #endif	/* MACH_KERNEL_PRIVATE */
 
@@ -484,8 +490,8 @@ extern pmap_t	kernel_pmap;			/* The kernel's map */
 #define VM_MEM_NOT_CACHEABLE	0x4		/* (I) Cache Inhibit */
 #define VM_MEM_WRITE_THROUGH	0x8		/* (W) Write-Through */
 
+#define VM_WIMG_USE_DEFAULT	0x80
 #define VM_WIMG_MASK		0xFF
-#define VM_WIMG_USE_DEFAULT	0x80000000
 
 #define VM_MEM_SUPERPAGE	0x100		/* map a superpage instead of a base page */
 

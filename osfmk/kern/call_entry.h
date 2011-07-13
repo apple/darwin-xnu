@@ -35,41 +35,116 @@
 #ifdef MACH_KERNEL_PRIVATE
 #include <kern/queue.h>
 
-typedef void			*call_entry_param_t;
-typedef void			(*call_entry_func_t)(
-								call_entry_param_t		param0,
-								call_entry_param_t		param1);
+typedef void		*call_entry_param_t;
+typedef void		(*call_entry_func_t)(
+				call_entry_param_t	param0,
+				call_entry_param_t	param1);
 
 typedef struct call_entry {
-    queue_chain_t		q_link;
-	queue_t				queue;
+    queue_chain_t	q_link;
+    queue_head_t	*queue;
     call_entry_func_t	func;
     call_entry_param_t	param0;
     call_entry_param_t	param1;
-    uint64_t			deadline;
+    uint64_t		deadline;
 } call_entry_data_t;
 
-typedef struct call_entry		*call_entry_t;
+typedef struct call_entry	*call_entry_t;
 
-extern queue_t		call_entry_enqueue_deadline(
-							call_entry_t		entry,
-							queue_t				queue,
-							uint64_t			deadline);
 
-extern queue_t		call_entry_enqueue_tail(
-							call_entry_t	entry,
-							queue_t			queue);
-
-extern queue_t		call_entry_dequeue(
-							call_entry_t	entry);
-
-#define	call_entry_setup(entry, pfun, p0)				\
-MACRO_BEGIN												\
+#define	call_entry_setup(entry, pfun, p0)			\
+MACRO_BEGIN							\
 	(entry)->func		= (call_entry_func_t)(pfun);	\
-	(entry)->param0		= (call_entry_param_t)(p0);		\
-	(entry)->queue		= NULL;							\
+	(entry)->param0		= (call_entry_param_t)(p0);	\
+	(entry)->queue		= NULL;				\
 MACRO_END
 
+#define qe(x)		((queue_entry_t)(x))
+#define CE(x)		((call_entry_t)(x))
+
+static __inline__ queue_head_t *
+call_entry_enqueue_tail(
+        call_entry_t            entry,
+        queue_t                 queue)
+{
+        queue_t                 old_queue = entry->queue;
+
+        if (old_queue != NULL)
+                (void)remque(qe(entry));
+
+        enqueue_tail(queue, qe(entry));
+
+        entry->queue = queue;
+
+        return (old_queue);
+}
+
+static __inline__ queue_head_t *
+call_entry_dequeue(
+	call_entry_t		entry)
+{
+        queue_t                 old_queue = entry->queue;
+
+	if (old_queue != NULL) {
+		(void)remque(qe(entry));
+
+		entry->queue = NULL;
+	}
+	return (old_queue);
+}
+
+static __inline__ queue_head_t *
+call_entry_enqueue_deadline(
+	call_entry_t			entry,
+	queue_head_t			*queue,
+	uint64_t			deadline)
+{
+	queue_t		old_queue = entry->queue;
+	call_entry_t	current;
+
+	if (old_queue != queue || entry->deadline < deadline) {
+		if (old_queue == NULL) {
+			current = CE(queue_first(queue));
+		} else if (old_queue != queue) {
+			(void)remque(qe(entry));
+			current = CE(queue_first(queue));
+		} else {
+			current = CE(queue_next(qe(entry)));
+			(void)remque(qe(entry));
+		}
+
+		while (TRUE) {
+			if (queue_end(queue, qe(current)) ||
+			    deadline < current->deadline) {
+				current = CE(queue_prev(qe(current)));
+				break;
+			}
+
+			current = CE(queue_next(qe(current)));
+		}
+		insque(qe(entry), qe(current));
+	}
+	else
+	if (deadline < entry->deadline) {
+		current = CE(queue_prev(qe(entry)));
+
+		(void)remque(qe(entry));
+
+		while (TRUE) {
+			if (queue_end(queue, qe(current)) ||
+			    current->deadline <= deadline) {
+				break;
+			}
+
+			current = CE(queue_prev(qe(current)));
+		}
+		insque(qe(entry), qe(current));
+	}
+	entry->queue = queue;
+	entry->deadline = deadline;
+
+	return (old_queue);
+}
 #endif /* MACH_KERNEL_PRIVATE */
 
 #endif /* _KERN_CALL_ENTRY_H_ */

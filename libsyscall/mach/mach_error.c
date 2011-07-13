@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -60,26 +60,24 @@
  *      or returns a descriptive string.
  */
 
-#include <stdio.h>
 #include <mach/mach_error.h>
 #include <mach/boolean.h>
 #include "errorlib.h"
+#include "string.h"
 
 int fprintf_stderr(const char *format, ...);
 
 void
-mach_error( str, err )
-	const char *str; 
-	mach_error_t err;
+mach_error(const char *str, mach_error_t err)
 {
-	char * err_str;
+	char *err_str;
 	char buf[1024];
 	boolean_t diag;
 
-	err_str=mach_error_string_int(err, &diag);
+	err_str = mach_error_string_int(err, &diag);
 
-	if ( diag ) {
-		sprintf( buf, "%s %s (%x)", mach_error_type(err), err_str, err );
+	if (diag) {
+		_mach_snprintf(buf, sizeof(buf), "%s %s (%x)", mach_error_type(err), err_str, err);
 		err_str = buf;
 	}
 

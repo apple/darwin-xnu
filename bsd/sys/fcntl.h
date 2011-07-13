@@ -77,6 +77,9 @@
  */
 #include <sys/_types.h>
 #include <sys/cdefs.h>
+#ifndef KERNEL
+#include <Availability.h>
+#endif
 
 /* We should not be exporting size_t here.  Temporary for gcc bootstrapping. */
 #ifndef _SIZE_T
@@ -169,6 +172,14 @@ typedef __darwin_pid_t	pid_t;
 #endif
 
 #ifdef KERNEL
+#define FNODIRECT	0x800000	/* fcntl(F_NODIRECT, 1) */
+#endif
+
+#if __DARWIN_C_LEVEL >= 200809L
+#define	O_CLOEXEC	0x1000000	/* implicitly set FD_CLOEXEC */
+#endif
+
+#ifdef KERNEL
 /* convert from open() flags to/from fflags; convert O_RD/WR to FREAD/FWRITE */
 #define	FFLAGS(oflags)	((oflags) + 1)
 #define	OFLAGS(fflags)	((fflags) - 1)
@@ -220,6 +231,7 @@ typedef __darwin_pid_t	pid_t;
 #define	F_SETLK		8		/* set record locking information */
 #define	F_SETLKW	9		/* F_SETLK; wait if blocked */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#define F_FLUSH_DATA    40
 #define F_CHKCLEAN      41              /* Used for regression test */
 #define F_PREALLOCATE   42		/* Preallocate storage */
 #define F_SETSIZE       43		/* Truncate a file without zeroing space */	
@@ -248,13 +260,34 @@ typedef __darwin_pid_t	pid_t;
 
 #define F_ADDFILESIGS	61		/* add signature from same file (used by dyld for shared libs) */
 
-#define F_GETPROTECTIONCLASS	62		/* Get the protection class of a file from the EA, returns int */
-#define F_SETPROTECTIONCLASS	63		/* Set the protection class of a file for the EA, requires int */
+#define F_NODIRECT	62		/* used in conjunction with F_NOCACHE to indicate that DIRECT, synchonous writes */
+                                        /* should not be used (i.e. its ok to temporaily create cached pages) */
+
+#define F_GETPROTECTIONCLASS	63		/* Get the protection class of a file from the EA, returns int */
+#define F_SETPROTECTIONCLASS	64		/* Set the protection class of a file for the EA, requires int */
+
+#define F_LOG2PHYS_EXT  65		/* file offset to device offset, extended */
+
+#define	F_GETLKPID		66		/* get record locking information, per-process */
+
+#ifdef PRIVATE
+#define F_MOVEDATAEXTENTS	69	/* Swap only the data associated with two files */
+#endif
+
+#define F_SETBACKINGSTORE	70	/* Mark the file as being the backing store for another filesystem */
+#define F_GETPATH_MTMINFO	71 	/* return the full path of the FD, but error in specific mtmd circumstances */
+
+#define F_SETNOSIGPIPE		73	/* No SIGPIPE generated on EPIPE */
+#define F_GETNOSIGPIPE		74	/* Status of SIGPIPE for this fd */
 
 // FS-specific fcntl()'s numbers begin at 0x00010000 and go up
 #define FCNTL_FS_SPECIFIC_BASE  0x00010000
 
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
+
+#if __DARWIN_C_LEVEL >= 200809L
+#define	F_DUPFD_CLOEXEC		67	/* mark the dup with FD_CLOEXEC */
+#endif
 
 /* file descriptor flags (F_GETFD, F_SETFD) */
 #define	FD_CLOEXEC	1		/* close-on-exec flag */
@@ -296,7 +329,7 @@ typedef __darwin_pid_t	pid_t;
 #define	S_IFLNK		0120000		/* [XSI] symbolic link */
 #define	S_IFSOCK	0140000		/* [XSI] socket */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define	S_IFWHT		0160000		/* whiteout */
+#define	S_IFWHT		0160000		/* OBSOLETE: whiteout */
 #endif
 
 /* File mode */
@@ -464,13 +497,22 @@ typedef struct user_fbootstraptransfer {
  * For them the fcntl will nedd to switch from using BMAP to CMAP
  * and a per filesystem type flag will be needed to interpret the
  * contiguous bytes count result from CMAP.
+ *
+ * F_LOG2PHYS_EXT is a variant of F_LOG2PHYS that uses a passed in
+ * file offset and length instead of the current file offset.
+ * F_LOG2PHYS_EXT operates on the same structure as F_LOG2PHYS, but
+ * treats it as an in/out.
  */
 #pragma pack(4)
 
 struct log2phys {
-	unsigned int	l2p_flags;		/* unused so far */
-	off_t		l2p_contigbytes;	/* unused so far */
-	off_t		l2p_devoffset;	/* bytes into device */
+	unsigned int	l2p_flags;	 /* unused so far */
+	off_t		l2p_contigbytes; /* F_LOG2PHYS:     unused so far */
+					 /* F_LOG2PHYS_EXT: IN:  number of bytes to be queried */
+					 /*                 OUT: number of contiguous bytes at this position */
+	off_t		l2p_devoffset;   /* F_LOG2PHYS:     OUT: bytes into device */
+					 /* F_LOG2PHYS_EXT: IN:  bytes into file */
+					 /*                 OUT: bytes into device */
 };
 
 #pragma pack()
@@ -544,6 +586,13 @@ int	fcntl(int, int, ...) __DARWIN_ALIAS_C(fcntl);
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 
 #ifdef PRIVATE
+/*
+ * These definitions are retained temporarily for compatibility.
+ * If you want to use fileports, please use
+ *	#include <sys/fileport.h>
+ * or
+ *	#include <System/sys/fileport.h>
+ */
 #ifndef _FILEPORT_T
 #define _FILEPORT_T
 typedef __darwin_mach_port_t fileport_t;
@@ -561,7 +610,7 @@ void	filesec_free(filesec_t);
 int	filesec_get_property(filesec_t, filesec_property_t, void *);
 int	filesec_query_property(filesec_t, filesec_property_t, int *);
 int	filesec_set_property(filesec_t, filesec_property_t, const void *);
-int	filesec_unset_property(filesec_t, filesec_property_t);
+int	filesec_unset_property(filesec_t, filesec_property_t) __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_2);
 #define _FILESEC_UNSET_PROPERTY	((void *)0)
 #define _FILESEC_REMOVE_ACL	((void *)1)
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */

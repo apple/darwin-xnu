@@ -95,6 +95,9 @@
 #include <sys/ubc.h>
 #include <sys/ubc_internal.h>
 #include <sys/sysproto.h>
+#if CONFIG_PROTECT
+#include <sys/cprotect.h>
+#endif
 
 #include <sys/syscall.h>
 #include <sys/kdebug.h>
@@ -156,6 +159,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	int 			fpref=0;
 	int error =0;
 	int fd = uap->fd;
+	int num_retries = 0;
 
 	user_addr = (mach_vm_offset_t)uap->addr;
 	user_size = (mach_vm_size_t) uap->len;
@@ -203,7 +207,9 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	user_size += pageoff;			/* low end... */
 	user_size = mach_vm_round_page(user_size);	/* hi end */
 
-
+	if ((flags & MAP_JIT) && ((flags & MAP_FIXED) || (flags & MAP_SHARED) || (flags & MAP_FILE))){
+		return EINVAL;
+	}
 	/*
 	 * Check for illegal addresses.  Watch out for address wrap... Note
 	 * that VM_*_ADDRESS are not constants due to casts (argh).
@@ -216,7 +222,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		 */
 		user_addr -= pageoff;
 		if (user_addr & PAGE_MASK)
-		return (EINVAL);
+			return (EINVAL);
 	}
 #ifdef notyet
 	/* DO not have apis to get this info, need to wait till then*/
@@ -236,6 +242,19 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	alloc_flags = 0;
 
 	if (flags & MAP_ANON) {
+
+		maxprot = VM_PROT_ALL;
+#if CONFIG_MACF
+		/*
+		 * Entitlement check.
+		 * Re-enable once mac* is implemented.
+		 */
+		/*error = mac_proc_check_map_anon(p, user_addr, user_size, prot, flags, &maxprot);
+		if (error) {
+			return EINVAL;
+		}*/		
+#endif /* MAC */
+
 		/*
 		 * Mapping blank space is trivial.  Use positive fds as the alias
 		 * value for memory tracking. 
@@ -245,7 +264,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			 * Use "fd" to pass (some) Mach VM allocation flags,
 			 * (see the VM_FLAGS_* definitions).
 			 */
-			alloc_flags = fd & (VM_FLAGS_ALIAS_MASK |
+			alloc_flags = fd & (VM_FLAGS_ALIAS_MASK | VM_FLAGS_SUPERPAGE_MASK |
 					    VM_FLAGS_PURGABLE);
 			if (alloc_flags != fd) {
 				/* reject if there are any extra flags */
@@ -254,7 +273,6 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		}
 			
 		handle = NULL;
-		maxprot = VM_PROT_ALL;
 		file_pos = 0;
 		mapanon = 1;
 	} else {
@@ -382,6 +400,21 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 				goto bad;
 			}
 #endif /* MAC */
+
+#if CONFIG_PROTECT
+			{
+				void *cnode;
+				if ((cnode = cp_get_protected_cnode(vp)) != NULL) {
+					error = cp_handle_vnop(cnode, CP_READ_ACCESS | CP_WRITE_ACCESS);
+					if (error) {
+						(void) vnode_put(vp);
+						goto bad;
+					}
+				}
+			}
+#endif /* CONFIG_PROTECT */
+
+
 		}
 	}
 
@@ -434,6 +467,9 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	if (flags & MAP_NOCACHE)
 		alloc_flags |= VM_FLAGS_NO_CACHE;
 
+	if (flags & MAP_JIT){
+		alloc_flags |= VM_FLAGS_MAP_JIT;
+	}
 	/*
 	 * Lookup/allocate object.
 	 */
@@ -455,7 +491,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		if (maxprot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
 			maxprot |= VM_PROT_READ;
 #endif	/* radar 3777787 */
-
+map_anon_retry:
 		result = vm_map_enter_mem_object(user_map,
 						 &user_addr, user_size,
 						 0, alloc_flags,
@@ -464,6 +500,16 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 						 (flags & MAP_SHARED) ?
 						 VM_INHERIT_SHARE : 
 						 VM_INHERIT_DEFAULT);
+
+		/* If a non-binding address was specified for this anonymous
+		 * mapping, retry the mapping with a zero base
+		 * in the event the mapping operation failed due to
+		 * lack of space between the address and the map's maximum.
+		 */
+		if ((result == KERN_NO_SPACE) && ((flags & MAP_FIXED) == 0) && user_addr && (num_retries++ == 0)) {
+			user_addr = PAGE_SIZE;
+			goto map_anon_retry;
+		}
 	} else {
 		if (vnode_isswap(vp)) {
 			/*
@@ -514,7 +560,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		if (maxprot & (VM_PROT_EXECUTE | VM_PROT_WRITE))
 			maxprot |= VM_PROT_READ;
 #endif	/* radar 3777787 */
-
+map_file_retry:
 		result = vm_map_enter_mem_object_control(user_map,
 						 &user_addr, user_size,
 						 0, alloc_flags,
@@ -523,6 +569,16 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 						 (flags & MAP_SHARED) ?
 						 VM_INHERIT_SHARE : 
 						 VM_INHERIT_DEFAULT);
+
+		/* If a non-binding address was specified for this file backed
+		 * mapping, retry the mapping with a zero base
+		 * in the event the mapping operation failed due to
+		 * lack of space between the address and the map's maximum.
+		 */
+		if ((result == KERN_NO_SPACE) && ((flags & MAP_FIXED) == 0) && user_addr && (num_retries++ == 0)) {
+			user_addr = PAGE_SIZE;
+			goto map_file_retry;
+		}
 	}
 
 	if (!mapanon) {
@@ -855,13 +911,15 @@ madvise(__unused proc_t p, struct madvise_args *uap, __unused int32_t *retval)
 
 	result = mach_vm_behavior_set(user_map, start, size, new_behavior);
 	switch (result) {
-		case KERN_SUCCESS:
-			return (0);
-		case KERN_INVALID_ADDRESS:
-			return (ENOMEM);
+	case KERN_SUCCESS:
+		return 0;
+	case KERN_INVALID_ADDRESS:
+		return EINVAL;
+	case KERN_NO_SPACE:	
+		return ENOMEM;
 	}
 
-	return (EINVAL);
+	return EINVAL;
 }
 
 int
@@ -1034,6 +1092,7 @@ munlockall(__unused proc_t p, __unused struct munlockall_args *uap, __unused int
 	return(ENOSYS);
 }
 
+#if		!defined(CONFIG_EMBEDDED)
 /* USV: No! need to obsolete map_fd()! mmap() already supports 64 bits */
 kern_return_t
 map_fd(struct map_fd_args *args)
@@ -1070,6 +1129,7 @@ map_fd_funneled(
 	vm_offset_t	map_addr=0;
 	vm_size_t	map_size;
 	int		err=0;
+	vm_prot_t	maxprot = VM_PROT_ALL;
 	vm_map_t	my_map;
 	proc_t		p = current_proc();
 	struct vnode_attr vattr;
@@ -1102,6 +1162,29 @@ map_fd_funneled(
 		err = KERN_INVALID_ARGUMENT;
 		goto bad;
 	}
+
+#if CONFIG_MACF
+	err = mac_file_check_mmap(vfs_context_ucred(vfs_context_current()),
+			fp->f_fglob, VM_PROT_DEFAULT, MAP_FILE, &maxprot);
+	if (err) {
+		(void)vnode_put(vp);
+		goto bad;
+	}
+#endif /* MAC */
+
+#if CONFIG_PROTECT
+	/* check for content protection access */
+	{
+	void *cnode;
+	if ((cnode = cp_get_protected_cnode(vp)) != NULL) {
+		err = cp_handle_vnop(cnode, CP_READ_ACCESS | CP_WRITE_ACCESS);
+		if (err != 0) { 
+			(void)vnode_put(vp);
+			goto bad;
+		}
+	}
+	}
+#endif /* CONFIG_PROTECT */
 
 	AUDIT_ARG(vnpath, vp, ARG_VNODE1);
 
@@ -1148,7 +1231,7 @@ map_fd_funneled(
 			my_map,
 			&map_addr, map_size, (vm_offset_t)0, 
 			VM_FLAGS_ANYWHERE, pager, offset, TRUE,
-			VM_PROT_DEFAULT, VM_PROT_ALL,
+			VM_PROT_DEFAULT, maxprot,
 			VM_INHERIT_DEFAULT);
 	if (result != KERN_SUCCESS) {
 		(void)vnode_put(vp);
@@ -1213,4 +1296,5 @@ bad:
 	fp_drop(p, fd, fp, 0);
 	return (err);
 }
+#endif		/* !defined(CONFIG_EMBEDDED) */
 

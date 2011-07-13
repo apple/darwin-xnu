@@ -67,10 +67,12 @@
 #include <kern/sched_prim.h>
 #include <kern/thread_call.h>
 #include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/sched_prim.h>
 #include <kern/processor.h>
 #include <kern/affinity.h>
 #include <kern/wait_queue.h>
+#include <kern/mach_param.h>
 #include <mach/mach_vm.h>
 #include <mach/mach_param.h>
 #include <mach/thread_policy.h>
@@ -82,9 +84,35 @@
 
 #include <libkern/OSAtomic.h>
 
-#define _PSYNCH_TRACE_ 0		/* kdebug trace */
-#define __TESTPANICS__ 0		/* panics for error conditions */
-#define COND_MTX_WAITQUEUEMOVE 0	/* auto move from cvar wait queue to mutex waitqueue */
+#include <pexpert/pexpert.h>
+
+#define __PSYNCH_DEBUG__ 0			/* debug panic actions  */
+#define _PSYNCH_TRACE_ 1		/* kdebug trace */
+
+#define __TESTMODE__ 2		/* 0 - return error on user error conditions */
+				/* 1 - log error on user error conditions */
+				/* 2 - abort caller on user error conditions */
+				/* 3 - panic on user error conditions */
+static int __test_panics__;
+static int __test_aborts__;
+static int __test_prints__;
+
+static inline void __FAILEDUSERTEST__(const char *str)
+{
+	proc_t p;
+
+	if (__test_panics__ != 0)
+		panic(str);
+
+	if (__test_aborts__ != 0 || __test_prints__ != 0)
+		p = current_proc();
+
+	if (__test_prints__ != 0)
+		printf("PSYNCH: pid[%d]: %s\n", p->p_pid, str);
+
+	if (__test_aborts__ != 0)
+		psignal(p, SIGABRT);
+}
 
 #if _PSYNCH_TRACE_
 #define _PSYNCH_TRACE_MLWAIT	0x9000000
@@ -103,6 +131,10 @@
 #define _PSYNCH_TRACE_RWUNLOCK2	0x9000034
 #define _PSYNCH_TRACE_RWHANDLEU	0x9000038
 #define _PSYNCH_TRACE_FSEQTILL	0x9000040
+#define _PSYNCH_TRACE_CLRPRE	0x9000044
+#define _PSYNCH_TRACE_CVHBROAD	0x9000048
+#define _PSYNCH_TRACE_CVSEQ	0x900004c
+#define _PSYNCH_TRACE_THWAKEUP	0x9000050
 /* user side */
 #define _PSYNCH_TRACE_UM_LOCK	0x9000060
 #define _PSYNCH_TRACE_UM_UNLOCK	0x9000064
@@ -112,7 +144,23 @@
 #define _PSYNCH_TRACE_UM_CVSIG	0x9000074
 #define _PSYNCH_TRACE_UM_CVBRD	0x9000078
 
+proc_t pthread_debug_proc = PROC_NULL;
+static inline void __PTHREAD_TRACE_DEBUG(uint32_t debugid, uintptr_t arg1, 
+                uintptr_t arg2,
+                uintptr_t arg3,
+                uintptr_t arg4,
+                uintptr_t arg5)
+{
+	proc_t p = current_proc();
+
+	if ((pthread_debug_proc != NULL) && (p == pthread_debug_proc))
+		KERNEL_DEBUG_CONSTANT(debugid, arg1, arg2, arg3, arg4, arg5);
+}
+
 #endif /* _PSYNCH_TRACE_ */
+
+#define ECVCERORR       256
+#define ECVPERORR       512
 
 lck_mtx_t * pthread_list_mlock;
 
@@ -122,19 +170,28 @@ struct pthhashhead * pth_glob_hashtbl;
 u_long pthhash;
 
 LIST_HEAD(, ksyn_wait_queue) pth_free_list;
+int num_total_kwq = 0;  /* number of kwq in use currently */
+int num_infreekwq = 0;	/* number of kwq in free list */
+int num_freekwq = 0;	/* number of kwq actually  freed from the free the list */
+int num_reusekwq = 0;	/* number of kwq pulled back for reuse from free list */
+int num_addedfreekwq = 0; /* number of added free kwq from the last instance */
+int num_lastfreekwqcount = 0;	/* the free count from the last time */
 
 static int PTH_HASHSIZE = 100;
 
+static zone_t kwq_zone; /* zone for allocation of ksyn_queue */
+static zone_t kwe_zone;	/* zone for allocation of ksyn_waitq_element */
 
 #define SEQFIT 0
 #define FIRSTFIT 1
 
 struct ksyn_queue {
-	TAILQ_HEAD(, uthread) ksynq_uthlist;
+	TAILQ_HEAD(ksynq_kwelist_head, ksyn_waitq_element) ksynq_kwelist;
 	uint32_t	ksynq_count;		/* number of entries in queue */
 	uint32_t	ksynq_firstnum;		/* lowest seq in queue */
 	uint32_t	ksynq_lastnum;		/* highest seq in queue */
 };
+typedef struct ksyn_queue * ksyn_queue_t;
 
 #define KSYN_QUEUE_READ		0
 #define KSYN_QUEUE_LREAD	1
@@ -146,9 +203,6 @@ struct ksyn_queue {
 struct ksyn_wait_queue {
 	LIST_ENTRY(ksyn_wait_queue) kw_hash;
 	LIST_ENTRY(ksyn_wait_queue) kw_list;
-#if USE_WAITQUEUE
-	struct wait_queue kw_wq;
-#endif /* USE_WAITQUEUE */
 	user_addr_t kw_addr;
 	uint64_t  kw_owner;
 	uint64_t kw_object;		/* object backing in shared mode */
@@ -157,78 +211,113 @@ struct ksyn_wait_queue {
 	int 	kw_pflags;		/* flags under listlock protection */
 	struct timeval kw_ts;		/* timeval need for upkeep before free */
 	int	kw_iocount;		/* inuse reference */
+	int 	kw_dropcount;		/* current users unlocking... */
 
 	int	kw_type;		/* queue type like mutex, cvar, etc */
 	uint32_t kw_inqueue;		/* num of waiters held */
+	uint32_t kw_fakecount;		/* number of error/prepost fakes */
 	uint32_t kw_highseq;		/* highest seq in the queue */
 	uint32_t kw_lowseq;		/* lowest seq in the queue */
+	uint32_t kw_lword;		/* L value from userland */
+	uint32_t kw_uword;		/* U world value from userland */
+	uint32_t kw_sword;		/* S word value from userland */
 	uint32_t kw_lastunlockseq;	/* the last seq that unlocked */
+/* for CV to be used as the seq kernel has seen so far */
+#define kw_cvkernelseq kw_lastunlockseq
+	uint32_t kw_lastseqword;		/* the last seq that unlocked */
+/* for mutex and cvar we need to track I bit values */
+	uint32_t kw_nextseqword;	/* the last seq that unlocked; with num of waiters */
+#define kw_initrecv kw_nextseqword	/* number of incoming waiters with Ibit seen sofar */
+	uint32_t kw_overlapwatch;	/* chance for overlaps  */
+#define kw_initcount kw_overlapwatch	/* number of incoming waiters with Ibit expected */
+	uint32_t kw_initcountseq;	/* highest seq with Ibit on for mutex and cvar*/
 	uint32_t kw_pre_rwwc;		/* prepost count */
 	uint32_t kw_pre_lockseq;	/* prepost target seq */
-	uint32_t kw_pre_cvretval;	/* retval for cwait on prepost */
-	uint32_t kw_pre_limrd;		/*  prepost read only(rwlock)  */
-	uint32_t kw_pre_limrdseq;	/* prepost limit seq for reads(rwlock)  */
-	uint32_t kw_pre_limrdbits;	/*  seqbit needed for updates on prepost */
+	uint32_t kw_pre_sseq;		/* prepost target sword, in cvar used for mutexowned  */
 	uint32_t kw_pre_intrcount;	/*  prepost of missed wakeup due to intrs */
 	uint32_t kw_pre_intrseq;	/*  prepost of missed wakeup limit seq */
 	uint32_t kw_pre_intrretbits;	/*  return bits value for missed wakeup threads */
 	uint32_t kw_pre_intrtype;	/*  type of failed wakueps*/
 
 	int 	kw_kflags;
-	TAILQ_HEAD(, uthread) kw_uthlist;       /* List of uthreads */
 	struct ksyn_queue kw_ksynqueues[KSYN_QUEUE_MAX];	/* queues to hold threads */
 	lck_mtx_t kw_lock;		/* mutex lock protecting this structure */
-	struct ksyn_wait_queue * kw_attq; /* attached queue (cvar->mutex, need in prepost */ 
 };
-
-typedef struct ksyn_queue * ksyn_queue_t;
 typedef struct ksyn_wait_queue * ksyn_wait_queue_t;
 
-#define PTHRW_EBIT			0x01
-#define PTHRW_LBIT			0x02
-#define PTHRW_YBIT			0x04
-#define PTHRW_WBIT			0x08
-#define PTHRW_UBIT			0x10
-#define PTHRW_RETRYBIT      		0x20
-/* same as 0x20, shadow W bit for rwlock */
-#define PTHRW_SHADOW_W      		0x20        
-
-#define PTHRW_TRYLKBIT      		0x40
-#define PTHRW_RW_HUNLOCK      		0x40	/* returning read thread responsible to handle unlock */
-
-#define PTHRW_MTX_NONE			0x80
-#define PTHRW_RW_INIT			0x80	/* reset on the lock bits */
-/* same as 0x80, spurious rwlock  unlock ret from kernel */
-#define PTHRW_RW_SPURIOUS     		0x80      
-
 #define PTHRW_INC			0x100
-
-#define PTHRW_BIT_MASK		0x000000ff;
+#define PTHRW_BIT_MASK		0x000000ff
 
 #define PTHRW_COUNT_SHIFT	8
 #define PTHRW_COUNT_MASK	0xffffff00
 #define PTHRW_MAX_READERS	0xffffff00
+
+/* New model bits on Lword */
+#define PTH_RWL_KBIT	0x01	/* users cannot acquire in user mode */
+#define PTH_RWL_EBIT	0x02	/* exclusive lock in progress */
+#define PTH_RWL_WBIT	0x04	/* write waiters pending in kernel */
+#define PTH_RWL_PBIT    0x04    /* prepost (cv) pending in kernel */
+#define PTH_RWL_YBIT	0x08	/* yielding write waiters pending in kernel */
+#define PTH_RWL_RETRYBIT 0x08	/* mutex retry wait */
+#define PTH_RWL_LBIT	0x10	/* long read in progress */
+#define PTH_RWL_MTXNONE 0x10    /* indicates the cvwait does not have mutex held */
+#define PTH_RWL_UBIT	0x20	/* upgrade request pending */
+#define PTH_RWL_MTX_WAIT 0x20	/* in cvar in mutex wait */
+#define PTH_RWL_RBIT	0x40	/* reader pending in kernel(not used) */
+#define PTH_RWL_MBIT	0x40	/* overlapping grants from kernel */
+#define PTH_RWL_TRYLKBIT 0x40	/* trylock attempt (mutex only) */
+#define PTH_RWL_IBIT	0x80	/* lcok reset, held untill first succeesful unlock */
+
+
+/* UBIT values for mutex, cvar */
+#define PTH_RWU_SBIT    0x01
+#define PTH_RWU_BBIT    0x02
+
+#define PTHRW_RWL_INIT       PTH_RWL_IBIT    /* reset state on the lock bits (U)*/
+
+/* New model bits on Sword */
+#define PTH_RWS_SBIT	0x01	/* kernel transition seq not set yet*/
+#define PTH_RWS_IBIT	0x02	/* Sequence is not set on return from kernel */
+#define PTH_RWS_CV_CBIT PTH_RWS_SBIT    /* kernel has cleared all info w.r.s.t CV */ 
+#define PTH_RWS_CV_PBIT PTH_RWS_IBIT    /* kernel has prepost/fake structs only,no waiters */
+#define PTH_RWS_CV_MBIT PTH_RWL_MBIT	/* to indicate prepost return */
+#define PTH_RWS_WSVBIT  0x04    /* save W bit */
+#define PTH_RWS_USVBIT  0x08    /* save U bit */
+#define PTH_RWS_YSVBIT  0x10    /* save Y bit */
+#define PTHRW_RWS_INIT       PTH_RWS_SBIT    /* reset on the lock bits (U)*/
+#define PTHRW_RWS_SAVEMASK (PTH_RWS_WSVBIT|PTH_RWS_USVBIT|PTH_RWS_YSVBIT)    /*save bits mask*/
+#define PTHRW_SW_Reset_BIT_MASK 0x000000fe      /* remove S bit and get rest of the bits */
+
+#define PTHRW_RWS_INIT       PTH_RWS_SBIT    /* reset on the lock bits (U)*/
+
+
+#define PTHRW_UN_BIT_MASK 0x000000bf	/* remove overlap  bit */
+
+
+#define PTHREAD_MTX_TID_SWITCHING (uint64_t)-1
+
+/* new L word defns */
+#define is_rwl_readinuser(x) ((((x) & (PTH_RWL_UBIT | PTH_RWL_KBIT)) == 0)||(((x) & PTH_RWL_LBIT) != 0))
+#define is_rwl_ebit_set(x) (((x) & PTH_RWL_EBIT) != 0)
+#define is_rwl_lbit_set(x) (((x) & PTH_RWL_LBIT) != 0)
+#define is_rwl_readoverlap(x) (((x) & PTH_RWL_MBIT) != 0)
+#define is_rw_ubit_set(x) (((x) & PTH_RWL_UBIT) != 0)
+
+/* S word checks */
+#define is_rws_setseq(x) (((x) & PTH_RWS_SBIT))
+#define is_rws_setunlockinit(x) (((x) & PTH_RWS_IBIT))
 
 /* first contended seq that kernel sees */
 #define KW_MTXFIRST_KSEQ	0x200
 #define KW_CVFIRST_KSEQ		1
 #define KW_RWFIRST_KSEQ		0x200
 
-#define is_rw_ewubit_set(x) ((x & (PTHRW_EBIT | PTHRW_WBIT | PTHRW_UBIT)) != 0)
-#define is_rw_lybit_set(x) ((x & (PTHRW_LBIT | PTHRW_YBIT)) != 0)
-#define is_rw_ebit_set(x) ((x & PTHRW_EBIT) != 0)
-#define is_rw_uebit_set(x) ((x & (PTHRW_EBIT | PTHRW_UBIT)) != 0)
-#define is_rw_ubit_set(x) ((x & PTHRW_UBIT) != 0)
-#define is_rw_either_ewyubit_set(x) ((x & (PTHRW_EBIT | PTHRW_WBIT | PTHRW_UBIT | PTHRW_YBIT)) != 0)
+int is_seqlower(uint32_t x, uint32_t y);
+int is_seqlower_eq(uint32_t x, uint32_t y);
+int is_seqhigher(uint32_t x, uint32_t y);
+int is_seqhigher_eq(uint32_t x, uint32_t y);
+int find_diff(uint32_t upto, uint32_t lowest);
 
-
-/* is x lower than Y */
-#define is_seqlower(x, y) ((x  < y) || ((x - y) > (PTHRW_MAX_READERS/2)))
-/* is x lower than or eq Y */
-#define is_seqlower_eq(x, y) ((x  <= y) || ((x - y) > (PTHRW_MAX_READERS/2)))
-
-/* is x greater than Y */
-#define is_seqhigher(x, y) ((x  > y) || ((y - x) > (PTHRW_MAX_READERS/2)))
 
 static inline  int diff_genseq(uint32_t x, uint32_t y) { 
 	if (x > y)  {
@@ -292,27 +381,39 @@ static inline  int diff_genseq(uint32_t x, uint32_t y) {
 #define PTHREAD_POLICY_FLAGS_MASK	0x1c0
 
 #define _PTHREAD_MTX_OPT_HOLDLOCK 	0x200
-#define _PTHREAD_MTX_OPT_NOHOLDLOCK 	0x400
-#define _PTHREAD_MTX_OPT_LASTDROP (_PTHREAD_MTX_OPT_HOLDLOCK | _PTHREAD_MTX_OPT_NOHOLDLOCK)
+#define _PTHREAD_MTX_OPT_NOMTX 		0x400
 
+#define _PTHREAD_MTX_OPT_NOTIFY 	0x1000
+#define _PTHREAD_MTX_OPT_MUTEX		0x2000	/* this is a mutex type  */
+
+#define _PTHREAD_RWLOCK_UPGRADE_TRY 0x10000
+
+/* pflags */
 #define KSYN_WQ_INLIST	1
 #define KSYN_WQ_INHASH	2
 #define KSYN_WQ_SHARED	4
+#define KSYN_WQ_WAITING 8	/* threads waiting for this wq to be available */
 #define KSYN_WQ_FLIST 	0X10	/* in free list to be freed after a short delay */
+
+/* kflags */
+#define KSYN_KWF_INITCLEARED	1	/* the init status found and preposts cleared */
+#define KSYN_KWF_ZEROEDOUT	2	/* the lword, etc are inited to 0 */
 
 #define KSYN_CLEANUP_DEADLINE 10
 int psynch_cleanupset;
 thread_call_t psynch_thcall;
 
 #define KSYN_WQTYPE_INWAIT	0x1000
+#define KSYN_WQTYPE_INDROP	0x2000
 #define KSYN_WQTYPE_MTX		0x1
 #define KSYN_WQTYPE_CVAR	0x2
 #define KSYN_WQTYPE_RWLOCK	0x4
 #define KSYN_WQTYPE_SEMA	0x8
 #define KSYN_WQTYPE_BARR	0x10
-#define KSYN_WQTYPE_MASK        0xffff
+#define KSYN_WQTYPE_MASK        0x00ff
 
 #define KSYN_MTX_MAX 0x0fffffff
+#define KSYN_WQTYPE_MUTEXDROP	(KSYN_WQTYPE_INDROP | KSYN_WQTYPE_MTX)
 
 #define KW_UNLOCK_PREPOST 		0x01
 #define KW_UNLOCK_PREPOST_UPGRADE 	0x02
@@ -324,14 +425,14 @@ thread_call_t psynch_thcall;
 
 #define CLEAR_PREPOST_BITS(kwq)  {\
 			kwq->kw_pre_lockseq = 0; \
+			kwq->kw_pre_sseq = PTHRW_RWS_INIT; \
 			kwq->kw_pre_rwwc = 0; \
-			kwq->kw_pre_cvretval = 0; \
 			}
 
-#define CLEAR_READ_PREPOST_BITS(kwq)  {\
-			kwq->kw_pre_limrd = 0; \
-			kwq->kw_pre_limrdseq = 0; \
-			kwq->kw_pre_limrdbits = 0; \
+#define CLEAR_INITCOUNT_BITS(kwq)  {\
+			kwq->kw_initcount = 0; \
+			kwq->kw_initrecv = 0; \
+			kwq->kw_initcountseq = 0; \
 			}
 
 #define CLEAR_INTR_PREPOST_BITS(kwq)  {\
@@ -340,7 +441,30 @@ thread_call_t psynch_thcall;
 			kwq->kw_pre_intrretbits = 0; \
 			kwq->kw_pre_intrtype = 0; \
 			}
-	
+
+#define CLEAR_REINIT_BITS(kwq)  {\
+			if ((kwq->kw_type & KSYN_WQTYPE_MASK) == KSYN_WQTYPE_CVAR) { \
+				if((kwq->kw_inqueue != 0) && (kwq->kw_inqueue != kwq->kw_fakecount)) \
+					panic("CV:entries in queue durinmg reinit %d:%d\n",kwq->kw_inqueue, kwq->kw_fakecount);	\
+			};\
+			if ((kwq->kw_type & KSYN_WQTYPE_MASK) == KSYN_WQTYPE_RWLOCK) { \
+				kwq->kw_nextseqword = PTHRW_RWS_INIT; \
+				kwq->kw_overlapwatch = 0; \
+			}; \
+			kwq->kw_pre_lockseq = 0; \
+			kwq->kw_pre_rwwc = 0; \
+			kwq->kw_pre_sseq = PTHRW_RWS_INIT; \
+			kwq->kw_lastunlockseq = PTHRW_RWL_INIT; \
+			kwq->kw_lastseqword = PTHRW_RWS_INIT; \
+			kwq->kw_pre_intrcount = 0; \
+			kwq->kw_pre_intrseq = 0; \
+			kwq->kw_pre_intrretbits = 0; \
+			kwq->kw_pre_intrtype = 0; \
+			kwq->kw_lword = 0;	\
+			kwq->kw_uword = 0;	\
+			kwq->kw_sword = PTHRW_RWS_INIT;	\
+			}
+
 void pthread_list_lock(void);
 void pthread_list_unlock(void);
 void pthread_list_lock_spin(void);
@@ -349,40 +473,68 @@ void ksyn_wqlock(ksyn_wait_queue_t kwq);
 void ksyn_wqunlock(ksyn_wait_queue_t kwq);
 ksyn_wait_queue_t ksyn_wq_hash_lookup(user_addr_t mutex, proc_t p, int flags, uint64_t object, uint64_t offset);
 int ksyn_wqfind(user_addr_t mutex, uint32_t mgen, uint32_t ugen, uint32_t rw_wc, uint64_t tid, int flags, int wqtype , ksyn_wait_queue_t * wq);
-void ksyn_wqrelease(ksyn_wait_queue_t mkwq, ksyn_wait_queue_t ckwq);
-int ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, uthread_t uth);
-kern_return_t ksyn_wakeup_thread(ksyn_wait_queue_t kwq, uthread_t uth);
-void ksyn_move_wqthread(ksyn_wait_queue_t ckwq, ksyn_wait_queue_t kwq, uint32_t mgen, uint32_t updateval, int diffgen, int nomutex);
-extern thread_t port_name_to_thread(mach_port_name_t port_name);
+void ksyn_wqrelease(ksyn_wait_queue_t mkwq, ksyn_wait_queue_t ckwq, int qfreenow, int wqtype);
 extern int ksyn_findobj(uint64_t mutex, uint64_t * object, uint64_t * offset);
-static void UPDATE_KWQ(ksyn_wait_queue_t kwq, uint32_t mgen, uint32_t ugen, uint32_t rw_wc, uint64_t tid, int wqtype, int retry);
-void psynch_mutexdrop_internal(ksyn_wait_queue_t kwq, uint32_t lkseq, uint32_t ugen, int flags);
+static void UPDATE_CVKWQ(ksyn_wait_queue_t kwq, uint32_t mgen, uint32_t ugen, uint32_t rw_wc, uint64_t tid, int wqtype);
+extern thread_t port_name_to_thread(mach_port_name_t port_name);
 
-#if USE_WAITQUEUE
-kern_return_t wait_queue_move_all(wait_queue_t from, event64_t eventfrom, wait_queue_t to, event64_t eventto);
-kern_return_t wait_queue_move_thread(wait_queue_t from, event64_t eventfrom, thread_t th, wait_queue_t to, event64_t eventto, thread_t * mthp);
-#endif /* USE_WAITQUEUE */
-int kwq_handle_unlock(ksyn_wait_queue_t, uint32_t mgen, uint32_t * updatep, int flags, int *blockp, uint32_t premgen);
+int ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, ksyn_waitq_element_t kwe, int log);
+kern_return_t ksyn_wakeup_thread(ksyn_wait_queue_t kwq, ksyn_waitq_element_t kwe);
+void ksyn_freeallkwe(ksyn_queue_t kq);
+
+uint32_t psynch_mutexdrop_internal(ksyn_wait_queue_t kwq, uint32_t lkseq, uint32_t ugen, int flags);
+int kwq_handle_unlock(ksyn_wait_queue_t, uint32_t mgen, uint32_t rw_wc, uint32_t * updatep, int flags, int *blockp, uint32_t premgen);
+
 void ksyn_queue_init(ksyn_queue_t kq);
-int ksyn_queue_insert(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t mgen, struct uthread * uth, int firstfit);
-struct uthread * ksyn_queue_removefirst(ksyn_queue_t kq, ksyn_wait_queue_t kwq);
-void ksyn_queue_removeitem(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uthread_t uth);
+int ksyn_queue_insert(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t mgen, struct uthread * uth, ksyn_waitq_element_t kwe, int firstfit);
+ksyn_waitq_element_t ksyn_queue_removefirst(ksyn_queue_t kq, ksyn_wait_queue_t kwq);
+void ksyn_queue_removeitem(ksyn_wait_queue_t kwq, ksyn_queue_t kq, ksyn_waitq_element_t kwe);
+int ksyn_queue_move_tofree(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t upto, ksyn_queue_t freeq, int all, int reease);
 void update_low_high(ksyn_wait_queue_t kwq, uint32_t lockseq);
 uint32_t find_nextlowseq(ksyn_wait_queue_t kwq);
 uint32_t find_nexthighseq(ksyn_wait_queue_t kwq);
+
 int find_seq_till(ksyn_wait_queue_t kwq, uint32_t upto, uint32_t  nwaiters, uint32_t *countp);
-int find_diff(uint32_t upto, uint32_t lowest);
 uint32_t ksyn_queue_count_tolowest(ksyn_queue_t kq, uint32_t upto);
+
+ksyn_waitq_element_t ksyn_queue_find_cvpreposeq(ksyn_queue_t kq, uint32_t cgen);
+uint32_t ksyn_queue_cvcount_entries(ksyn_queue_t kq, uint32_t upto, uint32_t from, int * numwaitersp, int * numintrp, int * numprepop);
+void ksyn_handle_cvbroad(ksyn_wait_queue_t ckwq, uint32_t upto, uint32_t *updatep);
+void ksyn_cvupdate_fixup(ksyn_wait_queue_t ckwq, uint32_t *updatep, ksyn_queue_t kfreeq, int release);
+ksyn_waitq_element_t ksyn_queue_find_signalseq(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t toseq, uint32_t lockseq);
+ksyn_waitq_element_t ksyn_queue_find_threadseq(ksyn_wait_queue_t ckwq, ksyn_queue_t kq, thread_t th, uint32_t toseq);
+
 int ksyn_wakeupreaders(ksyn_wait_queue_t kwq, uint32_t limitread, int longreadset, int allreaders, uint32_t updatebits, int * wokenp);
 int kwq_find_rw_lowest(ksyn_wait_queue_t kwq, int flags, uint32_t premgen, int * type, uint32_t lowest[]);
-uthread_t ksyn_queue_find_seq(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t seq);
+ksyn_waitq_element_t ksyn_queue_find_seq(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t seq, int remove);
+int kwq_handle_overlap(ksyn_wait_queue_t kwq, uint32_t lgenval, uint32_t ugenval, uint32_t rw_wc, uint32_t *updatebitsp, int flags , int * blockp);
 int kwq_handle_downgrade(ksyn_wait_queue_t kwq, uint32_t mgen, int flags, uint32_t premgen, int * blockp);
 
-
 static void
-UPDATE_KWQ(__unused ksyn_wait_queue_t kwq, __unused uint32_t mgen, __unused uint32_t ugen, __unused uint32_t rw_wc, __unused uint64_t tid, __unused int wqtype, __unused int retry)  
+UPDATE_CVKWQ(ksyn_wait_queue_t kwq, uint32_t mgen, uint32_t ugen, uint32_t rw_wc, __unused uint64_t tid, __unused int wqtype)
 {
+	if ((kwq->kw_type & KSYN_WQTYPE_MASK) == KSYN_WQTYPE_CVAR) {
+		if ((kwq->kw_kflags & KSYN_KWF_ZEROEDOUT) != 0) {
+			/* the values of L,U and S are cleared out due to L==S in previous transition */
+			kwq->kw_lword = mgen;
+			kwq->kw_uword = ugen;
+			kwq->kw_sword = rw_wc;
+			kwq->kw_kflags &=  ~KSYN_KWF_ZEROEDOUT;
+		}
+		if (is_seqhigher((mgen & PTHRW_COUNT_MASK), (kwq->kw_lword & PTHRW_COUNT_MASK)) != 0)
+			kwq->kw_lword = mgen;
+		if (is_seqhigher((ugen & PTHRW_COUNT_MASK), (kwq->kw_uword & PTHRW_COUNT_MASK)) != 0)
+			kwq->kw_uword = ugen;
+		if ((rw_wc & PTH_RWS_CV_CBIT) != 0) {
+			if(is_seqlower(kwq->kw_cvkernelseq, (rw_wc & PTHRW_COUNT_MASK)) != 0) {
+				kwq->kw_cvkernelseq = (rw_wc & PTHRW_COUNT_MASK);
+			}
+			if (is_seqhigher((rw_wc & PTHRW_COUNT_MASK), (kwq->kw_sword & PTHRW_COUNT_MASK)) != 0)
+				kwq->kw_sword = rw_wc;
+		}
+	}
 }
+
 
 /* to protect the hashes, iocounts, freelist */
 void
@@ -426,51 +578,43 @@ ksyn_wqunlock(ksyn_wait_queue_t kwq)
 
 
 /* routine to drop the mutex unlocks , used both for mutexunlock system call and drop during cond wait */
-void
+uint32_t
 psynch_mutexdrop_internal(ksyn_wait_queue_t kwq, uint32_t lkseq, uint32_t ugen, int flags)
 {
-	uint32_t nextgen, low_writer, updatebits;
+	uint32_t nextgen, low_writer, updatebits, returnbits = 0;
 	int firstfit = flags & _PTHREAD_MUTEX_POLICY_FIRSTFIT;
-	uthread_t uth;
+	ksyn_waitq_element_t kwe = NULL;
 	kern_return_t kret = KERN_SUCCESS;
-
 	
 	nextgen = (ugen + PTHRW_INC);
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_KMDROP | DBG_FUNC_START, kwq, lkseq, ugen, flags, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_KMDROP | DBG_FUNC_START, (uint32_t)kwq->kw_addr, lkseq, ugen, flags, 0);
 #endif /* _PSYNCH_TRACE_ */
 
 	ksyn_wqlock(kwq);
 
 redrive:
-
-#if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, kwq, 1, kwq->kw_inqueue, nextgen, 0);
-#endif /* _PSYNCH_TRACE_ */
+	
 	if (kwq->kw_inqueue != 0) {
-		updatebits = (kwq->kw_highseq & PTHRW_COUNT_MASK) | PTHRW_EBIT;
-		kwq->kw_lastunlockseq = ugen;
+		updatebits = (kwq->kw_highseq & PTHRW_COUNT_MASK) | (PTH_RWL_EBIT | PTH_RWL_KBIT);
+		kwq->kw_lastunlockseq = (ugen & PTHRW_COUNT_MASK);
 		if (firstfit != 0) 
 		{
-#if __TESTPANICS__
-		panic("psynch_mutexdrop_internal: first fit mutex arrives, not enabled yet \n");
-#endif /* __TESTPANICS__ */
 			/* first fit , pick any one */
-			uth = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], kwq);
+			kwe = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], kwq);
+			kwe->kwe_psynchretval = updatebits;
+			kwe->kwe_kwqqueue = NULL;
 
-			if (kwq->kw_ksynqueues[KSYN_QUEUE_WRITER].ksynq_count != 0)
-				updatebits |= PTHRW_WBIT;
 #if _PSYNCH_TRACE_
-			KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, kwq, 2, uth, updatebits, 0);
+			__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 0xcafecaf1, (uint32_t)(thread_tid((struct thread *)(((struct uthread *)(kwe->kwe_uth))->uu_context.vc_thread))), kwe->kwe_psynchretval, 0);
 #endif /* _PSYNCH_TRACE_ */
-				
-			uth->uu_psynchretval = updatebits;
-			uth->uu_kwqqueue = NULL;
-
-			kret = ksyn_wakeup_thread(kwq, uth);
+			
+			kret = ksyn_wakeup_thread(kwq, kwe);
+#if __TESTPANICS__
 			if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
 				panic("psynch_mutexdrop_internal: panic unable to wakeup firstfit mutex thread\n");
+#endif /* __TESTPANICS__ */
 			if (kret == KERN_NOT_WAITING)
 				goto redrive;
 		} else {
@@ -479,86 +623,124 @@ redrive:
 			low_writer &= PTHRW_COUNT_MASK;
 
 			if (low_writer == nextgen) {
-#if _PSYNCH_TRACE_
-				KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, kwq, 3, low_writer, nextgen, 0);
-#endif /* _PSYNCH_TRACE_ */
 				/* next seq to be granted found */
-				uth = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], kwq);
-				if (kwq->kw_ksynqueues[KSYN_QUEUE_WRITER].ksynq_count != 0)
-					updatebits |= PTHRW_WBIT;
+				kwe = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], kwq);
 				
-				uth->uu_psynchretval = updatebits;
-				uth->uu_kwqqueue = NULL;
+				/* since the grant could be cv, make sure mutex wait is set incase the thread interrupted out */
+				kwe->kwe_psynchretval = updatebits | PTH_RWL_MTX_WAIT;
+				kwe->kwe_kwqqueue = NULL;
 
-				kret = ksyn_wakeup_thread(kwq, uth);
+#if _PSYNCH_TRACE_
+				__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 0xcafecaf2, (uint32_t)(thread_tid((struct thread *)(((struct uthread *)(kwe->kwe_uth))->uu_context.vc_thread))), kwe->kwe_psynchretval, 0);
+#endif /* _PSYNCH_TRACE_ */
+				
+				kret = ksyn_wakeup_thread(kwq, kwe);
+#if __TESTPANICS__
 				if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
 					panic("psynch_mutexdrop_internal: panic unable to wakeup fairshare mutex thread\n");
-				if (kret == KERN_NOT_WAITING)
-					goto redrive;
+#endif /* __TESTPANICS__ */
+				if (kret == KERN_NOT_WAITING) {
+					/* interrupt post */
+					kwq->kw_pre_intrcount = 1;
+					kwq->kw_pre_intrseq = nextgen;
+					kwq->kw_pre_intrretbits = updatebits;
+					kwq->kw_pre_intrtype = PTH_RW_TYPE_WRITE;
+#if _PSYNCH_TRACE_
+					__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 0xfafafaf1, nextgen, kwq->kw_pre_intrretbits, 0);
+#endif /* _PSYNCH_TRACE_ */					
+				}
 
 			} else if (is_seqhigher(low_writer, nextgen) != 0) {
-#if _PSYNCH_TRACE_
-				KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, kwq, 4, low_writer, nextgen, 0);
-#endif /* _PSYNCH_TRACE_ */
 				kwq->kw_pre_rwwc++;
+
+				if (kwq->kw_pre_rwwc > 1) {
+					__FAILEDUSERTEST__("psynch_mutexdrop_internal: prepost more than one (1)\n");
+					goto out;
+				}
+
 				kwq->kw_pre_lockseq = (nextgen & PTHRW_COUNT_MASK); 
+#if _PSYNCH_TRACE_
+				__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 0xfefefef1, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
+#endif /* _PSYNCH_TRACE_ */
 			} else {
-#if __TESTPANICS__
-			panic("psynch_mutexdrop_internal: FS mutex unlock sequence higher than the lowest one is queue\n");
-#endif /* __TESTPANICS__ */
-#if _PSYNCH_TRACE_
-				KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, kwq, 5, low_writer, nextgen, 0);
-#endif /* _PSYNCH_TRACE_ */
-				uth = ksyn_queue_find_seq(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], nextgen);
-				if (uth != NULL) {
+
+				//__FAILEDUSERTEST__("psynch_mutexdrop_internal: FS mutex unlock sequence higher than the lowest one is queue\n");
+
+				kwe = ksyn_queue_find_seq(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], (nextgen & PTHRW_COUNT_MASK), 1);
+				if (kwe != NULL) {
 					/* next seq to be granted found */
-
-					if (kwq->kw_ksynqueues[KSYN_QUEUE_WRITER].ksynq_count != 0)
-						updatebits |= PTHRW_WBIT;
-				
+					/* since the grant could be cv, make sure mutex wait is set incase the thread interrupted out */
+					kwe->kwe_psynchretval = updatebits | PTH_RWL_MTX_WAIT;
+					kwe->kwe_kwqqueue = NULL;
 #if _PSYNCH_TRACE_
-					KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, kwq, 6, updatebits, 0, 0);
+					__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 0xcafecaf3, (uint32_t)(thread_tid((struct thread *)(((struct uthread *)(kwe->kwe_uth))->uu_context.vc_thread))), kwe->kwe_psynchretval, 0);
 #endif /* _PSYNCH_TRACE_ */
-					uth->uu_psynchretval = updatebits;
-					uth->uu_kwqqueue = NULL;
-
-					kret = ksyn_wakeup_thread(kwq, uth);
+					kret = ksyn_wakeup_thread(kwq, kwe);
+#if __TESTPANICS__
 					if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
 						panic("psynch_mutexdrop_internal: panic unable to wakeup fairshare mutex thread\n");
+#endif /* __TESTPANICS__ */
 					if (kret == KERN_NOT_WAITING)
 						goto redrive;
 				} else {
 					/* next seq to be granted not found, prepost */
-#if _PSYNCH_TRACE_
-					KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, kwq, 7, 0, 0, 0);
-#endif /* _PSYNCH_TRACE_ */
 					kwq->kw_pre_rwwc++;
+
+					if (kwq->kw_pre_rwwc > 1) {
+						__FAILEDUSERTEST__("psynch_mutexdrop_internal: prepost more than one (2)\n");
+						goto out;
+					}
+
 					kwq->kw_pre_lockseq = (nextgen & PTHRW_COUNT_MASK); 
+#if _PSYNCH_TRACE_
+					__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 0xfefefef2, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
+#endif /* _PSYNCH_TRACE_ */
 				}
 			}
 		} 
 	} else {
-#if _PSYNCH_TRACE_
-		KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, kwq, 8, 0, 0, 0);
-#endif /* _PSYNCH_TRACE_ */
+
 		/* if firstfit the last one could be spurious */
-		if ((firstfit == 0) || ((lkseq & PTHRW_COUNT_MASK) != nextgen))       {
-#if _PSYNCH_TRACE_
-			KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, kwq, 9, 0, 0, 0);
-#endif /* _PSYNCH_TRACE_ */
-			kwq->kw_lastunlockseq = ugen;
+		if (firstfit == 0) {
+			kwq->kw_lastunlockseq = (ugen & PTHRW_COUNT_MASK);
 			kwq->kw_pre_rwwc++;
+
+			if (kwq->kw_pre_rwwc > 1) {
+				__FAILEDUSERTEST__("psynch_mutexdrop_internal: prepost more than one (3)\n");
+				goto out;
+			}
+
 			kwq->kw_pre_lockseq = (nextgen & PTHRW_COUNT_MASK); 
+#if _PSYNCH_TRACE_
+			__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 0xfefefef3, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
+#endif /* _PSYNCH_TRACE_ */
+		} else {
+			/* first fit case */
+#if _PSYNCH_TRACE_
+			__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 0xfefefef3, kwq->kw_lastunlockseq, kwq->kw_pre_lockseq, 0);
+#endif /* _PSYNCH_TRACE_ */
+			kwq->kw_lastunlockseq = (ugen & PTHRW_COUNT_MASK);
+			/* not set or the new lkseq is higher */
+			if ((kwq->kw_pre_rwwc == 0) || (is_seqlower(kwq->kw_pre_lockseq, lkseq) == 0))
+				kwq->kw_pre_lockseq = (lkseq & PTHRW_COUNT_MASK);
+			kwq->kw_pre_rwwc = 1;
+#if _PSYNCH_TRACE_
+			__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_KMDROP | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 0xfefefef3, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
+#endif /* _PSYNCH_TRACE_ */
+
+			/* indicate prepost content in kernel */
+			returnbits = lkseq | PTH_RWL_PBIT;
 		}
 	}
 
+out:
 	ksyn_wqunlock(kwq);
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_KMDROP | DBG_FUNC_END, kwq, 0, 0, 0, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_KMDROP | DBG_FUNC_END, (uint32_t)kwq->kw_addr, 0xeeeeeeed, 0, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
-	ksyn_wqrelease(kwq, NULL);
-	return;
+	ksyn_wqrelease(kwq, NULL, 1, (KSYN_WQTYPE_INDROP | KSYN_WQTYPE_MTX));
+	return(returnbits);
 }
 
 /*
@@ -575,19 +757,24 @@ psynch_mutexwait(__unused proc_t p, struct psynch_mutexwait_args * uap, uint32_t
 	int flags = uap->flags;
 	ksyn_wait_queue_t kwq;
 	int error=0;
-	int ins_flags;
+	int ins_flags, retry;
 	uthread_t uth;
 	int firstfit = flags & _PTHREAD_MUTEX_POLICY_FIRSTFIT;
-	uint32_t lockseq, updatebits;
-	
+	uint32_t lockseq, updatebits=0;
+	ksyn_waitq_element_t kwe;
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_START, (uint32_t)mutex, mgen, ugen, flags, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_START, (uint32_t)mutex, mgen, ugen, flags, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_NONE, (uint32_t)mutex, mgen, ugen, (uint32_t)tid, 0);
 #endif /* _PSYNCH_TRACE_ */
 
 	uth = current_uthread();
 
-	uth->uu_lockseq = uap->mgen;
+	kwe = &uth->uu_kwe;
+	kwe->kwe_lockseq = uap->mgen;
+	kwe->kwe_uth = uth;
+	kwe->kwe_psynchretval = 0;
+	kwe->kwe_kwqqueue = NULL;
 	lockseq = (uap->mgen & PTHRW_COUNT_MASK);
 
 	if (firstfit  == 0) {
@@ -600,67 +787,105 @@ psynch_mutexwait(__unused proc_t p, struct psynch_mutexwait_args * uap, uint32_t
 	error = ksyn_wqfind(mutex, mgen, ugen, 0, tid, flags, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_MTX), &kwq);
 	if (error != 0) {
 #if _PSYNCH_TRACE_
-		KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_END, (uint32_t)mutex, 1, 0, error, 0);
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_END, (uint32_t)mutex, 1, 0xdeadbeef, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 		return(error);
 	}
 
 	ksyn_wqlock(kwq);
 
-	
-	if ((kwq->kw_pre_rwwc != 0) && ((ins_flags == FIRSTFIT) || (lockseq == kwq->kw_pre_lockseq ))) {
+
+	if ((mgen & PTH_RWL_RETRYBIT) != 0) {
+		retry = 1;
+		mgen &= ~PTH_RWL_RETRYBIT;
+	}
+
+        /* handle first the missed wakeups */
+        if ((kwq->kw_pre_intrcount != 0) &&
+                ((kwq->kw_pre_intrtype == PTH_RW_TYPE_WRITE)) &&
+                (is_seqlower_eq(lockseq, (kwq->kw_pre_intrseq & PTHRW_COUNT_MASK)) != 0)) {
+                kwq->kw_pre_intrcount--;
+                kwe->kwe_psynchretval = kwq->kw_pre_intrretbits;
+                if (kwq->kw_pre_intrcount==0)
+                        CLEAR_INTR_PREPOST_BITS(kwq);
+                ksyn_wqunlock(kwq);
+				*retval = kwe->kwe_psynchretval;
+#if _PSYNCH_TRACE_
+			__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_NONE, (uint32_t)mutex, 0xfafafaf1, kwe->kwe_psynchretval, kwq->kw_pre_intrcount, 0);
+#endif /* _PSYNCH_TRACE_ */
+                goto out;
+        }
+
+	if ((kwq->kw_pre_rwwc != 0) && ((ins_flags == FIRSTFIT) || ((lockseq & PTHRW_COUNT_MASK) == (kwq->kw_pre_lockseq & PTHRW_COUNT_MASK) ))) {
 		/* got preposted lock */
 		kwq->kw_pre_rwwc--;
 		if (kwq->kw_pre_rwwc == 0) {
 			CLEAR_PREPOST_BITS(kwq);
-			kwq->kw_lastunlockseq = 0;
+			kwq->kw_lastunlockseq = PTHRW_RWL_INIT;
+			if (kwq->kw_inqueue == 0) {
+				updatebits = lockseq | (PTH_RWL_KBIT | PTH_RWL_EBIT);
+			} else {
+				updatebits = (kwq->kw_highseq & PTHRW_COUNT_MASK) | (PTH_RWL_KBIT | PTH_RWL_EBIT);
+			}
+			updatebits &= ~PTH_RWL_MTX_WAIT;
+			
+			kwe->kwe_psynchretval = updatebits;
+
+			if (updatebits == 0) {
+				__FAILEDUSERTEST__("psynch_mutexwait(prepost): returning 0 lseq  in mutexwait with no EBIT \n");
+			}
+			ksyn_wqunlock(kwq);
+			*retval = updatebits;
+#if _PSYNCH_TRACE_
+			__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 0xfefefef1, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
+#endif /* _PSYNCH_TRACE_ */
+			goto out;	
 		} else {
-			panic("psynch_mutexwait: more than one prepost %d\n", (kwq->kw_pre_rwwc + 1));
+			__FAILEDUSERTEST__("psynch_mutexwait: more than one prepost\n");
 			kwq->kw_pre_lockseq += PTHRW_INC; /* look for next one */
+			ksyn_wqunlock(kwq);
+			error = EINVAL;
+			goto out;
 		}
-		if (kwq->kw_inqueue == 0) {
-			updatebits = lockseq | PTHRW_EBIT;
-		} else {
-			updatebits = (kwq->kw_highseq & PTHRW_COUNT_MASK) | (PTHRW_EBIT | PTHRW_WBIT);
-		}
-		
-		uth->uu_psynchretval = updatebits;
-#if __TESTPANICS__
-		if ((updatebits & PTHRW_COUNT_MASK) == 0)
-			panic("psynch_mutexwait: (prepost)returning 0 lseq  in mutexwait with EBIT \n");
-#endif /* __TESTPANICS__ */
-		ksyn_wqunlock(kwq);
-		*retval = updatebits;
-		goto out;	
 	}
 	
-	error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], mgen, uth, ins_flags);
-	if (error != 0)
-		panic("psynch_mutexwait: failed to enqueue\n");
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 0xfeedfeed, mgen, ins_flags, 0);
+#endif /* _PSYNCH_TRACE_ */
 	
-	error = ksyn_block_thread_locked(kwq, (uint64_t)0, uth);
+	error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], mgen, uth, kwe, ins_flags);
+	if (error != 0) {
+		ksyn_wqunlock(kwq);
+#if _PSYNCH_TRACE_
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_END, (uint32_t)mutex, 2, 0xdeadbeef, error, 0);
+#endif /* _PSYNCH_TRACE_ */
+		goto out;
+	}
+	
+	error = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0);
 		/* drops the wq lock */
 
 	if (error != 0) {
 		ksyn_wqlock(kwq);
+		
 #if _PSYNCH_TRACE_
-		KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_NONE, (uint32_t)mutex, 2, 0, error, 0);
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_NONE, (uint32_t)mutex, 3, 0xdeadbeef, error, 0);
 #endif /* _PSYNCH_TRACE_ */
-		if (uth->uu_kwqqueue != NULL)
-			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], uth);
+		if (kwe->kwe_kwqqueue != NULL)
+			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], kwe);
 		ksyn_wqunlock(kwq);
 	} else {
-		updatebits = uth->uu_psynchretval;
+		updatebits = kwe->kwe_psynchretval;
+		updatebits &= ~PTH_RWL_MTX_WAIT;
 		*retval = updatebits;
-#if __TESTPANICS__
-		if ((updatebits & PTHRW_COUNT_MASK) == 0)
-			panic("psynch_mutexwait: returning 0 lseq  in mutexwait with EBIT \n");
-#endif /* __TESTPANICS__ */
+
+		if (updatebits == 0)
+			__FAILEDUSERTEST__("psynch_mutexwait: returning 0 lseq  in mutexwait with no EBIT \n");
 	}
 out:
-	ksyn_wqrelease(kwq, NULL); 
+	ksyn_wqrelease(kwq, NULL, 1, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_MTX)); 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_END, (uint32_t)mutex, 0, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_END, (uint32_t)mutex, 0xeeeeeeed, updatebits, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 
 	return(error);
@@ -670,32 +895,26 @@ out:
  *  psynch_mutexdrop: This system call is used for unlock postings on contended psynch mutexes.
   */
 int
-psynch_mutexdrop(__unused proc_t p, struct psynch_mutexdrop_args * uap, __unused uint32_t * retval)
+psynch_mutexdrop(__unused proc_t p, struct psynch_mutexdrop_args * uap, uint32_t * retval)
 {
 	user_addr_t mutex  = uap->mutex;
 	uint32_t mgen = uap->mgen;
-	uint32_t lkseq = mgen &  PTHRW_COUNT_MASK;
 	uint32_t ugen = uap->ugen;
 	uint64_t tid = uap->tid;
 	int flags = uap->flags;
 	ksyn_wait_queue_t kwq;
+	uint32_t updateval;	
 	int error=0;
 
-#if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_MLDROP | DBG_FUNC_START, (uint32_t)mutex, mgen, ugen, flags, 0);
-#endif /* _PSYNCH_TRACE_ */
-	error = ksyn_wqfind(mutex, mgen, ugen, 0, tid, flags, KSYN_WQTYPE_MTX, &kwq);
+	error = ksyn_wqfind(mutex, mgen, ugen, 0, tid, flags, (KSYN_WQTYPE_INDROP | KSYN_WQTYPE_MTX), &kwq);
 	if (error != 0) {
-#if _PSYNCH_TRACE_
-		KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_MLDROP | DBG_FUNC_END, (uint32_t)mutex, 1, 0, error, 0);
-#endif /* _PSYNCH_TRACE_ */
 		return(error);
 	}
-	psynch_mutexdrop_internal(kwq, lkseq, ugen, flags);
+
+	updateval = psynch_mutexdrop_internal(kwq, mgen, ugen, flags);
 	/* drops the kwq reference */
-#if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_MLDROP | DBG_FUNC_END, (uint32_t)mutex, 0, 0, error, 0);
-#endif /* _PSYNCH_TRACE_ */
+
+	*retval = updateval;
 	return(0);
 
 }
@@ -704,350 +923,261 @@ psynch_mutexdrop(__unused proc_t p, struct psynch_mutexdrop_args * uap, __unused
  *  psynch_cvbroad: This system call is used for broadcast posting on blocked waiters of psynch cvars.
  */
 int
-psynch_cvbroad(__unused proc_t p, struct psynch_cvbroad_args * uap, int * retval)
+psynch_cvbroad(__unused proc_t p, struct psynch_cvbroad_args * uap, uint32_t * retval)
 {
 	user_addr_t cond  = uap->cv;
-	uint32_t cgen = uap->cvgen;
-	uint32_t diffgen = uap->diffgen;
-	uint32_t mgen = uap->mgen;
+	uint64_t cvlsgen = uap->cvlsgen;
+	uint64_t cvudgen = uap->cvudgen;
+	uint32_t cgen, cugen, csgen, diffgen;
+	uint32_t uptoseq, fromseq;
 	int flags = uap->flags;
-	ksyn_wait_queue_t kwq, ckwq;
+	ksyn_wait_queue_t ckwq;
 	int error=0;
-#if COND_MTX_WAITQUEUEMOVE
-	int mutexowned = flags & _PTHREAD_MTX_OPT_HOLDLOCK;
-	int nomutex = flags & _PTHREAD_MTX_OPT_NOHOLDLOCK;
-	user_addr_t mutex = uap->mutex;
-	uint32_t ugen = uap->ugen;
-	uint64_t tid = uap->tid;
-	uthread_t uth;
-	kern_return_t kret = KERN_SUCCESS;
-#else /* COND_MTX_WAITQUEUEMOVE */
-	int nomutex =  _PTHREAD_MTX_OPT_NOHOLDLOCK;
-#endif /* COND_MTX_WAITQUEUEMOVE */
-	uint32_t nextgen, ngen;
-	int updatebits = 0;
+	uint32_t updatebits = 0;
+	uint32_t count;
+	struct ksyn_queue  kfreeq;
+
+	csgen = (uint32_t)((cvlsgen >> 32) & 0xffffffff);
+	cgen = ((uint32_t)(cvlsgen & 0xffffffff));
+	cugen = (uint32_t)((cvudgen >> 32) & 0xffffffff);
+	diffgen = ((uint32_t)(cvudgen & 0xffffffff));
+	count = (diffgen >> PTHRW_COUNT_SHIFT);
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVBROAD | DBG_FUNC_START, (uint32_t)cond, (uint32_t) 0, cgen, mgen, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVBROAD | DBG_FUNC_START, (uint32_t)cond, cgen, cugen, csgen, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVBROAD | DBG_FUNC_NONE, (uint32_t)cond, 0xcbcbcbc1, diffgen,flags, 0);
 #endif /* _PSYNCH_TRACE_ */
-	error = ksyn_wqfind(cond, cgen, cgen, 0, 0, flags, KSYN_WQTYPE_CVAR, &ckwq);
+
+	uptoseq = cgen & PTHRW_COUNT_MASK;
+	fromseq = (cugen & PTHRW_COUNT_MASK) + PTHRW_INC;
+
+	if (is_seqhigher(fromseq, uptoseq) || is_seqhigher((csgen & PTHRW_COUNT_MASK), uptoseq)) {
+		__FAILEDUSERTEST__("cvbroad: invalid L, U and S values\n");
+		return EINVAL;
+	}
+	if (count > (uint32_t)task_threadmax) {
+		__FAILEDUSERTEST__("cvbroad: difference greater than maximum possible thread count\n");
+		return EBUSY;
+	}
+
+	ckwq = NULL;
+	
+	error = ksyn_wqfind(cond, cgen, cugen, csgen, 0, flags, (KSYN_WQTYPE_CVAR | KSYN_WQTYPE_INDROP), &ckwq);
 	if (error != 0) {
 #if _PSYNCH_TRACE_
-		KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVBROAD | DBG_FUNC_END, (uint32_t)cond, 1, 0, error, 0);
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVBROAD | DBG_FUNC_END, (uint32_t)cond, 0, 0xdeadbeef, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 		return(error);
 	}
 
-#if COND_MTX_WAITQUEUEMOVE
-	ngen = mgen + (PTHRW_INC * diffgen);
-	if (nomutex ==0) {
-		error = ksyn_wqfind(mutex, ngen, ugen, 0, tid, flags, KSYN_WQTYPE_MTX, &kwq);
-		if (error != 0)  {
-			kwq = NULL;
-			goto out;
-		}
-	}
-#else /* COND_MTX_WAITQUEUEMOVE */
-	nomutex = _PTHREAD_MTX_OPT_NOHOLDLOCK;
-	kwq= NULL;
-	ngen = 0;
-#endif /* COND_MTX_WAITQUEUEMOVE */
-
+	*retval = 0;
 
 	ksyn_wqlock(ckwq);
-#if COND_MTX_WAITQUEUEMOVE
-redrive:
-#endif /* COND_MTX_WAITQUEUEMOVE */
-	if (diffgen > ckwq->kw_inqueue) {
-		ckwq->kw_pre_rwwc = diffgen - ckwq->kw_inqueue;
-		ckwq->kw_pre_lockseq = cgen & PTHRW_BIT_MASK;
-		updatebits = ckwq->kw_pre_rwwc;	/* unused mutex refs */
-		nextgen = (mgen + (ckwq->kw_pre_rwwc * PTHRW_INC));
-	} else {
-		updatebits = 0;
-		nextgen = mgen + PTHRW_INC;
-	}
-	
-	if (ckwq->kw_inqueue != 0) {
-#if COND_MTX_WAITQUEUEMOVE
-		if (mutexowned != 0) {
-#if _PSYNCH_TRACE_
-			KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVBROAD | DBG_FUNC_NONE, (uint32_t)cond, 0, 1, ckwq->kw_inqueue, 0);
-#endif /* _PSYNCH_TRACE_ */
-			uth = ksyn_queue_removefirst(&ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER],ckwq);
-			uth->uu_psynchretval = ngen;
-			uth->uu_kwqqueue = NULL;
 
-			kret = ksyn_wakeup_thread(ckwq, uth);
-			if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
-				panic("cvbraoad: failed to remove\n");
-			if (kret == KERN_NOT_WAITING) {
-				/*
-				 * trying to wake one thread to return, so if
-				 * failed to wakeup get the next one.. 
-				 */
-				goto redrive;
-			}
-			nextgen = nextgen + PTHRW_INC;
-			diffgen -= 1;
-		}
-#else /* COND_MTX_WAITQUEUEMOVE */
-		updatebits = 0;
-#endif /* COND_MTX_WAITQUEUEMOVE */
-		
-		/* nomutex case or in mutexowned case after the first one */
-		/* move them all to the mutex waitqueue */
-		if ((ckwq->kw_inqueue != 0) && (diffgen > 0)) {
-			/* atleast one more posting needed and there are waiting threads */
-			/* drops the ckwq lock */
-#if _PSYNCH_TRACE_
-			KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVBROAD | DBG_FUNC_NONE, (uint32_t)cond, 0, 2, diffgen, 0);
-#endif /* _PSYNCH_TRACE_ */
-			/* move threads from ckwq to kwq if COND_MTX_WAITQUEUEMOVE, else wakeup */
-			ksyn_move_wqthread(ckwq, kwq, nextgen, ngen, diffgen, nomutex);
-		} else
-			ksyn_wqunlock(ckwq);
-	}  else {
-		/* no need for prepost as it is covered before */
-		ksyn_wqunlock(ckwq);
-	}
+	/* update L, U and S... */
+	UPDATE_CVKWQ(ckwq, cgen, cugen, csgen, 0, KSYN_WQTYPE_CVAR);
 
-	if (error == 0) {
-		*retval = updatebits;
-	}
+	/* broadcast wakeups/prepost handling */
+	ksyn_handle_cvbroad(ckwq, uptoseq, &updatebits);
 
-#if COND_MTX_WAITQUEUEMOVE
-out:
-#endif /* COND_MTX_WAITQUEUEMOVE */
-	ksyn_wqrelease(ckwq, kwq);
+	/* set C or P bits and free if needed */
+	ckwq->kw_sword += (updatebits & PTHRW_COUNT_MASK);
+	ksyn_cvupdate_fixup(ckwq, &updatebits, &kfreeq, 1);
+	ksyn_wqunlock(ckwq);
+
+	*retval = updatebits;
+
+	ksyn_wqrelease(ckwq, NULL, 1, (KSYN_WQTYPE_INDROP | KSYN_WQTYPE_CVAR));
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVBROAD | DBG_FUNC_END, (uint32_t)cond, 1, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVBROAD | DBG_FUNC_END, (uint32_t)cond, 0xeeeeeeed, (uint32_t)*retval, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 	
 	return(error);
+}
+
+ksyn_waitq_element_t
+ksyn_queue_find_threadseq(ksyn_wait_queue_t ckwq, __unused ksyn_queue_t kq, thread_t th, uint32_t upto)
+{
+	uthread_t uth = get_bsdthread_info(th);
+	ksyn_waitq_element_t kwe = &uth->uu_kwe;
+		
+	if (kwe->kwe_kwqqueue != ckwq ||
+	    is_seqhigher((kwe->kwe_lockseq & PTHRW_COUNT_MASK), upto)) {
+		/* the thread is not waiting in the cv (or wasn't when the wakeup happened) */
+		return NULL;
+	}
+	return kwe;
 }
 
 /*
  *  psynch_cvsignal: This system call is used for signalling the  blocked waiters of  psynch cvars.
  */
 int
-psynch_cvsignal(__unused proc_t p, struct psynch_cvsignal_args * uap, int * retval)
+psynch_cvsignal(__unused proc_t p, struct psynch_cvsignal_args * uap, uint32_t * retval)
 {
 	user_addr_t cond  = uap->cv;
-	uint32_t cgen = uap->cvgen;
+	uint64_t cvlsgen = uap->cvlsgen;
+	uint32_t cgen, csgen, signalseq, uptoseq;
 	uint32_t cugen = uap->cvugen;
-	uint32_t mgen = uap->mgen;
 	int threadport = uap->thread_port;
 	int flags = uap->flags;
-	ksyn_wait_queue_t kwq, ckwq;
-	int error=0, kret;
-	uthread_t uth;
-#if USE_WAITQUEUE
-	thread_t th = THREAD_NULL, mth;
-#else /* USE_WAITQUEUE */
+	ksyn_wait_queue_t ckwq = NULL;
+	ksyn_waitq_element_t kwe, nkwe = NULL;
+	ksyn_queue_t kq;
+	int error=0;
 	thread_t th = THREAD_NULL;
-#endif /* USE_WAITQUEUE */
-#if COND_MTX_WAITQUEUEMOVE
-	user_addr_t mutex = uap->mutex;
-	uint32_t ugen = uap->ugen;
-	int mutexowned = flags & _PTHREAD_MTX_OPT_HOLDLOCK;
-	int nomutex = flags & _PTHREAD_MTX_OPT_NOHOLDLOCK;
-#else /* COND_MTX_WAITQUEUEMOVE */
-	int nomutex =  _PTHREAD_MTX_OPT_NOHOLDLOCK;
-#endif /* COND_MTX_WAITQUEUEMOVE */
-	uint32_t retbits, ngen, lockseq;
+	uint32_t updatebits = 0;
+	kern_return_t kret;
+	struct ksyn_queue  kfreeq;
 
 
-	if (nomutex != 0)
-		retbits = 0;
-	else
-		retbits = 1;	
+	csgen = (uint32_t)((cvlsgen >> 32) & 0xffffffff);
+	cgen = ((uint32_t)(cvlsgen & 0xffffffff));
+
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_START, (uint32_t)cond, (uint32_t) 0, cgen, mgen, 0);
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_NONE, (uint32_t)cond, (uint32_t)cugen , flags, mgen, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_START, (uint32_t)cond, cgen, cugen, threadport, 0);
 #endif /* _PSYNCH_TRACE_ */
 
-	error = ksyn_wqfind(cond, cgen, cugen, 0, 0, flags, KSYN_WQTYPE_CVAR, &ckwq);
-	if (error != 0)  {
-		*retval = retbits;	
-#if _PSYNCH_TRACE_
-		KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_END, (uint32_t)cond, 1, 0, error, 0);
-#endif /* _PSYNCH_TRACE_ */
-		return(error);
-	}
-	
-	
-	if ((flags & _PTHREAD_MTX_OPT_LASTDROP) == _PTHREAD_MTX_OPT_LASTDROP) {
+	uptoseq = cgen & PTHRW_COUNT_MASK;
+	signalseq = (cugen & PTHRW_COUNT_MASK) + PTHRW_INC;
 
-		ksyn_wqlock(ckwq);
-		lockseq = cgen & PTHRW_COUNT_MASK;
-		/* do  we need to check for lockseq as this is from last waiter, may be race ? */
-		if ((ckwq->kw_pre_rwwc != 0) && (is_seqlower_eq(lockseq, ckwq->kw_pre_lockseq) != 0)) {
-			ckwq->kw_pre_rwwc--;
-			if (ckwq->kw_pre_rwwc == 0)
-				CLEAR_PREPOST_BITS(ckwq);
-		}
-		ksyn_wqunlock(ckwq);
-		/* no mutex or thread is associated with this, just notificaion */
-		th = THREAD_NULL;
-		error = 0;
+	/* validate sane L, U, and S values */
+	if (((threadport == 0) && (is_seqhigher(signalseq, uptoseq))) || is_seqhigher((csgen & PTHRW_COUNT_MASK), uptoseq)) {
+		__FAILEDUSERTEST__("psync_cvsignal; invalid sequence numbers\n");
+		error = EINVAL;
 		goto out;
 	}
 
-	ngen = mgen + PTHRW_INC;
-
-#if COND_MTX_WAITQUEUEMOVE
-	if (nomutex == 0) {
-		/* mutex was not operated on, ignore it */
-		error = ksyn_wqfind(mutex, ngen, ugen, 0, 0, flags, KSYN_WQTYPE_MTX, &kwq); 
-		if (error != 0)  {
-			*retval = retbits;	
-			kwq = NULL;
-			goto out;
-		}
-	} else {
-#endif /* COND_MTX_WAITQUEUEMOVE */
-		kwq = NULL;
-#if COND_MTX_WAITQUEUEMOVE
-	}
-#endif /* COND_MTX_WAITQUEUEMOVE */
-
-	
+	/* If we are looking for a specific thread, grab a reference for it */
 	if (threadport != 0) {
 		th = (thread_t)port_name_to_thread((mach_port_name_t)threadport);
 		if (th == THREAD_NULL) {
-			*retval = retbits;	
 			error = ESRCH;
 			goto out;
 		}
 	}
 
-	ksyn_wqlock(ckwq);
-redrive:
-	if (ckwq->kw_inqueue != 0) {
-		*retval = 0;	
-#if COND_MTX_WAITQUEUEMOVE
-		if ((mutexowned != 0) || (nomutex != 0)) {
+	error = ksyn_wqfind(cond, cgen, cugen, csgen, 0, flags, (KSYN_WQTYPE_CVAR | KSYN_WQTYPE_INDROP), &ckwq);
+	if (error != 0)  {
 #if _PSYNCH_TRACE_
-			KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_NONE, (uint32_t)cond, 0, 1, ckwq->kw_inqueue, 0);
-#endif /* _PSYNCH_TRACE_ */
-			if (th != THREAD_NULL) {
-				uth = get_bsdthread_info(th);
-				if (nomutex != 0) 
-					ngen |= PTHRW_MTX_NONE;
-				uth->uu_psynchretval = ngen;
-				uth->uu_kwqqueue = NULL;
-				ksyn_queue_removeitem(ckwq, &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER], uth);
-				kret = ksyn_wakeup_thread(ckwq, uth);
-				if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
-					panic("psynch_cvsignal: panic waking in cvsignal\n");
-				if (kret == KERN_NOT_WAITING) {
-					if (threadport != 0) {
-						error = 0;
-					} else
-						goto redrive;
-				}
-			} else {
-				uth = ksyn_queue_removefirst(&ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER],ckwq);
-				if (nomutex != 0) 
-					ngen |= PTHRW_MTX_NONE;
-				uth->uu_psynchretval = ngen;
-				uth->uu_kwqqueue = NULL;
-				kret = ksyn_wakeup_thread(ckwq, uth);
-				if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
-					panic("psynch_cvsignal: panic waking in cvsignal\n");
-				if (kret == KERN_NOT_WAITING) {
-					if (threadport != 0) {
-						error = 0;
-					} else
-						goto redrive;
-				}
-			}
-			ksyn_wqunlock(ckwq);
-		} else {
-#endif /* COND_MTX_WAITQUEUEMOVE */
-			/* need to move a thread to another queue */
-#if _PSYNCH_TRACE_
-			KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_NONE, (uint32_t)cond, 0, 2, ckwq->kw_inqueue, 0);
-#endif /* _PSYNCH_TRACE_ */
-			if (th != THREAD_NULL) {
-				uth = get_bsdthread_info(th);
-				/* if given thread not blocked in cvwait , return error */
-				if (uth->uu_kwqqueue != ckwq) {
-					error = EINVAL;
-					ksyn_wqunlock(ckwq);
-					goto out;
-				}
-				ksyn_queue_removeitem(ckwq, &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER], uth);
-			} else {
-				uth = ksyn_queue_removefirst(&ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER],ckwq);
-				if (uth == NULL)
-					panic("cvsign: null uthread after rem");
-			}
-#if COND_MTX_WAITQUEUEMOVE
-			ksyn_wqunlock(ckwq);
-#else /* COND_MTX_WAITQUEUEMOVE */
-			uth->uu_psynchretval = 0;
-			uth->uu_kwqqueue = NULL;
-			kret = ksyn_wakeup_thread(ckwq, uth);
-			if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
-				panic("psynch_cvsignal: panic waking in cvsignal\n");
-			if (kret == KERN_NOT_WAITING) {
-				error = 0;
-				if (threadport == 0) 
-					goto redrive;
-			}
-			
-			ksyn_wqunlock(ckwq);
-			error = 0;
-#endif /* COND_MTX_WAITQUEUEMOVE */
-			
-#if COND_MTX_WAITQUEUEMOVE
-			ksyn_wqlock(kwq);
-			ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], ngen, uth, SEQFIT);
-#if USE_WAITQUEUE
-                        kret = wait_queue_move_thread(&ckwq->kw_wq, ckwq->kw_addr, th, &kwq->kw_wq, kwq->kw_addr, &mth);
-                        if (kret == KERN_SUCCESS) {
-                                if (mth != THREAD_NULL) {
-                                        uth = (struct uthread *)get_bsdthread_info(mth);
-                                        uth->uu_lockseq = ngen;
-                                        TAILQ_INSERT_TAIL(&kwq->kw_ksynqueues[KSYN_QUEUE_WRITER].ksynq_uthlist, uth, uu_mtxlist);
-                                }
-                        }
-#else /* USE_WAITQUEUE */
-			/* no need to move anything, just update the sequence */
-			uth->uu_lockseq = ngen;
-
-#endif /* USE_WAITQUEUE */
-			ksyn_wqunlock(kwq);
-		}
-#endif /* COND_MTX_WAITQUEUEMOVE */
-	}   else {
-		/* prepost */
-#if _PSYNCH_TRACE_
-		KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_NONE, (uint32_t)cond, 0, 3, ckwq->kw_inqueue, 0);
-#endif /* _PSYNCH_TRACE_ */
-		if (threadport != 0) {
-			error = EINVAL;
-			ksyn_wqunlock(ckwq);
-			goto out;
-		}
-		
-		ckwq->kw_pre_rwwc++;
-		ckwq->kw_attq = kwq;
-		ckwq->kw_pre_lockseq = cgen & PTHRW_BIT_MASK;
-		ckwq->kw_pre_cvretval = ngen;
-		*retval = retbits;	
-		ksyn_wqunlock(ckwq);
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_END, (uint32_t)cond, 0, 0xdeadbeef, error, 0);
+#endif /* _PSYNCH_TRACE_ */		
+		goto out;
 	}
-	/* ckwq is unlocked here */
-		
-out:
-	ksyn_wqrelease(ckwq, kwq);
-	if (th != THREAD_NULL)
-		thread_deallocate(th);
+	
+	ksyn_wqlock(ckwq);
+
+	/* update L, U and S... */
+	UPDATE_CVKWQ(ckwq, cgen, cugen, csgen, 0, KSYN_WQTYPE_CVAR);
+
+	kq = &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER];
+
+retry:
+	/* Only bother if we aren't already balanced */
+	if ((ckwq->kw_lword & PTHRW_COUNT_MASK) != (ckwq->kw_sword & PTHRW_COUNT_MASK)) {
+
+		kwe = (th != NULL) ? ksyn_queue_find_threadseq(ckwq, kq, th, uptoseq) :
+			ksyn_queue_find_signalseq(ckwq, kq, uptoseq, signalseq);
+		if (kwe != NULL) {
+			switch (kwe->kwe_flags) {
+				
+			case KWE_THREAD_BROADCAST:
+				/* broadcasts swallow our signal */
+				break;
+
+			case KWE_THREAD_PREPOST:
+				/* merge in with existing prepost at our same uptoseq */
+				kwe->kwe_count += 1;
+				break;
+
+			case KWE_THREAD_INWAIT:
+				if (is_seqlower((kwe->kwe_lockseq & PTHRW_COUNT_MASK), signalseq)) {
+					/*
+					 * A valid thread in our range, but lower than our signal.
+					 * Matching it may leave our match with nobody to wake it if/when
+					 * it arrives (the signal originally meant for this thread might
+					 * not successfully wake it).
+					 *
+					 * Convert to broadcast - may cause some spurious wakeups
+					 * (allowed by spec), but avoids starvation (better choice).
+					 */
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_END, (uint32_t)cond, 0, 0, error, 0);
+					__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_NONE, (uint32_t)ckwq->kw_addr, 0xc1c1c1c1, uptoseq, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+					ksyn_handle_cvbroad(ckwq, uptoseq, &updatebits);
+				} else {
+					ksyn_queue_removeitem(ckwq, kq, kwe);
+					kwe->kwe_psynchretval = PTH_RWL_MTX_WAIT;
+					kwe->kwe_kwqqueue = NULL;
+#if _PSYNCH_TRACE_
+					__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_NONE, (uint32_t)ckwq->kw_addr, 0xcafecaf2, (uint32_t)(thread_tid((struct thread *)(((struct uthread *)(kwe->kwe_uth))->uu_context.vc_thread))), kwe->kwe_psynchretval, 0);
+#endif /* _PSYNCH_TRACE_ */
+					kret = ksyn_wakeup_thread(ckwq, kwe);
+#if __TESTPANICS__
+					if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
+						panic("ksyn_wakeup_thread: panic waking up condition waiter\n");
+#endif /* __TESTPANICS__ */
+					updatebits += PTHRW_INC;
+				}
+
+				ckwq->kw_sword += (updatebits & PTHRW_COUNT_MASK);
+				break;
+				
+			default: 
+				panic("unknown kweflags\n");
+				break;
+			}
+
+		} else if (th != NULL) {
+			/* 
+			 * Could not find the thread, post a broadcast, 
+			 * otherwise the waiter will be stuck. Use to send
+			 * ESRCH here, did lead to rare hangs. 
+			 */
+			ksyn_handle_cvbroad(ckwq, uptoseq, &updatebits);
+			ckwq->kw_sword += (updatebits & PTHRW_COUNT_MASK);
+		} else if (nkwe == NULL) {
+			ksyn_wqunlock(ckwq);
+			nkwe = (ksyn_waitq_element_t)zalloc(kwe_zone);
+			ksyn_wqlock(ckwq);
+			goto retry;
+
+		} else {
+			/* no eligible entries - add prepost */
+			bzero(nkwe, sizeof(struct ksyn_waitq_element));
+			nkwe->kwe_kwqqueue = ckwq;
+			nkwe->kwe_flags = KWE_THREAD_PREPOST;
+			nkwe->kwe_lockseq = uptoseq;
+			nkwe->kwe_count = 1;
+			nkwe->kwe_uth = NULL;
+			nkwe->kwe_psynchretval = 0;
+
+#if _PSYNCH_TRACE_
+			__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_NONE, (uint32_t)ckwq->kw_addr, 0xfeedfefe, uptoseq, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+			
+			(void)ksyn_queue_insert(ckwq, &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER], uptoseq, NULL, nkwe, SEQFIT);
+			ckwq->kw_fakecount++;
+			nkwe = NULL;
+		}
+
+		/* set C or P bits and free if needed */
+		ksyn_cvupdate_fixup(ckwq, &updatebits, &kfreeq, 1);
+	}
+
+	ksyn_wqunlock(ckwq);
+	if (nkwe != NULL)
+		zfree(kwe_zone, nkwe);
+
+	ksyn_wqrelease(ckwq, NULL, 1, (KSYN_WQTYPE_INDROP | KSYN_WQTYPE_CVAR));
+
+out:
+	if (th != NULL)
+		thread_deallocate(th);
+	if (error == 0)
+		*retval = updatebits;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSIGNAL | DBG_FUNC_END, (uint32_t)cond, 0xeeeeeeed, updatebits, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 	
 	return(error);
@@ -1060,112 +1190,318 @@ int
 psynch_cvwait(__unused proc_t p, struct psynch_cvwait_args * uap, uint32_t * retval)
 {
 	user_addr_t cond  = uap->cv;
-	uint32_t cgen = uap->cvgen;
+	uint64_t cvlsgen = uap->cvlsgen;
+	uint32_t cgen, csgen;
 	uint32_t cugen = uap->cvugen;
 	user_addr_t mutex = uap->mutex;
-	uint32_t mgen =0, ugen;
-	int flags = 0;
+	uint64_t mugen = uap->mugen;
+	uint32_t mgen, ugen;
+	int flags = uap->flags;
 	ksyn_wait_queue_t kwq, ckwq;
-	int error=0;
+	int error=0, local_error = 0;
 	uint64_t abstime = 0;
-	uint32_t lockseq, updatebits;
+	uint32_t lockseq, updatebits=0;
 	struct timespec  ts;
 	uthread_t uth;
-
+	ksyn_waitq_element_t kwe, nkwe = NULL;
+	struct ksyn_queue  *kq, kfreeq;
+#if __TESTPANICS__
+	//int timeoutval = 3;		/* 3 secs */
+	//u_int64_t ntime = 0;
+#endif /* __TESTPANICS__ */
+	
 	/* for conformance reasons */
 	__pthread_testcancel(0);
 
+	csgen = (uint32_t)((cvlsgen >> 32) & 0xffffffff);
+	cgen = ((uint32_t)(cvlsgen & 0xffffffff));
+	ugen = (uint32_t)((mugen >> 32) & 0xffffffff);
+	mgen = ((uint32_t)(mugen & 0xffffffff));
+
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_START, (uint32_t)cond, (uint32_t) mutex, cgen, mgen, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_START, (uint32_t)cond, cgen, cugen, csgen, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_NONE, (uint32_t)mutex, mgen, ugen, flags, 0);
 #endif /* _PSYNCH_TRACE_ */
-	flags = 0;
-	if ((uap->usec & 0xc0000000) != 0) {
-		if (uap->usec & 0x40000000)
-			flags |= PTHREAD_PROCESS_SHARED;
-		if (uap->usec & 0x80000000)
-			flags |= _PTHREAD_MUTEX_POLICY_FIRSTFIT;
+
+	lockseq = (cgen & PTHRW_COUNT_MASK);
+	/* 
+	 * In cvwait U word can be out of range as cond could be used only for 
+	 * timeouts. However S word needs to be within bounds and validated at
+	 * user level as well.
+	 */
+	if (is_seqhigher_eq((csgen & PTHRW_COUNT_MASK), lockseq) != 0) {
+		__FAILEDUSERTEST__("psync_cvwait; invalid sequence numbers\n");
+		return EINVAL;
 	}
-		
-	error = ksyn_wqfind(cond, cgen, cugen, 0, 0, flags, KSYN_WQTYPE_CVAR | KSYN_WQTYPE_INWAIT, &ckwq);
+
+	ckwq = kwq = NULL;
+	error = ksyn_wqfind(cond, cgen, cugen, csgen, 0, flags, KSYN_WQTYPE_CVAR | KSYN_WQTYPE_INWAIT, &ckwq);
 	if (error != 0) {
 #if _PSYNCH_TRACE_
-		KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_END, (uint32_t)cond, 1, 0, error, 0);
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_END, (uint32_t)cond, 1, 0xdeadbeef, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 		return(error);
 	}
 	
-	if (mutex != (user_addr_t)0) {
-		mgen = uap->mgen;
-		ugen = uap->ugen;
+#if __TESTPANICS__
+	//clock_interval_to_deadline(timeoutval, NSEC_PER_SEC, &ntime);
+#endif /* __TESTPANICS__ */
 
-		error = ksyn_wqfind(mutex, mgen, ugen, 0, 0, flags, KSYN_WQTYPE_MTX, &kwq); {
-		if (error != 0) 
+	if (mutex != (user_addr_t)0) {
+		error = ksyn_wqfind(mutex, mgen, ugen, 0, 0, flags, (KSYN_WQTYPE_INDROP | KSYN_WQTYPE_MTX), &kwq);
+		if (error != 0)  {
+			local_error = error;
+#if _PSYNCH_TRACE_
+			__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_END, (uint32_t)mutex, 2, 0xdeadbeef, error, 0);
+#endif /* _PSYNCH_TRACE_ */
 			goto out;
 		}
 		
-		psynch_mutexdrop_internal(kwq, mgen, ugen, flags);
+		(void)psynch_mutexdrop_internal(kwq, mgen, ugen, flags);
 		/* drops kwq reference */
+		kwq = NULL;
 	}
 
-	uth = current_uthread();
-	uth->uu_lockseq = cgen;
-	lockseq = (cgen & PTHRW_COUNT_MASK);
-
-	if (uap->sec != 0 || (uap->usec & 0x3fffffff)  != 0) {
+	if (uap->sec != 0 || (uap->nsec & 0x3fffffff)  != 0) {
 		ts.tv_sec = uap->sec;
-		ts.tv_nsec = (uap->usec & 0xc0000000);
-                nanoseconds_to_absolutetime((uint64_t)ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec,  &abstime );
-                clock_absolutetime_interval_to_deadline( abstime, &abstime );
+		ts.tv_nsec = (uap->nsec & 0x3fffffff);
+		nanoseconds_to_absolutetime((uint64_t)ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec,  &abstime );
+		clock_absolutetime_interval_to_deadline( abstime, &abstime );
 	}
+
 	ksyn_wqlock(ckwq);
-	if ((ckwq->kw_pre_rwwc != 0) && (is_seqlower_eq(lockseq, ckwq->kw_pre_lockseq) != 0)) {
+
+	/* update L, U and S... */
+	UPDATE_CVKWQ(ckwq, cgen, cugen, csgen, 0, KSYN_WQTYPE_CVAR);
+
+	/* Look for the sequence for prepost (or conflicting thread */
+	kq = &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER];
+	kwe = ksyn_queue_find_cvpreposeq(kq, lockseq);
+
+	if (kwe != NULL) {
+		switch (kwe->kwe_flags) {
+
+		case KWE_THREAD_INWAIT:
+			ksyn_wqunlock(ckwq);
+			__FAILEDUSERTEST__("cvwait: thread entry with same sequence already present\n");
+			local_error = EBUSY;
+			goto out;
+
+		case KWE_THREAD_BROADCAST:
+			break;
+
+		case KWE_THREAD_PREPOST:
+			if ((kwe->kwe_lockseq & PTHRW_COUNT_MASK) == lockseq) {
+				/* we can safely consume a reference, so do so */
+				if (--kwe->kwe_count == 0) {
+					ksyn_queue_removeitem(ckwq, kq, kwe);
+					ckwq->kw_fakecount--;
+					nkwe = kwe;
+				}
+			} else {
+				/*
+				 * consuming a prepost higher than our lock sequence is valid, but
+				 * can leave the higher thread without a match. Convert the entry 
+				 * to a broadcast to compensate for this.
+				 */
 #if _PSYNCH_TRACE_
-		KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_NONE, (uint32_t)cond, 0, 1, 0, 0);
+				__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_NONE, (uint32_t)ckwq->kw_addr, 0xc2c2c2c2, kwe->kwe_lockseq, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
+				
+				ksyn_handle_cvbroad(ckwq, kwe->kwe_lockseq, &updatebits);
+#if __TESTPANICS__
+				if (updatebits != 0)
+					panic("psync_cvwait: convert pre-post to broadcast: woke up %d threads that shouldn't be there\n",
+					      updatebits);
+#endif /* __TESTPANICS__ */
+			}
+
+			break;
 			
-#if  COND_MTX_WAITQUEUEMOVE
-		updatebits = ckwq->kw_pre_cvretval | PTHRW_MTX_NONE;
-#else /* COND_MTX_WAITQUEUEMOVE */
-		updatebits = 0;
-#endif /* COND_MTX_WAITQUEUEMOVE */
-		ckwq->kw_pre_rwwc--;
-		if (ckwq->kw_pre_rwwc == 0)
-			CLEAR_PREPOST_BITS(ckwq);
-		*retval = updatebits;
-		error = 0;
-		ksyn_wqunlock(ckwq);
-		goto out;
-		
-	} else {
+		default:
+			panic("psync_cvwait: unexpected wait queue element type\n");
+		}
+
 #if _PSYNCH_TRACE_
-		KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_NONE, (uint32_t)cond, 0, 2, cgen, 0);
+                                __PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_NONE, (uint32_t)ckwq->kw_addr, 0xfefefefe, kwe->kwe_lockseq, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
-		error = ksyn_queue_insert(ckwq, &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER], cgen, uth, FIRSTFIT);
-		if (error != 0)
-			panic("psynch_cvwait: failed to enqueue\n");
-		error = ksyn_block_thread_locked(ckwq, abstime, uth);
-		/* drops the lock */
+
+
+		updatebits = PTHRW_INC;
+		ckwq->kw_sword += PTHRW_INC;
+
+		/* set C or P bits and free if needed */
+		ksyn_cvupdate_fixup(ckwq, &updatebits, &kfreeq, 1);
+
+		error = 0;
+		local_error = 0;
+
+		*retval = updatebits;
+
+		ksyn_wqunlock(ckwq);
+
+		if (nkwe != NULL)
+			zfree(kwe_zone, nkwe);
+
+		goto out;
+
 	}
+		
+	uth = current_uthread();
+	kwe = &uth->uu_kwe;
+	kwe->kwe_kwqqueue = ckwq;
+	kwe->kwe_flags = KWE_THREAD_INWAIT;
+	kwe->kwe_lockseq = lockseq;
+	kwe->kwe_count = 1;
+	kwe->kwe_uth = uth;
+	kwe->kwe_psynchretval = 0;
+
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_NONE, (uint32_t)ckwq->kw_addr, 0xfeedfeed, cgen, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+
+	error = ksyn_queue_insert(ckwq, kq, cgen, uth, kwe, SEQFIT);
+	if (error != 0) {
+		ksyn_wqunlock(ckwq);
+		local_error = error;
+		goto out;
+	}
+
+#if 0 /* __TESTPANICS__ */
+	/* if no timeout  is passed, set 5 secs timeout to catch hangs */
+	error = ksyn_block_thread_locked(ckwq, (abstime == 0) ? ntime : abstime, kwe, 1);
+#else
+	error = ksyn_block_thread_locked(ckwq, abstime, kwe, 1);
+#endif /* __TESTPANICS__ */
+	/* lock dropped */
+
 	
+	local_error = error;
 	if (error != 0) {
 		ksyn_wqlock(ckwq);
-#if _PSYNCH_TRACE_
-		KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_NONE, (uint32_t)cond, 0, 3, error, 0);
-#endif /* _PSYNCH_TRACE_ */
-		if (uth->uu_kwqqueue != NULL) {
-			ksyn_queue_removeitem(ckwq, &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER], uth);
+		/* just in case it got woken up as we were granting */
+		*retval = kwe->kwe_psynchretval;
+
+#if __TESTPANICS__
+		if ((kwe->kwe_kwqqueue != NULL) && (kwe->kwe_kwqqueue != ckwq))
+			panic("cvwait waiting on some other kwq\n");
+
+#endif /* __TESTPANICS__ */
+
+
+		if (kwe->kwe_kwqqueue != NULL) {
+			ksyn_queue_removeitem(ckwq, &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER], kwe);
+			kwe->kwe_kwqqueue = NULL;
+		}
+		if ((kwe->kwe_psynchretval & PTH_RWL_MTX_WAIT) != 0) {
+		/* the condition var granted.
+			 * reset the error so that the thread returns back.
+			 */
+			local_error = 0;
+			/* no need to set any bits just return as cvsig/broad covers this */
+			ksyn_wqunlock(ckwq);
+			*retval = 0;
+			goto out;
+		}
+
+		ckwq->kw_sword += PTHRW_INC;
+	
+		/* set C and P bits, in the local error as well as updatebits */
+		if ((ckwq->kw_lword & PTHRW_COUNT_MASK) == (ckwq->kw_sword & PTHRW_COUNT_MASK)) {
+			updatebits |= PTH_RWS_CV_CBIT;
+			local_error |= ECVCERORR;
+			if (ckwq->kw_inqueue != 0) {
+				(void)ksyn_queue_move_tofree(ckwq, kq, (ckwq->kw_lword & PTHRW_COUNT_MASK), &kfreeq, 1, 1);
+			}
+			ckwq->kw_lword = ckwq->kw_uword = ckwq->kw_sword = 0;
+			ckwq->kw_kflags |= KSYN_KWF_ZEROEDOUT;
+		} else {
+			/* everythig in the queue is a fake entry ? */
+			if ((ckwq->kw_inqueue != 0) && (ckwq->kw_fakecount == ckwq->kw_inqueue)) {
+				updatebits |= PTH_RWS_CV_PBIT; 
+				local_error |= ECVPERORR;
+			}
 		}
 		ksyn_wqunlock(ckwq);
+		
 	} else  {
-		*retval = uth->uu_psynchretval;
-
+		/* PTH_RWL_MTX_WAIT is removed */
+		if ((kwe->kwe_psynchretval & PTH_RWS_CV_MBIT)  != 0)
+			*retval = PTHRW_INC | PTH_RWS_CV_CBIT;
+		else
+			*retval = 0;
+		local_error = 0;
 	}
 out:
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_END, (uint32_t)cond, 0, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_END, (uint32_t)cond, 0xeeeeeeed, (uint32_t)*retval, local_error, 0);
 #endif /* _PSYNCH_TRACE_ */
-	ksyn_wqrelease(ckwq, NULL);
-	return(error);
+	ksyn_wqrelease(ckwq, NULL, 1, (KSYN_WQTYPE_INWAIT | KSYN_WQTYPE_CVAR));
+	return(local_error);
+}
+
+/*
+ *  psynch_cvclrprepost: This system call clears pending prepost if present.
+ */
+int
+psynch_cvclrprepost(__unused proc_t p, struct psynch_cvclrprepost_args * uap, __unused int * retval)
+{
+	user_addr_t cond  = uap->cv;
+	uint32_t cgen = uap->cvgen;
+	uint32_t cugen = uap->cvugen;
+	uint32_t csgen = uap->cvsgen;
+	uint32_t pseq = uap->preposeq;
+	uint32_t flags = uap->flags;
+	int error;
+	ksyn_wait_queue_t ckwq = NULL;
+	struct ksyn_queue  kfreeq;
+
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CLRPRE | DBG_FUNC_START, (uint32_t)cond, cgen, cugen, csgen, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CLRPRE | DBG_FUNC_NONE, (uint32_t)cond, 0xcececece, pseq, flags, 0);
+#endif /* _PSYNCH_TRACE_ */
+
+	if ((flags & _PTHREAD_MTX_OPT_MUTEX) == 0) {
+		error = ksyn_wqfind(cond, cgen, cugen, csgen, 0, flags, (KSYN_WQTYPE_CVAR | KSYN_WQTYPE_INDROP), &ckwq);
+		if (error != 0)  {
+			*retval = 0;	
+#if _PSYNCH_TRACE_
+			__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CLRPRE | DBG_FUNC_END, (uint32_t)cond, 0, 0xdeadbeef, error, 0);
+#endif /* _PSYNCH_TRACE_ */
+			return(error);
+		}
+
+		ksyn_wqlock(ckwq);
+		(void)ksyn_queue_move_tofree(ckwq, &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER], (pseq & PTHRW_COUNT_MASK), &kfreeq, 0, 1); 
+		ksyn_wqunlock(ckwq);
+		ksyn_wqrelease(ckwq, NULL, 1, (KSYN_WQTYPE_CVAR | KSYN_WQTYPE_INDROP));
+	} else {
+		/* mutex type */
+		error = ksyn_wqfind(cond, cgen, cugen, 0, 0, flags, (KSYN_WQTYPE_MTX | KSYN_WQTYPE_INDROP), &ckwq);
+		if (error != 0)  {
+			*retval = 0;	
+#if _PSYNCH_TRACE_
+			__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CLRPRE | DBG_FUNC_END, (uint32_t)cond, 0, 0xdeadbeef, error, 0);
+#endif /* _PSYNCH_TRACE_ */
+			return(error);
+		}
+
+		ksyn_wqlock(ckwq);
+		if (((flags & _PTHREAD_MUTEX_POLICY_FIRSTFIT) != 0) && (ckwq->kw_pre_rwwc != 0)) {
+			if (is_seqlower_eq(ckwq->kw_pre_lockseq, cgen) != 0) {
+				/* clear prepost */
+				ckwq->kw_pre_rwwc = 0;
+				ckwq->kw_pre_lockseq = 0;
+			}
+		}
+		ksyn_wqunlock(ckwq);
+		ksyn_wqrelease(ckwq, NULL, 1, (KSYN_WQTYPE_MTX | KSYN_WQTYPE_INDROP));
+	}
+
+#if _PSYNCH_TRACE_
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CLRPRE | DBG_FUNC_END, (uint32_t)cond, 0xeeeeeeed, 0, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+	return(0);
 }
 
 /* ***************** pthread_rwlock ************************ */
@@ -1182,28 +1518,49 @@ psynch_rw_rdlock(__unused proc_t p, struct psynch_rw_rdlock_args * uap, uint32_t
 	//uint64_t tid = uap->tid;
 	int flags = uap->flags;
 	int error = 0, block;
-	uint32_t lockseq = 0, updatebits = 0, preseq = 0;
+	uint32_t lockseq = 0, updatebits = 0, preseq = 0, prerw_wc = 0;
 	ksyn_wait_queue_t kwq;
 	uthread_t uth;
+	int isinit = lgen & PTHRW_RWL_INIT;
+	uint32_t returnbits  = 0;
+	ksyn_waitq_element_t kwe;
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
 #endif /* _PSYNCH_TRACE_ */
 	uth = current_uthread();
 
 	/* preserve the seq number */
-	uth->uu_lockseq = lgen;
+	kwe = &uth->uu_kwe;
+	kwe->kwe_lockseq = lgen;
+	kwe->kwe_uth = uth;
+	kwe->kwe_psynchretval = 0;
+	kwe->kwe_kwqqueue = NULL;
+	
 	lockseq = lgen  & PTHRW_COUNT_MASK;
+
 
 	error = ksyn_wqfind(rwlock, lgen, ugen, rw_wc, TID_ZERO, flags, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_RWLOCK), &kwq);
 	if (error != 0)  {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 		return(error);
 	}
 	
 	ksyn_wqlock(kwq);
+
+	if (isinit != 0) {
+		lgen &= ~PTHRW_RWL_INIT;
+		if ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) == 0) {
+			/* first to notice the reset of the lock, clear preposts */
+                	CLEAR_REINIT_BITS(kwq);
+			kwq->kw_kflags |= KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 1, 0);
+#endif /* _PSYNCH_TRACE_ */
+		}
+	}
 
 	/* handle first the missed wakeups */
 	if ((kwq->kw_pre_intrcount != 0) && 
@@ -1211,38 +1568,56 @@ psynch_rw_rdlock(__unused proc_t p, struct psynch_rw_rdlock_args * uap, uint32_t
 		(is_seqlower_eq(lockseq, (kwq->kw_pre_intrseq & PTHRW_COUNT_MASK)) != 0)) {
 
 		kwq->kw_pre_intrcount--;
-		uth->uu_psynchretval = kwq->kw_pre_intrretbits;
+		kwe->kwe_psynchretval = kwq->kw_pre_intrretbits;
 		if (kwq->kw_pre_intrcount==0) 
 			CLEAR_INTR_PREPOST_BITS(kwq);	
 		ksyn_wqunlock(kwq);
 		goto out;
 	}
 
-	/* handle unlock2/downgrade first */
-	if ((kwq->kw_pre_limrd != 0) && (is_seqlower_eq(lockseq, (kwq->kw_pre_limrdseq & PTHRW_COUNT_MASK)) != 0)) {
+	/* handle overlap first as they are not counted against pre_rwwc */
+
+	/* check for overlap and if no pending W bit (indicates writers) */
+	if ((kwq->kw_overlapwatch != 0) && ((rw_wc & PTHRW_RWS_SAVEMASK) == 0) && ((lgen & PTH_RWL_WBIT) == 0)) { 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 1, kwq->kw_pre_limrd, kwq->kw_pre_limrdseq, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 10, kwq->kw_nextseqword, kwq->kw_lastseqword, 0);
 #endif /* _PSYNCH_TRACE_ */
-		kwq->kw_pre_limrd--;
-		/* acquired the locks, so return */
-		uth->uu_psynchretval = kwq->kw_pre_limrdbits;
-		if (kwq->kw_pre_limrd == 0)
-			CLEAR_READ_PREPOST_BITS(kwq);
-		ksyn_wqunlock(kwq);
-		goto out;
+		error = kwq_handle_overlap(kwq, lgen, ugen, rw_wc, &updatebits, (KW_UNLOCK_PREPOST_READLOCK|KW_UNLOCK_PREPOST), &block);
+#if __TESTPANICS__
+		if (error != 0)
+			panic("rw_rdlock: kwq_handle_overlap failed %d\n",error);
+#endif /* __TESTPANICS__ */
+		if (block == 0) {
+			error = 0;
+			kwe->kwe_psynchretval = updatebits;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 0xff, updatebits, 0xee, 0);
+#endif /* _PSYNCH_TRACE_ */
+			ksyn_wqunlock(kwq);
+			goto out;
+		}
 	}
 
 	if ((kwq->kw_pre_rwwc != 0) && (is_seqlower_eq(lockseq, (kwq->kw_pre_lockseq & PTHRW_COUNT_MASK)) != 0)) {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 2, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 2, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
 #endif /* _PSYNCH_TRACE_ */
 		kwq->kw_pre_rwwc--;
 		if (kwq->kw_pre_rwwc == 0) {
 			preseq = kwq->kw_pre_lockseq;
+			prerw_wc = kwq->kw_pre_sseq;
 			CLEAR_PREPOST_BITS(kwq);
-			error = kwq_handle_unlock(kwq, preseq,  &updatebits, (KW_UNLOCK_PREPOST_READLOCK|KW_UNLOCK_PREPOST), &block, lgen);
+			if ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) != 0){
+				kwq->kw_kflags &= ~KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+			}
+			error = kwq_handle_unlock(kwq, preseq, prerw_wc, &updatebits, (KW_UNLOCK_PREPOST_READLOCK|KW_UNLOCK_PREPOST), &block, lgen);
+#if __TESTPANICS__
 			if (error != 0)
-				panic("kwq_handle_unlock failed %d\n",error);
+				panic("rw_rdlock: kwq_handle_unlock failed %d\n",error);
+#endif /* __TESTPANICS__ */
 			if (block == 0) {
 				ksyn_wqunlock(kwq);
 				goto out;
@@ -1251,31 +1626,35 @@ psynch_rw_rdlock(__unused proc_t p, struct psynch_rw_rdlock_args * uap, uint32_t
 		}
 	}
 
+
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
-	error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_READ], lgen, uth, SEQFIT);
+	error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_READ], lgen, uth, kwe, SEQFIT);
+#if __TESTPANICS__
 	if (error != 0)
 		panic("psynch_rw_rdlock: failed to enqueue\n");
-	error = ksyn_block_thread_locked(kwq, (uint64_t)0, uth);
+#endif /* __TESTPANICS__ */
+	error = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0);
 	/* drops the kwq lock */
 	
 out:
 	if (error != 0) {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 4, error, 0, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 4, error, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
 		ksyn_wqlock(kwq);
-		if (uth->uu_kwqqueue != NULL)
-			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_READ], uth);
+		if (kwe->kwe_kwqqueue != NULL)
+			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_READ], kwe);
 		ksyn_wqunlock(kwq);
 	} else {
 		/* update bits */
-		*retval = uth->uu_psynchretval;
+		*retval = kwe->kwe_psynchretval;
+		returnbits = kwe->kwe_psynchretval;
 	}
-	ksyn_wqrelease(kwq, NULL); 
+	ksyn_wqrelease(kwq, NULL, 0, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_RWLOCK)); 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, returnbits, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 	return(error);
 }
@@ -1284,7 +1663,7 @@ out:
  *  psynch_rw_longrdlock: This system call is used for psync rwlock long readers to block.
  */
 int
-psynch_rw_longrdlock(__unused proc_t p, struct psynch_rw_longrdlock_args * uap, uint32_t * retval)
+psynch_rw_longrdlock(__unused proc_t p, __unused struct psynch_rw_longrdlock_args * uap,  __unused uint32_t * retval)
 {
 	user_addr_t rwlock  = uap->rwlock;
 	uint32_t lgen = uap->lgenval;
@@ -1292,29 +1671,47 @@ psynch_rw_longrdlock(__unused proc_t p, struct psynch_rw_longrdlock_args * uap, 
 	uint32_t rw_wc = uap->rw_wc;
 	//uint64_t tid = uap->tid;
 	int flags = uap->flags;
+	int isinit = lgen & PTHRW_RWL_INIT;
+	uint32_t returnbits=0;
+	ksyn_waitq_element_t kwe;
 
 	ksyn_wait_queue_t kwq;
 	int error=0, block = 0 ;
 	uthread_t uth;
-	uint32_t lockseq = 0, updatebits = 0, preseq = 0;
+	uint32_t lockseq = 0, updatebits = 0, preseq = 0, prerw_wc = 0;
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
 #endif /* _PSYNCH_TRACE_ */
 	uth = current_uthread();
-
-	uth->uu_lockseq = lgen;
+	kwe = &uth->uu_kwe;
+	kwe->kwe_lockseq = lgen;
+	kwe->kwe_uth = uth;
+	kwe->kwe_psynchretval = 0;
+	kwe->kwe_kwqqueue = NULL;
 	lockseq = (lgen & PTHRW_COUNT_MASK);
-
+	
 	error = ksyn_wqfind(rwlock, lgen, ugen, rw_wc, TID_ZERO, flags, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_RWLOCK), &kwq);
 	if (error != 0)  {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 		return(error);
 	}
 	
 	ksyn_wqlock(kwq);
+
+	if (isinit != 0) {
+		lgen &= ~PTHRW_RWL_INIT;
+		if ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) == 0) {
+			/* first to notice the reset of the lock, clear preposts */
+                	CLEAR_REINIT_BITS(kwq);
+			kwq->kw_kflags |= KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 1, 0);
+#endif /* _PSYNCH_TRACE_ */
+		}
+	}
 
 	/* handle first the missed wakeups */
 	if ((kwq->kw_pre_intrcount != 0) && 
@@ -1322,35 +1719,34 @@ psynch_rw_longrdlock(__unused proc_t p, struct psynch_rw_longrdlock_args * uap, 
 		(is_seqlower_eq(lockseq, (kwq->kw_pre_intrseq & PTHRW_COUNT_MASK)) != 0)) {
 
 		kwq->kw_pre_intrcount--;
-		uth->uu_psynchretval = kwq->kw_pre_intrretbits;
+		kwe->kwe_psynchretval = kwq->kw_pre_intrretbits;
 		if (kwq->kw_pre_intrcount==0) 
 			CLEAR_INTR_PREPOST_BITS(kwq);	
 		ksyn_wqunlock(kwq);
 		goto out;
 	}
 
-	/* handle unlock2/downgrade first */
-	if ((kwq->kw_pre_limrd != 0) && (is_seqlower_eq(lockseq, (kwq->kw_pre_limrdseq & PTHRW_COUNT_MASK)) != 0)) {
-#if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 1, kwq->kw_pre_limrd, kwq->kw_pre_limrdseq, 0);
-#endif /* _PSYNCH_TRACE_ */
-		kwq->kw_pre_limrd--;
-		if (kwq->kw_pre_limrd == 0)
-			CLEAR_READ_PREPOST_BITS(kwq);
-		/* not a read proceed */
-	}
 
 	if ((kwq->kw_pre_rwwc != 0) && (is_seqlower_eq(lockseq, (kwq->kw_pre_lockseq & PTHRW_COUNT_MASK)) != 0)) {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 2, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 2, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
 #endif /* _PSYNCH_TRACE_ */
 		kwq->kw_pre_rwwc--;
 		if (kwq->kw_pre_rwwc == 0) {
 			preseq = kwq->kw_pre_lockseq;
+			prerw_wc = kwq->kw_pre_sseq;
 			CLEAR_PREPOST_BITS(kwq);
-			error = kwq_handle_unlock(kwq, preseq, &updatebits, (KW_UNLOCK_PREPOST_LREADLOCK|KW_UNLOCK_PREPOST), &block, lgen);
+			if ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) != 0){
+				kwq->kw_kflags &= ~KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+			}
+			error = kwq_handle_unlock(kwq, preseq, prerw_wc, &updatebits, (KW_UNLOCK_PREPOST_LREADLOCK|KW_UNLOCK_PREPOST), &block, lgen);
+#if __TESTPANICS__
 			if (error != 0)
 				panic("kwq_handle_unlock failed %d\n",error);
+#endif /* __TESTPANICS__ */
 			if (block == 0) {
 				ksyn_wqunlock(kwq);
 				goto out;
@@ -1360,32 +1756,35 @@ psynch_rw_longrdlock(__unused proc_t p, struct psynch_rw_longrdlock_args * uap, 
 	}
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
-	error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_LREAD], lgen, uth, SEQFIT);
+	error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_LREAD], lgen, uth, kwe, SEQFIT);
+#if __TESTPANICS__
 	if (error != 0)
 		panic("psynch_rw_longrdlock: failed to enqueue\n");
+#endif /* __TESTPANICS__ */
 
-	error = ksyn_block_thread_locked(kwq, (uint64_t)0, uth);
+	error = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0);
 	/* drops the kwq lock */
 out:
 	if (error != 0) {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 		ksyn_wqlock(kwq);
-		if (uth->uu_kwqqueue != NULL)
-			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_LREAD], uth);
+		if (kwe->kwe_kwqqueue != NULL)
+			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_LREAD], kwe);
 		ksyn_wqunlock(kwq);
 	} else {
 		/* update bits */
-		*retval = uth->uu_psynchretval;
+		*retval = kwe->kwe_psynchretval;
+		returnbits = kwe->kwe_psynchretval;
 	}
 
-	ksyn_wqrelease(kwq, NULL); 
+	ksyn_wqrelease(kwq, NULL, 0, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_RWLOCK)); 
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_END, (uint32_t)rwlock, 0, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWLRDLOCK | DBG_FUNC_END, (uint32_t)rwlock, 0, returnbits, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 	return(error);
 }
@@ -1406,25 +1805,45 @@ psynch_rw_wrlock(__unused proc_t p, struct psynch_rw_wrlock_args * uap, uint32_t
 	ksyn_wait_queue_t kwq;
 	int error=0;
 	uthread_t uth;
-	uint32_t lockseq = 0, updatebits = 0, preseq = 0;
+	uint32_t lockseq = 0, updatebits = 0, preseq = 0, prerw_wc = 0;
+	int isinit = lgen & PTHRW_RWL_INIT;
+	uint32_t returnbits  = 0;
+	ksyn_waitq_element_t kwe;
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
 #endif /* _PSYNCH_TRACE_ */
 	uth = current_uthread();
-
-	uth->uu_lockseq = lgen;
+	kwe = &uth->uu_kwe;
+	kwe->kwe_lockseq = lgen;
+	kwe->kwe_uth = uth;
+	kwe->kwe_psynchretval = 0;
+	kwe->kwe_kwqqueue = NULL;
 	lockseq = (lgen & PTHRW_COUNT_MASK);
 
 	error = ksyn_wqfind(rwlock, lgen, ugen, rw_wc, TID_ZERO, flags, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_RWLOCK), &kwq);
 	if (error != 0)  {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 		return(error);
 	}
 	
 	ksyn_wqlock(kwq);
+
+
+	if (isinit != 0) {
+		lgen &= ~PTHRW_RWL_INIT;
+		if ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) == 0) {
+			/* first to notice the reset of the lock, clear preposts */
+                	CLEAR_REINIT_BITS(kwq);
+			kwq->kw_kflags |= KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 1, 0);
+#endif /* _PSYNCH_TRACE_ */
+		}
+	}
+
 
 	/* handle first the missed wakeups */
 	if ((kwq->kw_pre_intrcount != 0) && 
@@ -1432,71 +1851,76 @@ psynch_rw_wrlock(__unused proc_t p, struct psynch_rw_wrlock_args * uap, uint32_t
 		(is_seqlower_eq(lockseq, (kwq->kw_pre_intrseq & PTHRW_COUNT_MASK)) != 0)) {
 
 		kwq->kw_pre_intrcount--;
-		uth->uu_psynchretval = kwq->kw_pre_intrretbits;
+		kwe->kwe_psynchretval = kwq->kw_pre_intrretbits;
 		if (kwq->kw_pre_intrcount==0) 
 			CLEAR_INTR_PREPOST_BITS(kwq);	
 		ksyn_wqunlock(kwq);
 		goto out;
 	}
 
-	/* handle unlock2/downgrade first */
-	if ((kwq->kw_pre_limrd != 0) && (is_seqlower_eq(lockseq, (kwq->kw_pre_limrdseq & PTHRW_COUNT_MASK)) != 0)) {
-#if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 1, kwq->kw_pre_limrd, kwq->kw_pre_limrdseq, 0);
-#endif /* _PSYNCH_TRACE_ */
-		kwq->kw_pre_limrd--;
-		if (kwq->kw_pre_limrd == 0)
-			CLEAR_READ_PREPOST_BITS(kwq);
-		/* not a read proceed */
-	}
 
 	if ((kwq->kw_pre_rwwc != 0) && (is_seqlower_eq(lockseq, (kwq->kw_pre_lockseq & PTHRW_COUNT_MASK)) != 0)) {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 2, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 2, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
 #endif /* _PSYNCH_TRACE_ */
 		kwq->kw_pre_rwwc--;
 		if (kwq->kw_pre_rwwc == 0) {
 			preseq = kwq->kw_pre_lockseq;
+			prerw_wc = kwq->kw_pre_sseq;
 			CLEAR_PREPOST_BITS(kwq);
-			error = kwq_handle_unlock(kwq, preseq, &updatebits, (KW_UNLOCK_PREPOST_WRLOCK|KW_UNLOCK_PREPOST), &block, lgen);
+			if ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) != 0){
+				kwq->kw_kflags &= ~KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+			}
+			error = kwq_handle_unlock(kwq, preseq, prerw_wc, &updatebits, (KW_UNLOCK_PREPOST_WRLOCK|KW_UNLOCK_PREPOST), &block, lgen);
+#if __TESTPANICS__
 			if (error != 0)
-				panic("kwq_handle_unlock failed %d\n",error);
+				panic("rw_wrlock: kwq_handle_unlock failed %d\n",error);
+#endif /* __TESTPANICS__ */
 			if (block == 0) {
 				ksyn_wqunlock(kwq);
-				goto out;
+				*retval = updatebits;
+				goto out1;
 			}
 			/* insert to q and proceed as ususal */
 		} 
 	}
 
+	/* No overlap watch needed  go ahead and block */
+
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
-	error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], lgen, uth, SEQFIT);
+	error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], lgen, uth, kwe, SEQFIT);
+#if __TESTPANICS__
 	if (error != 0)
 		panic("psynch_rw_wrlock: failed to enqueue\n");
+#endif /* __TESTPANICS__ */
 
-	error = ksyn_block_thread_locked(kwq, (uint64_t)0, uth);
+	error = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0);
 	/* drops the wq lock */
 
 out:
 	if (error != 0) {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 4, error, 0, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 4, error, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
 		ksyn_wqlock(kwq);
-		if (uth->uu_kwqqueue != NULL)
-			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], uth);
+		if (kwe->kwe_kwqqueue != NULL)
+			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], kwe);
 		ksyn_wqunlock(kwq);
 	} else  {
 		/* update bits */
-		*retval = uth->uu_psynchretval;
+		*retval = kwe->kwe_psynchretval;
+		returnbits = kwe->kwe_psynchretval;
 	}
-
-	ksyn_wqrelease(kwq, NULL); 
+out1:
+	ksyn_wqrelease(kwq, NULL, 0, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_RWLOCK)); 
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_END, (uint32_t)rwlock, 0, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, returnbits, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 	return(error);
 }
@@ -1505,7 +1929,7 @@ out:
  *  psynch_rw_yieldwrlock: This system call is used for psync rwlock yielding writers to block.
  */
 int
-psynch_rw_yieldwrlock(__unused proc_t p, struct  psynch_rw_yieldwrlock_args * uap, uint32_t * retval)
+psynch_rw_yieldwrlock(__unused proc_t p, __unused struct  psynch_rw_yieldwrlock_args * uap, __unused uint32_t * retval)
 {
 	user_addr_t rwlock  = uap->rwlock;
 	uint32_t lgen = uap->lgenval;
@@ -1516,27 +1940,45 @@ psynch_rw_yieldwrlock(__unused proc_t p, struct  psynch_rw_yieldwrlock_args * ua
 	int block;
 	ksyn_wait_queue_t kwq;
 	int error=0;
+	int isinit = lgen & PTHRW_RWL_INIT;
 	uthread_t uth;
+	uint32_t returnbits=0;
+	ksyn_waitq_element_t kwe;
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
 #endif /* _PSYNCH_TRACE_ */
-	uint32_t lockseq = 0, updatebits = 0, preseq = 0;
+	uint32_t lockseq = 0, updatebits = 0, preseq = 0, prerw_wc = 0;
 
 	uth = current_uthread();
-
-	uth->uu_lockseq = lgen;
+	kwe = &uth->uu_kwe;
+	kwe->kwe_lockseq = lgen;
+	kwe->kwe_uth = uth;
+	kwe->kwe_psynchretval = 0;
+	kwe->kwe_kwqqueue = NULL;
 	lockseq = (lgen & PTHRW_COUNT_MASK);
 
 	error = ksyn_wqfind(rwlock, lgen, ugen, rw_wc, TID_ZERO, flags, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_RWLOCK), &kwq);
 	if (error != 0)  {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 		return(error);
 	}
 	
 	ksyn_wqlock(kwq);
+
+	if (isinit != 0) {
+		lgen &= ~PTHRW_RWL_INIT;
+		if ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) == 0) {
+			/* first to notice the reset of the lock, clear preposts */
+                	CLEAR_REINIT_BITS(kwq);
+			kwq->kw_kflags |= KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 1, 0);
+#endif /* _PSYNCH_TRACE_ */
+		}
+	}
 
 	/* handle first the missed wakeups */
 	if ((kwq->kw_pre_intrcount != 0) && 
@@ -1544,37 +1986,36 @@ psynch_rw_yieldwrlock(__unused proc_t p, struct  psynch_rw_yieldwrlock_args * ua
 		(is_seqlower_eq(lockseq, (kwq->kw_pre_intrseq & PTHRW_COUNT_MASK)) != 0)) {
 
 		kwq->kw_pre_intrcount--;
-		uth->uu_psynchretval = kwq->kw_pre_intrretbits;
+		kwe->kwe_psynchretval = kwq->kw_pre_intrretbits;
 		if (kwq->kw_pre_intrcount==0) 
 			CLEAR_INTR_PREPOST_BITS(kwq);	
 		ksyn_wqunlock(kwq);
 		goto out;
 	}
 
-	/* handle unlock2/downgrade first */
-	if ((kwq->kw_pre_limrd != 0) && (is_seqlower_eq(lockseq, (kwq->kw_pre_limrdseq & PTHRW_COUNT_MASK)) != 0)) {
-#if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 1, kwq->kw_pre_limrd, kwq->kw_pre_limrdseq, 0);
-#endif /* _PSYNCH_TRACE_ */
-		kwq->kw_pre_limrd--;
-		if (kwq->kw_pre_limrd == 0)
-			CLEAR_READ_PREPOST_BITS(kwq);
-		/* not a read proceed */
-	}
-
 	if ((kwq->kw_pre_rwwc != 0) && (is_seqlower_eq(lockseq, (kwq->kw_pre_lockseq & PTHRW_COUNT_MASK)) != 0)) {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 2, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 2, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
 #endif /* _PSYNCH_TRACE_ */
 		kwq->kw_pre_rwwc--;
 		if (kwq->kw_pre_rwwc == 0) {
 			preseq = kwq->kw_pre_lockseq;
+			prerw_wc = kwq->kw_pre_sseq;
 			CLEAR_PREPOST_BITS(kwq);
-			error = kwq_handle_unlock(kwq, preseq,  &updatebits, (KW_UNLOCK_PREPOST_YWRLOCK|KW_UNLOCK_PREPOST), &block, lgen);
+			if ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) != 0){
+				kwq->kw_kflags &= ~KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+			}
+			error = kwq_handle_unlock(kwq, preseq,  prerw_wc, &updatebits, (KW_UNLOCK_PREPOST_YWRLOCK|KW_UNLOCK_PREPOST), &block, lgen);
+#if __TESTPANICS__
 			if (error != 0)
 				panic("kwq_handle_unlock failed %d\n",error);
+#endif /* __TESTPANICS__ */
 			if (block == 0) {
 				ksyn_wqunlock(kwq);
+				*retval = updatebits;
 				goto out;
 			}
 			/* insert to q and proceed as ususal */
@@ -1582,37 +2023,40 @@ psynch_rw_yieldwrlock(__unused proc_t p, struct  psynch_rw_yieldwrlock_args * ua
 	}
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
-	error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_YWRITER], lgen, uth, SEQFIT);
+	error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_YWRITER], lgen, uth, kwe, SEQFIT);
+#if __TESTPANICS__
 	if (error != 0)
 		panic("psynch_rw_yieldwrlock: failed to enqueue\n");
+#endif /* __TESTPANICS__ */
 
-	error = ksyn_block_thread_locked(kwq, (uint64_t)0, uth);
+	error = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0);
 
 out:
 	if (error != 0) {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 4, error, 0, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 4, error, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
 		ksyn_wqlock(kwq);
-		if (uth->uu_kwqqueue != NULL)
-			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_YWRITER], uth);
+		if (kwe->kwe_kwqqueue != NULL)
+			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_YWRITER], kwe);
 		ksyn_wqunlock(kwq);
 	} else  {
 		/* update bits */
-		*retval = uth->uu_psynchretval;
+		*retval = kwe->kwe_psynchretval;
+		returnbits = kwe->kwe_psynchretval;
 	}
 
-	ksyn_wqrelease(kwq, NULL); 
+	ksyn_wqrelease(kwq, NULL, 0, (KSYN_WQTYPE_INWAIT | KSYN_WQTYPE_RWLOCK)); 
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, returnbits, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 	return(error);
 }
 
-
+#if NOTYET
 /*
  *  psynch_rw_downgrade: This system call is used for wakeup blocked readers who are eligible to run due to downgrade.
  */
@@ -1626,72 +2070,93 @@ psynch_rw_downgrade(__unused proc_t p, struct psynch_rw_downgrade_args * uap, __
 	//uint64_t tid = uap->tid;
 	int flags = uap->flags;
 	uint32_t count = 0;
-
+	int isinit = lgen & PTHRW_RWL_INIT;
 	ksyn_wait_queue_t kwq;
 	int error=0;
 	uthread_t uth;
 	uint32_t curgen = 0;
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWDOWNGRADE | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWDOWNGRADE | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
 #endif /* _PSYNCH_TRACE_ */
 	uth = current_uthread();
 
 	curgen = (lgen & PTHRW_COUNT_MASK);
 
-	error = ksyn_wqfind(rwlock, lgen, ugen, rw_wc, TID_ZERO, flags, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_RWLOCK), &kwq);
+	error = ksyn_wqfind(rwlock, lgen, ugen, rw_wc, TID_ZERO, flags, (KSYN_WQTYPE_INDROP | KSYN_WQTYPE_RWLOCK), &kwq);
 	if (error != 0)  {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWDOWNGRADE | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWDOWNGRADE | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 		return(error);
 	}
 	
 	ksyn_wqlock(kwq);
 	
-	if (is_seqlower(ugen, kwq->kw_lastunlockseq)!= 0) {
+	if ((lgen & PTHRW_RWL_INIT) != 0) {
+		lgen &= ~PTHRW_RWL_INIT;
+		if ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) == 0){
+			CLEAR_REINIT_BITS(kwq);
+			kwq->kw_kflags |= KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 1, 0);
+#endif /* _PSYNCH_TRACE_ */
+		}
+		isinit = 1;
+	} 
+
+	/* if lastunlock seq is set, ensure the current one is not lower than that, as it would be spurious */
+	if ((kwq->kw_lastunlockseq != PTHRW_RWL_INIT) && (is_seqlower(ugen, kwq->kw_lastunlockseq)!= 0)) {
 		/* spurious  updatebits?? */
+		error = 0;
 		goto out;
 	}
-	/* fast path for default case */
-	if((rw_wc == kwq->kw_inqueue) && (kwq->kw_highseq == curgen))
-		goto dounlock;
 
-	/* have we seen all the waiters? */
-	if(rw_wc > kwq->kw_inqueue) {
-		goto prepost;
+
+
+	/* If L-U != num of waiters, then it needs to be preposted or spr */
+	diff = find_diff(lgen, ugen);
+	/* take count of  the downgrade thread itself */
+	diff--;
+
+
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 1, kwq->kw_inqueue, curgen, 0);
+#endif /* _PSYNCH_TRACE_ */
+	if (find_seq_till(kwq, curgen, diff, &count) == 0) {
+		if (count < (uint32_t)diff)
+			goto prepost;
 	}
-		
-	if (is_seqhigher(curgen, kwq->kw_highseq) != 0) {
-		goto prepost;
-	} else {
-		if (find_seq_till(kwq, curgen, rw_wc, &count) == 0) {
-			if (count < rw_wc) {
-				kwq->kw_pre_limrd = rw_wc - count;
-				kwq->kw_pre_limrdseq = lgen;
-				kwq->kw_pre_limrdbits = lgen;
-				/* found none ? */
-				if (count == 0) 
-					goto out;
-			}
-		} 
+
+	/* no prepost and all threads are in place, reset the bit */
+	if ((isinit != 0) && ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) != 0)){
+		kwq->kw_kflags &= ~KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
 	}
+
+	/* can handle unlock now */
 		
+	CLEAR_PREPOST_BITS(kwq);
+
 dounlock:		
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWDOWNGRADE | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWDOWNGRADE | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
 	error = kwq_handle_downgrade(kwq, lgen, 0, 0, NULL);
 
+#if __TESTPANICS__
 	if (error != 0)
 		panic("psynch_rw_downgrade: failed to wakeup\n");
+#endif /* __TESTPANICS__ */
 
 out:
 	ksyn_wqunlock(kwq);
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWDOWNGRADE | DBG_FUNC_END, (uint32_t)rwlock, 0, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWDOWNGRADE | DBG_FUNC_END, (uint32_t)rwlock, 0, 0, error, 0);
 #endif /* _PSYNCH_TRACE_ */
-	ksyn_wqrelease(kwq, NULL); 
+	ksyn_wqrelease(kwq, NULL, 0, (KSYN_WQTYPE_INDROP | KSYN_WQTYPE_RWLOCK)); 
 
 	return(error);
 		
@@ -1699,7 +2164,7 @@ prepost:
 	kwq->kw_pre_rwwc = (rw_wc - count);
 	kwq->kw_pre_lockseq = lgen;
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWDOWNGRADE | DBG_FUNC_NONE, (uint32_t)rwlock, 1, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWDOWNGRADE | DBG_FUNC_NONE, (uint32_t)rwlock, 1, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
 #endif /* _PSYNCH_TRACE_ */
 	error = 0;
 	goto out;
@@ -1723,32 +2188,49 @@ psynch_rw_upgrade(__unused proc_t p, struct psynch_rw_upgrade_args * uap, uint32
 	int error=0;
 	uthread_t uth;
 	uint32_t lockseq = 0, updatebits = 0, preseq = 0;
+	int isinit = lgen & PTHRW_RWL_INIT;
+	ksyn_waitq_element_t kwe;
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUPGRADE | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUPGRADE | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
 #endif /* _PSYNCH_TRACE_ */
 	uth = current_uthread();
-
-	uth->uu_lockseq = lgen;
+	kwe = &uth->uu_kwe;
+	kwe->kwe_lockseq = lgen;
+	kwe->kwe_uth = uth;
+	kwe->kwe_psynchretval = 0;
+	kwe->kwe_kwqqueue = NULL;
 	lockseq = (lgen & PTHRW_COUNT_MASK);
-
-	error = ksyn_wqfind(rwlock, lgen, ugen, rw_wc, TID_ZERO, flags, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_RWLOCK), &kwq);
+	
+	error = ksyn_wqfind(rwlock, lgen, ugen, rw_wc, TID_ZERO, flags, (KSYN_WQTYPE_INWAIT | KSYN_WQTYPE_RWLOCK), &kwq);
 	if (error != 0)  {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUPGRADE | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUPGRADE | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 		return(error);
 	}
 	
 	ksyn_wqlock(kwq);
-	
+
+	if (isinit != 0) {
+		lgen &= ~PTHRW_RWL_INIT;
+		if ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) == 0) {
+			/* first to notice the reset of the lock, clear preposts */
+                	CLEAR_REINIT_BITS(kwq);
+			kwq->kw_kflags |= KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 1, 0);
+#endif /* _PSYNCH_TRACE_ */
+		}
+	}
+
 	/* handle first the missed wakeups */
 	if ((kwq->kw_pre_intrcount != 0) && 
-		(kwq->kw_pre_intrtype == PTH_RW_TYPE_UPGRADE) && 
+		((kwq->kw_pre_intrtype == PTH_RW_TYPE_READ) || (kwq->kw_pre_intrtype == PTH_RW_TYPE_LREAD)) && 
 		(is_seqlower_eq(lockseq, (kwq->kw_pre_intrseq & PTHRW_COUNT_MASK)) != 0)) {
 
 		kwq->kw_pre_intrcount--;
-		uth->uu_psynchretval = kwq->kw_pre_intrretbits;
+		kwe->kwe_psynchretval = kwq->kw_pre_intrretbits;
 		if (kwq->kw_pre_intrcount==0) 
 			CLEAR_INTR_PREPOST_BITS(kwq);	
 		ksyn_wqunlock(kwq);
@@ -1757,15 +2239,24 @@ psynch_rw_upgrade(__unused proc_t p, struct psynch_rw_upgrade_args * uap, uint32
 
 	if ((kwq->kw_pre_rwwc != 0) && (is_seqlower_eq(lockseq, (kwq->kw_pre_lockseq & PTHRW_COUNT_MASK)) != 0)) {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUPGRADE | DBG_FUNC_NONE, (uint32_t)rwlock, 2, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 2, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
 #endif /* _PSYNCH_TRACE_ */
 		kwq->kw_pre_rwwc--;
 		if (kwq->kw_pre_rwwc == 0) {
 			preseq = kwq->kw_pre_lockseq;
+			prerw_wc = kwq->kw_pre_sseq;
 			CLEAR_PREPOST_BITS(kwq);
-			error = kwq_handle_unlock(kwq, preseq, &updatebits, (KW_UNLOCK_PREPOST_UPGRADE|KW_UNLOCK_PREPOST), &block, lgen);
+			if ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) != 0){
+				kwq->kw_kflags &= ~KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+			}
+			error = kwq_handle_unlock(kwq, preseq, prerw_wc, &updatebits, (KW_UNLOCK_PREPOST_UPGRADE|KW_UNLOCK_PREPOST), &block, lgen);
+#if __TESTPANICS__
 			if (error != 0)
-				panic("kwq_handle_unlock failed %d\n",error);
+				panic("rw_rdlock: kwq_handle_unlock failed %d\n",error);
+#endif /* __TESTPANICS__ */
 			if (block == 0) {
 				ksyn_wqunlock(kwq);
 				goto out;
@@ -1776,37 +2267,52 @@ psynch_rw_upgrade(__unused proc_t p, struct psynch_rw_upgrade_args * uap, uint32
 	
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUPGRADE | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUPGRADE | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
-	error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_UPGRADE], lgen, uth, SEQFIT);
+	error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_UPGRADE], lgen, uth, kwe, SEQFIT);
+#if __TESTPANICS__
 	if (error != 0)
 		panic("psynch_rw_upgrade: failed to enqueue\n");
+#endif /* __TESTPANICS__ */
 
 
-	error = ksyn_block_thread_locked(kwq, (uint64_t)0, uth);
+	error = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0);
 	/* drops the lock */
 	
 out:
 	if (error != 0) {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUPGRADE | DBG_FUNC_NONE, (uint32_t)rwlock, 4, error, 0, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUPGRADE | DBG_FUNC_NONE, (uint32_t)rwlock, 4, error, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
 		ksyn_wqlock(kwq);
-		if (uth->uu_kwqqueue != NULL)
-			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_UPGRADE], uth);
+		if (kwe->kwe_kwqqueue != NULL)
+			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_UPGRADE], kwe);
 		ksyn_wqunlock(kwq);
 	} else {
 		/* update bits */
-		*retval = uth->uu_psynchretval;
+		*retval = kwe->kwe_psynchretval;
 	}
 
-	ksyn_wqrelease(kwq, NULL); 
+	ksyn_wqrelease(kwq, NULL, 0, (KSYN_WQTYPE_INWAIT | KSYN_WQTYPE_RWLOCK)); 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUPGRADE | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUPGRADE | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
 #endif /* _PSYNCH_TRACE_ */
+
 	return(error);
 }
 
+#else /* NOTYET */
+int
+psynch_rw_upgrade(__unused proc_t p, __unused struct psynch_rw_upgrade_args * uap, __unused uint32_t * retval)
+{
+	return(0);
+}
+int
+psynch_rw_downgrade(__unused proc_t p, __unused struct psynch_rw_downgrade_args * uap, __unused int * retval)
+{
+	return(0);
+}
+#endif /* NOTYET */
 /*
  *  psynch_rw_unlock: This system call is used for unlock state postings. This will grant appropriate
  *			reader/writer variety lock.
@@ -1825,19 +2331,20 @@ psynch_rw_unlock(__unused proc_t p, struct psynch_rw_unlock_args  * uap, uint32_
 	uthread_t uth;
 	ksyn_wait_queue_t kwq;
 	uint32_t updatebits = 0;
-	int error=0;
+	int error=0, diff;
 	uint32_t count = 0;
+	int isinit = 0;
 	
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
 #endif /* _PSYNCH_TRACE_ */
 	uth = current_uthread();
 
-	error = ksyn_wqfind(rwlock, lgen, ugen, rw_wc, TID_ZERO, flags, (KSYN_WQTYPE_RWLOCK), &kwq);
+	error = ksyn_wqfind(rwlock, lgen, ugen, rw_wc, TID_ZERO, flags, (KSYN_WQTYPE_INDROP | KSYN_WQTYPE_RWLOCK), &kwq);
 	if (error != 0)  {
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 		return(error);
 	}
@@ -1846,59 +2353,87 @@ psynch_rw_unlock(__unused proc_t p, struct psynch_rw_unlock_args  * uap, uint32_
 
 	ksyn_wqlock(kwq);
 
-	if ((lgen & PTHRW_RW_INIT) != 0) {
-		kwq->kw_lastunlockseq = 0;
-		lgen &= ~PTHRW_RW_INIT;
-	} else if (is_seqlower(ugen, kwq->kw_lastunlockseq) != 0) {
-		/* spurious  updatebits  set */
-		updatebits = PTHRW_RW_SPURIOUS;
+	if ((lgen & PTHRW_RWL_INIT) != 0) {
+		lgen &= ~PTHRW_RWL_INIT;
+		if ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) == 0){
+			CLEAR_REINIT_BITS(kwq);
+			kwq->kw_kflags |= KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 1, 0);
+#endif /* _PSYNCH_TRACE_ */
+		}
+		isinit = 1;
+	} 
+
+	/* if lastunlock seq is set, ensure the current one is not lower than that, as it would be spurious */
+	if ((kwq->kw_lastunlockseq != PTHRW_RWL_INIT) && (is_seqlower(ugen, kwq->kw_lastunlockseq)!= 0)) {
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, (uint32_t)0xeeeeeeee, rw_wc, kwq->kw_lastunlockseq, 0);
+#endif /* _PSYNCH_TRACE_ */
+		error = 0;
 		goto out;
 	}
 
+	/* If L-U != num of waiters, then it needs to be preposted or spr */
+	diff = find_diff(lgen, ugen);
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 1, kwq->kw_inqueue, curgen, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 1, kwq->kw_inqueue, curgen, 0);
 #endif /* _PSYNCH_TRACE_ */
-	if (find_seq_till(kwq, curgen, rw_wc, &count) == 0) {
-		if (count < rw_wc)
+	if (find_seq_till(kwq, curgen, diff, &count) == 0) {
+		if ((count == 0) || (count < (uint32_t)diff))
 			goto prepost;
 	}
 
+	/* no prepost and all threads are in place, reset the bit */
+	if ((isinit != 0) && ((kwq->kw_kflags & KSYN_KWF_INITCLEARED) != 0)){
+		kwq->kw_kflags &= ~KSYN_KWF_INITCLEARED;
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, lgen, ugen, rw_wc, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+	}
 
 	/* can handle unlock now */
 		
 	CLEAR_PREPOST_BITS(kwq);
-	kwq->kw_lastunlockseq = ugen;
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 2, 0, 0, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 2, 0, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
-	error = kwq_handle_unlock(kwq, lgen, &updatebits, 0, NULL, 0);
+	error = kwq_handle_unlock(kwq, lgen, rw_wc,  &updatebits, 0, NULL, 0);
+#if __TESTPANICS__
 	if (error != 0)
 		panic("psynch_rw_unlock: kwq_handle_unlock failed %d\n",error);
+#endif /* __TESTPANICS__ */
 out:
 	if (error == 0) {
 		/* update bits?? */
 		*retval = updatebits;
 	}
+
+
 	ksyn_wqunlock(kwq);
 
-	ksyn_wqrelease(kwq, NULL); 
+	ksyn_wqrelease(kwq, NULL, 0, (KSYN_WQTYPE_INDROP | KSYN_WQTYPE_RWLOCK)); 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_END, (uint32_t)rwlock, 0, 0, error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_END, (uint32_t)rwlock, 0, updatebits, error, 0);
 #endif /* _PSYNCH_TRACE_ */
 
 	return(error);
 		
 prepost:
-	kwq->kw_pre_rwwc = (rw_wc - count);
-	kwq->kw_pre_lockseq = curgen;
-	kwq->kw_lastunlockseq = ugen;
+	/* update if the new seq is higher than prev prepost, or first set */
+	if ((is_rws_setseq(kwq->kw_pre_sseq) != 0) || 
+			(is_seqhigher_eq((rw_wc & PTHRW_COUNT_MASK), (kwq->kw_pre_sseq & PTHRW_COUNT_MASK)) != 0)) {
+		kwq->kw_pre_rwwc = (diff - count);
+		kwq->kw_pre_lockseq = curgen;
+		kwq->kw_pre_sseq = rw_wc;
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 3, rw_wc, count, 0);
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 4, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 3, rw_wc, count, 0);
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUNLOCK | DBG_FUNC_NONE, (uint32_t)rwlock, 4, kwq->kw_pre_rwwc, kwq->kw_pre_lockseq, 0);
 #endif /* _PSYNCH_TRACE_ */
-	updatebits = (lgen | PTHRW_RW_SPURIOUS);/* let this not do unlock handling */
+		updatebits = lgen;	/* let this not do unlock handling */
+	}
 	error = 0;
 	goto out;
 }
@@ -1909,86 +2444,9 @@ prepost:
  *			  to new reader arrival races
  */
 int
-psynch_rw_unlock2(__unused proc_t p, struct psynch_rw_unlock2_args  * uap, uint32_t * retval)
+psynch_rw_unlock2(__unused proc_t p, __unused struct psynch_rw_unlock2_args  * uap, __unused uint32_t * retval)
 {
-	user_addr_t rwlock  = uap->rwlock;
-	uint32_t lgen = uap->lgenval;
-	uint32_t ugen = uap->ugenval;
-	uint32_t rw_wc = uap->rw_wc;
-	//uint64_t tid = uap->tid;
-	int flags = uap->flags;
-	uthread_t uth;
-	uint32_t num_lreader, limitread, curgen, updatebits;
-	ksyn_wait_queue_t kwq;
-	int error=0, longreadset = 0;
-	int diff;
-	uint32_t count=0;
-
-#if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUNLOCK2 | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
-#endif /* _PSYNCH_TRACE_ */
-	uth = current_uthread();
-
-	error = ksyn_wqfind(rwlock, lgen, ugen, rw_wc, TID_ZERO, flags, (KSYN_WQTYPE_RWLOCK), &kwq);
-	if (error != 0)  {
-#if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUNLOCK2 | DBG_FUNC_END, (uint32_t)rwlock, 1, 0, error, 0);
-#endif /* _PSYNCH_TRACE_ */
-		return(error);
-	}
-	
-	ksyn_wqlock(kwq);
-
-	curgen = (lgen & PTHRW_COUNT_MASK);	
-	diff = find_diff(lgen, ugen);
-
-	limitread = lgen & PTHRW_COUNT_MASK;
-
-	if (find_seq_till(kwq, curgen, diff, &count) == 0) {
-		kwq->kw_pre_limrd = diff - count;
-		kwq->kw_pre_limrdseq = lgen;
-		kwq->kw_pre_limrdbits = lgen;
-		/* found none ? */
-		if (count == 0) 
-			goto out;
-	} 
-
-	if (kwq->kw_ksynqueues[KSYN_QUEUE_LREAD].ksynq_count != 0) {
-		num_lreader = kwq->kw_ksynqueues[KSYN_QUEUE_LREAD].ksynq_firstnum;
-		if (is_seqlower_eq(num_lreader, limitread) != 0)
-			longreadset = 1;
-	}
-	
-	updatebits = lgen;
-#if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUNLOCK2 | DBG_FUNC_NONE, (uint32_t)rwlock, 3, 0, 0, 0);
-#endif /* _PSYNCH_TRACE_ */
-	count = ksyn_wakeupreaders(kwq, limitread, longreadset, 0, updatebits, NULL);
-	
-	if (count != 0) {
-		if (kwq->kw_pre_limrd !=  0) {
-			kwq->kw_pre_limrd += count;
-		} else {
-			kwq->kw_pre_limrd = count;
-			kwq->kw_pre_limrdseq = lgen;
-			kwq->kw_pre_limrdbits = lgen;
-		}
-	}
-	error = 0;
-
-out:
-	if (error == 0) {
-		/* update bits?? */
-		*retval = uth->uu_psynchretval;
-	}
-	ksyn_wqunlock(kwq);
-
-	ksyn_wqrelease(kwq, NULL); 
-#if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWUNLOCK2 | DBG_FUNC_END, (uint32_t)rwlock, 0, 0, error, 0);
-#endif /* _PSYNCH_TRACE_ */
-
-	return(error);
+	return(ENOTSUP);
 }
 
 
@@ -1996,7 +2454,31 @@ out:
 void
 pth_global_hashinit()
 {
+	int arg;
+
 	pth_glob_hashtbl = hashinit(PTH_HASHSIZE * 4, M_PROC, &pthhash);
+
+	/*
+	 * pthtest={0,1,2,3} (override default aborting behavior on pthread sync failures)
+	 * 0 - just return errors
+	 * 1 - print and return errors
+	 * 2 - abort user, print and return errors
+	 * 3 - panic
+	 */
+	if (!PE_parse_boot_argn("pthtest", &arg, sizeof(arg)))
+		arg = __TESTMODE__;
+
+	if (arg == 3) {
+		__test_panics__ = 1;
+		printf("Pthread support PANICS when sync kernel primitives misused\n");
+	} else if (arg == 2) {
+		__test_aborts__ = 1;
+		__test_prints__ = 1;
+		printf("Pthread support ABORTS when sync kernel primitives misused\n");
+	} else if (arg == 1) {
+		__test_prints__ = 1;
+		printf("Pthread support LOGS when sync kernel primitives misused\n");
+	}
 }
 
 void
@@ -2046,6 +2528,10 @@ pth_proc_hashdelete(proc_t p)
 	int hashsize = pthhash + 1;
 	int i;
 
+#if _PSYNCH_TRACE_
+	if ((pthread_debug_proc != NULL) && (p == pthread_debug_proc))
+		pthread_debug_proc = PROC_NULL;
+#endif /* _PSYNCH_TRACE_ */
 	hashptr = p->p_pthhash;
 	if (hashptr == NULL)
 		return;
@@ -2060,16 +2546,39 @@ pth_proc_hashdelete(proc_t p)
 			if ((kwq->kw_pflags & KSYN_WQ_FLIST) != 0) {
 				kwq->kw_pflags &= ~KSYN_WQ_FLIST;
 				LIST_REMOVE(kwq, kw_list);
+				num_infreekwq--;
 			}
+			num_freekwq++;
 			pthread_list_unlock();
+			/* release fake entries if present for cvars */
+			if (((kwq->kw_type & KSYN_WQTYPE_MASK) == KSYN_WQTYPE_CVAR) && (kwq->kw_inqueue != 0))
+				ksyn_freeallkwe(&kwq->kw_ksynqueues[KSYN_QUEUE_WRITER]);
 			lck_mtx_destroy(&kwq->kw_lock, pthread_lck_grp);
-			kfree(kwq, sizeof(struct ksyn_wait_queue));
+			zfree(kwq_zone, kwq);
 		}
 	}
 	FREE(p->p_pthhash, M_PROC);
 	p->p_pthhash = NULL;
 }
 
+/* no lock held for this as the waitqueue is getting freed */
+void
+ksyn_freeallkwe(ksyn_queue_t kq)
+{
+	ksyn_waitq_element_t kwe;
+
+	/* free all the fake entries, dequeue rest */
+	kwe = TAILQ_FIRST(&kq->ksynq_kwelist);
+	while (kwe != NULL) {
+		if (kwe->kwe_flags != KWE_THREAD_INWAIT) {
+			TAILQ_REMOVE(&kq->ksynq_kwelist, kwe, kwe_list);
+			zfree(kwe_zone, kwe);
+		} else {
+			TAILQ_REMOVE(&kq->ksynq_kwelist, kwe, kwe_list);
+		}
+		kwe = TAILQ_FIRST(&kq->ksynq_kwelist);
+	}
+}
 
 /* find kernel waitqueue, if not present create one. Grants a reference  */
 int
@@ -2081,7 +2590,8 @@ ksyn_wqfind(user_addr_t mutex, uint32_t mgen, uint32_t ugen, uint32_t rw_wc, uin
 	uint64_t object = 0, offset = 0;
 	uint64_t hashhint;
 	proc_t p  = current_proc();
-	int retry = mgen & PTHRW_RETRYBIT;
+	int retry = mgen & PTH_RWL_RETRYBIT;
+	struct ksyn_queue kfreeq;
 	int i;
 
 	if ((flags & PTHREAD_PSHARED_FLAGS_MASK) == PTHREAD_PROCESS_SHARED) 
@@ -2093,18 +2603,60 @@ ksyn_wqfind(user_addr_t mutex, uint32_t mgen, uint32_t ugen, uint32_t rw_wc, uin
 		hashptr = p->p_pthhash;
 	}
 
+	ksyn_queue_init(&kfreeq);
+
+	if (((wqtype & KSYN_WQTYPE_MASK) == KSYN_WQTYPE_MTX) && (retry != 0))
+		mgen &= ~PTH_RWL_RETRYBIT;
+
+loop:
 	//pthread_list_lock_spin();
 	pthread_list_lock();
 
 	kwq = ksyn_wq_hash_lookup(mutex, p, flags, object, offset);
 
 	if (kwq != NULL) {
-		kwq->kw_iocount++;
 		if ((kwq->kw_pflags & KSYN_WQ_FLIST) != 0) {
 			LIST_REMOVE(kwq, kw_list);
 			kwq->kw_pflags &= ~KSYN_WQ_FLIST;
+			num_infreekwq--;
+			num_reusekwq++;
 		}
-		UPDATE_KWQ(kwq, mgen, ugen, rw_wc, tid, wqtype, retry);
+		if ((kwq->kw_type & KSYN_WQTYPE_MASK) != (wqtype &KSYN_WQTYPE_MASK)) {
+			if ((kwq->kw_inqueue == 0) && (kwq->kw_pre_rwwc ==0) && (kwq->kw_pre_intrcount == 0)) {
+				if (kwq->kw_iocount == 0) {
+					kwq->kw_addr = mutex;
+					kwq->kw_flags = flags;
+					kwq->kw_object = object;
+					kwq->kw_offset = offset;
+					kwq->kw_type = (wqtype & KSYN_WQTYPE_MASK);
+					CLEAR_REINIT_BITS(kwq);
+					CLEAR_INTR_PREPOST_BITS(kwq);
+					CLEAR_PREPOST_BITS(kwq);
+					kwq->kw_lword = mgen;
+					kwq->kw_uword = ugen;
+					kwq->kw_sword = rw_wc;
+					kwq->kw_owner = tid;
+				} else if ((kwq->kw_iocount == 1) && (kwq->kw_dropcount == kwq->kw_iocount)) {
+					/* if all users are unlockers then wait for it to finish */
+					kwq->kw_pflags |= KSYN_WQ_WAITING;
+					/* wait for the wq to be free */
+					(void)msleep(&kwq->kw_pflags, pthread_list_mlock, PDROP, "ksyn_wqfind", 0);
+					/* does not have list lock */
+					goto loop;
+				} else {
+					__FAILEDUSERTEST__("address already known to kernel for another (busy) synchronizer type\n");
+					pthread_list_unlock();
+					return EBUSY;
+				}
+			} else {
+				__FAILEDUSERTEST__("address already known to kernel for another (busy) synchronizer type(1)\n");
+				pthread_list_unlock();
+				return EBUSY;
+			}
+		}
+		kwq->kw_iocount++;
+		if (wqtype == KSYN_WQTYPE_MUTEXDROP)
+			kwq->kw_dropcount++;
 		if (kwqp != NULL)
 			*kwqp = kwq;
 		pthread_list_unlock();
@@ -2113,23 +2665,34 @@ ksyn_wqfind(user_addr_t mutex, uint32_t mgen, uint32_t ugen, uint32_t rw_wc, uin
 
 	pthread_list_unlock();
 
-	nkwq = kalloc(sizeof(struct ksyn_wait_queue));
+	nkwq = (ksyn_wait_queue_t)zalloc(kwq_zone);
 	bzero(nkwq, sizeof(struct ksyn_wait_queue));
 	nkwq->kw_addr = mutex;
 	nkwq->kw_flags = flags;
 	nkwq->kw_iocount = 1;
+	if (wqtype == KSYN_WQTYPE_MUTEXDROP)
+			nkwq->kw_dropcount++;
 	nkwq->kw_object = object;
 	nkwq->kw_offset = offset;
 	nkwq->kw_type = (wqtype & KSYN_WQTYPE_MASK);
-	TAILQ_INIT(&nkwq->kw_uthlist);
+	nkwq->kw_lastseqword = PTHRW_RWS_INIT;
+	if (nkwq->kw_type == KSYN_WQTYPE_RWLOCK)
+		nkwq->kw_nextseqword = PTHRW_RWS_INIT;
+		
+	nkwq->kw_pre_sseq = PTHRW_RWS_INIT;
+
+	CLEAR_PREPOST_BITS(nkwq);
+	CLEAR_INTR_PREPOST_BITS(nkwq);
+	CLEAR_REINIT_BITS(nkwq);
+	nkwq->kw_lword = mgen;
+	nkwq->kw_uword = ugen;
+	nkwq->kw_sword = rw_wc;
+	nkwq->kw_owner = tid;
+
 
 	for (i=0; i< KSYN_QUEUE_MAX; i++) 
 		ksyn_queue_init(&nkwq->kw_ksynqueues[i]);
 		
-	UPDATE_KWQ(nkwq, mgen, ugen, rw_wc, tid, wqtype, retry);
-#if USE_WAITQUEUE
-	wait_queue_init(&nkwq->kw_wq, SYNC_POLICY_FIFO);
-#endif /* USE_WAITQUEUE */
 	lck_mtx_init(&nkwq->kw_lock, pthread_lck_grp, pthread_lck_attr);
 
 	//pthread_list_lock_spin();
@@ -2138,21 +2701,67 @@ ksyn_wqfind(user_addr_t mutex, uint32_t mgen, uint32_t ugen, uint32_t rw_wc, uin
 	kwq = ksyn_wq_hash_lookup(mutex, p, flags, object, offset);
 
 	if (kwq != NULL) {
-		kwq->kw_iocount++;
 		if ((kwq->kw_pflags & KSYN_WQ_FLIST) != 0) {
 			LIST_REMOVE(kwq, kw_list);
 			kwq->kw_pflags &= ~KSYN_WQ_FLIST;
+			num_infreekwq--;
+			num_reusekwq++;
 		}
-		UPDATE_KWQ(kwq, mgen, ugen, rw_wc, tid, wqtype, retry);
+		if ((kwq->kw_type & KSYN_WQTYPE_MASK) != (wqtype &KSYN_WQTYPE_MASK)) {
+			if ((kwq->kw_inqueue == 0) && (kwq->kw_pre_rwwc ==0) && (kwq->kw_pre_intrcount == 0)) {
+				if (kwq->kw_iocount == 0) {
+					kwq->kw_addr = mutex;
+					kwq->kw_flags = flags;
+					kwq->kw_object = object;
+					kwq->kw_offset = offset;
+					kwq->kw_type = (wqtype & KSYN_WQTYPE_MASK);
+					CLEAR_REINIT_BITS(kwq);
+					CLEAR_INTR_PREPOST_BITS(kwq);
+					CLEAR_PREPOST_BITS(kwq);
+					kwq->kw_lword = mgen;
+					kwq->kw_uword = ugen;
+					kwq->kw_sword = rw_wc;
+					kwq->kw_owner = tid;
+				} else if ((kwq->kw_iocount == 1) && (kwq->kw_dropcount == kwq->kw_iocount)) {
+					kwq->kw_pflags |= KSYN_WQ_WAITING;
+					/* wait for the wq to be free */
+					(void)msleep(&kwq->kw_pflags, pthread_list_mlock, PDROP, "ksyn_wqfind", 0);
+
+					lck_mtx_destroy(&nkwq->kw_lock, pthread_lck_grp);
+					zfree(kwq_zone, nkwq);
+					/* will acquire lock again */
+
+					goto loop;
+				} else {
+					__FAILEDUSERTEST__("address already known to kernel for another [busy] synchronizer type(2)\n");
+					pthread_list_unlock();
+					lck_mtx_destroy(&nkwq->kw_lock, pthread_lck_grp);
+					zfree(kwq_zone, nkwq);
+					return EBUSY;
+				}
+			} else {
+				__FAILEDUSERTEST__("address already known to kernel for another [busy] synchronizer type(3)\n");
+				pthread_list_unlock();
+				lck_mtx_destroy(&nkwq->kw_lock, pthread_lck_grp);
+				zfree(kwq_zone, nkwq);
+				return EBUSY;
+			}
+		}
+		kwq->kw_iocount++;
+		if (wqtype == KSYN_WQTYPE_MUTEXDROP)
+			kwq->kw_dropcount++;
 		if (kwqp != NULL)
 			*kwqp = kwq;
 		pthread_list_unlock();
 		lck_mtx_destroy(&nkwq->kw_lock, pthread_lck_grp);
-		kfree(nkwq, sizeof(struct ksyn_wait_queue));
+		zfree(kwq_zone, nkwq);
 		return (0);
 	}
 	kwq = nkwq;
 
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVSEQ | DBG_FUNC_NONE, kwq->kw_lword, kwq->kw_uword, kwq->kw_sword, 0xffff, 0);
+#endif /* _PSYNCH_TRACE_ */
 	if ((flags & PTHREAD_PSHARED_FLAGS_MASK) == PTHREAD_PROCESS_SHARED) 
 	{
 		kwq->kw_pflags |= KSYN_WQ_SHARED;
@@ -2161,6 +2770,7 @@ ksyn_wqfind(user_addr_t mutex, uint32_t mgen, uint32_t ugen, uint32_t rw_wc, uin
 		LIST_INSERT_HEAD(&hashptr[mutex & pthhash], kwq, kw_hash);
 
 	kwq->kw_pflags |= KSYN_WQ_INHASH;
+	num_total_kwq++;
 
 	pthread_list_unlock();
 
@@ -2171,34 +2781,81 @@ ksyn_wqfind(user_addr_t mutex, uint32_t mgen, uint32_t ugen, uint32_t rw_wc, uin
 
 /* Reference from find is dropped here. Starts the free process if needed  */
 void
-ksyn_wqrelease(ksyn_wait_queue_t kwq, ksyn_wait_queue_t ckwq)
+ksyn_wqrelease(ksyn_wait_queue_t kwq, ksyn_wait_queue_t ckwq, int qfreenow, int wqtype)
 {
 	uint64_t deadline;
 	struct timeval t;
 	int sched = 0;
-
+	ksyn_wait_queue_t free_elem = NULL;
+	ksyn_wait_queue_t free_elem1 = NULL;
 	
 	//pthread_list_lock_spin();
 	pthread_list_lock();
 	kwq->kw_iocount--;
-	if (kwq->kw_iocount == 0) {
-		if ((kwq->kw_pre_rwwc == 0) && (kwq->kw_inqueue == 0)) {
-			microuptime(&kwq->kw_ts);
-			LIST_INSERT_HEAD(&pth_free_list, kwq, kw_list);
-			kwq->kw_pflags |= KSYN_WQ_FLIST;
-		}
-		sched = 1;
+	if (wqtype == KSYN_WQTYPE_MUTEXDROP) {
+		kwq->kw_dropcount--;
 	}
-	if (ckwq != NULL){
-		ckwq->kw_iocount--;
-		if ( ckwq->kw_iocount == 0) {
-			if ((ckwq->kw_pre_rwwc == 0) && (ckwq->kw_inqueue == 0)) {
-				/* mark for free if we can */
-				microuptime(&ckwq->kw_ts);
-				LIST_INSERT_HEAD(&pth_free_list, ckwq, kw_list);
-				ckwq->kw_pflags |= KSYN_WQ_FLIST;
+	if (kwq->kw_iocount == 0) {
+		if ((kwq->kw_pflags & KSYN_WQ_WAITING) != 0) {
+			/* some one is waiting for the waitqueue, wake them up */
+			kwq->kw_pflags &=  ~KSYN_WQ_WAITING;
+			wakeup(&kwq->kw_pflags);
+		}
+
+		if ((kwq->kw_pre_rwwc == 0) && (kwq->kw_inqueue == 0) && (kwq->kw_pre_intrcount == 0)) {
+			if (qfreenow == 0) {
+				microuptime(&kwq->kw_ts);
+				LIST_INSERT_HEAD(&pth_free_list, kwq, kw_list);
+				kwq->kw_pflags |= KSYN_WQ_FLIST;
+				num_infreekwq++;
+				free_elem = NULL;
+			} else {
+				/* remove from the only list it is in ie hash */
+				kwq->kw_pflags &= ~(KSYN_WQ_FLIST | KSYN_WQ_INHASH);
+				LIST_REMOVE(kwq, kw_hash);
+				lck_mtx_destroy(&kwq->kw_lock, pthread_lck_grp);
+				num_total_kwq--;
+				num_freekwq++;
+				free_elem = kwq;
 			}
+		} else 
+			free_elem = NULL;
+		if (qfreenow == 0)
 			sched = 1;
+	}
+
+	if (ckwq != NULL) {
+		ckwq->kw_iocount--;
+		if (wqtype == KSYN_WQTYPE_MUTEXDROP) {
+			kwq->kw_dropcount--;
+		}
+		if ( ckwq->kw_iocount == 0) {
+			if ((kwq->kw_pflags & KSYN_WQ_WAITING) != 0) {
+				/* some one is waiting for the waitqueue, wake them up */
+				kwq->kw_pflags &=  ~KSYN_WQ_WAITING;
+				wakeup(&kwq->kw_pflags);
+			}
+			if ((ckwq->kw_pre_rwwc == 0) && (ckwq->kw_inqueue == 0) && (ckwq->kw_pre_intrcount == 0)) {
+				if (qfreenow == 0) {
+					/* mark for free if we can */
+					microuptime(&ckwq->kw_ts);
+					LIST_INSERT_HEAD(&pth_free_list, ckwq, kw_list);
+					ckwq->kw_pflags |= KSYN_WQ_FLIST;
+					num_infreekwq++;
+					free_elem1 = NULL;
+				} else {
+					/* remove from the only list it is in ie hash */
+					ckwq->kw_pflags &= ~(KSYN_WQ_FLIST | KSYN_WQ_INHASH);
+					LIST_REMOVE(ckwq, kw_hash);
+					lck_mtx_destroy(&ckwq->kw_lock, pthread_lck_grp);
+					num_total_kwq--;
+					num_freekwq++;
+					free_elem1 = ckwq;
+				}
+			} else
+				free_elem1 = NULL;
+			if (qfreenow == 0)
+				sched = 1;
 		}
 	}
 
@@ -2211,6 +2868,10 @@ ksyn_wqrelease(ksyn_wait_queue_t kwq, ksyn_wait_queue_t ckwq)
 		thread_call_enter_delayed(psynch_thcall, deadline);
 	}
 	pthread_list_unlock();
+	if (free_elem != NULL)
+		zfree(kwq_zone, free_elem);
+	if (free_elem1 != NULL)
+		zfree(kwq_zone, free_elem1);
 }
 
 /* responsible to free the waitqueues */
@@ -2226,16 +2887,13 @@ psynch_wq_cleanup(__unused void *  param, __unused void * param1)
 	//pthread_list_lock_spin();
 	pthread_list_lock();
 
+	num_addedfreekwq = num_infreekwq - num_lastfreekwqcount;
+	num_lastfreekwqcount = num_infreekwq;
 	microuptime(&t);
 
 	LIST_FOREACH(kwq, &pth_free_list, kw_list) {
-			
-		if (count > 100) {
-			delayed = 1;
-			break;
-		}
-		if ((kwq->kw_iocount != 0) && (kwq->kw_inqueue != 0)) {
-			/* still in freelist ??? */
+		if ((kwq->kw_iocount != 0) || (kwq->kw_pre_rwwc != 0) || (kwq->kw_inqueue != 0) || (kwq->kw_pre_intrcount != 0)) {
+			/* still in use */
 			continue;
 		}
 		diff = t.tv_sec - kwq->kw_ts.tv_sec;
@@ -2244,10 +2902,13 @@ psynch_wq_cleanup(__unused void *  param, __unused void * param1)
 		if (diff >= KSYN_CLEANUP_DEADLINE) {
 			/* out of hash */
 			kwq->kw_pflags &= ~(KSYN_WQ_FLIST | KSYN_WQ_INHASH);
+			num_infreekwq--;
+			num_freekwq++;
 			LIST_REMOVE(kwq, kw_hash);
 			LIST_REMOVE(kwq, kw_list);
 			LIST_INSERT_HEAD(&freelist, kwq, kw_list);
 			count ++;
+			num_total_kwq--;
 		} else {
 			delayed = 1;
 		}
@@ -2268,23 +2929,22 @@ psynch_wq_cleanup(__unused void *  param, __unused void * param1)
 	while ((kwq = LIST_FIRST(&freelist)) != NULL) {
 		LIST_REMOVE(kwq, kw_list);
 		lck_mtx_destroy(&kwq->kw_lock, pthread_lck_grp);
-		kfree(kwq, sizeof(struct ksyn_wait_queue));
+		zfree(kwq_zone, kwq);
 	}
 }
 
 
 int
-ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, uthread_t uth)
+ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, ksyn_waitq_element_t kwe, int mylog)
 {
 	kern_return_t kret;
 	int error = 0;
+#if _PSYNCH_TRACE_
+	uthread_t uth = NULL;
+#endif /* _PSYNCH_TRACE_ */
 
-	uth->uu_kwqqueue = (void *)kwq;
-#if USE_WAITQUEUE
-	kret  = wait_queue_assert_wait64(&kwq->kw_wq, kwq->kw_addr, THREAD_ABORTSAFE, abstime);
-#else /* USE_WAITQUEUE */
-	assert_wait_deadline(&uth->uu_psynchretval, THREAD_ABORTSAFE, abstime);
-#endif /* USE_WAITQUEUE */
+	kwe->kwe_kwqqueue = (void *)kwq;
+	assert_wait_deadline(&kwe->kwe_psynchretval, THREAD_ABORTSAFE, abstime);
 	ksyn_wqunlock(kwq);
 
 	kret = thread_block(NULL);
@@ -2296,114 +2956,40 @@ ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, uthread_t uth)
 			error  = EINTR;
 			break;
 	}
+#if _PSYNCH_TRACE_
+	uth = current_uthread();
+#if defined(__i386__)
+	if (mylog != 0)
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_THWAKEUP | DBG_FUNC_NONE, 0xf4f3f2f1, (uint32_t)uth, kret, 0, 0);
+#else
+	if (mylog != 0)
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_THWAKEUP | DBG_FUNC_NONE, 0xeeeeeeee, kret, error, 0xeeeeeeee, 0);
+#endif
+#endif /* _PSYNCH_TRACE_ */
+		
 	return(error);
 }
 
 kern_return_t
-#if USE_WAITQUEUE
-ksyn_wakeup_thread(ksyn_wait_queue_t kwq, uthread_t uth)
-#else /* USE_WAITQUEUE */
-ksyn_wakeup_thread(__unused ksyn_wait_queue_t kwq, uthread_t uth)
-#endif /* USE_WAITQUEUE */
+ksyn_wakeup_thread(__unused ksyn_wait_queue_t kwq, ksyn_waitq_element_t kwe)
 {
-	thread_t th;
 	kern_return_t kret;
-	th = uth->uu_context.vc_thread;
+#if _PSYNCH_TRACE_
+	uthread_t uth = NULL;
+#endif /* _PSYNCH_TRACE_ */
 
-#if USE_WAITQUEUE
-	kret = wait_queue_wakeup64_thread(&kwq->kw_wq, kwq->kw_addr, th, THREAD_AWAKENED);
-#else /* USE_WAITQUEUE */
-	kret = thread_wakeup_prim((caddr_t)&uth->uu_psynchretval, TRUE, THREAD_AWAKENED);
-#endif /* USE_WAITQUEUE */
+	kret = thread_wakeup_one((caddr_t)&kwe->kwe_psynchretval);
 
 	if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
 		panic("ksyn_wakeup_thread: panic waking up thread %x\n", kret);
+#if _PSYNCH_TRACE_
+	uth = kwe->kwe_uth;
+#if defined(__i386__)
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_THWAKEUP | DBG_FUNC_NONE, 0xf1f2f3f4, (uint32_t)uth, kret, 0, 0);
+#endif
+#endif /* _PSYNCH_TRACE_ */
 	
-	
-
 	return(kret);
-}
-
-/* move from one waitqueue to another */
-#if COND_MTX_WAITQUEUEMOVE
-void 
-ksyn_move_wqthread( ksyn_wait_queue_t ckwq, ksyn_wait_queue_t kwq, uint32_t mgen, uint32_t updateval, int diffgen, int nomutex)
-#else /* COND_MTX_WAITQUEUEMOVE */
-void 
-ksyn_move_wqthread( ksyn_wait_queue_t ckwq, __unused ksyn_wait_queue_t kwq, __unused uint32_t mgen, uint32_t updateval, __unused int diffgen, int nomutex)
-#endif /* COND_MTX_WAITQUEUEMOVE */
-{
-	kern_return_t kret;
-	uthread_t uth;
-#if COND_MTX_WAITQUEUEMOVE
-	int count = 0, error, kret;
-	uint32_t nextgen = mgen;
-#endif /* COND_MTX_WAITQUEUEMOVE */
-	struct ksyn_queue  kq;
-	uint32_t upgen;
-	
-	ksyn_queue_init(&kq);
-#if USE_WAITQUEUE
-	/* TBD wq move */
-	kret = wait_queue_move_all(&ckwq->kw_wq, ckwq->kw_addr, &kwq->kw_wq,  kwq->kw_addr);
-#else /* USE_WAITQUEUE */
-	/* no need to move as the thread is blocked at uthread address */
-	kret = KERN_SUCCESS;
-#endif /* USE_WAITQUEUE */
-
-	if (nomutex != 0) 
-		upgen = updateval | PTHRW_MTX_NONE;
-	else
-		upgen = updateval;
-	
-	if (kret== KERN_SUCCESS) {
-redrive:
-		while ((uth = ksyn_queue_removefirst(&ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER], ckwq)) != NULL) {
-			if (nomutex != 0) {
-#if COND_MTX_WAITQUEUEMOVE
-				uth->uu_psynchretval = upgen;
-#else /* COND_MTX_WAITQUEUEMOVE */
-				uth->uu_psynchretval = 0;
-				uth->uu_kwqqueue = NULL;
-				kret = ksyn_wakeup_thread(ckwq, uth);
-				if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
-					panic("ksyn_move_wqthread: panic waking up \n");
-				if (kret == KERN_NOT_WAITING)
-					goto redrive;
-#endif /* COND_MTX_WAITQUEUEMOVE */
-			} 
-#if COND_MTX_WAITQUEUEMOVE
-			  else {
-				count++;
-				if (count >diffgen)
-					panic("movethread inserting more than expected\n");
-				TAILQ_INSERT_TAIL(&kq.ksynq_uthlist, uth, uu_mtxlist);
-			}
-#endif /* COND_MTX_WAITQUEUEMOVE */
-			
-		}
-		ksyn_wqunlock(ckwq);
-
-#if COND_MTX_WAITQUEUEMOVE
-		if ( (nomutex == 0) && (count > 0)) {
-			ksyn_wqlock(kwq);
-			uth = TAILQ_FIRST(&kq.ksynq_uthlist);
-			while(uth != NULL) {
-				TAILQ_REMOVE(&kq.ksynq_uthlist, uth, uu_mtxlist);
-				error = ksyn_queue_insert(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], nextgen,  uth, SEQFIT); 
-				if (error != 0) {
-					panic("movethread insert failed\n");
-				} 
-				uth->uu_lockseq = nextgen;
-				nextgen += PTHRW_INC;
-				uth = TAILQ_FIRST(&kq.ksynq_uthlist);
-			}
-			ksyn_wqunlock(kwq);
-		}
-#endif /* COND_MTX_WAITQUEUEMOVE */
-	} else
-		panic("movethread : wq move all  failed\n");
-	return;
 }
 
 /* find the true shared obect/offset for shared mutexes */
@@ -2509,12 +3095,13 @@ kwq_find_rw_lowest(ksyn_wait_queue_t kwq, int flags, uint32_t premgen, int * typ
 	} else
 		lowest[KSYN_QUEUE_YWRITER] = 0;
 
-
 	
+#if __TESTPANICS__
 	if (count == 0)
 		panic("nothing in the queue???\n");
+#endif /* __TESTPANICS__ */
 
-        low = numbers[0];
+	low = numbers[0];
 	lowtype = typenum[0];
         if (count > 1) {
                 for (i = 1; i< count; i++) {
@@ -2535,44 +3122,39 @@ kwq_find_rw_lowest(ksyn_wait_queue_t kwq, int flags, uint32_t premgen, int * typ
 int
 ksyn_wakeupreaders(ksyn_wait_queue_t kwq, uint32_t limitread, int longreadset, int allreaders, uint32_t  updatebits, int * wokenp)
 {
-	uthread_t uth;
+	ksyn_waitq_element_t kwe = NULL;
 	ksyn_queue_t kq;
 	int failedwakeup = 0;
 	int numwoken = 0;
 	kern_return_t kret = KERN_SUCCESS;
-	int resetbit = updatebits & PTHRW_RW_HUNLOCK;
 	uint32_t lbits = 0;
 
 	lbits = updatebits;
 	if (longreadset != 0) {
 		/* clear all read and longreads */
-		while ((uth = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_READ], kwq)) != NULL) {
-			uth->uu_psynchretval = lbits;
-			/* set on one thread */
-			if (resetbit != 0) {
-				lbits &= ~PTHRW_RW_HUNLOCK;
-				resetbit = 0;
-			}
+		while ((kwe = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_READ], kwq)) != NULL) {
+			kwe->kwe_psynchretval = lbits;
+			kwe->kwe_kwqqueue = NULL;
+
 			numwoken++;
-			uth->uu_kwqqueue = NULL;
-			kret = ksyn_wakeup_thread(kwq, uth);
+			kret = ksyn_wakeup_thread(kwq, kwe);
+#if __TESTPANICS__
 			if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
 				panic("ksyn_wakeupreaders: panic waking up readers\n");
+#endif /* __TESTPANICS__ */
 			if (kret == KERN_NOT_WAITING) {
 				failedwakeup++;
 			}
 		}
-		while ((uth = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_LREAD], kwq)) != NULL) {
-			uth->uu_psynchretval = lbits;
-			uth->uu_kwqqueue = NULL;
-			if (resetbit != 0) {
-				lbits &= ~PTHRW_RW_HUNLOCK;
-				resetbit = 0;
-			}
+		while ((kwe = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_LREAD], kwq)) != NULL) {
+			kwe->kwe_psynchretval = lbits;
+			kwe->kwe_kwqqueue = NULL;
 			numwoken++;
-			kret = ksyn_wakeup_thread(kwq, uth);
+			kret = ksyn_wakeup_thread(kwq, kwe);
+#if __TESTPANICS__
 			if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
 				panic("ksyn_wakeupreaders: panic waking up lreaders\n");
+#endif /* __TESTPANICS__ */
 			if (kret == KERN_NOT_WAITING) {
 				failedwakeup++;
 			}
@@ -2580,17 +3162,15 @@ ksyn_wakeupreaders(ksyn_wait_queue_t kwq, uint32_t limitread, int longreadset, i
 	} else {
 		kq = &kwq->kw_ksynqueues[KSYN_QUEUE_READ];
 		while ((kq->ksynq_count != 0) && (allreaders || (is_seqlower(kq->ksynq_firstnum, limitread) != 0))) {
-			uth = ksyn_queue_removefirst(kq, kwq);
-			uth->uu_psynchretval = lbits;
-			if (resetbit != 0) {
-				lbits &= ~PTHRW_RW_HUNLOCK;
-				resetbit = 0;
-			}
+			kwe = ksyn_queue_removefirst(kq, kwq);
+			kwe->kwe_psynchretval = lbits;
+			kwe->kwe_kwqqueue = NULL;
 			numwoken++;
-			uth->uu_kwqqueue = NULL;
-			kret = ksyn_wakeup_thread(kwq, uth);
+			kret = ksyn_wakeup_thread(kwq, kwe);
+#if __TESTPANICS__
 			if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
 				panic("ksyn_wakeupreaders: panic waking up readers\n");
+#endif /* __TESTPANICS__ */
 			if (kret == KERN_NOT_WAITING) {
 				failedwakeup++;
 			}
@@ -2605,32 +3185,45 @@ ksyn_wakeupreaders(ksyn_wait_queue_t kwq, uint32_t limitread, int longreadset, i
 
 /* This handles the unlock grants for next set on rw_unlock() or on arrival of all preposted waiters */
 int
-kwq_handle_unlock(ksyn_wait_queue_t kwq, uint32_t mgen,  uint32_t * updatep, int flags, int * blockp, uint32_t premgen)
+kwq_handle_unlock(ksyn_wait_queue_t kwq, uint32_t mgen,  uint32_t rw_wc, uint32_t * updatep, int flags, int * blockp, uint32_t premgen)
 {
 	uint32_t low_reader, low_writer, low_ywriter, low_lreader,limitrdnum;
 	int rwtype, error=0;
 	int longreadset = 0, allreaders, failed;
-	uint32_t updatebits;
+	uint32_t updatebits=0, numneeded = 0;;
 	int prepost = flags & KW_UNLOCK_PREPOST;
 	thread_t preth = THREAD_NULL;
+	ksyn_waitq_element_t kwe;
 	uthread_t uth;
 	thread_t th;
 	int woken = 0;
 	int block = 1;
-        uint32_t lowest[KSYN_QUEUE_MAX]; /* np need for upgrade as it is handled separately */
+	uint32_t lowest[KSYN_QUEUE_MAX]; /* np need for upgrade as it is handled separately */
 	kern_return_t kret = KERN_SUCCESS;
+	ksyn_queue_t kq;
+	int curthreturns = 0;
 
 #if _PSYNCH_TRACE_
-#if defined(__i386__)
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWHANDLEU | DBG_FUNC_START, (uint32_t)kwq, mgen, premgen, 0, 0);
-#endif
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWHANDLEU | DBG_FUNC_START, (uint32_t)kwq->kw_addr, mgen, premgen, rw_wc, 0);
 #endif /* _PSYNCH_TRACE_ */
 	if (prepost != 0) {
 		preth = current_thread();
 	}
 	
+	kq = &kwq->kw_ksynqueues[KSYN_QUEUE_READ];	
+	kwq->kw_lastseqword = rw_wc;
+	kwq->kw_lastunlockseq = (rw_wc & PTHRW_COUNT_MASK);
+	kwq->kw_overlapwatch = 0;
+
 	/* upgrade pending */
 	if (is_rw_ubit_set(mgen)) {
+#if __TESTPANICS__
+		panic("NO UBIT SHOULD BE SET\n");
+		updatebits = PTH_RWL_EBIT | PTH_RWL_KBIT;
+		if (kwq->kw_ksynqueues[KSYN_QUEUE_WRITER].ksynq_count != 0)
+			updatebits |= PTH_RWL_WBIT;
+		if (kwq->kw_ksynqueues[KSYN_QUEUE_YWRITER].ksynq_count != 0)
+			updatebits |= PTH_RWL_YBIT;
 		if (prepost != 0)  {
 			if((flags & KW_UNLOCK_PREPOST_UPGRADE) != 0) {
 				/* upgrade thread calling the prepost */
@@ -2641,34 +3234,37 @@ kwq_handle_unlock(ksyn_wait_queue_t kwq, uint32_t mgen,  uint32_t * updatep, int
 
 		}
 		if (kwq->kw_ksynqueues[KSYN_QUEUE_UPGRADE].ksynq_count > 0) {
-			uth = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_UPGRADE], kwq);
-			uth->uu_psynchretval = (mgen  | PTHRW_EBIT) & ~PTHRW_UBIT;
-			uth->uu_kwqqueue = NULL;
-			kret = ksyn_wakeup_thread(kwq, uth);
+			kwe = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_UPGRADE], kwq);
+			
+			kwq->kw_nextseqword = (rw_wc & PTHRW_COUNT_MASK) + updatebits;
+			kwe->kwe_psynchretval = updatebits;
+			kwe->kwe_kwqqueue = NULL;
+			kret = ksyn_wakeup_thread(kwq, kwe);
 			if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
 				panic("kwq_handle_unlock: panic waking up the upgrade thread \n");
 			if (kret == KERN_NOT_WAITING) {
 				kwq->kw_pre_intrcount = 1;	/* actually a  count */
 				kwq->kw_pre_intrseq = mgen;
-				kwq->kw_pre_intrretbits = uth->uu_psynchretval;
+				kwq->kw_pre_intrretbits = kwe->kwe_psynchretval;
 				kwq->kw_pre_intrtype = PTH_RW_TYPE_UPGRADE;
 			}
 			error = 0;
 		} else {
 			panic("panic unable to find the upgrade thread\n");
 		}
+#endif /* __TESTPANICS__ */
 		ksyn_wqunlock(kwq);
 		goto out;
 	}
 	
 	error = kwq_find_rw_lowest(kwq, flags, premgen, &rwtype, lowest);
+#if __TESTPANICS__
 	if (error != 0)
 		panic("rwunlock: cannot fails to slot next round of threads");
+#endif /* __TESTPANICS__ */
 
 #if _PSYNCH_TRACE_
-#if defined(__i386__)
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWHANDLEU | DBG_FUNC_NONE, (uint32_t)kwq, 1, rwtype, lowest, 0);
-#endif
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWHANDLEU | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 1, rwtype, 0, 0);
 #endif /* _PSYNCH_TRACE_ */
 	low_reader = lowest[KSYN_QUEUE_READ];
 	low_lreader = lowest[KSYN_QUEUE_LREAD];
@@ -2676,24 +3272,36 @@ kwq_handle_unlock(ksyn_wait_queue_t kwq, uint32_t mgen,  uint32_t * updatep, int
 	low_ywriter = lowest[KSYN_QUEUE_YWRITER];
 
 	
-	updatebits = mgen  & ~( PTHRW_EBIT | PTHRW_WBIT |PTHRW_YBIT | PTHRW_UBIT | PTHRW_LBIT);
-
 	longreadset = 0;
 	allreaders = 0;
+	updatebits = 0;
+
+
 	switch (rwtype & PTH_RW_TYPE_MASK) {
 		case PTH_RW_TYPE_LREAD:
 			longreadset = 1;
+			
 		case PTH_RW_TYPE_READ: {
+			/* what about the preflight which is LREAD or READ ?? */
+			if  ((rwtype & PTH_RWSHFT_TYPE_MASK) != 0) {
+				if (rwtype & PTH_RWSHFT_TYPE_WRITE)
+					updatebits |= (PTH_RWL_WBIT | PTH_RWL_KBIT);
+				if (rwtype & PTH_RWSHFT_TYPE_YWRITE)
+					updatebits |= PTH_RWL_YBIT;
+			}
 			limitrdnum = 0;
 			if (longreadset == 0) {
 				switch (rwtype & (PTH_RWSHFT_TYPE_WRITE | PTH_RWSHFT_TYPE_YWRITE)) {
 					case PTH_RWSHFT_TYPE_WRITE: 
 						limitrdnum = low_writer;
 						if (((rwtype & PTH_RWSHFT_TYPE_LREAD) != 0) && 
-							(is_seqlower(low_lreader, low_writer) != 0)) {
+							(is_seqlower(low_lreader, limitrdnum) != 0)) {
 							longreadset = 1;
 						}
-				
+						if (((flags &  KW_UNLOCK_PREPOST_LREADLOCK) != 0) && 
+							(is_seqlower(premgen, limitrdnum) != 0)) {
+							longreadset = 1;
+						}
 						break;
 					case PTH_RWSHFT_TYPE_YWRITE: 
 						/* all read ? */
@@ -2702,11 +3310,25 @@ kwq_handle_unlock(ksyn_wait_queue_t kwq, uint32_t mgen,  uint32_t * updatep, int
 							longreadset = 1;
 						} else
 							allreaders = 1;
+						if (((flags &  KW_UNLOCK_PREPOST_LREADLOCK) != 0) && 
+							(is_seqlower(premgen, low_ywriter) != 0)) {
+							longreadset = 1;
+							allreaders = 0;
+						}
+				
+						
 						break;
 					case (PTH_RWSHFT_TYPE_WRITE | PTH_RWSHFT_TYPE_YWRITE):
-						limitrdnum = low_writer; 
+						if (is_seqlower(low_ywriter, low_writer) != 0) {
+							limitrdnum = low_ywriter;
+						} else
+							limitrdnum = low_writer;
 						if (((rwtype & PTH_RWSHFT_TYPE_LREAD) != 0) && 
-							(is_seqlower(low_lreader, low_ywriter) != 0)) {
+							(is_seqlower(low_lreader, limitrdnum) != 0)) {
+							longreadset = 1;
+						}
+						if (((flags &  KW_UNLOCK_PREPOST_LREADLOCK) != 0) && 
+							(is_seqlower(premgen, limitrdnum) != 0)) {
 							longreadset = 1;
 						}
 						break;
@@ -2718,35 +3340,71 @@ kwq_handle_unlock(ksyn_wait_queue_t kwq, uint32_t mgen,  uint32_t * updatep, int
 				};
 
 			}
-
-			if ((rwtype & PTH_RWSHFT_TYPE_WRITE) != 0)
-				updatebits |= PTHRW_WBIT;
-			else if ((rwtype & PTH_RWSHFT_TYPE_YWRITE) != 0)
-				updatebits |= PTHRW_YBIT;
-
-			if (longreadset == 0) {
-				if((prepost != 0) && 
-						((flags & KW_UNLOCK_PREPOST_READLOCK) != 0) &&
-					((allreaders != 0) || (is_seqlower(premgen, limitrdnum) != 0))) {
-					block = 0;
-					uth = current_uthread();
-					uth->uu_psynchretval = updatebits;
-				}
+			numneeded = 0;
+			if (longreadset !=  0) {
+				updatebits |= PTH_RWL_LBIT;
+				updatebits &= ~PTH_RWL_KBIT;
+				if ((flags &  (KW_UNLOCK_PREPOST_READLOCK | KW_UNLOCK_PREPOST_LREADLOCK)) != 0)
+					numneeded += 1;
+				numneeded += kwq->kw_ksynqueues[KSYN_QUEUE_READ].ksynq_count;
+				numneeded += kwq->kw_ksynqueues[KSYN_QUEUE_LREAD].ksynq_count;
+				updatebits += (numneeded << PTHRW_COUNT_SHIFT);
+				kwq->kw_overlapwatch = 1;
 			} else {
-				updatebits |= PTHRW_LBIT;
-				if ((prepost != 0) && 
-				   ((flags & (KW_UNLOCK_PREPOST_READLOCK | KW_UNLOCK_PREPOST_LREADLOCK)) != 0)) {
-					block = 0;
-					uth = current_uthread();
-					uth->uu_psynchretval = updatebits;
-				}
+				/* no longread, evaluate number of readers */
+
+				switch (rwtype & (PTH_RWSHFT_TYPE_WRITE | PTH_RWSHFT_TYPE_YWRITE)) {
+					case PTH_RWSHFT_TYPE_WRITE: 
+						limitrdnum = low_writer;
+						numneeded = ksyn_queue_count_tolowest(kq, limitrdnum);
+						if (((flags &  KW_UNLOCK_PREPOST_READLOCK) != 0) && (is_seqlower(premgen, limitrdnum) != 0)) {
+							curthreturns = 1;
+							numneeded += 1;
+						}
+						break;
+					case PTH_RWSHFT_TYPE_YWRITE: 
+						/* all read ? */
+						numneeded += kwq->kw_ksynqueues[KSYN_QUEUE_READ].ksynq_count;
+						if ((flags &  KW_UNLOCK_PREPOST_READLOCK) != 0) {
+							curthreturns = 1;
+							numneeded += 1;
+						}
+						break;
+					case (PTH_RWSHFT_TYPE_WRITE | PTH_RWSHFT_TYPE_YWRITE):
+						limitrdnum = low_writer; 
+						numneeded = ksyn_queue_count_tolowest(kq, limitrdnum);
+						if (((flags &  KW_UNLOCK_PREPOST_READLOCK) != 0) && (is_seqlower(premgen, limitrdnum) != 0)) {
+							curthreturns = 1;
+							numneeded += 1;
+						}
+						break;
+					default: /* no writers at all */
+						/* no other waiters only readers */
+						kwq->kw_overlapwatch = 1;
+						numneeded += kwq->kw_ksynqueues[KSYN_QUEUE_READ].ksynq_count;
+						if ((flags &  KW_UNLOCK_PREPOST_READLOCK) != 0) {
+							curthreturns = 1;
+							numneeded += 1;
+						}
+				};
+		
+				updatebits += (numneeded << PTHRW_COUNT_SHIFT);
+			}
+			kwq->kw_nextseqword = (rw_wc & PTHRW_COUNT_MASK) + updatebits;
+
+			if (curthreturns != 0) {
+				block = 0;
+				uth = current_uthread();
+				kwe = &uth->uu_kwe;
+				kwe->kwe_psynchretval = updatebits;
 			}
 			
-			if (prepost != 0) {
-				updatebits |= PTHRW_RW_HUNLOCK;
-			}
 
 			failed = ksyn_wakeupreaders(kwq, limitrdnum, longreadset, allreaders, updatebits, &woken);
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWHANDLEU | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 2, woken, failed, 0);
+#endif /* _PSYNCH_TRACE_ */
+
 			if (failed != 0) {
 				kwq->kw_pre_intrcount = failed;	/* actually a  count */
 				kwq->kw_pre_intrseq = limitrdnum;
@@ -2757,43 +3415,49 @@ kwq_handle_unlock(ksyn_wait_queue_t kwq, uint32_t mgen,  uint32_t * updatep, int
 					kwq->kw_pre_intrtype = PTH_RW_TYPE_READ;
 			} 
 
-			/* if we woken up no one and the current thread is returning, ensure it is doing unlock */
-			if ((prepost != 0) && (woken == 0) && (block == 0)&& ((updatebits & PTHRW_RW_HUNLOCK) != 0)) {
-				uth = current_uthread();
-				uth->uu_psynchretval = updatebits;
-	}
-
 			error = 0;
 
+			if ((kwq->kw_ksynqueues[KSYN_QUEUE_WRITER].ksynq_count != 0) && ((updatebits & PTH_RWL_WBIT) == 0))
+				panic("kwq_handle_unlock: writer pending but no writebit set %x\n", updatebits);
 		} 
 		break;
 			
 		case PTH_RW_TYPE_WRITE: {
-			updatebits |= PTHRW_EBIT;
+			
+			/* only one thread is goin to be granted */
+			updatebits |= (PTHRW_INC);
+			updatebits |= PTH_RWL_KBIT| PTH_RWL_EBIT;
+			
 			if (((flags & KW_UNLOCK_PREPOST_WRLOCK) != 0) && (low_writer == premgen)) {
 				block = 0;
 				if (kwq->kw_ksynqueues[KSYN_QUEUE_WRITER].ksynq_count != 0)
-					updatebits |= PTHRW_WBIT;
-				else if ((rwtype & PTH_RWSHFT_TYPE_YWRITE) != 0)
-					updatebits |= PTHRW_YBIT;
+					updatebits |= PTH_RWL_WBIT;
+				if ((rwtype & PTH_RWSHFT_TYPE_YWRITE) != 0)
+					updatebits |= PTH_RWL_YBIT;
 				th = preth;
 				uth = get_bsdthread_info(th);
-				uth->uu_psynchretval = updatebits;
+				kwe = &uth->uu_kwe;
+				kwe->kwe_psynchretval = updatebits;
 			}  else {
 				/*  we are not granting writelock to the preposting thread */
-				uth = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], kwq);
+				kwe = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], kwq);
 
 				/* if there are writers present or the preposting write thread then W bit is to be set */
 				if ((kwq->kw_ksynqueues[KSYN_QUEUE_WRITER].ksynq_count != 0) || ((flags & KW_UNLOCK_PREPOST_WRLOCK) != 0) )
-					updatebits |= PTHRW_WBIT;
-				else if ((rwtype & PTH_RWSHFT_TYPE_YWRITE) != 0)
-					updatebits |= PTHRW_YBIT;
-				uth->uu_psynchretval = updatebits;
-				uth->uu_kwqqueue = NULL;
+					updatebits |= PTH_RWL_WBIT;
+				if ((rwtype & PTH_RWSHFT_TYPE_YWRITE) != 0)
+					updatebits |= PTH_RWL_YBIT;
+				kwe->kwe_psynchretval = updatebits;
+				kwe->kwe_kwqqueue = NULL;
 				/* setup next in the queue */
-				kret = ksyn_wakeup_thread(kwq, uth);
+				kret = ksyn_wakeup_thread(kwq, kwe);
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWHANDLEU | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 3, kret, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+#if __TESTPANICS__
 				if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
 					panic("kwq_handle_unlock: panic waking up writer\n");
+#endif /* __TESTPANICS__ */
 				if (kret == KERN_NOT_WAITING) {
 					kwq->kw_pre_intrcount = 1;	/* actually a  count */
 					kwq->kw_pre_intrseq = low_writer;
@@ -2802,6 +3466,9 @@ kwq_handle_unlock(ksyn_wait_queue_t kwq, uint32_t mgen,  uint32_t * updatep, int
 				}
 				error = 0;
 			}
+			kwq->kw_nextseqword = (rw_wc & PTHRW_COUNT_MASK) + updatebits;
+			if ((updatebits & (PTH_RWL_KBIT | PTH_RWL_EBIT)) != (PTH_RWL_KBIT | PTH_RWL_EBIT))
+				panic("kwq_handle_unlock: writer lock granted but no ke set %x\n", updatebits);
 
 		 } 
 		break;
@@ -2809,26 +3476,36 @@ kwq_handle_unlock(ksyn_wait_queue_t kwq, uint32_t mgen,  uint32_t * updatep, int
 		case PTH_RW_TYPE_YWRITE: {
 			/* can reader locks be granted ahead of this write? */
 			if ((rwtype & PTH_RWSHFT_TYPE_READ) != 0)  {
-				if ((rwtype & PTH_RWSHFT_TYPE_WRITE) != 0)
-					updatebits |= PTHRW_WBIT;
-				else if ((rwtype & PTH_RWSHFT_TYPE_WRITE) != 0)
-					updatebits |= PTHRW_YBIT;
+				if  ((rwtype & PTH_RWSHFT_TYPE_MASK) != 0) {
+					if (rwtype & PTH_RWSHFT_TYPE_WRITE)
+						updatebits |= (PTH_RWL_WBIT | PTH_RWL_KBIT);
+					if (rwtype & PTH_RWSHFT_TYPE_YWRITE)
+						updatebits |= PTH_RWL_YBIT;
+				}
 					
 				if ((rwtype & PTH_RWSHFT_TYPE_WRITE) != 0) {
 					/* is lowest reader less than the low writer? */
 					if (is_seqlower(low_reader,low_writer) == 0)
 						goto yielditis;
+
+					numneeded = ksyn_queue_count_tolowest(kq, low_writer);
+					updatebits += (numneeded << PTHRW_COUNT_SHIFT);
 					if (((flags & KW_UNLOCK_PREPOST_READLOCK) != 0) && (is_seqlower(premgen, low_writer) != 0)) {
 						uth = current_uthread();
-						uth->uu_psynchretval = updatebits;
+						kwe = &uth->uu_kwe;
+						/* add one more */
+						updatebits += PTHRW_INC;
+						kwe->kwe_psynchretval = updatebits;
 						block = 0;
 					}
-					if (prepost != 0) {
-						updatebits |= PTHRW_RW_HUNLOCK;
-					}
 					
+					kwq->kw_nextseqword = (rw_wc & PTHRW_COUNT_MASK) + updatebits;
+
 					/* there will be readers to wakeup , no need to check for woken */
 					failed = ksyn_wakeupreaders(kwq, low_writer, 0, 0, updatebits, NULL);
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWHANDLEU | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 2, woken, failed, 0);
+#endif /* _PSYNCH_TRACE_ */
 					if (failed != 0) {
 						kwq->kw_pre_intrcount = failed;	/* actually a  count */
 						kwq->kw_pre_intrseq = low_writer;
@@ -2838,32 +3515,33 @@ kwq_handle_unlock(ksyn_wait_queue_t kwq, uint32_t mgen,  uint32_t * updatep, int
 					error = 0;
 				} else {
 					/* wakeup all readers */
+					numneeded = kwq->kw_ksynqueues[KSYN_QUEUE_READ].ksynq_count;
+					updatebits += (numneeded << PTHRW_COUNT_SHIFT);
 					if ((prepost != 0) &&  ((flags & KW_UNLOCK_PREPOST_READLOCK) != 0)) {
 						uth = current_uthread();
-						uth->uu_psynchretval = updatebits;
+						kwe = &uth->uu_kwe;
+						updatebits += PTHRW_INC;
+						kwe->kwe_psynchretval = updatebits;
 						block = 0;
 					}
-					if (prepost != 0) {
-						updatebits |= PTHRW_RW_HUNLOCK;
-					}
+					kwq->kw_nextseqword = (rw_wc & PTHRW_COUNT_MASK) + updatebits;
 					failed = ksyn_wakeupreaders(kwq, low_writer, 0, 1, updatebits, &woken);
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWHANDLEU | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 2, woken, failed, 0);
+#endif /* _PSYNCH_TRACE_ */
 					if (failed != 0) {
 						kwq->kw_pre_intrcount = failed;	/* actually a  count */
 						kwq->kw_pre_intrseq = kwq->kw_highseq;
 						kwq->kw_pre_intrretbits = updatebits;
 						kwq->kw_pre_intrtype = PTH_RW_TYPE_READ;
 					}
-					/* if we woken up no one and the current thread is returning, ensure it is doing unlock */
-					if ((prepost != 0) && (woken ==0) && (block == 0)&& ((updatebits & PTHRW_RW_HUNLOCK) != 0)) {
-						uth = current_uthread();
-						uth->uu_psynchretval = updatebits;
-					}
 					error = 0;
 				}
 			} else {
 yielditis:
 				/* no reads, so granting yeilding writes */
-				updatebits |= PTHRW_EBIT;
+				updatebits |= PTHRW_INC;
+				updatebits |= PTH_RWL_KBIT| PTH_RWL_EBIT;
 
 				if (((flags & KW_UNLOCK_PREPOST_YWRLOCK) != 0) && (low_writer == premgen)) {
 					/* preposting yielding write thread is being granted exclusive lock */
@@ -2871,29 +3549,35 @@ yielditis:
 					block = 0;
 
 					if ((rwtype & PTH_RWSHFT_TYPE_WRITE) != 0)
-						updatebits |= PTHRW_WBIT;
+						updatebits |= PTH_RWL_WBIT;
 					else if (kwq->kw_ksynqueues[KSYN_QUEUE_YWRITER].ksynq_count != 0)
-						updatebits |= PTHRW_YBIT;
+						updatebits |= PTH_RWL_YBIT;
 
 					th = preth;
 					uth = get_bsdthread_info(th);
-					uth->uu_psynchretval = updatebits;
+					kwe = &uth->uu_kwe;
+					kwe->kwe_psynchretval = updatebits;
 				}  else {
 					/*  we are granting yield writelock to some other thread */
-					uth = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_YWRITER], kwq);
+					kwe = ksyn_queue_removefirst(&kwq->kw_ksynqueues[KSYN_QUEUE_YWRITER], kwq);
 
 					if ((rwtype & PTH_RWSHFT_TYPE_WRITE) != 0)
-						updatebits |= PTHRW_WBIT;
+						updatebits |= PTH_RWL_WBIT;
 					/* if there are ywriters present or the preposting ywrite thread then W bit is to be set */
 					else if ((kwq->kw_ksynqueues[KSYN_QUEUE_YWRITER].ksynq_count != 0) || ((flags & KW_UNLOCK_PREPOST_YWRLOCK) != 0) )
-						updatebits |= PTHRW_YBIT;
+						updatebits |= PTH_RWL_YBIT;
 
-					uth->uu_psynchretval = updatebits;
-					uth->uu_kwqqueue = NULL;
+					kwe->kwe_psynchretval = updatebits;
+					kwe->kwe_kwqqueue = NULL;
 
-					kret = ksyn_wakeup_thread(kwq, uth);
+					kret = ksyn_wakeup_thread(kwq, kwe);
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWHANDLEU | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 3, kret, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+#if __TESTPANICS__
 					if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
 						panic("kwq_handle_unlock : panic waking up readers\n");
+#endif /* __TESTPANICS__ */
 					if (kret == KERN_NOT_WAITING) {
 						kwq->kw_pre_intrcount = 1;	/* actually a  count */
 						kwq->kw_pre_intrseq = low_ywriter;
@@ -2902,6 +3586,7 @@ yielditis:
 					}
 					error = 0;
 				}
+				kwq->kw_nextseqword = (rw_wc & PTHRW_COUNT_MASK) + updatebits;
 			}
 		} 
 		break;
@@ -2911,21 +3596,58 @@ yielditis:
 			
 	};
 
-	if (updatep != NULL)
-		*updatep = updatebits;
 
 out:
+	if (updatep != NULL)
+		*updatep = updatebits;
 	if (blockp != NULL)
 		*blockp = block;
 #if _PSYNCH_TRACE_
-#if defined(__i386__)
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_RWHANDLEU | DBG_FUNC_END, (uint32_t)kwq, 0, 0, block, 0);
-#endif
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWHANDLEU | DBG_FUNC_END, (uint32_t)kwq->kw_addr, 0, updatebits, block, 0);
 #endif /* _PSYNCH_TRACE_ */
 	return(error);
 }
 
+int
+kwq_handle_overlap(ksyn_wait_queue_t kwq, uint32_t lgenval, __unused uint32_t ugenval, uint32_t rw_wc, uint32_t *updatebitsp, __unused int flags , int * blockp)
+{
+	uint32_t highword = kwq->kw_nextseqword & PTHRW_COUNT_MASK;
+	uint32_t lowword = kwq->kw_lastseqword & PTHRW_COUNT_MASK;
+	uint32_t val=0;
+	int withinseq;
 
+
+	/* overlap is set, so no need to check for valid state for overlap */
+	
+	withinseq = ((is_seqlower_eq(rw_wc, highword) != 0) || (is_seqhigher_eq(lowword, rw_wc) != 0));
+
+	if (withinseq != 0) {
+		if ((kwq->kw_nextseqword & PTH_RWL_LBIT) == 0)  {
+			/* if no writers ahead, overlap granted */
+			if ((lgenval & PTH_RWL_WBIT) == 0) {
+				goto grantoverlap;
+			}
+		} else  {
+			/* Lbit is set, and writers ahead does not count */
+			goto grantoverlap;
+		}
+	}
+
+	*blockp = 1;
+	return(0);
+
+grantoverlap:
+		/* increase the next expected seq by one */
+		kwq->kw_nextseqword += PTHRW_INC;
+		/* set count by one &  bits from the nextseq and add M bit */
+		val = PTHRW_INC;
+		val |= ((kwq->kw_nextseqword & PTHRW_BIT_MASK) | PTH_RWL_MBIT);
+		*updatebitsp = val;
+		*blockp = 0;
+		return(0);
+}
+
+#if NOTYET
 /* handle downgrade actions */
 int
 kwq_handle_downgrade(ksyn_wait_queue_t kwq, uint32_t mgen, __unused int flags, __unused uint32_t premgen, __unused int * blockp)
@@ -2964,33 +3686,38 @@ kwq_handle_downgrade(ksyn_wait_queue_t kwq, uint32_t mgen, __unused int flags, _
 	}
 	return(0);
 }
+
+#endif /* NOTYET */
+
 /************* Indiv queue support routines ************************/
 void
 ksyn_queue_init(ksyn_queue_t kq)
 {
-	TAILQ_INIT(&kq->ksynq_uthlist);
+	TAILQ_INIT(&kq->ksynq_kwelist);
 	kq->ksynq_count = 0;
 	kq->ksynq_firstnum = 0;
 	kq->ksynq_lastnum = 0;
 }
 
-
 int
-ksyn_queue_insert(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t mgen, struct uthread * uth, int fit)
+ksyn_queue_insert(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t mgen, struct uthread * uth, ksyn_waitq_element_t kwe, int fit)
 {
 	uint32_t lockseq = mgen & PTHRW_COUNT_MASK;
-	struct uthread * q_uth, * r_uth;
+	ksyn_waitq_element_t q_kwe, r_kwe;
+	int res = 0;
+	uthread_t nuth = NULL;
 	
 	if (kq->ksynq_count == 0) {
-		TAILQ_INSERT_HEAD(&kq->ksynq_uthlist, uth, uu_mtxlist);
+		TAILQ_INSERT_HEAD(&kq->ksynq_kwelist, kwe, kwe_list);
 		kq->ksynq_firstnum = lockseq;
 		kq->ksynq_lastnum = lockseq;
 		goto out;
 	}
 
 	if (fit == FIRSTFIT) {
+		/* TBD: if retry bit is set for mutex, add it to the head */
 		/* firstfit, arriving order */
-		TAILQ_INSERT_TAIL(&kq->ksynq_uthlist, uth, uu_mtxlist);
+		TAILQ_INSERT_TAIL(&kq->ksynq_kwelist, kwe, kwe_list);
 		if (is_seqlower (lockseq, kq->ksynq_firstnum) != 0)
 			kq->ksynq_firstnum = lockseq;
 		if (is_seqhigher (lockseq, kq->ksynq_lastnum) != 0)
@@ -2998,55 +3725,79 @@ ksyn_queue_insert(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t mgen, struct 
 		goto out;
 	}
 		
-	if ((lockseq == kq->ksynq_firstnum) || (lockseq == kq->ksynq_lastnum))
-		panic("ksyn_queue_insert: two threads with same lockseq ");
+	if ((lockseq == kq->ksynq_firstnum) || (lockseq == kq->ksynq_lastnum)) {
+		/* During prepost when a thread is getting cancelled, we could have two with same seq */
+		if (kwe->kwe_flags == KWE_THREAD_PREPOST) {
+			q_kwe = ksyn_queue_find_seq(kwq, kq, lockseq, 0);
+			if ((q_kwe != NULL) && ((nuth = (uthread_t)q_kwe->kwe_uth) != NULL) && 
+				((nuth->uu_flag & (UT_CANCELDISABLE | UT_CANCEL | UT_CANCELED)) == UT_CANCEL)) {
+				TAILQ_INSERT_TAIL(&kq->ksynq_kwelist, kwe, kwe_list);
+				goto out;
+
+			} else {
+				__FAILEDUSERTEST__("ksyn_queue_insert: two threads with same lockseq ");
+				res = EBUSY;
+				goto out1;
+			}
+		 } else {
+			__FAILEDUSERTEST__("ksyn_queue_insert: two threads with same lockseq ");
+			res = EBUSY;
+			goto out1;
+		}
+	}
 
 	/* check for next seq one */
 	if (is_seqlower(kq->ksynq_lastnum, lockseq) != 0) {
-		TAILQ_INSERT_TAIL(&kq->ksynq_uthlist, uth, uu_mtxlist);
+		TAILQ_INSERT_TAIL(&kq->ksynq_kwelist, kwe, kwe_list);
 		kq->ksynq_lastnum = lockseq;
 		goto out;
 	}
 
 	if (is_seqlower(lockseq, kq->ksynq_firstnum) != 0) {
-		TAILQ_INSERT_HEAD(&kq->ksynq_uthlist, uth, uu_mtxlist);
+		TAILQ_INSERT_HEAD(&kq->ksynq_kwelist, kwe, kwe_list);
 		kq->ksynq_firstnum = lockseq;
 		goto out;
 	}
 
 	/* goto slow  insert mode */
-	TAILQ_FOREACH_SAFE(q_uth, &kq->ksynq_uthlist, uu_mtxlist, r_uth) {
-		if (is_seqhigher(q_uth->uu_lockseq, lockseq) != 0) {
-			TAILQ_INSERT_BEFORE(q_uth, uth, uu_mtxlist);
+	TAILQ_FOREACH_SAFE(q_kwe, &kq->ksynq_kwelist, kwe_list, r_kwe) {
+		if (is_seqhigher(q_kwe->kwe_lockseq, lockseq) != 0) {
+			TAILQ_INSERT_BEFORE(q_kwe, kwe, kwe_list);
 			goto out;
 		}
 	}
 
+#if __TESTPANICS__
 	panic("failed to insert \n");
+#endif /* __TESTPANICS__ */
+
 out:
+	if (uth != NULL)
+		kwe->kwe_uth = uth;
 	kq->ksynq_count++;
 	kwq->kw_inqueue++;
 	update_low_high(kwq, lockseq);
-	return(0);
+out1:
+	return(res);
 }
 
-struct uthread *
+ksyn_waitq_element_t
 ksyn_queue_removefirst(ksyn_queue_t kq, ksyn_wait_queue_t kwq)
 {
-	uthread_t uth = NULL;
-	uthread_t q_uth;
+	ksyn_waitq_element_t kwe = NULL;
+	ksyn_waitq_element_t q_kwe;
 	uint32_t curseq;
 
 	if (kq->ksynq_count != 0) {
-		uth = TAILQ_FIRST(&kq->ksynq_uthlist);
-		TAILQ_REMOVE(&kq->ksynq_uthlist, uth, uu_mtxlist);
-		curseq = uth->uu_lockseq & PTHRW_COUNT_MASK;
+		kwe = TAILQ_FIRST(&kq->ksynq_kwelist);
+		TAILQ_REMOVE(&kq->ksynq_kwelist, kwe, kwe_list);
+		curseq = kwe->kwe_lockseq & PTHRW_COUNT_MASK;
 		kq->ksynq_count--;
 		kwq->kw_inqueue--;
 	
 		if(kq->ksynq_count != 0) {
-			q_uth = TAILQ_FIRST(&kq->ksynq_uthlist);
-			kq->ksynq_firstnum = (q_uth->uu_lockseq & PTHRW_COUNT_MASK);
+			q_kwe = TAILQ_FIRST(&kq->ksynq_kwelist);
+			kq->ksynq_firstnum = (q_kwe->kwe_lockseq & PTHRW_COUNT_MASK);
 		} else {
 			kq->ksynq_firstnum = 0;
 			kq->ksynq_lastnum = 0;
@@ -3062,28 +3813,30 @@ ksyn_queue_removefirst(ksyn_queue_t kq, ksyn_wait_queue_t kwq)
 				kwq->kw_highseq = find_nexthighseq(kwq);
 		}
 	}
-	return(uth);
+	return(kwe);
 }
 
 void
-ksyn_queue_removeitem(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uthread_t uth)
+ksyn_queue_removeitem(ksyn_wait_queue_t kwq, ksyn_queue_t kq, ksyn_waitq_element_t kwe)
 {
-	uthread_t q_uth;
+	ksyn_waitq_element_t q_kwe;
 	uint32_t curseq;
 
 	if (kq->ksynq_count > 0) {
-		TAILQ_REMOVE(&kq->ksynq_uthlist, uth, uu_mtxlist);
+		TAILQ_REMOVE(&kq->ksynq_kwelist, kwe, kwe_list);
 		kq->ksynq_count--;
 		if(kq->ksynq_count != 0) {
-			q_uth = TAILQ_FIRST(&kq->ksynq_uthlist);
-			kq->ksynq_firstnum = (q_uth->uu_lockseq & PTHRW_COUNT_MASK);
+			q_kwe = TAILQ_FIRST(&kq->ksynq_kwelist);
+			kq->ksynq_firstnum = (q_kwe->kwe_lockseq & PTHRW_COUNT_MASK);
+			q_kwe = TAILQ_LAST(&kq->ksynq_kwelist, ksynq_kwelist_head);
+			kq->ksynq_lastnum = (q_kwe->kwe_lockseq & PTHRW_COUNT_MASK);
 		} else {
 			kq->ksynq_firstnum = 0;
 			kq->ksynq_lastnum = 0;
 		
 		}
 		kwq->kw_inqueue--;
-		curseq = uth->uu_lockseq & PTHRW_COUNT_MASK;
+		curseq = kwe->kwe_lockseq & PTHRW_COUNT_MASK;
 		if (kwq->kw_inqueue == 0) {
 			kwq->kw_lowseq = 0;
 			kwq->kw_highseq = 0;
@@ -3096,6 +3849,168 @@ ksyn_queue_removeitem(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uthread_t uth)
 	}
 }
 
+/* find the thread and removes from the queue */
+ksyn_waitq_element_t
+ksyn_queue_find_seq(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t seq, int remove)
+{
+	ksyn_waitq_element_t q_kwe, r_kwe;
+
+	/* TBD: bail out if higher seq is seen */
+	/* case where wrap in the tail of the queue exists */
+	TAILQ_FOREACH_SAFE(q_kwe, &kq->ksynq_kwelist, kwe_list, r_kwe) {
+		if ((q_kwe->kwe_lockseq & PTHRW_COUNT_MASK) == seq) {
+			if (remove != 0)
+				ksyn_queue_removeitem(kwq, kq, q_kwe);
+			return(q_kwe);
+		}
+	}
+	return(NULL);
+}
+
+
+/* find the thread at the target sequence (or a broadcast/prepost at or above) */
+ksyn_waitq_element_t
+ksyn_queue_find_cvpreposeq(ksyn_queue_t kq, uint32_t cgen)
+{
+	ksyn_waitq_element_t q_kwe, r_kwe;
+	uint32_t lgen = (cgen & PTHRW_COUNT_MASK);
+
+	/* case where wrap in the tail of the queue exists */
+	TAILQ_FOREACH_SAFE(q_kwe, &kq->ksynq_kwelist, kwe_list, r_kwe) {
+
+		/* skip the lower entries */
+		if (is_seqlower((q_kwe->kwe_lockseq & PTHRW_COUNT_MASK), cgen) != 0) 
+			continue;
+
+		switch (q_kwe->kwe_flags) {
+
+		case KWE_THREAD_INWAIT:
+			if ((q_kwe->kwe_lockseq & PTHRW_COUNT_MASK) != lgen)
+				break;
+			/* fall thru */
+
+		case KWE_THREAD_BROADCAST:
+		case KWE_THREAD_PREPOST:
+			return (q_kwe);
+		}
+	}
+	return(NULL);
+}
+
+/* look for a thread at lockseq, a  */
+ksyn_waitq_element_t
+ksyn_queue_find_signalseq(__unused ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t uptoseq, uint32_t signalseq)
+{
+	ksyn_waitq_element_t q_kwe, r_kwe, t_kwe = NULL;
+
+	/* case where wrap in the tail of the queue exists */
+	TAILQ_FOREACH_SAFE(q_kwe, &kq->ksynq_kwelist, kwe_list, r_kwe) {
+
+		switch (q_kwe->kwe_flags) {
+
+		case KWE_THREAD_PREPOST:
+			if (is_seqhigher((q_kwe->kwe_lockseq & PTHRW_COUNT_MASK), uptoseq))
+				return t_kwe;
+			/* fall thru */
+
+		case KWE_THREAD_BROADCAST:
+			/* match any prepost at our same uptoseq or any broadcast above */
+			if (is_seqlower((q_kwe->kwe_lockseq & PTHRW_COUNT_MASK), uptoseq))
+				continue;
+			return  q_kwe;
+
+		case KWE_THREAD_INWAIT:
+			/*
+			 * Match any (non-cancelled) thread at or below our upto sequence -
+			 * but prefer an exact match to our signal sequence (if present) to
+			 * keep exact matches happening.
+			 */
+			if (is_seqhigher((q_kwe->kwe_lockseq & PTHRW_COUNT_MASK), uptoseq))
+				return t_kwe;
+
+			if (q_kwe->kwe_kwqqueue == kwq) {
+				uthread_t ut = q_kwe->kwe_uth;
+				if ((ut->uu_flag & ( UT_CANCELDISABLE | UT_CANCEL | UT_CANCELED)) != UT_CANCEL) {
+					/* if equal or higher than our signal sequence, return this one */
+					if (is_seqhigher_eq((q_kwe->kwe_lockseq & PTHRW_COUNT_MASK), signalseq))
+						return q_kwe;
+					
+					/* otherwise, just remember this eligible thread and move on */
+					if (t_kwe == NULL)
+						t_kwe = q_kwe;
+				}
+			}
+			break;
+
+		default:
+			panic("ksyn_queue_find_signalseq(): unknow wait queue element type (%d)\n", q_kwe->kwe_flags);
+			break;
+		}
+	}
+	return t_kwe;
+}
+
+
+int
+ksyn_queue_move_tofree(ksyn_wait_queue_t ckwq, ksyn_queue_t kq, uint32_t upto, ksyn_queue_t kfreeq, int all, int release)
+{
+	ksyn_waitq_element_t kwe;
+	int count = 0;
+	uint32_t tseq = upto & PTHRW_COUNT_MASK;
+#if _PSYNCH_TRACE_
+	uthread_t ut;
+#endif /* _PSYNCH_TRACE_ */
+
+	ksyn_queue_init(kfreeq);
+
+	/* free all the entries, must be only fakes.. */
+	kwe = TAILQ_FIRST(&kq->ksynq_kwelist);
+	while (kwe != NULL) {
+		if ((all == 0) && (is_seqhigher((kwe->kwe_lockseq & PTHRW_COUNT_MASK), tseq) != 0)) 
+			break;
+		if (kwe->kwe_flags == KWE_THREAD_INWAIT) {
+			/* 
+			 * This scenario is typically noticed when the cvar is 
+			 * reinited and the new waiters are waiting. We can
+			 * return them as spurious wait so the cvar state gets
+			 * reset correctly.
+			 */
+#if _PSYNCH_TRACE_
+			ut = (uthread_t)kwe->kwe_uth;
+#endif /* _PSYNCH_TRACE_ */
+
+			/* skip canceled ones */
+			/* wake the rest */
+			ksyn_queue_removeitem(ckwq, kq, kwe);
+			/* set M bit to indicate to waking CV to retun Inc val */
+			kwe->kwe_psynchretval = PTHRW_INC | (PTH_RWS_CV_MBIT | PTH_RWL_MTX_WAIT);
+			kwe->kwe_kwqqueue = NULL;
+#if _PSYNCH_TRACE_
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVHBROAD | DBG_FUNC_NONE, (uint32_t)ckwq->kw_addr, 0xcafecaf3, (uint32_t)(thread_tid((struct thread *)(((struct uthread *)(kwe->kwe_uth))->uu_context.vc_thread))), kwe->kwe_psynchretval, 0);
+#endif /* _PSYNCH_TRACE_ */
+			(void)ksyn_wakeup_thread(ckwq, kwe);
+		} else {
+			ksyn_queue_removeitem(ckwq, kq, kwe);
+			TAILQ_INSERT_TAIL(&kfreeq->ksynq_kwelist, kwe, kwe_list);
+			ckwq->kw_fakecount--;
+			count++;
+		}
+		kwe = TAILQ_FIRST(&kq->ksynq_kwelist);
+	}
+
+	if ((release != 0) && (count != 0)) {
+		kwe = TAILQ_FIRST(&kfreeq->ksynq_kwelist);
+		while (kwe != NULL) {
+			TAILQ_REMOVE(&kfreeq->ksynq_kwelist, kwe, kwe_list);
+			zfree(kwe_zone, kwe);
+			kwe = TAILQ_FIRST(&kfreeq->ksynq_kwelist);
+		}
+	}
+
+	return(count);
+}
+
+/*************************************************************************/
 
 void
 update_low_high(ksyn_wait_queue_t kwq, uint32_t lockseq)
@@ -3168,13 +4083,65 @@ find_nexthighseq(ksyn_wait_queue_t kwq)
 }
 
 int
+is_seqlower(uint32_t x, uint32_t y)
+{
+	if (x < y) {
+		if ((y-x) < (PTHRW_MAX_READERS/2))
+			return(1);
+	} else {
+		if ((x-y) > (PTHRW_MAX_READERS/2))
+			return(1);
+	}
+	return(0);
+}
+
+int
+is_seqlower_eq(uint32_t x, uint32_t y)
+{
+	if (x==y)
+		return(1);
+	else
+		return(is_seqlower(x,y));
+}
+
+int
+is_seqhigher(uint32_t x, uint32_t y)
+{
+	if (x > y) {
+		if ((x-y) < (PTHRW_MAX_READERS/2))
+			return(1);
+	} else {
+		if ((y-x) > (PTHRW_MAX_READERS/2))
+			return(1);
+	}
+	return(0);
+}
+
+int
+is_seqhigher_eq(uint32_t x, uint32_t y)
+{
+	if (x==y)
+		return(1);
+	else
+		return(is_seqhigher(x,y));
+}
+
+
+int
 find_diff(uint32_t upto, uint32_t lowest)
 {
 	uint32_t diff;
 
 	if (upto == lowest)
 		return(0);
+#if 0
 	diff = diff_genseq(upto, lowest);
+#else
+        if (is_seqlower(upto, lowest) != 0)
+                diff = diff_genseq(lowest, upto);
+        else
+                diff = diff_genseq(upto, lowest);
+#endif
 	diff = (diff >> PTHRW_COUNT_SHIFT);
 	return(diff);
 }
@@ -3188,13 +4155,13 @@ find_seq_till(ksyn_wait_queue_t kwq, uint32_t upto, uint32_t nwaiters, uint32_t 
 
 
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_FSEQTILL | DBG_FUNC_START, 0, 0, upto, nwaiters, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_FSEQTILL | DBG_FUNC_START, 0, 0, upto, nwaiters, 0);
 #endif /* _PSYNCH_TRACE_ */
 
 	for (i= 0; i< KSYN_QUEUE_MAX; i++) {
 		count += ksyn_queue_count_tolowest(&kwq->kw_ksynqueues[i], upto);
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_FSEQTILL | DBG_FUNC_NONE, 0, 1, i, count, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_FSEQTILL | DBG_FUNC_NONE, 0, 1, i, count, 0);
 #endif /* _PSYNCH_TRACE_ */
 		if (count >= nwaiters) {
 			break;
@@ -3205,9 +4172,11 @@ find_seq_till(ksyn_wait_queue_t kwq, uint32_t upto, uint32_t nwaiters, uint32_t 
 		*countp = count;
 	}
 #if _PSYNCH_TRACE_
-	KERNEL_DEBUG_CONSTANT(_PSYNCH_TRACE_FSEQTILL | DBG_FUNC_END, 0, 0, count, nwaiters, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_FSEQTILL | DBG_FUNC_END, 0, 0, count, nwaiters, 0);
 #endif /* _PSYNCH_TRACE_ */
-	if (count >= nwaiters)
+	if (count == 0)
+		return(0);
+	else if (count >= nwaiters)
 		return(1);
 	else
 		return(0);
@@ -3218,7 +4187,7 @@ uint32_t
 ksyn_queue_count_tolowest(ksyn_queue_t kq, uint32_t upto)
 {
 	uint32_t i = 0;
-	uthread_t uth, newuth;
+	ksyn_waitq_element_t kwe, newkwe;
 	uint32_t curval;
 
 	/* if nothing or the  first num is greater than upto, return none */
@@ -3227,8 +4196,8 @@ ksyn_queue_count_tolowest(ksyn_queue_t kq, uint32_t upto)
 	if (upto == kq->ksynq_firstnum)
 		return(1);
 
-	TAILQ_FOREACH_SAFE(uth, &kq->ksynq_uthlist, uu_mtxlist, newuth) {
-		curval = (uth->uu_lockseq & PTHRW_COUNT_MASK);
+	TAILQ_FOREACH_SAFE(kwe, &kq->ksynq_kwelist, kwe_list, newkwe) {
+		curval = (kwe->kwe_lockseq & PTHRW_COUNT_MASK);
 		if (upto == curval) {
 			i++;
 			break;
@@ -3242,19 +4211,147 @@ ksyn_queue_count_tolowest(ksyn_queue_t kq, uint32_t upto)
 	return(i);
 }
 
-/* find the thread and removes from the queue */
-uthread_t
-ksyn_queue_find_seq(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t seq)
+
+/* handles the cond broadcast of cvar and returns number of woken threads and bits for syscall return */
+void
+ksyn_handle_cvbroad(ksyn_wait_queue_t ckwq, uint32_t upto, uint32_t * updatep)
 {
-		uthread_t q_uth, r_uth;
-		/* case where wrap in the tail of the queue exists */
-		TAILQ_FOREACH_SAFE(q_uth, &kq->ksynq_uthlist, uu_mtxlist, r_uth) {
-			if (q_uth->uu_lockseq == seq) {
-				ksyn_queue_removeitem(kwq, kq, q_uth);
-				return(q_uth);
-			}
+	kern_return_t kret;
+	ksyn_queue_t kq;
+	ksyn_waitq_element_t kwe, newkwe;
+	uint32_t updatebits = 0;
+	struct ksyn_queue  kfreeq;
+	uthread_t ut;
+
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVHBROAD | DBG_FUNC_START, 0xcbcbcbc2, upto, 0, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+
+	ksyn_queue_init(&kfreeq);
+	kq = &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER];
+
+ retry:
+	TAILQ_FOREACH_SAFE(kwe, &kq->ksynq_kwelist, kwe_list, newkwe) {
+
+		if (is_seqhigher((kwe->kwe_lockseq & PTHRW_COUNT_MASK), upto))	/* outside our range */
+			break;
+
+		/* now handle the one we found (inside the range) */
+		switch (kwe->kwe_flags) {
+
+		case KWE_THREAD_INWAIT:
+			ut = (uthread_t)kwe->kwe_uth;
+
+			/* skip canceled ones */
+			if (kwe->kwe_kwqqueue != ckwq ||
+			    (ut->uu_flag & (UT_CANCELDISABLE | UT_CANCEL | UT_CANCELED)) == UT_CANCEL)
+				break;
+
+			/* wake the rest */
+			ksyn_queue_removeitem(ckwq, kq, kwe);
+			kwe->kwe_psynchretval = PTH_RWL_MTX_WAIT;
+			kwe->kwe_kwqqueue = NULL;
+#if _PSYNCH_TRACE_
+				__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVHBROAD | DBG_FUNC_NONE, (uint32_t)ckwq->kw_addr, 0xcafecaf2, (uint32_t)(thread_tid((struct thread *)(((struct uthread *)(kwe->kwe_uth))->uu_context.vc_thread))), kwe->kwe_psynchretval, 0);
+#endif /* _PSYNCH_TRACE_ */
+				kret = ksyn_wakeup_thread(ckwq, kwe);
+#if __TESTPANICS__
+			if ((kret != KERN_SUCCESS) && (kret != KERN_NOT_WAITING))
+				panic("ksyn_wakeupreaders: panic waking up readers\n");
+#endif /* __TESTPANICS__ */
+			updatebits += PTHRW_INC;
+			break;
+			
+		case KWE_THREAD_BROADCAST:
+		case KWE_THREAD_PREPOST:
+			ksyn_queue_removeitem(ckwq, kq, kwe);
+			TAILQ_INSERT_TAIL(&kfreeq.ksynq_kwelist, kwe, kwe_list);
+			ckwq->kw_fakecount--;
+			break;
+			
+		default: 
+			panic("unknown kweflags\n");
+			break;
 		}
-	return(NULL);
+	}
+
+	/* Need to enter a broadcast in the queue (if not already at L == S) */
+
+	if ((ckwq->kw_lword & PTHRW_COUNT_MASK) != (ckwq->kw_sword & PTHRW_COUNT_MASK)) {
+
+		newkwe = TAILQ_FIRST(&kfreeq.ksynq_kwelist);
+		if (newkwe == NULL) {
+			ksyn_wqunlock(ckwq);
+			newkwe = (ksyn_waitq_element_t)zalloc(kwe_zone);
+			TAILQ_INSERT_TAIL(&kfreeq.ksynq_kwelist, newkwe, kwe_list);
+			ksyn_wqlock(ckwq);
+			goto retry;
+		}
+		
+		TAILQ_REMOVE(&kfreeq.ksynq_kwelist, newkwe, kwe_list);
+		bzero(newkwe, sizeof(struct ksyn_waitq_element));
+		newkwe->kwe_kwqqueue = ckwq;
+		newkwe->kwe_flags = KWE_THREAD_BROADCAST;
+		newkwe->kwe_lockseq = upto;
+		newkwe->kwe_count = 0;
+		newkwe->kwe_uth = NULL;
+		newkwe->kwe_psynchretval = 0;
+		
+#if _PSYNCH_TRACE_
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVHBROAD | DBG_FUNC_NONE, (uint32_t)ckwq->kw_addr, 0xfeedfeed, upto, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+		
+		(void)ksyn_queue_insert(ckwq, &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER], upto, NULL, newkwe, SEQFIT);
+		ckwq->kw_fakecount++;
+	}
+
+	/* free up any remaining things stumbled across above */
+	kwe = TAILQ_FIRST(&kfreeq.ksynq_kwelist);
+	while (kwe != NULL) {
+		TAILQ_REMOVE(&kfreeq.ksynq_kwelist, kwe, kwe_list);
+		zfree(kwe_zone, kwe);
+		kwe = TAILQ_FIRST(&kfreeq.ksynq_kwelist);
+	}
+
+	if (updatep != NULL)
+		*updatep = updatebits;
+
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVHBROAD | DBG_FUNC_END, 0xeeeeeeed, updatebits, 0, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
 }
 
+void
+ksyn_cvupdate_fixup(ksyn_wait_queue_t ckwq, uint32_t *updatep, ksyn_queue_t kfreeq, int release)
+{
+	uint32_t updatebits = 0;
+
+	if (updatep != NULL)
+		updatebits = *updatep;
+	if ((ckwq->kw_lword & PTHRW_COUNT_MASK) == (ckwq->kw_sword & PTHRW_COUNT_MASK)) {
+		updatebits |= PTH_RWS_CV_CBIT;
+		if (ckwq->kw_inqueue != 0) {
+			/* FREE THE QUEUE */
+			ksyn_queue_move_tofree(ckwq, &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER], ckwq->kw_lword, kfreeq, 0, release);
+#if __TESTPANICS__
+			if (ckwq->kw_inqueue != 0)
+				panic("ksyn_cvupdate_fixup: L == S, but entries in queue beyond S");
+#endif /* __TESTPANICS__ */
+		}
+		ckwq->kw_lword = ckwq->kw_uword = ckwq->kw_sword = 0;
+		ckwq->kw_kflags |= KSYN_KWF_ZEROEDOUT;
+	} else if ((ckwq->kw_inqueue != 0) && (ckwq->kw_fakecount == ckwq->kw_inqueue)) {
+		/* only fake entries are present in the queue */
+		updatebits |= PTH_RWS_CV_PBIT; 
+	}
+	if (updatep != NULL)
+		*updatep = updatebits;
+}
+
+void
+psynch_zoneinit(void)
+{
+        kwq_zone = (zone_t)zinit(sizeof(struct ksyn_wait_queue), 8192 * sizeof(struct ksyn_wait_queue), 4096, "ksyn_waitqueue zone");
+        kwe_zone = (zone_t)zinit(sizeof(struct ksyn_waitq_element), 8192 * sizeof(struct ksyn_waitq_element), 4096, "ksyn_waitq_element zone");
+}
 #endif /* PSYNCH */

@@ -3,9 +3,13 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-IOKIT_FRAMEDIR = $(FRAMEDIR)/IOKit.framework/Versions/A
-export INCDIR = $(IOKIT_FRAMEDIR)/Headers
-export LCLDIR = $(IOKIT_FRAMEDIR)/PrivateHeaders
+IOKIT_INCVERS = A
+IOKIT_INCFRAME = $(FRAMEDIR)/IOKit.framework
+IOKIT_INCDIR = $(IOKIT_INCFRAME)/Versions/$(IOKIT_INCVERS)/Headers
+IOKIT_PINCDIR = $(IOKIT_INCFRAME)/Versions/$(IOKIT_INCVERS)/PrivateHeaders
+
+export INCDIR = $(IOKIT_INCDIR)
+export LCLDIR = $(IOKIT_PINCDIR)
 
 include $(MakeInc_cmd)
 include $(MakeInc_def)
@@ -18,20 +22,13 @@ INSTINC_SUBDIRS = \
 	rtc \
 	system_management
 
-INSTINC_SUBDIRS_PPC = \
-	ppc
+INSTINC_SUBDIRS_I386 = 
 
-INSTINC_SUBDIRS_I386 = \
-	i386
+INSTINC_SUBDIRS_X86_64 = 
 
-INSTINC_SUBDIRS_X86_64 = \
-	i386
-
-INSTINC_SUBDIRS_ARM = \
-	arm
+INSTINC_SUBDIRS_ARM = 
 
 EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
-EXPINC_SUBDIRS_PPC = ${INSTINC_SUBDIRS_PPC}
 EXPINC_SUBDIRS_I386 = ${INSTINC_SUBDIRS_I386}
 EXPINC_SUBDIRS_X86_64 = ${INSTINC_SUBDIRS_X86_64}
 EXPINC_SUBDIRS_ARM = ${INSTINC_SUBDIRS_ARM}
@@ -41,7 +38,9 @@ NOT_EXPORT_HEADERS =
 NOT_KF_MI_HEADERS  = $(NOT_EXPORT_HEADERS)			\
 		     IOKitKeysPrivate.h IOCPU.h			\
 		     IOHibernatePrivate.h IOPolledInterface.h	\
-		     IOCommandQueue.h IOLocksPrivate.h
+		     IOCommandQueue.h IOLocksPrivate.h 		\
+		     AppleKeyStoreInterface.h			\
+		     IOStatistics.h IOStatisticsPrivate.h
 
 NOT_LOCAL_HEADERS = 
 
@@ -51,7 +50,7 @@ INSTALL_MI_LIST	= IOBSD.h IOKitKeys.h IOKitServer.h IOReturn.h\
 		  IOSharedLock.h IOTypes.h OSMessageNotification.h\
 		  IODataQueueShared.h IOMessage.h
                   
-INSTALL_MI_LCL_LIST = IOKitKeysPrivate.h IOHibernatePrivate.h IOLocksPrivate.h
+INSTALL_MI_LCL_LIST = IOKitKeysPrivate.h IOHibernatePrivate.h IOLocksPrivate.h IOStatistics.h AppleKeyStoreInterface.h
 
 INSTALL_MI_DIR = .
 

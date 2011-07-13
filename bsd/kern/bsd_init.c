@@ -106,6 +106,7 @@
 #include <kern/task.h>
 #include <kern/ast.h>
 #include <kern/kalloc.h>
+#include <mach/mach_host.h>
 
 #include <mach/vm_param.h>
 
@@ -132,6 +133,7 @@
 #include <sys/mcache.h>			/* for mcache_init() */
 #include <sys/mbuf.h>			/* for mbinit() */
 #include <sys/event.h>			/* for knote_init() */
+#include <sys/kern_memorystatus.h>	/* for kern_memorystatus_init() */
 #include <sys/aio_kern.h>		/* for aio_init() */
 #include <sys/semaphore.h>		/* for psem_cache_init() */
 #include <net/dlil.h>			/* for dlil_init() */
@@ -151,6 +153,8 @@
 #include <sys/tty.h>			/* for tty_init() */
 #include <net/if_utun.h>		/* for utun_register_control() */
 #include <net/net_str_id.h>		/* for net_str_id_init() */
+#include <net/netsrc.h>			/* for netsrc_init() */
+#include <kern/assert.h>		/* for assert() */
 
 #include <net/init.h>
 
@@ -162,6 +166,10 @@
 
 #include <machine/exec.h>
 
+#if NFSCLIENT
+#include <sys/netboot.h>
+#endif
+
 #if CONFIG_IMAGEBOOT
 #include <sys/imageboot.h>
 #endif
@@ -171,6 +179,7 @@
 #endif
 
 #include <pexpert/pexpert.h>
+#include <machine/pal_routines.h>
 
 void * get_user_regs(thread_t);		/* XXX kludge for <machine/thread.h> */
 void IOKitInitializeTime(void);		/* XXX */
@@ -216,9 +225,8 @@ char	domainname[MAXDOMNAMELEN];
 int		domainnamelen;
 #if defined(__i386__) || defined(__x86_64__)
 struct exec_archhandler exec_archhandler_ppc = {
-	.path = "/usr/libexec/oah/translate",
+	.path = "/usr/libexec/oah/RosettaNonGrata",
 };
-const char * const kRosettaStandIn_str = "/usr/libexec/oah/RosettaNonGrata";
 #else /* __i386__ */
 struct exec_archhandler exec_archhandler_ppc;
 #endif /* __i386__ */
@@ -243,16 +251,16 @@ extern void file_lock_init(void);
 extern void kmeminit(void);
 extern void bsd_bufferinit(void);
 
-extern int srv;
+extern int serverperfmode;
 extern int ncl;
 
 vm_map_t	bsd_pageable_map;
 vm_map_t	mb_map;
 
-static  int bsd_simul_execs = BSD_SIMUL_EXECS;
-static int bsd_pageable_map_size = BSD_PAGABLE_MAP_SIZE;
-__private_extern__ int execargs_cache_size = BSD_SIMUL_EXECS;
-__private_extern__ int execargs_free_count = BSD_SIMUL_EXECS;
+static  int bsd_simul_execs;
+static int bsd_pageable_map_size;
+__private_extern__ int execargs_cache_size = 0;
+__private_extern__ int execargs_free_count = 0;
 __private_extern__ vm_offset_t * execargs_cache = NULL;
 
 void bsd_exec_setup(int);
@@ -262,6 +270,14 @@ void bsd_exec_setup(int);
  * Intel only.
  */
 __private_extern__ int bootarg_no64exec = 0;
+__private_extern__ int bootarg_vnode_cache_defeat = 0;
+
+/*
+ * Prevent kernel-based ASLR from being used, for testing.
+ */
+#if DEVELOPMENT || DEBUG
+__private_extern__ int bootarg_disable_aslr = 0;
+#endif
 
 int	cmask = CMASK;
 extern int customnbuf;
@@ -274,6 +290,7 @@ static void parse_bsd_args(void);
 extern task_t bsd_init_task;
 extern char    init_task_failure_data[];
 extern void time_zone_slock_init(void);
+extern void select_wait_queue_init(void);
 static void process_name(const char *, proc_t);
 
 static void setconf(void);
@@ -289,17 +306,21 @@ extern void sysv_sem_lock_init(void);
 #if SYSV_MSG
 extern void sysv_msg_lock_init(void);
 #endif
-extern void pthread_init(void);
 
+#if !defined(SECURE_KERNEL)
 /* kmem access not enabled by default; can be changed with boot-args */
+/* We don't need to keep this symbol around in RELEASE kernel */
 int setup_kmem = 0;
+#endif
 
-/* size of kernel trace buffer, disabled by default */
-unsigned int new_nkdbufs = 0;
+#if CONFIG_MACF
+#if defined (__i386__) || defined (__x86_64__)
+/* MACF policy_check configuration flags; see policy_check.c for details */
+int policy_check_flags = 0;
 
-/* mach leak logging */
-int log_leaks = 0;
-int turn_on_log_leaks = 0;
+extern int check_policy_init(int);
+#endif
+#endif	/* CONFIG_MACF */
 
 extern void stackshot_lock_init(void);
 
@@ -343,8 +364,6 @@ struct rlimit vm_initial_limit_core = { DFLCSIZ, MAXCSIZ };
 
 extern thread_t	cloneproc(task_t, proc_t, int);
 extern int 	(*mountroot)(void);
-extern int 	netboot_mountroot(void); 	/* netboot.c */
-extern int	netboot_setup(void);
 
 lck_grp_t * proc_lck_grp;
 lck_grp_t * proc_slock_grp;
@@ -386,6 +405,10 @@ bsd_init(void)
 	struct vfs_context context;
 	kern_return_t	ret;
 	struct ucred temp_cred;
+	struct posix_cred temp_pcred;
+#if NFSCLIENT || CONFIG_IMAGEBOOT
+	boolean_t       netboot = FALSE;
+#endif
 
 #define bsd_init_kprintf(x...) /* kprintf("bsd_init: " x) */
 
@@ -427,7 +450,7 @@ bsd_init(void)
 	proc_lck_grp_attr= lck_grp_attr_alloc_init();
 
 	proc_lck_grp = lck_grp_alloc_init("proc",  proc_lck_grp_attr);
-#ifndef CONFIG_EMBEDDED
+#if CONFIG_FINE_LOCK_GROUPS
 	proc_slock_grp = lck_grp_alloc_init("proc-slock",  proc_lck_grp_attr);
 	proc_fdmlock_grp = lck_grp_alloc_init("proc-fdmlock",  proc_lck_grp_attr);
 	proc_mlock_grp = lck_grp_alloc_init("proc-mlock",  proc_lck_grp_attr);
@@ -440,20 +463,21 @@ bsd_init(void)
 #endif
 #endif
 
-#ifdef CONFIG_EMBEDDED
-	proc_list_mlock = lck_mtx_alloc_init(proc_lck_grp, proc_lck_attr);
-	proc_klist_mlock = lck_mtx_alloc_init(proc_lck_grp, proc_lck_attr);
-	lck_mtx_init(&kernproc->p_mlock, proc_lck_grp, proc_lck_attr);
-	lck_mtx_init(&kernproc->p_fdmlock, proc_lck_grp, proc_lck_attr);
-	lck_spin_init(&kernproc->p_slock, proc_lck_grp, proc_lck_attr);
-#else	
+#if CONFIG_FINE_LOCK_GROUPS
 	proc_list_mlock = lck_mtx_alloc_init(proc_mlock_grp, proc_lck_attr);
 	proc_klist_mlock = lck_mtx_alloc_init(proc_mlock_grp, proc_lck_attr);
 	lck_mtx_init(&kernproc->p_mlock, proc_mlock_grp, proc_lck_attr);
 	lck_mtx_init(&kernproc->p_fdmlock, proc_fdmlock_grp, proc_lck_attr);
 	lck_spin_init(&kernproc->p_slock, proc_slock_grp, proc_lck_attr);
+#else
+	proc_list_mlock = lck_mtx_alloc_init(proc_lck_grp, proc_lck_attr);
+	proc_klist_mlock = lck_mtx_alloc_init(proc_lck_grp, proc_lck_attr);
+	lck_mtx_init(&kernproc->p_mlock, proc_lck_grp, proc_lck_attr);
+	lck_mtx_init(&kernproc->p_fdmlock, proc_lck_grp, proc_lck_attr);
+	lck_spin_init(&kernproc->p_slock, proc_lck_grp, proc_lck_attr);
 #endif
 
+	assert(bsd_simul_execs != 0);
 	execargs_cache_lock = lck_mtx_alloc_init(proc_lck_grp, proc_lck_attr);
 	execargs_cache_size = bsd_simul_execs;
 	execargs_free_count = bsd_simul_execs;
@@ -473,6 +497,14 @@ bsd_init(void)
 	 */
 	mac_policy_initbsd();
 	kernproc->p_mac_enforce = 0;
+
+#if defined (__i386__) || defined (__x86_64__)
+	/*
+	 * We currently only support this on i386/x86_64, as that is the
+	 * only lock code we have instrumented so far.
+	 */
+	check_policy_init(policy_check_flags);
+#endif
 #endif /* MAC */
 
 	/*
@@ -483,15 +515,16 @@ bsd_init(void)
 	kernproc->p_pgrp = &pgrp0;
 	LIST_INSERT_HEAD(PGRPHASH(0), &pgrp0, pg_hash);
 	LIST_INIT(&pgrp0.pg_members);
-#ifdef CONFIG_EMBEDDED
-	lck_mtx_init(&pgrp0.pg_mlock, proc_lck_grp, proc_lck_attr);	
-#else
+#ifdef CONFIG_FINE_LOCK_GROUPS
 	lck_mtx_init(&pgrp0.pg_mlock, proc_mlock_grp, proc_lck_attr);
+#else
+	lck_mtx_init(&pgrp0.pg_mlock, proc_lck_grp, proc_lck_attr);
 #endif
 	/* There is no other bsd thread this point and is safe without pgrp lock */
 	LIST_INSERT_HEAD(&pgrp0.pg_members, kernproc, p_pglist);
 	kernproc->p_listflag |= P_LIST_INPGRP;
 	kernproc->p_pgrpid = 0;
+	kernproc->p_uniqueid = 0;
 
 	pgrp0.pg_session = &session0;
 	pgrp0.pg_membercnt = 1;
@@ -499,10 +532,10 @@ bsd_init(void)
 	session0.s_count = 1;
 	session0.s_leader = kernproc;
 	session0.s_listflags = 0;
-#ifdef CONFIG_EMBEDDED
-	lck_mtx_init(&session0.s_mlock, proc_lck_grp, proc_lck_attr);
-#else
+#ifdef CONFIG_FINE_LOCK_GROUPS
 	lck_mtx_init(&session0.s_mlock, proc_mlock_grp, proc_lck_attr);
+#else
+	lck_mtx_init(&session0.s_mlock, proc_lck_grp, proc_lck_attr);
 #endif
 	LIST_INSERT_HEAD(SESSHASH(0), &session0, s_hash);
 	proc_list_unlock();
@@ -515,6 +548,14 @@ bsd_init(void)
 	
 	kernproc->p_stat = SRUN;
 	kernproc->p_flag = P_SYSTEM;
+	kernproc->p_lflag = 0;
+	kernproc->p_ladvflag = 0;
+	
+#if DEVELOPMENT || DEBUG
+	if (bootarg_disable_aslr)
+		kernproc->p_flag |= P_DISABLE_ASLR;
+#endif
+
 	kernproc->p_nice = NZERO;
 	kernproc->p_pptr = kernproc;
 
@@ -531,14 +572,21 @@ bsd_init(void)
 	 */
 	bsd_init_kprintf("calling bzero\n");
 	bzero(&temp_cred, sizeof(temp_cred));
-	temp_cred.cr_ngroups = 1;
+	bzero(&temp_pcred, sizeof(temp_pcred));
+	temp_pcred.cr_ngroups = 1;
 
-	temp_cred.cr_audit.as_aia_p = &audit_default_aia;
-        /* XXX the following will go away with cr_au */
-	temp_cred.cr_au.ai_auid = AU_DEFAUDITID;
+	temp_cred.cr_audit.as_aia_p = audit_default_aia_p;
 
 	bsd_init_kprintf("calling kauth_cred_create\n");
+	/*
+	 * We have to label the temp cred before we create from it to
+	 * properly set cr_ngroups, or the create will fail.
+	 */
+	posix_cred_label(&temp_cred, &temp_pcred);
 	kernproc->p_ucred = kauth_cred_create(&temp_cred); 
+
+	/* update cred on proc */
+	PROC_UPDATE_CREDS_ONPROC(kernproc);
 
 	/* give the (already exisiting) initial thread a reference on it */
 	bsd_init_kprintf("calling kauth_cred_ref\n");
@@ -598,6 +646,7 @@ bsd_init(void)
 		vm_offset_t	minimum;
 
 		bsd_init_kprintf("calling kmem_suballoc\n");
+		assert(bsd_pageable_map_size != 0);
 		ret = kmem_suballoc(kernel_map,
 				&minimum,
 				(vm_size_t)bsd_pageable_map_size,
@@ -630,14 +679,14 @@ bsd_init(void)
 	bsd_init_kprintf("calling IOKitInitializeTime\n");
 	IOKitInitializeTime();
 
-	if (turn_on_log_leaks && !new_nkdbufs)
-		new_nkdbufs = 200000;
-	start_kern_tracing(new_nkdbufs);
-	if (turn_on_log_leaks)
-		log_leaks = 1;
-
 	bsd_init_kprintf("calling ubc_init\n");
 	ubc_init();
+
+	/*
+	 * Initialize device-switches.
+	 */
+	bsd_init_kprintf("calling devsw_init() \n");
+	devsw_init();
 
 	/* Initialize the file systems. */
 	bsd_init_kprintf("calling vfsinit\n");
@@ -702,6 +751,8 @@ bsd_init(void)
 	psem_cache_init();
 	bsd_init_kprintf("calling time_zone_slock_init\n");
 	time_zone_slock_init();
+	bsd_init_kprintf("calling select_wait_queue_init\n");
+	select_wait_queue_init();
 
 	/* Stack snapshot facility lock */
 	stackshot_lock_init();
@@ -728,6 +779,12 @@ bsd_init(void)
 
 	kernproc->p_fd->fd_cdir = NULL;
 	kernproc->p_fd->fd_rdir = NULL;
+
+#if CONFIG_FREEZE
+	/* Initialise background hibernation */
+	bsd_init_kprintf("calling kern_hibernation_init\n");
+	kern_hibernation_init();
+#endif
 
 #if CONFIG_EMBEDDED
 	/* Initialize kernel memory status notifications */
@@ -780,6 +837,10 @@ bsd_init(void)
 	
 	/* register user tunnel kernel control handler */
 	utun_register_control();
+    netsrc_init();
+	
+	/* wait for network domain to finish */
+	domainfin();
 #endif /* NETWORKING */
 
 	bsd_init_kprintf("calling vnode_pager_bootstrap\n");
@@ -794,61 +855,22 @@ bsd_init(void)
 	bsd_init_kprintf("calling inittodr\n");
 	inittodr(0);
 
-#if CONFIG_EMBEDDED
-	{
-		/* print out early VM statistics */
-		kern_return_t kr1;
-		vm_statistics_data_t stat;
-		mach_msg_type_number_t count;
-
-		count = HOST_VM_INFO_COUNT;
-		kr1 = host_statistics(host_self(),
-				      HOST_VM_INFO,
-				      (host_info_t)&stat,
-				      &count);
-		kprintf("Mach Virtual Memory Statistics (page size of 4096) bytes\n"
-			"Pages free:\t\t\t%u.\n"
-			"Pages active:\t\t\t%u.\n"
-			"Pages inactive:\t\t\t%u.\n"
-			"Pages wired down:\t\t%u.\n"
-			"\"Translation faults\":\t\t%u.\n"
-			"Pages copy-on-write:\t\t%u.\n"
-			"Pages zero filled:\t\t%u.\n"
-			"Pages reactivated:\t\t%u.\n"
-			"Pageins:\t\t\t%u.\n"
-			"Pageouts:\t\t\t%u.\n"
-			"Object cache: %u hits of %u lookups (%d%% hit rate)\n",
-
-			stat.free_count,
-			stat.active_count,
-			stat.inactive_count,
-			stat.wire_count,
-			stat.faults,
-			stat.cow_faults,
-			stat.zero_fill_count,
-			stat.reactivations,
-			stat.pageins,
-			stat.pageouts,
-			stat.hits,
-			stat.lookups,
-			(stat.hits == 0) ? 100 :
-			                   ((stat.lookups * 100) / stat.hits));
-	}
-#endif /* CONFIG_EMBEDDED */
-	
 	/* Mount the root file system. */
 	while( TRUE) {
 		int err;
 
 		bsd_init_kprintf("calling setconf\n");
 		setconf();
+#if NFSCLIENT
+		netboot = (mountroot == netboot_mountroot);
+#endif
 
 		bsd_init_kprintf("vfs_mountroot\n");
 		if (0 == (err = vfs_mountroot()))
 			break;
 		rootdevice[0] = '\0';
 #if NFSCLIENT
-		if (mountroot == netboot_mountroot) {
+		if (netboot) {
 			PE_display_icon( 0, "noroot");  /* XXX a netboot-specific icon would be nicer */
 			vc_progress_set(FALSE, 0);
 			for (i=1; 1; i*=2) {
@@ -880,8 +902,10 @@ bsd_init(void)
 	filedesc0.fd_cdir = rootvnode;
 
 #if NFSCLIENT
-	if (mountroot == netboot_mountroot) {
+	if (netboot) {
 		int err;
+
+		netboot = TRUE;
 		/* post mount setup */
 		if ((err = netboot_setup()) != 0) {
 			PE_display_icon( 0, "noroot");  /* XXX a netboot-specific icon would be nicer */
@@ -903,19 +927,12 @@ bsd_init(void)
 	 * See if a system disk image is present. If so, mount it and
 	 * switch the root vnode to point to it
 	 */ 
-  
-	if(imageboot_needed()) {
-		int err;
-
-		/* An image was found */
-		if((err = imageboot_setup())) {
-			/*
-			 * this is not fatal. Keep trying to root
-			 * off the original media
-			 */
-			printf("%s: imageboot could not find root, %d\n",
-				__FUNCTION__, err);
-		}
+	if (netboot == FALSE && imageboot_needed()) {
+		/* 
+		 * An image was found.  No turning back: we're booted
+		 * with a kernel from the disk image.
+		 */
+		imageboot_setup(); 
 	}
 #endif /* CONFIG_IMAGEBOOT */
   
@@ -943,15 +960,12 @@ bsd_init(void)
 	kernproc->p_flag |= P_LP64;
 	printf("Kernel is LP64\n");
 #endif
+
+	pal_kernel_announce();
+
 #if __i386__ || __x86_64__
 	/* this should be done after the root filesystem is mounted */
 	error = set_archhandler(kernproc, CPU_TYPE_POWERPC);
-	// 10/30/08 - gab: <rdar://problem/6324501>
-	// if default 'translate' can't be found, see if the understudy is available
-	if (ENOENT == error) {
-		strlcpy(exec_archhandler_ppc.path, kRosettaStandIn_str, MAXPATHLEN);
-		error = set_archhandler(kernproc, CPU_TYPE_POWERPC);
-	}
 	if (error) /* XXX make more generic */
 		exec_archhandler_ppc.path[0] = 0;
 #endif	
@@ -1117,12 +1131,18 @@ parse_bsd_args(void)
 	if (PE_parse_boot_argn("-x", namep, sizeof (namep))) /* safe boot */
 		boothowto |= RB_SAFEBOOT;
 
-	if (PE_parse_boot_argn("-l", namep, sizeof (namep))) /* leaks logging */
-		turn_on_log_leaks = 1;
-
 	/* disable 64 bit grading */
 	if (PE_parse_boot_argn("-no64exec", namep, sizeof (namep)))
 		bootarg_no64exec = 1;
+
+	/* disable vnode_cache_is_authorized() by setting vnode_cache_defeat */
+	if (PE_parse_boot_argn("-vnode_cache_defeat", namep, sizeof (namep)))
+		bootarg_vnode_cache_defeat = 1;
+
+#if DEVELOPMENT || DEBUG
+	if (PE_parse_boot_argn("-disable_aslr", namep, sizeof (namep)))
+		bootarg_disable_aslr = 1;
+#endif
 
 	PE_parse_boot_argn("ncl", &ncl, sizeof (ncl));
 	if (PE_parse_boot_argn("nbuf", &max_nbuf_headers,
@@ -1132,10 +1152,19 @@ parse_bsd_args(void)
 #if !defined(SECURE_KERNEL)
 	PE_parse_boot_argn("kmem", &setup_kmem, sizeof (setup_kmem));
 #endif
-	PE_parse_boot_argn("trace", &new_nkdbufs, sizeof (new_nkdbufs));
+
+#if CONFIG_MACF
+#if defined (__i386__) || defined (__x86_64__)
+	PE_parse_boot_argn("policy_check", &policy_check_flags, sizeof (policy_check_flags));
+#endif
+#endif	/* CONFIG_MACF */
 
 	if (PE_parse_boot_argn("msgbuf", &msgbuf, sizeof (msgbuf))) {
 		log_setsize(msgbuf);
+	}
+
+	if (PE_parse_boot_argn("-novfscache", namep, sizeof(namep))) {
+		nc_disabled = 1;
 	}
 }
 
@@ -1165,10 +1194,13 @@ bsd_exec_setup(int scale)
 			break;
 			
 	}
-	bsd_pageable_map_size = (bsd_simul_execs * (NCARGS + PAGE_SIZE));
+	bsd_pageable_map_size = (bsd_simul_execs * BSD_PAGEABLE_SIZE_PER_EXEC);
 }
 
 #if !NFSCLIENT
+int 
+netboot_root(void);
+
 int 
 netboot_root(void)
 {

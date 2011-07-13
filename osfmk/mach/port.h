@@ -277,7 +277,9 @@ typedef mach_port_type_t *mach_port_type_array_t;
 
 /* Dummy type bits that mach_port_type/mach_port_names can return. */
 
-#define MACH_PORT_TYPE_DNREQUEST	0x80000000
+#define MACH_PORT_TYPE_DNREQUEST		0x80000000
+#define MACH_PORT_TYPE_SPREQUEST		0x40000000
+#define MACH_PORT_TYPE_SPREQUEST_DELAYED	0x20000000
 
 /* User-references for capabilities. */
 

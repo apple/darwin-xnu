@@ -39,7 +39,7 @@
 #define VMX_FAIL_VALID		-2
 #define VMX_SUCCEED			0
 
-static inline void enter_64bit_mode(void) {
+__attribute__((always_inline)) static inline void enter_64bit_mode(void) {
 	__asm__ __volatile__ (
 		".byte   0xea    /* far jump longmode */	\n\t"
 		".long   1f					\n\t"
@@ -49,7 +49,7 @@ static inline void enter_64bit_mode(void) {
 		:: "i" (KERNEL64_CS)
 	);
 }
-static inline void enter_compat_mode(void) {
+__attribute__((always_inline)) static inline void enter_compat_mode(void) {
 	asm(
 		"ljmp    *4f					\n\t"
 	"4:							\n\t"

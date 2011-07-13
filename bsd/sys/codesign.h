@@ -38,6 +38,7 @@
 #define CS_EXEC_SET_HARD	0x1000	/* set CS_HARD on any exec'ed process */
 #define CS_EXEC_SET_KILL	0x2000	/* set CS_KILL on any exec'ed process */
 #define CS_KILLED		0x10000	/* was killed by kernel for invalidity */
+#define CS_RESTRICT		0x20000 /* tell dyld to treat restricted */
 
 /* csops  operations */
 #define	CS_OPS_STATUS		0	/* return status */
@@ -47,6 +48,8 @@
 #define	CS_OPS_PIDPATH		4	/* get executable's pathname */
 #define	CS_OPS_CDHASH		5	/* get code directory hash */
 #define CS_OPS_PIDOFFSET	6	/* get offset of active Mach-o slice */
+#define CS_OPS_ENTITLEMENTS_BLOB 7	/* get entitlements blob */
+#define CS_OPS_MARKRESTRICT	8	/* set RESTRICT flag (sticky) */
 
 #ifndef KERNEL
 

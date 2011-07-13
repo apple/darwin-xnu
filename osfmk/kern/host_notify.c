@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -24,14 +24,6 @@
  * limitations under the License.
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
- */
-/*
- * Copyright (c) 2003 Apple Computer, Inc.  All rights reserved.
- *
- * HISTORY
- *
- * 16 January 2003 (debo)
- *  Created.
  */
 
 #include <mach/mach_types.h>
@@ -143,7 +135,7 @@ host_notify_port_destroy(
 		ip_unlock(port);
 
 		assert(entry->port == port);
-		remqueue(NULL, (queue_entry_t)entry);
+		remqueue((queue_entry_t)entry);
 		lck_mtx_unlock(&host_notify_lock);
 		zfree(host_notify_zone, entry);
 

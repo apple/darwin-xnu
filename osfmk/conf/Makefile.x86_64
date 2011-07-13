@@ -2,32 +2,7 @@
 #BEGIN	Machine dependent Makefile fragment for x86_64
 ######################################################################
 
-CFLAGS+= -DAT386=1
-SFLAGS+= -DAT386=1
-
-CFLAGS+= $(WERROR) -Wshorten-64-to-32
-CWARNFLAGS= $(filter-out -Wbad-function-cast, $(CWARNFLAGS_STD))
-
-# Objects that don't compile cleanly:
-OBJS_NO_WERROR=				\
-	UNDRequest.o			\
-	db_examine.o			\
-	db_macro.o			\
-	db_print.o			\
-	db_sym.o			\
-	db_variables.o			\
-	db_disasm.o			\
-	db_interface.o			\
-	db_trace.o			\
-	host_priv_server.o \
-	mach_host_server.o \
-	security_server.o \
-	device_server.o \
-	gssd_mach.o \
-
-OBJS_WERROR=$(filter-out $(OBJS_NO_WERROR),$(OBJS))
-
-$(OBJS_WERROR):		WERROR=-Werror
+CWARNFLAGS = $(CWARNFLAGS_STD) -Wshorten-64-to-32
 
 # Files that must go in the __HIB segment:
 UNCONFIGURED_HIB_FILES=					\

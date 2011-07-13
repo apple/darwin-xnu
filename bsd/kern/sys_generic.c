@@ -152,6 +152,21 @@ __private_extern__ int	dofilewrite(vfs_context_t ctx, struct fileproc *fp,
 __private_extern__ int	preparefileread(struct proc *p, struct fileproc **fp_ret, int fd, int check_for_vnode);
 __private_extern__ void	donefileread(struct proc *p, struct fileproc *fp_ret, int fd);
 
+
+/* Conflict wait queue for when selects collide (opaque type) */
+struct wait_queue select_conflict_queue;
+
+/*
+ * Init routine called from bsd_init.c
+ */
+void select_wait_queue_init(void);
+void
+select_wait_queue_init(void)
+{
+	wait_queue_init(&select_conflict_queue, SYNC_POLICY_FIFO);
+}
+
+
 #if NETAT
 extern int appletalk_inited;
 #endif /* NETAT */
@@ -570,7 +585,8 @@ dofilewrite(vfs_context_t ctx, struct fileproc *fp,
 			error == EINTR || error == EWOULDBLOCK))
 			error = 0;
 		/* The socket layer handles SIGPIPE */
-		if (error == EPIPE && fp->f_type != DTYPE_SOCKET) {
+		if (error == EPIPE && fp->f_type != DTYPE_SOCKET &&
+		    (fp->f_fglob->fg_lflags & FG_NOSIGPIPE) == 0) {
 			/* XXX Raise the signal on the thread? */
 			psignal(vfs_context_proc(ctx), SIGPIPE);
 		}
@@ -662,13 +678,14 @@ wr_uio(struct proc *p, int fdes, uio_t uio, user_ssize_t *retval)
 						error == EINTR || error == EWOULDBLOCK))
 		        error = 0;
 		/* The socket layer handles SIGPIPE */
-		if (error == EPIPE && fp->f_type != DTYPE_SOCKET)
+		if (error == EPIPE && fp->f_type != DTYPE_SOCKET &&
+		    (fp->f_fglob->fg_lflags & FG_NOSIGPIPE) == 0)
 		        psignal(p, SIGPIPE);
 	}
 	*retval = count - uio_resid(uio);
 
 out:
-	if ( (error == 0) )
+	if (error == 0)
 	        fp_drop_written(p, fdes, fp);
 	else
 	        fp_drop(p, fdes, fp, 0);
@@ -937,8 +954,8 @@ extern int selcontinue(int error);
 extern int selprocess(int error, int sel_pass);
 static int selscan(struct proc *p, struct _select * sel,
 			int nfd, int32_t *retval, int sel_pass, wait_queue_sub_t wqsub);
-static int selcount(struct proc *p, u_int32_t *ibits, u_int32_t *obits,
-			int nfd, int * count, int *kfcount);
+static int selcount(struct proc *p, u_int32_t *ibits, int nfd, int *count);
+static int seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wakeup, int fromselcount);
 static int seldrop(struct proc *p, u_int32_t *ibits, int nfd);
 
 /*
@@ -966,7 +983,6 @@ select_nocancel(struct proc *p, struct select_nocancel_args *uap, int32_t *retva
 	struct _select *sel;
 	int needzerofill = 1;
 	int count = 0;
-	int kfcount = 0;
 
 	th_act = current_thread();
 	uth = get_bsdthread_info(th_act);
@@ -1070,13 +1086,11 @@ select_nocancel(struct proc *p, struct select_nocancel_args *uap, int32_t *retva
 	else
 		sel->abstime = 0;
 
-	sel->kfcount = 0;
-	if ( (error = selcount(p, sel->ibits, sel->obits, uap->nd, &count, &kfcount)) ) {
+	if ( (error = selcount(p, sel->ibits, uap->nd, &count)) ) {
 			goto continuation;
 	}
 
 	sel->count = count;
-	sel->kfcount = kfcount;
 	size = SIZEOF_WAITQUEUE_SET + (count * SIZEOF_WAITQUEUE_LINK);
 	if (uth->uu_allocsize) {
 		if (uth->uu_wqset == 0)
@@ -1090,7 +1104,6 @@ select_nocancel(struct proc *p, struct select_nocancel_args *uap, int32_t *retva
 				panic("failed to allocate memory for waitqueue\n");
 		}
 	} else {
-		sel->count = count;
 		uth->uu_allocsize = size;
 		uth->uu_wqset = (wait_queue_set_t)kalloc(uth->uu_allocsize);
 		if (uth->uu_wqset == (wait_queue_set_t)NULL)
@@ -1101,7 +1114,18 @@ select_nocancel(struct proc *p, struct select_nocancel_args *uap, int32_t *retva
 	wait_queue_set_init(uth->uu_wqset, (SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST));
 
 continuation:
-	return selprocess(error, SEL_FIRSTPASS);
+
+	if (error) {
+		/*
+		 * We have already cleaned up any state we established,
+		 * either locally or as a result of selcount().  We don't
+		 * need to wait_subqueue_unlink_all(), since we haven't set
+		 * anything at this point.
+		 */
+		return (error);
+	}
+
+	return selprocess(0, SEL_FIRSTPASS);
 }
 
 int
@@ -1110,6 +1134,13 @@ selcontinue(int error)
 	return selprocess(error, SEL_SECONDPASS);
 }
 
+
+/*
+ * selprocess
+ *
+ * Parameters:	error			The error code from our caller
+ *		sel_pass		The pass we are on
+ */
 int
 selprocess(int error, int sel_pass)
 {
@@ -1134,20 +1165,24 @@ selprocess(int error, int sel_pass)
 	uth = get_bsdthread_info(th_act);
 	sel = &uth->uu_select;
 
-	/* if it is first pass wait queue is not setup yet */
 	if ((error != 0) && (sel_pass == SEL_FIRSTPASS))
 			unwind = 0;
 	if (sel->count == 0)
 			unwind = 0;
 retry:
 	if (error != 0) {
-	  goto done;
+		sel_pass = SEL_FIRSTPASS;	/* Reset for seldrop */
+		goto done;
 	}
 
 	ncoll = nselcoll;
 	OSBitOrAtomic(P_SELECT, &p->p_flag);
 	/* skip scans if the select is just for timeouts */
 	if (sel->count) {
+		/*
+		 * Clear out any dangling refs from prior calls; technically
+		 * there should not be any.
+		 */
 		if (sel_pass == SEL_FIRSTPASS)
 			wait_queue_sub_clearrefs(uth->uu_wqset);
 
@@ -1215,10 +1250,10 @@ retry:
 		error = 0;
 	}
 
-	sel_pass = SEL_SECONDPASS;
 	if (error == 0) {
+		sel_pass = SEL_SECONDPASS;
 		if (!prepost)
-			somewakeup =1;
+			somewakeup = 1;
 		goto retry;
 	}
 done:
@@ -1253,6 +1288,23 @@ done:
 	return(error);
 }
 
+
+/*
+ * selscan
+ *
+ * Parameters:	p			Process performing the select
+ *		sel			The per-thread select context structure
+ *		nfd			The number of file descriptors to scan
+ *		retval			The per thread system call return area
+ *		sel_pass		Which pass this is; allowed values are
+ *						SEL_FIRSTPASS and SEL_SECONDPASS
+ *		wqsub			The per thread wait queue set
+ *
+ * Returns:	0			Success
+ *		EIO			Invalid p->p_fd field XXX Obsolete?
+ *		EBADF			One of the files in the bit vector is
+ *						invalid.
+ */
 static int
 selscan(struct proc *p, struct _select *sel, int nfd, int32_t *retval,
 	int sel_pass, wait_queue_sub_t wqsub)
@@ -1261,16 +1313,15 @@ selscan(struct proc *p, struct _select *sel, int nfd, int32_t *retval,
 	int msk, i, j, fd;
 	u_int32_t bits;
 	struct fileproc *fp;
-	int n = 0;
-	int nc = 0;
+	int n = 0;		/* count of bits */
+	int nc = 0;		/* bit vector offset (nc'th bit) */
 	static int flag[3] = { FREAD, FWRITE, 0 };
 	u_int32_t *iptr, *optr;
 	u_int nw;
 	u_int32_t *ibits, *obits;
 	char * wql;
 	char * wql_ptr;
-	int count, kfcount;
-	vnode_t vp;
+	int count;
 	struct vfs_context context = *vfs_context_current();
 
 	/*
@@ -1288,57 +1339,9 @@ selscan(struct proc *p, struct _select *sel, int nfd, int32_t *retval,
 	nw = howmany(nfd, NFDBITS);
 
 	count = sel->count;
-	kfcount = sel->kfcount;
-
-	if (kfcount > count)
-		panic("selscan: count < kfcount");
-
-	if (kfcount != 0) {
-		proc_fdlock(p);
-		for (msk = 0; msk < 3; msk++) {
-			iptr = (u_int32_t *)&ibits[msk * nw];
-			optr = (u_int32_t *)&obits[msk * nw];
-
-			for (i = 0; i < nfd; i += NFDBITS) {
-				bits = iptr[i/NFDBITS];
-
-				while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
-					bits &= ~(1 << j);
-					fp = fdp->fd_ofiles[fd];
-
-					if (fp == NULL ||
-						(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
-						proc_fdunlock(p);
-						return(EBADF);
-					}
-					if (sel_pass == SEL_SECONDPASS) {
-						wql_ptr = (char *)0;
-						fp->f_flags &= ~FP_INSELECT;
-						fp->f_waddr = (void *)0;
-					} else {
-					        wql_ptr = (wql + nc * SIZEOF_WAITQUEUE_LINK);
-						fp->f_flags |= FP_INSELECT;
-						fp->f_waddr = (void *)wqsub;
-					}
-
-					context.vc_ucred = fp->f_cred;
-
-					if (fp->f_ops && (fp->f_type == DTYPE_VNODE)
-							&& ((vp = (struct vnode *)fp->f_data)  != NULLVP)
-							&& (vp->v_type == VCHR)
-						&& fo_select(fp, flag[msk], wql_ptr, &context)) {
-						optr[fd/NFDBITS] |= (1 << (fd % NFDBITS));
-						n++;
-					}
-					nc++;
-				}
-			}
-		}
-		proc_fdunlock(p);
-	}
 
 	nc = 0;
-	if (kfcount != count) {
+	if (count) {
 		proc_fdlock(p);
 		for (msk = 0; msk < 3; msk++) {
 			iptr = (u_int32_t *)&ibits[msk * nw];
@@ -1351,29 +1354,37 @@ selscan(struct proc *p, struct _select *sel, int nfd, int32_t *retval,
 					bits &= ~(1 << j);
 					fp = fdp->fd_ofiles[fd];
 
-					if (fp == NULL ||
-						(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
+					if (fp == NULL || (fdp->fd_ofileflags[fd] & UF_RESERVED)) {
+						/*
+						 * If we abort because of a bad
+						 * fd, let the caller unwind...
+						 */
 						proc_fdunlock(p);
 						return(EBADF);
 					}
 					if (sel_pass == SEL_SECONDPASS) {
 						wql_ptr = (char *)0;
-						fp->f_flags &= ~FP_INSELECT;
-						fp->f_waddr = (void *)0;
+						if ((fp->f_flags & FP_INSELECT) && (fp->f_waddr == (void *)wqsub)) {
+							fp->f_flags &= ~FP_INSELECT;
+							fp->f_waddr = (void *)0;
+						}
 					} else {
 					        wql_ptr = (wql + nc * SIZEOF_WAITQUEUE_LINK);
-						fp->f_flags |= FP_INSELECT;
-						fp->f_waddr = (void *)wqsub;
+						if (fp->f_flags & FP_INSELECT) {
+							/* someone is already in select on this fp */
+							fp->f_flags |= FP_SELCONFLICT;
+							wait_queue_link(&select_conflict_queue, (wait_queue_set_t)wqsub);
+						} else {
+							fp->f_flags |= FP_INSELECT;
+							fp->f_waddr = (void *)wqsub;
+						}
 					}
 
 					context.vc_ucred = fp->f_cred;
 
-					if ((fp->f_ops && 
-						((fp->f_type != DTYPE_VNODE)
-						|| (((vp = (struct vnode *)fp->f_data)  != NULLVP)
-							&& (vp->v_type != VCHR))
-						)
-						&& fo_select(fp, flag[msk], wql_ptr, &context))) {
+					/* The select; set the bit, if true */
+					if (fp->f_ops
+						&& fo_select(fp, flag[msk], wql_ptr, &context)) {
 						optr[fd/NFDBITS] |= (1 << (fd % NFDBITS));
 						n++;
 					}
@@ -1476,9 +1487,9 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 		/* convert the poll event into a kqueue kevent */
 		kev.ident = fds[i].fd;
 		kev.flags = EV_ADD | EV_ONESHOT | EV_POLL;
-		kev.fflags = NOTE_LOWAT;
-		kev.data = 1; /* efficiency be damned: any data should trigger */
 		kev.udata = CAST_USER_ADDR_T(&fds[i]);
+		kev.fflags = 0;
+		kev.data = 0;
 		kev.ext[0] = 0;
 		kev.ext[1] = 0;
 
@@ -1608,9 +1619,32 @@ seltrue(__unused dev_t dev, __unused int flag, __unused struct proc *p)
 	return (1);
 }
 
+/*
+ * selcount
+ *
+ * Count the number of bits set in the input bit vector, and establish an
+ * outstanding fp->f_iocount for each of the descriptors which will be in
+ * use in the select operation.
+ *
+ * Parameters:	p			The process doing the select
+ *		ibits			The input bit vector
+ *		nfd			The number of fd's in the vector
+ *		countp			Pointer to where to store the bit count
+ *
+ * Returns:	0			Success
+ *		EIO			Bad per process open file table
+ *		EBADF			One of the bits in the input bit vector
+ *						references an invalid fd
+ *
+ * Implicit:	*countp (modified)	Count of fd's
+ *
+ * Notes:	This function is the first pass under the proc_fdlock() that
+ *		permits us to recognize invalid descriptors in the bit vector;
+ *		the may, however, not remain valid through the drop and
+ *		later reacquisition of the proc_fdlock().
+ */
 static int
-selcount(struct proc *p, u_int32_t *ibits, __unused u_int32_t *obits, 
-		 int nfd, int *countp, int * kfcountp)
+selcount(struct proc *p, u_int32_t *ibits, int nfd, int *countp)
 {
 	struct filedesc *fdp = p->p_fd;
 	int msk, i, j, fd;
@@ -1620,9 +1654,8 @@ selcount(struct proc *p, u_int32_t *ibits, __unused u_int32_t *obits,
 	u_int32_t *iptr;
 	u_int nw;
 	int error=0; 
-	int kfc = 0;
 	int dropcount;
-	vnode_t vp;
+	int need_wakeup = 0;
 
 	/*
 	 * Problems when reboot; due to MacOSX signal probs
@@ -1630,7 +1663,6 @@ selcount(struct proc *p, u_int32_t *ibits, __unused u_int32_t *obits,
 	 */
 	if (fdp == NULL) {
 		*countp = 0;
-		*kfcountp = 0;
 		return(EIO);
 	}
 	nw = howmany(nfd, NFDBITS);
@@ -1646,16 +1678,10 @@ selcount(struct proc *p, u_int32_t *ibits, __unused u_int32_t *obits,
 				if (fp == NULL ||
 					(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
 						*countp = 0;
-						*kfcountp = 0;
 						error = EBADF;
 						goto bad;
 				}
 				fp->f_iocount++;
-				if ((fp->f_type == DTYPE_VNODE)
-						&& ((vp = (struct vnode *)fp->f_data)  != NULLVP)
-						&& (vp->v_type == VCHR) )
-					kfc++;
-
 				n++;
 			}
 		}
@@ -1663,48 +1689,64 @@ selcount(struct proc *p, u_int32_t *ibits, __unused u_int32_t *obits,
 	proc_fdunlock(p);
 
 	*countp = n;
-	*kfcountp = kfc;
 	return (0);
+
 bad:
 	dropcount = 0;
 	
 	if (n== 0)
 		goto out;
-	/* undo the iocounts */
-	for (msk = 0; msk < 3; msk++) {
-		iptr = (u_int32_t *)&ibits[msk * nw];
-		for (i = 0; i < nfd; i += NFDBITS) {
-			bits = iptr[i/NFDBITS];
-			while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
-				bits &= ~(1 << j);
-				fp = fdp->fd_ofiles[fd];
-				if (dropcount >= n)
-					goto out;
-				fp->f_iocount--;
+	/* Ignore error return; it's already EBADF */
+	(void)seldrop_locked(p, ibits, nfd, n, &need_wakeup, 1);
 
-				if (p->p_fpdrainwait && fp->f_iocount == 0) {
-				        p->p_fpdrainwait = 0;
-					wakeup(&p->p_fpdrainwait);
-				}
-				dropcount++;
-			}
-		}
-	}
 out:
 	proc_fdunlock(p);
+	if (need_wakeup) {
+		wakeup(&p->p_fpdrainwait);
+	}
 	return(error);
 }
 
+
+/*
+ * seldrop_locked
+ *
+ * Drop outstanding wait queue references set up during selscan(); drop the
+ * outstanding per fileproc f_iocount() picked up during the selcount().
+ *
+ * Parameters:	p			Process performing the select
+ *		ibits			Input pit bector of fd's
+ *		nfd			Number of fd's
+ *		lim			Limit to number of vector entries to
+ *						consider, or -1 for "all"
+ *		inselect		True if
+ *		need_wakeup		Pointer to flag to set to do a wakeup
+ *					if f_iocont on any descriptor goes to 0
+ *
+ * Returns:	0			Success
+ *		EBADF			One or more fds in the bit vector
+ *						were invalid, but the rest
+ *						were successfully dropped
+ *
+ * Notes:	An fd make become bad while the proc_fdlock() is not held,
+ *		if a multithreaded application closes the fd out from under
+ *		the in progress select.  In this case, we still have to
+ *		clean up after the set up on the remaining fds.
+ */
 static int
-seldrop(struct proc *p, u_int32_t *ibits, int nfd)
+seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wakeup, int fromselcount)
 {
 	struct filedesc *fdp = p->p_fd;
 	int msk, i, j, fd;
 	u_int32_t bits;
 	struct fileproc *fp;
-	int n = 0;
 	u_int32_t *iptr;
 	u_int nw;
+	int error = 0;
+	int dropcount = 0;
+	uthread_t uth = get_bsdthread_info(current_thread());
+
+	*need_wakeup = 0;
 
 	/*
 	 * Problems when reboot; due to MacOSX signal probs
@@ -1716,8 +1758,6 @@ seldrop(struct proc *p, u_int32_t *ibits, int nfd)
 
 	nw = howmany(nfd, NFDBITS);
 
-
-	proc_fdlock(p);
 	for (msk = 0; msk < 3; msk++) {
 		iptr = (u_int32_t *)&ibits[msk * nw];
 		for (i = 0; i < nfd; i += NFDBITS) {
@@ -1725,28 +1765,67 @@ seldrop(struct proc *p, u_int32_t *ibits, int nfd)
 			while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
 				bits &= ~(1 << j);
 				fp = fdp->fd_ofiles[fd];
-				if (fp == NULL 
-#if 0
-			/* if you are here then it is being closed */
-					|| (fdp->fd_ofileflags[fd] & UF_RESERVED)
-#endif
-					) {
-						proc_fdunlock(p);
-						return(EBADF);
-				}
-				n++;
-				fp->f_iocount--;
-				fp->f_flags &= ~FP_INSELECT;
+				/*
+				 * If we've already dropped as many as were
+				 * counted/scanned, then we are done.  
+				 */
+				if ((fromselcount != 0) && (++dropcount > lim))
+					goto done;
 
-				if (p->p_fpdrainwait && fp->f_iocount == 0) {
-				        p->p_fpdrainwait = 0;
-					wakeup(&p->p_fpdrainwait);
+				if (fp == NULL) {
+					/* skip (now) bad fds */
+					error = EBADF;
+					continue;
+				}
+				/*
+				 * Only clear the flag if we set it.  We'll
+				 * only find that we set it if we had made
+				 * at least one [partial] pass through selscan().
+				 */
+				if ((fp->f_flags & FP_INSELECT) && (fp->f_waddr == (void *)uth->uu_wqset)) {
+					fp->f_flags &= ~FP_INSELECT;
+					fp->f_waddr = (void *)0;
+				}
+
+				fp->f_iocount--;
+				if (fp->f_iocount < 0)
+					panic("f_iocount overdecrement!");
+
+				if (fp->f_iocount == 0) {
+					/*
+					 * The last iocount is responsible for clearing
+					 * selconfict flag - even if we didn't set it -
+					 * and is also responsible for waking up anyone
+					 * waiting on iocounts to drain.
+					 */
+					if (fp->f_flags & FP_SELCONFLICT)
+						fp->f_flags &= ~FP_SELCONFLICT;
+					if (p->p_fpdrainwait) {
+						p->p_fpdrainwait = 0;
+						*need_wakeup = 1;
+					}
 				}
 			}
 		}
 	}
+done:
+	return (error);
+}
+
+
+static int
+seldrop(struct proc *p, u_int32_t *ibits, int nfd)
+{
+	int error;
+	int need_wakeup = 0;
+
+	proc_fdlock(p);
+	error =  seldrop_locked(p, ibits, nfd, nfd, &need_wakeup, 0);
 	proc_fdunlock(p);
-	return (0);
+	if (need_wakeup) {
+		wakeup(&p->p_fpdrainwait);
+	}
+	return (error);
 }
 
 /*
@@ -1760,12 +1839,8 @@ selrecord(__unused struct proc *selector, struct selinfo *sip, void * p_wql)
 
 	/* need to look at collisions */
 
-	if ((p_wql == (void *)0) && ((sip->si_flags & SI_INITED) == 0)) {
-		return;
-	}
-
 	/*do not record if this is second pass of select */
-	if((p_wql == (void *)0)) {
+	if(p_wql == (void *)0) {
 		return;
 	}
 

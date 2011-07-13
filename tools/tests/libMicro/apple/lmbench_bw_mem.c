@@ -76,6 +76,10 @@
 #define	TRIES		11	// value from bench.h in lmbench
 #define TYPE    	int
 
+/* Added as part of the fix for <rdar://problem/7508837> */
+static volatile u_int64_t       use_result_dummy;
+void use_int(int result) { use_result_dummy += result; }
+
 /*
  * rd - 4 byte read, 32 byte stride
  * wr - 4 byte write, 32 byte stride
@@ -214,6 +218,7 @@ rd(iter_t iterations, void *cookie)
 		p +=  128;
 	    }
 	}
+	use_int(sum);
 }
 #undef	DOIT
 
@@ -257,6 +262,7 @@ rdwr(iter_t iterations, void *cookie)
 		p +=  128;
 	    }
 	}
+	use_int(sum);
 }
 #undef	DOIT
 
@@ -362,6 +368,7 @@ frd(iter_t iterations, void *cookie)
 		p += 128;
 	    }
 	}
+	use_int(sum);
 }
 #undef	DOIT
 
@@ -616,30 +623,30 @@ benchmark(void *tsd, result_t *res)
 		return(-1);
 	}
 
-	if (strcmp(opt_what, "cp") ||
-	    strcmp(opt_what, "fcp") || strcmp(opt_what, "bcopy")) {
+	if (STREQ(opt_what, "cp") ||
+	    STREQ(opt_what, "fcp") || STREQ(opt_what, "bcopy")) {
 		ts->need_buf2 = 1;
 	}
 	
 	for (i = 0 ; i < lm_optB ; i++)
 	{
-		if (strcmp(opt_what, "rd")) {
+		if (STREQ(opt_what, "rd")) {
 			rd( ts->repetitions, tsd ); 
-		} else if (strcmp(opt_what, "wr")) {
+		} else if (STREQ(opt_what, "wr")) {
 			wr( ts->repetitions, tsd ); 
-		} else if (strcmp(opt_what, "rdwr")) {
+		} else if (STREQ(opt_what, "rdwr")) {
 			rdwr( ts->repetitions, tsd ); 
-		} else if (strcmp(opt_what, "cp")) {
+		} else if (STREQ(opt_what, "cp")) {
 			mcp( ts->repetitions, tsd ); 
-		} else if (strcmp(opt_what, "frd")) {
+		} else if (STREQ(opt_what, "frd")) {
 			frd( ts->repetitions, tsd ); 
-		} else if (strcmp(opt_what, "fwr")) {
+		} else if (STREQ(opt_what, "fwr")) {
 			fwr( ts->repetitions, tsd ); 
-		} else if (strcmp(opt_what, "fcp")) {
+		} else if (STREQ(opt_what, "fcp")) {
 			fcp( ts->repetitions, tsd ); 
-		} else if (strcmp(opt_what, "bzero")) {
+		} else if (STREQ(opt_what, "bzero")) {
 			loop_bzero( ts->repetitions, tsd ); 
-		} else if (strcmp(opt_what, "bcopy")) {
+		} else if (STREQ(opt_what, "bcopy")) {
 			loop_bcopy( ts->repetitions, tsd ); 
 		} else {
 			return(-1);

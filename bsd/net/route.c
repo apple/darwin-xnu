@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -70,16 +70,25 @@
 #include <sys/domain.h>
 #include <sys/syslog.h>
 #include <sys/queue.h>
+#include <sys/mcache.h>
+#include <sys/protosw.h>
 #include <kern/lock.h>
 #include <kern/zalloc.h>
 
 #include <net/if.h>
 #include <net/route.h>
+#include <net/ntstat.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/ip_mroute.h>
 #include <netinet/ip_var.h>
+#include <netinet/ip6.h>
+
+#if INET6
+#include <netinet6/ip6_var.h>
+#include <netinet6/in6_var.h>
+#endif /* INET6 */
 
 #include <net/if_dl.h>
 
@@ -187,7 +196,6 @@
  */
 
 #define	equal(a1, a2) (bcmp((caddr_t)(a1), (caddr_t)(a2), (a1)->sa_len) == 0)
-#define	SA(p) ((struct sockaddr *)(p))
 
 extern void kdp_set_gateway_mac (void *gatewaymac);
 
@@ -261,11 +269,6 @@ struct rtentry_dbg {
 	TAILQ_ENTRY(rtentry_dbg) rtd_trash_link;
 };
 
-#define atomic_add_16_ov(a, n)	\
-	((uint16_t) OSAddAtomic16(n, (volatile SInt16 *)a))
-#define atomic_add_32_ov(a, n)	\
-	((uint32_t) OSAddAtomic(n, a))
-
 /* List of trash route entries protected by rnh_lock */
 static TAILQ_HEAD(, rtentry_dbg) rttrash_head;
 
@@ -285,33 +288,34 @@ static struct rtentry *rtalloc1_common_locked(struct sockaddr *, int, uint32_t,
 static int rtrequest_common_locked(int, struct sockaddr *,
     struct sockaddr *, struct sockaddr *, int, struct rtentry **,
     unsigned int);
+static struct rtentry *rtalloc1_locked(struct sockaddr *, int, uint32_t);
 static void rtalloc_ign_common_locked(struct route *, uint32_t, unsigned int);
-static inline void sa_set_ifscope(struct sockaddr *, unsigned int);
-static struct sockaddr *sin_copy(struct sockaddr_in *, struct sockaddr_in *,
-    unsigned int);
-static struct sockaddr *mask_copy(struct sockaddr *, struct sockaddr_in *,
-    unsigned int);
+static inline void sin6_set_ifscope(struct sockaddr *, unsigned int);
+static inline void sin6_set_embedded_ifscope(struct sockaddr *, unsigned int);
+static inline unsigned int sin6_get_embedded_ifscope(struct sockaddr *);
+static struct sockaddr *sa_copy(struct sockaddr *, struct sockaddr_storage *,
+    unsigned int *);
+static struct sockaddr *ma_copy(int, struct sockaddr *,
+    struct sockaddr_storage *, unsigned int);
 static struct sockaddr *sa_trim(struct sockaddr *, int);
 static struct radix_node *node_lookup(struct sockaddr *, struct sockaddr *,
     unsigned int);
-static struct radix_node *node_lookup_default(void);
+static struct radix_node *node_lookup_default(int);
 static int rn_match_ifscope(struct radix_node *, void *);
 static struct ifaddr *ifa_ifwithroute_common_locked(int,
     const struct sockaddr *, const struct sockaddr *, unsigned int);
 static struct rtentry *rte_alloc(void);
 static void rte_free(struct rtentry *);
 static void rtfree_common(struct rtentry *, boolean_t);
-#if IFNET_ROUTE_REFCNT
 static void rte_if_ref(struct ifnet *, int);
-#endif /* IFNET_ROUTE_REFCNT */
 
 uint32_t route_generation = 0;
 
 /*
- * sockaddr_in with embedded interface scope; this is used internally
- * to keep track of scoped route entries in the routing table.  The
- * fact that such a scope is embedded in the structure is an artifact
- * of the current implementation which could change in future.
+ * sockaddr_in with scope ID field; this is used internally to keep
+ * track of scoped route entries in the routing table.  The fact that
+ * such a value is embedded in the structure is an artifact of the
+ * current implementation which could change in future.
  */
 struct sockaddr_inifscope {
 	__uint8_t	sin_len;
@@ -330,15 +334,24 @@ struct sockaddr_inifscope {
 			__uint32_t	ifscope;
 		} _in_index;
 	} un;
-#define	sin_ifscope	un._in_index.ifscope
+#define	sin_scope_id	un._in_index.ifscope
 };
 
+#define	SA(sa)		((struct sockaddr *)(size_t)(sa))
 #define	SIN(sa)		((struct sockaddr_in *)(size_t)(sa))
+#define	SIN6(sa)	((struct sockaddr_in6 *)(size_t)(sa))
 #define	SINIFSCOPE(sa)	((struct sockaddr_inifscope *)(size_t)(sa))
+#define	SIN6IFSCOPE(sa)	SIN6(sa)
 
 #define	ASSERT_SINIFSCOPE(sa) {						\
 	if ((sa)->sa_family != AF_INET ||				\
 	    (sa)->sa_len < sizeof (struct sockaddr_in))			\
+		panic("%s: bad sockaddr_in %p\n", __func__, sa);	\
+}
+
+#define	ASSERT_SIN6IFSCOPE(sa) {					\
+	if ((sa)->sa_family != AF_INET6 ||				\
+	    (sa)->sa_len < sizeof (struct sockaddr_in6))		\
 		panic("%s: bad sockaddr_in %p\n", __func__, sa);	\
 }
 
@@ -358,27 +371,36 @@ static struct sockaddr sin_def = {
 	sizeof (struct sockaddr_in), AF_INET, { 0, }
 };
 
+static struct sockaddr_in6 sin6_def = {
+	sizeof (struct sockaddr_in6), AF_INET6, 0, 0, IN6ADDR_ANY_INIT, 0
+};
+
 /*
  * Interface index (scope) of the primary interface; determined at
  * the time when the default, non-scoped route gets added, changed
  * or deleted.  Protected by rnh_lock.
  */
 static unsigned int primary_ifscope = IFSCOPE_NONE;
+static unsigned int primary6_ifscope = IFSCOPE_NONE;
 
-#define	INET_DEFAULT(dst)	\
-	((dst)->sa_family == AF_INET && SIN(dst)->sin_addr.s_addr == 0)
+#define	INET_DEFAULT(sa)	\
+	((sa)->sa_family == AF_INET && SIN(sa)->sin_addr.s_addr == 0)
 
+#define	INET6_DEFAULT(sa)						\
+	((sa)->sa_family == AF_INET6 &&					\
+	IN6_IS_ADDR_UNSPECIFIED(&SIN6(sa)->sin6_addr))
+
+#define	SA_DEFAULT(sa)	(INET_DEFAULT(sa) || INET6_DEFAULT(sa))
 #define	RT(r)		((struct rtentry *)r)
+#define	RN(r)		((struct radix_node *)r)
 #define	RT_HOST(r)	(RT(r)->rt_flags & RTF_HOST)
 
-#if IFNET_ROUTE_REFCNT
 SYSCTL_DECL(_net_idle_route);
 
 static int rt_if_idle_expire_timeout = RT_IF_IDLE_EXPIRE_TIMEOUT;
 SYSCTL_INT(_net_idle_route, OID_AUTO, expire_timeout, CTLFLAG_RW,
     &rt_if_idle_expire_timeout, 0, "Default expiration time on routes for "
     "interface idle reference counting");
-#endif /* IFNET_ROUTE_REFCNT */
 
 /*
  * Given a route, determine whether or not it is the non-scoped default
@@ -386,88 +408,189 @@ SYSCTL_INT(_net_idle_route, OID_AUTO, expire_timeout, CTLFLAG_RW,
  * a separate place when rt is in the process of being created.
  */
 boolean_t
-rt_inet_default(struct rtentry *rt, struct sockaddr *dst)
+rt_primary_default(struct rtentry *rt, struct sockaddr *dst)
 {
-	return (INET_DEFAULT(dst) && !(rt->rt_flags & RTF_IFSCOPE));
+	return (SA_DEFAULT(dst) && !(rt->rt_flags & RTF_IFSCOPE));
 }
 
 /*
  * Set the ifscope of the primary interface; caller holds rnh_lock.
  */
 void
-set_primary_ifscope(unsigned int ifscope)
+set_primary_ifscope(int af, unsigned int ifscope)
 {
-	primary_ifscope = ifscope;
+	if (af == AF_INET)
+		primary_ifscope = ifscope;
+	else
+		primary6_ifscope = ifscope;
 }
 
 /*
  * Return the ifscope of the primary interface; caller holds rnh_lock.
  */
 unsigned int
-get_primary_ifscope(void)
+get_primary_ifscope(int af)
 {
-	return (primary_ifscope);
+	return (af == AF_INET ? primary_ifscope : primary6_ifscope);
 }
 
 /*
- * Embed ifscope into a given a sockaddr_in.
+ * Set the scope ID of a given a sockaddr_in.
+ */
+void
+sin_set_ifscope(struct sockaddr *sa, unsigned int ifscope)
+{
+	/* Caller must pass in sockaddr_in */
+	ASSERT_SINIFSCOPE(sa);
+
+	SINIFSCOPE(sa)->sin_scope_id = ifscope;
+}
+
+/*
+ * Set the scope ID of given a sockaddr_in6.
  */
 static inline void
-sa_set_ifscope(struct sockaddr *sa, unsigned int ifscope)
+sin6_set_ifscope(struct sockaddr *sa, unsigned int ifscope)
 {
-	/* Caller must pass in sockaddr_in */
-	ASSERT_SINIFSCOPE(sa);
+	/* Caller must pass in sockaddr_in6 */
+	ASSERT_SIN6IFSCOPE(sa);
 
-	SINIFSCOPE(sa)->sin_ifscope = ifscope;
+	SIN6IFSCOPE(sa)->sin6_scope_id = ifscope;
 }
 
 /*
- * Given a sockaddr_in, return the embedded ifscope to the caller.
+ * Given a sockaddr_in, return the scope ID to the caller.
  */
 unsigned int
-sa_get_ifscope(struct sockaddr *sa)
+sin_get_ifscope(struct sockaddr *sa)
 {
 	/* Caller must pass in sockaddr_in */
 	ASSERT_SINIFSCOPE(sa);
 
-	return (SINIFSCOPE(sa)->sin_ifscope);
+	return (SINIFSCOPE(sa)->sin_scope_id);
 }
 
 /*
- * Copy a sockaddr_in src to dst and embed ifscope into dst.
+ * Given a sockaddr_in6, return the scope ID to the caller.
+ */
+unsigned int
+sin6_get_ifscope(struct sockaddr *sa)
+{
+	/* Caller must pass in sockaddr_in6 */
+	ASSERT_SIN6IFSCOPE(sa);
+
+	return (SIN6IFSCOPE(sa)->sin6_scope_id);
+}
+
+static inline void
+sin6_set_embedded_ifscope(struct sockaddr *sa, unsigned int ifscope)
+{
+	/* Caller must pass in sockaddr_in6 */
+	ASSERT_SIN6IFSCOPE(sa);
+	VERIFY(IN6_IS_SCOPE_EMBED(&(SIN6(sa)->sin6_addr)));
+
+	SIN6(sa)->sin6_addr.s6_addr16[1] = htons(ifscope);
+}
+
+static inline unsigned int
+sin6_get_embedded_ifscope(struct sockaddr *sa)
+{
+	/* Caller must pass in sockaddr_in6 */
+	ASSERT_SIN6IFSCOPE(sa);
+
+	return (ntohs(SIN6(sa)->sin6_addr.s6_addr16[1]));
+}
+
+/*
+ * Copy a sockaddr_{in,in6} src to a dst storage and set scope ID into dst.
+ *
+ * To clear the scope ID, pass is a NULL pifscope.  To set the scope ID, pass
+ * in a non-NULL pifscope with non-zero ifscope.  Otherwise if pifscope is
+ * non-NULL and ifscope is IFSCOPE_NONE, the existing scope ID is left intact.
+ * In any case, the effective scope ID value is returned to the caller via
+ * pifscope, if it is non-NULL.
  */
 static struct sockaddr *
-sin_copy(struct sockaddr_in *src, struct sockaddr_in *dst, unsigned int ifscope)
+sa_copy(struct sockaddr *src, struct sockaddr_storage *dst,
+    unsigned int *pifscope)
 {
-	*dst = *src;
-	sa_set_ifscope(SA(dst), ifscope);
+	int af = src->sa_family;
+	unsigned int ifscope = (pifscope != NULL) ? *pifscope : IFSCOPE_NONE;
+
+	VERIFY(af == AF_INET || af == AF_INET6);
+
+	bzero(dst, sizeof (*dst));
+
+	if (af == AF_INET) {
+		bcopy(src, dst, sizeof (struct sockaddr_in));
+		if (pifscope == NULL || ifscope != IFSCOPE_NONE)
+			sin_set_ifscope(SA(dst), ifscope);
+	} else {
+		bcopy(src, dst, sizeof (struct sockaddr_in6));
+		if (pifscope != NULL &&
+		    IN6_IS_SCOPE_EMBED(&SIN6(dst)->sin6_addr)) {
+			unsigned int eifscope;
+			/*
+			 * If the address contains the embedded scope ID,
+			 * use that as the value for sin6_scope_id as long
+			 * the caller doesn't insist on clearing it (by
+			 * passing NULL) or setting it.
+			 */
+			eifscope = sin6_get_embedded_ifscope(SA(dst));
+			if (eifscope != IFSCOPE_NONE && ifscope == IFSCOPE_NONE)
+				ifscope = eifscope;
+			sin6_set_ifscope(SA(dst), ifscope);
+			/*
+			 * If sin6_scope_id is set but the address doesn't
+			 * contain the equivalent embedded value, set it.
+			 */
+			if (ifscope != IFSCOPE_NONE && eifscope != ifscope)
+				sin6_set_embedded_ifscope(SA(dst), ifscope);
+		} else if (pifscope == NULL || ifscope != IFSCOPE_NONE) {
+			sin6_set_ifscope(SA(dst), ifscope);
+		}
+	}
+
+	if (pifscope != NULL) {
+		*pifscope = (af == AF_INET) ? sin_get_ifscope(SA(dst)) :
+		    sin6_get_ifscope(SA(dst));
+	}
 
 	return (SA(dst));
 }
 
 /*
- * Copy a mask from src to a sockaddr_in dst and embed ifscope into dst.
+ * Copy a mask from src to a dst storage and set scope ID into dst.
  */
 static struct sockaddr *
-mask_copy(struct sockaddr *src, struct sockaddr_in *dst, unsigned int ifscope)
+ma_copy(int af, struct sockaddr *src, struct sockaddr_storage *dst,
+    unsigned int ifscope)
 {
-	/* We know dst is at least the size of sockaddr{_in} */
+	VERIFY(af == AF_INET || af == AF_INET6);
+
 	bzero(dst, sizeof (*dst));
 	rt_maskedcopy(src, SA(dst), src);
 
 	/*
 	 * The length of the mask sockaddr would need to be adjusted
-	 * to cover the additional sin_ifscope field; when ifscope is
-	 * IFSCOPE_NONE, we'd end up clearing the embedded ifscope on
+	 * to cover the additional {sin,sin6}_ifscope field; when ifscope
+	 * is IFSCOPE_NONE, we'd end up clearing the scope ID field on
 	 * the destination mask in addition to extending the length
 	 * of the sockaddr, as a side effect.  This is okay, as any
 	 * trailing zeroes would be skipped by rn_addmask prior to
 	 * inserting or looking up the mask in the mask tree.
 	 */
-	SINIFSCOPE(dst)->sin_ifscope = ifscope;
-	SINIFSCOPE(dst)->sin_len =
-	    offsetof(struct sockaddr_inifscope, sin_ifscope) +
-	    sizeof (SINIFSCOPE(dst)->sin_ifscope);
+	if (af == AF_INET) {
+		SINIFSCOPE(dst)->sin_scope_id = ifscope;
+		SINIFSCOPE(dst)->sin_len =
+		    offsetof(struct sockaddr_inifscope, sin_scope_id) +
+		    sizeof (SINIFSCOPE(dst)->sin_scope_id);
+	} else {
+		SIN6IFSCOPE(dst)->sin6_scope_id = ifscope;
+		SIN6IFSCOPE(dst)->sin6_len =
+		    offsetof(struct sockaddr_in6, sin6_scope_id) +
+		    sizeof (SIN6IFSCOPE(dst)->sin6_scope_id);
+	}
 
 	return (SA(dst));
 }
@@ -501,15 +624,15 @@ sa_trim(struct sockaddr *sa, int skip)
 }
 
 /*
- * Called by rtm_msg{1,2} routines to "scrub" the embedded interface scope
- * away from the socket address structure, so that clients of the routing
- * socket will not be confused by the presence of the embedded scope, or the
- * side effect of the increased length due to that.  The source sockaddr is
- * not modified; instead, the scrubbing happens on the destination sockaddr
- * storage that is passed in by the caller.
+ * Called by rtm_msg{1,2} routines to "scrub" the scope ID field away from
+ * the socket address structure, so that clients of the routing socket will
+ * not be confused by the presence of the information, or the side effect of
+ * the increased length due to that.  The source sockaddr is not modified;
+ * instead, the scrubbing happens on the destination sockaddr storage that
+ * is passed in by the caller.
  */
 struct sockaddr *
-rtm_scrub_ifscope(int idx, struct sockaddr *hint, struct sockaddr *sa,
+rtm_scrub_ifscope(int type, int idx, struct sockaddr *hint, struct sockaddr *sa,
     struct sockaddr_storage *ss)
 {
 	struct sockaddr *ret = sa;
@@ -517,39 +640,64 @@ rtm_scrub_ifscope(int idx, struct sockaddr *hint, struct sockaddr *sa,
 	switch (idx) {
 	case RTAX_DST:
 		/*
-		 * If this is for an AF_INET destination address, call
-		 * sin_copy() with IFSCOPE_NONE as it does what we need.
+		 * If this is for an AF_INET/AF_INET6 destination address,
+		 * call sa_copy() to clear the scope ID field.
 		 */
 		if (sa->sa_family == AF_INET &&
-		    SINIFSCOPE(sa)->sin_ifscope != IFSCOPE_NONE) {
-			bzero(ss, sizeof (*ss));
-			ret = sin_copy(SIN(sa), SIN(ss), IFSCOPE_NONE);
+		    SINIFSCOPE(sa)->sin_scope_id != IFSCOPE_NONE) {
+			ret = sa_copy(sa, ss, NULL);
+		} else if (sa->sa_family == AF_INET6 &&
+		    SIN6IFSCOPE(sa)->sin6_scope_id != IFSCOPE_NONE) {
+			ret = sa_copy(sa, ss, NULL);
 		}
 		break;
 
 	case RTAX_NETMASK: {
+		int skip, af;
 		/*
-		 * If this is for a mask, we can't tell whether or not
-		 * there is an embedded interface scope, as the span of
-		 * bytes between sa_len and the beginning of the mask
-		 * (offset of sin_addr in the case of AF_INET) may be
-		 * filled with all-ones by rn_addmask(), and hence we
-		 * cannot rely on sa_family.  Because of this, we use
-		 * the sa_family of the hint sockaddr (RTAX_{DST,IFA})
-		 * as indicator as to whether or not the mask is to be
-		 * treated as one for AF_INET.  Clearing the embedded
-		 * scope involves setting it to IFSCOPE_NONE followed
-		 * by calling sa_trim() to trim trailing zeroes from
-		 * the storage sockaddr, which reverses what was done
-		 * earlier by mask_copy() on the source sockaddr.
+		 * If this is for a mask, we can't tell whether or not there
+		 * is an valid scope ID value, as the span of bytes between
+		 * sa_len and the beginning of the mask (offset of sin_addr in
+		 * the case of AF_INET, or sin6_addr for AF_INET6) may be
+		 * filled with all-ones by rn_addmask(), and hence we cannot
+		 * rely on sa_family.  Because of this, we use the sa_family
+		 * of the hint sockaddr (RTAX_{DST,IFA}) as indicator as to
+		 * whether or not the mask is to be treated as one for AF_INET
+		 * or AF_INET6.  Clearing the scope ID field involves setting
+		 * it to IFSCOPE_NONE followed by calling sa_trim() to trim
+		 * trailing zeroes from the storage sockaddr, which reverses
+		 * what was done earlier by ma_copy() on the source sockaddr.
 		 */
-		int skip = offsetof(struct sockaddr_in, sin_addr);
-		if (sa->sa_len > skip && sa->sa_len <= sizeof (*ss) &&
-		    hint != NULL && hint->sa_family == AF_INET) {
+		if (hint == NULL ||
+		    ((af = hint->sa_family) != AF_INET && af != AF_INET6))
+			break;	/* nothing to do */
+
+		skip = (af == AF_INET) ?
+		    offsetof(struct sockaddr_in, sin_addr) :
+		    offsetof(struct sockaddr_in6, sin6_addr);
+
+		if (sa->sa_len > skip && sa->sa_len <= sizeof (*ss)) {
 			bzero(ss, sizeof (*ss));
 			bcopy(sa, ss, sa->sa_len);
-			SINIFSCOPE(ss)->sin_ifscope = IFSCOPE_NONE;
+			/*
+			 * Don't use {sin,sin6}_set_ifscope() as sa_family
+			 * and sa_len for the netmask might not be set to
+			 * the corresponding expected values of the hint.
+			 */
+			if (hint->sa_family == AF_INET)
+				SINIFSCOPE(ss)->sin_scope_id = IFSCOPE_NONE;
+			else
+				SIN6IFSCOPE(ss)->sin6_scope_id = IFSCOPE_NONE;
 			ret = sa_trim(SA(ss), skip);
+
+			/*
+			 * For AF_INET6 mask, set sa_len appropriately unless
+			 * this is requested via systl_dumpentry(), in which
+			 * case we return the raw value.
+			 */
+			if (hint->sa_family == AF_INET6 &&
+			    type != RTM_GET && type != RTM_GET2)
+				SA(ret)->sa_len = sizeof (struct sockaddr_in6);
 		}
 		break;
 	}
@@ -569,11 +717,14 @@ rn_match_ifscope(struct radix_node *rn, void *arg)
 {
 	struct rtentry *rt = (struct rtentry *)rn;
 	struct matchleaf_arg *ma = arg;
+	int af = rt_key(rt)->sa_family;
 
-	if (!(rt->rt_flags & RTF_IFSCOPE) || rt_key(rt)->sa_family != AF_INET)
+	if (!(rt->rt_flags & RTF_IFSCOPE) || (af != AF_INET && af != AF_INET6))
 		return (0);
 
-	return (SINIFSCOPE(rt_key(rt))->sin_ifscope == ma->ifscope);
+	return (af == AF_INET ?
+	    (SINIFSCOPE(rt_key(rt))->sin_scope_id == ma->ifscope) :
+	    (SIN6IFSCOPE(rt_key(rt))->sin6_scope_id == ma->ifscope));
 }
 
 static void
@@ -624,6 +775,7 @@ route_init(void)
 		panic("route_init: failed allocating rte_zone");
 
 	zone_change(rte_zone, Z_EXPAND, TRUE);
+	zone_change(rte_zone, Z_CALLERACCT, FALSE);
 	zone_change(rte_zone, Z_NOENCRYPT, TRUE);
 
 	TAILQ_INIT(&rttrash_head);
@@ -648,16 +800,9 @@ rtalloc(struct route *ro)
 }
 
 void
-rtalloc_ign_locked(struct route *ro, uint32_t ignore)
+rtalloc_scoped(struct route *ro, unsigned int ifscope)
 {
-	return (rtalloc_ign_common_locked(ro, ignore, IFSCOPE_NONE));
-}
-
-void
-rtalloc_scoped_ign_locked(struct route *ro, uint32_t ignore,
-    unsigned int ifscope)
-{
-	return (rtalloc_ign_common_locked(ro, ignore, ifscope));
+	rtalloc_scoped_ign(ro, 0, ifscope);
 }
 
 static void
@@ -689,7 +834,7 @@ rtalloc_ign(struct route *ro, uint32_t ignore)
 {
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);
-	rtalloc_ign_locked(ro, ignore);
+	rtalloc_ign_common_locked(ro, ignore, IFSCOPE_NONE);
 	lck_mtx_unlock(rnh_lock);
 }
 
@@ -698,11 +843,11 @@ rtalloc_scoped_ign(struct route *ro, uint32_t ignore, unsigned int ifscope)
 {
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);
-	rtalloc_scoped_ign_locked(ro, ignore, ifscope);
+	rtalloc_ign_common_locked(ro, ignore, ifscope);
 	lck_mtx_unlock(rnh_lock);
 }
 
-struct rtentry *
+static struct rtentry *
 rtalloc1_locked(struct sockaddr *dst, int report, uint32_t ignflags)
 {
 	return (rtalloc1_common_locked(dst, report, ignflags, IFSCOPE_NONE));
@@ -910,6 +1055,9 @@ rtfree_common(struct rtentry *rt, boolean_t locked)
 	 * resources associated with the route.
 	 */
 	if (!(rt->rt_flags & RTF_UP)) {
+		struct rtentry *rt_parent;
+		struct ifaddr *rt_ifa;
+
 		if (rt->rt_nodes->rn_flags & (RNF_ACTIVE | RNF_ROOT))
 			panic("rt %p freed while in radix tree\n", rt);
 		/*
@@ -923,24 +1071,14 @@ rtfree_common(struct rtentry *rt, boolean_t locked)
 		}
 
 		/*
-		* Route is no longer in the tree and refcnt is 0;
-		* we have exclusive access, so destroy it.
-		*/
-		RT_UNLOCK(rt);
-
-		/*
 		 * release references on items we hold them on..
 		 * e.g other routes and ifaddrs.
 		 */
-		if (rt->rt_parent != NULL) {
-			rtfree_locked(rt->rt_parent);
+		if ((rt_parent = rt->rt_parent) != NULL)
 			rt->rt_parent = NULL;
-		}
 
-		if (rt->rt_ifa != NULL) {
-			ifafree(rt->rt_ifa);
+		if ((rt_ifa = rt->rt_ifa) != NULL)
 			rt->rt_ifa = NULL;
-		}
 
 		/*
 		 * Now free any attached link-layer info.
@@ -954,11 +1092,28 @@ rtfree_common(struct rtentry *rt, boolean_t locked)
 		}
 
 		/*
+		 * Route is no longer in the tree and refcnt is 0;
+		 * we have exclusive access, so destroy it.
+		 */
+		RT_UNLOCK(rt);
+
+		if (rt_parent != NULL)
+			rtfree_locked(rt_parent);
+
+		if (rt_ifa != NULL)
+			IFA_REMREF(rt_ifa);
+
+		/*
 		 * The key is separately alloc'd so free it (see rt_setgate()).
 		 * This also frees the gateway, as they are always malloc'd
 		 * together.
 		 */
 		R_Free(rt_key(rt));
+
+		/*
+		 * Free any statistics that may have been allocated
+		 */
+		nstat_route_detach(rt);
 
 		/*
 		 * and the rtentry itself of course
@@ -1057,16 +1212,19 @@ rtsetifa(struct rtentry *rt, struct ifaddr* ifa)
 	if (rt->rt_ifa == ifa)
 		return;
 
+	/* Become a regular mutex, just in case */
+	RT_CONVERT_LOCK(rt);
+
 	/* Release the old ifa */
 	if (rt->rt_ifa)
-		ifafree(rt->rt_ifa);
+		IFA_REMREF(rt->rt_ifa);
 
 	/* Set rt_ifa */
 	rt->rt_ifa = ifa;
 
 	/* Take a reference to the ifa */
 	if (rt->rt_ifa)
-		ifaref(rt->rt_ifa);
+		IFA_ADDREF(rt->rt_ifa);
 }
 
 /*
@@ -1086,10 +1244,22 @@ rtredirect(struct ifnet *ifp, struct sockaddr *dst, struct sockaddr *gateway,
 	struct rt_addrinfo info;
 	struct ifaddr *ifa = NULL;
 	unsigned int ifscope = (ifp != NULL) ? ifp->if_index : IFSCOPE_NONE;
-	struct sockaddr_in sin;
+	struct sockaddr_storage ss;
 
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(rnh_lock);
+
+	/*
+	 * Transform src into the internal routing table form for
+	 * comparison against rt_gateway below.
+	 */
+#if INET6
+	if ((src->sa_family == AF_INET && ip_doscopedroute) ||
+	    (src->sa_family == AF_INET6 && ip6_doscopedroute))
+#else
+	if (src->sa_family == AF_INET && ip_doscopedroute)
+#endif /* !INET6 */
+		src = sa_copy(src, &ss, &ifscope);
 
 	/*
 	 * Verify the gateway is directly reachable; if scoped routing
@@ -1106,31 +1276,29 @@ rtredirect(struct ifnet *ifp, struct sockaddr *dst, struct sockaddr *gateway,
 	if (rt != NULL)
 		RT_LOCK(rt);
 
-	/* Embed scope in src for comparison against rt_gateway below */
-	if (ip_doscopedroute && src->sa_family == AF_INET)
-		src = sin_copy(SIN(src), &sin, ifscope);
-
 	/*
 	 * If the redirect isn't from our current router for this dst,
 	 * it's either old or wrong.  If it redirects us to ourselves,
 	 * we have a routing loop, perhaps as a result of an interface
-	 * going down recently.
+	 * going down recently.  Holding rnh_lock here prevents the
+	 * possibility of rt_ifa/ifa's ifa_addr from changing (e.g.
+	 * in_ifinit), so okay to access ifa_addr without locking.
 	 */
 	if (!(flags & RTF_DONE) && rt != NULL &&
 	     (!equal(src, rt->rt_gateway) || !equal(rt->rt_ifa->ifa_addr,
 	     ifa->ifa_addr))) {
 		error = EINVAL;
 	} else {
-		ifafree(ifa);
+		IFA_REMREF(ifa);
 		if ((ifa = ifa_ifwithaddr(gateway))) {
-			ifafree(ifa);
+			IFA_REMREF(ifa);
 			ifa = NULL;
 			error = EHOSTUNREACH;
 		}
 	}
 
 	if (ifa) {
-		ifafree(ifa);
+		IFA_REMREF(ifa);
 		ifa = NULL;
 	}
 
@@ -1265,25 +1433,36 @@ ifa_ifwithroute_scoped_locked(int flags, const struct sockaddr *dst,
 
 static struct ifaddr *
 ifa_ifwithroute_common_locked(int flags, const struct sockaddr *dst,
-    const struct sockaddr *gateway, unsigned int ifscope)
+    const struct sockaddr *gw, unsigned int ifscope)
 {
 	struct ifaddr *ifa = NULL;
 	struct rtentry *rt = NULL;
-	struct sockaddr_in dst_in, gw_in;
+	struct sockaddr_storage dst_ss, gw_ss;
 
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
-	if (ip_doscopedroute) {
-		/*
-		 * Just in case the sockaddr passed in by the caller
-		 * contains embedded scope, make sure to clear it since
-		 * IPv4 interface addresses aren't scoped.
-		 */
-		if (dst != NULL && dst->sa_family == AF_INET)
-			dst = sin_copy(SIN(dst), &dst_in, IFSCOPE_NONE);
-		if (gateway != NULL && gateway->sa_family == AF_INET)
-			gateway = sin_copy(SIN(gateway), &gw_in, IFSCOPE_NONE);
-	}
+	/*
+	 * Just in case the sockaddr passed in by the caller
+	 * contains a scope ID, make sure to clear it since
+	 * interface addresses aren't scoped.
+	 */
+#if INET6
+	if (dst != NULL &&
+	    ((dst->sa_family == AF_INET && ip_doscopedroute) ||
+	    (dst->sa_family == AF_INET6 && ip6_doscopedroute)))
+#else
+	if (dst != NULL && dst->sa_family == AF_INET && ip_doscopedroute)
+#endif /* !INET6 */
+		dst = sa_copy(SA(dst), &dst_ss, NULL);
+
+#if INET6
+	if (gw != NULL &&
+	    ((gw->sa_family == AF_INET && ip_doscopedroute) ||
+	    (gw->sa_family == AF_INET6 && ip6_doscopedroute)))
+#else
+	if (gw != NULL && gw->sa_family == AF_INET && ip_doscopedroute)
+#endif /* !INET6 */
+		gw = sa_copy(SA(gw), &gw_ss, NULL);
 
 	if (!(flags & RTF_GATEWAY)) {
 		/*
@@ -1297,17 +1476,17 @@ ifa_ifwithroute_common_locked(int flags, const struct sockaddr *dst,
 			ifa = ifa_ifwithdstaddr(dst);
 		}
 		if (ifa == NULL)
-			ifa = ifa_ifwithaddr_scoped(gateway, ifscope);
+			ifa = ifa_ifwithaddr_scoped(gw, ifscope);
 	} else {
 		/*
 		 * If we are adding a route to a remote net
 		 * or host, the gateway may still be on the
 		 * other end of a pt to pt link.
 		 */
-		ifa = ifa_ifwithdstaddr(gateway);
+		ifa = ifa_ifwithdstaddr(gw);
 	}
 	if (ifa == NULL)
-		ifa = ifa_ifwithnet_scoped(gateway, ifscope);
+		ifa = ifa_ifwithnet_scoped(gw, ifscope);
 	if (ifa == NULL) {
 		/* Workaround to avoid gcc warning regarding const variable */
 		rt = rtalloc1_scoped_locked((struct sockaddr *)(size_t)dst,
@@ -1315,19 +1494,27 @@ ifa_ifwithroute_common_locked(int flags, const struct sockaddr *dst,
 		if (rt != NULL) {
 			RT_LOCK_SPIN(rt);
 			ifa = rt->rt_ifa;
-			if (ifa != NULL)
-				ifaref(ifa);
+			if (ifa != NULL) {
+				/* Become a regular mutex */
+				RT_CONVERT_LOCK(rt);
+				IFA_ADDREF(ifa);
+			}
 			RT_REMREF_LOCKED(rt);
 			RT_UNLOCK(rt);
 			rt = NULL;
 		}
 	}
+	/*
+	 * Holding rnh_lock here prevents the possibility of ifa from
+	 * changing (e.g. in_ifinit), so it is safe to access its
+	 * ifa_addr (here and down below) without locking.
+	 */
 	if (ifa != NULL && ifa->ifa_addr->sa_family != dst->sa_family) {
 		struct ifaddr *newifa;
 		/* Callee adds reference to newifa upon success */
 		newifa = ifaof_ifpforaddr(dst, ifa->ifa_ifp);
 		if (newifa != NULL) {
-			ifafree(ifa);
+			IFA_REMREF(ifa);
 			ifa = newifa;
 		}
 	}
@@ -1337,18 +1524,21 @@ ifa_ifwithroute_common_locked(int flags, const struct sockaddr *dst,
 	 * that may not agree with info garnered from the interfaces.
 	 * The routing table should carry more precedence than the
 	 * interfaces in this matter.  Must be careful not to stomp
-	 * on new entries from rtinit, hence (ifa->ifa_addr != gateway).
+	 * on new entries from rtinit, hence (ifa->ifa_addr != gw).
 	 */
 	if ((ifa == NULL ||
-	    !equal(ifa->ifa_addr, (struct sockaddr *)(size_t)gateway)) &&
-	    (rt = rtalloc1_scoped_locked((struct sockaddr *)(size_t)gateway,
+	    !equal(ifa->ifa_addr, (struct sockaddr *)(size_t)gw)) &&
+	    (rt = rtalloc1_scoped_locked((struct sockaddr *)(size_t)gw,
 	    0, 0, ifscope)) != NULL) {
 		if (ifa != NULL)
-			ifafree(ifa);
+			IFA_REMREF(ifa);
 		RT_LOCK_SPIN(rt);
 		ifa = rt->rt_ifa;
-		if (ifa != NULL)
-			ifaref(ifa);
+		if (ifa != NULL) {
+			/* Become a regular mutex */
+			RT_CONVERT_LOCK(rt);
+			IFA_ADDREF(ifa);
+		}
 		RT_REMREF_LOCKED(rt);
 		RT_UNLOCK(rt);
 	}
@@ -1359,7 +1549,7 @@ ifa_ifwithroute_common_locked(int flags, const struct sockaddr *dst,
 	 */
 	if ((flags & RTF_IFSCOPE) &&
 	    ifa != NULL && ifa->ifa_ifp->if_index != ifscope) {
-		ifafree(ifa);
+		IFA_REMREF(ifa);
 		ifa = NULL;
 	}
 
@@ -1400,7 +1590,7 @@ rtrequest_scoped_locked(int req, struct sockaddr *dst,
  * Do appropriate manipulations of a routing tree given all the bits of
  * info needed.
  *
- * Embedding the scope in the radix key is an internal job that should be
+ * Storing the scope ID in the radix key is an internal job that should be
  * left to routines in this module.  Callers should specify the scope value
  * to the "scoped" variants of route routines instead of manipulating the
  * key itself.  This is typically done when creating a scoped route, e.g.
@@ -1422,59 +1612,79 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 	struct radix_node_head *rnh;
 	struct ifaddr *ifa = NULL;
 	struct sockaddr *ndst, *dst = dst0;
-	struct sockaddr_in sin, mask;
+	struct sockaddr_storage ss, mask;
+	struct timeval curr_calendartime;
+	int af = dst->sa_family;
+	void (*ifa_rtrequest)(int, struct rtentry *, struct sockaddr *);
+
 #define senderr(x) { error = x ; goto bad; }
 
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	/*
 	 * Find the correct routing tree to use for this Address Family
 	 */
-	if ((rnh = rt_tables[dst->sa_family]) == 0)
+	if ((rnh = rt_tables[af]) == NULL)
 		senderr(ESRCH);
 	/*
 	 * If we are adding a host route then we don't want to put
 	 * a netmask in the tree
 	 */
 	if (flags & RTF_HOST)
-		netmask = 0;
+		netmask = NULL;
 
 	/*
-	 * If RTF_IFSCOPE is specified, use a local copy of the destination
-	 * address to embed the scope into.  This logic is repeated below
+	 * If Scoped Routing is enabled, use a local copy of the destination
+	 * address to store the scope ID into.  This logic is repeated below
 	 * in the RTM_RESOLVE handler since the caller does not normally
-	 * specify such a flag during a resolve; instead it passes in the
-	 * route used for cloning for which the scope info is derived from.
-	 * Note also that in the case of RTM_DELETE, the address passed in
-	 * by the caller might already contain the embedded scope info when
-	 * it is the key itself, thus making RTF_IFSCOPE unnecessary; one
-	 * instance where it is explicitly set is inside route_output()
-	 * as part of handling a routing socket request.
+	 * specify such a flag during a resolve, as well as for the handling
+	 * of IPv4 link-local address; instead, it passes in the route used for
+	 * cloning for which the scope info is derived from.  Note also that
+	 * in the case of RTM_DELETE, the address passed in by the caller
+	 * might already contain the scope ID info when it is the key itself,
+	 * thus making RTF_IFSCOPE unnecessary; one instance where it is
+	 * explicitly set is inside route_output() as part of handling a
+	 * routing socket request.
 	 */
-	if (req != RTM_RESOLVE && (flags & RTF_IFSCOPE)) {
-		/* Scoped routing is for AF_INET only */
-		if (dst->sa_family != AF_INET ||
-		    (req == RTM_ADD && !ip_doscopedroute))
+#if INET6
+	if (req != RTM_RESOLVE &&
+	    ((af == AF_INET && ip_doscopedroute) ||
+	    (af == AF_INET6 && ip6_doscopedroute))) {
+#else
+	if (req != RTM_RESOLVE && af == AF_INET && ip_doscopedroute) {
+#endif /* !INET6 */
+		/* Transform dst into the internal routing table form */
+		dst = sa_copy(dst, &ss, &ifscope);
+
+		/* Transform netmask into the internal routing table form */
+		if (netmask != NULL)
+			netmask = ma_copy(af, netmask, &mask, ifscope);
+
+		if (ifscope != IFSCOPE_NONE)
+			flags |= RTF_IFSCOPE;
+	} else {
+		if ((flags & RTF_IFSCOPE) && (af != AF_INET && af != AF_INET6))
 			senderr(EINVAL);
 
-		if (ifscope == IFSCOPE_NONE) {
-			flags &= ~RTF_IFSCOPE;
-		} else {
-			/* Embed ifscope into the key (local copy) */
-			dst = sin_copy(SIN(dst), &sin, ifscope);
-
-			/* Embed ifscope into netmask (local copy) */
-			if (netmask != NULL)
-				netmask = mask_copy(netmask, &mask, ifscope);
-		}
+#if INET6
+		if ((af == AF_INET && !ip_doscopedroute) ||
+		    (af == AF_INET6 && !ip6_doscopedroute))
+#else
+		if (af == AF_INET && !ip_doscopedroute)
+#endif /* !INET6 */
+			ifscope = IFSCOPE_NONE;
 	}
 
+	if (ifscope == IFSCOPE_NONE)
+		flags &= ~RTF_IFSCOPE;
+
 	switch (req) {
-	case RTM_DELETE:
+	case RTM_DELETE: {
+		struct rtentry *gwrt = NULL;
 		/*
 		 * Remove the item from the tree and return it.
 		 * Complain if it is not there and do no more processing.
 		 */
-		if ((rn = rnh->rnh_deladdr(dst, netmask, rnh)) == 0)
+		if ((rn = rnh->rnh_deladdr(dst, netmask, rnh)) == NULL)
 			senderr(ESRCH);
 		if (rn->rn_flags & (RNF_ACTIVE | RNF_ROOT))
 			panic ("rtrequest delete");
@@ -1512,20 +1722,22 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 
 		/*
 		 * Remove any external references we may have.
-		 * This might result in another rtentry being freed if
-		 * we held its last reference.
 		 */
-		if (rt->rt_gwroute != NULL) {
-			rtfree_locked(rt->rt_gwroute);
+		if ((gwrt = rt->rt_gwroute) != NULL)
 			rt->rt_gwroute = NULL;
-		}
 
 		/*
 		 * give the protocol a chance to keep things in sync.
 		 */
-		if ((ifa = rt->rt_ifa) && ifa->ifa_rtrequest)
-			ifa->ifa_rtrequest(RTM_DELETE, rt, SA(0));
-		ifa = NULL;
+		if ((ifa = rt->rt_ifa) != NULL) {
+			IFA_LOCK_SPIN(ifa);
+			ifa_rtrequest = ifa->ifa_rtrequest;
+			IFA_UNLOCK(ifa);
+			if (ifa_rtrequest != NULL)
+				ifa_rtrequest(RTM_DELETE, rt, NULL);
+			/* keep reference on rt_ifa */
+			ifa = NULL;
+		}
 
 		/*
 		 * one more rtentry floating around that is not
@@ -1541,17 +1753,22 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 		 * If this is the (non-scoped) default route, clear
 		 * the interface index used for the primary ifscope.
 		 */
-		if (rt_inet_default(rt, rt_key(rt)))
-			set_primary_ifscope(IFSCOPE_NONE);
-
-#if IFNET_ROUTE_REFCNT
-		if (rt->rt_if_ref_fn != NULL) {
-			rt->rt_if_ref_fn(rt->rt_ifp, -1);
-			rt->rt_flags &= ~RTF_IFREF;
+		if (rt_primary_default(rt, rt_key(rt))) {
+			set_primary_ifscope(rt_key(rt)->sa_family,
+			    IFSCOPE_NONE);
 		}
-#endif /* IFNET_ROUTE_REFCNT */
+		rt_clear_idleref(rt);
 
 		RT_UNLOCK(rt);
+
+		/*
+		 * This might result in another rtentry being freed if
+		 * we held its last reference.  Do this after the rtentry
+		 * lock is dropped above, as it could lead to the same
+		 * lock being acquired if gwrt is a clone of rt.
+		 */
+		if (gwrt != NULL)
+			rtfree_locked(gwrt);
 
 		/*
 		 * If the caller wants it, then it can have it,
@@ -1566,9 +1783,9 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 			rtfree_locked(rt);
 		}
 		break;
-
+	}
 	case RTM_RESOLVE:
-		if (ret_nrt == 0 || (rt = *ret_nrt) == 0)
+		if (ret_nrt == NULL || (rt = *ret_nrt) == NULL)
 			senderr(EINVAL);
 		/*
 		 * If cloning, we have the parent route given by the caller
@@ -1581,40 +1798,55 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 		 * of rt_rmx.
 		 */
 		ifa = rt->rt_ifa;
-		ifaref(ifa);
+		IFA_ADDREF(ifa);
 		flags = rt->rt_flags &
 		    ~(RTF_CLONING | RTF_PRCLONING | RTF_STATIC);
 		flags |= RTF_WASCLONED;
 		gateway = rt->rt_gateway;
-		if ((netmask = rt->rt_genmask) == 0)
+		if ((netmask = rt->rt_genmask) == NULL)
 			flags |= RTF_HOST;
 
-		if (!ip_doscopedroute || dst->sa_family != AF_INET)
+#if INET6
+		if ((af != AF_INET && af != AF_INET6) ||
+		    (af == AF_INET && !ip_doscopedroute) ||
+		    (af == AF_INET6 && !ip6_doscopedroute))
+#else
+		if (af != AF_INET || !ip_doscopedroute)
+#endif /* !INET6 */
 			goto makeroute;
+
 		/*
 		 * When scoped routing is enabled, cloned entries are
 		 * always scoped according to the interface portion of
 		 * the parent route.  The exception to this are IPv4
 		 * link local addresses.
 		 */
-		if (!IN_LINKLOCAL(ntohl(SIN(dst)->sin_addr.s_addr))) {
+		if (af == AF_INET &&
+		    IN_LINKLOCAL(ntohl(SIN(dst)->sin_addr.s_addr))) {
+			ifscope = IFSCOPE_NONE;
+			flags &= ~RTF_IFSCOPE;
+		} else {
 			if (flags & RTF_IFSCOPE) {
-				ifscope = sa_get_ifscope(rt_key(rt));
+				ifscope = (af == AF_INET) ?
+				    sin_get_ifscope(rt_key(rt)) :
+				    sin6_get_ifscope(rt_key(rt));
 			} else {
 				ifscope = rt->rt_ifp->if_index;
 				flags |= RTF_IFSCOPE;
 			}
-		} else {
-			ifscope = IFSCOPE_NONE;
-			flags &= ~RTF_IFSCOPE;
+			VERIFY(ifscope != IFSCOPE_NONE);
 		}
 
-		/* Embed or clear ifscope into/from the key (local copy) */
-		dst = sin_copy(SIN(dst), &sin, ifscope);
+		/*
+		 * Transform dst into the internal routing table form,
+		 * clearing out the scope ID field if ifscope isn't set.
+		 */
+		dst = sa_copy(dst, &ss, (ifscope == IFSCOPE_NONE) ?
+		    NULL : &ifscope);
 
-		/* Embed or clear ifscope into/from netmask (local copy) */
+		/* Transform netmask into the internal routing table form */
 		if (netmask != NULL)
-			netmask = mask_copy(netmask, &mask, ifscope);
+			netmask = ma_copy(af, netmask, &mask, ifscope);
 
 		goto makeroute;
 
@@ -1631,10 +1863,13 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 		if (ifa == NULL)
 			senderr(ENETUNREACH);
 makeroute:
+		getmicrotime(&curr_calendartime);
 		if ((rt = rte_alloc()) == NULL)
 			senderr(ENOBUFS);
 		Bzero(rt, sizeof(*rt));
 		rte_lock_init(rt);
+                rt->base_calendartime = curr_calendartime.tv_sec;
+		rt->base_uptime = net_uptime();
 		RT_LOCK(rt);
 		rt->rt_flags = RTF_UP | flags;
 
@@ -1644,6 +1879,7 @@ makeroute:
 		 */
 		if ((error = rt_setgate(rt, dst, gateway)) != 0) {
 			RT_UNLOCK(rt);
+			nstat_route_detach(rt);
 			rte_lock_destroy(rt);
 			rte_free(rt);
 			senderr(error);
@@ -1712,23 +1948,24 @@ makeroute:
 		 * If it still failed to go into the tree,
 		 * then un-make it (this should be a function)
 		 */
-		if (rn == 0) {
+		if (rn == NULL) {
 			if (rt->rt_gwroute) {
 				rtfree_locked(rt->rt_gwroute);
 				rt->rt_gwroute = NULL;
 			}
 			if (rt->rt_ifa) {
-				ifafree(rt->rt_ifa);
+				IFA_REMREF(rt->rt_ifa);
 				rt->rt_ifa = NULL;
 			}
 			R_Free(rt_key(rt));
 			RT_UNLOCK(rt);
+			nstat_route_detach(rt);
 			rte_lock_destroy(rt);
 			rte_free(rt);
 			senderr(EEXIST);
 		}
 
-		rt->rt_parent = 0;
+		rt->rt_parent = NULL;
 
 		/*
 		 * If we got here from RESOLVE, then we are cloning so clone
@@ -1741,42 +1978,46 @@ makeroute:
 		 */
 		if (req == RTM_RESOLVE) {
 			RT_LOCK_SPIN(*ret_nrt);
-			rt->rt_rmx = (*ret_nrt)->rt_rmx; /* copy metrics */
+			VERIFY((*ret_nrt)->rt_expire == 0 || (*ret_nrt)->rt_rmx.rmx_expire != 0);
+			VERIFY((*ret_nrt)->rt_expire != 0 || (*ret_nrt)->rt_rmx.rmx_expire == 0);
+			rt->rt_rmx = (*ret_nrt)->rt_rmx;
+			rt_setexpire(rt, (*ret_nrt)->rt_expire);
 			if ((*ret_nrt)->rt_flags & (RTF_CLONING | RTF_PRCLONING)) {
 				rt->rt_parent = (*ret_nrt);
 				RT_ADDREF_LOCKED(*ret_nrt);
 			}
 			RT_UNLOCK(*ret_nrt);
 
-#if IFNET_ROUTE_REFCNT
 			/*
 			 * Enable interface reference counting for unicast
 			 * cloned routes and bump up the reference count.
 			 */
 			if (rt->rt_parent != NULL &&
 			    !(rt->rt_flags & (RTF_BROADCAST | RTF_MULTICAST))) {
-				rt->rt_if_ref_fn = rte_if_ref;
-				rt->rt_if_ref_fn(rt->rt_ifp, 1);
-				rt->rt_flags |= RTF_IFREF;
+				rt_set_idleref(rt);
 			}
-#endif /* IFNET_ROUTE_REFCNT */
 		}
 
 		/*
 		 * if this protocol has something to add to this then
 		 * allow it to do that as well.
 		 */
-		if (ifa->ifa_rtrequest)
-			ifa->ifa_rtrequest(req, rt, SA(ret_nrt ? *ret_nrt : 0));
-		ifafree(ifa);
-		ifa = 0;
+		IFA_LOCK_SPIN(ifa);
+		ifa_rtrequest = ifa->ifa_rtrequest;
+		IFA_UNLOCK(ifa);
+		if (ifa_rtrequest != NULL)
+			ifa_rtrequest(req, rt, SA(ret_nrt ? *ret_nrt : NULL));
+		IFA_REMREF(ifa);
+		ifa = NULL;
 
 		/*
 		 * If this is the (non-scoped) default route, record
 		 * the interface index used for the primary ifscope.
 		 */
-		if (rt_inet_default(rt, rt_key(rt)))
-			set_primary_ifscope(rt->rt_ifp->if_index);
+		if (rt_primary_default(rt, rt_key(rt))) {
+			set_primary_ifscope(rt_key(rt)->sa_family,
+			    rt->rt_ifp->if_index);
+		}
 
 		/*
 		 * actually return a resultant rtentry and
@@ -1793,7 +2034,7 @@ makeroute:
 		 * hasn't been added to the tree yet.
 		 */
 		if (req == RTM_ADD &&
-		    !(rt->rt_flags & RTF_HOST) && rt_mask(rt) != 0) {
+		    !(rt->rt_flags & RTF_HOST) && rt_mask(rt) != NULL) {
 			struct rtfc_arg arg;
 			arg.rnh = rnh;
 			arg.rt0 = rt;
@@ -1803,22 +2044,19 @@ makeroute:
 		} else {
 			RT_UNLOCK(rt);
 		}
+		
+		nstat_route_new_entry(rt);
 		break;
 	}
 bad:
 	if (ifa)
-		ifafree(ifa);
+		IFA_REMREF(ifa);
 	return (error);
 }
 
 int
-rtrequest(
-	int req,
-	struct sockaddr *dst,
-	struct sockaddr *gateway,
-	struct sockaddr *netmask,
-	int flags,
-	struct rtentry **ret_nrt)
+rtrequest(int req, struct sockaddr *dst, struct sockaddr *gateway,
+    struct sockaddr *netmask, int flags, struct rtentry **ret_nrt)
 {
 	int error;
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
@@ -1827,6 +2065,21 @@ rtrequest(
 	lck_mtx_unlock(rnh_lock);
 	return (error);
 }
+
+int
+rtrequest_scoped(int req, struct sockaddr *dst, struct sockaddr *gateway,
+    struct sockaddr *netmask, int flags, struct rtentry **ret_nrt,
+    unsigned int ifscope)
+{
+	int error;
+	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_lock(rnh_lock);
+	error = rtrequest_scoped_locked(req, dst, gateway, netmask, flags,
+	    ret_nrt, ifscope);
+	lck_mtx_unlock(rnh_lock);
+	return (error);
+}
+
 /*
  * Called from rtrequest(RTM_DELETE, ...) to fix up the route's ``family''
  * (i.e., the routes related to it by the operation of cloning).  This
@@ -2018,11 +2271,16 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 		struct rtentry *gwrt;
 		unsigned int ifscope;
 
-		ifscope = (dst->sa_family == AF_INET) ?
-		    sa_get_ifscope(dst) : IFSCOPE_NONE;
+		if (dst->sa_family == AF_INET)
+			ifscope = sin_get_ifscope(dst);
+		else if (dst->sa_family == AF_INET6)
+			ifscope = sin6_get_ifscope(dst);
+		else
+			ifscope = IFSCOPE_NONE;
 
 		RT_UNLOCK(rt);
-		gwrt = rtalloc1_scoped_locked(gate, 1, RTF_PRCLONING, ifscope);
+		gwrt = rtalloc1_scoped_locked(gate, 1,
+		    RTF_CLONING | RTF_PRCLONING, ifscope);
 		if (gwrt != NULL)
 			RT_LOCK_ASSERT_NOTHELD(gwrt);
 		RT_LOCK(rt);
@@ -2082,8 +2340,10 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 		 * primary ifscope.  Also done in rt_setif() to take care
 		 * of the non-redirect cases.
 		 */
-		if (rt_inet_default(rt, dst) && rt->rt_ifp != NULL)
-			set_primary_ifscope(rt->rt_ifp->if_index);
+		if (rt_primary_default(rt, dst) && rt->rt_ifp != NULL) {
+			set_primary_ifscope(dst->sa_family,
+			    rt->rt_ifp->if_index);
+		}
 
 		/*
 		 * Tell the kernel debugger about the new default gateway
@@ -2095,8 +2355,8 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 		 */
 		if ((dst->sa_family == AF_INET) &&
 		    gwrt != NULL && gwrt->rt_gateway->sa_family == AF_LINK &&
-		    (gwrt->rt_ifp->if_index == get_primary_ifscope() ||
-		    get_primary_ifscope() == IFSCOPE_NONE))
+		    (gwrt->rt_ifp->if_index == get_primary_ifscope(AF_INET) ||
+		    get_primary_ifscope(AF_INET) == IFSCOPE_NONE))
 			kdp_set_gateway_mac(SDL(gwrt->rt_gateway)->sdl_data);
 	}
 
@@ -2142,11 +2402,16 @@ rt_setgate(struct rtentry *rt, struct sockaddr *dst, struct sockaddr *gate)
 	 * For consistency between rt_gateway and rt_key(gwrt).
 	 */
 	if ((rt->rt_flags & RTF_GATEWAY) && rt->rt_gwroute != NULL &&
-	    (rt->rt_gwroute->rt_flags & RTF_IFSCOPE) &&
-	    rt->rt_gateway->sa_family == AF_INET &&
-	    rt_key(rt->rt_gwroute)->sa_family == AF_INET) {
-		sa_set_ifscope(rt->rt_gateway,
-		    sa_get_ifscope(rt_key(rt->rt_gwroute)));
+	    (rt->rt_gwroute->rt_flags & RTF_IFSCOPE)) {
+		if (rt->rt_gateway->sa_family == AF_INET &&
+		    rt_key(rt->rt_gwroute)->sa_family == AF_INET) {
+			sin_set_ifscope(rt->rt_gateway,
+			    sin_get_ifscope(rt_key(rt->rt_gwroute)));
+		} else if (rt->rt_gateway->sa_family == AF_INET6 &&
+		    rt_key(rt->rt_gwroute)->sa_family == AF_INET6) {
+			sin6_set_ifscope(rt->rt_gateway,
+			    sin6_get_ifscope(rt_key(rt->rt_gwroute)));
+		}
 	}
 
 	/*
@@ -2192,32 +2457,35 @@ rt_maskedcopy(struct sockaddr *src, struct sockaddr *dst,
 }
 
 /*
- * Lookup an AF_INET scoped or non-scoped route depending on the ifscope
- * value passed in by the caller (IFSCOPE_NONE implies non-scoped).
+ * Lookup an AF_INET/AF_INET6 scoped or non-scoped route depending on the
+ * ifscope value passed in by the caller (IFSCOPE_NONE implies non-scoped).
  */
 static struct radix_node *
 node_lookup(struct sockaddr *dst, struct sockaddr *netmask,
     unsigned int ifscope)
 {
-	struct radix_node_head *rnh = rt_tables[AF_INET];
+	struct radix_node_head *rnh;
 	struct radix_node *rn;
-	struct sockaddr_in sin, mask;
+	struct sockaddr_storage ss, mask;
+	int af = dst->sa_family;
 	struct matchleaf_arg ma = { ifscope };
 	rn_matchf_t *f = rn_match_ifscope;
 	void *w = &ma;
 
-	if (dst->sa_family != AF_INET)
+	if (af != AF_INET && af != AF_INET6)
 		return (NULL);
 
-	/*
-	 * Embed ifscope into the search key; for a non-scoped
-	 * search this will clear out any embedded scope value.
-	 */
-	dst = sin_copy(SIN(dst), &sin, ifscope);
+	rnh = rt_tables[af];
 
-	/* Embed (or clear) ifscope into netmask */
+	/*
+	 * Transform dst into the internal routing table form,
+	 * clearing out the scope ID field if ifscope isn't set.
+	 */
+	dst = sa_copy(dst, &ss, (ifscope == IFSCOPE_NONE) ? NULL : &ifscope);
+
+	/* Transform netmask into the internal routing table form */
 	if (netmask != NULL)
-		netmask = mask_copy(netmask, &mask, ifscope);
+		netmask = ma_copy(af, netmask, &mask, ifscope);
 
 	if (ifscope == IFSCOPE_NONE)
 		f = w = NULL;
@@ -2230,13 +2498,18 @@ node_lookup(struct sockaddr *dst, struct sockaddr *netmask,
 }
 
 /*
- * Lookup the AF_INET non-scoped default route.
+ * Lookup the AF_INET/AF_INET6 non-scoped default route.
  */
 static struct radix_node *
-node_lookup_default(void)
+node_lookup_default(int af)
 {
-	struct radix_node_head *rnh = rt_tables[AF_INET];
-	return (rnh->rnh_lookup(&sin_def, NULL, rnh));
+	struct radix_node_head *rnh;
+
+	VERIFY(af == AF_INET || af == AF_INET6);
+	rnh = rt_tables[af];
+
+	return (af == AF_INET ? rnh->rnh_lookup(&sin_def, NULL, rnh) :
+	    rnh->rnh_lookup(&sin6_def, NULL, rnh));
 }
 
 /*
@@ -2250,10 +2523,10 @@ node_lookup_default(void)
  * per-interface route instance.  This permits multiple route entries having
  * the same destination (but not necessarily the same gateway) to exist in
  * the routing table; each of these entries is specific to the corresponding
- * interface.  This is made possible by embedding the scope value into the
+ * interface.  This is made possible by storing the scope ID value into the
  * radix key, thus making each route entry unique.  These scoped entries
  * exist along with the regular, non-scoped entries in the same radix tree
- * for a given address family (currently AF_INET only); the scope logically
+ * for a given address family (AF_INET/AF_INET6); the scope logically
  * partitions it into multiple per-interface sub-trees.
  *
  * When a scoped route lookup is performed, the routing table is searched for
@@ -2267,7 +2540,9 @@ rt_lookup(boolean_t lookup_only, struct sockaddr *dst, struct sockaddr *netmask,
     struct radix_node_head *rnh, unsigned int ifscope)
 {
 	struct radix_node *rn0, *rn;
-	boolean_t dontcare = (ifscope == IFSCOPE_NONE);
+	boolean_t dontcare;
+	int af = dst->sa_family;
+	struct sockaddr_storage dst_ss, mask_ss;
 
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
@@ -2277,11 +2552,14 @@ rt_lookup(boolean_t lookup_only, struct sockaddr *dst, struct sockaddr *netmask,
 	/*
 	 * Non-scoped route lookup.
 	 */
-	if (!ip_doscopedroute || dst->sa_family != AF_INET) {
-		if (lookup_only)
-			rn = rnh->rnh_lookup(dst, netmask, rnh);
-		else
-			rn = rnh->rnh_matchaddr(dst, rnh);
+#if INET6
+	if ((af != AF_INET && af != AF_INET6) ||
+	    (af == AF_INET && !ip_doscopedroute) ||
+	    (af == AF_INET6 && !ip6_doscopedroute)) {
+#else
+	if (af != AF_INET || !ip_doscopedroute) {
+#endif /* !INET6 */
+		rn = rnh->rnh_matchaddr(dst, rnh);
 
 		/*
 		 * Don't return a root node; also, rnh_matchaddr callback
@@ -2303,6 +2581,12 @@ rt_lookup(boolean_t lookup_only, struct sockaddr *dst, struct sockaddr *netmask,
 		return (RT(rn));
 	}
 
+	/* Transform dst/netmask into the internal routing table form */
+	dst = sa_copy(dst, &dst_ss, &ifscope);
+	if (netmask != NULL)
+		netmask = ma_copy(af, netmask, &mask_ss, ifscope);
+	dontcare = (ifscope == IFSCOPE_NONE);
+
 	/*
 	 * Scoped route lookup:
 	 *
@@ -2316,10 +2600,13 @@ rt_lookup(boolean_t lookup_only, struct sockaddr *dst, struct sockaddr *netmask,
 	/*
 	 * If the caller did not specify a scope, use the primary scope
 	 * derived from the system's non-scoped default route.  If, for
-	 * any reason, there is no primary interface, return what we have.
+	 * any reason, there is no primary interface, ifscope will be
+	 * set to IFSCOPE_NONE; if the above lookup resulted in a route,
+	 * we'll do a more-specific search below, scoped to the interface
+	 * of that route.
 	 */
-	if (dontcare && (ifscope = get_primary_ifscope()) == IFSCOPE_NONE)
-		goto done;
+	if (dontcare)
+		ifscope = get_primary_ifscope(af);
 
 	/*
 	 * Keep the original result if either of the following is true:
@@ -2381,7 +2668,7 @@ rt_lookup(boolean_t lookup_only, struct sockaddr *dst, struct sockaddr *netmask,
 	 *	as a more specific route.
 	 */
 	if (rn == NULL || (rn0 != NULL &&
-	    ((INET_DEFAULT(rt_key(RT(rn))) && !INET_DEFAULT(rt_key(RT(rn0)))) ||
+	    ((SA_DEFAULT(rt_key(RT(rn))) && !SA_DEFAULT(rt_key(RT(rn0)))) ||
 	    (!RT_HOST(rn) && RT_HOST(rn0)))))
 		rn = rn0;
 
@@ -2389,23 +2676,20 @@ rt_lookup(boolean_t lookup_only, struct sockaddr *dst, struct sockaddr *netmask,
 	 * If we still don't have a route, use the non-scoped default
 	 * route as long as the interface portion satistifes the scope.
 	 */
-	if (rn == NULL && (rn = node_lookup_default()) != NULL &&
+	if (rn == NULL && (rn = node_lookup_default(af)) != NULL &&
 	    RT(rn)->rt_ifp->if_index != ifscope)
 		rn = NULL;
 
-done:
 	if (rn != NULL) {
 		/*
-		 * Manually clear RTPRF_OURS using in_validate() and
+		 * Manually clear RTPRF_OURS using rt_validate() and
 		 * bump up the reference count after, and not before;
-		 * we only get here for AF_INET.  node_lookup() has
-		 * done the check against RNF_ROOT, so we can be sure
+		 * we only get here for AF_INET/AF_INET6.  node_lookup()
+		 * has done the check against RNF_ROOT, so we can be sure
 		 * that we're not returning a root node here.
 		 */
 		RT_LOCK_SPIN(RT(rn));
-		if (!(RT(rn)->rt_flags & RTF_CONDEMNED)) {
-			if (!lookup_only)
-				(void) in_validate(rn);
+		if (rt_validate(RT(rn))) {
 			RT_ADDREF_LOCKED(RT(rn));
 			RT_UNLOCK(RT(rn));
 		} else {
@@ -2415,6 +2699,25 @@ done:
 	}
 
 	return (RT(rn));
+}
+
+boolean_t
+rt_validate(struct rtentry *rt)
+{
+	RT_LOCK_ASSERT_HELD(rt);
+
+	if (!(rt->rt_flags & RTF_CONDEMNED)) {
+		int af = rt_key(rt)->sa_family;
+
+		if (af == AF_INET)
+			(void) in_validate(RN(rt));
+		else if (af == AF_INET6)
+			(void) in6_validate(RN(rt));
+	} else {
+		rt = NULL;
+	}
+
+	return (rt != NULL);
 }
 
 /*
@@ -2440,8 +2743,14 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 	struct sockaddr *deldst;
 	struct mbuf *m = 0;
 	struct rtentry *nrt = 0;
+	u_int32_t ifa_flags;
 	int error;
 
+	/*
+	 * Holding rnh_lock here prevents the possibility of ifa from
+	 * changing (e.g. in_ifinit), so it is safe to access its
+	 * ifa_{dst}addr (here and down below) without locking.
+	 */
 	dst = flags & RTF_HOST ? ifa->ifa_dstaddr : ifa->ifa_addr;
 	/*
 	 * If it's a delete, check that if it exists, it's on the correct
@@ -2513,8 +2822,11 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 	/*
 	 * Do the actual request
 	 */
+	IFA_LOCK_SPIN(ifa);
+	ifa_flags = ifa->ifa_flags;
+	IFA_UNLOCK(ifa);
 	error = rtrequest_locked(cmd, dst, ifa->ifa_addr, ifa->ifa_netmask,
-			flags | ifa->ifa_flags, &nrt);
+			flags | ifa_flags, &nrt);
 	if (m)
 		(void) m_free(m);
 	/*
@@ -2544,6 +2856,9 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 		 * have already existed or something. (XXX)
 		 */
 		if (rt->rt_ifa != ifa) {
+			void (*ifa_rtrequest)
+			    (int, struct rtentry *, struct sockaddr *);
+
 			if (!(rt->rt_ifa->ifa_ifp->if_flags &
 			    (IFF_POINTOPOINT|IFF_LOOPBACK)))
 				printf("rtinit: wrong ifa (%p) was (%p)\n",
@@ -2553,22 +2868,31 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 			 * remove anything it has associated with
 			 * this route and ifaddr.
 			 */
-			if (rt->rt_ifa->ifa_rtrequest)
-			    rt->rt_ifa->ifa_rtrequest(RTM_DELETE, rt, SA(0));
+			IFA_LOCK_SPIN(rt->rt_ifa);
+			ifa_rtrequest = rt->rt_ifa->ifa_rtrequest;
+			IFA_UNLOCK(rt->rt_ifa);
+			if (ifa_rtrequest != NULL)
+				ifa_rtrequest(RTM_DELETE, rt, SA(0));
 			/*
 			 * Set the route's ifa.
 			 */
 			rtsetifa(rt, ifa);
-#if IFNET_ROUTE_REFCNT
-			/*
-			 * Adjust route ref count for the interfaces.
-			 */
-			if (rt->rt_if_ref_fn != NULL &&
-			    rt->rt_ifp != ifa->ifa_ifp) {
-				rt->rt_if_ref_fn(ifa->ifa_ifp, 1);
-				rt->rt_if_ref_fn(rt->rt_ifp, -1);
+
+			if (rt->rt_ifp != ifa->ifa_ifp) {
+				/*
+				 * Purge any link-layer info caching.
+				 */
+				if (rt->rt_llinfo_purge != NULL)
+					rt->rt_llinfo_purge(rt);
+				/*
+				 * Adjust route ref count for the interfaces.
+				 */
+				if (rt->rt_if_ref_fn != NULL) {
+					rt->rt_if_ref_fn(ifa->ifa_ifp, 1);
+					rt->rt_if_ref_fn(rt->rt_ifp, -1);
+				}
 			}
-#endif /* IFNET_ROUTE_REFCNT */
+
 			/*
 			 * And substitute in references to the ifaddr
 			 * we are adding.
@@ -2579,8 +2903,11 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 			 * Now ask the protocol to check if it needs
 			 * any special processing in its new form.
 			 */
-			if (ifa->ifa_rtrequest)
-			    ifa->ifa_rtrequest(RTM_ADD, rt, SA(0));
+			IFA_LOCK_SPIN(ifa);
+			ifa_rtrequest = ifa->ifa_rtrequest;
+			IFA_UNLOCK(ifa);
+			if (ifa_rtrequest != NULL)
+				ifa_rtrequest(RTM_ADD, rt, SA(0));
 		}
 		/*
 		 * notify any listenning routing agents of the change
@@ -2604,7 +2931,6 @@ rtinit_locked(struct ifaddr *ifa, int cmd, int flags)
 u_int64_t
 rt_expiry(struct rtentry *rt, u_int64_t base, u_int32_t delta)
 {
-#if IFNET_ROUTE_REFCNT
 	u_int64_t retval;
 
 	/*
@@ -2619,10 +2945,29 @@ rt_expiry(struct rtentry *rt, u_int64_t base, u_int32_t delta)
 		retval = base + MIN(rt_if_idle_expire_timeout, delta);
 
 	return (retval);
-#else
-#pragma unused(rt)
-	return (base + delta);
-#endif /* IFNET_ROUTE_REFCNT */
+}
+
+void
+rt_set_idleref(struct rtentry *rt)
+{
+	RT_LOCK_ASSERT_HELD(rt);
+
+	rt_clear_idleref(rt);
+	rt->rt_if_ref_fn = rte_if_ref;
+	rt->rt_if_ref_fn(rt->rt_ifp, 1);
+	rt->rt_flags |= RTF_IFREF;
+}
+
+void
+rt_clear_idleref(struct rtentry *rt)
+{
+	RT_LOCK_ASSERT_HELD(rt);
+
+	if (rt->rt_if_ref_fn != NULL) {
+		rt->rt_if_ref_fn(rt->rt_ifp, -1);
+		rt->rt_flags &= ~RTF_IFREF;
+		rt->rt_if_ref_fn = NULL;
+	}
 }
 
 static void
@@ -2703,7 +3048,6 @@ rte_free(struct rtentry *p)
 	zfree(rte_zone, p);
 }
 
-#if IFNET_ROUTE_REFCNT
 static void
 rte_if_ref(struct ifnet *ifp, int cnt)
 {
@@ -2749,7 +3093,6 @@ rte_if_ref(struct ifnet *ifp, int cnt)
 		kev_post_msg(&ev_msg);
 	}
 }
-#endif /* IFNET_ROUTE_REFCNT */
 
 static inline struct rtentry *
 rte_alloc_debug(void)
@@ -2798,4 +3141,51 @@ ctrace_record(ctrace_t *tr)
 	tr->th = current_thread();
 	bzero(tr->pc, sizeof (tr->pc));
 	(void) OSBacktrace(tr->pc, CTRACE_STACK_SIZE);
+}
+
+__private_extern__ void
+route_copyout(
+	struct route *dst,
+	const struct route *src,
+	size_t length)
+{
+	/* Copy everything (rt, dst, flags) from ifnet */
+	bcopy(src, dst, length);
+
+	/* Hold one reference for the local copy of struct route */
+	if (dst->ro_rt != NULL)
+		RT_ADDREF(dst->ro_rt);
+}
+
+__private_extern__ void
+route_copyin(
+	struct route *src,
+	struct route *dst,
+	size_t length)
+{
+	/* No cached route in the ifnet? */
+	if (dst->ro_rt == NULL) {
+		/*
+		 * Copy everything (rt, dst, flags) from ip_forward();
+		 * the reference to the route was held at the time
+		 * it was allocated and is kept intact.
+		 */
+		bcopy(src, dst, length);
+	} else if (src->ro_rt != NULL) {
+		/*
+		 * If the same, update just the ro_flags and ditch the one
+		 * in the local copy.  Else ditch the one that is currently
+		 * cached, and cache the new route.
+		 */
+		if (dst->ro_rt == src->ro_rt) {
+			dst->ro_flags = src->ro_flags;
+			rtfree(src->ro_rt);
+		} else {
+			rtfree(dst->ro_rt);
+			bcopy(src, dst, length);
+		}
+	}
+
+	/* This function consumes the reference */
+	src->ro_rt = NULL;
 }

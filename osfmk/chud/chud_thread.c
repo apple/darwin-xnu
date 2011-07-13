@@ -46,8 +46,6 @@
 // include the correct file to find real_ncpus
 #if defined(__i386__) || defined(__x86_64__)
 #	include <i386/mp.h>	
-#elif defined(__ppc__) || defined(__ppc64__)
-#	include <ppc/cpu_internal.h>
 #else
 // fall back on declaring it extern.  The linker will sort us out.
 extern unsigned int real_ncpus;
@@ -122,6 +120,51 @@ chudxnu_thread_get_idle(thread_t thread) {
 	 * suspended thread to avoid a race.
 	 */
 	return ((thread->state & TH_IDLE) == TH_IDLE);
+}
+
+__private_extern__ int
+chudxnu_thread_get_scheduler_state(thread_t thread) {
+	/* 
+	 * Instantaneous snapshot of the scheduler state of
+	 * a given thread.
+	 *
+	 * MUST ONLY be called on an interrupted or 
+	 * locked thread, to avoid a race.
+	 */
+	
+	int state = 0;
+	int schedulerState = (volatile int)(thread->state);
+	processor_t lastProcessor = (volatile processor_t)(thread->last_processor);
+	
+	if ((PROCESSOR_NULL != lastProcessor) && (thread == lastProcessor->active_thread)) {
+		state |= CHUDXNU_TS_RUNNING;
+	}
+		
+	if (schedulerState & TH_RUN) {
+		state |= CHUDXNU_TS_RUNNABLE;
+	}
+	
+	if (schedulerState & TH_WAIT) {
+		state |= CHUDXNU_TS_WAIT;
+	}
+	
+	if (schedulerState & TH_UNINT) {
+		state |= CHUDXNU_TS_UNINT;
+	}
+	
+	if (schedulerState & TH_SUSP) {
+		state |= CHUDXNU_TS_SUSP;
+	}
+	
+	if (schedulerState & TH_TERMINATE) {
+		state |= CHUDXNU_TS_TERMINATE;
+	}	
+	
+	if (schedulerState & TH_IDLE) {
+		state |= CHUDXNU_TS_IDLE;
+	}
+	
+	return state;
 }
 
 #if 0

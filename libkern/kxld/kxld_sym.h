@@ -48,12 +48,11 @@ struct kxld_sym {
     kxld_addr_t base_addr;            // The symbol's base address
     kxld_addr_t link_addr;            // The relocated address
     kxld_addr_t got_addr;             // The address of this symbol's GOT entry
+    uint16_t desc;
     uint8_t type;
     uint8_t sectnum;                  // The symbol's section number
     uint8_t relocated_sectnum;
-    uint16_t desc;
-    struct {
-        u_int is_absolute:1,          // Set for absolute symbols
+    u_int is_absolute:1,              // Set for absolute symbols
         is_section:1,                 // Set for section symbols
         is_undefined:1,               // Set for undefined symbols
         is_indirect:1,                // Set for indirect symbols
@@ -74,7 +73,6 @@ struct kxld_sym {
         is_metaclass:1,               // Set for metaclass symbols
         is_super_metaclass_pointer:1, // Set for super metaclass pointer syms
         is_thumb:1;                   // Set for thumb symbols (ARM only)
-    } predicates;
 };
 
 /*******************************************************************************
@@ -128,6 +126,9 @@ boolean_t kxld_sym_is_undefined(const KXLDSym *sym)
 boolean_t kxld_sym_is_indirect(const KXLDSym *sym)
     __attribute__((pure, nonnull, visibility("hidden")));
 
+boolean_t kxld_sym_is_replaced(const KXLDSym *sym)
+    __attribute__((pure, nonnull, visibility("hidden")));
+
 /* We don't wrap this in KXLD_USER_OR_COMMON because even though common symbols
  * aren't always supported, we always need to be able to detect them.
  */
@@ -173,6 +174,9 @@ boolean_t kxld_sym_is_metaclass(const KXLDSym *sym)
     __attribute__((pure, nonnull, visibility("hidden")));
 
 boolean_t kxld_sym_is_super_metaclass_pointer(const KXLDSym *sym)
+    __attribute__((pure, nonnull, visibility("hidden")));
+
+boolean_t kxld_sym_name_is_pure_virtual(const char *name)
     __attribute__((pure, nonnull, visibility("hidden")));
 
 boolean_t kxld_sym_name_is_padslot(const char *name)
@@ -224,13 +228,13 @@ u_long kxld_sym_get_function_prefix_from_class_name(const char *class_name,
 
 #if KXLD_USER_OR_ILP32
 kern_return_t kxld_sym_export_macho_32(const KXLDSym *sym, u_char *nl, 
-    char *strtab, u_long *stroff, u_long strsize, boolean_t is_link_state)
+    char *strtab, u_long *stroff, u_long strsize)
     __attribute__((nonnull, visibility("hidden")));
 #endif
 
 #if KXLD_USER_OR_LP64
 kern_return_t kxld_sym_export_macho_64(const KXLDSym *sym, u_char *nl, 
-    char *strtab, u_long *stroff, u_long strsize, boolean_t is_link_state)
+    char *strtab, u_long *stroff, u_long strsize)
     __attribute__((nonnull, visibility("hidden")));
 #endif
 
@@ -246,8 +250,7 @@ void kxld_sym_set_got(KXLDSym *sym)
     __attribute__((nonnull, visibility("hidden")));
 #endif /* KXLD_USER_OR_GOT */
 
-kern_return_t kxld_sym_resolve(KXLDSym *sym, const kxld_addr_t addr,
-    boolean_t export_sym)
+kern_return_t kxld_sym_resolve(KXLDSym *sym, const kxld_addr_t addr)
     __attribute__((nonnull, visibility("hidden")));
 
 #if KXLD_USER_OR_COMMON

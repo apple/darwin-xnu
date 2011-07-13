@@ -90,6 +90,7 @@ struct ucred {
 	TAILQ_ENTRY(ucred)	cr_link; /* never modify this without KAUTH_CRED_HASH_LOCK */
 	u_long	cr_ref;			/* reference count */
 	
+struct posix_cred {
 	/*
 	 * The credential hash depends on everything from this point on
 	 * (see kauth_cred_get_hashkey)
@@ -102,15 +103,9 @@ struct ucred {
 	gid_t	cr_rgid;		/* real group id */
 	gid_t	cr_svgid;		/* saved group id */
 	uid_t	cr_gmuid;		/* UID for group membership purposes */
-	/*
-	 * XXX - cr_au will be replaced with cr_audit below.
-	 * cr_au is here to keep kexts from breaking. It seems to
-	 * be currently used by the ucred hashing as well.
-	 */
-	struct auditinfo cr_au;		/* XXX This needs to go away. */
-	struct label	*cr_label;	/* MAC label */
-
 	int	cr_flags;		/* flags on credential */
+} cr_posix;
+	struct label	*cr_label;	/* MAC label */
 	/* 
 	 * NOTE: If anything else (besides the flags)
 	 * added after the label, you must change
@@ -121,6 +116,7 @@ struct ucred {
 #ifndef _KAUTH_CRED_T
 #define	_KAUTH_CRED_T
 typedef struct ucred *kauth_cred_t;
+typedef struct posix_cred *posix_cred_t;
 #endif	/* !_KAUTH_CRED_T */
 
 /*

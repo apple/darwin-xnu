@@ -28,9 +28,7 @@
 #ifndef _MACHINE_XPR_H
 #define _MACHINE_XPR_H
 
-#if defined (__ppc__)
-#include "ppc/xpr.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/xpr.h"
 #else
 #error architecture not supported

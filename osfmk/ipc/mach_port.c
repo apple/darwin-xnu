@@ -128,6 +128,9 @@ static mach_port_qos_t	qos_template;
  *	Routine:	mach_port_names_helper
  *	Purpose:
  *		A helper function for mach_port_names.
+ *
+ *	Conditions:
+ *		Space containing entry is [at least] read-locked.
  */
 
 void
@@ -141,44 +144,51 @@ mach_port_names_helper(
 {
 	ipc_entry_bits_t bits;
 	ipc_port_request_index_t request;
-	mach_port_type_t type;
+	mach_port_type_t type = 0;
 	ipc_entry_num_t actual;
+	ipc_port_t port;
 
 	bits = entry->ie_bits;
 	request = entry->ie_request;
-	if (bits & MACH_PORT_TYPE_SEND_RIGHTS) {
-		ipc_port_t port;
-		boolean_t died;
+	port = (ipc_port_t) entry->ie_object;
 
-		port = (ipc_port_t) entry->ie_object;
-		assert(port != IP_NULL);
+	if (bits & MACH_PORT_TYPE_RECEIVE) {
+		assert(IP_VALID(port));
 
-		/*
-		 *	The timestamp serializes mach_port_names
-		 *	with ipc_port_destroy.  If the port died,
-		 *	but after mach_port_names started, pretend
-		 *	that it isn't dead.
-		 */
+		if (request != IE_REQ_NONE) {
+			ip_lock(port);
+			assert(ip_active(port));
+			type |= ipc_port_request_type(port, name, request);
+			ip_unlock(port);
+		}
 
+	} else if (bits & MACH_PORT_TYPE_SEND_RIGHTS) {
+		mach_port_type_t reqtype;
+
+		assert(IP_VALID(port));
 		ip_lock(port);
-		died = (!ip_active(port) &&
-			IP_TIMESTAMP_ORDER(port->ip_timestamp, timestamp));
-		ip_unlock(port);
 
-		if (died) {
-			/* pretend this is a dead-name entry */
-
+		reqtype = (request != IE_REQ_NONE) ?
+			  ipc_port_request_type(port, name, request) : 0;
+		
+		/*
+		 * If the port is alive, or was alive when the mach_port_names
+		 * started, then return that fact.  Otherwise, pretend we found
+		 * a dead name entry.
+		 */
+		if (ip_active(port) || IP_TIMESTAMP_ORDER(timestamp, port->ip_timestamp)) {
+			type |= reqtype;
+		} else {
 			bits &= ~(IE_BITS_TYPE_MASK);
 			bits |= MACH_PORT_TYPE_DEAD_NAME;
-			if (request != 0)
+			/* account for additional reference for dead-name notification */
+			if (reqtype != 0)
 				bits++;
-			request = 0;
 		}
+		ip_unlock(port);
 	}
 
-	type = IE_BITS_TYPE(bits);
-	if (request != 0)
-		type |= MACH_PORT_TYPE_DNREQUEST;
+	type |= IE_BITS_TYPE(bits);
 
 	actual = *actualp;
 	names[actual] = name;
@@ -436,6 +446,11 @@ mach_port_type(
 	kr = ipc_right_info(space, name, entry, typep, &urefs);
 	if (kr == KERN_SUCCESS)
 		is_write_unlock(space);
+#if 1
+        /* JMM - workaround rdar://problem/9121297 (CF being too picky on these bits). */
+        *typep &= ~(MACH_PORT_TYPE_SPREQUEST | MACH_PORT_TYPE_SPREQUEST_DELAYED);
+#endif
+
 	/* space is unlocked */
 	return kr;
 }
@@ -1472,6 +1487,18 @@ mach_port_request_notification(
 		break;
 	    }
 
+	    case MACH_NOTIFY_SEND_POSSIBLE:
+
+	    	if (!MACH_PORT_VALID(name)) {
+	      		return KERN_INVALID_ARGUMENT;
+		}
+
+		kr = ipc_right_request_alloc(space, name, sync != 0,
+					     TRUE, notify, previousp);
+		if (kr != KERN_SUCCESS)
+			return kr;
+		break;
+
 	    case MACH_NOTIFY_DEAD_NAME:
 
 	    	if (!MACH_PORT_VALID(name)) {
@@ -1483,8 +1510,8 @@ mach_port_request_notification(
 	      		return KERN_INVALID_ARGUMENT;
 		}
 
-		kr = ipc_right_dnrequest(space, name, sync != 0,
-					 notify, previousp);
+		kr = ipc_right_request_alloc(space, name, sync != 0,
+					     FALSE, notify, previousp);
 		if (kr != KERN_SUCCESS)
 			return kr;
 		break;
@@ -1677,7 +1704,7 @@ mach_port_get_attributes(
                         return kr;
                 /* port is locked and active */
 		
-		table = port->ip_dnrequests;
+		table = port->ip_requests;
 		if (table == IPR_NULL)
 			*(int *)info = 0;
 		else
@@ -1744,7 +1771,7 @@ mach_port_set_attributes(
                         return kr;
                 /* port is locked and active */
 		
-		kr = ipc_port_dngrow(port, *(int *)info);
+		kr = ipc_port_request_grow(port, *(int *)info);
 		if (kr != KERN_SUCCESS)
 			return kr;
 		break;
@@ -1870,6 +1897,12 @@ task_set_port_space(
 	kern_return_t kr;
 	
 	is_write_lock(space);
+
+	if (!space->is_active) {
+		is_write_unlock(space);
+		return KERN_INVALID_TASK;
+	}
+
 	kr = ipc_entry_grow_table(space, table_entries);
 	if (kr == KERN_SUCCESS)
 		is_write_unlock(space);

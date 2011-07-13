@@ -28,9 +28,7 @@
 #ifndef _MACHINE_MACHPARAM_H
 #define _MACHINE_MACHPARAM_H
 
-#if defined (__ppc__)
-#include "ppc/machparam.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/machparam.h"
 #else
 #error architecture not supported

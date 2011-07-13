@@ -74,7 +74,7 @@ and
 The
 .Fn kqueue
 system call
-provides a generic method of notifying the user when an kernel
+provides a generic method of notifying the user when a kernel
 event (kevent) happens or a condition holds, based on the results
 of small pieces of kernel code termed filters.
 A kevent is identified by an (ident, filter) pair and specifies
@@ -267,7 +267,7 @@ the descriptor.
 .It EV_RECEIPT
 This flag is useful for making bulk changes to a kqueue without draining any
 pending events. When passed as input, it forces EV_ERROR to always be returned.
-When a filter is successfully added. The
+When a filter is successfully added, the
 .Va data
 field will be zero.
 .It EV_ONESHOT
@@ -433,6 +433,8 @@ The events to monitor are:
 .Bl -tag -width NOTE_SIGNAL 
 .It NOTE_EXIT
 The process has exited.
+.It NOTE_EXITSTATUS
+The process has exited and its exit status is in filter specific data. Valid only on child processes and to be used along with NOTE_EXIT.
 .It NOTE_FORK
 The process created a child process via
 .Xr fork 2
@@ -506,42 +508,6 @@ contains the number of times the timeout has expired since the last call to
 .Fn kevent 
 or
 .Fn kevent64 .
-This filter automatically sets the EV_CLEAR flag internally.
-.It EVFILT_SESSION
-Takes the audit session ID to monitor as the identifier and the events to watch for in 
-.Va fflags ,
-and returns when one or more of the requested session events occurs.  
-To monitor for events for any audit session the value AS_ANY_ASID 
-should be used as the identifier.  With AS_ANY_ASID, as new audit
-sessions are created they are included as if the were added
-individually.  The events to monitor are:
-.Bl -tag -width NOTE_AS_UPDATE
-.It NOTE_AS_START
-A new audit session has started. 
-.It NOTE_AS_END
-All the processes in the audit session have exited.  
-.It NOTE_AS_CLOSE
-This audit session is no longer valid in the kernel.  In other words, it
-is now safe to dispose of any cached information about this session or
-reuse its session ID for a new audit session.
-.It NOTE_AS_UPDATE
-The audit session information was updated.  The audit session information is 
-considered immutable once initially set.  If this becomes enforced in
-the kernel then this event may no longer be needed and may become
-obsolete.
-.It NOTE_AS_ERR
-This flag is returned if the system was unable to attach an event to a
-new session when the audit session ID of AS_ANY_ASID
-is used.  This is usually due to resource limitations.
-.El
-.Pp
-On return, 
-.Va fflags
-contains the events which triggered the filter,
-.Va ident
-contains the audit session ID, and
-.Va data
-contains the audit user ID.
 This filter automatically sets the EV_CLEAR flag internally.
 .El
 .Pp

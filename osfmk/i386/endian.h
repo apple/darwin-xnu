@@ -50,8 +50,8 @@
  */
 
 #if !defined(ntohs)
-unsigned short	ntohs(unsigned short);
-extern __inline__
+static __inline__ unsigned short	ntohs(unsigned short);
+static __inline__
 unsigned short
 ntohs(unsigned short w_int)
 {
@@ -67,8 +67,8 @@ unsigned short	htons(unsigned short);
 #endif
 
 #if !defined(ntohl)
-unsigned long	ntohl(unsigned long);
-extern __inline__
+static __inline__ unsigned long	ntohl(unsigned long);
+static __inline__
 unsigned long
 ntohl(register unsigned long value)
 {

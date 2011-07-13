@@ -39,7 +39,6 @@
 #include <mach-o/loader.h>
 #include <libkern/kernel_mach_header.h>
 
-#define KEXT_ALLOC_MAX_OFFSET (2 * 1024 * 1024 * 1024UL)
 
 vm_map_t g_kext_map = 0;
 static mach_vm_offset_t kext_alloc_base = 0;
@@ -70,15 +69,15 @@ kext_alloc_init(void)
     text_end = vm_map_round_page(text->vmaddr + text->vmsize);
     text_size = text_end - text_start;
 
-    kext_alloc_base = text_end - KEXT_ALLOC_MAX_OFFSET;
-    kext_alloc_size = KEXT_ALLOC_MAX_OFFSET - text_size;
+    kext_alloc_base = KEXT_ALLOC_BASE(text_end);
+    kext_alloc_size = KEXT_ALLOC_SIZE(text_size);
     kext_alloc_max = kext_alloc_base + kext_alloc_size;
 
     /* Allocate the subblock of the kernel map */
 
     rval = kmem_suballoc(kernel_map, (vm_offset_t *) &kext_alloc_base, 
 			 kext_alloc_size, /* pageable */ TRUE,
-			 VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE|VM_FLAGS_BELOW_MIN, 
+			 VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE,
 			 &g_kext_map);
     if (rval != KERN_SUCCESS) {
 	    panic("kext_alloc_init: kmem_suballoc failed 0x%x\n", rval);

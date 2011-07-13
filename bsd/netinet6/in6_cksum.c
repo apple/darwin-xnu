@@ -224,7 +224,7 @@ inet6_cksum(struct mbuf *m, unsigned int nxt, unsigned int off,
  * code and should be modified for each CPU to be as fast as possible.
  */
 
-#define ADDCARRY(x)  (x > 65535 ? x -= 65535 : x)
+#define ADDCARRY(x)  do { if (x > 65535) { x -= 65535; } } while (0)
 #define REDUCE {l_util.l = sum; sum = l_util.s[0] + l_util.s[1]; ADDCARRY(sum);}
 
 /*

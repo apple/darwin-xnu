@@ -264,11 +264,7 @@ dump_frame64(x86_saved_state64_t *sp)
 		kprintf("%p: 0x%016llx\n", ip, *ip);
 
 	kprintf("sp->isf.trapno: 0x%08x\n", sp->isf.trapno);
-#ifdef __i386__
-	kprintf("sp->isf.trapfn: 0x%08x\n", sp->isf.trapfn);
-#else
 	kprintf("sp->isf.trapfn: 0x%016llx\n", sp->isf.trapfn);
-#endif
 	kprintf("sp->isf.err:    0x%016llx\n", sp->isf.err);
 	kprintf("sp->isf.rip:    0x%016llx\n", sp->isf.rip);
 	kprintf("sp->isf.cs:     0x%016llx\n", sp->isf.cs);

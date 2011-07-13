@@ -114,7 +114,6 @@
 #define T_PF_EXECUTE		0x10		/* instruction fetch when NX */
 #endif
 
-
 #if !defined(ASSEMBLER) && defined(MACH_KERNEL)
 
 #include <i386/thread.h>
@@ -129,7 +128,7 @@ extern void		sync_iss_to_iks(x86_saved_state_t *regs);
 extern void		sync_iss_to_iks_unconditionally(
 				x86_saved_state_t	*regs);
 
-extern void		kernel_trap(x86_saved_state_t *regs);
+extern void		kernel_trap(x86_saved_state_t *regs, uintptr_t *lo_spp);
 
 extern void		user_trap(x86_saved_state_t *regs);
 
@@ -148,11 +147,13 @@ extern void		i386_astintr(int preemption);
 typedef kern_return_t (*perfCallback)(
 				int			trapno,
 				void			*regs,
-				int			unused1,
-				int			unused2);
+				uintptr_t		*lo_spp,
+				      int);
+
+typedef kern_return_t (*perfASTCallback)(ast_t reasons, ast_t *myast);
 
 extern volatile perfCallback perfTrapHook;
-extern volatile perfCallback perfASTHook;
+extern volatile perfASTCallback perfASTHook;
 extern volatile perfCallback perfIntHook;
 
 extern void		panic_i386_backtrace(void *, int, const char *, boolean_t, x86_saved_state_t *);

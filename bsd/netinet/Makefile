@@ -9,13 +9,9 @@ include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
 
-INSTINC_SUBDIRS_PPC = \
-
 INSTINC_SUBDIRS_I386 = \
 
 EXPINC_SUBDIRS = \
-
-EXPINC_SUBDIRS_PPC = \
 
 EXPINC_SUBDIRS_I386 = \
 
@@ -32,12 +28,12 @@ KERNELFILES = \
 	kpi_ipfilter.h in_arp.h
 
 PRIVATE_DATAFILES = \
-	if_fddi.h if_atm.h ip_dummynet.h \
+	ip_dummynet.h \
 	tcp_debug.h \
 	in_gif.h ip_compat.h
 
 PRIVATE_KERNELFILES = ${KERNELFILES} \
-	ip_ecn.h ip_encap.h ip_flow.h
+	ip_ecn.h ip_encap.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 
@@ -48,7 +44,6 @@ EXPORT_MI_LIST	= ${DATAFILES} ${KERNELFILES}
 EXPORT_MI_DIR = ${INSTALL_MI_DIR}
 
 INSTALL_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
-
 INSTALL_KF_MI_LCL_LIST = ${INSTALL_MI_LCL_LIST} ${PRIVATE_KERNELFILES}
 
 include $(MakeInc_rule)

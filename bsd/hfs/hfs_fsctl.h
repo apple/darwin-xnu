@@ -81,8 +81,8 @@ struct hfs_journal_info {
 #define HFSIOC_BULKACCESS _IOW('h', 9, struct user32_access_t)
 #define HFS_BULKACCESS_FSCTL IOCBASECMD(HFSIOC_BULKACCESS)
 
-#define HFSIOC_SETACLSTATE  _IOW('h', 10, int32_t)
-#define HFS_SETACLSTATE  IOCBASECMD(HFSIOC_SETACLSTATE)
+/* Unsupported - Previously used to enable/disable ACLs */
+#define HFSIOC_UNSUPPORTED  _IOW('h', 10, int32_t)
 
 #define HFSIOC_PREV_LINK  _IOWR('h', 11, u_int32_t)
 #define HFS_PREV_LINK  IOCBASECMD(HFSIOC_PREV_LINK)
@@ -121,7 +121,10 @@ struct hfs_journal_info {
 #define HFSIOC_VOLUME_STATUS  _IOR('h', 24, u_int32_t)
 #define HFS_VOLUME_STATUS  IOCBASECMD(HFSIOC_VOLUME_STATUS)
 
-#endif /* __APPLE_API_UNSTABLE */
+/* Disable metadata zone for given volume */
+#define HFSIOC_DISABLE_METAZONE	_IO('h', 25)
+#define HFS_DISABLE_METAZONE	IOCBASECMD(HFSIOC_DISABLE_METAZONE)
 
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* ! _HFS_FSCTL_H_ */

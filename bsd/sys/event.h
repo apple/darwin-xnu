@@ -70,9 +70,10 @@
 #define EVFILT_MACHPORT         (-8)	/* Mach portsets */
 #define EVFILT_FS		(-9)	/* Filesystem events */
 #define EVFILT_USER             (-10)   /* User events */
-#define	EVFILT_SESSION		(-11)	/* Audit session events */
+					/* (-11) unused */
+#define EVFILT_VM		(-12)	/* Virtual memory events */
 
-#define EVFILT_SYSCOUNT		11
+#define EVFILT_SYSCOUNT		12
 #define EVFILT_THREADMARKER	EVFILT_SYSCOUNT /* Internal use only */
 
 #pragma pack(4)
@@ -191,7 +192,6 @@ struct kevent64_s {
  * On input, NOTE_TRIGGER causes the event to be triggered for output.
  */
 #define NOTE_TRIGGER	0x01000000
-#define EV_TRIGGER      0x0100 /*deprecated--for backwards compatibility only*/
 
 /*
  * On input, the top two bits of fflags specifies how the lower twenty four 
@@ -233,15 +233,25 @@ struct kevent64_s {
  * that hangs off the proc structure. They also both play games with the hint
  * passed to KNOTE(). If NOTE_SIGNAL is passed as a hint, then the lower bits
  * of the hint contain the signal. IF NOTE_FORK is passed, then the lower bits
- * contain the PID of the child.
+ * contain the PID of the child. 
  */
 #define	NOTE_EXIT	0x80000000		/* process exited */
 #define	NOTE_FORK	0x40000000		/* process forked */
 #define	NOTE_EXEC	0x20000000		/* process exec'd */
 #define	NOTE_REAP	0x10000000		/* process reaped */
 #define	NOTE_SIGNAL	0x08000000		/* shared with EVFILT_SIGNAL */
+#define	NOTE_EXITSTATUS	0x04000000		/* exit status to be returned, valid for child process only */
+#define	NOTE_RESOURCEEND 0x02000000		/* resource limit reached, resource type returned */
 #define	NOTE_PDATAMASK	0x000fffff		/* mask for pid/signal */
 #define	NOTE_PCTRLMASK	(~NOTE_PDATAMASK)
+
+/*
+ * data/hint fflags for EVFILT_VM, shared with userspace.
+ */
+#define NOTE_VM_PRESSURE			0x80000000              /* will react on memory pressure */
+#define NOTE_VM_PRESSURE_TERMINATE		0x40000000              /* will quit on memory pressure, possibly after cleaning up dirty state */
+#define NOTE_VM_PRESSURE_SUDDEN_TERMINATE	0x20000000		/* will quit immediately on memory pressure */
+#define NOTE_VM_ERROR				0x10000000              /* there was an error */
 
 /*
  * data/hint fflags for EVFILT_TIMER, shared with userspace.
@@ -258,7 +268,7 @@ struct kevent64_s {
 /*
  * data/hint fflags for EVFILT_MACHPORT, shared with userspace.
  *
- * Only portsets are support at this time.
+ * Only portsets are supported at this time.
  *
  * The fflags field can optionally contain the MACH_RCV_MSG, MACH_RCV_LARGE,
  * and related trailer receive options as defined in <mach/message.h>.
@@ -274,29 +284,6 @@ struct kevent64_s {
  * message is received by this call. Instead, on output, the data field simply
  * contains the name of the actual port detected with a message waiting.
  */
-
-/*
- * data/hint fflags for EVFILT_SESSION, shared with userspace.
- *
- * The kevent ident field should be set to AU_SESSION_ANY_ASID if interested
- * in events for any session.
- *
- * NOTE_AS_UPDATE may be going away since struct auditinfo_addr may become 
- * immutable once initially set.
- */
-#define	NOTE_AS_START	0x00000001		/* start of new session */
-#define	NOTE_AS_END	0x00000002		/* start of new session */
-#define	NOTE_AS_ERR	0x00000004		/* error tracking new session */
-#define	NOTE_AS_CLOSE	0x00000008		/* currently unsupported */
-#define	NOTE_AS_UPDATE	0x00000010		/* session data updated */
-
-/*
- * Kevent ident value for any session.
- */
-#define	AS_ANY_ASID	0xFFFFFFFF
-
-struct au_sentry;	/* Audit session entry */
-
 
 /*
  * DEPRECATED!!!!!!!!!
@@ -338,7 +325,6 @@ struct knote {
 		struct		fileproc *p_fp;	/* file data pointer */
 		struct		proc *p_proc;	/* proc pointer */
 		struct          ipc_pset *p_pset;       /* pset pointer */
-		struct		au_sentry *p_se; 	/* Audit session ptr */
 	} kn_ptr;
 	struct			filterops *kn_fop;
 	int			kn_status;	/* status bits */
@@ -378,7 +364,7 @@ struct filterops {
 	/* Optional f_touch operation, called only if !f_isfd && non-NULL */
 	void    (*f_touch)(struct knote *kn, struct kevent64_s *kev, long type);
 	/* Optional f_peek operation, called only if KN_STAYQUEUED is set */
-	int	(*f_peek)(struct knote *kn);
+	unsigned (*f_peek)(struct knote *kn);
 };
 
 struct proc;
@@ -399,6 +385,7 @@ extern int	knote_detach(struct klist *list, struct knote *kn);
 extern int	knote_link_wait_queue(struct knote *kn, struct wait_queue *wq);	
 extern void	knote_unlink_wait_queue(struct knote *kn, struct wait_queue *wq);
 extern void	knote_fdclose(struct proc *p, int fd);
+extern void	knote_markstayqueued(struct knote *kn);
 
 #endif /* !KERNEL_PRIVATE */
 

@@ -305,4 +305,104 @@
 #endif /* __NO_UNDERSCORES__ */
 #endif /* ASSEMBLER */
 
+/*
+ * The following macros make calls into C code.
+ * They dynamically align the stack to 16 bytes.
+ */
+#if defined(__i386__)
+/*
+ * Arguments are moved (not pushed) onto the correctly aligned stack.
+ * NOTE: ESI is destroyed in the process, and hence cannot
+ * be directly used as a parameter. Users of this macro must
+ * independently preserve ESI (a non-volatile) if the routine is
+ * intended to be called from C, for instance.
+ */
+
+#define CCALL(fn)			\
+	movl	%esp, %esi		;\
+	andl	$0xFFFFFFF0, %esp	;\
+	call	EXT(fn)			;\
+	movl	%esi, %esp
+
+#define CCALL1(fn, arg1)		\
+	movl	%esp, %esi		;\
+	subl	$4, %esp		;\
+	andl	$0xFFFFFFF0, %esp	;\
+	movl	arg1, (%esp)		;\
+	call	EXT(fn)			;\
+	movl	%esi, %esp
+
+#define CCALL2(fn, arg1, arg2)		\
+	movl	%esp, %esi		;\
+	subl	$8, %esp		;\
+	andl	$0xFFFFFFF0, %esp	;\
+	movl	arg2, 4(%esp)		;\
+	movl	arg1, (%esp)		;\
+	call	EXT(fn)			;\
+	movl	%esi, %esp
+
+/* This variant exists to permit adjustment of the stack by "dtrace" */
+#define CCALL1WITHSP(fn, arg1)		\
+	movl	%esp, %esi		;\
+	subl	$12, %esp		;\
+	andl	$0xFFFFFFF0, %esp	;\
+	movl	%esi, 8(%esp)		;\
+	leal	8(%esp), %esi		;\
+	movl	%esi, 4(%esp)		;\
+	movl	arg1, (%esp)		;\
+	call	EXT(fn)			;\
+	movl	8(%esp), %esp
+
+/*
+ * CCALL5 is used for callee functions with 3 arguments but
+ * where arg2 (a3:a2) and arg3 (a5:a4) are 64-bit values.
+ */
+#define CCALL5(fn, a1, a2, a3, a4, a5)	\
+	movl	%esp, %esi		;\
+	subl	$20, %esp		;\
+	andl	$0xFFFFFFF0, %esp	;\
+	movl	a5, 16(%esp)		;\
+	movl	a4, 12(%esp)		;\
+	movl	a3,  8(%esp)		;\
+	movl	a2,  4(%esp)		;\
+	movl	a1,  (%esp)		;\
+	call	EXT(fn)			;\
+	movl	%esi, %esp
+
+#elif defined(__x86_64__)
+
+/* This variant exists to permit adjustment of the stack by "dtrace" */
+#define CCALLWITHSP(fn)				 \
+	mov	%rsp, %r12			;\
+	sub	$8, %rsp			;\
+	and	$0xFFFFFFFFFFFFFFF0, %rsp	;\
+	mov	%r12, (%rsp)			;\
+	leaq	(%rsp), %rsi			;\
+	call	EXT(fn)				;\
+	mov	(%rsp), %rsp
+	
+#define CCALL(fn)				 \
+	mov	%rsp, %r12			;\
+	and	$0xFFFFFFFFFFFFFFF0, %rsp	;\
+	call	EXT(fn)				;\
+	mov	%r12, %rsp
+
+#define CCALL1(fn, arg1) 			 \
+	mov	arg1, %rdi 			;\
+	CCALL(fn)
+
+#define CCALL2(fn, arg1, arg2)		 	 \
+	mov	arg1, %rdi 			;\
+	CCALL(fn)
+
+#define CCALL3(fn, arg1, arg2, arg3) 		 \
+	mov	arg1, %rdi 			;\
+	mov	arg2, %rsi 			;\
+	mov	arg3, %rdx 			;\
+	CCALL(fn)
+
+#else
+#error unsupported architecture
+#endif
+
 #endif /* _I386_ASM_H_ */

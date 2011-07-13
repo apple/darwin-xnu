@@ -42,6 +42,7 @@ __BEGIN_DECLS
  */
 
 /* Initialize kernel */
+extern void kernel_early_bootstrap(void) __attribute__((section("__TEXT, initcode")));
 extern void kernel_bootstrap(void) __attribute__((section("__TEXT, initcode")));
 
 /* Initialize machine dependent stuff */

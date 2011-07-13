@@ -116,7 +116,7 @@ reboot(struct proc *p, register struct reboot_args *uap, __unused int32_t *retva
 #endif
 	if (!error) {
 		OSBitOrAtomic(P_REBOOT, &p->p_flag);  /* No more signals for this proc */
-		boot(RB_BOOT, uap->opt, command);
+		error = boot(RB_BOOT, uap->opt, command);
 	}
 	return(error);
 }

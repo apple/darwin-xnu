@@ -28,9 +28,7 @@
 #ifndef _MACHINE_SCHED_PARAM_H
 #define _MACHINE_SCHED_PARAM_H
 
-#if defined (__ppc__)
-#include "ppc/sched_param.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/sched_param.h"
 #else
 #error architecture not supported

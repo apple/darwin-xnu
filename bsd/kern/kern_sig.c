@@ -334,10 +334,10 @@ cansignal(proc_t p, kauth_cred_t uc, proc_t q, int signum, int zombie)
 	else
 		my_cred = proc_ucred(q);
 
-	if (uc->cr_ruid == my_cred->cr_ruid ||
-	    uc->cr_ruid == my_cred->cr_svuid ||
-	    kauth_cred_getuid(uc) == my_cred->cr_ruid ||
-	    kauth_cred_getuid(uc) == my_cred->cr_svuid) {
+	if (kauth_cred_getruid(uc) == kauth_cred_getruid(my_cred) ||
+	    kauth_cred_getruid(uc) == kauth_cred_getsvuid(my_cred) ||
+	    kauth_cred_getuid(uc) == kauth_cred_getruid(my_cred) ||
+	    kauth_cred_getuid(uc) == kauth_cred_getsvuid(my_cred)) {
 		if (zombie == 0)
 			kauth_cred_unref(&my_cred);
 		return (1);
@@ -566,7 +566,7 @@ set_procsigmask(proc_t p,  int bit)
  *		process/thread pair.
  *
  *		We mark thread as unused to alow compilation without warning
- *		onnon-PPC platforms.
+ *		on non-PPC platforms.
  */
 int
 setsigvec(proc_t p, __unused thread_t thread, int signum, struct __kern_sigaction *sa, boolean_t in_sigstart)
@@ -623,14 +623,6 @@ setsigvec(proc_t p, __unused thread_t thread, int signum, struct __kern_sigactio
 			OSBitAndAtomic(~((uint32_t)P_NOCLDWAIT), &p->p_flag);
 	}
 
-#ifdef __ppc__ 
-	if (signum == SIGFPE) {
-		if (sa->sa_handler == SIG_DFL || sa->sa_handler == SIG_IGN) 
-			thread_enable_fpe(thread, 0);
-		else
-			thread_enable_fpe(thread, 1);
-	}
-#endif  /* __ppc__ */
 	/*
 	 * Set bit in p_sigignore for signals that are set to SIG_IGN,
 	 * and for signals set to SIG_DFL where the default is to ignore.
@@ -1749,33 +1741,34 @@ psignal_internal(proc_t p, task_t task, thread_t thread, int flavor, int signum)
 	if (flavor & PSIG_VFORK) {
 		sig_task = task;
 		sig_thread = thread;
-		sig_proc= p;
+		sig_proc = p;
 	} else if (flavor & PSIG_THREAD) {
 		sig_task = get_threadtask(thread);
 		sig_thread = thread;
 		sig_proc = (proc_t)get_bsdtask_info(sig_task);
 	} else {
 		sig_task = p->task;
-		sig_proc = p;
 		sig_thread = (struct thread *)0;
+		sig_proc = p;
 	}
-	if (((sig_task == TASK_NULL)  || is_kerneltask(sig_task))) {
+
+	if ((sig_task == TASK_NULL) || is_kerneltask(sig_task))
 		return;
-	}
 
 	/*
 	 * do not send signals to the process that has the thread
 	 * doing a reboot(). Not doing so will mark that thread aborted
-	 * and can cause IO failures wich will cause data loss.
+	 * and can cause IO failures wich will cause data loss.  There's
+	 * also no need to send a signal to a process that is in the middle
+	 * of being torn down.
 	 */
-	if (ISSET(sig_proc->p_flag, P_REBOOT)) {
+	if (ISSET(sig_proc->p_flag, P_REBOOT) ||
+	    ISSET(sig_proc->p_lflag, P_LEXIT))
 		return;
-	}
 
 	if( (flavor & (PSIG_VFORK | PSIG_THREAD)) == 0) {
 		proc_knote(sig_proc, NOTE_SIGNAL | signum);
 	}
-
 
 	if ((flavor & PSIG_LOCKED)== 0)
 		proc_signalstart(sig_proc, 0);
@@ -2027,7 +2020,7 @@ psignal_internal(proc_t p, task_t task, thread_t thread, int flavor, int signum)
 				if (( pp != PROC_NULL) && ((pp->p_flag & P_NOCLDSTOP) == 0)) {
 
 					my_cred = kauth_cred_proc_ref(sig_proc);
-					r_uid = my_cred->cr_ruid;
+					r_uid = kauth_cred_getruid(my_cred);
 					kauth_cred_unref(&my_cred);
 
 					proc_lock(sig_proc);
@@ -2077,6 +2070,14 @@ psignal_internal(proc_t p, task_t task, thread_t thread, int flavor, int signum)
 			 */
 			sig_proc->p_stat = SRUN;
 			proc_unlock(sig_proc);
+			/*
+			 * In scenarios where suspend/resume are racing
+			 * the signal we are missing AST_BSD by the time
+			 * we get here, set again to avoid races. This
+			 * was the scenario with spindump enabled shutdowns.
+			 * We would need to cover this approp down the line.
+			 */
+			act_set_astbsd(sig_thread);
 			thread_abort(sig_thread);
 
 			goto psigout;
@@ -2281,7 +2282,7 @@ issignal(proc_t p)
 			} else {
 				proc_unlock(p);
 				my_cred = kauth_cred_proc_ref(p);
-				r_uid = my_cred->cr_ruid;
+				r_uid = kauth_cred_getruid(my_cred);
 				kauth_cred_unref(&my_cred);
 
 				pp = proc_parentholdref(p);
@@ -2445,7 +2446,7 @@ issignal(proc_t p)
 					stop(p, pp);
 					if ((pp != PROC_NULL) && ((pp->p_flag & P_NOCLDSTOP) == 0)) {
 						my_cred = kauth_cred_proc_ref(p);
-						r_uid = my_cred->cr_ruid;
+						r_uid = kauth_cred_getruid(my_cred);
 						kauth_cred_unref(&my_cred);
 
 						proc_lock(pp);
@@ -2501,7 +2502,7 @@ issignal(proc_t p)
 		}
 	/* NOTREACHED */
 out:
-	proc_signalend(p,1);
+	proc_signalend(p, 1);
 	proc_unlock(p);
 	return(retval);
 }
@@ -2538,6 +2539,7 @@ CURSIG(proc_t p)
 		signum = ffs((long)sigbits);
 		mask = sigmask(signum);
 		prop = sigprop[signum];
+		sigbits &= ~mask;		/* take the signal out */
 
 		/*
 		 * We should see pending but ignored signals
@@ -2546,14 +2548,8 @@ CURSIG(proc_t p)
 		if (mask & p->p_sigignore && (p->p_lflag & P_LTRACED) == 0) {
 			continue;
 		}
+
 		if (p->p_lflag & P_LTRACED && (p->p_lflag & P_LPPWAIT) == 0) {
-			/*
-			 * Put the new signal into p_siglist.  If the
-			 * signal is being masked, look for other signals.
-			 */
-			mask = sigmask(signum);
-			if (ut->uu_sigmask & mask)
-				continue;
 			return(signum);
 		}
 
@@ -2631,7 +2627,6 @@ CURSIG(proc_t p)
 			 */
 			return (signum);
 		}
-		sigbits &= ~mask;		/* take the signal! */
 	}
 	/* NOTREACHED */
 }
@@ -2761,12 +2756,6 @@ postsig(int signum)
 			ps->ps_siginfo &= ~mask;
 			ps->ps_signodefer &= ~mask;
 		}
-#ifdef __ppc__
-		/* Needs to disable to run in user mode */
-		if (signum == SIGFPE) {
-			thread_enable_fpe(current_thread(), 0);
-		}
-#endif  /* __ppc__ */
 
 		if (ps->ps_sig != signum) {
 			code = 0;
@@ -2945,10 +2934,33 @@ bsd_ast(thread_t thread)
 	    ut->t_dtrace_sig = 0;
 	    psignal(p, dt_action_sig);
 	}
+
 	if (ut->t_dtrace_stop) {
-	    ut->t_dtrace_stop = 0;
-	    psignal(p, SIGSTOP);
+		ut->t_dtrace_stop = 0;
+		proc_lock(p);
+		p->p_dtrace_stop = 1;
+		proc_unlock(p);
+		(void)task_suspend(p->task);
 	}
+
+	if (ut->t_dtrace_resumepid) {
+		proc_t resumeproc = proc_find(ut->t_dtrace_resumepid);
+		ut->t_dtrace_resumepid = 0;
+		if (resumeproc != PROC_NULL) {
+			proc_lock(resumeproc);
+			/* We only act on processes stopped by dtrace */
+			if (resumeproc->p_dtrace_stop) {
+				resumeproc->p_dtrace_stop = 0;
+				proc_unlock(resumeproc);
+				task_resume(resumeproc->task);
+			}
+			else {
+				proc_unlock(resumeproc);
+			}
+			proc_rele(resumeproc);
+		}
+	}
+		    
 #endif /* CONFIG_DTRACE */
 
 	if (CHECK_SIGNALS(p, current_thread(), ut)) {
@@ -3066,78 +3078,36 @@ pgsigio(pid_t pgid, int sig)
 		proc_rele(p);
 }
 
-
 void
 proc_signalstart(proc_t p, int locked)
 {
-	if (locked == 0)
+	if (!locked)
 		proc_lock(p);
-	while ((p->p_lflag & P_LINSIGNAL) == P_LINSIGNAL) {
-		p->p_lflag |= P_LSIGNALWAIT;
+	p->p_sigwaitcnt++;
+	while ((p->p_lflag & P_LINSIGNAL) == P_LINSIGNAL)
 		msleep(&p->p_sigmask, &p->p_mlock, 0, "proc_signstart", NULL);
-	}
+	p->p_sigwaitcnt--;
+
 	p->p_lflag |= P_LINSIGNAL;
-#if DIAGNOSTIC
-#if SIGNAL_DEBUG
-#ifdef __ppc__
-        {
-            int  sp, *fp, numsaved; 
- 
-            __asm__ volatile("mr %0,r1" : "=r" (sp));
-
-            fp = (int *)*((int *)sp);
-            for (numsaved = 0; numsaved < 3; numsaved++) {
-                p->lockpc[numsaved] = fp[2];
-                if ((int)fp <= 0)
-                        break;
-                fp = (int *)*fp;
-            }
-        }
-#endif /* __ppc__ */       
-#endif /* SIGNAL_DEBUG */
-#endif /* DIAGNOSTIC */
 	p->p_signalholder = current_thread();
-	if (locked == 0)
+	if (!locked)
 		proc_unlock(p);
-
 }
 
 void
 proc_signalend(proc_t p, int locked)
 {
-	if (locked == 0)
+	if (!locked)
 		proc_lock(p);
 	p->p_lflag &= ~P_LINSIGNAL;
 
-#if DIAGNOSTIC
-#if SIGNAL_DEBUG
-#ifdef __ppc__
-        {
-            int sp, *fp, numsaved; 
- 
-            __asm__ volatile("mr %0,r1" : "=r" (sp));
-
-            fp = (int *)*((int *)sp);
-            for (numsaved = 0; numsaved < 3; numsaved++) {
-                p->unlockpc[numsaved] = fp[2];
-                if ((int)fp <= 0)
-                        break;
-                fp = (int *)*fp;
-            }
-        }
-#endif /* __ppc__ */       
-#endif /* SIGNAL_DEBUG */
-#endif /* DIAGNOSTIC */
-
-	if ((p->p_lflag & P_LSIGNALWAIT) == P_LSIGNALWAIT) {
-		p->p_lflag &= ~P_LSIGNALWAIT;
+	if (p->p_sigwaitcnt > 0)
 		wakeup(&p->p_sigmask);
-	}
+
 	p->p_signalholder = NULL;
-	if (locked == 0)
+	if (!locked)
 		proc_unlock(p);
 }
-
 
 void
 sig_lock_to_exit(proc_t p)

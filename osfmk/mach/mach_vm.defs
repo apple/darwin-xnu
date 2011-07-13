@@ -291,7 +291,11 @@ routine vm_behavior_set(
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
 routine mach_vm_map(
 #else
+#if defined(__arm__) && !LIBSYSCALL_INTERFACE
+routine _vm_map_arm(
+#else
 routine vm_map(
+#endif
 #endif
 		target_task	: vm_task_entry_t;
 	inout	address		: mach_vm_address_t;

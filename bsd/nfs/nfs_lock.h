@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2008 Apple Inc.  All rights reserved.
+ * Copyright (c) 2002-2010 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -91,6 +91,8 @@ typedef struct nfs_lock_msg {
 #define LOCKD_MSG_NFSV3		0x0004  /* NFSv3 request */
 #define LOCKD_MSG_CANCEL	0x0008  /* cancelling blocked request */
 #define LOCKD_MSG_DENIED_GRACE	0x0010	/* lock denied due to grace period */
+#define LOCKD_MSG_RECLAIM	0x0020  /* lock reclaim request */
+#define LOCKD_MSG_TCP		0x0040  /* (try to) use TCP for request */
 
 /* The structure used to maintain the pending request queue */
 typedef struct nfs_lock_msg_request {
@@ -128,11 +130,26 @@ struct lockd_ans {
 #define LOCKD_ANS_DENIED_GRACE	0x0008	/* lock denied due to grace period */
 
 
+/*
+ * The structure that lockd hands the kernel for each notify.
+ */
+#define LOCKD_NOTIFY_VERSION	1
+struct lockd_notify {
+	int			ln_version;		/* lockd_notify version */
+	int			ln_flags;		/* notify flags */
+	int			ln_pad;			/* (for alignment) */
+	int			ln_addrcount;		/* # of addresss */
+	struct sockaddr_storage	ln_addr[1];		/* List of addresses. */
+};
+
+
 #ifdef KERNEL
 void	nfs_lockinit(void);
-void	nfs_lockd_mount_change(int);
-int	nfs3_vnop_advlock(struct vnop_advlock_args *ap);
+void	nfs_lockd_mount_register(struct nfsmount *);
+void	nfs_lockd_mount_unregister(struct nfsmount *);
+int	nfs3_lockd_request(nfsnode_t, int, LOCKD_MSG_REQUEST *, int, thread_t);
 int	nfslockdans(proc_t p, struct lockd_ans *ansp);
+int	nfslockdnotify(proc_t p, user_addr_t argp);
 
 #endif
 #endif /* __APPLE_API_PRIVATE */

@@ -77,7 +77,7 @@ struct encaptab {
 
 void	encap_init(void) __attribute__((section("__TEXT, initcode")));
 void	encap4_input(struct mbuf *, int);
-int	encap6_input(struct mbuf **, int *);
+int	encap6_input(struct mbuf **, int *, int);
 const struct encaptab *encap_attach(int, int, const struct sockaddr *,
 	const struct sockaddr *, const struct sockaddr *,
 	const struct sockaddr *, const struct protosw *, void *);

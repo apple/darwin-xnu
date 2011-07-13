@@ -585,12 +585,12 @@
 
 #elif (ALGORITHM_BYTE_ORDER == PLATFORM_BYTE_ORDER)
 
-#define word_in(x,c)    (*((aes_32t*)(x)+(c)))
+#define word_in(x,c)    (*((const aes_32t*)(x)+(c)))
 #define word_out(x,c,v) (*((aes_32t*)(x)+(c)) = (v))
 
 #else
 
-#define word_in(x,c)    aes_sw32(*((aes_32t*)(x)+(c)))
+#define word_in(x,c)    aes_sw32(*((const aes_32t*)(x)+(c)))
 #define word_out(x,c,v) (*((aes_32t*)(x)+(c)) = aes_sw32(v))
 
 #endif

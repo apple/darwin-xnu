@@ -72,6 +72,7 @@
 uint32_t	avenrun[3] = {0, 0, 0};
 uint32_t	mach_factor[3] = {0, 0, 0};
 
+#if defined(CONFIG_SCHED_TRADITIONAL)
 /*
  * Values are scaled by LOAD_SCALE, defined in processor_info.h
  */
@@ -87,22 +88,24 @@ static uint32_t		fract[3] = {
 #undef base
 #undef frac
 
+#endif /* CONFIG_SCHED_TRADITIONAL */
+
 static unsigned int		sched_nrun;
 
 typedef void	(*sched_avg_comp_t)(
 					void			*param);
 
-#define SCHED_AVG_SECS(n)	((n) << SCHED_TICK_SHIFT)
-
 static struct sched_average {
 	sched_avg_comp_t	comp;
 	void				*param;
-	int					period;
-	int					tick;			
+	int					period; /* in seconds */
+	uint64_t			deadline;			
 } sched_average[] = {
-	{ compute_averunnable, &sched_nrun, SCHED_AVG_SECS(5), 0 },
-	{ compute_stack_target, NULL, SCHED_AVG_SECS(5), 1 },
-	{ compute_memory_pressure, NULL, SCHED_AVG_SECS(1), 0 },
+	{ compute_averunnable, &sched_nrun, 5, 0 },
+	{ compute_stack_target, NULL, 5, 1 },
+	{ compute_memory_pressure, NULL, 1, 0 },
+	{ compute_zone_gc_throttle, NULL, 1, 0 },
+	{ compute_pmap_gc_throttle, NULL, 60, 0 },
 	{ NULL, NULL, 0, 0 }
 };
 
@@ -114,7 +117,8 @@ compute_averages(void)
 	int					ncpus, nthreads, nshared;
 	uint32_t			factor_now, average_now, load_now = 0;
 	sched_average_t		avg;
-
+	uint64_t			abstime;
+	
 	/*
 	 *	Retrieve counts, ignoring
 	 *	the current thread.
@@ -155,6 +159,13 @@ compute_averages(void)
 	}
 
 	/*
+	 *	Sample total running threads.
+	 */
+	sched_nrun = nthreads;
+	
+#if defined(CONFIG_SCHED_TRADITIONAL)
+
+	/*
 	 *	The conversion factor consists of
 	 *	two components: a fixed value based
 	 *	on the absolute time unit, and a
@@ -166,11 +177,6 @@ compute_averages(void)
 	 *	are discarded.
 	 */
 	sched_pri_shift = sched_fixed_shift - sched_load_shifts[load_now];
-
-	/*
-	 *	Sample total running threads.
-	 */
-	sched_nrun = nthreads;
 
 	/*
 	 * Compute old-style Mach load averages.
@@ -186,14 +192,16 @@ compute_averages(void)
 						(average_now * (LOAD_SCALE - fract[i]))) / LOAD_SCALE;
 		}
 	}
+#endif /* CONFIG_SCHED_TRADITIONAL */
 
 	/*
 	 *	Compute averages in other components.
 	 */
+	abstime = mach_absolute_time();
 	for (avg = sched_average; avg->comp != NULL; ++avg) {
-		if (++avg->tick >= avg->period) {
+		if (abstime >= avg->deadline) {
 			(*avg->comp)(avg->param);
-			avg->tick = 0;
+			avg->deadline = abstime + avg->period * sched_one_second_interval;
 		}
 	}
 }

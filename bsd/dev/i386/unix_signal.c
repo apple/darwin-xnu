@@ -54,10 +54,10 @@
 #include <i386/machine_routines.h>
 #include <i386/seg.h>
 
+#include <machine/pal_routines.h>
+
 #include <sys/kdebug.h>
-
 #include <sys/sdt.h>
-
 
 
 /* Forward: */
@@ -610,6 +610,8 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 	        goto bad;
 	ml_fp_setvalid(FALSE);
 
+	/* Tell the PAL layer about the signal */
+	pal_set_signal_delivery( thread );
 
 	proc_lock(p);
 

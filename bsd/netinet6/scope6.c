@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2009-2010 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/scope6.c,v 1.3 2002/03/25 10:12:51 ume Exp $	*/
 /*	$KAME: scope6.c,v 1.10 2000/07/24 13:29:31 itojun Exp $	*/
 
@@ -36,6 +64,8 @@
 #include <sys/socket.h>
 #include <sys/systm.h>
 #include <sys/queue.h>
+#include <sys/syslog.h>
+#include <sys/mcache.h>
 
 #include <net/route.h>
 #include <net/if.h>
@@ -47,13 +77,12 @@
 
 extern lck_mtx_t *scope6_mutex;
 
-struct scope6_id {
-	/*
-	 * 16 is correspondent to 4bit multicast scope field.
-	 * i.e. from node-local to global with some reserved/unassigned types.
-	 */
-	u_int32_t s6id_list[16];
-};
+#ifdef ENABLE_DEFAULT_SCOPE
+int ip6_use_defzone = 1;
+#else
+int ip6_use_defzone = 0;
+#endif
+
 static size_t if_scope_indexlim = 8;
 struct scope6_id *scope6_ids = NULL;
 
@@ -103,6 +132,7 @@ scope6_ifattach(
 	 * XXX: IPV6_ADDR_SCOPE_xxx macros are not standard.
 	 * Should we rather hardcode here?
 	 */
+	SID.s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL] = ifp->if_index;
 	SID.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] = ifp->if_index;
 #if MULTI_SCOPE
 	/* by default, we don't care about scope boundary for these scopes. */
@@ -133,14 +163,14 @@ scope6_set(
 
 	/*
 	 * TODO(XXX): after setting, we should reflect the changes to
-	 * interface addresses, routing table entries, PCB entries... 
+	 * interface addresses, routing table entries, PCB entries...
 	 */
 
 	lck_mtx_lock(scope6_mutex);
 	for (i = 0; i < 16; i++) {
 		if (idlist[i] &&
 		    idlist[i] != scope6_ids[ifp->if_index].s6id_list[i]) {
-			if (i == IPV6_ADDR_SCOPE_LINKLOCAL &&
+			if (i == IPV6_ADDR_SCOPE_INTFACELOCAL &&
 			    idlist[i] > if_index) {
 				/*
 				 * XXX: theoretically, there should be no
@@ -216,8 +246,8 @@ struct in6_addr *addr;
 		 * return scope doesn't work.
 		 */
 		switch (scope) {
-		case IPV6_ADDR_SCOPE_NODELOCAL:
-			return IPV6_ADDR_SCOPE_NODELOCAL;
+		case IPV6_ADDR_SCOPE_INTFACELOCAL:
+			return IPV6_ADDR_SCOPE_INTFACELOCAL;
 			break;
 		case IPV6_ADDR_SCOPE_LINKLOCAL:
 			return IPV6_ADDR_SCOPE_LINKLOCAL;
@@ -231,11 +261,15 @@ struct in6_addr *addr;
 		}
 	}
 
+	/*
+	 * Regard loopback and unspecified addresses as global, since
+	 * they have no ambiguity.
+	 */
 	if (bcmp(&in6addr_loopback, addr, sizeof(*addr) - 1) == 0) {
 		if (addr->s6_addr8[15] == 1) /* loopback */
-			return IPV6_ADDR_SCOPE_NODELOCAL;
-		if (addr->s6_addr8[15] == 0) /* unspecified */
 			return IPV6_ADDR_SCOPE_LINKLOCAL;
+		if (addr->s6_addr8[15] == 0) /* unspecified */
+			return IPV6_ADDR_SCOPE_GLOBAL; /* XXX: correct? */
 	}
 
 	return IPV6_ADDR_SCOPE_GLOBAL;
@@ -282,6 +316,106 @@ in6_addr2scopeid(
 	return retid;
 }
 
+/*
+ * Validate the specified scope zone ID in the sin6_scope_id field.  If the ID
+ * is unspecified (=0), needs to be specified, and the default zone ID can be
+ * used, the default value will be used.
+ * This routine then generates the kernel-internal form: if the address scope
+ * of is interface-local or link-local, embed the interface index in the
+ * address.
+ */
+int
+sa6_embedscope(struct sockaddr_in6 *sin6, int defaultok)
+{
+	struct ifnet *ifp;
+	u_int32_t zoneid;
+
+	if ((zoneid = sin6->sin6_scope_id) == 0 && defaultok)
+		zoneid = scope6_addr2default(&sin6->sin6_addr);
+
+	if (zoneid != 0 &&
+	    (IN6_IS_SCOPE_LINKLOCAL(&sin6->sin6_addr) ||
+	    IN6_IS_ADDR_MC_INTFACELOCAL(&sin6->sin6_addr))) {
+		/*
+		 * At this moment, we only check interface-local and
+		 * link-local scope IDs, and use interface indices as the
+		 * zone IDs assuming a one-to-one mapping between interfaces
+		 * and links.
+		 */
+		if (if_index < zoneid)
+			return (ENXIO);
+		ifnet_head_lock_shared();
+		ifp = ifindex2ifnet[zoneid];
+		if (ifp == NULL) {/* XXX: this can happen for some OS */
+			ifnet_head_done();
+			return (ENXIO);
+		}
+		ifnet_head_done();
+		/* XXX assignment to 16bit from 32bit variable */
+		sin6->sin6_addr.s6_addr16[1] = htons(zoneid & 0xffff);
+
+		sin6->sin6_scope_id = 0;
+	}
+
+	return 0;
+}
+
+void
+rtkey_to_sa6(struct rtentry *rt, struct sockaddr_in6 *sin6)
+{
+	VERIFY(rt_key(rt)->sa_family == AF_INET6);
+
+	*sin6 = *((struct sockaddr_in6 *)rt_key(rt));
+	sin6->sin6_scope_id = 0;
+}
+
+void
+rtgw_to_sa6(struct rtentry *rt, struct sockaddr_in6 *sin6)
+{
+	VERIFY(rt->rt_flags & RTF_GATEWAY);
+
+	*sin6 = *((struct sockaddr_in6 *)rt->rt_gateway);
+	sin6->sin6_scope_id = 0;
+}
+
+/*
+ * generate standard sockaddr_in6 from embedded form.
+ */
+int
+sa6_recoverscope(struct sockaddr_in6 *sin6)
+{
+	u_int32_t zoneid;
+
+	if (sin6->sin6_scope_id != 0) {
+		log(LOG_NOTICE,
+		    "sa6_recoverscope: assumption failure (non 0 ID): %s%%%d\n",
+		    ip6_sprintf(&sin6->sin6_addr), sin6->sin6_scope_id);
+		/* XXX: proceed anyway... */
+	}
+	if (IN6_IS_SCOPE_LINKLOCAL(&sin6->sin6_addr) ||
+	    IN6_IS_ADDR_MC_INTFACELOCAL(&sin6->sin6_addr)) {
+		/*
+		 * KAME assumption: link id == interface id
+		 */
+		zoneid = ntohs(sin6->sin6_addr.s6_addr16[1]);
+		if (zoneid) {
+			/* sanity check */
+			if (if_index < zoneid)
+				return (ENXIO);
+			ifnet_head_lock_shared();
+			if (ifindex2ifnet[zoneid] == NULL) {
+				ifnet_head_done();
+				return (ENXIO);
+			}
+			ifnet_head_done();
+			sin6->sin6_addr.s6_addr16[1] = 0;
+			sin6->sin6_scope_id = zoneid;
+		}
+	}
+
+	return 0;
+}
+
 void
 scope6_setdefault(
 	struct ifnet *ifp)	/* note that this might be NULL */
@@ -294,11 +428,14 @@ scope6_setdefault(
 	 */
 	lck_mtx_lock(scope6_mutex);
 	if (ifp) {
+		scope6_ids[0].s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL] =
+			ifp->if_index;
 		scope6_ids[0].s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] =
 			ifp->if_index;
-	}
-	else
+	} else {
+		scope6_ids[0].s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL] = 0;
 		scope6_ids[0].s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL] = 0;
+	}
 	lck_mtx_unlock(scope6_mutex);
 }
 
@@ -328,3 +465,93 @@ scope6_addr2default(
 	lck_mtx_unlock(scope6_mutex);
 	return (id);
 }
+
+/*
+ * Determine the appropriate scope zone ID for in6 and ifp.  If ret_id is
+ * non NULL, it is set to the zone ID.  If the zone ID needs to be embedded
+ * in the in6_addr structure, in6 will be modified.
+ *
+ * ret_id - unnecessary?
+ */
+int
+in6_setscope(struct in6_addr *in6, struct ifnet *ifp, u_int32_t *ret_id)
+{
+	int scope;
+	u_int32_t zoneid = 0;
+	int index = ifp->if_index;
+
+#ifdef DIAGNOSTIC
+	if (scope6_ids == NULL) { /* should not happen */
+		panic("in6_setscope: scope array is NULL");
+		/* NOTREACHED */
+	}
+#endif
+
+	/*
+	 * special case: the loopback address can only belong to a loopback
+	 * interface.
+	 */
+	if (IN6_IS_ADDR_LOOPBACK(in6)) {
+		if (!(ifp->if_flags & IFF_LOOPBACK)) {
+			return (EINVAL);
+		} else {
+			if (ret_id != NULL)
+				*ret_id = 0; /* there's no ambiguity */
+			return (0);
+		}
+	}
+
+	scope = in6_addrscope(in6);
+
+#define SID scope6_ids[index]
+	lck_mtx_lock(scope6_mutex);
+	switch (scope) {
+	case IPV6_ADDR_SCOPE_INTFACELOCAL: /* should be interface index */
+		zoneid = SID.s6id_list[IPV6_ADDR_SCOPE_INTFACELOCAL];
+		break;
+
+	case IPV6_ADDR_SCOPE_LINKLOCAL:
+		zoneid = SID.s6id_list[IPV6_ADDR_SCOPE_LINKLOCAL];
+		break;
+
+	case IPV6_ADDR_SCOPE_SITELOCAL:
+		zoneid = SID.s6id_list[IPV6_ADDR_SCOPE_SITELOCAL];
+		break;
+
+	case IPV6_ADDR_SCOPE_ORGLOCAL:
+		zoneid = SID.s6id_list[IPV6_ADDR_SCOPE_ORGLOCAL];
+		break;
+#undef SID
+	default:
+		zoneid = 0;	/* XXX: treat as global. */
+		break;
+	}
+	lck_mtx_unlock(scope6_mutex);
+
+	if (ret_id != NULL)
+		*ret_id = zoneid;
+
+	if (IN6_IS_SCOPE_LINKLOCAL(in6) || IN6_IS_ADDR_MC_INTFACELOCAL(in6))
+		in6->s6_addr16[1] = htons(zoneid & 0xffff); /* XXX */
+
+	return (0);
+}
+
+/*
+ * Just clear the embedded scope identifier.  Return 0 if the original address
+ * is intact; return non 0 if the address is modified.
+ */
+int
+in6_clearscope(struct in6_addr *in6)
+{
+	int modified = 0;
+
+	if (IN6_IS_SCOPE_LINKLOCAL(in6) || IN6_IS_ADDR_MC_INTFACELOCAL(in6)) {
+		if (in6->s6_addr16[1] != 0)
+			modified = 1;
+		in6->s6_addr16[1] = 0;
+	}
+
+	return (modified);
+}
+

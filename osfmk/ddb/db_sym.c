@@ -185,7 +185,7 @@ db_add_symbol_table(
 		st->map_pointer = 0;
 	else
 		st->map_pointer = map_pointer;
-	strcpy(st->name, name);
+	strlcpy(st->name, name, sizeof (st->name));
 	st->minsym = minsym;
 	st->maxsym = maxsym;
 	if (maxsym == 0)
@@ -1329,7 +1329,7 @@ db_clone_symtabXXX(
 	}
 
 	*st = *st_src;			/* bulk copy src -> dest	*/
-	strcpy(st->name, cloner);	/* new name			*/
+	strlcpy(st->name, cloner, sizeof (st->name));	/* new name	*/
 	st->private = memp;		/* copy symbols			*/
 	bcopy((const char *)st_src->private, st->private, size);
 	st->start = memp + sizeof(int);	/* fixup pointers to symtab	*/

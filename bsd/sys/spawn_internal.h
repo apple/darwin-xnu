@@ -30,7 +30,7 @@
 /*
  * [SPN] Support for _POSIX_SPAWN
  *
- * This file contains intern datastructures which are externally represented
+ * This file contains internal data structures which are externally represented
  * as opaque void pointers to prevent introspection.  This permits us to
  * change the underlying implementation of the code to maintain it or to
  * support new features, as needed, without the consumer needing to recompile
@@ -110,7 +110,8 @@ typedef struct _posix_spawnattr {
 typedef enum {
 	PSFA_OPEN = 0,
 	PSFA_CLOSE = 1,
-	PSFA_DUP2 = 2
+	PSFA_DUP2 = 2,
+	PSFA_INHERIT = 3
 } psfa_t;
 
 

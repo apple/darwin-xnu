@@ -101,6 +101,16 @@ struct user_mac {
 	user_size_t	m_buflen;
 	user_addr_t	m_string;
 };
+
+struct user32_mac {
+	uint32_t	m_buflen;
+	uint32_t	m_string;
+};
+
+struct user64_mac {
+	uint64_t	m_buflen;
+	uint64_t	m_string;
+};
 #endif /* KERNEL */
 
 /*
@@ -130,6 +140,14 @@ struct user_mac {
 #define MAC_DEVICE_USB		"USB"
 #define MAC_DEVICE_FIREWIRE	"FireWire"
 #define MAC_DEVICE_TYPE_KEY	"DeviceType"
+
+/*
+ * Flags for mac_proc_check_suspend_resume()
+ */
+#define MAC_PROC_CHECK_SUSPEND   		0
+#define MAC_PROC_CHECK_RESUME    		1
+#define MAC_PROC_CHECK_HIBERNATE 		2
+#define MAC_PROC_CHECK_SHUTDOWN_SOCKETS	3
 
 #ifndef KERNEL
 /*

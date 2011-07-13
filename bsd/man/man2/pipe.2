@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)pipe.2	8.1 (Berkeley) 6/4/93
 .\"
-.Dd June 4, 1993
+.Dd February 17, 2011
 .Dt PIPE 2
 .Os BSD 4
 .Sh NAME
@@ -82,6 +82,12 @@ signal.
 Widowing a pipe is the only way to deliver end-of-file to a reader:
 after the reader consumes any buffered data, reading a widowed pipe
 returns a zero count.
+.Pp
+The generation of the
+.Dv SIGPIPE
+signal can be suppressed using the
+.Dv F_SETNOSIGPIPE
+fcntl command.
 .Sh RETURN VALUES
 On successful creation of the pipe, zero is returned. Otherwise, 
 a value of -1 is returned and the variable
@@ -111,6 +117,7 @@ The system file table is full.
 .Xr fork 2 ,
 .Xr read 2 ,
 .Xr socketpair 2 ,
+.Xr fcntl 2 ,
 .Xr write 2
 .Sh HISTORY
 A

@@ -28,7 +28,6 @@
 
 #include <vm/pmap.h>
 #include <sys/kdebug.h>
-#include <kern/debug.h>
 
 #ifdef MACH_KERNEL_PRIVATE
 
@@ -44,9 +43,8 @@
 	simple_unlock(&(pmap)->lock);		\
 }
 
-
 #define PMAP_UPDATE_TLBS(pmap, s, e)					\
-	pmap_flush_tlbs(pmap)
+	pmap_flush_tlbs(pmap, s, e)
 
 #define	iswired(pte)	((pte) & INTEL_PTE_WIRED)
 
@@ -60,6 +58,9 @@ extern	boolean_t	pmap_trace;
 #define PMAP_TRACE(x,a,b,c,d,e)	KERNEL_DEBUG(x,a,b,c,d,e)
 #endif /* PMAP_TRACES */
 
+#define PMAP_TRACE_CONSTANT(x,a,b,c,d,e)				\
+	KERNEL_DEBUG_CONSTANT(x,a,b,c,d,e);				\
+
 void		pmap_expand_pml4(
 			pmap_t		map,
 			vm_map_offset_t	v);
@@ -67,12 +68,26 @@ void		pmap_expand_pml4(
 void		pmap_expand_pdpt(
 			pmap_t		map,
 			vm_map_offset_t	v);
-extern void 	pmap_flush_tlbs(pmap_t pmap);
 
-#if	defined(__x86_64__)
-extern const boolean_t cpu_64bit;
-#else
+void		phys_attribute_set(
+			ppnum_t		phys,
+			int		bits);
+
+void		pmap_set_reference(
+			ppnum_t pn);
+
+boolean_t	phys_page_exists(
+			ppnum_t pn);
+
+void pmap_flush_tlbs(pmap_t, vm_map_offset_t, vm_map_offset_t);
+
+void
+pmap_update_cache_attributes_locked(ppnum_t, unsigned);
+
+#if CONFIG_YONAH
 extern boolean_t cpu_64bit;
+#else
+extern const boolean_t cpu_64bit;
 #endif
 
 /*
@@ -99,8 +114,8 @@ extern boolean_t cpu_64bit;
 PV HASHING Changes - JK 1/2007
 
 Pve's establish physical to virtual mappings.  These are used for aliasing of a 
-physical page to (potentially many) virtual addresses within pmaps. In the previous 
-implementation the structure of the pv_entries (each 16 bytes in size) was
+physical page to (potentially many) virtual addresses within pmaps. In the
+previous implementation the structure of the pv_entries (each 16 bytes in size) was
 
 typedef struct pv_entry {
     struct pv_entry_t    next;
@@ -108,20 +123,23 @@ typedef struct pv_entry {
     vm_map_offset_t   va;
 } *pv_entry_t;
 
-An initial array of these is created at boot time, one per physical page of memory, 
-indexed by the physical page number. Additionally, a pool of entries is created from a 
-pv_zone to be used as needed by pmap_enter() when it is creating new mappings.  
-Originally, we kept this pool around because the code in pmap_enter() was unable to 
-block if it needed an entry and none were available - we'd panic.  Some time ago I 
-restructured the pmap_enter() code so that for user pmaps it can block while zalloc'ing 
-a pv structure and restart, removing a panic from the code (in the case of the kernel 
-pmap we cannot block and still panic, so, we keep a separate hot pool for use only on 
-kernel pmaps).  The pool has not been removed since there is a large performance gain 
-keeping freed pv's around for reuse and not suffering the overhead of zalloc for every new pv we need.
+An initial array of these is created at boot time, one per physical page of
+memory, indexed by the physical page number. Additionally, a pool of entries
+is created from a pv_zone to be used as needed by pmap_enter() when it is
+creating new mappings.  Originally, we kept this pool around because the code
+in pmap_enter() was unable to block if it needed an entry and none were
+available - we'd panic.  Some time ago I restructured the pmap_enter() code
+so that for user pmaps it can block while zalloc'ing a pv structure and restart,
+removing a panic from the code (in the case of the kernel pmap we cannot block
+and still panic, so, we keep a separate hot pool for use only on kernel pmaps).
+The pool has not been removed since there is a large performance gain keeping
+freed pv's around for reuse and not suffering the overhead of zalloc for every
+new pv we need.
 
-As pmap_enter() created new mappings it linked the new pve's for them off the fixed 
-pv array for that ppn (off the next pointer).  These pve's are accessed for several 
-operations, one of them being address space teardown.  In that case, we basically do this
+As pmap_enter() created new mappings it linked the new pve's for them off the
+fixed pv array for that ppn (off the next pointer).  These pve's are accessed
+for several operations, one of them being address space teardown. In that case,
+we basically do this
 
 	for (every page/pte in the space) {
 		calc pve_ptr from the ppn in the pte
@@ -133,124 +151,197 @@ operations, one of them being address space teardown.  In that case, we basicall
 		}
 	}
 
-The problem arose when we were running, say 8000 (or even 2000) apache or other processes 
-and one or all terminate. The list hanging off each pv array entry could have thousands of 
-entries.  We were continuously linearly searching each of these lists as we stepped through 
-the address space we were tearing down.  Because of the locks we hold, likely taking a cache 
-miss for each node,  and interrupt disabling for MP issues the system became completely 
-unresponsive for many seconds while we did this.
+The problem arose when we were running, say 8000 (or even 2000) apache or
+other processes and one or all terminate. The list hanging off each pv array
+entry could have thousands of entries.  We were continuously linearly searching
+each of these lists as we stepped through the address space we were tearing
+down.  Because of the locks we hold, likely taking a cache miss for each node,
+and interrupt disabling for MP issues the system became completely unresponsive
+for many seconds while we did this.
 
-Realizing that pve's are accessed in two distinct ways (linearly running the list by ppn 
-for operations like pmap_page_protect and finding and modifying/removing a single pve as 
-part of pmap_enter processing) has led to modifying the pve structures and databases.
+Realizing that pve's are accessed in two distinct ways (linearly running the
+list by ppn for operations like pmap_page_protect and finding and
+modifying/removing a single pve as part of pmap_enter processing) has led to
+modifying the pve structures and databases.
 
-There are now two types of pve structures.  A "rooted" structure which is basically the 
-original structure accessed in an array by ppn, and a ''hashed'' structure accessed on a 
-hash list via a hash of [pmap, vaddr].  These have been designed with the two goals of 
-minimizing wired memory and making the lookup of a ppn faster.  Since a vast majority of 
-pages in the system are not aliased and hence represented by a single pv entry I've kept 
-the rooted entry size as small as possible because there is one of these dedicated for 
-every physical page of memory.  The hashed pve's are larger due to the addition of the hash 
-link and the ppn entry needed for matching while running the hash list to find the entry we 
-are looking for.  This way, only systems that have lots of aliasing (like 2000+ httpd procs) 
-will pay the extra memory price. Both structures have the same first three fields allowing 
-some simplification in the code.
+There are now two types of pve structures.  A "rooted" structure which is
+basically the original structure accessed in an array by ppn, and a ''hashed''
+structure accessed on a hash list via a hash of [pmap, vaddr]. These have been
+designed with the two goals of minimizing wired memory and making the lookup of
+a ppn faster.  Since a vast majority of pages in the system are not aliased
+and hence represented by a single pv entry I've kept the rooted entry size as
+small as possible because there is one of these dedicated for every physical
+page of memory.  The hashed pve's are larger due to the addition of the hash
+link and the ppn entry needed for matching while running the hash list to find
+the entry we are looking for.  This way, only systems that have lots of
+aliasing (like 2000+ httpd procs) will pay the extra memory price. Both
+structures have the same first three fields allowing some simplification in
+the code.
 
 They have these shapes
 
 typedef struct pv_rooted_entry {
-        queue_head_t qlink;
-        vm_map_offset_t va;
-        pmap_t          pmap;
+	queue_head_t		qlink;
+        vm_map_offset_t		va;
+	pmap_t			pmap;
 } *pv_rooted_entry_t;
 
 
 typedef struct pv_hashed_entry {
-  queue_head_t qlink;
-  vm_map_offset_t va;
-  pmap_t        pmap;
-  ppnum_t ppn;
-  struct pv_hashed_entry *nexth;
+	queue_head_t		qlink;
+	vm_map_offset_t		va;
+	pmap_t			pmap;
+	ppnum_t 		ppn;
+	struct pv_hashed_entry *nexth;
 } *pv_hashed_entry_t;
 
-The main flow difference is that the code is now aware of the rooted entry and the hashed 
-entries.  Code that runs the pv list still starts with the rooted entry and then continues 
-down the qlink onto the hashed entries.  Code that is looking up a specific pv entry first 
-checks the rooted entry and then hashes and runs the hash list for the match. The hash list 
-lengths are much smaller than the original pv lists that contained all aliases for the specific ppn.
+The main flow difference is that the code is now aware of the rooted entry and
+the hashed entries.  Code that runs the pv list still starts with the rooted
+entry and then continues down the qlink onto the hashed entries.  Code that is
+looking up a specific pv entry first checks the rooted entry and then hashes
+and runs the hash list for the match. The hash list lengths are much smaller
+than the original pv lists that contained all aliases for the specific ppn.
 
 */
 
-typedef struct pv_rooted_entry {     /* first three entries must match pv_hashed_entry_t */
-        queue_head_t qlink;
-	vm_map_offset_t	va;		/* virtual address for mapping */
-	pmap_t		pmap;		/* pmap where mapping lies */
+typedef struct pv_rooted_entry {
+	/* first three entries must match pv_hashed_entry_t */
+        queue_head_t		qlink;
+	vm_map_offset_t		va;	/* virtual address for mapping */
+	pmap_t			pmap;	/* pmap where mapping lies */
 } *pv_rooted_entry_t;
 
 #define PV_ROOTED_ENTRY_NULL	((pv_rooted_entry_t) 0)
 
-
-typedef struct pv_hashed_entry {     /* first three entries must match pv_rooted_entry_t */
-	queue_head_t qlink;
-	vm_map_offset_t va;
-	pmap_t        pmap;
-	ppnum_t ppn;
-	struct pv_hashed_entry *nexth;
+typedef struct pv_hashed_entry {
+	/* first three entries must match pv_rooted_entry_t */
+	queue_head_t		qlink;
+	vm_map_offset_t		va;
+	pmap_t			pmap;
+	ppnum_t			ppn;
+	struct pv_hashed_entry	*nexth;
 } *pv_hashed_entry_t;
 
 #define PV_HASHED_ENTRY_NULL ((pv_hashed_entry_t)0)
 
-/* #define PV_DEBUG 1   uncomment to enable some PV debugging code */
+//#define PV_DEBUG 1   /* uncomment to enable some PV debugging code */
 #ifdef PV_DEBUG
 #define CHK_NPVHASH() if(0 == npvhash) panic("npvhash uninitialized");
 #else
-#define CHK_NPVHASH()
+#define CHK_NPVHASH(x)
 #endif
 
 #define NPVHASH 4095   /* MUST BE 2^N - 1 */
-#define PV_HASHED_LOW_WATER_MARK 5000
-#define PV_HASHED_KERN_LOW_WATER_MARK 400
-#define PV_HASHED_ALLOC_CHUNK 2000
-#define PV_HASHED_KERN_ALLOC_CHUNK 200
+#define PV_HASHED_LOW_WATER_MARK_DEFAULT 5000
+#define PV_HASHED_KERN_LOW_WATER_MARK_DEFAULT 2000
+#define PV_HASHED_ALLOC_CHUNK_INITIAL 2000
+#define PV_HASHED_KERN_ALLOC_CHUNK_INITIAL 200
 
-#define	PV_HASHED_ALLOC(pvh_e) { \
-	simple_lock(&pv_hashed_free_list_lock); \
-	if ((pvh_e = pv_hashed_free_list) != 0) { \
-	  pv_hashed_free_list = (pv_hashed_entry_t)pvh_e->qlink.next;	\
-	  pv_hashed_free_count--;					\
-	  if (pv_hashed_free_count < PV_HASHED_LOW_WATER_MARK)		\
-		  if (hw_compare_and_store(0,1,(u_int *)&mappingrecurse)) \
-			  thread_call_enter(mapping_adjust_call);	\
-	}								\
-	simple_unlock(&pv_hashed_free_list_lock); \
+extern volatile uint32_t	mappingrecurse;
+extern uint32_t  pv_hashed_low_water_mark, pv_hashed_kern_low_water_mark;
+
+/*
+ * PV hash locking
+ */
+
+#define LOCK_PV_HASH(hash)	lock_hash_hash(hash)
+#define UNLOCK_PV_HASH(hash)	unlock_hash_hash(hash)
+extern uint32_t npvhash;
+extern pv_hashed_entry_t	*pv_hash_table;  /* hash lists */
+extern pv_hashed_entry_t	pv_hashed_free_list;
+extern pv_hashed_entry_t	pv_hashed_kern_free_list;
+decl_simple_lock_data(extern, pv_hashed_free_list_lock)
+decl_simple_lock_data(extern, pv_hashed_kern_free_list_lock)
+decl_simple_lock_data(extern, pv_hash_table_lock)
+
+extern zone_t		pv_hashed_list_zone;	/* zone of pv_hashed_entry
+						 * structures */
+
+extern uint32_t		pv_hashed_free_count;
+extern uint32_t		pv_hashed_kern_free_count;
+/*
+ *	Each entry in the pv_head_table is locked by a bit in the
+ *	pv_lock_table.  The lock bits are accessed by the address of
+ *	the frame they lock.
+ */
+#define pv_lock_table_size(n)	(((n)+BYTE_SIZE-1)/BYTE_SIZE)
+#define pv_hash_lock_table_size(n)  (((n)+BYTE_SIZE-1)/BYTE_SIZE)
+extern char		*pv_lock_table;		/* pointer to array of bits */
+extern char		*pv_hash_lock_table;
+extern pv_rooted_entry_t pv_head_table;	/* array of entries, one per page */
+
+extern event_t mapping_replenish_event;
+
+static inline void	PV_HASHED_ALLOC(pv_hashed_entry_t *pvh_ep) {
+
+	simple_lock(&pv_hashed_free_list_lock);
+	/* If the kernel reserved pool is low, let non-kernel mappings allocate
+	 * synchronously, possibly subject to a throttle.
+	 */
+	if ((pv_hashed_kern_free_count >= pv_hashed_kern_low_water_mark) &&
+	    (*pvh_ep = pv_hashed_free_list) != 0) {
+		pv_hashed_free_list = (pv_hashed_entry_t)(*pvh_ep)->qlink.next;
+		pv_hashed_free_count--;
+	}
+
+	simple_unlock(&pv_hashed_free_list_lock);
+
+	if (pv_hashed_free_count < pv_hashed_low_water_mark) {
+		if (!mappingrecurse && hw_compare_and_store(0,1, &mappingrecurse))
+			thread_wakeup(&mapping_replenish_event);
+	}
 }
 
-#define	PV_HASHED_FREE_LIST(pvh_eh, pvh_et, pv_cnt) {	\
-	simple_lock(&pv_hashed_free_list_lock); \
-	pvh_et->qlink.next = (queue_entry_t)pv_hashed_free_list;	\
-	pv_hashed_free_list = pvh_eh; \
-	pv_hashed_free_count += pv_cnt;		  \
-	simple_unlock(&pv_hashed_free_list_lock); \
+static inline void	PV_HASHED_FREE_LIST(pv_hashed_entry_t pvh_eh, pv_hashed_entry_t pvh_et, int pv_cnt) {
+	simple_lock(&pv_hashed_free_list_lock);
+	pvh_et->qlink.next = (queue_entry_t)pv_hashed_free_list;
+	pv_hashed_free_list = pvh_eh;
+	pv_hashed_free_count += pv_cnt;
+	simple_unlock(&pv_hashed_free_list_lock);
 }
 
-#define	PV_HASHED_KERN_ALLOC(pvh_e) { \
-	simple_lock(&pv_hashed_kern_free_list_lock); \
-	if ((pvh_e = pv_hashed_kern_free_list) != 0) { \
-	  pv_hashed_kern_free_list = (pv_hashed_entry_t)pvh_e->qlink.next;	\
-	  pv_hashed_kern_free_count--;					\
-	  if (pv_hashed_kern_free_count < PV_HASHED_KERN_LOW_WATER_MARK) \
-		  if (hw_compare_and_store(0,1,(u_int *)&mappingrecurse)) \
-			  thread_call_enter(mapping_adjust_call);	\
-	}								\
-	simple_unlock(&pv_hashed_kern_free_list_lock); \
+extern unsigned pmap_kern_reserve_alloc_stat;
+
+static inline void	PV_HASHED_KERN_ALLOC(pv_hashed_entry_t *pvh_e) {
+	simple_lock(&pv_hashed_kern_free_list_lock);
+
+	if ((*pvh_e = pv_hashed_kern_free_list) != 0) {
+		pv_hashed_kern_free_list = (pv_hashed_entry_t)(*pvh_e)->qlink.next;
+		pv_hashed_kern_free_count--;
+		pmap_kern_reserve_alloc_stat++;
+	}
+
+	simple_unlock(&pv_hashed_kern_free_list_lock);
+
+	if (pv_hashed_kern_free_count < pv_hashed_kern_low_water_mark) {
+		if (!mappingrecurse && hw_compare_and_store(0,1, &mappingrecurse))
+			thread_wakeup(&mapping_replenish_event);
+	}
 }
 
-#define	PV_HASHED_KERN_FREE_LIST(pvh_eh, pvh_et, pv_cnt) {	 \
-	simple_lock(&pv_hashed_kern_free_list_lock); \
-	pvh_et->qlink.next = (queue_entry_t)pv_hashed_kern_free_list;	\
-	pv_hashed_kern_free_list = pvh_eh; \
-	pv_hashed_kern_free_count += pv_cnt;	       \
-	simple_unlock(&pv_hashed_kern_free_list_lock); \
+static inline void	PV_HASHED_KERN_FREE_LIST(pv_hashed_entry_t pvh_eh, pv_hashed_entry_t pvh_et, int pv_cnt) {
+	simple_lock(&pv_hashed_kern_free_list_lock);
+	pvh_et->qlink.next = (queue_entry_t)pv_hashed_kern_free_list;
+	pv_hashed_kern_free_list = pvh_eh;
+	pv_hashed_kern_free_count += pv_cnt;
+	simple_unlock(&pv_hashed_kern_free_list_lock);
+}
+
+extern uint64_t pmap_pv_throttle_stat, pmap_pv_throttled_waiters;
+extern event_t pmap_user_pv_throttle_event;
+
+static inline void pmap_pv_throttle(__unused pmap_t p) {
+	pmap_assert(p != kernel_pmap);
+	/* Apply throttle on non-kernel mappings */
+	if (pv_hashed_kern_free_count < (pv_hashed_kern_low_water_mark / 2)) {
+		pmap_pv_throttle_stat++;
+		/* This doesn't need to be strictly accurate, merely a hint
+		 * to eliminate the timeout when the reserve is replenished.
+		 */
+		pmap_pv_throttled_waiters++;
+		assert_wait_timeout(&pmap_user_pv_throttle_event, THREAD_UNINT, 1, 1000 * NSEC_PER_USEC);
+		thread_block(THREAD_CONTINUE_NULL);
+	}
 }
 
 /*
@@ -264,7 +355,6 @@ typedef struct pv_hashed_entry {     /* first three entries must match pv_rooted
 #define lock_pvh_pai(pai)	bit_lock(pai, (void *)pv_lock_table)
 #define unlock_pvh_pai(pai)	bit_unlock(pai, (void *)pv_lock_table)
 #define pvhash(idx)		(&pv_hash_table[idx])
-
 #define lock_hash_hash(hash)	bit_lock(hash, (void *)pv_hash_lock_table)
 #define unlock_hash_hash(hash)	bit_unlock(hash, (void *)pv_hash_lock_table)
 
@@ -279,6 +369,9 @@ typedef struct pv_hashed_entry {     /* first three entries must match pv_rooted
 #define	PHYS_REFERENCED	INTEL_PTE_REF	/* page referenced */
 #define PHYS_MANAGED	INTEL_PTE_VALID /* page is managed */
 #define PHYS_NOENCRYPT	INTEL_PTE_USER	/* no need to encrypt this page in the hibernation image */
+#define	PHYS_NCACHE	INTEL_PTE_NCACHE
+#define	PHYS_PTA	INTEL_PTE_PTA
+#define	PHYS_CACHEABILITY_MASK (INTEL_PTE_PTA | INTEL_PTE_NCACHE)
 
 /*
  *	Amount of virtual memory mapped by one
@@ -325,31 +418,7 @@ typedef struct pv_hashed_entry {     /* first three entries must match pv_rooted
 	unlock_pvh_pai(index);		\
 	mp_enable_preemption();		\
 }
-/*
- * PV hash locking
- */
 
-#define LOCK_PV_HASH(hash)         lock_hash_hash(hash)
-#define UNLOCK_PV_HASH(hash)       unlock_hash_hash(hash)
-extern uint32_t npvhash;
-extern pv_hashed_entry_t     	*pv_hash_table;  /* hash lists */
-extern pv_hashed_entry_t	pv_hashed_free_list;
-extern pv_hashed_entry_t	pv_hashed_kern_free_list;
-decl_simple_lock_data(extern, pv_hashed_free_list_lock)
-decl_simple_lock_data(extern, pv_hashed_kern_free_list_lock)
-decl_simple_lock_data(extern, pv_hash_table_lock)
-
-extern zone_t		pv_hashed_list_zone;	/* zone of pv_hashed_entry structures */
-
-extern int			pv_hashed_free_count;
-extern int			pv_hashed_kern_free_count;
-#define pv_lock_table_size(n)	(((n)+BYTE_SIZE-1)/BYTE_SIZE)
-#define pv_hash_lock_table_size(n)  (((n)+BYTE_SIZE-1)/BYTE_SIZE)
-extern char	*pv_lock_table;		/* pointer to array of bits */
-
-extern char    *pv_hash_lock_table;
-extern pv_rooted_entry_t	pv_head_table;		/* array of entries, one
-							 * per page */
 extern uint64_t pde_mapped_size;
 
 extern char		*pmap_phys_attributes;
@@ -379,23 +448,23 @@ extern uint64_t max_preemption_latency_tsc;
 #define pmap_intr_assert()
 #endif
 
-extern int		nx_enabled;
-extern unsigned int	inuse_ptepages_count;
+extern int 		nx_enabled;
+extern unsigned int    inuse_ptepages_count;
 
 static inline uint32_t
 pvhashidx(pmap_t pmap, vm_map_offset_t va)
 {
 	return ((uint32_t)(uintptr_t)pmap ^
-		((uint32_t)((uint64_t)va >> PAGE_SHIFT) & 0xFFFFFFFF)) &
+		((uint32_t)(va >> PAGE_SHIFT) & 0xFFFFFFFF)) &
 	       npvhash;
 }
+
 
 /*
  * unlinks the pv_hashed_entry_t pvh from the singly linked hash chain.
  * properly deals with the anchor.
  * must be called with the hash locked, does not unlock it
  */
-
 static inline void 
 pmap_pvh_unlink(pv_hashed_entry_t pvh)
 {
@@ -457,7 +526,7 @@ pv_hash_remove(pv_hashed_entry_t pvh_e)
 	remque(&pvh_e->qlink);
 	pmap_pvh_unlink(pvh_e);
 	UNLOCK_PV_HASH(pvhash_idx);
-}
+} 
 
 static inline boolean_t popcnt1(uint64_t distance) {
 	return ((distance & (distance - 1)) == 0);
@@ -639,16 +708,16 @@ pmap_cpc_exit:
 	pmap_pagetable_corruption_log(incident, suppress_reason, action, pmap, vaddr, &cpte, *ppnp, pvpmap, pvva);
 	return action;
 }
+
 /*
  * Remove pv list entry.
  * Called with pv_head_table entry locked.
  * Returns pv entry to be freed (or NULL).
  */
-
 static inline __attribute__((always_inline)) pv_hashed_entry_t
-pmap_pv_remove( pmap_t		pmap,
-		vm_map_offset_t	vaddr,
-		ppnum_t		*ppnp,
+pmap_pv_remove(pmap_t		pmap,
+	       vm_map_offset_t	vaddr,
+    		ppnum_t		*ppnp,
 		pt_entry_t	*pte) 
 {
 	pv_hashed_entry_t       pvh_e;
@@ -721,7 +790,8 @@ pmap_pv_remove_retry:
 		LOCK_PV_HASH(pvhash_idx);
 		pprevh = pvhash(pvhash_idx);
 		if (PV_HASHED_ENTRY_NULL == *pprevh) {
-			panic("pmap_pv_remove(%p,0x%llx,0x%x): empty hash", pmap, vaddr, ppn);
+			panic("pmap_pv_remove(%p,0x%llx,0x%x): empty hash",
+			      pmap, vaddr, ppn);
 		}
 		pvh_e = *pprevh;
 		pmap_pv_hashlist_walks++;
@@ -735,6 +805,7 @@ pmap_pv_remove_retry:
 			pprevh = &pvh_e->nexth;
 			pvh_e = pvh_e->nexth;
 		}
+
 		if (PV_HASHED_ENTRY_NULL == pvh_e) {
 			pmap_pagetable_corruption_action_t pac = pmap_classify_pagetable_corruption(pmap, vaddr, ppnp, pte, ROOT_PRESENT);
 
@@ -755,6 +826,7 @@ pmap_pv_remove_retry:
 				}
 			}
 		}
+
 		pmap_pv_hashlist_cnts += pv_cnt;
 		if (pmap_pv_hashlist_max < pv_cnt)
 			pmap_pv_hashlist_max = pv_cnt;
@@ -766,4 +838,161 @@ pmap_pv_remove_exit:
 	return pvh_e;
 }
 
+
+extern int 	pt_fake_zone_index;
+static inline void
+PMAP_ZINFO_PALLOC(vm_size_t bytes)
+{
+	thread_t thr = current_thread();
+	task_t task;
+	zinfo_usage_t zinfo;
+
+	thr->tkm_private.alloc += bytes;
+	if (pt_fake_zone_index != -1 && 
+	    (task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
+		OSAddAtomic64(bytes, (int64_t *)&zinfo[pt_fake_zone_index].alloc);
+}
+
+static inline void
+PMAP_ZINFO_PFREE(vm_size_t bytes)
+{
+	thread_t thr = current_thread();
+	task_t task;
+	zinfo_usage_t zinfo;
+
+	thr->tkm_private.free += bytes;
+	if (pt_fake_zone_index != -1 && 
+	    (task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
+		OSAddAtomic64(bytes, (int64_t *)&zinfo[pt_fake_zone_index].free);
+}
+
+extern boolean_t	pmap_initialized;/* Has pmap_init completed? */
+#define valid_page(x) (pmap_initialized && pmap_valid_page(x))
+
+// XXX
+#define HIGH_MEM_BASE  ((uint32_t)( -NBPDE) )  /* shared gdt etc seg addr */ /* XXX64 ?? */
+// XXX
+
+
+int		phys_attribute_test(
+			ppnum_t		phys,
+			int		bits);
+void		phys_attribute_clear(
+			ppnum_t		phys,
+			int		bits);
+
+//#define PCID_DEBUG 1
+#if	PCID_DEBUG
+#define pmap_pcid_log(fmt, args...)					\
+	do {								\
+		kprintf(fmt, ##args);					\
+		printf(fmt, ##args);					\
+	} while(0)
+#else
+#define pmap_pcid_log(fmt, args...)
+#endif
+void	pmap_pcid_configure(void);
+
+#if	defined(__x86_64__)
+/*
+ * The single pml4 page per pmap is allocated at pmap create time and exists
+ * for the duration of the pmap. we allocate this page in kernel vm.
+ * this returns the address of the requested pml4 entry in the top level page.
+ */
+static inline
+pml4_entry_t *
+pmap64_pml4(pmap_t pmap, vm_map_offset_t vaddr)
+{
+#if	PMAP_ASSERT
+	return PHYSMAP_PTOV(&((pml4_entry_t *)pmap->pm_cr3)[(vaddr >> PML4SHIFT) & (NPML4PG-1)]);
+#else
+	return &pmap->pm_pml4[(vaddr >> PML4SHIFT) & (NPML4PG-1)];
+#endif
+}
+
+/*
+ * Returns address of requested PDPT entry in the physmap.
+ */
+static inline pdpt_entry_t *
+pmap64_pdpt(pmap_t pmap, vm_map_offset_t vaddr)
+{
+	pml4_entry_t	newpf;
+	pml4_entry_t	*pml4;
+
+	assert(pmap);
+	if ((vaddr > 0x00007FFFFFFFFFFFULL) &&
+	    (vaddr < 0xFFFF800000000000ULL)) {
+		return (0);
+	}
+
+	pml4 = pmap64_pml4(pmap, vaddr);
+	if (pml4 && ((*pml4 & INTEL_PTE_VALID))) {
+		newpf = *pml4 & PG_FRAME;
+		return &((pdpt_entry_t *) PHYSMAP_PTOV(newpf))
+			[(vaddr >> PDPTSHIFT) & (NPDPTPG-1)];
+	}
+	return (NULL);
+}
+/*
+ * Returns the address of the requested PDE entry in the physmap.
+ */
+static inline pd_entry_t *
+pmap64_pde(pmap_t pmap, vm_map_offset_t vaddr)
+{
+	pdpt_entry_t	newpf;
+	pdpt_entry_t	*pdpt;
+
+	assert(pmap);
+	if ((vaddr > 0x00007FFFFFFFFFFFULL) &&
+	    (vaddr < 0xFFFF800000000000ULL)) {
+		return (0);
+	}
+
+	pdpt = pmap64_pdpt(pmap, vaddr);
+
+	if (pdpt && ((*pdpt & INTEL_PTE_VALID))) {
+		newpf = *pdpt & PG_FRAME;
+		return &((pd_entry_t *) PHYSMAP_PTOV(newpf))
+			[(vaddr >> PDSHIFT) & (NPDPG-1)];
+	}
+	return (NULL);
+}
+
+static inline pd_entry_t     *
+pmap_pde(pmap_t m, vm_map_offset_t v)
+{
+	pd_entry_t     *pde;
+
+	assert(m);
+	pde = pmap64_pde(m, v);
+
+	return pde;
+}
+
+
+/*
+ * return address of mapped pte for vaddr va in pmap pmap.
+ *
+ * In case the pde maps a superpage, return the pde, which, in this case
+ * is the actual page table entry.
+ */
+static inline pt_entry_t *
+pmap_pte(pmap_t pmap, vm_map_offset_t vaddr)
+{
+	pd_entry_t	*pde;
+	pd_entry_t	newpf;
+
+	assert(pmap);
+	pde = pmap_pde(pmap, vaddr);
+
+	if (pde && ((*pde & INTEL_PTE_VALID))) {
+		if (*pde & INTEL_PTE_PS) 
+			return pde;
+		newpf = *pde & PG_FRAME;
+		return &((pt_entry_t *)PHYSMAP_PTOV(newpf))
+			[i386_btop(vaddr) & (ppnum_t)(NPTEPG-1)];
+	}
+	return (NULL);
+}
+#endif
 #endif /* MACH_KERNEL_PRIVATE */

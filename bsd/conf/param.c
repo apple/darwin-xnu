@@ -91,7 +91,8 @@ int	maxprocperuid = NPROC/2;
 int nprocs = 0; /* XXX */
 
 //#define	NTEXT (80 + NPROC / 8)			/* actually the object cache */
-int    desiredvnodes = CONFIG_VNODES;
+int desiredvnodes = 0;				/* desiredvnodes is set explicitly in unix_startup.c */
+uint32_t kern_maxvnodes = 0;		/* global, to be read from the device tree */
 
 #define MAXFILES (OPEN_MAX + 2048)
 int	maxfiles = MAXFILES;

@@ -12,7 +12,6 @@
 #include <mach/mach.h>
 
 extern char  g_target_path[ PATH_MAX ];
-extern int		g_is_under_rosetta;
 
 /*  **************************************************************************************************************
  *	Test accept, bind, connect, listen, socket, recvmsg, sendmsg, recvfrom, sendto, getpeername, getsockname
@@ -213,51 +212,49 @@ int socket_tests( void * the_argp )
 		
 #if 1
 		/* sendfile test. Open libsystem, set up some headers, and send it */
-		if (!g_is_under_rosetta) {
-			struct sf_hdtr		my_sf_hdtr;
-			int					my_libsys_fd;
-			off_t				my_libsys_len;
+		struct sf_hdtr		my_sf_hdtr;
+		int					my_libsys_fd;
+		off_t				my_libsys_len;
 
-			my_libsys_fd = open("/usr/lib/libSystem.dylib", O_RDONLY, 0644);
-			if (my_libsys_fd < 0) {
-				printf( "test failed - could not open /usr/lib/libSystem.dylib\n" );
-			 	close ( my_child_fd );
-				exit ( -1 );
-			}
+		my_libsys_fd = open("/usr/lib/libSystem.dylib", O_RDONLY, 0644);
+		if (my_libsys_fd < 0) {
+			printf( "test failed - could not open /usr/lib/libSystem.dylib\n" );
+			 close ( my_child_fd );
+			exit ( -1 );
+		}
 
-			my_libsys_len = 7+2; /* 2 bytes of header */
-			my_buffer[0] = 's';
-			my_iov[0].iov_base = &my_buffer[0];
-			my_iov[0].iov_len = 1;
-			my_buffer[1] = 'e';
-			my_iov[1].iov_base = &my_buffer[1];
-			my_iov[1].iov_len = 1;
-			my_buffer[2] = 'n';
-			my_iov[2].iov_base = &my_buffer[2];
-			my_iov[2].iov_len = 1;
-			my_buffer[3] = 'd';
-			my_iov[3].iov_base = &my_buffer[3];
-			my_iov[3].iov_len = 1;
+		my_libsys_len = 7+2; /* 2 bytes of header */
+		my_buffer[0] = 's';
+		my_iov[0].iov_base = &my_buffer[0];
+		my_iov[0].iov_len = 1;
+		my_buffer[1] = 'e';
+		my_iov[1].iov_base = &my_buffer[1];
+		my_iov[1].iov_len = 1;
+		my_buffer[2] = 'n';
+		my_iov[2].iov_base = &my_buffer[2];
+		my_iov[2].iov_len = 1;
+		my_buffer[3] = 'd';
+		my_iov[3].iov_base = &my_buffer[3];
+		my_iov[3].iov_len = 1;
 
-			my_sf_hdtr.headers = &my_iov[0];
-			my_sf_hdtr.hdr_cnt = 2;
-			my_sf_hdtr.trailers = &my_iov[2];
-			my_sf_hdtr.trl_cnt = 2;
+		my_sf_hdtr.headers = &my_iov[0];
+		my_sf_hdtr.hdr_cnt = 2;
+		my_sf_hdtr.trailers = &my_iov[2];
+		my_sf_hdtr.trl_cnt = 2;
 			
-	 		my_result = sendfile(my_libsys_fd, my_child_fd, 3, &my_libsys_len, &my_sf_hdtr, 0);
-			if (my_result < 0 || my_libsys_len != 11) {
-				printf( "sendfile failed with error %d - \"%s\" \n", errno, strerror( errno) );
-				close( my_child_fd );
-				exit( -1 );
-			}
+	 	my_result = sendfile(my_libsys_fd, my_child_fd, 3, &my_libsys_len, &my_sf_hdtr, 0);
+		if (my_result < 0 || my_libsys_len != 11) {
+			printf( "sendfile failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			close( my_child_fd );
+			exit( -1 );
+		}
 
-			my_result = close ( my_libsys_fd );
-			if ( my_libsys_fd < 0 ) {
-				printf ( "close failed with error %d - \"%s\" \n", errno, strerror( errno) );
-				close ( my_child_fd );
-				exit ( -1 );
-			}
-		}		
+		my_result = close ( my_libsys_fd );
+		if ( my_libsys_fd < 0 ) {
+			printf ( "close failed with error %d - \"%s\" \n", errno, strerror( errno) );
+			close ( my_child_fd );
+			exit ( -1 );
+		}
 #endif
 
 		/* tell parent we're done */
@@ -332,31 +329,29 @@ int socket_tests( void * the_argp )
 #endif
 
 #if 1
-		if (!g_is_under_rosetta) {
-			size_t neededBytes = 11;
+		size_t neededBytes = 11;
 			
-			/* Check for sendfile output */
-			bzero( (void *)&my_parent_buffer[0], sizeof(my_parent_buffer) );
-			while (neededBytes > 0) {
-				my_result = read( my_accepted_socket, &my_parent_buffer[11-neededBytes], neededBytes );
-				if ( my_result == -1 ) {
-					printf( "read call failed with error %d - \"%s\" \n", errno, strerror( errno) );
-					goto test_failed_exit;
-				} else if (my_result == 0) {
-					break;
-				}
-				neededBytes -= my_result;
-			}
-			
-			if ( neededBytes > 0 ) {
-				printf( "read call returned %ld bytes instead of 11\n", 11 - neededBytes );
+		/* Check for sendfile output */
+		bzero( (void *)&my_parent_buffer[0], sizeof(my_parent_buffer) );
+		while (neededBytes > 0) {
+			my_result = read( my_accepted_socket, &my_parent_buffer[11-neededBytes], neededBytes );
+			if ( my_result == -1 ) {
+				printf( "read call failed with error %d - \"%s\" \n", errno, strerror( errno) );
 				goto test_failed_exit;
+			} else if (my_result == 0) {
+				break;
 			}
+			neededBytes -= my_result;
+		}
+			
+		if ( neededBytes > 0 ) {
+			printf( "read call returned %ld bytes instead of 11\n", 11 - neededBytes );
+			goto test_failed_exit;
+		}
 
-			if ( ! (my_parent_buffer[0] == 's' && my_parent_buffer[1] == 'e' && my_parent_buffer[9] == 'n' && my_parent_buffer[10] == 'd') ) {
-				printf( "read wrong sendfile message from child \n" );
-				goto test_failed_exit;
-			}
+		if ( ! (my_parent_buffer[0] == 's' && my_parent_buffer[1] == 'e' && my_parent_buffer[9] == 'n' && my_parent_buffer[10] == 'd') ) {
+			printf( "read wrong sendfile message from child \n" );
+			goto test_failed_exit;
 		}
 		
 #endif

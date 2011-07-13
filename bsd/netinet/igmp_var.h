@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -68,7 +68,6 @@
 #define _NETINET_IGMP_VAR_H_
 #include <sys/appleapiopts.h>
 
-
 /*
  * Internet Group Management Protocol (IGMP),
  * implementation-specific definitions.
@@ -76,6 +75,48 @@
  * Written by Steve Deering, Stanford, May 1988.
  *
  * MULTICAST Revision: 3.5.1.3
+ */
+
+struct igmpstat_v3 {
+	/*
+	 * Structure header (to insulate ABI changes).
+	 */
+	uint32_t igps_version;		/* version of this structure */
+	uint32_t igps_len;		/* length of this structure */
+	/*
+	 * Message statistics.
+	 */
+	uint64_t igps_rcv_total;	/* total IGMP messages received */
+	uint64_t igps_rcv_tooshort;	/* received with too few bytes */
+	uint64_t igps_rcv_badttl;	/* received with ttl other than 1 */
+	uint64_t igps_rcv_badsum;	/* received with bad checksum */
+	/*
+	 * Query statistics.
+	 */
+	uint64_t igps_rcv_v1v2_queries;	/* received IGMPv1/IGMPv2 queries */
+	uint64_t igps_rcv_v3_queries;	/* received IGMPv3 queries */
+	uint64_t igps_rcv_badqueries;	/* received invalid queries */
+	uint64_t igps_rcv_gen_queries;	/* received general queries */
+	uint64_t igps_rcv_group_queries;/* received group queries */
+	uint64_t igps_rcv_gsr_queries;	/* received group-source queries */
+	uint64_t igps_drop_gsr_queries;	/* dropped group-source queries */
+	/*
+	 * Report statistics.
+	 */
+	uint64_t igps_rcv_reports;	/* received membership reports */
+	uint64_t igps_rcv_badreports;	/* received invalid reports */
+	uint64_t igps_rcv_ourreports;	/* received reports for our groups */
+	uint64_t igps_rcv_nora;		/* received w/o Router Alert option */
+	uint64_t igps_snd_reports;	/* sent membership reports */
+	/*
+	 * Padding for future additions.
+	 */
+	uint64_t __igps_pad[4];
+} __attribute__((aligned(8)));
+
+/*
+ * Old IGMPv2 stat structure for backward compatibility
+ *
  */
 
 struct igmpstat {
@@ -90,41 +131,189 @@ struct igmpstat {
 	u_int	igps_snd_reports;	/* sent membership reports */
 };
 
-#ifdef KERNEL_PRIVATE
-#ifdef KERNEL
+#define IGPS_VERSION_3	3
+#define IGPS_VERSION3_LEN		168
+
+#ifdef PRIVATE
+/*
+ * Per-interface IGMP router version information.
+ */
+#ifndef XNU_KERNEL_PRIVATE
+struct igmp_ifinfo {
+#else
+struct igmp_ifinfo_u {
+#endif /* XNU_KERNEL_PRIVATE */
+	uint32_t igi_ifindex;	/* interface this instance belongs to */
+	uint32_t igi_version;	/* IGMPv3 Host Compatibility Mode */
+	uint32_t igi_v1_timer;	/* IGMPv1 Querier Present timer (s) */
+	uint32_t igi_v2_timer;	/* IGMPv2 Querier Present timer (s) */
+	uint32_t igi_v3_timer;	/* IGMPv3 General Query (interface) timer (s)*/
+	uint32_t igi_flags;	/* IGMP per-interface flags */
+	uint32_t igi_rv;	/* IGMPv3 Robustness Variable */
+	uint32_t igi_qi;	/* IGMPv3 Query Interval (s) */
+	uint32_t igi_qri;	/* IGMPv3 Query Response Interval (s) */
+	uint32_t igi_uri;	/* IGMPv3 Unsolicited Report Interval (s) */
+};
+
+#define IGIF_SILENT	0x00000001	/* Do not use IGMP on this ifp */
+#define IGIF_LOOPBACK	0x00000002	/* Send IGMP reports to loopback */
+
+/*
+ * IGMP version tag.
+ */
+#define IGMP_VERSION_NONE		0 /* Invalid */
+#define IGMP_VERSION_1			1
+#define IGMP_VERSION_2			2
+#define IGMP_VERSION_3			3 /* Default */
+#endif /* PRIVATE */
+
+#ifdef XNU_KERNEL_PRIVATE
+#include <libkern/libkern.h>
+#define IGMP_DEBUG 1
+#ifdef IGMP_DEBUG
+extern char * inet_ntoa(struct in_addr);
+extern int igmp_debug;
+
+#define IGMP_PRINTF(x)	do { if (igmp_debug) printf x; } while (0)
+#else
+#define	IGMP_PRINTF(x)
+#endif
+
+#define	OIGMPSTAT_ADD(name, val)	atomic_add_32(&igmpstat.name , (val))
+#define	OIGMPSTAT_INC(name)		OIGMPSTAT_ADD(name, 1)
+
+#define	IGMPSTAT_ADD(name, val)		atomic_add_64(&igmpstat_v3.name , (val))
+#define	IGMPSTAT_INC(name)		IGMPSTAT_ADD(name, 1)
+
 #define IGMP_RANDOM_DELAY(X) (random() % (X) + 1)
 
-/*
- * States for IGMPv2's leave processing
- */
-#define IGMP_OTHERMEMBER			0
-#define IGMP_IREPORTEDLAST			1
+#define IGMP_MAX_STATE_CHANGES		24 /* Max pending changes per group */
 
 /*
- * We must remember what version the subnet's querier is.
- * We conveniently use the IGMP message type for the proper
- * membership report to keep this state.
+ * IGMP per-group states.
  */
-#define IGMP_V1_ROUTER				IGMP_V1_MEMBERSHIP_REPORT
-#define IGMP_V2_ROUTER				IGMP_V2_MEMBERSHIP_REPORT
+#define IGMP_NOT_MEMBER			0 /* Can garbage collect in_multi */
+#define IGMP_SILENT_MEMBER		1 /* Do not perform IGMP for group */
+#define IGMP_REPORTING_MEMBER		2 /* IGMPv1/2/3 we are reporter */
+#define IGMP_IDLE_MEMBER		3 /* IGMPv1/2 we reported last */
+#define IGMP_LAZY_MEMBER		4 /* IGMPv1/2 other member reporting */
+#define IGMP_SLEEPING_MEMBER		5 /* IGMPv1/2 start query response */
+#define IGMP_AWAKENING_MEMBER		6 /* IGMPv1/2 group timer will start */
+#define IGMP_G_QUERY_PENDING_MEMBER	7 /* IGMPv3 group query pending */
+#define IGMP_SG_QUERY_PENDING_MEMBER	8 /* IGMPv3 source query pending */
+#define IGMP_LEAVING_MEMBER		9 /* IGMPv3 dying gasp (pending last */
+					  /* retransmission of INCLUDE {}) */
+/*
+ * IGMPv3 protocol control variables.
+ */
+#define IGMP_RV_INIT		2	/* Robustness Variable */
+#define IGMP_RV_MIN		1
+#define IGMP_RV_MAX		7
+
+#define IGMP_QI_INIT		125	/* Query Interval (s) */
+#define IGMP_QI_MIN		1
+#define IGMP_QI_MAX		255
+
+#define IGMP_QRI_INIT		10	/* Query Response Interval (s) */
+#define IGMP_QRI_MIN		1
+#define IGMP_QRI_MAX		255
+
+#define IGMP_URI_INIT		3	/* Unsolicited Report Interval (s) */
+#define IGMP_URI_MIN		0
+#define IGMP_URI_MAX		10
+
+#define IGMP_MAX_G_GS_PACKETS		8 /* # of packets to answer G/GS */
+#define IGMP_MAX_STATE_CHANGE_PACKETS	8 /* # of packets per state change */
+#define IGMP_MAX_RESPONSE_PACKETS	16 /* # of packets for general query */
+#define IGMP_MAX_RESPONSE_BURST		4 /* # of responses to send at once */
+#define IGMP_RESPONSE_BURST_INTERVAL	(PR_SLOWHZ)	/* 500ms */
 
 /*
- * Revert to new router if we haven't heard from an old router in
- * this amount of time.
+ * IGMP-specific mbuf flags.
  */
-#define IGMP_AGE_THRESHOLD			540
+#define M_IGMPV2	M_PROTO1	/* Packet is IGMPv2 */
+#define M_IGMPV3_HDR	M_PROTO2	/* Packet has IGMPv3 headers */
+#define M_GROUPREC	M_PROTO3	/* mbuf chain is a group record */
+#define M_IGMP_LOOP	M_LOOP		/* transmit on loif, not real ifp */
 
-void	igmp_init(void) __attribute__((section("__TEXT, initcode")));
-void	igmp_input(struct mbuf *, int);
-int		igmp_joingroup(struct in_multi *);
-void	igmp_leavegroup(struct in_multi *);
-void	igmp_fasttimo(void);
-void	igmp_slowtimo(void);
+/*
+ * Default amount of leading space for IGMPv3 to allocate at the
+ * beginning of its mbuf packet chains, to avoid fragmentation and
+ * unnecessary allocation of leading mbufs.
+ */
+#define RAOPT_LEN	4		/* Length of IP Router Alert option */
+#define	IGMP_LEADINGSPACE		\
+	(sizeof(struct ip) + RAOPT_LEN + sizeof(struct igmp_report))
+
+struct igmp_ifinfo {
+	decl_lck_mtx_data(, igi_lock);
+	uint32_t igi_refcnt;	/* reference count */
+	uint32_t igi_debug;	/* see ifa_debug flags */
+	LIST_ENTRY(igmp_ifinfo) igi_link;
+	struct ifnet *igi_ifp;	/* interface this instance belongs to */
+	uint32_t igi_version;	/* IGMPv3 Host Compatibility Mode */
+	uint32_t igi_v1_timer;	/* IGMPv1 Querier Present timer (s) */
+	uint32_t igi_v2_timer;	/* IGMPv2 Querier Present timer (s) */
+	uint32_t igi_v3_timer;	/* IGMPv3 General Query (interface) timer (s)*/
+	uint32_t igi_flags;	/* IGMP per-interface flags */
+	uint32_t igi_rv;	/* IGMPv3 Robustness Variable */
+	uint32_t igi_qi;	/* IGMPv3 Query Interval (s) */
+	uint32_t igi_qri;	/* IGMPv3 Query Response Interval (s) */
+	uint32_t igi_uri;	/* IGMPv3 Unsolicited Report Interval (s) */
+	SLIST_HEAD(,in_multi)	igi_relinmhead; /* released groups */
+	struct ifqueue	 igi_gq;	/* queue of general query responses */
+	struct ifqueue   igi_v2q; /* queue of v1/v2 packets */
+};
+
+#define	IGI_LOCK_ASSERT_HELD(_igi)					\
+	lck_mtx_assert(&(_igi)->igi_lock, LCK_MTX_ASSERT_OWNED)
+
+#define	IGI_LOCK_ASSERT_NOTHELD(_igi)					\
+	lck_mtx_assert(&(_igi)->igi_lock, LCK_MTX_ASSERT_NOTOWNED)
+
+#define	IGI_LOCK(_igi)							\
+	lck_mtx_lock(&(_igi)->igi_lock)
+
+#define	IGI_LOCK_SPIN(_igi)						\
+	lck_mtx_lock_spin(&(_igi)->igi_lock)
+
+#define	IGI_CONVERT_LOCK(_igi) do {					\
+	IGI_LOCK_ASSERT_HELD(_igi);					\
+	lck_mtx_convert_spin(&(_igi)->igi_lock);			\
+} while (0)
+
+#define	IGI_UNLOCK(_igi)						\
+	lck_mtx_unlock(&(_igi)->igi_lock)
+
+#define	IGI_ADDREF(_igi)						\
+	igi_addref(_igi, 0)
+
+#define	IGI_ADDREF_LOCKED(_igi)						\
+	igi_addref(_igi, 1)
+
+#define	IGI_REMREF(_igi)						\
+	igi_remref(_igi)
+
+/*
+ * Per-link IGMP context.
+ */
+#define IGMP_IFINFO(ifp)	((ifp)->if_igi)
+
+extern void igmp_init(void) __attribute__((section("__TEXT, initcode")));
+extern int igmp_change_state(struct in_multi *);
+extern struct igmp_ifinfo *igmp_domifattach(struct ifnet *, int);
+extern void igmp_domifreattach(struct igmp_ifinfo *);
+extern void igmp_domifdetach(struct ifnet *);
+extern void igmp_input(struct mbuf *, int);
+extern int igmp_joingroup(struct in_multi *);
+extern void igmp_leavegroup(struct in_multi *);
+extern void igmp_slowtimo(void);
+extern void igi_addref(struct igmp_ifinfo *, int);
+extern void igi_remref(struct igmp_ifinfo *);
 
 SYSCTL_DECL(_net_inet_igmp);
 
-#endif /* KERNEL */
-#endif /* KERNEL_PRIVATE */
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*
  * Names for IGMP sysctl objects
@@ -132,11 +321,11 @@ SYSCTL_DECL(_net_inet_igmp);
 #define IGMPCTL_STATS		1	/* statistics (read-only) */
 #define IGMPCTL_MAXID		2
 
-#ifdef KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
 #define IGMPCTL_NAMES { \
 	{ 0, 0 }, \
 	{ "stats", CTLTYPE_STRUCT }, \
 }
 
-#endif /* KERNEL_PRIVATE */
+#endif /* XNU_KERNEL_PRIVATE */
 #endif

@@ -172,16 +172,11 @@
 #endif
 #include <console/serial_protos.h>
 
-#ifdef __ppc__
-#include <ppc/Firmware.h>
-#endif
-
 #define isdigit(d) ((d) >= '0' && (d) <= '9')
 #define Ctod(c) ((c) - '0')
 
 #define MAXBUF (sizeof(long long int) * 8)	/* enough for binary */
 static char digs[] = "0123456789abcdef";
-
 
 #if CONFIG_NO_PRINTF_STRINGS
 /* Prevent CPP from breaking the definition below */
@@ -762,6 +757,14 @@ conslog_putc(
 #endif
 }
 
+void
+cons_putc_locked(
+	char c)
+{
+	if ((debug_mode && !disable_debug_output) || !disableConsoleOutput)
+		cnputc(c);
+}
+
 #if	MACH_KDB
 extern void db_putchar(char c);
 #endif
@@ -860,6 +863,8 @@ kdb_printf_unbuffered(const char *fmt, ...)
 	return 0;
 }
 
+#if !CONFIG_EMBEDDED
+
 static void
 copybyte(int c, void *arg)
 {
@@ -891,3 +896,4 @@ sprintf(char *buf, const char *fmt, ...)
 	*copybyte_str = '\0';
         return (int)strlen(buf);
 }
+#endif /* !CONFIG_EMBEDDED */

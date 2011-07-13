@@ -46,3 +46,5 @@ const char osbuilder[] = "###KERNEL_BUILDER###";
 const char osrelease[] = OSRELEASE;
 const char ostype[] = OSTYPE;
 char osversion[OSVERSIZE];
+
+__private_extern__ const char compiler_version[] = __VERSION__;

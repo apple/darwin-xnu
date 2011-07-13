@@ -1,0 +1,179 @@
+.\"	$Darwin$
+.\"
+.\" Copyright (c) 1999-2002 Apple Computer, Inc. All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" The contents of this file constitute Original Code as defined in and
+.\" are subject to the Apple Public Source License Version 1.1 (the
+.\" "License").  You may not use this file except in compliance with the
+.\" License.  Please obtain a copy of the License at
+.\" http://www.apple.com/publicsource and read it before using this file.
+.\" 
+.\" This Original Code and all software distributed under the License are
+.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+.\" License for the specific language governing rights and limitations
+.\" under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.Dd August 29, 2008
+.Dt SHM_OPEN 2
+.Os Darwin
+.Sh NAME
+.Nm shm_open
+.Nd open a shared memory object
+.Sh SYNOPSIS
+.Fd #include <sys/mman.h>
+.Ft int
+.Fo shm_open
+.Fa "const char *name"
+.Fa "int oflag"
+.Fa "..."
+.Fc
+.Pp
+The parameter "mode_t mode" is optional.
+.Sh DESCRIPTION
+The shared memory object referenced by
+.Fa name
+is opened for reading and/or writing as specified by the argument
+.Fa oflag
+and the file descriptor returned to the calling process.
+The returned file descriptor will be the lowest non-open file
+descriptor for the calling process, and is not shared with any
+other processes, as it is a new file descriptor. The new file
+descriptor will have the
+.Dv FD_CLOEXEC
+flag set.
+Repeated calls
+to
+.Nm shm_open
+with the same string value for
+.Fn name
+will return a file descriptor referring to the same shared memory
+object, provided that the object has not been unlinked by a call to
+.Fn shm_unlink .
+The
+.Fa oflag
+argument may indicate the file is to be
+created if it does not exist (by specifying the
+.Dv O_CREAT
+flag), in which case the file is created with mode
+.Fa mode
+as described in
+.Xr chmod 2
+and modified by the process' umask value (see
+.Xr umask 2 ) .
+.Pp
+The value of
+.Fa oflag
+is formed by
+.Em or Ns 'ing
+the following values:
+.Pp
+.Bd -literal -offset indent -compact
+O_RDONLY	open for reading only
+O_RDWR		open for reading and writing
+O_CREAT		create object if it does not exist
+O_EXCL		error if create and object exists
+O_TRUNC		truncate size to 0
+.Ed
+.Pp
+Exactly one of
+.Dv O_RDONLY
+or
+.Dv O_RDWR
+must be specified.
+.Pp
+If
+.Dv O_TRUNC
+is specified and the
+file exists, the file is truncated to zero length.
+If
+.Dv O_EXCL
+is set with
+.Dv O_CREAT
+and the file already
+exists,
+.Fn shm_open
+returns an error.  This may be used to
+implement a simple exclusive access locking mechanism.
+.Pp
+If successful,
+.Fn shm_open
+returns a non-negative integer, termed a file descriptor.
+It returns -1 and sets
+.Va errno
+on failure.
+The file pointer used to mark the current position within the
+memory object is set to the beginning of the object.
+.Pp
+When a new shared memory object is created it is given the
+owner and group corresponding to the effective user and
+group of the calling process. There is no visible entry in the
+file system for the created object in this implementation.
+.Pp
+When a shared memory object is created, it persists until it
+it unlinked and all other references are gone. Objects do
+not persist across a system reboot.
+.Pp
+The system imposes a limit on the number of file descriptors
+open simultaneously by one process.
+.Xr Getdtablesize 2
+returns the current system limit.
+.Sh ERRORS
+The named object is opened unless:
+.Bl -tag -width Er
+.It Bq Er EACCES
+The required permissions (for reading and/or writing)
+are denied for the given flags.
+.It Bq Er EACCES
+.Dv O_CREAT
+is specified, the object does not exist, and permission to
+create the object is denied.
+.It Bq Er EEXIST
+.Dv O_CREAT
+and
+.Dv O_EXCL
+were specified and the object exists.
+.It Bq Er EINTR
+The
+.Fn shm_open
+operation was interrupted by a signal.
+.It Bq Er EINVAL
+The
+.Fn shm_open
+operation is not supported.
+.It Bq Er EMFILE
+The process has already reached its limit for open file descriptors.
+.It Bq Er ENAMETOOLONG
+.Fa name
+exceeded the name size limit.
+This is currently
+.Dv PSHMNAMLEN
+characters (defined in
+.In sys/posix_shm.h ) ,
+but this may change in the future.
+.It Bq Er ENFILE
+The system file table is full.
+.It Bq Er ENOENT
+.Dv O_CREAT
+is not set and the named object does not exist.
+.It Bq Er ENOSPC
+.Dv O_CREAT
+is specified, the file does not exist, and there is insufficient
+space available to create the object.
+.El
+.Sh SEE ALSO
+.Xr chmod 2 ,
+.Xr close 2 ,
+.Xr getdtablesize 2 ,
+.Xr mmap 2 ,
+.Xr shm_unlink 2 ,
+.Xr umask 2
+.Sh HISTORY
+.Fn shm_open
+is specified in the POSIX Realtime Extension (1003.1b-1993/1003.1i-1995).

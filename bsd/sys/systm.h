@@ -223,10 +223,17 @@ void	bsd_untimeout(void (*)(void *), void *arg);
 void	set_fsblocksize(struct vnode *);
 uint64_t tvtoabstime(struct timeval *);
 void	*throttle_info_create(void);
-void	throttle_info_mount_ref(mount_t mp, void * throttle_info);	
-void	throttle_info_mount_rel(mount_t mp);	
+void	throttle_info_mount_ref(mount_t mp, void * throttle_info);
+void	throttle_info_mount_rel(mount_t mp);
 void	throttle_info_release(void *throttle_info);
 void	throttle_info_update(void *throttle_info, int flags);
+uint32_t throttle_lowpri_io(int sleep_amount);
+void	throttle_set_thread_io_policy(int policy);
+typedef struct __throttle_info_handle *throttle_info_handle_t;
+int		throttle_info_ref_by_mask(
+	uint64_t throttle_mask, throttle_info_handle_t *throttle_info_handle);
+void	throttle_info_rel_by_mask(throttle_info_handle_t throttle_info_handle);
+void	throttle_info_update_by_mask(void *throttle_info_handle, int flags);
 __END_DECLS
 
 #endif /* !_SYS_SYSTM_H_ */

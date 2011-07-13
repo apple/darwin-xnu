@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -106,7 +106,7 @@ typedef	struct queue_entry	*queue_entry_t;
 /*
  *	enqueue puts "elt" on the "queue".
  *	dequeue returns the first element in the "queue".
- *	remqueue removes the specified "elt" from the specified "queue".
+ *	remqueue removes the specified "elt" from its queue.
  */
 
 #define enqueue(queue,elt)	enqueue_tail(queue, elt)
@@ -137,7 +137,6 @@ extern queue_entry_t	dequeue_tail(
 
 /* Dequeue element */
 extern void		remqueue(
-				queue_t		que,
 				queue_entry_t	elt);
 
 /* Enqueue element after a particular elem */
@@ -152,6 +151,15 @@ extern void		remque(
 __END_DECLS
 
 #else	/* !__GNUC__ */
+
+#ifdef XNU_KERNEL_PRIVATE
+#define __DEQUEUE_ELT_CLEANUP(elt) do { \
+		(elt)->next = (queue_entry_t) 0; \
+		(elt)->prev = (queue_entry_t) 0; \
+	} while (0)
+#else
+#define __DEQUEUE_ELT_CLEANUP(elt) do { } while(0)
+#endif /* !XNU_KERNEL_PRIVATE */
 
 static __inline__ void
 enqueue_head(
@@ -185,6 +193,7 @@ dequeue_head(
 		elt = que->next;
 		elt->next->prev = que;
 		que->next = elt->next;
+		__DEQUEUE_ELT_CLEANUP(elt);
 	}
 
 	return (elt);
@@ -200,6 +209,7 @@ dequeue_tail(
 		elt = que->prev;
 		elt->prev->next = que;
 		que->prev = elt->prev;
+		__DEQUEUE_ELT_CLEANUP(elt);
 	}
 
 	return (elt);
@@ -207,11 +217,11 @@ dequeue_tail(
 
 static __inline__ void
 remqueue(
-	__unused queue_t		que,
 	queue_entry_t	elt)
 {
 	elt->next->prev = elt->prev;
 	elt->prev->next = elt->next;
+	__DEQUEUE_ELT_CLEANUP(elt);
 }
 
 static __inline__ void
@@ -231,6 +241,7 @@ remque(
 {
 	(elt->next)->prev = elt->prev;
 	(elt->prev)->next = elt->next;
+	__DEQUEUE_ELT_CLEANUP(elt);
 }
 
 #endif	/* !__GNUC__ */
@@ -603,34 +614,53 @@ MACRO_END
  */
 struct mpqueue_head {
 	struct queue_entry	head;		/* header for queue */
-	decl_simple_lock_data(,	lock)		/* lock for queue */
+	lck_mtx_t		lock_data;
+	lck_mtx_ext_t		lock_data_ext;
 };
 
 typedef struct mpqueue_head	mpqueue_head_t;
 
 #define	round_mpq(size)		(size)
 
-#define mpqueue_init(q)					\
+
+#if defined(__i386__) || defined(__x86_64__)
+
+#define mpqueue_init(q, lck_grp, lck_attr)		\
 MACRO_BEGIN						\
 	queue_init(&(q)->head);				\
-	simple_lock_init(&(q)->lock, 0);	\
+        lck_mtx_init_ext(&(q)->lock_data,		\
+			 &(q)->lock_data_ext,		\
+			 lck_grp,			\
+			 lck_attr);			\
 MACRO_END
+
+#else
+
+#define mpqueue_init(q, lck_grp, lck_attr)		\
+MACRO_BEGIN						\
+	queue_init(&(q)->head);				\
+        lck_spin_init(&(q)->lock_data,			\
+		      lck_grp,				\
+		      lck_attr);			\
+MACRO_END
+#endif
+
 
 #define mpenqueue_tail(q, elt)				\
 MACRO_BEGIN						\
-	simple_lock(&(q)->lock);			\
+        lck_mtx_lock_spin_always(&(q)->lock_data);	\
 	enqueue_tail(&(q)->head, elt);			\
-	simple_unlock(&(q)->lock);			\
+	lck_mtx_unlock_always(&(q)->lock_data);		\
 MACRO_END
 
 #define mpdequeue_head(q, elt)				\
 MACRO_BEGIN						\
-	simple_lock(&(q)->lock);			\
+        lck_mtx_lock_spin_always(&(q)->lock_data);	\
 	if (queue_empty(&(q)->head))			\
 		*(elt) = 0;				\
 	else						\
 		*(elt) = dequeue_head(&(q)->head);	\
-	simple_unlock(&(q)->lock);			\
+	lck_mtx_unlock_always(&(q)->lock_data);		\
 MACRO_END
 
 #endif	/* MACH_KERNEL_PRIVATE */

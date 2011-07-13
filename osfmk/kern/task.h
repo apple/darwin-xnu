@@ -104,15 +104,117 @@
 #include <mach/mach_param.h>
 #include <mach/task_info.h>
 #include <mach/exception_types.h>
+#include <mach/vm_statistics.h>
 #include <machine/task.h>
 
 #include <kern/cpu_data.h>
 #include <kern/queue.h>
 #include <kern/exception.h>
 #include <kern/lock.h>
-#include <kern/thread.h>
 #include <security/_label.h>
 #include <ipc/ipc_labelh.h>
+#endif /* MACH_KERNEL_PRIVATE */
+
+#ifdef XNU_KERNEL_PRIVATE
+
+/* defns for task->rsu_controldata */
+#define TASK_POLICY_CPU_RESOURCE_USAGE		0
+#define TASK_POLICY_WIREDMEM_RESOURCE_USAGE	1
+#define TASK_POLICY_VIRTUALMEM_RESOURCE_USAGE	2
+#define TASK_POLICY_DISK_RESOURCE_USAGE		3
+#define TASK_POLICY_NETWORK_RESOURCE_USAGE	4
+#define TASK_POLICY_POWER_RESOURCE_USAGE	5
+
+#define TASK_POLICY_RESOURCE_USAGE_COUNT 6
+
+/*
+ * Process Action and Policy bit definitions 
+
+The bit defns of the policy states 
+64   60    56   52   48   44   40   36   32   28   24   20   16   12   8        0
+|----|-----|----|----|----|----|----|----|----|----|----|----|----|----|--------| 
+|RFU | RFU | PWR| NET| DSK| CPU| VM | WM | LVM| RFU| CPU| NET| GPU| DSK| BGRND  |
+|----|-----|----|----|----|----|----|----|----|----|----|----|----|----|--------| 
+|<-----------   RESOURCE USAGE  -------->|< LOWSRC>|<-HARDWARE ACCESS->|BackGrnd|     
+|----|-----|----|----|----|----|----|----|----|----|----|----|----|----|--------| 
+
+*
+*/
+
+#define TASK_POLICY_BACKGROUND_ATTRIBUTE_NONE		0x00
+#define TASK_POLICY_BACKGROUND_ATTRIBUTE_LOWPRI		0x01
+#define TASK_POLICY_BACKGROUND_ATTRIBUTE_DISKTHROTTLE	0x02
+#define TASK_POLICY_BACKGROUND_ATTRIBUTE_NETTHROTTLE	0x04
+#define TASK_POLICY_BACKGROUND_ATTRIBUTE_NOGPU		0x08
+#if CONFIG_EMBEDDED
+#define TASK_POLICY_BACKGROUND_ATTRIBUTE_ALL		0x0F
+#else /* CONFIG_EMBEDDED */
+#define TASK_POLICY_BACKGROUND_ATTRIBUTE_ALL		0x07
+#endif /* CONFIG_EMBEDDED */
+#define TASK_POLICY_BACKGROUND_ATTRIBUTE_DEFAULT	TASK_POLICY_BACKGROUND_ATTRIBUTE_ALL
+
+/* Hardware disk access attributes, bit different as it should reflect IOPOL_XXX */
+#define TASK_POLICY_HWACCESS_DISK_ATTRIBUTE_NONE	0x00
+#define TASK_POLICY_HWACCESS_DISK_ATTRIBUTE_NORMAL	0x01
+#define TASK_POLICY_HWACCESS_DISK_ATTRIBUTE_PASSIVE	0x02
+#define TASK_POLICY_HWACCESS_DISK_ATTRIBUTE_THROTTLE	0x03
+#define TASK_POLICY_HWACCESS_DISK_ATTRIBUTE_DEFAULT	TASK_POLICY_HWACCESS_DISK_ATTRIBUTE_NORMAL
+
+/* Hardware disk access attributes */
+#define TASK_POLICY_HWACCESS_GPU_ATTRIBUTE_NONE		0x00
+#define TASK_POLICY_HWACCESS_GPU_ATTRIBUTE_NORMAL	0x00
+#define TASK_POLICY_HWACCESS_GPU_ATTRIBUTE_FULLACCESS	0x00
+#define TASK_POLICY_HWACCESS_GPU_ATTRIBUTE_NOACCESS	0x01
+#define TASK_POLICY_HWACCESS_GPU_ATTRIBUTE_DEFAULT	0x00
+
+/* Hardware Network access attributes */
+#define TASK_POLICY_HWACCESS_NET_ATTRIBUTE_NONE		0x00
+#define TASK_POLICY_HWACCESS_NET_ATTRIBUTE_NORMAL	0x00
+#define TASK_POLICY_HWACCESS_NET_ATTRIBUTE_THROTTLE	0x01
+#define TASK_POLICY_HWACCESS_NET_ATTRIBUTE_DEFAULT	0x00
+
+/* Hardware CPU access attributes */
+#define TASK_POLICY_HWACCESS_CPU_ATTRIBUTE_NONE		0x00
+#define TASK_POLICY_HWACCESS_CPU_ATTRIBUTE_NORMAL	0x00
+#define TASK_POLICY_HWACCESS_CPU_ATTRIBUTE_ALL		0x00
+#define TASK_POLICY_HWACCESS_CPU_ATTRIBUTE_ONE		0x01
+#define TASK_POLICY_HWACCESS_CPU_ATTRIBUTE_LLCACHE	0x02
+#define TASK_POLICY_HWACCESS_CPU_ATTRIBUTE_DEFAULT	0x00
+
+/* Resource usage/low resource attributes */
+#define TASK_POLICY_RESOURCE_ATTRIBUTE_NONE		0x00
+#define TASK_POLICY_RESOURCE_ATTRIBUTE_THROTTLE		0x01
+#define TASK_POLICY_RESOURCE_ATTRIBUTE_SUSPEND 		0x02
+#define TASK_POLICY_RESOURCE_ATTRIBUTE_TERMINATE	0x03
+#define TASK_POLICY_RESOURCE_ATTRIBUTE_NOTIFY		0x04
+#define TASK_POLICY_RESOURCE_ATTRIBUTE_DEFAULT		0x00
+
+#endif /* XNU_KERNEL_PRIVATE */
+
+#ifdef MACH_KERNEL_PRIVATE
+
+typedef struct process_policy {
+	uint64_t  apptype:4,
+		  rfu1:4,
+		  ru_power:4,	/* Resource Usage Power */
+		  ru_net:4,	/* Resource Usage Network */
+		  ru_disk:4,	/* Resource Usage Disk */
+		  ru_cpu:4,	/* Resource Usage CPU */
+		  ru_virtmem:4,	/* Resource Usage VM */
+		  ru_wiredmem:4,/* Resource Usage Wired Memory */
+		  low_vm:4,	/* Low Virtual Memory */
+		  rfu2:4,
+		  hw_cpu:4,	/* HW Access to CPU */
+		  hw_net:4,	/* HW Access to Network */
+		  hw_gpu:4,	/* HW Access to GPU */
+		  hw_disk:4,	/* HW Access to Disk */
+		  hw_bg:8;	/* Darwin Background Policy */
+} process_policy_t;
+
+#include <kern/thread.h>
+
+extern process_policy_t default_task_proc_policy;	/* init value for the process policy attributes */
+extern process_policy_t default_task_null_policy;		/* none as the value for the process policy attributes */
 
 struct task {
 	/* Synchronization/destruction information */
@@ -193,9 +295,14 @@ struct task {
         integer_t messages_received;   /* messages received counter */
         integer_t syscalls_mach;       /* mach system call counter */
         integer_t syscalls_unix;       /* unix system call counter */
-		uint32_t  c_switch;			   /* total context switches */
-		uint32_t  p_switch;			   /* total processor switches */
-		uint32_t  ps_switch;		   /* total pset switches */
+	uint32_t  c_switch;			   /* total context switches */
+	uint32_t  p_switch;			   /* total processor switches */
+	uint32_t  ps_switch;		   /* total pset switches */
+
+	zinfo_usage_store_t tkm_private;/* private kmem alloc/free stats (reaped threads) */
+	zinfo_usage_store_t tkm_shared; /* shared kmem alloc/free stats (reaped threads) */
+	zinfo_usage_t tkm_zinfo;	/* per-task, per-zone usage statistics */
+
 #ifdef  MACH_BSD 
 	void *bsd_info;
 #endif  
@@ -221,6 +328,14 @@ struct task {
 	uint32_t t_chud;		/* CHUD flags, used for Shark */
 #endif
 
+	process_policy_t ext_actionstate;	/* externally applied actions */
+	process_policy_t ext_policystate;	/* externally defined process policy states*/
+	process_policy_t actionstate;		/* self applied acions */
+	process_policy_t policystate;		/* process wide policy states */
+
+	uint64_t rsu_controldata[TASK_POLICY_RESOURCE_USAGE_COUNT];
+
+	vm_extmod_statistics_data_t	extmod_statistics;
 };
 
 #define task_lock(task)		lck_mtx_lock(&(task)->lock)
@@ -293,6 +408,24 @@ extern kern_return_t	task_hold(
 extern kern_return_t	task_release(
 							task_t		task);
 
+#if CONFIG_FREEZE
+
+/* Freeze a task's resident pages */
+extern kern_return_t	task_freeze(
+							task_t		task,
+							uint32_t	*purgeable_count,
+							uint32_t	*wired_count,
+							uint32_t	*clean_count,
+							uint32_t	*dirty_count,
+							boolean_t	*shared,
+							boolean_t	walk_only);
+
+/* Thaw a currently frozen task */
+extern kern_return_t	task_thaw(
+							task_t		task);
+
+#endif /* CONFIG_FREEZE */
+
 /* Halt all other threads in the current task */
 extern kern_return_t	task_start_halt(
 							task_t		task);
@@ -352,7 +485,7 @@ extern int get_task_numactivethreads(task_t task);
 /* JMM - should just be temporary (implementation in bsd_kern still) */
 extern void	set_bsdtask_info(task_t,void *);
 extern vm_map_t get_task_map_reference(task_t);
-extern vm_map_t	swap_task_map(task_t, thread_t, vm_map_t);
+extern vm_map_t	swap_task_map(task_t, thread_t, vm_map_t, boolean_t);
 extern pmap_t	get_task_pmap(task_t);
 extern uint64_t	get_task_resident_size(task_t);
 
@@ -373,6 +506,74 @@ extern kern_return_t machine_task_set_state(
 					mach_msg_type_number_t state_count);
 
 
+int proc_get_task_bg_policy(task_t task);
+int proc_get_thread_bg_policy(task_t task, uint64_t tid);
+int proc_get_self_isbackground(void);
+int proc_get_selfthread_isbackground(void);
+
+int proc_get_darwinbgstate(task_t, uint32_t *);
+int proc_set_bgtaskpolicy(task_t task, int intval);
+int proc_set1_bgtaskpolicy(task_t task, int intval);
+int proc_set_bgthreadpolicy(task_t task, uint64_t tid, int val);
+int proc_set1_bgthreadpolicy(task_t task, uint64_t tid, int val);
+
+int proc_add_bgtaskpolicy(task_t task, int val);
+int proc_add_bgthreadpolicy(task_t task, uint64_t tid, int val);
+int proc_remove_bgtaskpolicy(task_t task, int policy);
+int proc_remove_bgthreadpolicy(task_t task, uint64_t tid, int val);
+
+int proc_apply_bgtaskpolicy(task_t task);
+int proc_apply_bgtaskpolicy_external(task_t task);
+int proc_apply_bgtaskpolicy_internal(task_t task);
+int proc_apply_bgthreadpolicy(task_t task, uint64_t tid);
+int proc_apply_bgtask_selfpolicy(void);
+int proc_apply_bgthread_selfpolicy(void);
+int proc_apply_workq_bgthreadpolicy(thread_t);
+
+int proc_restore_bgtaskpolicy(task_t task);
+int proc_restore_bgthreadpolicy(task_t task, uint64_t tid);
+int proc_restore_bgthread_selfpolicy(void);
+int proc_restore_workq_bgthreadpolicy(thread_t);
+
+/* hw access routines */
+int proc_apply_task_diskacc(task_t task, int policy);
+int proc_apply_thread_diskacc(task_t task, uint64_t tid, int policy);
+int proc_apply_thread_selfdiskacc(int policy);
+int proc_get_task_disacc(task_t task);
+int proc_get_task_selfdiskacc(void);
+int proc_get_thread_selfdiskacc(void);
+int proc_denyinherit_policy(task_t task);
+int proc_denyselfset_policy(task_t task);
+
+int proc_get_task_selfgpuacc_deny(void);
+int proc_apply_task_gpuacc(task_t task, int prio);
+
+int proc_get_task_ruse_cpu(task_t task, uint32_t * policyp, uint32_t * percentagep, uint64_t * intervalp, uint64_t * deadlinep);
+int proc_set_task_ruse_cpu(task_t task, uint32_t policy, uint32_t percentage, uint64_t interval, uint64_t deadline);
+thread_t task_findtid(task_t, uint64_t);
+
+#define PROC_POLICY_OSX_APPTYPE_NONE		0
+#define PROC_POLICY_OSX_APPTYPE_TAL		1
+#define PROC_POLICY_OSX_APPTYPE_WIDGET		2
+#define PROC_POLICY_OSX_APPTYPE_DBCLIENT	2	/* Not a bug, just rename of widget */
+#define PROC_POLICY_IOS_APPTYPE			3
+#define PROC_POLICY_IOS_NONUITYPE		4
+
+void proc_set_task_apptype(task_t, int);
+int proc_disable_task_apptype(task_t task, int policy_subtype);
+int proc_enable_task_apptype(task_t task, int policy_subtype);
+
+/* resource handle callback */
+int task_action_cpuusage(task_t);
+
+/* BSD call back functions */
+extern int proc_apply_resource_actions(void * p, int type, int action);
+extern int proc_restore_resource_actions(void * p, int type, int action);
+extern int task_restore_resource_actions(task_t task, int type);
+
+extern void proc_apply_task_networkbg(void * bsd_info);
+extern void proc_restore_task_networkbg(void * bsd_info);
+extern void proc_set_task_networkbg(void * bsd_info, int setbg);
 #endif	/* XNU_KERNEL_PRIVATE */
 
 #ifdef	KERNEL_PRIVATE

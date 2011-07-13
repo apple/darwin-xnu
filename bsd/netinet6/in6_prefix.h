@@ -85,7 +85,6 @@ LIST_HEAD(rr_prhead, rr_prefix);
 
 extern struct rr_prhead rr_prefix;
 
-void in6_rr_timer(void *);
 int delete_each_prefix (struct rr_prefix *rpp, u_char origin);
 
 #endif /* KERNEL_PRIVATE */

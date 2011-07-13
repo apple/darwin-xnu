@@ -236,7 +236,7 @@ ipc_entry_get(
 
 		gen = IE_BITS_NEW_GEN(free_entry->ie_bits);
 		free_entry->ie_bits = gen;
-		free_entry->ie_request = 0;
+		free_entry->ie_request = IE_REQ_NONE;
 
 		/*
 		 *	The new name can't be MACH_PORT_NULL because index
@@ -377,7 +377,7 @@ ipc_entry_alloc_name(
 					table[next_index].ie_next;
 
 				entry->ie_bits = gen;
-				entry->ie_request = 0;
+				entry->ie_request = IE_REQ_NONE;
 				*entryp = entry;
 
 				assert(entry->ie_object == IO_NULL);
@@ -516,7 +516,12 @@ ipc_entry_dealloc(
 
 	assert(space->is_active);
 	assert(entry->ie_object == IO_NULL);
-	assert(entry->ie_request == 0);
+	assert(entry->ie_request == IE_REQ_NONE);
+
+#if 1
+	if (entry->ie_request != IE_REQ_NONE)
+		panic("ipc_entry_dealloc()\n");
+#endif
 
 	index = MACH_PORT_INDEX(name);
 	table = space->is_table;

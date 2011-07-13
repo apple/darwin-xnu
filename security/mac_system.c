@@ -84,6 +84,19 @@ mac_system_check_acct(kauth_cred_t cred, struct vnode *vp)
 }
 
 int
+mac_system_check_chud(kauth_cred_t cred)
+{
+	int error;
+
+	if (!mac_system_enforce)
+		return (0);
+
+	MAC_CHECK(system_check_chud, cred);
+
+	return (error);
+}
+
+int
 mac_system_check_host_priv(kauth_cred_t cred)
 {
 	int error;

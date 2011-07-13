@@ -147,7 +147,6 @@
 #define CPUID_MODEL_DALES_32NM	0x25	/* Clarkdale, Arrandale */
 #define CPUID_MODEL_WESTMERE	0x2C	/* Gulftown, Westmere-EP, Westmere-WS */
 #define CPUID_MODEL_WESTMERE_EX	0x2F
-/* Additional internal models go here */
 #define CPUID_MODEL_SANDYBRIDGE	0x2A
 #define CPUID_MODEL_JAKETOWN	0x2D
 
@@ -266,6 +265,7 @@ typedef struct {
 	uint64_t	cpuid_extfeatures;
 	uint32_t	cpuid_signature;
 	uint8_t   	cpuid_brand; 
+	uint8_t		cpuid_processor_flag;
 	
 	uint32_t	cache_size[LCACHE_MAX];
 	uint32_t	cache_linesize;

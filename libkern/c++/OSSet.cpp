@@ -196,29 +196,36 @@ void OSSet::flushCollection()
 
 bool OSSet::setObject(const OSMetaClassBase *anObject)
 {
-    if (containsObject(anObject))
+    if (containsObject(anObject)) {
         return false;
-    else {
+    } else {
         haveUpdated();
         return members->setObject(anObject);
     }
 }
 
-bool OSSet::merge(const OSArray *array)
+bool OSSet::merge(const OSArray * array)
 {
-    const OSMetaClassBase *anObject;
-    bool retVal = false;
+    const OSMetaClassBase * anObject = 0;
+    bool                    result   = true;
 
-// xx-review: if any setObject fails due to memory allocation failure,
-// xx-review: this function should return false
-    for (int i = 0; (anObject = array->getObject(i)); i++)
-        if (setObject(anObject))
-            retVal = true;
+    for (int i = 0; (anObject = array->getObject(i)); i++) {
 
-    return retVal;
+       /* setObject() returns false if the object is already in the set,
+        * so we have to check beforehand here with containsObject().
+        */
+        if (containsObject(anObject)) {
+            continue;
+        }
+        if (!setObject(anObject)) {
+            result = false;
+        }
+    }
+
+    return result;
 }
 
-bool OSSet::merge(const OSSet *set)
+bool OSSet::merge(const OSSet * set)
 {
     return merge(set->members);
 }

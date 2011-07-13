@@ -73,6 +73,11 @@ void chudxnu_cancel_all_callbacks(void)
 	chudxnu_dtrace_callback_cancel();
 }
 
+static lck_grp_t	chud_request_lck_grp;
+static lck_grp_attr_t	chud_request_lck_grp_attr;
+static lck_attr_t	chud_request_lck_attr;
+
+
 static chudcpu_data_t chudcpu_boot_cpu;
 void *
 chudxnu_cpu_alloc(boolean_t boot_processor)
@@ -81,6 +86,11 @@ chudxnu_cpu_alloc(boolean_t boot_processor)
 
 	if (boot_processor) {
 		chud_proc_info = &chudcpu_boot_cpu;
+
+		lck_attr_setdefault(&chud_request_lck_attr);
+		lck_grp_attr_setdefault(&chud_request_lck_grp_attr);
+		lck_grp_init(&chud_request_lck_grp, "chud_request", &chud_request_lck_grp_attr);
+
 	} else {
 		chud_proc_info = (chudcpu_data_t *)
 					kalloc(sizeof(chudcpu_data_t));
@@ -90,7 +100,8 @@ chudxnu_cpu_alloc(boolean_t boot_processor)
 	}
 	bzero((char *)chud_proc_info, sizeof(chudcpu_data_t));
 	chud_proc_info->t_deadline = 0xFFFFFFFFFFFFFFFFULL;
-	mpqueue_init(&chud_proc_info->cpu_request_queue);
+
+	mpqueue_init(&chud_proc_info->cpu_request_queue, &chud_request_lck_grp, &chud_request_lck_attr);
 
 
 	return (void *)chud_proc_info;
@@ -161,7 +172,8 @@ chudxnu_cpu_timer_callback_enter(
 	timer_call_setup(&(chud_proc_info->cpu_timer_call),
 			 chudxnu_private_cpu_timer_callback, NULL);
 	timer_call_enter(&(chud_proc_info->cpu_timer_call),
-			 chud_proc_info->t_deadline);
+			 chud_proc_info->t_deadline,
+			 TIMER_CALL_CRITICAL|TIMER_CALL_LOCAL);
 
 	ml_set_interrupts_enabled(oldlevel);
 	return KERN_SUCCESS;
@@ -316,46 +328,40 @@ static kern_return_t chud_null_ast(thread_flavor_t flavor __unused,
 }
 
 static kern_return_t
-chudxnu_private_chud_ast_callback(
-	int			trapno,
-	void			*regs,
-	int			unused1,
-	int			unused2)
-{
-#pragma unused (trapno)
-#pragma unused (regs)
-#pragma unused (unused1)
-#pragma unused (unused2)
-	boolean_t	oldlevel = ml_set_interrupts_enabled(FALSE);
-	ast_t		*myast = ast_pending();
-	kern_return_t	retval = KERN_FAILURE;
+chudxnu_private_chud_ast_callback(ast_t reasons, ast_t *myast)
+{	
+	boolean_t oldlevel = ml_set_interrupts_enabled(FALSE);
+	kern_return_t retval = KERN_FAILURE;
 	chudxnu_perfmon_ast_callback_func_t fn = perfmon_ast_callback_fn;
-    
-	if (*myast & AST_CHUD_URGENT) {
-		*myast &= ~(AST_CHUD_URGENT | AST_CHUD);
-		if ((*myast & AST_PREEMPTION) != AST_PREEMPTION)
-			*myast &= ~(AST_URGENT);
-		retval = KERN_SUCCESS;
-	} else if (*myast & AST_CHUD) {
-		*myast &= ~(AST_CHUD);
-		retval = KERN_SUCCESS;
-	}
-
+	
 	if (fn) {
-		x86_thread_state_t state;
-		mach_msg_type_number_t count;
-		count = x86_THREAD_STATE_COUNT;
-
-		if (chudxnu_thread_get_state(
-			current_thread(),
-			x86_THREAD_STATE,
-			(thread_state_t) &state, &count,
-			TRUE) == KERN_SUCCESS) {
-
-			(fn)(
-				x86_THREAD_STATE,
-				(thread_state_t) &state,
-				count);
+		if ((*myast & AST_CHUD_URGENT) && (reasons & (AST_URGENT | AST_CHUD_URGENT))) { // Only execute urgent callbacks if reasons specifies an urgent context.
+			*myast &= ~AST_CHUD_URGENT;
+			
+			if (AST_URGENT == *myast) { // If the only flag left is AST_URGENT, we can clear it; we know that we set it, but if there are also other bits set in reasons then someone else might still need AST_URGENT, so we'll leave it set.  The normal machinery in ast_taken will ensure it gets cleared eventually, as necessary.
+				*myast = AST_NONE;
+			}
+			
+			retval = KERN_SUCCESS;
+		}
+		
+		if ((*myast & AST_CHUD) && (reasons & AST_CHUD)) { // Only execute non-urgent callbacks if reasons actually specifies AST_CHUD.  This implies non-urgent callbacks since the only time this'll happen is if someone either calls ast_taken with AST_CHUD explicitly (not done at time of writing, but possible) or with AST_ALL, which of course includes AST_CHUD.
+			*myast &= ~AST_CHUD;
+			retval = KERN_SUCCESS;
+		}
+	
+		if (KERN_SUCCESS == retval) {
+			x86_thread_state_t state;
+			mach_msg_type_number_t count = x86_THREAD_STATE_COUNT;
+			thread_t thread = current_thread();
+			
+			if (KERN_SUCCESS == chudxnu_thread_get_state(thread,
+														 x86_THREAD_STATE,
+														 (thread_state_t)&state,
+														 &count,
+														 (thread->task != kernel_task))) {
+				(fn)(x86_THREAD_STATE, (thread_state_t)&state, count);
+			}
 		}
 	}
     
@@ -426,6 +432,9 @@ static kern_return_t chud_null_int(uint32_t trapentry __unused, thread_flavor_t 
 }
 
 static void
+chudxnu_private_interrupt_callback(void *foo) __attribute__((used));
+
+static void
 chudxnu_private_interrupt_callback(void *foo)
 {
 #pragma unused (foo)
@@ -460,7 +469,6 @@ chudxnu_interrupt_callback_enter(chudxnu_interrupt_callback_func_t func)
 	if(OSCompareAndSwapPtr(chud_null_int, func, 
 		(void * volatile *)&interrupt_callback_fn)) {
 		lapic_set_pmi_func((i386_intr_func_t)chudxnu_private_interrupt_callback);
-
 		return KERN_SUCCESS;
 	}
     return KERN_FAILURE;

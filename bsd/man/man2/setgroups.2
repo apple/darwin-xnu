@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)setgroups.2	8.2 (Berkeley) 4/16/94
 .\"
-.Dd April 16, 1994
+.Dd September 15, 2010
 .Dt SETGROUPS 2
 .Os BSD 4.2
 .Sh NAME
@@ -56,6 +56,10 @@ more than
 .Dv {NGROUPS_MAX} .
 .Pp
 Only the super-user may set new groups.
+.Pp
+Use of
+.Fn setgroups
+is highly discouraged.
 .Sh RETURN VALUES
 A 0 value is returned on success, -1 on error, with
 an error code stored in

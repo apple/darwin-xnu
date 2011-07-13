@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
-/*
+/*-
  * Copyright (c) 1982, 1986, 1988, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -38,10 +38,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the University of
- *	California, Berkeley and its contributors.
  * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
@@ -59,9 +55,10 @@
  * SUCH DAMAGE.
  *
  *	@(#)syslog.h	8.1 (Berkeley) 6/2/93
+ * $FreeBSD: src/sys/sys/syslog.h,v 1.27.2.1.4.1 2010/06/14 02:09:06 kensmith Exp $
  */
 
-#ifndef	_SYS_SYSLOG_H_
+#ifndef _SYS_SYSLOG_H_
 #define _SYS_SYSLOG_H_
 
 #include <sys/appleapiopts.h>
@@ -88,54 +85,61 @@
 #define	LOG_DEBUG	7	/* debug-level messages */
 
 #define	LOG_PRIMASK	0x07	/* mask to extract priority part (internal) */
-				/* extract priority */
+/* extract priority */
 #define	LOG_PRI(p)	((p) & LOG_PRIMASK)
-#define	LOG_MAKEPRI(fac, pri)	(((fac) << 3) | (pri))
+#define	LOG_MAKEPRI(fac, pri)	((fac) | (pri))
 
 #ifdef SYSLOG_NAMES
 #define	INTERNAL_NOPRI	0x10	/* the "no priority" priority */
-				/* mark "facility" */
-#define	INTERNAL_MARK	LOG_MAKEPRI(LOG_NFACILITIES, 0)
+/* mark "facility" */
+#define	INTERNAL_MARK	LOG_MAKEPRI((LOG_NFACILITIES<<3), 0)
 typedef struct _code {
-	char	*c_name;
-	int	c_val;
+	const char	*c_name;
+	int		c_val;
 } CODE;
 
 CODE prioritynames[] = {
-	{ "alert",	LOG_ALERT },
-	{ "crit",	LOG_CRIT },
-	{ "debug",	LOG_DEBUG },
-	{ "emerg",	LOG_EMERG },
-	{ "err",	LOG_ERR },
-	{ "error",	LOG_ERR },		/* DEPRECATED */
-	{ "info",	LOG_INFO },
-	{ "none",	INTERNAL_NOPRI },	/* INTERNAL */
-	{ "notice",	LOG_NOTICE },
-	{ "panic", 	LOG_EMERG },		/* DEPRECATED */
-	{ "warn",	LOG_WARNING },		/* DEPRECATED */
-	{ "warning",	LOG_WARNING },
-	{ 0,		-1 }
+	{ "alert",	LOG_ALERT,	},
+	{ "crit",	LOG_CRIT,	},
+	{ "debug",	LOG_DEBUG,	},
+	{ "emerg",	LOG_EMERG,	},
+	{ "err",	LOG_ERR,	},
+	{ "error",	LOG_ERR,	},	/* DEPRECATED */
+	{ "info",	LOG_INFO,	},
+	{ "none",	INTERNAL_NOPRI,	},	/* INTERNAL */
+	{ "notice",	LOG_NOTICE,	},
+	{ "panic", 	LOG_EMERG,	},	/* DEPRECATED */
+	{ "warn",	LOG_WARNING,	},	/* DEPRECATED */
+	{ "warning",	LOG_WARNING,	},
+	{ NULL,		-1,		}
 };
 #endif
 
 /* facility codes */
-#define	LOG_KERN		(0<<3)	/* kernel messages */
-#define	LOG_USER		(1<<3)	/* random user-level messages */
-#define	LOG_MAIL		(2<<3)	/* mail system */
-#define	LOG_DAEMON		(3<<3)	/* system daemons */
-#define	LOG_AUTH		(4<<3)	/* security/authorization messages */
-#define	LOG_SYSLOG		(5<<3)	/* messages generated internally by syslogd */
-#define	LOG_LPR			(6<<3)	/* line printer subsystem */
-#define	LOG_NEWS		(7<<3)	/* network news subsystem */
-#define	LOG_UUCP		(8<<3)	/* UUCP subsystem */
-#define	LOG_CRON		(9<<3)	/* clock daemon */
-#define	LOG_AUTHPRIV 	(10<<3)	/* security/authorization messages (private) */
-#define	LOG_FTP			(11<<3)	/* ftp daemon */
-#define	LOG_NETINFO		(12<<3)	/* NetInfo */
+#define	LOG_KERN	(0<<3)	/* kernel messages */
+#define	LOG_USER	(1<<3)	/* random user-level messages */
+#define	LOG_MAIL	(2<<3)	/* mail system */
+#define	LOG_DAEMON	(3<<3)	/* system daemons */
+#define	LOG_AUTH	(4<<3)	/* authorization messages */
+#define	LOG_SYSLOG	(5<<3)	/* messages generated internally by syslogd */
+#define	LOG_LPR		(6<<3)	/* line printer subsystem */
+#define	LOG_NEWS	(7<<3)	/* network news subsystem */
+#define	LOG_UUCP	(8<<3)	/* UUCP subsystem */
+#define	LOG_CRON	(9<<3)	/* clock daemon */
+#define	LOG_AUTHPRIV	(10<<3)	/* authorization messages (private) */
+/* Facility #10 clashes in DEC UNIX, where */
+/* it's defined as LOG_MEGASAFE for AdvFS  */
+/* event logging.                          */
+#define	LOG_FTP		(11<<3)	/* ftp daemon */
+//#define	LOG_NTP		(12<<3)	/* NTP subsystem */
+//#define	LOG_SECURITY	(13<<3) /* security subsystems (firewalling, etc.) */
+//#define	LOG_CONSOLE	(14<<3) /* /dev/console output */
+#define	LOG_NETINFO	(12<<3)	/* NetInfo */
 #define	LOG_REMOTEAUTH	(13<<3)	/* remote authentication/authorization */
-#define	LOG_INSTALL		(14<<3)	/* installer subsystem */
-#define	LOG_RAS			(15<<3)	/* Remote Access Service (VPN / PPP) */
+#define	LOG_INSTALL	(14<<3)	/* installer subsystem */
+#define	LOG_RAS		(15<<3)	/* Remote Access Service (VPN / PPP) */
 
+/* other codes through 15 reserved for system use */
 #define	LOG_LOCAL0	(16<<3)	/* reserved for local use */
 #define	LOG_LOCAL1	(17<<3)	/* reserved for local use */
 #define	LOG_LOCAL2	(18<<3)	/* reserved for local use */
@@ -145,43 +149,43 @@ CODE prioritynames[] = {
 #define	LOG_LOCAL6	(22<<3)	/* reserved for local use */
 #define	LOG_LOCAL7	(23<<3)	/* reserved for local use */
 
-#define	LOG_LAUNCHD		(24<<3)	/* launchd - general bootstrap daemon */
+#define	LOG_LAUNCHD	(24<<3)	/* launchd - general bootstrap daemon */
 
 #define	LOG_NFACILITIES	25	/* current number of facilities */
 #define	LOG_FACMASK	0x03f8	/* mask to extract facility part */
-				/* facility of pri */
+/* facility of pri */
 #define	LOG_FAC(p)	(((p) & LOG_FACMASK) >> 3)
 
 #ifdef SYSLOG_NAMES
 CODE facilitynames[] = {
-	{ "auth",	LOG_AUTH },
-	{ "authpriv",	LOG_AUTHPRIV },
-	{ "cron", 	LOG_CRON },
-	{ "daemon",	LOG_DAEMON },
-	{ "ftp",	LOG_FTP },
-	{ "install",	LOG_INSTALL },
-	{ "kern",	LOG_KERN },
-	{ "lpr",	LOG_LPR },
-	{ "mail",	LOG_MAIL },
-	{ "mark", 	INTERNAL_MARK },	/* INTERNAL */
-	{ "netinfo",	LOG_NETINFO },
-	{ "ras", 	LOG_RAS },
-	{ "remoteauth", LOG_REMOTEAUTH },
-	{ "news",	LOG_NEWS },
-	{ "security",	LOG_AUTH },		/* DEPRECATED */
-	{ "syslog",	LOG_SYSLOG },
-	{ "user",	LOG_USER },
-	{ "uucp",	LOG_UUCP },
-	{ "local0",	LOG_LOCAL0 },
-	{ "local1",	LOG_LOCAL1 },
-	{ "local2",	LOG_LOCAL2 },
-	{ "local3",	LOG_LOCAL3 },
-	{ "local4",	LOG_LOCAL4 },
-	{ "local5",	LOG_LOCAL5 },
-	{ "local6",	LOG_LOCAL6 },
-	{ "local7",	LOG_LOCAL7 },
-	{ "launchd", 	LOG_LAUNCHD },
-	{ 0,		-1 }
+	{ "auth",	LOG_AUTH,	},
+	{ "authpriv",	LOG_AUTHPRIV,	},
+	{ "cron", 	LOG_CRON,	},
+	{ "daemon",	LOG_DAEMON,	},
+	{ "ftp",	LOG_FTP,	},
+	{ "install",	LOG_INSTALL	},
+	{ "kern",	LOG_KERN,	},
+	{ "lpr",	LOG_LPR,	},
+	{ "mail",	LOG_MAIL,	},
+	{ "mark", 	INTERNAL_MARK,	},	/* INTERNAL */
+	{ "netinfo",	LOG_NETINFO,	},
+	{ "ras", 	LOG_RAS		},
+	{ "remoteauth", LOG_REMOTEAUTH	},
+	{ "news",	LOG_NEWS,	},
+	{ "security",	LOG_AUTH	},	/* DEPRECATED */
+	{ "syslog",	LOG_SYSLOG,	},
+	{ "user",	LOG_USER,	},
+	{ "uucp",	LOG_UUCP,	},
+	{ "local0",	LOG_LOCAL0,	},
+	{ "local1",	LOG_LOCAL1,	},
+	{ "local2",	LOG_LOCAL2,	},
+	{ "local3",	LOG_LOCAL3,	},
+	{ "local4",	LOG_LOCAL4,	},
+	{ "local5",	LOG_LOCAL5,	},
+	{ "local6",	LOG_LOCAL6,	},
+	{ "local7",	LOG_LOCAL7,	},
+	{ "launchd", 	LOG_LAUNCHD	},
+	{ NULL,		-1,		}
 };
 #endif
 
@@ -211,18 +215,24 @@ CODE facilitynames[] = {
 #define	LOG_PERROR	0x20	/* log to stderr as well */
 
 #ifndef KERNEL
-#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#include <sys/_types.h>		/* for __darwin_va_list */
-#endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
+
+/*
+ * Don't use va_list in the vsyslog() prototype.   Va_list is typedef'd in two
+ * places (<machine/varargs.h> and <machine/stdarg.h>), so if we include one
+ * of them here we may collide with the utility's includes.  It's unreasonable
+ * for utilities to have to include one of them to include syslog.h, so we get
+ * __va_list from <sys/_types.h> and use it.
+ */
+#include <sys/_types.h>
 
 __BEGIN_DECLS
 void	closelog(void);
 void	openlog(const char *, int, int);
 int	setlogmask(int);
-void	syslog(int, const char *, ...) __DARWIN_LDBL_COMPAT(syslog);
-#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-void	vsyslog(int, const char *, __darwin_va_list) __DARWIN_LDBL_COMPAT(vsyslog);
-#endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
+void	syslog(int, const char *, ...) __printflike(2, 3) __DARWIN_LDBL_COMPAT(syslog);
+#if __DARWIN_C_LEVEL >= __DARWIN_C_FULL
+void	vsyslog(int, const char *, __darwin_va_list) __printflike(2, 0) __DARWIN_LDBL_COMPAT(vsyslog);
+#endif
 __END_DECLS
 
 #else /* !KERNEL */

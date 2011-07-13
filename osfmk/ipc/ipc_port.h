@@ -127,13 +127,15 @@ struct ipc_port {
 	} data;
 
 	ipc_kobject_t ip_kobject;
+
 	mach_port_mscount_t ip_mscount;
 	mach_port_rights_t ip_srights;
 	mach_port_rights_t ip_sorights;
 
 	struct ipc_port *ip_nsrequest;
 	struct ipc_port *ip_pdrequest;
-	struct ipc_port_request *ip_dnrequests;
+	struct ipc_port_request *ip_requests;
+	boolean_t ip_sprequests;
 
 	unsigned int ip_pset_count;
 	struct ipc_kmsg *ip_premsg;
@@ -191,6 +193,9 @@ struct ipc_port {
 
 #define	ip_kotype(port)		io_kotype(&(port)->ip_object)
 
+#define ip_full_kernel(port)	imq_full_kernel(&(port)->ip_messages) 
+#define ip_full(port)		imq_full(&(port)->ip_messages) 
+
 /*
  * JMM - Preallocation flag
  * This flag indicates that there is a message buffer preallocated for this
@@ -215,7 +220,7 @@ MACRO_BEGIN								\
 	(port)->ip_premsg = IKM_NULL;					\
 MACRO_END
 
-
+/* JMM - address alignment/packing for LP64 */
 struct ipc_port_request {
 	union {
 		struct ipc_port *port;
@@ -233,6 +238,17 @@ struct ipc_port_request {
 
 #define	ipr_soright		notify.port
 #define	ipr_name		name.name
+
+/*
+ * Use the low bits in the ipr_soright to specify the request type
+ */
+#define IPR_SOR_SPARM_MASK	1		/* send-possible armed */
+#define IPR_SOR_SPREQ_MASK	2		/* send-possible requested */
+#define IPR_SOR_SPBIT_MASK	3		/* combo */
+#define IPR_SOR_SPARMED(sor)	(((uintptr_t)(sor) & IPR_SOR_SPARM_MASK) != 0)
+#define IPR_SOR_SPREQ(sor)	(((uintptr_t)(sor) & IPR_SOR_SPREQ_MASK) != 0)
+#define IPR_SOR_PORT(sor)	((ipc_port_t)((uintptr_t)(sor) & ~IPR_SOR_SPBIT_MASK))
+#define IPR_SOR_MAKE(p,m)	((ipc_port_t)((uintptr_t)(p) | (m)))
 
 extern lck_grp_t 	ipc_lck_grp;
 extern lck_attr_t 	ipc_lck_attr;
@@ -297,32 +313,47 @@ extern ipc_port_timestamp_t ipc_port_timestamp(void);
 				     MACH_PORT_RIGHT_SEND,		\
 				     (ipc_object_t *) (portp))
 
-/* Allocate a dead-name request slot */
+/* Allocate a notification request slot */
 extern kern_return_t
-ipc_port_dnrequest(
+ipc_port_request_alloc(
 	ipc_port_t			port,
 	mach_port_name_t		name,
 	ipc_port_t			soright,
+	boolean_t			send_possible,
+	boolean_t			immediate,
 	ipc_port_request_index_t	*indexp);
 
-/* Grow a port's table of dead-name requests */
-extern kern_return_t ipc_port_dngrow(
+/* Grow one of a port's tables of notifcation requests */
+extern kern_return_t ipc_port_request_grow(
 	ipc_port_t			port,
 	ipc_table_elems_t		target_size);
 
-/* Cancel a dead-name request and return the send-once right */
-extern ipc_port_t ipc_port_dncancel(
+/* Return the type(s) of notification requests outstanding */
+extern mach_port_type_t ipc_port_request_type(
 	ipc_port_t			port,
 	mach_port_name_t		name,
 	ipc_port_request_index_t	index);
 
-#define	ipc_port_dnrename(port, index, oname, nname)			\
+/* Cancel a notification request and return the send-once right */
+extern ipc_port_t ipc_port_request_cancel(
+	ipc_port_t			port,
+	mach_port_name_t		name,
+	ipc_port_request_index_t	index);
+
+/* Arm any delayed send-possible notification */
+extern void ipc_port_request_sparm(
+	ipc_port_t			port,
+	mach_port_name_t		name,
+	ipc_port_request_index_t	index);
+
+/* Macros for manipulating a port's dead name notificaiton requests */
+#define	ipc_port_request_rename(port, index, oname, nname)		\
 MACRO_BEGIN								\
 	ipc_port_request_t ipr, table;					\
 									\
 	assert(ip_active(port));					\
 									\
-	table = port->ip_dnrequests;					\
+	table = port->ip_requests;					\
 	assert(table != IPR_NULL);					\
 									\
 	ipr = &table[index];						\
@@ -330,6 +361,7 @@ MACRO_BEGIN								\
 									\
 	ipr->ipr_name = nname;						\
 MACRO_END
+
 
 /* Make a port-deleted request */
 extern void ipc_port_pdrequest(
@@ -375,8 +407,11 @@ extern kern_return_t ipc_port_alloc_name(
 
 /* Generate dead name notifications */
 extern void ipc_port_dnnotify(
-	ipc_port_t		port,
-	ipc_port_request_t	dnrequests);
+	ipc_port_t		port);
+
+/* Generate send-possible notifications */
+extern void ipc_port_spnotify(
+	ipc_port_t		port);
 
 /* Destroy a port */
 extern void ipc_port_destroy(
@@ -433,6 +468,10 @@ extern void ipc_port_release_sonce(
 
 /* Release a naked (in limbo or in transit) receive right */
 extern void ipc_port_release_receive(
+	ipc_port_t	port);
+
+/* finalize the destruction of a port before it gets freed */
+extern void ipc_port_finalize(
 	ipc_port_t	port);
 
 /* Allocate a port in a special space */

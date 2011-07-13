@@ -28,9 +28,7 @@
 #ifndef _MACHINE_TIMER_H
 #define _MACHINE_TIMER_H
 
-#if defined (__ppc__)
-#include "ppc/timer.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/timer.h"
 #else
 #error architecture not supported

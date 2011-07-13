@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2010 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -78,8 +78,6 @@
 
 #include <net/if_media.h>
 #include <net/multicast_list.h>
-
-extern void dlil_input_packet_list(struct ifnet *, struct mbuf *);
 
 static struct ether_addr slow_proto_multicast = {
     IEEE8023AD_SLOW_PROTO_MULTICAST
@@ -724,8 +722,9 @@ ifbond_release(ifbond_ref ifb)
 		printf("ifbond_release(%s) removing multicast\n",
 		       ifb->ifb_name);
 	    }
-	    (void)if_delmultiaddr(ifb->ifb_ifma_slow_proto, 0);
-	    ifma_release(ifb->ifb_ifma_slow_proto);
+	    (void) if_delmulti_anon(ifb->ifb_ifma_slow_proto->ifma_ifp,
+	        ifb->ifb_ifma_slow_proto->ifma_addr);
+	    IFMA_REMREF(ifb->ifb_ifma_slow_proto);
 	}
 	if (ifb->ifb_distributing_array != NULL) {
 	    FREE(ifb->ifb_distributing_array, M_BOND);
@@ -885,10 +884,6 @@ if_siflladdr(struct ifnet * ifp, const struct ether_addr * ea_p)
     ifr.ifr_addr.sa_family = AF_UNSPEC;
     ifr.ifr_addr.sa_len = ETHER_ADDR_LEN;
     ether_addr_copy(ifr.ifr_addr.sa_data, ea_p);
-#if 0
-    snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s%d", ifnet_name(ifp),
-	     ifnet_unit(ifp));
-#endif
     return (ifnet_ioctl(ifp, 0, SIOCSIFLLADDR, &ifr));
 }
 
@@ -909,9 +904,6 @@ bond_globals_create(lacp_system_priority sys_pri,
     TAILQ_INIT(&b->ifbond_list);
     b->system = *sys;
     b->system_priority = sys_pri;
-#if 0
-    b->verbose = 1;
-#endif
     return (b);
 }
 
@@ -936,7 +928,6 @@ bond_globals_init(void)
     for (i = 0; i < 4; i++) {
 	char 		ifname[IFNAMSIZ+1];
 	snprintf(ifname, sizeof(ifname), "en%d", i);
-	/* XXX ifunit() needs to return a reference on the ifp */
 	ifp = ifunit(ifname);
 	if (ifp != NULL) {
 	    break;
@@ -1108,8 +1099,7 @@ ifbond_add_slow_proto_multicast(ifbond_ref ifb)
     sdl.sdl_nlen = 0;
     sdl.sdl_alen = sizeof(slow_proto_multicast);
     bcopy(&slow_proto_multicast, sdl.sdl_data, sizeof(slow_proto_multicast));
-    error = if_addmulti(ifb->ifb_ifp, (struct sockaddr *)&sdl, 
-			&ifma);
+    error = if_addmulti_anon(ifb->ifb_ifp, (struct sockaddr *)&sdl, &ifma);
     if (error == 0) {
 	ifb->ifb_ifma_slow_proto = ifma;
     }
@@ -1236,10 +1226,10 @@ bond_if_detach(struct ifnet * ifp)
     int		error;
 
     error = ifnet_detach(ifp);
-	if (error) {
-	    printf("bond_if_detach %s%d: ifnet_detach failed, %d\n",
-		   ifnet_name(ifp), ifnet_unit(ifp), error);
-	}
+    if (error) {
+	printf("bond_if_detach %s%d: ifnet_detach failed, %d\n",
+	       ifnet_name(ifp), ifnet_unit(ifp), error);
+    }
 	
     return;
 }
@@ -2571,24 +2561,10 @@ static int
 bond_set_promisc(__unused struct ifnet *ifp)
 {
     int 		error = 0;
-#if 0
-    ifbond_ref	ifb = ifnet_softc(ifp);
-
-
-    if ((ifnet_flags(ifp) & IFF_PROMISC) != 0) {
-	if ((ifb->ifb_flags & IFBF_PROMISC) == 0) {
-	    error = ifnet_set_promiscuous(ifb->ifb_p, 1);
-	    if (error == 0)
-		ifb->ifb_flags |= IFBF_PROMISC;
-	}
-    } else {
-	if ((ifb->ifb_flags & IFBF_PROMISC) != 0) {
-	    error = ifnet_set_promiscuous(ifb->ifb_p, 0);
-	    if (error == 0)
-		ifb->ifb_flags &= ~IFBF_PROMISC;
-	}
-    }
-#endif
+    /*
+     * The benefit of doing this currently does not warrant
+     * the added code complexity. Do nothing and return.
+     */
     return (error);
 }
 
@@ -2812,7 +2788,6 @@ bond_ioctl(struct ifnet *ifp, u_long cmd, void * data)
 	switch (ibr.ibr_op) {
 	case IF_BOND_OP_ADD_INTERFACE:
 	case IF_BOND_OP_REMOVE_INTERFACE:
-	    /* XXX ifunit() needs to return a reference on the ifp */
 	    port_ifp = ifunit(ibr.ibr_ibru.ibru_if_name);
 	    if (port_ifp == NULL) {
 		error = ENXIO;
@@ -2947,23 +2922,16 @@ bond_if_free(struct ifnet * ifp)
 }
 
 static void
-bond_event(struct ifnet * port_ifp, __unused protocol_family_t protocol,
-		   const struct kev_msg * event)
+bond_handle_event(struct ifnet * port_ifp, int event_code)
 {
     struct ifnet *	bond_ifp = NULL;
-    int			event_code = 0;
     ifbond_ref		ifb;
     int			old_distributing_count;
     bondport_ref	p;
     struct media_info	media_info = { 0, 0};
 
-    if (event->vendor_code != KEV_VENDOR_APPLE 
-	|| event->kev_class != KEV_NETWORK_CLASS 
-	|| event->kev_subclass != KEV_DL_SUBCLASS) {
-	return;
-    }
-    switch (event->event_code) {
-    case KEV_DL_IF_DETACHING:
+    switch (event_code) {
+    case KEV_DL_IF_DETACHED:
 	break;
     case KEV_DL_LINK_OFF:
     case KEV_DL_LINK_ON:
@@ -2980,8 +2948,8 @@ bond_event(struct ifnet * port_ifp, __unused protocol_family_t protocol,
     }
     ifb = p->po_bond;
     old_distributing_count = ifb->ifb_distributing_count;
-    switch (event->event_code) {
-    case KEV_DL_IF_DETACHING:
+    switch (event_code) {
+    case KEV_DL_IF_DETACHED:
 	bond_remove_interface(ifb, p->po_ifp);
 	break;
     case KEV_DL_LINK_OFF:
@@ -3043,6 +3011,37 @@ bond_event(struct ifnet * port_ifp, __unused protocol_family_t protocol,
 }
 
 static void
+bond_event(struct ifnet * port_ifp, __unused protocol_family_t protocol,
+	   const struct kev_msg * event)
+{
+    int		event_code;
+
+    if (event->vendor_code != KEV_VENDOR_APPLE 
+	|| event->kev_class != KEV_NETWORK_CLASS 
+	|| event->kev_subclass != KEV_DL_SUBCLASS) {
+	return;
+    }
+    event_code = event->event_code;
+    switch (event_code) {
+    case KEV_DL_LINK_OFF:
+    case KEV_DL_LINK_ON:
+	/* we only care about link status changes */
+	bond_handle_event(port_ifp, event_code);
+	break;
+    default:
+	break;
+    }
+    return;
+}
+
+static errno_t
+bond_detached(ifnet_t port_ifp, __unused protocol_family_t protocol)
+{
+    bond_handle_event(port_ifp, KEV_DL_IF_DETACHED);
+    return (0);
+}
+
+static void
 interface_link_event(struct ifnet * ifp, u_int32_t event_code)
 {
     struct {
@@ -3051,6 +3050,7 @@ interface_link_event(struct ifnet * ifp, u_int32_t event_code)
 	char			if_name[IFNAMSIZ];
     } event;
 
+    bzero(&event, sizeof(event));
     event.header.total_size    = sizeof(event);
     event.header.vendor_code   = KEV_VENDOR_APPLE;
     event.header.kev_class     = KEV_NETWORK_CLASS;
@@ -3082,6 +3082,7 @@ bond_attach_protocol(struct ifnet *ifp)
     bzero(&reg, sizeof(reg));
     reg.input = bond_input;
     reg.event = bond_event;
+    reg.detached = bond_detached;
 	
     error = ifnet_attach_protocol(ifp, PF_BOND, &reg);
     if (error) {

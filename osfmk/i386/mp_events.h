@@ -65,7 +65,7 @@ const char *mp_event_name[] = {	\
 	"MP_LAST"		\
 }
 
-typedef enum { SYNC, ASYNC } mp_sync_t;
+typedef enum { SYNC, ASYNC, NOSYNC } mp_sync_t;
 
 __BEGIN_DECLS
 

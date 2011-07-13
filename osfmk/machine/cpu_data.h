@@ -28,9 +28,7 @@
 #ifndef _MACHINE_CPU_DATA_H
 #define _MACHINE_CPU_DATA_H
 
-#if defined (__ppc__)
-#include "ppc/cpu_data.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/cpu_data.h"
 #else
 #error architecture not supported

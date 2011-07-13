@@ -79,6 +79,9 @@ labelh_new_user(ipc_space_t space, struct label *inl, mach_port_name_t *namep)
 
 	/* XXX - perform entrypoint check here? */
 
+	/* JMM - redo as port allocation, kobject set, and then copyout */
+	assert(!CONFIG_MACF_MACH);
+
 	/*
 	 * Note: the calling task will have a receive right for the port.
 	 * This is different from label handles that reference tasks
@@ -94,6 +97,7 @@ labelh_new_user(ipc_space_t space, struct label *inl, mach_port_name_t *namep)
 	port->ip_mscount++;
 	port->ip_srights++;
 	is_write_lock(space);
+	/* XXX - must validate space is still active and unwind if not */
 	entry = ipc_entry_lookup(space, *namep);
 	if (entry != IE_NULL)
 		entry->ie_bits |= MACH_PORT_TYPE_SEND;

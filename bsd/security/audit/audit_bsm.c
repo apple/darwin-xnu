@@ -1757,6 +1757,24 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		}
 		break;
 
+	case AUE_SESSION_START:
+	case AUE_SESSION_UPDATE:
+	case AUE_SESSION_END:
+	case AUE_SESSION_CLOSE:
+		if (ARG_IS_VALID(kar, ARG_VALUE64)) {
+			tok = au_to_arg64(1, "sflags", ar->ar_arg_value64);
+			kau_write(rec, tok);
+		}
+		if (ARG_IS_VALID(kar, ARG_AMASK)) {
+			tok = au_to_arg32(2, "am_success",
+			    ar->ar_arg_amask.am_success);
+			kau_write(rec, tok);
+			tok = au_to_arg32(3, "am_failure",
+			    ar->ar_arg_amask.am_failure);
+			kau_write(rec, tok);
+		}
+		break;
+
 	/************************
 	 * Mach system calls    *
 	 ************************/
@@ -1884,7 +1902,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	}
 
 #if CONFIG_MACF
-	do {
+	if (NULL != ar->ar_mac_records) {
 		/* Convert the audit data from the MAC policies */
 		struct mac_audit_record *mar;
 
@@ -1913,7 +1931,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 
 			kau_write(rec, tok);
 		}
-	} while (0);
+	}
 #endif
 
 	kau_write(rec, subj_tok);

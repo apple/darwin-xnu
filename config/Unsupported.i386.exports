@@ -23,7 +23,7 @@ _kernel_thread
 _lapic_set_perfcnt_interrupt_mask
 _lapic_set_pmi_func
 _lo_ifp
-_m_adj
+_m_adj:_mbuf_adj
 _m_cat
 _m_copydata
 _m_copym
@@ -41,7 +41,7 @@ _m_split
 _m_trailingspace:_mbuf_trailingspace
 _mach_msg_rpc_from_kernel
 _mach_msg_send_from_kernel_with_options
-_mcl_to_paddr
+_mcl_to_paddr:_mbuf_data_to_physical
 _ml_get_apicid
 _ml_get_maxbusdelay
 _ml_get_maxsnoop

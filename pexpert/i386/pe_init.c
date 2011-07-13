@@ -185,9 +185,7 @@ void PE_init_platform(boolean_t vm_initialized, void * _args)
     }
 
     if (!vm_initialized) {
-		/* Hack! FIXME.. */ 
-        outb(0x21, 0xff);   /* Maskout all interrupts Pic1 */
-        outb(0xa1, 0xff);   /* Maskout all interrupts Pic2 */
+
         if (PE_state.deviceTreeHead) {
             DTInit(PE_state.deviceTreeHead);
         }

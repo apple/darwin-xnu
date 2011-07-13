@@ -91,6 +91,7 @@
 #include <mach/port.h>
 #include <vm/vm_protos.h>
 #include <vm/vm_map.h>	/* for current_map() */
+#include <vm/vm_fault.h>
 #include <mach/thread_act.h> /* for thread_resume */
 #include <machine/machine_routines.h>
 #if defined(__i386__)
@@ -109,12 +110,6 @@
 #define KERNEL_DEBUG1 KERNEL_DEBUG_CONSTANT1
 #endif
 
-
-#if defined(__ppc__) || defined(__ppc64__)
-#include <architecture/ppc/cframe.h>
-#endif
-
-
 lck_grp_attr_t   *pthread_lck_grp_attr;
 lck_grp_t    *pthread_lck_grp;
 lck_attr_t   *pthread_lck_attr;
@@ -130,7 +125,6 @@ extern kern_return_t semaphore_signal_internal_trap(mach_port_name_t);
 extern void workqueue_thread_yielded(void);
 
 static int workqueue_additem(struct workqueue *wq, int prio, user_addr_t item, int affinity);
-static int workqueue_removeitem(struct workqueue *wq, int prio, user_addr_t item);
 static boolean_t workqueue_run_nextitem(proc_t p, struct workqueue *wq, thread_t th,
 					user_addr_t oc_item, int oc_prio, int oc_affinity);
 static void wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlist *tl,
@@ -138,7 +132,7 @@ static void wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlis
 static void wq_unpark_continue(void);
 static void wq_unsuspend_continue(void);
 static int setup_wqthread(proc_t p, thread_t th, user_addr_t item, int reuse_thread, struct threadlist *tl);
-static boolean_t workqueue_addnewthread(struct workqueue *wq);
+static boolean_t workqueue_addnewthread(struct workqueue *wq, boolean_t oc_thread);
 static void workqueue_removethread(struct threadlist *tl);
 static void workqueue_lock_spin(proc_t);
 static void workqueue_unlock(proc_t);
@@ -215,9 +209,7 @@ bsdthread_create(__unused struct proc *p, struct bsdthread_create_args  *uap, us
 	isLP64 = IS_64BIT_PROCESS(p);
 
 
-#if defined(__ppc__)
-	stackaddr = 0xF0000000;
-#elif defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__)
 	stackaddr = 0xB0000000;
 #else
 #error Need to define a stack address hint for this architecture
@@ -266,6 +258,22 @@ bsdthread_create(__unused struct proc *p, struct bsdthread_create_args  *uap, us
 		th_stack = (stackaddr + th_stacksize + PTH_DEFAULT_GUARDSIZE);
 		th_pthread = (stackaddr + th_stacksize + PTH_DEFAULT_GUARDSIZE);
 		user_stacksize = th_stacksize;
+		
+	       /*
+		* Pre-fault the first page of the new thread's stack and the page that will
+		* contain the pthread_t structure.
+		*/	
+		vm_fault( vmap,
+		  vm_map_trunc_page(th_stack - PAGE_SIZE_64),
+		  VM_PROT_READ | VM_PROT_WRITE,
+		  FALSE, 
+		  THREAD_UNINT, NULL, 0);
+		
+		vm_fault( vmap,
+		  vm_map_trunc_page(th_pthread),
+		  VM_PROT_READ | VM_PROT_WRITE,
+		  FALSE, 
+		  THREAD_UNINT, NULL, 0);
 	} else {
 		th_stack = user_stack;
 		user_stacksize = user_stack;
@@ -275,31 +283,7 @@ bsdthread_create(__unused struct proc *p, struct bsdthread_create_args  *uap, us
 #endif
 	}
 	
-#if defined(__ppc__)
-	/*
-	 * Set up PowerPC registers...
-	 * internally they are always kept as 64 bit and
-	 * since the register set is the same between 32 and 64bit modes
-	 * we don't need 2 different methods for setting the state
-	 */
-	{
-	        ppc_thread_state64_t state64;
-		ppc_thread_state64_t *ts64 = &state64;
-
-		ts64->srr0 = (uint64_t)p->p_threadstart;
-		ts64->r1 = (uint64_t)(th_stack - C_ARGSAVE_LEN - C_RED_ZONE);
-		ts64->r3 = (uint64_t)th_pthread;
-		ts64->r4 = (uint64_t)(th_thport);
-		ts64->r5 = (uint64_t)user_func;
-		ts64->r6 = (uint64_t)user_funcarg;
-		ts64->r7 = (uint64_t)user_stacksize;
-		ts64->r8 = (uint64_t)uap->flags;
-
-		thread_set_wq_state64(th, (thread_state_t)ts64);
-
-		thread_set_cthreadself(th, (uint64_t)th_pthread, isLP64);
-	}
-#elif defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__)
 	{
         /*
          * Set up i386 registers & function call.
@@ -453,25 +437,32 @@ uint32_t wq_stalled_window_usecs	= WQ_STALLED_WINDOW_USECS;
 uint32_t wq_reduce_pool_window_usecs	= WQ_REDUCE_POOL_WINDOW_USECS;
 uint32_t wq_max_timer_interval_usecs	= WQ_MAX_TIMER_INTERVAL_USECS;
 uint32_t wq_max_threads			= WORKQUEUE_MAXTHREADS;
+uint32_t wq_max_constrained_threads	= WORKQUEUE_MAXTHREADS / 8;
 
 
-SYSCTL_INT(_kern, OID_AUTO, wq_yielded_threshold, CTLFLAG_RW,
+SYSCTL_INT(_kern, OID_AUTO, wq_yielded_threshold, CTLFLAG_RW | CTLFLAG_LOCKED,
 	   &wq_yielded_threshold, 0, "");
 
-SYSCTL_INT(_kern, OID_AUTO, wq_yielded_window_usecs, CTLFLAG_RW,
+SYSCTL_INT(_kern, OID_AUTO, wq_yielded_window_usecs, CTLFLAG_RW | CTLFLAG_LOCKED,
 	   &wq_yielded_window_usecs, 0, "");
 
-SYSCTL_INT(_kern, OID_AUTO, wq_stalled_window_usecs, CTLFLAG_RW,
+SYSCTL_INT(_kern, OID_AUTO, wq_stalled_window_usecs, CTLFLAG_RW | CTLFLAG_LOCKED,
 	   &wq_stalled_window_usecs, 0, "");
 
-SYSCTL_INT(_kern, OID_AUTO, wq_reduce_pool_window_usecs, CTLFLAG_RW,
+SYSCTL_INT(_kern, OID_AUTO, wq_reduce_pool_window_usecs, CTLFLAG_RW | CTLFLAG_LOCKED,
 	   &wq_reduce_pool_window_usecs, 0, "");
 
-SYSCTL_INT(_kern, OID_AUTO, wq_max_timer_interval_usecs, CTLFLAG_RW,
+SYSCTL_INT(_kern, OID_AUTO, wq_max_timer_interval_usecs, CTLFLAG_RW | CTLFLAG_LOCKED,
 	   &wq_max_timer_interval_usecs, 0, "");
 
-SYSCTL_INT(_kern, OID_AUTO, wq_max_threads, CTLFLAG_RW,
+SYSCTL_INT(_kern, OID_AUTO, wq_max_threads, CTLFLAG_RW | CTLFLAG_LOCKED,
 	   &wq_max_threads, 0, "");
+
+SYSCTL_INT(_kern, OID_AUTO, wq_max_constrained_threads, CTLFLAG_RW | CTLFLAG_LOCKED,
+	   &wq_max_constrained_threads, 0, "");
+
+
+static uint32_t wq_init_constrained_limit = 1;
 
 
 void
@@ -542,11 +533,9 @@ wq_thread_is_busy(uint64_t cur_ts, uint64_t *lastblocked_tsp)
 	 */
 	lastblocked_ts = *lastblocked_tsp;
 
-#if defined(__ppc__)
-#else
 	if ( !OSCompareAndSwap64((UInt64)lastblocked_ts, (UInt64)lastblocked_ts, lastblocked_tsp))
 		return (TRUE);
-#endif
+
 	if (lastblocked_ts >= cur_ts) {
 		/*
 		 * because the update of the timestamp when a thread blocks isn't
@@ -682,7 +671,7 @@ again:
 					}
 				}
 				if (add_thread == TRUE) {
-					retval = workqueue_addnewthread(wq);
+					retval = workqueue_addnewthread(wq, FALSE);
 					break;
 				}
 			}
@@ -774,7 +763,7 @@ workqueue_thread_yielded(void)
 		if (secs == 0 && usecs < wq_yielded_window_usecs) {
 
 			if (wq->wq_thidlecount == 0) {
-				workqueue_addnewthread(wq);
+				workqueue_addnewthread(wq, TRUE);
 				/*
 				 * 'workqueue_addnewthread' drops the workqueue lock
 				 * when creating the new thread and then retakes it before
@@ -876,14 +865,9 @@ workqueue_callback(int type, thread_t thread)
 			 * since another thread would have to get scheduled and then block after we start down 
 			 * this path), it's not a problem.  Either timestamp is adequate, so no need to retry
 			 */
-#if defined(__ppc__)
-			/*
-			 * this doesn't have to actually work reliablly for PPC, it just has to compile/link
-			 */
-			*lastblocked_ptr = (UInt64)curtime;
-#else
+
 			OSCompareAndSwap64(*lastblocked_ptr, (UInt64)curtime, lastblocked_ptr);
-#endif
+
 			if (wq->wq_itemcount)
 				WQ_TIMER_NEEDED(wq, start_timer);
 
@@ -963,9 +947,13 @@ workqueue_removethread(struct threadlist *tl)
 }
 
 
-
+/*
+ * called with workq lock held
+ * dropped and retaken around thread creation
+ * return with workq lock held
+ */
 static boolean_t
-workqueue_addnewthread(struct workqueue *wq)
+workqueue_addnewthread(struct workqueue *wq, boolean_t oc_thread)
 {
 	struct threadlist *tl;
 	struct uthread	*uth;
@@ -975,8 +963,25 @@ workqueue_addnewthread(struct workqueue *wq)
 	void 	 	*sright;
 	mach_vm_offset_t stackaddr;
 
-	if (wq->wq_nthreads >= wq_max_threads || wq->wq_nthreads >= (CONFIG_THREAD_MAX - 20))
+	if (wq->wq_nthreads >= wq_max_threads || wq->wq_nthreads >= (CONFIG_THREAD_MAX - 20)) {
+		wq->wq_lflags |= WQL_EXCEEDED_TOTAL_THREAD_LIMIT;
 		return (FALSE);
+	}
+	wq->wq_lflags &= ~WQL_EXCEEDED_TOTAL_THREAD_LIMIT;
+
+	if (oc_thread == FALSE && wq->wq_constrained_threads_scheduled >= wq_max_constrained_threads) {
+		/*
+		 * if we're not creating this thread to service an overcommit request,
+		 * then check the size of the constrained thread pool...  if we've already
+		 * reached our max for threads scheduled from this pool, don't create a new
+		 * one... the callers of this function are prepared for failure.
+		 */
+		wq->wq_lflags |= WQL_EXCEEDED_CONSTRAINED_THREAD_LIMIT;
+		return (FALSE);
+	}
+	if (wq->wq_constrained_threads_scheduled < wq_max_constrained_threads)
+		wq->wq_lflags &= ~WQL_EXCEEDED_CONSTRAINED_THREAD_LIMIT;
+
 	wq->wq_nthreads++;
 
 	p = wq->wq_proc;
@@ -990,9 +995,7 @@ workqueue_addnewthread(struct workqueue *wq)
 	tl = kalloc(sizeof(struct threadlist));
 	bzero(tl, sizeof(struct threadlist));
 
-#if defined(__ppc__)
-	stackaddr = 0xF0000000;
-#elif defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__)
 	stackaddr = 0xB0000000;
 #else
 #error Need to define a stack address hint for this architecture
@@ -1023,6 +1026,7 @@ workqueue_addnewthread(struct workqueue *wq)
 	}
 	if (kret != KERN_SUCCESS) {
 		(void) thread_terminate(th);
+		thread_deallocate(th);
 
 		kfree(tl, sizeof(struct threadlist));
 		goto failed;
@@ -1042,11 +1046,6 @@ workqueue_addnewthread(struct workqueue *wq)
 	tl->th_affinity_tag = -1;
 	tl->th_priority = WORKQUEUE_NUMPRIOS;
 	tl->th_policy = -1;
-
-#if defined(__ppc__)
-	//ml_fp_setvalid(FALSE);
-	thread_set_cthreadself(th, (uint64_t)(tl->th_stackaddr + PTH_DEFAULT_STACKSIZE + PTH_DEFAULT_GUARDSIZE), IS_64BIT_PROCESS(p));
-#endif /* __ppc__ */
 
 	uth = get_bsdthread_info(tl->th_thread);
 	uth->uu_threadlist = (void *)tl;
@@ -1087,6 +1086,22 @@ workq_open(struct proc *p, __unused struct workq_open_args  *uap, __unused int32
 	if ((p->p_lflag & P_LREGISTER) == 0)
 		return(EINVAL);
 
+	num_cpus = ml_get_max_cpus();
+
+	if (wq_init_constrained_limit) {
+		uint32_t limit;
+		/*
+		 * set up the limit for the constrained pool
+		 * this is a virtual pool in that we don't
+		 * maintain it on a separate idle and run list
+		 */
+		limit = num_cpus * (WORKQUEUE_NUMPRIOS + 1);
+
+		if (limit > wq_max_constrained_threads)
+			wq_max_constrained_threads = limit;
+
+		wq_init_constrained_limit = 0;
+	}
 	workqueue_lock_spin(p);
 
 	if (p->p_wqptr == NULL) {
@@ -1106,8 +1121,6 @@ workq_open(struct proc *p, __unused struct workq_open_args  *uap, __unused int32
 		p->p_wqiniting = TRUE;
 
 		workqueue_unlock(p);
-
-	        num_cpus = ml_get_max_cpus();
 
 		wq_size = sizeof(struct workqueue) +
 			(num_cpus * WORKQUEUE_NUMPRIOS * sizeof(uint32_t)) +
@@ -1153,7 +1166,7 @@ workq_open(struct proc *p, __unused struct workq_open_args  *uap, __unused int32
 		 * the size for the allocation of the workqueue struct
 		 */
 		nptr += (sizeof(uint64_t) - 1);
-		nptr = (char *)((long)nptr & ~(sizeof(uint64_t) - 1));
+		nptr = (char *)((uintptr_t)nptr & ~(sizeof(uint64_t) - 1));
 
 		for (i = 0; i < WORKQUEUE_NUMPRIOS; i++) {
 			wq->wq_lastblocked_ts[i] = (uint64_t *)nptr;
@@ -1217,9 +1230,9 @@ workq_kernreturn(struct proc *p, struct workq_kernreturn_args  *uap, __unused in
 			        workqueue_unlock(p);
 			        return (EINVAL);
 			}
-			if (wq->wq_thidlecount == 0 && (oc_item || (wq->wq_nthreads < wq->wq_affinity_max))) {
+			if (wq->wq_thidlecount == 0 && (oc_item || (wq->wq_constrained_threads_scheduled < wq->wq_affinity_max))) {
 
-				workqueue_addnewthread(wq);
+				workqueue_addnewthread(wq, oc_item ? TRUE : FALSE);
 
 				if (wq->wq_thidlecount == 0)
 					oc_item = 0;
@@ -1229,20 +1242,6 @@ workq_kernreturn(struct proc *p, struct workq_kernreturn_args  *uap, __unused in
 
 		        KERNEL_DEBUG(0xefffd008 | DBG_FUNC_NONE, wq, prio, affinity, oc_item, 0);
 		        }
-			break;
-		case WQOPS_QUEUE_REMOVE: {
-
-			if ((prio < 0) || (prio >= WORKQUEUE_NUMPRIOS))
-			        return (EINVAL);
-
-			workqueue_lock_spin(p);
-
-			if ((wq = (struct workqueue *)p->p_wqptr) == NULL) {
-			        workqueue_unlock(p);
-			        return (EINVAL);
-			}
-		        error = workqueue_removeitem(wq, prio, item);
-			}
 			break;
 		case WQOPS_THREAD_RETURN: {
 
@@ -1423,42 +1422,16 @@ workqueue_additem(struct workqueue *wq, int prio, user_addr_t item, int affinity
 	return (0);
 }
 
-static int 
-workqueue_removeitem(struct workqueue *wq, int prio, user_addr_t item)
-{
-	struct workitem *witem;
-	struct workitemlist *wl;
-	int error = ESRCH;
-
-	wl = (struct workitemlist *)&wq->wq_list[prio];
-
-	TAILQ_FOREACH(witem, &wl->wl_itemlist, wi_entry) {
-		if (witem->wi_item == item) {
-			TAILQ_REMOVE(&wl->wl_itemlist, witem, wi_entry);
-
-			if (TAILQ_EMPTY(&wl->wl_itemlist))
-				wq->wq_list_bitmap &= ~(1 << prio);
-			wq->wq_itemcount--;
-			
-			witem->wi_item = (user_addr_t)0;
-			witem->wi_affinity = 0;
-			TAILQ_INSERT_HEAD(&wl->wl_freelist, witem, wi_entry);
-
-			error = 0;
-			break;
-		}
-	}
-	return (error);
-}
-
 static int workqueue_importance[WORKQUEUE_NUMPRIOS] = 
 {
-	2, 0, -2,
+	2, 0, -2, INT_MIN,
 };
+
+#define WORKQ_POLICY_TIMESHARE 1
 
 static int workqueue_policy[WORKQUEUE_NUMPRIOS] = 
 {
-	1, 1, 1,
+	WORKQ_POLICY_TIMESHARE, WORKQ_POLICY_TIMESHARE, WORKQ_POLICY_TIMESHARE, WORKQ_POLICY_TIMESHARE
 };
 
 
@@ -1536,10 +1509,20 @@ workqueue_run_nextitem(proc_t p, struct workqueue *wq, thread_t thread, user_add
 		}
 		goto grab_idle_thread;
 	}
-	if (wq->wq_itemcount == 0) {
+	/*
+	 * if we get here, the work should be handled by a constrained thread
+	 */
+	if (wq->wq_itemcount == 0 || wq->wq_constrained_threads_scheduled >= wq_max_constrained_threads) {
+		/*
+		 * no work to do, or we're already at or over the scheduling limit for
+		 * constrained threads...  just return or park the thread...
+		 * do not start the timer for this condition... if we don't have any work,
+		 * we'll check again when new work arrives... if we're over the limit, we need 1 or more
+		 * constrained threads to return to the kernel before we can dispatch work from our queue
+		 */
 	        if ((th_to_park = thread) == THREAD_NULL)
 		        goto out_of_work;
-	        goto parkit;
+		goto parkit;
 	}
 	for (priority = 0; priority < WORKQUEUE_NUMPRIOS; priority++) {
 		if (wq->wq_list_bitmap & (1 << priority)) {
@@ -1727,6 +1710,16 @@ pick_up_work:
 		witem->wi_item = (user_addr_t)0;
 		witem->wi_affinity = 0;
 		TAILQ_INSERT_HEAD(&wl->wl_freelist, witem, wi_entry);
+
+		if ( !(tl->th_flags & TH_LIST_CONSTRAINED)) {
+			wq->wq_constrained_threads_scheduled++;
+			tl->th_flags |= TH_LIST_CONSTRAINED;
+		}
+	} else {
+		if (tl->th_flags & TH_LIST_CONSTRAINED) {
+			wq->wq_constrained_threads_scheduled--;
+			tl->th_flags &= ~TH_LIST_CONSTRAINED;
+		}
 	}
 	orig_priority = tl->th_priority;
 	orig_affinity_tag = tl->th_affinity_tag;
@@ -1775,15 +1768,46 @@ pick_up_work:
 		
 		KERNEL_DEBUG(0xefffd120 | DBG_FUNC_START, wq, orig_priority, tl->th_policy, 0, 0);
 
-		if (tl->th_policy != policy) {
+		if ((orig_priority == WORKQUEUE_BG_PRIOQUEUE) || (priority == WORKQUEUE_BG_PRIOQUEUE)) {
+			struct uthread *ut = NULL;
 
+	        	ut = get_bsdthread_info(th_to_run);
+
+			if (orig_priority == WORKQUEUE_BG_PRIOQUEUE) {
+				/* remove the disk throttle, importance will be reset in anycase */
+#if !CONFIG_EMBEDDED
+				proc_restore_workq_bgthreadpolicy(th_to_run);
+#else /* !CONFIG_EMBEDDED */
+				if ((ut->uu_flag & UT_BACKGROUND) != 0) {
+					ut->uu_flag &= ~UT_BACKGROUND;
+					ut->uu_iopol_disk = IOPOL_NORMAL;
+				}
+#endif /* !CONFIG_EMBEDDED */
+			} 
+
+			if (priority == WORKQUEUE_BG_PRIOQUEUE) {
+#if !CONFIG_EMBEDDED
+			proc_apply_workq_bgthreadpolicy(th_to_run);
+#else /* !CONFIG_EMBEDDED */
+				if ((ut->uu_flag & UT_BACKGROUND) == 0) {
+					/* set diskthrottling */
+					ut->uu_flag |= UT_BACKGROUND;
+					ut->uu_iopol_disk = IOPOL_THROTTLE;
+				}
+#endif /* !CONFIG_EMBEDDED */
+			}
+		}
+
+		if (tl->th_policy != policy) {
 			extinfo.timeshare = policy;
 			(void)thread_policy_set_internal(th_to_run, THREAD_EXTENDED_POLICY, (thread_policy_t)&extinfo, THREAD_EXTENDED_POLICY_COUNT);
 
 			tl->th_policy = policy;
 		}
+
                 precedinfo.importance = workqueue_importance[priority];
                 (void)thread_policy_set_internal(th_to_run, THREAD_PRECEDENCE_POLICY, (thread_policy_t)&precedinfo, THREAD_PRECEDENCE_POLICY_COUNT);
+
 
 		KERNEL_DEBUG(0xefffd120 | DBG_FUNC_END, wq,  priority, policy, 0, 0);
 	}
@@ -1858,12 +1882,18 @@ parkit:
 	wq->wq_thscheduled_count[tl->th_priority][tl->th_affinity_tag]--;
 	wq->wq_threads_scheduled--;
 
+	if (tl->th_flags & TH_LIST_CONSTRAINED) {
+		wq->wq_constrained_threads_scheduled--;
+		wq->wq_lflags &= ~WQL_EXCEEDED_CONSTRAINED_THREAD_LIMIT;
+		tl->th_flags &= ~TH_LIST_CONSTRAINED;
+	}
 	if (wq->wq_thidlecount < 100)
 		us_to_wait = wq_reduce_pool_window_usecs - (wq->wq_thidlecount * (wq_reduce_pool_window_usecs / 100));
 	else
 		us_to_wait = wq_reduce_pool_window_usecs / 100;
 
 	wq->wq_thidlecount++;
+	wq->wq_lflags &= ~WQL_EXCEEDED_TOTAL_THREAD_LIMIT;
 
 	assert_wait_timeout((caddr_t)tl, (THREAD_INTERRUPTIBLE), us_to_wait, NSEC_PER_USEC);
 
@@ -2080,34 +2110,11 @@ wq_runitem(proc_t p, user_addr_t item, thread_t th, struct threadlist *tl,
 	}
 }
 
+
 int
 setup_wqthread(proc_t p, thread_t th, user_addr_t item, int reuse_thread, struct threadlist *tl)
 {
-#if defined(__ppc__)
-	/*
-	 * Set up PowerPC registers...
-	 * internally they are always kept as 64 bit and
-	 * since the register set is the same between 32 and 64bit modes
-	 * we don't need 2 different methods for setting the state
-	 */
-	{
-	        ppc_thread_state64_t state64;
-		ppc_thread_state64_t *ts64 = &state64;
-
-		ts64->srr0 = (uint64_t)p->p_wqthread;
-		ts64->r1 = (uint64_t)((tl->th_stackaddr + PTH_DEFAULT_STACKSIZE + PTH_DEFAULT_GUARDSIZE) - C_ARGSAVE_LEN - C_RED_ZONE);
-		ts64->r3 = (uint64_t)(tl->th_stackaddr + PTH_DEFAULT_STACKSIZE + PTH_DEFAULT_GUARDSIZE);
-		ts64->r4 = (uint64_t)(tl->th_thport);
-		ts64->r5 = (uint64_t)(tl->th_stackaddr + PTH_DEFAULT_GUARDSIZE);
-		ts64->r6 = (uint64_t)item;
-		ts64->r7 = (uint64_t)reuse_thread;
-		ts64->r8 = (uint64_t)0;
-
-		if ((reuse_thread != 0) && (ts64->r3 == (uint64_t)0))
-			panic("setup_wqthread: setting reuse thread with null pthread\n");
-		thread_set_wq_state64(th, (thread_state_t)ts64);
-	}
-#elif defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__)
 	int isLP64 = 0;
 
 	isLP64 = IS_64BIT_PROCESS(p);
@@ -2183,6 +2190,14 @@ fill_procworkqueue(proc_t p, struct proc_workqueueinfo * pwqinfo)
 	pwqinfo->pwq_nthreads = wq->wq_nthreads;
 	pwqinfo->pwq_runthreads = activecount;
 	pwqinfo->pwq_blockedthreads = wq->wq_threads_scheduled - activecount;
+	pwqinfo->pwq_state = 0;
+
+	if (wq->wq_lflags & WQL_EXCEEDED_CONSTRAINED_THREAD_LIMIT)
+		pwqinfo->pwq_state |= WQ_EXCEEDED_CONSTRAINED_THREAD_LIMIT;
+
+	if (wq->wq_lflags & WQL_EXCEEDED_TOTAL_THREAD_LIMIT)
+		pwqinfo->pwq_state |= WQ_EXCEEDED_TOTAL_THREAD_LIMIT;
+
 out:
 	workqueue_unlock(p);
 	return(error);
@@ -2308,5 +2323,6 @@ pthread_init(void)
 	
 	pth_global_hashinit();
 	psynch_thcall = thread_call_allocate(psynch_wq_cleanup, NULL);
+	psynch_zoneinit();
 #endif /* PSYNCH */
 }

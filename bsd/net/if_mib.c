@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -67,8 +67,6 @@
 #include <net/if_mib.h>
 #include <net/if_var.h>
 
-#if NETMIBS
-
 /*
  * A sysctl(3) MIB for generic interface information.  This information
  * is exported in the net.link.generic branch, which has the following
@@ -97,30 +95,16 @@ SYSCTL_DECL(_net_link_generic);
 SYSCTL_NODE(_net_link_generic, IFMIB_SYSTEM, system, CTLFLAG_RD|CTLFLAG_LOCKED, 0,
 	    "Variables global to all interfaces");
 
-SYSCTL_INT(_net_link_generic_system, IFMIB_IFCOUNT, ifcount, CTLFLAG_RD,
+SYSCTL_INT(_net_link_generic_system, IFMIB_IFCOUNT, ifcount, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &if_index, 0, "Number of configured interfaces");
 
 static int sysctl_ifdata SYSCTL_HANDLER_ARGS;
-SYSCTL_NODE(_net_link_generic, IFMIB_IFDATA, ifdata, CTLFLAG_RD,
+SYSCTL_NODE(_net_link_generic, IFMIB_IFDATA, ifdata, CTLFLAG_RD | CTLFLAG_LOCKED,
             sysctl_ifdata, "Interface table");
 
 static int sysctl_ifalldata SYSCTL_HANDLER_ARGS;
-SYSCTL_NODE(_net_link_generic, IFMIB_IFALLDATA, ifalldata, CTLFLAG_RD,
+SYSCTL_NODE(_net_link_generic, IFMIB_IFALLDATA, ifalldata, CTLFLAG_RD | CTLFLAG_LOCKED,
             sysctl_ifalldata, "Interface table");
-
-extern int dlil_multithreaded_input;
-SYSCTL_INT(_net_link_generic_system, OID_AUTO, multi_threaded_input, CTLFLAG_RW,
-		    &dlil_multithreaded_input , 0, "Uses multiple input thread for DLIL input");
-#ifdef IFNET_INPUT_SANITY_CHK
-extern int dlil_input_sanity_check;
-SYSCTL_INT(_net_link_generic_system, OID_AUTO, dlil_input_sanity_check, CTLFLAG_RW,
-		    &dlil_input_sanity_check , 0, "Turn on sanity checking in DLIL input");
-#endif
-
-extern int dlil_verbose;
-SYSCTL_INT(_net_link_generic_system, OID_AUTO, dlil_verbose, CTLFLAG_RW,
-           &dlil_verbose, 0, "Log DLIL error messages");
-
 
 static int make_ifmibdata(struct ifnet *, int *, struct sysctl_req *);
 
@@ -140,7 +124,7 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 		/*
 		 * Make sure the interface is in use
 		 */
-		if (ifp->if_refcnt > 0) {
+		if (ifnet_is_attached(ifp, 0)) {
 			snprintf(ifmd.ifmd_name, sizeof(ifmd.ifmd_name), "%s%d",
 				ifp->if_name, ifp->if_unit);
 	
@@ -191,11 +175,14 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 #endif /* IF_MIB_WR */
 		break;
 
-#if PKT_PRIORITY
-	case IFDATA_SUPPLEMENTAL:
-		error = SYSCTL_OUT(req, &ifp->if_tc, sizeof(struct if_traffic_class));
+	case IFDATA_SUPPLEMENTAL: {
+		struct if_traffic_class if_tc;
+
+		if_copy_traffic_class(ifp, &if_tc);
+		
+		error = SYSCTL_OUT(req, &if_tc, sizeof(struct if_traffic_class));
 		break;
-#endif /* PKT_PRIORITY */
+	}
 	}
 	
 	return error;
@@ -211,23 +198,24 @@ sysctl_ifdata SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
 	struct ifnet *ifp;
 
 	if (namelen != 2)
-		return EINVAL;
+		return (EINVAL);
+
 	ifnet_head_lock_shared();
 	if (name[0] <= 0 || name[0] > if_index ||
-	    (ifp = ifindex2ifnet[name[0]]) == NULL ||
-	    ifp->if_refcnt == 0) {
+	    (ifp = ifindex2ifnet[name[0]]) == NULL) {
 		ifnet_head_done();
-		return ENOENT;
+		return (ENOENT);
 	}
+	ifnet_reference(ifp);
 	ifnet_head_done();
 
 	ifnet_lock_shared(ifp);
-	
 	error = make_ifmibdata(ifp, name, req);
-	
 	ifnet_lock_done(ifp);
-	
-	return error;
+
+	ifnet_release(ifp);
+
+	return (error);
 }
 
 int
@@ -240,20 +228,18 @@ sysctl_ifalldata SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
 	struct ifnet *ifp;
 
 	if (namelen != 2)
-		return EINVAL;
+		return (EINVAL);
 
 	ifnet_head_lock_shared();
 	TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
 		ifnet_lock_shared(ifp);
-		
+
 		error = make_ifmibdata(ifp, name, req);
-		
+
 		ifnet_lock_done(ifp);
-		if (error)
+		if (error != 0)
 			break;
 	}
 	ifnet_head_done();
 	return error;
 }
-
-#endif

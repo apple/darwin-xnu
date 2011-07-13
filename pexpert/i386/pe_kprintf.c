@@ -35,6 +35,7 @@
 #include <kern/debug.h>
 #include <kern/simple_lock.h>
 #include <i386/mp.h>
+#include <machine/pal_routines.h>
 
 /* Globals */
 void (*PE_kputc)(char c);
@@ -66,10 +67,11 @@ void PE_init_kprintf(boolean_t vm_initialized)
 			if (boot_arg & DB_KPRT)
 				new_disable_serial_output = FALSE;
 
-		/* If we are newly enabling serial, make sure we only call serial_init()
-		 * if our previous state was not enabled */
-		if (!new_disable_serial_output && (!disable_serial_output || serial_init()))
-			PE_kputc = serial_putc;
+		/* If we are newly enabling serial, make sure we only
+		 * call pal_serial_init() if our previous state was
+		 * not enabled */
+		if (!new_disable_serial_output && (!disable_serial_output || pal_serial_init()))
+			PE_kputc = pal_serial_putc;
 		else
 			PE_kputc = cnputc;
 
@@ -108,7 +110,7 @@ void kprintf(const char *fmt, ...)
 		 * take any locks, just dump to serial */
 		if (!PE_kputc) {
 			va_start(listp, fmt);
-			_doprnt(fmt, &listp, serial_putc, 16);
+			_doprnt(fmt, &listp, pal_serial_putc, 16);
 			va_end(listp);
 			return;
 		}
@@ -120,6 +122,9 @@ void kprintf(const char *fmt, ...)
 		 * interrupts are disabled once we have the lock.
 		 */
 		state = ml_set_interrupts_enabled(FALSE);
+
+		pal_preemption_assert();
+
 		while (!simple_lock_try(&kprintf_lock)) {
 			ml_set_interrupts_enabled(state);
 			ml_set_interrupts_enabled(FALSE);

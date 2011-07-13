@@ -1,4 +1,4 @@
-CFLAGS=-g -Os -arch ppc -arch i386
+CFLAGS=-g -Os -arch x86_64 -arch i386
 
 TARGETS	= lockstat
 

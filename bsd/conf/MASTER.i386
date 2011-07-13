@@ -44,21 +44,20 @@
 #  
 #  Standard Apple Research Configurations:
 #  -------- ----- -------- ---------------
-#  BASE =        [ intel mach medium config_dtrace vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue psynch ]
-#  FILESYS =	 [ devfs revfs hfs journaling fdesc config_fse quota namedstreams fifo union config_volfs config_hfs_trim hfs_compression config_imgsrc_access ]
-#  NETWORKING =  [ inet inet6 compat_oldsock tcpdrop_synfin bpfilter ipdivert ipfirewall ipv6firewall ipfw2 dummynet traffic_mgt sendfile netmibs bond vlan gif stf zlib randomipid ifnet_input_chk config_mbuf_jumbo ipflow pkt_priority if_bridge ]
+#  BASE =        [ intel mach medium config_dtrace vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue psynch zleaks ]
+#  FILESYS =	 [ devfs revfs hfs journaling fdesc config_fse quota namedstreams fifo config_volfs config_hfs_trim hfs_compression config_hfs_alloc_rbtree config_imgsrc_access config_triggers ]
+#  NETWORKING =  [ inet inet6 compat_oldsock tcpdrop_synfin bpfilter ipdivert ipfirewall ipv6firewall ipfw2 dummynet traffic_mgt sendfile bond vlan gif stf zlib randomipid ifnet_input_chk config_mbuf_jumbo if_bridge pf pflog pf_pkthdr ]
 #  NFS =         [ nfsclient nfsserver ]
 #  VPN =         [ ipsec ]
 #  RELEASE =     [ BASE NETWORKING NFS VPN FILESYS libdriver ]
 #  PROFILE =     [ RELEASE profile ]
-#  DEBUG =       [ BASE NETWORKING NFS VPN FILESYS libdriver_g debug xpr_debug mach_assert pf pflog ]
-#
+#  DEBUG =       [ BASE NETWORKING NFS VPN FILESYS libdriver_g debug xpr_debug mach_assert ]
 #
 #  EMBEDDED_BASE =	[ intel mach bsmall vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug sysv_sem sysv_msg sysv_shm audit panic_info config_imageboot config_workqueue psynch ]
 #  EMBEDDED_FILESYS =	[ devfs hfs journaling fdesc fifo ]
-#  EMBEDDED_NET =	[ inet compat_oldsock tcpdrop_synfin bpfilter config_mbuf_noexpand ]
+#  EMBEDDED_NET =	[ inet compat_oldsock tcpdrop_synfin bpfilter ]
 #  EMBEDDED =		[ EMBEDDED_BASE EMBEDDED_NET VPN EMBEDDED_FILESYS libdriver no_printf_str no_kprintf_str no_kdebug ]
-#  DEVELOPMENT =	[ EMBEDDED_BASE EMBEDDED_NET NFS VPN EMBEDDED_FILESYS libdriver netmibs development mach_assert config_dtrace ]
+#  DEVELOPMENT =	[ EMBEDDED_BASE EMBEDDED_NET NFS VPN EMBEDDED_FILESYS libdriver development mach_assert config_dtrace ]
 #
 ######################################################################
 #

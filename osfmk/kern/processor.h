@@ -87,13 +87,19 @@ struct processor_set {
 
 	processor_t			low_pri, low_count;
 
-	int					processor_count;
+	int					online_processor_count;
 
 	int					cpu_set_low, cpu_set_hi;
 	int					cpu_set_count;
 
 	decl_simple_lock_data(,sched_lock)	/* lock for above */
 
+#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_FIXEDPRIORITY)
+	struct run_queue	pset_runq;      /* runq for this processor set */
+	int					pset_runq_bound_count;
+		/* # of threads in runq bound to any processor in pset */
+#endif
+    
 	struct ipc_port	*	pset_self;		/* port for operations */
 	struct ipc_port *	pset_name_self;	/* port for information */
 
@@ -114,7 +120,7 @@ struct pset_node {
 
 extern struct pset_node	pset_node0;
 
-extern queue_head_t		tasks, threads;
+extern queue_head_t		tasks, terminated_tasks, threads; /* Terminated tasks are ONLY for stackshot */
 extern int				tasks_count, threads_count;
 decl_lck_mtx_data(extern,tasks_threads_lock)
 
@@ -138,6 +144,7 @@ struct processor {
 	processor_set_t		processor_set;	/* assigned set */
 
 	int					current_pri;	/* priority of current thread */
+	sched_mode_t		current_thmode;	/* sched mode of current thread */
 	int					cpu_id;			/* platform numeric id */
 
 	timer_call_data_t	quantum_timer;	/* timer for quantum expiration */
@@ -147,7 +154,13 @@ struct processor {
 	uint64_t			deadline;		/* current deadline */
 	int					timeslice;		/* quanta before timeslice ends */
 
+#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_FIXEDPRIORITY)
 	struct run_queue	runq;			/* runq for this processor */
+	int					runq_bound_count; /* # of threads bound to this processor */
+#endif
+#if defined(CONFIG_SCHED_GRRR)
+	struct grrr_run_queue	grrr_runq;      /* Group Ratio Round-Robin runq */
+#endif
 	processor_meta_t	processor_meta;
 
 	struct ipc_port *	processor_self;	/* port for operations */
@@ -163,6 +176,8 @@ decl_simple_lock_data(extern,processor_list_lock)
 extern uint32_t			processor_avail_count;
 
 extern processor_t		master_processor;
+
+extern boolean_t		sched_stats_active;
 
 /*
  *	Processor state is accessed by locking the scheduling lock
@@ -203,13 +218,24 @@ MACRO_END
 #define pset_count_hint(ps, p, cnt)		\
 MACRO_BEGIN												\
 	if ((p) != (ps)->low_count) {						\
-		if ((cnt) < (ps)->low_count->runq.count)		\
+		if ((cnt) < SCHED(processor_runq_count)((ps)->low_count))		\
 			(ps)->low_count = (p);						\
 		else											\
 		if ((ps)->low_count->state < PROCESSOR_IDLE)	\
 			(ps)->low_count = (p);						\
 	}													\
 MACRO_END
+
+#define pset_pri_init_hint(ps, p)		\
+MACRO_BEGIN												\
+	(ps)->low_pri = (p);								\
+MACRO_END
+
+#define pset_count_init_hint(ps, p)		\
+MACRO_BEGIN												\
+	(ps)->low_count = (p);								\
+MACRO_END
+
 
 extern void		processor_bootstrap(void) __attribute__((section("__TEXT, initcode")));
 

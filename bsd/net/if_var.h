@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -223,8 +223,6 @@ struct if_data64 {
 	struct IF_DATA_TIMEVAL ifi_lastchange;	/* time of last administrative change */
 };
 
-#pragma pack()
-
 #ifdef PRIVATE
 struct if_traffic_class {
 	u_int64_t		ifi_ibkpackets;	/* TC_BK packets received on interface */
@@ -240,11 +238,28 @@ struct if_traffic_class {
 	u_int64_t		ifi_ovopackets;	/* TC_VO packets sent on interface */
 	u_int64_t		ifi_ovobytes;	/* TC_VO bytes sent on interface */
 };
+#endif /* PRIVATE */
 
+#pragma pack()
+
+/*
+ * Structure defining a queue for a network interface.
+ */
+struct	ifqueue {
+	void	*ifq_head;
+	void	*ifq_tail;
+	int	ifq_len;
+	int	ifq_maxlen;
+	int	ifq_drops;
+};
+
+#ifdef XNU_KERNEL_PRIVATE
 /*
  * Internal storage of if_data. This is bound to change. Various places in the
  * stack will translate this data structure in to the externally visible
- * if_data structure above.
+ * if_data structure above.  Note that during interface attach time, the
+ * embedded if_data structure in ifnet is cleared, with the exception of
+ * some non-statistics related fields.
  */
 struct if_data_internal {
 	/* generic interface information */
@@ -259,6 +274,7 @@ struct if_data_internal {
 	u_int32_t	ifi_mtu;	/* maximum transmission unit */
 	u_int32_t	ifi_metric;	/* routing metric (external only) */
 	u_int32_t	ifi_baudrate;	/* linespeed */
+	u_int32_t	_pad;
 	/* volatile statistics */
 	u_int64_t	ifi_ipackets;	/* packets received on interface */
 	u_int64_t	ifi_ierrors;	/* input errors on interface */
@@ -279,7 +295,9 @@ struct if_data_internal {
 	u_int32_t	ifi_tso_v4_mtu;	/* TCP Segment Offload IPv4 maximum segment size */
 	u_int32_t	ifi_tso_v6_mtu;	/* TCP Segment Offload IPv6 maximum segment size */
 };
+#endif /* XNU_KERNEL_PRIVATE */
 
+#ifdef PRIVATE
 #define	if_mtu		if_data.ifi_mtu
 #define	if_type		if_data.ifi_type
 #define if_typelen	if_data.ifi_typelen
@@ -303,47 +321,57 @@ struct if_data_internal {
 #define	if_lastchange	if_data.ifi_lastchange
 #define if_recvquota	if_data.ifi_recvquota
 #define	if_xmitquota	if_data.ifi_xmitquota
-#define if_iflags	if_data.ifi_iflags
+#endif /* PRIVATE */
+#ifdef XNU_KERNEL_PRIVATE
 #define	if_tso_v4_mtu	if_data.ifi_tso_v4_mtu
 #define	if_tso_v6_mtu	if_data.ifi_tso_v6_mtu
+#endif /* XNU_KERNEL_PRIVATE */
 
-struct	mbuf;
-struct ifaddr;
-TAILQ_HEAD(ifnethead, ifnet);	/* we use TAILQs so that the order of */
-TAILQ_HEAD(ifaddrhead, ifaddr);	/* instantiation is preserved in the list */
-TAILQ_HEAD(ifprefixhead, ifprefix);
-LIST_HEAD(ifmultihead, ifmultiaddr);
-struct tqdummy;
-TAILQ_HEAD(tailq_head, tqdummy);
-
+#ifdef XNU_KERNEL_PRIVATE
 /*
  * Forward structure declarations for function prototypes [sic].
  */
-struct	proc;
-struct	rtentry;
-struct	socket;
-struct	ether_header;
-struct  sockaddr_dl;
+struct proc;
+struct rtentry;
+struct socket;
 struct ifnet_filter;
+struct mbuf;
+struct ifaddr;
+struct tqdummy;
+struct proto_hash_entry;
+struct dlil_threading_info;
+#if PF
+struct pfi_kif;
+#endif /* PF */
 
+/* we use TAILQs so that the order of instantiation is preserved in the list */
+TAILQ_HEAD(ifnethead, ifnet);
+TAILQ_HEAD(ifaddrhead, ifaddr);
+TAILQ_HEAD(ifprefixhead, ifprefix);
+LIST_HEAD(ifmultihead, ifmultiaddr);
+TAILQ_HEAD(tailq_head, tqdummy);
 TAILQ_HEAD(ifnet_filter_head, ifnet_filter);
 TAILQ_HEAD(ddesc_head_name, dlil_demux_desc);
+#endif /* XNU_KERNEL_PRIVATE */
 
-/* All of the following IF_HWASSIST_* flags are defined
- * in kpi_inteface.h as IFNET_* flags. These are redefined
- * here as constants to avoid failures to build user level
- * programs that can not include kpi_interface.h. It is 
- * important to keep this in sync with the definitions in
- * kpi_interface.h. The corresponding constant for each 
- * definition is mentioned in the comment.
+#ifdef PRIVATE
+/*
+ * All of the following IF_HWASSIST_* flags are defined in kpi_inteface.h as
+ * IFNET_* flags. These are redefined here as constants to avoid failures to
+ * build user level programs that can not include kpi_interface.h. It is
+ * important to keep this in sync with the definitions in kpi_interface.h.
+ * The corresponding constant for each definition is mentioned in the comment.
  *
- * Bottom 16 bits reserved for hardware checksum 
+ * Bottom 16 bits reserved for hardware checksum
  */
 #define IF_HWASSIST_CSUM_IP		0x0001	/* will csum IP, IFNET_CSUM_IP */
 #define IF_HWASSIST_CSUM_TCP		0x0002	/* will csum TCP, IFNET_CSUM_TCP */
 #define IF_HWASSIST_CSUM_UDP		0x0004	/* will csum UDP, IFNET_CSUM_UDP */
 #define IF_HWASSIST_CSUM_IP_FRAGS	0x0008	/* will csum IP fragments, IFNET_CSUM_FRAGMENT */
 #define IF_HWASSIST_CSUM_FRAGMENT	0x0010	/* will do IP fragmentation, IFNET_IP_FRAGMENT */
+#define IF_HWASSIST_CSUM_TCPIPV6	0x0020	/* will csum TCPv6, IFNET_CSUM_TCPIPV6 */
+#define IF_HWASSIST_CSUM_UDPIPV6	0x0040	/* will csum UDPv6, IFNET_CSUM_UDP */
+#define IF_HWASSIST_CSUM_FRAGMENT_IPV6	0x0080	/* will do IPv6 fragmentation, IFNET_IPV6_FRAGMENT */
 #define IF_HWASSIST_CSUM_TCP_SUM16	0x1000	/* simple TCP Sum16 computation, IFNET_CSUM_SUM16 */
 #define IF_HWASSIST_CSUM_MASK		0xffff
 #define IF_HWASSIST_CSUM_FLAGS(hwassist)	((hwassist) & IF_HWASSIST_CSUM_MASK)
@@ -356,30 +384,13 @@ TAILQ_HEAD(ddesc_head_name, dlil_demux_desc);
 
 #define IF_HWASSIST_TSO_V4		0x00200000	/* will do TCP Segment offload for IPv4, IFNET_TSO_IPV4 */
 #define IF_HWASSIST_TSO_V6		0x00400000	/* will do TCP Segment offload for IPv6, IFNET_TSO_IPV6 */
-
-#define IFNET_RW_LOCK 1
-
 #endif /* PRIVATE */
-/*
- * Structure defining a queue for a network interface.
- */
-struct	ifqueue {
-	void *ifq_head;
-	void *ifq_tail;
-	int	ifq_len;
-	int	ifq_maxlen;
-	int	ifq_drops;
-};
 
-#ifdef PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
+#include <sys/tree.h>
+#include <netinet/in.h>
 
-struct ddesc_head_str;
-struct proto_hash_entry;
-struct kev_msg;
-struct dlil_threading_info;
-#if PF
-struct pfi_kif;
-#endif /* PF */
+RB_HEAD(ll_reach_tree, if_llreach);	/* define struct ll_reach_tree */
 
 /*
  * Structure defining a network interface.
@@ -387,34 +398,42 @@ struct pfi_kif;
  * (Would like to call this struct ``if'', but C isn't PL/1.)
  */
 struct ifnet {
-	void	*if_softc;		/* pointer to driver state */
-	const char	*if_name;		/* name, e.g. ``en'' or ``lo'' */
-	TAILQ_ENTRY(ifnet) if_link; 	/* all struct ifnets are chained */
-	struct	ifaddrhead if_addrhead;	/* linked list of addresses per if */
-	u_int32_t	if_refcnt;
-#ifdef __KPI_INTERFACE__
-	ifnet_check_multi	if_check_multi;
-#else
-	void*				if_check_multi;
-#endif /* __KPI_INTERFACE__ */
-	int	if_pcount;		/* number of promiscuous listeners */
-	struct	bpf_if *if_bpf;		/* packet filter structure */
-	u_short	if_index;		/* numeric abbreviation for this if  */
-	short	if_unit;		/* sub-unit for lower level driver */
-	short	if_timer;		/* time 'til if_watchdog called */
-	short	if_flags;		/* up/down, broadcast, etc. */
-	int	if_ipending;		/* interrupts pending */
-	void	*if_linkmib;		/* link-type-specific MIB data */
-	size_t	if_linkmiblen;		/* length of above data */
-	struct	if_data_internal if_data;
+	/*
+	 * Lock (RW or mutex) to protect this data structure (static storage.)
+	 */
+	decl_lck_rw_data(, if_lock);
+	void		*if_softc;	/* pointer to driver state */
+	const char	*if_name;	/* name, e.g. ``en'' or ``lo'' */
+	TAILQ_ENTRY(ifnet) if_link;	/* all struct ifnets are chained */
+	TAILQ_ENTRY(ifnet) if_detaching_link; /* list of detaching ifnets */
 
-/* New with DLIL */
-#ifdef BSD_KERNEL_PRIVATE
-	int	if_usecnt;
-#else
-	int	refcnt;
-#endif
-#ifdef __KPI_INTERFACE__
+	decl_lck_mtx_data(, if_ref_lock)
+	u_int32_t	if_refflags;
+	u_int32_t	if_refio;	/* number of io ops to the underlying driver */
+
+#define	if_list		if_link
+	struct ifaddrhead if_addrhead;	/* linked list of addresses per if */
+#define	if_addrlist	if_addrhead
+	struct ifaddr	*if_lladdr;	/* link address (first/permanent) */
+
+	int		if_pcount;	/* number of promiscuous listeners */
+	struct bpf_if	*if_bpf;	/* packet filter structure */
+	u_short		if_index;	/* numeric abbreviation for this if  */
+	short		if_unit;	/* sub-unit for lower level driver */
+	short		if_timer;	/* time 'til if_watchdog called */
+	short		if_flags;	/* up/down, broadcast, etc. */
+	u_int32_t	if_eflags;	/* see <net/if.h> */
+
+	int		if_capabilities;	/* interface features & capabilities */
+	int		if_capenable;		/* enabled features & capabilities */
+
+	void		*if_linkmib;	/* link-type-specific MIB data */
+	size_t		if_linkmiblen;	/* length of above data */
+
+	struct if_data_internal if_data __attribute__((aligned(8)));
+
+	ifnet_family_t		if_family;	/* value assigned by Apple */
+	uintptr_t		if_family_cookie;
 	ifnet_output_func	if_output;
 	ifnet_ioctl_func	if_ioctl;
 	ifnet_set_bpf_tap	if_set_bpf_tap;
@@ -422,64 +441,28 @@ struct ifnet {
 	ifnet_demux_func	if_demux;
 	ifnet_event_func	if_event;
 	ifnet_framer_func	if_framer;
-	ifnet_family_t		if_family;		/* value assigned by Apple */
-#else
-	void*				if_output;
-	void*				if_ioctl;
-	void*				if_set_bpf_tap;
-	void*				if_free;
-	void*				if_demux;
-	void*				if_event;
-	void*				if_framer;
-	u_int32_t			if_family;		/* value assigned by Apple */
-#endif
-
-	struct ifnet_filter_head if_flt_head;
-
-/* End DLIL specific */
-
-	u_int32_t 	if_delayed_detach; /* need to perform delayed detach */
-	void    *if_private;	/* private to interface */
-	long	if_eflags;		/* autoaddr, autoaddr done, etc. */
-
-	struct	ifmultihead if_multiaddrs; /* multicast addresses configured */
-	int	if_amcount;		/* number of all-multicast requests */
-/* procedure handles */
-#ifdef __KPI_INTERFACE__
 	ifnet_add_proto_func	if_add_proto;
 	ifnet_del_proto_func	if_del_proto;
-#else /* !__KPI_INTERFACE__ */
-	void*	if_add_proto;
-	void*	if_del_proto;
-#endif /* !__KPI_INTERFACE__ */
+	ifnet_check_multi	if_check_multi;
 	struct proto_hash_entry	*if_proto_hash;
-	void					*if_kpi_storage;
-#if 0	
-	void	*unused_was_init;
-#else
+	void			*if_kpi_storage;
+
+	decl_lck_mtx_data(, if_flt_lock)
+	u_int32_t		if_flt_busy;
+	u_int32_t		if_flt_waiters;
+	struct ifnet_filter_head if_flt_head;
+
+	struct ifmultihead	if_multiaddrs;	/* multicast addresses */
+	u_int32_t		if_updatemcasts; /* mcast addrs need updating */
+	int			if_amcount;	/* # of all-multicast reqs */
+	decl_lck_mtx_data(, if_addrconfig_lock); /* for serializing addr config */
+	struct in_multi		*if_allhostsinm; /* store all-hosts inm for this ifp */
+
 	struct dlil_threading_info *if_input_thread;
-#endif
-	void	*unused_was_resolvemulti;
-	
-	struct ifqueue	if_snd;
-	u_int32_t 	unused_2[1];
-#ifdef __APPLE__
-	uintptr_t	family_cookie;
-	struct	ifprefixhead if_prefixhead; /* list of prefixes per if */
 
-#ifdef _KERN_LOCKS_H_
-#if IFNET_RW_LOCK
-	lck_rw_t *if_lock;		/* Lock to protect this interface */
-#else
-	lck_mtx_t *if_lock;		/* Lock to protect this interface */
-#endif
-#else
-	void	*if_lock;
-#endif
+	struct ifqueue		if_snd;
 
-#else
-	struct	ifprefixhead if_prefixhead; /* list of prefixes per if */
-#endif /* __APPLE__ */
+	struct	ifprefixhead	if_prefixhead;	/* list of prefixes per if */
 	struct {
 		u_int32_t	length;
 		union {
@@ -488,133 +471,134 @@ struct ifnet {
 		} u;
 	} if_broadcast;
 #if CONFIG_MACF_NET
-	struct  label *if_label;	/* interface MAC label */
+	struct label		*if_label;	/* interface MAC label */
 #endif
 
-	u_int32_t	if_wake_properties;
+	u_int32_t		if_wake_properties;
 #if PF
-	struct thread	*if_pf_curthread;
-	struct pfi_kif	*if_pf_kif;
+	struct thread		*if_pf_curthread;
+	struct pfi_kif		*if_pf_kif;
 #endif /* PF */
-#ifdef _KERN_LOCKS_H_
-	lck_mtx_t	*if_fwd_route_lock;
-#else
-	void		*if_fwd_route_lock;
-#endif
-	struct route	if_fwd_route;	/* cached IPv4 forwarding route */
-	void	*if_bridge;		/* bridge glue */
-#if IFNET_ROUTE_REFCNT
-	u_int32_t	if_want_aggressive_drain;
-	u_int32_t	if_idle_flags;	/* idle flags */
-	u_int32_t	if_route_refcnt; /* idle: route ref count */
-#endif /* IFNET_ROUTE_REFCNT */
-#if PKT_PRIORITY
+
+	decl_lck_mtx_data(, if_cached_route_lock);
+	u_int32_t		if_fwd_cacheok;
+	struct route		if_fwd_route;	/* cached forwarding route */
+	struct route		if_src_route;	/* cached ipv4 source route */
+	struct route_in6	if_src_route6;	/* cached ipv6 source route */
+
+	decl_lck_rw_data(, if_llreach_lock);
+	struct ll_reach_tree	if_ll_srcs;	/* source link-layer tree */
+
+	void			*if_bridge;	/* bridge glue */
+
+	u_int32_t		if_want_aggressive_drain;
+	u_int32_t		if_idle_flags;	/* idle flags */
+	u_int32_t		if_idle_new_flags; /* temporary idle flags */
+	u_int32_t		if_idle_new_flags_mask; /* temporary mask */
+	u_int32_t		if_route_refcnt; /* idle: route ref count */
+
 	struct if_traffic_class if_tc __attribute__((aligned(8)));
-#endif /* PKT_PRIORITY */
+#if INET
+	struct igmp_ifinfo	*if_igi;	/* for IGMPv3 */
+#endif /* INET */
+#if INET6
+	struct mld_ifinfo	*if_mli;	/* for MLDv2 */
+#endif /* INET6 */
 };
 
-#ifndef __APPLE__
-/* for compatibility with other BSDs */
-#define	if_addrlist	if_addrhead
-#define	if_list		if_link
-#endif /* !__APPLE__ */
+/*
+ * Valid values for if_useflags
+ */
+#define	IFRF_ATTACHED	0x1	/* ifnet attach is completely done */
+#define	IFRF_DETACHING	0x2	/* detach has been requested */
 
-
-#endif /* PRIVATE */
-
-#ifdef KERNEL_PRIVATE
 /*
  * Structure describing a `cloning' interface.
  */
 struct if_clone {
 	LIST_ENTRY(if_clone) ifc_list;	/* on list of cloners */
-	const char *ifc_name;			/* name of device, e.g. `vlan' */
-	size_t ifc_namelen;		/* length of name */
-	u_int32_t ifc_minifs;			/* minimum number of interfaces */
-	u_int32_t ifc_maxunit;		/* maximum unit number */
-	unsigned char *ifc_units;	/* bitmap to handle units */
-	u_int32_t ifc_bmlen;			/* bitmap length */
+	const char	*ifc_name;	/* name of device, e.g. `vlan' */
+	size_t		ifc_namelen;	/* length of name */
+	u_int32_t	ifc_minifs;	/* minimum number of interfaces */
+	u_int32_t	ifc_maxunit;	/* maximum unit number */
+	unsigned char	*ifc_units;	/* bitmap to handle units */
+	u_int32_t	ifc_bmlen;	/* bitmap length */
 
-	int	(*ifc_create)(struct if_clone *, u_int32_t, void *);
-	int	(*ifc_destroy)(struct ifnet *);
+	int		(*ifc_create)(struct if_clone *, u_int32_t, void *);
+	int		(*ifc_destroy)(struct ifnet *);
 };
 
-#define IF_CLONE_INITIALIZER(name, create, destroy, minifs, maxunit)	\
-    { { NULL, NULL }, name, sizeof(name) - 1, minifs, maxunit, NULL, 0, create, destroy }
+#define IF_CLONE_INITIALIZER(name, create, destroy, minifs, maxunit) {	      \
+	{ NULL, NULL }, name, (sizeof (name) - 1), minifs, maxunit, NULL, 0,  \
+	create, destroy							      \
+}
 
 #define M_CLONE         M_IFADDR
 
 /*
- * Bit values in if_ipending
- */
-#define	IFI_RECV	1	/* I want to receive */
-#define	IFI_XMIT	2	/* I want to transmit */
-
-/*
- * Output queues (ifp->if_snd) and slow device input queues (*ifp->if_slowq)
- * are queues of messages stored on ifqueue structures
- * (defined above).  Entries are added to and deleted from these structures
- * by these macros, which should be called with ipl raised to splimp().
+ * Macros to manipulate ifqueue.  Users of these macros are responsible
+ * for serialization, by holding whatever lock is appropriate for the
+ * corresponding structure that is referring the ifqueue.
  */
 #define	IF_QFULL(ifq)		((ifq)->ifq_len >= (ifq)->ifq_maxlen)
 #define	IF_DROP(ifq)		((ifq)->ifq_drops++)
-#define	IF_ENQUEUE(ifq, m) { \
-	(m)->m_nextpkt = 0; \
-	if ((ifq)->ifq_tail == 0) \
-		(ifq)->ifq_head = m; \
-	else \
-		((struct mbuf*)(ifq)->ifq_tail)->m_nextpkt = m; \
-	(ifq)->ifq_tail = m; \
-	(ifq)->ifq_len++; \
+#define	IF_ENQUEUE(ifq, m) {						\
+	(m)->m_nextpkt = NULL;						\
+	if ((ifq)->ifq_tail == NULL)					\
+		(ifq)->ifq_head = m;					\
+	else								\
+		((struct mbuf*)(ifq)->ifq_tail)->m_nextpkt = m;		\
+	(ifq)->ifq_tail = m;						\
+	(ifq)->ifq_len++;						\
 }
-#define	IF_PREPEND(ifq, m) { \
-	(m)->m_nextpkt = (ifq)->ifq_head; \
-	if ((ifq)->ifq_tail == 0) \
-		(ifq)->ifq_tail = (m); \
-	(ifq)->ifq_head = (m); \
-	(ifq)->ifq_len++; \
+#define	IF_PREPEND(ifq, m) {						\
+	(m)->m_nextpkt = (ifq)->ifq_head;				\
+	if ((ifq)->ifq_tail == NULL)					\
+		(ifq)->ifq_tail = (m);					\
+	(ifq)->ifq_head = (m);						\
+	(ifq)->ifq_len++;						\
 }
-#define	IF_DEQUEUE(ifq, m) { \
-	(m) = (ifq)->ifq_head; \
-	if (m) { \
-		if (((ifq)->ifq_head = (m)->m_nextpkt) == 0) \
-			(ifq)->ifq_tail = 0; \
-		(m)->m_nextpkt = 0; \
-		(ifq)->ifq_len--; \
-	} \
+#define	IF_DEQUEUE(ifq, m) {						\
+	(m) = (ifq)->ifq_head;						\
+	if (m != NULL) {						\
+		if (((ifq)->ifq_head = (m)->m_nextpkt) == NULL)		\
+			(ifq)->ifq_tail = NULL;				\
+		(m)->m_nextpkt = NULL;					\
+		(ifq)->ifq_len--;					\
+	}								\
 }
-
-#define	IF_ENQ_DROP(ifq, m)	if_enq_drop(ifq, m)
-
-#if defined(__GNUC__) && defined(MT_HEADER)
-static __inline int
-if_queue_drop(struct ifqueue *ifq, __unused struct mbuf *m)
-{
-	IF_DROP(ifq);
-	return 0;
+#define	IF_REMQUEUE(ifq, m) {						\
+	struct mbuf *_p = (ifq)->ifq_head;				\
+	struct mbuf *_n = (m)->m_nextpkt;				\
+	if ((m) == _p)							\
+		_p = NULL;						\
+	while (_p != NULL) {						\
+		if (_p->m_nextpkt == (m))				\
+			break;						\
+		_p = _p->m_nextpkt;					\
+	}								\
+	VERIFY(_p != NULL || ((m) == (ifq)->ifq_head));			\
+	if ((m) == (ifq)->ifq_head)					\
+		(ifq)->ifq_head = _n;					\
+	if ((m) == (ifq)->ifq_tail)					\
+		(ifq)->ifq_tail = _p;					\
+	VERIFY((ifq)->ifq_tail != NULL || (ifq)->ifq_head == NULL);	\
+	VERIFY((ifq)->ifq_len != 0);					\
+	--(ifq)->ifq_len;						\
+	if (_p != NULL)							\
+		_p->m_nextpkt = _n;					\
+	(m)->m_nextpkt = NULL;						\
 }
+#define IF_DRAIN(ifq) do {						\
+	struct mbuf *m;							\
+	for (;;) {							\
+		IF_DEQUEUE(ifq, m);					\
+		if (m == NULL)						\
+			break;						\
+		m_freem(m);						\
+	}								\
+} while (0)
 
-static __inline int
-if_enq_drop(struct ifqueue *ifq, struct mbuf *m)
-{
-	if (IF_QFULL(ifq) &&
-	    !if_queue_drop(ifq, m))
-		return 0;
-	IF_ENQUEUE(ifq, m);
-	return 1;
-}
-#else
-
-#ifdef MT_HEADER
-int	if_enq_drop(struct ifqueue *, struct mbuf *);
-#endif /* MT_HEADER */
-
-#endif /* defined(__GNUC__) && defined(MT_HEADER) */
-
-#endif /* KERNEL_PRIVATE */
-
-
-#ifdef PRIVATE
 /*
  * The ifaddr structure contains information about one address
  * of an interface.  They are maintained by the different address families,
@@ -622,21 +606,24 @@ int	if_enq_drop(struct ifqueue *, struct mbuf *);
  * together so all addresses for an interface can be located.
  */
 struct ifaddr {
-	struct	sockaddr *ifa_addr;	/* address of interface */
-	struct	sockaddr *ifa_dstaddr;	/* other end of p-to-p link */
+	decl_lck_mtx_data(, ifa_lock);	/* lock for ifaddr */
+	uint32_t	ifa_refcnt;	/* ref count, use IFA_{ADD,REM}REF */
+	uint32_t	ifa_debug;	/* debug flags */
+	struct sockaddr	*ifa_addr;	/* address of interface */
+	struct sockaddr	*ifa_dstaddr;	/* other end of p-to-p link */
 #define	ifa_broadaddr	ifa_dstaddr	/* broadcast address interface */
-	struct	sockaddr *ifa_netmask;	/* used to determine subnet */
-	struct	ifnet *ifa_ifp;		/* back-pointer to interface */
+	struct sockaddr	*ifa_netmask;	/* used to determine subnet */
+	struct ifnet	*ifa_ifp;	/* back-pointer to interface */
 	TAILQ_ENTRY(ifaddr) ifa_link;	/* queue macro glue */
 	void (*ifa_rtrequest)		/* check or clean routes (+ or -)'d */
 	    (int, struct rtentry *, struct sockaddr *);
-	uint32_t ifa_flags;		/* mostly rt_flags for cloning */
-	int32_t	ifa_refcnt;		/* ref count, use ifaref, ifafree */
-	int32_t	ifa_metric;		/* cost of going out this interface */
+	uint32_t	ifa_flags;	/* mostly rt_flags for cloning */
+	int32_t		ifa_metric;	/* cost of going out this interface */
 	void (*ifa_free)(struct ifaddr *); /* callback fn for freeing */
 	void (*ifa_trace)		/* callback fn for tracing refs */
 	    (struct ifaddr *, int);
-	uint32_t ifa_debug;		/* debug flags */
+	void (*ifa_attached)(struct ifaddr *); /* callback fn for attaching */
+	void (*ifa_detached)(struct ifaddr *); /* callback fn for detaching */
 };
 
 /*
@@ -648,13 +635,47 @@ struct ifaddr {
 /*
  * Valid values for ifa_debug
  */
-#define	IFD_ATTACHED	0x1		/* attached to an interface */
+#define	IFD_ATTACHED	0x1		/* attached to list */
 #define	IFD_ALLOC	0x2		/* dynamically allocated */
 #define	IFD_DEBUG	0x4		/* has debugging info */
+#define	IFD_LINK	0x8		/* link address */
+#define	IFD_TRASHED	0x10		/* in trash list */
+#define	IFD_SKIP	0x20		/* skip this entry */
+#define	IFD_NOTREADY	0x40		/* embryonic; not yet ready */
 
-#endif /* PRIVATE */
+#define	IFA_LOCK_ASSERT_HELD(_ifa)					\
+	lck_mtx_assert(&(_ifa)->ifa_lock, LCK_MTX_ASSERT_OWNED)
 
-#ifdef KERNEL_PRIVATE
+#define	IFA_LOCK_ASSERT_NOTHELD(_ifa)					\
+	lck_mtx_assert(&(_ifa)->ifa_lock, LCK_MTX_ASSERT_NOTOWNED)
+
+#define	IFA_LOCK(_ifa)							\
+	lck_mtx_lock(&(_ifa)->ifa_lock)
+
+#define	IFA_LOCK_SPIN(_ifa)						\
+	lck_mtx_lock_spin(&(_ifa)->ifa_lock)
+
+#define	IFA_CONVERT_LOCK(_ifa) do {					\
+	IFA_LOCK_ASSERT_HELD(_ifa);					\
+	lck_mtx_convert_spin(&(_ifa)->ifa_lock);			\
+} while (0)
+
+#define	IFA_UNLOCK(_ifa)						\
+	lck_mtx_unlock(&(_ifa)->ifa_lock)
+
+#define	IFA_ADDREF(_ifa)						\
+	ifa_addref(_ifa, 0)
+
+#define	IFA_ADDREF_LOCKED(_ifa)						\
+	ifa_addref(_ifa, 1)
+
+#define	IFA_REMREF(_ifa) do {						\
+	(void) ifa_remref(_ifa, 0);					\
+} while (0)
+
+#define	IFA_REMREF_LOCKED(_ifa)						\
+	ifa_remref(_ifa, 1)
+
 /*
  * The prefix structure contains information about one prefix
  * of an interface.  They are maintained by the different address families,
@@ -668,115 +689,169 @@ struct ifprefix {
 	u_char	ifpr_plen;		/* prefix length in bits */
 	u_char	ifpr_type;		/* protocol dependent prefix type */
 };
-#endif /* KERNEL_PRIVATE */
-
-#ifdef PRIVATE
-typedef void (*ifma_protospec_free_func)(void* ifma_protospec);
 
 /*
  * Multicast address structure.  This is analogous to the ifaddr
  * structure except that it keeps track of multicast addresses.
- * Also, the reference count here is a count of requests for this
- * address, not a count of pointers to this structure.
+ * Also, the request count here is a count of requests for this
+ * address, not a count of pointers to this structure; anonymous
+ * membership(s) holds one outstanding request count.
  */
 struct ifmultiaddr {
+	decl_lck_mtx_data(, ifma_lock);
+	u_int32_t ifma_refcount;	/* reference count */
+	u_int32_t ifma_anoncnt;		/* # of anonymous requests */
+	u_int32_t ifma_reqcnt;		/* total requests for this address */
+	u_int32_t ifma_debug;		/* see ifa_debug flags */
+	u_int32_t ifma_flags;		/* see below */
 	LIST_ENTRY(ifmultiaddr) ifma_link; /* queue macro glue */
-	struct	sockaddr *ifma_addr; 	/* address this membership is for */
+	struct sockaddr *ifma_addr;	/* address this membership is for */
 	struct ifmultiaddr *ifma_ll;	/* link-layer translation, if any */
-	struct	ifnet *ifma_ifp;		/* back-pointer to interface */
-	u_int	ifma_usecount;			/* use count, protected by ifp's lock */
-	void	*ifma_protospec;		/* protocol-specific state, if any */
-	int32_t	ifma_refcount;			/* reference count, atomically protected */
-	ifma_protospec_free_func ifma_free;	/* function called to free ifma_protospec */
+	struct ifnet *ifma_ifp;		/* back-pointer to interface */
+	void *ifma_protospec;		/* protocol-specific state, if any */
+	void (*ifma_trace)		/* callback fn for tracing refs */
+	    (struct ifmultiaddr *, int);
 };
-#endif /* PRIVATE */
-
-#ifdef KERNEL_PRIVATE
-#define IFAREF(ifa) ifaref(ifa)
-#define IFAFREE(ifa) ifafree(ifa)
 
 /*
- * To preserve kmem compatibility, we define
- * ifnet_head to ifnet. This should be temp.
+ * Values for ifma_flags
  */
-#define ifnet_head ifnet
-extern	struct ifnethead ifnet_head;
-extern struct	ifnet	**ifindex2ifnet;
-extern	int ifqmaxlen;
-extern	ifnet_t  lo_ifp;
-extern	int if_index;
-extern	struct ifaddr **ifnet_addrs;
+#define	IFMAF_ANONYMOUS		0x1	/* has anonymous request ref(s) held */
 
-int	if_addmulti(struct ifnet *, const struct sockaddr *, struct ifmultiaddr **);
-int	if_allmulti(struct ifnet *, int);
-void	if_attach(struct ifnet *);
-int	if_delmultiaddr(struct ifmultiaddr *ifma, int locked);
-int	if_delmulti(struct ifnet *, const struct sockaddr *);
-void	if_down(struct ifnet *);
-int 	if_down_all(void);
-void	if_route(struct ifnet *, int flag, int fam);
-void	if_unroute(struct ifnet *, int flag, int fam);
-void	if_up(struct ifnet *);
-void	if_updown(struct ifnet *ifp, int up);
-/*void	ifinit(void));*/ /* declared in systm.h for main( */
-int	ifioctl(struct socket *, u_long, caddr_t, struct proc *);
-int	ifioctllocked(struct socket *, u_long, caddr_t, struct proc *);
-struct	ifnet *ifunit(const char *);
-struct  ifnet *if_withname(struct sockaddr *);
+#define	IFMA_LOCK_ASSERT_HELD(_ifma)					\
+	lck_mtx_assert(&(_ifma)->ifma_lock, LCK_MTX_ASSERT_OWNED)
 
-int	if_clone_attach(struct if_clone *);
-void	if_clone_detach(struct if_clone *);
-struct if_clone *
-	if_clone_lookup(const char *, u_int32_t *);
+#define	IFMA_LOCK_ASSERT_NOTHELD(_ifma)					\
+	lck_mtx_assert(&(_ifma)->ifma_lock, LCK_MTX_ASSERT_NOTOWNED)
 
-void	ifnet_lock_assert(struct ifnet *ifp, int what);
-void	ifnet_lock_shared(struct ifnet *ifp);
-void	ifnet_lock_exclusive(struct ifnet *ifp);
-void	ifnet_lock_done(struct ifnet *ifp);
+#define	IFMA_LOCK(_ifma)						\
+	lck_mtx_lock(&(_ifma)->ifma_lock)
 
-void	ifnet_head_lock_shared(void);
-void	ifnet_head_lock_exclusive(void);
-void	ifnet_head_done(void);
+#define	IFMA_LOCK_SPIN(_ifma)						\
+	lck_mtx_lock_spin(&(_ifma)->ifma_lock)
 
-void	if_attach_ifa(struct ifnet * ifp, struct ifaddr *ifa);
-void	if_detach_ifa(struct ifnet * ifp, struct ifaddr *ifa);
+#define	IFMA_CONVERT_LOCK(_ifma) do {					\
+	IFMA_LOCK_ASSERT_HELD(_ifma);					\
+	lck_mtx_convert_spin(&(_ifma)->ifma_lock);			\
+} while (0)
 
-void	ifma_reference(struct ifmultiaddr *ifma);
-void	ifma_release(struct ifmultiaddr *ifma);
+#define	IFMA_UNLOCK(_ifma)						\
+	lck_mtx_unlock(&(_ifma)->ifma_lock)
 
-struct	ifaddr *ifa_ifwithaddr(const struct sockaddr *);
-struct	ifaddr *ifa_ifwithaddr_scoped(const struct sockaddr *, unsigned int);
-struct	ifaddr *ifa_ifwithdstaddr(const struct sockaddr *);
-struct	ifaddr *ifa_ifwithnet(const struct sockaddr *);
-struct	ifaddr *ifa_ifwithnet_scoped(const struct sockaddr *, unsigned int);
-struct	ifaddr *ifa_ifwithroute(int, const struct sockaddr *, const struct sockaddr *);
-struct	ifaddr *ifa_ifwithroute_locked(int, const struct sockaddr *, const struct sockaddr *);
-struct ifaddr *ifa_ifwithroute_scoped_locked(int, const struct sockaddr *,
+#define	IFMA_ADDREF(_ifma)						\
+	ifma_addref(_ifma, 0)
+
+#define	IFMA_ADDREF_LOCKED(_ifma)					\
+	ifma_addref(_ifma, 1)
+
+#define	IFMA_REMREF(_ifma)						\
+	ifma_remref(_ifma)
+
+__private_extern__ struct ifnethead ifnet_head;
+__private_extern__ struct ifnet **ifindex2ifnet;
+__private_extern__ int ifqmaxlen;
+__private_extern__ int if_index;
+__private_extern__ struct ifaddr **ifnet_addrs;
+__private_extern__ lck_attr_t *ifa_mtx_attr;
+__private_extern__ lck_grp_t *ifa_mtx_grp;
+__private_extern__ lck_grp_t *ifnet_lock_group;
+__private_extern__ lck_attr_t *ifnet_lock_attr;
+extern ifnet_t lo_ifp;
+
+extern int if_addmulti(struct ifnet *, const struct sockaddr *,
+    struct ifmultiaddr **);
+extern int if_addmulti_anon(struct ifnet *, const struct sockaddr *,
+    struct ifmultiaddr **);
+extern int if_allmulti(struct ifnet *, int);
+extern int if_delmulti(struct ifnet *, const struct sockaddr *);
+extern int if_delmulti_ifma(struct ifmultiaddr *);
+extern int if_delmulti_anon(struct ifnet *, const struct sockaddr *);
+extern void if_down(struct ifnet *);
+extern int if_down_all(void);
+extern void if_up(struct ifnet *);
+__private_extern__ void if_updown(struct ifnet *ifp, int up);
+extern int ifioctl(struct socket *, u_long, caddr_t, struct proc *);
+extern int ifioctllocked(struct socket *, u_long, caddr_t, struct proc *);
+extern struct ifnet *ifunit(const char *);
+extern struct ifnet *if_withname(struct sockaddr *);
+
+extern struct if_clone *if_clone_lookup(const char *, u_int32_t *);
+extern int if_clone_attach(struct if_clone *);
+extern void if_clone_detach(struct if_clone *);
+
+extern errno_t if_mcasts_update(struct ifnet *);
+
+typedef enum {
+	IFNET_LCK_ASSERT_EXCLUSIVE,	/* RW: held as writer */
+	IFNET_LCK_ASSERT_SHARED,	/* RW: held as reader */
+	IFNET_LCK_ASSERT_OWNED,		/* RW: writer/reader, MTX: held */
+	IFNET_LCK_ASSERT_NOTOWNED	/* not held */
+} ifnet_lock_assert_t;
+
+__private_extern__ void ifnet_lock_assert(struct ifnet *, ifnet_lock_assert_t);
+__private_extern__ void ifnet_lock_shared(struct ifnet *ifp);
+__private_extern__ void ifnet_lock_exclusive(struct ifnet *ifp);
+__private_extern__ void ifnet_lock_done(struct ifnet *ifp);
+
+__private_extern__ void	ifnet_head_lock_shared(void);
+__private_extern__ void	ifnet_head_lock_exclusive(void);
+__private_extern__ void	ifnet_head_done(void);
+
+__private_extern__ errno_t ifnet_set_idle_flags_locked(ifnet_t, u_int32_t,
+    u_int32_t);
+__private_extern__ int ifnet_is_attached(struct ifnet *, int refio);
+__private_extern__ void ifnet_decr_iorefcnt(struct ifnet *);
+
+__private_extern__ void if_attach_ifa(struct ifnet *, struct ifaddr *);
+__private_extern__ void if_attach_link_ifa(struct ifnet *, struct ifaddr *);
+__private_extern__ void if_detach_ifa(struct ifnet *, struct ifaddr *);
+__private_extern__ void if_detach_link_ifa(struct ifnet *, struct ifaddr *);
+
+extern struct ifaddr *ifa_ifwithaddr(const struct sockaddr *);
+extern struct ifaddr *ifa_ifwithaddr_scoped(const struct sockaddr *, unsigned int);
+extern struct ifaddr *ifa_ifwithdstaddr(const struct sockaddr *);
+extern struct ifaddr *ifa_ifwithnet(const struct sockaddr *);
+extern struct ifaddr *ifa_ifwithnet_scoped(const struct sockaddr *, unsigned int);
+extern struct ifaddr *ifa_ifwithroute(int, const struct sockaddr *,
+    const struct sockaddr *);
+extern struct	ifaddr *ifa_ifwithroute_locked(int, const struct sockaddr *, const struct sockaddr *);
+extern struct ifaddr *ifa_ifwithroute_scoped_locked(int, const struct sockaddr *,
     const struct sockaddr *, unsigned int);
-struct	ifaddr *ifaof_ifpforaddr(const struct sockaddr *, struct ifnet *);
-struct	ifaddr *ifa_ifpgetprimary(struct ifnet *, int);
-void	ifafree(struct ifaddr *);
-void	ifaref(struct ifaddr *);
+extern struct ifaddr *ifaof_ifpforaddr(const struct sockaddr *, struct ifnet *);
+__private_extern__ struct ifaddr *ifa_ifpgetprimary(struct ifnet *, int);
+extern void ifa_addref(struct ifaddr *, int);
+extern struct ifaddr *ifa_remref(struct ifaddr *, int);
+extern void ifa_lock_init(struct ifaddr *);
+extern void ifa_lock_destroy(struct ifaddr *);
+extern void ifma_addref(struct ifmultiaddr *, int);
+extern void ifma_remref(struct ifmultiaddr *);
 
-struct	ifmultiaddr *ifmaof_ifpforaddr(const struct sockaddr *, struct ifnet *);
+extern void ifa_init(void);
 
-extern struct in_ifaddr *ifa_foraddr(unsigned int);
-extern struct in_ifaddr *ifa_foraddr_scoped(unsigned int, unsigned int);
+__private_extern__ struct in_ifaddr *ifa_foraddr(unsigned int);
+__private_extern__ struct in_ifaddr *ifa_foraddr_scoped(unsigned int,
+    unsigned int);
 
-#ifdef BSD_KERNEL_PRIVATE
-enum {
-	kIfNetUseCount_MayBeZero = 0,
-	kIfNetUseCount_MustNotBeZero = 1
-};
+#if INET6
+struct in6_addr;
+__private_extern__ struct in6_ifaddr *ifa_foraddr6(struct in6_addr *);
+__private_extern__ struct in6_ifaddr *ifa_foraddr6_scoped(struct in6_addr *,
+    unsigned int);
+#endif /* INET6 */
 
-int ifp_use(struct ifnet *ifp, int handle_zero);
-int ifp_unuse(struct ifnet *ifp);
-void ifp_use_reached_zero(struct ifnet *ifp);
+__private_extern__ void if_data_internal_to_if_data(struct ifnet *ifp,
+    const struct if_data_internal *if_data_int, struct if_data *if_data);
+__private_extern__ void	if_data_internal_to_if_data64(struct ifnet *ifp,
+    const struct if_data_internal *if_data_int, struct if_data64 *if_data64);
+__private_extern__ void	if_copy_traffic_class(struct ifnet *ifp,
+    struct if_traffic_class *if_tc);
 
-void	if_data_internal_to_if_data(struct ifnet *ifp, const struct if_data_internal *if_data_int,
-			   struct if_data *if_data);
-void	if_data_internal_to_if_data64(struct ifnet *ifp, const struct if_data_internal *if_data_int,
-							   struct if_data64 *if_data64);
-#endif /* BSD_KERNEL_PRIVATE */
-#endif /* KERNEL_PRIVATE */
+__private_extern__ struct rtentry *ifnet_cached_rtlookup_inet(struct ifnet *,
+    struct in_addr);
+#if INET6
+__private_extern__ struct rtentry *ifnet_cached_rtlookup_inet6(struct ifnet *,
+    struct in6_addr *);
+#endif /* INET6 */
+
+#endif /* XNU_KERNEL_PRIVATE */
 #endif /* !_NET_IF_VAR_H_ */

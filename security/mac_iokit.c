@@ -73,3 +73,30 @@ mac_iokit_check_device(char *devtype, struct mac_module_data *mdata)
 	MAC_CHECK(iokit_check_device, devtype, mdata);
 	return (error);
 }
+
+int
+mac_iokit_check_open(kauth_cred_t cred, io_object_t user_client, unsigned int user_client_type)
+{
+	int error;
+
+	MAC_CHECK(iokit_check_open, cred, user_client, user_client_type);
+	return (error);
+}
+
+int
+mac_iokit_check_set_properties(kauth_cred_t cred, io_object_t registry_entry, io_object_t properties)
+{
+	int error;
+
+	MAC_CHECK(iokit_check_set_properties, cred, registry_entry, properties);
+	return (error);
+}
+
+int
+mac_iokit_check_hid_control(kauth_cred_t cred)
+{
+	int error;
+
+	MAC_CHECK(iokit_check_hid_control, cred);
+	return (error);
+}

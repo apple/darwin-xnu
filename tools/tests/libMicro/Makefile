@@ -35,7 +35,7 @@ ARCH = i386
 
 BINS=		$(ALL:%=bin-$(ARCH)/%) bin-$(ARCH)/tattle
 
-TARBALL_CONTENTS = 	\
+# TARBALL_CONTENTS = 	\
 	Makefile.benchmarks \
 	Makefile.SunOS 	\
 	Makefile.Linux 	\
@@ -61,6 +61,8 @@ TARBALL_CONTENTS = 	\
 	benchmark_finiworker.c	\
 	bench		\
 	bench.sh	\
+	coreos_bench	\
+	coreos_bench.sh	\
 	mk_tarball	\
 	multiview	\
 	multiview.sh	\
@@ -72,16 +74,27 @@ TARBALL_CONTENTS = 	\
 
 default $(ALL) run cstyle lint tattle: $(BINS)
 	@cp bench.sh bench
+	@cp coreos_bench.sh coreos_bench
 	@cp multiview.sh multiview
 	@cp wrapper.sh wrapper
 	@cp create_stuff.sh create_stuff
-	@chmod +x bench create_stuff multiview wrapper
+	@cp benchDS.sh benchDS
+	@cp od_account_create.sh od_account_create
+	@cp od_account_delete.sh od_account_delete
+	@chmod +x bench coreos_bench create_stuff multiview wrapper benchDS od_account_create od_account_delete
 	@mkdir -p bin-$(ARCH); cd bin-$(ARCH); MACH=$(ARCH) $(MAKE) -f ../Makefile.`uname -s` ARCH=$(ARCH) UNAME_RELEASE=`uname -r | sed 's/\./_/g'` $@
-
+	@echo "code signing all the binaries under bin-$(ARCH) and apple/bin-$(ARCH)"
+	@for file in $(abspath bin-$(ARCH)/*) $(abspath apple/bin-$(ARCH)/*);do        \
+		if test -x $$file;then  \
+			codesign -s - $$file 1>& /dev/null ;    \
+		fi;     \
+	done;
+	@echo "done"
+	
 .PHONY: clean clean_subdirs clean_$(SUBDIRS)
 
 clean: clean_subdirs
-	rm -rf bin bin-* wrapper multiview create_stuff bench tattle
+	rm -rf bin bin-* wrapper multiview create_stuff bench tattle benchDS od_account_create od_account_delete coreos_bench
 
 clean_subdirs:
 	for dir in $(SUBDIRS); do $(MAKE) -C $$dir clean; done
@@ -94,10 +107,10 @@ $(BINS): bin
 	@chmod +x wrapper
 	@ln -sf ../wrapper $@
 
-
-libMicro.tar:	FORCE
-	@chmod +x ./mk_tarball wrapper
-	@./mk_tarball $(TARBALL_CONTENTS) 
+# commenting the lbMicro.tar as it is not being used.
+# libMicro.tar:	FORCE
+#	@chmod +x ./mk_tarball wrapper
+#	@./mk_tarball $(TARBALL_CONTENTS) 
  
-FORCE:
+# FORCE:
 

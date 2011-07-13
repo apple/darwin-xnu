@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -52,7 +52,7 @@
 #include <mach/machine.h>
 #include <i386/cpuid.h>
 #include <i386/tsc.h>
-#include <i386/rtclock.h>
+#include <i386/rtclock_protos.h>
 #include <i386/cpu_data.h>
 #include <i386/machine_routines.h>
 #include <i386/misc_protos.h>
@@ -66,21 +66,18 @@
 #include <ipc/ipc_port.h>
 
 #include <kern/page_decrypt.h>
+#include <kern/processor.h>
 
 /* the lists of commpage routines are in commpage_asm.s  */
 extern	commpage_descriptor*	commpage_32_routines[];
 extern	commpage_descriptor*	commpage_64_routines[];
-
-/* translated commpage descriptors from commpage_sigs.c  */
-extern	commpage_descriptor sigdata_descriptor;
-extern	commpage_descriptor *ba_descriptors[];
 
 extern vm_map_t	commpage32_map;	// the shared submap, set up in vm init
 extern vm_map_t	commpage64_map;	// the shared submap, set up in vm init
 
 char	*commPagePtr32 = NULL;		// virtual addr in kernel map of 32-bit commpage
 char	*commPagePtr64 = NULL;		// ...and of 64-bit commpage
-int     _cpu_capabilities = 0;          // define the capability vector
+uint32_t     _cpu_capabilities = 0;          // define the capability vector
 
 int	noVMX = 0;		/* if true, do not set kHasAltivec in ppc _cpu_capabilities */
 
@@ -95,6 +92,8 @@ static commpage_address_t	commPageBaseOffset; // subtract from 32-bit runtime ad
 
 static	commpage_time_data	*time_data32 = NULL;
 static	commpage_time_data	*time_data64 = NULL;
+
+decl_simple_lock_data(static,commpage_active_cpus_lock);
 
 /* Allocate the commpage and add to the shared submap created by vm:
  * 	1. allocate a page in the kernel map (RW)
@@ -157,6 +156,13 @@ commpage_allocate(
 		panic("cannot map commpage");
 
 	ipc_port_release(handle);
+	
+	// Initialize the text section of the commpage with INT3
+	char *commpage_ptr = (char*)(intptr_t)kernel_addr;
+	vm_size_t i;
+	for( i = _COMM_PAGE_TEXT_START - _COMM_PAGE_START_ADDRESS; i < size; i++ )
+		// This is the hex for the X86 opcode INT3
+		commpage_ptr[i] = 0xCC;
 
 	return (void*)(intptr_t)kernel_addr;                     // return address in kernel map
 }
@@ -193,7 +199,7 @@ commpage_cpus( void )
 static void
 commpage_init_cpu_capabilities( void )
 {
-	int bits;
+	uint32_t bits;
 	int cpus;
 	ml_cpu_info_t cpu_info;
 
@@ -201,6 +207,9 @@ commpage_init_cpu_capabilities( void )
 	ml_cpu_get_info(&cpu_info);
 	
 	switch (cpu_info.vector_unit) {
+		case 9:
+			bits |= kHasAVX1_0;
+			/* fall thru */
 		case 8:
 			bits |= kHasSSE4_2;
 			/* fall thru */
@@ -275,46 +284,11 @@ commpage_stuff(
     void	*dest = commpage_addr_of(address);
     
     if (address < next)
-    	panic("commpage overlap at address 0x%p, 0x%x < 0x%x", dest, address, next);
+       panic("commpage overlap at address 0x%p, 0x%x < 0x%x", dest, address, next);
     
     bcopy(source,dest,length);
     
     next = address + length;
-}
-
-static void
-commpage_stuff_swap(
-	commpage_address_t	address,
-	void	*source,
-	int	length,
-	int	legacy )
-{
-	if ( legacy ) {
-		void *dest = commpage_addr_of(address);
-		dest = (void *)((uintptr_t) dest + _COMM_PAGE_SIGS_OFFSET);
-		switch (length) {
-			case 2:
-				OSWriteSwapInt16(dest, 0, *(uint16_t *)source);
-				break;
-			case 4:
-				OSWriteSwapInt32(dest, 0, *(uint32_t *)source);
-				break;
-			case 8:
-				OSWriteSwapInt64(dest, 0, *(uint64_t *)source);
-				break;
-		}
-	}
-}
-
-static void
-commpage_stuff2(
-	commpage_address_t	address,
-	void	*source,
-	int	length,
-	int	legacy )
-{
-	commpage_stuff_swap(address, source, length, legacy);
-	commpage_stuff(address, source, length);
 }
 
 /* Copy a routine into comm page if it matches running machine.
@@ -345,8 +319,6 @@ commpage_stuff_routine(
 }
 
 /* Fill in the 32- or 64-bit commpage.  Called once for each.
- * The 32-bit ("legacy") commpage has a bunch of stuff added to it
- * for translated processes, some of which is byte-swapped.
  */
 
 static void
@@ -356,17 +328,16 @@ commpage_populate_one(
 	size_t		area_used,	// _COMM_PAGE32_AREA_USED or _COMM_PAGE64_AREA_USED
 	commpage_address_t base_offset,	// will become commPageBaseOffset
 	commpage_descriptor** commpage_routines, // list of routine ptrs for this commpage
-	boolean_t	legacy,		// true if 32-bit commpage
 	commpage_time_data** time_data,	// &time_data32 or &time_data64
 	const char*	signature )	// "commpage 32-bit" or "commpage 64-bit"
 {
+	uint8_t	c1;
    	short   c2;
-	int	c4;
-	static double   two52 = 1048576.0 * 1048576.0 * 4096.0; // 2**52
-	static double   ten6 = 1000000.0;                       // 10**6
+	int	    c4;
+	uint64_t c8;
+	uint32_t	cfamily;
 	commpage_descriptor **rd;
 	short   version = _COMM_PAGE_THIS_VERSION;
-	int		swapcaps;
 
 	next = 0;
 	cur_routine = 0;
@@ -380,25 +351,11 @@ commpage_populate_one(
 	* ascending order, so we can check for overlap and panic if so.
 	*/
 	commpage_stuff(_COMM_PAGE_SIGNATURE,signature,(int)strlen(signature));
-	commpage_stuff2(_COMM_PAGE_VERSION,&version,sizeof(short),legacy);
+	commpage_stuff(_COMM_PAGE_VERSION,&version,sizeof(short));
 	commpage_stuff(_COMM_PAGE_CPU_CAPABILITIES,&_cpu_capabilities,sizeof(int));
 
-	/* excuse our magic constants, we cannot include ppc/cpu_capabilities.h */
-	/* always set kCache32 and kDcbaAvailable */
-	swapcaps =  0x44;
-	if ( _cpu_capabilities & kUP )
-		swapcaps |= (kUP + (1 << kNumCPUsShift));
-	else
-		swapcaps |= 2 << kNumCPUsShift;	/* limit #cpus to 2 */
-	if ( ! noVMX )		/* if rosetta will be emulating altivec... */
-		swapcaps |= 0x101;	/* ...then set kHasAltivec and kDataStreamsAvailable too */
-	commpage_stuff_swap(_COMM_PAGE_CPU_CAPABILITIES, &swapcaps, sizeof(int), legacy);
-	c2 = 32;
-	commpage_stuff_swap(_COMM_PAGE_CACHE_LINESIZE,&c2,2,legacy);
-
-	if (_cpu_capabilities & kCache32)
-		c2 = 32;
-	else if (_cpu_capabilities & kCache64)
+	c2 = 32;  // default
+	if (_cpu_capabilities & kCache64)
 		c2 = 64;
 	else if (_cpu_capabilities & kCache128)
 		c2 = 128;
@@ -407,10 +364,17 @@ commpage_populate_one(
 	c4 = MP_SPIN_TRIES;
 	commpage_stuff(_COMM_PAGE_SPIN_COUNT,&c4,4);
 
-	if ( legacy ) {
-		commpage_stuff2(_COMM_PAGE_2_TO_52,&two52,8,legacy);
-		commpage_stuff2(_COMM_PAGE_10_TO_6,&ten6,8,legacy);
-	}
+	/* machine_info valid after ml_get_max_cpus() */
+	c1 = machine_info.physical_cpu_max;
+	commpage_stuff(_COMM_PAGE_PHYSICAL_CPUS,&c1,1);
+	c1 = machine_info.logical_cpu_max;
+	commpage_stuff(_COMM_PAGE_LOGICAL_CPUS,&c1,1);
+
+	c8 = ml_cpu_cache_size(0);
+	commpage_stuff(_COMM_PAGE_MEMORY_SIZE, &c8, 8);
+
+	cfamily = cpuid_info()->cpuid_cpufamily;
+	commpage_stuff(_COMM_PAGE_CPUFAMILY, &cfamily, 4);
 
 	for( rd = commpage_routines; *rd != NULL ; rd++ )
 		commpage_stuff_routine(*rd);
@@ -421,14 +385,6 @@ commpage_populate_one(
 	if (next > _COMM_PAGE_END)
 		panic("commpage overflow: next = 0x%08x, commPagePtr = 0x%p", next, commPagePtr);
 
-	if ( legacy ) {
-		next = 0;
-		for( rd = ba_descriptors; *rd != NULL ; rd++ )
-			commpage_stuff_routine(*rd);
-
-		next = 0;
-		commpage_stuff_routine(&sigdata_descriptor);
-	}	
 }
 
 
@@ -449,7 +405,6 @@ commpage_populate( void )
 				_COMM_PAGE32_AREA_USED,
 				_COMM_PAGE32_BASE_ADDRESS,
 				commpage_32_routines, 
-				TRUE,			/* legacy (32-bit) commpage */
 				&time_data32,
 				"commpage 32-bit");
 #ifndef __LP64__
@@ -464,7 +419,6 @@ commpage_populate( void )
 					_COMM_PAGE64_AREA_USED,
 					_COMM_PAGE32_START_ADDRESS, /* commpage address are relative to 32-bit commpage placement */
 					commpage_64_routines, 
-					FALSE,		/* not a legacy commpage */
 					&time_data64,
 					"commpage 64-bit");
 #ifndef __LP64__
@@ -473,6 +427,9 @@ commpage_populate( void )
 #endif
 	}
 
+	simple_lock_init(&commpage_active_cpus_lock, 0);
+
+	commpage_update_active_cpus();
 	rtc_nanotime_init_commpage();
 }
 
@@ -627,6 +584,34 @@ commpage_set_spin_count(
 		*ip = (uint32_t) count;
 	}
 
+}
+
+/* Updated every time a logical CPU goes offline/online */
+void
+commpage_update_active_cpus(void)
+{
+	char	    *cp;
+	volatile uint8_t    *ip;
+	
+	/* At least 32-bit commpage must be initialized */
+	if (!commPagePtr32)
+		return;
+
+	simple_lock(&commpage_active_cpus_lock);
+
+	cp = commPagePtr32;
+	cp += (_COMM_PAGE_ACTIVE_CPUS - _COMM_PAGE32_BASE_ADDRESS);
+	ip = (volatile uint8_t*) cp;
+	*ip = (uint8_t) processor_avail_count;
+	
+	cp = commPagePtr64;
+	if ( cp ) {
+		cp += (_COMM_PAGE_ACTIVE_CPUS - _COMM_PAGE32_START_ADDRESS);
+		ip = (volatile uint8_t*) cp;
+		*ip = (uint8_t) processor_avail_count;
+	}
+
+	simple_unlock(&commpage_active_cpus_lock);
 }
 
 

@@ -29,10 +29,6 @@
 extern "C" {
 #include <libkern/OSKextLibPrivate.h>
 #include <libkern/mkext.h>
-
-#include <mach/host_special_ports.h>
-#include <kextd/kextd_mach.h>
-#include <kern/host.h>
 };
 
 #include <libkern/c++/OSContainers.h>
@@ -185,45 +181,6 @@ OSReturn OSKextCancelRequest(
 #if PRAGMA_MARK
 #pragma mark MIG Functions & Wrappers
 #endif
-/*********************************************************************
-* This function is for use only by OSKextLib.cpp and OSKext.cpp.
-*
-* xxx - can we cache the kextd port or do we have to get it each time
-* xxx - in case it relaunches?
-*********************************************************************/
-extern void ipc_port_release_send(ipc_port_t);
-
-kern_return_t OSKextPingKextd(void)
-{
-    kern_return_t result     = KERN_FAILURE;
-    mach_port_t   kextd_port = IPC_PORT_NULL;
-
-    result = host_get_kextd_port(host_priv_self(), &kextd_port);
-    if (result != KERN_SUCCESS || !IPC_PORT_VALID(kextd_port)) {
-	OSKextLog(/* kext */ NULL,
-            kOSKextLogErrorLevel |
-            kOSKextLogIPCFlag,
-            "Can't get kextd port.");
-        goto finish;
-    }
-
-    result = kextd_ping(kextd_port);
-    if (result != KERN_SUCCESS) {
-	OSKextLog(/* kext */ NULL,
-            kOSKextLogErrorLevel |
-            kOSKextLogIPCFlag,
-            "kextd ping failed (0x%x).", (int)result);
-        goto finish;
-    }
-
-finish:
-    if (IPC_PORT_VALID(kextd_port)) {
-        ipc_port_release_send(kextd_port);
-    }
-
-    return result;
-}
-
 /*********************************************************************
 * IMPORTANT: Once we have done the vm_map_copyout(), we *must* return
 * KERN_SUCCESS or the kernel map gets messed up (reason as yet
@@ -442,6 +399,16 @@ void OSKextRemoveKextBootstrap(void)
     return;
 }
 
+#if CONFIG_DTRACE
+/*********************************************************************
+*********************************************************************/
+void OSKextRegisterKextsWithDTrace(void)
+{
+    OSKext::registerKextsWithDTrace();
+    return;
+}
+#endif /* CONFIG_DTRACE */
+
 /*********************************************************************
 *********************************************************************/
 void kext_dump_panic_lists(int (*printf_func)(const char * fmt, ...))
@@ -491,7 +458,7 @@ kmod_dump_log(
 * Compatibility implementation for kmod_get_info() host_priv routine.
 * Only supported on old 32-bit architectures.
 *********************************************************************/
-#if __ppc__ || __i386__
+#if __i386__
 kern_return_t
 kext_get_kmod_info(
     kmod_info_array_t      * kmod_list,
@@ -499,6 +466,16 @@ kext_get_kmod_info(
 {
     return OSKext::getKmodInfo(kmod_list, kmodCount);
 }
-#endif /* __ppc__ || __i386__ */
+#endif /* __i386__ */
+
+#if PRAGMA_MARK
+#pragma mark Loaded Kext Summary
+#endif
+
+void 
+OSKextLoadedKextSummariesUpdated(void)
+{
+    // Do nothing.
+}
 
 };

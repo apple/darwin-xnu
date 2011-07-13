@@ -37,35 +37,15 @@ const char * gIOKernelConfigTables =
 "   {"
 "     'IOClass'         = IOPanicPlatform;"
 "     'IOProviderClass' = IOPlatformExpertDevice;"
-"     'IOProbeScore'    = '-1';"
+"     'IOProbeScore'    = 0:32;"
 "   }"
-#ifdef PPC
-"   ,"
-"   {"
-"       'IOClass'               = AppleCPU;"
-"       'IOProviderClass'       = IOPlatformDevice;"
-"       'IONameMatch'           = 'cpu';"
-"       'IOProbeScore'          = 100:32;"
-"   },"
-"   {"
-"       'IOClass'              = AppleNMI;"
-"       'IOProviderClass'      = AppleMacIODevice;"
-"       'IONameMatch'          = 'programmer-switch';"
-"   },"
-"   {"
-"       'IOClass'               = AppleNVRAM;"
-"       'IOProviderClass'       = AppleMacIODevice;"
-"       'IONameMatch'           = nvram;"
-"   }"
-#endif /* PPC */
 ")";
-
 
 /* This stuff is no longer used at all but was exported in prior
  * releases, so we'll keep them around for PPC/i386 only.
  * See libkern's OSKext.cpp for other symbols, which have been moved
  * there for sanity.
  */
-#if __ppc__ || __i386__
+#if __i386__
 const char * gIOKernelKmods = "";
-#endif /* __ppc__ || __i386__ */
+#endif /* __i386__ */

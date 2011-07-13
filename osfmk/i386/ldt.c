@@ -65,38 +65,38 @@
 
 struct real_descriptor	master_ldt[LDTSZ] __attribute__ ((aligned (4096))) = {
 #ifdef __i386__
-	[SEL_TO_INDEX(SYSENTER_CS)] MAKE_REAL_DESCRIPTOR(	/* kernel code (sysenter) */
+	[SEL_TO_INDEX(SYSENTER_CS)] = MAKE_REAL_DESCRIPTOR(	/* kernel code (sysenter) */
 		0,
 		0xfffff,
 		SZ_32|SZ_G,
 		ACC_P|ACC_PL_K|ACC_CODE_R
 	),
-	[SEL_TO_INDEX(SYSENTER_DS)] MAKE_REAL_DESCRIPTOR(	/* kernel data (sysenter) */
+	[SEL_TO_INDEX(SYSENTER_DS)] = MAKE_REAL_DESCRIPTOR(	/* kernel data (sysenter) */
 		0,
 		0xfffff,
 		SZ_32|SZ_G,
 		ACC_P|ACC_PL_K|ACC_DATA_W
 	),
-	[SEL_TO_INDEX(USER_CS)] MAKE_REAL_DESCRIPTOR(	/* user code segment */
+	[SEL_TO_INDEX(USER_CS)] = MAKE_REAL_DESCRIPTOR(	/* user code segment */
 		0,
 		0xfffff,
  		SZ_32|SZ_G,
 		ACC_P|ACC_PL_U|ACC_CODE_R
 	),
-	[SEL_TO_INDEX(USER_DS)] MAKE_REAL_DESCRIPTOR(	/* user data segment */
+	[SEL_TO_INDEX(USER_DS)] = MAKE_REAL_DESCRIPTOR(	/* user data segment */
 		0,
 		0xfffff,
 		SZ_32|SZ_G,
 		ACC_P|ACC_PL_U|ACC_DATA_W
 	),
-	[SEL_TO_INDEX(USER64_CS)] MAKE_REAL_DESCRIPTOR(	/* user 64-bit code segment */
+	[SEL_TO_INDEX(USER64_CS)] = MAKE_REAL_DESCRIPTOR(	/* user 64-bit code segment */
 		0,
 		0xfffff,
 		SZ_64|SZ_G,
 		ACC_P|ACC_PL_U|ACC_CODE_R
 	),
 #endif
-	[SEL_TO_INDEX(USER_CTHREAD)] MAKE_REAL_DESCRIPTOR(	/* user cthread segment */
+	[SEL_TO_INDEX(USER_CTHREAD)] = MAKE_REAL_DESCRIPTOR(	/* user cthread segment */
 		0,
 		0xfffff,
 		SZ_32|SZ_G,

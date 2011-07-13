@@ -16,9 +16,9 @@
 #include <libkern/OSByteOrder.h> /* for OSSwap32() */
 #include <mach/mach.h>
 
+
 extern char		g_target_path[ PATH_MAX ];
 extern int		g_skip_setuid_tests;
-extern int		g_is_under_rosetta;
 extern int		g_is_single_user;
 
 
@@ -896,6 +896,7 @@ int access_chmod_fchmod_test( void * the_argp )
 	int			my_err;
 	int			my_fd = -1;
 	char *		my_pathp = NULL;
+	uid_t euid,ruid;
 	struct stat		my_sb;
 	kern_return_t           my_kr;
 
@@ -914,6 +915,7 @@ int access_chmod_fchmod_test( void * the_argp )
 	if ( my_err != 0 ) {
 		goto test_failed_exit;
 	}
+	
 	
 	/* test chmod */
 	my_err = chmod( my_pathp, S_IRWXU );
@@ -940,17 +942,10 @@ int access_chmod_fchmod_test( void * the_argp )
 		
 		/* special case when running as root - we get back EPERM when running as root */
 		my_err = errno;
-#if !TARGET_OS_EMBEDDED
 		if ( ( tmp == 0 && my_err != EPERM) || (tmp != 0 && my_err != EACCES) ) {
 			printf( "access failed with errno %d - %s. \n", my_err, strerror( my_err ) );
 			goto test_failed_exit;
 		}
-#else
-		if ( ( tmp == 0 && my_err != EACCES) || (tmp != 0 && my_err != EACCES) ) {
-			printf( "access failed with errno %d - %s. \n", my_err, strerror( my_err ) );
-			goto test_failed_exit;
-		}
-#endif
 	}
 
 	/* verify correct modes are set */
@@ -965,7 +960,55 @@ int access_chmod_fchmod_test( void * the_argp )
 		printf( "chmod call appears to have failed.  stat shows incorrect values in st_mode! \n" );
 		goto test_failed_exit;
 	}
-
+	
+	
+	/*  another test for the access system call  -- refer ro radar# 6725311 */
+	
+	system("touch /tmp/me");
+	system("echo local | sudo touch /tmp/notme");
+	
+	euid = geteuid();
+	ruid = getuid();
+	//printf("effective user id is %d: and real user id is %d: \n", (int)euid, (int)ruid);
+	setreuid(ruid, ruid);
+	//printf("effective user id is %d: and real user id is %d: \n", (int)geteuid, (int)getuid);
+	my_err = unlink(FILE_NOTME);
+	if (my_err < 0) {
+		my_err = errno;
+	}
+	if (my_err == 0) {
+		printf("Unresolved: First attempt deleted '" FILE_NOTME "'! \n" );
+		goto test_failed_exit;
+	} else {
+		printf("Status: First attempt to delete '" FILE_NOTME "' failed with error %d - %s.\n", my_err, strerror( my_err ));
+			
+		if (true) {
+			my_err = access(FILE_ME, _DELETE_OK);
+            if (my_err < 0) {
+                my_err = errno;
+            }
+			//printf("Status: access('" FILE_ME "') = %d - %s.\n", my_err, strerror( my_err ));
+          fprintf(stderr, "Status: access('" FILE_ME "') = %d\n", my_err);
+		}
+		my_err = unlink(FILE_NOTME);
+        if (my_err < 0) {
+            my_err = errno;
+        }
+        if (my_err == 0) {
+			printf("Failed: Second attempt deleted '" FILE_NOTME "'!\n");
+            //fprintf(stderr, "Failed: Second attempt deleted '" FILE_NOTME "'!\n");
+			goto test_failed_exit;
+        } else {
+			printf("Passed: Second attempt to delete '" FILE_NOTME "' failed with error %d - %s.\n", my_err, strerror( my_err ));
+           // fprintf(stderr, "Passed: Second attempt to delete '" FILE_NOTME "' failed with error %d\n", my_err);
+			
+        }
+	}
+	setreuid(ruid, euid);
+	//printf("effective user id is %d: and real user id is %d    ---1: \n", euid, ruid);
+	/* end of test*/
+	
+	
 	/* test fchmod */
 	my_fd = open( my_pathp, O_RDONLY, 0 );
 	if ( my_fd == -1 ) {
@@ -1219,6 +1262,8 @@ struct vol_attr_buf {
 #pragma pack()
 typedef struct vol_attr_buf vol_attr_buf;
 
+#define STATFS_TEST_PATH	"/tmp"
+
 int fs_stat_tests( void * the_argp )
 {
 	int			my_err, my_count, i;
@@ -1255,7 +1300,7 @@ int fs_stat_tests( void * the_argp )
         }
 
 	my_statfsp = (struct statfs *) my_bufferp;
-	my_err = statfs( "/", my_statfsp );
+	my_err = statfs( STATFS_TEST_PATH, my_statfsp );
 	if ( my_err == -1 ) {
 		printf( "statfs call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
 		goto test_failed_exit;
@@ -1289,7 +1334,7 @@ int fs_stat_tests( void * the_argp )
 #if !TARGET_OS_EMBEDDED
 	/* now try statfs64 */
 	my_statfs64p = (struct statfs64 *) my_buffer64p;
-	my_err = statfs64( "/", my_statfs64p );
+	my_err = statfs64( STATFS_TEST_PATH, my_statfs64p );
 	if ( my_err == -1 ) {
 		printf( "statfs64 call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
 		goto test_failed_exit;
@@ -1338,8 +1383,8 @@ int fs_stat_tests( void * the_argp )
 		}
 	}
 	
-	/* open kernel to use as test file for fstatfs */
- 	my_fd = open( "/mach_kernel", O_RDONLY, 0 );
+	/* open to use as test file for fstatfs */
+ 	my_fd = open( STATFS_TEST_PATH, O_RDONLY, 0 );
 	if ( my_fd == -1 ) {
 		printf( "open call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
 		goto test_failed_exit;
@@ -1384,7 +1429,7 @@ int fs_stat_tests( void * the_argp )
 	} 
 
 	/* try again with statfs */
-	my_err = statfs( "/mach_kernel", my_statfsp );
+	my_err = statfs( STATFS_TEST_PATH , my_statfsp );
 	if ( my_err == -1 ) {
 		printf( "statfs call failed.  got errno %d - %s. \n", errno, strerror( errno ) );
 		goto test_failed_exit;
@@ -1942,11 +1987,7 @@ int execve_kill_vfork_test( void * the_argp )
 	}
 	
 	if (get_architecture() == INTEL) {
-		int ppc_fail_flag = 0;
 		struct stat sb;
-
-		if (stat("/usr/libexec/oah/translate", &sb))
-			ppc_fail_flag = 1;
 
 		if (bits == 64 && sizeof(long) == 8) {
 			/*
@@ -1970,19 +2011,12 @@ int execve_kill_vfork_test( void * the_argp )
 			argvs[0] = "launch-i386";
 			if (do_execve_test("helpers/launch-i386", argvs, NULL, 1) != 0)		goto test_failed_exit;
 
-			/* Test posix_spawn for i386, x86_64, and ppc (should succeed) */
+			/* Test posix_spawn for i386, x86_64 (should succeed) */
 			errmsg = NULL;
 			if (do_spawn_test(CPU_TYPE_I386, 0))
 				goto test_failed_exit;
 			if (do_spawn_test(CPU_TYPE_X86_64, 0))
 				goto test_failed_exit;
-			/*
-			 * Note: rosetta is no go in single-user mode
-			 */
-			if (!g_is_single_user) {
-				if (do_spawn_test(CPU_TYPE_POWERPC, ppc_fail_flag))
-					goto test_failed_exit;
-			}
 		}
 		else if (bits == 64 && sizeof(long) == 4) {
 			/*
@@ -2006,19 +2040,12 @@ int execve_kill_vfork_test( void * the_argp )
 			argvs[0] = "launch-x86_64";
 			if (do_execve_test("helpers/launch-x86_64", argvs, NULL, 1) != 0)	goto test_failed_exit;
 
-			/* Test posix_spawn for i386, x86_64, and ppc (should succeed) */
+			/* Test posix_spawn for i386, x86_64 (should succeed) */
 			errmsg = NULL;
 			if (do_spawn_test(CPU_TYPE_I386, 0))
 				goto test_failed_exit;
 			if (do_spawn_test(CPU_TYPE_X86_64, 0))
 				goto test_failed_exit;
-			/*
-			 * Note: rosetta is no go in single-user mode
-			 */
-			if (!g_is_single_user) {
-				if (do_spawn_test(CPU_TYPE_POWERPC, ppc_fail_flag))
-					goto test_failed_exit;
-			}
 		}
 		else if (bits == 32) {
 			/* Running on i386 hardware. Check cases 4. */
@@ -2026,61 +2053,14 @@ int execve_kill_vfork_test( void * the_argp )
 			argvs[0] = "sleep-i386";
 			if (do_execve_test("helpers/sleep-i386", argvs, NULL, 1)) 		goto test_failed_exit;
 
-			/* Test posix_spawn for x86_64 (should fail), i386, and ppc (should succeed) */
+			/* Test posix_spawn for x86_64 (should fail), i386 (should succeed) */
 			errmsg = NULL;
 			if (do_spawn_test(CPU_TYPE_X86_64, 1))
 				goto test_failed_exit;
 			if (do_spawn_test(CPU_TYPE_I386, 0))
 				goto test_failed_exit;
-			/*
-			 * Note: rosetta is no go in single-user mode
-			 */
-			if (!g_is_single_user) {
-				if (do_spawn_test(CPU_TYPE_POWERPC, ppc_fail_flag))
-					goto test_failed_exit;
-			}
 		}
-	}
-	else if (get_architecture() == POWERPC) {
-		if	(bits == 64 && sizeof(long) == 8) {
-			/*
-			 * Running on PPC64 hardware and running in 64-bit mode.
-			 * No longer supported on SnowLeopard.
-			 */ 
-			errmsg = "runnning ppc64 on snowleopard";
-			goto test_failed_exit;
-		}
-		else if	(bits == 64 && sizeof(long) == 4) {
-			/*
-			 * Running as PPC on PPC64 hardware or under Rosetta on x86_64 hardware.
-			 * Check cases 4, 5, 6 and fork a child to check 1, 2, 3. 
-			 */ 
-			errmsg = "execve failed: from ppc forking and exec()ing ppc process.\n";
-			argvs[0] = "sleep-ppc32";
-			if (do_execve_test("helpers/sleep-ppc32", argvs, NULL, 0))	goto test_failed_exit;
-
-			/* Test posix_spawn for i386 and ppc */
-			errmsg = NULL;
-			if (do_spawn_test(CPU_TYPE_I386, (g_is_under_rosetta ? 0 : 1)))
-				goto test_failed_exit;
-			if (do_spawn_test(CPU_TYPE_POWERPC, 0))
-				goto test_failed_exit;
-		}
-		else if (bits == 32) {
-			/* Running on ppc hardware. Check cases 4. */
-			errmsg = "execve failed: from ppc forking and exec()ing 32 bit ppc process.\n";
-			argvs[0] = "sleep-ppc32";
-			if (do_execve_test("helpers/sleep-ppc32", argvs, NULL, 1))		goto test_failed_exit;	
-			/* Test posix_spawn for i386 (should fail) and ppc (should succeed) */
-			errmsg = NULL;
-			 /* when under Rosetta, this process is CPU_TYPE_POWERPC, but the system should be able to run CPU_TYPE_I386 binaries */
-			if (do_spawn_test(CPU_TYPE_I386, (g_is_under_rosetta ? 0 : 1)))
-				goto test_failed_exit;
-			if (do_spawn_test(CPU_TYPE_POWERPC, 0))
-				goto test_failed_exit;
-		}
-	}
-	else if(get_architecture() == ARM) {
+	}else if(get_architecture() == ARM) {
 		if	(bits == 32) {
 
 			/* Running on arm hardware. Check cases 2. */
@@ -2914,36 +2894,11 @@ int acct_test( void * the_argp )
 	/* first letters in ac_comm should match the name of the executable */
 	if ( getuid( ) != my_acctp->ac_uid || getgid( ) != my_acctp->ac_gid ||
 			my_acctp->ac_comm[0] != 't' || my_acctp->ac_comm[1] != 'r' ) {
-		if (g_is_under_rosetta) {
-			// on x86 systems, data written by kernel to accounting info file is little endian; 
-                        // but Rosetta processes expects it to be big endian; so swap the uid for our test
-			if ( getuid( ) != OSSwapInt32(my_acctp->ac_uid) || 
-					getgid( ) != OSSwapInt32(my_acctp->ac_gid) ||
-					my_acctp->ac_comm[0] != 't' || 
-					my_acctp->ac_comm[1] != 'r' ) {
-				printf( "accounting data does not look correct under Rosetta:\n" );
-				printf( "------------------------\n" );
-				printf( "my_acctp->ac_uid = %lu (should be: %lu)\n",
-					(unsigned long) OSSwapInt32( my_acctp->ac_uid ), (unsigned long) getuid() );
-				printf( "my_acctp->ac_gid = %lu (should be: %lu)\n", 
-					(unsigned long) OSSwapInt32( my_acctp->ac_gid ), (unsigned long) getgid() );
-
-				print_acct_debug_strings(my_acctp->ac_comm);
-			}
-			else {
-				// is cool under Rosetta 
-				my_err = 0;
-				goto test_passed_exit;
-			}
-		}
-		else {
-			printf( "accounting data does not look correct:\n" );
 			printf( "------------------------\n" );
 			printf( "my_acctp->ac_uid = %lu (should be: %lu)\n", (unsigned long) my_acctp->ac_uid, (unsigned long) getuid() );
 			printf( "my_acctp->ac_gid = %lu (should be: %lu)\n", (unsigned long) my_acctp->ac_gid, (unsigned long) getgid() );
 
 			print_acct_debug_strings(my_acctp->ac_comm);
-		}
 		
 		goto test_failed_exit;
 	}
@@ -3320,6 +3275,7 @@ int fcntl_test( void * the_argp )
 {
 	int			my_err, my_result, my_tmep;
 	int			my_fd = -1;
+	int			my_newfd = -1;
 	char *		my_pathp = NULL;
 	kern_return_t           my_kr;
 
@@ -3376,7 +3332,60 @@ int fcntl_test( void * the_argp )
 		printf( "fcntl - F_SETFD failed to set FD_CLOEXEC correctly!!! \n" );
 		goto test_failed_exit;
 	}
-	
+
+	/* dup it to a new fd with FD_CLOEXEC forced on */
+
+	my_result = fcntl( my_fd, F_DUPFD_CLOEXEC, 0);
+	if ( my_result == -1 ) {
+		printf( "fcntl - F_DUPFD_CLOEXEC - failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	my_newfd = my_result;
+
+	/* check to see that it too is marked with FD_CLOEXEC */
+
+	my_result = fcntl( my_newfd, F_GETFD, 0);
+	if ( my_result == -1 ) {
+		printf( "fcntl - F_GETFD - failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	if ( (my_result & FD_CLOEXEC) == 0 ) {
+		printf( "fcntl - F_DUPFD_CLOEXEC failed to set FD_CLOEXEC!!! \n" );
+		goto test_failed_exit;
+	}
+
+	close( my_newfd );
+	my_newfd = -1;
+
+	/* While we're here, dup it via an open of /dev/fd/<fd> .. */
+
+	{
+		char devfdpath[PATH_MAX];
+
+		(void) snprintf( devfdpath, sizeof (devfdpath),
+			"/dev/fd/%u", my_fd );
+		my_result = open( devfdpath, O_RDONLY | O_CLOEXEC );
+	}
+	if ( my_result == -1 ) {
+		printf( "open call failed on /dev/fd/%u with error %d - \"%s\" \n", my_fd, errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	my_newfd = my_result;
+
+	/* check to see that it too is marked with FD_CLOEXEC */
+
+	my_result = fcntl( my_newfd, F_GETFD, 0);
+	if ( my_result == -1 ) {
+		printf( "fcntl - F_GETFD - failed with error %d - \"%s\" \n", errno, strerror( errno) );
+		goto test_failed_exit;
+	}
+	if ( (my_result & FD_CLOEXEC) == 0 ) {
+		printf( "fcntl - O_CLOEXEC open of /dev/fd/%u failed to set FD_CLOEXEC!!! \n", my_fd );
+		goto test_failed_exit;
+	}
+	close ( my_newfd );
+	my_newfd = -1;
+
 	my_err = 0;
 	goto test_passed_exit;
 
@@ -3384,6 +3393,8 @@ test_failed_exit:
 	my_err = -1;
 	
 test_passed_exit:
+	if ( my_newfd != -1)
+		close ( my_newfd );
 	if ( my_fd != -1 )
 		close( my_fd );
 	if ( my_pathp != NULL ) {
@@ -4993,6 +5004,7 @@ test_passed_exit:
 }
 
 
+
 /*  **************************************************************************************************************
  *	Test execution from data and stack areas.
  *  **************************************************************************************************************
@@ -5001,7 +5013,11 @@ int data_exec_tests( void * the_argp )
 {
 	int my_err = 0;
 	int arch, bits;
+	posix_spawnattr_t attrp;
+	char *argv[] = { "helpers/data_exec32nonxspawn", NULL };
 
+	int my_pid, my_status, ret;
+	
 	if ((arch = get_architecture()) == -1) {
 		printf("data_exec_test: couldn't determine architecture\n");
 		goto test_failed_exit;
@@ -5026,11 +5042,21 @@ int data_exec_tests( void * the_argp )
 			printf("data_exec-i386 failed\n");
 			goto test_failed_exit;
 		}
-	}
-
-	if (arch == POWERPC) {
-		if (system("arch -arch ppc helpers/data_exec") != 0) {
-			printf("data_exec-ppc failed\n");
+		
+		posix_spawnattr_init(&attrp);
+		posix_spawnattr_setflags(&attrp, _POSIX_SPAWN_ALLOW_DATA_EXEC );
+		ret = posix_spawn(&my_pid, "helpers/data_exec32nonxspawn", NULL, &attrp, argv, NULL);
+		if (ret) {
+			printf("data_exec-i386 failed in posix_spawn %s\n", strerror(errno));
+			goto test_failed_exit;
+		}
+		ret = wait4(my_pid, &my_status, 0, NULL);
+		if (ret == -1) {
+			printf("data_exec-i386 wait4 failed with errno %d - %s\n", errno, strerror(errno));
+			goto test_failed_exit;
+		}
+		if (WEXITSTATUS(my_status) != 0) {
+			printf("data_exec-i386 _POSIX_SPAWN_ALLOW_DATA_EXEC failed\n");
 			goto test_failed_exit;
 		}
 	}

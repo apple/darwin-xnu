@@ -39,7 +39,6 @@
 #define kIONVRAMPrivilege	kIOClientPrivilegeAdministrator
 //#define kIONVRAMPrivilege	kIOClientPrivilegeLocalUser
 
-
 OSDefineMetaClassAndStructors(IODTNVRAM, IOService);
 
 bool IODTNVRAM::init(IORegistryEntry *old, const IORegistryPlane *plane)
@@ -205,6 +204,9 @@ void IODTNVRAM::registerNVRAMController(IONVRAMController *nvram)
     _piImage = _nvramImage + _piPartitionOffset;
   }
   
+  _lastDeviceSync = 0;
+  _freshInterval = TRUE;		// we will allow sync() even before the first 15 minutes have passed.
+
   initOFVariables();
 }
 
@@ -229,27 +231,31 @@ bool IODTNVRAM::serializeProperties(OSSerialize *s) const
   OSDictionary         *dict = 0, *tmpDict = 0;
   OSCollectionIterator *iter = 0;
   
-  if (_ofDict == 0) return false;
-  
   // Verify permissions.
   hasPrivilege = (kIOReturnSuccess == IOUserClient::clientHasPrivilege(current_task(), kIONVRAMPrivilege));
 
   tmpDict = OSDictionary::withCapacity(1);
   if (tmpDict == 0) return false;
-    
-  iter = OSCollectionIterator::withCollection(_ofDict);
-  if (iter == 0) return false;
-    
-  while (1) {
-    key = OSDynamicCast(OSSymbol, iter->getNextObject());
-    if (key == 0) break;
-      
-    variablePerm = getOFVariablePerm(key);
-    if ((hasPrivilege || (variablePerm != kOFVariablePermRootOnly)) &&
-	( ! (variablePerm == kOFVariablePermKernelOnly && current_task() != kernel_task) )) {
-      tmpDict->setObject(key, _ofDict->getObject(key));
-    }
+
+  if (_ofDict == 0) {
+    /* No nvram. Return an empty dictionary. */
     dict = tmpDict;
+  } else {
+    /* Copy properties with client privilege. */
+    iter = OSCollectionIterator::withCollection(_ofDict);
+    if (iter == 0) return false;
+    
+    while (1) {
+      key = OSDynamicCast(OSSymbol, iter->getNextObject());
+      if (key == 0) break;
+      
+      variablePerm = getOFVariablePerm(key);
+      if ((hasPrivilege || (variablePerm != kOFVariablePermRootOnly)) &&
+	  ( ! (variablePerm == kOFVariablePermKernelOnly && current_task() != kernel_task) )) {
+	tmpDict->setObject(key, _ofDict->getObject(key));
+      }
+      dict = tmpDict;
+    }
   }
 
   result = dict->serialize(s);
@@ -412,18 +418,32 @@ IOReturn IODTNVRAM::setProperties(OSObject *properties)
     if (object == 0) continue;
     
     if (key->isEqualTo(kIONVRAMDeletePropertyKey)) {
-      tmpStr = OSDynamicCast(OSString, object);
-      if (tmpStr != 0) {
-	key = OSSymbol::withString(tmpStr);
-	removeProperty(key);
-	key->release();
-	result = true;
-      } else {
-	result = false;
-      }
-    } else {
-      result = setProperty(key, object);
+		tmpStr = OSDynamicCast(OSString, object);
+		if (tmpStr != 0) {
+			key = OSSymbol::withString(tmpStr);
+			removeProperty(key);
+			key->release();
+			result = true;
+		} else {
+			result = false;
+		}
+    } else if(key->isEqualTo(kIONVRAMSyncNowPropertyKey)) {
+		tmpStr = OSDynamicCast(OSString, object);
+		if (tmpStr != 0) {
+
+			result = true; // We are not going to gaurantee sync, this is best effort
+
+			if(safeToSync())
+				sync();
+
+		} else {
+			result = false;
+		}
+	}
+	else {
+		result = setProperty(key, object);
     }
+
   }
   
   iter->release();
@@ -1655,4 +1675,27 @@ IOReturn IODTNVRAM::writeNVRAMPropertyType1(IORegistryEntry *entry,
   data->release();
 
   return ok ? kIOReturnSuccess : kIOReturnNoMemory;
+}
+
+bool IODTNVRAM::safeToSync(void)
+{
+    AbsoluteTime delta;
+    UInt64       delta_ns;
+    SInt32       delta_secs;
+	
+	// delta interval went by
+	clock_get_uptime(&delta);
+	
+    // Figure it in seconds.
+    absolutetime_to_nanoseconds(delta, &delta_ns);
+    delta_secs = (SInt32)(delta_ns / NSEC_PER_SEC);
+
+	if ((delta_secs > (_lastDeviceSync + MIN_SYNC_NOW_INTERVAL)) || _freshInterval)
+	{
+		_lastDeviceSync = delta_secs;
+		_freshInterval = FALSE;
+		return TRUE;
+	}
+
+	return FALSE;
 }

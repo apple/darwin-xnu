@@ -806,6 +806,7 @@ db_machdep_init(void)
 	int c;
 
 	db_simple_lock_init(&kdb_lock, 0);
+#if MACH_KDB /*this only works for legacy 32-bit machines */
 	for (c = 0; c < real_ncpus; ++c) {
 		if (c == master_cpu) {
 			master_dbtss.esp0 = (int)(db_task_stack_store +
@@ -818,6 +819,7 @@ db_machdep_init(void)
 			 */
 		}
 	}
+#endif
 }
 
 /*

@@ -15,6 +15,8 @@ DATAFILES = \
 	lock.h	\
 	locks.h	\
 	machine_routines.h	\
+	pal_routines.h		\
+	pal_hibernate.h		\
 	simple_lock.h
 
 INSTALL_MI_LCL_LIST = cpu_capabilities.h

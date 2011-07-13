@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -59,7 +59,19 @@ __BEGIN_DECLS
 int  xattr_protected(const char *);
 int  xattr_validatename(const char *);
 
-#define XATTR_MAXSIZE	(64 * 1024 * 1024)
+/* Maximum extended attribute size supported by VFS */
+#define XATTR_MAXSIZE		(64 * 1024 * 1024)
+
+#ifdef PRIVATE
+/* Maximum extended attribute size in an Apple Double file */	
+#define AD_XATTR_MAXSIZE 	(128 * 1024)  
+
+/* Number of bits used to represent the maximum size of 
+ * extended attribute stored in an Apple Double file.
+ */
+#define AD_XATTR_SIZE_BITS	18
+#endif /* PRIVATE */
+
 __END_DECLS
 #endif /* KERNEL */
 

@@ -44,16 +44,14 @@ struct exec_info {
 struct exec_archhandler {
 	char path[MAXPATHLEN];
 	uint32_t fsid;
-	long fileid;
+	uint64_t fileid;
 };
 
 extern struct exec_archhandler exec_archhandler_ppc;
 int set_archhandler(struct proc *, int);
 int grade_binary(cpu_type_t, cpu_subtype_t);
 
-#if defined (__ppc__) || defined (__ppc64__)
-#include "ppc/exec.h"
-#elif defined (__i386__) || defined(__x86_64__)
+#if defined (__i386__) || defined(__x86_64__)
 #include "i386/exec.h"
 #else
 #error architecture not supported

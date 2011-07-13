@@ -231,17 +231,17 @@ int maxpipekva = 1024 * 1024 * 16;
 #if PIPE_SYSCTLS
 SYSCTL_DECL(_kern_ipc);
 
-SYSCTL_INT(_kern_ipc, OID_AUTO, maxpipekva, CTLFLAG_RD,
+SYSCTL_INT(_kern_ipc, OID_AUTO, maxpipekva, CTLFLAG_RD|CTLFLAG_LOCKED,
 	   &maxpipekva, 0, "Pipe KVA limit");
-SYSCTL_INT(_kern_ipc, OID_AUTO, maxpipekvawired, CTLFLAG_RW,
+SYSCTL_INT(_kern_ipc, OID_AUTO, maxpipekvawired, CTLFLAG_RW|CTLFLAG_LOCKED,
 	   &maxpipekvawired, 0, "Pipe KVA wired limit");
-SYSCTL_INT(_kern_ipc, OID_AUTO, pipes, CTLFLAG_RD,
+SYSCTL_INT(_kern_ipc, OID_AUTO, pipes, CTLFLAG_RD|CTLFLAG_LOCKED,
 	   &amountpipes, 0, "Current # of pipes");
-SYSCTL_INT(_kern_ipc, OID_AUTO, bigpipes, CTLFLAG_RD,
+SYSCTL_INT(_kern_ipc, OID_AUTO, bigpipes, CTLFLAG_RD|CTLFLAG_LOCKED,
 	   &nbigpipe, 0, "Current # of big pipes");
-SYSCTL_INT(_kern_ipc, OID_AUTO, pipekva, CTLFLAG_RD,
+SYSCTL_INT(_kern_ipc, OID_AUTO, pipekva, CTLFLAG_RD|CTLFLAG_LOCKED,
 	   &amountpipekva, 0, "Pipe KVA usage");
-SYSCTL_INT(_kern_ipc, OID_AUTO, pipekvawired, CTLFLAG_RD,
+SYSCTL_INT(_kern_ipc, OID_AUTO, pipekvawired, CTLFLAG_RD|CTLFLAG_LOCKED,
 	   &amountpipekvawired, 0, "Pipe wired KVA usage");
 #endif
 
@@ -1332,6 +1332,16 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 				error = EAGAIN;
 				break;
 			}
+
+			/*
+			 * If read side wants to go away, we just issue a signal
+			 * to ourselves.
+			 */
+			if (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF)) {
+				error = EPIPE;
+				break;
+			}	
+
 			/*
 			 * We have no more space and have something to offer,
 			 * wake up select/poll.
@@ -1344,14 +1354,6 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 
 			if (error != 0)
 				break;
-			/*
-			 * If read side wants to go away, we just issue a signal
-			 * to ourselves.
-			 */
-			if (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF)) {
-				error = EPIPE;
-				break;
-			}	
 		}
 	}
 	--wpipe->pipe_busy;
@@ -1741,8 +1743,14 @@ filt_piperead(struct knote *kn, long hint)
 		kn->kn_flags |= EV_EOF;
 		retval = 1;
 	} else {
-		retval = (kn->kn_sfflags & NOTE_LOWAT) ?
-		         (kn->kn_data >= kn->kn_sdata) : (kn->kn_data > 0);
+		int64_t lowwat = 1;
+		if (kn->kn_sfflags & NOTE_LOWAT) {
+			if (rpipe->pipe_buffer.size && kn->kn_sdata > rpipe->pipe_buffer.size)
+				lowwat = rpipe->pipe_buffer.size;
+			else if (kn->kn_sdata > lowwat)
+				lowwat = kn->kn_sdata;
+		}
+		retval = kn->kn_data >= lowwat;
 	}
 
 	if (hint == 0)
@@ -1779,17 +1787,24 @@ filt_pipewrite(struct knote *kn, long hint)
 	}
 	kn->kn_data = wpipe->pipe_buffer.size - wpipe->pipe_buffer.cnt;
 	if (!kn->kn_data && wpipe->pipe_buffer.size == 0)
-		kn->kn_data = 1; /* unwritten pipe is ready for write */
+		kn->kn_data = PIPE_BUF; /* unwritten pipe is ready for write */
 
 #ifndef PIPE_NODIRECT
 	if (wpipe->pipe_state & PIPE_DIRECTW)
 		kn->kn_data = 0;
 #endif
+	int64_t lowwat = PIPE_BUF;
+	if (kn->kn_sfflags & NOTE_LOWAT) {
+		if (wpipe->pipe_buffer.size && kn->kn_sdata > wpipe->pipe_buffer.size)
+			lowwat = wpipe->pipe_buffer.size;
+		else if (kn->kn_sdata > lowwat)
+			lowwat = kn->kn_sdata;
+	}
+	
 	if (hint == 0)
 	        PIPE_UNLOCK(rpipe);
 
-	return (kn->kn_data >= ((kn->kn_sfflags & NOTE_LOWAT) ?
-	                         kn->kn_sdata : PIPE_BUF));
+	return (kn->kn_data >= lowwat);
 }
 
 int

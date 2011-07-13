@@ -1,0 +1,88 @@
+.\"	$Darwin$
+.\"
+.\" Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" The contents of this file constitute Original Code as defined in and
+.\" are subject to the Apple Public Source License Version 1.1 (the
+.\" "License").  You may not use this file except in compliance with the
+.\" License.  Please obtain a copy of the License at
+.\" http://www.apple.com/publicsource and read it before using this file.
+.\" 
+.\" This Original Code and all software distributed under the License are
+.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+.\" License for the specific language governing rights and limitations
+.\" under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.Dd June 8, 2000
+.Dt SEM_WAIT 2
+.Os Darwin
+.Sh NAME
+.Nm sem_trywait, sem_wait
+.Nd lock a semaphore
+.Sh SYNOPSIS
+.Fd #include <semaphore.h>
+.Ft int
+.Fn sem_trywait "sem_t *sem"
+.Ft int
+.Fn sem_wait    "sem_t *sem"
+.Sh DESCRIPTION
+The semaphore referenced by
+.Fa sem
+is locked.  When calling
+.Fn sem_wait ,
+if the semaphore's value is zero, the calling thread will block until
+the lock is acquired or until the call is interrupted by a
+signal. Alternatively, the
+.Fn sem_trywait
+function will fail if the semaphore is already locked, rather than
+blocking on the semaphore.
+.Pp
+If successful (the lock was acquired),
+.Fn sem_wait
+and
+.Fn sem_trywait
+will return 0.  Otherwise, -1 is returned and
+.Va errno
+is set, and the state of the semaphore is unchanged.
+.Sh ERRORS
+.Fn sem_wait
+and
+.Fn sem_trywait
+succeed unless:
+.Bl -tag -width Er
+.It Bq Er EAGAIN
+The semaphore is already locked.
+.It Bq Er EDEADLK
+A deadlock was detected.
+.It Bq Er EINTR
+The call was interrupted by a signal.
+.It Bq Er EINVAL
+.Fa sem
+is not a valid semaphore descriptor.
+.El
+.Sh NOTES
+Applications may encounter a priority inversion while using
+semaphores.  When a thread is waiting on a semaphore which is about to
+be posted by a lower-priority thread and the lower-priority thread is
+preempted by another thread (of medium priority), a priority inversion
+has occured, and the higher-priority thread will be blocked for an
+unlimited time period.  Programmers using the realtime functionality
+of the system should take care to avoid priority inversions.
+.Sh SEE ALSO
+.Xr sem_open 2 ,
+.Xr sem_post 2 ,
+.Xr semctl 2 ,
+.Xr semget 2 ,
+.Xr semop 2
+.Sh HISTORY
+.Fn sem_wait
+and
+.Fn sem_trywait
+are specified in the POSIX Realtime Extension (1003.1b-1993/1003.1i-1995).

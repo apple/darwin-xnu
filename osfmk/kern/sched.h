@@ -166,10 +166,26 @@
 #define DEPRESSPRI	MINPRI			/* depress priority */
 #endif
 
+/* Type used for thread->sched_mode and saved_mode */
+typedef enum {
+	TH_MODE_NONE = 0,					/* unassigned, usually for saved_mode only */
+	TH_MODE_REALTIME,					/* time constraints supplied */
+	TH_MODE_FIXED,						/* use fixed priorities, no decay */
+	TH_MODE_TIMESHARE,					/* use timesharing algorithm */
+	TH_MODE_FAIRSHARE					/* use fair-share scheduling */		
+} sched_mode_t;
+
 /*
  *	Macro to check for invalid priorities.
  */
 #define invalid_pri(pri) ((pri) < MINPRI || (pri) > MAXPRI)
+
+struct runq_stats {
+	uint64_t				count_sum;
+	uint64_t				last_change_timestamp;
+};
+
+#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_PROTO) || defined(CONFIG_SCHED_FIXEDPRIORITY)
 
 struct run_queue {
 	int					highq;				/* highest runnable queue */
@@ -177,29 +193,81 @@ struct run_queue {
 	int					count;				/* # of threads total */
 	int					urgency;			/* level of preemption urgency */
 	queue_head_t		queues[NRQS];		/* one for each priority */
+
+	struct runq_stats	runq_stats;
 };
 
-typedef struct run_queue	*run_queue_t;
-#define RUN_QUEUE_NULL		((run_queue_t) 0)
+#endif /* defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_PROTO) || defined(CONFIG_SCHED_FIXEDPRIORITY) */
+
+struct rt_queue {
+	int					count;				/* # of threads total */
+	queue_head_t		queue;				/* all runnable RT threads */
+
+	struct runq_stats	runq_stats;
+};
+
+#if defined(CONFIG_SCHED_TRADITIONAL) || defined(CONFIG_SCHED_PROTO) || defined(CONFIG_SCHED_FIXEDPRIORITY)
+struct fairshare_queue {
+	int					count;				/* # of threads total */
+	queue_head_t		queue;				/* all runnable threads demoted to fairshare scheduling */
+	
+	struct runq_stats	runq_stats;
+};
+#endif
+
+#if defined(CONFIG_SCHED_GRRR_CORE)
+
+/*
+ * We map standard Mach priorities to an abstract scale that more properly
+ * indicates how we want processor time allocated under contention.
+ */
+typedef uint8_t	grrr_proportional_priority_t;
+typedef uint8_t grrr_group_index_t;
+
+#define NUM_GRRR_PROPORTIONAL_PRIORITIES	256
+#define MAX_GRRR_PROPORTIONAL_PRIORITY ((grrr_proportional_priority_t)255)
+
+#if 0
+#define NUM_GRRR_GROUPS 8					/* log(256) */
+#endif
+
+#define NUM_GRRR_GROUPS 64					/* 256/4 */
+
+struct grrr_group {
+	queue_chain_t			priority_order;				/* next greatest weight group */
+	grrr_proportional_priority_t		minpriority;
+	grrr_group_index_t		index;
+
+	queue_head_t			clients;
+	int						count;
+	uint32_t				weight;
+#if 0
+	uint32_t				deferred_removal_weight;
+#endif
+	uint32_t				work;
+	thread_t				current_client;
+};
+
+struct grrr_run_queue {
+	int					count;
+	uint32_t			last_rescale_tick;
+	struct grrr_group	groups[NUM_GRRR_GROUPS];
+	queue_head_t		sorted_group_list;
+	uint32_t			weight;
+	grrr_group_t		current_group;
+	
+	struct runq_stats   runq_stats;
+};
+
+#endif /* defined(CONFIG_SCHED_GRRR_CORE) */
 
 #define first_timeslice(processor)		((processor)->timeslice > 0)
 
-#define thread_quantum_init(thread)							\
-MACRO_BEGIN													\
-	(thread)->current_quantum = 							\
-		((thread)->sched_mode & TH_MODE_REALTIME)?			\
-			(thread)->realtime.computation: std_quantum;	\
-MACRO_END
-
-extern struct run_queue		rt_runq;
+extern struct rt_queue		rt_runq;
 
 /*
  *	Scheduler routines.
  */
-
-/* Remove thread from its run queue */
-extern boolean_t	run_queue_remove(
-						thread_t	thread);
 
 /* Handle quantum expiration for an executing thread */
 extern void		thread_quantum_expire(
@@ -209,12 +277,20 @@ extern void		thread_quantum_expire(
 /* Context switch check for current processor */
 extern ast_t	csw_check(processor_t		processor);
 
+#if defined(CONFIG_SCHED_TRADITIONAL)
 extern uint32_t	std_quantum, min_std_quantum;
 extern uint32_t	std_quantum_us;
+#endif
+
+extern uint32_t thread_depress_time;
+extern uint32_t default_timeshare_computation;
+extern uint32_t default_timeshare_constraint;
 
 extern uint32_t	max_rt_quantum, min_rt_quantum;
 
 extern uint32_t	sched_cswtime;
+
+#if defined(CONFIG_SCHED_TRADITIONAL)
 
 /*
  *	Age usage (1 << SCHED_TICK_SHIFT) times per second.
@@ -223,6 +299,10 @@ extern uint32_t	sched_cswtime;
 
 extern unsigned		sched_tick;
 extern uint32_t		sched_tick_interval;
+
+#endif /* CONFIG_SCHED_TRADITIONAL */
+
+extern uint64_t		sched_one_second_interval;
 
 /* Periodic computation of various averages */
 extern void		compute_averages(void);
@@ -236,16 +316,24 @@ extern void		compute_stack_target(
 extern void		compute_memory_pressure(
 					void			*arg);
 
+extern void		compute_zone_gc_throttle(
+					void			*arg);
+
+extern void		compute_pmap_gc_throttle(
+					void			*arg);
+
 /*
  *	Conversion factor from usage
  *	to priority.
  */
+#if defined(CONFIG_SCHED_TRADITIONAL)
 extern uint32_t		sched_pri_shift;
 extern uint32_t		sched_fixed_shift;
 extern int8_t		sched_load_shifts[NRQS];
+#endif
 
 extern int32_t		sched_poll_yield_shift;
-extern uint32_t		sched_safe_duration;
+extern uint64_t		sched_safe_duration;
 
 extern uint32_t		sched_run_count, sched_share_count;
 extern uint32_t		sched_load_average, sched_mach_factor;
@@ -256,13 +344,13 @@ extern uint64_t		max_unsafe_computation;
 extern uint64_t		max_poll_computation;
 
 #define sched_run_incr()			\
-MACRO_BEGIN													\
-	machine_run_count(hw_atomic_add(&sched_run_count, 1));	\
+MACRO_BEGIN					\
+         hw_atomic_add(&sched_run_count, 1);	\
 MACRO_END
 
 #define sched_run_decr()			\
-MACRO_BEGIN													\
-	machine_run_count(hw_atomic_sub(&sched_run_count, 1));	\
+MACRO_BEGIN					\
+	hw_atomic_sub(&sched_run_count, 1);	\
 MACRO_END
 
 #define sched_share_incr()			\

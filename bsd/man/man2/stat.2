@@ -127,9 +127,7 @@ as defined by
 and into which information is placed concerning the file.
 When the macro
 .Dv _DARWIN_FEATURE_64_BIT_INODE
-is not defined (the
-.Ft ino_t
-type is 32-bits), the
+is not defined (see below for more information about this macro), the
 .Fa stat
 structure is defined as:
 .Bd -literal
@@ -137,7 +135,7 @@ struct stat { /* when _DARWIN_FEATURE_64_BIT_INODE is NOT defined */
     dev_t    st_dev;    /* device inode resides on */
     ino_t    st_ino;    /* inode's number */
     mode_t   st_mode;   /* inode protection mode */
-    nlink_t  st_nlink;  /* number or hard links to the file */
+    nlink_t  st_nlink;  /* number of hard links to the file */
     uid_t    st_uid;    /* user-id of owner */
     gid_t    st_gid;    /* group-id of owner */
     dev_t    st_rdev;   /* device type, for special file inode */
@@ -155,16 +153,6 @@ struct stat { /* when _DARWIN_FEATURE_64_BIT_INODE is NOT defined */
 However, when the macro
 .Dv _DARWIN_FEATURE_64_BIT_INODE
 is defined, the
-.Ft ino_t
-type will be 64-bits (force 64-bit inode mode by defining the
-.Dv _DARWIN_USE_64_BIT_INODE
-macro before including header files).
-This will cause symbol variants of the
-.Fa stat
-family, with the
-.Fa $INODE64
-suffixes, to be automatically linked in.
-In addition, the
 .Fa stat
 structure will now be defined as:
 .Bd -literal
@@ -274,6 +262,141 @@ field, see
 .Aq Pa sys/stat.h
 and
 .Xr chflags 2 .
+.Sh _DARWIN_FEATURE_64_BIT_INODE
+In order to accommodate advanced capabilities of newer file systems, the 
+.Fa struct stat ,
+.Fa struct statfs ,
+and
+.Fa struct dirent
+data structures were updated in Mac OSX 10.5.
+.Pp
+The most obvious change is the increased size of
+.Fa ino_t
+from 32 bits to 64 bits.  As a consequence, storing an ino_t in an int is
+no longer safe, and file formats storing ino_t as 32-bit values may need to
+be updated.  There are other changes as well, such as the widening of
+.Fa f_fstypename ,
+.Fa f_mntonname ,
+and
+.Fa f_mntfromname
+in
+.Fa struct statfs .
+Please refer to
+.Xr stat 2
+and
+.Xr dir 5
+for more detail on the specific changes to the other affected data structures.
+.Pp
+On platforms that existed before these updates were available, ABI
+compatibility is achieved by providing two implementations for related
+functions: one using the legacy data structures and one using the updated
+data structures.  Variants which make use of the newer structures have their
+symbols suffixed with $INODE64.  These $INODE64 suffixes are automatically
+appended by the compiler tool-chain and should not be used directly.
+.Pp
+Platforms that were released after these updates only have the newer variants
+available to them.  These platforms have the macro
+.Dv _DARWIN_FEATURE_ONLY_64_BIT_INODE
+defined.
+.Pp
+The
+.Dv _DARWIN_FEATURE_64_BIT_INODE
+macro should not be set directly.  Instead, developers should make use of the
+.Dv _DARWIN_NO_64_BIT_INODE
+or
+.Dv _DARWIN_USE_64_BIT_INODE
+macros when the default variant is not desired.  The following table details
+the effects of defining these macros for different deployment targets.
+.Pp
+.TS
+center;
+c s s s
+l | c s s
+c | c c c
+c | c c c
+l | c c c.
+T{
+.Dv _DARWIN_FEATURE_ONLY_64_BIT_INODE Sy not defined
+T}
+=
+	Deployment Target
+user defines:	< 10.5	10.5	> 10.5
+_
+T{
+.Em (none)
+T}	32-bit	32-bit	64-bit
+T{
+.Dv _DARWIN_NO_64_BIT_INODE
+T}	32-bit	32-bit	32-bit
+T{
+.Dv _DARWIN_USE_64_BIT_INODE
+T}	32-bit	64-bit	64-bit
+_
+.T&
+c s s s
+c s s s
+c | l s s
+c | c c c
+l | c c c.
+
+T{
+.Dv _DARWIN_FEATURE_ONLY_64_BIT_INODE Sy defined
+T}
+=
+user defines:	Any Deployment Target
+_
+T{
+.Em (none)
+T}	64-bit-only
+T{
+.Dv _DARWIN_NO_64_BIT_INODE
+T}	T{
+.Em (error)
+T}
+T{
+.Dv _DARWIN_USE_64_BIT_INODE
+T}	64-bit-only
+_
+.TE
+.Pp
+.Bl -tag -width 64-bit-only -offset indent
+.It 32-bit
+32-bit inode values are enabled, and the legacy structures involving the
+.Vt ino_t
+type are in use.
+The macro
+.Dv _DARWIN_FEATURE_64_BIT_INODE
+is not defined.
+.It 64-bit
+64-bit inode values are enabled, and the expanded structures involving the
+.Vt ino_t
+type are in use.
+The macro
+.Dv _DARWIN_FEATURE_64_BIT_INODE
+is defined, and loader symbols will contain the
+.Li $INODE64
+suffix.
+.It 64-bit-only
+Like 64-bit, except loader symbols do not have the
+.Li $INODE64
+suffix.
+.It Em (error)
+A compile time error is generated.
+.El
+.Pp
+Due to the increased benefits of the larger structure, it is highly
+recommended that developers not define
+.Dv _DARWIN_NO_64_BIT_INODE
+and make use of
+.Dv _DARWIN_USE_64_BIT_INODE
+when targeting Mac OSX 10.5.
+.Pp
+In addition to the $INODE64 suffixed symbols, variants suffixed with 64 are
+also available for related functions.  These functions were provided as a way
+for developers to use the updated structures in code that also made use of
+the legacy structures.  The enlarged stat structures were also prefixed with
+64 to distinguish them from their legacy variants.  These functions have been
+deprecated and should be avoided.
 .Sh RETURN VALUES
 Upon successful completion a value of 0 is returned.
 Otherwise, a value of -1 is returned and
@@ -399,6 +522,7 @@ structure when 64-bit inodes are in effect (see above).
 .Xr chown 2 ,
 .Xr utimes 2 ,
 .Xr compat 5 ,
+.Xr statfs 2 ,
 .Xr symlink 7
 .Sh BUGS
 Applying

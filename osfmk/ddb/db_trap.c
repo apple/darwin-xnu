@@ -132,11 +132,7 @@ db_task_trap(__unused int type, __unused int code, boolean_t user_space)
 		db_printf("\n\t");
 		db_print_inst(db_dot, task_space);
 #else /* !defined(__alpha) */
-#if defined(__ppc__)
-		db_print_loc_and_inst(db_dot, task_space);
-#else	/* __ppc__ */
 		db_print_loc_and_inst(db_dot, task);
-#endif	/* __ppc__ */
 #endif /* defined(__alpha) */
 	    } else
 		db_printf("Trouble printing location %#llX.\n", (unsigned long long)db_dot);

@@ -88,6 +88,7 @@
 #include <i386/mp.h>
 
 #include <sys/kdebug.h>
+#include <mach/branch_predicates.h>
 
 /*
  * We need only enough declarations from the BSD-side to be able to
@@ -211,7 +212,6 @@ lck_rw_type_t lck_rw_done_gen(
 	lck_rw_t	*lck,
 	int		prior_lock_state);
 
-
 /*
  *      Routine:        lck_spin_alloc_init
  */
@@ -329,7 +329,7 @@ static uint32_t spinlock_timeout_NMI(uintptr_t thread_addr) {
 	for (i = 0; i < real_ncpus; i++) {
 		if ((uintptr_t)cpu_data_ptr[i]->cpu_active_thread == thread_addr) {
 			spinlock_owner_cpu = i;
-			if ((uint32_t)cpu_number() == i)
+			if ((uint32_t) cpu_number() == i)
 				break;
 			cpu_datap(i)->cpu_NMI_acknowledged = FALSE;
 			cpu_NMI_interrupt(i);
@@ -359,14 +359,15 @@ usimple_lock(
 
 	OBTAIN_PC(pc);
 	USLDBG(usld_lock_pre(l, pc));
-/* Try to get the lock with a timeout */
-	if(!hw_lock_to(&l->interlock, LockTimeOutTSC))	{
+
+	if(__improbable(hw_lock_to(&l->interlock, LockTimeOutTSC) == 0))	{
 		boolean_t uslock_acquired = FALSE;
 		while (machine_timeout_suspended()) {
 			enable_preemption();
 			if ((uslock_acquired = hw_lock_to(&l->interlock, LockTimeOutTSC)))
 				break;
-	}
+		}
+
 		if (uslock_acquired == FALSE) {
 			uint32_t lock_cpu;
 			spinlock_timed_out = l;
@@ -903,8 +904,8 @@ lck_rw_destroy(
 		((event_t) (((unsigned char*) (x)) + (offsetof(lck_rw_t, lck_rw_pad8))))
 
 /*
- * We need to disable interrupts while holding the mutex interlock
- * to prevent an IPI intervening.
+ * We disable interrupts while holding the RW interlock to prevent an
+ * interrupt from exacerbating hold time.
  * Hence, local helper functions lck_interlock_lock()/lck_interlock_unlock().
  */
 static boolean_t
@@ -1635,6 +1636,9 @@ lck_rw_assert(
 	panic("rw lock (%p) not held (mode=%u), first word %08x\n", lck, type, *(uint32_t *)lck);
 }
 
+#ifdef	MUTEX_ZONE
+extern zone_t lck_mtx_zone;
+#endif
 /*
  *      Routine:        lck_mtx_alloc_init
  */
@@ -1644,10 +1648,13 @@ lck_mtx_alloc_init(
 	lck_attr_t	*attr)
 {
 	lck_mtx_t	*lck;
-
+#ifdef	MUTEX_ZONE
+	if ((lck = (lck_mtx_t *)zalloc(lck_mtx_zone)) != 0)
+		lck_mtx_init(lck, grp, attr);
+#else
 	if ((lck = (lck_mtx_t *)kalloc(sizeof(lck_mtx_t))) != 0)
 		lck_mtx_init(lck, grp, attr);
-		
+#endif		
 	return(lck);
 }
 
@@ -1660,7 +1667,11 @@ lck_mtx_free(
 	lck_grp_t	*grp)
 {
 	lck_mtx_destroy(lck, grp);
+#ifdef	MUTEX_ZONE
+	zfree(lck_mtx_zone, lck);
+#else
 	kfree(lck, sizeof(lck_mtx_t));
+#endif
 }
 
 /*
@@ -1682,9 +1693,12 @@ lck_mtx_ext_init(
 	lck->lck_mtx_grp = grp;
 
 	if (grp->lck_grp_attr & LCK_GRP_ATTR_STAT)
-		 lck->lck_mtx_attr |= LCK_MTX_ATTR_STAT;
+		lck->lck_mtx_attr |= LCK_MTX_ATTR_STAT;
 
-	lck->lck_mtx.lck_mtx_ptr = (void *)LCK_MTX_PTR_EXTENDED;
+	lck->lck_mtx.lck_mtx_is_ext = 1;
+#if	defined(__x86_64__)
+	lck->lck_mtx.lck_mtx_sw.lck_mtxd.lck_mtxd_pad32 = 0xFFFFFFFF;
+#endif
 }
 
 /*
@@ -1709,18 +1723,14 @@ lck_mtx_init(
 			lck_mtx_ext_init(lck_ext, grp, lck_attr);	
 			lck->lck_mtx_tag = LCK_MTX_TAG_INDIRECT;
 			lck->lck_mtx_ptr = lck_ext;
-			lck->lck_mtx_ilocked = 1;
 		}
 	} else {
 		lck->lck_mtx_owner = 0;
-		lck->lck_mtx_ptr = 0;
-		lck->lck_mtx_waiters = 0;
-		lck->lck_mtx_pri = 0;
-		lck->lck_mtx_ilocked = 0;
-		lck->lck_mtx_mlocked = 0;
-		lck->lck_mtx_promoted = 0;
-		lck->lck_mtx_spin = 0;
+		lck->lck_mtx_state = 0;
 	}
+#if	defined(__x86_64__)
+	lck->lck_mtx_sw.lck_mtxd.lck_mtxd_pad32 = 0xFFFFFFFF;
+#endif
 	lck_grp_reference(grp);
 	lck_grp_lckcnt_incr(grp, LCK_TYPE_MTX);
 }
@@ -1746,17 +1756,14 @@ lck_mtx_init_ext(
 		lck_mtx_ext_init(lck_ext, grp, lck_attr);
 		lck->lck_mtx_tag = LCK_MTX_TAG_INDIRECT;
 		lck->lck_mtx_ptr = lck_ext;
-		lck->lck_mtx_ilocked = 1;
 	} else {
 		lck->lck_mtx_owner = 0;
-		lck->lck_mtx_ptr = 0;
-		lck->lck_mtx_waiters = 0;
-		lck->lck_mtx_pri = 0;
-		lck->lck_mtx_ilocked = 0;
-		lck->lck_mtx_mlocked = 0;
-		lck->lck_mtx_promoted = 0;
-		lck->lck_mtx_spin = 0;
+		lck->lck_mtx_state = 0;
 	}
+#if	defined(__x86_64__)
+	lck->lck_mtx_sw.lck_mtxd.lck_mtxd_pad32 = 0xFFFFFFFF;
+#endif
+
 	lck_grp_reference(grp);
 	lck_grp_lckcnt_incr(grp, LCK_TYPE_MTX);
 }
@@ -1795,50 +1802,67 @@ lck_mtx_destroy(
 /*
  * Routine: 	lck_mtx_unlock_wakeup_x86
  *
- * Invoked on unlock when there is contention.
+ * Invoked on unlock when there is 
+ * contention (i.e. the assembly routine sees that
+ * that mutex->lck_mtx_waiters != 0 or 
+ * that mutex->lck_mtx_promoted != 0...
  *
+ * neither the mutex or interlock is held
  */
 void
 lck_mtx_unlock_wakeup_x86 (
 	lck_mtx_t	*mutex,
-	int		owner_was_promoted)
+	int		prior_lock_state)
 {
+	lck_mtx_t	fake_lck;
 
-	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAKEUP_CODE) | DBG_FUNC_START, (int)mutex, owner_was_promoted, mutex->lck_mtx_waiters, 0, 0);
+	/*
+	 * prior_lock state is a snapshot of the 2nd word of the
+	 * lock in question... we'll fake up a lock with the bits
+	 * copied into place and carefully not access anything
+	 * beyond whats defined in the second word of a lck_mtx_t
+	 */
+	fake_lck.lck_mtx_state = prior_lock_state;
 
-	if (lck_mtx_lock_decr_waiter(mutex))
-		thread_wakeup_one((event_t)(((unsigned int*)mutex)+(sizeof(lck_mtx_t)-1)/sizeof(unsigned int)));
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAKEUP_CODE) | DBG_FUNC_START,
+		     mutex, fake_lck.lck_mtx_promoted, fake_lck.lck_mtx_waiters, fake_lck.lck_mtx_pri, 0);
 
-	if (owner_was_promoted) {
+	if (__probable(fake_lck.lck_mtx_waiters)) {
+
+		if (fake_lck.lck_mtx_waiters > 1)
+			thread_wakeup_one_with_pri((event_t)(((unsigned int*)mutex)+(sizeof(lck_mtx_t)-1)/sizeof(unsigned int)), fake_lck.lck_mtx_pri);
+		else
+			thread_wakeup_one((event_t)(((unsigned int*)mutex)+(sizeof(lck_mtx_t)-1)/sizeof(unsigned int)));
+	}
+
+	if (__improbable(fake_lck.lck_mtx_promoted)) {
 		thread_t	thread = current_thread();
 
 
-		KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_DEMOTE_CODE) | DBG_FUNC_NONE, (uintptr_t)thread_tid(thread), thread->promotions,
-			     thread->sched_mode & TH_MODE_PROMOTED, 0, 0);
+		KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_DEMOTE_CODE) | DBG_FUNC_NONE,
+			     thread_tid(thread), thread->promotions, thread->sched_flags & TH_SFLAG_PROMOTED, 0, 0);
 
 		if (thread->promotions > 0) {
 			spl_t	s = splsched();
 
 			thread_lock(thread);
 
-			if (--thread->promotions == 0 && (thread->sched_mode & TH_MODE_PROMOTED)) {
+			if (--thread->promotions == 0 && (thread->sched_flags & TH_SFLAG_PROMOTED)) {
 
-				thread->sched_mode &= ~TH_MODE_PROMOTED;
+				thread->sched_flags &= ~TH_SFLAG_PROMOTED;
 
-				if (thread->sched_mode & TH_MODE_ISDEPRESSED) {
-					KERNEL_DEBUG_CONSTANT(
-						MACHDBG_CODE(DBG_MACH_SCHED,MACH_DEMOTE) | DBG_FUNC_NONE,
-						thread->sched_pri, DEPRESSPRI, 0, mutex, 0);
+				if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
+					KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_DEMOTE) | DBG_FUNC_NONE,
+							      thread->sched_pri, DEPRESSPRI, 0, mutex, 0);
 
 					set_sched_pri(thread, DEPRESSPRI);
 				}
 				else {
 					if (thread->priority < thread->sched_pri) {
-						KERNEL_DEBUG_CONSTANT(
-							MACHDBG_CODE(DBG_MACH_SCHED,MACH_DEMOTE) | DBG_FUNC_NONE,
-							thread->sched_pri, thread->priority, 0, mutex, 0);
+						KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_DEMOTE) | DBG_FUNC_NONE,
+								      thread->sched_pri, thread->priority, 0, mutex, 0);
 
-						compute_priority(thread, FALSE);
+						SCHED(compute_priority)(thread, FALSE);
 					}
 				}
 			}
@@ -1846,7 +1870,8 @@ lck_mtx_unlock_wakeup_x86 (
 			splx(s);
 		}
 	}
-	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAKEUP_CODE) | DBG_FUNC_END, (int)mutex, 0, mutex->lck_mtx_waiters, 0, 0);
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAKEUP_CODE) | DBG_FUNC_END,
+		     mutex, 0, mutex->lck_mtx_waiters, 0, 0);
 }
 
 
@@ -1854,43 +1879,54 @@ lck_mtx_unlock_wakeup_x86 (
  * Routine: 	lck_mtx_lock_acquire_x86
  *
  * Invoked on acquiring the mutex when there is
- * contention.
- * mutex is owned...  interlock is not held
+ * contention (i.e. the assembly routine sees that
+ * that mutex->lck_mtx_waiters != 0 or 
+ * thread->was_promoted_on_wakeup != 0)...
+ *
+ * mutex is owned...  interlock is held... preemption is disabled
  */
 void
 lck_mtx_lock_acquire_x86(
 	lck_mtx_t	*mutex)
 {
-	thread_t	thread = current_thread();
+	thread_t	thread;
 	integer_t	priority;
+	spl_t		s;
 
-	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_ACQUIRE_CODE) | DBG_FUNC_START, (int)mutex, 0, mutex->lck_mtx_waiters, 0, 0);
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_ACQUIRE_CODE) | DBG_FUNC_START,
+		     mutex, thread->was_promoted_on_wakeup, mutex->lck_mtx_waiters, mutex->lck_mtx_pri, 0);
 
-	priority = lck_mtx_lock_get_pri(mutex);
+	if (mutex->lck_mtx_waiters)
+		priority = mutex->lck_mtx_pri;
+	else
+		priority = 0;
 
-	if (thread->sched_pri < priority) {
+	thread = (thread_t)mutex->lck_mtx_owner;	/* faster then current_thread() */
 
-		if (lck_mtx_lock_mark_promoted(mutex)) {
-			spl_t	s = splsched();
+	if (thread->sched_pri < priority || thread->was_promoted_on_wakeup) {
 
-			thread_lock(thread);
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_PROMOTE) | DBG_FUNC_NONE,
+				      thread->sched_pri, priority, thread->was_promoted_on_wakeup, mutex, 0);
 
-			if (thread->sched_pri < priority) {
+		s = splsched();
+		thread_lock(thread);
 
-				KERNEL_DEBUG_CONSTANT(
-					MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
-					thread->sched_pri, priority, 0, mutex, 0);
+		if (thread->sched_pri < priority)
+			set_sched_pri(thread, priority);
 
-				set_sched_pri(thread, priority);
-			}
+		if (mutex->lck_mtx_promoted == 0) {
+			mutex->lck_mtx_promoted = 1;
+			
 			thread->promotions++;
-			thread->sched_mode |= TH_MODE_PROMOTED;
-
-			thread_unlock(thread);
-			splx(s);
+			thread->sched_flags |= TH_SFLAG_PROMOTED;
 		}
+		thread->was_promoted_on_wakeup = 0;
+		
+		thread_unlock(thread);
+		splx(s);
 	}
-	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_ACQUIRE_CODE) | DBG_FUNC_END, (int)mutex, 0, mutex->lck_mtx_waiters, 0, 0);
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_ACQUIRE_CODE) | DBG_FUNC_END,
+		     mutex, 0, mutex->lck_mtx_waiters, 0, 0);
 }
 
 
@@ -1903,6 +1939,9 @@ lck_mtx_lock_acquire_x86(
  * time waiting for the lock to be released.
  *
  * Called with the interlock unlocked.
+ * returns 0 if mutex acquired
+ * returns 1 if we spun
+ * returns 2 if we didn't spin due to the holder not running
  */
 int
 lck_mtx_lock_spinwait_x86(
@@ -1913,9 +1952,9 @@ lck_mtx_lock_spinwait_x86(
 	int		retval = 1;
 	int		loopcount = 0;
 
-	KERNEL_DEBUG(
-		MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_SPIN_CODE) | DBG_FUNC_START,
-		(int)mutex, (int)mutex->lck_mtx_owner, mutex->lck_mtx_waiters, 0, 0);
+
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_SPIN_CODE) | DBG_FUNC_START,
+		     mutex, mutex->lck_mtx_owner, mutex->lck_mtx_waiters, 0, 0);
 
 	deadline = mach_absolute_time() + MutexSpin;
 
@@ -1928,7 +1967,7 @@ lck_mtx_lock_spinwait_x86(
 	 *   - we haven't spun for long enough.
 	 */
 	do {
-		if (lck_mtx_lock_grab_mutex(mutex)) {
+		if (__probable(lck_mtx_lock_grab_mutex(mutex))) {
 			retval = 0;
 			break;
 		}
@@ -1959,7 +1998,7 @@ lck_mtx_lock_spinwait_x86(
 	 * penalize only lock groups that have debug/stats enabled
 	 * with dtrace processing if desired.
 	 */
-	if (mutex->lck_mtx_ptr != (void *)LCK_MTX_PTR_EXTENDED) {
+	if (__probable(mutex->lck_mtx_is_ext == 0)) {
 		LOCKSTAT_RECORD(LS_LCK_MTX_LOCK_SPIN, mutex,
 		    mach_absolute_time() - (deadline - MutexSpin));
 	} else {
@@ -1969,9 +2008,8 @@ lck_mtx_lock_spinwait_x86(
 	/* The lockstat acquire event is recorded by the assembly code beneath us. */
 #endif
 
-	KERNEL_DEBUG(
-		MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_SPIN_CODE) | DBG_FUNC_END,
-		(int)mutex, (int)mutex->lck_mtx_owner, mutex->lck_mtx_waiters, retval, 0);
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_SPIN_CODE) | DBG_FUNC_END,
+		     mutex, mutex->lck_mtx_owner, mutex->lck_mtx_waiters, retval, 0);
 
 	return retval;
 }
@@ -1984,7 +2022,8 @@ lck_mtx_lock_spinwait_x86(
  * Invoked in order to wait on contention.
  *
  * Called with the interlock locked and
- * returns it unlocked.
+ * preemption disabled...  
+ * returns it unlocked and with preemption enabled
  */
 void
 lck_mtx_lock_wait_x86 (
@@ -1993,7 +2032,6 @@ lck_mtx_lock_wait_x86 (
 	thread_t	self = current_thread();
 	thread_t	holder;
 	integer_t	priority;
-	integer_t	old_lck_mtx_pri;
 	spl_t		s;
 #if	CONFIG_DTRACE
 	uint64_t	sleep_start = 0;
@@ -2002,7 +2040,8 @@ lck_mtx_lock_wait_x86 (
 		sleep_start = mach_absolute_time();
 	}
 #endif
-	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_START, (int)mutex, (int)mutex->lck_mtx_owner, mutex->lck_mtx_waiters, 0, 0);
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_START,
+		     mutex, mutex->lck_mtx_owner, mutex->lck_mtx_waiters, mutex->lck_mtx_pri, 0);
 
 	priority = self->sched_pri;
 
@@ -2011,45 +2050,41 @@ lck_mtx_lock_wait_x86 (
 	if (priority < BASEPRI_DEFAULT)
 		priority = BASEPRI_DEFAULT;
 
-	if (mutex->lck_mtx_waiters == 0)
-		old_lck_mtx_pri = 0;
-	else
-		old_lck_mtx_pri = mutex->lck_mtx_pri;
-
-	if (old_lck_mtx_pri < priority)
+	if (mutex->lck_mtx_waiters == 0 || priority > mutex->lck_mtx_pri)
 		mutex->lck_mtx_pri = priority;
+	mutex->lck_mtx_waiters++;
 
-	if ( (holder = (thread_t)mutex->lck_mtx_owner) ) {
+	if ( (holder = (thread_t)mutex->lck_mtx_owner) &&
+	     holder->sched_pri < mutex->lck_mtx_pri ) {
 
 		s = splsched();
 		thread_lock(holder);
 
-		if (holder->sched_pri < priority) {
+		if (holder->sched_pri < mutex->lck_mtx_pri) {
 			KERNEL_DEBUG_CONSTANT(
 				MACHDBG_CODE(DBG_MACH_SCHED, MACH_PROMOTE) | DBG_FUNC_NONE,
-				holder->sched_pri, priority, holder, mutex, 0);
+				holder->sched_pri, priority, thread_tid(holder), mutex, 0);
 
 			set_sched_pri(holder, priority);
 			
 			if (mutex->lck_mtx_promoted == 0) {
 				holder->promotions++;
-				holder->sched_mode |= TH_MODE_PROMOTED;
-
+				holder->sched_flags |= TH_SFLAG_PROMOTED;
+				
 				mutex->lck_mtx_promoted = 1;
 			}
 		}
 		thread_unlock(holder);
 		splx(s);
 	}
-	mutex->lck_mtx_waiters++;
-
 	assert_wait((event_t)(((unsigned int*)mutex)+((sizeof(lck_mtx_t)-1)/sizeof(unsigned int))), THREAD_UNINT);
 
 	lck_mtx_ilk_unlock(mutex);
 
 	thread_block(THREAD_CONTINUE_NULL);
 
-	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_END, (int)mutex, (int)mutex->lck_mtx_owner, mutex->lck_mtx_waiters, 0, 0);
+	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_LCK_WAIT_CODE) | DBG_FUNC_END,
+		     mutex, mutex->lck_mtx_owner, mutex->lck_mtx_waiters, mutex->lck_mtx_pri, 0);
 
 #if	CONFIG_DTRACE
 	/*
@@ -2057,7 +2092,7 @@ lck_mtx_lock_wait_x86 (
 	 * measured from when we were entered.
 	 */
 	if (sleep_start) {
-		if (mutex->lck_mtx_ptr != (void *)LCK_MTX_PTR_EXTENDED) {
+		if (mutex->lck_mtx_is_ext == 0) {
 			LOCKSTAT_RECORD(LS_LCK_MTX_LOCK_BLOCK, mutex,
 			    mach_absolute_time() - sleep_start);
 		} else {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -108,6 +108,17 @@ extern	char netio[], netcon[], netcls[];
 
 typedef	u_quad_t so_gen_t;
 
+#ifdef PRIVATE
+#define SO_TC_STATS_MAX 4
+
+struct data_stats {
+        u_int64_t       rxpackets;
+        u_int64_t       rxbytes;
+        u_int64_t       txpackets;
+        u_int64_t       txbytes;
+};
+#endif /* PRIVATE */
+
 #ifdef KERNEL_PRIVATE
 #ifndef __APPLE__
 /* We don't support BSD style socket filters */
@@ -196,6 +207,7 @@ struct socket {
 	void	(*so_upcall)(struct socket *so, caddr_t arg, int waitf);
 	caddr_t	so_upcallarg;		/* Arg for above */
 	uid_t	so_uid;			/* who opened the socket */
+	gid_t	so_gid;			/* gid of whoever opened the socket */
 	/* NB: generation count must not be first; easiest to make it last. */
 	so_gen_t so_gencnt;		/* generation count */
 #ifndef __APPLE__
@@ -220,7 +232,7 @@ struct socket {
 #define	SOF_NOSIGPIPE	0x1
 #define	SOF_NOADDRAVAIL	0x2	/* EADDRNOTAVAIL if src addr is gone */
 #define	SOF_PCBCLEARING	0x4	/* pru_disconnect done; don't call pru_detach */
-#define	SOF_DEFUNCT	0x8	/* accepted socket marked as inactive */
+#define	SOF_DEFUNCT	0x8	/* socket marked as inactive */
 #define	SOF_CLOSEWAIT	0x10	/* blocked in close awaiting some events */
 #define	SOF_UPCALLINUSE	0x20	/* socket upcall is currently in progress */
 #define SOF_REUSESHAREUID	0x40	/* Allows SO_REUSEADDR/SO_REUSEPORT for multiple so_uid */
@@ -233,6 +245,9 @@ struct socket {
 #define	SOF_UPCALLCLOSEWAIT 0x800 /* block on close until an upcall returns  */
 #define SOF_BINDRANDOMPORT 0x1000 /* Request a randomized port number for the bind */
 #define SOF_NPX_SETOPTSHUT 0x2000 /* Non POSIX extension to allow setsockopt(2) after shut down */
+#define SOF_RECV_TRAFFIC_CLASS	0x4000	/* Receive traffic class as ancillary data */
+#define	SOF_NODEFUNCT	0x8000	/* socket cannot be defunct'd */
+#define SOF_INCOMP_INPROGRESS 0x10000 /* incomp socket still being processed */
 	int	so_usecount;	/* refcounting of socket use */;
 	int	so_retaincnt;
 	u_int32_t so_filteruse;	/* usecount for the socket filters */
@@ -252,10 +267,36 @@ struct socket {
 	struct	label *so_label;	/* MAC label for socket */
 	struct	label *so_peerlabel;	/* cached MAC label for socket peer */
 	thread_t	so_background_thread;	/* thread that marked this socket background */
-#if PKT_PRIORITY
 	int		so_traffic_class;
-#endif /* PKT_PRIORITY */
+	
+	// last process to interact with this socket
+	u_int64_t	last_upid;
+	pid_t		last_pid;
+
+	struct data_stats	so_tc_stats[SO_TC_STATS_MAX];
 };
+
+/* Control message accessor in mbufs */
+
+#define _MIN_NXT_CMSGHDR_PTR(cmsg)                              \
+	((char *)(cmsg) +                                       \
+	    __DARWIN_ALIGN32((__uint32_t)(cmsg)->cmsg_len) +    \
+	    __DARWIN_ALIGN32(sizeof(struct cmsghdr)))
+
+#define M_FIRST_CMSGHDR(m)                                                                      \
+        ((char *)(m) != (char *)0L && (size_t)(m)->m_len >= sizeof(struct cmsghdr) &&           \
+	  (socklen_t)(m)->m_len >= __DARWIN_ALIGN32(((struct cmsghdr *)(m)->m_data)->cmsg_len) ?\
+         (struct cmsghdr *)(m)->m_data :                                                        \
+         (struct cmsghdr *)0L)
+
+#define M_NXT_CMSGHDR(m, cmsg)                                                  \
+        ((char *)(cmsg) == (char *)0L ? M_FIRST_CMSGHDR(m) :                    \
+            _MIN_NXT_CMSGHDR_PTR(cmsg) > ((char *)(m)->m_data) + (m)->m_len ||  \
+            _MIN_NXT_CMSGHDR_PTR(cmsg) < (char *)(m)->m_data ?                  \
+                (struct cmsghdr *)0L /* NULL */ :                               \
+                (struct cmsghdr *)((unsigned char *)(cmsg) +                    \
+                            __DARWIN_ALIGN32((__uint32_t)(cmsg)->cmsg_len)))
+
 #endif /* KERNEL_PRIVATE */
 
 /*
@@ -278,6 +319,7 @@ struct socket {
 #define	SS_ISDISCONNECTED	0x2000	/* socket disconnected from peer */
 #define	SS_DRAINING		0x4000	/* close waiting for blocked system
 					   calls to drain */
+#define	SS_DEFUNCT		0x8000	/* has been fully defunct'd */
 
 #if defined(__LP64__)
 #define	_XSOCKET_PTR(x)		u_int32_t
@@ -288,13 +330,13 @@ struct socket {
 #pragma pack(4)
 
 struct xsockbuf {
-		u_int32_t	sb_cc;
-		u_int32_t	sb_hiwat;
-		u_int32_t	sb_mbcnt;
-		u_int32_t	sb_mbmax;
-		int32_t		sb_lowat;
-		short		sb_flags;
-		short		sb_timeo;
+	u_int32_t	sb_cc;
+	u_int32_t	sb_hiwat;
+	u_int32_t	sb_mbcnt;
+	u_int32_t	sb_mbmax;
+	int32_t		sb_lowat;
+	short		sb_flags;
+	short		sb_timeo;
 };
 
 /*
@@ -347,6 +389,56 @@ struct	xsocket64 {
 };
 
 #endif /* !CONFIG_EMBEDDED */
+
+#ifdef PRIVATE
+
+#define XSO_SOCKET	0x001
+#define XSO_RCVBUF	0x002
+#define XSO_SNDBUF	0x004
+#define XSO_STATS	0x008
+#define XSO_INPCB	0x010
+#define XSO_TCPCB	0x020
+
+struct	xsocket_n {
+	u_int32_t		xso_len;		/* length of this structure */
+	u_int32_t		xso_kind;		/* XSO_SOCKET */
+	u_int64_t		xso_so;	/* makes a convenient handle */
+	short			so_type;
+	short			so_options;
+	short			so_linger;
+	short			so_state;
+	u_int64_t		so_pcb;		/* another convenient handle */
+	int				xso_protocol;
+	int				xso_family;
+	short			so_qlen;
+	short			so_incqlen;
+	short			so_qlimit;
+	short			so_timeo;
+	u_short			so_error;
+	pid_t			so_pgid;
+	u_int32_t		so_oobmark;
+	uid_t			so_uid;		/* XXX */
+};
+
+struct xsockbuf_n {
+	u_int32_t		xsb_len;		/* length of this structure */
+	u_int32_t		xsb_kind;		/* XSO_RCVBUF or XSO_SNDBUF */
+	u_int32_t		sb_cc;
+	u_int32_t		sb_hiwat;
+	u_int32_t		sb_mbcnt;
+	u_int32_t		sb_mbmax;
+	int32_t			sb_lowat;
+	short			sb_flags;
+	short			sb_timeo;
+};
+
+struct xsockstat_n {
+	u_int32_t		xst_len;		/* length of this structure */
+	u_int32_t		xst_kind;		/* XSO_STATS */
+	struct data_stats	xst_tc_stats[SO_TC_STATS_MAX];
+};
+
+#endif /* PRIVATE */
 
 #pragma pack()
 
@@ -434,6 +526,7 @@ extern so_gen_t so_gencnt;
 extern int	socket_debug;
 extern int sosendjcl;
 extern int sosendjcl_ignore_capab;
+extern int sodefunctlog;
 extern int somaxconn;
 
 struct file;
@@ -444,6 +537,7 @@ struct stat;
 struct ucred;
 struct uio;
 struct knote;
+struct so_tcdbg;
 
 #define	SBLASTRECORDCHK(sb, s)	\
 	if (socket_debug) sblastrecordchk(sb, s);
@@ -457,6 +551,20 @@ struct knote;
 		(sb)->sb_lastrecord = NULL;	\
 	}					\
 }
+
+#define	SODEFUNCTLOG(x)		do { if (sodefunctlog) printf x; } while (0)
+
+/*
+ * For debugging traffic class behaviors
+ */
+#define SOTCDB_NO_DSCP		0x01	/* Do not set DSCP code in IP header */
+#define SOTCDB_NO_MTC		0x02	/* Do not set the mbuf traffic class */
+#define SOTCDB_NO_SENDTCPBG	0x04	/* Do not use background TCP CC algorithm for sender */
+#define SOTCDB_NO_LCLTST	0x08	/* Do not test for local destination for setting DSCP */
+#define SOTCDB_NO_DSCPTST	0x10	/* Overwritte any existing DSCP code */
+#define SOTCDB_NO_RECVTCPBG	0x20	/* Do not use throttling on receiver-side of TCP */ 
+
+extern u_int32_t sotcdb;
 
 /*
  * From uipc_socket and friends
@@ -481,6 +589,7 @@ extern void sbcheck(struct sockbuf *sb);
 extern void sblastmbufchk(struct sockbuf *, const char *);
 extern void sblastrecordchk(struct sockbuf *, const char *);
 extern struct mbuf *sbcreatecontrol(caddr_t p, int size, int type, int level);
+extern struct mbuf **sbcreatecontrol_mbuf(caddr_t p, int size, int type, int level, struct mbuf** m);
 extern void sbdrop(struct sockbuf *sb, int len);
 extern void sbdroprecord(struct sockbuf *sb);
 extern void sbflush(struct sockbuf *sb);
@@ -512,11 +621,14 @@ extern void sofree(struct socket *so);
 extern void soreference(struct socket *so);
 extern void sodereference(struct socket *so);
 extern void somultipages(struct socket *, boolean_t);
+extern int sosetdefunct(struct proc *, struct socket *, int level, boolean_t);
+extern int sodefunct(struct proc *, struct socket *, int level);
 extern int sogetopt(struct socket *so, struct sockopt *sopt);
 extern void sohasoutofband(struct socket *so);
 extern void soisconnected(struct socket *so);
 extern void soisconnecting(struct socket *so);
 extern void soisdisconnected(struct socket *so);
+extern void sodisconnectwakeup(struct socket *so);
 extern void soisdisconnecting(struct socket *so);
 extern int soisbackground(struct socket *so);
 extern int solisten(struct socket *so, int backlog);
@@ -531,8 +643,15 @@ extern int socket_unlock(struct socket *so, int refcount);
 extern void sofreelastref(struct socket *, int);
 extern int sogetaddr_locked(struct socket *, struct sockaddr **, int);
 extern const char *solockhistory_nr(struct socket *);
-extern void set_traffic_class(struct mbuf *, struct socket *, int);
+extern void set_packet_tclass(struct mbuf *, struct socket *, int, int);
 extern int mbuf_traffic_class_from_control(struct mbuf *);
+extern void set_tcp_stream_priority(struct socket *so);
+extern int so_set_traffic_class(struct socket *, int);
+extern void so_set_default_traffic_class(struct socket *);
+extern void socket_tclass_init(void);
+extern int so_set_tcdbg(struct socket *, struct so_tcdbg *);
+extern int sogetopt_tcdbg(struct socket *, struct sockopt *);
+extern void so_recv_data_stat(struct socket *, struct mbuf *, size_t);
 
 /*
  * XXX; prepare mbuf for (__FreeBSD__ < 3) routines.
@@ -557,6 +676,7 @@ extern void sotoxsocket(struct socket *so, struct xsocket *xso);
 #if !CONFIG_EMBEDDED
 extern void sotoxsocket64(struct socket *so, struct xsocket64 *xso);
 #endif
+extern void sbwakeup(struct sockbuf *sb);
 extern void sowakeup(struct socket *so, struct sockbuf *sb);
 extern int soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p);
 

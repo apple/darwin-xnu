@@ -766,7 +766,7 @@ set_alarm(
 	uint64_t	abstime;
 
 	nanotime_to_absolutetime(alarm_time->tv_sec, alarm_time->tv_nsec, &abstime);
-	timer_call_enter(&alarm_expire_timer, abstime);
+	timer_call_enter(&alarm_expire_timer, abstime, 0);
 }
 
 /*

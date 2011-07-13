@@ -121,63 +121,14 @@ extern void	cpu_desc_init64(cpu_data_t *cdp);
 extern void	cpu_desc_load(cpu_data_t *cdp);
 extern void	cpu_desc_load64(cpu_data_t *cdp);
 
-static inline boolean_t
-valid_user_data_selector(uint16_t selector)
-{
-    sel_t	sel = selector_to_sel(selector);
-    
-    if (selector == 0)
-    	return (TRUE);
+extern boolean_t
+valid_user_data_selector(uint16_t selector);
 
-    if (sel.ti == SEL_LDT)
-	return (TRUE);
-    else if (sel.index < GDTSZ) {
-	if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U)
-	    return (TRUE);
-    }
-		
-    return (FALSE);
-}
+extern boolean_t
+valid_user_code_selector(uint16_t selector);
 
-static inline boolean_t
-valid_user_code_selector(uint16_t selector)
-{
-    sel_t	sel = selector_to_sel(selector);
-    
-    if (selector == 0)
-    	return (FALSE);
-
-    if (sel.ti == SEL_LDT) {
-	if (sel.rpl == USER_PRIV)
-	    return (TRUE);
-    }
-    else if (sel.index < GDTSZ && sel.rpl == USER_PRIV) {
-	if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U)
-	    return (TRUE);
-    }
-
-    return (FALSE);
-}
-
-static inline boolean_t
-valid_user_stack_selector(uint16_t selector)
-{
-    sel_t	sel = selector_to_sel(selector);
-    
-    if (selector == 0)
-    	return (FALSE);
-
-    if (sel.ti == SEL_LDT) {
-	if (sel.rpl == USER_PRIV)
-	    return (TRUE);
-    }
-    else if (sel.index < GDTSZ && sel.rpl == USER_PRIV) {
-	if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U)
-	    return (TRUE);
-    }
-		
-    return (FALSE);
-}
+extern boolean_t
+valid_user_stack_selector(uint16_t selector);
 
 extern boolean_t
 valid_user_segment_selectors(uint16_t cs,

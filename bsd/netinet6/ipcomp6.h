@@ -40,7 +40,7 @@
 #include <netinet6/ipsec.h>
 
 #ifdef KERNEL_PRIVATE
-extern int ipcomp6_input(struct mbuf **, int *);
+extern int ipcomp6_input(struct mbuf **, int *, int);
 extern int ipcomp6_output(struct mbuf *, u_char *, struct mbuf *,
 	struct secasvar *);
 #endif /* KERNEL_PRIVATE */

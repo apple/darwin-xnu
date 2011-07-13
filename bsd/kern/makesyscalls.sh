@@ -190,6 +190,11 @@ s/\$//g
 		printf "#include <mach/shared_region.h>\n" > sysarg
 		printf "\n#ifdef KERNEL\n" > sysarg
 		printf "#ifdef __APPLE_API_PRIVATE\n" > sysarg
+		printf "/*\n" > sysarg
+		printf " * The kernel may support multiple userspace ABIs, and must use\n" > sysarg
+		printf " * argument structures with elements large enough for any of them.\n" > sysarg
+		printf "*/\n" > sysarg
+		printf "\n" > sysarg
 		printf "#ifndef __arm__\n" > sysarg
 		printf "#define\tPAD_(t)\t(sizeof(uint64_t) <= sizeof(t) \\\n " > sysarg
 		printf "\t\t? 0 : sizeof(uint64_t) - sizeof(t))\n" > sysarg
@@ -205,8 +210,6 @@ s/\$//g
 		printf "#define\tPADR_(t)\t0\n" > sysarg
 		printf "#endif\n" > sysarg
 		printf "\n__BEGIN_DECLS\n" > sysarg
-		printf "#ifndef __MUNGE_ONCE\n" > sysarg
-		printf "#define __MUNGE_ONCE\n" > sysarg
 		printf "#ifndef __arm__\n" > sysarg
 		printf "void munge_w(const void *, void *);  \n" > sysarg
 		printf "void munge_ww(const void *, void *);  \n" > sysarg
@@ -218,6 +221,10 @@ s/\$//g
 		printf "void munge_wwwwwwww(const void *, void *);  \n" > sysarg
 		printf "void munge_wl(const void *, void *);  \n" > sysarg
 		printf "void munge_wlw(const void *, void *);  \n" > sysarg
+		printf "void munge_wlwwwll(const void *, void *);  \n" > sysarg
+		printf "void munge_wlwwwllw(const void *, void *);  \n" > sysarg
+		printf "void munge_wlwwlwlw(const void *, void *);  \n" > sysarg
+		printf "void munge_wllwwll(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwl(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwlw(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwlww(const void *, void *);  \n" > sysarg
@@ -225,13 +232,18 @@ s/\$//g
 		printf "void munge_wwwwlw(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwwl(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwwwl(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwwwlww(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwwwllw(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwwwlll(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwwwwll(const void *, void *);  \n" > sysarg
+		printf "void munge_wwwwwwl(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwwwwlw(const void *, void *);  \n" > sysarg
 		printf "void munge_wsw(const void *, void *);  \n" > sysarg
 		printf "void munge_wws(const void *, void *);  \n" > sysarg
 		printf "void munge_wwwsw(const void *, void *);  \n" > sysarg
 		printf "void munge_llllll(const void *, void *); \n" > sysarg
 		printf "#else \n" > sysarg
+		printf "/* ARM does not need mungers for BSD system calls */\n" > sysarg
 		printf "#define munge_w  NULL \n" > sysarg
 		printf "#define munge_ww  NULL \n" > sysarg
 		printf "#define munge_www  NULL \n" > sysarg
@@ -242,6 +254,10 @@ s/\$//g
 		printf "#define munge_wwwwwwww  NULL \n" > sysarg
 		printf "#define munge_wl  NULL \n" > sysarg
 		printf "#define munge_wlw  NULL \n" > sysarg
+		printf "#define munge_wlwwwll  NULL \n" > sysarg
+		printf "#define munge_wlwwwllw  NULL \n" > sysarg
+		printf "#define munge_wlwwlwlw  NULL \n" > sysarg
+		printf "#define munge_wllwwll  NULL \n" > sysarg
 		printf "#define munge_wwwl  NULL \n" > sysarg
 		printf "#define munge_wwwlw  NULL \n" > sysarg
 		printf "#define munge_wwwlww  NULL\n" > sysarg
@@ -249,22 +265,18 @@ s/\$//g
 		printf "#define munge_wwwwl  NULL \n" > sysarg
 		printf "#define munge_wwwwlw  NULL \n" > sysarg
 		printf "#define munge_wwwwwl  NULL \n" > sysarg
+		printf "#define munge_wwwwwlww  NULL \n" > sysarg
+		printf "#define munge_wwwwwllw  NULL \n" > sysarg
+		printf "#define munge_wwwwwlll  NULL \n" > sysarg
+		printf "#define munge_wwwwwwl  NULL \n" > sysarg
 		printf "#define munge_wwwwwwlw  NULL \n" > sysarg
 		printf "#define munge_wsw  NULL \n" > sysarg
 		printf "#define munge_wws  NULL \n" > sysarg
 		printf "#define munge_wwwsw  NULL \n" > sysarg
 		printf "#define munge_llllll  NULL \n" > sysarg
-		printf "#endif // ! __arm__\n" > sysarg
-		printf "#ifdef __ppc__\n" > sysarg
-		printf "void munge_d(const void *, void *);  \n" > sysarg
-		printf "void munge_dd(const void *, void *);  \n" > sysarg
-		printf "void munge_ddd(const void *, void *);  \n" > sysarg
-		printf "void munge_dddd(const void *, void *);  \n" > sysarg
-		printf "void munge_ddddd(const void *, void *);  \n" > sysarg
-		printf "void munge_dddddd(const void *, void *);  \n" > sysarg
-		printf "void munge_ddddddd(const void *, void *);  \n" > sysarg
-		printf "void munge_dddddddd(const void *, void *);  \n" > sysarg
-		printf "#else \n" > sysarg
+		printf "#endif /* __arm__ */\n" > sysarg
+		printf "\n" > sysarg
+		printf "/* Active 64-bit user ABIs do not need munging */\n" > sysarg
 		printf "#define munge_d  NULL \n" > sysarg
 		printf "#define munge_dd  NULL \n" > sysarg
 		printf "#define munge_ddd  NULL \n" > sysarg
@@ -273,8 +285,6 @@ s/\$//g
 		printf "#define munge_dddddd  NULL \n" > sysarg
 		printf "#define munge_ddddddd  NULL \n" > sysarg
 		printf "#define munge_dddddddd  NULL \n" > sysarg
-		printf "#endif // __ppc__\n" > sysarg
-		printf "#endif /* !__MUNGE_ONCE */\n" > sysarg
 		
 		printf "\n" > sysarg
 
@@ -592,7 +602,7 @@ s/\$//g
 							 argtype[i] == "socklen_t" || argtype[i] == "uint32_t" || argtype[i] == "int32_t" ||
 							 argtype[i] == "sigset_t" || argtype[i] == "gid_t" || argtype[i] == "unsigned int" ||
 							 argtype[i] == "mode_t" || argtype[i] == "key_t" ||
-							 argtype[i] == "mach_port_name_t") {
+							 argtype[i] == "mach_port_name_t" || argtype[i] == "au_asid_t") {
 						munge32 = munge32 "w"
 						munge64 = munge64 "d"
 						size32 += 4

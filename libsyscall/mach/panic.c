@@ -57,8 +57,11 @@
 
 #include <mach/mach.h>
 #include <mach/mach_host.h>
-#include <stdarg.h>
-#include <stdio.h>
+
+#include "abort.h"
+#include "string.h"
+
+int write(int fd, const char* cbuf, int nbyte);
 
 static mach_port_t master_host_port;
 
@@ -72,14 +75,10 @@ panic_init(mach_port_t port)
 void
 panic(const char *s, ...)
 {
-	va_list listp;
-
-	printf("panic: ");
-	va_start(listp, s);
-	vprintf(s, listp);
-	va_end(listp);
-	printf("\n");
-
+	char buffer[1024];
+	int len = _mach_snprintf(buffer, sizeof(buffer), "panic: %s\n", s);
+	write(__STDERR_FILENO, buffer, len+1);
+	
 #define RB_DEBUGGER	0x1000	/* enter debugger NOW */
 	(void) host_reboot(master_host_port, RB_DEBUGGER);
 

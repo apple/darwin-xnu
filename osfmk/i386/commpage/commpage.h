@@ -160,6 +160,7 @@ extern  void	commpage_set_nanotime(uint64_t tsc_base, uint64_t ns_base, uint32_t
 extern	void	commpage_set_memory_pressure(unsigned int  pressure);
 extern	void	commpage_set_spin_count(unsigned int  count);
 extern	void	commpage_sched_gen_inc(void);
+extern	void	commpage_update_active_cpus(void);
 
 extern	uint32_t	commpage_is_in_pfz32(uint32_t);
 extern	uint32_t	commpage_is_in_pfz64(addr64_t);

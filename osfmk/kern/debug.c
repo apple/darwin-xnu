@@ -75,20 +75,19 @@
 #include <kdp/kdp_udp.h>
 #endif
 
-#ifdef	__ppc__
-#include <ppc/Firmware.h>
-#include <ppc/low_trace.h>
-#endif
-
 #if defined(__i386__) || defined(__x86_64__)
 #include <i386/cpu_threads.h>
 #include <i386/pmCPU.h>
 #endif
 
 #include <IOKit/IOPlatformExpert.h>
+#include <machine/pal_routines.h>
 
 #include <sys/kdebug.h>
 #include <libkern/OSKextLibPrivate.h>
+#include <libkern/OSAtomic.h>
+#include <libkern/kernel_mach_header.h>
+#include <uuid/uuid.h>
 
 unsigned int	halt_in_debugger = 0;
 unsigned int	switch_debugger = 0;
@@ -122,6 +121,7 @@ char *debug_buf_ptr = debug_buf;
 unsigned int debug_buf_size = sizeof(debug_buf);
 
 static char model_name[64];
+/* uuid_string_t */ char kernel_uuid[37]; 
 
 struct pasc {
   unsigned a: 7;
@@ -184,6 +184,14 @@ MACRO_END
 void
 panic_init(void)
 {
+	unsigned long uuidlen = 0;
+	void *uuid;
+
+	uuid = getuuidfromheader(&_mh_execute_header, &uuidlen);
+	if ((uuid != NULL) && (uuidlen == sizeof(uuid_t))) {
+		uuid_unparse_upper(*(uuid_t *)uuid, kernel_uuid);
+	}
+
 	simple_lock_init(&panic_lock, 0);
 	panic_is_inited = 1;
 	panic_caller = 0;
@@ -216,7 +224,7 @@ debug_log_init(void)
 
 void _consume_panic_args(int a __unused, ...)
 {
-    panic(NULL);
+    panic("panic");
 }
 
 void
@@ -227,7 +235,15 @@ panic(const char *str, ...)
 	thread_t thread;
 	wait_queue_t wq;
 
+#if	defined(__i386__) || defined(__x86_64__)
+	/* Attempt to display the unparsed panic string */
+	const char *tstr = str;
 
+	kprintf("Panic initiated, string: ");
+	while (tstr && *tstr)
+		kprintf("%c", *tstr++);
+	kprintf("\n");
+#endif
 	if (kdebug_enable)
 		kdbg_dump_trace_to_file("/var/tmp/panic.trace");
 
@@ -235,10 +251,6 @@ panic(const char *str, ...)
 	disable_preemption();
 
 	panic_safe();
-
-#ifdef	__ppc__
-	lastTrace = LLTraceSet(0);		/* Disable low-level tracing */
-#endif
 
 	thread = current_thread();		/* Get failing thread */
 	wq = thread->wait_queue;		/* Save the old value */
@@ -340,6 +352,7 @@ debug_putc(char c)
 }
 
 /* In-place packing routines -- inefficient, but they're called at most once.
+ * Assumes "buflen" is a multiple of 8.
  */
 
 int packA(char *inbuf, uint32_t length, uint32_t buflen)
@@ -347,7 +360,7 @@ int packA(char *inbuf, uint32_t length, uint32_t buflen)
   unsigned int i, j = 0;
   pasc_t pack;
   
-  length = MIN(((length & ~7) +8), buflen);
+  length = MIN(((length + 7) & ~7), buflen);
 
   for (i = 0; i < length; i+=8)
     {
@@ -362,7 +375,7 @@ int packA(char *inbuf, uint32_t length, uint32_t buflen)
       bcopy ((char *) &pack, inbuf + j, 7);
       j += 7;
     }
-  return ((length * 7)/8);
+  return j;
 }
 
 void unpackA(char *inbuf, uint32_t length)
@@ -414,10 +427,20 @@ static void panic_display_model_name(void) {
 	if (ml_nofault_copy((vm_offset_t) &model_name, (vm_offset_t) &tmp_model_name, sizeof(model_name)) != sizeof(model_name))
 		return;
 
-	model_name[sizeof(model_name) - 1] = '\0';
+	tmp_model_name[sizeof(tmp_model_name) - 1] = '\0';
 
-	if (model_name[0] != 0)
-		kdb_printf("System model name: %s\n", model_name);
+	if (tmp_model_name[0] != 0)
+		kdb_printf("System model name: %s\n", tmp_model_name);
+}
+
+static void panic_display_kernel_uuid(void) {
+	char tmp_kernel_uuid[sizeof(kernel_uuid)];
+
+	if (ml_nofault_copy((vm_offset_t) &kernel_uuid, (vm_offset_t) &tmp_kernel_uuid, sizeof(kernel_uuid)) != sizeof(kernel_uuid))
+		return;
+
+	if (tmp_kernel_uuid[0] != '\0')
+		kdb_printf("Kernel UUID: %s\n", tmp_kernel_uuid);
 }
 
 static void panic_display_uptime(void) {
@@ -430,30 +453,37 @@ static void panic_display_uptime(void) {
 extern const char version[];
 extern char osversion[];
 
+static volatile uint32_t config_displayed = 0;
+
 __private_extern__ void panic_display_system_configuration(void) {
-	static volatile boolean_t config_displayed = FALSE;
 
 	panic_display_process_name();
-	if (config_displayed == FALSE) {
-		config_displayed = TRUE;
+	if (OSCompareAndSwap(0, 1, &config_displayed)) {
+		char buf[256];
+		if (strlcpy(buf, PE_boot_args(), sizeof(buf)))
+			kdb_printf("Boot args: %s\n", buf);
 		kdb_printf("\nMac OS version:\n%s\n",
 		    (osversion[0] != 0) ? osversion : "Not yet set");
 		kdb_printf("\nKernel version:\n%s\n",version);
+		panic_display_kernel_uuid();
+		panic_display_pal_info();
 		panic_display_model_name();
 		panic_display_uptime();
-#if	defined(__i386__) || defined(__x86_64__)
-		pmap_pagetable_corruption_msg_log(&kdb_printf);
-#endif /* i386 || x86_64 */
 		panic_display_zprint();
+#if CONFIG_ZLEAKS
+		panic_display_ztrace();
+#endif /* CONFIG_ZLEAKS */
 		kext_dump_panic_lists(&kdb_log);
 	}
 }
 
 extern zone_t		first_zone;
 extern unsigned int	num_zones, stack_total;
+extern unsigned long long stack_allocs;
 
 #if defined(__i386__) || defined (__x86_64__)
 extern unsigned int	inuse_ptepages_count;
+extern long long alloc_ptepages_count;
 #endif
 
 extern boolean_t	panic_include_zprint;
@@ -492,6 +522,37 @@ __private_extern__ void panic_display_zprint()
 		kdb_printf("Kalloc.Large:%lu\n",(uintptr_t)kalloc_large_total);
 	}
 }
+
+#if CONFIG_ZLEAKS
+extern boolean_t	panic_include_ztrace;
+extern struct ztrace* top_ztrace;
+/*
+ * Prints the backtrace most suspected of being a leaker, if we paniced in the zone allocator.
+ * top_ztrace and panic_include_ztrace comes from osfmk/kern/zalloc.c
+ */
+__private_extern__ void panic_display_ztrace(void)
+{
+	if(panic_include_ztrace == TRUE) {
+		unsigned int i = 0;
+		struct ztrace top_ztrace_copy;
+		
+		/* Make sure not to trip another panic if there's something wrong with memory */
+		if(ml_nofault_copy((vm_offset_t)top_ztrace, (vm_offset_t)&top_ztrace_copy, sizeof(struct ztrace)) == sizeof(struct ztrace)) {
+			kdb_printf("\nBacktrace suspected of leaking: (outstanding bytes: %lu)\n", (uintptr_t)top_ztrace_copy.zt_size);
+			/* Print the backtrace addresses */
+			for (i = 0; (i < top_ztrace_copy.zt_depth && i < MAX_ZTRACE_DEPTH) ; i++) {
+				kdb_printf("%p\n", top_ztrace_copy.zt_stack[i]);
+			}
+			/* Print any kexts in that backtrace, along with their link addresses so we can properly blame them */
+			kmod_panic_dump((vm_offset_t *)&top_ztrace_copy.zt_stack[0], top_ztrace_copy.zt_depth);
+		}
+		else {
+			kdb_printf("\nCan't access top_ztrace...\n");
+		}
+		kdb_printf("\n");
+	}
+}
+#endif /* CONFIG_ZLEAKS */
 
 #if !MACH_KDP
 static struct ether_addr kdp_current_mac_address = {{0, 0, 0, 0, 0, 0}};

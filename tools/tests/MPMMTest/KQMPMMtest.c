@@ -15,6 +15,7 @@
 #include <mach/notify.h>
 #include <servers/bootstrap.h>
 #include <sys/event.h>
+#include <sys/select.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/signal.h>
@@ -67,6 +68,7 @@ static boolean_t	affinity = FALSE;
 static boolean_t	timeshare = FALSE;
 static boolean_t	threaded = FALSE;
 static boolean_t	oneway = FALSE;
+static boolean_t	do_select = FALSE;
 int			msg_type;
 int			num_ints;
 int			num_msgs;
@@ -96,6 +98,7 @@ void usage(const char *progname) {
 	fprintf(stderr, "    -delay num\t\tmicroseconds to sleep clients between messages\n");
 	fprintf(stderr, "    -work num\t\tmicroseconds of client work\n");
 	fprintf(stderr, "    -pages num\t\tpages of memory touched by client work\n");
+	fprintf(stderr, "    -select   \t\tselect prior to calling kevent().\n");
 	fprintf(stderr, "default values are:\n");
 	fprintf(stderr, "    . no affinity\n");
 	fprintf(stderr, "    . not timeshare\n");
@@ -195,6 +198,9 @@ void parse_args(int argc, char *argv[]) {
 				usage(progname);
 			client_pages = strtoul(argv[1], NULL, 0);
 			argc -= 2; argv += 2;
+		} else if (0 == strcmp("-select", argv[0])) {
+			do_select = TRUE;
+			argc--; argv++;
 		} else 
 			usage(progname);
 	}
@@ -339,10 +345,12 @@ server(void *serverarg)
 	int kq;
 	struct kevent64_s kev[1];
 	int err;
+	int count;
 	struct port_args args;
 	int idx;
 	kern_return_t ret;
 	int totalmsg = num_msgs * num_clients;
+	fd_set readfds;
 
 	args.server_num = (int) (long) serverarg;
 	setup_server_ports(&args);
@@ -365,11 +373,26 @@ server(void *serverarg)
 		perror("kevent");
 		exit(1);
 	}
+	
 	for (idx = 0; idx < totalmsg; idx++) {
 
 		if (verbose) 
 			printf("server awaiting message %d\n", idx);
 	retry:
+		if (do_select) {
+			FD_ZERO(&readfds);
+			FD_SET(kq, &readfds);
+
+			if (verbose)
+				printf("Calling select() prior to kevent64().\n");
+
+			count = select(kq + 1, &readfds, NULL, NULL, NULL);
+			if (count == -1) {
+				perror("select");
+				exit(1);
+			}
+		}
+
 		EV_SET64(&kev[0], args.pset, EVFILT_MACHPORT, EV_ENABLE, 
 #if DIRECT_MSG_RCV
 			 MACH_RCV_MSG|MACH_RCV_LARGE, 0, 0, (mach_vm_address_t)args.req_msg, args.req_size);

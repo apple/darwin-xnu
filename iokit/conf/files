@@ -10,8 +10,6 @@ OPTIONS/mach_assert				optional mach_assert
 
 # libIOKit
 
-iokit/Kernel/WKdmCompress.c				optional hibernation
-iokit/Kernel/WKdmDecompress.c				optional hibernation
 iokit/Kernel/IOHibernateIO.cpp				optional hibernation
 iokit/Kernel/IOHibernateRestoreKernel.c			optional hibernation
 
@@ -77,6 +75,8 @@ iokit/Kernel/IOSharedDataQueue.cpp			optional iokitcpp
 # iokit/Tests/TestDevice.cpp				optional iokitcpp
 # iokit/Tests/TestContainers.cpp			optional iokitcpp
 # iokit/Tests/TestCollections.cpp			optional iokitcpp
+
+iokit/Kernel/IOStatistics.cpp			optional iokitcpp
 
 iokit/Kernel/IOStringFuncs.c				standard
 

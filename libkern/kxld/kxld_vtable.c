@@ -29,13 +29,24 @@
 #include <mach-o/loader.h>
 #include <sys/types.h>
 
+#if KERNEL
+    #ifdef MACH_ASSERT
+        #undef MACH_ASSERT
+    #endif
+    #define MACH_ASSERT 1
+    #include <kern/assert.h>
+#else
+    #include <assert.h>
+#endif
+
 #define DEBUG_ASSERT_COMPONENT_NAME_STRING "kxld"
 #include <AssertMacros.h>
 
 #include "kxld_demangle.h"
+#include "kxld_dict.h"
+#include "kxld_object.h"
 #include "kxld_reloc.h"
 #include "kxld_sect.h"
-#include "kxld_state.h"
 #include "kxld_sym.h"
 #include "kxld_symtab.h"
 #include "kxld_util.h"
@@ -49,235 +60,102 @@
 #define VTABLE_HEADER_LEN_64 2
 #define VTABLE_HEADER_SIZE_64 (VTABLE_HEADER_LEN_64 * VTABLE_ENTRY_SIZE_64)
 
-static kern_return_t init_by_relocs(KXLDVTable *vtable, const KXLDSym *sym,
-    const KXLDSect *sect, const KXLDSymtab *symtab, 
-    const KXLDRelocator *relocator);
+static void  get_vtable_base_sizes(boolean_t is_32_bit, u_int *vtable_entry_size,
+    u_int *vtable_header_size);
+
+static kern_return_t init_by_relocs(KXLDVTable *vtable, const KXLDSym *vtable_sym,
+    const KXLDSect *sect, const KXLDRelocator *relocator);
 
 static kern_return_t init_by_entries_and_relocs(KXLDVTable *vtable, 
-    const KXLDSym *sym, const KXLDSymtab *symtab, 
-    const KXLDRelocator *relocator, const KXLDArray *relocs);
+    const KXLDSym *vtable_sym, const KXLDRelocator *relocator, 
+    const KXLDArray *relocs, const KXLDDict *defined_cxx_symbols);
 
-static kxld_addr_t get_entry_value(u_char *entry, const KXLDRelocator *relocator)
-    __attribute__((pure));
-#if !KERNEL
-static kxld_addr_t swap_entry_value(kxld_addr_t entry_value, 
-    const KXLDRelocator *relocator) __attribute__((const));
-#endif /* !KERNEL */
-static kern_return_t init_by_entries(KXLDVTable *vtable, const KXLDSymtab *symtab,
-    const KXLDRelocator *relocator);
+static kern_return_t init_by_entries(KXLDVTable *vtable,
+    const KXLDRelocator *relocator, const KXLDDict *defined_cxx_symbols);
 
-/*******************************************************************************
-*******************************************************************************/
-kern_return_t
-kxld_vtable_init_from_kernel_macho(KXLDVTable *vtable, const KXLDSym *sym, 
-    const KXLDSect *sect, const KXLDSymtab *symtab, 
-    const KXLDRelocator *relocator)
-{
-    kern_return_t rval = KERN_FAILURE;
-    char *demangled_name = NULL;
-    size_t demangled_length = 0;
-
-    check(vtable);
-    check(sym);
-    check(sect);
-    check(symtab);
-
-    vtable->name = sym->name;
-    vtable->vtable = sect->data + kxld_sym_get_section_offset(sym, sect);
-    vtable->is_patched = FALSE;
-
-    require_action(kxld_sect_get_num_relocs(sect) == 0, finish,
-        rval=KERN_FAILURE;
-        kxld_log(kKxldLogPatching, kKxldLogErr, 
-            kKxldLogMalformedVTable,
-            kxld_demangle(vtable->name, &demangled_name, &demangled_length)));
-
-    rval = init_by_entries(vtable, symtab, relocator);
-    require_noerr(rval, finish);
-
-    vtable->is_patched = TRUE;
-
-    rval = KERN_SUCCESS;
-
-finish:
-    if (rval) kxld_vtable_deinit(vtable);
-    if (demangled_name) kxld_free(demangled_name, demangled_length);
-
-    return rval;
-}
-
-/*******************************************************************************
-*******************************************************************************/
-kern_return_t
-kxld_vtable_init_from_object_macho(KXLDVTable *vtable, const KXLDSym *sym, 
-    const KXLDSect *sect, const KXLDSymtab *symtab, 
-    const KXLDRelocator *relocator)
-{
-    kern_return_t rval = KERN_FAILURE;
-    char *demangled_name = NULL;
-    size_t demangled_length = 0;
-
-    check(vtable);
-    check(sym);
-    check(sect);
-    check(symtab);
-
-    vtable->name = sym->name;
-    vtable->vtable = sect->data + kxld_sym_get_section_offset(sym, sect);
-    vtable->is_patched = FALSE;
-
-    require_action(kxld_sect_get_num_relocs(sect) > 0, finish,
-        rval=KERN_FAILURE;
-        kxld_log(kKxldLogPatching, kKxldLogErr, 
-            kKxldLogMalformedVTable, 
-            kxld_demangle(vtable->name, &demangled_name, &demangled_length)));
-
-    rval = init_by_relocs(vtable, sym, sect, symtab, relocator);
-    require_noerr(rval, finish);
-
-    rval = KERN_SUCCESS;
-
-finish:
-    if (rval) kxld_vtable_deinit(vtable);
-    if (demangled_name) kxld_free(demangled_name, demangled_length);
-
-    return rval;
-}
-
-/*******************************************************************************
-*******************************************************************************/
-kern_return_t
-kxld_vtable_init_from_final_macho(KXLDVTable *vtable, const KXLDSym *sym, 
-    const KXLDSect *sect, const KXLDSymtab *symtab, 
-    const KXLDRelocator *relocator, const KXLDArray *relocs)
-{
-    kern_return_t rval = KERN_FAILURE;
-    char *demangled_name = NULL;
-    size_t demangled_length = 0;
-
-    check(vtable);
-    check(sym);
-    check(sect);
-    check(symtab);
-
-    vtable->name = sym->name;
-    vtable->vtable = sect->data + kxld_sym_get_section_offset(sym, sect);
-    vtable->is_patched = FALSE;
-
-    require_action(kxld_sect_get_num_relocs(sect) == 0, finish,
-        rval=KERN_FAILURE;
-        kxld_log(kKxldLogPatching, kKxldLogErr, 
-            kKxldLogMalformedVTable, 
-            kxld_demangle(vtable->name, &demangled_name, &demangled_length)));
-
-    rval = init_by_entries_and_relocs(vtable, sym, symtab,
-        relocator, relocs);
-    require_noerr(rval, finish);
-
-    rval = KERN_SUCCESS;
-
-finish:
-    if (rval) kxld_vtable_deinit(vtable);
-    if (demangled_name) kxld_free(demangled_name, demangled_length);
-
-    return rval;
-}
-
-#if KXLD_USER_OR_ILP32
 /*******************************************************************************
 *******************************************************************************/
 kern_return_t 
-kxld_vtable_init_from_link_state_32(KXLDVTable *vtable, u_char *file, 
-    KXLDVTableHdr *hdr)
+kxld_vtable_init(KXLDVTable *vtable, const KXLDSym *vtable_sym, 
+    const KXLDObject *object, const KXLDDict *defined_cxx_symbols)
 {
     kern_return_t rval = KERN_FAILURE;
-    KXLDSymEntry32 *sym = NULL;
-    KXLDVTableEntry *entry = NULL;
-    u_int i = 0;
+    const KXLDArray *extrelocs = NULL;
+    const KXLDRelocator *relocator = NULL;
+    const KXLDSect *vtable_sect = NULL;
+    char *demangled_name = NULL;
+    size_t demangled_length = 0;
 
     check(vtable);
-    check(file);
-    check(hdr);
+    check(vtable_sym);
+    check(object);
 
-    vtable->name = (char *) (file + hdr->nameoff);
-    vtable->is_patched = TRUE;
+    relocator = kxld_object_get_relocator(object);
 
-    rval = kxld_array_init(&vtable->entries, sizeof(KXLDVTableEntry), 
-        hdr->nentries);
-    require_noerr(rval, finish);
-    
-    sym = (KXLDSymEntry32 *) (file + hdr->vtableoff);
-    for (i = 0; i < vtable->entries.nitems; ++i, ++sym) {
-        entry = kxld_array_get_item(&vtable->entries, i);
-        entry->patched.name = (char *) (file + sym->nameoff);
-        entry->patched.addr = sym->addr;
+    vtable_sect = kxld_object_get_section_by_index(object, 
+        vtable_sym->sectnum);
+    require_action(vtable_sect, finish, rval=KERN_FAILURE);
+
+    vtable->name = vtable_sym->name;
+    vtable->vtable = vtable_sect->data + 
+        kxld_sym_get_section_offset(vtable_sym, vtable_sect);
+
+    if (kxld_object_is_linked(object)) {
+        rval = init_by_entries(vtable, relocator, defined_cxx_symbols);
+        require_noerr(rval, finish);
+
+        vtable->is_patched = TRUE;
+    } else {
+        if (kxld_object_is_final_image(object)) {
+            extrelocs = kxld_object_get_extrelocs(object);
+            require_action(extrelocs, finish,
+                rval=KERN_FAILURE;
+                kxld_log(kKxldLogPatching, kKxldLogErr, 
+                    kKxldLogMalformedVTable, 
+                    kxld_demangle(vtable->name, 
+                        &demangled_name, &demangled_length)));
+
+            rval = init_by_entries_and_relocs(vtable, vtable_sym, 
+                relocator, extrelocs, defined_cxx_symbols);
+            require_noerr(rval, finish);
+        } else {
+            require_action(kxld_sect_get_num_relocs(vtable_sect) > 0, finish,
+                rval=KERN_FAILURE;
+                kxld_log(kKxldLogPatching, kKxldLogErr, 
+                    kKxldLogMalformedVTable, 
+                    kxld_demangle(vtable->name, 
+                        &demangled_name, &demangled_length)));
+
+            rval = init_by_relocs(vtable, vtable_sym, vtable_sect, relocator);
+            require_noerr(rval, finish);
+        }
+        
+        vtable->is_patched = FALSE;
     }
 
     rval = KERN_SUCCESS;
-
 finish:
+    if (demangled_name) kxld_free(demangled_name, demangled_length);
+
     return rval;
 }
-#endif /* KXLD_USER_OR_ILP32 */
 
-#if KXLD_USER_OR_LP64
 /*******************************************************************************
 *******************************************************************************/
-kern_return_t 
-kxld_vtable_init_from_link_state_64(KXLDVTable *vtable, u_char *file, 
-    KXLDVTableHdr *hdr)
+static void 
+get_vtable_base_sizes(boolean_t is_32_bit, u_int *vtable_entry_size,
+    u_int *vtable_header_size)
 {
-    kern_return_t rval = KERN_FAILURE;
-    KXLDSymEntry64 *sym = NULL;
-    KXLDVTableEntry *entry = NULL;
-    u_int i = 0;
+    check(vtable_entry_size);
+    check(vtable_header_size);
 
-    check(vtable);
-    check(file);
-    check(hdr);
-
-    vtable->name = (char *) (file + hdr->nameoff);
-    vtable->is_patched = TRUE;
-
-    rval = kxld_array_init(&vtable->entries, sizeof(KXLDVTableEntry), 
-        hdr->nentries);
-    require_noerr(rval, finish);
-    
-    sym = (KXLDSymEntry64 *) (file + hdr->vtableoff);
-    for (i = 0; i < vtable->entries.nitems; ++i, ++sym) {
-        entry = kxld_array_get_item(&vtable->entries, i);
-        entry->patched.name = (char *) (file + sym->nameoff);
-        entry->patched.addr = sym->addr;
+    if (is_32_bit) {
+        *vtable_entry_size = VTABLE_ENTRY_SIZE_32;
+        *vtable_header_size = VTABLE_HEADER_SIZE_32;
+    } else {
+        *vtable_entry_size = VTABLE_ENTRY_SIZE_64;
+        *vtable_header_size = VTABLE_HEADER_SIZE_64;
     }
-
-    rval = KERN_SUCCESS;
-
-finish:
-    return rval;
-}
-#endif /* KXLD_USER_OR_LP64 */
-
-/*******************************************************************************
-*******************************************************************************/
-kern_return_t 
-kxld_vtable_copy(KXLDVTable *vtable, const KXLDVTable *src)
-{
-    kern_return_t rval = KERN_FAILURE;
-
-    check(vtable);
-    check(src);
-    
-    vtable->vtable = src->vtable;
-    vtable->name = src->name;
-    vtable->is_patched = src->is_patched;
-
-    rval = kxld_array_copy(&vtable->entries, &src->entries);
-    require_noerr(rval, finish);
-
-    rval = KERN_SUCCESS;
-
-finish:
-    return rval;
 }
 
 /*******************************************************************************
@@ -285,38 +163,35 @@ finish:
 * entries and finding the corresponding symbols.
 *******************************************************************************/
 static kern_return_t
-init_by_relocs(KXLDVTable *vtable, const KXLDSym *sym, const KXLDSect *sect, 
-    const KXLDSymtab *symtab, const KXLDRelocator *relocator)
+init_by_relocs(KXLDVTable *vtable, const KXLDSym *vtable_sym, 
+    const KXLDSect *sect, const KXLDRelocator *relocator)
 {
     kern_return_t rval = KERN_FAILURE;
     KXLDReloc *reloc = NULL;
     KXLDVTableEntry *entry = NULL;
-    KXLDSym *tmpsym = NULL;
+    KXLDSym *sym = NULL;
     kxld_addr_t vtable_base_offset = 0;
     kxld_addr_t entry_offset = 0;
     u_int i = 0;
     u_int nentries = 0;
     u_int vtable_entry_size = 0;
+    u_int vtable_header_size = 0;
     u_int base_reloc_index = 0;
     u_int reloc_index = 0;
 
     check(vtable);
-    check(sym);
+    check(vtable_sym);
     check(sect);
-    check(symtab);
     check(relocator);
 
     /* Find the first entry past the vtable padding */
 
-    vtable_base_offset = kxld_sym_get_section_offset(sym, sect);
-    if (relocator->is_32_bit) {
-        vtable_entry_size = VTABLE_ENTRY_SIZE_32;
-        vtable_base_offset += VTABLE_HEADER_SIZE_32;
-    } else {
-        vtable_entry_size = VTABLE_ENTRY_SIZE_64;
-        vtable_base_offset += VTABLE_HEADER_SIZE_64;
-    }
+    (void) get_vtable_base_sizes(relocator->is_32_bit, 
+        &vtable_entry_size, &vtable_header_size);
 
+    vtable_base_offset = kxld_sym_get_section_offset(vtable_sym, sect) + 
+        vtable_header_size;
+   
     /* Find the relocation entry at the start of the vtable */
 
     rval = kxld_reloc_get_reloc_index_by_offset(&sect->relocs, 
@@ -359,9 +234,9 @@ init_by_relocs(KXLDVTable *vtable, const KXLDSym *sym, const KXLDSect *sect,
          * skip it.  We won't be able to patch subclasses with this symbol,
          * but there isn't much we can do about that.
          */
-        tmpsym = kxld_reloc_get_symbol(relocator, reloc, sect->data, symtab);
+        sym = kxld_reloc_get_symbol(relocator, reloc, sect->data);
 
-        entry->unpatched.sym = tmpsym;
+        entry->unpatched.sym = sym;
         entry->unpatched.reloc = reloc;
     }
 
@@ -371,76 +246,41 @@ finish:
 }
 
 /*******************************************************************************
-*******************************************************************************/
-static kxld_addr_t
-get_entry_value(u_char *entry, const KXLDRelocator *relocator)
-{
-    kxld_addr_t entry_value;
-
-    if (relocator->is_32_bit) {
-        entry_value = *(uint32_t *)entry;
-    } else {
-        entry_value = *(uint64_t *)entry;
-    }
-
-    return entry_value;
-}
-
-#if !KERNEL
-/*******************************************************************************
-*******************************************************************************/
-static kxld_addr_t
-swap_entry_value(kxld_addr_t entry_value, const KXLDRelocator *relocator)
-{
-    if (relocator->is_32_bit) {
-        entry_value = OSSwapInt32((uint32_t) entry_value);
-    } else {
-        entry_value = OSSwapInt64((uint64_t) entry_value);
-    }
-
-    return entry_value;
-}
-#endif /* KERNEL */
-
-/*******************************************************************************
 * Initializes a vtable object by reading the symbol values out of the vtable
 * entries and performing reverse symbol lookups on those values.
 *******************************************************************************/
 static kern_return_t
-init_by_entries(KXLDVTable *vtable, const KXLDSymtab *symtab, 
-    const KXLDRelocator *relocator)
+init_by_entries(KXLDVTable *vtable, const KXLDRelocator *relocator,
+    const KXLDDict *defined_cxx_symbols)
 {
     kern_return_t rval = KERN_FAILURE;
     KXLDVTableEntry *tmpentry = NULL;
     KXLDSym *sym = NULL;
-    u_char *base_entry = NULL;
-    u_char *entry = NULL;
     kxld_addr_t entry_value = 0;
+    u_long entry_offset;
     u_int vtable_entry_size = 0;
     u_int vtable_header_size = 0;
     u_int nentries = 0;
     u_int i = 0;
 
-    if (relocator->is_32_bit) {
-        vtable_entry_size = VTABLE_ENTRY_SIZE_32;
-        vtable_header_size = VTABLE_HEADER_SIZE_32;
-    } else {
-        vtable_entry_size = VTABLE_ENTRY_SIZE_64;
-        vtable_header_size = VTABLE_HEADER_SIZE_64;
-    }
+    check(vtable);
+    check(relocator);
 
-    base_entry = vtable->vtable + vtable_header_size;
+    (void) get_vtable_base_sizes(relocator->is_32_bit, 
+        &vtable_entry_size, &vtable_header_size);
 
     /* Count the number of entries (the vtable is null-terminated) */
 
-    entry = base_entry;
-    entry_value = get_entry_value(entry, relocator);
-    while (entry_value) {
+    entry_offset = vtable_header_size;
+    while (1) {
+        entry_value = kxld_relocator_get_pointer_at_addr(relocator,
+            vtable->vtable, entry_offset);
+        if (!entry_value) break;
+
+        entry_offset += vtable_entry_size;
         ++nentries;
-        entry += vtable_entry_size;
-        entry_value = get_entry_value(entry, relocator);
     }
-    
+
     /* Allocate the symbol index */
 
     rval = kxld_array_init(&vtable->entries, sizeof(KXLDVTableEntry), nentries);
@@ -448,24 +288,19 @@ init_by_entries(KXLDVTable *vtable, const KXLDSymtab *symtab,
 
     /* Look up the symbols for each entry */
 
-    entry = base_entry;
-    rval = KERN_SUCCESS;
-    for (i = 0; i < vtable->entries.nitems; ++i) {
-        entry = base_entry + (i * vtable_entry_size);
-        entry_value = get_entry_value(entry, relocator);
+    for (i = 0, entry_offset = vtable_header_size; 
+         i < vtable->entries.nitems; 
+         ++i, entry_offset += vtable_entry_size) 
+    {
+        entry_value = kxld_relocator_get_pointer_at_addr(relocator,
+            vtable->vtable, entry_offset);
 
-#if !KERNEL
-        if (relocator->swap) {
-            entry_value = swap_entry_value(entry_value, relocator);
-        }
-#endif /* !KERNEL */
-        
         /* If we can't find the symbol, it means that the virtual function was
          * defined inline.  There's not much I can do about this; it just means
          * I can't patch this function.
          */
         tmpentry = kxld_array_get_item(&vtable->entries, i);
-        sym = kxld_symtab_get_cxx_symbol_by_value(symtab, entry_value);
+        sym = kxld_dict_find(defined_cxx_symbols, &entry_value);
 
         if (sym) {
             tmpentry->patched.name = sym->name;
@@ -477,7 +312,6 @@ init_by_entries(KXLDVTable *vtable, const KXLDSymtab *symtab,
     }
 
     rval = KERN_SUCCESS;
-
 finish:
     return rval;
 }
@@ -493,63 +327,49 @@ finish:
 * external symbols.
 *******************************************************************************/
 static kern_return_t
-init_by_entries_and_relocs(KXLDVTable *vtable, const KXLDSym *sym, 
-    const KXLDSymtab *symtab, const KXLDRelocator *relocator, 
-    const KXLDArray *relocs)
+init_by_entries_and_relocs(KXLDVTable *vtable, const KXLDSym *vtable_sym, 
+    const KXLDRelocator *relocator, const KXLDArray *relocs,
+    const KXLDDict *defined_cxx_symbols)
 {
     kern_return_t rval = KERN_FAILURE;
     KXLDReloc *reloc = NULL;
     KXLDVTableEntry *tmpentry = NULL;
-    KXLDSym *tmpsym = NULL;
+    KXLDSym *sym = NULL;
     u_int vtable_entry_size = 0;
     u_int vtable_header_size = 0;
-    u_char *base_entry = NULL;
-    u_char *entry = NULL;
     kxld_addr_t entry_value = 0;
-    kxld_addr_t base_entry_offset = 0;
-    kxld_addr_t entry_offset = 0;
+    u_long entry_offset = 0;
     u_int nentries = 0;
     u_int i = 0;
     char *demangled_name1 = NULL;
     size_t demangled_length1 = 0;
 
     check(vtable);
-    check(sym);
-    check(symtab);
+    check(vtable_sym);
+    check(relocator);
     check(relocs);
 
     /* Find the first entry and its offset past the vtable padding */
 
-    if (relocator->is_32_bit) {
-        vtable_entry_size = VTABLE_ENTRY_SIZE_32;
-        vtable_header_size = VTABLE_HEADER_SIZE_32;
-    } else {
-        vtable_entry_size = VTABLE_ENTRY_SIZE_64;
-        vtable_header_size = VTABLE_HEADER_SIZE_64;
-    }
-
-    base_entry = vtable->vtable + vtable_header_size;
-
-    base_entry_offset = sym->base_addr;
-    base_entry_offset += vtable_header_size;
+    (void) get_vtable_base_sizes(relocator->is_32_bit, 
+        &vtable_entry_size, &vtable_header_size);
 
     /* In a final linked image, a vtable slot is valid if it is nonzero
-     * (meaning the userspace linker has already resolved it, or if it has
+     * (meaning the userspace linker has already resolved it) or if it has
      * a relocation entry.  We'll know the end of the vtable when we find a
      * slot that meets neither of these conditions.
      */
-    entry = base_entry;
-    entry_value = get_entry_value(entry, relocator);
-    entry_offset = base_entry_offset;
+    entry_offset = vtable_header_size;
     while (1) {
-        entry_value = get_entry_value(entry, relocator);
+        entry_value = kxld_relocator_get_pointer_at_addr(relocator,
+            vtable->vtable, entry_offset);
         if (!entry_value) {
-            reloc = kxld_reloc_get_reloc_by_offset(relocs, entry_offset);
+            reloc = kxld_reloc_get_reloc_by_offset(relocs, 
+                vtable_sym->base_addr + entry_offset);
             if (!reloc) break;
         }
 
         ++nentries;
-        entry += vtable_entry_size;
         entry_offset += vtable_entry_size;
     }
 
@@ -560,11 +380,12 @@ init_by_entries_and_relocs(KXLDVTable *vtable, const KXLDSym *sym,
 
     /* Find the symbols for each vtable entry */
 
-    entry = base_entry;
-    entry_value = get_entry_value(entry, relocator);
-    entry_offset = base_entry_offset;
-    for (i = 0; i < vtable->entries.nitems; ++i) {
-        entry_value = get_entry_value(entry, relocator);
+    for (i = 0, entry_offset = vtable_header_size; 
+         i < vtable->entries.nitems; 
+         ++i, entry_offset += vtable_entry_size) 
+    {
+        entry_value = kxld_relocator_get_pointer_at_addr(relocator,
+            vtable->vtable, entry_offset);
 
         /* If we can't find a symbol, it means it is a locally-defined,
          * non-external symbol that has been stripped.  We don't patch over
@@ -573,16 +394,11 @@ init_by_entries_and_relocs(KXLDVTable *vtable, const KXLDSym *sym,
          * but there isn't much we can do about that.
          */
         if (entry_value) {
-#if !KERNEL
-            if (relocator->swap) {
-                entry_value = swap_entry_value(entry_value, relocator);
-            }
-#endif /* !KERNEL */
-
             reloc = NULL;
-            tmpsym = kxld_symtab_get_cxx_symbol_by_value(symtab, entry_value);
+            sym = kxld_dict_find(defined_cxx_symbols, &entry_value);
         } else {
-            reloc = kxld_reloc_get_reloc_by_offset(relocs, entry_offset);
+            reloc = kxld_reloc_get_reloc_by_offset(relocs,
+                vtable_sym->base_addr + entry_offset);
             require_action(reloc, finish,
                 rval=KERN_FAILURE;
                 kxld_log(kKxldLogPatching, kKxldLogErr, 
@@ -590,20 +406,15 @@ init_by_entries_and_relocs(KXLDVTable *vtable, const KXLDSym *sym,
                     kxld_demangle(vtable->name, &demangled_name1, 
                         &demangled_length1)));
         
-            tmpsym = kxld_reloc_get_symbol(relocator, reloc, 
-                /* data */ NULL, symtab);
+            sym = kxld_reloc_get_symbol(relocator, reloc, /* data */ NULL);
         }
- 
+
         tmpentry = kxld_array_get_item(&vtable->entries, i);
         tmpentry->unpatched.reloc = reloc;
-        tmpentry->unpatched.sym = tmpsym;
-
-        entry += vtable_entry_size;
-        entry_offset += vtable_entry_size;
+        tmpentry->unpatched.sym = sym;
     }
 
     rval = KERN_SUCCESS;
-
 finish:
     return rval;
 }
@@ -633,16 +444,41 @@ kxld_vtable_deinit(KXLDVTable *vtable)
 }
 
 /*******************************************************************************
+*******************************************************************************/
+KXLDVTableEntry * 
+kxld_vtable_get_entry_for_offset(const KXLDVTable *vtable, u_long offset, 
+    boolean_t is_32_bit)
+{
+    KXLDVTableEntry *rval = NULL;
+    u_int vtable_entry_size = 0;
+    u_int vtable_header_size = 0;
+    u_int vtable_entry_idx = 0;
+
+    (void) get_vtable_base_sizes(is_32_bit, 
+        &vtable_entry_size, &vtable_header_size);
+
+    if (offset % vtable_entry_size) {
+        goto finish;
+    }
+
+    vtable_entry_idx = (u_int) ((offset - vtable_header_size) / vtable_entry_size);
+    rval = kxld_array_get_item(&vtable->entries, vtable_entry_idx);
+finish:
+    return rval;
+}
+
+/*******************************************************************************
 * Patching vtables allows us to preserve binary compatibility across releases.
 *******************************************************************************/
 kern_return_t
 kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
-    KXLDSymtab *symtab, boolean_t strict_patching __unused)
+    KXLDObject *object)
 {
     kern_return_t rval = KERN_FAILURE;
+    const KXLDSymtab *symtab = NULL;
+    const KXLDSym *sym = NULL;
     KXLDVTableEntry *child_entry = NULL;
     KXLDVTableEntry *parent_entry = NULL;
-    KXLDSym *sym = NULL;
     u_int symindex = 0;
     u_int i = 0;
     char *demangled_name1 = NULL;
@@ -651,9 +487,12 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
     size_t demangled_length1 = 0;
     size_t demangled_length2 = 0;
     size_t demangled_length3 = 0;
+    boolean_t failure = FALSE;
 
     check(vtable);
     check(super_vtable);
+
+    symtab = kxld_object_get_symtab(object);
 
     require_action(!vtable->is_patched, finish, rval=KERN_SUCCESS);
     require_action(vtable->entries.nitems >= super_vtable->entries.nitems, finish,
@@ -679,7 +518,7 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
          */
 
         if (!parent_entry->patched.name) continue;
-
+        
         /* 1) If the symbol is defined locally, do not patch */
 
         if (kxld_sym_is_defined_locally(child_entry->unpatched.sym)) continue;
@@ -726,7 +565,8 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
          * should not patch it.
          */
 
-        if (strict_patching && !kxld_sym_is_defined(child_entry->unpatched.sym))
+        if (kxld_object_target_supports_strict_patching(object) && 
+            !kxld_sym_is_defined(child_entry->unpatched.sym))
         {
             char class_name[KXLD_MAX_NAME_LEN];
             char function_prefix[KXLD_MAX_NAME_LEN];
@@ -744,6 +584,14 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
             if (!strncmp(child_entry->unpatched.sym->name, 
                     function_prefix, function_prefix_len)) 
             {
+                failure = TRUE;
+                kxld_log(kKxldLogPatching, kKxldLogErr,
+                    "The %s is unpatchable because its class declares the "
+                    "method '%s' without providing an implementation.",
+                    kxld_demangle(vtable->name,
+                        &demangled_name1, &demangled_length1),
+                    kxld_demangle(child_entry->unpatched.sym->name,
+                        &demangled_name2, &demangled_length2));
                 continue;
             }
         }
@@ -758,9 +606,10 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
          * that.
          */
 
-        sym = kxld_symtab_get_symbol_by_name(symtab, parent_entry->patched.name);
+        sym = kxld_symtab_get_locally_defined_symbol_by_name(symtab, 
+            parent_entry->patched.name);
         if (!sym) {
-            rval = kxld_symtab_add_symbol(symtab, parent_entry->patched.name,
+            rval = kxld_object_add_symbol(object, parent_entry->patched.name,
                 parent_entry->patched.addr, &sym);
             require_noerr(rval, finish);
         }
@@ -771,7 +620,6 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
 
         rval = kxld_reloc_update_symindex(child_entry->unpatched.reloc, symindex);
         require_noerr(rval, finish);
-
         kxld_log(kKxldLogPatching, kKxldLogDetail,
             "In vtable '%s', patching '%s' with '%s'.", 
             kxld_demangle(vtable->name, &demangled_name1, &demangled_length1),
@@ -779,13 +627,28 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
                 &demangled_name2, &demangled_length2), 
             kxld_demangle(sym->name, &demangled_name3, &demangled_length3));
 
-        kxld_sym_patch(child_entry->unpatched.sym);
+        rval = kxld_object_patch_symbol(object, child_entry->unpatched.sym);
+        require_noerr(rval, finish);
+
         child_entry->unpatched.sym = sym;
+
+        /*
+         * The C++ ABI requires that functions be aligned on a 2-byte boundary:
+         * http://www.codesourcery.com/public/cxx-abi/abi.html#member-pointers
+         * If the LSB of any virtual function's link address is 1, then the
+         * compiler has violated that part of the ABI, and we're going to panic
+         * in _ptmf2ptf() (in OSMetaClass.h). Better to panic here with some
+         * context.
+         */
+        assert(kxld_sym_is_pure_virtual(sym) || !(sym->link_addr & 1)); 
     }
+
+    require_action(!failure, finish, rval=KERN_FAILURE);
 
     /* Change the vtable representation from the unpatched layout to the
      * patched layout.
      */
+
     for (i = 0; i < vtable->entries.nitems; ++i) {
         char *name;
         kxld_addr_t addr;

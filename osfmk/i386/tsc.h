@@ -42,7 +42,9 @@
 
 #define BASE_NHM_CLOCK_SOURCE 	133333333ULL
 #define IA32_PERF_STS		0x198
+#define	SLOW_TSC_THRESHOLD	1000067800	/* TSC is too slow for regular nanotime() algorithm */
 
+#ifndef ASSEMBLER
 extern uint64_t	busFCvtt2n;
 extern uint64_t	busFCvtn2t;
 extern uint64_t tscFreq;
@@ -74,6 +76,6 @@ typedef struct tscInfo tscInfo_t;
 extern void tsc_get_info(tscInfo_t *info);
 
 extern void tsc_init(void);
-
+#endif /* ASSEMBLER */
 #endif /* _I386_TSC_H_ */
 #endif /* KERNEL_PRIVATE */

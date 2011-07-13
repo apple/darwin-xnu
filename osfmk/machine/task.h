@@ -28,9 +28,7 @@
 #ifndef _MACHINE_TASK_H
 #define _MACHINE_TASK_H
 
-#if defined (__ppc__)
-#include "ppc/task.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/task.h"
 #else
 #error architecture not supported

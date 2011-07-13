@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2008-2009 Apple Inc.
+ * Copyright (c) 2008-2010 Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -58,6 +58,11 @@ struct mhdr {
 	u_long			 mh_magic;
 	char		 	 mh_data[0];
 };
+
+/*
+ * The lock group for the audit subsystem. 
+ */
+static lck_grp_t *audit_lck_grp = NULL;
 
 #define	AUDIT_MHMAGIC	0x4D656C53
 
@@ -174,28 +179,25 @@ _audit_malloc(size_t size, au_malloc_type_t *type, int flags, const char *fn)
 _audit_malloc(size_t size, au_malloc_type_t *type, int flags)
 #endif
 {
-	union {
-	    struct mhdr	hdr;
-	    char mem[size + sizeof (struct mhdr)];
-	} *mem;
-	size_t	memsize = sizeof (*mem);
+	struct mhdr	*hdr;
+	size_t	memsize = sizeof (*hdr) + size;
 
 	if (size == 0)
 		return (NULL);
 	if (flags & M_NOWAIT) {
-		mem = (void *)kalloc_noblock(memsize);
+		hdr = (void *)kalloc_noblock(memsize);
 	} else {
-		mem = (void *)kalloc(memsize);
-		if (mem == NULL)
+		hdr = (void *)kalloc(memsize);
+		if (hdr == NULL)
 			panic("_audit_malloc: kernel memory exhausted");
 	}
-	if (mem == NULL)
+	if (hdr == NULL)
 		return (NULL);
-	mem->hdr.mh_size = memsize;
-	mem->hdr.mh_type = type;
-	mem->hdr.mh_magic = AUDIT_MHMAGIC;
+	hdr->mh_size = memsize;
+	hdr->mh_type = type;
+	hdr->mh_magic = AUDIT_MHMAGIC;
 	if (flags & M_ZERO)
-		memset(mem->hdr.mh_data, 0, size);
+		memset(hdr->mh_data, 0, size);
 #if AUDIT_MALLOC_DEBUG
 	if (type != NULL && type->mt_type < NUM_MALLOC_TYPES) {
 		OSAddAtomic64(memsize, &type->mt_size);
@@ -206,7 +208,7 @@ _audit_malloc(size_t size, au_malloc_type_t *type, int flags)
 		audit_malloc_types[type->mt_type] = type;
 	}
 #endif /* AUDIT_MALLOC_DEBUG */
-	return (mem->hdr.mh_data);
+	return (hdr->mh_data);
 }
 
 /*
@@ -316,15 +318,99 @@ _audit_cv_wait_sig(struct cv *cvp, lck_mtx_t *mp, const char *desc)
 }
 
 /*
+ * BSD Mutexes.
+ */
+void
+#if DIAGNOSTIC
+_audit_mtx_init(struct mtx *mp, const char *lckname)
+#else
+_audit_mtx_init(struct mtx *mp, __unused const char *lckname)
+#endif
+{
+	mp->mtx_lock = lck_mtx_alloc_init(audit_lck_grp, LCK_ATTR_NULL);
+	KASSERT(mp->mtx_lock != NULL, 
+	    ("_audit_mtx_init: Could not allocate a mutex."));
+#if DIAGNOSTIC
+	strlcpy(mp->mtx_name, lckname, AU_MAX_LCK_NAME);	
+#endif
+}
+
+void
+_audit_mtx_destroy(struct mtx *mp)
+{
+
+	if (mp->mtx_lock) {
+		lck_mtx_free(mp->mtx_lock, audit_lck_grp);
+		mp->mtx_lock = NULL;
+	}
+}
+
+/*
+ * BSD rw locks.
+ */
+void
+#if DIAGNOSTIC
+_audit_rw_init(struct rwlock *lp, const char *lckname)
+#else
+_audit_rw_init(struct rwlock *lp, __unused const char *lckname)
+#endif
+{
+	lp->rw_lock = lck_rw_alloc_init(audit_lck_grp, LCK_ATTR_NULL);
+	KASSERT(lp->rw_lock != NULL, 
+	    ("_audit_rw_init: Could not allocate a rw lock."));
+#if DIAGNOSTIC
+	strlcpy(lp->rw_name, lckname, AU_MAX_LCK_NAME);	
+#endif
+}
+
+void
+_audit_rw_destroy(struct rwlock *lp)
+{
+
+	if (lp->rw_lock) {
+		lck_rw_free(lp->rw_lock, audit_lck_grp);
+		lp->rw_lock = NULL;
+	}
+}
+/*
+ * Wait on a condition variable in a continuation (i.e. yield kernel stack).
+ * A cv_signal or cv_broadcast on the same condition variable will cause
+ * the thread to be scheduled.
+ */
+int
+_audit_cv_wait_continuation(struct cv *cvp, lck_mtx_t *mp, thread_continue_t function)
+{
+	int status = KERN_SUCCESS;
+
+	cvp->cv_waiters++;
+	assert_wait(cvp, THREAD_UNINT);
+	lck_mtx_unlock(mp);
+
+	status = thread_block(function);
+
+	/* should not be reached, but just in case, re-lock */
+	lck_mtx_lock(mp);
+
+	return status;
+}
+
+/*
  * Simple recursive lock. 
  */
 void
-_audit_rlck_init(struct rlck *lp, const char *grpname)
+#if DIAGNOSTIC
+_audit_rlck_init(struct rlck *lp, const char *lckname)
+#else
+_audit_rlck_init(struct rlck *lp, __unused const char *lckname)
+#endif
 {
 
-	lp->rl_grp = lck_grp_alloc_init(grpname, LCK_GRP_ATTR_NULL);
-	lp->rl_mtx = lck_mtx_alloc_init(lp->rl_grp, LCK_ATTR_NULL);
-
+	lp->rl_mtx = lck_mtx_alloc_init(audit_lck_grp, LCK_ATTR_NULL);
+	KASSERT(lp->rl_mtx != NULL, 
+	    ("_audit_rlck_init: Could not allocate a recursive lock."));
+#if DIAGNOSTIC
+	strlcpy(lp->rl_name, lckname, AU_MAX_LCK_NAME);	
+#endif
 	lp->rl_thread = 0;
 	lp->rl_recurse = 0;
 }
@@ -368,12 +454,8 @@ _audit_rlck_destroy(struct rlck *lp)
 {
 
 	if (lp->rl_mtx) {
-		lck_mtx_free(lp->rl_mtx, lp->rl_grp);
-		lp->rl_mtx = 0;
-	}
-	if (lp->rl_grp) {
-		lck_grp_free(lp->rl_grp);
-		lp->rl_grp = 0;
+		lck_mtx_free(lp->rl_mtx, audit_lck_grp);
+		lp->rl_mtx = NULL;
 	}
 }
 
@@ -397,12 +479,19 @@ _audit_rlck_assert(struct rlck *lp, u_int assert)
  * Simple sleep lock.
  */
 void
-_audit_slck_init(struct slck *lp, const char *grpname)
+#if DIAGNOSTIC
+_audit_slck_init(struct slck *lp, const char *lckname)
+#else
+_audit_slck_init(struct slck *lp, __unused const char *lckname)
+#endif
 {
 
-	lp->sl_grp = lck_grp_alloc_init(grpname, LCK_GRP_ATTR_NULL);
-	lp->sl_mtx = lck_mtx_alloc_init(lp->sl_grp, LCK_ATTR_NULL);
-
+	lp->sl_mtx = lck_mtx_alloc_init(audit_lck_grp, LCK_ATTR_NULL);
+	KASSERT(lp->sl_mtx != NULL, 
+	    ("_audit_slck_init: Could not allocate a sleep lock."));
+#if DIAGNOSTIC
+	strlcpy(lp->sl_name, lckname, AU_MAX_LCK_NAME);	
+#endif
 	lp->sl_locked = 0;
 	lp->sl_waiting = 0;
 }
@@ -442,7 +531,7 @@ _audit_slck_unlock(struct slck *lp)
 		lp->sl_waiting = 0;
 
 		/* Wake up *all* sleeping threads. */
-		thread_wakeup_prim((event_t) lp, /*1 thr*/ 0, THREAD_AWAKENED);
+		wakeup((event_t) lp);
 	}
 	lck_mtx_unlock(lp->sl_mtx);
 }
@@ -482,12 +571,8 @@ _audit_slck_destroy(struct slck *lp)
 {
 
 	if (lp->sl_mtx) {
-		lck_mtx_free(lp->sl_mtx, lp->sl_grp);
-		lp->sl_mtx = 0;
-	}
-	if (lp->sl_grp) {
-		lck_grp_free(lp->sl_grp);
-		lp->sl_grp = 0;
+		lck_mtx_free(lp->sl_mtx, audit_lck_grp);
+		lp->sl_mtx = NULL;
 	}
 }
 
@@ -543,6 +628,18 @@ _audit_ppsratecheck(struct timeval *lasttime, int *curpps, int maxpps)
 		*curpps = *curpps + 1;
 
 	return (rv);	
+}
+
+/*
+ * Initialize lock group for audit related locks/mutexes.
+ */
+void
+_audit_lck_grp_init(void)
+{
+	audit_lck_grp = lck_grp_alloc_init("Audit", LCK_GRP_ATTR_NULL);
+
+	KASSERT(audit_lck_grp != NULL,
+	    ("audit_get_lck_grp: Could not allocate the audit lock group."));
 }
 
 int

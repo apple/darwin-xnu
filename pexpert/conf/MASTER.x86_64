@@ -7,7 +7,6 @@
 #  PROFILE	= [ RELEASE profile ]
 #  DEBUG	= [ RELEASE debug ]
 #
-#
 #  EMBEDDED	= [ intel mach mach_pe panic_info ]
 #  DEVELOPMENT	= [ EMBEDDED ]
 #

@@ -9,13 +9,9 @@ include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
 
-INSTINC_SUBDIRS_PPC = \
-
 INSTINC_SUBDIRS_I386 = \
 
 EXPINC_SUBDIRS = \
-
-EXPINC_SUBDIRS_PPC = \
 
 EXPINC_SUBDIRS_I386 = \
 
@@ -25,12 +21,12 @@ DATAFILES = \
 	in6_var.h ip6_mroute.h nd6.h ip6_fw.h
 
 PRIVATE_DATAFILES = \
-	in6_pcb.h ip6_var.h pim6_var.h
+	in6_pcb.h ip6_var.h pim6_var.h mld6_var.h
 
 PRIVATE_KERNELFILES = \
 	ah6.h esp6.h esp_rijndael.h in6_gif.h in6_ifattach.h \
 	 in6_prefix.h ip6_ecn.h ip6_fw.h  \
-	ip6protosw.h ipcomp6.h ipsec6.h mld6_var.h  \
+	ip6protosw.h ipcomp6.h ipsec6.h \
 	raw_ip6.h scope6_var.h tcp6_var.h udp6_var.h
 
 INSTALL_MI_LIST	= ${DATAFILES}

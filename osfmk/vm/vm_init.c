@@ -143,6 +143,9 @@ vm_mem_bootstrap(void)
 
 	if (zsize < ZONE_MAP_MIN)
 		zsize = ZONE_MAP_MIN;	/* Clamp to min */
+#if defined(__LP64__)
+	zsize += zsize >> 1;
+#endif  /* __LP64__ */
 	if (zsize > sane_size >> 1)
 		zsize = sane_size >> 1;	/* Clamp to half of RAM max */
 #if !__LP64__

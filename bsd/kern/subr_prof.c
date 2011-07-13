@@ -152,14 +152,28 @@ kmstartup(void)
 }
 
 /*
- * Return kernel profiling information.
+ * XXX		These should be broken out into per-argument OID values,
+ * XXX		since there are no sub-OID parameter values, but unfortunately
+ * XXX		there is barely enough time for an initial conversion.
+ *
+ * Note:	These items appear to be read/write.
  */
-int
+STATIC int
+sysctl_doprofhandle SYSCTL_HANDLER_ARGS
+{
 sysctl_doprof(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp, 
               user_addr_t newp, size_t newlen)
 {
+	__unused int cmd = oidp->oid_arg2;	/* subcommand*/
+	int *name = arg1;		/* oid element argument vector */
+	int namelen = arg2;		/* number of oid element arguments */
+	user_addr_t oldp = req->oldptr;	/* user buffer copy out address */
+	size_t *oldlenp = req->oldlen;	/* user buffer copy out size */
+	user_addr_t newp = req->newptr;	/* user buffer copy in address */
+	size_t newlen = req->newlen;	/* user buffer copy in size */
+
 	struct gmonparam *gp = &_gmonparam;
-	int error;
+	int error = 0;
 
 	/* all sysctl names at this level are terminal */
 	if (namelen != 1)
@@ -169,28 +183,44 @@ sysctl_doprof(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	case GPROF_STATE:
 		error = sysctl_int(oldp, oldlenp, newp, newlen, &gp->state);
 		if (error)
-			return (error);
+			break;
 		if (gp->state == GMON_PROF_OFF)
 			stopprofclock(kernproc);
 		else
 			startprofclock(kernproc);
-		return (0);
+		break;
 	case GPROF_COUNT:
-		return (sysctl_struct(oldp, oldlenp, newp, newlen, 
-		                      gp->kcount, gp->kcountsize));
+		error = sysctl_struct(oldp, oldlenp, newp, newlen, 
+		                      gp->kcount, gp->kcountsize);
+		break;
 	case GPROF_FROMS:
-		return (sysctl_struct(oldp, oldlenp, newp, newlen,
-		                      gp->froms, gp->fromssize));
+		error = sysctl_struct(oldp, oldlenp, newp, newlen,
+		                      gp->froms, gp->fromssize);
+		break;
 	case GPROF_TOS:
-		return (sysctl_struct(oldp, oldlenp, newp, newlen,
-		                      gp->tos, gp->tossize));
+		error = sysctl_struct(oldp, oldlenp, newp, newlen,
+		                      gp->tos, gp->tossize);
+		break;
 	case GPROF_GMONPARAM:
-		return (sysctl_rdstruct(oldp, oldlenp, newp, gp, sizeof *gp));
+		error = sysctl_rdstruct(oldp, oldlenp, newp, gp, sizeof *gp);
+		break;
 	default:
-		return (ENOTSUP);
+		error = ENOTSUP;
+		break;
 	}
-	/* NOTREACHED */
+
+	/* adjust index so we return the right required/consumed amount */
+	if (!error)
+		req->oldidx += req->oldlen;
+
+	return(error);
 }
+SYSCTL_PROC(_kern, KERN_PROF, prof, STLFLAG_NODE|CTLFLAG_RW | CTLFLAG_LOCKED,
+	0,			/* Pointer argument (arg1) */
+	0,			/* Integer argument (arg2) */
+	sysctl_doprofhandle,	/* Handler function */
+	NULL,			/* No explicit data */
+	"");
 
 
 /*

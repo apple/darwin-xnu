@@ -41,7 +41,7 @@
  */
 #ifdef __x86_64__
 #define DTRACE_LAB(p, n)		\
-   "__dtrace_probeDOLLAR" DTRACE_TOSTRING(__LINE__) DTRACE_STRINGIFY(_##p##___##n)
+   "__dtrace_probeDOLLAR" DTRACE_TOSTRING(%=__LINE__) DTRACE_STRINGIFY(_##p##___##n)
 
 #define DTRACE_LABEL(p, n)		\
       ".section __DATA, __data\n\t"	\
@@ -51,7 +51,7 @@
 	"1:"
 #else
 #define DTRACE_LAB(p, n)		\
-   "__dtrace_probe$" DTRACE_TOSTRING(__LINE__) DTRACE_STRINGIFY(_##p##___##n)
+   "__dtrace_probe$" DTRACE_TOSTRING(%=__LINE__) DTRACE_STRINGIFY(_##p##___##n)
 
 #define DTRACE_LABEL(p, n)		\
       ".section __DATA, __data\n\t"	\
@@ -62,7 +62,7 @@
 #endif
 #else	/* !KERNEL */
 #define DTRACE_LABEL(p, n)									\
-	"__dtrace_probe$" DTRACE_TOSTRING(__LINE__) DTRACE_STRINGIFY(_##p##___##n) ":"	"\n\t"
+	"__dtrace_probe$" DTRACE_TOSTRING(%=__LINE__) DTRACE_STRINGIFY(_##p##___##n) ":"	"\n\t"
 #endif	/* !KERNEL */
 
 #ifdef DTRACE_CALL_TEST
@@ -103,6 +103,8 @@
 #define DTRACE_CALL0ARGS(provider, name)							\
 	asm volatile (										\
 		      DTRACE_CALL(provider, name)						\
+	              :										\
+	              :										\
 	);
 
 #define DTRACE_CALL1ARG(provider, name)								\

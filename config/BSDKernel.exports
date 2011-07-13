@@ -33,6 +33,7 @@ _buf_bwrite
 _buf_callback
 _buf_clear
 _buf_clearflags
+_buf_clear_redundancy_flags
 _buf_clone
 _buf_count
 _buf_dataptr
@@ -55,6 +56,7 @@ _buf_iterate
 _buf_lblkno
 _buf_map
 _buf_markaged
+_buf_markclean
 _buf_markdelayed
 _buf_markeintr
 _buf_markfua
@@ -63,6 +65,7 @@ _buf_meta_bread
 _buf_meta_breadn
 _buf_proc
 _buf_rcred
+_buf_redundancy_flags
 _buf_reset
 _buf_resid
 _buf_setblkno
@@ -77,6 +80,7 @@ _buf_seterror
 _buf_setflags
 _buf_setfsprivate
 _buf_setlblkno
+_buf_set_redundancy_flags
 _buf_setresid
 _buf_setsize
 _buf_setupl
@@ -222,6 +226,8 @@ _ifnet_allocate
 _ifnet_attach
 _ifnet_attach_protocol
 _ifnet_baudrate
+_ifnet_capabilities_enabled
+_ifnet_capabilities_supported
 _ifnet_detach
 _ifnet_detach_protocol
 _ifnet_eflags
@@ -259,6 +265,8 @@ _ifnet_remove_multicast
 _ifnet_resolve_multicast:_dlil_resolve_multi
 _ifnet_set_addrlen
 _ifnet_set_baudrate
+_ifnet_set_capabilities_supported
+_ifnet_set_capabilities_enabled
 _ifnet_set_eflags
 _ifnet_set_flags
 _ifnet_set_hdrlen
@@ -305,6 +313,10 @@ _kauth_cred_get_with_ref
 _kauth_cred_getgid
 _kauth_cred_getguid
 _kauth_cred_getntsid
+_kauth_cred_getrgid
+_kauth_cred_getruid
+_kauth_cred_getsvgid
+_kauth_cred_getsvuid
 _kauth_cred_getuid
 _kauth_cred_gid2guid
 _kauth_cred_gid2ntsid
@@ -351,6 +363,7 @@ _mbuf_clear_csum_performed
 _mbuf_clear_csum_requested
 _mbuf_get_mlen
 _mbuf_get_mhlen
+_mbuf_get_minclsize
 _mbuf_clear_vlan_tag
 _mbuf_concatenate
 _mbuf_copy_pkthdr
@@ -368,6 +381,7 @@ _mbuf_freem_list
 _mbuf_get
 _mbuf_get_csum_performed
 _mbuf_get_csum_requested
+_mbuf_get_traffic_class
 _mbuf_get_tso_requested
 _mbuf_get_vlan_tag
 _mbuf_getcluster
@@ -388,6 +402,7 @@ _mbuf_pulldown
 _mbuf_pullup
 _mbuf_set_csum_performed
 _mbuf_set_csum_requested
+_mbuf_set_traffic_class
 _mbuf_set_vlan_tag
 _mbuf_setdata
 _mbuf_setflags
@@ -670,6 +685,7 @@ _vfs_setextendedsecurity
 _vfs_setflags
 _vfs_setfsprivate
 _vfs_setioattr
+_vfs_setlocklocal
 _vfs_setmaxsymlen
 _vfs_statfs
 _vfs_sysctl

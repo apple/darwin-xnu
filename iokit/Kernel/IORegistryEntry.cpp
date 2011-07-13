@@ -278,7 +278,12 @@ bool IORegistryEntry::init( OSDictionary * dict )
 	bzero(reserved, sizeof(ExpansionData));
     }
     if( dict) {
-	dict->retain();
+	if (OSCollection::kImmutable & dict->setOptions(0, 0)) {
+	    dict = (OSDictionary *) dict->copyCollection();
+	    if (!dict)
+           	return (false);
+	} else
+	    dict->retain();
 	if( fPropertyTable)
 	    fPropertyTable->release();
 	fPropertyTable = dict;

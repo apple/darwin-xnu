@@ -14,10 +14,10 @@ jmp_buf resume;
 
 #define ALT_STK_SIZE	(MINSIGSTKSZ + pagesize)
 
-#if __i386__ || __ppc__
+#if __i386__
 typedef	unsigned int		psint_t;
 #endif
-#if __x86_64__ || __ppc64__
+#if __x86_64__
 typedef unsigned long long	psint_t;
 #endif
 
@@ -43,25 +43,18 @@ int verbose = 0;
 #define FAIL	-1	/* can't use 0 since setjmp uses that */
 
 int expected[4] = {
-#if __i386__
+#if NXDATA32TESTNONX
 	SUCCEED,		/* execute from heap */
+	SUCCEED,		/* exeucte from heap with PROT_EXEC */
+	FAIL,			/* execute from stack */
+	SUCCEED,		/* exeucte from stack with PROT_EXEC */
+#elif __i386__
+	FAIL,		/* execute from heap */
 	SUCCEED,		/* exeucte from heap with PROT_EXEC */
 	FAIL,			/* execute from stack */
 	SUCCEED,		/* exeucte from stack with PROT_EXEC */
 #endif
 #if __x86_64__
-	FAIL,			/* execute from heap */
-	SUCCEED,		/* exeucte from heap with PROT_EXEC */
-	FAIL,			/* execute from stack */
-	SUCCEED,		/* exeucte from stack with PROT_EXEC */
-#endif
-#if __ppc__
-	SUCCEED,		/* execute from heap */
-	SUCCEED,		/* exeucte from heap with PROT_EXEC */
-	SUCCEED,		/* execute from stack */
-	SUCCEED,		/* exeucte from stack with PROT_EXEC */
-#endif
-#if __ppc64__
 	FAIL,			/* execute from heap */
 	SUCCEED,		/* exeucte from heap with PROT_EXEC */
 	FAIL,			/* execute from stack */

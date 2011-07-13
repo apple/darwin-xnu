@@ -70,6 +70,7 @@ int	ubc_setcred(struct vnode *, struct proc *) __deprecated;
 /* code signing */
 struct cs_blob;
 struct cs_blob *ubc_cs_blob_get(vnode_t, cpu_type_t, off_t);
+int cs_entitlements_blob_get(proc_t p, void **, size_t *);
 #endif
 
 /* cluster IO routines */

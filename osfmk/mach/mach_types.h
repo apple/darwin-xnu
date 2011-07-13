@@ -245,6 +245,7 @@ typedef exception_handler_array_t exception_port_arrary_t;
 #define TASK_NULL		((task_t) 0)
 #define TASK_NAME_NULL		((task_name_t) 0)
 #define THREAD_NULL		((thread_t) 0)
+#define TID_NULL		((uint64_t) 0)
 #define THR_ACT_NULL 		((thread_act_t) 0)
 #define IPC_SPACE_NULL		((ipc_space_t) 0)
 #define HOST_NULL		((host_t) 0)

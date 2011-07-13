@@ -1,5 +1,5 @@
 .\"
-.\" Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+.\" Copyright (c) 2000-2010 Apple Inc. All rights reserved.
 .\"
 .\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
 .\" 
@@ -27,7 +27,7 @@
 .\"
 .\"     @(#)posix_spawn.2
 .
-.Dd August 9, 2007
+.Dd November 2, 2010
 .Dt POSIX_SPAWN 2
 .Os "Mac OS X"
 .Sh NAME
@@ -95,7 +95,7 @@ spawned process.  The value is undefined in the case of a failure.
 .Pp
 The argument
 .Fa file_actions
-is either NULL, or it is a a pointer to a file actions object that was
+is either NULL, or it is a pointer to a file actions object that was
 initialized by a call to
 .Xr posix_spawn_file_actions_init 3
 and represents zero or more file actions.
@@ -108,9 +108,12 @@ and
 .Xr fcntl 2 ) .
 Descriptors that remain open are unaffected by
 .Fn posix_spawn
-unless their behaviour is modified by a file action; see
+unless their behaviour is modified by particular spawn flags
+or a file action; see
+.Xr posix_spawnattr_setflags 3
+and
 .Xr posix_spawn_file_actions_init 3
-for more information.
+for additional information.
 .Pp
 The argument
 .Fa attrp

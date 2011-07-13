@@ -139,9 +139,9 @@ ipc_port_timestamp(void)
 }
 
 /*
- *	Routine:	ipc_port_dnrequest
+ *	Routine:	ipc_port_request_alloc
  *	Purpose:
- *		Try to allocate a dead-name request slot.
+ *		Try to allocate a request slot.
  *		If successful, returns the request index.
  *		Otherwise returns zero.
  *	Conditions:
@@ -152,20 +152,24 @@ ipc_port_timestamp(void)
  */
 
 kern_return_t
-ipc_port_dnrequest(
+ipc_port_request_alloc(
 	ipc_port_t			port,
 	mach_port_name_t		name,
 	ipc_port_t			soright,
+	boolean_t			send_possible,
+	boolean_t			immediate,
 	ipc_port_request_index_t	*indexp)
 {
 	ipc_port_request_t ipr, table;
 	ipc_port_request_index_t index;
+	uintptr_t mask = 0;
 
 	assert(ip_active(port));
 	assert(name != MACH_PORT_NULL);
 	assert(soright != IP_NULL);
 
-	table = port->ip_dnrequests;
+	table = port->ip_requests;
+
 	if (table == IPR_NULL)
 		return KERN_NO_SPACE;
 
@@ -178,16 +182,25 @@ ipc_port_dnrequest(
 
 	table->ipr_next = ipr->ipr_next;
 	ipr->ipr_name = name;
-	ipr->ipr_soright = soright;
+	
+	if (send_possible) {
+		mask |= IPR_SOR_SPREQ_MASK;
+		if (immediate) {
+			mask |= IPR_SOR_SPARM_MASK;
+			port->ip_sprequests = TRUE;
+		}
+	}
+	ipr->ipr_soright = IPR_SOR_MAKE(soright, mask);
 
 	*indexp = index;
+
 	return KERN_SUCCESS;
 }
 
 /*
- *	Routine:	ipc_port_dngrow
+ *	Routine:	ipc_port_request_grow
  *	Purpose:
- *		Grow a port's table of dead-name requests.
+ *		Grow a port's table of requests.
  *	Conditions:
  *		The port must be locked and active.
  *		Nothing else locked; will allocate memory.
@@ -201,7 +214,7 @@ ipc_port_dnrequest(
  */
 
 kern_return_t
-ipc_port_dngrow(
+ipc_port_request_grow(
 	ipc_port_t		port,
 	ipc_table_elems_t 	target_size)
 {
@@ -210,9 +223,9 @@ ipc_port_dngrow(
 
 	assert(ip_active(port));
 
-	otable = port->ip_dnrequests;
+	otable = port->ip_requests;
 	if (otable == IPR_NULL)
-		its = &ipc_table_dnrequests[0];
+		its = &ipc_table_requests[0];
 	else
 		its = otable->ipr_size + 1;
 
@@ -235,7 +248,7 @@ ipc_port_dngrow(
 	ip_unlock(port);
 
 	if ((its->its_size == 0) ||
-	    ((ntable = it_dnrequests_alloc(its)) == IPR_NULL)) {
+	    ((ntable = it_requests_alloc(its)) == IPR_NULL)) {
 		ipc_port_release(port);
 		return KERN_RESOURCE_SHORTAGE;
 	}
@@ -246,12 +259,11 @@ ipc_port_dngrow(
 	/*
 	 *	Check that port is still active and that nobody else
 	 *	has slipped in and grown the table on us.  Note that
-	 *	just checking port->ip_dnrequests == otable isn't
-	 *	sufficient; must check ipr_size.
+	 *	just checking if the current table pointer == otable
+	 *	isn't sufficient; must check ipr_size.
 	 */
 
-	if (ip_active(port) &&
-	    (port->ip_dnrequests == otable) &&
+	if (ip_active(port) && (port->ip_requests == otable) &&
 	    ((otable == IPR_NULL) || (otable->ipr_size+1 == its))) {
 		ipc_table_size_t oits;
 		ipc_table_elems_t osize, nsize;
@@ -288,55 +300,125 @@ ipc_port_dngrow(
 
 		ntable->ipr_next = free;
 		ntable->ipr_size = its;
-		port->ip_dnrequests = ntable;
+		port->ip_requests = ntable;
 		ip_unlock(port);
 
 		if (otable != IPR_NULL) {
-			it_dnrequests_free(oits, otable);
+			it_requests_free(oits, otable);
 	        }
 	} else {
 		ip_check_unlock(port);
-		it_dnrequests_free(its, ntable);
+		it_requests_free(its, ntable);
 	}
 
 	return KERN_SUCCESS;
 }
  
 /*
- *	Routine:	ipc_port_dncancel
+ *	Routine:	ipc_port_request_sparm
  *	Purpose:
- *		Cancel a dead-name request and return the send-once right.
+ *		Arm delayed send-possible request.
  *	Conditions:
- *		The port must locked and active.
+ *		The port must be locked and active.
+ */
+
+void
+ipc_port_request_sparm(
+	ipc_port_t			port,
+	__assert_only mach_port_name_t	name,
+	ipc_port_request_index_t	index)
+{
+	if (index != IE_REQ_NONE) {
+		ipc_port_request_t ipr, table;
+
+		assert(ip_active(port));
+	
+		table = port->ip_requests;
+		assert(table != IPR_NULL);
+
+		ipr = &table[index];
+		assert(ipr->ipr_name == name);
+
+		if (IPR_SOR_SPREQ(ipr->ipr_soright)) {
+			ipr->ipr_soright = IPR_SOR_MAKE(ipr->ipr_soright, IPR_SOR_SPARM_MASK);
+			port->ip_sprequests = TRUE;
+		}
+	}
+}
+
+/*
+ *	Routine:	ipc_port_request_type
+ *	Purpose:
+ *		Determine the type(s) of port requests enabled for a name.
+ *	Conditions:
+ *		The port must be locked or inactive (to avoid table growth).
+ *		The index must not be IE_REQ_NONE and for the name in question.
+ */
+mach_port_type_t
+ipc_port_request_type(
+	ipc_port_t			port,
+	__assert_only mach_port_name_t	name,
+	ipc_port_request_index_t	index)
+{
+	ipc_port_request_t ipr, table;
+	mach_port_type_t type = 0;
+
+	table = port->ip_requests;
+	assert (table != IPR_NULL);
+
+	assert(index != IE_REQ_NONE);
+	ipr = &table[index];
+	assert(ipr->ipr_name == name);
+
+	if (IP_VALID(IPR_SOR_PORT(ipr->ipr_soright))) {
+		type |= MACH_PORT_TYPE_DNREQUEST;
+
+		if (IPR_SOR_SPREQ(ipr->ipr_soright)) {
+			type |= MACH_PORT_TYPE_SPREQUEST;
+
+			if (!IPR_SOR_SPARMED(ipr->ipr_soright)) {
+				type |= MACH_PORT_TYPE_SPREQUEST_DELAYED;
+			} else {
+				assert(port->ip_sprequests == TRUE);
+			}
+		}
+	}
+	return type;
+}
+
+/*
+ *	Routine:	ipc_port_request_cancel
+ *	Purpose:
+ *		Cancel a dead-name/send-possible request and return the send-once right.
+ *	Conditions:
+ *		The port must be locked and active.
+ *		The index must not be IPR_REQ_NONE and must correspond with name.
  */
 
 ipc_port_t
-ipc_port_dncancel(
-	ipc_port_t				port,
+ipc_port_request_cancel(
+	ipc_port_t			port,
 	__assert_only mach_port_name_t	name,
-	ipc_port_request_index_t		index)
+	ipc_port_request_index_t	index)
 {
 	ipc_port_request_t ipr, table;
-	ipc_port_t dnrequest;
+	ipc_port_t request = IP_NULL;
 
 	assert(ip_active(port));
-	assert(name != MACH_PORT_NULL);
-	assert(index != 0);
-
-	table = port->ip_dnrequests;
+	table = port->ip_requests;
 	assert(table != IPR_NULL);
 
+	assert (index != IE_REQ_NONE);
 	ipr = &table[index];
-	dnrequest = ipr->ipr_soright;
 	assert(ipr->ipr_name == name);
+	request = IPR_SOR_PORT(ipr->ipr_soright);
 
 	/* return ipr to the free list inside the table */
-
 	ipr->ipr_name = MACH_PORT_NULL;
 	ipr->ipr_next = table->ipr_next;
 	table->ipr_next = index;
 
-	return dnrequest;
+	return request;
 }
 
 /*
@@ -470,7 +552,7 @@ ipc_port_init(
 
 	port->ip_nsrequest = IP_NULL;
 	port->ip_pdrequest = IP_NULL;
-	port->ip_dnrequests = IPR_NULL;
+	port->ip_requests = IPR_NULL;
 
 	port->ip_pset_count = 0;
 	port->ip_premsg = IKM_NULL;
@@ -578,36 +660,104 @@ ipc_port_alloc_name(
 }
 
 /*
- * Generate dead name notifications.  Called from ipc_port_destroy.
- * Port is unlocked but still has reference(s);
- * dnrequests was taken from port while the port
- * was locked but the port now has port->ip_dnrequests set to IPR_NULL.
+ * 	Routine:	ipc_port_spnotify
+ *	Purpose:
+ *		Generate send-possible port notifications.
+ *	Conditions:
+ *		Nothing locked, reference held on port.
+ */
+void
+ipc_port_spnotify(
+	ipc_port_t	port)
+{
+	ipc_port_request_index_t index = 0;
+	ipc_table_elems_t size = 0;
+
+	/*
+	 * If the port has no send-possible request
+	 * armed, don't bother to lock the port.
+	 */
+	if (!port->ip_sprequests)
+		return;
+
+	ip_lock(port);
+	if (!port->ip_sprequests) {
+		ip_unlock(port);
+		return;
+	}
+	port->ip_sprequests = FALSE;
+
+ revalidate:
+	if (ip_active(port)) {
+		ipc_port_request_t requests;
+
+		/* table may change each time port unlocked (reload) */
+		requests = port->ip_requests;
+		assert(requests != IPR_NULL);
+
+		/*
+		 * no need to go beyond table size when first
+		 * we entered - those are future notifications.
+		 */
+		if (size == 0)
+			size = requests->ipr_size->its_size;
+
+		/* no need to backtrack either */
+		while (++index < size) {
+			ipc_port_request_t ipr = &requests[index];
+			mach_port_name_t name = ipr->ipr_name;
+			ipc_port_t soright = IPR_SOR_PORT(ipr->ipr_soright);
+			boolean_t armed = IPR_SOR_SPARMED(ipr->ipr_soright);
+
+			if (MACH_PORT_VALID(name) && armed && IP_VALID(soright)) {
+				/* claim send-once right - slot still inuse */
+				ipr->ipr_soright = IP_NULL;
+				ip_unlock(port);
+
+				ipc_notify_send_possible(soright, name);
+
+				ip_lock(port);
+				goto revalidate;
+			}
+		}
+	}
+	ip_unlock(port);
+}
+
+/*
+ * 	Routine:	ipc_port_dnnotify
+ *	Purpose:
+ *		Generate dead name notifications for
+ *		all outstanding dead-name and send-
+ *		possible requests.
+ *	Conditions:
+ *		Nothing locked.
+ *		Port must be inactive.
+ *		Reference held on port.
  */
 void
 ipc_port_dnnotify(
-	__unused ipc_port_t	port,
-	ipc_port_request_t	dnrequests)
+	ipc_port_t	port)
 {
-	ipc_table_size_t	its = dnrequests->ipr_size;
-	ipc_table_elems_t	size = its->its_size;
-	ipc_port_request_index_t index;
+	ipc_port_request_t requests = port->ip_requests;
 
-	for (index = 1; index < size; index++) {
-		ipc_port_request_t	ipr = &dnrequests[index];
-		mach_port_name_t	name = ipr->ipr_name;
-		ipc_port_t		soright;
+	assert(!ip_active(port));
+	if (requests != IPR_NULL) {
+		ipc_table_size_t its = requests->ipr_size;
+		ipc_table_elems_t size = its->its_size;
+		ipc_port_request_index_t index;
+		for (index = 1; index < size; index++) {
+			ipc_port_request_t ipr = &requests[index];
+			mach_port_name_t name = ipr->ipr_name;
+			ipc_port_t soright = IPR_SOR_PORT(ipr->ipr_soright);
 
-		if (name == MACH_PORT_NULL)
-			continue;
-
-		soright = ipr->ipr_soright;
-		assert(soright != IP_NULL);
-
-		ipc_notify_dead_name(soright, name);
+			if (MACH_PORT_VALID(name) && IP_VALID(soright)) {
+				ipc_notify_dead_name(soright, name);
+			}
+		}
 	}
-
-	it_dnrequests_free(its, dnrequests);
 }
+
 
 /*
  *	Routine:	ipc_port_destroy
@@ -629,7 +779,6 @@ ipc_port_destroy(
 	ipc_port_t pdrequest, nsrequest;
 	ipc_mqueue_t mqueue;
 	ipc_kmsg_t kmsg;
-	ipc_port_request_t dnrequests;
 
 	assert(ip_active(port));
 	/* port->ip_receiver_name is garbage */
@@ -659,10 +808,6 @@ ipc_port_destroy(
 	port->ip_object.io_bits &= ~IO_BITS_ACTIVE;
 	port->ip_timestamp = ipc_port_timestamp();
 
-	/* save for later */
-	dnrequests = port->ip_dnrequests;
-	port->ip_dnrequests = IPR_NULL;
-
 	/*
 	 * If the port has a preallocated message buffer and that buffer
 	 * is not inuse, free it.  If it has an inuse one, then the kmsg
@@ -679,7 +824,6 @@ ipc_port_destroy(
 	ip_unlock(port);
 
 	/* throw away no-senders request */
-
 	nsrequest = port->ip_nsrequest;
 	if (nsrequest != IP_NULL)
 		ipc_notify_send_once(nsrequest); /* consumes ref */
@@ -689,9 +833,7 @@ ipc_port_destroy(
 	ipc_mqueue_destroy(mqueue);
 
 	/* generate dead-name notifications */
-	if (dnrequests != IPR_NULL) {
-		ipc_port_dnnotify(port, dnrequests);
-	}
+	ipc_port_dnnotify(port);
 
 	ipc_kobject_destroy(port);
 
@@ -1001,7 +1143,7 @@ ipc_port_copyout_send(
 /*
  *	Routine:	ipc_port_release_send
  *	Purpose:
- *		Release a (valid) naked send right.
+ *		Release a naked send right.
  *		Consumes a ref for the port.
  *	Conditions:
  *		Nothing locked.
@@ -1014,7 +1156,8 @@ ipc_port_release_send(
 	ipc_port_t nsrequest = IP_NULL;
 	mach_port_mscount_t mscount;
 
-	assert(IP_VALID(port));
+	if (!IP_VALID(port))
+		return;
 
 	ip_lock(port);
 	ip_release(port);
@@ -1049,7 +1192,8 @@ ipc_port_t
 ipc_port_make_sonce(
 	ipc_port_t	port)
 {
-	assert(IP_VALID(port));
+	if (!IP_VALID(port))
+		return port;
 
 	ip_lock(port);
 	assert(ip_active(port));
@@ -1078,7 +1222,8 @@ void
 ipc_port_release_sonce(
 	ipc_port_t	port)
 {
-	assert(IP_VALID(port));
+	if (!IP_VALID(port))
+		return;
 
 	ip_lock(port);
 
@@ -1111,7 +1256,8 @@ ipc_port_release_receive(
 {
 	ipc_port_t dest;
 
-	assert(IP_VALID(port));
+	if (!IP_VALID(port))
+		return;
 
 	ip_lock(port);
 	assert(ip_active(port));
@@ -1200,6 +1346,37 @@ ipc_port_dealloc_special(
 	ipc_port_destroy(port);
 }
 
+/*
+ *	Routine:	ipc_port_finalize
+ *	Purpose:
+ *		Called on last reference deallocate to
+ *		free any remaining data associated with the
+ *		port.
+ *	Conditions:
+ *		Nothing locked.
+ */
+void
+ipc_port_finalize(
+	ipc_port_t		port)
+{
+	ipc_port_request_t requests = port->ip_requests;
+
+	assert(!ip_active(port));
+	if (requests != IPR_NULL) {
+		ipc_table_size_t its = requests->ipr_size;
+		it_requests_free(its, requests);
+		port->ip_requests = IPR_NULL;
+	}
+	
+#if	MACH_ASSERT
+	ipc_port_track_dealloc(port);
+#endif	/* MACH_ASSERT */
+
+#if CONFIG_MACF_MACH
+	/* Port label should have been initialized after creation. */
+	mac_port_label_destroy(&port->ip_label);
+#endif	  
+}
 
 #if	MACH_ASSERT
 #include <kern/machine.h>
@@ -1314,6 +1491,7 @@ ipc_port_track_dealloc(
 }
 #endif
 
+
 #endif	/* MACH_ASSERT */
 
 
@@ -1396,7 +1574,7 @@ ipc_port_print(
 
 	iprintf("nsrequest=0x%x", port->ip_nsrequest);
 	printf(", pdrequest=0x%x", port->ip_pdrequest);
-	printf(", dnrequests=0x%x\n", port->ip_dnrequests);
+	printf(", requests=0x%x\n", port->ip_requests);
 
 	iprintf("pset_count=0x%x", port->ip_pset_count);
 	printf(", seqno=%d", port->ip_messages.imq_seqno);

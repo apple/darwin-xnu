@@ -1203,7 +1203,7 @@ esp_auth(m0, skip, length, sav, sum)
 			break;
 		}
 	}
-	(*algo->result)(&s, (caddr_t) sumbuf);
+	(*algo->result)(&s, (caddr_t) sumbuf, sizeof(sumbuf));
 	bcopy(sumbuf, sum, siz);	/*XXX*/
 	KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 6,0,0,0,0);
 	return 0;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008, 2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -30,6 +30,11 @@
 #include <ipc/ipc_port.h>
 #include <kern/ipc_kobject.h>
 #include <kern/ipc_misc.h>
+
+#include <mach/mach_port.h>
+#include <mach/vm_map.h>
+#include <vm/vm_map.h>
+#include <vm/vm_kern.h>
 
 extern void fileport_releasefg(struct fileglob *);
 
@@ -140,6 +145,96 @@ fileport_notify(mach_msg_header_t *msg)
 	} else {
 		ip_unlock(port);
 	}
+}
 
-	return;
+/*
+ * fileport_invoke
+ *
+ * Description: Invoke a function with the fileglob underlying the fileport.
+ *		Returns the error code related to the fileglob lookup.
+ *
+ * Parameters:	task		The target task
+ *		action		The function to invoke with the fileglob
+ *		arg		Anonymous pointer to caller state
+ *		rval		The value returned from calling 'action'
+ */
+kern_return_t
+fileport_invoke(task_t task, mach_port_name_t name,
+	int (*action)(mach_port_name_t, struct fileglob *, void *),
+	void *arg, int *rval)
+{
+	kern_return_t kr;
+	ipc_port_t fileport;
+	struct fileglob *fg;
+
+	kr = ipc_object_copyin(task->itk_space, name,
+	    MACH_MSG_TYPE_COPY_SEND, (ipc_object_t *)&fileport);
+	if (kr != KERN_SUCCESS)
+		return (kr);
+
+	if ((fg = fileport_port_to_fileglob(fileport)) != NULL)
+		*rval = (*action)(name, fg, arg);
+	else
+		kr = KERN_FAILURE;
+	ipc_port_release_send(fileport);
+	return (kr);
+}
+
+/*
+ * fileport_walk
+ *
+ * Description: Invoke the action function on every fileport in the task.
+ *
+ *		This could be more efficient if we refactored mach_port_names()
+ *		so that (a) it didn't compute the type information unless asked
+ *		and (b) it could be asked to -not- unwire/copyout the memory
+ *		and (c) if we could ask for port names by kobject type. Not
+ *		clear that it's worth all that complexity, though.
+ *
+ * Parameters: 	task		The target task
+ *		action		The function to invoke on each fileport
+ *		arg		Anonymous pointer to caller state.
+ */
+kern_return_t
+fileport_walk(task_t task,
+	int (*action)(mach_port_name_t, struct fileglob *, void *arg),
+	void *arg)
+{
+	mach_port_name_t *names;
+	mach_msg_type_number_t ncnt, tcnt;
+	vm_map_copy_t map_copy_names, map_copy_types;
+	vm_map_address_t map_names;
+	kern_return_t kr;
+	uint_t i;
+	int rval;
+
+	/*
+	 * mach_port_names returns the 'name' and 'types' in copied-in
+	 * form.  Discard 'types' immediately, then copyout 'names'
+	 * back into the kernel before walking the array.
+	 */
+
+	kr = mach_port_names(task->itk_space,
+	    (mach_port_name_t **)&map_copy_names, &ncnt,
+	    (mach_port_type_t **)&map_copy_types, &tcnt);
+	if (kr != KERN_SUCCESS)
+		return (kr);
+
+	vm_map_copy_discard(map_copy_types);
+
+	kr = vm_map_copyout(ipc_kernel_map, &map_names, map_copy_names);
+	if (kr != KERN_SUCCESS) {
+		vm_map_copy_discard(map_copy_names);
+		return (kr);
+	}
+	names = (mach_port_name_t *)(uintptr_t)map_names;
+
+	for (rval = 0, i = 0; i < ncnt; i++)
+		if (fileport_invoke(task, names[i], action, arg,
+		    &rval) == KERN_SUCCESS && -1 == rval)
+			break;		/* early termination clause */
+
+	vm_deallocate(ipc_kernel_map,
+	    (vm_address_t)names, ncnt * sizeof (*names));
+	return (KERN_SUCCESS);
 }

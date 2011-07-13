@@ -32,25 +32,31 @@
 #include <IOKit/IOKitKeys.h>
 
 // properties found in the registry root
-#define kIOConsoleUsersKey                      "IOConsoleUsers"        /* value is OSArray */
+#define kIOConsoleLockedKey                     "IOConsoleLocked"               /* value is OSBoolean */
+#define kIOConsoleUsersKey                      "IOConsoleUsers"                /* value is OSArray */
 #define kIOMaximumMappedIOByteCountKey          "IOMaximumMappedIOByteCount"    /* value is OSNumber */
 
 // properties found in the console user dict
+#define kIOConsoleSessionAuditIDKey             "kCGSSessionAuditIDKey"        /* value is OSNumber */
 
-#define kIOConsoleSessionIDKey                  "kCGSSessionIDKey"        /* value is OSNumber */
-
-#define kIOConsoleSessionUserNameKey            "kCGSSessionUserNameKey"    /* value is OSString */
-#define kIOConsoleSessionUIDKey                 "kCGSSessionUserIDKey"        /* value is OSNumber */
-#define kIOConsoleSessionConsoleSetKey          "kCGSSessionConsoleSetKey"    /* value is OSNumber */
-#define kIOConsoleSessionOnConsoleKey           "kCGSSessionOnConsoleKey"    /* value is OSBoolean */
+#define kIOConsoleSessionUserNameKey            "kCGSSessionUserNameKey"       /* value is OSString */
+#define kIOConsoleSessionUIDKey                 "kCGSSessionUserIDKey"         /* value is OSNumber */
+#define kIOConsoleSessionConsoleSetKey          "kCGSSessionConsoleSetKey"     /* value is OSNumber */
+#define kIOConsoleSessionOnConsoleKey           "kCGSSessionOnConsoleKey"      /* value is OSBoolean */
 #define kIOConsoleSessionSecureInputPIDKey      "kCGSSessionSecureInputPID"    /* value is OSNumber */
+#define kIOConsoleSessionScreenLockedTimeKey    "CGSSessionScreenLockedTime"   /* value is OSNumber, secs - 1970 */
 
 // IOResources property
-#define kIOConsoleUsersSeedKey                  "IOConsoleUsersSeed"        /* value is OSNumber */
+#define kIOConsoleUsersSeedKey                  "IOConsoleUsersSeed"           /* value is OSNumber */
+
+// interest type
+#define kIOConsoleSecurityInterest		"IOConsoleSecurityInterest"
+
 
 // private keys for clientHasPrivilege
 #define kIOClientPrivilegeConsoleUser           "console"
 #define kIOClientPrivilegeSecureConsoleProcess  "secureprocess"
+#define kIOClientPrivilegeConsoleSession        "consolesession"
 
 // clientHasPrivilege security token for kIOClientPrivilegeSecureConsoleProcess
 typedef struct _IOUCProcessToken {

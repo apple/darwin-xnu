@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -255,9 +255,9 @@ db_i386_reg_value(
 		}
 	    }
 	    if (dp == 0) {
-		if (!thr_act || thr_act->machine.pcb == 0)
+		if (!thr_act)
 		    db_error("no pcb\n");
-		dp = (unsigned int *)((unsigned int)(thr_act->machine.pcb->iss) + 
+		dp = (unsigned int *)((unsigned int)(thr_act->machine.iss) + 
 			     ((unsigned int)vp->valuep - (unsigned int)&ddb_regs));
 	    }
 	}
@@ -409,8 +409,8 @@ db_nextframe(
 		break;
 
 	case SYSCALL:
-		if (thr_act != THREAD_NULL && thr_act->machine.pcb) {
-			iss32 = (x86_saved_state32_t *)thr_act->machine.pcb->iss;
+		if (thr_act != THREAD_NULL) {
+			iss32 = (x86_saved_state32_t *)thr_act->machine.iss;
 
 			*ip = (db_addr_t)(iss32->eip);
 			*fp = (struct i386_frame *)(iss32->ebp);
@@ -548,10 +548,6 @@ next_thread:
 	        frame = (struct i386_frame *)ddb_regs.ebp;
 	        callpc = (db_addr_t)ddb_regs.eip;
 	    } else {
-		if (th->machine.pcb == 0) {
-		    db_printf("thread has no pcb\n");
-		    return;
-		}
 		if (!th) {
 		    db_printf("thread has no shuttle\n");
 
@@ -565,7 +561,7 @@ next_thread:
 							DB_STGY_PROC, task);
 		    db_printf("\n");
 
-		    iss32 = (x86_saved_state32_t *)th->machine.pcb->iss;
+		    iss32 = (x86_saved_state32_t *)th->machine.iss;
 
 			frame = (struct i386_frame *) (iss32->ebp);
 			callpc = (db_addr_t) (iss32->eip);
@@ -586,7 +582,7 @@ next_thread:
 			     * which is not the top_most one in the RPC chain:
 			     * use the activation's pcb.
 			     */
-		            iss32 = (x86_saved_state32_t *)th->machine.pcb->iss;
+		            iss32 = (x86_saved_state32_t *)th->machine.iss;
 
 				    frame = (struct i386_frame *) (iss32->ebp);
 				    callpc = (db_addr_t) (iss32->eip);

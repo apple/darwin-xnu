@@ -227,7 +227,7 @@ done:
 lck_mtx_t cpu_lock;
 lck_mtx_t mod_lock;
 
-cpu_t *cpu_list;
+dtrace_cpu_t *cpu_list;
 cpu_core_t *cpu_core; /* XXX TLB lockdown? */
 
 /*
@@ -267,40 +267,37 @@ PRIV_POLICY_ONLY(void *cr, int priv, int boolean)
 	return kauth_cred_issuser(cr); /* XXX TODO: HAS_PRIVILEGE(cr, priv); */
 }
 
+/* XXX Get around const poisoning using structure assigns */
 gid_t
-crgetgid(const cred_t *cr) { return cr->cr_groups[0]; }
+crgetgid(const cred_t *cr) { cred_t copy_cr = *cr; return kauth_cred_getgid(&copy_cr); }
 
 uid_t
-crgetuid(const cred_t *cr) { return cr->cr_uid; }
+crgetuid(const cred_t *cr) { cred_t copy_cr = *cr; return kauth_cred_getuid(&copy_cr); }
 
 /*
  * "cyclic"
  */
 
 /* osfmk/kern/timer_call.h */
-typedef void            *call_entry_param_t;
-typedef void            (*call_entry_func_t)(
-								call_entry_param_t      param0,
-								call_entry_param_t      param1);
-
-typedef struct call_entry {
-	queue_chain_t       q_link;
-	call_entry_func_t   func;
-	call_entry_param_t  param0;
-	call_entry_param_t  param1;
-	uint64_t            deadline;
-	enum {
-		IDLE,
-		PENDING,
-		DELAYED }         state;
-} call_entry_data_t;
-
-
-typedef struct call_entry   *timer_call_t;
 typedef void                *timer_call_param_t;
 typedef void                (*timer_call_func_t)(
 	timer_call_param_t      param0,
 	timer_call_param_t      param1);
+
+typedef struct timer_call {
+	queue_chain_t       q_link;
+	queue_t             queue;
+	timer_call_func_t   func;
+	timer_call_param_t  param0;
+	timer_call_param_t  param1;
+	decl_simple_lock_data(,lock);
+	uint64_t            deadline;
+	uint64_t            soft_deadline;
+	uint32_t            flags;
+	boolean_t	    async_dequeue;
+} timer_call_data_t;
+
+typedef struct timer_call   *timer_call_t;
 
 extern void
 timer_call_setup(
@@ -312,7 +309,13 @@ extern boolean_t
 timer_call_enter1(
 	timer_call_t            call,
 	timer_call_param_t      param1,
-	uint64_t                deadline);
+	uint64_t                deadline,
+	uint32_t		flags);
+
+#ifndef TIMER_CALL_CRITICAL
+#define TIMER_CALL_CRITICAL 0x1
+#define TIMER_CALL_LOCAL    0x2
+#endif /* TIMER_CALL_CRITICAL */
 
 extern boolean_t
 timer_call_cancel(
@@ -322,7 +325,7 @@ typedef struct wrap_timer_call {
 	cyc_handler_t hdlr;
 	cyc_time_t when;
 	uint64_t deadline;
-	struct call_entry call;
+	struct timer_call call;
 } wrap_timer_call_t;
 
 #define WAKEUP_REAPER 0x7FFFFFFFFFFFFFFFLL
@@ -337,7 +340,7 @@ _timer_call_apply_cyclic( void *ignore, void *vTChdl )
 	(*(wrapTC->hdlr.cyh_func))( wrapTC->hdlr.cyh_arg );
 
 	clock_deadline_for_periodic_event( wrapTC->when.cyt_interval, mach_absolute_time(), &(wrapTC->deadline) );
-	timer_call_enter1( &(wrapTC->call), (void *)wrapTC, wrapTC->deadline );
+	timer_call_enter1( &(wrapTC->call), (void *)wrapTC, wrapTC->deadline, TIMER_CALL_CRITICAL | TIMER_CALL_LOCAL );
 
 	/* Did timer_call_remove_cyclic request a wakeup call when this timer call was re-armed? */
 	if (wrapTC->when.cyt_interval == WAKEUP_REAPER)
@@ -359,7 +362,7 @@ timer_call_add_cyclic(wrap_timer_call_t *wrapTC, cyc_handler_t *handler, cyc_tim
 	wrapTC->deadline = now;
 
 	clock_deadline_for_periodic_event( wrapTC->when.cyt_interval, now, &(wrapTC->deadline) );
-	timer_call_enter1( &(wrapTC->call), (void *)wrapTC, wrapTC->deadline );
+	timer_call_enter1( &(wrapTC->call), (void *)wrapTC, wrapTC->deadline, TIMER_CALL_CRITICAL | TIMER_CALL_LOCAL );
 
 	return (cyclic_id_t)wrapTC;
 }

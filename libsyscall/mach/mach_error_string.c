@@ -173,7 +173,6 @@ mach_error_string(mach_error_t err)
 	boolean_t diag;
 
 	return mach_error_string_int( err, &diag );
-
 }
 
 /* vim: set ts=4: */

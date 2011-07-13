@@ -63,8 +63,9 @@
 #include <mach/machine/vm_types.h>
 
 /*
- *	Remember to update the mig type definitions
- *	in mach_debug_types.defs when adding/removing fields.
+ *	Legacy definitions for host_zone_info().  This interface, and
+ *	these definitions have been deprecated in favor of the new
+ *	mach_zone_info() inteface and types below.
  */
 
 #define ZONE_NAME_MAX_LEN		80
@@ -90,4 +91,46 @@ typedef struct zone_info {
 
 typedef zone_info_t *zone_info_array_t;
 
+
+/*
+ *	Remember to update the mig type definitions
+ *	in mach_debug_types.defs when adding/removing fields.
+ */
+
+#define MACH_ZONE_NAME_MAX_LEN		80
+
+typedef struct mach_zone_name {
+	char		mzn_name[ZONE_NAME_MAX_LEN];
+} mach_zone_name_t;
+
+typedef mach_zone_name_t *mach_zone_name_array_t;
+
+typedef struct mach_zone_info_data {
+	uint64_t	mzi_count;	/* count of elements in use */
+	uint64_t	mzi_cur_size;	/* current memory utilization */
+	uint64_t	mzi_max_size;	/* how large can this zone grow */
+        uint64_t	mzi_elem_size;	/* size of an element */
+	uint64_t	mzi_alloc_size;	/* size used for more memory */
+	uint64_t	mzi_sum_size;	/* sum of all allocs (life of zone) */
+	uint64_t	mzi_exhaustible;	/* merely return if empty? */
+	uint64_t	mzi_collectable;	/* garbage collect elements? */
+} mach_zone_info_t;
+
+typedef mach_zone_info_t *mach_zone_info_array_t;
+
+typedef struct task_zone_info_data {
+	uint64_t	tzi_count;	/* count of elements in use */
+	uint64_t	tzi_cur_size;	/* current memory utilization */
+	uint64_t	tzi_max_size;	/* how large can this zone grow */
+        uint64_t	tzi_elem_size;	/* size of an element */
+	uint64_t	tzi_alloc_size;	/* size used for more memory */
+	uint64_t	tzi_sum_size;	/* sum of all allocs (life of zone) */
+	uint64_t	tzi_exhaustible;	/* merely return if empty? */
+	uint64_t	tzi_collectable;	/* garbage collect elements? */
+	uint64_t	tzi_caller_acct;	/* charged to caller (or kernel) */
+	uint64_t	tzi_task_alloc;	/* sum of all allocs by this task */
+	uint64_t	tzi_task_free;	/* sum of all frees by this task */
+} task_zone_info_t;
+
+typedef task_zone_info_t *task_zone_info_array_t;
 #endif	/* _MACH_DEBUG_ZONE_INFO_H_ */

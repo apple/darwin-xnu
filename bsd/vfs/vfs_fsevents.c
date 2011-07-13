@@ -206,6 +206,7 @@ fsevents_internal_init(void)
     // ever grow beyond what we initially filled it with
     zone_change(event_zone, Z_EXHAUST, TRUE);
     zone_change(event_zone, Z_COLLECT, FALSE);
+    zone_change(event_zone, Z_CALLERACCT, FALSE);
 }
 
 static void
@@ -1821,6 +1822,11 @@ fmod_watch(fs_event_watcher *watcher, struct uio *uio)
 
 	if (watcher->event_list[kfse->type] == FSE_REPORT && watcher_cares_about_dev(watcher, kfse->dev)) {
 
+	    if (last_event_ptr == kfse) {
+		last_event_ptr = NULL;
+		last_event_type = -1;
+		last_coalesced_time = 0;
+	    }
 	    error = copy_out_kfse(watcher, kfse, uio);
 	    if (error != 0) {
 		// if an event won't fit or encountered an error while
@@ -2667,18 +2673,24 @@ get_fse_info(struct vnode *vp, fse_info *fse, __unused vfs_context_t ctx)
 	memset(fse, 0, sizeof(fse_info));
 	return -1;
     }
-    
-    fse->ino  = (ino64_t)va.va_fileid;
-    fse->dev  = (dev_t)va.va_fsid;
-    fse->mode = (int32_t)vnode_vttoif(vnode_vtype(vp)) | va.va_mode;
-    fse->uid  = (uid_t)va.va_uid;
-    fse->gid  = (gid_t)va.va_gid;
+
+    return vnode_get_fse_info_from_vap(vp, fse, &va);
+}
+
+int
+vnode_get_fse_info_from_vap(vnode_t vp, fse_info *fse, struct vnode_attr *vap) 
+{
+    fse->ino  = (ino64_t)vap->va_fileid;
+    fse->dev  = (dev_t)vap->va_fsid;
+    fse->mode = (int32_t)vnode_vttoif(vnode_vtype(vp)) | vap->va_mode;
+    fse->uid  = (uid_t)vap->va_uid;
+    fse->gid  = (gid_t)vap->va_gid;
     if (vp->v_flag & VISHARDLINK) {
 	fse->mode |= FSE_MODE_HLINK;
 	if (vp->v_type == VDIR) {
-	    fse->nlink = (uint64_t)va.va_dirlinkcount;
+	    fse->nlink = (uint64_t)vap->va_dirlinkcount;
 	} else {
-	    fse->nlink = (uint64_t)va.va_nlink;
+	    fse->nlink = (uint64_t)vap->va_nlink;
 	}
     }    
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -104,13 +104,16 @@ extern int in6_pcbbind(struct inpcb *, struct sockaddr *, struct proc *);
 extern int in6_pcbconnect(struct inpcb *, struct sockaddr *, struct proc *);
 extern void in6_pcbdetach(struct inpcb *);
 extern void in6_pcbdisconnect(struct inpcb *);
-extern int in6_pcbladdr(struct inpcb *, struct sockaddr *, struct in6_addr *);
+extern int in6_pcbladdr(struct inpcb *, struct sockaddr *,
+    struct in6_addr *, unsigned int *);
 extern struct inpcb *in6_pcblookup_local(struct inpcbinfo *, struct in6_addr *,
     u_int, int);
 extern struct inpcb *in6_pcblookup_hash(struct inpcbinfo *, struct in6_addr *,
     u_int, struct in6_addr *, u_int, int, struct ifnet *);
+extern int in6_pcblookup_hash_exists(struct inpcbinfo *, struct in6_addr *,
+    u_int, struct in6_addr *, u_int, int, uid_t *, gid_t *, struct ifnet *);
 extern void in6_pcbnotify(struct inpcbinfo *, struct sockaddr *, u_int,
-    const struct sockaddr *, u_int, int, void (*)(struct inpcb *, int));
+    const struct sockaddr *, u_int, int, void *, void (*)(struct inpcb *, int));
 extern void in6_rtchange(struct inpcb *, int);
 extern struct sockaddr *in6_sockaddr(in_port_t port, struct in6_addr *addr_p);
 extern struct sockaddr *in6_v4mapsin6_sockaddr(in_port_t port,
@@ -119,9 +122,6 @@ extern int in6_setpeeraddr(struct socket *so, struct sockaddr **nam);
 extern int in6_setsockaddr(struct socket *so, struct sockaddr **nam);
 extern int in6_mapped_sockaddr(struct socket *so, struct sockaddr **nam);
 extern int in6_mapped_peeraddr(struct socket *so, struct sockaddr **nam);
-extern struct in6_addr *in6_selectsrc(struct sockaddr_in6 *,
-    struct ip6_pktopts *, struct ip6_moptions *, struct route_in6 *,
-    struct in6_addr *, struct in6_addr *, int *);
 extern int in6_selecthlim(struct in6pcb *, struct ifnet *);
 extern int in6_pcbsetport(struct in6_addr *, struct inpcb *,
     struct proc *, int);

@@ -30,9 +30,7 @@
 #ifndef _MACHINE_IO_MAP_ENTRIES_H_
 #define _MACHINE_IO_MAP_ENTRIES_H_
 
-#if defined (__ppc__)
-#include "ppc/io_map_entries.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/io_map_entries.h"
 #else
 #error architecture not supported

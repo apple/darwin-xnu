@@ -31,11 +31,11 @@
 
 struct auditinfo_addr;
 
-ipc_port_t audit_session_mksend(struct auditinfo_addr *aia_p,
-    ipc_port_t *sessionport);
+ipc_port_t audit_session_mksend(struct auditinfo_addr *, ipc_port_t *);
 struct auditinfo_addr *audit_session_porttoaia(ipc_port_t);
-void audit_session_portaiadestroy(struct auditinfo_addr *);
+void audit_session_portdestroy(ipc_port_t *);
 void audit_session_nosenders(mach_msg_header_t *);
-
+void audit_session_aiaref(struct auditinfo_addr *);
+void audit_session_aiaunref(struct auditinfo_addr *);
 #endif /* _KERN_AUDIT_SESSIONPORT_H_ */
 #endif /* KERNEL_PRIVATE */

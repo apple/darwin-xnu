@@ -51,7 +51,7 @@
  *	Waits (Meaningful only for lock types that can block): Incremented
  *	if a lock acquisition attempt proceeded to block.
  *
- *	Direct Waits (currently implemented only on i386): For adaptive
+ *	Direct Waits (currently implemented only on i386/x86_64): For adaptive
  *	locks, such as mutexes, incremented if the owner of the mutex
  *	wasn't active on another processor at the time of the lock
  *	attempt. This indicates that no adaptive spin occurred.
@@ -329,7 +329,7 @@ print_all_spin(lockgroup_info_t *lockgroup)
 void
 print_mutex_hdr(void)
 {
-#if defined(__i386__)
+#if defined(__i386__) || defined(__x86_64__)
 	printf("Mutex lock attempts  Misses      Waits Direct Waits Name\n");
 #else
         printf("     mutex locks           misses            waits   name\n");
@@ -343,7 +343,7 @@ print_mutex(int requested, lockgroup_info_t *lockgroup)
 
 	if (curptr->lock_mtx_cnt != 0 && curptr->lock_mtx_util_cnt != 0) {
 		printf("%16lld ", curptr->lock_mtx_util_cnt);
-#if defined(__i386__)
+#if defined(__i386__) || defined(__x86_64__)
 		printf("%10lld %10lld %10lld   ", curptr->lock_mtx_miss_cnt,  curptr->lock_mtx_wait_cnt, curptr->lock_mtx_held_cnt);
 #else
 		printf("%16lld %16lld   ", curptr->lock_mtx_miss_cnt,  curptr->lock_mtx_wait_cnt);

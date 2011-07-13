@@ -114,6 +114,7 @@ long	numcache;			/* number of cache entries allocated */
 int 	desiredNodes;
 int 	desiredNegNodes;
 int	ncs_negtotal;
+int	nc_disabled = 0;
 TAILQ_HEAD(, namecache) nchead;		/* chain of all name cache entries */
 TAILQ_HEAD(, namecache) neghead;	/* chain of only negative cache entries */
 
@@ -309,8 +310,22 @@ again:
 		 */
 		if (((vp->v_parent != NULLVP) && !fixhardlink) ||
 		    (flags & BUILDPATH_NO_FS_ENTER)) {
-			vp = vp->v_parent;
+			/*
+			 * In this if () block we are not allowed to enter the filesystem
+			 * to conclusively get the most accurate parent identifier.
+			 * As a result, if 'vp' does not identify '/' and it
+			 * does not have a valid v_parent, then error out
+			 * and disallow further path construction
+			 */
+			if ((vp->v_parent == NULLVP) && (rootvnode != vp)) {
+				/* Only '/' is allowed to have a NULL parent pointer */
+				ret = EINVAL;
 
+				/* The code below will exit early if 'tvp = vp' == NULL */
+			}
+
+			vp = vp->v_parent;
+			
 			/*
 			 * if the vnode we have in hand isn't a directory and it
 			 * has a v_parent, then we started with the resource fork
@@ -808,10 +823,17 @@ void vnode_uncache_authorized_action(vnode_t vp, kauth_action_t action)
 }
 
 
-boolean_t vnode_cache_is_authorized(vnode_t vp, vfs_context_t ctx, kauth_action_t action)
+extern int bootarg_vnode_cache_defeat;	/* default = 0, from bsd_init.c */
+
+boolean_t
+vnode_cache_is_authorized(vnode_t vp, vfs_context_t ctx, kauth_action_t action)
 {
 	kauth_cred_t	ucred;
 	boolean_t	retval = FALSE;
+
+	/* Boot argument to defeat rights caching */
+	if (bootarg_vnode_cache_defeat)
+		return FALSE;
 
 	if ( (vp->v_mount->mnt_kern_flag & (MNTK_AUTH_OPAQUE | MNTK_AUTH_CACHE_TTL)) ) {
 	        /*
@@ -937,7 +959,7 @@ boolean_t vnode_cache_is_stale(vnode_t vp)
  */
 int 
 cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp, 
-		vfs_context_t ctx, int *trailing_slash, int *dp_authorized, vnode_t last_dp)
+		vfs_context_t ctx, int *dp_authorized, vnode_t last_dp)
 {
 	char		*cp;		/* pointer into pathname argument */
 	int		vid;
@@ -951,8 +973,12 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
 	unsigned int	hash;
 	int		error = 0;
 
+#if CONFIG_TRIGGERS
+	vnode_t 	trigger_vp;
+#endif /* CONFIG_TRIGGERS */
+
 	ucred = vfs_context_ucred(ctx);
-	*trailing_slash = 0;
+	ndp->ni_flag &= ~(NAMEI_TRAILINGSLASH);
 
 	NAME_CACHE_LOCK_SHARED();
 
@@ -999,7 +1025,7 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
 			ndp->ni_pathlen--;
 
 			if (*cp == '\0') {
-			        *trailing_slash = 1;
+			        ndp->ni_flag |= NAMEI_TRAILINGSLASH;
 				*ndp->ni_next = '\0';
 			}
 		}
@@ -1073,10 +1099,12 @@ skiprsrcfork:
 		*dp_authorized = 1;
 
 		if ( (cnp->cn_flags & (ISLASTCN | ISDOTDOT)) ) {
-		        if (cnp->cn_nameiop != LOOKUP)
-			        break;
-		        if (cnp->cn_flags & (LOCKPARENT | NOCACHE))
-			        break;
+			if (cnp->cn_nameiop != LOOKUP)
+				break;
+			if (cnp->cn_flags & LOCKPARENT) 
+				break;
+			if (cnp->cn_flags & NOCACHE)
+				break;
 			if (cnp->cn_flags & ISDOTDOT) {
 				/*
 				 * Force directory hardlinks to go to
@@ -1126,6 +1154,7 @@ skiprsrcfork:
 			        vp = NULL;
 		        break;
 		}
+
 		if ( (mp = vp->v_mountedhere) && ((cnp->cn_flags & NOCROSSMOUNT) == 0)) {
 
 		        if (mp->mnt_realrootvp == NULLVP || mp->mnt_generation != mount_generation ||
@@ -1133,6 +1162,20 @@ skiprsrcfork:
 			        break;
 			vp = mp->mnt_realrootvp;
 		}
+
+#if CONFIG_TRIGGERS
+		/*
+		 * After traversing all mountpoints stacked here, if we have a
+		 * trigger in hand, resolve it.  Note that we don't need to 
+		 * leave the fast path if the mount has already happened.
+		 */
+		if ((vp->v_resolve != NULL) && 
+				(vp->v_resolve->vr_resolve_func != NULL)) {
+			break;
+		} 
+#endif /* CONFIG_TRIGGERS */
+
+
 		dp = vp;
 		vp = NULLVP;
 
@@ -1184,7 +1227,7 @@ need_dp:
 				 * immediately w/o waiting... it always succeeds
 				 */
 				vnode_get(dp);
-			} else if ( (vnode_getwithvid(dp, vid)) ) {
+			} else if ( (vnode_getwithvid_drainok(dp, vid)) ) {
 				/*
 				 * failure indicates the vnode
 				 * changed identity or is being
@@ -1202,7 +1245,7 @@ need_dp:
 		}
 	}
 	if (vp != NULLVP) {
-	        if ( (vnode_getwithvid(vp, vvid)) ) {
+	        if ( (vnode_getwithvid_drainok(vp, vvid)) ) {
 		        vp = NULLVP;
 
 		        /*
@@ -1219,8 +1262,23 @@ need_dp:
 			}
 		}
 	}
+
 	ndp->ni_dvp = dp;
 	ndp->ni_vp  = vp;
+
+#if CONFIG_TRIGGERS
+	trigger_vp = vp ? vp : dp;
+	if ((error == 0) && (trigger_vp != NULLVP) && vnode_isdir(trigger_vp)) {
+		error = vnode_trigger_resolve(trigger_vp, ndp, ctx);
+		if (error) {
+			if (vp)
+				vnode_put(vp);
+			if (dp) 
+				vnode_put(dp);
+			goto errorout;
+		}
+	} 
+#endif /* CONFIG_TRIGGERS */
 
 errorout:
 	/* 
@@ -1249,6 +1307,10 @@ cache_lookup_locked(vnode_t dvp, struct componentname *cnp)
 	long namelen = cnp->cn_namelen;
 	unsigned int hashval = (cnp->cn_hash & NCHASHMASK);
 	
+	if (nc_disabled) {
+		return NULL;
+	}
+
 	ncpp = NCHHASH(dvp, cnp->cn_hash);
 	LIST_FOREACH(ncp, ncpp, nc_hash) {
 	        if ((ncp->nc_dvp == dvp) && (ncp->nc_hashval == hashval)) {
@@ -1327,6 +1389,10 @@ cache_lookup(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp)
 	if (cnp->cn_hash == 0)
 		cnp->cn_hash = hash_string(cnp->cn_nameptr, cnp->cn_namelen);
 	hashval = (cnp->cn_hash & NCHASHMASK);
+
+	if (nc_disabled) {
+		return 0;
+	}
 
 	NAME_CACHE_LOCK_SHARED();
 
@@ -1484,6 +1550,9 @@ cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cn
 {
         struct namecache *ncp, *negp;
 	struct nchashhead *ncpp;
+
+	if (nc_disabled) 
+		return;
 
 	/*
 	 * if the entry is for -ve caching vp is null
@@ -1799,7 +1868,10 @@ cache_purge(vnode_t vp)
         struct namecache *ncp;
 	kauth_cred_t tcred = NULL;
 
-	if ((LIST_FIRST(&vp->v_nclinks) == NULL) && (LIST_FIRST(&vp->v_ncchildren) == NULL) && (vp->v_cred == NOCRED))
+	if ((LIST_FIRST(&vp->v_nclinks) == NULL) && 
+			(LIST_FIRST(&vp->v_ncchildren) == NULL) && 
+			(vp->v_cred == NOCRED) &&
+			(vp->v_parent == NULLVP))
 	        return;
 
 	NAME_CACHE_LOCK();
@@ -1973,9 +2045,6 @@ add_name_internal(const char *name, uint32_t len, u_int hashval, boolean_t need_
         uint32_t	  lock_index;
 	char              *ptr;
     
-	if (hashval == 0) {
-		hashval = hash_string(name, 0);
-	}
 	/*
 	 * if the length already accounts for the null-byte, then
 	 * subtract one so later on we don't index past the end
@@ -1984,6 +2053,10 @@ add_name_internal(const char *name, uint32_t len, u_int hashval, boolean_t need_
 	if (len > 0 && name[len-1] == '\0') {
 		len--;
 	}
+	if (hashval == 0) {
+		hashval = hash_string(name, len);
+	}
+
 	/*
 	 * take this lock 'shared' to keep the hash stable
 	 * if someone else decides to grow the pool they

@@ -5,4 +5,7 @@ iokit/Kernel/x86_64/IOSharedLock.s                            standard
 iokit/Kernel/x86_64/IOAsmSupport.s                            standard
 
 # Power Domains
-iokit/Kernel/IOPMrootDomain.cpp    				optional iokitcpp
+iokit/Kernel/IOPMrootDomain.cpp    			    optional iokitcpp
+
+# Key Store helper
+iokit/Kernel/i386/IOKeyStoreHelper.cpp			    standard

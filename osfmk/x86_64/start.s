@@ -84,7 +84,7 @@ EXT(low_intstack):
 	.globl  EXT(gIOHibernateRestoreStack)
 EXT(gIOHibernateRestoreStack):
 
-	.set	., .+INTSTACK_SIZE
+	.space	INTSTACK_SIZE
 
 	.globl	EXT(low_eintstack)
 EXT(low_eintstack:)
@@ -101,7 +101,7 @@ EXT(gIOHibernateRestoreStackEnd):
 	.align	12
 	.globl	EXT(df_task_stack)
 EXT(df_task_stack):
-	.set	., .+INTSTACK_SIZE
+	.space	INTSTACK_SIZE
 	.globl	EXT(df_task_stack_end)
 EXT(df_task_stack_end):
 
@@ -112,36 +112,9 @@ EXT(df_task_stack_end):
 	.align	12
 	.globl	EXT(mc_task_stack)
 EXT(mc_task_stack):
-	.set	., .+INTSTACK_SIZE
+	.space	INTSTACK_SIZE
 	.globl	EXT(mc_task_stack_end)
 EXT(mc_task_stack_end):
-
-
-#if	MACH_KDB
-/*
- * Kernel debugger stack for each processor.
- */
-	.align	12
-	.globl	EXT(db_stack_store)
-EXT(db_stack_store):
-	.set	., .+(INTSTACK_SIZE*MAX_CPUS)
-
-/*
- * Stack for last-ditch debugger task for each processor.
- */
-	.align	12
-	.globl	EXT(db_task_stack_store)
-EXT(db_task_stack_store):
-	.set	., .+(INTSTACK_SIZE*MAX_CPUS)
-
-/*
- * per-processor kernel debugger stacks
- */
-	.align  ALIGN
-	.globl  EXT(kgdb_stack_store)
-EXT(kgdb_stack_store):
-	.set    ., .+(INTSTACK_SIZE*MAX_CPUS)
-#endif	/* MACH_KDB */
 
 /*
  * BSP CPU start here.
@@ -176,7 +149,6 @@ EXT(kgdb_stack_store):
  * This proves that Little Endian is superior to Big Endian.
  */
 	
-
 	.text
 	.align	ALIGN
 	.globl	EXT(_start)
@@ -222,20 +194,20 @@ LEXT(_pstart)
 	movl	$EXT(protected_mode_gdtr), %eax
 	lgdtl	(%eax)
 
-	mov	$(KERNEL_DS), %ax
-	mov	%ax, %ds
-	mov	%ax, %es
-	mov	%ax, %ss
-	xor	%eax, %eax
-	mov	%ax, %fs
-	mov %ax, %gs
-
 /* the following code is shared by the master CPU and all slave CPUs */
 L_pstart_common:
 	/*
 	 * switch to 64 bit mode
 	 */
 	SWITCH_TO_64BIT_MODE
+
+	/* Flush data segment selectors */
+	xor	%eax, %eax
+	mov	%ax, %ss
+	mov	%ax, %ds
+	mov	%ax, %es
+	mov	%ax, %fs
+	mov	%ax, %gs
 
 	/* %edi = boot_args_start */
 	
@@ -441,8 +413,12 @@ ENTRY(acpi_sleep_cpu)
 	movw	%gs, saved_gs(%rip)
 	movw	%ss, saved_ss(%rip)	
 
-	/* save the 64bit kernel gs base */
+	/* save the 64bit user and kernel gs base */
+	/* note: user's curently swapped into kernel base MSR */
 	mov	$MSR_IA32_KERNEL_GS_BASE, %rcx
+	rdmsr
+	movl	%eax, saved_ugs_base(%rip)
+	movl	%edx, saved_ugs_base+4(%rip)
 	swapgs
 	rdmsr
 	movl	%eax, saved_kgs_base(%rip)
@@ -519,8 +495,9 @@ Lwake_64:
 	/* protected mode, paging enabled */
 	POSTCODE(ACPI_WAKE_PAGED_ENTRY)
 
-	/* switch to kernel data segment */
-	movw	$(KERNEL_DS), %ax
+	/* load null segment selectors */
+	xor	%eax, %eax
+	movw	%ax, %ss
 	movw	%ax, %ds
 
 	/* restore local and interrupt descriptor tables */
@@ -529,20 +506,20 @@ Lwake_64:
 
 	/* restore segment registers */
 	movw	saved_es(%rip), %es
+	movw	saved_fs(%rip), %fs
+	movw	saved_gs(%rip), %gs
 	movw	saved_ss(%rip), %ss
 
-	/* Program FS/GS with a NULL selector, precautionary */
-	xor	%rax, %rax
-	movw	%ax, %fs
-	movw	%ax, %gs
-	/* restore the 64bit kernel gs base */
+	/* restore the 64bit kernel and user gs base */
 	mov	$MSR_IA32_KERNEL_GS_BASE, %rcx
 	movl	saved_kgs_base(%rip),   %eax 
 	movl	saved_kgs_base+4(%rip), %edx 
 	wrmsr
 	swapgs
+	movl	saved_ugs_base(%rip),   %eax 
+	movl	saved_ugs_base+4(%rip), %edx 
+	wrmsr
 
-	//K64todo verify this TSS stuff
 	/*
 	 * Restore task register. Before doing this, clear the busy flag
 	 * in the TSS descriptor set by the CPU.
@@ -663,4 +640,5 @@ saved_idt:	.word 0
 saved_ldt:	.word 0
 saved_tr:	.word 0
 saved_kgs_base:	.quad 0
+saved_ugs_base:	.quad 0
 

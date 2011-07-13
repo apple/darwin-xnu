@@ -1,11 +1,10 @@
 ######################################################################
 #
-#  RELEASE	= [ intel mach libkerncpp networking config_dtrace crypto zlib config_kxld ]
+#  RELEASE	= [ intel mach libkerncpp hibernation networking config_dtrace crypto zlib config_kxld iokitstats ]
 #  PROFILE	= [ RELEASE profile ]
 #  DEBUG	= [ RELEASE debug mach_kdb ]
 #
-#
-#  EMBEDDED	= [ intel mach libkerncpp networking crypto zlib ]
+#  EMBEDDED	= [ intel mach libkerncpp hibernation networking crypto zlib ]
 #  DEVELOPMENT	= [ EMBEDDED ]
 #
 ######################################################################

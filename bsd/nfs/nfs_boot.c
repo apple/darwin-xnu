@@ -177,13 +177,7 @@ static int get_file_handle(struct nfs_dlmount *ndmntp);
 #define IP_CH(ip)	((u_char *)ip)
 #define IP_LIST(ip)	IP_CH(ip)[0],IP_CH(ip)[1],IP_CH(ip)[2],IP_CH(ip)[3]
 
-extern boolean_t
-netboot_iaddr(struct in_addr * iaddr_p);
-
-extern boolean_t
-netboot_rootpath(struct in_addr * server_ip,
-		 char * name, int name_len, 
-		 char * path, int path_len);
+#include <sys/netboot.h>
 
 /*
  * Called with an empty nfs_diskless struct to be filled in.

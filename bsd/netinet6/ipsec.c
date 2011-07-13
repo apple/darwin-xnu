@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -143,7 +143,6 @@ int ipsec_debug = 0;
 #define DBG_FNC_IPSEC_OUT		NETDBG_CODE(DBG_NETIPSEC, (3 << 8))
 
 extern lck_mtx_t *sadb_mutex;
-extern lck_mtx_t *ip6_mutex;
 
 struct ipsecstat ipsecstat;
 int ip4_ah_cleartos = 1;
@@ -169,33 +168,33 @@ SYSCTL_DECL(_net_inet6_ipsec6);
 #endif
 /* net.inet.ipsec */
 SYSCTL_STRUCT(_net_inet_ipsec, IPSECCTL_STATS,
-	stats, CTLFLAG_RD,	&ipsecstat,	ipsecstat, "");
-SYSCTL_PROC(_net_inet_ipsec, IPSECCTL_DEF_POLICY, def_policy, CTLTYPE_INT|CTLFLAG_RW,
+	stats, CTLFLAG_RD | CTLFLAG_LOCKED,	&ipsecstat,	ipsecstat, "");
+SYSCTL_PROC(_net_inet_ipsec, IPSECCTL_DEF_POLICY, def_policy, CTLTYPE_INT|CTLFLAG_RW | CTLFLAG_LOCKED,
 	&ip4_def_policy.policy,	0, &sysctl_def_policy, "I", "");
 SYSCTL_INT(_net_inet_ipsec, IPSECCTL_DEF_ESP_TRANSLEV, esp_trans_deflev,
-	CTLFLAG_RW, &ip4_esp_trans_deflev,	0, "");
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ip4_esp_trans_deflev,	0, "");
 SYSCTL_INT(_net_inet_ipsec, IPSECCTL_DEF_ESP_NETLEV, esp_net_deflev,
-	CTLFLAG_RW, &ip4_esp_net_deflev,	0, "");
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ip4_esp_net_deflev,	0, "");
 SYSCTL_INT(_net_inet_ipsec, IPSECCTL_DEF_AH_TRANSLEV, ah_trans_deflev,
-	CTLFLAG_RW, &ip4_ah_trans_deflev,	0, "");
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ip4_ah_trans_deflev,	0, "");
 SYSCTL_INT(_net_inet_ipsec, IPSECCTL_DEF_AH_NETLEV, ah_net_deflev,
-	CTLFLAG_RW, &ip4_ah_net_deflev,	0, "");
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ip4_ah_net_deflev,	0, "");
 SYSCTL_INT(_net_inet_ipsec, IPSECCTL_AH_CLEARTOS,
-	ah_cleartos, CTLFLAG_RW,	&ip4_ah_cleartos,	0, "");
+	ah_cleartos, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip4_ah_cleartos,	0, "");
 SYSCTL_INT(_net_inet_ipsec, IPSECCTL_AH_OFFSETMASK,
-	ah_offsetmask, CTLFLAG_RW,	&ip4_ah_offsetmask,	0, "");
+	ah_offsetmask, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip4_ah_offsetmask,	0, "");
 SYSCTL_INT(_net_inet_ipsec, IPSECCTL_DFBIT,
-	dfbit, CTLFLAG_RW,	&ip4_ipsec_dfbit,	0, "");
+	dfbit, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip4_ipsec_dfbit,	0, "");
 SYSCTL_INT(_net_inet_ipsec, IPSECCTL_ECN,
-	ecn, CTLFLAG_RW,	&ip4_ipsec_ecn,	0, "");
+	ecn, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip4_ipsec_ecn,	0, "");
 SYSCTL_INT(_net_inet_ipsec, IPSECCTL_DEBUG,
-	debug, CTLFLAG_RW,	&ipsec_debug,	0, "");
+	debug, CTLFLAG_RW | CTLFLAG_LOCKED,	&ipsec_debug,	0, "");
 SYSCTL_INT(_net_inet_ipsec, IPSECCTL_ESP_RANDPAD,
-	esp_randpad, CTLFLAG_RW,	&ip4_esp_randpad,	0, "");
+	esp_randpad, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip4_esp_randpad,	0, "");
 
 /* for performance, we bypass ipsec until a security policy is set */
 int ipsec_bypass = 1;
-SYSCTL_INT(_net_inet_ipsec, OID_AUTO, bypass, CTLFLAG_RD, &ipsec_bypass,0, "");
+SYSCTL_INT(_net_inet_ipsec, OID_AUTO, bypass, CTLFLAG_RD | CTLFLAG_LOCKED, &ipsec_bypass,0, "");
 
 /*
  * NAT Traversal requires a UDP port for encapsulation,
@@ -204,7 +203,7 @@ SYSCTL_INT(_net_inet_ipsec, OID_AUTO, bypass, CTLFLAG_RD, &ipsec_bypass,0, "");
  * for nat traversal.
  */
 SYSCTL_INT(_net_inet_ipsec, OID_AUTO, esp_port,
-		   CTLFLAG_RW, &esp_udp_encap_port, 0, "");
+		   CTLFLAG_RW | CTLFLAG_LOCKED, &esp_udp_encap_port, 0, "");
 
 #if INET6
 struct ipsecstat ipsec6stat;
@@ -218,23 +217,23 @@ int ip6_esp_randpad = -1;
 
 /* net.inet6.ipsec6 */
 SYSCTL_STRUCT(_net_inet6_ipsec6, IPSECCTL_STATS,
-	stats, CTLFLAG_RD, &ipsec6stat, ipsecstat, "");
+	stats, CTLFLAG_RD | CTLFLAG_LOCKED, &ipsec6stat, ipsecstat, "");
 SYSCTL_INT(_net_inet6_ipsec6, IPSECCTL_DEF_POLICY,
-	def_policy, CTLFLAG_RW,	&ip6_def_policy.policy,	0, "");
+	def_policy, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_def_policy.policy,	0, "");
 SYSCTL_INT(_net_inet6_ipsec6, IPSECCTL_DEF_ESP_TRANSLEV, esp_trans_deflev,
-	CTLFLAG_RW, &ip6_esp_trans_deflev,	0, "");
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_esp_trans_deflev,	0, "");
 SYSCTL_INT(_net_inet6_ipsec6, IPSECCTL_DEF_ESP_NETLEV, esp_net_deflev,
-	CTLFLAG_RW, &ip6_esp_net_deflev,	0, "");
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_esp_net_deflev,	0, "");
 SYSCTL_INT(_net_inet6_ipsec6, IPSECCTL_DEF_AH_TRANSLEV, ah_trans_deflev,
-	CTLFLAG_RW, &ip6_ah_trans_deflev,	0, "");
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_ah_trans_deflev,	0, "");
 SYSCTL_INT(_net_inet6_ipsec6, IPSECCTL_DEF_AH_NETLEV, ah_net_deflev,
-	CTLFLAG_RW, &ip6_ah_net_deflev,	0, "");
+	CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_ah_net_deflev,	0, "");
 SYSCTL_INT(_net_inet6_ipsec6, IPSECCTL_ECN,
-	ecn, CTLFLAG_RW,	&ip6_ipsec_ecn,	0, "");
+	ecn, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_ipsec_ecn,	0, "");
 SYSCTL_INT(_net_inet6_ipsec6, IPSECCTL_DEBUG,
-	debug, CTLFLAG_RW,	&ipsec_debug,	0, "");
+	debug, CTLFLAG_RW | CTLFLAG_LOCKED,	&ipsec_debug,	0, "");
 SYSCTL_INT(_net_inet6_ipsec6, IPSECCTL_ESP_RANDPAD,
-	esp_randpad, CTLFLAG_RW,	&ip6_esp_randpad,	0, "");
+	esp_randpad, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_esp_randpad,	0, "");
 #endif /* INET6 */
 
 static int ipsec_setspidx_mbuf(struct secpolicyindex *, u_int, u_int,
@@ -1717,7 +1716,7 @@ ipsec_get_reqlevel(isr)
 		? (ipsec_debug						      \
 			? log(LOG_INFO, "fixed system default level " #lev ":%d->%d\n",\
 				(lev), IPSEC_LEVEL_REQUIRE)		      \
-			: 0),						      \
+			: (void)0),									  \
 			(lev) = IPSEC_LEVEL_REQUIRE,			      \
 			(lev)						      \
 		: (lev))
@@ -2961,13 +2960,19 @@ ipsec4_output(
 			}
 			ip = mtod(state->m, struct ip *);
 
+			// grab sadb_mutex, before updating sah's route cache
+			lck_mtx_lock(sadb_mutex);
 			state->ro = &sav->sah->sa_route;
 			state->dst = (struct sockaddr *)&state->ro->ro_dst;
 			dst4 = (struct sockaddr_in *)state->dst;
+			if (state->ro->ro_rt != NULL) {
+				RT_LOCK(state->ro->ro_rt);
+			}
 			if (state->ro->ro_rt != NULL &&
 			    (state->ro->ro_rt->generation_id != route_generation ||
 			    !(state->ro->ro_rt->rt_flags & RTF_UP) ||
 			    dst4->sin_addr.s_addr != ip->ip_dst.s_addr)) {
+				RT_UNLOCK(state->ro->ro_rt);
 				rtfree(state->ro->ro_rt);
 				state->ro->ro_rt = NULL;
 			}
@@ -2976,11 +2981,14 @@ ipsec4_output(
 				dst4->sin_len = sizeof(*dst4);
 				dst4->sin_addr = ip->ip_dst;
 				rtalloc(state->ro);
-			}
-			if (state->ro->ro_rt == 0) {
-				OSAddAtomic(1, &ipstat.ips_noroute);
-				error = EHOSTUNREACH;
-				goto bad;
+				if (state->ro->ro_rt == 0) {
+					OSAddAtomic(1, &ipstat.ips_noroute);
+					error = EHOSTUNREACH;
+					// release sadb_mutex, after updating sah's route cache
+					lck_mtx_unlock(sadb_mutex);
+					goto bad;
+				}
+				RT_LOCK(state->ro->ro_rt);
 			}
 
 			/*
@@ -2996,6 +3004,9 @@ ipsec4_output(
 				state->dst = (struct sockaddr *)state->ro->ro_rt->rt_gateway;
 				dst4 = (struct sockaddr_in *)state->dst;
 			}
+			RT_UNLOCK(state->ro->ro_rt);
+			// release sadb_mutex, after updating sah's route cache
+			lck_mtx_unlock(sadb_mutex);
 		}
 
 		state->m = ipsec4_splithdr(state->m);
@@ -3384,7 +3395,8 @@ ipsec6_output_tunnel(
 				struct ip *ip;
 				struct sockaddr_in* dst4;
 				struct route *ro4 = NULL;
-				struct ip_out_args ipoa = { IFSCOPE_NONE };
+				struct route  ro4_copy;
+				struct ip_out_args ipoa = { IFSCOPE_NONE, 0 };
 
 				/*
 				 * must be last isr because encapsulated IPv6 packet
@@ -3406,12 +3418,18 @@ ipsec6_output_tunnel(
 				/* Now we have an IPv4 packet */
 				ip = mtod(state->m, struct ip *);
 
+				// grab sadb_mutex, to update sah's route cache and get a local copy of it
+				lck_mtx_lock(sadb_mutex);
 				ro4 = &sav->sah->sa_route;
 				dst4 = (struct sockaddr_in *)&ro4->ro_dst;
+				if (ro4->ro_rt) {
+					RT_LOCK(ro4->ro_rt);
+				}
 				if (ro4->ro_rt != NULL &&
 				    (ro4->ro_rt->generation_id != route_generation ||
 				    !(ro4->ro_rt->rt_flags & RTF_UP) ||
 				    dst4->sin_addr.s_addr != ip->ip_dst.s_addr)) {
+					RT_UNLOCK(ro4->ro_rt);
 					rtfree(ro4->ro_rt);
 					ro4->ro_rt = NULL;
 				}
@@ -3419,10 +3437,18 @@ ipsec6_output_tunnel(
 					dst4->sin_family = AF_INET;
 					dst4->sin_len = sizeof(*dst4);
 					dst4->sin_addr = ip->ip_dst;
+				} else {
+					RT_UNLOCK(ro4->ro_rt);
 				}
+				route_copyout(&ro4_copy, ro4, sizeof(ro4_copy));
+				// release sadb_mutex, after updating sah's route cache and getting a local copy
+				lck_mtx_unlock(sadb_mutex);
 				state->m = ipsec4_splithdr(state->m);
 				if (!state->m) {
 					error = ENOMEM;
+					if (ro4_copy.ro_rt != NULL) {
+						rtfree(ro4_copy.ro_rt);
+					}
 					goto bad;
 				}
 				switch (isr->saidx.proto) {
@@ -3430,6 +3456,9 @@ ipsec6_output_tunnel(
 #if IPSEC_ESP
 					if ((error = esp4_output(state->m, sav)) != 0) {
 						state->m = NULL;
+						if (ro4_copy.ro_rt != NULL) {
+							rtfree(ro4_copy.ro_rt);
+						}
 						goto bad;
 					}
 					break;
@@ -3438,17 +3467,26 @@ ipsec6_output_tunnel(
 					m_freem(state->m);
 					state->m = NULL;
 					error = EINVAL;
+					if (ro4_copy.ro_rt != NULL) {
+						rtfree(ro4_copy.ro_rt);
+					}
 					goto bad;
 #endif
 				case IPPROTO_AH:
 					if ((error = ah4_output(state->m, sav)) != 0) {
 						state->m = NULL;
+						if (ro4_copy.ro_rt != NULL) {
+							rtfree(ro4_copy.ro_rt);
+						}
 						goto bad;
 					}
 					break;
 				case IPPROTO_IPCOMP:
 					if ((error = ipcomp4_output(state->m, sav)) != 0) {
 						state->m = NULL;
+						if (ro4_copy.ro_rt != NULL) {
+							rtfree(ro4_copy.ro_rt);
+						}
 						goto bad;
 					}
 					break;
@@ -3459,17 +3497,27 @@ ipsec6_output_tunnel(
 					m_freem(state->m);
 					state->m = NULL;
 					error = EINVAL;
+					if (ro4_copy.ro_rt != NULL) {
+						rtfree(ro4_copy.ro_rt);
+					}
 					goto bad;
 				}
 		
 				if (state->m == 0) {
 					error = ENOMEM;
+					if (ro4_copy.ro_rt != NULL) {
+						rtfree(ro4_copy.ro_rt);
+					}
 					goto bad;
 				}
 				ip = mtod(state->m, struct ip *);
 				ip->ip_len = ntohs(ip->ip_len);  /* flip len field before calling ip_output */
-				error = ip_output(state->m, NULL, ro4, IP_OUTARGS, NULL, &ipoa);
+				error = ip_output(state->m, NULL, &ro4_copy, IP_OUTARGS, NULL, &ipoa);
 				state->m = NULL;
+				// grab sadb_mutex, to synchronize the sah's route cache with the local copy
+				lck_mtx_lock(sadb_mutex);
+				route_copyin(&ro4_copy, ro4, sizeof(ro4_copy));
+				lck_mtx_unlock(sadb_mutex);
 				if (error != 0)
 					goto bad;
 				goto done;
@@ -3481,14 +3529,20 @@ ipsec6_output_tunnel(
 				error = EAFNOSUPPORT;
 				goto bad;
 			}
-			
+
+			// grab sadb_mutex, before updating sah's route cache
+			lck_mtx_lock(sadb_mutex);
 			state->ro = &sav->sah->sa_route;
 			state->dst = (struct sockaddr *)&state->ro->ro_dst;
 			dst6 = (struct sockaddr_in6 *)state->dst;
+			if (state->ro->ro_rt) {
+				RT_LOCK(state->ro->ro_rt);
+			}
 			if (state->ro->ro_rt != NULL &&
 			    (state->ro->ro_rt->generation_id != route_generation ||
 			    !(state->ro->ro_rt->rt_flags & RTF_UP) ||
 			    !IN6_ARE_ADDR_EQUAL(&dst6->sin6_addr, &ip6->ip6_dst))) {
+				RT_UNLOCK(state->ro->ro_rt);
 				rtfree(state->ro->ro_rt);
 				state->ro->ro_rt = NULL;
 			}
@@ -3498,11 +3552,16 @@ ipsec6_output_tunnel(
 				dst6->sin6_len = sizeof(*dst6);
 				dst6->sin6_addr = ip6->ip6_dst;
 				rtalloc(state->ro);
+				if (state->ro->ro_rt) {
+					RT_LOCK(state->ro->ro_rt);
+				}
 			}
 			if (state->ro->ro_rt == 0) {
 				ip6stat.ip6s_noroute++;
 				IPSEC_STAT_INCREMENT(ipsec6stat.out_noroute);
 				error = EHOSTUNREACH;
+				// release sadb_mutex, after updating sah's route cache
+				lck_mtx_unlock(sadb_mutex);
 				goto bad;
 			}
 
@@ -3519,6 +3578,9 @@ ipsec6_output_tunnel(
 				state->dst = (struct sockaddr *)state->ro->ro_rt->rt_gateway;
 				dst6 = (struct sockaddr_in6 *)state->dst;
 			}
+			RT_UNLOCK(state->ro->ro_rt);
+			// release sadb_mutex, after updating sah's route cache
+			lck_mtx_unlock(sadb_mutex);
 		}
 
 		state->m = ipsec6_splithdr(state->m);
@@ -3982,8 +4044,8 @@ ipsec_addaux(
 		struct ipsec_tag	*itag;
 		
 		/* Allocate a tag */
-		tag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPSEC,
-						  IPSEC_TAG_SIZE, M_DONTWAIT);
+		tag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_IPSEC,
+						  IPSEC_TAG_SIZE, M_DONTWAIT, m);
 		
 		if (tag) {
 			itag = (struct ipsec_tag*)(tag + 1);
@@ -4128,7 +4190,8 @@ ipsec_send_natt_keepalive(
 	struct udphdr *uh;
 	struct ip *ip;
 	int error;
-	struct ip_out_args ipoa = { IFSCOPE_NONE };
+	struct ip_out_args ipoa = { IFSCOPE_NONE, 0 };
+	struct route ro;
 
 	lck_mtx_assert(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	
@@ -4168,8 +4231,23 @@ ipsec_send_natt_keepalive(
 	uh->uh_ulen = htons(1 + sizeof(struct udphdr));
 	uh->uh_sum = 0;
 	*(u_int8_t*)((char*)m_mtod(m) + sizeof(struct ip) + sizeof(struct udphdr)) = 0xFF;
-	
-	error = ip_output(m, NULL, &sav->sah->sa_route, IP_OUTARGS | IP_NOIPSEC, NULL, &ipoa);
+
+	// grab sadb_mutex, to get a local copy of sah's route cache
+	lck_mtx_lock(sadb_mutex);
+	if (sav->sah->sa_route.ro_rt != NULL &&
+	    rt_key(sav->sah->sa_route.ro_rt)->sa_family != AF_INET) {
+		rtfree(sav->sah->sa_route.ro_rt);
+		sav->sah->sa_route.ro_rt = NULL;
+	}
+	route_copyout(&ro, &sav->sah->sa_route, sizeof(ro));
+	lck_mtx_unlock(sadb_mutex);
+
+	error = ip_output(m, NULL, &ro, IP_OUTARGS | IP_NOIPSEC, NULL, &ipoa);
+
+	// grab sadb_mutex, to synchronize the sah's route cache with the local copy
+	lck_mtx_lock(sadb_mutex);
+	route_copyin(&ro, &sav->sah->sa_route, sizeof(ro));
+	lck_mtx_unlock(sadb_mutex);
 	if (error == 0) {
 		sav->natt_last_activity = natt_now;
 		return TRUE;

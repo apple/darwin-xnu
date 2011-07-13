@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -93,9 +93,10 @@
 static int devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, vfs_context_t ctx);
 static int devfs_vfs_getattr(mount_t mp, struct vfs_attr *fsap, vfs_context_t ctx);
 
+#if !defined(SECURE_KERNEL)
 extern int setup_kmem;
 __private_extern__ void devfs_setup_kmem(void);
-
+#endif
 
 /*-
  * Called from the generic VFS startups.
@@ -114,9 +115,11 @@ devfs_init(__unused struct vfsconf *vfsp)
 		    UID_ROOT, GID_WHEEL, 0622, "console");
     devfs_make_node(makedev(2, 0), DEVFS_CHAR, 
 		    UID_ROOT, GID_WHEEL, 0666, "tty");
+#if !defined(SECURE_KERNEL)
     if (setup_kmem) {
     	devfs_setup_kmem();
     }
+#endif
     devfs_make_node(makedev(3, 2), DEVFS_CHAR, 
 		    UID_ROOT, GID_WHEEL, 0666, "null");
     devfs_make_node(makedev(3, 3), DEVFS_CHAR, 
@@ -131,6 +134,7 @@ devfs_init(__unused struct vfsconf *vfsp)
     return 0;
 }
 
+#if !defined(SECURE_KERNEL)
 __private_extern__ void
 devfs_setup_kmem(void)
 {
@@ -139,6 +143,7 @@ devfs_setup_kmem(void)
     	devfs_make_node(makedev(3, 1), DEVFS_CHAR, 
 		    UID_ROOT, GID_KMEM, 0640, "kmem");
 }
+#endif
 
 
 /*-
@@ -495,7 +500,7 @@ devfs_kernel_mount(char * mntname)
 	/*
 	 * Get vnode to be covered
 	 */
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
+	NDINIT(&nd, LOOKUP, OP_MOUNT, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
 	    CAST_USER_ADDR_T(mntname), ctx);
 	if ((error = namei(&nd))) {
 	    printf("devfs_kernel_mount: failed to find directory '%s', %d", 

@@ -46,15 +46,9 @@ enum purgeable_q_type {
 	PURGEABLE_Q_TYPE_MAX
 };
 
-#if (CONFIG_TOKEN_QUEUE_SMALL == 1)
-typedef uint16_t token_idx_t;
-typedef uint16_t token_cnt_t;
-#define TOKEN_COUNT_MAX UINT16_MAX
-#else
 typedef uint32_t token_idx_t;
 typedef uint32_t token_cnt_t;
 #define TOKEN_COUNT_MAX UINT32_MAX
-#endif
 
 #define NUM_VOLATILE_GROUPS 8
 struct purgeable_q {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2009 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -83,10 +83,6 @@ member function's parameter list.
 			       void *arg2, void *arg3);
 
 protected:
-/*!
-    @function checkForWork
-    @abstract Not used, $link IOEventSource::checkForWork(). */
-    virtual bool checkForWork();
 
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of the IOWorkLoop in the future.

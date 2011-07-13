@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -312,7 +312,7 @@ int
 pf_osfp_add(struct pf_osfp_ioctl *fpioc)
 {
 	struct pf_os_fingerprint *fp, fpadd;
-	struct pf_osfp_entry *entry;
+	struct pf_osfp_entry *entry, *uentry;
 
 	memset(&fpadd, 0, sizeof (fpadd));
 	fpadd.fp_tcpopts = fpioc->fp_tcpopts;
@@ -323,6 +323,12 @@ pf_osfp_add(struct pf_osfp_ioctl *fpioc)
 	fpadd.fp_optcnt = fpioc->fp_optcnt;
 	fpadd.fp_wscale = fpioc->fp_wscale;
 	fpadd.fp_ttl = fpioc->fp_ttl;
+
+	uentry = &fpioc->fp_os;
+	uentry->fp_entry.sle_next = NULL;
+	uentry->fp_class_nm[sizeof (uentry->fp_class_nm) - 1] = '\0';
+	uentry->fp_version_nm[sizeof (uentry->fp_version_nm) - 1] = '\0';
+	uentry->fp_subtype_nm[sizeof (uentry->fp_subtype_nm) - 1] = '\0';
 
 	DPFPRINTF("adding osfp %s %s %s = %s%d:%d:%d:%s%d:0x%llx %d "
 	    "(TS=%s,M=%s%d,W=%s%d) %x\n",
@@ -527,6 +533,7 @@ pf_osfp_get(struct pf_osfp_ioctl *fpioc)
 				fpioc->fp_getnum = num;
 				memcpy(&fpioc->fp_os, entry,
 				    sizeof (fpioc->fp_os));
+				fpioc->fp_os.fp_entry.sle_next = NULL;
 				return (0);
 			}
 		}

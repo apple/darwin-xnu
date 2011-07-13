@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -86,6 +86,7 @@
 #include <sys/kernel.h>
 #include <sys/uio_internal.h>
 #include <sys/kauth.h>
+#include <kern/task.h>
 
 #include <security/audit/audit.h>
 
@@ -191,6 +192,22 @@ socket(struct proc *p, struct socket_args *uap, int32_t *retval)
 	if (error) {
 		fp_free(p, fd, fp);
 	} else {
+		thread_t			thread;
+		struct uthread		*ut;
+		
+		thread = current_thread();
+		ut = get_bsdthread_info(thread);
+			
+		/* if this is a backgrounded thread then throttle all new sockets */
+#if !CONFIG_EMBEDDED
+		if (proc_get_selfthread_isbackground() != 0)
+#else /* !CONFIG_EMBEDDED */
+		if ( (ut->uu_flag & UT_BACKGROUND) != 0 ) 
+#endif /* !CONFIG_EMBEDDED */
+		{
+			so->so_traffic_mgt_flags |= TRAFFIC_MGT_SO_BACKGROUND;
+			so->so_background_thread = thread;
+		}
 		fp->f_data = (caddr_t)so;
 
 		proc_fdlock(p);
@@ -510,16 +527,12 @@ gotnoname:
 
 releasefd:
 	/*
-	 * If the socket has been marked as inactive by soacceptfilter(),
-	 * disallow further operations on it.  We explicitly call shutdown
-	 * on both data directions to ensure that SS_CANT{RCV,SEND}MORE
-	 * states are set for the socket.  This would also flush out data
-	 * hanging off the receive list of this socket.
+	 * If the socket has been marked as inactive by sosetdefunct(),
+	 * disallow further operations on it.
 	 */
 	if (so->so_flags & SOF_DEFUNCT) {
-		(void) soshutdownlock(so, SHUT_RD);
-		(void) soshutdownlock(so, SHUT_WR);
-		(void) sodisconnectlocked(so);
+		sodefunct(current_proc(), so,
+		    SHUTDOWN_SOCKET_LEVEL_DISCONNECT_INTERNAL);
 	}
 
 	if (dosocklock)
@@ -735,6 +748,9 @@ socketpair(struct proc *p, struct socketpair_args *uap,
 		}
 	}
 
+	if ((error = copyout(sv, uap->rsv, 2 * sizeof (int))) != 0)
+		goto free4;
+
 	proc_fdlock(p);
 	procfdtbl_releasefd(p, sv[0], NULL);
 	procfdtbl_releasefd(p, sv[1], NULL);
@@ -742,8 +758,7 @@ socketpair(struct proc *p, struct socketpair_args *uap,
 	fp_drop(p, sv[1], fp2, 1);
 	proc_fdunlock(p);
 
-	error = copyout((caddr_t)sv, uap->rsv, 2 * sizeof (int));
-	return (error);
+	return (0);
 free4:
 	fp_free(p, sv[1], fp2);
 free3:
@@ -1194,63 +1209,79 @@ recvit(struct proc *p, int s, struct user_msghdr *mp, uio_t uiop,
 		while (m && len > 0) {
 			unsigned int tocopy;
 			struct cmsghdr *cp = mtod(m, struct cmsghdr *);
-	
-			/* 
-			 * SCM_TIMESTAMP hack because  struct timeval has a 
-			 * different size for 32 bits and 64 bits processes
-			 */
-			if (cp->cmsg_level == SOL_SOCKET &&  cp->cmsg_type == SCM_TIMESTAMP) {
-				unsigned char tmp_buffer[CMSG_SPACE(sizeof(struct user64_timeval))];
-				struct cmsghdr *tmp_cp = (struct cmsghdr *)tmp_buffer;
-				int tmp_space;
-				struct timeval *tv = (struct timeval *)CMSG_DATA(cp);
+			int cp_size = CMSG_ALIGN(cp->cmsg_len);
+			int buflen = m->m_len;
+			
+			while (buflen > 0 && len > 0) {
 				
-				tmp_cp->cmsg_level = SOL_SOCKET;
-				tmp_cp->cmsg_type = SCM_TIMESTAMP;
-				
-				if (proc_is64bit(p)) {
-					struct user64_timeval *tv64 = (struct user64_timeval *)CMSG_DATA(tmp_cp);
-
-					tv64->tv_sec = tv->tv_sec;
-					tv64->tv_usec = tv->tv_usec;
-
-					tmp_cp->cmsg_len = CMSG_LEN(sizeof(struct user64_timeval));
-					tmp_space = CMSG_SPACE(sizeof(struct user64_timeval));
-				} else {
-					struct user32_timeval *tv32 = (struct user32_timeval *)CMSG_DATA(tmp_cp);
+				/* 
+				 SCM_TIMESTAMP hack because  struct timeval has a 
+				 * different size for 32 bits and 64 bits processes
+				 */
+				if (cp->cmsg_level == SOL_SOCKET &&  cp->cmsg_type == SCM_TIMESTAMP) {
+					unsigned char tmp_buffer[CMSG_SPACE(sizeof(struct user64_timeval))];
+					struct cmsghdr *tmp_cp = (struct cmsghdr *)tmp_buffer;
+					int tmp_space;
+					struct timeval *tv = (struct timeval *)CMSG_DATA(cp);
 					
-					tv32->tv_sec = tv->tv_sec;
-					tv32->tv_usec = tv->tv_usec;
-
-					tmp_cp->cmsg_len = CMSG_LEN(sizeof(struct user32_timeval));
-					tmp_space = CMSG_SPACE(sizeof(struct user32_timeval));
-				}
-				if (len >= tmp_space) {
-					tocopy = tmp_space;
+					tmp_cp->cmsg_level = SOL_SOCKET;
+					tmp_cp->cmsg_type = SCM_TIMESTAMP;
+					
+					if (proc_is64bit(p)) {
+						struct user64_timeval *tv64 = (struct user64_timeval *)CMSG_DATA(tmp_cp);
+						
+						tv64->tv_sec = tv->tv_sec;
+						tv64->tv_usec = tv->tv_usec;
+						
+						tmp_cp->cmsg_len = CMSG_LEN(sizeof(struct user64_timeval));
+						tmp_space = CMSG_SPACE(sizeof(struct user64_timeval));
+					} else {
+						struct user32_timeval *tv32 = (struct user32_timeval *)CMSG_DATA(tmp_cp);
+						
+						tv32->tv_sec = tv->tv_sec;
+						tv32->tv_usec = tv->tv_usec;
+						
+						tmp_cp->cmsg_len = CMSG_LEN(sizeof(struct user32_timeval));
+						tmp_space = CMSG_SPACE(sizeof(struct user32_timeval));
+					}
+					if (len >= tmp_space) {
+						tocopy = tmp_space;
+					} else {
+						mp->msg_flags |= MSG_CTRUNC;
+						tocopy = len;
+					}
+					error = copyout(tmp_buffer, ctlbuf, tocopy);
+					if (error)
+						goto out;
+					
 				} else {
-					mp->msg_flags |= MSG_CTRUNC;
-					tocopy = len;
+					
+					if (cp_size > buflen) {
+						panic("cp_size > buflen, something wrong with alignment!");
+					}
+					
+					if (len >= cp_size) {
+						tocopy = cp_size;
+					} else {
+						mp->msg_flags |= MSG_CTRUNC;
+						tocopy = len;
+					}
+					
+					error = copyout((caddr_t) cp, ctlbuf,
+									tocopy);
+					if (error)
+						goto out;
 				}
-				error = copyout(tmp_buffer, ctlbuf, tocopy);
-				if (error)
-					goto out;
-
-			} else {
-				if (len >= m->m_len) {
-					tocopy = m->m_len;
-				} else {
-					mp->msg_flags |= MSG_CTRUNC;
-					tocopy = len;
-				}
-	
-				error = copyout((caddr_t)mtod(m, caddr_t), ctlbuf,
-					tocopy);
-				if (error)
-					goto out;
+				
+				
+				ctlbuf += tocopy;
+				len -= tocopy;
+				
+				buflen -= cp_size;
+				cp = (struct cmsghdr *) ((unsigned char *) cp + cp_size);
+				cp_size = CMSG_ALIGN(cp->cmsg_len);
 			}
-
-			ctlbuf += tocopy;
-			len -= tocopy;
+			
 			m = m->m_next;
 		}
 		mp->msg_controllen = ctlbuf - mp->msg_control;
@@ -1265,7 +1296,6 @@ out1:
 	fp_drop(p, s, fp, 0);
 	return (error);
 }
-
 
 /*
  * Returns:	0			Success
@@ -1698,28 +1728,9 @@ getsockname(__unused struct proc *p, struct getsockname_args *uap,
 	socket_lock(so, 1);
 	error = (*so->so_proto->pr_usrreqs->pru_sockaddr)(so, &sa);
 	if (error == 0) {
-		struct socket_filter_entry *filter;
-		int	filtered = 0;
-		for (filter = so->so_filt; filter && error == 0;
-		    filter = filter->sfe_next_onsocket) {
-			if (filter->sfe_filter->sf_filter.sf_getsockname) {
-				if (!filtered) {
-					filtered = 1;
-					sflt_use(so);
-					socket_unlock(so, 0);
-				}
-				error = filter->sfe_filter->sf_filter.
-				    sf_getsockname(filter->sfe_cookie, so, &sa);
-			}
-		}
-
+		error = sflt_getsockname(so, &sa);
 		if (error == EJUSTRETURN)
 			error = 0;
-
-		if (filtered) {
-			socket_lock(so, 0);
-			sflt_unuse(so);
-		}
 	}
 	socket_unlock(so, 1);
 	if (error)
@@ -1802,28 +1813,9 @@ getpeername(__unused struct proc *p, struct getpeername_args *uap,
 	sa = 0;
 	error = (*so->so_proto->pr_usrreqs->pru_peeraddr)(so, &sa);
 	if (error == 0) {
-		struct socket_filter_entry *filter;
-		int	filtered = 0;
-		for (filter = so->so_filt; filter && error == 0;
-		    filter = filter->sfe_next_onsocket) {
-			if (filter->sfe_filter->sf_filter.sf_getpeername) {
-				if (!filtered) {
-					filtered = 1;
-					sflt_use(so);
-					socket_unlock(so, 0);
-				}
-				error = filter->sfe_filter->sf_filter.
-				    sf_getpeername(filter->sfe_cookie, so, &sa);
-			}
-		}
-
+		error = sflt_getpeername(so, &sa);
 		if (error == EJUSTRETURN)
 			error = 0;
-
-		if (filtered) {
-			socket_lock(so, 0);
-			sflt_unuse(so);
-		}
 	}
 	socket_unlock(so, 1);
 	if (error)
@@ -1983,7 +1975,7 @@ SYSCTL_DECL(_kern_ipc);
 
 #define	SFUIOBUFS 64
 static int sendfileuiobufs = SFUIOBUFS;
-SYSCTL_INT(_kern_ipc, OID_AUTO, sendfileuiobufs, CTLFLAG_RW, &sendfileuiobufs,
+SYSCTL_INT(_kern_ipc, OID_AUTO, sendfileuiobufs, CTLFLAG_RW | CTLFLAG_LOCKED, &sendfileuiobufs,
     0, "");
 
 /* Macros to compute the number of mbufs needed depending on cluster size */
@@ -2026,13 +2018,13 @@ alloc_sendpkt(int how, size_t pktlen, unsigned int *maxchunks,
 	 * use mbuf_allocpacket().  The logic below is similar to sosend().
 	 */
 	*m = NULL;
-	if (pktlen > NBPG && jumbocl) {
+	if (pktlen > MBIGCLBYTES && jumbocl) {
 		needed = MIN(SENDFILE_MAX_16K, HOWMANY_16K(pktlen));
 		*m = m_getpackets_internal(&needed, 1, how, 0, M16KCLBYTES);
 	}
 	if (*m == NULL) {
 		needed = MIN(SENDFILE_MAX_4K, HOWMANY_4K(pktlen));
-		*m = m_getpackets_internal(&needed, 1, how, 0, NBPG);
+		*m = m_getpackets_internal(&needed, 1, how, 0, MBIGCLBYTES);
 	}
 
 	/*
@@ -2043,7 +2035,7 @@ alloc_sendpkt(int how, size_t pktlen, unsigned int *maxchunks,
 	 */
 	if (*m == NULL) {
 		needed = 1;
-		*m = m_getpackets_internal(&needed, 1, M_WAIT, 1, NBPG);
+		*m = m_getpackets_internal(&needed, 1, M_WAIT, 1, MBIGCLBYTES);
 	}
 	if (*m == NULL)
 		panic("%s: blocking allocation returned NULL\n", __func__);
@@ -2295,7 +2287,7 @@ sendfile(struct proc *p, struct sendfile_args *uap, __unused int *retval)
 
 		if (xfsize != uio_resid(auio))
 			printf("sendfile: xfsize: %lld != uio_resid(auio): "
-			    "%lld\n", xfsize, uio_resid(auio));
+				"%lld\n", xfsize, (long long)uio_resid(auio));
 
 		KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE_READ | DBG_FUNC_START),
 		    uap->s, (unsigned int)((xfsize >> 32) & 0x0ffffffff),
@@ -2385,53 +2377,20 @@ retry_space:
 			}
 			goto retry_space;
 		}
+		
+		struct mbuf *control = NULL;
 		{
 			/*
 			 * Socket filter processing
 			 */
-			struct socket_filter_entry *filter;
-			int filtered = 0;
-			struct mbuf *control = NULL;
-			boolean_t recursive = (so->so_send_filt_thread != NULL);
 
-			error = 0;
-			for (filter = so->so_filt; filter && (error == 0);
-			    filter = filter->sfe_next_onsocket) {
-				if (filter->sfe_filter->sf_filter.sf_data_out) {
-					if (filtered == 0) {
-						filtered = 1;
-						so->so_send_filt_thread =
-						    current_thread();
-						sflt_use(so);
-						socket_unlock(so, 0);
-					}
-					error = filter->sfe_filter->sf_filter.
-					    sf_data_out(filter->sfe_cookie, so,
-					    NULL, &m0, &control, 0);
+			error = sflt_data_out(so, NULL, &m0, &control, 0);
+			if (error) {
+				if (error == EJUSTRETURN) {
+					error = 0;
+					continue;
 				}
-			}
-
-			if (filtered) {
-				/*
-				 * At this point, we've run at least one filter.
-				 * The socket is unlocked as is the socket
-				 * buffer.  Clear the recorded filter thread
-				 * only when we are outside of a filter's
-				 * context.  This allows for a filter to issue
-				 * multiple inject calls from its sf_data_out
-				 * callback routine.
-				 */
-				socket_lock(so, 0);
-				sflt_unuse(so);
-				if (!recursive)
-					so->so_send_filt_thread = 0;
-				if (error) {
-					if (error == EJUSTRETURN) {
-						error = 0;
-						continue;
-					}
-					goto done3;
-				}
+				goto done3;
 			}
 			/*
 			 * End Socket filter processing
@@ -2440,7 +2399,7 @@ retry_space:
 		KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE_SEND | DBG_FUNC_START),
 		    uap->s, 0, 0, 0, 0);
 		error = (*so->so_proto->pr_usrreqs->pru_send)(so, 0, m0,
-		    0, 0, p);
+		    0, control, p);
 		KERNEL_DEBUG_CONSTANT((DBG_FNC_SENDFILE_SEND | DBG_FUNC_START),
 		    uap->s, 0, 0, 0, 0);
 		if (error) {

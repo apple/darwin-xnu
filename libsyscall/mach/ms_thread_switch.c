@@ -65,12 +65,12 @@ extern kern_return_t syscall_thread_switch(mach_port_name_t, int, mach_msg_timeo
 
 kern_return_t
 thread_switch(
-	mach_port_t		thread,
-	int			option,
-	mach_msg_timeout_t	option_time)
+	mach_port_t thread,
+	int option,
+	mach_msg_timeout_t option_time)
 {
 	kern_return_t result;
 	
-		result = syscall_thread_switch(thread, option, option_time);
-	return (result);
+	result = syscall_thread_switch(thread, option, option_time);
+	return result;
 }

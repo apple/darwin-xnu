@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -125,6 +125,7 @@ static int vn_kqfilt_add(struct fileproc *fp, struct knote *kn,
 			vfs_context_t ctx);
 static void filt_vndetach(struct knote *kn);
 static int filt_vnode(struct knote *kn, long hint);
+static int vn_open_auth_finish(vnode_t vp, int fmode, vfs_context_t ctx);
 #if 0
 static int vn_kqfilt_remove(struct vnode *vp, uintptr_t ident,
 			vfs_context_t ctx);
@@ -161,6 +162,138 @@ vn_open_modflags(struct nameidata *ndp, int *fmodep, int cmode)
 	VATTR_SET(&va, va_mode, cmode);
 	
 	return(vn_open_auth(ndp, fmodep, &va));
+}
+
+static int
+vn_open_auth_finish(vnode_t vp, int fmode, vfs_context_t ctx)
+{
+	int error;
+
+	if ((error = vnode_ref_ext(vp, fmode, 0)) != 0) {
+		goto bad;
+	}
+
+	/* call out to allow 3rd party notification of open. 
+	 * Ignore result of kauth_authorize_fileop call.
+	 */
+	kauth_authorize_fileop(vfs_context_ucred(ctx), KAUTH_FILEOP_OPEN, 
+						   (uintptr_t)vp, 0);
+
+	return 0;
+
+bad:
+	return error;
+
+}
+
+/*
+ * May do nameidone() to allow safely adding an FSEvent.  Cue off of ni_dvp to
+ * determine whether that has happened.  
+ */
+static int
+vn_open_auth_do_create(struct nameidata *ndp, struct vnode_attr *vap, int fmode, boolean_t *did_create, boolean_t *did_open, vfs_context_t ctx)
+{
+	uint32_t status = 0;
+	vnode_t dvp = ndp->ni_dvp;
+	int batched;
+	int error;
+	vnode_t vp;
+
+	batched = vnode_compound_open_available(ndp->ni_dvp);
+	*did_open = FALSE;
+
+	VATTR_SET(vap, va_type, VREG);
+	if (fmode & O_EXCL)
+		vap->va_vaflags |= VA_EXCLUSIVE;
+
+#if NAMEDRSRCFORK
+	if (ndp->ni_cnd.cn_flags & CN_WANTSRSRCFORK) {
+		if ((error = vn_authorize_create(dvp, &ndp->ni_cnd, vap, ctx, NULL)) != 0) 
+			goto out;
+		if ((error = vnode_makenamedstream(dvp, &ndp->ni_vp, XATTR_RESOURCEFORK_NAME, 0, ctx)) != 0)
+			goto out;
+		*did_create = TRUE;
+	} else {
+#endif
+		if (!batched) {
+			if ((error = vn_authorize_create(dvp, &ndp->ni_cnd, vap, ctx, NULL)) != 0)
+				goto out;
+		}
+
+		error = vn_create(dvp, &ndp->ni_vp, ndp, vap, VN_CREATE_DOOPEN, fmode, &status, ctx);
+		if (error != 0) {
+			if (batched) {
+				*did_create = (status & COMPOUND_OPEN_STATUS_DID_CREATE) ? TRUE : FALSE;
+			} else {
+				*did_create = FALSE;
+			}
+
+			if (error == EKEEPLOOKING) {
+				if (*did_create) {
+					panic("EKEEPLOOKING, but we did a create?");
+				}
+				if (!batched) {
+					panic("EKEEPLOOKING from filesystem that doesn't support compound vnops?");
+				}
+				if ((ndp->ni_flag & NAMEI_CONTLOOKUP) == 0) {
+					panic("EKEEPLOOKING, but continue flag not set?");
+				}
+
+				/* 
+				 * Do NOT drop the dvp: we need everything to continue the lookup.
+				 */
+				return error;
+			}
+		} else {
+			if (batched) {
+				*did_create = (status & COMPOUND_OPEN_STATUS_DID_CREATE) ? 1 : 0;
+				*did_open = TRUE;
+			} else {
+				*did_create = TRUE;
+			}
+		}
+#if NAMEDRSRCFORK
+	}
+#endif
+
+	/* 
+	* Unlock the fsnode (if locked) here so that we are free
+	* to drop the dvp iocount and prevent deadlock in build_path().
+	* nameidone() will still do the right thing later.
+	*/
+	vp = ndp->ni_vp;
+	namei_unlock_fsnode(ndp);
+
+	if (*did_create) {
+		int	update_flags = 0;
+
+		// Make sure the name & parent pointers are hooked up
+		if (vp->v_name == NULL)
+			update_flags |= VNODE_UPDATE_NAME;
+		if (vp->v_parent == NULLVP)
+			update_flags |= VNODE_UPDATE_PARENT;
+
+		if (update_flags)
+			vnode_update_identity(vp, dvp, ndp->ni_cnd.cn_nameptr, ndp->ni_cnd.cn_namelen, ndp->ni_cnd.cn_hash, update_flags);
+
+		vnode_put(dvp);
+		ndp->ni_dvp = NULLVP;
+
+#if CONFIG_FSE
+		if (need_fsevent(FSE_CREATE_FILE, vp)) {
+			add_fsevent(FSE_CREATE_FILE, ctx,
+					FSE_ARG_VNODE, vp,
+					FSE_ARG_DONE);
+		}
+#endif
+	}
+out:
+	if (ndp->ni_dvp != NULLVP) {
+		vnode_put(dvp);
+		ndp->ni_dvp = NULLVP;
+	}
+
+	return error;
 }
 
 /*
@@ -217,100 +350,85 @@ vn_open_auth(struct nameidata *ndp, int *fmodep, struct vnode_attr *vap)
 	int error;
 	int fmode;
 	uint32_t origcnflags;
-	kauth_action_t action;
+	boolean_t did_create;
+	boolean_t did_open;
+	boolean_t need_vnop_open;
+	boolean_t batched;
+	boolean_t ref_failed;
 
 again:
 	vp = NULL;
 	dvp = NULL;
+	batched = FALSE;
+	did_create = FALSE;
+	need_vnop_open = TRUE;
+	ref_failed = FALSE;
 	fmode = *fmodep;
 	origcnflags = ndp->ni_cnd.cn_flags;
+
+	/*
+	 * O_CREAT
+	 */
 	if (fmode & O_CREAT) {
 	        if ( (fmode & O_DIRECTORY) ) {
 		        error = EINVAL;
 			goto out;
 		}
 		ndp->ni_cnd.cn_nameiop = CREATE;
+#if CONFIG_TRIGGERS
+		ndp->ni_op = OP_LINK;
+#endif
 		/* Inherit USEDVP, vnode_open() supported flags only */
 		ndp->ni_cnd.cn_flags &= (USEDVP | NOCROSSMOUNT | DOWHITEOUT);
 		ndp->ni_cnd.cn_flags |= LOCKPARENT | LOCKLEAF | AUDITVNPATH1;
+		ndp->ni_flag = NAMEI_COMPOUNDOPEN;
 #if NAMEDRSRCFORK
 		/* open calls are allowed for resource forks. */
 		ndp->ni_cnd.cn_flags |= CN_ALLOWRSRCFORK;
 #endif
 		if ((fmode & O_EXCL) == 0 && (fmode & O_NOFOLLOW) == 0 && (origcnflags & FOLLOW) != 0)
 			ndp->ni_cnd.cn_flags |= FOLLOW;
+
+continue_create_lookup:
 		if ( (error = namei(ndp)) )
 			goto out;
+
 		dvp = ndp->ni_dvp;
 		vp = ndp->ni_vp;
 
- 		/* not found, create */
+		batched = vnode_compound_open_available(dvp);
+
+		/* not found, create */
 		if (vp == NULL) {
- 			/* must have attributes for a new file */
- 			if (vap == NULL) {
- 				error = EINVAL;
-				goto badcreate;
- 			}
-
-			VATTR_SET(vap, va_type, VREG);
-#if CONFIG_MACF
-			error = mac_vnode_check_create(ctx,
-			    dvp, &ndp->ni_cnd, vap);
-			if (error)
-				goto badcreate;
-#endif /* MAC */
-
-			/* authorize before creating */
- 			if ((error = vnode_authorize(dvp, NULL, KAUTH_VNODE_ADD_FILE, ctx)) != 0)
-				goto badcreate;
-
-			if (fmode & O_EXCL)
-				vap->va_vaflags |= VA_EXCLUSIVE;
-#if NAMEDRSRCFORK
-			if (ndp->ni_cnd.cn_flags & CN_WANTSRSRCFORK) {
-				if ((error = vnode_makenamedstream(dvp, &ndp->ni_vp, XATTR_RESOURCEFORK_NAME, 0, ctx)) != 0)
-					goto badcreate;
-			} else
-#endif
-			if ((error = vn_create(dvp, &ndp->ni_vp, &ndp->ni_cnd, vap, 0, ctx)) != 0)
-				goto badcreate;
-			
-			vp = ndp->ni_vp;
-
-			if (vp) {
-				int	update_flags = 0;
-
-			        // Make sure the name & parent pointers are hooked up
-			        if (vp->v_name == NULL)
-					update_flags |= VNODE_UPDATE_NAME;
-				if (vp->v_parent == NULLVP)
-				        update_flags |= VNODE_UPDATE_PARENT;
-
-				if (update_flags)
-				        vnode_update_identity(vp, dvp, ndp->ni_cnd.cn_nameptr, ndp->ni_cnd.cn_namelen, ndp->ni_cnd.cn_hash, update_flags);
-
-#if CONFIG_FSE
-				if (need_fsevent(FSE_CREATE_FILE, vp)) {
-					vnode_put(dvp);
-					dvp = NULL;
-				        add_fsevent(FSE_CREATE_FILE, ctx,
-						    FSE_ARG_VNODE, vp,
-						    FSE_ARG_DONE);
-				}
-#endif
-
+			/* must have attributes for a new file */
+			if (vap == NULL) {
+				error = EINVAL;
+				goto out;
 			}
 			/*
-			 * nameidone has to happen before we vnode_put(dvp)
-			 * and clear the ni_dvp field, since it may need
-			 * to release the fs_nodelock on the dvp
+			 * Attempt a create.   For a system supporting compound VNOPs, we may
+			 * find an existing file or create one; in either case, we will already
+			 * have the file open and no VNOP_OPEN() will be needed.
 			 */
-badcreate:
-			nameidone(ndp);
-			ndp->ni_dvp = NULL;
+			error = vn_open_auth_do_create(ndp, vap, fmode, &did_create, &did_open, ctx);
 
+			dvp = ndp->ni_dvp;
+			vp = ndp->ni_vp;
+
+			/* 
+			 * Detected a node that the filesystem couldn't handle.  Don't call
+			 * nameidone() yet, because we need that path buffer.
+			 */
+			if (error == EKEEPLOOKING) {
+				if (!batched) {
+					panic("EKEEPLOOKING from a filesystem that doesn't support compound VNOPs?");
+				}
+				goto continue_create_lookup;
+			}
+
+			nameidone(ndp);
 			if (dvp) {
-				vnode_put(dvp);
+				panic("Shouldn't have a dvp here.");
 			}
 
 			if (error) {
@@ -318,129 +436,166 @@ badcreate:
 				 * Check for a creation or unlink race.
 				 */
 				if (((error == EEXIST) && !(fmode & O_EXCL)) ||
-					   ((error == ENOENT) && (fmode & O_CREAT))){
+						((error == ENOENT) && (fmode & O_CREAT))){
+					if (vp) 
+						vnode_put(vp);
 					goto again;
 				}
 				goto bad;
 			}
-			fmode &= ~O_TRUNC;
-		} else {
-			nameidone(ndp);
-			ndp->ni_dvp = NULL;
-			vnode_put(dvp);
 
-			if (fmode & O_EXCL) {
+			need_vnop_open = !did_open;
+		} else {
+			if (fmode & O_EXCL)
 				error = EEXIST;
+
+			/* 
+			 * We have a vnode.  Use compound open if available 
+			 * or else fall through to "traditional" path.  Note: can't
+			 * do a compound open for root, because the parent belongs
+			 * to a different FS.
+			 */
+			if (error == 0 && batched && (vnode_mount(dvp) == vnode_mount(vp))) {
+				error = VNOP_COMPOUND_OPEN(dvp, &ndp->ni_vp, ndp, 0, fmode, NULL, NULL, ctx);
+
+				if (error == 0) {
+					vp = ndp->ni_vp;
+					need_vnop_open = FALSE;
+				} else if (error == EKEEPLOOKING) {
+					if ((ndp->ni_flag & NAMEI_CONTLOOKUP) == 0) {
+						panic("EKEEPLOOKING, but continue flag not set?");
+					}
+					goto continue_create_lookup;
+				} 
+			}
+			nameidone(ndp);
+			vnode_put(dvp);
+			ndp->ni_dvp = NULLVP;
+
+			if (error) {
 				goto bad;
 			}
+
 			fmode &= ~O_CREAT;
+
+			/* Fall through */
 		}
 	} else {
+		/*
+		 * Not O_CREAT
+		 */
 		ndp->ni_cnd.cn_nameiop = LOOKUP;
 		/* Inherit USEDVP, vnode_open() supported flags only */
 		ndp->ni_cnd.cn_flags &= (USEDVP | NOCROSSMOUNT | DOWHITEOUT);
-		ndp->ni_cnd.cn_flags |= FOLLOW | LOCKLEAF | AUDITVNPATH1;
+		ndp->ni_cnd.cn_flags |= FOLLOW | LOCKLEAF | AUDITVNPATH1 | WANTPARENT;
 #if NAMEDRSRCFORK
 		/* open calls are allowed for resource forks. */
 		ndp->ni_cnd.cn_flags |= CN_ALLOWRSRCFORK;
 #endif
+		ndp->ni_flag = NAMEI_COMPOUNDOPEN;
+
 		/* preserve NOFOLLOW from vnode_open() */
 		if (fmode & O_NOFOLLOW || fmode & O_SYMLINK || (origcnflags & FOLLOW) == 0) {
-		    ndp->ni_cnd.cn_flags &= ~FOLLOW;
+			ndp->ni_cnd.cn_flags &= ~FOLLOW;
 		}
 
-		if ( (error = namei(ndp)) )
-			goto out;
-		vp = ndp->ni_vp;
+		/* Do a lookup, possibly going directly to filesystem for compound operation */
+		do {
+			if ( (error = namei(ndp)) )
+				goto out;
+			vp = ndp->ni_vp;
+			dvp = ndp->ni_dvp;
+
+			/* Check for batched lookup-open */
+			batched = vnode_compound_open_available(dvp);
+			if (batched && ((vp == NULLVP) || (vnode_mount(dvp) == vnode_mount(vp)))) {
+				error = VNOP_COMPOUND_OPEN(dvp, &ndp->ni_vp, ndp, 0, fmode, NULL, NULL, ctx);
+				vp = ndp->ni_vp;
+				if (error == 0) {
+					need_vnop_open = FALSE;
+				} else if (error == EKEEPLOOKING) {
+					if ((ndp->ni_flag & NAMEI_CONTLOOKUP) == 0) {
+						panic("EKEEPLOOKING, but continue flag not set?");
+					}
+				}
+			}
+		} while (error == EKEEPLOOKING);
+
 		nameidone(ndp);
-		ndp->ni_dvp = NULL;
+		vnode_put(dvp);
+		ndp->ni_dvp = NULLVP;
 
-		if ( (fmode & O_DIRECTORY) && vp->v_type != VDIR ) {
-		        error = ENOTDIR;
+		if (error) {
 			goto bad;
 		}
 	}
 
-	if (vp->v_type == VSOCK && vp->v_tag != VT_FDESC) {
-		error = EOPNOTSUPP;	/* Operation not supported on socket */
-		goto bad;
+	/* 
+	 * By this point, nameidone() is called, dvp iocount is dropped,
+	 * and dvp pointer is cleared.
+	 */
+	if (ndp->ni_dvp != NULLVP) {
+		panic("Haven't cleaned up adequately in vn_open_auth()");
 	}
 
-	if (vp->v_type == VLNK && (fmode & O_NOFOLLOW) != 0) {
-		error = ELOOP;	/* O_NOFOLLOW was specified and the target is a symbolic link */
-		goto bad;
-	}
-
-	/* authorize open of an existing file */
-	if ((fmode & O_CREAT) == 0) {
-
-		/* disallow write operations on directories */
-		if (vnode_isdir(vp) && (fmode & (FWRITE | O_TRUNC))) {
-			error = EISDIR;
-			goto bad;
+	/*
+	 * Expect to use this code for filesystems without compound VNOPs, for the root 
+	 * of a filesystem, which can't be "looked up" in the sense of VNOP_LOOKUP(),
+	 * and for shadow files, which do not live on the same filesystems as their "parents."
+	 */
+	if (need_vnop_open) {
+		if (batched && !vnode_isvroot(vp) && !vnode_isnamedstream(vp)) {
+			panic("Why am I trying to use VNOP_OPEN() on anything other than the root or a named stream?");
 		}
 
-#if CONFIG_MACF
-		error = mac_vnode_check_open(ctx, vp, fmode);
-		if (error)
-			goto bad;
-#endif
-
-		/* compute action to be authorized */
-		action = 0;
-		if (fmode & FREAD) {
-			action |= KAUTH_VNODE_READ_DATA;
-		}
-		if (fmode & (FWRITE | O_TRUNC)) {
-			/*
-			 * If we are writing, appending, and not truncating,
-			 * indicate that we are appending so that if the
-			 * UF_APPEND or SF_APPEND bits are set, we do not deny
-			 * the open.
-			 */
-			if ((fmode & O_APPEND) && !(fmode & O_TRUNC)) {
-				action |= KAUTH_VNODE_APPEND_DATA;
-			} else {
-			action |= KAUTH_VNODE_WRITE_DATA;
+		if (!did_create) {
+			error = vn_authorize_open_existing(vp, &ndp->ni_cnd, fmode, ctx, NULL);
+			if (error) {
+				goto bad;
 			}
 		}
-		if ((error = vnode_authorize(vp, NULL, action, ctx)) != 0)
+
+		error = VNOP_OPEN(vp, fmode, ctx);
+		if (error) {
 			goto bad;
-		
-
-		//
-		// if the vnode is tagged VOPENEVT and the current process
-		// has the P_CHECKOPENEVT flag set, then we or in the O_EVTONLY
-		// flag to the open mode so that this open won't count against
-		// the vnode when carbon delete() does a vnode_isinuse() to see
-		// if a file is currently in use.  this allows spotlight
-		// importers to not interfere with carbon apps that depend on
-		// the no-delete-if-busy semantics of carbon delete().
-		//
-		if ((vp->v_flag & VOPENEVT) && (current_proc()->p_flag & P_CHECKOPENEVT)) {
-		    fmode |= O_EVTONLY;
 		}
-
+		need_vnop_open = FALSE;
 	}
 
-	if ( (error = VNOP_OPEN(vp, fmode, ctx)) ) {
+	// if the vnode is tagged VOPENEVT and the current process
+	// has the P_CHECKOPENEVT flag set, then we or in the O_EVTONLY
+	// flag to the open mode so that this open won't count against
+	// the vnode when carbon delete() does a vnode_isinuse() to see
+	// if a file is currently in use.  this allows spotlight
+	// importers to not interfere with carbon apps that depend on
+	// the no-delete-if-busy semantics of carbon delete().
+	//
+	if (!did_create && (vp->v_flag & VOPENEVT) && (current_proc()->p_flag & P_CHECKOPENEVT)) {
+		fmode |= O_EVTONLY;
+	}
+
+	/*
+	 * Grab reference, etc.
+	 */
+	error = vn_open_auth_finish(vp, fmode, ctx);
+	if (error) {
+		ref_failed = TRUE;
 		goto bad;
 	}
-	if ( (error = vnode_ref_ext(vp, fmode)) ) {
-		goto bad2;
-	}
 
-	/* call out to allow 3rd party notification of open. 
-	 * Ignore result of kauth_authorize_fileop call.
-	 */
-	kauth_authorize_fileop(vfs_context_ucred(ctx), KAUTH_FILEOP_OPEN, 
-						   (uintptr_t)vp, 0);
+	/* Compound VNOP open is responsible for doing the truncate */
+	if (batched || did_create) 
+		fmode &= ~O_TRUNC;
 
 	*fmodep = fmode;
 	return (0);
-bad2:
-	VNOP_CLOSE(vp, fmode, ctx);
+
 bad:
+	/* Opened either explicitly or by a batched create */
+	if (!need_vnop_open) {
+		VNOP_CLOSE(vp, fmode, ctx);
+	}
+
 	ndp->ni_vp = NULL;
 	if (vp) {
 #if NAMEDRSRCFORK
@@ -459,10 +614,11 @@ bad:
 		 *
 		 * EREDRIVEOPEN: means that we were hit by the tty allocation race.
 		 */
-		if (((error == ENOENT) && (*fmodep & O_CREAT)) || (error == EREDRIVEOPEN)) {
+		if (((error == ENOENT) && (*fmodep & O_CREAT)) || (error == EREDRIVEOPEN) || ref_failed) {
 			goto again;
 		}
 	}
+
 out:
 	return (error);
 }
@@ -502,16 +658,6 @@ vn_close(struct vnode *vp, int flags, vfs_context_t ctx)
 {
 	int error;
 
-#if CONFIG_FSE
-	if (flags & FWASWRITTEN) {
-	        if (need_fsevent(FSE_CONTENT_MODIFIED, vp)) {
-		        add_fsevent(FSE_CONTENT_MODIFIED, ctx,
-				    FSE_ARG_VNODE, vp,
-				    FSE_ARG_DONE);
-		}
-	}
-#endif
-
 #if NAMEDRSRCFORK
 	/* Sync data from resource fork shadow file if needed. */
 	if ((vp->v_flag & VISNAMEDSTREAM) && 
@@ -528,6 +674,16 @@ vn_close(struct vnode *vp, int flags, vfs_context_t ctx)
 		(void)vnode_rele_ext(vp, flags, 0);
 
 	error = VNOP_CLOSE(vp, flags, ctx);
+
+#if CONFIG_FSE
+	if (flags & FWASWRITTEN) {
+	        if (need_fsevent(FSE_CONTENT_MODIFIED, vp)) {
+		        add_fsevent(FSE_CONTENT_MODIFIED, ctx,
+				    FSE_ARG_VNODE, vp,
+				    FSE_ARG_DONE);
+		}
+	}
+#endif
 
 	if (!vnode_isspec(vp))
 		(void)vnode_rele_ext(vp, flags, 0);
@@ -782,6 +938,9 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 		ioflag |= IO_NDELAY;
 	if ((fp->f_fglob->fg_flag & FNOCACHE) || vnode_isnocache(vp))
 	        ioflag |= IO_NOCACHE;
+	if (fp->f_fglob->fg_flag & FNODIRECT)
+		ioflag |= IO_NODIRECT;
+
 	/*
 	 * Treat synchronous mounts and O_FSYNC on the fd as equivalent.
 	 *
@@ -996,7 +1155,7 @@ vn_stat_noauth(struct vnode *vp, void *sbptr, kauth_filesec_t *xsec, int isstat6
 		sb->st_blocks = roundup(va.va_total_alloc, 512) / 512;
 	}
 
-	/* if we're interested in exended security data and we got an ACL */
+	/* if we're interested in extended security data and we got an ACL */
 	if (xsec != NULL) {
 		if (!VATTR_IS_SUPPORTED(&va, va_acl) &&
 		    !VATTR_IS_SUPPORTED(&va, va_uuuid) &&
@@ -1147,7 +1306,10 @@ vn_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx)
 		error = VNOP_IOCTL(vp, com, data, fp->f_fglob->fg_flag, ctx);
 
 		if (error == 0 && com == TIOCSCTTY) {
-			vnode_ref(vp);
+			error = vnode_ref_ext(vp, 0, VNODE_REF_FORCE);
+			if (error != 0) {
+				panic("vnode_ref_ext() failed despite VNODE_REF_FORCE?!");
+			}
 
 			funnel_state = thread_funnel_set(kernel_flock, TRUE);
 			sessp = proc_session(vfs_context_proc(ctx));
@@ -1235,6 +1397,7 @@ int
 vn_pathconf(vnode_t vp, int name, int32_t *retval, vfs_context_t ctx)
 {
 	int	error = 0;
+	struct vfs_attr vfa;
 
 	switch(name) {
 	case _PC_EXTENDED_SECURITY_NP:
@@ -1273,6 +1436,33 @@ vn_pathconf(vnode_t vp, int name, int32_t *retval, vfs_context_t ctx)
 	case _PC_SYNC_IO:	/* unistd.h: _POSIX_SYNCHRONIZED_IO */
 		*retval = 0;	/* [SIO] option is not supported */
 		break;
+	case _PC_XATTR_SIZE_BITS:
+		/* The number of bits used to store maximum extended 
+		 * attribute size in bytes.  For example, if the maximum 
+		 * attribute size supported by a file system is 128K, the 
+		 * value returned will be 18.  However a value 18 can mean 
+		 * that the maximum attribute size can be anywhere from 
+		 * (256KB - 1) to 128KB.  As a special case, the resource 
+		 * fork can have much larger size, and some file system 
+		 * specific extended attributes can have smaller and preset 
+		 * size; for example, Finder Info is always 32 bytes.
+		 */
+		memset(&vfa, 0, sizeof(vfa));
+		VFSATTR_INIT(&vfa);
+		VFSATTR_WANTED(&vfa, f_capabilities);
+		if (vfs_getattr(vnode_mount(vp), &vfa, ctx) == 0 &&
+		    (VFSATTR_IS_SUPPORTED(&vfa, f_capabilities)) && 
+		    (vfa.f_capabilities.capabilities[VOL_CAPABILITIES_INTERFACES] & VOL_CAP_INT_EXTENDED_ATTR) && 
+		    (vfa.f_capabilities.valid[VOL_CAPABILITIES_INTERFACES] & VOL_CAP_INT_EXTENDED_ATTR)) {
+			/* Supports native extended attributes */
+			error = VNOP_PATHCONF(vp, name, retval, ctx);
+		} else {
+			/* Number of bits used to represent the maximum size of 
+			 * extended attribute stored in an Apple Double file.
+			 */
+			*retval = AD_XATTR_SIZE_BITS;
+		}
+		break;
 	default:
 		error = VNOP_PATHCONF(vp, name, retval, ctx);
 		break;
@@ -1303,7 +1493,7 @@ vn_kqfilt_add(struct fileproc *fp, struct knote *kn, vfs_context_t ctx)
 					}
 
 				} else if (!vnode_isreg(vp)) {
-					if (vnode_isspec(vp) && 
+					if (vnode_ischr(vp) && 
 							(error = spec_kqfilter(vp, kn)) == 0) {
 						/* claimed by a special device */
 						vnode_put(vp);
@@ -1447,18 +1637,22 @@ vnode_writable_space_count(vnode_t vp)
 static int
 filt_vnode(struct knote *kn, long hint)
 {
-	struct vnode *vp = (struct vnode *)kn->kn_hook;
+	vnode_t vp = (struct vnode *)kn->kn_hook;
 	int activate = 0;
+	long orig_hint = hint;
 
 	if (0 == hint) {
-		if ((vnode_getwithvid(vp, kn->kn_hookid) != 0)) {
-			hint = NOTE_REVOKE;
-		} else {
-			vnode_put(vp);
-		}
-	}    
+		vnode_lock(vp);
 
-	/* NOTE_REVOKE is special, as it is only sent during vnode reclaim */
+		if (vnode_getiocount(vp, kn->kn_hookid, VNODE_NODEAD | VNODE_WITHID) != 0) {
+			/* Is recycled */
+			hint = NOTE_REVOKE;
+		} 
+	} else {
+		lck_mtx_assert(&vp->v_lock, LCK_MTX_ASSERT_OWNED);
+	}
+
+	/* Special handling for vnodes that are in recycle or already gone */
 	if (NOTE_REVOKE == hint) {
 		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
 		activate = 1;
@@ -1494,6 +1688,16 @@ filt_vnode(struct knote *kn, long hint)
 			default:
 				panic("Invalid knote filter on a vnode!\n");
 		}
+	}
+
+	if (orig_hint == 0) {
+		/*
+		 * Definitely need to unlock, may need to put 
+		 */
+		if (hint == 0) {
+			vnode_put_locked(vp);
+		}
+		vnode_unlock(vp);
 	}
 
 	return (activate);

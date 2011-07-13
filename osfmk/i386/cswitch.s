@@ -60,15 +60,9 @@
 
 #include <i386/asm.h>
 #include <i386/proc_reg.h>
+#include <i386/mp.h>
 #include <assym.s>
 
-#ifdef	SYMMETRY
-#include <sqt/asm_macros.h>
-#endif
-
-#if	AT386
-#include <i386/mp.h>
-#endif	/* AT386 */
 
 #define	CX(addr, reg)	addr(,reg,4)
 
@@ -80,7 +74,7 @@
 Entry(Load_context)
 	movl	S_ARG0,%ecx			/* get thread */
 	movl	TH_KERNEL_STACK(%ecx),%ecx	/* get kernel stack */
-	lea	-IKS_SIZE-IEL_SIZE(%ecx),%edx
+	lea	-IKS_SIZE(%ecx),%edx
 	add	EXT(kernel_stack_size),%edx		/* point to stack top */
 	movl	%ecx,%gs:CPU_ACTIVE_STACK	/* store stack address */
 	movl	%edx,%gs:CPU_KERNEL_STACK	/* store stack top */
@@ -116,7 +110,7 @@ Entry(Switch_context)
 	movl	8(%esp),%ecx			/* get new thread */
 	movl    %ecx,%gs:CPU_ACTIVE_THREAD      /* new thread is active */
 	movl	TH_KERNEL_STACK(%ecx),%ebx	/* get its kernel stack */
-	lea	-IKS_SIZE-IEL_SIZE(%ebx),%ecx
+	lea	-IKS_SIZE(%ebx),%ecx
 	add	EXT(kernel_stack_size),%ecx
 						/* point to stack top */
 

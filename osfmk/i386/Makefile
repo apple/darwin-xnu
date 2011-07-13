@@ -26,14 +26,18 @@ EXPORT_ONLY_FILES = 	\
 		    mp.h \
 		    mp_desc.h \
 		    mp_events.h \
+		    pal_native.h \
+		    pal_routines.h \
+		    pal_hibernate.h \
 		    pmCPU.h \
 		    pmap.h \
 		    proc_reg.h \
-		    rtclock.h \
+		    rtclock_protos.h \
 		    seg.h \
 		    simple_lock.h \
 		    tsc.h \
 		    tss.h \
+		    ucode.h \
 		    vmx.h
 
 INSTALL_MD_DIR = i386
@@ -44,7 +48,7 @@ INSTALL_MD_LCL_LIST = cpu_capabilities.h
 
 INSTALL_KF_MD_LIST = asm.h cpuid.h eflags.h locks.h machine_routines.h proc_reg.h vmx.h
 
-INSTALL_KF_MD_LCL_LIST = $(filter-out cpu_data.h, $(EXPORT_ONLY_FILES))
+INSTALL_KF_MD_LCL_LIST = $(filter-out cpu_data.h pal_i386.h, $(EXPORT_ONLY_FILES))
 
 EXPORT_MD_LIST = ${EXPORT_ONLY_FILES}
 

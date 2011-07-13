@@ -105,6 +105,7 @@
 #include <machine/pmap.h>
 #include <machine/commpage.h>
 #include <libkern/version.h>
+#include <sys/kdebug.h>
 
 #if MACH_KDP
 #include <kdp/kdp.h>
@@ -116,11 +117,6 @@
 
 #if CONFIG_COUNTERS
 #include <pmc/pmc.h>
-#endif
-
-#ifdef __ppc__
-#include <ppc/Firmware.h>
-#include <ppc/mappings.h>
 #endif
 
 static void		kernel_bootstrap_thread(void);
@@ -135,36 +131,58 @@ extern void cpu_physwindow_init(int);
 // libkern/OSKextLib.cpp
 extern void	OSKextRemoveKextBootstrap(void);
 
-void srv_setup(void);
-extern void bsd_srv_setup(int);
+void scale_setup(void);
+extern void bsd_scale_setup(int);
 extern unsigned int semaphore_max;
-
 
 /*
  *	Running in virtual memory, on the interrupt stack.
  */
 
-extern int srv;
+extern int serverperfmode;
+
+/* size of kernel trace buffer, disabled by default */
+unsigned int new_nkdbufs = 0;
+
+/* mach leak logging */
+int log_leaks = 0;
+int turn_on_log_leaks = 0;
+
+
+void
+kernel_early_bootstrap(void)
+{
+
+	lck_mod_init();
+
+	/*
+	 * Initialize the timer callout world
+	 */
+	timer_call_initialize();
+}
+
 
 void
 kernel_bootstrap(void)
 {
 	kern_return_t	result;
-	thread_t		thread;
+	thread_t	thread;
+	char		namep[16];
 
 	printf("%s\n", version); /* log kernel version */
 
 #define kernel_bootstrap_kprintf(x...) /* kprintf("kernel_bootstrap: " x) */
 
+	if (PE_parse_boot_argn("-l", namep, sizeof (namep))) /* leaks logging */
+		turn_on_log_leaks = 1;
+
+	PE_parse_boot_argn("trace", &new_nkdbufs, sizeof (new_nkdbufs));
+
 	/* i386_vm_init already checks for this ; do it aagin anyway */
-        if (PE_parse_boot_argn("srv", &srv, sizeof (srv))) {
-                srv = 1;
+        if (PE_parse_boot_argn("serverperfmode", &serverperfmode, sizeof (serverperfmode))) {
+                serverperfmode = 1;
         }
-
-	srv_setup();
-
-	kernel_bootstrap_kprintf("calling lck_mod_init\n");
-	lck_mod_init();
+	scale_setup();
 
 	kernel_bootstrap_kprintf("calling vm_mem_bootstrap\n");
 	vm_mem_bootstrap();
@@ -232,6 +250,13 @@ kernel_bootstrap(void)
 	thread->state = TH_RUN;
 	thread_deallocate(thread);
 
+	/* transfer statistics from init thread to kernel */
+	thread_t init_thread = current_thread();
+	kernel_task->tkm_private.alloc = init_thread->tkm_private.alloc;
+	kernel_task->tkm_private.free = init_thread->tkm_private.free;
+	kernel_task->tkm_shared.alloc = init_thread->tkm_shared.alloc;
+	kernel_task->tkm_shared.free = init_thread->tkm_shared.free;
+
 	kernel_bootstrap_kprintf("calling load_context - done\n");
 	load_context(thread);
 	/*NOTREACHED*/
@@ -264,6 +289,18 @@ kernel_bootstrap_thread(void)
 	kernel_bootstrap_thread_kprintf("calling sched_startup\n");
 	sched_startup();
 
+	/*
+	 * Thread lifecycle maintenance (teardown, stack allocation)
+	 */
+	kernel_bootstrap_thread_kprintf("calling thread_daemon_init\n");
+	thread_daemon_init();
+	
+	/*
+	 * Thread callout service.
+	 */
+	kernel_bootstrap_thread_kprintf("calling thread_call_initialize\n");
+	thread_call_initialize();
+	
 	/*
 	 * Remain on current processor as
 	 * additional processors come online.
@@ -307,6 +344,14 @@ kernel_bootstrap_thread(void)
 	pmc_bootstrap();
 #endif
 
+#if (defined(__i386__) || defined(__x86_64__))
+	if (turn_on_log_leaks && !new_nkdbufs)
+		new_nkdbufs = 200000;
+	start_kern_tracing(new_nkdbufs);
+	if (turn_on_log_leaks)
+		log_leaks = 1;
+#endif
+
 #ifdef	IOKIT
 	PE_init_iokit();
 #endif
@@ -322,6 +367,14 @@ kernel_bootstrap_thread(void)
 	 * discovery.
 	 */
 	cpu_userwindow_init(0);
+#endif
+
+#if (!defined(__i386__) && !defined(__x86_64__))
+	if (turn_on_log_leaks && !new_nkdbufs)
+		new_nkdbufs = 200000;
+	start_kern_tracing(new_nkdbufs);
+	if (turn_on_log_leaks)
+		log_leaks = 1;
 #endif
 
 	/*
@@ -459,6 +512,7 @@ load_context(
 
 	processor->active_thread = thread;
 	processor->current_pri = thread->sched_pri;
+	processor->current_thmode = thread->sched_mode;
 	processor->deadline = UINT64_MAX;
 	thread->last_processor = processor;
 
@@ -477,23 +531,32 @@ load_context(
 }
 
 void
-srv_setup()
+scale_setup()
 {
 	int scale = 0;
 #if defined(__LP64__)
-	/* if memory is more than 16G, then apply rules for processes */
-	if ((srv != 0) && ((uint64_t)sane_size >= (uint64_t)(16 * 1024 * 1024 *1024ULL))) {
+	typeof(task_max) task_max_base = task_max;
+
+	/* Raise limits for servers with >= 16G */
+	if ((serverperfmode != 0) && ((uint64_t)sane_size >= (uint64_t)(16 * 1024 * 1024 *1024ULL))) {
 		scale = (int)((uint64_t)sane_size / (uint64_t)(8 * 1024 * 1024 *1024ULL));
 		/* limit to 128 G */
 		if (scale > 16)
 			scale = 16;
-		task_max = 2500 * scale;
+		task_max_base = 2500;
+	} else if ((uint64_t)sane_size >= (uint64_t)(3 * 1024 * 1024 *1024ULL))
+		scale = 2;
+
+	task_max = MAX(task_max, task_max_base * scale);
+
+	if (scale != 0) {
 		task_threadmax = task_max;
-		thread_max = task_max * 5;
-	} else
-		scale = 0;
+		thread_max = task_max * 5; 
+	}
+
 #endif
-	bsd_srv_setup(scale);
+
+	bsd_scale_setup(scale);
 	
 	ipc_space_max = SPACE_MAX;
 	ipc_tree_entry_max = ITE_MAX;

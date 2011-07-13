@@ -71,43 +71,6 @@ int main(int argc, const char * argv[])
 #endif
 
 
-#if defined(__ppc__)
-	/* 
-	 * This is the helper binary for the PPC64 version of xnu_quick_test. xnu_quick_test 
-	 * forks and execs this code to test exec()ing from a 32-bit binary.
-	 */
-	errmsg = "execve failed: from ppc forking and exec()ing ppc process.\n";
-	argvs[0] = "sleep-ppc32";
-	if (do_execve_test("helpers/sleep-ppc32", argvs, NULL, 0))	goto test_failed_exit;
-
-	errmsg = "execve failed: from ppc forking and exec()ing ppc64 process w/ 4G pagezero.\n";
-	argvs[0] = "sleep-ppc64-4G";
-	if (do_execve_test("helpers/sleep-ppc64-4G", argvs, NULL, 0))	goto test_failed_exit;
-
-	errmsg = "execve failed: from ppc forking and exec()ing ppc64 process w/ 4K pagezero.\n";
-	argvs[0] = "sleep-ppc64-4K";
-	if (do_execve_test("helpers/sleep-ppc64-4K", argvs, NULL, 0))	goto test_failed_exit;
-#endif
-
-
-#if defined(__ppc64__)
-	/* 
-	 * This is the helper binary for the ppc version of xnu_quick_test. xnu_quick_test 
-	 * forks and execs this code to test exec()ing from a 64-bit binary.
-	 */
-	errmsg = "execve failed: from ppc64 forking and exec()ing 64-bit ppc process w/ 4G pagezero.\n";
-	argvs[0] = "sleep-ppc64-4G";
-	if (do_execve_test("helpers/sleep-ppc64-4G", argvs, NULL, 1))		goto test_failed_exit;
-
-	errmsg = "execve failed: from ppc64 forking and exec()ing 64-bit ppc process w/ 4K pagezero.\n";
-	argvs[0] = "sleep-ppc64-4K";
-	if (do_execve_test("helpers/sleep-ppc64-4K", argvs, NULL, 1))		goto test_failed_exit;
-
-	errmsg = "execve failed: from ppc64 forking and exec()ing 32 bit ppc process.\n";
-	argvs[0] = "sleep-ppc32";
-	if (do_execve_test("helpers/sleep-ppc32", argvs, NULL, 1))		goto test_failed_exit;	
-#endif
-
 	/* 
 	 * We are ourselves launched with do_execve_test, which wants a chance to 
 	 * send a SIGKILL

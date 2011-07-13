@@ -92,10 +92,46 @@ vm_size_t kalloc_kernmap_size;	/* size of kallocs that can come from kernel map 
 unsigned int kalloc_large_inuse;
 vm_size_t    kalloc_large_total;
 vm_size_t    kalloc_large_max;
-volatile vm_size_t    kalloc_largest_allocated = 0;
+vm_size_t    kalloc_largest_allocated = 0;
+uint64_t    kalloc_large_sum;
+
+int	kalloc_fake_zone_index = -1; /* index of our fake zone in statistics arrays */
 
 vm_offset_t	kalloc_map_min;
 vm_offset_t	kalloc_map_max;
+
+#ifdef	MUTEX_ZONE
+/*
+ * Diagnostic code to track mutexes separately rather than via the 2^ zones
+ */
+	zone_t		lck_mtx_zone;
+#endif
+
+static void
+KALLOC_ZINFO_SALLOC(vm_size_t bytes)
+{
+	thread_t thr = current_thread();
+	task_t task;
+	zinfo_usage_t zinfo;
+
+	thr->tkm_shared.alloc += bytes;
+	if (kalloc_fake_zone_index != -1 && 
+	    (task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
+		zinfo[kalloc_fake_zone_index].alloc += bytes;
+}
+
+static void
+KALLOC_ZINFO_SFREE(vm_size_t bytes)
+{
+	thread_t thr = current_thread();
+	task_t task;
+	zinfo_usage_t zinfo;
+
+	thr->tkm_shared.free += bytes;
+	if (kalloc_fake_zone_index != -1 && 
+	    (task = thr->task) != NULL && (zinfo = task->tkm_zinfo) != NULL)
+		zinfo[kalloc_fake_zone_index].free += bytes;
+}
 
 /*
  *	All allocations of size less than kalloc_max are rounded to the
@@ -158,11 +194,23 @@ void * kalloc_canblock(
 		boolean_t	canblock);
 
 
+lck_grp_t *kalloc_lck_grp;
+lck_mtx_t kalloc_lock;
+
+#define kalloc_spin_lock()	lck_mtx_lock_spin(&kalloc_lock)
+#define kalloc_unlock()		lck_mtx_unlock(&kalloc_lock)
+
+
 /* OSMalloc local data declarations */
 static
 queue_head_t    OSMalloc_tag_list;
 
-decl_simple_lock_data(static,OSMalloc_tag_lock)
+lck_grp_t *OSMalloc_tag_lck_grp;
+lck_mtx_t OSMalloc_tag_lock;
+
+#define OSMalloc_tag_spin_lock()	lck_mtx_lock_spin(&OSMalloc_tag_lock)
+#define OSMalloc_tag_unlock()		lck_mtx_unlock(&OSMalloc_tag_lock)
+
 
 /* OSMalloc forward declarations */
 void OSMalloc_init(void);
@@ -225,7 +273,9 @@ kalloc_init(
 
 	/*
 	 *	Allocate a zone for each size we are going to handle.
-	 *	We specify non-paged memory.
+	 *	We specify non-paged memory.  Don't charge the caller
+	 *	for the allocation, as we aren't sure how the memory
+	 *	will be handled.
 	 */
 	for (i = 0, size = 1; size < kalloc_max; i++, size <<= 1) {
 		if (size < KALLOC_MINSIZE) {
@@ -237,8 +287,15 @@ kalloc_init(
 		}
 		k_zone[i] = zinit(size, k_zone_max[i] * size, size,
 				  k_zone_name[i]);
+		zone_change(k_zone[i], Z_CALLERACCT, FALSE);
 	}
+	kalloc_lck_grp = lck_grp_alloc_init("kalloc.large", LCK_GRP_ATTR_NULL);
+	lck_mtx_init(&kalloc_lock, kalloc_lck_grp, LCK_ATTR_NULL);
 	OSMalloc_init();
+#ifdef	MUTEX_ZONE	
+	lck_mtx_zone = zinit(sizeof(struct _lck_mtx_), 1024*256, 4096, "lck_mtx");
+#endif	
+
 }
 
 void *
@@ -261,36 +318,42 @@ kalloc_canblock(
 
 		/* kmem_alloc could block so we return if noblock */
 		if (!canblock) {
-		  return(NULL);
+			return(NULL);
 		}
 
-		if (size >= kalloc_kernmap_size) {
-			volatile vm_offset_t prev_largest;
+		if (size >= kalloc_kernmap_size)
 		        alloc_map = kernel_map;
-			/* Thread-safe version of the workaround for 4740071
-			 * (a double FREE())
-			 */
-			do {
-				prev_largest = kalloc_largest_allocated;
-			} while ((size > prev_largest) && !OSCompareAndSwap((UInt32)prev_largest, (UInt32)size, (volatile UInt32 *) &kalloc_largest_allocated));
-		} else
+		else
 			alloc_map = kalloc_map;
 
 		if (kmem_alloc(alloc_map, (vm_offset_t *)&addr, size) != KERN_SUCCESS) {
 			if (alloc_map != kernel_map) {
 				if (kmem_alloc(kernel_map, (vm_offset_t *)&addr, size) != KERN_SUCCESS)
 					addr = NULL;
-		}
+			}
 			else
 				addr = NULL;
 		}
 
 		if (addr != NULL) {
+			kalloc_spin_lock();
+			/*
+			 * Thread-safe version of the workaround for 4740071
+			 * (a double FREE())
+			 */
+			if (size > kalloc_largest_allocated)
+				kalloc_largest_allocated = size;
+
 		        kalloc_large_inuse++;
 		        kalloc_large_total += size;
+			kalloc_large_sum += size;
 
 			if (kalloc_large_total > kalloc_large_max)
 			        kalloc_large_max = kalloc_large_total;
+
+			kalloc_unlock();
+
+			KALLOC_ZINFO_SALLOC(size);
 		}
 		return(addr);
 	}
@@ -374,6 +437,7 @@ krealloc(
 			kmem_free(alloc_map, (vm_offset_t)*addrp, old_size);
 
 			kalloc_large_total += (new_size - old_size);
+			kalloc_large_sum += (new_size - old_size);
 
 			if (kalloc_large_total > kalloc_large_max)
 				kalloc_large_max = kalloc_large_total;
@@ -412,11 +476,18 @@ krealloc(
 			*addrp = NULL;
 			return;
 		}
+		kalloc_spin_lock();
+
 		kalloc_large_inuse++;
+		kalloc_large_sum += new_size;
 		kalloc_large_total += new_size;
 
 		if (kalloc_large_total > kalloc_large_max)
 		        kalloc_large_max = kalloc_large_total;
+
+		kalloc_unlock();
+
+		KALLOC_ZINFO_SALLOC(new_size);
 	} else {
 		register int new_zindex;
 
@@ -515,9 +586,14 @@ kfree(
 		}
 		kmem_free(alloc_map, (vm_offset_t)data, size);
 
+		kalloc_spin_lock();
+
 		kalloc_large_total -= size;
 		kalloc_large_inuse--;
 
+		kalloc_unlock();
+
+		KALLOC_ZINFO_SFREE(size);
 		return;
 	}
 
@@ -560,18 +636,32 @@ kalloc_zone(
 }
 #endif
 
+void
+kalloc_fake_zone_init(int zone_index)
+{
+	kalloc_fake_zone_index = zone_index;
+}
 
 void
-kalloc_fake_zone_info(int *count, vm_size_t *cur_size, vm_size_t *max_size, vm_size_t *elem_size,
-		     vm_size_t *alloc_size, int *collectable, int *exhaustable)
+kalloc_fake_zone_info(int *count, 
+		      vm_size_t *cur_size, vm_size_t *max_size, vm_size_t *elem_size, vm_size_t *alloc_size,
+		      uint64_t *sum_size, int *collectable, int *exhaustable, int *caller_acct)
 {
 	*count      = kalloc_large_inuse;
 	*cur_size   = kalloc_large_total;
 	*max_size   = kalloc_large_max;
-	*elem_size  = kalloc_large_total / kalloc_large_inuse;
-	*alloc_size = kalloc_large_total / kalloc_large_inuse;
+
+	if (kalloc_large_inuse) {
+		*elem_size  = kalloc_large_total / kalloc_large_inuse;
+		*alloc_size = kalloc_large_total / kalloc_large_inuse;
+	} else {
+		*elem_size  = 0;
+		*alloc_size = 0;
+	}
+	*sum_size   = kalloc_large_sum;
 	*collectable = 0;
 	*exhaustable = 0;
+	*caller_acct = 0;
 }
 
 
@@ -580,7 +670,9 @@ OSMalloc_init(
 	void)
 {
 	queue_init(&OSMalloc_tag_list);
-	simple_lock_init(&OSMalloc_tag_lock, 0);
+
+	OSMalloc_tag_lck_grp = lck_grp_alloc_init("OSMalloc_tag", LCK_GRP_ATTR_NULL);
+	lck_mtx_init(&OSMalloc_tag_lock, OSMalloc_tag_lck_grp, LCK_ATTR_NULL);
 }
 
 OSMallocTag
@@ -601,9 +693,9 @@ OSMalloc_Tagalloc(
 
 	strncpy(OSMTag->OSMT_name, str, OSMT_MAX_NAME);
 
-	simple_lock(&OSMalloc_tag_lock);
+	OSMalloc_tag_spin_lock();
 	enqueue_tail(&OSMalloc_tag_list, (queue_entry_t)OSMTag);
-	simple_unlock(&OSMalloc_tag_lock);
+	OSMalloc_tag_unlock();
 	OSMTag->OSMT_state = OSMT_VALID;
 	return(OSMTag);
 }
@@ -627,9 +719,9 @@ OSMalloc_Tagrele(
 
 	if (hw_atomic_sub(&tag->OSMT_refcnt, 1) == 0) {
 		if (hw_compare_and_store(OSMT_VALID|OSMT_RELEASED, OSMT_VALID|OSMT_RELEASED, &tag->OSMT_state)) {
-			simple_lock(&OSMalloc_tag_lock);
+			OSMalloc_tag_spin_lock();
 			(void)remque((queue_entry_t)tag);
-			simple_unlock(&OSMalloc_tag_lock);
+			OSMalloc_tag_unlock();
 			kfree((void*)tag, sizeof(*tag));
 		} else
 			panic("OSMalloc_Tagrele(): refcnt 0\n");
@@ -644,9 +736,9 @@ OSMalloc_Tagfree(
 		panic("OSMalloc_Tagfree(): bad state 0x%08X\n", tag->OSMT_state);
 
 	if (hw_atomic_sub(&tag->OSMT_refcnt, 1) == 0) {
-		simple_lock(&OSMalloc_tag_lock);
+		OSMalloc_tag_spin_lock();
 		(void)remque((queue_entry_t)tag);
-		simple_unlock(&OSMalloc_tag_lock);
+		OSMalloc_tag_unlock();
 		kfree((void*)tag, sizeof(*tag));
 	}
 }

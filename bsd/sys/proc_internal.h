@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -184,6 +184,14 @@ struct proc;
 
 #define PROC_NULL (struct proc *)0
 
+#define PROC_UPDATE_CREDS_ONPROC(p) { \
+	p->p_uid =  kauth_cred_getuid(p->p_ucred); \
+	p->p_gid =  kauth_cred_getgid(p->p_ucred); \
+	p->p_ruid =  kauth_cred_getruid(p->p_ucred); \
+	p->p_rgid =  kauth_cred_getrgid(p->p_ucred); \
+	p->p_svuid =  kauth_cred_getsvuid(p->p_ucred); \
+	p->p_svgid =  kauth_cred_getsvgid(p->p_ucred); \
+	}
 /*
  * Description of a process.
  *
@@ -203,6 +211,13 @@ struct	proc {
 	struct	proc *	p_pptr;		 	/* Pointer to parent process.(LL) */
 	pid_t		p_ppid;			/* process's parent pid number */
 	pid_t		p_pgrpid;		/* process group id of the process (LL)*/
+	uid_t		p_uid;
+	gid_t		p_gid;
+	uid_t		p_ruid;
+	gid_t		p_rgid;
+	uid_t		p_svuid;
+	gid_t		p_svgid;
+	uint64_t	p_uniqueid;		/* process uniqe ID */
 
 	lck_mtx_t 	p_mlock;		/* mutex lock for proc */
 
@@ -281,6 +296,7 @@ struct	proc {
 	lck_mtx_t			p_dtrace_sprlock;		/* sun proc lock emulation */
 	int				p_dtrace_probes;		/* (PL) are there probes for this proc? */
 	u_int				p_dtrace_count;			/* (sprlock) number of DTrace tracepoints */
+        uint8_t                         p_dtrace_stop;                  /* indicates a DTrace-desired stop */
 	struct dtrace_ptss_page*	p_dtrace_ptss_pages;		/* (sprlock) list of user ptss pages */
 	struct dtrace_ptss_page_entry*	p_dtrace_ptss_free_list;	/* (atomic) list of individual ptss entries */
 	struct dtrace_helpers*		p_dtrace_helpers;		/* (dtrace_lock) DTrace per-proc private */
@@ -314,7 +330,9 @@ struct	proc {
 	char	p_name[(2*MAXCOMLEN)+1];	/* PL */
 
 	struct 	pgrp *p_pgrp;	/* Pointer to process group. (LL) */
+#if CONFIG_EMBEDDED
 	int		p_iopol_disk;	/* disk I/O policy (PL) */
+#endif /* CONFIG_EMBEDDED */
 	uint32_t	p_csflags;	/* flags for codesign (PL) */
 	uint32_t	p_pcaction;	/* action  for process control on starvation */
 	uint8_t p_uuid[16];		/* from LC_UUID load command */
@@ -330,6 +348,7 @@ struct	proc {
 	struct klist p_klist;  /* knote list (PL ?)*/
 
 	struct	rusage *p_ru;	/* Exit information. (PL) */
+	int		p_sigwaitcnt;
 	thread_t 	p_signalholder;
 	thread_t 	p_transholder;
 
@@ -408,10 +427,13 @@ struct	proc {
 #define	P_LLIMWAIT	0x00040000
 #define P_LWAITED   	0x00080000 
 #define P_LINSIGNAL    	0x00100000 
-#define P_LSIGNALWAIT  	0x00200000 
+#define P_UNUSED  	0x00200000 	/* Unused */
 #define P_LRAGE_VNODES	0x00400000
 #define P_LREGISTER	0x00800000	/* thread start fns registered  */
+#if CONFIG_EMBEDDED
 #define P_LBACKGROUND	0x01000000
+#endif /* CONFIG_EMBEDDED */
+#define P_LVMRSRCOWNER	0x02000000	/* can handle the resource ownership of  */
 
 /* Process control state for resource starvation */
 #define P_PCTHROTTLE	1
@@ -426,7 +448,7 @@ struct	proc {
 #define PROC_SETACTION_STATE(p) (p->p_pcaction = (PROC_CONTROL_STATE(p) | (PROC_CONTROL_STATE(p) << 16)))
 #define PROC_RESETACTION_STATE(p) (p->p_pcaction = PROC_CONTROL_STATE(p))
 
-/* advisory flags in the proc */
+/* additional process flags */
 #define P_LADVLOCK		0x01
 
 /* defns for proc_iterate */
@@ -580,10 +602,10 @@ extern lck_mtx_t * proc_list_mlock;
 extern lck_mtx_t * proc_klist_mlock;
 
 #define BSD_SIMUL_EXECS		33 /* 32 , allow for rounding */
-#define	BSD_PAGABLE_MAP_SIZE	(BSD_SIMUL_EXECS * (NCARGS + PAGE_SIZE))
-__private_extern__ int execargs_cache_size;
-__private_extern__ int execargs_free_count;
-__private_extern__ vm_offset_t * execargs_cache;
+#define	BSD_PAGEABLE_SIZE_PER_EXEC	(NCARGS + PAGE_SIZE + PAGE_SIZE) /* page for apple vars, page for executable header */
+extern int execargs_cache_size;
+extern int execargs_free_count;
+extern vm_offset_t * execargs_cache;
 
 #define SESS_LEADER(p, sessp)	((sessp)->s_leader == (p))
 
@@ -611,9 +633,11 @@ extern LIST_HEAD(sesshashhead, session) *sesshashtbl;
 extern u_long sesshash;
 
 extern lck_grp_t * proc_lck_grp;
+#if CONFIG_FINE_LOCK_GROUPS
 extern lck_grp_t * proc_mlock_grp;
 extern lck_grp_t * proc_fdmlock_grp;
 extern lck_grp_t * proc_slock_grp;
+#endif
 extern lck_grp_attr_t * proc_lck_grp_attr;
 extern lck_attr_t * proc_lck_attr;
 
@@ -638,6 +662,9 @@ __private_extern__ int proc_core_name(const char *name, uid_t uid, pid_t pid,
 		char *cr_name, size_t cr_name_len);
 extern int isinferior(struct proc *, struct proc *);
 __private_extern__ struct proc *pzfind(pid_t);	/* Find zombie by id. */
+__private_extern__ struct proc *proc_find_zombref(pid_t);	/* Find zombie by id. */
+__private_extern__ void proc_drop_zombref(struct proc * p);	/* Find zombie by id. */
+
 
 extern struct	lctx *lcfind(pid_t);		/* Find a login context by id */
 extern struct	lctx *lccreate(void);		/* Create a new login context */
@@ -699,6 +726,7 @@ void proc_transcommit(struct proc *, int locked);
 void proc_transend(struct proc *, int locked);
 int  proc_transwait(struct proc *, int locked);
 void  proc_rele_locked(struct proc *  p);
+struct proc *proc_ref_locked(struct proc *  p);
 void proc_knote(struct proc * p, long hint);
 void proc_knote_drain(struct proc *p);
 void workqueue_init_lock(proc_t p);

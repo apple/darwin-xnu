@@ -74,21 +74,9 @@ chudxnu_cpu_number(void)
 #endif
 
 __private_extern__ boolean_t
-chudxnu_get_interrupts_enabled(void)
-{
-    return ml_get_interrupts_enabled();
-}
-
-__private_extern__ boolean_t
 chudxnu_set_interrupts_enabled(boolean_t enable)
 {
     return ml_set_interrupts_enabled(enable);
-}
-
-__private_extern__ boolean_t
-chudxnu_at_interrupt_context(void)
-{
-    return ml_at_interrupt_context();
 }
 
 __private_extern__ void

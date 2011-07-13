@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -76,6 +76,14 @@
 #include <sys/cdefs.h>
 #include <machine/_param.h>
 
+#ifdef PRIVATE
+#include <sys/param.h>
+#endif /* PRIVATE */
+
+#ifndef KERNEL 
+#include <Availability.h>
+#endif
+
 /*
  * Definitions related to sockets: types, address families, options.
  */
@@ -130,6 +138,23 @@ struct iovec {
 	size_t	 iov_len;	/* [XSI] Size of region iov_base points to */
 };
 #endif
+
+#ifdef PRIVATE
+#define SO_TCDBG_PID	0x01	/* Set/get traffic class for PID */
+#define SO_TCDBG_PNAME	0x02	/* Set/get traffic class for processes of that name */
+#define SO_TCDBG_PURGE	0x04	/* Purge entries for unused PIDs */
+#define SO_TCDBG_FLUSH	0x08	/* Flush all entries */
+#define SO_TCDBG_COUNT	0x10	/* Get count of entries */
+#define SO_TCDBG_LIST	0x20	/* List entries */
+
+struct so_tcdbg {
+	u_int32_t	so_tcdbg_cmd;
+	int32_t		so_tcdbg_tclass;
+	u_int32_t	so_tcdbg_count;
+	pid_t		so_tcdbg_pid;
+	char		so_tcdbg_pname[MAXCOMLEN + 1];
+};
+#endif /* PRIVATE */
  
 /*
  * Types
@@ -161,6 +186,7 @@ struct iovec {
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	SO_REUSEPORT	0x0200		/* allow local address & port reuse */
 #define	SO_TIMESTAMP	0x0400		/* timestamp received dgram traffic */
+#define SO_TIMESTAMP_MONOTONIC	0x0800	/* Monotonically increasing timestamp on rcvd dgram */
 #ifndef __APPLE__
 #define	SO_ACCEPTFILTER	0x1000		/* there is an accept filter */
 #else
@@ -184,6 +210,8 @@ struct iovec {
 #define	SO_TYPE		0x1008		/* get socket type */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*efine	SO_PRIVSTATE	0x1009		   get/deny privileged state */
+#define SO_LABEL        0x1010          /* socket's MAC label */
+#define SO_PEERLABEL    0x1011          /* socket's peer MAC label */
 #ifdef __APPLE__
 #define SO_NREAD	0x1020		/* APPLE: get 1st-packet byte count */
 #define SO_NKE		0x1021		/* APPLE: Install socket-level NKE */
@@ -203,16 +231,26 @@ struct iovec {
 #define SO_RANDOMPORT   0x1082  /* APPLE: request local port randomization */
 #define SO_NP_EXTENSIONS	0x1083	/* To turn off some POSIX behavior */
 #endif
+
 #ifdef PRIVATE
 #define	SO_EXECPATH	0x1085 		/* Application Firewall Socket option */
-#define SO_TRAFFIC_CLASS	0x1086		/* Traffic class */
+#define SO_TRAFFIC_CLASS		0x1086		/* Traffic class (int)*/
 #define  SO_TC_BE	0		/* Best effort, normal */
 #define  SO_TC_BK	1		/* Background, low priority or bulk traffic */
 #define  SO_TC_VI	2		/* Interactive video, constant bit rate, low latency */
 #define  SO_TC_VO	3		/* Interactive voice, constant bit rate, lowest latency */
-#endif
-#define	SO_LABEL	0x1010		/* socket's MAC label */
-#define	SO_PEERLABEL	0x1011		/* socket's peer MAC label */
+#define  SO_TC_MAX	4		/* Max traffic class value */
+
+/* Background socket configuration flags */
+#define TRAFFIC_MGT_SO_BACKGROUND       0x0001  /* background socket */
+#define TRAFFIC_MGT_TCP_RECVBG          0x0002  /* Only TCP sockets, receiver throttling */
+
+#define SO_RECV_TRAFFIC_CLASS	0x1087		/* Receive traffic class (bool)*/
+#define SO_TRAFFIC_CLASS_DBG	0x1088		/* Debug traffic class (struct so_tcdbg) */
+#define SO_TRAFFIC_CLASS_STATS	0x1089		/* Traffic class statistics */
+#define	SO_DEFUNCTOK	0x1100		/* can be defunct'd */
+#define	SO_ISDEFUNCT	0x1101		/* get defunct status */
+#endif /* PRIVATE */
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
@@ -429,6 +467,9 @@ struct sockaddr_storage {
  */
 #define	PF_VLAN		((uint32_t)0x766c616e)	/* 'vlan' */
 #define PF_BOND		((uint32_t)0x626f6e64)	/* 'bond' */
+#ifdef KERNEL_PRIVATE
+#define PF_BRIDGE	((uint32_t)0x62726467)	/* 'brdg' */
+#endif /* KERNEL_PRIVATE */
 
 /*
  * Definitions for network related sysctl, CTL_NET.
@@ -492,14 +533,18 @@ struct sockaddr_storage {
  *	Fifth: type of info, defined below
  *	Sixth: flag(s) to mask with for NET_RT_FLAGS
  */
-#define NET_RT_DUMP			1		/* dump; may limit to a.f. */
-#define NET_RT_FLAGS		2		/* by flags, e.g. RESOLVING */
-#define NET_RT_IFLIST		3		/* survey interface list */
-#define NET_RT_STAT			4		/* routing statistics */
-#define NET_RT_TRASH		5		/* routes not in table but not freed */
-#define NET_RT_IFLIST2	6		/* interface list with addresses */
-#define NET_RT_DUMP2                     7               /* dump; may limit to a.f. */
-#define	NET_RT_MAXID		8
+#define NET_RT_DUMP		1	/* dump; may limit to a.f. */
+#define NET_RT_FLAGS		2	/* by flags, e.g. RESOLVING */
+#define NET_RT_IFLIST		3	/* survey interface list */
+#define NET_RT_STAT		4	/* routing statistics */
+#define NET_RT_TRASH		5	/* routes not in table but not freed */
+#define NET_RT_IFLIST2		6	/* interface list with addresses */
+#define NET_RT_DUMP2		7	/* dump; may limit to a.f. */
+#ifdef PRIVATE
+#define	NET_RT_DUMPX		8	/* private */
+#define	NET_RT_DUMPX_FLAGS	9	/* private */
+#endif /* PRIVATE */
+#define	NET_RT_MAXID		10
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 #ifdef KERNEL_PRIVATE
@@ -512,6 +557,8 @@ struct sockaddr_storage {
 	{ "trash", CTLTYPE_INT }, \
 	{ "iflist2", CTLTYPE_STRUCT }, \
         { "dump2", CTLTYPE_STRUCT }, \
+        { "dumpx", CTLTYPE_STRUCT }, \
+        { "dumpx_flags", CTLTYPE_STRUCT }, \
 }
 
 #endif /* KERNEL_PRIVATE */
@@ -595,7 +642,13 @@ struct user32_msghdr {
 #define	MSG_DONTWAIT	0x80		/* this message should be nonblocking */
 #define	MSG_EOF		0x100		/* data completes connection */
 #ifdef __APPLE__
+#ifndef PRIVATE
+#ifdef __APPLE_API_OBSOLETE
 #define MSG_WAITSTREAM  0x200           /* wait up to full request.. may return partial */
+#endif
+#else
+#define MSG_WAITSTREAM  0x200           /* wait up to full request.. may return partial */
+#endif
 #define MSG_FLUSH	0x400		/* Start of 'hold' seq; dump so_temp */
 #define MSG_HOLD	0x800		/* Hold frag in so_temp */
 #define MSG_SEND	0x1000		/* Send the packet in so_temp */
@@ -680,7 +733,7 @@ struct cmsgcred {
 	    ((unsigned char *)(mhdr)->msg_control +			\
 	     (mhdr)->msg_controllen)) ?					\
 	  (struct cmsghdr *)0L /* NULL */ :				\
-	  (struct cmsghdr *)((unsigned char *)(cmsg) +			\
+	  (struct cmsghdr *)(void *)((unsigned char *)(cmsg) +		\
 	 		    __DARWIN_ALIGN32((__uint32_t)(cmsg)->cmsg_len))))
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
@@ -694,10 +747,11 @@ struct cmsgcred {
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /* "Socket"-level control message types: */
-#define	SCM_RIGHTS	0x01		/* access rights (array of int) */
+#define	SCM_RIGHTS			0x01	/* access rights (array of int) */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define	SCM_TIMESTAMP	0x02		/* timestamp (struct timeval) */
-#define	SCM_CREDS	0x03		/* process creds (struct cmsgcred) */
+#define	SCM_TIMESTAMP			0x02	/* timestamp (struct timeval) */
+#define	SCM_CREDS			0x03	/* process creds (struct cmsgcred) */
+#define	SCM_TIMESTAMP_MONOTONIC		0x04	/* timestamp (uint64_t) */ 
 
 #ifdef KERNEL_PRIVATE
 /*
@@ -792,7 +846,7 @@ ssize_t	sendto(int, const void *, size_t,
 		int, const struct sockaddr *, socklen_t) __DARWIN_ALIAS_C(sendto);
 int	setsockopt(int, int, int, const void *, socklen_t);
 int	shutdown(int, int);
-int	sockatmark(int);
+int	sockatmark(int) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
 int	socket(int, int, int);
 int	socketpair(int, int, int, int *) __DARWIN_ALIAS(socketpair);
 
@@ -804,7 +858,6 @@ int	sendfile(int, int, off_t, off_t *, struct sf_hdtr *, int);
 void	pfctlinput(int, struct sockaddr *);
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 __END_DECLS
-
 #endif /* !KERNEL */
 
 #ifdef KERNEL

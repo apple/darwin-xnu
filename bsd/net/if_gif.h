@@ -90,6 +90,7 @@ struct gif_softc {
 	TAILQ_ENTRY(gif_softc) gif_link; /* all gif's are linked */
 	bpf_tap_mode	tap_mode;
 	bpf_packet_func tap_callback;
+	char 	gif_ifname[IFNAMSIZ];
 };
 
 #define gif_ro gifsc_gifscr.gifscr_ro

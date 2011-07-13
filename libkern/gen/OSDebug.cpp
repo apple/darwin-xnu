@@ -28,6 +28,7 @@
 
 // NOTE:  This file is only c++ so I can get static initialisers going
 #include <libkern/OSDebug.h>
+#include <IOKit/IOLib.h>
 
 #include <sys/cdefs.h>
 
@@ -179,41 +180,23 @@ x86_64_validate_stackptr(vm_offset_t stackptr)
 }
 #endif
 
+void
+OSPrintBacktrace(void)
+{
+	void * btbuf[20];
+	int tmp = OSBacktrace(btbuf, 20);
+	int i;
+	for(i=0;i<tmp;i++)
+	{
+		kprintf("bt[%.2d] = %p\n", i, btbuf[i]);
+	}
+}
 
 unsigned OSBacktrace(void **bt, unsigned maxAddrs)
 {
     unsigned frame;
 
-#if __ppc__
-    vm_offset_t stackptr, stackptr_prev;
-    const vm_offset_t * const mem = (vm_offset_t *) 0;
-    unsigned i = 0;
-
-    __asm__ volatile("mflr %0" : "=r" (stackptr)); 
-    bt[i++] = (void *) stackptr;
-
-    __asm__ volatile("mr %0,r1" : "=r" (stackptr)); 
-    for ( ; i < maxAddrs; i++) {
-	// Validate we have a reasonable stackptr
-	if ( !(minstackaddr <= stackptr && stackptr < maxstackaddr)
-	|| (stackptr & 3))
-	    break;
-
-	stackptr_prev = stackptr;
-	stackptr = mem[stackptr_prev >> 2];
-	if ((stackptr - stackptr_prev) > 8 * 1024)	// Sanity check
-	    break;
-
-	vm_offset_t addr = mem[(stackptr >> 2) + 2]; 
-	if ((addr & 3) || (addr < 0x8000))	// More sanity checks
-	    break;
-	bt[i] = (void *) addr;
-    }
-    frame = i;
-
-    for ( ; i < maxAddrs; i++)
-	    bt[i] = (void *) 0;
-#elif __i386__
+#if __i386__
 #define SANE_i386_FRAME_SIZE (kernel_stack_size >> 1)
     vm_offset_t stackptr, stackptr_prev, raddr;
     unsigned frame_index = 0;

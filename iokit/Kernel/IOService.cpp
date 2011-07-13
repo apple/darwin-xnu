@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -50,10 +50,13 @@
 #include <IOKit/assert.h>
 #include <sys/errno.h>
 
+#include <machine/pal_routines.h>
+
 #define LOG kprintf
 //#define LOG IOLog
 
 #include "IOServicePrivate.h"
+#include "IOKitKernelInternal.h"
 
 // take lockForArbitration before LOCKNOTIFY
 
@@ -106,11 +109,16 @@ const OSSymbol *		gIOKitDebugKey;
 
 const OSSymbol *		gIOCommandPoolSizeKey;
 
+const OSSymbol *		gIOConsoleLockedKey;
 const OSSymbol *		gIOConsoleUsersKey;
 const OSSymbol *		gIOConsoleSessionUIDKey;
+const OSSymbol *		gIOConsoleSessionAuditIDKey;
 const OSSymbol *		gIOConsoleUsersSeedKey;
-const OSSymbol *        gIOConsoleSessionOnConsoleKey;
-const OSSymbol *        gIOConsoleSessionSecureInputPIDKey;
+const OSSymbol *		gIOConsoleSessionOnConsoleKey;
+const OSSymbol *		gIOConsoleSessionSecureInputPIDKey;
+const OSSymbol *		gIOConsoleSessionScreenLockedTimeKey;
+
+static clock_sec_t		gIOConsoleLockTime;
 
 static int			gIOResourceGenerationCount;
 
@@ -125,6 +133,7 @@ const OSSymbol *		gIOGeneralInterest;
 const OSSymbol *		gIOBusyInterest;
 const OSSymbol *		gIOAppPowerStateInterest;
 const OSSymbol *		gIOPriorityPowerStateInterest;
+const OSSymbol *		gIOConsoleSecurityInterest;
 
 static OSDictionary * 		gNotifications;
 static IORecursiveLock *	gNotificationLock;
@@ -158,6 +167,9 @@ const OSSymbol *		gIOPlatformQuiesceActionKey;
 const OSSymbol *		gIOPlatformActiveActionKey;
 
 const OSSymbol *		gIOPlatformFunctionHandlerSet;
+
+static IOLock *			gIOConsoleUsersLock;
+static thread_call_t		gIOConsoleLockCallout;
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -212,14 +224,6 @@ static IOLock *     gArbitrationLockQueueLock;
 bool IOService::isInactive( void ) const
     { return( 0 != (kIOServiceInactiveState & getState())); }
 
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-#define IOServiceTrace(csc, a, b, c, d) {				\
-    if(kIOTraceIOService & gIOKitTrace) {				\
-	KERNEL_DEBUG_CONSTANT(IODBG_IOSERVICE(csc), a, b, c, d, 0);	\
-    }									\
-}
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -296,6 +300,7 @@ void IOService::initialize( void )
     gIOBusyInterest   		= OSSymbol::withCStringNoCopy( kIOBusyInterest );
     gIOAppPowerStateInterest   	= OSSymbol::withCStringNoCopy( kIOAppPowerStateInterest );
     gIOPriorityPowerStateInterest   	= OSSymbol::withCStringNoCopy( kIOPriorityPowerStateInterest );
+    gIOConsoleSecurityInterest 	= OSSymbol::withCStringNoCopy( kIOConsoleSecurityInterest );
 
     gNotifications		= OSDictionary::withCapacity( 1 );
     gIOPublishNotification	= OSSymbol::withCStringNoCopy(
@@ -310,13 +315,18 @@ void IOService::initialize( void )
 						 kIOTerminatedNotification );
     gIOServiceKey		= OSSymbol::withCStringNoCopy( kIOServiceClass);
 
+    gIOConsoleLockedKey		= OSSymbol::withCStringNoCopy( kIOConsoleLockedKey);
     gIOConsoleUsersKey		= OSSymbol::withCStringNoCopy( kIOConsoleUsersKey);
     gIOConsoleSessionUIDKey	= OSSymbol::withCStringNoCopy( kIOConsoleSessionUIDKey);
-    gIOConsoleUsersSeedKey	= OSSymbol::withCStringNoCopy( kIOConsoleUsersSeedKey);
-    gIOConsoleSessionOnConsoleKey = OSSymbol::withCStringNoCopy( kIOConsoleSessionOnConsoleKey);
-    gIOConsoleSessionSecureInputPIDKey = OSSymbol::withCStringNoCopy( kIOConsoleSessionSecureInputPIDKey);
-    gIOConsoleUsersSeedValue	= OSData::withBytesNoCopy(&gIOConsoleUsersSeed, sizeof(gIOConsoleUsersSeed));
+    gIOConsoleSessionAuditIDKey	= OSSymbol::withCStringNoCopy( kIOConsoleSessionAuditIDKey);
 
+    gIOConsoleUsersSeedKey	         = OSSymbol::withCStringNoCopy(kIOConsoleUsersSeedKey);
+    gIOConsoleSessionOnConsoleKey        = OSSymbol::withCStringNoCopy(kIOConsoleSessionOnConsoleKey);
+    gIOConsoleSessionSecureInputPIDKey   = OSSymbol::withCStringNoCopy(kIOConsoleSessionSecureInputPIDKey);
+    gIOConsoleSessionScreenLockedTimeKey = OSSymbol::withCStringNoCopy(kIOConsoleSessionScreenLockedTimeKey);
+
+    gIOConsoleUsersSeedValue	       = OSData::withBytesNoCopy(&gIOConsoleUsersSeed, sizeof(gIOConsoleUsersSeed));
+	
     gIOPlatformSleepActionKey	= OSSymbol::withCStringNoCopy(kIOPlatformSleepActionKey);
     gIOPlatformWakeActionKey	= OSSymbol::withCStringNoCopy(kIOPlatformWakeActionKey);
     gIOPlatformQuiesceActionKey	= OSSymbol::withCStringNoCopy(kIOPlatformQuiesceActionKey);
@@ -345,9 +355,14 @@ void IOService::initialize( void )
 
     gIOServiceBusyLock = IOLockAlloc();
 
+    gIOConsoleUsersLock = IOLockAlloc();
+
     err = semaphore_create(kernel_task, &gJobsSemaphore, SYNC_POLICY_FIFO, 0);
 
-    assert( gIOServiceBusyLock && gJobs && gJobsLock && (err == KERN_SUCCESS) );
+    gIOConsoleLockCallout = thread_call_allocate(&IOService::consoleLockTimer, NULL);
+
+    assert( gIOServiceBusyLock && gJobs && gJobsLock && gIOConsoleUsersLock
+    		&& gIOConsoleLockCallout && (err == KERN_SUCCESS) );
 
     gIOResources = IOResources::resources();
     assert( gIOResources );
@@ -578,7 +593,6 @@ void IOService::startMatching( IOOptionBits options )
 //			OSKernelStackRemaining(), getName());
 
     if( needConfig) {
-	prevBusy = _adjustBusy( 1 );
         needWake = (0 != (kIOServiceSyncPubState & __state[1]));
     }
 
@@ -590,6 +604,8 @@ void IOService::startMatching( IOOptionBits options )
     unlockForArbitration();
 
     if( needConfig) {
+
+	prevBusy = _adjustBusy( 1 );
 
         if( needWake) {
             IOLockLock( gIOServiceBusyLock );
@@ -1470,6 +1486,7 @@ IONotifier * IOService::registerInterest( const OSSymbol * typeOfInterest,
     if( (typeOfInterest != gIOGeneralInterest)
      && (typeOfInterest != gIOBusyInterest)
      && (typeOfInterest != gIOAppPowerStateInterest)
+     && (typeOfInterest != gIOConsoleSecurityInterest)
      && (typeOfInterest != gIOPriorityPowerStateInterest))
         return( 0 );
 
@@ -1541,6 +1558,7 @@ void IOService::unregisterAllInterest( void )
     cleanInterestList( getProperty( gIOBusyInterest ));
     cleanInterestList( getProperty( gIOAppPowerStateInterest ));
     cleanInterestList( getProperty( gIOPriorityPowerStateInterest ));
+    cleanInterestList( getProperty( gIOConsoleSecurityInterest ));
 }
 
 /*
@@ -1583,7 +1601,7 @@ void _IOServiceInterestNotifier::remove()
     LOCKWRITENOTIFY();
 
     if( queue_next( &chain )) {
-	remqueue( 0, &chain);
+	remqueue(&chain);
 	queue_next( &chain) = queue_prev( &chain) = 0;
 	release();
     }
@@ -1631,7 +1649,7 @@ void _IOServiceInterestNotifier::enable( bool was )
 
 #define tailQ(o)		setObject(o)
 #define headQ(o)		setObject(0, o)
-#define TLOG(fmt, args...)  	{ if(kIOLogYield & gIOKitDebug) IOLog(fmt, ## args); }
+#define TLOG(fmt, args...)  	{ if(kIOLogYield & gIOKitDebug) { IOLog("[%llx] ", thread_tid(current_thread())); IOLog(fmt, ## args); }}
 
 static void _workLoopAction( IOWorkLoop::Action action,
                              IOService * service,
@@ -1667,13 +1685,15 @@ bool IOService::requestTerminate( IOService * provider, IOOptionBits options )
 
 bool IOService::terminatePhase1( IOOptionBits options )
 {
-    IOService *		victim;
-    IOService *		client;
-    OSIterator *	iter;
-    OSArray *		makeInactive;
-    bool		ok;
-    bool		didInactive;
-    bool		startPhase2 = false;
+    IOService *	 victim;
+    IOService *	 client;
+    OSIterator * iter;
+    OSArray *	 makeInactive;
+	int          waitResult = THREAD_AWAKENED;
+	bool         wait;
+    bool		 ok;
+    bool		 didInactive;
+    bool		 startPhase2 = false;
 
     TLOG("%s::terminatePhase1(%08llx)\n", getName(), (long long)options);
 
@@ -1701,16 +1721,38 @@ bool IOService::terminatePhase1( IOOptionBits options )
 
     while( victim ) {
 
-	didInactive = victim->lockForArbitration( true );
+		didInactive = victim->lockForArbitration( true );
         if( didInactive) {
             didInactive = (0 == (victim->__state[0] & kIOServiceInactiveState));
             if( didInactive) {
                 victim->__state[0] |= kIOServiceInactiveState;
                 victim->__state[0] &= ~(kIOServiceRegisteredState | kIOServiceMatchedState
                                         | kIOServiceFirstPublishState | kIOServiceFirstMatchState);
+
+				if (victim == this)
+					victim->__state[1] |= kIOServiceTermPhase1State;
+
                 victim->_adjustBusy( 1 );
-            }
-	    victim->unlockForArbitration();
+
+            } else if (victim != this) do {
+
+				IOLockLock(gIOServiceBusyLock);
+				wait = (victim->__state[1] & kIOServiceTermPhase1State);
+				if( wait) {
+				    TLOG("%s::waitPhase1(%s)\n", getName(), victim->getName());
+					victim->__state[1] |= kIOServiceTerm1WaiterState;
+					victim->unlockForArbitration();
+					assert_wait((event_t)&victim->__state[1], THREAD_UNINT);
+				}
+				IOLockUnlock(gIOServiceBusyLock);
+				if( wait) {
+					waitResult = thread_block(THREAD_CONTINUE_NULL);
+				    TLOG("%s::did waitPhase1(%s)\n", getName(), victim->getName());
+					victim->lockForArbitration();
+				}
+			} while( wait && (waitResult != THREAD_TIMED_OUT));
+
+			victim->unlockForArbitration();
         }
         if( victim == this)
             startPhase2 = didInactive;
@@ -1755,8 +1797,21 @@ bool IOService::terminatePhase1( IOOptionBits options )
     makeInactive->release();
 
     if( startPhase2)
-        scheduleTerminatePhase2( options );
+    {
+		lockForArbitration();
+		__state[1] &= ~kIOServiceTermPhase1State;
+		if (kIOServiceTerm1WaiterState & __state[1])
+		{
+			__state[1] &= ~kIOServiceTerm1WaiterState;
+			TLOG("%s::wakePhase1\n", getName());
+			IOLockLock( gIOServiceBusyLock );
+			thread_wakeup( (event_t) &__state[1]);
+			IOLockUnlock( gIOServiceBusyLock );
+		}
+		unlockForArbitration();
 
+        scheduleTerminatePhase2( options );
+    }
     return( true );
 }
 
@@ -1917,7 +1972,9 @@ bool IOService::didTerminate( IOService * provider, IOOptionBits options, bool *
 }
 
 void IOService::actionWillTerminate( IOService * victim, IOOptionBits options, 
-                                    OSArray * doPhase2List )
+				     OSArray * doPhase2List,
+				     void *unused2 __unused,
+				     void *unused3 __unused  )
 {
     OSIterator * iter;
     IOService *	 client;
@@ -1945,7 +2002,9 @@ void IOService::actionWillTerminate( IOService * victim, IOOptionBits options,
     }
 }
 
-void IOService::actionDidTerminate( IOService * victim, IOOptionBits options )
+void IOService::actionDidTerminate( IOService * victim, IOOptionBits options,
+			    void *unused1 __unused, void *unused2 __unused,
+			    void *unused3 __unused )
 {
     OSIterator * iter;
     IOService *	 client;
@@ -1977,7 +2036,9 @@ void IOService::actionDidTerminate( IOService * victim, IOOptionBits options )
     }
 }
 
-void IOService::actionFinalize( IOService * victim, IOOptionBits options )
+void IOService::actionFinalize( IOService * victim, IOOptionBits options,
+			    void *unused1 __unused, void *unused2 __unused,
+			    void *unused3 __unused )
 {
     TLOG("%s::finalize(%08llx)\n", victim->getName(), (long long)options);
 
@@ -1991,7 +2052,9 @@ void IOService::actionFinalize( IOService * victim, IOOptionBits options )
     victim->finalize( options );
 }
 
-void IOService::actionStop( IOService * provider, IOService * client )
+void IOService::actionStop( IOService * provider, IOService * client,
+			    void *unused1 __unused, void *unused2 __unused,
+			    void *unused3 __unused )
 {
     TLOG("%s::stop(%s)\n", client->getName(), provider->getName());
 
@@ -3181,8 +3244,10 @@ UInt32 IOService::_adjustBusy( SInt32 delta )
 				     &messageClientsApplier, &context );
 
 #if !NO_KEXTD
-            if( nowQuiet && (next == gIOServiceRoot))
+            if( nowQuiet && (next == gIOServiceRoot)) {
                 OSKext::considerUnloads();
+                IOServiceTrace(IOSERVICE_REGISTRY_QUIET, 0, 0, 0, 0);
+            }
 #endif
         }
 
@@ -3386,7 +3451,7 @@ IOReturn IOService::waitMatchIdle( UInt32 msToWait )
     bool            wait;
     int             waitResult = THREAD_AWAKENED;
     bool            computeDeadline = true;
-    AbsoluteTime    abstime;
+    AbsoluteTime    deadline;
 
     IOLockLock( gJobsLock );
     do {
@@ -3394,14 +3459,12 @@ IOReturn IOService::waitMatchIdle( UInt32 msToWait )
         if( wait) {
             if( msToWait) {
                 if( computeDeadline ) {
-                    clock_interval_to_absolutetime_interval(
-                          msToWait, kMillisecondScale, &abstime );
-                    clock_absolutetime_interval_to_deadline(
-                          abstime, &abstime );
+                    clock_interval_to_deadline(
+                          msToWait, kMillisecondScale, &deadline );
                     computeDeadline = false;
                 }
 			  waitResult = IOLockSleepDeadline( gJobsLock, &gNumConfigThreads,
-								abstime, THREAD_UNINT );
+								deadline, THREAD_UNINT );
 	    	   } else {
 			  waitResult = IOLockSleep( gJobsLock, &gNumConfigThreads,
 								THREAD_UNINT );
@@ -4096,6 +4159,34 @@ IOService * IOResources::resources( void )
     return( inst );
 }
 
+bool IOResources::init( OSDictionary * dictionary )
+{
+    // Do super init first
+    if ( !super::init() )
+        return false;
+
+    // Allow PAL layer to publish a value
+    const char *property_name;
+    int property_value;
+
+    pal_get_resource_property( &property_name, &property_value );
+
+    if( property_name ) {
+	OSNumber *num;
+	const OSSymbol *	sym;
+
+	if( (num = OSNumber::withNumber(property_value, 32)) != 0 ) {
+	    if( (sym = OSSymbol::withCString( property_name)) != 0 ) {
+		this->setProperty( sym, num );
+		sym->release();
+	    }
+	    num->release();
+	}
+    }
+
+    return true;
+}
+
 IOWorkLoop * IOResources::getWorkLoop() const
 {
     // If we are the resource root
@@ -4133,6 +4224,92 @@ bool IOResources::matchPropertyTable( OSDictionary * table )
     return( ok );
 }
 
+void IOService::consoleLockTimer(thread_call_param_t p0, thread_call_param_t p1)
+{
+    IOService::updateConsoleUsers(NULL, 0);
+}
+
+void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessage)
+{
+    IORegistryEntry * regEntry;
+    OSObject *        locked = kOSBooleanFalse;
+    uint32_t          idx;
+    bool              publish;
+    OSDictionary *    user;
+    static IOMessage  sSystemPower;
+
+    regEntry = IORegistryEntry::getRegistryRoot();
+
+    IOLockLock(gIOConsoleUsersLock);
+
+    if (systemMessage)
+    {
+        sSystemPower = systemMessage;
+    }
+    if (consoleUsers)
+    {
+        OSNumber * num = 0;
+	for (idx = 0; 
+	      (!num) && (user = OSDynamicCast(OSDictionary, consoleUsers->getObject(idx))); 
+	      idx++)
+	{
+	    num = OSDynamicCast(OSNumber, user->getObject(gIOConsoleSessionScreenLockedTimeKey));
+	}
+        gIOConsoleLockTime = num ? num->unsigned32BitValue() : 0;
+    }
+
+    if (gIOConsoleLockTime)
+    {
+	if (kIOMessageSystemWillSleep == sSystemPower)
+	    locked = kOSBooleanTrue;
+	else
+	{
+	    clock_sec_t  now;
+	    clock_usec_t microsecs;
+
+	    clock_get_calendar_microtime(&now, &microsecs);
+	    if (gIOConsoleLockTime > now)
+	    {
+		AbsoluteTime deadline;
+		clock_interval_to_deadline(gIOConsoleLockTime - now, kSecondScale, &deadline);
+		thread_call_enter_delayed(gIOConsoleLockCallout, deadline);
+	    }
+	    else
+	    {
+		locked = kOSBooleanTrue;
+	    }
+	}
+    }
+
+    publish = (consoleUsers || (locked != regEntry->getProperty(gIOConsoleLockedKey)));
+    if (publish)
+    {
+	regEntry->setProperty(gIOConsoleLockedKey, locked);
+	if (consoleUsers)
+	{
+	    regEntry->setProperty(gIOConsoleUsersKey, consoleUsers);
+	}
+	OSIncrementAtomic( &gIOConsoleUsersSeed );
+    }
+
+    IOLockUnlock(gIOConsoleUsersLock);
+
+    if (publish)
+    {
+	publishResource( gIOConsoleUsersSeedKey, gIOConsoleUsersSeedValue );
+
+	MessageClientsContext context;
+    
+	context.service  = getServiceRoot();
+	context.type     = kIOMessageConsoleSecurityChange;
+	context.argument = (void *) regEntry;
+	context.argSize  = 0;
+    
+	applyToInterestNotifiers(getServiceRoot(), gIOConsoleSecurityInterest, 
+				 &messageClientsApplier, &context );
+    }
+}
+
 IOReturn IOResources::setProperties( OSObject * properties )
 {
     IOReturn			err;
@@ -4152,15 +4329,17 @@ IOReturn IOResources::setProperties( OSObject * properties )
     if( 0 == iter)
 	return( kIOReturnBadArgument);
 
-    while( (key = OSDynamicCast(OSSymbol, iter->getNextObject()))) {
-
-	if (gIOConsoleUsersKey == key)
+    while( (key = OSDynamicCast(OSSymbol, iter->getNextObject())))
+    {
+	if (gIOConsoleUsersKey == key) do
 	{
-	    IORegistryEntry::getRegistryRoot()->setProperty(key, dict->getObject(key));
-	    OSIncrementAtomic( &gIOConsoleUsersSeed );
-	    publishResource( gIOConsoleUsersSeedKey, gIOConsoleUsersSeedValue );
-	    continue;
+	    OSArray * consoleUsers;
+	    consoleUsers = OSDynamicCast(OSArray, dict->getObject(key));
+	    if (!consoleUsers)
+		continue;
+	    IOService::updateConsoleUsers(consoleUsers, 0);
 	}
+	while (false);
 
 	publishResource( key, dict->getObject(key) );
     }
@@ -4461,7 +4640,7 @@ bool IOService::passiveMatch( OSDictionary * table, bool changesOK )
     } while( matchParent && (where = where->getProvider()) );
 
     if( kIOLogMatch & gIOKitDebug)
-        if( where != this)
+        if( where && (where != this) )
             LOG("match parent @ %s = %d\n",
                         where->getName(), match );
 
@@ -5174,22 +5353,3 @@ OSMetaClassDefineReservedUnused(IOService, 44);
 OSMetaClassDefineReservedUnused(IOService, 45);
 OSMetaClassDefineReservedUnused(IOService, 46);
 OSMetaClassDefineReservedUnused(IOService, 47);
-
-#ifdef __ppc__
-OSMetaClassDefineReservedUnused(IOService, 48);
-OSMetaClassDefineReservedUnused(IOService, 49);
-OSMetaClassDefineReservedUnused(IOService, 50);
-OSMetaClassDefineReservedUnused(IOService, 51);
-OSMetaClassDefineReservedUnused(IOService, 52);
-OSMetaClassDefineReservedUnused(IOService, 53);
-OSMetaClassDefineReservedUnused(IOService, 54);
-OSMetaClassDefineReservedUnused(IOService, 55);
-OSMetaClassDefineReservedUnused(IOService, 56);
-OSMetaClassDefineReservedUnused(IOService, 57);
-OSMetaClassDefineReservedUnused(IOService, 58);
-OSMetaClassDefineReservedUnused(IOService, 59);
-OSMetaClassDefineReservedUnused(IOService, 60);
-OSMetaClassDefineReservedUnused(IOService, 61);
-OSMetaClassDefineReservedUnused(IOService, 62);
-OSMetaClassDefineReservedUnused(IOService, 63);
-#endif

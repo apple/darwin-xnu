@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -244,9 +244,10 @@
  *	NetBSD 1.5: always use IFAREF whenever reference gets added.
  *		always use IFAFREE whenever reference gets freed.
  *		IFAFREE frees ifaddr when ifa_refcnt reaches 0.
- *	Darwin: always use ifaref whenever reference gets added.
- *		always use ifafree whenever reference gets freed.
- *		ifaref and ifafree are responsible for determining when to free.
+ *	Darwin: always use IFA_ADDREF whenever reference gets added.
+ *		always use IFA_REMREF whenever reference gets freed.
+ *		IFA_ADDREF and IFA_REMREF are responsible for determining
+ *		when to free.
  *	others: do not increase refcnt for ifp->if_addrlist and in_ifaddr.
  *		use IFAFREE once when ifaddr is disconnected from
  *		ifp->if_addrlist and in_ifaddr.  IFAFREE frees ifaddr when
@@ -266,11 +267,6 @@ extern const char *if_name(struct ifnet *);
 #define ifa_list	ifa_link
 #define if_addrlist	if_addrhead
 #define if_list		if_link
-
-/* sys/net/if.h */
-#ifndef __APPLE__
-#define IFAREF(ifa)	do { ++(ifa)->ifa_refcnt; } while (0)
-#endif
 
 #define WITH_CONVERT_AND_STRIP_IP_LEN
 

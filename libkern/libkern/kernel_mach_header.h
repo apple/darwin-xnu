@@ -57,8 +57,6 @@ typedef struct segment_command_64 kernel_segment_command_t;
 typedef struct section_64		kernel_section_t;
 
 #define LC_SEGMENT_KERNEL		LC_SEGMENT_64
-#define SECT_CONSTRUCTOR		"__mod_init_func"
-#define SECT_DESTRUCTOR			"__mod_term_func"
 
 #else
 
@@ -71,6 +69,9 @@ typedef struct section			kernel_section_t;
 #define SECT_DESTRUCTOR			"__destructor"
 
 #endif
+
+#define SECT_MODINITFUNC		"__mod_init_func"
+#define SECT_MODTERMFUNC		"__mod_term_func"
 
 extern kernel_mach_header_t _mh_execute_header;
 
@@ -94,6 +95,7 @@ kernel_section_t *getsectbynamefromheader(
 void *getsectdatafromheader(kernel_mach_header_t *, const char *, const char *, unsigned long *);
 kernel_section_t *firstsect(kernel_segment_command_t *sgp);
 kernel_section_t *nextsect(kernel_segment_command_t *sgp, kernel_section_t *sp);
+void *getuuidfromheader(kernel_mach_header_t *, unsigned long *);
 
 #if MACH_KDB
 boolean_t getsymtab(kernel_mach_header_t *header,

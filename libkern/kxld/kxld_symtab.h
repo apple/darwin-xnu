@@ -37,6 +37,7 @@
 #endif
 
 #include "kxld_sym.h"
+#include "kxld_seg.h"
 
 struct kxld_array;
 struct symtab_command;
@@ -55,18 +56,18 @@ struct kxld_symtab_iterator {
 *******************************************************************************/
 
 size_t kxld_symtab_sizeof(void)
-    __attribute__((const, nonnull, visibility("hidden")));
+    __attribute__((const, visibility("hidden")));
 
 #if KXLD_USER_OR_ILP32
-kern_return_t kxld_symtab_init_from_macho_32(KXLDSymtab *symtab, u_char *macho,
-    struct symtab_command *src, kxld_addr_t linkedit_offset) 
-    __attribute__((nonnull, visibility("hidden")));
+kern_return_t kxld_symtab_init_from_macho_32(KXLDSymtab *symtab,
+    struct symtab_command *src, u_char *macho, KXLDSeg * kernel_linkedit_seg)
+    __attribute__((nonnull(1,2), visibility("hidden")));
 #endif /* KXLD_USER_OR_ILP32 */
 
 #if KXLD_USER_OR_LP64
-kern_return_t kxld_symtab_init_from_macho_64(KXLDSymtab *symtab, u_char *macho,
-    struct symtab_command *src, kxld_addr_t linkedit_offset) 
-    __attribute__((nonnull, visibility("hidden")));
+kern_return_t kxld_symtab_init_from_macho_64(KXLDSymtab *symtab,
+    struct symtab_command *src, u_char *macho, KXLDSeg * kernel_linkedit_seg)
+    __attribute__((nonnull(1,2), visibility("hidden")));
 #endif /* KXLD_USER_OR_ILP64 */
 
 void kxld_symtab_iterator_init(KXLDSymtabIterator *iter, 
@@ -89,8 +90,12 @@ u_int kxld_symtab_get_num_symbols(const KXLDSymtab *symtab)
 KXLDSym * kxld_symtab_get_symbol_by_index(const KXLDSymtab *symtab, u_int idx)
     __attribute__((pure, nonnull, visibility("hidden")));
 
-KXLDSym * kxld_symtab_get_symbol_by_name(const KXLDSymtab *symtab,
+KXLDSym * kxld_symtab_get_symbol_by_name(const KXLDSymtab *symtab, 
     const char *name)
+    __attribute__((pure, nonnull, visibility("hidden")));
+
+KXLDSym * kxld_symtab_get_locally_defined_symbol_by_name(
+    const KXLDSymtab *symtab, const char *name)
     __attribute__((pure, nonnull, visibility("hidden")));
 
 KXLDSym * kxld_symtab_get_cxx_symbol_by_value(const KXLDSymtab *symtab,
@@ -99,20 +104,20 @@ KXLDSym * kxld_symtab_get_cxx_symbol_by_value(const KXLDSymtab *symtab,
     
 kern_return_t kxld_symtab_get_sym_index(const KXLDSymtab *symtab, 
     const KXLDSym * sym, u_int *idx)
-    __attribute__((pure, nonnull, visibility("hidden")));
+    __attribute__((nonnull, visibility("hidden")));
 
 u_long kxld_symtab_get_macho_header_size(void)
     __attribute__((pure, visibility("hidden")));
 
 u_long kxld_symtab_get_macho_data_size(const KXLDSymtab *symtab, 
-    boolean_t is_link_state, boolean_t is_32_bit)
+    boolean_t is_32_bit)
     __attribute__((pure, nonnull, visibility("hidden")));
 
 kern_return_t
 kxld_symtab_export_macho(const KXLDSymtab *symtab, u_char *buf, 
     u_long *header_offset, u_long header_size,
     u_long *data_offset, u_long data_size, 
-    boolean_t is_link_state, boolean_t is_32_bit)
+    boolean_t is_32_bit)
     __attribute__((nonnull, visibility("hidden")));
     
 u_int kxld_symtab_iterator_get_num_remaining(const KXLDSymtabIterator *iter)
@@ -121,6 +126,12 @@ u_int kxld_symtab_iterator_get_num_remaining(const KXLDSymtabIterator *iter)
 /*******************************************************************************
 * Modifiers 
 *******************************************************************************/
+
+kern_return_t kxld_symtab_index_symbols_by_name(KXLDSymtab *symtab)
+    __attribute__((nonnull, visibility("hidden")));
+
+kern_return_t kxld_symtab_index_cxx_symbols_by_value(KXLDSymtab *symtab)
+    __attribute__((nonnull, visibility("hidden")));
 
 kern_return_t kxld_symtab_relocate(KXLDSymtab *symtab,
     const struct kxld_array *sectarray)

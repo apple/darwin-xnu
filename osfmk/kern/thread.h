@@ -146,6 +146,7 @@ struct thread {
 #define TH_OPT_INTMASK		0x03		/* interrupt / abort level */
 #define TH_OPT_VMPRIV		0x04		/* may allocate reserved memory */
 #define TH_OPT_DTRACE		0x08		/* executing under dtrace_probe */
+#define TH_OPT_SYSTEM_CRITICAL	0x10		/* Thread must always be allowed to run - even under heavy load */
 
 	/* Data updated during assert_wait/thread_wakeup */
 	decl_simple_lock_data(,sched_lock)	/* scheduling lock (thread_lock()) */
@@ -183,23 +184,37 @@ struct thread {
 #define TH_IDLE			0x80			/* idling processor */
 
 	/* Scheduling information */
-	integer_t			sched_mode;			/* scheduling mode bits */
-#define TH_MODE_REALTIME		0x0001		/* time constraints supplied */
-#define TH_MODE_TIMESHARE		0x0002		/* use timesharing algorithm */
-#define TH_MODE_FAILSAFE		0x0004		/* fail-safe has tripped */
-#define	TH_MODE_PROMOTED		0x0008		/* sched pri has been promoted */
-#define TH_MODE_ABORT			0x0010		/* abort interruptible waits */
-#define TH_MODE_ABORTSAFELY		0x0020		/* ... but only those at safe point */
-#define TH_MODE_ISABORTED		(TH_MODE_ABORT | TH_MODE_ABORTSAFELY)
-#define	TH_MODE_DEPRESS			0x0040		/* normal depress yield */
-#define TH_MODE_POLLDEPRESS		0x0080		/* polled depress yield */
-#define TH_MODE_ISDEPRESSED		(TH_MODE_DEPRESS | TH_MODE_POLLDEPRESS)
+	sched_mode_t			sched_mode;		/* scheduling mode */
+	sched_mode_t			saved_mode;		/* saved mode during forced mode demotion */
+	
+	unsigned int			sched_flags;		/* current flag bits */
+#define TH_SFLAG_FAIRSHARE_TRIPPED	0x0001		/* fairshare scheduling activated */
+#define TH_SFLAG_FAILSAFE		0x0002		/* fail-safe has tripped */
+#define TH_SFLAG_THROTTLED		0x0004      /* owner task in throttled state */
+#define TH_SFLAG_DEMOTED_MASK      (TH_SFLAG_THROTTLED | TH_SFLAG_FAILSAFE | TH_SFLAG_FAIRSHARE_TRIPPED)
+
+#define	TH_SFLAG_PROMOTED		0x0008		/* sched pri has been promoted */
+#define TH_SFLAG_ABORT			0x0010		/* abort interruptible waits */
+#define TH_SFLAG_ABORTSAFELY		0x0020		/* ... but only those at safe point */
+#define TH_SFLAG_ABORTED_MASK		(TH_SFLAG_ABORT | TH_SFLAG_ABORTSAFELY)
+#define	TH_SFLAG_DEPRESS		0x0040		/* normal depress yield */
+#define TH_SFLAG_POLLDEPRESS		0x0080		/* polled depress yield */
+#define TH_SFLAG_DEPRESSED_MASK		(TH_SFLAG_DEPRESS | TH_SFLAG_POLLDEPRESS)
+#define TH_SFLAG_PRI_UPDATE		0x0100		/* Updating priority */
+#define TH_SFLAG_EAGERPREEMPT		0x0200		/* Any preemption of this thread should be treated as if AST_URGENT applied */
+
 
 	integer_t			sched_pri;			/* scheduled (current) priority */
 	integer_t			priority;			/* base priority */
 	integer_t			max_priority;		/* max base priority */
 	integer_t			task_priority;		/* copy of task base priority */
 
+#if defined(CONFIG_SCHED_GRRR)
+#if 0
+	uint16_t			grrr_deficit;		/* fixed point (1/1000th quantum) fractional deficit */
+#endif
+#endif
+	
 	integer_t			promotions;			/* level of promotion */
 	integer_t			pending_promoter_index;
 	void				*pending_promoter[2];
@@ -216,30 +231,38 @@ struct thread {
 		uint64_t			deadline;
 	}					realtime;
 
+	uint32_t			was_promoted_on_wakeup;
 	uint32_t			current_quantum;	/* duration of current quantum */
+	uint64_t			last_run_time;		/* time when thread was switched away from */
+	uint64_t			last_quantum_refill_time;	/* time when current_quantum was refilled after expiration */
 
   /* Data used during setrun/dispatch */
 	timer_data_t		system_timer;		/* system mode timer */
 	processor_t			bound_processor;	/* bound to a processor? */
 	processor_t			last_processor;		/* processor last dispatched on */
+	processor_t			chosen_processor;	/* Where we want to run this thread */
 
 	/* Fail-safe computation since last unblock or qualifying yield */
 	uint64_t			computation_metered;
 	uint64_t			computation_epoch;
-	integer_t			safe_mode;		/* saved mode during fail-safe */
-	natural_t			safe_release;	/* when to release fail-safe */
+	uint64_t			safe_release;	/* when to release fail-safe */
 
 	/* Call out from scheduler */
 	void				(*sched_call)(
 							int			type,
 							thread_t	thread);
-
+#if defined(CONFIG_SCHED_PROTO)
+	uint32_t			runqueue_generation;	/* last time runqueue was drained */
+#endif
+	
 	/* Statistics and timesharing calculations */
+#if defined(CONFIG_SCHED_TRADITIONAL)
 	natural_t			sched_stamp;	/* last scheduler tick */
 	natural_t			sched_usage;	/* timesharing cpu usage [sched] */
 	natural_t			pri_shift;		/* usage -> priority from pset */
 	natural_t			cpu_usage;		/* instrumented cpu usage [%cpu] */
 	natural_t			cpu_delta;		/* accumulated cpu_usage delta */
+#endif
 	uint32_t			c_switch;		/* total context switches */
 	uint32_t			p_switch;		/* total processor switches */
 	uint32_t			ps_switch;		/* total pset switches */
@@ -366,7 +389,20 @@ struct thread {
 	        clock_sec_t t_page_creation_time;
 
 		uint32_t t_chud;	/* CHUD flags, used for Shark */
+
+		integer_t mutex_count;	/* total count of locks held */
+
 		uint64_t thread_id;	/*system wide unique thread-id*/
+
+	/* Statistics accumulated per-thread and aggregated per-task */
+	uint32_t		syscalls_unix;
+	uint32_t		syscalls_mach;
+	zinfo_usage_store_t	tkm_private;	/* private kernel memory allocs/frees */
+	zinfo_usage_store_t	tkm_shared;	/* shared kernel memory allocs/frees */
+	struct process_policy ext_actionstate;	/* externally applied actions */
+	struct process_policy ext_policystate;	/* externally defined process policy states*/
+	struct process_policy actionstate;		/* self applied acions */
+	struct process_policy policystate;		/* process wide policy states */
 };
 
 #define ith_state		saved.receive.state
@@ -441,11 +477,15 @@ extern void			thread_release(
 extern void				stack_alloc(
 							thread_t		thread);
 
+extern void			stack_handoff(
+					      		thread_t		from,
+							thread_t		to);
+
 extern void				stack_free(
 							thread_t		thread);
 
-extern void				stack_free_stack(
-							vm_offset_t		stack);
+extern void				stack_free_reserved(
+							thread_t		thread);
 
 extern boolean_t		stack_alloc_try(
 							thread_t	    thread);
@@ -453,6 +493,7 @@ extern boolean_t		stack_alloc_try(
 extern void				stack_collect(void);
 
 extern void				stack_init(void) __attribute__((section("__TEXT, initcode")));
+
 
 extern kern_return_t    thread_state_initialize(
 							thread_t				thread);
@@ -684,6 +725,22 @@ extern kern_return_t	thread_setsinglestep(
 						thread_t		thread,
 						int			on);
 
+extern kern_return_t	thread_userstack(
+						thread_t,
+						int,
+						thread_state_t,
+						unsigned int,
+						mach_vm_offset_t *,
+						int *);
+
+kern_return_t	thread_entrypoint(
+				thread_t,
+				int,
+				thread_state_t,
+				unsigned int,
+				mach_vm_offset_t *); 
+
+
 extern kern_return_t	thread_wire_internal(
 							host_priv_t		host_priv,
 							thread_t		thread,
@@ -775,6 +832,10 @@ extern kern_return_t	kernel_thread_start(
 							thread_continue_t	continuation,
 							void				*parameter,
 							thread_t			*new_thread);
+#ifdef KERNEL_PRIVATE
+void thread_set_eager_preempt(thread_t thread);
+void thread_clear_eager_preempt(thread_t thread);
+#endif /* KERNEL_PRIVATE */
 
 __END_DECLS
 

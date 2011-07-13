@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -146,14 +146,71 @@ __private_extern__ int nfs_ticks;
  * (These sizes are always a power of 2. If the kernel malloc() changes
  *  to one that does not allocate space in powers of 2 size, then this all
  *  becomes bunk!).
- * Note that some of these structures come out of there own nfs zones.
-*/
+ * Note that some of these structures come out of their own nfs zones.
+ */
 #define NFS_NODEALLOC	1024
 #define NFS_MNTALLOC	1024
 #define NFS_SVCALLOC	512
 
+#define NFS_ARGSVERSION_XDR	88	/* NFS mount args are in XDR format */
+
+#define NFS_XDRARGS_VERSION_0	0
+#define NFS_MATTR_BITMAP_LEN	1		/* length of mount attributes bitmap */
+#define NFS_MFLAG_BITMAP_LEN	1		/* length of mount flags bitmap */
+
+/* NFS mount attributes */
+#define NFS_MATTR_FLAGS			0	/* mount flags (NFS_MATTR_*) */
+#define NFS_MATTR_NFS_VERSION		1	/* NFS protocol version */
+#define NFS_MATTR_NFS_MINOR_VERSION	2	/* NFS protocol minor version */
+#define NFS_MATTR_READ_SIZE		3	/* READ RPC size */
+#define NFS_MATTR_WRITE_SIZE		4	/* WRITE RPC size */
+#define NFS_MATTR_READDIR_SIZE		5	/* READDIR RPC size */
+#define NFS_MATTR_READAHEAD		6	/* block readahead count */
+#define NFS_MATTR_ATTRCACHE_REG_MIN	7	/* minimum attribute cache time */
+#define NFS_MATTR_ATTRCACHE_REG_MAX	8	/* maximum attribute cache time */
+#define NFS_MATTR_ATTRCACHE_DIR_MIN	9	/* minimum attribute cache time for dirs */
+#define NFS_MATTR_ATTRCACHE_DIR_MAX	10	/* maximum attribute cache time for dirs */
+#define NFS_MATTR_LOCK_MODE		11	/* advisory file locking mode (NFS_LOCK_MODE_*) */
+#define NFS_MATTR_SECURITY		12	/* RPC security flavors to use */
+#define NFS_MATTR_MAX_GROUP_LIST	13	/* max # of RPC AUTH_SYS groups */
+#define NFS_MATTR_SOCKET_TYPE		14	/* socket transport type as a netid-like string */
+#define NFS_MATTR_NFS_PORT		15	/* port # to use for NFS protocol */
+#define NFS_MATTR_MOUNT_PORT		16	/* port # to use for MOUNT protocol */
+#define NFS_MATTR_REQUEST_TIMEOUT	17	/* initial RPC request timeout value */
+#define NFS_MATTR_SOFT_RETRY_COUNT	18	/* max RPC retransmissions for soft mounts */
+#define NFS_MATTR_DEAD_TIMEOUT		19	/* how long until unresponsive mount is considered dead */
+#define NFS_MATTR_FH			20	/* file handle for mount directory */
+#define NFS_MATTR_FS_LOCATIONS		21	/* list of locations for the file system */
+#define NFS_MATTR_MNTFLAGS		22	/* VFS mount flags (MNT_*) */
+#define NFS_MATTR_MNTFROM		23	/* fixed string to use for "f_mntfromname" */
+
+/* NFS mount flags */
+#define NFS_MFLAG_SOFT			0	/* soft mount (requests fail if unresponsive) */
+#define NFS_MFLAG_INTR			1	/* allow operations to be interrupted */
+#define NFS_MFLAG_RESVPORT		2	/* use a reserved port */
+#define NFS_MFLAG_NOCONNECT		3	/* don't connect the socket (UDP) */
+#define NFS_MFLAG_DUMBTIMER		4	/* don't estimate RTT dynamically */
+#define NFS_MFLAG_CALLUMNT		5	/* call MOUNTPROC_UMNT on unmount */
+#define NFS_MFLAG_RDIRPLUS		6	/* request additional info when reading directories */
+#define NFS_MFLAG_NONEGNAMECACHE	7	/* don't do negative name caching */
+#define NFS_MFLAG_MUTEJUKEBOX		8	/* don't treat jukebox errors as unresponsive */
+#define NFS_MFLAG_EPHEMERAL		9	/* ephemeral (mirror) mount */
+#define NFS_MFLAG_NOCALLBACK		10	/* don't provide callback RPC service */
+#define NFS_MFLAG_NONAMEDATTR		11	/* don't use named attributes */
+#define NFS_MFLAG_NOACL			12	/* don't support ACLs */
+#define NFS_MFLAG_ACLONLY		13	/* only support ACLs - not mode */
+#define NFS_MFLAG_NFC			14	/* send NFC strings */
+#define NFS_MFLAG_NOQUOTA		15	/* don't support QUOTA requests */
+#define NFS_MFLAG_MNTUDP		16	/* MOUNT protocol should use UDP */
+#define NFS_MFLAG_MNTQUICK		17	/* use short timeouts while mounting */
+
+/* NFS advisory file locking modes */
+#define NFS_LOCK_MODE_ENABLED		0	/* advisory file locking enabled */
+#define NFS_LOCK_MODE_DISABLED		1	/* do not support advisory file locking */
+#define NFS_LOCK_MODE_LOCAL		2	/* perform advisory file locking locally */
+
 /*
- * Arguments to mount NFS
+ * Old-style arguments to mount NFS
  */
 #define NFS_ARGSVERSION	6		/* change when nfs_args changes */
 struct nfs_args {
@@ -197,115 +254,11 @@ struct nfs_args {
 	/* NFS_ARGSVERSION 5 ends here */
 	uint32_t	deadtimeout;	/* secs until unresponsive mount considered dead */
 };
-struct nfs_args5 {
-	int		version;	/* args structure version number */
-#ifdef KERNEL
-	user32_addr_t addr;		/* file server address */
-#else
-	struct sockaddr	*addr;		/* file server address */
-#endif
-	int		addrlen;	/* length of address */
-	int		sotype;		/* Socket type */
-	int		proto;		/* and Protocol */
-#ifdef KERNEL
-	user32_addr_t fh;		/* File handle to be mounted */
-#else
-	u_char		*fh;		/* File handle to be mounted */
-#endif
-	int		fhsize;		/* Size, in bytes, of fh */
-	int		flags;		/* flags */
-	int		wsize;		/* write size in bytes */
-	int		rsize;		/* read size in bytes */
-	int		readdirsize;	/* readdir size in bytes */
-	int		timeo;		/* initial timeout in .1 secs */
-	int		retrans;	/* times to retry send */
-	int		maxgrouplist;	/* Max. size of group list */
-	int		readahead;	/* # of blocks to readahead */
-	int		leaseterm;	/* obsolete: Term (sec) of lease */
-	int		deadthresh;	/* obsolete: Retrans threshold */
-#ifdef KERNEL
-	user32_addr_t hostname;	/* server's name */
-#else
-	char		*hostname;	/* server's name */
-#endif
-	/* NFS_ARGSVERSION 3 ends here */
-	int		acregmin;	/* reg file min attr cache timeout */
-	int		acregmax;	/* reg file max attr cache timeout */
-	int		acdirmin;	/* dir min attr cache timeout */
-	int		acdirmax;	/* dir max attr cache timeout */
-	/* NFS_ARGSVERSION 4 ends here */
-	uint32_t	auth;		/* security mechanism flavor */
-};
-struct nfs_args4 {
-	int		version;	/* args structure version number */
-#ifdef KERNEL
-	user32_addr_t addr;		/* file server address */
-#else
-	struct sockaddr	*addr;		/* file server address */
-#endif
-	int		addrlen;	/* length of address */
-	int		sotype;		/* Socket type */
-	int		proto;		/* and Protocol */
-#ifdef KERNEL
-	user32_addr_t fh;		/* File handle to be mounted */
-#else
-	u_char		*fh;		/* File handle to be mounted */
-#endif
-	int		fhsize;		/* Size, in bytes, of fh */
-	int		flags;		/* flags */
-	int		wsize;		/* write size in bytes */
-	int		rsize;		/* read size in bytes */
-	int		readdirsize;	/* readdir size in bytes */
-	int		timeo;		/* initial timeout in .1 secs */
-	int		retrans;	/* times to retry send */
-	int		maxgrouplist;	/* Max. size of group list */
-	int		readahead;	/* # of blocks to readahead */
-	int		leaseterm;	/* obsolete: Term (sec) of lease */
-	int		deadthresh;	/* obsolete: Retrans threshold */
-#ifdef KERNEL
-	user32_addr_t hostname;	/* server's name */
-#else
-	char		*hostname;	/* server's name */
-#endif
-	/* NFS_ARGSVERSION 3 ends here */
-	int		acregmin;	/* reg file min attr cache timeout */
-	int		acregmax;	/* reg file max attr cache timeout */
-	int		acdirmin;	/* dir min attr cache timeout */
-	int		acdirmax;	/* dir max attr cache timeout */
-};
 
-struct nfs_args3 {
-	int		version;	/* args structure version number */
-#ifdef KERNEL
-	user32_addr_t addr;		/* file server address */
-#else
-	struct sockaddr	*addr;		/* file server address */
-#endif
-	int		addrlen;	/* length of address */
-	int		sotype;		/* Socket type */
-	int		proto;		/* and Protocol */
-#ifdef KERNEL
-	user32_addr_t fh;		/* File handle to be mounted */
-#else
-	u_char		*fh;		/* File handle to be mounted */
-#endif
-	int		fhsize;		/* Size, in bytes, of fh */
-	int		flags;		/* flags */
-	int		wsize;		/* write size in bytes */
-	int		rsize;		/* read size in bytes */
-	int		readdirsize;	/* readdir size in bytes */
-	int		timeo;		/* initial timeout in .1 secs */
-	int		retrans;	/* times to retry send */
-	int		maxgrouplist;	/* Max. size of group list */
-	int		readahead;	/* # of blocks to readahead */
-	int		leaseterm;	/* obsolete: Term (sec) of lease */
-	int		deadthresh;	/* obsolete: Retrans threshold */
-#ifdef KERNEL
-	user32_addr_t hostname;	/* server's name */
-#else
-	char		*hostname;	/* server's name */
-#endif
-};
+/* incremental size additions in each version of nfs_args */
+#define NFS_ARGSVERSION4_INCSIZE	(4 * sizeof(int))
+#define NFS_ARGSVERSION5_INCSIZE	(sizeof(uint32_t))
+#define NFS_ARGSVERSION6_INCSIZE	(sizeof(uint32_t))
 
 #ifdef KERNEL
 /* LP64 version of nfs_args.  all pointers and longs
@@ -341,83 +294,10 @@ struct user_nfs_args {
 	/* NFS_ARGSVERSION 5 ends here */
 	uint32_t	deadtimeout;	/* secs until unresponsive mount considered dead */
 };
-struct user_nfs_args5 {
-	int		version;	/* args structure version number */
-	user_addr_t	addr __attribute((aligned(8)));		/* file server address */
-	int		addrlen;	/* length of address */
-	int		sotype;		/* Socket type */
-	int		proto;		/* and Protocol */
-	user_addr_t	fh __attribute((aligned(8)));		/* File handle to be mounted */
-	int		fhsize;		/* Size, in bytes, of fh */
-	int		flags;		/* flags */
-	int		wsize;		/* write size in bytes */
-	int		rsize;		/* read size in bytes */
-	int		readdirsize;	/* readdir size in bytes */
-	int		timeo;		/* initial timeout in .1 secs */
-	int		retrans;	/* times to retry send */
-	int		maxgrouplist;	/* Max. size of group list */
-	int		readahead;	/* # of blocks to readahead */
-	int		leaseterm;	/* obsolete: Term (sec) of lease */
-	int		deadthresh;	/* obsolete: Retrans threshold */
-	user_addr_t	hostname __attribute((aligned(8)));	/* server's name */
-	/* NFS_ARGSVERSION 3 ends here */
-	int		acregmin;	/* reg file min attr cache timeout */
-	int		acregmax;	/* reg file max attr cache timeout */
-	int		acdirmin;	/* dir min attr cache timeout */
-	int		acdirmax;	/* dir max attr cache timeout */
-	/* NFS_ARGSVERSION 4 ends here */
-	uint32_t	auth;		/* security mechanism flavor */
-};
-struct user_nfs_args4 {
-	int		version;	/* args structure version number */
-	user_addr_t	addr __attribute((aligned(8)));		/* file server address */
-	int		addrlen;	/* length of address */
-	int		sotype;		/* Socket type */
-	int		proto;		/* and Protocol */
-	user_addr_t	fh __attribute((aligned(8)));		/* File handle to be mounted */
-	int		fhsize;		/* Size, in bytes, of fh */
-	int		flags;		/* flags */
-	int		wsize;		/* write size in bytes */
-	int		rsize;		/* read size in bytes */
-	int		readdirsize;	/* readdir size in bytes */
-	int		timeo;		/* initial timeout in .1 secs */
-	int		retrans;	/* times to retry send */
-	int		maxgrouplist;	/* Max. size of group list */
-	int		readahead;	/* # of blocks to readahead */
-	int		leaseterm;	/* obsolete: Term (sec) of lease */
-	int		deadthresh;	/* obsolete: Retrans threshold */
-	user_addr_t	hostname __attribute((aligned(8)));	/* server's name */
-	/* NFS_ARGSVERSION 3 ends here */
-	int		acregmin;	/* reg file min attr cache timeout */
-	int		acregmax;	/* reg file max attr cache timeout */
-	int		acdirmin;	/* dir min attr cache timeout */
-	int		acdirmax;	/* dir max attr cache timeout */
-};
-struct user_nfs_args3 {
-	int		version;	/* args structure version number */
-	user_addr_t	addr __attribute((aligned(8)));		/* file server address */
-	int		addrlen;	/* length of address */
-	int		sotype;		/* Socket type */
-	int		proto;		/* and Protocol */
-	user_addr_t	fh __attribute((aligned(8)));		/* File handle to be mounted */
-	int		fhsize;		/* Size, in bytes, of fh */
-	int		flags;		/* flags */
-	int		wsize;		/* write size in bytes */
-	int		rsize;		/* read size in bytes */
-	int		readdirsize;	/* readdir size in bytes */
-	int		timeo;		/* initial timeout in .1 secs */
-	int		retrans;	/* times to retry send */
-	int		maxgrouplist;	/* Max. size of group list */
-	int		readahead;	/* # of blocks to readahead */
-	int		leaseterm;	/* obsolete: Term (sec) of lease */
-	int		deadthresh;	/* obsolete: Retrans threshold */
-	user_addr_t	hostname __attribute((aligned(8)));	/* server's name */
-};
-
 #endif // KERNEL
 
 /*
- * NFS mount option flags
+ * Old-style NFS mount option flags
  */
 #define	NFSMNT_SOFT		0x00000001  /* soft mount (hard is default) */
 #define	NFSMNT_WSIZE		0x00000002  /* set write size */
@@ -446,6 +326,27 @@ struct user_nfs_args3 {
 #define	NFSMNT_SECFLAVOR	0x01000000  /* Use security flavor */
 #define	NFSMNT_SECSYSOK		0x02000000  /* Server can support auth sys */
 #define	NFSMNT_MUTEJUKEBOX	0x04000000  /* don't treat jukebox errors as unresponsive */
+#define	NFSMNT_NOQUOTA		0x08000000  /* don't support QUOTA requests */
+
+
+/*
+ * fs.nfs sysctl(3) NFS_MOUNTINFO defines
+ */
+#define NFS_MOUNT_INFO_VERSION	0	/* nfsstat mount information version */
+#define NFS_MIATTR_BITMAP_LEN	1	/* length of mount info attributes bitmap */
+#define NFS_MIFLAG_BITMAP_LEN	1	/* length of mount info flags bitmap */
+
+/* NFS mount info attributes */
+#define NFS_MIATTR_FLAGS		0	/* mount info flags bitmap (MIFLAG_*) */
+#define NFS_MIATTR_ORIG_ARGS		1	/* original mount args passed into mount call */
+#define NFS_MIATTR_CUR_ARGS 		2	/* current mount args values */
+#define NFS_MIATTR_CUR_LOC_INDEX	3	/* current fs location index */
+
+/* NFS mount info flags */
+#define NFS_MIFLAG_DEAD		0	/* mount is dead */
+#define NFS_MIFLAG_NOTRESP	1	/* server is unresponsive */
+#define NFS_MIFLAG_RECOVERY	2	/* mount in recovery */
+
 
 /*
  * Structures for the nfssvc(2) syscall. Not that anyone but nfsd
@@ -831,6 +732,7 @@ struct nfsstats {
  * Flags for nfsclnt() system call.
  */
 #define NFSCLNT_LOCKDANS	0x200
+#define NFSCLNT_LOCKDNOTIFY	0x400
 
 /*
  * fs.nfs sysctl(3) identifiers
@@ -839,6 +741,7 @@ struct nfsstats {
 #define NFS_EXPORTSTATS 3	/* gets exported directory stats */
 #define NFS_USERSTATS	4	/* gets exported directory active user stats */
 #define NFS_USERCOUNT	5	/* gets current count of active nfs users */
+#define NFS_MOUNTINFO	6	/* gets information about an NFS mount */
 
 #ifndef NFS_WDELAYHASHSIZ
 #define	NFS_WDELAYHASHSIZ 16	/* and with this */
@@ -882,6 +785,11 @@ struct nfs_open_file;
 struct nfs_lock_owner;
 struct nfs_file_lock;
 struct nfsreq;
+struct nfs_rpc_record_state;
+struct nfs_fs_locations;
+struct nfs_location_index;
+struct nfs_socket;
+struct nfs_socket_search;
 
 /*
  * The set of signals the interrupt an I/O in progress for NFSMNT_INT mounts.
@@ -927,6 +835,28 @@ struct nfsreq_cbinfo {
 };
 
 /*
+ * Arguments to use if a request needs to call SECINFO to handle a WRONGSEC error
+ *
+ * If only node is set, use the parent file handle and this node's name; otherwise,
+ * use any file handle and name provided.
+ */
+struct nfsreq_secinfo_args {
+	nfsnode_t		rsia_np;		/* the node */
+	const char		*rsia_name;		/* alternate name string */
+	u_char			*rsia_fh;		/* alternate file handle */
+	uint32_t		rsia_namelen;		/* length of string */
+	uint32_t		rsia_fhsize;		/* length of fh */
+};
+#define NFSREQ_SECINFO_SET(SI, NP, FH, FHSIZE, NAME, NAMELEN) \
+	do { \
+		(SI)->rsia_np = (NP); \
+		(SI)->rsia_fh = (FH); \
+		(SI)->rsia_fhsize = (FHSIZE); \
+		(SI)->rsia_name = (NAME); \
+		(SI)->rsia_namelen = (NAMELEN); \
+	} while (0)
+
+/*
  * NFS outstanding request list element
  */
 struct nfsreq {
@@ -959,8 +889,11 @@ struct nfsreq {
 	SLIST_HEAD(, gss_seq)	r_gss_seqlist;	/* RPCSEC_GSS sequence numbers */
 	uint32_t		r_gss_argoff;	/* RPCSEC_GSS offset to args */
 	uint32_t		r_gss_arglen;	/* RPCSEC_GSS arg length */
+	uint32_t		r_auth;		/* security flavor request sent with */
+	uint32_t		*r_wrongsec;	/* wrongsec: other flavors to try */
 	int			r_error;	/* request error */
 	struct nfsreq_cbinfo	r_callback;	/* callback info */
+	struct nfsreq_secinfo_args r_secinfo;	/* secinfo args */
 };
 
 /*
@@ -992,9 +925,10 @@ __private_extern__ lck_grp_t *nfs_request_grp;
 #define R_RESENDQ	0x00004000	/* async request currently on resendq */
 #define R_SENDING	0x00008000	/* request currently being sent */
 
+#define R_NOINTR	0x20000000	/* request should not be interupted by a signal */
 #define R_RECOVER	0x40000000	/* a state recovery RPC - during NFSSTA_RECOVER */
 #define R_SETUP		0x80000000	/* a setup RPC - during (re)connection */
-#define R_OPTMASK	0xc0000000	/* mask of all RPC option flags */
+#define R_OPTMASK	0xe0000000	/* mask of all RPC option flags */
 
 /* Flag values for r_lflags */
 #define RL_BUSY		0x0001		/* Locked. */
@@ -1002,10 +936,21 @@ __private_extern__ lck_grp_t *nfs_request_grp;
 #define RL_QUEUED	0x0004		/* request is on the queue */
 
 __private_extern__ u_int32_t nfs_xid, nfs_xidwrap;
-__private_extern__ int nfs_iosize, nfs_access_cache_timeout, nfs_access_delete, nfs_allow_async, nfs_statfs_rate_limit;
+__private_extern__ int nfs_iosize, nfs_allow_async, nfs_statfs_rate_limit;
+__private_extern__ int nfs_access_cache_timeout, nfs_access_delete, nfs_access_dotzfs, nfs_access_for_getattr;
 __private_extern__ int nfs_lockd_mounts, nfs_lockd_request_sent, nfs_single_des;
 __private_extern__ int nfs_tprintf_initial_delay, nfs_tprintf_delay;
 __private_extern__ int nfsiod_thread_count, nfsiod_thread_max, nfs_max_async_writes;
+__private_extern__ int nfs_idmap_ctrl, nfs_callback_port;
+
+/* bits for nfs_idmap_ctrl: */
+#define NFS_IDMAP_CTRL_USE_IDMAP_SERVICE		0x00000001 /* use the ID mapping service */
+#define NFS_IDMAP_CTRL_FALLBACK_NO_COMMON_IDS		0x00000002 /* fallback should NOT handle common IDs like "root" and "nobody" */
+#define NFS_IDMAP_CTRL_FALLBACK_NO_WELLKNOWN_IDS	0x00000004 /* fallback should NOT handle the well known "XXX@" IDs */
+#define NFS_IDMAP_CTRL_UNKNOWN_IS_99			0x00000008 /* for unknown IDs use uid/gid 99 instead of -2/nobody */
+#define NFS_IDMAP_CTRL_COMPARE_RESULTS			0x00000010 /* compare results of ID mapping service and fallback */
+#define NFS_IDMAP_CTRL_LOG_FAILED_MAPPINGS		0x00000020 /* log failed ID mapping attempts */
+#define NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS		0x00000040 /* log successful ID mapping attempts */
 
 #define NFSIOD_MAX	(MIN(nfsiod_thread_max, NFS_MAXASYNCTHREAD))
 
@@ -1016,14 +961,6 @@ struct nfs_dulookup {
 	struct componentname du_cn;	/* ._ name being looked up */
 	struct nfsreq du_req;		/* NFS request for lookup */
 	char du_smallname[48];		/* buffer for small names */
-};
-
-/*
- * Network address hash list element
- */
-union nethostaddr {
-	u_int32_t had_inetaddr;
-	mbuf_t had_nam;
 };
 
 /*
@@ -1071,7 +1008,7 @@ struct nfsrv_sock {
 
 #define SLPNOLIST ((struct nfsrv_sock *)0xdeadbeef)	/* sentinel value for sockets not in the nfsrv_sockwg list */
 
-__private_extern__ struct nfsrv_sock *nfsrv_udpsock;
+__private_extern__ struct nfsrv_sock *nfsrv_udpsock, *nfsrv_udp6sock;
 
 /*
  * global NFS server socket lists:
@@ -1148,7 +1085,7 @@ __private_extern__ lck_mtx_t *nfs_global_mutex;
 
 /* NFSv4 callback globals */
 __private_extern__ int nfs4_callback_timer_on;
-__private_extern__ in_port_t nfs4_cb_port;
+__private_extern__ in_port_t nfs4_cb_port, nfs4_cb_port6;
 
 /* nfs timer call structures */
 __private_extern__ thread_call_t	nfs_request_timer_call;
@@ -1180,15 +1117,23 @@ void	nfs4_mount_callback_shutdown(struct nfsmount *);
 void	nfs4_cb_accept(socket_t, void *, int);
 void	nfs4_cb_rcv(socket_t, void *, int);
 void	nfs4_callback_timer(void *, void *);
+int	nfs4_secinfo_rpc(struct nfsmount *, struct nfsreq_secinfo_args *, kauth_cred_t, uint32_t *, int *);
+int	nfs4_get_fs_locations(struct nfsmount *, nfsnode_t, u_char *, int, const char *, vfs_context_t, struct nfs_fs_locations *);
+void	nfs_fs_locations_cleanup(struct nfs_fs_locations *);
+void	nfs4_default_attrs_for_referral_trigger(nfsnode_t, char *, int, struct nfs_vattr *, fhandle_t *);
 
-int	nfs_connect(struct nfsmount *, int);
+int	nfs_sockaddr_cmp(struct sockaddr *, struct sockaddr *);
+int	nfs_connect(struct nfsmount *, int, int);
 void	nfs_disconnect(struct nfsmount *);
 void	nfs_need_reconnect(struct nfsmount *);
 void	nfs_mount_sock_thread_wake(struct nfsmount *);
 void	nfs_mount_check_dead_timeout(struct nfsmount *);
+void	nfs_rpc_record_state_init(struct nfs_rpc_record_state *);
+void	nfs_rpc_record_state_cleanup(struct nfs_rpc_record_state *);
+int	nfs_rpc_record_read(socket_t, struct nfs_rpc_record_state *, int, int *, mbuf_t *);
 
 int	nfs_getattr(nfsnode_t, struct nfs_vattr *, vfs_context_t, int);
-int	nfs_getattrcache(nfsnode_t, struct nfs_vattr *);
+int	nfs_getattrcache(nfsnode_t, struct nfs_vattr *, int);
 int	nfs_loadattrcache(nfsnode_t, struct nfs_vattr *, u_int64_t *, int);
 int	nfs_attrcachetimeout(nfsnode_t);
 
@@ -1196,6 +1141,7 @@ int	nfs_buf_page_inval(vnode_t vp, off_t offset);
 int	nfs_vinvalbuf(vnode_t, int, vfs_context_t, int);
 int	nfs_vinvalbuf2(vnode_t, int, thread_t, kauth_cred_t, int);
 int	nfs_vinvalbuf_internal(nfsnode_t, int, thread_t, kauth_cred_t, int, int);
+void	nfs_wait_bufs(nfsnode_t);
 
 int	nfs_request_create(nfsnode_t, mount_t, struct nfsm_chain *, int, thread_t, kauth_cred_t, struct nfsreq **);
 void	nfs_request_destroy(struct nfsreq *);
@@ -1205,14 +1151,14 @@ int	nfs_request_add_header(struct nfsreq *);
 int	nfs_request_send(struct nfsreq *, int);
 void	nfs_request_wait(struct nfsreq *);
 int	nfs_request_finish(struct nfsreq *, struct nfsm_chain *, int *);
-int	nfs_request(nfsnode_t, mount_t, struct nfsm_chain *, int, vfs_context_t, struct nfsm_chain *, u_int64_t *, int *);
-int	nfs_request2(nfsnode_t, mount_t, struct nfsm_chain *, int, thread_t, kauth_cred_t, int, struct nfsm_chain *, u_int64_t *, int *);
+int	nfs_request(nfsnode_t, mount_t, struct nfsm_chain *, int, vfs_context_t, struct nfsreq_secinfo_args *, struct nfsm_chain *, u_int64_t *, int *);
+int	nfs_request2(nfsnode_t, mount_t, struct nfsm_chain *, int, thread_t, kauth_cred_t, struct nfsreq_secinfo_args *, int, struct nfsm_chain *, u_int64_t *, int *);
 int	nfs_request_gss(mount_t, struct nfsm_chain *, thread_t,	kauth_cred_t, int, struct nfs_gss_clnt_ctx *, struct nfsm_chain *, int *);
-int	nfs_request_async(nfsnode_t, mount_t, struct nfsm_chain *, int, thread_t, kauth_cred_t, struct nfsreq_cbinfo *cb, struct nfsreq **);
+int	nfs_request_async(nfsnode_t, mount_t, struct nfsm_chain *, int, thread_t, kauth_cred_t, struct nfsreq_secinfo_args *, int, struct nfsreq_cbinfo *, struct nfsreq **);
 int	nfs_request_async_finish(struct nfsreq *, struct nfsm_chain *, u_int64_t *, int *);
 void	nfs_request_async_cancel(struct nfsreq *);
 void	nfs_request_timer(void *, void *);
-int	nfs_aux_request(struct nfsmount *, thread_t, struct sockaddr_in *, mbuf_t, uint32_t, int, int, struct nfsm_chain *);
+int	nfs_request_using_gss(struct nfsreq *);
 void	nfs_get_xid(uint64_t *);
 int	nfs_sigintr(struct nfsmount *, struct nfsreq *, thread_t, int);
 int	nfs_noremotehang(thread_t);
@@ -1220,6 +1166,24 @@ int	nfs_noremotehang(thread_t);
 int	nfs_send(struct nfsreq *, int);
 int	nfs_sndlock(struct nfsreq *);
 void	nfs_sndunlock(struct nfsreq *);
+
+int	nfs_uaddr2sockaddr(const char *, struct sockaddr *);
+
+int	nfs_aux_request(struct nfsmount *, thread_t, struct sockaddr *, socket_t, int, mbuf_t, uint32_t, int, int, struct nfsm_chain *);
+int	nfs_portmap_lookup(struct nfsmount *, vfs_context_t, struct sockaddr *, socket_t, uint32_t, uint32_t, uint32_t, int);
+
+void	nfs_location_next(struct nfs_fs_locations *, struct nfs_location_index *);
+int	nfs_location_index_cmp(struct nfs_location_index *, struct nfs_location_index *);
+void	nfs_location_mntfromname(struct nfs_fs_locations *, struct nfs_location_index, char *, int, int);
+int	nfs_socket_create(struct nfsmount *, struct sockaddr *, int, in_port_t, uint32_t, uint32_t, int, struct nfs_socket **);
+void	nfs_socket_destroy(struct nfs_socket *);
+void	nfs_socket_options(struct nfsmount *, struct nfs_socket *);
+void	nfs_connect_upcall(socket_t, void *, int);
+int	nfs_connect_error_class(int);
+int	nfs_connect_search_loop(struct nfsmount *, struct nfs_socket_search *);
+void	nfs_socket_search_update_error(struct nfs_socket_search *, int);
+void	nfs_socket_search_cleanup(struct nfs_socket_search *);
+void	nfs_mount_connect_thread(void *, __unused wait_result_t);
 
 int	nfs_lookitup(nfsnode_t, char *, int, vfs_context_t, nfsnode_t *);
 void	nfs_dulookup_init(struct nfs_dulookup *, nfsnode_t, const char *, int, vfs_context_t);
@@ -1229,16 +1193,28 @@ int	nfs_dir_buf_cache_lookup(nfsnode_t, nfsnode_t *, struct componentname *, vfs
 int	nfs_dir_buf_search(struct nfsbuf *, struct componentname *, fhandle_t *, struct nfs_vattr *, uint64_t *, time_t *, daddr64_t *, int);
 void	nfs_name_cache_purge(nfsnode_t, nfsnode_t, struct componentname *, vfs_context_t);
 
+uint32_t nfs4_ace_nfstype_to_vfstype(uint32_t, int *);
+uint32_t nfs4_ace_vfstype_to_nfstype(uint32_t, int *);
+uint32_t nfs4_ace_nfsflags_to_vfsflags(uint32_t);
+uint32_t nfs4_ace_vfsflags_to_nfsflags(uint32_t);
+uint32_t nfs4_ace_nfsmask_to_vfsrights(uint32_t);
+uint32_t nfs4_ace_vfsrights_to_nfsmask(uint32_t);
+int nfs4_id2guid(char *, guid_t *, int);
+int nfs4_guid2id(guid_t *, char *, int *, int);
+
 int	nfs_parsefattr(struct nfsm_chain *, int, struct nfs_vattr *);
-int	nfs4_parsefattr(struct nfsm_chain *, struct nfs_fsattr *, struct nfs_vattr *, fhandle_t *, struct dqblk *);
+int	nfs4_parsefattr(struct nfsm_chain *, struct nfs_fsattr *, struct nfs_vattr *, fhandle_t *, struct dqblk *, struct nfs_fs_locations *);
 void	nfs_vattr_set_supported(uint32_t *, struct vnode_attr *);
+void	nfs_vattr_set_bitmap(struct nfsmount *, uint32_t *, struct vnode_attr *);
 void	nfs3_pathconf_cache(struct nfsmount *, struct nfs_fsattr *);
+int	nfs3_mount_rpc(struct nfsmount *, struct sockaddr *, int, int, char *, vfs_context_t, int, fhandle_t *, struct nfs_sec *);
 void	nfs3_umount_rpc(struct nfsmount *, vfs_context_t, int);
-int	nfs_node_mode_slot(nfsnode_t, uid_t, int);
+int	nfs_node_access_slot(nfsnode_t, uid_t, int);
+void	nfs_vnode_notify(nfsnode_t, uint32_t);
 
 void	nfs_avoid_needless_id_setting_on_create(nfsnode_t, struct vnode_attr *, vfs_context_t);
 int	nfs4_create_rpc(vfs_context_t, nfsnode_t, struct componentname *, struct vnode_attr *, int, char *, nfsnode_t *);
-int	nfs_open_state_set_busy(nfsnode_t, vfs_context_t);
+int	nfs_open_state_set_busy(nfsnode_t, thread_t);
 void	nfs_open_state_clear_busy(nfsnode_t);
 struct nfs_open_owner *nfs_open_owner_find(struct nfsmount *, kauth_cred_t, int);
 void	nfs_open_owner_destroy(struct nfs_open_owner *);
@@ -1248,21 +1224,34 @@ int	nfs_open_owner_set_busy(struct nfs_open_owner *, thread_t);
 void	nfs_open_owner_clear_busy(struct nfs_open_owner *);
 void	nfs_owner_seqid_increment(struct nfs_open_owner *, struct nfs_lock_owner *, int);
 int	nfs_open_file_find(nfsnode_t, struct nfs_open_owner *, struct nfs_open_file **, uint32_t, uint32_t, int);
+int	nfs_open_file_find_internal(nfsnode_t, struct nfs_open_owner *, struct nfs_open_file **, uint32_t, uint32_t, int);
 void	nfs_open_file_destroy(struct nfs_open_file *);
 int	nfs_open_file_set_busy(struct nfs_open_file *, thread_t);
 void	nfs_open_file_clear_busy(struct nfs_open_file *);
+void	nfs_open_file_add_open(struct nfs_open_file *, uint32_t, uint32_t, int);
+void	nfs_open_file_remove_open_find(struct nfs_open_file *, uint32_t, uint32_t, uint32_t *, uint32_t *, int*);
+void	nfs_open_file_remove_open(struct nfs_open_file *, uint32_t, uint32_t);
 void	nfs_get_stateid(nfsnode_t, thread_t, kauth_cred_t, nfs_stateid *);
 int	nfs4_open(nfsnode_t, struct nfs_open_file *, uint32_t, uint32_t, vfs_context_t);
-int	nfs4_close(nfsnode_t, struct nfs_open_file *, uint32_t, uint32_t, vfs_context_t);
-int	nfs4_check_for_locks(struct nfs_open_owner *, struct nfs_open_file *);
-void	nfs4_reopen(struct nfs_open_file *, thread_t);
+int	nfs4_open_delegated(nfsnode_t, struct nfs_open_file *, uint32_t, uint32_t, vfs_context_t);
+int	nfs_close(nfsnode_t, struct nfs_open_file *, uint32_t, uint32_t, vfs_context_t);
+int	nfs_check_for_locks(struct nfs_open_owner *, struct nfs_open_file *);
+int	nfs4_reopen(struct nfs_open_file *, thread_t);
 int	nfs4_open_rpc(struct nfs_open_file *, vfs_context_t, struct componentname *, struct vnode_attr *, vnode_t, vnode_t *, int, int, int);
 int	nfs4_open_rpc_internal(struct nfs_open_file *, vfs_context_t, thread_t, kauth_cred_t, struct componentname *, struct vnode_attr *, vnode_t, vnode_t *, int, int, int);
+int	nfs4_open_confirm_rpc(struct nfsmount *, nfsnode_t, u_char *, int, struct nfs_open_owner *, nfs_stateid *, thread_t, kauth_cred_t, struct nfs_vattr *, uint64_t *);
 int	nfs4_open_reopen_rpc(struct nfs_open_file *, thread_t, kauth_cred_t, struct componentname *, vnode_t, vnode_t *, int, int);
 int	nfs4_open_reclaim_rpc(struct nfs_open_file *, int, int);
+int	nfs4_claim_delegated_open_rpc(struct nfs_open_file *, int, int, int);
+int	nfs4_claim_delegated_state_for_open_file(struct nfs_open_file *, int);
+int	nfs4_claim_delegated_state_for_node(nfsnode_t, int);
 int	nfs4_open_downgrade_rpc(nfsnode_t, struct nfs_open_file *, vfs_context_t);
 int	nfs4_close_rpc(nfsnode_t, struct nfs_open_file *, thread_t, kauth_cred_t, int);
-int	nfs4_delegreturn_rpc(struct nfsmount *, u_char *, int, struct nfs_stateid *, thread_t, kauth_cred_t);
+void	nfs4_delegation_return_enqueue(nfsnode_t);
+int	nfs4_delegation_return(nfsnode_t, int, thread_t, kauth_cred_t);
+int	nfs4_delegreturn_rpc(struct nfsmount *, u_char *, int, struct nfs_stateid *, int, thread_t, kauth_cred_t);
+void	nfs_release_open_state_for_node(nfsnode_t, int);
+void	nfs_revoke_open_state_for_node(nfsnode_t);
 struct nfs_lock_owner *nfs_lock_owner_find(nfsnode_t, proc_t, int);
 void	nfs_lock_owner_destroy(struct nfs_lock_owner *);
 void	nfs_lock_owner_ref(struct nfs_lock_owner *);
@@ -1273,37 +1262,52 @@ void	nfs_lock_owner_insert_held_lock(struct nfs_lock_owner *, struct nfs_file_lo
 struct nfs_file_lock *nfs_file_lock_alloc(struct nfs_lock_owner *);
 void	nfs_file_lock_destroy(struct nfs_file_lock *);
 int	nfs_file_lock_conflict(struct nfs_file_lock *, struct nfs_file_lock *, int *);
-int	nfs4_lock_rpc(nfsnode_t, struct nfs_open_file *, struct nfs_file_lock *, int, thread_t, kauth_cred_t);
-int	nfs4_unlock_rpc(nfsnode_t, struct nfs_lock_owner *, int, uint64_t, uint64_t, vfs_context_t);
-int	nfs4_getlock(nfsnode_t, struct nfs_lock_owner *, struct flock *, uint64_t, uint64_t, vfs_context_t);
-int	nfs4_setlock(nfsnode_t, struct nfs_open_file *, struct nfs_lock_owner *, int, uint64_t, uint64_t, int, short, vfs_context_t);
-int	nfs4_unlock(nfsnode_t, struct nfs_open_file *, struct nfs_lock_owner *, uint64_t, uint64_t, int, vfs_context_t);
+int	nfs4_lock_rpc(nfsnode_t, struct nfs_open_file *, struct nfs_file_lock *, int, int, thread_t, kauth_cred_t);
+int	nfs_unlock_rpc(nfsnode_t, struct nfs_lock_owner *, int, uint64_t, uint64_t, thread_t, kauth_cred_t, int);
+int	nfs_advlock_getlock(nfsnode_t, struct nfs_lock_owner *, struct flock *, uint64_t, uint64_t, vfs_context_t);
+int	nfs_advlock_setlock(nfsnode_t, struct nfs_open_file *, struct nfs_lock_owner *, int, uint64_t, uint64_t, int, short, vfs_context_t);
+int	nfs_advlock_unlock(nfsnode_t, struct nfs_open_file *, struct nfs_lock_owner *, uint64_t, uint64_t, int, vfs_context_t);
 
-int	nfs_mount_state_in_use_start(struct nfsmount *);
+nfsnode_t nfs4_named_attr_dir_get(nfsnode_t, int, vfs_context_t);
+int	nfs4_named_attr_get(nfsnode_t, struct componentname *, uint32_t, int, vfs_context_t, nfsnode_t *, struct nfs_open_file **);
+int	nfs4_named_attr_remove(nfsnode_t, nfsnode_t, const char *, vfs_context_t);
+
+int	nfs_mount_state_in_use_start(struct nfsmount *, thread_t);
 int	nfs_mount_state_in_use_end(struct nfsmount *, int);
 int	nfs_mount_state_error_should_restart(int);
+int	nfs_mount_state_error_delegation_lost(int);
 uint	nfs_mount_state_max_restarts(struct nfsmount *);
 int	nfs_mount_state_wait_for_recovery(struct nfsmount *);
-void	nfs4_recover(struct nfsmount *);
+void	nfs_need_recover(struct nfsmount *nmp, int error);
+void	nfs_recover(struct nfsmount *);
 
 int	nfs_vnop_access(struct vnop_access_args *);
-
-int	nfs3_vnop_open(struct vnop_open_args *);
-int	nfs3_vnop_close(struct vnop_close_args *);
+int	nfs_vnop_remove(struct vnop_remove_args *);
+int	nfs_vnop_read(struct vnop_read_args *);
+int	nfs_vnop_write(struct vnop_write_args *);
+int	nfs_vnop_open(struct vnop_open_args *);
+int	nfs_vnop_close(struct vnop_close_args *);
+int	nfs_vnop_advlock(struct vnop_advlock_args *);
+int	nfs_vnop_mmap(struct vnop_mmap_args *);
+int	nfs_vnop_mnomap(struct vnop_mnomap_args *);
 
 int	nfs4_vnop_create(struct vnop_create_args *);
 int	nfs4_vnop_mknod(struct vnop_mknod_args *);
-int	nfs4_vnop_open(struct vnop_open_args *);
 int	nfs4_vnop_close(struct vnop_close_args *);
-int	nfs4_vnop_mmap(struct vnop_mmap_args *);
-int	nfs4_vnop_mnomap(struct vnop_mnomap_args *);
 int	nfs4_vnop_getattr(struct vnop_getattr_args *);
-int	nfs4_vnop_read(struct vnop_read_args *);
 int	nfs4_vnop_link(struct vnop_link_args *);
 int	nfs4_vnop_mkdir(struct vnop_mkdir_args *);
 int	nfs4_vnop_rmdir(struct vnop_rmdir_args *);
 int	nfs4_vnop_symlink(struct vnop_symlink_args *);
-int	nfs4_vnop_advlock(struct vnop_advlock_args *ap);
+int	nfs4_vnop_getxattr(struct vnop_getxattr_args *);
+int	nfs4_vnop_setxattr(struct vnop_setxattr_args *);
+int	nfs4_vnop_removexattr(struct vnop_removexattr_args *);
+int	nfs4_vnop_listxattr(struct vnop_listxattr_args *);
+#if NAMEDSTREAMS
+int	nfs4_vnop_getnamedstream(struct vnop_getnamedstream_args *);
+int	nfs4_vnop_makenamedstream(struct vnop_makenamedstream_args *);
+int	nfs4_vnop_removenamedstream(struct vnop_removenamedstream_args *);
+#endif
 
 int	nfs_read_rpc(nfsnode_t, uio_t, vfs_context_t);
 int	nfs_write_rpc(nfsnode_t, uio_t, vfs_context_t, int *, uint64_t *);
@@ -1311,8 +1315,8 @@ int	nfs_write_rpc2(nfsnode_t, uio_t, thread_t, kauth_cred_t, int *, uint64_t *);
 
 int	nfs3_access_rpc(nfsnode_t, u_int32_t *, vfs_context_t);
 int	nfs4_access_rpc(nfsnode_t, u_int32_t *, vfs_context_t);
-int	nfs3_getattr_rpc(nfsnode_t, mount_t, u_char *, size_t, vfs_context_t, struct nfs_vattr *, u_int64_t *);
-int	nfs4_getattr_rpc(nfsnode_t, mount_t, u_char *, size_t, vfs_context_t, struct nfs_vattr *, u_int64_t *);
+int	nfs3_getattr_rpc(nfsnode_t, mount_t, u_char *, size_t, int, vfs_context_t, struct nfs_vattr *, u_int64_t *);
+int	nfs4_getattr_rpc(nfsnode_t, mount_t, u_char *, size_t, int, vfs_context_t, struct nfs_vattr *, u_int64_t *);
 int	nfs3_setattr_rpc(nfsnode_t, struct vnode_attr *, vfs_context_t);
 int	nfs4_setattr_rpc(nfsnode_t, struct vnode_attr *, vfs_context_t);
 int	nfs3_read_rpc_async(nfsnode_t, off_t, size_t, thread_t, kauth_cred_t, struct nfsreq_cbinfo *, struct nfsreq **);
@@ -1327,18 +1331,24 @@ int	nfs3_readdir_rpc(nfsnode_t, struct nfsbuf *, vfs_context_t);
 int	nfs4_readdir_rpc(nfsnode_t, struct nfsbuf *, vfs_context_t);
 int	nfs3_readlink_rpc(nfsnode_t, char *, uint32_t *, vfs_context_t);
 int	nfs4_readlink_rpc(nfsnode_t, char *, uint32_t *, vfs_context_t);
-int	nfs3_commit_rpc(nfsnode_t, u_int64_t, u_int64_t, kauth_cred_t);
-int	nfs4_commit_rpc(nfsnode_t, u_int64_t, u_int64_t, kauth_cred_t);
+int	nfs3_commit_rpc(nfsnode_t, uint64_t, uint64_t, kauth_cred_t, uint64_t);
+int	nfs4_commit_rpc(nfsnode_t, uint64_t, uint64_t, kauth_cred_t, uint64_t);
 int	nfs3_lookup_rpc_async(nfsnode_t, char *, int, vfs_context_t, struct nfsreq **);
 int	nfs4_lookup_rpc_async(nfsnode_t, char *, int, vfs_context_t, struct nfsreq **);
-int	nfs3_lookup_rpc_async_finish(nfsnode_t, vfs_context_t, struct nfsreq *, u_int64_t *, fhandle_t *, struct nfs_vattr *);
-int	nfs4_lookup_rpc_async_finish(nfsnode_t, vfs_context_t, struct nfsreq *, u_int64_t *, fhandle_t *, struct nfs_vattr *);
+int	nfs3_lookup_rpc_async_finish(nfsnode_t, char *, int, vfs_context_t, struct nfsreq *, u_int64_t *, fhandle_t *, struct nfs_vattr *);
+int	nfs4_lookup_rpc_async_finish(nfsnode_t, char *, int, vfs_context_t, struct nfsreq *, u_int64_t *, fhandle_t *, struct nfs_vattr *);
 int	nfs3_remove_rpc(nfsnode_t, char *, int, thread_t, kauth_cred_t);
 int	nfs4_remove_rpc(nfsnode_t, char *, int, thread_t, kauth_cred_t);
 int	nfs3_rename_rpc(nfsnode_t, char *, int, nfsnode_t, char *, int, vfs_context_t);
 int	nfs4_rename_rpc(nfsnode_t, char *, int, nfsnode_t, char *, int, vfs_context_t);
 int	nfs3_pathconf_rpc(nfsnode_t, struct nfs_fsattr *, vfs_context_t);
 int	nfs4_pathconf_rpc(nfsnode_t, struct nfs_fsattr *, vfs_context_t);
+int	nfs3_setlock_rpc(nfsnode_t, struct nfs_open_file *, struct nfs_file_lock *, int, int, thread_t, kauth_cred_t);
+int	nfs4_setlock_rpc(nfsnode_t, struct nfs_open_file *, struct nfs_file_lock *, int, int, thread_t, kauth_cred_t);
+int	nfs3_unlock_rpc(nfsnode_t, struct nfs_lock_owner *, int, uint64_t, uint64_t, int, thread_t, kauth_cred_t);
+int	nfs4_unlock_rpc(nfsnode_t, struct nfs_lock_owner *, int, uint64_t, uint64_t, int, thread_t, kauth_cred_t);
+int	nfs3_getlock_rpc(nfsnode_t, struct nfs_lock_owner *, struct flock *, uint64_t, uint64_t, vfs_context_t);
+int	nfs4_getlock_rpc(nfsnode_t, struct nfs_lock_owner *, struct flock *, uint64_t, uint64_t, vfs_context_t);
 
 void	nfsrv_active_user_list_reclaim(void);
 void	nfsrv_cleancache(void);
@@ -1363,7 +1373,7 @@ int	nfsrv_is_initialized(void);
 int	nfsrv_namei(struct nfsrv_descript *, vfs_context_t, struct nameidata *,
 			struct nfs_filehandle *, vnode_t *,
 			struct nfs_export **, struct nfs_export_options **);
-void	nfsrv_rcv(socket_t, caddr_t, int);
+void	nfsrv_rcv(socket_t, void *, int);
 void	nfsrv_rcv_locked(socket_t, struct nfsrv_sock *, int);
 int	nfsrv_rephead(struct nfsrv_descript *, struct nfsrv_sock *, struct nfsm_chain *, size_t);
 int	nfsrv_send(struct nfsrv_sock *, mbuf_t, mbuf_t);
@@ -1409,6 +1419,15 @@ int	nfs_mountroot(void);
 struct nfs_diskless;
 int	nfs_boot_init(struct nfs_diskless *);
 int	nfs_boot_getfh(struct nfs_diskless *, int, int);
+
+#if CONFIG_TRIGGERS
+resolver_result_t nfs_mirror_mount_trigger_resolve(vnode_t, const struct componentname *, enum path_operation, int, void *, vfs_context_t);
+resolver_result_t nfs_mirror_mount_trigger_unresolve(vnode_t, int, void *, vfs_context_t);
+resolver_result_t nfs_mirror_mount_trigger_rearm(vnode_t, int, void *, vfs_context_t);
+int	nfs_mirror_mount_domount(vnode_t, vnode_t, vfs_context_t);
+void	nfs_ephemeral_mount_harvester_start(void);
+void	nfs_ephemeral_mount_harvester(__unused void *arg, __unused wait_result_t wr);
+#endif
 
 __END_DECLS
 

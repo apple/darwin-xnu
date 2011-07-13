@@ -94,7 +94,7 @@ extern int hfs_dbg_err;
     #if (HFS_DEBUG_STAGE == 4)
 		char		gDebugAssertStr[255];
 		#define DBG_ASSERT(a) { if (!(a)) { \
-				sprintf(gDebugAssertStr,"Oops - File "__FILE__", line %d: assertion '%s' failed.\n", __LINE__, #a); \
+				snprintf(gDebugAssertStr, sizeof (gDebugAssertStr), "Oops - File "__FILE__", line %d: assertion '%s' failed.\n", __LINE__, #a); \
                 Debugger(gDebugAssertStr); } }
 	#else
 #define DBG_ASSERT(a) { if (!(a)) { panic("File "__FILE__", line %d: assertion '%s' failed.\n", __LINE__, #a); } }

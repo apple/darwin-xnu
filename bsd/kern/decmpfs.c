@@ -204,11 +204,12 @@ _decmp_get_func(uint32_t type, int offset)
     if (IOCatalogueMatchingDriversPresent(providesName)) {
         // there is a kext that says it will register for this type, so let's wait for it
         char resourceName[80];
+        uint64_t delay = 10000000ULL; // 10 milliseconds.
         snprintf(resourceName, sizeof(resourceName), "com.apple.AppleFSCompression.Type%u", type);
         printf("waiting for %s\n", resourceName);
         while(decompressors[type] == NULL) {
             lck_rw_done(decompressorsLock); // we have to unlock to allow the kext to register
-            if (IOServiceWaitForMatchingResource(resourceName, 60)) {
+            if (IOServiceWaitForMatchingResource(resourceName, delay)) {
                 break;
             }
             if (!IOCatalogueMatchingDriversPresent(providesName)) {
@@ -217,6 +218,7 @@ _decmp_get_func(uint32_t type, int offset)
                 break;
             }
             printf("still waiting for %s\n", resourceName);
+            delay *= 2;
             lck_rw_lock_shared(decompressorsLock);
         }
         // IOKit says the kext is loaded, so it should be registered too!
@@ -659,11 +661,11 @@ decmpfs_file_is_compressed(vnode_t vp, decmpfs_cnode *cp)
             return 0;
     }
     
-    if (!vnode_isreg(vp)) {
-        /* only regular files can be compressed */
-        ret = FILE_IS_NOT_COMPRESSED;
-        goto done;
-    }
+//    if (!vnode_isreg(vp)) {
+//        /* only regular files can be compressed */
+//        ret = FILE_IS_NOT_COMPRESSED;
+//        goto done;
+//    }
     
     mp = vnode_mount(vp); 
     if (mp == NULL) {
@@ -1137,7 +1139,7 @@ decompress:
     else {
         if (!abort_pagein) {
             /* commit our pages */
-			kr = commit_upl(pl, pl_offset, total_size, UPL_COMMIT_FREE_ON_EMPTY | UPL_COMMIT_INACTIVATE, 0);
+			kr = commit_upl(pl, pl_offset, total_size, UPL_COMMIT_FREE_ON_EMPTY, 0);
         }
     }
     

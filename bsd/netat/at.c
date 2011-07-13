@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -127,6 +127,21 @@ static int set_zones(zone_usage_t *ifz)
 
 	return(0);
 } /* set_zones */
+
+static int
+at_domifattach(struct ifnet *ifp, at_ifaddr_t *ifID)
+{
+	int error;
+	
+	if ((error = proto_plumb(PF_APPLETALK, ifp))) {
+		if (error != EEXIST)
+			log(LOG_ERR, "%s: proto_plumb returned %d if=%s%d\n",
+			    __func__, error, ifp->if_name, ifp->if_unit);
+	} else if (ifID)
+		ifID->at_was_attached = 1;
+
+	return (error);
+}
 
 /*
   * Generic internet control operations (ioctl's).
@@ -580,10 +595,10 @@ at_control(so, cmd, data, ifp)
 
 			ifID->aa_ifp = ifp;
 			ifa = &ifID->aa_ifa;
-			error = proto_plumb(PF_APPLETALK, ifp);
+			error = at_domifattach(ifp, ifID);
 			if (error == EEXIST) {
-			    ifID->at_was_attached = 1;
-			    error = 0;
+				ifID->at_was_attached = 1;
+				error = 0;
 			}
 			if (error != 0) {
 				break;
@@ -592,27 +607,36 @@ at_control(so, cmd, data, ifp)
 			ifID->cable_multicast_addr = etalk_multicast_addr;
 			xpatcnt++;
 			ifnet_lock_exclusive(ifp);
-			TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) 
-				if ((sdl = (struct sockaddr_dl *)ifa->ifa_addr) &&
-				      (sdl->sdl_family == AF_LINK)) {
-				    bcopy(LLADDR(sdl), ifID->xaddr, sizeof(ifID->xaddr));
+			/*
+			 * Holding ifnet lock here prevents the link address
+			 * from changing contents, so no need to hold the ifa
+			 * lock.  The link address is always present; it's
+			 * never freed.
+			 */
+			sdl = (struct sockaddr_dl *)ifp->if_lladdr->ifa_addr;
+			bcopy(LLADDR(sdl), ifID->xaddr, sizeof(ifID->xaddr));
 #ifdef APPLETALK_DEBUG
-				    kprintf("SIOCSIFADDR: local enet address is %x.%x.%x.%x.%x.%x\n", 
-					    ifID->xaddr[0], ifID->xaddr[1], 
-					    ifID->xaddr[2], ifID->xaddr[3], 
-					    ifID->xaddr[4], ifID->xaddr[5]);
+			kprintf("SIOCSIFADDR: local enet address is "
+			    "%x.%x.%x.%x.%x.%x\n",
+			    ifID->xaddr[0], ifID->xaddr[1],
+			    ifID->xaddr[2], ifID->xaddr[3],
+			    ifID->xaddr[4], ifID->xaddr[5]);
 #endif
-				    break;
-				  }
 
 			/* attach the AppleTalk address to the ifnet structure */
 			ifa = &ifID->aa_ifa;
+			ifa_lock_init(ifa);
+			VERIFY(!(ifa->ifa_debug & IFD_ALLOC));
 			ifa->ifa_addr = (struct sockaddr *)&ifID->ifNodeAddress;
 			ifID->ifNodeAddress.sat_len = sizeof(struct sockaddr_at);
 			ifID->ifNodeAddress.sat_family =  AF_APPLETALK;
 			/* the address itself will be filled in when ifThisNode
 			   is set */
+			IFA_LOCK(ifa);
 			if_attach_ifa(ifp, ifa);
+			/* add a reference for at_interfaces[] */
+			IFA_ADDREF_LOCKED(ifa);
+			IFA_UNLOCK(ifa);
 			ifnet_lock_done(ifp);
 		}
 	  break;
@@ -678,11 +702,7 @@ at_control(so, cmd, data, ifp)
 			error = EACCES;
 			break;
 		}
-		error = proto_plumb(PF_APPLETALK, ifp);
-		if (ifID != NULL
-		    && (error == 0 || error == EEXIST)) {
-			ifID->at_was_attached = 1;
-		}
+		error = at_domifattach(ifp, ifID);
 		break;
 
 	case SIOCPROTODETACH:
@@ -713,6 +733,7 @@ void atalk_post_msg(struct ifnet *ifp, u_long event_code, struct at_addr *addres
 	struct kev_atalk_data  	at_event_data;
 	struct kev_msg  		ev_msg;
 
+	bzero(&ev_msg, sizeof(struct kev_msg));
 	ev_msg.vendor_code    = KEV_VENDOR_APPLE;
 	ev_msg.kev_class      = KEV_NETWORK_CLASS;
 	ev_msg.kev_subclass   = KEV_ATALK_SUBCLASS;
@@ -738,4 +759,23 @@ void atalk_post_msg(struct ifnet *ifp, u_long event_code, struct at_addr *addres
 	ev_msg.dv[1].data_length = 0;
 	
 	kev_post_msg(&ev_msg);
+}
+
+
+/*
+ * This is untested; the code is here only for completeness.
+ */
+void
+at_purgeaddrs(struct ifnet *ifp)
+{
+	at_ifaddr_t *ifID = NULL;
+	int pat_id;
+
+        /* Find address for this interface, if it exists */
+	for (pat_id = 0; pat_id < xpatcnt; pat_id++) {
+		if (at_interfaces[pat_id].aa_ifp == ifp) {
+			ifID = &at_interfaces[pat_id];
+			elap_offline(ifID);
+		}
+	}
 }

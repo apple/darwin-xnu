@@ -121,7 +121,9 @@ struct filedesc {
 
 #ifdef KERNEL
 #define UF_RESVWAIT	0x10		/* close in progress */
-#define UF_VALID_FLAGS	(UF_EXCLOSE| UF_RESERVED | UF_CLOSING | UF_RESVWAIT)
+#define	UF_INHERIT	0x20		/* "inherit-on-exec" */
+#define UF_VALID_FLAGS	\
+	(UF_EXCLOSE | UF_RESERVED | UF_CLOSING | UF_RESVWAIT | UF_INHERIT)
 #endif /* KERNEL */
 
 /*
@@ -148,7 +150,7 @@ extern void	ffree(struct file *fp);
 #ifdef __APPLE_API_PRIVATE
 extern struct	filedesc *fdcopy(proc_t p, struct vnode *uth_cdir);
 extern void	fdfree(proc_t p);
-extern void	fdexec(proc_t p);
+extern void	fdexec(proc_t p, short flags);
 #endif /* __APPLE_API_PRIVATE */
 
 #endif /* KERNEL */

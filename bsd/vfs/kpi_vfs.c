@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -605,6 +605,13 @@ VFS_VPTOFH(struct vnode * vp, int *fhlenp, unsigned char * fhp, vfs_context_t ct
 }
 
 
+/* returns the cached throttle mask for the mount_t */
+uint64_t
+vfs_throttle_mask(mount_t mp)
+{
+	return(mp->mnt_throttle_mask);
+}
+
 /* returns a  copy of vfs type name for the mount_t */
 void 
 vfs_name(mount_t mp, char * buffer)
@@ -944,6 +951,27 @@ vfs_vnodecovered(mount_t mp)
 }
 
 /*
+ * Returns device vnode backing a mountpoint with an iocount (if valid vnode exists).
+ * The iocount must be released with vnode_put().  Note that this KPI is subtle
+ * with respect to the validity of using this device vnode for anything substantial
+ * (which is discouraged).  If commands are sent to the device driver without
+ * taking proper steps to ensure that the device is still open, chaos may ensue.  
+ * Similarly, this routine should only be called if there is some guarantee that
+ * the mount itself is still valid.
+ */
+vnode_t
+vfs_devvp(mount_t mp)
+{
+	vnode_t vp = mp->mnt_devvp;
+
+	if ((vp != NULLVP) && (vnode_get(vp) == 0)) {
+		return vp;
+	}
+
+	return NULLVP;
+}
+
+/*
  * return the io attributes associated with mount_t
  */
 void
@@ -1002,7 +1030,6 @@ extern int vfs_opv_numops;
 errno_t
 vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t * handle)
 {
-#pragma unused(data)
 	struct vfstable	*newvfstbl = NULL;
 	int	i,j;
 	int	(***opv_desc_vector_p)(void *);
@@ -1686,6 +1713,40 @@ vnode_israge(vnode_t vp)
         return ((vp->v_flag & VRAGE)? 1 : 0);
 }
 
+int
+vnode_needssnapshots(vnode_t vp)
+{
+	return ((vp->v_flag & VNEEDSSNAPSHOT)? 1 : 0);
+}
+
+
+/* Check the process/thread to see if we should skip atime updates */
+int
+vfs_ctx_skipatime (vfs_context_t ctx) {
+	struct uthread *ut;
+	proc_t proc;
+	thread_t thr;
+
+	proc = vfs_context_proc(ctx);
+	thr = vfs_context_thread (ctx);
+
+	/* Validate pointers in case we were invoked via a kernel context */
+	if (thr && proc) {
+		ut = get_bsdthread_info (thr);
+
+		if (proc->p_lflag & P_LRAGE_VNODES) {
+			return 1;
+		}
+		
+		if (ut) {
+			if  (ut->uu_flag & UT_RAGE_VNODES) {
+				return 1;
+			}
+		}
+	}
+	return 0;
+}
+
 /* is vnode_t marked to not keep data cached once it's been consumed */
 int 
 vnode_isnocache(vnode_t vp)
@@ -1741,6 +1802,46 @@ int
 vnode_islnk(vnode_t vp)
 {
 	return ((vp->v_type == VLNK)? 1 : 0);
+}
+
+int
+vnode_lookup_continue_needed(vnode_t vp, struct componentname *cnp)
+{
+	struct nameidata *ndp = cnp->cn_ndp;
+
+	if (ndp == NULL) {
+		panic("vnode_lookup_continue_needed(): cnp->cn_ndp is NULL\n");
+	}
+
+	if (vnode_isdir(vp)) {
+		if (vp->v_mountedhere != NULL) {
+			goto yes;
+		}
+
+#if CONFIG_TRIGGERS
+		if (vp->v_resolve) {
+			goto yes;
+		}
+#endif /* CONFIG_TRIGGERS */
+
+	}
+
+
+	if (vnode_islnk(vp)) {
+		/* From lookup():  || *ndp->ni_next == '/') No need for this, we know we're NULL-terminated here */
+		if (cnp->cn_flags & FOLLOW) { 
+			goto yes;
+		}
+		if (ndp->ni_flag & NAMEI_TRAILINGSLASH) {
+			goto yes;
+		}
+	}
+
+	return 0;
+
+yes:
+	ndp->ni_flag |= NAMEI_CONTLOOKUP;
+	return EKEEPLOOKING;
 }
 
 /* is vnode_t a fifo ? */
@@ -2041,6 +2142,37 @@ vnode_vfsisrdonly(vnode_t vp)
 	return ((vp->v_mount->mnt_flag & MNT_RDONLY)? 1 : 0);
 }
 
+int
+vnode_compound_rename_available(vnode_t vp) 
+{
+	return vnode_compound_op_available(vp, COMPOUND_VNOP_RENAME);
+}
+int
+vnode_compound_rmdir_available(vnode_t vp) 
+{
+	return vnode_compound_op_available(vp, COMPOUND_VNOP_RMDIR);
+}
+int
+vnode_compound_mkdir_available(vnode_t vp) 
+{
+	return vnode_compound_op_available(vp, COMPOUND_VNOP_MKDIR);
+}
+int
+vnode_compound_remove_available(vnode_t vp) 
+{
+	return vnode_compound_op_available(vp, COMPOUND_VNOP_REMOVE);
+}
+int
+vnode_compound_open_available(vnode_t vp) 
+{
+	return vnode_compound_op_available(vp, COMPOUND_VNOP_OPEN);
+}
+
+int
+vnode_compound_op_available(vnode_t vp, compound_vnop_id_t opid) 
+{
+	return ((vp->v_mount->mnt_compound_ops & opid) != 0);
+}
 
 /*
  * Returns vnode ref to current working directory; if a per-thread current
@@ -2769,6 +2901,15 @@ vnode_notify(vnode_t vp, uint32_t events, struct vnode_attr *vap)
 	return 0;
 }
 
+
+
+int
+vnode_isdyldsharedcache(vnode_t vp)
+{
+	return ((vp->v_flag & VSHARED_DYLD) ? 1 : 0);
+}
+
+
 /*
  * For a filesystem that isn't tracking its own vnode watchers:
  * check whether a vnode is being monitored.
@@ -2776,27 +2917,6 @@ vnode_notify(vnode_t vp, uint32_t events, struct vnode_attr *vap)
 int
 vnode_ismonitored(vnode_t vp) {
 	return (vp->v_knotes.slh_first != NULL);
-}
-
-/*
- * Conceived as a function available only in BSD kernel so that if kevent_register
- * changes what a knote of type EVFILT_VNODE is watching, it can push
- * that updated information down to a networked filesystem that may
- * need to update server-side monitoring.
- *
- * Blunted to do nothing--because we want to get both kqueue and fsevents support
- * from the VNOP_MONITOR design, we always want all the events a filesystem can provide us.
- */
-void
-vnode_knoteupdate(__unused struct knote *kn) 
-{
-#if 0
-	vnode_t vp = (vnode_t)kn->kn_hook;
-	if (vnode_getwithvid(vp, kn->kn_hookid) == 0) {
-		VNOP_MONITOR(vp, kn->kn_sfflags, VNODE_MONITOR_UPDATE, (void*)kn, NULL);
-		vnode_put(vp);
-	}
-#endif
 }
 
 /*
@@ -2810,6 +2930,44 @@ vfs_get_notify_attributes(struct vnode_attr *vap)
 	vap->va_active = VNODE_NOTIFY_ATTRS;
 	return 0;
 }
+
+#if CONFIG_TRIGGERS
+int 
+vfs_settriggercallback(fsid_t *fsid, vfs_trigger_callback_t vtc, void *data, uint32_t flags __unused, vfs_context_t ctx)
+{
+	int error;
+	mount_t mp;
+
+	mp = mount_list_lookupby_fsid(fsid, 0 /* locked */, 1 /* withref */);
+	if (mp == NULL) {
+		return ENOENT;
+	}
+
+	error = vfs_busy(mp, LK_NOWAIT);
+	mount_iterdrop(mp);
+
+	if (error != 0) {
+		return ENOENT;
+	}
+
+	mount_lock(mp);
+	if (mp->mnt_triggercallback != NULL) {
+		error = EBUSY;
+		mount_unlock(mp);
+		goto out;
+	}
+
+	mp->mnt_triggercallback = vtc;
+	mp->mnt_triggerdata = data;
+	mount_unlock(mp);
+
+	mp->mnt_triggercallback(mp, VTC_REPLACE, data, ctx);
+
+out:
+	vfs_unbusy(mp);
+	return 0;
+}
+#endif /* CONFIG_TRIGGERS */
 
 /*
  *  Definition of vnode operations.
@@ -2909,13 +3067,87 @@ VNOP_LOOKUP(vnode_t dvp, vnode_t *vpp, struct componentname *cnp, vfs_context_t 
 }
 
 #if 0
-/*
- *#
- *#% create       dvp     L L L
- *#% create       vpp     - L -
- *#
- */
- 
+struct vnop_compound_open_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_dvp;
+	vnode_t *a_vpp;
+	struct componentname *a_cnp;
+	int32_t a_flags;
+	int32_t a_fmode;
+	struct vnode_attr *a_vap;
+	vfs_context_t a_context;
+	void *a_reserved;
+};
+#endif /* 0 */
+
+int
+VNOP_COMPOUND_OPEN(vnode_t dvp, vnode_t *vpp, struct nameidata *ndp, int32_t flags, int32_t fmode, uint32_t *statusp, struct vnode_attr *vap, vfs_context_t ctx)
+{
+	int _err;
+	struct vnop_compound_open_args a;
+	int did_create = 0;
+	int want_create;
+	uint32_t tmp_status = 0;
+	struct componentname *cnp = &ndp->ni_cnd;
+
+	want_create = (flags & VNOP_COMPOUND_OPEN_DO_CREATE);
+
+	a.a_desc = &vnop_compound_open_desc;
+	a.a_dvp = dvp;
+	a.a_vpp = vpp; /* Could be NULL */
+	a.a_cnp = cnp;
+	a.a_flags = flags;
+	a.a_fmode = fmode;
+	a.a_status = (statusp != NULL) ? statusp : &tmp_status;
+	a.a_vap = vap;
+	a.a_context = ctx;
+	a.a_open_create_authorizer = vn_authorize_create;
+	a.a_open_existing_authorizer = vn_authorize_open_existing;
+	a.a_reserved = NULL;
+
+	if (dvp == NULLVP) {
+		panic("No dvp?");
+	}
+	if (want_create && !vap) {
+		panic("Want create, but no vap?");
+	}
+	if (!want_create && vap) {
+		panic("Don't want create, but have a vap?");
+	}
+
+	_err = (*dvp->v_op[vnop_compound_open_desc.vdesc_offset])(&a);
+
+	did_create = (*a.a_status & COMPOUND_OPEN_STATUS_DID_CREATE);
+
+	if (did_create && !want_create) {
+		panic("Filesystem did a create, even though none was requested?");
+	}
+
+	if (did_create) { 
+		if (!NATIVE_XATTR(dvp)) {
+			/* 
+			 * Remove stale Apple Double file (if any).
+			 */
+			xattrfile_remove(dvp, cnp->cn_nameptr, ctx, 0);
+		}
+
+		/* On create, provide kqueue notification */
+		post_event_if_success(dvp, _err, NOTE_WRITE);
+	}
+
+	lookup_compound_vnop_post_hook(_err, dvp, *vpp, ndp, did_create);
+#if 0 /* FSEvents... */
+	if (*vpp && _err && _err != EKEEPLOOKING) {
+		vnode_put(*vpp);
+		*vpp = NULLVP;
+	}
+#endif /* 0 */
+
+	return (_err);
+
+}
+
+#if 0
 struct vnop_create_args {
 	struct vnodeop_desc *a_desc;
 	vnode_t a_dvp;
@@ -3094,34 +3326,34 @@ struct vnop_open_args {
 };
 #endif /* 0*/
 errno_t 
-VNOP_OPEN(vnode_t vp, int mode, vfs_context_t ctx)
+VNOP_OPEN(vnode_t vp, int mode, vfs_context_t ctx) 
 {
 	int _err;
 	struct vnop_open_args a;
 #ifndef __LP64__
 	int thread_safe;
-	int funnel_state = 0;
+	int funnel_state = 0; 
 #endif /* __LP64__ */
 
 	if (ctx == NULL) {
 		ctx = vfs_context_current();
-	}
+	}    
 	a.a_desc = &vnop_open_desc;
 	a.a_vp = vp;
 	a.a_mode = mode;
-	a.a_context = ctx;
+	a.a_context = ctx; 
 
 #ifndef __LP64__
 	thread_safe = THREAD_SAFE_FS(vp);
 	if (!thread_safe) {
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 		if (vp->v_type != VCHR && vp->v_type != VFIFO && vp->v_type != VSOCK) {
-		        if ( (_err = lock_fsnode(vp, NULL)) ) {
-			        (void) thread_funnel_set(kernel_flock, funnel_state);
-			        return (_err);
-			}
-		}
-	}
+			if ( (_err = lock_fsnode(vp, NULL)) ) {
+				(void) thread_funnel_set(kernel_flock, funnel_state);
+				return (_err);
+			}    
+		}    
+	}    
 #endif /* __LP64__ */
 
 	_err = (*vp->v_op[vnop_open_desc.vdesc_offset])(&a);
@@ -3130,9 +3362,9 @@ VNOP_OPEN(vnode_t vp, int mode, vfs_context_t ctx)
 	if (!thread_safe) {
 		if (vp->v_type != VCHR && vp->v_type != VFIFO && vp->v_type != VSOCK) {
 			unlock_fsnode(vp, NULL);
-		}
+		}    
 		(void) thread_funnel_set(kernel_flock, funnel_state);
-	}
+	}    
 #endif /* __LP64__ */
 
 	return (_err);
@@ -4012,6 +4244,49 @@ VNOP_REMOVE(vnode_t dvp, vnode_t vp, struct componentname * cnp, int flags, vfs_
 	return (_err);
 }
 
+int
+VNOP_COMPOUND_REMOVE(vnode_t dvp, vnode_t *vpp, struct nameidata *ndp, int32_t flags, struct vnode_attr *vap, vfs_context_t ctx)
+{
+	int _err;
+	struct vnop_compound_remove_args a;
+	int no_vp = (*vpp == NULLVP);
+
+	a.a_desc = &vnop_compound_remove_desc;
+	a.a_dvp = dvp;
+	a.a_vpp = vpp;
+	a.a_cnp = &ndp->ni_cnd;
+	a.a_flags = flags;
+	a.a_vap = vap;
+	a.a_context = ctx;
+	a.a_remove_authorizer = vn_authorize_unlink;
+
+	_err = (*dvp->v_op[vnop_compound_remove_desc.vdesc_offset])(&a);
+	if (_err == 0) {
+	        vnode_setneedinactive(*vpp);
+
+		if ( !(NATIVE_XATTR(dvp)) ) {
+		        /* 
+			 * Remove any associated extended attribute file (._ AppleDouble file).
+			 */
+		        xattrfile_remove(dvp, ndp->ni_cnd.cn_nameptr, ctx, 1);
+		}
+	}
+
+	post_event_if_success(*vpp, _err, NOTE_DELETE | NOTE_LINK);
+	post_event_if_success(dvp, _err, NOTE_WRITE);
+
+	if (no_vp) {
+		lookup_compound_vnop_post_hook(_err, dvp, *vpp, ndp, 0);
+		if (*vpp && _err && _err != EKEEPLOOKING) {
+			vnode_put(*vpp);
+			*vpp = NULLVP;
+		}
+	}
+
+	//printf("VNOP_COMPOUND_REMOVE() returning %d\n", _err);
+
+	return (_err);
+}
 
 #if 0
 /*
@@ -4085,114 +4360,33 @@ VNOP_LINK(vnode_t vp, vnode_t tdvp, struct componentname * cnp, vfs_context_t ct
 	return (_err);
 }
 
-
-#if 0
-/*
- *#
- *#% rename       fdvp    U U U
- *#% rename       fvp     U U U
- *#% rename       tdvp    L U U
- *#% rename       tvp     X U U
- *#
- */
-struct vnop_rename_args {
-	struct vnodeop_desc *a_desc;
-	vnode_t a_fdvp;
-	vnode_t a_fvp;
-	struct componentname *a_fcnp;
-	vnode_t a_tdvp;
-	vnode_t a_tvp;
-	struct componentname *a_tcnp;
-	vfs_context_t a_context;
-};
-#endif /* 0*/
 errno_t
-VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
-            struct vnode *tdvp, struct vnode *tvp, struct componentname *tcnp,
-            vfs_context_t ctx)
+vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, struct vnode_attr *fvap,
+            struct vnode *tdvp, struct vnode **tvpp, struct componentname *tcnp, struct vnode_attr *tvap,
+            uint32_t flags, vfs_context_t ctx)
 {
-	int _err = 0;
-	int events;
-	struct vnop_rename_args a;
-	char smallname1[48];
-	char smallname2[48];
-	char *xfromname = NULL;
-	char *xtoname = NULL;
-#ifndef __LP64__
-	int funnel_state = 0;
-	vnode_t	lock_first = NULL, lock_second = NULL;
-	vnode_t fdvp_unsafe = NULLVP;
-	vnode_t tdvp_unsafe = NULLVP;
-#endif /* __LP64__ */
+	int _err;
 	vnode_t src_attr_vp = NULLVP;
 	vnode_t dst_attr_vp = NULLVP;
 	struct nameidata fromnd;
 	struct nameidata tond;
+	char smallname1[48];
+	char smallname2[48];
+	char *xfromname = NULL;
+	char *xtoname = NULL;
+	int batched;
 
-	a.a_desc = &vnop_rename_desc;
-	a.a_fdvp = fdvp;
-	a.a_fvp = fvp;
-	a.a_fcnp = fcnp;
-	a.a_tdvp = tdvp;
-	a.a_tvp = tvp;
-	a.a_tcnp = tcnp;
-	a.a_context = ctx;
+	batched = vnode_compound_rename_available(fdvp);
 
 #ifndef __LP64__
-	if (!THREAD_SAFE_FS(fdvp))
-	        fdvp_unsafe = fdvp;
-	if (!THREAD_SAFE_FS(tdvp))
-	        tdvp_unsafe = tdvp;
-
-	if (fdvp_unsafe != NULLVP) {
-		/*
-		 * Lock parents in vnode address order to avoid deadlocks
-		 * note that it's possible for the fdvp to be unsafe,
-		 * but the tdvp to be safe because tvp could be a directory
-		 * in the root of a filesystem... in that case, tdvp is the
-		 * in the filesystem that this root is mounted on
-		 */
-		if (tdvp_unsafe == NULL || fdvp_unsafe == tdvp_unsafe) {
-			lock_first  = fdvp_unsafe;
-			lock_second = NULL;
-		} else if (fdvp_unsafe < tdvp_unsafe) {
-			lock_first  = fdvp_unsafe;
-			lock_second = tdvp_unsafe;
-		} else {
-			lock_first  = tdvp_unsafe;
-			lock_second = fdvp_unsafe;
-		}
-		if ( (_err = lock_fsnode(lock_first, &funnel_state)) )
-			return (_err);
-
-		if (lock_second != NULL && (_err = lock_fsnode(lock_second, NULL))) {
-			unlock_fsnode(lock_first, &funnel_state);
-			return (_err);
-		}
-
-		/*
-		 * Lock both children in vnode address order to avoid deadlocks
-		 */
-		if (tvp == NULL || tvp == fvp) {
-			lock_first  = fvp;
-			lock_second = NULL;
-		} else if (fvp < tvp) {
-			lock_first  = fvp;
-			lock_second = tvp;
-		} else {
-			lock_first  = tvp;
-			lock_second = fvp;
-		}
-		if ( (_err = lock_fsnode(lock_first, NULL)) )
-			goto out1;
-
-		if (lock_second != NULL && (_err = lock_fsnode(lock_second, NULL))) {
-		        unlock_fsnode(lock_first, NULL);
-			goto out1;
-		}
-	}
+	vnode_t fdvp_unsafe = (THREAD_SAFE_FS(fdvp) ? NULLVP : fdvp);
 #endif /* __LP64__ */
-	
+
+	if (!batched) {
+		if (*fvpp == NULLVP) 
+			panic("Not batched, and no fvp?");
+	}
+
 	/* 
 	 * We need to preflight any potential AppleDouble file for the source file
 	 * before doing the rename operation, since we could potentially be doing
@@ -4235,8 +4429,8 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 		 * is only for AppleDouble files.
 		 */
 		if (xfromname != NULL) {
-			NDINIT(&fromnd, RENAME, NOFOLLOW | USEDVP | CN_NBMOUNTLOOK, UIO_SYSSPACE,
-					CAST_USER_ADDR_T(xfromname), ctx);
+			NDINIT(&fromnd, RENAME, OP_RENAME, NOFOLLOW | USEDVP | CN_NBMOUNTLOOK,
+			       UIO_SYSSPACE, CAST_USER_ADDR_T(xfromname), ctx);
 			fromnd.ni_dvp = fdvp;
 			error = namei(&fromnd);
 		
@@ -4267,21 +4461,18 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 		}
 	}
 
+	if (batched) {
+		_err = VNOP_COMPOUND_RENAME(fdvp, fvpp, fcnp, fvap, tdvp, tvpp, tcnp, tvap, flags, ctx);
+		if (_err != 0) {
+			printf("VNOP_COMPOUND_RENAME() returned %d\n", _err);
+		}
 
-	/* do the rename of the main file. */
-	_err = (*fdvp->v_op[vnop_rename_desc.vdesc_offset])(&a);
-
-#ifndef  __LP64__
-	if (fdvp_unsafe != NULLVP) {
-	        if (lock_second != NULL)
-		        unlock_fsnode(lock_second, NULL);
-		unlock_fsnode(lock_first, NULL);
+	} else {
+		_err = VNOP_RENAME(fdvp, *fvpp, fcnp, tdvp, *tvpp, tcnp, ctx);
 	}
-#endif /* __LP64__ */
 
 	if (_err == 0) {
-		if (tvp && tvp != fvp)
-		        vnode_setneedinactive(tvp);
+		mac_vnode_notify_rename(ctx, *fvpp, tdvp, tcnp);
 	}
 
 	/* 
@@ -4295,7 +4486,7 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 		 * Note that tdvp already has an iocount reference. Make sure to check that we
 		 * get a valid vnode from namei.
 		 */
-		NDINIT(&tond, RENAME,
+		NDINIT(&tond, RENAME, OP_RENAME,
 		       NOCACHE | NOFOLLOW | USEDVP | CN_NBMOUNTLOOK, UIO_SYSSPACE,
 		       CAST_USER_ADDR_T(xtoname), ctx);
 		tond.ni_dvp = tdvp;
@@ -4309,81 +4500,15 @@ VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
 		}
 		
 		if (src_attr_vp) {
-			/* attempt to rename src -> dst */
-
-			a.a_desc = &vnop_rename_desc;
-			a.a_fdvp = fdvp;
-			a.a_fvp = src_attr_vp;
-			a.a_fcnp = &fromnd.ni_cnd;
-			a.a_tdvp = tdvp;
-			a.a_tvp = dst_attr_vp;
-			a.a_tcnp = &tond.ni_cnd;
-			a.a_context = ctx;
-
-#ifndef __LP64__
-			if (fdvp_unsafe != NULLVP) {
-				/*
-				 * Lock in vnode address order to avoid deadlocks
-				 */
-				if (dst_attr_vp == NULL || dst_attr_vp == src_attr_vp) {
-					lock_first  = src_attr_vp;
-					lock_second = NULL;
-				} else if (src_attr_vp < dst_attr_vp) {
-					lock_first  = src_attr_vp;
-					lock_second = dst_attr_vp;
-				} else {
-					lock_first  = dst_attr_vp;
-					lock_second = src_attr_vp;
-				}
-				if ( (error = lock_fsnode(lock_first, NULL)) == 0) {
-					if (lock_second != NULL && (error = lock_fsnode(lock_second, NULL)) )
-						unlock_fsnode(lock_first, NULL);
-				}
+			if (batched) {
+				error = VNOP_COMPOUND_RENAME(fdvp, &src_attr_vp, &fromnd.ni_cnd, NULL,
+						tdvp, &dst_attr_vp, &tond.ni_cnd, NULL,
+						0, ctx);
+			} else {
+				error = VNOP_RENAME(fdvp, src_attr_vp, &fromnd.ni_cnd, 
+						tdvp, dst_attr_vp, &tond.ni_cnd, ctx);
 			}
-#endif /* __LP64__ */
-			if (error == 0) {
-				const char *oname;
-				vnode_t oparent;
 
-				/* Save these off so we can later verify them (fix up below) */
-				oname   = src_attr_vp->v_name;
-				oparent = src_attr_vp->v_parent;
-
-				error = (*fdvp->v_op[vnop_rename_desc.vdesc_offset])(&a);
-
-#ifndef __LP64__
-				if (fdvp_unsafe != NULLVP) {
-					if (lock_second != NULL)
-						unlock_fsnode(lock_second, NULL);
-					unlock_fsnode(lock_first, NULL);
-				}
-#endif /* __LP64__ */
-
-				if (error == 0) {
-					vnode_setneedinactive(src_attr_vp);
-
-					if (dst_attr_vp && dst_attr_vp != src_attr_vp)
-						vnode_setneedinactive(dst_attr_vp);
-					/*
-					 * Fix up name & parent pointers on ._ file
-					 */
-					if (oname == src_attr_vp->v_name &&
-							oparent == src_attr_vp->v_parent) {
-						int update_flags;
-
-						update_flags = VNODE_UPDATE_NAME;
-
-						if (fdvp != tdvp)
-							update_flags |= VNODE_UPDATE_PARENT;
-
-						vnode_update_identity(src_attr_vp, tdvp,
-								tond.ni_cnd.cn_nameptr,
-								tond.ni_cnd.cn_namelen,
-								tond.ni_cnd.cn_hash,
-								update_flags);
-					}
-				}
-			}
 			/* kevent notifications for moving resource files 
 			 * _err is zero if we're here, so no need to notify directories, code
 			 * below will do that.  only need to post the rename on the source and
@@ -4449,6 +4574,125 @@ out:
 		FREE(xtoname, M_TEMP);
 	}
 
+	return _err;
+}
+
+
+#if 0
+/*
+ *#
+ *#% rename       fdvp    U U U
+ *#% rename       fvp     U U U
+ *#% rename       tdvp    L U U
+ *#% rename       tvp     X U U
+ *#
+ */
+struct vnop_rename_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_fdvp;
+	vnode_t a_fvp;
+	struct componentname *a_fcnp;
+	vnode_t a_tdvp;
+	vnode_t a_tvp;
+	struct componentname *a_tcnp;
+	vfs_context_t a_context;
+};
+#endif /* 0*/
+errno_t
+VNOP_RENAME(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
+            struct vnode *tdvp, struct vnode *tvp, struct componentname *tcnp,
+            vfs_context_t ctx)
+{
+	int _err = 0;
+	int events;
+	struct vnop_rename_args a;
+#ifndef __LP64__
+	int funnel_state = 0;
+	vnode_t	lock_first = NULL, lock_second = NULL;
+	vnode_t fdvp_unsafe = NULLVP;
+	vnode_t tdvp_unsafe = NULLVP;
+#endif /* __LP64__ */
+
+	a.a_desc = &vnop_rename_desc;
+	a.a_fdvp = fdvp;
+	a.a_fvp = fvp;
+	a.a_fcnp = fcnp;
+	a.a_tdvp = tdvp;
+	a.a_tvp = tvp;
+	a.a_tcnp = tcnp;
+	a.a_context = ctx;
+
+#ifndef __LP64__
+	if (!THREAD_SAFE_FS(fdvp))
+	        fdvp_unsafe = fdvp;
+	if (!THREAD_SAFE_FS(tdvp))
+	        tdvp_unsafe = tdvp;
+
+	if (fdvp_unsafe != NULLVP) {
+		/*
+		 * Lock parents in vnode address order to avoid deadlocks
+		 * note that it's possible for the fdvp to be unsafe,
+		 * but the tdvp to be safe because tvp could be a directory
+		 * in the root of a filesystem... in that case, tdvp is the
+		 * in the filesystem that this root is mounted on
+		 */
+		if (tdvp_unsafe == NULL || fdvp_unsafe == tdvp_unsafe) {
+			lock_first  = fdvp_unsafe;
+			lock_second = NULL;
+		} else if (fdvp_unsafe < tdvp_unsafe) {
+			lock_first  = fdvp_unsafe;
+			lock_second = tdvp_unsafe;
+		} else {
+			lock_first  = tdvp_unsafe;
+			lock_second = fdvp_unsafe;
+		}
+		if ( (_err = lock_fsnode(lock_first, &funnel_state)) )
+			return (_err);
+
+		if (lock_second != NULL && (_err = lock_fsnode(lock_second, NULL))) {
+			unlock_fsnode(lock_first, &funnel_state);
+			return (_err);
+		}
+
+		/*
+		 * Lock both children in vnode address order to avoid deadlocks
+		 */
+		if (tvp == NULL || tvp == fvp) {
+			lock_first  = fvp;
+			lock_second = NULL;
+		} else if (fvp < tvp) {
+			lock_first  = fvp;
+			lock_second = tvp;
+		} else {
+			lock_first  = tvp;
+			lock_second = fvp;
+		}
+		if ( (_err = lock_fsnode(lock_first, NULL)) )
+			goto out1;
+
+		if (lock_second != NULL && (_err = lock_fsnode(lock_second, NULL))) {
+		        unlock_fsnode(lock_first, NULL);
+			goto out1;
+		}
+	}
+#endif /* __LP64__ */
+
+	/* do the rename of the main file. */
+	_err = (*fdvp->v_op[vnop_rename_desc.vdesc_offset])(&a);
+
+#ifndef  __LP64__
+	if (fdvp_unsafe != NULLVP) {
+	        if (lock_second != NULL)
+		        unlock_fsnode(lock_second, NULL);
+		unlock_fsnode(lock_first, NULL);
+	}
+#endif /* __LP64__ */
+
+	if (_err == 0) {
+		if (tvp && tvp != fvp)
+		        vnode_setneedinactive(tvp);
+	}
+
 #ifndef __LP64__
 out1:
 	if (fdvp_unsafe != NULLVP) {
@@ -4486,6 +4730,112 @@ out1:
 	}
 
 	return (_err);
+}
+
+int
+VNOP_COMPOUND_RENAME( 
+		struct vnode *fdvp,  struct vnode **fvpp,  struct componentname *fcnp, struct vnode_attr *fvap,
+             	struct vnode *tdvp,  struct vnode **tvpp,  struct componentname *tcnp, struct vnode_attr *tvap,  
+	     	uint32_t flags, vfs_context_t ctx)
+{
+	int _err = 0;
+	int events;
+	struct vnop_compound_rename_args a;
+	int no_fvp, no_tvp;
+
+	no_fvp = (*fvpp) == NULLVP;
+	no_tvp = (*tvpp) == NULLVP;
+
+	a.a_desc = &vnop_compound_rename_desc;
+	
+	a.a_fdvp = fdvp;
+	a.a_fvpp = fvpp;
+	a.a_fcnp = fcnp;
+	a.a_fvap = fvap;
+
+	a.a_tdvp = tdvp;
+	a.a_tvpp = tvpp;
+	a.a_tcnp = tcnp;
+	a.a_tvap = tvap;
+	
+	a.a_flags = flags;
+	a.a_context = ctx;
+	a.a_rename_authorizer = vn_authorize_rename;
+	a.a_reserved = NULL;
+
+	/* do the rename of the main file. */
+	_err = (*fdvp->v_op[vnop_compound_rename_desc.vdesc_offset])(&a);
+
+	if (_err == 0) {
+		if (*tvpp && *tvpp != *fvpp)
+		        vnode_setneedinactive(*tvpp);
+	}
+
+	/* Wrote at least one directory.  If transplanted a dir, also changed link counts */
+	if (0 == _err && *fvpp != *tvpp) {
+		if (!*fvpp) {
+			panic("No fvpp after compound rename?");
+		}
+
+		events = NOTE_WRITE;
+		if (vnode_isdir(*fvpp)) {
+			/* Link count on dir changed only if we are moving a dir and...
+			 * 	--Moved to new dir, not overwriting there
+			 * 	--Kept in same dir and DID overwrite
+			 */
+			if (((fdvp != tdvp) && (!*tvpp)) || ((fdvp == tdvp) && (*tvpp))) {
+				events |= NOTE_LINK;
+			}
+		}
+
+		lock_vnode_and_post(fdvp, events);
+		if (fdvp != tdvp) {
+			lock_vnode_and_post(tdvp,  events);
+		}
+
+		/* If you're replacing the target, post a deletion for it */
+		if (*tvpp)
+		{
+			lock_vnode_and_post(*tvpp, NOTE_DELETE);
+		}
+
+		lock_vnode_and_post(*fvpp, NOTE_RENAME);
+	}
+
+	if (no_fvp) {
+		lookup_compound_vnop_post_hook(_err, fdvp, *fvpp, fcnp->cn_ndp, 0); 
+	}
+	if (no_tvp && *tvpp != NULLVP) {
+		lookup_compound_vnop_post_hook(_err, tdvp, *tvpp, tcnp->cn_ndp, 0);
+	}
+
+	if (_err && _err != EKEEPLOOKING) {
+		if (*fvpp) {
+			vnode_put(*fvpp);
+			*fvpp = NULLVP;
+		}
+		if (*tvpp) {
+			vnode_put(*tvpp);
+			*tvpp = NULLVP;
+		}
+	}
+
+	return (_err);
+}
+
+int
+vn_mkdir(struct vnode *dvp, struct vnode **vpp, struct nameidata *ndp,
+           struct vnode_attr *vap, vfs_context_t ctx)
+{
+	if (ndp->ni_cnd.cn_nameiop != CREATE) {
+		panic("Non-CREATE nameiop in vn_mkdir()?");
+	}
+
+	if (vnode_compound_mkdir_available(dvp)) {
+		return VNOP_COMPOUND_MKDIR(dvp, vpp, ndp, vap, ctx);
+	} else {
+		return VNOP_MKDIR(dvp, vpp, &ndp->ni_cnd, vap, ctx);
+	}
 }
 
  #if 0
@@ -4550,6 +4900,59 @@ VNOP_MKDIR(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
        return (_err);
 }
 
+int
+VNOP_COMPOUND_MKDIR(struct vnode *dvp, struct vnode **vpp, struct nameidata *ndp,
+           struct vnode_attr *vap, vfs_context_t ctx)
+{
+       int _err;
+       struct vnop_compound_mkdir_args a;
+
+       a.a_desc = &vnop_compound_mkdir_desc;
+       a.a_dvp = dvp;
+       a.a_vpp = vpp;
+       a.a_cnp = &ndp->ni_cnd;
+       a.a_vap = vap;
+       a.a_flags = 0;
+       a.a_context = ctx;
+#if 0
+       a.a_mkdir_authorizer = vn_authorize_mkdir;
+#endif /* 0 */
+       a.a_reserved = NULL;
+
+       _err = (*dvp->v_op[vnop_compound_mkdir_desc.vdesc_offset])(&a);
+	if (_err == 0 && !NATIVE_XATTR(dvp)) {
+		/* 
+		 * Remove stale Apple Double file (if any).
+		 */
+		xattrfile_remove(dvp, ndp->ni_cnd.cn_nameptr, ctx, 0);
+	}
+
+	post_event_if_success(dvp, _err, NOTE_LINK | NOTE_WRITE);
+
+	lookup_compound_vnop_post_hook(_err, dvp, *vpp, ndp, (_err == 0));
+	if (*vpp && _err && _err != EKEEPLOOKING) {
+		vnode_put(*vpp);
+		*vpp = NULLVP;
+	}
+
+	return (_err);
+}
+
+int
+vn_rmdir(vnode_t dvp, vnode_t *vpp, struct nameidata *ndp, struct vnode_attr *vap, vfs_context_t ctx)
+{
+	if (vnode_compound_rmdir_available(dvp)) {
+		return VNOP_COMPOUND_RMDIR(dvp, vpp, ndp, vap, ctx);
+	} else {
+		if (*vpp == NULLVP) {
+			panic("NULL vp, but not a compound VNOP?");
+		}
+		if (vap != NULL) {
+			panic("Non-NULL vap, but not a compound VNOP?");
+		}
+		return VNOP_RMDIR(dvp, *vpp, &ndp->ni_cnd, ctx);
+	}
+}
 
 #if 0
 /*
@@ -4618,6 +5021,53 @@ VNOP_RMDIR(struct vnode *dvp, struct vnode *vp, struct componentname *cnp, vfs_c
 	return (_err);
 }
 
+int
+VNOP_COMPOUND_RMDIR(struct vnode *dvp, struct vnode **vpp, struct nameidata *ndp,
+           struct vnode_attr *vap, vfs_context_t ctx)
+{
+       int _err;
+       struct vnop_compound_rmdir_args a;
+       int no_vp;
+
+       a.a_desc = &vnop_mkdir_desc;
+       a.a_dvp = dvp;
+       a.a_vpp = vpp;
+       a.a_cnp = &ndp->ni_cnd;
+       a.a_vap = vap;
+       a.a_flags = 0;
+       a.a_context = ctx;
+       a.a_rmdir_authorizer = vn_authorize_rmdir;
+       a.a_reserved = NULL;
+
+       no_vp = (*vpp == NULLVP);
+
+       _err = (*dvp->v_op[vnop_compound_rmdir_desc.vdesc_offset])(&a);
+	if (_err == 0 && !NATIVE_XATTR(dvp)) {
+		/* 
+		 * Remove stale Apple Double file (if any).
+		 */
+		xattrfile_remove(dvp, ndp->ni_cnd.cn_nameptr, ctx, 0);
+	}
+
+	if (*vpp) {
+		post_event_if_success(*vpp, _err, NOTE_DELETE | NOTE_LINK);
+	}
+	post_event_if_success(dvp, _err, NOTE_LINK | NOTE_WRITE);
+
+       if (no_vp) {
+	       lookup_compound_vnop_post_hook(_err, dvp, *vpp, ndp, 0);
+
+#if 0 /* Removing orphaned ._ files requires a vp.... */
+	       if (*vpp && _err && _err != EKEEPLOOKING) {
+		       vnode_put(*vpp);
+		       *vpp = NULLVP;
+	       }
+#endif  /* 0 */
+       }
+
+       return (_err);
+}
+
 /*
  * Remove a ._ AppleDouble file
  */
@@ -4642,7 +5092,7 @@ xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t ctx, int forc
 		MALLOC(filename, char *, len, M_TEMP, M_WAITOK);
 		len = snprintf(filename, len, "._%s", basename);
 	}
-	NDINIT(&nd, DELETE, WANTPARENT | LOCKLEAF | NOFOLLOW | USEDVP, UIO_SYSSPACE,
+	NDINIT(&nd, DELETE, OP_UNLINK, WANTPARENT | LOCKLEAF | NOFOLLOW | USEDVP, UIO_SYSSPACE,
 	       CAST_USER_ADDR_T(filename), ctx);
 	nd.ni_dvp = dvp;
 	if (namei(&nd) != 0)
@@ -4678,32 +5128,9 @@ xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t ctx, int forc
 		}
 	}
 	if (force) {
-		struct vnop_remove_args a;
 		int  error;
-#ifndef __LP64__
-		int thread_safe = THREAD_SAFE_FS(dvp);
-#endif /* __LP64__ */
 	
-		a.a_desc    = &vnop_remove_desc;
-		a.a_dvp     = nd.ni_dvp;
-		a.a_vp      = xvp;
-		a.a_cnp     = &nd.ni_cnd;
-		a.a_context = ctx;
-
-#ifndef __LP64__
-		if (!thread_safe) {
-			if ( (lock_fsnode(xvp, NULL)) )
-				goto out1;
-		}
-#endif /* __LP64__ */
-
-		error = (*dvp->v_op[vnop_remove_desc.vdesc_offset])(&a);
-
-#ifndef __LP64__
-		if (!thread_safe)
-			unlock_fsnode(xvp, NULL);
-#endif /* __LP64__ */
-
+		error = VNOP_REMOVE(dvp, xvp, &nd.ni_cnd, 0, ctx);
 		if (error == 0)
 			vnode_setneedinactive(xvp);
 
@@ -4745,7 +5172,7 @@ xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
 		MALLOC(filename, char *, len, M_TEMP, M_WAITOK);
 		len = snprintf(filename, len, "._%s", basename);
 	}
-	NDINIT(&nd, LOOKUP, NOFOLLOW | USEDVP, UIO_SYSSPACE,
+	NDINIT(&nd, LOOKUP, OP_SETATTR, NOFOLLOW | USEDVP, UIO_SYSSPACE,
 	       CAST_USER_ADDR_T(filename), ctx);
 	nd.ni_dvp = dvp;
 	if (namei(&nd) != 0)
@@ -4846,7 +5273,6 @@ VNOP_SYMLINK(struct vnode *dvp, struct vnode **vpp, struct componentname *cnp,
 		 */
 		xattrfile_remove(dvp, cnp->cn_nameptr, ctx, 0);
 	}
-
 
 #ifndef __LP64__
 	if (!thread_safe) {
@@ -5452,6 +5878,16 @@ VNOP_PAGEOUT(struct vnode *vp, upl_t pl, upl_offset_t pl_offset, off_t f_offset,
 	post_event_if_success(vp, _err, NOTE_WRITE);
 
 	return (_err);
+}
+
+int
+vn_remove(vnode_t dvp, vnode_t *vpp, struct nameidata *ndp, int32_t flags, struct vnode_attr *vap, vfs_context_t ctx)
+{
+	if (vnode_compound_remove_available(dvp)) {
+		return VNOP_COMPOUND_REMOVE(dvp, vpp, ndp, flags, vap, ctx);
+	} else {
+		return VNOP_REMOVE(dvp, *vpp, &ndp->ni_cnd, flags, ctx);
+	}
 }
 
 

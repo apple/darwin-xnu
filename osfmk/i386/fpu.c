@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -61,6 +61,7 @@
 #include <mach/exception_types.h>
 #include <mach/i386/thread_status.h>
 #include <mach/i386/fp_reg.h>
+#include <mach/branch_predicates.h>
 
 #include <kern/mach_param.h>
 #include <kern/processor.h>
@@ -434,7 +435,7 @@ fpu_save_context(thread_t thread)
 	struct x86_fx_thread_state *ifps;
 
 	assert(ml_get_interrupts_enabled() == FALSE);
-	ifps = (thread)->machine.pcb->ifps;
+	ifps = (thread)->machine.ifps;
 #if	DEBUG
 	if (ifps && ((ifps->fp_valid != FALSE) && (ifps->fp_valid != TRUE))) {
 		panic("ifps->fp_valid: %u\n", ifps->fp_valid);
@@ -448,7 +449,7 @@ fpu_save_context(thread_t thread)
 		 */
 		clear_ts();
 		/* registers are in FPU - save to memory */
-		fpu_store_registers(ifps, (thread_is_64bit(thread) && is_saved_state64(thread->machine.pcb->iss)));
+		fpu_store_registers(ifps, (thread_is_64bit(thread) && is_saved_state64(thread->machine.iss)));
 		ifps->fp_valid = TRUE;
 	}
 	set_ts();
@@ -492,7 +493,7 @@ fpu_set_fxstate(
 	state = (x86_float_state64_t *)tstate;
 
 	assert(thr_act != THREAD_NULL);
-	pcb = thr_act->machine.pcb;
+	pcb = THREAD_TO_PCB(thr_act);
 
 	if (state == NULL) {
 	    /*
@@ -598,7 +599,7 @@ fpu_get_fxstate(
 	state = (x86_float_state64_t *)tstate;
 
 	assert(thr_act != THREAD_NULL);
-	pcb = thr_act->machine.pcb;
+	pcb = THREAD_TO_PCB(thr_act);
 
 	simple_lock(&pcb->lock);
 
@@ -657,12 +658,12 @@ fpu_dup_fxstate(
 	boolean_t	intr;
 	pcb_t		ppcb;
 
-	ppcb = parent->machine.pcb;
+	ppcb = THREAD_TO_PCB(parent);
 
 	if (ppcb->ifps == NULL)
 	        return;
 
-        if (child->machine.pcb->ifps)
+        if (child->machine.ifps)
 	        panic("fpu_dup_fxstate: child's ifps non-null");
 
 	new_ifps = fp_state_alloc();
@@ -683,11 +684,11 @@ fpu_dup_fxstate(
 		(void)ml_set_interrupts_enabled(intr);
 
 		if (ifps->fp_valid) {
-			child->machine.pcb->ifps = new_ifps;
+			child->machine.ifps = new_ifps;
 			assert((fp_register_state_size == sizeof(struct x86_fx_thread_state)) ||
 			    (fp_register_state_size == sizeof(struct x86_avx_thread_state)));
 			bcopy((char *)(ppcb->ifps),
-			    (char *)(child->machine.pcb->ifps), fp_register_state_size);
+			    (char *)(child->machine.ifps), fp_register_state_size);
 
 			/* Mark the new fp saved state as non-live. */
 			/* Temporarily disabled: radar 4647827
@@ -750,7 +751,7 @@ fpnoextflt(void)
 	struct x86_fx_thread_state *ifps = 0;
 
 	thr_act = current_thread();
-	pcb = thr_act->machine.pcb;
+	pcb = THREAD_TO_PCB(thr_act);
 
 	assert(fp_register_state_size != 0);
 
@@ -769,7 +770,7 @@ fpnoextflt(void)
 
 	clear_ts();			/*  Enable FPU use */
 
-	if (get_interrupt_level()) {
+	if (__improbable(get_interrupt_level())) {
 		/*
 		 * Save current coprocessor context if valid
 		 * Initialize coprocessor live context
@@ -816,7 +817,7 @@ fpextovrflt(void)
 	 * This is a non-recoverable error.
 	 * Invalidate the thread`s FPU state.
 	 */
-	pcb = thr_act->machine.pcb;
+	pcb = THREAD_TO_PCB(thr_act);
 	simple_lock(&pcb->lock);
 	ifps = pcb->ifps;
 	pcb->ifps = 0;
@@ -853,7 +854,7 @@ void
 fpexterrflt(void)
 {
 	thread_t	thr_act = current_thread();
-	struct x86_fx_thread_state *ifps = thr_act->machine.pcb->ifps;
+	struct x86_fx_thread_state *ifps = thr_act->machine.ifps;
 	boolean_t	intr;
 
 	intr = ml_set_interrupts_enabled(FALSE);
@@ -896,7 +897,7 @@ void
 fp_save(
 	thread_t	thr_act)
 {
-	pcb_t pcb = thr_act->machine.pcb;
+	pcb_t pcb = THREAD_TO_PCB(thr_act);
 	struct x86_fx_thread_state *ifps = pcb->ifps;
 
 	assert(ifps != 0);
@@ -918,7 +919,7 @@ void
 fp_load(
 	thread_t	thr_act)
 {
-	pcb_t pcb = thr_act->machine.pcb;
+	pcb_t pcb = THREAD_TO_PCB(thr_act);
 	struct x86_fx_thread_state *ifps = pcb->ifps;
 
 	assert(ifps);
@@ -941,7 +942,7 @@ void
 fpSSEexterrflt(void)
 {
 	thread_t	thr_act = current_thread();
-	struct x86_fx_thread_state *ifps = thr_act->machine.pcb->ifps;
+	struct x86_fx_thread_state *ifps = thr_act->machine.ifps;
 	boolean_t	intr;
 
 	intr = ml_set_interrupts_enabled(FALSE);
@@ -972,7 +973,7 @@ fpSSEexterrflt(void)
 void
 fp_setvalid(boolean_t value) {
         thread_t	thr_act = current_thread();
-	struct x86_fx_thread_state *ifps = thr_act->machine.pcb->ifps;
+	struct x86_fx_thread_state *ifps = thr_act->machine.ifps;
 
 	if (ifps) {
 	        ifps->fp_valid = value;
@@ -985,7 +986,7 @@ fp_setvalid(boolean_t value) {
 	}
 }
 
-boolean_t
+__private_extern__ boolean_t
 ml_fpu_avx_enabled(void) {
 	return (fpu_YMM_present == TRUE);
 }

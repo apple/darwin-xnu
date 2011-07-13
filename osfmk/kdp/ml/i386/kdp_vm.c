@@ -44,9 +44,6 @@
 #include <vm/vm_protos.h>
 #include <vm/vm_kern.h>
 
-extern vm_offset_t sectTEXTB, sectDATAB, sectLINKB, sectPRELINKB;
-extern unsigned long sectSizeTEXT, sectSizeDATA, sectSizeLINK, sectSizePRELINK;
-
 int	kern_dump(void);
 int	kdp_dump_trap(int type, x86_saved_state32_t *regs);
 
@@ -156,15 +153,16 @@ kern_dump(void)
 	vm_map_t	map;
 	unsigned int	thread_count, segment_count;
 	unsigned int	command_size = 0, header_size = 0, tstate_size = 0;
-	unsigned int	hoffset = 0, foffset = 0, nfoffset = 0,  vmoffset = 0;
-	unsigned int	max_header_size = 0;
-	vm_offset_t	header;
+
+	uint64_t        hoffset = 0, foffset = 0, nfoffset = 0, max_header_size;
+	vm_offset_t     header, txstart;                                        
+	vm_address_t    vmoffset;                                               
+
 	struct mach_header	*mh;
 	struct segment_command	*sc;
 	vm_size_t	size;
 	vm_prot_t	prot = 0;
 	vm_prot_t	maxprot = 0;
-	vm_inherit_t	inherit = 0;
 	mythread_state_flavor_t flavors[MAX_TSTATE_FLAVORS];
 	vm_size_t	nflavors;
 	vm_size_t	i;
@@ -176,9 +174,6 @@ kern_dump(void)
 
 	int error = 0;
 	int panic_error = 0;
-	unsigned int txstart = 0;
-	unsigned int mach_section_count = 4;
-	unsigned int num_sects_txed = 0;
 
 	map = kernel_map;
 
@@ -194,7 +189,7 @@ kern_dump(void)
 		tstate_size += sizeof(mythread_state_flavor_t) +
 		    (flavors[i].count * sizeof(int));
 
-	command_size = (segment_count + mach_section_count) *
+	command_size = (segment_count) *
 	    sizeof(struct segment_command) +
 	    thread_count * sizeof(struct thread_command) +
 	    tstate_size * thread_count;
@@ -212,7 +207,7 @@ kern_dump(void)
 	mh->cputype = cpu_type();
 	mh->cpusubtype = cpu_subtype();
 	mh->filetype = MH_CORE;
-	mh->ncmds = segment_count + thread_count + mach_section_count;
+	mh->ncmds = segment_count + thread_count;
 	mh->sizeofcmds = command_size;
 	mh->flags = 0;
 
@@ -225,7 +220,7 @@ kern_dump(void)
 
 	max_header_size = foffset;
 
-	vmoffset = VM_MIN_ADDRESS;		/* offset into VM */
+	vmoffset = VM_MIN_KERNEL_ADDRESS;		/* offset into VM */
 
 	/* Transmit the Mach-O MH_CORE header, and seek forward past the 
 	 * area reserved for the segment and thread commands 
@@ -249,64 +244,36 @@ kern_dump(void)
 		error = panic_error;
 		goto out;
 	}
-	printf ("Transmitting kernel state, please wait: ");
+	printf ("Transmitting kernel state:\n");
 
-	while ((segment_count > 0) || (kret == KERN_SUCCESS)){
-		/* Check if we've transmitted all the kernel sections */
-		if (num_sects_txed == mach_section_count) {
+	while ((segment_count > 0) || (kret == KERN_SUCCESS)) {
+		while (1) {
 
-			while (1) {
+			/*
+			 *	Get region information for next region.
+			 */
 
-				/*
-				 *	Get region information for next region.
-				 */
-
-				vbrcount = VM_REGION_SUBMAP_INFO_COUNT_64;
-				if((kret = vm_region_recurse_64(map, 
-					    &vmoffset, &size, &nesting_depth, 
-					    (vm_region_recurse_info_t)&vbr,
-					    &vbrcount)) != KERN_SUCCESS) {
-					break;
-				}
-
-				if(vbr.is_submap) {
-					nesting_depth++;
-					continue;
-				} else {
-					break;
-				}
-			}
-
-			if(kret != KERN_SUCCESS)
-				break;
-
-			prot = vbr.protection;
-			maxprot = vbr.max_protection;
-			inherit = vbr.inheritance;
-		}
-		else
-		{
-			switch (num_sects_txed) {
-			case 0:
-				/* Transmit the kernel text section */
-				vmoffset = sectTEXTB;
-				size = sectSizeTEXT;
-				break;
-			case 1:
-				vmoffset = sectDATAB;
-				size = sectSizeDATA;
-				break;
-			case 2:
-				vmoffset = sectPRELINKB;
-				size = sectSizePRELINK;
-				break;
-			case 3:
-				vmoffset = sectLINKB;
-				size = sectSizeLINK;
+			vbrcount = VM_REGION_SUBMAP_INFO_COUNT_64;
+			if((kret = vm_region_recurse_64(map, 
+				    &vmoffset, &size, &nesting_depth, 
+				    (vm_region_recurse_info_t)&vbr,
+				    &vbrcount)) != KERN_SUCCESS) {
 				break;
 			}
-			num_sects_txed++;
+
+			if(vbr.is_submap) {
+				nesting_depth++;
+				continue;
+			} else {
+				break;
+			}
 		}
+
+		if(kret != KERN_SUCCESS)
+			break;
+
+		prot = vbr.protection;
+		maxprot = vbr.max_protection;
 		/*
 		 *	Fill in segment command structure.
 		 */
@@ -319,7 +286,7 @@ kern_dump(void)
 		sc->segname[0] = 0;
 		sc->vmaddr = vmoffset;
 		sc->vmsize = size;
-		sc->fileoff = foffset;
+		sc->fileoff = (uint32_t) foffset;                               
 		sc->filesize = size;
 		sc->maxprot = maxprot;
 		sc->initprot = prot;
@@ -392,8 +359,7 @@ kern_dump(void)
 	}
     
 	/* last packet */
-	if ((panic_error = kdp_send_crashdump_pkt (KDP_EOF, NULL, 0, ((void *) 0))) < 0)
-	{
+	if ((panic_error = kdp_send_crashdump_pkt (KDP_EOF, NULL, 0, ((void *) 0))) < 0) {
 		printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
 		error = panic_error;
 		goto out;

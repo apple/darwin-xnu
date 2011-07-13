@@ -88,7 +88,9 @@
 
 extern addr64_t  kvtophys(vm_offset_t va); 
 extern boolean_t kernacc(off_t, size_t );
+#if !defined(SECURE_KERNEL)
 extern int setup_kmem;
+#endif
 
 static caddr_t devzerobuf;
 
@@ -117,8 +119,11 @@ mmioctl(dev_t dev, u_long cmd, __unused caddr_t data,
 {
 	int minnum = minor(dev);
 
-	if ((setup_kmem == 0) && ((minnum == 0) || (minnum == 1)))
-		return(EINVAL);
+	if ((minnum == 0) || (minnum == 1))
+#if !defined(SECURE_KERNEL)
+		if (setup_kmem == 0) 
+			return(EINVAL);
+#endif
 
 	switch (cmd) {
 	case FIONBIO:
@@ -149,8 +154,12 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 
 		/* minor device 0 is physical memory */
 		case 0:
+#if defined(SECURE_KERNEL)
+			return(ENODEV);
+#else
 			if (setup_kmem == 0)
 				return(ENODEV);
+#endif
 
 			v = trunc_page(uio->uio_offset);
 			if (uio->uio_offset >= (off_t)mem_size)
@@ -169,8 +178,12 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 
 		/* minor device 1 is kernel memory */
 		case 1:
+#if defined(SECURE_KERNEL)
+			return(ENODEV);
+#else
 			if (setup_kmem == 0)
 				return(ENODEV);
+#endif
 			/* Do some sanity checking */
 			if (((vm_address_t)uio->uio_offset >= VM_MAX_KERNEL_ADDRESS) ||
 				((vm_address_t)uio->uio_offset <= VM_MIN_KERNEL_AND_KEXT_ADDRESS))

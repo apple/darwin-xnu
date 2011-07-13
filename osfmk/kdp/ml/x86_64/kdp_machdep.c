@@ -467,6 +467,11 @@ kdp_i386_trap(
 	break;
     }
 
+    if (current_cpu_datap()->cpu_fatal_trap_state) {
+	    current_cpu_datap()->cpu_post_fatal_trap_state = saved_state;
+	    saved_state = current_cpu_datap()->cpu_fatal_trap_state;
+    }
+
     kdp_raise_exception(exception, code, subcode, saved_state);
     /* If the instruction single step bit is set, disable kernel preemption
      */

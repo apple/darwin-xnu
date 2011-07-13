@@ -161,6 +161,7 @@ typedef struct fse_info {
 } fse_info;
 
 int   get_fse_info(struct vnode *vp, fse_info *fse, vfs_context_t ctx);
+int   vnode_get_fse_info_from_vap(vnode_t vp, fse_info *fse, struct vnode_attr *vap);
 
 char *get_pathbuff(void);
 void  release_pathbuff(char *path);

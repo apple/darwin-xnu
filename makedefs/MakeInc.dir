@@ -1,15 +1,25 @@
 #
 # Install kernel header files
 #
+.PHONY: installhdrs
+
 ifeq ($(RC_ProjectName),Libsyscall)
 installhdrs:
-	bsdmake -C libsyscall installhdrs
+	cd libsyscall ; \
+		sdk="$(SDKROOT)" ;								\
+		if [ $${sdk} = / ] ; then						\
+			sdk="" ;									\
+		fi;												\
+		xcrun -sdk "$(SDKROOT)" xcodebuild installhdrs 	\
+			"SRCROOT=$(SRCROOT)/libsyscall" 				\
+			"OBJROOT=$(OBJROOT)" 						\
+			"SYMROOT=$(SYMROOT)" 						\
+			"DSTROOT=$(DSTROOT)"						\
+			"SDKROOT=$${sdk}"
 else ifeq ($(findstring libkxld,$(RC_ProjectName)),libkxld)
 installhdrs:
 	make -C libkern/kxld/ installhdrs
-else ifeq ($(RC_ProjectName),xnu_debug)
-installhdrs:
-else # xnu
+else # xnu, xnu_debug, or xnu_headers_Sim
 installhdrs: exporthdrs installhdrs_mi installhdrs_md 
 	@echo "[ $(SRCROOT) ] make installhdrs installing Kernel.framework"
 	$(_v)kincpath=$(DSTROOT)/$(KINCDIR);					\
@@ -28,28 +38,52 @@ installhdrs: exporthdrs installhdrs_mi installhdrs_md
 	[ -d $(DSTROOT)/$(KPINCDIR) ] || $(MKDIR) $(DSTROOT)/$(KPINCDIR);	\
 	cd $$kframepath; [ -L PrivateHeaders ] ||		 	\
 	    $(LN) Versions/Current/PrivateHeaders PrivateHeaders;
+ifeq ($(RC_ProjectName),xnu_headers_Sim)
+	@echo "[ $(SRCROOT) ] make installhdrs installing System.framework"
+	$(_v)spincpath=$(DSTROOT)/$(SPINCDIR);				\
+	sframepath=$(DSTROOT)/$(SINCFRAME);				\
+	[ -d $$spincpath ] || $(MKDIR) $$spincpath;			\
+	cd $$sframepath/Versions;					\
+	    [ -L Current ] || $(LN) $(SINCVERS) Current;		\
+	cd $$sframepath; [ -L PrivateHeaders ] ||		 	\
+	    $(LN) Versions/Current/PrivateHeaders PrivateHeaders;
+endif
+ifeq (iPhoneOS,$(PLATFORM))
+	$(_v)$(IPHONEOS_OPTIMIZE) $(DSTROOT)/$(KRESDIR)/Info.plist
+endif
 endif
 
 #
 # Install header files order
 #
 .ORDER: installhdrs_mi installhdrs_md
+.PHONY: installhdrs_mi installhdrs_md
 
 #
 # Install machine independent header files
 #
 installhdrs_mi:
-	$(_v)rel_path=$(shell $(RELPATH) $(SRCROOT) $(SOURCE));			\
+	$(_v)rel_path=$(shell $(RELPATH) $(SRCROOT) $(SOURCE));		\
 	kernel_config=$(INSTALL_TYPE);					\
-	arch_config=$(INSTALL_ARCH_DEFAULT);					\
-	installinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
-	[ -d $${installinc_dir} ] ||$(MKDIR) $${installinc_dir};	\
+	machine_config=$(MACHINE_CONFIG);				\
+	arch_config=$(INSTALL_ARCH_DEFAULT);				\
+	if [ $${arch_config} = ARM ] ; then				\
+		if [ $${machine_config} = DEFAULT ] ; then		\
+			machine_config=$(DEFAULT_ARM_MACHINE_CONFIG);	\
+		fi;							\
+	fi;								\
+	if [ $${machine_config} = DEFAULT ] ; then			\
+		installinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
+	else								\
+		installinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/$${rel_path};	\
+	fi;								\
+	[ -d $${installinc_dir} ] || $(MKDIR) $${installinc_dir};	\
 	${MAKE} ${MAKEJOBS} -C $${installinc_dir}			\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile				\
 		SOURCE=${SOURCE}/					\
-		TARGET=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path}/	\
+		TARGET=$${installinc_dir}/				\
 		build_installhdrs_mi;					\
 
 #
@@ -67,17 +101,17 @@ installhdrs_md:
 		fi;		\
 	fi;		\
 	if [ $${machine_config} = DEFAULT ] ; then	\
-		objpath=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
+		installinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
 	else		\
-		objpath=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/$${rel_path};	\
+		installinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/$${rel_path};	\
 	fi;		\
-	[ -d $${objpath} ] || $(MKDIR) $${objpath};	\
-	${MAKE} ${MAKEJOBS} -C $${objpath}				\
+	[ -d $${installinc_dir} ] || $(MKDIR) $${installinc_dir};	\
+	${MAKE} ${MAKEJOBS} -C $${installinc_dir}			\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile				\
 		SOURCE=${SOURCE}/					\
-		TARGET=$${objpath}/			\
+		TARGET=$${installinc_dir}/				\
 		build_installhdrs_md;					\
 	done;
 
@@ -126,12 +160,15 @@ build_installhdrs_md: $(BUILD_INSTALLHDRS_MD_SUBDIRS_TARGETS)
 #
 # Install kernel header files
 #
+.PHONY: exporthdrs
+
 exporthdrs: exporthdrs_mi exporthdrs_md 
 
 #
 # Install header files order
 #
 .ORDER: exporthdrs_mi exporthdrs_md
+.PHONY: exporthdrs_mi exporthdrs_md
 
 #
 # Install machine independent header files
@@ -139,11 +176,21 @@ exporthdrs: exporthdrs_mi exporthdrs_md
 do_exporthdrs_mi:
 
 exporthdrs_mi:
-	$(_v)rel_path=$(shell $(RELPATH) $(SRCROOT) $(SOURCE));			\
+	$(_v)rel_path=$(shell $(RELPATH) $(SRCROOT) $(SOURCE));		\
 	kernel_config=$(INSTALL_TYPE);					\
-	arch_config=$(INSTALL_ARCH_DEFAULT);					\
-	exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
-	[ -d $${exportinc_dir} ] || $(MKDIR) $${exportinc_dir};					\
+	machine_config=$(MACHINE_CONFIG);				\
+	arch_config=$(INSTALL_ARCH_DEFAULT);				\
+	if [ $${arch_config} = ARM ] ; then				\
+		if [ $${machine_config} = DEFAULT ] ; then		\
+			machine_config=$(DEFAULT_ARM_MACHINE_CONFIG);	\
+		fi;							\
+	fi;								\
+	if [ $${machine_config} = DEFAULT ] ; then			\
+		exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
+	else								\
+		exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config}/$${rel_path};	\
+	fi;								\
+	[ -d $${exportinc_dir} ] || $(MKDIR) $${exportinc_dir};		\
 	${MAKE} ${MAKEJOBS} -C $${exportinc_dir}			\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
@@ -253,23 +300,21 @@ build_exporthdrs_md: $(BUILD_EXPORTHDRS_MD_SUBDIRS_TARGETS)
 #
 # Setup pass for  all architectures for all Configuration/Architecture options
 #
+.PHONY: setup
+
 setup:
-	$(_v)rel_path=$(shell $(RELPATH) $(SRCROOT) $(SOURCE));			\
-	for kernel_config in $(KERNEL_CONFIGS);				\
-	do								\
-	for arch_config in $(ARCH_CONFIGS);				\
-	do								\
-	setup_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path}; \
-	[ -d $${setup_subdir} ] || $(MKDIR) $${setup_subdir};					\
-	${MAKE} -C $${setup_subdir}					\
+	$(_v)rel_path=$(shell $(RELPATH) $(SRCROOT) $(SOURCE));		\
+	kernel_config=$(INSTALL_TYPE);					\
+	arch_config=$(INSTALL_ARCH_DEFAULT);				\
+	setup_subdir=${OBJROOT}/$${rel_path}; 				\
+	[ -d $${setup_subdir} ] || $(MKDIR) $${setup_subdir};		\
+	${MAKE} ${MAKEJOBS} -C $${setup_subdir}				\
 		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile				\
 		SOURCE=${SOURCE}/					\
 		TARGET=$${setup_subdir}/				\
-	build_setup;							\
-	done;								\
-	done;
+	build_setup;
 
 do_build_setup:
 
@@ -297,15 +342,32 @@ build_setup: $(BUILD_SETUP_SUBDIRS_TARGETS)
 # item in the set is the kernel configuration.  The second item in the set is the architecture  
 # and the third item is the machine configuration.  There may be multiple sets to build.
 #
+.PHONY: all
+
 ifeq ($(RC_ProjectName),Libsyscall)
 all:
-	bsdmake -C libsyscall install
-else ifeq ($(findstring libkxld,$(RC_ProjectName)),libkxld)
+	cd libsyscall ; \
+		sdk="$(SDKROOT)" ;								\
+		if [ $${sdk} = / ] ; then						\
+			sdk="" ;									\
+		fi;												\
+		xcrun -sdk "$(SDKROOT)" xcodebuild install	 	\
+			"SRCROOT=$(SRCROOT)/libsyscall"					\
+			"OBJROOT=$(OBJROOT)" 						\
+			"SYMROOT=$(SYMROOT)" 						\
+			"DSTROOT=$(DSTROOT)"						\
+			"SDKROOT=$${sdk}"
+else ifeq ($(RC_ProjectName),libkxld)
 all:
 	make -C libkern/kxld/ install
+else ifeq ($(RC_ProjectName),libkxld_host)
+all:
+	make -C libkern/kxld/ install PRODUCT_TYPE=ARCHIVE
+else ifeq ($(RC_ProjectName),xnu_headers_Sim)
+all: exporthdrs
 else # xnu or xnu_debug
 ifeq ($(COMPONENT), .)
-all: exporthdrs
+all: exporthdrs setup
 else
 all:
 endif
@@ -462,6 +524,8 @@ install: installhdrs all installman installmachinekernels
 ifeq ($(RC_ProjectName),Libsyscall)
 # nothing to do
 else ifeq ($(findstring libkxld,$(RC_ProjectName)),libkxld)
+# nothing to do, work performed in "all" action
+else ifeq ($(RC_ProjectName),xnu_headers_Sim)
 # nothing to do
 else # xnu or xnu_debug
 	$(_v)rel_path=$(shell $(RELPATH) $(SRCROOT) $(SOURCE));			\
@@ -523,10 +587,10 @@ installmachinekernels:
 		machine_config=$${my_config};		\
 		if [ $${machine_config} != DEFAULT ] ; then	\
 			build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}_$${machine_config};	\
-			install_file_list=mach.`printf "%s" "$${kernel_config}" | $(TR) A-Z a-z`.`printf "%s" "$${machine_config}" | $(TR) A-Z a-z`;	\
+			install_kernel_file=mach.`printf "%s" "$${kernel_config}" | $(TR) A-Z a-z`.`printf "%s" "$${machine_config}" | $(TR) A-Z a-z`;	\
 			[ -d $${build_subdir} ] || $(MKDIR) $${build_subdir};					\
 			${MAKE} ${MAKEJOBS} -C $${build_subdir}					\
-				INSTALL_FILE_LIST=$${install_file_list}			\
+				INSTALL_KERNEL_FILE=$${install_kernel_file}		\
 				KERNEL_CONFIG=$${kernel_config}				\
 				ARCH_CONFIG=$${arch_config}				\
 				MACHINE_CONFIG=$${machine_config}			\
@@ -578,13 +642,17 @@ build_install: $(BUILD_INSTALL_SUBDIRS_TARGETS)
 #
 # Install source tree
 #
+.PHONY: installsrc
+
 installsrc:
-	$(_v)($(TAR) -c --mode go=r,+X --no-ignore-case --exclude .svn --exclude cscope.\* --exclude BUILD --exclude \*~ -f - .) | (cd $(SRCROOT) && $(TAR) --no-same-owner -xf -)
+	$(_v)($(TAR) -c --mode go=r,+X --no-ignore-case --exclude .svn --exclude .git --exclude cscope.\* --exclude BUILD --exclude \*~ -f - .) | (cd $(SRCROOT) && $(TAR) --no-same-owner -xf -)
 
 
 #
 # Clean up source tree
 #
+.PHONY: clean
+
 clean:
 
 #
@@ -626,12 +694,17 @@ TAGS: cscope.files
 #
 # Install Man Pages
 #
+.PHONY: installman
+
 installman:
 ifeq ($(RC_ProjectName),Libsyscall)
-	bsdmake -C libsyscall install-man
+# nothing to do
 else ifeq ($(findstring libkxld,$(RC_ProjectName)),libkxld)
 # nothing to do
-else # xnu or xnu_debug
+else ifeq ($(findstring xnu_,$(RC_ProjectName)),xnu_)
+installman:
+# nothing to do
+else # xnu
 	@echo "[ $(SRCROOT) ] Installing man pages"
 	$(_v)manpath=$(DSTROOT)/$(MANDIR);   \
 	[ -d $$manpath ] || $(MKDIR) $$manpath;             \

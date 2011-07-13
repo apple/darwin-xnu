@@ -172,8 +172,16 @@ struct bpf_version {
 #define	BIOCGDLT	_IOR('B',106, u_int)
 #define BIOCGETIF	_IOR('B',107, struct ifreq)
 #define BIOCSETIF	_IOW('B',108, struct ifreq)
-#define BIOCSRTIMEOUT	_IOW('B',109, struct BPF_TIMEVAL)
-#define BIOCGRTIMEOUT	_IOR('B',110, struct BPF_TIMEVAL)
+#define BIOCSRTIMEOUT	_IOW('B',109, struct timeval)
+#ifdef KERNEL_PRIVATE
+#define BIOCSRTIMEOUT64	_IOW('B',109, struct user64_timeval)
+#define BIOCSRTIMEOUT32	_IOW('B',109, struct user32_timeval)
+#endif /* KERNEL_PRIVATE */
+#define BIOCGRTIMEOUT	_IOR('B',110, struct timeval)
+#ifdef KERNEL_PRIVATE
+#define BIOCGRTIMEOUT64	_IOR('B',110, struct user64_timeval)
+#define BIOCGRTIMEOUT32	_IOR('B',110, struct user32_timeval)
+#endif /* KERNEL_PRIVATE */
 #define BIOCGSTATS	_IOR('B',111, struct bpf_stat)
 #define BIOCIMMEDIATE	_IOW('B',112, u_int)
 #define BIOCVERSION	_IOR('B',113, struct bpf_version)

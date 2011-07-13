@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -38,6 +38,7 @@ extern "C" {
 #include <sys/queue.h>
 #include <mach/boolean.h>
 #include <kern/locks.h>
+#include <libkern/OSAtomic.h>
 
 #ifdef ASSERT
 #undef ASSERT
@@ -57,11 +58,40 @@ extern "C" {
 #define	ASSERT(EX)	((void)0)
 #endif
 
-#if defined(__ppc__)
-#define	CPU_CACHE_SIZE	128
+#define	atomic_add_16_ov(a, n)						\
+	((u_int16_t) OSAddAtomic16(n, (volatile SInt16 *)a))
+
+#define	atomic_add_16(a, n)						\
+	((void) atomic_add_16_ov(a, n))
+
+#define	atomic_add_32_ov(a, n)						\
+	((u_int32_t) OSAddAtomic(n, (volatile SInt32 *)a))
+
+#define	atomic_add_32(a, n)						\
+	((void) atomic_add_32_ov(a, n))
+
+#define	atomic_add_64_ov(a, n)						\
+	((u_int64_t) OSAddAtomic64(n, (volatile SInt64 *)a))
+
+#define	atomic_add_64(a, n)						\
+	((void) atomic_add_64_ov(a, n))
+
+#define	atomic_set_64(a, n) do {					\
+	while (!OSCompareAndSwap64(*a, n, (volatile UInt64 *)a))	\
+		;							\
+} while (0)
+
+#if defined(__LP64__)
+#define	atomic_get_64(n, a) do {					\
+	(n) = *(a);							\
+} while (0)
 #else
+#define	atomic_get_64(n, a) do {					\
+	(n) = atomic_add_64_ov(a, 0);					\
+} while (0)
+#endif /* __LP64__ */
+
 #define	CPU_CACHE_SIZE	64
-#endif
 
 #ifndef IS_P2ALIGNED
 #define	IS_P2ALIGNED(v, a) \
@@ -152,6 +182,7 @@ typedef unsigned int (*mcache_allocfn_t)(void *, mcache_obj_t ***,
     unsigned int, int);
 typedef void (*mcache_freefn_t)(void *, mcache_obj_t *, boolean_t);
 typedef void (*mcache_auditfn_t)(void *, mcache_obj_t *, boolean_t);
+typedef void (*mcache_logfn_t)(u_int32_t, mcache_obj_t *, boolean_t);
 typedef void (*mcache_notifyfn_t)(void *, u_int32_t);
 
 typedef struct mcache {
@@ -164,6 +195,7 @@ typedef struct mcache {
 	mcache_allocfn_t mc_slab_alloc;	/* slab layer allocate callback */
 	mcache_freefn_t	mc_slab_free;	/* slab layer free callback */
 	mcache_auditfn_t mc_slab_audit;	/* slab layer audit callback */
+	mcache_logfn_t mc_slab_log;	/* slab layer log callback */
 	mcache_notifyfn_t mc_slab_notify; /* slab layer notify callback */
 	void		*mc_private;	/* opaque arg to callbacks */
 	size_t		mc_bufsize;	/* object size */
@@ -210,11 +242,12 @@ typedef struct mcache {
 
 /* Valid values for mc_flags */
 #define	MCF_VERIFY	0x00000001	/* enable verification */
-#define	MCF_AUDIT	0x00000002	/* enable transaction auditing */
+#define	MCF_TRACE	0x00000002	/* enable transaction auditing */
 #define	MCF_NOCPUCACHE	0x00000010	/* disable CPU layer caching */
+#define	MCF_NOLEAKLOG	0x00000100	/* disable leak logging */
 
-#define	MCF_DEBUG	(MCF_VERIFY | MCF_AUDIT)
-#define	MCF_FLAGS_MASK	(MCF_DEBUG | MCF_NOCPUCACHE)
+#define	MCF_DEBUG	(MCF_VERIFY | MCF_TRACE)
+#define	MCF_FLAGS_MASK	(MCF_DEBUG | MCF_NOCPUCACHE | MCF_NOLEAKLOG)
 
 /* Valid values for notify callback */
 #define	MCN_RETRYALLOC	0x00000001	/* Allocation should be retried */
@@ -245,8 +278,8 @@ __private_extern__ mcache_t *mcache_create(const char *, size_t,
 __private_extern__ void *mcache_alloc(mcache_t *, int);
 __private_extern__ void mcache_free(mcache_t *, void *);
 __private_extern__ mcache_t *mcache_create_ext(const char *, size_t,
-    mcache_allocfn_t, mcache_freefn_t, mcache_auditfn_t, mcache_notifyfn_t,
-    void *, u_int32_t, int);
+    mcache_allocfn_t, mcache_freefn_t, mcache_auditfn_t, mcache_logfn_t,
+    mcache_notifyfn_t, void *, u_int32_t, int);
 __private_extern__ void mcache_destroy(mcache_t *);
 __private_extern__ unsigned int mcache_alloc_ext(mcache_t *, mcache_obj_t **,
     unsigned int, int);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -40,9 +40,9 @@
 
 #include "net/net_str_id.h"
 
-static const mbuf_flags_t mbuf_flags_mask = MBUF_EXT | MBUF_PKTHDR | MBUF_EOR |
-				MBUF_BCAST | MBUF_MCAST | MBUF_FRAG | MBUF_FIRSTFRAG |
-				MBUF_LASTFRAG | MBUF_PROMISC;
+static const mbuf_flags_t mbuf_flags_mask = (MBUF_EXT | MBUF_PKTHDR | MBUF_EOR |
+    MBUF_LOOP | MBUF_BCAST | MBUF_MCAST | MBUF_FRAG | MBUF_FIRSTFRAG |
+    MBUF_LASTFRAG | MBUF_PROMISC | MBUF_HASFCS);
 
 void* mbuf_data(mbuf_t mbuf)
 {
@@ -81,6 +81,10 @@ errno_t mbuf_align_32(mbuf_t mbuf, size_t len)
 	return 0;
 }
 
+/* This function is used to provide mcl_to_paddr via symbol indirection,
+ * please avoid any change in behavior or remove the indirection in 
+ * config/Unsupported*
+ */
 addr64_t mbuf_data_to_physical(void* ptr)
 {
 	return (addr64_t)(uintptr_t)mcl_to_paddr(ptr);
@@ -107,10 +111,10 @@ mbuf_attachcluster(mbuf_how_t how, mbuf_type_t type, mbuf_t *mbuf,
     caddr_t extbuf, void (*extfree)(caddr_t , u_int, caddr_t),
     size_t extsize, caddr_t extarg)
 {
-	if (extbuf == NULL || extfree == NULL || extsize == 0)
+	if (mbuf == NULL || extbuf == NULL || extfree == NULL || extsize == 0)
 		return (EINVAL);
 
-	if ((*mbuf = m_clattach(mbuf != NULL ? *mbuf : NULL, type, extbuf,
+	if ((*mbuf = m_clattach(*mbuf, type, extbuf,
 	    extfree, extsize, extarg, how)) == NULL)
 		return (ENOMEM);
 
@@ -126,15 +130,15 @@ mbuf_alloccluster(mbuf_how_t how, size_t *size, caddr_t *addr)
 	*addr = NULL;
 
 	/* Jumbo cluster pool not available? */
-	if (*size > NBPG && njcl == 0)
+	if (*size > MBIGCLBYTES && njcl == 0)
 		return (ENOTSUP);
 
 	if (*size <= MCLBYTES && (*addr = m_mclalloc(how)) != NULL)
 		*size = MCLBYTES;
-	else if (*size > MCLBYTES && *size <= NBPG &&
+	else if (*size > MCLBYTES && *size <= MBIGCLBYTES &&
 	    (*addr = m_bigalloc(how)) != NULL)
-		*size = NBPG;
-	else if (*size > NBPG && *size <= M16KCLBYTES &&
+		*size = MBIGCLBYTES;
+	else if (*size > MBIGCLBYTES && *size <= M16KCLBYTES &&
 	    (*addr = m_16kalloc(how)) != NULL)
 		*size = M16KCLBYTES;
 	else
@@ -149,14 +153,14 @@ mbuf_alloccluster(mbuf_how_t how, size_t *size, caddr_t *addr)
 void
 mbuf_freecluster(caddr_t addr, size_t size)
 {
-	if (size != MCLBYTES && size != NBPG && size != M16KCLBYTES)
+	if (size != MCLBYTES && size != MBIGCLBYTES && size != M16KCLBYTES)
 		panic("%s: invalid size (%ld) for cluster %p", __func__,
 		    size, (void *)addr);
 
 	if (size == MCLBYTES)
 		m_mclfree(addr);
-	else if (size == NBPG)
-		m_bigfree(addr, NBPG, NULL);
+	else if (size == MBIGCLBYTES)
+		m_bigfree(addr, MBIGCLBYTES, NULL);
 	else if (njcl > 0)
 		m_16kfree(addr, M16KCLBYTES, NULL);
 	else
@@ -184,7 +188,7 @@ mbuf_getcluster(mbuf_how_t how, mbuf_type_t type, size_t size, mbuf_t* mbuf)
 	 */
 	if (size == MCLBYTES) {
 		*mbuf = m_mclget(*mbuf, how);
-	} else if (size == NBPG) {
+	} else if (size == MBIGCLBYTES) {
 		*mbuf = m_mbigget(*mbuf, how);
 	} else if (size == M16KCLBYTES) {
 		if (njcl > 0) {
@@ -254,11 +258,17 @@ errno_t mbuf_getpacket(mbuf_how_t how, mbuf_t *mbuf)
 	return error;
 }
 
+/* This function is used to provide m_free via symbol indirection, please avoid
+ * any change in behavior or remove the indirection in config/Unsupported*
+ */
 mbuf_t mbuf_free(mbuf_t mbuf)
 {
 	return m_free(mbuf);
 }
 
+/* This function is used to provide m_freem via symbol indirection, please avoid
+ * any change in behavior or remove the indirection in config/Unsupported*
+ */
 void mbuf_freem(mbuf_t mbuf)
 {
 	m_freem(mbuf);
@@ -274,6 +284,10 @@ size_t mbuf_leadingspace(const mbuf_t mbuf)
 	return m_leadingspace(mbuf);
 }
 
+/* This function is used to provide m_trailingspace via symbol indirection,
+ * please avoid any change in behavior or remove the indirection in 
+ * config/Unsupported*
+ */
 size_t mbuf_trailingspace(const mbuf_t mbuf)
 {
 	return m_trailingspace(mbuf);
@@ -332,6 +346,9 @@ errno_t mbuf_pulldown(mbuf_t src, size_t *offset, size_t len, mbuf_t *location)
 	return (*location == NULL) ? ENOMEM : 0;
 }
 
+/* This function is used to provide m_adj via symbol indirection, please avoid
+ * any change in behavior or remove the indirection in config/Unsupported*
+ */
 void mbuf_adj(mbuf_t mbuf, int len)
 {
 	m_adj(mbuf, len);
@@ -544,7 +561,7 @@ void
 mbuf_outbound_finalize(mbuf_t mbuf, u_int32_t protocol_family, size_t protocol_offset)
 {
 	if ((mbuf->m_pkthdr.csum_flags &
-		 (CSUM_DELAY_DATA | CSUM_DELAY_IP | CSUM_TCP_SUM16)) == 0)
+		 (CSUM_DELAY_DATA | CSUM_DELAY_IP | CSUM_TCP_SUM16 | CSUM_DELAY_IPV6_DATA)) == 0)
 		return;
 	
 	/* Generate the packet in software, client needs it */
@@ -573,14 +590,23 @@ mbuf_outbound_finalize(mbuf_t mbuf, u_int32_t protocol_family, size_t protocol_o
 			
 			mbuf->m_pkthdr.csum_flags &= ~(CSUM_DELAY_DATA | CSUM_DELAY_IP);
 			break;
+
+		case PF_INET6:
+
+			if (mbuf->m_pkthdr.csum_flags & CSUM_DELAY_IPV6_DATA) {
+				in_delayed_cksum_offset(mbuf, protocol_offset);
+			}
+			mbuf->m_pkthdr.csum_flags &= ~CSUM_DELAY_IPV6_DATA;
+			break;
+			
 	
 		default:
 			/*
 			 * Not sure what to do here if anything.
-			 * Hardware checksum code looked pretty IPv4 specific.
+			 * Hardware checksum code looked pretty IPv4/IPv6 specific.
 			 */
-			if ((mbuf->m_pkthdr.csum_flags & (CSUM_DELAY_DATA | CSUM_DELAY_IP)) != 0)
-				panic("mbuf_outbound_finalize - CSUM flags set for non-IPv4 packet (%u)!\n", protocol_family);
+			if ((mbuf->m_pkthdr.csum_flags & (CSUM_DELAY_DATA | CSUM_DELAY_IP | CSUM_DELAY_IPV6_DATA)) != 0)
+				panic("mbuf_outbound_finalize - CSUM flags set for non-IPv4 or IPv6 packet (%u)!\n", protocol_family);
 	}
 }
 
@@ -619,7 +645,8 @@ mbuf_clear_vlan_tag(
 }
 
 static const mbuf_csum_request_flags_t mbuf_valid_csum_request_flags = 
-	MBUF_CSUM_REQ_IP | MBUF_CSUM_REQ_TCP | MBUF_CSUM_REQ_UDP | MBUF_CSUM_REQ_SUM16;
+	MBUF_CSUM_REQ_IP | MBUF_CSUM_REQ_TCP | MBUF_CSUM_REQ_UDP |
+       	MBUF_CSUM_REQ_SUM16 | MBUF_CSUM_REQ_TCPIPV6 | MBUF_CSUM_REQ_UDPIPV6;
 
 errno_t
 mbuf_set_csum_requested(
@@ -827,7 +854,7 @@ mbuf_tag_allocate(
 	}
 	
 	/* Allocate an mtag */
-	tag = m_tag_alloc(id, type, length, how);
+	tag = m_tag_create(id, type, length, how, mbuf);
 	if (tag == NULL) {
 		return how == M_WAITOK ? ENOMEM : EWOULDBLOCK;
 	}
@@ -1072,34 +1099,16 @@ mbuf_get_mhlen(void)
 	return (_MHLEN);
 }
 
-mbuf_priority_t
-mbuf_get_priority(struct mbuf *m)
+u_int32_t
+mbuf_get_minclsize(void)
 {
-#if !PKT_PRIORITY
-#pragma unused(m)
-	return (MBUF_PRIORITY_NORMAL);
-#else /* PKT_PRIORITY */
-	mbuf_priority_t prio = MBUF_PRIORITY_NORMAL;
-
-	if (m == NULL || !(m->m_flags & M_PKTHDR))
-		return (prio);
-
-	/* Defaults to normal; ignore anything else but background */
-	if (m->m_pkthdr.prio == MBUF_PRIORITY_BACKGROUND)
-		prio = MBUF_PRIORITY_BACKGROUND;
-
-	return (prio);
-#endif /* PKT_PRIORITY */
+	return (MHLEN + MLEN);
 }
 
 mbuf_traffic_class_t 
 mbuf_get_traffic_class(mbuf_t m)
 {
-#if !PKT_PRIORITY
-#pragma unused(m)
-	return (MBUF_TC_BE);
-#else /* PKT_PRIORITY */
-	mbuf_priority_t prio = MBUF_TC_BE;
+	mbuf_traffic_class_t prio = MBUF_TC_BE;
 
 	if (m == NULL || !(m->m_flags & M_PKTHDR))
 		return (prio);
@@ -1108,17 +1117,11 @@ mbuf_get_traffic_class(mbuf_t m)
 		prio = m->m_pkthdr.prio;
 
 	return (prio);
-#endif /* PKT_PRIORITY */
 }
 
 errno_t 
 mbuf_set_traffic_class(mbuf_t m, mbuf_traffic_class_t tc)
 {
-#if !PKT_PRIORITY
-#pragma unused(m)
-#pragma unused(tc)
-	return 0;
-#else /* PKT_PRIORITY */
 	errno_t error = 0;
 	
 	if (m == NULL || !(m->m_flags & M_PKTHDR))
@@ -1136,5 +1139,4 @@ mbuf_set_traffic_class(mbuf_t m, mbuf_traffic_class_t tc)
 			break;
 	}
 	return error;
-#endif /* PKT_PRIORITY */
 }

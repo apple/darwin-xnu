@@ -92,26 +92,6 @@ mach_get_vm_end(vm_map_t map)
 	return( vm_map_last_entry(map)->vme_end);
 }
 
-/*
- * Legacy routines to get the start and end for a vm_map_t.  They
- * return them in the vm_offset_t format.  So, they should only be
- * called on maps that are the same size as the kernel map for
- * accurate results.
- */
-vm_offset_t
-get_vm_start(
-	vm_map_t map)
-{
-	return(CAST_DOWN(vm_offset_t, vm_map_first_entry(map)->vme_start));
-}
-
-vm_offset_t
-get_vm_end(
-	vm_map_t map)
-{
-	return(CAST_DOWN(vm_offset_t, vm_map_last_entry(map)->vme_end));
-}
-
 /* 
  * BSD VNODE PAGER 
  */
@@ -128,6 +108,7 @@ const struct memory_object_pager_ops vnode_pager_ops = {
 	vnode_pager_synchronize,
 	vnode_pager_map,
 	vnode_pager_last_unmap,
+	NULL, /* data_reclaim */
 	"vnode pager"
 };
 
@@ -602,7 +583,9 @@ vnode_pager_bootstrap(void)
 	size = (vm_size_t) sizeof(struct vnode_pager);
 	vnode_pager_zone = zinit(size, (vm_size_t) MAX_VNODE*size,
 				PAGE_SIZE, "vnode pager structures");
+	zone_change(vnode_pager_zone, Z_CALLERACCT, FALSE);
 	zone_change(vnode_pager_zone, Z_NOENCRYPT, TRUE);
+
 
 #if CONFIG_CODE_DECRYPTION
 	apple_protect_pager_bootstrap();
@@ -750,6 +733,22 @@ vnode_pager_check_hard_throttle(
 }
 
 kern_return_t
+vnode_pager_get_isSSD(
+	memory_object_t		mem_obj,
+	boolean_t		*isSSD)
+{
+	vnode_pager_t	vnode_object;
+
+	if (mem_obj->mo_pager_ops != &vnode_pager_ops)
+		return KERN_INVALID_ARGUMENT;
+
+	vnode_object = vnode_pager_lookup(mem_obj);
+
+	*isSSD = vnode_pager_isSSD(vnode_object->vnode_handle);
+	return KERN_SUCCESS;
+}
+
+kern_return_t
 vnode_pager_get_object_size(
 	memory_object_t		mem_obj,
 	memory_object_offset_t	*length)
@@ -820,6 +819,25 @@ vnode_pager_get_object_cs_blobs(
 	return vnode_pager_get_cs_blobs(vnode_object->vnode_handle,
 					blobs);
 }
+
+#if CHECK_CS_VALIDATION_BITMAP
+kern_return_t
+vnode_pager_cs_check_validation_bitmap( 
+	memory_object_t	mem_obj, 
+	memory_object_offset_t	offset,
+        int		optype	)
+{
+	vnode_pager_t	vnode_object;
+
+	if (mem_obj == MEMORY_OBJECT_NULL ||
+	    mem_obj->mo_pager_ops != &vnode_pager_ops) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	vnode_object = vnode_pager_lookup(mem_obj);
+	return ubc_cs_check_validation_bitmap( vnode_object->vnode_handle, offset, optype );
+}
+#endif /* CHECK_CS_VALIDATION_BITMAP */
 
 /*
  *

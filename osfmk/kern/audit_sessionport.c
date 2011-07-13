@@ -30,12 +30,13 @@
 #include <ipc/ipc_port.h>
 #include <kern/ipc_kobject.h>
 #include <kern/audit_sessionport.h>
+#include <libkern/OSAtomic.h>
 
 #if CONFIG_AUDIT
 /*
  * audit_session_mksend
  *
- * Description: Obtain a send right for given audit session information. 
+ * Description: Obtain a send right for given audit session.
  *
  * Parameters:	*aia_p		Audit session information to assosiate with
  * 				the new port.
@@ -45,48 +46,60 @@
  * Returns:	!NULL		Resulting send right.	
  * 		NULL		Failed to allocate port (due to lack of memory
  * 				resources).
- *
- * 		*sessionport	The session port that may have been allocated.
- *
- * Notes: On return, sendport will be set to the new send right on success,
- *	  or null/dead on error.
+
+ * Assumptions: Caller holds a reference on the session during the call.
+ *		If there were no outstanding send rights against the port,
+ *		hold a reference on the session and arm a new no-senders
+ *		notification to determine when to release that reference.
+ *		Otherwise, by creating an additional send right, we share
+ *		the port's reference until all send rights go away.
  */
 ipc_port_t
 audit_session_mksend(struct auditinfo_addr *aia_p, ipc_port_t *sessionport)
 {
-	ipc_port_t notifyport;
 	ipc_port_t sendport = IPC_PORT_NULL;
+	ipc_port_t port;
 
 	/*
-	 * If we have an existing, active session port then use it. 
+	 * If we don't have an existing session port, then create one.
 	 */
-	sendport = ipc_port_make_send(*sessionport);
-	if (IP_VALID(sendport)) {
-		ip_lock(sendport);
-		if (ip_active(sendport) && 
-		    IKOT_AU_SESSIONPORT == ip_kotype(sendport)) {
-			ip_unlock(sendport);
-			return (sendport);
+	port = *sessionport;
+	if (!IP_VALID(port)) {
+		ipc_port_t new_port = ipc_port_alloc_kernel();
+		if (!IP_VALID(new_port))
+			return new_port;
+		ipc_kobject_set(new_port, (ipc_kobject_t)aia_p, IKOT_AU_SESSIONPORT);
+		if (!OSCompareAndSwapPtr(port, new_port, sessionport))
+			ipc_port_dealloc_kernel(new_port);
+		port = *sessionport;
+	}
+
+	assert(ip_active(port) && IKOT_AU_SESSIONPORT == ip_kotype(port));
+	sendport = ipc_port_make_send(port);
+
+	/*
+	 * If we don't have a no-senders notification outstanding against
+	 * the port, take a reference on the session and request one.
+	 */
+	if (IP_NULL == port->ip_nsrequest) {
+		ipc_port_t notifyport;
+
+		audit_session_aiaref(aia_p);
+
+		/* Need a send-once right for the target of the notification */
+		notifyport = ipc_port_make_sonce(port);
+
+		/* Request a no-senders notification (at the new make-send threshold) */
+		ip_lock(port);
+		ipc_port_nsrequest(port, port->ip_mscount, notifyport, &notifyport);
+		/* port unlocked */
+
+		if (IP_NULL != notifyport) {
+			/* race requesting notification */
+			audit_session_aiaunref(aia_p);
+			ipc_port_release_sonce(notifyport);
 		}
-		ip_unlock(sendport);
-		ipc_port_release_send(sendport);
 	}
-
-	/*
-	 * Otherwise, create a new one for this session.
-	 */
-	*sessionport = ipc_port_alloc_kernel();
-	if (IP_VALID(*sessionport)) {
-		ipc_kobject_set(*sessionport, (ipc_kobject_t)aia_p,
-		    IKOT_AU_SESSIONPORT);
-
-		/* Request a no-senders notification. */
-		notifyport = ipc_port_make_sonce(*sessionport);
-		ip_lock(*sessionport);
-		/* unlocked by ipc_port_nsrequest */
-		ipc_port_nsrequest(*sessionport, 1, notifyport, &notifyport);
-	}
-	sendport = ipc_port_make_send(*sessionport);
 
 	return (sendport);
 }
@@ -113,10 +126,12 @@ audit_session_porttoaia(ipc_port_t port)
 
 	if (IP_VALID(port)) {
 		ip_lock(port);
-		if (ip_active(port) && IKOT_AU_SESSIONPORT == ip_kotype(port))
+		if (IKOT_AU_SESSIONPORT == ip_kotype(port)) {
+			assert(ip_active(port));
 			aia_p = (struct auditinfo_addr *)port->ip_kobject;
+		}
 		ip_unlock(port);
-	} 
+	}
 
 	return (aia_p);
 }
@@ -149,28 +164,50 @@ audit_session_nosenders(mach_msg_header_t *msg)
 	ipc_port_t notifyport;
 	struct auditinfo_addr *port_aia_p = NULL;
 
-	if (!IP_VALID(port))
-		return;
+	assert(IKOT_AU_SESSIONPORT == ip_kotype(port));
 	ip_lock(port);
-	if (ip_active(port) && IKOT_AU_SESSIONPORT == ip_kotype(port)) {
-		port_aia_p = (struct auditinfo_addr *)port->ip_kobject;
-		assert(NULL != port_aia_p);
-		if (port->ip_mscount <= notification->not_count)
-			ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
-		else {
-			/* re-arm the notification */
-			ip_unlock(port);
-			notifyport = ipc_port_make_sonce(port);
-			ip_lock(port);
-			/* unlocked by ipc_port_nsrequest */
-			ipc_port_nsrequest(port, port->ip_mscount, notifyport,
-			    &notifyport);
-			return;
+	assert(ip_active(port));
+	port_aia_p = (struct auditinfo_addr *)port->ip_kobject;
+	assert(NULL != port_aia_p);
+
+	/*
+	 * if new send rights have been made since the last notify
+	 * request, re-arm the notification with the new threshold.
+	 */
+	if (port->ip_mscount > notification->not_count) {
+		ip_unlock(port);
+		notifyport = ipc_port_make_sonce(port);
+		ip_lock(port);
+		ipc_port_nsrequest(port, port->ip_mscount, notifyport, &notifyport);
+		/* port unlocked */
+
+		if (IP_NULL != notifyport) {
+			/* race re-arming the notification */
+			ipc_port_release_sonce(notifyport);
+			audit_session_aiaunref(port_aia_p);
 		}
+		return;
 	}
+
+	/*
+	 * Otherwise, no more extant send rights, so release the
+	 * reference held on the session by those send rights.
+	 */
 	ip_unlock(port);
-	if (NULL != port_aia_p)
-		audit_session_portaiadestroy(port_aia_p);
-	ipc_port_dealloc_kernel(port);
+	audit_session_aiaunref(port_aia_p);
+}
+
+void
+audit_session_portdestroy(ipc_port_t *sessionport)
+{
+	ipc_port_t port = *sessionport;
+
+	if (IP_VALID(port)) {
+		assert (ip_active(port));
+		assert(IKOT_AU_SESSIONPORT == ip_kotype(port));
+		ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
+		ipc_port_dealloc_kernel(port);
+		*sessionport = IP_NULL;
+	}
 }
 #endif /* CONFIG_AUDIT */

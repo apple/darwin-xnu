@@ -115,6 +115,7 @@ struct mount {
 	struct vnodelst	mnt_newvnodes;		/* list of vnodes this mount */
 	uint32_t		mnt_flag;		/* flags */
 	uint32_t		mnt_kern_flag;		/* kernel only flags */
+	uint32_t		mnt_compound_ops;	/* Available compound operations */
 	uint32_t		mnt_lflag;			/* mount life cycle flags */
 	uint32_t		mnt_maxsymlinklen;	/* max size of short symlink */
 	struct vfsstatfs	mnt_vfsstat;		/* cache of filesystem stats */
@@ -131,17 +132,22 @@ struct mount {
 	uint32_t	mnt_ioqueue_depth;	/* the maxiumum number of commands a device can accept */
         uint32_t	mnt_ioscale;		/* scale the various throttles/limits imposed on the amount of I/O in flight */
 	uint32_t	mnt_ioflags;		/* flags for  underlying device */
-	pending_io_t	mnt_pending_write_size;	/* byte count of pending writes */
-	pending_io_t	mnt_pending_read_size;	/* byte count of pending reads */
+	pending_io_t	mnt_pending_write_size __attribute__((aligned(sizeof(pending_io_t))));	/* byte count of pending writes */
+	pending_io_t	mnt_pending_read_size  __attribute__((aligned(sizeof(pending_io_t))));	/* byte count of pending reads */
 
 	lck_rw_t	mnt_rwlock;		/* mutex readwrite lock */
 	lck_mtx_t	mnt_renamelock;		/* mutex that serializes renames that change shape of tree */
 	vnode_t		mnt_devvp;		/* the device mounted on for local file systems */
 	uint32_t	mnt_devbsdunit;		/* the BSD unit number of the device */
+	uint64_t	mnt_throttle_mask;	/* the throttle mask of what devices will be affected by I/O from this mnt */
 	void		*mnt_throttle_info;	/* used by the throttle code */
 	int32_t		mnt_crossref;		/* refernces to cover lookups  crossing into mp */
 	int32_t		mnt_iterref;		/* refernces to cover iterations; drained makes it -ve  */
- 
+#if CONFIG_TRIGGERS
+	int32_t		mnt_numtriggers; 	/* num of trigger vnodes for this mount */
+	vfs_trigger_callback_t *mnt_triggercallback;
+	void		*mnt_triggerdata;
+#endif
  	/* XXX 3762912 hack to support HFS filesystem 'owner' */
  	uid_t		mnt_fsowner;
  	gid_t		mnt_fsgroup;
@@ -190,6 +196,7 @@ struct mount {
 	 */
 	pid_t		mnt_dependent_pid;
 	void		*mnt_dependent_process;
+	char		fstypename_override[MFSTYPENAMELEN];
 };
 
 /*
@@ -228,6 +235,12 @@ extern struct mount * dead_mountp;
  *		because the bits here were broken out from the high bits
  *		of the mount flags.
  */
+#define MNTK_DENY_READDIREXT 0x00000200 /* Deny Extended-style readdir's for this volume */
+#define MNTK_PERMIT_UNMOUNT	0x00000400	/* Allow (non-forced) unmounts by UIDs other than the one that mounted the volume */
+#ifdef NFSCLIENT
+#define MNTK_TYPENAME_OVERRIDE  0x00000800      /* override the fstypename for statfs() */
+#endif /* NFSCLIENT */
+#define MNTK_KERNEL_MOUNT	0x00001000	/* mount came from kernel side */
 #ifdef CONFIG_IMGSRC_ACCESS
 #define MNTK_HAS_MOVED		0x00002000
 #define MNTK_BACKS_ROOT		0x00004000
@@ -392,13 +405,11 @@ struct user32_statfs {
 };
 
 /*
- * throttle I/Os are affected only by normal I/Os happening on the same bsd device node.  For example, disk1s3 and
- * disk1s5 are the same device node, while disk1s3 and disk2 are not (although disk2 might be a mounted disk image file
- * and the disk image file resides on a partition in disk1).  The following constant defines the maximum number of
- * different bsd device nodes the algorithm can consider, and larger numbers are rounded by this maximum.  Since
- * throttled I/O is usually useful in non-server environment only, a small number 16 is enough in most cases
+ * throttle I/Os are affected only by normal I/Os happening on the same spindle.  Currently we use a 64-bit integer to
+ * represent what devices are affected, so we can handle at most 64 different spindles.  Since
+ * throttled I/O is usually useful in non-server environment only, this number is enough in most cases.
  */
-#define LOWPRI_MAX_NUM_DEV 16
+#define LOWPRI_MAX_NUM_DEV 64
 
 __BEGIN_DECLS
 
@@ -425,7 +436,7 @@ void	vfs_unmountall(void);
 int	safedounmount(struct mount *, int, vfs_context_t);
 int	dounmount(struct mount *, int, int, vfs_context_t);
 
-/* xnuy internal api */
+/* xnu internal api */
 void  mount_dropcrossref(mount_t, vnode_t, int);
 mount_t mount_lookupby_volfsid(int, int);
 mount_t mount_list_lookupby_fsid(fsid_t *, int, int);
@@ -437,10 +448,30 @@ void mount_iterdrop(mount_t);
 void mount_iterdrain(mount_t);
 void mount_iterreset(mount_t);
 
+/* tags a volume as not supporting extended readdir for NFS exports */
+#ifdef BSD_KERNEL_PRIVATE
+void mount_set_noreaddirext (mount_t);
+#endif
+
+/* Private NFS spi */
+#define KERNEL_MOUNT_NOAUTH		0x01 /* Don't check the UID of the directory we are mounting on */
+#define KERNEL_MOUNT_PERMIT_UNMOUNT	0x02 /* Allow (non-forced) unmounts by users other the one who mounted the volume */
+#if NFSCLIENT
+/*
+ * NOTE: kernel_mount() does not force MNT_NOSUID, MNT_NOEXEC, or MNT_NODEC for non-privileged
+ * mounting credentials, as the mount(2) system call does.
+ */
+int kernel_mount(char *, vnode_t, vnode_t, const char *, void *, size_t, int, uint32_t, vfs_context_t);
+boolean_t vfs_iskernelmount(mount_t);
+#endif
+
 /* throttled I/O api */
 int throttle_get_io_policy(struct uthread **ut);
-extern void throttle_lowpri_io(boolean_t ok_to_sleep);
 int throttle_io_will_be_throttled(int lowpri_window_msecs, mount_t mp);
+
+/* throttled I/O helper function */
+/* convert the lowest bit to a device index */
+extern int num_trailing_0(uint64_t n);
 
 __END_DECLS
 

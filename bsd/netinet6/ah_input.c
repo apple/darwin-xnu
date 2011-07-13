@@ -116,6 +116,7 @@
 
 #include <net/kpi_protocol.h>
 #include <netinet/kpi_ipfilter_var.h>
+#include <mach/sdt.h>
 
 #include <net/net_osdep.h>
 
@@ -416,6 +417,9 @@ ah4_input(struct mbuf *m, int off)
 		stripsiz = sizeof(struct newah) + siz1;
 	}
 	if (ipsec4_tunnel_validate(m, off + stripsiz, nxt, sav, &ifamily)) {
+		ifaddr_t ifa;
+		struct sockaddr_storage addr;
+
 		/*
 		 * strip off all the headers that precedes AH.
 		 *	IP xx AH IP' payload -> IP' payload
@@ -481,7 +485,25 @@ ah4_input(struct mbuf *m, int off)
 			IPSEC_STAT_INCREMENT(ipsecstat.in_nomem);
 			goto fail;
 		}
-		proto_input(PF_INET, m);
+
+		if (ip_doscopedroute) {
+			struct sockaddr_in *ipaddr;
+
+			bzero(&addr, sizeof(addr));
+			ipaddr = (__typeof__(ipaddr))&addr;
+			ipaddr->sin_family = AF_INET;
+			ipaddr->sin_len = sizeof(*ipaddr);
+			ipaddr->sin_addr = ip->ip_dst;
+
+			// update the receiving interface address based on the inner address
+			ifa = ifa_ifwithaddr((struct sockaddr *)&addr);
+			if (ifa) {
+				m->m_pkthdr.rcvif = ifa->ifa_ifp;
+				IFA_REMREF(ifa);
+			}
+		}
+		if (proto_input(PF_INET, m) != 0)
+			goto fail;
 		nxt = IPPROTO_DONE;
 	} else {
 		/*
@@ -549,6 +571,10 @@ ah4_input(struct mbuf *m, int off)
 			goto fail;
 		}
 
+		DTRACE_IP6(receive, struct mbuf *, m, struct inpcb *, NULL,
+                        struct ip *, ip, struct ifnet *, m->m_pkthdr.rcvif,
+                        struct ip *, ip, struct ip6_hdr *, NULL);
+
 		if (nxt != IPPROTO_DONE) {
 			if ((ip_protox[nxt]->pr_flags & PR_LASTHDR) != 0 &&
 			    ipsec4_in_reject(m, NULL)) {
@@ -583,10 +609,9 @@ fail:
 
 #if INET6
 int
-ah6_input(mp, offp)
-	struct mbuf **mp;
-	int *offp;
+ah6_input(struct mbuf **mp, int *offp, int proto)
 {
+#pragma unused(proto)
 	struct mbuf *m = *mp;
 	int off = *offp;
 	struct ip6_hdr *ip6;
@@ -825,6 +850,9 @@ ah6_input(mp, offp)
 		stripsiz = sizeof(struct newah) + siz1;
 	}
 	if (ipsec6_tunnel_validate(m, off + stripsiz, nxt, sav)) {
+		ifaddr_t ifa;
+		struct sockaddr_storage addr;
+
 		/*
 		 * strip off all the headers that precedes AH.
 		 *	IP6 xx AH IP6' payload -> IP6' payload
@@ -875,7 +903,26 @@ ah6_input(mp, offp)
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_nomem);
 			goto fail;
 		}
-		proto_input(PF_INET6, m);
+
+		if (ip6_doscopedroute) {
+			struct sockaddr_in6 *ip6addr;
+
+			bzero(&addr, sizeof(addr));
+			ip6addr = (__typeof__(ip6addr))&addr;
+			ip6addr->sin6_family = AF_INET6;
+			ip6addr->sin6_len = sizeof(*ip6addr);
+			ip6addr->sin6_addr = ip6->ip6_dst;
+
+			// update the receiving interface address based on the inner address
+			ifa = ifa_ifwithaddr((struct sockaddr *)&addr);
+			if (ifa) {
+				m->m_pkthdr.rcvif = ifa->ifa_ifp;
+				IFA_REMREF(ifa);
+			}
+		}
+
+		if (proto_input(PF_INET6, m) != 0)
+			goto fail;
 		nxt = IPPROTO_DONE;
 	} else {
 		/*

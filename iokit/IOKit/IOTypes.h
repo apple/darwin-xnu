@@ -164,7 +164,12 @@ typedef unsigned int	IOAlignment;
 #ifndef __IOKIT_PORTS_DEFINED__
 #define __IOKIT_PORTS_DEFINED__
 #ifdef KERNEL
+#ifdef __cplusplus
+class OSObject;
+typedef OSObject * io_object_t;
+#else
 typedef struct OSObject * io_object_t;
+#endif
 #else /* KERNEL */
 typedef mach_port_t	io_object_t;
 #endif /* KERNEL */

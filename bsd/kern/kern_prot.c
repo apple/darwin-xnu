@@ -360,9 +360,9 @@ gettid(__unused proc_t p, struct gettid_args *uap, int32_t *retval)
 	if (!(uthread->uu_flag & UT_SETUID))
 		return (ESRCH);
 
-	if ((error = suword(uap->uidp, uthread->uu_ucred->cr_ruid)))
+	if ((error = suword(uap->uidp, kauth_cred_getruid(uthread->uu_ucred))))
 		return (error);
-	if ((error = suword(uap->gidp, uthread->uu_ucred->cr_rgid)))
+	if ((error = suword(uap->gidp, kauth_cred_getrgid(uthread->uu_ucred))))
 		return (error);
 
 	*retval = 0;
@@ -448,21 +448,23 @@ getgroups(__unused proc_t p, struct getgroups_args *uap, int32_t *retval)
 	int ngrp;
 	int error;
 	kauth_cred_t cred;
+	posix_cred_t pcred;
 
 	/* grab reference while we muck around with the credential */
 	cred = kauth_cred_get_with_ref();
+	pcred = posix_cred_get(cred);
 
 	if ((ngrp = uap->gidsetsize) == 0) {
-		*retval = cred->cr_ngroups;
+		*retval = pcred->cr_ngroups;
 		kauth_cred_unref(&cred);
 		return (0);
 	}
-	if (ngrp < cred->cr_ngroups) {
+	if (ngrp < pcred->cr_ngroups) {
 		kauth_cred_unref(&cred);
 		return (EINVAL);
 	}
-	ngrp = cred->cr_ngroups;
-	if ((error = copyout((caddr_t)cred->cr_groups,
+	ngrp = pcred->cr_ngroups;
+	if ((error = copyout((caddr_t)pcred->cr_groups,
 	    				uap->gidset, 
 	    				ngrp * sizeof(gid_t)))) {
 		kauth_cred_unref(&cred);
@@ -716,17 +718,19 @@ setuid(proc_t p, struct setuid_args *uap, __unused int32_t *retval)
 	uid_t gmuid = KAUTH_UID_NONE;
 	int error;
 	kauth_cred_t my_cred, my_new_cred;
+	posix_cred_t my_pcred;
 
 
 	uid = uap->uid;
 
 	my_cred = kauth_cred_proc_ref(p);
+	my_pcred = posix_cred_get(my_cred);
 
 	DEBUG_CRED_ENTER("setuid (%d/%d): %p %d\n", p->p_pid, (p->p_pptr ? p->p_pptr->p_pid : 0), my_cred, uap->uid);
 	AUDIT_ARG(uid, uid);
 
-	if (uid != my_cred->cr_ruid &&	/* allow setuid(getuid()) */
-	    uid != my_cred->cr_svuid &&	/* allow setuid(saved uid) */
+	if (uid != my_pcred->cr_ruid &&		/* allow setuid(getuid()) */
+	    uid != my_pcred->cr_svuid &&	/* allow setuid(saved uid) */
 	    (error = suser(my_cred, &p->p_acflag))) {
 		kauth_cred_unref(&my_cred);
 		return (error);
@@ -747,7 +751,7 @@ setuid(proc_t p, struct setuid_args *uap, __unused int32_t *retval)
 		 * chgproccnt uses list lock for protection
 		 */
 		(void)chgproccnt(uid, 1);
-		(void)chgproccnt(my_cred->cr_ruid, -1);
+		(void)chgproccnt(my_pcred->cr_ruid, -1);
 	}
 
 	/* get current credential and take a reference while we muck with it */
@@ -761,7 +765,7 @@ setuid(proc_t p, struct setuid_args *uap, __unused int32_t *retval)
 		 * to something other than the default list for the user, as
 		 * in entering a group or leaving an exclusion group).
 		 */
-		if (!(my_cred->cr_flags & CRF_NOMEMBERD))
+		if (!(my_pcred->cr_flags & CRF_NOMEMBERD))
 			gmuid = uid;
 
   		/* 
@@ -774,7 +778,7 @@ setuid(proc_t p, struct setuid_args *uap, __unused int32_t *retval)
 		my_new_cred = kauth_cred_setresuid(my_cred, ruid, uid, svuid, gmuid);
 		if (my_cred != my_new_cred) {
 
-			DEBUG_CRED_CHANGE("setuid CH(%d): %p/0x%08x -> %p/0x%08x\n", p->p_pid, my_cred, my_cred->cr_flags, my_new_cred, my_new_cred->cr_flags);
+			DEBUG_CRED_CHANGE("setuid CH(%d): %p/0x%08x -> %p/0x%08x\n", p->p_pid, my_cred, my_pcred->cr_flags, my_new_cred, posix_cred_get(my_new_cred)->cr_flags);
 
 			proc_lock(p);
 			/*
@@ -791,6 +795,9 @@ setuid(proc_t p, struct setuid_args *uap, __unused int32_t *retval)
 				continue;
 			}
 			p->p_ucred = my_new_cred;
+			/* update cred on proc */
+			PROC_UPDATE_CREDS_ONPROC(p);
+
 			OSBitOrAtomic(P_SUGID, &p->p_flag);
 			proc_unlock(p);
 		}
@@ -828,6 +835,7 @@ seteuid(proc_t p, struct seteuid_args *uap, __unused int32_t *retval)
 	uid_t euid;
 	int error;
 	kauth_cred_t my_cred, my_new_cred;
+	posix_cred_t my_pcred;
 
 	DEBUG_CRED_ENTER("seteuid: %d\n", uap->euid);
 
@@ -835,8 +843,9 @@ seteuid(proc_t p, struct seteuid_args *uap, __unused int32_t *retval)
 	AUDIT_ARG(euid, euid);
 
 	my_cred = kauth_cred_proc_ref(p);
+	my_pcred = posix_cred_get(my_cred);
 
-	if (euid != my_cred->cr_ruid && euid != my_cred->cr_svuid &&
+	if (euid != my_pcred->cr_ruid && euid != my_pcred->cr_svuid &&
 	    (error = suser(my_cred, &p->p_acflag))) {
 		kauth_cred_unref(&my_cred);
 		return (error);
@@ -855,11 +864,11 @@ seteuid(proc_t p, struct seteuid_args *uap, __unused int32_t *retval)
 		 * passed in.  The subsequent compare is safe, because it is
 		 * a pointer compare rather than a contents compare.
   		 */
-		my_new_cred = kauth_cred_setresuid(my_cred, KAUTH_UID_NONE, euid, KAUTH_UID_NONE, my_cred->cr_gmuid);
+		my_new_cred = kauth_cred_setresuid(my_cred, KAUTH_UID_NONE, euid, KAUTH_UID_NONE, my_pcred->cr_gmuid);
 	
 		if (my_cred != my_new_cred) {
 
-			DEBUG_CRED_CHANGE("seteuid CH(%d): %p/0x%08x -> %p/0x%08x\n", p->p_pid, my_cred, my_cred->cr_flags, my_new_cred, my_new_cred->cr_flags);
+			DEBUG_CRED_CHANGE("seteuid CH(%d): %p/0x%08x -> %p/0x%08x\n", p->p_pid, my_cred, my_pcred->cr_flags, my_new_cred, posix_cred_get(my_new_cred)->cr_flags);
 
 			proc_lock(p);
 			/*
@@ -876,6 +885,8 @@ seteuid(proc_t p, struct seteuid_args *uap, __unused int32_t *retval)
 				continue;
 			}
 			p->p_ucred = my_new_cred;
+			/* update cred on proc */
+			PROC_UPDATE_CREDS_ONPROC(p);
 			OSBitOrAtomic(P_SUGID, &p->p_flag);
 			proc_unlock(p);
 		}
@@ -926,6 +937,7 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused int32_t *retval)
 	uid_t ruid, euid;
 	int error;
 	kauth_cred_t my_cred, my_new_cred;
+	posix_cred_t my_pcred;
 
 	DEBUG_CRED_ENTER("setreuid %d %d\n", uap->ruid, uap->euid);
 
@@ -939,15 +951,16 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused int32_t *retval)
 	AUDIT_ARG(ruid, ruid);
 
 	my_cred = kauth_cred_proc_ref(p);
+	my_pcred = posix_cred_get(my_cred);
 
 	if (((ruid != KAUTH_UID_NONE &&		/* allow no change of ruid */
-	      ruid != my_cred->cr_ruid &&	/* allow ruid = ruid */
-	      ruid != my_cred->cr_uid &&	/* allow ruid = euid */
-	      ruid != my_cred->cr_svuid) ||	/* allow ruid = svuid */
+	      ruid != my_pcred->cr_ruid &&	/* allow ruid = ruid */
+	      ruid != my_pcred->cr_uid &&	/* allow ruid = euid */
+	      ruid != my_pcred->cr_svuid) ||	/* allow ruid = svuid */
 	     (euid != KAUTH_UID_NONE &&		/* allow no change of euid */
-	      euid != my_cred->cr_uid &&	/* allow euid = euid */
-	      euid != my_cred->cr_ruid &&	/* allow euid = ruid */
-	      euid != my_cred->cr_svuid)) &&	/* allow euid = svui */
+	      euid != my_pcred->cr_uid &&	/* allow euid = euid */
+	      euid != my_pcred->cr_ruid &&	/* allow euid = ruid */
+	      euid != my_pcred->cr_svuid)) &&	/* allow euid = svui */
 	    (error = suser(my_cred, &p->p_acflag))) { /* allow root user any */
 		kauth_cred_unref(&my_cred);
 		return (error);
@@ -963,8 +976,8 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused int32_t *retval)
 		uid_t new_ruid;
 		uid_t svuid = KAUTH_UID_NONE;
 
-		new_euid = my_cred->cr_uid;
-		new_ruid = my_cred->cr_ruid;
+		new_euid = my_pcred->cr_uid;
+		new_ruid = my_pcred->cr_ruid;
 	
   		/* 
 		 * Set the credential with new info.  If there is no change,
@@ -973,16 +986,16 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused int32_t *retval)
 		 * passed in.  The subsequent compare is safe, because it is
 		 * a pointer compare rather than a contents compare.
   		 */
-		if (euid == KAUTH_UID_NONE && my_cred->cr_uid != euid) {
+		if (euid == KAUTH_UID_NONE && my_pcred->cr_uid != euid) {
 			/* changing the effective UID */
 			new_euid = euid;
 			OSBitOrAtomic(P_SUGID, &p->p_flag);
 		}
-		if (ruid != KAUTH_UID_NONE && my_cred->cr_ruid != ruid) {
+		if (ruid != KAUTH_UID_NONE && my_pcred->cr_ruid != ruid) {
 			/* changing the real UID; must do user accounting */
 		 	/* chgproccnt uses list lock for protection */
 			(void)chgproccnt(ruid, 1);
-			(void)chgproccnt(my_cred->cr_ruid, -1);
+			(void)chgproccnt(my_pcred->cr_ruid, -1);
 			new_ruid = ruid;
 			OSBitOrAtomic(P_SUGID, &p->p_flag);
 		}
@@ -992,17 +1005,17 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused int32_t *retval)
 		 * new effective uid.  We are protected from escalation
 		 * by the prechecking.
 		 */
-		if (my_cred->cr_svuid != uap->ruid &&
-		    my_cred->cr_svuid != uap->euid) {
+		if (my_pcred->cr_svuid != uap->ruid &&
+		    my_pcred->cr_svuid != uap->euid) {
 		    	svuid = new_euid;
 			OSBitOrAtomic(P_SUGID, &p->p_flag);
 		}
 
-		my_new_cred = kauth_cred_setresuid(my_cred, ruid, euid, svuid, my_cred->cr_gmuid);
+		my_new_cred = kauth_cred_setresuid(my_cred, ruid, euid, svuid, my_pcred->cr_gmuid);
 	
 		if (my_cred != my_new_cred) {
 
-			DEBUG_CRED_CHANGE("setreuid CH(%d): %p/0x%08x -> %p/0x%08x\n", p->p_pid, my_cred, my_cred->cr_flags, my_new_cred, my_new_cred->cr_flags);
+			DEBUG_CRED_CHANGE("setreuid CH(%d): %p/0x%08x -> %p/0x%08x\n", p->p_pid, my_cred, my_pcred->cr_flags, my_new_cred, posix_cred_get(my_new_cred)->cr_flags);
 
 			proc_lock(p);
 			/*
@@ -1019,6 +1032,8 @@ setreuid(proc_t p, struct setreuid_args *uap, __unused int32_t *retval)
 				continue;
 			}
 			p->p_ucred = my_new_cred;
+			/* update cred on proc */
+			PROC_UPDATE_CREDS_ONPROC(p);
 			OSBitOrAtomic(P_SUGID, &p->p_flag); /* XXX redundant? */
 			proc_unlock(p);
 		}
@@ -1065,6 +1080,7 @@ setgid(proc_t p, struct setgid_args *uap, __unused int32_t *retval)
 	gid_t svgid = KAUTH_GID_NONE;
 	int error;
 	kauth_cred_t my_cred, my_new_cred;
+	posix_cred_t my_pcred;
 
 	DEBUG_CRED_ENTER("setgid(%d/%d): %d\n", p->p_pid, (p->p_pptr ? p->p_pptr->p_pid : 0), uap->gid);
 
@@ -1072,9 +1088,10 @@ setgid(proc_t p, struct setgid_args *uap, __unused int32_t *retval)
 	AUDIT_ARG(gid, gid);
 
 	my_cred = kauth_cred_proc_ref(p);
+	my_pcred = posix_cred_get(my_cred);
 
-	if (gid != my_cred->cr_rgid &&	/* allow setgid(getgid()) */
-	    gid != my_cred->cr_svgid &&	/* allow setgid(saved gid) */
+	if (gid != my_pcred->cr_rgid &&		/* allow setgid(getgid()) */
+	    gid != my_pcred->cr_svgid &&	/* allow setgid(saved gid) */
 	    (error = suser(my_cred, &p->p_acflag))) {
 		kauth_cred_unref(&my_cred);
 		return (error);
@@ -1119,6 +1136,8 @@ setgid(proc_t p, struct setgid_args *uap, __unused int32_t *retval)
 				continue;
 			}
 			p->p_ucred = my_new_cred;
+			/* update cred on proc */
+			PROC_UPDATE_CREDS_ONPROC(p);
 			OSBitOrAtomic(P_SUGID, &p->p_flag);
 			proc_unlock(p);
 		}
@@ -1161,6 +1180,7 @@ setegid(proc_t p, struct setegid_args *uap, __unused int32_t *retval)
 	gid_t egid;
 	int error;
 	kauth_cred_t my_cred, my_new_cred;
+	posix_cred_t my_pcred;
 
 	DEBUG_CRED_ENTER("setegid %d\n", uap->egid);
 
@@ -1168,9 +1188,10 @@ setegid(proc_t p, struct setegid_args *uap, __unused int32_t *retval)
 	AUDIT_ARG(egid, egid);
 
 	my_cred = kauth_cred_proc_ref(p);
+	my_pcred = posix_cred_get(my_cred);
 
-	if (egid != my_cred->cr_rgid &&
-	    egid != my_cred->cr_svgid &&
+	if (egid != my_pcred->cr_rgid &&
+	    egid != my_pcred->cr_svgid &&
 	    (error = suser(my_cred, &p->p_acflag))) {
 		kauth_cred_unref(&my_cred);
 		return (error);
@@ -1188,7 +1209,7 @@ setegid(proc_t p, struct setegid_args *uap, __unused int32_t *retval)
 		my_new_cred = kauth_cred_setresgid(my_cred, KAUTH_GID_NONE, egid, KAUTH_GID_NONE);
 		if (my_cred != my_new_cred) {
 
-			DEBUG_CRED_CHANGE("setegid(CH)%d: %p/0x%08x->%p/0x%08x\n", p->p_pid, my_cred, my_cred->cr_flags, my_new_cred, my_new_cred->cr_flags);
+			DEBUG_CRED_CHANGE("setegid(CH)%d: %p/0x%08x->%p/0x%08x\n", p->p_pid, my_cred, my_pcred->cr_flags, my_new_cred, posix_cred_get(my_new_cred)->cr_flags);
 
 			proc_lock(p);
 			/*
@@ -1205,6 +1226,8 @@ setegid(proc_t p, struct setegid_args *uap, __unused int32_t *retval)
 				continue;
 			}
 			p->p_ucred = my_new_cred;
+			/* update cred on proc */
+			PROC_UPDATE_CREDS_ONPROC(p);
 			OSBitOrAtomic(P_SUGID, &p->p_flag);
 			proc_unlock(p);
 		}
@@ -1261,6 +1284,7 @@ setregid(proc_t p, struct setregid_args *uap, __unused int32_t *retval)
 	gid_t rgid, egid;
 	int error;
 	kauth_cred_t my_cred, my_new_cred;
+	posix_cred_t my_pcred;
 
 	DEBUG_CRED_ENTER("setregid %d %d\n", uap->rgid, uap->egid);
 
@@ -1275,16 +1299,17 @@ setregid(proc_t p, struct setregid_args *uap, __unused int32_t *retval)
 	AUDIT_ARG(rgid, rgid);
 
 	my_cred = kauth_cred_proc_ref(p);
+	my_pcred = posix_cred_get(my_cred);
 
 	if (((rgid != KAUTH_UID_NONE &&		/* allow no change of rgid */
-	      rgid != my_cred->cr_rgid &&	/* allow rgid = rgid */
-	      rgid != my_cred->cr_gid &&	/* allow rgid = egid */
-	      rgid != my_cred->cr_svgid) ||	/* allow rgid = svgid */
+	      rgid != my_pcred->cr_rgid &&	/* allow rgid = rgid */
+	      rgid != my_pcred->cr_gid &&	/* allow rgid = egid */
+	      rgid != my_pcred->cr_svgid) ||	/* allow rgid = svgid */
 	     (egid != KAUTH_UID_NONE &&		/* allow no change of egid */
-	      egid != my_cred->cr_groups[0] &&	/* allow no change of egid */
-	      egid != my_cred->cr_gid &&	/* allow egid = egid */
-	      egid != my_cred->cr_rgid &&	/* allow egid = rgid */
-	      egid != my_cred->cr_svgid)) &&	/* allow egid = svgid */
+	      egid != my_pcred->cr_groups[0] &&	/* allow no change of egid */
+	      egid != my_pcred->cr_gid &&	/* allow egid = egid */
+	      egid != my_pcred->cr_rgid &&	/* allow egid = rgid */
+	      egid != my_pcred->cr_svgid)) &&	/* allow egid = svgid */
 	    (error = suser(my_cred, &p->p_acflag))) { /* allow root user any */
 		kauth_cred_unref(&my_cred);
 		return (error);
@@ -1292,8 +1317,8 @@ setregid(proc_t p, struct setregid_args *uap, __unused int32_t *retval)
 
 	/* get current credential and take a reference while we muck with it */
 	for (;;) {
-		uid_t new_egid = my_cred->cr_gid;
-		uid_t new_rgid = my_cred->cr_rgid;
+		uid_t new_egid = my_pcred->cr_gid;
+		uid_t new_rgid = my_pcred->cr_rgid;
 		uid_t svgid = KAUTH_UID_NONE;
 
 		
@@ -1304,12 +1329,12 @@ setregid(proc_t p, struct setregid_args *uap, __unused int32_t *retval)
 		 * passed in.  The subsequent compare is safe, because it is
 		 * a pointer compare rather than a contents compare.
   		 */
-		if (egid == KAUTH_UID_NONE && my_cred->cr_groups[0] != egid) {
+		if (egid == KAUTH_UID_NONE && my_pcred->cr_gid != egid) {
 			/* changing the effective GID */
 			new_egid = egid;
 			OSBitOrAtomic(P_SUGID, &p->p_flag);
 		}
-		if (rgid != KAUTH_UID_NONE && my_cred->cr_rgid != rgid) {
+		if (rgid != KAUTH_UID_NONE && my_pcred->cr_rgid != rgid) {
 			/* changing the real GID */
 			new_rgid = rgid;
 			OSBitOrAtomic(P_SUGID, &p->p_flag);
@@ -1320,8 +1345,8 @@ setregid(proc_t p, struct setregid_args *uap, __unused int32_t *retval)
 		 * new effective gid.  We are protected from escalation
 		 * by the prechecking.
 		 */
-		if (my_cred->cr_svgid != uap->rgid &&
-		    my_cred->cr_svgid != uap->egid) {
+		if (my_pcred->cr_svgid != uap->rgid &&
+		    my_pcred->cr_svgid != uap->egid) {
 		    	svgid = new_egid;
 			OSBitOrAtomic(P_SUGID, &p->p_flag);
 		}
@@ -1329,7 +1354,7 @@ setregid(proc_t p, struct setregid_args *uap, __unused int32_t *retval)
 		my_new_cred = kauth_cred_setresgid(my_cred, rgid, egid, svgid);
 		if (my_cred != my_new_cred) {
 
-			DEBUG_CRED_CHANGE("setregid(CH)%d: %p/0x%08x->%p/0x%08x\n", p->p_pid, my_cred, my_cred->cr_flags, my_new_cred, my_new_cred->cr_flags);
+			DEBUG_CRED_CHANGE("setregid(CH)%d: %p/0x%08x->%p/0x%08x\n", p->p_pid, my_cred, my_pcred->cr_flags, my_new_cred, posix_cred_get(my_new_cred)->cr_flags);
 
 			proc_lock(p);
 			/* need to protect for a race where another thread
@@ -1345,6 +1370,8 @@ setregid(proc_t p, struct setregid_args *uap, __unused int32_t *retval)
 				continue;
 			}
 			p->p_ucred = my_new_cred;
+			/* update cred on proc */
+			PROC_UPDATE_CREDS_ONPROC(p);
 			OSBitOrAtomic(P_SUGID, &p->p_flag); /* XXX redundant? */
 			proc_unlock(p);
 		}
@@ -1444,6 +1471,7 @@ settid_with_pid(proc_t p, struct settid_with_pid_args *uap, __unused int32_t *re
 	proc_t target_proc;
 	struct uthread *uthread = get_bsdthread_info(current_thread());
 	kauth_cred_t my_cred, my_target_cred, my_new_cred;
+	posix_cred_t my_target_pcred;
 
 	AUDIT_ARG(pid, uap->pid);
 	AUDIT_ARG(value32, uap->assume);
@@ -1491,7 +1519,8 @@ settid_with_pid(proc_t p, struct settid_with_pid_args *uap, __unused int32_t *re
 		kauth_cred_ref(uthread->uu_ucred); 
 		my_cred = uthread->uu_ucred;
 		my_target_cred = kauth_cred_proc_ref(target_proc);
-		my_new_cred = kauth_cred_setuidgid(my_cred, my_target_cred->cr_uid, my_target_cred->cr_gid);
+		my_target_pcred = posix_cred_get(my_target_cred);
+		my_new_cred = kauth_cred_setuidgid(my_cred, my_target_pcred->cr_uid, my_target_pcred->cr_gid);
 		if (my_cred != my_new_cred)
 			uthread->uu_ucred = my_new_cred;
 	
@@ -1647,13 +1676,15 @@ setgroups1(proc_t p, u_int gidsetsize, user_addr_t gidset, uid_t gmuid, __unused
 					continue;
 				}
 				p->p_ucred = my_new_cred;
+				/* update cred on proc */
+				PROC_UPDATE_CREDS_ONPROC(p);
 				OSBitOrAtomic(P_SUGID, &p->p_flag);
 				proc_unlock(p);
 			}
 			break;
 		}
 		/* Drop old proc reference or our extra reference */
-		AUDIT_ARG(groupset, my_cred->cr_groups, ngrp);
+		AUDIT_ARG(groupset, posix_cred_get(my_cred)->cr_groups, ngrp);
 		kauth_cred_unref(&my_cred);
 
 
@@ -1835,15 +1866,17 @@ is_suser1(void)
 {
 	proc_t p = current_proc();
 	kauth_cred_t my_cred;
+	posix_cred_t my_pcred;
 	int err;
 
 	if (!p)
 		return (0);
 
 	my_cred = kauth_cred_proc_ref(p);
+	my_pcred = posix_cred_get(my_cred);
 
 	err =  (suser(my_cred, &p->p_acflag) == 0 ||
-			my_cred->cr_ruid == 0 || my_cred->cr_svuid == 0);
+			my_pcred->cr_ruid == 0 || my_pcred->cr_svuid == 0);
 	kauth_cred_unref(&my_cred);
 	return(err);
 }
@@ -1959,6 +1992,7 @@ set_security_token(proc_t p)
 	security_token_t sec_token;
 	audit_token_t    audit_token;
 	kauth_cred_t my_cred;
+	posix_cred_t my_pcred;
 	host_priv_t host_priv;
 
 	/*
@@ -1975,10 +2009,12 @@ set_security_token(proc_t p)
 	}
 		
 	my_cred = kauth_cred_proc_ref(p);
+	my_pcred = posix_cred_get(my_cred);
+
 	/* XXX mach_init doesn't have a p_ucred when it calls this function */
 	if (IS_VALID_CRED(my_cred)) {
 		sec_token.val[0] = kauth_cred_getuid(my_cred);
-		sec_token.val[1] = my_cred->cr_gid;
+		sec_token.val[1] = kauth_cred_getgid(my_cred);
 	} else {
 		sec_token.val[0] = 0;
 		sec_token.val[1] = 0;
@@ -1994,10 +2030,10 @@ set_security_token(proc_t p)
 	 * changes.
 	 */
 	audit_token.val[0] = my_cred->cr_audit.as_aia_p->ai_auid;
-	audit_token.val[1] = my_cred->cr_uid;
-	audit_token.val[2] = my_cred->cr_gid;
-	audit_token.val[3] = my_cred->cr_ruid;
-	audit_token.val[4] = my_cred->cr_rgid;
+	audit_token.val[1] = my_pcred->cr_uid;
+	audit_token.val[2] = my_pcred->cr_gid;
+	audit_token.val[3] = my_pcred->cr_ruid;
+	audit_token.val[4] = my_pcred->cr_rgid;
 	audit_token.val[5] = p->p_pid;
 	audit_token.val[6] = my_cred->cr_audit.as_aia_p->ai_asid;
 	audit_token.val[7] = p->p_idversion;
@@ -2028,12 +2064,13 @@ __private_extern__
 void
 cru2x(kauth_cred_t cr, struct xucred *xcr)
 {
+	posix_cred_t pcr = posix_cred_get(cr);
 
 	bzero(xcr, sizeof(*xcr));
 	xcr->cr_version = XUCRED_VERSION;
 	xcr->cr_uid = kauth_cred_getuid(cr);
-	xcr->cr_ngroups = cr->cr_ngroups;
-	bcopy(cr->cr_groups, xcr->cr_groups, sizeof(xcr->cr_groups));
+	xcr->cr_ngroups = pcr->cr_ngroups;
+	bcopy(pcr->cr_groups, xcr->cr_groups, sizeof(xcr->cr_groups));
 }
 
 #if CONFIG_LCTX

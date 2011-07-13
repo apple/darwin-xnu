@@ -30,6 +30,7 @@
  * These kxld stubs panic if the kernel is built without kxld support but
  * something tries to use it anyway.
  */
+#if KERNEL
 
 #if !CONFIG_KXLD
 
@@ -56,19 +57,15 @@ kxld_destroy_context(KXLDContext *context __unused)
 
 kern_return_t
 kxld_link_file(
-    KXLDContext *context __unused,
-    u_char *file __unused,
-    u_long size __unused,
-    const char *name,
-    void *callback_data __unused,
-    u_char **deps __unused,
-    u_int ndeps __unused,
-    u_char **_linked_object __unused,
-    kxld_addr_t *kmod_info_kern __unused,
-    u_char **_link_state __unused,
-    u_long *_link_state_size __unused,
-    u_char **_symbol_file __unused,
-    u_long *_symbol_file_size __unused)
+    KXLDContext       * context                 __unused,
+    u_char            * file                    __unused,
+    u_long              size                    __unused,
+    const char        * name                    __unused,
+    void              * callback_data           __unused,
+    KXLDDependency    * dependencies            __unused,
+    u_int               ndependencies           __unused,
+    u_char           ** linked_object_out       __unused,
+    kxld_addr_t       * kmod_info_kern          __unused)
 {
     panic("%s (%s) called in kernel without kxld support", __PRETTY_FUNCTION__, name);
     return KERN_SUCCESS;
@@ -81,3 +78,5 @@ kxld_validate_copyright_string(const char *str __unused)
 }
 
 #endif
+
+#endif /* KERNEL */

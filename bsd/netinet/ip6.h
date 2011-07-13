@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -170,7 +170,10 @@ struct ip6_dest {
 #define IP6OPT_JUMBO		0xC2	/* 11 0 00010 = 194 */
 #define IP6OPT_NSAP_ADDR	0xC3	/* 11 0 00011 */
 #define IP6OPT_TUNNEL_LIMIT	0x04	/* 00 0 00100 */
+#ifndef KERNEL_PRIVATE
 #define IP6OPT_RTALERT		0x05	/* 00 0 00101 (KAME definition) */
+#endif
+#define IP6OPT_ROUTER_ALERT	0x05	/* 00 0 00101 (RFC3542, recommended) */
 
 #define IP6OPT_RTALERT_LEN	4
 #define IP6OPT_RTALERT_MLD	0	/* Datagram contains an MLD message */
@@ -178,10 +181,6 @@ struct ip6_dest {
 #define IP6OPT_RTALERT_ACTNET	2 	/* contains an Active Networks msg */
 #define IP6OPT_MINLEN		2
 
-#define IP6OPT_BINDING_UPDATE	0xc6	/* 11 0 00110 */
-#define IP6OPT_BINDING_ACK	0x07	/* 00 0 00111 */
-#define IP6OPT_BINDING_REQ	0x08	/* 00 0 01000 */
-#define IP6OPT_HOME_ADDRESS	0xc9	/* 11 0 01001 */
 #define IP6OPT_EID		0x8a	/* 10 0 01010 */
 
 #define IP6OPT_TYPE(o)		((o) & 0xC0)
@@ -192,7 +191,55 @@ struct ip6_dest {
 
 #define IP6OPT_MUTABLE		0x20
 
+/* IPv6 options: common part */
+struct ip6_opt {
+	u_int8_t ip6o_type;
+	u_int8_t ip6o_len;
+} __attribute__((__packed__));
+
+/* Jumbo Payload Option */
+struct ip6_opt_jumbo {
+	u_int8_t ip6oj_type;
+	u_int8_t ip6oj_len;
+	u_int8_t ip6oj_jumbo_len[4];
+} __attribute__((__packed__));
 #define IP6OPT_JUMBO_LEN	6
+
+/* NSAP Address Option */
+struct ip6_opt_nsap {
+	u_int8_t ip6on_type;
+	u_int8_t ip6on_len;
+	u_int8_t ip6on_src_nsap_len;
+	u_int8_t ip6on_dst_nsap_len;
+	/* followed by source NSAP */
+	/* followed by destination NSAP */
+}__attribute__((__packed__));
+
+/* Tunnel Limit Option */
+struct ip6_opt_tunnel {
+	u_int8_t ip6ot_type;
+	u_int8_t ip6ot_len;
+	u_int8_t ip6ot_encap_limit;
+}__attribute__((__packed__));
+
+/* Router Alert Option */
+struct ip6_opt_router {
+	u_int8_t ip6or_type;
+	u_int8_t ip6or_len;
+	u_int8_t ip6or_value[2];
+}__attribute__((__packed__));
+/* Router alert values (in network byte order) */
+#if BYTE_ORDER == BIG_ENDIAN
+#define IP6_ALERT_MLD	0x0000
+#define IP6_ALERT_RSVP	0x0001
+#define IP6_ALERT_AN	0x0002
+#else
+#if BYTE_ORDER == LITTLE_ENDIAN
+#define IP6_ALERT_MLD	0x0000
+#define IP6_ALERT_RSVP	0x0100
+#define IP6_ALERT_AN	0x0200
+#endif /* LITTLE_ENDIAN */
+#endif
 
 /* Routing header */
 struct ip6_rthdr {
@@ -235,13 +282,14 @@ struct ip6_frag {
 /*
  * Internet implementation parameters.
  */
-#define IPV6_MAXHLIM	255	/* maximun hoplimit */
+#define IPV6_MAXHLIM	255	/* maximum hoplimit */
 #define IPV6_DEFHLIM	64	/* default hlim */
 #define IPV6_FRAGTTL	120	/* ttl for fragment packets, in slowtimo tick */
-#define IPV6_HLIMDEC	1	/* subtracted when forwaeding */
+#define IPV6_HLIMDEC	1	/* subtracted when forwarding */
 
 #define IPV6_MMTU	1280	/* minimal MTU and reassembly. 1024 + 256 */
 #define IPV6_MAXPACKET	65535	/* ip6 max packet size without Jumbo payload*/
+#define IPV6_MAXOPTHDR	2048	/* max option header size, 256 64-bit words */
 
 #ifdef KERNEL_PRIVATE
 /*
@@ -291,45 +339,12 @@ do {									\
  * with type "typ".
  * IP6_EXTHDR_GET0 does the same, except that it aligns the structure at the
  * very top of mbuf.  GET0 is likely to make memory copy than GET.
- *
- * XXX we're now testing this, needs m_pulldown()
  */
-#define IP6_EXTHDR_GET(val, typ, m, off, len) \
-do {									\
-	struct mbuf *t;							\
-	int tmp;							\
-	if ((m)->m_len >= (off) + (len))				\
-		(val) = (typ)(mtod((m), caddr_t) + (off));		\
-	else {								\
-		t = m_pulldown((m), (off), (len), &tmp);		\
-		if (t) {						\
-			if (t->m_len < tmp + (len))			\
-				panic("m_pulldown malfunction");	\
-			(val) = (typ)(mtod(t, caddr_t) + tmp);		\
-		} else {						\
-			(val) = (typ)NULL;				\
-			(m) = NULL;					\
-		}							\
-	}								\
-} while (0)
+#define IP6_EXTHDR_GET(val, typ, m, off, len)				\
+	M_STRUCT_GET(val, typ, m, off, len)
 
-#define IP6_EXTHDR_GET0(val, typ, m, off, len) \
-do {									\
-	struct mbuf *t;							\
-	if ((off) == 0)							\
-		(val) = (typ)mtod(m, caddr_t);				\
-	else {								\
-		t = m_pulldown((m), (off), (len), NULL);		\
-		if (t) {						\
-			if (t->m_len < (len))				\
-				panic("m_pulldown malfunction");	\
-			(val) = (typ)mtod(t, caddr_t);			\
-		} else {						\
-			(val) = (typ)NULL;				\
-			(m) = NULL;					\
-		}							\
-	}								\
-} while (0)
+#define IP6_EXTHDR_GET0(val, typ, m, off, len)				\
+	M_STRUCT_GET0(val, typ, m, off, len)
 
 #endif /* KERNEL_PRIVATE */
 #endif /* !_NETINET_IP6_H_ */

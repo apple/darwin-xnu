@@ -333,6 +333,44 @@ struct label *mac_mbuf_to_label(struct mbuf *m);
 } while (0)
 
 /*
+ * MAC_GRANT performs the designated check by walking the policy
+ * module list and checking with each as to how it feels about the
+ * request.  Unlike MAC_CHECK, it grants if any policies return '0',
+ * and otherwise returns EPERM.  Note that it returns its value via
+ * 'error' in the scope of the caller.
+ */
+#define MAC_GRANT(check, args...) do {					\
+	struct mac_policy_conf *mpc;					\
+	u_int i;							\
+									\
+	error = EPERM;							\
+	for (i = 0; i < mac_policy_list.staticmax; i++) {		\
+		mpc = mac_policy_list.entries[i].mpc;			\
+		if (mpc == NULL)					\
+			continue;					\
+									\
+		if (mpc->mpc_ops->mpo_ ## check != NULL) {		\
+			if (mpc->mpc_ops->mpo_ ## check (args) == 0)	\
+				error = 0;				\
+		}							\
+	}								\
+	if (mac_policy_list_conditional_busy() != 0) {			\
+		for (; i <= mac_policy_list.maxindex; i++) {		\
+			mpc = mac_policy_list.entries[i].mpc;		\
+			if (mpc == NULL)				\
+				continue;				\
+									\
+			if (mpc->mpc_ops->mpo_ ## check != NULL) {	\
+				if (mpc->mpc_ops->mpo_ ## check (args)	\
+				    == 0)				\
+					error = 0;			\
+			}						\
+		}							\
+		mac_policy_list_unbusy();				\
+	}								\
+} while (0)
+
+/*
  * MAC_BOOLEAN performs the designated boolean composition by walking
  * the module list, invoking each instance of the operation, and
  * combining the results using the passed C operator.  Note that it

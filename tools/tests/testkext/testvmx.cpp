@@ -2,9 +2,6 @@
  *  testvmx.cpp
  *  testkext
  *
- *  Created by Shantonu Sen on 10/24/08.
- *  Copyright 2008 Apple Computer, Inc.. All rights reserved.
- *
  */
 
 #include "testvmx.h"

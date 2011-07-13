@@ -206,7 +206,7 @@ vm32_region_info(
 				vio->vio_object =
 					(natural_t)(uintptr_t) cobject;
 				vio->vio_size =
-					(natural_t) cobject->size;
+					(natural_t) cobject->vo_size;
 				vio->vio_ref_count =
 					cobject->ref_count;
 				vio->vio_resident_page_count =
@@ -216,7 +216,7 @@ vm32_region_info(
 				vio->vio_shadow =
 					(natural_t)(uintptr_t) cobject->shadow;
 				vio->vio_shadow_offset =
-					(natural_t) cobject->shadow_offset;
+					(natural_t) cobject->vo_shadow_offset;
 				vio->vio_paging_offset =
 					(natural_t) cobject->paging_offset;
 				vio->vio_copy_strategy =
@@ -408,7 +408,7 @@ vm32_region_info_64(
 				vio->vio_object =
 					(natural_t)(uintptr_t) cobject;
 				vio->vio_size =
-					(natural_t) cobject->size;
+					(natural_t) cobject->vo_size;
 				vio->vio_ref_count =
 					cobject->ref_count;
 				vio->vio_resident_page_count =
@@ -418,7 +418,7 @@ vm32_region_info_64(
 				vio->vio_shadow =
 					(natural_t)(uintptr_t) cobject->shadow;
 				vio->vio_shadow_offset =
-					(natural_t) cobject->shadow_offset;
+					(natural_t) cobject->vo_shadow_offset;
 				vio->vio_paging_offset =
 					(natural_t) cobject->paging_offset;
 				vio->vio_copy_strategy =

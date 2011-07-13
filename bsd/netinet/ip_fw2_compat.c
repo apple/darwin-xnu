@@ -1592,7 +1592,7 @@ ipfw_version_latest_to_zero(struct ip_fw *curr_rule, struct ip_old_fw *rule_vers
 		rule_vers0->pipe_ptr      = CAST_DOWN_EXPLICIT(void*, rule_vers1.pipe_ptr);
 		rule_vers0->next_rule_ptr = CAST_DOWN_EXPLICIT(void*, rule_vers1.next_rule_ptr);
 
-		if (rule_vers1.fw_ipflg && IP_FW_IF_TCPEST_COMPAT) rule_vers0->fw_tcpf |= IP_OLD_FW_TCPF_ESTAB;
+		if (rule_vers1.fw_ipflg & IP_FW_IF_TCPEST_COMPAT) rule_vers0->fw_tcpf |= IP_OLD_FW_TCPF_ESTAB;
 	}
 	else {
 		struct ip_fw_compat_32	rule_vers1;
@@ -1620,7 +1620,7 @@ ipfw_version_latest_to_zero(struct ip_fw *curr_rule, struct ip_old_fw *rule_vers
 		rule_vers0->pipe_ptr      = CAST_DOWN_EXPLICIT(void*, rule_vers1.pipe_ptr);
 		rule_vers0->next_rule_ptr = CAST_DOWN_EXPLICIT(void*, rule_vers1.next_rule_ptr);
 
-		if (rule_vers1.fw_ipflg && IP_FW_IF_TCPEST_COMPAT) rule_vers0->fw_tcpf |= IP_OLD_FW_TCPF_ESTAB;
+		if (rule_vers1.fw_ipflg & IP_FW_IF_TCPEST_COMPAT) rule_vers0->fw_tcpf |= IP_OLD_FW_TCPF_ESTAB;
 	}
 
 }

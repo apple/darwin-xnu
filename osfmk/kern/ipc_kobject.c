@@ -560,12 +560,10 @@ ipc_kobject_notify(
 			   return TRUE;
 		   }
 #endif
-#if CONFIG_EMBEDDED
 		   if (ip_kotype(port) == IKOT_FILEPORT) {
 			fileport_notify(request_header);
 			return TRUE;
 		   }
-#endif
 
 	  	   break;
 

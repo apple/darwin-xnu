@@ -73,23 +73,14 @@ bool RootDomainUserClient::start( IOService * provider )
 
 IOReturn RootDomainUserClient::secureSleepSystem( uint32_t *return_code )
 {
-    IOByteCount     return_code_size = 1;
-
-    return secureSleepSystemOptions( NULL,      // inOptions
-                                     (void *)return_code, // returnCode
-                                     (void *)0,     // inSize
-                                     (void *)&return_code_size, // returnSize
-                                     NULL, NULL);
+    return secureSleepSystemOptions(NULL, 0, return_code);
 }
 
 IOReturn RootDomainUserClient::secureSleepSystemOptions( 
-    void * p1, void * p2, void * p3,
-    void * p4, void * p5, void * p6 )
+    const void      *inOptions, 
+    IOByteCount     inOptionsSize __unused,
+    uint32_t        *returnCode)
 {
-    void            *inOptions = (void *)p1;
-    uint32_t        *returnCode = (uint32_t *)p2;
-//  IOByteCount     inOptionsSize = (uintptr_t)p3;
-    IOByteCount     *returnCodeSize = (IOByteCount *)p4;
 
     int             local_priv = 0;
     int             admin_priv = 0;
@@ -103,7 +94,6 @@ IOReturn RootDomainUserClient::secureSleepSystemOptions(
     ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeAdministrator);
     admin_priv = (kIOReturnSuccess == ret);
     
-    *returnCodeSize = sizeof(uint32_t);
     
     if (inOptions)
     {
@@ -159,43 +149,32 @@ IOReturn RootDomainUserClient::secureSetAggressiveness(
 
     if((local_priv || admin_priv) && fOwner) {
         *return_code = fOwner->setAggressiveness(type, newLevel);
-        return kIOReturnSuccess;
     } else {
         *return_code = kIOReturnNotPrivileged;
-        return kIOReturnSuccess;
     }
+    return kIOReturnSuccess;
 }
 
-IOReturn RootDomainUserClient::secureSetMaintenanceWakeCalendar( 
-    void * p1, void * p2, void * p3,
-    void * p4, void * p5, void * p6 )
+IOReturn RootDomainUserClient::secureSetMaintenanceWakeCalendar(
+    IOPMCalendarStruct      *inCalendar,
+    uint32_t                *returnCode)
 {
-#if ROOT_DOMAIN_RUN_STATES
-    IOPMCalendarStruct *    inCalendar = (IOPMCalendarStruct *) p1;
-    uint32_t *              returnCode = (uint32_t *) p2;
-    IOByteCount *           returnCodeSize = (IOByteCount *) p4;
     int                     admin_priv = 0;
     IOReturn                ret = kIOReturnNotPrivileged;
     
     ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeAdministrator);
     admin_priv = (kIOReturnSuccess == ret);
-
-    *returnCodeSize = sizeof(uint32_t);
 
     if (admin_priv && fOwner) {
         *returnCode = fOwner->setMaintenanceWakeCalendar(inCalendar);
-        return kIOReturnSuccess;
     } else {
         *returnCode = kIOReturnNotPrivileged;
-        return kIOReturnSuccess;
     }
-#else
-    return kIOReturnUnsupported;
-#endif
+    return kIOReturnSuccess;
 }
 
 IOReturn RootDomainUserClient::secureSetUserAssertionLevels(
-    uint32_t assertBits )
+    uint32_t    assertionBitfield)
 {
     int                     admin_priv = 0;
     IOReturn                ret = kIOReturnNotPrivileged;
@@ -204,7 +183,7 @@ IOReturn RootDomainUserClient::secureSetUserAssertionLevels(
     admin_priv = (kIOReturnSuccess == ret);
 
     if (admin_priv && fOwner) {
-        ret = fOwner->setPMAssertionUserLevels(assertBits);
+        ret = fOwner->setPMAssertionUserLevels(assertionBitfield);
     } else {
         ret = kIOReturnNotPrivileged;
     }
@@ -223,103 +202,185 @@ IOReturn RootDomainUserClient::clientClose( void )
     return kIOReturnSuccess;
 }
 
-IOExternalMethod *
-RootDomainUserClient::getTargetAndMethodForIndex( IOService ** targetP, UInt32 index )
+IOReturn RootDomainUserClient::clientMemoryForType(
+    UInt32 type,
+    IOOptionBits *options,
+    IOMemoryDescriptor ** memory)
 {
-    static const IOExternalMethod sMethods[] = {
-        {   // kPMSetAggressiveness, 0
-            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSetAggressiveness, kIOUCScalarIScalarO, 2, 1
-        },
-        {   // kPMGetAggressiveness, 1
-            0, (IOMethod)&IOPMrootDomain::getAggressiveness, kIOUCScalarIScalarO, 1, 1
-        },
-        {   // kPMSleepSystem, 2
-            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSleepSystem, kIOUCScalarIScalarO, 0, 1
-        },
-        {   // kPMAllowPowerChange, 3
-            0, (IOMethod)&IOPMrootDomain::allowPowerChange, kIOUCScalarIScalarO, 1, 0
-        },
-        {   // kPMCancelPowerChange, 4
-            0, (IOMethod)&IOPMrootDomain::cancelPowerChange, kIOUCScalarIScalarO, 1, 0
-        },
-        {   // kPMShutdownSystem, 5
-            0, (IOMethod)&IOPMrootDomain::shutdownSystem, kIOUCScalarIScalarO, 0, 0
-        },
-        {   // kPMRestartSystem, 6
-            0, (IOMethod)&IOPMrootDomain::restartSystem, kIOUCScalarIScalarO, 0, 0
-        },
-        {   // kPMSleepSystemOptions, 7
-            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSleepSystemOptions, 
-            kIOUCStructIStructO, kIOUCVariableStructureSize, sizeof(uint32_t)
-        },
-        {   // kPMSetMaintenanceWakeCalendar, 8
-            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSetMaintenanceWakeCalendar,
-            kIOUCStructIStructO, sizeof(IOPMCalendarStruct), sizeof(uint32_t)
-        },
-        {   // kPMSetUserAssertionLevels, 9
-            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSetUserAssertionLevels,
-            kIOUCScalarIScalarO, 1, 0
+    if (!fOwner)
+        return kIOReturnNotReady;
+
+    if (kPMRootDomainMapTraceBuffer == type)
+    {
+        *memory = fOwner->getPMTraceMemoryDescriptor();
+        if (*memory) {
+            (*memory)->retain();
+            *options = 0;
+            return kIOReturnSuccess;
+        } else {
+            return kIOReturnNotFound;
         }
-    };
-    
-    if(index >= kNumPMMethods)
-    	return NULL;
-    else {
-        if (sMethods[index].object)
-            *targetP = this;
-        else
-            *targetP = fOwner;
 
-        return (IOExternalMethod *)&sMethods[index];
     }
+    return kIOReturnUnsupported;
 }
 
-#if 0
-IOReturn RootDomainUserClient::externalMethod( uint32_t selector, IOExternalMethodArguments * args,
-						IOExternalMethodDispatch * dispatch, OSObject * target, void * reference )
+IOReturn RootDomainUserClient::externalMethod(
+    uint32_t selector, 
+    IOExternalMethodArguments * arguments,
+    IOExternalMethodDispatch * dispatch __unused, 
+    OSObject * target __unused,
+    void * reference __unused )
 {
-    static const IOExternalMethodDispatch sMethods[] = {
-        { // kPMSetAggressiveness, 0
-            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSetAggressiveness, kIOUCScalarIScalarO, 2, 1
-        },
-        { // kPMGetAggressiveness, 1
-            0, (IOMethod)&IOPMrootDomain::getAggressiveness, kIOUCScalarIScalarO, 1, 1
-        },
-        { // kPMSleepSystem, 2
-            (IOService *)1, (IOMethod)&RootDomainUserClient::secureSleepSystem, kIOUCScalarIScalarO, 0, 1
-        },
-        { // kPMAllowPowerChange, 3
-            0, (IOMethod)&IOPMrootDomain::allowPowerChange, kIOUCScalarIScalarO, 1, 0
-        },
-        { // kPMCancelPowerChange, 4
-            0, (IOMethod)&IOPMrootDomain::cancelPowerChange, kIOUCScalarIScalarO, 1, 0
-        },
-        { // kPMShutdownSystem, 5
-            0, (IOMethod)&IOPMrootDomain::shutdownSystem, kIOUCScalarIScalarO, 0, 0
-        },
-        { // kPMRestartSystem, 6
-            0, (IOMethod)&IOPMrootDomain::restartSystem, kIOUCScalarIScalarO, 0, 0
-        },
-        { // kPMSetPreventative, 7
-            (IOService *)1, (IOMethod)&RootDomainUserClient::setPreventative, kIOUCScalarIScalarO, 2, 0
-        },
-    };
+    IOReturn    ret = kIOReturnBadArgument;    
+    
+    switch (selector)
+    {
+        case kPMSetAggressiveness:
+            if ((2 == arguments->scalarInputCount)
+                && (1 == arguments->scalarOutputCount))
+            {
+                ret = this->secureSetAggressiveness(
+                                (unsigned long)arguments->scalarInput[0],
+                                (unsigned long)arguments->scalarInput[1],
+                                (int *)&arguments->scalarOutput[0]);
+            }
+            break;
+        
+        case kPMGetAggressiveness:
+            if ((1 == arguments->scalarInputCount)
+                && (1 == arguments->scalarOutputCount))
+            {
+                ret = fOwner->getAggressiveness(
+                                (unsigned long)arguments->scalarInput[0],
+                                (unsigned long *)&arguments->scalarOutput[0]);
+            }
+            break;
+        
+        case kPMSleepSystem:
+            if (1 == arguments->scalarOutputCount)
+            {
+                ret = this->secureSleepSystem(
+                                (uint32_t *)&arguments->scalarOutput[0]);            
+            }
+            break;
 
-    if (selector > (sizeof(sMethods) / sizeof(sMethods[0])))
-	return (kIOReturnBadArgument);
+        case kPMAllowPowerChange:
+            if (1 == arguments->scalarInputCount)
+            {
+                ret = fOwner->allowPowerChange(
+                                arguments->scalarInput[0]);
+            }
+            break;
 
-    if ((1 << selector) & ((1 << 0) | (1 << 7))
-	target = this;
-    else
-	target = fOwner;
+        case kPMCancelPowerChange:
+            if (1 == arguments->scalarInputCount)
+            {
+                ret = fOwner->cancelPowerChange(
+                                arguments->scalarInput[0]);
+            }
+            break;
 
-    return (super::externalMethod(selector, args, &sMethods[selector], target, 0));
+        case kPMShutdownSystem:
+            // deperecated interface
+            ret = kIOReturnUnsupported;
+            break;
+
+        case kPMRestartSystem:
+            // deperecated interface
+            ret = kIOReturnUnsupported;
+            break;
+
+        case kPMSleepSystemOptions:
+            ret = this->secureSleepSystemOptions(
+                    arguments->structureInput,
+                    arguments->structureInputSize,
+                    (uint32_t *)&arguments->scalarOutput[0]);
+            break;
+        case kPMSetMaintenanceWakeCalendar:
+            ret = this->secureSetMaintenanceWakeCalendar(
+                    (IOPMCalendarStruct *)arguments->structureInput, 
+                    (uint32_t *)&arguments->structureOutput);
+            arguments->structureOutputSize = sizeof(uint32_t);
+            break;
+            
+        case kPMSetUserAssertionLevels:
+            ret = this->secureSetUserAssertionLevels(
+                        (uint32_t)arguments->scalarInput[0]);
+            break;
+            
+/*
+        case kPMMethodCopySystemTimeline:
+            // intentional fallthrough
+        case kPMMethodCopyDetailedTimeline:
+
+            if (!arguments->structureOutputDescriptor)
+            {
+                // TODO: Force IOKit.framework to always send this data out
+                // of line; so I don't have to create a MemoryDescriptor here.
+                mem_size = arguments->structureOutputSize;
+                mem = IOMemoryDescriptor::withAddressRange(
+                                    (mach_vm_address_t)arguments->structureOutput, 
+                                    (mach_vm_size_t)mem_size,
+                                    kIODirectionIn, current_task());
+            } else {
+                mem_size = arguments->structureOutputDescriptorSize;
+                if (( mem = arguments->structureOutputDescriptor ))
+                    mem->retain();   
+            }
+            
+            if (mem)
+            {
+                mem->prepare(kIODirectionNone);
+    
+                if (kPMMethodCopySystemTimeline == selector) {
+                    arguments->scalarOutput[0] = fOwner->copySystemTimeline(
+                                    mem, &mem_size);
+                } 
+                else
+                if (kPMMethodCopyDetailedTimeline == selector) {
+                    arguments->scalarOutput[0] = fOwner->copyDetailedTimeline(
+                                    mem, &mem_size);
+                }
+            
+                if (arguments->structureOutputDescriptor) {
+                    arguments->structureOutputDescriptorSize = mem_size;
+                } else {
+                    arguments->structureOutputSize = mem_size;
+                }
+            
+                mem->release();
+
+                ret = kIOReturnSuccess;
+            } else {
+                ret = kIOReturnCannotWire;
+            }
+            
+            break;
+*/
+        default:
+            // bad selector
+            return kIOReturnBadArgument;
+    }
+
+    return ret;
 }
-#endif
 
+/* getTargetAndMethodForIndex
+ * Not used. We prefer to use externalMethod() for user client invocations.
+ * We maintain getTargetAndExternalMethod since it's an exported symbol,
+ * and only for that reason.
+ */
+IOExternalMethod * RootDomainUserClient::getTargetAndMethodForIndex( 
+    IOService ** targetP, UInt32 index )
+{
+    // DO NOT EDIT
+    return super::getTargetAndMethodForIndex(targetP, index);
+}
+
+/* setPreventative
+ * Does nothing. Exists only for exported symbol compatibility.
+ */
 void 
 RootDomainUserClient::setPreventative(UInt32 on_off, UInt32 types_of_sleep)
-{
-    return;
-}
-
+{ return; } // DO NOT EDIT

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,8 +73,8 @@
 
 #ifdef __APPLE_API_PRIVATE
 
-int nfsm_rpchead(struct nfsreq *, int, mbuf_t, u_int64_t *, mbuf_t *);
-int nfsm_rpchead2(int, int, int, int, int, int, kauth_cred_t, struct nfsreq *, mbuf_t, u_int64_t *, mbuf_t *);
+int nfsm_rpchead(struct nfsreq *, mbuf_t, u_int64_t *, mbuf_t *);
+int nfsm_rpchead2(struct nfsmount *, int, int, int, int, int, kauth_cred_t, struct nfsreq *, mbuf_t, u_int64_t *, mbuf_t *);
 
 int nfsm_chain_new_mbuf(struct nfsm_chain *, size_t);
 int nfsm_chain_add_opaque_f(struct nfsm_chain *, const u_char *, uint32_t);
@@ -83,6 +83,7 @@ int nfsm_chain_add_uio(struct nfsm_chain *, uio_t, uint32_t);
 int nfsm_chain_add_fattr4_f(struct nfsm_chain *, struct vnode_attr *, struct nfsmount *);
 int nfsm_chain_add_v2sattr_f(struct nfsm_chain *, struct vnode_attr *, uint32_t);
 int nfsm_chain_add_v3sattr_f(struct nfsm_chain *, struct vnode_attr *);
+int nfsm_chain_add_string_nfc(struct nfsm_chain *, const uint8_t *, uint32_t);
 
 int nfsm_chain_advance(struct nfsm_chain *, uint32_t);
 int nfsm_chain_offset(struct nfsm_chain *);
@@ -93,6 +94,7 @@ int nfsm_chain_get_uio(struct nfsm_chain *, uint32_t, uio_t);
 int nfsm_chain_get_fh_attr(struct nfsm_chain *, nfsnode_t,
 	vfs_context_t, int, uint64_t *, fhandle_t *, struct nfs_vattr *);
 int nfsm_chain_get_wcc_data_f(struct nfsm_chain *, nfsnode_t, struct timespec *, int *, u_int64_t *);
+int nfsm_chain_get_secinfo(struct nfsm_chain *, uint32_t *, int *);
 
 #if NFSSERVER
 void nfsm_adj(mbuf_t, int, int);
@@ -339,6 +341,16 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 		nfsm_chain_add_opaque((E), (NMC), (STR), (LEN)); \
 	} while (0)
 
+/* add a name to an mbuf chain */
+#define nfsm_chain_add_name(E, NMC, STR, LEN, NMP) \
+	do { \
+		if (E) break; \
+		if (NMFLAG((NMP), NFC)) \
+			(E) = nfsm_chain_add_string_nfc((NMC), (const uint8_t*)(STR), (LEN)); \
+		else \
+			nfsm_chain_add_string((E), (NMC), (STR), (LEN)); \
+	} while (0)
+
 /* add an NFSv2 time to an mbuf chain */
 #define nfsm_chain_add_v2time(E, NMC, TVP) \
 	do { \
@@ -452,6 +464,36 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 		nfsm_chain_add_32((E), (NMC), (LEN)); \
 		for (__i=0; __i < (LEN); __i++) \
 			nfsm_chain_add_32((E), (NMC), ((B)[__i] & (MASK)[__i])); \
+	} while (0)
+
+/* add NFSv4 attr bitmap masked with the supported attributes for this mount/node */
+#define nfsm_chain_add_bitmap_supported(E, NMC, B, NMP, NP) \
+	do { \
+		uint32_t __bitmap[NFS_ATTR_BITMAP_LEN], *__bmp = (B); \
+		int __nonamedattr = 0, __noacl = 0, __nomode = 0; \
+		if (!((NMP)->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR) || \
+		    ((NP) && (((nfsnode_t)(NP))->n_flag & (NISDOTZFS|NISDOTZFSCHILD)))) \
+			__nonamedattr = 1; \
+		if (!((NMP)->nm_fsattr.nfsa_flags & NFS_FSFLAG_ACL)) \
+			__noacl = 1; \
+		if (NMFLAG((NMP), ACLONLY)) \
+			__nomode = 1; \
+		if (__nonamedattr || __noacl || __nomode) { \
+			/* don't ask for attrs we're not supporting */ \
+			/* some ".zfs" directories can't handle being asked for some attributes */ \
+			int __ii; \
+			NFS_CLEAR_ATTRIBUTES(__bitmap); \
+			for (__ii=0; __ii < NFS_ATTR_BITMAP_LEN; __ii++) \
+				__bitmap[__ii] = (B)[__ii]; \
+			if (__nonamedattr) \
+				NFS_BITMAP_CLR(__bitmap, NFS_FATTR_NAMED_ATTR); \
+			if (__noacl) \
+				NFS_BITMAP_CLR(__bitmap, NFS_FATTR_ACL); \
+			if (__nomode) \
+				NFS_BITMAP_CLR(__bitmap, NFS_FATTR_MODE); \
+			__bmp = __bitmap; \
+		} \
+		nfsm_chain_add_bitmap_masked((E), (NMC), __bmp, NFS_ATTR_BITMAP_LEN, (NMP)->nm_fsattr.nfsa_supp_attr); \
 	} while (0)
 
 /* Add an NFSv4 "stateid" structure to an mbuf chain */
@@ -642,19 +684,18 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 	} while (0)
 
 /* update a node's attribute cache with attributes from an mbuf chain */
-#define nfsm_chain_loadattr(E, NMC, NP, VERS, A, X) \
+#define nfsm_chain_loadattr(E, NMC, NP, VERS, X) \
 	do { \
-		struct nfs_vattr ttvattr, *ttnvap; \
+		struct nfs_vattr ttvattr; \
 		if (E) break; \
-		ttnvap = (A) ? (A) : &ttvattr; \
 		if ((VERS) == NFS_VER4) { \
-			NFS_CLEAR_ATTRIBUTES(ttnvap->nva_bitmap); \
-			(E) = nfs4_parsefattr((NMC), NULL, ttnvap, NULL, NULL); \
+			(E) = nfs4_parsefattr((NMC), NULL, &ttvattr, NULL, NULL, NULL); \
 		} else { \
-			(E) = nfs_parsefattr((NMC), (VERS), ttnvap); \
+			(E) = nfs_parsefattr((NMC), (VERS), &ttvattr); \
 		} \
-		if (E) break; \
-		(E) = nfs_loadattrcache((NP), ttnvap, (X), 0); \
+		if (!(E) && (NP)) \
+			(E) = nfs_loadattrcache((NP), &ttvattr, (X), 0); \
+		NVATTR_CLEANUP(&ttvattr); \
 	} while (0)
 
 /* get NFSv4 attr bitmap */
@@ -693,7 +734,8 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 	do { \
 		uint32_t __val = 0; \
 		nfsm_chain_get_32((E), (NMC), __val); \
-		nfsm_assert((E), (__val == (OP)), EBADRPC); \
+		/* [sigh] some implementations return the "illegal" op for unsupported ops */ \
+		nfsm_assert((E), ((__val == (OP)) || (__val == NFS_OP_ILLEGAL)), EBADRPC); \
 		nfsm_chain_get_32((E), (NMC), __val); \
 		nfsm_assert((E), (__val == NFS_OK), __val); \
 	} while (0)
@@ -705,7 +747,7 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 		nfsm_chain_get_32((E), (NMC), __ci_atomic); \
 		nfsm_chain_get_64((E), (NMC), __ci_before); \
 		nfsm_chain_get_64((E), (NMC), __ci_after); \
-		if (E) break; \
+		if ((E) || !(DNP)) break; \
 		if (__ci_atomic && (__ci_before == (DNP)->n_ncchange)) { \
 			(DNP)->n_ncchange = __ci_after; \
 		} else { \

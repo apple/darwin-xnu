@@ -34,12 +34,12 @@
 #include <IOKit/firewire/IOFireWireLib.h>
 #endif
 
-static struct error_sparse_map err_codes_iokit_common_map[] = {
+static const struct error_sparse_map err_codes_iokit_common_map[] = {
     err_code_map_entry(kIOReturnInvalid, kIOReturnInvalid ),
     err_code_map_entry(kIOReturnError,   kIOReturnNotFound),
 };
 
-static const char * err_codes_iokit_common[] = {
+static const char * const err_codes_iokit_common[] = {
     "(iokit/common) invalid - should never be seen",			// 0x001
 
     "(iokit/common) general error",					// 0x2bc
@@ -98,7 +98,7 @@ static const char * err_codes_iokit_common[] = {
 };
 
 #if !TARGET_OS_EMBEDDED
-static struct error_sparse_map err_codes_iokit_usb_map[] = {
+static const struct error_sparse_map err_codes_iokit_usb_map[] = {
     err_code_map_entry(kIOUSBCRCErr, kIOUSBDataToggleErr),
     err_code_map_entry(kIOUSBPIDCheckErr, kIOUSBWrongPIDErr),
     err_code_map_entry(kIOUSBReserved1Err, kIOUSBLinkErr),
@@ -108,7 +108,7 @@ static struct error_sparse_map err_codes_iokit_usb_map[] = {
 };
 
 // error codes with in 0xe0004000
-static const char * err_codes_iokit_usb[] = {
+static const char * const err_codes_iokit_usb[] = {
     "(iokit/usb) USB Controller Error: bad CRC received",		// 0x001
     "(iokit/usb) USB Controller Error:  bitstuffing",			// 0x002
     "(iokit/usb) USB Controller Error: Bad data toggle",		// 0x003
@@ -144,14 +144,14 @@ static const char * err_codes_iokit_usb[] = {
     "(iokit/usb) pipe ref not recognized",				// 0x061
 };
 
-static struct error_sparse_map err_codes_iokit_fw_map[] = {
+static const struct error_sparse_map err_codes_iokit_fw_map[] = {
     err_code_map_entry(kIOConfigNoEntry, kIOFireWireBusReset),
     err_code_map_entry(kIOFireWireBogusDCLProgram, kIOFireWireCompleting),
     err_code_map_entry(kIOFWMessageServiceIsRequestingClose, kIOFWMessageTopologyChanged),
 };
 
 // error codes with in 0xe0008000
-static const char * err_codes_iokit_fw[] = {
+static const char * const err_codes_iokit_fw[] = {
     "(iokit/firewire) can't find requested entry in config ROM",	// 001
     "(iokit/firewire) command pending (internal)",			// 002
     "(iokit/firewire) DCL callback is final callback (internal)",	// 003
@@ -196,7 +196,7 @@ static const char * err_codes_iokit_fw[] = {
 };
 
 // error codes with in 0xe0020000
-static const char * err_codes_iokit_bluetooth[] = {
+static const char * const err_codes_iokit_bluetooth[] = {
     "(iokit/bluetooth) unknown error",					// 000
     "(iokit/bluetooth) interrupted operation, hardware reset",		// 001
     "(iokit/bluetooth) connection to device already exists",		// 002
@@ -211,7 +211,7 @@ static const struct error_sparse_map err_iokit_sub_map[] = {
 };
 
 #define err_iokit_null_sub	{ "(iokit/?", 0 }
-static struct error_subsystem err_iokit_sub[] =
+static const struct error_subsystem err_iokit_sub[] =
 {
     /* 0 */ {
 	"(iokit/common)",			// 0xe0000000

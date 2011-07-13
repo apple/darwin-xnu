@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -194,27 +194,7 @@ soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 
 	/* Call the socket filter's ioctl handler for most ioctls */
 	if (IOCGROUP(cmd) != 'i' && IOCGROUP(cmd) != 'r') {
-		int filtered = 0;
-		struct socket_filter_entry *filter;
-
-		for (filter = so->so_filt; filter && error == 0;
-		    filter = filter->sfe_next_onsocket) {
-			if (filter->sfe_filter->sf_filter.sf_ioctl) {
-				if (filtered == 0) {
-					sflt_use(so);
-					socket_unlock(so, 0);
-					filtered = 1;
-				}
-				error = filter->sfe_filter->sf_filter.
-				    sf_ioctl(filter->sfe_cookie, so, cmd, data);
-			}
-		}
-
-		if (filtered) {
-			socket_lock(so, 0);
-			sflt_unuse(so);
-		}
-
+		error = sflt_ioctl(so, cmd, data);
 		if (error != 0)
 			goto out;
 	}
@@ -462,7 +442,7 @@ soo_stat(struct socket *so, void *ub, int isstat64)
 			sb64->st_mode |= S_IWUSR | S_IWGRP | S_IWOTH;
 		sb64->st_size = so->so_rcv.sb_cc - so->so_rcv.sb_ctl;
 		sb64->st_uid = so->so_uid;
-		sb64->st_gid = -1;	/* XXX -- what else to do? */
+		sb64->st_gid = so->so_gid;
 	} else {
 		sb->st_mode = S_IFSOCK;
 		if ((so->so_state & SS_CANTRCVMORE) == 0 ||
@@ -472,7 +452,7 @@ soo_stat(struct socket *so, void *ub, int isstat64)
 			sb->st_mode |= S_IWUSR | S_IWGRP | S_IWOTH;
 		sb->st_size = so->so_rcv.sb_cc - so->so_rcv.sb_ctl;
 		sb->st_uid = so->so_uid;
-		sb->st_gid = -1;	/* XXX -- what else to do? */
+		sb->st_gid = so->so_gid;
 	}
 
 	ret = (*so->so_proto->pr_usrreqs->pru_sense)(so, ub, isstat64);

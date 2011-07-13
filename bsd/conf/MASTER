@@ -101,6 +101,7 @@ options		MACH_IPC_COMPAT	# Enable old IPC interface	# <ipc_compat>
 options		MACH_IPC_DEBUG	# Enable IPC debugging calls	# <ipc_debug>
 options		MACH_IPC_TEST	# Testing code/printfs		# <ipc_test>
 options		MACH_LDEBUG	# Sanity-check simple locking	# <test>
+options		CONFIG_ZLEAKS	# Live zone leak debug sysctls	# <zleaks>
 options 	MACH_NP		# Mach IPC support		# <np>
 options		MACH_NBC	# No buffer cache		# <nbc>
 options		MACH_NET	# Fast network access		# <mach_net>
@@ -123,15 +124,12 @@ options		LLC		# 802.2 support			# <llc>
 options		LOOP		# loopback support		# <loop>
 options		MROUTING	# multicast routing		# <mrouting>
 options		ROUTING		# routing			# <routing>
-options		NETMIBS		#				# <netmibs>
 options		VLAN		#				# <vlan>
 options		BOND		#				# <bond>
 options		PF		# Packet Filter			# <pf>
 options		PF_PKTHDR	# PF tag inside mbuf pkthdr	# <pf_pkthdr>
-options		PKT_PRIORITY	# Packet priority support	# <pkt_priority>
 options		PFLOG		# PF log interface		# <pflog>
 options		IPDIVERT        # Divert sockets (for NAT)      # <ipdivert>
-options		IPFLOW		# IP fast forwarding		# <ipflow>
 options		IPFIREWALL      # IP Firewalling (used by NAT)  # <ipfirewall>
 options		IPFIREWALL_FORWARD      #Transparent proxy      # <ipfirewall>
 options		IPFIREWALL_DEFAULT_TO_ACCEPT    # allow everything by default   # <ipfirewall>
@@ -144,7 +142,6 @@ options		RANDOM_IP_ID	# random (not sequential) ip ids	# <randomipid>
 options		TCP_DROP_SYNFIN	# Drop TCP packets with SYN+FIN set	# <tcpdrop_synfin>
 options		ICMP_BANDLIM	# ICMP bandwidth limiting sysctl
 options		IFNET_INPUT_SANITY_CHK	# allow dlil/ifnet input sanity check # <ifnet_input_chk>
-options		IFNET_ROUTE_REFCNT # count route references to ifnet	# <ifnet_route_refcnt>
 options		SYSV_SEM	# SVID semaphores			# <sysv_sem>
 options		SYSV_MSG	# SVID messages				# <sysv_msg>
 options		SYSV_SHM	# SVID shared mem			# <sysv_shm>
@@ -169,14 +166,11 @@ options		NETWORKING	# networking layer			# <inet, inet6, netat>
 options		CONFIG_FSE	# file system events		# <config_fse>
 options		CONFIG_IMAGEBOOT	# local image boot	# <config_imageboot>
 options		CONFIG_SOWUPCALL	# SB_UPCALL on sowwakeup	# <config_sowupcall>
-options		CONFIG_MBUF_NOEXPAND	# limit mbuf expansion	# <config_mbuf_noexpand>
 options		CONFIG_MBUF_JUMBO	# jumbo cluster pool	# <config_mbuf_jumbo>
-options		CONFIG_MBUF_TAGS_MALLOC # use malloc for tags	# <config_mbuf_tags_malloc>
 options		CONFIG_FORCE_OUT_IFP	# Enable IP_FORCE_OUT_IFP # <config_force_out_ifp>
 options		CONFIG_IFEF_NOWINDOWSCALE # Scale TCP window per driver # <config_ifef_nowindowscale>
 
 options		CONFIG_WORKQUEUE	# <config_workqueue>
-
 
 #
 #	4.4 filesystems 
@@ -184,7 +178,6 @@ options		CONFIG_WORKQUEUE	# <config_workqueue>
 options		FFS			# Fast Filesystem Support	# <ffs>
 options		HFS			# HFS/HFS+ support		# <hfs>
 options		FIFO		# fifo support			# <fifo>
-options		UNION		# union_fs support		# <union>
 options		FDESC		# fdesc_fs support		# <fdesc>
 options		DEVFS		# devfs support			# <devfs>
 options		JOURNALING	# journaling support	# <journaling>
@@ -199,6 +192,7 @@ options		REV_ENDIAN_FS	# Reverse Endian FS		# <revfs>
 options		NAMEDSTREAMS	# named stream vnop support	# <namedstreams>
 options		CONFIG_VOLFS	# volfs path support (legacy)	# <config_volfs>
 options		CONFIG_IMGSRC_ACCESS # source of imageboot dmg	# <config_imgsrc_access>
+options		CONFIG_TRIGGERS	# trigger vnodes		# <config_triggers>
 
 #
 # NFS support
@@ -249,6 +243,7 @@ options			randomipid		# <inet,randomipid>
 
 options		ZLIB		# inflate/deflate support	# <zlib>
 
+options		IF_BRIDGE			# <if_bridge>
 
 makeoptions	LIBDRIVER = "libDriver_kern.o"			# <libdriver>
 makeoptions	LIBOBJC   = "libkobjc.o"			# <kernobjc>
@@ -292,7 +287,6 @@ options   CONFIG_KN_HASHSIZE=20		# <bsmall>
 options   CONFIG_VNODES=263168		# <large,xlarge>
 options   CONFIG_VNODES=263168		# <medium>
 options   CONFIG_VNODES=10240		# <small>
-options   CONFIG_VNODES=1024		# <xsmall>
 options   CONFIG_VNODES=750			# <bsmall>
 
 options   CONFIG_VNODE_FREE_MIN=500		# <large,xlarge>
@@ -397,6 +391,12 @@ options   CONFIG_MFCTBLSIZ=128			# <small,xsmall>
 options   CONFIG_MFCTBLSIZ=16			# <bsmall>
 
 #
+# configurable kernel message buffer size
+#
+options   CONFIG_MSG_BSIZE=4096			# <bsmall,small,xsmall>
+options   CONFIG_MSG_BSIZE=16384		# <medium,large,xlarge>
+
+#
 #  configurable kernel - use these options to strip strings from panic
 #  and printf calls.
 #  no_panic_str - saves around 50K of kernel footprint.
@@ -405,6 +405,11 @@ options   CONFIG_MFCTBLSIZ=16			# <bsmall>
 options   CONFIG_NO_PANIC_STRINGS		# <no_panic_str>
 options   CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
 options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
+
+#
+# use finer-grained lock groups for the proc subsystem
+#
+options   CONFIG_FINE_LOCK_GROUPS               # <medium,large,xlarge>
 
 #
 # configurable kernel - general switch to say we are building for an
@@ -433,6 +438,14 @@ options		CONFIG_CODE_DECRYPTION	# <config_embedded>
 
 options		CONFIG_PROTECT	# <config_protect>
 
+#
+# freeze - support app hibernation, used on embedded
+# CONFIG_FREEZE_SUSPENDED_MIN is the minimum number of suspended  
+# processes to be left unhibernated
+#
+options		CONFIG_FREEZE					# <freeze>
+
+options		CHECK_CS_VALIDATION_BITMAP			# <config_cs_validation_bitmap>
 
 #
 #  Ethernet (ARP)
@@ -463,6 +476,7 @@ pseudo-device  vndevice	   16       init    vndevice_init   # <xlarge>
 pseudo-device  vndevice		8       init    vndevice_init   # <large>
 pseudo-device  vndevice		4       init    vndevice_init   # <medium>
 pseudo-device  vndevice		3       init    vndevice_init   # <small>
+pseudo-device  vndevice		2       init    vndevice_init   # <xsmall>
 pseudo-device  vndevice		2       init    vndevice_init   # <bsmall>
 
 #

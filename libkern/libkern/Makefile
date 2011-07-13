@@ -11,21 +11,14 @@ INSTINC_SUBDIRS = \
         machine \
 	c++ \
 	crypto
-
-INSTINC_SUBDIRS_PPC = ${INSTINC_SUBDIRS} \
-        ppc
-
 INSTINC_SUBDIRS_I386 = ${INSTINC_SUBDIRS} \
         i386
-
 INSTINC_SUBDIRS_X86_64 = ${INSTINC_SUBDIRS} \
         i386
-
 INSTINC_SUBDIRS_ARM = ${INSTINC_SUBDIRS} \
         arm
 
 EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
-EXPINC_SUBDIRS_PPC = ${INSTINC_SUBDIRS_PPC}
 EXPINC_SUBDIRS_I386 = ${INSTINC_SUBDIRS_I386}
 EXPINC_SUBDIRS_X86_64 = ${INSTINC_SUBDIRS_X86_64}
 EXPINC_SUBDIRS_ARM = ${INSTINC_SUBDIRS_ARM}
@@ -42,15 +35,16 @@ DATAFILES = \
         OSTypes.h	\
 	locks.h		\
 	sysctl.h	\
+	tree.h		\
 	zconf.h		\
 	zlib.h
 
 PRIVATE_DATAFILES =         \
 	OSKextLibPrivate.h  \
-	OSKextLibPrivate.h  \
 	kext_request_keys.h \
 	mkext.h		    \
-	prelink.h
+	prelink.h           \
+	WKdm.h
 
 INSTALL_MI_LIST	=       \
 	OSByteOrder.h   \
@@ -65,6 +59,7 @@ INSTALL_MI_DIR = libkern
 INSTALL_MI_LCL_LIST =        \
 	${INSTALL_MI_LIST}   \
 	${PRIVATE_DATAFILES} \
+	tree.h		     \
 	kext_panic_report.h  \
 	OSCrossEndian.h
 

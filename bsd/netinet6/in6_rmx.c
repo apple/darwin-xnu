@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -108,8 +108,10 @@
 #include <kern/queue.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
+#include <sys/protosw.h>
 #include <sys/mbuf.h>
 #include <sys/syslog.h>
+#include <sys/mcache.h>
 #include <kern/lock.h>
 
 #include <net/if.h>
@@ -130,8 +132,8 @@
 
 extern int	in6_inithead(void **head, int off);
 static void	in6_rtqtimo(void *rock);
-static void in6_mtutimo(void *rock);
-extern int tvtohz(struct timeval *);
+static void	in6_mtutimo(void *rock);
+extern int	tvtohz(struct timeval *);
 
 static struct radix_node *in6_matroute_args(void *, struct radix_node_head *,
     rn_matchf_t *, void *);
@@ -195,11 +197,13 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 	 * should elaborate the code.
 	 */
 	if (rt->rt_flags & RTF_HOST) {
+		IFA_LOCK_SPIN(rt->rt_ifa);
 		if (IN6_ARE_ADDR_EQUAL(&satosin6(rt->rt_ifa->ifa_addr)
 					->sin6_addr,
 				       &sin6->sin6_addr)) {
 			rt->rt_flags |= RTF_LOCAL;
 		}
+		IFA_UNLOCK(rt->rt_ifa);
 	}
 
 	if (!rt->rt_rmx.rmx_mtu && !(rt->rt_rmx.rmx_locks & RTV_MTU)
@@ -214,8 +218,8 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		 * Find out if it is because of an
 		 * ARP entry and delete it if so.
 		 */
-		rt2 = rtalloc1_locked((struct sockaddr *)sin6, 0,
-				RTF_CLONING | RTF_PRCLONING);
+		rt2 = rtalloc1_scoped_locked((struct sockaddr *)sin6, 0,
+		    RTF_CLONING | RTF_PRCLONING, sin6_get_ifscope(rt_key(rt)));
 		if (rt2) {
 			RT_LOCK(rt2);
 			if ((rt2->rt_flags & RTF_LLINFO) &&
@@ -253,8 +257,8 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		 *	net route entry, 3ffe:0501:: -> if0.
 		 *	This case should not raise an error.
 		 */
-		rt2 = rtalloc1_locked((struct sockaddr *)sin6, 0,
-				RTF_CLONING | RTF_PRCLONING);
+		rt2 = rtalloc1_scoped_locked((struct sockaddr *)sin6, 0,
+		    RTF_CLONING | RTF_PRCLONING, sin6_get_ifscope(rt_key(rt)));
 		if (rt2) {
 			RT_LOCK(rt2);
 			if ((rt2->rt_flags & (RTF_CLONING|RTF_HOST|RTF_GATEWAY))
@@ -295,6 +299,24 @@ in6_deleteroute(void * v_arg, void *netmask_arg, struct radix_node_head *head)
 }
 
 /*
+ * Validate (unexpire) an expiring AF_INET6 route.
+ */
+struct radix_node *
+in6_validate(struct radix_node *rn)
+{
+	struct rtentry *rt = (struct rtentry *)rn;
+
+	RT_LOCK_ASSERT_HELD(rt);
+
+	/* This is first reference? */
+	if (rt->rt_refcnt == 0 && (rt->rt_flags & RTPRF_OURS)) {
+		rt->rt_flags &= ~RTPRF_OURS;
+		rt_setexpire(rt, 0);
+	}
+	return (rn);
+}
+
+/*
  * Similar to in6_matroute_args except without the leaf-matching parameters.
  */
 static struct radix_node *
@@ -313,16 +335,11 @@ in6_matroute_args(void *v_arg, struct radix_node_head *head,
     rn_matchf_t *f, void *w)
 {
 	struct radix_node *rn = rn_match_args(v_arg, head, f, w);
-	struct rtentry *rt = (struct rtentry *)rn;
 
-	/* This is first reference? */
-	if (rt != NULL) {
-		RT_LOCK_SPIN(rt);
-		if (rt->rt_refcnt == 0 && (rt->rt_flags & RTPRF_OURS)) {
-			rt->rt_flags &= ~RTPRF_OURS;
-			rt->rt_rmx.rmx_expire = 0;
-		}
-		RT_UNLOCK(rt);
+	if (rn != NULL) {
+		RT_LOCK_SPIN((struct rtentry *)rn);
+		in6_validate(rn);
+		RT_UNLOCK((struct rtentry *)rn);
 	}
 	return (rn);
 }
@@ -332,17 +349,17 @@ SYSCTL_DECL(_net_inet6_ip6);
 static int rtq_reallyold = 60*60;
 	/* one hour is ``really old'' */
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RTEXPIRE, rtexpire,
-	CTLFLAG_RW, &rtq_reallyold , 0, "");
+	CTLFLAG_RW | CTLFLAG_LOCKED, &rtq_reallyold , 0, "");
 
 static int rtq_minreallyold = 10;
 	/* never automatically crank down to less */
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RTMINEXPIRE, rtminexpire,
-	CTLFLAG_RW, &rtq_minreallyold , 0, "");
+	CTLFLAG_RW | CTLFLAG_LOCKED, &rtq_minreallyold , 0, "");
 
 static int rtq_toomany = 128;
 	/* 128 cached routes is ``too many'' */
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RTMAXCACHE, rtmaxcache,
-	CTLFLAG_RW, &rtq_toomany , 0, "");
+	CTLFLAG_RW | CTLFLAG_LOCKED, &rtq_toomany , 0, "");
 
 
 /*
@@ -394,12 +411,12 @@ in6_clsroute(struct radix_node *rn, __unused struct radix_node_head *head)
 			RT_LOCK(rt);
 		}
 	} else {
-		struct timeval timenow;
+		uint64_t timenow;
 
-		getmicrotime(&timenow);
+		timenow = net_uptime();
 		rt->rt_flags |= RTPRF_OURS;
-		rt->rt_rmx.rmx_expire =
-		    rt_expiry(rt, timenow.tv_sec, rtq_reallyold);
+		rt_setexpire(rt,
+		    rt_expiry(rt, timenow, rtq_reallyold));
 	}
 }
 
@@ -410,7 +427,7 @@ struct rtqk_arg {
 	int draining;
 	int killed;
 	int found;
-	time_t nextstop;
+	uint64_t nextstop;
 };
 
 /*
@@ -426,16 +443,17 @@ in6_rtqkill(struct radix_node *rn, void *rock)
 	struct rtqk_arg *ap = rock;
 	struct rtentry *rt = (struct rtentry *)rn;
 	int err;
-	struct timeval timenow;
+	uint64_t timenow;
 
-	getmicrotime(&timenow);
+	timenow = net_uptime();
 	lck_mtx_assert(rnh_lock, LCK_MTX_ASSERT_OWNED);
 
 	RT_LOCK(rt);
 	if (rt->rt_flags & RTPRF_OURS) {
 		ap->found++;
-
-		if (ap->draining || rt->rt_rmx.rmx_expire <= timenow.tv_sec ||
+		VERIFY(rt->rt_expire == 0 || rt->rt_rmx.rmx_expire != 0);
+		VERIFY(rt->rt_expire != 0 || rt->rt_rmx.rmx_expire == 0);
+		if (ap->draining || rt->rt_expire <= timenow ||
 		    ((rt->rt_flags & RTF_DYNAMIC) != 0 &&
 		    ip6_maxdynroutes >= 0 &&
 		    in6dynroutes > ip6_maxdynroutes / 2)) {
@@ -461,13 +479,13 @@ in6_rtqkill(struct radix_node *rn, void *rock)
 			}
 		} else {
 			if (ap->updating &&
-			    (unsigned)(rt->rt_rmx.rmx_expire - timenow.tv_sec) >
+			    (rt->rt_expire - timenow) >
 			    rt_expiry(rt, 0, rtq_reallyold)) {
-				rt->rt_rmx.rmx_expire = rt_expiry(rt,
-				    timenow.tv_sec, rtq_reallyold);
+				rt_setexpire(rt, rt_expiry(rt,
+				    timenow, rtq_reallyold));
 			}
 			ap->nextstop = lmin(ap->nextstop,
-					    rt->rt_rmx.rmx_expire);
+					    rt->rt_expire);
 			RT_UNLOCK(rt);
 		}
 	} else {
@@ -486,16 +504,16 @@ in6_rtqtimo(void *rock)
 	struct radix_node_head *rnh = rock;
 	struct rtqk_arg arg;
 	struct timeval atv;
-	static time_t last_adjusted_timeout = 0;
-	struct timeval timenow;
+	static uint64_t last_adjusted_timeout = 0;
+	uint64_t timenow;
 
 	lck_mtx_lock(rnh_lock);
 	/* Get the timestamp after we acquire the lock for better accuracy */
-	getmicrotime(&timenow);
+	timenow = net_uptime();
 
 	arg.found = arg.killed = 0;
 	arg.rnh = rnh;
-	arg.nextstop = timenow.tv_sec + rtq_timeout;
+	arg.nextstop = timenow + rtq_timeout;
 	arg.draining = arg.updating = 0;
 	rnh->rnh_walktree(rnh, in6_rtqkill, &arg);
 
@@ -508,14 +526,14 @@ in6_rtqtimo(void *rock)
 	 * hard.
 	 */
 	if ((arg.found - arg.killed > rtq_toomany)
-	   && (timenow.tv_sec - last_adjusted_timeout >= rtq_timeout)
+	   && ((timenow - last_adjusted_timeout) >= (uint64_t)rtq_timeout)
 	   && rtq_reallyold > rtq_minreallyold) {
 		rtq_reallyold = 2*rtq_reallyold / 3;
 		if (rtq_reallyold < rtq_minreallyold) {
 			rtq_reallyold = rtq_minreallyold;
 		}
 
-		last_adjusted_timeout = timenow.tv_sec;
+		last_adjusted_timeout = timenow;
 #if DIAGNOSTIC
 		log(LOG_DEBUG, "in6_rtqtimo: adjusted rtq_reallyold to %d",
 		    rtq_reallyold);
@@ -526,7 +544,7 @@ in6_rtqtimo(void *rock)
 	}
 
 	atv.tv_usec = 0;
-	atv.tv_sec = arg.nextstop - timenow.tv_sec;
+	atv.tv_sec = arg.nextstop - timenow;
 	lck_mtx_unlock(rnh_lock);
 	timeout(in6_rtqtimo, rock, tvtohz(&atv));
 }
@@ -536,7 +554,7 @@ in6_rtqtimo(void *rock)
  */
 struct mtuex_arg {
 	struct radix_node_head *rnh;
-	time_t nextstop;
+	uint64_t nextstop;
 };
 
 static int
@@ -544,21 +562,23 @@ in6_mtuexpire(struct radix_node *rn, void *rock)
 {
 	struct rtentry *rt = (struct rtentry *)rn;
 	struct mtuex_arg *ap = rock;
-	struct timeval timenow;
+	uint64_t timenow;
 
-	getmicrotime(&timenow);
+	timenow = net_uptime();
 
 	/* sanity */
 	if (!rt)
 		panic("rt == NULL in in6_mtuexpire");
 
 	RT_LOCK(rt);
-	if (rt->rt_rmx.rmx_expire && !(rt->rt_flags & RTF_PROBEMTU)) {
-		if (rt->rt_rmx.rmx_expire <= timenow.tv_sec) {
+	VERIFY(rt->rt_expire == 0 || rt->rt_rmx.rmx_expire != 0);
+	VERIFY(rt->rt_expire != 0 || rt->rt_rmx.rmx_expire == 0);
+	if (rt->rt_expire && !(rt->rt_flags & RTF_PROBEMTU)) {
+		if (rt->rt_expire <= timenow) {
 			rt->rt_flags |= RTF_PROBEMTU;
 		} else {
 			ap->nextstop = lmin(ap->nextstop,
-					rt->rt_rmx.rmx_expire);
+					rt->rt_expire);
 		}
 	}
 	RT_UNLOCK(rt);
@@ -574,24 +594,24 @@ in6_mtutimo(void *rock)
 	struct radix_node_head *rnh = rock;
 	struct mtuex_arg arg;
 	struct timeval atv;
-	struct timeval timenow;
+	uint64_t timenow, timo;
 
-	getmicrotime(&timenow);
+	timenow = net_uptime();
 
 	arg.rnh = rnh;
-	arg.nextstop = timenow.tv_sec + MTUTIMO_DEFAULT;
+	arg.nextstop = timenow + MTUTIMO_DEFAULT;
 	lck_mtx_lock(rnh_lock);
 	rnh->rnh_walktree(rnh, in6_mtuexpire, &arg);
 
 	atv.tv_usec = 0;
-	atv.tv_sec = arg.nextstop;
-	if (atv.tv_sec < timenow.tv_sec) {
+	timo = arg.nextstop;
+	if (timo < timenow) {
 #if DIAGNOSTIC
 		log(LOG_DEBUG, "IPv6: invalid mtu expiration time on routing table\n");
 #endif
-		arg.nextstop = timenow.tv_sec + 30;	/*last resort*/
+		arg.nextstop = timenow + 30;	/*last resort*/
 	}
-	atv.tv_sec -= timenow.tv_sec;
+	atv.tv_sec = timo - timenow;
 	lck_mtx_unlock(rnh_lock);
 	timeout(in6_mtutimo, rock, tvtohz(&atv));
 }

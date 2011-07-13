@@ -13,8 +13,6 @@
 #include <sys/param.h>
 #include <mach-o/ldsyms.h>
 
-extern int		g_is_under_rosetta;
-
 int machvm_tests( void * the_argp )
 {
 	int pagesize = getpagesize();
@@ -155,22 +153,20 @@ int machvm_tests( void * the_argp )
 		}
 	}		
 	
-	// do a vm_copy of our mach-o header and compare. Rosetta doesn't support this, though
-	if (!g_is_under_rosetta) {
+	// do a vm_copy of our mach-o header and compare.
 
-		kret = vm_write(mach_task_self(), (vm_address_t)regionbuffers[2],
+	kret = vm_write(mach_task_self(), (vm_address_t)regionbuffers[2],
 						(vm_offset_t)&_mh_execute_header, pagesize);
-		if (kret != KERN_SUCCESS) {
-			warnx("vm_write of %d pages failed: %d", 1, kret);
-			goto fail;
-		}
-		
-		if (_mh_execute_header.magic != *(uint32_t *)regionbuffers[2]) {
-			warnx("vm_write comparison failed");
-			kret = -1;
-			goto fail;
-		}	
+	if (kret != KERN_SUCCESS) {
+		warnx("vm_write of %d pages failed: %d", 1, kret);
+		goto fail;
 	}
+		
+	if (_mh_execute_header.magic != *(uint32_t *)regionbuffers[2]) {
+		warnx("vm_write comparison failed");
+		kret = -1;
+		goto fail;
+	}	
 	
 	// check that the vm_protects above worked
 	{
@@ -180,8 +176,11 @@ int machvm_tests( void * the_argp )
 		vm_region_basic_info_t basic = (vm_region_basic_info_t)_basic;
 		int _basic64[VM_REGION_BASIC_INFO_COUNT_64];
 		vm_region_basic_info_64_t basic64 = (vm_region_basic_info_64_t)_basic64;
+		int _submap[VM_REGION_SUBMAP_INFO_COUNT];
+		vm_region_submap_info_t submap = (vm_region_submap_info_t)_submap;
 		mach_msg_type_number_t	infocnt;
 		mach_port_t	objname;
+		natural_t nesting_depth = 0;
 		
 #if !__LP64__
 		infocnt = VM_REGION_BASIC_INFO_COUNT;
@@ -242,16 +241,115 @@ int machvm_tests( void * the_argp )
 		
 #if !__LP64__
 		// try to compare some stuff. Particularly important for fields after offset
-		if (!g_is_under_rosetta) {
-			if (basic->offset != basic64->offset ||
-				basic->behavior != basic64->behavior ||
-				basic->user_wired_count != basic64->user_wired_count) {
-				warnx("vm_region and vm_region_64 did not agree");
-				kret = -1;
-				goto fail;			
-			}
-		}		
+		if (basic->offset != basic64->offset ||
+			basic->behavior != basic64->behavior ||
+			basic->user_wired_count != basic64->user_wired_count) {
+			warnx("vm_region and vm_region_64 did not agree");
+			kret = -1;
+			goto fail;			
+		}
 #endif
+
+#if !__LP64__
+		infocnt = VM_REGION_SUBMAP_INFO_COUNT;
+		kret = vm_region_recurse(mach_task_self(), &addr, &size,
+								 &nesting_depth, (vm_region_info_t)submap,
+								 &infocnt);
+		if (kret != KERN_SUCCESS) {
+			warnx("vm_region_recurse() failed: %d", kret);
+			goto fail;
+		}
+
+		if (VM_REGION_SUBMAP_INFO_COUNT != infocnt) {
+			warnx("vm_region_recurse() returned a bad info count");
+			kret = -1;
+			goto fail;
+		}
+
+		if (submap->pages_dirtied != 10) {
+			warnx("vm_region_recurse() returned bage pages_dirtied");
+			kret = -1;
+			goto fail;
+		}
+
+#endif /* !__LP64__ */
+
+	}
+
+	// exercise mach_make_memory_entry/vm_map
+	{
+		vm_address_t addr1, addr2;
+		vm_size_t size;
+		mach_port_t mem_handle = MACH_PORT_NULL;
+
+		addr1 = 0;
+		size = 11*pagesize;
+		kret = vm_allocate(mach_task_self(), &addr1, size, VM_FLAGS_ANYWHERE);
+		if (kret != KERN_SUCCESS) {
+			warnx("vm_allocate failed: %d", kret);
+			kret = -1;
+			goto fail;
+		}
+
+		*(uint32_t *)(uintptr_t)addr1 = 'test';
+
+		kret = mach_make_memory_entry(mach_task_self(),
+									  &size, addr1, VM_PROT_DEFAULT,
+									  &mem_handle, MACH_PORT_NULL);
+		if (kret != KERN_SUCCESS) {
+			warnx("mach_make_memory_entry failed: %d", kret);
+			kret = -1;
+			goto fail;
+		}
+
+		kret = vm_deallocate(mach_task_self(), addr1, size);
+		if (kret != KERN_SUCCESS) {
+			warnx("vm_deallocate failed: %d", kret);
+			kret = -1;
+			goto fail;
+		}
+
+		addr2 = 0;
+		kret = vm_map(mach_task_self(), &addr2, size, 0, VM_FLAGS_ANYWHERE,
+					  mem_handle, 0, FALSE, VM_PROT_DEFAULT, VM_PROT_DEFAULT,
+					  VM_INHERIT_NONE);
+		if (kret != KERN_SUCCESS) {
+			warnx("vm_map failed: %d", kret);
+			kret = -1;
+			goto fail;
+		}
+
+		if (*(uint32_t *)(uintptr_t)addr2 != 'test') {
+			warnx("mapped data mismatch");
+			kret = -1;
+			goto fail;
+		}
+
+		kret = vm_deallocate(mach_task_self(), addr2, size);
+		if (kret != KERN_SUCCESS) {
+			warnx("vm_deallocate failed: %d", kret);
+			kret = -1;
+			goto fail;
+		}
+
+		kret = mach_port_mod_refs(mach_task_self(), mem_handle, MACH_PORT_RIGHT_SEND, -1);
+		if (kret != KERN_SUCCESS) {
+			warnx("mach_port_mod_refs(-1) failed: %d", kret);
+			kret = -1;
+			goto fail;
+		}
+
+		addr2 = 0;
+		kret = vm_map(mach_task_self(), &addr2, size, 0, VM_FLAGS_ANYWHERE,
+					  mem_handle, 0, FALSE, VM_PROT_DEFAULT, VM_PROT_DEFAULT,
+					  VM_INHERIT_NONE);
+		if (kret == KERN_SUCCESS) {
+			warnx("vm_map succeeded when it should not have");
+			kret = -1;
+			goto fail;
+		}
+
+		kret = KERN_SUCCESS;
 	}
 	
 fail:

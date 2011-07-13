@@ -42,6 +42,7 @@
 
 #ifndef _IP_FW_H
 #define _IP_FW_H
+#ifdef __APPLE_API_OBSOLETE
 
 #include <sys/appleapiopts.h>
 
@@ -324,4 +325,5 @@ extern struct ipfw_flow_id last_pkt ;
 #endif /* KERNEL_PRIVATE */
 
 #endif /* !IPFW2 */
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _IP_FW_H */

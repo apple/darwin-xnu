@@ -46,15 +46,16 @@ extern unsigned int disable_serial_output;
 
 int _serial_getc(int unit, int line, boolean_t wait, boolean_t raw);
 
-boolean_t console_is_serial(void);
-int switch_to_serial_console(void);
-int switch_to_video_console(void);
-void switch_to_old_console(int old_console);
-
 struct console_ops {
 	void	(*putc)(int, int, int);
 	int	(*getc)(int, int, boolean_t, boolean_t);
 };
+
+boolean_t console_is_serial(void);
+int switch_to_serial_console(void);
+int switch_to_video_console(void);
+void switch_to_old_console(int old_console);
+void console_set_serial_ops( struct console_ops *newops );
 
 #define SERIAL_CONS_OPS 0
 #define VC_CONS_OPS 1

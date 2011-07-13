@@ -71,6 +71,7 @@ void	mac_zfree	(zone_t zone, void *elem);
 #define Z_COLLECT       2       /* Make zone collectable        */
 #define Z_EXPAND        3       /* Make zone expandable         */
 #define Z_FOREIGN       4       /* Allow collectable zone to contain foreign elements */
+#define Z_CALLERACCT	5	/* Account alloc/free against the caller */
 
 #endif  /* __APPLE_API_EVOLVING */
 #endif	/* _SECURITY_MAC_ALLOC_H_ */

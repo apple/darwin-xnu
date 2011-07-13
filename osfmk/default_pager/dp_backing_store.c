@@ -163,11 +163,15 @@ unsigned int	maximum_pages_free = 0;
 ipc_port_t	min_pages_trigger_port = NULL;
 ipc_port_t	max_pages_trigger_port = NULL;
 
+#if CONFIG_FREEZE
+boolean_t	use_emergency_swap_file_first = TRUE;
+#else
 boolean_t	use_emergency_swap_file_first = FALSE;
+#endif
 boolean_t	bs_low = FALSE;
 int		backing_store_release_trigger_disable = 0;
 boolean_t	backing_store_stop_compaction = FALSE;
-
+boolean_t	backing_store_abort_compaction = FALSE;
 
 /* Have we decided if swap needs to be encrypted yet ? */
 boolean_t	dp_encryption_inited = FALSE;
@@ -175,7 +179,6 @@ boolean_t	dp_encryption_inited = FALSE;
 boolean_t	dp_encryption = FALSE;
 
 boolean_t	dp_isssd = FALSE;
-
 
 /*
  * Object sizes are rounded up to the next power of 2,
@@ -205,6 +208,15 @@ unsigned  int	dp_pages_free = 0;
 unsigned  int	dp_pages_reserve = 0;
 unsigned  int	cluster_transfer_minimum = 100;
 
+/* 
+ * Trim state 
+ */
+struct ps_vnode_trim_data {
+	struct vnode *vp;
+	dp_offset_t   offset;
+	dp_size_t     length;
+};
+
 /* forward declarations */
 kern_return_t ps_write_file(paging_segment_t, upl_t, upl_offset_t, dp_offset_t, unsigned int, int);	/* forward */
 kern_return_t ps_read_file (paging_segment_t, upl_t, upl_offset_t, dp_offset_t, unsigned int, unsigned int *, int);	/* forward */
@@ -226,6 +238,10 @@ vs_map_t vs_get_map_entry(
 
 kern_return_t
 default_pager_backing_store_delete_internal( MACH_PORT_FACE );
+
+static inline void ps_vnode_trim_init(struct ps_vnode_trim_data *data);
+static inline void ps_vnode_trim_now(struct ps_vnode_trim_data *data);
+static inline void ps_vnode_trim_more(struct ps_vnode_trim_data *data, struct vs_map *map, unsigned int shift, dp_size_t length);
 
 default_pager_thread_t *
 get_read_buffer( void )
@@ -441,7 +457,7 @@ backing_store_lookup(
 
 	if ((port == MACH_PORT_NULL) || port_is_vs(port))
 */
-	if ((port == MACH_PORT_NULL))
+	if (port == MACH_PORT_NULL)
 		return BACKING_STORE_NULL;
 
 	BSL_LOCK();
@@ -714,6 +730,10 @@ ps_delete(
 	if ((vs_count != 0) && (vs != NULL))
 		vs->vs_async_pending += 1;  /* hold parties calling  */
 					    /* vs_async_wait */
+
+	if (bs_low == FALSE)
+		backing_store_abort_compaction = FALSE;
+
 	VS_UNLOCK(vs);
 	VSL_UNLOCK();
 	while((vs_count != 0) && (vs != NULL)) {
@@ -736,13 +756,19 @@ ps_delete(
 			vm_object_t	transfer_object;
 			unsigned int	count;
 			upl_t		upl;
+			int		upl_flags;
 
 			transfer_object = vm_object_allocate((vm_object_size_t)VM_SUPER_CLUSTER);
 			count = 0;
+			upl_flags = (UPL_NO_SYNC | UPL_CLEAN_IN_PLACE |
+				     UPL_SET_LITE | UPL_SET_INTERNAL);
+			if (dp_encryption) {
+				/* mark the pages as "encrypted" when they come in */
+				upl_flags |= UPL_ENCRYPT;
+			}
 			error = vm_object_upl_request(transfer_object, 
 				(vm_object_offset_t)0, VM_SUPER_CLUSTER,
-				&upl, NULL, &count,
-				UPL_NO_SYNC | UPL_CLEAN_IN_PLACE | UPL_SET_LITE | UPL_SET_INTERNAL);
+				&upl, NULL, &count, upl_flags);
 
 			if(error == KERN_SUCCESS) {
 				error = ps_vstruct_transfer_from_segment(
@@ -754,7 +780,7 @@ ps_delete(
 			}
 			vm_object_deallocate(transfer_object);
 		}
-		if(error || current_thread_aborted() || backing_store_stop_compaction) {
+		if(error || current_thread_aborted()) {
 			VS_LOCK(vs);
 			vs->vs_async_pending -= 1;  /* release vs_async_wait */
 			if (vs->vs_async_pending == 0 && vs->vs_waiting_async) {
@@ -1408,6 +1434,7 @@ ps_select_segment(
 					trigger = min_pages_trigger_port;
 					min_pages_trigger_port = NULL;
 					bs_low = TRUE;
+					backing_store_abort_compaction = TRUE;
 				}
 				lps = ps;
 			} 
@@ -1428,6 +1455,8 @@ ps_select_segment(
 		PSL_UNLOCK();
 
 		if (trigger != IP_NULL) {
+			dprintf(("ps_select_segment - send HI_WAT_ALERT\n"));
+
 			default_pager_space_alert(trigger, HI_WAT_ALERT);
 			ipc_port_release_send(trigger);
 		}
@@ -1497,6 +1526,8 @@ ps_select_segment(
 							minimum_pages_remaining)) {
 							trigger = min_pages_trigger_port;
 							min_pages_trigger_port = NULL;
+							bs_low = TRUE;
+							backing_store_abort_compaction = TRUE;
 						}
 						PS_UNLOCK(ps);
 						/*
@@ -1506,6 +1537,8 @@ ps_select_segment(
 						PSL_UNLOCK();
 						
 						if (trigger != IP_NULL) {
+							dprintf(("ps_select_segment - send HI_WAT_ALERT\n"));
+
 							default_pager_space_alert(
 								trigger,
 								HI_WAT_ALERT);
@@ -1592,10 +1625,14 @@ retry:
 				(dp_pages_free < minimum_pages_remaining)) {
 			trigger = min_pages_trigger_port;
 			min_pages_trigger_port = NULL;
+			bs_low = TRUE;
+			backing_store_abort_compaction = TRUE;
 		}
 		PSL_UNLOCK();
 		PS_UNLOCK(ps);
 		if (trigger != IP_NULL) {
+			dprintf(("ps_allocate_cluster - send HI_WAT_ALERT\n"));
+
 			default_pager_space_alert(trigger, HI_WAT_ALERT);
 			ipc_port_release_send(trigger);
 		}
@@ -1688,9 +1725,12 @@ retry:
 			trigger = min_pages_trigger_port;
 			min_pages_trigger_port = NULL;
 			bs_low = TRUE;
+			backing_store_abort_compaction = TRUE;
 		}
 		PSL_UNLOCK();
 		if (trigger != IP_NULL) {
+			dprintf(("ps_allocate_cluster - send HI_WAT_ALERT\n"));
+
 			default_pager_space_alert(trigger, HI_WAT_ALERT);
 			ipc_port_release_send(trigger);
 		}
@@ -1780,10 +1820,23 @@ ps_dealloc_vsmap(
 	dp_size_t	size)
 {
 	unsigned int i;
-	for (i = 0; i < size; i++)
-		if (!VSM_ISCLR(vsmap[i]) && !VSM_ISERR(vsmap[i]))
+	struct ps_vnode_trim_data trim_data;
+
+	ps_vnode_trim_init(&trim_data);
+
+	for (i = 0; i < size; i++) {
+		if (!VSM_ISCLR(vsmap[i]) && !VSM_ISERR(vsmap[i])) {
+			ps_vnode_trim_more(&trim_data,
+					      &vsmap[i],
+					      VSM_PS(vsmap[i])->ps_clshift,
+					      vm_page_size << VSM_PS(vsmap[i])->ps_clshift);
 			ps_deallocate_cluster(VSM_PS(vsmap[i]),
 					      VSM_CLOFF(vsmap[i]));
+		} else {
+			ps_vnode_trim_now(&trim_data);
+		}
+	}
+	ps_vnode_trim_now(&trim_data);
 }
 
 void
@@ -1824,6 +1877,134 @@ ps_vstruct_dealloc(
 	bs_commit(- vs->vs_size);
 
 	zfree(vstruct_zone, vs);
+}
+
+void
+ps_vstruct_reclaim(
+	vstruct_t vs,
+	boolean_t return_to_vm,
+	boolean_t reclaim_backing_store)
+{
+	unsigned int	i, j;
+//	spl_t	s;
+	unsigned int	request_flags;
+	struct vs_map	*vsmap;
+	boolean_t	vsmap_all_clear, vsimap_all_clear;
+	struct vm_object_fault_info fault_info;
+	int		clmap_off;
+	unsigned int	vsmap_size;
+	kern_return_t	kr;
+
+	request_flags = UPL_NO_SYNC | UPL_RET_ONLY_ABSENT | UPL_SET_LITE;
+	if (reclaim_backing_store) {
+#if USE_PRECIOUS
+		request_flags |= UPL_PRECIOUS | UPL_CLEAN_IN_PLACE;
+#else	/* USE_PRECIOUS */
+		request_flags |= UPL_REQUEST_SET_DIRTY;
+#endif	/* USE_PRECIOUS */
+	}
+
+	VS_MAP_LOCK(vs);
+
+	fault_info.cluster_size = VM_SUPER_CLUSTER;
+	fault_info.behavior = VM_BEHAVIOR_SEQUENTIAL;
+	fault_info.user_tag = 0;
+	fault_info.lo_offset = 0;
+	fault_info.hi_offset = ptoa_32(vs->vs_size << vs->vs_clshift);
+	fault_info.io_sync = reclaim_backing_store;
+
+	/*
+	 * If this is an indirect structure, then we walk through the valid
+	 * (non-zero) indirect pointers and deallocate the clusters
+	 * associated with each used map entry (via ps_dealloc_vsmap).
+	 * When all of the clusters in an indirect block have been
+	 * freed, we deallocate the block.  When all of the indirect
+	 * blocks have been deallocated we deallocate the memory
+	 * holding the indirect pointers.
+	 */
+	if (vs->vs_indirect) {
+		vsimap_all_clear = TRUE;
+		for (i = 0; i < INDIRECT_CLMAP_ENTRIES(vs->vs_size); i++) {
+			vsmap = vs->vs_imap[i];
+			if (vsmap == NULL)
+				continue;
+			/* loop on clusters in this indirect map */
+			clmap_off = (vm_page_size * CLMAP_ENTRIES *
+				     VSCLSIZE(vs) * i);
+			if (i+1 == INDIRECT_CLMAP_ENTRIES(vs->vs_size))
+				vsmap_size = vs->vs_size - (CLMAP_ENTRIES * i);
+			else
+				vsmap_size = CLMAP_ENTRIES;
+			vsmap_all_clear = TRUE;
+			if (return_to_vm) {
+				for (j = 0; j < vsmap_size;) {
+					if (VSM_ISCLR(vsmap[j]) ||
+					    VSM_ISERR(vsmap[j])) {
+						j++;
+						clmap_off += vm_page_size * VSCLSIZE(vs);
+						continue;
+					}
+					VS_MAP_UNLOCK(vs);
+					kr = pvs_cluster_read(
+						vs,
+						clmap_off,
+						(dp_size_t) -1, /* read whole cluster */
+						&fault_info);
+					VS_MAP_LOCK(vs); /* XXX what if it changed ? */
+					if (kr != KERN_SUCCESS) {
+						vsmap_all_clear = FALSE;
+						vsimap_all_clear = FALSE;
+					}
+				}
+			}
+			if (vsmap_all_clear) {
+				ps_dealloc_vsmap(vsmap, CLMAP_ENTRIES);
+				kfree(vsmap, CLMAP_THRESHOLD);
+				vs->vs_imap[i] = NULL;
+			}
+		}
+		if (vsimap_all_clear) {
+//			kfree(vs->vs_imap, INDIRECT_CLMAP_SIZE(vs->vs_size));
+		}
+	} else {
+		/*
+		 * Direct map.  Free used clusters, then memory.
+		 */
+		vsmap = vs->vs_dmap;
+		if (vsmap == NULL) {
+			goto out;
+		}
+		vsmap_all_clear = TRUE;
+		/* loop on clusters in the direct map */
+		if (return_to_vm) {
+			for (j = 0; j < vs->vs_size;) {
+				if (VSM_ISCLR(vsmap[j]) ||
+				    VSM_ISERR(vsmap[j])) {
+					j++;
+					continue;
+				}
+				clmap_off = vm_page_size * (j << vs->vs_clshift);
+				VS_MAP_UNLOCK(vs);
+				kr = pvs_cluster_read(
+					vs,
+					clmap_off,
+					(dp_size_t) -1, /* read whole cluster */
+					&fault_info);
+				VS_MAP_LOCK(vs); /* XXX what if it changed ? */
+				if (kr != KERN_SUCCESS) {
+					vsmap_all_clear = FALSE;
+				} else {
+//					VSM_CLR(vsmap[j]);
+				}
+			}
+		}
+		if (vsmap_all_clear) {
+			ps_dealloc_vsmap(vs->vs_dmap, vs->vs_size);
+//			kfree(vs->vs_dmap, CLMAP_SIZE(vs->vs_size));
+		}
+	}
+out:
+	VS_MAP_UNLOCK(vs);
 }
 
 int ps_map_extend(vstruct_t, unsigned int);	/* forward */
@@ -2156,6 +2337,9 @@ ps_clunmap(
 {
 	dp_offset_t		cluster; /* The cluster number of offset */
 	struct vs_map		*vsmap;
+	struct ps_vnode_trim_data trim_data;
+
+	ps_vnode_trim_init(&trim_data);
 
 	VS_MAP_LOCK(vs);
 
@@ -2173,11 +2357,13 @@ ps_clunmap(
 		else
 			vsmap = vs->vs_dmap;
 		if (vsmap == NULL) {
+			ps_vnode_trim_now(&trim_data);
 			VS_MAP_UNLOCK(vs);
 			return;
 		}
 		vsmap += cluster%CLMAP_ENTRIES;
 		if (VSM_ISCLR(*vsmap)) {
+			ps_vnode_trim_now(&trim_data);
 			length -= vm_page_size;
 			offset += vm_page_size;
 			continue;
@@ -2206,12 +2392,19 @@ ps_clunmap(
 		/*
 		 * If map entry is empty, clear and deallocate cluster.
 		 */
-		if (!VSM_ALLOC(*vsmap)) {
+		if (!VSM_BMAP(*vsmap)) {
+			ps_vnode_trim_more(&trim_data, 
+					      vsmap,
+					      vs->vs_clshift,
+					      VSCLSIZE(vs) * vm_page_size);
 			ps_deallocate_cluster(VSM_PS(*vsmap),
 					      VSM_CLOFF(*vsmap));
 			VSM_CLR(*vsmap);
+		} else {
+			ps_vnode_trim_now(&trim_data);
 		}
 	}
+	ps_vnode_trim_now(&trim_data);
 
 	VS_MAP_UNLOCK(vs);
 }
@@ -2670,16 +2863,31 @@ pvs_object_data_provided(
 	ASSERT(size > 0);
 	GSTAT(global_stats.gs_pages_in += atop_32(size));
 
-
-#if	USE_PRECIOUS
-	ps_clunmap(vs, offset, size);
-#endif	/* USE_PRECIOUS */
+/* check upl iosync flag instead of using RECLAIM_SWAP*/
+#if	RECLAIM_SWAP
+	if (size != upl->size) {
+		upl_abort(upl, UPL_ABORT_ERROR);
+		upl_deallocate(upl);
+	} else {
+		ps_clunmap(vs, offset, size);
+		upl_commit(upl, NULL, 0);
+		upl_deallocate(upl);
+	}
+#endif	/* RECLAIM_SWAP */
 
 }
 
 static memory_object_offset_t   last_start;
 static vm_size_t		last_length;
 
+/*
+ * A "cnt" of 0 means that the caller just wants to check if the page at
+ * offset "vs_offset" exists in the backing store.  That page hasn't been
+ * prepared, so no need to release it.
+ *
+ * A "cnt" of -1 means that the caller wants to bring back from the backing
+ * store all existing pages in the cluster containing "vs_offset".
+ */
 kern_return_t
 pvs_cluster_read(
 	vstruct_t	vs,
@@ -2707,16 +2915,32 @@ pvs_cluster_read(
 	memory_object_offset_t	cluster_start;
 	vm_size_t		cluster_length;
 	uint32_t		io_streaming;
+	int			i;
+	boolean_t		io_sync = FALSE;
 
 	pages_in_cl = 1 << vs->vs_clshift;
 	cl_size = pages_in_cl * vm_page_size;
 	cl_mask = cl_size - 1;
 
-#if	USE_PRECIOUS
-	request_flags = UPL_NO_SYNC |  UPL_CLEAN_IN_PLACE | UPL_PRECIOUS | UPL_RET_ONLY_ABSENT | UPL_SET_LITE;
-#else
-	request_flags = UPL_NO_SYNC |  UPL_CLEAN_IN_PLACE | UPL_RET_ONLY_ABSENT | UPL_SET_LITE;
-#endif
+	request_flags = UPL_NO_SYNC | UPL_RET_ONLY_ABSENT | UPL_SET_LITE;
+
+	if (cnt == (dp_size_t) -1) {
+		/*
+		 * We've been called from ps_vstruct_reclaim() to move all
+		 * the object's swapped pages back to VM pages.
+		 * This can put memory pressure on the system, so we do want
+		 * to wait for free pages, to avoid getting in the way of the
+		 * vm_pageout_scan() thread.
+		 * Let's not use UPL_NOBLOCK in this case.
+		 */
+		vs_offset &= ~cl_mask;
+		i = pages_in_cl;
+	} else {
+		i = 1;
+		request_flags |= UPL_NOBLOCK;
+	}
+
+again:
 	cl_index = (vs_offset & cl_mask) / vm_page_size;
 
         if ((ps_clmap(vs, vs_offset & ~cl_mask, &clmap, CL_FIND, 0, 0) == (dp_offset_t)-1) ||
@@ -2734,6 +2958,16 @@ pvs_cluster_read(
 			 * Just let the caller know we don't have that page.
 			 */
 			return KERN_FAILURE;
+		}
+		if (cnt == (dp_size_t) -1) {
+			i--;
+			if (i == 0) {
+				/* no more pages in this cluster */
+				return KERN_FAILURE;
+			}
+			/* try the next page in this cluster */
+			vs_offset += vm_page_size;
+			goto again;
 		}
 
 		page_list_count = 0;
@@ -2762,6 +2996,24 @@ pvs_cluster_read(
 		return KERN_SUCCESS;
 	}
 		
+	if(((vm_object_fault_info_t)fault_info)->io_sync == TRUE ) {
+		io_sync = TRUE;
+	} else {
+#if RECLAIM_SWAP
+		io_sync = TRUE;
+#endif	/* RECLAIM_SWAP */
+	}
+
+	if( io_sync == TRUE ) {
+
+		io_flags |= UPL_IOSYNC | UPL_NOCOMMIT;
+#if USE_PRECIOUS
+		request_flags |= UPL_PRECIOUS | UPL_CLEAN_IN_PLACE;
+#else	/* USE_PRECIOUS */
+		request_flags |= UPL_REQUEST_SET_DIRTY;
+#endif	/* USE_PRECIOUS */
+	}
+
 	assert(dp_encryption_inited);
 	if (dp_encryption) {
 		/*
@@ -2770,6 +3022,7 @@ pvs_cluster_read(
 		 * decryption.
 		 */
 		request_flags |= UPL_ENCRYPT;
+		io_flags |= UPL_PAGING_ENCRYPTED;
 	}
 	orig_vs_offset = vs_offset;
 
@@ -2970,7 +3223,7 @@ pvs_cluster_read(
 			memory_object_super_upl_request(vs->vs_control, (memory_object_offset_t)vs_offset,
 							xfer_size, xfer_size, 
 							&upl, NULL, &page_list_count,
-							request_flags | UPL_SET_INTERNAL | UPL_NOBLOCK);
+							request_flags | UPL_SET_INTERNAL);
 
 			error = ps_read_file(psp[beg_pseg], 
 					     upl, (upl_offset_t) 0, 
@@ -3091,15 +3344,33 @@ vs_cluster_write(
 	boolean_t	minimal_clustering = FALSE;
 	boolean_t	found_dirty;
 
+	if (!dp_encryption_inited) {
+		/*
+		 * ENCRYPTED SWAP:
+		 * Once we've started using swap, we
+		 * can't change our mind on whether
+		 * it needs to be encrypted or
+		 * not.
+		 */
+		dp_encryption_inited = TRUE;
+	}
+	if (dp_encryption) {
+		/*
+		 * ENCRYPTED SWAP:
+		 * the UPL will need to be encrypted...
+		 */
+		flags |= UPL_PAGING_ENCRYPTED;
+	}
+
 	pages_in_cl = 1 << vs->vs_clshift;
 	cl_size = pages_in_cl * vm_page_size;
 	
 #if CONFIG_FREEZE
 	minimal_clustering = TRUE;
-#endif
+#else
 	if (dp_isssd == TRUE)
 		minimal_clustering = TRUE;
-
+#endif
 	if (!dp_internal) {
 		unsigned int page_list_count;
 		int	     request_flags;
@@ -3124,16 +3395,6 @@ vs_cluster_write(
 			        UPL_RET_ONLY_DIRTY | UPL_COPYOUT_FROM | 
 				UPL_NO_SYNC | UPL_SET_INTERNAL | UPL_SET_LITE;
 
-		if (!dp_encryption_inited) {
-			/*
-			 * ENCRYPTED SWAP:
-			 * Once we've started using swap, we
-			 * can't change our mind on whether
-			 * it needs to be encrypted or
-			 * not.
-			 */
-			dp_encryption_inited = TRUE;
-		}
 		if (dp_encryption) {
 			/*
 			 * ENCRYPTED SWAP:
@@ -3143,6 +3404,7 @@ vs_cluster_write(
 			request_flags |= UPL_ENCRYPT;
 			flags |= UPL_PAGING_ENCRYPTED;
 		}
+
 		page_list_count = 0;
 		memory_object_super_upl_request(vs->vs_control,
 				(memory_object_offset_t)offset,
@@ -3168,6 +3430,7 @@ vs_cluster_write(
 		found_dirty = TRUE;
 
 		for (seg_index = 0, transfer_size = upl->size; transfer_size > 0; ) {
+
 			unsigned int	seg_pgcnt;
 
 			seg_pgcnt = seg_size / PAGE_SIZE;
@@ -3208,7 +3471,7 @@ vs_cluster_write(
 				page_index += seg_pgcnt;
 			        transfer_size -= seg_size;
 				upl_offset_aligned += cl_size;
-				seg_size    = cl_size;
+				seg_size = cl_size;
 				seg_index++;
 			} else
 			        transfer_size = 0;
@@ -3588,6 +3851,14 @@ vs_changed:
 				vs->vs_xfer_pending = FALSE;
 				VS_UNLOCK(vs);
 				vs_finish_write(vs);
+
+				if (backing_store_abort_compaction || backing_store_stop_compaction) {
+					backing_store_abort_compaction = FALSE;
+					dprintf(("ps_vstruct_transfer_from_segment - ABORTED\n"));
+					return KERN_FAILURE;
+				}
+				vnode_pager_throttle();
+
 				VS_LOCK(vs);
 				vs->vs_xfer_pending = TRUE;
 				vs_wait_for_sync_writers(vs);
@@ -3810,7 +4081,7 @@ vs_cluster_transfer(
 			/* NEED TO ISSUE WITH SYNC & NO COMMIT */
 			error = ps_read_file(ps, upl, (upl_offset_t) 0, actual_offset, 
 					size, &residual, 
-					(UPL_IOSYNC | UPL_NOCOMMIT));
+					(UPL_IOSYNC | UPL_NOCOMMIT | (dp_encryption ? UPL_PAGING_ENCRYPTED : 0)));
 		}
 
 		read_vsmap = *vsmap_ptr;
@@ -4028,12 +4299,17 @@ default_pager_add_file(
 	 * emergency segment will be back to its original state of
 	 * online but not activated (till it's needed the next time).
 	 */
-	ps = paging_segments[EMERGENCY_PSEG_INDEX];
-	if(IS_PS_EMERGENCY_SEGMENT(ps) && IS_PS_OK_TO_USE(ps)) {
-		if(default_pager_backing_store_delete(emergency_segment_backing_store)) {
-			dprintf(("Failed to recover emergency paging segment\n"));
-		} else {
-			dprintf(("Recovered emergency paging segment\n"));
+#if CONFIG_FREEZE
+	if (!vm_freeze_enabled)
+#endif
+	{
+		ps = paging_segments[EMERGENCY_PSEG_INDEX];
+		if(IS_PS_EMERGENCY_SEGMENT(ps) && IS_PS_OK_TO_USE(ps)) {
+			if(default_pager_backing_store_delete(emergency_segment_backing_store)) {
+				dprintf(("Failed to recover emergency paging segment\n"));
+			} else {
+				dprintf(("Recovered emergency paging segment\n"));
+			}
 		}
 	}
 	
@@ -4123,6 +4399,49 @@ ps_write_file(
 	return result;
 }
 
+static inline void ps_vnode_trim_init(struct ps_vnode_trim_data *data)
+{
+#if CONFIG_EMBEDDED
+	data->vp = NULL;
+	data->offset = 0;
+	data->length = 0;
+#else
+#pragma unused(data)
+#endif
+}
+
+static inline void ps_vnode_trim_now(struct ps_vnode_trim_data *data)
+{
+#if CONFIG_EMBEDDED
+	if ((data->vp) != NULL) {
+		vnode_trim(data->vp,
+				   data->offset,
+				   data->length);
+		ps_vnode_trim_init(data); 
+	}
+#else
+#pragma unused(data)
+#endif
+}
+
+static inline void ps_vnode_trim_more(struct ps_vnode_trim_data *data, struct vs_map *map, unsigned int shift, dp_size_t length)
+{
+#if CONFIG_EMBEDDED
+	struct vnode *vp = VSM_PS(*map)->ps_vnode;
+	dp_offset_t offset = ptoa_32(VSM_CLOFF(*map)) << shift;
+
+	if ((vp != data->vp) || (offset) != (data->offset + data->length)) {
+		ps_vnode_trim_now(data);
+		data->vp = vp;
+		data->offset = offset;
+		data->length = 0;
+	}
+	data->length += (length);
+#else
+#pragma unused(data, map, shift, length)
+#endif
+}
+
 kern_return_t
 default_pager_triggers( __unused MACH_PORT_FACE default_pager,
 	int		hi_wat,
@@ -4130,7 +4449,7 @@ default_pager_triggers( __unused MACH_PORT_FACE default_pager,
 	int		flags,
 	MACH_PORT_FACE  trigger_port)
 {
-	MACH_PORT_FACE release;
+	MACH_PORT_FACE release = IPC_PORT_NULL;
 	kern_return_t kr;
 	clock_sec_t now;
 	clock_nsec_t nanoseconds_dummy;
@@ -4159,15 +4478,42 @@ default_pager_triggers( __unused MACH_PORT_FACE default_pager,
 		}
 	} else if (flags == HI_WAT_ALERT) {
 		release = min_pages_trigger_port;
-		min_pages_trigger_port = trigger_port;
-		minimum_pages_remaining = hi_wat/vm_page_size;
-		bs_low = FALSE;
-		kr = KERN_SUCCESS;
+#if CONFIG_FREEZE
+		/* High and low water signals aren't applicable when freeze is */
+		/* enabled, so release the trigger ports here and return       */
+		/* KERN_FAILURE.                                               */
+		if (vm_freeze_enabled) {
+			if (IP_VALID( trigger_port )){
+				ipc_port_release_send( trigger_port );
+			}
+			min_pages_trigger_port = IPC_PORT_NULL;
+			kr = KERN_FAILURE;
+		}
+		else
+#endif
+		{
+			min_pages_trigger_port = trigger_port;
+			minimum_pages_remaining = hi_wat/vm_page_size;
+			bs_low = FALSE;
+			kr = KERN_SUCCESS;
+		}
 	} else if (flags ==  LO_WAT_ALERT) {
 		release = max_pages_trigger_port;
-		max_pages_trigger_port = trigger_port;
-		maximum_pages_free = lo_wat/vm_page_size;
-		kr = KERN_SUCCESS;
+#if CONFIG_FREEZE
+		if (vm_freeze_enabled) {
+			if (IP_VALID( trigger_port )){
+				ipc_port_release_send( trigger_port );
+			}
+			max_pages_trigger_port = IPC_PORT_NULL;
+			kr = KERN_FAILURE;
+		}
+		else
+#endif
+		{
+			max_pages_trigger_port = trigger_port;
+			maximum_pages_free = lo_wat/vm_page_size;
+			kr = KERN_SUCCESS;
+		}
 	} else if (flags == USE_EMERGENCY_SWAP_FILE_FIRST) {
 		use_emergency_swap_file_first = TRUE;
 		release = trigger_port;
@@ -4259,6 +4605,8 @@ default_pager_backing_store_monitor(__unused thread_call_param_t p1,
 		} else {
 			VSL_UNLOCK();
 		}
+		dprintf(("default_pager_backing_store_monitor - send LO_WAT_ALERT\n"));
+
 		default_pager_space_alert(trigger, LO_WAT_ALERT);
 		ipc_port_release_send(trigger);
 		dp_pages_free_low_count = 0;
@@ -4267,3 +4615,9 @@ default_pager_backing_store_monitor(__unused thread_call_param_t p1,
 	clock_interval_to_deadline(PF_INTERVAL, NSEC_PER_SEC, &deadline);
 	thread_call_enter_delayed(default_pager_backing_store_monitor_callout, deadline);
 }
+
+#if CONFIG_FREEZE
+unsigned int default_pager_swap_pages_free() {
+	return dp_pages_free;
+}
+#endif

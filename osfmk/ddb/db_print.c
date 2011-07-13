@@ -278,7 +278,7 @@ db_print_act(
 		    db_printf("%s ID:   ACT     STAT  SW STACK    SHUTTLE", indent);
 		    db_printf("  SUS  PRI  WAIT_FUNC\n");
 		}
-		policy = ((athread && (athread->sched_mode&TH_MODE_TIMESHARE))? 1: 2);
+		policy = ((athread && (athread->sched_mode == TH_MODE_TIMESHARE))? 1: 2);
 		db_printf("%s%3d%c %0*X %s %s %0*X %0*X %3d %3d/%s ",
 		    indent, act_id,
 		    (thr_act == current_thread())? '#': ':',

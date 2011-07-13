@@ -85,7 +85,7 @@ extern void proc_selfname(char * buf, int size);
             __FUNCTION__, procname);  \
     } while (0)
 
-#if __ppc__ || __i386__
+#if __i386__
 // in libkern/OSKextLib.cpp
 extern kern_return_t kext_get_kmod_info(
     kmod_info_array_t      * kmod_list,
@@ -93,7 +93,7 @@ extern kern_return_t kext_get_kmod_info(
 #define KMOD_MIG_UNUSED
 #else
 #define KMOD_MIG_UNUSED __unused
-#endif /* __ppc__ || __i386__ */
+#endif /* __i386__ */
 
 
 /*********************************************************************
@@ -148,7 +148,7 @@ kmod_get_info(
     kmod_info_array_t * kmod_list KMOD_MIG_UNUSED,
     mach_msg_type_number_t * kmodCount KMOD_MIG_UNUSED)
 {
-#if __ppc__ || __i386__
+#if __i386__
     if (current_task() != kernel_task && task_has_64BitAddr(current_task())) {
         NOT_SUPPORTED_USER64();
         return KERN_NOT_SUPPORTED;
@@ -157,5 +157,5 @@ kmod_get_info(
 #else
     NOT_SUPPORTED_KERNEL();
     return KERN_NOT_SUPPORTED;
-#endif /* __ppc__ || __i386__ */
+#endif /* __i386__ */
 }

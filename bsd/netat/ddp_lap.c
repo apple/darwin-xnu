@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -1602,7 +1602,7 @@ int at_reg_mcast(ifID, data)
 			 *(unsigned*)data, (*(unsigned *)(data+2))&0x0000ffff, 
 			 (unsigned)ifID));
 
-		if (if_addmulti(nddp, (struct sockaddr *)&sdl, 0))
+		if (if_addmulti_anon(nddp, (struct sockaddr *)&sdl, NULL))
 			return -1;
 	}
 	return 0;
@@ -1641,7 +1641,7 @@ int at_unreg_mcast(ifID, data)
 			 (unsigned)ifID));
 		bzero(data, sizeof(struct etalk_addr));
 
-		if (if_delmulti(nddp, (struct sockaddr *)&sdl))
+		if (if_delmulti_anon(nddp, (struct sockaddr *)&sdl))
 			return -1;
 	}
 	return 0;
@@ -1687,7 +1687,7 @@ int at_reg_mcast(ifID, data)
 			 *(unsigned*)data, (*(unsigned *)(data+2))&0x0000ffff, 
 			 (unsigned)ifID));
 
-		if (if_addmulti(nddp, (struct sockaddr *)&sdl, 0))
+		if (if_addmulti_anon(nddp, (struct sockaddr *)&sdl, NULL))
 			return -1;
 	}
 
@@ -1724,7 +1724,7 @@ int at_unreg_mcast(ifID, data)
 			 (unsigned)ifID));
 		bzero(data, ETHERNET_ADDR_LEN);	
 
-		if (if_delmulti(nddp, (struct sockaddr *)&sdl))
+		if (if_delmulti_anon(nddp, (struct sockaddr *)&sdl))
 			return(-1);
 	}
 

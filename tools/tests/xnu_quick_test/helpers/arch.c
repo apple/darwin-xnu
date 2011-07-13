@@ -6,12 +6,6 @@
  */
 int main()
 {
-#if __ppc__
-	return CPU_TYPE_POWERPC;
-#endif /* __ppc__ */
-#if __ppc64__
-	return CPU_TYPE_POWERPC64;
-#endif /* __ppc64__ */
 #if __i386__
 	return CPU_TYPE_I386;
 #endif /* __i386__ */

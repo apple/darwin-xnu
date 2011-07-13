@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -56,30 +56,80 @@ OSMetaClassDefineReservedUnused(IOWorkLoop, 6);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 7);
 
 enum IOWorkLoopState { kLoopRestart = 0x1, kLoopTerminate = 0x2 };
-#ifdef __ppc__
-static inline void SETP(void *addr, unsigned int flag)
-    { unsigned int *num = (unsigned int *) addr; *num |= flag; }
-static inline void CLRP(void *addr, unsigned int flag)
-    { unsigned int *num = (unsigned int *) addr; *num &= ~flag; }
-static inline bool ISSETP(void *addr, unsigned int flag)
-    { unsigned int *num = (unsigned int *) addr; return (*num & flag) != 0; }
-#else
 static inline void SETP(void *addr, unsigned int flag)
     { unsigned char *num = (unsigned char *) addr; *num |= flag; }
 static inline void CLRP(void *addr, unsigned int flag)
     { unsigned char *num = (unsigned char *) addr; *num &= ~flag; }
 static inline bool ISSETP(void *addr, unsigned int flag)
     { unsigned char *num = (unsigned char *) addr; return (*num & flag) != 0; }
-#endif
 
 #define fFlags loopRestart
 
+#define passiveEventChain	reserved->passiveEventChain
+
+#if IOKITSTATS
+
+#define IOStatisticsRegisterCounter() \
+do { \
+	reserved->counter = IOStatistics::registerWorkLoop(this); \
+} while(0)
+
+#define IOStatisticsUnregisterCounter() \
+do { \
+	if (reserved) \
+		IOStatistics::unregisterWorkLoop(reserved->counter); \
+} while(0)
+
+#define IOStatisticsOpenGate() \
+do { \
+	IOStatistics::countWorkLoopOpenGate(reserved->counter); \
+} while(0)
+
+#define IOStatisticsCloseGate() \
+do { \
+	IOStatistics::countWorkLoopCloseGate(reserved->counter); \
+} while(0)
+
+#define IOStatisticsAttachEventSource() \
+do { \
+	IOStatistics::attachWorkLoopEventSource(reserved->counter, inEvent->reserved->counter); \
+} while(0)
+
+#define IOStatisticsDetachEventSource() \
+do { \
+	IOStatistics::detachWorkLoopEventSource(reserved->counter, inEvent->reserved->counter); \
+} while(0)
+
+#else
+
+#define IOStatisticsRegisterCounter()
+#define IOStatisticsUnregisterCounter()
+#define IOStatisticsOpenGate()
+#define IOStatisticsCloseGate()
+#define IOStatisticsAttachEventSource()
+#define IOStatisticsDetachEventSource()
+
+#endif /* IOKITSTATS */
 
 bool IOWorkLoop::init()
 {
-    // The super init and gateLock allocation MUST be done first
+    // The super init and gateLock allocation MUST be done first.
     if ( !super::init() )
         return false;
+	
+	// Allocate our ExpansionData if it hasn't been allocated already.
+	if ( !reserved )
+	{
+		reserved = IONew(ExpansionData,1);
+		if ( !reserved )
+			return false;
+		
+		bzero(reserved,sizeof(ExpansionData));
+	}
+	
+#if DEBUG
+	OSBacktrace ( reserved->allocationBacktrace, sizeof ( reserved->allocationBacktrace ) / sizeof ( reserved->allocationBacktrace[0] ) );
+#endif
 	
     if ( gateLock == NULL ) {
         if ( !( gateLock = IORecursiveLockAlloc()) )
@@ -92,6 +142,13 @@ bool IOWorkLoop::init()
         IOSimpleLockInit(workToDoLock);
         workToDo = false;
     }
+
+    if (!reserved) {
+        reserved = IONew(ExpansionData, 1);
+        reserved->options = 0;
+    }
+	
+    IOStatisticsRegisterCounter();
 
     if ( controlG == NULL ) {
         controlG = IOCommandGate::commandGate(
@@ -132,23 +189,24 @@ IOWorkLoop::workLoop()
 IOWorkLoop *
 IOWorkLoop::workLoopWithOptions(IOOptionBits options)
 {
-    IOWorkLoop *me = new IOWorkLoop;
-
-    if (me && options) {
-	me->reserved = IONew(ExpansionData, 1);
-	if (!me->reserved) {
-	    me->release();
-	    return 0;
+	IOWorkLoop *me = new IOWorkLoop;
+	
+	if (me && options) {
+		me->reserved = IONew(ExpansionData,1);
+		if (!me->reserved) {
+			me->release();
+			return 0;
+		}
+		bzero(me->reserved,sizeof(ExpansionData));
+		me->reserved->options = options;
 	}
-	me->reserved->options = options;
-    }
-
-    if (me && !me->init()) {
-        me->release();
-        return 0;
-    }
-
-    return me;
+	
+	if (me && !me->init()) {
+		me->release();
+		return 0;
+	}
+	
+	return me;
 }
 
 // Free is called twice:
@@ -187,6 +245,14 @@ void IOWorkLoop::free()
         }
         eventChain = 0;
 
+        for (event = passiveEventChain; event; event = next) {
+            next = event->getNext();
+            event->setWorkLoop(0);
+            event->setNext(0);
+            event->release();
+        }
+        passiveEventChain = 0;
+
 	// Either we have a partial initialization to clean up
 	// or the workThread itself is performing hari-kari.
 	// Either way clean up all of our resources and return.
@@ -205,6 +271,9 @@ void IOWorkLoop::free()
 	    IORecursiveLockFree(gateLock);
 	    gateLock = 0;
 	}
+	
+	IOStatisticsUnregisterCounter();
+	
 	if (reserved) {
 	    IODelete(reserved, ExpansionData, 1);
 	    reserved = 0;
@@ -230,6 +299,9 @@ void IOWorkLoop::enableAllEventSources() const
 
     for (event = eventChain; event; event = event->getNext())
         event->enable();
+
+    for (event = passiveEventChain; event; event = event->getNext())
+        event->enable();
 }
 
 void IOWorkLoop::disableAllEventSources() const
@@ -237,6 +309,10 @@ void IOWorkLoop::disableAllEventSources() const
     IOEventSource *event;
 
     for (event = eventChain; event; event = event->getNext())
+		event->disable();
+	
+	/* NOTE: controlG is in passiveEventChain since it's an IOCommandGate */
+    for (event = passiveEventChain; event; event = event->getNext())
         if (event != controlG)	// Don't disable the control gate
             event->disable();
 }
@@ -244,7 +320,7 @@ void IOWorkLoop::disableAllEventSources() const
 void IOWorkLoop::enableAllInterrupts() const
 {
     IOEventSource *event;
-
+	
     for (event = eventChain; event; event = event->getNext())
         if (OSDynamicCast(IOInterruptEventSource, event))
             event->enable();
@@ -253,43 +329,12 @@ void IOWorkLoop::enableAllInterrupts() const
 void IOWorkLoop::disableAllInterrupts() const
 {
     IOEventSource *event;
-
+	
     for (event = eventChain; event; event = event->getNext())
         if (OSDynamicCast(IOInterruptEventSource, event))
             event->disable();
 }
 
-#if KDEBUG
-#define IOTimeClientS()							\
-do {									\
-    IOTimeStampStart(IODBG_WORKLOOP(IOWL_CLIENT),			\
-                     (unsigned int) this, (unsigned int) event);	\
-} while(0)
-
-#define IOTimeClientE()							\
-do {									\
-    IOTimeStampEnd(IODBG_WORKLOOP(IOWL_CLIENT),				\
-                   (unsigned int) this, (unsigned int) event);		\
-} while(0)
-
-#define IOTimeWorkS()							\
-do {									\
-    IOTimeStampStart(IODBG_WORKLOOP(IOWL_WORK),	(unsigned int) this);	\
-} while(0)
-
-#define IOTimeWorkE()							\
-do {									\
-    IOTimeStampEnd(IODBG_WORKLOOP(IOWL_WORK),(unsigned int) this);	\
-} while(0)
-
-#else /* !KDEBUG */
-
-#define IOTimeClientS()
-#define IOTimeClientE()
-#define IOTimeWorkS()
-#define IOTimeWorkE()
-
-#endif /* KDEBUG */
 
 /* virtual */ bool IOWorkLoop::runEventSources()
 {
@@ -299,42 +344,43 @@ do {									\
     
     closeGate();
     if (ISSETP(&fFlags, kLoopTerminate))
-	goto abort;
-
+		goto abort;
+	
     if (traceWL)
     	IOTimeStampStartConstant(IODBG_WORKLOOP(IOWL_WORK), (uintptr_t) this);
 	
     bool more;
     do {
-	CLRP(&fFlags, kLoopRestart);
-	more = false;
-	IOInterruptState is = IOSimpleLockLockDisableInterrupt(workToDoLock);
-	workToDo = false;
-	IOSimpleLockUnlockEnableInterrupt(workToDoLock, is);
-	for (IOEventSource *evnt = eventChain; evnt; evnt = evnt->getNext()) {
-
-		if (traceES)
-			IOTimeStampStartConstant(IODBG_WORKLOOP(IOWL_CLIENT), (uintptr_t) this, (uintptr_t) evnt);
+		CLRP(&fFlags, kLoopRestart);
+		more = false;
+		IOInterruptState is = IOSimpleLockLockDisableInterrupt(workToDoLock);
+		workToDo = false;
+		IOSimpleLockUnlockEnableInterrupt(workToDoLock, is);
+		/* NOTE: only loop over event sources in eventChain. Bypass "passive" event sources for performance */
+		for (IOEventSource *evnt = eventChain; evnt; evnt = evnt->getNext()) {
 			
-	    more |= evnt->checkForWork();
+			if (traceES)
+				IOTimeStampStartConstant(IODBG_WORKLOOP(IOWL_CLIENT), (uintptr_t) this, (uintptr_t) evnt);
 			
-		if (traceES)
-			IOTimeStampEndConstant(IODBG_WORKLOOP(IOWL_CLIENT), (uintptr_t) this, (uintptr_t) evnt);
-
-	    if (ISSETP(&fFlags, kLoopTerminate))
-		goto abort;
-	    else if (fFlags & kLoopRestart) {
-		more = true;
-		break;
-	    }
-	}
+			more |= evnt->checkForWork();
+			
+			if (traceES)
+				IOTimeStampEndConstant(IODBG_WORKLOOP(IOWL_CLIENT), (uintptr_t) this, (uintptr_t) evnt);
+			
+			if (ISSETP(&fFlags, kLoopTerminate))
+				goto abort;
+			else if (fFlags & kLoopRestart) {
+				more = true;
+				break;
+			}
+		}
     } while (more);
-
+	
     res = true;
 	
     if (traceWL)
     	IOTimeStampEndConstant(IODBG_WORKLOOP(IOWL_WORK), (uintptr_t) this);
-
+	
 abort:
     openGate();
     return res;
@@ -403,27 +449,41 @@ void IOWorkLoop::signalWorkAvailable()
 
 void IOWorkLoop::openGate()
 {
+    IOStatisticsOpenGate();
     IORecursiveLockUnlock(gateLock);
 }
 
 void IOWorkLoop::closeGate()
 {
     IORecursiveLockLock(gateLock);
+    IOStatisticsCloseGate();
 }
 
 bool IOWorkLoop::tryCloseGate()
 {
-    return IORecursiveLockTryLock(gateLock) != 0;
+    bool res = (IORecursiveLockTryLock(gateLock) != 0);
+    if (res) {
+        IOStatisticsCloseGate();
+    }
+    return res;
 }
 
 int IOWorkLoop::sleepGate(void *event, UInt32 interuptibleType)
 {
-    return IORecursiveLockSleep(gateLock, event, interuptibleType);
+    int res; 
+    IOStatisticsOpenGate();
+    res = IORecursiveLockSleep(gateLock, event, interuptibleType);
+    IOStatisticsCloseGate();
+    return res;
 }
 
 int IOWorkLoop::sleepGate(void *event, AbsoluteTime deadline, UInt32 interuptibleType)
 {
-    return IORecursiveLockSleepDeadline(gateLock, event, deadline, interuptibleType);
+    int res; 
+    IOStatisticsOpenGate();
+    res = IORecursiveLockSleepDeadline(gateLock, event, deadline, interuptibleType);
+    IOStatisticsCloseGate();
+    return res;
 }
 
 void IOWorkLoop::wakeupGate(void *event, bool oneThread)
@@ -460,41 +520,82 @@ IOReturn IOWorkLoop::_maintRequest(void *inC, void *inD, void *, void *)
             inEvent->retain();
             inEvent->setWorkLoop(this);
             inEvent->setNext(0);
+
+    		/* Check if this is a passive or active event source being added */
+    		if (eventSourcePerformsWork(inEvent)) {
+    		
+	            if (!eventChain)
+    	            eventChain = inEvent;
+        	    else {
+            	    IOEventSource *event, *next;
     
-            if (!eventChain)
-                eventChain = inEvent;
-            else {
-                IOEventSource *event, *next;
-    
-                for (event = eventChain; (next = event->getNext()); event = next)
-                    ;
-                event->setNext(inEvent);
+                	for (event = eventChain; (next = event->getNext()); event = next)
+                    	;
+                	event->setNext(inEvent);
+                	
+            	}
+            	
             }
+            else {
+    		
+	            if (!passiveEventChain)
+    	            passiveEventChain = inEvent;
+        	    else {
+            	    IOEventSource *event, *next;
+    
+                	for (event = passiveEventChain; (next = event->getNext()); event = next)
+                    	;
+                	event->setNext(inEvent);
+                	
+            	}
+            	
+            }
+            IOStatisticsAttachEventSource();
         }
         break;
 
     case mRemoveEvent:
         if (inEvent->getWorkLoop()) {
-            if (eventChain == inEvent)
-                eventChain = inEvent->getNext();
-            else {
-                IOEventSource *event, *next;
-    
-                event = eventChain;
-                while ((next = event->getNext()) && next != inEvent)
-                    event = next;
-    
-                if (!next) {
-                    res = kIOReturnBadArgument;
-                    break;
-                }
-                event->setNext(inEvent->getNext());
-            }
-    
+        	if (eventSourcePerformsWork(inEvent)) {
+				if (eventChain == inEvent)
+					eventChain = inEvent->getNext();
+				else {
+					IOEventSource *event, *next;
+		
+					event = eventChain;
+					while ((next = event->getNext()) && next != inEvent)
+						event = next;
+		
+					if (!next) {
+						res = kIOReturnBadArgument;
+						break;
+					}
+					event->setNext(inEvent->getNext());
+				}
+    		}
+    		else {
+				if (passiveEventChain == inEvent)
+					passiveEventChain = inEvent->getNext();
+				else {
+					IOEventSource *event, *next;
+		
+					event = passiveEventChain;
+					while ((next = event->getNext()) && next != inEvent)
+						event = next;
+		
+					if (!next) {
+						res = kIOReturnBadArgument;
+						break;
+					}
+					event->setNext(inEvent->getNext());
+				}
+    		}
+    		
             inEvent->setWorkLoop(0);
             inEvent->setNext(0);
             inEvent->release();
             SETP(&fFlags, kLoopRestart);
+            IOStatisticsDetachEventSource();
         }
         break;
 
@@ -503,4 +604,41 @@ IOReturn IOWorkLoop::_maintRequest(void *inC, void *inD, void *, void *)
     }
 
     return res;
+}
+
+bool
+IOWorkLoop::eventSourcePerformsWork(IOEventSource *inEventSource)
+{
+	bool	result = true;
+
+	/*
+	 * The idea here is to see if the subclass of IOEventSource has overridden checkForWork().
+	 * The assumption is that if you override checkForWork(), you need to be
+	 * active and not passive.
+	 *
+	 * We picked a known quantity controlG that does not override
+	 * IOEventSource::checkForWork(), namely the IOCommandGate associated with
+	 * the workloop to which this event source is getting attached.
+	 * 
+	 * We do a pointer comparison on the offset in the vtable for inNewEvent against
+	 * the offset in the vtable for inReferenceEvent. This works because
+	 * IOCommandGate's slot for checkForWork() has the address of
+	 * IOEventSource::checkForWork() in it.
+	 * 
+	 * Think of OSMemberFunctionCast yielding the value at the vtable offset for
+	 * checkForWork() here. We're just testing to see if it's the same or not.
+	 *
+	 */
+	if (controlG) {
+		void *	ptr1;
+		void *	ptr2;
+		
+		ptr1 = OSMemberFunctionCast(void*, inEventSource, &IOEventSource::checkForWork);
+		ptr2 = OSMemberFunctionCast(void*, controlG, &IOEventSource::checkForWork);
+		
+		if (ptr1 == ptr2)
+			result = false;
+	}
+	
+    return result;
 }

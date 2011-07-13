@@ -43,16 +43,9 @@
 #include <kern/processor.h>
 
 
-#if defined(__ppc__) /* On ppc, vm statistics are still 32-bit */
-#define	VM_STAT_INCR(event)									\
-MACRO_BEGIN 											\
-	OSAddAtomic(1, (SInt32 *) (&(PROCESSOR_DATA(current_processor(), vm_stat).event)));	\
-MACRO_END
-#else /* !(defined(__ppc__)) */
 #define VM_STAT_INCR(event)									\
 MACRO_BEGIN											\
 	OSAddAtomic64(1, (SInt64 *) (&(PROCESSOR_DATA(current_processor(), vm_stat).event)));	\
 MACRO_END
-#endif /* !(defined(__ppc__)) */
 
 #endif	/* _KERN_HOST_STATISTICS_H_ */

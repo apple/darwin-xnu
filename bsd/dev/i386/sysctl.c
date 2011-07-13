@@ -33,6 +33,9 @@
 #include <i386/cpuid.h>
 #include <i386/tsc.h>
 #include <i386/machine_routines.h>
+#include <i386/ucode.h>
+#include <kern/clock.h>
+#include <libkern/libkern.h>
 
 static int
 _i386_cpu_info SYSCTL_HANDLER_ARGS
@@ -201,6 +204,42 @@ cpu_flex_ratio_max SYSCTL_HANDLER_ARGS
 	return SYSCTL_OUT(req, &flex_ratio_max, sizeof(flex_ratio_max));
 }
 
+static int
+cpu_ucode_update SYSCTL_HANDLER_ARGS
+{
+	__unused struct sysctl_oid *unused_oidp = oidp;
+	__unused void *unused_arg1 = arg1;
+	__unused int unused_arg2 = arg2;
+	uint64_t addr;
+	int error;
+	
+	error = SYSCTL_IN(req, &addr, sizeof(addr));
+	if (error)
+		return error;
+
+	int ret = ucode_interface(addr);
+	return ret;
+}
+
+extern uint64_t panic_restart_timeout;
+static int
+panic_set_restart_timeout(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	int new_value = 0, old_value = 0, changed = 0, error;
+	uint64_t nstime;
+
+	if (panic_restart_timeout) {
+		absolutetime_to_nanoseconds(panic_restart_timeout, &nstime);
+		old_value = nstime / NSEC_PER_SEC;
+	}
+
+	error = sysctl_io_number(req, old_value, sizeof(int), &new_value, &changed);
+	if (error == 0 && changed) {
+		nanoseconds_to_absolutetime(((uint64_t)new_value) * NSEC_PER_SEC, &panic_restart_timeout);
+	}
+	return error;
+}
+
 /*
  * Populates the {CPU, vector, latency} triple for the maximum observed primary
  * interrupt latency
@@ -226,107 +265,113 @@ misc_interrupt_latency_max(__unused struct sysctl_oid *oidp, __unused void *arg1
 SYSCTL_NODE(_machdep, OID_AUTO, cpu, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"CPU info");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, max_basic, CTLTYPE_INT | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, max_basic, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_max_basic),sizeof(uint32_t),
 	    i386_cpu_info, "IU", "Max Basic Information value");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, max_ext, CTLTYPE_INT | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, max_ext, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_max_ext), sizeof(uint32_t),
 	    i386_cpu_info, "IU", "Max Extended Function Information value");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, vendor, CTLTYPE_STRING | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, vendor, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_vendor), 0,
 	    i386_cpu_info, "A", "CPU vendor");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, brand_string, CTLTYPE_STRING | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, brand_string, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_brand_string), 0,
 	    i386_cpu_info, "A", "CPU brand string");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, family, CTLTYPE_INT | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, family, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_family), sizeof(uint8_t),
 	    i386_cpu_info, "I", "CPU family");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, model, CTLTYPE_INT | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, model, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_model), sizeof(uint8_t),
 	    i386_cpu_info, "I", "CPU model");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, extmodel, CTLTYPE_INT | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, extmodel, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_extmodel), sizeof(uint8_t),
 	    i386_cpu_info, "I", "CPU extended model");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, extfamily, CTLTYPE_INT | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, extfamily, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_extfamily), sizeof(uint8_t),
 	    i386_cpu_info, "I", "CPU extended family");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, stepping, CTLTYPE_INT | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, stepping, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_stepping), sizeof(uint8_t),
 	    i386_cpu_info, "I", "CPU stepping");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, feature_bits, CTLTYPE_QUAD | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, feature_bits, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_features), sizeof(uint64_t),
 	    i386_cpu_info, "IU", "CPU features");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, extfeature_bits, CTLTYPE_QUAD | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, extfeature_bits, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_extfeatures), sizeof(uint64_t),
 	    i386_cpu_info, "IU", "CPU extended features");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, signature, CTLTYPE_INT | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, signature, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_signature), sizeof(uint32_t),
 	    i386_cpu_info, "I", "CPU signature");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, brand, CTLTYPE_INT | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, brand, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_brand), sizeof(uint8_t),
 	    i386_cpu_info, "I", "CPU brand");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, features, CTLTYPE_STRING | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, features, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    0, 0,
 	    cpu_features, "A", "CPU feature names");
 
-SYSCTL_PROC(_machdep_cpu, OID_AUTO, extfeatures, CTLTYPE_STRING | CTLFLAG_RD, 
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, extfeatures, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    0, 0,
 	    cpu_extfeatures, "A", "CPU extended feature names");
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, logical_per_package,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    0, 0,
 	    cpu_logical_per_package, "I", "CPU logical cpus per package");
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, cores_per_package,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_cores_per_package),
 	    sizeof(uint32_t),
 	    i386_cpu_info, "I", "CPU cores per package");
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, microcode_version,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_microcode_version),
 	    sizeof(uint32_t),
 	    i386_cpu_info, "I", "Microcode version number");
+
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, processor_flag,
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
+	    (void *)offsetof(i386_cpu_info_t, cpuid_processor_flag),
+	    sizeof(uint32_t),
+	    i386_cpu_info, "I", "CPU processor flag");
 
 
 SYSCTL_NODE(_machdep_cpu, OID_AUTO, mwait, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"mwait");
 
 SYSCTL_PROC(_machdep_cpu_mwait, OID_AUTO, linesize_min,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_mwait_leaf_t, linesize_min),
 	    sizeof(uint32_t),
 	    cpu_mwait, "I", "Monitor/mwait minimum line size");
 
 SYSCTL_PROC(_machdep_cpu_mwait, OID_AUTO, linesize_max,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_mwait_leaf_t, linesize_max),
 	    sizeof(uint32_t),
 	    cpu_mwait, "I", "Monitor/mwait maximum line size");
 
 SYSCTL_PROC(_machdep_cpu_mwait, OID_AUTO, extensions,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_mwait_leaf_t, extensions),
 	    sizeof(uint32_t),
 	    cpu_mwait, "I", "Monitor/mwait extensions");
 
 SYSCTL_PROC(_machdep_cpu_mwait, OID_AUTO, sub_Cstates,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_mwait_leaf_t, sub_Cstates),
 	    sizeof(uint32_t),
 	    cpu_mwait, "I", "Monitor/mwait sub C-states");
@@ -336,31 +381,31 @@ SYSCTL_NODE(_machdep_cpu, OID_AUTO, thermal, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"thermal");
 
 SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, sensor,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_thermal_leaf_t, sensor),
 	    sizeof(boolean_t),
 	    cpu_thermal, "I", "Thermal sensor present");
 
 SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, dynamic_acceleration,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_thermal_leaf_t, dynamic_acceleration),
 	    sizeof(boolean_t),
 	    cpu_thermal, "I", "Dynamic Acceleration Technology (Turbo Mode)");
 
 SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, invariant_APIC_timer,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_thermal_leaf_t, invariant_APIC_timer),
 	    sizeof(boolean_t),
 	    cpu_thermal, "I", "Invariant APIC Timer");
 
 SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, thresholds,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_thermal_leaf_t, thresholds),
 	    sizeof(uint32_t),
 	    cpu_thermal, "I", "Number of interrupt thresholds");
 
 SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, ACNT_MCNT,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_thermal_leaf_t, ACNT_MCNT),
 	    sizeof(boolean_t),
 	    cpu_thermal, "I", "ACNT_MCNT capability");
@@ -410,43 +455,43 @@ SYSCTL_NODE(_machdep_cpu, OID_AUTO, arch_perf, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"arch_perf");
 
 SYSCTL_PROC(_machdep_cpu_arch_perf, OID_AUTO, version,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_arch_perf_leaf_t, version),
 	    sizeof(uint8_t),
 	    cpu_arch_perf, "I", "Architectural Performance Version Number");
 
 SYSCTL_PROC(_machdep_cpu_arch_perf, OID_AUTO, number,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_arch_perf_leaf_t, number),
 	    sizeof(uint8_t),
 	    cpu_arch_perf, "I", "Number of counters per logical cpu");
 
 SYSCTL_PROC(_machdep_cpu_arch_perf, OID_AUTO, width,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_arch_perf_leaf_t, width),
 	    sizeof(uint8_t),
 	    cpu_arch_perf, "I", "Bit width of counters");
 
 SYSCTL_PROC(_machdep_cpu_arch_perf, OID_AUTO, events_number,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_arch_perf_leaf_t, events_number),
 	    sizeof(uint8_t),
 	    cpu_arch_perf, "I", "Number of monitoring events");
 
 SYSCTL_PROC(_machdep_cpu_arch_perf, OID_AUTO, events,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_arch_perf_leaf_t, events),
 	    sizeof(uint32_t),
 	    cpu_arch_perf, "I", "Bit vector of events");
 
 SYSCTL_PROC(_machdep_cpu_arch_perf, OID_AUTO, fixed_number,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_arch_perf_leaf_t, fixed_number),
 	    sizeof(uint8_t),
 	    cpu_arch_perf, "I", "Number of fixed-function counters");
 
 SYSCTL_PROC(_machdep_cpu_arch_perf, OID_AUTO, fixed_width,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(cpuid_arch_perf_leaf_t, fixed_width),
 	    sizeof(uint8_t),
 	    cpu_arch_perf, "I", "Bit-width of fixed-function counters");
@@ -456,19 +501,19 @@ SYSCTL_NODE(_machdep_cpu, OID_AUTO, cache, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"cache");
 
 SYSCTL_PROC(_machdep_cpu_cache, OID_AUTO, linesize,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_cache_linesize),
 	    sizeof(uint32_t),
 	    i386_cpu_info, "I", "Cacheline size");
 
 SYSCTL_PROC(_machdep_cpu_cache, OID_AUTO, L2_associativity,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_cache_L2_associativity),
 	    sizeof(uint32_t),
 	    i386_cpu_info, "I", "L2 cache associativity");
 
 SYSCTL_PROC(_machdep_cpu_cache, OID_AUTO, size,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_cache_size),
 	    sizeof(uint32_t),
 	    i386_cpu_info, "I", "Cache size (in Kbytes)");
@@ -482,7 +527,7 @@ SYSCTL_NODE(_machdep_cpu_tlb, OID_AUTO, data, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"data");
 
 SYSCTL_PROC(_machdep_cpu_tlb_inst, OID_AUTO, small,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t,
 			     cpuid_tlb[TLB_INST][TLB_SMALL][0]),
 	    sizeof(uint32_t),
@@ -490,7 +535,7 @@ SYSCTL_PROC(_machdep_cpu_tlb_inst, OID_AUTO, small,
 	    "Number of small page instruction TLBs");
 
 SYSCTL_PROC(_machdep_cpu_tlb_data, OID_AUTO, small,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t,
 			     cpuid_tlb[TLB_DATA][TLB_SMALL][0]),
 	    sizeof(uint32_t),
@@ -498,7 +543,7 @@ SYSCTL_PROC(_machdep_cpu_tlb_data, OID_AUTO, small,
 	    "Number of small page data TLBs (1st level)");
 
 SYSCTL_PROC(_machdep_cpu_tlb_data, OID_AUTO, small_level1,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t,
 			     cpuid_tlb[TLB_DATA][TLB_SMALL][1]),
 	    sizeof(uint32_t),
@@ -506,7 +551,7 @@ SYSCTL_PROC(_machdep_cpu_tlb_data, OID_AUTO, small_level1,
 	    "Number of small page data TLBs (2nd level)");
 
 SYSCTL_PROC(_machdep_cpu_tlb_inst, OID_AUTO, large,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t,
 			     cpuid_tlb[TLB_INST][TLB_LARGE][0]),
 	    sizeof(uint32_t),
@@ -514,7 +559,7 @@ SYSCTL_PROC(_machdep_cpu_tlb_inst, OID_AUTO, large,
 	    "Number of large page instruction TLBs");
 
 SYSCTL_PROC(_machdep_cpu_tlb_data, OID_AUTO, large,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t,
 			     cpuid_tlb[TLB_DATA][TLB_LARGE][0]),
 	    sizeof(uint32_t),
@@ -522,7 +567,7 @@ SYSCTL_PROC(_machdep_cpu_tlb_data, OID_AUTO, large,
 	    "Number of large page data TLBs (1st level)");
 
 SYSCTL_PROC(_machdep_cpu_tlb_data, OID_AUTO, large_level1,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t,
 			     cpuid_tlb[TLB_DATA][TLB_LARGE][1]),
 	    sizeof(uint32_t),
@@ -530,7 +575,7 @@ SYSCTL_PROC(_machdep_cpu_tlb_data, OID_AUTO, large_level1,
 	    "Number of large page data TLBs (2nd level)");
 
 SYSCTL_PROC(_machdep_cpu_tlb, OID_AUTO, shared,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_stlb),
 	    sizeof(uint32_t),
 	    i386_cpu_info_nonzero, "I",
@@ -541,26 +586,26 @@ SYSCTL_NODE(_machdep_cpu, OID_AUTO, address_bits, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"address_bits");
 
 SYSCTL_PROC(_machdep_cpu_address_bits, OID_AUTO, physical,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_address_bits_physical),
 	    sizeof(uint32_t),
 	    i386_cpu_info, "I", "Number of physical address bits");
 
 SYSCTL_PROC(_machdep_cpu_address_bits, OID_AUTO, virtual,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, cpuid_address_bits_virtual),
 	    sizeof(uint32_t),
 	    i386_cpu_info, "I", "Number of virtual address bits");
 
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, core_count,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, core_count),
 	    sizeof(uint32_t),
 	    i386_cpu_info, "I", "Number of enabled cores per package");
 
 SYSCTL_PROC(_machdep_cpu, OID_AUTO, thread_count,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    (void *)offsetof(i386_cpu_info_t, thread_count),
 	    sizeof(uint32_t),
 	    i386_cpu_info, "I", "Number of enabled threads per package");
@@ -569,34 +614,40 @@ SYSCTL_NODE(_machdep_cpu, OID_AUTO, flex_ratio, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"Flex ratio");
 
 SYSCTL_PROC(_machdep_cpu_flex_ratio, OID_AUTO, desired,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    0, 0,
 	    cpu_flex_ratio_desired, "I", "Flex ratio desired (0 disabled)");
 
 SYSCTL_PROC(_machdep_cpu_flex_ratio, OID_AUTO, min,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    0, 0,
 	    cpu_flex_ratio_min, "I", "Flex ratio min (efficiency)");
 
 SYSCTL_PROC(_machdep_cpu_flex_ratio, OID_AUTO, max,
-	    CTLTYPE_INT | CTLFLAG_RD, 
+	    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 
 	    0, 0,
 	    cpu_flex_ratio_max, "I", "Flex ratio max (non-turbo)");
+
+SYSCTL_PROC(_machdep_cpu, OID_AUTO, ucupdate, 
+			CTLTYPE_INT | CTLFLAG_WR | CTLFLAG_LOCKED, 0, 0,
+            cpu_ucode_update, "S", "Microcode update interface");
 
 uint64_t pmap_pv_hashlist_walks;
 uint64_t pmap_pv_hashlist_cnts;
 uint32_t pmap_pv_hashlist_max;
 uint32_t pmap_kernel_text_ps = PAGE_SIZE;
+extern uint32_t pv_hashed_kern_low_water_mark;
 
 /*extern struct sysctl_oid_list sysctl__machdep_pmap_children;*/
 
 SYSCTL_NODE(_machdep, OID_AUTO, pmap, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"PMAP info");
 
-SYSCTL_QUAD    (_machdep_pmap, OID_AUTO, hashwalks, CTLFLAG_RD | CTLFLAG_KERN, &pmap_pv_hashlist_walks, "");
-SYSCTL_QUAD    (_machdep_pmap, OID_AUTO, hashcnts, CTLFLAG_RD | CTLFLAG_KERN, &pmap_pv_hashlist_cnts, "");
-SYSCTL_INT     (_machdep_pmap, OID_AUTO, hashmax, CTLFLAG_RD | CTLFLAG_KERN, &pmap_pv_hashlist_max, 0, "");
-SYSCTL_INT     (_machdep_pmap, OID_AUTO, kernel_text_ps, CTLFLAG_RD | CTLFLAG_KERN, &pmap_kernel_text_ps, 0, "");
+SYSCTL_QUAD    (_machdep_pmap, OID_AUTO, hashwalks, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &pmap_pv_hashlist_walks, "");
+SYSCTL_QUAD    (_machdep_pmap, OID_AUTO, hashcnts, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &pmap_pv_hashlist_cnts, "");
+SYSCTL_INT     (_machdep_pmap, OID_AUTO, hashmax, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &pmap_pv_hashlist_max, 0, "");
+SYSCTL_INT     (_machdep_pmap, OID_AUTO, kernel_text_ps, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &pmap_kernel_text_ps, 0, "");
+SYSCTL_INT     (_machdep_pmap, OID_AUTO, kern_pv_reserve, CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED, &pv_hashed_kern_low_water_mark, 0, "");
 
 SYSCTL_NODE(_machdep, OID_AUTO, memmap, CTLFLAG_RD|CTLFLAG_LOCKED, NULL, "physical memory map");
 
@@ -621,8 +672,14 @@ SYSCTL_QUAD(_machdep_memmap, OID_AUTO, Other, CTLFLAG_RD|CTLFLAG_LOCKED, &firmwa
 SYSCTL_NODE(_machdep, OID_AUTO, tsc, CTLFLAG_RD|CTLFLAG_LOCKED, NULL, "Timestamp counter parameters");
 
 SYSCTL_QUAD(_machdep_tsc, OID_AUTO, frequency, CTLFLAG_RD|CTLFLAG_LOCKED, &tscFreq, "");
+
 SYSCTL_NODE(_machdep, OID_AUTO, misc, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"Miscellaneous x86 kernel parameters");
+
+SYSCTL_PROC(_machdep_misc, OID_AUTO, panic_restart_timeout,
+	    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, 
+	    0, 0,
+	    panic_set_restart_timeout, "I", "Panic restart timeout in seconds");
 
 SYSCTL_PROC(_machdep_misc, OID_AUTO, interrupt_latency_max, CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_LOCKED, 
 	    0, 0,

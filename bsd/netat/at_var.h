@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -351,7 +351,7 @@ void init_ddp_handler(void);
 int  elap_wput(gref_t *gref, gbuf_t *m);
 int at_ioctl(struct atpcb *, u_long, caddr_t, int );
 
-
+extern void at_purgeaddrs(struct ifnet *);
 
 #endif /* KERNEL_PRIVATE */
 #endif /* __APPLE_API_OBSOLETE */

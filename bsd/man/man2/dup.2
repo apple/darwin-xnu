@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)dup.2	8.1 (Berkeley) 6/4/93
 .\"
-.Dd June 4, 1993
+.Dd December 1, 2010
 .Dt DUP 2
 .Os BSD 4
 .Sh NAME
@@ -100,8 +100,18 @@ In
 the value of the new descriptor
 .Fa fildes2
 is specified.
-If this descriptor is already in use,
-the descriptor is first deallocated as if a
+If
+.Fa fildes
+and
+.Fa fildes2
+are equal, then
+.Fn dup2 
+just returns
+.Fa fildes2 ;
+no other changes are made to the existing descriptor.
+Otherwise, if descriptor
+.Fa fildes2
+is already in use, it is first deallocated as if a
 .Xr close 2
 call had been done first.
 .Sh RETURN VALUES

@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
@@ -52,16 +52,10 @@
 
 /* #include <machine/trap.h> */
 struct savearea_t; /* Used anonymously */
-typedef kern_return_t (*perfCallback)(int, struct savearea_t *, int, int);
+typedef kern_return_t (*perfCallback)(int, struct savearea_t *, uintptr_t *, int);
 
-#if defined (__ppc__) || defined (__ppc64__)
-extern perfCallback tempDTraceTrapHook, tempDTraceIntHook;
-extern kern_return_t fbt_perfCallback(int, struct savearea_t *, int, int);
-extern kern_return_t fbt_perfIntCallback(int, struct savearea_t *, int, int);
-#else
 extern perfCallback tempDTraceTrapHook;
-extern kern_return_t fbt_perfCallback(int, struct savearea_t *, int, int);
-#endif
+extern kern_return_t fbt_perfCallback(int, struct savearea_t *, uintptr_t *);
 
 #define	FBT_ADDR2NDX(addr)	((((uintptr_t)(addr)) >> 4) & fbt_probetab_mask)
 #define	FBT_PROBETAB_SIZE	0x8000		/* 32k entries -- 128K total */
@@ -111,25 +105,42 @@ fbt_destroy(void *arg, dtrace_id_t id, void *parg)
 }
 
 /*ARGSUSED*/
-static void
+int
 fbt_enable(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg,id)
 	fbt_probe_t *fbt = parg;
-	struct modctl *ctl = fbt->fbtp_ctl;
+	struct modctl *ctl = NULL;
 
-#if defined (__ppc__) || defined (__ppc64__)
-	dtrace_casptr(&tempDTraceIntHook, NULL, fbt_perfIntCallback);
-	if (tempDTraceIntHook != (perfCallback)fbt_perfIntCallback) {
+    for (; fbt != NULL; fbt = fbt->fbtp_next) {
+
+	ctl = fbt->fbtp_ctl;
+	
+	if (!ctl->mod_loaded) {
 		if (fbt_verbose) {
-			cmn_err(CE_NOTE, "fbt_enable is failing for probe %s "
-			    "in module %s: tempDTraceIntHook already occupied.",
+			cmn_err(CE_NOTE, "fbt is failing for probe %s "
+			    "(module %s unloaded)",
 			    fbt->fbtp_name, ctl->mod_modname);
 		}
-		return;
+
+		continue;
 	}
-#endif
-	
+
+	/*
+	 * Now check that our modctl has the expected load count.  If it
+	 * doesn't, this module must have been unloaded and reloaded -- and
+	 * we're not going to touch it.
+	 */
+	if (ctl->mod_loadcnt != fbt->fbtp_loadcnt) {
+		if (fbt_verbose) {
+			cmn_err(CE_NOTE, "fbt is failing for probe %s "
+			    "(module %s reloaded)",
+			    fbt->fbtp_name, ctl->mod_modname);
+		}
+
+		continue;
+	}	
+
 	dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
 	if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
 		if (fbt_verbose) {
@@ -137,14 +148,21 @@ fbt_enable(void *arg, dtrace_id_t id, void *parg)
 			    "in module %s: tempDTraceTrapHook already occupied.",
 			    fbt->fbtp_name, ctl->mod_modname);
 		}
-		return;
+		continue;
 	}
 
-	for (; fbt != NULL; fbt = fbt->fbtp_next)
+	if (fbt->fbtp_currentval != fbt->fbtp_patchval) {
 		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint, 
 								sizeof(fbt->fbtp_patchval));
-		
-	dtrace_membar_consumer();
+                fbt->fbtp_currentval = fbt->fbtp_patchval;
+		ctl->mod_nenabled++;
+	}
+
+    }
+    
+    dtrace_membar_consumer();
+    
+    return (0);
 }
 
 /*ARGSUSED*/
@@ -153,11 +171,22 @@ fbt_disable(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg,id)
 	fbt_probe_t *fbt = parg;
+	struct modctl *ctl = NULL;
 
-	for (; fbt != NULL; fbt = fbt->fbtp_next)
+	for (; fbt != NULL; fbt = fbt->fbtp_next) {
+	    ctl = fbt->fbtp_ctl;
+	    
+	    if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt))
+		continue;
+
+	    if (fbt->fbtp_currentval != fbt->fbtp_savedval) {
 		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint, 
 								sizeof(fbt->fbtp_savedval));
-		
+		fbt->fbtp_currentval = fbt->fbtp_savedval;
+		ASSERT(ctl->mod_nenabled > 0);
+		ctl->mod_nenabled--;
+	    }
+	}
 	dtrace_membar_consumer();
 }
 
@@ -167,11 +196,20 @@ fbt_suspend(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg,id)
 	fbt_probe_t *fbt = parg;
+	struct modctl *ctl = NULL;
 
-	for (; fbt != NULL; fbt = fbt->fbtp_next)
-		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint, 
+	for (; fbt != NULL; fbt = fbt->fbtp_next) {
+	    ctl = fbt->fbtp_ctl;
+
+	    ASSERT(ctl->mod_nenabled > 0);
+	    if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt))
+		continue;
+
+	    (void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_savedval, (vm_offset_t)fbt->fbtp_patchpoint, 
 								sizeof(fbt->fbtp_savedval));
-		
+	    fbt->fbtp_currentval = fbt->fbtp_savedval;
+	}
+	
 	dtrace_membar_consumer();
 }
 
@@ -181,34 +219,30 @@ fbt_resume(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg,id)
 	fbt_probe_t *fbt = parg;
-	struct modctl *ctl = fbt->fbtp_ctl;
+	struct modctl *ctl = NULL;
 
-#if defined (__ppc__) || defined (__ppc64__)
-	dtrace_casptr(&tempDTraceIntHook, NULL, fbt_perfIntCallback);
-	if (tempDTraceIntHook != (perfCallback)fbt_perfIntCallback) {
-		if (fbt_verbose) {
-			cmn_err(CE_NOTE, "fbt_enable is failing for probe %s "
-			    "in module %s: tempDTraceIntHook already occupied.",
-			    fbt->fbtp_name, ctl->mod_modname);
-		}
-		return;
-	}
-#endif
+	for (; fbt != NULL; fbt = fbt->fbtp_next) {
+	    ctl = fbt->fbtp_ctl;
+
+	    ASSERT(ctl->mod_nenabled > 0);
+	    if (!ctl->mod_loaded || (ctl->mod_loadcnt != fbt->fbtp_loadcnt))
+		continue;
 	
-	dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
-	if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
+	    dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
+	    if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
 		if (fbt_verbose) {
 			cmn_err(CE_NOTE, "fbt_resume is failing for probe %s "
 			    "in module %s: tempDTraceTrapHook already occupied.",
 			    fbt->fbtp_name, ctl->mod_modname);
 		}
 		return;
+	    }
+	
+	    (void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint, 
+								sizeof(fbt->fbtp_patchval));
+  	    fbt->fbtp_currentval = fbt->fbtp_patchval;
 	}
 	
-	for (; fbt != NULL; fbt = fbt->fbtp_next)
-		(void)ml_nofault_copy( (vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint, 
-								sizeof(fbt->fbtp_patchval));
-		
 	dtrace_membar_consumer();
 }
 
@@ -422,8 +456,8 @@ static struct cdevsw fbt_cdevsw =
 	0					/* type */
 };
 
-static int gDisableFBT = 0;
-struct modctl g_fbt_kernctl;
+int gIgnoreFBTBlacklist = 0;
+static int gFBTInited = 0;
 #undef kmem_alloc /* from its binding to dt_kmem_alloc glue */
 #undef kmem_free /* from its binding to dt_kmem_free glue */
 #include <vm/vm_kern.h>
@@ -431,66 +465,22 @@ struct modctl g_fbt_kernctl;
 void
 fbt_init( void )
 {
-
-	PE_parse_boot_argn("DisableFBT", &gDisableFBT, sizeof (gDisableFBT));
-
-	if (0 == gDisableFBT)
+	if (0 == gFBTInited)
 	{
 		int majdevno = cdevsw_add(FBT_MAJOR, &fbt_cdevsw);
-		unsigned long size = 0, header_size, round_size;
-	   	kern_return_t ret;
-		void *p, *q;
 		
 		if (majdevno < 0) {
 			printf("fbt_init: failed to allocate a major number!\n");
 			return;
 		}
-
-		/*
-		 * Capture the kernel's mach_header in its entirety and the contents of
-		 * its LINKEDIT segment (and only that segment). This is sufficient to
-		 * build all the fbt probes lazily the first time a client looks to
-		 * the fbt provider. Remeber these on the global struct modctl g_fbt_kernctl.
-		 */
-		header_size = sizeof(kernel_mach_header_t) + _mh_execute_header.sizeofcmds;
-		p = getsegdatafromheader(&_mh_execute_header, SEG_LINKEDIT, &size);
-
-        round_size = round_page(header_size + size);
-		/* "q" will accomodate copied kernel_mach_header_t, its load commands, and LINKEIT segment. */
-		ret = kmem_alloc_pageable(kernel_map, (vm_offset_t *)&q, round_size);
-
-		if (p && (ret == KERN_SUCCESS)) {
-			kernel_segment_command_t *sgp;
-
-			bcopy( (void *)&_mh_execute_header, q, header_size);
-			bcopy( p, (char *)q + header_size, size);
-
-			sgp = getsegbynamefromheader(q, SEG_LINKEDIT);
-
-			if (sgp) {
-				sgp->vmaddr = (uintptr_t)((char *)q + header_size);
-				g_fbt_kernctl.address = (vm_address_t)q;
-				g_fbt_kernctl.size = header_size + size;
-			} else {
-				kmem_free(kernel_map, (vm_offset_t)q, round_size);
-				g_fbt_kernctl.address = (vm_address_t)NULL;
-				g_fbt_kernctl.size = 0;
-			}
-		} else {
-			if (ret == KERN_SUCCESS)
-				kmem_free(kernel_map, (vm_offset_t)q, round_size);
-			g_fbt_kernctl.address = (vm_address_t)NULL;
-			g_fbt_kernctl.size = 0;
-		}
-
-		strncpy((char *)&(g_fbt_kernctl.mod_modname), "mach_kernel", KMOD_MAX_NAME);
-		((char *)&(g_fbt_kernctl.mod_modname))[KMOD_MAX_NAME -1] = '\0';
+		
+		PE_parse_boot_argn("IgnoreFBTBlacklist", &gIgnoreFBTBlacklist, sizeof (gIgnoreFBTBlacklist));
 
 		fbt_attach( (dev_info_t	*)(uintptr_t)majdevno, DDI_ATTACH );
-
-		gDisableFBT = 1; /* Ensure this initialization occurs just one time. */
+		
+		gFBTInited = 1; /* Ensure this initialization occurs just one time. */
 	}
 	else
-		printf("fbt_init: DisableFBT non-zero, no FBT probes will be provided.\n");
+		panic("fbt_init: called twice!\n");
 }
 #undef FBT_MAJOR

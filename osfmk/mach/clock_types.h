@@ -84,6 +84,7 @@ typedef struct mach_timespec	mach_timespec_t;
 #define NSEC_PER_USEC	1000		/* nanoseconds per microsecond */
 #define USEC_PER_SEC	1000000		/* microseconds per second */
 #define NSEC_PER_SEC	1000000000	/* nanoseconds per second */
+#define NSEC_PER_MSEC	1000000ull	/* nanoseconds per millisecond */
 
 #define BAD_MACH_TIMESPEC(t)						\
 	((t)->tv_nsec < 0 || (t)->tv_nsec >= NSEC_PER_SEC)

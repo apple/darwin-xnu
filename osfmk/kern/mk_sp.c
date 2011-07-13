@@ -79,23 +79,27 @@ thread_policy_common(
 	if (thread->static_param)
 		return (KERN_SUCCESS);
 
+	if ((policy == POLICY_TIMESHARE)
+		&& !SCHED(supports_timeshare_mode)())
+		policy = TH_MODE_FIXED;
+
 	s = splsched();
 	thread_lock(thread);
 
-	if (	!(thread->sched_mode & TH_MODE_REALTIME)	&&
-			!(thread->safe_mode & TH_MODE_REALTIME)			) {
-		if (!(thread->sched_mode & TH_MODE_FAILSAFE)) {
-			integer_t	oldmode = (thread->sched_mode & TH_MODE_TIMESHARE);
+	if (	(thread->sched_mode != TH_MODE_REALTIME)	&&
+			(thread->saved_mode != TH_MODE_REALTIME)		) {
+		if (!(thread->sched_flags & TH_SFLAG_DEMOTED_MASK)) {
+			boolean_t	oldmode = thread->sched_mode == TH_MODE_TIMESHARE;
 
 			if (policy == POLICY_TIMESHARE && !oldmode) {
-				thread->sched_mode |= TH_MODE_TIMESHARE;
+				thread->sched_mode = TH_MODE_TIMESHARE;
 
 				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
 					sched_share_incr();
 			}
 			else
 			if (policy != POLICY_TIMESHARE && oldmode) {
-				thread->sched_mode &= ~TH_MODE_TIMESHARE;
+				thread->sched_mode = TH_MODE_FIXED;
 
 				if ((thread->state & (TH_RUN|TH_IDLE)) == TH_RUN)
 					sched_share_decr();
@@ -103,9 +107,9 @@ thread_policy_common(
 		}
 		else {
 			if (policy == POLICY_TIMESHARE)
-				thread->safe_mode |= TH_MODE_TIMESHARE;
+				thread->saved_mode = TH_MODE_TIMESHARE;
 			else
-				thread->safe_mode &= ~TH_MODE_TIMESHARE;
+				thread->saved_mode = TH_MODE_FIXED;
 		}
 
 		if (priority >= thread->max_priority)
@@ -128,6 +132,12 @@ thread_policy_common(
 			priority = MINPRI;
 
 		thread->importance = priority - thread->task_priority;
+
+#if CONFIG_EMBEDDED
+		/* No one can have a base priority less than MAXPRI_THROTTLE */
+		if (priority < MAXPRI_THROTTLE) 
+			priority = MAXPRI_THROTTLE;
+#endif /* CONFIG_EMBEDDED */
 
 		set_priority(thread, priority);
 	}

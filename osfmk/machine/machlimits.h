@@ -28,9 +28,7 @@
 #ifndef _MACHINE_MACHLIMITS_H
 #define _MACHINE_MACHLIMITS_H
 
-#if defined (__ppc__)
-#include "ppc/machlimits.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/machlimits.h"
 #else
 #error architecture not supported

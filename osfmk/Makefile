@@ -22,20 +22,13 @@ INSTINC_SUBDIRS = \
 	libsa \
 	kdp \
 	pmc
-
-INSTINC_SUBDIRS_PPC = \
-	mach \
-	ppc
-
 INSTINC_SUBDIRS_I386 = \
 	mach	\
 	i386
-
 INSTINC_SUBDIRS_X86_64 = \
 	mach	\
 	i386	\
 	x86_64
-
 INSTINC_SUBDIRS_ARM = \
 	mach	\
 	arm
@@ -58,25 +51,18 @@ EXPINC_SUBDIRS = \
 	kdp \
 	pmc
 
-EXPINC_SUBDIRS_PPC = \
-	mach \
-	ppc
-
 EXPINC_SUBDIRS_I386 = \
 	mach	\
 	i386
-
 EXPINC_SUBDIRS_X86_64 = \
 	mach	\
 	i386	\
 	x86_64
-
 EXPINC_SUBDIRS_ARM = \
 	mach	\
 	arm
 
-SETUP_SUBDIRS = 	\
-	conf
+SETUP_SUBDIRS =
 
 COMP_SUBDIRS = 	\
 	conf

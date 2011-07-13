@@ -50,13 +50,6 @@
 #endif
 
 __private_extern__ kern_return_t
-chudxnu_thread_user_state_available(thread_t thread)
-{
-#pragma unused (thread)
-	return KERN_SUCCESS;
-}
-
-__private_extern__ kern_return_t
 chudxnu_thread_get_state(
 						 thread_t	 	thread, 
 						 thread_flavor_t	 	flavor,

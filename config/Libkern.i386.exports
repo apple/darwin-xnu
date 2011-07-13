@@ -1,4 +1,7 @@
 _lck_mtx_unlock_darwin10
+_lck_mtx_lock_spin
+_lck_mtx_try_lock_spin
+_lck_mtx_convert_spin
 _OSAddAtomic64
 _OSCompareAndSwap64
 _OSRuntimeFinalizeCPP

@@ -57,6 +57,11 @@
 #include <sys/systm.h>
 #include <libkern/OSAtomic.h>
 #include <libkern/crypto/sha1.h>
+#define	SHA1_TIMER	0		// change to nonzero to write timing stamps to profile sha1transform
+
+#if SHA1_TIMER
+#include <sys/kdebug.h>
+#endif
 
 #define	memset(x, y, z)	bzero(x, z);
 #define	memcpy(x, y, z)	bcopy(y, x, z)
@@ -139,8 +144,11 @@ static unsigned char PADDING[64] = { 0x80, /* zeros */ };
 	(p) = ROTATE_LEFT(p, 1);	\
 }
 
-static void SHA1Transform(u_int32_t, u_int32_t, u_int32_t, u_int32_t,
-    u_int32_t, const u_int8_t *, SHA1_CTX *);
+#if (defined (__x86_64__) || defined (__i386__)) 
+extern void SHA1Transform(SHA1_CTX *, const u_int8_t *, u_int32_t Nblocks);
+#else
+static void SHA1Transform(SHA1_CTX *, const u_int8_t *);
+#endif
 
 void _SHA1Update(SHA1_CTX *context, const void *inpp, size_t inputLen);
 
@@ -199,19 +207,36 @@ _SHA1Update(SHA1_CTX *context, const void *inpp, size_t inputLen)
 	if (inputLen >= partLen) {
 		if (index != 0) {
 			memcpy(&context->buffer[index], input, partLen);
-			SHA1Transform(context->state[0], context->state[1],
-			    context->state[2], context->state[3],
-			    context->state[4], context->buffer, context);
+#if (defined (__x86_64__) || defined (__i386__)) 
+			SHA1Transform(context, context->buffer, 1);
+#else
+			SHA1Transform(context, context->buffer);
+#endif
 			i = partLen;
 		}
 
+#if SHA1_TIMER
+		KERNEL_DEBUG_CONSTANT(0xaa800004 | DBG_FUNC_START, 0, 0, 0, 0, 0);
+#endif
+#if (defined (__x86_64__) || defined (__i386__)) 
+			{	
+				int	kk = (inputLen-i)>>6;
+				if (kk>0) {
+					SHA1Transform(context, &input[i], kk);
+					i += (kk<<6);
+				}
+			}
+#else
 		for (; i + 63 < inputLen; i += 64)
-			SHA1Transform(context->state[0], context->state[1],
-			    context->state[2], context->state[3],
-			    context->state[4], &input[i], context);
+			SHA1Transform(context, &input[i]);
+#endif
 
-		if (inputLen == i)
+		 if (inputLen == i) {
+#if SHA1_TIMER
+		        KERNEL_DEBUG_CONSTANT(0xaa800004 | DBG_FUNC_END, 0, 0, 0, 0, 0);
+#endif
 			return;
+		 }
 
 		index = 0;
 	}
@@ -358,13 +383,20 @@ SHA1Final(void *digest, SHA1_CTX *context)
 /*
  * SHA1 basic transformation. Transforms state based on block.
  */
+#if !(defined (__x86_64__) || defined (__i386__)) 
 static void
-SHA1Transform(u_int32_t a, u_int32_t b, u_int32_t c, u_int32_t d,
-    u_int32_t e, const u_int8_t block[64], SHA1_CTX *context)
+SHA1Transform(SHA1_CTX *context, const u_int8_t block[64])
 {
 	/* Register (instead of array) is a win in most cases */
+	register u_int32_t a, b, c, d, e;
 	register u_int32_t w0, w1, w2, w3, w4, w5, w6, w7;
 	register u_int32_t w8, w9, w10, w11, w12, w13, w14, w15;
+
+	a = context->state[0];
+	b = context->state[1];
+	c = context->state[2];
+	d = context->state[3];
+	e = context->state[4];
 
 	w15 = FETCH_32(block + 60);
 	w14 = FETCH_32(block + 56);
@@ -480,3 +512,4 @@ SHA1Transform(u_int32_t a, u_int32_t b, u_int32_t c, u_int32_t d,
 	w15 = w14 = w13 = w12 = w11 = w10 = w9 = w8 = 0;
 	w7 = w6 = w5 = w4 = w3 = w2 = w1 = w0 = 0;
 }
+#endif

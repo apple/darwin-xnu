@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -205,12 +205,15 @@ mac_execve_enter(user_addr_t mac_p, struct image_params *imgp)
 		return (0);
 
 	if (IS_64BIT_PROCESS(current_proc())) {
-		error = copyin(mac_p, &mac, sizeof(mac));
+		struct user64_mac mac64;
+		error = copyin(mac_p, &mac64, sizeof(mac64));
+		mac.m_buflen = mac64.m_buflen;
+		mac.m_string = mac64.m_string;
 	} else {
-		struct mac mac32;
+		struct user32_mac mac32;
 		error = copyin(mac_p, &mac32, sizeof(mac32));
 		mac.m_buflen = mac32.m_buflen;
-		mac.m_string = CAST_USER_ADDR_T(mac32.m_string);
+		mac.m_string = mac32.m_string;
 	}
 	if (error)
 		return (error);
@@ -241,13 +244,17 @@ out:
  * When the subject's label changes, it may require revocation of privilege
  * to mapped objects.  This can't be done on-the-fly later with a unified
  * buffer cache.
+ *
+ * XXX:		CRF_MAC_ENFORCE should be in a kauth_cred_t field, rather
+ * XXX:		than a posix_cred_t field.
  */
 void
 mac_cred_label_update(kauth_cred_t cred, struct label *newlabel)
 {
+	posix_cred_t pcred = posix_cred_get(cred);
 
 	/* force label to be part of "matching" for credential */
-	cred->cr_flags |= CRF_MAC_ENFORCE;
+	pcred->cr_flags |= CRF_MAC_ENFORCE;
 
 	/* inform the policies of the update */
 	MAC_PERFORM(cred_label_update, cred, newlabel);
@@ -344,6 +351,29 @@ mac_proc_check_get_task(struct ucred *cred, struct proc *p)
 	int error;
 
 	MAC_CHECK(proc_check_get_task, cred, p);
+
+	return (error);
+}
+
+/*
+ * The type of maxprot in proc_check_map_anon must be equivalent to vm_prot_t
+ * (defined in <mach/vm_prot.h>). mac_policy.h does not include any header
+ * files, so cannot use the typedef itself.
+ */
+int
+mac_proc_check_map_anon(proc_t proc, user_addr_t u_addr,
+    user_size_t u_size, int prot, int flags, int *maxprot)
+{
+	kauth_cred_t cred;
+	int error;
+
+	if (!mac_vm_enforce ||
+	    !mac_proc_check_enforce(proc, MAC_VM_ENFORCE))
+		return (0);
+
+	cred = kauth_cred_proc_ref(proc);
+	MAC_CHECK(proc_check_map_anon, proc, cred, u_addr, u_size, prot, flags, maxprot);
+	kauth_cred_unref(&cred);
 
 	return (error);
 }
@@ -543,14 +573,6 @@ mac_lctx_check_label_update(struct lctx *l, struct label *newlabel)
 	return (error);
 }
 #endif	/* LCTX */
-
-void
-mac_thread_userret(int code, int error, struct thread *thread)
-{
-
-	if (mac_late)
-		MAC_PERFORM(thread_userret, code, error, thread);
-}
 
 int
 mac_proc_check_suspend_resume(proc_t curp, int sr)

@@ -78,6 +78,7 @@
 #include <netkey/keydb.h>
 
 #include <net/net_osdep.h>
+#include <mach/sdt.h>
 
 #define IPLEN_FLIPPED
 
@@ -214,6 +215,11 @@ ipcomp4_input(struct mbuf *m, int off)
 			IPSEC_STAT_INCREMENT(ipsecstat.in_polvio);
 			goto fail;
 		}
+
+		DTRACE_IP6(receive, struct mbuf *, m, struct inpcb *, NULL,
+                        struct ip *, ip, struct ifnet *, m->m_pkthdr.rcvif,
+                        struct ip *, ip, struct ip6_hdr *, NULL);
+
 		ip_proto_dispatch_in(m, off, nxt, 0);
 	} else
 		m_freem(m);
@@ -233,10 +239,9 @@ fail:
 
 #if INET6
 int
-ipcomp6_input(mp, offp)
-	struct mbuf **mp;
-	int *offp;
+ipcomp6_input(struct mbuf **mp, int *offp, int proto)
 {
+#pragma unused(proto)
 	struct mbuf *m, *md;
 	int off;
 	struct ip6_hdr *ip6;

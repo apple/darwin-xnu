@@ -60,28 +60,7 @@
 
 #include <sys/sysctl.h>
 
-#if __ppc__
-
-static __inline__ int
-_OSRosettaCheck(void)
-{
-	int isCrossEndian = 0;
-	int val = 0;
-	size_t size = sizeof val;
-
-	if (sysctlbyname("sysctl.proc_native", &val, &size, NULL, 0) == -1)
-		isCrossEndian = 0;
-	else
-		isCrossEndian = val ? 0 : 1;
-
-	return isCrossEndian;
-}
-
-#else /* __ppc__ */
-
 static __inline__ int _OSRosettaCheck(void) { return 0; }
-
-#endif /* __ppc__ */
 
 #define IF_ROSETTA() if (__builtin_expect(_OSRosettaCheck(), 0) )
 

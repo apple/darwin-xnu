@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -48,6 +48,12 @@
 #define FSOPT_REPORT_FULLSIZE	0x00000004
 /* The following option only valid when requesting ATTR_CMN_RETURNED_ATTRS */
 #define FSOPT_PACK_INVAL_ATTRS	0x00000008
+
+#ifdef PRIVATE
+#define FSOPT_EXCHANGE_DATA_ONLY 0x0000010
+#endif
+
+
 
 /* we currently aren't anywhere near this amount for a valid
  * fssearchblock.sizeofsearchparams1 or fssearchblock.sizeofsearchparams2
@@ -208,6 +214,12 @@ typedef struct vol_capabilities_attr {
  * 
  * VOL_CAP_FMT_DECMPFS_COMPRESSION: When set, the volume supports transparent
  * decompression of compressed files using decmpfs.
+ *
+ * VOL_CAP_FMT_64BIT_OBJECT_IDS: When set, the volume uses object IDs that
+ * are 64-bit. This means that ATTR_CMN_FILEID and ATTR_CMN_PARENTID are the
+ * only legitimate attributes for obtaining object IDs from this volume and the
+ * 32-bit fid_objno fields of the fsobj_id_t returned by ATTR_CMN_OBJID,
+ * ATTR_CMN_OBJPERMID, and ATTR_CMN_PAROBJID are undefined.
  */
 #define VOL_CAP_FMT_PERSISTENTOBJECTIDS		0x00000001
 #define VOL_CAP_FMT_SYMBOLICLINKS 		0x00000002
@@ -225,7 +237,8 @@ typedef struct vol_capabilities_attr {
 #define VOL_CAP_FMT_HIDDEN_FILES		0x00002000
 #define VOL_CAP_FMT_PATH_FROM_ID		0x00004000
 #define VOL_CAP_FMT_NO_VOLUME_SIZES		0x00008000
-#define VOL_CAP_FMT_DECMPFS_COMPRESSION	0x00010000
+#define VOL_CAP_FMT_DECMPFS_COMPRESSION		0x00010000
+#define VOL_CAP_FMT_64BIT_OBJECT_IDS		0x00020000
 
 
 /*
@@ -338,13 +351,15 @@ typedef struct vol_attributes_attr {
 #define ATTR_CMN_FILEID				0x02000000
 #define ATTR_CMN_PARENTID			0x04000000
 #define ATTR_CMN_FULLPATH			0x08000000
+#define ATTR_CMN_ADDEDTIME			0x10000000
+
 /*
  * ATTR_CMN_RETURNED_ATTRS is only valid with getattrlist(2).
  * It is always the first attribute in the return buffer.
  */
 #define ATTR_CMN_RETURNED_ATTRS			0x80000000
 
-#define ATTR_CMN_VALIDMASK			0x8FE7FFFF
+#define ATTR_CMN_VALIDMASK			0x9FE7FFFF
 #define ATTR_CMN_SETMASK			0x01C7FF00
 #define ATTR_CMN_VOLSETMASK			0x00006700
 
@@ -378,7 +393,9 @@ typedef struct vol_attributes_attr {
 #define ATTR_DIR_LINKCOUNT			0x00000001
 #define ATTR_DIR_ENTRYCOUNT			0x00000002
 #define ATTR_DIR_MOUNTSTATUS			0x00000004
-#define DIR_MNTSTATUS_MNTPOINT		0x00000001
+/* ATTR_DIR_MOUNTSTATUS Flags: */
+#define	  DIR_MNTSTATUS_MNTPOINT		0x00000001
+#define	  DIR_MNTSTATUS_TRIGGER			0x00000002
 
 #define ATTR_DIR_VALIDMASK			0x00000007
 #define ATTR_DIR_SETMASK			0x00000000
@@ -394,11 +411,9 @@ typedef struct vol_attributes_attr {
 #define ATTR_FILE_DATAALLOCSIZE			0x00000400
 #define ATTR_FILE_RSRCLENGTH			0x00001000
 #define ATTR_FILE_RSRCALLOCSIZE			0x00002000
-/* Only used when CONFIG_PROTECT is ON */
-#define ATTR_FILE_PROTECTION_CLASS			0x00004000
 
-#define ATTR_FILE_VALIDMASK			0x000077FF
-#define ATTR_FILE_SETMASK			0x00004020
+#define ATTR_FILE_VALIDMASK			0x000037FF
+#define ATTR_FILE_SETMASK			0x00000020
 
 #define ATTR_FORK_TOTALSIZE			0x00000001
 #define ATTR_FORK_ALLOCSIZE			0x00000002

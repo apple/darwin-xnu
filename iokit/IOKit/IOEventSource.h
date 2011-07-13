@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2000, 2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -44,6 +44,9 @@ HISTORY
 #include <IOKit/system.h>
 #include <IOKit/IOWorkLoop.h>
 
+#if IOKITSTATS
+#include <IOKit/IOStatisticsPrivate.h>
+#endif
 
 __BEGIN_DECLS
 #include <mach/clock_types.h>
@@ -69,12 +72,12 @@ source may only be a member of 1 linked list chain.  If you need to move it
 between chains than make sure it is removed from the original chain before
 attempting to move it.
 <br><br>
-	The IOEventSource makes no attempt to maintain the consitency of it's internal data across multi-threading.  It is assumed that the user of these basic tools will protect the data that these objects represent in some sort of device wide instance lock.	For example the IOWorkLoop maintains the event chain by handing off change request to its own thread and thus single threading access to its state.
+	The IOEventSource makes no attempt to maintain the consistency of its internal data across multi-threading.  It is assumed that the user of these basic tools will protect the data that these objects represent in some sort of device wide instance lock.	For example the IOWorkLoop maintains the event chain by using an IOCommandGate and thus single threading access to its state.
 <br><br>
-	All subclasses of the IOEventSource are expected to implement the checkForWork() member function.
+	All subclasses of IOEventSource that wish to perform work on the work-loop thread are expected to implement the checkForWork() member function. As of Mac OS X, 10.7 (Darwin 11), checkForWork is no longer pure virtual, and should not be overridden if there is no work to be done.
 
 <br><br>
-	checkForWork() is the key method in this class.	 It is called by some work-loop when convienient and is expected to evaluate it's internal state and determine if an event has occurred since the last call.  In the case of an event having occurred then the instance defined target(owner)/action will be called.	 The action is stored as an ordinary C function pointer but the first parameter is always the owner.  This means that a C++ member function can be used as an action function though this depends on the ABI.
+	checkForWork() is the key method in this class.	 It is called by some work-loop when convienient and is expected to evaluate its internal state and determine if an event has occurred since the last call.  In the case of an event having occurred then the instance defined target(owner)/action will be called.	 The action is stored as an ordinary C function pointer but the first parameter is always the owner.  This means that a C++ member function can be used as an action function though this depends on the ABI.
 <br><br>
 	Although the eventChainNext variable contains a reference to the next event source in the chain this reference is not retained.  The list 'owner' i.e. the client that creates the event, not the work-loop, is expected to retain the source.
 */
@@ -82,6 +85,9 @@ class IOEventSource : public OSObject
 {
     OSDeclareAbstractStructors(IOEventSource)
     friend class IOWorkLoop;
+#if IOKITSTATS
+    friend class IOStatistics;
+#endif
 
 public:
 /*!
@@ -125,7 +131,13 @@ protected:
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of the IOEventSource in the future.
     */    
-    struct ExpansionData { };
+    struct ExpansionData {
+#if IOKITSTATS
+	    struct IOEventSourceCounter *counter;
+#else
+	    void *iokitstatsReserved;
+#endif
+	};
 
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
@@ -149,14 +161,19 @@ successfully.
 */
     virtual bool init(OSObject *owner, IOEventSource::Action action = 0);
 
+    virtual void free( void );
+
 /*! @function checkForWork
-    @abstract Pure Virtual member function used by IOWorkLoop for work
+    @abstract Virtual member function used by IOWorkLoop for work
 scheduling.
     @discussion This function will be called to request a subclass to check
-it's internal state for any work to do and then to call out the owner/action.
+its internal state for any work to do and then to call out the owner/action.
+If this event source never performs any work (e.g. IOCommandGate), this
+method should not be overridden. NOTE: This method is no longer declared pure
+virtual. A default implementation is provided in IOEventSource.
     @result Return true if this function needs to be called again before all its outstanding events have been processed.
         */
-    virtual bool checkForWork() = 0;
+    virtual bool checkForWork();
 
 /*! @function setWorkLoop
     @abstract Set'ter for $link workLoop variable.

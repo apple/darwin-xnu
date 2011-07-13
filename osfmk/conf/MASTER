@@ -65,7 +65,7 @@ ident		MACH
 #	option should be on.
 #
 options		MACH_KERNEL
-options		MACH_PAGEMAP
+options		MACH_PAGEMAP	#	<mach_pagemap>
 options		MACH_LOAD
 options		MACH_RT
 options		TASK_SWAPPER	#	<task_swapper_disabled>
@@ -108,6 +108,9 @@ options		MACH_MP_DEBUG	#		# <debug>
 #	operations on each element.
 #
 options		ZONE_DEBUG	#		# <debug>
+
+options		CONFIG_ZLEAKS	# Live zone leak debugging	# <zleaks>
+
 #
 options		ZONE_ALIAS_ADDR	#		# <zone_alias_addr>
 # 
@@ -140,7 +143,6 @@ options		CONFIG_DTRACE	#		# <config_dtrace>
 # MACH_COUNTERS enables code that handles various counters in the system.
 # 
 options		MACH_COUNTERS	#		# <debug>
-
 
 ##########################################################
 #
@@ -207,9 +209,6 @@ options   CONFIG_ZONE_MAP_MIN=12582912	# <medium,large,xlarge>
 options   CONFIG_ZONE_MAP_MIN=6291456	# <small,xsmall>
 options   CONFIG_ZONE_MAP_MIN=1048576	# <bsmall>
 
-options   CONFIG_TOKEN_QUEUE_SMALL=1		# <bsmall>
-options   CONFIG_TOKEN_QUEUE_SMALL=0		# <xsmall,small,medium,large,xlarge>
-
 #
 #  configurable kernel - use these options to strip strings from panic
 #  and printf calls.
@@ -250,3 +249,23 @@ options		CONFIG_CODE_DECRYPTION	# <config_embedded>
 # Context switched counters 
 #
 options		CONFIG_COUNTERS			# <config_counters>
+
+#
+# Timeshare scheduler implementations
+#
+options		CONFIG_SCHED_TRADITIONAL	# <config_sched_traditional>
+options		CONFIG_SCHED_PROTO		# <config_sched_proto>
+options		CONFIG_SCHED_GRRR		# <config_sched_grrr>
+options		CONFIG_SCHED_FIXEDPRIORITY	# <config_sched_fixedpriority>
+options		CONFIG_SCHED_GRRR_CORE		# <config_sched_grrr,config_sched_fixedpriority>
+
+options		CONFIG_SCHED_IDLE_IN_PLACE		# <config_sched_idle_in_place>
+
+#
+# freeze - support app hibernation, used on embedded
+#
+options		CONFIG_FREEZE	# <freeze>
+
+
+options		CHECK_CS_VALIDATION_BITMAP	# <config_cs_validation_bitmap>
+

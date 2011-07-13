@@ -308,10 +308,10 @@ audit_arg_process(struct kaudit_record *ar, proc_t p)
 	ar->k_ar.ar_arg_asid = my_cred->cr_audit.as_aia_p->ai_asid;
 	bcopy(&my_cred->cr_audit.as_aia_p->ai_termid,
 	    &ar->k_ar.ar_arg_termid_addr, sizeof(au_tid_addr_t));
-	ar->k_ar.ar_arg_euid = my_cred->cr_uid;
-	ar->k_ar.ar_arg_egid = my_cred->cr_groups[0];
-	ar->k_ar.ar_arg_ruid = my_cred->cr_ruid;
-	ar->k_ar.ar_arg_rgid = my_cred->cr_rgid;
+	ar->k_ar.ar_arg_euid = kauth_cred_getuid(my_cred);
+	ar->k_ar.ar_arg_egid = kauth_cred_getgid(my_cred);
+	ar->k_ar.ar_arg_ruid = kauth_cred_getruid(my_cred);
+	ar->k_ar.ar_arg_rgid = kauth_cred_getrgid(my_cred);
 	kauth_cred_unref(&my_cred);
 	ar->k_ar.ar_arg_pid = p->p_pid;
 	ARG_SET_VALID(ar, ARG_AUID | ARG_EUID | ARG_EGID | ARG_RUID |

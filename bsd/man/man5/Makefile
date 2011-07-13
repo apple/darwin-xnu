@@ -11,8 +11,6 @@ DATAFILES = \
 	core.5 \
 	dir.5 \
 	dirent.5 \
-	fs.5 \
-	inode.5 \
 	types.5
 
 INSTALL_MAN_LIST = ${DATAFILES}

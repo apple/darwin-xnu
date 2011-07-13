@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		C68D22B30EB2441400C3A06C /* testvmx.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C68D22B20EB2441400C3A06C /* testvmx.cpp */; };
+		C6CBD9CE1225B9FF00F317B5 /* testthreadcall.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C6CBD9CD1225B9FF00F317B5 /* testthreadcall.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -16,10 +17,21 @@
 		C68D22A90EB243BC00C3A06C /* testvmx-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "testvmx-Info.plist"; sourceTree = "<group>"; };
 		C68D22B10EB2441400C3A06C /* testvmx.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = testvmx.h; sourceTree = "<group>"; };
 		C68D22B20EB2441400C3A06C /* testvmx.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = testvmx.cpp; sourceTree = "<group>"; };
+		C6CBD9C31225B98F00F317B5 /* testthreadcall.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = testthreadcall.kext; sourceTree = BUILT_PRODUCTS_DIR; };
+		C6CBD9C41225B98F00F317B5 /* testthreadcall-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "testthreadcall-Info.plist"; sourceTree = "<group>"; };
+		C6CBD9CC1225B9FF00F317B5 /* testthreadcall.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = testthreadcall.h; sourceTree = "<group>"; };
+		C6CBD9CD1225B9FF00F317B5 /* testthreadcall.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = testthreadcall.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		C68D22A60EB243BC00C3A06C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C6CBD9C11225B98F00F317B5 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -43,6 +55,7 @@
 			isa = PBXGroup;
 			children = (
 				C68D22A80EB243BC00C3A06C /* testvmx.kext */,
+				C6CBD9C31225B98F00F317B5 /* testthreadcall.kext */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -50,9 +63,12 @@
 		247142CAFF3F8F9811CA285C /* Source */ = {
 			isa = PBXGroup;
 			children = (
+				C6CBD9CC1225B9FF00F317B5 /* testthreadcall.h */,
+				C6CBD9CD1225B9FF00F317B5 /* testthreadcall.cpp */,
 				C68D22B10EB2441400C3A06C /* testvmx.h */,
 				C68D22B20EB2441400C3A06C /* testvmx.cpp */,
 				C68D22A90EB243BC00C3A06C /* testvmx-Info.plist */,
+				C6CBD9C41225B98F00F317B5 /* testthreadcall-Info.plist */,
 			);
 			name = Source;
 			sourceTree = "<group>";
@@ -77,6 +93,23 @@
 			productReference = C68D22A80EB243BC00C3A06C /* testvmx.kext */;
 			productType = "com.apple.product-type.kernel-extension.iokit";
 		};
+		C6CBD9C21225B98F00F317B5 /* testthreadcall */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C6CBD9C71225B98F00F317B5 /* Build configuration list for PBXNativeTarget "testthreadcall" */;
+			buildPhases = (
+				C6CBD9BF1225B98F00F317B5 /* Sources */,
+				C6CBD9C01225B98F00F317B5 /* Resources */,
+				C6CBD9C11225B98F00F317B5 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = testthreadcall;
+			productName = testthreadcall;
+			productReference = C6CBD9C31225B98F00F317B5 /* testthreadcall.kext */;
+			productType = "com.apple.product-type.kernel-extension.iokit";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -84,18 +117,33 @@
 			isa = PBXProject;
 			buildConfigurationList = 1DEB91DD08733DB10010E9CD /* Build configuration list for PBXProject "testkext" */;
 			compatibilityVersion = "Xcode 3.1";
+			developmentRegion = English;
 			hasScannedForEncodings = 1;
+			knownRegions = (
+				English,
+				Japanese,
+				French,
+				German,
+			);
 			mainGroup = 089C166AFE841209C02AAC07 /* testkext */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				C68D22A70EB243BC00C3A06C /* testvmx */,
+				C6CBD9C21225B98F00F317B5 /* testthreadcall */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		C68D22A50EB243BC00C3A06C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C6CBD9C01225B98F00F317B5 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -113,6 +161,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C6CBD9BF1225B98F00F317B5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C6CBD9CE1225B9FF00F317B5 /* testthreadcall.cpp in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
@@ -124,6 +180,7 @@
 				GCC_OPTIMIZATION_LEVEL = 0;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				ONLY_ACTIVE_ARCH = YES;
 				PREBINDING = NO;
 			};
 			name = Debug;
@@ -180,6 +237,45 @@
 			};
 			name = Release;
 		};
+		C6CBD9C51225B98F00F317B5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_ENABLE_FIX_AND_CONTINUE = NO;
+				GCC_MODEL_TUNING = G5;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				INFOPLIST_FILE = "testthreadcall-Info.plist";
+				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
+				MODULE_NAME = com.yourcompany.driver.testthreadcall;
+				MODULE_VERSION = 1.0.0d1;
+				PREBINDING = NO;
+				PRODUCT_NAME = testthreadcall;
+				WRAPPER_EXTENSION = kext;
+			};
+			name = Debug;
+		};
+		C6CBD9C61225B98F00F317B5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				COPY_PHASE_STRIP = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_ENABLE_FIX_AND_CONTINUE = NO;
+				GCC_MODEL_TUNING = G5;
+				INFOPLIST_FILE = "testthreadcall-Info.plist";
+				INSTALL_PATH = "$(SYSTEM_LIBRARY_DIR)/Extensions";
+				MODULE_NAME = com.yourcompany.driver.testthreadcall;
+				MODULE_VERSION = 1.0.0d1;
+				PREBINDING = NO;
+				PRODUCT_NAME = testthreadcall;
+				WRAPPER_EXTENSION = kext;
+				ZERO_LINK = NO;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -197,6 +293,15 @@
 			buildConfigurations = (
 				C68D22AA0EB243BD00C3A06C /* Debug */,
 				C68D22AB0EB243BD00C3A06C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C6CBD9C71225B98F00F317B5 /* Build configuration list for PBXNativeTarget "testthreadcall" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C6CBD9C51225B98F00F317B5 /* Debug */,
+				C6CBD9C61225B98F00F317B5 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

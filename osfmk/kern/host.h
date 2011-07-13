@@ -74,7 +74,7 @@
 #include <mach/exception_types.h>
 #include <mach/host_special_ports.h>
 #include <kern/kern_types.h>
-
+#include <mach/vm_statistics.h>
 
 struct	host {
 	decl_lck_mtx_data(,lock)		/* lock to protect exceptions */
@@ -88,6 +88,8 @@ extern host_data_t	realhost;
 
 #define host_lock(host)		lck_mtx_lock(&(host)->lock)
 #define host_unlock(host)	lck_mtx_unlock(&(host)->lock)
+
+extern vm_extmod_statistics_data_t host_extmod_statistics;
 
 #endif	/* MACH_KERNEL_PRIVATE */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -35,6 +35,20 @@
 
 #include <mach/sync_policy.h>
 
+#if IOKITSTATS
+
+#define IOStatisticsInitializeCounter() \
+	IOStatistics::setCounterType(reserved->counter, kIOStatisticsCommandQueueCounter)
+
+#define IOStatisticsActionCall() \
+	IOStatistics::countCommandQueueActionCall(reserved->counter)
+
+#else
+
+#define IOStatisticsInitializeCounter()
+#define IOStatisticsActionCall()
+
+#endif /* IOKITSTATS */
 
 #define NUM_FIELDS_IN_COMMAND	4
 typedef struct commandEntryTag {
@@ -87,6 +101,8 @@ bool IOCommandQueue::init(OSObject *inOwner,
 
     producerIndex = consumerIndex = 0;
 
+    IOStatisticsInitializeCounter();
+
     return true;
 }
 
@@ -130,7 +146,7 @@ void IOCommandQueue::free()
 
 bool IOCommandQueue::checkForWork()
 {
-    void *field0, *field1, *field2, *field3;
+    void	*field0, *field1, *field2, *field3;
 	bool	trace = ( gIOKitTrace & kIOTraceCommandGates ) ? true : false;
 
     if (!enabled || consumerIndex == producerIndex)
@@ -150,10 +166,11 @@ bool IOCommandQueue::checkForWork()
 
 	if (trace)
 		IOTimeStampStartConstant(IODBG_CMDQ(IOCMDQ_ACTION),
-			(uintptr_t) action, (uintptr_t) owner);
-
+								 (uintptr_t) action, (uintptr_t) owner);
+	
+    IOStatisticsActionCall();
     (*(IOCommandQueueAction) action)(owner, field0, field1, field2, field3);
-
+	
 	if (trace)
 		IOTimeStampEndConstant(IODBG_CMDQ(IOCMDQ_ACTION),
 							   (uintptr_t) action, (uintptr_t) owner);

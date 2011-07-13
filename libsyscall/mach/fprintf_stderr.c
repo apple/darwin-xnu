@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -32,30 +32,36 @@
 
 #include <mach/mach.h>
 #include <mach/mach_init.h>
-#include <stdio.h>
 #include <stdarg.h>
+#include "string.h"
 
 int (*vprintf_stderr_func)(const char *format, va_list ap);
 
+#define __STDERR_FILENO	2
+int write(int fd, const char* cbuf, int nbyte);
 
 /* This function allows the writing of a mach error message to an
  * application-controllable output method, the default being to
  * use printf if no other method is specified by the application.
  *
- * To override, set the global (static) function pointer vprintf_stderr to
+ * To override, set the global function pointer vprintf_stderr to
  * a function which takes the same parameters as vprintf.
  */
 
-int fprintf_stderr(const char *format, ...)
+__private_extern__ int
+fprintf_stderr(const char *format, ...)
 {
-        va_list args;
+	va_list args;
 	int retval;
 
 	va_start(args, format);
-	if (vprintf_stderr_func == NULL)
-		retval = vprintf(format, args);
-	else
+	if (vprintf_stderr_func == NULL) {
+		char buffer[1024];
+		retval = _mach_vsnprintf(buffer, sizeof(buffer), format, args);
+		write(__STDERR_FILENO, buffer, retval);
+	} else {
 		retval = (*vprintf_stderr_func)(format, args);
+	}
 	va_end(args);
 
 	return retval;

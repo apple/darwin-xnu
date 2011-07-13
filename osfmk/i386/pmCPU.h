@@ -30,15 +30,14 @@
 #define _I386_PMCPU_H_
 
 #include <i386/cpu_topology.h>
-#include <i386/rtclock.h>
 
 #ifndef ASSEMBLER
 
 /*
- * This value should be changed each time that pmDsipatch_t or pmCallBacks_t
+ * This value should be changed each time that pmDispatch_t or pmCallBacks_t
  * changes.
  */
-#define PM_DISPATCH_VERSION	23
+#define PM_DISPATCH_VERSION	102
 
 /*
  * Dispatch table for functions that get installed when the power
@@ -79,11 +78,10 @@ typedef struct
     int			(*pmIPIHandler)(void *state);
     void		(*pmThreadTellUrgency)(int urgency, uint64_t rt_period, uint64_t rt_deadline);
     void		(*pmActiveRTThreads)(boolean_t active);
+    boolean_t           (*pmInterruptPrewakeApplicable)(void);
 } pmDispatch_t;
 
-
-/*
- * common time fields exported to PM code. This structure may be
+/* common time fields exported to PM code. This structure may be
  * allocated on the stack, so avoid making it unnecessarily large.
  */
 typedef struct pm_rtc_nanotime {
@@ -115,9 +113,8 @@ typedef struct {
     void		(*pmSendIPI)(int cpu);
     void		(*GetNanotimeInfo)(pm_rtc_nanotime_t *);
     int			(*ThreadGetUrgency)(uint64_t *rt_period, uint64_t *rt_deadline);
-    uint32_t		(*timeQueueMigrate)(int cpu);
-    void		(*RTCClockAdjust)(uint64_t adjustment);
     uint32_t		(*timerQueueMigrate)(int cpu);
+    void		(*RTCClockAdjust)(uint64_t adjustment);
     x86_topology_parameters_t	*topoParms;
     boolean_t		(*InterruptPending)(void);
     boolean_t		(*IsInterrupting)(uint8_t vector);
@@ -144,8 +141,6 @@ void pmTimerSave(void);
 void pmTimerRestore(void);
 kern_return_t pmCPUExitHalt(int cpu);
 kern_return_t pmCPUExitHaltToOff(int cpu);
-void thread_tell_urgency(int urgency, uint64_t rt_period, uint64_t rt_deadline);
-void active_rt_threads(boolean_t active);
 
 #define PM_HALT_NORMAL		0		/* normal halt path */
 #define PM_HALT_DEBUG		1		/* debug code wants to halt */
@@ -160,7 +155,9 @@ void pmSafeMode(x86_lcpu_t *lcpu, uint32_t flags);
 #define PM_SAFE_FL_RESUME	0x00000020	/* resume execution on the CPU */
 
 extern int pmsafe_debug;
-extern int idlehalt;
+/* Default urgency timing threshold for the DEBUG build */
+#define		URGENCY_NOTIFICATION_ASSERT_NS (5 * 1000 * 1000)
+extern uint64_t	urgency_notification_assert_abstime_threshold;
 
 /******************************************************************************
  *

@@ -167,7 +167,7 @@ struct extern_proc {
 #define	P_TIMEOUT	0x00000400	/* Timing out during sleep */
 #define	P_TRACED	0x00000800	/* Debugged process being traced */
 
-#define	P_RESV3 	0x00001000	/* (P_WAITED)Debugging prc has waited for child */
+#define	P_DISABLE_ASLR	0x00001000	/* Disable address space layout randomization */
 #define	P_WEXIT		0x00002000	/* Working on exiting */
 #define	P_EXEC		0x00004000	/* Process called exec. */
 
@@ -252,7 +252,7 @@ extern int proc_pid(proc_t);
 extern int proc_ppid(proc_t);
 /* returns 1 if the process is marked for no remote hangs */
 extern int proc_noremotehang(proc_t);
-/* returns 1 is the process is marked for force quota */
+/* returns 1 if the process is marked for force quota */
 extern int proc_forcequota(proc_t);
 
 /* this routine returns 1 if the process is running with 64bit address space, else 0 */
@@ -292,9 +292,41 @@ extern int	msleep1(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, u_int
 extern int proc_pidversion(proc_t);
 extern int proc_getcdhash(proc_t, unsigned char *);
 #endif /* KERNEL_PRIVATE */
+#ifdef XNU_KERNEL_PRIVATE
+/* 
+ * This returns an unique 64bit id of a given process. 
+ * Caller needs to hold proper reference on the 
+ * passed in process strucutre.
+ */
+extern uint64_t proc_uniqueid(proc_t);
+extern uint64_t proc_selfuniqueid(void);
+extern void proc_getexecutableuuid(proc_t, unsigned char *, unsigned long);
+#endif /* XNU_KERNEL_PRIVATE*/
 
 __END_DECLS
 
 #endif	/* KERNEL */
+
+#ifdef PRIVATE
+
+/* Values for pid_shutdown_sockets */
+#ifdef KERNEL
+#define SHUTDOWN_SOCKET_LEVEL_DISCONNECT_INTERNAL	0x0
+#endif /* KERNEL */
+#define SHUTDOWN_SOCKET_LEVEL_DISCONNECT_SVC		0x1
+#define SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL		0x2
+
+#ifndef KERNEL
+
+__BEGIN_DECLS
+
+int pid_suspend(int pid);
+int pid_resume(int pid);
+
+
+__END_DECLS
+
+#endif /* !KERNEL */
+#endif /* PRIVATE */
 
 #endif	/* !_SYS_PROC_H_ */

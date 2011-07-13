@@ -15,32 +15,17 @@ A. How to build XNU:
 
   By default, architecture defaults to the build machine 
   architecture, and the kernel configuration is set to build for DEVELOPMENT.
-  The machine configuration defaults to S5L8900X for arm and default for i386 and ppc.
   
   This will also create a bootable image, mach_kernel,  and a kernel binary 
   with symbols, mach_kernel.sys.
-	
-  Examples:
-	/* make a debug kernel for H1 arm board */
-	make TARGET_CONFIGS="debug arm s5l8900x" SDKROOT=/path/to/SDK
-	
-    $(OBJROOT)/DEBUG_ARM_S5L8900X/osfmk/DEBUG/osfmk.o: pre-linked object for osfmk component
-    $(OBJROOT)/DEBUG_ARM_S5L8900X/mach_kernel: bootable image
 
-	/* make debug and development kernels for H1 arm board */
-	make TARGET_CONFIGS="debug arm s5l8900x  development arm s5l8900x" SDKROOT=/path/to/SDK
-	
-    $(OBJROOT)/DEBUG_ARM_S5L8900X/osfmk/DEBUG/osfmk.o: pre-linked object for osfmk component
-    $(OBJROOT)/DEBUG_ARM_S5L8900X/mach_kernel: bootable image
-    $(OBJROOT)/DEVELOPMENT_ARM_S5L8900X/osfmk/DEVELOPMENT/osfmk.o: pre-linked object for osfmk component
-    $(OBJROOT)/DEVELOPMENT_ARM_S5L8900X/mach_kernel: bootable image
 
-	/* this is all you need to do to build H1 arm with DEVELOPMENT kernel configuration  */
-	make TARGET_CONFIGS="default arm default" SDKROOT=/path/to/SDK
+	/* this is all you need to do to build with RELEASE kernel configuration  */
+	make TARGET_CONFIGS="release x86_64 default" SDKROOT=/path/to/SDK
 	
 	or the following is equivalent (ommitted SDKROOT will use /)
 	
-	make ARCH_CONFIGS=ARM
+	make ARCH_CONFIGS=X86_64
 
 2) Building a Component
 
@@ -64,7 +49,7 @@ A. How to build XNU:
   and KERNEL_CONFIGS).
   
   Example:
-    $(OBJROOT)/RELEASE_PPC/osfmk/RELEASE/osfmk.o: pre-linked object for osfmk component
+    $(OBJROOT)/RELEASE_X86_64/osfmk/RELEASE/osfmk.filelist: list of objects in osfmk component
 
   From the component top directory:
 
@@ -81,36 +66,36 @@ A. How to build XNU:
   Define kernel configuration to DEBUG in your environment or when running a 
   make command.  Then, apply procedures 4, 5
 
-  $ make TARGET_CONFIGS="DEBUG PPC DEFAULT" all
+  $ make TARGET_CONFIGS="DEBUG X86_64 DEFAULT" all
 
   or
 
-  $ make KERNEL_CONFIGS=DEBUG all
+  $ make KERNEL_CONFIGS=DEBUG ARCH_CONFIGS=X86_64 all
 
   or
 
-  $ export TARGET_CONFIGS="DEBUG ARM MX31ADS"
+  $ export TARGET_CONFIGS="DEBUG X86_64 DEFAULT"
   $ export SDKROOT=/path/to/SDK
   $ make all
 
   Example:
-    $(OBJROOT)/DEBUG_PPC/osfmk/DEBUG/osfmk.o: pre-linked object for osfmk component
-    $(OBJROOT)/DEBUG_PPC/mach_kernel: bootable image
+    $(OBJROOT)/DEBUG_X86_64/osfmk/DEBUG/osfmk.filelist: list of objects in osfmk component
+    $(OBJROOT)/DEBUG_X86_64/mach_kernel: bootable image
 
 4) Building fat
 
   Define architectures in your environment or when running a make command.
   Apply procedures 3, 4, 5
 
-  $ make TARGET_CONFIGS="RELEASE PPC default RELEASE I386 default" exporthdrs all
+  $ make TARGET_CONFIGS="RELEASE I386 DEFAULT RELEASE X86_64 DEFAULT" exporthdrs all
 
   or
 
-  $ make ARCH_CONFIGS="PPC I386" exporthdrs all
+  $ make ARCH_CONFIGS="I386 X86_64" exporthdrs all
 
   or
 
-  $ export ARCH_CONFIGS="PPC I386"
+  $ export ARCH_CONFIGS="I386 X86_64"
   $ make exporthdrs all
 
 5) Verbose make 
@@ -127,16 +112,28 @@ A. How to build XNU:
 
   From the top directory, run:
 
-    $ ~rc/bin/buildit . -arch ppc -arch i386 -noinstallsrc -nosum
+    $ ~rc/bin/buildit . -arch i386 -arch x86_64 -arch armv7 -arch ppc -noinstallsrc -nosum
+
 	
-	or for multiple arm builds
-	
-    $ ~rc/bin/buildit . -noinstallsrc -nosum -- TARGET_CONFIGS="release arm MX31ADS release arm LN2410SBC"
-	
-	or for default arm build (kernel config DEVELOPMENT and machine config MX31ADS)
-	
-    $ ~rc/bin/buildit . -arch arm -noinstallsrc -nosum -- TARGET_CONFIGS="release arm MX31ADS release arm LN2410SBC"
-	
+  xnu supports a number of XBS build aliases, which allow B&I to build
+  the same source submission multiple times in different ways, to
+  produce different results. Each build alias supports the standard
+  "clean", "install", "installsrc", "installhdrs" targets, but
+  conditionalize their behavior on the RC_ProjectName make variable
+  which is passed as the -project argument to ~rc/bin/buildit, which
+  can be one of:
+
+  -project xnu          # the default, builds /mach_kernel, kernel-space
+                        # headers, user-space headers, man pages,
+                        # symbol-set kexts
+
+  -project xnu_debug    # a DEBUG kernel in /AppleInternal with dSYM
+
+  -project libkxld      # user-space version of kernel linker
+
+  -project Libsyscall   # automatically generate BSD syscall stubs
+
+
 
 8) Creating tags and cscope
 
@@ -156,6 +153,8 @@ A. How to build XNU:
    $ make MAKEJOBS=-j8    # this will use 8 processes during the build. The default is 2x the number of active cores
 
    $ make -w              # trace recursive make invocations. Useful in combination with VERBOSE=YES
+
+   $ make BUILD_LTO=1	  # built with LLVM Link Time Optimization (experimental)
 
 =============================================
 B. How to install a new header file from XNU

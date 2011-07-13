@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -44,7 +44,7 @@ int krpc_portmap(struct sockaddr_in *sin,
 
 
 /*
- * RPC definitions for the portmapper
+ * RPC definitions for the portmapper (portmap and rpcbind)
  */
 #define	PMAPPORT		111
 #define	PMAPPROG		100000
@@ -55,6 +55,24 @@ int krpc_portmap(struct sockaddr_in *sin,
 #define	PMAPPROC_GETPORT	3
 #define	PMAPPROC_DUMP		4
 #define	PMAPPROC_CALLIT		5
+
+#define RPCBPROG		PMAPPROG
+#define RPCBVERS3		3
+#define RPCBVERS4		4
+#define RPCBPROC_NULL		0
+#define RPCBPROC_SET		1
+#define RPCBPROC_UNSET		2
+#define RPCBPROC_GETADDR	3
+#define RPCBPROC_DUMP		4
+#define RPCBPROC_CALLIT		5
+#define RPCBPROC_BCAST		RPCBPROC_CALLIT
+#define RPCBPROC_GETTIME	6
+#define RPCBPROC_UADDR2TADDR	7
+#define RPCBPROC_TADDR2UADDR	8
+#define RPCBPROC_GETVERSADDR	9
+#define RPCBPROC_INDIRECT	10
+#define RPCBPROC_GETADDRLIST	11
+#define RPCBPROC_GETSTAT	12
 
 
 /*

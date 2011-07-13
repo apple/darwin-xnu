@@ -340,7 +340,9 @@ clrbits(u_char *cp, int off, int len)
 		cp[sby++] &= mask;
 
 		mask = (1<<ebi) - 1;
-		cp[eby] &= ~mask;
+		/* handle remainder bits, if any, for a non-0 ebi value */
+		if (mask)
+			cp[eby] &= ~mask;
 
 		for (i = sby; i < eby; i++)
 			cp[i] = 0x00;

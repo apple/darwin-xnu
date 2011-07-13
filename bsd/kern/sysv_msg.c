@@ -667,8 +667,8 @@ msgget(__unused struct proc *p, struct msgget_args *uap, int32_t *retval)
 		msqptr->u.msg_perm._key = key;
 		msqptr->u.msg_perm.cuid = kauth_cred_getuid(cred);
 		msqptr->u.msg_perm.uid = kauth_cred_getuid(cred);
-		msqptr->u.msg_perm.cgid = cred->cr_gid;
-		msqptr->u.msg_perm.gid = cred->cr_gid;
+		msqptr->u.msg_perm.cgid = kauth_cred_getgid(cred);
+		msqptr->u.msg_perm.gid = kauth_cred_getgid(cred);
 		msqptr->u.msg_perm.mode = (msgflg & 0777);
 		/* Make sure that the returned msqid is unique */
 		msqptr->u.msg_perm._seq++;
@@ -1576,7 +1576,7 @@ IPCS_msg_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 }
 
 SYSCTL_DECL(_kern_sysv_ipcs);
-SYSCTL_PROC(_kern_sysv_ipcs, OID_AUTO, msg, CTLFLAG_RW|CTLFLAG_ANYBODY,
+SYSCTL_PROC(_kern_sysv_ipcs, OID_AUTO, msg, CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED,
 	0, 0, IPCS_msg_sysctl,
 	"S,IPCS_msg_command",
 	"ipcs msg command interface");

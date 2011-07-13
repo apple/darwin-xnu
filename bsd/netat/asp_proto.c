@@ -319,7 +319,7 @@ return (
 static char mbuf_str[100];
 char *mbuf_totals() 
 {
-  sprintf(mbuf_str, 
+  snprintf(mbuf_str, sizeof(mbuf_str),
 	  /*
 	  "dat = %d, prot = %d, ioc = %d, err = %d, hu = %d, ack = %d, nak = %d, ctl = %d",
 	  */

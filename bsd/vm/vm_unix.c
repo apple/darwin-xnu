@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -44,6 +44,7 @@
 #include <kern/thread.h>
 #include <kern/debug.h>
 #include <kern/lock.h>
+#include <kern/extmod_statistics.h>
 #include <mach/mach_traps.h>
 #include <mach/port.h>
 #include <mach/task.h>
@@ -74,8 +75,11 @@
 #include <sys/sysproto.h>
 #include <sys/mman.h>
 #include <sys/sysctl.h>
+#include <sys/cprotect.h>
+#include <sys/kpi_socket.h>
 
 #include <security/audit/audit.h>
+#include <security/mac.h>
 #include <bsm/audit_kevents.h>
 
 #include <kern/kalloc.h>
@@ -90,6 +94,18 @@
 
 #include <vm/vm_protos.h>
 
+#if CONFIG_FREEZE
+#include <sys/kern_memorystatus.h>
+#endif
+
+
+int _shared_region_map( struct proc*, int, unsigned int, struct shared_file_mapping_np*, memory_object_control_t*, struct shared_file_mapping_np*); 
+int _shared_region_slide(uint32_t, mach_vm_offset_t, mach_vm_size_t, mach_vm_offset_t, mach_vm_size_t, memory_object_control_t);
+int shared_region_copyin_mappings(struct proc*, user_addr_t, unsigned int, struct shared_file_mapping_np *);
+
+SYSCTL_INT(_vm, OID_AUTO, vm_debug_events, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_debug_events, 0, "");
+
+
 /*
  * Sysctl's related to data/stack execution.  See osfmk/vm/vm_map.c
  */
@@ -97,8 +113,8 @@
 #ifndef SECURE_KERNEL
 extern int allow_stack_exec, allow_data_exec;
 
-SYSCTL_INT(_vm, OID_AUTO, allow_stack_exec, CTLFLAG_RW, &allow_stack_exec, 0, "");
-SYSCTL_INT(_vm, OID_AUTO, allow_data_exec, CTLFLAG_RW, &allow_data_exec, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, allow_stack_exec, CTLFLAG_RW | CTLFLAG_LOCKED, &allow_stack_exec, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, allow_data_exec, CTLFLAG_RW | CTLFLAG_LOCKED, &allow_data_exec, 0, "");
 #endif /* !SECURE_KERNEL */
 
 static const char *prot_values[] = {
@@ -121,7 +137,7 @@ log_stack_execution_failure(addr64_t vaddr, vm_prot_t prot)
 
 int shared_region_unnest_logging = 1;
 
-SYSCTL_INT(_vm, OID_AUTO, shared_region_unnest_logging, CTLFLAG_RW,
+SYSCTL_INT(_vm, OID_AUTO, shared_region_unnest_logging, CTLFLAG_RW | CTLFLAG_LOCKED,
 	   &shared_region_unnest_logging, 0, "");
 
 int vm_shared_region_unnest_log_interval = 10;
@@ -486,8 +502,8 @@ task_for_pid_posix_check(proc_t target)
 
 	/* Do target's ruid, euid, and saved uid match my euid? */
 	if ((kauth_cred_getuid(targetcred) != myuid) || 
-			(targetcred->cr_ruid != myuid) ||
-			(targetcred->cr_svuid != myuid)) {
+			(kauth_cred_getruid(targetcred) != myuid) ||
+			(kauth_cred_getsvuid(targetcred) != myuid)) {
 		allowed = FALSE;
 		goto out;
 	}
@@ -600,6 +616,8 @@ task_for_pid(
 
 		/* Grant task port access */
 		task_reference(p->task);
+		extmod_statistics_incr_task_for_pid(p->task);
+
 		sright = (void *) convert_task_to_port(p->task);
 		tret = ipc_port_copyout_send(
 				sright, 
@@ -664,7 +682,7 @@ task_name_for_pid(
 		    && ((current_proc() == p)
 			|| kauth_cred_issuser(kauth_cred_get()) 
 			|| ((kauth_cred_getuid(target_cred) == kauth_cred_getuid(kauth_cred_get())) && 
-			    ((target_cred->cr_ruid == kauth_cred_get()->cr_ruid))))) {
+			    ((kauth_cred_getruid(target_cred) == kauth_getruid()))))) {
 
 			if (p->task != TASK_NULL) {
 				task_reference(p->task);
@@ -714,21 +732,21 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 	int 	error = 0;
 
 #if CONFIG_MACF
-	error = mac_proc_check_suspend_resume(p, 0); /* 0 for suspend */
+	error = mac_proc_check_suspend_resume(p, MAC_PROC_CHECK_SUSPEND);
 	if (error) {
-		error = KERN_FAILURE;
+		error = EPERM;
 		goto out;
 	}
 #endif
 
 	if (pid == 0) {
-		error = KERN_FAILURE;
+		error = EPERM;
 		goto out;
 	}
 
 	targetproc = proc_find(pid);
 	if (!task_for_pid_posix_check(targetproc)) {
-		error = KERN_FAILURE;
+		error = EPERM;
 		goto out;
 	}
 
@@ -744,7 +762,7 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 			(tfpport != IPC_PORT_NULL)) {
 
 			if (tfpport == IPC_PORT_DEAD) {
-				error = KERN_PROTECTION_FAILURE;
+				error = EACCES;
 				goto out;
 			}
 
@@ -753,9 +771,9 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 
 			if (error != MACH_MSG_SUCCESS) {
 				if (error == MACH_RCV_INTERRUPTED)
-					error = KERN_ABORTED;
+					error = EINTR;
 				else
-					error = KERN_FAILURE;
+					error = EPERM;
 				goto out;
 			}
 		}
@@ -764,7 +782,18 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 
 	task_reference(target);
 	error = task_suspend(target);
+	if (error) {
+		if (error == KERN_INVALID_ARGUMENT) {
+			error = EINVAL;
+		} else {
+			error = EPERM;
+		}
+	}
 	task_deallocate(target);
+
+#if CONFIG_FREEZE
+	kern_hibernation_on_pid_suspend(pid);
+#endif
 
 out:
 	if (targetproc != PROC_NULL)
@@ -782,21 +811,21 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 	int 	error = 0;
 
 #if CONFIG_MACF
-	error = mac_proc_check_suspend_resume(p, 1); /* 1 for resume */
+	error = mac_proc_check_suspend_resume(p, MAC_PROC_CHECK_RESUME);
 	if (error) {
-		error = KERN_FAILURE;
+		error = EPERM;
 		goto out;
 	}
 #endif
 
 	if (pid == 0) {
-		error = KERN_FAILURE;
+		error = EPERM;
 		goto out;
 	}
 
 	targetproc = proc_find(pid);
 	if (!task_for_pid_posix_check(targetproc)) {
-		error = KERN_FAILURE;
+		error = EPERM;
 		goto out;
 	}
 
@@ -812,7 +841,7 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 			(tfpport != IPC_PORT_NULL)) {
 
 			if (tfpport == IPC_PORT_DEAD) {
-				error = KERN_PROTECTION_FAILURE;
+				error = EACCES;
 				goto out;
 			}
 
@@ -821,9 +850,9 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 
 			if (error != MACH_MSG_SUCCESS) {
 				if (error == MACH_RCV_INTERRUPTED)
-					error = KERN_ABORTED;
+					error = EINTR;
 				else
-					error = KERN_FAILURE;
+					error = EPERM;
 				goto out;
 			}
 		}
@@ -831,7 +860,19 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 #endif
 
 	task_reference(target);
+
+#if CONFIG_FREEZE
+	kern_hibernation_on_pid_resume(pid, target);
+#endif
+
 	error = task_resume(target);
+	if (error) {
+		if (error == KERN_INVALID_ARGUMENT) {
+			error = EINVAL;
+		} else {
+			error = EPERM;
+		}
+	}
 	task_deallocate(target);
 
 out:
@@ -842,6 +883,118 @@ out:
 
 	return 0;
 }
+
+#if CONFIG_EMBEDDED
+kern_return_t
+pid_hibernate(struct proc *p __unused, struct pid_hibernate_args *args, int *ret)
+{
+	int 	error = 0;
+	proc_t	targetproc = PROC_NULL;
+	int 	pid = args->pid;
+
+#ifndef CONFIG_FREEZE
+	#pragma unused(pid)
+#else
+
+#if CONFIG_MACF
+	error = mac_proc_check_suspend_resume(p, MAC_PROC_CHECK_HIBERNATE);
+	if (error) {
+		error = EPERM;
+		goto out;
+	}
+#endif
+
+	/*
+	 * The only accepted pid value here is currently -1, since we just kick off the hibernation thread
+	 * here - individual ids aren't required. However, it's intended that that this call is to change
+	 * in the future to initiate hibernation of individual processes. In anticipation, we'll obtain the
+	 * process handle for potentially valid values and call task_for_pid_posix_check(); this way, everything
+	 * is validated correctly and set for further refactoring. See <rdar://problem/7839708> for more details.
+	 */
+	if (pid >= 0) {
+		targetproc = proc_find(pid);
+		if (!task_for_pid_posix_check(targetproc)) {
+			error = EPERM;
+			goto out;
+		}
+	}
+
+	if (pid == -1) {
+		kern_hibernation_on_pid_hibernate(pid);
+	} else {
+		error = EPERM;
+	}
+
+out:
+
+#endif /* CONFIG_FREEZE */
+
+	if (targetproc != PROC_NULL)
+		proc_rele(targetproc);
+	*ret = error;
+	return error;
+}
+
+int
+pid_shutdown_sockets(struct proc *p __unused, struct pid_shutdown_sockets_args *args, int *ret)
+{
+	int 				error = 0;
+	proc_t				targetproc = PROC_NULL;
+	struct filedesc		*fdp;
+	struct fileproc		*fp;
+	int 				pid = args->pid;
+	int					level = args->level;
+	int					i;
+
+	if (level != SHUTDOWN_SOCKET_LEVEL_DISCONNECT_SVC &&
+		level != SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL)
+	{
+		error = EINVAL;
+		goto out;
+	}
+
+#if CONFIG_MACF
+	error = mac_proc_check_suspend_resume(p, MAC_PROC_CHECK_SHUTDOWN_SOCKETS);
+	if (error) {
+		error = EPERM;
+		goto out;
+	}
+#endif
+
+	targetproc = proc_find(pid);
+	if (!task_for_pid_posix_check(targetproc)) {
+		error = EPERM;
+		goto out;
+	}
+
+	proc_fdlock(targetproc);
+	fdp = targetproc->p_fd;
+
+	for (i = 0; i < fdp->fd_nfiles; i++) {
+		struct socket *sockp;
+
+		fp = fdp->fd_ofiles[i];
+		if (fp == NULL || (fdp->fd_ofileflags[i] & UF_RESERVED) != 0 ||
+			fp->f_fglob->fg_type != DTYPE_SOCKET)
+		{
+			continue;
+		}
+
+		sockp = (struct socket *)fp->f_fglob->fg_data;
+
+		/* Call networking stack with socket and level */
+		(void) socket_defunct(targetproc, sockp, level);
+	}
+
+	proc_fdunlock(targetproc);
+
+out:
+	if (targetproc != PROC_NULL)
+		proc_rele(targetproc);
+	*ret = error;
+	return error;
+}
+#endif /* CONFIG_EMBEDDED */
 
 static int
 sysctl_settfp_policy(__unused struct sysctl_oid *oidp, void *arg1,
@@ -876,17 +1029,17 @@ static int kern_secure_kernel = 1;
 static int kern_secure_kernel = 0;
 #endif
 
-SYSCTL_INT(_kern, OID_AUTO, secure_kernel, CTLFLAG_RD, &kern_secure_kernel, 0, "");
+SYSCTL_INT(_kern, OID_AUTO, secure_kernel, CTLFLAG_RD | CTLFLAG_LOCKED, &kern_secure_kernel, 0, "");
 
-SYSCTL_NODE(_kern, KERN_TFP, tfp, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "tfp");
-SYSCTL_PROC(_kern_tfp, KERN_TFP_POLICY, policy, CTLTYPE_INT | CTLFLAG_RW,
+SYSCTL_NODE(_kern, KERN_TFP, tfp, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "tfp");
+SYSCTL_PROC(_kern_tfp, KERN_TFP_POLICY, policy, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &tfp_policy, sizeof(uint32_t), &sysctl_settfp_policy ,"I","policy");
 
-SYSCTL_INT(_vm, OID_AUTO, shared_region_trace_level, CTLFLAG_RW,
+SYSCTL_INT(_vm, OID_AUTO, shared_region_trace_level, CTLFLAG_RW | CTLFLAG_LOCKED,
 	   &shared_region_trace_level, 0, "");
-SYSCTL_INT(_vm, OID_AUTO, shared_region_version, CTLFLAG_RD,
+SYSCTL_INT(_vm, OID_AUTO, shared_region_version, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &shared_region_version, 0, "");
-SYSCTL_INT(_vm, OID_AUTO, shared_region_persistence, CTLFLAG_RW,
+SYSCTL_INT(_vm, OID_AUTO, shared_region_persistence, CTLFLAG_RW | CTLFLAG_LOCKED,
 	   &shared_region_persistence, 0, "");
 
 /*
@@ -968,6 +1121,31 @@ shared_region_check_np(
 	return error;
 }
 
+
+int
+shared_region_copyin_mappings(
+		struct proc			*p,
+		user_addr_t			user_mappings,
+		unsigned int			mappings_count,
+		struct shared_file_mapping_np	*mappings)
+{
+	int		error = 0;
+	vm_size_t	mappings_size = 0;
+
+	/* get the list of mappings the caller wants us to establish */
+	mappings_size = (vm_size_t) (mappings_count * sizeof (mappings[0]));
+	error = copyin(user_mappings,
+		       mappings,
+		       mappings_size);
+	if (error) {
+		SHARED_REGION_TRACE_ERROR(
+			("shared_region: %p [%d(%s)] map(): "
+			 "copyin(0x%llx, %d) failed (error=%d)\n",
+			 current_thread(), p->p_pid, p->p_comm,
+			 (uint64_t)user_mappings, mappings_count, error));
+	}
+	return error;
+}
 /*
  * shared_region_map_np()
  *
@@ -979,25 +1157,22 @@ shared_region_check_np(
  * requiring any further setup.
  */
 int
-shared_region_map_np(
+_shared_region_map(
 	struct proc				*p,
-	struct shared_region_map_np_args	*uap,
-	__unused int				*retvalp)
+	int					fd,
+	uint32_t				mappings_count,
+	struct shared_file_mapping_np		*mappings,
+	memory_object_control_t			*sr_file_control,
+	struct shared_file_mapping_np		*mapping_to_slide)
 {
 	int				error;
 	kern_return_t			kr;
-	int				fd;
 	struct fileproc			*fp;
 	struct vnode			*vp, *root_vp;
 	struct vnode_attr		va;
 	off_t				fs;
 	memory_object_size_t		file_size;
-	user_addr_t			user_mappings;
-	struct shared_file_mapping_np	*mappings;
-#define SFM_MAX_STACK	8
-	struct shared_file_mapping_np	stack_mappings[SFM_MAX_STACK];
-	unsigned int			mappings_count;
-	vm_size_t			mappings_size;
+	vm_prot_t			maxprot = VM_PROT_ALL;
 	memory_object_control_t		file_control;
 	struct vm_shared_region		*shared_region;
 
@@ -1006,14 +1181,8 @@ shared_region_map_np(
 		 current_thread(), p->p_pid, p->p_comm));
 
 	shared_region = NULL;
-	mappings_count = 0;
-	mappings_size = 0;
-	mappings = NULL;
 	fp = NULL;
 	vp = NULL;
-
-	/* get file descriptor for shared region cache file */
-	fd = uap->fd;
 
 	/* get file structure from file descriptor */
 	error = fp_lookup(p, fd, &fp, 0);
@@ -1068,11 +1237,38 @@ shared_region_map_np(
 		goto done;
 	}
 
+#if CONFIG_MACF
+	error = mac_file_check_mmap(vfs_context_ucred(vfs_context_current()),
+			fp->f_fglob, VM_PROT_ALL, MAP_FILE, &maxprot);
+	if (error) {
+		goto done;
+	}
+#endif /* MAC */
+
+#if CONFIG_PROTECT
+	/* check for content protection access */
+	{
+	void *cnode;
+	if ((cnode = cp_get_protected_cnode(vp)) != NULL) {
+		error = cp_handle_vnop(cnode, CP_READ_ACCESS | CP_WRITE_ACCESS);
+		if (error) 
+			goto done;
+	}
+	}
+#endif /* CONFIG_PROTECT */
+
 	/* make sure vnode is on the process's root volume */
 	root_vp = p->p_fd->fd_rdir;
 	if (root_vp == NULL) {
 		root_vp = rootvnode;
+	} else {
+		/*
+		 * Chroot-ed processes can't use the shared_region.
+		 */
+		error = EINVAL;
+		goto done;
 	}
+
 	if (vp->v_mount != root_vp->v_mount) {
 		SHARED_REGION_TRACE_ERROR(
 			("shared_region: %p [%d(%s)] map(%p:'%s'): "
@@ -1128,42 +1324,12 @@ shared_region_map_np(
 		error = EINVAL;
 		goto done;
 	}
-			 
-	/* get the list of mappings the caller wants us to establish */
-	mappings_count = uap->count;	/* number of mappings */
-	mappings_size = (vm_size_t) (mappings_count * sizeof (mappings[0]));
-	if (mappings_count == 0) {
-		SHARED_REGION_TRACE_INFO(
-			("shared_region: %p [%d(%s)] map(%p:'%s'): "
-			 "no mappings\n",
-			 current_thread(), p->p_pid, p->p_comm,
-			 vp, vp->v_name));
-		error = 0;	/* no mappings: we're done ! */
-		goto done;
-	} else if (mappings_count <= SFM_MAX_STACK) {
-		mappings = &stack_mappings[0];
-	} else {
-		SHARED_REGION_TRACE_ERROR(
-			("shared_region: %p [%d(%s)] map(%p:'%s'): "
-			 "too many mappings (%d)\n",
-			 current_thread(), p->p_pid, p->p_comm,
-			 vp, vp->v_name, mappings_count));
-		error = EINVAL;
-		goto done;
-	}
 
-	user_mappings = uap->mappings;	/* the mappings, in user space */
-	error = copyin(user_mappings,
-		       mappings,
-		       mappings_size);
-	if (error) {
-		SHARED_REGION_TRACE_ERROR(
-			("shared_region: %p [%d(%s)] map(%p:'%s'): "
-			 "copyin(0x%llx, %d) failed (error=%d)\n",
-			 current_thread(), p->p_pid, p->p_comm,
-			 vp, vp->v_name, (uint64_t)user_mappings, mappings_count, error));
-		goto done;
+	if (sr_file_control != NULL) {
+		*sr_file_control = file_control;
 	}
+			 
+
 
 	/* get the process's shared region (setup in vm_map_exec()) */
 	shared_region = vm_shared_region_get(current_task());
@@ -1182,7 +1348,8 @@ shared_region_map_np(
 				       mappings,
 				       file_control,
 				       file_size,
-				       (void *) p->p_fd->fd_rdir);
+				       (void *) p->p_fd->fd_rdir,
+				       mapping_to_slide);
 	if (kr != KERN_SUCCESS) {
 		SHARED_REGION_TRACE_ERROR(
 			("shared_region: %p [%d(%s)] map(%p:'%s'): "
@@ -1209,6 +1376,12 @@ shared_region_map_np(
 	}
 
 	error = 0;
+
+	vnode_lock_spin(vp);
+
+	vp->v_flag |= VSHARED_DYLD;
+
+	vnode_unlock(vp);
 
 	/* update the vnode's access time */
 	if (! (vnode_vfsvisflags(vp) & MNT_NOATIME)) {
@@ -1249,6 +1422,126 @@ done:
 	return error;
 }
 
+int
+_shared_region_slide(uint32_t slide,
+			mach_vm_offset_t	entry_start_address,
+			mach_vm_size_t		entry_size,
+			mach_vm_offset_t	slide_start,
+			mach_vm_size_t		slide_size,
+			memory_object_control_t	sr_file_control)
+{
+	void *slide_info_entry = NULL;
+	int			error;
+
+	if((error = vm_shared_region_slide_init(slide_size, entry_start_address, entry_size, slide, sr_file_control))) {
+		printf("slide_info initialization failed with kr=%d\n", error);
+		goto done;
+	}
+
+	slide_info_entry = vm_shared_region_get_slide_info_entry();
+	if (slide_info_entry == NULL){
+		error = EFAULT;
+	} else {	
+		error = copyin(slide_start,
+			       slide_info_entry,
+			       (vm_size_t)slide_size);
+	}
+	if (error) {
+		goto done;
+	}
+ 
+	if (vm_shared_region_slide_sanity_check() != KERN_SUCCESS) {
+ 		error = EFAULT; 
+ 		printf("Sanity Check failed for slide_info\n");
+ 	} else {
+#if DEBUG
+		printf("Succesfully init slide_info with start_address: %p region_size: %ld slide_header_size: %ld\n",
+ 				(void*)(uintptr_t)entry_start_address, 
+ 				(unsigned long)entry_size, 
+ 				(unsigned long)slide_size);
+#endif
+	}
+done:
+	return error;
+}
+
+int
+shared_region_map_and_slide_np(
+	struct proc				*p,
+	struct shared_region_map_and_slide_np_args	*uap,
+	__unused int					*retvalp)
+{
+	struct shared_file_mapping_np	mapping_to_slide;
+	struct shared_file_mapping_np	*mappings;
+	unsigned int mappings_count = uap->count;
+
+	memory_object_control_t		sr_file_control;
+	kern_return_t			kr = KERN_SUCCESS;
+	uint32_t			slide = uap->slide;
+	
+#define SFM_MAX_STACK	8
+	struct shared_file_mapping_np	stack_mappings[SFM_MAX_STACK];
+
+	if ((kr = vm_shared_region_sliding_valid(slide)) != KERN_SUCCESS) {
+		if (kr == KERN_INVALID_ARGUMENT) {
+			/*
+			 * This will happen if we request sliding again 
+			 * with the same slide value that was used earlier
+			 * for the very first sliding. We continue through
+			 * to the mapping layer. This is so that we can be
+			 * absolutely certain that the same mappings have
+			 * been requested.
+			 */
+			kr = KERN_SUCCESS;
+		} else {
+			goto done;
+		}
+	}
+
+	if (mappings_count == 0) {
+		SHARED_REGION_TRACE_INFO(
+			("shared_region: %p [%d(%s)] map(): "
+			 "no mappings\n",
+			 current_thread(), p->p_pid, p->p_comm));
+		kr = 0;	/* no mappings: we're done ! */
+		goto done;
+	} else if (mappings_count <= SFM_MAX_STACK) {
+		mappings = &stack_mappings[0];
+	} else {
+		SHARED_REGION_TRACE_ERROR(
+			("shared_region: %p [%d(%s)] map(): "
+			 "too many mappings (%d)\n",
+			 current_thread(), p->p_pid, p->p_comm,
+			 mappings_count));
+		kr = KERN_FAILURE;
+		goto done;
+	}
+
+	if ( (kr = shared_region_copyin_mappings(p, uap->mappings, uap->count, mappings))) {
+		goto done;
+	}
+
+
+	kr = _shared_region_map(p, uap->fd, mappings_count, mappings, &sr_file_control, &mapping_to_slide);
+	if (kr != KERN_SUCCESS) {
+		return kr;
+	}
+
+	if (slide) {
+		kr = _shared_region_slide(slide, 
+				mapping_to_slide.sfm_file_offset, 
+				mapping_to_slide.sfm_size, 
+				uap->slide_start, 
+				uap->slide_size, 
+				sr_file_control);
+		if (kr  != KERN_SUCCESS) {
+			vm_shared_region_undo_mappings(NULL, 0, mappings, mappings_count);
+			return kr;
+		}
+	}
+done:
+	return kr;
+}
 
 /* sysctl overflow room */
 
@@ -1256,11 +1549,11 @@ done:
 	allocate buffer space, possibly purgeable memory, but not cause inactive pages to be
 	reclaimed. It allows the app to calculate how much memory is free outside the free target. */
 extern unsigned int	vm_page_free_target;
-SYSCTL_INT(_vm, OID_AUTO, vm_page_free_target, CTLFLAG_RD, 
+SYSCTL_INT(_vm, OID_AUTO, vm_page_free_target, CTLFLAG_RD | CTLFLAG_LOCKED, 
 		   &vm_page_free_target, 0, "Pageout daemon free target");
 
 extern unsigned int	vm_memory_pressure;
-SYSCTL_INT(_vm, OID_AUTO, memory_pressure, CTLFLAG_RD,
+SYSCTL_INT(_vm, OID_AUTO, memory_pressure, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_memory_pressure, 0, "Memory pressure indicator");
 
 static int
@@ -1277,36 +1570,36 @@ SYSCTL_PROC(_vm, OID_AUTO, page_free_wanted,
 	    0, 0, vm_ctl_page_free_wanted, "I", "");
 
 extern unsigned int	vm_page_purgeable_count;
-SYSCTL_INT(_vm, OID_AUTO, page_purgeable_count, CTLFLAG_RD,
+SYSCTL_INT(_vm, OID_AUTO, page_purgeable_count, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_purgeable_count, 0, "Purgeable page count");
 
 extern unsigned int	vm_page_purgeable_wired_count;
-SYSCTL_INT(_vm, OID_AUTO, page_purgeable_wired_count, CTLFLAG_RD,
+SYSCTL_INT(_vm, OID_AUTO, page_purgeable_wired_count, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_purgeable_wired_count, 0, "Wired purgeable page count");
 
-SYSCTL_INT(_vm, OID_AUTO, page_reusable_count, CTLFLAG_RD,
+SYSCTL_INT(_vm, OID_AUTO, page_reusable_count, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.reusable_count, 0, "Reusable page count");
-SYSCTL_QUAD(_vm, OID_AUTO, reusable_success, CTLFLAG_RD,
+SYSCTL_QUAD(_vm, OID_AUTO, reusable_success, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.reusable_pages_success, "");
-SYSCTL_QUAD(_vm, OID_AUTO, reusable_failure, CTLFLAG_RD,
+SYSCTL_QUAD(_vm, OID_AUTO, reusable_failure, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.reusable_pages_failure, "");
-SYSCTL_QUAD(_vm, OID_AUTO, reusable_shared, CTLFLAG_RD,
+SYSCTL_QUAD(_vm, OID_AUTO, reusable_shared, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.reusable_pages_shared, "");
-SYSCTL_QUAD(_vm, OID_AUTO, all_reusable_calls, CTLFLAG_RD,
+SYSCTL_QUAD(_vm, OID_AUTO, all_reusable_calls, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.all_reusable_calls, "");
-SYSCTL_QUAD(_vm, OID_AUTO, partial_reusable_calls, CTLFLAG_RD,
+SYSCTL_QUAD(_vm, OID_AUTO, partial_reusable_calls, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.partial_reusable_calls, "");
-SYSCTL_QUAD(_vm, OID_AUTO, reuse_success, CTLFLAG_RD,
+SYSCTL_QUAD(_vm, OID_AUTO, reuse_success, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.reuse_pages_success, "");
-SYSCTL_QUAD(_vm, OID_AUTO, reuse_failure, CTLFLAG_RD,
+SYSCTL_QUAD(_vm, OID_AUTO, reuse_failure, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.reuse_pages_failure, "");
-SYSCTL_QUAD(_vm, OID_AUTO, all_reuse_calls, CTLFLAG_RD,
+SYSCTL_QUAD(_vm, OID_AUTO, all_reuse_calls, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.all_reuse_calls, "");
-SYSCTL_QUAD(_vm, OID_AUTO, partial_reuse_calls, CTLFLAG_RD,
+SYSCTL_QUAD(_vm, OID_AUTO, partial_reuse_calls, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.partial_reuse_calls, "");
-SYSCTL_QUAD(_vm, OID_AUTO, can_reuse_success, CTLFLAG_RD,
+SYSCTL_QUAD(_vm, OID_AUTO, can_reuse_success, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.can_reuse_success, "");
-SYSCTL_QUAD(_vm, OID_AUTO, can_reuse_failure, CTLFLAG_RD,
+SYSCTL_QUAD(_vm, OID_AUTO, can_reuse_failure, CTLFLAG_RD | CTLFLAG_LOCKED,
 	   &vm_page_stats_reusable.can_reuse_failure, "");
 
 

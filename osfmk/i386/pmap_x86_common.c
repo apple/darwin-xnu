@@ -29,26 +29,11 @@
 #include <vm/vm_map.h>
 #include <i386/pmap_internal.h>
 
-
 void		pmap_remove_range(
 			pmap_t		pmap,
 			vm_map_offset_t	va,
 			pt_entry_t	*spte,
 			pt_entry_t	*epte);
-
-pv_rooted_entry_t	pv_head_table;		/* array of entries, one per
-						 * page */
-thread_call_t 		mapping_adjust_call;
-static thread_call_data_t mapping_adjust_call_data;
-uint32_t		mappingrecurse = 0;
-
-pmap_pagetable_corruption_record_t pmap_pagetable_corruption_records[PMAP_PAGETABLE_CORRUPTION_MAX_LOG];
-uint32_t pmap_pagetable_corruption_incidents;
-uint64_t pmap_pagetable_corruption_last_abstime = (~(0ULL) >> 1);
-uint64_t pmap_pagetable_corruption_interval_abstime;
-thread_call_t 	pmap_pagetable_corruption_log_call;
-static thread_call_data_t 	pmap_pagetable_corruption_log_call_data;
-boolean_t pmap_pagetable_corruption_timeout = FALSE;
 
 /*
  * The Intel platform can nest at the PDE level, so NBPDE (i.e. 2MB) at a time,
@@ -103,8 +88,8 @@ kern_return_t pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t
 		panic("pmap_nest: va_start(0x%llx) != nstart(0x%llx)\n", va_start, nstart);
 
 	PMAP_TRACE(PMAP_CODE(PMAP__NEST) | DBG_FUNC_START,
-	    (int) grand, (int) subord,
-	    (int) (va_start>>32), (int) va_start, 0);
+	(uintptr_t) grand, (uintptr_t) subord,
+	    (uintptr_t) (va_start>>32), (uintptr_t) va_start, 0);
 
 	nvaddr = (vm_map_offset_t)nstart;
 	num_pde = size >> PDESHIFT;
@@ -216,8 +201,8 @@ kern_return_t pmap_unnest(pmap_t grand, addr64_t vaddr, uint64_t size) {
 	uint64_t npdpt = PMAP_INVALID_PDPTNUM;
 
 	PMAP_TRACE(PMAP_CODE(PMAP__UNNEST) | DBG_FUNC_START,
-	    (int) grand, 
-	    (int) (vaddr>>32), (int) vaddr, 0, 0);
+	    (uintptr_t) grand, 
+	    (uintptr_t) (vaddr>>32), (uintptr_t) vaddr, 0, 0);
 
 	if ((size & (pmap_nesting_size_min-1)) ||
 	    (vaddr & (pmap_nesting_size_min-1))) {
@@ -338,6 +323,67 @@ pfp_exit:
 }
 
 /*
+ * Update cache attributes for all extant managed mappings.
+ * Assumes PV for this page is locked, and that the page
+ * is managed.
+ */
+
+void
+pmap_update_cache_attributes_locked(ppnum_t pn, unsigned attributes) {
+	pv_rooted_entry_t	pv_h, pv_e;
+	pv_hashed_entry_t       pvh_e, nexth;
+	vm_map_offset_t vaddr;
+	pmap_t	pmap;
+	pt_entry_t	*ptep;
+	
+	assert(IS_MANAGED_PAGE(pn));
+
+	pv_h = pai_to_pvh(pn);
+	/* TODO: translate the PHYS_* bits to PTE bits, while they're
+	 * currently identical, they may not remain so
+	 * Potential optimization (here and in page_protect),
+	 * parallel shootdowns, check for redundant
+	 * attribute modifications.
+	 */
+	
+	/*
+	 * Alter attributes on all mappings
+	 */
+	if (pv_h->pmap != PMAP_NULL) {
+		pv_e = pv_h;
+		pvh_e = (pv_hashed_entry_t)pv_e;
+
+		do {
+			pmap = pv_e->pmap;
+			vaddr = pv_e->va;
+			ptep = pmap_pte(pmap, vaddr);
+		
+			if (0 == ptep)
+				panic("pmap_update_cache_attributes_locked: Missing PTE, pmap: %p, pn: 0x%x vaddr: 0x%llx kernel_pmap: %p", pmap, pn, vaddr, kernel_pmap);
+
+			nexth = (pv_hashed_entry_t)queue_next(&pvh_e->qlink);
+			pmap_update_pte(ptep, *ptep, (*ptep & ~PHYS_CACHEABILITY_MASK) | attributes);
+			PMAP_UPDATE_TLBS(pmap, vaddr, vaddr + PAGE_SIZE);
+			pvh_e = nexth;
+		} while ((pv_e = (pv_rooted_entry_t)nexth) != pv_h);
+	}
+}
+
+void x86_filter_TLB_coherency_interrupts(boolean_t dofilter) {
+	assert(ml_get_interrupts_enabled() == 0 || get_preemption_level() != 0);
+
+	if (dofilter) {
+		CPU_CR3_MARK_INACTIVE();
+	} else {
+		CPU_CR3_MARK_ACTIVE();
+		__asm__ volatile("mfence");
+		if (current_cpu_datap()->cpu_tlb_invalid)
+			process_pmap_updates();
+	}
+}
+
+
+/*
  *	Insert the given physical page (p) at
  *	the specified virtual address (v) in the
  *	target physical map with the protection requested.
@@ -444,7 +490,6 @@ Retry:
 		*pte = 0;
 	}
 
-
 	old_pa = pte_to_pa(*pte);
 	pai = pa_index(old_pa);
 	old_pa_locked = FALSE;
@@ -469,12 +514,15 @@ Retry:
 	 *	at this address.
 	 */
 	if (old_pa == pa) {
+		pt_entry_t old_attributes =
+		    *pte & ~(INTEL_PTE_REF | INTEL_PTE_MOD);
 
 		/*
 	         *	May be changing its wired attribute or protection
 	         */
 
 		template = pa_to_pte(pa) | INTEL_PTE_VALID;
+		template |= pmap_get_cache_attributes(pa_index(pa));
 
 		if (VM_MEM_NOT_CACHEABLE ==
 		    (flags & (VM_MEM_NOT_CACHEABLE | VM_WIMG_USE_DEFAULT))) {
@@ -492,11 +540,11 @@ Retry:
 
 		if (wired) {
 			template |= INTEL_PTE_WIRED;
-			if (!iswired(*pte))
+			if (!iswired(old_attributes))
 				OSAddAtomic(+1,
 					&pmap->stats.wired_count);
 		} else {
-			if (iswired(*pte)) {
+			if (iswired(old_attributes)) {
 				assert(pmap->stats.wired_count >= 1);
 				OSAddAtomic(-1,
 					&pmap->stats.wired_count);
@@ -504,6 +552,9 @@ Retry:
 		}
 		if (superpage)		/* this path can not be used */
 			template |= INTEL_PTE_PS;	/* to change the page size! */
+		/* Determine delta, PV locked */
+		need_tlbflush =
+		    ((old_attributes ^ template) != INTEL_PTE_WIRED);
 
 		/* store modified PTE and preserve RC bits */
 		pmap_update_pte(pte, *pte,
@@ -512,7 +563,6 @@ Retry:
 			UNLOCK_PVH(pai);
 			old_pa_locked = FALSE;
 		}
-		need_tlbflush = TRUE;
 		goto Done;
 	}
 
@@ -548,19 +598,12 @@ Retry:
 		pmap_store_pte(pte, 0);
 
 		if (IS_MANAGED_PAGE(pai)) {
-#if TESTING
-			if (pmap->stats.resident_count < 1)
-				panic("pmap_enter: resident_count");
-#endif
+			pmap_assert(old_pa_locked == TRUE);
 			assert(pmap->stats.resident_count >= 1);
 			OSAddAtomic(-1,
 				&pmap->stats.resident_count);
 
 			if (iswired(*pte)) {
-#if TESTING
-				if (pmap->stats.wired_count < 1)
-					panic("pmap_enter: wired_count");
-#endif
 				assert(pmap->stats.wired_count >= 1);
 				OSAddAtomic(-1,
 					&pmap->stats.wired_count);
@@ -624,7 +667,7 @@ Retry:
 				pvh_e = pvh_new;
 				pvh_new = PV_HASHED_ENTRY_NULL;
 			} else if (PV_HASHED_ENTRY_NULL == pvh_e) {
-				PV_HASHED_ALLOC(pvh_e);
+				PV_HASHED_ALLOC(&pvh_e);
 				if (PV_HASHED_ENTRY_NULL == pvh_e) {
 					/*
 					 * the pv list is empty. if we are on
@@ -636,10 +679,11 @@ Retry:
 					 * us.
 					 */
 					if (kernel_pmap == pmap) {
-						PV_HASHED_KERN_ALLOC(pvh_e);
+						PV_HASHED_KERN_ALLOC(&pvh_e);
 					} else {
 						UNLOCK_PVH(pai);
 						PMAP_UNLOCK(pmap);
+						pmap_pv_throttle(pmap);
 						pvh_new = (pv_hashed_entry_t) zalloc(pv_hashed_list_zone);
 						goto Retry;
 					}
@@ -664,7 +708,7 @@ Retry:
 	         * only count the mapping
 	         * for 'managed memory'
 	         */
-		OSAddAtomic(+1,  & pmap->stats.resident_count);
+		OSAddAtomic(+1,  &pmap->stats.resident_count);
 		if (pmap->stats.resident_count > pmap->stats.resident_max) {
 			pmap->stats.resident_max = pmap->stats.resident_count;
 		}
@@ -681,7 +725,13 @@ Retry:
 	 *	only the pfn changes.
 	 */
 	template = pa_to_pte(pa) | INTEL_PTE_VALID;
+	/*
+	 * DRK: It may be worth asserting on cache attribute flags that diverge
+	 * from the existing physical page attributes.
+	 */
 
+	template |= pmap_get_cache_attributes(pa_index(pa));
+	
 	if (flags & VM_MEM_NOT_CACHEABLE) {
 		if (!(flags & VM_MEM_GUARDED))
 			template |= INTEL_PTE_PTA;
@@ -728,9 +778,10 @@ Done:
 		m = vm_page_lookup(delpage_pm_obj, delpage_pde_index);
 		if (m == VM_PAGE_NULL)
 		    panic("pmap_enter: pte page not in object");
+		vm_object_unlock(delpage_pm_obj);
 		VM_PAGE_FREE(m);
 		OSAddAtomic(-1,  &inuse_ptepages_count);
-		vm_object_unlock(delpage_pm_obj);
+		PMAP_ZINFO_PFREE(PAGE_SIZE);
 	}
 
 	PMAP_TRACE(PMAP_CODE(PMAP__ENTER) | DBG_FUNC_END, 0, 0, 0, 0, 0);
@@ -1076,10 +1127,9 @@ pmap_page_protect(
 		vaddr = pv_e->va;
 		pte = pmap_pte(pmap, vaddr);
 
-#if	DEBUG
-		if (pa_index(pte_to_pa(*pte)) != pn)
-			panic("pmap_page_protect: PTE mismatch, pn: 0x%x, pmap: %p, vaddr: 0x%llx, pte: 0x%llx", pn, pmap, vaddr, *pte);
-#endif
+		pmap_assert2((pa_index(pte_to_pa(*pte)) == pn),
+		    "pmap_page_protect: PTE mismatch, pn: 0x%x, pmap: %p, vaddr: 0x%llx, pte: 0x%llx", pn, pmap, vaddr, *pte);
+
 		if (0 == pte) {
 			panic("pmap_page_protect() "
 				"pmap=%p pn=0x%x vaddr=0x%llx\n",
@@ -1089,16 +1139,21 @@ pmap_page_protect(
 
 		/*
 		 * Remove the mapping if new protection is NONE
-		 * or if write-protecting a kernel mapping.
 		 */
-		if (remove || pmap == kernel_pmap) {
+		if (remove) {
 			/*
 		         * Remove the mapping, collecting dirty bits.
 		         */
 			pmap_update_pte(pte, *pte, *pte & ~INTEL_PTE_VALID);
+
+			/* Remove per-pmap wired count */
+			if (iswired(*pte)) {
+				OSAddAtomic(-1, &pmap->stats.wired_count);
+			}
+
 			PMAP_UPDATE_TLBS(pmap, vaddr, vaddr+PAGE_SIZE);
 			pmap_phys_attributes[pai] |=
-				*pte & (PHYS_MODIFIED|PHYS_REFERENCED);
+			    *pte & (PHYS_MODIFIED|PHYS_REFERENCED);
 			pmap_store_pte(pte, 0);
 
 #if TESTING
@@ -1117,8 +1172,6 @@ pmap_page_protect(
 				 * Fix up head later.
 				 */
 				pv_h->pmap = PMAP_NULL;
-
-				pmap_phys_attributes[pai] &= ~PHYS_NOENCRYPT;
 			} else {
 				/*
 				 * Delete this entry.
@@ -1133,8 +1186,11 @@ pmap_page_protect(
 			}
 		} else {
 			/*
-		         * Write-protect.
+		         * Write-protect, after opportunistic refmod collect
 		         */
+			pmap_phys_attributes[pai] |=
+			    *pte & (PHYS_MODIFIED|PHYS_REFERENCED);
+
 			pmap_update_pte(pte, *pte, *pte & ~INTEL_PTE_WRITE);
 			PMAP_UPDATE_TLBS(pmap, vaddr, vaddr+PAGE_SIZE);
 		}
@@ -1170,180 +1226,206 @@ done:
 		   0, 0, 0, 0, 0);
 }
 
-__private_extern__ void
-pmap_pagetable_corruption_msg_log(int (*log_func)(const char * fmt, ...)__printflike(1,2)) {
-	if (pmap_pagetable_corruption_incidents > 0) {
-		int i, e = MIN(pmap_pagetable_corruption_incidents, PMAP_PAGETABLE_CORRUPTION_MAX_LOG);
-		(*log_func)("%u pagetable corruption incident(s) detected, timeout: %u\n", pmap_pagetable_corruption_incidents, pmap_pagetable_corruption_timeout);
-		for (i = 0; i < e; i++) {
-			(*log_func)("Incident 0x%x, reason: 0x%x, action: 0x%x, time: 0x%llx\n", pmap_pagetable_corruption_records[i].incident,  pmap_pagetable_corruption_records[i].reason, pmap_pagetable_corruption_records[i].action, pmap_pagetable_corruption_records[i].abstime);
-		}
-	}
-}
-
+/*
+ *	Clear specified attribute bits.
+ */
 void
-mapping_free_prime(void)
+phys_attribute_clear(
+	ppnum_t		pn,
+	int		bits)
 {
-	int			i;
-	pv_hashed_entry_t	pvh_e;
-	pv_hashed_entry_t	pvh_eh;
-	pv_hashed_entry_t	pvh_et;
-	int			pv_cnt;
-
-	pv_cnt = 0;
-	pvh_eh = pvh_et = PV_HASHED_ENTRY_NULL;
-	for (i = 0; i < (5 * PV_HASHED_ALLOC_CHUNK); i++) {
-		pvh_e = (pv_hashed_entry_t) zalloc(pv_hashed_list_zone);
-
-		pvh_e->qlink.next = (queue_entry_t)pvh_eh;
-		pvh_eh = pvh_e;
-
-		if (pvh_et == PV_HASHED_ENTRY_NULL)
-		        pvh_et = pvh_e;
-		pv_cnt++;
-	}
-	PV_HASHED_FREE_LIST(pvh_eh, pvh_et, pv_cnt);
-
-	pv_cnt = 0;
-	pvh_eh = pvh_et = PV_HASHED_ENTRY_NULL;
-	for (i = 0; i < PV_HASHED_KERN_ALLOC_CHUNK; i++) {
-		pvh_e = (pv_hashed_entry_t) zalloc(pv_hashed_list_zone);
-
-		pvh_e->qlink.next = (queue_entry_t)pvh_eh;
-		pvh_eh = pvh_e;
-
-		if (pvh_et == PV_HASHED_ENTRY_NULL)
-		        pvh_et = pvh_e;
-		pv_cnt++;
-	}
-	PV_HASHED_KERN_FREE_LIST(pvh_eh, pvh_et, pv_cnt);
-
-}
-
-static inline void
-pmap_pagetable_corruption_log_setup(void) {
-	if (pmap_pagetable_corruption_log_call == NULL) {
-		nanotime_to_absolutetime(PMAP_PAGETABLE_CORRUPTION_INTERVAL, 0, &pmap_pagetable_corruption_interval_abstime);
-		thread_call_setup(&pmap_pagetable_corruption_log_call_data,
-		    (thread_call_func_t) pmap_pagetable_corruption_msg_log,
-		    (thread_call_param_t) &printf);
-		pmap_pagetable_corruption_log_call = &pmap_pagetable_corruption_log_call_data;
-	}
-}
-
-void
-mapping_adjust(void)
-{
-	pv_hashed_entry_t	pvh_e;
-	pv_hashed_entry_t	pvh_eh;
-	pv_hashed_entry_t	pvh_et;
-	int			pv_cnt;
-	int             	i;
-
-	if (mapping_adjust_call == NULL) {
-		thread_call_setup(&mapping_adjust_call_data,
-				  (thread_call_func_t) mapping_adjust,
-				  (thread_call_param_t) NULL);
-		mapping_adjust_call = &mapping_adjust_call_data;
-	}
-
-	pmap_pagetable_corruption_log_setup();
-
-	pv_cnt = 0;
-	pvh_eh = pvh_et = PV_HASHED_ENTRY_NULL;
-	if (pv_hashed_kern_free_count < PV_HASHED_KERN_LOW_WATER_MARK) {
-		for (i = 0; i < PV_HASHED_KERN_ALLOC_CHUNK; i++) {
-			pvh_e = (pv_hashed_entry_t) zalloc(pv_hashed_list_zone);
-
-			pvh_e->qlink.next = (queue_entry_t)pvh_eh;
-			pvh_eh = pvh_e;
-
-			if (pvh_et == PV_HASHED_ENTRY_NULL)
-			        pvh_et = pvh_e;
-			pv_cnt++;
-		}
-		PV_HASHED_KERN_FREE_LIST(pvh_eh, pvh_et, pv_cnt);
-	}
-
-	pv_cnt = 0;
-	pvh_eh = pvh_et = PV_HASHED_ENTRY_NULL;
-	if (pv_hashed_free_count < PV_HASHED_LOW_WATER_MARK) {
-		for (i = 0; i < PV_HASHED_ALLOC_CHUNK; i++) {
-			pvh_e = (pv_hashed_entry_t) zalloc(pv_hashed_list_zone);
-
-			pvh_e->qlink.next = (queue_entry_t)pvh_eh;
-			pvh_eh = pvh_e;
-
-			if (pvh_et == PV_HASHED_ENTRY_NULL)
-			        pvh_et = pvh_e;
-			pv_cnt++;
-		}
-		PV_HASHED_FREE_LIST(pvh_eh, pvh_et, pv_cnt);
-	}
-	mappingrecurse = 0;
-}
-
-
-boolean_t
-pmap_is_noencrypt(ppnum_t pn)
-{
-	int		pai;
+	pv_rooted_entry_t	pv_h;
+	pv_hashed_entry_t	pv_e;
+	pt_entry_t		*pte;
+	int			pai;
+	pmap_t			pmap;
+	char			attributes = 0;
+	
+	pmap_intr_assert();
+	assert(pn != vm_page_fictitious_addr);
+	if (pn == vm_page_guard_addr)
+		return;
 
 	pai = ppn_to_pai(pn);
 
-	if (!IS_MANAGED_PAGE(pai))
-		return (TRUE);
+	if (!IS_MANAGED_PAGE(pai)) {
+		/*
+		 *	Not a managed page.
+		 */
+		return;
+	}
 
-	if (pmap_phys_attributes[pai] & PHYS_NOENCRYPT)
-		return (TRUE);
+	PMAP_TRACE(PMAP_CODE(PMAP__ATTRIBUTE_CLEAR) | DBG_FUNC_START,
+		   pn, bits, 0, 0, 0);
 
-	return (FALSE);
+	pv_h = pai_to_pvh(pai);
+
+	LOCK_PVH(pai);
+
+	/*
+	 * Walk down PV list, clearing all modify or reference bits.
+	 * We do not have to lock the pv_list because we have
+	 * the entire pmap system locked.
+	 */
+	if (pv_h->pmap != PMAP_NULL) {
+		/*
+		 * There are some mappings.
+		 */
+
+		pv_e = (pv_hashed_entry_t)pv_h;
+
+		do {
+			vm_map_offset_t	va;
+
+			pmap = pv_e->pmap;
+			va = pv_e->va;
+
+			 /*
+			  * Clear modify and/or reference bits.
+			  */
+			pte = pmap_pte(pmap, va);
+			attributes |= *pte & (PHYS_MODIFIED|PHYS_REFERENCED);
+
+			pmap_update_pte(pte, *pte, (*pte & ~bits));
+			/* Ensure all processors using this translation
+			 * invalidate this TLB entry. The invalidation *must*
+			 * follow the PTE update, to ensure that the TLB
+			 * shadow of the 'D' bit (in particular) is
+			 * synchronized with the updated PTE.
+			 */
+			PMAP_UPDATE_TLBS(pmap, va, va + PAGE_SIZE);
+
+			pv_e = (pv_hashed_entry_t)queue_next(&pv_e->qlink);
+
+		} while (pv_e != (pv_hashed_entry_t)pv_h);
+	}
+	/* Opportunistic refmod collection, annulled
+	 * if both REF and MOD are being cleared.
+	 */
+
+	pmap_phys_attributes[pai] |= attributes;
+	pmap_phys_attributes[pai] &= (~bits);
+
+	UNLOCK_PVH(pai);
+
+	PMAP_TRACE(PMAP_CODE(PMAP__ATTRIBUTE_CLEAR) | DBG_FUNC_END,
+		   0, 0, 0, 0, 0);
 }
 
-
-void
-pmap_set_noencrypt(ppnum_t pn)
+/*
+ *	Check specified attribute bits.
+ */
+int
+phys_attribute_test(
+	ppnum_t		pn,
+	int		bits)
 {
-	int		pai;
+	pv_rooted_entry_t	pv_h;
+	pv_hashed_entry_t	pv_e;
+	pt_entry_t		*pte;
+	int			pai;
+	pmap_t			pmap;
+	int			attributes = 0;
+
+	pmap_intr_assert();
+	assert(pn != vm_page_fictitious_addr);
+	if (pn == vm_page_guard_addr)
+		return 0;
 
 	pai = ppn_to_pai(pn);
 
-	if (IS_MANAGED_PAGE(pai)) {
-		LOCK_PVH(pai);
-
-		pmap_phys_attributes[pai] |= PHYS_NOENCRYPT;
-
-		UNLOCK_PVH(pai);
+	if (!IS_MANAGED_PAGE(pai)) {
+		/*
+		 *	Not a managed page.
+		 */
+		return 0;
 	}
+
+	/*
+	 * Fast check...  if bits already collected
+	 * no need to take any locks...
+	 * if not set, we need to recheck after taking
+	 * the lock in case they got pulled in while
+	 * we were waiting for the lock
+	 */
+	if ((pmap_phys_attributes[pai] & bits) == bits)
+		return bits;
+
+	pv_h = pai_to_pvh(pai);
+
+	LOCK_PVH(pai);
+
+	attributes = pmap_phys_attributes[pai] & bits;
+
+
+	/*
+	 * Walk down PV list, checking the mappings until we
+	 * reach the end or we've found the desired attributes.
+	 */
+	if (attributes != bits &&
+	    pv_h->pmap != PMAP_NULL) {
+		/*
+		 * There are some mappings.
+		 */
+		pv_e = (pv_hashed_entry_t)pv_h;
+		do {
+			vm_map_offset_t va;
+
+			pmap = pv_e->pmap;
+			va = pv_e->va;
+			/*
+	 		 * pick up modify and/or reference bits from mapping
+			 */
+
+			pte = pmap_pte(pmap, va);
+			attributes |= (int)(*pte & bits);
+
+			pv_e = (pv_hashed_entry_t)queue_next(&pv_e->qlink);
+
+		} while ((attributes != bits) &&
+			 (pv_e != (pv_hashed_entry_t)pv_h));
+	}
+	pmap_phys_attributes[pai] |= attributes;
+
+	UNLOCK_PVH(pai);
+	return (attributes);
 }
 
-
+/*
+ *	Routine:	pmap_change_wiring
+ *	Function:	Change the wiring attribute for a map/virtual-address
+ *			pair.
+ *	In/out conditions:
+ *			The mapping must already exist in the pmap.
+ */
 void
-pmap_clear_noencrypt(ppnum_t pn)
+pmap_change_wiring(
+	pmap_t		map,
+	vm_map_offset_t	vaddr,
+	boolean_t	wired)
 {
-	int		pai;
+	pt_entry_t	*pte;
 
-	pai = ppn_to_pai(pn);
+	PMAP_LOCK(map);
 
-	if (IS_MANAGED_PAGE(pai)) {
-		LOCK_PVH(pai);
+	if ((pte = pmap_pte(map, vaddr)) == PT_ENTRY_NULL)
+		panic("pmap_change_wiring: pte missing");
 
-		pmap_phys_attributes[pai] &= ~PHYS_NOENCRYPT;
-
-		UNLOCK_PVH(pai);
+	if (wired && !iswired(*pte)) {
+		/*
+		 * wiring down mapping
+		 */
+		OSAddAtomic(+1,  &map->stats.wired_count);
+		pmap_update_pte(pte, *pte, (*pte | INTEL_PTE_WIRED));
 	}
-}
-
-void x86_filter_TLB_coherency_interrupts(boolean_t dofilter) {
-	assert(ml_get_interrupts_enabled() == 0 || get_preemption_level() != 0);
-
-	if (dofilter) {
-		CPU_CR3_MARK_INACTIVE();
-	} else {
-		CPU_CR3_MARK_ACTIVE();
-		__asm__ volatile("mfence");
-		if (current_cpu_datap()->cpu_tlb_invalid)
-			process_pmap_updates();
+	else if (!wired && iswired(*pte)) {
+		/*
+		 * unwiring mapping
+		 */
+		assert(map->stats.wired_count >= 1);
+		OSAddAtomic(-1,  &map->stats.wired_count);
+		pmap_update_pte(pte, *pte, (*pte & ~INTEL_PTE_WIRED));
 	}
-}
 
+	PMAP_UNLOCK(map);
+}

@@ -60,46 +60,101 @@
 
 #include <sys/param.h>
 #include <sys/ipc.h>
+#include <sys/stat.h>	/* mode constants */
 #include <sys/ucred.h>
 #include <sys/kauth.h>
 
 
 /*
  * Check for ipc permission
- *
- * XXX: Should pass proc argument so that we can pass 
- * XXX: proc->p_acflag to suser()
  */
 
+
 /*
+ * ipc_perm
+ *
+ *	perm->mode			mode of the object
+ *	mode				mode bits we want to test
+ *
  * Returns:	0			Success
  *		EPERM
  *		EACCES
+ *
+ * Notes:	The IPC_M bit is special, in that it may only be granted to
+ *		root, the creating user, or the owning user.
+ *
+ *		This code does not use posix_cred_access() because of the
+ *		need to check both creator and owner separately when we are
+ *		considering a rights grant.  Because of this, we need to do
+ *		two evaluations when the values are inequal, which can lead
+ *		us to defeat the callout avoidance optimization.  So we do
+ *		the work here, inline.  This is less than optimal for any
+ *		future work involving opacity of of POSIX credentials.
+ *
+ *		Setting up the mode_owner / mode_group / mode_world implicitly
+ *		masks the IPC_M bit off.  This is intentional.
+ *
+ *		See the posix_cred_access() implementation for algorithm
+ *		information.
  */
 int
-ipcperm(kauth_cred_t cred, struct ipc_perm *perm, int mode)
+ipcperm(kauth_cred_t cred, struct ipc_perm *perm, int mode_req)
 {
+	uid_t	uid = kauth_cred_getuid(cred);	/* avoid multiple calls */
+	int	want_mod_controlinfo = (mode_req & IPC_M);
+	int	is_member;
+	mode_t	mode_owner = (perm->mode & S_IRWXU);
+	mode_t	mode_group = (perm->mode & S_IRWXG) << 3;
+	mode_t	mode_world = (perm->mode & S_IRWXO) << 6;
 
+	/* Grant all rights to super user */
 	if (!suser(cred, (u_short *)NULL))
 		return (0);
 
-	/* Check for user match. */
-	if (kauth_cred_getuid(cred) != perm->cuid && kauth_cred_getuid(cred) != perm->uid) {
-		int is_member;
+	/* Grant or deny rights based on ownership */
+	if (uid == perm->cuid || uid == perm->uid) {
+		if (want_mod_controlinfo)
+			return (0);
 
-		if (mode & IPC_M)
+		return ((mode_req & mode_owner) == mode_req ? 0 : EACCES);
+	} else {
+		/* everyone else who wants to modify control info is denied */
+		if (want_mod_controlinfo)
 			return (EPERM);
-		/* Check for group match. */
-		mode >>= 3;
-		if ((kauth_cred_ismember_gid(cred, perm->gid, &is_member) || !is_member) &&
-		    (kauth_cred_ismember_gid(cred, perm->cgid, &is_member) || !is_member)) {
-			/* Check for `other' match. */
-			mode >>= 3;
-	}
 	}
 
-	if (mode & IPC_M)
+	/*
+	 * Combined group and world rights check, if no owner rights; positive
+	 * asssertion of gid/cgid equality avoids an extra callout in the
+	 * common case.
+	 */
+	if ((mode_req & mode_group & mode_world) == mode_req) {
 		return (0);
-
-	return ((mode & perm->mode) == mode ? 0 : EACCES);
+	} else {
+		if ((mode_req & mode_group) != mode_req) {
+			if ((!kauth_cred_ismember_gid(cred, perm->gid, &is_member) && is_member) &&
+			    ((perm->gid == perm->cgid) ||
+			     (!kauth_cred_ismember_gid(cred, perm->cgid, &is_member) && is_member))) {
+			    	return (EACCES);
+			} else {
+				if ((mode_req & mode_world) != mode_req) {
+					return (EACCES);
+				} else {
+					return (0);
+				}
+			}
+		} else {
+			if ((!kauth_cred_ismember_gid(cred, perm->gid, &is_member) && is_member) ||
+			    ((perm->gid != perm->cgid) &&
+			     (!kauth_cred_ismember_gid(cred, perm->cgid, &is_member) && is_member))) {
+			    	return (0);
+			} else {
+				if ((mode_req & mode_world) != mode_req) {
+					return (EACCES);
+				} else {
+					return (0);
+				}
+			}
+		}
+	}
 }

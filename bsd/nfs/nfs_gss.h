@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -49,6 +49,9 @@ enum rpcsec_gss_service {
 	RPCSEC_GSS_SVC_PRIVACY		= 3,	// sec=krb5p
 	RPCSEC_GSS_SVC_SYS		= 4	// sec=sys (fallback)
 };
+
+/* encoded krb5 OID */
+extern u_char krb5_mech[11];
 
 /*
  * GSS-API things
@@ -111,8 +114,8 @@ struct nfs_gss_clnt_ctx {
 	mach_port_t		gss_clnt_mport;		// Mach port for gssd upcall
 	u_char			*gss_clnt_verf;		// RPC verifier from server
 	char			*gss_clnt_svcname;	// Service name e.g. "nfs/big.apple.com"
-	gss_cred		gss_clnt_cred_handle;	// Opaque cred handle from gssd
-	gss_ctx			gss_clnt_context;	// Opaque context handle from gssd
+	gssd_cred		gss_clnt_cred_handle;	// Opaque cred handle from gssd
+	gssd_ctx		gss_clnt_context;	// Opaque context handle from gssd
 	u_char			*gss_clnt_token;	// GSS token exchanged via gssd & server
 	uint32_t		gss_clnt_tokenlen;	// Length of token
 	gss_key_info		gss_clnt_kinfo;		// GSS key info
@@ -136,6 +139,7 @@ struct nfs_gss_svc_ctx {
 	lck_mtx_t		*gss_svc_mtx;
 	LIST_ENTRY(nfs_gss_svc_ctx)	gss_svc_entries;
 	uint32_t		gss_svc_handle;		// Identifies server context to client
+	uint32_t		gss_svc_refcnt;		// Reference count
 	uint32_t		gss_svc_proc;		// Current GSS proc from cred
 	uid_t			gss_svc_uid;		// UID of this user
 	gid_t			gss_svc_gids[NGROUPS];	// GIDs of this user
@@ -144,8 +148,8 @@ struct nfs_gss_svc_ctx {
 	uint32_t		gss_svc_seqmax;		// Current max GSS sequence number
 	uint32_t		gss_svc_seqwin;		// GSS sequence number window
 	uint32_t		*gss_svc_seqbits;	// Bitmap to track seq numbers
-	gss_cred		gss_svc_cred_handle;	// Opaque cred handle from gssd
-	gss_ctx			gss_svc_context;	// Opaque context handle from gssd
+	gssd_cred		gss_svc_cred_handle;	// Opaque cred handle from gssd
+	gssd_ctx			gss_svc_context;	// Opaque context handle from gssd
 	u_char			*gss_svc_token;		// GSS token exchanged via gssd & client
 	uint32_t		gss_svc_tokenlen;	// Length of token
 	gss_key_info		gss_svc_kinfo;		// Session key info
@@ -184,12 +188,13 @@ int	nfs_gss_clnt_args_restore(struct nfsreq *);
 int	nfs_gss_clnt_ctx_renew(struct nfsreq *);
 void	nfs_gss_clnt_ctx_ref(struct nfsreq *, struct nfs_gss_clnt_ctx *);
 void	nfs_gss_clnt_ctx_unref(struct nfsreq *);
-void	nfs_gss_clnt_ctx_unmount(struct nfsmount *, int);
+void	nfs_gss_clnt_ctx_unmount(struct nfsmount *);
 int	nfs_gss_svc_cred_get(struct nfsrv_descript *, struct nfsm_chain *);
 int	nfs_gss_svc_verf_put(struct nfsrv_descript *, struct nfsm_chain *);
 int	nfs_gss_svc_ctx_init(struct nfsrv_descript *, struct nfsrv_sock *, mbuf_t *);
 int	nfs_gss_svc_prepare_reply(struct nfsrv_descript *, struct nfsm_chain *);
 int	nfs_gss_svc_protect_reply(struct nfsrv_descript *, mbuf_t);
+void	nfs_gss_svc_ctx_deref(struct nfs_gss_svc_ctx *);
 void	nfs_gss_svc_cleanup(void);
 
 __END_DECLS

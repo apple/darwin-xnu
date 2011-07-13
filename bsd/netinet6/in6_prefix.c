@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -227,18 +227,25 @@ search_matched_prefix(struct ifnet *ifp, struct in6_prefixreq *ipr)
 	ifnet_lock_shared(ifp);
 	TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list)
 	{
-		if (ifa->ifa_addr->sa_family != AF_INET6)
+		IFA_LOCK(ifa);
+		if (ifa->ifa_addr->sa_family != AF_INET6) {
+			IFA_UNLOCK(ifa);
 			continue;
+		}
 		if (ipr->ipr_plen <=
-		    in6_matchlen(&ipr->ipr_prefix.sin6_addr, IFA_IN6(ifa)))
+		    in6_matchlen(&ipr->ipr_prefix.sin6_addr, IFA_IN6(ifa))) {
+			/* keep it locked */
 			break;
+		}
+		IFA_UNLOCK(ifa);
 	}
 	if (ifa == NULL) {
 		ifnet_lock_done(ifp);
 		return NULL;
 	}
-
+	IFA_LOCK_ASSERT_HELD(ifa);
 	rpp = ifpr2rp(((struct in6_ifaddr *)ifa)->ia6_ifpr);
+	IFA_UNLOCK(ifa);
 	if (rpp != 0) {
 		ifnet_lock_done(ifp);
 		return rpp;
@@ -302,24 +309,31 @@ mark_matched_prefixes(u_int32_t cmd, struct ifnet *ifp, struct in6_rrenumreq *ir
 	{
 		struct rr_prefix *rpp;
 
-		if (ifa->ifa_addr->sa_family != AF_INET6)
+		IFA_LOCK(ifa);
+		if (ifa->ifa_addr->sa_family != AF_INET6) {
+			IFA_UNLOCK(ifa);
 			continue;
+		}
 		matchlen = in6_matchlen(&irr->irr_matchprefix.sin6_addr,
 					IFA_IN6(ifa));
 		if (irr->irr_m_minlen > matchlen ||
-		    irr->irr_m_maxlen < matchlen || irr->irr_m_len > matchlen)
- 			continue;
+		    irr->irr_m_maxlen < matchlen || irr->irr_m_len > matchlen) {
+			IFA_UNLOCK(ifa);
+			continue;
+		}
 		rpp = ifpr2rp(((struct in6_ifaddr *)ifa)->ia6_ifpr);
 		if (rpp != 0) {
 			matched = 1;
 			rpp->rp_statef_addmark = 1;
 			if (cmd == SIOCCIFPREFIX_IN6)
 				rpp->rp_statef_delmark = 1;
-		} else
+		} else {
 			log(LOG_WARNING, "in6_prefix.c: mark_matched_prefixes:"
 			    "no back pointer to ifprefix for %s. "
 			    "ND autoconfigured addr?\n",
 			    ip6_sprintf(IFA_IN6(ifa)));
+		}
+		IFA_UNLOCK(ifa);
 	}
 	ifnet_lock_done(ifp);
 	return matched;
@@ -447,15 +461,17 @@ assign_ra_entry(struct rr_prefix *rpp, int iilen, struct in6_ifaddr *ia)
 		return error;
 
 	/* copy interface id part */
+	IFA_LOCK(&ia->ia_ifa);
 	bit_copy((caddr_t)&rap->ra_ifid, sizeof(rap->ra_ifid) << 3,
-		 (caddr_t)IA6_IN6(ia),
-		 sizeof(*IA6_IN6(ia)) << 3, rpp->rp_plen, iilen);
+	    (caddr_t)IA6_IN6(ia), sizeof(*IA6_IN6(ia)) << 3,
+	    rpp->rp_plen, iilen);
 	/* link to ia, and put into list */
 	rap->ra_addr = ia;
-	ifaref(&rap->ra_addr->ia_ifa);
+	IFA_ADDREF_LOCKED(&rap->ra_addr->ia_ifa);
 #if 0 /* Can't do this now, because rpp may be on th stack. should fix it? */
 	ia->ia6_ifpr = rp2ifpr(rpp);
 #endif
+	IFA_UNLOCK(&ia->ia_ifa);
 	lck_mtx_lock(prefix6_mutex);
 	LIST_INSERT_HEAD(&rpp->rp_addrhead, rap, ra_entry);
 	lck_mtx_unlock(prefix6_mutex);
@@ -478,9 +494,11 @@ in6_prefix_add_llifid(__unused int iilen, struct in6_ifaddr *ia)
 	if ((error = create_ra_entry(&rap)) != 0)
 		return(error);
 	/* copy interface id part */
+	IFA_LOCK(&ia->ia_ifa);
 	bit_copy((caddr_t)&rap->ra_ifid, sizeof(rap->ra_ifid) << 3,
 		 (caddr_t)IA6_IN6(ia), sizeof(*IA6_IN6(ia)) << 3,
 		 64, (sizeof(rap->ra_ifid) << 3) - 64);
+	IFA_UNLOCK(&ia->ia_ifa);
 	/* XXX: init dummy so */
 	bzero(&so, sizeof(so));
 	/* insert into list */
@@ -500,6 +518,7 @@ in6_prefix_add_llifid(__unused int iilen, struct in6_ifaddr *ia)
 	return 0;
 }
 
+#if 0
 /*
  * add an address to an interface.  if the interface id portion is new,
  * we will add new interface address (prefix database + new interface id).
@@ -507,17 +526,24 @@ in6_prefix_add_llifid(__unused int iilen, struct in6_ifaddr *ia)
 int
 in6_prefix_add_ifid(int iilen, struct in6_ifaddr *ia)
 {
-	int plen = (sizeof(*IA6_IN6(ia)) << 3) - iilen;
+	struct in6_addr addr;
+	int plen;
 	struct ifprefix *ifpr;
 	struct rp_addr *rap;
 	int error = 0;
 
-	if (IN6_IS_ADDR_LINKLOCAL(IA6_IN6(ia)))
+	IFA_LOCK_SPIN(&ia->ia_ifa);
+	addr = *IA6_IN6(ia);
+	plen = (sizeof(*IA6_IN6(ia)) << 3) - iilen;
+	IFA_UNLOCK(&ia->ia_ifa);
+
+	if (IN6_IS_ADDR_LINKLOCAL(&addr))
 		return(in6_prefix_add_llifid(iilen, ia));
-	ifpr = in6_prefixwithifp(ia->ia_ifp, plen, IA6_IN6(ia));
+	ifpr = in6_prefixwithifp(ia->ia_ifp, plen, &addr);
 	if (ifpr == NULL) {
 		struct rr_prefix rp;
 		struct socket so;
+		struct ifnet *ifp;
 		int pplen = (plen == 128) ? 64 : plen; /* XXX hardcoded 64 is bad */
 
 		/* allocate a prefix for ia, with default properties */
@@ -525,14 +551,12 @@ in6_prefix_add_ifid(int iilen, struct in6_ifaddr *ia)
 		/* init rp */
 		bzero(&rp, sizeof(rp));
 		rp.rp_type = IN6_PREFIX_RR;
-		rp.rp_ifp = ia->ia_ifp;
+		rp.rp_ifp = ifp = ia->ia_ifp;
 		rp.rp_plen = pplen;
 		rp.rp_prefix.sin6_len = sizeof(rp.rp_prefix);
 		rp.rp_prefix.sin6_family = AF_INET6;
 		bit_copy((char *)RP_IN6(&rp), sizeof(*RP_IN6(&rp)) << 3,
-			 (char *)&ia->ia_addr.sin6_addr,
-			 sizeof(ia->ia_addr.sin6_addr) << 3,
-			 0, pplen);
+			 (char *)&addr, sizeof (addr) << 3, 0, pplen);
 		rp.rp_vltime = rp.rp_pltime = RR_INFINITE_LIFETIME;
 		rp.rp_raf_onlink = 1;
 		rp.rp_raf_auto = 1;
@@ -541,7 +565,9 @@ in6_prefix_add_ifid(int iilen, struct in6_ifaddr *ia)
 		rp.rp_origin = PR_ORIG_RR; /* can be renumbered */
 
 		/* create ra_entry */
+		ifnet_lock_shared(ifp);
 		error = link_stray_ia6s(&rp);
+		ifnet_lock_done(ifp);
 		if (error != 0) {
 			free_rp_entries(&rp);
 			return error;
@@ -559,53 +585,69 @@ in6_prefix_add_ifid(int iilen, struct in6_ifaddr *ia)
 			return error;
 
 		/* search again */
-		ifpr = in6_prefixwithifp(ia->ia_ifp, pplen, IA6_IN6(ia));
+		ifpr = in6_prefixwithifp(ia->ia_ifp, pplen, &addr);
 		if (ifpr == NULL)
 			return 0;
 	}
-	rap = search_ifidwithprefix(ifpr2rp(ifpr), IA6_IN6(ia));
+	rap = search_ifidwithprefix(ifpr2rp(ifpr), &addr);
 	if (rap != NULL) {
 		if (rap->ra_addr == NULL) {
 			rap->ra_addr = ia;
-			ifaref(&rap->ra_addr->ia_ifa);
+			IFA_ADDREF(&rap->ra_addr->ia_ifa);
 		} else if (rap->ra_addr != ia) {
 			/* There may be some inconsistencies between addrs. */
 			log(LOG_ERR, "ip6_prefix.c: addr %s/%d matched prefix"
 			    " already has another ia %p(%s) on its ifid list\n",
-			    ip6_sprintf(IA6_IN6(ia)), plen,
-			    rap->ra_addr,
+			    ip6_sprintf(&addr), plen, rap->ra_addr,
 			    ip6_sprintf(IA6_IN6(rap->ra_addr)));
 			return EADDRINUSE /* XXX */;
 		}
+		IFA_LOCK_SPIN(&ia->ia_ifa);
 		ia->ia6_ifpr = ifpr;
+		IFA_UNLOCK(&ia->ia_ifa);
 		return 0;
 	}
 	error = assign_ra_entry(ifpr2rp(ifpr), iilen, ia);
-	if (error == 0)
+	if (error == 0) {
+		IFA_LOCK_SPIN(&ia->ia_ifa);
 		ia->ia6_ifpr = ifpr;
+		IFA_UNLOCK(&ia->ia_ifa);
+	}
 	return (error);
 }
+#endif
 
+#if 0
 void
 in6_prefix_remove_ifid(__unused int iilen, struct in6_ifaddr *ia)
 {
 	struct rp_addr *rap;
+	struct in6_addr addr;
+	struct ifprefix *ifpr;
 
-	if (ia->ia6_ifpr == NULL)
+	IFA_LOCK_SPIN(&ia->ia_ifa);
+	if ((ifpr = ia->ia6_ifpr) == NULL) {
+		IFA_UNLOCK(&ia->ia_ifa);
 		return;
-	rap = search_ifidwithprefix(ifpr2rp(ia->ia6_ifpr), IA6_IN6(ia));
+	}
+	addr = *IA6_IN6(ia);
+	IFA_UNLOCK(&ia->ia_ifa);
+	rap = search_ifidwithprefix(ifpr2rp(ifpr), &addr);
 	if (rap != NULL) {
 		lck_mtx_lock(prefix6_mutex);
 		LIST_REMOVE(rap, ra_entry);
 		lck_mtx_unlock(prefix6_mutex);
-		if (rap->ra_addr)
-			ifafree(&rap->ra_addr->ia_ifa);
+		if (rap->ra_addr) {
+			IFA_REMREF(&rap->ra_addr->ia_ifa);
+			rap->ra_addr = NULL;
+		}
 		FREE(rap, M_RR_ADDR);
 	}
 
-	if (LIST_EMPTY(&ifpr2rp(ia->ia6_ifpr)->rp_addrhead))
-		rp_remove(ifpr2rp(ia->ia6_ifpr));
+	if (LIST_EMPTY(&ifpr2rp(ifpr)->rp_addrhead))
+		rp_remove(ifpr2rp(ifpr));
 }
+#endif
 
 void
 in6_purgeprefix(
@@ -665,20 +707,29 @@ add_each_addr(struct socket *so, struct rr_prefix *rpp, struct rp_addr *rap)
 
 	ia6 = in6ifa_ifpwithaddr(rpp->rp_ifp, &ifra.ifra_addr.sin6_addr);
 	if (ia6 != NULL) {
+		struct in6_ifaddr *ria6 = NULL;
+
+		IFA_LOCK(&ia6->ia_ifa);
 		if (ia6->ia6_ifpr == NULL) {
 			/* link this addr and the prefix each other */
-			if (rap->ra_addr)
-				ifafree(&rap->ra_addr->ia_ifa);
+			if (rap->ra_addr != NULL)
+				ria6 = rap->ra_addr;
 			/* Reference held in in6ifa_ifpwithaddr() */
 			rap->ra_addr = ia6;
 			ia6->ia6_ifpr = rp2ifpr(rpp);
+			IFA_UNLOCK(&ia6->ia_ifa);
+			if (ria6 != NULL)
+				IFA_REMREF(&ria6->ia_ifa);
 			return;
 		}
 		if (ia6->ia6_ifpr == rp2ifpr(rpp)) {
-			if (rap->ra_addr)
-				ifafree(&rap->ra_addr->ia_ifa);
+			if (rap->ra_addr != NULL)
+				ria6 = rap->ra_addr;
 			/* Reference held in in6ifa_ifpwithaddr() */
 			rap->ra_addr = ia6;
+			IFA_UNLOCK(&ia6->ia_ifa);
+			if (ria6 != NULL)
+				IFA_REMREF(&ria6->ia_ifa);
 			return;
 		}
 		/*
@@ -697,7 +748,8 @@ add_each_addr(struct socket *so, struct rr_prefix *rpp, struct rp_addr *rap)
 		    ip6_sprintf(&ifra.ifra_addr.sin6_addr), rpp->rp_plen,
 		    ip6_sprintf(IA6_IN6(ia6)),
 		    in6_mask2len(&ia6->ia_prefixmask.sin6_addr, NULL));
-		ifafree(&ia6->ia_ifa);
+		IFA_UNLOCK(&ia6->ia_ifa);
+		IFA_REMREF(&ia6->ia_ifa);
 		return;
 	}
 	/* propagate ANYCAST flag if it is set for ancestor addr */
@@ -803,8 +855,10 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 			LIST_REMOVE(rap, ra_entry);
 			if (search_ifidwithprefix(rpp, &rap->ra_ifid)
 			    != NULL) {
-				if (rap->ra_addr)
-					ifafree(&rap->ra_addr->ia_ifa);
+				if (rap->ra_addr) {
+					IFA_REMREF(&rap->ra_addr->ia_ifa);
+					rap->ra_addr = NULL;
+				}
 				FREE(rap, M_RR_ADDR);
 				continue;
 			}
@@ -870,11 +924,14 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 	 * init the prefix pointer.
 	 */
 	lck_mtx_lock(prefix6_mutex);
-	LIST_FOREACH(rap, &rpp->rp_addrhead, ra_entry)
-	{
-		if (rap->ra_addr != NULL) {
-			if (rap->ra_addr->ia6_ifpr == NULL)
-				rap->ra_addr->ia6_ifpr = rp2ifpr(rpp);
+	LIST_FOREACH(rap, &rpp->rp_addrhead, ra_entry) {
+		struct in6_ifaddr *ia6;
+
+		if ((ia6 = rap->ra_addr) != NULL) {
+			IFA_LOCK(&ia6->ia_ifa);
+			if (ia6->ia6_ifpr == NULL)
+				ia6->ia6_ifpr = rp2ifpr(rpp);
+			IFA_UNLOCK(&ia6->ia_ifa);
 			continue;
 		}
 		add_each_addr(so, rpp, rap);
@@ -967,13 +1024,20 @@ init_newprefix(struct in6_rrenumreq *irr, struct ifprefix *ifpr,
 	{
 		struct rp_addr *rap;
 		int error = 0;
+		struct in6_ifaddr *ia6;
 
 		if ((error = create_ra_entry(&rap)) != 0)
 			return error;
 		rap->ra_ifid = orap->ra_ifid;
-		rap->ra_flags.anycast = (orap->ra_addr != NULL &&
-					 (orap->ra_addr->ia6_flags &
-					  IN6_IFF_ANYCAST) != 0) ? 1 : 0;
+		ia6 = orap->ra_addr->ia_ifa;
+		if (ia6 != NULL) {
+			IFA_LOCK(&ia6->ia_ifa);
+			rap->ra_flags.anycast =
+			    ((ia6->ia6_flags & IN6_IFF_ANYCAST) != 0) ? 1 : 0;
+			IFA_UNLOCK(&ia6->ia_ifa);
+		} else {
+			rap->ra_flags.anycast = 0;
+		}
 		LIST_INSERT_HEAD(&rpp->rp_addrhead, rap, ra_entry);
 	}
 	rpp->rp_vltime = irr->irr_vltime;
@@ -1005,8 +1069,10 @@ free_rp_entries(struct rr_prefix *rpp)
 
 		rap = LIST_FIRST(&rpp->rp_addrhead);
 		LIST_REMOVE(rap, ra_entry);
-		if (rap->ra_addr)
-			ifafree(&rap->ra_addr->ia_ifa);
+		if (rap->ra_addr) {
+			IFA_REMREF(&rap->ra_addr->ia_ifa);
+			rap->ra_addr = NULL;
+		}
 		FREE(rap, M_RR_ADDR);
 	}
 	lck_mtx_unlock(prefix6_mutex);
@@ -1054,10 +1120,14 @@ unprefer_prefix(struct rr_prefix *rpp)
 	lck_mtx_lock(prefix6_mutex);
 	for (rap = rpp->rp_addrhead.lh_first; rap != NULL;
 	     rap = rap->ra_entry.le_next) {
-		if (rap->ra_addr == NULL)
+		struct in6_ifaddr *ia6;
+
+		if ((ia6 = rap->ra_addr) == NULL)
 			continue;
-		rap->ra_addr->ia6_lifetime.ia6t_preferred = timenow.tv_sec;
-		rap->ra_addr->ia6_lifetime.ia6t_pltime = 0;
+		IFA_LOCK(&ia6->ia_ifa);
+		ia6->ia6_lifetime.ia6t_preferred = timenow.tv_sec;
+		ia6->ia6_lifetime.ia6t_pltime = 0;
+		IFA_UNLOCK(&ia6->ia_ifa);
 	}
 	lck_mtx_unlock(prefix6_mutex);
 
@@ -1074,20 +1144,24 @@ delete_each_prefix(struct rr_prefix *rpp, u_char origin)
 	lck_mtx_lock(prefix6_mutex);
 	while (rpp->rp_addrhead.lh_first != NULL) {
 		struct rp_addr *rap;
+		struct in6_ifaddr *ia6;
 
 		rap = LIST_FIRST(&rpp->rp_addrhead);
 		if (rap == NULL) {
 			break;
 		}
 		LIST_REMOVE(rap, ra_entry);
-		if (rap->ra_addr == NULL) {
+		if ((ia6 = rap->ra_addr) == NULL) {
 			FREE(rap, M_RR_ADDR);
 			continue;
 		}
-		rap->ra_addr->ia6_ifpr = NULL;
+		rap->ra_addr = NULL;
+		IFA_LOCK(&ia6->ia_ifa);
+		ia6->ia6_ifpr = NULL;
+		IFA_UNLOCK(&ia6->ia_ifa);
 
-		in6_purgeaddr(&rap->ra_addr->ia_ifa, 0);
-		ifafree(&rap->ra_addr->ia_ifa);
+		in6_purgeaddr(&ia6->ia_ifa, 0);
+		IFA_REMREF(&ia6->ia_ifa);
 		FREE(rap, M_RR_ADDR);
 	}
 	rp_remove(rpp);
@@ -1122,6 +1196,8 @@ link_stray_ia6s(struct rr_prefix *rpp)
 {
 	struct ifaddr *ifa;
 
+	ifnet_lock_assert(rpp->rp_ifp, IFNET_LCK_ASSERT_OWNED);
+
 	for (ifa = rpp->rp_ifp->if_addrlist.tqh_first; ifa;
 	     ifa = ifa->ifa_list.tqe_next)
 	{
@@ -1129,11 +1205,15 @@ link_stray_ia6s(struct rr_prefix *rpp)
 		struct rr_prefix *orpp;
 		int error = 0;
 
-		if (ifa->ifa_addr->sa_family != AF_INET6)
+		IFA_LOCK(ifa);
+		if (ifa->ifa_addr->sa_family != AF_INET6) {
+			IFA_UNLOCK(ifa);
 			continue;
-		if (rpp->rp_plen > in6_matchlen(RP_IN6(rpp), IFA_IN6(ifa)))
+		}
+		if (rpp->rp_plen > in6_matchlen(RP_IN6(rpp), IFA_IN6(ifa))) {
+			IFA_UNLOCK(ifa);
 			continue;
-
+		}
 		orpp = ifpr2rp(((struct in6_ifaddr *)ifa)->ia6_ifpr);
 		if (orpp != NULL) {
 			if (!in6_are_prefix_equal(RP_IN6(orpp), RP_IN6(rpp),
@@ -1144,8 +1224,10 @@ link_stray_ia6s(struct rr_prefix *rpp)
 				    ip6_sprintf(IFA_IN6(ifa)), orpp->rp_plen,
 				    ip6_sprintf(RP_IN6(rpp)),
 				    rpp->rp_plen);
+			IFA_UNLOCK(ifa);
 			continue;
 		}
+		IFA_UNLOCK(ifa);
 		if ((error = assign_ra_entry(rpp,
 					      (sizeof(rap->ra_ifid) << 3) -
 					      rpp->rp_plen,
@@ -1237,23 +1319,28 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 		rp_tmp.rp_origin = ipr->ipr_origin;
 
 		/* create rp_addr entries, usually at least for lladdr */
+		ifnet_lock_shared(ifp);
 		if ((error = link_stray_ia6s(&rp_tmp)) != 0) {
+			ifnet_lock_done(ifp);
 			free_rp_entries(&rp_tmp);
 			break;
 		}
-		ifnet_lock_exclusive(ifp);
 		for (ifa = ifp->if_addrlist.tqh_first;
 		     ifa;
 		     ifa = ifa->ifa_list.tqe_next)
 		{
-			if (ifa->ifa_addr == NULL)
-				continue;	/* just for safety */
-			if (ifa->ifa_addr->sa_family != AF_INET6)
+			IFA_LOCK(ifa);
+			if (ifa->ifa_addr->sa_family != AF_INET6) {
+				IFA_UNLOCK(ifa);
 				continue;
-			if (IN6_IS_ADDR_LINKLOCAL(IFA_IN6(ifa)) == 0)
+			}
+			if (IN6_IS_ADDR_LINKLOCAL(IFA_IN6(ifa)) == 0) {
+				IFA_UNLOCK(ifa);
 				continue;
-
+			}
 			if ((error = create_ra_entry(&rap)) != 0) {
+				IFA_UNLOCK(ifa);
+				ifnet_lock_done(ifp);
 				free_rp_entries(&rp_tmp);
 				goto bad;
 			}
@@ -1264,6 +1351,7 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 				 sizeof(*IFA_IN6(ifa)) << 3,
 				 rp_tmp.rp_plen,
 				 (sizeof(rap->ra_ifid) << 3) - rp_tmp.rp_plen);
+			IFA_UNLOCK(ifa);
 			/* insert into list */
 			lck_mtx_lock(prefix6_mutex);
 			LIST_INSERT_HEAD(&rp_tmp.rp_addrhead, rap, ra_entry);
@@ -1292,30 +1380,3 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 }
 #endif
 
-void
-in6_rr_timer(__unused void *ignored_arg)
-{
-	struct rr_prefix *rpp;
-	struct timeval timenow;
-
-	getmicrotime(&timenow);
-
-	/* expire */
-	lck_mtx_lock(prefix6_mutex);
-	rpp = LIST_FIRST(&rr_prefix);
-	while (rpp) {
-		if (rpp->rp_expire && rpp->rp_expire < timenow.tv_sec) {
-			struct rr_prefix *next_rpp;
-
-			next_rpp = LIST_NEXT(rpp, rp_entry);
-			delete_each_prefix(rpp, PR_ORIG_KERNEL);
-			rpp = next_rpp;
-			continue;
-		}
-		if (rpp->rp_preferred && rpp->rp_preferred < timenow.tv_sec)
-			unprefer_prefix(rpp);
-		rpp = LIST_NEXT(rpp, rp_entry);
-	}
-	lck_mtx_unlock(prefix6_mutex);
-	timeout(in6_rr_timer, (caddr_t)0, ip6_rr_prune * hz);
-}

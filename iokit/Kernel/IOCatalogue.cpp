@@ -75,31 +75,6 @@ IOLock         * gIOCatalogLock;
 #pragma mark Utility functions
 #endif
 /*********************************************************************
-*********************************************************************/
-static void
-UniqueProperties(OSDictionary * dict)
-{
-    OSString * data;
-
-    data = OSDynamicCast(OSString, dict->getObject(gIOClassKey));
-    if (data) {
-        const OSSymbol *classSymbol = OSSymbol::withString(data);
-
-        dict->setObject( gIOClassKey, (OSSymbol *) classSymbol);
-        classSymbol->release();
-    }
-
-    data = OSDynamicCast(OSString, dict->getObject(gIOMatchCategoryKey));
-    if (data) {
-        const OSSymbol *classSymbol = OSSymbol::withString(data);
-
-        dict->setObject(gIOMatchCategoryKey, (OSSymbol *) classSymbol);
-        classSymbol->release();
-    }
-    return;
-}
-
-/*********************************************************************
 * Add a new personality to the set if it has a unique IOResourceMatchKey value.
 * XXX -- svail: This should be optimized.
 * esb - There doesn't seem like any reason to do this - it causes problems
@@ -170,13 +145,13 @@ bool IOCatalogue::init(OSArray * initArray)
     gIOCatalogLock = IOLockAlloc();
 
     lock     = gIOCatalogLock;
-#if __ppc__ || __i386__
+#if __i386__
     kld_lock = NULL;
-#endif /* __ppc__ || __i386__ */
+#endif /* __i386__ */
 
     kernelTables->reset();
     while( (dict = (OSDictionary *) kernelTables->getNextObject())) {
-        UniqueProperties(dict);
+        OSKext::uniquePersonalityProperties(dict);
         if( 0 == dict->getObject( gIOClassKey ))
             IOLog("Missing or bad \"%s\" key\n",
                     gIOClassKey->getCStringNoCopy());
@@ -306,7 +281,7 @@ IOCatalogue::findDrivers(
     OSDictionary         * dict;
     OSOrderedSet         * set;
 
-    UniqueProperties(matching);
+    OSKext::uniquePersonalityProperties(matching);
 
     set = OSOrderedSet::withCapacity( 1, IOServiceOrdering,
                                       (void *)gIOProbeScoreKey );
@@ -345,7 +320,7 @@ bool IOCatalogue::addDrivers(
     bool                   result = false;
     OSCollectionIterator * iter = NULL;       // must release
     OSOrderedSet         * set = NULL;        // must release
-    OSDictionary         * dict = NULL;       // do not release
+    OSObject             * object = NULL;       // do not release
     OSArray              * persons = NULL;    // do not release
 
     persons = OSDynamicCast(OSArray, drivers);
@@ -364,16 +339,26 @@ bool IOCatalogue::addDrivers(
         goto finish;
     }
 
+   /* Start with success; clear it on an error.
+    */
     result = true;
 
     IOLockLock(lock);
-    while ( (dict = (OSDictionary *) iter->getNextObject()) ) {
+    while ( (object = iter->getNextObject()) ) {
     
         // xxx Deleted OSBundleModuleDemand check; will handle in other ways for SL
 
+        OSDictionary * personality = OSDynamicCast(OSDictionary, object);
+
         SInt count;
-        
-        UniqueProperties(dict);
+
+        if (!personality) {
+            IOLog("IOCatalogue::addDrivers() encountered non-dictionary; bailing.\n");
+            result = false;
+            break;
+        }
+
+        OSKext::uniquePersonalityProperties(personality);
         
         // Add driver personality to catalogue.
         count = array->getCount();
@@ -389,7 +374,7 @@ bool IOCatalogue::addDrivers(
             * Do not compare just the properties present in one driver
             * pesonality or the other.
             */
-            if (dict->isEqualTo(driver)) {
+            if (personality->isEqualTo(driver)) {
                 break;
             }
         }
@@ -398,15 +383,15 @@ bool IOCatalogue::addDrivers(
             continue;
         }
         
-        result = array->setObject(dict);
+        result = array->setObject(personality);
         if (!result) {
             break;
         }
         
-        AddNewImports(set, dict);
+        AddNewImports(set, personality);
     }
     // Start device matching.
-    if (doNubMatching && (set->getCount() > 0)) {
+    if (result && doNubMatching && (set->getCount() > 0)) {
         IOService::catalogNewDrivers(set);
         generation++;
     }
@@ -455,7 +440,7 @@ IOCatalogue::removeDrivers(
         return false;
     }
 
-    UniqueProperties( matching );
+    OSKext::uniquePersonalityProperties( matching );
 
     IOLockLock(lock);
     kernelTables->reset();
@@ -553,8 +538,7 @@ void IOCatalogue::moduleHasLoaded(OSString * moduleName)
     startMatching(dict);
     dict->release();
 
-    (void) OSKext::setDeferredLoadSucceeded();
-    (void) OSKext::considerRebuildOfPrelinkedKernel();
+    (void) OSKext::considerRebuildOfPrelinkedKernel(moduleName);
 }
 
 void IOCatalogue::moduleHasLoaded(const char * moduleName)
@@ -589,7 +573,7 @@ static IOReturn _terminateDrivers(OSDictionary * matching)
     if ( !iter )
         return kIOReturnNoMemory;
 
-    UniqueProperties( matching );
+    OSKext::uniquePersonalityProperties( matching );
 
     // terminate instances.
     do {
@@ -785,7 +769,183 @@ bool IOCatalogue::startMatching( OSDictionary * matching )
 
 void IOCatalogue::reset(void)
 {
+    IOCatalogue::resetAndAddDrivers(/* no drivers; true reset */ NULL,
+        /* doMatching */ false);
+    return;
+}
+
+bool IOCatalogue::resetAndAddDrivers(OSArray * drivers, bool doNubMatching)
+{
+    bool                   result              = false;
+    OSArray              * newPersonalities    = NULL;  // do not release
+    OSCollectionIterator * newPIterator        = NULL;  // must release
+    OSOrderedSet         * matchSet            = NULL;  // must release
+    OSArray              * oldPersonalities    = NULL;  // must release
+    OSArray              * kernelPersonalities = NULL;  // must release
+    OSString             * errorString         = NULL;  // must release
+    OSObject             * object              = NULL;  // do not release
+    OSDictionary         * thisNewPersonality  = NULL;  // do not release
+    signed int             count, i;
+
+    extern const char    * gIOKernelConfigTables;
+
+    if (drivers) {
+        newPersonalities = OSDynamicCast(OSArray, drivers);
+        if (!newPersonalities) {
+            goto finish;
+        }
+
+        newPIterator = OSCollectionIterator::withCollection(newPersonalities);
+        if (!newPIterator) {
+            goto finish;
+        }
+        
+        matchSet = OSOrderedSet::withCapacity(10, IOServiceOrdering,
+            (void *)gIOProbeScoreKey);
+        if (!matchSet) {
+            goto finish;
+        }
+    }
+
+   /* Read personalities for the built-in kernel driver classes.
+    * We don't have many any more.
+    */
+    kernelPersonalities = OSDynamicCast(OSArray,
+        OSUnserialize(gIOKernelConfigTables, &errorString));
+    if (!kernelPersonalities && errorString) {
+        IOLog("KernelConfigTables syntax error: %s\n",
+            errorString->getCStringNoCopy());
+        goto finish;
+    }
+    
+   /* Now copy the current array of personalities so we can reuse them
+    * if the new list contains any duplicates. This saves on memory
+    * consumption.
+    */
+    oldPersonalities = OSDynamicCast(OSArray, array->copyCollection());
+    if (!oldPersonalities) {
+        goto finish;
+    }
+
+    result = true;
+
     IOLog("Resetting IOCatalogue.\n");
+    
+   /* No goto finish from here to unlock.
+    */
+    IOLockLock(lock);
+    
+    array->flushCollection();
+
+   /* Add back the kernel personalities and remove them from the old
+    * array so we don't try to match on them again. Go forward through
+    * the arrays as this causes the least iteration since kernel personalities
+    * should always be first.
+    */
+    count = kernelPersonalities->getCount();
+    for (i = 0; i < count; i++) {
+    
+       /* Static cast here, as the data is coming from within the kernel image.
+        */
+        OSDictionary * thisNewPersonality = (OSDictionary *)
+            kernelPersonalities->getObject(i);
+        array->setObject(thisNewPersonality);
+
+        signed int oldPCount = oldPersonalities->getCount();
+        for (signed int oldPIndex = 0; oldPIndex < oldPCount; oldPIndex++) {
+            if (thisNewPersonality->isEqualTo(oldPersonalities->getObject(oldPIndex))) {
+                oldPersonalities->removeObject(oldPIndex);
+                break;
+            }
+        }
+    }
+
+   /* Now add the new set of personalities passed in, using existing
+    * copies if we had them in kernel memory already.
+    */
+    if (newPIterator) {
+        OSDictionary * thisOldPersonality = NULL;  // do not release
+        
+        while ( (object = newPIterator->getNextObject()) ) {
+
+            thisNewPersonality = OSDynamicCast(OSDictionary, object);
+            if (!thisNewPersonality) {
+                IOLog("IOCatalogue::resetAndAddDrivers() encountered non-dictionary; bailing.\n");
+            result = false;
+            break;
+            }
+
+           /* Convert common OSString property values to OSSymbols.
+            */
+            OSKext::uniquePersonalityProperties(thisNewPersonality);
+            
+           /* Add driver personality to catalogue, but if we had a copy already
+            * use that instead so we don't have multiple copies from OSKext instances.
+            */
+            count = oldPersonalities->getCount();
+            thisOldPersonality = NULL;
+            while (count--) {
+                
+                thisOldPersonality = (OSDictionary *)oldPersonalities->getObject(count);
+                
+               /* Unlike in other functions, this comparison must be exact!
+                * The catalogue must be able to contain personalities that
+                * are proper supersets of others.
+                * Do not compare just the properties present in one driver
+                * pesonality or the other.
+                */
+                if (thisNewPersonality->isEqualTo(thisOldPersonality)) {
+                    break;
+                }
+            }
+
+           /* If we found a dup, add the *original* back to the catalogue,
+            * remove it from our bookkeeping list, and continue.
+            * Don't worry about matching on personalities we already had.
+            */
+            if (count >= 0) {
+                array->setObject(thisOldPersonality);
+                oldPersonalities->removeObject(count);
+                continue;
+            }
+
+           /* Otherwise add the new personality and mark it for matching.
+            */
+            array->setObject(thisNewPersonality);
+            AddNewImports(matchSet, thisNewPersonality);                
+        }
+
+       /*****
+        * Now, go through remaining old personalities, which have effectively
+        * been removed, and add them to the match set as necessary.
+        */
+        count = oldPersonalities->getCount();
+        while (count--) {
+        
+           /* Static cast here is ok as these dictionaries were already in the catalogue.
+            */
+            thisOldPersonality = (OSDictionary *)oldPersonalities->getObject(count);
+            AddNewImports(matchSet, thisOldPersonality);
+        }
+
+       /* Finally, start device matching on all new & removed personalities.
+        */
+        if (result && doNubMatching && (matchSet->getCount() > 0)) {
+            IOService::catalogNewDrivers(matchSet);
+            generation++;
+        }
+    }
+
+    IOLockUnlock(lock);
+
+finish:
+    if (newPIterator) newPIterator->release();
+    if (matchSet) matchSet->release();
+    if (oldPersonalities) oldPersonalities->release();
+    if (kernelPersonalities) kernelPersonalities->release();
+    if (errorString) errorString->release();
+
+    return result;
 }
 
 bool IOCatalogue::serialize(OSSerialize * s) const
@@ -837,9 +997,9 @@ bool IOCatalogue::serializeData(IOOptionBits kind, OSSerialize * s) const
 **********************************************************************
 **********************************************************************
 * These functions are no longer used are necessary for C++ binary
-* compatibility on ppc/i386.
+* compatibility on i386.
 **********************************************************************/
-#if __ppc__ || __i386__
+#if __i386__
 
 bool IOCatalogue::recordStartupExtensions(void)
 {  return false;  }
@@ -850,4 +1010,4 @@ bool IOCatalogue::addExtensionsFromArchive(OSData * mkext)
 kern_return_t IOCatalogue::removeKernelLinker(void)
 {  return KERN_NOT_SUPPORTED;  }
 
-#endif /* __ppc__ || __i386__ */
+#endif /* __i386__ */

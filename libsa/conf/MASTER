@@ -64,4 +64,3 @@ options		CONFIG_NO_PRINTF_STRINGS			# <no_printf_str>
 options		CONFIG_NO_KPRINTF_STRINGS			# <no_kprintf_str>
 
 options		CONFIG_KXLD		# kxld/runtime linking of kexts # <config_kxld>
-

@@ -74,6 +74,8 @@ extern kern_return_t memory_object_pages_resident(memory_object_control_t,
 							boolean_t *);
 extern kern_return_t	memory_object_signed(memory_object_control_t control,
 					     boolean_t is_signed);
+extern boolean_t	memory_object_is_slid(memory_object_control_t	control);
+
 extern void Debugger(const char *message);
 
 
@@ -140,9 +142,11 @@ enum {
 	CSMAGIC_CODEDIRECTORY = 0xfade0c02,		/* CodeDirectory blob */
 	CSMAGIC_EMBEDDED_SIGNATURE = 0xfade0cc0, /* embedded form of signature data */
 	CSMAGIC_EMBEDDED_SIGNATURE_OLD = 0xfade0b02,	/* XXX */
+	CSMAGIC_EMBEDDED_ENTITLEMENTS = 0xfade7171,	/* embedded entitlements */
 	CSMAGIC_DETACHED_SIGNATURE = 0xfade0cc1, /* multi-arch collection of embedded signatures */
 	
 	CSSLOT_CODEDIRECTORY = 0,				/* slot index for CodeDirectory */
+	CSSLOT_ENTITLEMENTS = 5
 };
 
 static const uint32_t supportsScatter = 0x20100;	// first version to support scatter option
@@ -162,6 +166,12 @@ typedef struct __SuperBlob {
 	CS_BlobIndex index[];			/* (count) entries */
 	/* followed by Blobs in no particular order as indicated by offsets in index */
 } CS_SuperBlob;
+
+typedef struct __GenericBlob {
+	uint32_t magic;				/* magic number */
+	uint32_t length;			/* total length of blob */
+	char data[];
+} CS_GenericBlob;
 
 struct Scatter {
 	uint32_t count;			// number of pages; zero for sentinel (only)
@@ -352,6 +362,113 @@ hashes(
  * CODESIGNING
  * End of routines to navigate code signing data structures in the kernel.
  */
+
+/*
+ * ENTITLEMENTS
+ * Routines to navigate entitlements in the kernel.
+ */
+
+/* Retrieve the entitlements blob for a process.
+ * Returns:
+ *   EINVAL	no text vnode associated with the process
+ *   EBADEXEC   invalid code signing data
+ *   ENOMEM	you should reboot
+ *   0		no error occurred
+ *
+ * On success, out_start and out_length will point to the
+ * entitlements blob if found; or will be set to NULL/zero
+ * if there were no entitlements.
+ */
+int
+cs_entitlements_blob_get(proc_t p, void **out_start, size_t *out_length)
+{
+	SHA1_CTX context;			/* XXX hash agility */
+	int error = 0;
+	struct cs_blob *blob_list_entry;
+	CS_SuperBlob *super_blob;
+	CS_BlobIndex *blob_index;
+	CS_GenericBlob *blob;
+	CS_CodeDirectory *code_dir;
+	unsigned char *computed_hash = NULL;
+	unsigned char *embedded_hash = NULL;
+	void *start = NULL;
+	size_t length = 0;
+	size_t hash_size = 0;
+	unsigned int i, count;
+
+	if (NULL == p->p_textvp) {
+		error = EINVAL;
+		goto out;
+	}
+	if (NULL == (blob_list_entry = ubc_cs_blob_get(p->p_textvp, -1,
+	    p->p_textoff)))
+		goto out;
+	super_blob = (void *)blob_list_entry->csb_mem_kaddr;
+	if (CSMAGIC_EMBEDDED_SIGNATURE != ntohl(super_blob->magic)) {
+		error = EBADEXEC;
+		goto out;
+	}
+	count = ntohl(super_blob->count);
+	for (i = 0; i < count; ++i) {
+		blob_index = &super_blob->index[i];
+		blob = (void *)((char *)super_blob + ntohl(blob_index->offset));
+		switch (ntohl(blob_index->type)) {
+		case CSSLOT_CODEDIRECTORY:
+			if (CSMAGIC_CODEDIRECTORY != ntohl(blob->magic))
+				break;
+			code_dir = (void *)blob;
+			hash_size = code_dir->hashSize;
+			if (CSSLOT_ENTITLEMENTS <=
+			    ntohl(code_dir->nSpecialSlots)) {
+				embedded_hash = (void *)((char *)code_dir +
+				    ntohl(code_dir->hashOffset) -
+				    (hash_size * CSSLOT_ENTITLEMENTS));
+			}
+			break;
+		case CSSLOT_ENTITLEMENTS:
+			if (CSMAGIC_EMBEDDED_ENTITLEMENTS != ntohl(blob->magic))
+				break;
+			start = (void *)blob;
+			length = ntohl(blob->length);
+			break;
+		default:
+			break;
+		}
+	}
+	if (NULL == start && NULL == embedded_hash) {
+		error = 0;
+		goto out;
+	} else if (NULL == start || NULL == embedded_hash) {
+		error = EBADEXEC;
+		goto out;
+	}
+	if (NULL == (computed_hash = kalloc(hash_size))) {
+		error = ENOMEM;
+		goto out;
+	}
+	SHA1Init(&context);
+	SHA1Update(&context, start, length);
+	SHA1Final(computed_hash, &context);
+	if (0 != memcmp(computed_hash, embedded_hash, hash_size)) {
+		error = EBADEXEC;
+		goto out;
+	}
+	error = 0;
+out:
+	if (NULL != computed_hash)
+		kfree(computed_hash, hash_size);
+	if (0 == error) {
+		*out_start = start;
+		*out_length = length;
+	}
+	return error;
+}
+
+/*
+ * ENTITLEMENTS
+ * End of routines to navigate entitlements in the kernel.
+ */
+
 
 
 /*
@@ -626,7 +743,10 @@ ubc_setsize(struct vnode *vp, off_t nsize)
 	uip->ui_size = nsize;
 
 	if (nsize >= osize) {	/* Nothing more to do */
-		lock_vnode_and_post(vp, NOTE_EXTEND);
+		if (nsize > osize) {
+			lock_vnode_and_post(vp, NOTE_EXTEND);
+		}
+
 		return (1);		/* return success */
 	}
 
@@ -986,6 +1106,16 @@ ubc_getobject(struct vnode *vp, __unused int flags)
 	return (MEMORY_OBJECT_CONTROL_NULL);
 }
 
+boolean_t
+ubc_strict_uncached_IO(struct vnode *vp)
+{
+        boolean_t result = FALSE;
+
+	if (UBCINFOEXISTS(vp)) {
+	        result = memory_object_is_slid(vp->v_ubcinfo->ui_control);
+	}
+	return result;
+}
 
 /*
  * ubc_blktooff
@@ -1834,6 +1964,9 @@ ubc_create_upl(
 	if (bufsize & 0xfff)
 		return KERN_INVALID_ARGUMENT;
 
+	if (bufsize > MAX_UPL_SIZE * PAGE_SIZE)
+		return KERN_INVALID_ARGUMENT;
+
 	if (uplflags & (UPL_UBC_MSYNC | UPL_UBC_PAGEOUT | UPL_UBC_PAGEIN)) {
 
 		if (uplflags & UPL_UBC_MSYNC) {
@@ -2223,12 +2356,12 @@ static SInt32 cs_blob_count_peak = 0;
 
 int cs_validation = 1;
 
-SYSCTL_INT(_vm, OID_AUTO, cs_validation, CTLFLAG_RW, &cs_validation, 0, "Do validate code signatures");
-SYSCTL_INT(_vm, OID_AUTO, cs_blob_count, CTLFLAG_RD, &cs_blob_count, 0, "Current number of code signature blobs");
-SYSCTL_INT(_vm, OID_AUTO, cs_blob_size, CTLFLAG_RD, &cs_blob_size, 0, "Current size of all code signature blobs");
-SYSCTL_INT(_vm, OID_AUTO, cs_blob_count_peak, CTLFLAG_RD, &cs_blob_count_peak, 0, "Peak number of code signature blobs");
-SYSCTL_INT(_vm, OID_AUTO, cs_blob_size_peak, CTLFLAG_RD, &cs_blob_size_peak, 0, "Peak size of code signature blobs");
-SYSCTL_INT(_vm, OID_AUTO, cs_blob_size_max, CTLFLAG_RD, &cs_blob_size_max, 0, "Size of biggest code signature blob");
+SYSCTL_INT(_vm, OID_AUTO, cs_validation, CTLFLAG_RW | CTLFLAG_LOCKED, &cs_validation, 0, "Do validate code signatures");
+SYSCTL_INT(_vm, OID_AUTO, cs_blob_count, CTLFLAG_RD | CTLFLAG_LOCKED, (int *)(uintptr_t)&cs_blob_count, 0, "Current number of code signature blobs");
+SYSCTL_INT(_vm, OID_AUTO, cs_blob_size, CTLFLAG_RD | CTLFLAG_LOCKED, (int *)(uintptr_t)&cs_blob_size, 0, "Current size of all code signature blobs");
+SYSCTL_INT(_vm, OID_AUTO, cs_blob_count_peak, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_blob_count_peak, 0, "Peak number of code signature blobs");
+SYSCTL_INT(_vm, OID_AUTO, cs_blob_size_peak, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_blob_size_peak, 0, "Peak size of code signature blobs");
+SYSCTL_INT(_vm, OID_AUTO, cs_blob_size_max, CTLFLAG_RD | CTLFLAG_LOCKED, &cs_blob_size_max, 0, "Size of biggest code signature blob");
 
 kern_return_t
 ubc_cs_blob_allocate(
@@ -2335,7 +2468,7 @@ ubc_cs_blob_add(
 		blob->csb_start_offset = 0;
 		blob->csb_end_offset = 0;
 	} else {
-		unsigned char *sha1_base;
+		const unsigned char *sha1_base;
 		int sha1_size;
 
 		blob->csb_flags = ntohl(cd->flags) | CS_VALID;
@@ -2582,6 +2715,9 @@ ubc_cs_free(
 		OSAddAtomic((SInt32) -blob->csb_mem_size, &cs_blob_size);
 		kfree(blob, sizeof (*blob));
 	}
+#if CHECK_CS_VALIDATION_BITMAP
+	ubc_cs_validation_bitmap_deallocate( uip->ui_vnode );
+#endif
 	uip->cs_blobs = NULL;
 }
 
@@ -2820,3 +2956,127 @@ ubc_cs_getcdhash(
 
 	return ret;
 }
+
+#if CHECK_CS_VALIDATION_BITMAP
+#define stob(s)	((atop_64((s)) + 07) >> 3)
+extern	boolean_t	root_fs_upgrade_try;
+
+/*
+ * Should we use the code-sign bitmap to avoid repeated code-sign validation?
+ * Depends:
+ * a) Is the target vnode on the root filesystem?
+ * b) Has someone tried to mount the root filesystem read-write?
+ * If answers are (a) yes AND (b) no, then we can use the bitmap.
+ */
+#define USE_CODE_SIGN_BITMAP(vp)	( (vp != NULL) && (vp->v_mount != NULL) && (vp->v_mount->mnt_flag & MNT_ROOTFS) && !root_fs_upgrade_try) 
+kern_return_t
+ubc_cs_validation_bitmap_allocate(
+	vnode_t		vp)
+{
+	kern_return_t	kr = KERN_SUCCESS;
+	struct ubc_info *uip;
+	char		*target_bitmap;
+	vm_object_size_t	bitmap_size;
+
+	if ( ! USE_CODE_SIGN_BITMAP(vp) || (! UBCINFOEXISTS(vp))) {
+		kr = KERN_INVALID_ARGUMENT;
+	} else {
+		uip = vp->v_ubcinfo;
+
+		if ( uip->cs_valid_bitmap == NULL ) {
+			bitmap_size = stob(uip->ui_size);
+			target_bitmap = (char*) kalloc( (vm_size_t)bitmap_size );
+			if (target_bitmap == 0) {
+				kr = KERN_NO_SPACE;
+			} else {
+				kr = KERN_SUCCESS;
+			}
+			if( kr == KERN_SUCCESS ) {
+				memset( target_bitmap, 0, (size_t)bitmap_size);
+				uip->cs_valid_bitmap = (void*)target_bitmap;
+				uip->cs_valid_bitmap_size = bitmap_size;
+			}
+		}
+	}
+	return kr;
+}
+
+kern_return_t
+ubc_cs_check_validation_bitmap (
+	vnode_t			vp,
+	memory_object_offset_t		offset,
+	int			optype)
+{
+	kern_return_t	kr = KERN_SUCCESS;
+
+	if ( ! USE_CODE_SIGN_BITMAP(vp) || ! UBCINFOEXISTS(vp)) {
+		kr = KERN_INVALID_ARGUMENT;
+	} else {
+		struct ubc_info *uip = vp->v_ubcinfo;
+		char		*target_bitmap = uip->cs_valid_bitmap;
+
+		if ( target_bitmap == NULL ) {
+		       kr = KERN_INVALID_ARGUMENT;
+		} else {
+			uint64_t	bit, byte;
+			bit = atop_64( offset );
+			byte = bit >> 3;
+
+			if ( byte > uip->cs_valid_bitmap_size ) {
+			       kr = KERN_INVALID_ARGUMENT;
+			} else {
+
+				if (optype == CS_BITMAP_SET) {
+					target_bitmap[byte] |= (1 << (bit & 07));
+					kr = KERN_SUCCESS;
+				} else if (optype == CS_BITMAP_CLEAR) {
+					target_bitmap[byte] &= ~(1 << (bit & 07));
+					kr = KERN_SUCCESS;
+				} else if (optype == CS_BITMAP_CHECK) {
+					if ( target_bitmap[byte] & (1 << (bit & 07))) {
+						kr = KERN_SUCCESS;
+					} else {
+						kr = KERN_FAILURE;
+					}
+				}
+			}
+		}
+	}
+	return kr;
+}
+
+void
+ubc_cs_validation_bitmap_deallocate(
+	vnode_t		vp)
+{
+	struct ubc_info *uip;
+	void		*target_bitmap;
+	vm_object_size_t	bitmap_size;
+
+	if ( UBCINFOEXISTS(vp)) {
+		uip = vp->v_ubcinfo;
+
+		if ( (target_bitmap = uip->cs_valid_bitmap) != NULL ) {
+			bitmap_size = uip->cs_valid_bitmap_size;
+			kfree( target_bitmap, (vm_size_t) bitmap_size );
+			uip->cs_valid_bitmap = NULL;
+		}
+	}
+}
+#else
+kern_return_t	ubc_cs_validation_bitmap_allocate(__unused vnode_t vp){
+	return KERN_INVALID_ARGUMENT;
+}
+
+kern_return_t ubc_cs_check_validation_bitmap(
+	__unused struct vnode *vp, 
+	__unused memory_object_offset_t offset,
+	__unused int optype){
+
+	return KERN_INVALID_ARGUMENT;
+}
+
+void	ubc_cs_validation_bitmap_deallocate(__unused vnode_t vp){
+	return;
+}
+#endif /* CHECK_CS_VALIDATION_BITMAP */

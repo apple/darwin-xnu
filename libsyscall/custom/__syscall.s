@@ -29,11 +29,7 @@
 
 #include "SYS.h"
 
-#if defined(__ppc__) || defined(__ppc64__)
-
-__SYSCALL(__syscall, syscall, 7)
-
-#elif defined(__i386__)
+#if defined(__i386__)
 
 LEAF(___syscall, 0)
 	popl	%ecx		// ret addr
@@ -52,7 +48,7 @@ END(___syscall)
 // For x86-64, the kernel slides the argument list for us.
 // The number of arguments here is variable, but our macros ignore
 // that value anyway.
-__SYSCALL(__syscall, syscall, 0);
+__SYSCALL(___syscall, syscall, 0);
 
 #else
 #error Unsupported architecture

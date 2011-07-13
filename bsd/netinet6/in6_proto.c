@@ -129,6 +129,7 @@
 #include <netinet6/pim6_var.h>
 #include <netinet6/nd6.h>
 #include <netinet6/in6_prefix.h>
+#include <netinet6/mld6_var.h>
 
 #include <netinet6/ip6_mroute.h>
 
@@ -217,7 +218,7 @@ struct ip6protosw inet6sw[] = {
 { SOCK_RAW,	&inet6domain,	IPPROTO_ICMPV6,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   icmp6_input,	rip6_pr_output,	rip6_ctlinput,	rip6_ctloutput,
   0,
-  icmp6_init,	icmp6_fasttimo,	0,		0,
+  icmp6_init,	0,		mld_slowtimo,		0,
   0,
   &rip6_usrreqs,
   0,		rip_unlock,		0,
@@ -226,7 +227,7 @@ struct ip6protosw inet6sw[] = {
 { SOCK_DGRAM,     &inet6domain,   IPPROTO_ICMPV6, PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   icmp6_input,  rip6_pr_output, rip6_ctlinput,  icmp6_dgram_ctloutput,
   0,
-  icmp6_init,   icmp6_fasttimo, 0,              0,
+  icmp6_init,   0, 		mld_slowtimo,              0,
   0,
   &icmp6_dgram_usrreqs,
   0,            rip_unlock,             0,
@@ -398,7 +399,7 @@ int	ip6_accept_rtadv = 0;	/* "IPV6FORWARDING ? 0 : 1" is dangerous */
 int	ip6_maxfragpackets;	/* initialized in frag6.c:frag6_init() */
 int	ip6_maxfrags;
 int	ip6_log_interval = 5;
-int	ip6_hdrnestlimit = 50;	/* appropriate? */
+int	ip6_hdrnestlimit = 15;	/* How many header options will we process? */
 int	ip6_dad_count = 1;	/* DupAddrDetectionTransmits */
 u_int32_t ip6_flow_seq;
 int	ip6_auto_flowlabel = 1;
@@ -406,16 +407,19 @@ int	ip6_gif_hlim = 0;
 int	ip6_use_deprecated = 1;	/* allow deprecated addr (RFC2462 5.5.4) */
 int	ip6_rr_prune = 5;	/* router renumbering prefix
 				 * walk list every 5 sec.    */
-int	ip6_v6only = 0;		/* Mapped addresses on by default -  Radar 3347718 */
+int	ip6_mcast_pmtu = 0;	/* enable pMTU discovery for multicast? */
+int	ip6_v6only = 0;		/* Mapped addresses off by default -  Radar 3347718  -- REVISITING FOR 10.7 -- TESTING WITH MAPPED@ OFF */
 
 int	ip6_neighborgcthresh = 1024;	/* Threshold # of NDP entries for GC */
 int	ip6_maxifprefixes = 16;		/* Max acceptable prefixes via RA per IF */
 int	ip6_maxifdefrouters = 16;	/* Max acceptable def routers via RA */
 int	ip6_maxdynroutes = 1024;	/* Max # of routes created via redirect */
+int	ip6_only_allow_rfc4193_prefix = 0;	/* Only allow RFC4193 style Unique Local IPv6 Unicast prefixes */
 
 u_int32_t ip6_id = 0UL;
 int	ip6_keepfaith = 0;
 time_t	ip6_log_time = (time_t)0L;
+int	nd6_onlink_ns_rfc4861 = 0; /* allow 'on-link' nd6 NS (as in RFC 4861) */
 
 /* icmp6 */
 /*
@@ -450,7 +454,7 @@ int	udp6_recvspace = 40 * (1024 + sizeof(struct sockaddr_in6));
 /*
  * sysctl related items.
  */
-SYSCTL_NODE(_net,	PF_INET6,	inet6,	CTLFLAG_RW,	0,
+SYSCTL_NODE(_net,	PF_INET6,	inet6,	CTLFLAG_RW | CTLFLAG_LOCKED,	0,
 	"Internet6 Family");
 
 /* net.inet6 */
@@ -475,7 +479,8 @@ sysctl_ip6_temppltime SYSCTL_HANDLER_ARGS
 		return (error);
 	old = ip6_temp_preferred_lifetime;
 	error = SYSCTL_IN(req, arg1, sizeof(int));
-	if (ip6_temp_preferred_lifetime <
+	if (ip6_temp_preferred_lifetime > ND6_MAX_LIFETIME ||
+	    ip6_temp_preferred_lifetime <
 	    ip6_desync_factor + ip6_temp_regen_advance) {
 		ip6_temp_preferred_lifetime = old;
 		return(EINVAL);
@@ -495,7 +500,8 @@ sysctl_ip6_tempvltime SYSCTL_HANDLER_ARGS
 		return (error);
 	old = ip6_temp_valid_lifetime;
 	error = SYSCTL_IN(req, arg1, sizeof(int));
-	if (ip6_temp_valid_lifetime < ip6_temp_preferred_lifetime) {
+	if (ip6_temp_valid_lifetime > ND6_MAX_LIFETIME ||
+	    ip6_temp_valid_lifetime < ip6_temp_preferred_lifetime) {
 		ip6_temp_preferred_lifetime = old;
 		return(EINVAL);
 	}
@@ -503,90 +509,103 @@ sysctl_ip6_tempvltime SYSCTL_HANDLER_ARGS
 }
 
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_FORWARDING,
-	forwarding, CTLFLAG_RW, 	&ip6_forwarding,	0, "");
+	forwarding, CTLFLAG_RW | CTLFLAG_LOCKED, 	&ip6_forwarding,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_SENDREDIRECTS,
-	redirect, CTLFLAG_RW,		&ip6_sendredirects,	0, "");
+	redirect, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_sendredirects,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_DEFHLIM,
-	hlim, CTLFLAG_RW,		&ip6_defhlim,	0, "");
-SYSCTL_STRUCT(_net_inet6_ip6, IPV6CTL_STATS, stats, CTLFLAG_RD,
+	hlim, CTLFLAG_RW | CTLFLAG_LOCKED,		&ip6_defhlim,	0, "");
+SYSCTL_STRUCT(_net_inet6_ip6, IPV6CTL_STATS, stats, CTLFLAG_RD | CTLFLAG_LOCKED,
 	&ip6stat, ip6stat, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXFRAGPACKETS,
-	maxfragpackets, CTLFLAG_RW,	&ip6_maxfragpackets,	0, "");
+	maxfragpackets, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_maxfragpackets,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXFRAGS,
-        maxfrags, CTLFLAG_RW,           &ip6_maxfrags,  0, "");
+        maxfrags, CTLFLAG_RW | CTLFLAG_LOCKED,           &ip6_maxfrags,  0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_ACCEPT_RTADV,
-	accept_rtadv, CTLFLAG_RW,	&ip6_accept_rtadv,	0, "");
+	accept_rtadv, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&ip6_accept_rtadv,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_KEEPFAITH,
-	keepfaith, CTLFLAG_RW,		&ip6_keepfaith,	0, "");
+	keepfaith, CTLFLAG_RW | CTLFLAG_LOCKED,		&ip6_keepfaith,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_LOG_INTERVAL,
-	log_interval, CTLFLAG_RW,	&ip6_log_interval,	0, "");
+	log_interval, CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_log_interval,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_HDRNESTLIMIT,
-	hdrnestlimit, CTLFLAG_RW,	&ip6_hdrnestlimit,	0, "");
+	hdrnestlimit, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_hdrnestlimit,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_DAD_COUNT,
-	dad_count, CTLFLAG_RW,	&ip6_dad_count,	0, "");
+	dad_count, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_dad_count,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_AUTO_FLOWLABEL,
-	auto_flowlabel, CTLFLAG_RW,	&ip6_auto_flowlabel,	0, "");
+	auto_flowlabel, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_auto_flowlabel,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_DEFMCASTHLIM,
-	defmcasthlim, CTLFLAG_RW,	&ip6_defmcasthlim,	0, "");
+	defmcasthlim, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_defmcasthlim,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_GIF_HLIM,
-	gifhlim, CTLFLAG_RW,	&ip6_gif_hlim,			0, "");
+	gifhlim, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_gif_hlim,			0, "");
 SYSCTL_STRING(_net_inet6_ip6, IPV6CTL_KAME_VERSION,
-	kame_version, CTLFLAG_RD, (void *)((uintptr_t)(__KAME_VERSION)),		0, "");
+	kame_version, CTLFLAG_RD | CTLFLAG_LOCKED, (void *)((uintptr_t)(__KAME_VERSION)),		0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_USE_DEPRECATED,
-	use_deprecated, CTLFLAG_RW,	&ip6_use_deprecated,	0, "");
+	use_deprecated, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_use_deprecated,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RR_PRUNE,
-	rr_prune, CTLFLAG_RW,	&ip6_rr_prune,			0, "");
+	rr_prune, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_rr_prune,			0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_USETEMPADDR,
-	use_tempaddr, CTLFLAG_RW, &ip6_use_tempaddr,		0, "");
+	use_tempaddr, CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_use_tempaddr,		0, "");
 SYSCTL_OID(_net_inet6_ip6, IPV6CTL_TEMPPLTIME, temppltime,
-	   CTLTYPE_INT|CTLFLAG_RW, &ip6_temp_preferred_lifetime, 0,
+	   CTLTYPE_INT|CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_temp_preferred_lifetime, 0,
 	   sysctl_ip6_temppltime, "I", "");
 SYSCTL_OID(_net_inet6_ip6, IPV6CTL_TEMPVLTIME, tempvltime,
-	   CTLTYPE_INT|CTLFLAG_RW, &ip6_temp_valid_lifetime, 0,
+	   CTLTYPE_INT|CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_temp_valid_lifetime, 0,
 	   sysctl_ip6_tempvltime, "I", "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_V6ONLY,
-	v6only,	CTLFLAG_RW,	&ip6_v6only,			0, "");
+	v6only,	CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_v6only,		0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_AUTO_LINKLOCAL,
-	auto_linklocal, CTLFLAG_RW, &ip6_auto_linklocal,	0, "");
-SYSCTL_STRUCT(_net_inet6_ip6, IPV6CTL_RIP6STATS, rip6stats, CTLFLAG_RD,
+	auto_linklocal, CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_auto_linklocal,	0, "");
+SYSCTL_STRUCT(_net_inet6_ip6, IPV6CTL_RIP6STATS, rip6stats, CTLFLAG_RD | CTLFLAG_LOCKED,
 	&rip6stat, rip6stat, "");
+SYSCTL_INT(_net_inet6_ip6, IPV6CTL_PREFER_TEMPADDR,
+	prefer_tempaddr, CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_prefer_tempaddr,	0, "");
+SYSCTL_INT(_net_inet6_ip6, IPV6CTL_USE_DEFAULTZONE,
+	use_defaultzone, CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_use_defzone,		0,"");
+SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MCAST_PMTU,
+	mcast_pmtu, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_mcast_pmtu,	0, "");
 #if MROUTING
-SYSCTL_STRUCT(_net_inet6_ip6, OID_AUTO, mrt6stat, CTLFLAG_RD,
+SYSCTL_STRUCT(_net_inet6_ip6, OID_AUTO, mrt6stat, CTLFLAG_RD | CTLFLAG_LOCKED,
         &mrt6stat, mrt6stat, "");
 #endif
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_NEIGHBORGCTHRESH,
-	neighborgcthresh, CTLFLAG_RW,	&ip6_neighborgcthresh,	0, "");
+	neighborgcthresh, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_neighborgcthresh,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXIFPREFIXES,
-	maxifprefixes, CTLFLAG_RW,	&ip6_maxifprefixes,	0, "");
+	maxifprefixes, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_maxifprefixes,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXIFDEFROUTERS,
-	maxifdefrouters, CTLFLAG_RW,	&ip6_maxifdefrouters,	0, "");
+	maxifdefrouters, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_maxifdefrouters,	0, "");
 SYSCTL_INT(_net_inet6_ip6, IPV6CTL_MAXDYNROUTES,
-	maxdynroutes, CTLFLAG_RW,	&ip6_maxdynroutes,	0, "");
-
+	maxdynroutes, CTLFLAG_RW | CTLFLAG_LOCKED,	&ip6_maxdynroutes,	0, "");
+SYSCTL_INT(_net_inet6_ip6, OID_AUTO,
+	only_allow_rfc4193_prefixes, CTLFLAG_RW | CTLFLAG_LOCKED,
+	&ip6_only_allow_rfc4193_prefix,	0, "");
 
 /* net.inet6.icmp6 */
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_REDIRACCEPT,
-	rediraccept, CTLFLAG_RW,	&icmp6_rediraccept,	0, "");
+	rediraccept, CTLFLAG_RW | CTLFLAG_LOCKED,	&icmp6_rediraccept,	0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_REDIRTIMEOUT,
-	redirtimeout, CTLFLAG_RW,	&icmp6_redirtimeout,	0, "");
-SYSCTL_STRUCT(_net_inet6_icmp6, ICMPV6CTL_STATS, stats, CTLFLAG_RD,
+	redirtimeout, CTLFLAG_RW | CTLFLAG_LOCKED,	&icmp6_redirtimeout,	0, "");
+SYSCTL_STRUCT(_net_inet6_icmp6, ICMPV6CTL_STATS, stats, CTLFLAG_RD | CTLFLAG_LOCKED,
 	&icmp6stat, icmp6stat, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_PRUNE,
-	nd6_prune, CTLFLAG_RW,		&nd6_prune,	0, "");
+	nd6_prune, CTLFLAG_RW | CTLFLAG_LOCKED,		&nd6_prune,	0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_DELAY,
-	nd6_delay, CTLFLAG_RW,		&nd6_delay,	0, "");
+	nd6_delay, CTLFLAG_RW | CTLFLAG_LOCKED,		&nd6_delay,	0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_UMAXTRIES,
-	nd6_umaxtries, CTLFLAG_RW,	&nd6_umaxtries,	0, "");
+	nd6_umaxtries, CTLFLAG_RW | CTLFLAG_LOCKED,	&nd6_umaxtries,	0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_MMAXTRIES,
-	nd6_mmaxtries, CTLFLAG_RW,	&nd6_mmaxtries,	0, "");
+	nd6_mmaxtries, CTLFLAG_RW | CTLFLAG_LOCKED,	&nd6_mmaxtries,	0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_USELOOPBACK,
-	nd6_useloopback, CTLFLAG_RW,	&nd6_useloopback, 0, "");
+	nd6_useloopback, CTLFLAG_RW | CTLFLAG_LOCKED,	&nd6_useloopback, 0, "");
+SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_ACCEPT_6TO4,
+	nd6_accept_6to4, CTLFLAG_RW | CTLFLAG_LOCKED,	&nd6_accept_6to4, 0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_NODEINFO,
-	nodeinfo, CTLFLAG_RW,	&icmp6_nodeinfo,	0, "");
+	nodeinfo, CTLFLAG_RW | CTLFLAG_LOCKED,	&icmp6_nodeinfo,	0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ERRPPSLIMIT,
-	errppslimit, CTLFLAG_RW,	&icmp6errppslim,	0, "");
+	errppslimit, CTLFLAG_RW | CTLFLAG_LOCKED,	&icmp6errppslim,	0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_MAXNUDHINT,
-	nd6_maxnudhint, CTLFLAG_RW,	&nd6_maxnudhint, 0, "");
+	nd6_maxnudhint, CTLFLAG_RW | CTLFLAG_LOCKED,	&nd6_maxnudhint, 0, "");
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_DEBUG,
-	nd6_debug, CTLFLAG_RW,	&nd6_debug,		0, "");
-
+	nd6_debug, CTLFLAG_RW | CTLFLAG_LOCKED,	&nd6_debug,		0, "");
+SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_ONLINKNSRFC4861,
+	nd6_onlink_ns_rfc4861, CTLFLAG_RW | CTLFLAG_LOCKED, &nd6_onlink_ns_rfc4861, 0,
+	"Accept 'on-link' nd6 NS in compliance with RFC 4861.");

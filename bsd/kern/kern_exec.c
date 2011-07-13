@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -139,6 +139,7 @@
 #include <vm/vm_protos.h>
 #include <vm/vm_kern.h>
 
+#include <machine/pal_routines.h>
 
 #if CONFIG_DTRACE
 /* Do not include dtrace.h, it redefines kmem_[alloc/free] */
@@ -153,8 +154,7 @@ extern void dtrace_lazy_dofs_destroy(proc_t);
 thread_t fork_create_child(task_t parent_task, proc_t child_proc, int inherit_memory, int is64bit);
 void vfork_exit(proc_t p, int rv);
 int setsigvec(proc_t, thread_t, int, struct __kern_sigaction *, boolean_t in_sigstart);
-void workqueue_exit(struct proc *);
-
+extern void proc_apply_task_networkbg_internal(proc_t);
 
 /*
  * Mach things for which prototypes are unavailable from Mach headers
@@ -187,21 +187,17 @@ extern struct savearea *get_user_regs(thread_t);
 
 
 /*
- * SIZE_MAXPTR		The maximum size of a user space pointer, in bytes
- * SIZE_IMG_STRSPACE	The available string space, minus two pointers; we
- *			define it interms of the maximum, since we don't
- *			know the pointer size going in, until after we've
- *			parsed the executable image.
- */
-#define	SIZE_MAXPTR		8				/* 64 bits */
-#define	SIZE_IMG_STRSPACE	(NCARGS - 2 * SIZE_MAXPTR)
-
-/*
  * EAI_ITERLIMIT	The maximum number of times to iterate an image
  *			activator in exec_activate_image() before treating
  *			it as malformed/corrupt.
  */
 #define EAI_ITERLIMIT		10
+
+/*
+ * For #! interpreter parsing
+ */
+#define IS_WHITESPACE(ch) ((ch == ' ') || (ch == '\t'))
+#define IS_EOL(ch) ((ch == '#') || (ch == '\n'))
 
 extern vm_map_t bsd_pageable_map;
 extern struct fileops vnops;
@@ -218,9 +214,10 @@ static int execargs_alloc(struct image_params *imgp);
 static int execargs_free(struct image_params *imgp);
 static int exec_check_permissions(struct image_params *imgp);
 static int exec_extract_strings(struct image_params *imgp);
+static int exec_add_apple_strings(struct image_params *imgp);
 static int exec_handle_sugid(struct image_params *imgp);
 static int sugid_scripts = 0;
-SYSCTL_INT (_kern, OID_AUTO, sugid_scripts, CTLFLAG_RW, &sugid_scripts, 0, "");
+SYSCTL_INT (_kern, OID_AUTO, sugid_scripts, CTLFLAG_RW | CTLFLAG_LOCKED, &sugid_scripts, 0, "");
 static kern_return_t create_unix_stack(vm_map_t map, user_addr_t user_stack,
 					int customstack, proc_t p);
 static int copyoutptr(user_addr_t ua, user_addr_t ptr, int ptr_size);
@@ -232,12 +229,14 @@ __private_extern__
 int  open1(vfs_context_t, struct nameidata *, int, struct vnode_attr *, int32_t *);
 
 /*
- * exec_add_string
+ * exec_add_user_string
  *
  * Add the requested string to the string space area.
  *
  * Parameters;	struct image_params *		image parameter block
  *		user_addr_t			string to add to strings area
+ *		int				segment from which string comes
+ *		boolean_t			TRUE if string contributes to NCARGS
  *
  * Returns:	0			Success
  *		!0			Failure errno from copyinstr()
@@ -245,29 +244,41 @@ int  open1(vfs_context_t, struct nameidata *, int, struct vnode_attr *, int32_t 
  * Implicit returns:
  *		(imgp->ip_strendp)	updated location of next add, if any
  *		(imgp->ip_strspace)	updated byte count of space remaining
+ *		(imgp->ip_argspace) updated byte count of space in NCARGS
  */
 static int
-exec_add_string(struct image_params *imgp, user_addr_t str)
+exec_add_user_string(struct image_params *imgp, user_addr_t str, int seg, boolean_t is_ncargs)
 {
-        int error = 0;
-
-        do {
-                size_t len = 0;
-		if (imgp->ip_strspace <= 0) {
+	int error = 0;
+	
+	do {
+		size_t len = 0;
+		int space;
+		
+		if (is_ncargs)
+			space = imgp->ip_argspace; /* by definition smaller than ip_strspace */
+		else
+			space = imgp->ip_strspace;
+		
+		if (space <= 0) {
 			error = E2BIG;
 			break;
 		}
-		if (!UIO_SEG_IS_USER_SPACE(imgp->ip_seg)) {
+		
+		if (!UIO_SEG_IS_USER_SPACE(seg)) {
 			char *kstr = CAST_DOWN(char *,str);	/* SAFE */
-			error = copystr(kstr, imgp->ip_strendp, imgp->ip_strspace, &len);
+			error = copystr(kstr, imgp->ip_strendp, space, &len);
 		} else  {
-			error = copyinstr(str, imgp->ip_strendp, imgp->ip_strspace,
-			    &len);
+			error = copyinstr(str, imgp->ip_strendp, space, &len);
 		}
+
 		imgp->ip_strendp += len;
 		imgp->ip_strspace -= len;
+		if (is_ncargs)
+			imgp->ip_argspace -= len;
+		
 	} while (error == ENAMETOOLONG);
-
+	
 	return error;
 }
 
@@ -277,11 +288,10 @@ exec_add_string(struct image_params *imgp, user_addr_t str)
  * To support new app package launching for Mac OS X, the dyld needs the
  * first argument to execve() stored on the user stack.
  *
- * Save the executable path name at the top of the strings area and set
+ * Save the executable path name at the bottom of the strings area and set
  * the argument vector pointer to the location following that to indicate
  * the start of the argument and environment tuples, setting the remaining
- * string space count to the size of the string area minus the path length
- * and a reserve for two pointers.
+ * string space count to the size of the string area minus the path length.
  *
  * Parameters;	struct image_params *		image parameter block
  *		char *				path used to invoke program
@@ -295,8 +305,9 @@ exec_add_string(struct image_params *imgp, user_addr_t str)
  * Implicit returns:
  *		(imgp->ip_strings)		saved path
  *		(imgp->ip_strspace)		space remaining in ip_strings
- *		(imgp->ip_argv)			beginning of argument list
  *		(imgp->ip_strendp)		start of remaining copy area
+ *		(imgp->ip_argspace)		space remaining of NCARGS
+ *		(imgp->ip_applec)		Initial applev[0]
  *
  * Note:	We have to do this before the initial namei() since in the
  *		path contains symbolic links, namei() will overwrite the
@@ -310,10 +321,7 @@ exec_save_path(struct image_params *imgp, user_addr_t path, int seg)
 {
 	int error;
 	size_t	len;
-	char *kpath = CAST_DOWN(char *,path);	/* SAFE */
-
-	imgp->ip_strendp = imgp->ip_strings;
-	imgp->ip_strspace = SIZE_IMG_STRSPACE;
+	char *kpath;
 
 	len = MIN(MAXPATHLEN, imgp->ip_strspace);
 
@@ -323,6 +331,7 @@ exec_save_path(struct image_params *imgp, user_addr_t path, int seg)
 		error = copyinstr(path, imgp->ip_strings, len, &len);
 		break;
 	case UIO_SYSSPACE:
+		kpath = CAST_DOWN(char *,path);	/* SAFE */
 		error = copystr(kpath, imgp->ip_strings, len, &len);
 		break;
 	default:
@@ -333,10 +342,36 @@ exec_save_path(struct image_params *imgp, user_addr_t path, int seg)
 	if (!error) {
 		imgp->ip_strendp += len;
 		imgp->ip_strspace -= len;
-		imgp->ip_argv = imgp->ip_strendp;
 	}
 
 	return(error);
+}
+
+/*
+ * exec_reset_save_path
+ *
+ * If we detect a shell script, we need to reset the string area
+ * state so that the interpreter can be saved onto the stack.
+
+ * Parameters;	struct image_params *		image parameter block
+ *
+ * Returns:	int			0	Success
+ *
+ * Implicit returns:
+ *		(imgp->ip_strings)		saved path
+ *		(imgp->ip_strspace)		space remaining in ip_strings
+ *		(imgp->ip_strendp)		start of remaining copy area
+ *		(imgp->ip_argspace)		space remaining of NCARGS
+ *
+ */
+static int
+exec_reset_save_path(struct image_params *imgp)
+{
+	imgp->ip_strendp = imgp->ip_strings;
+	imgp->ip_argspace = NCARGS;
+	imgp->ip_strspace = ( NCARGS + PAGE_SIZE );
+
+	return (0);
 }
 
 #ifdef IMGPF_POWERPC
@@ -406,11 +441,15 @@ exec_powerpc32_imgact(struct image_params *imgp)
 	imgp->ip_flags |= IMGPF_POWERPC;
 
 	/* impute an interpreter */
-	error = copystr(exec_archhandler_ppc.path, imgp->ip_interp_name,
+	error = copystr(exec_archhandler_ppc.path, imgp->ip_interp_buffer,
 			IMG_SHSIZE, &len);
 	if (error)
 		return (error);
 
+	exec_reset_save_path(imgp);
+	exec_save_path(imgp, CAST_USER_ADDR_T(imgp->ip_interp_buffer),
+				   UIO_SYSSPACE);
+	
 	/*
 	 * provide a replacement string for p->p_comm; we have to use an
 	 * alternate buffer for this, rather than replacing it directly,
@@ -451,14 +490,12 @@ exec_shell_imgact(struct image_params *imgp)
 {
 	char *vdata = imgp->ip_vdata;
 	char *ihp;
-	char *line_endp;
+	char *line_startp, *line_endp;
 	char *interp;
-	char temp[16];
 	proc_t p;
 	struct fileproc *fp;
 	int fd;
 	int error;
-	size_t len;
 
 	/*
 	 * Make sure it's a shell script.  If we've already redirected
@@ -480,65 +517,82 @@ exec_shell_imgact(struct image_params *imgp)
 #endif	/* IMGPF_POWERPC */
 
 	imgp->ip_flags |= IMGPF_INTERPRET;
+	imgp->ip_interp_sugid_fd = -1;
+	imgp->ip_interp_buffer[0] = '\0';
 
-        /* Check to see if SUGID scripts are permitted.  If they aren't then
+	/* Check to see if SUGID scripts are permitted.  If they aren't then
 	 * clear the SUGID bits.
 	 * imgp->ip_vattr is known to be valid.
-         */
-        if (sugid_scripts == 0) {
-	   imgp->ip_origvattr->va_mode &= ~(VSUID | VSGID);
+	 */
+	if (sugid_scripts == 0) {
+		imgp->ip_origvattr->va_mode &= ~(VSUID | VSGID);
 	}
 
-	/* Find the nominal end of the interpreter line */
-	for( ihp = &vdata[2]; *ihp != '\n' && *ihp != '#'; ihp++) {
-		if (ihp >= &vdata[IMG_SHSIZE])
+	/* Try to find the first non-whitespace character */
+	for( ihp = &vdata[2]; ihp < &vdata[IMG_SHSIZE]; ihp++ ) {
+		if (IS_EOL(*ihp)) {
+			/* Did not find interpreter, "#!\n" */
 			return (ENOEXEC);
+		} else if (IS_WHITESPACE(*ihp)) {
+			/* Whitespace, like "#!    /bin/sh\n", keep going. */
+		} else {
+			/* Found start of interpreter */
+			break;
+		}
 	}
 
-	line_endp = ihp;
-	ihp = &vdata[2];
-	/* Skip over leading spaces - until the interpreter name */
-	while ( ihp < line_endp && ((*ihp == ' ') || (*ihp == '\t')))
-		ihp++;
+	if (ihp == &vdata[IMG_SHSIZE]) {
+		/* All whitespace, like "#!           " */
+		return (ENOEXEC);
+	}
+
+	line_startp = ihp;
+
+	/* Try to find the end of the interpreter+args string */
+	for ( ; ihp < &vdata[IMG_SHSIZE]; ihp++ ) {
+		if (IS_EOL(*ihp)) {
+			/* Got it */
+			break;
+		} else {
+			/* Still part of interpreter or args */
+		}
+	}
+
+	if (ihp == &vdata[IMG_SHSIZE]) {
+		/* A long line, like "#! blah blah blah" without end */
+		return (ENOEXEC);
+	}
+
+	/* Backtrack until we find the last non-whitespace */
+	while (IS_EOL(*ihp) || IS_WHITESPACE(*ihp)) {
+		ihp--;
+	}
+
+	/* The character after the last non-whitespace is our logical end of line */
+	line_endp = ihp + 1;
 
 	/*
-	 * Find the last non-whitespace character before the end of line or
-	 * the beginning of a comment; this is our new end of line.
+	 * Now we have pointers to the usable part of:
+	 *
+	 * "#!  /usr/bin/int first    second   third    \n"
+	 *      ^ line_startp                       ^ line_endp
 	 */
-	for (;line_endp > ihp && ((*line_endp == ' ') || (*line_endp == '\t')); line_endp--)
-		continue;
-
-	/* Empty? */
-	if (line_endp == ihp)
-		return (ENOEXEC);
 
 	/* copy the interpreter name */
-	interp = imgp->ip_interp_name;
-	while ((ihp < line_endp) && (*ihp != ' ') && (*ihp != '\t'))
-		*interp++ = *ihp++;
+	interp = imgp->ip_interp_buffer;
+	for ( ihp = line_startp; (ihp < line_endp) && !IS_WHITESPACE(*ihp); ihp++)
+		*interp++ = *ihp;
 	*interp = '\0';
 
-	exec_save_path(imgp, CAST_USER_ADDR_T(imgp->ip_interp_name),
+	exec_reset_save_path(imgp);
+	exec_save_path(imgp, CAST_USER_ADDR_T(imgp->ip_interp_buffer),
 							UIO_SYSSPACE);
 
-	ihp = &vdata[2];
-	while (ihp < line_endp) {
-		/* Skip leading whitespace before each argument */
-		while ((*ihp == ' ') || (*ihp == '\t'))
-			ihp++;
-
-		if (ihp >= line_endp)
-			break;
-
-		/* We have an argument; copy it */
-		while ((ihp < line_endp) && (*ihp != ' ') && (*ihp != '\t')) {  
-			*imgp->ip_strendp++ = *ihp++;
-			imgp->ip_strspace--;
-		}
-		*imgp->ip_strendp++ = 0;
-		imgp->ip_strspace--;
-		imgp->ip_argc++;
-	}
+	/* Copy the entire interpreter + args for later processing into argv[] */
+	interp = imgp->ip_interp_buffer;
+	for ( ihp = line_startp; (ihp < line_endp); ihp++)
+		*interp++ = *ihp;
+	*interp = '\0';
 
 	/*
 	 * If we have a SUID oder SGID script, create a file descriptor
@@ -562,10 +616,7 @@ exec_shell_imgact(struct image_params *imgp)
 		proc_fdunlock(p);
 		vnode_ref(imgp->ip_vp);
 
-		snprintf(temp, sizeof(temp), "/dev/fd/%d", fd);
-		error = copyoutstr(temp, imgp->ip_user_fname, sizeof(temp), &len);
-		if (error)
-			return(error);
+		imgp->ip_interp_sugid_fd = fd;
 	}
 
 	return (-3);
@@ -736,6 +787,7 @@ exec_mach_imgact(struct image_params *imgp)
 	load_result_t		load_result;
 	struct _posix_spawnattr *psa = NULL;
 	int spawn = (imgp->ip_flags & IMGPF_SPAWN);
+	int apptype = 0;
 
 	/*
 	 * make sure it's a Mach-O 1.0 or Mach-O 2.0 binary; the difference
@@ -766,7 +818,7 @@ exec_mach_imgact(struct image_params *imgp)
 
 	/*
 	 * Save off the vfexec state up front; we have to do this, because
-	 * we need to know if we were in this state initally subsequent to
+	 * we need to know if we were in this state initially subsequent to
 	 * creating the backing task, thread, and uthread for the child
 	 * process (from the vfs_context_t from in img_parms).
 	 */
@@ -813,20 +865,14 @@ grade:
 	if (error)
 		goto bad;
 
-	AUDIT_ARG(argv, imgp->ip_argv, imgp->ip_argc, 
-	    imgp->ip_strendargvp - imgp->ip_argv);
-	AUDIT_ARG(envv, imgp->ip_strendargvp, imgp->ip_envc,
-	    imgp->ip_strendp - imgp->ip_strendargvp);
+	error = exec_add_apple_strings(imgp);
+	if (error)
+		goto bad;
 
-	/*
-	 * Hack for binary compatability; put three NULs on the end of the
-	 * string area, and round it up to the next word boundary.  This
-	 * ensures padding with NULs to the boundary.
-	 */
-	imgp->ip_strendp[0] = 0;
-	imgp->ip_strendp[1] = 0;
-	imgp->ip_strendp[2] = 0;
-	imgp->ip_strendp += (((imgp->ip_strendp - imgp->ip_strings) + NBPW-1) & ~(NBPW-1));
+	AUDIT_ARG(argv, imgp->ip_startargv, imgp->ip_argc, 
+	    imgp->ip_endargv - imgp->ip_startargv);
+	AUDIT_ARG(envv, imgp->ip_endargv, imgp->ip_envc,
+	    imgp->ip_endenvv - imgp->ip_endargv);
 
 #ifdef IMGPF_POWERPC
 	/*
@@ -838,7 +884,7 @@ grade:
 	 * to the "encapsulated_binary:" label in exec_activate_image().
 	 */
 	if (imgp->ip_vattr->va_fsid == exec_archhandler_ppc.fsid &&
-		imgp->ip_vattr->va_fileid == (uint64_t)((u_long)exec_archhandler_ppc.fileid)) {
+		imgp->ip_vattr->va_fileid == exec_archhandler_ppc.fileid) {
 		imgp->ip_flags |= IMGPF_POWERPC;
 	}
 #endif	/* IMGPF_POWERPC */
@@ -846,7 +892,7 @@ grade:
 	/*
 	 * We are being called to activate an image subsequent to a vfork()
 	 * operation; in this case, we know that our task, thread, and
-	 * uthread are actualy those of our parent, and our proc, which we
+	 * uthread are actually those of our parent, and our proc, which we
 	 * obtained indirectly from the image_params vfs_context_t, is the
 	 * new child process.
 	 */
@@ -885,7 +931,7 @@ grade:
 	 *	Load the Mach-O file.
 	 *
 	 * NOTE: An error after this point  indicates we have potentially
-	 * destroyed or overwrote some process state while attempting an
+	 * destroyed or overwritten some process state while attempting an
 	 * execve() following a vfork(), which is an unrecoverable condition.
 	 */
 
@@ -932,10 +978,9 @@ grade:
 		    cpu_type());
 	
 	/*
-	 * Close file descriptors
-	 * which specify close-on-exec.
+	 * Close file descriptors which specify close-on-exec.
 	 */
-	fdexec(p);
+	fdexec(p, psa != NULL ? psa->psa_flags : 0);
 
 	/*
 	 * deal with set[ug]id.
@@ -959,14 +1004,6 @@ grade:
 		goto badtoolate;
 	}
 
-	/*  
-	 * There is no  continuing workq context during 
-	 * vfork exec. So no need to reset then. Otherwise
-	 * clear the workqueue context.
-	 */
-	if (vfexec == 0 && spawn == 0) {
-		(void)workqueue_exit(p);
-	}
 	if (vfexec || spawn) {
 		old_map = vm_map_switch(get_task_map(task));
 	}
@@ -991,15 +1028,12 @@ grade:
 	
 	if (load_result.dynlinker) {
 		uint64_t	ap;
+		int			new_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT) ? 8 : 4;
 
 		/* Adjust the stack */
-		if (imgp->ip_flags & IMGPF_IS_64BIT) {
-			ap = thread_adjuserstack(thread, -8);
-			error = copyoutptr(load_result.mach_header, ap, 8);
-		} else {
-			ap = thread_adjuserstack(thread, -4);
-			error = suword(ap, load_result.mach_header);
-		}
+		ap = thread_adjuserstack(thread, -new_ptr_size);
+		error = copyoutptr(load_result.mach_header, ap, new_ptr_size);
+
 		if (error) {
 		        if (vfexec || spawn)
 			        vm_map_switch(old_map);
@@ -1057,6 +1091,8 @@ grade:
 			(unsigned)imgp->ip_ndp->ni_cnd.cn_namelen);
 		p->p_comm[imgp->ip_ndp->ni_cnd.cn_namelen] = '\0';
 	}
+
+	pal_dbg_set_task_name( p->task );
 
 	memcpy(&p->p_uuid[0], &load_result.uuid[0], sizeof(p->p_uuid));
 
@@ -1142,6 +1178,22 @@ grade:
 			p->p_stat = SSTOP;
 			proc_unlock(p);
 			(void) task_suspend(p->task);
+		}
+		if ((psa->psa_flags & POSIX_SPAWN_OSX_TALAPP_START) || (psa->psa_flags & POSIX_SPAWN_OSX_DBCLIENT_START) || (psa->psa_flags & POSIX_SPAWN_IOS_APP_START)) {
+			if ((psa->psa_flags & POSIX_SPAWN_OSX_TALAPP_START))
+				apptype = PROC_POLICY_OSX_APPTYPE_TAL;
+			else if (psa->psa_flags & POSIX_SPAWN_OSX_DBCLIENT_START)
+				apptype = PROC_POLICY_OSX_APPTYPE_DBCLIENT;
+			else if (psa->psa_flags & POSIX_SPAWN_IOS_APP_START)
+				apptype = PROC_POLICY_IOS_APPTYPE;
+			else
+				apptype = 0;
+			proc_set_task_apptype(p->task, apptype);
+			if ((apptype == PROC_POLICY_OSX_APPTYPE_TAL) || 
+				(apptype == PROC_POLICY_OSX_APPTYPE_DBCLIENT)) {
+
+				proc_apply_task_networkbg_internal(p);
+			}
 		}
 	}
 
@@ -1245,21 +1297,16 @@ exec_activate_image(struct image_params *imgp)
 	if (error)
 		goto bad;
 	
-	/*
-	 * XXXAUDIT: Note: the double copyin introduces an audit
-	 * race.  To correct this race, we must use a single
-	 * copyin(), e.g. by passing a flag to namei to indicate an
-	 * external path buffer is being used.
-	 */
 	error = exec_save_path(imgp, imgp->ip_user_fname, imgp->ip_seg);
 	if (error) {
 		goto bad_notrans;
 	}
 
+	/* Use imgp->ip_strings, which contains the copyin-ed exec path */
 	DTRACE_PROC1(exec, uintptr_t, imgp->ip_strings);
 
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
-		imgp->ip_seg, imgp->ip_user_fname, imgp->ip_vfs_context);
+	NDINIT(&nd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
+		   UIO_SYSSPACE, CAST_USER_ADDR_T(imgp->ip_strings), imgp->ip_vfs_context);
 
 again:
 	error = namei(&nd);
@@ -1268,7 +1315,20 @@ again:
 	imgp->ip_ndp = &nd;	/* successful namei(); call nameidone() later */
 	imgp->ip_vp = nd.ni_vp;	/* if set, need to vnode_put() at some point */
 
-	error = proc_transstart(p, 0);
+	/*
+	 * Before we start the transition from binary A to binary B, make
+	 * sure another thread hasn't started exiting the process.  We grab
+	 * the proc lock to check p_lflag initially, and the transition
+	 * mechanism ensures that the value doesn't change after we release
+	 * the lock.
+	 */
+	proc_lock(p);
+	if (p->p_lflag & P_LEXIT) {
+		proc_unlock(p);
+		goto bad_notrans;
+	}
+	error = proc_transstart(p, 1);
+	proc_unlock(p);
 	if (error)
 		goto bad_notrans;
 
@@ -1322,11 +1382,16 @@ encapsulated_binary:
 			mac_vnode_label_copy(imgp->ip_vp->v_label,
 					     imgp->ip_scriptlabelp);
 #endif
+
+			nameidone(&nd);
+
 			vnode_put(imgp->ip_vp);
 			imgp->ip_vp = NULL;	/* already put */
-                
-			NDINIT(&nd, LOOKUP, (nd.ni_cnd.cn_flags & HASBUF) | (FOLLOW | LOCKLEAF),
-				UIO_SYSSPACE, CAST_USER_ADDR_T(imgp->ip_interp_name), imgp->ip_vfs_context);
+			imgp->ip_ndp = NULL; /* already nameidone */
+
+			/* Use imgp->ip_strings, which exec_shell_imgact reset to the interpreter */
+			NDINIT(&nd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF,
+				   UIO_SYSSPACE, CAST_USER_ADDR_T(imgp->ip_strings), imgp->ip_vfs_context);
 
 #ifdef IMGPF_POWERPC
 			/*
@@ -1379,10 +1444,10 @@ bad_notrans:
  * 		short psa_flags		posix spawn attribute flags
  *
  * Returns:	0			Success
- * 		KERN_FAILURE		Failure
+ * 		EINVAL			Failure
  * 		ENOTSUP			Illegal posix_spawn attr flag was set
  */
-static int
+static errno_t
 exec_handle_port_actions(struct image_params *imgp, short psa_flags)
 {
 	_posix_spawn_port_actions_t pacts = imgp->ip_px_spa;
@@ -1390,16 +1455,17 @@ exec_handle_port_actions(struct image_params *imgp, short psa_flags)
 	_ps_port_action_t *act = NULL;
 	task_t task = p->task;
 	ipc_port_t port = NULL;
-	kern_return_t ret = KERN_SUCCESS;
+	errno_t ret = KERN_SUCCESS;
 	int i;
 
 	for (i = 0; i < pacts->pspa_count; i++) {
 		act = &pacts->pspa_actions[i];
 
-		ret = ipc_object_copyin(get_task_ipcspace(current_task()),
+		if (ipc_object_copyin(get_task_ipcspace(current_task()),
 				CAST_MACH_PORT_TO_NAME(act->new_port),
 				MACH_MSG_TYPE_COPY_SEND,
-				(ipc_object_t *) &port);
+				(ipc_object_t *) &port) != KERN_SUCCESS)
+			return EINVAL;
 
 		if (ret) 			
 			return ret;
@@ -1409,19 +1475,19 @@ exec_handle_port_actions(struct image_params *imgp, short psa_flags)
 				/* Only allowed when not under vfork */
 				if (!(psa_flags & POSIX_SPAWN_SETEXEC))
 					return ENOTSUP;
-				ret = task_set_special_port(task, 
+				ret = (task_set_special_port(task, 
 						act->which, 
-						port);
+						port) == KERN_SUCCESS) ? 0 : EINVAL;
 				break;
 			case PSPA_EXCEPTION:
 				/* Only allowed when not under vfork */
 				if (!(psa_flags & POSIX_SPAWN_SETEXEC))
 					return ENOTSUP;
-				ret = task_set_exception_ports(task, 
+				ret = (task_set_exception_ports(task, 
 						act->mask,
 						port, 
 						act->behavior, 
-						act->flavor);
+						act->flavor) == KERN_SUCCESS) ? 0 : EINVAL;
 				break;
 #if CONFIG_AUDIT
 			case PSPA_AU_SESSION:
@@ -1430,7 +1496,7 @@ exec_handle_port_actions(struct image_params *imgp, short psa_flags)
 				break;
 #endif
 			default:
-				ret = KERN_FAILURE;
+				ret = EINVAL;
 		}
 		/* action failed, so release port resources */
 		if (ret) { 
@@ -1461,7 +1527,7 @@ exec_handle_port_actions(struct image_params *imgp, short psa_flags)
  *		normally permitted to perform.
  */
 static int
-exec_handle_file_actions(struct image_params *imgp)
+exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 {
 	int error = 0;
 	int action;
@@ -1479,7 +1545,7 @@ exec_handle_file_actions(struct image_params *imgp)
 			 * a path argument, which is normally copied in from
 			 * user space; because of this, we have to support an
 			 * open from kernel space that passes an address space
-			 * context oof UIO_SYSSPACE, and casts the address
+			 * context of UIO_SYSSPACE, and casts the address
 			 * argument to a user_addr_t.
 			 */
 			struct vnode_attr va;
@@ -1494,7 +1560,7 @@ exec_handle_file_actions(struct image_params *imgp)
 			mode = ((mode &~ p->p_fd->fd_cmask) & ALLPERMS) & ~S_ISTXT;
 			VATTR_SET(&va, va_mode, mode & ACCESSPERMS);
 
-			NDINIT(&nd, LOOKUP, FOLLOW | AUDITVNPATH1, UIO_SYSSPACE,
+			NDINIT(&nd, LOOKUP, OP_OPEN, FOLLOW | AUDITVNPATH1, UIO_SYSSPACE,
 			       CAST_USER_ADDR_T(psfa->psfaa_openargs.psfao_path),
 			       imgp->ip_vfs_context);
 
@@ -1506,8 +1572,8 @@ exec_handle_file_actions(struct image_params *imgp)
 
 			/*
 			 * If there's an error, or we get the right fd by
-			 * accident, then drop out here.  This is easier that
-			 * rearchitecting all the open code to preallocate fd
+			 * accident, then drop out here.  This is easier than
+			 * reworking all the open code to preallocate fd
 			 * slots, and internally taking one as an argument.
 			 */
 			if (error || ival[0] == psfa->psfaa_filedes)
@@ -1566,16 +1632,68 @@ exec_handle_file_actions(struct image_params *imgp)
 			}
 			break;
 
+		case PSFA_INHERIT: {
+			struct fileproc *fp;
+			int fd = psfa->psfaa_filedes;
+
+			/*
+			 * Check to see if the descriptor exists, and
+			 * ensure it's -not- marked as close-on-exec.
+			 * [Less code than the equivalent F_GETFD/F_SETFD.]
+			 */
+			proc_fdlock(p);
+			if ((error = fp_lookup(p, fd, &fp, 1)) == 0) {
+				*fdflags(p, fd) &= ~UF_EXCLOSE;
+				(void) fp_drop(p, fd, fp, 1);
+			}
+			proc_fdunlock(p);
+			}
+			break;
+
 		default:
 			error = EINVAL;
 			break;
 		}
+
 		/* All file actions failures are considered fatal, per POSIX */
+
 		if (error)
 			break;
 	}
 
-	return (error);
+	if (error != 0 || (psa_flags & POSIX_SPAWN_CLOEXEC_DEFAULT) == 0)
+		return (error);
+
+	/*
+	 * If POSIX_SPAWN_CLOEXEC_DEFAULT is set, behave (during
+	 * this spawn only) as if "close on exec" is the default
+	 * disposition of all pre-existing file descriptors.  In this case,
+	 * the list of file descriptors mentioned in the file actions
+	 * are the only ones that can be inherited, so mark them now.
+	 *
+	 * The actual closing part comes later, in fdexec().
+	 */
+	proc_fdlock(p);
+	for (action = 0; action < px_sfap->psfa_act_count; action++) {
+		_psfa_action_t *psfa = &px_sfap->psfa_act_acts[action];
+		int fd = psfa->psfaa_filedes;
+
+		switch (psfa->psfaa_type) {
+		case PSFA_DUP2:
+			fd = psfa->psfaa_openargs.psfao_oflag;
+			/*FALLTHROUGH*/
+		case PSFA_OPEN:
+		case PSFA_INHERIT:
+			*fdflags(p, fd) |= UF_INHERIT;
+			break;
+
+		case PSFA_CLOSE:
+			break;
+		}
+	}
+	proc_fdunlock(p);
+
+	return (0);
 }
 
 
@@ -1628,10 +1746,12 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 	_posix_spawn_port_actions_t px_spap = NULL;
 	struct __kern_sigaction vec;
 	boolean_t spawn_no_exec = FALSE;
+	boolean_t proc_transit_set = TRUE;
+	boolean_t exec_done = FALSE;
 
 	/*
 	 * Allocate a big chunk for locals instead of using stack since these  
-	 * structures a pretty big.
+	 * structures are pretty big.
 	 */
 	MALLOC(bufp, char *, (sizeof(*imgp) + sizeof(*vap) + sizeof(*origvap)), M_TEMP, M_WAITOK | M_ZERO);
 	imgp = (struct image_params *) bufp;
@@ -1740,7 +1860,7 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 	}
 
 	/*
-	 * If we don't have the extention flag that turns "posix_spawn()"
+	 * If we don't have the extension flag that turns "posix_spawn()"
 	 * into "execve() with options", then we will be creating a new
 	 * process which does not inherit memory from the parent process,
 	 * which is one of the most expensive things about using fork()
@@ -1755,7 +1875,7 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 
 	if (spawn_no_exec)
 		p = (proc_t)get_bsdthreadtask_info(imgp->ip_new_thread);
-
+	assert(p != NULL);
 
 	/* By default, the thread everyone plays with is the parent */
 	context.vc_thread = current_thread();
@@ -1768,17 +1888,22 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 	if (spawn_no_exec)
 		context.vc_thread = imgp->ip_new_thread;
 
-
 	/*
 	 * Post fdcopy(), pre exec_handle_sugid() - this is where we want
 	 * to handle the file_actions.  Since vfork() also ends up setting
 	 * us into the parent process group, and saved off the signal flags,
 	 * this is also where we want to handle the spawn flags.
 	 */
+
 	/* Has spawn file actions? */
-	if (imgp->ip_px_sfa != NULL &&
-	    (error = exec_handle_file_actions(imgp)) != 0) {
-		goto bad;
+	if (imgp->ip_px_sfa != NULL) {
+		/*
+		 * The POSIX_SPAWN_CLOEXEC_DEFAULT flag
+		 * is handled in exec_handle_file_actions().
+		 */
+		if ((error = exec_handle_file_actions(imgp,
+		    imgp->ip_px_sa != NULL ? px_sa.psa_flags : 0)) != 0)
+			goto bad;
 	}
 
 	/* Has spawn port actions? */
@@ -1787,7 +1912,8 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 		 * The check for the POSIX_SPAWN_SETEXEC flag is done in 
 		 * exec_handle_port_actions().
 		 */
-		if((error = exec_handle_port_actions(imgp, px_sa.psa_flags)) != 0) 
+		if ((error = exec_handle_port_actions(imgp,
+		    imgp->ip_px_sa != NULL ? px_sa.psa_flags : 0)) != 0) 
 			goto bad;
 	}
 
@@ -1824,11 +1950,35 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 		 */
 		if (px_sa.psa_flags & POSIX_SPAWN_RESETIDS) {
 			kauth_cred_t my_cred = p->p_ucred;
-			kauth_cred_t my_new_cred = kauth_cred_setuidgid(my_cred, my_cred->cr_ruid, my_cred->cr_rgid);
-			if (my_new_cred != my_cred)
+			kauth_cred_t my_new_cred = kauth_cred_setuidgid(my_cred, kauth_cred_getruid(my_cred), kauth_cred_getrgid(my_cred));
+			if (my_new_cred != my_cred) {
 				p->p_ucred = my_new_cred;
+				/* update cred on proc */
+				PROC_UPDATE_CREDS_ONPROC(p);
+			}
 		}
+
+		/*
+		 * Disable ASLR for the spawned process.
+		 */
+		if (px_sa.psa_flags & _POSIX_SPAWN_DISABLE_ASLR)
+			OSBitOrAtomic(P_DISABLE_ASLR, &p->p_flag);
+
+		/*
+		 * Forcibly disallow execution from data pages for the spawned process
+		 * even if it would otherwise be permitted by the architecture default.
+		 */
+		if (px_sa.psa_flags & _POSIX_SPAWN_ALLOW_DATA_EXEC)
+			imgp->ip_flags |= IMGPF_ALLOW_DATA_EXEC;
 	}
+
+	/*
+	 * Disable ASLR during image activation.  This occurs either if the
+	 * _POSIX_SPAWN_DISABLE_ASLR attribute was found above or if
+	 * P_DISABLE_ASLR was inherited from the parent process.
+	 */
+	if (p->p_flag & P_DISABLE_ASLR)
+		imgp->ip_flags |= IMGPF_DISABLE_ASLR;
 
 	/* 
 	 * Clear transition flag so we won't hang if exec_activate_image() causes
@@ -1838,6 +1988,7 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 	 */
 	if (spawn_no_exec) {
 		proc_transend(p, 0);
+		proc_transit_set = 0;
 	}
 
 #if MAC_SPAWN	/* XXX */
@@ -1853,9 +2004,13 @@ posix_spawn(proc_t ap, struct posix_spawn_args *uap, int32_t *retval)
 	 */
 	error = exec_activate_image(imgp);
 
-	/* Image not claimed by any activator? */
-	if (error == -1)
+	if (error == 0) {
+		/* process completed the exec */
+		exec_done = TRUE;
+	} else if (error == -1) {
+		/* Image not claimed by any activator? */
 		error = ENOEXEC;
+	}
 
 	/*
 	 * If we have a spawn attr, and it contains signal related flags,
@@ -1938,6 +2093,9 @@ bad:
 	 * before check_for_signature(), which uses psignal.
 	 */
 	if (spawn_no_exec) {
+		if (proc_transit_set)
+			proc_transend(p, 0);
+
 		/*
 		 * Drop the signal lock on the child which was taken on our
 		 * behalf by forkproc()/cloneproc() to prevent signals being
@@ -2040,8 +2198,10 @@ bad:
 				p->exit_thread = current_thread();
 				proc_unlock(p);
 				exit1(p, 1, (int *)NULL);
-				task_deallocate(get_threadtask(imgp->ip_new_thread));
-				thread_deallocate(imgp->ip_new_thread);
+				if (exec_done == FALSE) {
+					task_deallocate(get_threadtask(imgp->ip_new_thread));
+					thread_deallocate(imgp->ip_new_thread);
+				}
 			} else {
 				/* someone is doing it for us; just skip it */
 				proc_unlock(p);
@@ -2165,7 +2325,7 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 	imgp->ip_vattr = vap;
 	imgp->ip_origvattr = origvap;
 	imgp->ip_vfs_context = &context;
-	imgp->ip_flags = (is_64 ? IMGPF_WAS_64BIT : IMGPF_NONE);
+	imgp->ip_flags = (is_64 ? IMGPF_WAS_64BIT : IMGPF_NONE) | ((p->p_flag & P_DISABLE_ASLR) ? IMGPF_DISABLE_ASLR : IMGPF_NONE);
 	imgp->ip_p_comm = alt_p_comm;		/* for PowerPC */
 	imgp->ip_seg = (is_64 ? UIO_USERSPACE64 : UIO_USERSPACE32);
 
@@ -2273,8 +2433,6 @@ copyinptr(user_addr_t froma, user_addr_t *toptr, int ptr_size)
  * Returns:	0			Success
  *		EFAULT			Bad 'ua'
  *
- * Implicit returns:
- *		*ptr_size		Modified
  */
 static int
 copyoutptr(user_addr_t ua, user_addr_t ptr, int ptr_size)
@@ -2311,85 +2469,156 @@ copyoutptr(user_addr_t ua, user_addr_t ptr, int ptr_size)
  * Note:	The strings segment layout is backward, from the beginning
  *		of the top of the stack to consume the minimal amount of
  *		space possible; the returned stack pointer points to the
- *		end of the area consumed (stacks grow upward).
+ *		end of the area consumed (stacks grow downward).
  *
  *		argc is an int; arg[i] are pointers; env[i] are pointers;
- *		exec_path is a pointer; the 0's are (void *)NULL's
+ *		the 0's are (void *)NULL's
  *
  * The stack frame layout is:
  *
- *	+-------------+
- * sp->	|     argc    |
- *	+-------------+
- *	|    arg[0]   |
- *	+-------------+
- *	       :
- *	       :
- *	+-------------+
- *	| arg[argc-1] |
- *	+-------------+
- *	|      0      |
- *	+-------------+
- *	|    env[0]   |
- *	+-------------+
- *	       :
- *	       :
- *	+-------------+
- *	|    env[n]   |
- *	+-------------+
- *	|      0      |
- *	+-------------+
- *	|  exec_path  |	In MacOS X PR2 Beaker2E the path passed to exec() is
- *	+-------------+	passed on the stack just after the trailing 0 of the
- *	|      0      | the envp[] array as a pointer to a string.
- *	+-------------+
- *	|  PATH AREA  |
- *	+-------------+
- *	| STRING AREA |
- *	       :
- *	       :
- *	|             | <- p->user_stack
- *	+-------------+
+ *      +-------------+ <- p->user_stack
+ *      |     16b     |
+ *      +-------------+
+ *      | STRING AREA |
+ *      |      :      |
+ *      |      :      |
+ *      |      :      |
+ *      +- -- -- -- --+
+ *      |  PATH AREA  |
+ *      +-------------+
+ *      |      0      |
+ *      +-------------+
+ *      |  applev[n]  |
+ *      +-------------+
+ *             :
+ *             :
+ *      +-------------+
+ *      |  applev[1]  |
+ *      +-------------+
+ *      | exec_path / |
+ *      |  applev[0]  |
+ *      +-------------+
+ *      |      0      |
+ *      +-------------+
+ *      |    env[n]   |
+ *      +-------------+
+ *             :
+ *             :
+ *      +-------------+
+ *      |    env[0]   |
+ *      +-------------+
+ *      |      0      |
+ *      +-------------+
+ *      | arg[argc-1] |
+ *      +-------------+
+ *             :
+ *             :
+ *      +-------------+
+ *      |    arg[0]   |
+ *      +-------------+
+ *      |     argc    |
+ * sp-> +-------------+
  *
  * Although technically a part of the STRING AREA, we treat the PATH AREA as
  * a separate entity.  This allows us to align the beginning of the PATH AREA
  * to a pointer boundary so that the exec_path, env[i], and argv[i] pointers
  * which preceed it on the stack are properly aligned.
- *
- * TODO:	argc copied with suword(), which takes a 64 bit address
  */
+
 static int
 exec_copyout_strings(struct image_params *imgp, user_addr_t *stackp)
 {
 	proc_t p = vfs_context_proc(imgp->ip_vfs_context);
 	int	ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT) ? 8 : 4;
-	char	*argv = imgp->ip_argv;	/* modifiable copy of argv */
+	int	ptr_area_size;
+	void *ptr_buffer_start, *ptr_buffer;
+	int string_size;
+
 	user_addr_t	string_area;	/* *argv[], *env[] */
-	user_addr_t	path_area;	/* package launch path */
-	user_addr_t	ptr_area;	/* argv[], env[], exec_path */
+	user_addr_t	ptr_area;	/* argv[], env[], applev[] */
+	user_addr_t argc_area;	/* argc */
 	user_addr_t	stack;
-	int	stringc = imgp->ip_argc + imgp->ip_envc;
-	size_t len;
 	int error;
-	ssize_t strspace;
+
+	unsigned i;
+	struct copyout_desc {
+		char	*start_string;
+		int		count;
+#if CONFIG_DTRACE
+		user_addr_t	*dtrace_cookie;
+#endif
+		boolean_t	null_term;
+	} descriptors[] = {
+		{
+			.start_string = imgp->ip_startargv,
+			.count = imgp->ip_argc,
+#if CONFIG_DTRACE
+			.dtrace_cookie = &p->p_dtrace_argv,
+#endif
+			.null_term = TRUE
+		},
+		{
+			.start_string = imgp->ip_endargv,
+			.count = imgp->ip_envc,
+#if CONFIG_DTRACE
+			.dtrace_cookie = &p->p_dtrace_envp,
+#endif
+			.null_term = TRUE
+		},
+		{
+			.start_string = imgp->ip_strings,
+			.count = 1,
+#if CONFIG_DTRACE
+			.dtrace_cookie = NULL,
+#endif
+			.null_term = FALSE
+		},
+		{
+			.start_string = imgp->ip_endenvv,
+			.count = imgp->ip_applec - 1, /* exec_path handled above */
+#if CONFIG_DTRACE
+			.dtrace_cookie = NULL,
+#endif
+			.null_term = TRUE
+		}
+	};
 
 	stack = *stackp;
 
-	size_t patharea_len = imgp->ip_argv - imgp->ip_strings;
-	int envc_add = 0;
-	
 	/*
-	 * Set up pointers to the beginning of the string area, the beginning
-	 * of the path area, and the beginning of the pointer area (actually,
-	 * the location of argc, an int, which may be smaller than a pointer,
-	 * but we use ptr_size worth of space for it, for alignment).
+	 * All previous contributors to the string area
+	 * should have aligned their sub-area
 	 */
-	string_area = stack - (((imgp->ip_strendp - imgp->ip_strings) + ptr_size-1) & ~(ptr_size-1)) - ptr_size;
-	path_area = string_area - ((patharea_len + ptr_size-1) & ~(ptr_size-1));
-	ptr_area = path_area - ((imgp->ip_argc + imgp->ip_envc + 4 + envc_add) * ptr_size) - ptr_size /*argc*/;
+	if (imgp->ip_strspace % ptr_size != 0) {
+		error = EINVAL;
+		goto bad;
+	}
 
-	/* Return the initial stack address: the location of argc */
-	*stackp = ptr_area;
+	/* Grow the stack down for the strings we've been building up */
+	string_size = imgp->ip_strendp - imgp->ip_strings;
+	stack -= string_size;
+	string_area = stack;
+
+	/*
+	 * Need room for one pointer for each string, plus
+	 * one for the NULLs terminating the argv, envv, and apple areas.
+	 */
+	ptr_area_size = (imgp->ip_argc + imgp->ip_envc + imgp->ip_applec + 3) *
+	    ptr_size;
+	stack -= ptr_area_size;
+	ptr_area = stack;
+
+	/* We'll construct all the pointer arrays in our string buffer,
+	 * which we already know is aligned properly, and ip_argspace
+	 * was used to verify we have enough space.
+	 */
+	ptr_buffer_start = ptr_buffer = (void *)imgp->ip_strendp;
+
+	/*
+	 * Need room for pointer-aligned argc slot.
+	 */
+	stack -= ptr_size;
+	argc_area = stack;
 
 	/*
 	 * Record the size of the arguments area so that sysctl_procargs()
@@ -2397,92 +2626,73 @@ exec_copyout_strings(struct image_params *imgp, user_addr_t *stackp)
 	 */
 	proc_lock(p);
 	p->p_argc = imgp->ip_argc;
-	p->p_argslen = (int)(stack - path_area);
+	p->p_argslen = (int)(*stackp - string_area);
 	proc_unlock(p);
 
+	/* Return the initial stack address: the location of argc */
+	*stackp = stack;
 
 	/*
-	 * Support for new app package launching for Mac OS X allocates
-	 * the "path" at the begining of the imgp->ip_strings buffer.
-	 * copy it just before the string area.
+	 * Copy out the entire strings area.
 	 */
-	len = 0;
-	error = copyoutstr(imgp->ip_strings, path_area,
-						   patharea_len,
-						   &len);
+	error = copyout(imgp->ip_strings, string_area,
+						   string_size);
 	if (error)
 		goto bad;
 
+	for (i = 0; i < sizeof(descriptors)/sizeof(descriptors[0]); i++) {
+		char *cur_string = descriptors[i].start_string;
+		int j;
 
-	/* Save a NULL pointer below it */
-	(void)copyoutptr(0LL, path_area - ptr_size, ptr_size);
+#if CONFIG_DTRACE
+		if (descriptors[i].dtrace_cookie) {
+			proc_lock(p);
+			*descriptors[i].dtrace_cookie = ptr_area + ((uintptr_t)ptr_buffer - (uintptr_t)ptr_buffer_start); /* dtrace convenience */
+			proc_unlock(p);
+		}
+#endif /* CONFIG_DTRACE */
 
-	/* Save the pointer to "path" just below it */
-	(void)copyoutptr(path_area, path_area - 2*ptr_size, ptr_size);
+		/*
+		 * For each segment (argv, envv, applev), copy as many pointers as requested
+		 * to our pointer buffer.
+		 */
+		for (j = 0; j < descriptors[i].count; j++) {
+			user_addr_t cur_address = string_area + (cur_string - imgp->ip_strings);
+			
+			/* Copy out the pointer to the current string. Alignment has been verified  */
+			if (ptr_size == 8) {
+				*(uint64_t *)ptr_buffer = (uint64_t)cur_address;
+			} else {
+				*(uint32_t *)ptr_buffer = (uint32_t)cur_address;
+			}
+			
+			ptr_buffer = (void *)((uintptr_t)ptr_buffer + ptr_size);
+			cur_string += strlen(cur_string) + 1; /* Only a NUL between strings in the same area */
+		}
+
+		if (descriptors[i].null_term) {
+			if (ptr_size == 8) {
+				*(uint64_t *)ptr_buffer = 0ULL;
+			} else {
+				*(uint32_t *)ptr_buffer = 0;
+			}
+			
+			ptr_buffer = (void *)((uintptr_t)ptr_buffer + ptr_size);
+		}
+	}
 
 	/*
-	 * ptr_size for 2 NULL one each ofter arg[argc -1] and env[n]
-	 * ptr_size for argc
-	 * skip over saved path, ptr_size for pointer to path,
-	 * and ptr_size for the NULL after pointer to path.
+	 * Copy out all our pointer arrays in bulk.
 	 */
+	error = copyout(ptr_buffer_start, ptr_area,
+					ptr_area_size);
+	if (error)
+		goto bad;
 
 	/* argc (int32, stored in a ptr_size area) */
-	(void)suword(ptr_area, imgp->ip_argc);
-	ptr_area += sizeof(int);
-	/* pad to ptr_size, if 64 bit image, to ensure user stack alignment */
-	if (imgp->ip_flags & IMGPF_IS_64BIT) {
-		(void)suword(ptr_area, 0);	/* int, not long: ignored */
-		ptr_area += sizeof(int);
-	}
-
-#if CONFIG_DTRACE
-	p->p_dtrace_argv = ptr_area; /* user_addr_t &argv[0] for dtrace convenience */
-#endif /* CONFIG_DTRACE */
-
-	/*
-	 * We use (string_area - path_area) here rather than the more
-	 * intuitive (imgp->ip_argv - imgp->ip_strings) because we are
-	 * interested in the length of the PATH_AREA in user space,
-	 * rather than the actual length of the execution path, since
-	 * it includes alignment padding of the PATH_AREA + STRING_AREA
-	 * to a ptr_size boundary.
-	 */
-	strspace = SIZE_IMG_STRSPACE - (string_area - path_area);
-	for (;;) {
-		if (stringc == imgp->ip_envc) {
-			/* argv[n] = NULL */
-			(void)copyoutptr(0LL, ptr_area, ptr_size);
-			ptr_area += ptr_size;
-#if CONFIG_DTRACE
-			p->p_dtrace_envp = ptr_area; /* user_addr_t &env[0] for dtrace convenience */
-#endif /* CONFIG_DTRACE */
-		}
-		if (--stringc < 0)
-			break;
-
-		/* pointer: argv[n]/env[n] */
-		(void)copyoutptr(string_area, ptr_area, ptr_size);
-
-		/* string : argv[n][]/env[n][] */
-		do {
-			if (strspace <= 0) {
-				error = E2BIG;
-				break;
-			}
-			error = copyoutstr(argv, string_area,
-						strspace,
-						&len);
-			string_area += len;
-			argv += len;
-			strspace -= len;
-		} while (error == ENAMETOOLONG);
-		if (error == EFAULT || error == E2BIG)
-			break;	/* bad stack - user's problem */
-		ptr_area += ptr_size;
-	}
-	/* env[n] = NULL */
-	(void)copyoutptr(0LL, ptr_area, ptr_size);
+	error = copyoutptr((user_addr_t)imgp->ip_argc, argc_area, ptr_size);
+	if (error)
+		goto bad;
 
 bad:
 	return(error);
@@ -2495,6 +2705,11 @@ bad:
  * Copy arguments and environment from user space into work area; we may
  * have already copied some early arguments into the work area, and if
  * so, any arguments opied in are appended to those already there.
+ * This function is the primary manipulator of ip_argspace, since
+ * these are the arguments the client of execve(2) knows about. After
+ * each argv[]/envv[] string is copied, we charge the string length
+ * and argv[]/envv[] pointer slot to ip_argspace, so that we can
+ * full preflight the arg list size.
  *
  * Parameters:	struct image_params *	the image parameter block
  *
@@ -2504,6 +2719,8 @@ bad:
  * Implicit returns;
  *		(imgp->ip_argc)		Count of arguments, updated
  *		(imgp->ip_envc)		Count of environment strings, updated
+ *		(imgp->ip_argspace)	Count of remaining of NCARGS
+ *		(imgp->ip_interp_buffer)	Interpreter and args (mutated in place)
  *
  *
  * Note:	The argument and environment vectors are user space pointers
@@ -2513,47 +2730,101 @@ static int
 exec_extract_strings(struct image_params *imgp)
 {
 	int error = 0;
-	int strsz = 0;
 	int	ptr_size = (imgp->ip_flags & IMGPF_WAS_64BIT) ? 8 : 4;
+	int new_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT) ? 8 : 4;
 	user_addr_t	argv = imgp->ip_user_argv;
 	user_addr_t	envv = imgp->ip_user_envv;
-
-	/*
-	 * If the argument vector is NULL, this is the system startup
-	 * bootstrap from load_init_program(), and there's nothing to do
-	 */
-	if (imgp->ip_user_argv == 0LL)
-		goto bad;
-
-	/* Now, get rest of arguments */
 
 	/*
 	 * Adjust space reserved for the path name by however much padding it
 	 * needs. Doing this here since we didn't know if this would be a 32- 
 	 * or 64-bit process back in exec_save_path.
 	 */
-	strsz = strlen(imgp->ip_strings) + 1;
-	imgp->ip_strspace -= ((strsz + ptr_size-1) & ~(ptr_size-1)) - strsz;
+	while (imgp->ip_strspace % new_ptr_size != 0) {
+		*imgp->ip_strendp++ = '\0';
+		imgp->ip_strspace--;
+		/* imgp->ip_argspace--; not counted towards exec args total */
+	}
 
 	/*
-	 * If we are running an interpreter, replace the av[0] that was
-	 * passed to execve() with the fully qualified path name that was
-	 * passed to execve() for interpreters which do not use the PATH
-	 * to locate their script arguments.
+	 * From now on, we start attributing string space to ip_argspace
 	 */
-	if((imgp->ip_flags & IMGPF_INTERPRET) != 0 && argv != 0LL) {
-		user_addr_t	arg;
+	imgp->ip_startargv = imgp->ip_strendp;
+	imgp->ip_argc = 0;
 
-		error = copyinptr(argv, &arg, ptr_size);
-		if (error)
-			goto bad;
-		if (arg != 0LL && arg != (user_addr_t)-1) {
-			argv += ptr_size;
-			error = exec_add_string(imgp, imgp->ip_user_fname);
+	if((imgp->ip_flags & IMGPF_INTERPRET) != 0) {
+		user_addr_t	arg;
+		char *argstart, *ch;
+
+		/* First, the arguments in the "#!" string are tokenized and extracted. */
+		argstart = imgp->ip_interp_buffer;
+		while (argstart) {
+			ch = argstart;
+			while (*ch && !IS_WHITESPACE(*ch)) {
+				ch++;
+			}
+
+			if (*ch == '\0') {
+				/* last argument, no need to NUL-terminate */
+				error = exec_add_user_string(imgp, CAST_USER_ADDR_T(argstart), UIO_SYSSPACE, TRUE);
+				argstart = NULL;
+			} else {
+				/* NUL-terminate */
+				*ch = '\0';
+				error = exec_add_user_string(imgp, CAST_USER_ADDR_T(argstart), UIO_SYSSPACE, TRUE);
+
+				/*
+				 * Find the next string. We know spaces at the end of the string have already
+				 * been stripped.
+				 */
+				argstart = ch + 1;
+				while (IS_WHITESPACE(*argstart)) {
+					argstart++;
+				}
+			}
+
+			/* Error-check, regardless of whether this is the last interpreter arg or not */
 			if (error)
 				goto bad;
+			if (imgp->ip_argspace < new_ptr_size) {
+				error = E2BIG;
+				goto bad;
+			}
+			imgp->ip_argspace -= new_ptr_size; /* to hold argv[] entry */
 			imgp->ip_argc++;
 		}
+
+		if (argv != 0LL) {
+			/*
+			 * If we are running an interpreter, replace the av[0] that was
+			 * passed to execve() with the path name that was
+			 * passed to execve() for interpreters which do not use the PATH
+			 * to locate their script arguments.
+			 */
+			error = copyinptr(argv, &arg, ptr_size);
+			if (error)
+				goto bad;
+			if (arg != 0LL) {
+				argv += ptr_size; /* consume without using */
+			}
+		}
+
+		if (imgp->ip_interp_sugid_fd != -1) {
+			char temp[19]; /* "/dev/fd/" + 10 digits + NUL */
+			snprintf(temp, sizeof(temp), "/dev/fd/%d", imgp->ip_interp_sugid_fd);
+			error = exec_add_user_string(imgp, CAST_USER_ADDR_T(temp), UIO_SYSSPACE, TRUE);
+		} else {
+			error = exec_add_user_string(imgp, imgp->ip_user_fname, imgp->ip_seg, TRUE);
+		}
+		
+		if (error)
+			goto bad;
+		if (imgp->ip_argspace < new_ptr_size) {
+			error = E2BIG;
+			goto bad;
+		}
+		imgp->ip_argspace -= new_ptr_size; /* to hold argv[] entry */
+		imgp->ip_argc++;
 	}
 
 	while (argv != 0LL) {
@@ -2563,25 +2834,36 @@ exec_extract_strings(struct image_params *imgp)
 		if (error)
 			goto bad;
 
-		argv += ptr_size;
 		if (arg == 0LL) {
 			break;
-		} else if (arg == (user_addr_t)-1) {
-			/* Um... why would it be -1? */
-			error = EFAULT;
-			goto bad;
 		}
+
+		argv += ptr_size;
+
 		/*
 		* av[n...] = arg[n]
 		*/
-		error = exec_add_string(imgp, arg);
+		error = exec_add_user_string(imgp, arg, imgp->ip_seg, TRUE);
 		if (error)
 			goto bad;
+		if (imgp->ip_argspace < new_ptr_size) {
+			error = E2BIG;
+			goto bad;
+		}
+		imgp->ip_argspace -= new_ptr_size; /* to hold argv[] entry */
 		imgp->ip_argc++;
 	}	 
+
+	/* Save space for argv[] NULL terminator */
+	if (imgp->ip_argspace < new_ptr_size) {
+		error = E2BIG;
+		goto bad;
+	}
+	imgp->ip_argspace -= new_ptr_size;
 	
-	/* Note where the args end and env begins. */
-	imgp->ip_strendargvp = imgp->ip_strendp;
+	/* Note where the args ends and env begins. */
+	imgp->ip_endargv = imgp->ip_strendp;
+	imgp->ip_envc = 0;
 
 	/* Now, get the environment */
 	while (envv != 0LL) {
@@ -2594,29 +2876,165 @@ exec_extract_strings(struct image_params *imgp)
 		envv += ptr_size;
 		if (env == 0LL) {
 			break;
-		} else if (env == (user_addr_t)-1) {
-			error = EFAULT;
-			goto bad;
 		}
 		/*
 		* av[n...] = env[n]
 		*/
-		error = exec_add_string(imgp, env);
+		error = exec_add_user_string(imgp, env, imgp->ip_seg, TRUE);
 		if (error)
 			goto bad;
+		if (imgp->ip_argspace < new_ptr_size) {
+			error = E2BIG;
+			goto bad;
+		}
+		imgp->ip_argspace -= new_ptr_size; /* to hold envv[] entry */
 		imgp->ip_envc++;
 	}
+
+	/* Save space for envv[] NULL terminator */
+	if (imgp->ip_argspace < new_ptr_size) {
+		error = E2BIG;
+		goto bad;
+	}
+	imgp->ip_argspace -= new_ptr_size;
+
+	/* Align the tail of the combined argv+envv area */
+	while (imgp->ip_strspace % new_ptr_size != 0) {
+		if (imgp->ip_argspace < 1) {
+			error = E2BIG;
+			goto bad;
+		}
+		*imgp->ip_strendp++ = '\0';
+		imgp->ip_strspace--;
+		imgp->ip_argspace--;
+	}
+	
+	/* Note where the envv ends and applev begins. */
+	imgp->ip_endenvv = imgp->ip_strendp;
+
+	/*
+	 * From now on, we are no longer charging argument
+	 * space to ip_argspace.
+	 */
+
 bad:
 	return error;
 }
 
+static char *
+random_hex_str(char *str, int len)
+{
+	uint64_t low, high, value;
+	int idx;
+	char digit;
+
+	/* A 64-bit value will only take 16 characters, plus '0x' and NULL. */
+	if (len > 19)
+		len = 19;
+
+	/* We need enough room for at least 1 digit */
+	if (len < 4)
+		return (NULL);
+
+	low = random();
+	high = random();
+	value = high << 32 | low;
+
+	str[0] = '0';
+	str[1] = 'x';
+	for (idx = 2; idx < len - 1; idx++) {
+		digit = value & 0xf;
+		value = value >> 4;
+		if (digit < 10)
+			str[idx] = '0' + digit;
+		else
+			str[idx] = 'a' + (digit - 10);
+	}
+	str[idx] = '\0';
+	return (str);
+}
+
+/*
+ * Libc has an 8-element array set up for stack guard values.  It only fills
+ * in one of those entries, and both gcc and llvm seem to use only a single
+ * 8-byte guard.  Until somebody needs more than an 8-byte guard value, don't
+ * do the work to construct them.
+ */
+#define	GUARD_VALUES 1
+#define	GUARD_KEY "stack_guard="
+
+/*
+ * System malloc needs some entropy when it is initialized.
+ */
+#define	ENTROPY_VALUES 2
+#define ENTROPY_KEY "malloc_entropy="
+
+/*
+ * Build up the contents of the apple[] string vector
+ */
+static int
+exec_add_apple_strings(struct image_params *imgp)
+{
+	int i, error;
+	int new_ptr_size = (imgp->ip_flags & IMGPF_IS_64BIT) ? 8 : 4;
+	char guard[19];
+	char guard_vec[strlen(GUARD_KEY) + 19 * GUARD_VALUES + 1];
+
+	char entropy[19];
+	char entropy_vec[strlen(ENTROPY_KEY) + 19 * ENTROPY_VALUES + 1];
+
+	/* exec_save_path stored the first string */
+	imgp->ip_applec = 1;
+
+	/*
+	 * Supply libc with a collection of random values to use when
+	 * implementing -fstack-protector.
+	 */
+	(void)strlcpy(guard_vec, GUARD_KEY, sizeof (guard_vec));
+	for (i = 0; i < GUARD_VALUES; i++) {
+		random_hex_str(guard, sizeof (guard));
+		if (i)
+			(void)strlcat(guard_vec, ",", sizeof (guard_vec));
+		(void)strlcat(guard_vec, guard, sizeof (guard_vec));
+	}
+
+	error = exec_add_user_string(imgp, CAST_USER_ADDR_T(guard_vec), UIO_SYSSPACE, FALSE);
+	if (error)
+		goto bad;
+	imgp->ip_applec++;
+
+	/*
+	 * Supply libc with entropy for system malloc.
+	 */
+	(void)strlcpy(entropy_vec, ENTROPY_KEY, sizeof(entropy_vec));
+	for (i = 0; i < ENTROPY_VALUES; i++) {
+		random_hex_str(entropy, sizeof (entropy));
+		if (i)
+			(void)strlcat(entropy_vec, ",", sizeof (entropy_vec));
+		(void)strlcat(entropy_vec, entropy, sizeof (entropy_vec));
+	}
+	
+	error = exec_add_user_string(imgp, CAST_USER_ADDR_T(entropy_vec), UIO_SYSSPACE, FALSE);
+	if (error)
+		goto bad;
+	imgp->ip_applec++;
+
+	/* Align the tail of the combined applev area */
+	while (imgp->ip_strspace % new_ptr_size != 0) {
+		*imgp->ip_strendp++ = '\0';
+		imgp->ip_strspace--;
+	}
+
+bad:
+	return error;
+}
 
 #define	unix_stack_size(p)	(p->p_rlimit[RLIMIT_STACK].rlim_cur)
 
 /*
  * exec_check_permissions
  *
- * Decription:	Verify that the file that is being attempted to be executed
+ * Description:	Verify that the file that is being attempted to be executed
  *		is in fact allowed to be executed based on it POSIX file
  *		permissions and other access control criteria
  *
@@ -2658,7 +3076,7 @@ exec_check_permissions(struct image_params *imgp)
 	 * will always succeed, and we don't want to happen unless the
 	 * file really is executable.
 	 */
-	if ((vap->va_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0)
+	if (!vfs_authopaque(vnode_mount(vp)) && ((vap->va_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0))
 		return (EACCES);
 
 	/* Disallow zero length files */
@@ -2705,7 +3123,7 @@ exec_check_permissions(struct image_params *imgp)
 	 * cached values, then we set the PowerPC environment flag.
 	 */
 	if (vap->va_fsid == exec_archhandler_ppc.fsid &&
-		vap->va_fileid == (uint64_t)((uint32_t)exec_archhandler_ppc.fileid)) {
+		vap->va_fileid == exec_archhandler_ppc.fileid) {
 		imgp->ip_flags |= IMGPF_POWERPC;
 	}
 #endif	/* IMGPF_POWERPC */
@@ -2790,7 +3208,7 @@ exec_handle_sugid(struct image_params *imgp)
 	     kauth_cred_getuid(cred) != imgp->ip_origvattr->va_uid) ||
 	    ((imgp->ip_origvattr->va_mode & VSGID) != 0 &&
 		 ((kauth_cred_ismember_gid(cred, imgp->ip_origvattr->va_gid, &leave_sugid_clear) || !leave_sugid_clear) ||
-		 (cred->cr_gid != imgp->ip_origvattr->va_gid)))) {
+		 (kauth_cred_getgid(cred) != imgp->ip_origvattr->va_gid)))) {
 
 #if CONFIG_MACF
 /* label for MAC transition and neither VSUID nor VSGID */
@@ -2815,9 +3233,13 @@ handle_mac_transition:
 		 */
 		if (imgp->ip_origvattr->va_mode & VSUID) {
 			p->p_ucred  = kauth_cred_setresuid(p->p_ucred, KAUTH_UID_NONE, imgp->ip_origvattr->va_uid, imgp->ip_origvattr->va_uid, KAUTH_UID_NONE);
+			/* update cred on proc */
+			PROC_UPDATE_CREDS_ONPROC(p);
 		}
 		if (imgp->ip_origvattr->va_mode & VSGID) {
 			p->p_ucred = kauth_cred_setresgid(p->p_ucred, KAUTH_GID_NONE, imgp->ip_origvattr->va_gid, imgp->ip_origvattr->va_gid);
+			/* update cred on proc */
+			PROC_UPDATE_CREDS_ONPROC(p);
 		}
 
 #if CONFIG_MACF
@@ -2878,7 +3300,7 @@ handle_mac_transition:
 		if (dev_null == NULLVP) {
 			struct nameidata nd1;
 
-			NDINIT(&nd1, LOOKUP, FOLLOW, UIO_SYSSPACE,
+			NDINIT(&nd1, LOOKUP, OP_OPEN, FOLLOW, UIO_SYSSPACE,
 			    CAST_USER_ADDR_T("/dev/null"),
 			    imgp->ip_vfs_context);
 
@@ -2893,9 +3315,8 @@ handle_mac_transition:
 			}
 		}
 
-		/* Radar 2261856; setuid security hole fix */
-		/* Patch from OpenBSD: A. Ramesh */
 		/*
+		 * Radar 2261856; setuid security hole fix
 		 * XXX For setuid processes, attempt to ensure that
 		 * stdin, stdout, and stderr are already allocated.
 		 * We do not want userland to accidentally allocate
@@ -2913,7 +3334,7 @@ handle_mac_transition:
 				if ((error = falloc(p, &fp, &indx, imgp->ip_vfs_context)) != 0)
 					continue;
 
-				if ((error = vnode_ref_ext(dev_null, FREAD)) != 0) {
+				if ((error = vnode_ref_ext(dev_null, FREAD, 0)) != 0) {
 					fp_free(p, indx, fp);
 					break;
 				}
@@ -2958,7 +3379,9 @@ handle_mac_transition:
 	 * Implement the semantic where the effective user and group become
 	 * the saved user and group in exec'ed programs.
 	 */
-	p->p_ucred = kauth_cred_setsvuidgid(p->p_ucred, kauth_cred_getuid(p->p_ucred),  p->p_ucred->cr_gid);
+	p->p_ucred = kauth_cred_setsvuidgid(p->p_ucred, kauth_cred_getuid(p->p_ucred),  kauth_cred_getgid(p->p_ucred));
+	/* update cred on proc */
+	PROC_UPDATE_CREDS_ONPROC(p);
 	
 	/* Update the process' identity version and set the security token */
 	p->p_idversion++;
@@ -3131,7 +3554,7 @@ load_init_program(proc_t p)
 
 	error = execve(p,&init_exec_args,retval);
 	if (error)
-		panic("Process 1 exec of %s failed, errno %d\n",
+		panic("Process 1 exec of %s failed, errno %d",
 		      init_program_name, error);
 }
 
@@ -3188,8 +3611,6 @@ load_return_to_errno(load_return_t lrtn)
 #include <kern/clock.h>
 #include <mach/kern_return.h>
 
-extern semaphore_t execve_semaphore;
-
 /*
  * execargs_alloc
  *
@@ -3244,7 +3665,7 @@ execargs_lock_sleep(void) {
 
 static kern_return_t
 execargs_purgeable_allocate(char **execarg_address) {
-	kern_return_t kr = vm_allocate(bsd_pageable_map, (vm_offset_t *)execarg_address, NCARGS + PAGE_SIZE, VM_FLAGS_ANYWHERE | VM_FLAGS_PURGABLE);
+	kern_return_t kr = vm_allocate(bsd_pageable_map, (vm_offset_t *)execarg_address, BSD_PAGEABLE_SIZE_PER_EXEC, VM_FLAGS_ANYWHERE | VM_FLAGS_PURGABLE);
 	assert(kr == KERN_SUCCESS);
 	return kr;
 }
@@ -3315,7 +3736,11 @@ execargs_alloc(struct image_params *imgp)
 		return (ENOMEM);
 	}
 
-	imgp->ip_vdata = imgp->ip_strings + NCARGS;
+	/* last page used to read in file headers */
+	imgp->ip_vdata = imgp->ip_strings + ( NCARGS + PAGE_SIZE );
+	imgp->ip_strendp = imgp->ip_strings;
+	imgp->ip_argspace = NCARGS;
+	imgp->ip_strspace = ( NCARGS + PAGE_SIZE );
 
 	return (0);
 }
@@ -3404,8 +3829,11 @@ exec_resettextvp(proc_t p, struct image_params *imgp)
 static int 
 check_for_signature(proc_t p, struct image_params *imgp)
 {
+	void *blob = NULL;
+	size_t length = 0;
 	mach_port_t port = NULL;
-	kern_return_t error = 0;
+	kern_return_t kr = KERN_FAILURE;
+	int error = EACCES;
 	unsigned char hash[SHA1_RESULTLEN];
 
 	/*
@@ -3422,35 +3850,56 @@ check_for_signature(proc_t p, struct image_params *imgp)
 		vm_map_switch_protect(get_task_map(p->task), TRUE);
 	}
 
-	/*
-	 * If the task_access_port is set and the proc isn't signed,
-	 * ask for a code signature from user space. Fail the exec
-	 * if permission is denied.
+	/* If the process is not signed or if it contains
+	 * entitlements, we need to communicate through the
+	 * task_access_port to taskgated.  taskgated will provide a
+	 * detached code signature if present, and will enforce any
+	 * restrictions on entitlements.  taskgated returns
+	 * KERN_SUCCESS if it has completed its work and the exec
+	 * should continue, or KERN_FAILURE if the exec should fail.
 	 */
-	error = task_get_task_access_port(p->task, &port);
-	if (error == 0 && IPC_PORT_VALID(port) && !(p->p_csflags & CS_VALID)) {
-		error = find_code_signature(port, p->p_pid);
-		if (error == KERN_FAILURE) {
-			/* Make very sure execution fails */
-			psignal(p, SIGKILL);
-			return EACCES;
-		}
+	error = cs_entitlements_blob_get(p, &blob, &length);
 
-		/* Only do this if exec_resettextvp() did not fail */
-		if (p->p_textvp != NULLVP) {
-			/*
-			 * If there's a new code directory, mark this process
-			 * as signed.
-			 */
-			error = ubc_cs_getcdhash(p->p_textvp, p->p_textoff, hash); 
-			if (error == 0) {
-				proc_lock(p);
-				p->p_csflags |= CS_VALID;
-				proc_unlock(p);
-			}
+	/* if signed and no entitlements, then we're done here */
+	if ((p->p_csflags & CS_VALID) && NULL == blob) {
+		error = 0;
+		goto done;
+	}
+
+	kr = task_get_task_access_port(p->task, &port);
+	if (KERN_SUCCESS != kr || !IPC_PORT_VALID(port)) {
+		error = 0;
+#if !CONFIG_EMBEDDED
+		/* fatal on the desktop when entitlements are present */
+		if (NULL != blob)
+			error = EACCES;
+#endif
+		goto done;
+	}
+
+	kr = find_code_signature(port, p->p_pid);
+	if (KERN_SUCCESS != kr) {
+		error = EACCES;
+		goto done;
+	}
+
+	/* Only do this if exec_resettextvp() did not fail */
+	if (p->p_textvp != NULLVP) {
+		/*
+		 * If there's a new code directory, mark this process
+		 * as signed.
+		 */
+		if (0 == ubc_cs_getcdhash(p->p_textvp, p->p_textoff, hash)) {
+			proc_lock(p);
+			p->p_csflags |= CS_VALID;
+			proc_unlock(p);
 		}
 	}
 
-	return KERN_SUCCESS;
+done:
+	if (0 != error)
+		/* make very sure execution fails */
+		psignal(p, SIGKILL);
+	return error;
 }
 

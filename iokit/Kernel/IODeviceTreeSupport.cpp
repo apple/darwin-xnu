@@ -37,12 +37,14 @@
 
 #include <pexpert/device_tree.h>
 
-extern "C" {
-    #include <machine/machine_routines.h>
-    void DTInit( void * data );
+#include <machine/machine_routines.h>
 
-    int IODTGetLoaderInfo( char *key, void **infoAddr, int *infosize );
-    void IODTFreeLoaderInfo( char *key, void *infoAddr, int infoSize );
+extern "C" {
+
+int IODTGetLoaderInfo( const char *key, void **infoAddr, int *infosize );
+void IODTFreeLoaderInfo( const char *key, void *infoAddr, int infoSize );
+int IODTGetDefault(const char *key, void *infoAddr, unsigned int infoSize );
+
 }
 
 #include <IOKit/assert.h>
@@ -209,26 +211,6 @@ IODeviceTreeAlloc( void * dtTop )
             if( !intMap && child->getProperty( gIODTInterruptParentKey))
                 intMap = true;
 
-#if __ppc__
-            OSObject * obj;
-
-            // Look for a "driver,AAPL,MacOSX,PowerPC" property.
-            if( (obj = child->getProperty( "driver,AAPL,MacOSX,PowerPC"))) {
-                gIOCatalogue->addExtensionsFromArchive((OSData *)obj);
-                child->removeProperty( "driver,AAPL,MacOSX,PowerPC");
-            }
-
-            // some gross pruning
-            child->removeProperty( "lanLib,AAPL,MacOS,PowerPC");
-
-            if( (obj = child->getProperty( "driver,AAPL,MacOS,PowerPC"))) {
-
-                if( (0 == (prop = (OSData *)child->getProperty( gIODTTypeKey )))
-                  || (strncmp("display", (char *)prop->getBytesNoCopy(), sizeof("display"))) ) {
-                    child->removeProperty( "driver,AAPL,MacOS,PowerPC");
-                }
-            }
-#endif /* __ppc__ */
         }
         regIter->release();
     }
@@ -265,7 +247,7 @@ IODeviceTreeAlloc( void * dtTop )
     return( parent);
 }
 
-int IODTGetLoaderInfo( char *key, void **infoAddr, int *infoSize )
+int IODTGetLoaderInfo( const char *key, void **infoAddr, int *infoSize )
 {
     IORegistryEntry		*chosen;
     OSData				*propObj;
@@ -290,7 +272,7 @@ int IODTGetLoaderInfo( char *key, void **infoAddr, int *infoSize )
     return 0;
 }
 
-void IODTFreeLoaderInfo( char *key, void *infoAddr, int infoSize )
+void IODTFreeLoaderInfo( const char *key, void *infoAddr, int infoSize )
 {
     vm_offset_t			range[2];
     IORegistryEntry		*chosen;
@@ -305,6 +287,26 @@ void IODTFreeLoaderInfo( char *key, void *infoAddr, int infoSize )
             chosen->removeProperty(key);
         }
     }
+}
+
+int IODTGetDefault(const char *key, void *infoAddr, unsigned int infoSize )
+{
+    IORegistryEntry		*defaults;
+    OSData			*defaultObj;
+    unsigned int		defaultSize;
+
+    defaults = IORegistryEntry::fromPath( "/defaults", gIODTPlane );
+    if ( defaults == 0 ) return -1;
+
+    defaultObj = OSDynamicCast( OSData, defaults->getProperty(key) );
+    if ( defaultObj == 0 ) return -1;
+
+    defaultSize = defaultObj->getLength();
+    if ( defaultSize > infoSize) return -1;
+
+    memcpy( infoAddr, defaultObj->getBytesNoCopy(), defaultSize );
+
+    return 0;
 }
 
 static void FreePhysicalMemory( vm_offset_t * range )

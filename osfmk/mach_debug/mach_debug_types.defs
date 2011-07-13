@@ -64,11 +64,20 @@
 
 #include <mach/std_types.defs>
 
-type zone_name_t = struct[80] of char;
-type zone_name_array_t = array[] of zone_name_t;
+type zone_name_t = struct[80] of char;			/* deprecated */
+type zone_name_array_t = array[] of zone_name_t;	/* deprecated */
 
-type zone_info_t = struct[9] of integer_t;
-type zone_info_array_t = array[] of zone_info_t;
+type zone_info_t = struct[9] of integer_t;		/* deprecated */
+type zone_info_array_t = array[] of zone_info_t; 	/* deprecated */
+
+type mach_zone_name_t = struct[80] of char;
+type mach_zone_name_array_t = array[] of mach_zone_name_t;
+
+type mach_zone_info_t = struct[8] of uint64_t;
+type mach_zone_info_array_t = array[] of mach_zone_info_t;
+
+type task_zone_info_t = struct[11] of uint64_t;
+type task_zone_info_array_t = array[] of task_zone_info_t;
 
 type hash_info_bucket_t = struct[1] of natural_t;
 type hash_info_bucket_array_t = array[] of hash_info_bucket_t;

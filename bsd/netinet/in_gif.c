@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -94,7 +94,7 @@
 #include <net/net_osdep.h>
 
 int ip_gif_ttl = GIF_TTL;
-SYSCTL_INT(_net_inet_ip, IPCTL_GIF_TTL, gifttl, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip, IPCTL_GIF_TTL, gifttl, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&ip_gif_ttl,	0, "");
 
 int
@@ -111,7 +111,7 @@ in_gif_output(
 	struct ip iphdr;	/* capsule IP header, host byte ordered */
 	int proto, error;
 	u_int8_t tos;
-	struct ip_out_args ipoa = { IFSCOPE_NONE };
+	struct ip_out_args ipoa = { IFSCOPE_NONE, 0 };
 
 	if (sin_src == NULL || sin_dst == NULL ||
 	    sin_src->sin_family != AF_INET ||
@@ -371,10 +371,13 @@ gif_encapcheck4(
 	{
 		if ((ifnet_flags(ia4->ia_ifa.ifa_ifp) & IFF_BROADCAST) == 0)
 			continue;
+		IFA_LOCK(&ia4->ia_ifa);
 		if (ip.ip_src.s_addr == ia4->ia_broadaddr.sin_addr.s_addr) {
+			IFA_UNLOCK(&ia4->ia_ifa);
 			lck_rw_done(in_ifaddr_rwlock);
 			return 0;
 		}
+		IFA_UNLOCK(&ia4->ia_ifa);
 	}
 	lck_rw_done(in_ifaddr_rwlock);
 
@@ -393,11 +396,6 @@ gif_encapcheck4(
 		if (rt != NULL)
 			RT_LOCK(rt);
 		if (rt == NULL || rt->rt_ifp != m->m_pkthdr.rcvif) {
-#if 0
-			log(LOG_WARNING, "%s: packet from 0x%x dropped "
-			    "due to ingress filter\n", if_name(&sc->gif_if),
-			    (u_int32_t)ntohl(sin.sin_addr.s_addr));
-#endif
 			if (rt != NULL) {
 				RT_UNLOCK(rt);
 				rtfree(rt);

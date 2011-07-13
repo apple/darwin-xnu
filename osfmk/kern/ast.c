@@ -80,6 +80,10 @@
 #include <kern/wait_queue.h>
 #include <mach/policy.h>
 #include <machine/trap.h> // for CHUD AST hook
+#include <machine/pal_routines.h>
+
+
+volatile perfASTCallback perfASTHook;
 
 
 void
@@ -99,14 +103,14 @@ ast_taken(
 	boolean_t		preempt_trap = (reasons == AST_PREEMPTION);
 	ast_t			*myast = ast_pending();
 	thread_t		thread = current_thread();
-	perfCallback	perf_hook = perfASTHook;
+	perfASTCallback	perf_hook = perfASTHook;
 
 	/*
 	 * CHUD hook - all threads including idle processor threads
 	 */
 	if (perf_hook) {
 		if (*myast & AST_CHUD_ALL) {
-			(*perf_hook)(0, NULL, 0, 0);
+			(*perf_hook)(reasons, myast);
 			
 			if (*myast == AST_NONE)
 				return;
@@ -189,6 +193,7 @@ ast_check(
 	thread_t			thread = processor->active_thread;
 
 	processor->current_pri = thread->sched_pri;
+	processor->current_thmode = thread->sched_mode;
 	if (	processor->state == PROCESSOR_RUNNING		||
 			processor->state == PROCESSOR_SHUTDOWN		) {
 		ast_t			preempt;
@@ -196,6 +201,8 @@ ast_check(
 		/*
 		 *	Propagate thread ast to processor.
 		 */
+		pal_ast_check(thread);
+
 		ast_propagate(thread->ast);
 
 		/*

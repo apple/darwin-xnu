@@ -55,6 +55,8 @@ enum {
     kIOServiceConfigState	= 0x04000000,
     kIOServiceTermPhase2State	= 0x01000000,
     kIOServiceTermPhase3State	= 0x00800000,
+    kIOServiceTermPhase1State	= 0x00400000,
+	kIOServiceTerm1WaiterState  = 0x00200000
 };
 
 // options for terminate()
@@ -167,6 +169,7 @@ class IOResources : public IOService
 
 public:
     static IOService * resources( void );
+    virtual bool init( OSDictionary * dictionary = 0 );
     virtual IOWorkLoop * getWorkLoop( ) const;
     virtual bool matchPropertyTable( OSDictionary * table );
     virtual IOReturn setProperties( OSObject * properties );
@@ -195,6 +198,7 @@ public:
 
 extern const OSSymbol * gIOConsoleUsersKey;
 extern const OSSymbol * gIOConsoleSessionUIDKey;
+extern const OSSymbol *	gIOConsoleSessionAuditIDKey;
 extern const OSSymbol * gIOConsoleSessionOnConsoleKey;
 extern const OSSymbol * gIOConsoleSessionSecureInputPIDKey;
 

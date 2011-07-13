@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -82,6 +82,7 @@
 
 /* Authentication */
 #define	RPCAUTH_NULL	0
+#define	RPCAUTH_NONE	RPCAUTH_NULL
 #define	RPCAUTH_UNIX	1
 #define RPCAUTH_SYS	RPCAUTH_UNIX
 #define	RPCAUTH_SHORT	2
@@ -89,6 +90,8 @@
 #define RPCAUTH_KRB5	390003
 #define RPCAUTH_KRB5I	390004
 #define RPCAUTH_KRB5P	390005
+#define RPCAUTH_INVALID	~0U
+#define RPCAUTH_UNKNOWN	RPCAUTH_INVALID
 
 #define	RPCAUTH_MAXSIZ	400
 #define	RPCAUTH_UNIXGIDS 16

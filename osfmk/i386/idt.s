@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -60,6 +60,24 @@
 #include <mach_kdb.h>
 #include <i386/eflags.h>
 #include <i386/trap.h>
+#include <i386/rtclock_asm.h>
+#define _ARCH_I386_ASM_HELP_H_  /* Prevent inclusion of user header */
+#include <mach/i386/syscall_sw.h>
+#include <i386/postcode.h>
+#include <i386/proc_reg.h>
+#include <mach/exception_types.h>
+
+/*
+ * Low-memory handlers.
+ */
+#define	LO_ALLINTRS		EXT(lo_allintrs32)
+#define	LO_ALLTRAPS		EXT(lo_alltraps32)
+#define	LO_SYSENTER		EXT(lo_sysenter32)
+#define	LO_UNIX_SCALL		EXT(lo_unix_scall32)
+#define	LO_MACH_SCALL		EXT(lo_mach_scall32)
+#define	LO_MDEP_SCALL		EXT(lo_mdep_scall32)
+#define	LO_DIAG_SCALL		EXT(lo_diag_scall32)
+
 
 #define HI_DATA(lo_addr)	( (EXT(lo_addr) - EXT(hi_remap_data)) + HIGH_IDT_BASE )
 #define HI_TEXT(lo_text)	( (EXT(lo_text) - EXT(hi_remap_text)) + HIGH_MEM_BASE )
@@ -103,7 +121,7 @@ Entry(name)				;\
 	pushl	$0			;\
 	pushl	$(n)			;\
 	pusha				;\
-	movl	$ EXT(lo_alltraps),%ebx	;\
+	movl	$(LO_ALLTRAPS),%ebx	;\
 	jmp	enter_lohandler
 
 	
@@ -116,7 +134,7 @@ Entry(name)				;\
 	pushl	$0			;\
 	pushl	$(n)			;\
 	pusha				;\
-	movl	$ EXT(lo_alltraps),%ebx	;\
+	movl	$(LO_ALLTRAPS),%ebx	;\
 	jmp	enter_lohandler
 	
 
@@ -152,11 +170,11 @@ Entry(name)				;\
  * Error code has been pushed.  Push trap number.
  */
 #define	EXCEP_ERR(n,name) \
-	IDT_ENTRY(name,K_INTR_GATE);\
-Entry(name)				;\
-	pushl	$(n)			;\
-	pusha				;\
-	movl	$ EXT(lo_alltraps),%ebx	;\
+	IDT_ENTRY(name,K_INTR_GATE)		;\
+Entry(name)					;\
+	pushl	$(n)				;\
+	pusha					;\
+	movl	$(LO_ALLTRAPS),%ebx		;\
 	jmp	enter_lohandler
 
 	
@@ -170,7 +188,7 @@ L_ ## n:					;\
 	pushl	$0				;\
 	pushl	$(n)				;\
 	pusha					;\
-	movl	$ EXT(lo_allintrs),%ebx		;\
+	movl	$(LO_ALLINTRS),%ebx		;\
 	jmp	enter_lohandler
 
 
@@ -471,8 +489,7 @@ Entry(lo_kernel_cr3)
         .text
 
 	
-/*******************************************************************************************************
- *
+/*
  * Trap/interrupt entry points.
  *
  * All traps must create the following save area on the PCB "stack":
@@ -498,14 +515,21 @@ Entry(lo_kernel_cr3)
  *	user ss  - if from user
  */
 
-	
+ret_to_kernel:
+	jmp *1f
+1:	.long HI_TEXT(hi_ret_to_kernel)
+
+ret_to_user:
+	jmp *1f
+1:	.long HI_TEXT(hi_ret_to_user) 
+
 Entry(hi_ret_to_user)
 	movl	%esp,%ebx
 	movl	%gs:CPU_ACTIVE_THREAD,%ecx
-	subl	ACT_PCB_ISS(%ecx),%ebx
-	movl	$(WINDOWS_CLEAN),ACT_COPYIO_STATE(%ecx)
+	subl	TH_PCB_ISS(%ecx),%ebx
+	movl	$(WINDOWS_CLEAN),TH_COPYIO_STATE(%ecx)
 
-	movl	ACT_PCB_IDS(%ecx),%eax	/* get debug state struct */
+	movl	TH_PCB_IDS(%ecx),%eax	/* get debug state struct */
 	cmpl	$0,%eax			/* is there a debug state */
 	je	1f 			/* branch if not */
 	movl	DS_DR0(%eax), %ecx	/* Load the 32 bit debug registers */
@@ -562,7 +586,7 @@ Entry(hi_unix_scall)
 	pushl   %eax                    /* save system call number */
         pushl   $0                      /* clear trap number slot */
         pusha                           /* save the general registers */
-	movl	$ EXT(lo_unix_scall),%ebx
+	movl	$(LO_UNIX_SCALL),%ebx
 	jmp	enter_lohandler
 
 	
@@ -570,7 +594,7 @@ Entry(hi_mach_scall)
 	pushl   %eax                    /* save system call number */
         pushl   $0                      /* clear trap number slot */
         pusha                           /* save the general registers */
-	movl	$ EXT(lo_mach_scall),%ebx
+	movl	$(LO_MACH_SCALL),%ebx
 	jmp	enter_lohandler
 
 	
@@ -578,7 +602,7 @@ Entry(hi_mdep_scall)
 	pushl   %eax                    /* save system call number */
         pushl   $0                      /* clear trap number slot */
         pusha                           /* save the general registers */
-	movl	$ EXT(lo_mdep_scall),%ebx
+	movl	$(LO_MDEP_SCALL),%ebx
 	jmp	enter_lohandler
 
 	
@@ -586,7 +610,7 @@ Entry(hi_diag_scall)
 	pushl   %eax                    // Save sselector
         pushl   $0                      // Clear trap number slot
         pusha                           // save the general registers
-	movl	$EXT(lo_diag_scall),%ebx	// Get the function down low to transfer to
+	movl	$(LO_DIAG_SCALL),%ebx	// Get the function down low to transfer to
 	jmp	enter_lohandler			// Leap to it...
 
 	
@@ -622,7 +646,7 @@ hi_sysenter_2:
 	pushl	$0			/* clear trap number slot */
 	pusha				/* save the general registers */
 	orl	$(EFL_IF),R32_EFLAGS-R32_EDI(%esp)	/* (edi was last reg pushed) */
-	movl	$ EXT(lo_sysenter),%ebx
+	movl	$(LO_SYSENTER),%ebx
 enter_lohandler:
 	pushl   %ds
 	pushl   %es
@@ -650,11 +674,12 @@ enter_lohandler1:
 	testb	$3,R32_CS(%esp)
 	jz	2f
 	movl	%esp,%edx			/* came from user mode */
+	xor	%ebp, %ebp
 	subl	%gs:CPU_HI_ISS,%edx
 	movl	%gs:CPU_ACTIVE_THREAD,%ecx
-	addl	ACT_PCB_ISS(%ecx),%edx		/* rebase the high stack to a low address */
+	addl	TH_PCB_ISS(%ecx),%edx		/* rebase the high stack to a low address */
 	movl	%edx,%esp
-	cmpl	$0, ACT_PCB_IDS(%ecx)	/* Is there a debug register state? */
+	cmpl	$0, TH_PCB_IDS(%ecx)	/* Is there a debug register state? */
 	je	2f
 	movl	$0, %ecx		/* If so, reset DR7 (the control) */
 	movl	%ecx, %dr7
@@ -673,7 +698,7 @@ Entry(hi_page_fault)
 	movl	%cr2,%eax		/* get the faulting address */
 	movl	%eax,R32_CR2-R32_EDI(%esp)/* save in esp save slot */
 
-	movl	$ EXT(lo_alltraps),%ebx
+	movl	$(LO_ALLTRAPS),%ebx
 	jmp	enter_lohandler
 
 
@@ -728,7 +753,7 @@ hi_debug_trap:
 	pushl	$0
 	pushl	$(T_DEBUG)		/* handle as user trap */
 	pusha				/* save the general registers */
-	movl	$ EXT(lo_alltraps),%ebx
+	movl	$(LO_ALLTRAPS),%ebx
 	jmp	enter_lohandler	
 
 
@@ -769,7 +794,7 @@ trap_check_kernel_exit:
 	je	fault_popl_gs
 hi_take_trap:
 	pusha				/* save the general registers */
-	movl	$ EXT(lo_alltraps),%ebx
+	movl	$(LO_ALLTRAPS),%ebx
 	jmp	enter_lohandler
 
 		
@@ -798,7 +823,7 @@ fault_iret:
 	popl	%eax			/* restore eax */
 					/* now treat as fault from user */
 	pusha				/* save the general registers */
-	movl	$ EXT(lo_alltraps),%ebx
+	movl	$(LO_ALLTRAPS),%ebx
 	jmp	enter_lohandler
 
 /*
@@ -840,19 +865,471 @@ push_none:
 					/* now treat as fault from user */
 					/* except that segment registers are */
 					/* already pushed */
-	movl	$ EXT(lo_alltraps),%ebx
+	movl	$(LO_ALLTRAPS),%ebx
 	jmp	enter_lohandler1
 
 	
         .text
 
 
-Entry(lo_ret_to_user)
-	jmp *1f
-1:	.long HI_TEXT(hi_ret_to_user) 
-
-Entry(lo_ret_to_kernel)
-	jmp *1f
-1:	.long HI_TEXT(hi_ret_to_kernel)
-
 Entry(hi_remap_etext)
+
+
+/*
+ * All 32 bit task 'exceptions' enter lo_alltraps:
+ *	esp	-> x86_saved_state_t
+ * 
+ * The rest of the state is set up as:	
+ *	cr3	 -> kernel directory
+ *	esp	 -> low based stack
+ *	gs	 -> CPU_DATA_GS
+ *	cs	 -> KERNEL32_CS
+ *	ss/ds/es -> KERNEL_DS
+ *
+ *	interrupts disabled
+ *	direction flag cleared
+ */
+Entry(lo_alltraps32)
+	movl	R32_CS(%esp),%eax	/* assume 32-bit state */
+	cmpl	$(SS_64),SS_FLAVOR(%esp)/* 64-bit? */	
+	jne	1f
+	movl	R64_CS(%esp),%eax	/* 64-bit user mode */
+1:
+	testb	$3,%al
+	jz	trap_from_kernel
+						/* user mode trap */
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx
+	movl	TH_TASK(%ecx),%ebx
+
+	/* Check for active vtimers in the current task */
+	TASK_VTIMER_CHECK(%ebx, %ecx)
+
+	movl	%gs:CPU_KERNEL_STACK,%ebx
+	xchgl	%ebx,%esp		/* switch to kernel stack */
+
+	CCALL1(user_trap, %ebx)		/* call user trap routine */
+	/* user_trap() unmasks interrupts */
+	cli				/* hold off intrs - critical section */
+	xorl	%ecx,%ecx		/* don't check if we're in the PFZ */
+	
+/*
+ * Return from trap or system call, checking for ASTs.
+ * On lowbase PCB stack with intrs disabled
+ */	
+Entry(return_from_trap32)
+	movl	%gs:CPU_ACTIVE_THREAD, %esp
+	movl	TH_PCB_ISS(%esp), %esp	/* switch back to PCB stack */
+	movl	%gs:CPU_PENDING_AST, %eax
+	testl	%eax, %eax
+	je	EXT(return_to_user)	/* branch if no AST */
+LEXT(return_from_trap_with_ast)
+	movl	%gs:CPU_KERNEL_STACK, %ebx
+	xchgl	%ebx, %esp		/* switch to kernel stack */
+
+	testl	%ecx, %ecx		/* see if we need to check for an EIP in the PFZ */
+	je	2f			/* no, go handle the AST */
+	cmpl	$(SS_64), SS_FLAVOR(%ebx)	/* are we a 64-bit task? */
+	je	1f
+					/* no... 32-bit user mode */
+	movl	R32_EIP(%ebx), %eax
+	pushl	%ebx			/* save PCB stack */
+	xorl	%ebp, %ebp		/* clear frame pointer */
+	CCALL1(commpage_is_in_pfz32, %eax)
+	popl	%ebx			/* retrieve pointer to PCB stack */
+	testl	%eax, %eax
+	je	2f			/* not in the PFZ... go service AST */
+	movl	%eax, R32_EBX(%ebx)	/* let the PFZ know we've pended an AST */
+	xchgl	%ebx, %esp		/* switch back to PCB stack */
+	jmp	EXT(return_to_user)
+1:					/* 64-bit user mode */
+	movl	R64_RIP(%ebx), %ecx
+	movl	R64_RIP+4(%ebx), %eax
+	pushl	%ebx			/* save PCB stack */
+	xorl	%ebp, %ebp		/* clear frame pointer */
+	CCALL2(commpage_is_in_pfz64, %ecx, %eax)
+	popl	%ebx			/* retrieve pointer to PCB stack */
+	testl	%eax, %eax		
+	je	2f			/* not in the PFZ... go service AST */
+	movl	%eax, R64_RBX(%ebx)	/* let the PFZ know we've pended an AST */
+	xchgl	%ebx, %esp		/* switch back to PCB stack */
+	jmp	EXT(return_to_user)
+2:	
+	sti				/* interrupts always enabled on return to user mode */
+	xorl	%ebp, %ebp		/* Clear framepointer */
+	CCALL1(i386_astintr, $0)	/* take the AST */
+	cli
+	xorl	%ecx, %ecx		/* don't check if we're in the PFZ */
+	jmp	EXT(return_from_trap32)	/* and check again (rare) */
+
+
+/*
+ * Trap from kernel mode.  No need to switch stacks.
+ * Interrupts must be off here - we will set them to state at time of trap
+ * as soon as it's safe for us to do so and not recurse doing preemption
+ */
+trap_from_kernel:
+	movl	%esp, %eax		/* saved state addr */
+	pushl	R32_EIP(%esp)		/* Simulate a CALL from fault point */
+	pushl   %ebp			/* Extend framepointer chain */
+	movl	%esp, %ebp
+	CCALL1WITHSP(kernel_trap, %eax)	/* Call kernel trap handler */
+	popl	%ebp
+	addl	$4, %esp
+	cli
+
+	movl	%gs:CPU_PENDING_AST,%eax		/* get pending asts */
+	testl	$ AST_URGENT,%eax	/* any urgent preemption? */
+	je	ret_to_kernel			/* no, nothing to do */
+	cmpl	$ T_PREEMPT,R32_TRAPNO(%esp)
+	je	ret_to_kernel			  /* T_PREEMPT handled in kernel_trap() */
+	testl	$ EFL_IF,R32_EFLAGS(%esp)		/* interrupts disabled? */
+	je	ret_to_kernel
+	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL		/* preemption disabled? */
+	jne	ret_to_kernel
+	movl	%gs:CPU_KERNEL_STACK,%eax
+	movl	%esp,%ecx
+	xorl	%eax,%ecx
+	and	EXT(kernel_stack_mask),%ecx
+	testl	%ecx,%ecx		/* are we on the kernel stack? */
+	jne	ret_to_kernel		/* no, skip it */
+
+	CCALL1(i386_astintr, $1)	/* take the AST */
+
+	jmp	ret_to_kernel
+
+
+/*
+ * All interrupts on all tasks enter here with:
+ *	esp->	 -> x86_saved_state_t
+ *
+ *	cr3	 -> kernel directory
+ *	esp	 -> low based stack
+ *	gs	 -> CPU_DATA_GS
+ *	cs	 -> KERNEL32_CS
+ *	ss/ds/es -> KERNEL_DS
+ *
+ *	interrupts disabled
+ *	direction flag cleared
+ */
+Entry(lo_allintrs32)
+	/*
+	 * test whether already on interrupt stack
+	 */
+	movl	%gs:CPU_INT_STACK_TOP,%ecx
+	cmpl	%esp,%ecx
+	jb	1f
+	leal	-INTSTACK_SIZE(%ecx),%edx
+	cmpl	%esp,%edx
+	jb	int_from_intstack
+1:	
+	xchgl	%ecx,%esp		/* switch to interrupt stack */
+
+	movl	%cr0,%eax		/* get cr0 */
+	orl	$(CR0_TS),%eax		/* or in TS bit */
+	movl	%eax,%cr0		/* set cr0 */
+
+	subl	$8, %esp		/* for 16-byte stack alignment */
+	pushl	%ecx			/* save pointer to old stack */
+	movl	%ecx,%gs:CPU_INT_STATE	/* save intr state */
+	
+	TIME_INT_ENTRY			/* do timing */
+
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx
+	movl	TH_TASK(%ecx),%ebx
+
+	/* Check for active vtimers in the current task */
+	TASK_VTIMER_CHECK(%ebx, %ecx)
+
+	incl	%gs:CPU_PREEMPTION_LEVEL
+	incl	%gs:CPU_INTERRUPT_LEVEL
+
+	movl	%gs:CPU_INT_STATE, %eax
+	CCALL1(interrupt, %eax)		/* call generic interrupt routine */
+
+	cli				/* just in case we returned with intrs enabled */
+	xorl	%eax,%eax
+	movl	%eax,%gs:CPU_INT_STATE	/* clear intr state pointer */
+
+	decl	%gs:CPU_INTERRUPT_LEVEL
+	decl	%gs:CPU_PREEMPTION_LEVEL
+
+	TIME_INT_EXIT			/* do timing */
+
+	movl	%gs:CPU_ACTIVE_THREAD,%eax
+	movl	TH_PCB_FPS(%eax),%eax	/* get pcb's ifps */
+	testl	%eax, %eax		/* Is there a context */
+	je	1f			/* Branch if not */
+	cmpl	$0, FP_VALID(%eax)	/* Check fp_valid */
+	jne	1f			/* Branch if valid */
+	clts				/* Clear TS */
+	jmp	2f
+1:
+	movl	%cr0,%eax		/* get cr0 */
+	orl	$(CR0_TS),%eax		/* or in TS bit */
+	movl	%eax,%cr0		/* set cr0 */
+2:
+	popl	%esp			/* switch back to old stack */
+
+	/* Load interrupted code segment into %eax */
+	movl	R32_CS(%esp),%eax	/* assume 32-bit state */
+	cmpl	$(SS_64),SS_FLAVOR(%esp)/* 64-bit? */	
+	jne	3f
+	movl	R64_CS(%esp),%eax	/* 64-bit user mode */
+3:
+	testb	$3,%al			/* user mode, */
+	jnz	ast_from_interrupt_user	/* go handle potential ASTs */
+	/*
+	 * we only want to handle preemption requests if
+	 * the interrupt fell in the kernel context
+	 * and preemption isn't disabled
+	 */
+	movl	%gs:CPU_PENDING_AST,%eax	
+	testl	$ AST_URGENT,%eax		/* any urgent requests? */
+	je	ret_to_kernel			/* no, nothing to do */
+
+	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL	/* preemption disabled? */
+	jne	ret_to_kernel			/* yes, skip it */
+
+	movl	%gs:CPU_KERNEL_STACK,%eax
+	movl	%esp,%ecx
+	xorl	%eax,%ecx
+	and	EXT(kernel_stack_mask),%ecx
+	testl	%ecx,%ecx			/* are we on the kernel stack? */
+	jne	ret_to_kernel			/* no, skip it */
+
+	/*
+	 * Take an AST from kernel space.  We don't need (and don't want)
+	 * to do as much as the case where the interrupt came from user
+	 * space.
+	 */
+	CCALL1(i386_astintr, $1)
+
+	jmp	ret_to_kernel
+
+
+/*
+ * nested int - simple path, can't preempt etc on way out
+ */
+int_from_intstack:
+	incl	%gs:CPU_PREEMPTION_LEVEL
+	incl	%gs:CPU_INTERRUPT_LEVEL
+
+	movl	%esp, %edx		/* x86_saved_state */
+	CCALL1(interrupt, %edx)
+
+	decl	%gs:CPU_INTERRUPT_LEVEL
+	decl	%gs:CPU_PREEMPTION_LEVEL
+
+	jmp	ret_to_kernel
+
+/*
+ *	Take an AST from an interrupted user
+ */
+ast_from_interrupt_user:
+	movl	%gs:CPU_PENDING_AST,%eax
+	testl	%eax,%eax		/* pending ASTs? */
+	je	ret_to_user		/* no, nothing to do */
+
+	TIME_TRAP_UENTRY
+
+	movl	$1, %ecx		/* check if we're in the PFZ */
+	jmp	EXT(return_from_trap_with_ast)	/* return */
+
+
+/*
+ * 32bit Tasks
+ * System call entries via INTR_GATE or sysenter:
+ *
+ *	esp	 -> x86_saved_state32_t
+ *	cr3	 -> kernel directory
+ *	esp	 -> low based stack
+ *	gs	 -> CPU_DATA_GS
+ *	cs	 -> KERNEL32_CS
+ *	ss/ds/es -> KERNEL_DS
+ *
+ *	interrupts disabled
+ *	direction flag cleared
+ */
+
+Entry(lo_sysenter32)
+	/*
+	 * We can be here either for a mach syscall or a unix syscall,
+	 * as indicated by the sign of the code:
+	 */
+	movl	R32_EAX(%esp),%eax
+	testl	%eax,%eax
+	js	EXT(lo_mach_scall32)		/* < 0 => mach */
+						/* > 0 => unix */
+	
+Entry(lo_unix_scall32)
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_KERNEL_STACK,%edi
+	xchgl	%edi,%esp			/* switch to kernel stack */
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	TH_TASK(%ecx),%ebx		/* point to current task  */
+	incl	TH_SYSCALLS_UNIX(%ecx)		/* increment call count   */
+
+	/* Check for active vtimers in the current task */
+	TASK_VTIMER_CHECK(%ebx, %ecx)
+
+	sti
+
+	CCALL1(unix_syscall, %edi)
+	/*
+	 * always returns through thread_exception_return
+	 */
+
+
+Entry(lo_mach_scall32)
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_KERNEL_STACK,%edi
+	xchgl	%edi,%esp			/* switch to kernel stack */
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	TH_TASK(%ecx),%ebx		/* point to current task  */
+	incl	TH_SYSCALLS_MACH(%ecx)		/* increment call count   */
+
+	/* Check for active vtimers in the current task */
+	TASK_VTIMER_CHECK(%ebx, %ecx)
+
+	sti
+
+	CCALL1(mach_call_munger, %edi)
+	/*
+	 * always returns through thread_exception_return
+	 */
+
+
+Entry(lo_mdep_scall32)
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_KERNEL_STACK,%edi
+	xchgl	%edi,%esp			/* switch to kernel stack */
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	TH_TASK(%ecx),%ebx		/* point to current task  */
+
+	/* Check for active vtimers in the current task */
+	TASK_VTIMER_CHECK(%ebx, %ecx)
+	
+	sti
+
+	CCALL1(machdep_syscall, %edi)
+	/*
+	 * always returns through thread_exception_return
+	 */
+
+
+Entry(lo_diag_scall32)
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_KERNEL_STACK,%edi
+	xchgl	%edi,%esp			/* switch to kernel stack */
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	TH_TASK(%ecx),%ebx		/* point to current task  */
+
+	/* Check for active vtimers in the current task */
+	TASK_VTIMER_CHECK(%ebx, %ecx)
+
+	pushl	%edi			/* push pbc stack for later */
+
+	CCALL1(diagCall, %edi)		// Call diagnostics
+	
+	cli				// Disable interruptions just in case
+	popl	%esp			// Get back the original stack
+	cmpl	$0,%eax			// What kind of return is this?
+	jne	EXT(return_to_user)	// Normal return, do not check asts...
+
+	CCALL5(i386_exception, $EXC_SYSCALL, $0x6000, $0, $1, $0)
+		// pass what would be the diag syscall
+		// error return - cause an exception
+	/* no return */
+	
+
+LEXT(return_to_user)
+	TIME_TRAP_UEXIT
+	jmp	ret_to_user
+
+
+/*
+ * Double-fault exception handler task. The last gasp...
+ */
+Entry(df_task_start)
+	CCALL1(panic_double_fault32, $(T_DOUBLE_FAULT))
+	hlt
+
+
+/*
+ * machine-check handler task. The last gasp...
+ */
+Entry(mc_task_start)
+	CCALL1(panic_machine_check32, $(T_MACHINE_CHECK))
+	hlt
+
+#if MACH_KDB
+#include <i386/lapic.h>
+#define CX(addr,reg)	addr(,reg,4)
+#if	0
+/*
+ * Note that the per-fault entry points are not currently
+ * functional.  The only way to make them work would be to
+ * set up separate TSS's for each fault type, which doesn't
+ * currently seem worthwhile.  (The offset part of a task
+ * gate is always ignored.)  So all faults that task switch
+ * currently resume at db_task_start.
+ */
+/*
+ * Double fault (Murphy's point) - error code (0) on stack
+ */
+Entry(db_task_dbl_fault)
+	popl	%eax
+	movl	$(T_DOUBLE_FAULT),%ebx
+	jmp	db_task_start
+/*
+ * Segment not present - error code on stack
+ */
+Entry(db_task_seg_np)
+	popl	%eax
+	movl	$(T_SEGMENT_NOT_PRESENT),%ebx
+	jmp	db_task_start
+/*
+ * Stack fault - error code on (current) stack
+ */
+Entry(db_task_stk_fault)
+	popl	%eax
+	movl	$(T_STACK_FAULT),%ebx
+	jmp	db_task_start
+/*
+ * General protection fault - error code on stack
+ */
+Entry(db_task_gen_prot)
+	popl	%eax
+	movl	$(T_GENERAL_PROTECTION),%ebx
+	jmp	db_task_start
+#endif	/* 0 */
+/*
+ * The entry point where execution resumes after last-ditch debugger task
+ * switch.
+ */
+Entry(db_task_start)
+	movl	%esp,%edx
+	subl	$(ISS32_SIZE),%edx
+	movl	%edx,%esp		/* allocate x86_saved_state on stack */
+	movl	%eax,R32_ERR(%esp)
+	movl	%ebx,R32_TRAPNO(%esp)
+	pushl	%edx
+	CPU_NUMBER(%edx)
+	movl	CX(EXT(master_dbtss),%edx),%edx
+	movl	TSS_LINK(%edx),%eax
+	pushl	%eax			/* pass along selector of previous TSS */
+	call	EXT(db_tss_to_frame)
+	popl	%eax			/* get rid of TSS selector */
+	call	EXT(db_trap_from_asm)
+	addl	$0x4,%esp
+	/*
+	 * And now...?
+	 */
+	iret				/* ha, ha, ha... */
+#endif	/* MACH_KDB */

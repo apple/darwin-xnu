@@ -621,7 +621,6 @@ Routine:	BTZeroUnusedNodes
 
 Function:	Write zeros to all nodes in the B-tree that are not currently in use.
 -------------------------------------------------------------------------------*/
-__private_extern__
 int
 BTZeroUnusedNodes(FCB *filePtr)
 {
@@ -695,31 +694,39 @@ BTZeroUnusedNodes(FCB *filePtr)
 						err = EIO;
 						goto ErrorExit;
 					}
-					
+
 					if (buf_flags(bp) & B_LOCKED) {
 						/* 
-						 * This node is already part of a transaction and will be
-						 * written when the transaction is committed so don't write it here.
-						 * If we did, then we'd hit a panic in hfs_vnop_bwrite since
-						 * B_LOCKED is still set
+						 * This node is already part of a transaction and will be written when
+						 * the transaction is committed, so don't write it here.  If we did, then
+						 * we'd hit a panic in hfs_vnop_bwrite because the B_LOCKED bit is still set.
 						 */
 						buf_brelse(bp);
 						continue;
 					}
-
 					
 					buf_clear(bp);
 					buf_markaged(bp);
 					
 					/*
 					 * Try not to hog the buffer cache.  Wait for the write
-					 * every 32 nodes.
+					 * every 32 nodes.   If VNOP_BWRITE reports an error, bail out and bubble
+					 * it up to the function calling us.  If we tried to update a read-only 
+					 * mount on read-only media, for example, catching the error will let 
+					 * us alert the callers of this function that they should maintain 
+					 * the mount in read-only mode.
+
 					 */
 					++numWritten;
-					if (numWritten % 32 == 0)
-						VNOP_BWRITE(bp);
-					else
+					if (numWritten % 32 == 0) {
+						err = VNOP_BWRITE(bp);
+						if (err) {
+							goto ErrorExit;
+						}
+					}
+					else {
 						buf_bawrite(bp);
+					}
 				}
 			}
 			

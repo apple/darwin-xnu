@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -174,6 +174,7 @@ struct accessx_descriptor {
 #define	_PC_REC_XFER_ALIGN	23	/* Recommended buffer alignment */
 #define	_PC_SYMLINK_MAX		24	/* Max # of bytes in symlink name */
 #define	_PC_SYNC_IO		25	/* Sync I/O [SIO] supported? */
+#define _PC_XATTR_SIZE_BITS 	26	/* # of bits to represent maximum xattr size */
 
 /* configurable system strings */
 #define	_CS_PATH		 1

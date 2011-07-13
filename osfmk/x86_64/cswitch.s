@@ -60,19 +60,12 @@
 
 #include <i386/asm.h>
 #include <i386/proc_reg.h>
-#include <assym.s>
-
-#ifdef	SYMMETRY
-#include <sqt/asm_macros.h>
-#endif
-
-#if	AT386
 #include <i386/mp.h>
-#endif	/* AT386 */
+#include <assym.s>
 
 Entry(Load_context)
 	movq	TH_KERNEL_STACK(%rdi),%rcx	/* get kernel stack */
-	leaq	-IKS_SIZE-IEL_SIZE(%rcx),%rdx
+	leaq	-IKS_SIZE(%rcx),%rdx
 	addq	EXT(kernel_stack_size)(%rip),%rdx /* point to stack top */
 	movq	%rcx,%gs:CPU_ACTIVE_STACK	/* store stack address */
 	movq	%rdx,%gs:CPU_KERNEL_STACK	/* store stack top */
@@ -110,7 +103,7 @@ Entry(Switch_context)
 	/* new thread in %rdx */
 	movq    %rdx,%gs:CPU_ACTIVE_THREAD      /* new thread is active */
 	movq	TH_KERNEL_STACK(%rdx),%rdx	/* get its kernel stack */
-	lea	-IKS_SIZE-IEL_SIZE(%rdx),%rcx
+	lea	-IKS_SIZE(%rdx),%rcx
 	add	EXT(kernel_stack_size)(%rip),%rcx /* point to stack top */
 
 	movq	%rdx,%gs:CPU_ACTIVE_STACK	/* set current stack */

@@ -31,8 +31,10 @@
 #include <mach/mach_types.h>
 #include <mach/vm_prot.h>
 #include <vm/vm_kern.h>
+#include <sys/stat.h>
 #include <vm/vm_map.h>
 #include <sys/systm.h>
+#include <kern/assert.h>
 #include <sys/conf.h>
 #include <sys/proc_internal.h>
 #include <sys/buf.h>	/* for SET */
@@ -49,6 +51,9 @@ extern vm_offset_t kmem_mb_alloc(vm_map_t, int, int);
 void	pcb_synch(void);
 void	tbeproc(void *);
 
+TAILQ_HEAD(,devsw_lock) devsw_locks;
+lck_mtx_t devsw_lock_list_mtx;
+lck_grp_t *devsw_lock_grp;
 
 /* Just to satisfy pstat command */
 int     dmmin, dmmax, dmtext;
@@ -280,6 +285,7 @@ cdevsw_remove(int index, struct cdevsw * csw)
 		return(-1);
 	}
 	cdevsw[index] = nocdev;
+	cdevsw_flags[index] = 0;
 	return(index);
 }
 
@@ -301,6 +307,28 @@ cdevsw_add_with_bdev(int index, struct cdevsw * csw, int bdev)
 		return (-1);
 	}
 	return (index);
+}
+
+int
+cdevsw_setkqueueok(int index, struct cdevsw *csw, int use_offset)
+{
+	struct cdevsw *devsw;
+	uint64_t flags = CDEVSW_SELECT_KQUEUE;
+
+	devsw = &cdevsw[index];
+	if ((index < 0) || (index >= nchrdev) ||
+	    (memcmp((char *)devsw, 
+		          (char *)csw, 
+			  sizeof(struct cdevsw)) != 0)) {
+		return(-1);
+	}
+
+	if (use_offset) {
+		flags |= CDEVSW_USE_OFFSET;
+	}
+
+	cdevsw_flags[index] = flags;
+	return 0;
 }
 
 #include <pexpert/pexpert.h>	/* for PE_parse_boot_arg */
@@ -336,3 +364,71 @@ bsd_hostname(char *buf, int bufsize, int *len)
 	}    
 }
 
+void
+devsw_lock(dev_t dev, int mode)
+{
+	devsw_lock_t newlock, tmplock;
+	int res;
+
+	assert(0 <= major(dev) && major(dev) < nchrdev);	
+	assert(mode == S_IFCHR || mode == S_IFBLK);
+
+	MALLOC(newlock, devsw_lock_t, sizeof(struct devsw_lock), M_TEMP, M_WAITOK | M_ZERO);
+	newlock->dl_dev = dev;
+	newlock->dl_thread = current_thread();
+	newlock->dl_mode = mode;
+	
+	lck_mtx_lock_spin(&devsw_lock_list_mtx);
+retry:
+	TAILQ_FOREACH(tmplock, &devsw_locks, dl_list) {
+		if (tmplock->dl_dev == dev && tmplock->dl_mode == mode) {
+			res = msleep(tmplock, &devsw_lock_list_mtx, PVFS, "devsw_lock", NULL);	
+			assert(res == 0);
+			goto retry;
+		}
+	}
+
+	TAILQ_INSERT_TAIL(&devsw_locks, newlock, dl_list);
+	lck_mtx_unlock(&devsw_lock_list_mtx);
+
+}
+void
+devsw_unlock(dev_t dev, int mode)
+{
+	devsw_lock_t tmplock;
+
+	assert(0 <= major(dev) && major(dev) < nchrdev);	
+
+	lck_mtx_lock_spin(&devsw_lock_list_mtx);
+
+	TAILQ_FOREACH(tmplock, &devsw_locks, dl_list) {
+		if (tmplock->dl_dev == dev && tmplock->dl_mode == mode) {	
+			break;
+		}
+	}
+
+	if (tmplock == NULL) {
+		panic("Trying to unlock, and couldn't find lock.");
+	}
+
+	if (tmplock->dl_thread != current_thread()) {
+		panic("Trying to unlock, but I don't hold the lock.");
+	}
+
+	wakeup(tmplock);
+	TAILQ_REMOVE(&devsw_locks, tmplock, dl_list);
+	
+	lck_mtx_unlock(&devsw_lock_list_mtx);
+	
+	FREE(tmplock, M_TEMP);
+}
+
+void
+devsw_init()
+{
+	devsw_lock_grp = lck_grp_alloc_init("devsw", NULL);
+	assert(devsw_lock_grp != NULL);
+
+	lck_mtx_init(&devsw_lock_list_mtx, devsw_lock_grp, NULL);
+	TAILQ_INIT(&devsw_locks);
+}

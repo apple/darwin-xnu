@@ -443,7 +443,7 @@ extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
 #define	S_IFLNK		0120000		/* [XSI] symbolic link */
 #define	S_IFSOCK	0140000		/* [XSI] socket */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define	S_IFWHT		0160000		/* whiteout */
+#define	S_IFWHT		0160000		/* OBSOLETE: whiteout */
 #endif
 
 /* File mode */
@@ -489,7 +489,7 @@ extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
 #define	S_ISLNK(m)	(((m) & S_IFMT) == S_IFLNK)	/* symbolic link */
 #define	S_ISSOCK(m)	(((m) & S_IFMT) == S_IFSOCK)	/* socket */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define	S_ISWHT(m)	(((m) & S_IFMT) == S_IFWHT)	/* whiteout */
+#define	S_ISWHT(m)	(((m) & S_IFMT) == S_IFWHT)	/* OBSOLETE: whiteout */
 #endif
 
 /*
@@ -553,7 +553,8 @@ extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
  */
 /* #define UF_NOUNLINK	0x00000010 */	/* file may not be removed or renamed */
 #define UF_COMPRESSED	0x00000020	/* file is hfs-compressed */
-/* Bits 0x0040 through 0x4000 are currently undefined. */
+#define UF_TRACKED		0x00000040	/* file renames and deletes are tracked */
+/* Bits 0x0080 through 0x4000 are currently undefined. */
 #define UF_HIDDEN	0x00008000	/* hint that this item should not be */
 					/* displayed in a GUI */
 /*
@@ -607,13 +608,13 @@ int	chmodx_np(const char *, filesec_t);
 int	fchflags(int, __uint32_t);
 int	fchmodx_np(int, filesec_t);
 int	fstatx_np(int, struct stat *, filesec_t) __DARWIN_INODE64(fstatx_np);
-int	lchflags(const char *, __uint32_t);
-int	lchmod(const char *, mode_t);
+int	lchflags(const char *, __uint32_t) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+int	lchmod(const char *, mode_t) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
 int	lstatx_np(const char *, struct stat *, filesec_t) __DARWIN_INODE64(lstatx_np);
 int	mkdirx_np(const char *, filesec_t);
 int	mkfifox_np(const char *, filesec_t);
 int	statx_np(const char *, struct stat *, filesec_t) __DARWIN_INODE64(statx_np);
-int	umaskx_np(filesec_t);
+int	umaskx_np(filesec_t) __OSX_AVAILABLE_BUT_DEPRECATED(__MAC_10_4,__MAC_10_6,__IPHONE_NA,__IPHONE_NA);
 
 #if !__DARWIN_ONLY_64_BIT_INO_T
 /* The following deprecated routines are simillar to stat and friends except provide struct stat64 instead of struct stat  */

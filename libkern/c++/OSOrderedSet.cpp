@@ -226,9 +226,9 @@ void OSOrderedSet::removeObject(const OSMetaClassBase *anObject)
 
     for (i = 0; i < count; i++) {
 
-        if( deleted)
+        if (deleted)
             array[i-1] = array[i];
-        else if( (array[i].obj == anObject)) {
+        else if (array[i].obj == anObject) {
             deleted = true;
 	    haveUpdated();	// Pity we can't flush the log
             array[i].obj->taggedRelease(OSTypeID(OSCollection));

@@ -38,6 +38,29 @@ __BEGIN_DECLS
 #include <mach/memory_object_types.h>
 #include <device/device_port.h>
 
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#if !defined(NO_KDEBUG)
+
+#define IOServiceTrace(csc, a, b, c, d) do {				\
+    if(kIOTraceIOService & gIOKitDebug) {				\
+	KERNEL_DEBUG_CONSTANT(IODBG_IOSERVICE(csc), a, b, c, d, 0);	\
+    }									\
+} while(0)
+
+#else /* NO_KDEBUG */
+
+#define IOServiceTrace(csc, a, b, c, d) do {	\
+  (void)a;					\
+  (void)b;					\
+  (void)c;					\
+  (void)d;					\
+} while (0)
+
+#endif /* NO_KDEBUG */
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 typedef kern_return_t (*IOIteratePageableMapsCallback)(vm_map_t map, void * ref);
 
 void IOLibInit(void);
@@ -148,5 +171,9 @@ extern "C" void IOKitResetTime( void );
 extern "C" void IOKitInitializeTime( void );
 
 extern "C" OSString * IOCopyLogNameForPID(int pid);
+
+#if defined(__i386__) || defined(__x86_64__)
+extern "C" void IOSetKeyStoreData(IOMemoryDescriptor * data);
+#endif
 
 #endif /* ! _IOKIT_KERNELINTERNAL_H */

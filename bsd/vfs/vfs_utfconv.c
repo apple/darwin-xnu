@@ -80,7 +80,7 @@
  * Similar to __CFUniCharIsNonBaseCharacter except that
  * unicode_combinable also includes Hangul Jamo characters.
  */
-inline int
+int
 unicode_combinable(u_int16_t character)
 {
 	const u_int8_t *bitmap = __CFUniCharCombiningBitmap;
@@ -105,7 +105,7 @@ unicode_combinable(u_int16_t character)
  *
  * Similar to __CFUniCharIsDecomposableCharacter.
  */
-inline int
+int
 unicode_decomposeable(u_int16_t character) {
 	const u_int8_t *bitmap = __CFUniCharDecomposableBitmap;
 	u_int8_t value;
@@ -1024,7 +1024,7 @@ priortysort(u_int16_t* characters, int count)
 	u_int32_t p1, p2;
 	u_int16_t *ch1, *ch2;
 	u_int16_t *end;
-	int changes = 1;
+	int changes = 0;
 
 	end = characters + count;
 	do {
@@ -1035,13 +1035,22 @@ priortysort(u_int16_t* characters, int count)
 		while (ch2 < end) {
 			p1 = p2;
 			p2 = get_combining_class(*ch2);
-			if (p1 > p2) {
+			if (p1 > p2 && p2 != 0) {
 				u_int32_t tmp;
 
 				tmp = *ch1;
 				*ch1 = *ch2;
 				*ch2 = tmp;
 				changes = 1;
+				
+				/*
+				 * Make sure that p2 contains the combining class for the
+				 * character now stored at *ch2.  This isn't required for
+				 * correctness, but it will be more efficient if a character
+				 * with a large combining class has to "bubble past" several
+				 * characters with lower combining classes.
+				 */
+				p2 = p1;
 			}
 			++ch1;
 			++ch2;

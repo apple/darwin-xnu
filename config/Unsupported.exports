@@ -6,6 +6,8 @@ _KUNCUserNotificationDisplayAlert
 _KUNCUserNotificationDisplayFromBundle
 _KUNCUserNotificationDisplayNotice
 _NDR_record
+_OSSpinLockTry
+_OSSpinLockUnlock
 _PE_kputc
 __Z22OSFlushObjectTrackListv
 __ZN15IOWatchDogTimer10gMetaClassE
@@ -49,6 +51,7 @@ __ZN9IODTNVRAM26calculatePartitionChecksumEPh
 __ZN9IODTNVRAM9metaClassE
 __ZN9IODTNVRAMC2EPK11OSMetaClass
 __ZN9IODTNVRAMD2Ev
+__ZN9IODTNVRAM10safeToSyncEv
 __ZNK15IOWatchDogTimer12getMetaClassEv
 __ZNK15IOWatchDogTimer9MetaClass5allocEv
 __ZNK9IODTNVRAM17getOFVariablePermEPK8OSSymbol
@@ -64,6 +67,7 @@ _aes_decrypt_key
 _aes_decrypt_key128
 _aes_decrypt_key256
 _aes_encrypt_cbc
+_aes_encrypt_key
 _aes_encrypt_key128
 _aes_encrypt_key256
 _appleClut8
@@ -93,7 +97,6 @@ _host_get_special_port
 _host_priv_self
 _hz
 _ipc_kernel_map
-_ipflow_fastforward
 _kalloc
 _kauth_cred_issuser
 _kauth_cred_label_update
@@ -115,7 +118,11 @@ _ldisc_deregister
 _ldisc_register
 _log
 _mach_gss_accept_sec_context
+_mach_gss_accept_sec_context_v2
+_mach_gss_hold_cred
 _mach_gss_init_sec_context
+_mach_gss_init_sec_context_v2
+_mach_gss_unhold_cred
 _mach_make_memory_entry_64
 _mach_memory_entry_page_op
 _mach_memory_entry_range_op
@@ -159,7 +166,6 @@ _thread_notrigger
 _thread_tid
 _tsleep
 _vfs_context_current
-_vfs_setlocklocal
 _vfs_update_vfsstat
 _vm_allocate
 _vm_deallocate

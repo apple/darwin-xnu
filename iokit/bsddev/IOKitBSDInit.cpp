@@ -46,9 +46,10 @@ extern "C" {
 #define ROOTDEVICETIMEOUT       60
 #endif
 
-extern dev_t mdevadd(int devid, ppnum_t base, unsigned int size, int phys);
+extern dev_t mdevadd(int devid, uint64_t base, unsigned int size, int phys);
 extern dev_t mdevlookup(int devid);
 extern void mdevremoveall(void);
+extern void di_root_ramfile(IORegistryEntry * entry);
 
 kern_return_t
 IOKitBSDInit( void )
@@ -542,7 +543,7 @@ kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
     UInt32		flags = 0;
     int			mnr, mjr;
     bool		findHFSChild = false;
-    char *              mediaProperty = 0;
+    const char *        mediaProperty = 0;
     char *		rdBootVar;
     enum {		kMaxPathBuf = 512, kMaxBootVar = 128 };
     char *		str;
@@ -571,6 +572,7 @@ kern_return_t IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 
     do {
 	if( (regEntry = IORegistryEntry::fromPath( "/chosen", gIODTPlane ))) {
+	    di_root_ramfile(regEntry);
             data = OSDynamicCast(OSData, regEntry->getProperty( "root-matching" ));
             if (data) {
                matching = OSDynamicCast(OSDictionary, OSUnserializeXML((char *)data->getBytesNoCopy()));
@@ -917,7 +919,7 @@ kern_return_t IOBSDGetPlatformUUID( uuid_t uuid, mach_timespec_t timeout )
     IOService * resources;
     OSString *  string;
 
-    resources = IOService::waitForService( IOService::resourceMatching( kIOPlatformUUIDKey ), &timeout );
+    resources = IOService::waitForService( IOService::resourceMatching( kIOPlatformUUIDKey ), ( timeout.tv_sec || timeout.tv_nsec ) ? &timeout : 0 );
     if ( resources == 0 ) return KERN_OPERATION_TIMED_OUT;
 
     string = ( OSString * ) IOService::getPlatform( )->getProvider( )->getProperty( kIOPlatformUUIDKey );

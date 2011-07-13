@@ -34,6 +34,18 @@
 /*
  * XXX stubs until we fix <rdar://problem/4607887>
  */
+int mac_check_iokit_open(void)
+{
+	return 0;
+}
+int mac_check_iokit_set_properties(void)
+{
+	return 0;
+}
+int mac_check_iokit_hid_control(void)
+{
+	return 0;
+}
 int mac_check_ipc_method(void)
 {
 	return 0;
@@ -262,6 +274,10 @@ int mac_check_system_acct(void)
 {
 	return 0;
 }
+int mac_check_system_chud(void)
+{
+	return 0;
+}
 int mac_check_system_nfsd(void)
 {
 	return 0;
@@ -371,6 +387,10 @@ int mac_check_vnode_rename_to(void)
 	return 0;
 }
 int mac_check_vnode_revoke(void)
+{
+	return 0;
+}
+int mac_check_vnode_searchfs(void)
 {
 	return 0;
 }

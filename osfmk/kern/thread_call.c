@@ -46,13 +46,12 @@
 
 #include <sys/kdebug.h>
 
-decl_simple_lock_data(static,thread_call_lock)
 
 static zone_t		thread_call_zone;
 
 struct thread_call_group {
 	queue_head_t		pending_queue;
-	uint32_t			pending_count;
+	uint32_t		pending_count;
 
 	queue_head_t		delayed_queue;
 
@@ -60,7 +59,7 @@ struct thread_call_group {
 
 	struct wait_queue	idle_wqueue;
 	struct wait_queue	daemon_wqueue;
-	uint32_t			idle_count, active_count;
+	uint32_t		idle_count, active_count;
 };
 
 typedef struct thread_call_group	*thread_call_group_t;
@@ -113,12 +112,31 @@ static void		thread_call_daemon(
 				thread_call_thread(
 					thread_call_group_t		group);
 
-static void		thread_call_delayed_timer(
+extern void		thread_call_delayed_timer(
 					timer_call_param_t		p0,
 					timer_call_param_t		p1);
 
 #define qe(x)		((queue_entry_t)(x))
 #define TC(x)		((thread_call_t)(x))
+
+
+lck_grp_t               thread_call_queues_lck_grp;
+lck_grp_t               thread_call_lck_grp;
+lck_attr_t              thread_call_lck_attr;
+lck_grp_attr_t          thread_call_lck_grp_attr;
+
+#if defined(__i386__) || defined(__x86_64__)
+lck_mtx_t		thread_call_lock_data;
+#else
+lck_spin_t		thread_call_lock_data;
+#endif
+
+#define thread_call_lock_spin()			\
+	lck_mtx_lock_spin_always(&thread_call_lock_data)
+
+#define thread_call_unlock()			\
+	lck_mtx_unlock_always(&thread_call_lock_data)
+
 
 /*
  *	thread_call_initialize:
@@ -129,7 +147,7 @@ static void		thread_call_delayed_timer(
 void
 thread_call_initialize(void)
 {
-    thread_call_t			call;
+	thread_call_t			call;
 	thread_call_group_t		group = &thread_call_group0;
 	kern_return_t			result;
 	thread_t				thread;
@@ -138,33 +156,42 @@ thread_call_initialize(void)
 
 	i = sizeof (thread_call_data_t);
 	thread_call_zone = zinit(i, 4096 * i, 16 * i, "thread_call");
+	zone_change(thread_call_zone, Z_CALLERACCT, FALSE);
 	zone_change(thread_call_zone, Z_NOENCRYPT, TRUE);
 
-    simple_lock_init(&thread_call_lock, 0);
+	lck_attr_setdefault(&thread_call_lck_attr);
+	lck_grp_attr_setdefault(&thread_call_lck_grp_attr);
+	lck_grp_init(&thread_call_queues_lck_grp, "thread_call_queues", &thread_call_lck_grp_attr);
+	lck_grp_init(&thread_call_lck_grp, "thread_call", &thread_call_lck_grp_attr);
+
+#if defined(__i386__) || defined(__x86_64__)
+        lck_mtx_init(&thread_call_lock_data, &thread_call_lck_grp, &thread_call_lck_attr);
+#else
+        lck_spin_init(&thread_call_lock_data, &thread_call_lck_grp, &thread_call_lck_attr);
+#endif
+	queue_init(&group->pending_queue);
+	queue_init(&group->delayed_queue);
 
 	s = splsched();
-	simple_lock(&thread_call_lock);
-
-    queue_init(&group->pending_queue);
-    queue_init(&group->delayed_queue);
+	thread_call_lock_spin();
 
 	timer_call_setup(&group->delayed_timer, thread_call_delayed_timer, group);
 
 	wait_queue_init(&group->idle_wqueue, SYNC_POLICY_FIFO);
 	wait_queue_init(&group->daemon_wqueue, SYNC_POLICY_FIFO);
 
-    queue_init(&thread_call_internal_queue);
-    for (
+	queue_init(&thread_call_internal_queue);
+	for (
 	    	call = internal_call_storage;
 			call < &internal_call_storage[internal_call_count];
 			call++) {
 
 		enqueue_tail(&thread_call_internal_queue, qe(call));
-    }
+	}
 
 	thread_call_daemon_awake = TRUE;
 
-	simple_unlock(&thread_call_lock);
+	thread_call_unlock();
 	splx(s);
 
 	result = kernel_thread_start_priority((thread_continue_t)thread_call_daemon, group, BASEPRI_PREEMPT + 1, &thread);
@@ -236,7 +263,7 @@ _pending_call_enqueue(
     thread_call_t		call,
 	thread_call_group_t	group)
 {
-	queue_t		old_queue;
+	queue_head_t		*old_queue;
 
 	old_queue = call_entry_enqueue_tail(call, &group->pending_queue);
 
@@ -261,9 +288,9 @@ static __inline__ boolean_t
 _delayed_call_enqueue(
     thread_call_t		call,
 	thread_call_group_t	group,
-	uint64_t			deadline)
+	uint64_t		deadline)
 {
-	queue_t			old_queue;
+	queue_head_t		*old_queue;
 
 	old_queue = call_entry_enqueue_deadline(call, &group->delayed_queue, deadline);
 
@@ -287,7 +314,7 @@ _call_dequeue(
 	thread_call_t		call,
 	thread_call_group_t	group)
 {
-	queue_t			old_queue;
+	queue_head_t		*old_queue;
 
 	old_queue = call_entry_dequeue(call);
 
@@ -310,7 +337,7 @@ _set_delayed_call_timer(
     thread_call_t		call,
 	thread_call_group_t	group)
 {
-    timer_call_enter(&group->delayed_timer, call->deadline);
+    timer_call_enter(&group->delayed_timer, call->deadline, 0);
 }
 
 /*
@@ -330,7 +357,7 @@ _remove_from_pending_queue(
     thread_call_param_t		param0,
     boolean_t				remove_all)
 {
-	boolean_t				call_removed = FALSE;
+	boolean_t			call_removed = FALSE;
 	thread_call_t			call;
 	thread_call_group_t		group = &thread_call_group0;
     
@@ -424,7 +451,7 @@ thread_call_func(
     spl_t					s;
     
     s = splsched();
-    simple_lock(&thread_call_lock);
+    thread_call_lock_spin();
     
     call = TC(queue_first(&group->pending_queue));
     
@@ -449,7 +476,7 @@ thread_call_func(
 			thread_call_wake(group);
     }
 
-	simple_unlock(&thread_call_lock);
+    thread_call_unlock();
     splx(s);
 }
 
@@ -472,7 +499,7 @@ thread_call_func_delayed(
     spl_t					s;
     
     s = splsched();
-    simple_lock(&thread_call_lock);
+    thread_call_lock_spin();
     
     call = _internal_call_allocate();
     call->func			= func;
@@ -484,7 +511,7 @@ thread_call_func_delayed(
     if (queue_first(&group->delayed_queue) == qe(call))
     	_set_delayed_call_timer(call, group);
     
-    simple_unlock(&thread_call_lock);
+    thread_call_unlock();
     splx(s);
 }
 
@@ -510,7 +537,7 @@ thread_call_func_cancel(
     spl_t				s;
     
     s = splsched();
-    simple_lock(&thread_call_lock);
+    thread_call_lock_spin();
 
     if (cancel_all)
 		result = _remove_from_pending_queue(func, param, cancel_all) |
@@ -519,7 +546,7 @@ thread_call_func_cancel(
 		result = _remove_from_pending_queue(func, param, cancel_all) ||
 						_remove_from_delayed_queue(func, param, cancel_all);
     
-    simple_unlock(&thread_call_lock);
+    thread_call_unlock();
     splx(s);
 
 	return (result);
@@ -554,16 +581,16 @@ thread_call_free(
     spl_t		s;
     
     s = splsched();
-    simple_lock(&thread_call_lock);
+    thread_call_lock_spin();
     
     if (call->queue != NULL) {
-    	simple_unlock(&thread_call_lock);
-		splx(s);
+	    thread_call_unlock();
+	    splx(s);
 
-		return (FALSE);
+	    return (FALSE);
     }
     
-    simple_unlock(&thread_call_lock);
+    thread_call_unlock();
     splx(s);
     
 	zfree(thread_call_zone, call);
@@ -585,10 +612,10 @@ thread_call_enter(
 {
 	boolean_t				result = TRUE;
 	thread_call_group_t		group = &thread_call_group0;
-    spl_t					s;
+	spl_t					s;
     
-    s = splsched();
-    simple_lock(&thread_call_lock);
+	s = splsched();
+	thread_call_lock_spin();
     
     if (call->queue != &group->pending_queue) {
     	result = _pending_call_enqueue(call, group);
@@ -599,8 +626,8 @@ thread_call_enter(
 
 	call->param1 = 0;
 
-	simple_unlock(&thread_call_lock);
-    splx(s);
+	thread_call_unlock();
+	splx(s);
 
 	return (result);
 }
@@ -612,10 +639,10 @@ thread_call_enter1(
 {
 	boolean_t				result = TRUE;
 	thread_call_group_t		group = &thread_call_group0;
-    spl_t					s;
+	spl_t					s;
     
-    s = splsched();
-    simple_lock(&thread_call_lock);
+	s = splsched();
+	thread_call_lock_spin();
     
     if (call->queue != &group->pending_queue) {
     	result = _pending_call_enqueue(call, group);
@@ -626,8 +653,8 @@ thread_call_enter1(
 
 	call->param1 = param1;
 
-	simple_unlock(&thread_call_lock);
-    splx(s);
+	thread_call_unlock();
+	splx(s);
 
 	return (result);
 }
@@ -648,10 +675,10 @@ thread_call_enter_delayed(
 {
 	boolean_t				result = TRUE;
 	thread_call_group_t		group = &thread_call_group0;
-    spl_t					s;
+	spl_t					s;
 
-    s = splsched();
-    simple_lock(&thread_call_lock);
+	s = splsched();
+	thread_call_lock_spin();
 
 	result = _delayed_call_enqueue(call, group, deadline);
 
@@ -660,8 +687,8 @@ thread_call_enter_delayed(
 
 	call->param1 = 0;
 
-    simple_unlock(&thread_call_lock);
-    splx(s);
+	thread_call_unlock();
+	splx(s);
 
 	return (result);
 }
@@ -674,10 +701,10 @@ thread_call_enter1_delayed(
 {
 	boolean_t				result = TRUE;
 	thread_call_group_t		group = &thread_call_group0;
-    spl_t					s;
+	spl_t					s;
 
-    s = splsched();
-    simple_lock(&thread_call_lock);
+	s = splsched();
+	thread_call_lock_spin();
 
 	result = _delayed_call_enqueue(call, group, deadline);
 
@@ -686,8 +713,8 @@ thread_call_enter1_delayed(
 
 	call->param1 = param1;
 
-    simple_unlock(&thread_call_lock);
-    splx(s);
+	thread_call_unlock();
+	splx(s);
 
 	return (result);
 }
@@ -706,15 +733,15 @@ thread_call_cancel(
 {
 	boolean_t				result;
 	thread_call_group_t		group = &thread_call_group0;
-    spl_t					s;
+	spl_t					s;
     
-    s = splsched();
-    simple_lock(&thread_call_lock);
+	s = splsched();
+	thread_call_lock_spin();
 
 	result = _call_dequeue(call, group);
 	
-    simple_unlock(&thread_call_lock);
-    splx(s);
+	thread_call_unlock();
+	splx(s);
 
 	return (result);
 }
@@ -739,7 +766,7 @@ thread_call_is_delayed(
 	spl_t					s;
 
 	s = splsched();
-	simple_lock(&thread_call_lock);
+	thread_call_lock_spin();
 
 	if (call->queue == &group->delayed_queue) {
 		if (deadline != NULL)
@@ -747,7 +774,7 @@ thread_call_is_delayed(
 		result = TRUE;
 	}
 
-	simple_unlock(&thread_call_lock);
+	thread_call_unlock();
 	splx(s);
 
 	return (result);
@@ -769,13 +796,13 @@ static __inline__ void
 thread_call_wake(
 	thread_call_group_t		group)
 {
-	if (group->idle_count > 0 && wait_queue_wakeup_one(&group->idle_wqueue, NULL, THREAD_AWAKENED) == KERN_SUCCESS) {
+	if (group->idle_count > 0 && wait_queue_wakeup_one(&group->idle_wqueue, NO_EVENT, THREAD_AWAKENED, -1) == KERN_SUCCESS) {
 		group->idle_count--; group->active_count++;
 	}
 	else
 	if (!thread_call_daemon_awake) {
 		thread_call_daemon_awake = TRUE;
-		wait_queue_wakeup_one(&group->daemon_wqueue, NULL, THREAD_AWAKENED);
+		wait_queue_wakeup_one(&group->daemon_wqueue, NO_EVENT, THREAD_AWAKENED, -1);
 	}
 }
 
@@ -791,7 +818,7 @@ __unused	thread_t		thread)
 {
 	thread_call_group_t		group = &thread_call_group0;
 
-	simple_lock(&thread_call_lock);
+	thread_call_lock_spin();
 
 	switch (type) {
 
@@ -805,7 +832,7 @@ __unused	thread_t		thread)
 		break;
 	}
 
-	simple_unlock(&thread_call_lock);
+	thread_call_unlock();
 }
 
 /*
@@ -817,8 +844,8 @@ thread_call_thread(
 {
 	thread_t		self = current_thread();
 
-    (void) splsched();
-    simple_lock(&thread_call_lock);
+	(void) splsched();
+	thread_call_lock_spin();
 
 	thread_sched_call(self, sched_call_thread);
 
@@ -838,7 +865,7 @@ thread_call_thread(
 
 		_internal_call_release(call);
 
-		simple_unlock(&thread_call_lock);
+		thread_call_unlock();
 		(void) spllo();
 
 		KERNEL_DEBUG_CONSTANT(
@@ -847,10 +874,16 @@ thread_call_thread(
 
 		(*func)(param0, param1);
 
+		if (get_preemption_level() != 0) {
+			int pl = get_preemption_level();
+			panic("thread_call_thread: preemption_level %d, last callout %p(%p, %p)",
+				  pl, func, param0, param1);
+		}
+		
 		(void)thread_funnel_set(self->funnel_lock, FALSE);		/* XXX */
 
 		(void) splsched();
-		simple_lock(&thread_call_lock);
+		thread_call_lock_spin();
     }
 
 	thread_sched_call(self, NULL);
@@ -859,16 +892,16 @@ thread_call_thread(
     if (group->idle_count < thread_call_thread_min) {
 		group->idle_count++;
 
-		wait_queue_assert_wait(&group->idle_wqueue, NULL, THREAD_UNINT, 0);
+		wait_queue_assert_wait(&group->idle_wqueue, NO_EVENT, THREAD_UNINT, 0);
 	
-		simple_unlock(&thread_call_lock);
+		thread_call_unlock();
 		(void) spllo();
 
 		thread_block_parameter((thread_continue_t)thread_call_thread, group);
 		/* NOTREACHED */
     }
 
-    simple_unlock(&thread_call_lock);
+    thread_call_unlock();
     (void) spllo();
     
     thread_terminate(self);
@@ -886,12 +919,12 @@ thread_call_daemon_continue(
 	thread_t		thread;
 
     (void) splsched();
-    simple_lock(&thread_call_lock);
+    thread_call_lock_spin();
         
 	while (group->active_count == 0	&& group->pending_count > 0) {
 		group->active_count++;
 
-		simple_unlock(&thread_call_lock);
+		thread_call_unlock();
 		(void) spllo();
 	
 		result = kernel_thread_start_priority((thread_continue_t)thread_call_thread, group, BASEPRI_PREEMPT, &thread);
@@ -901,13 +934,13 @@ thread_call_daemon_continue(
 		thread_deallocate(thread);
 
 		(void) splsched();
-		simple_lock(&thread_call_lock);
+		thread_call_lock_spin();
     }
 
     thread_call_daemon_awake = FALSE;
-    wait_queue_assert_wait(&group->daemon_wqueue, NULL, THREAD_UNINT, 0);
+    wait_queue_assert_wait(&group->daemon_wqueue, NO_EVENT, THREAD_UNINT, 0);
     
-    simple_unlock(&thread_call_lock);
+    thread_call_unlock();
 	(void) spllo();
     
 	thread_block_parameter((thread_continue_t)thread_call_daemon_continue, group);
@@ -927,7 +960,7 @@ thread_call_daemon(
     /* NOTREACHED */
 }
 
-static void
+void
 thread_call_delayed_timer(
 	timer_call_param_t				p0,
 	__unused timer_call_param_t		p1
@@ -938,7 +971,7 @@ thread_call_delayed_timer(
 	boolean_t				new_pending = FALSE;
 	uint64_t				timestamp;
 
-    simple_lock(&thread_call_lock);
+	thread_call_lock_spin();
 
 	timestamp = mach_absolute_time();
     
@@ -961,5 +994,5 @@ thread_call_delayed_timer(
     if (new_pending && group->active_count == 0)
 		thread_call_wake(group);
 
-    simple_unlock(&thread_call_lock);
+    thread_call_unlock();
 }

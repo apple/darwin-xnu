@@ -249,6 +249,11 @@ ipc_space_clean(
 	while (space->is_growing)
 		is_write_sleep(space);
 
+	if (!space->is_active) {
+		is_write_unlock(space);
+		return;
+	}
+
 	/*
 	 *	Now we can futz with it	since we have the write lock.
 	 */

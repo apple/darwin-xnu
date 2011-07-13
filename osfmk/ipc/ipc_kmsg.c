@@ -808,51 +808,59 @@ void
 ipc_kmsg_destroy(
 	ipc_kmsg_t	kmsg)
 {
-	ipc_kmsg_queue_t queue;
-	boolean_t empty;
-
 	/*
-	 *	ipc_kmsg_clean can cause more messages to be destroyed.
-	 *	Curtail recursion by queueing messages.  If a message
-	 *	is already queued, then this is a recursive call.
+	 *	Destroying a message can cause more messages to be destroyed.
+	 *	Curtail recursion by putting messages on the deferred
+	 *	destruction queue.  If this was the first message on the
+	 *	queue, this instance must process the full queue.
 	 */
-
-	queue = &(current_thread()->ith_messages);
-	empty = ipc_kmsg_queue_empty(queue);
-	ipc_kmsg_enqueue(queue, kmsg);
-
-	if (empty) {
-		/* must leave kmsg in queue while cleaning it */
-
-		while ((kmsg = ipc_kmsg_queue_first(queue)) != IKM_NULL) {
-			ipc_kmsg_clean(kmsg);
-			ipc_kmsg_rmqueue(queue, kmsg);
-			ipc_kmsg_free(kmsg);
-		}
-	}
+	if (ipc_kmsg_delayed_destroy(kmsg))
+		ipc_kmsg_reap_delayed();
 }
 
 /*
- *	Routine:	ipc_kmsg_destroy_dest
+ *	Routine:	ipc_kmsg_delayed_destroy
  *	Purpose:
- *		Destroys a kernel message.  Releases all rights,
- *		references, and memory held by the message (including
- *		the destination port reference.
- *		Frees the message.
+ *		Enqueues a kernel message for deferred destruction.
+ *	Returns:
+ *		Boolean indicator that the caller is responsible to reap
+ *		deferred messages.
+ */
+
+boolean_t ipc_kmsg_delayed_destroy(
+	ipc_kmsg_t kmsg)
+{
+	ipc_kmsg_queue_t queue = &(current_thread()->ith_messages);
+	boolean_t first = ipc_kmsg_queue_empty(queue);
+
+	ipc_kmsg_enqueue(queue, kmsg);
+	return first;
+}
+
+/*
+ *	Routine:	ipc_kmsg_destroy_queue
+ *	Purpose:
+ *		Destroys messages from the per-thread
+ *		deferred reaping queue.
  *	Conditions:
  *		No locks held.
  */
-void
-ipc_kmsg_destroy_dest(
-	ipc_kmsg_t kmsg)
-{
-    ipc_port_t port;
-	
-    port = kmsg->ikm_header->msgh_remote_port;
 
-    ipc_port_release(port);
-    kmsg->ikm_header->msgh_remote_port = MACH_PORT_NULL;
-    ipc_kmsg_destroy(kmsg);
+void
+ipc_kmsg_reap_delayed(void)
+{
+	ipc_kmsg_queue_t queue = &(current_thread()->ith_messages);
+	ipc_kmsg_t kmsg;
+
+	/*
+	 * must leave kmsg in queue while cleaning it to assure
+	 * no nested calls recurse into here.
+	 */
+	while ((kmsg = ipc_kmsg_queue_first(queue)) != IKM_NULL) {
+		ipc_kmsg_clean(kmsg);
+		ipc_kmsg_rmqueue(queue, kmsg);
+		ipc_kmsg_free(kmsg);
+	}
 }
 
 /*
@@ -864,7 +872,7 @@ ipc_kmsg_destroy_dest(
  *	Conditions:
  *		No locks held.
  */
-
+static unsigned int _ipc_kmsg_clean_invalid_desc = 0;
 void
 ipc_kmsg_clean_body(
 	__unused ipc_kmsg_t	kmsg,
@@ -943,7 +951,7 @@ ipc_kmsg_clean_body(
 		break;
 	    }
 	    default : {
-		printf("cleanup: don't understand this type of descriptor\n");
+		    _ipc_kmsg_clean_invalid_desc++; /* don't understand this type of descriptor */
 	    }
 	}
     }
@@ -975,7 +983,7 @@ ipc_kmsg_clean_partial(
 
 	object = (ipc_object_t) kmsg->ikm_header->msgh_remote_port;
 	assert(IO_VALID(object));
-	ipc_object_destroy(object, MACH_MSGH_BITS_REMOTE(mbits));
+	ipc_object_destroy_dest(object, MACH_MSGH_BITS_REMOTE(mbits));
 
 	object = (ipc_object_t) kmsg->ikm_header->msgh_local_port;
 	if (IO_VALID(object))
@@ -1007,7 +1015,7 @@ ipc_kmsg_clean(
 	mbits = kmsg->ikm_header->msgh_bits;
 	object = (ipc_object_t) kmsg->ikm_header->msgh_remote_port;
 	if (IO_VALID(object))
-		ipc_object_destroy(object, MACH_MSGH_BITS_REMOTE(mbits));
+		ipc_object_destroy_dest(object, MACH_MSGH_BITS_REMOTE(mbits));
 
 	object = (ipc_object_t) kmsg->ikm_header->msgh_local_port;
 	if (IO_VALID(object))
@@ -1244,7 +1252,6 @@ ipc_kmsg_get_from_kernel(
 	assert(size >= sizeof(mach_msg_header_t));
 //	assert((size & 3) == 0);
 
-	assert(IP_VALID((ipc_port_t) msg->msgh_remote_port));
 	dest_port = (ipc_port_t)msg->msgh_remote_port;
 
 	msg_and_trailer_size = size + MAX_TRAILER_SIZE;
@@ -1254,7 +1261,7 @@ ipc_kmsg_get_from_kernel(
 	 * clients.  These are set up for those kernel clients
 	 * which cannot afford to wait.
 	 */
-	if (IP_PREALLOC(dest_port)) {
+	if (IP_VALID(dest_port) && IP_PREALLOC(dest_port)) {
 		mach_msg_size_t max_desc = 0;
 
 		ip_lock(dest_port);
@@ -1332,6 +1339,7 @@ ipc_kmsg_get_from_kernel(
  *		MACH_MSG_SUCCESS	The message was accepted.
  *		MACH_SEND_TIMED_OUT	Caller still has message.
  *		MACH_SEND_INTERRUPTED	Caller still has message.
+ *		MACH_SEND_INVALID_DEST	Caller still has message.
  */
 mach_msg_return_t
 ipc_kmsg_send(
@@ -1345,9 +1353,6 @@ ipc_kmsg_send(
 
 	port = (ipc_port_t) kmsg->ikm_header->msgh_remote_port;
 	assert(IP_VALID(port));
-
-	if ((option & ~(MACH_SEND_TIMEOUT|MACH_SEND_ALWAYS)) != 0)
-		printf("ipc_kmsg_send: bad option 0x%x\n", option);
 
 	ip_lock(port);
 
@@ -1543,16 +1548,6 @@ ipc_kmsg_put_to_kernel(
  *		and the bits field is updated.  The destination port
  *		will be a valid port pointer.
  *
- *		The notify argument implements the MACH_SEND_CANCEL option.
- *		If it is not MACH_PORT_NULL, it should name a receive right.
- *		If the processing of the destination port would generate
- *		a port-deleted notification (because the right for the
- *		destination port is destroyed and it had a request for
- *		a dead-name notification registered), and the port-deleted
- *		notification would be sent to the named receive right,
- *		then it isn't sent and the send-once right for the notify
- *		port is quietly destroyed.
- *
  *	Conditions:
  *		Nothing locked.
  *	Returns:
@@ -1560,9 +1555,6 @@ ipc_kmsg_put_to_kernel(
  *		MACH_SEND_INVALID_HEADER
  *			Illegal value in the message header bits.
  *		MACH_SEND_INVALID_DEST	The space is dead.
- *		MACH_SEND_INVALID_NOTIFY
- *			Notify is non-null and doesn't name a receive right.
- *			(Either KERN_INVALID_NAME or KERN_INVALID_RIGHT.)
  *		MACH_SEND_INVALID_DEST	Can't copyin destination port.
  *			(Either KERN_INVALID_NAME or KERN_INVALID_RIGHT.)
  *		MACH_SEND_INVALID_REPLY	Can't copyin reply port.
@@ -1573,7 +1565,7 @@ mach_msg_return_t
 ipc_kmsg_copyin_header(
 	mach_msg_header_t	*msg,
 	ipc_space_t		space,
-	mach_port_name_t	notify)
+	boolean_t		notify)
 {
 	mach_msg_bits_t mbits = msg->msgh_bits & MACH_MSGH_BITS_USER;
 	mach_port_name_t dest_name = CAST_MACH_PORT_TO_NAME(msg->msgh_remote_port);
@@ -1584,8 +1576,7 @@ ipc_kmsg_copyin_header(
 	mach_msg_type_name_t reply_type = MACH_MSGH_BITS_LOCAL(mbits);
 	ipc_object_t dest_port, reply_port;
 	ipc_port_t dest_soright, reply_soright;
-	ipc_port_t notify_port;
-	ipc_entry_t entry;
+	ipc_entry_t dest_entry, reply_entry;
 
 	if ((mbits != msg->msgh_bits) ||
 	    (!MACH_MSG_TYPE_PORT_ANY_SEND(dest_type)) ||
@@ -1609,10 +1600,10 @@ ipc_kmsg_copyin_header(
 	 * because copying the header involves copying the port rights too
 	 * and we need to do the send check before anything is actually copied.
 	 */
-	entry = ipc_entry_lookup(space, dest_name);
-	if (entry != IE_NULL) {
+	dest_entry = ipc_entry_lookup(space, dest_name);
+	if (dest_entry != IE_NULL) {
 		int error = 0;
-		ipc_port_t port = (ipc_port_t) entry->ie_object;
+		ipc_port_t port = (ipc_port_t) dest_entry->ie_object;
 		if (port == IP_NULL)
 			goto invalid_dest;
 		ip_lock(port);
@@ -1629,20 +1620,6 @@ ipc_kmsg_copyin_header(
 	}
 #endif
 
-	if (notify != MACH_PORT_NULL) {
-		if ((entry = ipc_entry_lookup(space, notify)) == IE_NULL) {
-			is_write_unlock(space);
-			return MACH_SEND_INVALID_NOTIFY;
-		}
-		if((entry->ie_bits & MACH_PORT_TYPE_RECEIVE) == 0) {
-			is_write_unlock(space);
-			return MACH_SEND_INVALID_NOTIFY;
-		}
-
-		notify_port = (ipc_port_t) entry->ie_object;
-	} else
-		notify_port = IP_NULL;
-
 	if (dest_name == reply_name) {
 		mach_port_name_t name = dest_name;
 
@@ -1658,13 +1635,14 @@ ipc_kmsg_copyin_header(
 		 *	copy-send and make-send.
 		 */
 
-		entry = ipc_entry_lookup(space, name);
-		if (entry == IE_NULL)
+		dest_entry = ipc_entry_lookup(space, name);
+		if (dest_entry == IE_NULL)
 			goto invalid_dest;
 
+		reply_entry = dest_entry;
 		assert(reply_type != 0); /* because name not null */
 
-		if (!ipc_right_copyin_check(space, name, entry, reply_type))
+		if (!ipc_right_copyin_check(space, name, reply_entry, reply_type))
 			goto invalid_reply;
 
 		if ((dest_type == MACH_MSG_TYPE_MOVE_SEND_ONCE) ||
@@ -1685,7 +1663,7 @@ ipc_kmsg_copyin_header(
 			   (dest_type == MACH_MSG_TYPE_MAKE_SEND_ONCE) ||
 			   (reply_type == MACH_MSG_TYPE_MAKE_SEND) ||
 			   (reply_type == MACH_MSG_TYPE_MAKE_SEND_ONCE)) {
-			kr = ipc_right_copyin(space, name, entry,
+			kr = ipc_right_copyin(space, name, dest_entry,
 					      dest_type, FALSE,
 					      &dest_port, &dest_soright);
 			if (kr != KERN_SUCCESS)
@@ -1702,16 +1680,15 @@ ipc_kmsg_copyin_header(
 			 */
 
 			assert(IO_VALID(dest_port));
-			assert(entry->ie_bits & MACH_PORT_TYPE_RECEIVE);
 			assert(dest_soright == IP_NULL);
 
-			kr = ipc_right_copyin(space, name, entry,
+			kr = ipc_right_copyin(space, name, reply_entry,
 					      reply_type, TRUE,
 					      &reply_port, &reply_soright);
 
 			assert(kr == KERN_SUCCESS);
 			assert(reply_port == dest_port);
-			assert(entry->ie_bits & MACH_PORT_TYPE_RECEIVE);
+			assert(reply_entry->ie_bits & MACH_PORT_TYPE_RECEIVE);
 			assert(reply_soright == IP_NULL);
 		} else if ((dest_type == MACH_MSG_TYPE_COPY_SEND) &&
 			   (reply_type == MACH_MSG_TYPE_COPY_SEND)) {
@@ -1720,13 +1697,13 @@ ipc_kmsg_copyin_header(
 			 *	and dup the send right we get out.
 			 */
 
-			kr = ipc_right_copyin(space, name, entry,
+			kr = ipc_right_copyin(space, name, dest_entry,
 					      dest_type, FALSE,
 					      &dest_port, &dest_soright);
 			if (kr != KERN_SUCCESS)
 				goto invalid_dest;
 
-			assert(entry->ie_bits & MACH_PORT_TYPE_SEND);
+			assert(dest_entry->ie_bits & MACH_PORT_TYPE_SEND);
 			assert(dest_soright == IP_NULL);
 
 			/*
@@ -1746,14 +1723,16 @@ ipc_kmsg_copyin_header(
 			 *	to get two send rights for the price of one.
 			 */
 
-			kr = ipc_right_copyin_two(space, name, entry,
+			kr = ipc_right_copyin_two(space, name, dest_entry,
 						  &dest_port, &dest_soright);
 			if (kr != KERN_SUCCESS)
 				goto invalid_dest;
 
 			/* the entry might need to be deallocated */
-			if (IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE)
-				ipc_entry_dealloc(space, name, entry);
+			if (IE_BITS_TYPE(dest_entry->ie_bits) == MACH_PORT_TYPE_NONE) {
+				ipc_entry_dealloc(space, name, dest_entry);
+				dest_entry = IE_NULL;
+			}
 
 			reply_port = dest_port;
 			reply_soright = IP_NULL;
@@ -1770,7 +1749,7 @@ ipc_kmsg_copyin_header(
 			 *	and dup the send right we get out.
 			 */
 
-			kr = ipc_right_copyin(space, name, entry,
+			kr = ipc_right_copyin(space, name, dest_entry,
 					      MACH_MSG_TYPE_MOVE_SEND, FALSE,
 					      &dest_port, &soright);
 			if (kr != KERN_SUCCESS)
@@ -1778,8 +1757,10 @@ ipc_kmsg_copyin_header(
 
 			/* the entry might need to be deallocated */
 
-			if (IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE)
-				ipc_entry_dealloc(space, name, entry);
+			if (IE_BITS_TYPE(dest_entry->ie_bits) == MACH_PORT_TYPE_NONE) {
+				ipc_entry_dealloc(space, name, dest_entry);
+				dest_entry = IE_NULL;
+			}
 
 			/*
 			 *	It's OK if the port we got is dead now,
@@ -1804,26 +1785,25 @@ ipc_kmsg_copyin_header(
 		 *	to make atomic.  Just copyin the destination.
 		 */
 
-		entry = ipc_entry_lookup(space, dest_name);
-		if (entry == IE_NULL)
+		dest_entry = ipc_entry_lookup(space, dest_name);
+		if (dest_entry == IE_NULL)
 			goto invalid_dest;
 
-		kr = ipc_right_copyin(space, dest_name, entry,
+		kr = ipc_right_copyin(space, dest_name, dest_entry,
 				      dest_type, FALSE,
 				      &dest_port, &dest_soright);
 		if (kr != KERN_SUCCESS)
 			goto invalid_dest;
 
 		/* the entry might need to be deallocated */
-
-		if (IE_BITS_TYPE(entry->ie_bits) == MACH_PORT_TYPE_NONE)
-			ipc_entry_dealloc(space, dest_name, entry);
+		if (IE_BITS_TYPE(dest_entry->ie_bits) == MACH_PORT_TYPE_NONE) {
+			ipc_entry_dealloc(space, dest_name, dest_entry);
+			dest_entry = IE_NULL;
+		}
 
 		reply_port = (ipc_object_t)CAST_MACH_NAME_TO_PORT(reply_name);
 		reply_soright = IP_NULL;
 	} else {
-		ipc_entry_t dest_entry, reply_entry;
-
 		/*
 		 *	This is the tough case to make atomic.
 		 *	The difficult problem is serializing with port death.
@@ -1856,7 +1836,7 @@ ipc_kmsg_copyin_header(
 		 * JMM - The code to handle this was too expensive and, anyway,
 		 * we intend to separate the dest lookup from the reply copyin
 		 * by a wide margin, so the user will have to learn to deal!
-		 * I will be making the change soon!
+		 * I will be making the change soon in rdar://problem/6275821.
 		 */
 
 		dest_entry = ipc_entry_lookup(space, dest_name);
@@ -1890,29 +1870,36 @@ ipc_kmsg_copyin_header(
 
 		/* the entries might need to be deallocated */
 
-		if (IE_BITS_TYPE(reply_entry->ie_bits) == MACH_PORT_TYPE_NONE)
+		if (IE_BITS_TYPE(reply_entry->ie_bits) == MACH_PORT_TYPE_NONE) {
 			ipc_entry_dealloc(space, reply_name, reply_entry);
+			reply_entry = IE_NULL;
+		}
 
-		if (IE_BITS_TYPE(dest_entry->ie_bits) == MACH_PORT_TYPE_NONE)
+		if (IE_BITS_TYPE(dest_entry->ie_bits) == MACH_PORT_TYPE_NONE) {
 			ipc_entry_dealloc(space, dest_name, dest_entry);
+			dest_entry = IE_NULL;
+		}
 	}
 
-	/*
-	 *	At this point, dest_port, reply_port,
-	 *	dest_soright, reply_soright are all initialized.
-	 *	Any defunct entries have been deallocated.
-	 *	The space is still write-locked, and we need to
-	 *	make the MACH_SEND_CANCEL check.  The notify_port pointer
-	 *	is still usable, because the copyin code above won't ever
-	 *	deallocate a receive right, so its entry still exists
-	 *	and holds a ref.  Note notify_port might even equal
-	 *	dest_port or reply_port.
-	 */
+	dest_type = ipc_object_copyin_type(dest_type);
+	reply_type = ipc_object_copyin_type(reply_type);
 
-	if ((notify != MACH_PORT_NULL) &&
-	    (dest_soright == notify_port)) {
-		ipc_port_release_sonce(dest_soright);
-		dest_soright = IP_NULL;
+	/*
+	 * JMM - Without rdar://problem/6275821, this is the last place we can
+	 * re-arm the send-possible notifications.  It may trigger unexpectedly
+	 * early (send may NOT have failed), but better than missing.
+	 */
+	if (notify && dest_type != MACH_MSG_TYPE_PORT_SEND_ONCE &&
+	    dest_entry != IE_NULL && dest_entry->ie_request != IE_REQ_NONE) {
+		ipc_port_t dport = (ipc_port_t)dest_port;
+
+		assert(dport != IP_NULL);
+		ip_lock(dport);
+		if (ip_active(dport) &&
+		    dport->ip_receiver != ipc_space_kernel && ip_full(dport)) {
+			ipc_port_request_sparm(dport, dest_name, dest_entry->ie_request);
+		}
+		ip_unlock(dport);
 	}
 
 	is_write_unlock(space);
@@ -1922,9 +1909,6 @@ ipc_kmsg_copyin_header(
 
 	if (reply_soright != IP_NULL)
 		ipc_notify_port_deleted(reply_soright, reply_name);
-
-	dest_type = ipc_object_copyin_type(dest_type);
-	reply_type = ipc_object_copyin_type(reply_type);
 
 	msg->msgh_bits = (MACH_MSGH_BITS_OTHER(mbits) |
 			  MACH_MSGH_BITS(dest_type, reply_type));
@@ -2472,7 +2456,6 @@ ipc_kmsg_copyin_body(
  *		MACH_MSG_SUCCESS	Successful copyin.
  *		MACH_SEND_INVALID_HEADER
  *			Illegal value in the message header bits.
- *		MACH_SEND_INVALID_NOTIFY	Bad notify port.
  *		MACH_SEND_INVALID_DEST	Can't copyin destination port.
  *		MACH_SEND_INVALID_REPLY	Can't copyin reply port.
  *		MACH_SEND_INVALID_MEMORY	Can't grab out-of-line memory.
@@ -2486,7 +2469,7 @@ ipc_kmsg_copyin(
 	ipc_kmsg_t		kmsg,
 	ipc_space_t		space,
 	vm_map_t		map,
-	mach_port_name_t	notify)
+	boolean_t		notify)
 {
     mach_msg_return_t 		mr;
     
@@ -2535,7 +2518,7 @@ ipc_kmsg_copyin(
  *		Nothing locked.
  */
 
-void
+mach_msg_return_t
 ipc_kmsg_copyin_from_kernel(
 	ipc_kmsg_t	kmsg)
 {
@@ -2546,6 +2529,8 @@ ipc_kmsg_copyin_from_kernel(
 	ipc_object_t local = (ipc_object_t) kmsg->ikm_header->msgh_local_port;
 
 	/* translate the destination and reply ports */
+	if (!IO_VALID(remote))
+		return MACH_SEND_INVALID_DEST;
 
 	ipc_object_copyin_from_kernel(remote, rname);
 	if (IO_VALID(local))
@@ -2569,7 +2554,7 @@ ipc_kmsg_copyin_from_kernel(
 
 		kmsg->ikm_header->msgh_bits = bits;
 		if ((bits & MACH_MSGH_BITS_COMPLEX) == 0)
-			return;
+			return MACH_MSG_SUCCESS;
 	}
     {
     	mach_msg_descriptor_t	*saddr;
@@ -2663,10 +2648,11 @@ ipc_kmsg_copyin_from_kernel(
 	    }
 	}
     }
+    return MACH_MSG_SUCCESS;
 }
 
 #if IKM_SUPPORT_LEGACY
-void
+mach_msg_return_t
 ipc_kmsg_copyin_from_kernel_legacy(
 	ipc_kmsg_t	kmsg)
 {
@@ -2677,6 +2663,8 @@ ipc_kmsg_copyin_from_kernel_legacy(
 	ipc_object_t local = (ipc_object_t) kmsg->ikm_header->msgh_local_port;
 
 	/* translate the destination and reply ports */
+	if (!IO_VALID(remote))
+		return MACH_SEND_INVALID_DEST;
 
 	ipc_object_copyin_from_kernel(remote, rname);
 	if (IO_VALID(local))
@@ -2700,7 +2688,7 @@ ipc_kmsg_copyin_from_kernel_legacy(
 
 		kmsg->ikm_header->msgh_bits = bits;
 		if ((bits & MACH_MSGH_BITS_COMPLEX) == 0)
-			return;
+			return MACH_MSG_SUCCESS;
 	}
     {
     	mach_msg_legacy_descriptor_t	*saddr;
@@ -2833,6 +2821,7 @@ ipc_kmsg_copyin_from_kernel_legacy(
 	    }
 	}
     }
+    return MACH_MSG_SUCCESS;
 }
 #endif /* IKM_SUPPORT_LEGACY */
 
@@ -2845,13 +2834,6 @@ ipc_kmsg_copyin_from_kernel_legacy(
  *		If it does succeed the remote/local port fields
  *		contain port names instead of object pointers,
  *		and the bits field is updated.
- *
- *		The notify argument implements the MACH_RCV_NOTIFY option.
- *		If it is not MACH_PORT_NULL, it should name a receive right.
- *		If the process of receiving the reply port creates a
- *		new right in the receiving task, then the new right is
- *		automatically registered for a dead-name notification,
- *		with the notify port supplying the send-once right.
  *	Conditions:
  *		Nothing locked.
  *	Returns:
@@ -2872,13 +2854,19 @@ ipc_kmsg_copyin_from_kernel_legacy(
 mach_msg_return_t
 ipc_kmsg_copyout_header(
 	mach_msg_header_t	*msg,
-	ipc_space_t		space,
-	mach_port_name_t	notify)
+	ipc_space_t		space)
 {
 	mach_msg_bits_t mbits = msg->msgh_bits;
 	ipc_port_t dest = (ipc_port_t) msg->msgh_remote_port;
 
 	assert(IP_VALID(dest));
+
+	/*
+	 * While we still hold a reference on the received-from port,
+	 * process all send-possible notfications we received along with
+	 * the message.
+	 */
+	ipc_port_spnotify(dest);
 
     {
 	mach_msg_type_name_t dest_type = MACH_MSGH_BITS_REMOTE(mbits);
@@ -2887,64 +2875,27 @@ ipc_kmsg_copyout_header(
 	mach_port_name_t dest_name, reply_name;
 
 	if (IP_VALID(reply)) {
-		ipc_port_t notify_port;
 		ipc_entry_t entry;
 		kern_return_t kr;
 
 		/*
-		 *	Handling notify (for MACH_RCV_NOTIFY) is tricky.
-		 *	The problem is atomically making a send-once right
-		 *	from the notify port and installing it for a
-		 *	dead-name request in the new entry, because this
-		 *	requires two port locks (on the notify port and
-		 *	the reply port).  However, we can safely make
-		 *	and consume send-once rights for the notify port
-		 *	as long as we hold the space locked.  This isn't
-		 *	an atomicity problem, because the only way
-		 *	to detect that a send-once right has been created
-		 *	and then consumed if it wasn't needed is by getting
-		 *	at the receive right to look at ip_sorights, and
-		 *	because the space is write-locked status calls can't
-		 *	lookup the notify port receive right.  When we make
-		 *	the send-once right, we lock the notify port,
-		 *	so any status calls in progress will be done.
+		 *	Get reply port entry (if none, skip to dest port
+		 *	copyout).  This may require growing the space.
 		 */
 
 		is_write_lock(space);
 
 		for (;;) {
-			ipc_port_request_index_t request;
-
 			if (!space->is_active) {
 				is_write_unlock(space);
 				return (MACH_RCV_HEADER_ERROR|
 					MACH_MSG_IPC_SPACE);
 			}
 
-			if (notify != MACH_PORT_NULL) {
-				notify_port = ipc_port_lookup_notify(space,
-								     notify);
-				if (notify_port == IP_NULL) {
-					printf("ipc_kmsg_copyout_header: no notify port\n");
-					is_write_unlock(space);
-					return MACH_RCV_INVALID_NOTIFY;
-				}
-			} else
-				notify_port = IP_NULL;
-
 			if ((reply_type != MACH_MSG_TYPE_PORT_SEND_ONCE) &&
 			    ipc_right_reverse(space, (ipc_object_t) reply,
 					      &reply_name, &entry)) {
 				/* reply port is locked and active */
-
-				/*
-				 *	We don't need the notify_port
-				 *	send-once right, but we can't release
-				 *	it here because reply port is locked.
-				 *	Wait until after the copyout to
-				 *	release the notify port right.
-				 */
-
 				assert(entry->ie_bits &
 				       MACH_PORT_TYPE_SEND_RECEIVE);
 				break;
@@ -2954,9 +2905,6 @@ ipc_kmsg_copyout_header(
 			if (!ip_active(reply)) {
 				ip_release(reply);
 				ip_check_unlock(reply);
-
-				if (notify_port != IP_NULL)
-					ipc_port_release_sonce(notify_port);
 
 				ip_lock(dest);
 				is_write_unlock(space);
@@ -2971,24 +2919,12 @@ ipc_kmsg_copyout_header(
 			if (kr != KERN_SUCCESS) {
 				ip_unlock(reply);
 
-				if (notify_port != IP_NULL)
-					ipc_port_release_sonce(notify_port);
-
 				/* space is locked */
 				kr = ipc_entry_grow_table(space,
 							  ITS_SIZE_NONE);
 				if (kr != KERN_SUCCESS) {
-					/* space is unlocked */
-
-					if (kr == KERN_RESOURCE_SHORTAGE) {
-						printf("ipc_kmsg_copyout_header: can't grow kernel ipc space\n");
-						return (MACH_RCV_HEADER_ERROR|
-							MACH_MSG_IPC_KERNEL);
-					} else {
-						printf("ipc_kmsg_copyout_header: can't grow user ipc space\n");
-						return (MACH_RCV_HEADER_ERROR|
-							MACH_MSG_IPC_SPACE);
-					}
+					return (MACH_RCV_HEADER_ERROR|
+						MACH_MSG_IPC_SPACE);
 				}
 				/* space is locked again; start over */
 
@@ -2998,48 +2934,7 @@ ipc_kmsg_copyout_header(
 			       MACH_PORT_TYPE_NONE);
 			assert(entry->ie_object == IO_NULL); 
 
-			if (notify_port == IP_NULL) {
-				/* not making a dead-name request */
-
-				entry->ie_object = (ipc_object_t) reply;
-				break;
-			}
-
-			kr = ipc_port_dnrequest(reply, reply_name,
-						notify_port, &request);
-			if (kr != KERN_SUCCESS) {
-				ip_unlock(reply);
-
-				ipc_port_release_sonce(notify_port);
-
-				ipc_entry_dealloc(space, reply_name, entry);
-				is_write_unlock(space);
-
-				ip_lock(reply);
-				if (!ip_active(reply)) {
-					/* will fail next time around loop */
-
-					ip_unlock(reply);
-					is_write_lock(space);
-					continue;
-				}
-
-				kr = ipc_port_dngrow(reply, ITS_SIZE_NONE);
-				/* port is unlocked */
-				if (kr != KERN_SUCCESS) {
-					printf("ipc_kmsg_copyout_header: can't grow kernel ipc space2\n");
-					return (MACH_RCV_HEADER_ERROR|
-						MACH_MSG_IPC_KERNEL);
-				}
-
-				is_write_lock(space);
-				continue;
-			}
-
-			notify_port = IP_NULL; /* don't release right below */
-
 			entry->ie_object = (ipc_object_t) reply;
-			entry->ie_request = request;
 			break;
 		}
 
@@ -3052,41 +2947,19 @@ ipc_kmsg_copyout_header(
 		/* reply port is unlocked */
 		assert(kr == KERN_SUCCESS);
 
-		if (notify_port != IP_NULL)
-			ipc_port_release_sonce(notify_port);
-
 		ip_lock(dest);
 		is_write_unlock(space);
 	} else {
 		/*
 		 *	No reply port!  This is an easy case.
 		 *	We only need to have the space locked
-		 *	when checking notify and when locking
-		 *	the destination (to ensure atomicity).
+		 *	when locking the destination.
 		 */
 
 		is_read_lock(space);
 		if (!space->is_active) {
 			is_read_unlock(space);
 			return MACH_RCV_HEADER_ERROR|MACH_MSG_IPC_SPACE;
-		}
-
-		if (notify != MACH_PORT_NULL) {
-			ipc_entry_t entry;
-
-			/* must check notify even though it won't be used */
-
-			if ((entry = ipc_entry_lookup(space, notify)) == IE_NULL) {
-				printf("ipc_kmsg_copyout_header: ipc_entry_lookup failed\n");
-				is_read_unlock(space);
-				return MACH_RCV_INVALID_NOTIFY;
-			}
-	
-			if ((entry->ie_bits & MACH_PORT_TYPE_RECEIVE) == 0) {
-				printf("ipc_kmsg_copyout_header: MACH_PORT_TYPE_RECEIVE not set!\n");
-				is_read_unlock(space);
-				return MACH_RCV_INVALID_NOTIFY;
-			}
 		}
 
 		ip_lock(dest);
@@ -3704,8 +3577,6 @@ ipc_kmsg_copyout_size(
  *		Nothing locked.
  *	Returns:
  *		MACH_MSG_SUCCESS	Copied out all rights and memory.
- *		MACH_RCV_INVALID_NOTIFY	Bad notify port.
- *			Rights and memory in the message are intact.
  *		MACH_RCV_HEADER_ERROR + special bits
  *			Rights and memory in the message are intact.
  *		MACH_RCV_BODY_ERROR + special bits
@@ -3718,12 +3589,11 @@ ipc_kmsg_copyout(
 	ipc_kmsg_t		kmsg,
 	ipc_space_t		space,
 	vm_map_t		map,
-	mach_port_name_t	notify,
 	mach_msg_body_t		*slist)
 {
 	mach_msg_return_t mr;
 
-	mr = ipc_kmsg_copyout_header(kmsg->ikm_header, space, notify);
+	mr = ipc_kmsg_copyout_header(kmsg->ikm_header, space);
 	if (mr != MACH_MSG_SUCCESS) {
 		return mr;
 	}

@@ -83,8 +83,13 @@ struct	sockaddr_un {
 };
 
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+
+/* Level number of get/setsockopt for local domain sockets */
+#define SOL_LOCAL		0
+
 /* Socket options. */
 #define LOCAL_PEERCRED          0x001           /* retrieve peer credentails */
+
 #endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 

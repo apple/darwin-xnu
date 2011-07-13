@@ -36,7 +36,7 @@
  *	error codes for Mach and Unix kernels
  */
 
-static const char * err_codes_kern[] = {
+static const char * const err_codes_kern[] = {
 	"(os/kern) successful",			/* 0 */
 	"(os/kern) invalid address",
 	"(os/kern) protection failure",
@@ -87,7 +87,7 @@ static const char * err_codes_kern[] = {
 	"(os/kern) remote node down",
 };
 
-static const char * err_codes_unix[] = {
+static const char * const err_codes_unix[] = {
 	NO_SUCH_ERROR,
 	"(os/unix) no rights to object",
 	"(os/unix) file or directory does not exist",

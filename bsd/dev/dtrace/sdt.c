@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
@@ -46,18 +46,12 @@
 #include <sys/dtrace_glue.h>
 
 #include <sys/sdt_impl.h>
+extern int dtrace_kernel_symbol_mode;
 
 struct savearea_t; /* Used anonymously */
-typedef kern_return_t (*perfCallback)(int, struct savearea_t *, int, int);
+typedef kern_return_t (*perfCallback)(int, struct savearea_t *, uintptr_t *, int);
 
-#if defined (__ppc__) || defined (__ppc64__)
-extern perfCallback tempDTraceTrapHook, tempDTraceIntHook;
-extern kern_return_t fbt_perfCallback(int, struct savearea_t *, int, int);
-extern kern_return_t fbt_perfIntCallback(int, struct savearea_t *, int, int);
-
-#define	SDT_PATCHVAL	0x7c810808
-#define SDT_AFRAMES     6
-#elif defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__)
 extern perfCallback tempDTraceTrapHook;
 extern kern_return_t fbt_perfCallback(int, struct savearea_t *, int, int);
 
@@ -86,7 +80,7 @@ static void
 __sdt_provide_module(void *arg, struct modctl *ctl)
 {
 #pragma unused(arg)
-	struct module *mp = (struct module *)ctl->address;
+	struct module *mp = (struct module *)ctl->mod_address;
 	char *modname = ctl->mod_modname;
 	sdt_probedesc_t *sdpd;
 	sdt_probe_t *sdp, *old;
@@ -220,14 +214,13 @@ sdt_destroy(void *arg, dtrace_id_t id, void *parg)
 }
 
 /*ARGSUSED*/
-static void
+static int
 sdt_enable(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg,id)
 	sdt_probe_t *sdp = parg;
 	struct modctl *ctl = sdp->sdp_ctl;
 
-#if !defined(__APPLE__)
 	ctl->mod_nenabled++;
 
 	/*
@@ -256,20 +249,7 @@ sdt_enable(void *arg, dtrace_id_t id, void *parg)
 		}
 		goto err;
 	}
-#endif /* __APPLE__ */
 
-#if defined (__ppc__) || defined (__ppc64__)
-	dtrace_casptr(&tempDTraceIntHook, NULL, fbt_perfIntCallback);
-	if (tempDTraceIntHook != (perfCallback)fbt_perfIntCallback) {
-		if (sdt_verbose) {
-			cmn_err(CE_NOTE, "sdt_enable is failing for probe %s "
-			    "in module %s: tempDTraceIntHook already occupied.",
-			    sdp->sdp_name, ctl->mod_modname);
-		}
-		return;
-	}
-#endif
-	
 	dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
 	if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
 		if (sdt_verbose) {
@@ -277,7 +257,7 @@ sdt_enable(void *arg, dtrace_id_t id, void *parg)
 			    "in module %s: tempDTraceTrapHook already occupied.",
 			    sdp->sdp_name, ctl->mod_modname);
 		}
-		return;
+		return (0);
 	}
 
 	while (sdp != NULL) {
@@ -285,10 +265,9 @@ sdt_enable(void *arg, dtrace_id_t id, void *parg)
 		                       (vm_size_t)sizeof(sdp->sdp_patchval));
 		sdp = sdp->sdp_next;
 	}
-#if !defined(__APPLE__)
+
 err:
-#endif /* __APPLE__ */
-	;
+	return (0);
 }
 
 /*ARGSUSED*/
@@ -297,14 +276,12 @@ sdt_disable(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg,id)
 	sdt_probe_t *sdp = parg;
-#if !defined(__APPLE__)
 	struct modctl *ctl = sdp->sdp_ctl;
 
 	ctl->mod_nenabled--;
 
 	if (!ctl->mod_loaded || ctl->mod_loadcnt != sdp->sdp_loadcnt)
 		goto err;
-#endif /* __APPLE__ */
 
 	while (sdp != NULL) {
 		(void)ml_nofault_copy( (vm_offset_t)&sdp->sdp_savedval, (vm_offset_t)sdp->sdp_patchpoint, 
@@ -312,17 +289,8 @@ sdt_disable(void *arg, dtrace_id_t id, void *parg)
 		sdp = sdp->sdp_next;
 	}
 
-#if !defined(__APPLE__)
 err:
-#endif /* __APPLE__ */	
 	;
-}
-
-static uint64_t
-sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
-{
-#pragma unused(arg,id,parg)	/* __APPLE__ */
-	return dtrace_getarg(argno, aframes);
 }
 
 static dtrace_pops_t sdt_pops = {
@@ -561,107 +529,116 @@ void sdt_init( void )
 		}
 
 		if (KERNEL_MAGIC != _mh_execute_header.magic) {
-        	g_sdt_kernctl.address = (vm_address_t)NULL;
-        	g_sdt_kernctl.size = 0;
+			g_sdt_kernctl.mod_address = (vm_address_t)NULL;
+			g_sdt_kernctl.mod_size = 0;
 		} else {
-		kernel_mach_header_t        *mh;
-    		struct load_command         *cmd;
-    		kernel_segment_command_t    *orig_ts = NULL, *orig_le = NULL;
-    		struct symtab_command       *orig_st = NULL;
-    		kernel_nlist_t		    *sym = NULL;
-    		char                        *strings;
-    		unsigned int 		    i;
-
-		g_sdt_mach_module.sdt_nprobes = 0;
-		g_sdt_mach_module.sdt_probes = NULL;
-
-        	g_sdt_kernctl.address = (vm_address_t)&g_sdt_mach_module;
-        	g_sdt_kernctl.size = 0;
-		strncpy((char *)&(g_sdt_kernctl.mod_modname), "mach_kernel", KMOD_MAX_NAME);
-
-		mh = &_mh_execute_header;
-    		cmd = (struct load_command*) &mh[1];
-    		for (i = 0; i < mh->ncmds; i++) {
-        		if (cmd->cmd == LC_SEGMENT_KERNEL) {
-            		kernel_segment_command_t *orig_sg = (kernel_segment_command_t *) cmd;
-
-            		if (LIT_STRNEQL(orig_sg->segname, SEG_TEXT))
-                		orig_ts = orig_sg;
-            		else if (LIT_STRNEQL(orig_sg->segname, SEG_LINKEDIT))
-                		orig_le = orig_sg;
-            		else if (LIT_STRNEQL(orig_sg->segname, ""))
-                		orig_ts = orig_sg; /* kexts have a single unnamed segment */
-        		}
-        		else if (cmd->cmd == LC_SYMTAB)
-            		orig_st = (struct symtab_command *) cmd;
-	
-        		cmd = (struct load_command *) ((uintptr_t) cmd + cmd->cmdsize);
-    		}
-	
-    		if ((orig_ts == NULL) || (orig_st == NULL) || (orig_le == NULL))
-        		return;
-
-		sym = (kernel_nlist_t *)(orig_le->vmaddr + orig_st->symoff - orig_le->fileoff);
-		strings = (char *)(orig_le->vmaddr + orig_st->stroff - orig_le->fileoff);
-
-    		for (i = 0; i < orig_st->nsyms; i++) {
-        		uint8_t n_type = sym[i].n_type & (N_TYPE | N_EXT);
-        		char *name = strings + sym[i].n_un.n_strx;
+			kernel_mach_header_t        *mh;
+			struct load_command         *cmd;
+			kernel_segment_command_t    *orig_ts = NULL, *orig_le = NULL;
+			struct symtab_command       *orig_st = NULL;
+			kernel_nlist_t		    *sym = NULL;
+			char                        *strings;
+			unsigned int 		    i;
+			
+			g_sdt_mach_module.sdt_nprobes = 0;
+			g_sdt_mach_module.sdt_probes = NULL;
+			
+			g_sdt_kernctl.mod_address = (vm_address_t)&g_sdt_mach_module;
+			g_sdt_kernctl.mod_size = 0;
+			strncpy((char *)&(g_sdt_kernctl.mod_modname), "mach_kernel", KMOD_MAX_NAME);
+			
+			g_sdt_kernctl.mod_next = NULL;
+			g_sdt_kernctl.mod_stale = NULL;
+			g_sdt_kernctl.mod_id = 0;
+			g_sdt_kernctl.mod_loadcnt = 1;
+			g_sdt_kernctl.mod_loaded = 1;
+			g_sdt_kernctl.mod_flags = 0;
+			g_sdt_kernctl.mod_nenabled = 0;
+			
+			mh = &_mh_execute_header;
+			cmd = (struct load_command*) &mh[1];
+			for (i = 0; i < mh->ncmds; i++) {
+				if (cmd->cmd == LC_SEGMENT_KERNEL) {
+					kernel_segment_command_t *orig_sg = (kernel_segment_command_t *) cmd;
+					
+					if (LIT_STRNEQL(orig_sg->segname, SEG_TEXT))
+						orig_ts = orig_sg;
+					else if (LIT_STRNEQL(orig_sg->segname, SEG_LINKEDIT))
+						orig_le = orig_sg;
+					else if (LIT_STRNEQL(orig_sg->segname, ""))
+						orig_ts = orig_sg; /* kexts have a single unnamed segment */
+				}
+				else if (cmd->cmd == LC_SYMTAB)
+					orig_st = (struct symtab_command *) cmd;
+				
+				cmd = (struct load_command *) ((uintptr_t) cmd + cmd->cmdsize);
+			}
+			
+			if ((orig_ts == NULL) || (orig_st == NULL) || (orig_le == NULL))
+				return;
+			
+			sym = (kernel_nlist_t *)(orig_le->vmaddr + orig_st->symoff - orig_le->fileoff);
+			strings = (char *)(orig_le->vmaddr + orig_st->stroff - orig_le->fileoff);
+			
+			for (i = 0; i < orig_st->nsyms; i++) {
+				uint8_t n_type = sym[i].n_type & (N_TYPE | N_EXT);
+				char *name = strings + sym[i].n_un.n_strx;
 				const char *prev_name;
 				unsigned long best;
 				unsigned int j;
-
-        		/* Check that the symbol is a global and that it has a name. */
-        		if (((N_SECT | N_EXT) != n_type && (N_ABS | N_EXT) != n_type))
-            		continue;
-
-        		if (0 == sym[i].n_un.n_strx) /* iff a null, "", name. */
-            		continue;
-
-        		/* Lop off omnipresent leading underscore. */
-        		if (*name == '_')
-            		name += 1;
-
-				if (strstr(name, DTRACE_PROBE_PREFIX)) {
+				
+				/* Check that the symbol is a global and that it has a name. */
+				if (((N_SECT | N_EXT) != n_type && (N_ABS | N_EXT) != n_type))
+					continue;
+				
+				if (0 == sym[i].n_un.n_strx) /* iff a null, "", name. */
+					continue;
+				
+				/* Lop off omnipresent leading underscore. */
+				if (*name == '_')
+					name += 1;
+				
+				if (strncmp(name, DTRACE_PROBE_PREFIX, sizeof(DTRACE_PROBE_PREFIX) - 1) == 0) {
 					sdt_probedesc_t *sdpd = kmem_alloc(sizeof(sdt_probedesc_t), KM_SLEEP);
 					int len = strlen(name) + 1;
-
+					
 					sdpd->sdpd_name = kmem_alloc(len, KM_SLEEP);
 					strncpy(sdpd->sdpd_name, name, len); /* NUL termination is ensured. */
-
+					
 					prev_name = "<unknown>";
 					best = 0;
 					
-					/* Avoid shadow build warnings */
+					/*
+					 * Find the symbol immediately preceding the sdt probe site just discovered,
+					 * that symbol names the function containing the sdt probe.
+					 */
 					for (j = 0; j < orig_st->nsyms; j++) {
 						uint8_t jn_type = sym[j].n_type & (N_TYPE | N_EXT);
 						char *jname = strings + sym[j].n_un.n_strx;
-
+						
 						if (((N_SECT | N_EXT) != jn_type && (N_ABS | N_EXT) != jn_type))
 							continue;
-
+						
 						if (0 == sym[j].n_un.n_strx) /* iff a null, "", name. */
 							continue;
-
+						
 						if (*jname == '_')
 							jname += 1;
-						if (strstr(jname, DTRACE_PROBE_PREFIX))
-							continue;
-
+						
 						if (*(unsigned long *)sym[i].n_value <= (unsigned long)sym[j].n_value)
 							continue;
-
+						
 						if ((unsigned long)sym[j].n_value > best) {
 							best = (unsigned long)sym[j].n_value;
 							prev_name = jname;
 						}
 					}
-
+					
 					sdpd->sdpd_func = kmem_alloc((len = strlen(prev_name) + 1), KM_SLEEP);
 					strncpy(sdpd->sdpd_func, prev_name, len); /* NUL termination is ensured. */
-
+					
 					sdpd->sdpd_offset = *(unsigned long *)sym[i].n_value;
-
+					
 					sdpd->sdpd_next = g_sdt_mach_module.sdt_probes;
 					g_sdt_mach_module.sdt_probes = sdpd;
 				} else {
@@ -669,9 +646,9 @@ void sdt_init( void )
 				}
 			}
 		}
-
+		
 		sdt_attach( (dev_info_t	*)(uintptr_t)majdevno, DDI_ATTACH );
-
+		
 		gSDTInited = 1;
 	} else
 		panic("sdt_init: called twice!\n");
@@ -683,19 +660,32 @@ void sdt_init( void )
 void
 sdt_provide_module(void *arg, struct modctl *ctl)
 {
-#pragma unused(ctl)
 #pragma unused(arg)
-    __sdt_provide_module(arg, &g_sdt_kernctl);
-
-	sdt_probedesc_t *sdpd = g_sdt_mach_module.sdt_probes;
-	while (sdpd) {
-		sdt_probedesc_t *this_sdpd = sdpd;
-		kmem_free((void *)sdpd->sdpd_name, strlen(sdpd->sdpd_name) + 1);
-		kmem_free((void *)sdpd->sdpd_func, strlen(sdpd->sdpd_func) + 1);
-		sdpd = sdpd->sdpd_next;
-		kmem_free((void *)this_sdpd, sizeof(sdt_probedesc_t));
+	ASSERT(ctl != NULL);
+	ASSERT(dtrace_kernel_symbol_mode != DTRACE_KERNEL_SYMBOLS_NEVER);
+	lck_mtx_assert(&mod_lock, LCK_MTX_ASSERT_OWNED);
+	
+	if (MOD_SDT_DONE(ctl))
+		return;
+		
+	if (MOD_IS_MACH_KERNEL(ctl)) {
+		__sdt_provide_module(arg, &g_sdt_kernctl);
+		
+		sdt_probedesc_t *sdpd = g_sdt_mach_module.sdt_probes;
+		while (sdpd) {
+			sdt_probedesc_t *this_sdpd = sdpd;
+			kmem_free((void *)sdpd->sdpd_name, strlen(sdpd->sdpd_name) + 1);
+			kmem_free((void *)sdpd->sdpd_func, strlen(sdpd->sdpd_func) + 1);
+			sdpd = sdpd->sdpd_next;
+			kmem_free((void *)this_sdpd, sizeof(sdt_probedesc_t));
+		}
+		g_sdt_mach_module.sdt_probes = NULL;
+	} else {
+		/* FIXME -- sdt in kext not yet supported */
 	}
-	g_sdt_mach_module.sdt_probes = NULL;
+	
+	/* Need to mark this module as completed */
+	ctl->mod_flags |= MODCTL_SDT_PROBES_PROVIDED;
 }
 
 #endif /* __APPLE__ */

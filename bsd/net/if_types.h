@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -148,6 +148,7 @@
 #define	IFT_PFSYNC	0xf6		/* Packet filter state syncing */
 #define	IFT_CARP	0xf8		/* Common Address Redundancy Protocol */
 
-#define	IFT_PDP		0xff		/* GPRS Packet Data Protocol */
+#define	IFT_CELLULAR	0xff		/* Packet Data over Cellular */
+#define	IFT_PDP		IFT_CELLULAR	/* deprecated; use IFT_CELLULAR */
 
 #endif

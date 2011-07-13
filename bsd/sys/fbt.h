@@ -29,9 +29,7 @@
 #ifndef _FBT_H
 #define _FBT_H
 
-#if defined (__ppc__) || defined (__ppc64__)
-typedef uint32_t machine_inst_t;
-#elif defined(__i386__) || defined (__x86_64__)
+#if defined(__i386__) || defined (__x86_64__)
 typedef uint8_t machine_inst_t;
 #else
 #error Unknown Architecture
@@ -45,18 +43,25 @@ typedef struct fbt_probe {
 	int8_t			fbtp_rval;
 	machine_inst_t	fbtp_patchval;
 	machine_inst_t	fbtp_savedval;
+        machine_inst_t  fbtp_currentval;
 	uintptr_t		fbtp_roffset;
 	dtrace_id_t		fbtp_id;
+	/* FIXME!
+	 * This field appears to only be used in error messages.
+	 * It puts this structure into the next size bucket in kmem_alloc
+	 * wasting 32 bytes per probe. (in i386 only)
+	 */
 	char			fbtp_name[MAX_FBTP_NAME_CHARS];
 	struct modctl	*fbtp_ctl;
 	int		fbtp_loadcnt;
+#if !defined(__APPLE__)
 	int		fbtp_symndx;
-	int		fbtp_primary;
+#endif
 	struct fbt_probe *fbtp_next;
 } fbt_probe_t;
 
 extern int dtrace_invop(uintptr_t, uintptr_t *, uintptr_t);
 extern int fbt_invop(uintptr_t, uintptr_t *, uintptr_t);
 extern void fbt_provide_module(void *, struct modctl *);
-
+extern int fbt_enable (void *arg, dtrace_id_t id, void *parg);
 #endif /* _FBT_H */

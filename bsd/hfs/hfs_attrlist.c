@@ -41,6 +41,7 @@
 #include <sys/unistd.h>
 #include <sys/mount_internal.h>
 #include <sys/kauth.h>
+#include <sys/fsctl.h>
 
 #include <kern/locks.h>
 
@@ -80,7 +81,6 @@ static u_int32_t hfs_real_user_access(vnode_t vp, vfs_context_t ctx);
  * apply for the file system you are doing the readdirattr on. To make life 
  * simpler, this call will only return entries in its directory, hfs like.
  */
-__private_extern__
 int
 hfs_vnop_readdirattr(ap)
 	struct vnop_readdirattr_args /* {
@@ -138,6 +138,19 @@ hfs_vnop_readdirattr(ap)
 	    (alist->forkattr != 0)) {
 		return (EINVAL);
 	}
+
+	if (VTOC(dvp)->c_flags & UF_COMPRESSED) {
+		int compressed = hfs_file_is_compressed(VTOC(dvp), 0);  /* 0 == take the cnode lock */
+
+		if (!compressed) {
+			error = check_for_dataless_file(dvp, NAMESPACE_HANDLER_READ_OP);
+			if (error) {
+				return error;
+			}
+		}
+	}
+
+
 	/*
 	 * Take an exclusive directory lock since we manipulate the directory hints
 	 */
@@ -256,12 +269,12 @@ hfs_vnop_readdirattr(ap)
 			/*
 			 * Obtain vnode for our vnode_authorize() calls.
 			 */
-			if (hfs_vget(hfsmp, cattrp->ca_fileid, &vp, 0) != 0) {
+			if (hfs_vget(hfsmp, cattrp->ca_fileid, &vp, 0, 0) != 0) {
 				vp = NULL;
 			}
 		} else if (!(ap->a_options & FSOPT_NOINMEMUPDATE)) {
 			/* Get in-memory cnode data (if any). */
-			vp = hfs_chash_getvnode(hfsmp, cattrp->ca_fileid, 0, 0);
+			vp = hfs_chash_getvnode(hfsmp, cattrp->ca_fileid, 0, 0, 0);
 		}
 		if (vp != NULL) {
 			cp = VTOC(vp);
@@ -405,7 +418,7 @@ exit2:
 /*
  * Pack cnode attributes into an attribute block.
  */
- __private_extern__
+__private_extern__
 void
 hfs_packattrblk(struct attrblock *abp,
 		struct hfsmount *hfsmp,
@@ -654,7 +667,10 @@ packcommonattr(
 	    }
 	}
 	if (ATTR_CMN_FNDRINFO & attr) {
+		u_int8_t *finfo = NULL;
 		bcopy(&cap->ca_finderinfo, attrbufptr, sizeof(u_int8_t) * 32);
+		finfo = (u_int8_t*)attrbufptr;
+
 		/* Don't expose a symlink's private type/creator. */
 		if (S_ISLNK(cap->ca_mode)) {
 			struct FndrFileInfo *fip;
@@ -663,6 +679,18 @@ packcommonattr(
 			fip->fdType = 0;
 			fip->fdCreator = 0;
 		}
+
+		/* advance 16 bytes into the attrbuf */
+		finfo = finfo + 16;
+		if (S_ISREG(cap->ca_mode)) {
+			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
+			extinfo->date_added = 0;
+		}
+		else if (S_ISDIR(cap->ca_mode)) {
+			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
+			extinfo->date_added = 0;
+		}
+
 		attrbufptr = (char *)attrbufptr + sizeof(u_int8_t) * 32;
 	}
 	if (ATTR_CMN_OWNERID & attr) {
@@ -814,7 +842,10 @@ packfileattr(
 	off_t datasize = datafork->cf_size;
 	off_t totalsize = datasize + rsrcfork->cf_size;
 #if HFS_COMPRESSION
-	if ( cattrp->ca_flags & UF_COMPRESSED ) {
+	int handle_compressed;
+	handle_compressed =  (cattrp->ca_flags & UF_COMPRESSED);// && hfs_file_is_compressed(VTOC(vp), 1);
+	
+	if (handle_compressed) {
 		if (attr & (ATTR_FILE_DATALENGTH|ATTR_FILE_TOTALSIZE)) {
 			if ( 0 == hfs_uncompressed_size_of_compressed_file(hfsmp, vp, cattrp->ca_fileid, &datasize, 1) ) { /* 1 == don't take the cnode lock */
 				/* total size of a compressed file is just the data size */
@@ -865,7 +896,7 @@ packfileattr(
 	 * passed by hfs_vnop_readdirattr() may be null. 
 	 */
 	
-	if ( cattrp->ca_flags & UF_COMPRESSED ) {
+	if ( handle_compressed ) {
 		if (attr & ATTR_FILE_DATAALLOCSIZE) {
 			*((off_t *)attrbufptr) = (off_t)rsrcfork->cf_blocks * (off_t)allocblksize;
 			attrbufptr = ((off_t *)attrbufptr) + 1;
@@ -902,7 +933,7 @@ packfileattr(
 /*
  * Calculate the total size of an attribute block.
  */
- __private_extern__
+__private_extern__
 int
 hfs_attrblksize(struct attrlist *attrlist)
 {
@@ -1015,7 +1046,6 @@ hfs_real_user_access(vnode_t vp, vfs_context_t ctx)
 }
 		
 
-__private_extern__
 u_int32_t
 DerivePermissionSummary(uid_t obj_uid, gid_t obj_gid, mode_t obj_mode,
 		struct mount *mp, kauth_cred_t cred, __unused struct proc *p)

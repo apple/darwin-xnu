@@ -30,25 +30,37 @@
 # ident	"@(#)Makefile.Darwin	1.5	05/08/04 SMI"
 #
 
+SDKROOT ?= /
+Product=$(shell tconf --product)
+Embedded=$(shell tconf --test TARGET_OS_EMBEDDED)
 
-CC=		gcc
+ifeq "$(Embedded)" "YES"
+SDKPATH = $(shell xcodebuild -sdk $(SDKROOT) -version Path)
+CFLAGS += -isysroot $(SDKPATH)
+endif
+
+CC = xcrun -sdk $(SDKROOT) gcc
 #NOPIC=	-mdynamic-no-pic
 ARCH=	i386
 
 ifeq "$(strip $(ARCH))" "fat"
-ARCH_FLAG=      -arch i386 -arch ppc -arch x86_64 
+ARCH_FLAG=      -arch i386 -arch x86_64 
 else
 ARCH_FLAG=	-arch $(ARCH)
 endif
 
-OPT_FLAG=	-g
+### OPT_FLAG value was modified from '-g' to '-Os' as part of the fix for radar 7508837 
+OPT_FLAG=	-Os
 SEMOP_FLAG=	-DUSE_SEMOP
 
 ###
 ###CFLAGS=		-Os -DUSE_SEMOP -fno-builtin $(NOPIC) $(ARCH_FLAG) -Wall
 ###extra_CFLAGS=	-Os -DUSE_SEMOP -fno-builtin $(NOPIC) $(ARCH_FLAG) -Wall
 ###
-CFLAGS=		$(OPT_FLAG) $(SEMOP_FLAG) -DUSE_GETHRTIME -fno-builtin $(NOPIC) $(ARCH_FLAG) -Wall
+CFLAGS+=		$(OPT_FLAG) $(SEMOP_FLAG) -DUSE_GETHRTIME -fno-builtin $(NOPIC) $(ARCH_FLAG) -Wall
+ifeq "$(Embedded)" "YES"
+CFLAGS += -g -I $(SDKPATH)/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/ -F/AppleInternal/Library/Frameworks/ $(MORECFLAGS)
+endif
 extra_CFLAGS=	$(OPT_FLAG) $(SEMOP_FLAG) -fno-builtin $(NOPIC) $(ARCH_FLAG) -Wall
 CPPFLAGS=		$(SEMOP_FLAG) -D_REENTRANT -Wall
 MATHLIB=	-lm

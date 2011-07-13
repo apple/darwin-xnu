@@ -41,47 +41,61 @@ extern	unsigned int	LcksOpts;
 #define enaLkDeb		0x00000001	/* Request debug in default attribute */
 #define enaLkStat		0x00000002	/* Request statistic in default attribute */
 
-#endif
+#endif /* MACH_KERNEL_PRIVATE */
 
-#ifdef	MACH_KERNEL_PRIVATE
+#if	defined(MACH_KERNEL_PRIVATE)
 typedef struct {
-	unsigned long	interlock;
-	unsigned long	lck_spin_pad[9];	/* XXX - usimple_lock_data_t */
+	volatile uintptr_t	interlock;
+#if	MACH_LDEBUG
+	unsigned long   lck_spin_pad[9];	/* XXX - usimple_lock_data_t */
+#endif
 } lck_spin_t;
 
 #define	LCK_SPIN_TAG_DESTROYED		0x00002007	/* lock marked as Destroyed */
 
-#else
+#else /* MACH_KERNEL_PRIVATE */
 #ifdef	KERNEL_PRIVATE
 typedef struct {
 	unsigned long    opaque[10];
 } lck_spin_t;
-#else
+#else /* KERNEL_PRIVATE */
 typedef	struct __lck_spin_t__	lck_spin_t;
 #endif
 #endif
 
 #ifdef	MACH_KERNEL_PRIVATE
+/* The definition of this structure, including the layout of the
+ * state bitfield, is tailored to the asm implementation in i386_lock.s
+ */
 typedef struct _lck_mtx_ {
 	union {
 		struct {
 			volatile uintptr_t		lck_mtxd_owner;
-			unsigned long			lck_mtxd_ptr;
-			volatile uint32_t		lck_mtxd_waiters:16,
-				                        lck_mtxd_pri:8,
-			                                lck_mtxd_ilocked:1,
-			                                lck_mtxd_mlocked:1,
-			                                lck_mtxd_promoted:1,
-				                        lck_mtxd_spin:1,
-				                        lck_mtxd_pad4:4; 	/* padding */
-#ifdef __x86_64__
-			unsigned int			lck_mtxd_pad;
-#endif
+			union {
+				struct {
+					volatile uint32_t
+						lck_mtxd_waiters:16,
+						lck_mtxd_pri:8,
+						lck_mtxd_ilocked:1,
+						lck_mtxd_mlocked:1,
+						lck_mtxd_promoted:1,
+						lck_mtxd_spin:1,
+						lck_mtxd_is_ext:1,
+						lck_mtxd_pad3:3;
+				};
+					uint32_t	lck_mtxd_state;
+			};
+#if	defined(__x86_64__)
+			/* Pad field used as a canary, initialized to ~0 */
+			uint32_t			lck_mtxd_pad32;
+#endif			
 		} lck_mtxd;
 		struct {
-			unsigned long			lck_mtxi_tag;
 			struct _lck_mtx_ext_		*lck_mtxi_ptr;
-			unsigned long			lck_mtxi_pad;
+			uint32_t			lck_mtxi_tag;
+#if	defined(__x86_64__)				
+			uint32_t			lck_mtxi_pad32;
+#endif			
 		} lck_mtxi;
 	} lck_mtx_sw;
 } lck_mtx_t;
@@ -89,31 +103,25 @@ typedef struct _lck_mtx_ {
 #define	lck_mtx_owner	lck_mtx_sw.lck_mtxd.lck_mtxd_owner
 #define	lck_mtx_waiters	lck_mtx_sw.lck_mtxd.lck_mtxd_waiters
 #define	lck_mtx_pri	lck_mtx_sw.lck_mtxd.lck_mtxd_pri
-#define	lck_mtx_ilocked	lck_mtx_sw.lck_mtxd.lck_mtxd_ilocked
-#define	lck_mtx_mlocked	lck_mtx_sw.lck_mtxd.lck_mtxd_mlocked
 #define	lck_mtx_promoted lck_mtx_sw.lck_mtxd.lck_mtxd_promoted
-#define	lck_mtx_spin	lck_mtx_sw.lck_mtxd.lck_mtxd_spin
+#define lck_mtx_is_ext  lck_mtx_sw.lck_mtxd.lck_mtxd_is_ext
 
 #define lck_mtx_tag	lck_mtx_sw.lck_mtxi.lck_mtxi_tag
 #define lck_mtx_ptr	lck_mtx_sw.lck_mtxi.lck_mtxi_ptr
-#define lck_mtx_state	lck_mtx_sw.lck_mtxi.lck_mtxi_pad
-
-#define	LCK_MTX_TAG_INDIRECT			0x00001007	/* lock marked as Indirect  */
-#define	LCK_MTX_TAG_DESTROYED			0x00002007	/* lock marked as Destroyed */
-#define LCK_MTX_PTR_EXTENDED			0x00003007	/* lock is extended version */
+#define lck_mtx_state	lck_mtx_sw.lck_mtxd.lck_mtxd_state
+/* This pattern must subsume the interlocked, mlocked and spin bits */
+#define	LCK_MTX_TAG_INDIRECT			0x07ff1007	/* lock marked as Indirect  */
+#define	LCK_MTX_TAG_DESTROYED			0x07fe2007	/* lock marked as Destroyed */
 
 /* Adaptive spin before blocking */
 extern unsigned int	MutexSpin;
 extern int		lck_mtx_lock_spinwait_x86(lck_mtx_t *mutex);
 extern void		lck_mtx_lock_wait_x86(lck_mtx_t *mutex);
 extern void		lck_mtx_lock_acquire_x86(lck_mtx_t *mutex);
-extern void		lck_mtx_unlock_wakeup_x86(lck_mtx_t *mutex, int owner_was_promoted);
+extern void		lck_mtx_unlock_wakeup_x86(lck_mtx_t *mutex, int prior_lock_state);
 
 extern void		lck_mtx_lock_mark_destroyed(lck_mtx_t *mutex);
-extern int		lck_mtx_lock_mark_promoted(lck_mtx_t *mutex);
-extern int		lck_mtx_lock_decr_waiter(lck_mtx_t *mutex);
 extern int		lck_mtx_lock_grab_mutex(lck_mtx_t *mutex);
-extern integer_t	lck_mtx_lock_get_pri(lck_mtx_t *mutex);
 
 extern void		hw_lock_byte_init(uint8_t *lock_byte);
 extern void		hw_lock_byte_lock(uint8_t *lock_byte);
@@ -153,10 +161,19 @@ typedef struct _lck_mtx_ext_ {
 #define	LCK_MTX_ATTR_STAT	0x2
 #define	LCK_MTX_ATTR_STATb	1
 
+#else /* MACH_KERNEL_PRIVATE */
+#ifdef	XNU_KERNEL_PRIVATE
+typedef struct {
+	unsigned long		opaque[2];
+} lck_mtx_t;
+
+typedef struct {
+	unsigned long		opaque[10];
+} lck_mtx_ext_t;
 #else
 #ifdef	KERNEL_PRIVATE
 typedef struct {
-	unsigned long		opaque[3];
+	unsigned long		opaque[2];
 } lck_mtx_t;
 
 typedef struct {
@@ -166,6 +183,7 @@ typedef struct {
 #else
 typedef struct __lck_mtx_t__		lck_mtx_t;
 typedef struct __lck_mtx_ext_t__	lck_mtx_ext_t;
+#endif
 #endif
 #endif
 

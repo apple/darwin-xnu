@@ -235,7 +235,7 @@ static void cpuid_fn(uint32_t selector, uint32_t *result)
 #else
 static void cpuid_fn(uint32_t selector, uint32_t *result)
 {
-	if (cpu_mode_is64bit()) {
+	if (get_is64bit()) {
 	       asm("call _cpuid64"
 			: "=a" (result[0]),
 			  "=b" (result[1]),
@@ -353,7 +353,15 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 			info_p->cache_sharing[type] = cache_sharing;
 			info_p->cache_partitions[type] = cache_partitions;
 			linesizes[type] = cache_linesize;
-			
+
+			/*
+			 * Overwrite associativity determined via
+			 * CPUID.0x80000006 -- this leaf is more
+			 * accurate
+			 */
+			if (type == L2U)
+				info_p->cpuid_cache_L2_associativity = cache_associativity;
+
 			/* Compute the number of page colors for this cache,
 			 * which is:
 			 *	( linesize * sets ) / page_size
@@ -501,10 +509,24 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
     
 	/* Get cache and addressing info. */
 	if (info_p->cpuid_max_ext >= 0x80000006) {
+		uint32_t assoc;
 		cpuid_fn(0x80000006, reg);
 		info_p->cpuid_cache_linesize   = bitfield32(reg[ecx], 7, 0);
-		info_p->cpuid_cache_L2_associativity =
-						 bitfield32(reg[ecx],15,12);
+		assoc = bitfield32(reg[ecx],15,12);
+		/*
+		 * L2 associativity is encoded, though in an insufficiently
+		 * descriptive fashion, e.g. 24-way is mapped to 16-way.
+		 * Represent a fully associative cache as 0xFFFF.
+		 * Overwritten by associativity as determined via CPUID.4
+		 * if available.
+		 */
+		if (assoc == 6)
+			assoc = 8;
+		else if (assoc == 8)
+			assoc = 16;
+		else if (assoc == 0xF)
+			assoc = 0xFFFF;
+		info_p->cpuid_cache_L2_associativity = assoc;
 		info_p->cpuid_cache_size       = bitfield32(reg[ecx],31,16);
 		cpuid_fn(0x80000008, reg);
 		info_p->cpuid_address_bits_physical =
@@ -513,8 +535,15 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 						 bitfield32(reg[eax],15, 8);
 	}
 
-	/* get processor signature and decode */
+	/*
+	 * Get processor signature and decode
+	 * and bracket this with the approved procedure for reading the
+	 * the microcode version number a.k.a. signature a.k.a. BIOS ID
+	 */
+	wrmsr64(MSR_IA32_BIOS_SIGN_ID, 0);
 	cpuid_fn(1, reg);
+	info_p->cpuid_microcode_version =
+		(uint32_t) (rdmsr64(MSR_IA32_BIOS_SIGN_ID) >> 32);
 	info_p->cpuid_signature = reg[eax];
 	info_p->cpuid_stepping  = bitfield32(reg[eax],  3,  0);
 	info_p->cpuid_model     = bitfield32(reg[eax],  7,  4);
@@ -524,6 +553,9 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	info_p->cpuid_extfamily = bitfield32(reg[eax], 27, 20);
 	info_p->cpuid_brand     = bitfield32(reg[ebx],  7,  0);
 	info_p->cpuid_features  = quad(reg[ecx], reg[edx]);
+
+	/* Get "processor flag"; necessary for microcode update matching */
+	info_p->cpuid_processor_flag = (rdmsr64(MSR_IA32_PLATFORM_ID)>> 50) & 3;
 
 	/* Fold extensions into family/model */
 	if (info_p->cpuid_family == 0x0f)
@@ -549,10 +581,6 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		info_p->cpuid_extfeatures |=
 				reg[edx] & (uint32_t)CPUID_EXTFEATURE_TSCI;
 	}
-
-	/* Find the microcode version number a.k.a. signature a.k.a. BIOS ID */
-        info_p->cpuid_microcode_version =
-                (uint32_t) (rdmsr64(MSR_IA32_BIOS_SIGN_ID) >> 32);
 
 	if (info_p->cpuid_max_basic >= 0x5) {
 		cpuid_mwait_leaf_t	*cmp = &info_p->cpuid_mwait_leaf;
@@ -625,12 +653,11 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 	switch (info_p->cpuid_family) {
 	case 6:
 		switch (info_p->cpuid_model) {
-		case 13:
-			cpufamily = CPUFAMILY_INTEL_6_13;
-			break;
+#if CONFIG_YONAH
 		case 14:
 			cpufamily = CPUFAMILY_INTEL_YONAH;
 			break;
+#endif
 		case 15:
 			cpufamily = CPUFAMILY_INTEL_MEROM;
 			break;
@@ -681,7 +708,7 @@ cpuid_set_info(void)
 
 	info_p->cpuid_cpu_type = CPU_TYPE_X86;
 	info_p->cpuid_cpu_subtype = CPU_SUBTYPE_X86_ARCH1;
-
+	/* Must be invoked after set_generic_info */
 	cpuid_set_cache_info(&cpuid_cpu_info);
 
 	/*
@@ -764,11 +791,11 @@ static struct {
 	{CPUID_FEATURE_MOVBE,     "MOVBE"},
 	{CPUID_FEATURE_POPCNT,    "POPCNT"},
 	{CPUID_FEATURE_AES,       "AES"},
+	{CPUID_FEATURE_VMM,       "VMM"},
+	{CPUID_FEATURE_PCID,      "PCID"},
 	{CPUID_FEATURE_XSAVE,     "XSAVE"},
 	{CPUID_FEATURE_OSXSAVE,   "OSXSAVE"},
-	{CPUID_FEATURE_VMM,       "VMM"},
 	{CPUID_FEATURE_SEGLIM64,  "SEGLIM64"},
-	{CPUID_FEATURE_PCID,      "PCID"},
 	{CPUID_FEATURE_TSCTMR,    "TSCTMR"},
 	{CPUID_FEATURE_AVX1_0,    "AVX1.0"},
 	{0, 0}

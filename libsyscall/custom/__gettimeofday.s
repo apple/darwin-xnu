@@ -29,21 +29,7 @@
 
 #include "SYS.h"
 
-#if defined(__ppc__) || defined(__ppc64__)
-
-/* This syscall is special cased: the timeval is returned in r3/r4.
- * Note also that the "seconds" field of the timeval is a long, so
- * it's size is mode dependent.
- */
-MI_ENTRY_POINT(___gettimeofday)
-    mr      r12,r3              // save ptr to timeval
-    SYSCALL_NONAME(gettimeofday,0)
-	stg     r3,0(r12)           // "stw" in 32-bit mode, "std" in 64-bit mode
-	stw     r4,GPR_BYTES(r12)
-	li      r3,0
-	blr
-
-#elif defined(__i386__)
+#if defined(__i386__)
 
 /*
  *	This syscall is special cased: the timeval is returned in eax/edx.

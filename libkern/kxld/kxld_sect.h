@@ -125,7 +125,7 @@ kxld_addr_t kxld_sect_align_address(const KXLDSect *sect, kxld_addr_t address)
 
 /* Returns the space required by the exported Mach-O header */
 u_long kxld_sect_get_macho_header_size(boolean_t is_32_bit)
-    __attribute__((const, nonnull, visibility("hidden")));
+    __attribute__((const, visibility("hidden")));
 
 /* Returns the space required by the exported Mach-O data */
 u_long kxld_sect_get_macho_data_size(const KXLDSect *sect)
@@ -176,8 +176,7 @@ kern_return_t kxld_sect_populate_got(KXLDSect *sect, struct kxld_symtab *symtab,
 
 /* Processes all of a section's relocation entries */
 kern_return_t kxld_sect_process_relocs(KXLDSect *sect, 
-    const struct kxld_relocator *relocator, const KXLDArray *sectarray,
-    const struct kxld_symtab *symtab)
+    struct kxld_relocator *relocator)
     __attribute__((nonnull, visibility("hidden")));
 
 #endif /* _KXLD_SECT_H_ */

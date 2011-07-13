@@ -36,7 +36,7 @@ extern "C" {
 #include <libkern/OSKextLibPrivate.h>
 #include <libkern/c++/OSKext.h>
 #include <IOKit/IOLib.h>
-#include <IOKit/IORegistryEntry.h>
+#include <IOKit/IOService.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOCatalogue.h>
 
@@ -65,6 +65,7 @@ extern "C" {
 
 static void bootstrapRecordStartupExtensions(void);
 static void bootstrapLoadSecurityExtensions(void);
+
 
 #if PRAGMA_MARK
 #pragma mark Macros
@@ -100,7 +101,7 @@ static const char * sKernelComponentNames[] = {
    "com.apple.iokit.IOSystemManagementFamily",
    "com.apple.iokit.ApplePlatformFamily",
    
-#if defined(__ppc__) || defined(__i386__) || defined(__arm__)
+#if defined(__i386__) || defined(__arm__)
    /* These ones are not supported on x86_64 or any newer platforms.
     * They must be version 7.9.9; check by "com.apple.kernel.", with
     * the trailing period; "com.apple.kernel" always represents the
@@ -163,7 +164,6 @@ KLDBootstrap::KLDBootstrap(void)
     }
     record_startup_extensions_function = &bootstrapRecordStartupExtensions;
     load_security_extensions_function = &bootstrapLoadSecurityExtensions;
-    OSKext::initialize();
 }
 
 /*********************************************************************
@@ -175,6 +175,8 @@ KLDBootstrap::~KLDBootstrap(void)
     if (this != &sBootstrapObject) {
         panic("Attempt to access bootstrap segment.");
     }
+
+
     record_startup_extensions_function = 0;
     load_security_extensions_function = 0;
 }
@@ -218,16 +220,11 @@ KLDBootstrap::readPrelinkedExtensions(
     kernel_section_t * prelinkInfoSect)
 {
     OSArray                   * infoDictArray           = NULL;  // do not release
-    OSArray                   * personalitiesArray      = NULL;  // do not release
     OSObject                  * parsedXML       = NULL;  // must release
     OSDictionary              * prelinkInfoDict         = NULL;  // do not release
     OSString                  * errorString             = NULL;  // must release
     OSKext                    * theKernel               = NULL;  // must release
 
-#if CONFIG_KXLD
-    kernel_section_t          * kernelLinkStateSection  = NULL;  // see code
-#endif
-    kernel_segment_command_t  * prelinkLinkStateSegment = NULL;  // see code
     kernel_segment_command_t  * prelinkTextSegment      = NULL;  // see code
     kernel_segment_command_t  * prelinkInfoSegment      = NULL;  // see code
 
@@ -235,13 +232,13 @@ KLDBootstrap::readPrelinkedExtensions(
     * going to fail the boot, so these won't be cleaned up on error.
     */
     void                      * prelinkData             = NULL;  // see code
-    void                      * prelinkCopy             = NULL;  // see code
     vm_size_t                   prelinkLength           = 0;
+
 #if !__LP64__ && !defined(__arm__)
     vm_map_offset_t             prelinkDataMapOffset    = 0;
-#endif
-
+    void                      * prelinkCopy             = NULL;  // see code
     kern_return_t               mem_result              = KERN_SUCCESS;
+#endif
 
     OSDictionary              * infoDict                = NULL;  // do not release
 
@@ -255,57 +252,6 @@ KLDBootstrap::readPrelinkedExtensions(
         kOSKextLogDirectoryScanFlag | kOSKextLogArchiveFlag,
         "Starting from prelinked kernel.");
 
-   /*****
-    * Wrap the kernel link state in-place in an OSData.
-    * This is unnecessary (and the link state may not be present) if the kernel
-    * does not have kxld support because this information is only used for
-    * runtime linking.
-    */
-#if CONFIG_KXLD
-    kernelLinkStateSection = getsectbyname(kPrelinkLinkStateSegment,
-        kPrelinkKernelLinkStateSection);
-    if (!kernelLinkStateSection) {
-        OSKextLog(/* kext */ NULL,
-            kOSKextLogErrorLevel |
-            kOSKextLogArchiveFlag,
-            "Can't find prelinked kernel link state.");
-        goto finish;
-    }
-
-    theKernel = OSKext::lookupKextWithIdentifier(kOSKextKernelIdentifier);
-    if (!theKernel) {
-        OSKextLog(/* kext */ NULL,
-            kOSKextLogErrorLevel |
-            kOSKextLogArchiveFlag,
-            "Can't find kernel kext object in prelinked kernel.");
-        goto finish;
-    }
-
-    prelinkData = (void *) kernelLinkStateSection->addr;
-    prelinkLength = kernelLinkStateSection->size;
-
-    mem_result = kmem_alloc_pageable(kernel_map,
-        (vm_offset_t *) &prelinkCopy, prelinkLength);
-    if (mem_result != KERN_SUCCESS) {
-        OSKextLog(/* kext */ NULL,
-            kOSKextLogErrorLevel |
-            kOSKextLogGeneralFlag | kOSKextLogArchiveFlag,
-            "Can't copy prelinked kernel link state.");
-        goto finish;
-    }
-    memcpy(prelinkCopy, prelinkData, prelinkLength);
-
-    theKernel->linkState = OSData::withBytesNoCopy(prelinkCopy, prelinkLength);
-    if (!theKernel->linkState) {
-        OSKextLog(/* kext */ NULL,
-            kOSKextLogErrorLevel |
-            kOSKextLogGeneralFlag | kOSKextLogArchiveFlag,
-            "Can't create prelinked kernel link state wrapper.");
-        goto finish;
-    }
-    theKernel->linkState->setDeallocFunction(osdata_kmem_free);
-#endif
-
     prelinkTextSegment = getsegbyname(kPrelinkTextSegment);
     if (!prelinkTextSegment) {
         OSKextLog(/* kext */ NULL,
@@ -318,7 +264,9 @@ KLDBootstrap::readPrelinkedExtensions(
     prelinkData = (void *) prelinkTextSegment->vmaddr;
     prelinkLength = prelinkTextSegment->vmsize;
 
-#if !__LP64__
+#if !__LP64__ && !__arm__
+    /* XXX: arm's pmap implementation doesn't seem to let us do this */
+
     /* To enable paging and write/execute protections on the kext
      * executables, we need to copy them out of the booter-created
      * memory, reallocate that space with VM, then prelinkCopy them back in.
@@ -375,7 +323,7 @@ KLDBootstrap::readPrelinkedExtensions(
     memcpy(prelinkData, prelinkCopy, prelinkLength);
 
     kmem_free(kernel_map, (vm_offset_t)prelinkCopy, prelinkLength);
-#endif /* !__LP64__ */
+#endif /* !__LP64__ && !__arm__*/
 
    /* Unserialize the info dictionary from the prelink info section.
     */
@@ -425,21 +373,6 @@ KLDBootstrap::readPrelinkedExtensions(
         OSSafeReleaseNULL(newKext);
     }
     
-    /* Get all of the personalities for kexts that were not prelinked and
-     * add them to the catalogue.
-     */
-    personalitiesArray = OSDynamicCast(OSArray,
-        prelinkInfoDict->getObject(kPrelinkPersonalitiesKey));
-    if (!personalitiesArray) {
-        OSKextLog(/* kext */ NULL, kOSKextLogErrorLevel | kOSKextLogArchiveFlag,
-            "The prelinked kernel has no personalities array");
-        goto finish;
-    }
-
-    if (personalitiesArray->getCount()) {
-        gIOCatalogue->addDrivers(personalitiesArray);
-    }
-
    /* Store the number of prelinked kexts in the registry so we can tell
     * when the system has been started from a prelinked kernel.
     */
@@ -454,21 +387,12 @@ KLDBootstrap::readPrelinkedExtensions(
         registryRoot->setProperty(kOSPrelinkKextCountKey, prelinkCountObj);
     }
 
-    OSSafeReleaseNULL(prelinkCountObj);
-    prelinkCountObj = OSNumber::withNumber(
-        (unsigned long long)personalitiesArray->getCount(),
-        8 * sizeof(uint32_t));
-    assert(prelinkCountObj);
-    if (prelinkCountObj) {
-        registryRoot->setProperty(kOSPrelinkPersonalityCountKey, prelinkCountObj);
-    }
-
     OSKextLog(/* kext */ NULL,
         kOSKextLogProgressLevel |
         kOSKextLogGeneralFlag | kOSKextLogKextBookkeepingFlag |
         kOSKextLogDirectoryScanFlag | kOSKextLogArchiveFlag,
-        "%u prelinked kexts, and %u additional personalities.", 
-        infoDictArray->getCount(), personalitiesArray->getCount());
+        "%u prelinked kexts", 
+        infoDictArray->getCount());
 
 #if __LP64__
         /* On LP64 systems, kexts are copied to their own special VM region
@@ -476,14 +400,6 @@ KLDBootstrap::readPrelinkedExtensions(
          */
         ml_static_mfree((vm_offset_t) prelinkData, prelinkLength);
 #endif /* __LP64__ */
-
-   /* Free the link state segment, kexts have copied out what they need.
-    */
-    prelinkLinkStateSegment = getsegbyname(kPrelinkLinkStateSegment);
-    if (prelinkLinkStateSegment) {
-        ml_static_mfree((vm_offset_t)prelinkLinkStateSegment->vmaddr,
-            (vm_size_t)prelinkLinkStateSegment->vmsize);
-    }
 
    /* Free the prelink info segment, we're done with it.
     */
@@ -946,3 +862,4 @@ static void bootstrapLoadSecurityExtensions(void)
     sBootstrapObject.loadSecurityExtensions();
     return;
 }
+

@@ -66,48 +66,6 @@
  * void  OSAtomicFifoEnqueue( OSFifoQueueHead *list, void *new, size_t offset);
  */
 
-COMMPAGE_FUNCTION_START(AtomicFifoEnqueue, 32, 4)
-	pushl	%edi
-	pushl	%esi
-	pushl	%ebx
-	xorl	%ebx,%ebx	// clear "preemption pending" flag
-	movl	16(%esp),%edi	// %edi == ptr to list head
-	movl	20(%esp),%esi	// %esi == new
-	movl	24(%esp),%edx	// %edx == offset
-	COMMPAGE_CALL(_COMM_PAGE_PFZ_ENQUEUE,_COMM_PAGE_FIFO_ENQUEUE,AtomicFifoEnqueue)
-	testl	%ebx,%ebx	// pending preemption?
-	jz	1f
-	COMMPAGE_CALL(_COMM_PAGE_PREEMPT,_COMM_PAGE_FIFO_ENQUEUE,AtomicFifoEnqueue)
-1:	
-	popl	%ebx
-	popl	%esi
-	popl	%edi
-	ret
-COMMPAGE_DESCRIPTOR(AtomicFifoEnqueue,_COMM_PAGE_FIFO_ENQUEUE,0,0)
-	
-	
-/* void* OSAtomicFifoDequeue( OSFifoQueueHead *list, size_t offset); */
-
-COMMPAGE_FUNCTION_START(AtomicFifoDequeue, 32, 4)
-	pushl	%edi
-	pushl	%esi
-	pushl	%ebx
-	xorl	%ebx,%ebx	// clear "preemption pending" flag
-	movl	16(%esp),%edi	// %edi == ptr to list head
-	movl	20(%esp),%edx	// %edx == offset
-	COMMPAGE_CALL(_COMM_PAGE_PFZ_DEQUEUE,_COMM_PAGE_FIFO_DEQUEUE,AtomicFifoDequeue)
-	testl	%ebx,%ebx	// pending preemption?
-	jz	1f
-	pushl	%eax		// save return value across sysenter
-	COMMPAGE_CALL(_COMM_PAGE_PREEMPT,_COMM_PAGE_FIFO_DEQUEUE,AtomicFifoDequeue)
-	popl	%eax
-1:	
-	popl	%ebx
-	popl	%esi
-	popl	%edi
-	ret			// ptr to 1st element in Q still in %eax
-COMMPAGE_DESCRIPTOR(AtomicFifoDequeue,_COMM_PAGE_FIFO_DEQUEUE,0,0)
-
 
 /* Subroutine to make a preempt syscall.  Called when we notice %ebx is
  * nonzero after returning from a PFZ subroutine.
@@ -254,38 +212,6 @@ COMMPAGE_DESCRIPTOR(pfz_dequeue,_COMM_PAGE_PFZ_DEQUEUE,0,0)
  *
  * void  OSAtomicFifoEnqueue( OSFifoQueueHead *list, void *new, size_t offset);
  */
-
-// %rdi == list head, %rsi == new, %rdx == offset
-
-COMMPAGE_FUNCTION_START(AtomicFifoEnqueue_64, 64, 4)
-	pushq	%rbx
-	xorl	%ebx,%ebx	// clear "preemption pending" flag
-	COMMPAGE_CALL(_COMM_PAGE_PFZ_ENQUEUE,_COMM_PAGE_FIFO_ENQUEUE,AtomicFifoEnqueue_64)
-	testl	%ebx,%ebx	// pending preemption?
-	jz	1f
-	COMMPAGE_CALL(_COMM_PAGE_PREEMPT,_COMM_PAGE_FIFO_ENQUEUE,AtomicFifoEnqueue_64)
-1:	
-	popq	%rbx
-	ret
-COMMPAGE_DESCRIPTOR(AtomicFifoEnqueue_64,_COMM_PAGE_FIFO_ENQUEUE,0,0)
-	
-	
-/* void* OSAtomicDequeue( OSQueueHead *list, size_t offset); */
-
-// %rdi == list head, %rsi == offset
-
-COMMPAGE_FUNCTION_START(AtomicFifoDequeue_64, 64, 4)
-	pushq	%rbx
-	xorl	%ebx,%ebx	// clear "preemption pending" flag
-	movq	%rsi,%rdx	// move offset to %rdx to be like the Enqueue case
-	COMMPAGE_CALL(_COMM_PAGE_PFZ_DEQUEUE,_COMM_PAGE_FIFO_DEQUEUE,AtomicFifoDequeue_64)
-	testl	%ebx,%ebx	// pending preemption?
-	jz	1f
-	COMMPAGE_CALL(_COMM_PAGE_PREEMPT,_COMM_PAGE_FIFO_DEQUEUE,AtomicFifoDequeue_64)
-1:	
-	popq	%rbx
-	ret			// ptr to 1st element in Q in %rax
-COMMPAGE_DESCRIPTOR(AtomicFifoDequeue_64,_COMM_PAGE_FIFO_DEQUEUE,0,0)
 
 
 /* Subroutine to make a preempt syscall.  Called when we notice %ebx is

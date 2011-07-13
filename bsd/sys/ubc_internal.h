@@ -87,6 +87,8 @@ struct cl_readahead {
 struct cl_writebehind {
 	lck_mtx_t	cl_lockw;
         void	*	cl_scmap;			/* pointer to sparse cluster map */
+	off_t		cl_last_write;			/* offset of the end of the last write */
+	off_t		cl_seq_written;			/* sequentially written bytes */
 	int		cl_sparse_pushes;		/* number of pushes outside of the cl_lockw in progress */
 	int		cl_sparse_wait;			/* synchronous push is in progress */
 	int		cl_number;			/* number of packed write behind clusters currently valid */
@@ -124,6 +126,13 @@ struct ubc_info {
         struct	cl_writebehind *cl_wbehind;	/* cluster write behind context */
 
 	struct	cs_blob		*cs_blobs; 	/* for CODE SIGNING */
+#if CHECK_CS_VALIDATION_BITMAP
+	void			*cs_valid_bitmap;     /* right now: used only for signed files on the read-only root volume */
+	uint64_t		cs_valid_bitmap_size; /* Save original bitmap size in case the file size changes.
+						       * In the future, we may want to reconsider changing the
+						       * underlying bitmap to reflect the new file size changes.
+						       */
+#endif /* CHECK_CS_VALIDATION_BITMAP */
 };
 
 /* Defines for ui_flags */
@@ -159,6 +168,7 @@ __private_extern__ uint32_t cluster_hard_throttle_limit(vnode_t, uint32_t *, uin
 #define UBC_FOR_PAGEOUT         0x0002
 
 memory_object_control_t ubc_getobject(vnode_t, int);
+boolean_t	ubc_strict_uncached_IO(vnode_t);
 
 int	ubc_info_init(vnode_t);
 int	ubc_info_init_withsize(vnode_t, off_t);
@@ -181,6 +191,8 @@ int	ubc_cs_getcdhash(vnode_t, off_t, unsigned char *);
 kern_return_t ubc_cs_blob_allocate(vm_offset_t *, vm_size_t *);
 void ubc_cs_blob_deallocate(vm_offset_t, vm_size_t);
 
+kern_return_t	ubc_cs_validation_bitmap_allocate( vnode_t );
+void		ubc_cs_validation_bitmap_deallocate( vnode_t );
 __END_DECLS
 
 

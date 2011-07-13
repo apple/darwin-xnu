@@ -107,6 +107,12 @@ void
 lck_mod_init(
 	void)
 {
+	/*
+	 * Obtain "lcks" options:this currently controls lock statistics
+	 */
+	if (!PE_parse_boot_argn("lcks", &LcksOpts, sizeof (LcksOpts)))
+		LcksOpts = 0;
+
 	queue_init(&lck_grp_queue);
 	
 	/* 
@@ -537,8 +543,12 @@ lck_mtx_sleep_deadline(
 	if (res == THREAD_WAITING) {
 		lck_mtx_unlock(lck);
 		res = thread_block(THREAD_CONTINUE_NULL);
-		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK))
-			lck_mtx_lock(lck);
+		if (!(lck_sleep_action & LCK_SLEEP_UNLOCK)) {
+			if ((lck_sleep_action & LCK_SLEEP_SPIN))
+				lck_mtx_lock_spin(lck);
+			else
+				lck_mtx_lock(lck);
+		}
 	}
 	else
 	if (lck_sleep_action & LCK_SLEEP_UNLOCK)
@@ -590,7 +600,7 @@ lck_mtx_lock_wait (
 	thread_lock(holder);
 	if (mutex->lck_mtx_pri == 0)
 		holder->promotions++;
-	holder->sched_mode |= TH_MODE_PROMOTED;
+	holder->sched_flags |= TH_SFLAG_PROMOTED;
 	if (		mutex->lck_mtx_pri < priority	&&
 				holder->sched_pri < priority		) {
 		KERNEL_DEBUG_CONSTANT(
@@ -672,7 +682,7 @@ lck_mtx_lock_acquire(
 
 		thread_lock(thread);
 		thread->promotions++;
-		thread->sched_mode |= TH_MODE_PROMOTED;
+		thread->sched_flags |= TH_SFLAG_PROMOTED;
 		if (thread->sched_pri < priority) {
 			KERNEL_DEBUG_CONSTANT(
 				MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
@@ -709,20 +719,22 @@ lck_mtx_unlock_wakeup (
 	else
 		mutex = &lck->lck_mtx_ptr->lck_mtx;
 
+	if (thread != holder)
+		panic("lck_mtx_unlock_wakeup: mutex %p holder %p\n", mutex, holder);
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_UNLCK_WAKEUP_CODE) | DBG_FUNC_START, (int)lck, (int)holder, 0, 0, 0);
 
-	if (thread != holder)
-		panic("lck_mtx_unlock_wakeup: mutex %p holder %p\n", mutex, holder);
+	assert(mutex->lck_mtx_waiters > 0);
+	thread_wakeup_one((event_t)(((unsigned int*)lck)+(sizeof(lck_mtx_t)-1)/sizeof(unsigned int)));
 
 	if (thread->promotions > 0) {
 		spl_t		s = splsched();
 
 		thread_lock(thread);
 		if (	--thread->promotions == 0				&&
-				(thread->sched_mode & TH_MODE_PROMOTED)		) {
-			thread->sched_mode &= ~TH_MODE_PROMOTED;
-			if (thread->sched_mode & TH_MODE_ISDEPRESSED) {
+				(thread->sched_flags & TH_SFLAG_PROMOTED)		) {
+			thread->sched_flags &= ~TH_SFLAG_PROMOTED;
+			if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
 				KERNEL_DEBUG_CONSTANT(
 					MACHDBG_CODE(DBG_MACH_SCHED,MACH_DEMOTE) | DBG_FUNC_NONE,
 						  thread->sched_pri, DEPRESSPRI, 0, lck, 0);
@@ -738,14 +750,12 @@ lck_mtx_unlock_wakeup (
 									0, lck, 0);
 				}
 
-				compute_priority(thread, FALSE);
+				SCHED(compute_priority)(thread, FALSE);
 			}
 		}
 		thread_unlock(thread);
 		splx(s);
 	}
-	assert(mutex->lck_mtx_waiters > 0);
-	thread_wakeup_one((event_t)(((unsigned int*)lck)+(sizeof(lck_mtx_t)-1)/sizeof(unsigned int)));
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_LOCKS, LCK_MTX_UNLCK_WAKEUP_CODE) | DBG_FUNC_END, 0, 0, 0, 0, 0);
 }

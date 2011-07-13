@@ -30,6 +30,7 @@
 #define _LIBKERN_OSKEXTLIBPRIVATE_H
 
 #include <sys/cdefs.h>
+#include <uuid/uuid.h>
 
 __BEGIN_DECLS
 #ifdef KERNEL
@@ -38,6 +39,7 @@ __BEGIN_DECLS
 #include <mach/vm_types.h>
 #else
 #include <CoreFoundation/CoreFoundation.h>
+#include <System/mach/kmod.h>
 #endif /* KERNEL */
 __END_DECLS
 
@@ -85,15 +87,17 @@ typedef uint8_t OSKextExcludeLevel;
 #endif
 /*********************************************************************
 * In addition to the keys defined here, you will find:
-*   CFBundleIdentifier
-*   CFBundleVersion
-*   OSBundleCompatibleVersion
-*   OSKernelResource
-*   OSBundleInterface
+*   kCFBundleIdentifierKey
+*   kCFBundleVersionKey
+*   kOSBundleCompatibleVersionKey
+*   kOSBundleIsInterfaceKey
+*   kOSKernelResourceKey
 *********************************************************************/
+#define kOSBundleMachOHeadersKey                "OSBundleMachOHeaders"
 #define kOSBundleCPUTypeKey                     "OSBundleCPUType"
 #define kOSBundleCPUSubtypeKey                  "OSBundleCPUSubtype"
 #define kOSBundlePathKey                        "OSBundlePath"
+#define kOSBundleExecutablePathKey              "OSBundleExecutablePath"
 #define kOSBundleUUIDKey                        "OSBundleUUID"
 #define kOSBundleStartedKey                     "OSBundleStarted"
 #define kOSBundlePrelinkedKey                   "OSBundlePrelinked"
@@ -104,8 +108,13 @@ typedef uint8_t OSKextExcludeLevel;
 #define kOSBundleDependenciesKey                "OSBundleDependencies"
 #define kOSBundleRetainCountKey                 "OSBundleRetainCount"
 
+/* Dictionary of metaclass info keyed by classname.
+ */
 #define kOSBundleClassesKey                     "OSBundleClasses"
 
+/* These are contained in kOSBundleClassesKey. kOSMetaClassSuperclassNameKey
+ * may be absent (for the root class).
+ */
 #define kOSMetaClassNameKey                     "OSMetaClassName"
 #define kOSMetaClassSuperclassNameKey           "OSMetaClassSuperclassName"
 #define kOSMetaClassTrackingCountKey            "OSMetaClassTrackingCount"
@@ -653,15 +662,6 @@ Boolean OSKextVersionGetString(
 void kext_weak_symbol_referenced(void);
 #endif /* XNU_KERNEL_PRIVATE */
 
-#if !(__x86_64__)
-
-extern const void *gOSKextUnresolved;
-
-#define OSKextSymbolIsResolved(weak_sym)        \
-    (&(weak_sym) != gOSKextUnresolved)
-
-#endif /* !(__x86_64__) */
-
 #if PRAGMA_MARK
 #pragma mark -
 /********************************************************************/
@@ -680,6 +680,17 @@ extern const void *gOSKextUnresolved;
 vm_map_t kext_get_vm_map(kmod_info_t * info);
 
 #ifdef XNU_KERNEL_PRIVATE
+
+#if CONFIG_DTRACE
+/*!
+ * @function OSKextRegisterKextsWithDTrace
+ * @abstract
+ * DTrace calls this once when it has started up so that the kext system
+ * will register any already-loaded kexts with it.
+ */
+void OSKextRegisterKextsWithDTrace(void);
+
+#endif /* CONFIG_DTRACE */
 
 /*!
  * @function kext_dump_panic_lists
@@ -786,6 +797,89 @@ OSReturn OSKextUnloadKextWithLoadTag(uint32_t loadTag);
 #endif /* XNU_KERNEL_PRIVATE */
 
 #endif /* KERNEL */
+
+#if PRAGMA_MARK
+#pragma mark -
+/********************************************************************/
+#pragma mark Loaded Kext Summary
+/********************************************************************/
+#endif
+
+/*!
+ * @define kOSKextLoadedKextSummaryVersion
+ * @abstract The current version of the loaded kext summary headers.
+ */
+#define kOSKextLoadedKextSummaryVersion 2
+
+/*!
+ * @typedef OSKextLoadedKextSummary
+ * @abstract A structure that describes a loaded kext.
+ *
+ * @field name The kext's bundle identifier.
+ * @field uuid The kext's UUID;
+ * @field address The kext's load address.
+ * @field size The kext's load size.
+ * @field version The binary format (OSKextVersion) version of the kext.
+ * @field loadTag The kext's load tag.
+ * @field flags Internal tracking flags.
+ * @field reference_list who this refs (links on).
+ * 
+ * @discussion
+ * The OSKextLoadedKextSummary structure contains a basic set of information
+ * about the kext to facilitate kext debugging and panic debug log output.
+ */
+typedef struct _loaded_kext_summary {
+    char        name[KMOD_MAX_NAME];
+    uuid_t      uuid;
+    uint64_t    address;
+    uint64_t    size;
+    uint64_t    version;
+    uint32_t    loadTag;
+    uint32_t    flags;
+    uint64_t    reference_list;
+} OSKextLoadedKextSummary;
+
+/*!
+ * @typedef OSKextLoadedKextSummaryHeader
+ * @abstract A structure that describes the set of loaded kext summaries.
+ *
+ * @field version The version of the loaded kext summary structures.
+ * @field entry_size The size of each entry in summaries.
+ * @field numSummaries The number of OSKextLoadedKextSummary structures
+ *        following the header.
+ * @field summaries A convenience pointer to the array of summaries following
+ *        the header.
+ *
+ * @discussion
+ * The OSKextLoadedKextSummaryHeader describes the set of loaded kext summaries
+ * available for use by the debugger or panic log routine.
+ * The array of summaries contains one OSKextLoadedKextSummary for every kext
+ * that declares an executable and is not an interface to the kernel.
+ */
+typedef struct _loaded_kext_summary_header {
+    uint32_t version;
+    uint32_t entry_size;
+    uint32_t numSummaries;
+    uint32_t reserved; /* explicit alignment for gdb  */
+    OSKextLoadedKextSummary summaries[0];
+} OSKextLoadedKextSummaryHeader;
+
+/*!
+ * @var gLoadedKextSummaries
+ * @abstract The global pointer to the current set of loaded kext summaries.
+ */
+extern OSKextLoadedKextSummaryHeader * gLoadedKextSummaries;
+
+/*!
+ * @function OSKextLoadedKextSummariesUpdated
+ * @abstract Called when gLoadedKextSummaries has been updated.
+ *
+ * @discussion
+ * gLoadedKextSummaries is updated when a kext is loaded or unloaded.
+ * When the update is complete, OSKextLoadedKextSummariesUpdated is called.
+ * gdb can set a breakpoint on this function to detect kext loads and unloads.
+ */
+void OSKextLoadedKextSummariesUpdated(void);
 
 __END_DECLS
 

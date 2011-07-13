@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -59,8 +59,6 @@
  *
  */
 
-
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -69,6 +67,7 @@
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <sys/sysctl.h>
+#include <sys/socketvar.h>
 #include <kern/lock.h>
 
 #include <net/if.h>
@@ -78,6 +77,7 @@
 #include <net/if_types.h>
 #include <net/ndrv.h>
 #include <net/kpi_protocol.h>
+#include <net/dlil.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -89,13 +89,6 @@
 #include <netinet6/nd6.h>
 #include <netinet6/in6_ifattach.h>
 #endif
-
-
-
-#include <sys/socketvar.h>
-
-#include <net/dlil.h>
-
 
 #if LLC && CCITT
 extern struct ifqueue pkintrq;
@@ -114,70 +107,83 @@ extern struct ifqueue pkintrq;
  * the ether header, which is provided separately.
  */
 static errno_t
-ether_inet6_input(
-	__unused ifnet_t	ifp,
-	protocol_family_t	protocol,
-	mbuf_t				packet,
-	__unused char		*header)
+ether_inet6_input(ifnet_t ifp, protocol_family_t protocol,
+    mbuf_t packet, char *header)
 {
-	errno_t error;
+#pragma unused(ifp, protocol)
+	struct ether_header *eh = (struct ether_header *)header;
 
-	if ((error = proto_input(protocol, packet)))
+	if (eh->ether_type == htons(ETHERTYPE_IPV6)) {
+		struct ifnet *mifp;
+		/*
+		 * Trust the ifp in the mbuf, rather than ifproto's
+		 * since the packet could have been injected via
+		 * a dlil_input_packet_list() using an ifp that is
+		 * different than the one where the packet really
+		 * came from.
+		 */
+		mifp = mbuf_pkthdr_rcvif(packet);
+
+		/* Update L2 reachability record, if present (and not bcast) */
+		if (bcmp(eh->ether_shost, etherbroadcastaddr,
+		    ETHER_ADDR_LEN) != 0) {
+			nd6_llreach_set_reachable(mifp, eh->ether_shost,
+			    ETHER_ADDR_LEN);
+		}
+
+		if (proto_input(protocol, packet) != 0)
+			m_freem(packet);
+	} else {
 		m_freem(packet);
-	return error;
+	}
+
+	return (EJUSTRETURN);
 }
 
 static errno_t
-ether_inet6_pre_output(
-    ifnet_t		    			ifp,
-    __unused protocol_family_t	protocol_family,
-    mbuf_t			     		*m0,
-    const struct sockaddr		*dst_netaddr,
-    void						*route,
-    char						*type,
-    char						*edst)
+ether_inet6_pre_output(ifnet_t ifp, protocol_family_t protocol_family,
+    mbuf_t *m0, const struct sockaddr *dst_netaddr, void *route,
+    char *type, char *edst)
 {
+#pragma unused(protocol_family)
 	errno_t	result;
-	struct	sockaddr_dl	sdl;
-	register struct mbuf *m = *m0;
+	struct sockaddr_dl sdl;
+	struct mbuf *m = *m0;
 
 	/*
 	 * Tell ether_frameout it's ok to loop packet if necessary
 	 */
 	m->m_flags |= M_LOOP;
-	
-	result = nd6_lookup_ipv6(ifp, (const struct sockaddr_in6*)dst_netaddr,
-							 &sdl, sizeof(sdl), route, *m0);
-	
+
+	result = nd6_lookup_ipv6(ifp, (const struct sockaddr_in6 *)dst_netaddr,
+	    &sdl, sizeof (sdl), route, *m0);
+
 	if (result == 0) {
-		*(u_int16_t*)type = htons(ETHERTYPE_IPV6);
+		*(u_int16_t *)type = htons(ETHERTYPE_IPV6);
 		bcopy(LLADDR(&sdl), edst, sdl.sdl_alen);
 	}
 
-
-
-    return result;
+	return (result);
 }
 
 static int
-ether_inet6_resolve_multi(
-	ifnet_t	ifp,
-	const struct sockaddr *proto_addr,
-	struct sockaddr_dl *out_ll,
-	size_t	ll_len)
+ether_inet6_resolve_multi(ifnet_t ifp, const struct sockaddr *proto_addr,
+    struct sockaddr_dl *out_ll, size_t ll_len)
 {
-	static const size_t minsize = offsetof(struct sockaddr_dl, sdl_data[0]) + ETHER_ADDR_LEN;
-	const struct sockaddr_in6	*sin6 = (const struct sockaddr_in6*)proto_addr;
-	
+	static const size_t minsize =
+	    offsetof(struct sockaddr_dl, sdl_data[0]) + ETHER_ADDR_LEN;
+	const struct sockaddr_in6 *sin6 =
+	    (const struct sockaddr_in6 *)proto_addr;
+
 	if (proto_addr->sa_family != AF_INET6)
-		return EAFNOSUPPORT;
-	
-	if (proto_addr->sa_len < sizeof(struct sockaddr_in6))
-		return EINVAL;
-	
+		return (EAFNOSUPPORT);
+
+	if (proto_addr->sa_len < sizeof (struct sockaddr_in6))
+		return (EINVAL);
+
 	if (ll_len < minsize)
-		return EMSGSIZE;
-	
+		return (EMSGSIZE);
+
 	bzero(out_ll, minsize);
 	out_ll->sdl_len = minsize;
 	out_ll->sdl_family = AF_LINK;
@@ -187,20 +193,17 @@ ether_inet6_resolve_multi(
 	out_ll->sdl_alen = ETHER_ADDR_LEN;
 	out_ll->sdl_slen = 0;
 	ETHER_MAP_IPV6_MULTICAST(&sin6->sin6_addr, LLADDR(out_ll));
-	
-	return 0;
+
+	return (0);
 }
 
-
 static errno_t
-ether_inet6_prmod_ioctl(
-	ifnet_t				ifp,
-	__unused protocol_family_t	protocol_family,
-	u_long				command,
-	void				*data)
+ether_inet6_prmod_ioctl(ifnet_t ifp, protocol_family_t protocol_family,
+    u_long command, void *data)
 {
-    struct ifreq *ifr = (struct ifreq *) data;
-    int error = 0;
+#pragma unused(protocol_family)
+	struct ifreq *ifr = (struct ifreq *)data;
+	int error = 0;
 
 	switch (command) {
 	case SIOCSIFADDR:
@@ -211,30 +214,30 @@ ether_inet6_prmod_ioctl(
 		break;
 
 	case SIOCGIFADDR:
-	ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data, ETHER_ADDR_LEN);
-	break;
+		(void) ifnet_lladdr_copy_bytes(ifp, ifr->ifr_addr.sa_data,
+		    ETHER_ADDR_LEN);
+		break;
 
-    default:
-	error = EOPNOTSUPP;
-	break;
-    }
-    return (error);
+	default:
+		error = EOPNOTSUPP;
+		break;
+	}
+	return (error);
 }
 
 errno_t
-ether_attach_inet6(
-	struct ifnet	*ifp,
-	__unused protocol_family_t protocol_family)
+ether_attach_inet6(struct ifnet *ifp, protocol_family_t protocol_family)
 {
+#pragma unused(protocol_family)
 	struct ifnet_attach_proto_param	proto;
 	struct ifnet_demux_desc demux[1];
-	u_short en_6native=htons(ETHERTYPE_IPV6);
+	u_short en_6native = htons(ETHERTYPE_IPV6);
 	errno_t	error;
-	
-	bzero(&proto, sizeof(proto));
+
+	bzero(&proto, sizeof (proto));
 	demux[0].type = DLIL_DESC_ETYPE2;
 	demux[0].data = &en_6native;
-	demux[0].datalen = sizeof(en_6native);
+	demux[0].datalen = sizeof (en_6native);
 	proto.demux_list = demux;
 	proto.demux_count = 1;
 	proto.input = ether_inet6_input;
@@ -243,24 +246,15 @@ ether_attach_inet6(
 	proto.resolve = ether_inet6_resolve_multi;
 	error = ifnet_attach_protocol(ifp, protocol_family, &proto);
 	if (error && error != EEXIST) {
-		printf("WARNING: ether_attach_inet6 can't attach ipv6 to %s%d\n",
-			ifp->if_name, ifp->if_unit);
+		printf("WARNING: %s can't attach ipv6 to %s%d\n", __func__,
+		    ifp->if_name, ifp->if_unit);
 	}
-	
-	return error;
+
+	return (error);
 }
 
 void
-ether_detach_inet6(
-	struct ifnet	*ifp,
-	protocol_family_t protocol_family)
+ether_detach_inet6(struct ifnet *ifp, protocol_family_t protocol_family)
 {
-	errno_t         error;
-
-	error = ifnet_detach_protocol(ifp, protocol_family);
-	if (error && error != ENOENT) {
-		printf("WARNING: ether_detach_inet6 can't detach ipv6 from %s%d\n",
-			ifp->if_name, ifp->if_unit);
-	}
+	(void) ifnet_detach_protocol(ifp, protocol_family);
 }
-

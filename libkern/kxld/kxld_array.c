@@ -139,6 +139,9 @@ array_init(KXLDArray *array, size_t itemsize, u_int nitems)
 {
     kern_return_t rval = KERN_FAILURE;
     KXLDArrayPool *pool = NULL;
+    
+    require_action(itemsize, finish, rval=KERN_INVALID_ARGUMENT);
+    require_action(array->npools < 2, finish, rval=KERN_INVALID_ARGUMENT);
  
     array->itemsize = itemsize;
 

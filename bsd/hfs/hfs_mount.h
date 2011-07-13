@@ -79,6 +79,7 @@ struct hfs_mount_args {
 #define HFS_GET_JOURNAL_INFO    0x6a6e6c69
 #define HFS_SET_PKG_EXTENSIONS  0x121031
 #define HFS_REPLAY_JOURNAL	0x6a6e6c72
+#define HFS_ENABLE_RESIZE_DEBUG 4	/* enable debug code for volume resizing */
 
 #endif /* __APPLE_API_UNSTABLE */
 

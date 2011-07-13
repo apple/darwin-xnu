@@ -5,7 +5,9 @@
 #include <sys/types.h>
 #include <sys/kernel_types.h>
 #include <kern/thread.h>
+#ifdef BSD_KERNEL_PRIVATE
 #include <sys/user.h>
+#endif
 #include <stdint.h>
 
 /*

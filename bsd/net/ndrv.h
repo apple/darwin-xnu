@@ -109,7 +109,7 @@ struct ndrv_demux_desc
  * Field:
  *	version		:	must be NDRV_PROTOCOL_DESC_VERS
  *	protocol_family	:	unique identifier for this protocol
- *	demux_count	:	number of demux_list descriptors in demux_list
+ *	demux_count	:	number of demux_list descriptors in demux_list; maximum of 10
  *	demux_list	:	pointer to array of demux descriptors
  */
 struct ndrv_protocol_desc

@@ -48,8 +48,6 @@ extern ppnum_t max_ppnum;
 
 #define MAX_BANKS	32
 
-int hibernate_page_list_allocate_avoided;
-
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 hibernate_page_list_t *
@@ -73,8 +71,6 @@ hibernate_page_list_allocate(void)
     msize = args->MemoryMapDescriptorSize;
     mcount = args->MemoryMapSize / msize;
 
-    hibernate_page_list_allocate_avoided = 0;
-
     num_banks = 0;
     for (i = 0; i < mcount; i++, mptr = (EfiMemoryRange *)(((vm_offset_t)mptr) + msize))
     {
@@ -86,7 +82,7 @@ hibernate_page_list_allocate(void)
 	if ((base + num - 1) > max_ppnum)
 		num = max_ppnum - base + 1;
 	if (!num)
-	    continue;
+		continue;
 
 	switch (mptr->Type)
 	{
@@ -131,9 +127,6 @@ hibernate_page_list_allocate(void)
 	    case kEfiRuntimeServicesData:
 	    // contents are volatile once the platform expert starts
 	    case kEfiACPIReclaimMemory:
-		hibernate_page_list_allocate_avoided += num;
-		break;
-
 	    // non dram
 	    case kEfiReservedMemoryType:
 	    case kEfiUnusableMemory:
@@ -227,13 +220,8 @@ hibernate_processor_setup(IOHibernateImageHeader * header)
     header->runtimePages     = args->efiRuntimeServicesPageStart;
     header->runtimePageCount = args->efiRuntimeServicesPageCount;
     header->runtimeVirtualPages = args->efiRuntimeServicesVirtualPageStart;
-    if (args->Version == kBootArgsVersion1 && args->Revision >= kBootArgsRevision1_6) {
-        header->performanceDataStart = args->performanceDataStart;
-        header->performanceDataSize = args->performanceDataSize;
-    } else {
-        header->performanceDataStart = 0;
-        header->performanceDataSize = 0;
-    }
+    header->performanceDataStart = args->performanceDataStart;
+    header->performanceDataSize = args->performanceDataSize;
 
     return (KERN_SUCCESS);
 }

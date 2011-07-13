@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -73,18 +73,21 @@
 
 int
 mig_strncpy(
-    register char *dest,
-    register const char *src,
-    register int len)
+    char *dest,
+    const char *src,
+    int len)
 {
-    register int i;
+    int i;
 
-    if (len <= 0)
-	return 0;
+    if (len <= 0) {
+		return 0;
+	}
 
-    for (i=1; i<len; i++)
-	if (! (*dest++ = *src++))
-	    return i;
+    for (i = 1; i < len; i++) {
+		if (!(*dest++ = *src++)) {
+			return i;
+		}
+	}
 
     *dest = '\0';
     return i;

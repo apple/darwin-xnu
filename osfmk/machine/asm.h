@@ -28,9 +28,7 @@
 #ifndef _MACHINE_ASM_H
 #define _MACHINE_ASM_H
 
-#if defined (__ppc__)
-#include "ppc/asm.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/asm.h"
 #else
 #error architecture not supported

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -436,28 +436,45 @@ pfi_instance_add(struct ifnet *ifp, int net, int flags)
 		return;
 	ifnet_lock_shared(ifp);
 	TAILQ_FOREACH(ia, &ifp->if_addrhead, ifa_link) {
-		if (ia->ifa_addr == NULL)
+		IFA_LOCK(ia);
+		if (ia->ifa_addr == NULL) {
+			IFA_UNLOCK(ia);
 			continue;
+		}
 		af = ia->ifa_addr->sa_family;
-		if (af != AF_INET && af != AF_INET6)
+		if (af != AF_INET && af != AF_INET6) {
+			IFA_UNLOCK(ia);
 			continue;
-		if ((flags & PFI_AFLAG_BROADCAST) && af == AF_INET6)
+		}
+		if ((flags & PFI_AFLAG_BROADCAST) && af == AF_INET6) {
+			IFA_UNLOCK(ia);
 			continue;
+		}
 		if ((flags & PFI_AFLAG_BROADCAST) &&
-		    !(ifp->if_flags & IFF_BROADCAST))
+		    !(ifp->if_flags & IFF_BROADCAST)) {
+			IFA_UNLOCK(ia);
 			continue;
+		}
 		if ((flags & PFI_AFLAG_PEER) &&
-		    !(ifp->if_flags & IFF_POINTOPOINT))
+		    !(ifp->if_flags & IFF_POINTOPOINT)) {
+			IFA_UNLOCK(ia);
 			continue;
+		}
 		if ((flags & PFI_AFLAG_NETWORK) && af == AF_INET6 &&
 		    IN6_IS_ADDR_LINKLOCAL(
-		    &((struct sockaddr_in6 *)ia->ifa_addr)->sin6_addr))
+		    &((struct sockaddr_in6 *)ia->ifa_addr)->sin6_addr)) {
+			IFA_UNLOCK(ia);
 			continue;
+		}
 		if (flags & PFI_AFLAG_NOALIAS) {
-			if (af == AF_INET && got4)
+			if (af == AF_INET && got4) {
+				IFA_UNLOCK(ia);
 				continue;
-			if (af == AF_INET6 && got6)
+			}
+			if (af == AF_INET6 && got6) {
+				IFA_UNLOCK(ia);
 				continue;
+			}
 		}
 		if (af == AF_INET)
 			got4 = 1;
@@ -480,6 +497,7 @@ pfi_instance_add(struct ifnet *ifp, int net, int flags)
 			pfi_address_add(ia->ifa_dstaddr, af, net2);
 		else
 			pfi_address_add(ia->ifa_addr, af, net2);
+		IFA_UNLOCK(ia);
 	}
 	ifnet_lock_done(ifp);
 }

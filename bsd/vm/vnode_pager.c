@@ -52,6 +52,7 @@
 #include <sys/mount_internal.h>	/* needs internal due to fhandle_t */
 #include <sys/ubc_internal.h>
 #include <sys/lock.h>
+#include <sys/disk.h> 		/* For DKIOC calls */
 
 #include <mach/mach_types.h>
 #include <mach/memory_object_types.h>
@@ -79,6 +80,27 @@
 #include <nfs/nfs.h>
 
 #include <vm/vm_protos.h>
+
+
+void
+vnode_pager_throttle()
+{
+	struct uthread *ut;
+
+	ut = get_bsdthread_info(current_thread());
+
+	if (ut->uu_lowpri_window)
+		throttle_lowpri_io(TRUE);
+}
+
+
+boolean_t
+vnode_pager_isSSD(vnode_t vp)
+{
+	if (vp->v_mount->mnt_kern_flag & MNTK_SSD)
+		return (TRUE);
+	return (FALSE);
+}
 
 
 uint32_t
@@ -135,6 +157,85 @@ vnode_pager_get_cs_blobs(
 {
 	*blobs = ubc_get_cs_blobs(vp);
 	return KERN_SUCCESS;
+}
+
+/* 
+ * vnode_trim:
+ * Used to call the DKIOCUNMAP ioctl on the underlying disk device for the specified vnode.
+ * Trims the region at offset bytes into the file, for length bytes.
+ *
+ * Care must be taken to ensure that the vnode is sufficiently reference counted at the time this
+ * function is called; no iocounts or usecounts are taken on the vnode.
+ * This function is non-idempotent in error cases;  We cannot un-discard the blocks if only some of them
+ * are successfully discarded.
+ */
+u_int32_t vnode_trim (
+		struct vnode *vp,
+		off_t offset,
+		size_t length)
+{
+	daddr64_t io_blockno;	 /* Block number corresponding to the start of the extent */
+	size_t io_bytecount;	/* Number of bytes in current extent for the specified range */
+	size_t trimmed = 0;
+	off_t current_offset = offset; 
+	size_t remaining_length = length;
+	int error = 0;
+	u_int32_t blocksize = 0;
+	struct vnode *devvp;
+	dk_extent_t extent;
+	dk_unmap_t unmap;
+
+
+	/* Get the underlying device vnode */
+	devvp = vp->v_mount->mnt_devvp;
+
+	/* Figure out the underlying device block size */
+	error  = VNOP_IOCTL(devvp, DKIOCGETBLOCKSIZE, (caddr_t)&blocksize, 0, vfs_context_kernel());
+	if (error) {
+		goto trim_exit;
+	}
+
+	/* 
+	 * We may not get the entire range from offset -> offset+length in a single
+	 * extent from the blockmap call.  Keep looping/going until we are sure we've hit
+	 * the whole range or if we encounter an error.
+	 */
+	while (trimmed < length) {
+		/*
+		 * VNOP_BLOCKMAP will tell us the logical to physical block number mapping for the
+		 * specified offset.  It returns blocks in contiguous chunks, so if the logical range is 
+		 * broken into multiple extents, it must be called multiple times, increasing the offset
+		 * in each call to ensure that the entire range is covered.
+		 */
+		error = VNOP_BLOCKMAP (vp, current_offset, remaining_length, 
+				&io_blockno, &io_bytecount, NULL, VNODE_READ, NULL);
+
+		if (error) {
+			goto trim_exit;
+		}
+		/* 
+		 * We have a contiguous run.  Prepare & issue the ioctl for the device.
+		 * the DKIOCUNMAP ioctl takes offset in bytes from the start of the device.
+		 */
+		memset (&extent, 0, sizeof(dk_extent_t));
+		memset (&unmap, 0, sizeof(dk_unmap_t));
+		extent.offset = (uint64_t) io_blockno * (u_int64_t) blocksize;
+		extent.length = io_bytecount;
+		unmap.extents = &extent;
+		unmap.extentsCount = 1;
+		error = VNOP_IOCTL(devvp, DKIOCUNMAP, (caddr_t)&unmap, 0, vfs_context_kernel());
+
+		if (error) {
+			goto trim_exit;
+		}
+		remaining_length = remaining_length - io_bytecount;
+		trimmed = trimmed + io_bytecount;
+		current_offset = current_offset + io_bytecount;
+	}
+trim_exit:
+
+	return error;
+
 }
 
 pager_return_t
@@ -219,9 +320,7 @@ vnode_pageout(struct vnode *vp,
 		else
 			request_flags = UPL_UBC_PAGEOUT | UPL_RET_ONLY_DIRTY;
 		
-	        ubc_create_upl(vp, f_offset, size, &upl, &pl, request_flags);
-
-		if (upl == (upl_t)NULL) {
+	        if (ubc_create_upl(vp, f_offset, size, &upl, &pl, request_flags) != KERN_SUCCESS) {
 			result    = PAGER_ERROR;
 			error_ret = EINVAL;
 			goto out;
@@ -555,14 +654,23 @@ vnode_pagein(
 					       xsize, flags, vfs_context_current())) ) {
 		        	/*
 				 * Usually this UPL will be aborted/committed by the lower cluster layer.
-				 * In the case of decmpfs, however, we may return an error (EAGAIN) to avoid
-				 * a deadlock with another thread already inflating the file. In that case,
-				 * we must take care of our UPL at this layer itself.
+				 *
+				 * a)	In the case of decmpfs, however, we may return an error (EAGAIN) to avoid
+				 *	a deadlock with another thread already inflating the file. 
+				 *
+				 * b)	In the case of content protection, EPERM is a valid error and we should respect it.
+				 *
+				 * In those cases, we must take care of our UPL at this layer itself.
 				 */
 				if (must_commit) {
 					if(error == EAGAIN) {
 			        		ubc_upl_abort_range(upl, (upl_offset_t) xoff, xsize, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_RESTART);
 					}
+#if CONFIG_PROTECT
+					if(error == EPERM) {
+			        		ubc_upl_abort_range(upl, (upl_offset_t) xoff, xsize, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+					}
+#endif
 				}
 				result = PAGER_ERROR;
 				error  = PAGER_ERROR;

@@ -107,3 +107,115 @@ sdt_invop(uintptr_t addr, uintptr_t *stack, uintptr_t eax)
 #endif
 
 
+struct frame {
+    struct frame *backchain;
+    uintptr_t retaddr;
+};
+
+/*ARGSUSED*/
+uint64_t
+sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
+{
+#pragma unused(arg, id, parg)    
+	uint64_t val;
+	struct frame *fp = (struct frame *)__builtin_frame_address(0);
+	uintptr_t *stack;
+	uintptr_t pc;
+	int i;
+
+#if defined(__x86_64__)
+    /*
+     * A total of 6 arguments are passed via registers; any argument with
+     * index of 5 or lower is therefore in a register.
+     */
+    int inreg = 5;
+#endif
+
+	for (i = 1; i <= aframes; i++) {
+		fp = fp->backchain;
+		pc = fp->retaddr;
+
+		if (dtrace_invop_callsite_pre != NULL
+			&& pc  >  (uintptr_t)dtrace_invop_callsite_pre
+			&& pc  <= (uintptr_t)dtrace_invop_callsite_post) {
+#if defined(__i386__)
+			/*
+			 * If we pass through the invalid op handler, we will
+			 * use the pointer that it passed to the stack as the
+			 * second argument to dtrace_invop() as the pointer to
+			 * the frame we're hunting for.
+			 */
+
+			stack = (uintptr_t *)&fp[1]; /* Find marshalled arguments */
+			fp = (struct frame *)stack[1]; /* Grab *second* argument */
+			stack = (uintptr_t *)&fp[0]; /* Find marshalled arguments */
+#elif defined(__x86_64__)
+			/*
+			 * In the case of x86_64, we will use the pointer to the
+			 * save area structure that was pushed when we took the
+			 * trap.  To get this structure, we must increment
+			 * beyond the frame structure. If the
+			 * argument that we're seeking is passed on the stack,
+			 * we'll pull the true stack pointer out of the saved
+			 * registers and decrement our argument by the number
+			 * of arguments passed in registers; if the argument
+			 * we're seeking is passed in regsiters, we can just
+			 * load it directly.
+			 */
+
+			/* fp points to frame of dtrace_invop() activation. */
+			fp = fp->backchain; /* to fbt_perfcallback() activation. */
+			fp = fp->backchain; /* to kernel_trap() activation. */
+			fp = fp->backchain; /* to trap_from_kernel() activation. */
+			
+			x86_saved_state_t   *tagged_regs = (x86_saved_state_t *)&fp[1];
+			x86_saved_state64_t *saved_state = saved_state64(tagged_regs);
+
+			if (argno <= inreg) {
+				stack = (uintptr_t *)&saved_state->rdi;
+			} else {
+				fp = (struct frame *)(saved_state->isf.rsp);
+				stack = (uintptr_t *)&fp[0]; /* Find marshalled
+								arguments */
+				argno -= (inreg +1);
+			}
+#else
+#error Unknown arch
+#endif
+			goto load;
+		}
+	}
+
+	/*
+	 * We know that we did not come through a trap to get into
+	 * dtrace_probe() --  We arrive here when the provider has
+	 * called dtrace_probe() directly.
+	 * The probe ID is the first argument to dtrace_probe().
+	 * We must advance beyond that to get the argX.
+	 */
+	argno++; /* Advance past probeID */
+
+#if defined(__x86_64__)
+	if (argno <= inreg) {
+		/*
+		 * This shouldn't happen.  If the argument is passed in a
+		 * register then it should have been, well, passed in a
+		 * register...
+		 */
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+		return (0);
+	}
+
+	argno -= (inreg + 1);
+#endif
+	stack = (uintptr_t *)&fp[1]; /* Find marshalled arguments */
+
+load:
+	DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
+	/* dtrace_probe arguments arg0 ... arg4 are 64bits wide */
+	val = (uint64_t)(*(((uintptr_t *)stack) + argno));
+	DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
+
+	return (val);
+}
+    

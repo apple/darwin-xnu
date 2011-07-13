@@ -104,14 +104,16 @@ arrays is specified by
 and
 .Fa trl_cnt .
 .Pp
-When a header or trailer is specified the value of 
+When a header or trailer is specified, the value of 
 .Fa len
-returned will include the size of header or trailer sent. The user should
-provide sufficiently large value of 
+argument indicates the maximum number of bytes in the header and/or file to be sent.
+It does not control the trailer; if a trailer exists, all of it will be sent.
+If the value of 
 .Fa len
-as argument including the size of header or trailer, 
-otherwise only part of file data will be sent
-following the header.
+argument is 0, all of the header and/or file will be sent before the entire trailer is sent.
+On return, the
+.Fa len
+argument specifies the total number of bytes sent.
 .Pp
 The
 .Fa flags

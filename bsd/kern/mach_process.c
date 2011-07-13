@@ -94,6 +94,8 @@
 
 #include <vm/vm_protos.h>		/* cs_allow_invalid() */
 
+#include <pexpert/pexpert.h>
+
 /* XXX ken/bsd_kern.c - prototype should be in common header */
 int get_task_userstop(task_t);
 
@@ -127,6 +129,10 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 	AUDIT_ARG(value32, uap->data);
 
 	if (uap->req == PT_DENY_ATTACH) {
+#if (DEVELOPMENT || DEBUG) && defined(__arm__)
+		if (PE_i_can_has_debugger(NULL))
+			return(0);
+#endif
 		proc_lock(p);
 		if (ISSET(p->p_lflag, P_LTRACED)) {
 			proc_unlock(p);
@@ -164,8 +170,10 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 		struct proc *pproc=proc_find(p->p_oppid);
 		proc_unlock(p);
 		cs_allow_invalid(p);
-		cs_allow_invalid(pproc);
-		proc_rele(pproc);
+		if(pproc) {
+			cs_allow_invalid(pproc);
+			proc_rele(pproc);
+		}
 		return(0);
 	}
 	if (uap->req == PT_SIGEXC) {
@@ -434,7 +442,7 @@ cantrace(proc_t cur_procp, kauth_cred_t creds, proc_t traced_procp, int *errp)
 	 *	(3) it's not owned by you, or is set-id on exec
 	 *	    (unless you're root).
 	 */
-	if ((creds->cr_ruid != proc_ucred(traced_procp)->cr_ruid ||
+	if ((kauth_cred_getruid(creds) != kauth_cred_getruid(proc_ucred(traced_procp)) ||
 		ISSET(traced_procp->p_flag, P_SUGID)) &&
 		(my_err = suser(creds, &cur_procp->p_acflag)) != 0) {
 		*errp = my_err;

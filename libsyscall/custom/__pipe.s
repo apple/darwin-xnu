@@ -29,19 +29,9 @@
 
 #include "SYS.h"
 
-#if defined(__ppc__) || defined(__ppc64__)
+#if defined(__i386__)
 
-MI_ENTRY_POINT(___pipe)
-    mr      r12,r3              // save fildes across syscall
-	SYSCALL_NONAME(pipe, 0)
-	stw     r3,0(r12)
-	stw     r4,4(r12)
-	li      r3,0
-	blr
-
-#elif defined(__i386__)
-
-PSEUDO_INT(__pipe, pipe, 0)
+PSEUDO_INT(___pipe, pipe, 0)
 	movl	4(%esp),%ecx
 	movl	%eax,(%ecx)
 	movl	%edx,4(%ecx)
@@ -50,7 +40,7 @@ PSEUDO_INT(__pipe, pipe, 0)
 
 #elif defined(__x86_64__)
 
-PSEUDO(__pipe, pipe, 0)
+PSEUDO(___pipe, pipe, 0)
 	movl	%eax, (%rdi)
 	movl	%edx, 4(%rdi)
 	xorl	%eax, %eax

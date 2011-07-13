@@ -11,9 +11,6 @@ INSTINC_SUBDIRS =	\
 	architecture	\
 	mach-o
 
-INSTINC_SUBDIRS_PPC = 	\
-	architecture
-
 INSTINC_SUBDIRS_I386 =	\
 	architecture
 
@@ -23,8 +20,12 @@ INSTINC_SUBDIRS_X86_64 =	\
 INSTINC_SUBDIRS_ARM =	\
 	architecture
 
+
 EXPORT_FILES = \
 	AppleSecureBootEpoch.h \
+	Availability.h	\
+	AvailabilityInternal.h	\
+	AvailabilityMacros.h	\
 	ar.h		\
 	stdarg.h	\
 	stdbool.h	\

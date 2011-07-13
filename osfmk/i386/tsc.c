@@ -51,7 +51,6 @@
 #include <mach/vm_prot.h>
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>		/* for kernel_map */
-#include <i386/ipl.h>
 #include <architecture/i386/pio.h>
 #include <i386/machine_cpu.h>
 #include <i386/cpuid.h>

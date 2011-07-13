@@ -28,9 +28,7 @@
 #ifndef _MACHINE_TRAP_H
 #define _MACHINE_TRAP_H
 
-#if defined (__ppc__)
-#include "ppc/trap.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/trap.h"
 #else
 #error architecture not supported

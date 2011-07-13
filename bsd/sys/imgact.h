@@ -85,15 +85,23 @@ struct image_params {
 	char		*ip_vdata;		/* file data (up to one page) */
 	int		ip_flags;		/* image flags */
 	int		ip_argc;		/* argument count */
-	char		*ip_argv;		/* argument vector beginning */
 	int		ip_envc;		/* environment count */
+	int		ip_applec;		/* apple vector count */
+
+	char		*ip_startargv;		/* argument vector beginning */
+	char		*ip_endargv;	/* end of argv/start of envv */
+	char		*ip_endenvv;	/* end of envv/start of applev */
+
 	char		*ip_strings;		/* base address for strings */
 	char		*ip_strendp;		/* current end pointer */
-	char		*ip_strendargvp;	/* end of argv/start of envp */
-	int		ip_strspace;		/* remaining space */
+
+	int 		ip_argspace;	/* remaining space of NCARGS limit (argv+envv) */
+	int		ip_strspace;		/* remaining total string space */
+
 	user_size_t 	ip_arch_offset;		/* subfile offset in ip_vp */
 	user_size_t 	ip_arch_size;		/* subfile length in ip_vp */
-	char		ip_interp_name[IMG_SHSIZE];	/* interpreter name */
+	char		ip_interp_buffer[IMG_SHSIZE];	/* interpreter buffer space */
+	int		ip_interp_sugid_fd;		/* fd for sugid script */
 
 	/* Next two fields are for support of architecture translation... */
 	char		*ip_p_comm;		/* optional alt p->p_comm */
@@ -112,14 +120,16 @@ struct image_params {
 /*
  * Image flags
  */
-#define	IMGPF_NONE	0x00000000		/* No flags */
-#define	IMGPF_INTERPRET	0x00000001		/* Interpreter invoked */
-#define	IMGPF_POWERPC	0x00000002		/* ppc mode for x86 */
+#define	IMGPF_NONE		0x00000000	/* No flags */
+#define	IMGPF_INTERPRET		0x00000001	/* Interpreter invoked */
+#define	IMGPF_POWERPC		0x00000002	/* ppc mode for x86 */
 #if CONFIG_EMBEDDED
 #undef IMGPF_POWERPC
 #endif
-#define	IMGPF_WAS_64BIT	0x00000004		/* exec from a 64Bit binary */
-#define	IMGPF_IS_64BIT	0x00000008		/* exec to a 64Bit binary */
-#define	IMGPF_SPAWN	0x00000010		/* spawn (without setexec) */
+#define	IMGPF_WAS_64BIT		0x00000004	/* exec from a 64Bit binary */
+#define	IMGPF_IS_64BIT		0x00000008	/* exec to a 64Bit binary */
+#define	IMGPF_SPAWN		0x00000010	/* spawn (without setexec) */
+#define	IMGPF_DISABLE_ASLR	0x00000020	/* disable ASLR */
+#define	IMGPF_ALLOW_DATA_EXEC	0x00000040	/* forcibly disallow data execution */
 
 #endif	/* !_SYS_IMGACT */

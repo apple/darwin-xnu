@@ -203,16 +203,7 @@ extern void flush_dcache64(addr64_t, unsigned, int);
 static __inline__ unsigned int
 clz(unsigned int num)
 {
-#if __ppc__
-	unsigned int result;
-	__asm__ volatile(
-		"cntlzw %0, %1"
-		: "=r" (result)
-		: "r" (num)
-	);
-	return result;
-
-#elif __i386__
+#if __i386__
 	unsigned int result;
 	__asm__ volatile(
 		"bsrl   %1, %0\n\t"

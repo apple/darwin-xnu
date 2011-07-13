@@ -65,7 +65,6 @@
 
 #define	CX(addr,reg)	addr(,reg,4)
 
-#include <i386/lapic.h>
 #include <i386/acpi.h>
 #include <i386/cpuid.h>
 
@@ -82,7 +81,7 @@ EXT(low_intstack):
 	.globl  EXT(gIOHibernateRestoreStack)
 EXT(gIOHibernateRestoreStack):
 
-	.set	., .+INTSTACK_SIZE
+	.space	INTSTACK_SIZE
 
 	.globl	EXT(low_eintstack)
 EXT(low_eintstack:)
@@ -110,7 +109,7 @@ LEXT(gdtptr)
 	.align	12
 	.globl	EXT(df_task_stack)
 EXT(df_task_stack):
-	.set	., .+INTSTACK_SIZE
+	.space	INTSTACK_SIZE
 	.globl	EXT(df_task_stack_end)
 EXT(df_task_stack_end):
 
@@ -121,38 +120,22 @@ EXT(df_task_stack_end):
 	.align	12
 	.globl	EXT(mc_task_stack)
 EXT(mc_task_stack):
-	.set	., .+INTSTACK_SIZE
+	.space	INTSTACK_SIZE
 	.globl	EXT(mc_task_stack_end)
 EXT(mc_task_stack_end):
 
 #if	MACH_KDB
-/*
- * Kernel debugger stack for each processor.
- */
-	.align	12
-	.globl	EXT(db_stack_store)
-EXT(db_stack_store):
-	.set	., .+(INTSTACK_SIZE*MAX_CPUS)
-
 /*
  * Stack for last-ditch debugger task for each processor.
  */
 	.align	12
 	.globl	EXT(db_task_stack_store)
 EXT(db_task_stack_store):
-	.set	., .+(INTSTACK_SIZE*MAX_CPUS)
+	.space	(INTSTACK_SIZE*MAX_CPUS)
 
-/*
- * per-processor kernel debugger stacks
- */
-        .align  ALIGN
-        .globl  EXT(kgdb_stack_store)
-EXT(kgdb_stack_store):
-        .set    ., .+(INTSTACK_SIZE*MAX_CPUS)
 #endif	/* MACH_KDB */
 
 
-	
 /*
  * BSP CPU start here.
  *	eax points to kernbootstruct
@@ -229,7 +212,7 @@ LEXT(slave_pstart)
 	mov $EXT(mp_slave_stack)+PAGE_SIZE, %esp;
 	jmp paging
 
-	
+
 /* Code to get from real mode to protected mode */
 
 #define	operand_size_prefix	.byte 0x66

@@ -1,3 +1,31 @@
+/*
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 /*	$FreeBSD: src/sys/netinet6/route6.c,v 1.1.2.3 2001/07/03 11:01:55 ume Exp $	*/
 /*	$KAME: route6.c,v 1.24 2001/03/14 03:07:05 itojun Exp $	*/
 
@@ -52,8 +80,9 @@ static int ip6_rthdr0(struct mbuf *, struct ip6_hdr *,
 #endif /* IP6_RTHDR0_ALLOWED */
 
 int
-route6_input(struct mbuf **mp, int *offp)
+route6_input(struct mbuf **mp, int *offp, int proto)
 {
+#pragma unused(proto)
 	struct ip6_hdr *ip6;
 	struct mbuf *m = *mp;
 	struct ip6_rthdr *rh;
@@ -143,7 +172,7 @@ ip6_rthdr0(m, ip6, rh0)
 	struct ip6_rthdr0 *rh0;
 {
 	int addrs, index;
-	struct in6_addr *nextaddr, tmpaddr;
+	struct in6_addr *nextaddr, tmpaddr, ia6 = NULL;
 	struct route_in6 ip6forward_rt;
 
 	if (rh0->ip6r0_segleft == 0)
@@ -156,20 +185,20 @@ ip6_rthdr0(m, ip6, rh0)
 		) {
 		/*
 		 * Type 0 routing header can't contain more than 23 addresses.
-		 * RFC 2462: this limitation was removed since stict/loose
+		 * RFC 2462: this limitation was removed since strict/loose
 		 * bitmap field was deleted.
 		 */
 		ip6stat.ip6s_badoptions++;
 		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER,
 			    (caddr_t)&rh0->ip6r0_len - (caddr_t)ip6);
-		return(-1);
+		return (-1);
 	}
 
 	if ((addrs = rh0->ip6r0_len / 2) < rh0->ip6r0_segleft) {
 		ip6stat.ip6s_badoptions++;
 		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER,
 			    (caddr_t)&rh0->ip6r0_segleft - (caddr_t)ip6);
-		return(-1);
+		return (-1);
 	}
 
 	index = addrs - rh0->ip6r0_segleft;
@@ -188,7 +217,7 @@ ip6_rthdr0(m, ip6, rh0)
 	    IN6_IS_ADDR_V4COMPAT(nextaddr)) {
 		ip6stat.ip6s_badoptions++;
 		m_freem(m);
-		return(-1);
+		return (-1);
 	}
 	if (IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst) ||
 	    IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_dst) ||
@@ -196,16 +225,31 @@ ip6_rthdr0(m, ip6, rh0)
 	    IN6_IS_ADDR_V4COMPAT(&ip6->ip6_dst)) {
 		ip6stat.ip6s_badoptions++;
 		m_freem(m);
-		return(-1);
+		return (-1);
 	}
+
+	/*
+	 * Determine the scope zone of the next hop, based on the interface
+	 * of the current hop. [RFC4007, Section 9]
+	 * Then disambiguate the scope zone for the next hop (if necessary).
+	 */
+	if ((ia6 = ip6_getdstifaddr(m)) == NULL)
+		goto bad;
+	if (in6_setscope(nextaddr, ia6->ia_ifp, NULL) != 0) {
+		ip6stat.ip6s_badscope++;
+		IFA_REMREF(&ia6->ia_ifa);
+		ia6 = NULL;
+		goto bad;
+	}
+	IFA_REMREF(&ia6->ia_ifa);
+	ia6 = NULL;
 
 	/*
 	 * Swap the IPv6 destination address and nextaddr. Forward the packet.
 	 */
 	tmpaddr = *nextaddr;
 	*nextaddr = ip6->ip6_dst;
-	if (IN6_IS_ADDR_LINKLOCAL(nextaddr))
-		nextaddr->s6_addr16[1] = 0;
+	in6_clearscope(nextaddr); /* XXX */
 	ip6->ip6_dst = tmpaddr;
 	if (IN6_IS_ADDR_LINKLOCAL(&ip6->ip6_dst))
 		ip6->ip6_dst.s6_addr16[1] = htons(m->m_pkthdr.rcvif->if_index);

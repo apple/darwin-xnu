@@ -37,6 +37,8 @@
 
 #include <console/serial_protos.h>
 
-int serial_init(void);
+int  serial_init(void);
+void serial_putc(char);
+int  serial_getc(void);
 
 #endif /* _I386_SERIAL_IO_H_ */

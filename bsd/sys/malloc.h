@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -179,7 +179,7 @@
 #define M_IP6NDP	86	/* IPv6 Neighbour Discovery*/
 #define M_IP6OPT	87	/* IPv6 options management */
 #define M_IP6MISC	88	/* IPv6 misc. memory */
-#define M_TSEGQ		89	/* TCP segment queue entry */
+#define M_TSEGQ		89	/* TCP segment queue entry, unused */
 #define M_IGMP		90
 #define M_JNL_JNL   91  /* Journaling: "struct journal" */
 #define M_JNL_TR    92  /* Journaling: "struct transaction" */ 
@@ -204,8 +204,13 @@
 #if HFS_COMPRESSION
 #define M_DECMPFS_CNODE	109	/* decmpfs cnode structures */
 #endif /* HFS_COMPRESSION */
+#define M_INMFILTER	110	/* IPv4 multicast PCB-layer source filter */
+#define M_IPMSOURCE	111	/* IPv4 multicast IGMP-layer source filter */
+#define	M_IN6MFILTER	112	/* IPv6 multicast PCB-layer source filter */
+#define	M_IP6MOPTS	113	/* IPv6 multicast options */
+#define	M_IP6MSOURCE	114	/* IPv6 multicast MLD-layer source filter */
 
-#define	M_LAST		110	/* Must be last type + 1 */
+#define	M_LAST		115	/* Must be last type + 1 */
 
 #else /* BSD_KERNEL_PRIVATE */
 
@@ -253,6 +258,9 @@ extern struct kmemstats kmemstats[];
 #define FREE(addr, type) \
 	_FREE((void *)addr, type)
 
+#define	REALLOC(space, cast, addr, size, type, flags) \
+	(space) = (cast)_REALLOC(addr, size, type, flags)
+
 #define MALLOC_ZONE(space, cast, size, type, flags) \
 	(space) = (cast)_MALLOC_ZONE(size, type, flags)
 
@@ -267,6 +275,12 @@ extern void	*_MALLOC(
 extern void	_FREE(
 			void		*addr,
 			int		type);
+
+extern void	*_REALLOC(
+			void		*addr,
+			size_t		size,
+			int		type,
+			int		flags);
 
 extern void	*_MALLOC_ZONE(
 			size_t		size,

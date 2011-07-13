@@ -30,6 +30,7 @@
 
 #include <stdarg.h>
 #include <stdint.h>
+#include <mach/boolean.h>       // boolean_t
 #include <mach/kern_return.h>
 
 /*******************************************************************************
@@ -82,7 +83,7 @@
 #endif
 
 /* For linking code specific to architectures that use MH_KEXT_BUNDLE */
-#if (!KERNEL || __x86_64__)
+#if (!KERNEL || __i386__ || __x86_64__ || __arm__)
     #define KXLD_USER_OR_BUNDLE 1
 #endif
 
@@ -115,14 +116,14 @@ typedef uint64_t kxld_size_t;
 
 /* Flags for general linker behavior */
 enum kxld_flags {
-    kKxldFlagDefault = 0x0
+    kKxldFlagDefault = 0x0,
 };
 typedef enum kxld_flags KXLDFlags;
 
 /* Flags for the allocation callback */
 enum kxld_allocate_flags {
     kKxldAllocateDefault = 0x0,
-    kKxldAllocateWritable = 0x1  /* kxld may write into the allocated memory */
+    kKxldAllocateWritable = 0x1,        /* kxld may write into the allocated memory */
 };
 typedef enum kxld_allocate_flags KXLDAllocateFlags;
 
@@ -148,6 +149,25 @@ typedef enum kxld_log_level {
     kKxldLogDetail = 0x4,
     kKxldLogDebug = 0x5
 } KXLDLogLevel;
+
+/* This structure is used to describe a dependency kext. The kext field
+ * is a pointer to the binary executable of the dependency. The interface
+ * field is a pointer to an optional interface kext that restricts the
+ * symbols that may be accessed in the dependency kext.
+ * 
+ * For example, to use this structure with the KPIs, set the kext field
+ * to point to the kernel's Mach-O binary, and set interface to point
+ * to the KPI's Mach-O binary.
+ */
+typedef struct kxld_dependency {
+    u_char      * kext;
+    u_long        kext_size;
+    char        * kext_name;
+    u_char      * interface;
+    u_long        interface_size;
+    char        * interface_name;
+    boolean_t     is_direct_dependency;
+} KXLDDependency;
 
 typedef void (*KXLDLoggingCallback) (KXLDLogSubsystem sys, KXLDLogLevel level, 
     const char *format, va_list ap, void *user_data);

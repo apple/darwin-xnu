@@ -43,6 +43,10 @@
 #include <mach/kmod.h>
 #include <libkern/OSAtomic.h>
 
+#if defined(__i386__) || defined(__x86_64__)
+#include <i386/mp.h>
+#endif
+
 /*
  * cmn_err
  */
@@ -100,17 +104,17 @@ extern lck_mtx_t mod_lock;
 /*
  * Per-CPU data.
  */
-typedef struct cpu {
+typedef struct dtrace_cpu {
 	processorid_t   cpu_id;                    /* CPU number */
-	struct cpu      *cpu_next;                 /* next existing CPU */
+	struct dtrace_cpu *cpu_next;                 /* next existing CPU */
 	lck_rw_t        cpu_ft_lock;               /* DTrace: fasttrap lock */
 	uintptr_t       cpu_dtrace_caller;         /* DTrace: caller, if any */
 	hrtime_t        cpu_dtrace_chillmark;      /* DTrace: chill mark time */
 	hrtime_t        cpu_dtrace_chilled;        /* DTrace: total chill time */
 	boolean_t       cpu_dtrace_invop_underway; /* DTrace gaurds against invalid op re-entrancy */
-} cpu_t;
+} dtrace_cpu_t;
 
-extern cpu_t *cpu_list;
+extern dtrace_cpu_t *cpu_list;
 
 /*
  * The cpu_core structure consists of per-CPU state available in any context.
@@ -130,7 +134,8 @@ typedef struct cpu_core {
 } cpu_core_t;
 
 extern cpu_core_t *cpu_core;
-extern unsigned int real_ncpus;
+
+
 extern int cpu_number(void); /* From #include <kern/cpu_number.h>. Called from probe context, must blacklist. */
 
 #define	CPU		(&(cpu_list[cpu_number()]))	/* Pointer to current CPU */
@@ -186,6 +191,55 @@ extern void unregister_cpu_setup_func(cpu_setup_func_t *, void *);
 				CPU_DTRACE_UPRIV | CPU_DTRACE_TUPOFLOW | \
 				CPU_DTRACE_BADSTACK)
 #define	CPU_DTRACE_ERROR	(CPU_DTRACE_FAULT | CPU_DTRACE_DROP)
+
+/*
+ * Loadable Modules
+ */
+
+/* Keep the compiler happy */
+struct dtrace_module_symbols;
+
+/* Solaris' modctl structure, greatly simplified, shadowing parts of xnu kmod structure. */
+typedef struct modctl {
+	struct modctl	*mod_next;
+	struct modctl	*mod_stale;     // stale module chain
+	uint32_t	mod_id;		// the kext unique identifier
+	char		mod_modname[KMOD_MAX_NAME];
+	int		mod_loadcnt;
+	char		mod_loaded;
+	char		mod_flags;	// See flags below
+	int		mod_nenabled;	// # of enabled DTrace probes in module
+	vm_address_t	mod_address;	// starting address (of Mach-o header blob)
+	vm_size_t	mod_size;	// total size (of blob)
+	UUID		mod_uuid;
+	struct dtrace_module_symbols* mod_user_symbols;
+} modctl_t;
+
+/* Definitions for mod_flags */
+#define MODCTL_IS_MACH_KERNEL			0x01 // This module represents /mach_kernel
+#define MODCTL_HAS_KERNEL_SYMBOLS		0x02 // Kernel symbols (nlist) are available
+#define MODCTL_FBT_PROBES_PROVIDED      	0x04 // fbt probes have been provided
+#define MODCTL_FBT_INVALID			0x08 // Module is invalid for fbt probes
+#define MODCTL_SDT_PROBES_PROVIDED		0x10 // sdt probes have been provided
+#define MODCTL_SDT_INVALID			0x20 // Module is invalid for sdt probes
+#define MODCTL_HAS_UUID				0x40 // Module has UUID
+
+/* Simple/singular mod_flags accessors */
+#define MOD_IS_MACH_KERNEL(mod)			(mod->mod_flags & MODCTL_IS_MACH_KERNEL)
+#define MOD_HAS_KERNEL_SYMBOLS(mod)		(mod->mod_flags & MODCTL_HAS_KERNEL_SYMBOLS)
+#define MOD_HAS_USERSPACE_SYMBOLS(mod)		(mod->mod_user_symbols) /* No point in duplicating state in the flags bits */
+#define MOD_FBT_PROBES_PROVIDED(mod)   		(mod->mod_flags & MODCTL_FBT_PROBES_PROVIDED)
+#define MOD_FBT_INVALID(mod)			(mod->mod_flags & MODCTL_FBT_INVALID)
+#define MOD_SDT_PROBES_PROVIDED(mod)   		(mod->mod_flags & MODCTL_SDT_PROBES_PROVIDED)
+#define MOD_SDT_INVALID(mod)			(mod->mod_flags & MODCTL_SDT_INVALID)
+#define MOD_HAS_UUID(mod)			(mod->mod_flags & MODCTL_HAS_UUID)
+
+/* Compound accessors */
+#define MOD_FBT_DONE(mod)			(MOD_FBT_PROBES_PROVIDED(mod) || MOD_FBT_INVALID(mod))
+#define MOD_SDT_DONE(mod)			(MOD_SDT_PROBES_PROVIDED(mod) || MOD_SDT_INVALID(mod))
+#define MOD_SYMBOLS_DONE(mod)			(MOD_FBT_DONE(mod) && MOD_SDT_DONE(mod))
+
+extern modctl_t *dtrace_modctl_list;
 
 /*
  * cred_t
@@ -244,8 +298,8 @@ typedef struct cyc_handler {
 } cyc_handler_t;
 
 typedef struct cyc_omni_handler {
-	void (*cyo_online)(void *, cpu_t *, cyc_handler_t *, cyc_time_t *);
-	void (*cyo_offline)(void *, cpu_t *, void *);
+	void (*cyo_online)(void *, dtrace_cpu_t *, cyc_handler_t *, cyc_time_t *);
+	void (*cyo_offline)(void *, dtrace_cpu_t *, void *);
 	void *cyo_arg;
 } cyc_omni_handler_t;
 
@@ -390,25 +444,6 @@ extern void kmem_cache_destroy(kmem_cache_t *);
 typedef struct _kthread kthread_t; /* For dtrace_vtime_switch(), dtrace_panicked and dtrace_errthread */
 
 /*
- * Loadable Modules
- */
-
-#if 0 /* kmod_lock has been removed */
-decl_simple_lock_data(extern,kmod_lock)
-#endif /* 0 */
-
-/* Want to use Darwin's kmod_info in place of the Solaris modctl.
-   Can't typedef since the (many) usages in the code are "struct modctl *" */
-extern kmod_info_t *kmod;
-#define modctl kmod_info
-
-#define mod_modname name
-#define mod_loadcnt id
-#define mod_next next
-#define mod_loaded info_version /* XXX Is always > 0, hence TRUE */
-#define modules kmod
-
-/*
  * proc
  */
 
@@ -471,15 +506,6 @@ static inline void atomic_add_32( uint32_t *theValue, int32_t theAmount )
 static inline void atomic_add_64( uint64_t *theValue, int64_t theAmount )
 {
 	(void)OSAddAtomic64( theAmount, (SInt64 *)theValue );
-}
-#elif defined(__ppc__)
-static inline void atomic_add_64( uint64_t *theValue, int64_t theAmount )
-{
-	// FIXME
-	// atomic_add_64() is at present only called from fasttrap.c to increment
-	// or decrement a 64bit counter. Narrow to 32bits since ppc32 (G4) has
-	// no convenient 64bit atomic op.
-	(void)OSAddAtomic( (int32_t)theAmount, &(((SInt32 *)theValue)[1]));
 }
 #endif
 

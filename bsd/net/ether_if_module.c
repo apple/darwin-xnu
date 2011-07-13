@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -98,6 +98,9 @@
 #include <sys/socketvar.h>
 #include <net/if_vlan_var.h>
 #include <net/if_bond_var.h>
+#if IF_BRIDGE
+#include <net/if_bridgevar.h>
+#endif /* IF_BRIDGE */
 
 #include <net/dlil.h>
 
@@ -133,7 +136,7 @@ struct en_desc {
 #endif
 
 /*
- * Header for the demux list, hangs off of IFP at family_cookie
+ * Header for the demux list, hangs off of IFP at if_family_cookie
  */
 
 struct ether_desc_blk_str {
@@ -147,19 +150,6 @@ struct ether_desc_blk_str {
 __private_extern__ u_char	etherbroadcastaddr[ETHER_ADDR_LEN] =
 								{ 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
-static __inline__ int
-_ether_cmp(const void * a, const void * b)
-{
-	const u_int16_t * a_s = (const u_int16_t *)a;
-	const u_int16_t * b_s = (const u_int16_t *)b;
-	
-	if (a_s[0] != b_s[0]
-	    || a_s[1] != b_s[1]
-	    || a_s[2] != b_s[2]) {
-		return (1);
-	}
-	return (0);
-}
 
 /*
  * Release all descriptor entries owned by this protocol (there may be several).
@@ -171,7 +161,7 @@ ether_del_proto(
 	ifnet_t ifp,
 	protocol_family_t protocol_family)
 {
-	struct ether_desc_blk_str *desc_blk = (struct ether_desc_blk_str *)ifp->family_cookie;
+	struct ether_desc_blk_str *desc_blk = (struct ether_desc_blk_str *)ifp->if_family_cookie;
 	u_int32_t	current = 0;
 	int found = 0;
 	
@@ -187,8 +177,8 @@ ether_del_proto(
 	}
 	
 	if (desc_blk->n_used == 0) {
-		FREE(ifp->family_cookie, M_IFADDR);
-		ifp->family_cookie = 0;
+		FREE(ifp->if_family_cookie, M_IFADDR);
+		ifp->if_family_cookie = 0;
 	}
 	else {
 		/* Decrement n_max_used */
@@ -207,7 +197,7 @@ ether_add_proto_internal(
 	const struct ifnet_demux_desc	*demux)
 {
 	struct en_desc *ed;
-	struct ether_desc_blk_str *desc_blk = (struct ether_desc_blk_str *)ifp->family_cookie;
+	struct ether_desc_blk_str *desc_blk = (struct ether_desc_blk_str *)ifp->if_family_cookie;
 	u_int32_t i;
 	
 	switch (demux->type) {
@@ -291,7 +281,7 @@ ether_add_proto_internal(
 			FREE(desc_blk, M_IFADDR);
 		}
 		desc_blk = tmp;
-		ifp->family_cookie = (uintptr_t)desc_blk;
+		ifp->if_family_cookie = (uintptr_t)desc_blk;
 		desc_blk->n_count = new_count;
 	}
 	else {
@@ -372,7 +362,7 @@ ether_demux(
 	u_int16_t		type;
 	u_int8_t		*data;
 	u_int32_t			i = 0;
-	struct ether_desc_blk_str *desc_blk = (struct ether_desc_blk_str *)ifp->family_cookie;
+	struct ether_desc_blk_str *desc_blk = (struct ether_desc_blk_str *)ifp->if_family_cookie;
 	u_int32_t			maxd = desc_blk ? desc_blk->n_max_used : 0;
 	struct en_desc	*ed = desc_blk ? desc_blk->block_ptr : NULL;
 	u_int32_t		extProto1 = 0;
@@ -385,6 +375,16 @@ ether_demux(
 		else
 			m->m_flags |= M_MCAST;
 	}
+
+	if (m->m_flags & M_HASFCS) {
+                /*
+                 * If the M_HASFCS is set by the driver we want to make sure
+                 * that we strip off the trailing FCS data before handing it
+                 * up the stack.
+                 */
+                m_adj(m, -ETHER_CRC_LEN);
+	        m->m_flags &= ~M_HASFCS;
+        }
 
 	if (ifp->if_eflags & IFEF_BOND) {
 		/* if we're bonded, bond "protocol" gets all the packets */
@@ -632,6 +632,9 @@ __private_extern__ int ether_family_init(void)
 #if BOND
 	bond_family_init();
 #endif /* BOND */
+#if IF_BRIDGE
+	bridgeattach(0);
+#endif /* IF_BRIDGE */
 
  done:
 

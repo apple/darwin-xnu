@@ -1,6 +1,4 @@
 #
-# CDDL HEADER START
-#
 # The contents of this file are subject to the terms
 # of the Common Development and Distribution License
 # (the "License").  You may not use this file except
@@ -53,6 +51,15 @@ ALL = 			\
 		lmbench_write		\
 		posix_spawn		\
 		trivial			\
-		vm_allocate
-
-
+		vm_allocate \
+		od_query_create_with_node   \
+		mbr_check_service_membership  \
+		getpwnam		\
+		mbr_check_membership	\
+		getpwuid		\
+		getgrgid		\
+		getpwent		\
+		getgrent		\
+		getaddrinfo_host	\
+		getaddrinfo_port	\
+		getgrnam

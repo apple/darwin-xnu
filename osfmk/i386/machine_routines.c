@@ -38,16 +38,16 @@
 #include <kern/thread.h>
 #include <i386/machine_cpu.h>
 #include <i386/lapic.h>
+#include <i386/lock.h>
 #include <i386/mp_events.h>
 #include <i386/pmCPU.h>
+#include <i386/trap.h>
 #include <i386/tsc.h>
 #include <i386/cpu_threads.h>
 #include <i386/proc_reg.h>
 #include <mach/vm_param.h>
 #include <i386/pmap.h>
 #include <i386/misc_protos.h>
-#include <i386/mp.h>
-
 #if MACH_KDB
 #include <machine/db_machdep.h>
 #include <ddb/db_aout.h>
@@ -65,7 +65,6 @@
 #define DBG(x...)
 #endif
 
-
 extern void 	wakeup(void *);
 
 static int max_cpus_initialized = 0;
@@ -74,6 +73,10 @@ unsigned int	LockTimeOut;
 unsigned int	LockTimeOutTSC;
 unsigned int	MutexSpin;
 uint64_t	LastDebuggerEntryAllowance;
+
+extern uint64_t panic_restart_timeout;
+
+boolean_t virtualized = FALSE;
 
 #define MAX_CPUS_SET    0x1
 #define MAX_CPUS_WAIT   0x2
@@ -130,7 +133,6 @@ ml_static_mfree(
 	assert(vaddr >= VM_MIN_KERNEL_ADDRESS);
 
 	assert((vaddr & (PAGE_SIZE-1)) == 0); /* must be page aligned */
-
 
 	for (vaddr_cur = vaddr;
 	     vaddr_cur < round_page_64(vaddr+size);
@@ -207,7 +209,6 @@ void ml_init_interrupt(void)
 }
 
 
-
 /* Get Interrupts Enabled */
 boolean_t ml_get_interrupts_enabled(void)
 {
@@ -220,27 +221,25 @@ boolean_t ml_get_interrupts_enabled(void)
 /* Set Interrupts Enabled */
 boolean_t ml_set_interrupts_enabled(boolean_t enable)
 {
-  unsigned long flags;
+	unsigned long flags;
+	boolean_t istate;
+	
+	__asm__ volatile("pushf; pop	%0" :  "=r" (flags));
 
-  __asm__ volatile("pushf; pop	%0" :  "=r" (flags));
+	istate = ((flags & EFL_IF) != 0);
 
-  if (enable) {
-	ast_t		*myast;
+	if (enable) {
+		__asm__ volatile("sti;nop");
 
-	myast = ast_pending();
-
-	if ( (get_preemption_level() == 0) &&  (*myast & AST_URGENT) ) {
-	__asm__ volatile("sti");
-          __asm__ volatile ("int $0xff");
-        } else {
-	  __asm__ volatile ("sti");
+		if ((get_preemption_level() == 0) && (*ast_pending() & AST_URGENT))
+			__asm__ volatile ("int $0xff");
 	}
-  }
-  else {
-	__asm__ volatile("cli");
-  }
+	else {
+		if (istate)
+			__asm__ volatile("cli");
+	}
 
-  return (flags & EFL_IF) != 0;
+	return istate;
 }
 
 /* Check if running at interrupt context */
@@ -435,7 +434,10 @@ ml_cpu_get_info(ml_cpu_info_t *cpu_infop)
 	 * As distinct from whether the cpu has these capabilities.
 	 */
 	os_supports_sse = !!(get_cr4() & CR4_OSXMM);
-	if ((cpuid_features() & CPUID_FEATURE_SSE4_2) && os_supports_sse)
+
+	if (ml_fpu_avx_enabled())
+		cpu_infop->vector_unit = 9;
+	else if ((cpuid_features() & CPUID_FEATURE_SSE4_2) && os_supports_sse)
 		cpu_infop->vector_unit = 8;
 	else if ((cpuid_features() & CPUID_FEATURE_SSE4_1) && os_supports_sse)
 		cpu_infop->vector_unit = 7;
@@ -525,7 +527,8 @@ ml_init_lock_timeout(void)
 	uint32_t	mtxspin;
 	uint64_t	default_timeout_ns = NSEC_PER_SEC>>2;
 	uint32_t	slto;
-	
+	uint32_t	prt;
+
 	if (PE_parse_boot_argn("slto_us", &slto, sizeof (slto)))
 		default_timeout_ns = slto * NSEC_PER_USEC;
 
@@ -544,6 +547,9 @@ ml_init_lock_timeout(void)
 	MutexSpin = (unsigned int)abstime;
 
 	nanoseconds_to_absolutetime(4ULL * NSEC_PER_SEC, &LastDebuggerEntryAllowance);
+	if (PE_parse_boot_argn("panic_restart_timeout", &prt, sizeof (prt)))
+		nanoseconds_to_absolutetime(prt * NSEC_PER_SEC, &panic_restart_timeout);
+	virtualized = ((cpuid_features() & CPUID_FEATURE_VMM) != 0);
 	interrupt_latency_tracker_setup();
 }
 
@@ -649,8 +655,33 @@ vm_offset_t ml_stack_remaining(void)
 	}
 }
 
+void
+kernel_preempt_check(void)
+{
+	boolean_t	intr;
+	unsigned long flags;
+
+	assert(get_preemption_level() == 0);
+
+	__asm__ volatile("pushf; pop	%0" :  "=r" (flags));
+
+	intr = ((flags & EFL_IF) != 0);
+
+	if ((*ast_pending() & AST_URGENT) && intr == TRUE) {
+		/*
+		 * can handle interrupts and preemptions 
+		 * at this point
+		 */
+
+		/*
+		 * now cause the PRE-EMPTION trap
+		 */
+		__asm__ volatile ("int %0" :: "N" (T_PREEMPT));
+	}
+}
+
 boolean_t machine_timeout_suspended(void) {
-	return (mp_recent_debugger_activity() || panic_active() || pmap_tlb_flush_timeout || spinlock_timed_out);
+	return (virtualized || pmap_tlb_flush_timeout || spinlock_timed_out || panic_active() || mp_recent_debugger_activity());
 }
 
 #if MACH_KDB

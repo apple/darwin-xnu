@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -154,14 +154,14 @@ proto_register_input(
 	}
 
 	
-	lck_mtx_lock(thread->input_lck);
+	lck_mtx_lock(&thread->input_lck);
 	entry->next = proto_input_add_list;
 	proto_input_add_list = entry;
 	
 	thread->input_waiting |= DLIL_PROTO_REGISTER;
 	if ((thread->input_waiting & DLIL_INPUT_RUNNING) == 0)
 		wakeup((caddr_t)&thread->input_waiting);
-	lck_mtx_unlock(thread->input_lck);
+	lck_mtx_unlock(&thread->input_lck);
 	
 	return 0;
 }
@@ -219,14 +219,14 @@ proto_input_run(void)
 	mbuf_t packet_list;
 	int i, locked = 0;
 
-	lck_mtx_assert(thread->input_lck,  LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_assert(&thread->input_lck,  LCK_MTX_ASSERT_NOTOWNED);
 
 	if ((thread->input_waiting & DLIL_PROTO_REGISTER) != 0) {
-		lck_mtx_lock(thread->input_lck);
+		lck_mtx_lock_spin(&thread->input_lck);
 		entry = proto_input_add_list;
 		proto_input_add_list = NULL;
 		thread->input_waiting &= ~DLIL_PROTO_REGISTER;
-		lck_mtx_unlock(thread->input_lck);
+		lck_mtx_unlock(&thread->input_lck);
 		proto_delayed_attach(entry);
 	}
 	/*
@@ -237,7 +237,7 @@ proto_input_run(void)
 		for (entry = proto_hash[i]; entry && proto_total_waiting;
 			 entry = entry->next) {
 			if (entry->inject_first) {
-				lck_mtx_lock(thread->input_lck);
+				lck_mtx_lock_spin(&thread->input_lck);
 				thread->input_waiting &= ~DLIL_PROTO_WAITING;
 
 				packet_list = entry->inject_first;
@@ -246,7 +246,7 @@ proto_input_run(void)
 				entry->inject_last = NULL;
 				proto_total_waiting--;
 
-				lck_mtx_unlock(thread->input_lck);
+				lck_mtx_unlock(&thread->input_lck);
 
 				if (entry->domain && (entry->domain->dom_flags & DOM_REENTRANT) == 0) {
 					lck_mtx_lock(entry->domain->dom_mtx);
@@ -333,7 +333,7 @@ proto_inject(
 	}
 	
 	if (entry) {
-		lck_mtx_lock(thread->input_lck);
+		lck_mtx_lock(&thread->input_lck);
 		if (entry->inject_first == NULL) {
 			proto_total_waiting++;
 			thread->input_waiting |= DLIL_PROTO_WAITING;
@@ -346,7 +346,7 @@ proto_inject(
 		if ((thread->input_waiting & DLIL_INPUT_RUNNING) == 0) {
 			wakeup((caddr_t)&thread->input_waiting);
 		}
-		lck_mtx_unlock(thread->input_lck);
+		lck_mtx_unlock(&thread->input_lck);
 	}
 	else
 	{

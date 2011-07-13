@@ -288,6 +288,7 @@ struct cdevsw	cdevsw[] =
 };
 int	nchrdev = sizeof (cdevsw) / sizeof (cdevsw[0]);
 
+uint64_t cdevsw_flags[sizeof (cdevsw) / sizeof (cdevsw[0])];
 
 #include	<sys/vnode.h> /* for VCHR and VBLK */
 /*

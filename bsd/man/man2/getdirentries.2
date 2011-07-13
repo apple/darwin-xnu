@@ -67,14 +67,8 @@ with buffers smaller than this size.
 .Pp
 The data in the buffer is a series of
 .Em dirent
-structures each containing the following entries:
-.Bd -literal -offset indent
-u_int32_t	d_fileno;             /* file number of entry */
-u_int16_t	d_reclen;             /* length of this record */
-u_int8_t	d_type;               /* file type, see below */
-u_int8_t	d_namlen;             /* length of string in d_name */
-char    	d_name[MAXNAMELEN + 1]; /* see below */
-.Ed
+structures (see
+.Xr dir 5 )
 .Pp
 The
 .Fa d_fileno
@@ -166,7 +160,11 @@ will not work
 with 64-bit inodes; in order to use
 .Fn getdirentries ,
 .Dv _DARWIN_NO_64_BIT_INODE
-must be defined.
+must be defined.  See
+.Xr stat 2
+for more information on
+.Dv _DARWIN_NO_64_BIT_INODE
+and its other effects.
 .Sh RETURN VALUES
 If successful, the number of bytes actually transferred is returned.
 Otherwise, -1 is returned and the global variable
@@ -193,8 +191,10 @@ error occurred while reading from or writing to the file system.
 .Sh SEE ALSO
 .Xr lseek 2 ,
 .Xr open 2 ,
+.Xr stat 2 ,
 .Xr opendir 3 ,
-.Xr readdir 3
+.Xr readdir 3 ,
+.Xr dir 5
 .Sh HISTORY
 The
 .Fn getdirentries

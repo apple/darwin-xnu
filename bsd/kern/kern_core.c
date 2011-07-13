@@ -70,24 +70,7 @@ typedef struct {
 	mach_msg_type_number_t	count;	/* count of ints in this flavor */
 } mythread_state_flavor_t;
 
-#if defined (__ppc__)
-/* 64 bit */
-mythread_state_flavor_t thread_flavor_array64[]={
-		{PPC_THREAD_STATE64 , PPC_THREAD_STATE64_COUNT},
-		{PPC_FLOAT_STATE, PPC_FLOAT_STATE_COUNT}, 
-		{PPC_EXCEPTION_STATE64, PPC_EXCEPTION_STATE64_COUNT},
-		{PPC_VECTOR_STATE, PPC_VECTOR_STATE_COUNT}
-		};
-
-/* 32 bit */
-mythread_state_flavor_t thread_flavor_array[]={
-		{PPC_THREAD_STATE , PPC_THREAD_STATE_COUNT},
-		{PPC_FLOAT_STATE, PPC_FLOAT_STATE_COUNT}, 
-		{PPC_EXCEPTION_STATE, PPC_EXCEPTION_STATE_COUNT},
-		{PPC_VECTOR_STATE, PPC_VECTOR_STATE_COUNT}
-		};
-
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 mythread_state_flavor_t thread_flavor_array [] = { 
 		{x86_THREAD_STATE, x86_THREAD_STATE_COUNT},
 		{x86_FLOAT_STATE, x86_FLOAT_STATE_COUNT},
@@ -139,9 +122,6 @@ process_cpu_type(proc_t core_proc)
 	} else {
 		what_we_think = CPU_TYPE_I386;
 	}
-#elif defined (__ppc__)
-	#pragma unused(core_proc)
-	what_we_think = CPU_TYPE_POWERPC;
 #endif
 	return what_we_think;
 }
@@ -156,9 +136,6 @@ process_cpu_subtype(proc_t core_proc)
 	} else {
 		what_we_think = CPU_SUBTYPE_I386_ALL;
 	}
-#elif defined (__ppc__)
-	#pragma unused(core_proc)
-	what_we_think = CPU_SUBTYPE_POWERPC_ALL;
 #endif
 	return what_we_think;
 }
@@ -261,8 +238,8 @@ coredump(proc_t core_proc)
 
 	if (do_coredump == 0 ||		/* Not dumping at all */
 	    ( (sugid_coredump == 0) &&	/* Not dumping SUID/SGID binaries */
-	      ( (cred->cr_svuid != cred->cr_ruid) ||
-	        (cred->cr_svgid != cred->cr_rgid)))) {
+	      ( (kauth_cred_getsvuid(cred) != kauth_cred_getruid(cred)) ||
+	        (kauth_cred_getsvgid(cred) != kauth_cred_getrgid(cred))))) {
 
 #if CONFIG_AUDIT
 		audit_proc_coredump(core_proc, NULL, EFAULT);
@@ -320,17 +297,8 @@ coredump(proc_t core_proc)
 
 	thread_count = get_task_numacts(task);
 	segment_count = get_vmmap_entries(map);	/* XXX */
-#if defined (__ppc__)
-	if (is_64) {
-		tir1.flavor_count = sizeof(thread_flavor_array64)/sizeof(mythread_state_flavor_t);
-		bcopy(thread_flavor_array64, flavors,sizeof(thread_flavor_array64));
-	} else {
-#endif	/* __ppc __ */
-		tir1.flavor_count = sizeof(thread_flavor_array)/sizeof(mythread_state_flavor_t);
-		bcopy(thread_flavor_array, flavors,sizeof(thread_flavor_array));
-#if defined (__ppc__)
-	}
-#endif	/* __ppc __ */
+	tir1.flavor_count = sizeof(thread_flavor_array)/sizeof(mythread_state_flavor_t);
+	bcopy(thread_flavor_array, flavors,sizeof(thread_flavor_array));
 	tstate_size = 0;
 	for (i = 0; i < tir1.flavor_count; i++)
 		tstate_size += sizeof(mythread_state_flavor_t) +

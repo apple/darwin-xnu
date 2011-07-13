@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -104,7 +104,9 @@
 
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
+#include <netinet6/scope6_var.h>
 #include <netinet6/ip6_mroute.h>
+#include <netinet/icmp6.h>
 #include <netinet6/pim6.h>
 #include <netinet6/pim6_var.h>
 
@@ -127,7 +129,6 @@ static int socket_send(struct socket *, struct mbuf *,
 static int register_send(struct ip6_hdr *, struct mif6 *,
 			      struct mbuf *);
 
-extern lck_mtx_t *ip6_mutex;
 /*
  * Globals.  All but ip6_mrouter, ip6_mrtproto and mrt6stat could be static,
  * except for netstat or debugging purposes.
@@ -258,9 +259,6 @@ static int del_m6if(mifi_t *);
 static int add_m6fc(struct mf6cctl *);
 static int del_m6fc(struct mf6cctl *);
 
-#ifndef __APPLE__
-static struct callout expire_upcalls_ch;
-#endif
 /*
  * Handle MRT setsockopt commands to modify the multicast routing tables.
  */
@@ -478,12 +476,7 @@ ip6_mrouter_init(so, v, cmd)
 
 	pim6 = 0;/* used for stubbing out/in pim stuff */
 
-#ifndef __APPLE__
-	callout_reset(&expire_upcalls_ch, EXPIRE_TIMEOUT,
-	    expire_upcalls, NULL);
-#else
 	timeout(expire_upcalls, (caddr_t)NULL, EXPIRE_TIMEOUT);
-#endif
 
 #if MRT6DEBUG
 	if (mrt6debug)
@@ -540,20 +533,12 @@ ip6_mrouter_done()
 			}
 		}
 	}
-#if notyet
-	bzero((caddr_t)qtable, sizeof(qtable));
-	bzero((caddr_t)tbftable, sizeof(tbftable));
-#endif
 	bzero((caddr_t)mif6table, sizeof(mif6table));
 	nummifs = 0;
 
 	pim6 = 0; /* used to stub out/in pim specific code */
 
-#ifndef __APPLE__
-	callout_stop(&expire_upcalls_ch);
-#else
 	untimeout(expire_upcalls, (caddr_t)NULL);
-#endif
 
 	/*
 	 * Free all multicast forwarding cache entries.
@@ -617,7 +602,9 @@ add_m6if(mifcp)
 		return EINVAL;
 	mifp = mif6table + mifcp->mif6c_mifi;
 	if (mifp->m6_ifp)
-		return EADDRINUSE; /* XXX: is it appropriate? */
+		return (EADDRINUSE); /* XXX: is it appropriate? */
+	if (mifcp->mif6c_pifi == 0 || mifcp->mif6c_pifi > if_index)
+		return (ENXIO);
 
 	ifnet_head_lock_shared();
 	if (mifcp->mif6c_pifi == 0 || mifcp->mif6c_pifi > if_index) {
@@ -653,10 +640,7 @@ add_m6if(mifcp)
 
 	mifp->m6_flags     = mifcp->mif6c_flags;
 	mifp->m6_ifp       = ifp;
-#if notyet
-	/* scaling up here allows division by 1024 in critical code */
-	mifp->m6_rate_limit = mifcp->mif6c_rate_limit * 1024 / 1000;
-#endif
+
 	/* initialize per mif pkt counters */
 	mifp->m6_pkt_in    = 0;
 	mifp->m6_pkt_out   = 0;
@@ -705,10 +689,6 @@ del_m6if(mifip)
 		if_allmulti(ifp, 0);
 	}
 
-#if notyet
-	bzero((caddr_t)qtable[*mifip], sizeof(qtable[*mifip]));
-	bzero((caddr_t)mifp->m6_tbf, sizeof(*(mifp->m6_tbf)));
-#endif
 	bzero((caddr_t)mifp, sizeof(*mifp));
 
 	/* Adjust nummifs down */
@@ -1285,12 +1265,7 @@ expire_upcalls(
 		}
 	}
 
-#ifndef __APPLE__
-	callout_reset(&expire_upcalls_ch, EXPIRE_TIMEOUT,
-	    expire_upcalls, NULL);
-#else
 	timeout(expire_upcalls, (caddr_t)NULL, EXPIRE_TIMEOUT);
-#endif
 }
 
 /*
@@ -1306,6 +1281,9 @@ ip6_mdq(m, ifp, rt)
 	mifi_t mifi, iif;
 	struct mif6 *mifp;
 	int plen = m->m_pkthdr.len;
+	struct in6_addr src0, dst0; /* copies for local work */
+	u_int32_t iszone, idzone, oszone, odzone;
+	int error = 0;
 
 /*
  * Macro to send packet on mif.  Since RSVP packets don't get counted on
@@ -1437,7 +1415,14 @@ ip6_mdq(m, ifp, rt)
 	 * For each mif, forward a copy of the packet if there are group
 	 * members downstream on the interface.
 	 */
-	for (mifp = mif6table, mifi = 0; mifi < nummifs; mifp++, mifi++)
+	src0 = ip6->ip6_src;
+	dst0 = ip6->ip6_dst;
+	if ((error = in6_setscope(&src0, ifp, &iszone)) != 0 ||
+	    (error = in6_setscope(&dst0, ifp, &idzone)) != 0) {
+		ip6stat.ip6s_badscope++;
+		return (error);
+	}
+	for (mifp = mif6table, mifi = 0; mifi < nummifs; mifp++, mifi++) {
 		if (IF_ISSET(mifi, &rt->mf6c_ifset)) {
 			/*
 			 * check if the outgoing packet is going to break
@@ -1445,23 +1430,25 @@ ip6_mdq(m, ifp, rt)
 			 * XXX For packets through PIM register tunnel
 			 * interface, we believe a routing daemon.
 			 */
-			if ((mif6table[rt->mf6c_parent].m6_flags &
-			     MIFF_REGISTER) == 0 &&
-			    (mif6table[mifi].m6_flags & MIFF_REGISTER) == 0 &&
-			    (in6_addr2scopeid(ifp, &ip6->ip6_dst) !=
-			     in6_addr2scopeid(mif6table[mifi].m6_ifp,
-					      &ip6->ip6_dst) ||
-			     in6_addr2scopeid(ifp, &ip6->ip6_src) !=
-			     in6_addr2scopeid(mif6table[mifi].m6_ifp,
-					      &ip6->ip6_src))) {
-				ip6stat.ip6s_badscope++;
-				continue;
+			if (!(mif6table[rt->mf6c_parent].m6_flags &
+			      MIFF_REGISTER) &&
+			    !(mif6table[mifi].m6_flags & MIFF_REGISTER)) {
+				if (in6_setscope(&src0, mif6table[mifi].m6_ifp,
+				    &oszone) ||
+				    in6_setscope(&dst0, mif6table[mifi].m6_ifp,
+				    &odzone) ||
+				    iszone != oszone ||
+				    idzone != odzone) {
+					ip6stat.ip6s_badscope++;
+					continue;
+				}
 			}
 
 			mifp->m6_pkt_out++;
 			mifp->m6_bytes_out += plen;
 			MC6_SEND(ip6, mifp, m);
 		}
+	}
 	return 0;
 }
 
@@ -1501,16 +1488,22 @@ phyint_send(ip6, mifp, m)
 	 * sending queue.
 	 */
 	if (m->m_pkthdr.rcvif == NULL) {
-		struct ip6_moptions im6o;
+		struct ip6_moptions *im6o;
 
-		im6o.im6o_multicast_ifp = ifp;
+		im6o = ip6_allocmoptions(M_DONTWAIT);
+		if (im6o == NULL) {
+			m_freem(mb_copy);
+			return;
+		}
+
+		im6o->im6o_multicast_ifp = ifp;
 		/* XXX: ip6_output will override ip6->ip6_hlim */
-		im6o.im6o_multicast_hlim = ip6->ip6_hlim;
-		im6o.im6o_multicast_loop = 1;
-		error = ip6_output(mb_copy, NULL, &ro,
-				   IPV6_FORWARDING, &im6o, NULL, 0);
+		im6o->im6o_multicast_hlim = ip6->ip6_hlim;
+		im6o->im6o_multicast_loop = 1;
+		error = ip6_output(mb_copy, NULL, &ro, IPV6_FORWARDING,
+		    im6o, NULL, NULL);
 
-
+		IM6O_REMREF(im6o);
 #if MRT6DEBUG
 		if (mrt6debug & DEBUG_XMIT)
 			log(LOG_DEBUG, "phyint_send on mif %d err %d\n",
@@ -1524,10 +1517,11 @@ phyint_send(ip6, mifp, m)
 	 * on the outgoing interface, loop back a copy.
 	 */
 	dst6 = (struct sockaddr_in6 *)&ro.ro_dst;
-	ifnet_lock_shared(ifp);
+	in6_multihead_lock_shared();
 	IN6_LOOKUP_MULTI(ip6->ip6_dst, ifp, in6m);
-	ifnet_lock_done(ifp);
+	in6_multihead_lock_done();
 	if (in6m != NULL) {
+		IN6M_REMREF(in6m);
 		dst6->sin6_len = sizeof(struct sockaddr_in6);
 		dst6->sin6_family = AF_INET6;
 		dst6->sin6_addr = ip6->ip6_dst;
@@ -1552,10 +1546,8 @@ phyint_send(ip6, mifp, m)
 		mb_copy->m_pkthdr.csum_data = 0;
 		mb_copy->m_pkthdr.csum_flags = 0;
 
-		lck_mtx_unlock(ip6_mutex);
 		error = dlil_output(ifp, PF_INET6, mb_copy,
 				NULL, (struct sockaddr *)&ro.ro_dst, 0);
-		lck_mtx_lock(ip6_mutex);
 #else
 		error = (*ifp->if_output)(ifp, mb_copy,
 					  (struct sockaddr *)&ro.ro_dst,
@@ -1567,21 +1559,28 @@ phyint_send(ip6, mifp, m)
 			    mifp - mif6table, error);
 #endif
 	} else {
-#if MULTICAST_PMTUD
-		icmp6_error(mb_copy, ICMP6_PACKET_TOO_BIG, 0, ifp->if_mtu);
-#else
+		/*
+		 * pMTU discovery is intentionally disabled by default, since
+		 * various router may notify pMTU in multicast, which can be
+		 * a DDoS to a router
+		 */
+		if (ip6_mcast_pmtu)
+			icmp6_error(mb_copy, ICMP6_PACKET_TOO_BIG, 0, ifp->if_mtu);
 #if MRT6DEBUG
-		if (mrt6debug & DEBUG_XMIT)
-			log(LOG_DEBUG,
-			    "phyint_send: packet too big on %s o %s g %s"
-			    " size %d(discarded)\n",
-			    if_name(ifp),
-			    ip6_sprintf(&ip6->ip6_src),
-			    ip6_sprintf(&ip6->ip6_dst),
-			    mb_copy->m_pkthdr.len);
+		else {
+			if (mrt6debug & DEBUG_XMIT) {
+				log(LOG_DEBUG,
+				    "phyint_send: packet too big on %s o %s "
+				    "g %s size %d(discarded)\n",
+				    if_name(ifp),
+				    ip6_sprintf(&ip6->ip6_src),
+				    ip6_sprintf(&ip6->ip6_dst),
+				    mb_copy->m_pkthdr.len);
+			}
+		}
 #endif /* MRT6DEBUG */
 		m_freem(mb_copy); /* simply discard the packet */
-#endif
+		
 	}
 }
 
@@ -1666,9 +1665,7 @@ register_send(ip6, mif, m)
  * is stripped off, and the inner packet is passed to register_mforward.
  */
 int
-pim6_input(mp, offp)
-	struct mbuf **mp;
-	int *offp;
+pim6_input(struct mbuf **mp, int *offp, int proto)
 {
 	struct pim *pim; /* pointer to a pim struct */
 	struct ip6_hdr *ip6;
@@ -1676,13 +1673,11 @@ pim6_input(mp, offp)
 	struct mbuf *m = *mp;
 	int minlen;
 	int off = *offp;
-	int proto;
 
 	++pim6stat.pim6s_rcv_total;
 
 	ip6 = mtod(m, struct ip6_hdr *);
 	pimlen = m->m_pkthdr.len - *offp;
-	proto = ip6->ip6_nxt;
 
 	/*
 	 * Validate lengths
@@ -1881,9 +1876,7 @@ pim6_input(mp, offp)
 #ifdef __APPLE__
 
                 if (lo_ifp) {
-		    lck_mtx_unlock(ip6_mutex);
                     dlil_output(lo_ifp, PF_INET6, m, 0, (struct sockaddr *)&dst, 0);
-		    lck_mtx_lock(ip6_mutex);
 		}
                 else {
                     printf("Warning: pim6_input call to dlil_find_dltag failed!\n");

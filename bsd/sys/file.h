@@ -81,6 +81,8 @@
 #define	_KAUTH_CRED_T
 struct ucred;
 typedef struct ucred *kauth_cred_t;
+struct posix_cred;
+typedef struct posix_cred *posix_cred_t;
 #endif	/* !_KAUTH_CRED_T */
 
 #pragma pack(4)

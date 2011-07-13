@@ -25,9 +25,7 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#if defined (__ppc__) || defined (__ppc64__)
-#include "ppc/_param.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/_param.h"
 #else
 #error architecture not supported

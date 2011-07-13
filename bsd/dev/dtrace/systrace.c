@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
@@ -73,10 +73,9 @@ typedef x86_saved_state_t savearea_t;
 #include <sys/conf.h>
 #include <sys/user.h>
 
-#if defined (__ppc__) || defined (__ppc64__)
-#define	SYSTRACE_ARTIFICIAL_FRAMES	3
-#define MACHTRACE_ARTIFICIAL_FRAMES 4
-#elif defined(__i386__) || defined (__x86_64__)
+#include <machine/pal_routines.h>
+
+#if defined(__i386__) || defined (__x86_64__)
 #define	SYSTRACE_ARTIFICIAL_FRAMES	2
 #define MACHTRACE_ARTIFICIAL_FRAMES 3
 #else
@@ -107,7 +106,6 @@ systrace_stub(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 #pragma unused(id,arg0,arg1,arg2,arg3,arg4,arg5,arg6,arg7)
 }
 
-
 int32_t
 dtrace_systrace_syscall(struct proc *pp, void *uap, int *rv)
 {
@@ -122,24 +120,10 @@ dtrace_systrace_syscall(struct proc *pp, void *uap, int *rv)
 #endif
 	syscall_arg_t *ip = (syscall_arg_t *)uap;
 
-#if defined (__ppc__) || defined (__ppc64__)
-	{
-		savearea_t *regs = (savearea_t *)find_user_regs(current_thread());
-
-		flavor = (((unsigned int)regs->save_r0) == 0)? 1: 0;
-
-		if (flavor)
-			code = regs->save_r3;
-		else
-			code = regs->save_r0;
-
-		/*
-		 * FIXME: unix_syscall screens for "unsafe calls" and instead calls nosys(), *not* sysent[code] !
-		 */
-	}
-#elif defined(__i386__) || defined (__x86_64__)
+#if defined(__i386__) || defined (__x86_64__)
 #pragma unused(flavor)
 	{
+		pal_register_cache_state(current_thread(), VALID);
 		x86_saved_state_t   *tagged_regs = (x86_saved_state_t *)find_user_regs(current_thread());
 
 		if (is_saved_state64(tagged_regs)) {
@@ -482,7 +466,7 @@ systrace_destroy(void *arg, dtrace_id_t id, void *parg)
 }
 
 /*ARGSUSED*/
-static void
+static int
 systrace_enable(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg) /* __APPLE__ */
@@ -505,7 +489,7 @@ systrace_enable(void *arg, dtrace_id_t id, void *parg)
 
 	if (enabled) {
 		ASSERT(sysent[sysnum].sy_callc == dtrace_systrace_syscall);
-		return;
+		return(0);
 	}
 
 	(void) casptr(&sysent[sysnum].sy_callc,
@@ -516,6 +500,7 @@ systrace_enable(void *arg, dtrace_id_t id, void *parg)
 	    (void *)systrace_sysent32[sysnum].stsy_underlying,
 	    (void *)dtrace_systrace_syscall32);
 #endif
+	return (0);
 }
 
 /*ARGSUSED*/
@@ -740,17 +725,13 @@ typedef void    mach_munge_t(const void *, void *);
 typedef struct {
         int                     mach_trap_arg_count;
         int                     (*mach_trap_function)(void);
-#if defined(__i386__)
-        boolean_t               mach_trap_stack;
-#else
+#if 0 /* no active architectures use mungers for mach traps */
         mach_munge_t            *mach_trap_arg_munge32; /* system call arguments for 32-bit */
         mach_munge_t            *mach_trap_arg_munge64; /* system call arguments for 64-bit */
 #endif
-#if     !MACH_ASSERT
-        int                     mach_trap_unused;
-#else
+#if     MACH_ASSERT
         const char*             mach_trap_name;
-#endif /* !MACH_ASSERT */
+#endif /* MACH_ASSERT */
 } mach_trap_t;
 
 extern mach_trap_t              mach_trap_table[];
@@ -803,20 +784,10 @@ dtrace_machtrace_syscall(struct mach_call_args *args)
 	syscall_arg_t *ip = (syscall_arg_t *)args;
 	mach_call_t mach_call;
 
-#if defined (__ppc__) || defined (__ppc64__)
-	{
-		savearea_t *regs = (savearea_t *)find_user_regs(current_thread());
-
-		flavor = (((unsigned int)regs->save_r0) == 0)? 1: 0;
-
-		if (flavor)
-			code = -regs->save_r3;
-		else
-			code = -regs->save_r0;
-	}
-#elif defined(__i386__) || defined (__x86_64__)
+#if defined(__i386__) || defined (__x86_64__)
 #pragma unused(flavor)
 	{
+		pal_register_cache_state(current_thread(), VALID);
 		x86_saved_state_t   *tagged_regs = (x86_saved_state_t *)find_user_regs(current_thread());
 
 		if (is_saved_state64(tagged_regs)) {
@@ -937,7 +908,7 @@ machtrace_destroy(void *arg, dtrace_id_t id, void *parg)
 }
 
 /*ARGSUSED*/
-static void
+static int
 machtrace_enable(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg) /* __APPLE__ */
@@ -954,12 +925,13 @@ machtrace_enable(void *arg, dtrace_id_t id, void *parg)
 
 	if (enabled) {
 	    ASSERT(sysent[sysnum].sy_callc == (void *)dtrace_machtrace_syscall);
-		return;
+	    return(0);
 	}
 
 	(void) casptr(&mach_trap_table[sysnum].mach_trap_function,
 		      (void *)machtrace_sysent[sysnum].stsy_underlying,
 		      (void *)dtrace_machtrace_syscall);
+	return(0);
 }
 
 /*ARGSUSED*/

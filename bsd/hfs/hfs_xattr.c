@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -35,6 +35,7 @@
 #include <sys/vnode.h>
 #include <sys/xattr.h>
 #include <sys/fcntl.h>
+#include <sys/fsctl.h>
 #include <sys/vnode_internal.h>
 #include <sys/kauth.h>
 
@@ -66,7 +67,6 @@ struct listattr_callback_state {
 #endif /* HFS_COMPRESSION */
 };
 
-#define HFS_MAXATTRIBUTESIZE    (128 * 1024)
 #define HFS_MAXATTRBLKS         (32 * 1024)
 
 
@@ -79,6 +79,8 @@ struct listattr_callback_state {
 	(((CP)->c_attr.ca_blocks - (CP)->c_datafork->ff_data.cf_blocks) > 0)
 
 static u_int32_t emptyfinfo[8] = {0};
+
+static int hfs_zero_dateadded (struct cnode *cp, u_int8_t *finderinfo); 
 
 const char hfs_attrdatafilename[] = "Attribute Data";
 
@@ -216,7 +218,7 @@ hfs_vnop_removenamedstream(struct vnop_removenamedstream_args* ap)
 	scp = VTOC(svp);
 
 	/* Take truncate lock before taking cnode lock. */
-	hfs_lock_truncate(scp, TRUE);
+	hfs_lock_truncate(scp, HFS_EXCLUSIVE_LOCK);
 	if ((error = hfs_lock(scp, HFS_EXCLUSIVE_LOCK))) {
 		goto out;
 	}
@@ -225,16 +227,38 @@ hfs_vnop_removenamedstream(struct vnop_removenamedstream_args* ap)
 	}
 	hfs_unlock(scp);
 out:
-	hfs_unlock_truncate(scp, TRUE);
+	hfs_unlock_truncate(scp, 0);
 	return (error);
 }
 #endif
+
+/* Zero out the date added field for the specified cnode */
+static int hfs_zero_dateadded (struct cnode *cp, u_int8_t *finderinfo) {
+	u_int8_t *finfo = finderinfo;
+    
+	/* Advance finfo by 16 bytes to the 2nd half of the finderinfo */
+	finfo = finfo + 16;
+	
+    if (S_ISREG(cp->c_attr.ca_mode)) {
+        struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
+        extinfo->date_added = 0;
+    }
+    else if (S_ISDIR(cp->c_attr.ca_mode)) {
+        struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
+        extinfo->date_added = 0;
+    }
+	else {
+		/* Return an error */
+		return -1;
+	}
+	return 0;
+    
+}
 
 
 /*
  * Retrieve the data of an extended attribute.
  */
-__private_extern__
 int
 hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 /*
@@ -253,13 +277,7 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 	struct cnode *cp;
 	struct hfsmount *hfsmp;
 	uio_t uio = ap->a_uio;
-	struct BTreeIterator * iterator = NULL;
-	struct filefork *btfile;
-	FSBufferDescriptor btdata;
-	HFSPlusAttrRecord * recp = NULL;
 	size_t bufsize;
-	u_int16_t datasize;
-	int lockflags;
 	int result;
 
 	cp = VTOC(vp);
@@ -281,6 +299,9 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 			/* Make a copy since we may not export all of it. */
 			bcopy(cp->c_finderinfo, finderinfo, sizeof(finderinfo));
 			hfs_unlock(cp);
+            
+            /* Zero out the date added field in the local copy */
+			hfs_zero_dateadded (cp, finderinfo);
 
 			/* Don't expose a symlink's private type/creator. */
 			if (vnode_islnk(vp)) {
@@ -347,17 +368,17 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 				    (result == 0) &&
 				    (uio_resid(uio) == uio_size)) {
 					/*
-					 we intentionally make the above call to VNOP_READ so that
-					 it can return an authorization/permission/etc. error
-					 based on ap->a_context and thus deny this operation;
-					 in that case, result != 0 and we won't proceed
-					 
-					 however, if result == 0, it will have returned no data
-					 because hfs_vnop_read hid the resource fork
-					 (hence uio_resid(uio) == uio_size, i.e. the uio is untouched)
-					 
-					 in that case, we try again with the decmpfs_ctx context
-					 to get the actual data
+					 * We intentionally make the above call to VNOP_READ so that
+					 * it can return an authorization/permission/etc. Error
+					 * based on ap->a_context and thus deny this operation;
+					 * in that case, result != 0 and we won't proceed.
+					 * 
+					 * However, if result == 0, it will have returned no data
+					 * because hfs_vnop_read hid the resource fork
+					 * (hence uio_resid(uio) == uio_size, i.e. the uio is untouched)
+					 * 
+					 * In that case, we try again with the decmpfs_ctx context
+					 * to get the actual data
 					 */
 					result = VNOP_READ(rvp, uio, 0, decmpfs_ctx);
 				}
@@ -387,24 +408,78 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 	if ((result = hfs_lock(cp, HFS_SHARED_LOCK))) {
 		return (result);
 	}
-	/* Bail if we don't have any extended attributes. */
+	
+	/* Check for non-rsrc, non-finderinfo EAs */
+	result = hfs_getxattr_internal (cp, ap, VTOHFS(cp->c_vp), 0);
+
+	hfs_unlock(cp);
+	
+	return MacToVFSError(result);
+}
+
+
+
+/*
+ * getxattr_internal
+ *
+ * We break out this internal function which searches the attributes B-Tree and the 
+ * overflow extents file to find non-resource, non-finderinfo EAs.  There may be cases 
+ * where we need to get EAs in contexts where we are already holding the cnode lock, 
+ * and to re-enter hfs_vnop_getxattr would cause us to double-lock the cnode.  Instead, 
+ * we can just directly call this function.
+ *
+ * We pass the hfsmp argument directly here because we may not necessarily have a cnode to
+ * operate on.  Under normal conditions, we have a file or directory to query, but if we
+ * are operating on the root directory (id 1), then we may not have a cnode.  In this case, if hte
+ * 'cp' argument is NULL, then we need to use the 'fileid' argument as the entry to manipulate
+ *
+ * NOTE: This function assumes the cnode lock for 'cp' is held exclusive or shared. 
+ */ 
+
+
+int hfs_getxattr_internal (struct cnode *cp, struct vnop_getxattr_args *ap, 
+		struct hfsmount *hfsmp, u_int32_t fileid) {
+	
+	struct filefork *btfile;
+	struct BTreeIterator * iterator = NULL;
+	size_t bufsize = 0;
+	HFSPlusAttrRecord *recp = NULL;
+	FSBufferDescriptor btdata;
+	int lockflags = 0;
+	int result = 0;
+	u_int16_t datasize = 0;
+	uio_t uio = ap->a_uio;
+	u_int32_t target_id = 0;
+
+	if (cp) {
+		target_id = cp->c_fileid;
+	}
+	else {
+		target_id = fileid;
+	}
+
+
+	/* Bail if we don't have an EA B-Tree. */
 	if ((hfsmp->hfs_attribute_vp == NULL) ||
-	    (cp->c_attr.ca_recflags & kHFSHasAttributesMask) == 0) {
-	    	result = ENOATTR;
+	   ((cp) &&  (cp->c_attr.ca_recflags & kHFSHasAttributesMask) == 0)) {
+		result = ENOATTR;
 		goto exit;
 	}
+	
+	/* Initialize the B-Tree iterator for searching for the proper EA */
 	btfile = VTOF(hfsmp->hfs_attribute_vp);
-
+	
 	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
 	if (iterator == NULL) {
 		result = ENOMEM;
 		goto exit;
 	}
 	bzero(iterator, sizeof(*iterator));
-
+	
 	bufsize = sizeof(HFSPlusAttrData) - 2;
-	if (uio)
+	if (uio) {
 		bufsize += uio_resid(uio);
+	}
 	bufsize = MAX(bufsize, sizeof(HFSPlusAttrRecord));
 	MALLOC(recp, HFSPlusAttrRecord *, bufsize, M_TEMP, M_WAITOK);
 	if (recp == NULL) {
@@ -414,132 +489,146 @@ hfs_vnop_getxattr(struct vnop_getxattr_args *ap)
 	btdata.bufferAddress = recp;
 	btdata.itemSize = bufsize;
 	btdata.itemCount = 1;
-
-	result = hfs_buildattrkey(VTOC(vp)->c_fileid, ap->a_name, (HFSPlusAttrKey *)&iterator->key);
-	if (result)
-		goto exit;	
-
-	/* Lookup the attribute. */
-	lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_SHARED_LOCK);
-	result = BTSearchRecord(btfile, iterator, &btdata, &datasize, NULL);
-	hfs_systemfile_unlock(hfsmp, lockflags);
-
+	
+	result = hfs_buildattrkey(target_id, ap->a_name, (HFSPlusAttrKey *)&iterator->key);
 	if (result) {
-		if (result == btNotFound)
-			result = ENOATTR;
 		goto exit;
 	}
 
-	switch (recp->recordType) {
-	case kHFSPlusAttrInlineData:
-		/*
-		 * Sanity check record size. It's not required to have any
-		 * user data, so the minimum size is 2 bytes less that the
-		 * size of HFSPlusAttrData (since HFSPlusAttrData struct
-		 * has 2 bytes set aside for attribute data).
-		 */
-		if (datasize < (sizeof(HFSPlusAttrData) - 2)) {
-			printf("hfs_getxattr: %d,%s invalid record size %d (expecting %lu)\n", 
-				VTOC(vp)->c_fileid, ap->a_name, datasize, sizeof(HFSPlusAttrData));
+	/* Lookup the attribute in the Attribute B-Tree */
+	lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_SHARED_LOCK);
+	result = BTSearchRecord(btfile, iterator, &btdata, &datasize, NULL);
+	hfs_systemfile_unlock(hfsmp, lockflags);
+	
+	if (result) {
+		if (result == btNotFound) {
 			result = ENOATTR;
-			break;
 		}
-		*ap->a_size = recp->attrData.attrSize;
-		if (uio && recp->attrData.attrSize != 0) {
-			if (*ap->a_size > (user_size_t)uio_resid(uio))
-				result = ERANGE;
-			else
-				result = uiomove((caddr_t) &recp->attrData.attrData , recp->attrData.attrSize, uio);
-		}
-		break;
-
-	case kHFSPlusAttrForkData:
-		if (datasize < sizeof(HFSPlusAttrForkData)) {
-			printf("hfs_getxattr: %d,%s invalid record size %d (expecting %lu)\n", 
-				VTOC(vp)->c_fileid, ap->a_name, datasize, sizeof(HFSPlusAttrForkData));
-			result = ENOATTR;
-			break;
-		}
-		*ap->a_size = recp->forkData.theFork.logicalSize;
-		if (uio == NULL) {
-			break;
-		}
-		if (*ap->a_size > (user_size_t)uio_resid(uio)) {
-			result = ERANGE;
-			break;
-		}
-		/* Process overflow extents if necessary. */
-		if (has_overflow_extents(&recp->forkData.theFork)) {
-			HFSPlusExtentDescriptor *extentbuf;
-			HFSPlusExtentDescriptor *extentptr;
-			size_t extentbufsize;
-			u_int32_t totalblocks;
-			u_int32_t blkcnt;
-			u_int32_t attrlen;
-
-			totalblocks = recp->forkData.theFork.totalBlocks;
-			/* Ignore bogus block counts. */
-			if (totalblocks > HFS_MAXATTRBLKS) {
-				result = ERANGE;
-				break;
-			}
-			attrlen = recp->forkData.theFork.logicalSize;
-
-			/* Get a buffer to hold the worst case amount of extents. */
-			extentbufsize = totalblocks * sizeof(HFSPlusExtentDescriptor);
-			extentbufsize = roundup(extentbufsize, sizeof(HFSPlusExtentRecord));
-			MALLOC(extentbuf, HFSPlusExtentDescriptor *, extentbufsize, M_TEMP, M_WAITOK);
-			if (extentbuf == NULL) {
-				result = ENOMEM;
-				break;
-			}
-			bzero(extentbuf, extentbufsize);
-			extentptr = extentbuf;
-
-			/* Grab the first 8 extents. */
-			bcopy(&recp->forkData.theFork.extents[0], extentptr, sizeof(HFSPlusExtentRecord));
-			extentptr += kHFSPlusExtentDensity;
-			blkcnt = count_extent_blocks(totalblocks, recp->forkData.theFork.extents);
-
-			/* Now lookup the overflow extents. */
-			lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_SHARED_LOCK);
-			while (blkcnt < totalblocks) {
-				((HFSPlusAttrKey *)&iterator->key)->startBlock = blkcnt;
-				result = BTSearchRecord(btfile, iterator, &btdata, &datasize, NULL);
-				if (result ||
-				    (recp->recordType != kHFSPlusAttrExtents) ||
-				    (datasize < sizeof(HFSPlusAttrExtents))) {
-					printf("hfs_getxattr: %s missing extents, only %d blks of %d found\n",
-						ap->a_name, blkcnt, totalblocks);
-					result = ENOATTR;
-					break;   /* break from while */
-				}
-				/* Grab the next 8 extents. */
-				bcopy(&recp->overflowExtents.extents[0], extentptr, sizeof(HFSPlusExtentRecord));
-				extentptr += kHFSPlusExtentDensity;
-				blkcnt += count_extent_blocks(totalblocks, recp->overflowExtents.extents);
-			}
-			hfs_systemfile_unlock(hfsmp, lockflags);
-
-			if (blkcnt < totalblocks) {
-				result = ENOATTR;
-			} else {
-				result = read_attr_data(hfsmp, uio, attrlen, extentbuf);
-			}
-			FREE(extentbuf, M_TEMP);
-
-		} else /* No overflow extents. */ {
-			result = read_attr_data(hfsmp, uio, recp->forkData.theFork.logicalSize, recp->forkData.theFork.extents);
-		}
-		break;
-
-	default:
-		result = ENOATTR;
-		break;		
+		goto exit;
 	}
-exit:
-	hfs_unlock(cp);
-
+	
+	/* 
+	 * Operate differently if we have inline EAs that can fit in the attribute B-Tree or if
+	 * we have extent based EAs.
+	 */
+	switch (recp->recordType) {
+		/* Attribute fits in the Attribute B-Tree */
+		case kHFSPlusAttrInlineData:
+			/*
+			 * Sanity check record size. It's not required to have any
+			 * user data, so the minimum size is 2 bytes less that the
+			 * size of HFSPlusAttrData (since HFSPlusAttrData struct
+			 * has 2 bytes set aside for attribute data).
+			 */
+			if (datasize < (sizeof(HFSPlusAttrData) - 2)) {
+				printf("hfs_getxattr: %d,%s invalid record size %d (expecting %lu)\n", 
+					   target_id, ap->a_name, datasize, sizeof(HFSPlusAttrData));
+				result = ENOATTR;
+				break;
+			}
+			*ap->a_size = recp->attrData.attrSize;
+			if (uio && recp->attrData.attrSize != 0) {
+				if (*ap->a_size > (user_size_t)uio_resid(uio)) {
+					result = ERANGE;
+				}
+				else {
+					result = uiomove((caddr_t) &recp->attrData.attrData , recp->attrData.attrSize, uio);
+				}
+			}
+			break;
+		/* Extent-Based EAs */
+		case kHFSPlusAttrForkData: {
+			if (datasize < sizeof(HFSPlusAttrForkData)) {
+				printf("hfs_getxattr: %d,%s invalid record size %d (expecting %lu)\n", 
+					   target_id, ap->a_name, datasize, sizeof(HFSPlusAttrForkData));
+				result = ENOATTR;
+				break;
+			}
+			*ap->a_size = recp->forkData.theFork.logicalSize;
+			if (uio == NULL) {
+				break;
+			}
+			if (*ap->a_size > (user_size_t)uio_resid(uio)) {
+				result = ERANGE;
+				break;
+			}
+			/* Process overflow extents if necessary. */
+			if (has_overflow_extents(&recp->forkData.theFork)) {
+				HFSPlusExtentDescriptor *extentbuf;
+				HFSPlusExtentDescriptor *extentptr;
+				size_t extentbufsize;
+				u_int32_t totalblocks;
+				u_int32_t blkcnt;
+				u_int32_t attrlen;
+				
+				totalblocks = recp->forkData.theFork.totalBlocks;
+				/* Ignore bogus block counts. */
+				if (totalblocks > HFS_MAXATTRBLKS) {
+					result = ERANGE;
+					break;
+				}
+				attrlen = recp->forkData.theFork.logicalSize;
+				
+				/* Get a buffer to hold the worst case amount of extents. */
+				extentbufsize = totalblocks * sizeof(HFSPlusExtentDescriptor);
+				extentbufsize = roundup(extentbufsize, sizeof(HFSPlusExtentRecord));
+				MALLOC(extentbuf, HFSPlusExtentDescriptor *, extentbufsize, M_TEMP, M_WAITOK);
+				if (extentbuf == NULL) {
+					result = ENOMEM;
+					break;
+				}
+				bzero(extentbuf, extentbufsize);
+				extentptr = extentbuf;
+				
+				/* Grab the first 8 extents. */
+				bcopy(&recp->forkData.theFork.extents[0], extentptr, sizeof(HFSPlusExtentRecord));
+				extentptr += kHFSPlusExtentDensity;
+				blkcnt = count_extent_blocks(totalblocks, recp->forkData.theFork.extents);
+				
+				/* Now lookup the overflow extents. */
+				lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_SHARED_LOCK);
+				while (blkcnt < totalblocks) {
+					((HFSPlusAttrKey *)&iterator->key)->startBlock = blkcnt;
+					result = BTSearchRecord(btfile, iterator, &btdata, &datasize, NULL);
+					if (result ||
+						(recp->recordType != kHFSPlusAttrExtents) ||
+						(datasize < sizeof(HFSPlusAttrExtents))) {
+						printf("hfs_getxattr: %s missing extents, only %d blks of %d found\n",
+							   ap->a_name, blkcnt, totalblocks);
+						result = ENOATTR;
+						break;   /* break from while */
+					}
+					/* Grab the next 8 extents. */
+					bcopy(&recp->overflowExtents.extents[0], extentptr, sizeof(HFSPlusExtentRecord));
+					extentptr += kHFSPlusExtentDensity;
+					blkcnt += count_extent_blocks(totalblocks, recp->overflowExtents.extents);
+				}
+				
+				/* Release Attr B-Tree lock */
+				hfs_systemfile_unlock(hfsmp, lockflags);
+				
+				if (blkcnt < totalblocks) {
+					result = ENOATTR;
+				} 
+				else {
+					result = read_attr_data(hfsmp, uio, attrlen, extentbuf);
+				}
+				FREE(extentbuf, M_TEMP);
+				
+			} 
+			else /* No overflow extents. */ {
+				result = read_attr_data(hfsmp, uio, recp->forkData.theFork.logicalSize, recp->forkData.theFork.extents);
+			}
+			break;
+		}
+			
+		default:
+			/* We only support Extent or inline EAs.  Default to ENOATTR for anything else */
+			result = ENOATTR;
+			break;		
+	}
+	
+exit:	
 	if (iterator) {
 		FREE(iterator, M_TEMP);
 	}
@@ -547,13 +636,14 @@ exit:
 		FREE(recp, M_TEMP);
 	}
 	
-	return MacToVFSError(result);
+	return result;
+	
 }
+
 
 /*
  * Set the data of an extended attribute.
  */
-__private_extern__
 int
 hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 /*
@@ -571,19 +661,10 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 	struct cnode *cp = NULL;
 	struct hfsmount *hfsmp;
 	uio_t uio = ap->a_uio;
-	struct BTreeIterator * iterator = NULL;
-	struct filefork *btfile = NULL;
 	size_t attrsize;
-	FSBufferDescriptor btdata;
-	HFSPlusAttrRecord *recp = NULL;
-	HFSPlusExtentDescriptor *extentptr = NULL;
-	HFSPlusAttrRecord attrdata;  /* 90 bytes */
 	void * user_data_ptr = NULL;
-	int started_transaction = 0;
-	int lockflags = 0;
-	int exists;
-	int allocatedblks = 0;
 	int result;
+	time_t orig_ctime=VTOC(vp)->c_ctime;
 
 	if (ap->a_name == NULL || ap->a_name[0] == '\0') {
 		return (EINVAL);  /* invalid name */
@@ -599,6 +680,8 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		if (result != 0)
 			return result;
 	}
+
+	check_for_tracked_file(vp, orig_ctime, NAMESPACE_HANDLER_METADATA_WRITE_OP, NULL);
 #endif /* HFS_COMPRESSION */
 	
 	/* Set the Finder Info. */
@@ -606,7 +689,9 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		u_int8_t finderinfo[32];
 		struct FndrFileInfo *fip;
 		void * finderinfo_start;
+		u_int8_t *finfo = NULL;
 		u_int16_t fdFlags;
+		u_int32_t dateadded = 0;
 
 		attrsize = sizeof(VTOC(vp)->c_finderinfo);
 
@@ -641,6 +726,12 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 			} 
 		}
 
+		/* Grab the current date added from the cnode */
+		dateadded = hfs_get_dateadded (cp);
+        
+		/* Zero out the date added field to ignore user's attempts to set it */
+		hfs_zero_dateadded(cp, finderinfo);
+
 		if (bcmp(finderinfo_start, emptyfinfo, attrsize)) {
 			/* attr exists and "create" was specified. */
 			if (ap->a_options & XATTR_CREATE) {
@@ -654,12 +745,33 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 				return (ENOATTR);
 			}
 		}
+
+		/* 
+		 * Now restore the date added to the finderinfo to be written out.
+		 * Advance to the 2nd half of the finderinfo to write out the date added
+		 * into the buffer.
+		 *
+		 * Make sure to endian swap the date added back into big endian.  When we used
+		 * hfs_get_dateadded above to retrieve it, it swapped into local endianness
+		 * for us.  But now that we're writing it out, put it back into big endian.
+		 */
+		finfo = &finderinfo[16];
+
+		if (S_ISREG(cp->c_attr.ca_mode)) {
+			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
+			extinfo->date_added = OSSwapHostToBigInt32(dateadded);
+		}
+		else if (S_ISDIR(cp->c_attr.ca_mode)) {
+			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
+			extinfo->date_added = OSSwapHostToBigInt32(dateadded);
+		}
+
 		/* Set the cnode's Finder Info. */
 		if (attrsize == sizeof(cp->c_finderinfo))
 			bcopy(&finderinfo[0], finderinfo_start, attrsize);
 		else
 			bcopy(&finderinfo[8], finderinfo_start, attrsize);
-
+	
 		/* Updating finderInfo updates change time and modified time */
 		cp->c_touch_chgtime = TRUE;
 		cp->c_flag |= C_MODIFIED;
@@ -724,32 +836,29 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		if (result) {
 			return (result);
 		}
-		/* 
-		 * VNOP_WRITE marks the vnode as needing a modtime update.
-		 */
+		/* VNOP_WRITE marks cnode as needing a modtime update */
 		result = VNOP_WRITE(rvp, uio, 0, ap->a_context);
 		
-		/* if open unlinked, force it inactive and recycle */
+		/* if open unlinked, force it inactive */
 		if (openunlinked) {
 			int vref;
 			vref = vnode_ref (rvp);
 			if (vref == 0) {
 				vnode_rele(rvp);
 			}
-			vnode_recycle (rvp);
+			vnode_recycle (rvp);	
 		}
 		else {
-			/* re-lock the cnode so we can update the modtimes */
-			if ((result = hfs_lock(VTOC(vp), HFS_EXCLUSIVE_LOCK))) {
-				vnode_recycle(rvp);
+			/* cnode is not open-unlinked, so re-lock cnode to sync */
+			if ((result = hfs_lock(cp, HFS_EXCLUSIVE_LOCK))) {
+				vnode_recycle (rvp);
 				vnode_put(rvp);
-				return (result);
+				return result;
 			}
-
-			/* HFS fsync the resource fork to force it out to disk */
-			result = hfs_fsync (rvp, MNT_NOWAIT, 0, vfs_context_proc(ap->a_context));
-
-			hfs_unlock(cp);
+			
+			/* hfs fsync rsrc fork to force to disk and update modtime */
+			result = hfs_fsync (rvp, MNT_NOWAIT, 0, vfs_context_proc (ap->a_context));
+			hfs_unlock (cp);
 		}
 
 		vnode_put(rvp);
@@ -764,8 +873,9 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 	attrsize = uio_resid(uio);
 
 	/* Enforce an upper limit. */
-	if (attrsize > HFS_MAXATTRIBUTESIZE) {
-		return (E2BIG);
+	if (attrsize > HFS_XATTR_MAXSIZE) {
+		result = E2BIG;
+		goto exit;
 	}
 
 	/*
@@ -791,23 +901,82 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		goto exit;
 	}
 	cp = VTOC(vp);
+	
+	/* 
+	 * If we're trying to set a non-finderinfo, non-resourcefork EA, then
+	 * call the breakout function.
+	 */
+	result = hfs_setxattr_internal (cp, user_data_ptr, attrsize, ap, VTOHFS(vp), 0);
 
+ exit:
+	if (cp) {
+		hfs_unlock(cp);
+	}
+	if (user_data_ptr) {
+		FREE(user_data_ptr, M_TEMP);
+	}
+
+	return (result == btNotFound ? ENOATTR : MacToVFSError(result));
+}
+
+
+/*
+ * hfs_setxattr_internal
+ * 
+ * Internal function to set non-rsrc, non-finderinfo EAs to either the attribute B-Tree or
+ * extent-based EAs.
+ *
+ * See comments from hfs_getxattr_internal on why we need to pass 'hfsmp' and fileid here.
+ * The gist is that we could end up writing to the root folder which may not have a cnode.
+ *
+ * Assumptions: 
+ *		1. cnode 'cp' is locked EXCLUSIVE before calling this function.
+ *		2. data_ptr contains data to be written.  If gathering data from userland, this must be
+ *			done before calling this function.  
+ *		3. If data originates entirely in-kernel, use a null UIO, and ensure the size is less than 
+ *			hfsmp->hfs_max_inline_attrsize bytes long. 
+ */ 
+int hfs_setxattr_internal (struct cnode *cp, caddr_t data_ptr, size_t attrsize,
+						   struct vnop_setxattr_args *ap, struct hfsmount *hfsmp, 
+						   u_int32_t fileid) {
+	uio_t uio = ap->a_uio;
+	struct vnode *vp = ap->a_vp;
+	int started_transaction = 0;
+	struct BTreeIterator * iterator = NULL;
+	struct filefork *btfile = NULL;
+	FSBufferDescriptor btdata;
+	HFSPlusAttrRecord attrdata;  /* 90 bytes */
+	HFSPlusAttrRecord *recp = NULL;
+	HFSPlusExtentDescriptor *extentptr = NULL;
+	int result = 0;
+	int lockflags = 0;
+	int exists = 0;
+	int allocatedblks = 0;
+	u_int32_t target_id;
+
+	if (cp) {
+		target_id = cp->c_fileid;
+	}
+	else {
+		target_id = fileid;
+	}
+	
 	/* Start a transaction for our changes. */
 	if (hfs_start_transaction(hfsmp) != 0) {
 	    result = EINVAL;
 	    goto exit;
 	}
 	started_transaction = 1;
-
+	
 	/*
 	 * Once we started the transaction, nobody can compete
 	 * with us, so make sure this file is still there.
 	 */
-	if (cp->c_flag & C_NOEXISTS) {
+	if ((cp) && (cp->c_flag & C_NOEXISTS)) {
 		result = ENOENT;
 		goto exit;
 	}
-
+	
 	/*
 	 * If there isn't an attributes b-tree then create one.
 	 */
@@ -821,10 +990,10 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 	if (hfsmp->hfs_max_inline_attrsize == 0) {
 		hfsmp->hfs_max_inline_attrsize = getmaxinlineattrsize(hfsmp->hfs_attribute_vp);
 	}
-
+	
 	/* Take exclusive access to the attributes b-tree. */
 	lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_EXCLUSIVE_LOCK);
-
+	
 	/* Build the b-tree key. */
 	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
 	if (iterator == NULL) {
@@ -832,18 +1001,18 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		goto exit;
 	}
 	bzero(iterator, sizeof(*iterator));
-	result = hfs_buildattrkey(VTOC(vp)->c_fileid, ap->a_name, (HFSPlusAttrKey *)&iterator->key);
+	result = hfs_buildattrkey(target_id, ap->a_name, (HFSPlusAttrKey *)&iterator->key);
 	if (result) {
 		goto exit;
 	}
-
+	
 	/* Preflight for replace/create semantics. */
 	btfile = VTOF(hfsmp->hfs_attribute_vp);
 	btdata.bufferAddress = &attrdata;
 	btdata.itemSize = sizeof(attrdata);
 	btdata.itemCount = 1;
 	exists = BTSearchRecord(btfile, iterator, &btdata, NULL, NULL) == 0;
-
+	
 	/* Replace requires that the attribute already exists. */
 	if ((ap->a_options & XATTR_REPLACE) && !exists) {
 		result = ENOATTR;
@@ -854,6 +1023,7 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		result = EEXIST;
 		goto exit;	
 	}
+	
 	/* If it won't fit inline then use extent-based attributes. */
 	if (attrsize > hfsmp->hfs_max_inline_attrsize) {
 		size_t extentbufsize;
@@ -861,13 +1031,17 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		int extentblks;
 		u_int32_t *keystartblk;
 		int i;
-
-		/* Check if volume supports extent-based attributes */
-		if ((hfsmp->hfs_flags & HFS_XATTR_EXTENTS) == 0) {
-			result = E2BIG;
+		
+		if (uio == NULL) {
+			/*
+			 * setxattrs originating from in-kernel are not supported if they are bigger
+			 * than the inline max size. Just return ENOATTR and force them to do it with a
+			 * smaller EA.
+			 */
+			result = EPERM;
 			goto exit;
-		} 
-
+		}
+		
 		/* Get some blocks. */
 		blkcnt = howmany(attrsize, hfsmp->blockSize);
 		extentbufsize = blkcnt * sizeof(HFSPlusExtentDescriptor);
@@ -886,11 +1060,13 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		/* Copy data into the blocks. */
 		result = write_attr_data(hfsmp, uio, attrsize, extentptr);
 		if (result) {
-			const char *name = vnode_getname(vp);
-			printf("hfs_setxattr: write_attr_data err (%d) %s:%s\n",
-				result,  name ? name : "", ap->a_name);
-			if (name)
-				vnode_putname(name);
+			if (vp) {
+				const char *name = vnode_getname(vp);
+				printf("hfs_setxattr: write_attr_data err (%d) %s:%s\n",
+						result,  name ? name : "", ap->a_name);
+				if (name)
+					vnode_putname(name);
+			}
 			goto exit;
 		}
 
@@ -898,15 +1074,16 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		if (exists) {
 			result = remove_attribute_records(hfsmp, iterator);
 			if (result) {
-				const char *name = vnode_getname(vp);
-				printf("hfs_setxattr: remove_attribute_records err (%d) %s:%s\n",
-					result, name ? name : "", ap->a_name);
-				if (name)
-					vnode_putname(name);
-				goto exit; 
+				if (vp) {
+					const char *name = vnode_getname(vp);
+					printf("hfs_setxattr: remove_attribute_records err (%d) %s:%s\n",
+							result, name ? name : "", ap->a_name);
+					if (name)
+						vnode_putname(name);
+				}
+				goto exit;
 			}
 		}
-
 		/* Create attribute fork data record. */
 		MALLOC(recp, HFSPlusAttrRecord *, sizeof(HFSPlusAttrRecord), M_TEMP, M_WAITOK);
 		if (recp == NULL) {
@@ -916,32 +1093,27 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		btdata.bufferAddress = recp;
 		btdata.itemCount = 1;
 		btdata.itemSize = sizeof(HFSPlusAttrForkData);
-
+		
 		recp->recordType = kHFSPlusAttrForkData;
 		recp->forkData.reserved = 0;
 		recp->forkData.theFork.logicalSize = attrsize;
 		recp->forkData.theFork.clumpSize = 0;
 		recp->forkData.theFork.totalBlocks = blkcnt;
 		bcopy(extentptr, recp->forkData.theFork.extents, sizeof(HFSPlusExtentRecord));
-
-		(void) hfs_buildattrkey(VTOC(vp)->c_fileid, ap->a_name, (HFSPlusAttrKey *)&iterator->key);
-
+		
+		(void) hfs_buildattrkey(target_id, ap->a_name, (HFSPlusAttrKey *)&iterator->key);
+		
 		result = BTInsertRecord(btfile, iterator, &btdata, btdata.itemSize);
 		if (result) {
-#if HFS_XATTR_VERBOSE
-			const char *name = vnode_getname(vp);
-			printf("hfs_setxattr: BTInsertRecord err (%d) %s:%s\n",
-			       MacToVFSError(result), name ? name : "", ap->a_name);
-			if (name)
-				vnode_putname(name);
-#endif
+			printf ("hfs_setxattr: BTInsertRecord() - %d,%s err=%d\n", 
+					target_id, ap->a_name, result);
 			goto exit; 
 		}
 		extentblks = count_extent_blocks(blkcnt, recp->forkData.theFork.extents);
 		blkcnt -= extentblks;
 		keystartblk = &((HFSPlusAttrKey *)&iterator->key)->startBlock;
 		i = 0;
-
+		
 		/* Create overflow extents as needed. */
 		while (blkcnt > 0) {
 			/* Initialize the key and record. */
@@ -949,31 +1121,29 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 			btdata.itemSize = sizeof(HFSPlusAttrExtents);
 			recp->recordType = kHFSPlusAttrExtents;
 			recp->overflowExtents.reserved = 0;
-
+			
 			/* Copy the next set of extents. */
 			i += kHFSPlusExtentDensity;
 			bcopy(&extentptr[i], recp->overflowExtents.extents, sizeof(HFSPlusExtentRecord));
-
+			
 			result = BTInsertRecord(btfile, iterator, &btdata, btdata.itemSize);
 			if (result) {
-				const char *name = vnode_getname(vp);
-				printf("hfs_setxattr: BTInsertRecord err (%d) %s:%s\n",
-					MacToVFSError(result), name ? name : "", ap->a_name);
-				if (name)
-					vnode_putname(name);
+				printf ("hfs_setxattr: BTInsertRecord() overflow - %d,%s err=%d\n", 
+						target_id, ap->a_name, result);
 				goto exit;
 			}
 			extentblks = count_extent_blocks(blkcnt, recp->overflowExtents.extents);
 			blkcnt -= extentblks;
 		}
-	} else /* Inline data */ {
+	}
+	else { /* Inline data */ 
 		if (exists) {
 			result = remove_attribute_records(hfsmp, iterator);
 			if (result) {
 				goto exit;
 			}
 		}
-
+		
 		/* Calculate size of record rounded up to multiple of 2 bytes. */
 		btdata.itemSize = sizeof(HFSPlusAttrData) - 2 + attrsize + ((attrsize & 1) ? 1 : 0);
 		MALLOC(recp, HFSPlusAttrRecord *, btdata.itemSize, M_TEMP, M_WAITOK);
@@ -985,24 +1155,36 @@ hfs_vnop_setxattr(struct vnop_setxattr_args *ap)
 		recp->attrData.reserved[0] = 0;
 		recp->attrData.reserved[1] = 0;
 		recp->attrData.attrSize = attrsize;
-	
+		
 		/* Copy in the attribute data (if any). */
 		if (attrsize > 0) {
-			if (user_data_ptr)
-				bcopy(user_data_ptr, &recp->attrData.attrData, attrsize);
-			else
+			if (data_ptr) {
+				bcopy(data_ptr, &recp->attrData.attrData, attrsize);
+			}
+			else {
+				/* 
+				 * A null UIO meant it originated in-kernel.  If they didn't supply data_ptr 
+				 * then deny the copy operation.
+				 */
+				if (uio == NULL) {
+					result = EPERM;
+					goto exit;
+				}
 				result = uiomove((caddr_t)&recp->attrData.attrData, attrsize, uio);
+			}
+			
 			if (result) {
 				goto exit;
 			}
 		}
-
-		(void) hfs_buildattrkey(VTOC(vp)->c_fileid, ap->a_name, (HFSPlusAttrKey *)&iterator->key);
-
+		
+		(void) hfs_buildattrkey(target_id, ap->a_name, (HFSPlusAttrKey *)&iterator->key);
+		
 		btdata.bufferAddress = recp;
 		btdata.itemCount = 1;
 		result = BTInsertRecord(btfile, iterator, &btdata, btdata.itemSize);
 	}
+	
 exit:
 	if (btfile && started_transaction) {
 		(void) BTFlushPath(btfile);
@@ -1011,16 +1193,18 @@ exit:
 		hfs_systemfile_unlock(hfsmp, lockflags);
 	}
 	if (result == 0) {
-		cp = VTOC(vp);
-		/* Setting an attribute only updates change time and not 
-		 * modified time of the file.
-		 */
-		cp->c_touch_chgtime = TRUE;
-		cp->c_attr.ca_recflags |= kHFSHasAttributesMask;
-		if ((bcmp(ap->a_name, KAUTH_FILESEC_XATTR, sizeof(KAUTH_FILESEC_XATTR)) == 0)) {
-			cp->c_attr.ca_recflags |= kHFSHasSecurityMask;
+		if (vp) {
+			cp = VTOC(vp);
+			/* Setting an attribute only updates change time and not 
+			 * modified time of the file.
+			 */
+			cp->c_touch_chgtime = TRUE;
+			cp->c_attr.ca_recflags |= kHFSHasAttributesMask;
+			if ((bcmp(ap->a_name, KAUTH_FILESEC_XATTR, sizeof(KAUTH_FILESEC_XATTR)) == 0)) {
+				cp->c_attr.ca_recflags |= kHFSHasSecurityMask;
+			}
+			(void) hfs_update(vp, 0);
 		}
-		(void) hfs_update(vp, 0);
 	}
 	if (started_transaction) {
 		if (result && allocatedblks) {
@@ -1028,12 +1212,7 @@ exit:
 		}
 		hfs_end_transaction(hfsmp);
 	}
-	if (cp) {
-		hfs_unlock(cp);
-	}
-	if (user_data_ptr) {
-		FREE(user_data_ptr, M_TEMP);
-	}
+	
 	if (recp) {
 		FREE(recp, M_TEMP);
 	}
@@ -1043,13 +1222,16 @@ exit:
 	if (iterator) {
 		FREE(iterator, M_TEMP);
 	}
-	return (result == btNotFound ? ENOATTR : MacToVFSError(result));
+	
+	return result;	
 }
+
+
+
 
 /*
  * Remove an extended attribute.
  */
-__private_extern__
 int
 hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 /*
@@ -1068,6 +1250,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 	struct BTreeIterator * iterator = NULL;
 	int lockflags;
 	int result;
+	time_t orig_ctime=VTOC(vp)->c_ctime;
 
 	if (ap->a_name == NULL || ap->a_name[0] == '\0') {
 		return (EINVAL);  /* invalid name */
@@ -1078,8 +1261,11 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 	}
 
 #if HFS_COMPRESSION
-	if (hfs_hides_xattr(ap->a_context, VTOC(vp), ap->a_name, 1) && !(ap->a_options & XATTR_SHOWCOMPRESSION))
+	if (hfs_hides_xattr(ap->a_context, VTOC(vp), ap->a_name, 1) && !(ap->a_options & XATTR_SHOWCOMPRESSION)) {
 		return ENOATTR;
+	}
+
+	check_for_tracked_file(vp, orig_ctime, NAMESPACE_HANDLER_METADATA_DELETE_OP, NULL);
 #endif /* HFS_COMPRESSION */
 	
 	/* If Resource Fork is non-empty then truncate it. */
@@ -1102,9 +1288,9 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 			return (result);
 		}
 
-		hfs_lock_truncate(VTOC(rvp), TRUE);
+		hfs_lock_truncate(VTOC(rvp), HFS_EXCLUSIVE_LOCK);
 		if ((result = hfs_lock(VTOC(rvp), HFS_EXCLUSIVE_LOCK))) {
-			hfs_unlock_truncate(cp, TRUE);
+			hfs_unlock_truncate(cp, 0);
 			vnode_put(rvp);
 			return (result);
 		}
@@ -1113,7 +1299,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 		 * hfs_truncate() and hfs_update()
 		 */
 		if ((result = hfs_start_transaction(hfsmp))) {
-			hfs_unlock_truncate(cp, TRUE);
+			hfs_unlock_truncate(cp, 0);
 			hfs_unlock(cp);
 			vnode_put(rvp);
 			return (result);
@@ -1127,7 +1313,7 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 		}
 
 		hfs_end_transaction(hfsmp);
-		hfs_unlock_truncate(VTOC(rvp), TRUE);
+		hfs_unlock_truncate(VTOC(rvp), 0);
 		hfs_unlock(VTOC(rvp));
 
 		vnode_put(rvp);
@@ -1137,34 +1323,80 @@ hfs_vnop_removexattr(struct vnop_removexattr_args *ap)
 	if (bcmp(ap->a_name, XATTR_FINDERINFO_NAME, sizeof(XATTR_FINDERINFO_NAME)) == 0) {
 		void * finderinfo_start;
 		int finderinfo_size;
-
+		u_int8_t finderinfo[32];
+		u_int32_t date_added;
+		u_int8_t *finfo = NULL;
+        
 		if ((result = hfs_lock(cp, HFS_EXCLUSIVE_LOCK))) {
 			return (result);
 		}
-
-		/* Symlink's don't have an external type/creator. */
+		
+		/* Use the local copy to store our temporary changes. */
+		bcopy(cp->c_finderinfo, finderinfo, sizeof(finderinfo));
+		
+		
+		/* Zero out the date added field in the local copy */
+		hfs_zero_dateadded (cp, finderinfo);
+		
+		/* Don't expose a symlink's private type/creator. */
 		if (vnode_islnk(vp)) {
-			/* Skip over type/creator fields. */
+			struct FndrFileInfo *fip;
+			
+			fip = (struct FndrFileInfo *)&finderinfo;
+			fip->fdType = 0;
+			fip->fdCreator = 0;
+		}
+		
+		/* Do the byte compare against the local copy */
+		if (bcmp(finderinfo, emptyfinfo, sizeof(emptyfinfo)) == 0) {
+			hfs_unlock (cp);
+			return (ENOATTR);
+		}
+		
+		/* 
+		 * If there was other content, zero out everything except 
+		 * type/creator and date added.  First, save the date added.
+		 */
+		finfo = cp->c_finderinfo;
+		finfo = finfo + 16;
+		if (S_ISREG(cp->c_attr.ca_mode)) {
+			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
+			date_added = extinfo->date_added;
+		}
+		else if (S_ISDIR(cp->c_attr.ca_mode)) {
+			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
+			date_added = extinfo->date_added;
+		}
+		
+		if (vnode_islnk(vp)) {
+			/* Ignore type/creator */
 			finderinfo_start = &cp->c_finderinfo[8];
 			finderinfo_size = sizeof(cp->c_finderinfo) - 8;
-		} else {
+		}
+		else {
 			finderinfo_start = &cp->c_finderinfo[0];
 			finderinfo_size = sizeof(cp->c_finderinfo);
 		}
-		if (bcmp(finderinfo_start, emptyfinfo, finderinfo_size) == 0) {
-			hfs_unlock(cp);
-			return (ENOATTR);
-		}
-
 		bzero(finderinfo_start, finderinfo_size);
-
+		
+		
+		/* Now restore the date added */
+		if (S_ISREG(cp->c_attr.ca_mode)) {
+			struct FndrExtendedFileInfo *extinfo = (struct FndrExtendedFileInfo *)finfo;
+			extinfo->date_added = date_added;
+		}
+		else if (S_ISDIR(cp->c_attr.ca_mode)) {
+			struct FndrExtendedDirInfo *extinfo = (struct FndrExtendedDirInfo *)finfo;
+			extinfo->date_added = date_added;
+		}
+        
 		/* Updating finderInfo updates change time and modified time */
 		cp->c_touch_chgtime = TRUE;
 		cp->c_flag |= C_MODIFIED;
 		hfs_update(vp, FALSE);
-
+        
 		hfs_unlock(cp);
-
+        
 		return (0);
 	}
 	/*
@@ -1305,7 +1537,7 @@ out:
  * - The Allocation Bitmap file must be locked exclusive.
  * - The iterator key must be initialized.
  */
-static int
+int
 remove_attribute_records(struct hfsmount *hfsmp, BTreeIterator * iterator)
 {
 	struct filefork *btfile;
@@ -1334,11 +1566,9 @@ remove_attribute_records(struct hfsmount *hfsmp, BTreeIterator * iterator)
 		int extentblks;
 		u_int32_t *keystartblk;
 
-#if HFS_XATTR_VERBOSE
 		if (datasize < sizeof(HFSPlusAttrForkData)) {
-			printf("hfs: remove_attribute_records: bad record size %d (expecting %d)\n", datasize, sizeof(HFSPlusAttrForkData));
+			printf("hfs: remove_attribute_records: bad record size %d (expecting %lu)\n", datasize, sizeof(HFSPlusAttrForkData));
 		}
-#endif
 		totalblks = attrdata.forkData.theFork.totalBlocks;
 
 		/* Process the first 8 extents. */
@@ -1385,7 +1615,6 @@ exit:
 /*
  * Retrieve the list of extended attribute names.
  */
-__private_extern__
 int
 hfs_vnop_listxattr(struct vnop_listxattr_args *ap)
 /*
@@ -1405,12 +1634,11 @@ hfs_vnop_listxattr(struct vnop_listxattr_args *ap)
 	struct BTreeIterator * iterator = NULL;
 	struct filefork *btfile;
 	struct listattr_callback_state state;
-	void * finderinfo_start;
-	int finderinfo_size;
 	user_addr_t user_start = 0;
 	user_size_t user_len = 0;
 	int lockflags;
 	int result;
+    u_int8_t finderinfo[32];
 
 	if (VNODE_IS_RSRC(vp)) {
 		return (EPERM);
@@ -1427,17 +1655,26 @@ hfs_vnop_listxattr(struct vnop_listxattr_args *ap)
 		return (result);
 	}
 
+	/* 
+	 * Make a copy of the cnode's finderinfo to a local so we can
+	 * zero out the date added field.  Also zero out the private type/creator
+	 * for symlinks.
+	 */
+	bcopy(cp->c_finderinfo, finderinfo, sizeof(finderinfo));
+	hfs_zero_dateadded (cp, finderinfo);
+	
 	/* Don't expose a symlink's private type/creator. */
 	if (vnode_islnk(vp)) {
-		/* Skip over type/creator fields. */
-		finderinfo_start = &cp->c_finderinfo[8];
-		finderinfo_size = sizeof(cp->c_finderinfo) - 8;
-	} else {
-		finderinfo_start = &cp->c_finderinfo[0];
-		finderinfo_size = sizeof(cp->c_finderinfo);
-	}
+		struct FndrFileInfo *fip;
+		
+		fip = (struct FndrFileInfo *)&finderinfo;
+		fip->fdType = 0;
+		fip->fdCreator = 0;
+	}	
+	
+    
 	/* If Finder Info is non-empty then export it's name. */
-	if (bcmp(finderinfo_start, emptyfinfo, finderinfo_size) != 0) {
+	if (bcmp(finderinfo, emptyfinfo, sizeof(emptyfinfo)) != 0) {
 		if (uio == NULL) {
 			*ap->a_size += sizeof(XATTR_FINDERINFO_NAME);
 		} else if ((user_size_t)uio_resid(uio) < sizeof(XATTR_FINDERINFO_NAME)) {
@@ -1546,11 +1783,9 @@ exit:
 	if (user_start) {
 		vsunlock(user_start, user_len, TRUE);
 	}
-	
 	if (iterator) {
 		FREE(iterator, M_TEMP);
 	}
-
 	hfs_unlock(cp);
 	
 	return MacToVFSError(result);
@@ -1558,7 +1793,7 @@ exit:
 
 
 /*
- * Callback - called for each attribute
+ * Callback - called for each attribute record
  */
 static int
 listattr_callback(const HFSPlusAttrKey *key, __unused const HFSPlusAttrData *data, struct listattr_callback_state *state)
@@ -1621,7 +1856,6 @@ listattr_callback(const HFSPlusAttrKey *key, __unused const HFSPlusAttrData *dat
  * This function takes the necessary locks on the attribute
  * b-tree file and the allocation (bitmap) file.
  */
-__private_extern__
 int
 hfs_removeallattr(struct hfsmount *hfsmp, u_int32_t fileid)
 {
@@ -1699,10 +1933,8 @@ hfs_xattr_init(struct hfsmount * hfsmp)
 /*
  * Enable/Disable volume attributes stored as EA for root file system.
  * Supported attributes are - 
- *	1. ACLs
- *	2. Extent-based Extended Attributes 
+ *	1. Extent-based Extended Attributes 
  */
-__private_extern__
 int
 hfs_set_volxattr(struct hfsmount *hfsmp, unsigned int xattrtype, int state)
 {
@@ -1713,6 +1945,9 @@ hfs_set_volxattr(struct hfsmount *hfsmp, unsigned int xattrtype, int state)
 
 	if (hfsmp->hfs_flags & HFS_STANDARD) {
 		return (ENOTSUP);
+	}
+	if (xattrtype != HFS_SET_XATTREXTENTS_STATE) {
+		return EINVAL;
 	}
 
 	/*
@@ -1736,18 +1971,8 @@ hfs_set_volxattr(struct hfsmount *hfsmp, unsigned int xattrtype, int state)
 	 * Build a b-tree key.
 	 * We use the root's parent id (1) to hold this volume attribute.
 	 */
-	if (xattrtype == HFS_SETACLSTATE) {
-		/* ACL */
-		(void) hfs_buildattrkey(kHFSRootParentID, XATTR_EXTENDEDSECURITY_NAME,
-		                      (HFSPlusAttrKey *)&iterator->key);
-	} else if (xattrtype == HFS_SET_XATTREXTENTS_STATE) {
-		/* Extent-based extended attributes */
-		(void) hfs_buildattrkey(kHFSRootParentID, XATTR_XATTREXTENTS_NAME,
-		                      (HFSPlusAttrKey *)&iterator->key);
-	} else {
-		result = EINVAL;
-		goto exit;
-	}
+	(void) hfs_buildattrkey(kHFSRootParentID, XATTR_XATTREXTENTS_NAME,
+			      (HFSPlusAttrKey *)&iterator->key);
 
 	/* Start a transaction for our changes. */
 	if (hfs_start_transaction(hfsmp) != 0) {
@@ -1790,91 +2015,21 @@ hfs_set_volxattr(struct hfsmount *hfsmp, unsigned int xattrtype, int state)
 
 	/* Finish the transaction of our changes. */
 	hfs_end_transaction(hfsmp);
+
+	/* Update the state in the mount point */
+	HFS_MOUNT_LOCK(hfsmp, TRUE);
+	if (state == 0) {
+		hfsmp->hfs_flags &= ~HFS_XATTR_EXTENTS; 
+	} else {
+		hfsmp->hfs_flags |= HFS_XATTR_EXTENTS; 
+	}
+	HFS_MOUNT_UNLOCK(hfsmp, TRUE); 
+
 exit:
 	if (iterator) {
 		FREE(iterator, M_TEMP);
 	}
-	if (result == 0) {
-		if (xattrtype == HFS_SETACLSTATE) {
-			if (state == 0) {
-				vfs_clearextendedsecurity(HFSTOVFS(hfsmp));
-			} else {
-				vfs_setextendedsecurity(HFSTOVFS(hfsmp));
-			}
-		} else { 
-			/* HFS_SET_XATTREXTENTS_STATE */
-			HFS_MOUNT_LOCK(hfsmp, TRUE);
-			if (state == 0) {
-				hfsmp->hfs_flags &= ~HFS_XATTR_EXTENTS; 
-			} else {
-				hfsmp->hfs_flags |= HFS_XATTR_EXTENTS; 
-			}
-			HFS_MOUNT_UNLOCK(hfsmp, TRUE); 
-		}
-	}
-
 	return MacToVFSError(result);
-}
-
-
- /*
- * Check for volume attributes stored as EA for root file system.
- * Supported attributes are - 
- *	1. ACLs
- *	2. Extent-based Extended Attributes 
- */
-__private_extern__
-void
-hfs_check_volxattr(struct hfsmount *hfsmp, unsigned int xattrtype)
-{
-	struct BTreeIterator * iterator;
-	struct filefork *btfile;
-	int lockflags;
-	int result;
-
-	if (hfsmp->hfs_flags & HFS_STANDARD ||
-	    hfsmp->hfs_attribute_vp == NULL) {
-		return;
-	}
-
-	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
-	if (iterator == NULL) {
-		return;
-	}
-	bzero(iterator, sizeof(*iterator));
-
-	/*
-	 * Build a b-tree key.
-	 * We use the root's parent id (1) to hold this volume attribute.
-	 */
-	if (xattrtype == HFS_SETACLSTATE) {
-		/* ACLs */
-		(void) hfs_buildattrkey(kHFSRootParentID, XATTR_EXTENDEDSECURITY_NAME,
-	        	              (HFSPlusAttrKey *)&iterator->key);
-	} else {
-		/* Extent-based extended attributes */
-		(void) hfs_buildattrkey(kHFSRootParentID, XATTR_XATTREXTENTS_NAME,
-	        	              (HFSPlusAttrKey *)&iterator->key);
-	}
-	btfile = VTOF(hfsmp->hfs_attribute_vp);
-
-	lockflags = hfs_systemfile_lock(hfsmp, SFL_ATTRIBUTE, HFS_EXCLUSIVE_LOCK);
-
-	/* Check for our attribute. */
-	result = BTSearchRecord(btfile, iterator, NULL, NULL, NULL);
-
-	hfs_systemfile_unlock(hfsmp, lockflags);
-	FREE(iterator, M_TEMP);
-
-	if (result == 0) {
-		if (xattrtype == HFS_SETACLSTATE) {
-			vfs_setextendedsecurity(HFSTOVFS(hfsmp));
-		} else {
-			HFS_MOUNT_LOCK(hfsmp, TRUE);
-			hfsmp->hfs_flags |= HFS_XATTR_EXTENTS; 
-			HFS_MOUNT_UNLOCK(hfsmp, TRUE); 
-		}
-	}
 }
 
 
@@ -2036,76 +2191,70 @@ getmaxinlineattrsize(struct vnode * attrvp)
 }
 
 /*
- * Get a referenced vnode for attribute data I/O.
+ * Initialize vnode for attribute data I/O.  
+ * 
+ * On success, 
+ * 	- returns zero
+ * 	- the attrdata vnode is initialized as hfsmp->hfs_attrdata_vp
+ * 	- an iocount is taken on the attrdata vnode which exists 
+ * 	  for the entire duration of the mount.  It is only dropped 
+ * 	  during unmount
+ * 	- the attrdata cnode is not locked
+ *
+ * On failure, 
+ * 	- returns non-zero value
+ * 	- the caller does not have to worry about any locks or references
  */
-static int
-get_attr_data_vnode(struct hfsmount *hfsmp, vnode_t *vpp)
+int init_attrdata_vnode(struct hfsmount *hfsmp)
 {
 	vnode_t vp;
 	int result = 0;
+	struct cat_desc cat_desc;
+	struct cat_attr cat_attr;
+	struct cat_fork cat_fork;
+	int newvnode_flags = 0;
 
-	vp = hfsmp->hfs_attrdata_vp;
-	if (vp == NULLVP) {
-		struct cat_desc cat_desc;
-		struct cat_attr cat_attr;
-		struct cat_fork cat_fork;
+	bzero(&cat_desc, sizeof(cat_desc));
+	cat_desc.cd_parentcnid = kHFSRootParentID;
+	cat_desc.cd_nameptr = (const u_int8_t *)hfs_attrdatafilename;
+	cat_desc.cd_namelen = strlen(hfs_attrdatafilename);
+	cat_desc.cd_cnid = kHFSAttributeDataFileID;
+	/* Tag vnode as system file, note that we can still use cluster I/O */
+	cat_desc.cd_flags |= CD_ISMETA; 
 
-		/* We don't tag it as a system file since we intend to use cluster I/O. */
-		bzero(&cat_desc, sizeof(cat_desc));
-		cat_desc.cd_parentcnid = kHFSRootParentID;
-		cat_desc.cd_nameptr = (const u_int8_t *)hfs_attrdatafilename;
-		cat_desc.cd_namelen = strlen(hfs_attrdatafilename);
-		cat_desc.cd_cnid = kHFSAttributeDataFileID;
+	bzero(&cat_attr, sizeof(cat_attr));
+	cat_attr.ca_linkcount = 1;
+	cat_attr.ca_mode = S_IFREG;
+	cat_attr.ca_fileid = cat_desc.cd_cnid;
+	cat_attr.ca_blocks = hfsmp->totalBlocks;
 
-		bzero(&cat_attr, sizeof(cat_attr));
-		cat_attr.ca_linkcount = 1;
-		cat_attr.ca_mode = S_IFREG;
-		cat_attr.ca_fileid = cat_desc.cd_cnid;
-		cat_attr.ca_blocks = hfsmp->totalBlocks;
+	/*
+	 * The attribute data file is a virtual file that spans the
+	 * entire file system space.
+	 *
+	 * Each extent-based attribute occupies a unique portion of
+	 * in this virtual file.  The cluster I/O is done using actual
+	 * allocation block offsets so no additional mapping is needed
+	 * for the VNOP_BLOCKMAP call.
+	 *
+	 * This approach allows the attribute data to be cached without
+	 * incurring the high cost of using a separate vnode per attribute.
+	 *
+	 * Since we need to acquire the attribute b-tree file lock anyways,
+	 * the virtual file doesn't introduce any additional serialization.
+	 */
+	bzero(&cat_fork, sizeof(cat_fork));
+	cat_fork.cf_size = (u_int64_t)hfsmp->totalBlocks * (u_int64_t)hfsmp->blockSize;
+	cat_fork.cf_blocks = hfsmp->totalBlocks;
+	cat_fork.cf_extents[0].startBlock = 0;
+	cat_fork.cf_extents[0].blockCount = cat_fork.cf_blocks;
 
-		/*
-		 * The attribute data file is a virtual file that spans the
-		 * entire file system space.
-		 *
-		 * Each extent-based attribute occupies a unique portion of
-		 * in this virtual file.  The cluster I/O is done using actual
-		 * allocation block offsets so no additional mapping is needed
-		 * for the VNOP_BLOCKMAP call.
-		 *
-		 * This approach allows the attribute data to be cached without
-		 * incurring the high cost of using a separate vnode per attribute.
-		 *
-		 * Since we need to acquire the attribute b-tree file lock anyways,
-		 * the virtual file doesn't introduce any additional serialization.
-		 */
-		bzero(&cat_fork, sizeof(cat_fork));
-		cat_fork.cf_size = (u_int64_t)hfsmp->totalBlocks * (u_int64_t)hfsmp->blockSize;
-		cat_fork.cf_blocks = hfsmp->totalBlocks;
-		cat_fork.cf_extents[0].startBlock = 0;
-		cat_fork.cf_extents[0].blockCount = cat_fork.cf_blocks;
-	
-		result = hfs_getnewvnode(hfsmp, NULL, NULL, &cat_desc, 0, &cat_attr, &cat_fork, &vp);
-		if (result == 0) {
-			HFS_MOUNT_LOCK(hfsmp, 1);
-			/* Check if someone raced us for creating this vnode. */
-			if (hfsmp->hfs_attrdata_vp != NULLVP) {
-				HFS_MOUNT_UNLOCK(hfsmp, 1);
-				vnode_put(vp);
-				vnode_recycle(vp);
-				vp = hfsmp->hfs_attrdata_vp;
-			} else {
-				hfsmp->hfs_attrdata_vp = vp;
-				HFS_MOUNT_UNLOCK(hfsmp, 1);
-				/* Keep a reference on this vnode until unmount */
-				vnode_ref_ext(vp, O_EVTONLY);
-				hfs_unlock(VTOC(vp));
-			}
-		}
-	} else {
-		if ((result = vnode_get(vp)))
-			vp = NULLVP;
+	result = hfs_getnewvnode(hfsmp, NULL, NULL, &cat_desc, 0, &cat_attr, 
+				 &cat_fork, &vp, &newvnode_flags);
+	if (result == 0) {
+		hfsmp->hfs_attrdata_vp = vp;
+		hfs_unlock(VTOC(vp));
 	}
-	*vpp = vp;
 	return (result);
 }
 
@@ -2115,7 +2264,7 @@ get_attr_data_vnode(struct hfsmount *hfsmp, vnode_t *vpp)
 static int
 read_attr_data(struct hfsmount *hfsmp, uio_t uio, size_t datasize, HFSPlusExtentDescriptor *extents)
 {
-	vnode_t evp = NULLVP;
+	vnode_t evp = hfsmp->hfs_attrdata_vp;
 	int bufsize;
 	int iosize;
 	int attrsize;
@@ -2123,10 +2272,7 @@ read_attr_data(struct hfsmount *hfsmp, uio_t uio, size_t datasize, HFSPlusExtent
 	int i;
 	int result = 0;
 
-	if ((result = get_attr_data_vnode(hfsmp, &evp))) {
-		return (result);
-	}
-	hfs_lock_truncate(VTOC(evp), 0);
+	hfs_lock_truncate(VTOC(evp), HFS_SHARED_LOCK);
 
 	bufsize = (int)uio_resid(uio);
 	attrsize = (int)datasize;
@@ -2158,7 +2304,6 @@ read_attr_data(struct hfsmount *hfsmp, uio_t uio, size_t datasize, HFSPlusExtent
 	uio_setoffset(uio, datasize);
 
 	hfs_unlock_truncate(VTOC(evp), 0);
-	vnode_put(evp);
 	return (result);
 }
 
@@ -2168,7 +2313,7 @@ read_attr_data(struct hfsmount *hfsmp, uio_t uio, size_t datasize, HFSPlusExtent
 static int
 write_attr_data(struct hfsmount *hfsmp, uio_t uio, size_t datasize, HFSPlusExtentDescriptor *extents)
 {
-	vnode_t evp = NULLVP;
+	vnode_t evp = hfsmp->hfs_attrdata_vp;
 	off_t filesize;
 	int bufsize;
 	int attrsize;
@@ -2177,11 +2322,7 @@ write_attr_data(struct hfsmount *hfsmp, uio_t uio, size_t datasize, HFSPlusExten
 	int i;
 	int result = 0;
 
-	/* Get exclusive use of attribute data vnode. */
-	if ((result = get_attr_data_vnode(hfsmp, &evp))) {
-		return (result);
-	}
-	hfs_lock_truncate(VTOC(evp), 0);
+	hfs_lock_truncate(VTOC(evp), HFS_SHARED_LOCK);
 
 	bufsize = uio_resid(uio);
 	attrsize = (int) datasize;
@@ -2213,7 +2354,6 @@ write_attr_data(struct hfsmount *hfsmp, uio_t uio, size_t datasize, HFSPlusExten
 	uio_setoffset(uio, datasize);
 
 	hfs_unlock_truncate(VTOC(evp), 0);
-	vnode_put(evp);
 	return (result);
 }
 
@@ -2264,7 +2404,7 @@ alloc_attr_blks(struct hfsmount *hfsmp, size_t attrsize, size_t extentbufsize, H
 #if HFS_XATTR_VERBOSE
 		printf("hfs: alloc_attr_blks: unexpected failure, %d blocks unallocated\n", blkcnt);
 #endif
-		for (; i <= 0; i--) {
+		for (; i >= 0; i--) {
 			if ((blkcnt = extents[i].blockCount) != 0) {
 				(void) BlockDeallocate(hfsmp, extents[i].startBlock, blkcnt, 0);
 				extents[i].startBlock = 0;
@@ -2283,14 +2423,11 @@ alloc_attr_blks(struct hfsmount *hfsmp, size_t attrsize, size_t extentbufsize, H
 static void
 free_attr_blks(struct hfsmount *hfsmp, int blkcnt, HFSPlusExtentDescriptor *extents)
 {
-	vnode_t evp = NULLVP;
+	vnode_t evp = hfsmp->hfs_attrdata_vp;
 	int remblks = blkcnt;
 	int lockflags;
 	int i;
 
-	if (get_attr_data_vnode(hfsmp, &evp) != 0) {
-		evp = NULLVP;
-	}
 	lockflags = hfs_systemfile_lock(hfsmp, SFL_BITMAP, HFS_EXCLUSIVE_LOCK);
 
 	for (i = 0; (remblks > 0) && (extents[i].blockCount != 0); i++) {
@@ -2325,9 +2462,6 @@ free_attr_blks(struct hfsmount *hfsmp, int blkcnt, HFSPlusExtentDescriptor *exte
 	}
 
 	hfs_systemfile_unlock(hfsmp, lockflags);
-	if (evp) {
-		vnode_put(evp);
-	}
 }
 
 static int

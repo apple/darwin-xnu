@@ -146,9 +146,8 @@ hfs_delete_chash(struct hfsmount *hfsmp)
  *
  * If it is in core, but locked, wait for it.
  */
-__private_extern__
 struct vnode *
-hfs_chash_getvnode(struct hfsmount *hfsmp, ino_t inum, int wantrsrc, int skiplock)
+hfs_chash_getvnode(struct hfsmount *hfsmp, ino_t inum, int wantrsrc, int skiplock, int allow_deleted)
 {
 	struct cnode *cp;
 	struct vnode *vp;
@@ -201,13 +200,15 @@ loop:
 		 * lock on the cnode which would allow the node to be
 		 * unlinked
 		 */
-		if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
-			if (!skiplock)
-		        	hfs_unlock(cp);
-			vnode_put(vp);
-
-			return (NULL);
-		}			
+		if (!allow_deleted) {
+			if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
+				if (!skiplock)
+						hfs_unlock(cp);
+				vnode_put(vp);
+	
+				return (NULL);
+			}
+		}
 		return (vp);
 	}
 exit:
@@ -218,8 +219,12 @@ exit:
 
 /*
  * Use the device, fileid pair to snoop an incore cnode.
+ *
+ * A cnode can exists in chash even after it has been 
+ * deleted from the catalog, so this function returns 
+ * ENOENT if C_NOEXIST is set in the cnode's flag.
+ * 
  */
-__private_extern__
 int
 hfs_chash_snoop(struct hfsmount *hfsmp, ino_t inum, int (*callout)(const struct cat_desc *,
                 const struct cat_attr *, void *), void * arg)
@@ -237,6 +242,10 @@ hfs_chash_snoop(struct hfsmount *hfsmp, ino_t inum, int (*callout)(const struct 
 	for (cp = CNODEHASH(hfsmp, inum)->lh_first; cp; cp = cp->c_hash.le_next) {
 		if (cp->c_fileid != inum)
 			continue;
+	       /* Skip cnodes that have been removed from the catalog */
+		if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
+			break;
+		}
 		/* Skip cnodes being created or reclaimed. */
 		if (!ISSET(cp->c_hflag, H_ALLOC | H_TRANSIT | H_ATTACH)) {
 			result = callout(&cp->c_desc, &cp->c_attr, arg);
@@ -257,10 +266,16 @@ hfs_chash_snoop(struct hfsmount *hfsmp, ino_t inum, int (*callout)(const struct 
  *
  * If the cnode is C_DELETED, then return NULL since that 
  * inum is no longer valid for lookups (open-unlinked file).
+ *
+ * If the cnode is C_DELETED but also marked C_RENAMED, then that means
+ * the cnode was renamed over and a new entry exists in its place.  The caller
+ * should re-drive the lookup to get the newer entry.  In that case, we'll still
+ * return NULL for the cnode, but also return GNV_CHASH_RENAMED in the output flags
+ * of this function to indicate the caller that they should re-drive.
  */
-__private_extern__
 struct cnode *
-hfs_chash_getcnode(struct hfsmount *hfsmp, ino_t inum, struct vnode **vpp, int wantrsrc, int skiplock)
+hfs_chash_getcnode(struct hfsmount *hfsmp, ino_t inum, struct vnode **vpp, 
+				   int wantrsrc, int skiplock, int *out_flags, int *hflags)
 {
 	struct cnode	*cp;
 	struct cnode	*ncp = NULL;
@@ -295,6 +310,7 @@ loop_with_lock:
 			 * The desired vnode isn't there so tag the cnode.
 			 */
 			SET(cp->c_hflag, H_ATTACH);
+			*hflags |= H_ATTACH;
 
 			hfs_chash_unlock(hfsmp);
 		} else {
@@ -311,7 +327,7 @@ loop_with_lock:
 			 * this cnode and add it to the hash
 			 * just dump our allocation
 			 */
-		        FREE_ZONE(ncp, sizeof(struct cnode), M_HFSNODE);
+		    FREE_ZONE(ncp, sizeof(struct cnode), M_HFSNODE);
 			ncp = NULL;
 		}
 
@@ -330,13 +346,19 @@ loop_with_lock:
 		 * is no longer valid for lookups.
 		 */
 		if ((cp->c_flag & (C_NOEXISTS | C_DELETED)) && !wantrsrc) {
+			int renamed = 0;
+			if (cp->c_flag & C_RENAMED) {
+				renamed = 1;
+			}
 			if (!skiplock)
 				hfs_unlock(cp);
 			if (vp != NULLVP) {
 				vnode_put(vp);
 			} else {
 				hfs_chash_lock_spin(hfsmp);
-		        	CLR(cp->c_hflag, H_ATTACH);
+		        CLR(cp->c_hflag, H_ATTACH);
+				*hflags &= ~H_ATTACH;
+
 				if (ISSET(cp->c_hflag, H_WAITING)) {
 					CLR(cp->c_hflag, H_WAITING);
 					wakeup((caddr_t)cp);
@@ -345,6 +367,9 @@ loop_with_lock:
 			}
 			vp = NULL;
 			cp = NULL;
+			if (renamed) {
+				*out_flags = GNV_CHASH_RENAMED;
+			}
 		}
 		*vpp = vp;
 		return (cp);
@@ -358,8 +383,7 @@ loop_with_lock:
 
 	if (ncp == NULL) {
 		hfs_chash_unlock(hfsmp);
-
-	        MALLOC_ZONE(ncp, struct cnode *, sizeof(struct cnode), M_HFSNODE, M_WAITOK);
+	    MALLOC_ZONE(ncp, struct cnode *, sizeof(struct cnode), M_HFSNODE, M_WAITOK);
 		/*
 		 * since we dropped the chash lock, 
 		 * we need to go back and re-verify
@@ -372,6 +396,7 @@ loop_with_lock:
 
 	bzero(ncp, sizeof(struct cnode));
 	SET(ncp->c_hflag, H_ALLOC);
+	*hflags |= H_ALLOC;
 	ncp->c_fileid = inum;
 	TAILQ_INIT(&ncp->c_hintlist); /* make the list empty */
 	TAILQ_INIT(&ncp->c_originlist);

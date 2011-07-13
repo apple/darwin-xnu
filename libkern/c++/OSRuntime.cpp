@@ -225,6 +225,41 @@ void __pure_virtual( void )        { panic("%s", __FUNCTION__); }
 typedef void (*structor_t)(void);
 
 /*********************************************************************
+*********************************************************************/
+static boolean_t
+sectionIsDestructor(kernel_section_t * section)
+{
+    boolean_t result;
+
+    result = !strncmp(section->sectname, SECT_MODTERMFUNC,
+        sizeof(SECT_MODTERMFUNC) - 1);
+#if !__LP64__
+    result = result || !strncmp(section->sectname, SECT_DESTRUCTOR, 
+        sizeof(SECT_DESTRUCTOR) - 1);
+#endif
+
+    return result;
+}
+
+/*********************************************************************
+*********************************************************************/
+static boolean_t
+sectionIsConstructor(kernel_section_t * section)
+{
+    boolean_t result;
+
+    result = !strncmp(section->sectname, SECT_MODINITFUNC,
+        sizeof(SECT_MODINITFUNC) - 1);
+#if !__LP64__
+    result = result || !strncmp(section->sectname, SECT_CONSTRUCTOR, 
+        sizeof(SECT_CONSTRUCTOR) - 1);
+#endif
+
+    return result;
+}
+
+
+/*********************************************************************
 * OSRuntimeUnloadCPPForSegment()
 *
 * Given a pointer to a mach object segment, iterate the segment to
@@ -249,9 +284,7 @@ OSRuntimeUnloadCPPForSegmentInKmod(
          section != 0;
          section = nextsect(segment, section)) {
 
-        if (strncmp(section->sectname, SECT_DESTRUCTOR, 
-            sizeof(SECT_DESTRUCTOR)) == 0) {
-
+        if (sectionIsDestructor(section)) {
             structor_t * destructors = (structor_t *)section->addr;
 
             if (destructors) {
@@ -422,9 +455,7 @@ OSRuntimeInitializeCPP(
              section != NULL;
              section = nextsect(segment, section)) {
 
-            if (strncmp(section->sectname, SECT_CONSTRUCTOR, 
-                sizeof(SECT_CONSTRUCTOR)) == 0) {
-
+            if (sectionIsConstructor(section)) {
                 structor_t * constructors = (structor_t *)section->addr;
 
                 if (constructors) {

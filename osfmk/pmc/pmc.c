@@ -38,11 +38,6 @@
 #include <i386/mp.h>
 #endif
 
-#if defined(__ppc__)
-#include <ppc/cpu_internal.h>
-#include <ppc/machine_cpu.h>
-#endif
-
 #if CONFIG_COUNTERS
 
 /* various debug logging enable */
@@ -224,13 +219,13 @@ static volatile uint32_t perf_counters_count = 0U;
  * constitute a conflict.
  */
 static queue_t system_reservations = NULL;
-static volatile uint32_t system_reservation_count __attribute__((aligned(4))) = 0U;
+static volatile uint32_t system_reservation_count = 0U;
 
 static queue_t task_reservations = NULL;
-static volatile uint32_t task_reservation_count __attribute__((aligned(4))) = 0U;
+static volatile uint32_t task_reservation_count = 0U;
 
 static queue_t thread_reservations = NULL;
-static volatile uint32_t thread_reservation_count __attribute__((aligned(4))) = 0U;
+static volatile uint32_t thread_reservation_count = 0U;
 
 
 #if XNU_KERNEL_PRIVATE
@@ -928,6 +923,7 @@ static boolean_t pmc_internal_reservation_add(pmc_reservation_t resv) {
 			case PMC_FLAG_SCOPE_SYSTEM:
 				/* Simply add it to the system queue */
 				pmc_internal_reservation_enqueue(system_reservations, resv);
+				system_reservation_count++;
 				
 				lck_spin_unlock(&reservations_spin);
 
@@ -939,6 +935,7 @@ static boolean_t pmc_internal_reservation_add(pmc_reservation_t resv) {
 
 				/* Not only do we enqueue it in our local queue for tracking */
 				pmc_internal_reservation_enqueue(task_reservations, resv);
+				task_reservation_count++;
 
 				lck_spin_unlock(&reservations_spin);
 
@@ -956,6 +953,7 @@ static boolean_t pmc_internal_reservation_add(pmc_reservation_t resv) {
 				 */
 
 				pmc_internal_reservation_enqueue(thread_reservations, resv);
+				thread_reservation_count++;
 
 				lck_spin_unlock(&reservations_spin);
 				
@@ -998,22 +996,6 @@ static void pmc_internal_reservation_broadcast(pmc_reservation_t reservation, vo
 			
 			/* Have each core run pmc_internal_reservation_stop_cpu asynchronously. */
 			mp_cpus_call(mask, ASYNC, action_func, reservation);
-#elif defined(__ppc__)
-			size_t ii;
-
-			if (core_cnt > 0) {
-				for (ii = 0; ii < core_cnt; ii++) {
-					if (cores[ii] == (uint32_t)cpu_number()) {
-						action_func(reservation);
-					} else {
-						cpu_signal(cores[ii], SIGPcall, (uint32_t)action_func, (uint32_t)reservation);
-					}
-				}
-			} else {
-				uint32_t sync;
-				cpu_broadcast(&sync, (void (*)(uint32_t))action_func, (uint32_t)reservation);
-				action_func(reservation);
-			}
 #else
 #error pmc_reservation_interrupt needs an inter-processor method invocation mechanism for this architecture
 #endif
@@ -1044,6 +1026,7 @@ static void pmc_internal_reservation_remove(pmc_reservation_t resv) {
 		case PMC_FLAG_SCOPE_SYSTEM:
 			lck_spin_lock(&reservations_spin);
 			pmc_internal_reservation_dequeue(system_reservations, resv);
+			system_reservation_count--;
 			lck_spin_unlock(&reservations_spin);
 			break;
 
@@ -1054,6 +1037,7 @@ static void pmc_internal_reservation_remove(pmc_reservation_t resv) {
 
 			/* remove from the global queue */
 			pmc_internal_reservation_dequeue(task_reservations, resv);
+			task_reservation_count--;
 
 			/* unlock the global */
 			lck_spin_unlock(&reservations_spin);
@@ -1066,6 +1050,7 @@ static void pmc_internal_reservation_remove(pmc_reservation_t resv) {
 			lck_spin_lock(&reservations_spin);
 
 			pmc_internal_reservation_dequeue(thread_reservations, resv);
+			thread_reservation_count--;
 
 			lck_spin_unlock(&reservations_spin);
 

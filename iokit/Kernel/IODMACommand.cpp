@@ -84,7 +84,7 @@ enum
 /**************************** class IODMACommand ***************************/
 
 #undef super
-#define super OSObject
+#define super IOCommand
 OSDefineMetaClassAndStructors(IODMACommand, IOCommand);
 
 OSMetaClassDefineReservedUsed(IODMACommand,  0);
@@ -227,6 +227,8 @@ IODMACommand::free()
 IOReturn
 IODMACommand::setMemoryDescriptor(const IOMemoryDescriptor *mem, bool autoPrepare)
 {
+	IOReturn err = kIOReturnSuccess;
+	
     if (mem == fMemory)
     {
 	if (!autoPrepare)
@@ -244,15 +246,15 @@ IODMACommand::setMemoryDescriptor(const IOMemoryDescriptor *mem, bool autoPrepar
 	if (fActive)
 	    return kIOReturnBusy;
 	clearMemoryDescriptor();
-    };
+    }
 
     if (mem) {
 	bzero(&fMDSummary, sizeof(fMDSummary));
-	IOReturn rtn = mem->dmaCommandOperation(
+	err = mem->dmaCommandOperation(
 		kIOMDGetCharacteristics,
 		&fMDSummary, sizeof(fMDSummary));
-	if (rtn)
-	    return rtn;
+	if (err)
+	    return err;
 
 	ppnum_t highPage = fMDSummary.fHighestPage ? fMDSummary.fHighestPage : gIOLastPage;
 
@@ -269,11 +271,15 @@ IODMACommand::setMemoryDescriptor(const IOMemoryDescriptor *mem, bool autoPrepar
 	fMemory = mem;
 
 	mem->dmaCommandOperation(kIOMDSetDMAActive, this, 0);
-	if (autoPrepare)
-	    return prepare();
-    };
-
-    return kIOReturnSuccess;
+	if (autoPrepare) {
+		err = prepare();
+		if (err) {
+			clearMemoryDescriptor();
+		}
+	}
+    }
+	
+    return err;
 }
 
 IOReturn

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -67,8 +67,11 @@ extern errno_t inet_arp_lookup(ifnet_t interface,
     size_t ll_dest_len, route_t hint, mbuf_t packet);
 #endif /* BSD_KERNEL_PRIVATE */
 #ifdef KERNEL_PRIVATE
+struct in_addr;
 extern void arp_init(void);
 extern void in_arpdrain(void *);
+extern void arp_validate(struct rtentry *);
+extern void arp_llreach_set_reachable(struct ifnet *, void *, unsigned int);
 /* arp_lookup_ip is obsolete, use inet_arp_lookup */
 extern errno_t arp_lookup_ip(ifnet_t interface,
     const struct sockaddr_in *ip_dest, struct sockaddr_dl *ll_dest,

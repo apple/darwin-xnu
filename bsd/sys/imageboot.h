@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -28,7 +28,12 @@
 #ifndef _IMAGEBOOT_H_
 #define _IMAGEBOOT_H_
 
-int imageboot_needed(void);
-int imageboot_setup(void);
+int 	imageboot_needed(void);
+void 	imageboot_setup(void);
+int	imageboot_format_is_valid(const char *root_path);
+int	imageboot_mount_image(const char *root_path, int height);
+
+#define IMAGEBOOT_CONTAINER_ARG		"container-dmg"
+#define IMAGEBOOT_ROOT_ARG		"root-dmg"
 
 #endif

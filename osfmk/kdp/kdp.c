@@ -37,11 +37,13 @@
 #include <kdp/kdp_dyld.h>
 
 #include <libsa/types.h>
+#include <libkern/version.h>
 
 #include <string.h> /* bcopy */
 
 #include <kern/processor.h>
 #include <kern/thread.h>
+#include <kern/clock.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 
@@ -151,8 +153,6 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 boolean_t kdp_copyin(pmap_t, uint64_t, void *, size_t);
 extern void bcopy_phys(addr64_t, addr64_t, vm_size_t);
 
-extern char version[];
-
 boolean_t
 kdp_packet(
     unsigned char	*pkt,
@@ -247,10 +247,10 @@ kdp_connect(
 	    rp->error = KDPERR_ALREADY_CONNECTED;
     }
     else { 
-	kdp.reply_port     = rport;
-	kdp.exception_port = eport;
-	kdp.is_conn        = TRUE;
-	kdp.conn_seq       = seq;
+	    kdp.reply_port     = rport;
+	    kdp.exception_port = eport;
+	    kdp.is_conn        = TRUE;
+	    kdp.conn_seq       = seq;
         kdp.session_key    = key;
 
 	rp->error = KDPERR_NO_ERROR;
@@ -375,7 +375,7 @@ kdp_kernelversion(
     rp->hdr.len = sizeof (*rp);
 	
     dprintf(("kdp_kernelversion\n"));
-	slen = strlcpy(rp->version, version, MAX_KDP_DATA_SIZE);
+	slen = strlcpy(rp->version, kdp_kernelversion_string, MAX_KDP_DATA_SIZE);
 	
 	rp->hdr.len += slen + 1; /* strlcpy returns the amount copied with NUL */
 	
@@ -547,8 +547,8 @@ kdp_readmem(
     size_t		plen = *len;
     kdp_readmem_reply_t *rp = &pkt->readmem_reply;
     mach_vm_size_t			cnt;
-#if __i386__ || __arm__
-    void		*pversion = &version;
+#if __i386__
+    void		*pversion = &kdp_kernelversion_string;
 #endif
 
     if (plen < sizeof (*rq))
@@ -563,9 +563,9 @@ kdp_readmem(
 	unsigned int	n = rq->nbytes;
 
 	dprintf(("kdp_readmem addr %x size %d\n", rq->address, n));
-#if __i386__ || __arm__
+#if __i386__
 	/* XXX This is a hack to facilitate the "showversion" macro
-	 * on i386/ARM, which is used to obtain the kernel version without
+	 * on i386, which is used to obtain the kernel version without
 	 * symbols - a pointer to the version string should eventually
 	 * be pinned at a fixed address when an equivalent of the
 	 * VECTORS segment (loaded at a fixed load address, and contains
@@ -1066,6 +1066,42 @@ kdp_copyin(pmap_t p, uint64_t uaddr, void *dest, size_t size) {
 	return (rem == 0);
 }
 
+
+static void
+kdp_mem_snapshot(struct mem_snapshot *mem_snap)
+{
+  mem_snap->snapshot_magic = STACKSHOT_MEM_SNAPSHOT_MAGIC;
+  mem_snap->free_pages = vm_page_free_count;
+  mem_snap->active_pages = vm_page_active_count;
+  mem_snap->inactive_pages = vm_page_inactive_count;
+  mem_snap->purgeable_pages = vm_page_purgeable_count;
+  mem_snap->wired_pages = vm_page_wire_count;
+  mem_snap->speculative_pages = vm_page_speculative_count;
+  mem_snap->throttled_pages = vm_page_throttled_count;
+}
+
+
+/* 
+ * Method for grabbing timer values safely, in the sense that no infinite loop will occur 
+ * Certain flavors of the timer_grab function, which would seem to be the thing to use,   
+ * can loop infinitely if called while the timer is in the process of being updated.      
+ * Unfortunately, it is (rarely) possible to get inconsistent top and bottom halves of    
+ * the timer using this method. This seems insoluble, since stackshot runs in a context   
+ * where the timer might be half-updated, and has no way of yielding control just long    
+ * enough to finish the update.                                                           
+ */
+
+static uint64_t safe_grab_timer_value(struct timer *t)
+{
+#if   defined(__LP64__)
+  return t->all_bits;
+#else
+  uint64_t time = t->high_bits;    /* endian independent grab */
+  time = (time << 32) | t->low_bits;
+  return time;
+#endif
+}
+
 int
 kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_flags, uint32_t dispatch_offset, uint32_t *pbytesTraced)
 {
@@ -1080,41 +1116,74 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 	unsigned framesize = 2 * sizeof(vm_offset_t);
 	struct task ctask;
 	struct thread cthread;
+	struct _vm_map cmap;
+	struct pmap cpmap;
+
+	queue_head_t *task_list = &tasks;
+	boolean_t is_active_list = TRUE;
 	
 	boolean_t dispatch_p = ((trace_flags & STACKSHOT_GET_DQ) != 0);
 	boolean_t save_loadinfo_p = ((trace_flags & STACKSHOT_SAVE_LOADINFO) != 0);
 
-	queue_iterate(&tasks, task, task_t, tasks) {
+	if(trace_flags & STACKSHOT_GET_GLOBAL_MEM_STATS) {
+	  if(tracepos + sizeof(struct mem_snapshot) > tracebound) {
+	    error = -1;
+	    goto error_exit;
+	  }
+	  kdp_mem_snapshot((struct mem_snapshot *)tracepos);
+	  tracepos += sizeof(struct mem_snapshot);
+	}
+
+walk_list:
+	queue_iterate(task_list, task, task_t, tasks) {
 		if ((task == NULL) || (ml_nofault_copy((vm_offset_t) task, (vm_offset_t) &ctask, sizeof(struct task)) != sizeof(struct task)))
 			goto error_exit;
 
 		int task_pid = pid_from_task(task);
 		boolean_t task64 = task_has_64BitAddr(task);
 
+		if (!task->active) {
+			/* 
+			 * Not interested in terminated tasks without threads, and
+			 * at the moment, stackshot can't handle a task  without a name.
+			 */
+			if (queue_empty(&task->threads) || task_pid == -1) {
+				continue;
+			}
+		}
+
 		/* Trace everything, unless a process was specified */
 		if ((pid == -1) || (pid == task_pid)) {
 			task_snapshot_t task_snap;
-			uint32_t uuid_info_count;
-			mach_vm_address_t uuid_info_addr;
+			uint32_t uuid_info_count = 0;
+			mach_vm_address_t uuid_info_addr = 0;
+			boolean_t have_map = (task->map != NULL) && 
+			  (ml_nofault_copy((vm_offset_t)(task->map), (vm_offset_t)&cmap, sizeof(struct _vm_map)) == sizeof(struct _vm_map));
+			boolean_t have_pmap = have_map && (cmap.pmap != NULL) &&
+			  (ml_nofault_copy((vm_offset_t)(cmap.pmap), (vm_offset_t)&cpmap, sizeof(struct pmap)) == sizeof(struct pmap));
 
-			if (save_loadinfo_p && task_pid > 0) {
+			if (have_pmap && task->active && save_loadinfo_p && task_pid > 0) {
 				// Read the dyld_all_image_infos struct from the task memory to get UUID array count and location
 				if (task64) {
 					struct dyld_all_image_infos64 task_image_infos;
-					if (!kdp_copyin(task->map->pmap, task->all_image_info_addr, &task_image_infos, sizeof(struct dyld_all_image_infos64)))
-						goto error_exit;
-					uuid_info_count = (uint32_t)task_image_infos.uuidArrayCount;
-					uuid_info_addr = task_image_infos.uuidArray;
+					if (kdp_copyin(task->map->pmap, task->all_image_info_addr, &task_image_infos, sizeof(struct dyld_all_image_infos64))) {
+						uuid_info_count = (uint32_t)task_image_infos.uuidArrayCount;
+						uuid_info_addr = task_image_infos.uuidArray;
+					}
 				} else {
 					struct dyld_all_image_infos task_image_infos;
-					if (!kdp_copyin(task->map->pmap, task->all_image_info_addr, &task_image_infos, sizeof(struct dyld_all_image_infos)))
-						goto error_exit;
-					uuid_info_count = task_image_infos.uuidArrayCount;
-					uuid_info_addr = task_image_infos.uuidArray;
+					if (kdp_copyin(task->map->pmap, task->all_image_info_addr, &task_image_infos, sizeof(struct dyld_all_image_infos))) {
+						uuid_info_count = task_image_infos.uuidArrayCount;
+						uuid_info_addr = task_image_infos.uuidArray;
+					}
 				}
-			} else {
-				uuid_info_count = 0;
-				uuid_info_addr = 0;
+
+				// If we get a NULL uuid_info_addr (which can happen when we catch dyld in the middle of updating
+				// this data structure), we zero the uuid_info_count so that we won't even try to save load info
+				// for this task.
+				if (!uuid_info_addr) {
+					uuid_info_count = 0;
+				}
 			}
 
 			if (tracepos + sizeof(struct task_snapshot) > tracebound) {
@@ -1134,7 +1203,17 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 			task_snap->ss_flags = 0;
 			if (task64)
 				task_snap->ss_flags |= kUser64_p;
+			if (!task->active) 
+				task_snap->ss_flags |= kTerminatedSnapshot;
+
+			task_snap->suspend_count = task->suspend_count;
+			task_snap->task_size = have_pmap ? pmap_resident_count(task->map->pmap) : 0;
+			task_snap->faults = task->faults;
+			task_snap->pageins = task->pageins;
+			task_snap->cow_faults = task->cow_faults;
 			
+			task_snap->user_time_in_terminated_threads = task->total_user_time;
+			task_snap->system_time_in_terminated_threads = task->total_system_time;
 			tracepos += sizeof(struct task_snapshot);
 
 			if (task_pid > 0 && uuid_info_count > 0) {
@@ -1147,10 +1226,11 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 				}
 
 				// Copy in the UUID info array
-				if (!kdp_copyin(task->map->pmap, uuid_info_addr, tracepos, uuid_info_array_size))
-					goto error_exit;
-
-				tracepos += uuid_info_array_size;
+				// It may be nonresident, in which case just fix up nloadinfos to 0 in the task_snap
+				if (have_pmap && !kdp_copyin(task->map->pmap, uuid_info_addr, tracepos, uuid_info_array_size))
+					task_snap->nloadinfos = 0;
+				else
+					tracepos += uuid_info_array_size;
 			}
 
 			queue_iterate(&task->threads, thread, thread_t, task_threads){
@@ -1167,12 +1247,13 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 				tsnap->state = thread->state;
 				tsnap->wait_event = thread->wait_event;
 				tsnap->continuation = (uint64_t) (uintptr_t) thread->continuation;
-
+				tsnap->user_time = safe_grab_timer_value(&thread->user_timer);
+				tsnap->system_time = safe_grab_timer_value(&thread->system_timer);
 				tsnap->snapshot_magic = STACKSHOT_THREAD_SNAPSHOT_MAGIC;
 				tracepos += sizeof(struct thread_snapshot);
 				tsnap->ss_flags = 0;
 
-				if (dispatch_p && (task != kernel_task) && (task->active) && (task->map)) {
+				if (dispatch_p && (task != kernel_task) && (task->active) && have_pmap) {
 					uint64_t dqkeyaddr = thread_dispatchqaddr(thread);
 					if (dqkeyaddr != 0) {
 						uint64_t dqaddr = 0;
@@ -1190,6 +1271,7 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 /* Call through to the machine specific trace routines
  * Frames are added past the snapshot header.
  */
+				tracebytes = 0;
 				if (thread->kernel_stack != 0) {
 #if defined(__LP64__)					
 					tracebytes = machine_trace_thread64(thread, tracepos, tracebound, MAX_FRAMES, FALSE);
@@ -1204,7 +1286,7 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 				tracepos += tracebytes;
 				tracebytes = 0;
 				/* Trace user stack, if any */
-				if (thread->task->map != kernel_map) {
+				if (task->active && thread->task->map != kernel_map) {
 					/* 64-bit task? */
 					if (task_has_64BitAddr(thread->task)) {
 						tracebytes = machine_trace_thread64(thread, tracepos, tracebound, MAX_FRAMES, TRUE);
@@ -1221,6 +1303,12 @@ kdp_stackshot(int pid, void *tracebuf, uint32_t tracebuf_size, uint32_t trace_fl
 				tracebytes = 0;
 			}
 		}
+	}
+
+	if (is_active_list) { 
+		is_active_list = FALSE;
+		task_list = &terminated_tasks;
+		goto walk_list;
 	}
 
 error_exit:

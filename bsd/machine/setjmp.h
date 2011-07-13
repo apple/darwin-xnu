@@ -31,9 +31,7 @@
 #ifndef	_MACHINE_SETJMP_H_
 #define	_MACHINE_SETJMP_H_
 
-#if defined (__ppc__) || defined (__ppc64__)
-#include "ppc/setjmp.h"
-#elif defined (__i386__) || defined(__x86_64__)
+#if defined (__i386__) || defined(__x86_64__)
 #include "i386/setjmp.h"
 #else
 #error architecture not supported

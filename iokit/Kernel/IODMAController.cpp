@@ -50,9 +50,9 @@ IODMAController *IODMAController::getController(IOService *provider, UInt32 dmaI
   
   // Find the name of the parent dma controller
   dmaParentData = OSDynamicCast(OSData, provider->getProperty("dma-parent"));
-  if (dmaParentData == 0) return false;
+  if (dmaParentData == 0) return NULL;
   dmaParentName = createControllerName(*(UInt32 *)dmaParentData->getBytesNoCopy());
-  if (dmaParentName == 0) return false;
+  if (dmaParentName == 0) return NULL;
   
   // Wait for the parent dma controller
   dmaController = OSDynamicCast(IODMAController, IOService::waitForService(IOService::nameMatching(dmaParentName)));

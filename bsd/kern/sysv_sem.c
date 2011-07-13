@@ -999,8 +999,8 @@ semget(__unused struct proc *p, struct semget_args *uap, int32_t *retval)
 		sema[semid].u.sem_perm._key = key;
 		sema[semid].u.sem_perm.cuid = kauth_cred_getuid(cred);
 		sema[semid].u.sem_perm.uid = kauth_cred_getuid(cred);
-		sema[semid].u.sem_perm.cgid = cred->cr_gid;
-		sema[semid].u.sem_perm.gid = cred->cr_gid;
+		sema[semid].u.sem_perm.cgid = kauth_cred_getgid(cred);
+		sema[semid].u.sem_perm.gid = kauth_cred_getgid(cred);
 		sema[semid].u.sem_perm.mode = (semflg & 0777) | SEM_ALLOC;
 		sema[semid].u.sem_perm._seq =
 		    (sema[semid].u.sem_perm._seq + 1) & 0x7fff;
@@ -1092,6 +1092,15 @@ semop(struct proc *p, struct semop_args *uap, int32_t *retval)
 		goto semopout;
 	}
 
+	/*  OK for LP64, since sizeof(struct sembuf) is currently invariant */
+	if ((eval = copyin(uap->sops, &sops, nsops * sizeof(struct sembuf))) != 0) {
+#ifdef SEM_DEBUG
+		printf("eval = %d from copyin(%08x, %08x, %ld)\n", eval,
+		    uap->sops, &sops, nsops * sizeof(struct sembuf));
+#endif
+		goto semopout;
+	}
+
 #if CONFIG_MACF
 	/*
 	 * Initial pass thru sops to see what permissions are needed.
@@ -1109,15 +1118,6 @@ semop(struct proc *p, struct semop_args *uap, int32_t *retval)
 	if (eval)
 		goto semopout;
 #endif
-
-	/*  OK for LP64, since sizeof(struct sembuf) is currently invariant */
-	if ((eval = copyin(uap->sops, &sops, nsops * sizeof(struct sembuf))) != 0) {
-#ifdef SEM_DEBUG
-		printf("eval = %d from copyin(%08x, %08x, %ld)\n", eval,
-		    uap->sops, &sops, nsops * sizeof(struct sembuf));
-#endif
-		goto semopout;
-	}
 
 	/*
 	 * Loop trying to satisfy the vector of requests.
@@ -1539,19 +1539,19 @@ out:
 
 /* SYSCTL_NODE(_kern, KERN_SYSV, sysv, CTLFLAG_RW, 0, "SYSV"); */
 extern struct sysctl_oid_list sysctl__kern_sysv_children;
-SYSCTL_PROC(_kern_sysv, OID_AUTO, semmni, CTLTYPE_INT | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, semmni, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &limitseminfo.semmni, 0, &sysctl_seminfo ,"I","semmni");
 
-SYSCTL_PROC(_kern_sysv, OID_AUTO, semmns, CTLTYPE_INT | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, semmns, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &limitseminfo.semmns, 0, &sysctl_seminfo ,"I","semmns");
 
-SYSCTL_PROC(_kern_sysv, OID_AUTO, semmnu, CTLTYPE_INT | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, semmnu, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &limitseminfo.semmnu, 0, &sysctl_seminfo ,"I","semmnu");
 
-SYSCTL_PROC(_kern_sysv, OID_AUTO, semmsl, CTLTYPE_INT | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, semmsl, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &limitseminfo.semmsl, 0, &sysctl_seminfo ,"I","semmsl");
     
-SYSCTL_PROC(_kern_sysv, OID_AUTO, semume, CTLTYPE_INT | CTLFLAG_RW,
+SYSCTL_PROC(_kern_sysv, OID_AUTO, semume, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     &limitseminfo.semume, 0, &sysctl_seminfo ,"I","semume");
 
 
@@ -1662,7 +1662,7 @@ IPCS_sem_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 }
 
 SYSCTL_DECL(_kern_sysv_ipcs);
-SYSCTL_PROC(_kern_sysv_ipcs, OID_AUTO, sem, CTLFLAG_RW|CTLFLAG_ANYBODY,
+SYSCTL_PROC(_kern_sysv_ipcs, OID_AUTO, sem, CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED,
 	0, 0, IPCS_sem_sysctl,
 	"S,IPCS_sem_command",
 	"ipcs sem command interface");

@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 1999-2009, Apple Inc.
+ * Copyright (c) 1999-2010, Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -246,7 +246,7 @@ int
 auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 {
 	kauth_cred_t scred;
-	int error;
+	int error = 0;
 	union auditon_udata udata;
 	proc_t tp = PROC_NULL;
 	struct auditinfo_addr aia;
@@ -288,6 +288,8 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 	case A_GETPINFO_ADDR:
 	case A_SENDTRIGGER:
 	case A_GETSINFO_ADDR:
+	case A_GETSFLAGS:
+	case A_SETSFLAGS:
 		error = copyin(uap->data, (void *)&udata, uap->length);
 		if (error)
 			return (error);
@@ -296,33 +298,45 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 		break;
 	}
 
+	/* Check appropriate privilege. */
+	switch (uap->cmd) {
 	/*
 	 * A_GETSINFO doesn't require priviledge but only superuser  
 	 * gets to see the audit masks. 
 	 */
-	error = suser(kauth_cred_get(), &p->p_acflag);
-	if (A_GETSINFO_ADDR == uap->cmd) {
+	case A_GETSINFO_ADDR:
 		if ((sizeof(udata.au_kau_info) != uap->length) ||
 	   		(audit_session_lookup(udata.au_kau_info.ai_asid,
 					      &udata.au_kau_info) != 0))
-			return (EINVAL);
-		if (error) {
+			error = EINVAL;
+		else if (!kauth_cred_issuser(kauth_cred_get())) {
 			udata.au_kau_info.ai_mask.am_success = ~0;
 			udata.au_kau_info.ai_mask.am_failure = ~0;
 		}
-	} else
-		if (error)
-			return (error);
+		break;
+	case A_GETSFLAGS:
+	case A_SETSFLAGS:
+		/* Getting one's own audit session flags requires no
+		 * privilege.  Setting the flags is subject to access
+		 * control implemented in audit_session_setaia().
+		 */
+		break;
+	default:
+		error = suser(kauth_cred_get(), &p->p_acflag);
+		break;
+	}
+	if (error)
+		return (error);
 
 	/*
 	 * XXX Need to implement these commands by accessing the global
 	 * values associated with the commands.
 	 */
-	mtx_lock(&audit_mtx);
 	switch (uap->cmd) {
 	case A_OLDGETPOLICY:
 	case A_GETPOLICY:
 		if (sizeof(udata.au_policy64) == uap->length) {
+			mtx_lock(&audit_mtx);
 			if (!audit_fail_stop)
 				udata.au_policy64 |= AUDIT_CNT;
 			if (audit_panic_on_write_fail)
@@ -331,12 +345,12 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 				udata.au_policy64 |= AUDIT_ARGV;
 			if (audit_arge)
 				udata.au_policy64 |= AUDIT_ARGE;
+			mtx_unlock(&audit_mtx);
 			break;
 		}
-		if (sizeof(udata.au_policy) != uap->length) {
-			mtx_unlock(&audit_mtx);
+		if (sizeof(udata.au_policy) != uap->length)
 			return (EINVAL);
-		}
+		mtx_lock(&audit_mtx);
 		if (!audit_fail_stop)
 			udata.au_policy |= AUDIT_CNT;
 		if (audit_panic_on_write_fail)
@@ -345,60 +359,61 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 			udata.au_policy |= AUDIT_ARGV;
 		if (audit_arge)
 			udata.au_policy |= AUDIT_ARGE;
+		mtx_unlock(&audit_mtx);
 		break;
 
 	case A_OLDSETPOLICY:
 	case A_SETPOLICY:
 		if (sizeof(udata.au_policy64) == uap->length) {
 			if (udata.au_policy64 & ~(AUDIT_CNT|AUDIT_AHLT|
-				AUDIT_ARGV|AUDIT_ARGE)) {
-				mtx_unlock(&audit_mtx);
+				AUDIT_ARGV|AUDIT_ARGE))
 				return (EINVAL);
-			}
+			mtx_lock(&audit_mtx);
 			audit_fail_stop = ((udata.au_policy64 & AUDIT_CNT) ==
 			    0);
 			audit_panic_on_write_fail = (udata.au_policy64 &
 			    AUDIT_AHLT);
 			audit_argv = (udata.au_policy64 & AUDIT_ARGV);
 			audit_arge = (udata.au_policy64 & AUDIT_ARGE);
-
+			mtx_unlock(&audit_mtx);
 			break;
 		}	
 		if ((sizeof(udata.au_policy) != uap->length) ||
 		    (udata.au_policy & ~(AUDIT_CNT|AUDIT_AHLT|AUDIT_ARGV|
-					 AUDIT_ARGE))) {
-			mtx_unlock(&audit_mtx);
+					 AUDIT_ARGE)))
 			return (EINVAL);
-		}
 		/*
 		 * XXX - Need to wake up waiters if the policy relaxes?
 		 */
+		mtx_lock(&audit_mtx);
 		audit_fail_stop = ((udata.au_policy & AUDIT_CNT) == 0);
 		audit_panic_on_write_fail = (udata.au_policy & AUDIT_AHLT);
 		audit_argv = (udata.au_policy & AUDIT_ARGV);
 		audit_arge = (udata.au_policy & AUDIT_ARGE);
+		mtx_unlock(&audit_mtx);
 		break;
 
 	case A_GETKMASK:
-		if (sizeof(udata.au_mask) != uap->length) {
-			mtx_unlock(&audit_mtx);
+		if (sizeof(udata.au_mask) != uap->length)
 			return (EINVAL);
-		}
+		mtx_lock(&audit_mtx);
 		udata.au_mask = audit_nae_mask;
+		mtx_unlock(&audit_mtx);
 		break;
 
 	case A_SETKMASK:
-		if (sizeof(udata.au_mask) != uap->length) {
-			mtx_unlock(&audit_mtx);
+		if (sizeof(udata.au_mask) != uap->length)
 			return (EINVAL);
-		}
+		mtx_lock(&audit_mtx);
 		audit_nae_mask = udata.au_mask;
 		AUDIT_CHECK_IF_KEVENTS_MASK(audit_nae_mask);
+		mtx_unlock(&audit_mtx);
 		break;
 
 	case A_OLDGETQCTRL:
 	case A_GETQCTRL:
 		if (sizeof(udata.au_qctrl64) == uap->length) {
+			mtx_lock(&audit_mtx);
 			udata.au_qctrl64.aq64_hiwater =
 			    (u_int64_t)audit_qctrl.aq_hiwater;
 			udata.au_qctrl64.aq64_lowater =
@@ -409,13 +424,14 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 			    (u_int64_t)audit_qctrl.aq_delay;
 			udata.au_qctrl64.aq64_minfree = 
 			    (int64_t)audit_qctrl.aq_minfree;
+			mtx_unlock(&audit_mtx);
 			break;
 		} 
-		if (sizeof(udata.au_qctrl) != uap->length) {
-			mtx_unlock(&audit_mtx);
+		if (sizeof(udata.au_qctrl) != uap->length)
 			return (EINVAL);
-		}
+		mtx_lock(&audit_mtx);
 		udata.au_qctrl = audit_qctrl;
+		mtx_unlock(&audit_mtx);
 		break;
 
 	case A_OLDSETQCTRL:
@@ -426,10 +442,9 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 			      udata.au_qctrl64.aq64_hiwater) ||
 			     (udata.au_qctrl64.aq64_bufsz > AQ_MAXBUFSZ) ||
 			     (udata.au_qctrl64.aq64_minfree < 0) ||
-			     (udata.au_qctrl64.aq64_minfree > 100)) {
-				mtx_unlock(&audit_mtx);
+			     (udata.au_qctrl64.aq64_minfree > 100))
 				return (EINVAL);
-			}
+			mtx_lock(&audit_mtx);
 			audit_qctrl.aq_hiwater =
 			     (int)udata.au_qctrl64.aq64_hiwater;
 			audit_qctrl.aq_lowater =
@@ -439,77 +454,67 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 			audit_qctrl.aq_minfree = 
 			    (int)udata.au_qctrl64.aq64_minfree;
 			audit_qctrl.aq_delay = -1;  /* Not used. */
-
-			 break;
+			mtx_unlock(&audit_mtx);
+			break;
 		}
 		if ((sizeof(udata.au_qctrl) != uap->length) ||
 		    (udata.au_qctrl.aq_hiwater > AQ_MAXHIGH) ||
 		    (udata.au_qctrl.aq_lowater >= udata.au_qctrl.aq_hiwater) ||
 		    (udata.au_qctrl.aq_bufsz > AQ_MAXBUFSZ) ||
 		    (udata.au_qctrl.aq_minfree < 0) ||
-		    (udata.au_qctrl.aq_minfree > 100)) {
-			mtx_unlock(&audit_mtx);
+		    (udata.au_qctrl.aq_minfree > 100))
 			return (EINVAL);
-		}
 
+		mtx_lock(&audit_mtx);
 		audit_qctrl = udata.au_qctrl;
 		/* XXX The queue delay value isn't used with the kernel. */
 		audit_qctrl.aq_delay = -1;
+		mtx_unlock(&audit_mtx);
 		break;
 
 	case A_GETCWD:
-		mtx_unlock(&audit_mtx);
 		return (ENOSYS);
-		break;
 
 	case A_GETCAR:
-		mtx_unlock(&audit_mtx);
 		return (ENOSYS);
-		break;
 
 	case A_GETSTAT:
-		mtx_unlock(&audit_mtx);
 		return (ENOSYS);
-		break;
 
 	case A_SETSTAT:
-		mtx_unlock(&audit_mtx);
 		return (ENOSYS);
-		break;
 
 	case A_SETUMASK:
-		mtx_unlock(&audit_mtx);
 		return (ENOSYS);
-		break;
 
 	case A_SETSMASK:
-		mtx_unlock(&audit_mtx);
 		return (ENOSYS);
-		break;
 
 	case A_OLDGETCOND:
 	case A_GETCOND:
 		if (sizeof(udata.au_cond64) == uap->length) {
+			mtx_lock(&audit_mtx);
 			if (audit_enabled && !audit_suspended)
 				udata.au_cond64 = AUC_AUDITING;
 			else
 				udata.au_cond64 = AUC_NOAUDIT;
-
+			mtx_unlock(&audit_mtx);
 			break;
 		}
-		if (sizeof(udata.au_cond) != uap->length) {
-			mtx_unlock(&audit_mtx);
+		if (sizeof(udata.au_cond) != uap->length)
 			return (EINVAL);
-		}
+		mtx_lock(&audit_mtx);
 		if (audit_enabled && !audit_suspended)
 			udata.au_cond = AUC_AUDITING;
 		else
 			udata.au_cond = AUC_NOAUDIT;
+		mtx_unlock(&audit_mtx);
 		break;
 
 	case A_OLDSETCOND:
 	case A_SETCOND:
 		if (sizeof(udata.au_cond64) == uap->length) {
+			mtx_lock(&audit_mtx);
 			if (udata.au_cond64 == AUC_NOAUDIT)
 				audit_suspended = 1;
 			if (udata.au_cond64 == AUC_AUDITING)
@@ -518,14 +523,15 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 				audit_suspended = 1;
 				mtx_unlock(&audit_mtx);
 				audit_shutdown();
-				mtx_lock(&audit_mtx);
+				break;
 			}
+			mtx_unlock(&audit_mtx);
 			break;
 		}
 		if (sizeof(udata.au_cond) != uap->length) {
-			mtx_unlock(&audit_mtx);
 			return (EINVAL);
 		}
+		mtx_lock(&audit_mtx);
 		if (udata.au_cond == AUC_NOAUDIT)
 			audit_suspended = 1;
 		if (udata.au_cond == AUC_AUDITING)
@@ -534,40 +540,32 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 			audit_suspended = 1;
 			mtx_unlock(&audit_mtx);
 			audit_shutdown();
-			mtx_lock(&audit_mtx);
+			break;
 		}
+		mtx_unlock(&audit_mtx);
 		break;
 
 	case A_GETCLASS:
-		if (sizeof(udata.au_evclass) != uap->length) {
-			mtx_unlock(&audit_mtx);
+		if (sizeof(udata.au_evclass) != uap->length)
 			return (EINVAL);
-		}
 		udata.au_evclass.ec_class = au_event_class(
 		    udata.au_evclass.ec_number);
 		break;
 
 	case A_SETCLASS:
-		if (sizeof(udata.au_evclass) != uap->length) {
-			mtx_unlock(&audit_mtx);
+		if (sizeof(udata.au_evclass) != uap->length)
 			return (EINVAL);
-		}
 		au_evclassmap_insert(udata.au_evclass.ec_number,
 		    udata.au_evclass.ec_class);
 		break;
 
 	case A_GETPINFO:
 		if ((sizeof(udata.au_aupinfo) != uap->length) ||
-		    IS_NOT_VALID_PID(udata.au_aupinfo.ap_pid)) {
-			mtx_unlock(&audit_mtx);
+		    IS_NOT_VALID_PID(udata.au_aupinfo.ap_pid))
 			return (EINVAL);
-		}
-		if ((tp = proc_find(udata.au_aupinfo.ap_pid)) == NULL) {
-			mtx_unlock(&audit_mtx);
+		if ((tp = proc_find(udata.au_aupinfo.ap_pid)) == NULL)
 			return (ESRCH);
-		}
 
-		mtx_unlock(&audit_mtx);
 		scred = kauth_cred_proc_ref(tp);
 		if (scred->cr_audit.as_aia_p->ai_termid.at_type == AU_IPv6) {
 			kauth_cred_unref(&scred);
@@ -590,19 +588,14 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 		kauth_cred_unref(&scred);
 		proc_rele(tp);
 		tp = PROC_NULL;
-		mtx_lock(&audit_mtx);
 		break;
 
 	case A_SETPMASK:
 		if ((sizeof(udata.au_aupinfo) != uap->length) ||
-		    IS_NOT_VALID_PID(udata.au_aupinfo.ap_pid)) {
-			mtx_unlock(&audit_mtx);
+		    IS_NOT_VALID_PID(udata.au_aupinfo.ap_pid))
 			return (EINVAL);
-		}
-		if ((tp = proc_find(udata.au_aupinfo.ap_pid)) == NULL) {
-			mtx_unlock(&audit_mtx);
+		if ((tp = proc_find(udata.au_aupinfo.ap_pid)) == NULL)
 			return (ESRCH);
-		}
 		scred = kauth_cred_proc_ref(tp);
 		bcopy(scred->cr_audit.as_aia_p, &aia, sizeof(aia));
 		kauth_cred_unref(&scred);
@@ -611,44 +604,38 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 		aia.ai_mask.am_failure =
 		    udata.au_aupinfo.ap_mask.am_failure;
 		AUDIT_CHECK_IF_KEVENTS_MASK(aia.ai_mask);
-		error = audit_session_setaia(tp, &aia, 0);
-		mtx_unlock(&audit_mtx);
+		error = audit_session_setaia(tp, &aia);
 		proc_rele(tp);
 		tp = PROC_NULL;
 		if (error)
 			return (error);
-		mtx_lock(&audit_mtx);
 		break;
 
 	case A_SETFSIZE:
 		if ((sizeof(udata.au_fstat) != uap->length) ||
 		    ((udata.au_fstat.af_filesz != 0) &&
-		     (udata.au_fstat.af_filesz < MIN_AUDIT_FILE_SIZE))) {
-			mtx_unlock(&audit_mtx);
+		     (udata.au_fstat.af_filesz < MIN_AUDIT_FILE_SIZE)))
 			return (EINVAL);
-		}
+		mtx_lock(&audit_mtx);
 		audit_fstat.af_filesz = udata.au_fstat.af_filesz;
+		mtx_unlock(&audit_mtx);
 		break;
 
 	case A_GETFSIZE:
-		if (sizeof(udata.au_fstat) != uap->length) {
-			mtx_unlock(&audit_mtx);
+		if (sizeof(udata.au_fstat) != uap->length)
 			return (EINVAL);
-		}
+		mtx_lock(&audit_mtx);
 		udata.au_fstat.af_filesz = audit_fstat.af_filesz;
 		udata.au_fstat.af_currsz = audit_fstat.af_currsz;
+		mtx_unlock(&audit_mtx);
 		break;
 
 	case A_GETPINFO_ADDR:
 		if ((sizeof(udata.au_aupinfo_addr) != uap->length) ||
-		    IS_NOT_VALID_PID(udata.au_aupinfo_addr.ap_pid)) {
-			mtx_unlock(&audit_mtx);
+		    IS_NOT_VALID_PID(udata.au_aupinfo_addr.ap_pid))
 			return (EINVAL);
-		}
-		if ((tp = proc_find(udata.au_aupinfo.ap_pid)) == NULL) {
-			mtx_unlock(&audit_mtx);
+		if ((tp = proc_find(udata.au_aupinfo.ap_pid)) == NULL)
 			return (ESRCH);
-		}
 		WARN_IF_AINFO_ADDR_CHANGED(uap->length,
 		    sizeof(auditpinfo_addr_t), "auditon(A_GETPINFO_ADDR,...)",
 		    "auditpinfo_addr_t");
@@ -672,41 +659,48 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 		break;
 
 	case A_GETKAUDIT:
-		mtx_unlock(&audit_mtx);
 		if (sizeof(udata.au_kau_info) != uap->length) 
 			return (EINVAL);
 		audit_get_kinfo(&udata.au_kau_info);
-		mtx_lock(&audit_mtx);
 		break;
 
 	case A_SETKAUDIT:
 		if ((sizeof(udata.au_kau_info) != uap->length) ||
 		    (udata.au_kau_info.ai_termid.at_type != AU_IPv4 &&
-		    udata.au_kau_info.ai_termid.at_type != AU_IPv6)) {
-			mtx_unlock(&audit_mtx);
+		    udata.au_kau_info.ai_termid.at_type != AU_IPv6))
 			return (EINVAL);
-		}
-		mtx_unlock(&audit_mtx);
 		audit_set_kinfo(&udata.au_kau_info);
-		mtx_lock(&audit_mtx);
 		break;
 
 	case A_SENDTRIGGER:
 		if ((sizeof(udata.au_trigger) != uap->length) || 
 		    (udata.au_trigger < AUDIT_TRIGGER_MIN) ||
-		    (udata.au_trigger > AUDIT_TRIGGER_MAX)) {
-			mtx_unlock(&audit_mtx);
+		    (udata.au_trigger > AUDIT_TRIGGER_MAX))
 			return (EINVAL);
-		}
-		mtx_unlock(&audit_mtx);
 		return (audit_send_trigger(udata.au_trigger));
 
 	case A_GETSINFO_ADDR:
 		/* Handled above before switch(). */
 		break;
 
+	case A_GETSFLAGS:
+		if (sizeof(udata.au_flags) != uap->length)
+			return (EINVAL);
+		bcopy(&(kauth_cred_get()->cr_audit.as_aia_p->ai_flags),
+		    &udata.au_flags, sizeof(udata.au_flags));
+		break;
+
+	case A_SETSFLAGS:
+		if (sizeof(udata.au_flags) != uap->length)
+			return (EINVAL);
+		bcopy(kauth_cred_get()->cr_audit.as_aia_p, &aia, sizeof(aia));
+		aia.ai_flags = udata.au_flags;
+		error = audit_session_setaia(p, &aia);
+		if (error)
+			return (error);
+		break;
+
 	default:
-		mtx_unlock(&audit_mtx);
 		return (EINVAL);
 	}
 
@@ -730,15 +724,13 @@ auditon(proc_t p, struct auditon_args *uap, __unused int32_t *retval)
 	case A_GETPINFO_ADDR:
 	case A_GETKAUDIT:
 	case A_GETSINFO_ADDR:
+	case A_GETSFLAGS:
 		error = copyout((void *)&udata, uap->data, uap->length);
-		if (error) {
-			mtx_unlock(&audit_mtx);
+		if (error)
 			return (ENOSYS);
-		}
 		break;
 	}
 
-	mtx_unlock(&audit_mtx);
 	return (0);
 }
 
@@ -803,7 +795,7 @@ setauid(proc_t p, struct setauid_args *uap, __unused int32_t *retval)
 	bcopy(&scred->cr_audit.as_mask, &aia.ai_mask, sizeof(au_mask_t));
 	kauth_cred_unref(&scred);
 	aia.ai_auid = id;
-	error = audit_session_setaia(p, &aia, 0);
+	error = audit_session_setaia(p, &aia);
 
 	return (error);
 }
@@ -917,7 +909,7 @@ setaudit(proc_t p, struct setaudit_args *uap, __unused int32_t *retval)
 	newaia.ai_termid.at_port = ai.ai_termid.port;
 	newaia.ai_termid.at_type = AU_IPv4;
 
-	error = audit_session_setaia(p, &newaia, 0);
+	error = audit_session_setaia(p, &newaia);
 	if (error)
 		return (error);
 
@@ -1007,7 +999,7 @@ setaudit_addr(proc_t p, struct setaudit_addr_args *uap,
 	if (aia.ai_asid == AU_DEFAUDITSID)
 		aia.ai_asid = AU_ASSIGN_ASID;
 
-	error = audit_session_setaia(p, &aia, 0);
+	error = audit_session_setaia(p, &aia);
 	if (error)
 		return (error);
 
@@ -1053,7 +1045,7 @@ auditctl(proc_t p, struct auditctl_args *uap, __unused int32_t *retval)
 	if (uap->path == USER_ADDR_NULL)
 		return (EINVAL);
 
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
+	NDINIT(&nd, LOOKUP, OP_OPEN, FOLLOW | LOCKLEAF | AUDITVNPATH1,
 	    (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 :
 	    UIO_USERSPACE32), uap->path, vfs_context_current());
 	error = vn_open(&nd, AUDIT_OPEN_FLAGS, 0);

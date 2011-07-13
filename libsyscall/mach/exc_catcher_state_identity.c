@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -36,9 +36,12 @@
 #include <mach/exception.h>
 #include <mach/mig_errors.h>
 #include <dlfcn.h>
-#include <stdlib.h>
 
-__private_extern__ kern_return_t internal_catch_exception_raise_state_identity (
+#include "abort.h"
+#include "exc_catcher.h"
+
+__private_extern__ kern_return_t
+internal_catch_exception_raise_state_identity(
         mach_port_t exception_port,
         mach_port_t thread,
         mach_port_t task,
@@ -52,21 +55,19 @@ __private_extern__ kern_return_t internal_catch_exception_raise_state_identity (
         mach_msg_type_number_t *new_stateCnt)
 {
 #if defined(__DYNAMIC__)
-    static int checkForFunction = 0;
-    /* This will be non-zero if the user has defined this function */
-    static kern_return_t (*func)(mach_port_t, mach_port_t, mach_port_t, exception_type_t, exception_data_t, mach_msg_type_number_t, int *, thread_state_t, mach_msg_type_number_t, thread_state_t, mach_msg_type_number_t *);
-    if (checkForFunction == 0) {
-        checkForFunction = 1;
-		func = dlsym(RTLD_DEFAULT, "catch_exception_raise_state_identity");
-    }
-    if (func == 0) {
-        /* The user hasn't defined catch_exception_raise in their binary */
-        abort();
-    }
-    return (*func)(exception_port, thread, task, exception, code, codeCnt, flavor, old_state, old_stateCnt, new_state, new_stateCnt);
+	static _libkernel_exec_raise_state_identity_t exc_raise_state_identity_func = (void*)-1;
+	
+	if (exc_raise_state_identity_func == ((void*)-1)) {
+		exc_raise_state_identity_func = _dlsym(RTLD_DEFAULT, "catch_exception_raise_state_identity");
+	}	
+	if (exc_raise_state_identity_func == 0) {
+		/* The user hasn't defined catch_exception_raise in their binary */
+		abort();
+	}
+	return (*exc_raise_state_identity_func)(exception_port, thread, task, exception, code, codeCnt, flavor, old_state, old_stateCnt, new_state, new_stateCnt);
 #else
-    extern kern_return_t catch_exception_raise_state_identity(mach_port_t, mach_port_t, mach_port_t, exception_type_t, exception_data_t, mach_msg_type_number_t, int *, thread_state_t, mach_msg_type_number_t, thread_state_t, mach_msg_type_number_t *);
-    return catch_exception_raise_state_identity(exception_port, thread, task, exception, code, codeCnt, flavor, old_state, old_stateCnt, new_state, new_stateCnt);
+	extern kern_return_t catch_exception_raise_state_identity(mach_port_t, mach_port_t, mach_port_t, exception_type_t, exception_data_t, mach_msg_type_number_t, int *, thread_state_t, mach_msg_type_number_t, thread_state_t, mach_msg_type_number_t *);
+	return catch_exception_raise_state_identity(exception_port, thread, task, exception, code, codeCnt, flavor, old_state, old_stateCnt, new_state, new_stateCnt);
 #endif
 }
 

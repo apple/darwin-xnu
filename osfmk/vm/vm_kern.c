@@ -422,7 +422,7 @@ kernel_memory_allocate(
 		mem->wpmapped = TRUE;
 
 		PMAP_ENTER(kernel_pmap, map_addr + pg_offset, mem, 
-			   VM_PROT_READ | VM_PROT_WRITE, object->wimg_bits & VM_WIMG_MASK, TRUE);
+			   VM_PROT_READ | VM_PROT_WRITE, 0, TRUE);
 
 		if (flags & KMA_NOENCRYPT) {
 			bzero(CAST_DOWN(void *, (map_addr + pg_offset)), PAGE_SIZE);
@@ -550,9 +550,9 @@ kmem_realloc(
 	/* attempt is made to realloc a kmem_alloc'd area       */
 	vm_object_lock(object);
 	vm_map_unlock(map);
-	if (object->size != oldmapsize)
+	if (object->vo_size != oldmapsize)
 		panic("kmem_realloc");
-	object->size = newmapsize;
+	object->vo_size = newmapsize;
 	vm_object_unlock(object);
 
 	/* allocate the new pages while expanded portion of the */
@@ -574,7 +574,7 @@ kmem_realloc(
 				VM_PAGE_FREE(mem);
 			}
 		}
-		object->size = oldmapsize;
+		object->vo_size = oldmapsize;
 		vm_object_unlock(object);
 		vm_object_deallocate(object);
 		return kr;
@@ -598,7 +598,7 @@ kmem_realloc(
 				VM_PAGE_FREE(mem);
 			}
 		}
-		object->size = oldmapsize;
+		object->vo_size = oldmapsize;
 		vm_object_unlock(object);
 		vm_object_deallocate(object);
 		return (kr);
@@ -812,10 +812,7 @@ kmem_remap_pages(
 	    mem->pmapped = TRUE;
 	    mem->wpmapped = TRUE;
 
-	    PMAP_ENTER(kernel_pmap, map_start, mem, protection, 
-			((unsigned int)(mem->object->wimg_bits))
-					& VM_WIMG_MASK,
-			TRUE);
+	    PMAP_ENTER(kernel_pmap, map_start, mem, protection, 0, TRUE);
 
 	    map_start += PAGE_SIZE;
 	    offset += PAGE_SIZE;
@@ -892,7 +889,6 @@ kmem_suballoc(
 	return (KERN_SUCCESS);
 }
 
-
 /*
  *	kmem_init:
  *
@@ -910,25 +906,35 @@ kmem_init(
 	map_start = vm_map_trunc_page(start);
 	map_end = vm_map_round_page(end);
 
-	kernel_map = vm_map_create(pmap_kernel(),VM_MIN_KERNEL_ADDRESS,
+	kernel_map = vm_map_create(pmap_kernel(),VM_MIN_KERNEL_AND_KEXT_ADDRESS,
 			    map_end, FALSE);
 	/*
 	 *	Reserve virtual memory allocated up to this time.
 	 */
-	if (start != VM_MIN_KERNEL_ADDRESS) {
+	if (start != VM_MIN_KERNEL_AND_KEXT_ADDRESS) {
 		vm_map_offset_t map_addr;
+		kern_return_t kr;
  
-		map_addr = VM_MIN_KERNEL_ADDRESS;
-		(void) vm_map_enter(kernel_map,
-			    &map_addr, 
-			    (vm_map_size_t)(map_start - VM_MIN_KERNEL_ADDRESS),
-			    (vm_map_offset_t) 0,
-			    VM_FLAGS_ANYWHERE | VM_FLAGS_NO_PMAP_CHECK,
-			    VM_OBJECT_NULL, 
-			    (vm_object_offset_t) 0, FALSE,
-			    VM_PROT_NONE, VM_PROT_NONE,
-			    VM_INHERIT_DEFAULT);
+		map_addr = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
+		kr = vm_map_enter(kernel_map,
+			&map_addr, 
+		    	(vm_map_size_t)(map_start - VM_MIN_KERNEL_AND_KEXT_ADDRESS),
+			(vm_map_offset_t) 0,
+			VM_FLAGS_FIXED | VM_FLAGS_NO_PMAP_CHECK,
+			VM_OBJECT_NULL, 
+			(vm_object_offset_t) 0, FALSE,
+			VM_PROT_NONE, VM_PROT_NONE,
+			VM_INHERIT_DEFAULT);
+		
+		if (kr != KERN_SUCCESS) {
+			panic("kmem_init(0x%llx,0x%llx): vm_map_enter(0x%llx,0x%llx) error 0x%x\n",
+			      (uint64_t) start, (uint64_t) end,
+			      (uint64_t) VM_MIN_KERNEL_AND_KEXT_ADDRESS,
+			      (uint64_t) (map_start - VM_MIN_KERNEL_AND_KEXT_ADDRESS),
+			      kr);
+		}	
 	}
+
 	/*
 	 * Set the default global user wire limit which limits the amount of
 	 * memory that can be locked via mlock().  We set this to the total
@@ -1057,7 +1063,7 @@ vm_conflict_check(
 		obj = entry->object.vm_object;
 		obj_off = (off - entry->vme_start) + entry->offset;
 		while(obj->shadow) {
-			obj_off += obj->shadow_offset;
+			obj_off += obj->vo_shadow_offset;
 			obj = obj->shadow;
 		}
 		if((obj->pager_created) && (obj->pager == pager)) {

@@ -36,77 +36,114 @@ extern "C" {
 #if KERNEL_PRIVATE
 
 #include <sys/cdefs.h>
+#include <sys/content_protection.h>
 #include <sys/kernel_types.h>
 
-#define PROTECTION_CLASS_A 1
-#define PROTECTION_CLASS_B 2
-#define PROTECTION_CLASS_C 3
-#define PROTECTION_CLASS_D 4
-#define PROTECTION_CLASS_E 5
+#define CP_KEYSIZE 32				/* 8x4 = 32, 32x8 = 256 */
+#define CP_WRAPPEDKEYSIZE  40		/* 2x4 = 8, 8x8 = 64 */
 
-#define KEYSIZE 8				/* 8x4 = 32, 32x8 = 256 */
-#define INTEGRITYSIZE 2			/* 2x4 = 8, 8x8 = 64 */
+/* lock events from AppleKeyStore */
+#define CP_LOCKED_STATE 0		/* Device is locked */
+#define CP_UNLOCKED_STATE 1		/* Device is unlocked */
 
-#define LOCKED_STATE 0
-#define UNLOCKED_STATE 1
+#define CP_LOCKED_KEYCHAIN 0	
+#define CP_UNLOCKED_KEYCHAIN 1
 
-#define LOCKED_KEYCHAIN 0
-#define UNLOCKED_KEYCHAIN 1
+/* For struct cprotect: cp_flags */
+#define CP_NEEDS_KEYS		0x1		/* File needs persistent keys */
+#define CP_KEY_FLUSHED		0x2		/* File's unwrapped key has been purged from memory */
+#define CP_NO_XATTR			0x4		/* Key info has not been saved as EA to the FS */
+
+/* Content Protection VNOP Operation flags */
+#define CP_READ_ACCESS 	0x1
+#define CP_WRITE_ACCESS 0x2
 
 #define CONTENT_PROTECTION_XATTR_NAME	"com.apple.system.cprotect"
+#define CP_CURRENT_MAJOR_VERS 2
+#define CP_CURRENT_MINOR_VERS 0
 
-#define kEMBCKeyHandleSpecial	~1
-
-/* SLIST_HEAD(cp_list, cp_entry) cp_head = LIST_HEAD_INITIALIZER(cp_head); */
-/* struct cp_list *cprotect_list_headp;                 /\* List head *\/ */
 
 typedef struct cprotect *cprotect_t;
 typedef struct cp_wrap_func *cp_wrap_func_t;
 typedef struct cp_global_state *cp_global_state_t;
 typedef struct cp_xattr *cp_xattr_t;
 
+typedef struct cnode * cnode_ptr_t;
+//forward declare the struct.
+struct hfsmount;
 
-typedef int wrapper_t(uint32_t properties, void *key_bytes, size_t key_length, void **wrapped_data, uint32_t *wrapped_length);
-typedef	int unwrapper_t(uint32_t properties, void *wrapped_data, size_t wrapped_data_length, void **key_bytes, uint32_t *key_length);
+/* The wrappers are invoked by the AKS kext */
+typedef int wrapper_t(uint32_t properties, void *key_bytes, size_t key_length, void *wrapped_data, size_t *wrapped_length);
+typedef	int unwrapper_t(uint32_t properties, void *wrapped_data, size_t wrapped_data_length, void *key_bytes, size_t *key_length);
 
+/* 
+ * Runtime-only structure containing the content protection status 
+ * for the given file.  This is contained within the cnode 
+ */
 struct cprotect {
-	uint32_t cache_key[KEYSIZE];
-	uint32_t special_data;
-	uint32_t pclass;
-	uint8_t cache_key_flushed;
-	uint8_t lock_state;			/* lock_state: 0 means unlocked. 1 means locked */
-};
-
-struct cp_entry {
-    SLIST_ENTRY(cp_entry) cp_list;
-	struct cprotect *protected_entry;
+	uint8_t		cp_cache_key[CP_KEYSIZE];
+	uint8_t		cp_persistent_key[CP_WRAPPEDKEYSIZE];
+	uint32_t	cp_flags;
+	uint32_t	cp_pclass;
 };
 
 struct cp_wrap_func {
-	wrapper_t *wrapper;
-	unwrapper_t *unwrapper;
+	wrapper_t	*wrapper;
+	unwrapper_t	*unwrapper;
 };
 
 struct cp_global_state {
+	uint8_t	wrap_functions_set;
 	uint8_t lock_state;
-	uint8_t wrap_functions_set;
 };
 
+/*
+ * On-disk structure written as the per-file EA payload 
+ * All on-disk multi-byte fields for the CP XATTR must be stored
+ * little-endian on-disk.  This means they must be endian swapped to
+ * L.E on getxattr() and converted to LE on setxattr().	
+ */
 struct cp_xattr {
-	uint32_t persistent_class;
-	uint8_t persistent_key[32];
-	uint8_t persistent_integrity[8];
-	uint8_t xattr_version;
+	u_int16_t	xattr_major_version;
+	u_int16_t	xattr_minor_version;
+	u_int32_t	flags;
+	u_int32_t	persistent_class;
+	u_int32_t	key_size;
+	uint8_t		persistent_key[CP_WRAPPEDKEYSIZE];	
 };
 
-int cp_create_init(vnode_t, vfs_context_t);
+/* Same is true for the root EA, all fields must be written little endian. */
+struct cp_root_xattr {
+	u_int16_t major_version;
+	u_int16_t minor_version;
+	u_int64_t flags;
+	u_int32_t reserved1;
+	u_int32_t reserved2;
+	u_int32_t reserved3;
+	u_int32_t reserved4;
+};
+
+
+/* 
+ * Functions to check the status of a CP and to query 
+ * the containing filesystem to see if it is supported.
+ */
+int cp_vnode_getclass(vnode_t, int *);
+int cp_vnode_setclass(vnode_t, uint32_t);
+
 int cp_key_store_action(int);
 int cp_register_wraps(cp_wrap_func_t);
-struct cprotect *cp_vnode_entry_alloc(void);
-void cp_vnode_entry_init(vnode_t);
-int cp_vnode_entry_init_needed(vnode_t);
-struct cp_xattr * cp_vn_getxattr(vnode_t, vfs_context_t);
-int cp_vn_setxattr(vnode_t, uint32_t, vfs_context_t);
+
+int cp_entry_init(cnode_ptr_t, struct mount *);
+int cp_entry_create_keys(cnode_ptr_t);
+void cp_entry_destroy(cnode_ptr_t);
+
+cnode_ptr_t cp_get_protected_cnode(vnode_t);
+int cp_handle_vnop(cnode_ptr_t, int);
+int cp_fs_protected (mount_t);
+int cp_getrootxattr (struct hfsmount *hfsmp, struct cp_root_xattr *outxattr);
+int cp_setrootxattr (struct hfsmount *hfsmp, struct cp_root_xattr *newxattr);
+int cp_handle_relocate (cnode_ptr_t cp);
 
 #endif	/* KERNEL_PRIVATE */
 

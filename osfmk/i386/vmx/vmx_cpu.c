@@ -35,7 +35,6 @@
 #include <i386/vmx/vmx_asm.h>
 #include <i386/vmx/vmx_shims.h>
 #include <i386/vmx/vmx_cpu.h>
-#include <i386/mtrr.h>
 #include <mach/mach_host.h>             /* for host_info() */
 
 #define VMX_KPRINTF(x...) /* kprintf("vmx: " x) */
@@ -190,7 +189,7 @@ vmx_get_specs()
 	Enter VMX root operation on this CPU.
    -------------------------------------------------------------------------- */
 static void
-vmx_on(void)
+vmx_on(void *arg __unused)
 {
 	vmx_cpu_t *cpu = &current_cpu_datap()->cpu_vmx;
 	addr64_t vmxon_region_paddr;
@@ -222,7 +221,7 @@ vmx_on(void)
 	Leave VMX root operation on this CPU.
    -------------------------------------------------------------------------- */
 static void
-vmx_off(void)
+vmx_off(void *arg __unused)
 {
 	int result;
 	
@@ -322,7 +321,7 @@ host_vmxon(boolean_t exclusive)
 
 	if (do_it) {
 		vmx_allocate_vmxon_regions();
-		mp_rendezvous(NULL, (void (*)(void *))vmx_on, NULL, NULL);
+		mp_rendezvous(NULL, vmx_on, NULL, NULL);
 	}
 	return error;
 }
@@ -348,7 +347,7 @@ host_vmxoff()
 	simple_unlock(&vmx_use_count_lock);
 
 	if (do_it) {
-		mp_rendezvous(NULL, (void (*)(void *))vmx_off, NULL, NULL);
+		mp_rendezvous(NULL, vmx_off, NULL, NULL);
 		vmx_free_vmxon_regions();
 	}
 
@@ -365,7 +364,7 @@ vmx_suspend()
 {
 	VMX_KPRINTF("vmx_suspend\n");
 	if (vmx_use_count)
-		vmx_off();
+		vmx_off(NULL);
 }
 
 /* -----------------------------------------------------------------------------
@@ -378,5 +377,5 @@ vmx_resume()
 	VMX_KPRINTF("vmx_resume\n");
 	vmx_init(); /* init VMX on CPU #0 */
 	if (vmx_use_count)
-		vmx_on();
+		vmx_on(NULL);
 }

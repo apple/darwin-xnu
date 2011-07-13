@@ -99,14 +99,13 @@ typedef struct Boot_Video	Boot_Video;
 /* Boot argument structure - passed into Mach kernel at boot time.
  * "Revision" can be incremented for compatible changes
  */
-#define kBootArgsRevision		6
-#define kBootArgsVersion		1
+#define kBootArgsRevision		0
+#define kBootArgsVersion		2
 
 /* Snapshot constants of previous revisions that are supported */
 #define kBootArgsVersion1		1
-#define kBootArgsRevision1_4		4
-#define kBootArgsRevision1_5		5
-#define kBootArgsRevision1_6		6
+#define kBootArgsVersion2		2
+#define kBootArgsRevision2_0		0
 
 #define kBootArgsEfiMode32              32
 #define kBootArgsEfiMode64              64
@@ -114,6 +113,10 @@ typedef struct Boot_Video	Boot_Video;
 typedef struct boot_args {
     uint16_t    Revision;	/* Revision of boot_args structure */
     uint16_t    Version;	/* Version of boot_args structure */
+
+    uint8_t     efiMode;    /* 32 = 32-bit, 64 = 64-bit */
+    uint8_t     debugMode;  /* Bit field with behavior changes */
+    uint8_t     __reserved1[2];
 
     char        CommandLine[BOOT_LINE_LENGTH];	/* Passed in command line */
 
@@ -132,17 +135,25 @@ typedef struct boot_args {
 
     uint32_t    efiRuntimeServicesPageStart; /* physical address of defragmented runtime pages */
     uint32_t    efiRuntimeServicesPageCount;
-    uint32_t    efiSystemTable;   /* physical address of system table in runtime area */
+    uint64_t    efiRuntimeServicesVirtualPageStart; /* virtual address of defragmented runtime pages */
 
-    uint8_t     efiMode;       /* 32 = 32-bit, 64 = 64-bit */
-    uint8_t     __reserved1[3];
-    uint32_t    __reserved2[1];
+    uint32_t    efiSystemTable;   /* physical address of system table in runtime area */
+    uint32_t    __reserved2;
+
     uint32_t    performanceDataStart; /* physical address of log */
     uint32_t    performanceDataSize;
-    uint64_t    efiRuntimeServicesVirtualPageStart; /* virtual address of defragmented runtime pages */
-    uint32_t    __reserved3[2];
+
+    uint32_t    keyStoreDataStart; /* physical address of key store data */
+    uint32_t    keyStoreDataSize;
+    uint64_t	bootMemStart;
+    uint64_t	bootMemSize;
+    uint64_t    PhysicalMemorySize;
+    uint64_t    FSBFrequency;
+    uint32_t    __reserved4[734];
 
 } boot_args;
+
+extern char assert_boot_args_size_is_4096[sizeof(boot_args) == 4096 ? 1 : -1];
 
 #endif /* _PEXPERT_I386_BOOT_H */
 

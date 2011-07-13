@@ -59,6 +59,7 @@
 #include <kern/ast.h>
 #include <kern/mach_param.h>
 #include <kern/zalloc.h>
+#include <kern/extmod_statistics.h>
 #include <kern/thread.h>
 #include <kern/task.h>
 #include <kern/sched_prim.h>
@@ -314,12 +315,12 @@ act_abort(
 
 	thread_lock(thread);
 
-	if (!(thread->sched_mode & TH_MODE_ABORT)) {
-		thread->sched_mode |= TH_MODE_ABORT;
+	if (!(thread->sched_flags & TH_SFLAG_ABORT)) {
+		thread->sched_flags |= TH_SFLAG_ABORT;
 		install_special_handler_locked(thread);
 	}
 	else
-		thread->sched_mode &= ~TH_MODE_ABORTSAFELY;
+		thread->sched_flags &= ~TH_SFLAG_ABORTSAFELY;
 
 	thread_unlock(thread);
 	splx(s);
@@ -365,8 +366,8 @@ thread_abort_safely(
 		thread_lock(thread);
 		if (!thread->at_safe_point ||
 				clear_wait_internal(thread, THREAD_INTERRUPTED) != KERN_SUCCESS) {
-			if (!(thread->sched_mode & TH_MODE_ABORT)) {
-				thread->sched_mode |= TH_MODE_ISABORTED;
+			if (!(thread->sched_flags & TH_SFLAG_ABORT)) {
+				thread->sched_flags |= TH_SFLAG_ABORTED_MASK;
 				install_special_handler_locked(thread);
 			}
 		}
@@ -460,12 +461,13 @@ thread_get_state(
  *	Change thread's machine-dependent state.  Called with nothing
  *	locked.  Returns same way.
  */
-kern_return_t
-thread_set_state(
+static kern_return_t
+thread_set_state_internal(
 	register thread_t		thread,
 	int						flavor,
 	thread_state_t			state,
-	mach_msg_type_number_t	state_count)
+	mach_msg_type_number_t	state_count,
+	boolean_t				from_user)
 {
 	kern_return_t		result = KERN_SUCCESS;
 
@@ -500,11 +502,41 @@ thread_set_state(
 	else
 		result = KERN_TERMINATED;
 
+	if ((result == KERN_SUCCESS) && from_user)
+		extmod_statistics_incr_thread_set_state(thread);
+
 	thread_mtx_unlock(thread);
 
 	return (result);
 }
+
+/* No prototype, since thread_act_server.h has the _from_user version if KERNEL_SERVER */ 
+kern_return_t
+thread_set_state(
+	register thread_t		thread,
+	int						flavor,
+	thread_state_t			state,
+	mach_msg_type_number_t	state_count);
+
+kern_return_t
+thread_set_state(
+	register thread_t		thread,
+	int						flavor,
+	thread_state_t			state,
+	mach_msg_type_number_t	state_count)
+{
+	return thread_set_state_internal(thread, flavor, state, state_count, FALSE);
+}
  
+kern_return_t
+thread_set_state_from_user(
+	register thread_t		thread,
+	int						flavor,
+	thread_state_t			state,
+	mach_msg_type_number_t	state_count)
+{
+	return thread_set_state_internal(thread, flavor, state, state_count, TRUE);
+}
  
 /*
  * Kernel-internal "thread" interfaces used outside this file:
@@ -672,8 +704,8 @@ install_special_handler_locked(
 	 * a chance to do locking required to
 	 * block itself in special_handler().
 	 */
-	if (thread->sched_mode & TH_MODE_ISDEPRESSED)
-		compute_priority(thread, TRUE);
+	if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK)
+		SCHED(compute_priority)(thread, TRUE);
 
 	thread_ast_set(thread, AST_APC);
 
@@ -753,7 +785,7 @@ special_handler_continue(void)
 		spl_t			s = splsched();
 
 		thread_lock(thread);
-		if (thread->sched_mode & TH_MODE_ISDEPRESSED) {
+		if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
 			processor_t		myprocessor = thread->last_processor;
 
 			thread->sched_pri = DEPRESSPRI;
@@ -784,7 +816,7 @@ special_handler(
 
 	s = splsched();
 	thread_lock(thread);
-	thread->sched_mode &= ~TH_MODE_ISABORTED;
+	thread->sched_flags &= ~TH_SFLAG_ABORTED_MASK;
 	thread_unlock(thread);
 	splx(s);
 
@@ -816,6 +848,14 @@ special_handler(
 	thread_mtx_unlock(thread);
 }
 
+/* Prototype, see justification above */
+kern_return_t
+act_set_state(
+	thread_t				thread,
+	int						flavor,
+	thread_state_t			state,
+	mach_msg_type_number_t	count);
+
 kern_return_t
 act_set_state(
 	thread_t				thread,
@@ -827,6 +867,20 @@ act_set_state(
 	    return (KERN_INVALID_ARGUMENT);
 
     return (thread_set_state(thread, flavor, state, count));
+    
+}
+
+kern_return_t
+act_set_state_from_user(
+	thread_t				thread,
+	int						flavor,
+	thread_state_t			state,
+	mach_msg_type_number_t	count)
+{
+    if (thread == current_thread())
+	    return (KERN_INVALID_ARGUMENT);
+
+    return (thread_set_state_from_user(thread, flavor, state, count));
     
 }
 

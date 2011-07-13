@@ -106,6 +106,24 @@ struct vnodeop_desc vnop_lookup_desc = {
 	NULL
 };
 
+int vnop_compound_open_vp_offsets[] = {
+	VOPARG_OFFSETOF(struct vnop_compound_open_args, a_dvp),
+	VDESC_NO_OFFSET
+};
+
+struct vnodeop_desc vnop_compound_open_desc = {
+	0,
+	"vnop_compound_open",
+	0 | VDESC_VP0_WILLRELE,
+	vnop_compound_open_vp_offsets, 
+	VOPARG_OFFSETOF(struct vnop_compound_open_args, a_vpp),
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vnop_compound_open_args, a_cnp),
+	VOPARG_OFFSETOF(struct vnop_compound_open_args, a_context),
+	NULL
+};
+
 int vnop_create_vp_offsets[] = {
 	VOPARG_OFFSETOF(struct vnop_create_args,a_dvp),
 	VDESC_NO_OFFSET
@@ -485,6 +503,23 @@ struct vnodeop_desc vnop_remove_desc = {
 	NULL
 };
 
+int vnop_remove_extended_vp_offsets[] = {
+	VOPARG_OFFSETOF(struct vnop_remove_args,a_dvp),
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_compound_remove_desc = {
+	0,
+	"vnop_compound_remove",
+	0,
+	vnop_remove_vp_offsets,
+	VOPARG_OFFSETOF(struct vnop_compound_remove_args, a_vpp),
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vnop_remove_args, a_cnp),
+	VOPARG_OFFSETOF(struct vnop_remove_args, a_context),
+	NULL
+};
+
 int vnop_link_vp_offsets[] = {
 	VOPARG_OFFSETOF(struct vnop_link_args,a_vp),
 	VOPARG_OFFSETOF(struct vnop_link_args,a_tdvp),
@@ -523,6 +558,26 @@ struct vnodeop_desc vnop_rename_desc = {
 	NULL
 };
 
+int vnop_compound_rename_vp_offsets[] = {
+	VOPARG_OFFSETOF(struct vnop_compound_rename_args,a_fdvp),
+	VOPARG_OFFSETOF(struct vnop_compound_rename_args,a_fvpp),
+	VOPARG_OFFSETOF(struct vnop_compound_rename_args,a_tdvp),
+	VOPARG_OFFSETOF(struct vnop_compound_rename_args,a_tvpp),
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_compound_rename_desc = {
+	0,
+	"vnop_compound_rename",
+	0 | VDESC_VP0_WILLRELE | VDESC_VP1_WILLRELE | VDESC_VP2_WILLRELE | VDESC_VP3_WILLRELE,
+	vnop_compound_rename_vp_offsets,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vnop_compound_rename_args, a_fcnp),
+	VOPARG_OFFSETOF(struct vnop_compound_rename_args, a_context),
+	NULL
+};
+
 int vnop_mkdir_vp_offsets[] = {
        VOPARG_OFFSETOF(struct vnop_mkdir_args,a_dvp),
        VDESC_NO_OFFSET
@@ -540,6 +595,24 @@ struct vnodeop_desc vnop_mkdir_desc = {
        NULL
 };
 
+int vnop_compound_mkdir_vp_offsets[] = {
+       VOPARG_OFFSETOF(struct vnop_compound_mkdir_args,a_dvp),
+       VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_compound_mkdir_desc = {
+       0,
+       "vnop_compound_mkdir",
+       0 | VDESC_VP0_WILLRELE,
+       vnop_compound_mkdir_vp_offsets,
+       VOPARG_OFFSETOF(struct vnop_compound_mkdir_args, a_vpp),
+       VDESC_NO_OFFSET,
+       VDESC_NO_OFFSET,
+       VOPARG_OFFSETOF(struct vnop_compound_mkdir_args, a_cnp),
+       VOPARG_OFFSETOF(struct vnop_compound_mkdir_args, a_context),
+       NULL
+};
+
+
 int vnop_rmdir_vp_offsets[] = {
 	VOPARG_OFFSETOF(struct vnop_rmdir_args,a_dvp),
 	VOPARG_OFFSETOF(struct vnop_rmdir_args,a_vp),
@@ -555,6 +628,23 @@ struct vnodeop_desc vnop_rmdir_desc = {
 	VDESC_NO_OFFSET,
 	VOPARG_OFFSETOF(struct vnop_rmdir_args, a_cnp),
 	VOPARG_OFFSETOF(struct vnop_rmdir_args, a_context),
+	NULL
+};
+
+int vnop_compound_rmdir_vp_offsets[] = {
+	VOPARG_OFFSETOF(struct vnop_compound_rmdir_args,a_dvp),
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_compound_rmdir_desc = {
+	0,
+	"vnop_compound_rmdir",
+	0 | VDESC_VP0_WILLRELE | VDESC_VP1_WILLRELE,
+	vnop_rmdir_vp_offsets,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vnop_compound_rmdir_args, a_cnp),
+	VOPARG_OFFSETOF(struct vnop_compound_rmdir_args, a_context),
 	NULL
 };
 
@@ -1004,6 +1094,7 @@ struct vnodeop_desc *vfs_op_descs[] = {
 	&vnop_mknod_desc,
 	&vnop_whiteout_desc,
 	&vnop_open_desc,
+	&vnop_compound_open_desc,
 	&vnop_close_desc,
 	&vnop_access_desc,
 	&vnop_getattr_desc,
@@ -1021,10 +1112,14 @@ struct vnodeop_desc *vfs_op_descs[] = {
 	&vnop_mnomap_desc,
 	&vnop_fsync_desc,
 	&vnop_remove_desc,
+	&vnop_compound_remove_desc,
 	&vnop_link_desc,
 	&vnop_rename_desc,
+	&vnop_compound_rename_desc,
 	&vnop_mkdir_desc,
+	&vnop_compound_mkdir_desc,
 	&vnop_rmdir_desc,
+	&vnop_compound_rmdir_desc,
 	&vnop_symlink_desc,
 	&vnop_readdir_desc,
 	&vnop_readdirattr_desc,

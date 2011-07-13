@@ -1,0 +1,87 @@
+.\"	$Darwin$
+.\"
+.\" Copyright (c) 1999-2002 Apple Computer, Inc. All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" The contents of this file constitute Original Code as defined in and
+.\" are subject to the Apple Public Source License Version 1.1 (the
+.\" "License").  You may not use this file except in compliance with the
+.\" License.  Please obtain a copy of the License at
+.\" http://www.apple.com/publicsource and read it before using this file.
+.\" 
+.\" This Original Code and all software distributed under the License are
+.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+.\" License for the specific language governing rights and limitations
+.\" under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.Dd August 31, 2006
+.Dt SHM_UNLINK 2
+.Os Darwin
+.Sh NAME
+.Nm shm_unlink
+.Nd remove shared memory object
+.Sh SYNOPSIS
+.Fd #include <sys/mman.h>
+.Ft int
+.Fn shm_unlink "const char *name"
+.Sh DESCRIPTION
+The
+.Fn shm_unlink
+function disassociates the shared memory object specified by
+.Fa name
+from that name.
+The resources associated with the shared memory object remain intact
+until the last file descriptor reference is removed, e.g., by
+.Xr close 2
+or
+.Xr munmap 2 ,
+at which point the resources are reclaimed
+(if no references exist at the time of the call to
+.Fn shm_unlink ,
+the resources are reclaimed immediately).
+The name can only be reused
+when it is bound to a new shared memory object with a call to
+.Xr shm_open 2
+with the
+.Dv O_CREAT
+flag.
+.Sh RETURN VALUES
+Upon successful completion, a value of 0 is returned.
+Otherwise, a value of -1 is returned and
+.Va errno
+is set to indicate the error,
+and the named shared memory object will remain unchanged.
+.Sh ERRORS
+The
+.Fn shm_unlink
+succeeds unless:
+.Bl -tag -width Er
+.It Bq Er EACCES
+Permission is denied to be remove the object.
+.It Bq Er ENAMETOOLONG
+.Fa name
+exceeded the name size limit.
+This is currently
+.Dv PSHMNAMLEN
+characters (defined in
+.In sys/posix_shm.h ) ,
+but this may change in the future.
+.It Bq Er ENOENT
+The named object does not exist.
+.El
+.Sh SEE ALSO
+.Xr close 2 ,
+.Xr mmap 2 ,
+.Xr munmap 2 ,
+.Xr shm_open 2 ,
+.Xr shmat 2 ,
+.Xr shmctl 2
+.Sh HISTORY
+.Fn shm_open
+is specified in the POSIX Realtime Extension (1003.1b-1993/1003.1i-1995).

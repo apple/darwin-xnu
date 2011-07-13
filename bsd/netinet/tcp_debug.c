@@ -96,7 +96,7 @@
 
 #if TCPDEBUG
 __private_extern__ int	tcpconsdebug = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, tcpconsdebug, CTLFLAG_RW, 
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, tcpconsdebug, CTLFLAG_RW | CTLFLAG_LOCKED,
     &tcpconsdebug, 0, "Turn tcp debugging on or off");
 #endif
 

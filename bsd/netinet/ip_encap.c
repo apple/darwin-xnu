@@ -259,9 +259,7 @@ encap4_input(m, off)
 
 #if INET6
 int
-encap6_input(mp, offp)
-	struct mbuf **mp;
-	int *offp;
+encap6_input(struct mbuf **mp, int *offp, int proto)
 {
 	struct mbuf *m = *mp;
 	struct ip6_hdr *ip6;
@@ -269,10 +267,8 @@ encap6_input(mp, offp)
 	const struct ip6protosw *psw;
 	struct encaptab *ep, *match;
 	int prio, matchprio;
-	int proto;
 
 	ip6 = mtod(m, struct ip6_hdr *);
-	proto = ip6->ip6_nxt;
 
 	bzero(&s, sizeof(s));
 	s.sin6_family = AF_INET6;
@@ -315,7 +311,7 @@ encap6_input(mp, offp)
 		psw = (const struct ip6protosw *)match->psw;
 		if (psw && psw->pr_input) {
 			encap_fillarg(m, match);
-			return (*psw->pr_input)(mp, offp);
+			return (*psw->pr_input)(mp, offp, proto);
 		} else {
 			m_freem(m);
 			return IPPROTO_DONE;
@@ -323,7 +319,7 @@ encap6_input(mp, offp)
 	}
 
 	/* last resort: inject to raw socket */
-	return rip6_input(mp, offp);
+	return rip6_input(mp, offp, proto);
 }
 #endif
 
@@ -532,8 +528,8 @@ encap_fillarg(
 	struct m_tag	*tag;
 	struct encaptabtag *et;
 	
-	tag = m_tag_alloc(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_ENCAP,
-					  sizeof(struct encaptabtag), M_WAITOK);
+	tag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_ENCAP,
+					  sizeof(struct encaptabtag), M_WAITOK, m);
 	
 	if (tag != NULL) {
 		et = (struct encaptabtag*)(tag + 1);

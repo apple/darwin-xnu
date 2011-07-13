@@ -72,6 +72,8 @@ OPTIONS/stack_usage		optional stack_usage
 OPTIONS/config_dtrace		optional config_dtrace
 OPTIONS/config_counters		optional config_counters
 
+OPTIONS/no_kextd		optional no_kextd
+
 # Default pager and system pager files, to be moved to separate component
  
 osfmk/default_pager/default_pager.c	standard
@@ -93,7 +95,7 @@ osfmk/default_pager/dp_memory_object.c	standard
 #
 # kextd files
 #
-./kextd/kextd_mach.c				standard
+./kextd/kextd_mach.c				optional not no_kextd
 
 #
 # UserNotification files
@@ -152,13 +154,14 @@ osfmk/kern/clock_oldops.c		standard
 osfmk/kern/counters.c			standard
 osfmk/kern/debug.c			standard
 osfmk/kern/exception.c		standard
+osfmk/kern/extmod_statistics.c		standard
 osfmk/kern/host.c			standard
 osfmk/kern/host_notify.c		standard
 osfmk/kern/ipc_clock.c		standard
 osfmk/kern/ipc_host.c			standard
 osfmk/kern/ipc_kobject.c		standard
 osfmk/kern/ipc_mig.c			standard
-osfmk/kern/ipc_misc.c			optional config_embedded
+osfmk/kern/ipc_misc.c			standard
 osfmk/kern/ipc_sync.c			standard
 osfmk/kern/ipc_tt.c			standard
 osfmk/kern/kalloc.c			standard
@@ -176,6 +179,9 @@ osfmk/kern/processor_data.c		standard
 osfmk/kern/queue.c			standard
 osfmk/kern/sched_average.c		standard
 osfmk/kern/sched_prim.c		standard
+osfmk/kern/sched_proto.c	optional config_sched_proto
+osfmk/kern/sched_grrr.c	optional config_sched_grrr_core
+osfmk/kern/sched_fixedpriority.c	optional config_sched_fixedpriority
 osfmk/kern/security.c		optional config_macf
 osfmk/kern/stack.c			standard
 osfmk/kern/startup.c			standard
@@ -235,6 +241,7 @@ osfmk/pmc/pmc.c				standard
 ./mach/security_server.c		optional config_macf
 
 osfmk/vm/bsd_vm.c			optional mach_bsd
+osfmk/vm/default_freezer.c		optional config_freeze
 osfmk/vm/device_vm.c			standard
 osfmk/vm/memory_object.c		standard
 osfmk/vm/vm_debug.c			standard
@@ -243,6 +250,9 @@ osfmk/vm/vm_fault.c			standard
 osfmk/vm/vm_init.c			standard
 osfmk/vm/vm_kern.c			standard
 osfmk/vm/vm_map.c			standard
+osfmk/vm/vm_map_store.c			standard
+osfmk/vm/vm_map_store_ll.c		standard
+osfmk/vm/vm_map_store_rb.c		standard
 osfmk/vm/vm_object.c			standard
 osfmk/vm/vm_pageout.c			standard
 osfmk/vm/vm_purgeable.c			standard
@@ -280,4 +290,3 @@ osfmk/chud/chud_osfmk_callback.c	standard
 osfmk/chud/chud_thread.c		standard
 
 osfmk/console/serial_general.c	standard
-

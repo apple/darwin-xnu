@@ -36,8 +36,10 @@ struct IOHibernateVars
 {
     hibernate_page_list_t *		page_list;
     hibernate_page_list_t *		page_list_wired;
+    hibernate_page_list_t *		page_list_pal;
     class IOBufferMemoryDescriptor *    ioBuffer;
     class IOBufferMemoryDescriptor *    srcBuffer;
+    class IOBufferMemoryDescriptor *    handoffBuffer;
     class IOMemoryDescriptor *          previewBuffer;
     OSData *          			previewData;
     OSData *		 		fileExtents;
@@ -52,6 +54,7 @@ struct IOHibernateVars
     uint8_t				saveBootAudioVolume;
     uint8_t				wiredCryptKey[kIOHibernateAESKeySize / 8];
     uint8_t				cryptKey[kIOHibernateAESKeySize / 8];
+    uint8_t				volumeCryptKey[kIOHibernateAESKeySize / 8];
 };
 typedef struct IOHibernateVars IOHibernateVars;
 
@@ -68,12 +71,15 @@ struct IOPolledFileIOVars
     IOByteCount 			bufferHalf;
     IOByteCount				extentRemaining;
     IOByteCount				lastRead;
-    boolean_t                           solid_state;
+    IOByteCount				readEnd;
+    uint32_t                            flags;
     uint64_t				block0;
     uint64_t				position;
     uint64_t				extentPosition;
     uint64_t				encryptStart;
     uint64_t				encryptEnd;
+    uint64_t                            cryptBytes;
+    AbsoluteTime                        cryptTime;
     IOPolledFileExtent * 		extentMap;
     IOPolledFileExtent * 		currentExtent;
     bool				io;
@@ -103,6 +109,5 @@ extern unsigned long sectSizeDATA;
 extern vm_offset_t sectINITPTB;
 #endif
 
-extern vm_offset_t gIOHibernateWakeMap;	    // ppnum
-extern vm_size_t   gIOHibernateWakeMapSize;
-
+extern ppnum_t gIOHibernateHandoffPages[];
+extern uint32_t gIOHibernateHandoffPageCount;

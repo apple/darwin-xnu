@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2008 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -57,6 +57,17 @@ extern int setPop(uint64_t time);
 #endif
 
 extern void etimer_resync_deadlines(void);
+
+extern uint32_t etimer_queue_migrate(int target_cpu);
+
+/* Kernel trace events associated with timers */
+#define DECR_TRAP_LATENCY	MACHDBG_CODE(DBG_MACH_EXCP_DECI, 0)
+#define DECR_SET_DEADLINE	MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1)
+#define DECR_TIMER_CALLOUT	MACHDBG_CODE(DBG_MACH_EXCP_DECI, 2)
+#define DECR_PM_DEADLINE	MACHDBG_CODE(DBG_MACH_EXCP_DECI, 3)
+#define DECR_TIMER_MIGRATE	MACHDBG_CODE(DBG_MACH_EXCP_DECI, 4)
+#define DECR_RDHPET		MACHDBG_CODE(DBG_MACH_EXCP_DECI, 5)
+#define DECR_SET_TSC_DEADLINE	MACHDBG_CODE(DBG_MACH_EXCP_DECI, 6)
 
 #endif /* _KERN_ETIMER_H_ */
 

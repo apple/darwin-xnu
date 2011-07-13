@@ -67,16 +67,16 @@
 #include <mach/task.h>			/* for task_suspend() */
 #include <sys/sysproto.h>		/* abused for sync() */
 #include <kern/clock.h>			/* for delay_for_interval() */
+#include <libkern/OSAtomic.h>
 
 #include <sys/kdebug.h>
 
-int system_inshutdown = 0;
+uint32_t system_inshutdown = 0;
 
 /* XXX should be in a header file somewhere, but isn't */
 extern void md_prepare_for_shutdown(int, int, char *);
 extern void (*unmountroot_pre_hook)(void);
 
-int	waittime = -1;
 unsigned int proc_shutdown_exitcount = 0;
 
 static int  sd_openlog(vfs_context_t);
@@ -109,37 +109,34 @@ static int  sd_callback1(proc_t p, void * arg);
 static int  sd_callback2(proc_t p, void * arg);
 static int  sd_callback3(proc_t p, void * arg);
 
-void
+int
 boot(int paniced, int howto, char *command)
 {
 	struct proc *p = current_proc();	/* XXX */
 	int hostboot_option=0;
-	int funnel_state;
 
-	system_inshutdown = 1;
-
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-
-       /*
-	* Temporary hack to notify the power management root domain
-	* that the system will shut down.
-	*/
+	if (!OSCompareAndSwap(0, 1, &system_inshutdown)) {
+		if ( (howto&RB_QUICK) == RB_QUICK)
+			goto force_reboot;
+		return (EBUSY);
+	}
+	/*
+	 * Temporary hack to notify the power management root domain
+	 * that the system will shut down.
+	 */
 	IOSystemShutdownNotification();
 
 	md_prepare_for_shutdown(paniced, howto, command);
 
-	if ((howto&RB_QUICK)==RB_QUICK && waittime < 0) {
-		waittime = 0;
+	if ((howto&RB_QUICK)==RB_QUICK) {
 		printf("Quick reboot...\n");
 		if ((howto&RB_NOSYNC)==0) {
 			sync(p, (void *)NULL, (int *)NULL);
 		}
 	}
-	else if ((howto&RB_NOSYNC)==0 && waittime < 0) {
+	else if ((howto&RB_NOSYNC)==0) {
 		int iter, nbusy;
 
-		waittime = 0;
-		
 		printf("syncing disks... ");
 
 		/*
@@ -150,7 +147,7 @@ boot(int paniced, int howto, char *command)
 		proc_shutdown();
 
 #if CONFIG_AUDIT
- 		audit_shutdown();
+		audit_shutdown();
 #endif
 
 		if (unmountroot_pre_hook != NULL)
@@ -162,7 +159,7 @@ boot(int paniced, int howto, char *command)
 		 * Now that all processes have been terminated and system is
 		 * sync'ed up, suspend init
 		 */
-
+			
 		if (initproc && p != initproc)
 			task_suspend(initproc->task);
 
@@ -187,7 +184,6 @@ boot(int paniced, int howto, char *command)
 		else
 			printf("done\n");
 	}
-
 #if NETWORKING
 	/*
 	 * Can't just use an splnet() here to disable the network
@@ -197,6 +193,7 @@ boot(int paniced, int howto, char *command)
 	if_down_all();
 #endif /* NETWORKING */
 
+force_reboot:
 	if (howto & RB_POWERDOWN)
 		hostboot_option = HOST_REBOOT_HALT;
 	if (howto & RB_HALT)
@@ -204,13 +201,15 @@ boot(int paniced, int howto, char *command)
 	if (paniced == RB_PANIC)
 		hostboot_option = HOST_REBOOT_HALT;
 
-    if (howto & RB_UPSDELAY) {
-        hostboot_option = HOST_REBOOT_UPSDELAY;
-    }
+	if (howto & RB_UPSDELAY) {
+		hostboot_option = HOST_REBOOT_UPSDELAY;
+	}
 
 	host_reboot(host_priv_self(), hostboot_option);
-
-	thread_funnel_set(kernel_flock, FALSE);
+	/*
+	 * should not be reached
+	 */
+	return (0);
 }
 
 static int

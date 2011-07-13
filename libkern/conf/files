@@ -4,6 +4,7 @@ OPTIONS/libkerncpp					optional libkerncpp
 OPTIONS/kdebug						optional kdebug
 OPTIONS/gprof						optional gprof
 OPTIONS/config_dtrace				optional config_dtrace
+OPTIONS/hibernation				optional hibernation
 OPTIONS/networking					optional networking
 OPTIONS/crypto						optional crypto
 OPTIONS/zlib						optional zlib
@@ -72,9 +73,9 @@ libkern/kxld/kxld_demangle.c    optional config_kxld
 libkern/kxld/kxld_dict.c        optional config_kxld
 libkern/kxld/kxld_kext.c        optional config_kxld
 libkern/kxld/kxld_reloc.c       optional config_kxld
+libkern/kxld/kxld_object.c      optional config_kxld
 libkern/kxld/kxld_sect.c        optional config_kxld
 libkern/kxld/kxld_seg.c         optional config_kxld
-libkern/kxld/kxld_state.c       optional config_kxld
 libkern/kxld/kxld_sym.c         optional config_kxld
 libkern/kxld/kxld_symtab.c      optional config_kxld
 libkern/kxld/kxld_util.c        optional config_kxld

@@ -84,7 +84,7 @@ typedef struct decmpfs_cnode {
 	uint32_t cmp_type;
 	uint32_t lockcount;
 	void    *lockowner;              /* cnode's lock owner (if a thread is currently holding an exclusive lock) */
-    uint64_t uncompressed_size;
+    uint64_t uncompressed_size __attribute__((aligned(8)));
     lck_rw_t compressed_data_lock;
 #if !DECMPFS_SUPPORTS_SWAP64
     /* we need a lock since we can't atomically fetch/set 64 bits */

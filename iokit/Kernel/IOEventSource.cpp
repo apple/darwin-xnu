@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2000, 2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -40,6 +40,7 @@ HISTORY
 #define super OSObject
 
 OSDefineMetaClassAndAbstractStructors(IOEventSource, OSObject)
+
 OSMetaClassDefineReservedUnused(IOEventSource, 0);
 OSMetaClassDefineReservedUnused(IOEventSource, 1);
 OSMetaClassDefineReservedUnused(IOEventSource, 2);
@@ -49,17 +50,88 @@ OSMetaClassDefineReservedUnused(IOEventSource, 5);
 OSMetaClassDefineReservedUnused(IOEventSource, 6);
 OSMetaClassDefineReservedUnused(IOEventSource, 7);
 
+bool IOEventSource::checkForWork() { return false; }
+
 /* inline function implementations */
-void IOEventSource::signalWorkAvailable()	{ workLoop->signalWorkAvailable(); }
-void IOEventSource::openGate()			{ workLoop->openGate(); }
-void IOEventSource::closeGate()			{ workLoop->closeGate(); }
-bool IOEventSource::tryCloseGate()		{ return workLoop->tryCloseGate(); }
+
+#if IOKITSTATS
+
+#define IOStatisticsRegisterCounter() \
+do { \
+	reserved->counter = IOStatistics::registerEventSource(inOwner); \
+} while (0)
+
+#define IOStatisticsUnregisterCounter() \
+do { \
+	if (reserved) \
+		IOStatistics::unregisterEventSource(reserved->counter); \
+} while (0)
+
+#define IOStatisticsOpenGate() \
+do { \
+	IOStatistics::countOpenGate(reserved->counter); \
+} while (0)
+
+#define IOStatisticsCloseGate() \
+do { \
+	IOStatistics::countCloseGate(reserved->counter); \
+} while (0)
+
+#else
+
+#define IOStatisticsRegisterCounter()
+#define IOStatisticsUnregisterCounter()
+#define IOStatisticsOpenGate()
+#define IOStatisticsCloseGate()
+
+#endif /* IOKITSTATS */
+
+void IOEventSource::signalWorkAvailable() 
+{ 
+	workLoop->signalWorkAvailable(); 
+}
+
+void IOEventSource::openGate() 
+{ 
+	IOStatisticsOpenGate();
+	workLoop->openGate(); 
+}
+
+void IOEventSource::closeGate()	
+{ 
+	workLoop->closeGate(); 
+	IOStatisticsCloseGate(); 
+}
+
+bool IOEventSource::tryCloseGate() 
+{ 
+	bool res; 
+	if ((res = workLoop->tryCloseGate())) {
+		IOStatisticsCloseGate(); 
+	}
+	return res; 
+}
+
 int IOEventSource::sleepGate(void *event, UInt32 type)
-        { return workLoop->sleepGate(event, type); }
+{ 
+	bool res; 
+	IOStatisticsOpenGate(); 
+	res = workLoop->sleepGate(event, type); 
+	IOStatisticsCloseGate(); 
+	return res; 
+}
+
 int IOEventSource::sleepGate(void *event, AbsoluteTime deadline, UInt32 type)
-        { return workLoop->sleepGate(event, deadline, type); }
-void IOEventSource::wakeupGate(void *event, bool oneThread)
-        { workLoop->wakeupGate(event, oneThread); }
+{ 
+	bool res; 
+	IOStatisticsOpenGate(); 
+	res = workLoop->sleepGate(event, deadline, type);
+	IOStatisticsCloseGate(); 
+	return res; 
+}
+  
+void IOEventSource::wakeupGate(void *event, bool oneThread) { workLoop->wakeupGate(event, oneThread); }
+
 
 bool IOEventSource::init(OSObject *inOwner,
                          Action inAction)
@@ -75,7 +147,26 @@ bool IOEventSource::init(OSObject *inOwner,
     (void) setAction(inAction);
     enabled = true;
 
+    if(!reserved) {
+        reserved = IONew(ExpansionData, 1);
+        if (!reserved) {
+            return false;
+        }
+    }
+
+    IOStatisticsRegisterCounter();
+		
     return true;
+}
+
+void IOEventSource::free( void )
+{
+    IOStatisticsUnregisterCounter();
+	
+    if (reserved)
+		IODelete(reserved, ExpansionData, 1);
+
+    super::free();
 }
 
 IOEventSource::Action IOEventSource::getAction () const { return action; };

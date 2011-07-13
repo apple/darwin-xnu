@@ -46,38 +46,49 @@ class RootDomainUserClient : public IOUserClient
 {
     OSDeclareDefaultStructors(RootDomainUserClient)
 
+    friend class IOPMrootDomain;
 private:
     IOPMrootDomain *	fOwner;
     task_t              fOwningTask;
 
     IOReturn            secureSleepSystem( uint32_t *return_code );
     
-    IOReturn            secureSleepSystemOptions( void *p1, void *p2, void *p3,
-                                                  void *p4, void *p5, void *p6 );
+    IOReturn            secureSleepSystemOptions( const void  *inOptions, 
+                                                  IOByteCount  inOptionsSize,
+                                                  uint32_t  *returnCode);
 
     IOReturn            secureSetAggressiveness( unsigned long type, 
                                                  unsigned long newLevel, 
                                                  int *return_code );
 
     IOReturn            secureSetMaintenanceWakeCalendar(
-                                void * p1, void * p2, void * p3,
-                                void * p4, void * p5, void * p6 );
-
-    IOReturn            secureSetUserAssertionLevels(
-                                uint32_t assertBits );
+                                                IOPMCalendarStruct  *inCalendar,
+                                                uint32_t            *returnCode);
+                                                
+    IOReturn            secureSetUserAssertionLevels(uint32_t    assertionBitfield);
 
 public:
 
     virtual IOReturn clientClose( void );
     
-    virtual IOExternalMethod * getTargetAndMethodForIndex( IOService ** targetP, UInt32 index );
+    virtual IOReturn clientMemoryForType( UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory);
+    
+    virtual IOReturn externalMethod( uint32_t selector, 
+                    IOExternalMethodArguments * arguments,
+					IOExternalMethodDispatch * dispatch, 
+					OSObject * target, 
+					void * reference );
 
     virtual bool start( IOService * provider );
 
     virtual bool initWithTask(task_t owningTask, void *security_id, 
 					UInt32 type, OSDictionary * properties);
 
+    // Unused - retained for symbol compatibility
     void setPreventative(UInt32 on_off, UInt32 types_of_sleep);
+
+    // Unused - retained for symbol compatibility
+    virtual IOExternalMethod * getTargetAndMethodForIndex( IOService ** targetP, UInt32 index );
 
 };
 

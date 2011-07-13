@@ -148,6 +148,7 @@ lck_grp_t	* devfs_lck_grp;
 lck_grp_attr_t	* devfs_lck_grp_attr;
 lck_attr_t	* devfs_lck_attr;
 lck_mtx_t  	  devfs_mutex;
+lck_mtx_t  	  devfs_attr_mutex;
 
 devdirent_t *		dev_root = NULL; 	/* root of backing tree */
 struct devfs_stats	devfs_stats;		/* hold stats */
@@ -185,6 +186,7 @@ devfs_sinit(void)
 	devfs_lck_attr = lck_attr_alloc_init();
 
 	lck_mtx_init(&devfs_mutex, devfs_lck_grp, devfs_lck_attr);
+	lck_mtx_init(&devfs_attr_mutex, devfs_lck_grp, devfs_lck_attr);
 
 	DEVFS_LOCK();
         error = dev_add_entry("root", NULL, DEV_DIR, NULL, NULL, NULL, &dev_root);

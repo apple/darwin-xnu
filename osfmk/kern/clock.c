@@ -50,7 +50,7 @@
 uint32_t	hz_tick_interval = 1;
 
 
-decl_simple_lock_data(static,clock_lock)
+decl_simple_lock_data(,clock_lock)
 
 #define clock_lock()	\
 	simple_lock(&clock_lock)
@@ -72,7 +72,6 @@ decl_simple_lock_data(static,clock_lock)
  *	where CONV converts absolute time units into seconds and a fraction.
  */
 static struct clock_calend {
-
 	uint64_t	epoch;
 	uint64_t	offset;
 
@@ -161,11 +160,6 @@ clock_config(void)
 	thread_call_setup(&calend_wakecall, (thread_call_func_t)IOKitResetTime, NULL);
 
 	clock_oldconfig();
-
-	/*
-	 * Initialize the timer callouts.
-	 */
-	timer_call_initialize();
 }
 
 /*
@@ -246,6 +240,15 @@ clock_get_calendar_microtime(
 	if (clock_calend.adjdelta < 0) {
 		uint32_t	t32;
 
+		/* 
+		 * Since offset is decremented during a negative adjustment,
+		 * ensure that time increases monotonically without going
+		 * temporarily backwards.
+		 * If the delta has not yet passed, now is set to the start
+		 * of the current adjustment period; otherwise, we're between
+		 * the expiry of the delta and the next call to calend_adjust(),
+		 * and we offset accordingly.
+		 */
 		if (now > clock_calend.adjstart) {
 			t32 = (uint32_t)(now - clock_calend.adjstart);
 
@@ -305,6 +308,7 @@ clock_get_calendar_nanotime(
 	now += clock_calend.offset;
 
 	absolutetime_to_microtime(now, secs, nanosecs);
+
 	*nanosecs *= NSEC_PER_USEC;
 
 	*secs += (clock_sec_t)clock_calend.epoch;
@@ -408,6 +412,7 @@ clock_set_calendar_microtime(
 	 *	Set the new calendar epoch.
 	 */
 	clock_calend.epoch = secs;
+
 	nanoseconds_to_absolutetime((uint64_t)microsecs * NSEC_PER_USEC, &clock_calend.offset);
 
 	/*
@@ -473,6 +478,7 @@ clock_initialize_calendar(void)
 		 *	Set the new calendar epoch.
 		 */
 		clock_calend.epoch = secs;
+
 		nanoseconds_to_absolutetime((uint64_t)microsecs * NSEC_PER_USEC, &clock_calend.offset);
 
 		/*
@@ -538,7 +544,7 @@ clock_adjtime(
 	interval = calend_set_adjustment(secs, microsecs);
 	if (interval != 0) {
 		calend_adjdeadline = mach_absolute_time() + interval;
-		if (!timer_call_enter(&calend_adjcall, calend_adjdeadline))
+		if (!timer_call_enter(&calend_adjcall, calend_adjdeadline, TIMER_CALL_CRITICAL))
 			calend_adjactive++;
 	}
 	else
@@ -558,47 +564,103 @@ calend_set_adjustment(
 	int64_t			total, ototal;
 	uint32_t		interval = 0;
 
+	/* 
+	 * Compute the total adjustment time in nanoseconds.
+	 */
 	total = (int64_t)*secs * NSEC_PER_SEC + *microsecs * NSEC_PER_USEC;
 
+	/* 
+	 * Disable commpage gettimeofday().
+	 */
 	commpage_disable_timestamp();
 
+	/* 
+	 * Get current absolute time.
+	 */
 	now = mach_absolute_time();
 
+	/* 
+	 * Save the old adjustment total for later return.
+	 */
 	ototal = calend_adjtotal;
 
+	/*
+	 * Is a new correction specified?
+	 */
 	if (total != 0) {
+		/*
+		 * Set delta to the standard, small, adjustment skew.
+		 */
 		int32_t		delta = calend_adjskew;
 
 		if (total > 0) {
+			/*
+			 * Positive adjustment. If greater than the preset 'big' 
+			 * threshold, slew at a faster rate, capping if necessary.
+			 */
 			if (total > calend_adjbig)
 				delta *= 10;
 			if (delta > total)
 				delta = (int32_t)total;
 
+			/* 
+			 * Convert the delta back from ns to absolute time and store in adjoffset.
+			 */
 			nanoseconds_to_absolutetime((uint64_t)delta, &t64);
 			clock_calend.adjoffset = (uint32_t)t64;
 		}
 		else {
+			/*
+			 * Negative adjustment; therefore, negate the delta. If 
+			 * greater than the preset 'big' threshold, slew at a faster 
+			 * rate, capping if necessary.
+			 */
 			if (total < -calend_adjbig)
 				delta *= 10;
 			delta = -delta;
 			if (delta < total)
 				delta = (int32_t)total;
 
+			/* 
+			 * Save the current absolute time. Subsequent time operations occuring
+			 * during this negative correction can make use of this value to ensure 
+			 * that time increases monotonically.
+			 */
 			clock_calend.adjstart = now;
 
+			/* 
+			 * Convert the delta back from ns to absolute time and store in adjoffset.
+			 */
 			nanoseconds_to_absolutetime((uint64_t)-delta, &t64);
 			clock_calend.adjoffset = (uint32_t)t64;
 		}
 
+		/* 
+		 * Store the total adjustment time in ns. 
+		 */
 		calend_adjtotal = total;
+		
+		/* 
+		 * Store the delta for this adjustment period in ns. 
+		 */
 		clock_calend.adjdelta = delta;
 
+		/* 
+		 * Set the interval in absolute time for later return. 
+		 */
 		interval = calend_adjinterval;
 	}
-	else
+	else {
+		/* 
+		 * No change; clear any prior adjustment.
+		 */
 		calend_adjtotal = clock_calend.adjdelta = 0;
+	}
 
+	/* 
+	 * If an prior correction was in progress, return the
+	 * remaining uncorrected time from it. 
+	 */
 	if (ototal != 0) {
 		*secs = (long)(ototal / NSEC_PER_SEC);
 		*microsecs = (int)((ototal % NSEC_PER_SEC) / NSEC_PER_USEC);
@@ -627,7 +689,7 @@ calend_adjust_call(void)
 		if (interval != 0) {
 			clock_deadline_for_periodic_event(interval, mach_absolute_time(), &calend_adjdeadline);
 
-			if (!timer_call_enter(&calend_adjcall, calend_adjdeadline))
+			if (!timer_call_enter(&calend_adjcall, calend_adjdeadline, TIMER_CALL_CRITICAL))
 				calend_adjactive++;
 		}
 	}
@@ -661,21 +723,21 @@ calend_adjust(void)
 		}
 	}
 	else
-	if (delta < 0) {
-		clock_calend.offset -= clock_calend.adjoffset;
+		if (delta < 0) {
+			clock_calend.offset -= clock_calend.adjoffset;
 
-		calend_adjtotal -= delta;
-		if (delta < calend_adjtotal) {
-			clock_calend.adjdelta = delta = (int32_t)calend_adjtotal;
+			calend_adjtotal -= delta;
+			if (delta < calend_adjtotal) {
+				clock_calend.adjdelta = delta = (int32_t)calend_adjtotal;
 
-			nanoseconds_to_absolutetime((uint64_t)-delta, &t64);
-			clock_calend.adjoffset = (uint32_t)t64;
+				nanoseconds_to_absolutetime((uint64_t)-delta, &t64);
+				clock_calend.adjoffset = (uint32_t)t64;
+			}
+
+			if (clock_calend.adjdelta != 0)
+				clock_calend.adjstart = now;
 		}
 
-		if (clock_calend.adjdelta != 0)
-			clock_calend.adjstart = now;
-	}
-	
 	if (clock_calend.adjdelta != 0)
 		interval = calend_adjinterval;
 

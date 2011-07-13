@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -77,7 +77,7 @@ extern "C" {
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/queue.h>
-#include <sys/tree.h>
+#include <libkern/tree.h>
 
 #include <net/radix.h>
 #include <netinet/in.h>
@@ -1771,6 +1771,55 @@ struct pfioc_states_64 {
 };
 #endif /* KERNEL */
 
+#define PFTOK_PROCNAME_LEN    64
+#pragma pack(1)
+struct pfioc_token {
+	u_int64_t			token_value;
+	u_int64_t			timestamp;
+	pid_t				pid;
+	char				proc_name[PFTOK_PROCNAME_LEN];
+};
+#pragma pack()
+
+struct pfioc_kernel_token {
+	SLIST_ENTRY(pfioc_kernel_token)	next;
+	struct pfioc_token		token;
+};
+
+struct pfioc_remove_token {
+	u_int64_t                token_value;
+	u_int64_t                refcount;
+};
+
+struct pfioc_tokens {
+	int	size;
+	union {
+		caddr_t				pgtu_buf;
+		struct pfioc_token		*pgtu_tokens;
+	} pgt_u __attribute__((aligned(8)));
+#define pgt_buf		pgt_u.pgtu_buf
+#define pgt_tokens	pgt_u.pgtu_tokens
+};
+
+#ifdef KERNEL
+struct pfioc_tokens_32 {
+	int	size;
+	union {
+		user32_addr_t		pgtu_buf;
+		user32_addr_t		pgtu_tokens;
+	} pgt_u __attribute__((aligned(8)));
+};
+
+struct pfioc_tokens_64 {
+	int	size;
+	union {
+		user64_addr_t		pgtu_buf;
+		user64_addr_t		pgtu_tokens;
+	} pgt_u __attribute__((aligned(8)));
+};
+#endif /* KERNEL */
+
+
 struct pfioc_src_nodes {
 	int	psn_len;
 	union {
@@ -1859,6 +1908,7 @@ struct pfioc_trans_64 {
 	user64_addr_t	 array __attribute__((aligned(8)));
 };
 #endif /* KERNEL */
+
 
 #define PFR_FLAG_ATOMIC		0x00000001
 #define PFR_FLAG_DUMMY		0x00000002
@@ -1955,12 +2005,15 @@ struct pfioc_iface_64 {
 #define DIOCSTART	_IO  ('D',  1)
 #define DIOCSTOP	_IO  ('D',  2)
 #define DIOCADDRULE	_IOWR('D',  4, struct pfioc_rule)
+#define DIOCGETSTARTERS	_IOWR('D',  5, struct pfioc_tokens)
 #define DIOCGETRULES	_IOWR('D',  6, struct pfioc_rule)
 #define DIOCGETRULE	_IOWR('D',  7, struct pfioc_rule)
-/* XXX cut 8 - 17 */
+#define DIOCSTARTREF	_IOR ('D',  8, u_int64_t)
+#define DIOCSTOPREF	_IOWR('D',  9, struct pfioc_remove_token)
+/* XXX cut 10 - 17 */
 #define DIOCCLRSTATES	_IOWR('D', 18, struct pfioc_state_kill)
 #define DIOCGETSTATE	_IOWR('D', 19, struct pfioc_state)
-#define DIOCSETSTATUSIF _IOWR('D', 20, struct pfioc_if)
+#define DIOCSETSTATUSIF	_IOWR('D', 20, struct pfioc_if)
 #define DIOCGETSTATUS	_IOWR('D', 21, struct pf_status)
 #define DIOCCLRSTATUS	_IO  ('D', 22)
 #define DIOCNATLOOK	_IOWR('D', 23, struct pfioc_natlook)
@@ -1995,23 +2048,23 @@ struct pfioc_iface_64 {
 #define	DIOCRDELTABLES	_IOWR('D', 62, struct pfioc_table)
 #define	DIOCRGETTABLES	_IOWR('D', 63, struct pfioc_table)
 #define	DIOCRGETTSTATS	_IOWR('D', 64, struct pfioc_table)
-#define DIOCRCLRTSTATS  _IOWR('D', 65, struct pfioc_table)
+#define DIOCRCLRTSTATS	_IOWR('D', 65, struct pfioc_table)
 #define	DIOCRCLRADDRS	_IOWR('D', 66, struct pfioc_table)
 #define	DIOCRADDADDRS	_IOWR('D', 67, struct pfioc_table)
 #define	DIOCRDELADDRS	_IOWR('D', 68, struct pfioc_table)
 #define	DIOCRSETADDRS	_IOWR('D', 69, struct pfioc_table)
 #define	DIOCRGETADDRS	_IOWR('D', 70, struct pfioc_table)
 #define	DIOCRGETASTATS	_IOWR('D', 71, struct pfioc_table)
-#define DIOCRCLRASTATS  _IOWR('D', 72, struct pfioc_table)
+#define DIOCRCLRASTATS	_IOWR('D', 72, struct pfioc_table)
 #define	DIOCRTSTADDRS	_IOWR('D', 73, struct pfioc_table)
 #define	DIOCRSETTFLAGS	_IOWR('D', 74, struct pfioc_table)
 #define DIOCRINADEFINE	_IOWR('D', 77, struct pfioc_table)
 #define DIOCOSFPFLUSH	_IO('D', 78)
 #define DIOCOSFPADD	_IOWR('D', 79, struct pf_osfp_ioctl)
 #define DIOCOSFPGET	_IOWR('D', 80, struct pf_osfp_ioctl)
-#define DIOCXBEGIN      _IOWR('D', 81, struct pfioc_trans)
-#define DIOCXCOMMIT     _IOWR('D', 82, struct pfioc_trans)
-#define DIOCXROLLBACK   _IOWR('D', 83, struct pfioc_trans)
+#define DIOCXBEGIN	_IOWR('D', 81, struct pfioc_trans)
+#define DIOCXCOMMIT	_IOWR('D', 82, struct pfioc_trans)
+#define DIOCXROLLBACK	_IOWR('D', 83, struct pfioc_trans)
 #define DIOCGETSRCNODES	_IOWR('D', 84, struct pfioc_src_nodes)
 #define DIOCCLRSRCNODES	_IO('D', 85)
 #define DIOCSETHOSTID	_IOWR('D', 86, u_int32_t)
@@ -2158,6 +2211,7 @@ __private_extern__ int pfr_pool_get(struct pfr_ktable *, int *,
     struct pf_addr *, struct pf_addr **, struct pf_addr **, sa_family_t);
 __private_extern__ void pfr_dynaddr_update(struct pfr_ktable *,
     struct pfi_dynaddr *);
+__private_extern__ void pfr_table_copyin_cleanup(struct pfr_table *);
 __private_extern__ struct pfr_ktable *pfr_attach_table(struct pf_ruleset *,
     char *);
 __private_extern__ void pfr_detach_table(struct pfr_ktable *);
@@ -2247,6 +2301,9 @@ __private_extern__ void pf_ifnet_hook(struct ifnet *, int);
 __private_extern__ struct pf_anchor_global pf_anchors;
 __private_extern__ struct pf_anchor pf_main_anchor;
 #define pf_main_ruleset	pf_main_anchor.ruleset
+
+__private_extern__ int pf_is_enabled;
+#define PF_IS_ENABLED (pf_is_enabled != 0)
 
 /* these ruleset functions can be linked into userland programs (pfctl) */
 __private_extern__ int pf_get_ruleset_number(u_int8_t);

@@ -195,6 +195,20 @@ typedef struct task_absolutetime_info	*task_absolutetime_info_t;
 #define TASK_ABSOLUTETIME_INFO_COUNT	((mach_msg_type_number_t) \
 		(sizeof (task_absolutetime_info_data_t) / sizeof (natural_t)))
 
+#define TASK_KERNELMEMORY_INFO	7
+
+struct task_kernelmemory_info {
+	uint64_t		total_palloc;	/* private kernel mem alloc'ed */
+	uint64_t		total_pfree;	/* private kernel mem freed */
+	uint64_t		total_salloc;	/* shared kernel mem alloc'ed */
+	uint64_t		total_sfree;	/* shared kernel mem freed */
+};
+
+typedef struct task_kernelmemory_info	task_kernelmemory_info_data_t;
+typedef struct task_kernelmemory_info	*task_kernelmemory_info_t;
+#define TASK_KERNELMEMORY_INFO_COUNT	((mach_msg_type_number_t) \
+		(sizeof (task_kernelmemory_info_data_t) / sizeof (natural_t)))
+
 #define TASK_SECURITY_TOKEN		13
 #define TASK_SECURITY_TOKEN_COUNT	((mach_msg_type_number_t) \
 		(sizeof(security_token_t) / sizeof(natural_t)))
@@ -217,16 +231,30 @@ typedef struct task_affinity_tag_info	*task_affinity_tag_info_t;
 #define TASK_AFFINITY_TAG_INFO_COUNT	\
 		(sizeof(task_affinity_tag_info_data_t) / sizeof(natural_t))
 
-#define TASK_DYLD_INFO			17	/* This is experimental. */
+#define TASK_DYLD_INFO			17
 
 struct task_dyld_info {
 	mach_vm_address_t	all_image_info_addr;
 	mach_vm_size_t		all_image_info_size;
+	integer_t		all_image_info_format;		
 };
 typedef struct task_dyld_info	task_dyld_info_data_t;
 typedef struct task_dyld_info	*task_dyld_info_t;
 #define TASK_DYLD_INFO_COUNT	\
     		(sizeof(task_dyld_info_data_t) / sizeof(natural_t))
+#define TASK_DYLD_ALL_IMAGE_INFO_32	0	/* format value */
+#define TASK_DYLD_ALL_IMAGE_INFO_64	1	/* format value */
+
+#define TASK_EXTMOD_INFO			18
+
+struct task_extmod_info {
+	unsigned char	task_uuid[16];
+	vm_extmod_statistics_data_t		extmod_statistics;
+};
+typedef struct task_extmod_info	task_extmod_info_data_t;
+typedef struct task_extmod_info	*task_extmod_info_t;
+#define TASK_EXTMOD_INFO_COUNT	\
+    		(sizeof(task_extmod_info_data_t) / sizeof(natural_t))
 
 #pragma pack()
 

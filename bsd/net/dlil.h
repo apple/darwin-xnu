@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -24,12 +24,6 @@
  * limitations under the License.
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
- */
-/*
- *	Copyright (c) 1999 Apple Computer, Inc. 
- *
- *	Data Link Inteface Layer
- *	Author: Ted Walker
  */
 #ifndef DLIL_H
 #define DLIL_H
@@ -82,22 +76,22 @@ struct sockaddr_dl;
 
 #endif
 
-#ifdef BSD_KERNEL_PRIVATE
-struct ifnet_stat_increment_param;
 struct iff_filter;
 
+#define	DLIL_THREADNAME_LEN	32
+
 struct dlil_threading_info {
-	mbuf_t 		mbuf_head;	/* start of mbuf list from if */
-	mbuf_t 		mbuf_tail;
-	u_int32_t 	mbuf_count;
+	decl_lck_mtx_data(, input_lck);
+	lck_grp_t	*lck_grp;	/* lock group (for lock stats) */
+	mbuf_t		mbuf_head;	/* start of mbuf list from if */
+	mbuf_t		mbuf_tail;
+	u_int32_t	mbuf_count;
 	boolean_t	net_affinity;	/* affinity set is available */
-	u_int32_t 	input_waiting;	/* DLIL condition of thread */
+	u_int32_t	input_waiting;	/* DLIL condition of thread */
 	struct thread	*input_thread;	/* thread data for this input */
 	struct thread	*workloop_thread; /* current workloop thread */
 	u_int32_t	tag;		/* current affinity tag */
-	lck_mtx_t	*input_lck;	
-	lck_grp_t	*lck_grp;	/* lock group (for lock stats) */
-	char 		input_name[32];		 
+	char		input_name[DLIL_THREADNAME_LEN];
 #if IFNET_INPUT_SANITY_CHK
 	u_int32_t	input_wake_cnt;	/* number of times the thread was awaken with packets to process */
 	u_long		input_mbuf_cnt;	/* total number of mbuf packets processed by this thread */
@@ -105,8 +99,8 @@ struct dlil_threading_info {
 };
 
 /*
-	The following are shared with kpi_protocol.c so that it may wakeup
-	the input thread to run through packets queued for protocol input.
+ * The following are shared with kpi_protocol.c so that it may wakeup
+ * the input thread to run through packets queued for protocol input.
 */
 #define	DLIL_INPUT_RUNNING	0x80000000
 #define	DLIL_INPUT_WAITING	0x40000000
@@ -114,79 +108,52 @@ struct dlil_threading_info {
 #define	DLIL_PROTO_WAITING	0x10000000
 #define	DLIL_INPUT_TERMINATE	0x08000000
 
-void dlil_init(void);
+extern void dlil_init(void);
 
-errno_t dlil_set_bpf_tap(ifnet_t ifp, bpf_tap_mode mode,
-						 bpf_packet_func callback);
+extern errno_t dlil_set_bpf_tap(ifnet_t, bpf_tap_mode, bpf_packet_func);
 
 /*
- * Send arp internal bypasses the check for
- * IPv4LL.
+ * Send arp internal bypasses the check for IPv4LL.
  */
-errno_t
-dlil_send_arp_internal(
-	ifnet_t	ifp,
-	u_int16_t arpop,
-	const struct sockaddr_dl* sender_hw,
-	const struct sockaddr* sender_proto,
-	const struct sockaddr_dl* target_hw,
-	const struct sockaddr* target_proto);
+extern errno_t dlil_send_arp_internal(ifnet_t, u_int16_t,
+    const struct sockaddr_dl *, const struct sockaddr *,
+    const struct sockaddr_dl *, const struct sockaddr *);
 
-int
-dlil_output(
-	ifnet_t					ifp,
-	protocol_family_t		proto_family,
-	mbuf_t					packetlist,
-	void					*route,
-	const struct sockaddr	*dest,
-	int						raw);
+extern int dlil_output(ifnet_t, protocol_family_t, mbuf_t, void *,
+    const struct sockaddr *, int);
 
-errno_t
-dlil_resolve_multi(
-	struct ifnet *ifp,
-	const struct sockaddr *proto_addr,
-	struct sockaddr *ll_addr,
-	size_t ll_len);
+extern void dlil_input_packet_list(struct ifnet *, struct mbuf *);
 
-errno_t
-dlil_send_arp(
-	ifnet_t	ifp,
-	u_int16_t arpop,
-	const struct sockaddr_dl* sender_hw,
-	const struct sockaddr* sender_proto,
-	const struct sockaddr_dl* target_hw,
-	const struct sockaddr* target_proto);
+extern errno_t dlil_resolve_multi(struct ifnet *,
+    const struct sockaddr *, struct sockaddr *, size_t);
 
-int dlil_attach_filter(ifnet_t ifp, const struct iff_filter *if_filter,
-					   interface_filter_t *filter_ref);
-void dlil_detach_filter(interface_filter_t filter);
-int dlil_detach_protocol(ifnet_t ifp, u_int32_t protocol);
+extern errno_t dlil_send_arp(ifnet_t, u_int16_t, const struct sockaddr_dl *,
+    const struct sockaddr *, const struct sockaddr_dl *,
+    const struct sockaddr *);
+
+extern int dlil_attach_filter(ifnet_t, const struct iff_filter *,
+    interface_filter_t *);
+extern void dlil_detach_filter(interface_filter_t);
+
 extern void dlil_proto_unplumb_all(ifnet_t);
 
-#endif /* BSD_KERNEL_PRIVATE */
+extern void dlil_post_msg(struct ifnet *, u_int32_t, u_int32_t,
+    struct net_event_data *, u_int32_t);
 
-void
-dlil_post_msg(struct ifnet *ifp,u_int32_t event_subclass, u_int32_t event_code, 
-		   struct net_event_data *event_data, u_int32_t event_data_len);
-
-/* 
+/*
  * dlil_if_acquire is obsolete. Use ifnet_allocate.
  */
-
-int dlil_if_acquire(u_int32_t family, const void *uniqueid, size_t uniqueid_len, 
-			struct ifnet **ifp);
-			
-
-/* 
+extern int dlil_if_acquire(u_int32_t, const void *, size_t, struct ifnet **);
+/*
  * dlil_if_release is obsolete. The equivalent is called automatically when
  * an interface is detached.
  */
+extern void dlil_if_release(struct ifnet *ifp);
 
-void dlil_if_release(struct ifnet *ifp);
-
-#if IFNET_ROUTE_REFCNT
 extern u_int32_t ifnet_aggressive_drainers;
-#endif /* IFNET_ROUTE_REFCNT */
+
+extern errno_t dlil_if_ref(struct ifnet *);
+extern errno_t dlil_if_free(struct ifnet *);
 
 #endif /* KERNEL_PRIVATE */
 #endif /* KERNEL */

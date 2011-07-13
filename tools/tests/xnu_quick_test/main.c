@@ -119,6 +119,11 @@ struct test_entry   g_tests[] =
 	{1, &message_queue_tests, NULL, "msgctl, msgget, msgrcv, msgsnd"},
 	{1, &data_exec_tests, NULL, "data/stack execution"},
 	{1, &machvm_tests, NULL, "Mach VM calls"},
+	{1, &commpage_data_tests, NULL, "Commpage data"},
+#if defined(i386) || defined(__x86_64__)
+	{1, &atomic_fifo_queue_test, NULL, "OSAtomicFifoEnqueue, OSAtomicFifoDequeue"},
+#endif
+	{1, &sched_tests, NULL, "Scheduler tests"},
 	{0, NULL, NULL, "last one"}
 };
 
@@ -136,11 +141,13 @@ int		g_skip_setuid_tests = 0;
 int		g_xilog_active = 0;
 const char *	g_cmd_namep;
 char		g_target_path[ PATH_MAX ];
-int		g_is_under_rosetta = 0;
 int		g_is_single_user = 0;
+int		g_testbots_active = 0;
  
 int main( int argc, const char * argv[] ) 
 {
+	#pragma unused(argc)
+	#pragma unused(argv)
 	int				my_tests_count, i;
 	int				err;
 	int				my_failures = 0;
@@ -255,20 +262,16 @@ int main( int argc, const char * argv[] )
 
 	/* done parsing.
 	 */
-    
-#ifdef __ppc__
-	/* determine if we are running under Rosetta 
-	 */
-	{
-	    int val = 0;
-	    size_t size = sizeof val;
-	    if (sysctlbyname("sysctl.proc_native", &val, &size, NULL, 0) == -1)
-		g_is_under_rosetta = 0;
-	    else
-		g_is_under_rosetta = val ? 0 : 1;
-	}
-#endif
 
+/* Check if we are running under testbots */
+#if RUN_UNDER_TESTBOTS
+g_testbots_active = 1;
+#endif
+	/* Code added to run xnu_quick_test under testbots */
+	if ( g_testbots_active == 1 ) {
+	printf("[TEST] xnu_quick_test \n");	/* Declare the beginning of test suite */
+	}
+    
 	/* Populate groups list if we're in single user mode */
 	if (setgroups_if_single_user()) {
 		return 1;
@@ -296,14 +299,15 @@ int main( int argc, const char * argv[] )
 	create_target_directory( my_targetp );
 	printf( "Will allow %ld failures before testing is aborted \n", g_max_failures );
 	
-        if (g_is_under_rosetta) {
-                printf("Running under Rosetta.\n");
-        }
-        
 	my_start_time = time( NULL );
 	printf( "\nBegin testing - %s \n", ctime_r( &my_start_time, &my_buffer[0] ) );
 	printf( "Current architecture is %s\n", current_arch() );
 
+	/* Code added to run xnu_quick_test under testbots */
+        if ( g_testbots_active == 1 ) {
+        printf("[PASS] xnu_quick_test started\n");     
+        }
+		
 	/* run each test that is marked to run in our table until we complete all of them or
 	 * hit the maximum number of failures.
 	 */
@@ -322,6 +326,7 @@ int main( int argc, const char * argv[] )
 		}
 #endif
 		printf( "test #%d - %s \n", (i + 1), my_testp->test_infop );
+		fflush(stdout);
 		my_err = my_testp->test_routine( my_testp->test_input );
 		if ( my_err != 0 ) {
 			printf("\t--> FAILED \n");
@@ -334,19 +339,38 @@ int main( int argc, const char * argv[] )
 			my_failures++;
 			if ( my_failures > g_max_failures ) {
 #if !TARGET_OS_EMBEDDED	
-				if (g_xilog_active == 1) {	
+				if (g_xilog_active == 1) {
+					XILogMsg("Reached the maximum number of failures - Aborting xnu_quick_test.");
 					XILogEndTestCase( logRef, kXILogTestPassOnErrorLevel );
 				}
 #endif
-				printf( "\n too many failures - test aborted \n" );
+				printf( "\n Reached the maximum number of failures - Aborting xnu_quick_test. \n" );
+	                        /* Code added to run xnu_quick_test under testbots */
+        	                if ( g_testbots_active == 1 ) {
+				printf("[FAIL] %s \n", my_testp->test_infop);
+				}	
 				goto exit_this_routine;
 			}
+			/* Code added to run xnu_quick_test under testbots */
+			if ( g_testbots_active == 1 ) {
+				printf("[FAIL] %s \n", my_testp->test_infop);
+			}			
+#if !TARGET_OS_EMBEDDED	
+			if (g_xilog_active == 1) {
+				XILogEndTestCase( logRef, kXILogTestPassOnErrorLevel );
+			}
+#endif
+			continue;
 		}
 #if !TARGET_OS_EMBEDDED	
 		if (g_xilog_active == 1) {	
 			XILogEndTestCase(logRef, kXILogTestPassOnErrorLevel);
 		}
 #endif
+		/* Code added to run xnu_quick_test under testbots */
+		if ( g_testbots_active == 1 ) {
+		printf("[PASS] %s \n", my_testp->test_infop);
+		}	
 	}
 	
 exit_this_routine:

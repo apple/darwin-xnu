@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -79,12 +79,17 @@
 #include <sys/socketvar.h>
 #include <kern/locks.h>
 #include <sys/sysctl.h>
+#include <sys/mcache.h>
 
 #include <machine/endian.h>
+#include <pexpert/pexpert.h>
 
 #include <net/if.h>
 #include <net/if_dl.h>
+#include <net/if_types.h>
 #include <net/route.h>
+#include <net/ntstat.h>
+#include <net/net_osdep.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -124,6 +129,7 @@
 
 #include <netinet/ip_fw.h>
 #include <netinet/ip_divert.h>
+#include <mach/sdt.h>
 
 #if DUMMYNET
 #include <netinet/ip_dummynet.h>
@@ -144,20 +150,14 @@
 u_short ip_id;
 
 static struct mbuf *ip_insertoptions(struct mbuf *, struct mbuf *, int *);
-static struct ifnet *ip_multicast_if(struct in_addr *, int *);
 static void	ip_mloopback(struct ifnet *, struct mbuf *,
 	struct sockaddr_in *, int);
-static int	ip_getmoptions(struct sockopt *, struct ip_moptions *);
 static int	ip_pcbopts(int, struct mbuf **, struct mbuf *);
-static int	ip_setmoptions(struct sockopt *, struct ip_moptions **);
+static void	imo_trace(struct ip_moptions *, int);
 
 static void ip_out_cksum_stats(int, u_int32_t);
 static struct ifaddr *in_selectsrcif(struct ip *, struct route *, unsigned int);
-static void ip_bindif(struct inpcb *, unsigned int);
 
-int ip_createmoptions(struct ip_moptions **imop);
-int ip_addmembership(struct ip_moptions *imo, struct ip_mreq *mreq);
-int ip_dropmembership(struct ip_moptions *imo, struct ip_mreq *mreq);
 int	ip_optcopy(struct ip *, struct ip *);
 void in_delayed_cksum_offset(struct mbuf *, int );
 void in_cksum_offset(struct mbuf* , size_t );
@@ -175,17 +175,49 @@ extern int ipsec_bypass;
 #endif
 
 static int	ip_maxchainsent = 0;
-SYSCTL_INT(_net_inet_ip, OID_AUTO, maxchainsent, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip, OID_AUTO, maxchainsent, CTLFLAG_RW | CTLFLAG_LOCKED,
     &ip_maxchainsent, 0, "use dlil_output_list");
 #if DEBUG
 static int forge_ce = 0;
-SYSCTL_INT(_net_inet_ip, OID_AUTO, forge_ce, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip, OID_AUTO, forge_ce, CTLFLAG_RW | CTLFLAG_LOCKED,
     &forge_ce, 0, "Forge ECN CE");
 #endif /* DEBUG */
 
 static int ip_select_srcif_debug = 0;
-SYSCTL_INT(_net_inet_ip, OID_AUTO, select_srcif_debug, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_ip, OID_AUTO, select_srcif_debug, CTLFLAG_RW | CTLFLAG_LOCKED,
     &ip_select_srcif_debug, 0, "log source interface selection debug info");
+
+#define	IMO_TRACE_HIST_SIZE	32	/* size of trace history */
+
+/* For gdb */
+__private_extern__ unsigned int imo_trace_hist_size = IMO_TRACE_HIST_SIZE;
+
+struct ip_moptions_dbg {
+	struct ip_moptions	imo;			/* ip_moptions */
+	u_int16_t		imo_refhold_cnt;	/* # of IMO_ADDREF */
+	u_int16_t		imo_refrele_cnt;	/* # of IMO_REMREF */
+	/*
+	 * Alloc and free callers.
+	 */
+	ctrace_t		imo_alloc;
+	ctrace_t		imo_free;
+	/*
+	 * Circular lists of IMO_ADDREF and IMO_REMREF callers.
+	 */
+	ctrace_t		imo_refhold[IMO_TRACE_HIST_SIZE];
+	ctrace_t		imo_refrele[IMO_TRACE_HIST_SIZE];
+};
+
+#if DEBUG
+static unsigned int imo_debug = 1;	/* debugging (enabled) */
+#else
+static unsigned int imo_debug;		/* debugging (disabled) */
+#endif /* !DEBUG */
+static unsigned int imo_size;		/* size of zone element */
+static struct zone *imo_zone;		/* zone for ip_moptions */
+
+#define	IMO_ZONE_MAX		64		/* maximum elements in zone */
+#define	IMO_ZONE_NAME		"ip_moptions"	/* zone name */
 
 /*
  * IP output.  The packet in mbuf chain m contains a skeletal IP
@@ -244,11 +276,12 @@ ip_output_list(
 	struct ifnet *ifp = NULL;
 	struct mbuf *m = m0, **mppn = NULL;
 	int hlen = sizeof (struct ip);
-	int len = 0, off, error = 0;
+	int len = 0, error = 0;
 	struct sockaddr_in *dst = NULL;
 	struct in_ifaddr *ia = NULL, *src_ia = NULL;
 	int isbroadcast, sw_csum;
 	struct in_addr pkt_dst;
+	struct ipf_pktopts *ippo = NULL, ipf_pktopts;
 #if IPSEC
 	struct route iproute;
 	struct socket *so = NULL;
@@ -258,18 +291,24 @@ ip_output_list(
 	int fwd_rewrite_src = 0;
 #endif
 #if IPFIREWALL
+	int off;
 	struct ip_fw_args args;
+	struct m_tag	*tag;
+	struct sockaddr_in *next_hop_from_ipfwd_tag = NULL;
 #endif
 	int didfilter = 0;
 	ipfilter_t inject_filter_ref = 0;
-	struct m_tag	*tag;
+#if DUMMYNET
 	struct route	saved_route;
 	struct ip_out_args saved_ipoa;
+	struct sockaddr_in dst_buf;
+#endif /* DUMMYNET */
 	struct mbuf * packetlist;
 	int pktcnt = 0, tso = 0;
+	u_int32_t	bytecnt = 0;
 	unsigned int ifscope;
+	unsigned int nocell;
 	boolean_t select_srcif;
-
 	KERNEL_DEBUG(DBG_FNC_IP_OUTPUT | DBG_FUNC_START, 0,0,0,0,0);
 
 	packetlist = m0;
@@ -296,7 +335,8 @@ ip_output_list(
 		ro = &saved_route;
 
 		imo = NULL;
-		dst = dn_tag->dn_dst;
+		bcopy(&dn_tag->dn_dst, &dst_buf, sizeof(dst_buf));
+		dst = &dst_buf;
 		ifp = dn_tag->ifp;
 		flags = dn_tag->flags;
 		saved_ipoa = dn_tag->ipoa;
@@ -323,8 +363,8 @@ ip_output_list(
 		struct ip_fwd_tag	*ipfwd_tag;
 
 		ipfwd_tag = (struct ip_fwd_tag *)(tag+1);
-		args.next_hop = ipfwd_tag->next_hop;
-
+		next_hop_from_ipfwd_tag = ipfwd_tag->next_hop;
+		
 		m_tag_delete(m0, tag);
 	}
 ipfw_tags_done:
@@ -340,6 +380,9 @@ ipfw_tags_done:
 		      mtod(m, struct ip *)->ip_p);
 #endif
 
+	bzero(&ipf_pktopts, sizeof(struct ipf_pktopts));
+	ippo = &ipf_pktopts;
+
 	/*
 	 * At present the IP_OUTARGS flag implies a request for IP to
 	 * perform source interface selection.  In the forwarding case,
@@ -348,10 +391,20 @@ ipfw_tags_done:
 	 */
 	if (ip_doscopedroute && (flags & IP_OUTARGS)) {
 		select_srcif = !(flags & IP_FORWARDING);
-		ifscope = ipoa->ipoa_ifscope;
+		ifscope = ipoa->ipoa_boundif;
+		ipf_pktopts.ippo_flags = IPPOF_BOUND_IF;
+		ipf_pktopts.ippo_flags |= (ifscope << IPPOF_SHIFT_IFSCOPE);
 	} else {
 		select_srcif = FALSE;
 		ifscope = IFSCOPE_NONE;
+	}
+
+	if (flags & IP_OUTARGS) {
+		nocell = ipoa->ipoa_nocell;
+		if (nocell)
+			ipf_pktopts.ippo_flags |= IPPOF_NO_IFT_CELLULAR;
+	} else {
+		nocell = 0;
 	}
 
 #if IPFIREWALL
@@ -361,8 +414,11 @@ ipfw_tags_done:
 		if (ro->ro_rt != NULL) {
 			RT_LOCK_SPIN(ro->ro_rt);
 			ia = (struct in_ifaddr *)ro->ro_rt->rt_ifa;
-			if (ia)
-				ifaref(&ia->ia_ifa);
+			if (ia) {
+				/* Become a regular mutex */
+				RT_CONVERT_LOCK(ro->ro_rt);
+				IFA_ADDREF(&ia->ia_ifa);
+			}
 			RT_UNLOCK(ro->ro_rt);
 		}
 #if IPSEC
@@ -397,10 +453,28 @@ loopit:
 	}
 	ip = mtod(m, struct ip *);
 #if IPFIREWALL
+	/*
+	 * rdar://8542331
+	 *
+	 * When dealing with a packet chain, we need to reset "next_hop" because 
+	 * "dst" may have been changed to the gateway address below for the previous
+	 * packet of the chain. This could cause the route to be inavertandly changed 
+	 * to the route to the gateway address (instead of the route to the destination).
+	 */
+	args.next_hop = next_hop_from_ipfwd_tag;
 	pkt_dst = args.next_hop ? args.next_hop->sin_addr : ip->ip_dst;
 #else
 	pkt_dst = ip->ip_dst;
 #endif
+
+	/*
+	 * We must not send if the packet is destined to network zero.
+	 * RFC1122 3.2.1.3 (a) and (b).
+	 */
+	if (IN_ZERONET(ntohl(pkt_dst.s_addr))) {
+		error = EHOSTUNREACH;
+		goto bad;
+	}
 
 	/*
 	 * Fill in IP header.
@@ -450,7 +524,7 @@ loopit:
 				error = EADDRNOTAVAIL;
 				goto bad;
 			}
-			ifafree(&src_ia->ia_ifa);
+			IFA_REMREF(&src_ia->ia_ifa);
 		}
 		/*
 		 * Test rt_flags without holding rt_lock for performance
@@ -487,7 +561,7 @@ loopit:
 #define sintosa(sin)	((struct sockaddr *)(sin))
 	if (flags & IP_ROUTETOIF) {
 		if (ia)
-			ifafree(&ia->ia_ifa);
+			IFA_REMREF(&ia->ia_ifa);
 		if ((ia = ifatoia(ifa_ifwithdstaddr(sintosa(dst)))) == 0) {
 			if ((ia = ifatoia(ifa_ifwithnet(sintosa(dst)))) == 0) {
 				OSAddAtomic(1, &ipstat.ips_noroute);
@@ -499,15 +573,14 @@ loopit:
 		ip->ip_ttl = 1;
 		isbroadcast = in_broadcast(dst->sin_addr, ifp);
 	} else if (IN_MULTICAST(ntohl(pkt_dst.s_addr)) &&
-	    imo != NULL && imo->imo_multicast_ifp != NULL) {
+	    imo != NULL && (ifp = imo->imo_multicast_ifp) != NULL) {
 		/*
 		 * Bypass the normal routing lookup for multicast
 		 * packets if the interface is specified.
 		 */
-		ifp = imo->imo_multicast_ifp;
 		isbroadcast = 0;
 		if (ia != NULL)
-			ifafree(&ia->ia_ifa);
+			IFA_REMREF(&ia->ia_ifa);
 
 		/* Macro takes reference on ia */
 		IFP_TO_IA(ifp, ia);
@@ -529,6 +602,18 @@ loopit:
 
 			/* Find the source interface */
 			ifa = in_selectsrcif(ip, ro, ifscope);
+
+			/*
+			 * If the source address belongs to a cellular interface
+			 * and the caller forbids our using interfaces of such
+			 * type, pretend that there is no source address.
+			 */
+			if (nocell && ifa != NULL &&
+			    ifa->ifa_ifp->if_type == IFT_CELLULAR) {
+				IFA_REMREF(ifa);
+				error = EADDRNOTAVAIL;
+				goto bad;
+			}
 
 			/*
 			 * If the source address is spoofed (in the case
@@ -560,7 +645,7 @@ loopit:
 			if (ifa != NULL) {
 				if (ifscope == IFSCOPE_NONE)
 					ifscope = ifa->ifa_ifp->if_index;
-				ifafree(ifa);
+				IFA_REMREF(ifa);
 				cloneok = (!(flags & IP_RAWOUTPUT) &&
 				    !(IN_LINKLOCAL(ntohl(ip->ip_dst.s_addr))));
 			}
@@ -611,6 +696,23 @@ loopit:
 				rtalloc_ign(ro, ign);
 			else
 				rtalloc_scoped_ign(ro, ign, ifscope);
+
+			/*
+			 * If the route points to a cellular interface and the
+			 * caller forbids our using interfaces of such type,
+			 * pretend that there is no route.
+			 */
+			if (nocell && ro->ro_rt != NULL) {
+				RT_LOCK_SPIN(ro->ro_rt);
+				if (ro->ro_rt->rt_ifp->if_type ==
+				    IFT_CELLULAR) {
+					RT_UNLOCK(ro->ro_rt);
+					rtfree(ro->ro_rt);
+					ro->ro_rt = NULL;
+				} else {
+					RT_UNLOCK(ro->ro_rt);
+				}
+			}
 		}
 
 		if (ro->ro_rt == NULL) {
@@ -620,11 +722,14 @@ loopit:
 		}
 
 		if (ia)
-			ifafree(&ia->ia_ifa);
+			IFA_REMREF(&ia->ia_ifa);
 		RT_LOCK_SPIN(ro->ro_rt);
 		ia = ifatoia(ro->ro_rt->rt_ifa);
-		if (ia)
-			ifaref(&ia->ia_ifa);
+		if (ia) {
+			/* Become a regular mutex */
+			RT_CONVERT_LOCK(ro->ro_rt);
+			IFA_ADDREF(&ia->ia_ifa);
+		}
 		ifp = ro->ro_rt->rt_ifp;
 		ro->ro_rt->rt_use++;
 		if (ro->ro_rt->rt_flags & RTF_GATEWAY)
@@ -641,6 +746,9 @@ loopit:
 
 	if (IN_MULTICAST(ntohl(pkt_dst.s_addr))) {
 		struct in_multi *inm;
+		u_int32_t vif;
+		u_int8_t ttl = IP_DEFAULT_MULTICAST_TTL;
+		u_int8_t loop = IP_DEFAULT_MULTICAST_LOOP;
 
 		m->m_flags |= M_MCAST;
 		/*
@@ -653,22 +761,28 @@ loopit:
 		 * See if the caller provided any multicast options
 		 */
 		if (imo != NULL) {
-			if ((flags & IP_RAWOUTPUT) == 0) ip->ip_ttl = imo->imo_multicast_ttl;
-			if (imo->imo_multicast_ifp != NULL) {
+			IMO_LOCK(imo);
+			vif = imo->imo_multicast_vif;
+			ttl = imo->imo_multicast_ttl;
+			loop = imo->imo_multicast_loop;
+			if ((flags & IP_RAWOUTPUT) == 0)
+				ip->ip_ttl = ttl;
+			if (imo->imo_multicast_ifp != NULL)
 				ifp = imo->imo_multicast_ifp;
-			}
+			IMO_UNLOCK(imo);
 #if MROUTING
-			if (imo->imo_multicast_vif != -1 && 
-				((flags & IP_RAWOUTPUT) == 0 || ip->ip_src.s_addr == INADDR_ANY))
-				ip->ip_src.s_addr =
-					ip_mcast_src(imo->imo_multicast_vif);
+			if (vif != -1 && ((flags & IP_RAWOUTPUT) == 0 ||
+			    ip->ip_src.s_addr == INADDR_ANY))
+				ip->ip_src.s_addr = ip_mcast_src(vif);
 #endif /* MROUTING */
-		} else
-			if ((flags & IP_RAWOUTPUT) == 0) ip->ip_ttl = IP_DEFAULT_MULTICAST_TTL;
+		} else if ((flags & IP_RAWOUTPUT) == 0) {
+			vif = -1;
+			ip->ip_ttl = ttl;
+		}
 		/*
 		 * Confirm that the outgoing interface supports multicast.
 		 */
-		if ((imo == NULL) || (imo->imo_multicast_vif == -1)) {
+		if (imo == NULL || vif == -1) {
 			if ((ifp->if_flags & IFF_MULTICAST) == 0) {
 				OSAddAtomic(1, &ipstat.ips_noroute);
 				error = ENETUNREACH;
@@ -682,11 +796,15 @@ loopit:
 		if (ip->ip_src.s_addr == INADDR_ANY) {
 			struct in_ifaddr *ia1;
 			lck_rw_lock_shared(in_ifaddr_rwlock);
-			TAILQ_FOREACH(ia1, &in_ifaddrhead, ia_link)
+			TAILQ_FOREACH(ia1, &in_ifaddrhead, ia_link) {
+				IFA_LOCK_SPIN(&ia1->ia_ifa);
 				if (ia1->ia_ifp == ifp) {
 					ip->ip_src = IA_SIN(ia1)->sin_addr;
+					IFA_UNLOCK(&ia1->ia_ifa);
 					break;
 				}
+				IFA_UNLOCK(&ia1->ia_ifa);
+			}
 			lck_rw_done(in_ifaddr_rwlock);
 			if (ip->ip_src.s_addr == INADDR_ANY) {
 				error = ENETUNREACH;
@@ -694,11 +812,10 @@ loopit:
 			}
 		}
 
-		ifnet_lock_shared(ifp);
-		IN_LOOKUP_MULTI(pkt_dst, ifp, inm);
-		ifnet_lock_done(ifp);
-		if (inm != NULL &&
-		   (imo == NULL || imo->imo_multicast_loop)) {
+		in_multihead_lock_shared();
+		IN_LOOKUP_MULTI(&pkt_dst, ifp, inm);
+		in_multihead_lock_done();
+		if (inm != NULL && (imo == NULL || loop)) {
 			/*
 			 * If we belong to the destination multicast group
 			 * on the outgoing interface, and the caller did not
@@ -707,17 +824,16 @@ loopit:
 			if (!TAILQ_EMPTY(&ipv4_filters)) {
 				struct ipfilter	*filter;
 				int seen = (inject_filter_ref == 0);
-				struct ipf_pktopts *ippo = 0, ipf_pktopts;
 
-				if (imo) {						
-					ippo = &ipf_pktopts;
-					ipf_pktopts.ippo_mcast_ifnet = imo->imo_multicast_ifp;
-					ipf_pktopts.ippo_mcast_ttl = imo->imo_multicast_ttl;
-					ipf_pktopts.ippo_mcast_loop = imo->imo_multicast_loop;
+				if (imo != NULL) {
+					ipf_pktopts.ippo_flags |= IPPOF_MCAST_OPTS;
+					ipf_pktopts.ippo_mcast_ifnet = ifp;
+					ipf_pktopts.ippo_mcast_ttl = ttl;
+					ipf_pktopts.ippo_mcast_loop = loop;
 				}
-				
+
 				ipf_ref();
-				
+
 				/* 4135317 - always pass network byte order to filter */
 
 #if BYTE_ORDER != BIG_ENDIAN
@@ -734,15 +850,17 @@ loopit:
 						result = filter->ipf_filter.ipf_output(filter->ipf_filter.cookie, (mbuf_t*)&m, ippo);
 						if (result == EJUSTRETURN) {
 							ipf_unref();
+							INM_REMREF(inm);
 							goto done;
 						}
 						if (result != 0) {
 							ipf_unref();
+							INM_REMREF(inm);
 							goto bad;
 						}
 					}
 				}
-				
+
 				/* set back to host byte order */
 				ip = mtod(m, struct ip *);
 
@@ -778,15 +896,18 @@ loopit:
 				 * as prescribed by rsvpd.
 				 */
 				if (!rsvp_on)
-				  imo = NULL;
+					imo = NULL;
 				if (ip_mforward(ip, ifp, m, imo) != 0) {
 					m_freem(m);
+					if (inm != NULL)
+						INM_REMREF(inm);
 					goto done;
 				}
 			}
 		}
 #endif /* MROUTING */
-
+		if (inm != NULL)
+			INM_REMREF(inm);
 		/*
 		 * Multicasts with a time-to-live of zero may be looped-
 		 * back, above, but must not be transmitted on a network.
@@ -808,7 +929,9 @@ loopit:
 	 * of outgoing interface.
 	 */
 	if (ip->ip_src.s_addr == INADDR_ANY) {
+		IFA_LOCK_SPIN(&ia->ia_ifa);
 		ip->ip_src = IA_SIN(ia)->sin_addr;
+		IFA_UNLOCK(&ia->ia_ifa);
 #if IPFIREWALL_FORWARD
 		/* Keep note that we did this - if the firewall changes
 		 * the next-hop, our interface may change, changing the
@@ -847,26 +970,30 @@ loopit:
 sendit:
 #if PF
 	/* Invoke outbound packet filter */
-	if (pf_af_hook(ifp, mppn, &m, AF_INET, FALSE) != 0) {
-		if (packetlist == m0) {
-			packetlist = m;
-			mppn = NULL;
+	if ( PF_IS_ENABLED) {
+		int rc;
+		rc = pf_af_hook(ifp, mppn, &m, AF_INET, FALSE);
+		if (rc != 0) {
+			if (packetlist == m0) {
+				packetlist = m;
+				mppn = NULL;
+			}
+			if (m != NULL) {
+				m0 = m;
+				/* Next packet in the chain */
+				goto loopit;
+			} else if (packetlist != NULL) {
+				/* No more packet; send down the chain */
+				goto sendchain;
+			}
+			/* Nothing left; we're done */
+			goto done;
 		}
-		if (m != NULL) {
-			m0 = m;
-			/* Next packet in the chain */
-			goto loopit;
-		} else if (packetlist != NULL) {
-			/* No more packet; send down the chain */
-			goto sendchain;
-		}
-		/* Nothing left; we're done */
-		goto done;
+		m0 = m;
+		ip = mtod(m, struct ip *);
+		pkt_dst = ip->ip_dst;
+		hlen = IP_VHL_HL(ip->ip_vhl) << 2;
 	}
-	m0 = m;
-	ip = mtod(m, struct ip *);
-	pkt_dst = ip->ip_dst;
-	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
 #endif /* PF */
         /*
          * Force IP TTL to 255 following draft-ietf-zeroconf-ipv4-linklocal.txt
@@ -882,7 +1009,8 @@ sendit:
 	if (!didfilter && !TAILQ_EMPTY(&ipv4_filters)) {
 		struct ipfilter	*filter;
 		int seen = (inject_filter_ref == 0);
-	
+		ipf_pktopts.ippo_flags &= ~IPPOF_MCAST_OPTS;
+
 		/* Check that a TSO frame isn't passed to a filter.
 		 * This could happen if a filter is inserted while
 		 * TCP is sending the TSO packet.
@@ -907,7 +1035,7 @@ sendit:
 					seen = 1;
 			} else if (filter->ipf_filter.ipf_output) {
 				errno_t result;
-				result = filter->ipf_filter.ipf_output(filter->ipf_filter.cookie, (mbuf_t*)&m, 0);
+				result = filter->ipf_filter.ipf_output(filter->ipf_filter.cookie, (mbuf_t*)&m, ippo);
 				if (result == EJUSTRETURN) {
 					ipf_unref();
 					goto done;
@@ -1011,6 +1139,10 @@ sendit:
 	HTONS(ip->ip_off);
 #endif
 
+	DTRACE_IP6(send, struct mbuf *, m, struct inpcb *, NULL,
+		struct ip *, ip, struct ifnet *, ifp,
+		struct ip *, ip, struct ip6_hdr *, NULL);
+
 	error = ipsec4_output(&state, sp, flags);
     
 	m0 = m = state.m;
@@ -1071,7 +1203,7 @@ sendit:
 		rtfree(ro->ro_rt);
 		ro->ro_rt = NULL;
 		if (src_ia != NULL)
-			ifafree(&src_ia->ia_ifa);
+			IFA_REMREF(&src_ia->ia_ifa);
 	}
 
 	if (ro->ro_rt == NULL) {
@@ -1085,11 +1217,14 @@ sendit:
 		}
 	} else {
 		if (ia)
-			ifafree(&ia->ia_ifa);
+			IFA_REMREF(&ia->ia_ifa);
 		RT_LOCK_SPIN(ro->ro_rt);
 		ia = ifatoia(ro->ro_rt->rt_ifa);
-		if (ia)
-			ifaref(&ia->ia_ifa);
+		if (ia) {
+			/* Become a regular mutex */
+			RT_CONVERT_LOCK(ro->ro_rt);
+			IFA_ADDREF(&ia->ia_ifa);
+		}
 		ifp = ro->ro_rt->rt_ifp;
 		RT_UNLOCK(ro->ro_rt);
 	}
@@ -1107,6 +1242,8 @@ sendit:
 	if (!TAILQ_EMPTY(&ipv4_filters)) {
 		struct ipfilter	*filter;
 		
+		ipf_pktopts.ippo_flags &= ~IPPOF_MCAST_OPTS;
+
 		/* Check that a TSO frame isn't passed to a filter.
 		 * This could happen if a filter is inserted while
 		 * TCP is sending the TSO packet.
@@ -1128,7 +1265,7 @@ sendit:
 		TAILQ_FOREACH(filter, &ipv4_filters, ipf_link) {
 			if (filter->ipf_filter.ipf_output) {
 				errno_t result;
-				result = filter->ipf_filter.ipf_output(filter->ipf_filter.cookie, (mbuf_t*)&m, 0);
+				result = filter->ipf_filter.ipf_output(filter->ipf_filter.cookie, (mbuf_t*)&m, ippo);
 				if (result == EJUSTRETURN) {
 					ipf_unref();
 					goto done;
@@ -1310,31 +1447,35 @@ skip_ipsec:
 				 * of ours, we pretend to
 				 * be the destination for this packet.
 				 */
+				IFA_LOCK_SPIN(&ia_fw->ia_ifa);
 				if (IA_SIN(ia_fw)->sin_addr.s_addr ==
-						 dst->sin_addr.s_addr)
+				    dst->sin_addr.s_addr) {
+					IFA_UNLOCK(&ia_fw->ia_ifa);
 					break;
+				}
+				IFA_UNLOCK(&ia_fw->ia_ifa);
 			}
 			lck_rw_done(in_ifaddr_rwlock);
 			if (ia_fw) {
 				/* tell ip_input "dont filter" */
 				struct m_tag 		*fwd_tag;
 				struct ip_fwd_tag	*ipfwd_tag;
-				
-				fwd_tag = m_tag_alloc(KERNEL_MODULE_TAG_ID,
+
+				fwd_tag = m_tag_create(KERNEL_MODULE_TAG_ID,
 				    KERNEL_TAG_TYPE_IPFORWARD,
-				    sizeof (*ipfwd_tag), M_NOWAIT);
+				    sizeof (*ipfwd_tag), M_NOWAIT, m);
 				if (fwd_tag == NULL) {
 					error = ENOBUFS;
 					goto bad;
 				}
-				
+
 				ipfwd_tag = (struct ip_fwd_tag *)(fwd_tag+1);
 				ipfwd_tag->next_hop = args.next_hop;
 
 				m_tag_prepend(m, fwd_tag);
 
 				if (m->m_pkthdr.rcvif == NULL)
-					m->m_pkthdr.rcvif = ifunit("lo0");
+					m->m_pkthdr.rcvif = lo_ifp;
 				if ((~IF_HWASSIST_CSUM_FLAGS(m->m_pkthdr.rcvif->if_hwassist) & 
 						m->m_pkthdr.csum_flags) == 0) {
 					if (m->m_pkthdr.csum_flags & CSUM_DELAY_DATA) {
@@ -1387,8 +1528,11 @@ skip_ipsec:
 
 			RT_LOCK_SPIN(ro_fwd->ro_rt);
 			ia_fw = ifatoia(ro_fwd->ro_rt->rt_ifa);
-			if (ia_fw != NULL)
-				ifaref(&ia_fw->ia_ifa);
+			if (ia_fw != NULL) {
+				/* Become a regular mutex */
+				RT_CONVERT_LOCK(ro_fwd->ro_rt);
+				IFA_ADDREF(&ia_fw->ia_ifa);
+			}
 			ifp = ro_fwd->ro_rt->rt_ifp;
 			ro_fwd->ro_rt->rt_use++;
 			if (ro_fwd->ro_rt->rt_flags & RTF_GATEWAY)
@@ -1412,9 +1556,12 @@ skip_ipsec:
 			 * interface, do it again, from the new one.
 			 */
 			if (ia_fw != NULL) {
-				if (fwd_rewrite_src)
+				if (fwd_rewrite_src) {
+					IFA_LOCK_SPIN(&ia_fw->ia_ifa);
 					ip->ip_src = IA_SIN(ia_fw)->sin_addr;
-				ifafree(&ia_fw->ia_ifa);
+					IFA_UNLOCK(&ia_fw->ia_ifa);
+				}
+				IFA_REMREF(&ia_fw->ia_ifa);
 			}
 			goto pass ;
 		}
@@ -1427,9 +1574,9 @@ skip_ipsec:
 		error = EACCES; /* not sure this is the right error msg */
 		goto done;
 	}
-#endif /* IPFIREWALL */
 
 pass:
+#endif /* IPFIREWALL */
 #if __APPLE__
 	/* Do not allow loopback address to wind up on a wire */
 	if ((ifp->if_flags & IFF_LOOPBACK) == 0 &&
@@ -1526,11 +1673,14 @@ pass:
 			ipsec_delaux(m);
 #endif
 		if (packetchain == 0) {
+			if (ro->ro_rt && nstat_collect)
+				nstat_route_tx(ro->ro_rt, 1, m->m_pkthdr.len, 0);
 			error = ifnet_output(ifp, PF_INET, m, ro->ro_rt,
 			    (struct sockaddr *)dst);
 			goto done;
 		}
 		else { /* packet chaining allows us to reuse the route for all packets */
+			bytecnt += m->m_pkthdr.len;
 			mppn = &m->m_nextpkt;
 			m = m->m_nextpkt;
 			if (m == NULL) {
@@ -1539,10 +1689,13 @@ sendchain:
 #endif /* PF */
 				if (pktcnt > ip_maxchainsent)
 					ip_maxchainsent = pktcnt;
+				if (ro->ro_rt && nstat_collect)
+					nstat_route_tx(ro->ro_rt, pktcnt, bytecnt, 0);
 				//send
 				error = ifnet_output(ifp, PF_INET, packetlist,
 				    ro->ro_rt, (struct sockaddr *)dst);
 				pktcnt = 0;
+				bytecnt = 0;
 				goto done;
 	
 			}
@@ -1556,23 +1709,28 @@ sendchain:
 	 * Must be able to put at least 8 bytes per fragment.
 	 */
 
-	if (ip->ip_off & IP_DF  || (m->m_pkthdr.csum_flags & CSUM_TSO_IPV4)) {
+	if (ip->ip_off & IP_DF  || (m->m_pkthdr.csum_flags & CSUM_TSO_IPV4) ||
+		pktcnt > 0) {
 		error = EMSGSIZE;
 		/*
 		 * This case can happen if the user changed the MTU
-		 *   
 		 * of an interface after enabling IP on it.  Because
 		 * most netifs don't keep track of routes pointing to
 		 * them, there is no way for one to update all its
 		 * routes when the MTU is changed.
 		 */
-		RT_LOCK_SPIN(ro->ro_rt);
-		if (ro->ro_rt && (ro->ro_rt->rt_flags & (RTF_UP | RTF_HOST))
-		    && !(ro->ro_rt->rt_rmx.rmx_locks & RTV_MTU)
-		    && (ro->ro_rt->rt_rmx.rmx_mtu > ifp->if_mtu)) {
-			ro->ro_rt->rt_rmx.rmx_mtu = ifp->if_mtu;
+		if (ro->ro_rt) {
+			RT_LOCK_SPIN(ro->ro_rt);
+			if ((ro->ro_rt->rt_flags & (RTF_UP | RTF_HOST))
+			    && !(ro->ro_rt->rt_rmx.rmx_locks & RTV_MTU)
+			    && (ro->ro_rt->rt_rmx.rmx_mtu > ifp->if_mtu)) {
+				ro->ro_rt->rt_rmx.rmx_mtu = ifp->if_mtu;
+			}
+			RT_UNLOCK(ro->ro_rt);
 		}
-		RT_UNLOCK(ro->ro_rt);
+		if (pktcnt > 0) {
+			m0 = packetlist;
+		}
 		OSAddAtomic(1, &ipstat.ips_cantfrag);
 		goto bad;
 	}
@@ -1604,6 +1762,8 @@ sendchain:
 #endif
 			if ((packetchain != 0)  && (pktcnt > 0))
 				panic("ip_output: mix of packet in packetlist is wrong=%p", packetlist);
+			if (ro->ro_rt && nstat_collect)
+				nstat_route_tx(ro->ro_rt, 1, m->m_pkthdr.len, 0);
 			error = ifnet_output(ifp, PF_INET, m, ro->ro_rt,
 			    (struct sockaddr *)dst);
 		} else
@@ -1615,7 +1775,7 @@ sendchain:
 
 done:
 	if (ia) {
-		ifafree(&ia->ia_ifa);
+		IFA_REMREF(&ia->ia_ifa);
 		ia = NULL;
 	}
 #if IPSEC
@@ -1781,8 +1941,11 @@ in_delayed_cksum_offset(struct mbuf *m0, int ip_offset)
 	struct ip *ip;
 	unsigned char buf[sizeof(struct ip)];
 	u_short csum, offset, ip_len;
-	struct mbuf *m = m0;
-	
+
+        /* Save copy of first mbuf pointer and the ip_offset before modifying */
+        struct mbuf *m = m0;
+        int ip_offset_copy = ip_offset;
+
 	while (ip_offset >= m->m_len) {
 		ip_offset -= m->m_len;
 		m = m->m_next;
@@ -1823,12 +1986,12 @@ in_delayed_cksum_offset(struct mbuf *m0, int ip_offset)
 	 * is bogus and we give up.
 	 */
 	ip_len = ip->ip_len;
-	if (ip_len != (m0->m_pkthdr.len - ip_offset)) {
+	if (ip_len != (m0->m_pkthdr.len - ip_offset_copy)) {
 		ip_len = SWAP16(ip_len);
-		if (ip_len != (m0->m_pkthdr.len - ip_offset)) {
+		if (ip_len != (m0->m_pkthdr.len - ip_offset_copy)) {
 			printf("in_delayed_cksum_offset: ip_len %d (%d) "
 			    "doesn't match actual length %d\n", ip->ip_len,
-			    ip_len, (m0->m_pkthdr.len - ip_offset));
+			    ip_len, (m0->m_pkthdr.len - ip_offset_copy));
 			return;
 		}
 	}
@@ -1880,6 +2043,10 @@ in_cksum_offset(struct mbuf* m, size_t ip_offset)
 	int hlen = 0;
 	unsigned char buf[sizeof(struct ip)];
 	int swapped = 0;
+
+        /* Save copy of first mbuf pointer and the ip_offset before modifying */
+        struct mbuf* m0 = m;
+        size_t ip_offset_copy = ip_offset;
 	
 	while (ip_offset >= m->m_len) {
 		ip_offset -= m->m_len;
@@ -1927,15 +2094,15 @@ in_cksum_offset(struct mbuf* m, size_t ip_offset)
 	 * the length and check again.  If it still fails, then the packet
 	 * is bogus and we give up.
 	 */
-	if (ntohs(ip->ip_len) != (m->m_pkthdr.len - ip_offset)) {
+	if (ntohs(ip->ip_len) != (m0->m_pkthdr.len - ip_offset_copy)) {
 		ip->ip_len = SWAP16(ip->ip_len);
 		swapped = 1;
-		if (ntohs(ip->ip_len) != (m->m_pkthdr.len - ip_offset)) {
+		if (ntohs(ip->ip_len) != (m0->m_pkthdr.len - ip_offset_copy)) {
 			ip->ip_len = SWAP16(ip->ip_len);
 			printf("in_cksum_offset: ip_len %d (%d) "
 			    "doesn't match actual length %lu\n",
 			    ip->ip_len, SWAP16(ip->ip_len),
-			    (m->m_pkthdr.len - ip_offset));
+			    (m0->m_pkthdr.len - ip_offset_copy));
 			return;
 		}
 	}
@@ -2120,6 +2287,7 @@ ip_ctloutput(so, sopt)
 #if defined(NFAITH) && NFAITH > 0
 		case IP_FAITH:
 #endif
+		case IP_RECVPKTINFO:
 			error = sooptcopyin(sopt, &optval, sizeof optval,
 					    sizeof optval);
 			if (error)
@@ -2164,6 +2332,9 @@ ip_ctloutput(so, sopt)
 				OPTSET(INP_FAITH);
 				break;
 #endif
+			case IP_RECVPKTINFO:
+				OPTSET(INP_PKTINFO);
+				break;
 			}
 			break;
 #undef OPTSET
@@ -2200,14 +2371,14 @@ ip_ctloutput(so, sopt)
 					break;
 			}
 
-			if (sopt->sopt_valsize == 0 || ifname[0] == NULL) {
+			if (sopt->sopt_valsize == 0 || ifname[0] == '\0') {
 				/* Unbind this socket from any interface */
 				ifscope = IFSCOPE_NONE;
 			} else {
 				ifnet_t	ifp;
 
 				/* Verify name is NULL terminated */
-				if (ifname[sopt->sopt_valsize - 1] != NULL) {
+				if (ifname[sopt->sopt_valsize - 1] != '\0') {
 					error = EINVAL;
 					break;
 				}
@@ -2227,17 +2398,33 @@ ip_ctloutput(so, sopt)
 				 */
 				ifnet_release(ifp);
 			}
-			ip_bindif(inp, ifscope);
+			inp_bindif(inp, ifscope);
 		}
 		break;
 #endif
+		/*
+		 * Multicast socket options are processed by the in_mcast
+		 * module.
+		 */
 		case IP_MULTICAST_IF:
+		case IP_MULTICAST_IFINDEX:
 		case IP_MULTICAST_VIF:
 		case IP_MULTICAST_TTL:
 		case IP_MULTICAST_LOOP:
 		case IP_ADD_MEMBERSHIP:
 		case IP_DROP_MEMBERSHIP:
-			error = ip_setmoptions(sopt, &inp->inp_moptions);
+		case IP_ADD_SOURCE_MEMBERSHIP:
+		case IP_DROP_SOURCE_MEMBERSHIP:
+		case IP_BLOCK_SOURCE:
+		case IP_UNBLOCK_SOURCE:
+		case IP_MSFILTER:
+		case MCAST_JOIN_GROUP:
+		case MCAST_LEAVE_GROUP:
+		case MCAST_JOIN_SOURCE_GROUP:
+		case MCAST_LEAVE_SOURCE_GROUP:
+		case MCAST_BLOCK_SOURCE:
+		case MCAST_UNBLOCK_SOURCE:
+			error = inp_setmoptions(inp, sopt);
 			break;
 
 		case IP_PORTRANGE:
@@ -2277,10 +2464,6 @@ ip_ctloutput(so, sopt)
 			struct mbuf *m;
 			int optname;
 
-                        if (sopt->sopt_valsize > MCLBYTES) {
-                                error = EMSGSIZE;
-                                break;
-                        }
 			if ((error = soopt_getm(sopt, &m)) != 0) /* XXX */
 				break;
 			if ((error = soopt_mcopyin(sopt, m)) != 0) /* XXX */
@@ -2306,13 +2489,11 @@ ip_ctloutput(so, sopt)
 				break;
 
 			if (background) {
-				socket_set_traffic_mgt_flags(so,
-				    TRAFFIC_MGT_SO_BACKGROUND |
-				    TRAFFIC_MGT_SO_BG_REGULATE);
+				socket_set_traffic_mgt_flags_locked(so,
+				    TRAFFIC_MGT_SO_BACKGROUND);
 			} else {
-				socket_clear_traffic_mgt_flags(so,
-				    TRAFFIC_MGT_SO_BACKGROUND |
-				    TRAFFIC_MGT_SO_BG_REGULATE);
+				socket_clear_traffic_mgt_flags_locked(so,
+				    TRAFFIC_MGT_SO_BACKGROUND);
 			}
 
 			break;
@@ -2331,11 +2512,11 @@ ip_ctloutput(so, sopt)
 		 * on the destination address type (e.g.  unicast, multicast,
 		 * or broadcast if applicable) or whether or not the host is
 		 * directly reachable.  Note that in the multicast transmit
-		 * case, IP_MULTICAST_IF takes precedence over IP_BOUND_IF,
-		 * since the former practically bypasses the routing table;
-		 * in this case, IP_BOUND_IF sets the default interface used
-		 * for sending multicast packets in the absence of an explicit
-		 * transmit interface set via IP_MULTICAST_IF.
+		 * case, IP_MULTICAST_{IF,IFINDEX} takes precedence over
+		 * IP_BOUND_IF, since the former practically bypasses the
+		 * routing table; in this case, IP_BOUND_IF sets the default
+		 * interface used for sending multicast packets in the absence
+		 * of an explicit multicast transmit interface.
 		 */
 		case IP_BOUND_IF:
 			/* This option is settable only for IPv4 */
@@ -2350,7 +2531,28 @@ ip_ctloutput(so, sopt)
 			if (error)
 				break;
 
-			ip_bindif(inp, optval);
+			inp_bindif(inp, optval);
+			break;
+
+		case IP_NO_IFT_CELLULAR:
+			/* This option is settable only for IPv4 */
+			if (!(inp->inp_vflag & INP_IPV4)) {
+				error = EINVAL;
+				break;
+			}
+
+			error = sooptcopyin(sopt, &optval, sizeof (optval),
+			    sizeof (optval));
+
+			if (error)
+				break;
+
+			error = inp_nocellular(inp, optval);
+			break;
+
+		case IP_OUT_IF:
+			/* This option is not settable */
+			error = EINVAL;
 			break;
 
 		default:
@@ -2383,6 +2585,7 @@ ip_ctloutput(so, sopt)
 #if defined(NFAITH) && NFAITH > 0
 		case IP_FAITH:
 #endif
+		case IP_RECVPKTINFO:
 			switch (sopt->sopt_name) {
 
 			case IP_TOS:
@@ -2429,17 +2632,20 @@ ip_ctloutput(so, sopt)
 				optval = OPTBIT(INP_FAITH);
 				break;
 #endif
+			case IP_RECVPKTINFO:
+				optval = OPTBIT(INP_PKTINFO);
+				break;
 			}
 			error = sooptcopyout(sopt, &optval, sizeof optval);
 			break;
 
 		case IP_MULTICAST_IF:
+		case IP_MULTICAST_IFINDEX:
 		case IP_MULTICAST_VIF:
 		case IP_MULTICAST_TTL:
 		case IP_MULTICAST_LOOP:
-		case IP_ADD_MEMBERSHIP:
-		case IP_DROP_MEMBERSHIP:
-			error = ip_getmoptions(sopt, inp->inp_moptions);
+		case IP_MSFILTER:
+			error = inp_getmoptions(inp, sopt);
 			break;
 
 #if IPSEC
@@ -2465,7 +2671,7 @@ ip_ctloutput(so, sopt)
 #if TRAFFIC_MGT
 		case IP_TRAFFIC_MGT_BACKGROUND:
 		{
-			unsigned	background = so->so_traffic_mgt_flags;
+			unsigned	background = (so->so_traffic_mgt_flags &  TRAFFIC_MGT_SO_BACKGROUND);
 			return (sooptcopyout(sopt, &background, sizeof(background)));
 			break;
 		}
@@ -2474,6 +2680,16 @@ ip_ctloutput(so, sopt)
 		case IP_BOUND_IF:
 			if (inp->inp_flags & INP_BOUND_IF)
 				optval = inp->inp_boundif;
+			error = sooptcopyout(sopt, &optval, sizeof (optval));
+			break;
+
+		case IP_NO_IFT_CELLULAR:
+			optval = (inp->inp_flags & INP_NO_IFT_CELLULAR) ? 1 : 0;
+			error = sooptcopyout(sopt, &optval, sizeof (optval));
+			break;
+
+		case IP_OUT_IF:
+			optval = inp->inp_last_outif;
 			error = sooptcopyout(sopt, &optval, sizeof (optval));
 			break;
 
@@ -2591,471 +2807,138 @@ bad:
 	return (EINVAL);
 }
 
-/*
- * XXX
- * The whole multicast option thing needs to be re-thought.
- * Several of these options are equally applicable to non-multicast
- * transmission, and one (IP_MULTICAST_TTL) totally duplicates a
- * standard option (IP_TTL).
- */
-
-/*
- * following RFC1724 section 3.3, 0.0.0.0/8 is interpreted as interface index.
- */
-static struct ifnet *
-ip_multicast_if(a, ifindexp)
-	struct in_addr *a;
-	int *ifindexp;
+void
+ip_moptions_init(void)
 {
-	int ifindex;
-	struct ifnet *ifp;
+	PE_parse_boot_argn("ifa_debug", &imo_debug, sizeof (imo_debug));
 
-	if (ifindexp)
-		*ifindexp = 0;
-	if (ntohl(a->s_addr) >> 24 == 0) {
-		ifindex = ntohl(a->s_addr) & 0xffffff;
-		ifnet_head_lock_shared();
-		if (ifindex < 0 || if_index < ifindex) {
-			ifnet_head_done();
-			return NULL;
-		}
-		ifp = ifindex2ifnet[ifindex];
-		ifnet_head_done();
-		if (ifindexp)
-			*ifindexp = ifindex;
+	imo_size = (imo_debug == 0) ? sizeof (struct ip_moptions) :
+	    sizeof (struct ip_moptions_dbg);
+
+	imo_zone = zinit(imo_size, IMO_ZONE_MAX * imo_size, 0,
+	    IMO_ZONE_NAME);
+	if (imo_zone == NULL) {
+		panic("%s: failed allocating %s", __func__, IMO_ZONE_NAME);
+		/* NOTREACHED */
+	}
+	zone_change(imo_zone, Z_EXPAND, TRUE);
+}
+
+void
+imo_addref(struct ip_moptions *imo, int locked)
+{
+	if (!locked)
+		IMO_LOCK(imo);
+	else
+		IMO_LOCK_ASSERT_HELD(imo);
+
+	if (++imo->imo_refcnt == 0) {
+		panic("%s: imo %p wraparound refcnt\n", __func__, imo);
+		/* NOTREACHED */
+	} else if (imo->imo_trace != NULL) {
+		(*imo->imo_trace)(imo, TRUE);
+	}
+
+	if (!locked)
+		IMO_UNLOCK(imo);
+}
+
+void
+imo_remref(struct ip_moptions *imo)
+{
+	int i;
+
+	IMO_LOCK(imo);
+	if (imo->imo_refcnt == 0) {
+		panic("%s: imo %p negative refcnt", __func__, imo);
+		/* NOTREACHED */
+	} else if (imo->imo_trace != NULL) {
+		(*imo->imo_trace)(imo, FALSE);
+	}
+
+	--imo->imo_refcnt;
+	if (imo->imo_refcnt > 0) {
+		IMO_UNLOCK(imo);
+		return;
+	}
+
+	for (i = 0; i < imo->imo_num_memberships; ++i) {
+		struct in_mfilter *imf;
+
+		imf = imo->imo_mfilters ? &imo->imo_mfilters[i] : NULL;
+		if (imf != NULL)
+			imf_leave(imf);
+
+		(void) in_leavegroup(imo->imo_membership[i], imf);
+
+		if (imf != NULL)
+			imf_purge(imf);
+
+		INM_REMREF(imo->imo_membership[i]);
+		imo->imo_membership[i] = NULL;
+	}
+	imo->imo_num_memberships = 0;
+	if (imo->imo_mfilters != NULL) {
+		FREE(imo->imo_mfilters, M_INMFILTER);
+		imo->imo_mfilters = NULL;
+	}
+	if (imo->imo_membership != NULL) {
+		FREE(imo->imo_membership, M_IPMOPTS);
+		imo->imo_membership = NULL;
+	}
+	IMO_UNLOCK(imo);
+
+	lck_mtx_destroy(&imo->imo_lock, ifa_mtx_grp);
+
+	if (!(imo->imo_debug & IFD_ALLOC)) {
+		panic("%s: imo %p cannot be freed", __func__, imo);
+		/* NOTREACHED */
+	}
+	zfree(imo_zone, imo);
+}
+
+static void
+imo_trace(struct ip_moptions *imo, int refhold)
+{
+	struct ip_moptions_dbg *imo_dbg = (struct ip_moptions_dbg *)imo;
+	ctrace_t *tr;
+	u_int32_t idx;
+	u_int16_t *cnt;
+
+	if (!(imo->imo_debug & IFD_DEBUG)) {
+		panic("%s: imo %p has no debug structure", __func__, imo);
+		/* NOTREACHED */
+	}
+	if (refhold) {
+		cnt = &imo_dbg->imo_refhold_cnt;
+		tr = imo_dbg->imo_refhold;
 	} else {
-		INADDR_TO_IFP(*a, ifp);
+		cnt = &imo_dbg->imo_refrele_cnt;
+		tr = imo_dbg->imo_refrele;
 	}
-	return ifp;
+
+	idx = atomic_add_16_ov(cnt, 1) % IMO_TRACE_HIST_SIZE;
+	ctrace_record(&tr[idx]);
 }
 
-/*
- * Set the IP multicast options in response to user setsockopt().
- */
-static int
-ip_setmoptions(sopt, imop)
-	struct sockopt *sopt;
-	struct ip_moptions **imop;
-{
-	int error = 0;
-	struct in_addr addr;
-	struct ip_mreq mreq;
-	struct ifnet *ifp = NULL;
-	struct ip_moptions *imo = *imop;
-	int ifindex;
-
-	if (imo == NULL) {
-		/*
-		 * No multicast option buffer attached to the pcb;
-		 * allocate one and initialize to default values.
-		 */
-		error = ip_createmoptions(imop);
-		if (error != 0)
-			return error;
-		imo = *imop;
-	}
-
-	switch (sopt->sopt_name) {
-	/* store an index number for the vif you wanna use in the send */
-#if MROUTING
-	case IP_MULTICAST_VIF: 
-		{
-			int i;
-			if (legal_vif_num == 0) {
-				error = EOPNOTSUPP;
-				break;
-			}
-			error = sooptcopyin(sopt, &i, sizeof i, sizeof i);
-			if (error)
-				break;
-			if (!legal_vif_num(i) && (i != -1)) {
-				error = EINVAL;
-				break;
-			}
-			imo->imo_multicast_vif = i;
-			break;
-		}
-#endif /* MROUTING */
-
-	case IP_MULTICAST_IF:
-		/*
-		 * Select the interface for outgoing multicast packets.
-		 */
-		error = sooptcopyin(sopt, &addr, sizeof addr, sizeof addr);
-		if (error)
-			break;
-		/*
-		 * INADDR_ANY is used to remove a previous selection.
-		 * When no interface is selected, a default one is
-		 * chosen every time a multicast packet is sent.
-		 */
-		if (addr.s_addr == INADDR_ANY) {
-			imo->imo_multicast_ifp = NULL;
-			break;
-		}
-		/*
-		 * The selected interface is identified by its local
-		 * IP address.  Find the interface and confirm that
-		 * it supports multicasting.
-		 */
-		ifp = ip_multicast_if(&addr, &ifindex);
-		if (ifp == NULL || (ifp->if_flags & IFF_MULTICAST) == 0) {
-			error = EADDRNOTAVAIL;
-			break;
-		}
-		imo->imo_multicast_ifp = ifp;
-		if (ifindex)
-			imo->imo_multicast_addr = addr;
-		else
-			imo->imo_multicast_addr.s_addr = INADDR_ANY;
-		break;
-
-	case IP_MULTICAST_TTL:
-		/*
-		 * Set the IP time-to-live for outgoing multicast packets.
-		 * The original multicast API required a char argument,
-		 * which is inconsistent with the rest of the socket API.
-		 * We allow either a char or an int.
-		 */
-		if (sopt->sopt_valsize == 1) {
-			u_char ttl;
-			error = sooptcopyin(sopt, &ttl, 1, 1);
-			if (error)
-				break;
-			imo->imo_multicast_ttl = ttl;
-		} else {
-			u_int ttl;
-			error = sooptcopyin(sopt, &ttl, sizeof ttl, 
-					    sizeof ttl);
-			if (error)
-				break;
-			if (ttl > 255)
-				error = EINVAL;
-			else
-				imo->imo_multicast_ttl = ttl;
-		}
-		break;
-
-	case IP_MULTICAST_LOOP:
-		/*
-		 * Set the loopback flag for outgoing multicast packets.
-		 * Must be zero or one.  The original multicast API required a
-		 * char argument, which is inconsistent with the rest
-		 * of the socket API.  We allow either a char or an int.
-		 */
-		if (sopt->sopt_valsize == 1) {
-			u_char loop;
-			error = sooptcopyin(sopt, &loop, 1, 1);
-			if (error)
-				break;
-			imo->imo_multicast_loop = !!loop;
-		} else {
-			u_int loop;
-			error = sooptcopyin(sopt, &loop, sizeof loop,
-					    sizeof loop);
-			if (error)
-				break;
-			imo->imo_multicast_loop = !!loop;
-		}
-		break;
-
-	case IP_ADD_MEMBERSHIP:
-		/*
-		 * Add a multicast group membership.
-		 * Group must be a valid IP multicast address.
-		 */
-		error = sooptcopyin(sopt, &mreq, sizeof mreq, sizeof mreq);
-		if (error)
-			break;
-		
-		error = ip_addmembership(imo, &mreq);
-		break;
-
-	case IP_DROP_MEMBERSHIP:
-		/*
-		 * Drop a multicast group membership.
-		 * Group must be a valid IP multicast address.
-		 */
-		error = sooptcopyin(sopt, &mreq, sizeof mreq, sizeof mreq);
-		if (error)
-			break;
-		
-		error = ip_dropmembership(imo, &mreq);
-		break;
-
-	default:
-		error = EOPNOTSUPP;
-		break;
-	}
-
-	/*
-	 * If all options have default values, no need to keep the mbuf.
-	 */
-	if (imo->imo_multicast_ifp == NULL &&
-	    imo->imo_multicast_vif == (u_int32_t)-1 &&
-	    imo->imo_multicast_ttl == IP_DEFAULT_MULTICAST_TTL &&
-	    imo->imo_multicast_loop == IP_DEFAULT_MULTICAST_LOOP &&
-	    imo->imo_num_memberships == 0) {
-		FREE(*imop, M_IPMOPTS);
-		*imop = NULL;
-	}
-
-	return (error);
-}
-
-/*
- * Set the IP multicast options in response to user setsockopt().
- */
-__private_extern__ int
-ip_createmoptions(
-	struct ip_moptions **imop)
+struct ip_moptions *
+ip_allocmoptions(int how)
 {
 	struct ip_moptions *imo;
-	imo = (struct ip_moptions*) _MALLOC(sizeof(*imo), M_IPMOPTS,
-		M_WAITOK);
 
-	if (imo == NULL)
-		return (ENOBUFS);
-	*imop = imo;
-	imo->imo_multicast_ifp = NULL;
-	imo->imo_multicast_addr.s_addr = INADDR_ANY;
-	imo->imo_multicast_vif = -1;
-	imo->imo_multicast_ttl = IP_DEFAULT_MULTICAST_TTL;
-	imo->imo_multicast_loop = IP_DEFAULT_MULTICAST_LOOP;
-	imo->imo_num_memberships = 0;
-	
-	return 0;
-}
-
-/*
- * Add membership to an IPv4 multicast.
- */
-__private_extern__ int
-ip_addmembership(
-	struct ip_moptions *imo,
-	struct ip_mreq *mreq)
-{
-	struct route ro;
-	struct sockaddr_in *dst;
-	struct ifnet *ifp = NULL;
-	int error = 0;
-	int i;
-
-	bzero((caddr_t)&ro, sizeof(ro));
-
-	if (!IN_MULTICAST(ntohl(mreq->imr_multiaddr.s_addr))) {
-		error = EINVAL;
-		goto done;
-	}
-	/*
-	 * If no interface address was provided, use the interface of
-	 * the route to the given multicast address.
-	 */
-	if (mreq->imr_interface.s_addr == INADDR_ANY) {
-		dst = (struct sockaddr_in *)&ro.ro_dst;
-		dst->sin_len = sizeof(*dst);
-		dst->sin_family = AF_INET;
-		dst->sin_addr = mreq->imr_multiaddr;
-		rtalloc_ign(&ro, 0);
-		if (ro.ro_rt != NULL) {
-			ifp = ro.ro_rt->rt_ifp;
-		} else {
-			/* If there's no default route, try using loopback */
-			mreq->imr_interface.s_addr = htonl(INADDR_LOOPBACK);
-		}
-	}
-
-	if (ifp == NULL) {
-		ifp = ip_multicast_if(&mreq->imr_interface, NULL);
-	}
-
-	/*
-	 * See if we found an interface, and confirm that it
-	 * supports multicast.
-	 */
-	if (ifp == NULL || (ifp->if_flags & IFF_MULTICAST) == 0) {
-		error = EADDRNOTAVAIL;
-		goto done;
-	}
-	/*
-	 * See if the membership already exists or if all the
-	 * membership slots are full.
-	 */
-	for (i = 0; i < imo->imo_num_memberships; ++i) {
-		if (imo->imo_membership[i]->inm_ifp == ifp &&
-			imo->imo_membership[i]->inm_addr.s_addr
-					== mreq->imr_multiaddr.s_addr)
-			break;
-	}
-	if (i < imo->imo_num_memberships) {
-		error = EADDRINUSE;
-		goto done;
-	}
-	if (i == IP_MAX_MEMBERSHIPS) {
-		error = ETOOMANYREFS;
-		goto done;
-	}
-	/*
-	 * Everything looks good; add a new record to the multicast
-	 * address list for the given interface.
-	 */
-	if ((imo->imo_membership[i] =
-		in_addmulti(&mreq->imr_multiaddr, ifp)) == NULL) {
-		error = ENOBUFS;
-		goto done;
-	}
-	++imo->imo_num_memberships;
-
-done:
-	if (ro.ro_rt != NULL)
-		rtfree(ro.ro_rt);
-
-	return error;
-}
-
-/*
- * Drop membership of an IPv4 multicast.
- */
-__private_extern__ int
-ip_dropmembership(
-	struct ip_moptions *imo,
-	struct ip_mreq *mreq)
-{
-	int error = 0;
-	struct ifnet* ifp = NULL;
-	int i;
-	
-	if (!IN_MULTICAST(ntohl(mreq->imr_multiaddr.s_addr))) {
-		error = EINVAL;
-		return error;
-	}
-
-	/*
-	 * If an interface address was specified, get a pointer
-	 * to its ifnet structure.
-	 */
-	if (mreq->imr_interface.s_addr == INADDR_ANY)
-		ifp = NULL;
-	else {
-		ifp = ip_multicast_if(&mreq->imr_interface, NULL);
-		if (ifp == NULL) {
-			error = EADDRNOTAVAIL;
-			return error;
-		}
-	}
-	/*
-	 * Find the membership in the membership array.
-	 */
-	for (i = 0; i < imo->imo_num_memberships; ++i) {
-		if ((ifp == NULL ||
-			 imo->imo_membership[i]->inm_ifp == ifp) &&
-			 imo->imo_membership[i]->inm_addr.s_addr ==
-			 mreq->imr_multiaddr.s_addr)
-			break;
-	}
-	if (i == imo->imo_num_memberships) {
-		error = EADDRNOTAVAIL;
-		return error;
-	}
-	/*
-	 * Give up the multicast address record to which the
-	 * membership points.
-	 */
-	in_delmulti(&imo->imo_membership[i]);
-	/*
-	 * Remove the gap in the membership array.
-	 */
-	for (++i; i < imo->imo_num_memberships; ++i)
-		imo->imo_membership[i-1] = imo->imo_membership[i];
-	--imo->imo_num_memberships;
-	
-	return error;
-}
-
-/*
- * Return the IP multicast options in response to user getsockopt().
- */
-static int
-ip_getmoptions(sopt, imo)
-	struct sockopt *sopt;
-	register struct ip_moptions *imo;
-{
-	struct in_addr addr;
-	struct in_ifaddr *ia;
-	int error, optval;
-	u_char coptval;
-
-	error = 0;
-	switch (sopt->sopt_name) {
-#if MROUTING
-	case IP_MULTICAST_VIF: 
-		if (imo != NULL)
-			optval = imo->imo_multicast_vif;
-		else
-			optval = -1;
-		error = sooptcopyout(sopt, &optval, sizeof optval);
-		break;
-#endif /* MROUTING */
-
-	case IP_MULTICAST_IF:
-		if (imo == NULL || imo->imo_multicast_ifp == NULL)
-			addr.s_addr = INADDR_ANY;
-		else if (imo->imo_multicast_addr.s_addr) {
-			/* return the value user has set */
-			addr = imo->imo_multicast_addr;
-		} else {
-			IFP_TO_IA(imo->imo_multicast_ifp, ia);
-			addr.s_addr = (ia == NULL) ? INADDR_ANY
-				: IA_SIN(ia)->sin_addr.s_addr;
-			if (ia != NULL)
-				ifafree(&ia->ia_ifa);
-		}
-		error = sooptcopyout(sopt, &addr, sizeof addr);
-		break;
-
-	case IP_MULTICAST_TTL:
-		if (imo == 0)
-			optval = coptval = IP_DEFAULT_MULTICAST_TTL;
-		else
-			optval = coptval = imo->imo_multicast_ttl;
-		if (sopt->sopt_valsize == 1)
-			error = sooptcopyout(sopt, &coptval, 1);
-		else
-			error = sooptcopyout(sopt, &optval, sizeof optval);
-		break;
-
-	case IP_MULTICAST_LOOP:
-		if (imo == 0)
-			optval = coptval = IP_DEFAULT_MULTICAST_LOOP;
-		else
-			optval = coptval = imo->imo_multicast_loop;
-		if (sopt->sopt_valsize == 1)
-			error = sooptcopyout(sopt, &coptval, 1);
-		else
-			error = sooptcopyout(sopt, &optval, sizeof optval);
-		break;
-
-	default:
-		error = ENOPROTOOPT;
-		break;
-	}
-	return (error);
-}
-
-/*
- * Discard the IP multicast options.
- */
-void
-ip_freemoptions(imo)
-	register struct ip_moptions *imo;
-{
-	register int i;
-
+	imo = (how == M_WAITOK) ? zalloc(imo_zone) : zalloc_noblock(imo_zone);
 	if (imo != NULL) {
-		for (i = 0; i < imo->imo_num_memberships; ++i)
-			in_delmulti(&imo->imo_membership[i]);
-		FREE(imo, M_IPMOPTS);
+		bzero(imo, imo_size);
+		lck_mtx_init(&imo->imo_lock, ifa_mtx_grp, ifa_mtx_attr);
+		imo->imo_debug |= IFD_ALLOC;
+		if (imo_debug != 0) {
+			imo->imo_debug |= IFD_DEBUG;
+			imo->imo_trace = imo_trace;
+		}
+		IMO_ADDREF(imo);
 	}
+
+	return (imo);
 }
 
 /*
@@ -3174,6 +3057,8 @@ ip_mloopback(ifp, m, dst, hlen)
  * without any locks based on the assumption that ip_output() is single-
  * threaded per-pcb, i.e. for any given pcb there can only be one thread
  * performing output at the IP layer.
+ *
+ * This routine is analogous to in6_selectroute() for IPv6.
  */
 static struct ifaddr *
 in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
@@ -3215,9 +3100,9 @@ in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
 		 */
 		if (scope == IFSCOPE_NONE) {
 			scope = rt_ifp->if_index;
-			if (scope != get_primary_ifscope() &&
+			if (scope != get_primary_ifscope(AF_INET) &&
 			    ro->ro_rt->generation_id != route_generation)
-				scope = get_primary_ifscope();
+				scope = get_primary_ifscope(AF_INET);
 		}
 
 		ifa = (struct ifaddr *)ifa_foraddr_scoped(src.s_addr, scope);
@@ -3232,7 +3117,7 @@ in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
 			 */
 			ifa = (struct ifaddr *)ifa_foraddr(src.s_addr);
 			if (ifa != NULL) {
-				ifafree(ifa);
+				IFA_REMREF(ifa);
 				ifa = NULL;
 				ifscope = IFSCOPE_NONE;
 			}
@@ -3240,16 +3125,14 @@ in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
 
 		if (ip_select_srcif_debug && ifa != NULL) {
 			if (ro->ro_rt != NULL) {
-				printf("%s->%s ifscope %d->%d ifa_if %s%d "
-				    "ro_if %s%d\n", s_src, s_dst, ifscope,
-				    scope, ifa->ifa_ifp->if_name,
-				    ifa->ifa_ifp->if_unit, rt_ifp->if_name,
-				    rt_ifp->if_unit);
+				printf("%s->%s ifscope %d->%d ifa_if %s "
+				    "ro_if %s\n", s_src, s_dst, ifscope,
+				    scope, if_name(ifa->ifa_ifp),
+				    if_name(rt_ifp));
 			} else {
-				printf("%s->%s ifscope %d->%d ifa_if %s%d\n",
+				printf("%s->%s ifscope %d->%d ifa_if %s\n",
 				    s_src, s_dst, ifscope, scope,
-				    ifa->ifa_ifp->if_name,
-				    ifa->ifa_ifp->if_unit);
+				    if_name(ifa->ifa_ifp));
 			}
 		}
 	}
@@ -3296,7 +3179,7 @@ in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
 				if (ifa->ifa_ifp != rt->rt_ifp) {
 					oifa = ifa;
 					ifa = rt->rt_ifa;
-					ifaref(ifa);
+					IFA_ADDREF(ifa);
 					RT_UNLOCK(rt);
 				} else {
 					RT_UNLOCK(rt);
@@ -3322,8 +3205,8 @@ in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
 					 * as well as the route interface
 					 * address, and use this instead.
 					 */
-					ifafree(oifa);
-					ifafree(ifa);
+					IFA_REMREF(oifa);
+					IFA_REMREF(ifa);
 					ifa = iifa;
 				} else if (!ipforwarding ||
 				    (rt->rt_flags & RTF_GATEWAY)) {
@@ -3334,7 +3217,7 @@ in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
 					 * original one, and let the caller
 					 * do a scoped route lookup.
 					 */
-					ifafree(ifa);
+					IFA_REMREF(ifa);
 					ifa = oifa;
 				} else {
 					/*
@@ -3347,7 +3230,7 @@ in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
 					 * the original one and use the route
 					 * interface address instead.
 					 */
-					ifafree(oifa);
+					IFA_REMREF(oifa);
 				}
 			}
 		} else if (ifa != NULL && ro->ro_rt != NULL &&
@@ -3359,15 +3242,14 @@ in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
 			 * as the interface used by the known route; drop the
 			 * original one and use the route interface address.
 			 */
-			ifafree(ifa);
+			IFA_REMREF(ifa);
 			ifa = ro->ro_rt->rt_ifa;
-			ifaref(ifa);
+			IFA_ADDREF(ifa);
 		}
 
 		if (ip_select_srcif_debug && ifa != NULL) {
-			printf("%s->%s ifscope %d ifa_if %s%d\n",
-			    s_src, s_dst, ifscope, ifa->ifa_ifp->if_name,
-			    ifa->ifa_ifp->if_unit);
+			printf("%s->%s ifscope %d ifa_if %s\n",
+			    s_src, s_dst, ifscope, if_name(ifa->ifa_ifp));
 		}
 	}
 
@@ -3384,16 +3266,14 @@ in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
 	    !(ro->ro_rt->rt_flags & RTF_UP))) {
 		if (ip_select_srcif_debug) {
 			if (ifa != NULL) {
-				printf("%s->%s ifscope %d ro_if %s%d != "
-				    "ifa_if %s%d (cached route cleared)\n",
-				    s_src, s_dst, ifscope, rt_ifp->if_name,
-				    rt_ifp->if_unit, ifa->ifa_ifp->if_name,
-				    ifa->ifa_ifp->if_unit);
+				printf("%s->%s ifscope %d ro_if %s != "
+				    "ifa_if %s (cached route cleared)\n",
+				    s_src, s_dst, ifscope, if_name(rt_ifp),
+				    if_name(ifa->ifa_ifp));
 			} else {
-				printf("%s->%s ifscope %d ro_if %s%d "
+				printf("%s->%s ifscope %d ro_if %s "
 				    "(no ifa_if found)\n",
-				    s_src, s_dst, ifscope, rt_ifp->if_name,
-				    rt_ifp->if_unit);
+				    s_src, s_dst, ifscope, if_name(rt_ifp));
 			}
 		}
 
@@ -3414,7 +3294,7 @@ in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
 		 */
 		if (IN_LINKLOCAL(ntohl(dst.s_addr)) &&
 		    !IN_LINKLOCAL(ntohl(src.s_addr)) && ifa != NULL) {
-			ifafree(ifa);
+			IFA_REMREF(ifa);
 			ifa = NULL;
 		}
 	}
@@ -3443,32 +3323,4 @@ in_selectsrcif(struct ip *ip, struct route *ro, unsigned int ifscope)
 		RT_UNLOCK(ro->ro_rt);
 
 	return (ifa);
-}
-
-/*
- * Handler for setting IP_FORCE_OUT_IFP or IP_BOUND_IF socket option.
- */
-static void
-ip_bindif(struct inpcb *inp, unsigned int ifscope)
-{
-	/*
-	 * A zero interface scope value indicates an "unbind".
-	 * Otherwise, take in whatever value the app desires;
-	 * the app may already know the scope (or force itself
-	 * to such a scope) ahead of time before the interface
-	 * gets attached.  It doesn't matter either way; any
-	 * route lookup from this point on will require an
-	 * exact match for the embedded interface scope.
-	 */
-	inp->inp_boundif = ifscope;
-	if (inp->inp_boundif == IFSCOPE_NONE)
-		inp->inp_flags &= ~INP_BOUND_IF;
-	else
-		inp->inp_flags |= INP_BOUND_IF;
-
-	/* Blow away any cached route in the PCB */
-	if (inp->inp_route.ro_rt != NULL) {
-		rtfree(inp->inp_route.ro_rt);
-		inp->inp_route.ro_rt = NULL;
-	}
 }

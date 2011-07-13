@@ -40,12 +40,14 @@
 #include <i386/machine_routines.h>
 #include <i386/misc_protos.h>
 #include <i386/cpu_threads.h>
-#include <i386/rtclock.h>
+#include <i386/rtclock_protos.h>
 #include <i386/cpuid.h>
 #if CONFIG_VMX
 #include <i386/vmx/vmx_cpu.h>
 #endif
 #include <vm/vm_kern.h>
+#include <kern/etimer.h>
+#include <kern/timer_call.h>
 
 struct processor	processor_master;
 
@@ -100,6 +102,9 @@ void
 cpu_init(void)
 {
 	cpu_data_t	*cdp = current_cpu_datap();
+
+	timer_call_initialize_queue(&cdp->rtclock_timer.queue);
+	cdp->rtclock_timer.deadline = EndOfAllTime;
 
 	cdp->cpu_type = cpuid_cputype();
 	cdp->cpu_subtype = cpuid_cpusubtype();
@@ -167,13 +172,6 @@ cpu_machine_init(
 	PE_cpu_machine_init(cdp->cpu_id, !cdp->cpu_boot_complete);
 	cdp->cpu_boot_complete = TRUE;
 	cdp->cpu_running = TRUE;
-#if 0
-	if (cpu_datap(cpu)->hibernate)
-	{
-	    cpu_datap(cpu)->hibernate = 0;
-	    hibernate_machine_init();
-	}
-#endif
 	ml_init_interrupt();
 
 #if CONFIG_VMX
@@ -245,8 +243,6 @@ slot_threadtype(
 {
 	return (cpu_datap(slot_num)->cpu_threadtype);
 }
-
-
 
 cpu_type_t
 cpu_type(void)

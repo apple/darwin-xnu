@@ -71,7 +71,7 @@ struct ah_algorithm {
 	const char *name;
 	int (*init)(struct ah_algorithm_state *, struct secasvar *);
 	void (*update)(struct ah_algorithm_state *, caddr_t, size_t);
-	void (*result)(struct ah_algorithm_state *, caddr_t);
+	void (*result)(struct ah_algorithm_state *, caddr_t, size_t);
 };
 
 #define	AH_MAXSUMSIZE	64 // sha2-512's output size

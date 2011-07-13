@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -189,5 +189,9 @@ IOTimeStamp(uintptr_t csc,
 #define IOSERVICE_TERMINATE_STOP_NOP		15	/* 0x0508003C */
 #define IOSERVICE_TERMINATE_STOP_DEFER		16	/* 0x05080040 */
 #define IOSERVICE_TERMINATE_DONE		17	/* 0x05080044 */
+
+#define IOSERVICE_KEXTD_ALIVE		18	/* 0x05080048 */
+#define IOSERVICE_KEXTD_READY		19	/* 0x0508004C */
+#define IOSERVICE_REGISTRY_QUIET		20	/* 0x05080050 */
 
 #endif /* ! IOKIT_IOTIMESTAMP_H */

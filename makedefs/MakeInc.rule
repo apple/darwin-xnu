@@ -523,7 +523,9 @@ S_RULE_3=
 C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} 
 C_RULE_1B=$*.c
 C_RULE_2=@echo CC $@
-ifeq    ($(BUILD_STABS),1)
+ifeq ($(BUILD_MACHO_OBJ),0)
+C_RULE_3=
+else ifeq ($(BUILD_STABS),1)
 C_RULE_3=
 else
 C_RULE_3=$(_v)${CTFCONVERT} -l xnu -v -o $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf || true;
@@ -547,7 +549,9 @@ P_RULE_1A=$(_v)${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${$@_CFLAGS_RM}, ${CFLA
 P_RULE_1B=$(<F)
 P_RULE_2=$(_v)sed 's/.c.o: /.cpo: /' $(@:.cpo=.d) > $(@:.cpo=.d~) && mv $(@:.cpo=.d~) $(@:.cpo=.d)
 P_RULE_3=@echo C++ $@
-ifeq    ($(BUILD_STABS),1)
+ifeq ($(BUILD_MACHO_OBJ),0)
+P_RULE_4=
+else ifeq ($(BUILD_STABS),1)
 P_RULE_4=
 else
 P_RULE_4=$(_v)${CTFCONVERT} -l xnu -v -o $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf $@ > /dev/null && $(CTFSCRUB) `cat $(SRCROOT)/config/DtraceIgnored.symbols` $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)/$@.ctf || true;
@@ -568,25 +572,37 @@ STATIC_KMODS =  $(SRCROOT)/kmods.a
 
 do_build_mach_kernel: $(TARGET)/kgmacros $(TARGET)/mach_kernel
 
-$(TARGET)/mach_kernel: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) lastkernelconstructor.o
+$(TARGET)/mach_kernel: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .filelist, $(component))))) lastkernelconstructor.o
 	$(_v)${MAKE} version.o
 	$(_v)${MAKE} build_mach_kernel_exports
 	@echo LD mach_kernel.sys
-	$(_v)$(CAT) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) > mach_kernel.filelist
-	$(_v)$(LD) $(LDFLAGS_KERNEL) -filelist mach_kernel.filelist version.o lastkernelconstructor.o `if [ -e $(STATIC_KMODS) ]; then echo $(STATIC_KMODS); fi` \
+	$(_v)$(CAT) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell printf $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .filelist, $(component))))) < /dev/null > link.filelist
+	$(_v)$(LD) $(LDFLAGS_KERNEL) -filelist link.filelist version.o lastkernelconstructor.o `if [ -e $(STATIC_KMODS) ]; then echo $(STATIC_KMODS); fi` \
 		-o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS)
-	@echo DSYMUTIL mach_kernel.sys
 	$(_v)if [ $(BUILD_DWARF)  -eq  1 ]; then \
+		echo DSYMUTIL mach_kernel.sys; \
 		$(DSYMUTIL) $(DSYMUTIL_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel.sys.dSYM > /dev/null; \
+		$(INSTALL) $(INSTALL_FLAGS) $(SRCROOT)/kgmacros $(TARGET)/mach_kernel.sys.dSYM/$(DSYMRESDIR)/kgmacros; \
+	fi;
+	$(_v)if [ $(MACHINE_CONFIG) != DEFAULT ] ; then     \
+		kernel_file_name=mach.`printf "%s" "$(KERNEL_CONFIG)" | $(TR) A-Z a-z`.`printf "%s" "$(MACHINE_CONFIG)" | $(TR) A-Z a-z`; \
+		echo  kernel_file_name $${kernel_file_name}; \
+		[ -h  ${OBJROOT}/$${kernel_file_name} ] || $(LN) $(TARGET)/mach_kernel ${OBJROOT}/$${kernel_file_name};	\
 	fi;
 	@echo STRIP mach_kernel
 	$(_v)$(STRIP) $(STRIP_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel
-	@echo CTFMERGE mach_kernel
-	$(_v)if [ $(BUILD_DWARF) -eq 1 ]; then			\
+	$(_v)if [ $(BUILD_MACHO_OBJ) -eq 1 -a $(BUILD_DWARF) -eq 1 ]; then			\
+		echo CTFMERGE mach_kernel;   		     	\
 		$(FIND) $(OBJPATH)/ -name \*.ctf -size 0	\
 			-exec $(RM) -rf {} \;	;		\
-		$(CTFMERGE) -l xnu -o $(TARGET)/mach_kernel 		\
-			$(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true;	\
+		$(CTFMERGE) -l xnu -o $(TARGET)/mach_kernel     \
+			    -Z $(TARGET)/mach_kernel.ctfdata	\
+			    $(OBJPATH)/*/$(KERNEL_CONFIG)/*.*o.ctf || true; 	\
+		echo CTFINSERT mach_kernel;   		     	\
+		$(CTFINSERT) $(TARGET)/mach_kernel		\
+			 $($(addsuffix $(ARCH_CONFIG),ARCH_FLAGS_)) $(TARGET)/mach_kernel.ctfdata \
+			 -o $(TARGET)/mach_kernel || true;	\
+			 $(RM) -f $(TARGET)/mach_kernel.ctfdata > /dev/null || true; \
 	fi;							\
 
 version.o: $(OBJPATH)/version.c
@@ -599,9 +615,13 @@ $(OBJPATH)/version.c: $(SRCROOT)/config/version.c $(NEWVERS) $(SRCROOT)/config/M
 	$(_v)$(CP) $< $@
 	$(_v)$(NEWVERS) $(OBJPATH)/version.c > /dev/null;
 
+# "/libsa" needed because TARGET ends in "/."
+lastkernelconstructor.o: COMP_OBJ_DIR=/libsa
 lastkernelconstructor.o: $(SRCROOT)/libsa/lastkernelconstructor.c
+	$(_v)$(MKDIR) $(TARGET)$(COMP_OBJ_DIR)/$(KERNEL_CONFIG)
 	${C_RULE_1A}$<
 	${C_RULE_2}
+	${C_RULE_3}
 	${C_RULE_4}
 
 $(TARGET)/kgmacros: $(SRCROOT)/kgmacros
@@ -615,65 +635,19 @@ build_mach_kernel_exports:
 		TARGET=$${TARGET}			\
 	build_mach_kernel_exports;
 
-# Special rules to install machine configuration variants
-
-$(DSTROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC): $(TARGET)/mach_kernel force_file_install
-	@echo Installing $< in $@;
-	$(_v)if [ ! -e $(DSTROOT)$(INSTALL_FILE_DIR) ]; then	\
-		$(MKDIR) $(DSTROOT)$(INSTALL_FILE_DIR);		\
-	fi;							\
-	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
-		$(RM) $(RMFLAGS) $@;				\
-		$(INSTALL) $(FILE_INSTALL_FLAGS) $< $@;		\
-	else							\
-		if [ ! -e $@ ]; then				\
-			print "" >empty_file_$(notdir $@);			\
-			lipo_arg="$(foreach lipo_arch,$(INSTALL_ARCHS),$(ARCH_FLAGS_$(lipo_arch)) empty_file_$(notdir $@))"; \
-			$(LIPO) $${lipo_arg} -create -output $@;	\
-			$(RM) $(RMFLAGS) empty_file_$(notdir $@);		\
-		fi;							\
-		$(LIPO) $@ -replace $(subst -arch,,$(ARCH_FLAGS_$(ARCH_CONFIG))) $< -o $@;	\
-	fi
-
-$(SYMROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC): $(TARGET)/mach_kernel.sys force_file_install
-	@echo Installing $< in $@;
-	$(_v)if [ ! -e $(SYMROOT)$(INSTALL_FILE_DIR) ]; then	\
-		$(MKDIR) $(SYMROOT)$(INSTALL_FILE_DIR);		\
-	fi;							\
-	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
-		$(RM) $(RMFLAGS) $@;				\
-		$(INSTALL) $(FILE_INSTALL_FLAGS) $< $@;		\
-		if [ $(BUILD_DWARF) -eq 1 ]; then			\
-			$(RM) -rf $@.dSYM;				\
-			$(MKDIR) -p -m 0755 $@.dSYM/$(DSYMBUILDDIR);	\
-			$(INSTALL) $(INSTALL_FLAGS)			\
-				$<.dSYM/$(DSYMBUILDDIR)/$(notdir $<)	\
-				$@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);	\
-		fi;							\
-	else							\
-		if [ ! -e $@ ]; then				\
-			printf "" >empty_file_$(notdir $@);			\
-			lipo_arg="$(foreach lipo_arch,$(INSTALL_ARCHS),$(ARCH_FLAGS_$(lipo_arch)) empty_file_$(notdir $@))"; \
-			$(LIPO) $${lipo_arg} -create -output $@;	\
-			$(RM) $(RMFLAGS) empty_file_$(notdir $@);		\
-		fi;							\
-		$(LIPO) $@ -replace $(subst -arch,,$(ARCH_FLAGS_$(ARCH_CONFIG))) $< -o $@;	\
-	fi
-
 endif # mach_kernel-specific build rules
 
 #
-# Generic Install rules
+# Kernel Install rules
 #
-INSTALL_FILE_FILES = $(addprefix $(DSTROOT)$(INSTALL_FILE_DIR), $(INSTALL_FILE_LIST))
-INSTALL_FILE_FILES_GENERIC = $(filter-out $(DSTROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC), $(INSTALL_FILE_FILES))
+INSTALL_KERNEL_FILE_FILES = $(addprefix $(DSTROOT)$(INSTALL_KERNEL_DIR), $(INSTALL_KERNEL_FILE))
 
-force_file_install:
+force_kernel_file_install:
 
-$(INSTALL_FILE_FILES_GENERIC): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% force_file_install
+$(INSTALL_KERNEL_FILE_FILES): $(TARGET)/mach_kernel force_kernel_file_install
 	@echo Installing $< in $@;
-	$(_v)if [ ! -e $(DSTROOT)$(INSTALL_FILE_DIR) ]; then		\
-		$(MKDIR) $(DSTROOT)$(INSTALL_FILE_DIR);			\
+	$(_v)if [ ! -e $(DSTROOT)$(INSTALL_KERNEL_DIR) ]; then		\
+		$(MKDIR) $(DSTROOT)$(INSTALL_KERNEL_DIR);		\
 	fi;								\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then		\
 		$(RM) $(RMFLAGS) $@;					\
@@ -688,28 +662,27 @@ $(INSTALL_FILE_FILES_GENERIC): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% forc
 		$(LIPO) $@ -replace $(subst -arch,,$(ARCH_FLAGS_$(ARCH_CONFIG))) $< -o $@;	\
 	fi
 
-INSTALL_FILESYS_FILES = $(addprefix $(SYMROOT)$(INSTALL_FILE_DIR), $(INSTALL_FILE_LIST))
-INSTALL_FILESYS_FILES_GENERIC = $(filter-out $(SYMROOT)$(INSTALL_FILE_DIR)mach.$(KERNEL_CONFIG_LC).$(MACHINE_CONFIG_LC), $(INSTALL_FILESYS_FILES))
+INSTALL_KERNEL_FILESYS_FILES = $(addprefix $(SYMROOT)$(INSTALL_KERNEL_DIR), $(INSTALL_KERNEL_FILE))
 
-force_filesys_install:
+force_kernel_filesys_install:
 
-$(INSTALL_FILESYS_FILES_GENERIC): $(SYMROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/%.sys force_filesys_install
+$(INSTALL_KERNEL_FILESYS_FILES): $(TARGET)/mach_kernel.sys force_kernel_filesys_install
 	@echo Installing $< in $@;
-	$(_v)if [ ! -e $(SYMROOT)$(INSTALL_FILE_DIR) ]; then	\
-		$(MKDIR) $(SYMROOT)$(INSTALL_FILE_DIR);		\
+	$(_v)if [ ! -e $(SYMROOT)$(INSTALL_KERNEL_DIR) ]; then	\
+		$(MKDIR) $(SYMROOT)$(INSTALL_KERNEL_DIR);		\
 	fi;							\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
 		$(RM) $(RMFLAGS) $@;				\
 		$(INSTALL) $(INSTALL_FLAGS) $< $@;			\
 		if [ $(BUILD_DWARF) -eq 1 ]; then			\
-			$(DSYMUTIL) $(DSYMUTIL_FLAGS)			\
-				$(TARGET)/mach_kernel.sys		\
-				-o $(TARGET)/mach_kernel.sys.dSYM;	\
 			$(RM) -rf $@.dSYM;				\
 			$(MKDIR) -p -m 0755 $@.dSYM/$(DSYMBUILDDIR);	\
 			$(INSTALL) $(INSTALL_FLAGS)			\
 				$<.dSYM/$(DSYMBUILDDIR)/$(notdir $<)	\
 				$@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);	\
+			$(INSTALL) $(INSTALL_FLAGS)			\
+				$<.dSYM/$(DSYMRESDIR)/kgmacros		\
+				$@.dSYM/$(DSYMRESDIR)/kgmacros;		\
 		fi;							\
 	else							\
 		if [ ! -e $@ ]; then				\
@@ -730,29 +703,21 @@ $(INSTALL_FILESYS_FILES_GENERIC): $(SYMROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/%.s
 					$@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);  \
 				$(RM) $(RMFLAGS) empty_filesys_$(notdir $@);   \
 			fi;						       \
-			$(DSYMUTIL) $(DSYMUTIL_FLAGS)			\
-				$(TARGET)/mach_kernel.sys		\
-				-o $(TARGET)/mach_kernel.sys.dSYM;	\
 			$(LIPO) $@.dSYM/$(DSYMBUILDDIR)/$(notdir $@)	       \
 				-replace $(subst -arch,,$(ARCH_FLAGS_$(ARCH_CONFIG)))		       \
 				$<.dSYM/$(DSYMBUILDDIR)/$(notdir $<)	       \
 				-o $@.dSYM/$(DSYMBUILDDIR)/$(notdir $@);       \
+			$(INSTALL) $(INSTALL_FLAGS)			\
+				$<.dSYM/$(DSYMRESDIR)/kgmacros		\
+				$@.dSYM/$(DSYMRESDIR)/kgmacros;		\
 		fi;							       \
 	fi
 	$(INSTALL) $(INSTALL_FLAGS) $(SOURCE)kgmacros $(SYMROOT)$(INSTALL_FILE_DIR)
 
-INSTALL_DATA_FILES = $(addprefix $(DSTROOT)$(INSTALL_DATA_DIR), $(INSTALL_DATA_LIST))
-
-$(INSTALL_DATA_FILES): $(DSTROOT)$(INSTALL_DATA_DIR)% : $(SOURCE)/%
-	@echo Installing $< in $@;
-	$(_v)[ -d $(dir $@) ] ||$(MKDIR) $(dir $@);		\
-	$(RM) $(RMFLAGS) $@;		\
-	$(INSTALL) $(DATA_INSTALL_FLAGS) $< $(dir $@);
-
 setup_build_install:
 	@echo "[ $(SOURCE) ] make setup_build_install $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
-do_build_install: $(INSTALL_FILESYS_FILES) $(INSTALL_FILE_FILES) $(INSTALL_DATA_FILES)
+do_build_install: $(INSTALL_KERNEL_FILESYS_FILES) $(INSTALL_KERNEL_FILE_FILES)
 	@echo "[ $(SOURCE) ] make do_build_install $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 INSTALL_MAN_FILES = $(addprefix $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/, $(INSTALL_MAN_LIST))

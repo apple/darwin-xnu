@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -119,6 +119,7 @@
 #include <netinet/kpi_ipfilter_var.h>
 
 #include <net/net_osdep.h>
+#include <mach/sdt.h>
 
 #include <sys/kdebug.h>
 #define DBG_LAYER_BEG		NETDBG_CODE(DBG_NETIPSEC, 1)
@@ -136,16 +137,37 @@ extern struct protosw inetsw[];
 	(sizeof(struct esp) < sizeof(struct newesp) \
 		? sizeof(struct newesp) : sizeof(struct esp))
 
+static struct ip *
+esp4_input_strip_UDP_encap (struct mbuf *m, int iphlen)
+{
+	// strip the udp header that's encapsulating ESP
+	struct ip *ip;
+	size_t     stripsiz = sizeof(struct udphdr);
+
+	ip = mtod(m, __typeof__(ip));
+	ovbcopy((caddr_t)ip, (caddr_t)(((u_char *)ip) + stripsiz), iphlen);
+	m->m_data += stripsiz;
+	m->m_len -= stripsiz;
+	m->m_pkthdr.len -= stripsiz;
+	ip = mtod(m, __typeof__(ip));
+	ip->ip_len = ip->ip_len - stripsiz;
+	ip->ip_p = IPPROTO_ESP;
+	return ip;
+}
+
 void
 esp4_input(m, off)
 	struct mbuf *m;
 	int off;
 {
 	struct ip *ip;
+#if INET6
 	struct ip6_hdr *ip6;
+#endif /* INET6 */
 	struct esp *esp;
 	struct esptail esptail;
 	u_int32_t spi;
+	u_int32_t seq;
 	struct secasvar *sav = NULL;
 	size_t taillen;
 	u_int16_t nxt;
@@ -175,6 +197,14 @@ esp4_input(m, off)
 	}
 
 	ip = mtod(m, struct ip *);
+	// expect udp-encap and esp packets only
+	if (ip->ip_p != IPPROTO_ESP &&
+	    !(ip->ip_p == IPPROTO_UDP && off >= sizeof(struct udphdr))) {
+		ipseclog((LOG_DEBUG,
+			  "IPv4 ESP input: invalid protocol type\n"));
+		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
+		goto bad;
+	}
 	esp = (struct esp *)(((u_int8_t *)ip) + off);
 #ifdef _IP_VHL
 	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
@@ -222,6 +252,7 @@ esp4_input(m, off)
 		goto bad;
 	}
 
+	seq = ntohl(((struct newesp *)esp)->esp_seq);
 	if (!((sav->flags & SADB_X_EXT_OLD) == 0 && sav->replay
 	 && (sav->alg_auth && sav->key_auth)))
 		goto noreplaycheck;
@@ -233,7 +264,7 @@ esp4_input(m, off)
 	/*
 	 * check for sequence number.
 	 */
-	if (ipsec_chkreplay(ntohl(((struct newesp *)esp)->esp_seq), sav))
+	if (ipsec_chkreplay(seq, sav))
 		; /*okey*/
 	else {
 		IPSEC_STAT_INCREMENT(ipsecstat.in_espreplay);
@@ -298,7 +329,7 @@ esp4_input(m, off)
 	 * update sequence number.
 	 */
 	if ((sav->flags & SADB_X_EXT_OLD) == 0 && sav->replay) {
-		if (ipsec_updatereplay(ntohl(((struct newesp *)esp)->esp_seq), sav)) {
+		if (ipsec_updatereplay(seq, sav)) {
 			IPSEC_STAT_INCREMENT(ipsecstat.in_espreplay);
 			goto bad;
 		}
@@ -388,9 +419,40 @@ noreplaycheck:
 #else
 	ip->ip_len = htons(ntohs(ip->ip_len) - taillen);
 #endif
+	if (ip->ip_p == IPPROTO_UDP) {
+		// offset includes the outer ip and udp header lengths.
+		if (m->m_len < off) {
+			m = m_pullup(m, off);
+			if (!m) {
+				ipseclog((LOG_DEBUG,
+					  "IPv4 ESP input: invalid udp encapsulated ESP packet length \n"));
+				IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
+				goto bad;
+			}
+		}
+
+		// check the UDP encap header to detect changes in the source port, and then strip the header
+		off -= sizeof(struct udphdr); // off no longer includes the udphdr's size
+		// if peer is behind nat and this is the latest esp packet
+		if ((sav->flags & SADB_X_EXT_NATT_DETECTED_PEER) != 0 &&
+		    (sav->flags & SADB_X_EXT_OLD) == 0 &&
+		    seq && sav->replay &&
+		    seq >= sav->replay->lastseq)  {
+			struct udphdr *encap_uh = (__typeof__(encap_uh))((caddr_t)ip + off);
+			if (encap_uh->uh_sport &&
+			    encap_uh->uh_sport != sav->remote_ike_port) {
+				sav->remote_ike_port = encap_uh->uh_sport;
+			}
+		}
+		ip = esp4_input_strip_UDP_encap(m, off);
+		esp = (struct esp *)(((u_int8_t *)ip) + off);
+	}
 
 	/* was it transmitted over the IPsec tunnel SA? */
 	if (ipsec4_tunnel_validate(m, off + esplen + ivlen, nxt, sav, &ifamily)) {
+		ifaddr_t ifa;
+		struct sockaddr_storage addr;
+
 		/*
 		 * strip off all the headers that precedes ESP header.
 		 *	IP4 xx ESP IP4' payload -> IP4' payload
@@ -403,6 +465,8 @@ noreplaycheck:
 		tos = ip->ip_tos;
 		m_adj(m, off + esplen + ivlen);
 		if (ifamily == AF_INET) {
+			struct sockaddr_in *ipaddr;
+
 			if (m->m_len < sizeof(*ip)) {
 				m = m_pullup(m, sizeof(*ip));
 				if (!m) {
@@ -421,8 +485,18 @@ noreplaycheck:
 				IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 				goto bad;
 			}
+
+			if (ip_doscopedroute) {
+				bzero(&addr, sizeof(addr));
+				ipaddr = (__typeof__(ipaddr))&addr;
+				ipaddr->sin_family = AF_INET;
+				ipaddr->sin_len = sizeof(*ipaddr);
+				ipaddr->sin_addr = ip->ip_dst;
+			}
 #if INET6
 		} else if (ifamily == AF_INET6) {
+			struct sockaddr_in6 *ip6addr;
+
 #ifndef PULLDOWN_TEST
 			/*
 			 * m_pullup is prohibited in KAME IPv6 input processing
@@ -452,7 +526,15 @@ noreplaycheck:
 			    ipsec6_logpacketstr(ip6, spi), ipsec_logsastr(sav)));
 				IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 				goto bad;
-			}		
+			}
+
+			if (ip6_doscopedroute) {
+				bzero(&addr, sizeof(addr));
+				ip6addr = (__typeof__(ip6addr))&addr;
+				ip6addr->sin6_family = AF_INET6;
+				ip6addr->sin6_len = sizeof(*ip6addr);
+				ip6addr->sin6_addr = ip6->ip6_dst;
+			}
 #endif /* INET6 */
 		} else {
 			ipseclog((LOG_ERR, "ipsec tunnel unsupported address family "
@@ -466,10 +548,21 @@ noreplaycheck:
 			IPSEC_STAT_INCREMENT(ipsecstat.in_nomem);
 			goto bad;
 		}
-		
+
+		if (ip_doscopedroute || ip6_doscopedroute) {
+			// update the receiving interface address based on the inner address
+			ifa = ifa_ifwithaddr((struct sockaddr *)&addr);
+			if (ifa) {
+				m->m_pkthdr.rcvif = ifa->ifa_ifp;
+				IFA_REMREF(ifa);
+			}
+		}
+
 		/* Clear the csum flags, they can't be valid for the inner headers */
 		m->m_pkthdr.csum_flags = 0;
-		proto_input(ifamily == AF_INET ? PF_INET : PF_INET6, m);
+		if (proto_input(ifamily == AF_INET ? PF_INET : PF_INET6, m) != 0)
+			goto bad;
+
 		nxt = IPPROTO_DONE;
 		KERNEL_DEBUG(DBG_FNC_ESPIN | DBG_FUNC_END, 2,0,0,0,0);
 	} else {
@@ -554,6 +647,11 @@ noreplaycheck:
 				udp->uh_sport = htons(sav->remote_ike_port);
 				udp->uh_sum = 0;
 			}
+
+			DTRACE_IP6(receive, struct mbuf *, m, struct inpcb *, NULL,
+                        	struct ip *, ip, struct ifnet *, m->m_pkthdr.rcvif,
+                        	struct ip *, ip, struct ip6_hdr *, NULL);
+
 			ip_proto_dispatch_in(m, off, nxt, 0);
 		} else
 			m_freem(m);
@@ -583,16 +681,16 @@ bad:
 
 #if INET6
 int
-esp6_input(mp, offp)
-	struct mbuf **mp;
-	int *offp;
+esp6_input(struct mbuf **mp, int *offp, int proto)
 {
+#pragma unused(proto)
 	struct mbuf *m = *mp;
 	int off = *offp;
 	struct ip6_hdr *ip6;
 	struct esp *esp;
 	struct esptail esptail;
 	u_int32_t spi;
+	u_int32_t seq;
 	struct secasvar *sav = NULL;
 	size_t taillen;
 	u_int16_t nxt;
@@ -667,6 +765,8 @@ esp6_input(mp, offp)
 		goto bad;
 	}
 
+	seq = ntohl(((struct newesp *)esp)->esp_seq);
+
 	if (!((sav->flags & SADB_X_EXT_OLD) == 0 && sav->replay
 	 && (sav->alg_auth && sav->key_auth)))
 		goto noreplaycheck;
@@ -678,7 +778,7 @@ esp6_input(mp, offp)
 	/*
 	 * check for sequence number.
 	 */
-	if (ipsec_chkreplay(ntohl(((struct newesp *)esp)->esp_seq), sav))
+	if (ipsec_chkreplay(seq, sav))
 		; /*okey*/
 	else {
 		IPSEC_STAT_INCREMENT(ipsec6stat.in_espreplay);
@@ -740,7 +840,7 @@ esp6_input(mp, offp)
 	 * update sequence number.
 	 */
 	if ((sav->flags & SADB_X_EXT_OLD) == 0 && sav->replay) {
-		if (ipsec_updatereplay(ntohl(((struct newesp *)esp)->esp_seq), sav)) {
+		if (ipsec_updatereplay(seq, sav)) {
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_espreplay);
 			goto bad;
 		}
@@ -828,6 +928,9 @@ noreplaycheck:
 
 	/* was it transmitted over the IPsec tunnel SA? */
 	if (ipsec6_tunnel_validate(m, off + esplen + ivlen, nxt, sav)) {
+		ifaddr_t ifa;
+		struct sockaddr_storage addr;
+
 		/*
 		 * strip off all the headers that precedes ESP header.
 		 *	IP6 xx ESP IP6' payload -> IP6' payload
@@ -872,7 +975,26 @@ noreplaycheck:
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_nomem);
 			goto bad;
 		}
-		proto_input(PF_INET6, m);
+
+		if (ip6_doscopedroute) {
+			struct sockaddr_in6 *ip6addr;
+
+			bzero(&addr, sizeof(addr));
+			ip6addr = (__typeof__(ip6addr))&addr;
+			ip6addr->sin6_family = AF_INET6;
+			ip6addr->sin6_len = sizeof(*ip6addr);
+			ip6addr->sin6_addr = ip6->ip6_dst;
+
+			// update the receiving interface address based on the inner address
+			ifa = ifa_ifwithaddr((struct sockaddr *)&addr);
+			if (ifa) {
+				m->m_pkthdr.rcvif = ifa->ifa_ifp;
+				IFA_REMREF(ifa);
+			}
+		}
+
+		if (proto_input(PF_INET6, m) != 0)
+			goto bad;
 		nxt = IPPROTO_DONE;
 	} else {
 		/*

@@ -47,7 +47,7 @@ void port_obj_init(
 {
 	kern_return_t kr;
 
-	kr = vm_allocate(mach_task_self(),
+	kr = vm_allocate(mach_task_self_,
 		(vm_offset_t *)&port_obj_table,
 		(vm_size_t)(maxsize * sizeof (*port_obj_table)),
 		TRUE);

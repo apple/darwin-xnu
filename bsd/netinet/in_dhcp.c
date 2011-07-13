@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1988-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1988-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -281,12 +281,6 @@ link_print(struct sockaddr_dl * dl_p)
 {
     int i;
 
-#if 0
-    printf("len %d index %d family %d type 0x%x nlen %d alen %d"
-	   " slen %d addr ", dl_p->sdl_len, 
-	   dl_p->sdl_index,  dl_p->sdl_family, dl_p->sdl_type,
-	   dl_p->sdl_nlen, dl_p->sdl_alen, dl_p->sdl_slen);
-#endif
     for (i = 0; i < dl_p->sdl_alen; i++) 
 	printf("%s%x", i ? ":" : "", 
 	       (link_address(dl_p))[i]);
@@ -297,19 +291,7 @@ link_print(struct sockaddr_dl * dl_p)
 static struct sockaddr_dl *
 link_from_ifnet(struct ifnet * ifp)
 {
-    struct ifaddr * addr;
-
-    ifnet_lock_shared(ifp);
-    TAILQ_FOREACH(addr, &ifp->if_addrhead, ifa_link) {
-	if (addr->ifa_addr->sa_family == AF_LINK) {
-	    struct sockaddr_dl * dl_p = (struct sockaddr_dl *)(addr->ifa_addr);
-	    
-	    ifnet_lock_done(ifp);
-	    return (dl_p);
-	}
-    }
-    ifnet_lock_done(ifp);
-    return (NULL);
+    return ((struct sockaddr_dl *)ifp->if_lladdr->ifa_addr);
 }
 
 /*

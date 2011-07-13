@@ -68,6 +68,8 @@
 #include <sys/_types.h>
 #ifdef KERNEL
 #include <machine/types.h>	/* user_time_t */
+#else /* !KERNEL */
+#include <Availability.h>
 #endif /* KERNEL */
 
 /*
@@ -240,7 +242,7 @@ __BEGIN_DECLS
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 int	adjtime(const struct timeval *, struct timeval *);
 int	futimes(int, const struct timeval *);
-int	lutimes(const char *, const struct timeval *);
+int	lutimes(const char *, const struct timeval *) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
 int	settimeofday(const struct timeval *, const struct timezone *);
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 

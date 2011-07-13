@@ -49,11 +49,14 @@ int (*dtrace_fasttrap_probe_ptr)(struct regs *);
  * They're assigned in dtrace.c but Darwin never calls them.
  */
 void (*dtrace_cpu_init)(processorid_t);
+#if !defined(__APPLE__)
 void (*dtrace_modload)(struct modctl *);
 void (*dtrace_modunload)(struct modctl *);
-#if defined(__APPLE__)
+#else
+int (*dtrace_modload)(struct kmod_info *);
+int (*dtrace_modunload)(struct kmod_info *);
 void (*dtrace_helpers_cleanup)(proc_t *);
-#endif
+#endif  /*__APPLE__*/
 void (*dtrace_helpers_fork)(proc_t *, proc_t *);
 void (*dtrace_cpustart_init)(void);
 void (*dtrace_cpustart_fini)(void);

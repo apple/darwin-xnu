@@ -88,19 +88,15 @@ extern "C" {
  */
 #define kKextRequestPredicateGetLoaded             "Get Loaded Kext Info"
 
-/* Predicate: Get Kernel Link State
+/* Predicate: Get Kernel Image
  * Argument:  None
- * Response:  Raw bytes + length containing the link state of the kernel.
+ * Response:  Raw bytes + length containing the sanitized image of the kernel.
  * Op result: OSReturn indicating any errors in processing (see OSKextLib.h)
  *
- * Retrieves the link state of the running kernel for use in generating
+ * Retrieves a sanitized image of the running kernel for use in generating
  * debug symbols in user space.
- *
- * xxx - Should this allow retrieval of any kext's link state (maybe for
- * xxx - debugging)? Could rename "Get Kext Link State" and take a bundle ID
- * xxx - or none for kernel, just like with "Get Kext UUID".
  */
-#define kKextRequestPredicateGetKernelLinkState    "Get Kernel Link State"
+#define kKextRequestPredicateGetKernelImage    "Get Kernel Image"
 
 /* Predicate: Get Kernel Load Address
  * Argument:  None
@@ -223,6 +219,26 @@ extern "C" {
  */
 #define kKextRequestPredicateRequestLoad           "Kext Load Request"
 
+/* Predicate: Kext Load Notification
+ * Argument:  kext identifier
+ * Response:  None
+ * Op result: OSReturn indicating result (see OSKextLib.h)
+ *
+ * Informs kextd that the kernel has successfully loaded and started
+ * a kext.
+ */
+#define kKextRequestPredicateLoadNotification      "Kext Load Notification"
+
+/* Predicate: Kext Unload Notification
+ * Argument:  kext identifier
+ * Response:  None
+ * Op result: OSReturn indicating result (see OSKextLib.h)
+ *
+ * Informs kextd that the kernel has successfully stopped and unloaded
+ * a kext.
+ */
+#define kKextRequestPredicateUnloadNotification    "Kext Unload Notification"
+
 /* Predicate: Prelinked Kernel Request
  * Argument:  None
  * Response:  None
@@ -280,6 +296,14 @@ extern "C" {
  * Any request that takes a bundle identifier uses this key.
  */
 #define kKextRequestArgumentBundleIdentifierKey    "CFBundleIdentifier"
+
+/* Argument:  OSReturn
+ * Type:      Dictionary
+ * Used by:   OSKext::copyInfo()
+ *
+ * Used to specify a subset of all possible info to be returned.
+ */
+#define kKextRequestArgumentInfoKeysKey          "Kext Request Info Keys"
 
 /* Argument:  OSReturn
  * Type:      Number (OSReturn)
@@ -358,7 +382,7 @@ extern "C" {
  * either the primary kext, or the whole load list (any that weren't
  * already loaded & started).
  */
-#define kKextKextRequestArgumentStartExcludeKey        "Start Exclude Level"
+#define kKextRequestArgumentStartExcludeKey        "Start Exclude Level"
 
 /* Argument:  Start Matching Exclude Level
  * Type:      Integer, corresponding to OSKextExcludeLevel

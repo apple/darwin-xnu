@@ -28,45 +28,7 @@
 
 #include "SYS.h"
 
-#if defined(__ppc__) || defined(__ppc64__)
-
-        .data
-        .globl  __current_pid
-        .align  2
-__current_pid:
-        .long 0
-
-MI_ENTRY_POINT(___getpid)
-#if defined(__DYNAMIC__)
-        mflr    r0              // note we cannot use MI_GET_ADDRESS...
-        bcl    20,31,1f         // ...because we define __current_pid
-1:
-        mflr    r5
-        mtlr    r0
-        addis   r5, r5, ha16(__current_pid - 1b)
-        addi    r5, r5, lo16(__current_pid - 1b)
-#else
-	lis	r5,hi16(__current_pid)
-	ori	r5,r5,lo16(__current_pid)
-#endif
-        lwz     r3,0(r5)		// get the cached pid
-        cmpwi 	r3,0			// if positive,
-        bgtlr++                 // return it
-	
-        SYSCALL_NONAME(getpid, 0)
-
-        lwarx	r4,0,r5			// see if we can cache it
-        cmpwi	r4,0			// we can't if there are any...
-        blt--	1f              // ...vforks in progress
-
-        stwcx.	r3,0,r5			// ignore cache conflicts
-        blr
-1:
-        li      r6,-4           // on 970, cancel the reservation using red zone...
-        stwcx.  r3,r6,r1        // ...to avoid an errata
-        blr
-
-#elif defined(__i386__)
+#if defined(__i386__)
 
 	.data
 	.private_extern __current_pid

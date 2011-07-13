@@ -31,9 +31,7 @@
 #ifndef _BSD_MACHINE_PARAM_H_
 #define _BSD_MACHINE_PARAM_H_
 
-#if defined (__ppc__) || defined (__ppc64__)
-#include "ppc/param.h"
-#elif defined (__i386__) || defined(__x86_64__)
+#if defined (__i386__) || defined(__x86_64__)
 #include "i386/param.h"
 #else
 #error architecture not supported

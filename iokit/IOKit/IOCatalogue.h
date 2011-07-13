@@ -63,11 +63,11 @@ private:
     SInt32                   generation;
 
 /* This stuff is no longer used at all but was exported in prior
- * releases, so we keep it around for PPC/i386 only.
+ * releases, so we keep it around for i386 only.
  */
-#if __ppc__ || __i386__
+#if __i386__
     IOLock *                 kld_lock;
-#endif /* __ppc__ || __i386__ */
+#endif /* __i386__ */
 
 public:
     /*!
@@ -202,8 +202,18 @@ public:
     /*!
         @function reset
         @abstract Return the Catalogue to its initial state.
+        @discussion
+        Should only be used by kextd just before it sends all kext personalities down during a rescan.
     */
     void reset(void);
+
+    /*!
+        @function resetAndAddDrivers
+        @abstract Replace personalities in IOCatalog with those provided.
+        @discussion
+        Resets the catalogue with a new set of drivers, preserving matching originals to keep wired memory usage down.
+    */
+    bool resetAndAddDrivers(OSArray * drivers, bool doNubMatching = true);
 
     /*!
         @function serialize
@@ -215,10 +225,10 @@ public:
 
     bool serializeData(IOOptionBits kind, OSSerialize * s) const;
 
-/* This stuff is no longer used at all we keep it around for PPC/i386
+/* This stuff is no longer used at all we keep it around for i386
  * binary compatibility only. Symbols are no longer exported.
  */
-#if __ppc__ || __i386__
+#if __i386__
     /*!
         @function recordStartupExtensions
         @abstract Records extensions made available by the primary booter.
@@ -253,7 +263,7 @@ public:
             removed or wasn't present, KERN_FAILURE otherwise.
     */
     virtual kern_return_t removeKernelLinker(void);
-#endif /* __ppc__ || __i386__ */
+#endif /* __i386__ */
 
 private:
 

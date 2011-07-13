@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -25,13 +25,6 @@
  * 
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
- *
- * HISTORY
- *
- */
-
 
 #ifndef _IOKIT_IOKITDEBUG_H
 #define _IOKIT_IOKITDEBUG_H
@@ -82,6 +75,9 @@ enum {
     kOSRegistryModsMode =         0x00040000ULL,  // Change default registry modification handling - panic vs. log
 //    kIOTraceIOService   =         0x00080000ULL,  // Obsolete: Use iotrace=0x00080000ULL to enable now
     kIOLogHibernate     =         0x00100000ULL,
+    kIOLogDriverPower1  =         0x01000000ULL,
+    kIOLogDriverPower2  =         0x02000000ULL,
+    kIOStatistics       =         0x04000000ULL,
 
     // debug aids - change behaviour
     kIONoFreeObjects    =         0x00100000ULL,
@@ -97,7 +93,7 @@ enum {
 	kIOTraceEventSources	=		0x00000004ULL,	// Trace non-passive event sources
 	kIOTraceIntEventSource	=		0x00000008ULL,	// Trace IOIES and IOFIES sources
 	kIOTraceCommandGates	=		0x00000010ULL,	// Trace command gate activity
-	kIOTraceTimers			= 		0x00000020ULL,	// Trace timer event source activity
+	kIOTraceTimers			= 		0x00000008ULL,	// Trace timer event source activity
 	
 	kIOTracePowerMgmt		=		0x00000400ULL,	// Trace power management changes
 	
@@ -108,15 +104,22 @@ enum {
 
 extern SInt64    gIOKitDebug;
 extern SInt64    gIOKitTrace;
-extern UInt64	 gIOInterruptThresholdNS;
-
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-struct IORegistryPlane;
-extern void    IOPrintPlane( const struct IORegistryPlane * plane );
+#ifdef __cplusplus
+class IORegistryPlane;
+#endif
+
+extern void    IOPrintPlane(
+#ifdef __cplusplus
+                            const IORegistryPlane * plane
+#else
+                            const struct IORegistryPlane * plane
+#endif
+                           );
 #ifndef _OSCPPDEBUG_H
 extern void    OSPrintMemory( void );
 #endif

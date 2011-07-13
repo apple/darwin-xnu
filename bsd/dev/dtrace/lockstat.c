@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
@@ -59,10 +59,6 @@
 #define	NOP	0x90
 #define	RET	0xc3
 #define LOCKSTAT_AFRAMES 1
-#elif	__ppc__
-#define	NOP	0x60000000
-#define RET	0x4e800020	/* blr */
-#define LOCKSTAT_AFRAMES 2
 #else
 #error "not ported to this architecture"
 #endif
@@ -189,11 +185,6 @@ void lockstat_hot_patch(boolean_t active)
 		(void) ml_nofault_copy( (vm_offset_t)&instr, *(assembly_probes[i]), 
 								sizeof(instr));
 #endif
-#ifdef __ppc__
-		uint32_t instr;
-		instr = (active ? NOP : RET );
-		(void) ml_nofault_copy( (vm_offset_t)&instr, *(assembly_probes[i]), sizeof(instr));
-#endif
 	}
 }
 
@@ -206,7 +197,7 @@ static dev_info_t	*lockstat_devi;	/* saved in xxattach() for xxinfo() */
 static dtrace_provider_id_t lockstat_id;
 
 /*ARGSUSED*/
-static void
+static int
 lockstat_enable(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg) /* __APPLE__ */
@@ -220,6 +211,7 @@ lockstat_enable(void *arg, dtrace_id_t id, void *parg)
 
 	lockstat_hot_patch(TRUE);
 	membar_producer();
+	return(0);
 
 }
 

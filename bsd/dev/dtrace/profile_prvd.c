@@ -49,6 +49,7 @@
 #define MACH__POSIX_C_SOURCE_PRIVATE 1 /* pulls in suitable savearea from mach/ppc/thread_status.h */
 #include <kern/cpu_data.h>
 #include <kern/thread.h>
+#include <kern/assert.h>
 #include <mach/thread_status.h>
 
 #include <sys/param.h>
@@ -65,9 +66,9 @@
 
 #include <sys/dtrace_glue.h>
 
-#if defined(__ppc__) || defined(__ppc64__)
-extern struct savearea *find_kern_regs(thread_t);
-#elif defined(__i386__) || defined(__x86_64__)
+#include <machine/pal_routines.h>
+
+#if defined(__i386__) || defined(__x86_64__)
 extern x86_saved_state_t *find_kern_regs(thread_t);
 #else
 #error Unknown architecture
@@ -127,9 +128,7 @@ static dtrace_provider_id_t profile_id;
 
 #else /* is Mac OS X */
 
-#if defined(__ppc__) || defined(__ppc64__)
-#define PROF_ARTIFICIAL_FRAMES 8
-#elif defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__)
 #define PROF_ARTIFICIAL_FRAMES  9
 #else
 #error Unknown architecture
@@ -185,7 +184,6 @@ static int profile_ticks[] = {
 static uint32_t profile_max;		/* maximum number of profile probes */
 static uint32_t profile_total;	/* current number of profile probes */
 
-
 static void
 profile_fire(void *arg)
 {
@@ -200,22 +198,7 @@ profile_fire(void *arg)
 	dtrace_probe(prof->prof_id, CPU->cpu_profile_pc,
 	    CPU->cpu_profile_upc, late, 0, 0);
 #else
-#if defined(__ppc__) || defined(__ppc64__)
-	{
-	struct savearea *sv = find_kern_regs(current_thread());
-
-	if (sv) {
-		if (USERMODE(sv->save_srr1)) {
-			dtrace_probe(prof->prof_id, 0x0, sv->save_srr0, late, 0, 0);
-		} else {
-			dtrace_probe(prof->prof_id, sv->save_srr0, 0x0, late, 0, 0);
-		}
-	} else {
-		dtrace_probe(prof->prof_id, 0xcafebabe,
-	    	0x0, late, 0, 0); /* XXX_BOGUS also see profile_usermode() below. */
-	}
-	}
-#elif defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__)
 	x86_saved_state_t *kern_regs = find_kern_regs(current_thread());
 
 	if (NULL != kern_regs) {
@@ -228,6 +211,7 @@ profile_fire(void *arg)
 #error Unknown arch
 #endif
 	} else {
+		pal_register_cache_state(current_thread(), VALID);
 		/* Possibly a user interrupt */
 		x86_saved_state_t   *tagged_regs = (x86_saved_state_t *)find_user_regs(current_thread());
 
@@ -260,22 +244,7 @@ profile_tick(void *arg)
 	dtrace_probe(prof->prof_id, CPU->cpu_profile_pc,
 	    CPU->cpu_profile_upc, 0, 0, 0);
 #else
-#if defined(__ppc__) || defined(__ppc64__)
-	{
-	struct savearea *sv = find_kern_regs(current_thread());
-
-	if (sv) {
-		if (USERMODE(sv->save_srr1)) {
-			dtrace_probe(prof->prof_id, 0x0, sv->save_srr0, 0, 0, 0);
-		} else {
-			dtrace_probe(prof->prof_id, sv->save_srr0, 0x0, 0, 0, 0);
-		}
-	} else {
-		dtrace_probe(prof->prof_id, 0xcafebabe,
-	    	0x0, 0, 0, 0); /* XXX_BOGUS also see profile_usermode() below. */
-	}
-	}
-#elif defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__) || defined(__x86_64__)
 	x86_saved_state_t *kern_regs = find_kern_regs(current_thread());
 
 	if (NULL != kern_regs) {
@@ -288,6 +257,7 @@ profile_tick(void *arg)
 #error Unknown arch
 #endif
 	} else {
+		pal_register_cache_state(current_thread(), VALID);
 		/* Possibly a user interrupt */
 		x86_saved_state_t   *tagged_regs = (x86_saved_state_t *)find_user_regs(current_thread());
 
@@ -550,7 +520,7 @@ profile_destroy(void *arg, dtrace_id_t id, void *parg)
 
 /*ARGSUSED*/
 static void
-profile_online(void *arg, cpu_t *cpu, cyc_handler_t *hdlr, cyc_time_t *when)
+profile_online(void *arg, dtrace_cpu_t *cpu, cyc_handler_t *hdlr, cyc_time_t *when)
 {
 #pragma unused(cpu) /* __APPLE__ */
 	profile_probe_t *prof = arg;
@@ -580,7 +550,7 @@ profile_online(void *arg, cpu_t *cpu, cyc_handler_t *hdlr, cyc_time_t *when)
 
 /*ARGSUSED*/
 static void
-profile_offline(void *arg, cpu_t *cpu, void *oarg)
+profile_offline(void *arg, dtrace_cpu_t *cpu, void *oarg)
 {
 	profile_probe_percpu_t *pcpu = oarg;
 
@@ -593,7 +563,7 @@ profile_offline(void *arg, cpu_t *cpu, void *oarg)
 }
 
 /*ARGSUSED*/
-static void
+static int
 profile_enable(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg,id) /* __APPLE__ */
@@ -636,6 +606,7 @@ profile_enable(void *arg, dtrace_id_t id, void *parg)
 		prof->prof_cyclic = (cyclic_id_t)cyclic_add_omni(&omni); /* cast puns cyclic_id_list_t with cyclic_id_t */
 	}
 #endif /* __APPLE__ */
+	return(0);
 }
 
 /*ARGSUSED*/

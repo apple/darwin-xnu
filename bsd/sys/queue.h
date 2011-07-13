@@ -133,8 +133,11 @@
  * _INSERT_AFTER		+	+	+	+	+
  * _INSERT_TAIL			-	-	+	+	+
  * _CONCAT			-	-	+	+	-
+ * _REMOVE_AFTER		+	-	+	-	-
  * _REMOVE_HEAD			+	-	+	-	-
+ * _REMOVE_HEAD_UNTIL		-	-	+	-	-
  * _REMOVE			+	+	+	+	+
+ * _SWAP			-	+	+	+	-
  *
  */
 #ifdef QUEUE_MACRO_DEBUG
@@ -232,10 +235,14 @@ struct {								\
 		struct type *curelm = SLIST_FIRST((head));		\
 		while (SLIST_NEXT(curelm, field) != (elm))		\
 			curelm = SLIST_NEXT(curelm, field);		\
-		SLIST_NEXT(curelm, field) =				\
-		    SLIST_NEXT(SLIST_NEXT(curelm, field), field);	\
+		SLIST_REMOVE_AFTER(curelm, field);			\
 	}								\
 	TRASHIT((elm)->field.sle_next);					\
+} while (0)
+
+#define SLIST_REMOVE_AFTER(elm, field) do {				\
+	SLIST_NEXT(elm, field) =					\
+	    SLIST_NEXT(SLIST_NEXT(elm, field), field);			\
 } while (0)
 
 #define	SLIST_REMOVE_HEAD(head, field) do {				\
@@ -324,9 +331,7 @@ struct {								\
 		struct type *curelm = STAILQ_FIRST((head));		\
 		while (STAILQ_NEXT(curelm, field) != (elm))		\
 			curelm = STAILQ_NEXT(curelm, field);		\
-		if ((STAILQ_NEXT(curelm, field) =			\
-		     STAILQ_NEXT(STAILQ_NEXT(curelm, field), field)) == NULL)\
-			(head)->stqh_last = &STAILQ_NEXT((curelm), field);\
+		STAILQ_REMOVE_AFTER(head, curelm, field);		\
 	}								\
 	TRASHIT((elm)->field.stqe_next);				\
 } while (0)
@@ -337,10 +342,30 @@ struct {								\
 		(head)->stqh_last = &STAILQ_FIRST((head));		\
 } while (0)
 
-#define	STAILQ_REMOVE_HEAD_UNTIL(head, elm, field) do {			\
-	if ((STAILQ_FIRST((head)) = STAILQ_NEXT((elm), field)) == NULL)	\
-		(head)->stqh_last = &STAILQ_FIRST((head));		\
+#define STAILQ_REMOVE_HEAD_UNTIL(head, elm, field) do {                 \
+       if ((STAILQ_FIRST((head)) = STAILQ_NEXT((elm), field)) == NULL) \
+               (head)->stqh_last = &STAILQ_FIRST((head));              \
 } while (0)
+
+#define STAILQ_REMOVE_AFTER(head, elm, field) do {			\
+	if ((STAILQ_NEXT(elm, field) =					\
+	     STAILQ_NEXT(STAILQ_NEXT(elm, field), field)) == NULL)	\
+		(head)->stqh_last = &STAILQ_NEXT((elm), field);		\
+} while (0)
+
+#define STAILQ_SWAP(head1, head2, type) do {				\
+	struct type *swap_first = STAILQ_FIRST(head1);			\
+	struct type **swap_last = (head1)->stqh_last;			\
+	STAILQ_FIRST(head1) = STAILQ_FIRST(head2);			\
+	(head1)->stqh_last = (head2)->stqh_last;			\
+	STAILQ_FIRST(head2) = swap_first;				\
+	(head2)->stqh_last = swap_last;					\
+	if (STAILQ_EMPTY(head1))					\
+		(head1)->stqh_last = &STAILQ_FIRST(head1);		\
+	if (STAILQ_EMPTY(head2))					\
+		(head2)->stqh_last = &STAILQ_FIRST(head2);		\
+} while (0)
+
 
 /*
  * List declarations.
@@ -442,6 +467,16 @@ struct {								\
 	*(elm)->field.le_prev = LIST_NEXT((elm), field);		\
 	TRASHIT((elm)->field.le_next);					\
 	TRASHIT((elm)->field.le_prev);					\
+} while (0)
+
+#define LIST_SWAP(head1, head2, type, field) do {			\
+	struct type *swap_tmp = LIST_FIRST((head1));			\
+	LIST_FIRST((head1)) = LIST_FIRST((head2));			\
+	LIST_FIRST((head2)) = swap_tmp;					\
+	if ((swap_tmp = LIST_FIRST((head1))) != NULL)			\
+		swap_tmp->field.le_prev = &LIST_FIRST((head1));		\
+	if ((swap_tmp = LIST_FIRST((head2))) != NULL)			\
+		swap_tmp->field.le_prev = &LIST_FIRST((head2));		\
 } while (0)
 
 /*
@@ -572,6 +607,23 @@ struct {								\
 	TRASHIT((elm)->field.tqe_next);					\
 	TRASHIT((elm)->field.tqe_prev);					\
 	QMD_TRACE_ELEM(&(elm)->field);					\
+} while (0)
+
+#define TAILQ_SWAP(head1, head2, type, field) do {                      \
+	struct type *swap_first = (head1)->tqh_first;                   \
+	struct type **swap_last = (head1)->tqh_last;                    \
+	(head1)->tqh_first = (head2)->tqh_first;                        \
+	(head1)->tqh_last = (head2)->tqh_last;                          \
+	(head2)->tqh_first = swap_first;                                \
+	(head2)->tqh_last = swap_last;                                  \
+	if ((swap_first = (head1)->tqh_first) != NULL)                  \
+		swap_first->field.tqe_prev = &(head1)->tqh_first;       \
+	else                                                            \
+		(head1)->tqh_last = &(head1)->tqh_first;                \
+	if ((swap_first = (head2)->tqh_first) != NULL)                  \
+		swap_first->field.tqe_prev = &(head2)->tqh_first;       \
+	else                                                            \
+		(head2)->tqh_last = &(head2)->tqh_first;                \
 } while (0)
 
 /*

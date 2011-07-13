@@ -44,6 +44,8 @@
 #include <vm/vm_protos.h>
 #include <vm/vm_kern.h>
 
+#include <machine/pal_routines.h>
+
 // #define KDP_VM_READ_DEBUG 1
 // #define KDP_VM_WRITE_DEBUG 1
 
@@ -73,8 +75,8 @@ kdp_vtophys(
 mach_vm_size_t
 kdp_machine_vm_read( mach_vm_address_t src, caddr_t dst, mach_vm_size_t len)
 {
-	addr64_t cur_virt_src = (addr64_t)src;
-	addr64_t cur_virt_dst = (addr64_t)(intptr_t)dst;
+	addr64_t cur_virt_src = PAL_KDP_ADDR((addr64_t)src);
+	addr64_t cur_virt_dst = PAL_KDP_ADDR((addr64_t)(intptr_t)dst);
 	addr64_t cur_phys_dst, cur_phys_src;
 	mach_vm_size_t resid = len;
 	mach_vm_size_t cnt = 0, cnt_src, cnt_dst;
@@ -201,8 +203,8 @@ kdp_machine_vm_write( caddr_t src, mach_vm_address_t dst, mach_vm_size_t len)
 	printf("kdp_vm_write: src %p dst %llx len %llx - %08X %08X\n", (void *)src, dst, len, ((unsigned int *)src)[0], ((unsigned int *)src)[1]);
 #endif
 
-	cur_virt_src = (addr64_t)(intptr_t)src;
-	cur_virt_dst = (addr64_t)dst;
+	cur_virt_src = PAL_KDP_ADDR((addr64_t)(intptr_t)src);
+	cur_virt_dst = PAL_KDP_ADDR((addr64_t)dst);
 
 	resid = (unsigned)len;
 

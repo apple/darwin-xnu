@@ -401,17 +401,19 @@ _STRUCT_X86_AVX_STATE32
 #define _STRUCT_X86_EXCEPTION_STATE32	struct __darwin_i386_exception_state
 _STRUCT_X86_EXCEPTION_STATE32
 {
-    unsigned int	__trapno;
-    unsigned int	__err;
-    unsigned int	__faultvaddr;
+	__uint16_t	__trapno;
+	__uint16_t	__cpu;
+	__uint32_t	__err;
+	__uint32_t	__faultvaddr;
 };
 #else /* !__DARWIN_UNIX03 */
 #define _STRUCT_X86_EXCEPTION_STATE32	struct i386_exception_state
 _STRUCT_X86_EXCEPTION_STATE32
 {
-    unsigned int	trapno;
-    unsigned int	err;
-    unsigned int	faultvaddr;
+	__uint16_t	trapno;
+	__uint16_t	cpu;
+	__uint32_t	err;
+	__uint32_t	faultvaddr;
 };
 #endif /* !__DARWIN_UNIX03 */
 
@@ -748,17 +750,19 @@ _STRUCT_X86_AVX_STATE64
 #define _STRUCT_X86_EXCEPTION_STATE64	struct __darwin_x86_exception_state64
 _STRUCT_X86_EXCEPTION_STATE64
 {
-    unsigned int	__trapno;
-    unsigned int	__err;
-    __uint64_t		__faultvaddr;
+    __uint16_t	__trapno;
+    __uint16_t	__cpu;
+    __uint32_t	__err;
+    __uint64_t	__faultvaddr;
 };
 #else /* !__DARWIN_UNIX03 */
 #define _STRUCT_X86_EXCEPTION_STATE64	struct x86_exception_state64
 _STRUCT_X86_EXCEPTION_STATE64
 {
-    unsigned int	trapno;
-    unsigned int	err;
-    __uint64_t		faultvaddr;
+    __uint16_t	trapno;
+    __uint16_t	cpu;
+    __uint32_t	err;
+    __uint64_t	faultvaddr;
 };
 #endif /* !__DARWIN_UNIX03 */
 

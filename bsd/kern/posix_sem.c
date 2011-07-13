@@ -30,7 +30,7 @@
  *	All Rights Reserved.
  */
 /*
- * posix_shm.c : Support for POSIX semaphore APIs
+ * posix_sem.c : Support for POSIX semaphore APIs
  *
  *	File:	posix_sem.c
  *	Author:	Ananthakrishna Ramesh
@@ -155,9 +155,9 @@ u_long	psemhash;				/* size of hash table - 1 */
 long	psemnument;			/* number of cache entries allocated */
 long	posix_sem_max = 10000;		/* tunable for max POSIX semaphores */
 					/* 10000 limits to ~1M of memory */
-SYSCTL_NODE(_kern, KERN_POSIX, posix, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Posix");
-SYSCTL_NODE(_kern_posix, OID_AUTO, sem, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Semaphores");
-SYSCTL_LONG (_kern_posix_sem, OID_AUTO, max, CTLFLAG_RW, &posix_sem_max, "max");
+SYSCTL_NODE(_kern, KERN_POSIX, posix, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "Posix");
+SYSCTL_NODE(_kern_posix, OID_AUTO, sem, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "Semaphores");
+SYSCTL_LONG (_kern_posix_sem, OID_AUTO, max, CTLFLAG_RW | CTLFLAG_LOCKED, &posix_sem_max, "max");
 
 struct psemstats psemstats;		/* cache effectiveness statistics */
 
@@ -524,8 +524,8 @@ sem_open(proc_t p, struct sem_open_args *uap, user_addr_t *retval)
 		pinfo->psem_flags = PSEM_DEFINED | PSEM_INCREATE;
 		pinfo->psem_usecount = 1;
 		pinfo->psem_mode = cmode;
-		pinfo->psem_uid = kauth_cred_getuid(kauth_cred_get());
-		pinfo->psem_gid = kauth_cred_get()->cr_gid;
+		pinfo->psem_uid = kauth_getuid();
+		pinfo->psem_gid = kauth_getgid();
 		bcopy(pnbuf, &pinfo->psem_name[0], PSEMNAMLEN);
 		pinfo->psem_name[PSEMNAMLEN]= 0;
 		pinfo->psem_flags &= ~PSEM_DEFINED;
@@ -643,39 +643,14 @@ bad:
 static int
 psem_access(struct pseminfo *pinfo, int mode, kauth_cred_t cred)
 {
-	mode_t mask;
-	int is_member;
+	int mode_req = ((mode & FREAD) ? S_IRUSR : 0) |
+		       ((mode & FWRITE) ? S_IWUSR : 0);
 
 	/* Otherwise, user id 0 always gets access. */
 	if (!suser(cred, NULL))
 		return (0);
 
-	mask = 0;
-
-	/* Otherwise, check the owner. */
-	if (kauth_cred_getuid(cred) == pinfo->psem_uid) {
-		if (mode & FREAD)
-			mask |= S_IRUSR;
-		if (mode & FWRITE)
-			mask |= S_IWUSR;
-		return ((pinfo->psem_mode & mask) == mask ? 0 : EACCES);
-	}
-
-	/* Otherwise, check the groups. */
-	if (kauth_cred_ismember_gid(cred, pinfo->psem_gid, &is_member) == 0 && is_member) {
-		if (mode & FREAD)
-			mask |= S_IRGRP;
-		if (mode & FWRITE)
-			mask |= S_IWGRP;
-		return ((pinfo->psem_mode & mask) == mask ? 0 : EACCES);
-	}
-
-	/* Otherwise, check everyone else. */
-	if (mode & FREAD)
-		mask |= S_IROTH;
-	if (mode & FWRITE)
-		mask |= S_IWOTH;
-	return ((pinfo->psem_mode & mask) == mask ? 0 : EACCES);
+	return(posix_cred_access(cred, pinfo->psem_uid, pinfo->psem_gid, pinfo->psem_mode, mode_req));
 }
 
 int
@@ -809,6 +784,7 @@ sem_close(proc_t p, struct sem_close_args *uap, __unused int32_t *retval)
 		proc_fdunlock(p);
 		return(error);
 	}
+	procfdtbl_markclosefd(p, fd);
 	fileproc_drain(p, fp);
 	fdrelse(p, fd);
 	error = closef_locked(fp, fp->f_fglob, p);

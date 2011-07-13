@@ -106,7 +106,7 @@ struct ipc_table_size {
 };
 
 extern ipc_table_size_t ipc_table_entries;
-extern ipc_table_size_t ipc_table_dnrequests;
+extern ipc_table_size_t ipc_table_requests;
 
 /* Initialize IPC capabilities table storage */
 extern void ipc_table_init(void) __attribute__((section("__TEXT, initcode")));
@@ -161,12 +161,12 @@ extern void ipc_table_free(
 	    (void *)(table)					\
 	)
 
-#define	it_dnrequests_alloc(its)					\
+#define	it_requests_alloc(its)					\
 	((ipc_port_request_t)						\
 	 ipc_table_alloc((its)->its_size *				\
 			 sizeof(struct ipc_port_request)))
 
-#define	it_dnrequests_free(its, table)					\
+#define	it_requests_free(its, table)					\
 	ipc_table_free((its)->its_size *				\
 		       sizeof(struct ipc_port_request),			\
 		       (void *)(table))

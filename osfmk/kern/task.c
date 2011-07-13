@@ -131,12 +131,6 @@
 #include <ddb/db_sym.h>
 #endif	/* MACH_KDB */
 
-#ifdef __ppc__
-#include <ppc/exception.h>
-#include <ppc/hw_perfmon.h>
-#endif
-
-
 /*
  * Exported interfaces
  */
@@ -163,7 +157,13 @@ lck_attr_t      task_lck_attr;
 lck_grp_t       task_lck_grp;
 lck_grp_attr_t  task_lck_grp_attr;
 
+zinfo_usage_store_t tasks_tkm_private;
+zinfo_usage_store_t tasks_tkm_shared;
+
 int task_max = CONFIG_TASK_MAX; /* Max number of tasks */
+
+/* externs for BSD kernel */
+extern void proc_getexecutableuuid(void *, unsigned char *, unsigned long);
 
 /* Forwards */
 
@@ -226,17 +226,6 @@ task_set_64bit(
 				     (vm_map_offset_t) VM_MAX_ADDRESS,
 				     MACH_VM_MAX_ADDRESS,
 				     0);
-#ifdef __ppc__
-		/*
-		 * PPC51: ppc64 is limited to 51-bit addresses.
-		 * Memory mapped above that limit is handled specially
-		 * at the pmap level, so let pmap clean the commpage mapping
-		 * explicitly...
-		 */
-		pmap_unmap_sharedpage(task->map->pmap);	/* Unmap commpage */
-		/* ... and avoid regular pmap cleanup */
-		vm_flags |= VM_MAP_REMOVE_NO_PMAP_CLEANUP;
-#endif /* __ppc__ */
 		/* remove the higher VM mappings */
 		(void) vm_map_remove(task->map,
 				     MACH_VM_MAX_ADDRESS,
@@ -285,6 +274,7 @@ task_init(void)
 			task_max * sizeof(struct task),
 			TASK_CHUNK * sizeof(struct task),
 			"tasks");
+
 	zone_change(task_zone, Z_NOENCRYPT, TRUE);
 
 	/*
@@ -409,6 +399,13 @@ task_create_internal(
 	new_task->taskFeatures[0] = 0;				/* Init task features */
 	new_task->taskFeatures[1] = 0;				/* Init task features */
 
+	new_task->tkm_private.alloc = 0;
+	new_task->tkm_private.free = 0;
+	new_task->tkm_shared.alloc = 0;
+	new_task->tkm_shared.free = 0;
+
+	zinfo_task_init(new_task);
+
 #ifdef MACH_BSD
 	new_task->bsd_info = NULL;
 #endif /* MACH_BSD */
@@ -416,12 +413,8 @@ task_create_internal(
 #if defined(__i386__) || defined(__x86_64__)
 	new_task->i386_ldt = 0;
 	new_task->task_debug = NULL;
-
 #endif
 
-#ifdef __ppc__
-	if(BootProcInfo.pf.Available & pf64Bit) new_task->taskFeatures[0] |= tf64BitData;	/* If 64-bit machine, show we have 64-bit registers at least */
-#endif
 
 	queue_init(&new_task->semaphore_list);
 	queue_init(&new_task->lock_set_list);
@@ -473,6 +466,16 @@ task_create_internal(
 			task_affinity_create(parent_task, new_task);
 
 		new_task->pset_hint = parent_task->pset_hint = task_choose_pset(parent_task);
+		new_task->policystate = parent_task->policystate;
+		/* inherit the self action state */
+		new_task->actionstate = parent_task->actionstate;
+		new_task->ext_policystate = parent_task->ext_policystate;
+#if NOTYET
+		/* till the child lifecycle is cleared do not inherit external action */
+		new_task->ext_actionstate = parent_task->ext_actionstate;
+#else
+		new_task->ext_actionstate = default_task_null_policy;
+#endif
 	}
 	else {
 		new_task->sec_token = KERNEL_SECURITY_TOKEN;
@@ -483,8 +486,14 @@ task_create_internal(
 		if(is_64bit)
 			task_set_64BitAddr(new_task);
 #endif
+		new_task->all_image_info_addr = (mach_vm_address_t)0;
+		new_task->all_image_info_size = (mach_vm_size_t)0;
 
 		new_task->pset_hint = PROCESSOR_SET_NULL;
+		new_task->policystate = default_task_proc_policy;
+		new_task->ext_policystate = default_task_proc_policy;
+		new_task->actionstate = default_task_null_policy;
+		new_task->ext_actionstate = default_task_null_policy;
 	}
 
 	if (kernel_task == TASK_NULL) {
@@ -495,6 +504,8 @@ task_create_internal(
 		new_task->priority = BASEPRI_DEFAULT;
 		new_task->max_priority = MAXPRI_USER;
 	}
+
+	bzero(&new_task->extmod_statistics, sizeof(new_task->extmod_statistics));
 	
 	lck_mtx_lock(&tasks_threads_lock);
 	queue_enter(&tasks, new_task, task_t, tasks);
@@ -525,6 +536,10 @@ task_deallocate(
 	if (task_deallocate_internal(task) > 0)
 		return;
 
+	lck_mtx_lock(&tasks_threads_lock);
+	queue_remove(&terminated_tasks, task, task_t, tasks);
+	lck_mtx_unlock(&tasks_threads_lock);
+
 	ipc_task_terminate(task);
 
 	if (task->affinity_space)
@@ -538,6 +553,11 @@ task_deallocate(
 #if CONFIG_MACF_MACH
 	labelh_release(task->label);
 #endif
+	OSAddAtomic64(task->tkm_private.alloc, (int64_t *)&tasks_tkm_private.alloc);
+	OSAddAtomic64(task->tkm_private.free, (int64_t *)&tasks_tkm_private.free);
+	OSAddAtomic64(task->tkm_shared.alloc, (int64_t *)&tasks_tkm_shared.alloc);
+	OSAddAtomic64(task->tkm_shared.free, (int64_t *)&tasks_tkm_shared.free);
+	zinfo_task_free(task);
 	zfree(task_zone, task);
 }
 
@@ -603,9 +623,9 @@ task_terminate_internal(
 		task_lock(task);
 	}
 
-	if (!task->active || !self->active) {
+	if (!task->active) {
 		/*
-		 *	Task or current act is already being terminated.
+		 *	Task is already being terminated.
 		 *	Just return an error. If we are dying, this will
 		 *	just get us to our AST special handler and that
 		 *	will get us to finalize the termination of ourselves.
@@ -665,13 +685,6 @@ task_terminate_internal(
 	 */
 	ipc_space_destroy(task->itk_space);
 
-#ifdef __ppc__
-	/*
-	 * PPC51: ppc64 is limited to 51-bit addresses.
-	 */
-	pmap_unmap_sharedpage(task->map->pmap);		/* Unmap commpage */
-#endif /* __ppc__ */
-
 	if (vm_map_has_4GB_pagezero(task->map))
 		vm_map_clear_4GB_pagezero(task->map);
 
@@ -693,6 +706,7 @@ task_terminate_internal(
 
 	lck_mtx_lock(&tasks_threads_lock);
 	queue_remove(&tasks, task, task_t, tasks);
+	queue_enter(&terminated_tasks, task, task_t, tasks);
 	tasks_count--;
 	lck_mtx_unlock(&tasks_threads_lock);
 
@@ -701,10 +715,6 @@ task_terminate_internal(
 	 * the previous interruptible state.
 	 */
 	thread_interrupt_level(interrupt_save);
-
-#if __ppc__
-    perfmon_release_facility(task); // notify the perfmon facility
-#endif
 
 	/*
 	 * Get rid of the task active reference on itself.
@@ -1162,8 +1172,9 @@ task_resume(
 	}
 
 	if (task->user_stop_count > 0) {
-		if (--task->user_stop_count == 0)
+		if (--task->user_stop_count == 0) {
 			release = TRUE;
+		}
 	}
 	else {
 		task_unlock(task);
@@ -1181,6 +1192,60 @@ task_resume(
 
 	return (KERN_SUCCESS);
 }
+
+#if CONFIG_FREEZE
+
+/*
+ *	task_freeze:
+ *
+ *	Freeze a currently suspended task.
+ *
+ * Conditions:
+ * 	The caller holds a reference to the task
+ */
+kern_return_t
+task_freeze(
+	register task_t    task,
+	uint32_t           *purgeable_count,
+	uint32_t           *wired_count,
+	uint32_t           *clean_count,
+	uint32_t           *dirty_count,
+	boolean_t          *shared,
+	boolean_t          walk_only)
+{
+	if (task == TASK_NULL || task == kernel_task)
+		return (KERN_INVALID_ARGUMENT);
+
+	if (walk_only) {
+		vm_map_freeze_walk(task->map, purgeable_count, wired_count, clean_count, dirty_count, shared);		
+	} else {
+		vm_map_freeze(task->map, purgeable_count, wired_count, clean_count, dirty_count, shared);
+	}
+
+	return (KERN_SUCCESS);
+}
+
+/*
+ *	task_thaw:
+ *
+ *	Thaw a currently frozen task.
+ *
+ * Conditions:
+ * 	The caller holds a reference to the task
+ */
+kern_return_t
+task_thaw(
+	register task_t		task)
+{
+	if (task == TASK_NULL || task == kernel_task)
+		return (KERN_INVALID_ARGUMENT);
+
+	vm_map_thaw(task->map);
+
+	return (KERN_SUCCESS);
+}
+
+#endif /* CONFIG_FREEZE */
 
 kern_return_t
 host_security_set_task_token(
@@ -1439,15 +1504,124 @@ task_info(
 	{
 		task_dyld_info_t info;
 
-		if (*task_info_count < TASK_DYLD_INFO_COUNT) {
+		/*
+		 * We added the format field to TASK_DYLD_INFO output.  For
+		 * temporary backward compatibility, accept the fact that
+		 * clients may ask for the old version - distinquished by the
+		 * size of the expected result structure.
+		 */
+#define TASK_LEGACY_DYLD_INFO_COUNT \
+		offsetof(struct task_dyld_info, all_image_info_format)/sizeof(natural_t)
+
+		if (*task_info_count < TASK_LEGACY_DYLD_INFO_COUNT) {
 			error = KERN_INVALID_ARGUMENT;
 			break;
 		}
+
 		info = (task_dyld_info_t)task_info_out;
 		info->all_image_info_addr = task->all_image_info_addr;
 		info->all_image_info_size = task->all_image_info_size;
-		*task_info_count = TASK_DYLD_INFO_COUNT;
+
+		/* only set format on output for those expecting it */
+		if (*task_info_count >= TASK_DYLD_INFO_COUNT) {
+			info->all_image_info_format = task_has_64BitAddr(task) ?
+				                 TASK_DYLD_ALL_IMAGE_INFO_64 : 
+				                 TASK_DYLD_ALL_IMAGE_INFO_32 ;
+			*task_info_count = TASK_DYLD_INFO_COUNT;
+		} else {
+			*task_info_count = TASK_LEGACY_DYLD_INFO_COUNT;
+		}
 		break;
+	}
+
+	case TASK_EXTMOD_INFO:
+	{
+		task_extmod_info_t info;
+		void *p;
+
+		if (*task_info_count < TASK_EXTMOD_INFO_COUNT) {
+			error = KERN_INVALID_ARGUMENT;
+			break;
+		}
+
+		info = (task_extmod_info_t)task_info_out;
+
+		p = get_bsdtask_info(task);
+		if (p) {
+			proc_getexecutableuuid(p, info->task_uuid, sizeof(info->task_uuid));
+		} else {
+			bzero(info->task_uuid, sizeof(info->task_uuid));
+		}
+		info->extmod_statistics = task->extmod_statistics;
+		*task_info_count = TASK_EXTMOD_INFO_COUNT;
+
+		break;
+	}
+
+	case TASK_KERNELMEMORY_INFO:
+	{
+		task_kernelmemory_info_t	tkm_info;
+		thread_t			thread;
+
+		if (*task_info_count < TASK_KERNELMEMORY_INFO_COUNT) {
+		   error = KERN_INVALID_ARGUMENT;
+		   break;
+		}
+
+		tkm_info = (task_kernelmemory_info_t) task_info_out;
+
+		if (task == kernel_task) {
+			/*
+			 * All shared allocs/frees from other tasks count against
+			 * the kernel private memory usage.  If we are looking up
+			 * info for the kernel task, gather from everywhere.
+			 */
+			task_unlock(task);
+
+			/* start by accounting for all the terminated tasks against the kernel */
+			tkm_info->total_palloc = tasks_tkm_private.alloc + tasks_tkm_shared.alloc;
+			tkm_info->total_pfree = tasks_tkm_private.free + tasks_tkm_shared.free;
+			tkm_info->total_salloc = 0;
+			tkm_info->total_sfree = 0;
+
+			/* count all other task/thread shared alloc/free against the kernel */
+			lck_mtx_lock(&tasks_threads_lock);
+			queue_iterate(&tasks, task, task_t, tasks) {
+				if (task == kernel_task) {
+					tkm_info->total_palloc += task->tkm_private.alloc;
+					tkm_info->total_pfree += task->tkm_private.free;
+				}
+				tkm_info->total_palloc += task->tkm_shared.alloc;
+				tkm_info->total_pfree += task->tkm_shared.free;
+			}
+			queue_iterate(&threads, thread, thread_t, threads) {
+				if (thread->task == kernel_task) {
+					tkm_info->total_palloc += thread->tkm_private.alloc;
+					tkm_info->total_pfree += thread->tkm_private.free;
+				}
+				tkm_info->total_palloc += thread->tkm_shared.alloc;
+				tkm_info->total_pfree += thread->tkm_shared.free;
+			}
+			lck_mtx_unlock(&tasks_threads_lock);
+		} else {
+			/* account for all the terminated threads in the process */
+			tkm_info->total_palloc = task->tkm_private.alloc;
+			tkm_info->total_pfree = task->tkm_private.free;
+			tkm_info->total_salloc = task->tkm_shared.alloc;
+			tkm_info->total_sfree = task->tkm_shared.free;
+
+			/* then add in all the running threads */
+			queue_iterate(&task->threads, thread, thread_t, task_threads) {
+				tkm_info->total_palloc += thread->tkm_private.alloc;
+				tkm_info->total_pfree += thread->tkm_private.free;
+				tkm_info->total_salloc += thread->tkm_shared.alloc;
+				tkm_info->total_sfree += thread->tkm_shared.free;
+			}
+			task_unlock(task);
+		}
+
+		*task_info_count = TASK_KERNELMEMORY_INFO_COUNT;
+		return KERN_SUCCESS;
 	}
 
 	/* OBSOLETE */
@@ -1460,12 +1634,15 @@ task_info(
 		}
 
 		error = KERN_INVALID_POLICY;
+		break;
 	}
 
 	/* OBSOLETE */
 	case TASK_SCHED_RR_INFO:
 	{
 		register policy_rr_base_t	rr_base;
+		uint32_t quantum_time;
+		uint64_t quantum_ns;
 
 		if (*task_info_count < POLICY_RR_BASE_COUNT) {
 			error = KERN_INVALID_ARGUMENT;
@@ -1481,7 +1658,10 @@ task_info(
 
 		rr_base->base_priority = task->priority;
 
-		rr_base->quantum = std_quantum_us / 1000;
+		quantum_time = SCHED(initial_quantum_size)(THREAD_NULL);
+		absolutetime_to_nanoseconds(quantum_time, &quantum_ns);
+		
+		rr_base->quantum = (uint32_t)(quantum_ns / 1000 / 1000);
 
 		*task_info_count = POLICY_RR_BASE_COUNT;
 		break;
@@ -1546,6 +1726,7 @@ task_info(
             
 	case TASK_SCHED_INFO:
 		error = KERN_INVALID_ARGUMENT;
+		break;
 
 	case TASK_EVENTS_INFO:
 	{
@@ -1571,7 +1752,9 @@ task_info(
 		events_info->csw = task->c_switch;
 
 		queue_iterate(&task->threads, thread, thread_t, task_threads) {
-			events_info->csw += thread->c_switch;
+			events_info->csw	   += thread->c_switch;
+			events_info->syscalls_mach += thread->syscalls_mach;
+			events_info->syscalls_unix += thread->syscalls_unix;
 		}
 
 
@@ -1586,8 +1769,8 @@ task_info(
 		}
 
 		error = task_affinity_info(task, task_info_out, task_info_count);
+		break;
 	}
-
 	default:
 		error = KERN_INVALID_ARGUMENT;
 	}
@@ -1941,6 +2124,24 @@ task_reference(
 	if (task != TASK_NULL)
 		task_reference_internal(task);
 }
+
+/* 
+ * This routine is called always with task lock held.
+ * And it returns a thread handle without reference as the caller
+ * operates on it under the task lock held.
+ */
+thread_t
+task_findtid(task_t task, uint64_t tid)
+{
+	thread_t thread= THREAD_NULL;
+
+	queue_iterate(&task->threads, thread, thread_t, task_threads) {
+			if (thread->thread_id == tid)
+				break;
+	}
+	return(thread);
+}
+
 
 #if CONFIG_MACF_MACH
 /*

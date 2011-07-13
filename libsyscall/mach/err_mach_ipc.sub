@@ -36,7 +36,7 @@
  *	Error string definitions for the new Mach IPC
  */
 
-static const char * err_codes_mach_send[] = {
+static const char * const err_codes_mach_send[] = {
 	/* 0 */	"(ipc/send) no error",
 	/* 1 */	"(ipc/send) send in progress",
 	/* 2 */	"(ipc/send) invalid data",
@@ -61,7 +61,7 @@ static const char * err_codes_mach_send[] = {
        /* 21 */ "(ipc/send) out-of-line buffer too large",
 };
 
-static const char * err_codes_mach_rcv[] = {
+static const char * const err_codes_mach_rcv[] = {
 	/* 0 */	"(ipc/rcv) no error",
 	/* 1 */	"(ipc/rcv) receive in progress",
 	/* 2 */	"(ipc/rcv) invalid name",
@@ -81,7 +81,7 @@ static const char * err_codes_mach_rcv[] = {
        /* 16 */ "(ipc/rcv) DIPC transport error",
 };
 
-static const char 	* err_codes_mach_mig[] = {
+static const char * const err_codes_mach_mig[] = {
 	/* 0 */	"(ipc/mig) client type check failure",
 	/* 1 */	"(ipc/mig) wrong reply message ID",
 	/* 2 */	"(ipc/mig) server detected error",

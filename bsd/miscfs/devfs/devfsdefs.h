@@ -178,6 +178,7 @@ struct devdirent
 extern devdirent_t * 		dev_root;
 extern struct devfs_stats	devfs_stats;
 extern lck_mtx_t	  	devfs_mutex;
+extern lck_mtx_t	  	devfs_attr_mutex;
 
 /*
  * Rules for front nodes:
@@ -214,9 +215,10 @@ struct devfsmount
 #define VTODN(vp)	((devnode_t *)(vp)->v_data)
 
 #define DEVFS_LOCK()	lck_mtx_lock(&devfs_mutex)
-
 #define DEVFS_UNLOCK()	lck_mtx_unlock(&devfs_mutex)
 
+#define DEVFS_ATTR_LOCK_SPIN()	lck_mtx_lock_spin(&devfs_attr_mutex);
+#define DEVFS_ATTR_UNLOCK()	lck_mtx_unlock(&devfs_attr_mutex);
 
 /*
  * XXX all the (SInt32 *) casts below assume sizeof(int) == sizeof(long)
@@ -269,34 +271,32 @@ DEVFS_DECR_STRINGSPACE(int space)
     OSAddAtomic(-space, &devfs_stats.stringspace);
 }
 
-static __inline__ void
-dn_times(devnode_t * dnp, struct timeval *t1, struct timeval *t2, struct timeval *t3) 
-{
-	if (dnp->dn_access) {
-	    dnp->dn_atime.tv_sec = t1->tv_sec;
-	    dnp->dn_atime.tv_nsec = t1->tv_usec * 1000;
-	    dnp->dn_access = 0;
-	}
-	if (dnp->dn_update) {
-	    dnp->dn_mtime.tv_sec = t2->tv_sec;
-	    dnp->dn_mtime.tv_nsec = t2->tv_usec * 1000;
-	    dnp->dn_update = 0;
-	}
-	if (dnp->dn_change) {
-	    dnp->dn_ctime.tv_sec = t3->tv_sec;
-	    dnp->dn_ctime.tv_nsec = t3->tv_usec * 1000;
-	    dnp->dn_change = 0;
-	}
+/* 
+ * Access, change, and modify times are protected by a separate lock,
+ * which allows tty times to be updated (no more than once per second)
+ * in the I/O path without too much fear of contention.
+ *
+ * For getattr, update times to current time if the last update was recent; 
+ * preserve  legacy behavior that frequent stats can yield sub-second resolutions.  
+ * If the last time is old, however, we know that the event that triggered
+ * the need for an update was no more than 1s after the last update.  In that case,
+ * use (last update + 1s) as the time, avoiding the illusion that last update happened
+ * much later than it really did.
+ */
+#define DEVFS_LAZY_UPDATE_SECONDS	1
 
-	return;
-}
+#define DEVFS_UPDATE_CHANGE		0x1
+#define DEVFS_UPDATE_MOD		0x2
+#define DEVFS_UPDATE_ACCESS		0x4
 
 static __inline__ void
 dn_copy_times(devnode_t * target, devnode_t * source)
 {
+    DEVFS_ATTR_LOCK_SPIN();
     target->dn_atime = source->dn_atime;
     target->dn_mtime = source->dn_mtime;
     target->dn_ctime = source->dn_ctime;
+    DEVFS_ATTR_UNLOCK();
     return;
 }
 

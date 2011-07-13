@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -48,11 +48,7 @@
 
 #define	PAUSE		rep; nop
 
-
-#define PUSHF pushf
-#define POPF  popf
-#define CLI   cli
-
+#include <i386/pal_lock_asm.h>
 
 /*
  *	When performance isn't the only concern, it's
@@ -124,18 +120,23 @@
 /* For x86_64, the varargs ABI requires that %al indicate
  * how many SSE register contain arguments. In our case, 0 */
 #if __i386__
-#define LOAD_STRING_ARG0(label)	pushl $##label ;
-#define LOAD_ARG1(x)		pushl x	;
+#define ALIGN_STACK()		subl $8, %esp; andl	$0xFFFFFFF0, %esp ;
+#define LOAD_STRING_ARG0(label)	movl $##label, (%esp) ;
+#define LOAD_ARG1(x)		mov  x, 4(%esp)	;
+#define LOAD_PTR_ARG1(x)	mov  x, 4(%esp)	;
 #define CALL_PANIC()		call EXT(panic) ;
 #else
+#define ALIGN_STACK() 		and  $0xFFFFFFFFFFFFFFF0, %rsp ;
 #define LOAD_STRING_ARG0(label)	leaq label(%rip), %rdi ;
-#define LOAD_ARG1(x)		movq x, %rsi ;
+#define LOAD_ARG1(x)		mov x, %esi ;
+#define LOAD_PTR_ARG1(x)	mov x, %rsi ;
 #define CALL_PANIC()		xorb %al,%al ; call EXT(panic) ;
 #endif
 
 #define	CHECK_UNLOCK(current, owner)				\
 	cmp	current, owner				;	\
 	je	1f					;	\
+	ALIGN_STACK()					;	\
 	LOAD_STRING_ARG0(2f)				;	\
 	CALL_PANIC()					;	\
 	hlt						;	\
@@ -157,6 +158,7 @@
 #define	CHECK_MUTEX_TYPE()					\
 	cmpl	$ MUTEX_TAG,M_TYPE			;	\
 	je	1f					;	\
+	ALIGN_STACK()					;	\
 	LOAD_STRING_ARG0(2f)				;	\
 	CALL_PANIC()					;	\
 	hlt						;	\
@@ -177,7 +179,9 @@
 	jne	1f					;	\
 	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL		;	\
 	je	1f					;	\
-	LOAD_ARG1(%gs:CPU_PREEMPTION_LEVEL)             ;       \
+	ALIGN_STACK()					;	\
+	movl	%gs:CPU_PREEMPTION_LEVEL, %eax		;	\
+	LOAD_ARG1(%eax)					;	\
 	LOAD_STRING_ARG0(2f)				;	\
 	CALL_PANIC()					;	\
 	hlt						;	\
@@ -192,6 +196,7 @@
 #define	CHECK_MYLOCK(current, owner)				\
 	cmp	current, owner				;	\
 	jne	1f					;	\
+	ALIGN_STACK()					;	\
 	LOAD_STRING_ARG0(2f)				;	\
 	CALL_PANIC()					;	\
 	hlt						;	\
@@ -206,32 +211,47 @@
 #define	CHECK_MYLOCK(thd)
 #endif	/* MACH_LDEBUG */
 
-
 #define PREEMPTION_DISABLE				\
-	incl	%gs:CPU_PREEMPTION_LEVEL		
-	
-	
+	incl	%gs:CPU_PREEMPTION_LEVEL
+
+#if MACH_LDEBUG || 1
+#define	PREEMPTION_LEVEL_DEBUG 1	
+#endif
+#if	PREEMPTION_LEVEL_DEBUG
 #define	PREEMPTION_ENABLE				\
 	decl	%gs:CPU_PREEMPTION_LEVEL	;	\
-	jne	9f				;	\
+	js	17f				;	\
+	jnz	19f				;	\
+	testl	$AST_URGENT,%gs:CPU_PENDING_AST	;	\
+	jz	19f				;	\
 	PUSHF					;	\
-	testl	$ EFL_IF,S_PC			;	\
-	je	8f				;	\
-	CLI					;	\
-	movl	%gs:CPU_PENDING_AST,%eax	;	\
-	testl	$ AST_URGENT,%eax		;	\
-	je	8f				;	\
-	movl	%gs:CPU_INTERRUPT_LEVEL,%eax	;	\
-	testl	%eax,%eax			;	\
-	jne	8f				;	\
+	testl	$EFL_IF, S_PC			;	\
+	jz	18f				;	\
 	POPF					;	\
 	int	$(T_PREEMPT)			;	\
-	jmp	9f				;	\
-8:							\
+	jmp	19f				;	\
+17:							\
+	call	_preemption_underflow_panic	;	\
+18:							\
 	POPF					;	\
-9:	
+19:
+#else
+#define	PREEMPTION_ENABLE				\
+	decl	%gs:CPU_PREEMPTION_LEVEL	;	\
+	jnz	19f				;	\
+	testl	$AST_URGENT,%gs:CPU_PENDING_AST	;	\
+	jz	19f				;	\
+	PUSHF					;	\
+	testl	$EFL_IF, S_PC			;	\
+	jz	18f				;	\
+	POPF					;	\
+	int	$(T_PREEMPT)			;	\
+	jmp	19f				;	\
+18:							\
+	POPF					;	\
+19:
+#endif
 
-	
 
 #if	CONFIG_DTRACE
 
@@ -646,8 +666,10 @@ Entry(lck_rw_lock_shared)
 	 */
 	LOCKSTAT_LABEL(_lck_rw_lock_shared_lockstat_patch_point)
 	ret
-    /* Fall thru when patched, counting on lock pointer in LCK_RW_REGISTER  */
-    LOCKSTAT_RECORD(LS_LCK_RW_LOCK_SHARED_ACQUIRE, LCK_RW_REGISTER)
+	/*
+	Fall thru when patched, counting on lock pointer in LCK_RW_REGISTER
+	*/
+	LOCKSTAT_RECORD(LS_LCK_RW_LOCK_SHARED_ACQUIRE, LCK_RW_REGISTER)
 #endif
 	ret
 2:
@@ -972,6 +994,7 @@ Entry(lck_rw_done)
 	PAUSE
 	jmp	1b
 8:
+	ALIGN_STACK()
 	LOAD_STRING_ARG0(rwl_release_error_str)
 	CALL_PANIC()
 	
@@ -1121,13 +1144,11 @@ Entry(lck_rw_held_read_or_upgrade)
 #define LMTX_A_REG32	%eax
 #define LMTX_C_REG	%ecx
 #define LMTX_C_REG32	%ecx
-#define LMTX_D_REG	%edx
 #define LMTX_RET_REG	%eax
+#define LMTX_RET_REG32	%eax
 #define LMTX_LGROUP_REG	%esi
 #define LMTX_SSTATE_REG	%edi	
 #define	LOAD_LMTX_REG(arg)	mov arg, LMTX_REG
-#define LOAD_REG_ARG0(reg)	push reg
-#define LOAD_REG_ARG1(reg)	push reg
 #define LMTX_CHK_EXTENDED	cmp LMTX_REG, LMTX_ARG0
 #define LMTX_ASSERT_OWNED	cmpl $(MUTEX_ASSERT_OWNED), LMTX_ARG1
 
@@ -1222,13 +1243,11 @@ Entry(lck_rw_held_read_or_upgrade)
 #define LMTX_A_REG32	%eax
 #define LMTX_C_REG	%rcx
 #define LMTX_C_REG32	%ecx
-#define LMTX_D_REG	%rdx
 #define LMTX_RET_REG	%rax
+#define LMTX_RET_REG32	%eax
 #define LMTX_LGROUP_REG	%r10
 #define LMTX_SSTATE_REG	%r11	
 #define	LOAD_LMTX_REG(arg)	mov %rdi, %rdx
-#define LOAD_REG_ARG0(reg)	mov reg, %rdi
-#define LOAD_REG_ARG1(reg)	mov reg, %rsi
 #define LMTX_CHK_EXTENDED	cmp LMTX_REG, LMTX_REG_ORIG
 #define LMTX_ASSERT_OWNED	cmp $(MUTEX_ASSERT_OWNED), LMTX_ARG1
 
@@ -1319,7 +1338,7 @@ Entry(lck_rw_held_read_or_upgrade)
 	pop	LMTX_SSTATE_REG		;	\
 	pop	LMTX_LGROUP_REG		;	\
 12:
-	
+
 #else
 #error Unsupported architecture
 #endif
@@ -1331,8 +1350,6 @@ Entry(lck_rw_held_read_or_upgrade)
 #define M_MLOCKED_MSK		0x02000000
 #define M_PROMOTED_MSK		0x04000000
 #define M_SPIN_MSK		0x08000000
-
-	
 
 /*
  *	void lck_mtx_assert(lck_mtx_t* l, unsigned int)
@@ -1348,10 +1365,11 @@ NONLEAF_ENTRY(lck_mtx_assert)
         LOAD_LMTX_REG(B_ARG0)	                   	/* Load lock address */
 	mov	%gs:CPU_ACTIVE_THREAD, LMTX_A_REG	/* Load current thread */
 
-	mov	M_OWNER(LMTX_REG), LMTX_C_REG
-	cmp	$(MUTEX_IND), LMTX_C_REG	/* Is this an indirect mutex? */
-	cmove	M_PTR(LMTX_REG), LMTX_REG	/* If so, take indirection */
-
+	mov	M_STATE(LMTX_REG), LMTX_C_REG32
+	cmp	$(MUTEX_IND), LMTX_C_REG32	/* Is this an indirect mutex? */
+	jne	0f
+	mov	M_PTR(LMTX_REG), LMTX_REG	/* If so, take indirection */
+0:	
 	mov	M_OWNER(LMTX_REG), LMTX_C_REG	/* Load owner */
 	LMTX_ASSERT_OWNED
 	jne	2f				/* Assert ownership? */
@@ -1364,18 +1382,21 @@ NONLEAF_ENTRY(lck_mtx_assert)
 2:
 	cmp	LMTX_A_REG, LMTX_C_REG		/* Current thread match? */
 	jne	1b				/* No, return */
-	LOAD_REG_ARG1(LMTX_REG)
+	ALIGN_STACK()
+	LOAD_PTR_ARG1(LMTX_REG)
 	LOAD_STRING_ARG0(mutex_assert_owned_str)
 	jmp	4f
 3:
-	LOAD_REG_ARG1(LMTX_REG)
+	ALIGN_STACK()
+	LOAD_PTR_ARG1(LMTX_REG)
 	LOAD_STRING_ARG0(mutex_assert_not_owned_str)
 4:
 	CALL_PANIC()
 
 
 lck_mtx_destroyed:
-	LOAD_REG_ARG1(LMTX_REG)
+	ALIGN_STACK()
+	LOAD_PTR_ARG1(LMTX_REG)
 	LOAD_STRING_ARG0(mutex_interlock_destroyed_str)
 	CALL_PANIC()
 	
@@ -1396,54 +1417,38 @@ mutex_interlock_destroyed_str:
  * lck_mtx_try_lock()
  * lck_mtx_unlock()
  * lck_mtx_lock_spin()
+ * lck_mtx_lock_spin_always()
  * lck_mtx_convert_spin()
  */
-	
+NONLEAF_ENTRY(lck_mtx_lock_spin_always)
+	LOAD_LMTX_REG(B_ARG0)		/* fetch lock pointer */
+	jmp	Llmls_avoid_check
+
 NONLEAF_ENTRY(lck_mtx_lock_spin)
 	LOAD_LMTX_REG(B_ARG0)		/* fetch lock pointer */
 
 	CHECK_PREEMPTION_LEVEL()
-
+Llmls_avoid_check:	
 	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-	test	$(M_ILOCKED_MSK), LMTX_C_REG	/* is the interlock held */
-	je	Llmls_enter			/* no - can't be INDIRECT or DESTROYED */
-
-	mov	M_OWNER(LMTX_REG), LMTX_A_REG
-	cmp	$(MUTEX_DESTROYED), LMTX_A_REG	/* check to see if its marked destroyed */
-	je	lck_mtx_destroyed
-	cmp	$(MUTEX_IND), LMTX_A_REG	/* Is this an indirect mutex */
-	jne	Llmls_loop
-
-	LMTX_ENTER_EXTENDED
-
-	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-	test	$(M_SPIN_MSK), LMTX_C_REG
-	je	Llmls_loop
-
-	LMTX_UPDATE_MISS
-Llmls_loop:
-	PAUSE
-	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-
-	test	$(M_ILOCKED_MSK), LMTX_C_REG	/* is the interlock held */
-	jne	Llmls_loop
-Llmls_enter:
-	test	$(M_MLOCKED_MSK), LMTX_C_REG	/* is the mutex locked */
-	jne	Llml_contended			/* fall back to normal mutex handling */
-
-	PUSHF					/* save interrupt state */
+	test	$(M_ILOCKED_MSK | M_MLOCKED_MSK), LMTX_C_REG32	/* is the interlock or mutex held */
+	jnz	Llmls_slow
+Llmls_try:					/* no - can't be INDIRECT, DESTROYED or locked */
 	mov	LMTX_C_REG, LMTX_A_REG		/* eax contains snapshot for cmpxchgl */
-	or	$(M_ILOCKED_MSK | M_SPIN_MSK), LMTX_C_REG
-	CLI					/* disable interrupts */
+	or	$(M_ILOCKED_MSK | M_SPIN_MSK), LMTX_C_REG32
+
+	PREEMPTION_DISABLE
 	lock
 	cmpxchg LMTX_C_REG32, M_STATE(LMTX_REG)	/* atomic compare and exchange */
-	jne	1f
+	jne	Llmls_busy_disabled
 
  	mov	%gs:CPU_ACTIVE_THREAD, LMTX_A_REG
 	mov	LMTX_A_REG, M_OWNER(LMTX_REG)	/* record owner of interlock */
-
-	PREEMPTION_DISABLE
-	POPF				/* restore interrupt state */
+#if	MACH_LDEBUG
+	test	LMTX_A_REG, LMTX_A_REG
+	jz	1f
+	incl	TH_MUTEX_COUNT(LMTX_A_REG)	/* lock statistic */
+1:	
+#endif	/* MACH_LDEBUG */
 
 	LMTX_CHK_EXTENDED_EXIT
 	/* return with the interlock held and preemption disabled */
@@ -1456,8 +1461,34 @@ Llmls_enter:
 #endif
 	ret
 
-1:	
-	POPF				/* restore interrupt state */
+Llmls_slow:	
+	test	$M_ILOCKED_MSK, LMTX_C_REG32		/* is the interlock held */
+	jz	Llml_contended				/* no, must have been the mutex */
+
+	cmp	$(MUTEX_DESTROYED), LMTX_C_REG32	/* check to see if its marked destroyed */
+	je	lck_mtx_destroyed
+	cmp	$(MUTEX_IND), LMTX_C_REG32		/* Is this an indirect mutex */
+	jne	Llmls_loop				/* no... must be interlocked */
+
+	LMTX_ENTER_EXTENDED
+
+	mov	M_STATE(LMTX_REG), LMTX_C_REG32
+	test	$(M_SPIN_MSK), LMTX_C_REG32
+	jz	Llmls_loop1
+
+	LMTX_UPDATE_MISS		/* M_SPIN_MSK was set, so M_ILOCKED_MSK must also be present */
+Llmls_loop:
+	PAUSE
+	mov	M_STATE(LMTX_REG), LMTX_C_REG32
+Llmls_loop1:
+	test	$(M_ILOCKED_MSK | M_MLOCKED_MSK), LMTX_C_REG32
+	jz	Llmls_try
+	test	$(M_MLOCKED_MSK), LMTX_C_REG32
+	jnz	Llml_contended				/* mutex owned by someone else, go contend for it */
+	jmp	Llmls_loop
+
+Llmls_busy_disabled:
+	PREEMPTION_ENABLE
 	jmp	Llmls_loop
 
 
@@ -1468,47 +1499,35 @@ NONLEAF_ENTRY(lck_mtx_lock)
 	CHECK_PREEMPTION_LEVEL()
 
 	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-	test	$(M_ILOCKED_MSK), LMTX_C_REG	/* is the interlock held */
-	je	Llml_enter			/* no - can't be INDIRECT or DESTROYED */
-
-	mov	M_OWNER(LMTX_REG), LMTX_A_REG
-	cmp	$(MUTEX_DESTROYED), LMTX_A_REG	/* check to see if its marked destroyed */
-	je	lck_mtx_destroyed
-	cmp	$(MUTEX_IND), LMTX_A_REG	/* Is this an indirect mutex? */
-	jne	Llml_loop
-
-	LMTX_ENTER_EXTENDED
-
-	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-	test	$(M_SPIN_MSK), LMTX_C_REG
-	je	Llml_loop
-
-	LMTX_UPDATE_MISS
-Llml_loop:
-	PAUSE
-	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-
-	test	$(M_ILOCKED_MSK), LMTX_C_REG
-	jne	Llml_loop
-Llml_enter:
-	test	$(M_MLOCKED_MSK), LMTX_C_REG
-	jne	Llml_contended			/* mutex owned by someone else, go contend for it */
-
+	test	$(M_ILOCKED_MSK | M_MLOCKED_MSK), LMTX_C_REG32	/* is the interlock or mutex held */
+	jnz	Llml_slow
+Llml_try:					/* no - can't be INDIRECT, DESTROYED or locked */
 	mov	LMTX_C_REG, LMTX_A_REG		/* eax contains snapshot for cmpxchgl */
-	or	$(M_MLOCKED_MSK), LMTX_C_REG
+	or	$(M_ILOCKED_MSK | M_MLOCKED_MSK), LMTX_C_REG32
+
+	PREEMPTION_DISABLE
 	lock
 	cmpxchg LMTX_C_REG32, M_STATE(LMTX_REG)	/* atomic compare and exchange */
-	jne	Llml_loop
+	jne	Llml_busy_disabled
 
  	mov	%gs:CPU_ACTIVE_THREAD, LMTX_A_REG
 	mov	LMTX_A_REG, M_OWNER(LMTX_REG)	/* record owner of mutex */
+#if	MACH_LDEBUG
+	test	LMTX_A_REG, LMTX_A_REG
+	jz	1f
+	incl	TH_MUTEX_COUNT(LMTX_A_REG)	/* lock statistic */
+1:
+#endif	/* MACH_LDEBUG */
 
-Llml_acquired:
 	testl	$(M_WAITERS_MSK), M_STATE(LMTX_REG)
-	je	1f
+	jz	Llml_finish
 
 	LMTX_CALLEXT1(lck_mtx_lock_acquire_x86)
-1:	
+
+Llml_finish:
+	andl	$(~M_ILOCKED_MSK), M_STATE(LMTX_REG)
+	PREEMPTION_ENABLE
+	
 	LMTX_CHK_EXTENDED		/* is this an extended mutex */
 	jne	2f
 
@@ -1530,8 +1549,39 @@ Llml_acquired:
 	LOCKSTAT_RECORD(LS_LCK_MTX_EXT_LOCK_ACQUIRE, LMTX_REG)
 #endif
 	ret
-	
 
+	
+Llml_slow:
+	test	$M_ILOCKED_MSK, LMTX_C_REG32		/* is the interlock held */
+	jz	Llml_contended				/* no, must have been the mutex */
+	
+	cmp	$(MUTEX_DESTROYED), LMTX_C_REG32	/* check to see if its marked destroyed */
+	je	lck_mtx_destroyed
+	cmp	$(MUTEX_IND), LMTX_C_REG32		/* Is this an indirect mutex? */
+	jne	Llml_loop				/* no... must be interlocked */
+
+	LMTX_ENTER_EXTENDED
+
+	mov	M_STATE(LMTX_REG), LMTX_C_REG32
+	test	$(M_SPIN_MSK), LMTX_C_REG32
+	jz	Llml_loop1
+
+	LMTX_UPDATE_MISS		/* M_SPIN_MSK was set, so M_ILOCKED_MSK must also be present */
+Llml_loop:
+	PAUSE
+	mov	M_STATE(LMTX_REG), LMTX_C_REG32
+Llml_loop1:
+	test	$(M_ILOCKED_MSK | M_MLOCKED_MSK), LMTX_C_REG32
+	jz	Llml_try
+	test	$(M_MLOCKED_MSK), LMTX_C_REG32
+	jnz	Llml_contended				/* mutex owned by someone else, go contend for it */
+	jmp	Llml_loop
+
+Llml_busy_disabled:
+	PREEMPTION_ENABLE
+	jmp	Llml_loop
+
+	
 Llml_contended:
 	LMTX_CHK_EXTENDED		/* is this an extended mutex */
 	je	0f
@@ -1540,7 +1590,8 @@ Llml_contended:
 	LMTX_CALLEXT1(lck_mtx_lock_spinwait_x86)
 
 	test	LMTX_RET_REG, LMTX_RET_REG
-	je	Llml_acquired		/* acquired mutex */
+	jz	Llml_acquired		/* acquired mutex, interlock held and preemption disabled */
+
 	cmp	$1, LMTX_RET_REG	/* check for direct wait status */
 	je	2f
 	LMTX_CHK_EXTENDED		/* is this an extended mutex */
@@ -1548,32 +1599,43 @@ Llml_contended:
 	LMTX_UPDATE_DIRECT_WAIT
 2:	
 	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-	test	$(M_ILOCKED_MSK), LMTX_C_REG
-	jne	6f
+	test	$(M_ILOCKED_MSK), LMTX_C_REG32
+	jnz	6f
 
-	PUSHF					/* save state of interrupt mask */
 	mov	LMTX_C_REG, LMTX_A_REG		/* eax contains snapshot for cmpxchgl */
-	or	$(M_ILOCKED_MSK), LMTX_C_REG	/* try to take the interlock */
-	CLI					/* disable interrupts */
+	or	$(M_ILOCKED_MSK), LMTX_C_REG32	/* try to take the interlock */
+
+	PREEMPTION_DISABLE
 	lock
 	cmpxchg LMTX_C_REG32, M_STATE(LMTX_REG)	/* atomic compare and exchange */
 	jne	5f
 
-	test	$(M_MLOCKED_MSK), LMTX_C_REG	/* we've got the interlock and */
-	jne	3f
-	or	$(M_MLOCKED_MSK), LMTX_C_REG	/* the mutex is free... grab it directly */
-	and	$(~M_ILOCKED_MSK), LMTX_C_REG
+	test	$(M_MLOCKED_MSK), LMTX_C_REG32	/* we've got the interlock and */
+	jnz	3f
+	or	$(M_MLOCKED_MSK), LMTX_C_REG32	/* the mutex is free... grab it directly */
+	mov	LMTX_C_REG32, M_STATE(LMTX_REG)
 	
  	mov	%gs:CPU_ACTIVE_THREAD, LMTX_A_REG
 	mov	LMTX_A_REG, M_OWNER(LMTX_REG)	/* record owner of mutex */
-	mov	LMTX_C_REG32, M_STATE(LMTX_REG)	/* now drop the interlock */
+#if	MACH_LDEBUG
+	test	LMTX_A_REG, LMTX_A_REG
+	jz	1f
+	incl	TH_MUTEX_COUNT(LMTX_A_REG)	/* lock statistic */
+1:
+#endif	/* MACH_LDEBUG */
 
-	POPF				/* restore interrupt state */
-	jmp	Llml_acquired
+Llml_acquired:
+	testl	$(M_WAITERS_MSK), M_STATE(LMTX_REG)
+	jnz	1f
+	mov	M_OWNER(LMTX_REG), LMTX_A_REG
+	mov	TH_WAS_PROMOTED_ON_WAKEUP(LMTX_A_REG), LMTX_A_REG32
+	test	LMTX_A_REG32, LMTX_A_REG32
+	jz	Llml_finish
+1:	
+	LMTX_CALLEXT1(lck_mtx_lock_acquire_x86)
+	jmp	Llml_finish
+
 3:					/* interlock held, mutex busy */
-	PREEMPTION_DISABLE
-	POPF				/* restore interrupt state */
-
 	LMTX_CHK_EXTENDED		/* is this an extended mutex */
 	je	4f
 	LMTX_UPDATE_WAIT
@@ -1581,7 +1643,7 @@ Llml_contended:
 	LMTX_CALLEXT1(lck_mtx_lock_wait_x86)
 	jmp	Llml_contended
 5:	
-	POPF				/* restore interrupt state */
+	PREEMPTION_ENABLE
 6:
 	PAUSE
 	jmp	2b
@@ -1592,38 +1654,25 @@ NONLEAF_ENTRY(lck_mtx_try_lock_spin)
 	LOAD_LMTX_REG(B_ARG0)			/* fetch lock pointer */
 
 	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-	test	$(M_ILOCKED_MSK), LMTX_C_REG	/* is the interlock held */
-	je	Llmts_enter			/* no - can't be INDIRECT or DESTROYED */
-
-	mov	M_OWNER(LMTX_REG), LMTX_A_REG
-	cmp	$(MUTEX_DESTROYED), LMTX_A_REG	/* check to see if its marked destroyed */
-	je	lck_mtx_destroyed
-	cmp	$(MUTEX_IND), LMTX_A_REG	/* Is this an indirect mutex? */
-	jne	Llmts_enter
-
-	LMTX_ENTER_EXTENDED
-Llmts_loop:
-	PAUSE
-	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-Llmts_enter:
-	test	$(M_MLOCKED_MSK | M_SPIN_MSK), LMTX_C_REG
-	jne	Llmts_fail
-	test	$(M_ILOCKED_MSK), LMTX_C_REG
-	jne	Llmts_loop
-
-	PUSHF					/* save interrupt state */
+	test	$(M_ILOCKED_MSK | M_MLOCKED_MSK), LMTX_C_REG32	/* is the interlock or mutex held */
+	jnz	Llmts_slow
+Llmts_try:					/* no - can't be INDIRECT, DESTROYED or locked */
 	mov	LMTX_C_REG, LMTX_A_REG		/* eax contains snapshot for cmpxchgl */
 	or	$(M_ILOCKED_MSK | M_SPIN_MSK), LMTX_C_REG
-	CLI					/* disable interrupts */
+
+	PREEMPTION_DISABLE
 	lock
 	cmpxchg LMTX_C_REG32, M_STATE(LMTX_REG)	/* atomic compare and exchange */
-	jne	3f
+	jne	Llmts_busy_disabled
 
  	mov	%gs:CPU_ACTIVE_THREAD, LMTX_A_REG
 	mov	LMTX_A_REG, M_OWNER(LMTX_REG)	/* record owner of mutex */
-
-	PREEMPTION_DISABLE
-	POPF				/* restore interrupt state */
+#if	MACH_LDEBUG
+	test	LMTX_A_REG, LMTX_A_REG
+	jz	1f
+	incl	TH_MUTEX_COUNT(LMTX_A_REG)	/* lock statistic */
+1:
+#endif	/* MACH_LDEBUG */
 
 	LMTX_CHK_EXTENDED_EXIT
 	leave
@@ -1637,52 +1686,68 @@ Llmts_enter:
 #endif
 	mov	$1, LMTX_RET_REG	/* return success */
 	ret
-3:	
-	POPF				/* restore interrupt state */
+
+Llmts_slow:
+	test	$(M_ILOCKED_MSK), LMTX_C_REG32	/* is the interlock held */
+	jz	Llmts_fail			/* no, must be held as a mutex */
+
+	cmp	$(MUTEX_DESTROYED), LMTX_C_REG32	/* check to see if its marked destroyed */
+	je	lck_mtx_destroyed
+	cmp	$(MUTEX_IND), LMTX_C_REG32	/* Is this an indirect mutex? */
+	jne	Llmts_loop1
+
+	LMTX_ENTER_EXTENDED
+Llmts_loop:
+	PAUSE
+	mov	M_STATE(LMTX_REG), LMTX_C_REG32
+Llmts_loop1:
+	test	$(M_MLOCKED_MSK | M_SPIN_MSK), LMTX_C_REG32
+	jnz	Llmts_fail
+	test	$(M_ILOCKED_MSK), LMTX_C_REG32
+	jz	Llmts_try
+	jmp	Llmts_loop
+	
+Llmts_busy_disabled:
+	PREEMPTION_ENABLE
 	jmp	Llmts_loop
 
-	
+
 	
 NONLEAF_ENTRY(lck_mtx_try_lock)
 	LOAD_LMTX_REG(B_ARG0)			/* fetch lock pointer */
 
 	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-	test	$(M_ILOCKED_MSK), LMTX_C_REG	/* is the interlock held */
-	je	Llmt_enter			/* no - can't be INDIRECT or DESTROYED */
-
-	mov	M_OWNER(LMTX_REG), LMTX_A_REG
-	cmp	$(MUTEX_DESTROYED), LMTX_A_REG	/* check to see if its marked destroyed */
-	je	lck_mtx_destroyed
-	cmp	$(MUTEX_IND), LMTX_A_REG	/* Is this an indirect mutex? */
-	jne	Llmt_enter
-
-	LMTX_ENTER_EXTENDED
-Llmt_loop:
-	PAUSE
-	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-Llmt_enter:
-	test	$(M_MLOCKED_MSK | M_SPIN_MSK), LMTX_C_REG
-	jne	Llmt_fail
-	test	$(M_ILOCKED_MSK), LMTX_C_REG
-	jne	Llmt_loop
-
+	test	$(M_ILOCKED_MSK | M_MLOCKED_MSK), LMTX_C_REG32	/* is the interlock or mutex held */
+	jnz	Llmt_slow	
+Llmt_try:					/* no - can't be INDIRECT, DESTROYED or locked */
 	mov	LMTX_C_REG, LMTX_A_REG		/* eax contains snapshot for cmpxchgl */
-	or	$(M_MLOCKED_MSK), LMTX_C_REG
+	or	$(M_ILOCKED_MSK | M_MLOCKED_MSK), LMTX_C_REG32
+	
+	PREEMPTION_DISABLE
 	lock
 	cmpxchg LMTX_C_REG32, M_STATE(LMTX_REG)	/* atomic compare and exchange */
-	jne	Llmt_loop
+	jne	Llmt_busy_disabled
 
  	mov	%gs:CPU_ACTIVE_THREAD, LMTX_A_REG
 	mov	LMTX_A_REG, M_OWNER(LMTX_REG)	/* record owner of mutex */
+#if	MACH_LDEBUG
+	test	LMTX_A_REG, LMTX_A_REG
+	jz	1f
+	incl	TH_MUTEX_COUNT(LMTX_A_REG)	/* lock statistic */
+1:
+#endif	/* MACH_LDEBUG */
 
 	LMTX_CHK_EXTENDED_EXIT
 
-	test	$(M_WAITERS_MSK), LMTX_C_REG
-	je	2f
-	LMTX_CALLEXT1(lck_mtx_lock_acquire_x86)
-2:
-	leave
+	test	$(M_WAITERS_MSK), LMTX_C_REG32
+	jz	0f
 
+	LMTX_CALLEXT1(lck_mtx_lock_acquire_x86)
+0:
+	andl	$(~M_ILOCKED_MSK), M_STATE(LMTX_REG)
+	PREEMPTION_ENABLE
+
+	leave
 #if	CONFIG_DTRACE
 	mov	$1, LMTX_RET_REG		/* return success */
 	/* Dtrace probe: LS_LCK_MTX_TRY_LOCK_ACQUIRE */
@@ -1693,6 +1758,30 @@ Llmt_enter:
 #endif	
 	mov	$1, LMTX_RET_REG		/* return success */
 	ret
+
+Llmt_slow:
+	test	$(M_ILOCKED_MSK), LMTX_C_REG32	/* is the interlock held */
+	jz	Llmt_fail			/* no, must be held as a mutex */
+
+	cmp	$(MUTEX_DESTROYED), LMTX_C_REG32	/* check to see if its marked destroyed */
+	je	lck_mtx_destroyed
+	cmp	$(MUTEX_IND), LMTX_C_REG32	/* Is this an indirect mutex? */
+	jne	Llmt_loop
+
+	LMTX_ENTER_EXTENDED
+Llmt_loop:
+	PAUSE
+	mov	M_STATE(LMTX_REG), LMTX_C_REG32
+Llmt_loop1:
+	test	$(M_MLOCKED_MSK | M_SPIN_MSK), LMTX_C_REG32
+	jnz	Llmt_fail
+	test	$(M_ILOCKED_MSK), LMTX_C_REG32
+	jz	Llmt_try
+	jmp	Llmt_loop
+
+Llmt_busy_disabled:
+	PREEMPTION_ENABLE
+	jmp	Llmt_loop
 
 
 Llmt_fail:
@@ -1710,34 +1799,36 @@ Llmts_fail:
 NONLEAF_ENTRY(lck_mtx_convert_spin)
 	LOAD_LMTX_REG(B_ARG0)			/* fetch lock pointer */
 
-	mov	M_OWNER(LMTX_REG), LMTX_A_REG
-	cmp	$(MUTEX_IND), LMTX_A_REG	/* Is this an indirect mutex? */
-	cmove	M_PTR(LMTX_REG), LMTX_REG	/* If so, take indirection */
-
 	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-	test	$(M_MLOCKED_MSK), LMTX_C_REG	/* already owned as a mutex, just return */
-	jne	2f
-1:	
-	and	$(~(M_ILOCKED_MSK | M_SPIN_MSK)), LMTX_C_REG	/* convert from spin version to mutex */
-	or	$(M_MLOCKED_MSK), LMTX_C_REG
-	mov	LMTX_C_REG32, M_STATE(LMTX_REG)		/* since I own the interlock, I don't need an atomic update */
-
-	PREEMPTION_ENABLE			/* only %eax is consumed */
-
-	test	$(M_WAITERS_MSK), LMTX_C_REG	/* are there any waiters? */
-	je	2f
+	cmp	$(MUTEX_IND), LMTX_C_REG32	/* Is this an indirect mutex? */
+	jne	0f
+	mov	M_PTR(LMTX_REG), LMTX_REG	/* If so, take indirection */
+	mov	M_STATE(LMTX_REG), LMTX_C_REG32
+0:
+	test	$(M_MLOCKED_MSK), LMTX_C_REG32	/* already owned as a mutex, just return */
+	jnz	2f
+	test	$(M_WAITERS_MSK), LMTX_C_REG32	/* are there any waiters? */
+	jz	1f
 
 	LMTX_CALLEXT1(lck_mtx_lock_acquire_x86)
+	mov	M_STATE(LMTX_REG), LMTX_C_REG32
+1:	
+	and	$(~(M_ILOCKED_MSK | M_SPIN_MSK)), LMTX_C_REG32	/* convert from spin version to mutex */
+	or	$(M_MLOCKED_MSK), LMTX_C_REG32
+	mov	LMTX_C_REG32, M_STATE(LMTX_REG)		/* since I own the interlock, I don't need an atomic update */
+
+	PREEMPTION_ENABLE
 2:	
 	NONLEAF_RET
 
+	
 
 #if	defined(__i386__)
 NONLEAF_ENTRY(lck_mtx_unlock)
 	LOAD_LMTX_REG(B_ARG0)			/* fetch lock pointer */
 	mov	M_OWNER(LMTX_REG), LMTX_A_REG
 	test	LMTX_A_REG, LMTX_A_REG
-	jnz	Llmu_prim
+	jnz	Llmu_entry
 	leave
 	ret
 NONLEAF_ENTRY(lck_mtx_unlock_darwin10)
@@ -1745,49 +1836,56 @@ NONLEAF_ENTRY(lck_mtx_unlock_darwin10)
 NONLEAF_ENTRY(lck_mtx_unlock)
 #endif
 	LOAD_LMTX_REG(B_ARG0)			/* fetch lock pointer */
-	mov	M_OWNER(LMTX_REG), LMTX_A_REG
-Llmu_prim:
-	cmp	$(MUTEX_IND), LMTX_A_REG	/* Is this an indirect mutex? */
-	je	Llmu_ext
-0:	
+Llmu_entry:
 	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-	test	$(M_MLOCKED_MSK), LMTX_C_REG	/* check for full mutex */
-	jne	1f
+Llmu_prim:
+	cmp	$(MUTEX_IND), LMTX_C_REG32	/* Is this an indirect mutex? */
+	je	Llmu_ext
 
+Llmu_chktype:
+	test	$(M_MLOCKED_MSK), LMTX_C_REG32	/* check for full mutex */
+	jz	Llmu_unlock
+Llmu_mutex:
+	test	$(M_ILOCKED_MSK), LMTX_C_REG	/* have to wait for interlock to clear */
+	jnz	Llmu_busy
+
+	mov	LMTX_C_REG, LMTX_A_REG		/* eax contains snapshot for cmpxchgl */
+	and	$(~M_MLOCKED_MSK), LMTX_C_REG32	/* drop mutex */
+	or	$(M_ILOCKED_MSK), LMTX_C_REG32	/* pick up interlock */
+
+	PREEMPTION_DISABLE
+	lock
+	cmpxchg LMTX_C_REG32, M_STATE(LMTX_REG)	/* atomic compare and exchange */
+	jne	Llmu_busy_disabled		/* branch on failure to spin loop */
+
+Llmu_unlock:
 	xor	LMTX_A_REG, LMTX_A_REG
 	mov	LMTX_A_REG, M_OWNER(LMTX_REG)
 	mov	LMTX_C_REG, LMTX_A_REG			/* keep original state in %ecx for later evaluation */
 	and	$(~(M_ILOCKED_MSK | M_SPIN_MSK | M_PROMOTED_MSK)), LMTX_A_REG
-	mov	LMTX_A_REG32, M_STATE(LMTX_REG)		/* since I own the interlock, I don't need an atomic update */
 
-	PREEMPTION_ENABLE			/* need to re-enable preemption - clobbers eax */
-	jmp	2f
-1:	
-	test	$(M_ILOCKED_MSK), LMTX_C_REG	/* have to wait for interlock to clear */
-	jne	7f
-
-	PUSHF					/* save interrupt state */
-	mov	LMTX_C_REG, LMTX_A_REG		/* eax contains snapshot for cmpxchgl */
-	and	$(~M_MLOCKED_MSK), LMTX_C_REG	/* drop mutex */
-	or	$(M_ILOCKED_MSK), LMTX_C_REG	/* pick up interlock */
-	CLI
-	lock
-	cmpxchg LMTX_C_REG32, M_STATE(LMTX_REG)	/* atomic compare and exchange */
-	jne	6f				/* branch on failure to spin loop */
-
-	xor	LMTX_A_REG, LMTX_A_REG
-	mov	LMTX_A_REG, M_OWNER(LMTX_REG)
-	mov	LMTX_C_REG, LMTX_A_REG			/* keep original state in %ecx for later evaluation */
-	and	$(~(M_ILOCKED_MSK | M_PROMOTED_MSK)), LMTX_A_REG
-	mov	LMTX_A_REG32, M_STATE(LMTX_REG)		/* since I own the interlock, I don't need an atomic update */
-	POPF						/* restore interrupt state */
+	test	$(M_WAITERS_MSK), LMTX_A_REG32
+	jz	2f
+	dec	LMTX_A_REG32				/* decrement waiter count */
 2:	
-	test	$(M_PROMOTED_MSK | M_WAITERS_MSK), LMTX_C_REG
-	je	3f
-	and	$(M_PROMOTED_MSK), LMTX_C_REG
+	mov	LMTX_A_REG32, M_STATE(LMTX_REG)		/* since I own the interlock, I don't need an atomic update */
+
+#if	MACH_LDEBUG
+	/* perform lock statistics after drop to prevent delay */
+	mov	%gs:CPU_ACTIVE_THREAD, LMTX_A_REG
+	test	LMTX_A_REG, LMTX_A_REG
+	jz	1f
+	decl	TH_MUTEX_COUNT(LMTX_A_REG)	/* lock statistic */
+1:
+#endif	/* MACH_LDEBUG */
+
+	test	$(M_PROMOTED_MSK | M_WAITERS_MSK), LMTX_C_REG32
+	jz	3f
 
 	LMTX_CALLEXT2(lck_mtx_unlock_wakeup_x86, LMTX_C_REG)
 3:	
+	PREEMPTION_ENABLE
+
 	LMTX_CHK_EXTENDED
 	jne	4f
 
@@ -1810,77 +1908,25 @@ Llmu_prim:
 	LOCKSTAT_RECORD(LS_LCK_MTX_EXT_UNLOCK_RELEASE, LMTX_REG)
 #endif
 	ret
-6:
-	POPF				/* restore interrupt state */
-7:
+
+
+Llmu_busy_disabled:
+	PREEMPTION_ENABLE
+Llmu_busy:
 	PAUSE
 	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-	jmp	1b
+	jmp	Llmu_mutex
+
 Llmu_ext:
 	mov	M_PTR(LMTX_REG), LMTX_REG
 	mov	M_OWNER(LMTX_REG), LMTX_A_REG
 	mov	%gs:CPU_ACTIVE_THREAD, LMTX_C_REG
 	CHECK_UNLOCK(LMTX_C_REG, LMTX_A_REG)
-	jmp 0b
-
-
-LEAF_ENTRY(lck_mtx_lock_decr_waiter)
-	LOAD_LMTX_REG(L_ARG0)			/* fetch lock pointer - no indirection here */
-1:	
 	mov	M_STATE(LMTX_REG), LMTX_C_REG32
+	jmp 	Llmu_chktype
 
-	test	$(M_WAITERS_MSK), LMTX_C_REG
-	je	2f
-	test	$(M_ILOCKED_MSK), LMTX_C_REG	/* have to wait for interlock to clear */
-	jne	3f
-
-	mov	LMTX_C_REG, LMTX_A_REG		/* eax contains snapshot for cmpxchgl */
-	dec	LMTX_C_REG			/* decrement waiter count */
-	lock
-	cmpxchg LMTX_C_REG32, M_STATE(LMTX_REG)	/* atomic compare and exchange */
-	jne	3f				/* branch on failure to spin loop */
-
-	mov	$1, LMTX_RET_REG
-	LEAF_RET
-2:	
-	xor	LMTX_RET_REG, LMTX_RET_REG
-	LEAF_RET
-3:	
-	PAUSE
-	jmp	1b
-	
 
 	
-LEAF_ENTRY(lck_mtx_lock_get_pri)
-	LOAD_LMTX_REG(L_ARG0)			/* fetch lock pointer - no indirection here */
-1:	
-	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-
-	test	$(M_WAITERS_MSK), LMTX_C_REG
-	jne	2f
-	test	$(M_ILOCKED_MSK), LMTX_C_REG	/* have to wait for interlock to clear */
-	jne	3f
-
-	mov	LMTX_C_REG, LMTX_A_REG		/* eax contains snapshot for cmpxchgl */
-	and	$(~M_PRIORITY_MSK), LMTX_C_REG	/* no waiters, reset mutex priority to 0 */
-	lock
-	cmpxchg LMTX_C_REG32, M_STATE(LMTX_REG)	/* atomic compare and exchange */
-	jne	3f				/* branch on failure to spin loop */
-
-	xor	LMTX_RET_REG, LMTX_RET_REG	/* return mutex priority == 0 */
-	LEAF_RET
-2:	
-	mov	LMTX_C_REG, LMTX_RET_REG
-	and	$(M_PRIORITY_MSK), LMTX_RET_REG
-	shr	$16, LMTX_RET_REG		/* return current mutex priority */
-	LEAF_RET
-3:	
-	PAUSE
-	jmp	1b
-	
-	
-
-
 LEAF_ENTRY(lck_mtx_ilk_unlock)
 	LOAD_LMTX_REG(L_ARG0)			/* fetch lock pointer - no indirection here */
 
@@ -1897,93 +1943,80 @@ LEAF_ENTRY(lck_mtx_lock_grab_mutex)
 
 	mov	M_STATE(LMTX_REG), LMTX_C_REG32
 
-	test	$(M_ILOCKED_MSK | M_MLOCKED_MSK), LMTX_C_REG	/* can't have the mutex yet */
-	jne	2f
+	test	$(M_ILOCKED_MSK | M_MLOCKED_MSK), LMTX_C_REG32	/* can't have the mutex yet */
+	jnz	3f
 
 	mov	LMTX_C_REG, LMTX_A_REG		/* eax contains snapshot for cmpxchgl */
-	or	$(M_MLOCKED_MSK), LMTX_C_REG
+	or	$(M_ILOCKED_MSK | M_MLOCKED_MSK), LMTX_C_REG32
+
+	PREEMPTION_DISABLE
 	lock
 	cmpxchg LMTX_C_REG32, M_STATE(LMTX_REG)	/* atomic compare and exchange */
 	jne	2f				/* branch on failure to spin loop */
 
  	mov	%gs:CPU_ACTIVE_THREAD, LMTX_A_REG
 	mov	LMTX_A_REG, M_OWNER(LMTX_REG)	/* record owner of mutex */
+#if	MACH_LDEBUG
+	test	LMTX_A_REG, LMTX_A_REG
+	jz	1f
+	incl	TH_MUTEX_COUNT(LMTX_A_REG)	/* lock statistic */
+1:
+#endif	/* MACH_LDEBUG */
 
 	mov	$1, LMTX_RET_REG		/* return success */
 	LEAF_RET
 2:						
+	PREEMPTION_ENABLE
+3:
 	xor	LMTX_RET_REG, LMTX_RET_REG	/* return failure */
 	LEAF_RET
 	
 
 
-LEAF_ENTRY(lck_mtx_lock_mark_promoted)
-	LOAD_LMTX_REG(L_ARG0)			/* fetch lock pointer - no indirection here */
-1:	
-	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-
-	test	$(M_PROMOTED_MSK), LMTX_C_REG
-	jne	3f
-	test	$(M_ILOCKED_MSK), LMTX_C_REG	/* have to wait for interlock to clear */
-	jne	2f
-
-	mov	LMTX_C_REG, LMTX_A_REG		/* eax contains snapshot for cmpxchgl */
-	or	$(M_PROMOTED_MSK), LMTX_C_REG
-	lock
-	cmpxchg LMTX_C_REG32, M_STATE(LMTX_REG)	/* atomic compare and exchange */
-	jne	2f				/* branch on failure to spin loop */
-
-	mov	$1, LMTX_RET_REG
-	LEAF_RET
-2:	
-	PAUSE
-	jmp	1b
-3:
-	xor	LMTX_RET_REG, LMTX_RET_REG
-	LEAF_RET
-
-
-	
 LEAF_ENTRY(lck_mtx_lock_mark_destroyed)
 	LOAD_LMTX_REG(L_ARG0)
 1:
-	mov	M_OWNER(LMTX_REG), LMTX_A_REG
-
-	cmp	$(MUTEX_DESTROYED), LMTX_A_REG	/* check to see if its marked destroyed */
-	je	3f
-	cmp	$(MUTEX_IND), LMTX_A_REG	/* Is this an indirect mutex? */
+	mov	M_STATE(LMTX_REG), LMTX_C_REG32
+	cmp	$(MUTEX_IND), LMTX_C_REG32	/* Is this an indirect mutex? */
 	jne	2f
 
-	movl	$(MUTEX_DESTROYED), M_OWNER(LMTX_REG)	/* convert to destroyed state */
+	movl	$(MUTEX_DESTROYED), M_STATE(LMTX_REG)	/* convert to destroyed state */
 	jmp	3f
 2:	
-	mov	M_STATE(LMTX_REG), LMTX_C_REG32
-
 	test	$(M_ILOCKED_MSK), LMTX_C_REG	/* have to wait for interlock to clear */
-	jne	5f
+	jnz	5f
 
-	PUSHF					/* save interrupt state */
+	PREEMPTION_DISABLE
 	mov	LMTX_C_REG, LMTX_A_REG		/* eax contains snapshot for cmpxchgl */
-	or	$(M_ILOCKED_MSK), LMTX_C_REG
-	CLI
+	or	$(M_ILOCKED_MSK), LMTX_C_REG32
 	lock
 	cmpxchg LMTX_C_REG32, M_STATE(LMTX_REG)	/* atomic compare and exchange */
 	jne	4f				/* branch on failure to spin loop */
-	movl	$(MUTEX_DESTROYED), M_OWNER(LMTX_REG)	/* convert to destroyed state */
-	POPF					/* restore interrupt state */
+	movl	$(MUTEX_DESTROYED), M_STATE(LMTX_REG)	/* convert to destroyed state */
+	PREEMPTION_ENABLE
 3:
 	LEAF_RET				/* return with M_ILOCKED set */
 4:
-	POPF					/* restore interrupt state */
+	PREEMPTION_ENABLE
 5:
 	PAUSE
 	jmp	1b
 
-	
-	
+LEAF_ENTRY(preemption_underflow_panic)
+	FRAME
+	incl	%gs:CPU_PREEMPTION_LEVEL
+	ALIGN_STACK()
+	LOAD_STRING_ARG0(16f)
+	CALL_PANIC()
+	hlt
+	.data
+16:	String	"Preemption level underflow, possible cause unlocking an unlocked mutex or spinlock"
+	.text
+
+
 LEAF_ENTRY(_disable_preemption)
 #if	MACH_RT
-	_DISABLE_PREEMPTION
+	PREEMPTION_DISABLE
 #endif	/* MACH_RT */
 	LEAF_RET
 
@@ -1997,6 +2030,7 @@ LEAF_ENTRY(_enable_preemption)
 #else
 	movl	%gs:CPU_PREEMPTION_LEVEL,%esi
 #endif
+	ALIGN_STACK()
 	LOAD_STRING_ARG0(_enable_preemption_less_than_zero)
 	CALL_PANIC()
 	hlt
@@ -2006,7 +2040,7 @@ _enable_preemption_less_than_zero:
 	.text
 1:
 #endif	/* MACH_ASSERT */
-	_ENABLE_PREEMPTION
+	PREEMPTION_ENABLE
 #endif	/* MACH_RT */
 	LEAF_RET
 
@@ -2015,6 +2049,7 @@ LEAF_ENTRY(_enable_preemption_no_check)
 #if	MACH_ASSERT
 	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL
 	jg	1f
+	ALIGN_STACK()
 	LOAD_STRING_ARG0(_enable_preemption_no_check_less_than_zero)
 	CALL_PANIC()
 	hlt
@@ -2031,7 +2066,7 @@ _enable_preemption_no_check_less_than_zero:
 	
 LEAF_ENTRY(_mp_disable_preemption)
 #if	MACH_RT
-	_DISABLE_PREEMPTION
+	PREEMPTION_DISABLE
 #endif	/* MACH_RT */
 	LEAF_RET
 
@@ -2045,6 +2080,7 @@ LEAF_ENTRY(_mp_enable_preemption)
 #else
 	movl	%gs:CPU_PREEMPTION_LEVEL,%esi
 #endif
+	ALIGN_PANIC()
 	LOAD_STRING_ARG0(_mp_enable_preemption_less_than_zero)
 	CALL_PANIC()
 	hlt
@@ -2054,7 +2090,7 @@ _mp_enable_preemption_less_than_zero:
 	.text
 1:
 #endif	/* MACH_ASSERT */
-	_ENABLE_PREEMPTION
+	PREEMPTION_ENABLE
 #endif	/* MACH_RT */
 	LEAF_RET
 
@@ -2063,6 +2099,7 @@ LEAF_ENTRY(_mp_enable_preemption_no_check)
 #if	MACH_ASSERT
 	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL
 	jg	1f
+	ALIGN_STACK()
 	LOAD_STRING_ARG0(_mp_enable_preemption_no_check_less_than_zero)
 	CALL_PANIC()
 	hlt

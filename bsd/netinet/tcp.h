@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -185,8 +185,6 @@ struct tcphdr {
 
 #define TCP_MAX_WINSHIFT	14	/* maximum window shift */
 
-#define TCP_MAXBURST		4 	/* maximum segments in a burst */
-
 #define TCP_MAXHLEN	(0xf<<2)	/* max length of header in bytes */
 #define TCP_MAXOLEN	(TCP_MAXHLEN - sizeof(struct tcphdr))
 					/* max space left for options */
@@ -202,6 +200,90 @@ struct tcphdr {
 #define TCP_NOOPT               0x08    /* don't use TCP options */
 #define TCP_KEEPALIVE           0x10    /* idle time used when SO_KEEPALIVE is enabled */
 #define TCP_CONNECTIONTIMEOUT   0x20    /* connection timeout */
+#define PERSIST_TIMEOUT		0x40	/* time after which a connection in
+					 *  persist timeout will terminate.
+					 *  see draft-ananth-tcpm-persist-02.txt
+					 */
+#define TCP_RXT_CONNDROPTIME	0x80	/* time after which tcp retransmissions will be 
+					 * stopped and the connection will be dropped
+					 */
+#define TCP_RXT_FINDROP	0x100	/* when this option is set, drop a connection 
+					 * after retransmitting the FIN 3 times. It will
+					 * prevent holding too many mbufs in socket 
+					 * buffer queues.
+					 */
+#ifdef PRIVATE
+#define	TCP_INFO				0x200	/* retrieve tcp_info structure */
+
+/*
+ * The TCP_INFO socket option comes from the Linux 2.6 TCP API, and permits
+ * the caller to query certain information about the state of a TCP
+ * connection.  We provide an overlapping set of fields with the Linux
+ * implementation, but since this is a fixed size structure, room has been
+ * left for growth.  In order to maximize potential future compatibility with
+ * the Linux API, the same variable names and order have been adopted, and
+ * padding left to make room for omitted fields in case they are added later.
+ *
+ * XXX: This is currently an unstable ABI/API, in that it is expected to
+ * change.
+ */
+#pragma pack(4)
+
+#define	TCPI_OPT_TIMESTAMPS	0x01
+#define	TCPI_OPT_SACK		0x02
+#define	TCPI_OPT_WSCALE		0x04
+#define	TCPI_OPT_ECN		0x08
+
+struct tcp_info {
+	u_int8_t	tcpi_state;			/* TCP FSM state. */
+	u_int8_t	tcpi_options;		/* Options enabled on conn. */
+	u_int8_t	tcpi_snd_wscale;	/* RFC1323 send shift value. */
+	u_int8_t	tcpi_rcv_wscale;	/* RFC1323 recv shift value. */
+
+	u_int32_t	tcpi_snd_mss;		/* Max segment size for send. */
+	u_int32_t	tcpi_rcv_mss;		/* Max segment size for receive. */
+
+	u_int32_t	tcpi_snd_ssthresh;	/* Slow start threshold. */
+	u_int32_t	tcpi_snd_cwnd;		/* Send congestion window. */
+
+	u_int32_t	tcpi_rcv_space;		/* Advertised recv window. */
+
+	u_int32_t	tcpi_snd_wnd;		/* Advertised send window. */
+	u_int32_t	tcpi_snd_bwnd;		/* Bandwidth send window. */
+	u_int32_t	tcpi_snd_nxt;		/* Next egress seqno */
+	u_int32_t	tcpi_rcv_nxt;		/* Next ingress seqno */
+	
+	int32_t		tcpi_last_outif;	/* if_index of interface used to send last */
+};
+
+/*
+ * Note that IPv6 link local addresses should have the appropriate scope ID
+ */
+
+struct info_tuple {
+	u_int8_t	itpl_proto;
+	union {
+		struct sockaddr		_itpl_sa;
+		struct sockaddr_in	_itpl_sin;
+		struct sockaddr_in6	_itpl_sin6;
+	} itpl_localaddr;
+	union {
+		struct sockaddr		_itpl_sa;
+		struct sockaddr_in	_itpl_sin;
+		struct sockaddr_in6	_itpl_sin6;
+	} itpl_remoteaddr;
+};
+
+#define itpl_local_sa		itpl_localaddr._itpl_sa
+#define itpl_local_sin 		itpl_localaddr._itpl_sin
+#define itpl_local_sin6		itpl_localaddr._itpl_sin6
+#define itpl_remote_sa 		itpl_remoteaddr._itpl_sa
+#define itpl_remote_sin		itpl_remoteaddr._itpl_sin
+#define itpl_remote_sin6	itpl_remoteaddr._itpl_sin6
+
+#pragma pack()
+
+#endif /* PRIVATE */
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 #endif

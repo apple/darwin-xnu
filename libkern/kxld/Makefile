@@ -36,15 +36,16 @@ endif
 PRODUCT_TYPE ?= DYLIB
 
 HDRDST=$(DSTROOT)/usr/local/include
-LIBDST=$(DSTROOT)/usr/lib/system
+DYLIBDST=$(DSTROOT)/usr/lib/system
 ARCHIVEDST=$(DSTROOT)/usr/local/lib
-LIBOBJ=$(OBJROOT)/libkxld.o
 LIBKXLD_DYLIB=libkxld.dylib
 LIBKXLD_ARCHIVE=libkxld.a
-LIBKXLDNAME=/usr/lib/system/$(LIBKXLD_DYLIB)
+LIBKXLD_INSTALLNAME=/usr/lib/system/$(LIBKXLD_DYLIB)
 LIBKXLDOBJ_DYLIB=$(OBJROOT)/$(LIBKXLD_DYLIB)
 LIBKXLDOBJ_ARCHIVE=$(OBJROOT)/$(LIBKXLD_ARCHIVE)
-LIBKXLDDST_DYLIB=$(LIBDST)/$(LIBKXLD_DYLIB)
+LIBKXLDSYM_DYLIB=$(SYMROOT)/$(LIBKXLD_DYLIB)
+LIBKXLDSYM_ARCHIVE=$(SYMROOT)/$(LIBKXLD_ARCHIVE)
+LIBKXLDDST_DYLIB=$(DYLIBDST)/$(LIBKXLD_DYLIB)
 LIBKXLDDST_ARCHIVE=$(ARCHIVEDST)/$(LIBKXLD_ARCHIVE)
 TESTSRC=$(SRCROOT)/tests
 TESTDST=./BUILD/tests
@@ -55,15 +56,20 @@ CFLAGS=-std=c99 -Wall -Wextra -Werror -pedantic -Wformat=2 -Wcast-align \
 	-Wwrite-strings -Wshorten-64-to-32 -Wshadow -Winit-self -Wpointer-arith \
 	-Wno-format-y2k -W -Wstrict-prototypes -Wmissing-prototypes -Wreturn-type \
 	-Wcast-qual -Wwrite-strings -Wswitch -Wcast-align -Wbad-function-cast \
-	-Wchar-subscripts -Winline -Wnested-externs -Wredundant-decls -g \
-	-isysroot $(SDKROOT)
-LDFLAGS=$(ARCHS) -dynamiclib -install_name $(LIBKXLDNAME) \
+	-Wchar-subscripts -Winline -Wnested-externs -Wredundant-decls -g
+LDFLAGS=$(ARCHS) -dynamiclib -install_name $(LIBKXLD_INSTALLNAME) \
 	-compatibility_version $(COMPATIBILITY_VERSION) \
-	-current_version $(CURRENT_VERSION) -isysroot $(SDKROOT) -lstdc++
-INCLUDES=-I$(HDRSRC) $(INCFLAGS_EXTERN)
+	-current_version $(CURRENT_VERSION) -lstdc++
+INCLUDES=-I$(HDRSRC)
+
+ifneq ($(SDKROOT),/)
+	CFLAGS += -isysroot $(SDKROOT)
+	LDFLAGS += -isysroot $(SDKROOT)
+endif
 
 # Tools
 CC = xcrun -sdk $(SDKROOT) cc
+CLANG_ANALYZER = clang --analyze
 LIBTOOL = xcrun -sdk $(SDKROOT) libtool
 STRIP = xcrun -sdk $(SDKROOT) strip
 
@@ -73,10 +79,11 @@ CFLAGS+=-Wno-cast-align
 endif
 
 # Files
-HDR_NAMES=kxld.h kxld_types.h
+HDR_NAMES=kxld.h kxld_types.h WKdm.h
 OBJ_NAMES=kxld.o kxld_array.o kxld_copyright.o kxld_demangle.o kxld_dict.o \
-	kxld_kext.o kxld_reloc.o kxld_sect.o kxld_seg.o kxld_sym.o kxld_state.o \
-	kxld_symtab.o kxld_util.o kxld_uuid.o kxld_vtable.o
+	kxld_kext.o kxld_object.o kxld_reloc.o kxld_sect.o kxld_seg.o 		\
+	kxld_sym.o kxld_symtab.o kxld_util.o kxld_uuid.o kxld_vtable.o \
+	WKdmCompress.o WKdmDecompress.o
 HDRS=$(addprefix $(HDRSRC)/, $(HDR_NAMES))
 OBJS=$(addprefix $(OBJROOT)/, $(OBJ_NAMES))
 
@@ -108,11 +115,17 @@ profile: OPTIM=-Os -pg -dynamic
 profile: build
 
 tests: OPTIM=-O0 -DDEBUG
-tests: kxld_dict_test copyrighttest
+tests: kxld_array_test kxld_dict_test copyrighttest
 
-build: $(LIBKXLDOBJ_$(PRODUCT_TYPE))
-	@[ -d $(SYMROOT) ] || mkdir -p $(SYMROOT)
-	install -c -m 644 $< $(SYMROOT)
+build: $(LIBKXLDSYM_$(PRODUCT_TYPE))
+
+$(LIBKXLDSYM_DYLIB): $(LIBKXLDOBJ_DYLIB)
+	@mkdir -p $(SYMROOT)
+	install -c -m 644 $< $@
+
+$(LIBKXLDSYM_ARCHIVE): $(LIBKXLDOBJ_ARCHIVE)
+	@mkdir -p $(SYMROOT)
+	install -c -m 644 $< $@
 
 $(LIBKXLDOBJ_DYLIB): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^
@@ -121,39 +134,56 @@ $(LIBKXLDOBJ_ARCHIVE): $(OBJS)
 	$(LIBTOOL) -static -o $@ $^
 
 installhdrs:
-	@[ -d $(HDRDST) ] || mkdir -p $(HDRDST)
+	@mkdir -p $(HDRDST)
 	install -o 0 -g 0 -c -m 444 $(HDRS) $(HDRDST)
 
 install: release installhdrs $(LIBKXLDDST_$(PRODUCT_TYPE))
 
-$(LIBKXLDDST_DYLIB):
-	@[ -d $(LIBDST) ] || mkdir -p $(LIBDST)
-	install -o 0 -g 0 -c -m 555 $(SYMROOT)/$(LIBKXLD_DYLIB) $(LIBDST)
+$(LIBKXLDDST_DYLIB): $(LIBKXLDSYM_DYLIB)
+	@mkdir -p $(DYLIBDST)
+	install -o 0 -g 0 -c -m 555 $< $@
 	$(STRIP) -S -x $@
 
-$(LIBKXLDDST_ARCHIVE):
-	@[ -d $(ARCHIVEDST) ] || mkdir -p $(ARCHIVEDST)
-	install -o 0 -g 0 -c -m 555 $(SYMROOT)/$(LIBKXLD_ARCHIVE) $(ARCHIVEDST)
+$(LIBKXLDDST_ARCHIVE): $(LIBKXLDSYM_ARCHIVE)
+	@mkdir -p $(ARCHIVEDST)
+	install -o 0 -g 0 -c -m 555 $< $@
 
 
 KEXTCOPYOBJS=$(OBJROOT)/kextcopyright.o $(OBJROOT)/kxld_copyright.o $(OBJROOT)/kxld_util.o 
-kextcopyright: $(KEXTCOPYOBJS) $(TESTDST)
+kextcopyright: $(TESTDST)/kextcopyright
+$(TESTDST)/kextcopyright: $(KEXTCOPYOBJS)
+	@mkdir -p $(TESTDST)
 	$(CC) $(ARCHS) $(KEXTCOPYOBJS) -framework CoreFoundation -o $(OBJROOT)/kextcopyright
-	install -c -m 755 $(OBJROOT)/kextcopyright $(TESTDST)
+	install -c -m 755 $(OBJROOT)/kextcopyright $@
 
-DICTOBJS=$(OBJROOT)/kxld_dict_test.o $(OBJROOT)/kxld_dict.o $(OBJROOT)/kxld_array.o $(OBJROOT)/kxld_util.o
-kxld_dict_test: $(DICTOBJS) $(TESTDST)
+TESTOBJS=$(OBJROOT)/kxld_test.o $(OBJROOT)/kxld_util.o
+
+ARRAYOBJS=$(OBJROOT)/kxld_array_test.o $(OBJROOT)/kxld_array.o $(TESTOBJS)
+kxld_array_test: $(TESTDST)/kxld_array_test
+$(TESTDST)/kxld_array_test: $(ARRAYOBJS)
+	@mkdir -p $(TESTDST)
+	$(CC) $(ARCHS) $(ARRAYOBJS) -o $(OBJROOT)/kxld_array_test
+	install -c -m 755 $(OBJROOT)/kxld_array_test $@
+
+DICTOBJS=$(OBJROOT)/kxld_dict_test.o $(OBJROOT)/kxld_dict.o $(OBJROOT)/kxld_array.o $(TESTOBJS)
+kxld_dict_test: $(TESTDST)/kxld_dict_test
+$(TESTDST)/kxld_dict_test: $(DICTOBJS)
+	@mkdir -p $(TESTDST)
 	$(CC) $(ARCHS) $(DICTOBJS) -o $(OBJROOT)/kxld_dict_test
-	install -c -m 755 $(OBJROOT)/kxld_dict_test $(TESTDST)
+	install -c -m 755 $(OBJROOT)/kxld_dict_test $@
 
 COPYTESTOBJS=$(OBJROOT)/kxld_copyright.o $(OBJROOT)/kxld_util.o
 copyrighttest: OPTIM+=-DTEST
-copyrighttest: $(KEXTCOPYOBJS) $(TESTDST)
+copyrighttest: $(TESTDST)/copyrighttest
+$(TESTDST)/copyrighttest: $(COPYTESTOBJS)
+	@mkdir -p $(TESTDST)
 	$(CC) $(ARCHS) $(COPYTESTOBJS) -framework CoreFoundation -framework IOKit -o $(OBJROOT)/copyrighttest
-	install -c -m 755 $(OBJROOT)/copyrighttest $(TESTDST)
+	install -c -m 755 $(OBJROOT)/copyrighttest $@
 
-$(TESTDST):
-	@[ -d $(TESTDST) ] || mkdir -p $(TESTDST)
+analyze:
+	@$(CLANG_ANALYZER) *.c
+	@$(CLANG_ANALYZER) -I. tests/*.c
+	@rm -f *.plist
 
 clean: 
 	@rm -rf $(OBJROOT)/*

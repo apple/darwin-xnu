@@ -54,17 +54,13 @@
  * Destination options header processing.
  */
 int
-dest6_input(mp, offp)
-	struct mbuf **mp;
-	int *offp;
+dest6_input(struct mbuf **mp, int *offp, int proto)
 {
+#pragma unused(proto)
 	struct mbuf *m = *mp;
 	int off = *offp, dstoptlen, optlen;
 	struct ip6_dest *dstopts;
 	u_int8_t *opt;
-	struct ip6_hdr *ip6;
-
-	ip6 = mtod(m, struct ip6_hdr *);
 
 	/* validation of the length of the header */
 #ifndef PULLDOWN_TEST
@@ -107,7 +103,7 @@ dest6_input(mp, offp)
 
 		default:		/* unknown option */
 			optlen = ip6_unknown_opt(opt, m,
-			    opt - mtod(m, u_int8_t *), 0);
+			    opt - mtod(m, u_int8_t *));
 			if (optlen == -1)
 				return (IPPROTO_DONE);
 			optlen += 2;

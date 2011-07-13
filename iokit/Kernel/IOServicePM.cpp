@@ -26,14 +26,16 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-//#define IOASSERT 1
+//#undef IOASSERT
+//#define IOASSERT    1
+
 #include <IOKit/assert.h>
 #include <IOKit/IOKitDebug.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMessage.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOService.h>
-#include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOCommand.h>
 
@@ -42,8 +44,10 @@
 #include <IOKit/pwr_mgt/IOPMinformeeList.h>
 #include <IOKit/pwr_mgt/IOPowerConnection.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
+#include <IOKit/pwr_mgt/IOPMPrivate.h>
 
 #include <sys/proc.h>
+#include <libkern/OSDebug.h>
 
 // Required for notification instrumentation
 #include "IOServicePrivate.h"
@@ -51,6 +55,7 @@
 #include "IOKitKernelInternal.h"
 
 static void settle_timer_expired(thread_call_param_t, thread_call_param_t);
+static void idle_timer_expired(thread_call_param_t, thread_call_param_t);
 static void tellKernelClientApplier(OSObject * object, void * arg);
 static void tellAppClientApplier(OSObject * object, void * arg);
 
@@ -69,15 +74,20 @@ static uint64_t computeTimeDeltaNS( const AbsoluteTime * start )
 OSDefineMetaClassAndStructors(IOPMprot, OSObject)
 #endif
 
-//*********************************************************************************
+// Container class for recording system power events
+OSDefineMetaClassAndStructors( PMEventDetails, OSObject );
+
+//******************************************************************************
 // Globals
-//*********************************************************************************
+//******************************************************************************
 
 static bool                  gIOPMInitialized   = false;
 static uint32_t              gIOPMBusyCount     = 0;
+static uint32_t              gIOPMWorkCount     = 0;
 static IOWorkLoop *          gIOPMWorkLoop      = 0;
 static IOPMRequestQueue *    gIOPMRequestQueue  = 0;
 static IOPMRequestQueue *    gIOPMReplyQueue    = 0;
+static IOPMWorkQueue *       gIOPMWorkQueue     = 0;
 static IOPMCompletionQueue * gIOPMFreeQueue     = 0;
 static IOPMRequest *         gIOPMRequest       = 0;
 static IOPlatformExpert *    gPlatform          = 0;
@@ -96,16 +106,31 @@ static uint32_t getPMRequestType( void )
     return type;
 }
 
-//*********************************************************************************
+//******************************************************************************
 // Macros
-//*********************************************************************************
+//******************************************************************************
 
 #define PM_ERROR(x...)              do { kprintf(x); IOLog(x); } while (false)
-#define PM_DEBUG(x...)              do { kprintf(x); } while (false)
-#define PM_TRACE(x...)              do {  \
-	if (kIOLogDebugPower & gIOKitDebug) kprintf(x); } while (false)
+#define PM_LOG(x...)                do { kprintf(x); } while (false)
 
-#define PM_CONNECT(x...)
+#define PM_LOG1(x...)               do {  \
+                                    if (kIOLogDebugPower & gIOKitDebug) \
+                                        kprintf(x); } while (false)
+
+#define PM_LOG2(x...)               do {  \
+                                    if (kIOLogDebugPower & gIOKitDebug) \
+                                        kprintf(x); } while (false)
+
+#if 0
+#define PM_LOG3(x...)               do { kprintf(x); } while (false)
+#else
+#define PM_LOG3(x...)
+#endif
+
+#define RD_LOG(x...)                do { \
+                                    if ((kIOLogPMRootDomain & gIOKitDebug) && \
+                                        (getPMRootDomain() == this)) \
+                                        kprintf("PMRD: " x); } while (false)
 
 #define PM_ASSERT_IN_GATE(x)          \
 do {                                  \
@@ -114,7 +139,7 @@ do {                                  \
 
 #define PM_LOCK()                   IOLockLock(fPMLock)
 #define PM_UNLOCK()                 IOLockUnlock(fPMLock)
-#define PM_LOCK_SLEEP(event)        IOLockSleep(fPMLock, event, THREAD_UNINT)
+#define PM_LOCK_SLEEP(event, dl)    IOLockSleepDeadline(fPMLock, event, dl, THREAD_UNINT)
 #define PM_LOCK_WAKEUP(event)       IOLockWakeup(fPMLock, event, false)
 
 #define ns_per_us                   1000
@@ -128,17 +153,16 @@ do {                                  \
     do { gPlatform->PMLog( fName, t, a, b); } while(0)
 
 #define NS_TO_MS(nsec)              ((int)((nsec) / 1000000ULL))
+#define NS_TO_US(nsec)              ((int)((nsec) / 1000ULL))
 
 #if CONFIG_EMBEDDED
 #define SUPPORT_IDLE_CANCEL         1
 #endif
 
-#define kNotifyWillChange           (true)
-#define kNotifyDidChange            (false)
-
 #define kIOPMPowerStateMax          0xFFFFFFFF  
 
-#define IS_PM_ROOT()                (this == gIOPMRootNode)
+#define IS_PM_ROOT                  (this == gIOPMRootNode)
+#define IS_ROOT_DOMAIN              (getPMRootDomain() == this)
 #define IS_POWER_DROP               (fHeadNotePowerState < fCurrentPowerState)
 #define IS_POWER_RISE               (fHeadNotePowerState > fCurrentPowerState)
 
@@ -149,41 +173,69 @@ do {                                  \
 // use message tracer to log messages longer than (ns):
 #define LOG_APP_RESPONSE_MSG_TRACER (3 * 1000ULL * 1000ULL * 1000ULL)
 
-#define RESERVE_DOMAIN_POWER        1
-
 enum {
     kReserveDomainPower = 1
 };
 
+#define MS_PUSH(n)  \
+    do { assert(kIOPM_BadMachineState == fSavedMachineState); \
+         assert(kIOPM_BadMachineState != n); \
+         fSavedMachineState = n; } while (false)
+
+#define MS_POP()    \
+    do { assert(kIOPM_BadMachineState != fSavedMachineState); \
+         fMachineState = fSavedMachineState; \
+         fSavedMachineState = kIOPM_BadMachineState; } while (false)
+
+#define PM_ACTION_0(a) \
+    do { if (fPMActions.a) { \
+         (fPMActions.a)(fPMActions.target, this, &fPMActions); } \
+         } while (false)
+
+#define PM_ACTION_2(a, x, y) \
+    do { if (fPMActions.a) { \
+         (fPMActions.a)(fPMActions.target, this, &fPMActions, x, y); } \
+         } while (false)
+
 //*********************************************************************************
 // PM machine states
+//
+// Check kgmacros after modifying machine states.
 //*********************************************************************************
 
 enum {
+    kIOPM_Finished                                      = 0,
+
     kIOPM_OurChangeTellClientsPowerDown                 = 1,
     kIOPM_OurChangeTellPriorityClientsPowerDown         = 2,
     kIOPM_OurChangeNotifyInterestedDriversWillChange    = 3,
     kIOPM_OurChangeSetPowerState                        = 4,
     kIOPM_OurChangeWaitForPowerSettle                   = 5,
     kIOPM_OurChangeNotifyInterestedDriversDidChange     = 6,
-    kIOPM_OurChangeFinish                               = 7,
-    kIOPM_ParentDownTellPriorityClientsPowerDown        = 8,
-    kIOPM_ParentDownNotifyInterestedDriversWillChange   = 9,
-    /* 10 not used */
-    kIOPM_ParentDownNotifyDidChangeAndAcknowledgeChange = 11,
-    kIOPM_ParentDownSetPowerState                       = 12,
-    kIOPM_ParentDownWaitForPowerSettle                  = 13,
-    kIOPM_ParentAcknowledgePowerChange                  = 14,
-    kIOPM_ParentUpSetPowerState                         = 15,
-    /* 16 not used */
-    kIOPM_ParentUpWaitForSettleTime                     = 17,
-    kIOPM_ParentUpNotifyInterestedDriversDidChange      = 18,
-    /* 19 not used */
-    kIOPM_Finished                                      = 20,
-    kIOPM_DriverThreadCallDone                          = 21,
-    kIOPM_NotifyChildrenDone                            = 22,
+    kIOPM_OurChangeTellCapabilityDidChange              = 7,
+    kIOPM_OurChangeFinish                               = 8,
+
+    kIOPM_ParentChangeTellPriorityClientsPowerDown      = 10,
+    kIOPM_ParentChangeNotifyInterestedDriversWillChange = 11,
+    kIOPM_ParentChangeSetPowerState                     = 12,
+    kIOPM_ParentChangeWaitForPowerSettle                = 13,
+    kIOPM_ParentChangeNotifyInterestedDriversDidChange  = 14,
+    kIOPM_ParentChangeTellCapabilityDidChange           = 15,
+    kIOPM_ParentChangeAcknowledgePowerChange            = 16,
+
+    kIOPM_NotifyChildrenStart                           = 17,
+    kIOPM_NotifyChildrenOrdered                         = 18,
+    kIOPM_NotifyChildrenDelayed                         = 19,
+    kIOPM_SyncTellClientsPowerDown                      = 20,
+    kIOPM_SyncTellPriorityClientsPowerDown              = 21,
+    kIOPM_SyncNotifyWillChange                          = 22,
     kIOPM_SyncNotifyDidChange                           = 23,
-    kIOPM_SyncFinish                                    = 24
+    kIOPM_SyncTellCapabilityDidChange                   = 24,
+    kIOPM_SyncFinish                                    = 25,
+    kIOPM_TellCapabilityChangeDone                      = 26,
+    kIOPM_DriverThreadCallDone                          = 27,
+
+    kIOPM_BadMachineState                               = 0xFFFFFFFF
 };
 
 
@@ -366,68 +418,95 @@ void IOService::PMinit ( void )
 		if ( !gIOPMInitialized )
 		{
             gPlatform = getPlatform();
-			gIOPMWorkLoop = IOWorkLoop::workLoop();
-			if (gIOPMWorkLoop)
-			{
-				gIOPMRequestQueue = IOPMRequestQueue::create(
-					this, OSMemberFunctionCast(IOPMRequestQueue::Action,
-						this, &IOService::servicePMRequestQueue));
+            gIOPMWorkLoop = IOWorkLoop::workLoop();
+            if (gIOPMWorkLoop)
+            {
+                gIOPMRequestQueue = IOPMRequestQueue::create(
+                    this, OSMemberFunctionCast(IOPMRequestQueue::Action,
+                        this, &IOService::servicePMRequestQueue));
 
-				gIOPMReplyQueue = IOPMRequestQueue::create(
-					this, OSMemberFunctionCast(IOPMRequestQueue::Action,
-						this, &IOService::servicePMReplyQueue));
+                gIOPMReplyQueue = IOPMRequestQueue::create(
+                    this, OSMemberFunctionCast(IOPMRequestQueue::Action,
+                        this, &IOService::servicePMReplyQueue));
 
-				gIOPMFreeQueue = IOPMCompletionQueue::create(
-					this, OSMemberFunctionCast(IOPMCompletionQueue::Action,
-						this, &IOService::servicePMFreeQueue));
+                gIOPMWorkQueue = IOPMWorkQueue::create(
+                    this,
+                    OSMemberFunctionCast(IOPMWorkQueue::Action, this,
+                        &IOService::servicePMRequest),
+                    OSMemberFunctionCast(IOPMWorkQueue::Action, this,
+                        &IOService::retirePMRequest));
 
-				if (gIOPMWorkLoop->addEventSource(gIOPMRequestQueue) !=
-					kIOReturnSuccess)
-				{
-					gIOPMRequestQueue->release();
-					gIOPMRequestQueue = 0;
-				}
+                gIOPMFreeQueue = IOPMCompletionQueue::create(
+                    this, OSMemberFunctionCast(IOPMCompletionQueue::Action,
+                        this, &IOService::servicePMFreeQueue));
 
-				if (gIOPMWorkLoop->addEventSource(gIOPMReplyQueue) !=
-					kIOReturnSuccess)
-				{
-					gIOPMReplyQueue->release();
-					gIOPMReplyQueue = 0;
-				}
+                if (gIOPMWorkLoop->addEventSource(gIOPMRequestQueue) !=
+                    kIOReturnSuccess)
+                {
+                    gIOPMRequestQueue->release();
+                    gIOPMRequestQueue = 0;
+                }
 
-				if (gIOPMWorkLoop->addEventSource(gIOPMFreeQueue) !=
-					kIOReturnSuccess)
-				{
-					gIOPMFreeQueue->release();
-					gIOPMFreeQueue = 0;
-				}
+                if (gIOPMWorkLoop->addEventSource(gIOPMReplyQueue) !=
+                    kIOReturnSuccess)
+                {
+                    gIOPMReplyQueue->release();
+                    gIOPMReplyQueue = 0;
+                }
 
-                gIOPMPowerClientDevice     = OSSymbol::withCStringNoCopy( "DevicePowerState" );
-                gIOPMPowerClientDriver     = OSSymbol::withCStringNoCopy( "DriverPowerState" );
-                gIOPMPowerClientChildProxy = OSSymbol::withCStringNoCopy( "ChildProxyPowerState" );
-                gIOPMPowerClientChildren   = OSSymbol::withCStringNoCopy( "ChildrenPowerState" );
-			}
+                if (gIOPMWorkLoop->addEventSource(gIOPMWorkQueue) !=
+                    kIOReturnSuccess)
+                {
+                    gIOPMWorkQueue->release();
+                    gIOPMWorkQueue = 0;
+                }
 
-			if (gIOPMRequestQueue && gIOPMReplyQueue && gIOPMFreeQueue)
-				gIOPMInitialized = true;
-		}
-		if (!gIOPMInitialized)
-			return;
+                if (gIOPMWorkLoop->addEventSource(gIOPMFreeQueue) !=
+                    kIOReturnSuccess)
+                {
+                    gIOPMFreeQueue->release();
+                    gIOPMFreeQueue = 0;
+                }
+
+                gIOPMPowerClientDevice =
+                    OSSymbol::withCStringNoCopy( "DevicePowerState" );
+
+                gIOPMPowerClientDriver =
+                    OSSymbol::withCStringNoCopy( "DriverPowerState" );
+
+                gIOPMPowerClientChildProxy =
+                    OSSymbol::withCStringNoCopy( "ChildProxyPowerState" );
+
+                gIOPMPowerClientChildren =
+                    OSSymbol::withCStringNoCopy( "ChildrenPowerState" );
+            }
+
+            if (gIOPMRequestQueue && gIOPMReplyQueue && gIOPMFreeQueue)
+                gIOPMInitialized = true;
+        }
+        if (!gIOPMInitialized)
+            return;
 
         pwrMgt = new IOServicePM;
         pwrMgt->init();
         setProperty(kPwrMgtKey, pwrMgt);
 
+        queue_init(&pwrMgt->WorkChain);
+        queue_init(&pwrMgt->RequestHead);
+        queue_init(&pwrMgt->PMDriverCallQueue);
+
+        fOwner                      = this;
         fPMLock                     = IOLockAlloc();
         fInterestedDrivers          = new IOPMinformeeList;
         fInterestedDrivers->initialize();
         fDesiredPowerState          = 0;
         fDeviceDesire               = 0;
-        fInitialChange              = true;
-        fPreviousRequest            = 0;
-        fDeviceOverrides            = false;
+        fInitialPowerChange         = true;
+        fInitialSetPowerState       = true;
+        fPreviousRequestPowerFlags  = 0;
+        fDeviceOverrideEnabled      = false;
         fMachineState               = kIOPM_Finished;
-        fIdleTimerEventSource       = NULL;
+        fSavedMachineState          = kIOPM_BadMachineState;
         fIdleTimerMinPowerState     = 0;
         fActivityLock               = IOLockAlloc();
         fStrictTreeOrder            = false;
@@ -437,13 +516,12 @@ void IOService::PMinit ( void )
         fNumberOfPowerStates        = 0;
         fCurrentPowerState          = 0;
         fParentsCurrentPowerFlags   = 0;
-        fMaxCapability              = 0;
+        fMaxPowerState              = 0;
         fName                       = getName();
         fParentsKnowState           = false;
         fSerialNumber               = 0;
         fResponseArray              = NULL;
         fNotifyClientArray          = NULL;
-        fDoNotPowerDown             = true;
         fCurrentPowerConsumption    = kIOPMUnknown;
         fOverrideMaxPowerState      = kIOPMPowerStateMax;
 
@@ -457,9 +535,20 @@ void IOService::PMinit ( void )
 			&IOService::ack_timer_expired, (thread_call_param_t)this);
         fSettleTimer = thread_call_allocate(
 			&settle_timer_expired, (thread_call_param_t)this);
-		fDriverCallEntry = thread_call_allocate(
+        fIdleTimer = thread_call_allocate(
+            &idle_timer_expired, (thread_call_param_t)this);
+        fDriverCallEntry = thread_call_allocate(
 			(thread_call_func_t) &IOService::pmDriverCallout, this);
-		assert(fDriverCallEntry);
+        assert(fDriverCallEntry);
+
+        // Check for powerChangeDone override.
+        if (OSMemberFunctionCast(void (*)(void),
+				getResourceService(), &IOService::powerChangeDone) !=
+			  OSMemberFunctionCast(void (*)(void),
+				this, &IOService::powerChangeDone))
+        {
+            fPCDFunctionOverride = true;
+        }
 
 #if PM_VARS_SUPPORT
         IOPMprot * prot = new IOPMprot;
@@ -472,7 +561,7 @@ void IOService::PMinit ( void )
             pm_vars = prot;
 		}
 #else
-        pm_vars = (void *) true;
+        pm_vars = (void *) (uintptr_t) true;
 #endif
 
         initialized = true;
@@ -487,22 +576,18 @@ void IOService::PMinit ( void )
 
 void IOService::PMfree ( void )
 {
-	initialized = false;
+    initialized = false;
     pm_vars = 0;
 
     if ( pwrMgt )
-	{
-		assert(fMachineState == kIOPM_Finished);
-		assert(fInsertInterestSet == NULL);
-		assert(fRemoveInterestSet == NULL);
+    {
+        assert(fMachineState == kIOPM_Finished);
+        assert(fInsertInterestSet == NULL);
+        assert(fRemoveInterestSet == NULL);
         assert(fNotifyChildArray  == NULL);
+        assert(queue_empty(&pwrMgt->RequestHead));
+        assert(queue_empty(&fPMDriverCallQueue));
 
-        if ( fIdleTimerEventSource != NULL ) {
-            fIdleTimerEventSource->disable();
-            gIOPMWorkLoop->removeEventSource(fIdleTimerEventSource);
-            fIdleTimerEventSource->release();
-            fIdleTimerEventSource = NULL;
-        }
         if ( fSettleTimer ) {
             thread_call_cancel(fSettleTimer);
             thread_call_free(fSettleTimer);
@@ -512,6 +597,11 @@ void IOService::PMfree ( void )
             thread_call_cancel(fAckTimer);
             thread_call_free(fAckTimer);
             fAckTimer = NULL;
+        }
+        if ( fIdleTimer ) {
+            thread_call_cancel(fIdleTimer);
+            thread_call_free(fIdleTimer);
+            fIdleTimer = NULL;
         }
         if ( fDriverCallEntry ) {
             thread_call_free(fDriverCallEntry);
@@ -525,20 +615,15 @@ void IOService::PMfree ( void )
             IOLockFree(fActivityLock);
             fActivityLock = NULL;
         }
-		if ( fInterestedDrivers ) {
-			fInterestedDrivers->release();
-			fInterestedDrivers = NULL;
-		}
-		if ( fPMWorkQueue ) {
-			gIOPMWorkLoop->removeEventSource(fPMWorkQueue);
-			fPMWorkQueue->release();
-			fPMWorkQueue = 0;
-		}
-		if (fDriverCallParamSlots && fDriverCallParamPtr) {
-			IODelete(fDriverCallParamPtr, DriverCallParam, fDriverCallParamSlots);
-			fDriverCallParamPtr = 0;
-			fDriverCallParamSlots = 0;
-		}
+        if ( fInterestedDrivers ) {
+            fInterestedDrivers->release();
+            fInterestedDrivers = NULL;
+        }
+        if (fDriverCallParamSlots && fDriverCallParamPtr) {
+            IODelete(fDriverCallParamPtr, DriverCallParam, fDriverCallParamSlots);
+            fDriverCallParamPtr = 0;
+            fDriverCallParamSlots = 0;
+        }
         if ( fResponseArray ) {
             fResponseArray->release();
             fResponseArray = NULL;
@@ -548,25 +633,25 @@ void IOService::PMfree ( void )
             fNotifyClientArray = NULL;
         }
         if (fPowerStates && fNumberOfPowerStates) {
-            IODelete(fPowerStates, IOPMPowerState, fNumberOfPowerStates);
+            IODelete(fPowerStates, IOPMPSEntry, fNumberOfPowerStates);
             fNumberOfPowerStates = 0;
             fPowerStates = NULL;
         }
-		if (fPowerClients) {
-			fPowerClients->release();
-			fPowerClients = 0;
-		}
+        if (fPowerClients) {
+            fPowerClients->release();
+            fPowerClients = 0;
+        }
 
 #if PM_VARS_SUPPORT
-		if (fPMVars)
-		{
-			fPMVars->release();
-			fPMVars = 0;
-		}
+        if (fPMVars)
+        {
+            fPMVars->release();
+            fPMVars = 0;
+        }
 #endif
 
         pwrMgt->release();
-		pwrMgt = 0;
+        pwrMgt = 0;
     }
 }
 
@@ -614,42 +699,35 @@ IOReturn IOService::youAreRoot ( void )
 
 void IOService::PMstop ( void )
 {
-	IOPMRequest * request;
+    IOPMRequest * request;
 
-	if (!initialized)
-		return;
+    if (!initialized)
+        return;
 
-	// Schedule an async PMstop request, but immediately stop any further
-	// calls to the controlling or interested drivers. This device will
-	// continue to exist in the power plane and participate in power state
-	// changes until the PMstop async request is processed.
+    PM_LOCK();
 
-	PM_LOCK();
-	fLockedFlags.PMStop = true;
-    if (fLockedFlags.DriverCallBusy)
+    if (fLockedFlags.PMStop)
     {
-        PM_DEBUG("%s: PMstop() driver call busy\n", getName());
+        PM_LOG2("%s: PMstop() already stopped\n", fName);
+        PM_UNLOCK();
+        return;
     }
-    while (fThreadAssertionCount != 0)
-    {
-        if (current_thread() == fThreadAssertionThread)
-        {
-            PM_ERROR("%s: PMstop() called from PM thread call\n", getName());
-            break;
-        }
-        // Wait for thread assertions to drop to zero.
-        PM_DEBUG("%s: PMstop() wait for %u thread assertion(s)\n",
-            getName(), fThreadAssertionCount);
-        PM_LOCK_SLEEP(&fThreadAssertionCount);
-    }
+
+    // Inhibit future driver calls.
+    fLockedFlags.PMStop = true;
+
+    // Wait for all prior driver calls to finish.
+    waitForPMDriverCall();
+
     PM_UNLOCK();
 
-	request = acquirePMRequest( this, kIOPMRequestTypePMStop );
-	if (request)
-	{
-		PM_TRACE("%s: %p PMstop\n", getName(), this);
-		submitPMRequest( request );
-	}
+    // The rest of the work is performed async.
+    request = acquirePMRequest( this, kIOPMRequestTypePMStop );
+    if (request)
+    {
+        PM_LOG2("%s: %p PMstop\n", getName(), this);
+        submitPMRequest( request );
+    }
 }
 
 //*********************************************************************************
@@ -660,14 +738,14 @@ void IOService::PMstop ( void )
 
 void IOService::handlePMstop ( IOPMRequest * request )
 {
-    OSIterator *		iter;
+    OSIterator *        iter;
     OSObject *			next;
     IOPowerConnection *	connection;
     IOService *			theChild;
     IOService *			theParent;
 
 	PM_ASSERT_IN_GATE();
-	PM_TRACE("%s: %p %s start\n", getName(), this, __FUNCTION__);
+	PM_LOG2("%s: %p %s start\n", getName(), this, __FUNCTION__);
 
     // remove the property
     removeProperty(kPwrMgtKey);			
@@ -729,23 +807,23 @@ void IOService::handlePMstop ( IOPMRequest * request )
 
     if ( fInterestedDrivers )
     {
-		IOPMinformeeList *	list = fInterestedDrivers;
+        IOPMinformeeList *	list = fInterestedDrivers;
         IOPMinformee *		item;
 
-		PM_LOCK();
-		while ((item = list->firstInList()))
-		{
-			list->removeFromList(item->whatObject);
-		}
-		PM_UNLOCK();
-	}
+        PM_LOCK();
+        while ((item = list->firstInList()))
+        {
+            list->removeFromList(item->whatObject);
+        }
+        PM_UNLOCK();
+    }
 
-	// Tell idleTimerExpired() to ignore idle timer.
-	fIdleTimerPeriod = 0;
-    if (fIdleTimerEventSource)
-        fIdleTimerEventSource->disable();
+    // Tell idleTimerExpired() to ignore idle timer.
+    fIdleTimerPeriod = 0;
+    if (fIdleTimer && thread_call_cancel(fIdleTimer))
+        release();
 
-	PM_TRACE("%s: %p %s done\n", getName(), this, __FUNCTION__);
+    PM_LOG2("%s: %p %s done\n", getName(), this, __FUNCTION__);
 }
 
 //*********************************************************************************
@@ -791,7 +869,7 @@ IOReturn IOService::addPowerChild ( IOService * child )
 		}
 		if (!ok)
 		{
-			PM_DEBUG("%s: %s (%p) is already a child\n",
+			PM_LOG("%s: %s (%p) is already a child\n",
 				getName(), child->getName(), child);
 			break;
 		}
@@ -876,7 +954,7 @@ void IOService::addPowerChild1 ( IOPMRequest * request )
 		tempDesire = fNumberOfPowerStates - 1;
 	}
 
-	if (tempDesire && (IS_PM_ROOT() || (fMaxCapability >= tempDesire)))
+	if (tempDesire && (IS_PM_ROOT || (fMaxPowerState >= tempDesire)))
 	{
 		adjustPowerState(tempDesire);
 	}
@@ -903,7 +981,7 @@ void IOService::addPowerChild2 ( IOPMRequest * request )
 
 	if (!parent || !inPlane(gIOPowerPlane))
 	{
-		PM_DEBUG("%s: addPowerChild2 not in power plane\n", getName());
+		PM_LOG("%s: addPowerChild2 not in power plane\n", getName());
 		return;
 	}
 
@@ -914,7 +992,7 @@ void IOService::addPowerChild2 ( IOPMRequest * request )
 	powerState = parent->fCurrentPowerState;
 
 	if (knowsState)
-		powerFlags = parent->fPowerStates[powerState].outputPowerCharacter;
+		powerFlags = parent->fPowerStates[powerState].outputPowerFlags;
 	else
 		powerFlags = 0;
 
@@ -928,16 +1006,14 @@ void IOService::addPowerChild2 ( IOPMRequest * request )
 
     if ( fControllingDriver && fParentsKnowState )
     {
-        fMaxCapability = fControllingDriver->maxCapabilityForDomainState(fParentsCurrentPowerFlags);
+        fMaxPowerState = fControllingDriver->maxCapabilityForDomainState(fParentsCurrentPowerFlags);
         // initially change into the state we are already in
         tempDesire = fControllingDriver->initialPowerStateForDomainState(fParentsCurrentPowerFlags);
-        fPreviousRequest = 0xffffffff;
+        fPreviousRequestPowerFlags = (IOPMPowerFlags)(-1);
         adjustPowerState(tempDesire);
     }
 
-#if ROOT_DOMAIN_RUN_STATES
-    getPMRootDomain()->tagPowerPlaneService(this, &fRootDomainState);
-#endif
+    getPMRootDomain()->tagPowerPlaneService(this, &fPMActions);
 }
 
 //*********************************************************************************
@@ -960,7 +1036,7 @@ void IOService::addPowerChild3 ( IOPMRequest * request )
 	{
 		if (child->getProperty("IOPMStrictTreeOrder"))
 		{
-			PM_DEBUG("%s: strict PM order enforced\n", getName());
+			PM_LOG1("%s: strict PM order enforced\n", getName());
 			fStrictTreeOrder = true;
 		}
 
@@ -969,7 +1045,7 @@ void IOService::addPowerChild3 ( IOPMRequest * request )
 	}
 	else
 	{
-		PM_DEBUG("%s: addPowerChild3 not in power plane\n", getName());
+		PM_LOG("%s: addPowerChild3 not in power plane\n", getName());
 	}
 
 	connection->release();
@@ -1031,6 +1107,10 @@ IOReturn IOService::removePowerChild ( IOPowerConnection * theNub )
 			if ( fHeadNotePendingAcks == 0 )
 			{
 				stop_ack_timer();
+
+				// Request unblocked, work queue
+				// should re-scan all busy requests.
+				gIOPMWorkQueue->incrementProducerCount();
 			}
 		}
 	}
@@ -1065,8 +1145,8 @@ IOReturn IOService::registerPowerDriver (
 	IOPMPowerState *	powerStates,
 	unsigned long		numberOfStates )
 {
-	IOPMRequest *	 request;
-	IOPMPowerState * powerStatesCopy = 0;
+	IOPMRequest *   request;
+	IOPMPSEntry *   powerStatesCopy = 0;
 
     if (!initialized)
 		return IOPMNotYetInitialized;
@@ -1092,12 +1172,19 @@ IOReturn IOService::registerPowerDriver (
 
 	do {
 		// Make a copy of the supplied power state array.
-		powerStatesCopy = IONew(IOPMPowerState, numberOfStates);
+		powerStatesCopy = IONew(IOPMPSEntry, numberOfStates);
 		if (!powerStatesCopy)
 			break;
 
-		bcopy( powerStates, powerStatesCopy,
-			sizeof(IOPMPowerState) * numberOfStates );
+        for (uint32_t i = 0; i < numberOfStates; i++)
+        {
+            powerStatesCopy[i].capabilityFlags  = powerStates[i].capabilityFlags;
+            powerStatesCopy[i].outputPowerFlags = powerStates[i].outputPowerCharacter;
+            powerStatesCopy[i].inputPowerFlags  = powerStates[i].inputPowerRequirement;
+            powerStatesCopy[i].staticPower      = powerStates[i].staticPower;
+            powerStatesCopy[i].settleUpTime     = powerStates[i].settleUpTime;
+            powerStatesCopy[i].settleDownTime   = powerStates[i].settleDownTime;
+        }
 
 		request = acquirePMRequest( this, kIOPMRequestTypeRegisterPowerDriver );
 		if (!request)
@@ -1114,7 +1201,7 @@ IOReturn IOService::registerPowerDriver (
 	while (false);
 
 	if (powerStatesCopy)
-		IODelete(powerStatesCopy, IOPMPowerState, numberOfStates);
+		IODelete(powerStatesCopy, IOPMPSEntry, numberOfStates);
 	return kIOReturnNoMemory;
 }
 
@@ -1124,12 +1211,12 @@ IOReturn IOService::registerPowerDriver (
 
 void IOService::handleRegisterPowerDriver ( IOPMRequest * request )
 {
-	IOService *			powerDriver    = (IOService *)      request->fArg0;
-	IOPMPowerState *	powerStates    = (IOPMPowerState *) request->fArg1;
-	unsigned long		numberOfStates = (unsigned long)    request->fArg2;
-    unsigned long		i;
-	IOService *			root;
-	OSIterator *		iter;
+	IOService *     powerDriver    = (IOService *)   request->fArg0;
+	IOPMPSEntry *   powerStates    = (IOPMPSEntry *) request->fArg1;
+	unsigned long   numberOfStates = (unsigned long) request->fArg2;
+    unsigned long   i;
+	IOService *     root;
+	OSIterator *    iter;
 
 	PM_ASSERT_IN_GATE();
 	assert(powerStates);
@@ -1140,7 +1227,7 @@ void IOService::handleRegisterPowerDriver ( IOPMRequest * request )
     {
 		OUR_PMLog(kPMLogControllingDriver,
 			(unsigned long) numberOfStates,
-			(unsigned long) powerStates[0].version);
+			(unsigned long) kIOPMPowerStateVersion1);
 
         fPowerStates            = powerStates;
 		fNumberOfPowerStates    = numberOfStates;
@@ -1150,7 +1237,7 @@ void IOService::handleRegisterPowerDriver ( IOPMRequest * request )
 		// make a mask of all the character bits we know about
 		fOutputPowerCharacterFlags = 0;
 		for ( i = 0; i < numberOfStates; i++ ) {
-			fOutputPowerCharacterFlags |= fPowerStates[i].outputPowerCharacter;
+			fOutputPowerCharacterFlags |= fPowerStates[i].outputPowerFlags;
 		}
 
 		// Register powerDriver as interested, unless already done.
@@ -1201,7 +1288,7 @@ void IOService::handleRegisterPowerDriver ( IOPMRequest * request )
 		if ( inPlane(gIOPowerPlane) && fParentsKnowState )
 		{
 			unsigned long tempDesire;
-			fMaxCapability = fControllingDriver->maxCapabilityForDomainState(fParentsCurrentPowerFlags);
+			fMaxPowerState = fControllingDriver->maxCapabilityForDomainState(fParentsCurrentPowerFlags);
 			// initially change into the state we are already in
 			tempDesire = fControllingDriver->initialPowerStateForDomainState(fParentsCurrentPowerFlags);
 			adjustPowerState(tempDesire);
@@ -1210,7 +1297,7 @@ void IOService::handleRegisterPowerDriver ( IOPMRequest * request )
 	else
 	{
 		OUR_PMLog(kPMLogControllingDriverErr2, numberOfStates, 0);
-        IODelete(powerStates, IOPMPowerState, numberOfStates);
+        IODelete(powerStates, IOPMPSEntry, numberOfStates);
 	}
 
 	powerDriver->release();
@@ -1227,29 +1314,33 @@ void IOService::handleRegisterPowerDriver ( IOPMRequest * request )
 
 IOPMPowerFlags IOService::registerInterestedDriver ( IOService * driver )
 {
-	IOPMRequest *	request;
-	bool			signal;
+    IOPMRequest *	request;
+    bool			signal;
 
-	if (!initialized || !fInterestedDrivers)
-		return IOPMNotPowerManaged;
+    if (!driver || !initialized || !fInterestedDrivers)
+        return 0;
 
-	PM_LOCK();
-	signal = (!fInsertInterestSet && !fRemoveInterestSet);
-	if (fInsertInterestSet == NULL)
-		fInsertInterestSet = OSSet::withCapacity(4);
-	if (fInsertInterestSet)
-		fInsertInterestSet->setObject(driver);
-	PM_UNLOCK();
+    PM_LOCK();
+    signal = (!fInsertInterestSet && !fRemoveInterestSet);
+    if (fInsertInterestSet == NULL)
+        fInsertInterestSet = OSSet::withCapacity(4);
+    if (fInsertInterestSet)
+    {
+        fInsertInterestSet->setObject(driver);
+        if (fRemoveInterestSet)
+            fRemoveInterestSet->removeObject(driver);
+    }
+    PM_UNLOCK();
 
-	if (signal)
-	{
-		request = acquirePMRequest( this, kIOPMRequestTypeInterestChanged );
-		if (request)
-			submitPMRequest( request );
-	}
+    if (signal)
+    {
+        request = acquirePMRequest( this, kIOPMRequestTypeInterestChanged );
+        if (request)
+            submitPMRequest( request );
+    }
 
-	// This return value cannot be trusted, but return a value
-	// for those clients that care.
+    // This return value cannot be trusted, but return a value
+    // for those clients that care.
 
     OUR_PMLog(kPMLogInterestedDriver, kIOPMDeviceUsable, 2);
     return kIOPMDeviceUsable;	
@@ -1261,41 +1352,44 @@ IOPMPowerFlags IOService::registerInterestedDriver ( IOService * driver )
 
 IOReturn IOService::deRegisterInterestedDriver ( IOService * driver )
 {
-	IOPMinformeeList *	list;
+    IOPMinformeeList *	list;
     IOPMinformee *		item;
-	IOPMRequest *		request;
-	bool				signal;
+    IOPMRequest *       request;
+    bool                signal;
 
-	if (!initialized || !fInterestedDrivers)
-		return IOPMNotPowerManaged;
+    if (!driver)
+        return kIOReturnBadArgument;
+    if (!initialized || !fInterestedDrivers)
+        return IOPMNotPowerManaged;
 
-	PM_LOCK();
-	signal = (!fRemoveInterestSet && !fInsertInterestSet);
-	if (fRemoveInterestSet == NULL)
-		fRemoveInterestSet = OSSet::withCapacity(4);
-	if (fRemoveInterestSet)
-	{
-		fRemoveInterestSet->setObject(driver);
+    PM_LOCK();
+    signal = (!fRemoveInterestSet && !fInsertInterestSet);
+    if (fRemoveInterestSet == NULL)
+        fRemoveInterestSet = OSSet::withCapacity(4);
+    if (fRemoveInterestSet)
+    {
+        fRemoveInterestSet->setObject(driver);
+        if (fInsertInterestSet)
+            fInsertInterestSet->removeObject(driver);
 
-		list = fInterestedDrivers;
-		item = list->findItem(driver);
-		if (item && item->active)
-		{
-			item->active = false;
-		}
-		if (fLockedFlags.DriverCallBusy)
-            PM_DEBUG("%s::deRegisterInterestedDriver() driver call busy\n", getName());
-	}
-	PM_UNLOCK();
+        list = fInterestedDrivers;
+        item = list->findItem(driver);
+        if (item && item->active)
+        {
+            item->active = false;
+            waitForPMDriverCall( driver );
+        }
+    }
+    PM_UNLOCK();
 
-	if (signal)
-	{
-		request = acquirePMRequest( this, kIOPMRequestTypeInterestChanged );
-		if (request)
-			submitPMRequest( request );
-	}
+    if (signal)
+    {
+        request = acquirePMRequest( this, kIOPMRequestTypeInterestChanged );
+        if (request)
+            submitPMRequest( request );
+    }
 
-	return IOPMNoErr;
+    return IOPMNoErr;
 }
 
 //*********************************************************************************
@@ -1306,49 +1400,48 @@ IOReturn IOService::deRegisterInterestedDriver ( IOService * driver )
 
 void IOService::handleInterestChanged( IOPMRequest * request )
 {
-	IOService *			driver;
+    IOService *			driver;
     IOPMinformee *		informee;
-	IOPMinformeeList *	list = fInterestedDrivers;
+    IOPMinformeeList *	list = fInterestedDrivers;
 
-	PM_LOCK();
+    PM_LOCK();
 
-	if (fInsertInterestSet)
-	{
-		while ((driver = (IOService *) fInsertInterestSet->getAnyObject()))
-		{
-			if ((list->findItem(driver) == NULL) &&
-				(!fRemoveInterestSet ||
-				 !fRemoveInterestSet->containsObject(driver)))
-			{
-				informee = list->appendNewInformee(driver);
-			}
-			fInsertInterestSet->removeObject(driver);
-		}
-		fInsertInterestSet->release();
-		fInsertInterestSet = 0;
-	}
+    if (fInsertInterestSet)
+    {
+        while ((driver = (IOService *) fInsertInterestSet->getAnyObject()))
+        {
+            if (list->findItem(driver) == NULL)
+            {
+                informee = list->appendNewInformee(driver);
+            }
+            fInsertInterestSet->removeObject(driver);
+        }
+        fInsertInterestSet->release();
+        fInsertInterestSet = 0;
+    }
 
-	if (fRemoveInterestSet)
-	{
-		while ((driver = (IOService *) fRemoveInterestSet->getAnyObject()))
-		{
-			informee = list->findItem(driver);
-			if (informee)
-			{
-				if (fHeadNotePendingAcks && informee->timer)
-				{
-					informee->timer = 0;
-					fHeadNotePendingAcks--;
-				}
-				list->removeFromList(driver);
-			}
-			fRemoveInterestSet->removeObject(driver);
-		}
-		fRemoveInterestSet->release();
-		fRemoveInterestSet = 0;
-	}
+    if (fRemoveInterestSet)
+    {
+        while ((driver = (IOService *) fRemoveInterestSet->getAnyObject()))
+        {
+            informee = list->findItem(driver);
+            if (informee)
+            {
+                // Clean-up async interest acknowledgement
+                if (fHeadNotePendingAcks && informee->timer)
+                {
+                    informee->timer = 0;
+                    fHeadNotePendingAcks--;
+                }
+                list->removeFromList(driver);
+            }
+            fRemoveInterestSet->removeObject(driver);
+        }
+        fRemoveInterestSet->release();
+        fRemoveInterestSet = 0;
+    }
 
-	PM_UNLOCK();
+    PM_UNLOCK();
 }
 
 //*********************************************************************************
@@ -1432,11 +1525,25 @@ bool IOService::handleAcknowledgePowerChange ( IOPMRequest * request )
                 {
                     uint64_t nsec = computeTimeDeltaNS(&informee->startTime);
                     if (nsec > LOG_SETPOWER_TIMES)
-                        PM_DEBUG("%s::powerState%sChangeTo(%p, %s, %lu -> %lu) async took %d ms\n",
+                        PM_LOG("%s::powerState%sChangeTo(%p, %s, %lu -> %lu) async took %d ms\n",
                             informee->whatObject->getName(),
                             (fDriverCallReason == kDriverCallInformPreChange) ? "Will" : "Did",
                             informee->whatObject,
-                            fName, fCurrentPowerState, fHeadNotePowerState, NS_TO_MS(nsec));
+                            fName, fCurrentPowerState, fHeadNotePowerState, NS_TO_US(nsec));
+                    
+                    uint16_t logType = (fDriverCallReason == kDriverCallInformPreChange) 
+                                            ? kIOPMEventTypePSWillChangeTo
+                                             : kIOPMEventTypePSDidChangeTo;
+
+                    PMEventDetails *details = PMEventDetails::eventDetails(
+                                                logType,
+                                                fName,
+                                                (uintptr_t)this,
+                                                informee->whatObject->getName(),
+                                                0, 0, 0,
+                                                NS_TO_MS(nsec));
+
+                    getPMRootDomain()->recordAndReleasePMEventGated( details );
                 }
 #endif
                 // mark it acked
@@ -1523,8 +1630,17 @@ void IOService::adjustPowerState ( uint32_t clamp )
 	computeDesiredState(clamp);
 	if (fControllingDriver && fParentsKnowState && inPlane(gIOPowerPlane))
 	{
+        IOPMPowerChangeFlags changeFlags = kIOPMSelfInitiated;
+
+        // Indicate that children desires were ignored, and do not ask
+        // apps for permission to drop power. This is used by root domain
+        // for demand sleep.
+
+        if (getPMRequestType() == kIOPMRequestTypeRequestPowerStateOverride)
+            changeFlags |= (kIOPMIgnoreChildren | kIOPMSkipAskPowerDown);
+
 		startPowerChange(
-			 /* flags        */	kIOPMWeInitiated,
+			 /* flags        */	changeFlags,
 			 /* power state  */	fDesiredPowerState,
 			 /* domain flags */	0,
 			 /* connection   */	0,
@@ -1536,9 +1652,11 @@ void IOService::adjustPowerState ( uint32_t clamp )
 // [public] synchronizePowerTree
 //*********************************************************************************
 
-IOReturn IOService::synchronizePowerTree ( void )
+IOReturn IOService::synchronizePowerTree (
+    IOOptionBits    options,
+    IOService *     notifyRoot )
 {
-	IOPMRequest *   request_c;
+	IOPMRequest *   request_c = 0;
     IOPMRequest *   request_s;
 
     if (this != getPMRootDomain())
@@ -1546,15 +1664,30 @@ IOReturn IOService::synchronizePowerTree ( void )
 	if (!initialized)
 		return kIOPMNotYetInitialized;
 
-    request_c = acquirePMRequest( this, kIOPMRequestTypeIdleCancel );
-    request_s = acquirePMRequest( this, kIOPMRequestTypeSynchronizePowerTree );
+    if (notifyRoot)
+    {
+        IOPMRequest * nr;
 
-    if (!request_c || !request_s)
+        // Cancels don't need to be synchronized.
+        nr = acquirePMRequest(notifyRoot, kIOPMRequestTypeChildNotifyDelayCancel);
+        if (nr) submitPMRequest(nr);        
+        nr = acquirePMRequest(getPMRootDomain(), kIOPMRequestTypeChildNotifyDelayCancel);
+        if (nr) submitPMRequest(nr);
+    }
+
+    request_s = acquirePMRequest( this, kIOPMRequestTypeSynchronizePowerTree );
+    if (!request_s)
         goto error_no_memory;
 
-    request_c->attachNextRequest( request_s );
-
-    submitPMRequest(request_c);
+    if (options & kIOPMSyncCancelPowerDown)
+        request_c = acquirePMRequest( this, kIOPMRequestTypeIdleCancel );
+    if (request_c)
+    {
+        request_c->attachNextRequest( request_s );
+        submitPMRequest(request_c);
+    }
+    
+    request_s->fArg0 = (void *)(uintptr_t) options;
     submitPMRequest(request_s);
 
     return kIOReturnSuccess;
@@ -1569,14 +1702,17 @@ error_no_memory:
 // [private] handleSynchronizePowerTree
 //*********************************************************************************
 
-void IOService::handleSynchronizePowerTree ( IOPMRequest * /*request*/ )
+void IOService::handleSynchronizePowerTree ( IOPMRequest * request )
 {
 	PM_ASSERT_IN_GATE();
 	if (fControllingDriver && fParentsKnowState && inPlane(gIOPowerPlane) &&
         (fCurrentPowerState == fNumberOfPowerStates - 1))
 	{
+        IOOptionBits options = (uintptr_t) request->fArg0;
+
 		startPowerChange(
-			 /* flags        */	kIOPMWeInitiated | kIOPMSynchronize,
+			 /* flags        */	kIOPMSelfInitiated | kIOPMSynchronize |
+                                (options & kIOPMSyncNoChildNotify),
 			 /* power state  */	fCurrentPowerState,
 			 /* domain flags */	0,
 			 /* connection   */	0,
@@ -1610,24 +1746,24 @@ IOReturn IOService::powerDomainWillChangeTo (
 
 void IOService::handlePowerDomainWillChangeTo ( IOPMRequest * request )
 {
-	IOPMPowerFlags		parentPowerFlags = (IOPMPowerFlags) request->fArg0;
-	IOPowerConnection *	whichParent = (IOPowerConnection *) request->fArg1;
-    unsigned long       parentChangeFlags = (unsigned long) request->fArg2;
-    OSIterator *		iter;
-    OSObject *			next;
-    IOPowerConnection *	connection;
-    unsigned long		newPowerState;
-    unsigned long       myChangeFlags;
-    IOPMPowerFlags		combinedPowerFlags;
-	bool				savedParentsKnowState;
-	IOReturn			result = IOPMAckImplied;
+	IOPMPowerFlags		 parentPowerFlags = (IOPMPowerFlags) request->fArg0;
+	IOPowerConnection *	 whichParent = (IOPowerConnection *) request->fArg1;
+    IOPMPowerChangeFlags parentChangeFlags = (IOPMPowerChangeFlags)(uintptr_t) request->fArg2;
+    IOPMPowerChangeFlags myChangeFlags;
+    OSIterator *		 iter;
+    OSObject *			 next;
+    IOPowerConnection *	 connection;
+    IOPMPowerStateIndex  newPowerState;
+    IOPMPowerFlags		 combinedPowerFlags;
+	bool				 savedParentsKnowState;
+	IOReturn			 result = IOPMAckImplied;
 
 	PM_ASSERT_IN_GATE();
     OUR_PMLog(kPMLogWillChange, parentPowerFlags, 0);
 
 	if (!inPlane(gIOPowerPlane) || !whichParent || !whichParent->getAwaitingAck())
 	{
-		PM_DEBUG("%s::%s not in power tree\n", getName(), __FUNCTION__);
+		PM_LOG("%s::%s not in power tree\n", getName(), __FUNCTION__);
         goto exit_no_ack;
 	}
 
@@ -1656,7 +1792,7 @@ void IOService::handlePowerDomainWillChangeTo ( IOPMRequest * request )
     // If our initial change has yet to occur, then defer the power change
     // until after the power domain has completed its power transition.
 
-    if ( fControllingDriver && !fInitialChange )
+    if ( fControllingDriver && !fInitialPowerChange )
     {
 		newPowerState = fControllingDriver->maxCapabilityForDomainState(
 							combinedPowerFlags);
@@ -1729,21 +1865,21 @@ IOReturn IOService::powerDomainDidChangeTo (
 
 void IOService::handlePowerDomainDidChangeTo ( IOPMRequest * request )
 {
-	IOPMPowerFlags		parentPowerFlags = (IOPMPowerFlags) request->fArg0;
-	IOPowerConnection *	whichParent = (IOPowerConnection *) request->fArg1;
-    unsigned long       parentChangeFlags = (unsigned long) request->fArg2;
-    unsigned long		newPowerState;
-    unsigned long       myChangeFlags;
-    unsigned long       initialDesire;
-	bool				savedParentsKnowState;
-	IOReturn			result = IOPMAckImplied;
+	IOPMPowerFlags		 parentPowerFlags = (IOPMPowerFlags) request->fArg0;
+	IOPowerConnection *	 whichParent = (IOPowerConnection *) request->fArg1;
+    IOPMPowerChangeFlags parentChangeFlags = (IOPMPowerChangeFlags)(uintptr_t) request->fArg2;
+    IOPMPowerChangeFlags myChangeFlags;
+    IOPMPowerStateIndex  newPowerState;
+    IOPMPowerStateIndex  initialDesire;
+	bool				 savedParentsKnowState;
+	IOReturn			 result = IOPMAckImplied;
 
 	PM_ASSERT_IN_GATE();
     OUR_PMLog(kPMLogDidChange, parentPowerFlags, 0);
 
 	if (!inPlane(gIOPowerPlane) || !whichParent || !whichParent->getAwaitingAck())
 	{
-		PM_DEBUG("%s::%s not in power tree\n", getName(), __FUNCTION__);
+		PM_LOG("%s::%s not in power tree\n", getName(), __FUNCTION__);
         goto exit_no_ack;
 	}
 
@@ -1756,7 +1892,7 @@ void IOService::handlePowerDomainDidChangeTo ( IOPMRequest * request )
 		newPowerState = fControllingDriver->maxCapabilityForDomainState(
 							fParentsCurrentPowerFlags);
 
-        if (fInitialChange)
+        if (fInitialPowerChange)
         {
             initialDesire = fControllingDriver->initialPowerStateForDomainState(
                             fParentsCurrentPowerFlags);
@@ -1796,7 +1932,7 @@ void IOService::handlePowerDomainDidChangeTo ( IOPMRequest * request )
 
 	if (!savedParentsKnowState && fParentsKnowState)
 	{
-		PM_TRACE("%s::powerDomainDidChangeTo parentsKnowState = true\n",
+		PM_LOG1("%s::powerDomainDidChangeTo parentsKnowState = true\n",
 			getName());
 		requestDomainPower( fDesiredPowerState );
 	}
@@ -1889,7 +2025,7 @@ void IOService::rebuildChildClampBits ( void )
             {
 				if (connection->getReadyFlag() == false)
 				{
-					PM_CONNECT("[%s] %s: connection not ready\n",
+					PM_LOG3("[%s] %s: connection not ready\n",
 						getName(), __FUNCTION__);
 					continue;
 				}
@@ -1919,7 +2055,7 @@ IOReturn IOService::requestPowerDomainState(
     IOPowerConnection * childConnection,
     unsigned long		specification )
 {
-    unsigned long       ps;
+    IOPMPowerStateIndex ps;
 	IOPMPowerFlags		outputPowerFlags;
     IOService *         child;
 	IOPMRequest *       subRequest;
@@ -1931,7 +2067,7 @@ IOReturn IOService::requestPowerDomainState(
 
 	if (gIOPMWorkLoop->onThread() == false)
 	{
-		PM_DEBUG("%s::requestPowerDomainState\n", getName());
+		PM_LOG("%s::requestPowerDomainState\n", getName());
 		return kIOReturnSuccess;
 	}
 
@@ -1941,7 +2077,7 @@ IOReturn IOService::requestPowerDomainState(
 		return kIOReturnNotAttached;
 
     if (!fControllingDriver || !fNumberOfPowerStates)
-        return IOPMNotYetInitialized;
+        return kIOReturnNotReady;
 
 	child = (IOService *) childConnection->getChildEntry(gIOPowerPlane);
 	assert(child);
@@ -1953,10 +2089,10 @@ IOReturn IOService::requestPowerDomainState(
     // Merge in the power flags contributed by this power parent
     // at its current or impending power state. 
 
-    outputPowerFlags = fPowerStates[fCurrentPowerState].outputPowerCharacter;
+    outputPowerFlags = fPowerStates[fCurrentPowerState].outputPowerFlags;
 	if (fMachineState != kIOPM_Finished)
 	{
-		if (IS_POWER_DROP && (getPMRootDomain() != this))
+		if (IS_POWER_DROP && !IS_ROOT_DOMAIN)
 		{
 			// Use the lower power state when dropping power. 
 			// Must be careful since a power drop can be canceled
@@ -1967,7 +2103,7 @@ IOReturn IOService::requestPowerDomainState(
 			// The child must not wait for this parent to raise power
 			// if the power drop was cancelled. The solution is to cancel
 			// the power drop if possible, then schedule an adjustment to
-			// re-evaluate our correct power state.
+			// re-evaluate the parent's power state.
 			//
 			// Root domain is excluded to avoid idle sleep issues. And permit
 			// root domain children to pop up when system is going to sleep.
@@ -1977,14 +2113,14 @@ IOReturn IOService::requestPowerDomainState(
 			{
 				fDoNotPowerDown = true;     // cancel power drop
 				adjustPower     = true;     // schedule an adjustment
-				PM_TRACE("%s: power drop cancelled in state %u by %s\n",
+				PM_LOG1("%s: power drop cancelled in state %u by %s\n",
 					getName(), fMachineState, child->getName());
 			}
 			else
 			{
 				// Beyond cancellation point, report the impending state.
 				outputPowerFlags =
-					fPowerStates[fHeadNotePowerState].outputPowerCharacter;
+					fPowerStates[fHeadNotePowerState].outputPowerFlags;
 			}
 		}
 		else if (IS_POWER_RISE)
@@ -2006,7 +2142,7 @@ IOReturn IOService::requestPowerDomainState(
 
     for (ps = 0; ps < fNumberOfPowerStates; ps++)
     {
-        if ((fPowerStates[ps].outputPowerCharacter & childRequestPowerFlags) ==
+        if ((fPowerStates[ps].outputPowerFlags & childRequestPowerFlags) ==
             (fOutputPowerCharacterFlags & childRequestPowerFlags))
             break;
     }
@@ -2028,7 +2164,7 @@ IOReturn IOService::requestPowerDomainState(
 #if ENABLE_DEBUG_LOGS
     if (adjustPower)
     {
-        PM_DEBUG("requestPowerDomainState[%s]: %s, init %d, %u->%u\n",
+        PM_LOG("requestPowerDomainState[%s]: %s, init %d, %u->%u\n",
             getName(), child->getName(),
             !childConnection->childHasRequestedPower(),
             (uint32_t) childConnection->getDesiredDomainState(),
@@ -2049,7 +2185,7 @@ IOReturn IOService::requestPowerDomainState(
 	// adjust power state. Submit a request if one wasn't pending,
 	// or if the current request is part of a call tree.
 
-    if (adjustPower && !fDeviceOverrides &&
+    if (adjustPower && !fDeviceOverrideEnabled &&
         (!fAdjustPowerScheduled || gIOPMRequest->getRootRequest()))
     {
 		subRequest = acquirePMRequest(
@@ -2185,8 +2321,8 @@ IOReturn IOService::changePowerStateWithOverrideTo ( unsigned long ordinal )
 	{
 		fTempClampPowerState = max(fTempClampPowerState, ordinal);
 		fTempClampCount++;
-        fOverrideMaxPowerState = ordinal;
-		request->fArg2 = (void *) true;
+		fOverrideMaxPowerState = ordinal;
+		request->fArg2 = (void *) (uintptr_t) true;
 	}
 
 	submitPMRequest( request );
@@ -2228,7 +2364,7 @@ IOReturn IOService::requestPowerState (
 	{
 		fTempClampPowerState = max(fTempClampPowerState, state);
 		fTempClampCount++;
-		request->fArg2 = (void *) true;
+		request->fArg2 = (void *) (uintptr_t) true;
 	}
 
 	submitPMRequest( request );
@@ -2255,8 +2391,8 @@ void IOService::handleRequestPowerState ( IOPMRequest * request )
 	if (fNumberOfPowerStates && (state >= fNumberOfPowerStates))
 		state = fNumberOfPowerStates - 1;
 
-    // Override from changePowerStateWithOverrideTo() persists until
-    // the next "device" power request, such as changePowerStateToPriv().
+    // The power suppression due to changePowerStateWithOverrideTo() expires
+    // upon the next "device" power request - changePowerStateToPriv().
 
     if ((getPMRequestType() != kIOPMRequestTypeRequestPowerStateOverride) &&
         (client == gIOPMPowerClientDevice))
@@ -2318,6 +2454,77 @@ uint32_t IOService::getPowerStateForClient( const OSSymbol * client )
 }
 
 //*********************************************************************************
+// [protected] powerOverrideOnPriv
+//*********************************************************************************
+
+IOReturn IOService::powerOverrideOnPriv ( void )
+{
+	IOPMRequest * request;
+
+    if (!initialized)
+		return IOPMNotYetInitialized;
+
+	if (gIOPMWorkLoop->inGate())
+	{
+		fDeviceOverrideEnabled = true;
+		return IOPMNoErr;
+	}
+
+	request = acquirePMRequest( this, kIOPMRequestTypePowerOverrideOnPriv );
+	if (!request)
+		return kIOReturnNoMemory;
+
+	submitPMRequest( request );
+    return IOPMNoErr;
+}
+
+//*********************************************************************************
+// [protected] powerOverrideOffPriv
+//*********************************************************************************
+
+IOReturn IOService::powerOverrideOffPriv ( void )
+{
+	IOPMRequest * request;
+
+    if (!initialized)
+		return IOPMNotYetInitialized;
+
+	if (gIOPMWorkLoop->inGate())
+	{
+		fDeviceOverrideEnabled = false;
+		return IOPMNoErr;
+	}
+
+	request = acquirePMRequest( this, kIOPMRequestTypePowerOverrideOffPriv );
+	if (!request)
+		return kIOReturnNoMemory;
+
+	submitPMRequest( request );
+    return IOPMNoErr;
+}
+
+//*********************************************************************************
+// [private] handlePowerOverrideChanged
+//*********************************************************************************
+
+void IOService::handlePowerOverrideChanged ( IOPMRequest * request )
+{
+	PM_ASSERT_IN_GATE();
+	if (request->getType() == kIOPMRequestTypePowerOverrideOnPriv)
+	{
+		OUR_PMLog(kPMLogOverrideOn, 0, 0);
+		fDeviceOverrideEnabled = true;
+    }
+	else
+	{
+		OUR_PMLog(kPMLogOverrideOff, 0, 0);
+		fDeviceOverrideEnabled = false;
+	}
+
+	adjustPowerState();
+}
+
+//*********************************************************************************
 // [private] computeDesiredState
 //*********************************************************************************
 
@@ -2335,7 +2542,7 @@ void IOService::computeDesiredState ( unsigned long localClamp )
 	if (!fNumberOfPowerStates)
 	{
         fDesiredPowerState = 0;
-		//PM_DEBUG("%s::%s no controlling driver\n", getName(), __FUNCTION__);
+		//PM_LOG("%s::%s no controlling driver\n", getName(), __FUNCTION__);
 		return;
 	}
 
@@ -2350,7 +2557,7 @@ void IOService::computeDesiredState ( unsigned long localClamp )
             {
                 if (connection->getReadyFlag() == false)
                 {
-                    PM_CONNECT("[%s] %s: connection not ready\n",
+                    PM_LOG3("[%s] %s: connection not ready\n",
                         getName(), __FUNCTION__);
                     continue;
                 }
@@ -2376,7 +2583,7 @@ void IOService::computeDesiredState ( unsigned long localClamp )
         while ((client = (const OSSymbol *) iter->getNextObject()))
         {
 			// Ignore child and driver when override is in effect.
-            if ((fDeviceOverrides ||
+            if ((fDeviceOverrideEnabled ||
                 (getPMRequestType() == kIOPMRequestTypeRequestPowerStateOverride)) &&
                 ((client == gIOPMPowerClientChildren) ||
                  (client == gIOPMPowerClientDriver)))
@@ -2388,7 +2595,7 @@ void IOService::computeDesiredState ( unsigned long localClamp )
 
             desiredState = getPowerStateForClient(client);
             assert(desiredState < fNumberOfPowerStates);			
-			PM_TRACE("  %u %s\n",
+			PM_LOG1("  %u %s\n",
 				desiredState, client->getCStringNoCopy());
 
             newPowerState = max(newPowerState, desiredState);
@@ -2415,7 +2622,7 @@ void IOService::computeDesiredState ( unsigned long localClamp )
 
     fDesiredPowerState = newPowerState;
 
-    PM_TRACE("  temp %u, clamp %u, current %u, new %u\n",
+    PM_LOG1("  temp %u, clamp %u, current %u, new %u\n",
         (uint32_t) localClamp, (uint32_t) fTempClampPowerState,
 		(uint32_t) fCurrentPowerState, newPowerState);
 
@@ -2466,6 +2673,86 @@ IOWorkLoop * IOService::getPMworkloop ( void )
 	return gIOPMWorkLoop;
 }
 
+#if NOT_YET
+
+//*********************************************************************************
+// Power Parent/Children Applier
+//*********************************************************************************
+
+static void
+applyToPowerChildren( 
+    IOService *               service,
+    IOServiceApplierFunction  applier,
+    void *                    context,
+    IOOptionBits              options )
+{
+	PM_ASSERT_IN_GATE();
+
+    IORegistryEntry *       entry;
+    IORegistryIterator *    iter;
+    IOPowerConnection *     connection;
+    IOService *             child;
+
+    iter = IORegistryIterator::iterateOver(service, gIOPowerPlane, options);
+    if (iter)
+    {
+        while ((entry = iter->getNextObject()))
+        {
+            // Get child of IOPowerConnection objects
+            if ((connection = OSDynamicCast(IOPowerConnection, entry)))
+            {
+                child = (IOService *) connection->copyChildEntry(gIOPowerPlane);
+                if (child)
+                {
+                    (*applier)(child, context);
+                    child->release();
+                }
+            }
+        }
+        iter->release();
+    }
+}
+
+static void
+applyToPowerParent( 
+    IOService *               service,
+    IOServiceApplierFunction  applier,
+    void *                    context,
+    IOOptionBits              options )
+{
+	PM_ASSERT_IN_GATE();
+
+    IORegistryEntry *       entry;
+    IORegistryIterator *    iter;
+    IOPowerConnection *     connection;
+    IOService *             parent;
+
+    iter = IORegistryIterator::iterateOver(service, gIOPowerPlane,
+            options | kIORegistryIterateParents);
+    if (iter)
+    {
+        while ((entry = iter->getNextObject()))
+        {
+            // Get child of IOPowerConnection objects
+            if ((connection = OSDynamicCast(IOPowerConnection, entry)))
+            {
+                parent = (IOService *) connection->copyParentEntry(gIOPowerPlane);
+                if (parent)
+                {
+                    (*applier)(parent, context);
+                    parent->release();
+                }
+            }
+        }
+        iter->release();
+    }
+}
+
+#endif /* NOT_YET */
+
+// MARK: -
+// MARK: Activity Tickle & Idle Timer
+
 //*********************************************************************************
 // [public] activityTickle
 //
@@ -2487,14 +2774,11 @@ bool IOService::activityTickle ( unsigned long type, unsigned long stateNumber )
 
 		// Record device activity for the idle timer handler.
 
-        fDeviceActive = true;
+        fDeviceWasActive = true;
         fActivityTickleCount++;
         clock_get_uptime(&fDeviceActiveTimestamp);
 
-#if ROOT_DOMAIN_RUN_STATES
-        getPMRootDomain()->handleActivityTickleForService(this, type,
-                    fCurrentPowerState, fActivityTickleCount);
-#endif
+        PM_ACTION_0(actionActivityTickle);
 
 		// Record the last tickle power state.
 		// This helps to filter out redundant tickles as
@@ -2509,7 +2793,7 @@ bool IOService::activityTickle ( unsigned long type, unsigned long stateNumber )
 			if (request)
 			{
 				request->fArg0 = (void *) stateNumber;	// power state
-				request->fArg1 = (void *) true;			// power rise
+				request->fArg1 = (void *) (uintptr_t) true;	// power rise
 				submitPMRequest(request);
 			}
 		}
@@ -2558,21 +2842,19 @@ void IOService::handleActivityTickle ( IOPMRequest * request )
 	}
 }
 
-//*********************************************************************************
+//******************************************************************************
 // [public] setIdleTimerPeriod
 //
-// A subclass policy-maker is going to use our standard idleness
-// detection service.  Make a command queue and an idle timer and
-// connect them to the power management workloop.  Finally,
-// start the timer.
-//*********************************************************************************
+// A subclass policy-maker is using our standard idleness detection service.
+// Start the idle timer. Period is in seconds.
+//******************************************************************************
 
 IOReturn IOService::setIdleTimerPeriod ( unsigned long period )
 {
     if (!initialized)
 		return IOPMNotYetInitialized;
 
-    OUR_PMLog(kPMLogSetIdleTimerPeriod, period, 0);
+    OUR_PMLog(kPMLogSetIdleTimerPeriod, period, fIdleTimerPeriod);
 
     IOPMRequest * request =
         acquirePMRequest( this, kIOPMRequestTypeSetIdleTimerPeriod );
@@ -2582,7 +2864,7 @@ IOReturn IOService::setIdleTimerPeriod ( unsigned long period )
     request->fArg0 = (void *) period;
     submitPMRequest( request );
 
-    return IOPMNoErr;
+    return kIOReturnSuccess;
 }
 
 //******************************************************************************
@@ -2597,10 +2879,10 @@ SInt32 IOService::nextIdleTimeout(
     AbsoluteTime lastActivity, 
     unsigned int powerState)
 {
-    AbsoluteTime                        delta;
-    UInt64                              delta_ns;
-    SInt32                              delta_secs;
-    SInt32                              delay_secs;
+    AbsoluteTime        delta;
+    UInt64              delta_ns;
+    SInt32              delta_secs;
+    SInt32              delay_secs;
 
     // Calculate time difference using funky macro from clock.h.
     delta = currentTime;
@@ -2619,26 +2901,25 @@ SInt32 IOService::nextIdleTimeout(
     return (SInt32)delay_secs;
 }
 
-//******************************************************************************
+//*********************************************************************************
 // [public] start_PM_idle_timer
-//
-// The parameter is a pointer to us.  Use it to call our timeout method.
-//******************************************************************************
+//*********************************************************************************
 
 void IOService::start_PM_idle_timer ( void )
 {
-    static const int                    maxTimeout = 100000;
-    static const int                    minTimeout = 1;
-    AbsoluteTime                        uptime;
-    SInt32                              idle_in = 0;
+    static const int    maxTimeout = 100000;
+    static const int    minTimeout = 1;
+    AbsoluteTime        uptime, deadline;
+    SInt32              idle_in = 0;
+	boolean_t           pending;
 
-	if (!initialized || !fIdleTimerPeriod || !fIdleTimerEventSource)
+	if (!initialized || !fIdleTimerPeriod)
 		return;
 
     IOLockLock(fActivityLock);
 
     clock_get_uptime(&uptime);
-    
+
     // Subclasses may modify idle sleep algorithm
     idle_in = nextIdleTimeout(uptime, fDeviceActiveTimestamp, fCurrentPowerState);
 
@@ -2655,18 +2936,41 @@ void IOService::start_PM_idle_timer ( void )
 
     IOLockUnlock(fActivityLock);
 
-	fIdleTimerEventSource->setTimeout(idle_in, NSEC_PER_SEC);
+    retain();
+    clock_interval_to_absolutetime_interval(idle_in, kSecondScale, &deadline);
+    ADD_ABSOLUTETIME(&deadline, &uptime);
+    pending = thread_call_enter_delayed(fIdleTimer, deadline);
+    if (pending) release();
+}
+
+//*********************************************************************************
+// idle_timer_expired
+//*********************************************************************************
+
+static void
+idle_timer_expired (
+    thread_call_param_t arg0, thread_call_param_t arg1 )
+{
+	IOService * me = (IOService *) arg0;
+
+	if (gIOPMWorkLoop)
+		gIOPMWorkLoop->runAction(
+            OSMemberFunctionCast(IOWorkLoop::Action, me,
+                &IOService::idleTimerExpired),
+            me);
+
+	me->release();
 }
 
 //*********************************************************************************
 // [private] idleTimerExpired
 //
-// The idle timer has expired.  If there has been activity since the last
+// The idle timer has expired. If there has been activity since the last
 // expiration, just restart the timer and return.  If there has not been
 // activity, switch to the next lower power state and restart the timer.
 //*********************************************************************************
 
-void IOService::idleTimerExpired( IOTimerEventSource * )
+void IOService::idleTimerExpired( void )
 {
 	IOPMRequest *	request;
 	bool			restartTimer = true;
@@ -2678,10 +2982,10 @@ void IOService::idleTimerExpired( IOTimerEventSource * )
 
 	// Check for device activity (tickles) over last timer period.
 
-	if (fDeviceActive)
+	if (fDeviceWasActive)
 	{
 		// Device was active - do not drop power, restart timer.
-		fDeviceActive = false;
+		fDeviceWasActive = false;
 	}
 	else
 	{
@@ -2699,7 +3003,7 @@ void IOService::idleTimerExpired( IOTimerEventSource * )
 		if (request)
 		{
 			request->fArg0 = (void *) 0;		// power state (irrelevant)
-			request->fArg1 = (void *) false;	// power drop
+			request->fArg1 = (void *) (uintptr_t) false;	// power drop
 			submitPMRequest( request );
 
 			// Do not restart timer until after the tickle request has been
@@ -2798,7 +3102,7 @@ IOReturn IOService::systemWake ( void )
             {
 				if (connection->getReadyFlag() == false)
 				{
-					PM_CONNECT("[%s] %s: connection not ready\n",
+					PM_LOG3("[%s] %s: connection not ready\n",
 						getName(), __FUNCTION__);
 					continue;
 				}
@@ -2836,7 +3140,7 @@ IOReturn IOService::temperatureCriticalForZone ( IOService * whichZone )
     
     OUR_PMLog(kPMLogCriticalTemp, 0, 0);
 
-    if ( inPlane(gIOPowerPlane) && !IS_PM_ROOT() )
+    if ( inPlane(gIOPowerPlane) && !IS_PM_ROOT )
     {
         theNub = (IOService *)copyParentEntry(gIOPowerPlane);
         if ( theNub )
@@ -2854,87 +3158,21 @@ IOReturn IOService::temperatureCriticalForZone ( IOService * whichZone )
 }
 #endif /* !__LP64__ */
 
-//*********************************************************************************
-// [protected] powerOverrideOnPriv
-//*********************************************************************************
-
-IOReturn IOService::powerOverrideOnPriv ( void )
-{
-	IOPMRequest * request;
-
-    if (!initialized)
-		return IOPMNotYetInitialized;
-
-	if (gIOPMWorkLoop->inGate())
-	{
-		fDeviceOverrides = true;
-		return IOPMNoErr;
-	}
-
-	request = acquirePMRequest( this, kIOPMRequestTypePowerOverrideOnPriv );
-	if (!request)
-		return kIOReturnNoMemory;
-
-	submitPMRequest( request );
-    return IOPMNoErr;
-}
-
-//*********************************************************************************
-// [protected] powerOverrideOffPriv
-//*********************************************************************************
-
-IOReturn IOService::powerOverrideOffPriv ( void )
-{
-	IOPMRequest * request;
-
-    if (!initialized)
-		return IOPMNotYetInitialized;
-
-	if (gIOPMWorkLoop->inGate())
-	{
-		fDeviceOverrides = false;
-		return IOPMNoErr;
-	}
-
-	request = acquirePMRequest( this, kIOPMRequestTypePowerOverrideOffPriv );
-	if (!request)
-		return kIOReturnNoMemory;
-
-	submitPMRequest( request );
-    return IOPMNoErr;
-}
-
-//*********************************************************************************
-// [private] handlePowerOverrideChanged
-//*********************************************************************************
-
-void IOService::handlePowerOverrideChanged ( IOPMRequest * request )
-{
-	PM_ASSERT_IN_GATE();
-	if (request->getType() == kIOPMRequestTypePowerOverrideOnPriv)
-	{
-		OUR_PMLog(kPMLogOverrideOn, 0, 0);
-		fDeviceOverrides = true;
-    }
-	else
-	{
-		OUR_PMLog(kPMLogOverrideOff, 0, 0);
-		fDeviceOverrides = false;
-	}
-
-	adjustPowerState();
-}
+// MARK: -
+// MARK: Power Change (Common)
 
 //*********************************************************************************
 // [private] startPowerChange
+//
+// All power state changes starts here.
 //*********************************************************************************
 
-IOReturn IOService::startPowerChange (
-    unsigned long		changeFlags,
-    unsigned long		powerState,
-    unsigned long		domainFlags,
-    IOPowerConnection *	parentConnection,
-    unsigned long		parentFlags )
+IOReturn IOService::startPowerChange(
+    IOPMPowerChangeFlags    changeFlags,
+    IOPMPowerStateIndex     powerState,
+    IOPMPowerFlags          domainFlags,
+    IOPowerConnection *     parentConnection,
+    IOPMPowerFlags          parentFlags )
 {
 	PM_ASSERT_IN_GATE();
 	assert( fMachineState == kIOPM_Finished );
@@ -2943,32 +3181,17 @@ IOReturn IOService::startPowerChange (
     if (powerState >= fNumberOfPowerStates)
         return IOPMAckImplied;
 
-#if ROOT_DOMAIN_RUN_STATES
-    // Root domain can override chosen power state to a lower state.
-    getPMRootDomain()->overridePowerStateForService(
-                        this, &fRootDomainState,
-                        &powerState, changeFlags);
-#endif
+    fIsPreChange = true;
+    PM_ACTION_2(actionPowerChangeOverride, &powerState, &changeFlags);
 
-    // Invalidate the last recorded tickle power state when a power transition
-    // is about to occur, and not as a result of a tickle request.
+	// Forks to either Driver or Parent initiated power change paths.
 
-    if ((getPMRequestType() != kIOPMRequestTypeActivityTickle) &&
-        (fActivityTicklePowerState != -1))
-    {
-        IOLockLock(fActivityLock);
-        fActivityTicklePowerState = -1;
-        IOLockUnlock(fActivityLock);
-    }
-
-	// Initialize the change note.
-
-    fHeadNoteFlags            = changeFlags;
+    fHeadNoteChangeFlags      = changeFlags;
     fHeadNotePowerState       = powerState;
 	fHeadNotePowerArrayEntry  = &fPowerStates[ powerState ];
 	fHeadNoteParentConnection = NULL;
 
-	if (changeFlags & kIOPMWeInitiated)
+	if (changeFlags & kIOPMSelfInitiated)
 	{
         if (changeFlags & kIOPMSynchronize)
             OurSyncStart();
@@ -2992,70 +3215,68 @@ IOReturn IOService::startPowerChange (
 
 bool IOService::notifyInterestedDrivers ( void )
 {
-	IOPMinformee *		informee;
-	IOPMinformeeList *	list = fInterestedDrivers;
-	DriverCallParam *	param;
-	IOItemCount			count;
+    IOPMinformee *		informee;
+    IOPMinformeeList *	list = fInterestedDrivers;
+    DriverCallParam *	param;
+    IOItemCount			count;
 
-	PM_ASSERT_IN_GATE();
-	assert( fDriverCallParamCount == 0 );
-	assert( fHeadNotePendingAcks == 0 );
+    PM_ASSERT_IN_GATE();
+    assert( fDriverCallParamCount == 0 );
+    assert( fHeadNotePendingAcks == 0 );
 
     fHeadNotePendingAcks = 0;
 
-	count = list->numberOfItems();
-	if (!count)
-		goto done;	// no interested drivers
+    count = list->numberOfItems();
+    if (!count)
+        goto done;	// no interested drivers
 
-	// Allocate an array of interested drivers and their return values
-	// for the callout thread. Everything else is still "owned" by the
-	// PM work loop, which can run to process acknowledgePowerChange()
-	// responses.
+    // Allocate an array of interested drivers and their return values
+    // for the callout thread. Everything else is still "owned" by the
+    // PM work loop, which can run to process acknowledgePowerChange()
+    // responses.
 
-	param = (DriverCallParam *) fDriverCallParamPtr;
-	if (count > fDriverCallParamSlots)
-	{
-		if (fDriverCallParamSlots)
-		{
-			assert(fDriverCallParamPtr);
-			IODelete(fDriverCallParamPtr, DriverCallParam, fDriverCallParamSlots);
-			fDriverCallParamPtr = 0;
-			fDriverCallParamSlots = 0;
-		}
+    param = (DriverCallParam *) fDriverCallParamPtr;
+    if (count > fDriverCallParamSlots)
+    {
+        if (fDriverCallParamSlots)
+        {
+            assert(fDriverCallParamPtr);
+            IODelete(fDriverCallParamPtr, DriverCallParam, fDriverCallParamSlots);
+            fDriverCallParamPtr = 0;
+            fDriverCallParamSlots = 0;
+        }
 
-		param = IONew(DriverCallParam, count);
-		if (!param)
-			goto done;	// no memory
+        param = IONew(DriverCallParam, count);
+        if (!param)
+            goto done;	// no memory
 
-		fDriverCallParamPtr   = (void *) param;
-		fDriverCallParamSlots = count;
-	}
+        fDriverCallParamPtr   = (void *) param;
+        fDriverCallParamSlots = count;
+    }
 
-	informee = list->firstInList();
-	assert(informee);
-	for (IOItemCount i = 0; i < count; i++)
-	{
-		informee->timer = -1;
-		param[i].Target = informee;
-		informee->retain();
+    informee = list->firstInList();
+    assert(informee);
+    for (IOItemCount i = 0; i < count; i++)
+    {
+        informee->timer = -1;
+        param[i].Target = informee;
+        informee->retain();
         informee = list->nextInList( informee );
-	}
+    }
 
-	fDriverCallParamCount = count;
-	fHeadNotePendingAcks = count;
+    fDriverCallParamCount = count;
+    fHeadNotePendingAcks  = count;
 
-	// Machine state will be blocked pending callout thread completion.
-
-	PM_LOCK();
-	assert( fLockedFlags.DriverCallBusy == false );
-	fLockedFlags.DriverCallBusy = true;
-	PM_UNLOCK();
-	thread_call_enter( fDriverCallEntry );
-	return true;
+    // Block state machine and wait for callout completion.
+    assert(!fDriverCallBusy);
+    fDriverCallBusy = true;
+    thread_call_enter( fDriverCallEntry );
+    return true;
 
 done:
-	// no interested drivers or did not schedule callout thread due to error.
-	return false;
+    // Return false if there are no interested drivers or could not schedule
+    // callout thread due to error.
+    return false;
 }
 
 //*********************************************************************************
@@ -3064,17 +3285,17 @@ done:
 
 void IOService::notifyInterestedDriversDone ( void )
 {
-	IOPMinformee *		informee;
-	IOItemCount			count;
-	DriverCallParam *	param;
-	IOReturn			result;
+    IOPMinformee *		informee;
+    IOItemCount			count;
+    DriverCallParam *   param;
+    IOReturn            result;
 
 	PM_ASSERT_IN_GATE();
+	assert( fDriverCallBusy == false );
+	assert( fMachineState == kIOPM_DriverThreadCallDone );
+
 	param = (DriverCallParam *) fDriverCallParamPtr;
 	count = fDriverCallParamCount;
-
-	assert( fLockedFlags.DriverCallBusy == false );
-	assert( fMachineState == kIOPM_DriverThreadCallDone );
 
 	if (param && count)
 	{
@@ -3128,10 +3349,23 @@ void IOService::notifyInterestedDriversDone ( void )
 		}
 	}
 
-	// Hop back to original machine state path (from notifyAll)
-	fMachineState = fNextMachineState;
+    MS_POP();  // pushed by notifyAll()
 
-	notifyChildren();
+    // If interest acks are outstanding, wait for fHeadNotePendingAcks to become
+    // zero before notifying children. This enforces the children after interest
+    // ordering even for async interest clients.
+
+    if (!fHeadNotePendingAcks)
+    {
+        notifyChildren();
+    }
+    else
+    {
+        MS_PUSH(fMachineState);
+        fMachineState = kIOPM_NotifyChildrenStart;
+        PM_LOG2("%s: %u outstanding async interest\n",
+            getName(), fHeadNotePendingAcks);
+    }
 }
 
 //*********************************************************************************
@@ -3144,6 +3378,17 @@ void IOService::notifyChildren ( void )
     OSObject *			next;
     IOPowerConnection *	connection;
 	OSArray *			children = 0;
+    IOPMrootDomain *    rootDomain;
+    bool                delayNotify = false;
+    
+    if ((fHeadNotePowerState != fCurrentPowerState) &&
+        (IS_POWER_DROP == fIsPreChange) &&
+        ((rootDomain = getPMRootDomain()) == this))
+    {
+        rootDomain->tracePoint( IS_POWER_DROP ?
+            kIOPMTracePointSleepPowerPlaneDrivers :
+            kIOPMTracePointWakePowerPlaneDrivers  );
+    }
 
 	if (fStrictTreeOrder)
 		children = OSArray::withCapacity(8);
@@ -3160,49 +3405,78 @@ void IOService::notifyChildren ( void )
             {
 				if (connection->getReadyFlag() == false)
 				{
-					PM_CONNECT("[%s] %s: connection not ready\n",
+					PM_LOG3("[%s] %s: connection not ready\n",
 						getName(), __FUNCTION__);
 					continue;
 				}
 
-				if (children)
+                // Mechanism to postpone the did-change notification to
+                // certain power children to order those children last.
+                // Cannot be used together with strict tree ordering.
+
+                if (!fIsPreChange &&
+                    (connection->delayChildNotification) &&
+                    getPMRootDomain()->shouldDelayChildNotification(this))
+                {
+                    if (!children)
+                    {
+                        children = OSArray::withCapacity(8);
+                        if (children)
+                            delayNotify = true;
+                    }
+                    if (delayNotify)
+                    {
+                        children->setObject( connection );
+                        continue;
+                    }
+                }
+
+				if (!delayNotify && children)
 					children->setObject( connection );
 				else
-					notifyChild( connection,
-						fDriverCallReason == kDriverCallInformPreChange );
+					notifyChild( connection );
 			}
         }
         iter->release();
     }
 
+    if (children && (children->getCount() == 0))
+    {
+        children->release();
+        children = 0;
+    }
 	if (children)
 	{
-		if (children->getCount() == 0)
-		{
-			children->release();
-			children = 0;
-		}
-		else
-		{
-			assert(fNotifyChildArray == 0);
-			fNotifyChildArray = children;
-			fNextMachineState = fMachineState;
-			fMachineState     = kIOPM_NotifyChildrenDone;
-		}		
+        assert(fNotifyChildArray == 0);
+        fNotifyChildArray = children;        
+        MS_PUSH(fMachineState);
+
+        if (delayNotify)
+        {
+            // Wait for exiting child notifications to complete,
+            // before notifying the children in the array.
+            fMachineState = kIOPM_NotifyChildrenDelayed;
+            PM_LOG2("%s: %d children in delayed array\n",
+                getName(), children->getCount());
+        }
+        else
+        {
+            // Notify children in the array one at a time.
+            fMachineState = kIOPM_NotifyChildrenOrdered;
+        }
 	}
 }
 
 //*********************************************************************************
-// [private] notifyChildrenDone
+// [private] notifyChildrenOrdered
 //*********************************************************************************
 
-void IOService::notifyChildrenDone ( void )
+void IOService::notifyChildrenOrdered ( void )
 {
 	PM_ASSERT_IN_GATE();
 	assert(fNotifyChildArray);
-	assert(fMachineState == kIOPM_NotifyChildrenDone);
+	assert(fMachineState == kIOPM_NotifyChildrenOrdered);
 
-	// Interested drivers have all acked (if any), ack timer stopped.
 	// Notify one child, wait for it to ack, then repeat for next child.
 	// This is a workaround for some drivers with multiple instances at
 	// the same branch in the power tree, but the driver is slow to power
@@ -3217,28 +3491,61 @@ void IOService::notifyChildrenDone ( void )
 		IOPowerConnection *	connection;
 		connection = (IOPowerConnection *) fNotifyChildArray->getObject(0);
 		fNotifyChildArray->removeObject(0);
-		notifyChild( connection, fDriverCallReason == kDriverCallInformPreChange );
+		notifyChild( connection );
 	}
 	else
 	{
 		fNotifyChildArray->release();
 		fNotifyChildArray = 0;
-		fMachineState = fNextMachineState;
+
+        MS_POP();   // pushed by notifyChildren()
 	}
+}
+
+//*********************************************************************************
+// [private] notifyChildrenDelayed
+//*********************************************************************************
+
+void IOService::notifyChildrenDelayed ( void )
+{
+    IOPowerConnection *	connection;
+
+	PM_ASSERT_IN_GATE();
+	assert(fNotifyChildArray);
+	assert(fMachineState == kIOPM_NotifyChildrenDelayed);
+
+    // Wait after all non-delayed children and interested drivers have ack'ed,
+    // then notify all delayed children. When explicitly cancelled, interest
+    // acks (and ack timer) may still be outstanding.
+
+    for (int i = 0; ; i++)
+    {
+		connection = (IOPowerConnection *) fNotifyChildArray->getObject(i);
+        if (!connection)
+            break;
+
+		notifyChild( connection );
+    }
+
+    PM_LOG2("%s: notified delayed children\n", getName());
+    fNotifyChildArray->release();
+    fNotifyChildArray = 0;
+    
+    MS_POP();   // pushed by notifyChildren()
 }
 
 //*********************************************************************************
 // [private] notifyAll
 //*********************************************************************************
 
-IOReturn IOService::notifyAll ( int nextMachineState, bool is_prechange )
+IOReturn IOService::notifyAll ( uint32_t nextMS )
 {
 	// Save the next machine_state to be restored by notifyInterestedDriversDone()
 
 	PM_ASSERT_IN_GATE();
-	fNextMachineState = nextMachineState;
+    MS_PUSH(nextMS);
 	fMachineState     = kIOPM_DriverThreadCallDone;
-	fDriverCallReason = is_prechange ?
+	fDriverCallReason = fIsPreChange ?
 						kDriverCallInformPreChange : kDriverCallInformPostChange;
 
 	if (!notifyInterestedDrivers())
@@ -3258,16 +3565,15 @@ IOReturn IOService::actionDriverCalloutDone (
 	void * arg0, void * arg1,
 	void * arg2, void * arg3 )
 {
-	IOServicePM * pwrMgt = (IOServicePM *) arg0;
+    IOServicePM * pwrMgt = (IOServicePM *) arg0;
 
-	PM_LOCK();
-	fLockedFlags.DriverCallBusy = false;
-	PM_UNLOCK();
+    assert( fDriverCallBusy );
+    fDriverCallBusy = false;
 
-	if (gIOPMReplyQueue)
-		gIOPMReplyQueue->signalWorkAvailable();
+    assert(gIOPMWorkQueue);
+    gIOPMWorkQueue->signalWorkAvailable();
 
-	return kIOReturnSuccess;
+    return kIOReturnSuccess;
 }
 
 void IOService::pmDriverCallout ( IOService * from )
@@ -3302,27 +3608,35 @@ void IOService::pmDriverCallout ( IOService * from )
 
 void IOService::driverSetPowerState ( void )
 {
-	IOService *			driver;
-	unsigned long		powerState;
-	DriverCallParam *	param;
-	IOReturn			result;
+    IOPMPowerStateIndex powerState;
+    DriverCallParam *	param;
+    IOPMDriverCallEntry callEntry;
     AbsoluteTime        end;
+    IOReturn            result;
+    uint32_t            oldPowerState = getPowerState();
 
-    assert( fLockedFlags.DriverCallBusy == true );
-	param = (DriverCallParam *) fDriverCallParamPtr;
-	assert( param );
-	assert( fDriverCallParamCount == 1 );
+    assert( fDriverCallBusy );
+    assert( fDriverCallParamPtr );
+    assert( fDriverCallParamCount == 1 );
 
-	driver = fControllingDriver;
-	powerState = fHeadNotePowerState;
+    param = (DriverCallParam *) fDriverCallParamPtr;
+    powerState = fHeadNotePowerState;
 
-	if (fLockedFlags.PMStop == false)
-	{
-		OUR_PMLog(          kPMLogProgramHardware, (uintptr_t) this, powerState);
+    if (assertPMDriverCall(&callEntry))
+    {
+        OUR_PMLog(          kPMLogProgramHardware, (uintptr_t) this, powerState);
         clock_get_uptime(&fDriverCallStartTime);
-		result = driver->setPowerState( powerState, this );
+        result = fControllingDriver->setPowerState( powerState, this );
         clock_get_uptime(&end);
-		OUR_PMLog((UInt32) -kPMLogProgramHardware, (uintptr_t) this, (UInt32) result);
+        OUR_PMLog((UInt32) -kPMLogProgramHardware, (uintptr_t) this, (UInt32) result);
+
+        deassertPMDriverCall(&callEntry);
+
+        if (result < 0)
+        {
+            PM_LOG("%s::setPowerState(%p, %lu -> %lu) returned 0x%x\n",
+                fName, this, fCurrentPowerState, powerState, result);
+        }
 
 #if LOG_SETPOWER_TIMES
         if ((result == IOPMAckImplied) || (result < 0))
@@ -3332,15 +3646,27 @@ void IOService::driverSetPowerState ( void )
             SUB_ABSOLUTETIME(&end, &fDriverCallStartTime);
             absolutetime_to_nanoseconds(end, &nsec);
             if (nsec > LOG_SETPOWER_TIMES)
-                PM_DEBUG("%s::setPowerState(%p, %lu -> %lu) took %d ms\n",
+                PM_LOG("%s::setPowerState(%p, %lu -> %lu) took %d ms\n",
                     fName, this, fCurrentPowerState, powerState, NS_TO_MS(nsec));
+
+            PMEventDetails *details = PMEventDetails::eventDetails(
+                                        kIOPMEventTypeSetPowerStateImmediate, // type
+                                        fName,								  // who
+                                        (uintptr_t)this,					  // owner unique
+                                        NULL,								  // interest name
+                                        (uint8_t)oldPowerState,				  // old
+                                        (uint8_t)powerState,				  // new
+                                        0,									  // result
+                                        NS_TO_US(nsec));					  // usec completion time
+
+            getPMRootDomain()->recordAndReleasePMEventGated( details );
         }
 #endif
-	}
-	else
-		result = kIOPMAckImplied;
+    }
+    else
+        result = kIOPMAckImplied;
 
-	param->Result = result;
+    param->Result = result;
 }
 
 //*********************************************************************************
@@ -3351,46 +3677,51 @@ void IOService::driverSetPowerState ( void )
 
 void IOService::driverInformPowerChange ( void )
 {
-	IOItemCount			count;
-	IOPMinformee *		informee;
-	IOService *			driver;
-	IOReturn			result;
-	IOPMPowerFlags		powerFlags;
-	unsigned long		powerState;
-	DriverCallParam *	param;
+    IOPMinformee *		informee;
+    IOService *			driver;
+    DriverCallParam *	param;
+    IOPMDriverCallEntry callEntry;
+    IOPMPowerFlags		powerFlags;
+    IOPMPowerStateIndex powerState;
     AbsoluteTime        end;
+    IOReturn            result;
+    IOItemCount			count;
 
-    assert( fLockedFlags.DriverCallBusy == true );
-	param = (DriverCallParam *) fDriverCallParamPtr;
-	count = fDriverCallParamCount;
-	assert( count && param );
+    assert( fDriverCallBusy );
+    assert( fDriverCallParamPtr );
+    assert( fDriverCallParamCount );
 
-	powerFlags = fHeadNotePowerArrayEntry->capabilityFlags;
-	powerState = fHeadNotePowerState;
+    param = (DriverCallParam *) fDriverCallParamPtr;
+    count = fDriverCallParamCount;
 
-	for (IOItemCount i = 0; i < count; i++)
-	{
-		informee = (IOPMinformee *) param->Target;
-		driver   = informee->whatObject;
+    powerFlags = fHeadNotePowerArrayEntry->capabilityFlags;
+    powerState = fHeadNotePowerState;
 
-		if ((fLockedFlags.PMStop == false) && informee->active)
-		{
-			if (fDriverCallReason == kDriverCallInformPreChange)
-			{
-				OUR_PMLog(kPMLogInformDriverPreChange, (uintptr_t) this, powerState);
+    for (IOItemCount i = 0; i < count; i++)
+    {
+        informee = (IOPMinformee *) param->Target;
+        driver   = informee->whatObject;
+
+        if (assertPMDriverCall(&callEntry, 0, informee))
+        {
+            if (fDriverCallReason == kDriverCallInformPreChange)
+            {
+                OUR_PMLog(kPMLogInformDriverPreChange, (uintptr_t) this, powerState);
                 clock_get_uptime(&informee->startTime);
-				result = driver->powerStateWillChangeTo(powerFlags, powerState, this);
+                result = driver->powerStateWillChangeTo(powerFlags, powerState, this);
                 clock_get_uptime(&end);
-				OUR_PMLog((UInt32)-kPMLogInformDriverPreChange, (uintptr_t) this, result);
-			}
-			else
-			{
-				OUR_PMLog(kPMLogInformDriverPostChange, (uintptr_t) this, powerState);
+                OUR_PMLog((UInt32)-kPMLogInformDriverPreChange, (uintptr_t) this, result);
+            }
+            else
+            {
+                OUR_PMLog(kPMLogInformDriverPostChange, (uintptr_t) this, powerState);
                 clock_get_uptime(&informee->startTime);
-				result = driver->powerStateDidChangeTo(powerFlags, powerState, this);
+                result = driver->powerStateDidChangeTo(powerFlags, powerState, this);
                 clock_get_uptime(&end);
-				OUR_PMLog((UInt32)-kPMLogInformDriverPostChange, (uintptr_t) this, result);
-			}
+                OUR_PMLog((UInt32)-kPMLogInformDriverPostChange, (uintptr_t) this, result);
+            }
+    
+            deassertPMDriverCall(&callEntry);
 
 #if LOG_SETPOWER_TIMES
             if ((result == IOPMAckImplied) || (result < 0))
@@ -3400,19 +3731,35 @@ void IOService::driverInformPowerChange ( void )
                 SUB_ABSOLUTETIME(&end, &informee->startTime);
                 absolutetime_to_nanoseconds(end, &nsec);
                 if (nsec > LOG_SETPOWER_TIMES)
-                    PM_DEBUG("%s::powerState%sChangeTo(%p, %s, %lu -> %lu) took %d ms\n",
+                    PM_LOG("%s::powerState%sChangeTo(%p, %s, %lu -> %lu) took %d ms\n",
                         driver->getName(),
                         (fDriverCallReason == kDriverCallInformPreChange) ? "Will" : "Did",
                         driver, fName, fCurrentPowerState, powerState, NS_TO_MS(nsec));
+
+                uint16_t logType = (fDriverCallReason == kDriverCallInformPreChange) 
+                                    ? kIOPMEventTypePSWillChangeTo
+                                    : kIOPMEventTypePSDidChangeTo;
+
+                PMEventDetails *details = PMEventDetails::eventDetails(
+                                            logType,						// type
+                                            fName,							// who
+                                            (uintptr_t)this,				// owner unique
+                                            driver->getName(),				// interest name
+                                            (uint8_t)fCurrentPowerState,	// old
+                                            (uint8_t)fHeadNotePowerState,	// new
+                                            0,								// result
+                                            NS_TO_US(nsec));				// usec completion time
+
+                getPMRootDomain()->recordAndReleasePMEventGated( details );
             }
 #endif
-		}
-		else
-			result = kIOPMAckImplied;
+        }
+        else
+            result = kIOPMAckImplied;
 
-		param->Result = result;
-		param++;
-	}
+        param->Result = result;
+        param++;
+    }
 }
 
 //*********************************************************************************
@@ -3422,14 +3769,14 @@ void IOService::driverInformPowerChange ( void )
 // If the object acknowledges the current change, we return TRUE.
 //*********************************************************************************
 
-bool IOService::notifyChild ( IOPowerConnection * theNub, bool is_prechange )
+bool IOService::notifyChild ( IOPowerConnection * theNub )
 {
-    IOReturn		ret = IOPMAckImplied;
-    unsigned long	childPower;
-    IOService *		theChild;
-	IOPMRequest *	childRequest;
-    uint32_t        requestArg2;
-	int				requestType;
+    IOReturn                ret = IOPMAckImplied;
+    unsigned long           childPower;
+    IOService *             theChild;
+	IOPMRequest *           childRequest;
+    IOPMPowerChangeFlags    requestArg2;
+	int                     requestType;
 
 	PM_ASSERT_IN_GATE();
     theChild = (IOService *)(theNub->copyChildEntry(gIOPowerPlane));
@@ -3444,11 +3791,11 @@ bool IOService::notifyChild ( IOPowerConnection * theNub, bool is_prechange )
 	fHeadNotePendingAcks++;
     theNub->setAwaitingAck(true);
 
-    requestArg2 = fHeadNoteFlags;
+    requestArg2 = fHeadNoteChangeFlags;
     if (fHeadNotePowerState < fCurrentPowerState)
         requestArg2 |= kIOPMDomainPowerDrop;
 
-    requestType = is_prechange ?
+    requestType = fIsPreChange ?
         kIOPMRequestTypePowerDomainWillChange :
         kIOPMRequestTypePowerDomainDidChange;
 
@@ -3456,7 +3803,7 @@ bool IOService::notifyChild ( IOPowerConnection * theNub, bool is_prechange )
 	if (childRequest)
 	{
         theNub->retain();
-		childRequest->fArg0 = (void *) fHeadNotePowerArrayEntry->outputPowerCharacter;
+		childRequest->fArg0 = (void *) fHeadNotePowerArrayEntry->outputPowerFlags;
 		childRequest->fArg1 = (void *) theNub;
 		childRequest->fArg2 = (void *) requestArg2;
 		theChild->submitPMRequest( childRequest );
@@ -3481,6 +3828,246 @@ bool IOService::notifyChild ( IOPowerConnection * theNub, bool is_prechange )
 	return (IOPMAckImplied == ret);
 }
 
+//*********************************************************************************
+// [private] notifyControllingDriver
+//*********************************************************************************
+
+bool IOService::notifyControllingDriver ( void )
+{
+    DriverCallParam *	param;
+
+    PM_ASSERT_IN_GATE();
+    assert( fDriverCallParamCount == 0  );
+    assert( fControllingDriver );
+
+    if (fInitialSetPowerState)
+    {
+        // Driver specified flag to skip the inital setPowerState()
+        if (fHeadNotePowerArrayEntry->capabilityFlags & kIOPMInitialDeviceState)
+        {
+            return false;
+        }
+        fInitialSetPowerState = false;
+    }
+
+    param = (DriverCallParam *) fDriverCallParamPtr;
+    if (!param)
+    {
+        param = IONew(DriverCallParam, 1);
+        if (!param)
+            return false;	// no memory
+
+        fDriverCallParamPtr   = (void *) param;
+        fDriverCallParamSlots = 1;
+    }
+
+    param->Target = fControllingDriver;
+    fDriverCallParamCount = 1;
+    fDriverTimer = -1;
+
+    // Block state machine and wait for callout completion.
+    assert(!fDriverCallBusy);
+    fDriverCallBusy = true;
+    thread_call_enter( fDriverCallEntry );
+
+    return true;
+}
+
+//*********************************************************************************
+// [private] notifyControllingDriverDone
+//*********************************************************************************
+
+void IOService::notifyControllingDriverDone( void )
+{
+	DriverCallParam *	param;
+	IOReturn			result;
+
+	PM_ASSERT_IN_GATE();
+	param = (DriverCallParam *) fDriverCallParamPtr;
+
+	assert( fDriverCallBusy == false );
+	assert( fMachineState == kIOPM_DriverThreadCallDone );
+
+	if (param && fDriverCallParamCount)
+	{
+		assert(fDriverCallParamCount == 1);
+		
+		// the return value from setPowerState()
+		result = param->Result;
+
+		if ((result == IOPMAckImplied) || (result < 0))
+		{
+            fDriverTimer = 0;
+		}
+		else if (fDriverTimer)
+		{
+            assert(fDriverTimer == -1);
+
+            // Driver has not acked, and has returned a positive result.
+            // Enforce a minimum permissible timeout value.
+            // Make the min value large enough so timeout is less likely
+            // to occur if a driver misinterpreted that the return value
+            // should be in microsecond units.  And make it large enough
+            // to be noticeable if a driver neglects to ack.
+
+            if (result < kMinAckTimeoutTicks)
+                result = kMinAckTimeoutTicks;
+
+            fDriverTimer = (result / (ACK_TIMER_PERIOD / ns_per_us)) + 1;
+		}
+		// else, child has already acked and driver_timer reset to 0.
+
+		fDriverCallParamCount = 0;
+
+		if ( fDriverTimer )
+		{
+			OUR_PMLog(kPMLogStartAckTimer, 0, 0);
+			start_ack_timer();
+		}
+	}
+
+    MS_POP();   // pushed by OurChangeSetPowerState()
+    fIsPreChange  = false;
+}
+
+//*********************************************************************************
+// [private] all_done
+//
+// A power change is done.
+//*********************************************************************************
+
+void IOService::all_done ( void )
+{
+    IOPMPowerStateIndex     prevPowerState;
+    const IOPMPSEntry *     powerStatePtr;
+    IOPMDriverCallEntry     callEntry;
+    uint32_t                prevMachineState = fMachineState;
+    bool                    callAction = false;
+
+    fMachineState = kIOPM_Finished;
+
+    if ((fHeadNoteChangeFlags & kIOPMSynchronize) &&
+        ((prevMachineState == kIOPM_Finished) ||
+         (prevMachineState == kIOPM_SyncFinish)))
+    {
+        // Sync operation and no power change occurred.
+        // Do not inform driver and clients about this request completion,
+        // except for the originator (root domain).
+
+        PM_ACTION_2(actionPowerChangeDone,
+            fHeadNotePowerState, fHeadNoteChangeFlags);
+
+        if (getPMRequestType() == kIOPMRequestTypeSynchronizePowerTree)
+        {
+            powerChangeDone(fCurrentPowerState);
+        }
+
+        return;
+    }
+
+    // our power change
+    if ( fHeadNoteChangeFlags & kIOPMSelfInitiated )
+    {
+        // could our driver switch to the new state?
+        if ( !( fHeadNoteChangeFlags & kIOPMNotDone) )
+        {
+			// we changed, tell our parent
+            requestDomainPower(fHeadNotePowerState);
+
+            // yes, did power raise?
+            if ( fCurrentPowerState < fHeadNotePowerState )
+            {
+                // yes, inform clients and apps
+                tellChangeUp (fHeadNotePowerState);
+            }
+            prevPowerState = fCurrentPowerState;
+            // either way
+            fCurrentPowerState = fHeadNotePowerState;
+#if PM_VARS_SUPPORT
+            fPMVars->myCurrentState = fCurrentPowerState;
+#endif
+            OUR_PMLog(kPMLogChangeDone, fCurrentPowerState, 0);
+            PM_ACTION_2(actionPowerChangeDone,
+                fHeadNotePowerState, fHeadNoteChangeFlags);
+            callAction = true;
+
+            powerStatePtr = &fPowerStates[fCurrentPowerState];
+            fCurrentCapabilityFlags = powerStatePtr->capabilityFlags;
+            if (fCurrentCapabilityFlags & kIOPMStaticPowerValid)
+                fCurrentPowerConsumption = powerStatePtr->staticPower;
+
+            // inform subclass policy-maker
+            if (fPCDFunctionOverride && fParentsKnowState &&
+                assertPMDriverCall(&callEntry, kIOPMADC_NoInactiveCheck))
+            {
+                powerChangeDone(prevPowerState);
+                deassertPMDriverCall(&callEntry);
+            }
+        }
+        else if (getPMRequestType() == kIOPMRequestTypeRequestPowerStateOverride)
+        {
+            // changePowerStateWithOverrideTo() was cancelled
+            fOverrideMaxPowerState = kIOPMPowerStateMax;
+        }
+    }
+
+    // parent's power change
+    if ( fHeadNoteChangeFlags & kIOPMParentInitiated)
+    {
+        if (((fHeadNoteChangeFlags & kIOPMDomainWillChange) &&
+             (fCurrentPowerState >= fHeadNotePowerState))   ||
+			  ((fHeadNoteChangeFlags & kIOPMDomainDidChange)  &&
+             (fCurrentPowerState < fHeadNotePowerState)))
+        {
+            // did power raise?
+            if ( fCurrentPowerState < fHeadNotePowerState )
+            {
+                // yes, inform clients and apps
+                tellChangeUp (fHeadNotePowerState);
+            }
+            // either way
+            prevPowerState = fCurrentPowerState;
+            fCurrentPowerState = fHeadNotePowerState;
+#if PM_VARS_SUPPORT
+            fPMVars->myCurrentState = fCurrentPowerState;
+#endif
+            fMaxPowerState = fControllingDriver->maxCapabilityForDomainState(fHeadNoteDomainFlags);
+
+            OUR_PMLog(kPMLogChangeDone, fCurrentPowerState, 0);
+            PM_ACTION_2(actionPowerChangeDone,
+                fHeadNotePowerState, fHeadNoteChangeFlags);
+            callAction = true;
+
+            powerStatePtr = &fPowerStates[fCurrentPowerState];
+            fCurrentCapabilityFlags = powerStatePtr->capabilityFlags;
+            if (fCurrentCapabilityFlags & kIOPMStaticPowerValid)
+                fCurrentPowerConsumption = powerStatePtr->staticPower;
+
+            // inform subclass policy-maker
+            if (fPCDFunctionOverride && fParentsKnowState &&
+                assertPMDriverCall(&callEntry, kIOPMADC_NoInactiveCheck))
+            {
+                powerChangeDone(prevPowerState);
+                deassertPMDriverCall(&callEntry);
+            }
+        }
+    }
+
+    // When power rises enough to satisfy the tickle's desire for more power,
+    // the condition preventing idle-timer from dropping power is removed.
+
+    if (fCurrentPowerState >= fIdleTimerMinPowerState)
+    {
+        fIdleTimerMinPowerState = 0;
+    }
+
+    if (!callAction)
+    {
+        PM_ACTION_2(actionPowerChangeDone,
+            fHeadNotePowerState, fHeadNoteChangeFlags);
+    }
+}
+
 // MARK: -
 // MARK: Power Change Initiated by Driver
 
@@ -3495,13 +4082,13 @@ void IOService::OurChangeStart ( void )
 	PM_ASSERT_IN_GATE();
     OUR_PMLog( kPMLogStartDeviceChange, fHeadNotePowerState, fCurrentPowerState );
 
-	// fMaxCapability is our maximum possible power state based on the current
+	// fMaxPowerState is our maximum possible power state based on the current
 	// power state of our parents.  If we are trying to raise power beyond the
 	// maximum, send an async request for more power to all parents.
 
-    if (!IS_PM_ROOT() && (fMaxCapability < fHeadNotePowerState))
+    if (!IS_PM_ROOT && (fMaxPowerState < fHeadNotePowerState))
     {
-        fHeadNoteFlags |= kIOPMNotDone;
+        fHeadNoteChangeFlags |= kIOPMNotDone;
         requestDomainPower(fHeadNotePowerState);
         OurChangeFinish();
         return;
@@ -3509,36 +4096,29 @@ void IOService::OurChangeStart ( void )
 
 	// Redundant power changes skips to the end of the state machine.
 
-    if (!fInitialChange && (fHeadNotePowerState == fCurrentPowerState))
+    if (!fInitialPowerChange && (fHeadNotePowerState == fCurrentPowerState))
 	{
 		OurChangeFinish();
 		return;
     }
-    fInitialChange = false;
+    fInitialPowerChange = false;
 
-#if ROOT_DOMAIN_RUN_STATES
     // Change started, but may not complete...
     // Can be canceled (power drop) or deferred (power rise).
 
-    getPMRootDomain()->handlePowerChangeStartForService(
-                        /* service */       this,
-                        /* RD flags */      &fRootDomainState,
-                        /* new pwr state */ fHeadNotePowerState,
-                        /* change flags */  fHeadNoteFlags );
-#endif
+    PM_ACTION_2(actionPowerChangeStart, fHeadNotePowerState, &fHeadNoteChangeFlags);
 
 	// Two separate paths, depending if power is being raised or lowered.
 	// Lowering power is subject to approval by clients of this service.
 
     if (IS_POWER_DROP)
     {
-		// Next machine state for a power drop.
-        fMachineState = kIOPM_OurChangeTellClientsPowerDown;
         fDoNotPowerDown = false;
 
-        // Ask apps and kernel clients permission to lower power.	
+        // Ask for persmission to drop power state
+        fMachineState = kIOPM_OurChangeTellClientsPowerDown;
         fOutOfBandParameter = kNotifyApps;
-		askChangeDown(fHeadNotePowerState);
+        askChangeDown(fHeadNotePowerState);
     }
 	else
 	{
@@ -3554,7 +4134,6 @@ void IOService::OurChangeStart ( void )
         // then the child will signal the parent to adjust power, and the child
         // will defer its power change.
 
-#if RESERVE_DOMAIN_POWER
         IOReturn ret;
 
         // Reserve parent power necessary to achieve fHeadNotePowerState.
@@ -3562,13 +4141,12 @@ void IOService::OurChangeStart ( void )
         if (ret != kIOReturnSuccess)
         {
             // Reservation failed, defer power rise.
-            fHeadNoteFlags |= kIOPMNotDone;
+            fHeadNoteChangeFlags |= kIOPMNotDone;
             OurChangeFinish();
             return;
         }
-#endif
-		// Notify interested drivers and children.
-        notifyAll( kIOPM_OurChangeSetPowerState, kNotifyWillChange );
+
+        OurChangeTellCapabilityWillChange();
     }
 }
 
@@ -3613,26 +4191,26 @@ requestDomainPowerApplier(
 //*********************************************************************************
 
 IOReturn IOService::requestDomainPower(
-    unsigned long   ourPowerState,
-    IOOptionBits    options )
+    IOPMPowerStateIndex ourPowerState,
+    IOOptionBits        options )
 {
-    const IOPMPowerState *          powerStateEntry;
+    const IOPMPSEntry *             powerStateEntry;
     IOPMPowerFlags                  requestPowerFlags;
-    unsigned long                   maxPowerState;
+    IOPMPowerStateIndex             maxPowerState;
     IOPMRequestDomainPowerContext   context;
 
 	PM_ASSERT_IN_GATE();
     assert(ourPowerState < fNumberOfPowerStates);
     if (ourPowerState >= fNumberOfPowerStates)
         return kIOReturnBadArgument;
-    if (IS_PM_ROOT())
+    if (IS_PM_ROOT)
         return kIOReturnSuccess;
 
     // Fetch the input power flags for the requested power state.
     // Parent request is stated in terms of required power flags.
 
 	powerStateEntry = &fPowerStates[ourPowerState];
-	requestPowerFlags = powerStateEntry->inputPowerRequirement;
+	requestPowerFlags = powerStateEntry->inputPowerFlags;
 
     if (powerStateEntry->capabilityFlags & (kIOPMChildClamp | kIOPMPreventIdleSleep))
         requestPowerFlags |= kIOPMPreventIdleSleep;
@@ -3642,12 +4220,12 @@ IOReturn IOService::requestDomainPower(
     // Disregard the "previous request" for power reservation.
 
     if (((options & kReserveDomainPower) == 0) &&
-        (fPreviousRequest == requestPowerFlags))
+        (fPreviousRequestPowerFlags == requestPowerFlags))
     {
         // skip if domain already knows our requirements
         goto done;
     }
-    fPreviousRequest = requestPowerFlags;
+    fPreviousRequestPowerFlags = requestPowerFlags;
 
     context.child              = this;
     context.requestPowerFlags  = requestPowerFlags;
@@ -3661,7 +4239,7 @@ IOReturn IOService::requestDomainPower(
 
         if (maxPowerState < fHeadNotePowerState)
         {
-            PM_TRACE("%s: power desired %u:0x%x got %u:0x%x\n",
+            PM_LOG1("%s: power desired %u:0x%x got %u:0x%x\n",
                 getName(),
                 (uint32_t) ourPowerState, (uint32_t) requestPowerFlags,
                 (uint32_t) maxPowerState, (uint32_t) fHeadNoteDomainTargetFlags);
@@ -3681,30 +4259,38 @@ void IOService::OurSyncStart ( void )
 {
 	PM_ASSERT_IN_GATE();
 
-    if (fInitialChange)
+    if (fInitialPowerChange)
         return;
 
-#if ROOT_DOMAIN_RUN_STATES
-    getPMRootDomain()->handlePowerChangeStartForService(
-                        /* service */       this,
-                        /* RD flags */      &fRootDomainState,
-                        /* new pwr state */ fHeadNotePowerState,
-                        /* change flags */  fHeadNoteFlags );
-#endif
+    PM_ACTION_2(actionPowerChangeStart, fHeadNotePowerState, &fHeadNoteChangeFlags);
 
-    fMachineState     = kIOPM_SyncNotifyDidChange;
-    fDriverCallReason = kDriverCallInformPreChange;
+    if (fHeadNoteChangeFlags & kIOPMNotDone)
+    {
+		OurChangeFinish();
+		return;
+    }
 
-    notifyChildren();
+    if (fHeadNoteChangeFlags & kIOPMSyncTellPowerDown)
+    {
+        fDoNotPowerDown = false;
+
+        // Ask for permission to drop power state
+        fMachineState = kIOPM_SyncTellClientsPowerDown;
+        fOutOfBandParameter = kNotifyApps;
+        askChangeDown(fHeadNotePowerState);
+    }
+    else
+    {
+        // Only inform capability app and clients.
+        tellSystemCapabilityChange( kIOPM_SyncNotifyWillChange );
+    }
 }
 
 //*********************************************************************************
 // [private] OurChangeTellClientsPowerDown
 //
-// All registered applications and kernel clients have positively acknowledged our
-// intention of lowering power.  Here we notify them all that we will definitely
-// lower the power.  If we don't have to wait for any of them to acknowledge, we
-// carry on by notifying interested drivers.  Otherwise, we do wait.
+// All applications and kernel clients have acknowledged our permission to drop
+// power. Here we notify them that we will lower the power and wait for acks. 
 //*********************************************************************************
 
 void IOService::OurChangeTellClientsPowerDown ( void )
@@ -3716,10 +4302,8 @@ void IOService::OurChangeTellClientsPowerDown ( void )
 //*********************************************************************************
 // [private] OurChangeTellPriorityClientsPowerDown
 //
-// All registered applications and kernel clients have positively acknowledged our
-// intention of lowering power.  Here we notify "priority" clients that we are
-// lowering power.  If we don't have to wait for any of them to acknowledge, we
-// carry on by notifying interested drivers.  Otherwise, we do wait.
+// All applications and kernel clients have acknowledged our intention to drop
+// power.  Here we notify "priority" clients that we are lowering power.
 //*********************************************************************************
 
 void IOService::OurChangeTellPriorityClientsPowerDown ( void )
@@ -3729,79 +4313,122 @@ void IOService::OurChangeTellPriorityClientsPowerDown ( void )
 }
 
 //*********************************************************************************
+// [private] OurChangeTellCapabilityWillChange
+//
+// Extra stage for root domain to notify apps and drivers about the
+// system capability change when raising power state.
+//*********************************************************************************
+
+void IOService::OurChangeTellCapabilityWillChange ( void )
+{
+    if (!IS_ROOT_DOMAIN)
+        return OurChangeNotifyInterestedDriversWillChange();
+
+    tellSystemCapabilityChange( kIOPM_OurChangeNotifyInterestedDriversWillChange );
+}
+
+//*********************************************************************************
 // [private] OurChangeNotifyInterestedDriversWillChange
 //
-// All registered applications and kernel clients have acknowledged our notification
-// that we are lowering power.  Here we notify interested drivers.  If we don't have
-// to wait for any of them to acknowledge, we instruct our power driver to make the
-// change. Otherwise, we do wait.
+// All applications and kernel clients have acknowledged our power state change.
+// Here we notify interested drivers pre-change.
 //*********************************************************************************
 
 void IOService::OurChangeNotifyInterestedDriversWillChange ( void )
 {
-    IOPMrootDomain  *rootDomain;
+    IOPMrootDomain * rootDomain;
     if ((rootDomain = getPMRootDomain()) == this)
     {
-        rootDomain->tracePoint(kIOPMTracePointSystemSleepDriversPhase);
+        if (IS_POWER_DROP)
+        {
+            rootDomain->tracePoint( kIOPMTracePointSleepWillChangeInterests );
+
+            PMEventDetails *details = PMEventDetails::eventDetails(
+                                        kIOPMEventTypeAppNotificationsFinished,
+                                        NULL,
+                                        100,
+                                        kIOReturnSuccess);
+            rootDomain->recordAndReleasePMEventGated( details );
+        }
+        else
+            rootDomain->tracePoint( kIOPMTracePointWakeWillChangeInterests );
     }
 
-    notifyAll( kIOPM_OurChangeSetPowerState, kNotifyWillChange );
+    notifyAll( kIOPM_OurChangeSetPowerState );
 }
 
 //*********************************************************************************
 // [private] OurChangeSetPowerState
 //
-// All interested drivers have acknowledged our pre-change notification of a power
-// change we initiated.  Here we instruct our controlling driver to make
-// the change to the hardware.  If it does so, we continue processing
-// (waiting for settle and notifying interested parties post-change.)
-// If it doesn't, we have to wait for it to acknowledge and then continue.
+// Instruct our controlling driver to program the hardware for the power state
+// change. Wait for async completions.
 //*********************************************************************************
 
 void IOService::OurChangeSetPowerState ( void )
 {
-    fNextMachineState = kIOPM_OurChangeWaitForPowerSettle;
-	fMachineState     = kIOPM_DriverThreadCallDone;
-	fDriverCallReason = kDriverCallSetPowerState;
+    MS_PUSH( kIOPM_OurChangeWaitForPowerSettle );
+    fMachineState     = kIOPM_DriverThreadCallDone;
+    fDriverCallReason = kDriverCallSetPowerState;
 
-	if (notifyControllingDriver() == false)
-		notifyControllingDriverDone();
+    if (notifyControllingDriver() == false)
+        notifyControllingDriverDone();
 }
 
 //*********************************************************************************
 // [private] OurChangeWaitForPowerSettle
 //
-// Our controlling driver has changed power state on the hardware
-// during a power change we initiated. Wait for the driver specified
-// settle time to expire, before notifying interested parties post-change.
+// Our controlling driver has completed the power state change we initiated.
+// Wait for the driver specified settle time to expire.
 //*********************************************************************************
 
-void IOService::OurChangeWaitForPowerSettle( void )
+void IOService::OurChangeWaitForPowerSettle ( void )
 {
-	fMachineState = kIOPM_OurChangeNotifyInterestedDriversDidChange;
+    fMachineState = kIOPM_OurChangeNotifyInterestedDriversDidChange;
     startSettleTimer();
 }
 
 //*********************************************************************************
 // [private] OurChangeNotifyInterestedDriversDidChange
 //
-// Power has settled on a power change we initiated.  Here we notify
-// all our interested parties post-change.  If they all acknowledge, we're
-// done with this change note, and we can start on the next one.
-// Otherwise we have to wait for acknowledgements and finish up later.
+// Power has settled on a power change we initiated. Here we notify
+// all our interested drivers post-change.
 //*********************************************************************************
 
 void IOService::OurChangeNotifyInterestedDriversDidChange ( void )
 {
-    notifyAll( kIOPM_OurChangeFinish, kNotifyDidChange );
+    IOPMrootDomain * rootDomain;
+    if ((rootDomain = getPMRootDomain()) == this)
+    {
+        rootDomain->tracePoint( IS_POWER_DROP ?
+            kIOPMTracePointSleepDidChangeInterests :
+            kIOPMTracePointWakeDidChangeInterests  );
+    }
+
+    notifyAll( kIOPM_OurChangeTellCapabilityDidChange );
+}
+
+//*********************************************************************************
+// [private] OurChangeTellCapabilityDidChange
+//
+// For root domain to notify capability power-change.
+//*********************************************************************************
+
+void IOService::OurChangeTellCapabilityDidChange ( void )
+{
+    if (!IS_ROOT_DOMAIN)
+        return OurChangeFinish();
+
+    getPMRootDomain()->tracePoint( IS_POWER_DROP ?
+        kIOPMTracePointSleepCapabilityClients :
+        kIOPMTracePointWakeCapabilityClients  );
+
+    tellSystemCapabilityChange( kIOPM_OurChangeFinish );
 }
 
 //*********************************************************************************
 // [private] OurChangeFinish
 //
-// Power has settled on a power change we initiated, and
-// all our interested parties have acknowledged.  We're
-// done with this change note, and we can start on the next one.
+// Done with this self-induced power state change.
 //*********************************************************************************
 
 void IOService::OurChangeFinish ( void )
@@ -3829,17 +4456,11 @@ IOReturn IOService::ParentChangeStart ( void )
 		// TODO: redundant? See handlePowerDomainWillChangeTo()
 		setParentInfo( fHeadNoteParentFlags, fHeadNoteParentConnection, true );
 
-#if ROOT_DOMAIN_RUN_STATES
-        getPMRootDomain()->handlePowerChangeStartForService(
-                            /* service */       this,
-                            /* RD flags */      &fRootDomainState,
-                            /* new pwr state */ fHeadNotePowerState,
-                            /* change flags */  fHeadNoteFlags );
-#endif
+        PM_ACTION_2(actionPowerChangeStart, fHeadNotePowerState, &fHeadNoteChangeFlags);
 
-    	// tell apps and kernel clients
-    	fInitialChange = false;
-        fMachineState = kIOPM_ParentDownTellPriorityClientsPowerDown;
+    	// Tell apps and kernel clients
+    	fInitialPowerChange = false;
+        fMachineState = kIOPM_ParentChangeTellPriorityClientsPowerDown;
 		tellChangeDown1(fHeadNotePowerState);
         return IOPMWillAckLater;
     }
@@ -3864,24 +4485,19 @@ IOReturn IOService::ParentChangeStart ( void )
         }
     }
 
-    if ( fHeadNoteFlags & kIOPMDomainDidChange )
+    if ( fHeadNoteChangeFlags & kIOPMDomainDidChange )
 	{
         if ( fHeadNotePowerState > fCurrentPowerState )
         {
-#if ROOT_DOMAIN_RUN_STATES
-            getPMRootDomain()->handlePowerChangeStartForService(
-                                /* service */       this,
-                                /* RD flags */      &fRootDomainState,
-                                /* new pwr state */ fHeadNotePowerState,
-                                /* change flags */  fHeadNoteFlags );
-#endif
+            PM_ACTION_2(actionPowerChangeStart,
+                fHeadNotePowerState, &fHeadNoteChangeFlags);
 
             // Parent did change up - start our change up
-            fInitialChange = false;
-            notifyAll( kIOPM_ParentUpSetPowerState, kNotifyWillChange );
+            fInitialPowerChange = false;            
+            ParentChangeTellCapabilityWillChange();
             return IOPMWillAckLater;
         }
-        else if (fHeadNoteFlags & kIOPMSynchronize)
+        else if (fHeadNoteChangeFlags & kIOPMSynchronize)
         {
             // We do not need to change power state, but notify
             // children to propagate tree synchronization.
@@ -3897,102 +4513,108 @@ IOReturn IOService::ParentChangeStart ( void )
 }
 
 //*********************************************************************************
-// [private] ParentDownTellPriorityClientsPowerDown
+// [private] ParentChangeTellPriorityClientsPowerDown
 //
-// All applications and kernel clients have been notified of a power lowering
-// initiated by the parent and we had to wait for responses.  Here
-// we notify any priority clients.  If they all ack, we continue with the power change.
-// If at least one doesn't, we have to wait for it to acknowledge and then continue.
+// All applications and kernel clients have acknowledged our intention to drop
+// power.  Here we notify "priority" clients that we are lowering power.
 //*********************************************************************************
 
-void IOService::ParentDownTellPriorityClientsPowerDown ( void )
+void IOService::ParentChangeTellPriorityClientsPowerDown ( void )
 {
-    fMachineState = kIOPM_ParentDownNotifyInterestedDriversWillChange;
+    fMachineState = kIOPM_ParentChangeNotifyInterestedDriversWillChange;
 	tellChangeDown2(fHeadNotePowerState);
 }
 
 //*********************************************************************************
-// [private] ParentDownNotifyInterestedDriversWillChange
+// [private] ParentChangeTellCapabilityWillChange
 //
-// All applications and kernel clients have been notified of a power lowering
-// initiated by the parent and we had to wait for their responses.  Here we notify
-// any interested drivers and power domain children.  If they all ack, we continue
-// with the power change.
-// If at least one doesn't, we have to wait for it to acknowledge and then continue.
+// All (legacy) applications and kernel clients have acknowledged, extra stage for
+// root domain to notify apps and drivers about the system capability change.
 //*********************************************************************************
 
-void IOService::ParentDownNotifyInterestedDriversWillChange ( void )
+void IOService::ParentChangeTellCapabilityWillChange ( void )
 {
-    IOPMrootDomain  *rootDomain;
-    if ((rootDomain = getPMRootDomain()) == this)
-    {
-        rootDomain->tracePoint(kIOPMTracePointSystemSleepDriversPhase);
-    }
+    if (!IS_ROOT_DOMAIN)
+        return ParentChangeNotifyInterestedDriversWillChange();
 
-	notifyAll( kIOPM_ParentDownSetPowerState, kNotifyWillChange );
+    tellSystemCapabilityChange( kIOPM_ParentChangeNotifyInterestedDriversWillChange );
 }
 
 //*********************************************************************************
-// [private] ParentDownSetPowerState
+// [private] ParentChangeNotifyInterestedDriversWillChange
 //
-// We had to wait for it, but all parties have acknowledged our pre-change
-// notification of a power lowering initiated by the parent.
-// Here we instruct our controlling driver
-// to put the hardware in the state it needs to be in when the domain is
-// lowered.  If it does so, we continue processing
-// (waiting for settle and acknowledging the parent.)
-// If it doesn't, we have to wait for it to acknowledge and then continue.
+// All applications and kernel clients have acknowledged our power state change.
+// Here we notify interested drivers pre-change.
 //*********************************************************************************
 
-void IOService::ParentDownSetPowerState ( void )
+void IOService::ParentChangeNotifyInterestedDriversWillChange ( void )
 {
-	fNextMachineState = kIOPM_ParentDownWaitForPowerSettle;
-	fMachineState     = kIOPM_DriverThreadCallDone;
-	fDriverCallReason = kDriverCallSetPowerState;
-
-	if (notifyControllingDriver() == false)
-		notifyControllingDriverDone();
+	notifyAll( kIOPM_ParentChangeSetPowerState );
 }
 
 //*********************************************************************************
-// [private] ParentDownWaitForPowerSettle
+// [private] ParentChangeSetPowerState
 //
-// Our controlling driver has changed power state on the hardware
-// during a power change initiated by our parent.  We have had to wait
-// for acknowledgement from interested parties, or we have had to wait
-// for the controlling driver to change the state.  Here we see if we need
-// to wait for power to settle before continuing.  If not, we continue
-// processing (acknowledging our preparedness to the parent).
-// If so, we wait and continue later.
+// Instruct our controlling driver to program the hardware for the power state
+// change. Wait for async completions.
 //*********************************************************************************
 
-void IOService::ParentDownWaitForPowerSettle ( void )
+void IOService::ParentChangeSetPowerState ( void )
 {
-	fMachineState = kIOPM_ParentDownNotifyDidChangeAndAcknowledgeChange;
+    MS_PUSH( kIOPM_ParentChangeWaitForPowerSettle );
+    fMachineState     = kIOPM_DriverThreadCallDone;
+    fDriverCallReason = kDriverCallSetPowerState;
+
+    if (notifyControllingDriver() == false)
+        notifyControllingDriverDone();
+}
+
+//*********************************************************************************
+// [private] ParentChangeWaitForPowerSettle
+//
+// Our controlling driver has completed the power state change initiated by our
+// parent. Wait for the driver specified settle time to expire.
+//*********************************************************************************
+
+void IOService::ParentChangeWaitForPowerSettle ( void )
+{
+	fMachineState = kIOPM_ParentChangeNotifyInterestedDriversDidChange;
     startSettleTimer();
 }
 
 //*********************************************************************************
-// [private] ParentDownNotifyDidChangeAndAcknowledgeChange
+// [private] ParentChangeNotifyInterestedDriversDidChange
 //
-// Power has settled on a power change initiated by our parent.  Here we
-// notify interested parties.
+// Power has settled on a power change initiated by our parent. Here we notify
+// all our interested drivers post-change.
 //*********************************************************************************
 
-void IOService::ParentDownNotifyDidChangeAndAcknowledgeChange ( void )
+void IOService::ParentChangeNotifyInterestedDriversDidChange ( void )
 {
-	notifyAll( kIOPM_ParentAcknowledgePowerChange, kNotifyDidChange );	
+	notifyAll( kIOPM_ParentChangeTellCapabilityDidChange );	
+}
+
+//*********************************************************************************
+// [private] ParentChangeTellCapabilityDidChange
+//
+// For root domain to notify capability power-change.
+//*********************************************************************************
+
+void IOService::ParentChangeTellCapabilityDidChange ( void )
+{
+    if (!IS_ROOT_DOMAIN)
+        return ParentChangeAcknowledgePowerChange();
+
+    tellSystemCapabilityChange( kIOPM_ParentChangeAcknowledgePowerChange );
 }
 
 //*********************************************************************************
 // [private] ParentAcknowledgePowerChange
 //
-// We had to wait for it, but all parties have acknowledged our post-change
-// notification of a power change (either Up or Down) initiated by the parent.
-// Here we acknowledge the parent.
+// Acknowledge our power parent that our power change is done. 
 //*********************************************************************************
 
-void IOService::ParentAcknowledgePowerChange ( void )
+void IOService::ParentChangeAcknowledgePowerChange ( void )
 {
     IORegistryEntry *	nub;
     IOService *			parent;
@@ -4009,186 +4631,20 @@ void IOService::ParentAcknowledgePowerChange ( void )
     nub->release();
 }
 
-//*********************************************************************************
-// [private] ParentUpSetPowerState
-//
-// Our parent has informed us via powerStateDidChange that it has
-// raised the power in our power domain, and we have had to wait
-// for some interested party to acknowledge our notification.
-//   Here we instruct our controlling
-// driver to program the hardware to take advantage of the higher domain
-// power.  If it does so, we continue processing
-// (waiting for settle and notifying interested parties post-change.)
-// If it doesn't, we have to wait for it to acknowledge and then continue.
-//*********************************************************************************
-
-void IOService::ParentUpSetPowerState ( void )
-{
-	fNextMachineState = kIOPM_ParentUpWaitForSettleTime;
-	fMachineState     = kIOPM_DriverThreadCallDone;
-	fDriverCallReason = kDriverCallSetPowerState;
-
-	if (notifyControllingDriver() == false)
-		notifyControllingDriverDone();
-}
+// MARK: -
+// MARK: Ack and Settle timers
 
 //*********************************************************************************
-// [private] ParentUpWaitForSettleTime
-//
-// Our controlling driver has changed power state on the hardware
-// during a power raise initiated by the parent, but we had to wait for it.
-// Here we see if we need to wait for power to settle before continuing.
-// If not, we continue processing  (notifying interested parties post-change).
-// If so, we wait and continue later.
-//*********************************************************************************
-
-void IOService::ParentUpWaitForSettleTime ( void )
-{
-	fMachineState = kIOPM_ParentUpNotifyInterestedDriversDidChange;
-    startSettleTimer();
-}
-
-//*********************************************************************************
-// [private] ParentUpNotifyInterestedDriversDidChange
-//
-// Power has settled on a power raise initiated by the parent.
-// Here we notify all our interested parties post-change.  If they all acknowledge,
-// we're done with this change note, and we can start on the next one.
-// Otherwise we have to wait for acknowledgements and finish up later.
-//*********************************************************************************
-
-void IOService::ParentUpNotifyInterestedDriversDidChange ( void )
-{
-	notifyAll( kIOPM_ParentAcknowledgePowerChange, kNotifyDidChange );	
-}
-
-//*********************************************************************************
-// [private] all_done
-//
-// A power change is complete, and the used post-change note is at
-// the head of the queue.  Remove it and set myCurrentState to the result
-// of the change.  Start up the next change in queue.
-//*********************************************************************************
-
-void IOService::all_done ( void )
-{
-    unsigned long	previous_state;
-
-#if ROOT_DOMAIN_RUN_STATES
-    getPMRootDomain()->handlePowerChangeDoneForService(
-                        /* service */       this,
-                        /* RD flags */      &fRootDomainState,
-                        /* new pwr state */ fHeadNotePowerState,
-                        /* change flags */  fHeadNoteFlags );
-#endif
-
-    if ((fHeadNoteFlags & kIOPMSynchronize) &&
-        ((fMachineState == kIOPM_Finished) || (fMachineState == kIOPM_SyncFinish)))
-    {
-        // Sync operation and no power change occurred.
-        // Do not inform driver and clients about this request completion,
-        // except for the originator (root domain).
-
-        if (getPMRequestType() == kIOPMRequestTypeSynchronizePowerTree)
-        {
-            powerChangeDone(fCurrentPowerState);
-        }
-
-        fMachineState = kIOPM_Finished;
-        return;
-    }
-
-    fMachineState = kIOPM_Finished;
-
-    // our power change
-    if ( fHeadNoteFlags & kIOPMWeInitiated )
-    {
-        // could our driver switch to the new state?
-        if ( !( fHeadNoteFlags & kIOPMNotDone) )
-        {
-			// we changed, tell our parent
-            requestDomainPower(fHeadNotePowerState);
-
-            // yes, did power raise?
-            if ( fCurrentPowerState < fHeadNotePowerState )
-            {
-                // yes, inform clients and apps
-                tellChangeUp (fHeadNotePowerState);
-            }
-            previous_state = fCurrentPowerState;
-            // either way
-            fCurrentPowerState = fHeadNotePowerState;
-#if PM_VARS_SUPPORT
-			fPMVars->myCurrentState = fCurrentPowerState;
-#endif
-            OUR_PMLog(kPMLogChangeDone, fCurrentPowerState, 0);
-			
-            // inform subclass policy-maker
-            if ((fLockedFlags.PMStop == false) && fParentsKnowState)
-                powerChangeDone(previous_state);
-            else
-                PM_DEBUG("%s::powerChangeDone() skipped\n", getName());
-        }
-    }
-
-    // parent's power change
-    if ( fHeadNoteFlags & kIOPMParentInitiated)
-    {
-        if (((fHeadNoteFlags & kIOPMDomainWillChange) && (fCurrentPowerState >= fHeadNotePowerState)) ||
-			((fHeadNoteFlags & kIOPMDomainDidChange) && (fCurrentPowerState < fHeadNotePowerState)))
-        {
-            // did power raise?
-            if ( fCurrentPowerState < fHeadNotePowerState )
-            {
-                // yes, inform clients and apps
-                tellChangeUp (fHeadNotePowerState);
-            }
-            // either way
-            previous_state = fCurrentPowerState;
-            fCurrentPowerState = fHeadNotePowerState;
-#if PM_VARS_SUPPORT
-			fPMVars->myCurrentState = fCurrentPowerState;
-#endif
-            fMaxCapability = fControllingDriver->maxCapabilityForDomainState(fHeadNoteDomainFlags);
-
-            OUR_PMLog(kPMLogChangeDone, fCurrentPowerState, 0);
-
-            // inform subclass policy-maker
-            if ((fLockedFlags.PMStop == false) && fParentsKnowState)
-                powerChangeDone(previous_state);
-            else
-                PM_DEBUG("%s::powerChangeDone() skipped\n", getName());
-        }
-    }
-
-    if (fCurrentPowerState < fNumberOfPowerStates)
-    {
-        const IOPMPowerState * powerStatePtr = &fPowerStates[fCurrentPowerState];
-
-        fCurrentCapabilityFlags = powerStatePtr->capabilityFlags;
-        if (fCurrentCapabilityFlags & kIOPMStaticPowerValid)
-            fCurrentPowerConsumption = powerStatePtr->staticPower;
-    }
-
-    // When power rises enough to satisfy the tickle's desire for more power,
-    // the condition preventing idle-timer from dropping power is removed.
-
-    if (fCurrentPowerState >= fIdleTimerMinPowerState)
-    {
-        fIdleTimerMinPowerState = 0;
-    }
-}
-
-//*********************************************************************************
-// [public] settleTimerExpired
+// [private] settleTimerExpired
 //
 // Power has settled after our last change.  Notify interested parties that
 // there is a new power state.
 //*********************************************************************************
 
-void IOService::settleTimerExpired ( void )
+void IOService::settleTimerExpired( void )
 {
 	fSettleTimeUS = 0;
+	gIOPMWorkQueue->signalWorkAvailable();
 }
 
 //*********************************************************************************
@@ -4202,12 +4658,11 @@ settle_timer_expired( thread_call_param_t arg0, thread_call_param_t arg1 )
 {
 	IOService * me = (IOService *) arg0;
 
-	if (gIOPMWorkLoop && gIOPMReplyQueue)
+	if (gIOPMWorkLoop && gIOPMWorkQueue)
 	{
 		gIOPMWorkLoop->runAction(
             OSMemberFunctionCast(IOWorkLoop::Action, me, &IOService::settleTimerExpired),
             me);
-		gIOPMReplyQueue->signalWorkAvailable();
 	}
 	me->release();
 }
@@ -4221,7 +4676,7 @@ settle_timer_expired( thread_call_param_t arg0, thread_call_param_t arg1 )
 void IOService::startSettleTimer( void )
 {
     AbsoluteTime        deadline;
-    unsigned long       i;
+    IOPMPowerStateIndex i;
     uint32_t            settleTime = 0;
 	boolean_t           pending;
 
@@ -4288,8 +4743,7 @@ bool IOService::ackTimerTick( void )
 	PM_ASSERT_IN_GATE();
     switch (fMachineState) {
         case kIOPM_OurChangeWaitForPowerSettle:
-        case kIOPM_ParentDownWaitForPowerSettle:
-        case kIOPM_ParentUpWaitForSettleTime:
+        case kIOPM_ParentChangeWaitForPowerSettle:
             // are we waiting for controlling driver to acknowledge?
             if ( fDriverTimer > 0 )
             {
@@ -4303,6 +4757,20 @@ bool IOService::ackTimerTick( void )
                     setProperty(kIOPMTardyAckSPSKey, kOSBooleanTrue);
                     PM_ERROR("%s::setPowerState(%p, %lu -> %lu) timed out after %d ms\n",
                         fName, this, fCurrentPowerState, fHeadNotePowerState, NS_TO_MS(nsec));
+
+#if LOG_SETPOWER_TIMES
+                    PMEventDetails *details = PMEventDetails::eventDetails(
+                                                kIOPMEventTypeSetPowerStateDelayed, // type
+                                                fName,								// who
+                                                (uintptr_t)this,					// owner unique
+                                                NULL,								// interest name
+                                                (uint8_t)getPowerState(),			// old
+                                                0,									// new
+                                                kIOReturnTimeout,					// result
+                                                NS_TO_US(nsec));					// usec completion time
+					
+                    getPMRootDomain()->recordAndReleasePMEventGated( details );
+#endif
 
                     if (gIOKitDebug & kIOLogDebugPower)
                     {
@@ -4321,12 +4789,7 @@ bool IOService::ackTimerTick( void )
             }
             break;
 
-        case kIOPM_OurChangeSetPowerState:
-        case kIOPM_OurChangeFinish:
-        case kIOPM_ParentDownSetPowerState:
-        case kIOPM_ParentAcknowledgePowerChange:
-        case kIOPM_ParentUpSetPowerState:
-		case kIOPM_NotifyChildrenDone:
+        case kIOPM_NotifyChildrenStart:
             // are we waiting for interested parties to acknowledge?
             if ( fHeadNotePendingAcks != 0 )
             {
@@ -4350,6 +4813,24 @@ bool IOService::ackTimerTick( void )
                                 nextObject->whatObject, fName, fCurrentPowerState, fHeadNotePowerState,
                                 NS_TO_MS(nsec));
 
+#if LOG_SETPOWER_TIMES
+                            uint16_t logType = (fDriverCallReason == kDriverCallInformPreChange) 
+                                                ? kIOPMEventTypePSWillChangeTo
+                                                : kIOPMEventTypePSDidChangeTo;
+							
+                            PMEventDetails *details = PMEventDetails::eventDetails(
+                                                        logType,							  // type
+                                                        fName,								  // who
+                                                        (uintptr_t)this,					  // owner unique
+                                                        nextObject->whatObject->getName(),	  // interest name
+                                                        (uint8_t)fCurrentPowerState,		  // old
+                                                        (uint8_t)fHeadNotePowerState,		  // new
+                                                        kIOReturnTimeout,					  // result
+                                                        NS_TO_US(nsec));					  // usec completion time
+							
+                            getPMRootDomain()->recordAndReleasePMEventGated( details );
+#endif
+
                             // Pretend driver has acked.
                             fHeadNotePendingAcks--;
                         }
@@ -4369,11 +4850,16 @@ bool IOService::ackTimerTick( void )
             }
             break;
 
-        case kIOPM_ParentDownTellPriorityClientsPowerDown:
-        case kIOPM_ParentDownNotifyInterestedDriversWillChange:
+        // TODO: aggreggate this
         case kIOPM_OurChangeTellClientsPowerDown:
         case kIOPM_OurChangeTellPriorityClientsPowerDown:
         case kIOPM_OurChangeNotifyInterestedDriversWillChange:
+        case kIOPM_ParentChangeTellPriorityClientsPowerDown:
+        case kIOPM_ParentChangeNotifyInterestedDriversWillChange:
+        case kIOPM_SyncTellClientsPowerDown:
+        case kIOPM_SyncTellPriorityClientsPowerDown:
+        case kIOPM_SyncNotifyWillChange:
+        case kIOPM_TellCapabilityChangeDone:
 			// apps didn't respond in time
             cleanClientResponses(true);
             OUR_PMLog(kPMLogClientTardy, 0, 1);
@@ -4382,7 +4868,7 @@ bool IOService::ackTimerTick( void )
             break;
 
         default:
-            PM_TRACE("%s: unexpected ack timer tick (state = %d)\n",
+            PM_LOG1("%s: unexpected ack timer tick (state = %d)\n",
 				getName(), fMachineState);
             break;
     }
@@ -4441,8 +4927,8 @@ IOService::actionAckTimerExpired (
 	// otherwise no need to signal the work loop.
 
 	done = me->ackTimerTick();
-	if (done && gIOPMReplyQueue)
-		gIOPMReplyQueue->signalWorkAvailable();
+	if (done && gIOPMWorkQueue)
+		gIOPMWorkQueue->signalWorkAvailable();
 
 	return kIOReturnSuccess;
 }
@@ -4465,104 +4951,31 @@ IOService::ack_timer_expired ( thread_call_param_t arg0, thread_call_param_t arg
 	me->release();
 }
 
+// MARK: -
+// MARK: Client Messaging
+
 //*********************************************************************************
-// [private] notifyControllingDriver
+// [private] tellSystemCapabilityChange
 //*********************************************************************************
 
-bool IOService::notifyControllingDriver ( void )
+void IOService::tellSystemCapabilityChange( uint32_t nextMS )
 {
-	DriverCallParam *	param;
-	unsigned long		powerState;
+	MS_PUSH( nextMS );
+    fMachineState       = kIOPM_TellCapabilityChangeDone;
+    fOutOfBandMessage   = kIOMessageSystemCapabilityChange;
 
-	PM_ASSERT_IN_GATE();
-	assert( fDriverCallParamCount == 0  );
-	assert( fControllingDriver );
+    if (fIsPreChange)
+    {
+        // Notify app first on pre-change.
+        fOutOfBandParameter = kNotifyCapabilityChangeApps;
+    }
+    else
+    {
+        // Notify kernel clients first on post-change.
+        fOutOfBandParameter = kNotifyCapabilityChangePriority;
+    }
 
-	powerState = fHeadNotePowerState;
-
-	param = (DriverCallParam *) fDriverCallParamPtr;
-	if (!param)
-	{
-		param = IONew(DriverCallParam, 1);
-		if (!param)
-			return false;	// no memory
-
-		fDriverCallParamPtr   = (void *) param;
-		fDriverCallParamSlots = 1;
-	}
-
-	param->Target = fControllingDriver;
-	fDriverCallParamCount = 1;
-
-	fDriverTimer = -1;
-
-	// Machine state for this object will stall waiting for a reply
-	// from the callout thread.
-
-	PM_LOCK();
-	assert( fLockedFlags.DriverCallBusy == false );
-	fLockedFlags.DriverCallBusy = true;
-	PM_UNLOCK();
-	thread_call_enter( fDriverCallEntry );
-	return true;
-}
-
-//*********************************************************************************
-// [private] notifyControllingDriverDone
-//*********************************************************************************
-
-void IOService::notifyControllingDriverDone( void )
-{
-	DriverCallParam *	param;
-	IOReturn			result;
-
-	PM_ASSERT_IN_GATE();
-	param = (DriverCallParam *) fDriverCallParamPtr;
-
-	assert( fLockedFlags.DriverCallBusy == false );
-	assert( fMachineState == kIOPM_DriverThreadCallDone );
-
-	if (param)
-	{
-		assert(fDriverCallParamCount == 1);
-		
-		// the return value from setPowerState()
-		result = param->Result;
-
-		if ((result == IOPMAckImplied) || (result < 0))
-		{
-			// child return IOPMAckImplied
-			fDriverTimer = 0;
-		}
-		else if (fDriverTimer)
-		{
-			assert(fDriverTimer == -1);
-
-            // Driver has not acked, and has returned a positive result.
-            // Enforce a minimum permissible timeout value.
-            // Make the min value large enough so timeout is less likely
-            // to occur if a driver misinterpreted that the return value
-            // should be in microsecond units.  And make it large enough
-            // to be noticeable if a driver neglects to ack.
-
-            if (result < kMinAckTimeoutTicks)
-                result = kMinAckTimeoutTicks;
-
-            fDriverTimer = (result / (ACK_TIMER_PERIOD / ns_per_us)) + 1;
-		}
-		// else, child has already acked and driver_timer reset to 0.
-
-		fDriverCallParamCount = 0;
-
-		if ( fDriverTimer )
-		{
-			OUR_PMLog(kPMLogStartAckTimer, 0, 0);
-			start_ack_timer();
-		}
-	}
-
-	// Hop back to original machine state path.
-	fMachineState = fNextMachineState;
+    tellClientsWithResponse( fOutOfBandMessage );
 }
 
 //*********************************************************************************
@@ -4648,11 +5061,11 @@ static void logAppTimeouts ( OSObject * object, void * arg )
         clientIndex = context->notifyClients->getNextIndexOfObject(object, 0);
 
         if ((clientIndex != (unsigned int) -1) &&
-            (flag = context->responseFlags->getObject(clientIndex)) &&
+            (flag = context->responseArray->getObject(clientIndex)) &&
             (flag != kOSBooleanTrue))
         {
             OSString * clientID = 0;
-            context->us->messageClient(context->msgType, object, &clientID);
+            context->us->messageClient(context->messageType, object, &clientID);
             PM_ERROR(context->errorLog, clientID ? clientID->getCStringNoCopy() : "");
 
             // TODO: record message type if possible
@@ -4669,32 +5082,47 @@ static void logAppTimeouts ( OSObject * object, void * arg )
 
 void IOService::cleanClientResponses ( bool logErrors )
 {
-    IOPMInterestContext context;
-
-    if (logErrors && fResponseArray && fNotifyClientArray) {
-        context.responseFlags    = fResponseArray;
-        context.notifyClients    = fNotifyClientArray;
-        context.serialNumber     = fSerialNumber;
-        context.counter          = 0;
-        context.msgType          = kIOMessageCopyClientID;
-        context.us               = this;
-        context.maxTimeRequested = 0;
-        context.stateNumber      = fHeadNotePowerState;
-        context.stateFlags       = fHeadNotePowerArrayEntry->capabilityFlags;
-        context.errorLog         = "PM notification timeout (%s)\n";
-
+    if (logErrors && fResponseArray)
+    {
         switch ( fOutOfBandParameter ) {
             case kNotifyApps:
-                applyToInterested(gIOAppPowerStateInterest, logAppTimeouts, (void *) &context);
-            case kNotifyPriority:
+            case kNotifyCapabilityChangeApps:
+                if (fNotifyClientArray)
+                {
+                    IOPMInterestContext context;
+
+                    context.responseArray    = fResponseArray;
+                    context.notifyClients    = fNotifyClientArray;
+                    context.serialNumber     = fSerialNumber;
+                    context.messageType      = kIOMessageCopyClientID;
+                    context.notifyType       = kNotifyApps;
+                    context.isPreChange      = fIsPreChange;
+                    context.enableTracing    = false;
+                    context.us               = this;
+                    context.maxTimeRequested = 0;
+                    context.stateNumber      = fHeadNotePowerState;
+                    context.stateFlags       = fHeadNotePowerArrayEntry->capabilityFlags;
+                    context.changeFlags      = fHeadNoteChangeFlags;
+                    context.errorLog         = "PM notification timeout (%s)\n";
+
+                    applyToInterested(gIOAppPowerStateInterest, logAppTimeouts, (void *) &context);
+                }
+                break;
+
             default:
+                // kNotifyPriority, kNotifyCapabilityChangePriority
+                // TODO: identify the priority client that has not acked
+                PM_ERROR("PM priority notification timeout\n");
+                if (gIOKitDebug & kIOLogDebugPower)
+                {
+                    panic("PM priority notification timeout");
+                }
                 break;
         }
     }
 
     if (fResponseArray)
     {
-        // get rid of this stuff
         fResponseArray->release();
         fResponseArray = NULL;
     }
@@ -4703,8 +5131,6 @@ void IOService::cleanClientResponses ( bool logErrors )
         fNotifyClientArray->release();
         fNotifyClientArray = NULL;
     }
-
-    return;
 }
 
 //*********************************************************************************
@@ -4716,53 +5142,95 @@ void IOService::cleanClientResponses ( bool logErrors )
 // Return true if we don't have to wait for acknowledgements
 //*********************************************************************************
 
-bool IOService::tellClientsWithResponse (
-        int messageType )
-{
-    return tellClientsWithResponse( messageType, 0 );
-}
-
-bool IOService::tellClientsWithResponse (
-        int                 messageType,
-        IOPMMessageFilter   filter )
+bool IOService::tellClientsWithResponse ( int messageType )
 {
     IOPMInterestContext     context;
+    bool                    isRootDomain = IS_ROOT_DOMAIN;
 
 	PM_ASSERT_IN_GATE();
     assert( fResponseArray == NULL );
     assert( fNotifyClientArray == NULL );
+
+    RD_LOG("tellClientsWithResponse( %s, %d )\n",
+        getIOMessageString(messageType), fOutOfBandParameter);
 
     fResponseArray = OSArray::withCapacity( 1 );
     if (!fResponseArray)
         goto exit;
 
     fResponseArray->setCapacityIncrement(8);
-    fSerialNumber += 1;
+    if (++fSerialNumber == 0)
+        fSerialNumber++;        
 
-    context.responseFlags    = fResponseArray;
+    context.responseArray    = fResponseArray;
     context.notifyClients    = 0;
     context.serialNumber     = fSerialNumber;
-    context.counter          = 0;
-    context.msgType          = messageType;
+    context.messageType      = messageType;
+    context.notifyType       = fOutOfBandParameter;
+    context.isPreChange      = fIsPreChange;
+    context.enableTracing    = false;
     context.us               = this;
     context.maxTimeRequested = 0;
     context.stateNumber      = fHeadNotePowerState;
     context.stateFlags       = fHeadNotePowerArrayEntry->capabilityFlags;
-    context.filterFunc       = filter;
+    context.changeFlags      = fHeadNoteChangeFlags;
+    context.messageFilter    = (isRootDomain) ?
+                               OSMemberFunctionCast(
+                                    IOPMMessageFilter,
+                                    this,
+                                    &IOPMrootDomain::systemMessageFilter) : 0;
 
     switch ( fOutOfBandParameter ) {
         case kNotifyApps:
             applyToInterested( gIOAppPowerStateInterest,
 				pmTellAppWithResponse, (void *) &context );
-            fNotifyClientArray = context.notifyClients;
+
+            if (isRootDomain &&
+                (fMachineState != kIOPM_OurChangeTellClientsPowerDown) &&
+                (fMachineState != kIOPM_SyncTellClientsPowerDown))
+            {
+                // Notify capability app for tellChangeDown1()
+                // but not for askChangeDown().
+                context.notifyType  = kNotifyCapabilityChangeApps;
+                context.messageType = kIOMessageSystemCapabilityChange;
+                applyToInterested( gIOAppPowerStateInterest,
+                    pmTellCapabilityAppWithResponse, (void *) &context ); 
+                context.notifyType  = fOutOfBandParameter;
+                context.messageType = messageType;
+            }
+            context.maxTimeRequested = k30seconds;
 
             applyToInterested( gIOGeneralInterest,
 				pmTellClientWithResponse, (void *) &context );
+
+            fNotifyClientArray = context.notifyClients;
             break;
 
         case kNotifyPriority:
+            context.enableTracing = isRootDomain;
             applyToInterested( gIOPriorityPowerStateInterest,
 				pmTellClientWithResponse, (void *) &context );
+
+            if (isRootDomain)
+            {
+                // Notify capability clients for tellChangeDown2().
+                context.notifyType  = kNotifyCapabilityChangePriority;
+                context.messageType = kIOMessageSystemCapabilityChange;
+                applyToInterested( gIOPriorityPowerStateInterest,
+                    pmTellCapabilityClientWithResponse, (void *) &context );
+            }
+            break;
+
+        case kNotifyCapabilityChangeApps:
+            applyToInterested( gIOAppPowerStateInterest,
+				pmTellCapabilityAppWithResponse, (void *) &context );
+            fNotifyClientArray = context.notifyClients;
+            context.maxTimeRequested = k30seconds;
+            break;
+
+        case kNotifyCapabilityChangePriority:
+            applyToInterested( gIOPriorityPowerStateInterest,
+				pmTellCapabilityClientWithResponse, (void *) &context );
             break;
     }
 
@@ -4770,6 +5238,8 @@ bool IOService::tellClientsWithResponse (
     if ( !checkForDone() )
     {
         OUR_PMLog(kPMLogStartAckTimer, context.maxTimeRequested, 0);
+        if (context.enableTracing)
+            getPMRootDomain()->traceDetail( context.maxTimeRequested / 1000 );
 		start_ack_timer( context.maxTimeRequested / 1000, kMillisecondScale );	
         return false;
     }
@@ -4799,143 +5269,361 @@ exit:
 
 void IOService::pmTellAppWithResponse ( OSObject * object, void * arg )
 {
-    IOPMInterestContext *	context = (IOPMInterestContext *) arg;
+    IOPMInterestContext *   context = (IOPMInterestContext *) arg;
     IOServicePM *           pwrMgt = context->us->pwrMgt;
+    uint32_t                msgIndex, msgRef, msgType;
+#if LOG_APP_RESPONSE_TIMES
     AbsoluteTime            now;
-    UInt32                  refcon;
+#endif
 
     if (!OSDynamicCast(_IOServiceInterestNotifier, object))
-    {
-		// object must be an _IOServiceInterestNotifier.
         return;
-    }
 
-    // Lazily create app clients array.
-    if (0 == context->notifyClients)
+    if (context->messageFilter &&
+        !context->messageFilter(context->us, object, context, 0, 0))
     {
-        context->notifyClients = OSArray::withCapacity( 32 );
-    }
-
-    if (context->filterFunc && !context->filterFunc(object, arg))
-    {
-        // ack - needed to match the counter index at logAppTimeouts().
-        context->responseFlags->setObject(context->counter, kOSBooleanTrue);
-        if (context->notifyClients)
-            context->notifyClients->setObject(context->counter, kOSBooleanTrue);
-    }
-    else
-    {
-        refcon = ((context->serialNumber & 0xFFFF)<<16)
-               + (context->counter & 0xFFFF);
-        OUR_PMLog(kPMLogAppNotify, context->msgType, refcon);
-
-        if (gIOKitDebug & kIOLogDebugPower)
+        if (kIOLogDebugPower & gIOKitDebug)
         {
-            // Log client pid/name and associated index.
+            // Log client pid/name and client array index.
             OSString * clientID = 0;
             context->us->messageClient(kIOMessageCopyClientID, object, &clientID);
-            PM_DEBUG("[Notify %u] message 0x%x to %s\n",
-                (uint32_t) context->counter,
-                context->msgType,
+            PM_LOG("%s DROP App %s, %s\n",
+                context->us->getName(),
+                getIOMessageString(context->messageType),
                 clientID ? clientID->getCStringNoCopy() : "");
             if (clientID) clientID->release();
         }
+        return;
+    }
 
+    // Create client array (for tracking purposes) only if the service
+    // has app clients. Usually only root domain does.
+    if (0 == context->notifyClients)
+        context->notifyClients = OSArray::withCapacity( 32 );
+
+    msgType  = context->messageType;
+    msgIndex = context->responseArray->getCount();
+    msgRef   = ((context->serialNumber & 0xFFFF) << 16) + (msgIndex & 0xFFFF);
+
+    OUR_PMLog(kPMLogAppNotify, msgType, msgRef);
+    if (kIOLogDebugPower & gIOKitDebug)
+    {
+        // Log client pid/name and client array index.
+        OSString * clientID = 0;
+        context->us->messageClient(kIOMessageCopyClientID, object, &clientID);
+        PM_LOG("%s MESG App(%u) %s, %s\n",
+            context->us->getName(),
+            msgIndex, getIOMessageString(msgType),
+            clientID ? clientID->getCStringNoCopy() : "");
+        if (clientID) clientID->release();
+    }
+
+#if LOG_APP_RESPONSE_TIMES
+    OSNumber * num;
+    clock_get_uptime(&now);
+    num = OSNumber::withNumber(AbsoluteTime_to_scalar(&now), sizeof(uint64_t) * 8);
+    if (num)
+    {
+        context->responseArray->setObject(msgIndex, num);
+        num->release();
+    }
+    else
+#endif
+    context->responseArray->setObject(msgIndex, kOSBooleanFalse);
+
+    if (context->notifyClients)
+        context->notifyClients->setObject(msgIndex, object);
+
+    context->us->messageClient(msgType, object, (void *) msgRef);
+}
+
+//*********************************************************************************
+// [static private] pmTellClientWithResponse
+//
+// We send a message to an in-kernel client, and we expect a response,
+// so we compute a cookie we can identify the response with.
+//*********************************************************************************
+
+void IOService::pmTellClientWithResponse ( OSObject * object, void * arg )
+{
+    IOPowerStateChangeNotification  notify;
+    IOPMInterestContext *           context = (IOPMInterestContext *) arg;
+    OSObject *                      replied = kOSBooleanTrue;
+    _IOServiceInterestNotifier *    notifier;
+    uint32_t                        msgIndex, msgRef, msgType;
+    IOReturn                        retCode;
+
+    if (context->messageFilter &&
+        !context->messageFilter(context->us, object, context, 0, 0))
+    {
+        if ((kIOLogDebugPower & gIOKitDebug) &&
+            (OSDynamicCast(_IOServiceInterestNotifier, object)))
+        {
+            _IOServiceInterestNotifier *n = (_IOServiceInterestNotifier *) object;
+            PM_LOG("%s DROP Client %s, notifier %p, handler %p\n",
+                context->us->getName(),
+                getIOMessageString(context->messageType),
+                object, n->handler);
+		}        
+        return;
+    }
+
+    notifier = OSDynamicCast(_IOServiceInterestNotifier, object);
+    msgType  = context->messageType;
+    msgIndex = context->responseArray->getCount();
+    msgRef   = ((context->serialNumber & 0xFFFF) << 16) + (msgIndex & 0xFFFF);
+
+    IOServicePM * pwrMgt = context->us->pwrMgt;
+    if (gIOKitDebug & kIOLogPower) {
+		OUR_PMLog(kPMLogClientNotify, msgRef, msgType);
+		if (OSDynamicCast(IOService, object)) {
+			const char *who = ((IOService *) object)->getName();
+			gPlatform->PMLog(who, kPMLogClientNotify, (uintptr_t) object, 0);
+		}
+        else if (notifier) {
+			OUR_PMLog(kPMLogClientNotify, (uintptr_t) notifier->handler, 0);
+        }
+    }
+    if ((kIOLogDebugPower & gIOKitDebug) && notifier)
+    {
+        PM_LOG("%s MESG Client %s, notifier %p, handler %p\n",
+            context->us->getName(),
+            getIOMessageString(msgType),
+            object, notifier->handler);
+    }
+
+    notify.powerRef    = (void *)(uintptr_t) msgRef;
+    notify.returnValue = 0;
+    notify.stateNumber = context->stateNumber;
+    notify.stateFlags  = context->stateFlags;
+
+    if (context->enableTracing && (notifier != 0))
+    {
+        uint32_t detail = ((msgIndex & 0xff) << 24) |
+                          ((msgType & 0xfff) << 12) |
+                          (((uintptr_t) notifier->handler) & 0xfff);
+        getPMRootDomain()->traceDetail( detail );
+    }
+
+    retCode = context->us->messageClient(msgType, object, (void *) &notify);
+    if ( kIOReturnSuccess == retCode )
+    {
+        if ( 0 == notify.returnValue )
+        {
+            // client doesn't want time to respond
+			OUR_PMLog(kPMLogClientAcknowledge, msgRef, (uintptr_t) object);
+        }
+        else
+        {
+            replied = kOSBooleanFalse;
+            if ( notify.returnValue > context->maxTimeRequested )
+            {
+                if (notify.returnValue > kPriorityClientMaxWait)
+                {
+                    context->maxTimeRequested = kPriorityClientMaxWait;
+                    PM_ERROR("%s: client %p returned %llu for %s\n",
+                        context->us->getName(),
+                        notifier ? (void *)  notifier->handler : object,
+                        (uint64_t) notify.returnValue,
+                        getIOMessageString(msgType));
+                }
+                else
+                    context->maxTimeRequested = notify.returnValue;
+            }
+        }
+    }
+    else
+    {
+        // not a client of ours
+        // so we won't be waiting for response
+		OUR_PMLog(kPMLogClientAcknowledge, msgRef, 0);
+    }
+
+    context->responseArray->setObject(msgIndex, replied);
+}
+
+//*********************************************************************************
+// [static private] pmTellCapabilityAppWithResponse
+//*********************************************************************************
+
+void IOService::pmTellCapabilityAppWithResponse ( OSObject * object, void * arg )
+{
+    IOPMSystemCapabilityChangeParameters msgArg;
+    IOPMInterestContext *       context = (IOPMInterestContext *) arg;
+    OSObject *                  replied = kOSBooleanTrue;
+    IOServicePM *               pwrMgt = context->us->pwrMgt;
+    uint32_t                    msgIndex, msgRef, msgType;
+#if LOG_APP_RESPONSE_TIMES
+    AbsoluteTime                now;
+#endif
+
+    if (!OSDynamicCast(_IOServiceInterestNotifier, object))
+        return;
+
+    memset(&msgArg, 0, sizeof(msgArg));
+    if (context->messageFilter &&
+        !context->messageFilter(context->us, object, context, &msgArg, &replied))
+    {
+        return;
+    }
+
+    // Create client array (for tracking purposes) only if the service
+    // has app clients. Usually only root domain does.
+    if (0 == context->notifyClients)
+        context->notifyClients = OSArray::withCapacity( 32 );
+
+    msgType  = context->messageType;
+    msgIndex = context->responseArray->getCount();
+    msgRef   = ((context->serialNumber & 0xFFFF) << 16) + (msgIndex & 0xFFFF);
+
+    OUR_PMLog(kPMLogAppNotify, msgType, msgRef);
+    if (kIOLogDebugPower & gIOKitDebug)
+    {
+        // Log client pid/name and client array index.
+        OSString * clientID = 0;
+        context->us->messageClient(kIOMessageCopyClientID, object, &clientID);
+        PM_LOG("%s MESG App(%u) %s, wait %u, %s\n",
+            context->us->getName(),
+            msgIndex, getIOMessageString(msgType),
+            (replied != kOSBooleanTrue),
+            clientID ? clientID->getCStringNoCopy() : "");
+        if (clientID) clientID->release();
+    }
+
+    msgArg.notifyRef = msgRef;
+    msgArg.maxWaitForReply = 0;
+
+    if (replied == kOSBooleanTrue)
+    {
+        msgArg.notifyRef = 0;
+        context->responseArray->setObject(msgIndex, kOSBooleanTrue);
+        if (context->notifyClients)
+            context->notifyClients->setObject(msgIndex, kOSBooleanTrue);
+    }
+    else
+    {
 #if LOG_APP_RESPONSE_TIMES
         OSNumber * num;
         clock_get_uptime(&now);
         num = OSNumber::withNumber(AbsoluteTime_to_scalar(&now), sizeof(uint64_t) * 8);
         if (num)
         {
-            context->responseFlags->setObject(context->counter, num);
+            context->responseArray->setObject(msgIndex, num);
             num->release();
         }
         else
 #endif
-        context->responseFlags->setObject(context->counter, kOSBooleanFalse);
-        
-        if (context->notifyClients)
-            context->notifyClients->setObject(context->counter, object);
+        context->responseArray->setObject(msgIndex, kOSBooleanFalse);
 
-        context->us->messageClient(context->msgType, object, (void *)refcon);
-        if ( context->maxTimeRequested < k30seconds )
-        {
-            context->maxTimeRequested = k30seconds;
-        }
+        if (context->notifyClients)
+            context->notifyClients->setObject(msgIndex, object);
     }
 
-    context->counter++;
+    context->us->messageClient(msgType, object, (void *) &msgArg, sizeof(msgArg));
 }
 
 //*********************************************************************************
-// [static private] pmTellClientWithResponse
-//
-// We send a message to an in-kernel client, and we expect a response, so we compute a
-// cookie we can identify the response with.
-// If it doesn't understand the notification (it is not power-management savvy)
-// we won't wait for it to prepare for sleep.  If it tells us via a return code
-// in the passed struct that it is currently ready, we won't wait for it to prepare.
-// If it tells us via the return code in the struct that it does need time, we will chill.
+// [static private] pmTellCapabilityClientWithResponse
 //*********************************************************************************
 
-void IOService::pmTellClientWithResponse ( OSObject * object, void * arg )
+void IOService::pmTellCapabilityClientWithResponse(
+    OSObject * object, void * arg )
 {
+    IOPMSystemCapabilityChangeParameters msgArg;
     IOPMInterestContext *           context = (IOPMInterestContext *) arg;
-    IOPowerStateChangeNotification  notify;
-    UInt32                          refcon;
+    OSObject *                      replied = kOSBooleanTrue;
+    _IOServiceInterestNotifier *    notifier;
+    uint32_t                        msgIndex, msgRef, msgType;
     IOReturn                        retCode;
-    OSObject *                      theFlag;
 
-    if (context->filterFunc && !context->filterFunc(object, arg))
+    memset(&msgArg, 0, sizeof(msgArg));
+    if (context->messageFilter &&
+        !context->messageFilter(context->us, object, context, &msgArg, 0))
+    {
+        if ((kIOLogDebugPower & gIOKitDebug) &&
+            (OSDynamicCast(_IOServiceInterestNotifier, object)))
+        {
+            _IOServiceInterestNotifier *n = (_IOServiceInterestNotifier *) object;
+            PM_LOG("%s DROP Client %s, notifier %p, handler %p\n",
+                context->us->getName(),
+                getIOMessageString(context->messageType),
+                object, n->handler);
+		}        
         return;
+    }
 
-    refcon = ((context->serialNumber & 0xFFFF)<<16) + (context->counter & 0xFFFF);
-    context->responseFlags->setObject(context->counter, kOSBooleanFalse);
+    notifier = OSDynamicCast(_IOServiceInterestNotifier, object);
+    msgType  = context->messageType;
+    msgIndex = context->responseArray->getCount();
+    msgRef   = ((context->serialNumber & 0xFFFF) << 16) + (msgIndex & 0xFFFF);
 
     IOServicePM * pwrMgt = context->us->pwrMgt;
     if (gIOKitDebug & kIOLogPower) {
-		OUR_PMLog(kPMLogClientNotify, refcon, (UInt32) context->msgType);
+		OUR_PMLog(kPMLogClientNotify, msgRef, msgType);
 		if (OSDynamicCast(IOService, object)) {
 			const char *who = ((IOService *) object)->getName();
-			gPlatform->PMLog(who,
-				kPMLogClientNotify, * (UInt32 *) object, (UInt64) object);
-		} else if (OSDynamicCast(_IOServiceInterestNotifier, object)) {
-			_IOServiceInterestNotifier *n = (_IOServiceInterestNotifier *) object;
-			OUR_PMLog(kPMLogClientNotify, (UInt64) n->handler, 0);
+			gPlatform->PMLog(who, kPMLogClientNotify, (uintptr_t) object, 0);
+		}
+        else if (notifier) {
+			OUR_PMLog(kPMLogClientNotify, (uintptr_t) notifier->handler, 0);
 		}
     }
-
-    notify.powerRef = (void *)refcon;
-    notify.returnValue = 0;
-    notify.stateNumber = context->stateNumber;
-    notify.stateFlags = context->stateFlags;
-    retCode = context->us->messageClient(context->msgType,object,(void *)&notify);
-    if ( retCode == kIOReturnSuccess )
+    if ((kIOLogDebugPower & gIOKitDebug) && notifier)
     {
-        if ( notify.returnValue == 0 )
+        PM_LOG("%s MESG Client %s, notifier %p, handler %p\n",
+            context->us->getName(),
+            getIOMessageString(msgType),
+            object, notifier->handler);
+    }
+
+    msgArg.notifyRef = msgRef;
+    msgArg.maxWaitForReply = 0;
+
+    if (context->enableTracing && (notifier != 0))
+    {
+        uint32_t detail = ((msgIndex & 0xff) << 24) |
+                          ((msgType & 0xfff) << 12) |
+                          (((uintptr_t) notifier->handler) & 0xfff);
+        getPMRootDomain()->traceDetail( detail );
+    }
+
+    retCode = context->us->messageClient(
+        msgType, object, (void *) &msgArg, sizeof(msgArg));
+
+    if ( kIOReturnSuccess == retCode )
+    {
+        if ( 0 == msgArg.maxWaitForReply )
         {
             // client doesn't want time to respond
-            context->responseFlags->replaceObject(context->counter, kOSBooleanTrue);
-			OUR_PMLog(kPMLogClientAcknowledge, refcon, (UInt64) object);
-        } else {
-            // it does want time, and it hasn't responded yet
-            theFlag = context->responseFlags->getObject(context->counter);
-            if ( kOSBooleanTrue != theFlag ) 
+			OUR_PMLog(kPMLogClientAcknowledge, msgRef, (uintptr_t) object);
+        }
+        else
+        {
+            replied = kOSBooleanFalse;
+            if ( msgArg.maxWaitForReply > context->maxTimeRequested )
             {
-                // so note its time requirement
-                if ( context->maxTimeRequested < notify.returnValue ) 
+                if (msgArg.maxWaitForReply > kCapabilityClientMaxWait)
                 {
-                    context->maxTimeRequested = notify.returnValue;
+                    context->maxTimeRequested = kCapabilityClientMaxWait;
+                    PM_ERROR("%s: client %p returned %u for %s\n",
+                        context->us->getName(),
+                        notifier ? (void *) notifier->handler : object,
+                        msgArg.maxWaitForReply,
+                        getIOMessageString(msgType));
                 }
+                else
+                    context->maxTimeRequested = msgArg.maxWaitForReply;
             }
         }
-    } else {
-		OUR_PMLog(kPMLogClientAcknowledge, refcon, 0);
+    }
+    else
+    {
         // not a client of ours
         // so we won't be waiting for response
-        context->responseFlags->replaceObject(context->counter, kOSBooleanTrue);
+		OUR_PMLog(kPMLogClientAcknowledge, msgRef, 0);
     }
-    context->counter++;
+
+    context->responseArray->setObject(msgIndex, replied);
 }
 
 //*********************************************************************************
@@ -4975,22 +5663,28 @@ void IOService::tellChangeUp ( unsigned long )
 
 void IOService::tellClients ( int messageType )
 {
-    tellClients( messageType, 0 );
-}
-
-void IOService::tellClients ( int messageType, IOPMMessageFilter filter )
-{
     IOPMInterestContext     context;
 
-    context.msgType     = messageType;
-    context.us          = this;
-    context.stateNumber = fHeadNotePowerState;
-    context.stateFlags  = fHeadNotePowerArrayEntry->capabilityFlags;
-    context.filterFunc  = filter;
+    RD_LOG("tellClients( %s )\n", getIOMessageString(messageType));
 
+    memset(&context, 0, sizeof(context));
+    context.messageType   = messageType;
+    context.isPreChange   = fIsPreChange;
+    context.us            = this;
+    context.stateNumber   = fHeadNotePowerState;
+    context.stateFlags    = fHeadNotePowerArrayEntry->capabilityFlags;
+    context.changeFlags   = fHeadNoteChangeFlags;
+    context.messageFilter = (IS_ROOT_DOMAIN) ?
+                            OSMemberFunctionCast(
+                                IOPMMessageFilter,
+                                this,
+                                &IOPMrootDomain::systemMessageFilter) : 0;
+
+    context.notifyType    = kNotifyPriority;
     applyToInterested( gIOPriorityPowerStateInterest,
         tellKernelClientApplier, (void *) &context );
-    
+
+    context.notifyType    = kNotifyApps;
     applyToInterested( gIOAppPowerStateInterest,
         tellAppClientApplier, (void *) &context );
 
@@ -5006,18 +5700,40 @@ void IOService::tellClients ( int messageType, IOPMMessageFilter filter )
 
 static void tellKernelClientApplier ( OSObject * object, void * arg )
 {
-    IOPMInterestContext *           context = (IOPMInterestContext *) arg;
     IOPowerStateChangeNotification	notify;
+    IOPMInterestContext *           context = (IOPMInterestContext *) arg;
 
-    if (context->filterFunc && !context->filterFunc(object, arg))
+    if (context->messageFilter &&
+        !context->messageFilter(context->us, object, context, 0, 0))
+    {
+        if ((kIOLogDebugPower & gIOKitDebug) &&
+            (OSDynamicCast(_IOServiceInterestNotifier, object)))
+        {
+            _IOServiceInterestNotifier *n = (_IOServiceInterestNotifier *) object;
+            PM_LOG("%s DROP Client %s, notifier %p, handler %p\n",
+                context->us->getName(),
+                IOService::getIOMessageString(context->messageType),
+                object, n->handler);
+		}
         return;
+    }
 
     notify.powerRef     = (void *) 0;
     notify.returnValue	= 0;
     notify.stateNumber	= context->stateNumber;
     notify.stateFlags	= context->stateFlags;
 
-    context->us->messageClient(context->msgType, object, &notify);
+    context->us->messageClient(context->messageType, object, &notify);
+
+    if ((kIOLogDebugPower & gIOKitDebug) &&
+        (OSDynamicCast(_IOServiceInterestNotifier, object)))
+    {
+        _IOServiceInterestNotifier *n = (_IOServiceInterestNotifier *) object;
+        PM_LOG("%s MESG Client %s, notifier %p, handler %p\n",
+            context->us->getName(),
+            IOService::getIOMessageString(context->messageType),
+            object, n->handler);
+    }
 }
 
 //*********************************************************************************
@@ -5028,12 +5744,38 @@ static void tellKernelClientApplier ( OSObject * object, void * arg )
 
 static void tellAppClientApplier ( OSObject * object, void * arg )
 {
-    IOPMInterestContext *   context = (IOPMInterestContext *) arg;
+    IOPMInterestContext * context = (IOPMInterestContext *) arg;
 
-    if (context->filterFunc && !context->filterFunc(object, arg))
+    if (context->messageFilter &&
+        !context->messageFilter(context->us, object, context, 0, 0))
+    {
+        if (kIOLogDebugPower & gIOKitDebug)
+        {
+            // Log client pid/name and client array index.
+            OSString * clientID = 0;
+            context->us->messageClient(kIOMessageCopyClientID, object, &clientID);
+            PM_LOG("%s DROP App %s, %s\n",
+                context->us->getName(),
+                IOService::getIOMessageString(context->messageType),
+                clientID ? clientID->getCStringNoCopy() : "");
+            if (clientID) clientID->release();
+        }
         return;
+    }
 
-    context->us->messageClient(context->msgType, object, 0);
+    if (kIOLogDebugPower & gIOKitDebug)
+    {
+        // Log client pid/name and client array index.
+        OSString * clientID = 0;
+        context->us->messageClient(kIOMessageCopyClientID, object, &clientID);
+        PM_LOG("%s MESG App %s, %s\n",
+            context->us->getName(),
+            IOService::getIOMessageString(context->messageType),
+            clientID ? clientID->getCStringNoCopy() : "");
+        if (clientID) clientID->release();
+    }
+
+    context->us->messageClient(context->messageType, object, 0);
 }
 
 //*********************************************************************************
@@ -5069,12 +5811,11 @@ bool IOService::checkForDone ( void )
 // [public] responseValid
 //*********************************************************************************
 
-bool IOService::responseValid ( unsigned long x, int pid )
+bool IOService::responseValid ( uint32_t refcon, int pid )
 {
     UInt16			serialComponent;
     UInt16			ordinalComponent;
     OSObject *		theFlag;
-    unsigned long	refcon = (unsigned long) x;
 
     serialComponent  = (refcon >> 16) & 0xFFFF;
     ordinalComponent = (refcon & 0xFFFF);
@@ -5102,18 +5843,37 @@ bool IOService::responseValid ( unsigned long x, int pid )
 #if LOG_APP_RESPONSE_TIMES
         AbsoluteTime	now;
         AbsoluteTime	start;
-        uint64_t	nsec;
+        uint64_t        nsec;
+        OSString        *name = IOCopyLogNameForPID(pid);
 
         clock_get_uptime(&now);
         AbsoluteTime_to_scalar(&start) = num->unsigned64BitValue();
         SUB_ABSOLUTETIME(&now, &start);
         absolutetime_to_nanoseconds(now, &nsec);
+		
+        PMEventDetails *details = PMEventDetails::eventDetails(
+                                    kIOPMEventTypeAppResponse,				// type
+                                    name ? name->getCStringNoCopy() : "",   // who
+                                    (uintptr_t)pid,							// owner unique
+                                    NULL,									// interest name
+                                    0,										// old
+                                    0,										// new
+                                    0,										// result
+                                    NS_TO_US(nsec));						// usec completion time
+		
+        getPMRootDomain()->recordAndReleasePMEventGated( details );
+
+        if (kIOLogDebugPower & gIOKitDebug)
+        {
+            PM_LOG("Ack(%u) %u ms\n",
+                (uint32_t) ordinalComponent,
+                NS_TO_MS(nsec));
+        }
 
         // > 100 ms
         if (nsec > LOG_APP_RESPONSE_TIMES)
         {
-            OSString * name = IOCopyLogNameForPID(pid);
-            PM_DEBUG("PM response took %d ms (%s)\n", NS_TO_MS(nsec),
+            PM_LOG("PM response took %d ms (%s)\n", NS_TO_MS(nsec),
                 name ? name->getCStringNoCopy() : "");
 
             if (nsec > LOG_APP_RESPONSE_MSG_TRACER)
@@ -5123,22 +5883,17 @@ bool IOService::responseValid ( unsigned long x, int pid )
                     gIOPMStatsApplicationResponseSlow, 
                     name ? name->getCStringNoCopy() : "", 0,
                     NS_TO_MS(nsec), pid);
-            }
-            
-            if (name)
-            name->release();
+            }            
         }
+
+        if (name)
+            name->release();
 #endif
         theFlag = kOSBooleanFalse;
     }
 
     if ( kOSBooleanFalse == theFlag ) 
     {
-        if ((gIOKitDebug & kIOLogDebugPower) &&
-            (fOutOfBandParameter == kNotifyApps))
-        {
-            PM_DEBUG("[Notify %u] acked\n", (uint32_t) ordinalComponent);
-        }
         fResponseArray->replaceObject(ordinalComponent, kOSBooleanTrue);
     }
     
@@ -5151,9 +5906,6 @@ bool IOService::responseValid ( unsigned long x, int pid )
 // Our power state is about to lower, and we have notified applications
 // and kernel clients, and one of them has acknowledged.  If this is the last to do
 // so, and all acknowledgements are positive, we continue with the power change.
-//
-// We serialize this processing with timer expiration with a command gate on the
-// power management workloop, which the timer expiration is command gated to as well.
 //*********************************************************************************
 
 IOReturn IOService::allowPowerChange ( unsigned long refcon )
@@ -5172,7 +5924,7 @@ IOReturn IOService::allowPowerChange ( unsigned long refcon )
 
 	request->fArg0 = (void *) refcon;
 	request->fArg1 = (void *) proc_selfpid();
-    request->fArg2 = (void *) 0;
+	request->fArg2 = (void *) 0;
 	submitPMRequest( request );
 
 	return kIOReturnSuccess;
@@ -5192,9 +5944,6 @@ IOReturn IOService::serializedAllowPowerChange2 ( unsigned long refcon )
 // Our power state is about to lower, and we have notified applications
 // and kernel clients, and one of them has vetoed the change.  If this is the last
 // client to respond, we abandon the power change.
-//
-// We serialize this processing with timer expiration with a command gate on the
-// power management workloop, which the timer expiration is command gated to as well.
 //*********************************************************************************
 
 IOReturn IOService::cancelPowerChange ( unsigned long refcon )
@@ -5255,6 +6004,9 @@ void IOService::clampPowerOn ( unsigned long duration )
 }
 #endif /* !__LP64__ */
 
+// MARK: -
+// MARK: Driver Overrides
+
 //*********************************************************************************
 // [public] setPowerState
 //
@@ -5285,8 +6037,8 @@ unsigned long IOService::maxCapabilityForDomainState ( IOPMPowerFlags domainStat
    }
    for ( i = fNumberOfPowerStates - 1; i >= 0; i-- )
    {
-       if ( (domainState & fPowerStates[i].inputPowerRequirement) ==
-			               fPowerStates[i].inputPowerRequirement )
+       if ( (domainState & fPowerStates[i].inputPowerFlags) ==
+			               fPowerStates[i].inputPowerFlags )
        {
            return i;
        }
@@ -5312,8 +6064,8 @@ unsigned long IOService::initialPowerStateForDomainState ( IOPMPowerFlags domain
     }
     for ( i = fNumberOfPowerStates - 1; i >= 0; i-- )
     {
-        if ( (domainState & fPowerStates[i].inputPowerRequirement) ==
-			fPowerStates[i].inputPowerRequirement )
+        if ( (domainState & fPowerStates[i].inputPowerFlags) ==
+			fPowerStates[i].inputPowerFlags )
         {
             return i;
         }
@@ -5339,8 +6091,8 @@ unsigned long IOService::powerStateForDomainState ( IOPMPowerFlags domainState )
     }
     for ( i = fNumberOfPowerStates - 1; i >= 0; i-- )
     {
-        if ( (domainState & fPowerStates[i].inputPowerRequirement) ==
-			fPowerStates[i].inputPowerRequirement )
+        if ( (domainState & fPowerStates[i].inputPowerFlags) ==
+			fPowerStates[i].inputPowerFlags )
         {
             return i;
         }
@@ -5420,6 +6172,9 @@ void IOService::systemWillShutdown( IOOptionBits specifier )
 		rootDomain->acknowledgeSystemWillShutdown( this );
 }
 
+// MARK: -
+// MARK: PM State Machine
+
 //*********************************************************************************
 // [private static] acquirePMRequest
 //*********************************************************************************
@@ -5473,7 +6228,7 @@ void IOService::submitPMRequest( IOPMRequest * request )
 	assert( gIOPMReplyQueue );
 	assert( gIOPMRequestQueue );
 
-	PM_TRACE("[+ %02lx] %p [%p %s] %p %p %p\n",
+	PM_LOG1("[+ %02lx] %p [%p %s] %p %p %p\n",
 		(long)request->getType(), request,
 		request->getTarget(), request->getTarget()->getName(),
 		request->fArg0, request->fArg1, request->fArg2);
@@ -5493,7 +6248,7 @@ void IOService::submitPMRequest( IOPMRequest ** requests, IOItemCount count )
 	for (IOItemCount i = 0; i < count; i++)
 	{
 		IOPMRequest * req = requests[i];
-		PM_TRACE("[+ %02lx] %p [%p %s] %p %p %p\n",
+		PM_LOG1("[+ %02lx] %p [%p %s] %p %p %p\n",
 			(long)req->getType(), req,
 			req->getTarget(), req->getTarget()->getName(),
 			req->fArg0, req->fArg1, req->fArg2);
@@ -5504,66 +6259,39 @@ void IOService::submitPMRequest( IOPMRequest ** requests, IOItemCount count )
 
 //*********************************************************************************
 // [private] servicePMRequestQueue
+//
+// Called from IOPMRequestQueue::checkForWork().
 //*********************************************************************************
 
 bool IOService::servicePMRequestQueue(
 	IOPMRequest *		request,
 	IOPMRequestQueue *	queue )
 {
-	// Calling PM methods without PMinit() is not allowed, fail the requests.
+    bool more;
 
-	if (!initialized)
-	{
-		PM_DEBUG("%s: PM not initialized\n", getName());
-        goto done;
-	}
+    if (initialized)
+    {
+        // Work queue will immediately execute the queue'd request if possible.
+        // If execution blocks, the work queue will wait for a producer signal.
+        // Only need to signal more when completing attached requests.
 
-	// Create an IOPMWorkQueue on demand, when the initial PM request is
-	// received.
+        more = gIOPMWorkQueue->queuePMRequest(request, pwrMgt);
+        return more;
+    }
 
-	if (!fPMWorkQueue)
-	{
-		// Allocate and attach an IOPMWorkQueue on demand to avoid taking
-		// the work loop lock in PMinit(), which may deadlock with certain
-		// drivers / families.
+    // Calling PM without PMinit() is not allowed, fail the request.
 
-		fPMWorkQueue = IOPMWorkQueue::create(
-			/* target */	this,
-			/* Work */		OSMemberFunctionCast(IOPMWorkQueue::Action, this,
-								&IOService::servicePMRequest),
-			/* Done */		OSMemberFunctionCast(IOPMWorkQueue::Action, this,
-								&IOService::retirePMRequest)
-			);
-
-		if (fPMWorkQueue &&
-			(gIOPMWorkLoop->addEventSource(fPMWorkQueue) != kIOReturnSuccess))
-		{
-			PM_ERROR("%s: add PM work queue failed\n", getName());
-			fPMWorkQueue->release();
-			fPMWorkQueue = 0;
-		}
-
-		if (!fPMWorkQueue)
-		{
-			PM_ERROR("%s: no PM work queue (type %02lx)\n",
-				getName(), (long)request->getType());
-			goto done;
-		}
-	}
-
-	fPMWorkQueue->queuePMRequest(request);
-	return false;	// do not signal more
-
-done:
+    PM_LOG("%s: PM not initialized\n", getName());
 	fAdjustPowerScheduled = false;
-	gIOPMFreeQueue->queuePMRequest(request);
-	return false;	// do not signal more
+	more = gIOPMFreeQueue->queuePMRequest(request);
+    if (more) gIOPMWorkQueue->incrementProducerCount();
+	return more;
 }
 
 //*********************************************************************************
 // [private] servicePMFreeQueue
 //
-// Called by the request completion to recycle a completed request.
+// Called from IOPMCompletionQueue::checkForWork().
 //*********************************************************************************
 
 bool IOService::servicePMFreeQueue(
@@ -5575,26 +6303,8 @@ bool IOService::servicePMFreeQueue(
 
     if (root && (root != request))
         more = true;
-
-    if (fLockedFlags.PMStop && fPMWorkQueue && fPMWorkQueue->isEmpty())
-    {
-        // Driver PMstop'ed and the work queue is empty.
-        // Detach and destroy the work queue to avoid the similar cleanup by
-        // PMfree(), which is deadlock prone. After PMstop() if driver calls PM,
-        // or a request from power parent or child arrives, it is possible to
-        // create/cleanup work queue more than once. Should be rare.
-
-        gIOPMWorkLoop->removeEventSource(fPMWorkQueue);
-        fPMWorkQueue->release();
-        fPMWorkQueue = 0;
-
-        if ( fIdleTimerEventSource != NULL ) {
-            fIdleTimerEventSource->disable();
-            gIOPMWorkLoop->removeEventSource(fIdleTimerEventSource);
-            fIdleTimerEventSource->release();
-            fIdleTimerEventSource = NULL;
-        }		
-    }
+    if (more)
+        gIOPMWorkQueue->incrementProducerCount();
 
 	releasePMRequest( request );
 	return more;
@@ -5610,14 +6320,14 @@ bool IOService::retirePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
 {
 	assert(request && queue);
 
-	PM_TRACE("[- %02x] %p [%p %s] State %d, Busy %d\n",
+	PM_LOG1("[- %02x] %p [%p %s] state %d, busy %d\n",
 		request->getType(), request, this, getName(),
 		fMachineState, gIOPMBusyCount);
 
 	// Catch requests created by idleTimerExpired().
 
 	if ((request->getType() == kIOPMRequestTypeActivityTickle) &&
-		(request->fArg1 == (void *) false))
+	    (request->fArg1 == (void *) (uintptr_t) false))
 	{
 		// Idle timer power drop request completed.
 		// Restart the idle timer if deviceDesire can go lower, otherwise set
@@ -5633,8 +6343,10 @@ bool IOService::retirePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
 			fIdleTimerStopped = true;
 	}
 
-	gIOPMFreeQueue->queuePMRequest( request );
-	return true;
+    // If the request is linked, then Work queue has already incremented its
+    // producer count.
+
+	return (gIOPMFreeQueue->queuePMRequest( request ));
 }
 
 //*********************************************************************************
@@ -5656,7 +6368,8 @@ bool IOService::isPMBlocked ( IOPMRequest * request, int count )
             // 5 = kDriverCallInformPreChange
             // 6 = kDriverCallInformPostChange
             // 7 = kDriverCallSetPowerState
-			if (fLockedFlags.DriverCallBusy) reason = 5 + fDriverCallReason;
+			if (fDriverCallBusy)
+                reason = 5 + fDriverCallReason;
 			break;
 		}
 
@@ -5691,7 +6404,7 @@ bool IOService::isPMBlocked ( IOPMRequest * request, int count )
 	{
 		if (count)
 		{
-			PM_TRACE("[B %02x] %p [%p %s] State %d, Reason %d\n",
+			PM_LOG1("[B %02x] %p [%p %s] state %d, reason %d\n",
 				request->getType(), request, this, getName(),
 				fMachineState, reason);
 		}
@@ -5717,10 +6430,11 @@ bool IOService::servicePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
 
 	while (isPMBlocked(request, loop++) == false)
 	{
-		PM_TRACE("[W %02x] %p [%p %s] State %d\n",
+		PM_LOG1("[W %02x] %p [%p %s] state %d\n",
 			request->getType(), request, this, getName(), fMachineState);
 
 		gIOPMRequest = request;
+        gIOPMWorkCount++;
 
 		// Every PM machine states must be handled in one of the cases below.
 
@@ -5731,40 +6445,87 @@ bool IOService::servicePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
 				break;
 
 			case kIOPM_OurChangeTellClientsPowerDown:
-				// our change, was it vetoed?
+                // Root domain might self cancel due to assertions.
+                if (IS_ROOT_DOMAIN)
+                {
+                    bool cancel = (bool) fDoNotPowerDown;
+                    getPMRootDomain()->askChangeDownDone(
+                        &fHeadNoteChangeFlags, &cancel);
+                    fDoNotPowerDown = cancel;
+                }
+
+                // askChangeDown() done, was it vetoed?
 				if (!fDoNotPowerDown)
 				{
+                    if (IS_ROOT_DOMAIN) {
+                        PMEventDetails *details = PMEventDetails::eventDetails(
+                                                    kIOPMEventTypeAppNotificationsFinished,
+                                                    NULL,
+                                                    0,
+                                                    0);
+						
+						getPMRootDomain()->recordAndReleasePMEventGated( details );
+                    }
+
 					// no, we can continue
 					OurChangeTellClientsPowerDown();
 				}
 				else
 				{
+                    if (IS_ROOT_DOMAIN) {
+                        PMEventDetails *details = PMEventDetails::eventDetails(
+                                                    kIOPMEventTypeSleepDone,
+                                                    NULL,
+                                                    1, /* reason: 1 == Ask clients succeeded */
+                                                    kIOReturnAborted); /* result */
+			  
+                        getPMRootDomain()->recordAndReleasePMEventGated( details );
+                    }
+
 					OUR_PMLog(kPMLogIdleCancel, (uintptr_t) this, fMachineState);
 					PM_ERROR("%s: idle cancel\n", fName);
 					// yes, rescind the warning
 					tellNoChangeDown(fHeadNotePowerState);
 					// mark the change note un-actioned
-					fHeadNoteFlags |= kIOPMNotDone;
+					fHeadNoteChangeFlags |= kIOPMNotDone;
 					// and we're done
-					all_done();
+					OurChangeFinish();
 				}
 				break;
 
 			case kIOPM_OurChangeTellPriorityClientsPowerDown:
-				// our change, should it be acted on still?
+				// tellChangeDown(kNotifyApps) done, was it cancelled?
 				if (fDoNotPowerDown)
 				{
+                    if (IS_ROOT_DOMAIN) {
+						PMEventDetails *details = PMEventDetails::eventDetails(
+                                                    kIOPMEventTypeSleepDone,
+                                                    NULL,
+                                                    2, /* reason: 2 == Client cancelled wake */
+                                                    kIOReturnAborted); /* result */
+						
+						getPMRootDomain()->recordAndReleasePMEventGated( details );
+                    }
 					OUR_PMLog(kPMLogIdleCancel, (uintptr_t) this, fMachineState);
 					PM_ERROR("%s: idle revert\n", fName);
 					// no, tell clients we're back in the old state
 					tellChangeUp(fCurrentPowerState);
 					// mark the change note un-actioned
-					fHeadNoteFlags |= kIOPMNotDone;
+					fHeadNoteChangeFlags |= kIOPMNotDone;
 					// and we're done
-					all_done();
+					OurChangeFinish();
 				}
 				else
 				{
+                    if (IS_ROOT_DOMAIN) {
+						PMEventDetails *details = PMEventDetails::eventDetails(
+                                                    kIOPMEventTypeAppNotificationsFinished,
+                                                    NULL,
+                                                    2, /* reason: 2 == TellPriorityClientsDone */																	
+                                                    kIOReturnSuccess); /* result */
+						
+						getPMRootDomain()->recordAndReleasePMEventGated( details );
+                    }
 					// yes, we can continue
 					OurChangeTellPriorityClientsPowerDown();  
 				}
@@ -5786,44 +6547,40 @@ bool IOService::servicePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
 				OurChangeNotifyInterestedDriversDidChange();
 				break;
 
+            case kIOPM_OurChangeTellCapabilityDidChange:
+                OurChangeTellCapabilityDidChange();
+                break;
+
 			case kIOPM_OurChangeFinish:
 				OurChangeFinish();
 				break;
 
-			case kIOPM_ParentDownTellPriorityClientsPowerDown:
-				ParentDownTellPriorityClientsPowerDown();
+			case kIOPM_ParentChangeTellPriorityClientsPowerDown:
+				ParentChangeTellPriorityClientsPowerDown();
 				break;
 
-			case kIOPM_ParentDownNotifyInterestedDriversWillChange:
-				ParentDownNotifyInterestedDriversWillChange();
+			case kIOPM_ParentChangeNotifyInterestedDriversWillChange:
+				ParentChangeNotifyInterestedDriversWillChange();
 				break;
 
-			case kIOPM_ParentDownNotifyDidChangeAndAcknowledgeChange:
-				ParentDownNotifyDidChangeAndAcknowledgeChange();
+			case kIOPM_ParentChangeSetPowerState:
+				ParentChangeSetPowerState();
 				break;
 
-			case kIOPM_ParentDownSetPowerState:
-				ParentDownSetPowerState();	
+			case kIOPM_ParentChangeWaitForPowerSettle:
+				ParentChangeWaitForPowerSettle();
 				break;
 
-			case kIOPM_ParentDownWaitForPowerSettle:
-				ParentDownWaitForPowerSettle();
+			case kIOPM_ParentChangeNotifyInterestedDriversDidChange:
+				ParentChangeNotifyInterestedDriversDidChange();
 				break;
 
-			case kIOPM_ParentAcknowledgePowerChange:
-				ParentAcknowledgePowerChange();
-				break;
+            case kIOPM_ParentChangeTellCapabilityDidChange:
+                ParentChangeTellCapabilityDidChange();
+                break;
 
-			case kIOPM_ParentUpSetPowerState:
-				ParentUpSetPowerState();
-				break;
-
-			case kIOPM_ParentUpWaitForSettleTime:
-				ParentUpWaitForSettleTime();
-				break;
-
-			case kIOPM_ParentUpNotifyInterestedDriversDidChange:
-				ParentUpNotifyInterestedDriversDidChange();
+			case kIOPM_ParentChangeAcknowledgePowerChange:
+				ParentChangeAcknowledgePowerChange();
 				break;
 
 			case kIOPM_DriverThreadCallDone:
@@ -5833,21 +6590,116 @@ bool IOService::servicePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
 					notifyInterestedDriversDone();
 				break;
 
-			case kIOPM_NotifyChildrenDone:
-				notifyChildrenDone();
+			case kIOPM_NotifyChildrenOrdered:
+				notifyChildrenOrdered();
 				break;
 
+			case kIOPM_NotifyChildrenDelayed:
+				notifyChildrenDelayed();
+				break;
+
+            case kIOPM_NotifyChildrenStart:
+                PM_LOG2("%s: kIOPM_NotifyChildrenStart done\n", getName());
+                MS_POP();   // from notifyInterestedDriversDone()
+                notifyChildren();
+                break;
+
+            case kIOPM_SyncTellClientsPowerDown:
+                // Root domain might self cancel due to assertions.
+                if (IS_ROOT_DOMAIN)
+                {
+                    bool cancel = (bool) fDoNotPowerDown;
+                    getPMRootDomain()->askChangeDownDone(
+                        &fHeadNoteChangeFlags, &cancel);
+                    fDoNotPowerDown = cancel;
+                }                
+				if (!fDoNotPowerDown)
+				{
+                    fMachineState = kIOPM_SyncTellPriorityClientsPowerDown;
+                    fOutOfBandParameter = kNotifyApps;
+                    tellChangeDown(fHeadNotePowerState);
+				}
+				else
+				{
+					OUR_PMLog(kPMLogIdleCancel, (uintptr_t) this, fMachineState);
+					PM_ERROR("%s: idle cancel\n", fName);
+					tellNoChangeDown(fHeadNotePowerState);
+					fHeadNoteChangeFlags |= kIOPMNotDone;
+					OurChangeFinish();
+				}
+                break;
+
+            case kIOPM_SyncTellPriorityClientsPowerDown:
+				if (!fDoNotPowerDown)
+				{
+                    fMachineState = kIOPM_SyncNotifyWillChange;
+                    fOutOfBandParameter = kNotifyPriority;
+                    tellChangeDown(fHeadNotePowerState);
+                }
+                else
+                {
+					OUR_PMLog(kPMLogIdleCancel, (uintptr_t) this, fMachineState);
+					PM_ERROR("%s: idle revert\n", fName);
+					tellChangeUp(fCurrentPowerState);
+					fHeadNoteChangeFlags |= kIOPMNotDone;
+					OurChangeFinish();
+				}
+				break;
+
+            case kIOPM_SyncNotifyWillChange:
+                if (kIOPMSyncNoChildNotify & fHeadNoteChangeFlags)
+                {
+                    fMachineState = kIOPM_SyncFinish;
+                    continue;
+                }
+                fMachineState     = kIOPM_SyncNotifyDidChange;
+                fDriverCallReason = kDriverCallInformPreChange;
+                notifyChildren();
+                break;
+
             case kIOPM_SyncNotifyDidChange:
-                fMachineState     = kIOPM_SyncFinish;
+                fIsPreChange = false;
+
+                if (fHeadNoteChangeFlags & kIOPMParentInitiated)
+                    fMachineState = kIOPM_SyncFinish;
+                else
+                    fMachineState = kIOPM_SyncTellCapabilityDidChange;
+
                 fDriverCallReason = kDriverCallInformPostChange;
                 notifyChildren();
                 break;
 
+            case kIOPM_SyncTellCapabilityDidChange:
+                tellSystemCapabilityChange( kIOPM_SyncFinish );
+                break;
+
             case kIOPM_SyncFinish:
-                if (fHeadNoteFlags & kIOPMParentInitiated)
-                    ParentAcknowledgePowerChange();
+                if (fHeadNoteChangeFlags & kIOPMParentInitiated)
+                    ParentChangeAcknowledgePowerChange();
                 else
                     OurChangeFinish();
+                break;
+
+            case kIOPM_TellCapabilityChangeDone:
+                if (fIsPreChange)
+                {
+                    if (fOutOfBandParameter == kNotifyCapabilityChangePriority)
+                    {
+                        MS_POP();   // tellSystemCapabilityChange()
+                        continue;
+                    }
+                    fOutOfBandParameter = kNotifyCapabilityChangePriority;
+                }
+                else
+                {
+                    if (fOutOfBandParameter == kNotifyCapabilityChangeApps)
+                    {
+                        MS_POP();   // tellSystemCapabilityChange()
+                        continue;
+                    }
+                    fOutOfBandParameter = kNotifyCapabilityChangeApps;
+                }
+                tellClientsWithResponse( fOutOfBandMessage );
                 break;
 
 			default:
@@ -5859,8 +6711,6 @@ bool IOService::servicePMRequest( IOPMRequest * request, IOPMWorkQueue * queue )
 
 		if (fMachineState == kIOPM_Finished)
 		{
-			//PM_TRACE("[%s] PM   End: Request %p (type %02lx)\n",
-			//	getName(), request, request->getType());
 			done = true;
 			break;
 		}
@@ -5910,6 +6760,7 @@ void IOService::executePMRequest( IOPMRequest * request )
 			break;
 
 		case kIOPMRequestTypePowerDomainDidChange:
+            
 			handlePowerDomainDidChangeTo( request );
 			break;
 
@@ -5933,29 +6784,10 @@ void IOService::executePMRequest( IOPMRequest * request )
 
         case kIOPMRequestTypeSetIdleTimerPeriod:
             {
-                IOWorkLoop * wl  = gIOPMWorkLoop;
                 fIdleTimerPeriod = (uintptr_t) request->fArg0;
 
-                if (wl && (false == fLockedFlags.PMStop) && (fIdleTimerPeriod > 0))
+                if ((false == fLockedFlags.PMStop) && (fIdleTimerPeriod > 0))
                 {
-                    if ( NULL == fIdleTimerEventSource )
-                    {
-                        IOTimerEventSource * timerSrc;
-
-                        timerSrc = IOTimerEventSource::timerEventSource(
-                            this,
-                            OSMemberFunctionCast(IOTimerEventSource::Action,
-                                this, &IOService::idleTimerExpired));
-                        
-                        if (timerSrc && (wl->addEventSource(timerSrc) != kIOReturnSuccess))
-                        {
-                            timerSrc->release();
-                            timerSrc = 0;
-                        }
-
-                        fIdleTimerEventSource = timerSrc;
-                    }
-
                     fActivityTickleCount = 0;
                     clock_get_uptime(&fIdleTimerStartTime);
                     start_PM_idle_timer();
@@ -5979,7 +6811,7 @@ bool IOService::servicePMReplyQueue( IOPMRequest * request, IOPMRequestQueue * q
 	assert( request && queue );
 	assert( request->isReplyType() );
 
-	PM_TRACE("[A %02x] %p [%p %s] State %d\n",
+	PM_LOG1("[A %02x] %p [%p %s] state %d\n",
 		request->getType(), request, this, getName(), fMachineState);
 
 	switch ( request->getType() )
@@ -5987,32 +6819,30 @@ bool IOService::servicePMReplyQueue( IOPMRequest * request, IOPMRequestQueue * q
 		case kIOPMRequestTypeAllowPowerChange:
 		case kIOPMRequestTypeCancelPowerChange:
 			// Check if we are expecting this response.
-			if (responseValid((unsigned long) request->fArg0, (int)(long) request->fArg1))
+			if (responseValid((uint32_t)(uintptr_t) request->fArg0,
+                              (int)(uintptr_t) request->fArg1))
 			{
 				if (kIOPMRequestTypeCancelPowerChange == request->getType())
                 {
-                    OSString * name = (OSString *) request->fArg2;
-                    getPMRootDomain()->pmStatsRecordApplicationResponse(
-                        gIOPMStatsApplicationResponseCancel,
-                        name ? name->getCStringNoCopy() : "", 0,
-                        0, (int)(uintptr_t) request->fArg1);
+                    // Clients are not allowed to cancel when kIOPMSkipAskPowerDown
+                    // flag is set. Only root domain will set this flag.
 
-					fDoNotPowerDown = true;
+                    if ((fHeadNoteChangeFlags & kIOPMSkipAskPowerDown) == 0)
+                    {
+                        fDoNotPowerDown = true;
+
+                        OSString * name = (OSString *) request->fArg2;
+                        getPMRootDomain()->pmStatsRecordApplicationResponse(
+                            gIOPMStatsApplicationResponseCancel,
+                            name ? name->getCStringNoCopy() : "", 0,
+                            0, (int)(uintptr_t) request->fArg1);
+                    }
                 }
 
 				if (checkForDone())
 				{
 					stop_ack_timer();
-					if ( fResponseArray )
-					{
-						fResponseArray->release();
-						fResponseArray = NULL;
-					}
-                    if ( fNotifyClientArray )
-                    {
-                        fNotifyClientArray->release();
-                        fNotifyClientArray = NULL;
-                    }
+                    cleanClientResponses(false);
 					more = true;
 				}
 			}
@@ -6045,8 +6875,20 @@ bool IOService::servicePMReplyQueue( IOPMRequest * request, IOPMRequestQueue * q
 #if LOG_SETPOWER_TIMES
                 uint64_t nsec = computeTimeDeltaNS(&fDriverCallStartTime);
                 if (nsec > LOG_SETPOWER_TIMES)
-                    PM_DEBUG("%s::setPowerState(%p, %lu -> %lu) async took %d ms\n",
+                    PM_LOG("%s::setPowerState(%p, %lu -> %lu) async took %d ms\n",
                         fName, this, fCurrentPowerState, fHeadNotePowerState, NS_TO_MS(nsec));
+				
+				PMEventDetails *details = PMEventDetails::eventDetails(
+                                            kIOPMEventTypeSetPowerStateDelayed,		// type
+                                            fName,									// who
+                                            (uintptr_t)this,						// owner unique
+                                            NULL,									// interest name
+                                            (uint8_t)getPowerState(),				// old
+                                            (uint8_t)fHeadNotePowerState,			// new
+                                            0,										// result
+                                            NS_TO_US(nsec));						// usec completion time
+				
+				getPMRootDomain()->recordAndReleasePMEventGated( details );
 #endif
 				OUR_PMLog(kPMLogDriverAcknowledgeSet, (uintptr_t) this, fDriverTimer);
 				fDriverTimer = 0;
@@ -6066,68 +6908,187 @@ bool IOService::servicePMReplyQueue( IOPMRequest * request, IOPMRequestQueue * q
 
 		case kIOPMRequestTypeIdleCancel:
 			if ((fMachineState == kIOPM_OurChangeTellClientsPowerDown) 
-			 || (fMachineState == kIOPM_OurChangeTellPriorityClientsPowerDown))
+             || (fMachineState == kIOPM_OurChangeTellPriorityClientsPowerDown) 
+             || (fMachineState == kIOPM_SyncTellClientsPowerDown)
+             || (fMachineState == kIOPM_SyncTellPriorityClientsPowerDown))
 			{
-				OUR_PMLog(kPMLogIdleCancel, (uintptr_t) this, 0);
+				OUR_PMLog(kPMLogIdleCancel, (uintptr_t) this, fMachineState);
+                PM_LOG2("%s: cancel from machine state %d\n",
+                    getName(), fMachineState);
 				fDoNotPowerDown = true;
-				if (fMachineState == kIOPM_OurChangeTellPriorityClientsPowerDown)
+                // Stop waiting for app replys.
+				if ((fMachineState == kIOPM_OurChangeTellPriorityClientsPowerDown) ||
+                    (fMachineState == kIOPM_SyncTellPriorityClientsPowerDown))
 					cleanClientResponses(false);
 				more = true;
 			}
 			break;
+
+        case kIOPMRequestTypeChildNotifyDelayCancel:
+            if (fMachineState == kIOPM_NotifyChildrenDelayed)
+            {
+                PM_LOG2("%s: delay notify cancelled\n", getName());                
+                notifyChildrenDelayed();
+            }
+            break;
 
 		default:
 			panic("servicePMReplyQueue: unknown reply type %x",
                 request->getType());
 	}
 
-	releasePMRequest( request );
+	more |= gIOPMFreeQueue->queuePMRequest(request);
+    if (more)
+        gIOPMWorkQueue->incrementProducerCount();
+
 	return more;
 }
 
 //*********************************************************************************
-// [private] assertPMThreadCall / deassertPMThreadCall
+// [private] assertPMDriverCall / deassertPMDriverCall
 //*********************************************************************************
 
-bool IOService::assertPMThreadCall( void )
+bool IOService::assertPMDriverCall(
+    IOPMDriverCallEntry *   entry,
+    IOOptionBits            options,
+    IOPMinformee *          inform )
 {
+    IOService * target = 0;
+    bool        ok = false;
+
     if (!initialized)
         return false;
 
-    // PMfree() should only be called from IOService::free().
-    // That makes it safe to touch IOServicePM state here.
-    // Caller holds a retain and has checked target is on PM plane.
-
     PM_LOCK();
+
     if (fLockedFlags.PMStop)
     {
-        // PMstop() already issued - fail the assertion.
-        PM_UNLOCK();
-        return false;
+        goto fail;
+    }
+    
+    if (((options & kIOPMADC_NoInactiveCheck) == 0) && isInactive())
+    {
+        goto fail;
     }
 
-    // Increment assertion count to block PMstop(), and return true.
-    fThreadAssertionCount++;
-    fThreadAssertionThread = current_thread();  // only 1 caller
+    if (inform)
+    {
+        if (!inform->active)
+        {
+            goto fail;
+        }
+        target = inform->whatObject;
+        if (target->isInactive())
+        {
+            goto fail;
+        }
+    }
+
+    entry->thread = current_thread();
+    entry->target = target;
+    queue_enter(&fPMDriverCallQueue, entry, IOPMDriverCallEntry *, link);
+    ok = true;
+
+fail:
     PM_UNLOCK();
 
-    return true;
+    return ok;
 }
 
-void IOService::deassertPMThreadCall( void )
+void IOService::deassertPMDriverCall( IOPMDriverCallEntry * entry )
 {
+    bool wakeup = false;
+
     PM_LOCK();
-    assert(fThreadAssertionCount > 0);
-    if (fThreadAssertionCount)
-        fThreadAssertionCount--;
-    if (current_thread() == fThreadAssertionThread)
-        fThreadAssertionThread = 0;
-    if ((fThreadAssertionCount == 0) && fLockedFlags.PMStop)
+
+    assert( !queue_empty(&fPMDriverCallQueue) );
+    queue_remove(&fPMDriverCallQueue, entry, IOPMDriverCallEntry *, link);
+    if (fLockedFlags.PMDriverCallWait)
     {
-        // PMstop() is blocked waiting for assertion count to drop to zero.
-        PM_LOCK_WAKEUP(&fThreadAssertionCount);
+        wakeup = true;
     }
+
     PM_UNLOCK();
+
+    if (wakeup)
+        PM_LOCK_WAKEUP(&fPMDriverCallQueue);
+}
+
+void IOService::waitForPMDriverCall( IOService * target )
+{
+    const IOPMDriverCallEntry * entry;
+    thread_t                    thread = current_thread();
+    AbsoluteTime                deadline;
+    int                         waitResult;
+    bool                        log = true;
+    bool                        wait;
+
+    do {
+        wait = false;
+        queue_iterate(&fPMDriverCallQueue, entry, const IOPMDriverCallEntry *, link)
+        {
+            // Target of interested driver call
+            if (target && (target != entry->target))
+                continue;
+
+            if (entry->thread == thread)
+            {
+                if (log)
+                {
+                    PM_LOG("%s: %s(%s) on PM thread\n",
+                        fName, __FUNCTION__, target ? target->getName() : "");
+                    OSReportWithBacktrace("%s: %s(%s) on PM thread\n",
+                        fName, __FUNCTION__, target ? target->getName() : "");
+                    log = false;
+                }
+                continue;
+            }
+            
+            wait = true;
+            break;
+        }
+
+        if (wait)
+        {
+            fLockedFlags.PMDriverCallWait = true;
+            clock_interval_to_deadline(15, kSecondScale, &deadline);
+            waitResult = PM_LOCK_SLEEP(&fPMDriverCallQueue, deadline);
+            fLockedFlags.PMDriverCallWait = false;
+            if (THREAD_TIMED_OUT == waitResult)
+            {
+                PM_ERROR("%s: waitForPMDriverCall timeout\n", fName);
+                wait = false;
+            }
+        }
+    } while (wait);
+}
+
+//*********************************************************************************
+// [private] Debug helpers
+//*********************************************************************************
+
+const char * IOService::getIOMessageString( uint32_t msg )
+{
+#define MSG_ENTRY(x)    {x, #x}
+
+    static const IONamedValue msgNames[] = { 
+        MSG_ENTRY( kIOMessageCanDevicePowerOff      ),
+        MSG_ENTRY( kIOMessageDeviceWillPowerOff     ),
+        MSG_ENTRY( kIOMessageDeviceWillNotPowerOff  ),
+        MSG_ENTRY( kIOMessageDeviceHasPoweredOn     ),
+        MSG_ENTRY( kIOMessageCanSystemPowerOff      ),
+        MSG_ENTRY( kIOMessageSystemWillPowerOff     ),
+        MSG_ENTRY( kIOMessageSystemWillNotPowerOff  ),
+        MSG_ENTRY( kIOMessageCanSystemSleep         ),
+        MSG_ENTRY( kIOMessageSystemWillSleep        ),
+        MSG_ENTRY( kIOMessageSystemWillNotSleep     ),
+        MSG_ENTRY( kIOMessageSystemHasPoweredOn     ),
+        MSG_ENTRY( kIOMessageSystemWillRestart      ),
+        MSG_ENTRY( kIOMessageSystemWillPowerOn      ),
+        MSG_ENTRY( kIOMessageSystemCapabilityChange )
+    };
+
+    return IOFindNameForValue(msg, msgNames);
 }
 
 // MARK: -
@@ -6189,8 +7150,10 @@ void IOPMRequest::reset( void )
 	}	
 }
 
-void IOPMRequest::attachNextRequest( IOPMRequest * next )
+bool IOPMRequest::attachNextRequest( IOPMRequest * next )
 {
+    bool ok = false;
+
     if (!fRequestNext)
     {
         // Postpone the execution of the next request after
@@ -6204,11 +7167,15 @@ void IOPMRequest::attachNextRequest( IOPMRequest * next )
             (uint32_t) fRequestNext->fWorkWaitCount,
             fTarget->getName());
 #endif
+        ok = true;
     }
+    return ok;
 }
 
-void IOPMRequest::detachNextRequest( void )
+bool IOPMRequest::detachNextRequest( void )
 {
+    bool ok = false;
+
     if (fRequestNext)
     {
         assert(fRequestNext->fWorkWaitCount);
@@ -6222,11 +7189,15 @@ void IOPMRequest::detachNextRequest( void )
             fTarget->getName());
 #endif
         fRequestNext = 0;
+        ok = true;
     }
+    return ok;
 }
 
-void IOPMRequest::attachRootRequest( IOPMRequest * root )
+bool IOPMRequest::attachRootRequest( IOPMRequest * root )
 {
+    bool ok = false;
+
     if (!fRequestRoot)
     {
         // Delay the completion of the root request after
@@ -6240,11 +7211,15 @@ void IOPMRequest::attachRootRequest( IOPMRequest * root )
             (uint32_t) fRequestRoot->fFreeWaitCount,
             fTarget->getName());
 #endif
+        ok = true;
     }
+    return ok;
 }
 
-void IOPMRequest::detachRootRequest( void )
+bool IOPMRequest::detachRootRequest( void )
 {
+    bool ok = false;
+
     if (fRequestRoot)
     {
         assert(fRequestRoot->fFreeWaitCount);
@@ -6258,7 +7233,9 @@ void IOPMRequest::detachRootRequest( void )
             fTarget->getName());
 #endif
         fRequestRoot = 0;
+        ok = true;
     }
+    return ok;
 }
 
 // MARK: -
@@ -6267,8 +7244,7 @@ void IOPMRequest::detachRootRequest( void )
 //*********************************************************************************
 // IOPMRequestQueue Class
 //
-// Global queues. As PM-aware drivers load and unload, their IOPMWorkQueue's are
-// created and deallocated. IOPMRequestQueue are created once and never released.
+// Global queues. Queues are created once and never released.
 //*********************************************************************************
 
 OSDefineMetaClassAndStructors( IOPMRequestQueue, IOEventSource );
@@ -6353,19 +7329,13 @@ bool IOPMRequestQueue::checkForWork( void )
 	return more;
 }
 
-void IOPMRequestQueue::signalWorkAvailable( void )
-{
-	IOEventSource::signalWorkAvailable();
-}
-
 // MARK: -
 // MARK: IOPMWorkQueue
 
 //*********************************************************************************
 // IOPMWorkQueue Class
 //
-// Every object in the power plane that has handled a PM request, will have an
-// instance of IOPMWorkQueue allocated for it.
+// Queue of IOServicePM objects with busy IOPMRequest(s).
 //*********************************************************************************
 
 OSDefineMetaClassAndStructors( IOPMWorkQueue, IOEventSource );
@@ -6390,43 +7360,160 @@ bool IOPMWorkQueue::init( IOService * inOwner, Action work, Action retire )
 
 	queue_init(&fWorkQueue);
 
-	fWorkAction   = work;
-	fRetireAction = retire;
+	fWorkAction    = work;
+	fRetireAction  = retire;
+    fConsumerCount = fProducerCount = 0;
 
 	return true;
 }
 
-void IOPMWorkQueue::queuePMRequest( IOPMRequest * request )
+bool IOPMWorkQueue::queuePMRequest( IOPMRequest * request, IOServicePM * pwrMgt )
 {
+    bool more = false;
+    bool empty;
+
 	assert( request );
+    assert( pwrMgt );
 	assert( onThread() );
+    assert( queue_next(&request->fCommandChain) ==
+            queue_prev(&request->fCommandChain) );
 
 	gIOPMBusyCount++;
-	queue_enter(&fWorkQueue, request, IOPMRequest *, fCommandChain);
-	checkForWork();
+
+    // Add new request to the tail of the per-service request queue.
+    // Then immediately check the request queue to minimize latency
+    // if the queue was empty.
+
+    empty = queue_empty(&pwrMgt->RequestHead);
+	queue_enter(&pwrMgt->RequestHead, request, IOPMRequest *, fCommandChain);
+    if (empty)
+    {
+        more = checkRequestQueue(&pwrMgt->RequestHead, &empty);
+        if (!empty)
+        {
+            // New Request is blocked, add IOServicePM to work queue.
+            assert( queue_next(&pwrMgt->WorkChain) ==
+                    queue_prev(&pwrMgt->WorkChain) );
+
+            queue_enter(&fWorkQueue, pwrMgt, IOServicePM *, WorkChain);
+            fQueueLength++;
+            PM_LOG3("IOPMWorkQueue: [%u] added %s@%p to queue\n",
+                fQueueLength, pwrMgt->Name, pwrMgt);
+        }
+    }
+
+    return more;
+}
+
+bool IOPMWorkQueue::checkRequestQueue( queue_head_t * queue, bool * empty )
+{
+	IOPMRequest *	request;
+	IOService *		target;
+    bool            more = false;
+	bool			done = false;
+
+    assert(!queue_empty(queue));
+    do {
+		request = (IOPMRequest *) queue_first(queue);
+		if (request->isWorkBlocked())
+            break;  // cannot start, blocked on attached request
+
+		target = request->getTarget();
+        done = (*fWorkAction)( target, request, this );
+		if (!done)
+            break;  // work started, blocked on PM state machine
+
+        assert(gIOPMBusyCount > 0);
+		if (gIOPMBusyCount)
+            gIOPMBusyCount--;
+
+        queue_remove_first(queue, request, IOPMRequest *, fCommandChain);
+        more |= (*fRetireAction)( target, request, this );
+        done = queue_empty(queue);
+    } while (!done);
+
+    *empty = done;
+
+    if (more)
+    {
+        // Retired request blocks another request, since the
+        // blocked request may reside in the work queue, we
+        // must bump the producer count to avoid work stall.
+        fProducerCount++;
+    }
+
+    return more;
 }
 
 bool IOPMWorkQueue::checkForWork( void )
 {
-	IOPMRequest *	request;
-	IOService *		target = (IOService *) owner;
-	bool			done;
+	IOServicePM *   entry;
+	IOServicePM *   next;
+    bool			more = false;
+    bool            empty;
 
-	while (!queue_empty(&fWorkQueue))
-	{
-		request = (IOPMRequest *) queue_first(&fWorkQueue);
-		assert(request->getTarget() == target);
-		if (request->isWorkBlocked()) break;
-		done = (*fWorkAction)( target, request, this );
-		if (!done) break;
+#if WORK_QUEUE_STATS
+    fStatCheckForWork++;
+#endif
 
-		assert(gIOPMBusyCount > 0);
-		if (gIOPMBusyCount) gIOPMBusyCount--;
-		queue_remove_first(&fWorkQueue, request, IOPMRequest *, fCommandChain);
-		(*fRetireAction)( target, request, this );
-	}
+    // Each producer signal triggers a full iteration over
+    // all IOServicePM entries in the work queue.
 
-	return false;
+    while (fConsumerCount != fProducerCount)
+    {
+        PM_LOG3("IOPMWorkQueue: checkForWork %u %u\n",
+            fProducerCount, fConsumerCount);
+
+        fConsumerCount = fProducerCount;
+
+#if WORK_QUEUE_STATS        
+        if (queue_empty(&fWorkQueue))
+        {
+            fStatQueueEmpty++;
+            break;
+        }
+        fStatScanEntries++;
+        uint32_t cachedWorkCount = gIOPMWorkCount;
+#endif
+
+        entry = (IOServicePM *) queue_first(&fWorkQueue);
+        while (!queue_end(&fWorkQueue, (queue_entry_t) entry))
+        {
+            more |= checkRequestQueue(&entry->RequestHead, &empty);
+
+            // Get next entry, points to head if current entry is last.
+            next = (IOServicePM *) queue_next(&entry->WorkChain);
+
+            // if request queue is empty, remove IOServicePM from queue.
+            if (empty)
+            {
+                assert(fQueueLength);
+                if (fQueueLength) fQueueLength--;
+                PM_LOG3("IOPMWorkQueue: [%u] removed %s@%p from queue\n",
+                    fQueueLength, entry->Name, entry);
+                queue_remove(&fWorkQueue, entry, IOServicePM *, WorkChain);
+            }
+            entry = next;
+        }
+
+#if WORK_QUEUE_STATS
+        if (cachedWorkCount == gIOPMWorkCount)
+            fStatNoWorkDone++;
+#endif
+    }
+
+    return more;
+}
+
+void IOPMWorkQueue::signalWorkAvailable( void )
+{
+    fProducerCount++;
+	IOEventSource::signalWorkAvailable();
+}
+
+void IOPMWorkQueue::incrementProducerCount( void )
+{
+    fProducerCount++;
 }
 
 // MARK: -
@@ -6438,7 +7525,8 @@ bool IOPMWorkQueue::checkForWork( void )
 
 OSDefineMetaClassAndStructors( IOPMCompletionQueue, IOEventSource );
 
-IOPMCompletionQueue * IOPMCompletionQueue::create( IOService * inOwner, Action inAction )
+IOPMCompletionQueue *
+IOPMCompletionQueue::create( IOService * inOwner, Action inAction )
 {
 	IOPMCompletionQueue * me = OSTypeAlloc(IOPMCompletionQueue);
 	if (me && !me->init(inOwner, inAction))
@@ -6458,39 +7546,40 @@ bool IOPMCompletionQueue::init( IOService * inOwner, Action inAction )
 	return true;
 }
 
-void IOPMCompletionQueue::queuePMRequest( IOPMRequest * request )
+bool IOPMCompletionQueue::queuePMRequest( IOPMRequest * request )
 {
+    bool more;
+
 	assert(request);
-    request->detachNextRequest();   // unblocks next request
+    // unblock dependent request
+    more = request->detachNextRequest();
 	queue_enter(&fQueue, request, IOPMRequest *, fCommandChain);
-	if (workLoop) signalWorkAvailable();
+    return more;
 }
 
 bool IOPMCompletionQueue::checkForWork( void )
 {
     Action			dqAction = (Action) action;
 	IOPMRequest *	request;
+	IOPMRequest *   next;
 	IOService *		target;
 	bool			more = false;
-	queue_head_t	tmpQueue;
 
-	queue_init(&tmpQueue);
+    request = (IOPMRequest *) queue_first(&fQueue);
+    while (!queue_end(&fQueue, (queue_entry_t) request))
+    {
+        next = (IOPMRequest *) queue_next(&request->fCommandChain);
+		if (!request->isFreeBlocked())
+        {
+            queue_remove(&fQueue, request, IOPMRequest *, fCommandChain);
+            target = request->getTarget();
+            assert(target);
+            more |= (*dqAction)( target, request, this );
+        }
+        request = next;
+    }
 
-	while (!queue_empty(&fQueue))
-	{
-		queue_remove_first( &fQueue, request, IOPMRequest *, fCommandChain );
-		if (request->isFreeBlocked())
-		{
-			queue_enter(&tmpQueue, request, IOPMRequest *, fCommandChain);
-			continue;
-		}
-		target = request->getTarget();
-		assert(target);
-		more |= (*dqAction)( target, request, this );
-	}
-
-	queue_new_head(&tmpQueue, &fQueue, IOPMRequest *, fCommandChain);
-	return more;
+    return more;
 }
 
 // MARK: -
@@ -6519,10 +7608,15 @@ IOReturn IOServicePM::gatedSerialize( OSSerialize * s  )
 {
 	OSDictionary *	dict;
 	bool			ok = false;
-	int				dictSize = 4;
+	int				dictSize = 5;
 
 	if (IdleTimerPeriod)
 		dictSize += 4;
+
+#if WORK_QUEUE_STATS
+    if (gIOPMRootNode == ControllingDriver)
+        dictSize += 4;
+#endif
 
     if (PowerClients)
         dict = OSDictionary::withDictionary(
@@ -6533,11 +7627,13 @@ IOReturn IOServicePM::gatedSerialize( OSSerialize * s  )
 	if (dict)
 	{
         setPMProperty(dict, "CurrentPowerState", CurrentPowerState);
+        if (NumberOfPowerStates)
+            setPMProperty(dict, "MaxPowerState", NumberOfPowerStates-1);
         if (DesiredPowerState != CurrentPowerState)
             setPMProperty(dict, "DesiredPowerState", DesiredPowerState);
         if (kIOPM_Finished != MachineState)
             setPMProperty(dict, "MachineState", MachineState);
-        if (DeviceOverrides)
+        if (DeviceOverrideEnabled)
             dict->setObject("PowerOverrideOn", kOSBooleanTrue);
 
 		if (IdleTimerPeriod)
@@ -6560,7 +7656,7 @@ IOReturn IOServicePM::gatedSerialize( OSSerialize * s  )
                 delta = now;
                 SUB_ABSOLUTETIME(&delta, &DeviceActiveTimestamp);
                 absolutetime_to_nanoseconds(delta, &nsecs);
-                setPMProperty(dict, "TimeSinceActivityTickle", NS_TO_MS(nsecs));
+                setPMProperty(dict, "TimeSinceLastTickle", NS_TO_MS(nsecs));
             }
 
             if (AbsoluteTime_to_scalar(&IdleTimerStartTime))
@@ -6572,6 +7668,20 @@ IOReturn IOServicePM::gatedSerialize( OSSerialize * s  )
                 setPMProperty(dict, "TimeSinceDeviceIdle", NS_TO_MS(nsecs));
             }
 		}
+
+#if WORK_QUEUE_STATS
+        if (gIOPMRootNode == Owner)
+        {
+            setPMProperty(dict, "WQ-CheckForWork",
+                gIOPMWorkQueue->fStatCheckForWork);
+            setPMProperty(dict, "WQ-ScanEntries",
+                gIOPMWorkQueue->fStatScanEntries);
+            setPMProperty(dict, "WQ-QueueEmpty",
+                gIOPMWorkQueue->fStatQueueEmpty);
+            setPMProperty(dict, "WQ-NoWorkDone",
+                gIOPMWorkQueue->fStatNoWorkDone);
+        }
+#endif
 
 		ok = dict->serialize(s);
 		dict->release();
@@ -6593,3 +7703,53 @@ bool IOServicePM::serialize( OSSerialize * s ) const
 
     return (kIOReturnSuccess == ret);
 }
+
+PMEventDetails* PMEventDetails::eventDetails(uint32_t   type,
+                                             const char *ownerName,
+                                             uintptr_t  ownerUnique,
+                                             const char *interestName,
+                                             uint8_t    oldState,
+                                             uint8_t    newState,
+                                             uint32_t   result,
+                                             uint32_t   elapsedTimeUS) {
+	
+	PMEventDetails *myself;
+	myself  = new PMEventDetails;
+	
+	if(myself) {
+		myself->eventType     = type;
+		myself->ownerName     = ownerName;
+		myself->ownerUnique   = ownerUnique;
+		myself->interestName  = interestName;
+		myself->oldState      = oldState;
+		myself->newState      = newState;
+		myself->result        = result;
+		myself->elapsedTimeUS = elapsedTimeUS;
+		
+		myself->eventClassifier = kIOPMEventClassDriverEvent;
+	}
+	
+	return myself;
+}
+
+
+PMEventDetails* PMEventDetails::eventDetails(uint32_t   type,
+                                             const char *uuid,
+                                             uint32_t   reason,
+                                             uint32_t   result) {
+	
+	PMEventDetails *myself;
+	myself  = new PMEventDetails;
+	
+	if(myself) {
+		myself->eventType     = type;
+		myself->uuid          = uuid;
+		myself->reason        = reason;
+		myself->result        = result;
+		
+		myself->eventClassifier = kIOPMEventClassSystemEvent;
+	}
+	
+	return myself;
+}
+

@@ -74,8 +74,10 @@
  */
 
 #define MACH_NOTIFY_FIRST		0100
-#define MACH_NOTIFY_PORT_DELETED	(MACH_NOTIFY_FIRST + 001 )
+#define MACH_NOTIFY_PORT_DELETED	(MACH_NOTIFY_FIRST + 001)
 			/* A send or send-once right was deleted. */
+#define MACH_NOTIFY_SEND_POSSIBLE	(MACH_NOTIFY_FIRST + 002)
+			/* Now possible to send using specified right */
 #define MACH_NOTIFY_PORT_DESTROYED	(MACH_NOTIFY_FIRST + 005)
 			/* A receive right was (would have been) deallocated */
 #define MACH_NOTIFY_NO_SENDERS		(MACH_NOTIFY_FIRST + 006)
@@ -102,6 +104,13 @@ typedef struct {
     mach_port_name_t not_port;/* MACH_MSG_TYPE_PORT_NAME */
     mach_msg_format_0_trailer_t trailer;
 } mach_port_deleted_notification_t;
+
+typedef struct {
+    mach_msg_header_t	not_header;
+    NDR_record_t	NDR;
+    mach_port_name_t not_port;/* MACH_MSG_TYPE_PORT_NAME */
+    mach_msg_format_0_trailer_t trailer;
+} mach_send_possible_notification_t;
 
 typedef struct {
     mach_msg_header_t	not_header;

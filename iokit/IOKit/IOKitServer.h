@@ -73,6 +73,11 @@ enum {
     @constant kIOCatalogRemoveDrivers  Signals a call to the removeDrivers function in IOCatalogue.
     @constant kIOCatalogRemoveDriversNoMatch  Signals a call to the removedrivers function in IOCatalogue but does not start a matching thread. 
     @constant kIOCatalogStartMatching  Signals the IOCatalogue to start an IOService matching thread.
+    @constant kIOCatalogRemoveKernelLinker  Deprecated; does nothing.
+    @constant kIOCatalogKextdActive  Signals the kernel that kextd is running.
+    @constant kIOCatalogKextdFinishedLaunching  Signals the IOCatalogue that kextd has finished sending it information at startup.
+    @constant kIOCatalogResetDrivers  Resets the IOCatalogue with a new set of personalities.
+    @constant kIOCatalogResetDriversNoMatch  Resets the IOCatalogue with a new set of personalities but does not start a matching thread.
 */
 enum {
     kIOCatalogAddDrivers	= 1,
@@ -82,7 +87,9 @@ enum {
     kIOCatalogStartMatching,
     kIOCatalogRemoveKernelLinker,
     kIOCatalogKextdActive,
-    kIOCatalogKextdFinishedLaunching
+    kIOCatalogKextdFinishedLaunching,
+    kIOCatalogResetDrivers,
+    kIOCatalogResetDriversNoMatch
 };
 
 // IOCatalogueGetData

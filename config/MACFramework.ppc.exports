@@ -1,9 +1,0 @@
-_kau_will_audit
-_mac_kalloc
-_mac_kalloc_noblock
-_mac_kfree
-_mac_mbuf_alloc
-_mac_mbuf_free
-_mac_unwire
-_mac_wire
-_sysctl__security_mac_children

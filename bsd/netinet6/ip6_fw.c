@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -150,11 +150,11 @@ static int ip6fw_sysctl SYSCTL_HANDLER_ARGS;
 SYSCTL_DECL(_net_inet6_ip6);
 SYSCTL_NODE(_net_inet6_ip6, OID_AUTO, fw, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "Firewall");
 SYSCTL_PROC(_net_inet6_ip6_fw, OID_AUTO, enable, 
-	CTLTYPE_INT | CTLFLAG_RW,
+	CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
 	&ip6_fw_enable, 0, ip6fw_sysctl, "I", "Enable ip6fw");
-SYSCTL_INT(_net_inet6_ip6_fw, OID_AUTO, debug, CTLFLAG_RW, &fw6_debug, 0, "");
-SYSCTL_INT(_net_inet6_ip6_fw, OID_AUTO, verbose, CTLFLAG_RW, &fw6_verbose, 0, "");
-SYSCTL_INT(_net_inet6_ip6_fw, OID_AUTO, verbose_limit, CTLFLAG_RW, &fw6_verbose_limit, 0, "");
+SYSCTL_INT(_net_inet6_ip6_fw, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_LOCKED, &fw6_debug, 0, "");
+SYSCTL_INT(_net_inet6_ip6_fw, OID_AUTO, verbose, CTLFLAG_RW | CTLFLAG_LOCKED, &fw6_verbose, 0, "");
+SYSCTL_INT(_net_inet6_ip6_fw, OID_AUTO, verbose_limit, CTLFLAG_RW | CTLFLAG_LOCKED, &fw6_verbose_limit, 0, "");
 
 static int
 ip6fw_sysctl SYSCTL_HANDLER_ARGS
@@ -202,7 +202,6 @@ static void cp_to_user_32( struct ip6_fw_32 *userrule_32, struct ip6_fw *rule);
 static void cp_from_user_32( struct ip6_fw_32 *userrule_32, struct ip6_fw *rule);
 
 static char err_prefix[] = "ip6_fw_ctl:";
-extern lck_mtx_t *ip6_mutex;
 
 /*
  * Returns 1 if the port is matched by the vector, 0 otherwise
@@ -390,17 +389,21 @@ iface_match(struct ifnet *ifp, union ip6_fw_if *ifu, int byname)
 		struct ifaddr *ia;
 
 		ifnet_lock_shared(ifp);
-		for (ia = ifp->if_addrlist.tqh_first; ia; ia = ia->ifa_list.tqe_next)
+		for (ia = ifp->if_addrlist.tqh_first; ia;
+		    ia = ia->ifa_list.tqe_next)
 		{
-
-			if (ia->ifa_addr == NULL)
+			IFA_LOCK_SPIN(ia);
+			if (ia->ifa_addr->sa_family != AF_INET6) {
+				IFA_UNLOCK(ia);
 				continue;
-			if (ia->ifa_addr->sa_family != AF_INET6)
-				continue;
+			}
 			if (!IN6_ARE_ADDR_EQUAL(&ifu->fu_via_ip6,
 			    &(((struct sockaddr_in6 *)
-			    (ia->ifa_addr))->sin6_addr))) 
+			    (ia->ifa_addr))->sin6_addr))) {
+				IFA_UNLOCK(ia);
 				continue;
+			}
+			IFA_UNLOCK(ia);
 			ifnet_lock_done(ifp);
 			return(1);
 		}
@@ -558,7 +561,7 @@ ip6_fw_chk(struct ip6_hdr **pip6,
 	struct ip6_fw_chain *chain;
 	struct ip6_fw *rule = NULL;
 	struct ip6_hdr *ip6 = *pip6;
-	struct ifnet *const rif = ((*m)->m_flags & M_LOOP) ? ifunit("lo0") : (*m)->m_pkthdr.rcvif;
+	struct ifnet *const rif = ((*m)->m_flags & M_LOOP) ? lo_ifp : (*m)->m_pkthdr.rcvif;
 	u_short offset = 0;
 	int off = sizeof(struct ip6_hdr), nxt = ip6->ip6_nxt;
 	u_short src_port, dst_port;
@@ -870,18 +873,15 @@ got_match:
 			}
 			bcopy(&ti, ip6, sizeof(ti));
 			tcp_respond(NULL, ip6, (struct tcphdr *)(ip6 + 1),
-				*m, ack, seq, flags, IFSCOPE_NONE);
+				*m, ack, seq, flags, IFSCOPE_NONE, 0);
 			*m = NULL;
 			break;
 		  }
 		default:	/* Send an ICMP unreachable using code */
 			if (oif)
 				(*m)->m_pkthdr.rcvif = oif;
-			lck_mtx_assert(ip6_mutex, LCK_MTX_ASSERT_OWNED);
-			lck_mtx_unlock(ip6_mutex);
 			icmp6_error(*m, ICMP6_DST_UNREACH,
 			    rule->fw_reject_code, 0);
-			lck_mtx_lock(ip6_mutex);
 			*m = NULL;
 			break;
 		}
@@ -962,6 +962,7 @@ add_entry6(struct ip6_fw_head *chainptr, struct ip6_fw *frwl)
 		}
 	}
 
+	bcopy(ftmp, frwl, sizeof(struct ip6_fw));
 	splx(s);
 	return (0);
 }
@@ -1400,6 +1401,17 @@ ip6_fw_ctl(struct sockopt *sopt)
 				ip6fw_kev_post_msg(KEV_IP6FW_ADD);
 			} else
 				error = EINVAL;
+
+			if (is64user){
+				struct ip6_fw_64 userrule_64;
+				cp_to_user_64( &userrule_64, &rule);
+				error = sooptcopyout(sopt, &userrule_64, userrulesize);
+			}
+			else {
+				struct ip6_fw_32 userrule_32;
+				cp_to_user_32( &userrule_32, &rule);
+				error = sooptcopyout(sopt, &userrule_32, userrulesize);
+			}
 			break;
 
 		case IPV6_FW_DEL:

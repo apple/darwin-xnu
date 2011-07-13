@@ -88,7 +88,15 @@ Apple-added Benchmarks
 
 	create_file
 	geekbench_stdlib_write
+	getaddrinfo_port
+	getaddrinfo_host
+	getgrgid
+	getgrent
+	getgrnam
 	getppid
+	getpwnam
+	getpwuid
+	getpwent
 	lb_mmtest
 	lm_null_call
 	lmbench_bw_file_rd
@@ -107,6 +115,9 @@ Apple-added Benchmarks
 	lmbench_select_tcp
 	lmbench_stat
 	lmbench_write
+	mbr_check_service_membership
+	mbr_check_membership
+	od_query_create_with_node
 	trivial
 	vm_allocate
 

@@ -28,9 +28,7 @@
 #ifndef _MACH_MACHINE_PROFILE_MD_H
 #define _MACH_MACHINE_PROFILE_MD_H_
 
-#if defined (__ppc__)
-#include "profiling/ppc/profile-md.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "profiling/i386/profile-md.h"
 #else
 #error architecture not supported

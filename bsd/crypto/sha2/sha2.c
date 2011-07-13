@@ -63,7 +63,7 @@
  *
  */
 
-#ifndef assert(x)
+#ifndef assert
 #define assert(x) do {} while(0)
 #endif
 
@@ -202,13 +202,21 @@ typedef u_int64_t sha2_word64;	/* Exactly 8 bytes */
  * only.
  */
 void SHA512_Last(SHA512_CTX*);
+#if defined	(SHA256_USE_ASSEMBLY) && (defined(__x86_64__)||defined(__i386__))
+void SHA256_Transform(SHA256_CTX*, const sha2_word32*, unsigned int num_blocks);
+#else
 void SHA256_Transform(SHA256_CTX*, const sha2_word32*);
+#endif
 void SHA512_Transform(SHA512_CTX*, const sha2_word64*);
 
 
 /*** SHA-XYZ INITIAL HASH VALUES AND CONSTANTS ************************/
 /* Hash constant words K for SHA-256: */
+#if defined	(SHA256_USE_ASSEMBLY) && (defined(__x86_64__)||defined(__i386__))
+const sha2_word32 K256[64] = {		// assembly code will need to read this table
+#else
 static const sha2_word32 K256[64] = {
+#endif
 	0x428a2f98UL, 0x71374491UL, 0xb5c0fbcfUL, 0xe9b5dba5UL,
 	0x3956c25bUL, 0x59f111f1UL, 0x923f82a4UL, 0xab1c5ed5UL,
 	0xd807aa98UL, 0x12835b01UL, 0x243185beUL, 0x550c7dc3UL,
@@ -323,6 +331,8 @@ void SHA256_Init(SHA256_CTX* context) {
 	bzero(context->buffer, SHA256_BLOCK_LENGTH);
 	context->bitcount = 0;
 }
+
+#if !(defined (SHA256_USE_ASSEMBLY) && (defined(__x86_64__)||defined(__i386__)))
 
 #ifdef SHA2_UNROLL_TRANSFORM
 
@@ -499,6 +509,8 @@ void SHA256_Transform(SHA256_CTX* context, const sha2_word32* data) {
 
 #endif /* SHA2_UNROLL_TRANSFORM */
 
+#endif	// defined (SHA256_USE_ASSEMBLY) && (defined(__x86_64__)||defined(__i386__))
+
 void SHA256_Update(SHA256_CTX* context, const sha2_byte *data, size_t len) {
 	unsigned int	freespace, usedspace;
 
@@ -521,7 +533,11 @@ void SHA256_Update(SHA256_CTX* context, const sha2_byte *data, size_t len) {
 			context->bitcount += freespace << 3;
 			len -= freespace;
 			data += freespace;
+#if defined (SHA256_USE_ASSEMBLY) && (defined(__x86_64__)||defined(__i386__))
+			SHA256_Transform(context, (sha2_word32*)context->buffer, 1);
+#else
 			SHA256_Transform(context, (sha2_word32*)context->buffer);
+#endif
 		} else {
 			/* The buffer is not yet full */
 			bcopy(data, &context->buffer[usedspace], len);
@@ -531,6 +547,17 @@ void SHA256_Update(SHA256_CTX* context, const sha2_byte *data, size_t len) {
 			return;
 		}
 	}
+#if defined (SHA256_USE_ASSEMBLY) && (defined(__x86_64__)||defined(__i386__))
+	{
+		unsigned int	kk = len/SHA256_BLOCK_LENGTH;
+		if (kk>0) {
+			SHA256_Transform(context, (const sha2_word32*)data, kk);
+			context->bitcount += (SHA256_BLOCK_LENGTH << 3)*kk;
+			len -= SHA256_BLOCK_LENGTH*kk;
+			data += SHA256_BLOCK_LENGTH*kk;
+		}
+	}	
+#else
 	while (len >= SHA256_BLOCK_LENGTH) {
 		/* Process as many complete blocks as we can */
 		SHA256_Transform(context, (const sha2_word32*)data);
@@ -538,6 +565,7 @@ void SHA256_Update(SHA256_CTX* context, const sha2_byte *data, size_t len) {
 		len -= SHA256_BLOCK_LENGTH;
 		data += SHA256_BLOCK_LENGTH;
 	}
+#endif
 	if (len > 0) {
 		/* There's left-overs, so save 'em */
 		bcopy(data, context->buffer, len);
@@ -573,7 +601,11 @@ void SHA256_Final(sha2_byte digest[], SHA256_CTX* context) {
 					bzero(&context->buffer[usedspace], SHA256_BLOCK_LENGTH - usedspace);
 				}
 				/* Do second-to-last transform: */
+#if defined (SHA256_USE_ASSEMBLY) && (defined(__x86_64__)||defined(__i386__))
+				SHA256_Transform(context, (sha2_word32*)context->buffer, 1);
+#else
 				SHA256_Transform(context, (sha2_word32*)context->buffer);
+#endif
 
 				/* And set-up for the last transform: */
 				bzero(context->buffer, SHA256_SHORT_BLOCK_LENGTH);
@@ -589,7 +621,11 @@ void SHA256_Final(sha2_byte digest[], SHA256_CTX* context) {
 		*(sha2_word64*)&context->buffer[SHA256_SHORT_BLOCK_LENGTH] = context->bitcount;
 
 		/* Final transform: */
+#if defined (SHA256_USE_ASSEMBLY) && (defined(__x86_64__)||defined(__i386__))
+		SHA256_Transform(context, (sha2_word32*)context->buffer, 1);
+#else
 		SHA256_Transform(context, (sha2_word32*)context->buffer);
+#endif
 
 #if BYTE_ORDER == LITTLE_ENDIAN
 		{

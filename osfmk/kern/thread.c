@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -91,11 +91,13 @@
 #include <mach/vm_param.h>
 
 #include <machine/thread.h>
+#include <machine/pal_routines.h>
 
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
 #include <kern/cpu_data.h>
 #include <kern/counters.h>
+#include <kern/extmod_statistics.h>
 #include <kern/ipc_mig.h>
 #include <kern/ipc_tt.h>
 #include <kern/mach_param.h>
@@ -182,8 +184,9 @@ thread_bootstrap(void)
 	thread_template.parameter = NULL;
 
 	thread_template.importance = 0;
-	thread_template.sched_mode = 0;
-	thread_template.safe_mode = 0;
+	thread_template.sched_mode = TH_MODE_NONE;
+	thread_template.sched_flags = 0;
+	thread_template.saved_mode = TH_MODE_NONE;
 	thread_template.safe_release = 0;
 
 	thread_template.priority = 0;
@@ -198,14 +201,18 @@ thread_bootstrap(void)
 	thread_template.realtime.deadline = UINT64_MAX;
 
 	thread_template.current_quantum = 0;
+	thread_template.last_run_time = 0;
+	thread_template.last_quantum_refill_time = 0;
 
 	thread_template.computation_metered = 0;
 	thread_template.computation_epoch = 0;
 
+#if defined(CONFIG_SCHED_TRADITIONAL)
 	thread_template.sched_stamp = 0;
-	thread_template.sched_usage = 0;
 	thread_template.pri_shift = INT8_MAX;
+	thread_template.sched_usage = 0;
 	thread_template.cpu_usage = thread_template.cpu_delta = 0;
+#endif
 	thread_template.c_switch = thread_template.p_switch = thread_template.ps_switch = 0;
 
 	thread_template.bound_processor = PROCESSOR_NULL;
@@ -247,6 +254,18 @@ thread_bootstrap(void)
 
 	thread_template.affinity_set = NULL;
 	
+	thread_template.syscalls_unix = 0;
+	thread_template.syscalls_mach = 0;
+
+	thread_template.tkm_private.alloc = 0;
+	thread_template.tkm_private.free = 0;
+	thread_template.tkm_shared.alloc = 0;
+	thread_template.tkm_shared.free = 0;
+	thread_template.actionstate = default_task_null_policy;
+	thread_template.ext_actionstate = default_task_null_policy;
+	thread_template.policystate = default_task_proc_policy;
+	thread_template.ext_policystate = default_task_proc_policy;
+
 	init_thread = thread_template;
 	machine_set_current_thread(&init_thread);
 }
@@ -259,8 +278,9 @@ thread_init(void)
 			thread_max * sizeof(struct thread),
 			THREAD_CHUNK * sizeof(struct thread),
 			"threads");
+
 	zone_change(thread_zone, Z_NOENCRYPT, TRUE);
-	
+
 	lck_grp_attr_setdefault(&thread_lck_grp_attr);
 	lck_grp_init(&thread_lck_grp, "thread", &thread_lck_grp_attr);
 	lck_attr_setdefault(&thread_lck_attr);
@@ -288,9 +308,12 @@ void
 thread_terminate_self(void)
 {
 	thread_t		thread = current_thread();
+
 	task_t			task;
 	spl_t			s;
 	int threadcnt;
+
+	pal_thread_terminate_self(thread);
 
 	DTRACE_PROC(lwp__exit);
 
@@ -309,8 +332,8 @@ thread_terminate_self(void)
 	 *	Cancel priority depression, wait for concurrent expirations
 	 *	on other processors.
 	 */
-	if (thread->sched_mode & TH_MODE_ISDEPRESSED) {
-		thread->sched_mode &= ~TH_MODE_ISDEPRESSED;
+	if (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) {
+		thread->sched_flags &= ~TH_SFLAG_DEPRESSED_MASK;
 
 		if (timer_call_cancel(&thread->depress_timer))
 			thread->depress_timer_active--;
@@ -374,8 +397,7 @@ thread_terminate_self(void)
 	 *	If there is a reserved stack, release it.
 	 */
 	if (thread->reserved_stack != 0) {
-		if (thread->reserved_stack != thread->kernel_stack)
-			stack_free_stack(thread->reserved_stack);
+		stack_free_reserved(thread);
 		thread->reserved_stack = 0;
 	}
 
@@ -404,6 +426,7 @@ thread_deallocate(
 	if (thread_deallocate_internal(thread) > 0)
 		return;
 
+
 	ipc_thread_terminate(thread);
 
 	task = thread->task;
@@ -417,13 +440,13 @@ thread_deallocate(
 	}
 #endif  /* MACH_BSD */   
 
-	task_deallocate(task);
-
 	if (thread->kernel_stack != 0)
 		stack_free(thread);
 
 	lck_mtx_destroy(&thread->mutex, &thread_lck_grp);
 	machine_thread_destroy(thread);
+
+	task_deallocate(task);
 
 	zfree(thread_zone, thread);
 }
@@ -436,8 +459,11 @@ thread_deallocate(
 static void
 thread_terminate_daemon(void)
 {
-	thread_t			thread;
-	task_t				task;
+	thread_t	self, thread;
+	task_t		task;
+
+	self = current_thread();
+	self->options |= TH_OPT_SYSTEM_CRITICAL;
 
 	(void)splsched();
 	simple_lock(&thread_terminate_lock);
@@ -455,6 +481,14 @@ thread_terminate_daemon(void)
 		task->c_switch += thread->c_switch;
 		task->p_switch += thread->p_switch;
 		task->ps_switch += thread->ps_switch;
+
+		task->syscalls_unix += thread->syscalls_unix;
+		task->syscalls_mach += thread->syscalls_mach;
+
+		task->tkm_private.alloc += thread->tkm_private.alloc;
+		task->tkm_private.free += thread->tkm_private.free;
+		task->tkm_shared.alloc += thread->tkm_shared.alloc;
+		task->tkm_shared.free += thread->tkm_shared.free;
 
 		queue_remove(&task->threads, thread, thread_t, task_threads);
 		task->thread_count--;
@@ -483,6 +517,7 @@ thread_terminate_daemon(void)
 	simple_unlock(&thread_terminate_lock);
 	/* splsched */
 
+	self->options &= ~TH_OPT_SYSTEM_CRITICAL;
 	thread_block((thread_continue_t)thread_terminate_daemon);
 	/*NOTREACHED*/
 }
@@ -561,7 +596,7 @@ void
 thread_daemon_init(void)
 {
 	kern_return_t	result;
-	thread_t		thread;
+	thread_t	thread = NULL;
 
 	simple_lock_init(&thread_terminate_lock, 0);
 	queue_init(&thread_terminate_queue);
@@ -712,18 +747,25 @@ thread_create_internal(
 #endif
 
 	/* Set the thread's scheduling parameters */
-	if (parent_task != kernel_task)
-		new_thread->sched_mode |= TH_MODE_TIMESHARE;
+	new_thread->sched_mode = SCHED(initial_thread_sched_mode)(parent_task);
+	new_thread->sched_flags = 0;
 	new_thread->max_priority = parent_task->max_priority;
 	new_thread->task_priority = parent_task->priority;
 	new_thread->priority = (priority < 0)? parent_task->priority: priority;
 	if (new_thread->priority > new_thread->max_priority)
 		new_thread->priority = new_thread->max_priority;
+#if CONFIG_EMBEDDED 
+	if (new_thread->priority < MAXPRI_THROTTLE) {
+		new_thread->priority = MAXPRI_THROTTLE;
+	}
+#endif /* CONFIG_EMBEDDED */
 	new_thread->importance =
 					new_thread->priority - new_thread->task_priority;
+#if defined(CONFIG_SCHED_TRADITIONAL)
 	new_thread->sched_stamp = sched_tick;
 	new_thread->pri_shift = sched_pri_shift;
-	compute_priority(new_thread, FALSE);
+#endif
+	SCHED(compute_priority)(new_thread, FALSE);
 
 	new_thread->active = TRUE;
 
@@ -751,10 +793,11 @@ thread_create_internal(
 	return (KERN_SUCCESS);
 }
 
-kern_return_t
-thread_create(
+static kern_return_t
+thread_create_internal2(
 	task_t				task,
-	thread_t			*new_thread)
+	thread_t			*new_thread,
+	boolean_t			from_user)
 {
 	kern_return_t		result;
 	thread_t			thread;
@@ -771,6 +814,9 @@ thread_create(
 	if (task->suspend_count > 0)
 		thread_hold(thread);
 
+	if (from_user)
+		extmod_statistics_incr_thread_create(task);
+
 	task_unlock(task);
 	lck_mtx_unlock(&tasks_threads_lock);
 	
@@ -779,13 +825,36 @@ thread_create(
 	return (KERN_SUCCESS);
 }
 
+/* No prototype, since task_server.h has the _from_user version if KERNEL_SERVER */
 kern_return_t
-thread_create_running(
+thread_create(
+	task_t				task,
+	thread_t			*new_thread);
+
+kern_return_t
+thread_create(
+	task_t				task,
+	thread_t			*new_thread)
+{
+	return thread_create_internal2(task, new_thread, FALSE);
+}
+
+kern_return_t
+thread_create_from_user(
+	task_t				task,
+	thread_t			*new_thread)
+{
+	return thread_create_internal2(task, new_thread, TRUE);
+}
+
+static kern_return_t
+thread_create_running_internal2(
 	register task_t         task,
 	int                     flavor,
 	thread_state_t          new_state,
 	mach_msg_type_number_t  new_state_count,
-	thread_t				*new_thread)
+	thread_t				*new_thread,
+	boolean_t				from_user)
 {
 	register kern_return_t  result;
 	thread_t				thread;
@@ -812,12 +881,50 @@ thread_create_running(
 	thread_start_internal(thread);
 	thread_mtx_unlock(thread);
 
+	if (from_user)
+		extmod_statistics_incr_thread_create(task);
+
 	task_unlock(task);
 	lck_mtx_unlock(&tasks_threads_lock);
 
 	*new_thread = thread;
 
 	return (result);
+}
+
+/* Prototype, see justification above */
+kern_return_t
+thread_create_running(
+	register task_t         task,
+	int                     flavor,
+	thread_state_t          new_state,
+	mach_msg_type_number_t  new_state_count,
+	thread_t				*new_thread);
+
+kern_return_t
+thread_create_running(
+	register task_t         task,
+	int                     flavor,
+	thread_state_t          new_state,
+	mach_msg_type_number_t  new_state_count,
+	thread_t				*new_thread)
+{
+	return thread_create_running_internal2(
+		task, flavor, new_state, new_state_count,
+		new_thread, FALSE);
+}
+
+kern_return_t
+thread_create_running_from_user(
+	register task_t         task,
+	int                     flavor,
+	thread_state_t          new_state,
+	mach_msg_type_number_t  new_state_count,
+	thread_t				*new_thread)
+{
+	return thread_create_running_internal2(
+		task, flavor, new_state, new_state_count,
+		new_thread, TRUE);
 }
 
 kern_return_t
@@ -977,8 +1084,8 @@ thread_info_internal(
 		/*
 		 *	Update lazy-evaluated scheduler info because someone wants it.
 		 */
-		if (thread->sched_stamp != sched_tick)
-			update_priority(thread);
+		if (SCHED(can_update_priority)(thread))
+			SCHED(update_priority)(thread);
 
 		basic_info->sleep_time = 0;
 
@@ -987,14 +1094,19 @@ thread_info_internal(
 		 *	then for 5/8 ageing.  The correction factor [3/5] is
 		 *	(1/(5/8) - 1).
 		 */
-		basic_info->cpu_usage =	(integer_t)(((uint64_t)thread->cpu_usage
-									* TH_USAGE_SCALE) /	sched_tick_interval);
-		basic_info->cpu_usage = (basic_info->cpu_usage * 3) / 5;
-
+		basic_info->cpu_usage = 0;
+#if defined(CONFIG_SCHED_TRADITIONAL)
+		if (sched_tick_interval) {
+			basic_info->cpu_usage =	(integer_t)(((uint64_t)thread->cpu_usage
+										* TH_USAGE_SCALE) /	sched_tick_interval);
+			basic_info->cpu_usage = (basic_info->cpu_usage * 3) / 5;
+		}
+#endif
+		
 		if (basic_info->cpu_usage > TH_USAGE_SCALE)
 			basic_info->cpu_usage = TH_USAGE_SCALE;
 
-		basic_info->policy = ((thread->sched_mode & TH_MODE_TIMESHARE)?
+		basic_info->policy = ((thread->sched_mode == TH_MODE_TIMESHARE)?
 												POLICY_TIMESHARE: POLICY_RR);
 
 	    flags = 0;
@@ -1045,11 +1157,7 @@ thread_info_internal(
 	    thread_lock(thread);
 
 	    identifier_info->thread_id = thread->thread_id;
-#if defined(__ppc__) || defined(__arm__)
 	    identifier_info->thread_handle = thread->machine.cthread_self;
-#else
-	    identifier_info->thread_handle = thread->machine.pcb->cthread_self;
-#endif
 	    if(thread->task->bsd_info) {
 	    	identifier_info->dispatch_qaddr =  identifier_info->thread_handle + get_dispatchqueue_offset_from_proc(thread->task->bsd_info);
 	    } else {
@@ -1074,14 +1182,14 @@ thread_info_internal(
 	    s = splsched();
 		thread_lock(thread);
 
-	    if (!(thread->sched_mode & TH_MODE_TIMESHARE)) {
+	    if (thread->sched_mode != TH_MODE_TIMESHARE) {
 	    	thread_unlock(thread);
 			splx(s);
 
 			return (KERN_INVALID_POLICY);
 	    }
 
-		ts_info->depressed = (thread->sched_mode & TH_MODE_ISDEPRESSED) != 0;
+		ts_info->depressed = (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) != 0;
 		if (ts_info->depressed) {
 			ts_info->base_priority = DEPRESSPRI;
 			ts_info->depress_priority = thread->priority;
@@ -1111,7 +1219,9 @@ thread_info_internal(
 	else
 	if (flavor == THREAD_SCHED_RR_INFO) {
 		policy_rr_info_t			rr_info;
-
+		uint32_t quantum_time;
+		uint64_t quantum_ns;
+		
 		if (*thread_info_count < POLICY_RR_INFO_COUNT)
 			return (KERN_INVALID_ARGUMENT);
 
@@ -1120,14 +1230,14 @@ thread_info_internal(
 	    s = splsched();
 		thread_lock(thread);
 
-	    if (thread->sched_mode & TH_MODE_TIMESHARE) {
+	    if (thread->sched_mode == TH_MODE_TIMESHARE) {
 	    	thread_unlock(thread);
 			splx(s);
 
 			return (KERN_INVALID_POLICY);
 	    }
 
-		rr_info->depressed = (thread->sched_mode & TH_MODE_ISDEPRESSED) != 0;
+		rr_info->depressed = (thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) != 0;
 		if (rr_info->depressed) {
 			rr_info->base_priority = DEPRESSPRI;
 			rr_info->depress_priority = thread->priority;
@@ -1137,8 +1247,11 @@ thread_info_internal(
 			rr_info->depress_priority = -1;
 		}
 
+		quantum_time = SCHED(initial_quantum_size)(THREAD_NULL);
+		absolutetime_to_nanoseconds(quantum_time, &quantum_ns);
+		
 		rr_info->max_priority = thread->max_priority;
-	    rr_info->quantum = std_quantum_us / 1000;
+	    rr_info->quantum = (uint32_t)(quantum_ns / 1000 / 1000);
 
 		thread_unlock(thread);
 	    splx(s);
@@ -1416,11 +1529,7 @@ thread_dispatchqaddr(
 	uint64_t	thread_handle = 0;
 
 	if (thread != THREAD_NULL) {
-#if defined(__ppc__) || defined(__arm__)
 		thread_handle = thread->machine.cthread_self;
-#else
-		thread_handle = thread->machine.pcb->cthread_self;
-#endif
 
 		if (thread->task->bsd_info)
 			dispatchqueue_addr = thread_handle + get_dispatchqueue_offset_from_proc(thread->task->bsd_info);

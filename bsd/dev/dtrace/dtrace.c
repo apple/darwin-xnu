@@ -20,7 +20,7 @@
  */
 
 /*
- * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
@@ -100,6 +100,7 @@
 #include <sys/systm.h>
 #include <sys/dtrace_impl.h>
 #include <sys/param.h>
+#include <sys/proc_internal.h>
 #include <sys/ioctl.h>
 #include <sys/fcntl.h>
 #include <miscfs/devfs/devfs.h>
@@ -112,13 +113,17 @@
 #include <sys/user.h>
 #include <mach/exception_types.h>
 #include <sys/signalvar.h>
+#include <mach/task.h>
 #include <kern/zalloc.h>
 #include <kern/ast.h>
 #include <netinet/in.h>
 
 #if defined(__APPLE__)
+#include <kern/cpu_data.h>
 extern uint32_t pmap_find_phys(void *, uint64_t);
 extern boolean_t pmap_valid_page(uint32_t);
+extern void OSKextRegisterKextsWithDTrace(void);
+extern kmod_info_t g_kernel_kmod_info;
 #endif /* __APPLE__ */
 
 
@@ -140,6 +145,7 @@ extern void dtrace_postinit(void);
 
 extern kern_return_t chudxnu_dtrace_callback
 	(uint64_t selector, uint64_t *args, uint32_t count);
+
 #endif /* __APPLE__ */
 
 /*
@@ -170,7 +176,7 @@ size_t		dtrace_global_maxsize = (16 * 1024);
 size_t		dtrace_actions_max = (16 * 1024);
 size_t		dtrace_retain_max = 1024;
 dtrace_optval_t	dtrace_helper_actions_max = 32;
-dtrace_optval_t	dtrace_helper_providers_max = 32;
+dtrace_optval_t	dtrace_helper_providers_max = 64;
 dtrace_optval_t	dtrace_dstate_defsize = (1 * 1024 * 1024);
 size_t		dtrace_strsize_default = 256;
 dtrace_optval_t	dtrace_cleanrate_default = 9900990;		/* 101 hz */
@@ -238,6 +244,12 @@ static dtrace_genid_t   dtrace_retained_gen;    /* current retained enab gen */
 static dtrace_dynvar_t	dtrace_dynhash_sink;	/* end of dynamic hash chains */
 #if defined(__APPLE__)
 static int		dtrace_dof_mode;	/* See dtrace_impl.h for a description of Darwin's dof modes. */
+
+			/*
+			 * This does't quite fit as an internal variable, as it must be accessed in
+			 * fbt_provide and sdt_provide. Its clearly not a dtrace tunable variable either...
+			 */
+int			dtrace_kernel_symbol_mode;	/* See dtrace_impl.h for a description of Darwin's kernel symbol modes. */
 #endif
 
 #if defined(__APPLE__)
@@ -249,6 +261,8 @@ static int		dtrace_dof_mode;	/* See dtrace_impl.h for a description of Darwin's 
  */
 
 struct zone *dtrace_probe_t_zone;
+
+static int dtrace_module_unloaded(struct kmod_info *kmod);
 #endif /* __APPLE__ */
 
 /*
@@ -328,10 +342,16 @@ static void
 dtrace_nullop(void)
 {}
 
+static int
+dtrace_enable_nullop(void)
+{
+    return (0);
+}
+
 static dtrace_pops_t	dtrace_provider_ops = {
 	(void (*)(void *, const dtrace_probedesc_t *))dtrace_nullop,
 	(void (*)(void *, struct modctl *))dtrace_nullop,
-	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
+	(int (*)(void *, dtrace_id_t, void *))dtrace_enable_nullop,
 	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
 	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
 	(void (*)(void *, dtrace_id_t, void *))dtrace_nullop,
@@ -429,8 +449,8 @@ static lck_mtx_t dtrace_errlock;
 	(where) = ((curthread->t_did + DIF_VARIABLE_MAX) & \
 	    (((uint64_t)1 << 61) - 1)) | ((uint64_t)intr << 61); \
 }
-#else 
-#if (defined(__x86_64__) || defined(__ppc64__))
+#else
+#if defined(__x86_64__)
 /* FIXME: two function calls!! */
 #define	DTRACE_TLS_THRKEY(where) { \
 	uint_t intr = ml_at_interrupt_context(); /* Note: just one measly bit */ \
@@ -542,12 +562,11 @@ dtrace_load##bits(uintptr_t addr)					\
 	return (!(*flags & CPU_DTRACE_FAULT) ? rval : 0);		\
 }
 #else /* __APPLE__ */
-#define RECOVER_LABEL(bits) __asm__ volatile("_dtraceLoadRecover" #bits ":" );
+#define RECOVER_LABEL(bits) dtraceLoadRecover##bits:
 
 #if (defined(__i386__) || defined (__x86_64__))
 #define	DTRACE_LOADFUNC(bits)						\
 /*CSTYLED*/								\
-extern vm_offset_t dtraceLoadRecover##bits;				\
 uint##bits##_t dtrace_load##bits(uintptr_t addr);			\
 									\
 uint##bits##_t								\
@@ -578,7 +597,7 @@ dtrace_load##bits(uintptr_t addr)					\
 	}								\
 									\
 	{								\
-	volatile vm_offset_t recover = (vm_offset_t)&dtraceLoadRecover##bits;		\
+	volatile vm_offset_t recover = (vm_offset_t)&&dtraceLoadRecover##bits;		\
 	*flags |= CPU_DTRACE_NOFAULT;					\
 	recover = dtrace_set_thread_recover(current_thread(), recover);	\
 	/*CSTYLED*/							\
@@ -598,7 +617,6 @@ dtrace_load##bits(uintptr_t addr)					\
 #else /* all other architectures */
 #define	DTRACE_LOADFUNC(bits)						\
 /*CSTYLED*/								\
-extern vm_offset_t dtraceLoadRecover##bits;				\
 uint##bits##_t dtrace_load##bits(uintptr_t addr);			\
 									\
 uint##bits##_t								\
@@ -629,7 +647,7 @@ dtrace_load##bits(uintptr_t addr)					\
 	}								\
 									\
 	{								\
-	volatile vm_offset_t recover = (vm_offset_t)&dtraceLoadRecover##bits;		\
+	volatile vm_offset_t recover = (vm_offset_t)&&dtraceLoadRecover##bits;		\
 	*flags |= CPU_DTRACE_NOFAULT;					\
 	recover = dtrace_set_thread_recover(current_thread(), recover);	\
 	/*CSTYLED*/	\
@@ -654,6 +672,7 @@ dtrace_load##bits(uintptr_t addr)					\
 #define	DTRACE_DYNHASH_SINK	1
 #define	DTRACE_DYNHASH_VALID	2
 
+#define DTRACE_MATCH_FAIL       -1
 #define	DTRACE_MATCH_NEXT	0
 #define	DTRACE_MATCH_DONE	1
 #define	DTRACE_ANCHORED(probe)	((probe)->dtpr_func[0] != '\0')
@@ -1291,12 +1310,12 @@ dtrace_priv_proc_common_user(dtrace_state_t *state)
 #else
 	if ((cr = dtrace_CRED()) != NULL &&
 #endif /* __APPLE__ */
-	    s_cr->cr_uid == cr->cr_uid &&
-	    s_cr->cr_uid == cr->cr_ruid &&
-	    s_cr->cr_uid == cr->cr_suid &&
-	    s_cr->cr_gid == cr->cr_gid &&
-	    s_cr->cr_gid == cr->cr_rgid &&
-	    s_cr->cr_gid == cr->cr_sgid)
+	    posix_cred_get(s_cr)->cr_uid == posix_cred_get(cr)->cr_uid &&
+	    posix_cred_get(s_cr)->cr_uid == posix_cred_get(cr)->cr_ruid &&
+	    posix_cred_get(s_cr)->cr_uid == posix_cred_get(cr)->cr_suid &&
+	    posix_cred_get(s_cr)->cr_gid == posix_cred_get(cr)->cr_gid &&
+	    posix_cred_get(s_cr)->cr_gid == posix_cred_get(cr)->cr_rgid &&
+	    posix_cred_get(s_cr)->cr_gid == posix_cred_get(cr)->cr_sgid)
 		return (1);
 
 	return (0);
@@ -4946,15 +4965,20 @@ next:
 #if !defined(__APPLE__)
 			ipaddr_t ip4;
 #else
-			in_addr_t ip4;
+			uint32_t ip4;
 #endif /* __APPLE__ */
 			uint8_t *ptr8, val;
 
 			/*
 			 * Safely load the IPv4 address.
 			 */
+#if !defined(__APPLE__)			
 			ip4 = dtrace_load32(tupregs[argi].dttk_value);
-
+#else
+			dtrace_bcopy(
+			    (void *)(uintptr_t)tupregs[argi].dttk_value,
+			    (void *)(uintptr_t)&ip4, sizeof (ip4));
+#endif /* __APPLE__ */			
 			/*
 			 * Check an IPv4 string will fit in scratch.
 			 */
@@ -6180,7 +6204,7 @@ dtrace_action_raise(uint64_t sig)
 
 	if (uthread && uthread->t_dtrace_sig == 0) {
 		uthread->t_dtrace_sig = sig;
-		astbsd_on();
+		act_set_astbsd(current_thread());
 	}
 #endif /* __APPLE__ */
 }
@@ -6198,21 +6222,55 @@ dtrace_action_stop(void)
 		aston(curthread);
 	}
 #else
-	uthread_t uthread = (uthread_t)get_bsdthread_info(current_thread());
-
-	if (uthread && uthread->t_dtrace_stop == 0) {
+        uthread_t uthread = (uthread_t)get_bsdthread_info(current_thread());
+	if (uthread) {
+		/*
+		 * The currently running process will be set to task_suspend
+		 * when it next leaves the kernel.
+		*/
 		uthread->t_dtrace_stop = 1;
-		astbsd_on();
+		act_set_astbsd(current_thread());
 	}
+
 #endif /* __APPLE__ */
 }
+
+#if defined(__APPLE__)
+static void
+dtrace_action_pidresume(uint64_t pid)
+{
+	if (dtrace_destructive_disallow)
+		return;
+
+	if (kauth_cred_issuser(kauth_cred_get()) == 0) {
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);		
+		return;
+	}
+
+        uthread_t uthread = (uthread_t)get_bsdthread_info(current_thread());
+
+	/*
+	 * When the currently running process leaves the kernel, it attempts to
+	 * task_resume the process (denoted by pid), if that pid appears to have
+	 * been stopped by dtrace_action_stop().
+	 * The currently running process has a pidresume() queue depth of 1 --
+	 * subsequent invocations of the pidresume() action are ignored.
+	 */	
+
+	if (pid != 0 && uthread && uthread->t_dtrace_resumepid == 0) {
+		uthread->t_dtrace_resumepid = pid;
+		act_set_astbsd(current_thread());
+	}
+}
+#endif /* __APPLE__ */
+
 
 static void
 dtrace_action_chill(dtrace_mstate_t *mstate, hrtime_t val)
 {
 	hrtime_t now;
 	volatile uint16_t *flags;
-	cpu_t *cpu = CPU;
+	dtrace_cpu_t *cpu = CPU;
 
 	if (dtrace_destructive_disallow)
 		return;
@@ -6601,17 +6659,21 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 
 				ASSERT(s_cr != NULL);
 
+			/*
+			 * XXX this is hackish, but so is setting a variable
+			 * XXX in a McCarthy OR...
+			 */
 #if !defined(__APPLE__)
 				if ((cr = CRED()) == NULL ||
 #else
 				if ((cr = dtrace_CRED()) == NULL ||
 #endif /* __APPLE__ */
-				    s_cr->cr_uid != cr->cr_uid ||
-				    s_cr->cr_uid != cr->cr_ruid ||
-				    s_cr->cr_uid != cr->cr_suid ||
-				    s_cr->cr_gid != cr->cr_gid ||
-				    s_cr->cr_gid != cr->cr_rgid ||
-				    s_cr->cr_gid != cr->cr_sgid ||
+				    posix_cred_get(s_cr)->cr_uid != posix_cred_get(cr)->cr_uid ||
+				    posix_cred_get(s_cr)->cr_uid != posix_cred_get(cr)->cr_ruid ||
+				    posix_cred_get(s_cr)->cr_uid != posix_cred_get(cr)->cr_suid ||
+				    posix_cred_get(s_cr)->cr_gid != posix_cred_get(cr)->cr_gid ||
+				    posix_cred_get(s_cr)->cr_gid != posix_cred_get(cr)->cr_rgid ||
+				    posix_cred_get(s_cr)->cr_gid != posix_cred_get(cr)->cr_sgid ||
 #if !defined(__APPLE__)
 				    (proc = ttoproc(curthread)) == NULL ||
 				    (proc->p_flag & SNOCD))
@@ -6867,6 +6929,13 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 				if (dtrace_priv_proc_destructive(state))
 					dtrace_action_raise(val);
 				continue;
+
+#if defined(__APPLE__)				
+			case DTRACEACT_PIDRESUME:
+				if (dtrace_priv_proc_destructive(state))
+					dtrace_action_pidresume(val);
+				continue;
+#endif /* __APPLE__ */				
 
 			case DTRACEACT_COMMIT:
 				ASSERT(!committed);
@@ -7126,12 +7195,13 @@ __dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
    on some function in the transitive closure of the call to dtrace_probe(). Solaris has some
    strong guarantees that this won't happen, the Darwin implementation is not so mature as to
    make those guarantees. */
+
 void
 dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
     uint64_t arg2, uint64_t arg3, uint64_t arg4)
 {
 	thread_t thread = current_thread();
-
+	disable_preemption();
 	if (id == dtrace_probeid_error) {
 		__dtrace_probe(id, arg0, arg1, arg2, arg3, arg4);
 		dtrace_getipl(); /* Defeat tail-call optimization of __dtrace_probe() */
@@ -7143,6 +7213,7 @@ dtrace_probe(dtrace_id_t id, uint64_t arg0, uint64_t arg1,
 #if DEBUG
 	else __dtrace_probe(dtrace_probeid_error, 0, id, 1, -1, DTRACEFLT_UNKNOWN);
 #endif
+	enable_preemption();
 }
 #endif /* __APPLE__ */
 
@@ -7733,7 +7804,7 @@ dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
 {
 	dtrace_probe_t template, *probe;
 	dtrace_hash_t *hash = NULL;
-	int len, best = INT_MAX, nmatched = 0;
+	int len, rc, best = INT_MAX, nmatched = 0;
 	dtrace_id_t i;
 
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
@@ -7745,7 +7816,8 @@ dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
 	if (pkp->dtpk_id != DTRACE_IDNONE) {
 		if ((probe = dtrace_probe_lookup_id(pkp->dtpk_id)) != NULL &&
 		    dtrace_match_probe(probe, pkp, priv, uid, zoneid) > 0) {
-			(void) (*matched)(probe, arg);
+		        if ((*matched)(probe, arg) == DTRACE_MATCH_FAIL)
+                               return (DTRACE_MATCH_FAIL);
 			nmatched++;
 		}
 		return (nmatched);
@@ -7802,8 +7874,11 @@ dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
 
 			nmatched++;
 
-			if ((*matched)(probe, arg) != DTRACE_MATCH_NEXT)
-				break;
+                       if ((rc = (*matched)(probe, arg)) != DTRACE_MATCH_NEXT) {
+			       if (rc == DTRACE_MATCH_FAIL)
+                                       return (DTRACE_MATCH_FAIL);
+			       break;
+                       }
 		}
 
 		return (nmatched);
@@ -7822,8 +7897,11 @@ dtrace_match(const dtrace_probekey_t *pkp, uint32_t priv, uid_t uid,
 
 		nmatched++;
 
-		if ((*matched)(probe, arg) != DTRACE_MATCH_NEXT)
-			break;
+		if ((rc = (*matched)(probe, arg)) != DTRACE_MATCH_NEXT) {
+		    if (rc == DTRACE_MATCH_FAIL)
+			return (DTRACE_MATCH_FAIL);
+		    break;
+		}
 	}
 
 	return (nmatched);
@@ -8051,7 +8129,7 @@ dtrace_unregister(dtrace_provider_id_t id)
 	dtrace_probe_t *probe, *first = NULL;
 
 	if (old->dtpv_pops.dtps_enable ==
-	    (void (*)(void *, dtrace_id_t, void *))dtrace_nullop) {
+	    (int (*)(void *, dtrace_id_t, void *))dtrace_enable_nullop) {
 		/*
 		 * If DTrace itself is the provider, we're called with locks
 		 * already held.
@@ -8201,7 +8279,7 @@ dtrace_invalidate(dtrace_provider_id_t id)
 	dtrace_provider_t *pvp = (dtrace_provider_t *)id;
 
 	ASSERT(pvp->dtpv_pops.dtps_enable !=
-	    (void (*)(void *, dtrace_id_t, void *))dtrace_nullop);
+	    (int (*)(void *, dtrace_id_t, void *))dtrace_enable_nullop);
 
 	lck_mtx_lock(&dtrace_provider_lock);
 	lck_mtx_lock(&dtrace_lock);
@@ -8242,7 +8320,7 @@ dtrace_condense(dtrace_provider_id_t id)
 	 * Make sure this isn't the dtrace provider itself.
 	 */
 	ASSERT(prov->dtpv_pops.dtps_enable !=
-	    (void (*)(void *, dtrace_id_t, void *))dtrace_nullop);
+	  (int (*)(void *, dtrace_id_t, void *))dtrace_enable_nullop);
 
 	lck_mtx_lock(&dtrace_provider_lock);
 	lck_mtx_lock(&dtrace_lock);
@@ -8508,7 +8586,6 @@ dtrace_probe_provide(dtrace_probedesc_t *desc, dtrace_provider_t *prv)
 {
 	struct modctl *ctl;
 	int all = 0;
-#pragma unused(ctl) /* __APPLE__ */
 
 	lck_mtx_assert(&dtrace_provider_lock, LCK_MTX_ASSERT_OWNED);
 
@@ -8516,22 +8593,22 @@ dtrace_probe_provide(dtrace_probedesc_t *desc, dtrace_provider_t *prv)
 		all = 1;
 		prv = dtrace_provider;
 	}
-
+		 
 	do {
 		/*
 		 * First, call the blanket provide operation.
 		 */
 		prv->dtpv_pops.dtps_provide(prv->dtpv_arg, desc);
-
-#if !defined(__APPLE__)
+		
 		/*
 		 * Now call the per-module provide operation.  We will grab
 		 * mod_lock to prevent the list from being modified.  Note
 		 * that this also prevents the mod_busy bits from changing.
 		 * (mod_busy can only be changed with mod_lock held.)
 		 */
-		mutex_enter(&mod_lock);
-
+		lck_mtx_lock(&mod_lock);
+		
+#if !defined(__APPLE__)
 		ctl = &modules;
 		do {
 			if (ctl->mod_busy || ctl->mod_mp == NULL)
@@ -8540,29 +8617,15 @@ dtrace_probe_provide(dtrace_probedesc_t *desc, dtrace_provider_t *prv)
 			prv->dtpv_pops.dtps_provide_module(prv->dtpv_arg, ctl);
 
 		} while ((ctl = ctl->mod_next) != &modules);
-
-		mutex_exit(&mod_lock);
 #else
-#if 0 /* FIXME: Workaround for PR_4643546 */
-		/* NOTE: kmod_lock has been removed. */
-		simple_lock(&kmod_lock);
-		
-		kmod_info_t *ktl = kmod;
-		while (ktl) {
-			prv->dtpv_pops.dtps_provide_module(prv->dtpv_arg, ktl);
-			ktl = ktl->next;
+		ctl = dtrace_modctl_list;
+		while (ctl) {
+			prv->dtpv_pops.dtps_provide_module(prv->dtpv_arg, ctl);
+			ctl = ctl->mod_next;
 		}
-		
-		simple_unlock(&kmod_lock);
-#else
-		/*
-		 * Don't bother to iterate over the kmod list. At present only fbt
-		 * offers a provide_module in its dtpv_pops, and then it ignores the
-		 * module anyway.
-		 */
-		prv->dtpv_pops.dtps_provide_module(prv->dtpv_arg, NULL);
 #endif
-#endif /* __APPLE__ */
+		
+		lck_mtx_unlock(&mod_lock);
 	} while (all && (prv = prv->dtpv_next) != NULL);
 }
 
@@ -9295,7 +9358,7 @@ dtrace_difo_validate(dtrace_difo_t *dp, dtrace_vstate_t *vstate, uint_t nregs,
 			break;
 
 		default:
-			err += efunc(dp->dtdo_len - 1, "bad return size");
+			err += efunc(dp->dtdo_len - 1, "bad return size\n");
 		}
 	}
 
@@ -10356,7 +10419,7 @@ dtrace_ecb_add(dtrace_state_t *state, dtrace_probe_t *probe)
 	return (ecb);
 }
 
-static void
+static int
 dtrace_ecb_enable(dtrace_ecb_t *ecb)
 {
 	dtrace_probe_t *probe = ecb->dte_probe;
@@ -10369,7 +10432,7 @@ dtrace_ecb_enable(dtrace_ecb_t *ecb)
 		/*
 		 * This is the NULL probe -- there's nothing to do.
 		 */
-		return;
+	    return(0);
 	}
 
 	if (probe->dtpr_ecb == NULL) {
@@ -10383,8 +10446,8 @@ dtrace_ecb_enable(dtrace_ecb_t *ecb)
 		if (ecb->dte_predicate != NULL)
 			probe->dtpr_predcache = ecb->dte_predicate->dtp_cacheid;
 
-		prov->dtpv_pops.dtps_enable(prov->dtpv_arg,
-		    probe->dtpr_id, probe->dtpr_arg);
+		return (prov->dtpv_pops.dtps_enable(prov->dtpv_arg,
+                    probe->dtpr_id, probe->dtpr_arg));
 	} else {
 		/*
 		 * This probe is already active.  Swing the last pointer to
@@ -10397,6 +10460,7 @@ dtrace_ecb_enable(dtrace_ecb_t *ecb)
 		probe->dtpr_predcache = 0;
 
 		dtrace_sync();
+		return(0);
 	}
 }
 
@@ -10860,6 +10924,9 @@ dtrace_ecb_action_add(dtrace_ecb_t *ecb, dtrace_actdesc_t *desc)
 		case DTRACEACT_CHILL:
 		case DTRACEACT_DISCARD:
 		case DTRACEACT_RAISE:
+#if defined(__APPLE__)
+		case DTRACEACT_PIDRESUME:
+#endif /* __APPLE__ */
 			if (dp == NULL)
 				return (EINVAL);
 			break;
@@ -11196,7 +11263,9 @@ dtrace_ecb_create_enable(dtrace_probe_t *probe, void *arg)
 	if ((ecb = dtrace_ecb_create(state, probe, enab)) == NULL)
 		return (DTRACE_MATCH_DONE);
 
-	dtrace_ecb_enable(ecb);
+	if (dtrace_ecb_enable(ecb) < 0)
+               return (DTRACE_MATCH_FAIL);
+	
 	return (DTRACE_MATCH_NEXT);
 }
 
@@ -11313,7 +11382,7 @@ static int
 dtrace_buffer_alloc(dtrace_buffer_t *bufs, size_t size, int flags,
     processorid_t cpu)
 {
-	cpu_t *cp;
+	dtrace_cpu_t *cp;
 	dtrace_buffer_t *buf;
 
 	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
@@ -12052,7 +12121,7 @@ static int
 dtrace_enabling_match(dtrace_enabling_t *enab, int *nmatched)
 {
 	int i = 0;
-	int matched = 0;
+	int total_matched = 0, matched = 0;
 
 	lck_mtx_assert(&cpu_lock, LCK_MTX_ASSERT_OWNED);
 	lck_mtx_assert(&dtrace_lock, LCK_MTX_ASSERT_OWNED);
@@ -12063,7 +12132,14 @@ dtrace_enabling_match(dtrace_enabling_t *enab, int *nmatched)
 		enab->dten_current = ep;
 		enab->dten_error = 0;
 
-		matched += dtrace_probe_enable(&ep->dted_probe, enab);
+		/*
+		 * If a provider failed to enable a probe then get out and
+		 * let the consumer know we failed.
+		 */
+		if ((matched = dtrace_probe_enable(&ep->dted_probe, enab)) < 0)
+			return (EBUSY);
+
+		total_matched += matched;
 
 		if (enab->dten_error != 0) {
 			/*
@@ -12091,7 +12167,7 @@ dtrace_enabling_match(dtrace_enabling_t *enab, int *nmatched)
 
 	enab->dten_probegen = dtrace_probegen;
 	if (nmatched != NULL)
-		*nmatched = matched;
+		*nmatched = total_matched;
 
 	return (0);
 }
@@ -12351,16 +12427,22 @@ dtrace_dof_copyin(user_addr_t uarg, int *errp)
 #if !defined(__APPLE__)
 	dof = kmem_alloc(hdr.dofh_loadsz, KM_SLEEP);
 
-	if (copyin((void *)uarg, dof, hdr.dofh_loadsz) != 0) {
+        if (copyin((void *)uarg, dof, hdr.dofh_loadsz) != 0 ||
+	  dof->dofh_loadsz != hdr.dofh_loadsz) {
+	    kmem_free(dof, hdr.dofh_loadsz);
+	    *errp = EFAULT;
+	    return (NULL);
+	}
 #else
 	dof = dt_kmem_alloc_aligned(hdr.dofh_loadsz, 8, KM_SLEEP);
 
-	if (copyin(uarg, dof, hdr.dofh_loadsz) != 0) {
+        if (copyin(uarg, dof, hdr.dofh_loadsz) != 0  ||
+	  dof->dofh_loadsz != hdr.dofh_loadsz) {
+	    dt_kmem_free_aligned(dof, hdr.dofh_loadsz);
+	    *errp = EFAULT;
+	    return (NULL);
+	}	    
 #endif
-		dt_kmem_free_aligned(dof, hdr.dofh_loadsz);
-		*errp = EFAULT;
-		return (NULL);
-	}
 
 	return (dof);
 }
@@ -16079,30 +16161,257 @@ dtrace_helpers_duplicate(proc_t *from, proc_t *to)
 /*
  * DTrace Hook Functions
  */
+
+#if defined(__APPLE__)
+/*
+ * Routines to manipulate the modctl list within dtrace
+ */
+
+modctl_t *dtrace_modctl_list;
+
+static void
+dtrace_modctl_add(struct modctl * newctl)
+{
+	struct modctl *nextp, *prevp;
+
+	ASSERT(newctl != NULL);
+	lck_mtx_assert(&mod_lock, LCK_MTX_ASSERT_OWNED);
+
+	// Insert new module at the front of the list,
+	
+	newctl->mod_next = dtrace_modctl_list;
+	dtrace_modctl_list = newctl;
+
+	/*
+	 * If a module exists with the same name, then that module
+	 * must have been unloaded with enabled probes. We will move
+	 * the unloaded module to the new module's stale chain and
+	 * then stop traversing the list.
+	 */
+
+	prevp = newctl;
+	nextp = newctl->mod_next;
+    
+	while (nextp != NULL) {
+		if (nextp->mod_loaded) {
+			/* This is a loaded module. Keep traversing. */
+			prevp = nextp;
+			nextp = nextp->mod_next;
+			continue;
+		}
+		else {
+			/* Found an unloaded module */
+			if (strncmp (newctl->mod_modname, nextp->mod_modname, KMOD_MAX_NAME)) {
+				/* Names don't match. Keep traversing. */
+				prevp = nextp;
+				nextp = nextp->mod_next;
+				continue;
+			}
+			else {
+				/* We found a stale entry, move it. We're done. */
+				prevp->mod_next = nextp->mod_next;
+				newctl->mod_stale = nextp;
+				nextp->mod_next = NULL;
+				break;
+			}
+		}
+	}
+}
+
+static modctl_t *
+dtrace_modctl_lookup(struct kmod_info * kmod)
+{
+    lck_mtx_assert(&mod_lock, LCK_MTX_ASSERT_OWNED);
+
+    struct modctl * ctl;
+
+    for (ctl = dtrace_modctl_list; ctl; ctl=ctl->mod_next) {
+	if (ctl->mod_id == kmod->id)
+	    return(ctl);
+    }
+    return (NULL);
+}
+
+/*
+ * This routine is called from dtrace_module_unloaded().
+ * It removes a modctl structure and its stale chain
+ * from the kext shadow list.
+ */
+static void
+dtrace_modctl_remove(struct modctl * ctl)
+{
+	ASSERT(ctl != NULL);
+	lck_mtx_assert(&mod_lock, LCK_MTX_ASSERT_OWNED);
+	modctl_t *prevp, *nextp, *curp;
+
+	// Remove stale chain first
+	for (curp=ctl->mod_stale; curp != NULL; curp=nextp) {
+		nextp = curp->mod_stale;
+		/* There should NEVER be user symbols allocated at this point */
+		ASSERT(curp->mod_user_symbols == NULL);	
+		kmem_free(curp, sizeof(modctl_t));
+	}
+
+	prevp = NULL;
+	curp = dtrace_modctl_list;
+	
+	while (curp != ctl) {
+		prevp = curp;
+		curp = curp->mod_next;
+	}
+
+	if (prevp != NULL) {
+		prevp->mod_next = ctl->mod_next;
+	}
+	else {
+		dtrace_modctl_list = ctl->mod_next;
+	}
+
+	/* There should NEVER be user symbols allocated at this point */
+	ASSERT(ctl->mod_user_symbols == NULL);
+
+	kmem_free (ctl, sizeof(modctl_t));
+}
+	
+#endif /* __APPLE__ */
+
+/*
+ * APPLE NOTE: The kext loader will call dtrace_module_loaded
+ * when the kext is loaded in memory, but before calling the
+ * kext's start routine.
+ *
+ * Return 0 on success
+ * Return -1 on failure
+ */
+	
+#if !defined (__APPLE__)
 static void
 dtrace_module_loaded(struct modctl *ctl)
+#else
+static int
+dtrace_module_loaded(struct kmod_info *kmod)
+#endif /* __APPLE__ */
 {
 	dtrace_provider_t *prv;
 
-	lck_mtx_lock(&dtrace_provider_lock);
-	lck_mtx_lock(&mod_lock);
-
 #if !defined(__APPLE__)
+	mutex_enter(&dtrace_provider_lock);
+	mutex_enter(&mod_lock);
+	
 	ASSERT(ctl->mod_busy);
 #else
-	/* FIXME: awaits kmod awareness PR_4648477. */
-#endif /* __APPLE__ */
+		
+	/*
+	 * If kernel symbols have been disabled, return immediately
+	 * DTRACE_KERNEL_SYMBOLS_NEVER is a permanent mode, it is safe to test without holding locks
+	 */
+	if (dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_NEVER)
+		return 0;
+	
+	struct modctl *ctl = NULL;
+	if (!kmod || kmod->address == 0 || kmod->size == 0)
+		return(-1);
+		
+	lck_mtx_lock(&dtrace_provider_lock);
+	lck_mtx_lock(&mod_lock);	
+	
+	/*
+	 * Have we seen this kext before?
+	 */
 
+	ctl = dtrace_modctl_lookup(kmod);
+
+	if (ctl != NULL) {
+		/* bail... we already have this kext in the modctl list */
+		lck_mtx_unlock(&mod_lock);
+		lck_mtx_unlock(&dtrace_provider_lock);
+		if (dtrace_err_verbose)
+			cmn_err(CE_WARN, "dtrace load module already exists '%s %u' is failing against '%s %u'", kmod->name, (uint_t)kmod->id, ctl->mod_modname, ctl->mod_id);
+		return(-1);
+	}
+	else {
+		ctl = kmem_alloc(sizeof(struct modctl), KM_SLEEP);
+		if (ctl == NULL) {
+			if (dtrace_err_verbose)
+				cmn_err(CE_WARN, "dtrace module load '%s %u' is failing ", kmod->name, (uint_t)kmod->id);
+			lck_mtx_unlock(&mod_lock);
+			lck_mtx_unlock(&dtrace_provider_lock);
+			return (-1);
+		}
+		ctl->mod_next = NULL;
+		ctl->mod_stale = NULL;
+		strlcpy (ctl->mod_modname, kmod->name, sizeof(ctl->mod_modname));
+		ctl->mod_loadcnt = kmod->id;
+		ctl->mod_nenabled = 0;
+		ctl->mod_address  = kmod->address;
+		ctl->mod_size = kmod->size;
+		ctl->mod_id = kmod->id;
+		ctl->mod_loaded = 1;
+		ctl->mod_flags = 0;
+		ctl->mod_user_symbols = NULL;
+		
+		/*
+		 * Find the UUID for this module, if it has one
+		 */
+		kernel_mach_header_t* header = (kernel_mach_header_t *)ctl->mod_address;
+		struct load_command* load_cmd = (struct load_command *)&header[1];
+		uint32_t i;
+		for (i = 0; i < header->ncmds; i++) {
+			if (load_cmd->cmd == LC_UUID) {
+				struct uuid_command* uuid_cmd = (struct uuid_command *)load_cmd;
+				memcpy(ctl->mod_uuid, uuid_cmd->uuid, sizeof(uuid_cmd->uuid));
+				ctl->mod_flags |= MODCTL_HAS_UUID;
+				break;
+			}
+			load_cmd = (struct load_command *)((caddr_t)load_cmd + load_cmd->cmdsize);
+		}
+		
+		if (ctl->mod_address == g_kernel_kmod_info.address) {
+			ctl->mod_flags |= MODCTL_IS_MACH_KERNEL;
+		}
+	}
+	dtrace_modctl_add(ctl);
+	
+	/*
+	 * We must hold the dtrace_lock to safely test non permanent dtrace_fbt_symbol_mode(s)
+	 */
+	lck_mtx_lock(&dtrace_lock);
+	
+	/*
+	 * If the module does not have a valid UUID, we will not be able to find symbols for it from
+	 * userspace. Go ahead and instrument it now.
+	 */
+	if (MOD_HAS_UUID(ctl) && (dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE)) {
+		lck_mtx_unlock(&dtrace_lock);
+		lck_mtx_unlock(&mod_lock);
+		lck_mtx_unlock(&dtrace_provider_lock);
+		return 0;
+	}
+	
+	ctl->mod_flags |= MODCTL_HAS_KERNEL_SYMBOLS;
+	
+	lck_mtx_unlock(&dtrace_lock);
+#endif /* __APPLE__ */
+	
 	/*
 	 * We're going to call each providers per-module provide operation
 	 * specifying only this module.
 	 */
 	for (prv = dtrace_provider; prv != NULL; prv = prv->dtpv_next)
-		prv->dtpv_pops.dtps_provide_module(prv->dtpv_arg, ctl);
-
+		prv->dtpv_pops.dtps_provide_module(prv->dtpv_arg, ctl);	
+	
+#if defined(__APPLE__)
+	/*
+	 * The contract with the kext loader is that once this function has completed,
+	 * it may delete kernel symbols at will. We must set this while still holding
+	 * the mod_lock.
+	 */
+	ctl->mod_flags &= ~MODCTL_HAS_KERNEL_SYMBOLS;
+#endif
+	
 	lck_mtx_unlock(&mod_lock);
 	lck_mtx_unlock(&dtrace_provider_lock);
-
+	
 	/*
 	 * If we have any retained enablings, we need to match against them.
 	 * Enabling probes requires that cpu_lock be held, and we cannot hold
@@ -16112,17 +16421,22 @@ dtrace_module_loaded(struct modctl *ctl)
 	 * our task queue to do the match for us.
 	 */
 	lck_mtx_lock(&dtrace_lock);
-
+	
 	if (dtrace_retained == NULL) {
 		lck_mtx_unlock(&dtrace_lock);
+#if !defined(__APPLE__)
 		return;
+#else
+		return 0;
+#endif
 	}
-
+	
+#if !defined(__APPLE__)
 	(void) taskq_dispatch(dtrace_taskq,
-	    (task_func_t *)dtrace_enabling_matchall, NULL, TQ_SLEEP);
-
-	lck_mtx_unlock(&dtrace_lock);
-
+			      (task_func_t *)dtrace_enabling_matchall, NULL, TQ_SLEEP);
+	
+	mutex_exit(&dtrace_lock);
+	
 	/*
 	 * And now, for a little heuristic sleaze:  in general, we want to
 	 * match modules as soon as they load.  However, we cannot guarantee
@@ -16134,8 +16448,23 @@ dtrace_module_loaded(struct modctl *ctl)
 	 * just loaded may not be immediately instrumentable.
 	 */
 	delay(1);
+#else
+	/* APPLE NOTE!
+	 *
+	 * The cpu_lock mentioned above is only held by dtrace code, Apple's xnu never actually
+	 * holds it for any reason. Thus the comment above is invalid, we can directly invoke
+	 * dtrace_enabling_matchall without jumping through all the hoops, and we can avoid
+	 * the delay call as well.
+	 */
+	lck_mtx_unlock(&dtrace_lock);
+	
+	dtrace_enabling_matchall();
+	
+	return 0;
+#endif /* __APPLE__ */
 }
-
+	
+#if !defined(__APPLE__)
 static void
 dtrace_module_unloaded(struct modctl *ctl)
 {
@@ -16144,27 +16473,27 @@ dtrace_module_unloaded(struct modctl *ctl)
 
 	template.dtpr_mod = ctl->mod_modname;
 
-	lck_mtx_lock(&dtrace_provider_lock);
-	lck_mtx_lock(&mod_lock);
-	lck_mtx_lock(&dtrace_lock);
+	mutex_enter(&dtrace_provider_lock);
+	mutex_enter(&mod_lock);
+	mutex_enter(&dtrace_lock);
 
 	if (dtrace_bymod == NULL) {
 		/*
 		 * The DTrace module is loaded (obviously) but not attached;
 		 * we don't have any work to do.
 		 */
-		lck_mtx_unlock(&dtrace_provider_lock);
-		lck_mtx_unlock(&mod_lock);
-		lck_mtx_unlock(&dtrace_lock);
+		mutex_exit(&dtrace_provider_lock);
+		mutex_exit(&mod_lock);
+		mutex_exit(&dtrace_lock);
 		return;
 	}
 
 	for (probe = first = dtrace_hash_lookup(dtrace_bymod, &template);
 	    probe != NULL; probe = probe->dtpr_nextmod) {
 		if (probe->dtpr_ecb != NULL) {
-			lck_mtx_unlock(&dtrace_provider_lock);
-			lck_mtx_unlock(&mod_lock);
-			lck_mtx_unlock(&dtrace_lock);
+			mutex_exit(&dtrace_provider_lock);
+			mutex_exit(&mod_lock);
+			mutex_exit(&dtrace_lock);
 
 			/*
 			 * This shouldn't _actually_ be possible -- we're
@@ -16222,17 +16551,177 @@ dtrace_module_unloaded(struct modctl *ctl)
 		kmem_free(probe->dtpr_func, strlen(probe->dtpr_func) + 1);
 		kmem_free(probe->dtpr_name, strlen(probe->dtpr_name) + 1);
 		vmem_free(dtrace_arena, (void *)(uintptr_t)probe->dtpr_id, 1);
-#if !defined(__APPLE__)
 		kmem_free(probe, sizeof (dtrace_probe_t));
-#else
-		zfree(dtrace_probe_t_zone, probe);
-#endif /* __APPLE__ */
 	}
+
+	mutex_exit(&dtrace_lock);
+	mutex_exit(&mod_lock);
+	mutex_exit(&dtrace_provider_lock);
+}
+#else  /* __APPLE__ */
+
+/*
+ * Return 0 on success
+ * Return -1 on failure
+ */
+static int
+dtrace_module_unloaded(struct kmod_info *kmod)
+{
+	dtrace_probe_t template, *probe, *first, *next;
+	dtrace_provider_t *prov;
+        struct modctl *ctl = NULL;
+	struct modctl *syncctl = NULL;
+	struct modctl *nextsyncctl = NULL;
+	int syncmode = 0;
+	
+        lck_mtx_lock(&dtrace_provider_lock);
+	lck_mtx_lock(&mod_lock);
+	lck_mtx_lock(&dtrace_lock);
+
+	if (kmod == NULL) {
+	    syncmode = 1;
+	}
+	else {
+	    ctl = dtrace_modctl_lookup(kmod);
+	    if (ctl == NULL)
+	    {
+		lck_mtx_unlock(&dtrace_lock);
+		lck_mtx_unlock(&mod_lock);
+		lck_mtx_unlock(&dtrace_provider_lock);
+		return (-1);
+	    }
+	    ctl->mod_loaded = 0;
+	    ctl->mod_address = 0;
+	    ctl->mod_size = 0;
+	}
+	
+	if (dtrace_bymod == NULL) {
+		/*
+		 * The DTrace module is loaded (obviously) but not attached;
+		 * we don't have any work to do.
+		 */
+	         if (ctl != NULL)
+			 (void)dtrace_modctl_remove(ctl);
+		 lck_mtx_unlock(&dtrace_provider_lock);
+		 lck_mtx_unlock(&mod_lock);
+		 lck_mtx_unlock(&dtrace_lock);
+		 return(0);
+	}
+
+	/* Syncmode set means we target and traverse entire modctl list. */
+        if (syncmode)
+	    nextsyncctl = dtrace_modctl_list;
+
+syncloop:
+	if (syncmode)
+	{
+	    /* find a stale modctl struct */
+	    for (syncctl = nextsyncctl; syncctl != NULL; syncctl=syncctl->mod_next) {
+		if (syncctl->mod_address == 0)
+		    break;
+	    }
+	    if (syncctl==NULL)
+	    {
+		/* We have no more work to do */
+		lck_mtx_unlock(&dtrace_provider_lock);
+		lck_mtx_unlock(&mod_lock);
+		lck_mtx_unlock(&dtrace_lock);
+		return(0);
+	    }
+	    else {
+		/* keep track of next syncctl in case this one is removed */
+		nextsyncctl = syncctl->mod_next;
+		ctl = syncctl;
+	    }
+	}
+
+	template.dtpr_mod = ctl->mod_modname;
+	
+	for (probe = first = dtrace_hash_lookup(dtrace_bymod, &template);
+	    probe != NULL; probe = probe->dtpr_nextmod) {
+	        if (probe->dtpr_ecb != NULL) {
+			/*
+			 * This shouldn't _actually_ be possible -- we're
+			 * unloading a module that has an enabled probe in it.
+			 * (It's normally up to the provider to make sure that
+			 * this can't happen.)  However, because dtps_enable()
+			 * doesn't have a failure mode, there can be an
+			 * enable/unload race.  Upshot:  we don't want to
+			 * assert, but we're not going to disable the
+			 * probe, either.
+			 */
+
+
+		        if (syncmode) {
+			    /* We're syncing, let's look at next in list */
+			    goto syncloop;
+			}
+
+			lck_mtx_unlock(&dtrace_provider_lock);
+			lck_mtx_unlock(&mod_lock);
+			lck_mtx_unlock(&dtrace_lock);
+		    
+			if (dtrace_err_verbose) {
+				cmn_err(CE_WARN, "unloaded module '%s' had "
+				    "enabled probes", ctl->mod_modname);
+			}
+			return(-1);
+		}
+	}
+
+	probe = first;
+
+	for (first = NULL; probe != NULL; probe = next) {
+		ASSERT(dtrace_probes[probe->dtpr_id - 1] == probe);
+
+		dtrace_probes[probe->dtpr_id - 1] = NULL;
+
+		next = probe->dtpr_nextmod;
+		dtrace_hash_remove(dtrace_bymod, probe);
+		dtrace_hash_remove(dtrace_byfunc, probe);
+		dtrace_hash_remove(dtrace_byname, probe);
+
+		if (first == NULL) {
+			first = probe;
+			probe->dtpr_nextmod = NULL;
+		} else {
+			probe->dtpr_nextmod = first;
+			first = probe;
+		}
+	}
+
+	/*
+	 * We've removed all of the module's probes from the hash chains and
+	 * from the probe array.  Now issue a dtrace_sync() to be sure that
+	 * everyone has cleared out from any probe array processing.
+	 */
+	dtrace_sync();
+
+	for (probe = first; probe != NULL; probe = first) {
+		first = probe->dtpr_nextmod;
+		prov = probe->dtpr_provider;
+		prov->dtpv_pops.dtps_destroy(prov->dtpv_arg, probe->dtpr_id,
+		    probe->dtpr_arg);
+		kmem_free(probe->dtpr_mod, strlen(probe->dtpr_mod) + 1);
+		kmem_free(probe->dtpr_func, strlen(probe->dtpr_func) + 1);
+		kmem_free(probe->dtpr_name, strlen(probe->dtpr_name) + 1);
+		vmem_free(dtrace_arena, (void *)(uintptr_t)probe->dtpr_id, 1);
+
+		zfree(dtrace_probe_t_zone, probe);
+	}
+
+	dtrace_modctl_remove(ctl);
+	
+	if (syncmode)
+	    goto syncloop;
 
 	lck_mtx_unlock(&dtrace_lock);
 	lck_mtx_unlock(&mod_lock);
 	lck_mtx_unlock(&dtrace_provider_lock);
+
+	return(0);
 }
+#endif /* __APPLE__ */
 
 void
 dtrace_suspend(void)
@@ -16463,13 +16952,6 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	    dtrace_provider, NULL, NULL, "END", 0, NULL);
 	dtrace_probeid_error = dtrace_probe_create((dtrace_provider_id_t)
 	    dtrace_provider, NULL, NULL, "ERROR", 1, NULL);
-#elif defined(__ppc__) || defined(__ppc64__)
-	dtrace_probeid_begin = dtrace_probe_create((dtrace_provider_id_t)
-	    dtrace_provider, NULL, NULL, "BEGIN", 2, NULL);
-	dtrace_probeid_end = dtrace_probe_create((dtrace_provider_id_t)
-	    dtrace_provider, NULL, NULL, "END", 1, NULL);
-	dtrace_probeid_error = dtrace_probe_create((dtrace_provider_id_t)
-	    dtrace_provider, NULL, NULL, "ERROR", 4, NULL);
 #elif (defined(__i386__) || defined (__x86_64__))
 	dtrace_probeid_begin = dtrace_probe_create((dtrace_provider_id_t)
 	    dtrace_provider, NULL, NULL, "BEGIN", 1, NULL);
@@ -16505,6 +16987,15 @@ dtrace_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	if (dtrace_anon.dta_enabling != NULL) {
 		ASSERT(dtrace_retained == dtrace_anon.dta_enabling);
 
+#if defined(__APPLE__)
+		/*
+		 * If there is anonymous dof, we should switch symbol modes.
+		 */
+		if (dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE) {
+			dtrace_kernel_symbol_mode = DTRACE_KERNEL_SYMBOLS_FROM_KERNEL;
+		}
+#endif
+		
 		dtrace_enabling_provide(NULL);
 		state = dtrace_anon.dta_state;
 
@@ -16612,7 +17103,7 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 	lck_mtx_unlock(&cpu_lock);
 
 	if (state == NULL) {
-		if (--dtrace_opens == 0)
+		if (--dtrace_opens == 0 && dtrace_anon.dta_enabling == NULL)		    
 			(void) kdi_dtrace_set(KDI_DTSET_DTRACE_DEACTIVATE);
 		lck_mtx_unlock(&dtrace_lock);
 		return (EAGAIN);
@@ -16624,7 +17115,7 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 	lck_mtx_unlock(&cpu_lock);
 
 	if (rv != 0 || state == NULL) {
-		if (--dtrace_opens == 0)
+		if (--dtrace_opens == 0 && dtrace_anon.dta_enabling == NULL)
 			(void) kdi_dtrace_set(KDI_DTSET_DTRACE_DEACTIVATE);
 		lck_mtx_unlock(&dtrace_lock);
 		/* propagate EAGAIN or ERESTART */
@@ -16656,6 +17147,27 @@ dtrace_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 	}
 
 	lck_rw_unlock_exclusive(&dtrace_dof_mode_lock);
+
+	/*
+	 * Update kernel symbol state.
+	 *
+	 * We must own the provider and dtrace locks. 
+	 *
+	 * NOTE! It may appear there is a race by setting this value so late
+	 * after dtrace_probe_provide. However, any kext loaded after the
+	 * call to probe provide and before we set LAZY_OFF will be marked as
+	 * eligible for symbols from userspace. The same dtrace that is currently
+	 * calling dtrace_open() (this call!) will get a list of kexts needing
+	 * symbols and fill them in, thus closing the race window.
+	 *
+	 * We want to set this value only after it certain it will succeed, as
+	 * this significantly reduces the complexity of error exits.
+	 */
+	lck_mtx_lock(&dtrace_lock);
+	if (dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE) {
+		dtrace_kernel_symbol_mode = DTRACE_KERNEL_SYMBOLS_FROM_KERNEL;
+	}
+	lck_mtx_unlock(&dtrace_lock);
 #endif /* __APPLE__ */
 
 	return (0);
@@ -16691,31 +17203,52 @@ dtrace_close(dev_t dev, int flag, int otyp, cred_t *cred_p)
 
 	dtrace_state_destroy(state);
 	ASSERT(dtrace_opens > 0);
-	if (--dtrace_opens == 0)
-		(void) kdi_dtrace_set(KDI_DTSET_DTRACE_DEACTIVATE);
 
+	/*
+	 * Only relinquish control of the kernel debugger interface when there
+	 * are no consumers and no anonymous enablings.
+	 */
+	if (--dtrace_opens == 0 && dtrace_anon.dta_enabling == NULL)
+		(void) kdi_dtrace_set(KDI_DTSET_DTRACE_DEACTIVATE);
+	
 	lck_mtx_unlock(&dtrace_lock);
 	lck_mtx_unlock(&cpu_lock);
 
 #if defined(__APPLE__)
-
 	/*
 	 * Lock ordering requires the dof mode lock be taken before
 	 * the dtrace_lock.
 	 */
 	lck_rw_lock_exclusive(&dtrace_dof_mode_lock);
 	lck_mtx_lock(&dtrace_lock);
+	
+	if (dtrace_opens == 0) {
+		/*
+		 * If we are currently lazy-off, and this is the last close, transition to
+		 * lazy state.
+		 */
+		if (dtrace_dof_mode == DTRACE_DOF_MODE_LAZY_OFF) {
+			dtrace_dof_mode = DTRACE_DOF_MODE_LAZY_ON;
+		}
 
-	/*
-	 * If we are currently lazy-off, and this is the last close, transition to
-	 * lazy state.
-	 */
-	if (dtrace_dof_mode == DTRACE_DOF_MODE_LAZY_OFF && dtrace_opens == 0) {
-		dtrace_dof_mode = DTRACE_DOF_MODE_LAZY_ON;
+		/*
+		 * If we are the last dtrace client, switch back to lazy (from userspace) symbols
+		 */
+		if (dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_FROM_KERNEL) {
+			dtrace_kernel_symbol_mode = DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE;
+		}
 	}
-
+	
 	lck_mtx_unlock(&dtrace_lock);
 	lck_rw_unlock_exclusive(&dtrace_dof_mode_lock);
+	
+	/*
+	 * Kext probes may be retained past the end of the kext's lifespan. The
+	 * probes are kept until the last reference to them has been removed.
+	 * Since closing an active dtrace context is likely to drop that last reference,
+	 * lets take a shot at cleaning out the orphaned probes now.
+	 */
+	dtrace_module_unloaded(NULL);
 #endif /* __APPLE__ */
 
 	return (0);
@@ -18437,8 +18970,254 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 		return (0);
 	}
 
-	default:
-		break;
+	case DTRACEIOC_MODUUIDSLIST: {
+		size_t module_uuids_list_size;
+		dtrace_module_uuids_list_t* uuids_list;
+		uint64_t dtmul_count;
+		
+		/*
+		 * Fail if the kernel symbol mode makes this operation illegal.
+		 * Both NEVER & ALWAYS_FROM_KERNEL are permanent states, it is legal to check
+		 * for them without holding the dtrace_lock.
+		 */		
+		if (dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_NEVER ||
+		    dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_ALWAYS_FROM_KERNEL) {
+			cmn_err(CE_WARN, "dtrace_kernel_symbol_mode of %u disallows DTRACEIOC_MODUUIDSLIST", dtrace_kernel_symbol_mode);
+			return (EPERM);
+		}
+			
+		/*
+		 * Read the number of symbolsdesc structs being passed in.
+		 */
+		if (copyin(arg + offsetof(dtrace_module_uuids_list_t, dtmul_count),
+			   &dtmul_count,
+			   sizeof(dtmul_count))) {
+			cmn_err(CE_WARN, "failed to copyin dtmul_count");
+			return (EFAULT);
+		}
+		
+		/*
+		 * Range check the count. More than 2k kexts is probably an error.
+		 */
+		if (dtmul_count > 2048) {
+			cmn_err(CE_WARN, "dtmul_count is not valid");
+			return (EINVAL);
+		}
+
+		/*
+		 * For all queries, we return EINVAL when the user specified
+		 * count does not match the actual number of modules we find
+		 * available.
+		 *
+		 * If the user specified count is zero, then this serves as a
+		 * simple query to count the available modules in need of symbols.
+		 */
+		
+		rval = 0;
+
+		if (dtmul_count == 0)
+		{
+			lck_mtx_lock(&mod_lock);
+			struct modctl* ctl = dtrace_modctl_list;
+			while (ctl) {
+				ASSERT(!MOD_HAS_USERSPACE_SYMBOLS(ctl));
+				if (!MOD_SYMBOLS_DONE(ctl)) {
+					dtmul_count++;
+					rval = EINVAL;
+				}
+				ctl = ctl->mod_next;
+			}
+			lck_mtx_unlock(&mod_lock);
+			
+			if (copyout(&dtmul_count, arg, sizeof (dtmul_count)) != 0)
+				return (EFAULT);
+			else
+				return (rval);
+		}
+		
+		/*
+		 * If we reach this point, then we have a request for full list data.
+		 * Allocate a correctly sized structure and copyin the data.
+		 */
+		module_uuids_list_size = DTRACE_MODULE_UUIDS_LIST_SIZE(dtmul_count);
+		if ((uuids_list = kmem_alloc(module_uuids_list_size, KM_SLEEP)) == NULL) 
+			return (ENOMEM);
+		
+		/* NOTE! We can no longer exit this method via return */
+		if (copyin(arg, uuids_list, module_uuids_list_size) != 0) {
+			cmn_err(CE_WARN, "failed copyin of dtrace_module_uuids_list_t");
+			rval = EFAULT;
+			goto moduuidslist_cleanup;
+		}
+		
+		/*
+		 * Check that the count didn't change between the first copyin and the second.
+		 */
+		if (uuids_list->dtmul_count != dtmul_count) {
+			rval = EINVAL;
+			goto moduuidslist_cleanup;
+		}
+		
+		/*
+		 * Build the list of UUID's that need symbols
+		 */
+		lck_mtx_lock(&mod_lock);
+		
+		dtmul_count = 0;
+		
+		struct modctl* ctl = dtrace_modctl_list;
+		while (ctl) {
+			/*
+			 * We assume that userspace symbols will be "better" than kernel level symbols,
+			 * as userspace can search for dSYM(s) and symbol'd binaries. Even if kernel syms
+			 * are available, add user syms if the module might use them.
+			 */
+			ASSERT(!MOD_HAS_USERSPACE_SYMBOLS(ctl));
+			if (!MOD_SYMBOLS_DONE(ctl)) {
+				UUID* uuid = &uuids_list->dtmul_uuid[dtmul_count];
+				if (dtmul_count++ < uuids_list->dtmul_count) {
+					memcpy(uuid, ctl->mod_uuid, sizeof(UUID));
+				}
+			}
+			ctl = ctl->mod_next;
+		}
+		
+		lck_mtx_unlock(&mod_lock);
+		
+		if (uuids_list->dtmul_count < dtmul_count)
+			rval = EINVAL;
+		
+		uuids_list->dtmul_count = dtmul_count;
+		
+		/*
+		 * Copyout the symbols list (or at least the count!)
+		 */
+		if (copyout(uuids_list, arg, module_uuids_list_size) != 0) {
+			cmn_err(CE_WARN, "failed copyout of dtrace_symbolsdesc_list_t");
+			rval = EFAULT;
+		}
+		
+	moduuidslist_cleanup:
+		/*
+		 * If we had to allocate struct memory, free it.
+		 */
+		if (uuids_list != NULL) {
+			kmem_free(uuids_list, module_uuids_list_size);
+		}
+		
+		return rval;
+	}
+
+	case DTRACEIOC_PROVMODSYMS: {
+		size_t module_symbols_size;
+		dtrace_module_symbols_t* module_symbols;
+		uint64_t dtmodsyms_count;
+				
+		/*
+		 * Fail if the kernel symbol mode makes this operation illegal.
+		 * Both NEVER & ALWAYS_FROM_KERNEL are permanent states, it is legal to check
+		 * for them without holding the dtrace_lock.
+		 */
+		if (dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_NEVER ||
+		    dtrace_kernel_symbol_mode == DTRACE_KERNEL_SYMBOLS_ALWAYS_FROM_KERNEL) {
+			cmn_err(CE_WARN, "dtrace_kernel_symbol_mode of %u disallows DTRACEIOC_PROVMODSYMS", dtrace_kernel_symbol_mode);
+			return (EPERM);
+		}
+		
+		/*
+		 * Read the number of module symbols structs being passed in.
+		 */
+		if (copyin(arg + offsetof(dtrace_module_symbols_t, dtmodsyms_count),
+			   &dtmodsyms_count,
+			   sizeof(dtmodsyms_count))) {
+			cmn_err(CE_WARN, "failed to copyin dtmodsyms_count");
+			return (EFAULT);
+		}
+		
+		/*
+		 * Range check the count. How much data can we pass around?
+		 * FIX ME!
+		 */
+		if (dtmodsyms_count == 0 || (dtmodsyms_count > 100 * 1024)) {
+			cmn_err(CE_WARN, "dtmodsyms_count is not valid");
+			return (EINVAL);
+		}
+			
+		/*
+		 * Allocate a correctly sized structure and copyin the data.
+		 */
+		module_symbols_size = DTRACE_MODULE_SYMBOLS_SIZE(dtmodsyms_count);
+		if ((module_symbols = kmem_alloc(module_symbols_size, KM_SLEEP)) == NULL) 
+			return (ENOMEM);
+			
+		rval = 0;
+
+		/* NOTE! We can no longer exit this method via return */
+		if (copyin(arg, module_symbols, module_symbols_size) != 0) {
+			cmn_err(CE_WARN, "failed copyin of dtrace_module_symbols_t, symbol count %llu", module_symbols->dtmodsyms_count);
+			rval = EFAULT;
+			goto module_symbols_cleanup;
+		}
+			
+		/*
+		 * Check that the count didn't change between the first copyin and the second.
+		 */
+		if (module_symbols->dtmodsyms_count != dtmodsyms_count) {
+			rval = EINVAL;
+			goto module_symbols_cleanup;
+		}
+			
+		/*
+		 * Find the modctl to add symbols to.
+		 */
+		lck_mtx_lock(&dtrace_provider_lock);
+		lck_mtx_lock(&mod_lock);
+		
+		struct modctl* ctl = dtrace_modctl_list;
+		while (ctl) {
+			ASSERT(!MOD_HAS_USERSPACE_SYMBOLS(ctl));
+			if (MOD_HAS_UUID(ctl) && !MOD_SYMBOLS_DONE(ctl)) {
+				if (memcmp(module_symbols->dtmodsyms_uuid, ctl->mod_uuid, sizeof(UUID)) == 0) {
+					/* BINGO! */
+					ctl->mod_user_symbols = module_symbols;
+					break;
+				}
+			}
+			ctl = ctl->mod_next;
+		}
+
+		if (ctl) {
+			dtrace_provider_t *prv;
+
+			/*
+			 * We're going to call each providers per-module provide operation
+			 * specifying only this module.
+			 */
+			for (prv = dtrace_provider; prv != NULL; prv = prv->dtpv_next)
+				prv->dtpv_pops.dtps_provide_module(prv->dtpv_arg, ctl);	
+						
+			/*
+			 * We gave every provider a chance to provide with the user syms, go ahead and clear them
+			 */
+			ctl->mod_user_symbols = NULL; /* MUST reset this to clear HAS_USERSPACE_SYMBOLS */
+		}
+		
+		lck_mtx_unlock(&mod_lock);
+		lck_mtx_unlock(&dtrace_provider_lock);
+
+	module_symbols_cleanup:
+		/*
+		 * If we had to allocate struct memory, free it.
+		 */
+		if (module_symbols != NULL) {
+			kmem_free(module_symbols, module_symbols_size);
+		}
+		
+		return rval;
+	}
+			
+		default:
+			break;
 	}
 
 	return (ENOTTY);
@@ -18912,12 +19691,14 @@ dtrace_init( void )
 		lck_mtx_init(&cpu_lock, dtrace_lck_grp, dtrace_lck_attr);
 		lck_mtx_init(&mod_lock, dtrace_lck_grp, dtrace_lck_attr);
 
+		dtrace_modctl_list = NULL;
+
 		cpu_core = (cpu_core_t *)kmem_zalloc( ncpu * sizeof(cpu_core_t), KM_SLEEP );
 		for (i = 0; i < ncpu; ++i) {
 			lck_mtx_init(&cpu_core[i].cpuc_pid_lock, dtrace_lck_grp, dtrace_lck_attr);
 		}
 
-		cpu_list = (cpu_t *)kmem_zalloc( ncpu * sizeof(cpu_t), KM_SLEEP );
+		cpu_list = (dtrace_cpu_t *)kmem_zalloc( ncpu * sizeof(dtrace_cpu_t), KM_SLEEP );
 		for (i = 0; i < ncpu; ++i) {
 			cpu_list[i].cpu_id = (processorid_t)i;
 			cpu_list[i].cpu_next = &(cpu_list[(i+1) % ncpu]);
@@ -18965,6 +19746,14 @@ dtrace_init( void )
 				break;
 		}
 
+		/*
+		 * See dtrace_impl.h for a description of kernel symbol modes.
+		 * The default is to wait for symbols from userspace (lazy symbols).
+		 */
+		if (!PE_parse_boot_argn("dtrace_kernel_symbol_mode", &dtrace_kernel_symbol_mode, sizeof (dtrace_kernel_symbol_mode))) {
+			dtrace_kernel_symbol_mode = DTRACE_KERNEL_SYMBOLS_FROM_USERSPACE;
+		}
+				
 		gDTraceInited = 1;
 
 	} else
@@ -18974,12 +19763,29 @@ dtrace_init( void )
 void
 dtrace_postinit(void)
 {
-		/*
-		 * Called from bsd_init after all provider's *_init() routines have been
-		 * run. That way, anonymous DOF enabled under dtrace_attach() is safe
-		 * to go.
-		 */
-		dtrace_attach( (dev_info_t *)(uintptr_t)makedev(gMajDevNo, 0), 0 ); /* Punning a dev_t to a dev_info_t* */
+	/*
+	 * Called from bsd_init after all provider's *_init() routines have been
+	 * run. That way, anonymous DOF enabled under dtrace_attach() is safe
+	 * to go.
+	 */
+	dtrace_attach( (dev_info_t *)(uintptr_t)makedev(gMajDevNo, 0), 0 ); /* Punning a dev_t to a dev_info_t* */
+	
+	/*
+	 * Add the mach_kernel to the module list for lazy processing
+	 */
+	struct kmod_info fake_kernel_kmod;
+	memset(&fake_kernel_kmod, 0, sizeof(fake_kernel_kmod));
+	
+	strlcpy(fake_kernel_kmod.name, "mach_kernel", sizeof(fake_kernel_kmod.name));
+	fake_kernel_kmod.id = 1;
+	fake_kernel_kmod.address = g_kernel_kmod_info.address;
+	fake_kernel_kmod.size = g_kernel_kmod_info.size;
+
+	if (dtrace_module_loaded(&fake_kernel_kmod) != 0) {
+		printf("dtrace_postinit: Could not register mach_kernel modctl\n");
+	}
+	
+	(void)OSKextRegisterKextsWithDTrace();
 }
 #undef DTRACE_MAJOR
 

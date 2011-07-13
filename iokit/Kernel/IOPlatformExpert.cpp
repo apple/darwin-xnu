@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -44,6 +44,7 @@
 
 #include <libkern/c++/OSContainers.h>
 #include <libkern/crypto/sha1.h>
+#include <libkern/OSAtomic.h>
 
 extern "C" {
 #include <machine/machine_routines.h>
@@ -77,6 +78,7 @@ OSMetaClassDefineReservedUnused(IOPlatformExpert, 11);
 static IOPlatformExpert * gIOPlatform;
 static OSDictionary * gIOInterruptControllers;
 static IOLock * gIOInterruptControllersLock;
+static IODTNVRAM *gIOOptionsEntry;
 
 OSSymbol * gPlatformInterruptControllerName;
 
@@ -258,7 +260,7 @@ int IOPlatformExpert::haltRestart(unsigned int type)
   // On ARM kPEPanicRestartCPU is supported in the drivers
   if (type == kPEPanicRestartCPU)
 	  type = kPERestartCPU;
-  
+
   if (PE_halt_restart) return (*PE_halt_restart)(type);
   else return -1;
 }
@@ -371,6 +373,8 @@ PMLog(const char *who, unsigned long event,
 {
     UInt32 debugFlags = gIOKitDebug;
     UInt32 traceFlags = gIOKitTrace;
+    uintptr_t   name = 0;
+    UInt32 i = 0;
 
     if (debugFlags & kIOLogPower) {
 
@@ -402,8 +406,11 @@ PMLog(const char *who, unsigned long event,
 		code |= DBG_FUNC_START - sgnevent;
 	    }
 
-	    // Record the timestamp, wish I had a this pointer
-	    IOTimeStampConstant(code, (uintptr_t) who, event, param1, param2);
+        // Get first 8 characters of the name
+        while ( i < sizeof(uintptr_t) && who[i] != 0) 
+        {    ((char *)&name)[sizeof(uintptr_t)-i-1]=who[i]; i++; }
+	    // Record the timestamp. 
+	    IOTimeStampConstant(code, name, event, param1, param2);
 	}
     }
 }
@@ -779,12 +786,13 @@ int PEGetPlatformEpoch(void)
 
 int PEHaltRestart(unsigned int type)
 {
-  IOPMrootDomain    *pmRootDomain = IOService::getPMRootDomain();
+  IOPMrootDomain    *pmRootDomain;
   AbsoluteTime      deadline;
   thread_call_t     shutdown_hang;
   
   if(type == kPEHaltCPU || type == kPERestartCPU || type == kPEUPSDelayHaltCPU)
   {
+    pmRootDomain = IOService::getPMRootDomain();
     /* Notify IOKit PM clients of shutdown/restart
        Clients subscribe to this message with a call to
        IOService::registerInterest()
@@ -819,6 +827,115 @@ UInt32 PESavePanicInfo(UInt8 *buffer, UInt32 length)
   if (gIOPlatform != 0) return gIOPlatform->savePanicInfo(buffer, length);
   else return 0;
 }
+
+
+
+inline static int init_gIOOptionsEntry(void)
+{
+    IORegistryEntry *entry;
+    void *nvram_entry;
+    volatile void **options;
+    int ret = -1;
+
+    if (gIOOptionsEntry) 
+        return 0;
+
+    entry = IORegistryEntry::fromPath( "/options", gIODTPlane );
+    if (!entry)
+        return -1;
+
+    nvram_entry = (void *) OSDynamicCast(IODTNVRAM, entry);
+    if (!nvram_entry) 
+        goto release;
+
+    options = (volatile void **) &gIOOptionsEntry;
+    if (!OSCompareAndSwapPtr(NULL, nvram_entry, options)) {
+        ret = 0;
+        goto release;
+    }
+
+    return 0;
+
+release:
+    entry->release();
+    return ret;
+
+}
+
+/* pass in a NULL value if you just want to figure out the len */
+boolean_t PEReadNVRAMProperty(const char *symbol, void *value,
+                              unsigned int *len)
+{
+    OSObject  *obj;
+    OSData *data;
+    unsigned int vlen;
+
+    if (!symbol || !len)
+        goto err;
+
+    if (init_gIOOptionsEntry() < 0)
+        goto err;
+
+    vlen = *len;
+    *len = 0;
+
+    obj = gIOOptionsEntry->getProperty(symbol);
+    if (!obj)
+        goto err;
+
+    /* convert to data */
+    data = OSDynamicCast(OSData, obj);
+    if (!data) 
+        goto err;
+
+    *len  = data->getLength();
+    vlen  = min(vlen, *len);
+    if (vlen)
+        memcpy((void *) value, data->getBytesNoCopy(), vlen);
+
+    return TRUE;
+
+err:
+    return FALSE;
+}
+
+
+boolean_t PEWriteNVRAMProperty(const char *symbol, const void *value, 
+                               const unsigned int len)
+{
+    const OSSymbol *sym;
+    OSData *data;
+    bool ret = false;
+
+    if (!symbol || !value || !len)
+        goto err;
+
+    if (init_gIOOptionsEntry() < 0)
+        goto err;
+
+    sym = OSSymbol::withCStringNoCopy(symbol);
+    if (!sym)
+        goto err;
+
+    data = OSData::withBytes((void *) value, len);
+    if (!data)
+        goto sym_done;
+
+    ret = gIOOptionsEntry->setProperty(sym, data);
+    data->release();
+
+sym_done:
+    sym->release();
+
+    if (ret == true) {
+        gIOOptionsEntry->sync();
+        return TRUE;
+    }
+
+err:
+    return FALSE;
+}
+
 
 long PEGetGMTTimeOfDay(void)
 {

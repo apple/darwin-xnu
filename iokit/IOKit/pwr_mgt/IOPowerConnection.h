@@ -46,16 +46,18 @@ class IOPowerConnection : public IOService
 protected:
     /*! @field parentKnowsState	true: parent knows state of its domain
 					used by child */
-    bool		stateKnown;
+    bool            stateKnown;
+
     /*! @field currentPowerFlags	power flags which describe  the current state of the power domain
 					used by child */
     IOPMPowerFlags 	currentPowerFlags;
+
     /*! @field desiredDomainState	state number which corresponds to the child's desire
 					used by parent */
     unsigned long	desiredDomainState;
 
     /*! @field requestFlag		set to true when desiredDomainState is set */
-    bool		requestFlag;
+    bool            requestFlag;
 
     /*! @field preventIdleSleepFlag	true if child has this bit set in its desired state
 					used by parent */
@@ -67,16 +69,21 @@ protected:
 
     /*! @field awaitingAck		true if child has not yet acked our notification
 					used by parent */
-    bool		awaitingAck;
+    bool            awaitingAck;
 
     /*! @field readyFlag		true if the child has been added as a power child
 					used by parent */
-	bool		readyFlag;
+	bool            readyFlag;
+
+#ifdef XNU_KERNEL_PRIVATE
+public:
+    bool            delayChildNotification;
+#endif
 
 public:
-        /*! @function setParentKnowsState
-            @abstract Sets the stateKnown variable.
-            @discussion Called by the parent when the object is created and called by the child when it discovers that the parent now knows its state. */
+    /*! @function setParentKnowsState
+        @abstract Sets the stateKnown variable.
+        @discussion Called by the parent when the object is created and called by the child when it discovers that the parent now knows its state. */
     void setParentKnowsState (bool );
 
     /*! @function setParentCurrentPowerFlags
@@ -106,7 +113,6 @@ public:
         @abstract Set the flag that says that the child has called requestPowerDomainState.
     @discussion Called by the parent. */
     void setChildHasRequestedPower ( void );
-
 
     /*! @function childHasRequestedPower
         @abstract Return the flag that says whether the child has called requestPowerDomainState.

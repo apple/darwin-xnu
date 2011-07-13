@@ -30,9 +30,7 @@
 #ifndef _MACHINE_LOCK_H_
 #define _MACHINE_LOCK_H_
 
-#if defined (__ppc__)
-#include "ppc/lock.h"
-#elif defined (__i386__) || defined (__x86_64__)
+#if defined (__i386__) || defined (__x86_64__)
 #include "i386/lock.h"
 #else
 #error architecture not supported

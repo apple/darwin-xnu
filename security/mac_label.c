@@ -48,6 +48,7 @@ mac_labelzone_init(void)
 	    sizeof(struct label), "MAC Labels");
 	zone_change(zone_label, Z_EXPAND, TRUE);
 	zone_change(zone_label, Z_EXHAUST, FALSE);
+	zone_change(zone_label, Z_CALLERACCT, FALSE);
 }
 
 struct label *

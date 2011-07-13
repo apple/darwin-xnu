@@ -103,20 +103,20 @@
 #endif /*IPSEC*/
 
 int	tcp_do_sack = 1;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, sack, CTLFLAG_RW, &tcp_do_sack, 0,
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, sack, CTLFLAG_RW | CTLFLAG_LOCKED, &tcp_do_sack, 0,
 	"Enable/Disable TCP SACK support");
 static int tcp_sack_maxholes = 128;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, sack_maxholes, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, sack_maxholes, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&tcp_sack_maxholes, 0, 
     "Maximum number of TCP SACK holes allowed per connection");
 
 static int tcp_sack_globalmaxholes = 65536;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, sack_globalmaxholes, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, sack_globalmaxholes, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&tcp_sack_globalmaxholes, 0, 
     "Global maximum number of TCP SACK holes");
 
 static int tcp_sack_globalholes = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, sack_globalholes, CTLFLAG_RD,
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, sack_globalholes, CTLFLAG_RD | CTLFLAG_LOCKED,
     &tcp_sack_globalholes, 0,
     "Global number of TCP SACK holes currently allocated");
 
@@ -203,6 +203,18 @@ tcp_update_sack_list(struct tcpcb *tp, tcp_seq rcv_start, tcp_seq rcv_end)
 
 	/* Save the number of SACK blocks. */
 	tp->rcv_numsacks = num_head + num_saved;
+
+	/* If we are requesting SACK recovery, reset the stretch-ack state
+	 * so that connection will generate more acks after recovery and
+	 * sender's cwnd will open.
+	 */
+	if ((tp->t_flags & TF_STRETCHACK) != 0 && tp->rcv_numsacks > 0)
+		tcp_reset_stretch_ack(tp);
+
+#if TRAFFIC_MGT
+	if (tp->acc_iaj > 0 && tp->rcv_numsacks > 0) 
+		reset_acc_iaj(tp);
+#endif /* TRAFFIC_MGT */
 }
 
 /*

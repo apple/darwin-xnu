@@ -1,5 +1,5 @@
 .\"
-.\" Copyright (c) 2008 Apple Inc.  All rights reserved.
+.\" Copyright (c) 2011 Apple Inc.  All rights reserved.
 .\"
 .\" @APPLE_LICENSE_HEADER_START@
 .\" 
@@ -56,7 +56,7 @@
 .\"
 .\"     @(#)fcntl.2	8.2 (Berkeley) 1/12/94
 .\"
-.Dd October 2, 2008
+.Dd February 17, 2011
 .Dt FCNTL 2
 .Os BSD 4.2
 .Sh NAME
@@ -98,26 +98,24 @@ Same file status flags (i.e., both file descriptors
 share the same file status flags).
 .It
 The close-on-exec flag associated with the new file descriptor
-is set to remain open across
+is cleared so that the descriptor remains open across an
 .Xr execv 2
-system calls.
+system call.
 .El
+.It Dv F_DUPFD_CLOEXEC
+Like
+.Dv F_DUPFD ,
+except that the close-on-exec flag associated with the new file descriptor
+is set.
 .It Dv F_GETFD
-Get the close-on-exec flag associated with the file descriptor
-.Fa fildes .
-If the low-order bit of the returned value is 0,
-the file will remain open across
-.Fn exec ,
-otherwise the file will be closed upon execution of
-.Fn exec
+Get the flags associated with the file descriptor
+.Fa fildes ,
+as described below
 .Fa ( arg
 is ignored).
 .It Dv F_SETFD
-Set the close-on-exec flag associated with
-.Fa fildes
-to the low order bit of
-.Fa arg
-(0 or 1 as above).
+Set the file descriptor flags to
+.Fa arg .
 .It Dv F_GETFL
 Get descriptor status flags, as described below
 .Fa ( arg
@@ -187,6 +185,9 @@ Get disk device information.
 Currently this only includes the
 disk device address that corresponds
 to the current file offset.
+.It Dv F_LOG2PHYS_EXT
+Variant of F_LOG2PHYS that uses the passed in
+file offset and length.
 .It Dv F_FULLFSYNC
 Does the same thing as
 .Xr fsync 2
@@ -200,6 +201,43 @@ and Universal Disk Format (UDF) file systems.
 The operation may take quite a while to complete.
 Certain FireWire drives have also been known
 to ignore the request to flush their buffered data.
+.It Dv F_SETNOSIGPIPE
+Determines whether a
+.Dv SIGPIPE
+signal will be generated when a write fails on a pipe or socket for
+which there is no reader.  If
+.Fa arg
+is non-zero,
+.Dv SIGPIPE
+generation is disabled for descriptor
+.Fa fildes ,
+while an
+.Fa arg
+of zero enables it (the default).
+.It Dv F_GETNOSIGPIPE
+Returns whether a
+.Dv SIGPIPE
+signal will be generated when a write fails on a pipe or socket
+for which there is no reader.  The semantics of the return value
+match those of the
+.Fa arg
+of
+.Dv F_SETNOSIGPIPE .
+.El
+.Pp
+The flags for the
+.Dv F_GETFD
+and
+.Dv F_SETFD
+commands are as follows:
+.Bl -tag -width FD_CLOEXECX -offset indent
+.It Dv FD_CLOEXEC
+Close-on-exec; the given file descriptor will be automatically
+closed in the successor process image when one of the
+.Xr execv 2
+or
+.Xr posix_spawn 2
+family of system calls is invoked.
 .El
 .Pp
 The flags for the
@@ -476,15 +514,43 @@ commands operate on the following structure.
 .Pp
 The
 .Dv F_LOG2PHYS
-command operates on the following structure.
+command operates on the following structure:
 .ne 7v
 .Bd -literal
         struct log2phys {
-	    u_int32_t	l2p_flags;		/* unused so far */
-	    off_t	l2p_contigbytes;	/* unused so far */
-	    off_t	l2p_devoffset;	    /* bytes into device */
+            u_int32_t l2p_flags;        /* unused so far */
+            off_t     l2p_contigbytes;  /* unused so far */
+            off_t     l2p_devoffset;    /* bytes into device */
         };
 .Ed
+.Pp
+The
+.Dv F_LOG2PHYS_EXT
+command operates on the same structure as F_LOG2PHYS but treats it as an in/out:
+.ne 7v
+.Bd -literal
+        struct log2phys {
+            u_int32_t l2p_flags;        /* unused so far */
+            off_t     l2p_contigbytes;  /* IN: number of bytes to be queried;
+                                           OUT: number of contiguous bytes allocated at this position */
+            off_t     l2p_devoffset;    /* IN: bytes into file;
+                                           OUT: bytes into device */
+        };
+.Ed
+.Pp
+If
+.Fa fildes
+is a socket, then the
+.Dv F_SETNOSIGPIPE
+and
+.Dv F_GETNOSIGPIPE
+commands are directly analogous, and fully interoperate with the
+.Dv SO_NOSIGPIPE
+option of
+.Xr setsockopt 2
+and
+.Xr getsockopt 2
+respectively.
 .Sh RETURN VALUES
 Upon successful completion, the value returned depends on
 .Fa cmd
@@ -579,6 +645,8 @@ The argument
 .Fa cmd
 is
 .Dv F_LOG2PHYS
+or
+.Dv F_LOG2PHYS_EXT
 and
 .Fa fildes
 is not a valid file descriptor open for reading.
@@ -696,6 +764,9 @@ the process ID given as argument is not in use.
 .Xr flock 2 ,
 .Xr getdtablesize 2 ,
 .Xr open 2 ,
+.Xr pipe 2 ,
+.Xr socket 2 ,
+.Xr setsockopt 2 ,
 .Xr sigaction 3
 .Sh HISTORY
 The

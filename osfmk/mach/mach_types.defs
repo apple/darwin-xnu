@@ -213,11 +213,13 @@ type thread_policy_t		= array[*:16] of integer_t;
 		 * policy_rr_info_t (5 ints)
 		 * task security token (2 ints)
 		 * task audit token (8 ints)
+		 * dyld info (2 64-bit ints and 1 int)
+		 * task_extmod_info_t (8 64-bit ints)
 		 * If other task_info flavors are added, this
 		 * definition may need to be changed. (See
 		 * mach/task_info.h and mach/policy.h) */
 type task_flavor_t		= int;
-type task_info_t		= array[*:10] of integer_t;
+type task_info_t		= array[*:32] of integer_t;
 
 type task_policy_flavor_t	= natural_t;
 type task_policy_t		= array[*:16] of integer_t;
@@ -311,6 +313,7 @@ type host_info_t 		= array[*:15] of integer_t;
 		 * host_info64_t: variable-sized inline array that can contain:
 		 * 
 		 *	vm_statistics_t (6 ints and 9 longs)
+		 *	vm_extmod_statistics_t (6 64-bit ints)
 		 */
 type host_info64_t		= array[*:256] of integer_t;
 

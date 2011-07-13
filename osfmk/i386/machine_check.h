@@ -58,6 +58,7 @@ typedef union {
 	uint64_t	mcg_ecms		:BIT1(12);
 	uint64_t	mcg_reserved2		:BITS(15,13);
 	uint64_t	mcg_ext_cnt		:BITS(23,16);
+	uint64_t	mcg_ser_p		:BIT1(24);
      }		bits;
      uint64_t	u64;
 } ia32_mcg_cap_t;
@@ -128,11 +129,13 @@ typedef union {
 	uint64_t	over			:BIT1(62);
 	uint64_t	val			:BIT1(63);
     }		bits;
-     struct {		/* Variant if threshold-based error status present: */
+    struct {		/* Variant if threshold-based error status present: */
 	uint64_t	mca_error		:BITS(15,0);
 	uint64_t	model_specific_error	:BITS(31,16);
 	uint64_t	other_information	:BITS(52,32);
 	uint64_t	threshold		:BITS(54,53);
+	uint64_t	ar			:BIT1(55);
+	uint64_t	s			:BIT1(56);
 	uint64_t	pcc			:BIT1(57);
 	uint64_t	addrv			:BIT1(58);
 	uint64_t	miscv			:BIT1(59);
@@ -151,6 +154,7 @@ typedef union {
 	uint64_t	redundant_memory	:BIT1(19);
 	uint64_t	sparing			:BIT1(20);
 	uint64_t	access_out_of_range	:BIT1(21);
+	uint64_t	rtid_out_of_range	:BIT1(22);
 	uint64_t	address_parity		:BIT1(23);
 	uint64_t	byte_enable_parity	:BIT1(24);
 	uint64_t	reserved		:BITS(37,25);
@@ -173,7 +177,8 @@ typedef union {
 #define	MC8_MMM_RESERVED		4
 typedef union {
     struct {
-	uint64_t	reserved1		:BITS(15,0);
+	uint64_t	rtid			:BITS(7,0);
+	uint64_t	reserved1		:BITS(15,8);
 	uint64_t	dimm			:BITS(17,16);
 	uint64_t	channel			:BITS(19,18);
 	uint64_t	reserved2		:BITS(31,20);

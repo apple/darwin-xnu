@@ -1,4 +1,4 @@
-CFLAGS=-g -O2 -arch ppc -arch i386
+CFLAGS=-g -O2 -arch i386
 CFLAGS64=-g -O2 -arch x86_64
 
 TARGETS	= MPMMtest MPMMtest_64 KQMPMMtest KQMPMMtest_64 KQMPMMtestD KQMPMMtest_64D
