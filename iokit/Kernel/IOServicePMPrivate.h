@@ -442,6 +442,7 @@ the ack timer is ticking every tenth of a second.
 #define kIOPMSyncNoChildNotify      0x0200  // sync root domain only, not entire tree
 #define kIOPMSyncTellPowerDown      0x0400  // send the ask/will power off messages
 #define kIOPMSyncCancelPowerDown    0x0800  // sleep cancel for maintenance wake
+#define kIOPMPowerSuppressed        0x1000  // power suppressed for dark wake
 
 enum {
     kDriverCallInformPreChange,

@@ -46,7 +46,7 @@ uint32_t	data_size;
 	cpu_freq = getFreq();
 
 	if (cpu_freq == 0) {
-		fprintf(stderr, "this appears to be an N90 device, where cpu_freq can not be detected. set to 800MHz.\n");
+		fprintf(stderr, "this appears to be an iPhone device, where cpu_freq can not be detected. set to 800MHz.\n");
 		cpu_freq = 800000000;
 	} else {
 		fprintf(stderr, "device max CPU clock rate = %.2f MHz\n", cpu_freq/1.e6);

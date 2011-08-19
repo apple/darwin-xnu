@@ -268,6 +268,7 @@ static UInt32           gPagingOff = 0;
 static UInt32           gSleepWakeUUIDIsSet = false;
 static uint32_t         gAggressivesState = 0;
 static uint32_t         gDarkWakeFlags = kDarkWakeFlagHIDTickleNone;
+static bool             gRAMDiskImageBoot = false;
 
 struct timeval gIOLastSleepTime;
 struct timeval gIOLastWakeTime;
@@ -845,6 +846,17 @@ bool IOPMrootDomain::start( IOService * nub )
         };
 
     PE_parse_boot_argn("darkwake", &gDarkWakeFlags, sizeof(gDarkWakeFlags));
+    
+    IORegistryEntry * chosenEntry = IORegistryEntry::fromPath("/chosen", gIODTPlane);
+    if (chosenEntry)
+    {
+        if (chosenEntry->getProperty("boot-ramdmg-size") &&
+            chosenEntry->getProperty("boot-ramdmg-extents"))
+        {
+            gRAMDiskImageBoot = true;
+        }
+        chosenEntry->release();
+    }
 
     queue_init(&aggressivesQueue);
     aggressivesThreadCall = thread_call_allocate(handleAggressivesFunction, this);
@@ -4360,6 +4372,13 @@ void IOPMrootDomain::overridePowerChangeForUIService(
         }
     }
 
+    if (gRAMDiskImageBoot &&
+        (actions->parameter & kPMActionsFlagIsDisplayWrangler))
+    {
+        // Tag devices subject to power suppression.
+        *inOutChangeFlags |= kIOPMPowerSuppressed;
+    }
+
     if (actions->parameter & kPMActionsFlagLimitPower)
     {
         uint32_t maxPowerState = (uint32_t)(-1);
@@ -4369,7 +4388,8 @@ void IOPMrootDomain::overridePowerChangeForUIService(
             // Enforce limit for system power/cap transitions.
 
             maxPowerState = 0;
-            if (actions->parameter & kPMActionsFlagIsDisplayWrangler)
+            if ((actions->parameter & kPMActionsFlagIsDisplayWrangler) &&
+                (!gRAMDiskImageBoot || (service->getPowerState() > 0)))
             {
                 // Forces a 3->1 transition sequence
                 if (changeFlags & kIOPMDomainWillChange)

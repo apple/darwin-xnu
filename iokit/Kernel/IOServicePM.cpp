@@ -4019,6 +4019,15 @@ void IOService::all_done ( void )
 			  ((fHeadNoteChangeFlags & kIOPMDomainDidChange)  &&
              (fCurrentPowerState < fHeadNotePowerState)))
         {
+            if ((fHeadNoteChangeFlags & kIOPMPowerSuppressed) &&
+                (fHeadNotePowerState != fCurrentPowerState) &&
+                (fHeadNotePowerState == fDesiredPowerState))
+            {
+                // Power changed, and desired power state restored.
+                // Clear any prior power desire while in suppressed state.
+                requestDomainPower(fHeadNotePowerState);
+            }
+
             // did power raise?
             if ( fCurrentPowerState < fHeadNotePowerState )
             {

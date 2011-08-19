@@ -74,7 +74,7 @@
 	The idea was actually described in the Intel AES Instruction Set White Paper (Rev. 2.0 page 53-55) 
 
 	This modification interleaves the aesdec/aesdeclast instructions for 4 blocks in cbc mode.
-	On a K18 (2.4GHz core-i5/2.66GHz core-i7), the x86_64 decrypt throughput (in xnu-iokit) has been improved
+	On a 2.4GHz core-i5/2.66GHz core-i7, the x86_64 decrypt throughput (in xnu-iokit) has been improved
 	from 1180/1332 to 1667/1858 MBytes/sec. This is approximately 1.40 times speedup in the decryption.
 	The encrypt throughput is not changed.  
 

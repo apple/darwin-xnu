@@ -968,7 +968,7 @@ panic_print_macho_symbol_name(kernel_mach_header_t *mh, vm_address_t search, con
                 orig_le = orig_sg;
             else if (strncmp("", orig_sg->segname,
 				    sizeof(orig_sg->segname)) == 0)
-                orig_ts = orig_sg; /* pre-Barolo i386 kexts have a single unnamed segment */
+                orig_ts = orig_sg; /* pre-Lion i386 kexts have a single unnamed segment */
         }
         else if (cmd->cmd == LC_SYMTAB)
             orig_st = (struct symtab_command *) cmd;

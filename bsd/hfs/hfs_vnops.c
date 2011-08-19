@@ -3416,6 +3416,8 @@ hfs_vnop_rename(ap)
 	int lockflags;
 	int error;
 	time_t orig_from_ctime, orig_to_ctime;
+	int emit_rename = 1;
+	int emit_delete = 1;
 
 	orig_from_ctime = VTOC(fvp)->c_ctime;
 	if (tvp && VTOC(tvp)) {
@@ -3424,10 +3426,55 @@ hfs_vnop_rename(ap)
 		orig_to_ctime = ~0;
 	}
 
-	check_for_tracked_file(fvp, orig_from_ctime, NAMESPACE_HANDLER_RENAME_OP, NULL);
+	hfsmp = VTOHFS(tdvp);
+	/* 
+	 * Do special case checks here.  If fvp == tvp then we need to check the
+	 * cnode with locks held.
+	 */
+	if (fvp == tvp) {
+		int is_hardlink = 0;
+		/* 
+		 * In this case, we do *NOT* ever emit a DELETE event.  
+		 * We may not necessarily emit a RENAME event 
+		 */	
+		emit_delete = 0;
+		if ((error = hfs_lock(VTOC(fvp), HFS_SHARED_LOCK))) {
+			return error;
+		}
+		/* Check to see if the item is a hardlink or not */
+		is_hardlink = (VTOC(fvp)->c_flag & C_HARDLINK);
+		hfs_unlock (VTOC(fvp));
+		
+		/* 
+		 * If the item is not a hardlink, then case sensitivity must be off, otherwise
+		 * two names should not resolve to the same cnode unless they were case variants.
+		 */
+		if (is_hardlink) {
+			emit_rename = 0;
+			/*
+			 * Hardlinks are a little trickier.  We only want to emit a rename event
+			 * if the item is a hardlink, the parent directories are the same, case sensitivity
+			 * is off, and the case folded names are the same.  See the fvp == tvp case below for more
+			 * info.
+			 */
+
+			if ((fdvp == tdvp) && ((hfsmp->hfs_flags & HFS_CASE_SENSITIVE) == 0)) {
+				if (hfs_namecmp((const u_int8_t *)fcnp->cn_nameptr, fcnp->cn_namelen,
+							(const u_int8_t *)tcnp->cn_nameptr, tcnp->cn_namelen) == 0) {
+					/* Then in this case only it is ok to emit a rename */
+					emit_rename = 1;
+				}
+			}
+		}
+	}
+	if (emit_rename) {
+		check_for_tracked_file(fvp, orig_from_ctime, NAMESPACE_HANDLER_RENAME_OP, NULL);
+	}
 
 	if (tvp && VTOC(tvp)) {
-		check_for_tracked_file(tvp, orig_to_ctime, NAMESPACE_HANDLER_DELETE_OP, NULL);
+		if (emit_delete) {
+			check_for_tracked_file(tvp, orig_to_ctime, NAMESPACE_HANDLER_DELETE_OP, NULL);
+		}
 	}
 	
 	/* 
@@ -3533,7 +3580,6 @@ hfs_vnop_rename(ap)
 	fcp = VTOC(fvp);
 	tdcp = VTOC(tdvp);
 	tcp = tvp ? VTOC(tvp) : NULL;
-	hfsmp = VTOHFS(tdvp);
 
 	/* Ensure we didn't race src or dst parent directories with rmdir. */
 	if (fdcp->c_flag & (C_NOEXISTS | C_DELETED)) {
@@ -3799,14 +3845,48 @@ hfs_vnop_rename(ap)
 		 */
 		if (fvp == tvp) {
 			if (!(fcp->c_flag & C_HARDLINK)) {
+				/* 
+				 * If they're not hardlinks, then fvp == tvp must mean we 
+				 * are using case-insensitive HFS because case-sensitive would
+				 * not use the same vnode for both.  In this case we just update
+				 * the catalog for: a -> A
+				 */
 				goto skip_rm;  /* simple case variant */
 
-			} else if ((fdvp != tdvp) ||
+			}
+		   	/* For all cases below, we must be using hardlinks */	
+			else if ((fdvp != tdvp) ||
 			           (hfsmp->hfs_flags & HFS_CASE_SENSITIVE)) {
+				/*
+				 * If the parent directories are not the same, AND the two items
+				 * are hardlinks, posix says to do nothing:
+				 * dir1/fred <-> dir2/bob   and the op was mv dir1/fred -> dir2/bob
+				 * We just return 0 in this case.
+				 *
+				 * If case sensitivity is on, and we are using hardlinks 
+				 * then renaming is supposed to do nothing.
+				 * dir1/fred <-> dir2/FRED, and op == mv dir1/fred -> dir2/FRED
+				 */
 				goto out;  /* matching hardlinks, nothing to do */
 
 			} else if (hfs_namecmp((const u_int8_t *)fcnp->cn_nameptr, fcnp->cn_namelen,
 			                       (const u_int8_t *)tcnp->cn_nameptr, tcnp->cn_namelen) == 0) {
+				/*
+				 * If we get here, then the following must be true:
+				 * a) We are running case-insensitive HFS+.
+				 * b) Both paths 'fvp' and 'tvp' are in the same parent directory.
+				 * c) the two names are case-variants of each other.
+				 *
+				 * In this case, we are really only dealing with a single catalog record
+				 * whose name is being updated.
+				 * 
+				 * op is dir1/fred -> dir1/FRED
+				 * 
+				 * We need to special case the name matching, because if
+				 * dir1/fred <-> dir1/bob were the two links, and the 
+				 * op was dir1/fred -> dir1/bob
+				 * That would fail/do nothing.
+				 */
 				goto skip_rm;  /* case-variant hardlink in the same dir */
 			} else {
 				goto out;  /* matching hardlink, nothing to do */
