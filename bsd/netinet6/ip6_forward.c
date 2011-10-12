@@ -134,7 +134,6 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	struct secpolicy *sp = NULL;
 #endif
 	struct timeval timenow;
-	int	tunneledv4 = 0;
 	unsigned int ifscope = IFSCOPE_NONE;
 #if PF
 	struct pf_mtag *pf_mtag;
@@ -296,15 +295,18 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	 */
 	bzero(&state, sizeof(state));
 	state.m = m;
-	state.ro = NULL;	/* update at ipsec6_output_tunnel() */
 	state.dst = NULL;	/* update at ipsec6_output_tunnel() */
 
-	error = ipsec6_output_tunnel(&state, sp, 0, &tunneledv4);
+	error = ipsec6_output_tunnel(&state, sp, 0);
 	key_freesp(sp, KEY_SADB_UNLOCKED);
-	if (tunneledv4)
+	if (state.tunneled == 4)
 		return;  /* packet is gone - sent over IPv4 */
 		
 	m = state.m;
+	if (state.ro.ro_rt) {
+		rtfree(state.ro.ro_rt);
+		state.ro.ro_rt = NULL;
+	}
 	if (error) {
 		/* mbuf is already reclaimed in ipsec6_output_tunnel. */
 		switch (error) {

@@ -283,7 +283,8 @@ ip_output_list(
 	struct in_addr pkt_dst;
 	struct ipf_pktopts *ippo = NULL, ipf_pktopts;
 #if IPSEC
-	struct route iproute;
+	struct ipsec_output_state ipsec_state;
+	struct route *ipsec_saved_route = NULL;
 	struct socket *so = NULL;
 	struct secpolicy *sp = NULL;
 #endif
@@ -310,6 +311,10 @@ ip_output_list(
 	unsigned int nocell;
 	boolean_t select_srcif;
 	KERNEL_DEBUG(DBG_FNC_IP_OUTPUT | DBG_FUNC_START, 0,0,0,0,0);
+
+#if IPSEC
+	bzero(&ipsec_state, sizeof(ipsec_state));
+#endif /* IPSEC */
 
 	packetlist = m0;
 #if IPFIREWALL
@@ -1112,15 +1117,12 @@ sendit:
 		printf("ip_output: Invalid policy found. %d\n", sp->policy);
 	}
     {
-	struct ipsec_output_state state;
-	bzero(&state, sizeof(state));
-	state.m = m;
+	ipsec_state.m = m;
 	if (flags & IP_ROUTETOIF) {
-		state.ro = &iproute;
-		bzero(&iproute, sizeof(iproute));
+		bzero(&ipsec_state.ro, sizeof(ipsec_state.ro));
 	} else
-		state.ro = ro;
-	state.dst = (struct sockaddr *)dst;
+		route_copyout(&ipsec_state.ro, ro, sizeof(ipsec_state.ro));
+	ipsec_state.dst = (struct sockaddr *)dst;
 
 	ip->ip_sum = 0;
 
@@ -1143,23 +1145,25 @@ sendit:
 		struct ip *, ip, struct ifnet *, ifp,
 		struct ip *, ip, struct ip6_hdr *, NULL);
 
-	error = ipsec4_output(&state, sp, flags);
+	error = ipsec4_output(&ipsec_state, sp, flags);
     
-	m0 = m = state.m;
+	m0 = m = ipsec_state.m;
 	
 	if (flags & IP_ROUTETOIF) {
 		/*
 		 * if we have tunnel mode SA, we may need to ignore
 		 * IP_ROUTETOIF.
 		 */
-		if (state.ro != &iproute || state.ro->ro_rt != NULL) {
+		if (ipsec_state.tunneled) {
 			flags &= ~IP_ROUTETOIF;
-			ro = state.ro;
+			ipsec_saved_route = ro;
+			ro = &ipsec_state.ro;
 		}
-	} else
-		ro = state.ro;
-
-	dst = (struct sockaddr_in *)state.dst;
+	} else {
+		ipsec_saved_route = ro;
+		ro = &ipsec_state.ro;
+	}
+	dst = (struct sockaddr_in *)ipsec_state.dst;
 	if (error) {
 		/* mbuf is already reclaimed in ipsec4_output. */
 		m0 = NULL;
@@ -1780,10 +1784,8 @@ done:
 	}
 #if IPSEC
 	if (ipsec_bypass == 0 && (flags & IP_NOIPSEC) == 0) {
-	if (ro == &iproute && ro->ro_rt) {
-		rtfree(ro->ro_rt);
-		ro->ro_rt = NULL;
-	}
+		if (ipsec_state.ro.ro_rt)
+			rtfree(ipsec_state.ro.ro_rt);
 	if (sp != NULL) {
 		KEYDEBUG(KEYDEBUG_IPSEC_STAMP,
 			printf("DP ip_output call free SP:%x\n", sp));

@@ -37,53 +37,6 @@
  16 byte aligned if VIA ACE is being used
 */
 
-/* modified 3/5/10 cclee */
-/* Clean up those related to VIA ACE and hand optimize aes_cbc_encrypt and aes_cbc_decrypt */
-/* move the xmm registers save/restore originally inside the callee functions into these 2 caller functions */
-
-/* HW-AES specific implementation cclee 3-12-10 */
-/* In aes_encrypt_cbc and aes_decrypt_cbc, __cpu_capabilities is polled, 
-	and if kHasAES is detected, branch to the hw-specific functions here */
-
-
-/* 	
-	This files defines _aes_encrypt_cbc_hw and _aes_decrypt_cbc_hw --- Intel Westmere HW AES-based implementation
-	of _aes_encrypt_cbc and _aes_decrypt_cbc. 
-
-	These 2 functions SHOULD BE entried ONLY after the AES HW is verified to be available. 
-	They SHOULD NOT be called without AES HW detection. It might cause xnu to crash.
-
-	The AES HW is detected 1st thing in 
-		_aes_encrypt_cbc (aes_modes_asm.s) 
-		_aes_decrypt_cbc (aes_modes_asm.s)
-	and, if AES HW is detected, branch without link (ie, jump) to the functions here.
-
-	The implementation here follows the examples in an Intel White Paper
-	"Intel Advanced Encryption Standard (AES) Instruction Set" Rev.2 01
-
-	Note: Rev. 03 Final 2010 01 26 is available. Looks like some code change from Rev.2 01
-
-	cclee 3-13-10
-*/
-
-/* 
-	The function _aes_decrypt_cbc_hw previously simply serially decrypts block by block
-	in our group meeting, Eric/Ali suggested that I perhaps should take a look of combining multiple blocks
-	in a loop and interleaving multiple aesdec instructions to absorb/hide stalls to improve the decrypt thoughput.
-
-	The idea was actually described in the Intel AES Instruction Set White Paper (Rev. 2.0 page 53-55) 
-
-	This modification interleaves the aesdec/aesdeclast instructions for 4 blocks in cbc mode.
-	On a 2.4GHz core-i5/2.66GHz core-i7, the x86_64 decrypt throughput (in xnu-iokit) has been improved
-	from 1180/1332 to 1667/1858 MBytes/sec. This is approximately 1.40 times speedup in the decryption.
-	The encrypt throughput is not changed.  
-
-	I also enhanced the assembly code comments.
-
-	cclee-4-30-10 (Do you know 4-30 is National Honesty Day in the US? No need to know. I've been honest all the time.)
-
-*/
-
 /* ---------------------------------------------------------------------------------------------------------------- 
 
 	aes_encrypt_cbc function (see aes_modes.c or aes_modes_asm.s) :

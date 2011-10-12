@@ -489,10 +489,9 @@ usld_lock_common_checks(
 	if (l == USIMPLE_LOCK_NULL)
 		panic("%s:  null lock pointer", caller);
 	if (l->lock_type != USLOCK_TAG)
-		panic("%s:  0x%p is not a usimple lock", caller, l);
+		panic("%s:  %p is not a usimple lock, 0x%x", caller, l, l->lock_type);
 	if (!(l->debug.state & USLOCK_INIT))
-		panic("%s:  %p is not an initialized lock",
-		      caller, l);
+		panic("%s:  %p is not an initialized lock, 0x%x", caller, l, l->debug.state);
 	return USLOCK_CHECKING(l);
 }
 

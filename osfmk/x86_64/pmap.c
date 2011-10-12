@@ -1051,9 +1051,10 @@ pmap_destroy(pmap_t	p)
 		 * physically on the right pmap:
 		 */
 		PMAP_UPDATE_TLBS(p, 0x0ULL, 0xFFFFFFFFFFFFF000ULL);
+		if (pmap_pcid_ncpus)
+			pmap_destroy_pcid_sync(p);
 	}
-	if (pmap_pcid_ncpus)
-		pmap_destroy_pcid_sync(p);
+
 	PMAP_UNLOCK(p);
 
 	if (c != 0) {

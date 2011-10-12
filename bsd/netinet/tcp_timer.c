@@ -386,6 +386,14 @@ tcp_garbage_collect(struct inpcb *inp, int istimewait)
 			struct tcpcb *, tp, int32_t, TCPS_CLOSED);
 		/* Become a regular mutex */
 		lck_mtx_convert_spin(&inp->inpcb_mtx);
+		
+		/* If this tp still happens to be on the timer list, 
+		 * take it out
+		 */
+		if (TIMER_IS_ON_LIST(tp)) {
+			tcp_remove_timer(tp);
+		}
+
 		if (inp->inp_state != INPCB_STATE_DEAD) {
 #if INET6
 			if (INP_CHECK_SOCKAF(so, AF_INET6))
@@ -887,10 +895,10 @@ tcp_remove_timer(struct tcpcb *tp)
 	tp->t_flags &= ~(TF_TIMER_ONLIST);
 
 	listp->entries--;
-	lck_mtx_unlock(listp->mtx);
 
 	tp->tentry.le.le_next = NULL;
 	tp->tentry.le.le_prev = NULL;
+	lck_mtx_unlock(listp->mtx);
 }
 
 /* Function to check if the timerlist needs to be rescheduled to run

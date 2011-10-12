@@ -966,6 +966,7 @@ nfs_vnop_close(
 //		denyMode = NFS_OPEN_SHARE_DENY_WRITE;
 //	else
 //		denyMode = NFS_OPEN_SHARE_DENY_NONE;
+#if 0  // Not yet
 	if (fflag & FHASLOCK) {
 		/* XXX assume FHASLOCK is for the deny mode and not flock */
 		/* FHASLOCK flock will be unlocked in the close path, but the flag is not cleared. */
@@ -978,8 +979,10 @@ nfs_vnop_close(
 	} else {
 			denyMode = NFS_OPEN_SHARE_DENY_NONE;
 	}
+#else
 	// XXX don't do deny modes just yet (and never do it for !v4)
 	denyMode = NFS_OPEN_SHARE_DENY_NONE;
+#endif
 
 	if (!accessMode) {
 		/*

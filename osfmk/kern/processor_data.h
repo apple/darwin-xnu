@@ -51,6 +51,7 @@ struct processor_sched_statistics {
 	uint32_t		ipi_count;
 	uint32_t		timer_pop_count;
 	uint32_t		idle_transitions;
+	uint32_t		quantum_timer_expirations;
 };
 
 struct processor_data {
@@ -121,6 +122,13 @@ MACRO_END
 MACRO_BEGIN											\
 	if (__builtin_expect(sched_stats_active, 0)) { 					\
 		(p)->processor_data.sched_stats.idle_transitions++;				\
+	}											\
+MACRO_END
+
+#define SCHED_STATS_QUANTUM_TIMER_EXPIRATION(p)								\
+MACRO_BEGIN											\
+	if (__builtin_expect(sched_stats_active, 0)) { 					\
+		(p)->processor_data.sched_stats.quantum_timer_expirations++;		\
 	}											\
 MACRO_END
 

@@ -268,7 +268,11 @@ ip6_output(
 	int needipsectun = 0;
 	struct socket *so = NULL;
 	struct secpolicy *sp = NULL;
+	struct route_in6 *ipsec_saved_route = NULL;
+	struct ipsec_output_state ipsec_state;
 
+	bzero(&ipsec_state, sizeof(ipsec_state));
+		
 	/* for AH processing. stupid to have "socket" variable in IP layer... */
 	if (ipsec_bypass == 0)
 	{
@@ -572,7 +576,6 @@ ip6_output(
 	    {
 		struct ip6_rthdr *rh = NULL;
 		int segleft_org = 0;
-		struct ipsec_output_state state;
 
 		if (exthdrs.ip6e_rthdr) {
 			rh = mtod(exthdrs.ip6e_rthdr, struct ip6_rthdr *);
@@ -580,11 +583,10 @@ ip6_output(
 			rh->ip6r_segleft = 0;
 		}
 
-		bzero(&state, sizeof(state));
-		state.m = m;
-		error = ipsec6_output_trans(&state, nexthdrp, mprev, sp, flags,
+		ipsec_state.m = m;
+		error = ipsec6_output_trans(&ipsec_state, nexthdrp, mprev, sp, flags,
 			&needipsectun);
-		m = state.m;
+		m = ipsec_state.m;
 		if (error) {
 			/* mbuf is already reclaimed in ipsec6_output_trans. */
 			m = NULL;
@@ -741,10 +743,9 @@ skip_ipsec2:
 		dst->sin6_len = sizeof(struct sockaddr_in6);
 		dst->sin6_addr = ip6->ip6_dst;
 	}
+
 #if IPSEC
 	if (needipsec && needipsectun) {
-		struct ipsec_output_state state;
-		int tunneledv4 = 0;
 #if CONFIG_DTRACE
 		struct ifnet *trace_ifp = (ifpp != NULL) ? (*ifpp) : NULL;
 #endif /* CONFIG_DTRACE */
@@ -759,22 +760,22 @@ skip_ipsec2:
 		bzero(&exthdrs, sizeof(exthdrs));
 		exthdrs.ip6e_ip6 = m;
 
-		bzero(&state, sizeof(state));
-		state.m = m;
-		state.ro = (struct route *)ro;
-		state.dst = (struct sockaddr *)dst;
+		ipsec_state.m = m;
+		route_copyout(&ipsec_state.ro, (struct route *)ro, sizeof(ipsec_state.ro));
+		ipsec_state.dst = (struct sockaddr *)dst;
 
 		/* Added a trace here so that we can see packets inside a tunnel */
 		DTRACE_IP6(send, struct mbuf *, m, struct inpcb *, NULL,
 			struct ip6_hdr *, ip6, struct ifnet *, trace_ifp,
 			struct ip *, NULL, struct ip6_hdr *, ip6); 
 
-		error = ipsec6_output_tunnel(&state, sp, flags, &tunneledv4);
-		if (tunneledv4)	/* tunneled in IPv4 - packet is gone */
+		error = ipsec6_output_tunnel(&ipsec_state, sp, flags);
+		if (ipsec_state.tunneled == 4)	/* tunneled in IPv4 - packet is gone */
 			goto done;
-		m = state.m;
-		ro = (struct route_in6 *)state.ro;
-		dst = (struct sockaddr_in6 *)state.dst;
+		m = ipsec_state.m;
+		ipsec_saved_route = ro;
+		ro = (struct route_in6 *)&ipsec_state.ro;
+		dst = (struct sockaddr_in6 *)ipsec_state.dst;
 		if (error) {
 			/* mbuf is already reclaimed in ipsec6_output_tunnel. */
 			m0 = m = NULL;
@@ -1367,6 +1368,14 @@ sendorfree:
 		ip6stat.ip6s_fragmented++;
 
 done:
+#if IPSEC
+	if (ipsec_saved_route) {
+		ro = ipsec_saved_route;
+		if (ipsec_state.ro.ro_rt) { 
+			rtfree(ipsec_state.ro.ro_rt);
+		}
+	}
+#endif /* IPSEC */
 	if (ro == &ip6route && ro->ro_rt) { /* brace necessary for rtfree */
 		rtfree(ro->ro_rt);
 	} else if (ro_pmtu == &ip6route && ro_pmtu->ro_rt) {

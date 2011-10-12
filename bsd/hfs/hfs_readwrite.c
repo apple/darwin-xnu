@@ -942,7 +942,7 @@ do_attr_lookup(struct hfsmount *hfsmp, struct access_cache *cache, cnid_t cnid,
 	struct cinfo c_info;
 
 	/* otherwise, check the cnode hash incase the file/dir is incore */
-	if (hfs_chash_snoop(hfsmp, cnid, snoop_callback, &c_info) == 0) {
+	if (hfs_chash_snoop(hfsmp, cnid, 0, snoop_callback, &c_info) == 0) {
 	    cnattrp->ca_uid = c_info.uid;
 	    cnattrp->ca_gid = c_info.gid;
 	    cnattrp->ca_mode = c_info.mode;

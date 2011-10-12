@@ -258,7 +258,7 @@ struct _processor_statistics_np  {
 	uint64_t		ps_runq_count_sum __attribute((aligned(8)));
 
 	uint32_t		ps_idle_transitions;
-
+	uint32_t		ps_quantum_timer_expirations;
 };
 
 #endif /* PRIVATE */

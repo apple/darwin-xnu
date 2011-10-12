@@ -43,6 +43,7 @@
 #define kIOConsoleSessionUIDKey                 "kCGSSessionUserIDKey"         /* value is OSNumber */
 #define kIOConsoleSessionConsoleSetKey          "kCGSSessionConsoleSetKey"     /* value is OSNumber */
 #define kIOConsoleSessionOnConsoleKey           "kCGSSessionOnConsoleKey"      /* value is OSBoolean */
+#define kIOConsoleSessionLoginDoneKey           "kCGSessionLoginDoneKey"       /* value is OSBoolean */
 #define kIOConsoleSessionSecureInputPIDKey      "kCGSSessionSecureInputPID"    /* value is OSNumber */
 #define kIOConsoleSessionScreenLockedTimeKey    "CGSSessionScreenLockedTime"   /* value is OSNumber, secs - 1970 */
 

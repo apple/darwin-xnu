@@ -482,16 +482,6 @@ hfs_vnop_open(struct vnop_open_args *ap)
 	if (cp->c_fileid == hfsmp->hfs_jnlfileid)
 		return (EPERM);
 
-	/* If we're going to write to the file, initialize quotas. */
-#if QUOTA
-	if ((ap->a_mode & FWRITE) && (hfsmp->hfs_flags & HFS_QUOTAS))
-		(void)hfs_getinoquota(cp);
-#endif /* QUOTA */
-
-	/*
-	 * On the first (non-busy) open of a fragmented
-	 * file attempt to de-frag it (if its less than 20MB).
-	 */
 	if ((hfsmp->hfs_flags & HFS_READ_ONLY) ||
 	    (hfsmp->jnl == NULL) ||
 #if NAMEDSTREAMS
@@ -504,6 +494,17 @@ hfs_vnop_open(struct vnop_open_args *ap)
 
 	if ((error = hfs_lock(cp, HFS_EXCLUSIVE_LOCK)))
 		return (error);
+
+#if QUOTA
+	/* If we're going to write to the file, initialize quotas. */
+	if ((ap->a_mode & FWRITE) && (hfsmp->hfs_flags & HFS_QUOTAS))
+		(void)hfs_getinoquota(cp);
+#endif /* QUOTA */
+
+	/*
+	 * On the first (non-busy) open of a fragmented
+	 * file attempt to de-frag it (if its less than 20MB).
+	 */
 	fp = VTOF(vp);
 	if (fp->ff_blocks &&
 	    fp->ff_extents[7].blockCount != 0 &&
@@ -535,6 +536,7 @@ hfs_vnop_open(struct vnop_open_args *ap)
 					vfs_context_proc(ap->a_context));
 		}
 	}
+
 	hfs_unlock(cp);
 
 	return (0);

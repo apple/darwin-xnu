@@ -138,7 +138,11 @@ struct IOExternalMethodArguments
     IOMemoryDescriptor * structureOutputDescriptor;
     uint32_t		 structureOutputDescriptorSize;
 
-    uint32_t		__reserved[32];
+    uint32_t		__reservedA;
+
+    OSObject **         structureVariableOutputData;
+
+    uint32_t		__reserved[30];
 };
 
 typedef IOReturn (*IOExternalMethodAction)(OSObject * target, void * reference, 
@@ -153,7 +157,7 @@ struct IOExternalMethodDispatch
 };
 
 enum {
-#define IO_EXTERNAL_METHOD_ARGUMENTS_CURRENT_VERSION	1
+#define IO_EXTERNAL_METHOD_ARGUMENTS_CURRENT_VERSION	2
     kIOExternalMethodArgumentsCurrentVersion = IO_EXTERNAL_METHOD_ARGUMENTS_CURRENT_VERSION
 };
 

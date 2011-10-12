@@ -106,6 +106,7 @@ hfs_getinoquota(cp)
 	struct hfsmount *hfsmp;
 	struct vnode *vp;
 	int error;
+	int drop_usrquota = false;
 
 	vp = cp->c_vp ? cp->c_vp : cp->c_rsrc_vp;
 	hfsmp = VTOHFS(vp);
@@ -113,20 +114,30 @@ hfs_getinoquota(cp)
 	 * Set up the user quota based on file uid.
 	 * EINVAL means that quotas are not enabled.
 	 */
-	if (cp->c_dquot[USRQUOTA] == NODQUOT &&
-	    (error =
-		dqget(cp->c_uid, &hfsmp->hfs_qfiles[USRQUOTA], USRQUOTA, &cp->c_dquot[USRQUOTA])) &&
-	    error != EINVAL)
-		return (error);
+	if (cp->c_dquot[USRQUOTA] == NODQUOT) {
+		error = dqget(cp->c_uid, &hfsmp->hfs_qfiles[USRQUOTA], USRQUOTA, &cp->c_dquot[USRQUOTA]);
+		if ((error != 0) && (error != EINVAL)) {
+			return error;
+		} else if (error == 0) {
+			drop_usrquota = true;
+		}
+	}
+
 	/*
 	 * Set up the group quota based on file gid.
 	 * EINVAL means that quotas are not enabled.
 	 */
-	if (cp->c_dquot[GRPQUOTA] == NODQUOT &&
-	    (error =
-		dqget(cp->c_gid, &hfsmp->hfs_qfiles[GRPQUOTA], GRPQUOTA, &cp->c_dquot[GRPQUOTA])) &&
-	    error != EINVAL)
-		return (error);
+	if (cp->c_dquot[GRPQUOTA] == NODQUOT) {
+	       error = dqget(cp->c_gid, &hfsmp->hfs_qfiles[GRPQUOTA], GRPQUOTA, &cp->c_dquot[GRPQUOTA]);
+	       if ((error != 0) && (error != EINVAL)) {
+		       if (drop_usrquota == true) {
+			       dqrele(cp->c_dquot[USRQUOTA]);
+			       cp->c_dquot[USRQUOTA] = NODQUOT;
+		       }
+		       return error;
+	       }
+	}
+
 	return (0);
 }
 

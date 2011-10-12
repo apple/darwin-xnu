@@ -681,6 +681,20 @@ routine io_registry_entry_get_registry_entry_id(
 	out entry_id		: uint64_t
 	);
 
+routine io_connect_method_var_output(
+	    connection		: io_connect_t;
+	in  selector		: uint32_t;
+
+	in  scalar_input	: io_scalar_inband64_t;
+	in  inband_input	: io_struct_inband_t;
+	in  ool_input		: mach_vm_address_t;
+	in  ool_input_size	: mach_vm_size_t;
+
+	out inband_output	: io_struct_inband_t, CountInOut;
+	out scalar_output	: io_scalar_inband64_t, CountInOut;
+	out var_output		: io_buf_ptr_t, physicalcopy
+	);
+
 #endif /* IOKIT */
 
 /* vim: set ft=c : */

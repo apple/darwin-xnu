@@ -3717,6 +3717,7 @@ void IOPMrootDomain::handlePlatformHaltRestart( UInt32 pe_type )
 		case kPEPagingOff:
 			ctx.PowerState  = ON_STATE;
 			ctx.MessageType = kIOMessageSystemPagingOff;
+			IOService::updateConsoleUsers(NULL, kIOMessageSystemPagingOff);
 			break;
 
 		default:

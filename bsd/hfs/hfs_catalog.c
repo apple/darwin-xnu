@@ -948,7 +948,22 @@ cat_create(struct hfsmount *hfsmp, struct cat_desc *descp, struct cat_attr *attr
 			
 			buildthreadkey(nextCNID, std_hfs, (CatalogKey *) &bto->iterator.key);
 
-			result = BTInsertRecord(fcb, &bto->iterator, &btdata, datalen);
+			/*
+			 * If the CNID wraparound bit is set, then we need to validate if there
+			 * is a cnode in the hash already with this ID (even if it no longer exists
+			 * on disk).  If so, then just skip this ID and move on to the next one. 
+			 */
+			if (!std_hfs && (hfsmp->vcbAtrb & kHFSCatalogNodeIDsReusedMask)) {
+				if (hfs_chash_snoop (hfsmp, nextCNID, 1, NULL, NULL) == 0) {
+					/* It was found in the cnode hash!*/
+					result = btExists;
+				}	
+			}
+
+			if (result == 0) {
+				result = BTInsertRecord(fcb, &bto->iterator, &btdata, datalen);
+			}
+
 			if ((result == btExists) && !std_hfs && (hfsmp->vcbAtrb & kHFSCatalogNodeIDsReusedMask)) {
 				/*
 				 * Allow CNIDs on HFS Plus volumes to wrap around
@@ -2089,6 +2104,9 @@ cat_createlink(struct hfsmount *hfsmp, struct cat_desc *descp, struct cat_attr *
 	int thread_inserted = 0;
 	int alias_allocated = 0;
 	int result = 0;
+	int std_hfs;
+
+	std_hfs = (hfsmp->hfs_flags & HFS_STANDARD);
 
 	fcb = hfsmp->hfs_catalog_cp->c_datafork;
 
@@ -2128,8 +2146,24 @@ cat_createlink(struct hfsmount *hfsmp, struct cat_desc *descp, struct cat_attr *
 	
 	for (;;) {
 		buildthreadkey(nextCNID, 0, (CatalogKey *) &bto->iterator.key);
+	
+		/*
+		 * If the CNID wraparound bit is set, then we need to validate if there
+		 * is a cnode in the hash already with this ID (even if it no longer exists
+		 * on disk).  If so, then just skip this ID and move on to the next one. 
+		 */
+		if (!std_hfs && (hfsmp->vcbAtrb & kHFSCatalogNodeIDsReusedMask)) {
+			/* Verify that the CNID does not already exist in the cnode hash... */
+			if (hfs_chash_snoop (hfsmp, nextCNID, 1, NULL, NULL) == 0) {
+				/* It was found in the cnode hash!*/
+				result = btExists;
+			}	
+		}
 
-		result = BTInsertRecord(fcb, &bto->iterator, &btdata, datalen);
+		if (result == 0) {
+			result = BTInsertRecord(fcb, &bto->iterator, &btdata, datalen);
+		}
+
 		if ((result == btExists) && (hfsmp->vcbAtrb & kHFSCatalogNodeIDsReusedMask)) {
 			/*
 			 * Allow CNIDs on HFS Plus volumes to wrap around

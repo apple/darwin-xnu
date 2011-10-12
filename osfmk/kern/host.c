@@ -602,6 +602,7 @@ get_sched_statistics(
 		out->ps_timer_pop_count 	= stats->timer_pop_count;
 		out->ps_runq_count_sum 		= SCHED(processor_runq_stats_count_sum)(processor);
 		out->ps_idle_transitions	= stats->idle_transitions;
+		out->ps_quantum_timer_expirations	= stats->quantum_timer_expirations;
 
 		out++;
 		processor = processor->processor_list;

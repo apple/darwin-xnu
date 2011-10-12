@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -70,21 +70,6 @@ deadline_to_decrementer(
 	}
 }
 
-static inline uint64_t
-_absolutetime_to_tsc(uint64_t ns)
-{
-	uint32_t	generation;
-	uint64_t	tsc;
-
-	do {
-		generation =  pal_rtc_nanotime_info.generation;
-		tsc = tmrCvt(ns - pal_rtc_nanotime_info.ns_base, tscFCvtn2t)
-			+ pal_rtc_nanotime_info.tsc_base;
-	} while (generation == 0 ||
-		 generation != pal_rtc_nanotime_info.generation);
-
-	return tsc;
-}
 
 /*
  * Regular local APIC timer case:
@@ -125,14 +110,19 @@ rtc_lapic_config_tsc_deadline_timer(void)
 static uint64_t
 rtc_lapic_set_tsc_deadline_timer(uint64_t deadline, uint64_t now)
 {
-	uint64_t	set = 0;
+	uint64_t delta;
+	uint64_t delta_tsc;
+	uint64_t tsc = rdtsc64();
+	uint64_t set = 0;
 
 	if (deadline > 0) {
 		/*
 		 * Convert to TSC
 		 */
-		set = now + deadline_to_decrementer(deadline, now);
-		lapic_set_tsc_deadline_timer(_absolutetime_to_tsc(set));
+		delta = deadline_to_decrementer(deadline, now);
+		set = now + delta;
+		delta_tsc = tmrCvt(delta, tscFCvtn2t);
+		lapic_set_tsc_deadline_timer(tsc + delta_tsc);
 	} else {
 		lapic_set_tsc_deadline_timer(0);
 	}
@@ -140,7 +130,7 @@ rtc_lapic_set_tsc_deadline_timer(uint64_t deadline, uint64_t now)
 	KERNEL_DEBUG_CONSTANT(
 		DECR_SET_TSC_DEADLINE | DBG_FUNC_NONE,
 		now, deadline,
-		rdtsc64(), lapic_get_tsc_deadline_timer(),
+		tsc, lapic_get_tsc_deadline_timer(),
 		0);
 
 	return set;

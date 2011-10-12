@@ -92,6 +92,8 @@ thread_quantum_expire(
 	thread_t			thread = p1;
 	ast_t				preempt;
 
+	SCHED_STATS_QUANTUM_TIMER_EXPIRATION(processor);
+
 	thread_lock(thread);
 
 	/*
@@ -157,8 +159,8 @@ thread_quantum_expire(
 	thread->last_quantum_refill_time = processor->quantum_end;
 
 	processor->quantum_end += thread->current_quantum;
-	timer_call_enter1(&processor->quantum_timer,
-							thread, processor->quantum_end, 0);
+	timer_call_enter1(&processor->quantum_timer, thread,
+	    processor->quantum_end, TIMER_CALL_CRITICAL);
 
 	/*
 	 *	Context switch check.

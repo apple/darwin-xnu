@@ -500,12 +500,12 @@ retry:
 		while (win_getbit(cp->gss_clnt_seqbits, 
 			((cp->gss_clnt_seqnum - cp->gss_clnt_seqwin) + 1) % cp->gss_clnt_seqwin)) {
 			cp->gss_clnt_flags |= GSS_NEEDSEQ;
-			msleep(cp, cp->gss_clnt_mtx, slpflag, "seqwin", NULL);
+			msleep(cp, cp->gss_clnt_mtx, slpflag | PDROP, "seqwin", NULL);
 			slpflag &= ~PCATCH;
 			if ((error = nfs_sigintr(req->r_nmp, req, req->r_thread, 0))) {
-				lck_mtx_unlock(cp->gss_clnt_mtx);
 				return (error);
 			}
+			lck_mtx_lock(cp->gss_clnt_mtx);
 			if (cp->gss_clnt_flags & GSS_CTX_INVAL) {
 				/* Renewed while while we were waiting */
 				lck_mtx_unlock(cp->gss_clnt_mtx);

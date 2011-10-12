@@ -133,7 +133,7 @@ static void wq_unpark_continue(void);
 static void wq_unsuspend_continue(void);
 static int setup_wqthread(proc_t p, thread_t th, user_addr_t item, int reuse_thread, struct threadlist *tl);
 static boolean_t workqueue_addnewthread(struct workqueue *wq, boolean_t oc_thread);
-static void workqueue_removethread(struct threadlist *tl);
+static void workqueue_removethread(struct threadlist *tl, int fromexit);
 static void workqueue_lock_spin(proc_t);
 static void workqueue_unlock(proc_t);
 int proc_settargetconc(pid_t pid, int queuenum, int32_t targetconc);
@@ -897,17 +897,23 @@ workqueue_callback(int type, thread_t thread)
 
 
 static void
-workqueue_removethread(struct threadlist *tl)
+workqueue_removethread(struct threadlist *tl, int fromexit)
 {
 	struct workqueue *wq;
 	struct uthread * uth;
 
+	/* 
+	 * If fromexit is set, the call is from workqueue_exit(,
+	 * so some cleanups are to be avoided.
+	 */
 	wq = tl->th_workq;
 
 	TAILQ_REMOVE(&wq->wq_thidlelist, tl, th_entry);
 
-	wq->wq_nthreads--;
-	wq->wq_thidlecount--;
+	if (fromexit == 0) {
+		wq->wq_nthreads--;
+		wq->wq_thidlecount--;
+	}
 
 	/*
 	 * Clear the threadlist pointer in uthread so 
@@ -921,7 +927,10 @@ workqueue_removethread(struct threadlist *tl)
 	if (uth != (struct uthread *)0) {
 		uth->uu_threadlist = NULL;
 	}
-	workqueue_unlock(wq->wq_proc);
+	if (fromexit == 0) {
+		/* during exit the lock is not held */
+		workqueue_unlock(wq->wq_proc);
+	}
 
 	if ( (tl->th_flags & TH_LIST_SUSPENDED) ) {
 		/*
@@ -930,7 +939,10 @@ workqueue_removethread(struct threadlist *tl)
 		 * since we're not going to spin up through the
 		 * normal exit path triggered from Libc
 		 */
-		(void)mach_vm_deallocate(wq->wq_map, tl->th_stackaddr, tl->th_allocsize);
+		if (fromexit == 0) {
+			/* vm map is already deallocated when this is called from exit */
+			(void)mach_vm_deallocate(wq->wq_map, tl->th_stackaddr, tl->th_allocsize);
+		}
 		(void)mach_port_deallocate(get_task_ipcspace(wq->wq_task), tl->th_thport);
 
 	        KERNEL_DEBUG1(0xefffd014 | DBG_FUNC_END, wq, (uintptr_t)thread_tid(current_thread()), wq->wq_nthreads, 0xdead, thread_tid(tl->th_thread));
@@ -1048,10 +1060,10 @@ workqueue_addnewthread(struct workqueue *wq, boolean_t oc_thread)
 	tl->th_policy = -1;
 
 	uth = get_bsdthread_info(tl->th_thread);
-	uth->uu_threadlist = (void *)tl;
 
         workqueue_lock_spin(p);
 	
+	uth->uu_threadlist = (void *)tl;
 	TAILQ_INSERT_TAIL(&wq->wq_thidlelist, tl, th_entry);
 
 	wq->wq_thidlecount++;
@@ -1373,21 +1385,7 @@ workqueue_exit(struct proc *p)
 			kfree(tl, sizeof(struct threadlist));
 		}
 		TAILQ_FOREACH_SAFE(tl, &wq->wq_thidlelist, th_entry, tlist) {
-
-			thread_sched_call(tl->th_thread, NULL);
-
-			uth = get_bsdthread_info(tl->th_thread);
-			if (uth != (struct uthread *)0) {
-				uth->uu_threadlist = NULL;
-			}
-			TAILQ_REMOVE(&wq->wq_thidlelist, tl, th_entry);
-
-		        /*
-			 * drop our last ref on the thread
-			 */
-		        thread_deallocate(tl->th_thread);
-
-			kfree(tl, sizeof(struct threadlist));
+			workqueue_removethread(tl, 1);
 		}
 		thread_call_free(wq->wq_atimer_call);
 
@@ -1952,7 +1950,7 @@ normal_resume_to_user:
 			 * queue... remove it from our domain...
 			 * workqueue_removethread consumes the lock
 			 */
-			workqueue_removethread(tl);
+			workqueue_removethread(tl, 0);
 
 			thread_bootstrap_return();
 		}
@@ -2024,7 +2022,7 @@ normal_return_to_user:
 				 *
 				 * workqueue_removethread consumes the lock
 				 */
-				workqueue_removethread(tl);
+				workqueue_removethread(tl, 0);
 					
 				thread_exception_return();
 			}

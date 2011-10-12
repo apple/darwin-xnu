@@ -6624,6 +6624,52 @@ vm_map_copy_overwrite_aligned(
 				continue;
 			}
 
+			if (entry->alias >= VM_MEMORY_MALLOC &&
+			    entry->alias <= VM_MEMORY_MALLOC_LARGE_REUSED) {
+				vm_object_t new_object, new_shadow;
+
+				/*
+				 * We're about to map something over a mapping
+				 * established by malloc()...
+				 */
+				new_object = copy_entry->object.vm_object;
+				if (new_object != VM_OBJECT_NULL) {
+					vm_object_lock_shared(new_object);
+				}
+				while (new_object != VM_OBJECT_NULL &&
+				       new_object->internal) {
+					new_shadow = new_object->shadow;
+					if (new_shadow == VM_OBJECT_NULL) {
+						break;
+					}
+					vm_object_lock_shared(new_shadow);
+					vm_object_unlock(new_object);
+					new_object = new_shadow;
+				}
+				if (new_object != VM_OBJECT_NULL) {
+					if (!new_object->internal) {
+						/*
+						 * The new mapping is backed
+						 * by an external object.  We
+						 * don't want malloc'ed memory
+						 * to be replaced with such a
+						 * non-anonymous mapping, so
+						 * let's go off the optimized
+						 * path...
+						 */
+						vm_object_unlock(new_object);
+						goto slow_copy;
+					}
+					vm_object_unlock(new_object);
+				}
+				/*
+				 * The new mapping is still backed by
+				 * anonymous (internal) memory, so it's
+				 * OK to substitute it for the original
+				 * malloc() mapping.
+				 */
+			}
+
 			if (old_object != VM_OBJECT_NULL) {
 				if(entry->is_sub_map) {
 					if(entry->use_pmap) {
@@ -6701,15 +6747,40 @@ vm_map_copy_overwrite_aligned(
 			tmp_entry = tmp_entry->vme_next;
 		} else {
 			vm_map_version_t	version;
-			vm_object_t		dst_object = entry->object.vm_object;
-			vm_object_offset_t	dst_offset = entry->offset;
+			vm_object_t		dst_object;
+			vm_object_offset_t	dst_offset;
 			kern_return_t		r;
+
+		slow_copy:
+			dst_object = entry->object.vm_object;
+			dst_offset = entry->offset;
 
 			/*
 			 *	Take an object reference, and record
 			 *	the map version information so that the
 			 *	map can be safely unlocked.
 			 */
+
+			if (dst_object == VM_OBJECT_NULL) {
+				/*
+				 * We would usually have just taken the
+				 * optimized path above if the destination
+				 * object has not been allocated yet.  But we
+				 * now disable that optimization if the copy
+				 * entry's object is not backed by anonymous
+				 * memory to avoid replacing malloc'ed
+				 * (i.e. re-usable) anonymous memory with a
+				 * not-so-anonymous mapping.
+				 * So we have to handle this case here and
+				 * allocate a new VM object for this map entry.
+				 */
+				dst_object = vm_object_allocate(
+					entry->vme_end - entry->vme_start);
+				dst_offset = 0;
+				entry->object.vm_object = dst_object;
+				entry->offset = dst_offset;
+				
+			}
 
 			vm_object_reference(dst_object);
 

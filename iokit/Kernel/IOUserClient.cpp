@@ -2094,7 +2094,7 @@ kern_return_t is_io_registry_entry_get_registry_entry_id(
 // Create a vm_map_copy_t or kalloc'ed data for memory
 // to be copied out. ipc will free after the copyout.
 
-static kern_return_t copyoutkdata( void * data, vm_size_t len,
+static kern_return_t copyoutkdata( const void * data, vm_size_t len,
                                     io_buf_ptr_t * buf )
 {
     kern_return_t	err;
@@ -2774,6 +2774,97 @@ kern_return_t is_io_connect_set_properties(
     return( is_io_registry_entry_set_properties( connection, properties, propertiesCnt, result ));
 }
 
+/* Routine io_user_client_method */
+kern_return_t is_io_connect_method_var_output
+(
+	io_connect_t connection,
+	uint32_t selector,
+	io_scalar_inband64_t scalar_input,
+	mach_msg_type_number_t scalar_inputCnt,
+	io_struct_inband_t inband_input,
+	mach_msg_type_number_t inband_inputCnt,
+	mach_vm_address_t ool_input,
+	mach_vm_size_t ool_input_size,
+	io_struct_inband_t inband_output,
+	mach_msg_type_number_t *inband_outputCnt,
+	io_scalar_inband64_t scalar_output,
+	mach_msg_type_number_t *scalar_outputCnt,
+	io_buf_ptr_t *var_output,
+	mach_msg_type_number_t *var_outputCnt
+)
+{
+    CHECK( IOUserClient, connection, client );
+
+    IOExternalMethodArguments args;
+    IOReturn ret;
+    IOMemoryDescriptor * inputMD  = 0;
+    OSObject *           structureVariableOutputData = 0;
+
+    bzero(&args.__reserved[0], sizeof(args.__reserved));
+    args.version = kIOExternalMethodArgumentsCurrentVersion;
+
+    args.selector = selector;
+
+    args.asyncWakePort               = MACH_PORT_NULL;
+    args.asyncReference              = 0;
+    args.asyncReferenceCount         = 0;
+    args.structureVariableOutputData = &structureVariableOutputData;
+
+    args.scalarInput = scalar_input;
+    args.scalarInputCount = scalar_inputCnt;
+    args.structureInput = inband_input;
+    args.structureInputSize = inband_inputCnt;
+
+    if (ool_input)
+	inputMD = IOMemoryDescriptor::withAddressRange(ool_input, ool_input_size, 
+						    kIODirectionOut, current_task());
+
+    args.structureInputDescriptor = inputMD;
+
+    args.scalarOutput = scalar_output;
+    args.scalarOutputCount = *scalar_outputCnt;
+    args.structureOutput = inband_output;
+    args.structureOutputSize = *inband_outputCnt;
+    args.structureOutputDescriptor = NULL;
+    args.structureOutputDescriptorSize = 0;
+
+    IOStatisticsClientCall();
+    ret = client->externalMethod( selector, &args );
+
+    *scalar_outputCnt = args.scalarOutputCount;
+    *inband_outputCnt = args.structureOutputSize;
+
+    if (var_outputCnt && var_output && (kIOReturnSuccess == ret))
+    {
+    	OSSerialize * serialize;
+    	OSData      * data;
+	vm_size_t     len;
+
+	if ((serialize = OSDynamicCast(OSSerialize, structureVariableOutputData)))
+	{
+	    len = serialize->getLength();
+	    *var_outputCnt = len;
+	    ret = copyoutkdata(serialize->text(), len, var_output);
+	}
+	else if ((data = OSDynamicCast(OSData, structureVariableOutputData)))
+	{
+	    len = data->getLength();
+	    *var_outputCnt = len;
+	    ret = copyoutkdata(data->getBytesNoCopy(), len, var_output);
+	}
+	else
+	{
+	    ret = kIOReturnUnderrun;
+	}
+    }
+
+    if (inputMD)
+	inputMD->release();
+    if (structureVariableOutputData)
+    	structureVariableOutputData->release();
+
+    return (ret);
+}
 
 /* Routine io_user_client_method */
 kern_return_t is_io_connect_method
@@ -2791,7 +2882,7 @@ kern_return_t is_io_connect_method
 	io_scalar_inband64_t scalar_output,
 	mach_msg_type_number_t *scalar_outputCnt,
 	mach_vm_address_t ool_output,
-	mach_vm_size_t * ool_output_size
+	mach_vm_size_t *ool_output_size
 )
 {
     CHECK( IOUserClient, connection, client );
@@ -2806,9 +2897,10 @@ kern_return_t is_io_connect_method
 
     args.selector = selector;
 
-    args.asyncWakePort       = MACH_PORT_NULL;
-    args.asyncReference      = 0;
-    args.asyncReferenceCount = 0;
+    args.asyncWakePort               = MACH_PORT_NULL;
+    args.asyncReference              = 0;
+    args.asyncReferenceCount         = 0;
+    args.structureVariableOutputData = 0;
 
     args.scalarInput = scalar_input;
     args.scalarInputCount = scalar_inputCnt;
@@ -2826,16 +2918,16 @@ kern_return_t is_io_connect_method
     args.structureOutput = inband_output;
     args.structureOutputSize = *inband_outputCnt;
 
-    if (ool_output)
+    if (ool_output && ool_output_size)
     {
 	outputMD = IOMemoryDescriptor::withAddressRange(ool_output, *ool_output_size, 
 						    kIODirectionIn, current_task());
     }
 
     args.structureOutputDescriptor = outputMD;
-    args.structureOutputDescriptorSize = *ool_output_size;
+    args.structureOutputDescriptorSize = ool_output_size ? *ool_output_size : 0;
 
-	IOStatisticsClientCall();
+    IOStatisticsClientCall();
     ret = client->externalMethod( selector, &args );
 
     *scalar_outputCnt = args.scalarOutputCount;

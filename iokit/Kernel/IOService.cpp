@@ -115,6 +115,7 @@ const OSSymbol *		gIOConsoleSessionUIDKey;
 const OSSymbol *		gIOConsoleSessionAuditIDKey;
 const OSSymbol *		gIOConsoleUsersSeedKey;
 const OSSymbol *		gIOConsoleSessionOnConsoleKey;
+const OSSymbol *		gIOConsoleSessionLoginDoneKey;
 const OSSymbol *		gIOConsoleSessionSecureInputPIDKey;
 const OSSymbol *		gIOConsoleSessionScreenLockedTimeKey;
 
@@ -322,6 +323,7 @@ void IOService::initialize( void )
 
     gIOConsoleUsersSeedKey	         = OSSymbol::withCStringNoCopy(kIOConsoleUsersSeedKey);
     gIOConsoleSessionOnConsoleKey        = OSSymbol::withCStringNoCopy(kIOConsoleSessionOnConsoleKey);
+    gIOConsoleSessionLoginDoneKey        = OSSymbol::withCStringNoCopy(kIOConsoleSessionLoginDoneKey);
     gIOConsoleSessionSecureInputPIDKey   = OSSymbol::withCStringNoCopy(kIOConsoleSessionSecureInputPIDKey);
     gIOConsoleSessionScreenLockedTimeKey = OSSymbol::withCStringNoCopy(kIOConsoleSessionScreenLockedTimeKey);
 
@@ -360,6 +362,8 @@ void IOService::initialize( void )
     err = semaphore_create(kernel_task, &gJobsSemaphore, SYNC_POLICY_FIFO, 0);
 
     gIOConsoleLockCallout = thread_call_allocate(&IOService::consoleLockTimer, NULL);
+
+    IORegistryEntry::getRegistryRoot()->setProperty(gIOConsoleLockedKey, kOSBooleanTrue);
 
     assert( gIOServiceBusyLock && gJobs && gJobsLock && gIOConsoleUsersLock
     		&& gIOConsoleLockCallout && (err == KERN_SUCCESS) );
@@ -4234,6 +4238,7 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
     IORegistryEntry * regEntry;
     OSObject *        locked = kOSBooleanFalse;
     uint32_t          idx;
+    bool              loggedIn;
     bool              publish;
     OSDictionary *    user;
     static IOMessage  sSystemPower;
@@ -4246,38 +4251,45 @@ void IOService::updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessa
     {
         sSystemPower = systemMessage;
     }
+    loggedIn = false;
     if (consoleUsers)
     {
         OSNumber * num = 0;
 	for (idx = 0; 
-	      (!num) && (user = OSDynamicCast(OSDictionary, consoleUsers->getObject(idx))); 
+	      (user = OSDynamicCast(OSDictionary, consoleUsers->getObject(idx))); 
 	      idx++)
 	{
-	    num = OSDynamicCast(OSNumber, user->getObject(gIOConsoleSessionScreenLockedTimeKey));
+	    loggedIn |= ((kOSBooleanTrue == user->getObject(gIOConsoleSessionOnConsoleKey))
+	      		&& (kOSBooleanTrue == user->getObject(gIOConsoleSessionLoginDoneKey)));
+	    if (!num)
+	    {
+   	        num = OSDynamicCast(OSNumber, user->getObject(gIOConsoleSessionScreenLockedTimeKey));
+	    }
 	}
         gIOConsoleLockTime = num ? num->unsigned32BitValue() : 0;
     }
 
-    if (gIOConsoleLockTime)
+    if (!loggedIn 
+     || (kIOMessageSystemWillSleep == sSystemPower)
+     || (kIOMessageSystemPagingOff == sSystemPower))
     {
-	if (kIOMessageSystemWillSleep == sSystemPower)
-	    locked = kOSBooleanTrue;
+	locked = kOSBooleanTrue;
+    }
+    else if (gIOConsoleLockTime)
+    {
+	clock_sec_t  now;
+	clock_usec_t microsecs;
+
+	clock_get_calendar_microtime(&now, &microsecs);
+	if (gIOConsoleLockTime > now)
+	{
+	    AbsoluteTime deadline;
+	    clock_interval_to_deadline(gIOConsoleLockTime - now, kSecondScale, &deadline);
+	    thread_call_enter_delayed(gIOConsoleLockCallout, deadline);
+	}
 	else
 	{
-	    clock_sec_t  now;
-	    clock_usec_t microsecs;
-
-	    clock_get_calendar_microtime(&now, &microsecs);
-	    if (gIOConsoleLockTime > now)
-	    {
-		AbsoluteTime deadline;
-		clock_interval_to_deadline(gIOConsoleLockTime - now, kSecondScale, &deadline);
-		thread_call_enter_delayed(gIOConsoleLockCallout, deadline);
-	    }
-	    else
-	    {
-		locked = kOSBooleanTrue;
-	    }
+	    locked = kOSBooleanTrue;
 	}
     }
 

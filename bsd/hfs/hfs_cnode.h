@@ -322,7 +322,7 @@ extern struct vnode * hfs_chash_getvnode(struct hfsmount *hfsmp, ino_t inum, int
 										 int skiplock, int allow_deleted);
 extern struct cnode * hfs_chash_getcnode(struct hfsmount *hfsmp, ino_t inum, struct vnode **vpp, 
 										 int wantrsrc, int skiplock, int *out_flags, int *hflags);
-extern int hfs_chash_snoop(struct hfsmount *, ino_t, int (*)(const struct cat_desc *,
+extern int hfs_chash_snoop(struct hfsmount *, ino_t, int, int (*)(const struct cat_desc *,
                             const struct cat_attr *, void *), void *);
 extern int hfs_valid_cnode(struct hfsmount *hfsmp, struct vnode *dvp, struct componentname *cnp, 
 							cnid_t cnid, struct cat_attr *cattr, int *error);
@@ -345,6 +345,8 @@ extern int hfs_chash_set_childlinkbit(struct hfsmount *hfsmp, cnid_t cnid);
  *       E. Overflow Extents B-tree file (always exclusive, supports recursion)
  *  5. hfs mount point (always last)
  *
+ *
+ * I. HFS cnode hash lock (must not acquire any new locks while holding this lock, always taken last)
  */
 enum hfslocktype  {HFS_SHARED_LOCK = 1, HFS_EXCLUSIVE_LOCK = 2, HFS_FORCE_LOCK = 3, HFS_RECURSE_TRUNCLOCK = 4};
 #define HFS_SHARED_OWNER  (void *)0xffffffff

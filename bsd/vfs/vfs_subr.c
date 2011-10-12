@@ -6006,13 +6006,8 @@ vnode_authorize_delete(vauth_ctx vcp, boolean_t cached_delete_child)
 		return(EACCES);
 	}
 
-	/*
-	 * enforce sticky bit behaviour; the cached_delete_child property will
-	 * be false and the dvap contents valis for sticky bit directories;
-	 * this makes us check the directory each time, but it's unavoidable,
-	 * as sticky bit is an exception to caching.
-	 */
-	if (!cached_delete_child && (dvap->va_mode & S_ISTXT) && !vauth_file_owner(vcp) && !vauth_dir_owner(vcp)) {
+	/* enforce sticky bit behaviour */
+	if ((dvap->va_mode & S_ISTXT) && !vauth_file_owner(vcp) && !vauth_dir_owner(vcp)) {
 		KAUTH_DEBUG("%p    DENIED - sticky bit rules (user %d  file %d  dir %d)",
 		    vcp->vp, cred->cr_posix.cr_uid, vap->va_uid, dvap->va_uid);
 		return(EACCES);
@@ -6597,7 +6592,7 @@ vnode_authorize_callback_int(__unused kauth_cred_t unused_cred, __unused void *i
 		KAUTH_DEBUG("%p    ERROR - failed to get vnode attributes - %d", vp, result);
 		goto out;
 	}
-	if (dvp && parent_authorized_for_delete_child == FALSE) {
+	if (dvp) {
 		VATTR_WANTED(&dva, va_mode);
 		VATTR_WANTED(&dva, va_uid);
 		VATTR_WANTED(&dva, va_gid);

@@ -3168,7 +3168,6 @@ exec_handle_sugid(struct image_params *imgp)
 	int			i;
 	int			leave_sugid_clear = 0;
 	int			error = 0;
-	struct vnode	*dev_null = NULLVP;
 #if CONFIG_MACF
 	int			mac_transition;
 
@@ -3296,25 +3295,6 @@ handle_mac_transition:
 		if (!leave_sugid_clear)
 			OSBitOrAtomic(P_SUGID, &p->p_flag);
 
-		/* Cache the vnode for /dev/null the first time around */
-		if (dev_null == NULLVP) {
-			struct nameidata nd1;
-
-			NDINIT(&nd1, LOOKUP, OP_OPEN, FOLLOW, UIO_SYSSPACE,
-			    CAST_USER_ADDR_T("/dev/null"),
-			    imgp->ip_vfs_context);
-
-			if ((error = vn_open(&nd1, FREAD, 0)) == 0) {
-				dev_null = nd1.ni_vp;
-				/*
-				 * vn_open returns with both a use_count
-				 * and an io_count on the found vnode
-				 * drop the io_count, but keep the use_count
-				 */
-				vnode_put(nd1.ni_vp);
-			}
-		}
-
 		/*
 		 * Radar 2261856; setuid security hole fix
 		 * XXX For setuid processes, attempt to ensure that
@@ -3323,40 +3303,48 @@ handle_mac_transition:
 		 * descriptors in this range which has implied meaning
 		 * to libc.
 		 */
-		if (dev_null != NULLVP) {
-			for (i = 0; i < 3; i++) {
-				struct fileproc *fp;
-				int indx;
+		for (i = 0; i < 3; i++) {
 
-				if (p->p_fd->fd_ofiles[i] != NULL)
-					continue;
+			if (p->p_fd->fd_ofiles[i] != NULL)
+				continue;
 
-				if ((error = falloc(p, &fp, &indx, imgp->ip_vfs_context)) != 0)
-					continue;
-
-				if ((error = vnode_ref_ext(dev_null, FREAD, 0)) != 0) {
-					fp_free(p, indx, fp);
-					break;
-				}
-
-				fp->f_fglob->fg_flag = FREAD;
-				fp->f_fglob->fg_type = DTYPE_VNODE;
-				fp->f_fglob->fg_ops = &vnops;
-				fp->f_fglob->fg_data = (caddr_t)dev_null;
-				
-				proc_fdlock(p);
-				procfdtbl_releasefd(p, indx, NULL);
-				fp_drop(p, indx, fp, 1);
-				proc_fdunlock(p);
-			}
 			/*
-			 * for now we need to drop the reference immediately
-			 * since we don't have any mechanism in place to
-			 * release it before starting to unmount "/dev"
-			 * during a reboot/shutdown
+			 * Do the kernel equivalent of
+			 *
+			 * 	(void) open("/dev/null", O_RDONLY);
 			 */
-			vnode_rele(dev_null);
-			dev_null = NULLVP;
+
+			struct fileproc *fp;
+			int indx;
+
+			if ((error = falloc(p,
+			    &fp, &indx, imgp->ip_vfs_context)) != 0)
+				continue;
+
+			struct nameidata nd1;
+
+			NDINIT(&nd1, LOOKUP, OP_OPEN, FOLLOW, UIO_SYSSPACE,
+			    CAST_USER_ADDR_T("/dev/null"),
+			    imgp->ip_vfs_context);
+
+			if ((error = vn_open(&nd1, FREAD, 0)) != 0) {
+				fp_free(p, indx, fp);
+				break;
+			}
+
+			struct fileglob *fg = fp->f_fglob;
+
+			fg->fg_flag = FREAD;
+			fg->fg_type = DTYPE_VNODE;
+			fg->fg_ops = &vnops;
+			fg->fg_data = nd1.ni_vp;
+
+			vnode_put(nd1.ni_vp);
+
+			proc_fdlock(p);
+			procfdtbl_releasefd(p, indx, NULL);
+			fp_drop(p, indx, fp, 1);
+			proc_fdunlock(p);
 		}
 	}
 #if CONFIG_MACF

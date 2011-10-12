@@ -271,12 +271,31 @@ static lck_grp_attr_t	*pipe_mtx_grp_attr;
 
 static zone_t pipe_zone;
 
+#define	PIPE_GARBAGE_AGE_LIMIT		5000	/* In milliseconds */
+#define PIPE_GARBAGE_QUEUE_LIMIT	32000
+
+struct pipe_garbage {
+	struct pipe		*pg_pipe;
+	struct pipe_garbage	*pg_next;
+	uint64_t		pg_timestamp;
+};
+
+static zone_t pipe_garbage_zone;
+static struct pipe_garbage *pipe_garbage_head = NULL;
+static struct pipe_garbage *pipe_garbage_tail = NULL;
+static uint64_t pipe_garbage_age_limit = PIPE_GARBAGE_AGE_LIMIT;
+static int pipe_garbage_count = 0;
+static lck_mtx_t *pipe_garbage_lock;
+
 SYSINIT(vfs, SI_SUB_VFS, SI_ORDER_ANY, pipeinit, NULL);
 
 void
 pipeinit(void)
 {
-        pipe_zone = (zone_t)zinit(sizeof(struct pipe), 8192 * sizeof(struct pipe), 4096, "pipe zone");
+	vm_size_t zone_size;
+
+	zone_size = 8192 * sizeof(struct pipe);
+        pipe_zone = zinit(sizeof(struct pipe), zone_size, 4096, "pipe zone");
 
 	/*
 	 * allocate lock group attribute and group for pipe mutexes
@@ -288,6 +307,15 @@ pipeinit(void)
 	 * allocate the lock attribute for pipe mutexes
 	 */
 	pipe_mtx_attr = lck_attr_alloc_init();
+
+	/*
+	 * Set up garbage collection for dead pipes
+	 */
+	zone_size = (PIPE_GARBAGE_QUEUE_LIMIT + 20) *
+	    sizeof(struct pipe_garbage);
+        pipe_garbage_zone = (zone_t)zinit(sizeof(struct pipe_garbage),
+	    zone_size, 4096, "pipe garbage zone");
+	pipe_garbage_lock = lck_mtx_alloc_init(pipe_mtx_grp, pipe_mtx_attr);
 }
 
 /* Bitmap for things to touch in pipe_touch() */
@@ -1492,6 +1520,8 @@ pipe_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx)
 		break;
 
         case FWRITE:
+		if (wpipe)
+			wpipe->pipe_state |= PIPE_WSELECT;
 		if (wpipe == NULL || (wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF)) ||
 		    (((wpipe->pipe_state & PIPE_DIRECTW) == 0) &&
 		     (wpipe->pipe_buffer.size - wpipe->pipe_buffer.cnt) >= PIPE_BUF)) {
@@ -1557,6 +1587,78 @@ pipe_free_kmem(struct pipe *cpipe)
 		cpipe->pipe_map.npages = 0;
 	}
 #endif
+}
+
+/*
+ * When a thread sets a write-select on a pipe, it creates an implicit,
+ * untracked dependency between that thread and the peer of the pipe
+ * on which the select is set.  If the peer pipe is closed and freed
+ * before the select()ing thread wakes up, the system will panic as
+ * it attempts to unwind the dangling select().  To avoid that panic,
+ * we notice whenever a dangerous select() is set on a pipe, and
+ * defer the final deletion of the pipe until that select()s are all
+ * resolved.  Since we can't currently detect exactly when that
+ * resolution happens, we use a simple garbage collection queue to 
+ * reap the at-risk pipes 'later'.
+ */
+static void
+pipe_garbage_collect(struct pipe *cpipe)
+{
+	uint64_t old, now;
+	struct pipe_garbage *pgp;
+
+	/* Convert msecs to nsecs and then to abstime */
+	old = pipe_garbage_age_limit * 1000000;
+	nanoseconds_to_absolutetime(old, &old);
+
+	lck_mtx_lock(pipe_garbage_lock);
+
+	/* Free anything that's been on the queue for <mumble> seconds */
+	now = mach_absolute_time();
+	old = now - old;
+	while ((pgp = pipe_garbage_head) && pgp->pg_timestamp < old) {
+		pipe_garbage_head = pgp->pg_next;
+		if (pipe_garbage_head == NULL)
+			pipe_garbage_tail = NULL;
+		pipe_garbage_count--;
+		zfree(pipe_zone, pgp->pg_pipe);
+		zfree(pipe_garbage_zone, pgp);
+	}
+
+	/* Add the new pipe (if any) to the tail of the garbage queue */
+	if (cpipe) {
+		cpipe->pipe_state = PIPE_DEAD;
+		pgp = (struct pipe_garbage *)zalloc(pipe_garbage_zone);
+		if (pgp == NULL) {
+			/*
+			 * We're too low on memory to garbage collect the
+			 * pipe.  Freeing it runs the risk of panicing the
+			 * system.  All we can do is leak it and leave
+			 * a breadcrumb behind.  The good news, such as it
+			 * is, is that this will probably never happen.
+			 * We will probably hit the panic below first.
+			 */
+			printf("Leaking pipe %p - no room left in the queue",
+			    cpipe);
+			lck_mtx_unlock(pipe_garbage_lock);
+			return;
+		}
+
+		pgp->pg_pipe = cpipe;
+		pgp->pg_timestamp = now;
+		pgp->pg_next = NULL;
+
+		if (pipe_garbage_tail)
+			pipe_garbage_tail->pg_next = pgp;
+		pipe_garbage_tail = pgp;
+		if (pipe_garbage_head == NULL)
+			pipe_garbage_head = pipe_garbage_tail;
+
+		if (pipe_garbage_count++ >= PIPE_GARBAGE_QUEUE_LIMIT)
+			panic("Length of pipe garbage queue exceeded %d",
+			    PIPE_GARBAGE_QUEUE_LIMIT);
+	}
+	lck_mtx_unlock(pipe_garbage_lock);
 }
 
 /*
@@ -1637,9 +1739,12 @@ pipeclose(struct pipe *cpipe)
 		}
 	}
 	pipe_free_kmem(cpipe);
-
-	zfree(pipe_zone, cpipe);
-
+	if (cpipe->pipe_state & PIPE_WSELECT) {
+		pipe_garbage_collect(cpipe);
+	} else {
+		zfree(pipe_zone, cpipe);
+		pipe_garbage_collect(NULL);
+	}
 }
 
 /*ARGSUSED*/

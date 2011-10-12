@@ -226,7 +226,7 @@ exit:
  * 
  */
 int
-hfs_chash_snoop(struct hfsmount *hfsmp, ino_t inum, int (*callout)(const struct cat_desc *,
+hfs_chash_snoop(struct hfsmount *hfsmp, ino_t inum, int existence_only, int (*callout)(const struct cat_desc *,
                 const struct cat_attr *, void *), void * arg)
 {
 	struct cnode *cp;
@@ -242,7 +242,27 @@ hfs_chash_snoop(struct hfsmount *hfsmp, ino_t inum, int (*callout)(const struct 
 	for (cp = CNODEHASH(hfsmp, inum)->lh_first; cp; cp = cp->c_hash.le_next) {
 		if (cp->c_fileid != inum)
 			continue;
-	       /* Skip cnodes that have been removed from the catalog */
+	
+		/*
+		 * Under normal circumstances, we would want to return ENOENT if a cnode is in
+		 * the hash and it is marked C_NOEXISTS or C_DELETED.  However, if the CNID
+		 * namespace has wrapped around, then we have the possibility of collisions.  
+		 * In that case, we may use this function to validate whether or not we 
+		 * should trust the nextCNID value in the hfs mount point.  
+		 * 
+		 * If we didn't do this, then it would be possible for a cnode that is no longer backed
+		 * by anything on-disk (C_NOEXISTS) to still exist in the hash along with its
+		 * vnode.  The cat_create routine could then create a new entry in the catalog
+		 * re-using that CNID.  Then subsequent hfs_getnewvnode calls will repeatedly fail
+		 * trying to look it up/validate it because it is marked C_NOEXISTS.  So we want
+		 * to prevent that from happening as much as possible.
+		 */
+		if (existence_only) {
+			result = 0;
+			break;
+		}
+
+		/* Skip cnodes that have been removed from the catalog */
 		if (cp->c_flag & (C_NOEXISTS | C_DELETED)) {
 			break;
 		}

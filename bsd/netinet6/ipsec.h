@@ -279,8 +279,9 @@ struct ipsecstat {
 
 #ifdef KERNEL
 struct ipsec_output_state {
+    int tunneled;
 	struct mbuf *m;
-	struct route *ro;
+	struct route ro;
 	struct sockaddr *dst;
 };
 
