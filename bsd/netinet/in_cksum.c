@@ -141,38 +141,6 @@ in_pseudo(u_int a, u_int b, u_int c)
 
 }
 
-#if defined(__arm__) && __ARM_ARCH__ >= 6
-
-extern int cpu_in_cksum(struct mbuf *m, int len, int off, uint32_t initial_sum);
-
-u_int16_t
-inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
-    unsigned int len)
-{
-	u_int32_t sum = 0;
-
-	/* sanity check */
-	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.len < skip + len) {
-		panic("inet_cksum: mbuf len (%d) < off+len (%d+%d)\n",
-		    m->m_pkthdr.len, skip, len);
-	}
-
-	/* include pseudo header checksum? */
-	if (nxt != 0) {
-		struct ip *iph;
-
-		if (m->m_len < sizeof (struct ip))
-			panic("inet_cksum: bad mbuf chain");
-
-		iph = mtod(m, struct ip *);
-		sum = in_pseudo(iph->ip_src.s_addr, iph->ip_dst.s_addr,
-		    htonl(len + nxt));
-	}
-
-	return (cpu_in_cksum(m, len, skip, sum));
-}
-
-#else
 
 u_int16_t
 inet_cksum(struct mbuf *m, unsigned int nxt, unsigned int skip,
@@ -304,4 +272,3 @@ skip_start:
 	return (~sum & 0xffff);
 }
 
-#endif

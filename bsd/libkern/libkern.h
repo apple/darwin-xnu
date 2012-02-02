@@ -213,15 +213,6 @@ clz(unsigned int num)
 	);
 	return 31 ^ result;
 
-#elif __arm__ && !__thumb__ && defined(_ARM_ARCH_5)
-	unsigned int result;
-	__asm__ volatile(
-		"clz %0, %1"
-		: "=r" (result)
-		: "r" (num)
-	);
-
-	return result;
 #else
 	return num?__builtin_clz(num):__builtin_clz(0);
 #endif

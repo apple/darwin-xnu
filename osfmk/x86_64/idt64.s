@@ -268,14 +268,13 @@ L_32bit_dispatch: /* 32-bit user task */
 	mov	%eax, R32_EIP(%rsp)
 	mov	ISC32_RFLAGS(%rsp), %eax
 	mov	%eax, R32_EFLAGS(%rsp)
-	mov	ISC32_CS(%rsp), %esi		/* %esi := %cs for later */
-
-	mov	%esi, R32_CS(%rsp)
 	mov	ISC32_RSP(%rsp), %eax
 	mov	%eax, R32_UESP(%rsp)
 	mov	ISC32_SS(%rsp), %eax
 	mov	%eax, R32_SS(%rsp)
 L_32bit_dispatch_after_fault:
+	mov	ISC32_CS(%rsp), %esi		/* %esi := %cs for later */
+	mov	%esi, R32_CS(%rsp)
 	mov	ISC32_TRAPNO(%rsp), %ebx	/* %ebx := trapno for later */
 	mov	%ebx, R32_TRAPNO(%rsp)
 	mov	ISC32_ERR(%rsp), %eax

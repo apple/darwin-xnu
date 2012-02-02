@@ -2445,13 +2445,13 @@ define zprint_one
     set $kgm_zone = (struct zone *)$arg0
 
     showptr $kgm_zone
-    printf "  %6d ",$kgm_zone->count
+    printf "  %8d ",$kgm_zone->count
     printf "%8x ",$kgm_zone->cur_size
     printf "%8x ",$kgm_zone->max_size
-    printf "%6d ",$kgm_zone->elem_size
+    printf "%8d ",$kgm_zone->elem_size
     printf "%8x ",$kgm_zone->alloc_size
-	printf " %8d ",$kgm_zone->num_allocs
-	printf "%8d ",$kgm_zone->num_frees
+	printf " %16ld ",$kgm_zone->num_allocs
+	printf "%16ld ",$kgm_zone->num_frees
     printf "%s ",$kgm_zone->zone_name
 
     if ($kgm_zone->exhaustible)
@@ -2473,7 +2473,7 @@ end
 define zprint
     printf "ZONE      "
     showptrhdrpad
-    printf "   COUNT   TOT_SZ   MAX_SZ ELT_SZ ALLOC_SZ TOT_ALLOC TOT_FREE NAME\n"
+    printf "     COUNT   TOT_SZ   MAX_SZ   ELT_SZ ALLOC_SZ         TOT_ALLOC         TOT_FREE NAME\n"
     set $kgm_zone_ptr = (struct zone *)first_zone
     while ($kgm_zone_ptr != 0)
         zprint_one $kgm_zone_ptr
@@ -9714,12 +9714,13 @@ define zstack
 		printf "\n--------------- "
 
 		if (zrecords[$index].z_opcode == 1)
-			printf "ALLOC "
+			printf "ALLOC  "
 		else
-			printf "FREE "
+			printf "FREE  "
 		end
 
-		printf " 0x%x : index %d  :  ztime %d -------------\n", zrecords[$index].z_element, $index, zrecords[$index].z_time
+		showptr zrecords[$index].z_element
+		printf " : index %d  :  ztime %d -------------\n", $index, zrecords[$index].z_time
 
 		set $frame = 0
 

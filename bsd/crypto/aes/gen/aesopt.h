@@ -283,9 +283,6 @@
     assembler code routines for encryption and decryption with the C code
     only providing key scheduling
 */
-#if 0 && !defined(AES_ASM)
-#define AES_ASM
-#endif
 
 /*  3. BYTE ORDER WITHIN 32 BIT WORDS
 
@@ -316,15 +313,7 @@
 
     NOTE: Assembler code versions rely on PLATFORM_BYTE_ORDER being set
 */
-#if 1 || defined(AES_ASM)
 #define ALGORITHM_BYTE_ORDER PLATFORM_BYTE_ORDER
-#elif 0
-#define ALGORITHM_BYTE_ORDER BRG_LITTLE_ENDIAN
-#elif 0
-#define ALGORITHM_BYTE_ORDER BRG_BIG_ENDIAN
-#else
-#error The algorithm byte order is not defined
-#endif
 
 /*  4. FAST INPUT/OUTPUT OPERATIONS.
 
@@ -342,9 +331,6 @@
     assumed that access to byte arrays as if they are arrays of 32-bit
     words will not cause problems when such accesses are misaligned.
 */
-#if 0 && !defined(_MSC_VER)
-#define SAFE_IO
-#endif
 
 /*  5. LOOP UNROLLING
 
@@ -429,9 +415,6 @@
     it seems to sometimes cause trouble for the VC++ version 6 compiler.
 */
 
-#if 0 && defined(_MSC_VER) && (_MSC_VER >= 1300)
-#define TABLE_ALIGN 64
-#endif
 
 /*  10. INTERNAL TABLE CONFIGURATION
 

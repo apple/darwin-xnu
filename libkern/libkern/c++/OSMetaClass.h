@@ -60,8 +60,6 @@ class OSSerialize;
 #if defined(__LP64__)
 /*! @parseOnly */
 #define APPLE_KEXT_LEGACY_ABI  0
-#elif defined(__arm__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 2))
-#define APPLE_KEXT_LEGACY_ABI  0
 #else
 #define APPLE_KEXT_LEGACY_ABI  1
 #endif

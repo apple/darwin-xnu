@@ -468,6 +468,19 @@ extern kern_return_t vm_map_find_space(
 				int			flags,
 				vm_map_entry_t		*o_entry);	/* OUT */
 
+extern void vm_map_clip_start(
+	vm_map_t	map,
+	vm_map_entry_t	entry,
+	vm_map_offset_t	endaddr);
+extern void vm_map_clip_end(
+	vm_map_t	map,
+	vm_map_entry_t	entry,
+	vm_map_offset_t	endaddr);
+#if !CONFIG_EMBEDDED
+extern boolean_t vm_map_entry_should_cow_for_true_share(
+	vm_map_entry_t	entry);
+#endif /* !CONFIG_EMBEDDED */
+
 /* Lookup map entry containing or the specified address in the given map */
 extern boolean_t	vm_map_lookup_entry(
 				vm_map_t		map,

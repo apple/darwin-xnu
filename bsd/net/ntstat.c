@@ -1248,8 +1248,7 @@ nstat_idle_check(
 				removed.hdr.type = NSTAT_MSG_TYPE_SRC_REMOVED;
 				removed.hdr.context = 0;
 				removed.srcref = dead->srcref;
-				errno_t result = ctl_enqueuedata(control->kctl, control->unit, &removed, sizeof(removed), CTL_DATA_EOR);
-				if (result != 0) printf("%s:%d ctl_enqueuedata failed: %d\n", __FUNCTION__, __LINE__, result);
+				(void)ctl_enqueuedata(control->kctl, control->unit, &removed, sizeof(removed), CTL_DATA_EOR);
 				
 				// Put this on the list to release later
 				dead->next = dead_list;
@@ -1318,8 +1317,7 @@ nstat_control_cleanup_source(
 		removed.hdr.type = NSTAT_MSG_TYPE_SRC_REMOVED;
 		removed.hdr.context = 0;
 		removed.srcref = src->srcref;
-		errno_t result = ctl_enqueuedata(state->kctl, state->unit, &removed, sizeof(removed), CTL_DATA_EOR);
-		if (result != 0) printf("%s:%d ctl_enqueuedata failed: %d\n", __FUNCTION__, __LINE__, result);
+		(void)ctl_enqueuedata(state->kctl, state->unit, &removed, sizeof(removed), CTL_DATA_EOR);
 	}
 	
 	// Cleanup the source if we found it.
@@ -1551,7 +1549,6 @@ nstat_control_handle_add_request(
 	
 	if (result != 0)
 	{
-		printf("nstat_lookup_entry failed: %d\n", result);
 		return result;
 	}
 	
@@ -1785,10 +1782,6 @@ nstat_control_handle_query_request(
 			if (result == 0)
 			{
 				result = ctl_enqueuedata(state->kctl, state->unit, &counts, sizeof(counts), CTL_DATA_EOR);
-				if (result != 0)
-				{
-					printf("%s:%d ctl_enqueuedata failed: %d\n", __FUNCTION__, __LINE__, result);
-				}
 			}
 			else
 			{

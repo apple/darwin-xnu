@@ -1847,22 +1847,25 @@ sockargs(struct mbuf **mp, user_addr_t data, int buflen, int type)
 	struct mbuf *m;
 	int error;
 
-	int alloc_buflen = buflen;
+	size_t alloc_buflen = (size_t)buflen;
+	
+	if(alloc_buflen > INT_MAX/2) 
+		return (EINVAL);
 #ifdef __LP64__
 	/* The fd's in the buffer must expand to be pointers, thus we need twice as much space */
 	if(type == MT_CONTROL)
 		alloc_buflen = ((buflen - sizeof(struct cmsghdr))*2) + sizeof(struct cmsghdr);
 #endif
-	if ((u_int)alloc_buflen > MLEN) {
-		if (type == MT_SONAME && (u_int)alloc_buflen <= 112)
+	if (alloc_buflen > MLEN) {
+		if (type == MT_SONAME && alloc_buflen <= 112)
 			alloc_buflen = MLEN;		/* unix domain compat. hack */
-		else if ((u_int)alloc_buflen > MCLBYTES)
+		else if (alloc_buflen > MCLBYTES)
 			return (EINVAL);
 	}
 	m = m_get(M_WAIT, type);
 	if (m == NULL)
 		return (ENOBUFS);
-	if ((u_int)alloc_buflen > MLEN) {
+	if (alloc_buflen > MLEN) {
 		MCLGET(m, M_WAIT);
 		if ((m->m_flags & M_EXT) == 0) {
 			m_free(m);

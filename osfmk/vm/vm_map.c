@@ -1253,6 +1253,7 @@ vm_map_find_space(
 	}
 	*address = start;
 
+	assert(start < end);
 	new_entry->vme_start = start;
 	new_entry->vme_end = end;
 	assert(page_aligned(new_entry->vme_start));
@@ -1868,6 +1869,7 @@ StartAgain: ;
 			 *	new range.
 			 */
 			map->size += (end - entry->vme_end);
+			assert(entry->vme_start < end);
 			entry->vme_end = end;
 			vm_map_store_update_first_free(map, map->first_free);
 			RETURN(KERN_SUCCESS);
@@ -2971,7 +2973,7 @@ vm_map_clip_unnest(
  *	the specified address; if necessary,
  *	it splits the entry into two.
  */
-static void
+void
 vm_map_clip_start(
 	vm_map_t	map,
 	vm_map_entry_t	entry,
@@ -3038,7 +3040,9 @@ _vm_map_clip_start(
 	vm_map_entry_copy_full(new_entry, entry);
 
 	new_entry->vme_end = start;
+	assert(new_entry->vme_start < new_entry->vme_end);
 	entry->offset += (start - entry->vme_start);
+	assert(start < entry->vme_end);
 	entry->vme_start = start;
 
 	_vm_map_store_entry_link(map_header, entry->vme_prev, new_entry);
@@ -3057,7 +3061,7 @@ _vm_map_clip_start(
  *	the specified address; if necessary,
  *	it splits the entry into two.
  */
-static void
+void
 vm_map_clip_end(
 	vm_map_t	map,
 	vm_map_entry_t	entry,
@@ -3128,8 +3132,10 @@ _vm_map_clip_end(
 	new_entry = _vm_map_entry_create(map_header);
 	vm_map_entry_copy_full(new_entry, entry);
 
+	assert(entry->vme_start < end);
 	new_entry->vme_start = entry->vme_end = end;
 	new_entry->offset += (end - entry->vme_start);
+	assert(new_entry->vme_start < new_entry->vme_end);
 
 	_vm_map_store_entry_link(map_header, entry, new_entry);
 
@@ -5876,6 +5882,12 @@ start_overwrite:
 				copy->type = VM_MAP_COPY_ENTRY_LIST;
 				copy->offset = new_offset;
 
+				/*
+				 * XXX FBDP
+				 * this does not seem to deal with
+				 * the VM map store (R&B tree)
+				 */
+
 				total_size -= copy_size;
 				copy_size = 0;
 				/* put back remainder of copy in container */
@@ -6520,6 +6532,10 @@ vm_map_copy_overwrite_unaligned(
  *	to the above pass and make sure that no wiring is involved.
  */
 
+int vm_map_copy_overwrite_aligned_src_not_internal = 0;
+int vm_map_copy_overwrite_aligned_src_not_symmetric = 0;
+int vm_map_copy_overwrite_aligned_src_large = 0;
+
 static kern_return_t
 vm_map_copy_overwrite_aligned(
 	vm_map_t	dst_map,
@@ -6624,6 +6640,26 @@ vm_map_copy_overwrite_aligned(
 				continue;
 			}
 
+#if !CONFIG_EMBEDDED
+#define __TRADEOFF1_OBJ_SIZE (64 * 1024 * 1024)	/* 64 MB */
+#define __TRADEOFF1_COPY_SIZE (128 * 1024)	/* 128 KB */
+			if (copy_entry->object.vm_object != VM_OBJECT_NULL &&
+			    copy_entry->object.vm_object->vo_size >= __TRADEOFF1_OBJ_SIZE &&
+			    copy_size <= __TRADEOFF1_COPY_SIZE) {
+				/*
+				 * Virtual vs. Physical copy tradeoff #1.
+				 *
+				 * Copying only a few pages out of a large
+				 * object:  do a physical copy instead of
+				 * a virtual copy, to avoid possibly keeping
+				 * the entire large object alive because of
+				 * those few copy-on-write pages.
+				 */
+				vm_map_copy_overwrite_aligned_src_large++;
+				goto slow_copy;
+			}
+#endif /* !CONFIG_EMBEDDED */
+
 			if (entry->alias >= VM_MEMORY_MALLOC &&
 			    entry->alias <= VM_MEMORY_MALLOC_LARGE_REUSED) {
 				vm_object_t new_object, new_shadow;
@@ -6637,6 +6673,10 @@ vm_map_copy_overwrite_aligned(
 					vm_object_lock_shared(new_object);
 				}
 				while (new_object != VM_OBJECT_NULL &&
+#if !CONFIG_EMBEDDED
+				       !new_object->true_share &&
+				       new_object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC &&
+#endif /* !CONFIG_EMBEDDED */
 				       new_object->internal) {
 					new_shadow = new_object->shadow;
 					if (new_shadow == VM_OBJECT_NULL) {
@@ -6657,9 +6697,24 @@ vm_map_copy_overwrite_aligned(
 						 * let's go off the optimized
 						 * path...
 						 */
+						vm_map_copy_overwrite_aligned_src_not_internal++;
 						vm_object_unlock(new_object);
 						goto slow_copy;
 					}
+#if !CONFIG_EMBEDDED
+					if (new_object->true_share ||
+					    new_object->copy_strategy != MEMORY_OBJECT_COPY_SYMMETRIC) {
+						/*
+						 * Same if there's a "true_share"
+						 * object in the shadow chain, or
+						 * an object with a non-default
+						 * (SYMMETRIC) copy strategy.
+						 */
+						vm_map_copy_overwrite_aligned_src_not_symmetric++;
+						vm_object_unlock(new_object);
+						goto slow_copy;
+					}
+#endif /* !CONFIG_EMBEDDED */
 					vm_object_unlock(new_object);
 				}
 				/*
@@ -6752,6 +6807,14 @@ vm_map_copy_overwrite_aligned(
 			kern_return_t		r;
 
 		slow_copy:
+			if (entry->needs_copy) {
+				vm_object_shadow(&entry->object.vm_object,
+						 &entry->offset,
+						 (entry->vme_end -
+						  entry->vme_start));
+				entry->needs_copy = FALSE;
+			}
+
 			dst_object = entry->object.vm_object;
 			dst_offset = entry->offset;
 
@@ -6838,7 +6901,8 @@ vm_map_copy_overwrite_aligned(
 
 			start += copy_size;
 			vm_map_lock(dst_map);
-			if (version.main_timestamp == dst_map->timestamp) {
+			if (version.main_timestamp == dst_map->timestamp &&
+			    copy_size != 0) {
 				/* We can safely use saved tmp_entry value */
 
 				vm_map_clip_end(dst_map, tmp_entry, start);
@@ -7910,6 +7974,7 @@ vm_map_copyin_common(
 		tmp_entry->vme_end = copy_addr + 
 			(tmp_entry->vme_end - tmp_entry->vme_start);
 		tmp_entry->vme_start = copy_addr;
+		assert(tmp_entry->vme_start < tmp_entry->vme_end);
 		copy_addr += tmp_entry->vme_end - tmp_entry->vme_start;
 		tmp_entry = (struct vm_map_entry *)tmp_entry->vme_next;
 	}
@@ -10000,6 +10065,7 @@ vm_map_simplify_entry(
 	    (this_entry->is_shared == FALSE)
 		) {
 		_vm_map_store_entry_unlink(&map->hdr, prev_entry);
+		assert(prev_entry->vme_start < this_entry->vme_end);
 		this_entry->vme_start = prev_entry->vme_start;
 		this_entry->offset = prev_entry->offset;
 		if (prev_entry->is_sub_map) {
@@ -11086,6 +11152,7 @@ vm_map_entry_insert(
 	new_entry->vme_end = end;
 	assert(page_aligned(new_entry->vme_start));
 	assert(page_aligned(new_entry->vme_end));
+	assert(new_entry->vme_start < new_entry->vme_end);
 
 	new_entry->object.vm_object = object;
 	new_entry->offset = offset;
@@ -11288,6 +11355,7 @@ vm_map_remap_extract(
 
 		new_entry->vme_start = map_address;
 		new_entry->vme_end = map_address + tmp_size;
+		assert(new_entry->vme_start < new_entry->vme_end);
 		new_entry->inheritance = inheritance;
 		new_entry->offset = offset;
 
@@ -13203,3 +13271,85 @@ out:
 	vm_map_unlock(map);
 }
 #endif
+
+#if !CONFIG_EMBEDDED
+/*
+ * vm_map_entry_should_cow_for_true_share:
+ *
+ * Determines if the map entry should be clipped and setup for copy-on-write
+ * to avoid applying "true_share" to a large VM object when only a subset is
+ * targeted.
+ *
+ * For now, we target only the map entries created for the Objective C
+ * Garbage Collector, which initially have the following properties:
+ *	- alias == VM_MEMORY_MALLOC
+ * 	- wired_count == 0
+ * 	- !needs_copy
+ * and a VM object with:
+ * 	- internal
+ * 	- copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC
+ * 	- !true_share
+ * 	- vo_size == ANON_CHUNK_SIZE
+ */
+boolean_t
+vm_map_entry_should_cow_for_true_share(
+	vm_map_entry_t	entry)
+{
+	vm_object_t	object;
+
+	if (entry->is_sub_map) {
+		/* entry does not point at a VM object */
+		return FALSE;
+	}
+
+	if (entry->needs_copy) {
+		/* already set for copy_on_write: done! */
+		return FALSE;
+	}
+
+	if (entry->alias != VM_MEMORY_MALLOC) {
+		/* not tagged as an ObjectiveC's Garbage Collector entry */
+		return FALSE;
+	}
+
+	if (entry->wired_count) {
+		/* wired: can't change the map entry... */
+		return FALSE;
+	}
+
+	object = entry->object.vm_object;
+
+	if (object == VM_OBJECT_NULL) {
+		/* no object yet... */
+		return FALSE;
+	}
+
+	if (!object->internal) {
+		/* not an internal object */
+		return FALSE;
+	}
+
+	if (object->copy_strategy != MEMORY_OBJECT_COPY_SYMMETRIC) {
+		/* not the default copy strategy */
+		return FALSE;
+	}
+
+	if (object->true_share) {
+		/* already true_share: too late to avoid it */
+		return FALSE;
+	}
+
+	if (object->vo_size != ANON_CHUNK_SIZE) {
+		/* not an object created for the ObjC Garbage Collector */
+		return FALSE;
+	}
+
+	/*
+	 * All the criteria match: we have a large object being targeted for "true_share".
+	 * To limit the adverse side-effects linked with "true_share", tell the caller to
+	 * try and avoid setting up the entire object for "true_share" by clipping the
+	 * targeted range and setting it up for copy-on-write.
+	 */
+	return TRUE;
+}
+#endif /* !CONFIG_EMBEDDED */

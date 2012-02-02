@@ -101,6 +101,7 @@ void	vm_map_store_copy_insert( vm_map_t map, vm_map_entry_t after_where, vm_map_
 void
 _vm_map_store_entry_link( struct vm_map_header * mapHdr, vm_map_entry_t after_where, vm_map_entry_t entry)
 {
+	assert(entry->vme_start < entry->vme_end);
 	vm_map_store_entry_link_ll(mapHdr, after_where, entry);
 #ifdef VM_MAP_STORE_USE_RB
 	vm_map_store_entry_link_rb(mapHdr, after_where, entry);

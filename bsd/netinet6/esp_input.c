@@ -440,8 +440,8 @@ noreplaycheck:
 		    seq >= sav->replay->lastseq)  {
 			struct udphdr *encap_uh = (__typeof__(encap_uh))((caddr_t)ip + off);
 			if (encap_uh->uh_sport &&
-			    encap_uh->uh_sport != sav->remote_ike_port) {
-				sav->remote_ike_port = encap_uh->uh_sport;
+			    ntohs(encap_uh->uh_sport) != sav->remote_ike_port) {
+				sav->remote_ike_port = ntohs(encap_uh->uh_sport);
 			}
 		}
 		ip = esp4_input_strip_UDP_encap(m, off);

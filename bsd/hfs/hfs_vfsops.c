@@ -3966,6 +3966,9 @@ hfs_extendfs(struct hfsmount *hfsmp, u_int64_t newsize, vfs_context_t context)
 	hfsmp->hfs_flags |= HFS_RESIZE_IN_PROGRESS;
 	HFS_MOUNT_UNLOCK(hfsmp, TRUE);
 
+	/* Start with a clean journal. */
+	hfs_journal_flush(hfsmp, TRUE);
+
 	/*
 	 * Enclose changes inside a transaction.
 	 */
@@ -4244,6 +4247,9 @@ out:
 	}
 	if (transaction_begun) {
 		hfs_end_transaction(hfsmp);
+		hfs_journal_flush(hfsmp, FALSE);
+		/* Just to be sure, sync all data to the disk */
+		(void) VNOP_IOCTL(hfsmp->hfs_devvp, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, context);
 	}
 
 	return MacToVFSError(error);

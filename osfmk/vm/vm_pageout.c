@@ -3956,10 +3956,30 @@ REDISCOVER_ENTRY:
 
 			return KERN_SUCCESS;
 		}
+
+		if (entry->is_sub_map) {
+			vm_map_t	submap;
+
+			submap = entry->object.sub_map;
+			local_start = entry->vme_start;
+			local_offset = entry->offset;
+
+			vm_map_reference(submap);
+			vm_map_unlock_read(map);
+
+			ret = vm_map_create_upl(submap, 
+						local_offset + (offset - local_start), 
+						upl_size, upl, page_list, count, flags);
+			vm_map_deallocate(submap);
+
+			return ret;
+		}
+
 	        if (entry->object.vm_object == VM_OBJECT_NULL || !entry->object.vm_object->phys_contiguous) {
         		if ((*upl_size/PAGE_SIZE) > MAX_UPL_SIZE)
                			*upl_size = MAX_UPL_SIZE * PAGE_SIZE;
 		}
+
 		/*
 		 *      Create an object if necessary.
 		 */
@@ -3978,6 +3998,42 @@ REDISCOVER_ENTRY:
 				vm_map_unlock_read(map);
 				return KERN_PROTECTION_FAILURE;
 			}
+
+#if !CONFIG_EMBEDDED
+			local_object = entry->object.vm_object;
+			if (vm_map_entry_should_cow_for_true_share(entry) &&
+			    local_object->vo_size > *upl_size &&
+			    *upl_size != 0) {
+				vm_prot_t	prot;
+
+				/*
+				 * Set up the targeted range for copy-on-write to avoid
+				 * applying true_share/copy_delay to the entire object.
+				 */
+
+				if (vm_map_lock_read_to_write(map)) {
+					goto REDISCOVER_ENTRY;
+				}
+
+				vm_map_clip_start(map, entry, vm_map_trunc_page(offset));
+				vm_map_clip_end(map, entry, vm_map_round_page(offset + *upl_size));
+				prot = entry->protection & ~VM_PROT_WRITE;
+				if (override_nx(map, entry->alias) && prot)
+					prot |= VM_PROT_EXECUTE;
+				vm_object_pmap_protect(local_object,
+						       entry->offset,
+						       entry->vme_end - entry->vme_start,
+						       ((entry->is_shared || map->mapped)
+							? PMAP_NULL
+							: map->pmap),
+						       entry->vme_start,
+						       prot);
+				entry->needs_copy = TRUE;
+
+				vm_map_lock_write_to_read(map);
+			}
+#endif /* !CONFIG_EMBEDDED */
+
 			if (entry->needs_copy)  {
 				/*
 				 * Honor copy-on-write for COPY_SYMMETRIC
@@ -4011,23 +4067,6 @@ REDISCOVER_ENTRY:
 
 				goto REDISCOVER_ENTRY;
 			}
-		}
-		if (entry->is_sub_map) {
-			vm_map_t	submap;
-
-			submap = entry->object.sub_map;
-			local_start = entry->vme_start;
-			local_offset = entry->offset;
-
-			vm_map_reference(submap);
-			vm_map_unlock_read(map);
-
-			ret = vm_map_create_upl(submap, 
-						local_offset + (offset - local_start), 
-						upl_size, upl, page_list, count, flags);
-			vm_map_deallocate(submap);
-
-			return ret;
 		}
 		if (sync_cow_data) {
 			if (entry->object.vm_object->shadow || entry->object.vm_object->copy) {

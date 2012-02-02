@@ -231,7 +231,7 @@ uint32_t speculative_prefetch_max = (MAX_UPL_SIZE * 3);
  * before we issue a synchronous write 
  */
 #define HARD_THROTTLE_MAXCNT	0
-#define HARD_THROTTLE_MAXSIZE	(32 * 1024)
+#define HARD_THROTTLE_MAXSIZE	(256 * 1024)
 
 int hard_throttle_on_root = 0;
 struct timeval priority_IO_timestamp_for_root;

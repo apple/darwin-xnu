@@ -77,7 +77,7 @@ int hfs_set_backingstore (struct vnode *vp, int val) {
 	int err = 0;
 	
 	cp = VTOC(vp);
-	if (vnode_isdir(vp)) {
+	if (!vnode_isreg(vp) && !vnode_isdir(vp)) {
 		return EINVAL;
 	}
 
@@ -113,7 +113,7 @@ int hfs_is_backingstore (struct vnode *vp, int *val) {
 	struct cnode *cp = NULL;
 	int err = 0;
 
-	if (!vnode_isreg(vp)) {
+	if (!vnode_isreg(vp) && !vnode_isdir(vp)) {
 		*val = 0;
 		return 0;
 	}

@@ -1833,6 +1833,8 @@ mach_make_memory_entry_64(
 	vm_prot_t		original_protections, mask_protections;
 	unsigned int		wimg_mode;
 
+	boolean_t		force_shadow = FALSE;
+
 	if (((permission & 0x00FF0000) &
 	     ~(MAP_MEM_ONLY |
 	       MAP_MEM_NAMED_CREATE |
@@ -2173,6 +2175,35 @@ redo_lookup:
 			}
 		}
 
+#if !CONFIG_EMBEDDED
+		if (vm_map_entry_should_cow_for_true_share(map_entry) &&
+		    object->vo_size > map_size &&
+		    map_size != 0) {
+			/*
+			 * Set up the targeted range for copy-on-write to
+			 * limit the impact of "true_share"/"copy_delay" to
+			 * that range instead of the entire VM object...
+			 */
+			
+			vm_object_unlock(object);
+			if (vm_map_lock_read_to_write(target_map)) {
+				vm_object_deallocate(object);
+				target_map = original_map;
+				goto redo_lookup;
+			}
+
+			vm_map_clip_start(target_map, map_entry, vm_map_trunc_page(offset));
+			vm_map_clip_end(target_map, map_entry, vm_map_round_page(offset) + map_size);
+			force_shadow = TRUE;
+
+			map_size = map_entry->vme_end - map_entry->vme_start;
+			total_size = map_size;
+
+			vm_map_lock_write_to_read(target_map);
+			vm_object_lock(object);
+		}
+#endif /* !CONFIG_EMBEDDED */
+
 		if(object->internal) {
 	   		/* vm_map_lookup_locked will create a shadow if   */
 		 	/* needs_copy is set but does not check for the   */
@@ -2180,9 +2211,11 @@ redo_lookup:
 			/* set up an object which will not be pulled from */
 			/* under us.  */
 
-	      		if ((map_entry->needs_copy  || object->shadowed ||
-			     (object->vo_size > total_size))
-					&& !object->true_share) {
+	      		if (force_shadow ||
+			    ((map_entry->needs_copy  ||
+			      object->shadowed ||
+			      (object->vo_size > total_size)) &&
+			     !object->true_share)) {
 				/*
 				 * We have to unlock the VM object before
 				 * trying to upgrade the VM map lock, to

@@ -167,9 +167,6 @@ SYSCTL_UINT(_security_mac, OID_AUTO, label_mbufs, CTLFLAG_RW | CTLFLAG_LOCKED,
 	&mac_label_mbufs, 0, "Label all MBUFs");
 #endif
 
-#if !defined(CONFIG_MACF_ALWAYS_LABEL_MBUF) && 0
-static int	mac_labelmbufs = 0;
-#endif
 
 /*
  * Flag to indicate whether or not we should allocate label storage for
@@ -744,26 +741,6 @@ mac_policy_removefrom_labellist(mac_policy_handle_t handle)
 static void
 mac_policy_updateflags(void)
 {
-#if !defined(CONFIG_MACF_ALWAYS_LABEL_MBUF) && 0 /* port to new list style */
-
-	struct mac_policy_conf *tmpc;
-	int labelmbufs;
-
-	mac_policy_assert_exclusive();
-
-	labelmbufs = 0;
-
-	/* XXX - convert to new list structure */
-	LIST_FOREACH(tmpc, &mac_static_policy_list, mpc_list) {
-		if (tmpc->mpc_loadtime_flags & MPC_LOADTIME_FLAG_LABELMBUFS)
-			labelmbufs++;
-	}
-	LIST_FOREACH(tmpc, &mac_policy_list, mpc_list) {
-		if (tmpc->mpc_loadtime_flags & MPC_LOADTIME_FLAG_LABELMBUFS)
-			labelmbufs++;
-	}
-	mac_labelmbufs = (labelmbufs != 0);
-#endif
 }
 
 static __inline void

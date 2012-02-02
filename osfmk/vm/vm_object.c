@@ -3894,6 +3894,10 @@ vm_object_shadow(
 	register vm_object_t	result;
 
 	source = *object;
+	assert(source != VM_OBJECT_NULL);
+	if (source == VM_OBJECT_NULL)
+		return FALSE;
+
 #if 0
 	/*
 	 * XXX FBDP

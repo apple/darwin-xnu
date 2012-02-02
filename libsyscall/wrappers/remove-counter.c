@@ -31,19 +31,11 @@ static int32_t __remove_counter = 0;
 
 __uint64_t
 __get_remove_counter(void) {
-#if defined(__arm__) && !defined(_ARM_ARCH_6)
-	return __remove_counter;
-#else
 	return __sync_add_and_fetch(&__remove_counter, 0);
-#endif
 }
 
 void
 __inc_remove_counter(void)
 {
-#if defined(__arm__) && !defined(_ARM_ARCH_6)
-	__remove_counter++;
-#else
 	__sync_add_and_fetch(&__remove_counter, 1);
-#endif
 }
