@@ -1405,7 +1405,9 @@ kdp_reset(void)
 	kdp.reply_port = kdp.exception_port = 0;
 	kdp.is_halted = kdp.is_conn = FALSE;
 	kdp.exception_seq = kdp.conn_seq = 0;
-        kdp.session_key = 0;
+	kdp.session_key = 0;
+	pkt.input = manual_pkt.input = FALSE;
+	pkt.len = pkt.off = manual_pkt.len = 0;
 }
 
 struct corehdr *
@@ -2013,8 +2015,6 @@ kdp_panic_dump(void)
 
 panic_dump_exit:
 	abort_panic_transfer();
-	pkt.input = FALSE;
-	pkt.len = 0;
 	kdp_reset();
 	return;
 }
@@ -2122,6 +2122,9 @@ kdp_init(void)
 
 	if (debug_boot_arg & DB_REBOOT_POST_CORE)
 		kdp_flag |= REBOOT_POST_CORE;
+#if	defined(__x86_64__)	
+	kdp_machine_init();
+#endif
 #if CONFIG_SERIAL_KDP
 	char kdpname[80];
 	struct in_addr ipaddr;

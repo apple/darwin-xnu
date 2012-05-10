@@ -235,6 +235,14 @@ panic(const char *str, ...)
 	thread_t thread;
 	wait_queue_t wq;
 
+	if (kdebug_enable) {
+		ml_set_interrupts_enabled(TRUE);
+		kdbg_dump_trace_to_file("/var/tmp/panic.trace");
+	}
+
+	s = splhigh();
+	disable_preemption();
+
 #if	defined(__i386__) || defined(__x86_64__)
 	/* Attempt to display the unparsed panic string */
 	const char *tstr = str;
@@ -244,11 +252,6 @@ panic(const char *str, ...)
 		kprintf("%c", *tstr++);
 	kprintf("\n");
 #endif
-	if (kdebug_enable)
-		kdbg_dump_trace_to_file("/var/tmp/panic.trace");
-
-	s = splhigh();
-	disable_preemption();
 
 	panic_safe();
 

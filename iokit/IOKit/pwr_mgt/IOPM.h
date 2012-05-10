@@ -245,7 +245,7 @@ enum {
  *  false       == Retain FV key when going to standby mode
  *  not present == Retain FV key when going to standby mode
  */
-#define kIOPMDestroyFVKeyOnStandbyKey            "DestroyFVKeyOnStandby"
+#define kIOPMDestroyFVKeyOnStandbyKey       "DestroyFVKeyOnStandby"
 
 /*******************************************************************************
  *
@@ -288,7 +288,15 @@ enum {
      */
     kIOPMDriverAssertionPreventDisplaySleepBit      = 0x40,
 
-    kIOPMDriverAssertionReservedBit7                = 0x80
+    /*! kIOPMDriverAssertionReservedBit7
+     * Reserved for storage family.
+     */
+    kIOPMDriverAssertionReservedBit7                = 0x80,
+
+    /*! kIOPMDriverAssertionReservedBit8
+     * Reserved for networking family.
+     */
+    kIOPMDriverAssertionReservedBit8                = 0x100
 };
 
  /* kIOPMAssertionsDriverKey
@@ -665,6 +673,7 @@ enum {
 // Maintenance wake calendar.
 #define kIOPMSettingMaintenanceWakeCalendarKey      "MaintenanceWakeCalendarDate"
 
+
 struct IOPMCalendarStruct {
     UInt32      year;
     UInt8       month;
@@ -672,6 +681,7 @@ struct IOPMCalendarStruct {
     UInt8       hour;
     UInt8       minute;
     UInt8       second;
+    UInt8       selector;
 };
 typedef struct IOPMCalendarStruct IOPMCalendarStruct;
 
@@ -760,6 +770,7 @@ struct stateChangeNote {
 };
 typedef struct stateChangeNote stateChangeNote;
 
+#endif /* KERNEL && __cplusplus */
 struct IOPowerStateChangeNotification {
     void *        powerRef;
     unsigned long    returnValue;
@@ -768,7 +779,6 @@ struct IOPowerStateChangeNotification {
 };
 typedef struct IOPowerStateChangeNotification IOPowerStateChangeNotification;
 typedef IOPowerStateChangeNotification sleepWakeNote;
-#endif /* KERNEL && __cplusplus */
 
 /*! @struct IOPMSystemCapabilityChangeParameters
     @abstract A structure describing a system capability change.

@@ -38,15 +38,6 @@
 #include <i386/lapic.h>
 #include <i386/machine_routines.h>
 
-//#define TOPO_DEBUG 1
-#if TOPO_DEBUG
-#define DBG(x...)	kprintf("DBG: " x)
-#else
-#define DBG(x...)
-#endif
-void debug_topology_print(void);
-void validate_topology(void);
-
 __private_extern__ void qsort(
     void * array,
     size_t nmembers,
@@ -85,15 +76,16 @@ cpu_topology_sort(int ncpus)
 	/* Lights out for this */
 	istate = ml_set_interrupts_enabled(FALSE);
 
-#ifdef TOPO_DEBUG
-	DBG("cpu_topology_start() %d cpu%s registered\n",
-		ncpus, (ncpus > 1) ? "s" : "");
-	for (i = 0; i < ncpus; i++) {
-		cpu_data_t	*cpup = cpu_datap(i);
-		DBG("\tcpu_data[%d]:0x%08x local apic 0x%x\n",
-			i, (unsigned) cpup, cpup->cpu_phys_number);
+	if (topo_dbg) {
+		TOPO_DBG("cpu_topology_start() %d cpu%s registered\n",
+			ncpus, (ncpus > 1) ? "s" : "");
+		for (i = 0; i < ncpus; i++) {
+			cpu_data_t	*cpup = cpu_datap(i);
+			TOPO_DBG("\tcpu_data[%d]:%p local apic 0x%x\n",
+				i, (void *) cpup, cpup->cpu_phys_number);
+		}
 	}
-#endif
+
 	/*
 	 * Re-order the cpu_data_ptr vector sorting by physical id.
 	 * Skip the boot processor, it's required to be correct.
@@ -104,14 +96,14 @@ cpu_topology_sort(int ncpus)
 			sizeof(cpu_data_t *),
 			lapicid_cmp);
 	}
-#ifdef TOPO_DEBUG
-	DBG("cpu_topology_start() after sorting:\n");
-	for (i = 0; i < ncpus; i++) {
-		cpu_data_t	*cpup = cpu_datap(i);
-		DBG("\tcpu_data[%d]:0x%08x local apic 0x%x\n",
-			i, (unsigned) cpup, cpup->cpu_phys_number);
+	if (topo_dbg) {
+		TOPO_DBG("cpu_topology_start() after sorting:\n");
+		for (i = 0; i < ncpus; i++) {
+			cpu_data_t	*cpup = cpu_datap(i);
+			TOPO_DBG("\tcpu_data[%d]:%p local apic 0x%x\n",
+				i, (void *) cpup, cpup->cpu_phys_number);
+		}
 	}
-#endif
 
 	/*
 	 * Fix up logical numbers and reset the map kept by the lapic code.
@@ -142,13 +134,10 @@ cpu_topology_sort(int ncpus)
 		x86_set_pkg_numbers(pkg, &cpup->lcpu);
 	}
 
-#if TOPO_DEBUG
-	debug_topology_print();
-#endif /* TOPO_DEBUG */
 	validate_topology();
 
 	ml_set_interrupts_enabled(istate);
-	DBG("cpu_topology_start() LLC is L%d\n", topoParms.LLCDepth + 1);
+	TOPO_DBG("cpu_topology_start() LLC is L%d\n", topoParms.LLCDepth + 1);
 
 	/*
 	 * Let the CPU Power Management know that the topology is stable.
@@ -161,7 +150,7 @@ cpu_topology_sort(int ncpus)
 	 * for their LLC cache. Each affinity set possesses a processor set
 	 * into which each logical processor is added.
 	 */
-	DBG("cpu_topology_start() creating affinity sets:\n");
+	TOPO_DBG("cpu_topology_start() creating affinity sets:\n");
 	for (i = 0; i < ncpus; i++) {
 		cpu_data_t		*cpup = cpu_datap(i);
 		x86_lcpu_t		*lcpup = cpu_to_lcpu(i);
@@ -184,11 +173,11 @@ cpu_topology_sort(int ncpus)
 					pset_create(pset_node_root());
 			if (aset->pset == PROCESSOR_SET_NULL)
 				panic("cpu_topology_start: pset_create");
-			DBG("\tnew set %p(%d) pset %p for cache %p\n",
+			TOPO_DBG("\tnew set %p(%d) pset %p for cache %p\n",
 				aset, aset->num, aset->pset, aset->cache);
 		}
 
-		DBG("\tprocessor_init set %p(%d) lcpup %p(%d) cpu %p processor %p\n",
+		TOPO_DBG("\tprocessor_init set %p(%d) lcpup %p(%d) cpu %p processor %p\n",
 			aset, aset->num, lcpup, lcpup->cpu_num, cpup, cpup->cpu_processor);
 
 		if (i != master_cpu)
@@ -213,10 +202,10 @@ cpu_topology_start_cpu( int cpunum )
 	int		i = cpunum;
 
 	/* Decide whether to start a CPU, and actually start it */
-	DBG("cpu_topology_start() processor_start():\n");
+	TOPO_DBG("cpu_topology_start() processor_start():\n");
 	if( i < ncpus)
 	{
-		DBG("\tlcpu %d\n", cpu_datap(i)->cpu_number);
+		TOPO_DBG("\tlcpu %d\n", cpu_datap(i)->cpu_number);
 		processor_start(cpu_datap(i)->cpu_processor); 
 		return KERN_SUCCESS;
 	}
@@ -230,7 +219,7 @@ lapicid_cmp(const void *x, const void *y)
 	cpu_data_t	*cpu_x = *((cpu_data_t **)(uintptr_t)x);
 	cpu_data_t	*cpu_y = *((cpu_data_t **)(uintptr_t)y);
 
-	DBG("lapicid_cmp(%p,%p) (%d,%d)\n",
+	TOPO_DBG("lapicid_cmp(%p,%p) (%d,%d)\n",
 		x, y, cpu_x->cpu_phys_number, cpu_y->cpu_phys_number);
 	if (cpu_x->cpu_phys_number < cpu_y->cpu_phys_number)
 		return -1;

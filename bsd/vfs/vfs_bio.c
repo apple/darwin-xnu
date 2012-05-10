@@ -405,6 +405,18 @@ buf_setcpaddr(buf_t bp __unused, void *cp_entry_addr __unused) {
 }
 #endif /* CONFIG_PROTECT */
 
+int
+bufattr_throttled(bufattr_t bap) {
+	if ( (bap->ba_flags & BA_THROTTLED_IO) )
+		return 1;
+	return 0;
+}
+
+bufattr_t
+buf_attr(buf_t bp) {
+	return &bp->b_attr;
+}
+
 errno_t
 buf_error(buf_t bp) {
         
@@ -3400,6 +3412,7 @@ bcleanbuf(buf_t bp, boolean_t discard)
 #ifdef CONFIG_PROTECT
 		bp->b_cpentry = 0;
 #endif
+		bzero(&bp->b_attr, sizeof(struct bufattr));
 
 		lck_mtx_lock_spin(buf_mtxp);
 	}
@@ -3659,6 +3672,7 @@ buf_biodone(buf_t bp)
 	 * indicators
 	 */
 	CLR(bp->b_flags, (B_WASDIRTY | B_THROTTLED_IO | B_PASSIVE));
+	CLR(bp->b_attr.ba_flags, (BA_THROTTLED_IO));
 	DTRACE_IO1(done, buf_t, bp);
 
 	if (!ISSET(bp->b_flags, B_READ) && !ISSET(bp->b_flags, B_RAW))
@@ -3853,6 +3867,7 @@ alloc_io_buf(vnode_t vp, int priv)
 #ifdef CONFIG_PROTECT
 	bp->b_cpentry = 0;
 #endif
+	bzero(&bp->b_attr, sizeof(struct bufattr));
 
 	if (vp && (vp->v_type == VBLK || vp->v_type == VCHR))
 		bp->b_dev = vp->v_rdev;

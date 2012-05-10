@@ -497,6 +497,7 @@ OSErr MapFileBlockC (
 	//
 	//	Determine the end of the available space.  It will either be the end of the extent,
 	//	or the file's PEOF, whichever is smaller.
+	
 	//
 	dataEnd = (off_t)((off_t)(nextFABN) * (off_t)(allocBlockSize));   // Assume valid data through end of this extent
 	if (((off_t)fcb->ff_blocks * (off_t)allocBlockSize) < dataEnd)    // Is PEOF shorter?
@@ -529,6 +530,12 @@ OSErr MapFileBlockC (
 	if (availableBytes)
 	{
 		tmpOff = dataEnd - offset;
+		/*
+		 * Disallow negative runs.
+		 */
+		if (tmpOff <= 0) {
+			return EINVAL;
+		}
 		if (tmpOff > (off_t)(numberOfBytes))
 			*availableBytes = numberOfBytes;  // more there than they asked for, so pin the output
 		else

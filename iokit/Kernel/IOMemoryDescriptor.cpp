@@ -1937,7 +1937,7 @@ IOReturn IOGeneralMemoryDescriptor::wireVirtual(IODirection forDirection)
     assert(!_wireCount);
     assert(kIOMemoryTypeVirtual == type || kIOMemoryTypeVirtual64 == type || kIOMemoryTypeUIO == type);
 
-    if (_pages >= gIOMaximumMappedIOPageCount)
+    if (_pages > gIOMaximumMappedIOPageCount)
 	return kIOReturnNoResources;
 
     dataP = getDataP(_memoryEntries);

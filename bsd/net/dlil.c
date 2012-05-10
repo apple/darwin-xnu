@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -235,8 +235,8 @@ static lck_grp_t *dlil_lock_group;
 lck_grp_t *ifnet_lock_group;
 static lck_grp_t *ifnet_head_lock_group;
 lck_attr_t *ifnet_lock_attr;
-decl_lck_rw_data(, ifnet_head_lock);
-decl_lck_mtx_data(, dlil_ifnet_lock);
+decl_lck_rw_data(static, ifnet_head_lock);
+decl_lck_mtx_data(static, dlil_ifnet_lock);
 u_int32_t dlil_filter_count = 0;
 extern u_int32_t	ipv4_ll_arp_aware;
 
@@ -2771,11 +2771,19 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	if (ifp == NULL)
 		return (EINVAL);
 
+	/*
+	 * Serialize ifnet attach using dlil_ifnet_lock, in order to
+	 * prevent the interface from being configured while it is
+	 * embryonic, as ifnet_head_lock is dropped and reacquired
+	 * below prior to marking the ifnet with IFRF_ATTACHED.
+	 */
+	dlil_if_lock();
 	ifnet_head_lock_exclusive();
 	/* Verify we aren't already on the list */
 	TAILQ_FOREACH(tmp_if, &ifnet_head, if_link) {
 		if (tmp_if == ifp) {
 			ifnet_head_done();
+			dlil_if_unlock();
 			return (EEXIST);
 		}
 	}
@@ -2800,6 +2808,7 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 		} else if (ll_addr->sdl_alen != ifp->if_addrlen) {
 			ifnet_lock_done(ifp);
 			ifnet_head_done();
+			dlil_if_unlock();
 			return (EINVAL);
 		}
 	}
@@ -2813,6 +2822,7 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 		    "family module - %d\n", __func__, ifp->if_family);
 		ifnet_lock_done(ifp);
 		ifnet_head_done();
+		dlil_if_unlock();
 		return (ENODEV);
 	}
 
@@ -2822,6 +2832,7 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	if (ifp->if_proto_hash == NULL) {
 		ifnet_lock_done(ifp);
 		ifnet_head_done();
+		dlil_if_unlock();
 		return (ENOBUFS);
 	}
 	bzero(ifp->if_proto_hash, dlif_phash_size);
@@ -2855,6 +2866,7 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 			ifp->if_index = 0;
 			ifnet_lock_done(ifp);
 			ifnet_head_done();
+			dlil_if_unlock();
 			return (ENOBUFS);
 		}
 		ifp->if_index = idx;
@@ -2868,6 +2880,7 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	if (ifa == NULL) {
 		ifnet_lock_done(ifp);
 		ifnet_head_done();
+		dlil_if_unlock();
 		return (ENOBUFS);
 	}
 
@@ -3026,6 +3039,7 @@ ifnet_attach(ifnet_t ifp, const struct sockaddr_dl *ll_addr)
 	}
 	ifnet_lock_done(ifp);
 	lck_mtx_unlock(rnh_lock);
+	dlil_if_unlock();
 
 #if PF
 	/*
@@ -3252,9 +3266,9 @@ ifnet_detach(ifnet_t ifp)
 	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_DETACHING, NULL, 0);
 
 	/* Let worker thread take care of the rest, to avoid reentrancy */
-	lck_mtx_lock(&dlil_ifnet_lock);
+	dlil_if_lock();
 	ifnet_detaching_enqueue(ifp);
-	lck_mtx_unlock(&dlil_ifnet_lock);
+	dlil_if_unlock();
 
 	return (0);
 }
@@ -3262,7 +3276,7 @@ ifnet_detach(ifnet_t ifp)
 static void
 ifnet_detaching_enqueue(struct ifnet *ifp)
 {
-	lck_mtx_assert(&dlil_ifnet_lock, LCK_MTX_ASSERT_OWNED);
+	dlil_if_lock_assert();
 
 	++ifnet_detaching_cnt;
 	VERIFY(ifnet_detaching_cnt != 0);
@@ -3275,7 +3289,7 @@ ifnet_detaching_dequeue(void)
 {
 	struct ifnet *ifp;
 
-	lck_mtx_assert(&dlil_ifnet_lock, LCK_MTX_ASSERT_OWNED);
+	dlil_if_lock_assert();
 
 	ifp = TAILQ_FIRST(&ifnet_detaching_head);
 	VERIFY(ifnet_detaching_cnt != 0 || ifp == NULL);
@@ -3295,7 +3309,7 @@ ifnet_delayed_thread_func(void)
 	struct ifnet *ifp;
 
 	for (;;) {
-		lck_mtx_lock(&dlil_ifnet_lock);
+		dlil_if_lock();
 		while (ifnet_detaching_cnt == 0) {
 			(void) msleep(&ifnet_delayed_run, &dlil_ifnet_lock,
 			    (PZERO - 1), "ifnet_delayed_thread", NULL);
@@ -3305,12 +3319,9 @@ ifnet_delayed_thread_func(void)
 
 		/* Take care of detaching ifnet */
 		ifp = ifnet_detaching_dequeue();
-		if (ifp != NULL) {
-			lck_mtx_unlock(&dlil_ifnet_lock);
+		dlil_if_unlock();
+		if (ifp != NULL)
 			ifnet_detach_final(ifp);
-		} else {
-			lck_mtx_unlock(&dlil_ifnet_lock);
-		}
 	}
 }
 
@@ -3618,7 +3629,7 @@ int dlil_if_acquire(u_int32_t family, const void *uniqueid,
 	void *buf, *base, **pbuf;
 	int ret = 0;
 
-	lck_mtx_lock(&dlil_ifnet_lock);
+	dlil_if_lock();
 	TAILQ_FOREACH(dlifp1, &dlil_ifnet_head, dl_if_link) {
 		ifp1 = (struct ifnet *)dlifp1;
 
@@ -3705,7 +3716,7 @@ int dlil_if_acquire(u_int32_t family, const void *uniqueid,
 	*ifp = ifp1;
 
 end:
-	lck_mtx_unlock(&dlil_ifnet_lock);
+	dlil_if_unlock();
 
 	VERIFY(dlifp1 == NULL || (IS_P2ALIGNED(dlifp1, sizeof (u_int64_t)) &&
 	    IS_P2ALIGNED(&ifp1->if_data, sizeof (u_int64_t))));
@@ -3734,6 +3745,24 @@ dlil_if_release(ifnet_t	ifp)
 	mac_ifnet_label_recycle(ifp);
 #endif
 	ifnet_lock_done(ifp);
+}
+
+__private_extern__ void
+dlil_if_lock(void)
+{
+	lck_mtx_lock(&dlil_ifnet_lock);
+}
+
+__private_extern__ void
+dlil_if_unlock(void)
+{
+	lck_mtx_unlock(&dlil_ifnet_lock);
+}
+
+__private_extern__ void
+dlil_if_lock_assert(void)
+{
+	lck_mtx_assert(&dlil_ifnet_lock, LCK_MTX_ASSERT_OWNED);
 }
 
 __private_extern__ void

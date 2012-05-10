@@ -381,8 +381,7 @@ public:
     void        handleQueueSleepWakeUUID(
                     OSObject *obj);
 
-    IOReturn    setMaintenanceWakeCalendar(
-                    const IOPMCalendarStruct * calendar );
+    IOReturn    setMaintenanceWakeCalendar(const IOPMCalendarStruct * calendar );
 
     // Handle callbacks from IOService::systemWillShutdown()
 	void        acknowledgeSystemWillShutdown( IOService * from );
@@ -406,6 +405,9 @@ public:
 
     bool        systemMessageFilter(
                     void * object, void * arg1, void * arg2, void * arg3 );
+
+    void        publishPMSetting(
+                    const OSSymbol * feature, uint32_t where, uint32_t * featureID );
 
 /*! @function recordPMEvent
     @abstract Logs IOService PM event timing.
@@ -467,6 +469,7 @@ private:
     IOPMPowerStateQueue     *pmPowerStateQueue;
 
     OSArray                 *allowedPMSettings;
+    OSArray                 *noPublishPMSettings;
     PMTraceWorker           *pmTracer;
     PMAssertionsTracker     *pmAssertions;
 
@@ -565,6 +568,7 @@ private:
     unsigned int            logGraphicsClamp        :1;
     unsigned int            darkWakeToSleepASAP     :1;
     unsigned int            darkWakeMaintenance     :1;
+    unsigned int            darkWakeSleepService    :1;
     unsigned int            darkWakePostTickle      :1;
 
     unsigned int            sleepTimerMaintenance   :1;
@@ -585,6 +589,7 @@ private:
 
     IOOptionBits            platformSleepSupport;
     uint32_t                _debugWakeSeconds;
+    uint32_t                _lastDebugWakeSeconds;
 
     queue_head_t            aggressivesQueue;
     thread_call_t           aggressivesThreadCall;
@@ -600,6 +605,10 @@ private:
     IONotifier *            systemCapabilityNotifier;
 
     IOPMTimeline            *timeline;
+
+    IOPMSystemSleepPolicyHandler    _sleepPolicyHandler;
+    void *                          _sleepPolicyTarget;
+    IOPMSystemSleepPolicyVariables *_sleepPolicyVars;
 
 	// IOPMrootDomain internal sleep call
     IOReturn    privateSleepSystem( uint32_t sleepReason );
@@ -647,11 +656,14 @@ private:
 
     void        evaluatePolicy( int stimulus, uint32_t arg = 0 );
 
+    void evaluateAssertions(IOPMDriverAssertionType newAssertions, 
+                                IOPMDriverAssertionType oldAssertions);
+
     void        deregisterPMSettingObject( PMSettingObject * pmso );
 
 #if HIBERNATION
     bool        getSleepOption( const char * key, uint32_t * option );
-    bool        evaluateSystemSleepPolicy( IOPMSystemSleepParameters * p );
+    bool        evaluateSystemSleepPolicy( IOPMSystemSleepParameters * p, int phase );
     void        evaluateSystemSleepPolicyEarly( void );
     void        evaluateSystemSleepPolicyFinal( void );
 #endif /* HIBERNATION */

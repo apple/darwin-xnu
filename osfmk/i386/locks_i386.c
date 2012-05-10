@@ -370,9 +370,10 @@ usimple_lock(
 
 		if (uslock_acquired == FALSE) {
 			uint32_t lock_cpu;
+			uintptr_t lowner = (uintptr_t)l->interlock.lock_data;
 			spinlock_timed_out = l;
-			lock_cpu = spinlock_timeout_NMI((uintptr_t)l->interlock.lock_data);
-			panic("Spinlock acquisition timed out: lock=%p, lock owner thread=0x%lx, current_thread: %p, lock owner active on CPU 0x%x", l, (uintptr_t)l->interlock.lock_data, current_thread(), lock_cpu);
+			lock_cpu = spinlock_timeout_NMI(lowner);
+			panic("Spinlock acquisition timed out: lock=%p, lock owner thread=0x%lx, current_thread: %p, lock owner active on CPU 0x%x, current owner: 0x%lx", l, lowner,  current_thread(), lock_cpu, (uintptr_t)l->interlock.lock_data);
 		}
 	}
 	USLDBG(usld_lock_post(l, pc));

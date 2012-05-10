@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -806,6 +806,10 @@ __private_extern__ void if_attach_ifa(struct ifnet *, struct ifaddr *);
 __private_extern__ void if_attach_link_ifa(struct ifnet *, struct ifaddr *);
 __private_extern__ void if_detach_ifa(struct ifnet *, struct ifaddr *);
 __private_extern__ void if_detach_link_ifa(struct ifnet *, struct ifaddr *);
+
+__private_extern__ void dlil_if_lock(void);
+__private_extern__ void dlil_if_unlock(void);
+__private_extern__ void dlil_if_lock_assert(void);
 
 extern struct ifaddr *ifa_ifwithaddr(const struct sockaddr *);
 extern struct ifaddr *ifa_ifwithaddr_scoped(const struct sockaddr *, unsigned int);

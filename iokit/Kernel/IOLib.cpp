@@ -344,6 +344,7 @@ IOKernelFreePhysical(mach_vm_address_t address, mach_vm_size_t size)
 	kfree((void *)allocationAddress, adjustedSize);
     }
 
+    IOStatisticsAlloc(kIOStatisticsFreeContiguous, size);
 #if IOALLOCDEBUG
     debug_iomalloc_size -= size;
 #endif
@@ -379,12 +380,18 @@ IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxP
         contiguous = (contiguous && (adjustedSize > page_size))
                            || (alignment > page_size);
 
-        if ((!contiguous) && (maxPhys <= 0xFFFFFFFF))
-        {
-            maxPhys = 0;
-            options |= KMA_LOMEM;
-        }
-
+	if (!contiguous)
+	{
+	    if (maxPhys <= 0xFFFFFFFF)
+	    {
+		maxPhys = 0;
+		options |= KMA_LOMEM;
+	    }
+	    else if (gIOLastPage && (atop_64(maxPhys) > gIOLastPage))
+	    {
+		maxPhys = 0;
+	    }
+	}
 	if (contiguous || maxPhys)
 	{
 	    kr = kmem_alloc_contig(kernel_map, &virt, size,
@@ -422,11 +429,12 @@ IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxP
 	    address = 0;
     }
 
-#if IOALLOCDEBUG
     if (address) {
+    IOStatisticsAlloc(kIOStatisticsMallocContiguous, size);
+#if IOALLOCDEBUG
 	debug_iomalloc_size += size;
-    }
 #endif
+    }
 
     return (address);
 }
@@ -490,10 +498,6 @@ void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
     }
     while (false);
 
-	if (address) {
-	    IOStatisticsAlloc(kIOStatisticsMallocContiguous, size);
-    }
-
     return (void *) address;
 }
 
@@ -531,8 +535,6 @@ void IOFreeContiguous(void * _address, vm_size_t size)
     {
 	IOKernelFreePhysical((mach_vm_address_t) address, size);
     }
-
-    IOStatisticsAlloc(kIOStatisticsFreeContiguous, size);
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */

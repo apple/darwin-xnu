@@ -122,8 +122,11 @@
 #include <libkern/kernel_mach_header.h>
 #include <libkern/OSKextLibPrivate.h>
 
+#if	DEBUG
+#define DPRINTF(x...)	kprintf(x)
+#else
 #define DPRINTF(x...)
-//#define DPRINTF(x...)	kprintf(x)
+#endif
 
 static void machine_conf(void);
 
@@ -571,7 +574,7 @@ efi_init(void)
 			(void *) (uintptr_t) mptr->VirtualStart,
 			(void *) vm_addr,
 			(void *) vm_size);
-		pmap_map(vm_addr, phys_addr, phys_addr + round_page(vm_size),
+		pmap_map_bd(vm_addr, phys_addr, phys_addr + round_page(vm_size),
 		     (mptr->Type == kEfiRuntimeServicesCode) ? VM_PROT_READ | VM_PROT_EXECUTE : VM_PROT_READ|VM_PROT_WRITE,
 		     (mptr->Type == EfiMemoryMappedIO)       ? VM_WIMG_IO   : VM_WIMG_USE_DEFAULT);
 	    }
@@ -580,7 +583,7 @@ efi_init(void)
         if (args->Version != kBootArgsVersion2)
             panic("Incompatible boot args version %d revision %d\n", args->Version, args->Revision);
 
-        kprintf("Boot args version %d revision %d mode %d\n", args->Version, args->Revision, args->efiMode);
+	DPRINTF("Boot args version %d revision %d mode %d\n", args->Version, args->Revision, args->efiMode);
         if (args->efiMode == kBootArgsEfiMode64) {
             efi_set_tables_64((EFI_SYSTEM_TABLE_64 *) ml_static_ptovirt(args->efiSystemTable));
         } else {

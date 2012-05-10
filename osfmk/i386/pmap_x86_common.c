@@ -1429,3 +1429,52 @@ pmap_change_wiring(
 
 	PMAP_UNLOCK(map);
 }
+
+/*
+ *	"Backdoor" direct map routine for early mappings.
+ * 	Useful for mapping memory outside the range
+ *      Sets A, D and NC if requested
+ */
+
+vm_offset_t
+pmap_map_bd(
+	vm_offset_t	virt,
+	vm_map_offset_t	start_addr,
+	vm_map_offset_t	end_addr,
+	vm_prot_t	prot,
+	unsigned int	flags)
+{
+	pt_entry_t	template;
+	pt_entry_t	*pte;
+	spl_t           spl;
+	vm_offset_t	base = virt;
+	template = pa_to_pte(start_addr)
+		| INTEL_PTE_REF
+		| INTEL_PTE_MOD
+		| INTEL_PTE_WIRED
+		| INTEL_PTE_VALID;
+
+	if ((flags & (VM_MEM_NOT_CACHEABLE | VM_WIMG_USE_DEFAULT)) == VM_MEM_NOT_CACHEABLE) {
+		template |= INTEL_PTE_NCACHE;
+		if (!(flags & (VM_MEM_GUARDED)))
+			template |= INTEL_PTE_PTA;
+	}
+	if (prot & VM_PROT_WRITE)
+		template |= INTEL_PTE_WRITE;
+
+	while (start_addr < end_addr) {
+	        spl = splhigh();
+		pte = pmap_pte(kernel_pmap, (vm_map_offset_t)virt);
+		if (pte == PT_ENTRY_NULL) {
+			panic("pmap_map_bd: Invalid kernel address\n");
+		}
+		pmap_store_pte(pte, template);
+		splx(spl);
+		pte_increment_pa(template);
+		virt += PAGE_SIZE;
+		start_addr += PAGE_SIZE;
+	}
+	flush_tlb_raw();
+	PMAP_UPDATE_TLBS(kernel_pmap, base, base + end_addr - start_addr);
+	return(virt);
+}

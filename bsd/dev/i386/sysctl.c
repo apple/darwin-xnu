@@ -440,7 +440,6 @@ SYSCTL_PROC(_machdep_cpu_thermal, OID_AUTO, energy_policy,
 	    sizeof(boolean_t),
 	    cpu_thermal, "I", "Energy Efficient Policy Support");
 
-
 SYSCTL_NODE(_machdep_cpu, OID_AUTO, xsave, CTLFLAG_RW|CTLFLAG_LOCKED, 0,
 	"xsave");
 

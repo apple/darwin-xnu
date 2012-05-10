@@ -83,6 +83,13 @@
 #define NOLIST ((struct buf *)0x87654321)
 
 /*
+ * Attributes of an I/O to be used by lower layers
+ */
+struct bufattr {
+	uint64_t ba_flags;	/* flags. Some are only in-use on embedded devices */
+};
+
+/*
  * The buffer header describes an I/O operation in the kernel.
  */
 struct buf {
@@ -128,6 +135,7 @@ struct buf {
 #if CONFIG_PROTECT
 	struct cprotect *b_cpentry; 	/* address of cp_entry, to be passed further down  */
 #endif /* CONFIG_PROTECT */
+	struct bufattr b_attr;
 #ifdef JOE_DEBUG
         void *	b_owner;
         int     b_tag;
@@ -217,6 +225,12 @@ struct buf {
 #define B_CLRBUF	0x01	/* Request allocated buffer be cleared. */
 #define B_SYNC		0x02	/* Do all allocations synchronously. */
 #define B_NOBUFF	0x04	/* Do not allocate struct buf */
+
+/*
+ * ba_flags (Buffer Attribute flags)
+ * Some of these may be in-use only on embedded devices.
+ */
+#define BA_THROTTLED_IO         0x000000002
 
 
 extern int niobuf_headers;		/* The number of IO buffer headers for cluster IO */

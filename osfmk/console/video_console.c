@@ -125,7 +125,15 @@ struct vc_info vinfo;
 /* allowed otherwise we won't use the panic dialog even if it is allowed */
 boolean_t panicDialogDesired;
 
- 
+void noroot_icon_test(void);
+
+int
+vc_display_lzss_icon(uint32_t dst_x,       uint32_t dst_y,
+                     uint32_t image_width, uint32_t image_height,
+                     const uint8_t *compressed_image,
+                     uint32_t       compressed_size, 
+                     const uint8_t *clut);
+
 extern int       disableConsoleOutput;
 static boolean_t gc_enabled     = FALSE;
 static boolean_t gc_initialized = FALSE;
@@ -2138,6 +2146,150 @@ static void vc_blit_rect_30(int x, int y, int bx,
 	    dataPtr += sourceRow - width;
     }
 }
+
+
+/*
+ * Routines to render the lzss image format
+ */
+
+struct lzss_image_state {
+	uint32_t col;
+	uint32_t row;
+	uint32_t width;
+	uint32_t height;
+	uint32_t bytes_per_row;
+	volatile uint32_t * row_start;
+	const uint8_t* clut;
+};
+typedef struct lzss_image_state lzss_image_state;
+
+// returns 0 if OK, 1 if error
+static inline int 
+vc_decompress_lzss_next_pixel (int next_data, lzss_image_state* state) 
+{
+    uint32_t palette_index = 0;
+    uint32_t pixel_value   = 0;
+
+    palette_index = next_data * 3;
+
+    pixel_value = ( (uint32_t) state->clut[palette_index + 0] << 16) 
+                | ( (uint32_t) state->clut[palette_index + 1] << 8) 
+                | ( (uint32_t) state->clut[palette_index + 2]); 
+
+    *(state->row_start + state->col) = pixel_value;
+
+    if (++state->col >= state->width) {
+        state->col = 0;
+        if (++state->row >= state->height) {
+            return 1;
+        }
+        state->row_start = (volatile uint32_t *) (((uintptr_t)state->row_start) + state->bytes_per_row);
+    }
+    return 0;
+}
+
+
+/*
+ * Blit an lzss compressed image to the framebuffer
+ * Assumes 32 bit screen (which is everything we ship at the moment)
+ * The function vc_display_lzss_icon was copied from libkern/mkext.c, then modified.
+ */
+
+/* 
+ * TODO: Does lzss use too much stack? 4096 plus bytes... 
+ * 	Can probably chop it down by 1/2.
+ */
+
+/**************************************************************
+ LZSS.C -- A Data Compression Program
+***************************************************************
+    4/6/1989 Haruhiko Okumura
+    Use, distribute, and modify this program freely.
+    Please send me your improved versions.
+        PC-VAN      SCIENCE
+        NIFTY-Serve PAF01022
+        CompuServe  74050,1022
+
+**************************************************************/
+
+#define N         4096  /* size of ring buffer - must be power of 2 */
+#define F         18    /* upper limit for match_length */
+#define THRESHOLD 2     /* encode string into position and length
+                           if match_length is greater than this */
+
+// returns 0 if OK, 1 if error
+// x and y indicate upper left corner of image location on screen
+int
+vc_display_lzss_icon(uint32_t dst_x,       uint32_t dst_y,
+                     uint32_t image_width, uint32_t image_height,
+                     const uint8_t *compressed_image,
+                     uint32_t       compressed_size, 
+                     const uint8_t *clut)
+{
+    uint32_t* image_start;
+    uint32_t bytes_per_pixel = 4;
+    uint32_t bytes_per_row = vinfo.v_rowbytes;
+
+    image_start = (uint32_t *) (vinfo.v_baseaddr + (dst_y * bytes_per_row) + (dst_x * bytes_per_pixel));
+    
+    lzss_image_state state = {0, 0, image_width, image_height, bytes_per_row, image_start, clut};
+
+    int rval = 0;
+
+    const uint8_t *src = compressed_image;
+    uint32_t srclen = compressed_size;
+
+    /* ring buffer of size N, with extra F-1 bytes to aid string comparison */
+    uint8_t text_buf[N + F - 1];
+    const uint8_t *srcend = src + srclen;
+    int  i, j, k, r, c;
+    unsigned int flags;
+
+    srcend = src + srclen;
+    for (i = 0; i < N - F; i++)
+        text_buf[i] = ' ';
+    r = N - F;
+    flags = 0;
+    for ( ; ; ) {
+        if (((flags >>= 1) & 0x100) == 0) {
+            if (src < srcend) c = *src++; else break;
+            flags = c | 0xFF00;  /* uses higher byte cleverly */
+        }   /* to count eight */
+        if (flags & 1) {
+            if (src < srcend) c = *src++; else break;
+            rval = vc_decompress_lzss_next_pixel(c, &state);
+            if (rval != 0)
+                return rval;
+            text_buf[r++] = c;
+            r &= (N - 1);
+        } else {
+            if (src < srcend) i = *src++; else break;
+            if (src < srcend) j = *src++; else break;
+            i |= ((j & 0xF0) << 4);
+            j  =  (j & 0x0F) + THRESHOLD;
+            for (k = 0; k <= j; k++) {
+                c = text_buf[(i + k) & (N - 1)];
+                rval = vc_decompress_lzss_next_pixel(c, &state);
+                if (rval != 0 )
+                    return rval;
+                text_buf[r++] = c;
+                r &= (N - 1);
+            }
+        }
+    }
+    return 0;
+}
+
+void noroot_icon_test(void) {
+    boolean_t o_vc_progress_enable = vc_progress_enable;
+
+    vc_progress_enable = 1;
+
+    PE_display_icon( 0, "noroot");
+
+    vc_progress_enable = o_vc_progress_enable;
+}
+
 
 void vc_display_icon( vc_progress_element * desc,
 			const unsigned char * data )

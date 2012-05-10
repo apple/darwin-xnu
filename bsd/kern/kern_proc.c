@@ -2679,9 +2679,11 @@ cs_invalid_page(
 	if (p->p_csflags & CS_KILL) {
 		p->p_csflags |= CS_KILLED;
 		proc_unlock(p);
-		printf("CODE SIGNING: cs_invalid_page(0x%llx): "
-		       "p=%d[%s] honoring CS_KILL, final status 0x%x\n",
-		       vaddr, p->p_pid, p->p_comm, p->p_csflags);
+		if (cs_debug) {
+			printf("CODE SIGNING: cs_invalid_page(0x%llx): "
+			       "p=%d[%s] honoring CS_KILL, final status 0x%x\n",
+			       vaddr, p->p_pid, p->p_comm, p->p_csflags);
+		}
 		cs_procs_killed++;
 		psignal(p, SIGKILL);
 		proc_lock(p);
@@ -2690,9 +2692,11 @@ cs_invalid_page(
 	/* CS_HARD means fail the mapping operation so the process stays valid. */
 	if (p->p_csflags & CS_HARD) {
 		proc_unlock(p);
-		printf("CODE SIGNING: cs_invalid_page(0x%llx): "
-		       "p=%d[%s] honoring CS_HARD\n",
-		       vaddr, p->p_pid, p->p_comm);
+		if (cs_debug) {
+			printf("CODE SIGNING: cs_invalid_page(0x%llx): "
+			       "p=%d[%s] honoring CS_HARD\n",
+			       vaddr, p->p_pid, p->p_comm);
+		}
 		retval = 1;
 	} else {
 		if (p->p_csflags & CS_VALID) {

@@ -229,6 +229,9 @@ kvtophys(
 	return ((addr64_t)pa);
 }
 
+extern pt_entry_t *debugger_ptep;
+extern vm_map_offset_t debugger_window_kva;
+
 __private_extern__ void ml_copy_phys(addr64_t src64, addr64_t dst64, vm_size_t bytes) {
 	void *src, *dst;
 
@@ -243,6 +246,36 @@ __private_extern__ void ml_copy_phys(addr64_t src64, addr64_t dst64, vm_size_t b
 #elif defined(__x86_64__)
 	src = PHYSMAP_PTOV(src64);
 	dst = PHYSMAP_PTOV(dst64);
+
+	addr64_t debug_pa = 0;
+
+	/* If either destination or source are outside the
+	 * physical map, establish a physical window onto the target frame.
+	 */
+	assert(physmap_enclosed(src64) || physmap_enclosed(dst64));
+
+	if (physmap_enclosed(src64) == FALSE) {
+		src = (void *)(debugger_window_kva | (src64 & INTEL_OFFMASK));
+		debug_pa = src64 & PG_FRAME;
+	} else if (physmap_enclosed(dst64) == FALSE) {
+		dst = (void *)(debugger_window_kva | (dst64 & INTEL_OFFMASK));
+		debug_pa = dst64 & PG_FRAME;
+	}
+	/* DRK: debugger only routine, we don't bother checking for an
+	 * identical mapping.
+	 */
+	if (debug_pa) {
+		if (debugger_window_kva == 0)
+			panic("%s: invoked in non-debug mode", __FUNCTION__);
+		/* Establish a cache-inhibited physical window; some platforms
+		 * may not cover arbitrary ranges with MTRRs
+		 */
+		pmap_store_pte(debugger_ptep, debug_pa | INTEL_PTE_NCACHE | INTEL_PTE_RW | INTEL_PTE_REF| INTEL_PTE_MOD | INTEL_PTE_VALID);
+		flush_tlb_raw();
+#if	DEBUG
+		kprintf("Remapping debugger physical window at %p to 0x%llx\n", (void *)debugger_window_kva, debug_pa);
+#endif
+	}
 #endif
 	/* ensure we stay within a page */
 	if (((((uint32_t)src64 & (I386_PGBYTES-1)) + bytes) > I386_PGBYTES) || ((((uint32_t)dst64 & (I386_PGBYTES-1)) + bytes) > I386_PGBYTES) ) {
@@ -251,17 +284,17 @@ __private_extern__ void ml_copy_phys(addr64_t src64, addr64_t dst64, vm_size_t b
 
 	switch (bytes) {
 	case 1:
-		*((uint8_t *) dst) = *((uint8_t *) src);
+		*((uint8_t *) dst) = *((volatile uint8_t *) src);
 		break;
 	case 2:
-		*((uint16_t *) dst) = *((uint16_t *) src);
+		*((uint16_t *) dst) = *((volatile uint16_t *) src);
 		break;
 	case 4:
-		*((uint32_t *) dst) = *((uint32_t *) src);
+		*((uint32_t *) dst) = *((volatile uint32_t *) src);
 		break;
 		/* Should perform two 32-bit reads */
 	case 8:
-		*((uint64_t *) dst) = *((uint64_t *) src);
+		*((uint64_t *) dst) = *((volatile uint64_t *) src);
 		break;
 	default:
 		bcopy(src, dst, bytes);

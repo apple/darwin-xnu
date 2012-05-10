@@ -15,11 +15,13 @@ _bdevsw
 _boot
 _bsd_hostname
 _bsd_set_dependency_capable
+_buf_attr
 _buf_create_shadow
 _buf_getcpaddr
 _buf_setcpaddr
 _buf_setfilter
 _buf_shadow
+_bufattr_throttled
 _cdevsw
 _cdevsw_setkqueueok
 _clalloc

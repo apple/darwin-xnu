@@ -1721,6 +1721,7 @@ public:
     void deassertPMDriverCall( IOPMDriverCallEntry * callEntry );
     IOReturn changePowerStateWithOverrideTo( unsigned long ordinal );
     static const char * getIOMessageString( uint32_t msg );
+    IOReturn setIgnoreIdleTimer( bool ignore );
 
 #ifdef __LP64__
     static IOWorkLoop * getPMworkloop( void );

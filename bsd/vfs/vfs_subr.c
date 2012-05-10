@@ -1394,6 +1394,8 @@ found_alias:
 		nvp->v_specflags = 0;
 		nvp->v_speclastr = -1;
 		nvp->v_specinfo->si_opencount = 0;
+		nvp->v_specinfo->si_initted = 0;
+		nvp->v_specinfo->si_throttleable = 0;
 
 		SPECHASH_LOCK();
 		

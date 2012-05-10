@@ -485,7 +485,7 @@ fpu_set_fxstate(
 	struct x86_fx_thread_state *new_ifps;
 	x86_float_state64_t	*state;
 	pcb_t	pcb;
-	size_t	state_size = (((f == x86_AVX_STATE32) || (f == x86_AVX_STATE64)) && (fpu_YMM_present == TRUE)) ? sizeof(struct x86_avx_thread_state) : sizeof(struct x86_fx_thread_state);
+	size_t	state_size = sizeof(struct x86_fx_thread_state);
 	boolean_t	old_valid;
 	if (fp_kind == FP_NO)
 	    return KERN_FAILURE;
@@ -538,11 +538,29 @@ fpu_set_fxstate(
 		    panic("fpu_set_fxstate inconsistency, thread: %p not stopped", thr_act);
 	    }
 #endif
+	    /*
+	     * Clear any reserved bits in the MXCSR to prevent a GPF
+	     * when issuing an FXRSTOR.
+	     */
+
+	    state->fpu_mxcsr &= mxcsr_capability_mask;
 
 	    bcopy((char *)&state->fpu_fcw, (char *)ifps, state_size);
 
 	    if (fpu_YMM_present) {
 		struct x86_avx_thread_state *iavx = (void *) ifps;
+		uint32_t fpu_nyreg = 0;
+
+		if (f == x86_AVX_STATE32)
+			fpu_nyreg = 8;
+		else if (f == x86_AVX_STATE64)
+			fpu_nyreg = 16;
+
+		if (fpu_nyreg) {
+			x86_avx_state64_t *ystate = (x86_avx_state64_t *) state;
+			bcopy(&ystate->__fpu_ymmh0, &iavx->x_YMMH_reg[0][0], fpu_nyreg * sizeof(_STRUCT_XMM_REG));
+		}
+
 		iavx->fp_save_layout = thread_is_64bit(thr_act) ? XSAVE64 : XSAVE32;
 		/* Sanitize XSAVE header */
 		bzero(&iavx->_xh.xhrsvd[0], sizeof(iavx->_xh.xhrsvd));
@@ -561,11 +579,6 @@ fpu_set_fxstate(
 		    set_ts();
 		    ml_set_interrupts_enabled(istate);
 	    }
-		/*
-		 * Clear any reserved bits in the MXCSR to prevent a GPF
-		 * when issuing an FXRSTOR.
-		 */
-	    ifps->fx_MXCSR &= mxcsr_capability_mask;
 
 	    simple_unlock(&pcb->lock);
 
@@ -591,7 +604,7 @@ fpu_get_fxstate(
 	x86_float_state64_t	*state;
 	kern_return_t	ret = KERN_FAILURE;
 	pcb_t	pcb;
-	size_t	state_size = (((f == x86_AVX_STATE32) || (f == x86_AVX_STATE64)) && (fpu_YMM_present == TRUE)) ? sizeof(struct x86_avx_thread_state) : sizeof(struct x86_fx_thread_state);
+	size_t	state_size = sizeof(struct x86_fx_thread_state);
 
 	if (fp_kind == FP_NO)
 		return KERN_FAILURE;
@@ -633,6 +646,21 @@ fpu_get_fxstate(
 	}
 	if (ifps->fp_valid) {
         	bcopy((char *)ifps, (char *)&state->fpu_fcw, state_size);
+		if (fpu_YMM_present) {
+			struct x86_avx_thread_state *iavx = (void *) ifps;
+			uint32_t fpu_nyreg = 0;
+
+			if (f == x86_AVX_STATE32)
+				fpu_nyreg = 8;
+			else if (f == x86_AVX_STATE64)
+				fpu_nyreg = 16;
+
+			if (fpu_nyreg) {
+				x86_avx_state64_t *ystate = (x86_avx_state64_t *) state;
+				bcopy(&iavx->x_YMMH_reg[0][0], &ystate->__fpu_ymmh0, fpu_nyreg * sizeof(_STRUCT_XMM_REG));
+			}
+		}
+
 		ret = KERN_SUCCESS;
 	}
 	simple_unlock(&pcb->lock);

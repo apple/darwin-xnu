@@ -75,4 +75,13 @@ extern void x86_set_pkg_numbers(x86_pkg_t *pkg, x86_lcpu_t *lcpu);
 
 extern x86_topology_parameters_t	topoParms;
 
+extern boolean_t	topo_dbg;
+#define TOPO_DBG(x...)			\
+	do {				\
+		if (topo_dbg)		\
+			kprintf(x);	\
+	} while (0)			\
+
+extern void validate_topology(void);
+
 #endif /* _I386_CPU_THREADS_H_ */

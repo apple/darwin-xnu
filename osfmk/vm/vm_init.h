@@ -34,6 +34,6 @@
 
 extern void vm_mem_bootstrap(void) __attribute__((section("__TEXT, initcode")));
 extern void vm_mem_init(void) __attribute__((section("__TEXT, initcode")));
-extern void vm_map_steal_memory(void);
+extern void vm_map_steal_memory(void) __attribute__((section("__TEXT, initcode")));;
 
 #endif /* VM_INIT_H */

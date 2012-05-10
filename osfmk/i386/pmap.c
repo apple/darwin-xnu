@@ -564,56 +564,6 @@ pmap_map(
 	return(virt);
 }
 
-/*
- *	Back-door routine for mapping kernel VM at initialization.  
- * 	Useful for mapping memory outside the range
- *      Sets no-cache, A, D.
- *	Otherwise like pmap_map.
- */
-vm_offset_t
-pmap_map_bd(
-	vm_offset_t	virt,
-	vm_map_offset_t	start_addr,
-	vm_map_offset_t	end_addr,
-	vm_prot_t	prot,
-	unsigned int	flags)
-{
-	pt_entry_t	template;
-	pt_entry_t      *pte;
-	spl_t           spl;
-
-	template = pa_to_pte(start_addr)
-		| INTEL_PTE_REF
-		| INTEL_PTE_MOD
-		| INTEL_PTE_WIRED
-		| INTEL_PTE_VALID;
-
-	if(flags & (VM_MEM_NOT_CACHEABLE | VM_WIMG_USE_DEFAULT)) {
-	    template |= INTEL_PTE_NCACHE;
-	    if(!(flags & (VM_MEM_GUARDED | VM_WIMG_USE_DEFAULT)))
-		    template |= INTEL_PTE_PTA;
-	}
-
-	if (prot & VM_PROT_WRITE)
-	    template |= INTEL_PTE_WRITE;
-
-	while (start_addr < end_addr) {
-	        spl = splhigh();
-		pte = pmap_pte(kernel_pmap, (vm_map_offset_t)virt);
-		if (pte == PT_ENTRY_NULL) {
-			panic("pmap_map_bd: Invalid kernel address\n");
-		}
-		pmap_store_pte(pte, template);
-		splx(spl);
-		pte_increment_pa(template);
-		virt += PAGE_SIZE;
-		start_addr += PAGE_SIZE;
-	} 
-
-	flush_tlb();
-	return(virt);
-}
-
 extern	pmap_paddr_t		first_avail;
 extern	vm_offset_t		virtual_avail, virtual_end;
 extern	pmap_paddr_t		avail_start, avail_end;
@@ -1060,9 +1010,7 @@ pmap_init(void)
 						if (pn > last_managed_page)
 						        last_managed_page = pn;
 
-						if (pn < lowest_lo)
-							pmap_phys_attributes[pn] |= PHYS_NOENCRYPT;
-						else if (pn >= lowest_hi && pn <= highest_hi)
+						if (pn >= lowest_hi && pn <= highest_hi)
 							pmap_phys_attributes[pn] |= PHYS_NOENCRYPT;
 					}
 				}

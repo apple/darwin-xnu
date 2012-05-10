@@ -137,7 +137,7 @@ pmap_is_noencrypt(ppnum_t pn)
 	pai = ppn_to_pai(pn);
 
 	if (!IS_MANAGED_PAGE(pai))
-		return (TRUE);
+		return (FALSE);
 
 	if (pmap_phys_attributes[pai] & PHYS_NOENCRYPT)
 		return (TRUE);
@@ -171,11 +171,17 @@ pmap_clear_noencrypt(ppnum_t pn)
 	pai = ppn_to_pai(pn);
 
 	if (IS_MANAGED_PAGE(pai)) {
-		LOCK_PVH(pai);
+		/*
+		 * synchronization at VM layer prevents PHYS_NOENCRYPT
+		 * from changing state, so we don't need the lock to inspect
+		 */
+		if (pmap_phys_attributes[pai] & PHYS_NOENCRYPT) {
+			LOCK_PVH(pai);
 
-		pmap_phys_attributes[pai] &= ~PHYS_NOENCRYPT;
+			pmap_phys_attributes[pai] &= ~PHYS_NOENCRYPT;
 
-		UNLOCK_PVH(pai);
+			UNLOCK_PVH(pai);
+		}
 	}
 }
 

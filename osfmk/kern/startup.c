@@ -69,7 +69,6 @@
 #include <debug.h>
 #include <xpr_debug.h>
 #include <mach_kdp.h>
-#include <norma_vm.h>
 
 #include <mach/boolean.h>
 #include <mach/machine.h>
@@ -326,11 +325,6 @@ kernel_bootstrap_thread(void)
 	device_service_create();
 
 	kth_started = 1;
-
-#if MACH_KDP
-	kernel_bootstrap_kprintf("calling kdp_init\n");
-	kdp_init();
-#endif
 		
 #if (defined(__i386__) || defined(__x86_64__)) && NCOPY_WINDOWS > 0
 	/*
@@ -338,6 +332,13 @@ kernel_bootstrap_thread(void)
 	 * This is required before starting kicking off  IOKit.
 	 */
 	cpu_physwindow_init(0);
+#endif
+
+	vm_kernel_reserved_entry_init();
+	
+#if MACH_KDP
+	kernel_bootstrap_kprintf("calling kdp_init\n");
+	kdp_init();
 #endif
 
 #if CONFIG_COUNTERS

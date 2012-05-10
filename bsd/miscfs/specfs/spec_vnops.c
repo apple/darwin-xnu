@@ -154,6 +154,20 @@ struct vnodeopv_desc spec_vnodeop_opv_desc =
 static void set_blocksize(vnode_t, dev_t);
 
 
+struct _throttle_io_info_t {
+	struct timeval	last_normal_IO_timestamp;
+	struct timeval	last_IO_timestamp;
+	SInt32 numthreads_throttling;
+	SInt32 refcnt;
+	SInt32 alloc;
+};
+
+struct _throttle_io_info_t _throttle_io_info[LOWPRI_MAX_NUM_DEV];
+
+static void throttle_info_update_internal(void *throttle_info, int flags, boolean_t isssd);
+
+
+
 /*
  * Trivial lookup routine that always fails.
  */
@@ -259,6 +273,38 @@ spec_open(struct vnop_open_args *ap)
 		}
 
 		devsw_unlock(dev, S_IFCHR);
+
+		if (error == 0 && cdevsw[maj].d_type == D_DISK && !vp->v_un.vu_specinfo->si_initted) {
+			int	isssd = 0;
+			uint64_t throttle_mask = 0;
+			uint32_t devbsdunit = 0;
+
+			if (VNOP_IOCTL(vp, DKIOCGETTHROTTLEMASK, (caddr_t)&throttle_mask, 0, NULL) == 0) {
+			
+				if (VNOP_IOCTL(vp, DKIOCISSOLIDSTATE, (caddr_t)&isssd, 0, ap->a_context) == 0) {
+					/*
+					 * as a reasonable approximation, only use the lowest bit of the mask
+					 * to generate a disk unit number
+					 */
+					devbsdunit = num_trailing_0(throttle_mask);
+
+					vnode_lock(vp);
+					
+					vp->v_un.vu_specinfo->si_isssd = isssd;
+					vp->v_un.vu_specinfo->si_devbsdunit = devbsdunit;
+					vp->v_un.vu_specinfo->si_throttle_mask = throttle_mask;
+					vp->v_un.vu_specinfo->si_throttleable = 1;
+					vp->v_un.vu_specinfo->si_initted = 1;
+
+					vnode_unlock(vp);
+				}
+			}
+			if (vp->v_un.vu_specinfo->si_initted == 0) {
+				vnode_lock(vp);
+				vp->v_un.vu_specinfo->si_initted = 1;
+				vnode_unlock(vp);
+			}
+		}
 		return (error);
 
 	case VBLK:
@@ -357,8 +403,17 @@ spec_read(struct vnop_read_args *ap)
 	switch (vp->v_type) {
 
 	case VCHR:
+                if (cdevsw[major(vp->v_rdev)].d_type == D_DISK && vp->v_un.vu_specinfo->si_throttleable) {
+			struct _throttle_io_info_t *throttle_info;
+
+			throttle_info = &_throttle_io_info[vp->v_un.vu_specinfo->si_devbsdunit];
+
+			throttle_info_update_internal(throttle_info, 0, vp->v_un.vu_specinfo->si_isssd);
+                }
+
 		error = (*cdevsw[major(vp->v_rdev)].d_read)
 			(vp->v_rdev, uio, ap->a_ioflag);
+
 		return (error);
 
 	case VBLK:
@@ -442,8 +497,19 @@ spec_write(struct vnop_write_args *ap)
 	switch (vp->v_type) {
 
 	case VCHR:
+                if (cdevsw[major(vp->v_rdev)].d_type == D_DISK && vp->v_un.vu_specinfo->si_throttleable) {
+			struct _throttle_io_info_t *throttle_info;
+
+			throttle_info = &_throttle_io_info[vp->v_un.vu_specinfo->si_devbsdunit];
+
+			throttle_info_update_internal(throttle_info, 0, vp->v_un.vu_specinfo->si_isssd);
+
+			microuptime(&throttle_info->last_IO_timestamp);
+                }
+
 		error = (*cdevsw[major(vp->v_rdev)].d_write)
 			(vp->v_rdev, uio, ap->a_ioflag);
+
 		return (error);
 
 	case VBLK:
@@ -645,15 +711,6 @@ void IOSleep(int);
 #define LOWPRI_SLEEP_INTERVAL 2
 #endif
 
-struct _throttle_io_info_t {
-	struct timeval	last_normal_IO_timestamp;
-	struct timeval	last_IO_timestamp;
-	SInt32 numthreads_throttling;
-	SInt32 refcnt;
-	SInt32 alloc;
-};
-
-struct _throttle_io_info_t _throttle_io_info[LOWPRI_MAX_NUM_DEV];
 int 	lowpri_IO_initial_window_msecs  = LOWPRI_INITIAL_WINDOW_MSECS;
 int 	lowpri_IO_window_msecs_inc  = LOWPRI_WINDOW_MSECS_INC;
 int 	lowpri_max_window_msecs  = LOWPRI_MAX_WINDOW_MSECS;
@@ -1210,6 +1267,7 @@ spec_strategy(struct vnop_strategy_args *ap)
 
 	if (policy == IOPOL_THROTTLE) {
 		bp->b_flags |= B_THROTTLED_IO;
+		bp->b_attr.ba_flags |= BA_THROTTLED_IO;
 		bp->b_flags &= ~B_PASSIVE;
 	} else if (policy == IOPOL_PASSIVE)
 		bp->b_flags |= B_PASSIVE;

@@ -507,7 +507,12 @@ extern uint32_t		pmap_kernel_text_ps;
 #define ID_MAP_VTOP(x)	((void *)(((uint64_t)(x)) & LOW_4GB_MASK))
 
 #define PHYSMAP_BASE	KVADDR(KERNEL_PHYSMAP_INDEX,0,0,0)
+#define NPHYSMAP (MAX(K64_MAXMEM/GB + 4, 4))
 #define PHYSMAP_PTOV(x)	((void *)(((uint64_t)(x)) + PHYSMAP_BASE))
+
+static inline boolean_t physmap_enclosed(addr64_t a) {
+	return (a < (NPHYSMAP * GB));
+}
 #endif
 
 typedef	volatile long	cpu_set;	/* set of CPUs - must be <= 32 */
@@ -579,10 +584,11 @@ extern void         pmap_put_mapwindow(mapwindow_t *map);
 #endif
 
 typedef struct pmap_memory_regions {
-  ppnum_t base;
-  ppnum_t end;
-  ppnum_t alloc;
-  uint32_t type;
+	ppnum_t base;
+	ppnum_t end;
+	ppnum_t alloc;
+	uint32_t type;
+	uint64_t attribute;
 } pmap_memory_region_t;
 
 extern unsigned pmap_memory_region_count;

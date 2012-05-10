@@ -237,7 +237,8 @@ struct vm_map_entry {
 	/* boolean_t */		superpage_size:3,/* use superpages of a certain size */
 	/* boolean_t */		zero_wired_pages:1, /* zero out the wired pages of this entry it is being deleted without unwiring them */
 	/* boolean_t */		used_for_jit:1,
-	/* unsigned char */	pad:1;		/* available bits */
+	/* boolean_t */	from_reserved_zone:1;	/* Allocated from
+							 * kernel reserved zone	 */
 	unsigned short		wired_count;	/* can be paged if = 0 */
 	unsigned short		user_wired_count; /* for vm_wire */
 };
@@ -457,6 +458,8 @@ struct vm_map_copy {
 
 /* Initialize the module */
 extern void		vm_map_init(void) __attribute__((section("__TEXT, initcode")));
+
+extern void		vm_kernel_reserved_entry_init(void) __attribute__((section("__TEXT, initcode")));
 
 /* Allocate a range in the specified virtual address map and
  * return the entry allocated for that range. */

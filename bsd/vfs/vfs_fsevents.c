@@ -198,15 +198,16 @@ fsevents_internal_init(void)
 	printf("fsevents: failed to initialize the event zone.\n");
     }
 
-    if (zfill(event_zone, MAX_KFS_EVENTS) != MAX_KFS_EVENTS) {
-	printf("fsevents: failed to pre-fill the event zone.\n");	
-    }
-    
     // mark the zone as exhaustible so that it will not
     // ever grow beyond what we initially filled it with
     zone_change(event_zone, Z_EXHAUST, TRUE);
     zone_change(event_zone, Z_COLLECT, FALSE);
     zone_change(event_zone, Z_CALLERACCT, FALSE);
+
+    if (zfill(event_zone, MAX_KFS_EVENTS) < MAX_KFS_EVENTS) {
+	printf("fsevents: failed to pre-fill the event zone.\n");	
+    }
+    
 }
 
 static void

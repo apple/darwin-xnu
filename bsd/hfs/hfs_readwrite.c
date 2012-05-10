@@ -259,6 +259,7 @@ hfs_vnop_write(struct vnop_write_args *ap)
 	int do_snapshot = 1;
 	time_t orig_ctime=VTOC(vp)->c_ctime;
 	int took_truncate_lock = 0;
+	struct rl_entry *invalid_range;
 
 #if HFS_COMPRESSION
 	if ( hfs_file_is_compressed(VTOC(vp), 1) ) { /* 1 == don't take the cnode lock */
@@ -328,7 +329,14 @@ hfs_vnop_write(struct vnop_write_args *ap)
 
 again:
 	/* Protect against a size change. */
-	if (ioflag & IO_APPEND) {
+	/*
+	 * Protect against a size change.
+	 *
+	 * Note: If took_truncate_lock is true, then we previously got the lock shared
+	 * but needed to upgrade to exclusive.  So try getting it exclusive from the
+	 * start.
+	 */
+	if (ioflag & IO_APPEND || took_truncate_lock) {
 		hfs_lock_truncate(cp, HFS_EXCLUSIVE_LOCK);
 	}	
 	else {
@@ -350,17 +358,42 @@ again:
 	writelimit = offset + resid;
 	filebytes = (off_t)fp->ff_blocks * (off_t)hfsmp->blockSize;
 
-	/* If the truncate lock is shared, and if we either have virtual 
-	 * blocks or will need to extend the file, upgrade the truncate 
-	 * to exclusive lock.  If upgrade fails, we lose the lock and 
-	 * have to get exclusive lock again.  Note that we want to
-	 * grab the truncate lock exclusive even if we're not allocating new blocks
-	 * because we could still be growing past the LEOF.
+	/*
+	 * We may need an exclusive truncate lock for several reasons, all
+	 * of which are because we may be writing to a (portion of a) block
+	 * for the first time, and we need to make sure no readers see the
+	 * prior, uninitialized contents of the block.  The cases are:
+	 *
+	 * 1. We have unallocated (delayed allocation) blocks.  We may be
+	 *    allocating new blocks to the file and writing to them.
+	 *    (A more precise check would be whether the range we're writing
+	 *    to contains delayed allocation blocks.)
+	 * 2. We need to extend the file.  The bytes between the old EOF
+	 *    and the new EOF are not yet initialized.  This is important
+	 *    even if we're not allocating new blocks to the file.  If the
+	 *    old EOF and new EOF are in the same block, we still need to
+	 *    protect that range of bytes until they are written for the
+	 *    first time.
+	 * 3. The write overlaps some invalid ranges (delayed zero fill; that
+	 *    part of the file has been allocated, but not yet written).
+	 *
+	 * If we had a shared lock with the above cases, we need to try to upgrade
+	 * to an exclusive lock.  If the upgrade fails, we will lose the shared
+	 * lock, and will need to take the truncate lock again; the took_truncate_lock
+	 * flag will still be set, causing us to try for an exclusive lock next time.
+	 *
+	 * NOTE: Testing for #3 (delayed zero fill) needs to be done while the cnode
+	 * lock is held, since it protects the range lists.
 	 */
 	if ((cp->c_truncatelockowner == HFS_SHARED_OWNER) &&
-	    ((fp->ff_unallocblocks != 0) || (writelimit > origFileSize))) {
-		/* Lock upgrade failed and we lost our shared lock, try again */
+	    ((fp->ff_unallocblocks != 0) ||
+	     (writelimit > origFileSize))) {
 		if (lck_rw_lock_shared_to_exclusive(&cp->c_truncatelock) == FALSE) {
+			/*
+			 * Lock upgrade failed and we lost our shared lock, try again.
+			 * Note: we do not set took_truncate_lock=0 here.  Leaving it
+			 * set to 1 will cause us to try to get the lock exclusive.
+			 */
 			goto again;
 		} 
 		else {
@@ -374,11 +407,28 @@ again:
 	}
 	cnode_locked = 1;
 	
-	if (cp->c_truncatelockowner == HFS_SHARED_OWNER) {
-		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 0)) | DBG_FUNC_START,
-		             (int)offset, uio_resid(uio), (int)fp->ff_size,
-		             (int)filebytes, 0);
+	/*
+	 * Now that we have the cnode lock, see if there are delayed zero fill ranges
+	 * overlapping our write.  If so, we need the truncate lock exclusive (see above).
+	 */
+	if ((cp->c_truncatelockowner == HFS_SHARED_OWNER) &&
+	    (rl_scan(&fp->ff_invalidranges, offset, writelimit-1, &invalid_range) != RL_NOOVERLAP)) {
+	    	/*
+		 * When testing, it appeared that calling lck_rw_lock_shared_to_exclusive() causes
+		 * a deadlock, rather than simply returning failure.  (That is, it apparently does
+		 * not behave like a "try_lock").  Since this condition is rare, just drop the
+		 * cnode lock and try again.  Since took_truncate_lock is set, we will
+		 * automatically take the truncate lock exclusive.
+		 */
+		hfs_unlock(cp);
+		cnode_locked = 0;
+		hfs_unlock_truncate(cp, 0);
+		goto again;
 	}
+	
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 0)) | DBG_FUNC_START,
+		     (int)offset, uio_resid(uio), (int)fp->ff_size,
+		     (int)filebytes, 0);
 
 	/* Check if we do not need to extend the file */
 	if (writelimit <= filebytes) {
@@ -452,7 +502,6 @@ sizeok:
 		off_t inval_end;
 		off_t io_start;
 		int lflag;
-		struct rl_entry *invalid_range;
 
 		if (writelimit > fp->ff_size)
 			filesize = writelimit;
@@ -1966,85 +2015,7 @@ fail_change_next_allocation:
 
 	case F_READBOOTSTRAP:
 	case F_WRITEBOOTSTRAP:
-	{
-	    struct vnode *devvp = NULL;
-	    user_fbootstraptransfer_t *user_bootstrapp;
-	    int devBlockSize;
-	    int error;
-	    uio_t auio;
-	    daddr64_t blockNumber;
-	    u_int32_t blockOffset;
-	    u_int32_t xfersize;
-	    struct buf *bp;
-	    user_fbootstraptransfer_t user_bootstrap;
-
-		if (!vnode_isvroot(vp))
-			return (EINVAL);
-		/* LP64 - when caller is a 64 bit process then we are passed a pointer 
-		 * to a user_fbootstraptransfer_t else we get a pointer to a 
-		 * fbootstraptransfer_t which we munge into a user_fbootstraptransfer_t
-		 */
-		if ((hfsmp->hfs_flags & HFS_READ_ONLY)
-			&& (ap->a_command == F_WRITEBOOTSTRAP)) {
-			return (EROFS);
-		}
-		if (is64bit) {
-			user_bootstrapp = (user_fbootstraptransfer_t *)ap->a_data;
-		}
-		else {
-			user32_fbootstraptransfer_t *bootstrapp = (user32_fbootstraptransfer_t *)ap->a_data;
-			user_bootstrapp = &user_bootstrap;
-			user_bootstrap.fbt_offset = bootstrapp->fbt_offset;
-			user_bootstrap.fbt_length = bootstrapp->fbt_length;
-			user_bootstrap.fbt_buffer = CAST_USER_ADDR_T(bootstrapp->fbt_buffer);
-		}
-
-		if ((user_bootstrapp->fbt_offset < 0) || (user_bootstrapp->fbt_offset > 1024) || 
-				(user_bootstrapp->fbt_length > 1024)) {
-			return EINVAL;
-		}
-
-		if (user_bootstrapp->fbt_offset + user_bootstrapp->fbt_length > 1024) 
-			return EINVAL;
-	    
-		devvp = VTOHFS(vp)->hfs_devvp;
-		auio = uio_create(1, user_bootstrapp->fbt_offset, 
-						  is64bit ? UIO_USERSPACE64 : UIO_USERSPACE32,
-						  (ap->a_command == F_WRITEBOOTSTRAP) ? UIO_WRITE : UIO_READ);
-		uio_addiov(auio, user_bootstrapp->fbt_buffer, user_bootstrapp->fbt_length);
-
-	    devBlockSize = vfs_devblocksize(vnode_mount(vp));
-
-	    while (uio_resid(auio) > 0) {
-			blockNumber = uio_offset(auio) / devBlockSize;
-			error = (int)buf_bread(devvp, blockNumber, devBlockSize, cred, &bp);
-			if (error) {
-				if (bp) buf_brelse(bp);
-				uio_free(auio);
-				return error;
-			};
-
-			blockOffset = uio_offset(auio) % devBlockSize;
-			xfersize = devBlockSize - blockOffset;
-			error = uiomove((caddr_t)buf_dataptr(bp) + blockOffset, (int)xfersize, auio);
-			if (error) {
-				buf_brelse(bp);
-				uio_free(auio);
-				return error;
-			};
-			if (uio_rw(auio) == UIO_WRITE) {
-				error = VNOP_BWRITE(bp);
-				if (error) {
-					uio_free(auio);
-                  	return error;
-				}
-			} else {
-				buf_brelse(bp);
-			};
-		};
-		uio_free(auio);
-	};
-	return 0;
+		return 0;
 
 	case _IOC(IOC_OUT,'h', 4, 0):     /* Create date in local time */
 	{

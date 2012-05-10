@@ -136,7 +136,7 @@ static vm_page_t	vm_page_grab_fictitious_common(ppnum_t phys_addr);
 
 vm_offset_t virtual_space_start;
 vm_offset_t virtual_space_end;
-int	vm_page_pages;
+uint32_t	vm_page_pages;
 
 /*
  *	The vm_page_lookup() routine, which provides for fast
@@ -1473,6 +1473,14 @@ vm_page_init(
 	boolean_t	lopage)
 {
 	assert(phys_page);
+
+#if	DEBUG
+	if ((phys_page != vm_page_fictitious_addr) && (phys_page != vm_page_guard_addr)) {
+		if (!(pmap_valid_page(phys_page))) {
+			panic("vm_page_init: non-DRAM phys_page 0x%x\n", phys_page);
+		}
+	}
+#endif
 	*mem = vm_page_template;
 	mem->phys_page = phys_page;
 #if 0
@@ -1628,7 +1636,7 @@ void vm_page_more_fictitious(void)
 		vm_page_wait(THREAD_UNINT);
 		return;
 	}
-	zcram(vm_page_zone, (void *) addr, PAGE_SIZE);
+	zcram(vm_page_zone, addr, PAGE_SIZE);
 
 	lck_mtx_unlock(&vm_page_alloc_lock);
 }
@@ -1717,6 +1725,7 @@ vm_page_grablo(void)
 	assert(!mem->free);
 	assert(!mem->pmapped);
 	assert(!mem->wpmapped);
+	assert(!pmap_is_noencrypt(mem->phys_page));
 
 	mem->pageq.next = NULL;
 	mem->pageq.prev = NULL;
@@ -1779,6 +1788,7 @@ return_page_from_cpu_list:
 		assert(!mem->inactive);
 		assert(!mem->throttled);
 		assert(!mem->speculative);
+		assert(!pmap_is_noencrypt(mem->phys_page));
 
 		return mem;
 	}
@@ -1895,6 +1905,7 @@ return_page_from_cpu_list:
 			assert(!mem->encrypted);
 			assert(!mem->pmapped);
 			assert(!mem->wpmapped);
+			assert(!pmap_is_noencrypt(mem->phys_page));
 		}
 		PROCESSOR_DATA(current_processor(), free_pages) = head->pageq.next;
 		PROCESSOR_DATA(current_processor(), start_color) = color;
@@ -1953,6 +1964,8 @@ vm_page_release(
 	}
 //	dbgLog(mem->phys_page, vm_page_free_count, vm_page_wire_count, 5);	/* (TEST/DEBUG) */
 
+
+	pmap_clear_noencrypt(mem->phys_page);
 
 	lck_mtx_lock_spin(&vm_page_queue_free_lock);
 #if DEBUG
@@ -2372,6 +2385,8 @@ vm_page_free_list(
 						  vm_page_t,
 						  pageq);
 				pg_count++;
+
+				pmap_clear_noencrypt(mem->phys_page);
 			}
 		} else {
 			assert(mem->phys_page == vm_page_fictitious_addr ||
@@ -4776,7 +4791,7 @@ hibernate_flush_memory()
 			
 			sync_internal();
 			(void)(*consider_buffer_cache_collect)(1);
-			consider_zone_gc(1);
+			consider_zone_gc(TRUE);
 
 			KERNEL_DEBUG_CONSTANT(IOKDBG_CODE(DBG_HIBERNATE, 7) | DBG_FUNC_END, vm_page_wire_count, 0, 0, 0, 0);
 		}

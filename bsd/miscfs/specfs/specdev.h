@@ -83,6 +83,12 @@ struct specinfo {
 	daddr_t	si_size;		/* device block size in bytes */
 	daddr64_t	si_lastr;	/* last read blkno (read-ahead) */
 	u_int64_t	si_devsize;	/* actual device size in bytes */
+
+	u_int8_t	si_initted;
+	u_int8_t	si_throttleable;
+	u_int16_t	si_isssd;
+	u_int32_t	si_devbsdunit;
+	u_int64_t	si_throttle_mask;
 };
 /*
  * Exported shorthand

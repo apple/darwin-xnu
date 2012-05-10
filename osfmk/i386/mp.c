@@ -147,7 +147,7 @@ static volatile long	mp_rv_complete __attribute__((aligned(64)));
 volatile	uint64_t	debugger_entry_time;
 volatile	uint64_t	debugger_exit_time;
 #if MACH_KDP
-
+#include <kdp/kdp.h>
 extern int kdp_snapshot;
 static struct _kdp_xcpu_call_func {
 	kdp_x86_xcpu_func_t func;
@@ -579,12 +579,12 @@ NMIInterruptHandler(x86_saved_state_t *regs)
 			goto NMExit;
 
 	if (spinlock_timed_out) {
-		char pstr[160];
+		char pstr[192];
 		snprintf(&pstr[0], sizeof(pstr), "Panic(CPU %d): NMIPI for spinlock acquisition timeout, spinlock: %p, spinlock owner: %p, current_thread: %p, spinlock_owner_cpu: 0x%x\n", cpu_number(), spinlock_timed_out, (void *) spinlock_timed_out->interlock.lock_data, current_thread(), spinlock_owner_cpu);
 		panic_i386_backtrace(stackptr, 64, &pstr[0], TRUE, regs);
 	} else if (pmap_tlb_flush_timeout == TRUE) {
 		char pstr[128];
-		snprintf(&pstr[0], sizeof(pstr), "Panic(CPU %d): Unresponsive processor (this CPU did not acknowledge interrupts) TLB state:%d\n", cpu_number(), current_cpu_datap()->cpu_tlb_invalid);
+		snprintf(&pstr[0], sizeof(pstr), "Panic(CPU %d): Unresponsive processor (this CPU did not acknowledge interrupts) TLB state:0x%x\n", cpu_number(), current_cpu_datap()->cpu_tlb_invalid);
 		panic_i386_backtrace(stackptr, 48, &pstr[0], TRUE, regs);
 	}
 
@@ -1315,6 +1315,7 @@ i386_activate_cpu(void)
 	cdp->cpu_running = TRUE;
 	started_cpu();
 	simple_unlock(&x86_topo_lock);
+	flush_tlb_raw();
 }
 
 extern void etimer_timer_expire(void	*arg);
@@ -1372,6 +1373,13 @@ mp_kdp_enter(void)
 	 */
 	mp_kdp_state = ml_set_interrupts_enabled(FALSE);
 	my_cpu = cpu_number();
+
+	if (my_cpu == (unsigned) debugger_cpu) {
+		kprintf("\n\nRECURSIVE DEBUGGER ENTRY DETECTED\n\n");
+		kdp_reset();
+		return;
+	}
+
 	cpu_datap(my_cpu)->debugger_entry_time = mach_absolute_time();
 	simple_lock(&mp_kdp_lock);
 

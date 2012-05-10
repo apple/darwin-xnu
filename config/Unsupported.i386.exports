@@ -57,7 +57,6 @@ _pffinddomain
 _pffindproto
 _pmCPUControl
 _pmKextRegister
-_pm_init_lock
 _pru_abort_notsupp
 _pru_accept_notsupp
 _pru_bind_notsupp
@@ -124,3 +123,4 @@ _udbinfo
 _hibernate_vm_lock
 _hibernate_vm_unlock
 _clock_get_system_value
+_PE_state

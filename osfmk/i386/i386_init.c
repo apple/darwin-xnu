@@ -199,7 +199,7 @@ x86_64_post_sleep(uint64_t new_cr3)
 // Set up the physical mapping - NPHYSMAP GB of memory mapped at a high address
 // NPHYSMAP is determined by the maximum supported RAM size plus 4GB to account
 // the PCI hole (which is less 4GB but not more).
-#define NPHYSMAP MAX(K64_MAXMEM/GB + 4, 4)
+
 // Compile-time guard:
 extern int maxphymapsupported[NPHYSMAP <= PTE_PER_PAGE ? 1 : -1];
 static void
@@ -335,9 +335,22 @@ vstart(vm_offset_t boot_args_start)
 
 		cpu = 0;
 		cpu_data_alloc(TRUE);
+
+				
+		/*
+		 * Setup boot args given the physical start address.
+		 */
+		kernelBootArgs = (boot_args *)
+		    ml_static_ptovirt(boot_args_start);
+		DBG("i386_init(0x%lx) kernelBootArgs=%p\n",
+		    (unsigned long)boot_args_start, kernelBootArgs);
+
+		PE_init_platform(FALSE, kernelBootArgs);
+		postcode(PE_INIT_PLATFORM_D);
 	} else {
 		/* Find our logical cpu number */
 		cpu = lapic_to_cpu[(LAPIC_READ(ID)>>LAPIC_ID_SHIFT) & LAPIC_ID_MASK];
+		DBG("CPU: %d, GSBASE initial value: 0x%llx\n", cpu, rdmsr64(MSR_IA32_GS_BASE));
 #ifdef	__x86_64__
 		if (cpuid_extfeatures() & CPUID_EXTFEATURE_XD) {
 			wrmsr64(MSR_IA32_EFER, rdmsr64(MSR_IA32_EFER) | MSR_IA32_EFER_NXE);
@@ -373,7 +386,7 @@ vstart(vm_offset_t boot_args_start)
 	}
 
 	if (is_boot_cpu)
-		i386_init(boot_args_start);
+		i386_init();
 	else
 		i386_init_slave();
 	/*NOTREACHED*/
@@ -406,7 +419,7 @@ vstart(vm_offset_t boot_args_start)
  *	set up.
  */
 void
-i386_init(vm_offset_t boot_args_start)
+i386_init(void)
 {
 	unsigned int	maxmem;
 	uint64_t	maxmemtouse;
@@ -423,16 +436,6 @@ i386_init(vm_offset_t boot_args_start)
 	mca_cpu_init();
 #endif
 
-	/*
-	 * Setup boot args given the physical start address.
-	 */
-	kernelBootArgs = (boot_args *)
-		ml_static_ptovirt(boot_args_start);
-	DBG("i386_init(0x%lx) kernelBootArgs=%p\n",
-		(unsigned long)boot_args_start, kernelBootArgs);
-
-	PE_init_platform(FALSE, kernelBootArgs);
-	postcode(PE_INIT_PLATFORM_D);
 
 	kernel_early_bootstrap();
 

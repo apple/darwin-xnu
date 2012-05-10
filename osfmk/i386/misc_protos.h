@@ -38,7 +38,8 @@ struct boot_args;
 struct cpu_data;
 
 extern void		vstart(vm_offset_t);
-extern void		i386_init(vm_offset_t);
+extern void		i386_init(void);
+
 extern void		i386_vm_init(
 				uint64_t,
 				boolean_t,

@@ -792,7 +792,7 @@ IOPolledFileOpen( const char * filename, IOBufferMemoryDescriptor * ioBuffer,
         HIBLOG("error 0x%x opening hibernation file\n", err);
 	if (vars->fileRef)
 	{
-	    kern_close_file_for_direct_io(vars->fileRef, 0, 0, 0);
+	    kern_close_file_for_direct_io(vars->fileRef, 0, 0, 0, 0, 0);
 	    gIOHibernateFileRef = vars->fileRef = NULL;
 	}
     }
@@ -897,7 +897,7 @@ IOPolledFileWrite(IOPolledFileIOVars * vars,
             {
                 AbsoluteTime startTime, endTime;
 
-                uint32_t encryptLen, encryptStart;
+                uint64_t encryptLen, encryptStart;
                 encryptLen = vars->position - vars->encryptStart;
                 if (encryptLen > length)
                     encryptLen = length;
@@ -1713,7 +1713,7 @@ IOHibernateSystemWake(void)
     if (vars->ioBuffer)
 	vars->ioBuffer->release();
     bzero(&gIOHibernateHandoffPages[0], gIOHibernateHandoffPageCount * sizeof(gIOHibernateHandoffPages[0]));
-    if (vars->handoffBuffer)
+    if (vars->handoffBuffer && (kIOHibernateStateWakingFromHibernate == gIOHibernateState))
     {
 	IOHibernateHandoff * handoff;
 	bool done = false;
@@ -1721,7 +1721,7 @@ IOHibernateSystemWake(void)
 	     !done;
 	     handoff = (IOHibernateHandoff *) &handoff->data[handoff->bytecount])
 	{
-//	    HIBPRINT("handoff %p, %x, %x\n", handoff, handoff->type, handoff->bytecount);
+	    HIBPRINT("handoff %p, %x, %x\n", handoff, handoff->type, handoff->bytecount);
 	    uint8_t * data = &handoff->data[0];
 	    switch (handoff->type)
 	    {
@@ -1772,7 +1772,9 @@ IOHibernateSystemPostWake(void)
 	gIOHibernateCurrentHeader->signature = kIOHibernateHeaderInvalidSignature;
 	kern_close_file_for_direct_io(gIOHibernateFileRef,
 				       0, (caddr_t) gIOHibernateCurrentHeader, 
-				       sizeof(IOHibernateImageHeader));
+				       sizeof(IOHibernateImageHeader),
+				       sizeof(IOHibernateImageHeader),
+				       gIOHibernateCurrentHeader->imageSize);
         gIOHibernateFileRef = 0;
     }
     return (kIOReturnSuccess);
@@ -2198,7 +2200,7 @@ hibernate_write_image(void)
         {
             if (needEncrypt && (kEncrypt & pageType))
             {
-                vars->fileVars->encryptStart = (vars->fileVars->position & ~(AES_BLOCK_SIZE - 1));
+                vars->fileVars->encryptStart = (vars->fileVars->position & ~(((uint64_t)AES_BLOCK_SIZE) - 1));
                 vars->fileVars->encryptEnd   = UINT64_MAX;
                 HIBLOG("encryptStart %qx\n", vars->fileVars->encryptStart);
 
@@ -2338,8 +2340,7 @@ hibernate_write_image(void)
 
             if ((kEncrypt & pageType))
             {
-                vars->fileVars->encryptEnd = (vars->fileVars->position + AES_BLOCK_SIZE - 1) 
-                                              & ~(AES_BLOCK_SIZE - 1);
+                vars->fileVars->encryptEnd = ((vars->fileVars->position + 511) & ~511ULL);
                 HIBLOG("encryptEnd %qx\n", vars->fileVars->encryptEnd);
             }
 
@@ -2352,11 +2353,14 @@ hibernate_write_image(void)
             }
             if (kWiredClear == pageType)
             {
+		// enlarge wired image for test
+//              err = IOPolledFileWrite(vars->fileVars, 0, 0x60000000, cryptvars);
+
                 // end wired image
                 header->encryptStart = vars->fileVars->encryptStart;
                 header->encryptEnd   = vars->fileVars->encryptEnd;
                 image1Size = vars->fileVars->position;
-                HIBLOG("image1Size %qd, encryptStart1 %qx, End1 %qx\n",
+                HIBLOG("image1Size 0x%qx, encryptStart1 0x%qx, End1 0x%qx\n",
                         image1Size, header->encryptStart, header->encryptEnd);
             }
         }
@@ -2736,8 +2740,8 @@ hibernate_machine_init(void)
 	    }
 	}
     }
-    if (pagesDone == gIOHibernateCurrentHeader->actualUncompressedPages)
-	err = kIOReturnLockedRead;
+    if ((kIOReturnSuccess == err) && (pagesDone == gIOHibernateCurrentHeader->actualUncompressedPages))
+    	err = kIOReturnLockedRead;
 
     if (kIOReturnSuccess != err)
 	panic("Hibernate restore error %x", err);

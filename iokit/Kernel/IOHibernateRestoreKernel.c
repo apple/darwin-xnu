@@ -201,7 +201,12 @@ enum
     kIOHibernateRestoreCodeWakeMapSize	    = 'wkms',
     kIOHibernateRestoreCodeConflictPage	    = 'cfpg',
     kIOHibernateRestoreCodeConflictSource   = 'cfsr',
-    kIOHibernateRestoreCodeNoMemory         = 'nomm'
+    kIOHibernateRestoreCodeNoMemory         = 'nomm',
+    kIOHibernateRestoreCodeTag              = 'tag ',
+    kIOHibernateRestoreCodeSignature        = 'sign',
+    kIOHibernateRestoreCodeMapVirt          = 'mapV',
+    kIOHibernateRestoreCodeHandoffPages     = 'hand',
+    kIOHibernateRestoreCodeHandoffCount     = 'hndc',
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -335,6 +340,8 @@ hibernate_page_bitmap_count(hibernate_bitmap_t * bitmap, uint32_t set, uint32_t 
 	}
     }
 
+    if ((page + count) > (bitmap->last_page + 1)) count = (bitmap->last_page + 1) - page;
+
     return (count);
 }
 
@@ -403,12 +410,15 @@ bcopy_internal(const void *src, void *dst, uint32_t len)
 #define C_ASSERT(e) typedef char    __C_ASSERT__[(e) ? 1 : -1]
 
 long 
-hibernate_kernel_entrypoint(IOHibernateImageHeader * header, 
-                            void * p2, void * p3, void * p4)
+hibernate_kernel_entrypoint(uint32_t p1, 
+                            uint32_t p2, uint32_t p3, uint32_t p4)
 {
+    uint64_t headerPhys;
+    uint64_t mapPhys;
+    uint64_t srcPhys;
+    uint64_t imageReadPhys;
+    uint64_t pageIndexPhys;
     uint32_t idx;
-    uint32_t * src;
-    uint32_t * imageReadPos;
     uint32_t * pageIndexSource;
     hibernate_page_list_t * map;
     uint32_t stage;
@@ -418,8 +428,10 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
     uint32_t conflictCount;
     uint32_t compressedSize;
     uint32_t uncompressedPages;
-    uint32_t copyPageListHead;
+    uint32_t copyPageListHeadPage;
+    uint32_t pageListPage;
     uint32_t * copyPageList;
+    uint32_t * src;
     uint32_t copyPageIndex;
     uint32_t sum;
     uint32_t pageSum;
@@ -432,37 +444,43 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
 
     C_ASSERT(sizeof(IOHibernateImageHeader) == 512);
 
+    headerPhys = ptoa_64(p1);
+
     if ((kIOHibernateDebugRestoreLogs & gIOHibernateDebugFlags) && !debug_probe())
 	gIOHibernateDebugFlags &= ~kIOHibernateDebugRestoreLogs;
 
-    debug_code(kIOHibernateRestoreCodeImageStart, (uintptr_t) header);
+    debug_code(kIOHibernateRestoreCodeImageStart, headerPhys);
 
-    bcopy_internal(header, 
-                gIOHibernateCurrentHeader, 
-                sizeof(IOHibernateImageHeader));
+    bcopy_internal((void *) pal_hib_map(IMAGE_AREA, headerPhys), 
+                   gIOHibernateCurrentHeader, 
+                   sizeof(IOHibernateImageHeader));
 
-    map = (hibernate_page_list_t *)
-                (((uintptr_t) &header->fileExtentMap[0]) 
-                            + header->fileExtentMapSize 
-                            + ptoa_32(header->restore1PageCount)
-                            + header->previewSize);
+    debug_code(kIOHibernateRestoreCodeSignature, gIOHibernateCurrentHeader->signature);
 
-    lastImagePage = atop_32(((uintptr_t) header) + header->image1Size);
+    mapPhys = headerPhys
+             + (offsetof(IOHibernateImageHeader, fileExtentMap)
+	     + gIOHibernateCurrentHeader->fileExtentMapSize 
+	     + ptoa_32(gIOHibernateCurrentHeader->restore1PageCount)
+	     + gIOHibernateCurrentHeader->previewSize);
 
-    lastMapPage = atop_32(((uintptr_t) map) + header->bitmapSize);
+    map = (hibernate_page_list_t *) pal_hib_map(BITMAP_AREA, mapPhys);
 
-    handoffPages     = header->handoffPages;
-    handoffPageCount = header->handoffPageCount;
+    lastImagePage = atop_64(headerPhys + gIOHibernateCurrentHeader->image1Size);
+    lastMapPage = atop_64(mapPhys + gIOHibernateCurrentHeader->bitmapSize);
+
+    handoffPages     = gIOHibernateCurrentHeader->handoffPages;
+    handoffPageCount = gIOHibernateCurrentHeader->handoffPageCount;
 
     debug_code(kIOHibernateRestoreCodeImageEnd,       ptoa_64(lastImagePage));
-    debug_code(kIOHibernateRestoreCodeMapStart,       (uintptr_t) map);
+    debug_code(kIOHibernateRestoreCodeMapStart,       mapPhys);
     debug_code(kIOHibernateRestoreCodeMapEnd,         ptoa_64(lastMapPage));
 
-    debug_code('hand', ptoa_64(handoffPages));
-    debug_code('hnde', ptoa_64(handoffPageCount));
+    debug_code(kIOHibernateRestoreCodeMapVirt, (uintptr_t) map);
+    debug_code(kIOHibernateRestoreCodeHandoffPages, ptoa_64(handoffPages));
+    debug_code(kIOHibernateRestoreCodeHandoffCount, handoffPageCount);
 
     // knock all the image pages to be used out of free map
-    for (ppnum = atop_32((uintptr_t) header); ppnum <= lastImagePage; ppnum++)
+    for (ppnum = atop_64(headerPhys); ppnum <= lastImagePage; ppnum++)
     {
 	hibernate_page_bitset(map, FALSE, ppnum);
     }
@@ -475,40 +493,39 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
     nextFree = 0;
     hibernate_page_list_grab(map, &nextFree);
 
-    pal_hib_window_setup(hibernate_page_list_grab(map, &nextFree));
-
-    sum = header->actualRestore1Sum;
-    gIOHibernateCurrentHeader->diag[0] = (uint32_t)(uintptr_t) header;
+    sum = gIOHibernateCurrentHeader->actualRestore1Sum;
+    gIOHibernateCurrentHeader->diag[0] = atop_64(headerPhys);
     gIOHibernateCurrentHeader->diag[1] = sum;
 
-    uncompressedPages = 0;
-    conflictCount     = 0;
-    copyPageListHead  = 0;
-    copyPageList      = 0;
-    copyPageIndex     = PAGE_SIZE >> 2;
+    uncompressedPages    = 0;
+    conflictCount        = 0;
+    copyPageListHeadPage = 0;
+    copyPageList         = 0;
+    copyPageIndex        = PAGE_SIZE >> 2;
 
-    compressedSize    = PAGE_SIZE;
-    stage             = 2;
-    count             = 0;
-    src               = NULL;
+    compressedSize       = PAGE_SIZE;
+    stage                = 2;
+    count                = 0;
+    srcPhys              = 0;
 
     if (gIOHibernateCurrentHeader->previewSize)
     {
-	pageIndexSource = (uint32_t *)
-		     (((uintptr_t) &header->fileExtentMap[0]) 
-				 + gIOHibernateCurrentHeader->fileExtentMapSize 
-				 + ptoa_32(gIOHibernateCurrentHeader->restore1PageCount));
-	imageReadPos = (uint32_t *) (((uintptr_t) pageIndexSource) + gIOHibernateCurrentHeader->previewPageListSize);
-	lastPageIndexPage = atop_32((uintptr_t) imageReadPos);
+	pageIndexPhys     = headerPhys
+	                   + (offsetof(IOHibernateImageHeader, fileExtentMap)
+			   + gIOHibernateCurrentHeader->fileExtentMapSize 
+			   + ptoa_32(gIOHibernateCurrentHeader->restore1PageCount));
+	imageReadPhys     = (pageIndexPhys + gIOHibernateCurrentHeader->previewPageListSize);
+	lastPageIndexPage = atop_64(imageReadPhys);
+	pageIndexSource   = (uint32_t *) pal_hib_map(IMAGE2_AREA, pageIndexPhys);
     }
     else
     {
-	pageIndexSource   = NULL;
+	pageIndexPhys     = 0;
 	lastPageIndexPage = 0;
-	imageReadPos =  (uint32_t *) (((uintptr_t) map) + gIOHibernateCurrentHeader->bitmapSize);
+	imageReadPhys     = (mapPhys + gIOHibernateCurrentHeader->bitmapSize);
     }
 
-    debug_code(kIOHibernateRestoreCodePageIndexStart, (uintptr_t) pageIndexSource);
+    debug_code(kIOHibernateRestoreCodePageIndexStart, pageIndexPhys);
     debug_code(kIOHibernateRestoreCodePageIndexEnd,   ptoa_64(lastPageIndexPage));
 
     while (1)
@@ -517,38 +534,35 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
 	{
 	    case 2:
 		// copy handoff data
-		count = src ? 0 : handoffPageCount;
+		count = srcPhys ? 0 : handoffPageCount;
 		if (!count)
 		    break;
-		if (count > gIOHibernateHandoffPageCount)
-		    count = gIOHibernateHandoffPageCount;
-		src = (uint32_t *) (uintptr_t) ptoa_64(handoffPages);
+		if (count > gIOHibernateHandoffPageCount) count = gIOHibernateHandoffPageCount;
+		srcPhys = ptoa_64(handoffPages);
 		break;
 	
 	    case 1:
 		// copy pageIndexSource pages == preview image data
-		if (!src)
+		if (!srcPhys)
 		{
-		    if (!pageIndexSource)
-		    	break;
-		    src = imageReadPos;
+		    if (!pageIndexPhys) break;
+		    srcPhys = imageReadPhys;
 		}
 		ppnum = pageIndexSource[0];
 		count = pageIndexSource[1];
 		pageIndexSource += 2;
-		imageReadPos = src;
+		pageIndexPhys   += 2 * sizeof(pageIndexSource[0]);
+		imageReadPhys = srcPhys;
 		break;
 
 	    case 0:
 		// copy pages
-		if (!src)
-		{
-		    src =  (uint32_t *) (((uintptr_t) map) + gIOHibernateCurrentHeader->bitmapSize);
-		}
+		if (!srcPhys) srcPhys = (mapPhys + gIOHibernateCurrentHeader->bitmapSize);
+		src = (uint32_t *) pal_hib_map(IMAGE_AREA, srcPhys);
 		ppnum = src[0];
 		count = src[1];
-		src += 2;
-		imageReadPos = src;
+		srcPhys += 2 * sizeof(*src);
+		imageReadPhys = srcPhys;
 		break;
 	}
 
@@ -558,7 +572,7 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
 	    if (!stage)
 	        break;
 	    stage--;
-	    src = NULL;
+	    srcPhys = 0;
 	    continue;
 	}
 
@@ -567,23 +581,26 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
 	    uint32_t tag;
 	    int conflicts;
 
-	    if (2 == stage)
-		ppnum = gIOHibernateHandoffPages[page];
+	    src = (uint32_t *) pal_hib_map(IMAGE_AREA, srcPhys);
+
+	    if (2 == stage) ppnum = gIOHibernateHandoffPages[page];
 	    else if (!stage)
 	    {
 		tag = *src++;
+//		debug_code(kIOHibernateRestoreCodeTag, (uintptr_t) tag);
+		srcPhys += sizeof(*src);
 		compressedSize = kIOHibernateTagLength & tag;
 	    }
 
-	    conflicts = (ppnum >= atop_32((uintptr_t) map)) && (ppnum <= lastMapPage);
+	    conflicts = (ppnum >= atop_64(mapPhys)) && (ppnum <= lastMapPage);
 
-	    conflicts |= ((ppnum >= atop_32((uintptr_t) imageReadPos)) && (ppnum <= lastImagePage));
+	    conflicts |= ((ppnum >= atop_64(imageReadPhys)) && (ppnum <= lastImagePage));
 
 	    if (stage >= 2)
- 		conflicts |= ((ppnum >= atop_32((uintptr_t) src)) && (ppnum <= (handoffPages + handoffPageCount - 1)));
+ 		conflicts |= ((ppnum >= atop_64(srcPhys)) && (ppnum <= (handoffPages + handoffPageCount - 1)));
 
 	    if (stage >= 1)
- 		conflicts |= ((ppnum >= atop_32((uintptr_t) pageIndexSource)) && (ppnum <= lastPageIndexPage));
+ 		conflicts |= ((ppnum >= atop_64(pageIndexPhys)) && (ppnum <= lastPageIndexPage));
 
 	    if (!conflicts)
 	    {
@@ -610,15 +627,15 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
 		if (copyPageIndex > ((PAGE_SIZE >> 2) - 3))
 		{
 		    // alloc new copy list page
-		    uint32_t pageListPage = hibernate_page_list_grab(map, &nextFree);
+		    pageListPage = hibernate_page_list_grab(map, &nextFree);
 		    // link to current
 		    if (copyPageList) {
 			    copyPageList[1] = pageListPage;
 		    } else {
-			    copyPageListHead = pageListPage;
+			    copyPageListHeadPage = pageListPage;
 		    }
 		    copyPageList = (uint32_t *)pal_hib_map(SRC_COPY_AREA, 
-				    ptoa_32(pageListPage));
+				    ptoa_64(pageListPage));
 		    copyPageList[1] = 0;
 		    copyPageIndex = 2;
 		}
@@ -628,11 +645,12 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
 		copyPageList[copyPageIndex++] = (compressedSize | (stage << 24));
 		copyPageList[0] = copyPageIndex;
 
-		dst = (uint32_t *)pal_hib_map(DEST_COPY_AREA, ptoa_32(bufferPage));
+		dst = (uint32_t *)pal_hib_map(DEST_COPY_AREA, ptoa_64(bufferPage));
 		for (idx = 0; idx < ((compressedSize + 3) >> 2); idx++)
 			dst[idx] = src[idx];
 	    }
-	    src += ((compressedSize + 3) >> 2);
+	    srcPhys += ((compressedSize + 3) & ~3);
+	    src     += ((compressedSize + 3) >> 2);
 	}
     }
 
@@ -641,16 +659,15 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
 
     // -- copy back conflicts
 
-    copyPageList = (uint32_t *)(uintptr_t) ptoa_32(copyPageListHead);
-
-    while (copyPageList)
+    pageListPage = copyPageListHeadPage;
+    while (pageListPage)
     {
-	copyPageList = (uint32_t *)pal_hib_map(COPY_PAGE_AREA, (uintptr_t)copyPageList);
+	copyPageList = (uint32_t *)pal_hib_map(COPY_PAGE_AREA, ptoa_64(pageListPage));
 	for (copyPageIndex = 2; copyPageIndex < copyPageList[0]; copyPageIndex += 3)
 	{
 	    ppnum          = copyPageList[copyPageIndex + 0];
-	    src            = (uint32_t *) (uintptr_t) ptoa_32(copyPageList[copyPageIndex + 1]);
-	    src            = (uint32_t *)pal_hib_map(SRC_COPY_AREA, (uintptr_t)src);
+	    srcPhys        = ptoa_64(copyPageList[copyPageIndex + 1]);
+	    src            = (uint32_t *) pal_hib_map(SRC_COPY_AREA, srcPhys);
 	    compressedSize = copyPageList[copyPageIndex + 2];
 	    stage 	   = compressedSize >> 24;
 	    compressedSize &= 0x1FFF;
@@ -660,7 +677,7 @@ hibernate_kernel_entrypoint(IOHibernateImageHeader * header,
 	    	sum += pageSum;
 	    uncompressedPages++;
 	}
-	copyPageList = (uint32_t *) (uintptr_t) ptoa_32(copyPageList[1]);
+	pageListPage = copyPageList[1];
     }
 
     pal_hib_patchup();

@@ -33,9 +33,6 @@
 
 extern pd_entry_t BootstrapPTD[2048];
 
-#define TWO_MEG_MASK 0xFFFFFFFFFFE00000ULL
-#define FOUR_K_MASK 0xFFFFFFFFFFFFF000ULL
-
 // src is virtually mapped, not page aligned, 
 // dst is a physical 4k page aligned ptr, len is one 4K page
 // src & dst will not overlap
@@ -63,63 +60,41 @@ hibernate_restore_phys_page(uint64_t src, uint64_t dst, uint32_t len, uint32_t p
 
 void hibprintf(const char *fmt, ...);
 
-void
-pal_hib_window_setup(ppnum_t page)
-{
-	uint64_t *pp;
-	uint64_t phys = ptoa_64(page);
-	int i;
-
-	BootstrapPTD[2047] = (phys & ~((uint64_t)I386_LPGMASK)) | INTEL_PTE_PS  | INTEL_PTE_VALID | INTEL_PTE_WRITE;
-
-	invlpg(HIB_PTES);
-
-	pp = (uint64_t *)(uintptr_t)(HIB_PTES + (phys & I386_LPGMASK));
-
-	for(i=0;i<512;i++)
-		*pp = 0;
-
-	pp[0] = phys | INTEL_PTE_VALID | INTEL_PTE_WRITE;
-	BootstrapPTD[2047] = phys | INTEL_PTE_VALID | INTEL_PTE_WRITE;
-
-	invlpg(HIB_PTES);
-}
-
 uintptr_t
-pal_hib_map(uintptr_t v, uint64_t p)
+pal_hib_map(uintptr_t virt, uint64_t phys)
 {
-	int index;
+    uintptr_t index;
 
-	switch(v) {
-		case DEST_COPY_AREA:
-			index = 1;
-			break;
-		case SRC_COPY_AREA:
-			index = 2;
-			break;
-		case COPY_PAGE_AREA:
-			index = 3;
-			break;
-		default:
-			index = -1;
-			asm("cli;hlt;");
-	}
+    switch (virt)
+    {
+	case DEST_COPY_AREA:
+	case SRC_COPY_AREA:
+	case COPY_PAGE_AREA:
+	case BITMAP_AREA:
+	case IMAGE_AREA:
+	case IMAGE2_AREA:
+	    break;
+	default:
+	    asm("cli;hlt;");
+	    break;
+    }
 
-	uint64_t *ptes = (uint64_t *)HIB_PTES;
+    index = (virt >> I386_LPGSHIFT);
+    virt += (uintptr_t)(phys & I386_LPGMASK);
+    phys  = ((phys & ~((uint64_t)I386_LPGMASK)) | INTEL_PTE_PS  | INTEL_PTE_VALID | INTEL_PTE_WRITE);
+    BootstrapPTD[index] = phys;
+    invlpg(virt);
+    BootstrapPTD[index + 1] = (phys + I386_LPGBYTES);
+    invlpg(virt + I386_LPGBYTES);
 
-	/* Outside 1-1 4G map so set up the mappings for the dest page using 2MB pages */
-	ptes[index] = (p & FOUR_K_MASK) | INTEL_PTE_VALID | INTEL_PTE_WRITE;
-		
-	/* Invalidate the page tables for this */
-	invlpg((uintptr_t)v);
-
-	return v;
+    return (virt);
 }
 
 void hibernateRestorePALState(uint32_t *arg)
 {
-	(void)arg;
+    (void)arg;
 }
+
 void
 pal_hib_patchup(void)
 {

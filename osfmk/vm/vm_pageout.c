@@ -4724,6 +4724,9 @@ process_upl_to_commit:
 				else {
 					m->absent = FALSE;
 					dwp->dw_mask |= (DW_clear_busy | DW_PAGE_WAKEUP);
+
+					if ( !(dwp->dw_mask & DW_vm_page_deactivate_internal))
+						dwp->dw_mask |= DW_vm_page_activate;
 				}
 			} else
 				dwp->dw_mask |= DW_vm_page_unwire;

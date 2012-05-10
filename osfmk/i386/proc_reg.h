@@ -145,21 +145,23 @@
 /*
  * CR4
  */
-#define CR4_OSXSAVE 0x00040000	/* OS supports XSAVE */
-#define CR4_PCIDE   0x00020000	/* PCID Enable */
-#define CR4_SMXE    0x00004000	/* Enable SMX operation */
-#define CR4_VMXE    0x00002000	/* Enable VMX operation */
-#define CR4_OSXMM   0x00000400  /* SSE/SSE2 exceptions supported in OS */
-#define CR4_OSFXS   0x00000200  /* SSE/SSE2 OS supports FXSave */
-#define CR4_PCE     0x00000100  /* Performance-Monitor Count Enable */
-#define CR4_PGE     0x00000080  /* Page Global Enable */
-#define	CR4_MCE     0x00000040	/* Machine Check Exceptions */
-#define CR4_PAE     0x00000020  /* Physical Address Extensions */
-#define	CR4_PSE     0x00000010	/* Page Size Extensions */
-#define	CR4_DE      0x00000008	/* Debugging Extensions */
-#define	CR4_TSD     0x00000004	/* Time Stamp Disable */
-#define	CR4_PVI     0x00000002	/* Protected-mode Virtual Interrupts */
-#define	CR4_VME     0x00000001	/* Virtual-8086 Mode Extensions */
+#define CR4_SMEP	0x00100000	/* Supervisor-Mode Execute Protect */
+#define CR4_OSXSAVE	0x00040000	/* OS supports XSAVE */
+#define CR4_PCIDE	0x00020000	/* PCID Enable */
+#define CR4_RDWRFSGS	0x00010000	/* RDWRFSGS Enable */
+#define CR4_SMXE	0x00004000	/* Enable SMX operation */
+#define CR4_VMXE	0x00002000	/* Enable VMX operation */
+#define CR4_OSXMM	0x00000400	/* SSE/SSE2 exception support in OS */
+#define CR4_OSFXS	0x00000200	/* SSE/SSE2 OS supports FXSave */
+#define CR4_PCE		0x00000100	/* Performance-Monitor Count Enable */
+#define CR4_PGE		0x00000080	/* Page Global Enable */
+#define	CR4_MCE		0x00000040	/* Machine Check Exceptions */
+#define CR4_PAE		0x00000020	/* Physical Address Extensions */
+#define	CR4_PSE		0x00000010	/* Page Size Extensions */
+#define	CR4_DE		0x00000008	/* Debugging Extensions */
+#define	CR4_TSD		0x00000004	/* Time Stamp Disable */
+#define	CR4_PVI		0x00000002	/* Protected-mode Virtual Interrupts */
+#define	CR4_VME		0x00000001	/* Virtual-8086 Mode Extensions */
 
 /*
  * XCR0 - XFEATURE_ENABLED_MASK (a.k.a. XFEM) register

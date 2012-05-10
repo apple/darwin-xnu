@@ -38,6 +38,8 @@
 #include <i386/pio.h>
 #include <i386/proc_reg.h>
 
+#include <i386/pmap_internal.h>
+
 #include <kdp/kdp_internal.h>
 #include <mach/vm_map.h>
 
@@ -373,4 +375,37 @@ kdp_machine_msr64_write(kdp_writemsr64_req_t *rq, caddr_t data, uint16_t lcpu)
 
 	wrmsr64(msr, *value);
 	return KDPERR_NO_ERROR;
+}
+
+pt_entry_t *debugger_ptep;
+vm_map_offset_t debugger_window_kva;
+
+/* Establish a pagetable window that can be remapped on demand.
+ * This is utilized by the debugger to address regions outside
+ * the physical map.
+ */
+
+void
+kdp_machine_init(void) {
+	if (debug_boot_arg == 0)
+		return;
+
+	vm_map_entry_t e;
+	kern_return_t kr = vm_map_find_space(kernel_map,
+	    &debugger_window_kva,
+	    PAGE_SIZE, 0,
+	    VM_MAKE_TAG(VM_MEMORY_IOKIT), &e);
+
+	if (kr != KERN_SUCCESS) {
+		panic("%s: vm_map_find_space failed with %d\n", __FUNCTION__, kr);
+	}
+
+	vm_map_unlock(kernel_map);
+
+	debugger_ptep = pmap_pte(kernel_pmap, debugger_window_kva);
+
+	if (debugger_ptep == NULL) {
+		pmap_expand(kernel_pmap, debugger_window_kva);
+		debugger_ptep = pmap_pte(kernel_pmap, debugger_window_kva);
+	}
 }

@@ -36,6 +36,7 @@
 #include <kern/simple_lock.h>
 #include <i386/mp.h>
 #include <machine/pal_routines.h>
+#include <i386/proc_reg.h>
 
 /* Globals */
 void (*PE_kputc)(char c);
@@ -105,10 +106,13 @@ void kprintf(const char *fmt, ...)
 	boolean_t state;
 
 	if (!disable_serial_output) {
-
+		boolean_t early = FALSE;
+		if (rdmsr64(MSR_IA32_GS_BASE) == 0) {
+			early = TRUE;
+		}
 		/* If PE_kputc has not yet been initialized, don't
 		 * take any locks, just dump to serial */
-		if (!PE_kputc) {
+		if (!PE_kputc || early) {
 			va_start(listp, fmt);
 			_doprnt(fmt, &listp, pal_serial_putc, 16);
 			va_end(listp);

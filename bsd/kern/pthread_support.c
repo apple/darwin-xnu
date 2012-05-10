@@ -478,7 +478,7 @@ extern int ksyn_findobj(uint64_t mutex, uint64_t * object, uint64_t * offset);
 static void UPDATE_CVKWQ(ksyn_wait_queue_t kwq, uint32_t mgen, uint32_t ugen, uint32_t rw_wc, uint64_t tid, int wqtype);
 extern thread_t port_name_to_thread(mach_port_name_t port_name);
 
-int ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, ksyn_waitq_element_t kwe, int log);
+kern_return_t ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, ksyn_waitq_element_t kwe, int log, thread_continue_t, void * parameter);
 kern_return_t ksyn_wakeup_thread(ksyn_wait_queue_t kwq, ksyn_waitq_element_t kwe);
 void ksyn_freeallkwe(ksyn_queue_t kq);
 
@@ -503,6 +503,8 @@ void ksyn_handle_cvbroad(ksyn_wait_queue_t ckwq, uint32_t upto, uint32_t *update
 void ksyn_cvupdate_fixup(ksyn_wait_queue_t ckwq, uint32_t *updatep, ksyn_queue_t kfreeq, int release);
 ksyn_waitq_element_t ksyn_queue_find_signalseq(ksyn_wait_queue_t kwq, ksyn_queue_t kq, uint32_t toseq, uint32_t lockseq);
 ksyn_waitq_element_t ksyn_queue_find_threadseq(ksyn_wait_queue_t ckwq, ksyn_queue_t kq, thread_t th, uint32_t toseq);
+void psynch_cvcontinue(void *, wait_result_t);
+void psynch_mtxcontinue(void *, wait_result_t);
 
 int ksyn_wakeupreaders(ksyn_wait_queue_t kwq, uint32_t limitread, int longreadset, int allreaders, uint32_t updatebits, int * wokenp);
 int kwq_find_rw_lowest(ksyn_wait_queue_t kwq, int flags, uint32_t premgen, int * type, uint32_t lowest[]);
@@ -762,6 +764,7 @@ psynch_mutexwait(__unused proc_t p, struct psynch_mutexwait_args * uap, uint32_t
 	int firstfit = flags & _PTHREAD_MUTEX_POLICY_FIRSTFIT;
 	uint32_t lockseq, updatebits=0;
 	ksyn_waitq_element_t kwe;
+	kern_return_t kret;
 
 #if _PSYNCH_TRACE_
 	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_START, (uint32_t)mutex, mgen, ugen, flags, 0);
@@ -862,26 +865,13 @@ psynch_mutexwait(__unused proc_t p, struct psynch_mutexwait_args * uap, uint32_t
 		goto out;
 	}
 	
-	error = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0);
-		/* drops the wq lock */
+	kret = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0, psynch_mtxcontinue, (void *)kwq);
 
-	if (error != 0) {
-		ksyn_wqlock(kwq);
-		
-#if _PSYNCH_TRACE_
-		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_NONE, (uint32_t)mutex, 3, 0xdeadbeef, error, 0);
-#endif /* _PSYNCH_TRACE_ */
-		if (kwe->kwe_kwqqueue != NULL)
-			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], kwe);
-		ksyn_wqunlock(kwq);
-	} else {
-		updatebits = kwe->kwe_psynchretval;
-		updatebits &= ~PTH_RWL_MTX_WAIT;
-		*retval = updatebits;
+	psynch_mtxcontinue((void *)kwq, kret);
 
-		if (updatebits == 0)
-			__FAILEDUSERTEST__("psynch_mutexwait: returning 0 lseq  in mutexwait with no EBIT \n");
-	}
+	/* not expected to return from unix_syscall_return */
+	panic("psynch_mtxcontinue returned from unix_syscall_return");
+
 out:
 	ksyn_wqrelease(kwq, NULL, 1, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_MTX)); 
 #if _PSYNCH_TRACE_
@@ -889,6 +879,54 @@ out:
 #endif /* _PSYNCH_TRACE_ */
 
 	return(error);
+}
+
+void 
+psynch_mtxcontinue(void * parameter, wait_result_t result)
+{
+	int error = 0;
+	uint32_t updatebits = 0;
+	uthread_t uth = current_uthread();
+	ksyn_wait_queue_t kwq = (ksyn_wait_queue_t)parameter;
+	ksyn_waitq_element_t kwe;
+
+	kwe = &uth->uu_kwe;
+
+	switch (result) {
+		case THREAD_TIMED_OUT:
+			error  = ETIMEDOUT;
+			break;
+		case THREAD_INTERRUPTED:
+			error  = EINTR;
+			break;
+		default:
+			error = 0;
+			break;
+	}
+
+	if (error != 0) {
+		ksyn_wqlock(kwq);
+		
+#if _PSYNCH_TRACE_
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_NONE, (uint32_t)kwq->kw_addr, 3, 0xdeadbeef, error, 0);
+#endif /* _PSYNCH_TRACE_ */
+		if (kwe->kwe_kwqqueue != NULL)
+			ksyn_queue_removeitem(kwq, &kwq->kw_ksynqueues[KSYN_QUEUE_WRITER], kwe);
+		ksyn_wqunlock(kwq);
+	} else {
+		updatebits = kwe->kwe_psynchretval;
+		updatebits &= ~PTH_RWL_MTX_WAIT;
+		uth->uu_rval[0] = updatebits;
+
+		if (updatebits == 0)
+			__FAILEDUSERTEST__("psynch_mutexwait: returning 0 lseq  in mutexwait with no EBIT \n");
+	}
+	ksyn_wqrelease(kwq, NULL, 1, (KSYN_WQTYPE_INWAIT|KSYN_WQTYPE_MTX)); 
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_MLWAIT | DBG_FUNC_END, (uint32_t)kwq->kw_addr, 0xeeeeeeed, updatebits, error, 0);
+#endif /* _PSYNCH_TRACE_ */
+
+	unix_syscall_return(error);
 }
 
 /*
@@ -1205,10 +1243,7 @@ psynch_cvwait(__unused proc_t p, struct psynch_cvwait_args * uap, uint32_t * ret
 	uthread_t uth;
 	ksyn_waitq_element_t kwe, nkwe = NULL;
 	struct ksyn_queue  *kq, kfreeq;
-#if __TESTPANICS__
-	//int timeoutval = 3;		/* 3 secs */
-	//u_int64_t ntime = 0;
-#endif /* __TESTPANICS__ */
+	kern_return_t kret;
 	
 	/* for conformance reasons */
 	__pthread_testcancel(0);
@@ -1243,9 +1278,6 @@ psynch_cvwait(__unused proc_t p, struct psynch_cvwait_args * uap, uint32_t * ret
 		return(error);
 	}
 	
-#if __TESTPANICS__
-	//clock_interval_to_deadline(timeoutval, NSEC_PER_SEC, &ntime);
-#endif /* __TESTPANICS__ */
 
 	if (mutex != (user_addr_t)0) {
 		error = ksyn_wqfind(mutex, mgen, ugen, 0, 0, flags, (KSYN_WQTYPE_INDROP | KSYN_WQTYPE_MTX), &kwq);
@@ -1367,20 +1399,53 @@ psynch_cvwait(__unused proc_t p, struct psynch_cvwait_args * uap, uint32_t * ret
 		goto out;
 	}
 
-#if 0 /* __TESTPANICS__ */
-	/* if no timeout  is passed, set 5 secs timeout to catch hangs */
-	error = ksyn_block_thread_locked(ckwq, (abstime == 0) ? ntime : abstime, kwe, 1);
-#else
-	error = ksyn_block_thread_locked(ckwq, abstime, kwe, 1);
-#endif /* __TESTPANICS__ */
+	kret = ksyn_block_thread_locked(ckwq, abstime, kwe, 1, psynch_cvcontinue, (void *)ckwq);
 	/* lock dropped */
 
-	
+	psynch_cvcontinue(ckwq, kret);	
+	/* not expected to return from unix_syscall_return */
+	panic("psynch_cvcontinue returned from unix_syscall_return");
+
+out:
+#if _PSYNCH_TRACE_
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_END, (uint32_t)cond, 0xeeeeeeed, (uint32_t)*retval, local_error, 0);
+#endif /* _PSYNCH_TRACE_ */
+	ksyn_wqrelease(ckwq, NULL, 1, (KSYN_WQTYPE_INWAIT | KSYN_WQTYPE_CVAR));
+	return(local_error);
+}
+
+
+void 
+psynch_cvcontinue(void * parameter, wait_result_t result)
+{
+	int error = 0, local_error = 0;
+	uthread_t uth = current_uthread();
+	ksyn_wait_queue_t ckwq = (ksyn_wait_queue_t)parameter;
+	ksyn_waitq_element_t kwe;
+	struct ksyn_queue  kfreeq;
+
+	switch (result) {
+		case THREAD_TIMED_OUT:
+			error  = ETIMEDOUT;
+			break;
+		case THREAD_INTERRUPTED:
+			error  = EINTR;
+			break;
+		default:
+			error = 0;
+			break;
+	}
+#if _PSYNCH_TRACE_
+		__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_THWAKEUP | DBG_FUNC_NONE, 0xf4f3f2f1, (uintptr_t)uth, result, 0, 0);
+#endif /* _PSYNCH_TRACE_ */
+
 	local_error = error;
+	kwe = &uth->uu_kwe;
+
 	if (error != 0) {
 		ksyn_wqlock(ckwq);
 		/* just in case it got woken up as we were granting */
-		*retval = kwe->kwe_psynchretval;
+		uth->uu_rval[0] = kwe->kwe_psynchretval;
 
 #if __TESTPANICS__
 		if ((kwe->kwe_kwqqueue != NULL) && (kwe->kwe_kwqqueue != ckwq))
@@ -1394,31 +1459,28 @@ psynch_cvwait(__unused proc_t p, struct psynch_cvwait_args * uap, uint32_t * ret
 			kwe->kwe_kwqqueue = NULL;
 		}
 		if ((kwe->kwe_psynchretval & PTH_RWL_MTX_WAIT) != 0) {
-		/* the condition var granted.
+			/* the condition var granted.
 			 * reset the error so that the thread returns back.
 			 */
 			local_error = 0;
 			/* no need to set any bits just return as cvsig/broad covers this */
 			ksyn_wqunlock(ckwq);
-			*retval = 0;
 			goto out;
 		}
 
 		ckwq->kw_sword += PTHRW_INC;
 	
-		/* set C and P bits, in the local error as well as updatebits */
+		/* set C and P bits, in the local error */
 		if ((ckwq->kw_lword & PTHRW_COUNT_MASK) == (ckwq->kw_sword & PTHRW_COUNT_MASK)) {
-			updatebits |= PTH_RWS_CV_CBIT;
 			local_error |= ECVCERORR;
 			if (ckwq->kw_inqueue != 0) {
-				(void)ksyn_queue_move_tofree(ckwq, kq, (ckwq->kw_lword & PTHRW_COUNT_MASK), &kfreeq, 1, 1);
+				(void)ksyn_queue_move_tofree(ckwq, &ckwq->kw_ksynqueues[KSYN_QUEUE_WRITER], (ckwq->kw_lword & PTHRW_COUNT_MASK), &kfreeq, 1, 1);
 			}
 			ckwq->kw_lword = ckwq->kw_uword = ckwq->kw_sword = 0;
 			ckwq->kw_kflags |= KSYN_KWF_ZEROEDOUT;
 		} else {
 			/* everythig in the queue is a fake entry ? */
 			if ((ckwq->kw_inqueue != 0) && (ckwq->kw_fakecount == ckwq->kw_inqueue)) {
-				updatebits |= PTH_RWS_CV_PBIT; 
 				local_error |= ECVPERORR;
 			}
 		}
@@ -1427,17 +1489,19 @@ psynch_cvwait(__unused proc_t p, struct psynch_cvwait_args * uap, uint32_t * ret
 	} else  {
 		/* PTH_RWL_MTX_WAIT is removed */
 		if ((kwe->kwe_psynchretval & PTH_RWS_CV_MBIT)  != 0)
-			*retval = PTHRW_INC | PTH_RWS_CV_CBIT;
+			uth->uu_rval[0] = PTHRW_INC | PTH_RWS_CV_CBIT;
 		else
-			*retval = 0;
+			uth->uu_rval[0] = 0;
 		local_error = 0;
 	}
 out:
 #if _PSYNCH_TRACE_
-	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_END, (uint32_t)cond, 0xeeeeeeed, (uint32_t)*retval, local_error, 0);
+	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_CVWAIT | DBG_FUNC_END, (uint32_t)ckwq->kw_addr, 0xeeeeeeed, uth->uu_rval[0], local_error, 0);
 #endif /* _PSYNCH_TRACE_ */
 	ksyn_wqrelease(ckwq, NULL, 1, (KSYN_WQTYPE_INWAIT | KSYN_WQTYPE_CVAR));
-	return(local_error);
+
+	unix_syscall_return(local_error);
+
 }
 
 /*
@@ -1524,6 +1588,7 @@ psynch_rw_rdlock(__unused proc_t p, struct psynch_rw_rdlock_args * uap, uint32_t
 	int isinit = lgen & PTHRW_RWL_INIT;
 	uint32_t returnbits  = 0;
 	ksyn_waitq_element_t kwe;
+	kern_return_t kret;
 
 #if _PSYNCH_TRACE_
 	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWRDLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
@@ -1635,8 +1700,19 @@ psynch_rw_rdlock(__unused proc_t p, struct psynch_rw_rdlock_args * uap, uint32_t
 	if (error != 0)
 		panic("psynch_rw_rdlock: failed to enqueue\n");
 #endif /* __TESTPANICS__ */
-	error = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0);
+	kret = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0, THREAD_CONTINUE_NULL, NULL);
 	/* drops the kwq lock */
+	switch (kret) {
+		case THREAD_TIMED_OUT:
+			error  = ETIMEDOUT;
+			break;
+		case THREAD_INTERRUPTED:
+			error  = EINTR;
+			break;
+		default:
+			error = 0;
+			break;
+	}
 	
 out:
 	if (error != 0) {
@@ -1674,6 +1750,7 @@ psynch_rw_longrdlock(__unused proc_t p, __unused struct psynch_rw_longrdlock_arg
 	int isinit = lgen & PTHRW_RWL_INIT;
 	uint32_t returnbits=0;
 	ksyn_waitq_element_t kwe;
+	kern_return_t kret;
 
 	ksyn_wait_queue_t kwq;
 	int error=0, block = 0 ;
@@ -1764,8 +1841,19 @@ psynch_rw_longrdlock(__unused proc_t p, __unused struct psynch_rw_longrdlock_arg
 		panic("psynch_rw_longrdlock: failed to enqueue\n");
 #endif /* __TESTPANICS__ */
 
-	error = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0);
+	kret = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0, THREAD_CONTINUE_NULL, NULL);
 	/* drops the kwq lock */
+	switch (kret) {
+		case THREAD_TIMED_OUT:
+			error  = ETIMEDOUT;
+			break;
+		case THREAD_INTERRUPTED:
+			error  = EINTR;
+			break;
+		default:
+			error = 0;
+			break;
+	}
 out:
 	if (error != 0) {
 #if _PSYNCH_TRACE_
@@ -1809,6 +1897,7 @@ psynch_rw_wrlock(__unused proc_t p, struct psynch_rw_wrlock_args * uap, uint32_t
 	int isinit = lgen & PTHRW_RWL_INIT;
 	uint32_t returnbits  = 0;
 	ksyn_waitq_element_t kwe;
+	kern_return_t kret;
 
 #if _PSYNCH_TRACE_
 	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWWRLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
@@ -1899,8 +1988,19 @@ psynch_rw_wrlock(__unused proc_t p, struct psynch_rw_wrlock_args * uap, uint32_t
 		panic("psynch_rw_wrlock: failed to enqueue\n");
 #endif /* __TESTPANICS__ */
 
-	error = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0);
+	kret = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0, THREAD_CONTINUE_NULL, NULL);
 	/* drops the wq lock */
+	switch (kret) {
+		case THREAD_TIMED_OUT:
+			error  = ETIMEDOUT;
+			break;
+		case THREAD_INTERRUPTED:
+			error  = EINTR;
+			break;
+		default:
+			error = 0;
+			break;
+	}
 
 out:
 	if (error != 0) {
@@ -1944,6 +2044,7 @@ psynch_rw_yieldwrlock(__unused proc_t p, __unused struct  psynch_rw_yieldwrlock_
 	uthread_t uth;
 	uint32_t returnbits=0;
 	ksyn_waitq_element_t kwe;
+	kern_return_t kret;
 
 #if _PSYNCH_TRACE_
 	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWYWRLOCK | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
@@ -2031,7 +2132,18 @@ psynch_rw_yieldwrlock(__unused proc_t p, __unused struct  psynch_rw_yieldwrlock_
 		panic("psynch_rw_yieldwrlock: failed to enqueue\n");
 #endif /* __TESTPANICS__ */
 
-	error = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0);
+	kret = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0, THREAD_CONTINUE_NULL, NULL);
+	switch (kret) {
+		case THREAD_TIMED_OUT:
+			error  = ETIMEDOUT;
+			break;
+		case THREAD_INTERRUPTED:
+			error  = EINTR;
+			break;
+		default:
+			error = 0;
+			break;
+	}
 
 out:
 	if (error != 0) {
@@ -2190,6 +2302,7 @@ psynch_rw_upgrade(__unused proc_t p, struct psynch_rw_upgrade_args * uap, uint32
 	uint32_t lockseq = 0, updatebits = 0, preseq = 0;
 	int isinit = lgen & PTHRW_RWL_INIT;
 	ksyn_waitq_element_t kwe;
+	kern_return_t kret;
 
 #if _PSYNCH_TRACE_
 	__PTHREAD_TRACE_DEBUG(_PSYNCH_TRACE_RWUPGRADE | DBG_FUNC_START, (uint32_t)rwlock, lgen, ugen, rw_wc, 0);
@@ -2276,8 +2389,19 @@ psynch_rw_upgrade(__unused proc_t p, struct psynch_rw_upgrade_args * uap, uint32
 #endif /* __TESTPANICS__ */
 
 
-	error = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0);
+	kret = ksyn_block_thread_locked(kwq, (uint64_t)0, kwe, 0, THREAD_CONTINUE_NULL, NULL);
 	/* drops the lock */
+	switch (kret) {
+		case THREAD_TIMED_OUT:
+			error  = ETIMEDOUT;
+			break;
+		case THREAD_INTERRUPTED:
+			error  = EINTR;
+			break;
+		default:
+			error = 0;
+			break;
+	}
 	
 out:
 	if (error != 0) {
@@ -2934,8 +3058,12 @@ psynch_wq_cleanup(__unused void *  param, __unused void * param1)
 }
 
 
-int
-ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, ksyn_waitq_element_t kwe, int mylog)
+kern_return_t
+#if _PSYNCH_TRACE_
+ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, ksyn_waitq_element_t kwe, int mylog, thread_continue_t continuation, void * parameter)
+#else
+ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, ksyn_waitq_element_t kwe, __unused int mylog, thread_continue_t continuation, void * parameter)
+#endif
 {
 	kern_return_t kret;
 	int error = 0;
@@ -2947,7 +3075,12 @@ ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, ksyn_waitq_ele
 	assert_wait_deadline(&kwe->kwe_psynchretval, THREAD_ABORTSAFE, abstime);
 	ksyn_wqunlock(kwq);
 
-	kret = thread_block(NULL);
+	if (continuation == THREAD_CONTINUE_NULL)
+		kret = thread_block(NULL);
+	else
+		kret = thread_block_parameter(continuation, parameter);
+		
+#if _PSYNCH_TRACE_
 	switch (kret) {
 		case THREAD_TIMED_OUT:
 			error  = ETIMEDOUT;
@@ -2956,7 +3089,6 @@ ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, ksyn_waitq_ele
 			error  = EINTR;
 			break;
 	}
-#if _PSYNCH_TRACE_
 	uth = current_uthread();
 #if defined(__i386__)
 	if (mylog != 0)
@@ -2967,7 +3099,7 @@ ksyn_block_thread_locked(ksyn_wait_queue_t kwq, uint64_t abstime, ksyn_waitq_ele
 #endif
 #endif /* _PSYNCH_TRACE_ */
 		
-	return(error);
+	return(kret);
 }
 
 kern_return_t

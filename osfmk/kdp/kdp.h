@@ -47,3 +47,5 @@ kdp_reset(void);
 
 void
 kdp_init(void);
+
+void kdp_machine_init(void);

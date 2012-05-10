@@ -248,30 +248,36 @@ ml_phys_read_data(pmap_paddr_t paddr, int size)
 {
 	unsigned int result;
 
-        switch (size) {
-            unsigned char s1;
-            unsigned short s2;
-        case 1:
-            s1 = *(unsigned char *)PHYSMAP_PTOV(paddr);
-            result = s1;
-            break;
-        case 2:
-            s2 = *(unsigned short *)PHYSMAP_PTOV(paddr);
-            result = s2;
-            break;
-        case 4:
-        default:
-            result = *(unsigned int *)PHYSMAP_PTOV(paddr);
-            break;
-        }
+	if (!physmap_enclosed(paddr))
+		panic("%s: 0x%llx out of bounds\n", __FUNCTION__, paddr);
 
+        switch (size) {
+		unsigned char s1;
+		unsigned short s2;
+        case 1:
+		s1 = *(volatile unsigned char *)PHYSMAP_PTOV(paddr);
+		result = s1;
+		break;
+        case 2:
+		s2 = *(volatile unsigned short *)PHYSMAP_PTOV(paddr);
+		result = s2;
+		break;
+        case 4:
+		result = *(volatile unsigned int *)PHYSMAP_PTOV(paddr);
+		break;
+	default:
+		panic("Invalid size %d for ml_phys_read_data\n", size);
+		break;
+        }
         return result;
 }
 
 static unsigned long long
 ml_phys_read_long_long(pmap_paddr_t paddr )
 {
-	return *(unsigned long long *)PHYSMAP_PTOV(paddr);
+	if (!physmap_enclosed(paddr))
+		panic("%s: 0x%llx out of bounds\n", __FUNCTION__, paddr);
+	return *(volatile unsigned long long *)PHYSMAP_PTOV(paddr);
 }
 
 unsigned int ml_phys_read( vm_offset_t paddr)
@@ -333,24 +339,32 @@ unsigned long long ml_phys_read_double_64(addr64_t paddr64)
 static inline void
 ml_phys_write_data(pmap_paddr_t paddr, unsigned long data, int size)
 {
+	if (!physmap_enclosed(paddr))
+		panic("%s: 0x%llx out of bounds\n", __FUNCTION__, paddr);
+
         switch (size) {
         case 1:
-	    *(unsigned char *)PHYSMAP_PTOV(paddr) = (unsigned char)data;
+	    *(volatile unsigned char *)PHYSMAP_PTOV(paddr) = (unsigned char)data;
             break;
         case 2:
-	    *(unsigned short *)PHYSMAP_PTOV(paddr) = (unsigned short)data;
+	    *(volatile unsigned short *)PHYSMAP_PTOV(paddr) = (unsigned short)data;
             break;
         case 4:
-        default:
-	    *(unsigned int *)PHYSMAP_PTOV(paddr) = (unsigned int)data;
+	    *(volatile unsigned int *)PHYSMAP_PTOV(paddr) = (unsigned int)data;
             break;
+	default:
+		panic("Invalid size %d for ml_phys_write_data\n", size);
+		break;
         }
 }
 
 static void
 ml_phys_write_long_long(pmap_paddr_t paddr, unsigned long long data)
 {
-	*(unsigned long long *)PHYSMAP_PTOV(paddr) = data;
+	if (!physmap_enclosed(paddr))
+		panic("%s: 0x%llx out of bounds\n", __FUNCTION__, paddr);
+
+	*(volatile unsigned long long *)PHYSMAP_PTOV(paddr) = data;
 }
 
 void ml_phys_write_byte(vm_offset_t paddr, unsigned int data)
@@ -408,9 +422,8 @@ void ml_phys_write_double_64(addr64_t paddr64, unsigned long long data)
  *
  *
  *      Read the memory location at physical address paddr.
- *  This is a part of a device probe, so there is a good chance we will
- *  have a machine check here. So we have to be able to handle that.
- *  We assume that machine checks are enabled both in MSR and HIDs
+ * *Does not* recover from machine checks, unlike the PowerPC implementation.
+ * Should probably be deprecated.
  */
 
 boolean_t

@@ -182,6 +182,10 @@ typedef struct
 #define DKIOCLOCKPHYSICALEXTENTS              _IO('d', 81)
 #define DKIOCGETPHYSICALEXTENT                _IOWR('d', 82, dk_physical_extent_t)
 #define DKIOCUNLOCKPHYSICALEXTENTS            _IO('d', 83)
+
+#ifdef PRIVATE
+#define _DKIOCGETMIGRATIONUNITBYTESIZE        _IOR('d', 85, uint32_t)
+#endif /* PRIVATE */
 #endif /* KERNEL */
 
 #endif	/* _SYS_DISK_H_ */

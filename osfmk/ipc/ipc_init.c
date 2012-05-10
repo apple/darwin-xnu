@@ -189,7 +189,6 @@ ipc_bootstrap(void)
 			      IKM_SAVED_KMSG_SIZE,
 			      "ipc kmsgs");
 	zone_change(ipc_kmsg_zone, Z_CALLERACCT, FALSE);
-	zone_change(ipc_kmsg_zone, Z_NOENCRYPT, TRUE);
 
 #if CONFIG_MACF_MACH
 	ipc_labelh_zone = 

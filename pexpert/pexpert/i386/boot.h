@@ -96,6 +96,17 @@ typedef struct Boot_Video	Boot_Video;
 #define GRAPHICS_MODE         1
 #define FB_TEXT_MODE          2
 
+/* Struct describing an image passed in by the booter */
+struct boot_icon_element {
+    unsigned int    width;
+    unsigned int    height;
+    int             y_offset_from_center;
+    unsigned int    data_size;
+    unsigned int    __reserved1[4];
+    unsigned char   data[0];
+};
+typedef struct boot_icon_element boot_icon_element;
+
 /* Boot argument structure - passed into Mach kernel at boot time.
  * "Revision" can be incremented for compatible changes
  */
@@ -149,7 +160,10 @@ typedef struct boot_args {
     uint64_t	bootMemSize;
     uint64_t    PhysicalMemorySize;
     uint64_t    FSBFrequency;
-    uint32_t    __reserved4[734];
+    uint64_t    pciConfigSpaceBaseAddress;
+    uint32_t    pciConfigSpaceStartBusNumber;
+    uint32_t    pciConfigSpaceEndBusNumber;
+    uint32_t    __reserved4[730];
 
 } boot_args;
 

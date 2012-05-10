@@ -145,6 +145,7 @@ perfCallback tempDTraceTrapHook = NULL; /* Pointer to DTrace fbt trap hook routi
 extern boolean_t dtrace_tally_fault(user_addr_t);
 #endif
 
+
 void
 thread_syscall_return(
         kern_return_t ret)
@@ -679,10 +680,11 @@ kernel_trap(
 				is_user = -1;
 			}
 #else
-			if (vaddr < VM_MAX_USER_PAGE_ADDRESS) {
+			if (__probable(vaddr < VM_MAX_USER_PAGE_ADDRESS)) {
 				/* fault occurred in userspace */
 				map = thread->map;
 				is_user = -1;
+
 				/*
 				 * If we're not sharing cr3 with the user
 				 * and we faulted in copyio,
@@ -699,6 +701,7 @@ kernel_trap(
 #endif
 		}
 	}
+
 	KERNEL_DEBUG_CONSTANT(
 		(MACHDBG_CODE(DBG_MACH_EXCP_KTRAP_x86, type)) | DBG_FUNC_NONE,
 		(unsigned)(vaddr >> 32), (unsigned)vaddr, is_user, kern_ip, 0);
@@ -744,22 +747,6 @@ kernel_trap(
 	      goto debugger_entry;
 #endif
 	    case T_PAGE_FAULT:
-		/*
-		 * If the current map is a submap of the kernel map,
-		 * and the address is within that map, fault on that
-		 * map.  If the same check is done in vm_fault
-		 * (vm_map_lookup), we may deadlock on the kernel map
-		 * lock.
-		 */
-
-		prot = VM_PROT_READ;
-
-		if (code & T_PF_WRITE)
-		        prot |= VM_PROT_WRITE;
-#if     PAE
-		if (code & T_PF_EXECUTE)
-		        prot |= VM_PROT_EXECUTE;
-#endif
 
 #if	MACH_KDB
 		/*
@@ -791,6 +778,16 @@ kernel_trap(
 			}
 		}
 #endif /* CONFIG_DTRACE */
+
+		
+		prot = VM_PROT_READ;
+
+		if (code & T_PF_WRITE)
+		        prot |= VM_PROT_WRITE;
+#if     PAE
+		if (code & T_PF_EXECUTE)
+		        prot |= VM_PROT_EXECUTE;
+#endif
 
 		result = vm_fault(map,
 				  vm_map_trunc_page(vaddr),
@@ -863,9 +860,6 @@ FALL_THROUGH:
 			kprintf("kernel_trap() ignoring spurious trap 15\n"); 
 			return;
 		}
-#if defined(__x86_64__) && DEBUG
-		kprint_state(saved_state);
-#endif
 debugger_entry:
 		/* Ensure that the i386_kernel_state at the base of the
 		 * current thread's stack (if any) is synchronized with the
@@ -959,6 +953,8 @@ panic_trap(x86_saved_state32_t *regs)
 	cr0 = 0;
 }
 #else
+
+
 static void
 panic_trap(x86_saved_state64_t *regs)
 {
@@ -981,6 +977,7 @@ panic_trap(x86_saved_state64_t *regs)
 
 	if (regs->isf.trapno < TRAP_TYPES)
 	        trapname = trap_type[regs->isf.trapno];
+
 #undef panic
 	panic("Kernel trap at 0x%016llx, type %d=%s, registers:\n"
 	      "CR0: 0x%016llx, CR2: 0x%016llx, CR3: 0x%016llx, CR4: 0x%016llx\n"
@@ -989,7 +986,7 @@ panic_trap(x86_saved_state64_t *regs)
 	      "R8:  0x%016llx, R9:  0x%016llx, R10: 0x%016llx, R11: 0x%016llx\n"
 	      "R12: 0x%016llx, R13: 0x%016llx, R14: 0x%016llx, R15: 0x%016llx\n"
 	      "RFL: 0x%016llx, RIP: 0x%016llx, CS:  0x%016llx, SS:  0x%016llx\n"
-	      "CR2: 0x%016llx, Error code: 0x%016llx, Faulting CPU: 0x%x\n",
+	      "CR2: 0x%016llx, Error code: 0x%016llx, Faulting CPU: 0x%x%s\n",
 	      regs->isf.rip, regs->isf.trapno, trapname,
 	      cr0, cr2, cr3, cr4,
 	      regs->rax, regs->rbx, regs->rcx, regs->rdx,
@@ -997,7 +994,8 @@ panic_trap(x86_saved_state64_t *regs)
 	      regs->r8,  regs->r9,  regs->r10, regs->r11,
 	      regs->r12, regs->r13, regs->r14, regs->r15,
 	      regs->isf.rflags, regs->isf.rip, regs->isf.cs & 0xFFFF,
-	      regs->isf.ss & 0xFFFF,regs->cr2, regs->isf.err, regs->isf.cpu);
+	      regs->isf.ss & 0xFFFF,regs->cr2, regs->isf.err, regs->isf.cpu,
+	      "");
 	/*
 	 * This next statement is not executed,
 	 * but it's needed to stop the compiler using tail call optimization

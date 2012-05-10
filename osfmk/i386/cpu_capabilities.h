@@ -58,6 +58,9 @@
 #define	kUP				0x00008000	/* set if (kNumCPUs == 1) */
 #define	kNumCPUs			0x00FF0000	/* number of CPUs (see _NumCPUs() below) */
 #define	kHasAVX1_0			0x01000000
+#define	kHasRDRAND			0x02000000
+#define	kHasF16C			0x04000000
+#define	kHasENFSTRG			0x08000000
 #define	kNumCPUsShift			16		/* see _NumCPUs() below */
 
 #ifndef	__ASSEMBLER__

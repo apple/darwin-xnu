@@ -33,3 +33,4 @@ _xts_decrypt
 _xts_done
 _xts_encrypt
 _xts_start
+_aes_decrypt

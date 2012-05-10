@@ -2867,6 +2867,24 @@ IOReturn IOService::setIdleTimerPeriod ( unsigned long period )
     return kIOReturnSuccess;
 }
 
+IOReturn IOService::setIgnoreIdleTimer( bool ignore )
+{
+    if (!initialized)
+		return IOPMNotYetInitialized;
+
+    OUR_PMLog(kIOPMRequestTypeIgnoreIdleTimer, ignore, 0);
+
+    IOPMRequest * request =
+        acquirePMRequest( this, kIOPMRequestTypeIgnoreIdleTimer );
+    if (!request)
+        return kIOReturnNoMemory;
+
+    request->fArg0 = (void *) ignore;
+    submitPMRequest( request );
+
+    return kIOReturnSuccess;
+}
+
 //******************************************************************************
 // [public] nextIdleTimeout
 //
@@ -2987,7 +3005,7 @@ void IOService::idleTimerExpired( void )
 		// Device was active - do not drop power, restart timer.
 		fDeviceWasActive = false;
 	}
-	else
+	else if (!fIdleTimerIgnored)
 	{
 		// No device activity - drop power state by one level.
 		// Decrement the cached tickle power state when possible.
@@ -5414,7 +5432,7 @@ void IOService::pmTellClientWithResponse ( OSObject * object, void * arg )
         getPMRootDomain()->traceDetail( detail );
     }
 
-    retCode = context->us->messageClient(msgType, object, (void *) &notify);
+    retCode = context->us->messageClient(msgType, object, (void *) &notify, sizeof(notify));
     if ( kIOReturnSuccess == retCode )
     {
         if ( 0 == notify.returnValue )
@@ -5732,7 +5750,7 @@ static void tellKernelClientApplier ( OSObject * object, void * arg )
     notify.stateNumber	= context->stateNumber;
     notify.stateFlags	= context->stateFlags;
 
-    context->us->messageClient(context->messageType, object, &notify);
+    context->us->messageClient(context->messageType, object, &notify, sizeof(notify));
 
     if ((kIOLogDebugPower & gIOKitDebug) &&
         (OSDynamicCast(_IOServiceInterestNotifier, object)))
@@ -6802,6 +6820,10 @@ void IOService::executePMRequest( IOPMRequest * request )
                     start_PM_idle_timer();
                 }
             }
+            break;
+
+        case kIOPMRequestTypeIgnoreIdleTimer:
+            fIdleTimerIgnored = request->fArg0 ? 1 : 0;
             break;
 
 		default:

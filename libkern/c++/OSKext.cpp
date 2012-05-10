@@ -4874,8 +4874,9 @@ OSKext::jettisonLinkeditSegment(void)
     kernel_mach_header_t     * machhdr = (kernel_mach_header_t *)kmod_info->address;
     kernel_segment_command_t * linkedit = NULL;
     vm_size_t                  linkeditsize, kextsize;
+    vm_offset_t                linkeditaddr = 0;
     OSData                   * data = NULL;
-
+	
     if (sKeepSymbols || isLibrary() || !isExecutable() || !linkedExecutable) {
         goto finish;
     }
@@ -4899,7 +4900,10 @@ OSKext::jettisonLinkeditSegment(void)
     */
     linkeditsize = round_page(linkedit->vmsize);
     kextsize = kmod_info->size - linkeditsize;
-
+	
+	/* Save linkedit address as removeLinkeditHeaders() will zero it */
+	linkeditaddr = trunc_page(linkedit->vmaddr);
+	
     data = OSData::withBytesNoCopy((void *)kmod_info->address, kextsize);
     if (!data) {
         goto finish;
@@ -4921,7 +4925,7 @@ OSKext::jettisonLinkeditSegment(void)
 
    /* Free the linkedit segment.
     */
-    kext_free(linkedit->vmaddr, linkeditsize);
+    kext_free(linkeditaddr, linkeditsize);
 
 finish:
     return;

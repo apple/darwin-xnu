@@ -54,6 +54,7 @@ enum {
     kIOPMRequestTypeSynchronizePowerTree        = 0x0D,
     kIOPMRequestTypeRequestPowerStateOverride   = 0x0E,
     kIOPMRequestTypeSetIdleTimerPeriod          = 0x0F,
+    kIOPMRequestTypeIgnoreIdleTimer             = 0x10,
     
     /* Reply Types */
     kIOPMRequestTypeReplyStart                  = 0x80,
@@ -240,6 +241,7 @@ private:
     unsigned int            IsPreChange:1;
     unsigned int            DriverCallBusy:1;
     unsigned int            PCDFunctionOverride:1;
+    unsigned int            IdleTimerIgnored:1;
 
     // Time of last device activity.
     AbsoluteTime            DeviceActiveTimestamp;
@@ -367,6 +369,7 @@ private:
 #define fIsPreChange                pwrMgt->IsPreChange
 #define fDriverCallBusy             pwrMgt->DriverCallBusy
 #define fPCDFunctionOverride        pwrMgt->PCDFunctionOverride
+#define fIdleTimerIgnored           pwrMgt->IdleTimerIgnored
 #define fDeviceActiveTimestamp      pwrMgt->DeviceActiveTimestamp
 #define fActivityLock               pwrMgt->ActivityLock
 #define fIdleTimerPeriod            pwrMgt->IdleTimerPeriod

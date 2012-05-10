@@ -263,14 +263,10 @@ kern_open_file_for_direct_io(const char * name,
                              off_t offset,
                              caddr_t addr,
                              vm_size_t len);
-
-
 void
 kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref,
-			      off_t offset, caddr_t addr, vm_size_t len);
-int
-kern_write_file(struct kern_direct_file_io_ref_t * ref, off_t offset, caddr_t addr, vm_size_t len);
-int get_kernel_symfile(struct proc *p, char const **symfile);
+			      off_t write_offset, caddr_t addr, vm_size_t write_length,
+			      off_t discard_offset, off_t discard_end);
 #endif /* _SYS_CONF_H_ */
 
 hibernate_page_list_t *
@@ -354,9 +350,9 @@ uint32_t
 hibernate_write_image(void);
 
 long
-hibernate_machine_entrypoint(IOHibernateImageHeader * header, void * p2, void * p3, void * p4);
+hibernate_machine_entrypoint(uint32_t p1, uint32_t p2, uint32_t p3, uint32_t p4);
 long
-hibernate_kernel_entrypoint(IOHibernateImageHeader * header, void * p2, void * p3, void * p4);
+hibernate_kernel_entrypoint(uint32_t p1, uint32_t p2, uint32_t p3, uint32_t p4);
 void
 hibernate_newruntime_map(void * map, vm_size_t map_size, 
 			    uint32_t system_table_offset);

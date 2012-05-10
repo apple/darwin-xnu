@@ -37,5 +37,6 @@
 #define kPMSleepSystemOptions           7
 #define kPMSetMaintenanceWakeCalendar   8
 #define kPMSetUserAssertionLevels       9
+#define kPMActivityTickle               10
 
-#define kNumPMMethods                   10
+#define kNumPMMethods                   11

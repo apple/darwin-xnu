@@ -28,15 +28,17 @@
 #ifndef _I386_PAL_HIBERNATE_H
 #define _I386_PAL_HIBERNATE_H
 
-#define HIB_PTES		(4*GB - 1*I386_LPGBYTES) /*4GB - 2m */
-#define DEST_COPY_AREA	(HIB_PTES + 1*I386_PGBYTES)
-#define SRC_COPY_AREA	(HIB_PTES + 2*I386_PGBYTES)
-#define COPY_PAGE_AREA	(HIB_PTES + 3*I386_PGBYTES)
+#define HIB_MAP_SIZE    (2*I386_LPGBYTES)
+#define DEST_COPY_AREA	(4*GB - HIB_MAP_SIZE) /*4GB - 2*2m */
+#define SRC_COPY_AREA	(DEST_COPY_AREA - HIB_MAP_SIZE)
+#define COPY_PAGE_AREA	(SRC_COPY_AREA  - HIB_MAP_SIZE)
+#define BITMAP_AREA	(COPY_PAGE_AREA - HIB_MAP_SIZE)
+#define IMAGE_AREA	(BITMAP_AREA    - HIB_MAP_SIZE)
+#define IMAGE2_AREA	(IMAGE_AREA     - HIB_MAP_SIZE)
 
 #define HIB_BASE sectINITPTB
 #define HIB_ENTRYPOINT acpi_wake_prot_entry
 
-void pal_hib_window_setup(ppnum_t page);
 uintptr_t pal_hib_map(uintptr_t v, uint64_t p);
 void hibernateRestorePALState(uint32_t *src);
 void pal_hib_patchup(void);

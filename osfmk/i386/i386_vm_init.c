@@ -99,8 +99,10 @@ ppnum_t		lowest_lo = 0;
 ppnum_t		lowest_hi = 0;
 ppnum_t		highest_hi = 0;
 
+enum {PMAP_MAX_RESERVED_RANGES = 32};
 uint32_t pmap_reserved_pages_allocated = 0;
-uint32_t pmap_last_reserved_range = 0xFFFFFFFF;
+uint32_t pmap_reserved_range_indices[PMAP_MAX_RESERVED_RANGES];
+uint32_t pmap_last_reserved_range_index = 0;
 uint32_t pmap_reserved_ranges = 0;
 
 extern unsigned int bsd_mbuf_cluster_reserve(boolean_t *);
@@ -161,7 +163,7 @@ i386_vm_init(uint64_t	maxmem,
 	uint32_t maxdmaaddr;
 	uint32_t  mbuf_reserve = 0;
 	boolean_t mbuf_override = FALSE;
-
+	boolean_t coalescing_permitted;
 #if DEBUG
 	kprintf("Boot args revision: %d version: %d",
 		args->Revision, args->Version);
@@ -256,6 +258,12 @@ i386_vm_init(uint64_t	maxmem,
 		}
 		base = (ppnum_t) (mptr->PhysicalStart >> I386_PGSHIFT);
 		top = (ppnum_t) (((mptr->PhysicalStart) >> I386_PGSHIFT) + mptr->NumberOfPages - 1);
+
+#if	MR_RSV_TEST
+		static uint32_t nmr = 0;
+		if ((base > 0x20000) && (nmr++ < 4))
+			mptr->Attribute |= EFI_MEMORY_KERN_RESERVED;
+#endif
 		region_bytes = (uint64_t)(mptr->NumberOfPages << I386_PGSHIFT);
 		pmap_type = mptr->Type;
 
@@ -347,6 +355,19 @@ i386_vm_init(uint64_t	maxmem,
 			        prev_pmptr = 0;
 				continue;
 			}
+			/*
+			 * A range may be marked with with the
+			 * EFI_MEMORY_KERN_RESERVED attribute
+			 * on some systems, to indicate that the range
+			 * must not be made available to devices.
+			 */
+
+			if (mptr->Attribute & EFI_MEMORY_KERN_RESERVED) {
+				if (++pmap_reserved_ranges > PMAP_MAX_RESERVED_RANGES) {
+					panic("Too many reserved ranges %u\n", pmap_reserved_ranges);
+				}
+			}
+
 			if (top < fap) {
 			        /*
 				 * entire range below first_avail
@@ -361,21 +382,11 @@ i386_vm_init(uint64_t	maxmem,
 
 				pmptr->end = top;
 
-				/*
-				 * A range may be marked with with the
-				 * EFI_MEMORY_KERN_RESERVED attribute
-				 * on some systems, to indicate that the range
-				 * must not be made available to devices.
-				 * Simplifying assumptions are made regarding
-				 * the placement of the range.
-				 */
-				if (mptr->Attribute & EFI_MEMORY_KERN_RESERVED)
-					pmap_reserved_ranges++;
 
 				if ((mptr->Attribute & EFI_MEMORY_KERN_RESERVED) &&
 				    (top < I386_KERNEL_IMAGE_BASE_PAGE)) {
 					pmptr->alloc = pmptr->base;
-					pmap_last_reserved_range = pmap_memory_region_count;
+					pmap_reserved_range_indices[pmap_last_reserved_range_index++] = pmap_memory_region_count;
 				}
 				else {
 					/*
@@ -384,6 +395,7 @@ i386_vm_init(uint64_t	maxmem,
 					pmptr->alloc = top;
 				}
 				pmptr->type = pmap_type;
+				pmptr->attribute = mptr->Attribute;
 			}
 			else if ( (base < fap) && (top > fap) ) {
 			        /*
@@ -394,39 +406,48 @@ i386_vm_init(uint64_t	maxmem,
 			        pmptr->base = base;
 				pmptr->alloc = pmptr->end = (fap - 1);
 				pmptr->type = pmap_type;
+				pmptr->attribute = mptr->Attribute;
 				/*
 				 * we bump these here inline so the accounting
 				 * below works correctly
 				 */
 				pmptr++;
 				pmap_memory_region_count++;
+
 				pmptr->alloc = pmptr->base = fap;
 				pmptr->type = pmap_type;
+				pmptr->attribute = mptr->Attribute;
 				pmptr->end = top;
-			}
-			else {
+
+				if (mptr->Attribute & EFI_MEMORY_KERN_RESERVED)
+					pmap_reserved_range_indices[pmap_last_reserved_range_index++] = pmap_memory_region_count;
+			} else {
 			        /*
 				 * entire range useable
 				 */
 			        pmptr->alloc = pmptr->base = base;
 				pmptr->type = pmap_type;
+				pmptr->attribute = mptr->Attribute;
 				pmptr->end = top;
+				if (mptr->Attribute & EFI_MEMORY_KERN_RESERVED)
+					pmap_reserved_range_indices[pmap_last_reserved_range_index++] = pmap_memory_region_count;
 			}
 
 			if (i386_ptob(pmptr->end) > avail_end )
 			        avail_end = i386_ptob(pmptr->end);
 
 			avail_remaining += (pmptr->end - pmptr->base);
-
+			coalescing_permitted = (prev_pmptr && (pmptr->attribute == prev_pmptr->attribute) && ((pmptr->attribute & EFI_MEMORY_KERN_RESERVED) == 0));
 			/*
 			 * Consolidate contiguous memory regions, if possible
 			 */
 			if (prev_pmptr &&
-			    pmptr->type == prev_pmptr->type &&
-			    pmptr->base == pmptr->alloc &&
-				pmptr->base == (prev_pmptr->end + 1))
+			    (pmptr->type == prev_pmptr->type) &&
+			    (coalescing_permitted) &&
+			    (pmptr->base == pmptr->alloc) &&
+			    (pmptr->base == (prev_pmptr->end + 1)))
 			{
-				if(prev_pmptr->end == prev_pmptr->alloc)
+				if (prev_pmptr->end == prev_pmptr->alloc)
 					prev_pmptr->alloc = pmptr->base;
 				prev_pmptr->end = pmptr->end;
 			} else {
@@ -603,11 +624,12 @@ boolean_t pmap_next_page_reserved(ppnum_t *);
  */
 boolean_t
 pmap_next_page_reserved(ppnum_t *pn) {
-	if (pmap_reserved_ranges && pmap_last_reserved_range != 0xFFFFFFFF) {
+	if (pmap_reserved_ranges) {
 		uint32_t n;
 		pmap_memory_region_t *region;
-		for (n = 0; n <= pmap_last_reserved_range; n++) {
-			region = &pmap_memory_regions[n];
+		for (n = 0; n < pmap_last_reserved_range_index; n++) {
+			uint32_t reserved_index = pmap_reserved_range_indices[n];
+			region = &pmap_memory_regions[reserved_index];
 			if (region->alloc < region->end) {
 				*pn = region->alloc++;
 				avail_remaining--;
@@ -619,6 +641,11 @@ pmap_next_page_reserved(ppnum_t *pn) {
 					lowest_lo = *pn;
 
 				pmap_reserved_pages_allocated++;
+#if DEBUG
+				if (region->alloc == region->end) {
+					kprintf("Exhausted reserved range index: %u, base: 0x%x end: 0x%x, type: 0x%x, attribute: 0x%llx\n", reserved_index, region->base, region->end, region->type, region->attribute);
+				}
+#endif
 				return TRUE;
 			}
 		}

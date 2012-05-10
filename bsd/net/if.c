@@ -1452,7 +1452,13 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 #endif /* IF_CLONE_LIST */
 	}
 
+	/*
+	 * ioctls which require ifp.  Note that we acquire dlil_ifnet_lock
+	 * here to ensure that the ifnet, if found, has been fully attached.
+	 */
+	dlil_if_lock();
 	ifp = ifunit(ifr->ifr_name);
+	dlil_if_unlock();
 	if (ifp == NULL)
 		return (ENXIO);
 

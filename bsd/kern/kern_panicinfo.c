@@ -43,6 +43,7 @@
 
 /* prototypes not exported by osfmk/console. */
 extern void panic_dialog_test( void );
+extern void noroot_icon_test(void);
 extern int  panic_dialog_set_image( const unsigned char * ptr, unsigned int size );
 extern void panic_dialog_get_image( unsigned char ** ptr, unsigned int * size );
 
@@ -51,7 +52,6 @@ static int sysctl_dopanicinfo SYSCTL_HANDLER_ARGS;
 
 
 #define PANIC_IMAGE_SIZE_LIMIT	(32 * 4096)				/* 128K - Maximum amount of memory consumed for the panic UI */
-#define KERN_PANICINFO_TEST	(KERN_PANICINFO_IMAGE+2)		/* Allow the panic UI to be tested by root without causing a panic */
 
 /* Local data */
 static int image_size_limit = PANIC_IMAGE_SIZE_LIMIT;
@@ -90,6 +90,12 @@ sysctl_dopanicinfo SYSCTL_HANDLER_ARGS
 	case KERN_PANICINFO_TEST:
 		
 		panic_dialog_test();
+		break;
+
+	case KERN_PANICINFO_NOROOT_TEST:
+		printf("Testing noroot icon \n");
+
+		noroot_icon_test();
 		break;
 
 	case KERN_PANICINFO_MAXSIZE:

@@ -309,6 +309,11 @@ IOReturn RootDomainUserClient::externalMethod(
                         (uint32_t)arguments->scalarInput[0]);
             break;
             
+        case kPMActivityTickle:
+            fOwner->reportUserInput( );
+            ret = kIOReturnSuccess;
+            break;
+            
 /*
         case kPMMethodCopySystemTimeline:
             // intentional fallthrough

@@ -1025,6 +1025,14 @@ uint32_t	buf_redundancy_flags(buf_t);
  */
 void	buf_set_redundancy_flags(buf_t, uint32_t);
 
+/*!
+ @function buf_attr
+ @abstract Gets the attributes for this buf.
+ @param bp Buffer whose attributes to get.
+ @return bufattr_t.
+ */
+bufattr_t buf_attr(buf_t);
+
 #ifdef KERNEL_PRIVATE
 void	buf_setfilter(buf_t, void (*)(buf_t, void *), void *, void (**)(buf_t, void *), void **);
 
@@ -1044,6 +1052,14 @@ void buf_setcpaddr(buf_t, void *);
  @return int.
  */
 void *buf_getcpaddr(buf_t);
+
+/*!
+ @function buf_throttled
+ @abstract Check if a buffer is throttled.
+ @param bap Buffer attribute to test.
+ @return Nonzero if the buffer is throttled, 0 otherwise.
+ */
+int bufattr_throttled(bufattr_t bap);
 #endif /* KERNEL_PRIVATE */
 
 

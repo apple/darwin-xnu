@@ -114,7 +114,9 @@ struct zone {
 #endif	/* ZONE_DEBUG */
 	/* boolean_t */	caller_acct: 1, /* do we account allocation/free to the caller? */  
 	/* boolean_t */	doing_gc :1,	/* garbage collect in progress? */
-	/* boolean_t */ noencrypt :1;
+	/* boolean_t */ noencrypt :1,
+	/* boolean_t */	no_callout:1,
+	/* boolean_t */	async_prio_refill:1;
 	int		index;		/* index into zone_info arrays for this zone */
 	struct zone *	next_zone;	/* Link for all-zones list */
 	call_entry_data_t	call_async_alloc;	/* callout for asynchronous alloc */
@@ -128,6 +130,8 @@ struct zone {
 	uint32_t num_frees;		/* free stats for zleak benchmarks */
 	uint32_t zleak_capture; /* per-zone counter for capturing every N allocations */
 #endif /* CONFIG_ZLEAKS */
+	vm_size_t	prio_refill_watermark;
+	thread_t	zone_replenish_thread;
 };
 
 /*
@@ -232,7 +236,7 @@ extern void *	zget(
 /* Fill zone with memory */
 extern void		zcram(
 					zone_t		zone,
-					void		*newmem,
+					vm_offset_t	newmem,
 					vm_size_t	size);
 
 /* Initially fill zone with specified number of elements */
@@ -245,7 +249,7 @@ extern void		zone_change(
 					zone_t			zone,
 					unsigned int	item,
 					boolean_t		value);
-
+extern void		zone_prio_refill_configure(zone_t, vm_size_t);
 /* Item definitions */
 #define Z_EXHAUST	1	/* Make zone exhaustible	*/
 #define Z_COLLECT	2	/* Make zone collectable	*/
@@ -253,7 +257,9 @@ extern void		zone_change(
 #define	Z_FOREIGN	4	/* Allow collectable zone to contain foreign elements */
 #define Z_CALLERACCT	5	/* Account alloc/free against the caller */
 #define Z_NOENCRYPT	6	/* Don't encrypt zone during hibernation */
-
+#define Z_NOCALLOUT 	7	/* Don't asynchronously replenish the zone via
+				 * callouts
+				 */
 /* Preallocate space for zone from zone map */
 extern void		zprealloc(
 					zone_t		zone,
