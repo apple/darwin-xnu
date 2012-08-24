@@ -1049,7 +1049,7 @@ void IOService::addPowerChild3 ( IOPMRequest * request )
 
 	if (child && inPlane(gIOPowerPlane))
 	{
-		if (child->getProperty("IOPMStrictTreeOrder"))
+		if ((this != rootDomain) && child->getProperty("IOPMStrictTreeOrder"))
 		{
 			PM_LOG1("%s: strict PM order enforced\n", getName());
 			fStrictTreeOrder = true;
@@ -3487,8 +3487,8 @@ void IOService::notifyChildrenOrdered ( void )
 	{
 		IOPowerConnection *	connection;
 		connection = (IOPowerConnection *) fNotifyChildArray->getObject(0);
-		fNotifyChildArray->removeObject(0);
 		notifyChild( connection );
+		fNotifyChildArray->removeObject(0);
 	}
 	else
 	{
@@ -3779,7 +3779,6 @@ bool IOService::notifyChild ( IOPowerConnection * theNub )
     theChild = (IOService *)(theNub->copyChildEntry(gIOPowerPlane));
     if (!theChild)
     {
-		assert(false);
         return true;
     }
 
